@@ -453,31 +453,86 @@
     background: rgba(255, 255, 255, 0.02);
   }
 
-  /* Tool call display */
-  .tool-block {
-    margin: 8px 0;
-    background: var(--tool-bg);
-    border: 1px solid var(--tool-border);
-    border-radius: var(--radius-sm);
-    overflow: hidden;
+  /* Tool call group (collapsible) */
+  .tool-group {
+    width: 100%;
   }
 
-  .tool-header {
+  .tool-group-header {
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 8px 12px;
     background: rgba(79, 195, 247, 0.08);
-    border-bottom: 1px solid var(--tool-border);
+    border: 1px solid var(--tool-border);
+    border-radius: var(--radius-sm);
     font-size: 12px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s;
+  }
+
+  .tool-group-header:hover {
+    background: rgba(79, 195, 247, 0.14);
+  }
+
+  .tg-arrow {
+    color: var(--text-mute);
+    font-size: 10px;
+    transition: transform 0.15s;
+  }
+
+  .tool-group.open .tg-arrow {
+    transform: rotate(90deg);
+  }
+
+  .tg-title {
+    color: var(--tool-name);
+    font-weight: 600;
+  }
+
+  .tg-status {
+    margin-left: auto;
+    color: var(--success);
+    font-size: 11px;
+  }
+
+  .tool-group-body {
+    display: none;
+    margin-top: 6px;
+  }
+
+  .tool-group.open .tool-group-body {
+    display: block;
+  }
+
+  .tool-entry {
+    background: var(--tool-bg);
+    border: 1px solid var(--tool-border);
+    border-radius: var(--radius-sm);
+    margin-bottom: 6px;
+    overflow: hidden;
+  }
+
+  .tool-entry:last-child {
+    margin-bottom: 0;
+  }
+
+  .tool-entry-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    font-size: 12px;
+    background: rgba(79, 195, 247, 0.05);
   }
 
   .tool-icon {
     color: var(--tool-name);
-    font-size: 14px;
+    font-size: 12px;
   }
 
-  .tool-name {
+  .tool-entry-head .tool-name {
     color: var(--tool-name);
     font-weight: 600;
   }
@@ -486,20 +541,27 @@
     color: var(--text-mute);
     font-size: 11px;
     margin-left: auto;
-    font-family: inherit;
+    max-width: 55%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .tool-result {
-    padding: 8px 12px;
+    padding: 6px 10px;
     color: var(--text-dim);
     font-size: 12px;
-    font-family: inherit;
+    word-break: break-all;
   }
 
   .tool-result .label {
     color: var(--success);
     font-weight: 600;
     margin-right: 8px;
+  }
+
+  .tool-group-images {
+    margin-top: 8px;
   }
 
   .generated-image {
@@ -930,12 +992,14 @@ async function loadHistory() {
       emptyState.style.display = 'none';
       data.messages.forEach(msg => {
         if (msg.role === 'user') {
+          flushToolGroup();
           appendMessage('user', msg.content);
         } else if (msg.role === 'assistant') {
           // 用统一解析器拆分正文与工具块（兼容省略 [[/TOOL]]）
           const parts = splitToolBlocks(msg.content);
           for (const part of parts) {
             if (part.type === 'text' && part.text.trim()) {
+              flushToolGroup();
               appendMessage('assistant', part.text);
             } else if (part.type === 'tool') {
               addToolCall(part.name, part.args);
@@ -945,6 +1009,7 @@ async function loadHistory() {
           addToolResult(msg.tool_name || 'tool', msg.content);
         }
       });
+      flushToolGroup();
       scrollToBottom();
     }
   } catch (e) {
@@ -984,16 +1049,18 @@ async function sendMessage() {
     removeLoading(loadingId);
 
     // Process events
-    let lastAssistantBubble = null;
     for (const event of data.events) {
       if (event.type === 'assistant') {
-        lastAssistantBubble = appendMessage('assistant', event.content);
+        // 出现新正文时，先收尾上一组工具折叠条
+        flushToolGroup();
+        appendMessage('assistant', event.content);
       } else if (event.type === 'tool_call') {
         addToolCall(event.name, event.args);
       } else if (event.type === 'tool_result') {
         addToolResult(event.name, event.result);
       }
     }
+    flushToolGroup();
 
     scrollToBottom();
   } catch (e) {
@@ -1245,7 +1312,26 @@ function removeLoading(id) {
   if (el) el.remove();
 }
 
-function addToolCall(name, args) {
+// ─── 工具调用折叠组 ─────────────────────────────────
+// 连续的 tool_call / tool_result 归为一组，渲染成一条可展开的折叠条；
+// 默认收起，只显示「已调用 N 个工具 + 状态」，展开才能看到每个调用的细节。
+let activeToolGroup = null;
+
+function flushToolGroup() {
+  if (!activeToolGroup) return;
+  const g = activeToolGroup;
+  // 收尾时仍有未收到结果的调用（历史记录缺结果等边缘情况）
+  for (const p of g.pending) {
+    p.res.innerHTML = '<span class="label">✓ 完成</span>';
+  }
+  g.pending = [];
+  g.statusEl.textContent = '✓ 全部完成';
+  activeToolGroup = null;
+}
+
+function getToolGroup() {
+  if (activeToolGroup) return activeToolGroup;
+
   const msg = document.createElement('div');
   msg.className = 'msg assistant';
 
@@ -1258,56 +1344,97 @@ function addToolCall(name, args) {
   bubble.style.background = 'var(--tool-bg)';
   bubble.style.borderColor = 'var(--tool-border)';
 
-  const block = document.createElement('div');
-  block.className = 'tool-block';
+  const group = document.createElement('div');
+  group.className = 'tool-group';
 
   const header = document.createElement('div');
-  header.className = 'tool-header';
-  header.innerHTML = `
-    <span class="tool-icon">⚡</span>
-    <span class="tool-name">${name}</span>
-    <span class="tool-args">${JSON.stringify(args)}</span>
-  `;
+  header.className = 'tool-group-header';
+  header.innerHTML = '<span class="tg-arrow">▶</span><span class="tg-title"></span><span class="tg-status">执行中...</span>';
+  header.addEventListener('click', function() {
+    group.classList.toggle('open');
+  });
 
-  const result = document.createElement('div');
-  result.className = 'tool-result';
-  result.id = 'tool-result-' + Date.now();
-  result.innerHTML = '<span class="label">执行中...</span>';
+  const body = document.createElement('div');
+  body.className = 'tool-group-body';
 
-  block.appendChild(header);
-  block.appendChild(result);
-  bubble.appendChild(block);
+  const imagesEl = document.createElement('div');
+  imagesEl.className = 'tool-group-images';
+
+  group.appendChild(header);
+  group.appendChild(body);
+  group.appendChild(imagesEl);
+  bubble.appendChild(group);
   msg.appendChild(avatar);
   msg.appendChild(bubble);
   messagesEl.appendChild(msg);
+
+  activeToolGroup = {
+    header, body, imagesEl,
+    titleEl: header.querySelector('.tg-title'),
+    statusEl: header.querySelector('.tg-status'),
+    count: 0,
+    pending: []
+  };
+  return activeToolGroup;
+}
+
+function addToolCall(name, args) {
+  const g = getToolGroup();
+  g.count++;
+  g.titleEl.textContent = '已调用 ' + g.count + ' 个工具';
+
+  const entry = document.createElement('div');
+  entry.className = 'tool-entry';
+
+  const head = document.createElement('div');
+  head.className = 'tool-entry-head';
+  head.innerHTML =
+    '<span class="tool-icon">⚡</span>' +
+    '<span class="tool-name">' + escapeHtml(name) + '</span>' +
+    '<span class="tool-args">' + escapeHtml(JSON.stringify(args)) + '</span>';
+
+  const res = document.createElement('div');
+  res.className = 'tool-result';
+  res.innerHTML = '<span class="label">执行中...</span>';
+
+  entry.appendChild(head);
+  entry.appendChild(res);
+  g.body.appendChild(entry);
+  g.pending.push({ res: res });
   scrollToBottom();
 }
 
 function addToolResult(name, result) {
-  // Find the last tool result placeholder
-  const results = document.querySelectorAll('.tool-result');
-  const last = results[results.length - 1];
-  if (last && last.querySelector('.label').textContent === '执行中...') {
-    // Extract text and image URLs
-    const urlRegex = /(https?:\/\/[^\s]+\.(?:png|jpg|jpeg|gif|webp|bmp))/gi;
-    const imageUrls = result.match(urlRegex) || [];
-    const textWithoutUrls = result.replace(urlRegex, '').trim();
-    
-    let html = `<span class="label">✓ 完成</span>`;
+  const g = activeToolGroup;
+  const pending = (g && g.pending.length) ? g.pending.shift() : null;
+
+  // Extract text and image URLs
+  const urlRegex = /(https?:\/\/[^\s]+\.(?:png|jpg|jpeg|gif|webp|bmp))/gi;
+  const imageUrls = result.match(urlRegex) || [];
+  const textWithoutUrls = result.replace(urlRegex, '').trim();
+
+  if (pending) {
+    let html = '<span class="label">✓ 完成</span>';
     if (textWithoutUrls) {
-      html += `<span style="margin-left:8px;">${escapeHtml(textWithoutUrls)}</span>`;
+      html += '<span>' + escapeHtml(textWithoutUrls) + '</span>';
     }
-    
-    if (imageUrls.length > 0) {
-      const gridClass = imageUrls.length > 1 ? 'image-grid' : '';
-      html += `<div class="${gridClass}">`;
-      for (const url of imageUrls) {
-        html += `<img src="${url}" class="generated-image" onclick="window.open('${url}', '_blank')" alt="generated image" loading="lazy">`;
-      }
-      html += `</div>`;
+    pending.res.innerHTML = html;
+  }
+
+  // 图片例外：不收进折叠区，直接展示在折叠条下方，收起状态也能看到
+  if (g && imageUrls.length > 0) {
+    const grid = document.createElement('div');
+    if (imageUrls.length > 1) grid.className = 'image-grid';
+    for (const url of imageUrls) {
+      const img = document.createElement('img');
+      img.src = url;
+      img.className = 'generated-image';
+      img.alt = 'generated image';
+      img.loading = 'lazy';
+      img.addEventListener('click', function() { window.open(url, '_blank'); });
+      grid.appendChild(img);
     }
-    
-    last.innerHTML = html;
+    g.imagesEl.appendChild(grid);
   }
   scrollToBottom();
 }
