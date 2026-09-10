@@ -1,6 +1,11 @@
 """
 Agent System Prompt
 集中管理 LLM 的系统提示词，结构化分段 + 优先级 + 动态状态栏
+
+设计原则：
+- 稳定层（Stable）：内容固定，作为 prefix cache 锚点，永远放在最前面
+- 稳定-可变层（Stable-Volatile）：低频变化，如 Skill 目录、环境信息
+- 动态层（Dynamic）：每轮变化，如状态栏
 """
 
 from datetime import datetime
@@ -18,6 +23,11 @@ P_RULES = 3         # 行为规则
 P_SKILLS = 3        # Skill 目录
 P_ENV = 4           # 环境信息
 P_STATUSBAR = 5     # 状态栏（最容易被裁）
+
+# ─── 缓存指纹 ───────────────────────────────────────
+# 稳定层内容如果没变，就不重建，提高 cache 命中率
+_stable_cache = None
+_stable_fp = None
 
 
 def _build_tool_list():
@@ -42,24 +52,28 @@ def _build_skill_list():
     return "\n".join(descs) if descs else "（暂无）"
 
 
-def build_status_bar(message_count=0, last_tool="none"):
-    """构建 Agent 状态栏（放在 prompt 末尾，实时元信息）"""
-    lines = [
-        "<status_bar>",
-        "time: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "session_messages: " + str(message_count),
-        "last_tool: " + last_tool,
-        "skills_available: " + str(len(list_skills())),
-        "</status_bar>",
-    ]
-    return "\n".join(lines)
+def _calc_fingerprint():
+    """稳定层指纹：工具列表 + Skill 列表的哈希。
+    这些内容变化时，稳定层才需要重建。"""
+    import hashlib
+    tool_names = ",".join(t["name"] for t in TOOLS)
+    skill_names = ",".join(list_skills())
+    raw = f"{tool_names}|{skill_names}"
+    return hashlib.md5(raw.encode()).hexdigest()
 
 
-def build_system_prompt(message_count=0, last_tool="none"):
+def build_stable_prompt():
     """
-    构建结构化 system prompt
-    每个 section 有 priority，为后续上下文裁剪做准备
+    构建稳定层 System Prompt（前缀缓存锚点）。
+    内容：角色定义 + 工具调用格式 + 工具列表 + 安全规则 + 行为规则 + Skill 目录 + 环境信息
+    这些内容在同一会话中基本不变，是 prefix cache 的基石。
     """
+    global _stable_cache, _stable_fp
+
+    fp = _calc_fingerprint()
+    if _stable_cache is not None and _stable_fp == fp:
+        return _stable_cache
+
     sections = []
 
     # [P1] 角色
@@ -121,7 +135,7 @@ def build_system_prompt(message_count=0, last_tool="none"):
         + _build_skill_list()
     ))
 
-    # [P4] 环境信息（动态）
+    # [P4] 环境信息（相对稳定，启动时确定）
     sections.append((P_ENV, "Environment",
         "- 运行环境: Python + Flask Web UI\n"
         "- ComfyUI 地址: http://127.0.0.1:8188\n"
@@ -136,7 +150,30 @@ def build_system_prompt(message_count=0, last_tool="none"):
     for prio, title, content in sections:
         parts.append("## " + title + "\n\n" + content)
 
-    # [P5] 状态栏放最后（不破坏前面的 prompt cache）
-    parts.append(build_status_bar(message_count, last_tool))
+    result = "\n\n".join(parts)
+    _stable_cache = result
+    _stable_fp = fp
+    return result
 
-    return "\n\n".join(parts)
+
+def build_status_bar(message_count=0, last_tool="none"):
+    """构建 Agent 状态栏（动态层，放在 prompt 末尾）"""
+    lines = [
+        "<status_bar>",
+        "time: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "session_messages: " + str(message_count),
+        "last_tool: " + last_tool,
+        "skills_available: " + str(len(list_skills())),
+        "</status_bar>",
+    ]
+    return "\n".join(lines)
+
+
+def build_system_prompt(message_count=0, last_tool="none"):
+    """
+    构建完整 system prompt = 稳定层 + 动态层（状态栏）
+    稳定层有缓存，只有指纹变化时才重建
+    """
+    stable = build_stable_prompt()
+    status_bar = build_status_bar(message_count, last_tool)
+    return stable + "\n\n" + status_bar
