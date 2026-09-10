@@ -1,0 +1,18 @@
+# 环境变量
+.env
+
+# 会话数据
+data/
+
+# Skills（本地技能，不上传）
+skills/
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*/__pycache__/
+
+# IDE
+.vscode/
+.idea/
