@@ -883,6 +883,43 @@ async function deleteDoc(filename) {
   }
 }
 
+// 解析 markdown 文本中的工具调用块，返回按顺序的片段数组
+// [{type:'text', text}, {type:'tool', name, args}]
+function splitToolBlocks(content) {
+  const items = [];
+  const re = /\[\[TOOL:(\w+)\]\]/g;
+  let pos = 0;
+  let m;
+  while ((m = re.exec(content)) !== null) {
+    if (m.index > pos) items.push({ type: 'text', text: content.substring(pos, m.index) });
+    // 解析 JSON 参数（花括号配对，兼容省略 [[/TOOL]]）
+    let name = m[1];
+    let used = 0;
+    let rest = content.substring(m[0].length + m.index);
+    let trimmed = rest.replace(/^\s*/, (s) => { used = s.length; return ''; });
+    let args = {};
+    if (trimmed.startsWith('{')) {
+      let depth = 0, endIdx = -1;
+      for (let i = 0; i < trimmed.length; i++) {
+        if (trimmed[i] === '{') depth++;
+        else if (trimmed[i] === '}') { depth--; if (depth === 0) { endIdx = i + 1; break; } }
+      }
+      if (endIdx > 0) {
+        try { args = JSON.parse(trimmed.substring(0, endIdx)); } catch (e) { args = { raw: trimmed.substring(0, endIdx) }; }
+        used += endIdx;
+      }
+    }
+    // 跳过关闭标签
+    let after = content.substring(m.index + m[0].length + used).replace(/^\s*/, '');
+    if (after.startsWith('[[/TOOL]]')) used += (content.length - (m.index + m[0].length + used)) - after.length + '[[/TOOL]]'.length;
+    items.push({ type: 'tool', name, args });
+    pos = m.index + m[0].length + used;
+    re.lastIndex = pos;
+  }
+  if (pos < content.length) items.push({ type: 'text', text: content.substring(pos) });
+  return items;
+}
+
 async function loadHistory() {
   try {
     const res = await fetch('/api/history');
@@ -895,26 +932,14 @@ async function loadHistory() {
         if (msg.role === 'user') {
           appendMessage('user', msg.content);
         } else if (msg.role === 'assistant') {
-          // Check if there's a tool call in the reply
-          const toolMatch = msg.content.match(/\[\[TOOL:(\w+)\]\]([\s\S]*?)\[\[\/TOOL\]\]/);
-          if (toolMatch) {
-            const beforeText = msg.content.substring(0, toolMatch.index).trim();
-            if (beforeText) {
-              appendMessage('assistant', beforeText);
+          // 用统一解析器拆分正文与工具块（兼容省略 [[/TOOL]]）
+          const parts = splitToolBlocks(msg.content);
+          for (const part of parts) {
+            if (part.type === 'text' && part.text.trim()) {
+              appendMessage('assistant', part.text);
+            } else if (part.type === 'tool') {
+              addToolCall(part.name, part.args);
             }
-            // Render tool call block (result will be filled by the next tool_result message)
-            try {
-              const args = JSON.parse(toolMatch[2].trim());
-              addToolCall(toolMatch[1], args);
-            } catch (e) {
-              addToolCall(toolMatch[1], { raw: toolMatch[2].trim() });
-            }
-            const afterText = msg.content.substring(toolMatch.index + toolMatch[0].length).trim();
-            if (afterText) {
-              appendMessage('assistant', afterText);
-            }
-          } else {
-            appendMessage('assistant', msg.content);
           }
         } else if (msg.role === 'tool_result') {
           addToolResult(msg.tool_name || 'tool', msg.content);
@@ -962,23 +987,7 @@ async function sendMessage() {
     let lastAssistantBubble = null;
     for (const event of data.events) {
       if (event.type === 'assistant') {
-        // Check if there's a tool call in the reply — if so, render as tool block
-        const toolMatch = event.content.match(/\[\[TOOL:(\w+)\]\]([\s\S]*?)\[\[\/TOOL\]\]/);
-        if (toolMatch) {
-          // Extract text before tool call
-          const beforeText = event.content.substring(0, toolMatch.index).trim();
-          if (beforeText) {
-            lastAssistantBubble = appendMessage('assistant', beforeText);
-          }
-          // Tool call is shown as separate block — handled by tool_call event
-          // But we need to show the rest of the text after tool result
-          const afterText = event.content.substring(toolMatch.index + toolMatch[0].length).trim();
-          if (afterText) {
-            lastAssistantBubble = appendMessage('assistant', afterText);
-          }
-        } else {
-          lastAssistantBubble = appendMessage('assistant', event.content);
-        }
+        lastAssistantBubble = appendMessage('assistant', event.content);
       } else if (event.type === 'tool_call') {
         addToolCall(event.name, event.args);
       } else if (event.type === 'tool_result') {
