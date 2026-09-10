@@ -38,6 +38,9 @@ else:
     MODEL = VOLC_CHAT_MODEL
 
 # ─── ComfyUI ────────────────────────────────────────
+# 没装 ComfyUI 的机器设为 false：不再注册 generate_image 工具，
+# 避免 LLM 白白尝试调用一个必然失败的工具
+ENABLE_IMAGE_GEN = os.getenv("ENABLE_IMAGE_GEN", "true").lower() not in ("0", "false", "no")
 
 COMFYUI_URL = os.getenv("COMFYUI_URL", "http://127.0.0.1:8188")
 

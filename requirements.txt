@@ -2,3 +2,10 @@ flask>=2.0
 requests>=2.28
 python-dotenv>=1.0
 duckduckgo-search>=5.0
+
+# RAG 向量知识库（search_kb / ingest_kb / list_kb / delete_kb / chunk_document）
+# 首次调用会下载 BGE-M3 模型（约 2GB），不想用知识库可以不装
+chromadb>=0.5.0
+sentence-transformers>=3.0
+torch>=2.0
+modelscope>=1.9

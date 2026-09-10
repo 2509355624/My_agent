@@ -42,8 +42,11 @@ register_tool(**_web_search_tool)
 from app.tools.normal.load_skill import tool as _load_skill_tool
 register_tool(**_load_skill_tool)
 
-from app.tools.normal.generate_image import tool as _generate_image_tool
-register_tool(**_generate_image_tool)
+# 生图工具可选：没有 ComfyUI 的机器用 ENABLE_IMAGE_GEN=false 关掉
+from app.config import ENABLE_IMAGE_GEN
+if ENABLE_IMAGE_GEN:
+    from app.tools.normal.generate_image import tool as _generate_image_tool
+    register_tool(**_generate_image_tool)
 
 from app.tools.normal.list_skills import tool as _list_skills_tool
 register_tool(**_list_skills_tool)
