@@ -133,7 +133,7 @@ TOOL_SCHEMA = {
 
 
 def _get_client():
-    from .rag_client import RagClient
+    from app.rag.rag_client import RagClient
     return RagClient.get()
 
 

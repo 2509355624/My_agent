@@ -1,6 +1,11 @@
 """
 工具注册表
-所有工具在这里注册，Agent 通过 execute_tool 统一调用
+所有工具在这里注册（普通工具 + RAG 工具），Agent 通过 execute_tool 统一调用。
+
+目录结构：
+  app/tools/normal/  普通工具（时间、搜索、文件、生图、Skill 管理、文档）
+  app/tools/rag/     RAG 向量知识库工具（检索、入库、切块）
+  app/rag/           RAG 引擎层（向量存储、embedding、daemon，非 Agent 工具）
 """
 
 TOOLS = []
@@ -27,29 +32,29 @@ def execute_tool(name, args):
     return "未知工具: " + name
 
 
-# 导入并注册所有工具
-from app.tools.get_time import tool as _get_time_tool
+# ─── 普通工具 ─────────────────────────────────────────
+from app.tools.normal.get_time import tool as _get_time_tool
 register_tool(**_get_time_tool)
 
-from app.tools.web_search import tool as _web_search_tool
+from app.tools.normal.web_search import tool as _web_search_tool
 register_tool(**_web_search_tool)
 
-from app.tools.load_skill import tool as _load_skill_tool
+from app.tools.normal.load_skill import tool as _load_skill_tool
 register_tool(**_load_skill_tool)
 
-from app.tools.generate_image import tool as _generate_image_tool
+from app.tools.normal.generate_image import tool as _generate_image_tool
 register_tool(**_generate_image_tool)
 
-from app.tools.list_skills import tool as _list_skills_tool
+from app.tools.normal.list_skills import tool as _list_skills_tool
 register_tool(**_list_skills_tool)
 
-from app.tools.read_file import tool as _read_file_tool
+from app.tools.normal.read_file import tool as _read_file_tool
 register_tool(**_read_file_tool)
 
-from app.tools.write_file import tool as _write_file_tool
+from app.tools.normal.write_file import tool as _write_file_tool
 register_tool(**_write_file_tool)
 
-from app.tools.documents import (
+from app.tools.normal.documents import (
     tool_list as _doc_list_tool,
     tool_info as _doc_info_tool,
     tool_read as _doc_read_tool,
@@ -60,8 +65,8 @@ register_tool(**_doc_info_tool)
 register_tool(**_doc_read_tool)
 register_tool(**_doc_search_tool)
 
-# RAG 向量知识库工具
-from app.rag.kb_tools import (
+# ─── RAG 知识库工具 ───────────────────────────────────
+from app.tools.rag.kb_tools import (
     TOOL_SCHEMA as _KB_SCHEMA,
     search_kb as _search_kb_fn,
     ingest_kb as _ingest_kb_fn,

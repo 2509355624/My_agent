@@ -9,7 +9,7 @@ from app.skills import list_skills, load_skill
 from app.agent_prompt import build_stable_prompt, build_status_bar
 from app.memory import load_history, save_history
 from app.agent import run_agent_stream
-from app.tools.documents import list_documents, file_info, read_document, search_document
+from app.tools.normal.documents import list_documents, file_info, read_document, search_document
 
 app = Flask(__name__, static_folder=WEB_DIR, static_url_path="")
 
