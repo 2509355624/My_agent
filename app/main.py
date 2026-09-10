@@ -6,7 +6,7 @@ import requests
 from flask import Flask, request, jsonify, send_from_directory, Response
 from app.config import AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR
 from app.skills import list_skills, load_skill
-from app.agent_prompt import build_stable_prompt, build_status_bar
+from app.agent_prompt import build_stable_prompt
 from app.memory import load_history, save_history
 from app.agent import run_agent_stream
 from app.tools.normal.documents import list_documents, file_info, read_document, search_document
@@ -19,46 +19,18 @@ history = load_history()
 
 
 def _ensure_system_prompt():
-    """确保 history 开头有两条 system 消息：
-    [0] 稳定层（内容固定，prefix cache 锚点）
-    [1] 动态层（状态栏，每轮更新，放在后面不影响前缀缓存）
+    """确保 history 开头有一条稳定的 system 消息（prefix cache 锚点）。
+
+    状态栏不再放在 messages[1]——那里每轮变化会把之后所有历史的
+    前缀缓存全部毒化。状态栏改为请求时动态追加在消息数组末尾
+    （见 agent.run_agent_stream），只牺牲它自己那几十个 token。
     """
     stable_prompt = build_stable_prompt()
-    msg_count = len([m for m in history if m.get("role") != "system"])
-    status_bar = build_status_bar(message_count=msg_count, last_tool="none")
-
-    # 移除现有的 system 消息
     non_system = [m for m in history if m.get("role") != "system"]
 
     history.clear()
     history.append({"role": "system", "content": stable_prompt})
-    history.append({"role": "system", "content": status_bar})
     history.extend(non_system)
-
-
-def _refresh_status_bar():
-    """只更新状态栏（第二条 system 消息），稳定层保持不变。
-    这样第一条 system 消息永远相同，prefix cache 命中率最高。"""
-    last_tool = "none"
-    for msg in reversed(history):
-        if msg.get("role") == "tool_result":
-            last_tool = msg.get("tool_name", "none")
-            break
-
-    msg_count = len([m for m in history if m.get("role") != "system"])
-    status_bar = build_status_bar(message_count=msg_count, last_tool=last_tool)
-
-    # 找到第二条 system 消息（状态栏）
-    system_count = 0
-    for i, msg in enumerate(history):
-        if msg.get("role") == "system":
-            system_count += 1
-            if system_count == 2:
-                history[i] = {"role": "system", "content": status_bar}
-                return
-
-    # 没有第二条，重建 system 消息
-    _ensure_system_prompt()
 
 
 # 初始化时设置 system prompt
@@ -88,9 +60,6 @@ def chat():
 
     if not user_input:
         return jsonify({"error": "消息不能为空"}), 400
-
-    # 每次对话前刷新状态栏（第二条 system 消息），稳定层保持不变
-    _refresh_status_bar()
 
     events = []
     for event in run_agent_stream(user_input, history):

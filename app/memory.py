@@ -120,6 +120,11 @@ def trim_history(history):
             truncate_len = _get_truncate_length(turn_age, total)
             for msg in turn_msgs:
                 if msg["role"] == "tool_result":
+                    # 已截断的消息字节一次定型，永不再改：
+                    # 二次重截会改变历史字节，制造新的缓存断点
+                    if msg.get("_truncated"):
+                        result_msgs.append(msg)
+                        continue
                     msg_copy = dict(msg)
                     tool_name = msg.get("tool_name", "")
                     msg_copy["content"] = _truncate_content(
@@ -142,6 +147,10 @@ def trim_history(history):
                 compressed.append(turn_msgs[0])  # user 消息
                 # assistant 消息截断到很短
                 for msg in turn_msgs[1:]:
+                    # 已定型的消息跳过，不再改字节
+                    if msg.get("_truncated"):
+                        compressed.append(msg)
+                        continue
                     if msg["role"] == "assistant":
                         msg_copy = dict(msg)
                         msg_copy["content"] = _truncate_content(

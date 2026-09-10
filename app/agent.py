@@ -103,6 +103,25 @@ def _history_for_llm(history):
     return result
 
 
+def _status_message(history):
+    """构造状态栏消息，追加在请求消息数组的末尾。
+
+    动态内容只出现在尾部：状态栏每轮变化只 miss 它自己那几十 token，
+    前面的稳定 system + 全部历史（只追加）都能命中 prefix cache。
+    绝不把状态栏放在前部——那会让之后所有历史按原价重算。
+    """
+    from app.agent_prompt import build_status_bar
+
+    last_tool = "none"
+    for msg in reversed(history):
+        if msg.get("role") == "tool_result":
+            last_tool = msg.get("tool_name", "none")
+            break
+
+    msg_count = len([m for m in history if m.get("role") != "system"])
+    return {"role": "system", "content": build_status_bar(message_count=msg_count, last_tool=last_tool)}
+
+
 def run_agent_stream(user_input, history):
     """
     Agent Loop: 生成器版本，逐事件返回
@@ -126,6 +145,8 @@ def run_agent_stream(user_input, history):
             # 裁剪 + 转换为 LLM 格式（tool_result -> user）
             trimmed = trim_history(history)
             llm_history = _history_for_llm(trimmed)
+            # 状态栏追加在尾部，动态变化不毒化前缀缓存
+            llm_history.append(_status_message(history))
             reply = call_llm(llm_history)
             history.append({"role": "assistant", "content": reply})
 
