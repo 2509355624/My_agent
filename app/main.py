@@ -4,11 +4,12 @@ Flask Web 服务入口
 
 import requests
 from flask import Flask, request, jsonify, send_from_directory, Response
-from app.config import AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL
+from app.config import AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR
 from app.skills import list_skills, load_skill
 from app.agent_prompt import build_system_prompt
 from app.memory import load_history, save_history
 from app.agent import run_agent_stream
+from app.tools.documents import list_documents, file_info, read_document, search_document
 
 app = Flask(__name__, static_folder=WEB_DIR, static_url_path="")
 
@@ -104,6 +105,108 @@ def get_skills():
             desc = data["skill_md"].split("\n")[0] if data["skill_md"] else ""
             skills.append({"name": s, "description": desc})
     return jsonify({"skills": skills})
+
+
+# ─── 文档 API ────────────────────────────────────────
+
+@app.route("/api/documents")
+def api_list_documents():
+    """列出所有文档"""
+    import os
+    os.makedirs(DOCUMENTS_DIR, exist_ok=True)
+    result = []
+    for root, dirs, files in os.walk(DOCUMENTS_DIR):
+        for f in files:
+            full_path = os.path.join(root, f)
+            rel_path = os.path.relpath(full_path, DOCUMENTS_DIR)
+            size = os.path.getsize(full_path)
+            try:
+                with open(full_path, "r", encoding="utf-8", errors="ignore") as fh:
+                    lines = len(fh.readlines())
+            except:
+                lines = -1
+            result.append({
+                "name": rel_path,
+                "size": size,
+                "lines": lines
+            })
+    return jsonify({"files": result})
+
+
+@app.route("/api/documents/upload", methods=["POST"])
+def api_upload_document():
+    """上传文档到 documents 目录"""
+    import os
+    from werkzeug.utils import secure_filename
+
+    os.makedirs(DOCUMENTS_DIR, exist_ok=True)
+
+    if "file" not in request.files:
+        return jsonify({"error": "没有文件"}), 400
+
+    f = request.files["file"]
+    if not f.filename:
+        return jsonify({"error": "文件名为空"}), 400
+
+    filename = secure_filename(f.filename)
+    filepath = os.path.join(DOCUMENTS_DIR, filename)
+    f.save(filepath)
+
+    size = os.path.getsize(filepath)
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as fh:
+            lines = len(fh.readlines())
+    except:
+        lines = -1
+
+    return jsonify({
+        "ok": True,
+        "name": filename,
+        "size": size,
+        "lines": lines
+    })
+
+
+@app.route("/api/documents/<path:filename>")
+def api_get_document(filename):
+    """读取文档内容（带行号，支持 offset/limit 参数）"""
+    offset = request.args.get("offset", "1")
+    limit = request.args.get("limit", "100")
+    try:
+        offset = int(offset)
+        limit = int(limit)
+    except ValueError:
+        offset = 1
+        limit = 100
+
+    content = read_document(filename, offset=offset, limit=limit)
+    return jsonify({"content": content})
+
+
+@app.route("/api/documents/<path:filename>", methods=["DELETE"])
+def api_delete_document(filename):
+    """删除文档"""
+    import os
+
+    # 安全校验：确保在 documents 目录内
+    safe_name = filename.replace("..", "").lstrip("/").lstrip("\\").strip()
+    if not safe_name:
+        return jsonify({"error": "文件名非法"}), 400
+
+    filepath = os.path.join(DOCUMENTS_DIR, safe_name)
+    try:
+        real_target = os.path.realpath(filepath)
+        real_docs = os.path.realpath(DOCUMENTS_DIR)
+        if not real_target.startswith(real_docs):
+            return jsonify({"error": "路径非法"}), 400
+    except Exception:
+        return jsonify({"error": "路径非法"}), 400
+
+    if not os.path.exists(filepath):
+        return jsonify({"error": "文件不存在"}), 404
+
+    os.remove(filepath)
+    return jsonify({"ok": True})
 
 
 # ─── 启动 ──────────────────────────────────────────

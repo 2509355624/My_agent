@@ -85,7 +85,17 @@ def build_system_prompt(message_count=0, last_tool="none"):
         "提示：\n"
         "- 不熟悉的 Skill 先调用 load_skill 读取规范\n"
         "- 批量生成图片用 --- 分隔多个 prompt，只调用一次 generate_image\n"
-        "- generate_image 的 prompt 参数必须是英文"
+        "- generate_image 的 prompt 参数必须是英文\n"
+        "- 想创建新 Skill？用 write_file 写入 skill.md / character.txt / workflow.json\n"
+        "- 文件操作仅限 skills 目录和 documents 目录\n"
+        "- 读长文档先 file_info 看规模，再 search_document 搜索定位，最后 read_document 分段精读\n"
+        "- read_document 一次最多 500 行，用 offset 翻页\n"
+        "- 向量知识库（RAG）使用指南：\n"
+        "  1. 先用 list_kb 查看有哪些知识库\n"
+        "  2. 检索用 search_kb(kb_name, query) 找到相关片段\n"
+        "  3. 把文档存入知识库：先用 chunk_document 切块，再用 ingest_kb 入库\n"
+        "  4. 常用知识库：'documents'（用户上传的通用文档）、'skills'（生图技能）、'interview'（面试知识）\n"
+        "  5. 2万字以上的长文档，优先走 RAG 检索而不是全文阅读——更快更精准"
     ))
 
     # [P2] 安全规则

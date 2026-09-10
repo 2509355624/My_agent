@@ -7,6 +7,12 @@ data/
 # Skills（本地技能，不上传）
 skills/
 
+# 文档（用户本地文档，不上传）
+documents/
+
+# 向量知识库
+vector_store/
+
 # Python 缓存
 __pycache__/
 *.pyc
