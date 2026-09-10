@@ -534,7 +534,29 @@ async function loadHistory() {
         if (msg.role === 'user') {
           appendMessage('user', msg.content);
         } else if (msg.role === 'assistant') {
-          appendMessage('assistant', msg.content);
+          // Check if there's a tool call in the reply
+          const toolMatch = msg.content.match(/\[\[TOOL:(\w+)\]\]([\s\S]*?)\[\[\/TOOL\]\]/);
+          if (toolMatch) {
+            const beforeText = msg.content.substring(0, toolMatch.index).trim();
+            if (beforeText) {
+              appendMessage('assistant', beforeText);
+            }
+            // Render tool call block (result will be filled by the next tool_result message)
+            try {
+              const args = JSON.parse(toolMatch[2].trim());
+              addToolCall(toolMatch[1], args);
+            } catch (e) {
+              addToolCall(toolMatch[1], { raw: toolMatch[2].trim() });
+            }
+            const afterText = msg.content.substring(toolMatch.index + toolMatch[0].length).trim();
+            if (afterText) {
+              appendMessage('assistant', afterText);
+            }
+          } else {
+            appendMessage('assistant', msg.content);
+          }
+        } else if (msg.role === 'tool_result') {
+          addToolResult(msg.tool_name || 'tool', msg.content);
         }
       });
       scrollToBottom();

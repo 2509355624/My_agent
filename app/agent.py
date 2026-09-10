@@ -23,6 +23,24 @@ def parse_tool_call(text):
     return {"name": name, "args": args}
 
 
+def _history_for_llm(history):
+    """
+    将内部 history 转换为 LLM 可识别的格式：
+    - tool_result -> user role + "[工具结果]" 前缀
+    - 其他保持不变
+    """
+    result = []
+    for msg in history:
+        if msg["role"] == "tool_result":
+            result.append({
+                "role": "user",
+                "content": "[工具结果] " + msg["content"]
+            })
+        else:
+            result.append(msg)
+    return result
+
+
 def run_agent_stream(user_input, history):
     """
     Agent Loop: 生成器版本，逐事件返回
@@ -32,7 +50,9 @@ def run_agent_stream(user_input, history):
     yield {"type": "user", "content": user_input}
 
     while True:
-        llm_history = trim_history(history)
+        # 裁剪 + 转换为 LLM 格式（tool_result -> user）
+        trimmed = trim_history(history)
+        llm_history = _history_for_llm(trimmed)
         reply = call_llm(llm_history)
         history.append({"role": "assistant", "content": reply})
 
@@ -49,7 +69,9 @@ def run_agent_stream(user_input, history):
         result = execute_tool(name, args)
         yield {"type": "tool_result", "name": name, "result": result}
 
+        # 用 tool_result role 存储，便于前端区分展示
         history.append({
-            "role": "user",
-            "content": "[工具结果] " + result
+            "role": "tool_result",
+            "content": result,
+            "tool_name": name
         })

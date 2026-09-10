@@ -82,12 +82,12 @@ def _generate_image(prompt, skill="image_gen_v1"):
 
 tool = {
     "name": "generate_image",
-    "description": "调用 ComfyUI 生成图片",
+    "description": "调用 ComfyUI 生成图片，支持批量生成。多个提示词用 --- 分隔，一次调用可生成多张图",
     "function": _generate_image,
     "parameters": {
         "type": "object",
         "properties": {
-            "prompt": {"type": "string", "description": "英文提示词，逗号分隔的标签"},
+            "prompt": {"type": "string", "description": "英文提示词，逗号分隔的标签。多张图用 --- 分隔，例如: prompt1 --- prompt2 --- prompt3"},
             "skill": {"type": "string", "description": "Skill名称，默认image_gen_v1"}
         },
         "required": ["prompt"]
