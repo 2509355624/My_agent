@@ -5,6 +5,11 @@ LLM 调用封装
 import requests
 from app.config import API_URL, API_KEY, MODEL
 
+# 跨调用状态（缓存优化用）：记录最近一次请求的 token 用量与命中率
+LAST_USAGE = {"total_tokens": 0, "hit_tokens": 0, "miss_tokens": 0, "hit_rate": 0.0}
+# 估算上下文上限（与 deepseek-flash 对齐，DeepSeek 官方文档 1M）
+CONTEXT_LIMIT = 1_000_000
+
 
 def call_llm(messages, timeout=120):
     """调用豆包 DeepSeek API，返回回复文本
@@ -32,9 +37,16 @@ def call_llm(messages, timeout=120):
         hit = details.get("cached_tokens", 0)
         miss = usage.get("prompt_tokens", 0) - hit
     total = (hit or 0) + (miss or 0)
+
+    # 更新跨调用状态（供 memory 压缩决策）
+    rate = (hit / total) if total > 0 else 0.0
+    LAST_USAGE["total_tokens"] = total
+    LAST_USAGE["hit_tokens"] = hit or 0
+    LAST_USAGE["miss_tokens"] = miss or 0
+    LAST_USAGE["hit_rate"] = rate
+
     if total > 0:
-        rate = (hit or 0) / total * 100
-        print(f"[cache] 命中 {hit} / {total} tokens = {rate:.1f}% "
+        print(f"[cache] 命中 {hit} / {total} tokens = {rate*100:.1f}% "
               f"(未命中 {miss})")
 
     return data["choices"][0]["message"]["content"]

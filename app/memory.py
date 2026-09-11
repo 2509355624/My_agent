@@ -1,21 +1,20 @@
 """
 会话持久化 + 上下文管理
 
-上下文压缩策略（渐进式）：
-- Tier 0 (< WATCH_THRESHOLD)：完整保留，监控
-- Tier 1 (>= WATCH_THRESHOLD)：旧轮次工具结果截断
-- Tier 2 (>= COMPACT_THRESHOLD)：更多轮次截断 + 更强截断
-- Tier 3 (>= REACTIVE_THRESHOLD)：强压缩，只保留最近几轮完整
+上下文压缩策略（缓存感知 + 一次性整段 LLM 摘要）：
+- 原则 1：命中率高时绝不压缩。DeepSeek 1M 上下文，命中 token 近乎免费；
+  让上下文自然增长，保持热前缀不被掐断。
+- 原则 2：只在"占用率高 且 命中率低"时，把旧区一次性交给 LLM 生成摘要，
+  替换为单条摘要消息，建立新的稳定热前缀。
+- 原则 3：不做逐轮逐条截断——那会每轮掐断一次热前缀（cache miss 元凶）。
 
-设计原则：
-1. 不删除消息，只截断内容 → 保持消息数组长度稳定，保护 prefix cache
-2. 渐进式 → 尽量晚地破坏信息，先压最旧的
-3. 工具结果优先压 → user/assistant 消息保留完整对话逻辑
+基于天枢 cache-preserving 策略思想简化实现。
 """
 
 import json
 import os
-from app.config import SESSION_FILE, MAX_TURNS
+from app.config import SESSION_FILE
+from app.llm import LAST_USAGE, CONTEXT_LIMIT
 
 
 # ─── 持久化 ──────────────────────────────────────────
@@ -43,133 +42,20 @@ def load_history():
 
 # ─── 上下文压缩 ──────────────────────────────────────
 
-# 压缩阈值（按轮次计算，一轮 = user + assistant + 若干 tool_result）
-WATCH_THRESHOLD = int(MAX_TURNS * 0.5)      # 超过 50% 开始轻度截断
-COMPACT_THRESHOLD = int(MAX_TURNS * 0.75)   # 超过 75% 中度截断
-REACTIVE_THRESHOLD = int(MAX_TURNS * 0.9)   # 超过 90% 强压缩
+# token 占用率触发点（对应 DeepSeek 1M 上下文）
+WATCH_RATIO = 0.5     # 占用 50% 开始"考虑"（仅记录，不压缩）
+COMPACT_RATIO = 0.80  # 占用 80% 且命中率低 → 触发整段摘要
+REACTIVE_RATIO = 0.90 # 占用 90% → 无论命中率都强制压缩
 
-# 工具结果截断长度（字符数）
-TRUNCATE_LIGHT = 800      # 轻度截断：保留 800 字预览
-TRUNCATE_MEDIUM = 300     # 中度截断：保留 300 字预览
-TRUNCATE_HEAVY = 100      # 重度截断：保留 100 字预览
+# 命中率"低"判据：低于此值才认为该压缩（保护热前缀）
+LOW_HIT_RATE = 0.3
 
-# 完整保留的最近轮次
-FULL_RECENT_TURNS = 3     # 最近 3 轮永远完整保留
+# 完整保留的最近轮次（保证热前缀有稳定"锚点"）
+FULL_RECENT_TURNS = 3
 
-
-def _estimate_turns(other_msgs):
-    """估算消息中的用户轮次（user 消息数 = 轮次数）"""
-    return sum(1 for m in other_msgs if m["role"] == "user")
-
-
-def _truncate_content(content, max_chars, tool_name=""):
-    """截断工具结果内容，保留开头预览 + 标记"""
-    if len(content) <= max_chars:
-        return content
-
-    # 保留前 max_chars 字符
-    preview = content[:max_chars]
-    marker = f"\n\n[已截断 · 原内容 {len(content)} 字，仅保留前 {max_chars} 字]"
-    if tool_name:
-        marker = f"\n\n[已截断 · {tool_name} · 原 {len(content)} 字，保留前 {max_chars} 字]"
-
-    return preview + marker
-
-
-def trim_history(history):
-    """
-    渐进式上下文压缩。
-
-    策略：
-    1. system 消息永远保留
-    2. 最近 FULL_RECENT_TURNS 轮完整保留
-    3. 更早的轮次，按"越旧越狠"的原则截断工具结果
-    4. 超过 MAX_TURNS 的轮次，只保留 user 消息（作为上下文锚点）和截断的 assistant 消息
-
-    关键：不删除消息（只截断内容），保持消息数量稳定，
-    保护 prefix cache 的消息索引不被破坏。
-    """
-    system_msgs = [m for m in history if m.get("role") == "system"]
-    other_msgs = [m for m in history if m.get("role") != "system"]
-
-    total_turns = _estimate_turns(other_msgs)
-
-    # 还没到阈值，完整返回
-    if total_turns <= WATCH_THRESHOLD:
-        return history
-
-    # 按轮次分组（一轮 = 从 user 开始，到下一个 user 之前）
-    turns = _split_turns(other_msgs)
-    total = len(turns)
-
-    if total <= FULL_RECENT_TURNS:
-        return history
-
-    # 计算每轮的压缩级别
-    # 最近 FULL_RECENT_TURNS 轮：完整保留
-    # 往前的轮次：越旧越狠
-    result_msgs = []
-    for i, turn_msgs in enumerate(turns):
-        turn_age = total - 1 - i  # 0 = 最新，越大越旧
-
-        if turn_age < FULL_RECENT_TURNS:
-            # 最近几轮，完整保留
-            result_msgs.extend(turn_msgs)
-        else:
-            # 旧轮次，截断工具结果
-            truncate_len = _get_truncate_length(turn_age, total)
-            for msg in turn_msgs:
-                if msg["role"] == "tool_result":
-                    # 已截断的消息字节一次定型，永不再改：
-                    # 二次重截会改变历史字节，制造新的缓存断点
-                    if msg.get("_truncated"):
-                        result_msgs.append(msg)
-                        continue
-                    msg_copy = dict(msg)
-                    tool_name = msg.get("tool_name", "")
-                    msg_copy["content"] = _truncate_content(
-                        msg["content"], truncate_len, tool_name
-                    )
-                    msg_copy["_truncated"] = True
-                    result_msgs.append(msg_copy)
-                else:
-                    result_msgs.append(msg)
-
-    # 如果还是太多（超过 MAX_TURNS 很多），做更强的处理：
-    # 把最旧的轮次里的 assistant 消息也截断
-    final_turns = _split_turns(result_msgs)
-    if len(final_turns) > MAX_TURNS:
-        excess = len(final_turns) - MAX_TURNS
-        compressed = []
-        for i, turn_msgs in enumerate(final_turns):
-            if i < excess:
-                # 最旧的 excess 轮：只保留 user 消息（首条），其他极简
-                compressed.append(turn_msgs[0])  # user 消息
-                # assistant 消息截断到很短
-                for msg in turn_msgs[1:]:
-                    # 已定型的消息跳过，不再改字节
-                    if msg.get("_truncated"):
-                        compressed.append(msg)
-                        continue
-                    if msg["role"] == "assistant":
-                        msg_copy = dict(msg)
-                        msg_copy["content"] = _truncate_content(
-                            msg["content"], 100, ""
-                        )
-                        msg_copy["_truncated"] = True
-                        compressed.append(msg_copy)
-                    elif msg["role"] == "tool_result":
-                        msg_copy = dict(msg)
-                        msg_copy["content"] = _truncate_content(
-                            msg["content"], TRUNCATE_HEAVY, msg.get("tool_name", "")
-                        )
-                        msg_copy["_truncated"] = True
-                        compressed.append(msg_copy)
-            else:
-                compressed.extend(turn_msgs)
-        result_msgs = compressed
-
-    return system_msgs + result_msgs
+# 压缩冷却：压缩后短时间内不再触发，避免连续摘要浪费
+_LAST_COMPACT_TOKENS = 0  # 上次压缩时的占用 token 数
+COMPACT_COOLDOWN_TOKENS = 100_000  # 压缩后至少涨 10 万 token 才再次压缩
 
 
 def _split_turns(messages):
@@ -187,16 +73,126 @@ def _split_turns(messages):
     return turns
 
 
-def _get_truncate_length(turn_age, total_turns):
-    """根据轮次年龄计算截断长度：越旧越短"""
-    # turn_age: 0 = 最新，total_turns-1 = 最旧
-    if total_turns <= FULL_RECENT_TURNS + 1:
-        return TRUNCATE_LIGHT
+def _summarize_old_turns(old_msgs):
+    """把旧交错义消息（不含 system）交给 LLM 生成一段摘要。
 
-    # 线性插值：从 LIGHT 到 HEAVY
-    old_ratio = (turn_age - FULL_RECENT_TURNS) / max(1, total_turns - FULL_RECENT_TURNS)
-    old_ratio = min(1.0, max(0.0, old_ratio))
+    用独立一次 LLM 调用，把整段旧历史压缩成一句 / 若干句要点，
+    替换为单条工具结果式消息，从而建立新的稳定前缀。
+    """
+    from app.llm import call_llm
 
-    truncate_range = TRUNCATE_LIGHT - TRUNCATE_HEAVY
-    length = int(TRUNCATE_LIGHT - old_ratio * truncate_range * 0.8)
-    return max(TRUNCATE_HEAVY, length)
+    # 拼装摘要请求：只把旧内容交给模型，不混入新历史
+    payload = [{
+        "role": "system",
+        "content": (
+            "你是会话压缩器。下面是一段 AI 助手同用户的旧对话记录，"
+            "包含其调用工具的过程和结果。请你用简洁的中文，提炼出对"
+            "后续继续对话仍然重要的事实、结论、用户偏好、已完成的任务"
+            "和产生的文件/产物。省略工具调用的机械过程，只保留有长期"
+            "价值的信息。控制在 200 字以内。"
+        )
+    }, {
+        "role": "user",
+        "content": "以下是旧对话记录：\n\n" + _dump_messages(old_msgs)
+    }]
+
+    summary = call_llm(payload)
+    summary = summary.strip()
+    if not summary:
+        summary = "（旧对话无需要保留的长期信息）"
+    return summary
+
+
+def _dump_messages(msgs):
+    """把消息转成供摘要的紧凑文本"""
+    lines = []
+    for m in msgs:
+        role = m.get("role")
+        content = m.get("content", "")
+        if role == "tool_result":
+            lines.append("[工具结果：" + m.get("tool_name", "?") + "] " + str(content)[:3000])
+        elif role == "user":
+            lines.append("[用户] " + str(content))
+        elif role == "assistant":
+            lines.append("[助手] " + str(content))
+    return "\n".join(lines)
+
+
+def trim_history(history):
+    """
+    缓存感知的上下文压缩。
+
+    触发逻辑（用最近一次 LLM 调用的真实 token 占用 + 命中率）：
+    1. 占用率 < COMPACT_RATIO：直接原样返回（不压，保住热前缀）。
+    2. 占用率 >= COMPACT_RATIO 且命中率低：触发一次整段摘要替换旧区。
+    3. 占用率 >= REACTIVE_RATIO：无论命中率，强制压缩。
+    4. 压缩冷却期内不重复触发。
+
+    压缩方式：保留最近 FULL_RECENT_TURNS 轮完整，其余旧轮一次性交给
+    LLM 生成摘要，替换为单条摘要消息。此后热前缀重建，后续稳定命中。
+    """
+    global _LAST_COMPACT_TOKENS
+
+    system_msgs = [m for m in history if m.get("role") == "system"]
+    other_msgs = [m for m in history if m.get("role") != "system"]
+
+    if not other_msgs:
+        return history
+
+    # 用真实 token 占用率决定是否压缩（而不是消息条数/轮次）
+    total_tokens = LAST_USAGE.get("total_tokens", 0)
+    hit_rate = LAST_USAGE.get("hit_rate", 1.0)
+    ratio = total_tokens / CONTEXT_LIMIT if CONTEXT_LIMIT else 0
+
+    should = False
+    forced = False
+    if total_tokens and ratio >= REACTIVE_RATIO:
+        should = True
+        forced = True
+    elif total_tokens and ratio >= COMPACT_RATIO and hit_rate < LOW_HIT_RATE:
+        should = True
+
+    # 冷却期防护：非强制场景下，压缩后 token 增量太小则跳过
+    # REACTIVE 强制压缩不受冷却影响——接近真实上限时必须立即压，否则爆上下文
+    if should and not forced and total_tokens - _LAST_COMPACT_TOKENS < COMPACT_COOLDOWN_TOKENS:
+        return history
+
+    if should:
+        _LAST_COMPACT_TOKENS = total_tokens
+        return _compact(history, system_msgs, other_msgs)
+
+    # 默认：不压缩。命中率越高越不该动（每 token 都是免费命中价）
+    return history
+
+
+def _compact(history, system_msgs, other_msgs, force=False):
+    """执行整段摘要替换：保留最近几轮完整，旧区交给 LLM 一次性摘要。"""
+    turns = _split_turns(other_msgs)
+    if len(turns) <= FULL_RECENT_TURNS:
+        return history
+
+    old_turns = turns[:-FULL_RECENT_TURNS]
+    recent_turns = turns[-FULL_RECENT_TURNS:]
+
+    # 旧轮扁平化为摘要输入
+    old_msgs = []
+    for t in old_turns:
+        old_msgs.extend(t)
+
+    summary = _summarize_old_turns(old_msgs)
+
+    # 拼装：system + 摘要消息 + 最近几轮 + 状态栏（由 agent 运行时追加）
+    result = list(system_msgs)
+    result.append({
+        "role": "tool_result",
+        "tool_name": "compact_summary",
+        "content": "[上文压缩摘要] " + summary,
+    })
+    for t in recent_turns:
+        result.extend(t)
+    return result
+
+
+def _compact_if_needed_for_history(history):
+    """兼容旧调用点的高层入口"""
+    return trim_history(history)
