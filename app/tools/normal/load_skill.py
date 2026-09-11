@@ -8,6 +8,17 @@ def _load_skill(skill_name):
         return "错误: 找不到 Skill '" + skill_name + "'"
     if not skill_data["skill_md"]:
         return "Skill '" + skill_name + "' 没有说明文档"
+
+    parts = [skill_data["skill_md"]]
+
+    if skill_data.get("version"):
+        parts.append("[版本]\n" + skill_data["version"])
+
+    if skill_data.get("references"):
+        parts.append("[参考资料]\n" + skill_data["references"])
+
+    if len(parts) > 1:
+        return "\n\n".join(parts)
     return skill_data["skill_md"]
 
 

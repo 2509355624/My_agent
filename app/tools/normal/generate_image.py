@@ -48,7 +48,7 @@ def _get_output_images(history_entry):
 
 # ─── 工具函数 ────────────────────────────────────────
 
-def _generate_image(prompt, skill="image_gen_v1"):
+def _generate_image(prompt, skill="image_gen_v1", use_character=True):
     skill_data = load_skill(skill)
     if not skill_data or not skill_data["workflow"]:
         return "错误: 找不到 Skill '" + skill + "'"
@@ -57,7 +57,10 @@ def _generate_image(prompt, skill="image_gen_v1"):
 
     # 替换占位符
     seed = random.randint(1, 2**32 - 1)
+    # 是否用 skill 底模：默认用；若关闭则用中性占位（不吃角色本体）
     character = skill_data.get("character", "")
+    if not use_character:
+        character = ""
     # 转义 character 里的换行和特殊字符
     character_escaped = character.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '')
     workflow_str = workflow_str.replace('"__MULTI_PROMPTS__"', json.dumps(prompt))
@@ -82,13 +85,16 @@ def _generate_image(prompt, skill="image_gen_v1"):
 
 tool = {
     "name": "generate_image",
-    "description": "调用 ComfyUI 生成图片，支持批量生成。多个提示词用 --- 分隔，一次调用可生成多张图",
+    "description": "调用 ComfyUI 生成图片，支持批量生成。多个提示词用 --- 分隔，一次调用可生成多张图。"
+                  "【底模两种模式】use_character=true时使用Skill自带角色底模(固定角色，prompt只写动作/环境/构图)；"
+                  "use_character=false时无底模，你必须自己在prompt中写出完整角色提示词(发型/发色/体型/胸围/服装/年龄等)，再叠加动作和环境。",
     "function": _generate_image,
     "parameters": {
         "type": "object",
         "properties": {
-            "prompt": {"type": "string", "description": "英文提示词，逗号分隔的标签。多张图用 --- 分隔，例如: prompt1 --- prompt2 --- prompt3"},
-            "skill": {"type": "string", "description": "Skill名称，默认image_gen_v1"}
+            "prompt": {"type": "string", "description": "英文提示词，逗号分隔的标签。多张图用 --- 分隔，例如: prompt1 --- prompt2 --- prompt3。无底模时须包含完整角色描述"},
+            "skill": {"type": "string", "description": "Skill名称，默认image_gen_v1。列表见 load_skill"},
+            "use_character": {"type": "boolean", "description": "是否使用该Skill自带的角色底模（默认true）。设为false时无底模，你必须把完整角色提示词写进prompt"}
         },
         "required": ["prompt"]
     }

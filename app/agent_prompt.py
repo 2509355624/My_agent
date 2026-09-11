@@ -39,16 +39,28 @@ def _build_tool_list():
 
 
 def _build_skill_list():
-    """构建 Skill 目录（只列名字+一句话简介）"""
+    """构建 Skill 目录（名字 + 类型 + 底模情况 + 一句话简介）"""
     skill_list = list_skills()
     if not skill_list:
         return "（暂无）"
     descs = []
     for s in skill_list:
         data = load_skill(s)
-        if data and data["skill_md"]:
-            first_line = data["skill_md"].strip().split("\n")[0].lstrip("# ").strip()
-            descs.append("- **" + s + "**: " + first_line)
+        if not data or not data["skill_md"]:
+            continue
+        first_line = data["skill_md"].strip().split("\n")[0].lstrip("# ").strip()
+
+        # 类型 + 底模标注
+        is_image = data.get("workflow") is not None
+        has_char = bool((data.get("character") or "").strip())
+        if is_image:
+            kind = "生图"
+            base = "带底模" if has_char else "无底模"
+            tag = "[" + base + "]"
+        else:
+            kind = "写作"
+            tag = ""
+        descs.append("- **" + s + "**（" + kind + tag + "）: " + first_line)
     return "\n".join(descs) if descs else "（暂无）"
 
 
