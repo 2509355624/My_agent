@@ -931,7 +931,7 @@ function quickAskAboutDoc(filename) {
 async function deleteDoc(filename) {
   if (!confirm('确定删除这个文档吗？')) return;
   try {
-    const res = await fetch('/api/documents/' + filename, {
+    const res = await fetch('/api/documents/' + encodeURIComponent(filename), {
       method: 'DELETE'
     });
     const data = await res.json();

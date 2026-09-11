@@ -2,6 +2,7 @@
 Flask Web 服务入口
 """
 
+import re
 import requests
 from flask import Flask, request, jsonify, send_from_directory, Response
 from app.config import AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR
@@ -127,11 +128,21 @@ def api_list_documents():
     return jsonify({"files": result})
 
 
+def _safe_base_filename(fname):
+    """净化上传文件名：保留中文等 Unicode 字符，仅去除路径分隔符和危险字符防穿越"""
+    fname = fname.replace("\\", "/").split("/")[-1].strip()
+    # 只允许 中文/字母/数字/下划线/中划线/空格/点，去其他危险字符
+    cleaned = re.sub(r"[^\w\u4e00-\u9fff. \-]", "", fname, flags=re.UNICODE)
+    cleaned = cleaned.strip(". ")
+    if not cleaned:
+        cleaned = "unnamed.txt"
+    return cleaned
+
+
 @app.route("/api/documents/upload", methods=["POST"])
 def api_upload_document():
     """上传文档到 documents 目录"""
     import os
-    from werkzeug.utils import secure_filename
 
     os.makedirs(DOCUMENTS_DIR, exist_ok=True)
 
@@ -142,7 +153,7 @@ def api_upload_document():
     if not f.filename:
         return jsonify({"error": "文件名为空"}), 400
 
-    filename = secure_filename(f.filename)
+    filename = _safe_base_filename(f.filename)
     filepath = os.path.join(DOCUMENTS_DIR, filename)
     f.save(filepath)
 
