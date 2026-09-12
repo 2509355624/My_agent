@@ -152,6 +152,14 @@ def _handle(req: dict, embeddings: LocalEmbeddings, store: VectorStore) -> dict:
             deleted = store.delete_entry(kb_name, entry_id)
             return {"id": req_id, "ok": True, "deleted": deleted}
 
+        if cmd == "delete_entries":
+            kb_name = str(req.get("kb_name") or "").strip()
+            ids = req.get("ids") or []
+            if not kb_name or not ids:
+                raise ValueError("kb_name and ids are required")
+            deleted = store.delete_entries(kb_name, ids)
+            return {"id": req_id, "ok": True, "deleted": deleted}
+
         raise ValueError(f"unknown cmd: {cmd}")
     except Exception as exc:
         return {"id": req_id, "ok": False, "error": str(exc)}

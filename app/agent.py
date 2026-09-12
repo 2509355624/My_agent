@@ -122,7 +122,7 @@ def _status_message(history):
     return {"role": "system", "content": build_status_bar(message_count=msg_count, last_tool=last_tool)}
 
 
-def run_agent_stream(user_input, history):
+def run_agent_stream(user_input, history, provider=None, model=None):
     """
     Agent Loop: 生成器版本，逐事件返回
     事件类型: user / assistant / tool_call / tool_result
@@ -131,6 +131,7 @@ def run_agent_stream(user_input, history):
     1. 一次处理多个工具调用
     2. turn 上限 MAX_TURNS 防止无限循环
     3. 异常捕获，保证至少返回回复
+    4. provider/model 透传：支持 web 端动态切换模型
     """
     from app.config import MAX_TURNS
 
@@ -147,7 +148,7 @@ def run_agent_stream(user_input, history):
             llm_history = _history_for_llm(trimmed)
             # 状态栏追加在尾部，动态变化不毒化前缀缓存
             llm_history.append(_status_message(history))
-            reply = call_llm(llm_history)
+            reply = call_llm(llm_history, provider=provider, model=model)
             history.append({"role": "assistant", "content": reply})
 
             tool_calls = parse_tool_calls(reply)

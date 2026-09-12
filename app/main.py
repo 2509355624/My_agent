@@ -5,7 +5,8 @@ Flask Web 服务入口
 import re
 import requests
 from flask import Flask, request, jsonify, send_from_directory, Response
-from app.config import AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR
+from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
+                        LLM_PROVIDER, PROVIDERS, OLLAMA_BASE_URL)
 from app.skills import list_skills, load_skill
 from app.agent_prompt import build_stable_prompt
 from app.memory import load_history, save_history
@@ -47,10 +48,42 @@ def index():
 
 # ─── API 路由 ────────────────────────────────────────
 
+@app.route("/api/providers")
+def get_providers():
+    """返回支持的模型提供商列表（供前端下拉）"""
+    items = []
+    for key, cfg in PROVIDERS.items():
+        items.append({
+            "id": key,
+            "label": cfg["label"],
+            "model": cfg["model"],
+            "base_url": cfg["base_url"],
+        })
+    return jsonify({"providers": items, "default": LLM_PROVIDER, "model": MODEL})
+
+
+@app.route("/api/models")
+def get_ollama_models():
+    """列出 Ollama 本地已安装的模型（代理 /api/tags）"""
+    base = request.args.get("baseUrl", "").strip() or OLLAMA_BASE_URL
+    try:
+        resp = requests.get(base.rstrip("/") + "/api/tags", timeout=5)
+        resp.raise_for_status()
+        models = [
+            {"name": t.get("name", ""), "size": t.get("size", 0)}
+            for t in resp.json().get("models", [])
+            if t.get("name")
+        ]
+        return jsonify({"ok": True, "models": models})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 502
+
+
 @app.route("/api/history")
 def get_history():
     msgs = [m for m in history if m.get("role") != "system"]
-    return jsonify({"messages": msgs, "model": MODEL, "count": len(msgs)})
+    return jsonify({"messages": msgs, "model": MODEL, "count": len(msgs),
+                    "provider": LLM_PROVIDER})
 
 
 @app.route("/api/chat", methods=["POST"])
@@ -58,12 +91,14 @@ def chat():
     global history
     data = request.get_json()
     user_input = data.get("message", "").strip()
+    provider = data.get("provider")
+    model = data.get("model")
 
     if not user_input:
         return jsonify({"error": "消息不能为空"}), 400
 
     events = []
-    for event in run_agent_stream(user_input, history):
+    for event in run_agent_stream(user_input, history, provider=provider, model=model):
         events.append(event)
 
     save_history(history)

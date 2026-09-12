@@ -37,6 +37,48 @@ else:
     API_KEY = VOLC_API_KEY
     MODEL = VOLC_CHAT_MODEL
 
+# ─── 多 Provider 配置表（web 端模型切换用）───────────
+
+# Ollama 本地
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+
+# provider 元信息：每种提供商的默认 base_url / model / 是否需要 api_key
+PROVIDERS = {
+    # 火山引擎（deepseek 开源模型托管）
+    "volc": {
+        "label": "火山引擎",
+        "base_url": VOLC_BASE_URL,
+        "model": VOLC_CHAT_MODEL,
+        "api_key": VOLC_API_KEY,
+        "needs_key": False,   # 用 .env 里配置的 key
+    },
+    # 豆包（Doubao 自家模型）
+    "doubao": {
+        "label": "豆包",
+        "base_url": VOLC_BASE_URL,   # 火山方舟兼容 OpenAI 接口
+        "model": os.getenv("DOUBAO_MODEL", "doubao-1-5-thinking-pro-250615"),
+        "api_key": VOLC_API_KEY,
+        "needs_key": False,
+    },
+    # DeepSeek 官方
+    "deepseek": {
+        "label": "DeepSeek 官方",
+        "base_url": DEEPSEEK_BASE_URL,
+        "model": DEEPSEEK_MODEL,
+        "api_key": DEEPSEEK_API_KEY,
+        "needs_key": False,
+    },
+    # Ollama（本地免费）
+    "ollama": {
+        "label": "Ollama 本地",
+        "base_url": OLLAMA_BASE_URL,
+        "model": OLLAMA_MODEL,
+        "api_key": "",
+        "needs_key": False,
+    },
+}
+
 # ─── ComfyUI ────────────────────────────────────────
 # 没装 ComfyUI 的机器设为 false：不再注册 generate_image 工具，
 # 避免 LLM 白白尝试调用一个必然失败的工具

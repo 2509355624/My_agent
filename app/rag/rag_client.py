@@ -147,5 +147,8 @@ class RagClient:
     def delete_entry(self, kb_name: str, entry_id: str) -> dict:
         return self._call("delete_entry", kb_name=kb_name, entry_id=entry_id)
 
+    def delete_entries(self, kb_name: str, entry_ids: list[str]) -> dict:
+        return self._call("delete_entries", kb_name=kb_name, ids=entry_ids)
+
     def ping(self) -> dict:
         return self._call("ping")

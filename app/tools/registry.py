@@ -57,6 +57,9 @@ register_tool(**_read_file_tool)
 from app.tools.normal.write_file import tool as _write_file_tool
 register_tool(**_write_file_tool)
 
+from app.tools.normal.delete_file import tool as _delete_file_tool
+register_tool(**_delete_file_tool)
+
 from app.tools.normal.documents import (
     tool_list as _doc_list_tool,
     tool_info as _doc_info_tool,
@@ -75,6 +78,7 @@ from app.tools.rag.kb_tools import (
     ingest_kb as _ingest_kb_fn,
     list_kb as _list_kb_fn,
     delete_kb as _delete_kb_fn,
+    delete_entries as _delete_entries_fn,
     chunk_document as _chunk_doc_fn,
 )
 
@@ -108,6 +112,14 @@ register_tool(
     description=_KB_SCHEMA["delete_kb"]["function"]["description"],
     function=_delete_kb_fn,
     parameters=_KB_SCHEMA["delete_kb"]["function"]["parameters"],
+)
+
+# delete_entries
+register_tool(
+    name="delete_entries",
+    description=_KB_SCHEMA["delete_entries"]["function"]["description"],
+    function=_delete_entries_fn,
+    parameters=_KB_SCHEMA["delete_entries"]["function"]["parameters"],
 )
 
 # chunk_document

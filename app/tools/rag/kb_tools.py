@@ -103,6 +103,28 @@ TOOL_SCHEMA = {
             }
         }
     },
+    "delete_entries": {
+        "type": "function",
+        "function": {
+            "name": "delete_entries",
+            "description": "批量删除知识库中指定 id 的片段（ChromaDB 原生批量删除）。用于清理错入库或过期的内容，需先通过 search_kb 或查询确认要删除的片段 id。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kb_name": {
+                        "type": "string",
+                        "description": "知识库名称"
+                    },
+                    "entry_ids": {
+                        "type": "array",
+                        "description": "要删除的片段 id 列表（可一次传多个，批量删除）",
+                        "items": {"type": "string"}
+                    }
+                },
+                "required": ["kb_name", "entry_ids"]
+            }
+        }
+    },
     "chunk_document": {
         "type": "function",
         "function": {
@@ -204,6 +226,20 @@ def delete_kb(kb_name: str) -> str:
     if deleted:
         return f"[知识库 '{kb_name}'] 已删除"
     return f"[知识库 '{kb_name}'] 删除失败（可能不存在）"
+
+
+def delete_entries(kb_name: str, entry_ids: list[str]) -> str:
+    """批量删除指定 id 的片段（ChromaDB 原生批量删除，非 for 循环）。"""
+    ids = [i for i in (entry_ids or []) if i]
+    if not ids:
+        return "错误: entry_ids 不能为空"
+    client = _get_client()
+    result = client.delete_entries(kb_name, ids)
+
+    if not result.get("ok"):
+        return f"[删除失败] {result.get('error', '未知错误')}"
+    deleted = result.get("deleted", 0)
+    return f"[知识库 '{kb_name}'] 批量删除 {deleted} 条片段"
 
 
 def chunk_document(content: str, source: str, chunk_size: int = 600) -> str:

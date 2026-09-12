@@ -753,6 +753,80 @@
     border-radius: 50%;
     margin-right: 6px;
   }
+
+  /* ── 右侧模型设置面板 ── */
+  .sidebar.right {
+    left: auto;
+    right: -300px;
+    width: 280px;
+    border-right: none;
+    border-left: 1px solid var(--border);
+  }
+  .sidebar.right.open {
+    right: 0;
+  }
+
+  .side-form {
+    padding: 12px;
+    overflow-y: auto;
+    flex: 1;
+  }
+
+  .form-group {
+    margin-bottom: 14px;
+  }
+  .form-group > label {
+    display: block;
+    font-size: 11px;
+    color: var(--text-mute);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .side-select,
+  .side-input {
+    width: 100%;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
+    font-family: inherit;
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .side-select:focus,
+  .side-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+  }
+  .side-select option {
+    background: var(--bg-input);
+    color: var(--text);
+  }
+  select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .baseurl-note {
+    font-size: 11px;
+    color: var(--text-mute);
+    margin-top: 6px;
+    word-break: break-all;
+    opacity: 0.85;
+  }
+  .side-hint {
+    font-size: 11px;
+    color: var(--text-mute);
+    line-height: 1.6;
+    margin-bottom: 12px;
+  }
+  .hidden {
+    display: none !important;
+  }
 </style>
 </head>
 <body>
@@ -760,6 +834,7 @@
   <div class="header">
     <div class="header-left">
       <button class="icon-btn" onclick="toggleSidebar()" title="文档库">📁</button>
+      <button class="icon-btn" onclick="toggleModelPanel()" title="模型设置">⚙</button>
       <div class="logo">A</div>
       <div>
         <div class="title">个人 Agent</div>
@@ -789,6 +864,29 @@
       </div>
     </div>
     <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+    <!-- 右侧面板：模型设置 -->
+    <div class="sidebar right" id="modelPanel">
+      <div class="sidebar-header">
+        <span>⚙ 模型设置</span>
+        <button class="icon-btn-sm" onclick="toggleModelPanel()">✕</button>
+      </div>
+      <div class="side-form">
+        <div class="side-hint">选择对话使用的模型提供商，切换后立即生效。</div>
+
+        <div class="form-group">
+          <label>AI Provider</label>
+          <select id="provider" class="side-select" onchange="onProviderChange()">
+            <option value="">加载中...</option>
+          </select>
+        </div>
+
+        <div id="modelGroup"></div>
+
+        <button class="btn" style="width:100%" onclick="refreshModels(true)">🔄 刷新模型列表</button>
+      </div>
+    </div>
+    <div class="sidebar-overlay" id="modelOverlay" onclick="toggleModelPanel()"></div>
 
     <!-- 聊天主区域 -->
     <div class="chat-area">
@@ -831,6 +929,11 @@ const modelBadge = document.getElementById('modelBadge');
 
 let isLoading = false;
 
+// 当前选中的模型提供商与模型（随每次请求传入后端）
+let providersMeta = [];   // {id, label, model, base_url}
+let currentProvider = null;
+let currentModel = '';
+
 // Auto-resize textarea
 inputBox.addEventListener('input', function() {
   this.style.height = 'auto';
@@ -847,6 +950,7 @@ inputBox.addEventListener('keydown', function(e) {
 
 // Load history on page load
 window.addEventListener('DOMContentLoaded', function() {
+  loadProviders();
   loadHistory();
   loadDocuments();
 });
@@ -858,6 +962,139 @@ function toggleSidebar() {
   const overlay = document.getElementById('sidebarOverlay');
   sidebar.classList.toggle('open');
   overlay.classList.toggle('open');
+}
+
+// ─── 模型设置面板 ────────────────────────────────────
+
+function toggleModelPanel() {
+  const panel = document.getElementById('modelPanel');
+  const overlay = document.getElementById('modelOverlay');
+  panel.classList.toggle('open');
+  overlay.classList.toggle('open');
+}
+
+// 各提供商的候选模型列表（ollama 由后端实时拉取）
+const MODEL_PRESETS = {
+  volc: ['deepseek-v4-flash-ga-260731', 'deepseek-v4-flash-260425'],
+  doubao: ['doubao-1-5-thinking-pro-250615', 'doubao-seed-2-0-mini-260428', 'doubao-1-5-pro-250615'],
+  deepseek: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-flash']
+};
+
+function updateModelBadge(label, model) {
+  modelBadge.textContent = (label && model) ? label + ' · ' + model : (model || '未知模型');
+}
+
+async function loadProviders() {
+  try {
+    const res = await fetch('/api/providers');
+    const data = await res.json();
+    providersMeta = data.providers || [];
+
+    const sel = document.getElementById('provider');
+    sel.innerHTML = providersMeta.map(p =>
+      '<option value="' + escapeHtml(p.id) + '">' + escapeHtml(p.label) + '</option>'
+    ).join('');
+
+    // 默认选中后端配置的 provider
+    const def = data.default;
+    sel.value = providersMeta.some(p => p.id === def) ? def : (providersMeta[0] && providersMeta[0].id);
+    currentProvider = sel.value;
+    const cfg = providersMeta.find(p => p.id === currentProvider);
+    currentModel = (cfg && cfg.model) || '';
+    onProviderChange();
+  } catch (e) {
+    modelBadge.textContent = '模型加载失败';
+  }
+}
+
+function onProviderChange() {
+  const sel = document.getElementById('provider');
+  currentProvider = sel.value;
+  const cfg = providersMeta.find(p => p.id === currentProvider);
+  // 切换到新提供商时，模型重置为该提供商的默认值，避免残留上一个提供商的模型导致误发
+  if (cfg) {
+    currentModel = cfg.model || '';
+    renderModelGroup(currentProvider, cfg, currentModel);
+  }
+}
+
+function renderModelGroup(provider, cfg, selectedModel) {
+  const group = document.getElementById('modelGroup');
+
+  // base_url 只读展示（后端以 .env 配置为准）
+  let baseNote = '';
+  if (cfg && cfg.base_url) {
+    baseNote = '<div class="baseurl-note">' + escapeHtml(cfg.base_url) + '</div>';
+  }
+
+  if (provider === 'ollama') {
+    group.innerHTML =
+      '<div class="form-group">' +
+        '<label>本地模型</label>' +
+        '<select id="model" class="side-select" disabled onchange="onModelSelect(this.value)">' +
+          '<option>正在检测 Ollama…</option>' +
+        '</select>' +
+        baseNote +
+      '</div>';
+    fetchOllamaModels(selectedModel);
+    return;
+  }
+
+  const presets = MODEL_PRESETS[provider] || (cfg && cfg.model ? [cfg.model] : []);
+  const opts = presets.map(m =>
+    '<option value="' + escapeHtml(m) + '"></option>'
+  ).join('');
+
+  group.innerHTML =
+    '<div class="form-group">' +
+      '<label>模型 / 接入点ID</label>' +
+      '<input id="model" list="modelOptions" class="side-input" value="' + escapeHtml(selectedModel) + '"' +
+        ' oninput="onModelSelect(this.value)" autocomplete="off" spellcheck="false" placeholder="模型ID 或 ep-xxxx 接入点ID">' +
+      '<datalist id="modelOptions">' + opts + '</datalist>' +
+      baseNote +
+    '</div>';
+}
+
+function onModelSelect(value) {
+  currentModel = value;
+  updateModelBadge((providersMeta.find(p => p.id === currentProvider) || {}).label, currentModel);
+}
+
+async function fetchOllamaModels(selectedModel) {
+  const sel = document.getElementById('model');
+  const cfg = providersMeta.find(p => p.id === 'ollama');
+  const baseUrl = (cfg && cfg.base_url) || '';
+  try {
+    const res = await fetch('/api/models?baseUrl=' + encodeURIComponent(baseUrl));
+    const data = await res.json();
+    let opts;
+    if (res.ok && data.ok && data.models.length > 0) {
+      const chosen = selectedModel && data.models.some(m => m.name === selectedModel) ? selectedModel : data.models[0].name;
+      currentModel = chosen;
+      opts = data.models.map(m =>
+        '<option value="' + escapeHtml(m.name) + '"' + (m.name === chosen ? ' selected' : '') + '>' +
+        escapeHtml(m.name) + '</option>'
+      ).join('');
+    } else {
+      opts = '<option value="">（未检测到模型，请先 ollama pull）</option>';
+    }
+    sel.innerHTML = opts;
+    sel.disabled = false;
+    updateModelBadge(cfg ? cfg.label : 'Ollama', currentModel);
+  } catch (e) {
+    sel.innerHTML = '<option value="">（无法连接 Ollama）</option>';
+    sel.disabled = false;
+    updateModelBadge(cfg ? cfg.label : 'Ollama', currentModel);
+  }
+}
+
+function refreshModels(manual) {
+  if (currentProvider !== 'ollama') {
+    if (manual) alert('仅 Ollama 本地需要刷新模型列表');
+    return;
+  }
+  const cfg = providersMeta.find(p => p.id === 'ollama');
+  renderModelGroup('ollama', cfg, currentModel);
 }
 
 function formatSize(bytes) {
@@ -986,7 +1223,6 @@ async function loadHistory() {
   try {
     const res = await fetch('/api/history');
     const data = await res.json();
-    modelBadge.textContent = data.model;
 
     if (data.messages.length > 0) {
       emptyState.style.display = 'none';
@@ -1038,7 +1274,11 @@ async function sendMessage() {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text })
+      body: JSON.stringify({
+        message: text,
+        provider: currentProvider,
+        model: currentModel
+      })
     });
 
     if (!res.ok) throw new Error('请求失败');

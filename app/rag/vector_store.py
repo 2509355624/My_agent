@@ -140,9 +140,19 @@ class VectorStore:
             return False
 
     def delete_entry(self, kb_name: str, entry_id: str) -> bool:
+        return self.delete_entries(kb_name, [entry_id])
+
+    def delete_entries(self, kb_name: str, entry_ids: list[str]) -> int:
+        """批量删除指定 id 的条目（ChromaDB 原生批量删，非 for 循环）。
+
+        返回实际删除条数；id 不存在会被 ChromaDB 静默忽略。
+        """
         col = self._collection(kb_name)
+        ids = [i for i in (entry_ids or []) if i]
+        if not ids:
+            return 0
         try:
-            col.delete(ids=[entry_id])
-            return True
+            col.delete(ids=ids)
+            return len(ids)
         except Exception:
-            return False
+            return 0
