@@ -3,6 +3,7 @@ Flask Web 服务入口
 """
 
 import re
+import socket
 import requests
 from flask import Flask, request, jsonify, send_from_directory, Response
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
@@ -15,27 +16,25 @@ from app.tools.normal.documents import list_documents, file_info, read_document,
 
 app = Flask(__name__, static_folder=WEB_DIR, static_url_path="")
 
-# ─── 全局状态 ────────────────────────────────────────
+# ─── 会话持久化（以 SESSION_FILE 为单一事实源）────────
+# 一切以磁盘文件为准：每次读写都 load/save，保证手机/电脑等多端
+# 刷新到的一致（不再依赖进程内存全局变量，避免多端不同步）。
 
-history = load_history()
 
+def _ensure_system_prompt(only_system=False):
+    """把 SESSION_FILE 的会话首条固定为稳定的 system 消息（prefix cache 锚点）。
+    状态栏不在 messages[1]，而是由 agent.run_agent_stream 请求时动态追加在
+    消息数组末尾，只牺牲它自己那几十个 token，避免毒化前缀缓存。
 
-def _ensure_system_prompt():
-    """确保 history 开头有一条稳定的 system 消息（prefix cache 锚点）。
-
-    状态栏不再放在 messages[1]——那里每轮变化会把之后所有历史的
-    前缀缓存全部毒化。状态栏改为请求时动态追加在消息数组末尾
-    （见 agent.run_agent_stream），只牺牲它自己那几十个 token。
+    - only_system=True：清空所有非 system 消息（用于“清空会话”）
+    - only_system=False：仅补齐 system 头部，保留已有历史
     """
     stable_prompt = build_stable_prompt()
-    non_system = [m for m in history if m.get("role") != "system"]
-
-    history.clear()
-    history.append({"role": "system", "content": stable_prompt})
-    history.extend(non_system)
+    keep = [] if only_system else [m for m in load_history() if m.get("role") != "system"]
+    save_history([{"role": "system", "content": stable_prompt}] + keep)
 
 
-# 初始化时设置 system prompt
+# 初始化：确保会话文件以 system 开头
 _ensure_system_prompt()
 
 
@@ -81,14 +80,14 @@ def get_ollama_models():
 
 @app.route("/api/history")
 def get_history():
-    msgs = [m for m in history if m.get("role") != "system"]
+    h = load_history()
+    msgs = [m for m in h if m.get("role") != "system"]
     return jsonify({"messages": msgs, "model": MODEL, "count": len(msgs),
                     "provider": LLM_PROVIDER})
 
 
 @app.route("/api/chat", methods=["POST"])
 def chat():
-    global history
     data = request.get_json()
     user_input = data.get("message", "").strip()
     provider = data.get("provider")
@@ -97,20 +96,24 @@ def chat():
     if not user_input:
         return jsonify({"error": "消息不能为空"}), 400
 
+    # 每次从文件读取最新会话，保证多端一致；写完立即落盘
+    h = load_history()
+    if not h or h[0].get("role") != "system":
+        _ensure_system_prompt(only_system=True)
+        h = load_history()
+
     events = []
-    for event in run_agent_stream(user_input, history, provider=provider, model=model):
+    for event in run_agent_stream(user_input, h, provider=provider, model=model):
         events.append(event)
 
-    save_history(history)
+    save_history(h)
     return jsonify({"events": events})
 
 
 @app.route("/api/clear", methods=["POST"])
 def clear():
-    global history
-    history = []
-    _ensure_system_prompt()
-    save_history(history)
+    # 清空全部非 system 消息（保留稳定 system 前缀）
+    _ensure_system_prompt(only_system=True)
     return jsonify({"ok": True})
 
 
@@ -251,15 +254,31 @@ def api_delete_document(filename):
 
 # ─── 启动 ──────────────────────────────────────────
 
+def _local_ip():
+    """探测本机局域网 IP（供手机/平板同网访问）"""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = "127.0.0.1"
+    finally:
+        s.close()
+    return ip
+
+
 def run():
+    host = "0.0.0.0"  # 监听所有网卡，允许手机/iPad 局域网访问
+    ip = _local_ip()
     print("=" * 50)
     print("  My Agent - Personal AI Assistant")
     print("  Model: " + MODEL)
-    print("  URL: http://localhost:" + str(AGENT_PORT))
-    print("  Session: " + str(len(history)) + " messages")
+    print("  本机: http://localhost:" + str(AGENT_PORT))
+    print("  局域网: http://" + ip + ":" + str(AGENT_PORT))
+    print("  Session: " + str(len(load_history())) + " messages")
     print("  Skills: " + ", ".join(list_skills()))
     print("=" * 50)
-    app.run(host="127.0.0.1", port=AGENT_PORT, debug=False)
+    app.run(host=host, port=AGENT_PORT, debug=False)
 
 
 if __name__ == "__main__":

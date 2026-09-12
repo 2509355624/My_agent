@@ -827,6 +827,128 @@
   .hidden {
     display: none !important;
   }
+
+  /* ── 小说阅读模式（番茄小说风格整段排版）── */
+  .toggle-read.active {
+    background: var(--accent);
+    color: #fff;
+  }
+  body.novel-mode .chat-area {
+    max-width: 720px;
+    width: 100%;
+    margin: 0 auto;
+  }
+  body.novel-mode .messages {
+    padding: 28px 6px;
+  }
+  body.novel-mode .msg {
+    display: block;
+    margin-bottom: 6px;
+  }
+  body.novel-mode .msg .avatar {
+    display: none;
+  }
+  body.novel-mode .msg .bubble {
+    max-width: 100% !important;
+    background: transparent !important;
+    border: none !important;
+    border-radius: 0 !important;
+    padding: 0;
+  }
+  /* 助手回复 → 小说正文：整段、宽松行距、首行缩进、两端对齐 */
+  body.novel-mode .msg.assistant .bubble .md {
+    font-size: 17px;
+    line-height: 1.95;
+    color: var(--text);
+    text-align: justify;
+    letter-spacing: 0.3px;
+  }
+  body.novel-mode .msg.assistant .bubble .md > p {
+    text-indent: 2em;
+    margin: 0.7em 0;
+  }
+  body.novel-mode .msg.assistant .bubble .md h1,
+  body.novel-mode .msg.assistant .bubble .md h2,
+  body.novel-mode .msg.assistant .bubble .md h3 {
+    text-indent: 0;
+    margin: 1em 0 0.5em;
+  }
+  /* 用户消息 → 居中淡色小字，弱化为“对话旁白” */
+  body.novel-mode .msg.user .bubble {
+    color: var(--text-mute);
+    text-align: center;
+    font-size: 13px;
+    line-height: 1.6;
+    max-width: 90% !important;
+    margin: 14px auto;
+  }
+  body.novel-mode .msg.user .bubble pre {
+    white-space: pre-wrap;
+    font-family: inherit;
+    font-size: inherit;
+  }
+  body.novel-mode .msg.user .bubble pre,
+  body.novel-mode .msg.user .bubble {
+    text-indent: 0 !important;
+  }
+
+  /* ── 移动端响应式（手机 / iPad 竖屏）── */
+  @media (max-width: 768px) {
+    .app {
+      max-width: 100%;
+      padding: 0 12px;
+      height: 100vh;
+      height: 100dvh; /* iOS 地址栏动态高度 */
+    }
+    .header {
+      padding: 8px 0;
+    }
+    .header-left,
+    .header-actions {
+      gap: 6px;
+    }
+    /* 窄屏省空间：隐藏 logo 与标题，只留抽屉入口 + 模型徽标 */
+    .logo,
+    .title {
+      display: none;
+    }
+    .model-badge {
+      font-size: 10px;
+      max-width: 130px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .btn.danger {
+      font-size: 12px;
+      padding: 5px 10px;
+    }
+    .messages {
+      padding: 16px 0;
+      min-height: 0;
+    }
+    .msg {
+      margin-bottom: 14px;
+      gap: 8px;
+    }
+    .input-area {
+      padding: 8px 0 calc(10px + env(safe-area-inset-bottom, 0px));
+    }
+    textarea {
+      font-size: 16px; /* 防止 iOS 聚焦输入时自动放大页面 */
+      padding-right: 88px;
+    }
+    .input-actions .hint {
+      display: none;
+    }
+    .sidebar {
+      width: min(280px, 85vw);
+    }
+    .sidebar.right {
+      width: min(280px, 85vw);
+      right: -300px;
+    }
+  }
 </style>
 </head>
 <body>
@@ -842,6 +964,7 @@
       <span class="model-badge" id="modelBadge">加载中...</span>
     </div>
     <div class="header-actions">
+      <button class="btn toggle-read" id="readModeBtn" onclick="toggleReadMode()">📖 阅读</button>
       <button class="btn danger" onclick="clearChat()">清空会话</button>
     </div>
   </div>
@@ -926,6 +1049,18 @@ const inputBox = document.getElementById('inputBox');
 const sendBtn = document.getElementById('sendBtn');
 const emptyState = document.getElementById('emptyState');
 const modelBadge = document.getElementById('modelBadge');
+const readModeBtn = document.getElementById('readModeBtn');
+
+// ─── 小说阅读模式切换（localStorage 记忆）──────────────
+function setReadMode(on) {
+  document.body.classList.toggle('novel-mode', on);
+  localStorage.setItem('novelMode', on ? '1' : '0');
+  readModeBtn.textContent = on ? '💬 气泡' : '📖 阅读';
+  readModeBtn.classList.toggle('active', on);
+}
+function toggleReadMode() {
+  setReadMode(!document.body.classList.contains('novel-mode'));
+}
 
 let isLoading = false;
 
@@ -950,6 +1085,7 @@ inputBox.addEventListener('keydown', function(e) {
 
 // Load history on page load
 window.addEventListener('DOMContentLoaded', function() {
+  setReadMode(localStorage.getItem('novelMode') === '1');
   loadProviders();
   loadHistory();
   loadDocuments();

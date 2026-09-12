@@ -1,23 +1,64 @@
-"""网页搜索工具"""
-from duckduckgo_search import DDGS
+"""网页搜索工具：优先豆包搜索，未配置/失败时回退 DuckDuckGo"""
+import requests
+from app.config import SEARCH_API_KEY, DOUBAO_SEARCH_ENDPOINT
+
+
+def _format_results(query, items, limit):
+    out = []
+    count = 0
+    for r in items:
+        if count >= limit:
+            break
+        title = r.get("Title") or r.get("title") or ""
+        url = r.get("Url") or r.get("url") or ""
+        # Summary（500~1000字，适合 LLM）优先，其次 Snippet
+        body = r.get("Summary") or r.get("Snippet") or r.get("body") or ""
+        count += 1
+        out.append("[" + str(count) + "] " + title + "\n    " + body + "\n    来源: " + url)
+    return "搜索 '" + query + "' 找到 " + str(len(items)) + " 条结果：\n\n" + "\n\n".join(out)
+
+
+def _doubao_search(query, max_results=5):
+    """豆包搜索（火山引擎 联网搜索接口）"""
+    if not SEARCH_API_KEY:
+        return None
+    body = {
+        "Query": query[:100],          # 接口仅支持 1~100 字符
+        "SearchType": "web",
+        "Count": min(max_results, 50),
+        "NeedSummary": True,
+        "Filter": {"NeedUrl": True},
+    }
+    headers = {"Authorization": "Bearer " + SEARCH_API_KEY, "Content-Type": "application/json"}
+    resp = requests.post(DOUBAO_SEARCH_ENDPOINT, json=body, headers=headers, timeout=20)
+    resp.raise_for_status()
+    data = resp.json()
+    meta = data.get("ResponseMetadata") or {}
+    if meta.get("Error"):
+        raise RuntimeError(str(meta["Error"]))
+    items = (data.get("Result") or {}).get("WebResults") or []
+    if not items:
+        return "搜索 '" + query + "' 没有找到结果"
+    return _format_results(query, items, max_results)
 
 
 def _web_search(query, max_results=5):
     try:
-        results = DDGS().text(keywords=query, max_results=max_results)
-        if not results:
-            return "搜索 '" + query + "' 没有找到结果"
-
-        output = []
-        for i, r in enumerate(results, 1):
-            title = r.get("title", "")
-            body = r.get("body", "")
-            href = r.get("href", "")
-            output.append("[" + str(i) + "] " + title + "\n    " + body + "\n    来源: " + href)
-
-        return "搜索 '" + query + "' 找到 " + str(len(results)) + " 条结果：\n\n" + "\n\n".join(output)
+        result = _doubao_search(query, max_results)
+        if result:
+            return result
+        return _ddgs_search(query, max_results)
     except Exception as e:
         return "搜索失败: " + str(e)
+
+
+def _ddgs_search(query, max_results):
+    """DuckDuckGo 回退实现"""
+    from duckduckgo_search import DDGS
+    results = DDGS().text(keywords=query, max_results=max_results)
+    if not results:
+        return "搜索 '" + query + "' 没有找到结果"
+    return _format_results(query, results, max_results)
 
 
 tool = {

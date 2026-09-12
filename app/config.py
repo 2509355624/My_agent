@@ -79,6 +79,14 @@ PROVIDERS = {
     },
 }
 
+# ─── Web 搜索（豆包搜索）─────────────────────────────
+# 豆包搜索（原 联网搜索/融合信息搜索）专用 API Key，在火山「联网搜索控制台」创建：
+# https://console.volcengine.com/search-infinity/api-key?tab=post_paid
+# 注意：与方舟 ARK 的 VOLC_API_KEY 不同，需单独开通。未配置时 web_search 自动回退 DuckDuckGo。
+SEARCH_API_KEY = os.getenv("SEARCH_API_KEY", "")
+DOUBAO_SEARCH_ENDPOINT = os.getenv("DOUBAO_SEARCH_ENDPOINT",
+                                   "https://open.feedcoopapi.com/search_api/web_search")
+
 # ─── ComfyUI ────────────────────────────────────────
 # 没装 ComfyUI 的机器设为 false：不再注册 generate_image 工具，
 # 避免 LLM 白白尝试调用一个必然失败的工具
