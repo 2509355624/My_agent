@@ -828,6 +828,62 @@
     display: none !important;
   }
 
+  /* ── 传图预览 + 📷 按钮 + 用户图片 ── */
+  .input-preview {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 6px 10px;
+    margin-bottom: 8px;
+  }
+  .input-preview .preview-tag {
+    font-size: 12px;
+    color: var(--text-mute, #999);
+  }
+  .input-preview img {
+    max-height: 64px;
+    max-width: 96px;
+    border-radius: 6px;
+    object-fit: cover;
+  }
+  .input-preview .remove-img {
+    cursor: pointer;
+    color: var(--text-mute, #999);
+    font-weight: 700;
+    margin-left: auto;
+    padding: 0 4px;
+  }
+  .icon-btn,button.img-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    height: 34px;
+    width: 34px;
+    cursor: pointer;
+    font-size: 16px;
+    color: var(--text-mute, #999);
+  }
+  .icon-btn:hover,button.img-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .input-actions .hint { margin-left: 6px; }
+  .msg.user .user-img {
+    margin-bottom: 6px;
+  }
+  .msg.user .user-img img {
+    max-width: 220px;
+    max-height: 220px;
+    border-radius: 10px;
+    display: block;
+  }
+
   /* ── 小说阅读模式（番茄小说风格整段排版）── */
   .toggle-read.active {
     background: var(--accent);
@@ -1027,6 +1083,12 @@
       </div>
 
       <div class="input-area">
+        <input type="file" id="fileInput" accept="image/*" style="display:none" onchange="onPickImage(event)">
+        <div class="input-preview" id="imagePreview" style="display:none">
+          <span class="preview-tag">📷 图片已选</span>
+          <img id="previewImg" alt="图片预览">
+          <span class="remove-img" onclick="removeImage()">✕</span>
+        </div>
         <div class="input-wrapper">
           <textarea
             id="inputBox"
@@ -1034,6 +1096,7 @@
             rows="1"
           ></textarea>
           <div class="input-actions">
+            <button class="img-btn" id="imgBtn" onclick="fileInput.click()" title="发送图片给 AI 看">📷</button>
             <span class="hint">Ctrl+Enter 发送</span>
             <button class="send-btn" id="sendBtn" onclick="sendMessage()">发送</button>
           </div>
@@ -1063,6 +1126,69 @@ function toggleReadMode() {
 }
 
 let isLoading = false;
+let pendingImage = null;   // 待发送图片 dataURL
+
+// ─── 传图给 AI 看 ───────────────────────────────────
+function onPickImage(e) {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  e.target.value = '';
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const img = new Image();
+    img.onload = () => {
+      // 压缩到最长边 1536，控住请求体大小（deepseek 内联上限 48MiB）
+      const max = 1536;
+      let w = img.width, h = img.height;
+      const scale = Math.min(1, max / Math.max(w, h));
+      w = Math.round(w * scale); h = Math.round(h * scale);
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      pendingImage = c.toDataURL('image/jpeg', 0.85);
+      document.getElementById('previewImg').src = pendingImage;
+      document.getElementById('imagePreview').style.display = 'flex';
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+function removeImage() {
+  pendingImage = null;
+  document.getElementById('imagePreview').style.display = 'none';
+}
+
+async function sendWithImage(text) {
+  const imgUrl = pendingImage;
+  appendMessage('user', text ? text : '（发送了一张图片）', imgUrl);
+  pendingImage = null;
+  document.getElementById('imagePreview').style.display = 'none';
+  inputBox.value = '';
+  inputBox.style.height = 'auto';
+  scrollToBottom();
+
+  const loadingId = addLoading();
+  try {
+    const res = await fetch('/api/vision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: imgUrl, question: text, provider: currentProvider, model: currentModel })
+    });
+    removeLoading(loadingId);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || '请求失败');
+    }
+    const data = await res.json();
+    flushToolGroup();
+    appendMessage('assistant', data.reply);
+    scrollToBottom();
+  } catch (e) {
+    removeLoading(loadingId);
+    appendMessage('assistant', '❌ 错误: ' + e.message);
+    scrollToBottom();
+  }
+}
 
 // 当前选中的模型提供商与模型（随每次请求传入后端）
 let providersMeta = [];   // {id, label, model, base_url}
@@ -1391,6 +1517,7 @@ async function loadHistory() {
 
 async function sendMessage() {
   const text = inputBox.value.trim();
+  if (pendingImage) { sendWithImage(text); return; }
   if (!text || isLoading) return;
 
   isLoading = true;
@@ -1450,7 +1577,7 @@ async function sendMessage() {
   }
 }
 
-function appendMessage(role, content) {
+function appendMessage(role, content, imageDataURL) {
   const msg = document.createElement('div');
   msg.className = `msg ${role}`;
 
@@ -1460,6 +1587,15 @@ function appendMessage(role, content) {
 
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
+
+  if (imageDataURL) {
+    const pic = document.createElement('div');
+    pic.className = 'user-img';
+    const im = document.createElement('img');
+    im.src = imageDataURL;
+    pic.appendChild(im);
+    bubble.appendChild(pic);
+  }
 
   if (role === 'assistant') {
     // assistant 回复渲染 markdown
@@ -1784,10 +1920,11 @@ function addToolResult(name, result) {
   const g = activeToolGroup;
   const pending = (g && g.pending.length) ? g.pending.shift() : null;
 
-  // Extract text and image URLs
-  const urlRegex = /(https?:\/\/[^\s]+\.(?:png|jpg|jpeg|gif|webp|bmp))/gi;
-  const imageUrls = result.match(urlRegex) || [];
-  const textWithoutUrls = result.replace(urlRegex, '').trim();
+  // Extract text and image URLs（兼容带任意 host/不带 host，统一归一化为相对路径，
+  // 让历史里原有 localhost 旧记录在手机等其它端也能用当前站点 origin 加载）
+  const imgRe = /((?:https?:\/\/[^\s\/]+)?\/api\/image\/[^\s]+\.(?:png|jpg|jpeg|gif|webp|bmp))/gi;
+  const imageUrls = (result.match(imgRe) || []).map(u => u.replace(/^https?:\/\/[^\/]+/, ''));
+  const textWithoutUrls = result.replace(imgRe, '').trim();
 
   if (pending) {
     let html = '<span class="label">✓ 完成</span>';

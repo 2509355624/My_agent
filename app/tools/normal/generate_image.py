@@ -77,8 +77,8 @@ def _generate_image(prompt, skill="image_gen_v1", use_character=True):
     if not images:
         return "错误: 生成完成但未找到输出图片"
 
-    base_url = request.host_url.rstrip('/') if request else "http://localhost:" + str(AGENT_PORT)
-    urls = [base_url + "/api/image/" + img for img in images]
+    # 用相对路径（不带 host）：任何端(手机/平板/PC)访问时都用当前站点 origin 加载
+    urls = ["/api/image/" + img for img in images]
 
     return "生成成功！seed: " + str(seed) + "\n图片地址:\n" + "\n".join(urls)
 

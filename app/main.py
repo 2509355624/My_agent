@@ -110,6 +110,49 @@ def chat():
     return jsonify({"events": events})
 
 
+@app.route("/api/vision", methods=["POST"])
+def vision():
+    """多模态：让 AI 看一张图片并文字分析/给优化建议。
+
+    走 deepseek 官方 deepseek-flash（官方文档验证支持图像理解），content 用块数组
+    内联 data URL 图片。只分析讨论，绝不由 AI 自动重绘——重绘与否由用户决定。
+    """
+    from app.llm import call_llm
+
+    data = request.get_json() or {}
+    image = (data.get("image") or "").strip()
+    question = (data.get("question") or "").strip()
+    provider = data.get("provider")
+    model = data.get("model")
+    if not image:
+        return jsonify({"error": "缺少图片"}), 400
+    if not question:
+        question = "帮我看看这张图片，描述它，并给出可以优化/改进的地方。"
+
+    from app.agent_prompt import build_stable_prompt
+    messages = [
+        {"role": "system", "content": build_stable_prompt()},
+        {"role": "user", "content": [
+            {"type": "text", "text": question},
+            {"type": "image_url", "image_url": {"url": image, "detail": "low"}},
+        ]},
+    ]
+    try:
+        reply = call_llm(messages, provider=provider or None, model=model or None, timeout=180)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    # 记入历史（图片不入档避免会话文件膨胀；保留用户问题文本）
+    h = load_history()
+    if not h or h[0].get("role") != "system":
+        _ensure_system_prompt(only_system=True)
+        h = load_history()
+    h.append({"role": "user", "content": "（用户上传了一张图片" + (("：" + question) if question else "") + "）"})
+    h.append({"role": "assistant", "content": reply})
+    save_history(h)
+    return jsonify({"reply": reply})
+
+
 @app.route("/api/clear", methods=["POST"])
 def clear():
     # 清空全部非 system 消息（保留稳定 system 前缀）
