@@ -166,7 +166,7 @@ def _status_message(history):
     return {"role": "system", "content": build_status_bar(message_count=msg_count, last_tool=last_tool)}
 
 
-def run_agent_stream(user_input, history, provider=None, model=None):
+def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_results=None):
     """
     Agent Loop: 生成器版本，逐事件返回
     事件类型: user / assistant / tool_call / tool_result
@@ -176,11 +176,21 @@ def run_agent_stream(user_input, history, provider=None, model=None):
     2. turn 上限 MAX_TURNS 防止无限循环
     3. 异常捕获，保证至少返回回复
     4. provider/model 透传：支持 web 端动态切换模型
+    pre_tool_results: 可选，用户输入里直接带的 [[TOOL:...]] 已执行完的结果，
+      在进入 LLM 循环前先注入历史，让 LLM 一开始就能看到这些工具结果。
     """
     from app.config import MAX_TURNS
 
     history.append({"role": "user", "content": user_input})
     yield {"type": "user", "content": user_input}
+
+    for tc in (pre_tool_results or []):
+        history.append({
+            "role": "tool_result",
+            "content": tc["result"],
+            "tool_name": tc["name"],
+        })
+        yield {"type": "tool_result", "name": tc["name"], "result": tc["result"]}
 
     turn_count = 0
     while turn_count < MAX_TURNS:

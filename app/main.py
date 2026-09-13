@@ -3,15 +3,18 @@ Flask Web 服务入口
 """
 
 import re
+import json
 import socket
 import requests
-from flask import Flask, request, jsonify, send_from_directory, Response
+from flask import (Flask, request, jsonify, send_from_directory, Response,
+                   stream_with_context)
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         LLM_PROVIDER, PROVIDERS, OLLAMA_BASE_URL)
 from app.skills import list_skills, load_skill
 from app.agent_prompt import build_stable_prompt
 from app.memory import load_history, save_history
-from app.agent import run_agent_stream
+from app.agent import run_agent_stream, parse_tool_calls, _strip_tool_blocks
+from app.tools import execute_tool
 from app.tools.normal.documents import list_documents, file_info, read_document, search_document
 
 app = Flask(__name__, static_folder=WEB_DIR, static_url_path="")
@@ -96,18 +99,45 @@ def chat():
     if not user_input:
         return jsonify({"error": "消息不能为空"}), 400
 
+    # 支持用户直接在输入框粘贴/输入 [[TOOL:name]]{...} 触发工具：
+    # 解析并执行用户消息里的工具块，把结果注入历史后，再进入 LLM 循环，
+    # 这样 LLM 一开始就能看到已执行的工具结果。
+    user_tools = parse_tool_calls(user_input)
+    clean_input = _strip_tool_blocks(user_input).strip() or user_input
+    pre_results = []
+    if user_tools:
+        for tc in user_tools:
+            try:
+                result = execute_tool(tc["name"], tc["args"])
+            except Exception as e:
+                result = "工具执行失败: " + str(e)
+            pre_results.append({"name": tc["name"], "result": result})
+
     # 每次从文件读取最新会话，保证多端一致；写完立即落盘
     h = load_history()
     if not h or h[0].get("role") != "system":
         _ensure_system_prompt(only_system=True)
         h = load_history()
 
-    events = []
-    for event in run_agent_stream(user_input, h, provider=provider, model=model):
-        events.append(event)
+    # 流式返回：agent 循环每产生一个事件就立刻推给前端（NDJSON，一行一个 JSON）。
+    # 之前是收集完所有事件再一次性 jsonify，导致本地模型跑 60-70 秒期间前端全黑箱。
+    def generate():
+        try:
+            for event in run_agent_stream(clean_input, h, provider=provider,
+                                          model=model, pre_tool_results=pre_results):
+                yield json.dumps(event, ensure_ascii=False) + "\n"
+        finally:
+            # 无论正常结束还是客户端中断，都落盘已产生的会话
+            save_history(h)
 
-    save_history(h)
-    return jsonify({"events": events})
+    return Response(
+        stream_with_context(generate()),
+        mimetype="application/x-ndjson; charset=utf-8",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",   # 禁止反向代理缓冲
+        }
+    )
 
 
 @app.route("/api/vision", methods=["POST"])
