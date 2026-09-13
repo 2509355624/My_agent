@@ -31,10 +31,26 @@ _stable_fp = None
 
 
 def _build_tool_list():
-    """构建工具简述列表（一行一个，不展开详细参数）"""
+    """构建工具列表：名称(参数签名): 描述
+
+    带上参数签名，避免模型靠猜参数名反复试错（小模型尤其明显）。
+    `*` 标记必填参数。
+    """
     lines = []
     for tool in TOOLS:
-        lines.append("- **" + tool["name"] + "**: " + tool["description"])
+        params = tool.get("parameters") or {}
+        props = params.get("properties") or {}
+        required = set(params.get("required") or [])
+        if props:
+            sig_parts = []
+            for pname, pdef in props.items():
+                ptype = (pdef or {}).get("type", "any")
+                star = "*" if pname in required else ""
+                sig_parts.append(f"{pname}{star}:{ptype}")
+            sig = ", ".join(sig_parts)
+        else:
+            sig = ""
+        lines.append("- **" + tool["name"] + "**(" + sig + "): " + tool["description"])
     return "\n".join(lines)
 
 
@@ -97,18 +113,37 @@ def build_stable_prompt():
 
     # [P1] 工具调用格式（核心协议，不能丢）
     sections.append((P_ROLE, "Tool Call Format",
-        "当你需要调用工具时，在回复中使用以下格式（单独一行）：\n"
+        "调用工具时，在回复中**单独一行**输出以下格式，必须一字不差：\n"
         "\n"
         "[[TOOL:工具名]]{\"参数名\": \"参数值\"}[[/TOOL]]\n"
         "\n"
-        "一次回复可以调用多个工具，每个工具占一行。"
+        "格式硬性要求：\n"
+        "1. 必须保留 `TOOL:` 前缀，**不能省略**；冒号后不能有空格\n"
+        "2. 工具名用下方 Available Tools 里的英文名，不能翻译、不能改写\n"
+        "3. 无参数时写成 [[TOOL:工具名]][[/TOOL]]\n"
+        "4. 一次可调用多个工具，每个占一行\n"
+        "5. 工具块前后不要加反引号、不要写进代码块\n"
+        "\n"
+        "正确示例：\n"
+        "用户：查看当前所有 skills\n"
+        "助手：[[TOOL:list_skills]][[/TOOL]]\n"
+        "\n"
+        "用户：读取 skills/writing/skill.md 的前 50 行\n"
+        "助手：[[TOOL:read_file]]{\"path\": \"skills/writing/skill.md\", \"limit\": 50}[[/TOOL]]\n"
+        "\n"
+        "错误写法（会被当成普通文本，工具不会执行）：\n"
+        "[[list_skills]] ← 缺少 TOOL: 前缀\n"
+        "[[TOOL: list_skills]] ← 冒号后多了空格\n"
+        "```[[TOOL:list_skills]][[/TOOL]]``` ← 包在代码块里"
     ))
 
     # [P2] 工具列表（简述，详细规范由 load_skill 按需读取）
     sections.append((P_TOOLS, "Available Tools",
-        _build_tool_list() + "\n"
+        "参数名后带 * 表示必填，必须严格使用下列参数名：\n"
+        + _build_tool_list() + "\n"
         "\n"
         "提示：\n"
+        "- 文件名类参数只传文件名本身（如 xxx.md），不要带 documents/ 或 skills/ 前缀\n"
         "- 不熟悉的 Skill 先调用 load_skill 读取规范\n"
         "- 批量生成图片用 --- 分隔多个 prompt，只调用一次 generate_image\n"
         "- generate_image 的 prompt 参数必须是英文\n"

@@ -10,16 +10,59 @@ from app.memory import trim_history
 from app.tools import execute_tool
 
 
+# 统一工具块正则：容忍 "TOOL:" 前后/内部的空白，也容忍省略前缀的简写
+#   [[TOOL:name]]   [[TOOL: name]]   [[TOOL:NAME]]   [[name]]
+# 简写形式（无 TOOL: 前缀）只有在名字命中注册表时才被认作工具调用，
+# 避免把正文里正常的 [[xxx]] 标记误判成工具。
+TOOL_TAG_RE = re.compile(r'\[\[\s*(?:(TOOL)\s*:\s*)?(\w+)\s*\]\]', re.IGNORECASE)
+
+
+def _known_tool_names():
+    """已注册工具名集合（懒加载，避免循环导入）"""
+    global _TOOL_NAMES
+    if _TOOL_NAMES is None:
+        try:
+            from app.tools.registry import TOOLS
+            _TOOL_NAMES = {t["name"] for t in TOOLS}
+        except Exception:
+            _TOOL_NAMES = set()
+    return _TOOL_NAMES
+
+
+_TOOL_NAMES = None
+
+
+def _iter_tool_tags(text):
+    """产出 (match, name)，已过滤掉不合法的简写、并归一化大小写"""
+    known = _known_tool_names()
+    lower_map = {n.lower(): n for n in known}
+    for m in TOOL_TAG_RE.finditer(text or ""):
+        has_prefix = m.group(1) is not None
+        name = m.group(2)
+        # 关闭标签 [[/TOOL]] 已被 \w+ 排除（'/' 不是 \w）
+        if name in known:
+            yield m, name
+            continue
+        if name.lower() in lower_map:
+            # 大小写不一致（如 [[TOOL:LIST_SKILLS]]）→ 归一到注册表名
+            yield m, lower_map[name.lower()]
+            continue
+        # 名字没命中注册表：带 TOOL: 前缀的保留（让执行层报"工具不存在"），
+        # 无前缀的当作正文标记忽略，避免误伤
+        if has_prefix:
+            yield m, name
+
+
 def parse_tool_calls(text):
     """从 LLM 回复中解析所有工具调用（支持一次多个）
-    兼容两种格式：
+    兼容格式：
     - [[TOOL:name]]{...}[[/TOOL]]   （带关闭标签）
     - [[TOOL:name]]{...}            （省略关闭标签，匹配到行尾/下一个工具）
+    - [[TOOL: name]] / [[TOOL:NAME]] （容忍空白与大小写）
+    - [[name]]                       （小模型常见的省略前缀写法，需命中注册表）
     """
     result = []
-    # 先找所有 [[TOOL:xxx]] 出现的位置
-    for m in re.finditer(r'\[\[TOOL:(\w+)\]\]', text):
-        name = m.group(1)
+    for m, name in _iter_tool_tags(text):
         rest = text[m.end():]
         # 尝试标准 JSON 参数（{...}）
         args_str = ""
@@ -52,12 +95,13 @@ def parse_tool_calls(text):
 def _strip_tool_blocks(text):
     """去掉回复中的所有工具调用块（含参数），只保留正文
     通过花括号配对精确界定每个 [[TOOL:name]] JSON 参数的结束位置，
-    这样能正确处理工具块后紧跟正文的情况。"""
+    这样能正确处理工具块后紧跟正文的情况。
+    与 parse_tool_calls 使用同一套识别规则（含简写 [[name]]）。"""
     if not text:
         return text
     result_parts = []
     pos = 0  # 当前已扫描位置（属于正文）
-    for m in re.finditer(r'\[\[TOOL:\w+\]\]', text):
+    for m, _name in _iter_tool_tags(text):
         # 保留工具块之前的正文
         result_parts.append(text[pos:m.start()])
         # 找到工具块结束位置（含参数和关闭标签）
