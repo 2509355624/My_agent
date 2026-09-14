@@ -13,30 +13,77 @@
 
 import json
 import os
+import threading
+import time
 from app.config import SESSION_FILE
 from app.llm import LAST_USAGE, CONTEXT_LIMIT
 
 
 # ─── 持久化 ──────────────────────────────────────────
 
+# 进程内写锁：防止同进程多线程同时写同一个会话文件（多端并发时至少保证
+# 单进程内是串行的；跨进程的并发写由 os.replace 的原子性兜底——最终文件
+# 永远是"某一次完整写入"的结果，不会出现两份内容交错）。
+_SAVE_LOCK = threading.Lock()
+
+
+def _atomic_replace(src, dst, attempts=5, delay=0.05):
+    """把 src 原子替换为 dst。
+
+    os.replace 在同一文件系统内是原子操作（Windows 走 MoveFileEx 的 replace
+    语义），读者永远看不到"写了一半"的文件。Windows 上目标文件可能被其他
+    进程（例如同时刷新的另一个终端）短暂占用而抛 PermissionError，做少量
+    重试即可，不引入跨进程文件锁的复杂度。
+    """
+    for i in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(delay)
+
+
 def save_history(history):
-    """保存会话到 JSONL 文件"""
-    os.makedirs(os.path.dirname(SESSION_FILE), exist_ok=True)
-    with open(SESSION_FILE, "w", encoding="utf-8") as f:
-        for msg in history:
-            f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+    """原子保存会话到 JSONL 文件。
+
+    先写同目录临时文件 -> flush + fsync -> os.replace 原子替换。
+    相比直接 open("w") 覆盖写，避免两种问题：
+    1. 写到一半进程崩溃/被杀 -> 留下半截损坏文件，下次直接解析失败；
+    2. 多端（手机/电脑）同时刷新 -> 读者读到中间态。
+    """
+    parent = os.path.dirname(SESSION_FILE)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    tmp_path = SESSION_FILE + ".tmp"
+    with _SAVE_LOCK:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            for msg in history:
+                f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        _atomic_replace(tmp_path, SESSION_FILE)
 
 
 def load_history():
-    """从 JSONL 文件加载会话"""
+    """从 JSONL 文件加载会话。
+
+    跳过空行与损坏行：单行坏数据不应该让整段历史读不出来
+    （原子写之后正常情况下不会出现，这里是防御性兜底）。
+    """
     if not os.path.exists(SESSION_FILE):
         return []
     history = []
     with open(SESSION_FILE, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if line:
+            if not line:
+                continue
+            try:
                 history.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
     return history
 
 

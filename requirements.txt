@@ -9,3 +9,8 @@ chromadb>=0.5.0
 sentence-transformers>=3.0
 torch>=2.0
 modelscope>=1.9
+
+# 测试（tests/）用标准库 unittest 编写，无需额外依赖：
+#   python -m unittest discover -s tests -v
+# 若想用 pytest 运行，再单独安装：
+# pytest>=7.0

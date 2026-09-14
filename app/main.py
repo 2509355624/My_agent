@@ -37,8 +37,9 @@ def _ensure_system_prompt(only_system=False):
     save_history([{"role": "system", "content": stable_prompt}] + keep)
 
 
-# 初始化：确保会话文件以 system 开头
-_ensure_system_prompt()
+# 注意：不在这里(import 时)初始化会话文件。导入模块不应产生磁盘副作用——
+# 那会让测试/复用 import app.main 时污染真实 data/session.jsonl。
+# 初始化改到 run() 里做，并且各路由在发现缺 system 头时会自行补齐。
 
 
 # ─── 页面路由 ────────────────────────────────────────
@@ -341,6 +342,9 @@ def _local_ip():
 
 
 def run():
+    # 启动时确保会话文件以稳定 system 头开始（prefix cache 锚点）
+    _ensure_system_prompt()
+
     host = "0.0.0.0"  # 监听所有网卡，允许手机/iPad 局域网访问
     ip = _local_ip()
     print("=" * 50)
