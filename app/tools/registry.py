@@ -47,6 +47,9 @@ from app.config import ENABLE_IMAGE_GEN
 if ENABLE_IMAGE_GEN:
     from app.tools.normal.generate_image import tool as _generate_image_tool
     register_tool(**_generate_image_tool)
+    from app.tools.normal.comfy_workflow import tool as _cw_info, tool_update as _cw_update
+    register_tool(**_cw_info)
+    register_tool(**_cw_update)
 
 from app.tools.normal.list_skills import tool as _list_skills_tool
 register_tool(**_list_skills_tool)
