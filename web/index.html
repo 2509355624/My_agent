@@ -824,6 +824,35 @@
     word-break: break-all;
     opacity: 0.85;
   }
+  /* 预设模型：始终可见、可点击的候选按钮（原生 datalist 会按当前值过滤，坑） */
+  .model-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .model-chip {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-family: inherit;
+    font-size: 11.5px;
+    line-height: 1.4;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+  .model-chip:hover {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+  .model-chip.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-glow);
+  }
   .side-hint {
     font-size: 11px;
     color: var(--text-mute);
@@ -1243,7 +1272,7 @@ function toggleModelPanel() {
 
 // 各提供商的候选模型列表（ollama 由后端实时拉取）
 const MODEL_PRESETS = {
-  volc: ['deepseek-v4-flash-ga-260731', 'deepseek-v4-flash-260425'],
+  volc: ['deepseek-v4-flash-ga-260731', 'deepseek-v4-flash-260425', 'deepseek-v4-pro-ga-260813'],
   doubao: ['doubao-1-5-thinking-pro-250615', 'doubao-seed-2-0-mini-260428', 'doubao-1-5-pro-250615'],
   deepseek: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-flash']
 };
@@ -1309,22 +1338,38 @@ function renderModelGroup(provider, cfg, selectedModel) {
   }
 
   const presets = MODEL_PRESETS[provider] || (cfg && cfg.model ? [cfg.model] : []);
-  const opts = presets.map(m =>
-    '<option value="' + escapeHtml(m) + '"></option>'
-  ).join('');
+  // 预设按钮：始终全部可见，避免原生 datalist「按当前值过滤」导致只看到一项
+  const chips = presets.map(function(m) {
+    const active = (m === selectedModel) ? ' active' : '';
+    return '<button type="button" class="model-chip' + active + '"' +
+      ' data-model="' + escapeAttr(m) + '"' +
+      ' onclick="pickModel(this.getAttribute(\'data-model\'))">' +
+      escapeHtml(m) + '</button>';
+  }).join('');
 
   group.innerHTML =
     '<div class="form-group">' +
       '<label>模型 / 接入点ID</label>' +
-      '<input id="model" list="modelOptions" class="side-input" value="' + escapeHtml(selectedModel) + '"' +
+      '<input id="model" class="side-input" value="' + escapeAttr(selectedModel) + '"' +
         ' oninput="onModelSelect(this.value)" autocomplete="off" spellcheck="false" placeholder="模型ID 或 ep-xxxx 接入点ID">' +
-      '<datalist id="modelOptions">' + opts + '</datalist>' +
+      '<div class="model-chips" id="modelChips">' + chips + '</div>' +
       baseNote +
     '</div>';
 }
 
+// 点击预设模型按钮：填入输入框 + 高亮 + 刷新徽标
+function pickModel(model) {
+  const input = document.getElementById('model');
+  if (input) input.value = model;
+  onModelSelect(model);
+}
+
 function onModelSelect(value) {
   currentModel = value;
+  // 同步预设按钮高亮（手动输入也生效）
+  document.querySelectorAll('#modelChips .model-chip').forEach(function(el) {
+    el.classList.toggle('active', el.getAttribute('data-model') === value);
+  });
   updateModelBadge((providersMeta.find(p => p.id === currentProvider) || {}).label, currentModel);
 }
 
@@ -1700,6 +1745,15 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+// 写入 HTML 属性时用：额外转义双引号（escapeHtml 不处理引号）
+function escapeAttr(text) {
+  return String(text == null ? '' : text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function inlineMd(text) {
