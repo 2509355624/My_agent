@@ -147,7 +147,7 @@ def build_stable_prompt():
         "\n"
         "提示：\n"
         "- read_file / write_file / list_files 的 path 是**相对 skills/ 的路径**，可带子目录，"
-        "如 human-writing/references/fiction.md（不要带 skills/ 前缀）\n"
+        "如 writing/01-structure/write-structure.md（不要带 skills/ 前缀）\n"
         "- 想深入某个 Skill：先 list_files(path=\"skill名\") 看清它内部有哪些文件，"
         "再 read_file 读命中的那一个；不要为了保险把整个 Skill 一次全读进来\n"
         "- 大文件用 offset / limit 分段读，read_file 单次默认最多 1000 行\n"

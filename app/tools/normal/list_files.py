@@ -2,7 +2,7 @@
 
 补的是「模型在 skills 内部是瞎的」这个洞：
     list_skills 只给顶层目录名，read_file 只能猜文件名——
-    于是模型知道 human-writing 存在，却不知道里面有 references/fiction.md。
+    于是模型知道 writing 存在，却不知道里面有 references/fiction.md。
     有了 list_files，读取链才闭合：list_skills → list_files → read_file。
 
 输出刻意用「相对 skills/ 的完整路径」，因为它就是 read_file(path=...) 直接能用的形式。
@@ -49,7 +49,7 @@ def list_files(path="", depth=DEFAULT_DEPTH):
 
     参数:
       - path: 相对 skills/ 的路径，留空表示 skills 根目录。
-              传某个 skill 名（如 "human-writing"）可只看它内部。
+              传某个 skill 名（如 "writing"）可只看它内部。
       - depth: 向下展开层数，1 表示只看指定目录的直接子项，默认 3，最大 5
     """
     raw = "" if path is None else str(path).strip()

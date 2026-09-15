@@ -14,7 +14,7 @@ def read_file(path, offset=1, limit=0):
 
     参数:
       - path: 相对 skills/ 的路径，可带子目录，
-              如 "human-writing/SKILL.md"、"human-writing/references/fiction.md"
+              如 "writing/skill.md"、"writing/01-structure/write-structure.md"
       - offset: 起始行号（从 1 开始，默认 1）
       - limit: 读取行数，0 表示读到末尾（默认 0，上限 DEFAULT_MAX_LINES）
     """
@@ -28,7 +28,7 @@ def read_file(path, offset=1, limit=0):
 
     if not os.path.exists(target):
         return ("错误: 文件不存在: " + str(path)
-                + "（先用 list_files 确认路径，例如 list_files(path=\"human-writing\")）")
+                + "（先用 list_files 确认路径，例如 list_files(path=\"writing\")）")
 
     try:
         with open(target, "r", encoding="utf-8", errors="replace") as f:
@@ -69,14 +69,14 @@ def read_file(path, offset=1, limit=0):
 
 tool = {
     "name": "read_file",
-    "description": "读取 skills 目录内的文件，支持任意层级子目录（如 human-writing/references/fiction.md）。"
+    "description": "读取 skills 目录内的文件，支持任意层级子目录（如 writing/01-structure/write-structure.md）。"
                   "大文件用 offset / limit 分段读。不确定路径时先用 list_files 查看目录结构。",
     "function": read_file,
     "parameters": {
         "type": "object",
         "properties": {
             "path": {"type": "string",
-                     "description": "相对 skills/ 的路径，可带子目录，如 human-writing/references/fiction.md"},
+                     "description": "相对 skills/ 的路径，可带子目录，如 writing/01-structure/write-structure.md"},
             "offset": {"type": "integer", "description": "起始行号，从 1 开始，默认 1"},
             "limit": {"type": "integer", "description": "读取行数，0（默认）表示读到末尾，单次最多 1000 行"}
         },

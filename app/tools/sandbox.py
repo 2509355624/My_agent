@@ -52,7 +52,7 @@ def resolve_in_skills(rel_path, allow_absolute=False):
     """把路径安全映射到 SKILLS_DIR 内，返回 (绝对路径, 错误信息)。
 
     参数:
-      - rel_path: 相对 skills/ 的路径，如 "human-writing/references/fiction.md"
+      - rel_path: 相对 skills/ 的路径，如 "writing/01-structure/write-structure.md"
       - allow_absolute: 是否放行落在 skills 内的绝对路径。
                         只读类工具（read_file / list_files）设 True，
                         它们拿到的是用户或模型手抄的绝对路径，放行能少一轮试错；
