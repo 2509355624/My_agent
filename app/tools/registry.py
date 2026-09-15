@@ -54,6 +54,9 @@ if ENABLE_IMAGE_GEN:
 from app.tools.normal.list_skills import tool as _list_skills_tool
 register_tool(**_list_skills_tool)
 
+from app.tools.normal.list_files import tool as _list_files_tool
+register_tool(**_list_files_tool)
+
 from app.tools.normal.read_file import tool as _read_file_tool
 register_tool(**_read_file_tool)
 

@@ -24,7 +24,8 @@ def _load_skill(skill_name):
 
 tool = {
     "name": "load_skill",
-    "description": "读取某个 Skill 的完整说明文档",
+    "description": "读取某个 Skill 的主规范文档（会一并带出 references/ 全部内容，上下文开销大）。"
+                  "只想读其中某一个文件时，请改用 list_files + read_file 按需读取。",
     "function": _load_skill,
     "parameters": {
         "type": "object",

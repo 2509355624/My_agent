@@ -19,7 +19,7 @@
 - **Agent 循环**：单轮可执行多个工具、`MAX_TURNS` 上限保护、异常兜底不断循环。
 - **真流式输出**：`/api/chat` 以 NDJSON 逐事件推送，工具调用与结果实时可见，
   等待期间显示计时器，不再是黑箱。
-- **20 个内置工具**：时间 / 搜索 / Skill 管理 / 文件读写删 / 文档分段阅读 /
+- **21 个内置工具**：时间 / 搜索 / Skill 管理 / 文件读写删 / 文档分段阅读 /
   生图 / 工作流编辑 / 向量知识库。
 - **RAG 向量知识库**：ChromaDB 持久化 + 本地 BGE-M3 embedding + MMR 检索，
   跑在**独立子进程 daemon** 里（重依赖隔离、懒加载，不装 torch 也不会拖垮主服务）。
@@ -106,6 +106,7 @@ agent_my_test/
 │   ├── skills.py               # Skill 目录解析与加载
 │   ├── tools/
 │   │   ├── registry.py         # 工具注册表（execute_tool 统一入口）
+│   │   ├── sandbox.py          # skills 沙箱路径解析（read/write/list/delete 共用）
 │   │   ├── normal/             # 普通工具（时间/搜索/文件/文档/生图/工作流）
 │   │   └── rag/kb_tools.py     # 向量知识库工具（检索/入库/切块）
 │   └── rag/
@@ -165,7 +166,7 @@ agent_my_test/
 
 ## 工具清单
 
-共 20 个（`ENABLE_IMAGE_GEN=false` 时为 17 个，仅少生图/工作流三项）。
+共 21 个（`ENABLE_IMAGE_GEN=false` 时为 18 个，仅少生图/工作流三项）。
 参数名后带 `*` 为必填。
 
 ### 通用
@@ -174,15 +175,20 @@ agent_my_test/
 |------|------|------|
 | `get_time` | — | 获取当前日期时间 |
 | `web_search` | `query*`, `max_results` | 网页搜索（豆包搜索优先，回退 DuckDuckGo） |
-| `list_skills` | — | 列出所有可用 Skill |
-| `load_skill` | `skill_name*` | 读取某个 Skill 的完整说明文档 |
-| `read_file` | `skill_name*`, `filename*` | 读 Skill 目录内文件（只能读 `skills/`） |
-| `write_file` | `skill_name*`, `filename*`, `content*` | 写 Skill 文件（可新建 Skill，只能写 `skills/`） |
-| `delete_file` | `rel_path*`, `recursive` | 删除 `skills/` 内文件或子目录（强沙箱，删不到项目其他位置） |
+| `list_skills` | — | 列出所有可用 Skill（只到顶层目录名） |
+| `list_files` | `path`, `depth` | 列出 `skills/` 的文件结构（默认展开 3 层，跳过 `.git`/`__pycache__`） |
+| `load_skill` | `skill_name*` | 读取某个 Skill 主规范（**会带上全部 `references/`**，上下文开销大） |
+| `read_file` | `path*`, `offset`, `limit` | 读 `skills/` 内任意文件，**支持子目录**，默认单次最多 1000 行 |
+| `write_file` | `path*`, `content*` | 写 `skills/` 内文件（父目录自动创建，可新建 Skill） |
+| `delete_file` | `rel_path*`, `recursive` | 删除 `skills/` 内文件或子目录（强沙箱，只认相对路径） |
 | `list_documents` | — | 列出 `documents/` 下可读文件 |
 | `file_info` | `filename*` | 文件大小 / 行数 |
 | `read_document` | `filename*`, `offset`, `limit` | 分段读取（带行号，单次最多 500 行） |
 | `search_document` | `filename*`, `query*` | 文档内关键词搜索（带上下文，最多 10 处） |
+
+> `read_file` / `write_file` / `list_files` 的 `path` 是**相对 `skills/` 的路径**，
+> 可带任意层级子目录（如 `human-writing/references/fiction.md`），也接受落在
+> `skills/` 内的绝对路径。路径规则统一实现在 `app/tools/sandbox.py`。
 
 ### 生图（需 ComfyUI，`ENABLE_IMAGE_GEN=true`）
 
@@ -228,8 +234,10 @@ skills/sun-style-writing/sun-style-writing/
 └── assets/
 ```
 
-相关工具：`list_skills` 列目录、`load_skill` 读规范、`read_file` / `write_file` /
-`delete_file` 读写删。Agent 也能用 `write_file` 自己创建新 Skill。
+相关工具：`list_skills` 列顶层、`list_files` 看内部结构、`read_file` 按
+`path` 读取任意层级文件（如 `human-writing/references/fiction.md`）、`load_skill`
+一次加载主规范 + 全部 references、`write_file` / `delete_file` 增删。
+Agent 也能用 `write_file` 自己创建新 Skill。
 
 ---
 
@@ -285,6 +293,7 @@ python -m pytest tests -v                   # 方式二：若已安装 pytest
 | `test_agent_loop.py` | Agent 主循环事件流、多工具、`pre_tool_results` 注入、异常兜底、轮次上限 |
 | `test_memory.py` | 会话原子写（并发/损坏行/无残留临时文件）、压缩阈值与冷却 |
 | `test_skills.py` | Skill 目录解析：大小写规范、同名嵌套、`__SEED__` 修复、references |
+| `test_file_tools.py` | `skills/` 文件沙箱：子目录读写、`..` 与越界绝对路径拦截、分段读、`list_files` 深度与噪音过滤 |
 | `test_documents.py` | 文档读取/搜索/上限与路径沙箱 |
 | `test_tools_registry.py` | 注册表完整性、执行兜底、切块与知识库工具文案 |
 | `test_web_api.py` | Flask 路由、`/api/chat` NDJSON 流 + 用户工具块预执行、文件名净化 |

@@ -1,60 +1,85 @@
-"""读取 Skill 内的文件（只读 skills 目录，安全限制）"""
+"""读取 skills 目录内的文件（只读 skills 沙箱，支持任意层级子目录）"""
 
 import os
-from app.config import SKILLS_DIR
+
+from app.tools.sandbox import resolve_in_skills, to_rel
+
+# limit<=0 时的保护上限：别让一次 read_file 把上下文撑爆
+DEFAULT_MAX_LINES = 1000
 
 
-def _safe_path(skill_name, filename):
-    """确保路径在 skills 目录内，防止路径穿越"""
-    # 过滤掉 .. / \ 等危险字符
-    safe_skill = skill_name.replace("..", "").replace("/", "").replace("\\", "")
-    safe_file = filename.replace("..", "").replace("/", "").replace("\\", "")
-
-    target = os.path.join(SKILLS_DIR, safe_skill, safe_file)
-    # 二次校验：规范化后必须仍在 SKILLS_DIR 内
-    real_target = os.path.realpath(target)
-    real_skills = os.path.realpath(SKILLS_DIR)
-    if not real_target.startswith(real_skills):
-        return None, "路径非法"
-    return target, None
-
-
-def read_file(skill_name, filename):
+def read_file(path, offset=1, limit=0):
     """
-    读取某个 Skill 目录下的文件
+    读取 skills 目录内的文件。
+
     参数:
-      - skill_name: Skill 名称
-      - filename: 文件名（如 skill.md, character.txt, workflow.json）
+      - path: 相对 skills/ 的路径，可带子目录，
+              如 "human-writing/SKILL.md"、"human-writing/references/fiction.md"
+      - offset: 起始行号（从 1 开始，默认 1）
+      - limit: 读取行数，0 表示读到末尾（默认 0，上限 DEFAULT_MAX_LINES）
     """
-    filepath, err = _safe_path(skill_name, filename)
+    target, err = resolve_in_skills(path, allow_absolute=True)
     if err:
         return "错误: " + err
 
-    if not os.path.exists(filepath):
-        return "错误: 文件 '" + filename + "' 不存在于 Skill '" + skill_name + "' 中"
+    if os.path.isdir(target):
+        return ("错误: '" + str(path) + "' 是目录，不是文件。"
+                + "用 list_files(path=\"" + str(path) + "\") 查看它下面有哪些文件。")
+
+    if not os.path.exists(target):
+        return ("错误: 文件不存在: " + str(path)
+                + "（先用 list_files 确认路径，例如 list_files(path=\"human-writing\")）")
 
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        lines = content.split("\n")
-        result = "文件: " + skill_name + "/" + filename + " (" + str(len(lines)) + " 行)\n\n"
-        result += content
-        return result
+        with open(target, "r", encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
     except Exception as e:
         return "读取失败: " + str(e)
+
+    total = len(all_lines)
+
+    try:
+        offset = max(1, int(offset))
+    except (TypeError, ValueError):
+        offset = 1
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 0
+    if limit <= 0:
+        limit = DEFAULT_MAX_LINES
+
+    start = min(offset - 1, total)
+    end = min(start + limit, total)
+    chunk = all_lines[start:end]
+
+    rel = to_rel(target)
+    if start == 0 and end == total:
+        header = "文件: " + rel + " (共 " + str(total) + " 行)\n\n"
+    else:
+        header = ("文件: " + rel + " (第 " + str(start + 1) + "-" + str(end)
+                  + " 行 / 共 " + str(total) + " 行)\n\n")
+
+    result = header + "".join(chunk)
+    if end < total:
+        result += ("\n\n... (还有 " + str(total - end)
+                   + " 行未显示，用 offset=" + str(end + 1) + " 继续读取)")
+    return result
 
 
 tool = {
     "name": "read_file",
-    "description": "读取某个 Skill 目录下的文件（skill.md / character.txt / workflow.json 等）",
+    "description": "读取 skills 目录内的文件，支持任意层级子目录（如 human-writing/references/fiction.md）。"
+                  "大文件用 offset / limit 分段读。不确定路径时先用 list_files 查看目录结构。",
     "function": read_file,
     "parameters": {
         "type": "object",
         "properties": {
-            "skill_name": {"type": "string", "description": "Skill 名称"},
-            "filename": {"type": "string", "description": "文件名，如 skill.md、character.txt、workflow.json"}
+            "path": {"type": "string",
+                     "description": "相对 skills/ 的路径，可带子目录，如 human-writing/references/fiction.md"},
+            "offset": {"type": "integer", "description": "起始行号，从 1 开始，默认 1"},
+            "limit": {"type": "integer", "description": "读取行数，0（默认）表示读到末尾，单次最多 1000 行"}
         },
-        "required": ["skill_name", "filename"]
+        "required": ["path"]
     }
 }

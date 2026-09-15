@@ -128,8 +128,11 @@ def build_stable_prompt():
         "用户：查看当前所有 skills\n"
         "助手：[[TOOL:list_skills]][[/TOOL]]\n"
         "\n"
-        "用户：读取 skills/writing/skill.md 的前 50 行\n"
-        "助手：[[TOOL:read_file]]{\"path\": \"skills/writing/skill.md\", \"limit\": 50}[[/TOOL]]\n"
+        "用户：看看 human-writing 这个 skill 里有什么\n"
+        "助手：[[TOOL:list_files]]{\"path\": \"human-writing\"}[[/TOOL]]\n"
+        "\n"
+        "用户：读一下 human-writing/references/fiction.md\n"
+        "助手：[[TOOL:read_file]]{\"path\": \"human-writing/references/fiction.md\"}[[/TOOL]]\n"
         "\n"
         "错误写法（会被当成普通文本，工具不会执行）：\n"
         "[[list_skills]] ← 缺少 TOOL: 前缀\n"
@@ -143,8 +146,12 @@ def build_stable_prompt():
         + _build_tool_list() + "\n"
         "\n"
         "提示：\n"
-        "- 文件名类参数只传文件名本身（如 xxx.md），不要带 documents/ 或 skills/ 前缀\n"
-        "- 不熟悉的 Skill 先调用 load_skill 读取规范\n"
+        "- read_file / write_file / list_files 的 path 是**相对 skills/ 的路径**，可带子目录，"
+        "如 human-writing/references/fiction.md（不要带 skills/ 前缀）\n"
+        "- 想深入某个 Skill：先 list_files(path=\"skill名\") 看清它内部有哪些文件，"
+        "再 read_file 读命中的那一个；不要为了保险把整个 Skill 一次全读进来\n"
+        "- 大文件用 offset / limit 分段读，read_file 单次默认最多 1000 行\n"
+        "- 不熟悉的 Skill 可用 load_skill 读主规范（注意它会带上全部 references，上下文开销大）\n"
         "- 批量生成图片用 --- 分隔多个 prompt，只调用一次 generate_image\n"
         "- generate_image 的 prompt 参数必须是英文\n"
         "- 想创建新 Skill？用 write_file 写入 skill.md / character.txt / workflow.json\n"
@@ -178,7 +185,8 @@ def build_stable_prompt():
 
     # [P3] Skill 目录
     sections.append((P_SKILLS, "Available Skills",
-        "以下是可用的生图 Skill，详细规范请调用 load_skill 工具读取：\n"
+        "以下是可用的 Skill（生图类带 [底模] 标注，其余为写作/知识类）。"
+        "深入某个 Skill 时先 list_files 看它的文件结构，再 read_file 按需读取：\n"
         + _build_skill_list()
     ))
 
