@@ -12,6 +12,7 @@ import unittest
 from unittest import mock
 
 import app.skills as skills
+import app.tools.normal.list_skills as list_skills_tool
 
 
 class SkillLoaderTest(unittest.TestCase):
@@ -94,6 +95,74 @@ class SkillLoaderTest(unittest.TestCase):
         data = skills.load_skill("empty")
         self.assertEqual(data["skill_md"], "")
         self.assertEqual(data["references"], "")
+
+
+class SkillSummaryTest(unittest.TestCase):
+    """一行简介的抽取规则。
+
+    带 YAML frontmatter 的规范首行是 `---`，直接取首行会得到一个对选 skill
+    毫无信息量的 `---`（system prompt 与 list_skills 都会踩）。
+    """
+
+    def test_yaml_frontmatter_is_skipped(self):
+        md = "---\nname: writing\ndescription: 很长的一段\n---\n\n# 中文写作总装 Skill\n\n正文"
+        self.assertEqual(skills.skill_summary(md), "中文写作总装 Skill")
+
+    def test_frontmatter_terminated_by_dots(self):
+        self.assertEqual(skills.skill_summary("---\nname: x\n...\n# 标题\n"), "标题")
+
+    def test_plain_heading_without_frontmatter(self):
+        self.assertEqual(
+            skills.skill_summary("# 生图 Skill v2（涩图动作优化版）\n\n正文"),
+            "生图 Skill v2（涩图动作优化版）")
+
+    def test_multilevel_heading_is_stripped(self):
+        self.assertEqual(skills.skill_summary("## 二级标题\n"), "二级标题")
+
+    def test_fallback_to_first_body_line(self):
+        md = "---\nname: x\n---\n\n正文第一行\n第二行"
+        self.assertEqual(skills.skill_summary(md), "正文第一行")
+
+    def test_fallback_skips_separator_line(self):
+        md = "---\nname: x\n---\n\n----\n\n正文"
+        self.assertEqual(skills.skill_summary(md), "正文")
+
+    def test_unclosed_frontmatter_yields_empty(self):
+        self.assertEqual(skills.skill_summary("---\nname: x\ndescription: y"), "")
+
+    def test_empty_input(self):
+        self.assertEqual(skills.skill_summary(""), "")
+
+
+class ListSkillsToolTest(unittest.TestCase):
+    """list_skills 工具的展示层（不能出现 `---` 这种无信息量的简介）"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = self.tmp.name
+        p = mock.patch.object(skills, "SKILLS_DIR", self.root)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _write(self, rel, content):
+        path = os.path.join(self.root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+    def test_frontmatter_skill_shows_heading_not_dashes(self):
+        self._write("fm/skill.md", "---\nname: fm\ndescription: 说明\n---\n\n# 有标题的规范\n")
+        out = list_skills_tool._list_skills()
+        self.assertIn("- **fm**: 有标题的规范", out)
+        self.assertNotIn("---", out)
+
+    def test_skill_without_spec_shows_placeholder(self):
+        os.makedirs(os.path.join(self.root, "bare"), exist_ok=True)
+        self.assertIn("- **bare**: (无说明)", list_skills_tool._list_skills())
+
+    def test_empty_skills_dir(self):
+        self.assertEqual(list_skills_tool._list_skills(), "暂无可用 Skill")
 
 
 if __name__ == "__main__":

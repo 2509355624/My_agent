@@ -9,7 +9,7 @@ Agent System Prompt
 """
 
 from datetime import datetime
-from app.skills import list_skills, load_skill
+from app.skills import list_skills, load_skill, skill_summary
 from app.tools.registry import TOOLS
 
 
@@ -64,7 +64,8 @@ def _build_skill_list():
         data = load_skill(s)
         if not data or not data["skill_md"]:
             continue
-        first_line = data["skill_md"].strip().split("\n")[0].lstrip("# ").strip()
+        # 一行简介：跳过 YAML frontmatter（否则首行是 ---，没有信息量）
+        first_line = skill_summary(data["skill_md"])
 
         # 类型 + 底模标注
         is_image = data.get("workflow") is not None

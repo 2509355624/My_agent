@@ -131,3 +131,40 @@ def list_skills():
         return []
     return [d for d in os.listdir(SKILLS_DIR)
             if os.path.isdir(os.path.join(SKILLS_DIR, d))]
+
+
+def skill_summary(skill_md):
+    """从规范全文里抽一行简介，供 list_skills 展示。
+
+    踩过的坑：带 YAML frontmatter 的规范首行是 `---`，直接取首行只能得到
+    一个 `---`，对模型选 skill 毫无信息量。这里按优先级取：
+    首个 markdown 标题 > 首个非空且非分隔线的正文行。
+    """
+    if not skill_md:
+        return ""
+
+    lines = skill_md.splitlines()
+    start = 0
+
+    # 跳过 YAML frontmatter（首行 --- 到下一个 --- / ... 为止）
+    if lines and lines[0].strip() == "---":
+        for i in range(1, len(lines)):
+            if lines[i].strip() in ("---", "..."):
+                start = i + 1
+                break
+        else:
+            start = len(lines)  # 没有闭合的 frontmatter，视为无正文
+
+    body = lines[start:]
+
+    for line in body:
+        s = line.strip()
+        if s.startswith("#"):
+            return s.lstrip("#").strip()
+
+    for line in body:
+        s = line.strip()
+        if s and set(s) != {"-"}:
+            return s
+
+    return ""

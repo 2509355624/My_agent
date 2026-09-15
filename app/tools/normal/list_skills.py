@@ -1,6 +1,6 @@
 """列出所有可用 Skill"""
 
-from app.skills import list_skills, load_skill
+from app.skills import list_skills, load_skill, skill_summary
 
 
 def _list_skills():
@@ -11,18 +11,15 @@ def _list_skills():
     lines = []
     for s in skills:
         data = load_skill(s)
-        if data and data["skill_md"]:
-            first_line = data["skill_md"].strip().split("\n")[0].lstrip("# ").strip()
-            lines.append("- **" + s + "**: " + first_line)
-        else:
-            lines.append("- **" + s + "**: (无说明)")
+        summary = skill_summary(data["skill_md"]) if data else ""
+        lines.append("- **" + s + "**: " + (summary or "(无说明)"))
 
     return "当前可用 Skill 共 " + str(len(skills)) + " 个：\n" + "\n".join(lines)
 
 
 tool = {
     "name": "list_skills",
-    "description": "列出所有可用的生图 Skill",
+    "description": "列出所有可用 Skill（含生图、写作等各类），并给出一行说明",
     "function": _list_skills,
     "parameters": {
         "type": "object",
