@@ -7,6 +7,9 @@ data/
 # Skills（本地技能，不上传）
 skills/
 
+# Skills 迁移备份（搬家前的逐字节副本，保留 2 周后手动删除）
+skills_bak_20260915/
+
 # 文档（用户本地文档，不上传）
 documents/
 

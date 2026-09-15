@@ -23,9 +23,12 @@ from app.config import SKILLS_DIR
 
 
 def _resolve_skill_dir(skill_name):
-    """定位 skill 真实目录，处理同名嵌套层。
-    例如 skills/sun-style-writing/sun-style-writing/SKILL.md
-    会下探到真正含 SKILL.md / skill.md 的那一层。
+    """定位 skill 真实目录，处理**同名**嵌套层。
+    例如 skills/foo/foo/SKILL.md 会下探到真正含 SKILL.md / skill.md 的那一层。
+
+    注意：只认「子目录名 == skill 名」这一种嵌套。子目录名不同（如
+    skills/foo-main/foo/）**不会**下探，此时返回 base，上层会读到空。
+    2026-09-15 迁移后 skills/ 下已无同名嵌套形态，逻辑保留以防再次遇到。
     """
     base = os.path.join(SKILLS_DIR, skill_name)
     if not os.path.isdir(base):

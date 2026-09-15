@@ -187,7 +187,7 @@ agent_my_test/
 | `search_document` | `filename*`, `query*` | 文档内关键词搜索（带上下文，最多 10 处） |
 
 > `read_file` / `write_file` / `list_files` 的 `path` 是**相对 `skills/` 的路径**，
-> 可带任意层级子目录（如 `human-writing/references/fiction.md`），也接受落在
+> 可带任意层级子目录（如 `writing/01-structure/write-structure.md`），也接受落在
 > `skills/` 内的绝对路径。路径规则统一实现在 `app/tools/sandbox.py`。
 
 ### 生图（需 ComfyUI，`ENABLE_IMAGE_GEN=true`）
@@ -224,18 +224,22 @@ skills/image_gen_v1/
 └── character.txt   # 角色底模（可选）
 ```
 
-**2）标准 / 脚手架 Skill**（GitHub 下载风格，支持同名多一层嵌套）
+**2）标准 / 脚手架 Skill**（GitHub 下载风格）
 
 ```
-skills/sun-style-writing/sun-style-writing/
+skills/<name>/
 ├── SKILL.md          # 主规范（大写优先于 skill.md）
 ├── VERSION           # 版本（可选）
 ├── references/*.md   # 参考手册，加载时拼接附带
 └── assets/
 ```
 
+> 历史上兼容「同名多一层嵌套」（`skills/foo/foo/SKILL.md`）——`_resolve_skill_dir`
+> 会下探一层。2026-09-15 迁移后 `skills/` 下已无此形态，逻辑保留以防再遇到。
+> 该逻辑**只认「子目录名 == skill 名」**，`foo-main/foo/` 这种不会下探（会读到空）。
+
 相关工具：`list_skills` 列顶层、`list_files` 看内部结构、`read_file` 按
-`path` 读取任意层级文件（如 `human-writing/references/fiction.md`）、`load_skill`
+`path` 读取任意层级文件（如 `writing/04-liveness/human-writing.md`）、`load_skill`
 一次加载主规范 + 全部 references、`write_file` / `delete_file` 增删。
 Agent 也能用 `write_file` 自己创建新 Skill。
 
