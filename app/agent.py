@@ -5,7 +5,7 @@ Agent Loop
 
 import json
 import re
-from app.llm import call_llm
+from app.llm import call_llm_stream
 from app.memory import trim_history
 from app.tools import execute_tool
 
@@ -202,7 +202,19 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
             llm_history = _history_for_llm(trimmed)
             # 状态栏追加在尾部，动态变化不毒化前缀缓存
             llm_history.append(_status_message(history))
-            reply = call_llm(llm_history, provider=provider, model=model)
+            # 流式调用：
+            # - 思考内容(reasoning)即时下发给前端展示。**只出不进**——绝不写回
+            #   history，模型侧要求思考内容不参与后续上下文，写回去还会毒化前缀缓存。
+            # - 正文(content)只在本轮累积，等收完再解析工具调用：直接边收边下发
+            #   会让 [[TOOL:...]] 标签在页面上闪一下。
+            reply_parts = []
+            for kind, text in call_llm_stream(llm_history, provider=provider, model=model):
+                if kind == "reasoning":
+                    yield {"type": "reasoning", "content": text}
+                else:
+                    reply_parts.append(text)
+            reply = "".join(reply_parts)
+
             history.append({"role": "assistant", "content": reply})
 
             tool_calls = parse_tool_calls(reply)

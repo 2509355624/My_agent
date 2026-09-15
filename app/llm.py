@@ -2,6 +2,7 @@
 LLM 调用封装（支持多 Provider 动态路由）
 """
 
+import codecs
 import json
 import requests
 from app.config import (API_URL, API_KEY, MODEL, LLM_PROVIDER,
@@ -30,7 +31,7 @@ def get_effective_config(provider=None, model=None):
     }
 
 
-def call_llm(messages, timeout=120, provider=None, model=None):
+def call_llm(messages, timeout=600, provider=None, model=None):
     """调用 LLM，返回回复文本。
 
     - provider: 'volc' / 'doubao' / 'deepseek' / 'ollama'；默认当前生效 provider
@@ -73,6 +74,36 @@ def _raise_with_detail(resp):
     raise RuntimeError(msg)
 
 
+def _record_usage(usage, elapsed=None):
+    """把一次响应的 usage 折算成命中率写入 LAST_USAGE（流式/非流式共用口径）。
+
+    - 火山/DeepSeek 口径：prompt_cache_hit_tokens / prompt_cache_miss_tokens
+    - OpenAI 口径兜底：prompt_tokens_details.cached_tokens
+    流式下多数服务端只在末帧带 usage，且需要在请求里声明
+    stream_options.include_usage。
+    """
+    if not usage:
+        return
+    hit = usage.get("prompt_cache_hit_tokens")
+    miss = usage.get("prompt_cache_miss_tokens")
+    if hit is None:
+        details = usage.get("prompt_tokens_details") or {}
+        hit = details.get("cached_tokens", 0)
+        miss = (usage.get("prompt_tokens") or 0) - (hit or 0)
+    total = (hit or 0) + (miss or 0)
+    if total <= 0:
+        return
+    rate = (hit or 0) / total
+    LAST_USAGE["total_tokens"] = total
+    LAST_USAGE["hit_tokens"] = hit or 0
+    LAST_USAGE["miss_tokens"] = miss or 0
+    LAST_USAGE["hit_rate"] = rate
+
+    tail = f"  {elapsed:.1f}s" if elapsed is not None else ""
+    print(f"[cache] 命中 {hit} / {total} tokens = {rate*100:.1f}% "
+          f"(未命中 {miss}){tail} @{_now()}")
+
+
 def _call_provider(eff, body, timeout):
     """按 provider 分派请求。返回回复文本。"""
     if eff["provider"] == "ollama":
@@ -88,27 +119,10 @@ def _call_provider(eff, body, timeout):
         _raise_with_detail(resp)
     data = resp.json()
 
-    usage = data.get("usage") or {}
-    hit = usage.get("prompt_cache_hit_tokens")
-    miss = usage.get("prompt_cache_miss_tokens")
-    if hit is None:
-        details = usage.get("prompt_tokens_details") or {}
-        hit = details.get("cached_tokens", 0)
-        miss = usage.get("prompt_tokens", 0) - hit
-    total = (hit or 0) + (miss or 0)
+    _record_usage(data.get("usage"), resp.elapsed.total_seconds())
 
-    rate = (hit / total) if total > 0 else 0.0
-    LAST_USAGE["total_tokens"] = total
-    LAST_USAGE["hit_tokens"] = hit or 0
-    LAST_USAGE["miss_tokens"] = miss or 0
-    LAST_USAGE["hit_rate"] = rate
-
-    if total > 0:
-        elapsed = resp.elapsed.total_seconds()
-        print(f"[cache] 命中 {hit} / {total} tokens = {rate*100:.1f}% "
-              f"(未命中 {miss})  {elapsed:.1f}s @{_now()}")
-
-    return data["choices"][0]["message"]["content"]
+    message = (data.get("choices") or [{}])[0].get("message") or {}
+    return message.get("content") or ""
 
 
 def _call_ollama(base_url, body, timeout):
@@ -124,6 +138,116 @@ def _call_ollama(base_url, body, timeout):
         _raise_with_detail(resp)
     data = resp.json()
     return data["message"]["content"]
+
+
+# ─── 流式（SSE）──────────────────────────────────────
+# thinking / stream_options 这两个扩展字段只在火山方舟侧确认支持；DeepSeek
+# 官方的思考能力由模型自身决定，塞未知字段可能被判 400。所以按 provider
+# 白名单下发，并在真撞上 400 时降级重试一次。
+_EXTRA_FIELDS_PROVIDERS = ("volc", "doubao")
+
+
+def _build_stream_body(eff, messages, extras=True):
+    """构造流式请求体。extras=False 时只带最保守的字段（400 降级重试用）。"""
+    body = {"messages": messages, "stream": True, "model": eff["model"]}
+    if extras and eff["provider"] in _EXTRA_FIELDS_PROVIDERS:
+        # 火山多个 DeepSeek 版本默认关闭思维链，必须显式开启
+        body["thinking"] = {"type": "enabled"}
+        # 末帧回传 usage，否则缓存命中统计在流式下会断掉
+        body["stream_options"] = {"include_usage": True}
+    return body
+
+
+def _iter_sse_lines(resp):
+    """把 SSE 响应切成行。
+
+    用增量解码器按 UTF-8 解码：SSE 响应头常不带 charset，交给 requests 猜
+    编码容易把中文解成乱码；而 HTTP 分块又可能把一个多字节汉字劈成两半，
+    所以必须用 incremental decoder 而不是逐块 decode。
+    """
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    buf = ""
+    for chunk in resp.iter_content(chunk_size=None):
+        if not chunk:
+            continue
+        buf += decoder.decode(chunk)
+        while "\n" in buf:
+            line, buf = buf.split("\n", 1)
+            yield line
+    buf += decoder.decode(b"", final=True)
+    if buf:
+        yield buf
+
+
+def _parse_sse_line(line):
+    """解析一行 SSE，返回 [(kind, text)]，kind ∈ {"reasoning", "content"}。
+
+    非 data 行、坏 JSON、空 delta、[DONE] 一律返回空列表——流里出现噪声
+    不应该中断整次回答。
+    """
+    line = (line or "").strip()
+    if not line or not line.startswith("data:"):
+        return []
+    payload = line[5:].strip()
+    if not payload or payload == "[DONE]":
+        return []
+    try:
+        chunk = json.loads(payload)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(chunk, dict):
+        return []
+    _record_usage(chunk.get("usage"))
+
+    out = []
+    for choice in chunk.get("choices") or []:
+        delta = choice.get("delta") or {}
+        # 思考内容在前，正文在后（同一帧里可能同时有，保持这个顺序）
+        if delta.get("reasoning_content"):
+            out.append(("reasoning", delta["reasoning_content"]))
+        if delta.get("content"):
+            out.append(("content", delta["content"]))
+    return out
+
+
+def call_llm_stream(messages, timeout=600, provider=None, model=None):
+    """流式调用 LLM，逐块产出 (kind, text)。
+
+    kind 只有两种：
+      - "reasoning"：思考内容，**仅供展示，绝不能写回 messages**——
+        模型侧要求思考内容不参与后续上下文，写回去还会毒化前缀缓存。
+      - "content"：正文增量。
+
+    Ollama 走非流式，整体作为单个 content 块产出（行为与 call_llm 一致）。
+    timeout 在流式下是"两次数据块之间的最大间隔"，而非整次响应上限。
+    """
+    eff = get_effective_config(provider, model)
+    if eff["provider"] == "ollama":
+        yield "content", _call_ollama(
+            eff["base_url"], {"model": eff["model"], "messages": messages}, timeout)
+        return
+
+    url = eff["base_url"].rstrip("/") + "/chat/completions"
+    headers = {
+        "Authorization": "Bearer " + eff["api_key"],
+        "Content-Type": "application/json",
+    }
+    resp = requests.post(url, json=_build_stream_body(eff, messages, True),
+                         headers=headers, timeout=timeout, stream=True)
+    if resp.status_code == 400:
+        # 有的模型不认 thinking / stream_options，去掉扩展字段重试一次
+        resp.close()
+        resp = requests.post(url, json=_build_stream_body(eff, messages, False),
+                             headers=headers, timeout=timeout, stream=True)
+    if resp.status_code >= 400:
+        _raise_with_detail(resp)
+
+    try:
+        for line in _iter_sse_lines(resp):
+            for kind, text in _parse_sse_line(line):
+                yield kind, text
+    finally:
+        resp.close()
 
 
 def _now():

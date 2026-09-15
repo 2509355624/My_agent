@@ -2,8 +2,8 @@
 """Agent 主循环测试（app/agent.py::run_agent_stream）。
 
 用"脚本化的假 LLM"替换真实网络调用，验证事件流顺序、工具执行、
-pre_tool_results 注入、异常兜底与最大轮次保护。这些是前端渲染和
-用户体验直接依赖的行为，回归代价最高。
+pre_tool_results 注入、思考内容（reasoning）只出不进、异常兜底与
+最大轮次保护。这些是前端渲染和用户体验直接依赖的行为，回归代价最高。
 """
 
 import unittest
@@ -14,7 +14,14 @@ import app.config as config
 
 
 class _ScriptedLLM:
-    """按脚本依次返回回复；脚本元素是 Exception 时抛出。"""
+    """按脚本依次产出回复，模拟 call_llm_stream 的 (kind, text) 契约。
+
+    脚本元素：
+      - str            → 作为一整块正文（"content"）
+      - (kind, text)   → 原样产出，用于构造思考内容 / 分块正文
+      - [(kind, text)] → 同上，一次产出多块
+      - Exception      → 抛出（验证 agent 的异常兜底）
+    """
 
     def __init__(self, replies):
         self.replies = list(replies)
@@ -25,11 +32,18 @@ class _ScriptedLLM:
         self.calls += 1
         self.seen_histories.append(messages)
         if not self.replies:
-            return "（脚本已用尽）"
+            yield "content", "（脚本已用尽）"
+            return
         item = self.replies.pop(0)
         if isinstance(item, Exception):
             raise item
-        return item
+        if isinstance(item, list):
+            for pair in item:
+                yield pair
+        elif isinstance(item, tuple):
+            yield item
+        else:
+            yield "content", item
 
 
 class AgentLoopTest(unittest.TestCase):
@@ -49,7 +63,7 @@ class AgentLoopTest(unittest.TestCase):
 
     def _patch_llm(self, replies):
         fake = _ScriptedLLM(replies)
-        p = mock.patch.object(agent, "call_llm", fake)
+        p = mock.patch.object(agent, "call_llm_stream", fake)
         p.start()
         self.addCleanup(p.stop)
         return fake
@@ -116,6 +130,40 @@ class AgentLoopTest(unittest.TestCase):
         # 动态状态栏必须追加在末尾；放在头部会毒化 prefix cache
         self.assertIn("<status_bar>", sent[-1]["content"])
         self.assertNotIn("<status_bar>", sent[0]["content"])
+
+    def test_reasoning_is_streamed_but_never_stored(self):
+        self._patch_llm([
+            [("reasoning", "先看"), ("reasoning", "时间"), ("content", "现在 12 点。")],
+        ])
+        events = self._collect("几点了")
+        self.assertEqual([e["type"] for e in events],
+                         ["user", "reasoning", "reasoning", "assistant"])
+        self.assertEqual("".join(e["content"] for e in events if e["type"] == "reasoning"),
+                         "先看时间")
+        # 思考内容"只出不进"：历史里只能有 user/assistant，且正文不含思考
+        self.assertEqual([m["role"] for m in self.history], ["user", "assistant"])
+        self.assertEqual(self.history[-1]["content"], "现在 12 点。")
+        self.assertNotIn("先看时间", self.history[-1]["content"])
+
+    def test_content_chunks_are_concatenated(self):
+        self._patch_llm([[("content", "你"), ("content", "好"), ("content", "！")]])
+        events = self._collect("你好")
+        # 正文分块只能产生一条 assistant 事件（不是三条）
+        self.assertEqual([e["type"] for e in events], ["user", "assistant"])
+        self.assertEqual(events[-1]["content"], "你好！")
+        self.assertEqual(self.history[-1]["content"], "你好！")
+
+    def test_reasoning_resumes_after_tool_call(self):
+        self._patch_llm([
+            [("reasoning", "需要查时间"), ("content", "[[TOOL:get_time]][[/TOOL]]")],
+            [("reasoning", "拿到结果了"), ("content", "现在 12:00。")],
+        ])
+        events = self._collect("几点了")
+        self.assertEqual([e["type"] for e in events],
+                         ["user", "reasoning", "tool_call", "tool_result",
+                          "reasoning", "assistant"])
+        self.assertEqual(events[1]["content"], "需要查时间")
+        self.assertEqual(events[4]["content"], "拿到结果了")
 
     def test_llm_exception_is_reported_not_raised(self):
         self._patch_llm([RuntimeError("boom")])

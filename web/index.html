@@ -564,6 +564,61 @@
     margin-top: 8px;
   }
 
+  /* 思考过程折叠块：与工具组同构（默认收起），长思考不会刷屏 */
+  .think-group {
+    width: 100%;
+  }
+
+  .think-group-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--tool-bg);
+    border: 1px solid var(--tool-border);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .think-group-header:hover {
+    background: rgba(167, 139, 250, 0.14);
+  }
+
+  .think-group.open .tg-arrow {
+    transform: rotate(90deg);
+  }
+
+  .think-title {
+    color: #a78bfa;
+    font-weight: 600;
+  }
+
+  .think-status {
+    margin-left: auto;
+    color: var(--text-mute);
+    font-size: 11px;
+  }
+
+  .think-group-body {
+    display: none;
+    margin-top: 6px;
+    max-height: 320px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-dim);
+    border-left: 2px solid var(--tool-border);
+    padding-left: 10px;
+  }
+
+  .think-group.open .think-group-body {
+    display: block;
+  }
+
   .generated-image {
     margin-top: 12px;
     border-radius: 8px;
@@ -1631,30 +1686,39 @@ async function sendMessage() {
           continue;
         }
 
-        if (ev.type === 'assistant') {
+        if (ev.type === 'reasoning') {
+          // 思考开始流出就代表 AI 在干活了，撤掉等待动画，交给折叠块做实时反馈
           markFirstRenderable();
-          // 出现新正文时，先收尾上一组工具折叠条
+          appendReasoning(ev.content);
+        } else if (ev.type === 'assistant') {
+          markFirstRenderable();
+          // 出现新正文时，先收尾上一组思考/工具折叠条
+          flushThinkBlock();
           flushToolGroup();
           appendMessage('assistant', ev.content);
           scrollToBottom();
         } else if (ev.type === 'tool_call') {
           markFirstRenderable();
+          flushThinkBlock();
           addToolCall(ev.name, ev.args);
           scrollToBottom();
         } else if (ev.type === 'tool_result') {
           markFirstRenderable();
+          flushThinkBlock();
           addToolResult(ev.name, ev.result);
           scrollToBottom();
         }
       }
     }
 
+    flushThinkBlock();
     flushToolGroup();
     // 一个事件都没收到（静默返回）时兜底移除加载态
     if (!gotFirstEvent) removeLoading(loadingId);
     scrollToBottom();
   } catch (e) {
     // 流中断也要收尾，别让折叠条永远停在"执行中"
+    flushThinkBlock();
     flushToolGroup();
     appendMessage('assistant', '❌ 错误: ' + e.message);
     scrollToBottom();
@@ -1972,6 +2036,73 @@ function removeLoading(id) {
   }
   const el = document.getElementById(id);
   if (el) el.remove();
+}
+
+// ─── 思考过程折叠块 ─────────────────────────────────
+// 思考内容(reasoning)边收边追加，默认收起，标题上显示「思考中… / 已思考 N 字」。
+// 一次回答里可能思考多轮（每次工具调用后又想一遍），所以遇到正文/工具事件就
+// 收尾，下一个 reasoning 事件会开一个新的折叠块。
+let activeThink = null;
+
+function flushThinkBlock() {
+  if (!activeThink) return;
+  const t = activeThink;
+  t.statusEl.textContent = '✓ 已思考 ' + t.text.length + ' 字';
+  activeThink = null;
+}
+
+function appendReasoning(text) {
+  if (!text) return;
+  let t = activeThink;
+  if (!t) {
+    const msg = document.createElement('div');
+    msg.className = 'msg assistant';
+
+    const avatar = document.createElement('div');
+    avatar.className = 'avatar';
+    avatar.textContent = '思';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.style.background = 'var(--tool-bg)';
+    bubble.style.borderColor = 'var(--tool-border)';
+
+    const group = document.createElement('div');
+    group.className = 'think-group';
+
+    const header = document.createElement('div');
+    header.className = 'think-group-header';
+    header.innerHTML = '<span class="tg-arrow">▶</span>' +
+      '<span class="think-title">思考过程</span>' +
+      '<span class="think-status">思考中…</span>';
+    header.addEventListener('click', function() {
+      group.classList.toggle('open');
+    });
+
+    const body = document.createElement('div');
+    body.className = 'think-group-body';
+
+    group.appendChild(header);
+    group.appendChild(body);
+    bubble.appendChild(group);
+    msg.appendChild(avatar);
+    msg.appendChild(bubble);
+    messagesEl.appendChild(msg);
+
+    // 只在新建折叠块时滚一次：思考是逐 token 到达的，每帧都滚会把
+    // 正在回看历史的用户强行拽到底部。
+    scrollToBottom();
+
+    t = activeThink = {
+      text: '',
+      body: body,
+      statusEl: header.querySelector('.think-status')
+    };
+  }
+  t.text += text;
+  // 用 textContent 而非 innerHTML：思考内容里出现尖括号时不会被当标签解析
+  t.body.textContent = t.text;
+  t.statusEl.textContent = '思考中… ' + t.text.length + ' 字';
 }
 
 // ─── 工具调用折叠组 ─────────────────────────────────

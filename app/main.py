@@ -169,7 +169,7 @@ def vision():
         ]},
     ]
     try:
-        reply = call_llm(messages, provider=provider or None, model=model or None, timeout=180)
+        reply = call_llm(messages, provider=provider or None, model=model or None, timeout=600)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
