@@ -241,5 +241,67 @@ class AgentToolWhitelistTest(unittest.TestCase):
         self.assertIn("不可用", blocked[0]["content"])
 
 
+class AgentEventHistoryContractTest(unittest.TestCase):
+    """契约：会话消息类事件出流时，那条消息已经写进 history。
+
+    app/main.py 以「事件出流」作为落盘时机，所以这个顺序是不变式。
+    反过来（先 yield 后 append）该条消息会赶不上落盘——客户端中断时尤其明显。
+    """
+
+    def setUp(self):
+        self.history = []
+        for target, value in (
+            ("trim_history", lambda h, agent_id=None: h),
+            ("execute_tool", lambda name, args: "工具结果:" + name),
+        ):
+            p = mock.patch.object(agent, target, value)
+            p.start()
+            self.addCleanup(p.stop)
+        p = mock.patch.object(config, "MAX_TURNS", 10)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _patch_llm(self, replies):
+        fake = _ScriptedLLM(replies)
+        p = mock.patch.object(agent, "call_llm_stream", fake)
+        p.start()
+        self.addCleanup(p.stop)
+        return fake
+
+    def _histories_by_event(self, user_input, **kwargs):
+        """手动迭代事件流，逐个记录事件出流那一刻的 history 内容。"""
+        seen = {}
+        gen = agent.run_agent_stream(user_input, self.history, **kwargs)
+        for event in gen:
+            seen.setdefault(event["type"], []).append(
+                [m.get("content") for m in self.history])
+        return seen
+
+    def test_each_event_sees_its_own_message_in_history(self):
+        self._patch_llm(['[[TOOL:get_time]][[/TOOL]]', '现在 12:00。'])
+        seen = self._histories_by_event("几点了")
+
+        # user 事件出流时，用户那句话已经在历史里
+        self.assertEqual(seen["user"][0], ["几点了"])
+        # tool_result 事件出流时，工具结果已经在历史里（原先这里是反的）
+        self.assertIn("工具结果:get_time", seen["tool_result"][0])
+        # assistant 事件出流时，回复正文已经在历史里
+        self.assertIn("现在 12:00。", seen["assistant"][0])
+
+    def test_mid_stream_close_keeps_emitted_messages(self):
+        """客户端中途断开：已经推送出去的内容都留在 history 里。"""
+        self._patch_llm(['[[TOOL:get_time]][[/TOOL]]', '现在 12:00。'])
+        gen = agent.run_agent_stream("几点了", self.history)
+        next(gen)                                  # user
+        next(gen)                                  # tool_call（不入历史）
+        gen.close()                                # 模拟断开
+
+        contents = [m.get("content") for m in self.history]
+        # 已推送的 user 在；那一轮的 assistant 原文（工具块）也在，
+        # 因为它在解析工具调用之前就已入历史——只是没有单独出流。
+        self.assertEqual(contents[0], "几点了")
+        self.assertNotIn("现在 12:00。", contents)   # 还没生成的当然没有
+
+
 if __name__ == "__main__":
     unittest.main()

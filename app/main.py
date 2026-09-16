@@ -194,14 +194,30 @@ def chat():
 
     # 流式返回：agent 循环每产生一个事件就立刻推给前端（NDJSON，一行一个 JSON）。
     # 之前是收集完所有事件再一次性 jsonify，导致本地模型跑 60-70 秒期间前端全黑箱。
+    #
+    # 落盘时机：会话消息类事件一出流就落盘，而不是攒到整轮结束。
+    # 一轮请求可能包含多次工具调用（生图更可能阻塞数十分钟），若只在 finally
+    # 落盘，这段时间磁盘一直是上一轮的样子——进程被杀（改完 app/*.py 重启）
+    # 整轮内容蒸发，另一个标签页刷新也读不到正在进行的内容。
+    # 单次写盘是「临时文件 + fsync + os.replace」，几十上百 KB 的文件几毫秒，
+    # 一轮多写几十次可以接受。
+    SESSION_EVENTS = ("user", "assistant", "tool_result")
+
     def generate():
         try:
             for event in run_agent_stream(clean_input, h, provider=provider,
                                           model=model, pre_tool_results=pre_results,
                                           agent_id=agent_id):
+                # 先落盘再推送：内容一旦可见于前端，磁盘上就已经有了
+                if event.get("type") in SESSION_EVENTS:
+                    try:
+                        save_history(h, agent_id)
+                    except Exception:
+                        # 落盘失败不该打断这一轮对话，finally 还会再试一次
+                        pass
                 yield json.dumps(event, ensure_ascii=False) + "\n"
         finally:
-            # 无论正常结束还是客户端中断，都落盘已产生的会话
+            # 兜底：无论正常结束还是客户端中断，都落盘已产生的会话
             save_history(h, agent_id)
 
     return Response(

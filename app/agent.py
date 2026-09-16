@@ -173,6 +173,11 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
     Agent Loop: 生成器版本，逐事件返回
     事件类型: user / assistant / tool_call / tool_result
 
+    契约：会话消息类事件（user / assistant / tool_result）出流时，那条消息
+    已经写进 history。调用方以「事件出流」作为落盘时机，所以这几处一律
+    append 在前、yield 在后，不能反过来。reasoning 与 tool_call 不写历史
+    （思考内容只出不进；工具调用的结果由随后的 tool_result 承载），不在此列。
+
     改进：
     1. 一次处理多个工具调用
     2. turn 上限 MAX_TURNS 防止无限循环
@@ -246,14 +251,15 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
                     result = "该工具在当前 agent 不可用：" + name
                 else:
                     result = execute_tool(name, args)
-                yield {"type": "tool_result", "name": name, "result": result}
-
+                # 先入历史再出流：调用方把「事件出流」当作落盘时机，
+                # 顺序反了这条就赶不上落盘（客户端中断时尤其明显）。
                 # 用 tool_result role 存储，便于前端区分展示
                 history.append({
                     "role": "tool_result",
                     "content": result,
                     "tool_name": name
                 })
+                yield {"type": "tool_result", "name": name, "result": result}
 
             # 循环继续 → 执行完所有工具 → LLM 再思考一次
             if tool_calls:

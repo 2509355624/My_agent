@@ -98,6 +98,79 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(captured["provider"], "volc")
         self.assertEqual(captured["agent"], "main")   # 未指定 agent → 兜底到默认
 
+    # ─── /api/chat：事件级落盘 ───────────────────────
+
+    @staticmethod
+    def _visible(agent_id="main"):
+        """磁盘上非 system 的消息内容（落盘结果的地面真值）。"""
+        return [m.get("content") for m in memory.load_history(agent_id)
+                if m.get("role") != "system"]
+
+    def test_session_events_are_flushed_before_stream_ends(self):
+        """流还没跑完，已经推出去的内容就该在盘上。
+
+        否则后台仍在跑（生图可能阻塞数十分钟）时，另一个标签页刷新只能看到
+        上一轮；改完 app/*.py 重启服务则整轮内容蒸发。
+        """
+        snapshots = []
+
+        def fake_stream(user_input, history, provider=None, model=None,
+                        pre_tool_results=None, agent_id=None):
+            history.append({"role": "user", "content": user_input})
+            yield {"type": "user", "content": user_input}
+            snapshots.append(self._visible())      # 生成器尚未结束，finally 也没跑
+
+            history.append({"role": "assistant", "content": "A1"})
+            yield {"type": "assistant", "content": "A1"}
+            snapshots.append(self._visible())
+
+            history.append({"role": "tool_result", "content": "T1",
+                            "tool_name": "lookup"})
+            yield {"type": "tool_result", "name": "lookup", "result": "T1"}
+            snapshots.append(self._visible())
+
+        with mock.patch.object(main, "run_agent_stream", fake_stream):
+            resp = self.client.post("/api/chat", json={"message": "U1"})
+            self.assertEqual(resp.status_code, 200)
+            resp.get_data()                        # 消费完整个流
+
+        self.assertEqual(snapshots, [["U1"], ["U1", "A1"], ["U1", "A1", "T1"]])
+
+    def test_thinking_and_tool_call_events_are_not_persisted(self):
+        """reasoning / tool_call 不入历史，也不该触发额外的落盘语义。"""
+        def fake_stream(user_input, history, provider=None, model=None,
+                        pre_tool_results=None, agent_id=None):
+            yield {"type": "reasoning", "content": "想想"}
+            yield {"type": "tool_call", "name": "lookup", "args": {}}
+            history.append({"role": "assistant", "content": "好了"})
+            yield {"type": "assistant", "content": "好了"}
+
+        with mock.patch.object(main, "run_agent_stream", fake_stream):
+            resp = self.client.post("/api/chat", json={"message": "问一句"})
+            resp.get_data()
+
+        self.assertEqual(self._visible(), ["好了"])
+
+    def test_client_disconnect_keeps_flushed_content(self):
+        """客户端中途断开：已推送的内容必须已经在盘上。"""
+        def fake_stream(user_input, history, provider=None, model=None,
+                        pre_tool_results=None, agent_id=None):
+            history.append({"role": "user", "content": user_input})
+            yield {"type": "user", "content": user_input}
+            history.append({"role": "assistant", "content": "A1"})
+            yield {"type": "assistant", "content": "A1"}
+            history.append({"role": "assistant", "content": "A2"})
+            yield {"type": "assistant", "content": "A2"}
+
+        with mock.patch.object(main, "run_agent_stream", fake_stream):
+            resp = self.client.post("/api/chat", json={"message": "U1"})
+            it = iter(resp.response)
+            next(it)                               # user
+            next(it)                               # A1
+            it.close()                             # 模拟断开，A2 从未产生
+
+        self.assertEqual(self._visible(), ["U1", "A1"])
+
     # ─── /api/chat：编辑某条用户消息后重发 ────────────
 
     def _seed_history(self, agent_id="main"):
