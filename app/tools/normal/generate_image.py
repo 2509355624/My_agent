@@ -6,7 +6,7 @@ import time
 import random
 import uuid
 from flask import request
-from app.config import COMFYUI_URL, AGENT_PORT
+from app.config import COMFYUI_URL, IMAGE_GEN_TIMEOUT
 from app.skills import load_skill
 
 
@@ -21,7 +21,8 @@ def _queue_prompt(workflow):
     return resp.json()["prompt_id"]
 
 
-def _wait_for_completion(prompt_id, timeout=300):
+def _wait_for_completion(prompt_id, timeout=IMAGE_GEN_TIMEOUT):
+    """轮询等待 ComfyUI 出图。批量生图逐张串行，故超时给得较宽（见 config）。"""
     start = time.time()
     while time.time() - start < timeout:
         try:

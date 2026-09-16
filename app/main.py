@@ -54,6 +54,27 @@ def _ensure_system_prompt(agent_id=None, only_system=False):
     save_history([{"role": "system", "content": stable_prompt}] + keep, agent_id)
 
 
+def _truncate_at_user(history, user_index):
+    """截断到第 user_index 条用户消息之前（1 起数），供「编辑并重发」使用。
+
+    只数 role == "user"：assistant 与 tool_result 不参与计数，所以一轮回复
+    被拆成多个 assistant 气泡、中间夹了多少工具结果，都不影响定位。
+    这一点很重要——前端的「我」气泡序号正是按这个口径数的。
+
+    返回 (新历史, 是否命中)。index 非法或找不到对应消息时原样返回并标记
+    未命中，由调用方决定报错还是放行（静默按原样追加会让人误以为改生效了）。
+    """
+    if not isinstance(user_index, int) or user_index < 1:
+        return history, False
+    seen = 0
+    for i, msg in enumerate(history):
+        if msg.get("role") == "user":
+            seen += 1
+            if seen == user_index:
+                return history[:i], True
+    return history, False
+
+
 # 注意：不在这里(import 时)初始化会话文件。导入模块不应产生磁盘副作用——
 # 那会让测试/复用 import app.main 时污染真实 data/session.jsonl。
 # 初始化改到 run() 里做，并且各路由在发现缺 system 头时会自行补齐。
@@ -155,6 +176,21 @@ def chat():
     if not h or h[0].get("role") != "system":
         _ensure_system_prompt(agent_id, only_system=True)
         h = load_history(agent_id)
+
+    # 「编辑某条用户消息后重发」：该条之前的会话保留，之后的全部丢弃。
+    # 被丢掉的那些消息都是在回应被改掉的那一句，留着会让上下文自相矛盾
+    # ——模型会以为它们是在回答新内容。本进程不持有常驻会话对象，每次请求
+    # 都重新 load，所以截断就是一次数组切片，不需要撤销已落盘的日志行。
+    edit_user_index = data.get("edit_user_index")
+    if edit_user_index not in (None, ""):
+        try:
+            edit_user_index = int(edit_user_index)
+        except (TypeError, ValueError):
+            return jsonify({"error": "edit_user_index 必须是整数"}), 400
+        h, hit = _truncate_at_user(h, edit_user_index)
+        if not hit:
+            return jsonify(
+                {"error": "找不到第 %d 条用户消息" % edit_user_index}), 400
 
     # 流式返回：agent 循环每产生一个事件就立刻推给前端（NDJSON，一行一个 JSON）。
     # 之前是收集完所有事件再一次性 jsonify，导致本地模型跑 60-70 秒期间前端全黑箱。

@@ -94,6 +94,11 @@ ENABLE_IMAGE_GEN = os.getenv("ENABLE_IMAGE_GEN", "true").lower() not in ("0", "f
 
 COMFYUI_URL = os.getenv("COMFYUI_URL", "http://127.0.0.1:8188")
 
+# 单次 generate_image 调用的等待上限（秒）。批量生图是逐张串行跑的，
+# 张数越多总耗时越长，所以这里给足时间，避免整批在最后一张前被掐断
+# （超时会丢掉本批已经生成出来的图）。
+IMAGE_GEN_TIMEOUT = int(os.getenv("IMAGE_GEN_TIMEOUT", "3600"))
+
 # ─── Agent ──────────────────────────────────────────
 
 AGENT_PORT = int(os.getenv("AGENT_PORT", "5174"))

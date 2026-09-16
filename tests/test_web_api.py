@@ -98,6 +98,99 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(captured["provider"], "volc")
         self.assertEqual(captured["agent"], "main")   # 未指定 agent → 兜底到默认
 
+    # ─── /api/chat：编辑某条用户消息后重发 ────────────
+
+    def _seed_history(self, agent_id="main"):
+        """造一段"问了三轮"的历史：用户/助手/工具结果混排。"""
+        memory.save_history([
+            {"role": "system", "content": "S"},
+            {"role": "user", "content": "U1"},
+            {"role": "assistant", "content": "A1"},
+            {"role": "tool_result", "content": "T1"},
+            {"role": "user", "content": "U2"},
+            {"role": "assistant", "content": "A2"},
+            {"role": "user", "content": "U3"},
+            {"role": "assistant", "content": "A3"},
+        ], agent_id)
+
+    def _post_edit_capture(self, user_index, message="改过的话"):
+        """发一次"编辑重发"，返回传给 agent 循环的历史（只留 content）。"""
+        captured = {}
+
+        def fake_stream(user_input, history, provider=None, model=None,
+                        pre_tool_results=None, agent_id=None):
+            captured["history"] = [m.get("content") for m in history]
+            captured["user_input"] = user_input
+            yield {"type": "assistant", "content": "done"}
+
+        with mock.patch.object(main, "run_agent_stream", fake_stream):
+            resp = self.client.post("/api/chat", json={
+                "message": message, "edit_user_index": user_index,
+                "agent": "main"})
+        return resp, captured
+
+    def test_edit_middle_message_drops_everything_after_it(self):
+        self._seed_history()
+        resp, captured = self._post_edit_capture(2)
+        self.assertEqual(resp.status_code, 200)
+        # 第 2 条用户消息之前的保留（含夹在中间的工具结果），之后的全部丢弃；
+        # 被丢的 A2 / U3 / A3 都是在回应旧的那一句，留着会自相矛盾。
+        self.assertEqual(captured["history"], ["S", "U1", "A1", "T1"])
+        self.assertEqual(captured["user_input"], "改过的话")
+
+    def test_edit_first_message_keeps_only_system(self):
+        self._seed_history()
+        resp, captured = self._post_edit_capture(1)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(captured["history"], ["S"])
+
+    def test_edit_last_message_keeps_earlier_turns(self):
+        self._seed_history()
+        resp, captured = self._post_edit_capture(3)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(captured["history"],
+                         ["S", "U1", "A1", "T1", "U2", "A2"])
+
+    def test_edit_index_beyond_history_is_rejected(self):
+        self._seed_history()
+        resp, _ = self._post_edit_capture(99)
+        # 找不到就别静默按原样追加——那会让人以为改动生效了
+        self.assertEqual(resp.status_code, 400)
+
+    def test_edit_index_must_be_numeric(self):
+        self._seed_history()
+        resp, _ = self._post_edit_capture("abc")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_edit_index_invalid_leaves_history_untouched(self):
+        self._seed_history()
+        self._post_edit_capture(99)
+        kept = [m.get("content") for m in memory.load_history("main")]
+        self.assertEqual(kept, ["S", "U1", "A1", "T1", "U2", "A2", "U3", "A3"])
+
+    def test_normal_send_keeps_full_history(self):
+        self._seed_history()
+        captured = {}
+
+        def fake_stream(user_input, history, provider=None, model=None,
+                        pre_tool_results=None, agent_id=None):
+            captured["history"] = [m.get("content") for m in history]
+            yield {"type": "assistant", "content": "done"}
+
+        with mock.patch.object(main, "run_agent_stream", fake_stream):
+            self.client.post("/api/chat", json={"message": "U4", "agent": "main"})
+        # 不带 edit_user_index 时必须什么都不动
+        self.assertEqual(captured["history"],
+                         ["S", "U1", "A1", "T1", "U2", "A2", "U3", "A3"])
+
+    def test_truncate_at_user_handles_bad_index_types(self):
+        hist = [{"role": "system", "content": "S"},
+                {"role": "user", "content": "U1"}]
+        for bad in (0, -3, "1", None, 1.5):
+            out, hit = main._truncate_at_user(hist, bad)
+            self.assertFalse(hit, "index=%r 不该命中" % bad)
+            self.assertEqual(out, hist)
+
     # ─── documents API ───────────────────────────────
 
     def test_documents_list_empty(self):
