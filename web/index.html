@@ -687,6 +687,83 @@
     width: 100%;
   }
 
+  /* ── 图片灯箱：点击放大 + 左右翻页（替代原先跳新标签页）── */
+  .lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 999;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(6, 6, 10, 0.92);
+    backdrop-filter: blur(4px);
+  }
+
+  .lightbox.open {
+    display: flex;
+  }
+
+  .lightbox-img {
+    max-width: 92vw;
+    max-height: 86vh;
+    object-fit: contain;
+    border-radius: 8px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+    user-select: none;
+    cursor: default;
+  }
+
+  .lb-btn {
+    position: absolute;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    font-family: inherit;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+  }
+
+  .lb-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  /* 到第一张 / 最后一张时按钮变灰，不循环 —— 边界一眼可见 */
+  .lb-btn:disabled {
+    opacity: 0.2;
+    cursor: default;
+  }
+
+  .lb-btn:disabled:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .lb-prev { left: 2.5vw; top: 50%; transform: translateY(-50%); }
+  .lb-next { right: 2.5vw; top: 50%; transform: translateY(-50%); }
+  .lb-close { top: 16px; right: 16px; width: 38px; height: 38px; font-size: 16px; }
+
+  .lb-counter {
+    position: absolute;
+    z-index: 1;
+    bottom: 18px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    color: var(--text-dim);
+    background: rgba(255, 255, 255, 0.08);
+    user-select: none;
+  }
+
   /* Input area */
   .input-area {
     padding: 16px 0 20px;
@@ -1013,6 +1090,7 @@
     max-height: 220px;
     border-radius: 10px;
     display: block;
+    cursor: zoom-in;
   }
 
   /* ── 小说阅读模式（番茄小说风格整段排版）── */
@@ -1834,6 +1912,7 @@ function appendMessage(role, content, imageDataURL) {
     pic.className = 'user-img';
     const im = document.createElement('img');
     im.src = imageDataURL;
+    bindLightbox(im);
     pic.appendChild(im);
     bubble.appendChild(pic);
   }
@@ -2340,13 +2419,142 @@ function addToolResult(name, result) {
       img.className = 'generated-image';
       img.alt = 'generated image';
       img.loading = 'lazy';
-      img.addEventListener('click', function() { window.open(url, '_blank'); });
+      // 点击在当前页面放大（灯箱内可左右翻页），不再跳新标签页
+      bindLightbox(img);
       grid.appendChild(img);
     }
     g.imagesEl.appendChild(grid);
   }
   scrollToBottom();
 }
+
+// ─── 图片灯箱：点击放大 + 左右翻页 ──────────────────
+// 图集范围 = 整个会话里所有可点击放大的图，按出现顺序（即时间顺序）排成一列。
+// 点开任意一张，灯箱就从它自己的位置起步；左右翻页可以一路翻完整场会话，
+// 跨轮次、跨批次都能连着看。AI 生成的图和用户自己发的图在同一个序列里，
+// 因为它们本来就在同一条会话流上（用户图通常只有零星几张，不影响观感）。
+let lightboxEl = null;
+let lightboxState = { list: [], index: 0 };
+
+function buildLightbox() {
+  if (lightboxEl) return lightboxEl;
+
+  const box = document.createElement('div');
+  box.className = 'lightbox';
+
+  const img = document.createElement('img');
+  img.className = 'lightbox-img';
+  img.alt = '图片预览';
+  img.draggable = false;
+  img.addEventListener('click', (e) => e.stopPropagation());
+
+  const mkBtn = (cls, text, title) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'lb-btn ' + cls;
+    b.textContent = text;
+    b.title = title;
+    return b;
+  };
+
+  const prev = mkBtn('lb-prev', '‹', '上一张（←）');
+  const next = mkBtn('lb-next', '›', '下一张（→）');
+  const close = mkBtn('lb-close', '✕', '关闭（Esc）');
+  const counter = document.createElement('div');
+  counter.className = 'lb-counter';
+
+  prev.addEventListener('click', (e) => { e.stopPropagation(); stepLightbox(-1); });
+  next.addEventListener('click', (e) => { e.stopPropagation(); stepLightbox(1); });
+  close.addEventListener('click', (e) => { e.stopPropagation(); closeLightbox(); });
+  // 点图片以外的遮罩区域即关闭
+  box.addEventListener('click', () => closeLightbox());
+
+  box.appendChild(img);
+  box.appendChild(prev);
+  box.appendChild(next);
+  box.appendChild(close);
+  box.appendChild(counter);
+  document.body.appendChild(box);
+
+  box._img = img;
+  box._prev = prev;
+  box._next = next;
+  box._counter = counter;
+  lightboxEl = box;
+  return box;
+}
+
+// 整个会话的图集：DOM 顺序即出现顺序。每次点击时现取，所以刚生成的新图
+// 会自动进入序列，不需要额外维护索引。
+function sessionImages() {
+  return Array.from(messagesEl.querySelectorAll('.generated-image, .user-img img'));
+}
+
+function bindLightbox(img) {
+  img.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const list = sessionImages();
+    const at = list.indexOf(img);
+    openLightbox(list, at < 0 ? 0 : at);
+  });
+}
+
+function openLightbox(list, index) {
+  if (!list || !list.length) return;
+  const box = buildLightbox();
+  lightboxState = {
+    list: list,
+    index: Math.max(0, Math.min(index, list.length - 1))
+  };
+  renderLightbox();
+  box.classList.add('open');
+}
+
+function renderLightbox() {
+  const box = lightboxEl;
+  if (!box) return;
+  const list = lightboxState.list;
+  const index = lightboxState.index;
+  const cur = list[index];
+  if (!cur) return;
+
+  box._img.src = cur.src;
+
+  const multi = list.length > 1;
+  box._prev.style.display = multi ? 'flex' : 'none';
+  box._next.style.display = multi ? 'flex' : 'none';
+  box._prev.disabled = index <= 0;
+  box._next.disabled = index >= list.length - 1;
+
+  box._counter.textContent = (index + 1) + ' / ' + list.length;
+  box._counter.style.display = multi ? 'block' : 'none';
+}
+
+function stepLightbox(delta) {
+  const target = lightboxState.index + delta;
+  if (target < 0 || target >= lightboxState.list.length) return;
+  lightboxState.index = target;
+  renderLightbox();
+}
+
+function closeLightbox() {
+  if (lightboxEl) lightboxEl.classList.remove('open');
+}
+
+// ← → 翻页、Esc 关闭。用捕获阶段接管，避免被输入框的 keydown 吃掉；
+// 灯箱没打开时直接返回，不干扰任何既有按键行为。
+document.addEventListener('keydown', function(e) {
+  if (!lightboxEl || !lightboxEl.classList.contains('open')) return;
+  if (e.key === 'Escape') {
+    closeLightbox();
+  } else if (e.key === 'ArrowLeft') {
+    e.preventDefault();
+    stepLightbox(-1);
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault();
+    stepLightbox(1);
+  }
+}, true);
 
 function scrollToBottom() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
