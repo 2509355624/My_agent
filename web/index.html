@@ -257,6 +257,18 @@
     border: 1px solid var(--border);
   }
 
+  /* 顶栏 agent 下拉：与 model-badge 同高，不抢视觉重心 */
+  .agent-select {
+    font-size: 11px;
+    color: inherit;
+    background: var(--bg-elev);
+    padding: 3px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    max-width: 140px;
+    cursor: pointer;
+  }
+
   .header-actions {
     display: flex;
     gap: 8px;
@@ -1239,6 +1251,7 @@
       <div>
         <div class="title">个人 Agent</div>
       </div>
+      <select id="agentSelect" class="agent-select" onchange="onAgentChange(this.value)" title="切换 agent（各自独立的会话与工具集）"></select>
       <span class="model-badge" id="modelBadge">加载中...</span>
     </div>
     <div class="header-actions">
@@ -1349,6 +1362,68 @@ function toggleReadMode() {
 
 let isLoading = false;
 let pendingImage = null;   // 待发送图片 dataURL
+let currentAgent = '';     // 当前 agent id：决定会话文件、人设、工具与 skills 白名单
+let currentAbort = null;   // 当前请求的中断控制器，切换 agent 时用来掐断正在跑的流
+
+// ─── agent 切换 ─────────────────────────────────────
+// 每个 agent 有独立的会话文件与工具/skills 白名单，所以切换时必须：
+// 掐断正在跑的流 → 清空消息区 → 按新 agent 重新拉历史。
+
+async function loadAgents() {
+  const sel = document.getElementById('agentSelect');
+  let list = [];
+  let def = '';
+  try {
+    const res = await fetch('/api/agents');
+    const data = await res.json();
+    list = data.agents || [];
+    def = data.default || '';
+  } catch (e) {
+    // 列表拿不到时也要把历史拉出来，不能让页面空着
+    loadHistory();
+    return;
+  }
+
+  if (!list.length) {
+    sel.style.display = 'none';
+    loadHistory();
+    return;
+  }
+
+  sel.innerHTML = list.map(a =>
+    '<option value="' + escapeHtml(a.id) + '" title="' + escapeHtml(a.description || '') + '">'
+    + escapeHtml(a.name || a.id) + '</option>'
+  ).join('');
+
+  // 优先用上次选的（存在且仍在列表里），否则用后端默认
+  const saved = localStorage.getItem('agentId');
+  currentAgent = (saved && list.some(a => a.id === saved)) ? saved
+    : (list.some(a => a.id === def) ? def : list[0].id);
+  sel.value = currentAgent;
+  loadHistory();
+}
+
+function onAgentChange(agentId) {
+  if (!agentId || agentId === currentAgent) return;
+
+  // 正在生成回答：直接掐断，而不是等它跑完（本地模型可能跑一分钟）
+  if (currentAbort) {
+    currentAbort.abort();
+    currentAbort = null;
+  }
+
+  currentAgent = agentId;
+  localStorage.setItem('agentId', agentId);
+
+  // 先把残留的思考块 / 工具分组收尾写进 DOM（马上会被清掉），再清空消息区，
+  // 否则收尾动作会把残余元素插到空状态之后。
+  flushThinkBlock();
+  flushToolGroup();
+  messagesEl.innerHTML = '';
+  messagesEl.appendChild(emptyState);
+  emptyState.style.display = 'flex';
+  loadHistory();
+}
 
 // ─── 传图给 AI 看 ───────────────────────────────────
 function onPickImage(e) {
@@ -1394,7 +1469,7 @@ async function sendWithImage(text) {
     const res = await fetch('/api/vision', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: imgUrl, question: text, provider: currentProvider, model: currentModel })
+      body: JSON.stringify({ image: imgUrl, question: text, provider: currentProvider, model: currentModel, agent: currentAgent })
     });
     removeLoading(loadingId);
     if (!res.ok) {
@@ -1435,7 +1510,7 @@ inputBox.addEventListener('keydown', function(e) {
 window.addEventListener('DOMContentLoaded', function() {
   setReadMode(localStorage.getItem('novelMode') === '1');
   loadProviders();
-  loadHistory();
+  loadAgents();     // 先拿到 agent 列表，再由它触发 loadHistory（读当前 agent 的会话）
   loadDocuments();
 });
 
@@ -1721,7 +1796,7 @@ function splitToolBlocks(content) {
 
 async function loadHistory() {
   try {
-    const res = await fetch('/api/history');
+    const res = await fetch('/api/history?agent=' + encodeURIComponent(currentAgent || ''));
     const data = await res.json();
 
     if (data.messages.length > 0) {
@@ -1781,14 +1856,18 @@ async function sendMessage() {
     }
   };
 
+  const ac = new AbortController();
+  currentAbort = ac;
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: ac.signal,
       body: JSON.stringify({
         message: text,
         provider: currentProvider,
-        model: currentModel
+        model: currentModel,
+        agent: currentAgent
       })
     });
 
@@ -1852,12 +1931,18 @@ async function sendMessage() {
     // 流中断也要收尾，别让折叠条永远停在"执行中"
     flushThinkBlock();
     flushToolGroup();
-    appendMessage('assistant', '❌ 错误: ' + e.message);
+    if (e.name === 'AbortError') {
+      // 切换 agent 或用户主动中断：不是错误，静默收尾
+      appendMessage('assistant', '（已中断）');
+    } else {
+      appendMessage('assistant', '❌ 错误: ' + e.message);
+    }
     scrollToBottom();
   } finally {
     removeLoading(loadingId);
     isLoading = false;
     sendBtn.disabled = false;
+    if (currentAbort === ac) currentAbort = null;
     inputBox.focus();
   }
 }
@@ -2560,10 +2645,20 @@ function scrollToBottom() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
+function currentAgentName() {
+  const sel = document.getElementById('agentSelect');
+  const opt = sel && sel.selectedOptions && sel.selectedOptions[0];
+  return (opt && opt.textContent) || currentAgent || '当前 agent';
+}
+
 async function clearChat() {
-  if (!confirm('确定清空所有对话记录？')) return;
+  if (!confirm('确定清空「' + currentAgentName() + '」的所有对话记录？')) return;
   try {
-    await fetch('/api/clear', { method: 'POST' });
+    await fetch('/api/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent: currentAgent })
+    });
     messagesEl.innerHTML = '';
     messagesEl.appendChild(emptyState);
     emptyState.style.display = 'flex';

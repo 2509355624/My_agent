@@ -14,6 +14,7 @@ import threading
 import unittest
 from unittest import mock
 
+import app.agents as agents
 import app.memory as memory
 
 
@@ -25,10 +26,15 @@ class PersistenceTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.path = os.path.join(self.tmp.name, "session.jsonl")
-        p = mock.patch.object(memory, "SESSION_FILE", self.path)
+        # 会话文件现在由 agent 决定：agents/<id>/session.jsonl。
+        # 把 agents 目录整体重定向到临时目录，就不会碰真实的 agents/。
+        p = mock.patch.object(agents, "AGENTS_DIR",
+                              os.path.join(self.tmp.name, "agents"))
         p.start()
         self.addCleanup(p.stop)
+        agents.clear_cache()
+        self.addCleanup(agents.clear_cache)
+        self.path = os.path.join(self.tmp.name, "agents", "main", "session.jsonl")
 
     def test_roundtrip_preserves_unicode(self):
         history = [_msg("system", "系统"),
@@ -49,9 +55,10 @@ class PersistenceTest(unittest.TestCase):
     def test_no_leftover_tmp_file(self):
         memory.save_history([_msg("user", "x")])
         self.assertFalse(os.path.exists(self.path + ".tmp"))
-        self.assertEqual(os.listdir(self.tmp.name), ["session.jsonl"])
+        self.assertEqual(os.listdir(os.path.dirname(self.path)), ["session.jsonl"])
 
     def test_corrupted_line_is_skipped(self):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
         with open(self.path, "w", encoding="utf-8") as f:
             f.write(json.dumps({"role": "user", "content": "ok"},
                                ensure_ascii=False) + "\n")
@@ -60,6 +67,25 @@ class PersistenceTest(unittest.TestCase):
             f.write(json.dumps({"role": "assistant", "content": "hi"}) + "\n")
         self.assertEqual([m["content"] for m in memory.load_history()],
                          ["ok", "hi"])
+
+    def test_two_agents_keep_separate_sessions(self):
+        """会话隔离：这是多 agent 的核心语义——各写各的文件，互不覆盖。"""
+        memory.save_history([_msg("user", "main 的会话")], "main")
+        memory.save_history([_msg("user", "writing 的会话")], "writing")
+        self.assertEqual([m["content"] for m in memory.load_history("main")],
+                         ["main 的会话"])
+        self.assertEqual([m["content"] for m in memory.load_history("writing")],
+                         ["writing 的会话"])
+        self.assertNotEqual(agents.session_file("main"),
+                            agents.session_file("writing"))
+        self.assertTrue(os.path.exists(agents.session_file("main")))
+        self.assertTrue(os.path.exists(agents.session_file("writing")))
+
+    def test_illegal_agent_id_never_writes_outside(self):
+        """agent_id 带 ../ 时兜底到默认 agent，绝不在 agents/ 之外落文件。"""
+        memory.save_history([_msg("user", "兜底")], "../evil")
+        self.assertTrue(os.path.exists(agents.session_file("main")))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "evil")))
 
     def test_concurrent_saves_never_produce_partial_file(self):
         payloads = [[_msg("user", "msg-%d" % i)] * 50 for i in range(8)]
@@ -89,9 +115,9 @@ class TrimHistoryTest(unittest.TestCase):
     """
 
     def setUp(self):
-        # _LAST_COMPACT_TOKENS 是模块级全局，压缩一次就被改写；每例归零
+        # _LAST_COMPACT_TOKENS 是按 agent 记的字典，压缩一次就被改写；每例清空
         for target, value in (
-            ("_LAST_COMPACT_TOKENS", 0),
+            ("_LAST_COMPACT_TOKENS", {}),
             ("_summarize_old_turns", lambda msgs: "旧内容摘要"),
         ):
             p = mock.patch.object(memory, target, value)

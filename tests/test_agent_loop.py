@@ -50,7 +50,7 @@ class AgentLoopTest(unittest.TestCase):
     def setUp(self):
         # 不做上下文压缩、不做真实工具调用、不做真实网络请求
         for target, value in (
-            ("trim_history", lambda h: h),
+            ("trim_history", lambda h, agent_id=None: h),
             ("execute_tool", lambda name, args: "工具结果:" + name),
         ):
             p = mock.patch.object(agent, target, value)
@@ -179,6 +179,66 @@ class AgentLoopTest(unittest.TestCase):
         self._patch_llm(['[[TOOL:get_time]][[/TOOL]]'])  # 每轮都要调工具
         events = self._collect("一直查")
         self.assertIn("最大轮次", events[-1]["content"])
+
+
+class AgentToolWhitelistTest(unittest.TestCase):
+    """执行层的工具白名单拦截。
+
+    system prompt 里不列出只是「看不见」，这里保证「调不动」——
+    少了这一道，「写作 agent 不能用生图」就只是名义上的隔离。
+    """
+
+    def setUp(self):
+        self.history = []
+        self.executed = []
+
+        def fake_execute(name, args):
+            self.executed.append(name)
+            return "结果:" + name
+
+        for target, value in (
+            ("trim_history", lambda h, agent_id=None: h),
+            ("execute_tool", fake_execute),
+        ):
+            p = mock.patch.object(agent, target, value)
+            p.start()
+            self.addCleanup(p.stop)
+        p = mock.patch.object(config, "MAX_TURNS", 10)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _patch_llm(self, replies):
+        fake = _ScriptedLLM(replies)
+        p = mock.patch.object(agent, "call_llm_stream", fake)
+        p.start()
+        self.addCleanup(p.stop)
+        return fake
+
+    def _patch_whitelist(self, allowed):
+        p = mock.patch.object(agent.agent_store, "allows_tool",
+                              lambda aid, name: allowed)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_allowed_tool_runs(self):
+        self._patch_whitelist(True)
+        self._patch_llm(['[[TOOL:read_file]]{"path": "a.md"}[[/TOOL]]', '读完了。'])
+        events = list(agent.run_agent_stream("读一下", self.history, agent_id="writing"))
+        self.assertEqual(self.executed, ["read_file"])
+        results = [e for e in events if e["type"] == "tool_result"]
+        self.assertEqual(results[0]["result"], "结果:read_file")
+
+    def test_blocked_tool_never_executes(self):
+        self._patch_whitelist(False)
+        self._patch_llm(['[[TOOL:generate_image]]{"prompt": "cat"}[[/TOOL]]', '好的。'])
+        events = list(agent.run_agent_stream("画只猫", self.history, agent_id="writing"))
+        self.assertEqual(self.executed, [])                      # 压根没被执行
+        results = [e for e in events if e["type"] == "tool_result"]
+        self.assertIn("不可用", results[0]["result"])
+        # 拒绝结果同样要落进历史，模型下一轮才知道换条路
+        blocked = [m for m in self.history if m.get("role") == "tool_result"]
+        self.assertEqual(len(blocked), 1)
+        self.assertIn("不可用", blocked[0]["content"])
 
 
 if __name__ == "__main__":

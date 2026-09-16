@@ -8,8 +8,9 @@ import socket
 import requests
 from flask import (Flask, request, jsonify, send_from_directory, Response,
                    stream_with_context)
+from app import agents as agent_store
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
-                        LLM_PROVIDER, PROVIDERS, OLLAMA_BASE_URL)
+                        LLM_PROVIDER, PROVIDERS, OLLAMA_BASE_URL, DEFAULT_AGENT_ID)
 from app.skills import list_skills, load_skill
 from app.agent_prompt import build_stable_prompt
 from app.memory import load_history, save_history
@@ -19,22 +20,38 @@ from app.tools.normal.documents import list_documents, file_info, read_document,
 
 app = Flask(__name__, static_folder=WEB_DIR, static_url_path="")
 
-# ─── 会话持久化（以 SESSION_FILE 为单一事实源）────────
+# ─── 会话持久化（每个 agent 一个会话文件）────────────
 # 一切以磁盘文件为准：每次读写都 load/save，保证手机/电脑等多端
 # 刷新到的一致（不再依赖进程内存全局变量，避免多端不同步）。
+# 用哪个文件由 agent id 决定，见 app/agents.py。
 
 
-def _ensure_system_prompt(only_system=False):
-    """把 SESSION_FILE 的会话首条固定为稳定的 system 消息（prefix cache 锚点）。
+def _req_agent_id(data=None):
+    """从当前请求解析 agent id：body 字段优先，其次 query 参数。
+
+    非法、缺失、指向不存在的目录都会兜底到默认 agent，所以这里拿到的
+    永远是可用 id——前端下拉与 URL 都可能不带参数，不该因此报错。
+    """
+    raw = None
+    if isinstance(data, dict):
+        raw = data.get("agent")
+    if not raw:
+        raw = request.args.get("agent")
+    return agent_store.resolve(raw)
+
+
+def _ensure_system_prompt(agent_id=None, only_system=False):
+    """把该 agent 会话的首条固定为稳定的 system 消息（prefix cache 锚点）。
     状态栏不在 messages[1]，而是由 agent.run_agent_stream 请求时动态追加在
     消息数组末尾，只牺牲它自己那几十个 token，避免毒化前缀缓存。
 
     - only_system=True：清空所有非 system 消息（用于“清空会话”）
     - only_system=False：仅补齐 system 头部，保留已有历史
     """
-    stable_prompt = build_stable_prompt()
-    keep = [] if only_system else [m for m in load_history() if m.get("role") != "system"]
-    save_history([{"role": "system", "content": stable_prompt}] + keep)
+    stable_prompt = build_stable_prompt(agent_id)
+    keep = ([] if only_system
+            else [m for m in load_history(agent_id) if m.get("role") != "system"])
+    save_history([{"role": "system", "content": stable_prompt}] + keep, agent_id)
 
 
 # 注意：不在这里(import 时)初始化会话文件。导入模块不应产生磁盘副作用——
@@ -65,6 +82,16 @@ def get_providers():
     return jsonify({"providers": items, "default": LLM_PROVIDER, "model": MODEL})
 
 
+@app.route("/api/agents")
+def get_agents():
+    """返回所有 agent（供前端切换下拉）。
+
+    实时扫 agents/ 目录、不缓存，所以新建一个 agent 目录后刷新页面即可用。
+    """
+    return jsonify({"agents": agent_store.list_agents(),
+                    "default": DEFAULT_AGENT_ID})
+
+
 @app.route("/api/models")
 def get_ollama_models():
     """列出 Ollama 本地已安装的模型（代理 /api/tags）"""
@@ -84,10 +111,11 @@ def get_ollama_models():
 
 @app.route("/api/history")
 def get_history():
-    h = load_history()
+    agent_id = _req_agent_id()
+    h = load_history(agent_id)
     msgs = [m for m in h if m.get("role") != "system"]
     return jsonify({"messages": msgs, "model": MODEL, "count": len(msgs),
-                    "provider": LLM_PROVIDER})
+                    "provider": LLM_PROVIDER, "agent": agent_id})
 
 
 @app.route("/api/chat", methods=["POST"])
@@ -96,6 +124,7 @@ def chat():
     user_input = data.get("message", "").strip()
     provider = data.get("provider")
     model = data.get("model")
+    agent_id = _req_agent_id(data)
 
     if not user_input:
         return jsonify({"error": "消息不能为空"}), 400
@@ -108,6 +137,13 @@ def chat():
     pre_results = []
     if user_tools:
         for tc in user_tools:
+            # 与 agent 主循环里的拦截保持一致：手打工具块同样受白名单约束
+            if not agent_store.allows_tool(agent_id, tc["name"]):
+                pre_results.append({
+                    "name": tc["name"],
+                    "result": "该工具在当前 agent 不可用：" + tc["name"],
+                })
+                continue
             try:
                 result = execute_tool(tc["name"], tc["args"])
             except Exception as e:
@@ -115,21 +151,22 @@ def chat():
             pre_results.append({"name": tc["name"], "result": result})
 
     # 每次从文件读取最新会话，保证多端一致；写完立即落盘
-    h = load_history()
+    h = load_history(agent_id)
     if not h or h[0].get("role") != "system":
-        _ensure_system_prompt(only_system=True)
-        h = load_history()
+        _ensure_system_prompt(agent_id, only_system=True)
+        h = load_history(agent_id)
 
     # 流式返回：agent 循环每产生一个事件就立刻推给前端（NDJSON，一行一个 JSON）。
     # 之前是收集完所有事件再一次性 jsonify，导致本地模型跑 60-70 秒期间前端全黑箱。
     def generate():
         try:
             for event in run_agent_stream(clean_input, h, provider=provider,
-                                          model=model, pre_tool_results=pre_results):
+                                          model=model, pre_tool_results=pre_results,
+                                          agent_id=agent_id):
                 yield json.dumps(event, ensure_ascii=False) + "\n"
         finally:
             # 无论正常结束还是客户端中断，都落盘已产生的会话
-            save_history(h)
+            save_history(h, agent_id)
 
     return Response(
         stream_with_context(generate()),
@@ -155,6 +192,7 @@ def vision():
     question = (data.get("question") or "").strip()
     provider = data.get("provider")
     model = data.get("model")
+    agent_id = _req_agent_id(data)
     if not image:
         return jsonify({"error": "缺少图片"}), 400
     if not question:
@@ -162,7 +200,7 @@ def vision():
 
     from app.agent_prompt import build_stable_prompt
     messages = [
-        {"role": "system", "content": build_stable_prompt()},
+        {"role": "system", "content": build_stable_prompt(agent_id)},
         {"role": "user", "content": [
             {"type": "text", "text": question},
             {"type": "image_url", "image_url": {"url": image, "detail": "low"}},
@@ -174,21 +212,22 @@ def vision():
         return jsonify({"error": str(e)}), 500
 
     # 记入历史（图片不入档避免会话文件膨胀；保留用户问题文本）
-    h = load_history()
+    h = load_history(agent_id)
     if not h or h[0].get("role") != "system":
-        _ensure_system_prompt(only_system=True)
-        h = load_history()
+        _ensure_system_prompt(agent_id, only_system=True)
+        h = load_history(agent_id)
     h.append({"role": "user", "content": "（用户上传了一张图片" + (("：" + question) if question else "") + "）"})
     h.append({"role": "assistant", "content": reply})
-    save_history(h)
+    save_history(h, agent_id)
     return jsonify({"reply": reply})
 
 
 @app.route("/api/clear", methods=["POST"])
 def clear():
-    # 清空全部非 system 消息（保留稳定 system 前缀）
-    _ensure_system_prompt(only_system=True)
-    return jsonify({"ok": True})
+    # 清空该 agent 的全部非 system 消息（保留稳定 system 前缀）
+    agent_id = _req_agent_id(request.get_json(silent=True))
+    _ensure_system_prompt(agent_id, only_system=True)
+    return jsonify({"ok": True, "agent": agent_id})
 
 
 @app.route("/api/image/<filename>")
@@ -342,8 +381,12 @@ def _local_ip():
 
 
 def run():
-    # 启动时确保会话文件以稳定 system 头开始（prefix cache 锚点）
-    _ensure_system_prompt()
+    # 启动时确保每个 agent 的会话文件都以稳定 system 头开始（prefix cache 锚点）。
+    # agents/ 下一个目录都没有时，也要保证默认 agent 可用，否则第一次聊天
+    # 会缺 system 头（各路由虽有兜底，但启动时铺好更省事）。
+    agent_ids = [a["id"] for a in agent_store.list_agents()] or [DEFAULT_AGENT_ID]
+    for aid in agent_ids:
+        _ensure_system_prompt(aid)
 
     host = "0.0.0.0"  # 监听所有网卡，允许手机/iPad 局域网访问
     ip = _local_ip()
@@ -352,7 +395,9 @@ def run():
     print("  Model: " + MODEL)
     print("  本机: http://localhost:" + str(AGENT_PORT))
     print("  局域网: http://" + ip + ":" + str(AGENT_PORT))
-    print("  Session: " + str(len(load_history())) + " messages")
+    print("  Agents: " + ", ".join(agent_ids))
+    print("  会话(默认 " + DEFAULT_AGENT_ID + "): "
+          + str(len(load_history(DEFAULT_AGENT_ID))) + " messages")
     print("  Skills: " + ", ".join(list_skills()))
     print("=" * 50)
     app.run(host=host, port=AGENT_PORT, debug=False)

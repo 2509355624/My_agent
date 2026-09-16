@@ -6,6 +6,7 @@ Agent Loop
 import json
 import re
 from app.llm import call_llm_stream
+from app import agents as agent_store
 from app.memory import trim_history
 from app.tools import execute_tool
 
@@ -166,7 +167,8 @@ def _status_message(history):
     return {"role": "system", "content": build_status_bar(message_count=msg_count, last_tool=last_tool)}
 
 
-def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_results=None):
+def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_results=None,
+                     agent_id=None):
     """
     Agent Loop: 生成器版本，逐事件返回
     事件类型: user / assistant / tool_call / tool_result
@@ -178,6 +180,9 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
     4. provider/model 透传：支持 web 端动态切换模型
     pre_tool_results: 可选，用户输入里直接带的 [[TOOL:...]] 已执行完的结果，
       在进入 LLM 循环前先注入历史，让 LLM 一开始就能看到这些工具结果。
+    agent_id: 哪个 agent 在跑。影响两件事——上下文压缩的冷却水位按 agent 分开记；
+      工具白名单在此处兜底拦截（system prompt 里不列出是第一道，这里是第二道，
+      模型即便硬写出白名单外的工具也不会被执行）。
     """
     from app.config import MAX_TURNS
 
@@ -198,7 +203,7 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
 
         try:
             # 裁剪 + 转换为 LLM 格式（tool_result -> user）
-            trimmed = trim_history(history)
+            trimmed = trim_history(history, agent_id)
             llm_history = _history_for_llm(trimmed)
             # 状态栏追加在尾部，动态变化不毒化前缀缓存
             llm_history.append(_status_message(history))
@@ -235,7 +240,12 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
                 args = tool_call["args"]
                 yield {"type": "tool_call", "name": name, "args": args}
 
-                result = execute_tool(name, args)
+                # 第二道白名单拦截：prompt 里不列出是「看不见」，这里是「调不动」。
+                # 少了这一道，「写作 agent 不能用生图」就只是名义上的隔离。
+                if not agent_store.allows_tool(agent_id, name):
+                    result = "该工具在当前 agent 不可用：" + name
+                else:
+                    result = execute_tool(name, args)
                 yield {"type": "tool_result", "name": name, "result": result}
 
                 # 用 tool_result role 存储，便于前端区分展示

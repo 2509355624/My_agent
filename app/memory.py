@@ -15,7 +15,7 @@ import json
 import os
 import threading
 import time
-from app.config import SESSION_FILE
+from app.agents import session_file as _agent_session_file
 from app.llm import LAST_USAGE, CONTEXT_LIMIT
 
 
@@ -45,37 +45,41 @@ def _atomic_replace(src, dst, attempts=5, delay=0.05):
             time.sleep(delay)
 
 
-def save_history(history):
-    """原子保存会话到 JSONL 文件。
+def save_history(history, agent_id=None):
+    """原子保存某个 agent 的会话到它的 JSONL 文件。
 
     先写同目录临时文件 -> flush + fsync -> os.replace 原子替换。
     相比直接 open("w") 覆盖写，避免两种问题：
     1. 写到一半进程崩溃/被杀 -> 留下半截损坏文件，下次直接解析失败；
     2. 多端（手机/电脑）同时刷新 -> 读者读到中间态。
+
+    agent_id 决定写哪个 agent 的会话文件（不传用默认 agent）。
     """
-    parent = os.path.dirname(SESSION_FILE)
+    path = _agent_session_file(agent_id)
+    parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    tmp_path = SESSION_FILE + ".tmp"
+    tmp_path = path + ".tmp"
     with _SAVE_LOCK:
         with open(tmp_path, "w", encoding="utf-8") as f:
             for msg in history:
                 f.write(json.dumps(msg, ensure_ascii=False) + "\n")
             f.flush()
             os.fsync(f.fileno())
-        _atomic_replace(tmp_path, SESSION_FILE)
+        _atomic_replace(tmp_path, path)
 
 
-def load_history():
-    """从 JSONL 文件加载会话。
+def load_history(agent_id=None):
+    """从某个 agent 的 JSONL 文件加载会话。
 
     跳过空行与损坏行：单行坏数据不应该让整段历史读不出来
     （原子写之后正常情况下不会出现，这里是防御性兜底）。
     """
-    if not os.path.exists(SESSION_FILE):
+    path = _agent_session_file(agent_id)
+    if not os.path.exists(path):
         return []
     history = []
-    with open(SESSION_FILE, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -100,8 +104,9 @@ LOW_HIT_RATE = 0.3
 # 完整保留的最近轮次（保证热前缀有稳定"锚点"）
 FULL_RECENT_TURNS = 3
 
-# 压缩冷却：压缩后短时间内不再触发，避免连续摘要浪费
-_LAST_COMPACT_TOKENS = 0  # 上次压缩时的占用 token 数
+# 压缩冷却：压缩后短时间内不再触发，避免连续摘要浪费。
+# 按 agent 分别记水位——多个 agent 并存时，A 的压缩不该让 B 的冷却误判。
+_LAST_COMPACT_TOKENS = {}  # {agent_id: 上次压缩时的占用 token 数}
 COMPACT_COOLDOWN_TOKENS = 100_000  # 压缩后至少涨 10 万 token 才再次压缩
 
 
@@ -165,7 +170,7 @@ def _dump_messages(msgs):
     return "\n".join(lines)
 
 
-def trim_history(history):
+def trim_history(history, agent_id=None):
     """
     缓存感知的上下文压缩。
 
@@ -177,8 +182,10 @@ def trim_history(history):
 
     压缩方式：保留最近 FULL_RECENT_TURNS 轮完整，其余旧轮一次性交给
     LLM 生成摘要，替换为单条摘要消息。此后热前缀重建，后续稳定命中。
+
+    agent_id 只用于隔离压缩冷却水位（每个 agent 各记一份）。
     """
-    global _LAST_COMPACT_TOKENS
+    key = agent_id or "_default"
 
     system_msgs = [m for m in history if m.get("role") == "system"]
     other_msgs = [m for m in history if m.get("role") != "system"]
@@ -201,11 +208,12 @@ def trim_history(history):
 
     # 冷却期防护：非强制场景下，压缩后 token 增量太小则跳过
     # REACTIVE 强制压缩不受冷却影响——接近真实上限时必须立即压，否则爆上下文
-    if should and not forced and total_tokens - _LAST_COMPACT_TOKENS < COMPACT_COOLDOWN_TOKENS:
+    last_tokens = _LAST_COMPACT_TOKENS.get(key, 0)
+    if should and not forced and total_tokens - last_tokens < COMPACT_COOLDOWN_TOKENS:
         return history
 
     if should:
-        _LAST_COMPACT_TOKENS = total_tokens
+        _LAST_COMPACT_TOKENS[key] = total_tokens
         return _compact(history, system_msgs, other_msgs)
 
     # 默认：不压缩。命中率越高越不该动（每 token 都是免费命中价）
@@ -240,6 +248,6 @@ def _compact(history, system_msgs, other_msgs, force=False):
     return result
 
 
-def _compact_if_needed_for_history(history):
+def _compact_if_needed_for_history(history, agent_id=None):
     """兼容旧调用点的高层入口"""
-    return trim_history(history)
+    return trim_history(history, agent_id)

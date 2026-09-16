@@ -98,11 +98,12 @@ agent_my_test/
 ├── .env_example                # 配置模板
 ├── app/
 │   ├── config.py               # 配置加载 + PROVIDERS 表
-│   ├── main.py                 # Flask 路由（页面 / chat 流式 / 文档 / 模型列表）
+│   ├── main.py                 # Flask 路由（页面 / chat 流式 / 文档 / 模型列表 / agent 列表）
+│   ├── agents.py               # 多 agent：目录扫描、白名单过滤、路径安全、热加载
 │   ├── agent.py                # Agent 循环 + 工具协议解析
-│   ├── agent_prompt.py         # System Prompt 构造（稳定层 + 动态状态栏）
+│   ├── agent_prompt.py         # System Prompt 构造（按 agent 组装：人设 + 白名单 + 状态栏）
 │   ├── llm.py                  # 多 provider 路由 + token 命中率统计
-│   ├── memory.py               # 会话原子持久化 + 缓存感知上下文压缩
+│   ├── memory.py               # 会话原子持久化 + 缓存感知上下文压缩（按 agent 隔离）
 │   ├── skills.py               # Skill 目录解析与加载
 │   ├── tools/
 │   │   ├── registry.py         # 工具注册表（execute_tool 统一入口）
@@ -119,7 +120,12 @@ agent_my_test/
 ├── tests/                      # 单元测试（标准库 unittest，见下）
 ├── skills/                     # ← 私有数据，不进版本库
 ├── documents/                  # ← 私有数据，不进版本库
-├── data/                       # ← 会话文件，不进版本库
+├── agents/                     # ← agent 人设与会话，不进版本库
+│   └── <agent-id>/             #   一个 agent = 一个自包含目录
+│       ├── agent.json          #     显示名 + 工具/skills 白名单（null = 不限制）
+│       ├── prompt.md           #     角色人设（缺失则用默认角色）
+│       └── session.jsonl       #     该 agent 的会话历史
+├── data/                       # ← 日志等（旧单会话文件已迁至 agents/）
 └── vector_store/               # ← 向量库，不进版本库
 ```
 
@@ -152,6 +158,45 @@ agent_my_test/
 
 前端每个 provider 的可选模型列表在 `web/index.html` 的 `MODEL_PRESETS` 里维护
 （选 provider 后以常驻按钮呈现，也支持手动输入任意模型 ID）。
+
+---
+
+## 多 agent
+
+一个 agent = `agents/` 下的一个自包含目录：人设、可见范围、会话历史都封在自己目录里。
+
+```
+agents/
+├── main/                # 默认 agent（请求未指定或指定了不存在的 id 时兜底到它）
+│   ├── agent.json       # 显示名 + 工具/skills 白名单
+│   ├── prompt.md        # 角色人设
+│   └── session.jsonl    # 会话历史（与其他 agent 完全隔离）
+└── writing/
+    ├── agent.json
+    ├── prompt.md
+    └── session.jsonl
+```
+
+`agent.json` 字段：
+
+| 字段 | 说明 |
+|------|------|
+| `name` | 显示名（前端下拉用），缺省用目录名 |
+| `description` | 一句话说明，作下拉的 title |
+| `prompt` | 内联人设（`prompt_file` 不存在时的兜底） |
+| `prompt_file` | 人设文件名，默认 `prompt.md`（不允许带路径分隔符） |
+| `tools` | `null` = 全部工具；数组 = 白名单 |
+| `skills` | `null` = 全部 Skill；数组 = 白名单 |
+
+**加一个 agent**：在 `agents/` 下建目录、写 `agent.json` 与 `prompt.md` 即可——不用改代码、不用重启服务（配置按文件 mtime 热加载，`GET /api/agents` 每次实时扫目录）。刷新页面就能在顶栏下拉里看到。
+
+**隔离是两层的**：白名单外的工具既不出现在 system prompt 的工具列表里（看不见），执行层也会拒绝调用（调不动）——所以在「写作 agent」下，即使模型硬写出 `[[TOOL:generate_image]]`，也只会拿到「该工具在当前 agent 不可用」。同理，工具使用提示与「环境信息」里跟生图相关的条目也会一并裁掉，不会留下"提了个不存在的工具"的噪音。
+
+**路径安全**：`agent_id` 直接参与文件路径（`agents/<id>/session.jsonl`），因此统一过 `safe_agent_id()` 校验：只允许字母数字 / 下划线 / 连字符，且 realpath 解析后必须落在 `agents/` 的直接子目录内。非法或指向不存在目录的 id 一律兜底到 `DEFAULT_AGENT_ID`（默认 `main`）。
+
+**接口**：`/api/history`、`/api/chat`、`/api/vision`、`/api/clear` 都接受 `agent` 参数（query 或 body 字段）；`GET /api/agents` 返回 agent 列表。
+
+**并发**：服务端不持有常驻会话对象，每个请求自带 agent id 并各自读盘，所以多标签页各连一个 agent 是天然支持的。
 
 ---
 

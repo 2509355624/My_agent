@@ -16,6 +16,7 @@ import unittest
 from unittest import mock
 
 import app.main as main
+import app.agents as agents
 import app.memory as memory
 import app.tools.normal.documents as documents
 from app.main import _safe_base_filename
@@ -27,7 +28,7 @@ class WebApiTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         docs_dir = os.path.join(self.tmp.name, "documents")
         targets = (
-            (memory, "SESSION_FILE", os.path.join(self.tmp.name, "session.jsonl")),
+            (agents, "AGENTS_DIR", os.path.join(self.tmp.name, "agents")),
             (main, "DOCUMENTS_DIR", docs_dir),
             (documents, "DOCUMENTS_DIR", docs_dir),
         )
@@ -35,6 +36,9 @@ class WebApiTest(unittest.TestCase):
             p = mock.patch.object(module, attr, value)
             p.start()
             self.addCleanup(p.stop)
+        # agent 配置/人设有 mtime 缓存，换目录后必须清一次
+        agents.clear_cache()
+        self.addCleanup(agents.clear_cache)
         self.docs_dir = docs_dir
         self.client = main.app.test_client()
 
@@ -68,10 +72,11 @@ class WebApiTest(unittest.TestCase):
         captured = {}
 
         def fake_stream(user_input, history, provider=None, model=None,
-                        pre_tool_results=None):
+                        pre_tool_results=None, agent_id=None):
             captured["user_input"] = user_input
             captured["pre"] = pre_tool_results
             captured["provider"] = provider
+            captured["agent"] = agent_id
             yield {"type": "assistant", "content": "done"}
 
         with mock.patch.object(main, "run_agent_stream", fake_stream), \
@@ -91,6 +96,7 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(captured["pre"],
                          [{"name": "get_time", "result": "结果:get_time"}])
         self.assertEqual(captured["provider"], "volc")
+        self.assertEqual(captured["agent"], "main")   # 未指定 agent → 兜底到默认
 
     # ─── documents API ───────────────────────────────
 
