@@ -364,6 +364,47 @@
     margin: 0;
   }
 
+  /* ── AI 回复的复制按钮 ── */
+  .msg-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+    margin-top: 8px;
+  }
+
+  .copy-btn {
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1;
+    padding: 4px 9px;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    opacity: 0.45;
+    transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+  }
+
+  .copy-btn:hover {
+    opacity: 1;
+    color: var(--text);
+    border-color: var(--accent);
+  }
+
+  /* 复制成功/失败的短暂反馈态 */
+  .copy-btn.copied {
+    opacity: 1;
+    color: var(--success);
+    border-color: var(--success);
+  }
+
+  .copy-btn.failed {
+    opacity: 1;
+    color: var(--error);
+    border-color: var(--error);
+  }
+
   /* Markdown 渲染样式 */
   .md { font-size: 14px; line-height: 1.7; word-wrap: break-word; }
   .md > *:first-child { margin-top: 0; }
@@ -1036,6 +1077,19 @@
   body.novel-mode .msg.user .bubble pre,
   body.novel-mode .msg.user .bubble {
     text-indent: 0 !important;
+  }
+  /* 复制按钮：小说模式正文是纯排版，按钮再弱化一档，别打断阅读 */
+  body.novel-mode .msg-actions {
+    margin-top: 4px;
+  }
+  body.novel-mode .copy-btn {
+    font-size: 11px;
+    opacity: 0.25;
+  }
+  body.novel-mode .copy-btn:hover,
+  body.novel-mode .copy-btn.copied,
+  body.novel-mode .copy-btn.failed {
+    opacity: 1;
   }
 
   /* ── 移动端响应式（手机 / iPad 竖屏）── */
@@ -1786,10 +1840,14 @@ function appendMessage(role, content, imageDataURL) {
 
   if (role === 'assistant') {
     // assistant 回复渲染 markdown（先剔除可能残留的 [[TOOL:...]] 原始工具块）
+    const mdSource = stripToolMarkup(content) || '';
     const md = document.createElement('div');
     md.className = 'md';
-    md.innerHTML = renderMarkdown(stripToolMarkup(content)) || '<p></p>';
+    md.innerHTML = renderMarkdown(mdSource) || '<p></p>';
     bubble.appendChild(md);
+    // 复制按钮复制的就是这份渲染前的 Markdown 原文：
+    // 表格、--- 分割线、代码块在 DOM 里选中复制会丢结构，这里给一条保真的路子。
+    bubble.appendChild(buildCopyButton(mdSource));
   } else {
     // user 消息保持纯文本
     const pre = document.createElement('pre');
@@ -1802,6 +1860,63 @@ function appendMessage(role, content, imageDataURL) {
   messagesEl.appendChild(msg);
 
   return bubble;
+}
+
+// ─── 复制 AI 回复（Markdown 原文）──────────────────
+// 按钮复制的是渲染前的 Markdown 源文本：在 DOM 里手动选中复制时，
+// --- 分割线、表格、代码块这些会丢结构或漏字符，这里给一条保真的路子。
+function buildCopyButton(mdText) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg-actions';
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'copy-btn';
+  btn.textContent = '复制';
+  btn.title = '复制这条回复的 Markdown 原文';
+
+  btn.addEventListener('click', async () => {
+    const ok = await copyText(mdText);
+    btn.classList.toggle('copied', ok);
+    btn.classList.toggle('failed', !ok);
+    btn.textContent = ok ? '已复制' : '复制失败';
+    clearTimeout(btn._resetTimer);
+    btn._resetTimer = setTimeout(() => {
+      btn.classList.remove('copied', 'failed');
+      btn.textContent = '复制';
+    }, 1500);
+  });
+
+  wrap.appendChild(btn);
+  return wrap;
+}
+
+// 优先用 Clipboard API；它只在安全上下文（https / localhost）存在，
+// 用户若改用局域网 IP 访问就回退到 textarea + execCommand。
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (e) {
+      // 落到下面的回退
+    }
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-1000px';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) {
+    return false;
+  }
 }
 
 // ─── Markdown 渲染（纯 JS，无依赖）──────────────────
