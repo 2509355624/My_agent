@@ -5,6 +5,7 @@ Agent Loop
 
 import json
 import re
+from app.cancel import is_cancelled
 from app.llm import call_llm_stream
 from app import agents as agent_store
 from app.memory import trim_history
@@ -200,16 +201,23 @@ def _status_message(history):
     return {"role": "system", "content": build_status_bar(message_count=msg_count, last_tool=last_tool)}
 
 
+# 用户手动中断后写进历史的一条说明。必须留——否则下一轮模型看到自己那条半截
+# 回复，会以为话说完了，容易顺着一个已经作废的前提继续往下讲。用 tool_result
+# 承载：它不是用户说的话，而是「这一轮被系统中止了」这个事实。
+_ABORT_NOTE = "⚠️ 用户手动中断了上一条回复，其内容可能不完整，请以用户的新指示为准。"
+
+
 def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_results=None,
-                     agent_id=None, image=None):
+                     agent_id=None, image=None, cancel_event=None):
     """
     Agent Loop: 生成器版本，逐事件返回
-    事件类型: user / assistant / tool_call / tool_result
+    事件类型: user / assistant / tool_call / tool_result / aborted
 
     契约：会话消息类事件（user / assistant / tool_result）出流时，那条消息
     已经写进 history。调用方以「事件出流」作为落盘时机，所以这几处一律
     append 在前、yield 在后，不能反过来。reasoning 与 tool_call 不写历史
     （思考内容只出不进；工具调用的结果由随后的 tool_result 承载），不在此列。
+    aborted 同样遵守：它出流时那条中断说明已经写进 history。
 
     改进：
     1. 一次处理多个工具调用
@@ -224,6 +232,12 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
     image: 可选，本轮随消息一起下发的图片 dataURL。**只在第 1 轮**以多模态
       形式带给模型（见 _attach_image），第 2 轮起不再重发；它也不会被写进
       history——调用方在历史里放的是占位文本。
+    cancel_event: 可选，threading.Event，置位表示用户按了「停止」。循环在三个
+      检查点收工：① 每轮开头 ② 模型输出结束（半截回复绝不拿去解析工具调用——
+      残缺的 JSON 会被当成一次合法调用真执行）③ 每个工具执行前。
+      **工具一旦跑起来就只能靠工具内部自己检查**，生图那个轮询循环就是干这个的。
+      收工走正常流程：落盘 + 出 aborted 事件，不做任何强制中断，进程和会话
+      文件都保持干净。
     """
     from app.config import MAX_TURNS
 
@@ -239,7 +253,12 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
         yield {"type": "tool_result", "name": tc["name"], "result": tc["result"]}
 
     turn_count = 0
+    aborted = False
     while turn_count < MAX_TURNS:
+        # 检查点①：轮次边界。拦住"工具连环调用"继续往下走。
+        if is_cancelled(cancel_event):
+            aborted = True
+            break
         turn_count += 1
 
         try:
@@ -258,7 +277,8 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
             # - 正文(content)只在本轮累积，等收完再解析工具调用：直接边收边下发
             #   会让 [[TOOL:...]] 标签在页面上闪一下。
             reply_parts = []
-            for kind, text in call_llm_stream(llm_history, provider=provider, model=model):
+            for kind, text in call_llm_stream(llm_history, provider=provider,
+                                              model=model, cancel_event=cancel_event):
                 if kind == "reasoning":
                     yield {"type": "reasoning", "content": text}
                 else:
@@ -266,6 +286,13 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
             reply = "".join(reply_parts)
 
             history.append({"role": "assistant", "content": reply})
+
+            # 检查点②：模型输出期间被中断。此刻 reply 可能是半截话——含没闭合的
+            # [[TOOL:...]] 或残缺 JSON，直接收尾，绝不往下解析工具调用（残缺参数
+            # 会被当成一次合法调用真执行，那比不做更糟）。
+            if is_cancelled(cancel_event):
+                aborted = True
+                break
 
             tool_calls = parse_tool_calls(reply)
 
@@ -281,6 +308,11 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
 
             # 依次执行所有工具调用
             for tool_call in tool_calls:
+                # 检查点③：每个工具执行前。一旦工具开始跑（生图最长可达
+                # IMAGE_GEN_TIMEOUT），就只剩工具内部自己能检查了。
+                if is_cancelled(cancel_event):
+                    aborted = True
+                    break
                 name = tool_call["name"]
                 args = tool_call["args"]
                 yield {"type": "tool_call", "name": name, "args": args}
@@ -301,6 +333,9 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
                 })
                 yield {"type": "tool_result", "name": name, "result": result}
 
+            if aborted:
+                break
+
             # 循环继续 → 执行完所有工具 → LLM 再思考一次
             if tool_calls:
                 continue
@@ -309,9 +344,24 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
             break
 
         except Exception as e:
+            # 中断期间冒出来的异常（上游连接被关、读取被打断）不是"执行出错"，
+            # 报给用户没有意义，按中断收尾。
+            if is_cancelled(cancel_event):
+                aborted = True
+                break
             # 异常捕获：至少返回错误，不要断循环
             yield {"type": "assistant", "content": f"❌ 执行出错：{str(e)}"}
             break
+
+    if aborted:
+        # 中断也走正常收尾：先把说明写进历史再出流（调用方以事件出流为落盘时机）
+        history.append({
+            "role": "tool_result",
+            "content": _ABORT_NOTE,
+            "tool_name": "user_cancel",
+        })
+        yield {"type": "aborted", "content": _ABORT_NOTE}
+        return
 
     if turn_count >= MAX_TURNS:
         yield {"type": "assistant", "content": f"⚠️ 已达到最大轮次限制 ({MAX_TURNS} 轮)，请继续提问。"}

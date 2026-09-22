@@ -5,6 +5,7 @@ LLM 调用封装（支持多 Provider 动态路由）
 import codecs
 import json
 import requests
+from app.cancel import is_cancelled
 from app.config import (API_URL, API_KEY, MODEL, LLM_PROVIDER,
                         PROVIDERS, OLLAMA_BASE_URL)
 
@@ -210,7 +211,8 @@ def _parse_sse_line(line):
     return out
 
 
-def call_llm_stream(messages, timeout=600, provider=None, model=None):
+def call_llm_stream(messages, timeout=600, provider=None, model=None,
+                    cancel_event=None):
     """流式调用 LLM，逐块产出 (kind, text)。
 
     kind 只有两种：
@@ -218,7 +220,13 @@ def call_llm_stream(messages, timeout=600, provider=None, model=None):
         模型侧要求思考内容不参与后续上下文，写回去还会毒化前缀缓存。
       - "content"：正文增量。
 
-    Ollama 走非流式，整体作为单个 content 块产出（行为与 call_llm 一致）。
+    cancel_event: 可选，threading.Event。置位即停止读取并关闭上游连接。
+      **这是用户点「停止」后唯一能立刻生效的位置**——被中断时模型往往正在
+      长篇思考，早一步断开就少生成一批 token（也就少计费）。半截正文由
+      agent 循环按"已收到多少算多少"落盘，这里不负责收尾。
+
+    Ollama 走非流式，整体作为单个 content 块产出（行为与 call_llm 一致），
+    该分支无法中断。
     timeout 在流式下是"两次数据块之间的最大间隔"，而非整次响应上限。
     """
     eff = get_effective_config(provider, model)
@@ -244,6 +252,10 @@ def call_llm_stream(messages, timeout=600, provider=None, model=None):
 
     try:
         for line in _iter_sse_lines(resp):
+            # 逐块检查取消信号。用 return 而非抛异常结束：finally 里的
+            # resp.close() 会断开上游，未生成的 token 不再产生也不再计费。
+            if is_cancelled(cancel_event):
+                return
             for kind, text in _parse_sse_line(line):
                 yield kind, text
     finally:

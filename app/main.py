@@ -9,6 +9,7 @@ import requests
 from flask import (Flask, request, jsonify, send_from_directory, Response,
                    stream_with_context)
 from app import agents as agent_store
+from app import cancel as cancel_mod
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         LLM_PROVIDER, PROVIDERS, OLLAMA_BASE_URL, DEFAULT_AGENT_ID)
 from app.skills import list_skills, load_skill
@@ -149,6 +150,11 @@ def chat():
     provider = data.get("provider")
     model = data.get("model")
     agent_id = _req_agent_id(data)
+    # 中断用的请求标识：前端每轮生成一个，点「停止」时原样回传给 /api/stop。
+    # 按它建键而不是按 agent —— 多标签页可能同时用同一个 agent，按 agent 中断
+    # 会把另一个标签页里正常跑的请求一起打断。
+    request_id = (data.get("request_id") or "").strip()
+    cancel_event = cancel_mod.register(request_id)
 
     # 允许"只有图、没有文字"的请求（纯图提问是常见用法）
     if not user_input and not image:
@@ -205,7 +211,8 @@ def chat():
     # 整轮内容蒸发，另一个标签页刷新也读不到正在进行的内容。
     # 单次写盘是「临时文件 + fsync + os.replace」，几十上百 KB 的文件几毫秒，
     # 一轮多写几十次可以接受。
-    SESSION_EVENTS = ("user", "assistant", "tool_result")
+    # aborted 也在其中：它出流时那条「被中断」的说明刚写进历史，要跟着落盘
+    SESSION_EVENTS = ("user", "assistant", "tool_result", "aborted")
 
     # 带图时：图片本体不进历史——一张图 base64 几十万字符，存进会话文件会让它
     # 迅速膨胀，而且刷新回放时也还原不出图片。历史里只留一句与 /api/vision
@@ -217,10 +224,14 @@ def chat():
         turn_input = clean_input
 
     def generate():
+        # 把取消事件绑到本线程：工具层（execute_tool 内部）靠它感知中断，
+        # 生图那种长阻塞的轮询循环只有走这条链路才停得下来。
+        cancel_mod.bind(cancel_event)
         try:
             for event in run_agent_stream(turn_input, h, provider=provider,
                                           model=model, pre_tool_results=pre_results,
-                                          agent_id=agent_id, image=image):
+                                          agent_id=agent_id, image=image,
+                                          cancel_event=cancel_event):
                 # 先落盘再推送：内容一旦可见于前端，磁盘上就已经有了
                 if event.get("type") in SESSION_EVENTS:
                     try:
@@ -230,7 +241,9 @@ def chat():
                         pass
                 yield json.dumps(event, ensure_ascii=False) + "\n"
         finally:
-            # 兜底：无论正常结束还是客户端中断，都落盘已产生的会话
+            # 兜底：无论正常结束、被中断还是客户端断开，都落盘已产生的会话；
+            # 同时摘掉取消事件的登记，否则注册表会随会话一直变大
+            cancel_mod.unregister(request_id)
             save_history(h, agent_id)
 
     return Response(
@@ -285,6 +298,27 @@ def vision():
     h.append({"role": "assistant", "content": reply})
     save_history(h, agent_id)
     return jsonify({"reply": reply})
+
+
+@app.route("/api/stop", methods=["POST"])
+def stop():
+    """手动中断正在跑的那一轮。
+
+    只做一件事：置位进程内的取消事件。真正停在哪里交给 agent 循环的三个检查点
+    （模型输出中 / 轮次之间 / 生图轮询中都能立刻停），之后按正常流程收尾——
+    出 aborted 事件、落盘、生成器结束。所以这里不杀线程、不动会话文件，被中断
+    那一轮已产生的内容会完整留在会话里。
+
+    之所以不能靠前端断开连接来充当"停止"：服务端要等到下一次往流里写数据才会
+    发现你走了，而卡在工具执行里时它根本不写流——那正是只能杀进程的原因。
+
+    hit=false 表示这条请求已经跑完（或 request_id 对不上），没什么可中断的。
+    """
+    data = request.get_json(silent=True) or {}
+    request_id = (data.get("request_id") or "").strip()
+    if not request_id:
+        return jsonify({"error": "缺少 request_id"}), 400
+    return jsonify({"ok": True, "hit": cancel_mod.cancel(request_id)})
 
 
 @app.route("/api/clear", methods=["POST"])

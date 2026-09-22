@@ -893,6 +893,16 @@
     box-shadow: none;
   }
 
+  /* 生成期间发送键换成「停止」：同一个按钮两种职责，不额外占一个控件 */
+  .send-btn.stop {
+    background: #e05353;
+  }
+
+  .send-btn.stop:hover {
+    background: #c94040;
+    box-shadow: 0 4px 12px rgba(224, 83, 83, 0.35);
+  }
+
   /* Loading indicator */
   .typing {
     display: flex;
@@ -1367,7 +1377,7 @@
           <div class="input-actions">
             <button class="img-btn" id="imgBtn" onclick="fileInput.click()" title="发送图片给 AI 看">📷</button>
             <span class="hint">Ctrl+Enter 发送</span>
-            <button class="send-btn" id="sendBtn" onclick="sendMessage()">发送</button>
+            <button class="send-btn" id="sendBtn" onclick="onSendClick()">发送</button>
           </div>
         </div>
       </div>
@@ -1398,6 +1408,8 @@ let isLoading = false;
 let pendingImage = null;   // 待发送图片 dataURL
 let currentAgent = '';     // 当前 agent id：决定会话文件、人设、工具与 skills 白名单
 let currentAbort = null;   // 当前请求的中断控制器，切换 agent 时用来掐断正在跑的流
+let currentRequestId = null;   // 本轮请求标识，点「停止」时拿它通知服务端
+let stopFallbackTimer = null;  // 停止后服务端若迟迟不结束，兜底强制断开浏览器侧
 
 // ─── agent 切换 ─────────────────────────────────────
 // 每个 agent 有独立的会话文件与工具/skills 白名单，所以切换时必须：
@@ -1846,6 +1858,52 @@ async function loadHistory() {
   }
 }
 
+// 发送键在生成期间变成「停止」——同一个按钮两种职责，不额外占一个控件。
+// 生成中再按「发送」本来也没有意义（同一轮不存在并发发送的语义），所以直接复用。
+function setStopMode(on) {
+  sendBtn.textContent = on ? '停止' : '发送';
+  sendBtn.classList.toggle('stop', on);
+  sendBtn.disabled = false;   // 停止期间必须可点，那正是它的用处
+  sendBtn.title = on ? '中断这一轮（Esc）' : '';
+}
+
+function onSendClick() {
+  if (isLoading) { stopGeneration(); return; }
+  sendMessage();
+}
+
+// 手动中断这一轮。两步走，顺序不能反：
+//   1) 先告诉服务端（/api/stop）：循环在三个检查点收工、正常落盘、把 aborted
+//      事件推下来，前端收到后走正常收尾。这样服务端是干净的——不留半跑的循环，
+//      也不动会话文件。
+//   2) 再起 3 秒兜底：万一卡在某个没法检查的调用里（比如工具内部的网络请求），
+//      前端不能干等，到期直接断开浏览器侧，UI 立刻恢复。
+// 反过来先 abort 的话流就断了，收不到服务端那条 aborted 事件，还会退回到
+// "服务端继续跑、前端假装停了"的老样子。
+async function stopGeneration() {
+  const requestId = currentRequestId;
+  if (!requestId) return;
+  try {
+    await fetch('/api/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ request_id: requestId })
+    });
+  } catch (e) {
+    // 通知失败也继续走兜底：用户按了停止，就得停下来
+  }
+  if (stopFallbackTimer) clearTimeout(stopFallbackTimer);
+  stopFallbackTimer = setTimeout(() => {
+    stopFallbackTimer = null;
+    if (currentAbort) currentAbort.abort();
+  }, 3000);
+}
+
+// 生成期间按 Esc 也能中断。灯箱那套 Esc 只在灯箱开着时生效，不会打架。
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && isLoading) stopGeneration();
+});
+
 async function sendMessage() {
   const text = inputBox.value.trim();
   if (pendingImage) { sendWithImage(text); return; }
@@ -1869,7 +1927,14 @@ async function sendMessage() {
 async function streamChat(text, editUserIndex, image) {
   if (isLoading) return;
   isLoading = true;
-  sendBtn.disabled = true;
+  setStopMode(true);
+
+  // 每轮一个请求标识：点「停止」时原样回传，服务端据此找到要中断的那一轮。
+  // 用 UUID 而不是时间戳，避免同一毫秒内的两次请求撞号。
+  const requestId = (window.crypto && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : String(Date.now()) + '-' + Math.random().toString(16).slice(2);
+  currentRequestId = requestId;
 
   // Add loading indicator
   // 注意：后端流里的第一个事件是 'user'（回声，不渲染），它到达时模型往往
@@ -1891,7 +1956,8 @@ async function streamChat(text, editUserIndex, image) {
       message: text,
       provider: currentProvider,
       model: currentModel,
-      agent: currentAgent
+      agent: currentAgent,
+      request_id: requestId
     };
     // 编辑重发：告诉后端从第几条用户消息处重新开始
     if (editUserIndex) payload.edit_user_index = editUserIndex;
@@ -1948,9 +2014,19 @@ async function streamChat(text, editUserIndex, image) {
           addToolCall(ev.name, ev.args);
           scrollToBottom();
         } else if (ev.type === 'tool_result') {
+          // 中断标记是写给模型看的（让它知道上一轮不完整），不上屏
+          if (ev.name !== 'user_cancel') {
+            markFirstRenderable();
+            flushThinkBlock();
+            addToolResult(ev.name, ev.result);
+            scrollToBottom();
+          }
+        } else if (ev.type === 'aborted') {
+          // 服务端确认中断并已收尾：不是错误，收拢折叠条后留一条提示
           markFirstRenderable();
           flushThinkBlock();
-          addToolResult(ev.name, ev.result);
+          flushToolGroup();
+          appendMessage('assistant', '（已中断）');
           scrollToBottom();
         }
       }
@@ -1978,7 +2054,9 @@ async function streamChat(text, editUserIndex, image) {
   } finally {
     removeLoading(loadingId);
     isLoading = false;
-    sendBtn.disabled = false;
+    setStopMode(false);
+    if (stopFallbackTimer) { clearTimeout(stopFallbackTimer); stopFallbackTimer = null; }
+    if (currentRequestId === requestId) currentRequestId = null;
     if (currentAbort === ac) currentAbort = null;
     inputBox.focus();
   }

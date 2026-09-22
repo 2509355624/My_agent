@@ -6,6 +6,7 @@ import time
 import random
 import uuid
 from flask import request
+from app.cancel import Cancelled, is_cancelled
 from app.config import COMFYUI_URL, IMAGE_GEN_TIMEOUT
 from app.skills import load_skill
 
@@ -22,9 +23,18 @@ def _queue_prompt(workflow):
 
 
 def _wait_for_completion(prompt_id, timeout=IMAGE_GEN_TIMEOUT):
-    """轮询等待 ComfyUI 出图。批量生图逐张串行，故超时给得较宽（见 config）。"""
+    """轮询等待 ComfyUI 出图。批量生图逐张串行，故超时给得较宽（见 config）。
+
+    每次轮询检查一次中断信号：用户点「停止」时立刻放弃等待，让 agent 循环
+    尽快收尾。**这里不去调 ComfyUI 的 /interrupt** —— 它中断的是「当前正在
+    执行」的任务，如果那一刻恰好是用户自己在界面上排的图，会被一起取消。
+    放弃等待更安全：那张图会在后台照常跑完，只是不再有人等它。
+    """
     start = time.time()
     while time.time() - start < timeout:
+        # 放在 try 之外：下面的 except 是裸的，包进去会被它吞掉
+        if is_cancelled():
+            raise Cancelled("用户中断了等待")
         try:
             resp = requests.get(COMFYUI_URL + "/history/" + prompt_id, timeout=10)
             resp.raise_for_status()
@@ -50,6 +60,10 @@ def _get_output_images(history_entry):
 # ─── 工具函数 ────────────────────────────────────────
 
 def _generate_image(prompt, skill="image_gen_v1", use_character=True):
+    # 提交前先看一眼：已经中断就别再往 ComfyUI 队列里塞新任务了
+    if is_cancelled():
+        return "已中断：用户取消了本次生成。"
+
     skill_data = load_skill(skill)
     if not skill_data or not skill_data["workflow"]:
         return "错误: 找不到 Skill '" + skill + "'"
@@ -72,7 +86,12 @@ def _generate_image(prompt, skill="image_gen_v1", use_character=True):
 
     # 提交到 ComfyUI
     prompt_id = _queue_prompt(workflow)
-    history_entry = _wait_for_completion(prompt_id)
+    try:
+        history_entry = _wait_for_completion(prompt_id)
+    except Cancelled:
+        # 不把 Cancelled 抛给 execute_tool：那会被描述成"工具执行失败"，
+        # 让模型以为工具坏了。中断是一个正常结局，说清楚就行。
+        return "已中断：用户取消了等待。图片可能仍在后台生成，可到 ComfyUI 界面查看。"
     images = _get_output_images(history_entry)
 
     if not images:

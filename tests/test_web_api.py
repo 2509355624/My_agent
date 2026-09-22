@@ -15,6 +15,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+import app.agent as agent
+import app.cancel as cancel_mod
 import app.main as main
 import app.agents as agents
 import app.memory as memory
@@ -62,6 +64,66 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(self.client.get("/api/history").get_json()["messages"], [])
 
+    # ─── /api/stop（手动中断）────────────────────────
+
+    def test_stop_without_request_id_is_rejected(self):
+        self.assertEqual(self.client.post("/api/stop", json={}).status_code, 400)
+
+    def test_stop_unknown_request_reports_miss(self):
+        resp = self.client.post("/api/stop", json={"request_id": "never-started"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.get_json()["hit"])
+
+    def test_stop_interrupts_running_stream_and_flushes(self):
+        """端到端：流跑到一半点停止。
+
+        真实的 run_agent_stream 全程参与（只把 LLM 换成脚本），覆盖的是完整链路：
+        main 建注册表 → generate 绑定线程 → agent 的三个检查点 → aborted 事件 →
+        落盘 → 注册表摘除。把 run_agent_stream 整个 mock 掉就测不到这些。
+        """
+        rid = "rid-stop-test"
+
+        def slow_llm(messages, provider=None, model=None, cancel_event=None):
+            # 必须产出 reasoning：正文会被 agent 攒着等收完再解析工具调用，
+            # 流上根本看不到中间状态，也就没机会在中途插入这条停止请求。
+            for i in range(200):
+                if cancel_event is not None and cancel_event.is_set():
+                    return
+                yield "reasoning", "思考第%d步 " % i
+
+        with mock.patch.object(agent, "call_llm_stream", slow_llm):
+            # 流是惰性执行的：generate() 只在被迭代时才跑，所以 patch 必须
+            # 覆盖到把流读完为止，不能只包住 post。
+            resp = self.client.post(
+                "/api/chat",
+                json={"message": "写一篇长文", "request_id": rid},
+                buffered=False)
+            self.assertEqual(resp.status_code, 200)
+
+            it = iter(resp.response)
+            self.assertEqual(json.loads(bytes(next(it)).decode("utf-8"))["type"], "user")
+            next(it)                                 # 再吃掉一个 reasoning 块
+
+            # 此刻 generate() 正挂在 yield 上——停在这里发停止请求
+            hit = self.client.post("/api/stop", json={"request_id": rid})
+            self.assertTrue(hit.get_json()["hit"])
+
+            body = b"".join(list(it)).decode("utf-8")
+            events = [json.loads(l) for l in body.split("\n") if l.strip()]
+            self.assertEqual(events[-1]["type"], "aborted")
+
+        saved = memory.load_history("main")
+        self.assertTrue(any(m.get("tool_name") == "user_cancel" for m in saved))
+        self.assertEqual(cancel_mod.active_count(), 0)   # 注册表已摘除
+
+    def test_chat_without_request_id_skips_cancel_registry(self):
+        # 旧客户端/脚本不带 request_id：不建键、不落任何状态，行为与从前一致
+        with mock.patch.object(main, "run_agent_stream") as fake:
+            fake.return_value = iter([{"type": "assistant", "content": "ok"}])
+            self.client.post("/api/chat", json={"message": "你好"})
+            self.assertIsNone(fake.call_args.kwargs.get("cancel_event"))
+        self.assertEqual(cancel_mod.active_count(), 0)
+
     # ─── /api/chat ───────────────────────────────────
 
     def test_chat_rejects_empty_message(self):
@@ -72,7 +134,8 @@ class WebApiTest(unittest.TestCase):
         captured = {}
 
         def fake_stream(user_input, history, provider=None, model=None,
-                        pre_tool_results=None, agent_id=None, image=None):
+                        pre_tool_results=None, agent_id=None, image=None,
+                        **kwargs):
             captured["user_input"] = user_input
             captured["pre"] = pre_tool_results
             captured["provider"] = provider
@@ -115,7 +178,8 @@ class WebApiTest(unittest.TestCase):
         snapshots = []
 
         def fake_stream(user_input, history, provider=None, model=None,
-                        pre_tool_results=None, agent_id=None, image=None):
+                        pre_tool_results=None, agent_id=None, image=None,
+                        **kwargs):
             history.append({"role": "user", "content": user_input})
             yield {"type": "user", "content": user_input}
             snapshots.append(self._visible())      # 生成器尚未结束，finally 也没跑
@@ -139,7 +203,8 @@ class WebApiTest(unittest.TestCase):
     def test_thinking_and_tool_call_events_are_not_persisted(self):
         """reasoning / tool_call 不入历史，也不该触发额外的落盘语义。"""
         def fake_stream(user_input, history, provider=None, model=None,
-                        pre_tool_results=None, agent_id=None, image=None):
+                        pre_tool_results=None, agent_id=None, image=None,
+                        **kwargs):
             yield {"type": "reasoning", "content": "想想"}
             yield {"type": "tool_call", "name": "lookup", "args": {}}
             history.append({"role": "assistant", "content": "好了"})
@@ -154,7 +219,8 @@ class WebApiTest(unittest.TestCase):
     def test_client_disconnect_keeps_flushed_content(self):
         """客户端中途断开：已推送的内容必须已经在盘上。"""
         def fake_stream(user_input, history, provider=None, model=None,
-                        pre_tool_results=None, agent_id=None, image=None):
+                        pre_tool_results=None, agent_id=None, image=None,
+                        **kwargs):
             history.append({"role": "user", "content": user_input})
             yield {"type": "user", "content": user_input}
             history.append({"role": "assistant", "content": "A1"})
@@ -191,7 +257,8 @@ class WebApiTest(unittest.TestCase):
         captured = {}
 
         def fake_stream(user_input, history, provider=None, model=None,
-                        pre_tool_results=None, agent_id=None, image=None):
+                        pre_tool_results=None, agent_id=None, image=None,
+                        **kwargs):
             captured["history"] = [m.get("content") for m in history]
             captured["user_input"] = user_input
             yield {"type": "assistant", "content": "done"}
@@ -246,7 +313,8 @@ class WebApiTest(unittest.TestCase):
         captured = {}
 
         def fake_stream(user_input, history, provider=None, model=None,
-                        pre_tool_results=None, agent_id=None, image=None):
+                        pre_tool_results=None, agent_id=None, image=None,
+                        **kwargs):
             captured["history"] = [m.get("content") for m in history]
             yield {"type": "assistant", "content": "done"}
 
@@ -271,7 +339,8 @@ class WebApiTest(unittest.TestCase):
         captured = {}
 
         def fake_stream(user_input, history, provider=None, model=None,
-                        pre_tool_results=None, agent_id=None, image=None):
+                        pre_tool_results=None, agent_id=None, image=None,
+                        **kwargs):
             # 与真实循环一致：先入历史再出流（落盘契约依赖这个顺序）
             history.append({"role": "user", "content": user_input})
             captured["user_input"] = user_input
