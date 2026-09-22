@@ -49,12 +49,16 @@ def _contains_spec(d):
 
 
 def _read_md(d):
-    """读取目录下的 SKILL.md（大写优先）或 skill.md（小写回退）"""
+    """读取目录下的 SKILL.md（大写优先）或 skill.md（小写回退）
+
+    剥掉开头的 UTF-8 BOM：带 BOM 时首行会变成 `\ufeff---`，frontmatter /
+    一行简介的「首行是否分隔线」判断会静默失效（Windows 工具另存为很常见）。
+    """
     for fname in ("SKILL.md", "skill.md"):
         p = os.path.join(d, fname)
         if os.path.exists(p):
             with open(p, "r", encoding="utf-8") as f:
-                return f.read()
+                return f.read().lstrip("\ufeff")
     return ""
 
 
@@ -75,11 +79,35 @@ def _read_references(d):
     return "\n\n".join(parts)
 
 
+def _parse_frontmatter(text):
+    """解析规范顶部的 YAML frontmatter，只取简单的单行 `key: value`。
+
+    够用即可——本项目只用 kind 一个字段，不为此引入 YAML 依赖。
+    无 frontmatter 或未闭合时返回空 dict。
+    """
+    if not text:
+        return {}
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+    fm = {}
+    for line in lines[1:]:
+        s = line.strip()
+        if s in ("---", "..."):
+            break
+        if not s or s.startswith("#") or ":" not in s:
+            continue
+        k, _, v = s.partition(":")
+        fm[k.strip().lower()] = v.strip().strip('"').strip("'")
+    return fm
+
+
 def load_skill(skill_name):
     """加载 Skill: 返回
-    {name, workflow, skill_md, character, version, references}
+    {name, workflow, skill_md, character, version, kind, references}
     - skill_md: 主规范（SKILL.md 优先生成大写）
     - version: VERSION 文件内容（若有）
+    - kind: 规范 frontmatter 声明的类型（生图/写作）；未声明时为空串
     - references: references/ 目录下所有 md 原文（若有）
     """
     skill_dir = _resolve_skill_dir(skill_name)
@@ -101,6 +129,11 @@ def load_skill(skill_name):
     skill_md = _read_md(skill_dir)
     references = _read_references(skill_dir)
 
+    # 类型声明（可选）：给「不出图但属于生图链路」的 skill（资料库、参数存档）用
+    kind = _parse_frontmatter(skill_md).get("kind", "")
+
+    
+
     # 角色底模
     character = ""
     char_path = os.path.join(skill_dir, "character.txt")
@@ -121,6 +154,7 @@ def load_skill(skill_name):
         "skill_md": skill_md,
         "character": character,
         "version": version,
+        "kind": kind,
         "references": references,
     }
 

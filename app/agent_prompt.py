@@ -125,14 +125,17 @@ def _build_skill_list(agent_id=None):
         first_line = skill_summary(data["skill_md"])
 
         # 类型 + 底模标注
-        is_image = data.get("workflow") is not None
+        # 类型以 skill.md 的 frontmatter `kind:` 声明为准；没声明才按有无
+        # workflow.json 推断。原因：pose_library / image_presets 属于生图链路
+        # 但本身不出图、天然没有 workflow.json，只靠文件特征会被误标成「写作」。
+        kind = (data.get("kind") or "").strip()
+        if not kind:
+            kind = "生图" if data.get("workflow") is not None else "写作"
         has_char = bool((data.get("character") or "").strip())
-        if is_image:
-            kind = "生图"
+        if kind == "生图":
             base = "带底模" if has_char else "无底模"
             tag = "[" + base + "]"
         else:
-            kind = "写作"
             tag = ""
         descs.append("- **" + s + "**（" + kind + tag + "）: " + first_line)
     return "\n".join(descs) if descs else "（暂无）"
