@@ -148,6 +148,39 @@ def _history_for_llm(history):
     return result
 
 
+def _attach_image(llm_history, image):
+    """把本轮的用户消息升级为多模态（text + image_url），供带图对话使用。
+
+    只在第 1 轮调用。一张前端压缩后的图 base64 有几十万字符：每轮重复下发
+    既白烧输入 token，又让前缀缓存每轮都 miss；而模型看图只需一次——后续
+    轮次能从它自己写下的分析、以及工具返回结果里获得信息。
+
+    实现上有两条不能碰的红线：
+    1. **只替换列表元素，绝不修改元素内部的 dict**。_history_for_llm 返回的
+       字典对象与 history 里的是同一批引用，改内部字段会把这个 base64 一起
+       落进会话文件——那正是"图片不入档"要避免的事。
+    2. 倒序找**第一条不是工具结果的** user 消息。本轮用户消息一定排在它自己
+       的 pre_tool_results（手打 [[TOOL:]] 的结果）之前，倒序找别把工具结果
+       当成用户消息升级了。
+    """
+    for i in range(len(llm_history) - 1, -1, -1):
+        msg = llm_history[i]
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, str) or content.startswith("[工具结果] "):
+            continue
+        llm_history[i] = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": content},
+                {"type": "image_url", "image_url": {"url": image, "detail": "low"}},
+            ],
+        }
+        return True
+    return False
+
+
 def _status_message(history):
     """构造状态栏消息，追加在请求消息数组的末尾。
 
@@ -168,7 +201,7 @@ def _status_message(history):
 
 
 def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_results=None,
-                     agent_id=None):
+                     agent_id=None, image=None):
     """
     Agent Loop: 生成器版本，逐事件返回
     事件类型: user / assistant / tool_call / tool_result
@@ -188,6 +221,9 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
     agent_id: 哪个 agent 在跑。影响两件事——上下文压缩的冷却水位按 agent 分开记；
       工具白名单在此处兜底拦截（system prompt 里不列出是第一道，这里是第二道，
       模型即便硬写出白名单外的工具也不会被执行）。
+    image: 可选，本轮随消息一起下发的图片 dataURL。**只在第 1 轮**以多模态
+      形式带给模型（见 _attach_image），第 2 轮起不再重发；它也不会被写进
+      history——调用方在历史里放的是占位文本。
     """
     from app.config import MAX_TURNS
 
@@ -210,6 +246,10 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
             # 裁剪 + 转换为 LLM 格式（tool_result -> user）
             trimmed = trim_history(history, agent_id)
             llm_history = _history_for_llm(trimmed)
+            # 带图对话：第 1 轮把本轮用户消息升级成多模态，之后轮次不再带图
+            # （图片本体始终不在 history 里，历史中只有占位文本）
+            if image and turn_count == 1:
+                _attach_image(llm_history, image)
             # 状态栏追加在尾部，动态变化不毒化前缀缓存
             llm_history.append(_status_message(history))
             # 流式调用：

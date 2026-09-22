@@ -143,11 +143,15 @@ def get_history():
 def chat():
     data = request.get_json()
     user_input = data.get("message", "").strip()
+    # 可选：本条消息附带的图片（前端压缩后的 dataURL）。带图时走同一条 agent
+    # 循环，模型能先看图再决定调什么工具——这正是 /api/vision 做不到的事。
+    image = (data.get("image") or "").strip()
     provider = data.get("provider")
     model = data.get("model")
     agent_id = _req_agent_id(data)
 
-    if not user_input:
+    # 允许"只有图、没有文字"的请求（纯图提问是常见用法）
+    if not user_input and not image:
         return jsonify({"error": "消息不能为空"}), 400
 
     # 支持用户直接在输入框粘贴/输入 [[TOOL:name]]{...} 触发工具：
@@ -203,11 +207,20 @@ def chat():
     # 一轮多写几十次可以接受。
     SESSION_EVENTS = ("user", "assistant", "tool_result")
 
+    # 带图时：图片本体不进历史——一张图 base64 几十万字符，存进会话文件会让它
+    # 迅速膨胀，而且刷新回放时也还原不出图片。历史里只留一句与 /api/vision
+    # 同口径的占位文本，图片本身由 run_agent_stream 在第 1 轮以多模态形式下发。
+    if image:
+        turn_input = ("（用户上传了一张图片：" + clean_input + "）"
+                      if clean_input else "（用户上传了一张图片）")
+    else:
+        turn_input = clean_input
+
     def generate():
         try:
-            for event in run_agent_stream(clean_input, h, provider=provider,
+            for event in run_agent_stream(turn_input, h, provider=provider,
                                           model=model, pre_tool_results=pre_results,
-                                          agent_id=agent_id):
+                                          agent_id=agent_id, image=image):
                 # 先落盘再推送：内容一旦可见于前端，磁盘上就已经有了
                 if event.get("type") in SESSION_EVENTS:
                     try:

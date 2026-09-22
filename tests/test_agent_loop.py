@@ -145,6 +145,41 @@ class AgentLoopTest(unittest.TestCase):
         self.assertEqual(self.history[-1]["content"], "现在 12 点。")
         self.assertNotIn("先看时间", self.history[-1]["content"])
 
+    # ─── 带图对话：图片只注入第 1 轮，且绝不进历史 ─────
+
+    def test_image_attached_to_first_turn_only(self):
+        fake = self._patch_llm(['[[TOOL:list_files]][[/TOOL]]', '看完了'])
+        list(agent.run_agent_stream("（用户上传了一张图片：看图）", self.history,
+                                    image="data:image/jpeg;base64,ZZZ"))
+        # 第 1 轮：本轮用户消息被升级成多模态
+        first = [m for m in fake.seen_histories[0] if isinstance(m.get("content"), list)]
+        self.assertEqual(len(first), 1)
+        parts = first[0]["content"]
+        self.assertEqual(parts[0],
+                         {"type": "text", "text": "（用户上传了一张图片：看图）"})
+        self.assertEqual(parts[1]["image_url"]["url"], "data:image/jpeg;base64,ZZZ")
+        # 第 2 轮：不再重发图片——白烧输入 token，而且每轮都会掐断前缀缓存
+        second = [m for m in fake.seen_histories[1] if isinstance(m.get("content"), list)]
+        self.assertEqual(second, [])
+
+    def test_image_never_leaks_into_history(self):
+        self._patch_llm(["看图完毕。"])
+        list(agent.run_agent_stream("看图", self.history,
+                                    image="data:image/jpeg;base64,ZZZ"))
+        # 图片本体绝不能进 history——整份历史会被原样落盘
+        self.assertEqual(self.history[0], {"role": "user", "content": "看图"})
+
+    def test_image_targets_user_message_not_tool_result(self):
+        # 用户手打工具块时 pre_tool_results 排在本轮 user 之后（_history_for_llm
+        # 会把它们转成 user role），倒序找必须跳过它们，否则图片挂到工具结果上
+        fake = self._patch_llm(["好了"])
+        list(agent.run_agent_stream(
+            "看图", self.history, image="data:image/jpeg;base64,ZZZ",
+            pre_tool_results=[{"name": "get_time", "result": "12:00"}]))
+        multi = [m for m in fake.seen_histories[0] if isinstance(m.get("content"), list)]
+        self.assertEqual(len(multi), 1)
+        self.assertEqual(multi[0]["content"][0]["text"], "看图")
+
     def test_content_chunks_are_concatenated(self):
         self._patch_llm([[("content", "你"), ("content", "好"), ("content", "！")]])
         events = self._collect("你好")

@@ -1489,6 +1489,10 @@ function removeImage() {
   document.getElementById('imagePreview').style.display = 'none';
 }
 
+// 带图发送：走与纯文本同一条流式 agent 循环，只是在 payload 里多带一个 image。
+// 之前这里打的是 /api/vision——那是"单次非流式问答"，模型看完图想调工具也没人
+// 执行，对话就停在一句"我先看看生图 Skill……"上。现在图片随本轮请求进入 agent
+// 循环，看图 → 读 skill → 生成图 能一条链走完。
 async function sendWithImage(text) {
   const imgUrl = pendingImage;
   appendMessage('user', text ? text : '（发送了一张图片）', imgUrl);
@@ -1498,27 +1502,7 @@ async function sendWithImage(text) {
   inputBox.style.height = 'auto';
   scrollToBottom();
 
-  const loadingId = addLoading();
-  try {
-    const res = await fetch('/api/vision', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: imgUrl, question: text, provider: currentProvider, model: currentModel, agent: currentAgent })
-    });
-    removeLoading(loadingId);
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || '请求失败');
-    }
-    const data = await res.json();
-    flushToolGroup();
-    appendMessage('assistant', data.reply);
-    scrollToBottom();
-  } catch (e) {
-    removeLoading(loadingId);
-    appendMessage('assistant', '❌ 错误: ' + e.message);
-    scrollToBottom();
-  }
+  await streamChat(text, null, imgUrl);
 }
 
 // 当前选中的模型提供商与模型（随每次请求传入后端）
@@ -1880,7 +1864,9 @@ async function sendMessage() {
 
 // 发起一轮对话并把流式事件渲染出来。editUserIndex 非空时表示这是
 // 「编辑第 k 条用户消息后重发」——后端会先截断到那一条之前再开始。
-async function streamChat(text, editUserIndex) {
+// image 非空时表示本轮带图（dataURL）：后端只在第 1 轮把它以多模态形式
+// 下发给模型，图片本体不写进会话历史。
+async function streamChat(text, editUserIndex, image) {
   if (isLoading) return;
   isLoading = true;
   sendBtn.disabled = true;
@@ -1909,6 +1895,8 @@ async function streamChat(text, editUserIndex) {
     };
     // 编辑重发：告诉后端从第几条用户消息处重新开始
     if (editUserIndex) payload.edit_user_index = editUserIndex;
+    // 带图：图片只在本轮有效，不进会话文件
+    if (image) payload.image = image;
 
     const res = await fetch('/api/chat', {
       method: 'POST',

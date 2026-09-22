@@ -72,7 +72,7 @@ class WebApiTest(unittest.TestCase):
         captured = {}
 
         def fake_stream(user_input, history, provider=None, model=None,
-                        pre_tool_results=None, agent_id=None):
+                        pre_tool_results=None, agent_id=None, image=None):
             captured["user_input"] = user_input
             captured["pre"] = pre_tool_results
             captured["provider"] = provider
@@ -115,7 +115,7 @@ class WebApiTest(unittest.TestCase):
         snapshots = []
 
         def fake_stream(user_input, history, provider=None, model=None,
-                        pre_tool_results=None, agent_id=None):
+                        pre_tool_results=None, agent_id=None, image=None):
             history.append({"role": "user", "content": user_input})
             yield {"type": "user", "content": user_input}
             snapshots.append(self._visible())      # 生成器尚未结束，finally 也没跑
@@ -139,7 +139,7 @@ class WebApiTest(unittest.TestCase):
     def test_thinking_and_tool_call_events_are_not_persisted(self):
         """reasoning / tool_call 不入历史，也不该触发额外的落盘语义。"""
         def fake_stream(user_input, history, provider=None, model=None,
-                        pre_tool_results=None, agent_id=None):
+                        pre_tool_results=None, agent_id=None, image=None):
             yield {"type": "reasoning", "content": "想想"}
             yield {"type": "tool_call", "name": "lookup", "args": {}}
             history.append({"role": "assistant", "content": "好了"})
@@ -154,7 +154,7 @@ class WebApiTest(unittest.TestCase):
     def test_client_disconnect_keeps_flushed_content(self):
         """客户端中途断开：已推送的内容必须已经在盘上。"""
         def fake_stream(user_input, history, provider=None, model=None,
-                        pre_tool_results=None, agent_id=None):
+                        pre_tool_results=None, agent_id=None, image=None):
             history.append({"role": "user", "content": user_input})
             yield {"type": "user", "content": user_input}
             history.append({"role": "assistant", "content": "A1"})
@@ -191,7 +191,7 @@ class WebApiTest(unittest.TestCase):
         captured = {}
 
         def fake_stream(user_input, history, provider=None, model=None,
-                        pre_tool_results=None, agent_id=None):
+                        pre_tool_results=None, agent_id=None, image=None):
             captured["history"] = [m.get("content") for m in history]
             captured["user_input"] = user_input
             yield {"type": "assistant", "content": "done"}
@@ -246,7 +246,7 @@ class WebApiTest(unittest.TestCase):
         captured = {}
 
         def fake_stream(user_input, history, provider=None, model=None,
-                        pre_tool_results=None, agent_id=None):
+                        pre_tool_results=None, agent_id=None, image=None):
             captured["history"] = [m.get("content") for m in history]
             yield {"type": "assistant", "content": "done"}
 
@@ -263,6 +263,54 @@ class WebApiTest(unittest.TestCase):
             out, hit = main._truncate_at_user(hist, bad)
             self.assertFalse(hit, "index=%r 不该命中" % bad)
             self.assertEqual(out, hist)
+
+    # ─── 带图对话（图片只在本轮有效，不进历史）─────────
+
+    def _post_with_image(self, message="识别这张图",
+                         image="data:image/jpeg;base64,AAAA"):
+        captured = {}
+
+        def fake_stream(user_input, history, provider=None, model=None,
+                        pre_tool_results=None, agent_id=None, image=None):
+            # 与真实循环一致：先入历史再出流（落盘契约依赖这个顺序）
+            history.append({"role": "user", "content": user_input})
+            captured["user_input"] = user_input
+            captured["image"] = image
+            captured["history"] = [m.get("content") for m in history]
+            yield {"type": "user", "content": user_input}
+
+        with mock.patch.object(main, "run_agent_stream", fake_stream):
+            resp = self.client.post("/api/chat", json={
+                "message": message, "image": image, "agent": "main"})
+        return resp, captured
+
+    def test_chat_forwards_image_to_agent_loop(self):
+        image = "data:image/jpeg;base64," + "A" * 500
+        resp, captured = self._post_with_image(image=image)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(captured["image"], image)
+
+    def test_chat_keeps_image_base64_out_of_history(self):
+        image = "data:image/jpeg;base64," + "B" * 500
+        _, captured = self._post_with_image(image=image)
+        # 历史里只留一句占位文本
+        self.assertIn("（用户上传了一张图片：识别这张图）", captured["history"])
+        self.assertNotIn("B" * 50, "\n".join(captured["history"]))
+
+        # 落盘后同样不能有——刷新/重启读到的是磁盘那一份
+        with open(agents.session_file("main"), encoding="utf-8") as f:
+            raw = f.read()
+        self.assertIn("（用户上传了一张图片：识别这张图）", raw)
+        self.assertNotIn("B" * 50, raw)
+
+    def test_chat_allows_image_without_text(self):
+        resp, captured = self._post_with_image(message="")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(captured["user_input"], "（用户上传了一张图片）")
+
+    def test_chat_without_text_and_without_image_still_rejected(self):
+        self.assertEqual(
+            self.client.post("/api/chat", json={"message": "   "}).status_code, 400)
 
     # ─── documents API ───────────────────────────────
 
