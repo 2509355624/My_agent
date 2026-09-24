@@ -7,6 +7,7 @@ VERSION + references/），还可能多一层同名嵌套。这些兼容规则�
 """
 
 import os
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -196,6 +197,84 @@ class RealSkillsDataTest(unittest.TestCase):
             checked.append(name)
 
         self.assertTrue(checked, "skills/ 下没找到任何 workflow.json，这个测试形同虚设")
+
+
+class GithubStyleSkillRefsTest(unittest.TestCase):
+    """GitHub 风格 skill（大写 SKILL.md + references/）的两条数据契约。
+
+    skills/ 是私有数据目录（gitignore），换机后靠手工重建，所以规则要钉住。
+
+    契约一：references/ 下的**子目录不能**被 load_skill 吞进上下文。
+    `_read_references()` 只扫 references/ 顶层，而这类 skill 的资料常放在
+    references/knowledge/、references/practical/ 两层里，于是返回空——这是
+    想要的行为：全量可达数百 KB（狗头军师 43 份约 29 万字符），一旦改成
+    递归就会把整个库塞进 system prompt。
+
+    契约二：SKILL.md 里的路径引用必须是**相对 skills/ 的路径**（带 skill
+    名前缀）。写成裸的 `references/xxx.md` 会被解析到 skills 根下，模型只会
+    拿到「文件不存在」，白烧一轮。手工改写 SKILL.md 时最容易漏这个。
+    """
+
+    REF_RE = re.compile(r"`([^`\s]+\.md)`")
+
+    def _skills_dir(self):
+        d = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "skills")
+        return d if os.path.isdir(d) else None
+
+    def _github_style_names(self, root):
+        for name in sorted(os.listdir(root)):
+            if os.path.isfile(os.path.join(root, name, "SKILL.md")):
+                yield name
+
+    def test_nested_reference_subdirs_are_not_swallowed(self):
+        root = self._skills_dir()
+        if not root:
+            self.skipTest("本机没有 skills/ 数据目录")
+
+        checked = 0
+        for name in self._github_style_names(root):
+            ref_dir = os.path.join(root, name, "references")
+            if not os.path.isdir(ref_dir):
+                continue
+            nested = [f for f in os.listdir(ref_dir)
+                      if os.path.isdir(os.path.join(ref_dir, f))
+                      and not f.startswith(".") and f != "__pycache__"]
+            if not nested:
+                continue
+            checked += 1
+            self.assertEqual(
+                skills.load_skill(name)["references"], "",
+                "skill '%s' 的 references/ 下只有子目录，load_skill 不该带出内容"
+                "（改成递归会把整个知识库塞进上下文）" % name)
+
+        if not checked:
+            self.skipTest("没有「references/ 下只有子目录」的 skill 可校验")
+
+    def test_referenced_paths_are_prefixed_and_exist(self):
+        root = self._skills_dir()
+        if not root:
+            self.skipTest("本机没有 skills/ 数据目录")
+
+        checked = 0
+        for name in self._github_style_names(root):
+            md = skills.load_skill(name)["skill_md"]
+            for ref in sorted(set(self.REF_RE.findall(md))):
+                # 只看指向 references/ 的引用。裸写法 `references/x.md` 不含
+                # "/references/"（它在开头），两种形态都要进来才能被下面拦住。
+                if "/references/" not in ref and not ref.startswith("references/"):
+                    continue
+                self.assertFalse(
+                    ref.startswith("references/"),
+                    "skill '%s'：引用路径 '%s' 缺 skill 名前缀，"
+                    "read_file 会解析到 skills 根目录下而找不到文件" % (name, ref))
+                self.assertTrue(
+                    os.path.isfile(os.path.join(root, ref.replace("/", os.sep))),
+                    "skill '%s'：引用的文件在磁盘上不存在 —— %s" % (name, ref))
+                checked += 1
+
+        if not checked:
+            self.skipTest("没有 GitHub 风格 skill 的路径引用可校验")
 
 
 if __name__ == "__main__":
