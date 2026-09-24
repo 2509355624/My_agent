@@ -434,5 +434,138 @@ class SafeBaseFilenameTest(unittest.TestCase):
         self.assertEqual(_safe_base_filename("...hidden.txt"), "hidden.txt")
 
 
+class AgentAdminApiTest(unittest.TestCase):
+    """后台管理接口：读 agent 配置、保存人设与模型。
+
+    这里验证的重点不是「能写进去」，而是**写的时候别把别的东西弄坏**——
+    接口只暴露 prompt / provider / model 三项，其余字段必须原样留在磁盘上。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = os.path.join(self.tmp.name, "agents")
+        os.makedirs(self.root, exist_ok=True)
+        p = mock.patch.object(agents, "AGENTS_DIR", self.root)
+        p.start()
+        self.addCleanup(p.stop)
+        agents.clear_cache()
+        self.addCleanup(agents.clear_cache)
+        self.client = main.app.test_client()
+
+    def _write_agent(self, aid, cfg=None, prompt=None):
+        d = os.path.join(self.root, aid)
+        os.makedirs(d, exist_ok=True)
+        if cfg is not None:
+            with open(os.path.join(d, "agent.json"), "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False)
+        if prompt is not None:
+            with open(os.path.join(d, "prompt.md"), "w", encoding="utf-8") as f:
+                f.write(prompt)
+        return d
+
+    def test_get_returns_detail(self):
+        self._write_agent("main", {"name": "主", "description": "描述",
+                                   "tools": ["read_file"]}, prompt="你是助手")
+        d = self.client.get("/api/agent/main").get_json()
+        self.assertEqual(d["id"], "main")
+        self.assertEqual(d["name"], "主")
+        self.assertEqual(d["description"], "描述")
+        self.assertEqual(d["prompt"], "你是助手")
+        self.assertEqual(d["prompt_file"], "prompt.md")
+        # 没配就是空串，并由 *_effective 字段告诉界面实际会用谁
+        self.assertEqual(d["provider"], "")
+        self.assertEqual(d["global_provider"], main.LLM_PROVIDER)
+        self.assertEqual(d["effective_provider"], main.LLM_PROVIDER)
+        self.assertEqual(d["effective_model"], main.PROVIDERS[main.LLM_PROVIDER]["model"])
+        self.assertEqual(d["tools"], ["read_file"])
+        self.assertTrue(any(p["id"] == "volc" for p in d["providers"]))
+
+    def test_put_saves_model_and_prompt(self):
+        self._write_agent("main", {"tools": ["read_file"]}, prompt="旧人设")
+        resp = self.client.put("/api/agent/main", json={
+            "provider": "deepseek", "model": "m-x", "prompt": "新的人设"})
+        self.assertEqual(resp.status_code, 200)
+        d = resp.get_json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["effective_provider"], "deepseek")
+        self.assertEqual(d["effective_model"], "m-x")
+        self.assertEqual(d["prompt"], "新的人设")
+
+        # 落盘检查：模型写进去了，而没在界面上暴露的 tools 原样保留
+        raw = agents.agent_raw_config("main")
+        self.assertEqual(raw["provider"], "deepseek")
+        self.assertEqual(raw["model"], "m-x")
+        self.assertEqual(raw["tools"], ["read_file"])
+        with open(os.path.join(self.root, "main", "prompt.md"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "新的人设")
+
+    def test_put_only_model_leaves_prompt_alone(self):
+        self._write_agent("main", {}, prompt="别动我")
+        self.client.put("/api/agent/main", json={"provider": "volc"})
+        with open(os.path.join(self.root, "main", "prompt.md"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "别动我")
+
+    def test_effective_model_falls_back_to_provider_default(self):
+        """只选 provider 不填 model 时，实际用的是该家的默认模型。"""
+        self._write_agent("main", {})
+        d = self.client.put("/api/agent/main", json={
+            "provider": "volc", "model": ""}).get_json()
+        self.assertEqual(d["effective_provider"], "volc")
+        self.assertEqual(d["effective_model"], main.PROVIDERS["volc"]["model"])
+
+    def test_clearing_returns_to_global_default(self):
+        self._write_agent("main", {"provider": "deepseek", "model": "m"})
+        d = self.client.put("/api/agent/main", json={
+            "provider": "", "model": ""}).get_json()
+        self.assertEqual(d["provider"], "")
+        self.assertEqual(d["effective_provider"], main.LLM_PROVIDER)
+
+    def test_put_creates_config_when_absent(self):
+        self._write_agent("newone")
+        resp = self.client.put("/api/agent/newone", json={"provider": "volc"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(os.path.exists(os.path.join(self.root, "newone", "agent.json")))
+
+    def test_put_rejects_unknown_provider(self):
+        self._write_agent("main", {})
+        self.assertEqual(
+            self.client.put("/api/agent/main", json={"provider": "gpt5"}).status_code, 400)
+
+    def test_put_rejects_wrong_types(self):
+        self._write_agent("main", {})
+        for body in ({"provider": 5}, {"model": ["x"]}, {"prompt": {"a": 1}}):
+            self.assertEqual(
+                self.client.put("/api/agent/main", json=body).status_code, 400, body)
+
+    def test_put_rejects_non_object_body(self):
+        self._write_agent("main", {})
+        resp = self.client.put("/api/agent/main", data="不是 json",
+                               content_type="application/json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_bad_agent_id_rejected(self):
+        self.assertEqual(self.client.get("/api/agent/-bad").status_code, 400)
+
+    def test_remote_blocked_by_default(self):
+        self._write_agent("main", {})
+        with mock.patch.object(main, "ADMIN_ALLOW_REMOTE", False):
+            resp = self.client.put("/api/agent/main", json={"model": "x"},
+                                   environ_base={"REMOTE_ADDR": "192.168.1.9"})
+        self.assertEqual(resp.status_code, 403)
+
+    def test_remote_allowed_when_opted_in(self):
+        self._write_agent("main", {})
+        with mock.patch.object(main, "ADMIN_ALLOW_REMOTE", True):
+            resp = self.client.put("/api/agent/main", json={"provider": "volc"},
+                                   environ_base={"REMOTE_ADDR": "192.168.1.9"})
+        self.assertEqual(resp.status_code, 200)
+
+    def test_admin_page_is_served(self):
+        resp = self.client.get("/admin")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(b"Agent", resp.data)
+
+
 if __name__ == "__main__":
     unittest.main()

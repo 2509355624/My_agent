@@ -104,6 +104,11 @@ IMAGE_GEN_TIMEOUT = int(os.getenv("IMAGE_GEN_TIMEOUT", "3600"))
 AGENT_PORT = int(os.getenv("AGENT_PORT", "5174"))
 MAX_TURNS = int(os.getenv("MAX_TURNS", "10"))
 
+# 后台管理接口是否允许非本机访问。默认只允许回环地址——服务监听 0.0.0.0
+# 且没有任何鉴权，一个能改 agent 配置的口子不该顺带暴露到整个局域网。
+# 需要从别的设备打开管理页时，在 .env 里设成 true。
+ADMIN_ALLOW_REMOTE = os.getenv("ADMIN_ALLOW_REMOTE", "false").lower() not in ("0", "false", "no", "")
+
 # ─── 路径 ───────────────────────────────────────────
 
 SKILLS_DIR = os.path.join(BASE_DIR, "skills")

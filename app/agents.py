@@ -20,13 +20,15 @@ import json
 import os
 import re
 
-from app.config import AGENTS_DIR, DEFAULT_AGENT_ID
+from app.config import AGENTS_DIR, DEFAULT_AGENT_ID, PROVIDERS
 
 
 # 字母数字开头，后跟字母数字 / 下划线 / 连字符；限长防超长文件名。
 _AGENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 # agent.json 的默认值。tools / skills 为 None 表示「不限制」。
+# provider / model 为空串表示「继承 .env 里的全局默认」，这样没写过这两个
+# 字段的 agent（以及所有老 agent.json）行为与从前完全一致。
 _DEFAULT_CONFIG = {
     "name": "",
     "description": "",
@@ -34,6 +36,8 @@ _DEFAULT_CONFIG = {
     "prompt_file": "prompt.md",
     "tools": None,
     "skills": None,
+    "provider": "",
+    "model": "",
 }
 
 DEFAULT_PROMPT_FILE = "prompt.md"
@@ -146,6 +150,17 @@ def _normalize(cfg):
                 items.append(x.strip())
         out[key] = items
 
+    # provider / model 留空串 = 继承 .env 的全局默认。
+    # provider 写错（不在 PROVIDERS 里）一律清空而不是原样保留：留着会让请求
+    # 带着一个不存在的名字走到 llm 层，再被静默回退到全局默认，界面显示的和
+    # 实际在用的就对不上了。model 则刻意不做校验——模型名由各家平台决定，
+    # 写错时让它带着 404 报出来（llm 层有专门的接入点提示），比悄悄回退有用。
+    for key in ("provider", "model"):
+        val = out.get(key)
+        out[key] = val.strip() if isinstance(val, str) else ""
+    _prov = out["provider"].lower()
+    out["provider"] = _prov if _prov in PROVIDERS else ""
+
     if not isinstance(out.get("prompt_file"), str) or not out["prompt_file"].strip():
         out["prompt_file"] = DEFAULT_PROMPT_FILE
     if not isinstance(out.get("prompt"), str):
@@ -192,6 +207,22 @@ def agent_config(agent_id):
     return cfg
 
 
+def persona_path(agent_id):
+    """人设文件的绝对路径；agent_id 非法时返回 None。
+
+    prompt_file 不允许带路径分隔符——否则在 agent.json 里写一个 ../.. 就能
+    指到 agent 目录外面去。读取与保存两边都必须走这个函数，防穿越规则才
+    不会各写一份、日后只改了一处。
+    """
+    aid = safe_agent_id(agent_id)
+    if aid is None:
+        return None
+    fname = agent_config(aid)["prompt_file"]
+    if os.path.basename(fname) != fname:
+        fname = DEFAULT_PROMPT_FILE
+    return os.path.join(AGENTS_DIR, aid, fname)
+
+
 def persona_text(agent_id):
     """人设文本：优先 prompt_file（默认 prompt.md），其次 agent.json 的 prompt 字段。
 
@@ -202,12 +233,7 @@ def persona_text(agent_id):
         return ""
 
     cfg = agent_config(aid)
-    fname = cfg["prompt_file"]
-    # prompt_file 同样不允许带路径分隔符，避免从 agent 目录里逃逸
-    if os.path.basename(fname) != fname:
-        fname = DEFAULT_PROMPT_FILE
-
-    path = os.path.join(AGENTS_DIR, aid, fname)
+    path = persona_path(aid)
     try:
         mtime = os.path.getmtime(path)
     except OSError:
@@ -225,6 +251,68 @@ def persona_text(agent_id):
 
     _persona_cache[aid] = (mtime, text)
     return text
+
+
+def _atomic_write_text(path, text):
+    """临时文件 + fsync + os.replace 的原子写。
+
+    和 memory.save_history 同一套路：直接 open("w") 覆盖时，写到一半进程
+    被杀就留下半截文件，下次读直接解析失败。
+    """
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def agent_raw_config(agent_id):
+    """磁盘上 agent.json 的原始内容，不做补默认值与规范化。
+
+    给「后台改配置」用：读-改-写必须以磁盘原文为底，只覆盖用户真正改过的
+    字段。若拿规范化后的 dict 回写，那些界面上没暴露的字段（tools / skills
+    等）会被默认值冲掉。目录缺失或文件损坏时返回空 dict。
+    """
+    aid = safe_agent_id(agent_id)
+    if aid is None:
+        return {}
+    path = os.path.join(AGENTS_DIR, aid, "agent.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def save_agent_config(agent_id, cfg):
+    """原子写入 agent.json，并清掉配置缓存。
+
+    清缓存不是可选项：mtime 精度有限，「读 → 写 → 立刻再读」有可能命中旧
+    缓存，表现就是「点了保存但没生效」。配置本身很小，重读一次可忽略。
+    """
+    aid = safe_agent_id(agent_id)
+    if aid is None or not isinstance(cfg, dict):
+        return False
+    d = os.path.join(AGENTS_DIR, aid)
+    os.makedirs(d, exist_ok=True)
+    _atomic_write_text(os.path.join(d, "agent.json"),
+                       json.dumps(cfg, ensure_ascii=False, indent=2) + "\n")
+    clear_cache()
+    return True
+
+
+def save_persona(agent_id, text):
+    """原子写入人设文件（默认 prompt.md），并清掉人设缓存。"""
+    aid = safe_agent_id(agent_id)
+    if aid is None or not isinstance(text, str):
+        return False
+    path = persona_path(aid)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    _atomic_write_text(path, text)
+    _persona_cache.pop(aid, None)
+    return True
 
 
 def revision(agent_id):
@@ -279,6 +367,9 @@ def list_agents():
             "description": cfg["description"],
             "tools": cfg["tools"],
             "skills": cfg["skills"],
+            # 空串 = 继承全局默认。管理页用它标出「谁单独配过模型」
+            "provider": cfg["provider"],
+            "model": cfg["model"],
         })
 
     items.sort(key=lambda a: (a["id"] != DEFAULT_AGENT_ID, a["id"]))

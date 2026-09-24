@@ -6,10 +6,14 @@ pre_tool_results 注入、思考内容（reasoning）只出不进、异常兜底
 最大轮次保护。这些是前端渲染和用户体验直接依赖的行为，回归代价最高。
 """
 
+import json
+import os
+import tempfile
 import unittest
 from unittest import mock
 
 import app.agent as agent
+import app.agents as agent_store
 import app.config as config
 
 
@@ -336,6 +340,92 @@ class AgentEventHistoryContractTest(unittest.TestCase):
         # 因为它在解析工具调用之前就已入历史——只是没有单独出流。
         self.assertEqual(contents[0], "几点了")
         self.assertNotIn("现在 12:00。", contents)   # 还没生成的当然没有
+
+
+class AgentModelConfigTest(unittest.TestCase):
+    """agent.json 里配的 provider / model 要透传到 LLM 调用。
+
+    这是「后台给单个 agent 换模型」生效的最后一环：网页端 /api/chat 与 QQ
+    适配层都只调 run_agent_stream，且都可能不传 provider/model，所以回退
+    必须发生在循环内部，而不是各调用点各写一遍。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = os.path.join(self.tmp.name, "agents")
+        os.makedirs(self.root, exist_ok=True)
+        for module, attr, value in (
+            (agent_store, "AGENTS_DIR", self.root),
+            (agent, "trim_history", lambda h, agent_id=None: h),
+            (agent, "execute_tool", lambda name, args: ""),
+        ):
+            p = mock.patch.object(module, attr, value)
+            p.start()
+            self.addCleanup(p.stop)
+        agent_store.clear_cache()
+        self.addCleanup(agent_store.clear_cache)
+        self.seen = []
+
+    def _write_agent(self, aid, cfg):
+        d = os.path.join(self.root, aid)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "agent.json"), "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False)
+
+    def _patch_llm(self):
+        def fake(messages, **kwargs):
+            self.seen.append(kwargs)
+            yield "content", "好"
+        p = mock.patch.object(agent, "call_llm_stream", fake)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _run(self, **kwargs):
+        return list(agent.run_agent_stream("你好", [], **kwargs))
+
+    def test_agent_config_used_when_caller_silent(self):
+        self._write_agent("a", {"provider": "volc", "model": "m1"})
+        self._patch_llm()
+        self._run(agent_id="a")
+        self.assertEqual(self.seen[0]["provider"], "volc")
+        self.assertEqual(self.seen[0]["model"], "m1")
+
+    def test_caller_value_wins(self):
+        """网页端下拉显式选了模型，就不该再被 agent 配置覆盖。"""
+        self._write_agent("a", {"provider": "volc", "model": "m1"})
+        self._patch_llm()
+        self._run(agent_id="a", provider="deepseek", model="m2")
+        self.assertEqual(self.seen[0]["provider"], "deepseek")
+        self.assertEqual(self.seen[0]["model"], "m2")
+
+    def test_unconfigured_agent_passes_none(self):
+        """老 agent.json 没有这两个字段时必须原样传 None，行为与从前一致。"""
+        self._write_agent("a", {"tools": ["read_file"]})
+        self._patch_llm()
+        self._run(agent_id="a")
+        self.assertIsNone(self.seen[0]["provider"])
+        self.assertIsNone(self.seen[0]["model"])
+
+    def test_empty_string_counts_as_unset(self):
+        """「跟随默认」传的是空串，不能因为不是 None 就跳过 agent 配置。"""
+        self._write_agent("a", {"provider": "volc", "model": "m1"})
+        self._patch_llm()
+        self._run(agent_id="a", provider="", model="")
+        self.assertEqual(self.seen[0]["provider"], "volc")
+
+    def test_only_provider_configured(self):
+        """只配了 provider 没配 model：model 留 None，交给 llm 层用该家的默认模型。"""
+        self._write_agent("a", {"provider": "deepseek"})
+        self._patch_llm()
+        self._run(agent_id="a")
+        self.assertEqual(self.seen[0]["provider"], "deepseek")
+        self.assertIsNone(self.seen[0]["model"])
+
+    def test_no_agent_id_is_safe(self):
+        self._patch_llm()
+        self._run()
+        self.assertIsNone(self.seen[0]["provider"])
 
 
 if __name__ == "__main__":

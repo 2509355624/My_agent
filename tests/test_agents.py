@@ -228,5 +228,135 @@ class RevisionTest(AgentsTestBase):
         self.assertEqual(agents.revision("a"), agents.revision("a"))
 
 
+class ModelConfigTest(AgentsTestBase):
+    """agent 级模型配置：空串 = 继承 .env 的全局默认。"""
+
+    def test_defaults_to_empty(self):
+        self.make_agent("a", {})
+        cfg = agents.agent_config("a")
+        self.assertEqual(cfg["provider"], "")
+        self.assertEqual(cfg["model"], "")
+
+    def test_reads_configured_values(self):
+        self.make_agent("a", {"provider": "volc", "model": "m1"})
+        cfg = agents.agent_config("a")
+        self.assertEqual(cfg["provider"], "volc")
+        self.assertEqual(cfg["model"], "m1")
+
+    def test_provider_lowercased(self):
+        self.make_agent("a", {"provider": "VOLC"})
+        self.assertEqual(agents.agent_config("a")["provider"], "volc")
+
+    def test_unknown_provider_cleared(self):
+        """写错的 provider 必须清空而不是原样保留，否则界面显示的和实际用的会不一致。"""
+        self.make_agent("a", {"provider": "gpt5"})
+        self.assertEqual(agents.agent_config("a")["provider"], "")
+
+    def test_non_string_values_cleared(self):
+        self.make_agent("a", {"provider": ["volc"], "model": 123})
+        cfg = agents.agent_config("a")
+        self.assertEqual(cfg["provider"], "")
+        self.assertEqual(cfg["model"], "")
+
+    def test_model_not_validated(self):
+        """model 不做白名单校验，写错了应该带着报错暴露出来，而不是被悄悄清空。"""
+        self.make_agent("a", {"provider": "volc", "model": "随便写的名字"})
+        self.assertEqual(agents.agent_config("a")["model"], "随便写的名字")
+
+    def test_legacy_config_unchanged(self):
+        """老 agent.json 没有这两个字段，读出来必须是空串（等价于行为不变）。"""
+        self.make_agent("a", {"tools": ["read_file"]})
+        cfg = agents.agent_config("a")
+        self.assertEqual(cfg["provider"], "")
+        self.assertEqual(cfg["model"], "")
+        self.assertEqual(cfg["tools"], ["read_file"])
+
+    def test_list_agents_exposes_model_fields(self):
+        self.make_agent("a", {"provider": "volc", "model": "m1"})
+        item = [x for x in agents.list_agents() if x["id"] == "a"][0]
+        self.assertEqual(item["provider"], "volc")
+        self.assertEqual(item["model"], "m1")
+
+
+class SaveAgentConfigTest(AgentsTestBase):
+    """后台保存 agent.json。"""
+
+    def test_preserves_fields_not_edited(self):
+        """最要紧的一条：界面上只有 provider/model，回写不能把 tools/skills 冲掉。"""
+        self.make_agent("a", {"name": "A", "tools": ["read_file"],
+                              "skills": ["writing"], "prompt": "内联人设"})
+        raw = agents.agent_raw_config("a")
+        raw["provider"] = "volc"
+        raw["model"] = "m1"
+        self.assertTrue(agents.save_agent_config("a", raw))
+
+        after = agents.agent_raw_config("a")
+        self.assertEqual(after["tools"], ["read_file"])
+        self.assertEqual(after["skills"], ["writing"])
+        self.assertEqual(after["name"], "A")
+        self.assertEqual(after["prompt"], "内联人设")
+        self.assertEqual(after["provider"], "volc")
+
+    def test_takes_effect_without_mtime_change(self):
+        """写后立刻读必须看到新值——同秒内 mtime 可能不变，缓存要被主动清掉。"""
+        self.make_agent("a", {})
+        agents.agent_config("a")            # 先让缓存建立
+        raw = agents.agent_raw_config("a")
+        raw["provider"] = "deepseek"
+        agents.save_agent_config("a", raw)
+        self.assertEqual(agents.agent_config("a")["provider"], "deepseek")
+
+    def test_creates_missing_dir(self):
+        self.assertTrue(agents.save_agent_config("brandnew", {"provider": "volc"}))
+        self.assertEqual(agents.agent_config("brandnew")["provider"], "volc")
+
+    def test_raw_config_fallbacks(self):
+        self.assertEqual(agents.agent_raw_config("nope"), {})
+        self.assertEqual(agents.agent_raw_config("../evil"), {})
+
+    def test_raw_config_on_broken_json(self):
+        d = self.make_agent("a", {})
+        with open(os.path.join(d, "agent.json"), "w", encoding="utf-8") as f:
+            f.write("{ 这不是 json")
+        self.assertEqual(agents.agent_raw_config("a"), {})
+
+    def test_rejects_bad_args(self):
+        self.assertFalse(agents.save_agent_config("../evil", {}))
+        self.assertFalse(agents.save_agent_config("a", "不是 dict"))
+
+
+class SavePersonaTest(AgentsTestBase):
+    def test_roundtrip(self):
+        self.make_agent("a", {}, prompt="旧人设")
+        self.assertTrue(agents.save_persona("a", "新人设"))
+        self.assertEqual(agents.persona_text("a"), "新人设")
+
+    def test_immediate_effect(self):
+        self.make_agent("a", {}, prompt="旧")
+        agents.persona_text("a")            # 先让缓存建立
+        agents.save_persona("a", "新")
+        self.assertEqual(agents.persona_text("a"), "新")
+
+    def test_creates_file_when_absent(self):
+        self.make_agent("a", {})
+        self.assertTrue(agents.save_persona("a", "第一次写人设"))
+        self.assertEqual(agents.persona_text("a"), "第一次写人设")
+
+    def test_rejects_bad_args(self):
+        self.assertFalse(agents.save_persona("../evil", "x"))
+        self.assertFalse(agents.save_persona("a", 123))
+
+    def test_prompt_file_traversal_blocked(self):
+        """agent.json 里把 prompt_file 写成 ../outside.md 也不能指到目录外。"""
+        self.make_agent("a", {"prompt_file": "../outside.md"})
+        self.assertEqual(os.path.basename(agents.persona_path("a")), "prompt.md")
+        agents.save_persona("a", "写这里")
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "outside.md")))
+        self.assertTrue(os.path.exists(os.path.join(self.root, "a", "prompt.md")))
+
+    def test_persona_path_invalid_id(self):
+        self.assertIsNone(agents.persona_path("../evil"))
+
+
 if __name__ == "__main__":
     unittest.main()

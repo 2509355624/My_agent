@@ -241,6 +241,16 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
     """
     from app.config import MAX_TURNS
 
+    # agent 级模型：调用方没显式指定时，用 agent.json 里配的 provider/model。
+    # 放在这一处而不是各个调用点上，是为了让网页端 /api/chat 与 QQ 适配层
+    # 都自动吃到这份配置——它们都只调 run_agent_stream，不必各写一遍。
+    # 都没配则维持原样（传 None 下去，由 llm 层回退到 .env 的全局默认），
+    # 所以老 agent.json 没这两个字段时行为与从前完全一致。
+    if not provider and not model:
+        _acfg = agent_store.agent_config(agent_id)
+        provider = _acfg["provider"] or None
+        model = _acfg["model"] or None
+
     history.append({"role": "user", "content": user_input})
     yield {"type": "user", "content": user_input}
 

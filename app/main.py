@@ -11,7 +11,8 @@ from flask import (Flask, request, jsonify, send_from_directory, Response,
 from app import agents as agent_store
 from app import cancel as cancel_mod
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
-                        LLM_PROVIDER, PROVIDERS, OLLAMA_BASE_URL, DEFAULT_AGENT_ID)
+                        LLM_PROVIDER, PROVIDERS, OLLAMA_BASE_URL, DEFAULT_AGENT_ID,
+                        ADMIN_ALLOW_REMOTE)
 from app.skills import list_skills, load_skill
 from app.agent_prompt import build_stable_prompt
 from app.memory import load_history, save_history
@@ -350,6 +351,119 @@ def get_skills():
             desc = data["skill_md"].split("\n")[0] if data["skill_md"] else ""
             skills.append({"name": s, "description": desc})
     return jsonify({"skills": skills})
+
+
+# ─── 后台管理（agent 配置读写）──────────────────────
+# 只开放两样：人设（prompt.md）与模型（agent.json 的 provider/model）。
+# 工具 / skills 白名单刻意不做成界面——那是「配置」而不是「管理」，手编 JSON
+# 能一眼看到全貌；在勾选框里漏勾一个是静默的，改错 JSON 立刻报解析错。
+# 配置落在 agent 自己的目录里，仍是「文件即真相」，后台只是一层编辑器。
+
+# 回环地址。IPv4-mapped 形式（::ffff:127.0.0.1）也要认，某些环境下 Flask
+# 拿到的 remote_addr 长这样。
+_LOCAL_ADDRS = ("127.0.0.1", "::1", "::ffff:127.0.0.1", "localhost")
+
+
+def _admin_allowed():
+    return ADMIN_ALLOW_REMOTE or request.remote_addr in _LOCAL_ADDRS
+
+
+def _agent_or_400(agent_id):
+    """校验路径里的 agent id。返回 (id, None) 或 (None, 错误响应)。"""
+    aid = agent_store.safe_agent_id(agent_id)
+    if aid is None:
+        return None, (jsonify({"error": "非法的 agent id：%s" % agent_id}), 400)
+    return aid, None
+
+
+def _agent_detail(aid):
+    """管理页需要的完整状态。provider / model 为空串表示「继承全局默认」。"""
+    cfg = agent_store.agent_config(aid)
+    raw = agent_store.agent_raw_config(aid)
+    eff_provider = cfg["provider"] or LLM_PROVIDER
+    eff_model = cfg["model"] or PROVIDERS.get(eff_provider, {}).get("model", "")
+    return {
+        "id": aid,
+        "name": cfg["name"] or aid,
+        "description": cfg["description"],
+        "provider": cfg["provider"],
+        "model": cfg["model"],
+        "prompt_file": cfg["prompt_file"],
+        "prompt": agent_store.persona_text(aid),
+        "providers": [{"id": k, "label": v["label"], "model": v["model"]}
+                      for k, v in PROVIDERS.items()],
+        "global_provider": LLM_PROVIDER,
+        "global_model": MODEL,
+        # 把「继承」算进去后实际会用的模型，让用户改完能立刻看到是什么效果
+        "effective_provider": eff_provider,
+        "effective_model": eff_model,
+        # 只读展示：白名单收窄过没有（null = 不限制）。不提供编辑入口
+        "tools": raw.get("tools"),
+        "skills": raw.get("skills"),
+    }
+
+
+@app.route("/admin")
+def admin_page():
+    """agent 管理页（独立页面，不动 index.html）。"""
+    return send_from_directory(WEB_DIR, "admin.html")
+
+
+@app.route("/api/agent/<agent_id>")
+def get_agent_detail(agent_id):
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    return jsonify(_agent_detail(aid))
+
+
+@app.route("/api/agent/<agent_id>", methods=["PUT"])
+def put_agent_detail(agent_id):
+    """保存人设与模型配置。
+
+    只接受 prompt / provider / model 三项。agent.json 以磁盘原文为底做部分
+    更新，所以 tools / skills 这些界面没暴露的字段会原样保留——直接用规范化
+    后的配置回写会把它们冲成默认值（等于悄悄放开白名单）。
+    空串是有效值，表示「该字段继承全局默认」。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "请求体必须是 JSON 对象"}), 400
+
+    if "provider" in data or "model" in data:
+        for key in ("provider", "model"):
+            val = data.get(key, "")
+            if not isinstance(val, str):
+                return jsonify({"error": "%s 必须是字符串" % key}), 400
+        provider = (data.get("provider") or "").strip().lower()
+        model = (data.get("model") or "").strip()
+        if provider and provider not in PROVIDERS:
+            return jsonify({"error": "未知的 provider：%s" % provider}), 400
+
+        raw = agent_store.agent_raw_config(aid)
+        raw["provider"] = provider
+        raw["model"] = model
+        if not agent_store.save_agent_config(aid, raw):
+            return jsonify({"error": "写入 agent.json 失败"}), 500
+
+    if "prompt" in data:
+        prompt = data.get("prompt")
+        if not isinstance(prompt, str):
+            return jsonify({"error": "prompt 必须是字符串"}), 400
+        if not agent_store.save_persona(aid, prompt):
+            return jsonify({"error": "写入人设文件失败"}), 500
+
+    # 保存后回读：返回「已落盘并已生效」的状态，而不是前端提交上来的值
+    detail = _agent_detail(aid)
+    detail["ok"] = True
+    return jsonify(detail)
 
 
 # ─── 文档 API ────────────────────────────────────────

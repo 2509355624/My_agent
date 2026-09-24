@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent 管理</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%237c5cff'/></svg>">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0a0a0f;
+    --bg-elev: #12121a;
+    --bg-input: #1a1a24;
+    --border: #2a2a3a;
+    --border-soft: #1f1f2e;
+    --text: #e8e8f0;
+    --text-dim: #8888a0;
+    --text-mute: #555570;
+    --accent: #7c5cff;
+    --success: #4ade80;
+    --error: #f87171;
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
+
+  html, body {
+    min-height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "SF Mono", "JetBrains Mono", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
+    font-size: 14px;
+    line-height: 1.7;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(124, 92, 255, 0.15), transparent);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .wrap { position: relative; z-index: 1; max-width: 1080px; margin: 0 auto; padding: 24px 20px 48px; }
+
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; }
+  h1 { font-size: 18px; font-weight: 500; }
+  .sub { color: var(--text-mute); font-size: 12px; }
+  header .spacer { flex: 1; }
+  a.back { color: var(--text-dim); font-size: 13px; text-decoration: none; }
+  a.back:hover { color: var(--accent); }
+
+  .layout { display: flex; gap: 20px; align-items: flex-start; }
+
+  .list {
+    width: 200px; flex: 0 0 200px;
+    background: var(--bg-elev); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: 8px;
+  }
+  .list-item { padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer; }
+  .list-item:hover { background: var(--bg-input); }
+  .list-item.active { background: rgba(124, 92, 255, 0.14); }
+  .list-item .nm { font-size: 13px; }
+  .list-item .tag { font-size: 11px; color: var(--text-mute); }
+  .list-item.active .nm { color: var(--accent); }
+  .list-item.active .tag { color: #a892ff; }
+
+  .panel { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+
+  .meta { font-size: 12px; color: var(--text-mute); }
+
+  .card {
+    background: var(--bg-elev); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: 16px;
+  }
+  .card h2 { font-size: 13px; font-weight: 500; color: var(--text-dim); }
+  .card h2 .file { color: var(--text-mute); font-weight: 400; }
+  .card .hint { font-size: 12px; color: var(--text-mute); margin: 4px 0 12px; }
+
+  textarea, input, select {
+    width: 100%; background: var(--bg-input); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 10px 12px; font-family: inherit; font-size: 13px; line-height: 1.7;
+    outline: none; transition: border-color 0.15s;
+  }
+  textarea:focus, input:focus, select:focus { border-color: var(--accent); }
+  textarea { min-height: 360px; resize: vertical; }
+
+  .row { display: flex; gap: 12px; }
+  .field { flex: 1; min-width: 0; }
+  .field label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
+
+  .eff {
+    margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-sm);
+    background: var(--bg-input); font-size: 12px; color: var(--text-dim);
+    border-left: 2px solid var(--accent);
+  }
+  .eff b { color: var(--text); font-weight: 500; }
+
+  .warn {
+    margin-top: 10px; padding: 10px 12px; border-radius: var(--radius-sm);
+    background: rgba(248, 113, 113, 0.08); border-left: 2px solid var(--error);
+    font-size: 12px; color: var(--text-dim);
+  }
+
+  .actions { display: flex; align-items: center; gap: 12px; }
+
+  button {
+    background: var(--accent); color: #fff; border: none;
+    padding: 9px 20px; border-radius: var(--radius-sm);
+    font-family: inherit; font-size: 13px; cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  button:hover { opacity: 0.88; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.ghost { background: none; color: var(--text-dim); border: 1px solid var(--border); }
+  button.ghost:hover { color: var(--text); border-color: var(--text-mute); opacity: 1; }
+
+  .status { font-size: 12px; color: var(--text-mute); }
+  .status.ok { color: var(--success); }
+  .status.err { color: var(--error); }
+
+  .hidden { display: none !important; }
+
+  @media (max-width: 720px) {
+    .layout { flex-direction: column; }
+    .list { width: 100%; flex: none; display: flex; gap: 6px; overflow-x: auto; }
+    .list-item { flex: none; }
+    textarea { min-height: 240px; }
+    .row { flex-direction: column; gap: 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Agent 管理</h1>
+    <span class="sub" id="sub">加载中</span>
+    <span class="spacer"></span>
+    <a class="back" href="/">返回聊天</a>
+  </header>
+
+  <div class="layout">
+    <div class="list" id="list"></div>
+
+    <div class="panel">
+      <div class="meta" id="meta"></div>
+
+      <div class="card">
+        <h2>人设 <span class="file" id="promptFile"></span></h2>
+        <div class="hint">写进 system prompt 的 Role 段，决定这个 agent 怎么说话。保存后下一轮对话即生效，不用重启。</div>
+        <textarea id="prompt" spellcheck="false" placeholder="（人设文件为空）"></textarea>
+      </div>
+
+      <div class="card">
+        <h2>模型</h2>
+        <div class="hint">留空即继承 .env 的全局默认。给单个 agent 指定，比如让带图对话的 agent 用 DeepSeek、其余走火山。</div>
+        <div class="row">
+          <div class="field">
+            <label>provider</label>
+            <select id="provider"></select>
+          </div>
+          <div class="field">
+            <label>model</label>
+            <input id="model" spellcheck="false" autocomplete="off">
+          </div>
+        </div>
+        <div class="eff" id="eff"></div>
+        <div class="warn hidden" id="novisual"></div>
+      </div>
+
+      <div class="actions">
+        <button id="save">保存</button>
+        <button class="ghost" id="reload">放弃修改</button>
+        <span class="status" id="status"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+// 已知的能力差异（实测）：火山侧不支持图片输入。带了图也不会报错——
+// 它把 data URL 当成普通文本塞进 prompt，超长被截断，模型只会说
+// 「base64 被截断了」，很难一眼归因。带图的 agent 别选这两个。
+const NO_VISION = { volc: 1, doubao: 1 };
+
+let agents = [];
+let cur = null;
+let snap = null;
+let detail = null;
+
+function status(msg, cls) {
+  const el = $('status');
+  el.textContent = msg || '';
+  el.className = 'status' + (cls ? ' ' + cls : '');
+}
+
+async function api(path, opts) {
+  const resp = await fetch(path, opts);
+  let data = null;
+  try { data = await resp.json(); } catch (e) { data = null; }
+  if (!resp.ok) {
+    throw new Error((data && data.error) || ('请求失败 HTTP ' + resp.status));
+  }
+  return data;
+}
+
+function labelOf(pid) {
+  const p = (detail && detail.providers || []).find((x) => x.id === pid);
+  return p ? p.label : (pid || '');
+}
+
+function defaultModelOf(pid) {
+  if (!pid) return (detail && detail.global_model) || '';
+  const p = (detail && detail.providers || []).find((x) => x.id === pid);
+  return p ? p.model : '';
+}
+
+function snapshot() {
+  return {
+    provider: $('provider').value || '',
+    model: $('model').value.trim(),
+    prompt: $('prompt').value,
+  };
+}
+
+function isDirty() {
+  if (!snap) return false;
+  const s = snapshot();
+  return s.provider !== snap.provider || s.model !== snap.model || s.prompt !== snap.prompt;
+}
+
+function renderList() {
+  const box = $('list');
+  box.textContent = '';
+  if (!agents.length) {
+    const empty = document.createElement('div');
+    empty.className = 'list-item';
+    empty.textContent = '（没有 agent）';
+    box.appendChild(empty);
+    return;
+  }
+  agents.forEach((a) => {
+    const item = document.createElement('div');
+    item.className = 'list-item' + (a.id === cur ? ' active' : '');
+    const nm = document.createElement('div');
+    nm.className = 'nm';
+    nm.textContent = a.name || a.id;
+    const tag = document.createElement('div');
+    tag.className = 'tag';
+    // 有 provider 说明单独配过；空串代表跟随全局
+    tag.textContent = a.id + (a.provider ? ' · ' + a.provider : ' · 继承');
+    item.appendChild(nm);
+    item.appendChild(tag);
+    item.addEventListener('click', () => selectAgent(a.id));
+    box.appendChild(item);
+  });
+}
+
+function renderEffective() {
+  const pid = $('provider').value || detail.global_provider;
+  const mid = $('model').value.trim() || defaultModelOf(pid);
+
+  const box = $('eff');
+  box.textContent = '';
+  const b1 = document.createElement('b');
+  b1.textContent = labelOf(pid);
+  const b2 = document.createElement('b');
+  b2.textContent = mid || '—';
+  box.append('实际生效：', b1, ' / ', b2);
+
+  const warn = $('novisual');
+  if (NO_VISION[pid]) {
+    warn.textContent = '该 provider 没有视觉能力：若这个 agent 用于带图对话，'
+      + '图片会被当成纯文本塞进去、超长被截断，模型读不到图。带图场景请选 DeepSeek 官方。';
+    warn.classList.remove('hidden');
+  } else {
+    warn.classList.add('hidden');
+  }
+}
+
+function renderMeta() {
+  const parts = [];
+  const t = detail.tools;
+  const s = detail.skills;
+  parts.push(t === null || t === undefined ? '工具未限制' : ('工具 ' + t.length + ' 个'));
+  parts.push(s === null || s === undefined ? '技能未限制' : ('技能 ' + s.length + ' 个'));
+  $('meta').textContent = parts.join(' · ') + '　（白名单不在此页编辑，改 agent.json）';
+}
+
+async function loadDetail() {
+  detail = await api('/api/agent/' + encodeURIComponent(cur));
+  $('prompt').value = detail.prompt || '';
+  $('promptFile').textContent = detail.prompt_file || '';
+  $('sub').textContent = detail.id + (detail.description ? ' · ' + detail.description : '');
+
+  const sel = $('provider');
+  sel.textContent = '';
+  const inherit = document.createElement('option');
+  inherit.value = '';
+  inherit.textContent = '继承全局（' + labelOf(detail.global_provider) + '）';
+  sel.appendChild(inherit);
+  (detail.providers || []).forEach((p) => {
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = p.label + '（' + p.id + '）';
+    sel.appendChild(opt);
+  });
+  sel.value = detail.provider || '';
+  $('model').value = detail.model || '';
+
+  const pid = sel.value || detail.global_provider;
+  $('model').placeholder = '默认 ' + (defaultModelOf(pid) || '—');
+  renderEffective();
+  renderMeta();
+
+  snap = snapshot();
+  status('');
+}
+
+async function selectAgent(id) {
+  if (id === cur) return;
+  if (isDirty() && !confirm('当前修改还没保存，确定要切换吗？')) return;
+  cur = id;
+  try {
+    await loadDetail();
+    renderList();
+  } catch (e) {
+    status(e.message, 'err');
+  }
+}
+
+async function save() {
+  if (!cur) return;
+  $('save').disabled = true;
+  status('保存中…');
+  try {
+    const data = await api('/api/agent/' + encodeURIComponent(cur), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(snapshot()),
+    });
+    // 用服务端回读的值回填：它才是真正落盘并已生效的状态
+    detail = data;
+    $('prompt').value = data.prompt || '';
+    $('provider').value = data.provider || '';
+    $('model').value = data.model || '';
+    renderEffective();
+    snap = snapshot();
+    renderList();
+    status('已保存 · 下次对话即用 ' + labelOf(data.effective_provider)
+           + ' / ' + data.effective_model, 'ok');
+  } catch (e) {
+    status(e.message, 'err');
+  } finally {
+    $('save').disabled = false;
+  }
+}
+
+async function boot() {
+  try {
+    const d = await api('/api/agents');
+    agents = d.agents || [];
+    if (!agents.length) {
+      status('agents/ 下没有可管理的 agent', 'err');
+      return;
+    }
+    // 默认选中当前 URL 指定的 agent，其次默认 agent，再次第一个
+    const wanted = new URLSearchParams(location.search).get('agent');
+    const exists = agents.some((a) => a.id === wanted);
+    cur = exists ? wanted : (agents.some((a) => a.id === d.default) ? d.default : agents[0].id);
+    await loadDetail();
+    renderList();
+  } catch (e) {
+    status(e.message, 'err');
+  }
+}
+
+$('save').addEventListener('click', save);
+$('reload').addEventListener('click', () => {
+  loadDetail().catch((e) => status(e.message, 'err'));
+});
+$('provider').addEventListener('change', () => {
+  const pid = $('provider').value || detail.global_provider;
+  $('model').placeholder = '默认 ' + (defaultModelOf(pid) || '—');
+  renderEffective();
+});
+$('model').addEventListener('input', renderEffective);
+$('prompt').addEventListener('input', () => status(''));
+
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+    e.preventDefault();
+    save();
+  }
+});
+
+window.addEventListener('beforeunload', (e) => {
+  if (isDirty()) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
+
+boot();
+</script>
+</body>
+</html>
