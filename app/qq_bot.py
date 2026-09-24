@@ -1,0 +1,352 @@
+"""
+QQ 接入适配层（NapCat / OneBot 11）
+
+独立进程运行：
+
+    python -m app.qq_bot
+
+不并进 app/main.py 的理由：QQ 掉线重连、协议端重启、扫码失效这些事不该
+影响网页端；反过来改网页端代码要重启，也不该把 QQ 连接一起断掉。两边共享
+同一套 app.* 代码，只是进程分开。
+
+链路：
+
+    QQ → NapCat(:3001 WS 推事件) → 本模块 → run_agent_stream
+                                          → NapCat(:3000 HTTP) → QQ
+
+几条设计取舍：
+
+1. **一条会话线 = 一个 session_key**。私聊是 private_<QQ号>，群聊是
+   group_<群号>，各自落 agents/qq/sessions/<key>.jsonl。这样群里张三说的话
+   和李四的上下文不会串，私聊也不会串到群里去。
+2. **同一条会话线永远串行**。模型回复有先后顺序，并发跑会让后一句先回、
+   上下文还互相干扰；不同会话线之间才并行。
+3. **排队期间的消息合并**。群里连发三句会攒成一条一起送进去，而不是白跑
+   三轮 LLM（也避免机器人刷屏式地回三条）。
+4. **本轮调用过 send_qq_message 就不再自动回发正文**。否则同一句话会被
+   发两遍。
+"""
+
+import asyncio
+import json
+import logging
+import re
+from urllib.parse import quote
+
+from app import qq_api
+from app.agent import run_agent_stream
+from app.agent_prompt import build_stable_prompt
+from app.config import (
+    COMFYUI_URL, QQ_AGENT_ID, QQ_BLACKLIST_USERS, QQ_DEBOUNCE_SECONDS,
+    QQ_GROUP_AT_ONLY, QQ_GROUP_KEYWORDS, QQ_MAX_CONCURRENCY,
+    QQ_PRIVATE_ENABLE, QQ_TOKEN, QQ_WHITELIST_GROUPS, QQ_WHITELIST_USERS,
+    QQ_WS_URL,
+)
+from app.memory import load_history, save_history
+
+try:
+    from websockets.asyncio.client import connect as ws_connect
+except ImportError:          # 旧版 websockets 的兼容路径
+    from websockets import connect as ws_connect
+
+log = logging.getLogger("qq_bot")
+
+# 与 app/main.py 的 SESSION_EVENTS 同义：这几类事件出流时消息已写进 history，
+# 所以看到就要落盘（生图可能阻塞很久，不落盘的话进程被杀会丢整轮）
+SESSION_EVENTS = ("user", "assistant", "tool_result", "aborted")
+
+# 生图工具返回的是相对地址 /api/image/<file>，这里把它换成协议端能直接拉的
+# ComfyUI 地址。不用网页端的 /api/image 是因为适配层是独立进程，不该依赖
+# 网页端 Flask 同时开着。
+_IMAGE_PATH_RE = re.compile(r"/api/image/([^\s)\"'，。]+)")
+_CQ_RE = re.compile(r"\[CQ:([a-z_]+)((?:,[^\]]*)?)\]")
+
+
+# ─── 会话线的 system 头 ──────────────────────────────
+
+def _ensure_system_prompt(session_key):
+    """把这条会话线的首条固定为稳定的 system 消息（prefix cache 锚点）。
+
+    与 app/main.py 里的同名函数同构，差别只在多传一个 session_key。
+    """
+    stable = build_stable_prompt(QQ_AGENT_ID)
+    keep = [m for m in load_history(QQ_AGENT_ID, session_key)
+            if m.get("role") != "system"]
+    save_history([{"role": "system", "content": stable}] + keep,
+                 QQ_AGENT_ID, session_key)
+
+
+# ─── 事件解析 ────────────────────────────────────────
+
+def _parse_segments(ev):
+    """从事件里取出文本，并判断这条消息有没有 @ 到机器人。
+
+    OneBot 有两种上报格式：message 数组（结构化）和 raw_message 字符串
+    （CQ 码）。NapCat 配的是哪种都要能认，所以两条路都走。
+    """
+    self_id = str(ev.get("self_id", ""))
+    segs = ev.get("message")
+
+    if isinstance(segs, list):
+        parts, at_me = [], False
+        for seg in segs:
+            if not isinstance(seg, dict):
+                continue
+            stype = seg.get("type")
+            sdata = seg.get("data") or {}
+            if stype == "text":
+                parts.append(str(sdata.get("text", "")))
+            elif stype == "at":
+                if str(sdata.get("qq", "")) == self_id:
+                    at_me = True
+            elif stype == "image":
+                parts.append("[图片]")
+            elif stype == "face":
+                parts.append("[表情]")
+        return "".join(parts).strip(), at_me
+
+    raw = str(ev.get("raw_message") or "")
+
+    def _sub(m):
+        name, rest = m.group(1), m.group(2)
+        if name == "at" and ("qq=" + self_id) in rest:
+            _sub.at_me = True
+        return ""
+
+    _sub.at_me = False
+    return _CQ_RE.sub(_sub, raw).strip(), _sub.at_me
+
+
+def _session_key(target, target_id):
+    return "%s_%s" % (target, target_id)
+
+
+def _should_reply(ev, target, target_id, text, at_me):
+    """判定这条消息要不要回。返回 (bool, 原因)，原因只用于日志。"""
+    user_id = str(ev.get("user_id", ""))
+
+    if user_id in QQ_BLACKLIST_USERS:
+        return False, "在黑名单里"
+
+    if target == "private":
+        if not QQ_PRIVATE_ENABLE:
+            return False, "私聊未开启"
+        if QQ_WHITELIST_USERS and user_id not in QQ_WHITELIST_USERS:
+            return False, "不在私聊白名单"
+        return (bool(text), "私聊")
+
+    group_id = str(target_id)
+    if QQ_WHITELIST_GROUPS and group_id not in QQ_WHITELIST_GROUPS:
+        return False, "群不在白名单"
+
+    if at_me:
+        return (bool(text), "被 @")
+    for kw in QQ_GROUP_KEYWORDS:
+        if kw in text:
+            return True, "命中关键词 " + kw
+    if not QQ_GROUP_AT_ONLY:
+        return (bool(text), "群全量模式")
+    return False, "未 @ 且未命中关键词"
+
+
+# ─── 一条会话线的串行执行器 ──────────────────────────
+
+class SessionRunner:
+    """把同一条会话线上的消息排队、合并、串行交给 agent。
+
+    _pending 攒消息，_loop 在静默窗口结束后一次性取走——这样群里连发三句
+    只会跑一轮。不同 SessionRunner 之间互不影响，并发上限由外部信号量控制。
+    """
+
+    def __init__(self, bot, session_key, target, target_id):
+        self.bot = bot
+        self.session_key = session_key
+        self.target = target
+        self.target_id = target_id
+        self._pending = []
+        self._task = None
+
+    def submit(self, text, sender_name=""):
+        item = {"text": text, "sender": sender_name}
+        self._pending.append(item)
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._loop())
+
+    async def _loop(self):
+        while self._pending:
+            # 静默窗口：等连发的后续消息到齐再一起处理
+            await asyncio.sleep(QQ_DEBOUNCE_SECONDS)
+            batch, self._pending = self._pending[:], []
+            if not batch:
+                continue
+            try:
+                async with self.bot.sem:
+                    await asyncio.to_thread(self._run_turn, batch)
+            except Exception:
+                log.exception("处理 %s 的会话时出错", self.session_key)
+
+    def _run_turn(self, batch):
+        """在 worker 线程里跑一轮（run_agent_stream 是同步生成器）。"""
+        text = "\n".join(x["text"] for x in batch if x["text"]).strip()
+        if not text:
+            return
+
+        history = load_history(QQ_AGENT_ID, self.session_key)
+        if not history or history[0].get("role") != "system":
+            _ensure_system_prompt(self.session_key)
+            history = load_history(QQ_AGENT_ID, self.session_key)
+
+        # 工具层靠线程本地变量知道「此刻在为哪个会话服务」，
+        # send_qq_message 不带参数时就发回这里
+        qq_api.bind_context(self.session_key, self.target, self.target_id)
+        sent_by_tool = False
+        reply_parts, images = [], []
+
+        try:
+            for ev in run_agent_stream(text, history, agent_id=QQ_AGENT_ID):
+                etype = ev.get("type")
+                # 先落盘再处理（与 main.py 的契约一致）
+                if etype in SESSION_EVENTS:
+                    try:
+                        save_history(history, QQ_AGENT_ID, self.session_key)
+                    except Exception:
+                        log.exception("落盘失败 %s", self.session_key)
+                if etype == "assistant":
+                    reply_parts.append(ev.get("content", ""))
+                elif etype == "tool_result":
+                    if ev.get("name") == "send_qq_message":
+                        sent_by_tool = True
+                    elif ev.get("name") == "generate_image":
+                        images.extend(
+                            _IMAGE_PATH_RE.findall(str(ev.get("result") or "")))
+        except Exception:
+            log.exception("agent 循环异常 %s", self.session_key)
+            reply_parts.append("（这边出了点问题，稍后再试）")
+        finally:
+            qq_api.clear_context()
+            try:
+                save_history(history, QQ_AGENT_ID, self.session_key)
+            except Exception:
+                log.exception("收尾落盘失败 %s", self.session_key)
+
+        self._deliver(sent_by_tool, "".join(reply_parts), images)
+
+    def _deliver(self, sent_by_tool, reply, images):
+        """把结果发回 QQ。图片走 ComfyUI 的 /view 地址。"""
+        send_text = (qq_api.send_group if self.target == "group"
+                     else qq_api.send_private)
+
+        if not sent_by_tool and reply.strip():
+            try:
+                send_text(self.target_id, reply)
+            except Exception:
+                log.exception("回发文字失败 %s", self.session_key)
+
+        for name in images:
+            url = COMFYUI_URL.rstrip("/") + "/view?filename=" + quote(name)
+            try:
+                qq_api.send_image(self.target, self.target_id, url)
+            except Exception:
+                log.exception("回发图片失败 %s", self.session_key)
+
+
+# ─── 适配层主体 ──────────────────────────────────────
+
+class QQBot:
+    def __init__(self):
+        self.runners = {}
+        self.sem = None
+
+    def _runner_for(self, session_key, target, target_id):
+        runner = self.runners.get(session_key)
+        if runner is None:
+            runner = SessionRunner(self, session_key, target, target_id)
+            self.runners[session_key] = runner
+        return runner
+
+    def _dispatch(self, raw):
+        """处理一条 WS 事件。只认消息事件，其余（心跳、通知）一律忽略。"""
+        try:
+            ev = json.loads(raw)
+        except (ValueError, TypeError):
+            return
+        if not isinstance(ev, dict) or ev.get("post_type") != "message":
+            return
+
+        # 自己发的消息也会被上报（reportSelfMessage），要跳过，否则会自问自答
+        self_id = str(ev.get("self_id", ""))
+        if self_id and str(ev.get("user_id", "")) == self_id:
+            return
+
+        mtype = ev.get("message_type")
+        if mtype == "group":
+            target, target_id = "group", str(ev.get("group_id", ""))
+        elif mtype == "private":
+            target, target_id = "private", str(ev.get("user_id", ""))
+        else:
+            return
+        if not target_id or target_id == "0":
+            return
+
+        text, at_me = _parse_segments(ev)
+        ok, reason = _should_reply(ev, target, target_id, text, at_me)
+        if not ok:
+            log.debug("跳过 %s %s：%s", target, target_id, reason)
+            return
+
+        sender = ((ev.get("sender") or {}).get("card")
+                  or (ev.get("sender") or {}).get("nickname") or "")
+        session_key = _session_key(target, target_id)
+
+        # 群里要带上说话人，否则模型不知道是谁在问；私聊不用
+        if target == "group" and sender:
+            text = sender + "：" + text
+
+        log.info("← %s %s（%s）: %s",
+                 target, target_id, reason, text[:60].replace("\n", " "))
+        self._runner_for(session_key, target, target_id).submit(text, sender)
+
+    async def _probe(self):
+        """启动时探一下协议端在不在，不在就只警告、照常去连 WS。"""
+        try:
+            uid, nick = await asyncio.to_thread(qq_api.check_alive)
+            log.info("协议端在线：%s（%s）", nick, uid)
+        except Exception as e:
+            log.warning("协议端探活失败：%s", e)
+
+    async def run(self):
+        self.sem = asyncio.Semaphore(QQ_MAX_CONCURRENCY)
+        log.info("QQ 接入启动：agent=%s，事件源=%s", QQ_AGENT_ID, QQ_WS_URL)
+        await self._probe()
+
+        kwargs = {}
+        if QQ_TOKEN:
+            kwargs["additional_headers"] = {"Authorization": "Bearer " + QQ_TOKEN}
+
+        # connect 作为异步迭代器使用时自带断线重连（指数退避），
+        # 所以这里不需要自己写 while + sleep 的重连循环
+        async for ws in ws_connect(QQ_WS_URL, **kwargs):
+            log.info("已连接 %s", QQ_WS_URL)
+            try:
+                async for raw in ws:
+                    self._dispatch(raw)
+            except Exception as e:
+                log.warning("连接断开：%s，准备重连", e)
+
+
+def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    if not QQ_AGENT_ID:
+        log.error("QQ_AGENT_ID 为空，先配好 .env 再启动")
+        return
+    try:
+        asyncio.run(QQBot().run())
+    except KeyboardInterrupt:
+        log.info("已停止")
+
+
+if __name__ == "__main__":
+    main()

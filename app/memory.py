@@ -45,7 +45,7 @@ def _atomic_replace(src, dst, attempts=5, delay=0.05):
             time.sleep(delay)
 
 
-def save_history(history, agent_id=None):
+def save_history(history, agent_id=None, session_key=None):
     """原子保存某个 agent 的会话到它的 JSONL 文件。
 
     先写同目录临时文件 -> flush + fsync -> os.replace 原子替换。
@@ -54,8 +54,10 @@ def save_history(history, agent_id=None):
     2. 多端（手机/电脑）同时刷新 -> 读者读到中间态。
 
     agent_id 决定写哪个 agent 的会话文件（不传用默认 agent）。
+    session_key 用于「一个 agent 下挂多条互不相干的会话线」的场景（QQ 接入
+    时每个私聊用户 / 每个群各一条），不传就是该 agent 的主会话。
     """
-    path = _agent_session_file(agent_id)
+    path = _agent_session_file(agent_id, session_key)
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
@@ -69,13 +71,14 @@ def save_history(history, agent_id=None):
         _atomic_replace(tmp_path, path)
 
 
-def load_history(agent_id=None):
+def load_history(agent_id=None, session_key=None):
     """从某个 agent 的 JSONL 文件加载会话。
 
     跳过空行与损坏行：单行坏数据不应该让整段历史读不出来
     （原子写之后正常情况下不会出现，这里是防御性兜底）。
+    session_key 与 save_history 同义。
     """
-    path = _agent_session_file(agent_id)
+    path = _agent_session_file(agent_id, session_key)
     if not os.path.exists(path):
         return []
     history = []

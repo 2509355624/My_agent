@@ -78,9 +78,40 @@ def agent_dir(agent_id):
     return os.path.join(AGENTS_DIR, aid)
 
 
-def session_file(agent_id):
-    """该 agent 的会话文件路径（不保证存在，写入时会自动建目录）。"""
+# 子会话 key 的字符白名单：字母数字开头，后跟字母数字 / 下划线 / 连字符。
+# 不含路径分隔符，也不含点（挡掉 ".."），所以拼进路径不会逃逸。
+_SESSION_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+def safe_session_key(key):
+    """校验子会话 key；非法返回 None。
+
+    用于 QQ 这类「一个 agent 下挂多条独立会话线」的场景（每个私聊用户 /
+    每个群各一条），key 会被拼进文件名，所以做白名单校验。字符集本身已经
+    排除了路径分隔符和点，拼出来不可能逃出 sessions/ 目录，无需再做
+    realpath —— agent_id 那一层的穿越防线在 safe_agent_id 里。
+    """
+    if not isinstance(key, str):
+        return None
+    k = key.strip()
+    if not _SESSION_KEY_RE.match(k):
+        return None
+    return k
+
+
+def session_file(agent_id, key=None):
+    """该 agent 的会话文件路径（不保证存在，写入时会自动建目录）。
+
+    key 为 None 时是 agent 的主会话（session.jsonl），网页端用的就是这条。
+    传 key 时落到 sessions/<key>.jsonl，供一个 agent 承载多条互不相干的
+    会话线使用（QQ 适配层按「私聊用户 / 群」分线）。key 非法则退回主会话
+    —— 存不下来比抛异常打断一轮对话更糟。
+    """
     aid = safe_agent_id(agent_id) or DEFAULT_AGENT_ID
+    if key:
+        safe = safe_session_key(key)
+        if safe is not None:
+            return os.path.join(AGENTS_DIR, aid, "sessions", safe + ".jsonl")
     return os.path.join(AGENTS_DIR, aid, "session.jsonl")
 
 

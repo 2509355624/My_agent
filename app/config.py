@@ -117,3 +117,51 @@ VECTOR_STORE_DIR = os.path.join(BASE_DIR, "vector_store", "chroma")
 # 不再有「全局单会话文件」这种东西。
 AGENTS_DIR = os.path.join(BASE_DIR, "agents")
 DEFAULT_AGENT_ID = os.getenv("DEFAULT_AGENT_ID", "main")
+
+# ─── QQ 接入（NapCat / OneBot 11）─────────────────────
+# 适配层是独立进程（app/qq_bot.py），本段配置只在它里面用到；网页端进程
+# 仅用到 QQ_ENABLE（决定是否注册 send_qq_message 工具）。
+def _env_bool(name, default=False):
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return val.strip().lower() not in ("0", "false", "no", "")
+
+
+def _env_list(name):
+    """逗号分隔的字符串列表，去空项。"""
+    raw = os.getenv(name, "")
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+QQ_ENABLE = _env_bool("QQ_ENABLE", False)
+
+# NapCat 协议端地址：WS 收事件，HTTP 发消息（WebUI 里要分别启用这两个）
+QQ_WS_URL = os.getenv("QQ_WS_URL", "ws://127.0.0.1:3001")
+QQ_HTTP_URL = os.getenv("QQ_HTTP_URL", "http://127.0.0.1:3000").rstrip("/")
+# OneBot 访问令牌（NapCat 网络配置里设的那个）。空表示不鉴权，仅限本机使用
+QQ_TOKEN = os.getenv("QQ_TOKEN", "")
+
+# 用哪个 agent 的人设与工具白名单
+QQ_AGENT_ID = os.getenv("QQ_AGENT_ID", "qq")
+
+# 触发规则
+QQ_PRIVATE_ENABLE = _env_bool("QQ_PRIVATE_ENABLE", True)   # 是否响应私聊
+QQ_GROUP_AT_ONLY = _env_bool("QQ_GROUP_AT_ONLY", True)     # 群里必须 @ 才回
+QQ_GROUP_KEYWORDS = _env_list("QQ_GROUP_KEYWORDS")         # 群里命中即回（免 @）
+
+# 名单：留空表示不限。黑名单优先于白名单
+QQ_WHITELIST_GROUPS = _env_list("QQ_WHITELIST_GROUPS")
+QQ_WHITELIST_USERS = _env_list("QQ_WHITELIST_USERS")
+QQ_BLACKLIST_USERS = _env_list("QQ_BLACKLIST_USERS")
+
+# 并发：同一条会话线永远串行，这里是跨会话的并行上限。
+# agent 一轮可能跑几十秒（生图更久），开太大没什么收益，还容易顶满 LLM 限流
+QQ_MAX_CONCURRENCY = int(os.getenv("QQ_MAX_CONCURRENCY", "2"))
+
+# 单条 QQ 消息的字数上限，超出按段落切分成多条发送
+QQ_REPLY_MAX_CHARS = int(os.getenv("QQ_REPLY_MAX_CHARS", "700"))
+
+# 每轮结束后的静默窗口，把这段时间内到达的同一会话消息合并成一次处理
+# （群里连发几句时，避免逐句各跑一轮 LLM）
+QQ_DEBOUNCE_SECONDS = float(os.getenv("QQ_DEBOUNCE_SECONDS", "1.5"))

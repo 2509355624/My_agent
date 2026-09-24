@@ -51,6 +51,13 @@ if ENABLE_IMAGE_GEN:
     register_tool(**_cw_info)
     register_tool(**_cw_update)
 
+# QQ 主动推送工具：只有开了 QQ 接入才注册。没配 QQ 的机器不该让模型看见
+# 一个必然失败的工具（与 ENABLE_IMAGE_GEN 同一取舍）
+from app.config import QQ_ENABLE
+if QQ_ENABLE:
+    from app.tools.normal.send_qq_message import tool as _send_qq_tool
+    register_tool(**_send_qq_tool)
+
 from app.tools.normal.list_skills import tool as _list_skills_tool
 register_tool(**_list_skills_tool)
 
