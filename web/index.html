@@ -5,6 +5,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>个人 Agent</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%237c5cff'/></svg>">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -1299,6 +1300,7 @@
       <span class="model-badge" id="modelBadge">加载中...</span>
     </div>
     <div class="header-actions">
+      <button class="btn" onclick="window.open('/admin','_blank')" title="Agent 管理：在线编辑人设与默认模型（新标签打开）">🛠 管理</button>
       <button class="btn toggle-read" id="readModeBtn" onclick="toggleReadMode()">📖 阅读</button>
       <button class="btn danger" onclick="clearChat()">清空会话</button>
     </div>
