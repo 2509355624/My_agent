@@ -121,7 +121,7 @@ class TrimHistoryTest(unittest.TestCase):
         # _LAST_COMPACT_TOKENS 是按 agent 记的字典，压缩一次就被改写；每例清空
         for target, value in (
             ("_LAST_COMPACT_TOKENS", {}),
-            ("_summarize_old_turns", lambda msgs: "旧内容摘要"),
+            ("_summarize_old_turns", lambda msgs, **kw: "旧内容摘要"),
         ):
             p = mock.patch.object(memory, target, value)
             p.start()
@@ -209,7 +209,7 @@ class CompactKeepDegradeTest(unittest.TestCase):
 
     def setUp(self):
         p = mock.patch.object(memory, "_summarize_old_turns",
-                              lambda msgs: "旧内容摘要")
+                              lambda msgs, **kw: "旧内容摘要")
         p.start()
         self.addCleanup(p.stop)
 
@@ -246,7 +246,7 @@ class CompactKeepDegradeTest(unittest.TestCase):
     def test_summary_covers_the_dropped_turns(self):
         seen = []
         with mock.patch.object(memory, "_summarize_old_turns",
-                               lambda msgs: seen.append(msgs) or "摘要"):
+                               lambda msgs, **kw: seen.append(msgs) or "摘要"):
             h = self._fat_history(6, 4000)
             memory.trim_history(h, usage={"total_tokens": 40_000,
                                           "hit_rate": 0.0}, budget=12_000)
@@ -278,6 +278,127 @@ class SplitAndDumpTest(unittest.TestCase):
         msgs = [{"role": "tool_result", "tool_name": "read_document",
                  "content": "x" * 5000}]
         self.assertLess(len(memory._dump_messages(msgs)), 5000)
+
+
+class SummaryModelPassthroughTest(unittest.TestCase):
+    """摘要调用必须带上**本轮生效**的 provider/model。
+
+    摘要是后台的隐形调用：漏传时 get_effective_config 会回退到 .env 的
+    全局默认，于是同一轮里主对话用 agent 配的模型、压缩却打另一家的额度。
+    实测症状：qq agent 已切到 deepseek，一触发压缩就报火山的额度错误，
+    看起来像"有些群没切过来"，其实是压缩这条支线从来不读 agent 配置。
+    """
+
+    BUDGET = 12_000
+
+    def setUp(self):
+        # 压缩水位按 agent 记，跨用例互相污染；清空更干净
+        p = mock.patch.object(memory, "_LAST_COMPACT_TOKENS", {})
+        p.start()
+        self.addCleanup(p.stop)
+
+    @staticmethod
+    def _fat_history(turns=6, chars=4000):
+        """每轮约 4800 token，预算 12000 装不下最近 3 轮 → 必然触发摘要。"""
+        h = [_msg("system", "sys")]
+        for i in range(turns):
+            h.append(_msg("user", "u%d" % i + "字" * chars))
+            h.append(_msg("assistant", "a%d" % i + "字" * chars))
+        return h
+
+    def _trim(self, **kw):
+        return memory.trim_history(
+            self._fat_history(),
+            usage={"total_tokens": 40_000, "hit_rate": 0.0},
+            budget=self.BUDGET, **kw)
+
+    def test_trim_history_forwards_provider_and_model(self):
+        seen = {}
+
+        def fake(msgs, provider=None, model=None):
+            seen["provider"], seen["model"] = provider, model
+            return "摘要"
+
+        with mock.patch.object(memory, "_summarize_old_turns", fake):
+            self._trim(provider="deepseek", model="deepseek-flash")
+
+        self.assertEqual(seen, {"provider": "deepseek",
+                                "model": "deepseek-flash"})
+
+    def test_call_llm_is_invoked_with_them(self):
+        """端到端落到 call_llm 的关键字参数——这一层漏了，上一层就白传。"""
+        seen = {}
+
+        def fake_call_llm(messages, timeout=600, provider=None, model=None):
+            seen["provider"], seen["model"] = provider, model
+            return "摘要"
+
+        with mock.patch("app.llm.call_llm", fake_call_llm):
+            memory._summarize_old_turns([_msg("user", "旧")],
+                                        provider="deepseek",
+                                        model="deepseek-flash")
+
+        self.assertEqual(seen, {"provider": "deepseek",
+                                "model": "deepseek-flash"})
+
+    def test_omitting_them_keeps_old_behaviour(self):
+        """老调用点不传时行为不变：None 透传，由 llm 层回退全局默认。"""
+        seen = {}
+
+        def fake(msgs, provider=None, model=None):
+            seen["provider"], seen["model"] = provider, model
+            return "摘要"
+
+        with mock.patch.object(memory, "_summarize_old_turns", fake):
+            self._trim()
+
+        self.assertEqual(seen, {"provider": None, "model": None})
+
+
+class SummaryFailureDegradeTest(unittest.TestCase):
+    """摘要失败降级为「本轮不压缩」，绝不把整轮对话一起带走。"""
+
+    BUDGET = 12_000
+
+    def setUp(self):
+        p = mock.patch.object(memory, "_LAST_COMPACT_TOKENS", {})
+        p.start()
+        self.addCleanup(p.stop)
+
+    @staticmethod
+    def _fat_history():
+        h = [_msg("system", "sys")]
+        for i in range(6):
+            h.append(_msg("user", "u%d" % i + "字" * 4000))
+            h.append(_msg("assistant", "a%d" % i + "字" * 4000))
+        return h
+
+    def test_failure_returns_history_untouched(self):
+        h = self._fat_history()
+
+        def boom(msgs, **kw):
+            raise RuntimeError("LLM 请求失败 HTTP 429 | 额度已用尽")
+
+        with mock.patch.object(memory, "_summarize_old_turns", boom):
+            out = memory.trim_history(h,
+                                      usage={"total_tokens": 40_000,
+                                             "hit_rate": 0.0},
+                                      budget=self.BUDGET, provider="deepseek")
+
+        self.assertIs(out, h)          # 原样交回，调用方照常往下走
+
+    def test_failure_does_not_propagate(self):
+        def boom(msgs, **kw):
+            raise ConnectionError("网络断了")
+
+        with mock.patch.object(memory, "_summarize_old_turns", boom):
+            try:
+                memory.trim_history(self._fat_history(),
+                                    usage={"total_tokens": 40_000,
+                                           "hit_rate": 0.0},
+                                    budget=self.BUDGET, provider="deepseek")
+            except Exception as e:
+                self.fail("摘要失败不该抛出，实际抛了 %r" % (e,))
 
 
 if __name__ == "__main__":

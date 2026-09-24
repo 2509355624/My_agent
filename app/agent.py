@@ -367,8 +367,12 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
 
         try:
             # 裁剪 + 转换为 LLM 格式（tool_result -> user）
+            # provider/model 必须显式传：摘要是后台的隐形调用，不传会回退到
+            # .env 的全局默认，于是主对话用 agent 配的模型、压缩却打另一家的
+            # 额度（实测症状：agent 切到 deepseek 后压缩仍报火山的额度错误）。
             trimmed = trim_history(history, agent_id, usage=last_usage,
-                                   budget=context_budget)
+                                   budget=context_budget,
+                                   provider=provider, model=model)
             llm_history = _history_for_llm(trimmed)
             # 带图对话（仅当本轮模型有视觉）：第 1 轮把用户消息升级成多模态，
             # 之后轮次不再带图（图片本体始终不在 history 里，历史中只有文本）

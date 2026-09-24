@@ -201,11 +201,16 @@ def _split_turns(messages):
     return turns
 
 
-def _summarize_old_turns(old_msgs):
-    """把旧交错义消息（不含 system）交给 LLM 生成一段摘要。
+def _summarize_old_turns(old_msgs, provider=None, model=None):
+    """把旧交互消息（不含 system）交给 LLM 生成一段摘要。
 
     用独立一次 LLM 调用，把整段旧历史压缩成一句 / 若干句要点，
     替换为单条工具结果式消息，从而建立新的稳定前缀。
+
+    provider/model 必须由调用方传本轮**已落定**的那一份。摘要是后台的
+    "隐形"调用，不传就会回退 .env 的全局默认，于是同一轮对话里主流程用
+    agent 配的模型、压缩却打另一家的额度——实测症状是 agent 早已切到
+    deepseek，一压缩就报火山的额度错误。
     """
     from app.llm import call_llm
 
@@ -224,7 +229,7 @@ def _summarize_old_turns(old_msgs):
         "content": "以下是旧对话记录：\n\n" + _dump_messages(old_msgs)
     }]
 
-    summary = call_llm(payload)
+    summary = call_llm(payload, provider=provider, model=model)
     summary = summary.strip()
     if not summary:
         summary = "（旧对话无需要保留的长期信息）"
@@ -246,7 +251,8 @@ def _dump_messages(msgs):
     return "\n".join(lines)
 
 
-def trim_history(history, agent_id=None, usage=None, budget=None):
+def trim_history(history, agent_id=None, usage=None, budget=None,
+                 provider=None, model=None):
     """
     缓存感知的上下文压缩。
 
@@ -263,6 +269,8 @@ def trim_history(history, agent_id=None, usage=None, budget=None):
       则回退到「当前线程最近一次」，兼容旧调用点与测试。**agent 循环应当显式
       传**——QQ 场景下线程会被不同会话复用，显式传才读不到别人的数。
     budget: 该 agent 的 token 预算；不传用全局 CONTEXT_BUDGET。
+    provider/model: 摘要调用要用的模型。**agent 循环必须传本轮已落定的
+      那一份**，否则摘要会回退到全局默认（见 _summarize_old_turns）。
     agent_id 只用于隔离压缩冷却水位（每个 agent 各记一份）。
     """
     key = agent_id or "_default"
@@ -296,13 +304,14 @@ def trim_history(history, agent_id=None, usage=None, budget=None):
 
     if should:
         _LAST_COMPACT_TOKENS[key] = total_tokens
-        return _compact(history, system_msgs, other_msgs, budget)
+        return _compact(history, system_msgs, other_msgs, budget,
+                        provider=provider, model=model)
 
     # 默认：不压缩。命中率越高越不该动（每 token 都是命中价）
     return history
 
 
-def _compact(history, system_msgs, other_msgs, budget):
+def _compact(history, system_msgs, other_msgs, budget, provider=None, model=None):
     """执行整段摘要替换：保留最近若干轮完整，旧区交给 LLM 一次性摘要。
 
     **保留几轮不是固定的**：先估一次体积，若「摘要 + 最近 FULL_RECENT_TURNS
@@ -311,6 +320,10 @@ def _compact(history, system_msgs, other_msgs, budget):
 
     没有这一步，预算在「最近几轮自己就很大」时形同虚设——摘要省下来的空间
     会被原样留下的那几轮吃回去，于是每轮都超支、每轮都要摘要。
+
+    摘要失败一律降级为「本轮不压缩」：它是内部优化步骤，不该把整轮对话
+    一起带走（额度、网络、服务端都可能抽风）。代价是这轮按原样多花些
+    token，但用户拿得到回复。
     """
     turns = _split_turns(other_msgs)
     if len(turns) <= FULL_RECENT_TURNS:
@@ -338,7 +351,13 @@ def _compact(history, system_msgs, other_msgs, budget):
     for t in old_turns:
         old_msgs.extend(t)
 
-    summary = _summarize_old_turns(old_msgs)
+    try:
+        summary = _summarize_old_turns(old_msgs, provider=provider, model=model)
+    except Exception as e:
+        # 降级：不压缩，原样把历史交回去。下一轮若仍超预算会再试一次
+        # （强制压缩不受冷却水位限制），所以这里不必重试或补压。
+        print("[compact] 摘要失败，本轮跳过压缩：%s: %s" % (type(e).__name__, e))
+        return history
 
     # 拼装：system + 摘要消息 + 最近几轮 + 状态栏（由 agent 运行时追加）
     result = list(system_msgs)
