@@ -46,7 +46,8 @@ from app.agent_prompt import build_stable_prompt
 from app.config import (
     BASE_DIR, COMFYUI_URL, QQ_AGENT_ID, QQ_BLACKLIST_USERS,
     QQ_DEBOUNCE_SECONDS, QQ_GROUP_AT_ONLY, QQ_GROUP_KEYWORDS,
-    QQ_MAX_CONCURRENCY, QQ_PRIVATE_ENABLE, QQ_TOKEN, QQ_WHITELIST_GROUPS,
+    QQ_MAX_CONCURRENCY, QQ_PENDING_MAX_CHARS, QQ_PENDING_MAX_ITEMS,
+    QQ_PRIVATE_ENABLE, QQ_TOKEN, QQ_WHITELIST_GROUPS,
     QQ_WHITELIST_USERS, QQ_WS_URL,
 )
 from app.memory import load_history, save_history
@@ -169,13 +170,50 @@ def _should_reply(ev, target, target_id, text, at_me):
     return False, "未 @ 且未命中关键词"
 
 
+# ─── 一批消息的合并 ──────────────────────────────────
+
+def _merge_batch(batch, max_items=None, max_chars=None):
+    """把攒下来的一批消息拼成一条文本，并施加两道闸。
+
+    静默窗口只负责「等连发到齐」，它自己不限制攒下多少：群里被刷屏时
+    _pending 会一直涨，直接 join 出来的那一条会长到离谱，一次全灌进模型
+    （既撑爆上下文预算，也把真正有用的近期内容冲淡）。所以这里只取最近的：
+
+    - 条数上限：超过就只保留最后 max_items 条；
+    - 字数上限：从最新往前装，装不下就停，更旧的丢掉。
+
+    **最新的那条永远保留**，哪怕它自己就超过字数上限——否则会把用户刚说
+    的话整个吞掉，那比超长更糟。两个上限 <=0 表示该项不限制。
+    """
+    if max_items is None:
+        max_items = QQ_PENDING_MAX_ITEMS
+    if max_chars is None:
+        max_chars = QQ_PENDING_MAX_CHARS
+
+    items = [x for x in batch if x.get("text")]
+    if max_items > 0 and len(items) > max_items:
+        log.info("待处理 %d 条，只取最近的 %d 条", len(items), max_items)
+        items = items[-max_items:]
+
+    lines, total = [], 0
+    for it in reversed(items):
+        t = it["text"]
+        if lines and max_chars > 0 and total + len(t) > max_chars:
+            break
+        lines.append(t)
+        total += len(t)
+    lines.reverse()
+    return "\n".join(lines).strip()
+
+
 # ─── 一条会话线的串行执行器 ──────────────────────────
 
 class SessionRunner:
     """把同一条会话线上的消息排队、合并、串行交给 agent。
 
     _pending 攒消息，_loop 在静默窗口结束后一次性取走——这样群里连发三句
-    只会跑一轮。不同 SessionRunner 之间互不影响，并发上限由外部信号量控制。
+    只会跑一轮。取走时经 _merge_batch 施加条数与字数上限，防刷屏灌爆。
+    不同 SessionRunner 之间互不影响，并发上限由外部信号量控制。
     """
 
     def __init__(self, bot, session_key, target, target_id):
@@ -207,7 +245,7 @@ class SessionRunner:
 
     def _run_turn(self, batch):
         """在 worker 线程里跑一轮（run_agent_stream 是同步生成器）。"""
-        text = "\n".join(x["text"] for x in batch if x["text"]).strip()
+        text = _merge_batch(batch)
         if not text:
             return
 

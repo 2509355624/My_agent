@@ -6,7 +6,7 @@ Agent Loop
 import json
 import re
 from app.cancel import is_cancelled
-from app.llm import call_llm_stream
+from app.llm import call_llm_stream, current_usage
 from app import agents as agent_store
 from app.memory import trim_history
 from app.tools import execute_tool
@@ -246,10 +246,13 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
     # 都自动吃到这份配置——它们都只调 run_agent_stream，不必各写一遍。
     # 都没配则维持原样（传 None 下去，由 llm 层回退到 .env 的全局默认），
     # 所以老 agent.json 没这两个字段时行为与从前完全一致。
+    _acfg = agent_store.agent_config(agent_id)
     if not provider and not model:
-        _acfg = agent_store.agent_config(agent_id)
         provider = _acfg["provider"] or None
         model = _acfg["model"] or None
+    # 上下文预算同理，0 → 传 None，由 memory 回退到 .env 的 CONTEXT_BUDGET。
+    # 这样「QQ 群聊省钱、网页端深度任务放开」可以按 agent 各配一个数。
+    context_budget = _acfg["context_budget"] or None
 
     history.append({"role": "user", "content": user_input})
     yield {"type": "user", "content": user_input}
@@ -264,6 +267,11 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
 
     turn_count = 0
     aborted = False
+    # 上一轮 LLM 调用的真实用量，供这一轮判断该不该压缩。
+    # 初值给空 dict 而不是 None：None 会让 memory 回退去读「当前线程最近一次」，
+    # 而 QQ 场景下线程是跨会话复用的，读到的可能是别的群刚留下的数。空 dict
+    # 表示「还不知道」，于是第一轮不压缩——首轮本来也没什么可压的。
+    last_usage = {}
     while turn_count < MAX_TURNS:
         # 检查点①：轮次边界。拦住"工具连环调用"继续往下走。
         if is_cancelled(cancel_event):
@@ -273,7 +281,8 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
 
         try:
             # 裁剪 + 转换为 LLM 格式（tool_result -> user）
-            trimmed = trim_history(history, agent_id)
+            trimmed = trim_history(history, agent_id, usage=last_usage,
+                                   budget=context_budget)
             llm_history = _history_for_llm(trimmed)
             # 带图对话：第 1 轮把本轮用户消息升级成多模态，之后轮次不再带图
             # （图片本体始终不在 history 里，历史中只有占位文本）
@@ -294,6 +303,8 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
                 else:
                     reply_parts.append(text)
             reply = "".join(reply_parts)
+            # 记下本轮真实用量，下一轮拿它判断该不该压缩
+            last_usage = current_usage()
 
             history.append({"role": "assistant", "content": reply})
 

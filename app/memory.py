@@ -2,21 +2,29 @@
 会话持久化 + 上下文管理
 
 上下文压缩策略（缓存感知 + 一次性整段 LLM 摘要）：
-- 原则 1：命中率高时绝不压缩。DeepSeek 1M 上下文，命中 token 近乎免费；
-  让上下文自然增长，保持热前缀不被掐断。
-- 原则 2：只在"占用率高 且 命中率低"时，把旧区一次性交给 LLM 生成摘要，
-  替换为单条摘要消息，建立新的稳定热前缀。
+- 原则 1：命中率高时**尽量**不压缩。命中的 token 只有未命中的十分之一价，
+  让上下文自然增长、保持热前缀不被掐断，通常比反复摘要更划算。
+- 原则 2：命中率低时提前压——到预算的四分之三且命中率差，就把旧区一次性
+  交给 LLM 生成摘要，替换为单条摘要消息，建立新的稳定热前缀。
 - 原则 3：不做逐轮逐条截断——那会每轮掐断一次热前缀（cache miss 元凶）。
+- 原则 4：**预算是硬闸门**。原则 1 的「别压缩」不能没有上限，否则上下文
+  一路涨到几万 token，每轮都在为这一长串付钱。所以一到预算就无条件压，
+  无论命中率多高。这是「最坏情况花多少钱」的唯一保证。
+
+水位按 **token 绝对量**判断（对比 CONTEXT_BUDGET），不再按百分比算——
+预算本身是可配的，用绝对量能让「设 3.2 万就真的是 3.2 万」一目了然。
 
 基于天枢 cache-preserving 策略思想简化实现。
 """
 
 import json
 import os
+import re
 import threading
 import time
 from app.agents import session_file as _agent_session_file
-from app.llm import LAST_USAGE, CONTEXT_LIMIT
+from app.config import CONTEXT_BUDGET
+from app.llm import current_usage
 
 
 # ─── 持久化 ──────────────────────────────────────────
@@ -96,21 +104,62 @@ def load_history(agent_id=None, session_key=None):
 
 # ─── 上下文压缩 ──────────────────────────────────────
 
-# token 占用率触发点（对应 DeepSeek 1M 上下文）
-WATCH_RATIO = 0.5     # 占用 50% 开始"考虑"（仅记录，不压缩）
-COMPACT_RATIO = 0.80  # 占用 80% 且命中率低 → 触发整段摘要
-REACTIVE_RATIO = 0.90 # 占用 90% → 无论命中率都强制压缩
+# 水位：相对预算的比例。到 WARN_RATIO 且命中率低才提前压；到 100% 无条件压
+WARN_RATIO = 0.75
 
-# 命中率"低"判据：低于此值才认为该压缩（保护热前缀）
+# 命中率"低"判据：低于此值才认为该提前压缩（保护热前缀）
 LOW_HIT_RATE = 0.3
 
 # 完整保留的最近轮次（保证热前缀有稳定"锚点"）
 FULL_RECENT_TURNS = 3
 
-# 压缩冷却：压缩后短时间内不再触发，避免连续摘要浪费。
-# 按 agent 分别记水位——多个 agent 并存时，A 的压缩不该让 B 的冷却误判。
-_LAST_COMPACT_TOKENS = {}  # {agent_id: 上次压缩时的占用 token 数}
-COMPACT_COOLDOWN_TOKENS = 100_000  # 压缩后至少涨 10 万 token 才再次压缩
+# 压缩冷却：压缩后至少再涨这么多（占预算的比例）才考虑下一次，避免连续摘要。
+# 强制压缩不受它限制——接近预算时必须立即压，否则每轮都超支。
+# 水位按 agent 记。注意同一个 agent 挂多条会话线时（QQ 一个群里多个群共用
+# qq 这个 agent）它们共用一份水位，理论上会互相干扰；实际影响很小——压完会
+# 落到很低，涨回 WARN_RATIO 本身就隔了足够多的增量，冷却很少成为瓶颈。
+_LAST_COMPACT_TOKENS = {}  # {agent_id: 上次压缩时的 token 数}
+COMPACT_COOLDOWN_RATIO = 0.2
+
+# 摘要消息自身的 token 开销（提示词要求控制在 200 字内，留足余量）
+_SUMMARY_TOKENS = 800
+
+# 中日韩字符 + 全角标点。用于 estimate_tokens()，见那里的说明。
+_CJK_RE = re.compile(r"[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff"
+                     r"\uf900-\ufaff\uff00-\uffef]")
+
+
+def estimate_tokens(text):
+    """粗估一段文本的 token 数。
+
+    口径取自 DeepSeek 官方文档：1 个中文字符 ≈ 0.6 token，1 个英文字符
+    ≈ 0.3 token。**只用于「压缩之后还超不超预算」这种兜底判断**，真实用量
+    一律以 API 返回的 usage 为准（见 llm.current_usage）。两者不需要对齐，
+    估算偏大一点反而是好事。
+    """
+    if not text:
+        return 0
+    s = str(text)
+    cjk = len(_CJK_RE.findall(s))
+    return int(cjk * 0.6 + (len(s) - cjk) * 0.3)
+
+
+def estimate_messages(msgs):
+    """粗估一段消息列表的 token 数（含每条的角色开销）。"""
+    total = 0
+    for m in msgs or []:
+        if not isinstance(m, dict):
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            total += estimate_tokens(content)
+        elif isinstance(content, list):
+            # 多模态消息（历史里不该出现，防御性处理）
+            for part in content:
+                if isinstance(part, dict):
+                    total += estimate_tokens(part.get("text") or "")
+        total += 4
+    return total
 
 
 def _split_turns(messages):
@@ -173,22 +222,27 @@ def _dump_messages(msgs):
     return "\n".join(lines)
 
 
-def trim_history(history, agent_id=None):
+def trim_history(history, agent_id=None, usage=None, budget=None):
     """
     缓存感知的上下文压缩。
 
     触发逻辑（用最近一次 LLM 调用的真实 token 占用 + 命中率）：
-    1. 占用率 < COMPACT_RATIO：直接原样返回（不压，保住热前缀）。
-    2. 占用率 >= COMPACT_RATIO 且命中率低：触发一次整段摘要替换旧区。
-    3. 占用率 >= REACTIVE_RATIO：无论命中率，强制压缩。
-    4. 压缩冷却期内不重复触发。
+    1. 未到 WARN_RATIO：原样返回（不压，保住热前缀）。
+    2. 到 WARN_RATIO 且命中率低：触发一次整段摘要替换旧区。
+    3. 到预算：无论命中率，强制压缩。这是原则 4 的硬闸门。
+    4. 压缩冷却期内不重复触发（强制压缩不受此限）。
 
     压缩方式：保留最近 FULL_RECENT_TURNS 轮完整，其余旧轮一次性交给
     LLM 生成摘要，替换为单条摘要消息。此后热前缀重建，后续稳定命中。
 
+    usage: 上一次 LLM 调用的用量 dict（llm.current_usage() 的返回值）。不传
+      则回退到「当前线程最近一次」，兼容旧调用点与测试。**agent 循环应当显式
+      传**——QQ 场景下线程会被不同会话复用，显式传才读不到别人的数。
+    budget: 该 agent 的 token 预算；不传用全局 CONTEXT_BUDGET。
     agent_id 只用于隔离压缩冷却水位（每个 agent 各记一份）。
     """
     key = agent_id or "_default"
+    budget = budget or CONTEXT_BUDGET
 
     system_msgs = [m for m in history if m.get("role") == "system"]
     other_msgs = [m for m in history if m.get("role") != "system"]
@@ -196,41 +250,64 @@ def trim_history(history, agent_id=None):
     if not other_msgs:
         return history
 
-    # 用真实 token 占用率决定是否压缩（而不是消息条数/轮次）
-    total_tokens = LAST_USAGE.get("total_tokens", 0)
-    hit_rate = LAST_USAGE.get("hit_rate", 1.0)
-    ratio = total_tokens / CONTEXT_LIMIT if CONTEXT_LIMIT else 0
+    if usage is None:
+        usage = current_usage()
+    total_tokens = usage.get("total_tokens", 0) or 0
+    hit_rate = usage.get("hit_rate", 1.0)
 
     should = False
     forced = False
-    if total_tokens and ratio >= REACTIVE_RATIO:
+    if total_tokens >= budget:
         should = True
         forced = True
-    elif total_tokens and ratio >= COMPACT_RATIO and hit_rate < LOW_HIT_RATE:
+    elif total_tokens >= budget * WARN_RATIO and hit_rate < LOW_HIT_RATE:
         should = True
 
-    # 冷却期防护：非强制场景下，压缩后 token 增量太小则跳过
-    # REACTIVE 强制压缩不受冷却影响——接近真实上限时必须立即压，否则爆上下文
+    # 冷却期防护：非强制场景下，压缩后 token 增量太小则跳过。
+    # 强制压缩不受冷却影响——到预算了必须立即压，否则每轮都超支。
     last_tokens = _LAST_COMPACT_TOKENS.get(key, 0)
-    if should and not forced and total_tokens - last_tokens < COMPACT_COOLDOWN_TOKENS:
+    if (should and not forced
+            and total_tokens - last_tokens < budget * COMPACT_COOLDOWN_RATIO):
         return history
 
     if should:
         _LAST_COMPACT_TOKENS[key] = total_tokens
-        return _compact(history, system_msgs, other_msgs)
+        return _compact(history, system_msgs, other_msgs, budget)
 
-    # 默认：不压缩。命中率越高越不该动（每 token 都是免费命中价）
+    # 默认：不压缩。命中率越高越不该动（每 token 都是命中价）
     return history
 
 
-def _compact(history, system_msgs, other_msgs, force=False):
-    """执行整段摘要替换：保留最近几轮完整，旧区交给 LLM 一次性摘要。"""
+def _compact(history, system_msgs, other_msgs, budget):
+    """执行整段摘要替换：保留最近若干轮完整，旧区交给 LLM 一次性摘要。
+
+    **保留几轮不是固定的**：先估一次体积，若「摘要 + 最近 FULL_RECENT_TURNS
+    轮」仍超预算，就少保留一轮、把更多内容并进摘要，最多降到只剩最近 1 轮。
+    估算放在调 LLM 之前，所以无论降几级都只花一次摘要调用的钱。
+
+    没有这一步，预算在「最近几轮自己就很大」时形同虚设——摘要省下来的空间
+    会被原样留下的那几轮吃回去，于是每轮都超支、每轮都要摘要。
+    """
     turns = _split_turns(other_msgs)
     if len(turns) <= FULL_RECENT_TURNS:
+        # 轮数本来就少：再压就把上下文榨干了，不压。
+        # 这种「单轮自身过大」只能靠入口侧限制输入长度兜住。
         return history
 
-    old_turns = turns[:-FULL_RECENT_TURNS]
-    recent_turns = turns[-FULL_RECENT_TURNS:]
+    base = estimate_messages(system_msgs) + _SUMMARY_TOKENS
+    keep = FULL_RECENT_TURNS
+    while True:
+        size = base + sum(estimate_messages(t) for t in turns[-keep:])
+        if size <= budget or keep <= 1:
+            break
+        keep -= 1
+
+    if size > budget:
+        print("[compact] 摘要后仍需约 %d tokens（预算 %d）：最近一轮自身过大，"
+              "应在入口侧限制单条输入长度" % (size, budget))
+
+    old_turns = turns[:-keep]
+    recent_turns = turns[-keep:]
 
     # 旧轮扁平化为摘要输入
     old_msgs = []

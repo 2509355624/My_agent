@@ -104,6 +104,14 @@ IMAGE_GEN_TIMEOUT = int(os.getenv("IMAGE_GEN_TIMEOUT", "3600"))
 AGENT_PORT = int(os.getenv("AGENT_PORT", "5174"))
 MAX_TURNS = int(os.getenv("MAX_TURNS", "10"))
 
+# 上下文预算：**单次请求允许携带的 prompt token 上限**。
+# 注意它跟模型的物理上下文上限（火山/DeepSeek 是 128K~1M）是两件事——
+# 这里管的是「我愿意为每一轮付多少钱」，不是「模型装不装得下」。超了就
+# 压缩历史（见 app/memory.py）。
+# 折算参考：一个中文字符约 0.6 token，32000 约合 5.3 万汉字、50~60 轮对话。
+# 单个 agent 可在 agent.json 里用 context_budget 覆盖（0 = 用这里的全局值）。
+CONTEXT_BUDGET = int(os.getenv("CONTEXT_BUDGET", "32000"))
+
 # 后台管理接口是否允许非本机访问。默认只允许回环地址——服务监听 0.0.0.0
 # 且没有任何鉴权，一个能改 agent 配置的口子不该顺带暴露到整个局域网。
 # 需要从别的设备打开管理页时，在 .env 里设成 true。
@@ -170,3 +178,10 @@ QQ_REPLY_MAX_CHARS = int(os.getenv("QQ_REPLY_MAX_CHARS", "700"))
 # 每轮结束后的静默窗口，把这段时间内到达的同一会话消息合并成一次处理
 # （群里连发几句时，避免逐句各跑一轮 LLM）
 QQ_DEBOUNCE_SECONDS = float(os.getenv("QQ_DEBOUNCE_SECONDS", "1.5"))
+
+# 排队合并的上限。静默窗口只是「等连发到齐」，本身不限制攒多少——群里被
+# 刷屏时 _pending 会一直涨，合并出来的那一条会长到离谱，一次全灌进模型。
+# 所以合并时设两道闸：条数上限（只取最近的 N 条）与字数上限（从最新往前
+# 累计，装不下就丢掉更旧的）。两个都 <=0 表示不限制（不建议）。
+QQ_PENDING_MAX_ITEMS = int(os.getenv("QQ_PENDING_MAX_ITEMS", "20"))
+QQ_PENDING_MAX_CHARS = int(os.getenv("QQ_PENDING_MAX_CHARS", "2000"))

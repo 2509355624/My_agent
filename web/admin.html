@@ -170,6 +170,20 @@
         <div class="warn hidden" id="novisual"></div>
       </div>
 
+      <div class="card">
+        <h2>上下文预算</h2>
+        <div class="hint">单次请求最多携带多少 prompt token，超过就压缩旧历史。管的是「每轮愿意花多少钱」，
+          不是模型的物理上限——模型能装几十万，不代表你愿意每轮都付这个钱。留空即继承全局。</div>
+        <div class="row">
+          <div class="field">
+            <label>token 预算（留空继承全局）</label>
+            <input id="budget" type="number" min="4000" max="1000000" step="1000"
+                   placeholder="—" spellcheck="false" autocomplete="off">
+          </div>
+        </div>
+        <div class="eff" id="budgetEff"></div>
+      </div>
+
       <div class="actions">
         <button id="save">保存</button>
         <button class="ghost" id="reload">放弃修改</button>
@@ -224,13 +238,23 @@ function snapshot() {
     provider: $('provider').value || '',
     model: $('model').value.trim(),
     prompt: $('prompt').value,
+    budget: $('budget').value.trim(),
   };
 }
 
 function isDirty() {
   if (!snap) return false;
   const s = snapshot();
-  return s.provider !== snap.provider || s.model !== snap.model || s.prompt !== snap.prompt;
+  return s.provider !== snap.provider || s.model !== snap.model
+    || s.prompt !== snap.prompt || s.budget !== snap.budget;
+}
+
+// 输入框留空或填了非数字，一律按 0 提交（= 继承全局），与后端约定一致
+function budgetValue() {
+  const raw = snapshot().budget;
+  if (raw === '') return 0;
+  const n = parseInt(raw, 10);
+  return isNaN(n) ? 0 : n;
 }
 
 function renderList() {
@@ -282,6 +306,31 @@ function renderEffective() {
   }
 }
 
+// 回显「这个预算实际是多少、现在用掉了多少」。
+// 光给一个输入框不够用——改完到底有没有生效是最难查的问题，所以这里始终
+// 把生效值和当前体量算给你看，超没超一眼就知道。
+function renderBudget() {
+  const globalB = detail.global_context_budget || 0;
+  const typed = budgetValue();
+  const eff = typed || globalB;
+  const used = detail.session_tokens || 0;
+  const pct = eff ? Math.round((used / eff) * 100) : 0;
+
+  const box = $('budgetEff');
+  box.textContent = '';
+  const b = document.createElement('b');
+  b.textContent = eff.toLocaleString() + ' tokens';
+  box.append('实际生效：', b, typed ? '（本 agent 单独配置）' : '（继承全局）');
+
+  const u = document.createElement('span');
+  u.textContent = '　当前主会话约 ' + used.toLocaleString() + ' tokens，占 ' + pct + '%';
+  if (pct >= 100) {
+    u.textContent += ' —— 已超预算，下一轮会压缩历史';
+    u.style.color = 'var(--error)';
+  }
+  box.appendChild(u);
+}
+
 function renderMeta() {
   const parts = [];
   const t = detail.tools;
@@ -311,10 +360,13 @@ async function loadDetail() {
   });
   sel.value = detail.provider || '';
   $('model').value = detail.model || '';
+  $('budget').value = detail.context_budget ? String(detail.context_budget) : '';
+  $('budget').placeholder = '全局 ' + (detail.global_context_budget || 0).toLocaleString();
 
   const pid = sel.value || detail.global_provider;
   $('model').placeholder = '默认 ' + (defaultModelOf(pid) || '—');
   renderEffective();
+  renderBudget();
   renderMeta();
 
   snap = snapshot();
@@ -338,21 +390,30 @@ async function save() {
   $('save').disabled = true;
   status('保存中…');
   try {
+    const s = snapshot();
     const data = await api('/api/agent/' + encodeURIComponent(cur), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(snapshot()),
+      body: JSON.stringify({
+        provider: s.provider,
+        model: s.model,
+        prompt: s.prompt,
+        context_budget: budgetValue(),
+      }),
     });
     // 用服务端回读的值回填：它才是真正落盘并已生效的状态
     detail = data;
     $('prompt').value = data.prompt || '';
     $('provider').value = data.provider || '';
     $('model').value = data.model || '';
+    $('budget').value = data.context_budget ? String(data.context_budget) : '';
     renderEffective();
+    renderBudget();
     snap = snapshot();
     renderList();
     status('已保存 · 下次对话即用 ' + labelOf(data.effective_provider)
-           + ' / ' + data.effective_model, 'ok');
+           + ' / ' + data.effective_model
+           + ' · 预算 ' + (data.effective_context_budget || 0).toLocaleString(), 'ok');
   } catch (e) {
     status(e.message, 'err');
   } finally {
@@ -390,6 +451,7 @@ $('provider').addEventListener('change', () => {
 });
 $('model').addEventListener('input', renderEffective);
 $('prompt').addEventListener('input', () => status(''));
+$('budget').addEventListener('input', () => { renderBudget(); status(''); });
 
 document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {

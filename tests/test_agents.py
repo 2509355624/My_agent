@@ -278,6 +278,58 @@ class ModelConfigTest(AgentsTestBase):
         self.assertEqual(item["model"], "m1")
 
 
+class ContextBudgetTest(AgentsTestBase):
+    """agent 级上下文预算：0 = 继承 .env 的 CONTEXT_BUDGET。"""
+
+    def test_defaults_to_inherit(self):
+        self.make_agent("a", {})
+        self.assertEqual(agents.agent_config("a")["context_budget"], 0)
+
+    def test_reads_configured_value(self):
+        self.make_agent("a", {"context_budget": 64000})
+        self.assertEqual(agents.agent_config("a")["context_budget"], 64000)
+
+    def test_string_number_accepted(self):
+        """手改 json 时写成字符串也该认，不该因此悄悄回退成全局值。"""
+        self.make_agent("a", {"context_budget": "64000"})
+        self.assertEqual(agents.agent_config("a")["context_budget"], 64000)
+
+    def test_garbage_falls_back_to_inherit(self):
+        """写错一律归 0（继承全局），而不是抛异常拦住整个 agent 加载。"""
+        for i, bad in enumerate(("", "abc", None, [], {})):
+            aid = "bad%d" % i
+            self.make_agent(aid, {"context_budget": bad})
+            self.assertEqual(agents.agent_config(aid)["context_budget"], 0, bad)
+
+    def test_out_of_range_falls_back_to_inherit(self):
+        """太小会每轮都摘要（反而更贵），太大等于没设——两者都归 0。"""
+        cases = (100, agents.MIN_CONTEXT_BUDGET - 1,
+                 agents.MAX_CONTEXT_BUDGET + 1, 10 ** 9)
+        for i, bad in enumerate(cases):
+            aid = "range%d" % i
+            self.make_agent(aid, {"context_budget": bad})
+            self.assertEqual(agents.agent_config(aid)["context_budget"], 0, bad)
+
+    def test_boundaries_accepted(self):
+        for i, good in enumerate((agents.MIN_CONTEXT_BUDGET,
+                                  agents.MAX_CONTEXT_BUDGET)):
+            aid = "ok%d" % i
+            self.make_agent(aid, {"context_budget": good})
+            self.assertEqual(agents.agent_config(aid)["context_budget"], good)
+
+    def test_legacy_config_unchanged(self):
+        """老 agent.json 没这个字段 → 0，等价于行为不变。"""
+        self.make_agent("a", {"tools": ["read_file"]})
+        cfg = agents.agent_config("a")
+        self.assertEqual(cfg["context_budget"], 0)
+        self.assertEqual(cfg["tools"], ["read_file"])
+
+    def test_list_agents_exposes_budget(self):
+        self.make_agent("a", {"context_budget": 64000})
+        item = [x for x in agents.list_agents() if x["id"] == "a"][0]
+        self.assertEqual(item["context_budget"], 64000)
+
+
 class SaveAgentConfigTest(AgentsTestBase):
     """后台保存 agent.json。"""
 

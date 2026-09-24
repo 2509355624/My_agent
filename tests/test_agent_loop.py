@@ -54,7 +54,7 @@ class AgentLoopTest(unittest.TestCase):
     def setUp(self):
         # 不做上下文压缩、不做真实工具调用、不做真实网络请求
         for target, value in (
-            ("trim_history", lambda h, agent_id=None: h),
+            ("trim_history", lambda h, agent_id=None, **kw: h),
             ("execute_tool", lambda name, args: "工具结果:" + name),
         ):
             p = mock.patch.object(agent, target, value)
@@ -236,7 +236,7 @@ class AgentToolWhitelistTest(unittest.TestCase):
             return "结果:" + name
 
         for target, value in (
-            ("trim_history", lambda h, agent_id=None: h),
+            ("trim_history", lambda h, agent_id=None, **kw: h),
             ("execute_tool", fake_execute),
         ):
             p = mock.patch.object(agent, target, value)
@@ -290,7 +290,7 @@ class AgentEventHistoryContractTest(unittest.TestCase):
     def setUp(self):
         self.history = []
         for target, value in (
-            ("trim_history", lambda h, agent_id=None: h),
+            ("trim_history", lambda h, agent_id=None, **kw: h),
             ("execute_tool", lambda name, args: "工具结果:" + name),
         ):
             p = mock.patch.object(agent, target, value)
@@ -357,7 +357,7 @@ class AgentModelConfigTest(unittest.TestCase):
         os.makedirs(self.root, exist_ok=True)
         for module, attr, value in (
             (agent_store, "AGENTS_DIR", self.root),
-            (agent, "trim_history", lambda h, agent_id=None: h),
+            (agent, "trim_history", lambda h, agent_id=None, **kw: h),
             (agent, "execute_tool", lambda name, args: ""),
         ):
             p = mock.patch.object(module, attr, value)

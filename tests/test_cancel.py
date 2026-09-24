@@ -102,7 +102,7 @@ class CancelRegistryTest(unittest.TestCase):
 class AgentCancelTest(unittest.TestCase):
     def setUp(self):
         for target, value in (
-            ("trim_history", lambda h, agent_id=None: h),
+            ("trim_history", lambda h, agent_id=None, **kw: h),
             ("execute_tool", lambda name, args: "工具结果:" + name),
         ):
             p = mock.patch.object(agent, target, value)

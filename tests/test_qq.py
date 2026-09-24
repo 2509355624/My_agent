@@ -101,6 +101,55 @@ class SplitMessageTest(unittest.TestCase):
 
 # ─── 图片消息段 ─────────────────────────────────────
 
+class MergeBatchTest(unittest.TestCase):
+    """排队攒下的多条消息合并成一条，并施加条数 / 字数上限。
+
+    静默窗口只负责「等连发到齐」，它自己不限制攒多少——群里被刷屏时
+    _pending 会一直涨，直接 join 出来的那一条会长到离谱，一次全灌进模型。
+    """
+
+    @staticmethod
+    def _batch(*texts):
+        return [{"text": t, "sender": ""} for t in texts]
+
+    def test_joins_in_arrival_order(self):
+        out = qq_bot._merge_batch(self._batch("第一句", "第二句"))
+        self.assertEqual(out, "第一句\n第二句")
+
+    def test_skips_empty_texts(self):
+        out = qq_bot._merge_batch(self._batch("有", "", "有"))
+        self.assertEqual(out, "有\n有")
+
+    def test_empty_batch(self):
+        self.assertEqual(qq_bot._merge_batch([]), "")
+
+    def test_item_limit_keeps_newest(self):
+        b = self._batch(*["m%d" % i for i in range(30)])
+        out = qq_bot._merge_batch(b, max_items=3)
+        self.assertEqual(out, "m27\nm28\nm29")
+
+    def test_char_limit_keeps_newest(self):
+        b = self._batch("a" * 100, "b" * 100, "c" * 100)
+        out = qq_bot._merge_batch(b, max_items=0, max_chars=150)
+        self.assertEqual(out, "c" * 100)          # 只装得下最近一条
+
+    def test_char_limit_accumulates_multiple(self):
+        b = self._batch("a" * 60, "b" * 60, "c" * 60)
+        out = qq_bot._merge_batch(b, max_items=0, max_chars=150)
+        self.assertEqual(out, "b" * 60 + "\n" + "c" * 60)
+
+    def test_latest_message_kept_even_if_oversized(self):
+        """最新那条永远保留——否则会把用户刚说的话整个吞掉，比超长更糟。"""
+        b = self._batch("旧" * 10, "新" * 500)
+        out = qq_bot._merge_batch(b, max_items=0, max_chars=100)
+        self.assertEqual(out, "新" * 500)
+
+    def test_zero_limits_mean_no_cap(self):
+        b = self._batch(*["m%d" % i for i in range(30)])
+        out = qq_bot._merge_batch(b, max_items=0, max_chars=0)
+        self.assertEqual(len(out.split("\n")), 30)
+
+
 class ImageSegmentTest(unittest.TestCase):
     def test_http_url_passes_through(self):
         url = "http://127.0.0.1:8188/view?filename=a.png"

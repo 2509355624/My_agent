@@ -110,9 +110,12 @@ class PersistenceTest(unittest.TestCase):
 
 
 class TrimHistoryTest(unittest.TestCase):
-    """用生产口径的阈值做断言（CONTEXT_LIMIT=1M、冷却 10 万 token），
-    这样测试同时起到"阈值文档"的作用。占用率按 1M 上下文换算。
+    """用生产口径的阈值做断言（预算 32000、预警线 75%、冷却 20%），
+    这样测试同时起到「阈值文档」的作用。水位按 token 绝对量比较，
+    不再是「占某个上限的百分比」。
     """
+
+    BUDGET = 32000
 
     def setUp(self):
         # _LAST_COMPACT_TOKENS 是按 agent 记的字典，压缩一次就被改写；每例清空
@@ -124,13 +127,16 @@ class TrimHistoryTest(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
-    def _set_usage(self, total_tokens, hit_rate):
-        p = mock.patch.object(memory, "LAST_USAGE", {
+    def _trim(self, history, total_tokens, hit_rate, budget=None):
+        """显式传用量跑一次判断。
+
+        不依赖 llm 里那份「按线程记」的记录——显式传参才是 agent 循环真正
+        走的路径，测试之间也不会互相影响。
+        """
+        return memory.trim_history(history, usage={
             "total_tokens": total_tokens, "hit_tokens": 0,
             "miss_tokens": 0, "hit_rate": hit_rate,
-        })
-        p.start()
-        self.addCleanup(p.stop)
+        }, budget=budget or self.BUDGET)
 
     @staticmethod
     def _history_with_turns(n):
@@ -140,20 +146,18 @@ class TrimHistoryTest(unittest.TestCase):
             h.append(_msg("assistant", "a%d" % i))
         return h
 
-    def test_below_threshold_not_compacted(self):
-        self._set_usage(100_000, 0.0)  # 占用 10%
+    def test_below_warn_line_not_compacted(self):
         h = self._history_with_turns(6)
-        self.assertIs(memory.trim_history(h), h)
+        self.assertIs(self._trim(h, 10_000, 0.0), h)      # 远低于预警线
 
-    def test_high_hit_rate_at_compact_ratio_not_compacted(self):
-        self._set_usage(850_000, 0.9)  # 占用 85% 但命中率高 → 让热前缀自然增长
+    def test_high_hit_rate_above_warn_line_not_compacted(self):
         h = self._history_with_turns(6)
-        self.assertIs(memory.trim_history(h), h)
+        # 过了预警线（24000）但命中率高 → 让热前缀自然增长更划算
+        self.assertIs(self._trim(h, 26_000, 0.9), h)
 
-    def test_low_hit_rate_triggers_compaction(self):
-        self._set_usage(850_000, 0.1)  # 占用 85% 且命中率低 → 压缩
+    def test_low_hit_rate_above_warn_line_triggers_compaction(self):
         h = self._history_with_turns(6)
-        out = memory.trim_history(h)
+        out = self._trim(h, 26_000, 0.1)                  # 且命中率低 → 压缩
         self.assertIsNot(out, h)
         self.assertEqual(out[0]["role"], "system")
         self.assertEqual(out[1]["tool_name"], "compact_summary")
@@ -161,28 +165,95 @@ class TrimHistoryTest(unittest.TestCase):
         # 最近 FULL_RECENT_TURNS 轮必须完整保留（热前缀锚点）
         self.assertEqual(out[-1]["content"], "a5")
 
-    def test_reactive_ratio_forces_compaction_despite_high_hit(self):
-        self._set_usage(950_000, 1.0)  # 占用 95% → 无论命中率都压缩
+    def test_budget_reached_forces_compaction_despite_high_hit(self):
         h = self._history_with_turns(6)
-        out = memory.trim_history(h)
+        # 到预算就是硬闸门：命中率再高也得压。这是「最坏花多少钱」的唯一保证，
+        # 少了它上下文会一路涨，每轮都在为这一长串付钱。
+        out = self._trim(h, 33_000, 1.0)
         self.assertIsNot(out, h)
         self.assertEqual(out[1]["tool_name"], "compact_summary")
 
-    def test_cooldown_blocks_repeat_compaction(self):
-        self._set_usage(850_000, 0.1)
+    def test_custom_budget_shifts_the_line(self):
         h = self._history_with_turns(6)
-        memory.trim_history(h)                       # 第一次压缩，记录水位
-        self.assertIs(memory.trim_history(h), h)     # 增量 0 < 冷却阈值 → 跳过
+        # 同样是 26K：32K 预算下只到预警区（命中率高就不压），
+        # 换成 16K 预算已经越线，必须压。证明 agent 级预算真的生效。
+        self.assertIs(self._trim(h, 26_000, 0.9), h)
+        self.assertIsNot(self._trim(h, 26_000, 0.9, budget=16_000), h)
+
+    def test_cooldown_blocks_repeat_compaction(self):
+        h = self._history_with_turns(6)
+        self._trim(h, 26_000, 0.1)                        # 第一次压缩，记录水位
+        self.assertIs(self._trim(h, 26_000, 0.1), h)      # 增量 0 < 冷却阈值 → 跳过
+
+    def test_cooldown_does_not_block_forced_compaction(self):
+        h = self._history_with_turns(6)
+        self._trim(h, 26_000, 0.1)                        # 先把水位推到 26000
+        # 同一水位上涨到预算之上：强制压缩不受冷却限制
+        self.assertIsNot(self._trim(h, 33_000, 0.1), h)
 
     def test_too_few_turns_returns_unchanged(self):
-        self._set_usage(950_000, 0.0)
-        h = self._history_with_turns(2)              # 轮数 <= FULL_RECENT_TURNS
-        self.assertIs(memory.trim_history(h), h)
+        h = self._history_with_turns(2)                   # 轮数 <= FULL_RECENT_TURNS
+        self.assertIs(self._trim(h, 33_000, 0.0), h)
 
     def test_only_system_messages_returned_as_is(self):
-        self._set_usage(950_000, 0.0)
         h = [_msg("system", "sys")]
-        self.assertIs(memory.trim_history(h), h)
+        self.assertIs(self._trim(h, 33_000, 0.0), h)
+
+
+class CompactKeepDegradeTest(unittest.TestCase):
+    """摘要之后仍然超预算时，保留轮数要自动递减。
+
+    这是「最近几轮自己就很大」的兜底：不加它，摘要省下的空间会被原样留下
+    的那几轮吃回去，于是每轮都超支、每轮都要摘要一次。
+    """
+
+    def setUp(self):
+        p = mock.patch.object(memory, "_summarize_old_turns",
+                              lambda msgs: "旧内容摘要")
+        p.start()
+        self.addCleanup(p.stop)
+
+    @staticmethod
+    def _fat_history(turns, chars):
+        """造一份每轮都很胖的历史（汉字 ≈ 0.6 token/字）。"""
+        h = [_msg("system", "sys")]
+        for i in range(turns):
+            h.append(_msg("user", "u%d" % i + "字" * chars))
+            h.append(_msg("assistant", "a%d" % i + "字" * chars))
+        return h
+
+    @staticmethod
+    def _kept_turns(out):
+        return len([m for m in out if m.get("role") == "user"])
+
+    def test_keep_degrades_when_recent_turns_too_big(self):
+        # 每轮约 2×4000 字 ≈ 4800 token。预算 12000 装不下最近 3 轮，
+        # 于是只能再少留一轮
+        h = self._fat_history(6, 4000)
+        out = memory.trim_history(h, usage={"total_tokens": 40_000,
+                                            "hit_rate": 0.0}, budget=12_000)
+        self.assertIsNot(out, h)
+        self.assertLess(self._kept_turns(out), memory.FULL_RECENT_TURNS)
+        # 最新的那轮无论如何都要留着
+        self.assertIn("a5", out[-1]["content"])
+
+    def test_keep_stays_when_it_fits(self):
+        h = self._fat_history(6, 10)                     # 每轮很小
+        out = memory.trim_history(h, usage={"total_tokens": 40_000,
+                                            "hit_rate": 0.0}, budget=12_000)
+        self.assertEqual(self._kept_turns(out), memory.FULL_RECENT_TURNS)
+
+    def test_summary_covers_the_dropped_turns(self):
+        seen = []
+        with mock.patch.object(memory, "_summarize_old_turns",
+                               lambda msgs: seen.append(msgs) or "摘要"):
+            h = self._fat_history(6, 4000)
+            memory.trim_history(h, usage={"total_tokens": 40_000,
+                                          "hit_rate": 0.0}, budget=12_000)
+        # 被降级砍掉的那几轮要进摘要输入，而不是直接丢掉
+        self.assertTrue(seen)
+        joined = "\n".join(str(m.get("content")) for m in seen[0])
+        self.assertIn("u0", joined)
 
 
 class SplitAndDumpTest(unittest.TestCase):

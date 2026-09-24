@@ -12,10 +12,10 @@ from app import agents as agent_store
 from app import cancel as cancel_mod
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         LLM_PROVIDER, PROVIDERS, OLLAMA_BASE_URL, DEFAULT_AGENT_ID,
-                        ADMIN_ALLOW_REMOTE)
+                        ADMIN_ALLOW_REMOTE, CONTEXT_BUDGET)
 from app.skills import list_skills, load_skill
 from app.agent_prompt import build_stable_prompt
-from app.memory import load_history, save_history
+from app.memory import load_history, save_history, estimate_messages
 from app.agent import run_agent_stream, parse_tool_calls, _strip_tool_blocks
 from app.tools import execute_tool
 from app.tools.normal.documents import list_documents, file_info, read_document, search_document
@@ -397,6 +397,13 @@ def _agent_detail(aid):
         # 把「继承」算进去后实际会用的模型，让用户改完能立刻看到是什么效果
         "effective_provider": eff_provider,
         "effective_model": eff_model,
+        # 上下文预算：0 → 继承全局。session_tokens 是主会话的粗估体量，
+        # 让「改完到底有没有用」立刻可见（网页端会话就是这一条）。
+        # QQ 那些群各自一条会话线，不在这里体现，看日志里的 [cache] 行。
+        "context_budget": cfg["context_budget"],
+        "global_context_budget": CONTEXT_BUDGET,
+        "effective_context_budget": cfg["context_budget"] or CONTEXT_BUDGET,
+        "session_tokens": estimate_messages(load_history(aid)),
         # 只读展示：白名单收窄过没有（null = 不限制）。不提供编辑入口
         "tools": raw.get("tools"),
         "skills": raw.get("skills"),
@@ -419,12 +426,12 @@ def get_agent_detail(agent_id):
 
 @app.route("/api/agent/<agent_id>", methods=["PUT"])
 def put_agent_detail(agent_id):
-    """保存人设与模型配置。
+    """保存人设、模型与上下文预算。
 
-    只接受 prompt / provider / model 三项。agent.json 以磁盘原文为底做部分
-    更新，所以 tools / skills 这些界面没暴露的字段会原样保留——直接用规范化
-    后的配置回写会把它们冲成默认值（等于悄悄放开白名单）。
-    空串是有效值，表示「该字段继承全局默认」。
+    只接受 prompt / provider / model / context_budget 四项。agent.json 以磁盘
+    原文为底做部分更新，所以 tools / skills 这些界面没暴露的字段会原样保留
+    ——直接用规范化后的配置回写会把它们冲成默认值（等于悄悄放开白名单）。
+    空串 / 0 是有效值，表示「该字段继承全局默认」。
     """
     if not _admin_allowed():
         return jsonify({"error": "管理接口默认只允许本机访问，"
@@ -450,6 +457,25 @@ def put_agent_detail(agent_id):
         raw = agent_store.agent_raw_config(aid)
         raw["provider"] = provider
         raw["model"] = model
+        if not agent_store.save_agent_config(aid, raw):
+            return jsonify({"error": "写入 agent.json 失败"}), 500
+
+    if "context_budget" in data:
+        val = data.get("context_budget")
+        try:
+            budget = int(val)
+        except (TypeError, ValueError):
+            return jsonify({"error": "context_budget 必须是整数，"
+                                     "0 表示继承全局"}), 400
+        if budget and not (agent_store.MIN_CONTEXT_BUDGET
+                           <= budget <= agent_store.MAX_CONTEXT_BUDGET):
+            return jsonify({
+                "error": "context_budget 需在 %d ~ %d 之间，或填 0 继承全局"
+                         % (agent_store.MIN_CONTEXT_BUDGET,
+                            agent_store.MAX_CONTEXT_BUDGET)}), 400
+
+        raw = agent_store.agent_raw_config(aid)
+        raw["context_budget"] = budget
         if not agent_store.save_agent_config(aid, raw):
             return jsonify({"error": "写入 agent.json 失败"}), 500
 

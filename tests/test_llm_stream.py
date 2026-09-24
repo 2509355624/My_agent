@@ -13,6 +13,7 @@
 """
 
 import json
+import threading
 import unittest
 from unittest import mock
 
@@ -125,6 +126,61 @@ class BuildStreamBodyTest(unittest.TestCase):
         body = llm._build_stream_body(self._eff("volc"), [], False)
         self.assertNotIn("thinking", body)
         self.assertNotIn("stream_options", body)
+
+
+class UsageThreadIsolationTest(unittest.TestCase):
+    """用量记录按线程隔离。
+
+    QQ 适配层会让多个群在各自线程里并发跑 LLM。要是共用一份记录，A 群刚写
+    进去的 3 万 token 会被 B 群拿去判断「我该不该压缩历史」——上下文本来很
+    短的群被误摘要，真正该压的群又可能读到别的小数字而漏压。
+    """
+
+    def test_main_thread_usage_still_readable(self):
+        """兼容路径：直接读 llm.LAST_USAGE 的老写法在主线程里必须照旧可用。"""
+        llm._record_usage({"prompt_cache_hit_tokens": 900,
+                           "prompt_cache_miss_tokens": 100})
+        self.assertEqual(llm.LAST_USAGE["total_tokens"], 1000)
+        self.assertAlmostEqual(llm.LAST_USAGE["hit_rate"], 0.9)
+
+    def test_worker_thread_does_not_leak_into_main(self):
+        llm._record_usage({"prompt_cache_hit_tokens": 10,
+                           "prompt_cache_miss_tokens": 0})
+
+        def worker():
+            llm._record_usage({"prompt_cache_hit_tokens": 5000,
+                               "prompt_cache_miss_tokens": 5000})
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+
+        # 子线程写的 10000 绝不能污染主线程那一份
+        self.assertEqual(llm.current_usage()["total_tokens"], 10)
+
+    def test_each_worker_sees_only_its_own(self):
+        seen = []
+
+        def worker(tag, hit, miss):
+            llm._record_usage({"prompt_cache_hit_tokens": hit,
+                               "prompt_cache_miss_tokens": miss})
+            seen.append((tag, llm.current_usage()["total_tokens"]))
+
+        threads = [threading.Thread(target=worker, args=("a", 0, 7000)),
+                   threading.Thread(target=worker, args=("b", 0, 9000))]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(sorted(seen), [("a", 7000), ("b", 9000)])
+
+    def test_current_usage_returns_copy(self):
+        llm._record_usage({"prompt_cache_hit_tokens": 100,
+                           "prompt_cache_miss_tokens": 0})
+        snap = llm.current_usage()
+        snap["total_tokens"] = 999999
+        self.assertEqual(llm.current_usage()["total_tokens"], 100)
 
 
 class CallLlmStreamTest(unittest.TestCase):

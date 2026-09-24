@@ -4,15 +4,44 @@ LLM 调用封装（支持多 Provider 动态路由）
 
 import codecs
 import json
+import threading
 import requests
 from app.cancel import is_cancelled
 from app.config import (API_URL, API_KEY, MODEL, LLM_PROVIDER,
-                        PROVIDERS, OLLAMA_BASE_URL)
+                        PROVIDERS, OLLAMA_BASE_URL, CONTEXT_BUDGET)
 
-# 跨调用状态（缓存优化用）：记录最近一次请求的 token 用量与命中率
-LAST_USAGE = {"total_tokens": 0, "hit_tokens": 0, "miss_tokens": 0, "hit_rate": 0.0}
-# 估算上下文上限（与 deepseek-flash 对齐，DeepSeek 官方文档 1M）
-CONTEXT_LIMIT = 1_000_000
+# 跨调用状态（缓存优化用）：记录最近一次请求的 token 用量与命中率。
+#
+# **按线程各存一份**。QQ 适配层会让多个群在各自线程里并发跑同一轮 LLM，若
+# 共用一个字典，A 群刚写进去的 3 万 token 会被 B 群读去判断「我该不该压缩
+# 历史」——上下文本来很短的 B 群会被误摘要，而 A 群真正该压的时候又可能读到
+# B 群的小数字而漏压。会话之间只有这一点共享状态，隔离掉就没有串号问题了。
+_USAGE_LOCAL = threading.local()
+
+_EMPTY_USAGE = {"total_tokens": 0, "hit_tokens": 0, "miss_tokens": 0, "hit_rate": 0.0}
+
+
+def _usage():
+    """当前线程的用量记录（首次访问时惰性建一份）。"""
+    d = getattr(_USAGE_LOCAL, "d", None)
+    if d is None:
+        d = dict(_EMPTY_USAGE)
+        _USAGE_LOCAL.d = d
+    return d
+
+
+def current_usage():
+    """当前线程最近一次 LLM 调用的用量快照（返回拷贝，改不到内部状态）。
+
+    app/memory.trim_history 用它决定该不该压缩历史；agent 循环每轮取一次、
+    传给下一轮，这样压缩判断用的始终是「这条会话线自己」的真实用量。
+    """
+    return dict(_usage())
+
+
+# 主线程视图，只为兼容既有读取方式（含测试）而保留。多线程场景请改用
+# current_usage()，它按线程取，才是准的。
+LAST_USAGE = _usage()
 
 # 当前生效的 provider（web 端切换后更新）。默认取 .env 的 LLM_PROVIDER
 CURRENT_PROVIDER = LLM_PROVIDER
@@ -76,7 +105,7 @@ def _raise_with_detail(resp):
 
 
 def _record_usage(usage, elapsed=None):
-    """把一次响应的 usage 折算成命中率写入 LAST_USAGE（流式/非流式共用口径）。
+    """把一次响应的 usage 折算成命中率写入**当前线程**的用量记录（流式/非流式共用口径）。
 
     - 火山/DeepSeek 口径：prompt_cache_hit_tokens / prompt_cache_miss_tokens
     - OpenAI 口径兜底：prompt_tokens_details.cached_tokens
@@ -95,10 +124,11 @@ def _record_usage(usage, elapsed=None):
     if total <= 0:
         return
     rate = (hit or 0) / total
-    LAST_USAGE["total_tokens"] = total
-    LAST_USAGE["hit_tokens"] = hit or 0
-    LAST_USAGE["miss_tokens"] = miss or 0
-    LAST_USAGE["hit_rate"] = rate
+    u = _usage()                     # 写当前线程那一份，不与其他会话互串
+    u["total_tokens"] = total
+    u["hit_tokens"] = hit or 0
+    u["miss_tokens"] = miss or 0
+    u["hit_rate"] = rate
 
     tail = f"  {elapsed:.1f}s" if elapsed is not None else ""
     print(f"[cache] 命中 {hit} / {total} tokens = {rate*100:.1f}% "

@@ -29,6 +29,7 @@ _AGENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 # agent.json 的默认值。tools / skills 为 None 表示「不限制」。
 # provider / model 为空串表示「继承 .env 里的全局默认」，这样没写过这两个
 # 字段的 agent（以及所有老 agent.json）行为与从前完全一致。
+# context_budget 为 0 表示「继承 .env 的 CONTEXT_BUDGET」，同上。
 _DEFAULT_CONFIG = {
     "name": "",
     "description": "",
@@ -38,7 +39,13 @@ _DEFAULT_CONFIG = {
     "skills": None,
     "provider": "",
     "model": "",
+    "context_budget": 0,
 }
+
+# context_budget 的合法区间。低于下限压缩得太频繁（每轮都在摘要，反而更贵），
+# 高于上限就等于没设；越界与写错一律归 0 → 继承全局，而不是报错拦住保存。
+MIN_CONTEXT_BUDGET = 4000
+MAX_CONTEXT_BUDGET = 1_000_000
 
 DEFAULT_PROMPT_FILE = "prompt.md"
 
@@ -160,6 +167,17 @@ def _normalize(cfg):
         out[key] = val.strip() if isinstance(val, str) else ""
     _prov = out["provider"].lower()
     out["provider"] = _prov if _prov in PROVIDERS else ""
+
+    # context_budget：0 = 继承全局。只接受区间内的整数——写错（空串、非数字、
+    # 越界）一律归 0，不让一个手滑的数字把压缩彻底关掉、或调到每轮都摘要。
+    # 容忍字符串形式的数字（"32000"），手改 json 时不必纠结类型。
+    try:
+        n = int(out.get("context_budget"))
+    except (TypeError, ValueError):
+        n = 0
+    if n and not (MIN_CONTEXT_BUDGET <= n <= MAX_CONTEXT_BUDGET):
+        n = 0
+    out["context_budget"] = n
 
     if not isinstance(out.get("prompt_file"), str) or not out["prompt_file"].strip():
         out["prompt_file"] = DEFAULT_PROMPT_FILE
@@ -370,6 +388,8 @@ def list_agents():
             # 空串 = 继承全局默认。管理页用它标出「谁单独配过模型」
             "provider": cfg["provider"],
             "model": cfg["model"],
+            # 0 = 继承全局预算，同样是「谁单独配过」的标记
+            "context_budget": cfg["context_budget"],
         })
 
     items.sort(key=lambda a: (a["id"] != DEFAULT_AGENT_ID, a["id"]))
