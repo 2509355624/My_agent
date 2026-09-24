@@ -196,10 +196,17 @@
 <script>
 const $ = (id) => document.getElementById(id);
 
-// 已知的能力差异（实测）：火山侧不支持图片输入。带了图也不会报错——
-// 它把 data URL 当成普通文本塞进 prompt，超长被截断，模型只会说
-// 「base64 被截断了」，很难一眼归因。带图的 agent 别选这两个。
-const NO_VISION = { volc: 1, doubao: 1 };
+// 模型名里出现这些词就认为能读图，与后端 app/config.py 的判定保持同口径。
+// 后端才是权威（agent.py 用 provider_vision 决定走不走识图），这里只负责
+// 让"还没保存"的选择也能立刻给出提示。
+const VISION_HINTS = ['vl', 'vision', 'omni'];
+
+function hasVision(pid, model) {
+  const p = (detail && detail.providers || []).find((x) => x.id === pid);
+  const name = String(model || (p && p.model) || '').toLowerCase();
+  if (VISION_HINTS.some((h) => name.indexOf(h) >= 0)) return true;
+  return !!(p && p.vision);
+}
 
 let agents = [];
 let cur = null;
@@ -297,12 +304,13 @@ function renderEffective() {
   box.append('实际生效：', b1, ' / ', b2);
 
   const warn = $('novisual');
-  if (NO_VISION[pid]) {
-    warn.textContent = '该 provider 没有视觉能力：若这个 agent 用于带图对话，'
-      + '图片会被当成纯文本塞进去、超长被截断，模型读不到图。带图场景请选 DeepSeek 官方。';
-    warn.classList.remove('hidden');
-  } else {
+  if (hasVision(pid, mid)) {
     warn.classList.add('hidden');
+  } else {
+    const vp = labelOf(detail.vision_provider) + ' · ' + (detail.vision_model || '—');
+    warn.textContent = '当前模型读不了图。带图消息会先由「' + vp + '」识别成文字'
+      + '再交给它 —— 图能看，但细节以识别结果为准。';
+    warn.classList.remove('hidden');
   }
 }
 

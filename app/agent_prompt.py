@@ -8,6 +8,7 @@ Agent System Prompt
 - 动态层（Dynamic）：每轮变化，如状态栏
 """
 
+import os
 from datetime import datetime
 from app import agents as agent_store
 from app.skills import list_skills, load_skill, skill_summary
@@ -267,6 +268,73 @@ def build_stable_prompt(agent_id=None):
     _stable_cache[key] = result
     _stable_fp[key] = fp
     return result
+
+
+# 已检查过的配置版本：{(agent_key, session_key): revision}。用来做短路——
+# revision 没变就完全不用构造 prompt（构造要扫 skills 目录）。进程重启后
+# 缓存为空，第一次会真比一次，之后靠它省掉每轮的开销。
+_session_rev = {}
+
+
+def clear_session_cache():
+    """清掉「已检查过的 revision」记录。
+
+    测试用（换 AGENTS_DIR 后必须清）。正常情况下不需要——revision 变了会
+    自动失效。
+    """
+    _session_rev.clear()
+
+
+def sync_session_system(agent_id=None, session_key=None):
+    """把人设 / 配置的变更同步到已有会话的首条 system 头。返回是否发生了替换。
+
+    会话的 system 头是建立时写进 JSONL 的，之后就一直躺在那里。改 prompt.md
+    时，进程内的 build_stable_prompt 立刻返回新内容，但**已有会话读到的还是
+    旧的那条**——网页端靠启动时重建，QQ 端连启动都不重建（只有"首条不是
+    system 才补"这一个条件，会话一有历史就永远不成立）。结果：改完机器人的
+    人设，已经在聊的群纹丝不动，只有新开的会话才吃到新配置。很难察觉，容易
+    误判成热加载坏了。
+
+    这里补上：每轮对话前比一次，变了才重建。
+
+    两处短路，都是为了不白干活：
+    1. revision（agent.json + prompt.md 的 mtime 指纹）没变 → 直接返回；
+    2. revision 变了但内容恰好相同（比如只改了 description）→ 只更新缓存，
+       不写文件。**相同就一个字节都不动**，保住这条会话的前缀缓存。
+
+    revision 不含 skills 集合的变化：运行期新增 skill 仍需重启才进 prompt。
+    人设与 agent.json 的热更新则被覆盖到了。
+
+    注意：真的替换 system 头时，这条会话的前缀缓存会整个失效一次（system 在
+    最前面，改它等于后面全部重算）。这是"要更新人设"必须付的价，只在人设
+    真的变了时才付。
+    """
+    from app.memory import load_history, peek_system, save_history
+    from app.agents import session_file as _session_file
+
+    key = agent_store.safe_agent_id(agent_id) or "_default"
+    ckey = (key, session_key or "")
+    rev = agent_store.revision(agent_id)
+
+    if _session_rev.get(ckey) == rev:
+        return False
+    # 先记下：无论后面走哪个分支，这次 revision 都已经检查过了
+    _session_rev[ckey] = rev
+
+    if not os.path.exists(_session_file(agent_id, session_key)):
+        # 会话还没建过，不在这一处建头：第一轮由 _ensure_system_prompt 补，
+        # 免得两条路径各写一次（也免得在这里把空会话落盘）。
+        return False
+
+    stable = build_stable_prompt(agent_id)
+    if peek_system(agent_id, session_key) == stable:
+        return False
+
+    keep = [m for m in load_history(agent_id, session_key)
+            if m.get("role") != "system"]
+    save_history([{"role": "system", "content": stable}] + keep,
+                 agent_id, session_key)
+    return True
 
 
 def build_status_bar(message_count=0, last_tool="none", agent_id=None):

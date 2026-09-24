@@ -153,7 +153,10 @@ class AgentLoopTest(unittest.TestCase):
 
     def test_image_attached_to_first_turn_only(self):
         fake = self._patch_llm(['[[TOOL:list_files]][[/TOOL]]', '看完了'])
+        # 显式指定有视觉的模型：图片直发多模态。若走默认 provider（.env 里是
+        # 火山，纯文本），会改走识图预处理——那是另一条路径，另有测试覆盖。
         list(agent.run_agent_stream("（用户上传了一张图片：看图）", self.history,
+                                    provider="deepseek",
                                     image="data:image/jpeg;base64,ZZZ"))
         # 第 1 轮：本轮用户消息被升级成多模态
         first = [m for m in fake.seen_histories[0] if isinstance(m.get("content"), list)]
@@ -168,17 +171,104 @@ class AgentLoopTest(unittest.TestCase):
 
     def test_image_never_leaks_into_history(self):
         self._patch_llm(["看图完毕。"])
-        list(agent.run_agent_stream("看图", self.history,
+        list(agent.run_agent_stream("看图", self.history, provider="deepseek",
                                     image="data:image/jpeg;base64,ZZZ"))
         # 图片本体绝不能进 history——整份历史会被原样落盘
         self.assertEqual(self.history[0], {"role": "user", "content": "看图"})
+
+    # ─── 无视觉模型：先识图转文字再进正文 ─────────────
+
+    def _patch_vision(self, text=None, exc=None):
+        """替换识图调用：要么返回固定文字，要么抛错（验证降级路径）。"""
+        def fake(_data_url):
+            if exc is not None:
+                raise exc
+            return text
+
+        p = mock.patch("app.vision.describe", fake)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_no_vision_model_gets_recognized_text(self):
+        """火山的纯文本模型：图先被识成文字，拼在用户输入后面进正文。
+
+        这条路径是必需的——把 base64 直接喂给纯文本模型不是"效果差"，
+        而是整条请求挂死（实测 ReadTimeout 卡满 180 秒）。
+        """
+        self._patch_vision("一只猫趴在键盘上。")
+        fake = self._patch_llm(["我看到一只猫。"])
+        list(agent.run_agent_stream("这是什么", self.history, provider="volc",
+                                    image="data:image/jpeg;base64,ZZZ"))
+
+        # 发给模型的那条用户消息带上识别结果（第 1 轮）
+        first_user = [m for m in fake.seen_histories[0]
+                      if m.get("role") == "user"][0]
+        self.assertIn("这是什么", first_user["content"])
+        self.assertIn("一只猫趴在键盘上。", first_user["content"])
+        self.assertIn("[用户发来图片，以下是识别结果]", first_user["content"])
+        # 没有任何多模态结构，也没落下 base64
+        self.assertFalse(any(isinstance(m.get("content"), list)
+                             for m in fake.seen_histories[0]))
+        self.assertNotIn("ZZZ", str(fake.seen_histories[0]))
+
+    def test_recognized_text_is_what_enters_history(self):
+        """进 history 的是识别文字，不是图片本体。"""
+        self._patch_vision("图中写着：504 Gateway Timeout")
+        self._patch_llm(["是网关超时。"])
+        list(agent.run_agent_stream("这个报错什么意思", self.history,
+                                    provider="volc",
+                                    image="data:image/jpeg;base64,ZZZ"))
+        self.assertEqual(self.history[0]["role"], "user")
+        self.assertIn("504 Gateway Timeout", self.history[0]["content"])
+        self.assertNotIn("ZZZ", self.history[0]["content"])
+
+    def test_vision_failure_degrades_instead_of_breaking_turn(self):
+        """识图挂掉不能让整轮对话失败：降级成"看不到这张图"，照常回答。"""
+        self._patch_vision(exc=RuntimeError("识图请求失败：超时"))
+        fake = self._patch_llm(["抱歉，我看不到这张图。"])
+        list(agent.run_agent_stream("看看这个", self.history, provider="volc",
+                                    image="data:image/jpeg;base64,ZZZ"))
+
+        first_user = [m for m in fake.seen_histories[0]
+                      if m.get("role") == "user"][0]
+        self.assertIn("识别失败", first_user["content"])
+        # 说的是"你看不到"，不能让模型以为图在那儿而顺着编
+        self.assertIn("看不到它的内容", first_user["content"])
+        # 正常出最终回复，没有变成错误事件
+        self.assertEqual(self.history[-1]["content"], "抱歉，我看不到这张图。")
+
+    def test_multiple_images_all_attached_and_numbered(self):
+        self._patch_vision("识别结果")
+        fake = self._patch_llm(["看完了"])
+        list(agent.run_agent_stream("两张", self.history, provider="deepseek",
+                                    image=["data:image/jpeg;base64,AAA",
+                                           "data:image/jpeg;base64,BBB"]))
+        multi = [m for m in fake.seen_histories[0]
+                 if isinstance(m.get("content"), list)]
+        self.assertEqual(len(multi), 1)
+        urls = [p["image_url"]["url"] for p in multi[0]["content"]
+                if p.get("type") == "image_url"]
+        self.assertEqual(urls, ["data:image/jpeg;base64,AAA",
+                                "data:image/jpeg;base64,BBB"])
+
+    def test_multiple_images_numbered_when_preprocessing(self):
+        self._patch_vision("文字内容")
+        fake = self._patch_llm(["好"])
+        list(agent.run_agent_stream("两张", self.history, provider="volc",
+                                    image=["data:image/jpeg;base64,AAA",
+                                           "data:image/jpeg;base64,BBB"]))
+        first_user = [m for m in fake.seen_histories[0]
+                      if m.get("role") == "user"][0]
+        self.assertIn("【第 1 张】", first_user["content"])
+        self.assertIn("【第 2 张】", first_user["content"])
 
     def test_image_targets_user_message_not_tool_result(self):
         # 用户手打工具块时 pre_tool_results 排在本轮 user 之后（_history_for_llm
         # 会把它们转成 user role），倒序找必须跳过它们，否则图片挂到工具结果上
         fake = self._patch_llm(["好了"])
         list(agent.run_agent_stream(
-            "看图", self.history, image="data:image/jpeg;base64,ZZZ",
+            "看图", self.history, provider="deepseek",
+            image="data:image/jpeg;base64,ZZZ",
             pre_tool_results=[{"name": "get_time", "result": "12:00"}]))
         multi = [m for m in fake.seen_histories[0] if isinstance(m.get("content"), list)]
         self.assertEqual(len(multi), 1)

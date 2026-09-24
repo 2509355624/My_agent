@@ -44,6 +44,13 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 
 # provider 元信息：每种提供商的默认 base_url / model / 是否需要 api_key
+# vision 表示「这个 provider 的默认模型能不能读图」。它决定带图请求走哪条路：
+# 有视觉的直接多模态下发；没有的先过一道识图（见 app/vision.py）转成文字。
+#
+# 为什么必须显式标注、不能只靠模型名猜：火山那条线的 v4flash 与 v4-pro 都是
+# 纯文本模型，把 base64 图塞进去不会报错，而是**整条请求挂死**（实测
+# ReadTimeout 卡满 180 秒）——模型把 base64 当普通文本读，token 涨到几万，
+# 服务端一直不返回。这是"必须预处理"而不是"预处理效果更好"。
 PROVIDERS = {
     # 火山引擎（deepseek 开源模型托管）
     "volc": {
@@ -52,6 +59,7 @@ PROVIDERS = {
         "model": VOLC_CHAT_MODEL,
         "api_key": VOLC_API_KEY,
         "needs_key": False,   # 用 .env 里配置的 key
+        "vision": False,
     },
     # 豆包（Doubao 自家模型）
     "doubao": {
@@ -60,6 +68,7 @@ PROVIDERS = {
         "model": os.getenv("DOUBAO_MODEL", "doubao-1-5-thinking-pro-250615"),
         "api_key": VOLC_API_KEY,
         "needs_key": False,
+        "vision": False,
     },
     # DeepSeek 官方
     "deepseek": {
@@ -68,16 +77,51 @@ PROVIDERS = {
         "model": DEEPSEEK_MODEL,
         "api_key": DEEPSEEK_API_KEY,
         "needs_key": False,
+        "vision": True,
     },
-    # Ollama（本地免费）
+    # Ollama 本地（能不能读图取决于拉的是哪个模型，默认按不能算）
     "ollama": {
         "label": "Ollama 本地",
         "base_url": OLLAMA_BASE_URL,
         "model": OLLAMA_MODEL,
         "api_key": "",
         "needs_key": False,
+        "vision": False,
     },
 }
+
+# 模型名里出现这些词就认为它有视觉能力，用来覆盖上面的 provider 开关。
+# 场景：豆包换成 doubao-1-5-vision、本地换 qwen-vl-max，都不用改代码。
+_VISION_MODEL_HINTS = ("vl", "vision", "omni")
+
+
+def provider_vision(provider=None, model=None):
+    """判断这个 (provider, model) 组合能不能直接读图。
+
+    两级判断：模型名命中关键字 → 有视觉（覆盖 provider 开关）；否则看
+    provider 自己的 vision 开关。这样默认行为由 PROVIDERS 管住，个别型号
+    又不用回来改代码。
+    """
+    pid = (provider or LLM_PROVIDER or "").lower()
+    cfg = PROVIDERS.get(pid) or PROVIDERS.get(LLM_PROVIDER, {})
+    name = (model if model is not None else cfg.get("model", "")) or ""
+    if any(h in name.lower() for h in _VISION_MODEL_HINTS):
+        return True
+    return bool(cfg.get("vision"))
+
+
+# ─── 图片识别（视觉预处理）───────────────────────────
+# 给没有视觉能力的模型用的：先把图交给这里识别成文字，再让 agent 接着跑。
+# 固定走 DeepSeek 官方——它是目前唯一稳定可用的视觉来源，且单次调用很便宜
+# （实测一张图 246 + 340 token，比跑一轮对话还低）。
+VISION_PROVIDER = os.getenv("VISION_PROVIDER", "deepseek")
+# 空 = 用该 provider 的默认模型
+VISION_MODEL = os.getenv("VISION_MODEL", "")
+# 识图是单次同步调用，实测 1.9 秒返回，给 30 秒余量足够；超时按失败降级
+VISION_TIMEOUT = float(os.getenv("VISION_TIMEOUT", "30"))
+# 发出去前把图缩到最长边这么多像素。QQ 群里的图有 8MB 级的，直接 base64
+# 是 11MB 字符串——既慢又贵，还可能撞服务端请求体上限
+VISION_MAX_EDGE = int(os.getenv("VISION_MAX_EDGE", "1024"))
 
 # ─── Web 搜索（豆包搜索）─────────────────────────────
 # 豆包搜索（原 联网搜索/融合信息搜索）专用 API Key，在火山「联网搜索控制台」创建：
@@ -174,6 +218,14 @@ QQ_MAX_CONCURRENCY = int(os.getenv("QQ_MAX_CONCURRENCY", "2"))
 
 # 单条 QQ 消息的字数上限，超出按段落切分成多条发送
 QQ_REPLY_MAX_CHARS = int(os.getenv("QQ_REPLY_MAX_CHARS", "700"))
+
+# 一条消息里最多处理几张图（超出的只记一句"还有 N 张没看"，不下载）。
+# 群里刷图时，每张都要先下载再送一次识图，没有上限就是开口子的花销
+QQ_IMAGE_MAX_COUNT = int(os.getenv("QQ_IMAGE_MAX_COUNT", "3"))
+# 图片下载超时（秒）。实测腾讯的图床很快，但断连时会一直挂
+QQ_IMAGE_TIMEOUT = float(os.getenv("QQ_IMAGE_TIMEOUT", "20"))
+# 下载体积上限（字节）。超过就不下——8MB 的图压完也未必划算，直接说明看不到
+QQ_IMAGE_MAX_BYTES = int(os.getenv("QQ_IMAGE_MAX_BYTES", str(16 * 1024 * 1024)))
 
 # 每轮结束后的静默窗口，把这段时间内到达的同一会话消息合并成一次处理
 # （群里连发几句时，避免逐句各跑一轮 LLM）

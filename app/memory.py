@@ -102,6 +102,30 @@ def load_history(agent_id=None, session_key=None):
     return history
 
 
+def peek_system(agent_id=None, session_key=None):
+    """只读会话文件第一行，取回首条 system 的内容；不是 system 或读不到返回 None。
+
+    存在的理由：判断"人设变了没有"每轮都要做一次，而 load_history 会把整个
+    文件解析成对象列表——QQ 群里聊上几个月，会话文件可能是几 MB，每轮为比
+    一个字符串读几 MB 太亏。JSONL 的首行就是 system 头，读一行就够。
+    """
+    path = _agent_session_file(agent_id, session_key)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            line = f.readline().strip()
+    except OSError:
+        return None
+    if not line:
+        return None
+    try:
+        msg = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(msg, dict) and msg.get("role") == "system":
+        return msg.get("content")
+    return None
+
+
 # ─── 上下文压缩 ──────────────────────────────────────
 
 # 水位：相对预算的比例。到 WARN_RATIO 且命中率低才提前压；到 100% 无条件压

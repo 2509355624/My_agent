@@ -41,6 +41,12 @@ class WebApiTest(unittest.TestCase):
         # agent 配置/人设有 mtime 缓存，换目录后必须清一次
         agents.clear_cache()
         self.addCleanup(agents.clear_cache)
+        # 这些用例测的是「编辑重发怎么截断历史」，不关心 system 头同步。
+        # 关掉它：种子历史里的 "S" 是假头，同步会把它当成「人设变了」重写成
+        # 真实人设（那是另一套用例的事，放在 test_agent_prompt 里）。
+        p = mock.patch.object(main, "sync_session_system", lambda *a, **k: False)
+        p.start()
+        self.addCleanup(p.stop)
         self.docs_dir = docs_dir
         self.client = main.app.test_client()
 

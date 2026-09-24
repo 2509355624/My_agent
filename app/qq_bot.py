@@ -42,7 +42,7 @@ except ImportError:                    # 非 Windows 平台退化为不做检查
 
 from app import qq_api
 from app.agent import run_agent_stream
-from app.agent_prompt import build_stable_prompt
+from app.agent_prompt import build_stable_prompt, sync_session_system
 from app.config import (
     BASE_DIR, COMFYUI_URL, QQ_AGENT_ID, QQ_BLACKLIST_USERS,
     QQ_DEBOUNCE_SECONDS, QQ_GROUP_AT_ONLY, QQ_GROUP_KEYWORDS,
@@ -99,17 +99,30 @@ def _ensure_system_prompt(session_key):
 
 # ─── 事件解析 ────────────────────────────────────────
 
+def _cq_arg(rest, key):
+    """从 CQ 码的参数串里取一个值（`...,url=http://x,y=1` 这种形式）。"""
+    for part in (rest or "").lstrip(",").split(","):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            if k.strip() == key:
+                return v.strip()
+    return ""
+
+
 def _parse_segments(ev):
-    """从事件里取出文本，并判断这条消息有没有 @ 到机器人。
+    """从事件里取出文本、@ 标记、以及图片地址列表。
 
     OneBot 有两种上报格式：message 数组（结构化）和 raw_message 字符串
     （CQ 码）。NapCat 配的是哪种都要能认，所以两条路都走。
+
+    图片在这里**只取地址，不下载**：下载是 IO，得放到 worker 线程里做
+    （见 SessionRunner._prepare_images），事件循环上不能有阻塞操作。
     """
     self_id = str(ev.get("self_id", ""))
     segs = ev.get("message")
 
     if isinstance(segs, list):
-        parts, at_me = [], False
+        parts, at_me, images = [], False, []
         for seg in segs:
             if not isinstance(seg, dict):
                 continue
@@ -121,30 +134,46 @@ def _parse_segments(ev):
                 if str(sdata.get("qq", "")) == self_id:
                     at_me = True
             elif stype == "image":
-                parts.append("[图片]")
+                url = str(sdata.get("url") or "")
+                if url:
+                    images.append(url)
+                else:
+                    # 只给了本地文件名（file）时拿不到图，退回占位说明
+                    parts.append("[图片]")
             elif stype == "face":
                 parts.append("[表情]")
-        return "".join(parts).strip(), at_me
+        return "".join(parts).strip(), at_me, images
 
     raw = str(ev.get("raw_message") or "")
+    images = []
 
     def _sub(m):
         name, rest = m.group(1), m.group(2)
         if name == "at" and ("qq=" + self_id) in rest:
             _sub.at_me = True
+        elif name == "image":
+            url = _cq_arg(rest, "url")
+            if url:
+                images.append(url)
         return ""
 
     _sub.at_me = False
-    return _CQ_RE.sub(_sub, raw).strip(), _sub.at_me
+    return _CQ_RE.sub(_sub, raw).strip(), _sub.at_me, images
 
 
 def _session_key(target, target_id):
     return "%s_%s" % (target, target_id)
 
 
-def _should_reply(ev, target, target_id, text, at_me):
-    """判定这条消息要不要回。返回 (bool, 原因)，原因只用于日志。"""
+def _should_reply(ev, target, target_id, text, at_me, has_image=False):
+    """判定这条消息要不要回。返回 (bool, 原因)，原因只用于日志。
+
+    has_image 参与判定的理由：@ 了机器人却只发一张图（"看看这个"）是常见
+    用法，以前只看 text 会把它整个丢掉。注意「有内容」判据是 `text or
+    has_image`——图也算内容，但**不 @ 的群里仍然不看图**，触发规则没变宽。
+    """
     user_id = str(ev.get("user_id", ""))
+    has_content = bool(text) or bool(has_image)
 
     if user_id in QQ_BLACKLIST_USERS:
         return False, "在黑名单里"
@@ -154,19 +183,19 @@ def _should_reply(ev, target, target_id, text, at_me):
             return False, "私聊未开启"
         if QQ_WHITELIST_USERS and user_id not in QQ_WHITELIST_USERS:
             return False, "不在私聊白名单"
-        return (bool(text), "私聊")
+        return (has_content, "私聊")
 
     group_id = str(target_id)
     if QQ_WHITELIST_GROUPS and group_id not in QQ_WHITELIST_GROUPS:
         return False, "群不在白名单"
 
     if at_me:
-        return (bool(text), "被 @")
+        return (has_content, "被 @")
     for kw in QQ_GROUP_KEYWORDS:
         if kw in text:
             return True, "命中关键词 " + kw
     if not QQ_GROUP_AT_ONLY:
-        return (bool(text), "群全量模式")
+        return (has_content, "群全量模式")
     return False, "未 @ 且未命中关键词"
 
 
@@ -190,7 +219,9 @@ def _merge_batch(batch, max_items=None, max_chars=None):
     if max_chars is None:
         max_chars = QQ_PENDING_MAX_CHARS
 
-    items = [x for x in batch if x.get("text")]
+    # 只发图不打字的消息也算一条，不能按 text 过滤掉（否则「@机器人 + 一张图」
+    # 会被整条丢弃）。图的下载与张数上限在 _run_turn / _prepare_images 里管。
+    items = [x for x in batch if x.get("text") or x.get("images")]
     if max_items > 0 and len(items) > max_items:
         log.info("待处理 %d 条，只取最近的 %d 条", len(items), max_items)
         items = items[-max_items:]
@@ -200,7 +231,8 @@ def _merge_batch(batch, max_items=None, max_chars=None):
         t = it["text"]
         if lines and max_chars > 0 and total + len(t) > max_chars:
             break
-        lines.append(t)
+        if t:
+            lines.append(t)
         total += len(t)
     lines.reverse()
     return "\n".join(lines).strip()
@@ -224,8 +256,8 @@ class SessionRunner:
         self._pending = []
         self._task = None
 
-    def submit(self, text, sender_name=""):
-        item = {"text": text, "sender": sender_name}
+    def submit(self, text, sender_name="", images=None):
+        item = {"text": text, "sender": sender_name, "images": images or []}
         self._pending.append(item)
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._loop())
@@ -243,15 +275,50 @@ class SessionRunner:
             except Exception:
                 log.exception("处理 %s 的会话时出错", self.session_key)
 
+    @staticmethod
+    def _prepare_images(urls):
+        """下载图片并转成 data URL，返回 (可用列表, 被丢弃的张数)。
+
+        单张失败只记日志、跳过——一张图挂了不该让整轮对话停住，这正是
+        「看不到这张图」的降级路径（模型会如实说看不到，而不是编内容）。
+        """
+        from app.config import QQ_IMAGE_MAX_COUNT
+        from app.vision import fetch_image, to_data_url
+
+        if not urls:
+            return [], 0
+        picked = urls[:QQ_IMAGE_MAX_COUNT] if QQ_IMAGE_MAX_COUNT > 0 else urls
+        out = []
+        for i, url in enumerate(picked, 1):
+            try:
+                out.append(to_data_url(fetch_image(url)))
+            except Exception as exc:
+                log.warning("取图失败（第 %d 张）：%s", i, exc)
+        return out, len(urls) - len(picked)
+
     def _run_turn(self, batch):
         """在 worker 线程里跑一轮（run_agent_stream 是同步生成器）。"""
         text = _merge_batch(batch)
-        if not text:
+        # 图片段单独收集：只发图不打字是合法用法（"帮我看下这个"），
+        # 不能因为 text 为空就把整轮丢掉
+        image_urls = [u for it in batch for u in (it.get("images") or [])]
+        if not text and not image_urls:
+            return
+
+        data_urls, dropped = self._prepare_images(image_urls)
+        if dropped > 0:
+            text = (text + "\n（另有 %d 张图片超过单条上限，未读取）"
+                    % dropped).strip()
+        if not text and not data_urls:
             return
 
         history = load_history(QQ_AGENT_ID, self.session_key)
         if not history or history[0].get("role") != "system":
             _ensure_system_prompt(self.session_key)
+            history = load_history(QQ_AGENT_ID, self.session_key)
+        elif sync_session_system(QQ_AGENT_ID, self.session_key):
+            # 人设/配置变了，首条 system 已被替换 → 重新读一份带新头的历史。
+            # 没变时 sync 返回 False，一个字节都没动过，前缀缓存不受影响。
             history = load_history(QQ_AGENT_ID, self.session_key)
 
         # 工具层靠线程本地变量知道「此刻在为哪个会话服务」，
@@ -261,7 +328,8 @@ class SessionRunner:
         reply_parts, images = [], []
 
         try:
-            for ev in run_agent_stream(text, history, agent_id=QQ_AGENT_ID):
+            for ev in run_agent_stream(text, history, agent_id=QQ_AGENT_ID,
+                                       image=data_urls or None):
                 etype = ev.get("type")
                 # 先落盘再处理（与 main.py 的契约一致）
                 if etype in SESSION_EVENTS:
@@ -346,8 +414,9 @@ class QQBot:
         if not target_id or target_id == "0":
             return
 
-        text, at_me = _parse_segments(ev)
-        ok, reason = _should_reply(ev, target, target_id, text, at_me)
+        text, at_me, image_urls = _parse_segments(ev)
+        ok, reason = _should_reply(ev, target, target_id, text, at_me,
+                                   bool(image_urls))
         if not ok:
             log.debug("跳过 %s %s：%s", target, target_id, reason)
             return
@@ -360,9 +429,11 @@ class QQBot:
         if target == "group" and sender:
             text = sender + "：" + text
 
-        log.info("← %s %s（%s）: %s",
-                 target, target_id, reason, text[:60].replace("\n", " "))
-        self._runner_for(session_key, target, target_id).submit(text, sender)
+        log.info("← %s %s（%s）: %s%s", target, target_id, reason,
+                 text[:60].replace("\n", " "),
+                 (" +%d 张图" % len(image_urls)) if image_urls else "")
+        self._runner_for(session_key, target, target_id).submit(
+            text, sender, image_urls)
 
     async def _probe(self):
         """启动时探一下协议端在不在，不在就只警告、照常去连 WS。"""

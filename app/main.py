@@ -12,9 +12,10 @@ from app import agents as agent_store
 from app import cancel as cancel_mod
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         LLM_PROVIDER, PROVIDERS, OLLAMA_BASE_URL, DEFAULT_AGENT_ID,
-                        ADMIN_ALLOW_REMOTE, CONTEXT_BUDGET)
+                        ADMIN_ALLOW_REMOTE, CONTEXT_BUDGET,
+                        VISION_PROVIDER, VISION_MODEL, provider_vision)
 from app.skills import list_skills, load_skill
-from app.agent_prompt import build_stable_prompt
+from app.agent_prompt import build_stable_prompt, sync_session_system
 from app.memory import load_history, save_history, estimate_messages
 from app.agent import run_agent_stream, parse_tool_calls, _strip_tool_blocks
 from app.tools import execute_tool
@@ -186,6 +187,10 @@ def chat():
     h = load_history(agent_id)
     if not h or h[0].get("role") != "system":
         _ensure_system_prompt(agent_id, only_system=True)
+        h = load_history(agent_id)
+    elif sync_session_system(agent_id):
+        # 人设/配置改过了 → 新的 system 头已写进会话，重读一份带上。
+        # 没变时它一个字节都没动（内部只读首行比较），前缀缓存不受影响。
         h = load_history(agent_id)
 
     # 「编辑某条用户消息后重发」：该条之前的会话保留，之后的全部丢弃。
@@ -390,13 +395,22 @@ def _agent_detail(aid):
         "model": cfg["model"],
         "prompt_file": cfg["prompt_file"],
         "prompt": agent_store.persona_text(aid),
-        "providers": [{"id": k, "label": v["label"], "model": v["model"]}
+        # vision 一并下发：管理页在下拉里换来换去时，用它即时判断该不该提示
+        # 「这个模型读不了图」，不必等保存后再问后端
+        "providers": [{"id": k, "label": v["label"], "model": v["model"],
+                       "vision": bool(v.get("vision"))}
                       for k, v in PROVIDERS.items()],
         "global_provider": LLM_PROVIDER,
         "global_model": MODEL,
         # 把「继承」算进去后实际会用的模型，让用户改完能立刻看到是什么效果
         "effective_provider": eff_provider,
         "effective_model": eff_model,
+        # 带图能力：生效模型能不能直接读图。不能的话，带图请求会先经过识图
+        # 预处理——识图固定走 vision_provider，与该 agent 自己的模型无关。
+        "vision": provider_vision(eff_provider, eff_model),
+        "vision_provider": VISION_PROVIDER,
+        "vision_model": (VISION_MODEL
+                         or PROVIDERS.get(VISION_PROVIDER, {}).get("model", "")),
         # 上下文预算：0 → 继承全局。session_tokens 是主会话的粗估体量，
         # 让「改完到底有没有用」立刻可见（网页端会话就是这一条）。
         # QQ 那些群各自一条会话线，不在这里体现，看日志里的 [cache] 行。

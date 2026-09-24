@@ -200,7 +200,7 @@ class ParseSegmentsTest(unittest.TestCase):
             {"type": "at", "data": {"qq": "111"}},
             {"type": "text", "data": {"text": " 你好"}},
         ]}
-        text, at_me = qq_bot._parse_segments(ev)
+        text, at_me, _imgs = qq_bot._parse_segments(ev)
         self.assertEqual(text, "你好")
         self.assertTrue(at_me)
 
@@ -209,27 +209,57 @@ class ParseSegmentsTest(unittest.TestCase):
             {"type": "at", "data": {"qq": "222"}},
             {"type": "text", "data": {"text": "你好"}},
         ]}
-        _text, at_me = qq_bot._parse_segments(ev)
+        _text, at_me, _imgs = qq_bot._parse_segments(ev)
         self.assertFalse(at_me)
 
-    def test_image_and_face_become_placeholders(self):
+    def test_image_url_is_collected(self):
+        """带 url 的图片段收集地址（不在这里下载，下载在 worker 线程里做）。"""
+        ev = {"self_id": 1, "message": [
+            {"type": "image", "data": {"file": "x.jpg",
+                                       "url": "https://example.com/a.jpg"}},
+            {"type": "text", "data": {"text": "看看这个"}},
+        ]}
+        text, _at, imgs = qq_bot._parse_segments(ev)
+        self.assertEqual(text, "看看这个")
+        self.assertEqual(imgs, ["https://example.com/a.jpg"])
+
+    def test_multiple_images_all_collected(self):
+        ev = {"self_id": 1, "message": [
+            {"type": "image", "data": {"url": "u1"}},
+            {"type": "text", "data": {"text": "两张"}},
+            {"type": "image", "data": {"url": "u2"}},
+        ]}
+        _text, _at, imgs = qq_bot._parse_segments(ev)
+        self.assertEqual(imgs, ["u1", "u2"])
+
+    def test_image_without_url_falls_back_to_placeholder(self):
+        """只有本地文件名（file）时拿不到图，退回占位文本，不能当成有图。"""
         ev = {"self_id": 1, "message": [
             {"type": "image", "data": {"file": "x.jpg"}},
             {"type": "face", "data": {"id": "1"}},
             {"type": "text", "data": {"text": "看看"}},
         ]}
-        text, _ = qq_bot._parse_segments(ev)
+        text, _at, imgs = qq_bot._parse_segments(ev)
         self.assertEqual(text, "[图片][表情]看看")
+        self.assertEqual(imgs, [])
+
+    def test_cq_string_image_url_is_collected(self):
+        """CQ 码格式（raw_message）也要能认出图片地址。"""
+        ev = {"self_id": "111",
+              "raw_message": "[CQ:image,file=x.jpg,url=https://e.com/b.png] 看"}
+        text, _at, imgs = qq_bot._parse_segments(ev)
+        self.assertEqual(text, "看")
+        self.assertEqual(imgs, ["https://e.com/b.png"])
 
     def test_cq_string_format(self):
         ev = {"self_id": "111", "raw_message": "[CQ:at,qq=111] 在吗"}
-        text, at_me = qq_bot._parse_segments(ev)
+        text, at_me, _imgs = qq_bot._parse_segments(ev)
         self.assertEqual(text, "在吗")
         self.assertTrue(at_me)
 
     def test_cq_string_at_someone_else(self):
         ev = {"self_id": "111", "raw_message": "[CQ:at,qq=999] 在吗"}
-        _text, at_me = qq_bot._parse_segments(ev)
+        _text, at_me, _imgs = qq_bot._parse_segments(ev)
         self.assertFalse(at_me)
 
 

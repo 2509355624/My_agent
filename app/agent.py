@@ -4,12 +4,15 @@ Agent Loop
 """
 
 import json
+import logging
 import re
 from app.cancel import is_cancelled
-from app.llm import call_llm_stream, current_usage
+from app.llm import call_llm_stream, current_usage, get_effective_config
 from app import agents as agent_store
 from app.memory import trim_history
 from app.tools import execute_tool
+
+log = logging.getLogger("agent")
 
 
 # 统一工具块正则：容忍 "TOOL:" 前后/内部的空白，也容忍省略前缀的简写
@@ -149,12 +152,12 @@ def _history_for_llm(history):
     return result
 
 
-def _attach_image(llm_history, image):
-    """把本轮的用户消息升级为多模态（text + image_url），供带图对话使用。
+def _attach_images(llm_history, images):
+    """把本轮的用户消息升级为多模态（text + 若干 image_url），供带图对话使用。
 
-    只在第 1 轮调用。一张前端压缩后的图 base64 有几十万字符：每轮重复下发
-    既白烧输入 token，又让前缀缓存每轮都 miss；而模型看图只需一次——后续
-    轮次能从它自己写下的分析、以及工具返回结果里获得信息。
+    只在第 1 轮调用。一张压缩后的图 base64 有几十万字符：每轮重复下发既白烧
+    输入 token，又让前缀缓存每轮都 miss；而模型看图只需一次——后续轮次能从
+    它自己写下的分析、以及工具返回结果里获得信息。
 
     实现上有两条不能碰的红线：
     1. **只替换列表元素，绝不修改元素内部的 dict**。_history_for_llm 返回的
@@ -171,15 +174,80 @@ def _attach_image(llm_history, image):
         content = msg.get("content")
         if not isinstance(content, str) or content.startswith("[工具结果] "):
             continue
-        llm_history[i] = {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": content},
-                {"type": "image_url", "image_url": {"url": image, "detail": "low"}},
-            ],
-        }
+        parts = [{"type": "text", "text": content}]
+        for data_url in images:
+            parts.append({"type": "image_url", "image_url": {"url": data_url}})
+        llm_history[i] = {"role": "user", "content": parts}
         return True
     return False
+
+
+# ─── 图片预处理（给没有视觉能力的模型）───────────────
+
+# 识图失败时给模型的说明。必须明确告诉它"你看不到这张图"，否则它会假装
+# 看见了，顺着用户的"你看这个报错"编出一段分析——那比直接说不看更糟。
+_VISION_FAIL_NOTE = "（这张图片识别失败，你看不到它的内容，请如实说明）"
+
+_VISION_HEAD = "[用户发来图片，以下是识别结果]"
+
+
+def _vision_notes(images):
+    """逐张识图，返回可拼进用户输入的文本行。失败的项也占一行。"""
+    from app.vision import describe
+
+    notes = []
+    total = len(images)
+    for i, data_url in enumerate(images, 1):
+        try:
+            text = describe(data_url).strip()
+        except Exception as exc:
+            log.warning("识图失败（第 %d/%d 张）：%s", i, total, exc)
+            text = ""
+        body = text or _VISION_FAIL_NOTE
+        notes.append("【第 %d 张】%s" % (i, body) if total > 1 else body)
+    return notes
+
+
+def _with_vision(user_input, images):
+    """把识图结果并入用户输入文本（图片本体不进 history，只留这段文字）。
+
+    加这段头是必要的：识别出来的文字混在用户的话里，多轮之后模型分不清
+    哪些是"用户说的"、哪些是"从图里读出来的"，容易把图里的报错当成用户
+    的诉求本身。
+    """
+    notes = _vision_notes(images)
+    if not notes:
+        return user_input
+    block = _VISION_HEAD + "\n" + "\n".join(notes)
+    text = (user_input or "").strip()
+    return (text + "\n\n" + block) if text else block
+
+
+def _as_image_list(image):
+    """把 image 参数归一化成列表。单张 data URL 与列表都接受。"""
+    if not image:
+        return []
+    if isinstance(image, str):
+        return [image]
+    if isinstance(image, (list, tuple)):
+        return [x for x in image if isinstance(x, str) and x]
+    return []
+
+
+def _error_reply(exc):
+    """把异常翻成给用户看的一句话。
+
+    额度耗尽和限流都长着 429 的脸，处理方式却相反：前者只能换模型，后者等
+    几秒就好。混成一句"出错了"的话，用户只能去翻代码和日志——而这台机器上
+    火山免费额度确实有用完的那一天，那是唯一需要动手切换的场景。
+    """
+    text = str(exc)
+    if "QuotaExceeded" in text or "FreeQuota" in text or "额度" in text:
+        return ("⚠️ 模型额度已用尽（免费额度已消耗完）。请打开管理页 "
+                "/admin 把这个 agent 的模型切换成其它 provider 后重试。")
+    if "RateLimit" in text or "rate_limit" in text:
+        return "⚠️ 模型当前被限流，稍等几秒再发一次即可，不必切换模型。"
+    return "❌ 执行出错：" + text
 
 
 def _status_message(history):
@@ -229,9 +297,11 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
     agent_id: 哪个 agent 在跑。影响两件事——上下文压缩的冷却水位按 agent 分开记；
       工具白名单在此处兜底拦截（system prompt 里不列出是第一道，这里是第二道，
       模型即便硬写出白名单外的工具也不会被执行）。
-    image: 可选，本轮随消息一起下发的图片 dataURL。**只在第 1 轮**以多模态
-      形式带给模型（见 _attach_image），第 2 轮起不再重发；它也不会被写进
-      history——调用方在历史里放的是占位文本。
+    image: 可选，本轮随消息一起下发的图片。可以是单个 dataURL 字符串，也可以
+      是 dataURL 列表（QQ 一条消息带多张图）。去向由**本轮实际生效的模型**
+      决定：有视觉能力的按多模态下发（见 _attach_images，只在第 1 轮），没有
+      视觉能力的先过识图转成文字再拼进用户输入。两种情况图片本体都不进
+      history——进档的是文本（占位说明或识别结果）。
     cancel_event: 可选，threading.Event，置位表示用户按了「停止」。循环在三个
       检查点收工：① 每轮开头 ② 模型输出结束（半截回复绝不拿去解析工具调用——
       残缺的 JSON 会被当成一次合法调用真执行）③ 每个工具执行前。
@@ -239,7 +309,7 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
       收工走正常流程：落盘 + 出 aborted 事件，不做任何强制中断，进程和会话
       文件都保持干净。
     """
-    from app.config import MAX_TURNS
+    from app.config import MAX_TURNS, provider_vision
 
     # agent 级模型：调用方没显式指定时，用 agent.json 里配的 provider/model。
     # 放在这一处而不是各个调用点上，是为了让网页端 /api/chat 与 QQ 适配层
@@ -253,6 +323,22 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
     # 上下文预算同理，0 → 传 None，由 memory 回退到 .env 的 CONTEXT_BUDGET。
     # 这样「QQ 群聊省钱、网页端深度任务放开」可以按 agent 各配一个数。
     context_budget = _acfg["context_budget"] or None
+
+    # ─── 图片路由 ────────────────────────────────────
+    # 判据是**本轮实际生效的模型**，不是 agent 配置的 provider：网页端的模型
+    # 面板能在请求级覆盖模型，降级到别处时配置和实际也会不一致，按配置判会判错。
+    #
+    # 有视觉 → 图片按多模态原样下发；没有 → 先识图转成文字拼进正文。后者不是
+    # "效果更好"，是必需的：火山的纯文本模型收到 base64 不会报错，而是整条
+    # 请求挂死（实测 ReadTimeout 卡满 180 秒）。
+    images = _as_image_list(image)
+    attach_mode = False
+    if images:
+        eff = get_effective_config(provider, model)
+        if provider_vision(eff["provider"], eff["model"]):
+            attach_mode = True
+        else:
+            user_input = _with_vision(user_input, images)
 
     history.append({"role": "user", "content": user_input})
     yield {"type": "user", "content": user_input}
@@ -284,10 +370,10 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
             trimmed = trim_history(history, agent_id, usage=last_usage,
                                    budget=context_budget)
             llm_history = _history_for_llm(trimmed)
-            # 带图对话：第 1 轮把本轮用户消息升级成多模态，之后轮次不再带图
-            # （图片本体始终不在 history 里，历史中只有占位文本）
-            if image and turn_count == 1:
-                _attach_image(llm_history, image)
+            # 带图对话（仅当本轮模型有视觉）：第 1 轮把用户消息升级成多模态，
+            # 之后轮次不再带图（图片本体始终不在 history 里，历史中只有文本）
+            if attach_mode and turn_count == 1:
+                _attach_images(llm_history, images)
             # 状态栏追加在尾部，动态变化不毒化前缀缓存
             llm_history.append(_status_message(history))
             # 流式调用：
@@ -370,8 +456,10 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
             if is_cancelled(cancel_event):
                 aborted = True
                 break
-            # 异常捕获：至少返回错误，不要断循环
-            yield {"type": "assistant", "content": f"❌ 执行出错：{str(e)}"}
+            # 异常捕获：至少返回错误，不要断循环。
+            # 文案交给 _error_reply：额度耗尽要明确告诉用户去切模型，而不是
+            # 丢一句"出错了"让人去翻日志。
+            yield {"type": "assistant", "content": _error_reply(e)}
             break
 
     if aborted:
