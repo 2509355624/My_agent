@@ -253,7 +253,7 @@ def build_stable_prompt(agent_id=None):
     env_lines = ["- 运行环境: Python + Flask Web UI"]
     if agent_store.allows_tool(agent_id, "generate_image"):
         env_lines.append("- ComfyUI 地址: http://127.0.0.1:8188")
-        env_lines.append("- 生图引擎: 本地 ComfyUI + BatchPromptImageGenerator")
+        env_lines.append("- 生图引擎: 本地 ComfyUI（具体工作流由所选 skill 决定）")
     sections.append((P_ENV, "Environment", "\n".join(env_lines)))
 
     # 按 priority 排序（小的在前）

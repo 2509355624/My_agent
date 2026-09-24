@@ -107,13 +107,16 @@ tool = {
     "name": "generate_image",
     "description": "调用 ComfyUI 生成图片，支持批量生成。多个提示词用 --- 分隔，一次调用可生成多张图。"
                   "【底模两种模式】use_character=true时使用Skill自带角色底模(固定角色，prompt只写动作/环境/构图)；"
-                  "use_character=false时无底模，你必须自己在prompt中写出完整角色提示词(发型/发色/体型/胸围/服装/年龄等)，再叠加动作和环境。",
+                  "use_character=false时无底模，你必须自己在prompt中写出完整角色提示词(发型/发色/体型/胸围/服装/年龄等)，再叠加动作和环境。"
+                  "【默认 Skill】没特别说明就用 image_gen_v1，不要无理由换。"
+                  "仅当用户明确点名 krea2（如「用 krea2」「krea2 生图」）时才传 skill=krea2——"
+                  "它是备选的 Krea2 Turbo + retroanime lora 工作流，一次只出一张，prompt 不要带 --- 分隔。",
     "function": _generate_image,
     "parameters": {
         "type": "object",
         "properties": {
             "prompt": {"type": "string", "description": "英文提示词，逗号分隔的标签。多张图用 --- 分隔，例如: prompt1 --- prompt2 --- prompt3。无底模时须包含完整角色描述"},
-            "skill": {"type": "string", "description": "Skill名称，默认image_gen_v1。列表见 load_skill"},
+            "skill": {"type": "string", "description": "Skill名称，默认image_gen_v1。可选值见系统提示 Available Skills 里标 [底模]/[无底模] 的生图类；krea2 仅在用户点名时用"},
             "use_character": {"type": "boolean", "description": "是否使用该Skill自带的角色底模（默认true）。设为false时无底模，你必须把完整角色提示词写进prompt"}
         },
         "required": ["prompt"]

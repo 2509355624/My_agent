@@ -165,5 +165,38 @@ class ListSkillsToolTest(unittest.TestCase):
         self.assertEqual(list_skills_tool._list_skills(), "暂无可用 Skill")
 
 
+class RealSkillsDataTest(unittest.TestCase):
+    """真实 skills/ 里每个 workflow.json 都必须能被 load_skill 解析。
+
+    这是「数据契约」测试。模板里的 `__SEED__` 是**故意不加引号**的非法 JSON，
+    靠 load_skill 先做 `": __SEED__" -> ': "__SEED__"'` 的字面替换再 parse。
+    哪天写成 `"seed":__SEED__`（少个空格）或换了字段风格，替换就会落空，
+    parse 直接失败、load_skill 返回 None——而症状只在真机生不出图时才暴露。
+
+    skills/ 是本机私有数据（已 gitignore），换机或 CI 上不存在则跳过。
+    """
+
+    def test_every_workflow_parses(self):
+        skills_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "skills")
+        if not os.path.isdir(skills_dir):
+            self.skipTest("本机没有 skills/ 数据目录")
+
+        checked = []
+        for name in sorted(os.listdir(skills_dir)):
+            if not os.path.isfile(os.path.join(skills_dir, name, "workflow.json")):
+                continue
+            data = skills.load_skill(name)
+            self.assertIsNotNone(
+                data, "skill '%s' 的 workflow.json 解析失败（检查 __SEED__ 占位写法）" % name)
+            self.assertIsNotNone(data["workflow"], "skill '%s' 解析出空工作流" % name)
+            for nid, node in data["workflow"].items():
+                self.assertIn("class_type", node,
+                              "skill '%s' 节点 %s 缺 class_type" % (name, nid))
+            checked.append(name)
+
+        self.assertTrue(checked, "skills/ 下没找到任何 workflow.json，这个测试形同虚设")
+
+
 if __name__ == "__main__":
     unittest.main()
