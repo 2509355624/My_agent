@@ -91,6 +91,12 @@
   .field { flex: 1; min-width: 0; }
   .field label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
 
+  /* 模型预选：选完只写进上面的输入框，输入框才是取值来源 —— 清单里没有的
+     自定义 ID / ep-xxxx 接入点照旧能手填。 */
+  .pick { margin-top: 8px; }
+  .pick-note { font-size: 11px; color: var(--text-mute); margin-top: 6px; line-height: 1.6; }
+  .pick-note.err { color: var(--error); }
+
   .eff {
     margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-sm);
     background: var(--bg-input); font-size: 12px; color: var(--text-dim);
@@ -164,6 +170,8 @@
           <div class="field">
             <label>model</label>
             <input id="model" spellcheck="false" autocomplete="off">
+            <select id="modelPick" class="pick"></select>
+            <div class="pick-note" id="modelPickNote"></div>
           </div>
         </div>
         <div class="eff" id="eff"></div>
@@ -240,6 +248,87 @@ function defaultModelOf(pid) {
   return p ? p.model : '';
 }
 
+// ─── 模型预选 ────────────────────────────────────────
+// 清单由后端去问 provider 自己（/api/models?provider=），不在前端写死：模型 ID
+// 会下线也会改名，写死的清单会静默指向不存在的模型 —— 症状是「切过去之后请求
+// 404」，不报错、只是不回话。
+let catalog = { pid: null, models: [], loading: false, error: null };
+
+async function loadCatalog(pid, force) {
+  if (!pid) return;
+  // 同一个 provider 已有清单就不重复拉（后端另有 10 分钟缓存兜着）
+  if (!force && catalog.pid === pid && catalog.models.length) {
+    renderModelPick();
+    return;
+  }
+  catalog = { pid: pid, models: [], loading: true, error: null };
+  renderModelPick();
+  try {
+    const data = await api('/api/models?provider=' + encodeURIComponent(pid));
+    if (catalog.pid !== pid) return;        // 期间又切了 provider，丢弃这次结果
+    catalog = {
+      pid: pid,
+      models: data.models || [],
+      loading: false,
+      error: data.ok === false ? (data.error || '未知原因') : null,
+    };
+  } catch (e) {
+    if (catalog.pid !== pid) return;
+    catalog = { pid: pid, models: [], loading: false, error: e.message };
+  }
+  renderModelPick();
+}
+
+function renderModelPick() {
+  const sel = $('modelPick');
+  const note = $('modelPickNote');
+  sel.textContent = '';
+  note.className = 'pick-note';
+
+  const live = (catalog.models || []).filter((m) => !m.retiring);
+  const retiring = (catalog.models || []).filter((m) => m.retiring);
+
+  const head = document.createElement('option');
+  head.value = '';
+  head.textContent = catalog.loading ? '正在获取模型清单…'
+    : (live.length ? '从列表选（' + live.length + ' 个在用）'
+                   : '从列表选（暂无清单）');
+  sel.appendChild(head);
+
+  const fill = (parent, list) => list.forEach((m) => {
+    const o = document.createElement('option');
+    o.value = m.id;
+    o.textContent = m.id;
+    parent.appendChild(o);
+  });
+  fill(sel, live);
+  if (retiring.length) {
+    // 将退役的仍可能在免费额度里，不该替用户决定不用 —— 单独一组，不占默认视野
+    const grp = document.createElement('optgroup');
+    grp.label = '将退役（' + retiring.length + '）';
+    fill(grp, retiring);
+    sel.appendChild(grp);
+  }
+  syncModelPick();
+
+  if (catalog.error) {
+    note.className = 'pick-note err';
+    note.textContent = '拿不到模型清单（' + catalog.error + '）——可直接手填模型 ID。';
+  } else if (!catalog.loading && !catalog.models.length) {
+    note.textContent = '这个 provider 没返回可用模型，可直接手填模型 ID。';
+  } else if (!catalog.loading) {
+    note.textContent = '清单来自 ' + labelOf(catalog.pid) + ' 自己；点选即填入上方输入框。';
+  }
+}
+
+// 下拉只是选择器。手填了清单里没有的 ID（自定义接入点）时，下拉回到占位项。
+function syncModelPick() {
+  const sel = $('modelPick');
+  const v = $('model').value.trim();
+  const hit = Array.prototype.some.call(sel.options, (o) => o.value === v);
+  sel.value = hit ? v : '';
+}
+
 function snapshot() {
   return {
     provider: $('provider').value || '',
@@ -312,6 +401,7 @@ function renderEffective() {
       + '再交给它 —— 图能看，但细节以识别结果为准。';
     warn.classList.remove('hidden');
   }
+  syncModelPick();
 }
 
 // 回显「这个预算实际是多少、现在用掉了多少」。
@@ -374,6 +464,7 @@ async function loadDetail() {
   const pid = sel.value || detail.global_provider;
   $('model').placeholder = '默认 ' + (defaultModelOf(pid) || '—');
   renderEffective();
+  loadCatalog(pid);
   renderBudget();
   renderMeta();
 
@@ -456,6 +547,14 @@ $('provider').addEventListener('change', () => {
   const pid = $('provider').value || detail.global_provider;
   $('model').placeholder = '默认 ' + (defaultModelOf(pid) || '—');
   renderEffective();
+  loadCatalog(pid);
+});
+$('modelPick').addEventListener('change', () => {
+  const v = $('modelPick').value;
+  if (!v) return;
+  $('model').value = v;
+  renderEffective();
+  status('');
 });
 $('model').addEventListener('input', renderEffective);
 $('prompt').addEventListener('input', () => status(''));

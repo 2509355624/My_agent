@@ -1564,12 +1564,45 @@ function toggleModelPanel() {
   overlay.classList.toggle('open');
 }
 
-// 各提供商的候选模型列表（ollama 由后端实时拉取）
-const MODEL_PRESETS = {
-  volc: ['deepseek-v4-flash-ga-260731', 'deepseek-v4-flash-260425', 'deepseek-v4-pro-ga-260813'],
-  doubao: ['doubao-1-5-thinking-pro-250615', 'doubao-seed-2-0-mini-260428', 'doubao-1-5-pro-250615'],
-  deepseek: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-flash']
-};
+// 候选模型清单由后端去问 provider 自己拿（/api/models?provider=）。
+// 不写死是必要的：模型 ID 会下线也会改名，写死的清单会慢慢指向不存在的模型，
+// 症状是「点了这个预设之后请求 404」——不报错、只是不回话，很难归因。
+// 下面这组只在拉取回来之前临时占位，所以只放「该 provider 的默认模型 + 当前选中的」。
+
+// 拉取还没回来时的临时候选：默认模型 + 当前选中，够点、也够看出当前在哪
+function presetIdsFor(cfg, selected) {
+  const ids = [];
+  if (cfg && cfg.model) ids.push(cfg.model);
+  if (selected && ids.indexOf(selected) < 0) ids.push(selected);
+  return ids;
+}
+
+// 预设按钮：始终全部可见，避免原生 datalist「按当前值过滤」导致只看到一项
+function renderPresetChips(ids) {
+  const box = document.getElementById('modelChips');
+  if (!box) return;
+  box.innerHTML = ids.map(function(m) {
+    const active = (m === currentModel) ? ' active' : '';
+    return '<button type="button" class="model-chip' + active + '"' +
+      ' data-model="' + escapeAttr(m) + '"' +
+      ' onclick="pickModel(this.getAttribute(\'data-model\'))">' +
+      escapeHtml(m) + '</button>';
+  }).join('');
+}
+
+async function refreshPresets(provider) {
+  try {
+    const res = await fetch('/api/models?provider=' + encodeURIComponent(provider));
+    const data = await res.json();
+    if (provider !== currentProvider) return;      // 期间又切了 provider
+    const live = ((data && data.models) || [])
+      .filter(function(m) { return !m.retiring; })  // 将退役的别占视野，仍可手填
+      .map(function(m) { return m.id; });
+    if (live.length) renderPresetChips(live);       // 拉不到就留着手上的，别清空
+  } catch (e) {
+    /* 静默：临时项还在，用户仍可手填模型 ID */
+  }
+}
 
 function updateModelBadge(label, model) {
   modelBadge.textContent = (label && model) ? label + ' · ' + model : (model || '未知模型');
@@ -1631,24 +1664,17 @@ function renderModelGroup(provider, cfg, selectedModel) {
     return;
   }
 
-  const presets = MODEL_PRESETS[provider] || (cfg && cfg.model ? [cfg.model] : []);
-  // 预设按钮：始终全部可见，避免原生 datalist「按当前值过滤」导致只看到一项
-  const chips = presets.map(function(m) {
-    const active = (m === selectedModel) ? ' active' : '';
-    return '<button type="button" class="model-chip' + active + '"' +
-      ' data-model="' + escapeAttr(m) + '"' +
-      ' onclick="pickModel(this.getAttribute(\'data-model\'))">' +
-      escapeHtml(m) + '</button>';
-  }).join('');
-
   group.innerHTML =
     '<div class="form-group">' +
       '<label>模型 / 接入点ID</label>' +
       '<input id="model" class="side-input" value="' + escapeAttr(selectedModel) + '"' +
         ' oninput="onModelSelect(this.value)" autocomplete="off" spellcheck="false" placeholder="模型ID 或 ep-xxxx 接入点ID">' +
-      '<div class="model-chips" id="modelChips">' + chips + '</div>' +
+      '<div class="model-chips" id="modelChips"></div>' +
       baseNote +
     '</div>';
+  // 先给临时项，再让实时清单替换它
+  renderPresetChips(presetIdsFor(cfg, selectedModel));
+  refreshPresets(provider);
 }
 
 // 点击预设模型按钮：填入输入框 + 高亮 + 刷新徽标

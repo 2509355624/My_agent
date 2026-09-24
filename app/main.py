@@ -15,6 +15,7 @@ from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         ADMIN_ALLOW_REMOTE, CONTEXT_BUDGET,
                         VISION_PROVIDER, VISION_MODEL, provider_vision)
 from app.skills import list_skills, load_skill
+from app import model_catalog
 from app.agent_prompt import build_stable_prompt, sync_session_system
 from app.memory import load_history, save_history, estimate_messages
 from app.agent import run_agent_stream, parse_tool_calls, _strip_tool_blocks
@@ -118,7 +119,16 @@ def get_agents():
 
 @app.route("/api/models")
 def get_ollama_models():
-    """列出 Ollama 本地已安装的模型（代理 /api/tags）"""
+    """列出可选的模型。
+
+    带 `provider` 时返回该 provider 当前可用的对话模型（各自去问对方，见
+    app/model_catalog.py）——预选清单写死会腐烂，模型 ID 是会下线、会改名的。
+    不带则维持原行为：按 `baseUrl` 代理 Ollama 的 /api/tags。
+    """
+    pid = request.args.get("provider", "").strip()
+    if pid:
+        return jsonify(model_catalog.list_models(pid))
+
     base = request.args.get("baseUrl", "").strip() or OLLAMA_BASE_URL
     try:
         resp = requests.get(base.rstrip("/") + "/api/tags", timeout=5)
