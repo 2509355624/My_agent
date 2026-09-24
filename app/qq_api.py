@@ -52,6 +52,14 @@ def current_context():
 
 # ─── 底层调用 ────────────────────────────────────────
 
+# NapCat 就在本机 127.0.0.1，请求必须绕开系统代理：本机装了 Clash 这类工具
+# 时会把代理写进 Windows 注册表，而 requests 在环境变量为空时会 fallback
+# 去读注册表，结果连 127.0.0.1 的请求也被送去代理、换回一个 502。
+# trust_env=False 让这个 session 完全不理会环境变量与注册表里的代理设置。
+_session = requests.Session()
+_session.trust_env = False
+
+
 def _call(action, payload=None, timeout=20):
     """调一个 OneBot action，返回 data 字段。
 
@@ -63,7 +71,7 @@ def _call(action, payload=None, timeout=20):
     if QQ_TOKEN:
         headers["Authorization"] = "Bearer " + QQ_TOKEN
 
-    resp = requests.post(url, json=payload or {}, headers=headers, timeout=timeout)
+    resp = _session.post(url, json=payload or {}, headers=headers, timeout=timeout)
     resp.raise_for_status()
     try:
         data = resp.json()

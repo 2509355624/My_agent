@@ -1,5 +1,7 @@
-# 环境变量
+# 环境变量（各类备份也一并忽略，避免真实密钥进仓库）
 .env
+.env.*
+!.env_example
 
 # 会话数据（旧单会话文件所在目录，保留忽略以防残留）
 data/
@@ -20,6 +22,9 @@ documents/
 
 # 向量知识库
 vector_store/
+
+# QQ 适配层单实例锁（运行时状态文件）
+.qq_bot.lock
 
 # Python 缓存
 __pycache__/

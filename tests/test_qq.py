@@ -11,7 +11,9 @@
 真机（连 NapCat 收真实群消息）另做验证，这里只管逻辑。
 """
 
+import asyncio
 import os
+import tempfile
 import unittest
 from unittest import mock
 
@@ -417,6 +419,94 @@ class ThreadLocalContextTest(unittest.TestCase):
         self.assertEqual(qq_api.current_context(), ("group", "9"))
         qq_api.clear_context()
         self.assertEqual(qq_api.current_context(), (None, None))
+
+
+# ─── 连接层：代理绕过 + 首次失败重试 ──────────────────
+
+class ConnectRobustnessTest(unittest.TestCase):
+    """这两条都是真机上炸出来的，不是假想问题。
+
+    本机装了 Clash 这类工具时，代理会写进环境变量与注册表，于是连
+    127.0.0.1 的回环请求也被送去代理，换回 502。更麻烦的是 websockets
+    把 InvalidProxyStatus 当成不可重试的致命错误直接抛出（它只重试
+    ConnectionRefusedError 这类），进程当场就没了 —— 真机日志里正是
+    这条路径，而不是普通的连不上。
+
+    所以两条都要治：HTTP 侧 trust_env=False，WS 侧显式 proxy=None。
+    外层 while 重试是兜底，防的是同类「不可重试异常」再出现。
+    """
+
+    def test_http_session_bypasses_system_proxy(self):
+        self.assertFalse(qq_api._session.trust_env,
+                         "trust_env 必须为 False，否则会被系统代理接管")
+
+    def test_ws_disables_proxy(self):
+        self.assertTrue(qq_bot._WS_SUPPORTS_NO_PROXY,
+                        "当前 websockets 版本应支持 proxy=None")
+
+    def test_first_connect_failure_retries_instead_of_crashing(self):
+        calls = []
+
+        def fake_connect(url, **kw):
+            calls.append(kw)
+            raise OSError("connection refused")
+
+        async def scenario():
+            bot = qq_bot.QQBot()
+            with mock.patch.object(qq_bot, "ws_connect", fake_connect), \
+                 mock.patch.object(qq_api, "check_alive",
+                                   side_effect=OSError("probe failed")), \
+                 mock.patch.object(qq_bot, "_RECONNECT_MIN", 0.01), \
+                 mock.patch.object(qq_bot, "_RECONNECT_MAX", 0.01):
+                try:
+                    await asyncio.wait_for(bot.run(), timeout=0.15)
+                except asyncio.TimeoutError:
+                    pass                # 预期：一直在重试，所以超时
+
+        asyncio.run(scenario())
+        self.assertGreaterEqual(len(calls), 3, "首次连不上时没有重试")
+        self.assertIsNone(calls[0].get("proxy"), "未显式关闭代理")
+
+
+# ─── 单实例保护 ─────────────────────────────────────
+
+class SingleInstanceTest(unittest.TestCase):
+    """两个适配层同时连着 NapCat 时，同一条 QQ 消息会被回两遍，必须拦住。"""
+
+    def setUp(self):
+        self._saved = qq_bot._SINGLETON_HANDLE
+        qq_bot._SINGLETON_HANDLE = None
+
+    def tearDown(self):
+        self._release()
+        qq_bot._SINGLETON_HANDLE = self._saved
+
+    def _release(self):
+        """关掉当前句柄 —— Windows 上文件被占用时临时目录删不掉。"""
+        if qq_bot._SINGLETON_HANDLE is not None:
+            qq_bot._SINGLETON_HANDLE.close()
+            qq_bot._SINGLETON_HANDLE = None
+
+    def test_second_acquire_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(qq_bot, "BASE_DIR", d):
+                self.assertTrue(qq_bot._acquire_single_instance())
+                self.assertFalse(qq_bot._acquire_single_instance())
+            self._release()
+
+    def test_lock_released_after_handle_closed(self):
+        """进程退出后锁要能被下一个进程拿到，不能残留死锁。"""
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(qq_bot, "BASE_DIR", d):
+                self.assertTrue(qq_bot._acquire_single_instance())
+                self._release()
+                self.assertTrue(qq_bot._acquire_single_instance())
+            self._release()
+
+    def test_missing_msvcrt_does_not_block(self):
+        """非 Windows 平台不做检查，不能因此起不来。"""
+        with mock.patch.object(qq_bot, "msvcrt", None):
+            self.assertTrue(qq_bot._acquire_single_instance())
 
 
 if __name__ == "__main__":

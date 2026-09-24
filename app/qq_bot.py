@@ -28,19 +28,26 @@ QQ 接入适配层（NapCat / OneBot 11）
 """
 
 import asyncio
+import inspect
 import json
 import logging
+import os
 import re
 from urllib.parse import quote
+
+try:
+    import msvcrt                      # Windows 文件锁，用于单实例保护
+except ImportError:                    # 非 Windows 平台退化为不做检查
+    msvcrt = None
 
 from app import qq_api
 from app.agent import run_agent_stream
 from app.agent_prompt import build_stable_prompt
 from app.config import (
-    COMFYUI_URL, QQ_AGENT_ID, QQ_BLACKLIST_USERS, QQ_DEBOUNCE_SECONDS,
-    QQ_GROUP_AT_ONLY, QQ_GROUP_KEYWORDS, QQ_MAX_CONCURRENCY,
-    QQ_PRIVATE_ENABLE, QQ_TOKEN, QQ_WHITELIST_GROUPS, QQ_WHITELIST_USERS,
-    QQ_WS_URL,
+    BASE_DIR, COMFYUI_URL, QQ_AGENT_ID, QQ_BLACKLIST_USERS,
+    QQ_DEBOUNCE_SECONDS, QQ_GROUP_AT_ONLY, QQ_GROUP_KEYWORDS,
+    QQ_MAX_CONCURRENCY, QQ_PRIVATE_ENABLE, QQ_TOKEN, QQ_WHITELIST_GROUPS,
+    QQ_WHITELIST_USERS, QQ_WS_URL,
 )
 from app.memory import load_history, save_history
 
@@ -50,6 +57,19 @@ except ImportError:          # 旧版 websockets 的兼容路径
     from websockets import connect as ws_connect
 
 log = logging.getLogger("qq_bot")
+
+# 首次连接失败后的重试间隔（秒），指数退避到上限。NapCat 启动后需要先扫码
+# 登录，3001 要等登录成功才监听，所以适配层刚起来时连不上属于常态。
+_RECONNECT_MIN = 5
+_RECONNECT_MAX = 60
+
+# websockets 用 proxy=None 显式关掉代理，旧版本没有这个参数。不关代理会被
+# 本机的 Clash 之类劫持：连 ws://127.0.0.1 的握手会被送去代理，换回
+# 502 InvalidProxyStatus 并让进程当场退出。
+try:
+    _WS_SUPPORTS_NO_PROXY = "proxy" in inspect.signature(ws_connect).parameters
+except (TypeError, ValueError):
+    _WS_SUPPORTS_NO_PROXY = False
 
 # 与 app/main.py 的 SESSION_EVENTS 同义：这几类事件出流时消息已写进 history，
 # 所以看到就要落盘（生图可能阻塞很久，不落盘的话进程被杀会丢整轮）
@@ -319,19 +339,61 @@ class QQBot:
         log.info("QQ 接入启动：agent=%s，事件源=%s", QQ_AGENT_ID, QQ_WS_URL)
         await self._probe()
 
-        kwargs = {}
+        kwargs = {"proxy": None} if _WS_SUPPORTS_NO_PROXY else {}
         if QQ_TOKEN:
             kwargs["additional_headers"] = {"Authorization": "Bearer " + QQ_TOKEN}
 
-        # connect 作为异步迭代器使用时自带断线重连（指数退避），
-        # 所以这里不需要自己写 while + sleep 的重连循环
-        async for ws in ws_connect(QQ_WS_URL, **kwargs):
-            log.info("已连接 %s", QQ_WS_URL)
+        # 两层重连各管一件事，缺一不可：
+        #   - 内层 async for 管「连上之后断开」，它自带指数退避重连；
+        #   - 外层 while 管「第一次就没连上」—— 这种失败会让 connect 直接
+        #     抛异常冒泡出去，内置重连根本轮不到，进程会当场退出。NapCat
+        #     还没扫码登录时正是这种情况。
+        delay = _RECONNECT_MIN
+        while True:
             try:
-                async for raw in ws:
-                    self._dispatch(raw)
+                async for ws in ws_connect(QQ_WS_URL, **kwargs):
+                    log.info("已连接 %s", QQ_WS_URL)
+                    delay = _RECONNECT_MIN    # 连上了就把退避重置回去
+                    try:
+                        async for raw in ws:
+                            self._dispatch(raw)
+                    except Exception as e:
+                        log.warning("连接断开：%s", e)
+                log.warning("连接已结束，%d 秒后重连", delay)
             except Exception as e:
-                log.warning("连接断开：%s，准备重连", e)
+                log.warning("连接失败：%s，%d 秒后重试", e, delay)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, _RECONNECT_MAX)
+
+
+_SINGLETON_HANDLE = None
+
+
+def _acquire_single_instance():
+    """抢占单实例锁；已有实例在跑时返回 False。
+
+    两个适配层同时连着 NapCat 的 WS 时，同一条 QQ 消息会被两个进程各处理
+    一遍 —— 同一个会话里回两遍，而且两份上下文会互相覆盖。Windows 的文件
+    锁随进程结束（包括被强杀）由内核自动释放，所以不用担心残留锁文件。
+
+    拿不到锁文件本身（如目录只读）时不拦启动，只记一条警告。
+    """
+    global _SINGLETON_HANDLE
+    if msvcrt is None:
+        return True
+    path = os.path.join(BASE_DIR, ".qq_bot.lock")
+    try:
+        handle = open(path, "a+b")
+    except OSError as e:
+        log.warning("无法创建锁文件 %s（%s），跳过单实例检查", path, e)
+        return True
+    try:
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        handle.close()
+        return False
+    _SINGLETON_HANDLE = handle          # 持有引用，避免被 GC 提前关掉
+    return True
 
 
 def main():
@@ -341,6 +403,10 @@ def main():
     )
     if not QQ_AGENT_ID:
         log.error("QQ_AGENT_ID 为空，先配好 .env 再启动")
+        return
+    if not _acquire_single_instance():
+        log.error("已有 QQ 适配层在运行，本次退出。"
+                  "要重启请先结束旧进程，或改用 一键启动QQ机器人.bat")
         return
     try:
         asyncio.run(QQBot().run())
