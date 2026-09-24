@@ -227,6 +227,11 @@ QQ_IMAGE_TIMEOUT = float(os.getenv("QQ_IMAGE_TIMEOUT", "20"))
 # 下载体积上限（字节）。超过就不下——8MB 的图压完也未必划算，直接说明看不到
 QQ_IMAGE_MAX_BYTES = int(os.getenv("QQ_IMAGE_MAX_BYTES", str(16 * 1024 * 1024)))
 
+# 被引用的消息带进模型的字数上限。引用是「这一轮问题的上下文」，但它可能是
+# 机器人自己的一条长回复，或一张转发了几十条的聊天记录卡——不封顶就会把
+# 预算吃光。超出只截断并附一句说明：引用内容只是补充，不该让整轮失败。
+QQ_QUOTE_MAX_CHARS = int(os.getenv("QQ_QUOTE_MAX_CHARS", "3000"))
+
 # 每轮结束后的静默窗口，把这段时间内到达的同一会话消息合并成一次处理
 # （群里连发几句时，避免逐句各跑一轮 LLM）
 QQ_DEBOUNCE_SECONDS = float(os.getenv("QQ_DEBOUNCE_SECONDS", "1.5"))

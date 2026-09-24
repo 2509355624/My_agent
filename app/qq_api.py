@@ -89,6 +89,26 @@ def check_alive(timeout=5):
     return info.get("user_id"), info.get("nickname")
 
 
+def get_message(message_id, timeout=10):
+    """按 id 取一条历史消息，用于展开「引用」段。
+
+    引用（reply）段里只有一个 message_id，被引用的正文不在这条消息里，
+    得回头查。返回的字段与 WS 上报的消息事件**同构**（message /
+    raw_message / sender / message_type），所以能直接交给 qq_bot 现有的
+    解析逻辑复用，不必另写一套。
+    """
+    return _call("get_msg", {"message_id": message_id}, timeout=timeout)
+
+
+def get_forward_msg(forward_id, timeout=10):
+    """按 id 取一张「转发的聊天记录」卡片的全部节点。
+
+    多数情况下 forward 段自带 content 数组，用不上这个接口；这里是兜底，
+    以及万一 NapCat 某个版本不下发 content 时的退路。
+    """
+    return _call("get_forward_msg", {"id": forward_id}, timeout=timeout)
+
+
 # ─── Markdown → QQ 纯文本 ────────────────────────────
 
 # 处理顺序有讲究：图片 ![alt](url) 必须在普通链接之前，否则会先被

@@ -47,7 +47,7 @@ from app.config import (
     BASE_DIR, COMFYUI_URL, QQ_AGENT_ID, QQ_BLACKLIST_USERS,
     QQ_DEBOUNCE_SECONDS, QQ_GROUP_AT_ONLY, QQ_GROUP_KEYWORDS,
     QQ_MAX_CONCURRENCY, QQ_PENDING_MAX_CHARS, QQ_PENDING_MAX_ITEMS,
-    QQ_PRIVATE_ENABLE, QQ_TOKEN, QQ_WHITELIST_GROUPS,
+    QQ_PRIVATE_ENABLE, QQ_QUOTE_MAX_CHARS, QQ_TOKEN, QQ_WHITELIST_GROUPS,
     QQ_WHITELIST_USERS, QQ_WS_URL,
 )
 from app.memory import load_history, save_history
@@ -161,19 +161,124 @@ def _parse_segments(ev):
     return _CQ_RE.sub(_sub, raw).strip(), _sub.at_me, images
 
 
+def _extract_quotes(ev):
+    """取出这条消息里的引用来源（reply / forward 段）。
+
+    这两类段只带一个 id，被引用的正文不在这条消息里，所以单独提取出来，
+    留到 _run_turn 里再回头查——那时才确认了「这条消息确实要回」，否则
+    群里每来一条消息都要白跑一次 HTTP。
+
+    与 _parse_segments 分开，是因为两者性质不同：text / at / image 是消息
+    本体（决定回不回、谁来问），引用只是本轮的附加上下文。
+
+    返回 [{"kind": "reply", "id": ...}] 或
+         [{"kind": "forward", "id": ..., "nodes": [...]}]。
+    """
+    out = []
+    segs = ev.get("message")
+
+    if isinstance(segs, list):
+        for seg in segs:
+            if not isinstance(seg, dict):
+                continue
+            stype, sdata = seg.get("type"), seg.get("data") or {}
+            if stype == "reply":
+                mid = str(sdata.get("id") or "")
+                if mid:
+                    out.append({"kind": "reply", "id": mid})
+            elif stype == "forward":
+                nodes = sdata.get("content")
+                out.append({
+                    "kind": "forward",
+                    "id": str(sdata.get("id") or ""),
+                    "nodes": nodes if isinstance(nodes, list) else None,
+                })
+        return out
+
+    raw = str(ev.get("raw_message") or "")
+    for m in _CQ_RE.finditer(raw):
+        name, rest = m.group(1), m.group(2)
+        if name == "reply":
+            mid = _cq_arg(rest, "id")
+            if mid:
+                out.append({"kind": "reply", "id": mid})
+        elif name == "forward":
+            fid = _cq_arg(rest, "id")
+            if fid:
+                out.append({"kind": "forward", "id": fid, "nodes": None})
+    return out
+
+
+def _quote_body(ev, limit):
+    """把一条被引用的消息渲染成 (正文, 说话人, 图片地址列表)。
+
+    这里直接复用 _parse_segments：get_msg 返回的结构与 WS 上报的消息事件
+    同构，同一套解析逻辑拿来就能用。注意**里层的引用不再展开**——只解析
+    正文，它自己带的 reply 段直接忽略，否则「引用了引用」会一层层追下去。
+    """
+    text, _at, images = _parse_segments(ev)
+    who = ((ev.get("sender") or {}).get("card")
+           or (ev.get("sender") or {}).get("nickname") or "")
+    body = text or ("（图片）" if images else "（没有可读内容）")
+    if limit > 0 and len(body) > limit:
+        body = body[:limit] + "……（过长已截断）"
+    return body, who, images
+
+
+def _resolve_quote(q, limit):
+    """把一个引用来源拉取并渲染成 (文本块, 图片地址列表)。
+
+    拉取失败一律降级成一句说明：引用只是本轮的补充上下文，取不到不该让
+    整轮对话失败（与取图失败的处理一致）。返回空文本表示这条引用没内容。
+    """
+    if q.get("kind") == "forward":
+        nodes = q.get("nodes")
+        if not nodes and q.get("id"):
+            try:                     # 兜底：forward 段没带 content 时再问一次
+                nodes = qq_api.get_forward_msg(q["id"]).get("messages") or []
+            except Exception as exc:
+                log.warning("拉取转发的聊天记录失败 %s：%s", q.get("id"), exc)
+                return "[转发的聊天记录无法读取]", []
+        lines, images, total = [], [], 0
+        for node in (nodes or []):
+            if not isinstance(node, dict):
+                continue
+            body, who, node_images = _quote_body(node, limit)
+            lines.append("%s：%s" % (who, body) if who else body)
+            images.extend(node_images)
+            total += len(lines[-1])
+            if limit > 0 and total >= limit:
+                lines.append("……（记录过长，已截取）")
+                break
+        if not lines:
+            return "", []
+        return "[转发的聊天记录]\n" + "\n".join(lines), images
+
+    try:
+        msg = qq_api.get_message(q.get("id"))
+    except Exception as exc:
+        log.warning("拉取引用的消息失败 %s：%s", q.get("id"), exc)
+        return "[引用的消息无法读取]", []
+    body, who, images = _quote_body(msg, limit)
+    head = "[引用 %s 的消息] " % who if who else "[引用的消息] "
+    return head + body, images
+
+
 def _session_key(target, target_id):
     return "%s_%s" % (target, target_id)
 
 
-def _should_reply(ev, target, target_id, text, at_me, has_image=False):
+def _should_reply(ev, target, target_id, text, at_me, has_image=False,
+                  has_quote=False):
     """判定这条消息要不要回。返回 (bool, 原因)，原因只用于日志。
 
-    has_image 参与判定的理由：@ 了机器人却只发一张图（"看看这个"）是常见
-    用法，以前只看 text 会把它整个丢掉。注意「有内容」判据是 `text or
-    has_image`——图也算内容，但**不 @ 的群里仍然不看图**，触发规则没变宽。
+    has_image / has_quote 参与判定的理由：@ 了机器人却只发一张图、或者只
+    引用一条消息不写字（"这句怎么回"），都是常见用法，以前只看 text 会把
+    它们整个丢掉。注意「有内容」判据是 `text or has_image or has_quote`
+    ——这些也算内容，但**不 @ 的群里仍然不看**，触发规则没放宽。
     """
     user_id = str(ev.get("user_id", ""))
-    has_content = bool(text) or bool(has_image)
+    has_content = bool(text) or bool(has_image) or bool(has_quote)
 
     if user_id in QQ_BLACKLIST_USERS:
         return False, "在黑名单里"
@@ -219,9 +324,11 @@ def _merge_batch(batch, max_items=None, max_chars=None):
     if max_chars is None:
         max_chars = QQ_PENDING_MAX_CHARS
 
-    # 只发图不打字的消息也算一条，不能按 text 过滤掉（否则「@机器人 + 一张图」
-    # 会被整条丢弃）。图的下载与张数上限在 _run_turn / _prepare_images 里管。
-    items = [x for x in batch if x.get("text") or x.get("images")]
+    # 只发图不打字、只引用不写字的消息也算一条，不能按 text 过滤掉，否则
+    # 「@机器人 + 一张图」「引用一句 + 直接发送」会被整条丢弃。图的下载与
+    # 张数上限在 _run_turn / _prepare_images 里管，引言在 _resolve_quote 里拉。
+    items = [x for x in batch
+             if x.get("text") or x.get("images") or x.get("quotes")]
     if max_items > 0 and len(items) > max_items:
         log.info("待处理 %d 条，只取最近的 %d 条", len(items), max_items)
         items = items[-max_items:]
@@ -256,8 +363,9 @@ class SessionRunner:
         self._pending = []
         self._task = None
 
-    def submit(self, text, sender_name="", images=None):
-        item = {"text": text, "sender": sender_name, "images": images or []}
+    def submit(self, text, sender_name="", images=None, quotes=None):
+        item = {"text": text, "sender": sender_name,
+                "images": images or [], "quotes": quotes or []}
         self._pending.append(item)
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._loop())
@@ -302,6 +410,21 @@ class SessionRunner:
         # 图片段单独收集：只发图不打字是合法用法（"帮我看下这个"），
         # 不能因为 text 为空就把整轮丢掉
         image_urls = [u for it in batch for u in (it.get("images") or [])]
+
+        # 引用/转发的正文不在这条消息里，得回头问协议端。放在这里而不是
+        # _dispatch 里，是因为那时还没判定「这条要不要回」——否则群里每来
+        # 一条消息都要白跑一次 HTTP。这也是 IO，必须在 worker 线程上做。
+        quote_blocks, quote_images = [], []
+        for it in batch:
+            for q in (it.get("quotes") or []):
+                block, q_images = _resolve_quote(q, QQ_QUOTE_MAX_CHARS)
+                if block:
+                    quote_blocks.append(block)
+                quote_images.extend(q_images)
+        image_urls = quote_images + image_urls
+        if quote_blocks:
+            text = "\n\n".join(quote_blocks + ([text] if text else []))
+
         if not text and not image_urls:
             return
 
@@ -415,8 +538,9 @@ class QQBot:
             return
 
         text, at_me, image_urls = _parse_segments(ev)
+        quotes = _extract_quotes(ev)
         ok, reason = _should_reply(ev, target, target_id, text, at_me,
-                                   bool(image_urls))
+                                   bool(image_urls), bool(quotes))
         if not ok:
             log.debug("跳过 %s %s：%s", target, target_id, reason)
             return
@@ -425,15 +549,21 @@ class QQBot:
                   or (ev.get("sender") or {}).get("nickname") or "")
         session_key = _session_key(target, target_id)
 
-        # 群里要带上说话人，否则模型不知道是谁在问；私聊不用
-        if target == "group" and sender:
+        # 群里要带上说话人，否则模型不知道是谁在问；私聊不用。
+        # 没有文字时不加——「引用一条 + 不写字」的正文本来就是空的，硬拼
+        # 出一个「张三：」只会让模型看到一行没有内容的归属标记。
+        if target == "group" and sender and text:
             text = sender + "：" + text
 
+        extra = ""
+        if image_urls:
+            extra += " +%d 张图" % len(image_urls)
+        if quotes:
+            extra += " +%d 条引用" % len(quotes)
         log.info("← %s %s（%s）: %s%s", target, target_id, reason,
-                 text[:60].replace("\n", " "),
-                 (" +%d 张图" % len(image_urls)) if image_urls else "")
+                 text[:60].replace("\n", " "), extra)
         self._runner_for(session_key, target, target_id).submit(
-            text, sender, image_urls)
+            text, sender, image_urls, quotes)
 
     async def _probe(self):
         """启动时探一下协议端在不在，不在就只警告、照常去连 WS。"""

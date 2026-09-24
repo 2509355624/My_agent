@@ -12,6 +12,7 @@
 """
 
 import asyncio
+import json
 import os
 import tempfile
 import unittest
@@ -149,6 +150,20 @@ class MergeBatchTest(unittest.TestCase):
         out = qq_bot._merge_batch(b, max_items=0, max_chars=0)
         self.assertEqual(len(out.split("\n")), 30)
 
+    def test_only_quote_message_is_not_filtered_out(self):
+        """只有引用、没有文字的消息不能被当成「空消息」丢掉。
+
+        否则「引用一条 + 直接发送」会被静默过滤，用户等半天没反应。这里
+        用「只留最近一条」反证：留下的必须是那条没有文字、只有引用的消息
+        （它拼不出文字，所以结果为空串）。
+        """
+        batch = [
+            {"text": "更早的一句", "sender": "", "images": [], "quotes": []},
+            {"text": "", "sender": "", "images": [],
+             "quotes": [{"kind": "reply", "id": "1"}]},
+        ]
+        self.assertEqual(qq_bot._merge_batch(batch, max_items=1), "")
+
 
 class ImageSegmentTest(unittest.TestCase):
     def test_http_url_passes_through(self):
@@ -263,6 +278,173 @@ class ParseSegmentsTest(unittest.TestCase):
         self.assertFalse(at_me)
 
 
+# ─── 引用消息（reply / forward 段）───────────────────
+
+class ExtractQuotesTest(unittest.TestCase):
+    """引用段只带一个 id，被引用的正文不在这条消息里。
+
+    以前这两类段走到 _parse_segments 就被静默丢掉：数组形式不匹配任何
+    分支，CQ 码形式被正则替换成空串。于是「引用一句 + 问怎么回」在模型
+    眼里就是光秃秃的一句问话，完全不知道在说哪句。
+    """
+
+    def test_array_reply(self):
+        ev = {"message": [
+            {"type": "reply", "data": {"id": "1532711165"}},
+            {"type": "text", "data": {"text": "这句怎么回"}},
+        ]}
+        self.assertEqual(qq_bot._extract_quotes(ev),
+                         [{"kind": "reply", "id": "1532711165"}])
+
+    def test_array_forward_keeps_inline_nodes(self):
+        nodes = [{"sender": {"nickname": "甲"}, "message": []}]
+        ev = {"message": [{"type": "forward",
+                           "data": {"id": "768", "content": nodes}}]}
+        self.assertEqual(qq_bot._extract_quotes(ev),
+                         [{"kind": "forward", "id": "768", "nodes": nodes}])
+
+    def test_forward_without_content_keeps_id_for_lookup(self):
+        """协议端不下发 content 时要留下 id，好在展开时回头查一次。"""
+        ev = {"message": [{"type": "forward", "data": {"id": "768"}}]}
+        self.assertEqual(qq_bot._extract_quotes(ev),
+                         [{"kind": "forward", "id": "768", "nodes": None}])
+
+    def test_cq_string_reply(self):
+        ev = {"raw_message": "[CQ:reply,id=1532711165] 这句怎么回"}
+        self.assertEqual(qq_bot._extract_quotes(ev),
+                         [{"kind": "reply", "id": "1532711165"}])
+
+    def test_cq_string_forward(self):
+        ev = {"raw_message": "[CQ:forward,id=768] 看这个"}
+        self.assertEqual(qq_bot._extract_quotes(ev),
+                         [{"kind": "forward", "id": "768", "nodes": None}])
+
+    def test_reply_without_id_is_ignored(self):
+        ev = {"message": [{"type": "reply", "data": {}}]}
+        self.assertEqual(qq_bot._extract_quotes(ev), [])
+
+    def test_no_quote_returns_empty(self):
+        ev = {"message": [{"type": "text", "data": {"text": "你好"}}]}
+        self.assertEqual(qq_bot._extract_quotes(ev), [])
+
+    def test_quote_segment_never_leaks_into_text(self):
+        """引用段不该混进正文——正文要干干净净地参与触发词匹配。"""
+        ev = {"message": [
+            {"type": "reply", "data": {"id": "1"}},
+            {"type": "text", "data": {"text": "帮我看看"}},
+        ]}
+        text, _at, _imgs = qq_bot._parse_segments(ev)
+        self.assertEqual(text, "帮我看看")
+
+
+class ResolveQuoteTest(unittest.TestCase):
+    """把引用来源展开成「文本 + 图片地址」。
+
+    拉取失败一律降级成一句说明：引用只是本轮的补充上下文，取不到不该让
+    整轮对话失败（与取图失败的处理一致）。
+    """
+
+    @staticmethod
+    def _msg(text, nickname="温知澄", images=()):
+        segs = [] if not text else [{"type": "text", "data": {"text": text}}]
+        segs += [{"type": "image", "data": {"url": u}} for u in images]
+        return {"sender": {"nickname": nickname}, "message": segs}
+
+    def test_reply_is_fetched_and_rendered(self):
+        """get_msg 返回的结构与 WS 事件同构，所以直接复用同一套解析。"""
+        msg = self._msg("我机器人弄不进来")
+        with mock.patch.object(qq_api, "get_message", lambda mid, **kw: msg):
+            block, images = qq_bot._resolve_quote(
+                {"kind": "reply", "id": "1532711165"}, 3000)
+        self.assertEqual(block, "[引用 温知澄 的消息] 我机器人弄不进来")
+        self.assertEqual(images, [])
+
+    def test_reply_images_are_returned_for_download(self):
+        """引用里的图要一起带出来，否则「引用一张截图问怎么回」等于没解决。"""
+        msg = self._msg("", images=["https://e.com/a.jpg"])
+        with mock.patch.object(qq_api, "get_message", lambda mid, **kw: msg):
+            block, images = qq_bot._resolve_quote(
+                {"kind": "reply", "id": "1"}, 3000)
+        self.assertEqual(images, ["https://e.com/a.jpg"])
+        self.assertIn("（图片）", block)
+
+    def test_reply_fetch_failure_degrades(self):
+        def boom(mid, **kw):
+            raise RuntimeError("消息不存在")
+
+        with mock.patch.object(qq_api, "get_message", boom):
+            block, images = qq_bot._resolve_quote(
+                {"kind": "reply", "id": "999"}, 3000)
+        self.assertEqual(block, "[引用的消息无法读取]")
+        self.assertEqual(images, [])
+
+    def test_group_card_name_wins_over_nickname(self):
+        msg = {"sender": {"card": "群名片", "nickname": "真名"},
+               "message": [{"type": "text", "data": {"text": "在吗"}}]}
+        with mock.patch.object(qq_api, "get_message", lambda mid, **kw: msg):
+            block, _ = qq_bot._resolve_quote({"kind": "reply", "id": "1"}, 3000)
+        self.assertIn("群名片", block)
+        self.assertNotIn("真名", block)
+
+    def test_long_quote_is_truncated(self):
+        """引用可能是一整条长回复，不封顶会把上下文预算吃光。"""
+        msg = self._msg("长" * 500)
+        with mock.patch.object(qq_api, "get_message", lambda mid, **kw: msg):
+            block, _ = qq_bot._resolve_quote({"kind": "reply", "id": "1"}, 100)
+        self.assertIn("过长已截断", block)
+        self.assertLess(len(block), 200)
+
+    def test_forward_uses_inline_nodes_without_api_call(self):
+        """forward 段自带 content 时不该再跑一次 HTTP。"""
+        nodes = [{"sender": {"nickname": "甲"},
+                  "message": [{"type": "text", "data": {"text": "在吗"}}]},
+                 {"sender": {"nickname": "乙"},
+                  "message": [{"type": "text", "data": {"text": "在"}}]}]
+        called = []
+        with mock.patch.object(qq_api, "get_forward_msg",
+                               lambda fid, **kw: called.append(fid) or {}):
+            block, _ = qq_bot._resolve_quote(
+                {"kind": "forward", "id": "768", "nodes": nodes}, 3000)
+        self.assertEqual(called, [], "自带 content 时不该再请求一次")
+        self.assertTrue(block.startswith("[转发的聊天记录]"))
+        self.assertIn("甲：在吗", block)
+        self.assertIn("乙：在", block)
+
+    def test_forward_falls_back_to_api_without_inline_nodes(self):
+        data = {"messages": [{"sender": {"nickname": "甲"},
+                              "message": [{"type": "text",
+                                           "data": {"text": "在吗"}}]}]}
+        with mock.patch.object(qq_api, "get_forward_msg",
+                               lambda fid, **kw: data):
+            block, _ = qq_bot._resolve_quote(
+                {"kind": "forward", "id": "768", "nodes": None}, 3000)
+        self.assertIn("甲：在吗", block)
+
+    def test_forward_fetch_failure_degrades(self):
+        def boom(fid, **kw):
+            raise RuntimeError("找不到相关的聊天记录")
+
+        with mock.patch.object(qq_api, "get_forward_msg", boom):
+            block, _ = qq_bot._resolve_quote(
+                {"kind": "forward", "id": "1", "nodes": None}, 3000)
+        self.assertEqual(block, "[转发的聊天记录无法读取]")
+
+    def test_embedded_quote_is_not_expanded(self):
+        """只展开一层：被引用的消息自己又带 reply 段时，不再往下追。
+
+        否则「引用了引用」会一层层查下去，既慢又可能绕成环。
+        """
+        msg = {"sender": {"nickname": "甲"},
+               "message": [{"type": "reply", "data": {"id": "2"}},
+                           {"type": "text", "data": {"text": "在吗"}}]}
+        calls = []
+        with mock.patch.object(qq_api, "get_message",
+                               lambda mid, **kw: calls.append(mid) or msg):
+            block, _ = qq_bot._resolve_quote({"kind": "reply", "id": "1"}, 3000)
+        self.assertEqual(calls, ["1"], "不该递归拉取里层的引用")
+        self.assertEqual(block, "[引用 甲 的消息] 在吗")
+
+
 # ─── 触发判定 ───────────────────────────────────────
 
 class ShouldReplyTest(unittest.TestCase):
@@ -338,6 +520,151 @@ class ShouldReplyTest(unittest.TestCase):
         self._override("QQ_BLACKLIST_USERS", ["1"])
         ok, _ = self._reply(target="private", target_id="1", user_id="1")
         self.assertFalse(ok)
+
+
+class QuoteTriggerTest(unittest.TestCase):
+    """只引用、不写字的消息也算「有内容」。
+
+    「引用一条 + @机器人 + 直接发送」是常见用法，以前 has_content 只看
+    text 和图，这种消息会被整个丢掉，用户等半天没反应。
+    """
+
+    def setUp(self):
+        for name, value in (
+            ("QQ_GROUP_AT_ONLY", True),
+            ("QQ_GROUP_KEYWORDS", []),
+            ("QQ_WHITELIST_GROUPS", []),
+            ("QQ_BLACKLIST_USERS", []),
+        ):
+            p = mock.patch.object(qq_bot, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _reply(self, text="", at_me=False, has_quote=False, has_image=False):
+        return qq_bot._should_reply({"user_id": "1"}, "group", "9", text,
+                                    at_me, has_image, has_quote)
+
+    def test_quote_counts_as_content_when_at(self):
+        ok, _ = self._reply(at_me=True, has_quote=True)
+        self.assertTrue(ok)
+
+    def test_empty_without_quote_is_still_skipped(self):
+        ok, _ = self._reply(at_me=True)
+        self.assertFalse(ok)
+
+    def test_quote_does_not_bypass_the_at_requirement(self):
+        """引用了消息但没 @ 也没命中关键词时，群里仍然不理。
+
+        触发规则只在「这条算不算有内容」上放宽，没有变宽到「引用即唤醒」。
+        """
+        ok, reason = self._reply(has_quote=True)
+        self.assertFalse(ok)
+        self.assertIn("未 @", reason)
+
+
+class RunTurnQuoteTest(unittest.TestCase):
+    """展开出来的引用块拼在正文前面，让模型先看到「在说哪句」。"""
+
+    def _run(self, batch, get_message):
+        seen = {}
+
+        def fake_stream(text, history, agent_id=None, image=None, **kw):
+            seen["text"] = text
+            return iter(())
+
+        runner = qq_bot.SessionRunner(None, "group_9", "group", "9")
+        with mock.patch.object(qq_bot, "run_agent_stream", fake_stream), \
+             mock.patch.object(qq_bot, "load_history", lambda *a, **k: []), \
+             mock.patch.object(qq_bot, "_ensure_system_prompt",
+                               lambda *a: None), \
+             mock.patch.object(qq_bot, "save_history", lambda *a, **k: None), \
+             mock.patch.object(qq_api, "get_message", get_message):
+            runner._run_turn(batch)
+        return seen.get("text")
+
+    def test_quote_block_is_prepended_to_text(self):
+        msg = {"sender": {"nickname": "温知澄"},
+               "message": [{"type": "text",
+                            "data": {"text": "我机器人弄不进来"}}]}
+        text = self._run(
+            [{"text": "233：这句怎么回", "sender": "233", "images": [],
+              "quotes": [{"kind": "reply", "id": "1"}]}],
+            lambda mid, **kw: msg)
+        self.assertEqual(
+            text, "[引用 温知澄 的消息] 我机器人弄不进来\n\n233：这句怎么回")
+
+    def test_failed_quote_still_lets_the_turn_run(self):
+        def boom(mid, **kw):
+            raise RuntimeError("消息不存在")
+
+        text = self._run(
+            [{"text": "这句怎么回", "sender": "", "images": [],
+              "quotes": [{"kind": "reply", "id": "999"}]}],
+            boom)
+        self.assertEqual(text, "[引用的消息无法读取]\n\n这句怎么回")
+
+
+class DispatchQuoteTest(unittest.TestCase):
+    """事件进来时要把引用来源一并交给会话执行器。
+
+    这一环以前是断的：_parse_segments 不认识 reply / forward 段，引用被
+    静默丢掉，模型只看到一句无头无尾的问话。
+    """
+
+    def setUp(self):
+        for name, value in (
+            ("QQ_GROUP_AT_ONLY", True),
+            ("QQ_GROUP_KEYWORDS", []),
+            ("QQ_WHITELIST_GROUPS", []),
+            ("QQ_BLACKLIST_USERS", []),
+        ):
+            p = mock.patch.object(qq_bot, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _dispatch(self, segs, at=True):
+        captured = {}
+
+        class FakeRunner:
+            def submit(self, text, sender, images, quotes=None):
+                captured.update(text=text, sender=sender,
+                                images=images, quotes=quotes)
+
+        msg = list(segs)
+        if at:
+            msg = [{"type": "at", "data": {"qq": "111"}}] + msg
+        ev = {"post_type": "message", "message_type": "group",
+              "self_id": 111, "user_id": 1, "group_id": "9",
+              "sender": {"nickname": "张三"}, "message": msg}
+        bot = qq_bot.QQBot()
+        bot._runner_for = lambda key, t, tid: FakeRunner()
+        bot._dispatch(json.dumps(ev))
+        return captured
+
+    def test_quote_is_passed_to_runner(self):
+        got = self._dispatch([
+            {"type": "reply", "data": {"id": "153"}},
+            {"type": "text", "data": {"text": "这句怎么回"}},
+        ])
+        self.assertEqual(got["text"], "张三：这句怎么回")
+        self.assertEqual(got["quotes"], [{"kind": "reply", "id": "153"}])
+
+    def test_quote_only_message_reaches_runner_without_prefix(self):
+        """引用一条 + 不写字也要能进来，且不该留下「张三：」这种空归属。"""
+        got = self._dispatch([{"type": "reply", "data": {"id": "153"}}])
+        self.assertEqual(got["text"], "")
+        self.assertEqual(got["quotes"], [{"kind": "reply", "id": "153"}])
+
+    def test_at_without_any_content_is_still_ignored(self):
+        self.assertEqual(self._dispatch([]), {})
+
+    def test_quote_alone_without_at_is_ignored_in_group(self):
+        """触发规则没有因为引用而放宽：群里不 @ 就还是不理。"""
+        got = self._dispatch([
+            {"type": "reply", "data": {"id": "1"}},
+            {"type": "text", "data": {"text": "看看"}},
+        ], at=False)
+        self.assertEqual(got, {})
 
 
 # ─── 生图结果里的图片地址 ───────────────────────────
