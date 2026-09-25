@@ -13,6 +13,7 @@ import io
 import unittest
 from unittest import mock
 
+import app.agent as agent
 import app.config as config
 import app.vision as vision
 from app.agent import _error_reply
@@ -218,6 +219,55 @@ class ErrorReplyTest(unittest.TestCase):
     def test_other_errors_keep_the_original_text(self):
         msg = _error_reply(RuntimeError("connection reset by peer"))
         self.assertIn("connection reset by peer", msg)
+
+
+class VisionAttributionTest(unittest.TestCase):
+    """识图文字块要写清「谁发的图」。
+
+    群里一轮经常混着好几个人的图，块头写「用户发来图片」时模型只能猜主人，
+    猜错就是把 A 的图安到 B 头上——这是「关系网乱」的头号来源。
+    """
+
+    def _patch_describe(self, text="一只猫"):
+        p = mock.patch("app.vision.describe", return_value=text)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_head_names_the_sender(self):
+        self._patch_describe()
+        out = agent._with_vision("", ["data:1"], ["温知澄"])
+        self.assertIn("[温知澄 发来图片，以下是识别结果]", out)
+        self.assertNotIn("用户发来", out)
+
+    def test_head_lists_two_senders(self):
+        self._patch_describe()
+        out = agent._with_vision("", ["data:1", "data:2"], ["温知澄", "翎"])
+        self.assertIn("温知澄、翎", out)
+
+    def test_unknown_sender_falls_back_to_generic_head(self):
+        self._patch_describe()
+        out = agent._with_vision("", ["data:1"])
+        self.assertIn("[用户发来图片，以下是识别结果]", out)
+
+    def test_multi_images_mark_each_owner(self):
+        self._patch_describe()
+        out = agent._with_vision("", ["data:1", "data:2"], ["温知澄", "翎"])
+        self.assertIn("【第 1 张（温知澄 发的）】", out)
+        self.assertIn("【第 2 张（翎 发的）】", out)
+
+    def test_missing_owner_for_one_image_is_left_blank(self):
+        # owners 比图少时缺的那张留空，不能错位安人
+        self._patch_describe()
+        out = agent._with_vision("", ["data:1", "data:2"], ["温知澄"])
+        self.assertIn("【第 1 张（温知澄 发的）】", out)
+        self.assertIn("【第 2 张】", out)
+
+    def test_single_image_keeps_plain_body(self):
+        self._patch_describe()
+        out = agent._with_vision("帮我看看", ["data:1"], ["温知澄"])
+        self.assertIn("帮我看看", out)
+        self.assertIn("一只猫", out)
+        self.assertNotIn("【第 1 张", out)
 
 
 if __name__ == "__main__":

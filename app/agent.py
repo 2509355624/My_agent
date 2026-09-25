@@ -188,11 +188,31 @@ def _attach_images(llm_history, images):
 # 看见了，顺着用户的"你看这个报错"编出一段分析——那比直接说不看更糟。
 _VISION_FAIL_NOTE = "（这张图片识别失败，你看不到它的内容，请如实说明）"
 
+# 识图结果前面的说明。带发送者时把名字写进去——群里一轮可能混着好几张图，
+# 不写谁发的，模型只能猜，猜错就是把 A 发的图安到 B 头上（「关系网乱」的
+# 头号来源）。发送者未知时退回「用户发来」，宁可笼统也不要乱安人。
 _VISION_HEAD = "[用户发来图片，以下是识别结果]"
 
 
-def _vision_notes(images):
-    """逐张识图，返回可拼进用户输入的文本行。失败的项也占一行。"""
+def _vision_head(owners):
+    """按发送者渲染识图块的头。owners 为空/全空时退回笼统写法。"""
+    known = [o for o in (owners or []) if o]
+    if not known:
+        return _VISION_HEAD
+    uniq = []
+    for o in known:
+        if o not in uniq:
+            uniq.append(o)
+    if len(uniq) == 1:
+        return "[%s 发来图片，以下是识别结果]" % uniq[0]
+    return "[%s 发来图片，以下是识别结果]" % "、".join(uniq)
+
+
+def _vision_notes(images, owners=None):
+    """逐张识图，返回可拼进用户输入的文本行。失败的项也占一行。
+
+    owners 与 images 一一对应（可短可缺）；多张图时每张标出是谁发的。
+    """
     from app.vision import describe
 
     notes = []
@@ -204,21 +224,27 @@ def _vision_notes(images):
             log.warning("识图失败（第 %d/%d 张）：%s", i, total, exc)
             text = ""
         body = text or _VISION_FAIL_NOTE
-        notes.append("【第 %d 张】%s" % (i, body) if total > 1 else body)
+        if total > 1:
+            owner = (owners or [])[i - 1] if i - 1 < len(owners or []) else ""
+            head = "【第 %d 张" % i
+            head += "（%s 发的）】" % owner if owner else "】"
+            notes.append(head + body)
+        else:
+            notes.append(body)
     return notes
 
 
-def _with_vision(user_input, images):
+def _with_vision(user_input, images, owners=None):
     """把识图结果并入用户输入文本（图片本体不进 history，只留这段文字）。
 
     加这段头是必要的：识别出来的文字混在用户的话里，多轮之后模型分不清
     哪些是"用户说的"、哪些是"从图里读出来的"，容易把图里的报错当成用户
     的诉求本身。
     """
-    notes = _vision_notes(images)
+    notes = _vision_notes(images, owners)
     if not notes:
         return user_input
-    block = _VISION_HEAD + "\n" + "\n".join(notes)
+    block = _vision_head(owners) + "\n" + "\n".join(notes)
     text = (user_input or "").strip()
     return (text + "\n\n" + block) if text else block
 
@@ -285,7 +311,8 @@ _ABORT_NOTE = "⚠️ 用户手动中断了上一条回复，其内容可能不�
 
 
 def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_results=None,
-                     agent_id=None, image=None, cancel_event=None, extra_context=None):
+                     agent_id=None, image=None, cancel_event=None, extra_context=None,
+                     image_owners=None):
     """
     Agent Loop: 生成器版本，逐事件返回
     事件类型: user / assistant / tool_call / tool_result / aborted
@@ -317,6 +344,9 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
       **工具一旦跑起来就只能靠工具内部自己检查**，生图那个轮询循环就是干这个的。
       收工走正常流程：落盘 + 出 aborted 事件，不做任何强制中断，进程和会话
       文件都保持干净。
+    image_owners: 可选，与 image 一一对应的发送者昵称列表（QQ 侧传来）。
+      只影响没有视觉能力时的识图文字块——把「谁发的图」写进去，模型才知道
+      这张图该挂在谁头上。数量对不上（短了或空）时缺的那些退成笼统写法。
     extra_context: 可选，只在这一轮生效的补充上下文（QQ 侧传「群里最近的
       对话」）。挂在末尾那条状态栏消息里、**不写回 history**，所以每轮现取
       现用，不会在历史里重复堆积。详见 _status_message。
@@ -350,7 +380,7 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
         if provider_vision(eff["provider"], eff["model"]):
             attach_mode = True
         else:
-            user_input = _with_vision(user_input, images)
+            user_input = _with_vision(user_input, images, image_owners)
 
     history.append({"role": "user", "content": user_input})
     yield {"type": "user", "content": user_input}

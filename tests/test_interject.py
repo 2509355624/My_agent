@@ -295,11 +295,14 @@ class DecideVerdictTest(_StateIsolationMixin, unittest.TestCase):
         self.assertEqual(kwargs.get("provider"), "deepseek")
         self.assertEqual(kwargs.get("model"), "deepseek-flash")
 
-    def test_system_prompt_keeps_pro_active_bias(self):
-        # 口径的活跃度方向是被反复调过的（放宽→收紧→再放宽），钉住当前值：
-        # 用户拍板「要主动，不要矜持」——拿不准倾向接，别再把方向写反
-        self.assertIn("拿不准的时候倾向「接」", interject._SYSTEM)
-        self.assertNotIn("先忍忍", interject._SYSTEM)
+    def test_system_prompt_keeps_strict_bias(self):
+        # 口径方向是被反复调过的（放宽→收紧→再放宽），钉住当前值：
+        # 2026-09-25 实测日志里连判 12 次「接」一次没挡住 → 用户拍板收紧，
+        # 方向改成「拿不准就不接」，别再把方向写反
+        self.assertIn("拿不准就「不接」", interject._SYSTEM)
+        self.assertNotIn("拿不准的时候倾向「接」", interject._SYSTEM)
+        # 「已经有人在接就别插」是这次收紧的关键一条，别被改掉
+        self.assertIn("已经有人在接了", interject._SYSTEM)
 
     def test_judge_is_marked_before_calling(self):
         # 失败也要计入节流，否则调用一直挂会疯狂重试

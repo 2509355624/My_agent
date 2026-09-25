@@ -144,6 +144,30 @@ class MergeBatchTest(unittest.TestCase):
         self.assertEqual(qq_bot._merge_batch(batch),
                          "张三：在吗\n张三：@机器人 你好")
 
+    def test_senderless_line_inherits_previous_speaker(self):
+        # 协议端偶尔不给名片/昵称，那一行就没有说话人。空行会被模型当成
+        # 「不知道谁说的」进而安错人，所以跟着上一条已知的人走（同一人连发）。
+        batch = [{"text": "服务器是什么", "sender": "大肥鱼"},
+                 {"text": "还有别一口一个调教", "sender": ""}]
+        self.assertEqual(
+            qq_bot._merge_batch(batch),
+            "大肥鱼：服务器是什么\n大肥鱼：还有别一口一个调教")
+
+    def test_senderless_first_line_stays_unsigned(self):
+        # 开头就没名字时没有可继承的人，宁可留白也不乱安一个
+        self.assertEqual(
+            qq_bot._merge_batch([{"text": "第一条", "sender": ""},
+                                 {"text": "第二条", "sender": "张三"}]),
+            "第一条\n张三：第二条")
+
+    def test_senderless_line_not_inherited_without_prefix(self):
+        # 私聊（prefix=False）不做继承——那里本来就没有「谁说的」这回事
+        self.assertEqual(
+            qq_bot._merge_batch([{"text": "在吗", "sender": "张三"},
+                                 {"text": "还在吗", "sender": ""}],
+                                prefix=False),
+            "在吗\n还在吗")
+
     def test_private_chat_does_not_sign(self):
         # 私聊不需要署名（对面就一个人），保持旧行为
         batch = [{"text": "你好", "sender": "李四"}]
@@ -635,8 +659,10 @@ class RunTurnQuoteTest(unittest.TestCase):
             [{"text": "233：这句怎么回", "sender": "233", "images": [],
               "quotes": [{"kind": "reply", "id": "1"}]}],
             lambda mid, **kw: msg)
+        # 引用块要带「谁引用的」——只写被引的人，模型会看到一段没有主人的话
         self.assertEqual(
-            text, "[引用 温知澄 的消息] 我机器人弄不进来\n\n233：这句怎么回")
+            text,
+            "233：[引用 温知澄 的消息] 我机器人弄不进来\n\n233：这句怎么回")
 
     def test_failed_quote_still_lets_the_turn_run(self):
         def boom(mid, **kw):

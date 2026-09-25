@@ -347,6 +347,10 @@ def _merge_batch(batch, max_items=None, max_chars=None, prefix=True):
     谁说的哪句必须跟着走——尤其纯图消息，不署名模型会把图安到正好在
     说话的那个人头上。dispatch 已给「要回的」文本加过前缀，startswith
     挡住重复；主动接话入队的（tentative）没加过，在这里补上。
+    
+    偶尔有一条解析不出发送者（协议端没给名片/昵称）。这时跟着上一条已知的
+    人走——空行会被模型当成「不知道谁说的」，进而把话安错人。按时间正序过
+    一遍才能补，所以署名先算完，再走下面的截断（截断是从新往旧取的）。
     """
     if max_items is None:
         max_items = QQ_PENDING_MAX_ITEMS
@@ -362,21 +366,30 @@ def _merge_batch(batch, max_items=None, max_chars=None, prefix=True):
         log.info("待处理 %d 条，只取最近的 %d 条", len(items), max_items)
         items = items[-max_items:]
 
-    lines, total = [], 0
-    for it in reversed(items):
+    # 第一步：按时间正序算好每行的署名（无名行跟着上一条已知的人）
+    staged, last_who = [], ""
+    for it in items:
         t = it["text"]
         who = it.get("sender") or ""
+        if who:
+            last_who = who
+        owner = who or (last_who if prefix else "")
         n_img = len(it.get("images") or [])
-        if prefix and who and t and not t.startswith(who + "："):
-            t = who + "：" + t
+        if prefix and owner and t and not t.startswith(owner + "："):
+            t = owner + "：" + t
         if n_img:
             # 图的署名跟着消息走：有字的在句尾标张数，纯图的给一行占位
             if t:
                 t += "（发了%d张图）" % n_img
-            elif prefix and who:
-                t = who + "：[图片]"
+            elif prefix and owner:
+                t = owner + "：[图片]"
             else:
                 t = "[图片]"
+        staged.append(t)
+
+    # 第二步：从最新往回装，装不下就停（最新的那条一定在）
+    lines, total = [], 0
+    for t in reversed(staged):
         if lines and max_chars > 0 and total + len(t) > max_chars:
             break
         if t:
@@ -508,20 +521,35 @@ class SessionRunner:
 
         text = _merge_batch(batch, prefix=(self.target == "group"))
         # 图片段单独收集：只发图不打字是合法用法（"帮我看下这个"），
-        # 不能因为 text 为空就把整轮丢掉
-        image_urls = [u for it in batch for u in (it.get("images") or [])]
+        # 不能因为 text 为空就把整轮丢掉。owner 与 image_urls 一一对应，
+        # 识图文字块靠它写清「谁发的图」，否则模型会把图安错人。
+        image_urls = []
+        image_owners = []
+        for it in batch:
+            who = it.get("sender") or ""
+            for u in (it.get("images") or []):
+                image_urls.append(u)
+                image_owners.append(who)
 
         # 引用/转发的正文不在这条消息里，得回头问协议端。放在这里而不是
         # _dispatch 里，是因为那时还没判定「这条要不要回」——否则群里每来
         # 一条消息都要白跑一次 HTTP。这也是 IO，必须在 worker 线程上做。
         quote_blocks, quote_images = [], []
         for it in batch:
+            who = it.get("sender") or ""
             for q in (it.get("quotes") or []):
                 block, q_images = _resolve_quote(q, QQ_QUOTE_MAX_CHARS)
-                if block:
-                    quote_blocks.append(block)
+                if not block:
+                    continue
+                # 署名必须跟着「引用这条消息的人」，不能只写被引的人——
+                # 否则模型看到一段没有主人的引用，只能猜是谁在说话。
+                if who and not block.startswith(who + "："):
+                    block = who + "：" + block
+                quote_blocks.append(block)
                 quote_images.extend(q_images)
+        # 引言里的图是被引那条消息里的，主人不在合并窗口里，宁可留空也不乱安
         image_urls = quote_images + image_urls
+        image_owners = [""] * len(quote_images) + image_owners
         if quote_blocks:
             text = "\n\n".join(quote_blocks + ([text] if text else []))
 
@@ -578,6 +606,7 @@ class SessionRunner:
         try:
             for ev in run_agent_stream(text, history, agent_id=QQ_AGENT_ID,
                                        image=data_urls or None,
+                                       image_owners=image_owners or None,
                                        extra_context=extra_context or None):
                 etype = ev.get("type")
                 # 先落盘再处理（与 main.py 的契约一致）
