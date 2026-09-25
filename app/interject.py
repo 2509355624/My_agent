@@ -56,7 +56,7 @@ from app import agents as agent_store
 from app import recent
 from app.config import (
     QQ_INTERJECT_CONTEXT_MAX_CHARS, QQ_INTERJECT_CONTEXT_MESSAGES,
-    QQ_INTERJECT_COOLDOWN, QQ_INTERJECT_GROUPS, QQ_INTERJECT_MIN_GAP,
+    QQ_INTERJECT_GROUPS, QQ_INTERJECT_MIN_GAP,
     QQ_INTERJECT_MODE,
 )
 from app.llm import call_llm
@@ -133,11 +133,13 @@ def _mark_judged(agent_id, group_id):
 
 
 def _cooldown_ok(agent_id, group_id):
-    if QQ_INTERJECT_COOLDOWN <= 0:
+    """冷却秒数在 settings.json（管理页可调，热生效）；0 = 不限频。"""
+    cd = agent_store.interject_cooldown(agent_id, group_id)
+    if cd <= 0:
         return True
     with _state_lock:
         last = _last_spoke.get((agent_id, group_id))
-    return last is None or (time.time() - last) >= QQ_INTERJECT_COOLDOWN
+    return last is None or (time.time() - last) >= cd
 
 
 def mark_spoke(agent_id, group_id):

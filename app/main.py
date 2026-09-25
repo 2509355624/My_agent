@@ -591,12 +591,18 @@ def get_agent_sessions(agent_id):
     settings = agent_store.load_settings(aid)
     muted = set(settings.get("interject_muted") or [])
     img_muted = set(settings.get("image_gen_muted") or [])
+    overrides = settings.get("interject_cooldown_overrides") or {}
     for item in items:
         if item["kind"] == "group":
             item["interject"] = item["target_id"] not in muted
             item["image_gen"] = item["target_id"] not in img_muted
+            ov = overrides.get(str(item["target_id"]))
+            item["cooldown_override"] = ov if isinstance(ov, (int, float)) else None
+    # 全局主动发言冷却（settings 里没设就回落 .env 默认），管理页输入框用
     return jsonify({"sessions": items, "names_ok": names_ok, "agent": aid,
-                    "image_gen_on": settings.get("image_gen") is not False})
+                    "image_gen_on": settings.get("image_gen") is not False,
+                    "interject_cooldown":
+                        agent_store.interject_cooldown(aid, "")})
 
 
 @app.route("/api/agent/<agent_id>/image_gen", methods=["PUT"])
@@ -680,6 +686,79 @@ def set_agent_interject(agent_id, group_id):
         return jsonify({"error": "写入 settings.json 失败"}), 500
     return jsonify({"ok": True, "agent": aid, "group": str(group_id),
                     "interject": body["enabled"]})
+
+
+def _cooldown_from_body(body):
+    """从请求体解析冷却秒数。合法返回 0~3600 的整数（0=不限频），
+    不合法/越界返回 None——写入层明确拒绝，越界收敛只在读取层兜底。"""
+    v = body.get("cooldown")
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    if not (agent_store.INTERJECT_COOLDOWN_MIN
+            <= v <= agent_store.INTERJECT_COOLDOWN_MAX):
+        return None
+    return int(v)
+
+
+@app.route("/api/agent/<agent_id>/interject_cooldown", methods=["PUT"])
+def set_interject_cooldown(agent_id):
+    """设全局主动发言冷却秒数（settings.json 的 interject_cooldown）。热生效。
+
+    0 = 不限频；删除限制走 PUT cooldown=0。回落 .env 默认目前没有做 UI，
+    想恢复出厂就把值设成 .env 里的 QQ_INTERJECT_COOLDOWN。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    cd = _cooldown_from_body(body)
+    if cd is None:
+        return jsonify({"error": "需要数字字段 cooldown（0~3600 秒）"}), 400
+
+    settings = agent_store.load_settings(aid)
+    settings["interject_cooldown"] = cd
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "cooldown": cd})
+
+
+@app.route("/api/agent/<agent_id>/interject_cooldown/<group_id>",
+           methods=["PUT"])
+def set_interject_cooldown_group(agent_id, group_id):
+    """设单群主动发言冷却覆盖。cooldown=null 删除覆盖（回落全局值）。"""
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if "cooldown" not in body:
+        return jsonify({"error": "需要字段 cooldown（0~3600 的数字，或 null）"}), 400
+    if body["cooldown"] is None:
+        cd = None
+    else:
+        cd = _cooldown_from_body(body)
+        if cd is None:
+            return jsonify({"error": "cooldown 要么是 0~3600 的数字，"
+                                     "要么是 null（删除覆盖）"}), 400
+
+    settings = agent_store.load_settings(aid)
+    overrides = settings.get("interject_cooldown_overrides")
+    if not isinstance(overrides, dict):
+        overrides = {}
+    if cd is None:
+        overrides.pop(str(group_id), None)
+    else:
+        overrides[str(group_id)] = cd
+    settings["interject_cooldown_overrides"] = overrides
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "group": str(group_id),
+                    "cooldown": cd})
 
 
 @app.route("/api/agent/<agent_id>/sessions/<key>", methods=["DELETE"])

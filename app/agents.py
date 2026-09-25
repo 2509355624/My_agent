@@ -20,7 +20,8 @@ import json
 import os
 import re
 
-from app.config import AGENTS_DIR, DEFAULT_AGENT_ID, PROVIDERS
+from app.config import (AGENTS_DIR, DEFAULT_AGENT_ID, PROVIDERS,
+                        QQ_INTERJECT_COOLDOWN)
 
 
 # 字母数字开头，后跟字母数字 / 下划线 / 连字符；限长防超长文件名。
@@ -134,6 +135,38 @@ def image_gen_allowed(agent_id, target, target_id):
     if target == "group" and str(target_id) in (s.get("image_gen_muted") or []):
         return False, "生图功能在本群已被管理员关闭"
     return True, ""
+
+
+# 主动发言冷却的合法范围（秒）。0 = 不限频；上限防手滑输成天文数字。
+INTERJECT_COOLDOWN_MIN = 0
+INTERJECT_COOLDOWN_MAX = 3600
+
+
+def _clamp_cooldown(v):
+    """收敛成 0~3600 的整数；不是数字返回 None（让调用方回落默认）。"""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return max(INTERJECT_COOLDOWN_MIN, min(INTERJECT_COOLDOWN_MAX, int(v)))
+
+
+def interject_cooldown(agent_id, group_id):
+    """这个群主动发言的冷却秒数（热生效，不用重启）。
+
+    settings.json 三层取值：
+    - interject_cooldown_overrides[群号]：单群覆盖（管理页单群设置）；
+    - interject_cooldown：全局值；
+    - 都没有时回落 .env 的 QQ_INTERJECT_COOLDOWN（重启级默认）。
+    settings 读的是热路径，文件坏了 load_settings 返回 {}，这里自然回落默认。
+    """
+    s = load_settings(agent_id)
+    overrides = s.get("interject_cooldown_overrides")
+    v = overrides.get(str(group_id)) if isinstance(overrides, dict) else None
+    if v is None:
+        v = s.get("interject_cooldown")
+    clamped = _clamp_cooldown(v)
+    if clamped is None:
+        clamped = _clamp_cooldown(QQ_INTERJECT_COOLDOWN) or 0
+    return clamped
 
 
 def safe_agent_id(agent_id):

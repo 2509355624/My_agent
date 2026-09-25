@@ -231,6 +231,15 @@
           <span class="hint">一键关闭 / 恢复这个 agent 在所有 QQ 会话的生图（网页端不受影响）。
             单独某个群不想让它画，用群行里的「生图」开关。</span>
         </div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
+          <label class="hint" for="coolAll">主动发言间隔</label>
+          <input id="coolAll" type="number" min="0" max="3600" step="10"
+                 style="width:76px;" />
+          <span class="hint">秒</span>
+          <button class="ghost" id="coolAllSave">保存</button>
+          <span class="hint">没被 @ 时最多每这么多秒主动接一次话，0 = 不限频。
+            想让某个群单独不同，点群行里的「频率」按钮。</span>
+        </div>
         <div class="sess" id="sessList"></div>
         <div class="sess-foot">
           <button class="ghost" id="sessReload">刷新</button>
@@ -633,6 +642,14 @@ function renderSessions() {
       ig.textContent = s.image_gen ? '生图·开' : '生图·关';
       ig.addEventListener('click', () => toggleImageGen(s, ig));
       row.appendChild(ig);
+
+      // 「频率」按钮：这个群主动发言的间隔秒数；单群覆盖，跟全局可不同。
+      const cf = document.createElement('button');
+      cf.className = 'ghost';
+      cf.textContent = s.cooldown_override != null
+        ? '频率:' + s.cooldown_override + 's' : '频率·跟全局';
+      cf.addEventListener('click', () => editCooldown(s, cf));
+      row.appendChild(cf);
     }
 
     // 没有会话线的群（收到过消息但从没回过）没有聊天记录可删
@@ -657,6 +674,7 @@ async function loadSessions() {
     sessions = d.sessions || [];
     renderSessions();
     renderImageGenAll(d.image_gen_on !== false);
+    $('coolAll').value = d.interject_cooldown != null ? d.interject_cooldown : '';
     // 名字要问 QQ 协议端，拿不到只是显示得糙一点，不影响删除
     sessStatus(d.names_ok ? '' : 'NapCat 没连上，群里只显示群号（不影响删除）',
                d.names_ok ? '' : 'err');
@@ -738,6 +756,60 @@ async function toggleImageGen(s, btn) {
   }
 }
 
+// ─── 主动发言频率 ────────────────────────────────────
+// 全局一个秒数；单群可覆盖。存 settings.json，热生效不用重启。0 = 不限频。
+
+async function saveCooldownAll() {
+  const v = Number($('coolAll').value);
+  if (!Number.isInteger(v) || v < 0 || v > 3600) {
+    sessStatus('间隔要填 0~3600 的整数（0 = 不限频）', 'err');
+    return;
+  }
+  try {
+    await api('/api/agent/' + encodeURIComponent(cur) + '/interject_cooldown',
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cooldown: v }) });
+    sessStatus('主动发言间隔已设为 ' + v + ' 秒，立即生效', 'ok');
+  } catch (e) {
+    sessStatus(e.message, 'err');
+  }
+}
+
+async function editCooldown(s, btn) {
+  const name = s.name || s.target_id;
+  const curVal = s.cooldown_override != null ? s.cooldown_override : '';
+  const raw = prompt(
+    '「' + name + '」的主动发言间隔（秒）\n\n'
+    + '0 = 不限频；留空 = 删掉这个群的单独设置，跟全局一样。', curVal);
+  if (raw === null) return;            // 取消
+  const t = raw.trim();
+  let cd = null;                        // null = 删除覆盖
+  if (t !== '') {
+    const v = Number(t);
+    if (!Number.isInteger(v) || v < 0 || v > 3600) {
+      sessStatus('间隔要填 0~3600 的整数，留空表示跟全局', 'err');
+      return;
+    }
+    cd = v;
+  }
+  btn.disabled = true;
+  try {
+    await api('/api/agent/' + encodeURIComponent(cur) + '/interject_cooldown/'
+      + encodeURIComponent(s.target_id),
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cooldown: cd }) });
+    s.cooldown_override = cd;
+    renderSessions();
+    sessStatus('「' + name + '」主动发言间隔已'
+      + (cd == null ? '恢复跟全局一致' : '设为 ' + cd + ' 秒') + '，立即生效', 'ok');
+  } catch (e) {
+    sessStatus(e.message, 'err');
+    btn.disabled = false;
+  }
+}
+
 async function removeSession(s, btn) {
   const title = s.name || s.key;
   const what = s.kind === 'main' ? '主会话（网页端对话）' : '「' + title + '」的全部聊天记录';
@@ -782,6 +854,7 @@ $('reload').addEventListener('click', () => {
 });
 $('sessReload').addEventListener('click', loadSessions);
 $('imgGenAll').addEventListener('click', toggleImageGenAll);
+$('coolAllSave').addEventListener('click', saveCooldownAll);
 $('provider').addEventListener('change', () => {
   const pid = $('provider').value || detail.global_provider;
   $('model').placeholder = '默认 ' + (defaultModelOf(pid) || '—');

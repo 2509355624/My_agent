@@ -223,11 +223,15 @@ class DecideVerdictTest(_StateIsolationMixin, unittest.TestCase):
         super().setUp()
         for name, value in (("QQ_INTERJECT_MODE", "shadow"),
                             ("QQ_INTERJECT_GROUPS", []),
-                            ("QQ_INTERJECT_COOLDOWN", 180),
                             ("QQ_INTERJECT_MIN_GAP", 0)):
             p = mock.patch.object(interject, name, value)
             p.start()
             self.addCleanup(p.stop)
+        # 冷却秒数现在挂在 agent_store（settings 层），管理页可调
+        p = mock.patch.object(interject.agent_store, "interject_cooldown",
+                              return_value=180)
+        p.start()
+        self.addCleanup(p.stop)
         p = mock.patch.object(interject.recent, "format_recent",
                               return_value="张三：在吗")
         p.start()
@@ -317,17 +321,21 @@ class DecideVerdictTest(_StateIsolationMixin, unittest.TestCase):
 
 
 class CooldownTest(_StateIsolationMixin, unittest.TestCase):
-    def test_zero_cooldown_always_ok(self):
-        p = mock.patch.object(interject, "QQ_INTERJECT_COOLDOWN", 0)
+    """冷却判断走 agent_store.interject_cooldown（settings 层，管理页可调）。"""
+
+    def _cooldown(self, value):
+        p = mock.patch.object(interject.agent_store, "interject_cooldown",
+                              return_value=value)
         p.start()
         self.addCleanup(p.stop)
+
+    def test_zero_cooldown_always_ok(self):
+        self._cooldown(0)
         interject.mark_spoke("qq", "1")
         self.assertTrue(interject._cooldown_ok("qq", "1"))
 
     def test_cooldown_blocks_then_expires(self):
-        p = mock.patch.object(interject, "QQ_INTERJECT_COOLDOWN", 60)
-        p.start()
-        self.addCleanup(p.stop)
+        self._cooldown(60)
         interject.mark_spoke("qq", "1")
         self.assertFalse(interject._cooldown_ok("qq", "1"))
 
@@ -336,9 +344,7 @@ class CooldownTest(_StateIsolationMixin, unittest.TestCase):
         self.assertTrue(interject._cooldown_ok("qq", "1"))
 
     def test_cooldown_is_per_group(self):
-        p = mock.patch.object(interject, "QQ_INTERJECT_COOLDOWN", 60)
-        p.start()
-        self.addCleanup(p.stop)
+        self._cooldown(60)
         interject.mark_spoke("qq", "1")
         self.assertTrue(interject._cooldown_ok("qq", "2"))
 

@@ -16,6 +16,7 @@ import unittest
 from unittest import mock
 
 import app.agents as agents
+import app.config as config
 import app.main as main
 import app.qq_api as qq_api
 
@@ -336,6 +337,96 @@ class InterjectToggleApiTest(SessionsTestBase):
                                    json={"enabled": False},
                                    environ_base={"REMOTE_ADDR": "8.8.8.8"})
         self.assertEqual(resp.status_code, 200)
+
+
+class CooldownApiTest(SessionsTestBase):
+    """主动发言频率：全局秒数 + 单群覆盖，settings.json 层热生效。"""
+
+    def test_sessions_carry_effective_global(self):
+        self.write_session("qq", key="group_111")
+        agents.save_settings("qq", {"interject_cooldown": 300})
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertEqual(d["interject_cooldown"], 300)
+        self.assertIsNone(d["sessions"][0]["cooldown_override"])
+
+    def test_put_global_persists(self):
+        resp = self.client.put("/api/agent/qq/interject_cooldown",
+                               json={"cooldown": 120})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(agents.load_settings("qq")["interject_cooldown"], 120)
+        # 立即反映到 GET
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertEqual(d["interject_cooldown"], 120)
+
+    def test_put_global_zero_means_unlimited(self):
+        self.client.put("/api/agent/qq/interject_cooldown",
+                        json={"cooldown": 0})
+        self.assertEqual(agents.load_settings("qq")["interject_cooldown"], 0)
+
+    def test_put_global_rejects_bad_values(self):
+        for bad in ({}, {"cooldown": "120"}, {"cooldown": True},
+                    {"cooldown": -1}, {"cooldown": 3601}, {"cooldown": None}):
+            resp = self.client.put("/api/agent/qq/interject_cooldown", json=bad)
+            self.assertEqual(resp.status_code, 400, bad)
+
+    def test_put_group_override_and_clear(self):
+        self.write_session("qq", key="group_111")
+        resp = self.client.put("/api/agent/qq/interject_cooldown/111",
+                               json={"cooldown": 600})
+        self.assertEqual(resp.status_code, 200)
+        s = agents.load_settings("qq")["interject_cooldown_overrides"]
+        self.assertEqual(s["111"], 600)
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertEqual(d["sessions"][0]["cooldown_override"], 600)
+        # null = 删覆盖，回落全局
+        self.client.put("/api/agent/qq/interject_cooldown/111",
+                        json={"cooldown": None})
+        self.assertEqual(
+            agents.load_settings("qq")["interject_cooldown_overrides"], {})
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertIsNone(d["sessions"][0]["cooldown_override"])
+
+    def test_put_group_rejects_bad_values(self):
+        for bad in ({}, {"cooldown": "x"}, {"cooldown": 4000}):
+            resp = self.client.put("/api/agent/qq/interject_cooldown/111",
+                                   json=bad)
+            self.assertEqual(resp.status_code, 400, bad)
+
+    def test_put_remote_blocked_by_default(self):
+        resp = self.client.put("/api/agent/qq/interject_cooldown",
+                               json={"cooldown": 60},
+                               environ_base={"REMOTE_ADDR": "8.8.8.8"})
+        self.assertEqual(resp.status_code, 403)
+
+
+class CooldownResolveTest(SessionsTestBase):
+    """agents.interject_cooldown 的三层取值与收敛。"""
+
+    def test_falls_back_to_env_default(self):
+        self.assertEqual(agents.interject_cooldown("qq", "111"),
+                         config.QQ_INTERJECT_COOLDOWN)
+
+    def test_global_then_override(self):
+        agents.save_settings("qq", {"interject_cooldown": 100,
+                                    "interject_cooldown_overrides":
+                                        {"111": 5, "222": 99999}})
+        self.assertEqual(agents.interject_cooldown("qq", "333"), 100)
+        self.assertEqual(agents.interject_cooldown("qq", "111"), 5)
+        # 越界值收敛到上限
+        self.assertEqual(agents.interject_cooldown("qq", "222"), 3600)
+
+    def test_bad_types_degrade_to_env(self):
+        agents.save_settings("qq", {"interject_cooldown": "abc",
+                                    "interject_cooldown_overrides":
+                                        {"111": "x"}})
+        self.assertEqual(agents.interject_cooldown("qq", "111"),
+                         config.QQ_INTERJECT_COOLDOWN)
+        self.assertEqual(agents.interject_cooldown("qq", "222"),
+                         config.QQ_INTERJECT_COOLDOWN)
+
+    def test_zero_in_settings_means_unlimited(self):
+        agents.save_settings("qq", {"interject_cooldown": 0})
+        self.assertEqual(agents.interject_cooldown("qq", "111"), 0)
 
     def test_private_sessions_carry_no_interject_field(self):
         self.write_session("qq", key="private_222")
