@@ -153,71 +153,111 @@ def _tag(data_url):
 def collect(agent_id, items):
     """收藏一批图。items = [(url, 发送者昵称), ...]。
 
-    每张图：下载 → md5/URL 去重 → 尺寸判定 → 落盘 → 打标签 → 记索引。
-    单张失败只记日志，不影响其他张。返回收藏张数（给日志用）。
+    每张交给 ingest 走完整流程；批量路径只关心张数，单张的成败细节由
+    ingest 记日志。返回收藏张数（给日志用）。
     """
     saved = 0
     for url, sender in items:
-        if not url:
-            continue
-        # 下载前先看一眼索引：同一个 URL 之前收过就不用再下（下载前查是
-        # 快速路径；锁内还有一道 md5/URL 查重，防并发窗口里的重复）。
-        # 只跟活着的条目比——删过的图再发一次，说明它还想进库，那就收。
-        if url in {r.get("url") for r in _live(_load_index(agent_id))}:
-            continue
-        try:
-            raw = fetch_image(url)
-        except Exception as exc:
-            log.info("表情包下载失败，跳过：%s", exc)
-            continue
-
-        digest = hashlib.md5(raw).hexdigest()
-        # 「查重-落盘-记索引」整体持锁：两条会话线程同时进来不会重复入库
-        with _lock:
-            index = _load_index(agent_id)
-            live = _live(index)
-            if digest in {r.get("md5") for r in live}:
-                continue
-            if url in {r.get("url") for r in live}:
-                continue
-            # 上限按「活着的」算：删过的位置要让给新图，否则删了也白删
-            if len(live) >= STICKER_LIMIT:
-                # 库满了就停收，不淘汰——哪张该删没有判断依据，别瞎删
-                global _full_warned
-                if not _full_warned:
-                    log.info("表情包库存已满（%d 张），不再收藏", STICKER_LIMIT)
-                    _full_warned = True
-                continue
-            ok, w, h = _is_sticker(raw)
-            if not ok:
-                continue
-            os.makedirs(_dir(agent_id), exist_ok=True)
-            name = "%s.%s" % (digest[:8], _EXT[sniff_mime(raw)])
-            try:
-                with open(os.path.join(_dir(agent_id), name), "wb") as f:
-                    f.write(raw)
-            except OSError as exc:
-                log.warning("表情包落盘失败：%s", exc)
-                continue
-            try:
-                from app.vision import to_data_url
-                desc, tags = _tag(to_data_url(raw))
-            except Exception:
-                desc, tags = "", []
-            rec = {
-                "md5": digest, "file": name, "desc": desc, "tags": tags,
-                "sender": sender or "", "t": int(time.time()),
-                "url": url, "w": w, "h": h,
-            }
-            try:
-                with open(_index_path(agent_id), "a", encoding="utf-8") as f:
-                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-                saved += 1
-            except OSError as exc:
-                log.warning("表情包索引写入失败：%s", exc)
+        status, _, _ = ingest(agent_id, url, sender)
+        if status == "ok":
+            saved += 1
     if saved:
         log.info("表情包收藏 %d 张", saved)
     return saved
+
+
+def ingest(agent_id, url, sender):
+    """收一张图进库。返回 (status, 编号, 给人看的短句)。
+
+    status: ok / dup（库里已有）/ cap（库存满）/ fail（下载、落盘失败
+    或不是表情包）。自动收藏路径只看成功与否；点收工具 collect_sticker
+    靠后两个返回值给模型一句能如实转述的回话——此前上限挡人时是静默的，
+    模型无从得知，虚报过「加进来了」。
+    """
+    if not url:
+        return "fail", None, "没有图片地址"
+    # 下载前先看一眼索引：同一个 URL 之前收过就不用再下（下载前查是
+    # 快速路径；锁内还有一道 md5/URL 查重，防并发窗口里的重复）。
+    # 只跟活着的条目比——删过的图再发一次，说明它还想进库，那就收。
+    if url in {r.get("url") for r in _live(_load_index(agent_id))}:
+        return "dup", None, "库里已经有这张了"
+    try:
+        raw = fetch_image(url)
+    except Exception as exc:
+        log.info("表情包下载失败，跳过：%s", exc)
+        return "fail", None, "下载失败（链接可能过期了）"
+
+    digest = hashlib.md5(raw).hexdigest()
+    # 「查重-落盘-记索引」整体持锁：两条会话线程同时进来不会重复入库
+    with _lock:
+        index = _load_index(agent_id)
+        live = _live(index)
+        if digest in {r.get("md5") for r in live}:
+            return "dup", None, "库里已经有这张了"
+        if url in {r.get("url") for r in live}:
+            return "dup", None, "库里已经有这张了"
+        # 上限按「活着的」算：删过的位置要让给新图，否则删了也白删
+        if len(live) >= STICKER_LIMIT:
+            # 库满了就停收，不淘汰——哪张该删没有判断依据，别瞎删
+            global _full_warned
+            if not _full_warned:
+                log.info("表情包库存已满（%d 张），不再收藏", STICKER_LIMIT)
+                _full_warned = True
+            return "cap", None, "库存满了（上限 %d 张）" % STICKER_LIMIT
+        ok, w, h = _is_sticker(raw)
+        if not ok:
+            return "fail", None, "尺寸不像表情包，没往库里放"
+        os.makedirs(_dir(agent_id), exist_ok=True)
+        name = "%s.%s" % (digest[:8], _EXT[sniff_mime(raw)])
+        try:
+            with open(os.path.join(_dir(agent_id), name), "wb") as f:
+                f.write(raw)
+        except OSError as exc:
+            log.warning("表情包落盘失败：%s", exc)
+            return "fail", None, "落盘失败"
+        try:
+            from app.vision import to_data_url
+            desc, tags = _tag(to_data_url(raw))
+        except Exception:
+            desc, tags = "", []
+        rec = {
+            "md5": digest, "file": name, "desc": desc, "tags": tags,
+            "sender": sender or "", "t": int(time.time()),
+            "url": url, "w": w, "h": h,
+        }
+        number = len(index) + 1          # 编号 = 行号（含墓碑，只增不减）
+        try:
+            with open(_index_path(agent_id), "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except OSError as exc:
+            log.warning("表情包索引写入失败：%s", exc)
+            return "fail", None, "索引写入失败"
+    desc = (desc or "").strip()
+    return "ok", number, ("已入库，编 %d 号：%s" % (number, desc[:30])
+                          if desc else "已入库，编 %d 号" % number)
+
+
+# 最近见过的图（按会话）：点收工具的取图来源。模型想「收这张」时得能拿
+# 到那张图的直链——QQ 图链带时效签名，也得趁热。只在内存里留最近几张，
+# 重启丢了就丢了（那张图再发一次就有）。
+_RECENT_IMAGES = {}                  # (target, target_id) → [(url, sender)]
+_RECENT_IMAGES_MAX = 10
+
+
+def note_image(conv_key, url, sender):
+    """把本轮见过的图记进「最近图片」缓冲（最新在尾）。失败不打扰调用方。"""
+    if not url:
+        return
+    with _lock:
+        bucket = _RECENT_IMAGES.setdefault(conv_key, [])
+        bucket.append((url, sender or ""))
+        del bucket[:-_RECENT_IMAGES_MAX]
+
+
+def recent_images(conv_key):
+    """当前会话最近见过的图，[(url, 发送者), ...] 按时间序，最新在尾。"""
+    with _lock:
+        return list(_RECENT_IMAGES.get(conv_key) or [])
 
 
 def abs_path(agent_id, rec):

@@ -550,6 +550,15 @@ class SessionRunner:
         # 引言里的图是被引那条消息里的，主人不在合并窗口里，宁可留空也不乱安
         image_urls = quote_images + image_urls
         image_owners = [""] * len(quote_images) + image_owners
+
+        # 点收来源：本轮见过的图（消息本体的 + 引用块里的）记进「最近图片」
+        # 缓冲，模型调 collect_sticker 时按「最近第几张」取链。引用里的图
+        # 只走识图、不进自动收藏，这条缓冲是它唯一的落点。
+        for _u, _w in zip(image_urls, image_owners):
+            try:
+                stickers.note_image((self.target, self.target_id), _u, _w)
+            except Exception:
+                pass
         if quote_blocks:
             text = "\n\n".join(quote_blocks + ([text] if text else []))
 

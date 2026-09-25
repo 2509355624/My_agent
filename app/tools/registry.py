@@ -61,6 +61,8 @@ if QQ_ENABLE:
     register_tool(**_send_sticker_tool)
     from app.tools.normal.delete_sticker import tool as _delete_sticker_tool
     register_tool(**_delete_sticker_tool)
+    from app.tools.normal.collect_sticker import tool as _collect_sticker_tool
+    register_tool(**_collect_sticker_tool)
 
 from app.tools.normal.list_skills import tool as _list_skills_tool
 register_tool(**_list_skills_tool)
