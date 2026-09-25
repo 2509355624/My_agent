@@ -42,6 +42,10 @@ class _StateIsolationMixin:
                               return_value={})
         p.start()
         self.addCleanup(p.stop)
+        # _run_turn 开头会做表情包收藏（网络下载）——一律挡掉
+        p = mock.patch.object(qq_bot.stickers, "collect", return_value=0)
+        p.start()
+        self.addCleanup(p.stop)
 
     @staticmethod
     def _clear():
@@ -435,8 +439,8 @@ class RunTurnVoluntaryTest(_StateIsolationMixin, unittest.TestCase):
                    "latency_ms": 10.0, "context_chars": 10, "raw": "接"}
         with mock.patch.object(interject, "decide", return_value=verdict), \
                 mock.patch.object(interject, "speaking", return_value=True), \
-                mock.patch.object(qq_bot.recent, "latest_image_record",
-                                  return_value=None):
+                mock.patch.object(qq_bot.recent, "recent_image_records",
+                                  return_value=[]):
             runner._run_turn([{"text": "在吗", "sender": "张三",
                                "images": [], "quotes": [], "tentative": True}])
         # 关键：群消息不能被当成「有人在问它」，正文换成了那句说明
@@ -457,25 +461,30 @@ class RunTurnVoluntaryTest(_StateIsolationMixin, unittest.TestCase):
                                "images": [], "quotes": [], "tentative": True}])
         self.assertNotIn("batch", seen)
 
-    def test_voluntary_reply_sees_latest_image(self):
-        # 判断模型只看得到 "[图片]" 占位符；判「接」之后要把最近一张真正的图
-        # 带给主模型，不然它对着看不见的东西只能装懂。图还得带署名——不告诉
-        # 模型图是谁发的，它会把图安到最近在发言的那个人头上
+    def test_voluntary_reply_sees_latest_images(self):
+        # 判断模型只看得到 "[图片]" 占位符；判「接」之后要把最近两张真正的图
+        # 带给主模型（群里经常连着甩表情，一张常常不够），而且得带署名——
+        # 不告诉模型图是谁发的，它会把图安到最近在发言的那个人头上
         runner = self._runner()
         seen = self._capture_merge()
         verdict = {"choice": "接", "want": True, "cooled": True, "pass": True,
                    "latency_ms": 10.0, "context_chars": 10, "raw": "接"}
         with mock.patch.object(interject, "decide", return_value=verdict), \
                 mock.patch.object(interject, "speaking", return_value=True), \
-                mock.patch.object(qq_bot.recent, "latest_image_record",
-                                  return_value={"m": "http://x/pic.jpg",
-                                                "n": "被子教"}) as li:
+                mock.patch.object(qq_bot.recent, "recent_image_records",
+                                  return_value=[
+                                      {"m": "http://x/pic2.jpg",
+                                       "n": "被子教"},
+                                      {"m": "http://x/pic1.jpg",
+                                       "n": "猫大侠"}]) as ri:
             runner._run_turn([{"text": "在吗", "sender": "张三",
                                "images": [], "quotes": [], "tentative": True}])
-        li.assert_called_once_with("qq", "1041079621",
-                                   qq_bot._INTERJECT_IMAGE_LOOKBACK)
-        self.assertEqual(seen["batch"][0]["images"], ["http://x/pic.jpg"])
+        ri.assert_called_once_with("qq", "1041079621",
+                                   qq_bot._INTERJECT_IMAGE_LOOKBACK, 2)
+        self.assertEqual(seen["batch"][0]["images"],
+                         ["http://x/pic2.jpg", "http://x/pic1.jpg"])
         self.assertIn("被子教", seen["batch"][0]["text"])
+        self.assertIn("猫大侠", seen["batch"][0]["text"])
 
     def test_mixed_batch_goes_the_normal_way(self):
         # 只要混进一条被 @ 的，就照常回，不必问判断模型

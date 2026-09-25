@@ -158,17 +158,26 @@ def load_recent(agent_id, group_id, limit):
     return out
 
 
-def latest_image_record(agent_id, group_id, within=12):
-    """最近 within 条里最新一条带图记录（整条 dict，含发送者）；没有返回 None。
+def recent_image_records(agent_id, group_id, within=12, limit=1):
+    """最近 within 条里最新的至多 limit 条带图记录（新→旧，含发送者）。
 
     接话场景除了图本身还得知道是谁发的——只给 URL 不署名，模型会把图
     安到正好在说话的那个人头上（张冠李戴）。只往前翻 within 条：太老的
     图多半已经不是当前话题了。
     """
+    out = []
     for rec in reversed(load_recent(agent_id, group_id, within)):
         if rec.get("m"):
-            return rec
-    return None
+            out.append(rec)
+            if len(out) >= limit:
+                break
+    return out
+
+
+def latest_image_record(agent_id, group_id, within=12):
+    """最近 within 条里最新一条带图记录；没有返回 None。"""
+    recs = recent_image_records(agent_id, group_id, within, 1)
+    return recs[0] if recs else None
 
 
 def latest_image(agent_id, group_id, within=12):

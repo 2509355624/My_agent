@@ -275,6 +275,21 @@ class ParseSegmentsTest(unittest.TestCase):
         _text, _at, imgs = qq_bot._parse_segments(ev)
         self.assertEqual(imgs, ["u1", "u2"])
 
+    def test_mface_with_url_is_collected_as_image(self):
+        """商城表情包（mface）带 url 时按普通图收——表情库/识图都认它。"""
+        ev = {"self_id": 1, "message": [
+            {"type": "mface", "data": {"emoji_id": "1",
+                                       "url": "https://example.com/m.gif"}},
+        ]}
+        _text, _at, imgs = qq_bot._parse_segments(ev)
+        self.assertEqual(imgs, ["https://example.com/m.gif"])
+
+    def test_mface_without_url_becomes_placeholder(self):
+        ev = {"self_id": 1, "message": [{"type": "mface", "data": {}}]}
+        text, _at, imgs = qq_bot._parse_segments(ev)
+        self.assertEqual(text, "[表情]")
+        self.assertEqual(imgs, [])
+
     def test_image_without_url_falls_back_to_placeholder(self):
         """只有本地文件名（file）时拿不到图，退回占位文本，不能当成有图。"""
         ev = {"self_id": 1, "message": [
@@ -606,6 +621,7 @@ class RunTurnQuoteTest(unittest.TestCase):
              mock.patch.object(qq_bot, "_ensure_system_prompt",
                                lambda *a: None), \
              mock.patch.object(qq_bot, "save_history", lambda *a, **k: None), \
+             mock.patch.object(qq_bot.stickers, "collect", return_value=0), \
              mock.patch.object(qq_api, "get_message", get_message):
             runner._run_turn(batch)
         return seen.get("text")
@@ -630,6 +646,44 @@ class RunTurnQuoteTest(unittest.TestCase):
               "quotes": [{"kind": "reply", "id": "999"}]}],
             boom)
         self.assertEqual(text, "[引用的消息无法读取]\n\n这句怎么回")
+
+
+class StickerCollectTest(unittest.TestCase):
+    """群聊每轮开头要收藏图片（跟回不回无关）；私聊不收。"""
+
+    def _run(self, target, target_id, batch):
+        runner = qq_bot.SessionRunner(None, "%s_%s" % (target, target_id),
+                                      target, target_id)
+        with mock.patch.object(qq_bot, "run_agent_stream",
+                               lambda *a, **k: iter(())), \
+             mock.patch.object(qq_bot, "load_history", lambda *a, **k: []), \
+             mock.patch.object(qq_bot, "_ensure_system_prompt",
+                               lambda *a: None), \
+             mock.patch.object(qq_bot, "save_history", lambda *a, **k: None), \
+             mock.patch.object(qq_bot.stickers, "collect",
+                               return_value=0) as collect:
+            runner._run_turn(batch)
+        return collect
+
+    def test_group_turn_collects_images_with_sender(self):
+        collect = self._run("group", "9", [
+            {"text": "看图", "sender": "被子教", "images": ["http://x/1.jpg"],
+             "quotes": [], "tentative": True},
+        ])
+        collect.assert_called_once_with(
+            qq_bot.QQ_AGENT_ID, [("http://x/1.jpg", "被子教")])
+
+    def test_group_turn_without_images_still_calls_collect(self):
+        collect = self._run("group", "9",
+                            [{"text": "纯文字", "sender": "甲",
+                              "images": [], "quotes": []}])
+        collect.assert_called_once_with(qq_bot.QQ_AGENT_ID, [])
+
+    def test_private_turn_does_not_collect(self):
+        collect = self._run("private", "1",
+                            [{"text": "你好", "sender": "李四",
+                              "images": ["http://x/1.jpg"], "quotes": []}])
+        collect.assert_not_called()
 
 
 class DispatchQuoteTest(unittest.TestCase):

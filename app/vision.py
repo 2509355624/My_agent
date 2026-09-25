@@ -129,11 +129,12 @@ def fetch_image(url, timeout=None, max_bytes=None):
 
 # ─── 识图 ────────────────────────────────────────────
 
-def describe(data_url, timeout=None):
+def describe(data_url, timeout=None, prompt=None):
     """调 VISION_PROVIDER 识图，返回文字。失败抛 RuntimeError。
 
-    只暴露"成功拿到文字"和"失败"两种结果，让调用方能用一句 try/except
-    覆盖全部异常——识图失败不该让整轮对话挂掉，降级成"看不到这张图"即可。
+    prompt 不传用默认的「描述画面+原样提取文字」；表情包打标签等场景
+    传自己的。只暴露"成功拿到文字"和"失败"两种结果，让调用方能用一句
+    try/except 覆盖全部异常——识图失败不该让整轮对话挂掉。
     """
     pid = (VISION_PROVIDER or "").lower()
     cfg = PROVIDERS.get(pid)
@@ -147,7 +148,7 @@ def describe(data_url, timeout=None):
         "messages": [{
             "role": "user",
             "content": [
-                {"type": "text", "text": _PROMPT},
+                {"type": "text", "text": prompt or _PROMPT},
                 {"type": "image_url", "image_url": {"url": data_url}},
             ],
         }],

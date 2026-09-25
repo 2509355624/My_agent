@@ -40,7 +40,7 @@ try:
 except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
-from app import interject, longterm, qq_api, recent
+from app import interject, longterm, qq_api, recent, stickers
 from app.agent import run_agent_stream
 from app.agent_prompt import build_stable_prompt, sync_session_system
 from app.config import (
@@ -142,6 +142,13 @@ def _parse_segments(ev):
                 else:
                     # 只给了本地文件名（file）时拿不到图，退回占位说明
                     parts.append("[图片]")
+            elif stype == "mface":
+                # 商城表情包：NapCat 一般带 url，能当普通图收（表情库/识图都认）
+                url = str(sdata.get("url") or "")
+                if url:
+                    images.append(url)
+                else:
+                    parts.append("[表情]")
             elif stype == "face":
                 parts.append("[表情]")
         return "".join(parts).strip(), at_me, images
@@ -154,6 +161,10 @@ def _parse_segments(ev):
         if name == "at" and ("qq=" + self_id) in rest:
             _sub.at_me = True
         elif name == "image":
+            url = _cq_arg(rest, "url")
+            if url:
+                images.append(url)
+        elif name == "mface":
             url = _cq_arg(rest, "url")
             if url:
                 images.append(url)
@@ -452,6 +463,18 @@ class SessionRunner:
 
     def _run_turn(self, batch):
         """在 worker 线程里跑一轮（run_agent_stream 是同步生成器）。"""
+        # 表情包收藏：群图趁链接活着赶紧落盘，跟「这轮回不回」无关——
+        # 接话被拒的轮次里出现的图也照收。下载是阻塞 IO，好在已经在
+        # worker 线程上。失败只记日志，别让它碰倒整轮对话。
+        if self.target == "group":
+            try:
+                stickers.collect(QQ_AGENT_ID,
+                                 [(u, it.get("sender") or "")
+                                  for it in batch
+                                  for u in (it.get("images") or [])])
+            except Exception:
+                log.exception("表情包收藏出错 %s", self.session_key)
+
         # 整批都是「没点名机器人」的消息时，先让判断模型决定要不要开口。只要
         # 混进一条 @ 或命中触发词的，就照常回，不必问。
         voluntary = all(it.get("tentative") for it in batch)
@@ -466,17 +489,22 @@ class SessionRunner:
             batch = [{"text": interject.INTERJECT_PROMPT, "sender": "",
                       "images": [], "quotes": []}]
             # 判断模型看不见图（上下文里图只是 "[图片]" 占位符）。它判「接」
-            # 往往就是好奇那张图——把最近一张真正捞出来给主模型看，不然只能
-            # 对着看不见的东西装懂。多张取最新一张，够接话用了。图必须带上
-            # 「是谁发的」：不署名的话，模型会把它安到最近在发言的那个人头上。
-            rec = recent.latest_image_record(QQ_AGENT_ID, self.target_id,
-                                             _INTERJECT_IMAGE_LOOKBACK)
-            if rec:
-                batch[0]["images"] = [rec["m"]]
-                pic_owner = rec.get("n") or rec.get("u") or ""
-                if pic_owner:
-                    batch[0]["text"] += "\n（上面说的那张最近图片，是 %s 发的）" \
-                        % pic_owner
+            # 往往就是好奇那张图——把最近两张真正捞出来给主模型看，不然只能
+            # 对着看不见的东西装懂。两张是因为群里经常连着甩表情，光看最新
+            # 一张常常不够。每张都带上「是谁发的」：不署名的话，模型会把它
+            # 安到最近在发言的那个人头上。
+            recs = recent.recent_image_records(QQ_AGENT_ID, self.target_id,
+                                               _INTERJECT_IMAGE_LOOKBACK, 2)
+            if recs:
+                batch[0]["images"] = [r["m"] for r in recs]
+                owners = []
+                for r in recs:
+                    who = r.get("n") or r.get("u") or ""
+                    if who and who not in owners:
+                        owners.append(who)
+                if owners:
+                    batch[0]["text"] += "\n（最近的 %d 张图片是 %s 发的）" \
+                        % (len(recs), " 和 ".join(owners))
 
         text = _merge_batch(batch, prefix=(self.target == "group"))
         # 图片段单独收集：只发图不打字是合法用法（"帮我看下这个"），
