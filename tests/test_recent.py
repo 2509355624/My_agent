@@ -37,6 +37,11 @@ class _TmpAgentsMixin:
         p = mock.patch.object(agents, "AGENTS_DIR", self.root)
         p.start()
         self.addCleanup(p.stop)
+        # 裁剪会触发长期记忆摘要（后台线程 + 真实 API 调用），测试里一律挡掉；
+        # 摘要本身的行为归 tests/test_longterm.py 管。
+        p = mock.patch.object(recent.longterm, "digest_async")
+        p.start()
+        self.addCleanup(p.stop)
 
 
 # ─── 缓存本身 ───────────────────────────────────────

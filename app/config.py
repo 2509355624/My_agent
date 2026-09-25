@@ -281,3 +281,13 @@ QQ_INTERJECT_CONTEXT_MAX_CHARS = int(
 # 发出去的回复会以这个名字记进群聊缓存——主模型靠它认出「哪些是我刚说过的」，
 # 认不出来就会换个说法复读上一句。
 QQ_BOT_NAME = os.getenv("QQ_BOT_NAME", "小小怪").strip() or "小小怪"
+
+# ─── 长期记忆（群聊摘要） ─────────────────────────────
+# 群聊缓存写满裁剪时，把丢掉的那批消息交给模型压成一条「回忆」，按群存进
+# agents/<id>/memory/，回复时随群聊背景一起注入——让它记得住以前聊过什么。
+# 详见 app/longterm.py。
+# 每轮注入最近几条摘要 / 字数上限（从最新往前累计）。条数 0 = 不注入。
+QQ_MEMORY_INJECT_LIMIT = int(os.getenv("QQ_MEMORY_INJECT_LIMIT", "10"))
+QQ_MEMORY_INJECT_MAX_CHARS = int(os.getenv("QQ_MEMORY_INJECT_MAX_CHARS", "1500"))
+# 摘要调用的超时（秒）。在后台线程跑，卡不到聊天主链路，给宽一点没关系。
+QQ_MEMORY_DIGEST_TIMEOUT = int(os.getenv("QQ_MEMORY_DIGEST_TIMEOUT", "60"))

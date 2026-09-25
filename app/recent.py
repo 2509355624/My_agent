@@ -22,6 +22,7 @@ import os
 import time
 
 from app import agents as agent_store
+from app import longterm
 
 log = logging.getLogger("recent")
 
@@ -81,7 +82,7 @@ def remember(agent_id, group_id, name, text, user_id="", when=None, image=""):
         # 缓存写失败不该影响聊天本身，记一条警告就放过去
         log.warning("写群聊缓存失败 %s：%s", path, exc)
         return False
-    _trim(path)
+    _trim(path, agent_id, group_id)
     return True
 
 
@@ -96,11 +97,15 @@ def _archive_path(path):
     return os.path.join(os.path.dirname(path), "archive", name)
 
 
-def _trim(path):
+def _trim(path, agent_id="", group_id=""):
     """行数超标时重写一次，只留最近 KEEP_LINES 条。
 
     丢掉的行先追加进 archive（追加失败只记警告，不影响缓存本身重写）——
     这些是真实群聊记录，留着以后翻旧账。
+
+    agent_id/group_id 用来触发长期记忆摘要（longterm.digest_async，后台
+    线程，不阻塞这里）——归档就是「这批消息从缓存毕业」的时刻，顺手让它
+    变成一条记忆。
     """
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -121,6 +126,11 @@ def _trim(path):
             f.writelines(keep)
     except OSError as exc:
         log.warning("裁剪群聊缓存失败 %s：%s", path, exc)
+    if dropped:
+        try:
+            longterm.digest_async(agent_id, group_id, dropped)
+        except Exception:
+            log.exception("长期记忆摘要任务启动失败")
 
 
 def load_recent(agent_id, group_id, limit):

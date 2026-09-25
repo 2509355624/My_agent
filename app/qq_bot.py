@@ -40,14 +40,15 @@ try:
 except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
-from app import interject, qq_api, recent
+from app import interject, longterm, qq_api, recent
 from app.agent import run_agent_stream
 from app.agent_prompt import build_stable_prompt, sync_session_system
 from app.config import (
     BASE_DIR, COMFYUI_URL, QQ_AGENT_ID, QQ_BOT_NAME, QQ_BLACKLIST_USERS,
     QQ_CONTEXT_MAX_CHARS, QQ_CONTEXT_MESSAGES,
     QQ_DEBOUNCE_SECONDS, QQ_GROUP_AT_ONLY, QQ_GROUP_KEYWORDS,
-    QQ_MAX_CONCURRENCY, QQ_PENDING_MAX_CHARS, QQ_PENDING_MAX_ITEMS,
+    QQ_MAX_CONCURRENCY, QQ_MEMORY_INJECT_LIMIT, QQ_MEMORY_INJECT_MAX_CHARS,
+    QQ_PENDING_MAX_CHARS, QQ_PENDING_MAX_ITEMS,
     QQ_PRIVATE_ENABLE, QQ_QUOTE_MAX_CHARS, QQ_REPLY_MAX_CHARS, QQ_TOKEN, QQ_WHITELIST_GROUPS,
     QQ_WHITELIST_USERS, QQ_WS_URL,
 )
@@ -504,6 +505,14 @@ class SessionRunner:
             extra_context = recent.format_recent(
                 QQ_AGENT_ID, self.target_id,
                 QQ_CONTEXT_MESSAGES, QQ_CONTEXT_MAX_CHARS)
+            # 长期记忆：最近几条「以前聊过什么」的摘要跟在短背景后面。
+            # 走同一条 extra_context 通道——不写回 history，出流即弃。
+            mem = longterm.format_memories(
+                QQ_AGENT_ID, self.target_id,
+                QQ_MEMORY_INJECT_LIMIT, QQ_MEMORY_INJECT_MAX_CHARS)
+            if mem:
+                extra_context = (extra_context + "\n\n" + mem
+                                 if extra_context else mem)
 
         # 工具层靠线程本地变量知道「此刻在为哪个会话服务」，
         # send_qq_message 不带参数时就发回这里
