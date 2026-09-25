@@ -139,9 +139,10 @@ class PickTest(_TmpAgentMixin, unittest.TestCase):
         self._seed([{"md5": "1", "file": "a.png", "tags": ["无语"]}])
         self.assertEqual(stickers.pick("qq", "随便")["file"], "a.png")
 
-    def test_no_match_returns_none(self):
+    def test_no_match_falls_back_to_random(self):
+        # 甩表情不是精准检索——标签对不上就随机兜底一张，真人也经常乱甩
         self._seed([{"md5": "1", "file": "a.png", "tags": ["无语"]}])
-        self.assertIsNone(stickers.pick("qq", "点赞"))
+        self.assertEqual(stickers.pick("qq", "点赞")["file"], "a.png")
 
     def test_missing_file_is_skipped(self):
         self._seed([{"md5": "1", "file": "a.png", "tags": ["无语"]}])
@@ -151,6 +152,30 @@ class PickTest(_TmpAgentMixin, unittest.TestCase):
     def test_empty_library_returns_none(self):
         self._setup_tmp()
         self.assertIsNone(stickers.pick("qq", "大笑"))
+
+    def test_collect_stops_at_limit(self):
+        # 库存上限 100：满了就停收（不淘汰——哪张该删没有判断依据）
+        self._setup_tmp()
+        os.makedirs(stickers._dir("qq"), exist_ok=True)
+        with open(stickers._index_path("qq"), "w", encoding="utf-8") as f:
+            for i in range(stickers.STICKER_LIMIT):
+                f.write(json.dumps(
+                    {"md5": str(i), "file": "s%d.png" % i, "tags": []},
+                    ensure_ascii=False) + "\n")
+                with open(os.path.join(
+                        stickers._dir("qq"), "s%d.png" % i), "wb") as g:
+                    g.write(b"x")
+        from PIL import Image
+        import io
+        buf = io.BytesIO()
+        Image.new("RGB", (300, 300)).save(buf, format="PNG")
+        with mock.patch.object(stickers, "fetch_image",
+                               return_value=buf.getvalue()), \
+                mock.patch.object(stickers, "_tag", return_value=[]):
+            n = stickers.collect("qq", [("http://x/new.png", "甲")])
+        self.assertEqual(n, 0)
+        self.assertEqual(len(stickers._load_index("qq")),
+                         stickers.STICKER_LIMIT)
 
 
 if __name__ == "__main__":

@@ -35,11 +35,18 @@ log = logging.getLogger("stickers")
 # 静态图最长边上限：超过按照片处理，不入库
 STICKER_MAX_EDGE = 640
 
+# 收藏上限：库存满了就不再收新的（用户口径：最多给 AI 100 个选择）。
+# 不做淘汰——删旧留新需要"哪张好"的判断，现在没有这个信号，先简单停收。
+STICKER_LIMIT = 100
+
 _EXT = {"image/jpeg": "jpg", "image/png": "png",
         "image/gif": "gif", "image/webp": "webp"}
 
 # 并发保护：索引的「读-判-写」必须整体原子，否则两轮同时收藏会重复入库
 _lock = threading.Lock()
+
+# 「库存已满」只提醒一次的标志（lock 对象挂不了属性，单独放）
+_full_warned = False
 
 
 def _dir(agent_id):
@@ -123,6 +130,13 @@ def collect(agent_id, items):
                 continue
             if url in {r.get("url") for r in index}:
                 continue
+            if len(index) >= STICKER_LIMIT:
+                # 库满了就停收，不淘汰——哪张该删没有判断依据，别瞎删
+                global _full_warned
+                if not _full_warned:
+                    log.info("表情包库存已满（%d 张），不再收藏", STICKER_LIMIT)
+                    _full_warned = True
+                continue
             ok, w, h = _is_sticker(raw)
             if not ok:
                 continue
@@ -161,11 +175,13 @@ def abs_path(agent_id, rec):
 
 
 def pick(agent_id, query):
-    """按标签挑一张表情包，返回索引记录；没有匹配返回 None。
+    """按标签挑一张表情包，返回索引记录；空库返回 None。
 
     query 是模型用自然语言说的情绪/场景（"大笑""无语"）。匹配规则宽松：
     标签和 query 互含就算命中。query 带"随便/随机"时不挑直接随机。
-    文件已被手动删掉的条目跳过。全都匹配不上返回 None，让调用方如实说。
+    标签匹配不上也随机兜底一张——甩表情不是精准检索，真人经常乱甩，
+    频繁甩的场合里"有图可用"比"图完全对题"要紧。
+    文件已被手动删掉的条目跳过。
     """
     d = _dir(agent_id)
     entries = [r for r in _load_index(agent_id)
@@ -181,6 +197,6 @@ def pick(agent_id, query):
         if hit:
             scored.append((hit, r))
     if not scored:
-        return None
+        return random.choice(entries)
     best = max(h for h, _ in scored)
     return random.choice([r for h, r in scored if h == best])

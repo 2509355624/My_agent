@@ -38,8 +38,8 @@ def _send_sticker(query, target=None, target_id=None):
 
     rec = stickers.pick(QQ_AGENT_ID, query or "")
     if not rec:
-        return ("库里没有匹配「%s」的表情包。可以换个说法再试，"
-                "或者之后看到群里有人发好图自然会收藏。" % (query or "随便"))
+        return ("表情包库还是空的——平时群里有人发小图/GIF 会自动收藏，"
+                "攒几张之后就能甩了。")
 
     file_uri = "file:///" + stickers.abs_path(
         QQ_AGENT_ID, rec).replace("\\", "/").lstrip("/")
@@ -58,9 +58,10 @@ def _send_sticker(query, target=None, target_id=None):
 tool = {
     "name": "send_sticker",
     "description": (
-        "发一个表情包活跃气氛。表情包来自平时自动收藏的群里好图，"
+        "发一个表情包。表情包来自平时自动收藏的群里好图（库存上限 100 张），"
         "已按情绪打好标签。query 填想表达的情绪或场景（如 大笑/无语/摸鱼），"
-        "填「随便」就随机来一张。偶尔用一次才有惊喜感，别每轮都发。"
+        "填「随便」就随机来一张；标签没对上时也会随机兜底，当抽卡就好。"
+        "一张图配一句短话最自然，别一口气连发三张以上。"
     ),
     "function": _send_sticker,
     "parameters": {
