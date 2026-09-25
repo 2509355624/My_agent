@@ -32,7 +32,9 @@ import inspect
 import json
 import logging
 import os
+import random
 import re
+import time
 from urllib.parse import quote
 
 try:
@@ -40,12 +42,12 @@ try:
 except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
-from app import interject, qq_api, recent
+from app import bubbles, interject, qq_api, recent
 from app.agent import run_agent_stream
 from app.agent_prompt import build_stable_prompt, sync_session_system
 from app.config import (
     BASE_DIR, COMFYUI_URL, QQ_AGENT_ID, QQ_BOT_NAME, QQ_BLACKLIST_USERS,
-    QQ_CONTEXT_MAX_CHARS, QQ_CONTEXT_MESSAGES,
+    QQ_BUBBLE_DELAY, QQ_BUBBLES_MAX, QQ_CONTEXT_MAX_CHARS, QQ_CONTEXT_MESSAGES,
     QQ_DEBOUNCE_SECONDS, QQ_GROUP_AT_ONLY, QQ_GROUP_KEYWORDS,
     QQ_MAX_CONCURRENCY, QQ_PENDING_MAX_CHARS, QQ_PENDING_MAX_ITEMS,
     QQ_PRIVATE_ENABLE, QQ_QUOTE_MAX_CHARS, QQ_TOKEN, QQ_WHITELIST_GROUPS,
@@ -546,7 +548,14 @@ class SessionRunner:
 
         if not sent_by_tool and reply.strip():
             try:
-                send_text(self.target_id, reply)
+                # 拆成几条短气泡连发，条间留随机打字间隔——真人不一次甩
+                # 一整面墙（QQ_BUBBLES_MAX=0 可关掉，整条发）。
+                parts = (bubbles.split_bubbles(reply, QQ_BUBBLES_MAX)
+                         if QQ_BUBBLES_MAX > 0 else [reply])
+                for i, part in enumerate(parts):
+                    if i and QQ_BUBBLE_DELAY > 0:
+                        time.sleep(random.uniform(0.5, QQ_BUBBLE_DELAY))
+                    send_text(self.target_id, part)
                 spoke = True
             except Exception:
                 log.exception("回发文字失败 %s", self.session_key)

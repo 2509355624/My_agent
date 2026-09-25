@@ -707,6 +707,31 @@ class DeliverTest(unittest.TestCase):
             self._runner()._deliver(False, "正常回复", [])
         self.assertEqual(sent, ["正常回复"])
 
+    def test_reply_splits_into_bubbles_with_delays(self):
+        # 真人不是一次甩一整面墙——长回复按句拆条连发，条间留打字间隔
+        sent = []
+        slept = []
+        with mock.patch.object(qq_bot.time, "sleep",
+                               lambda s: slept.append(s)), \
+                mock.patch.object(qq_api, "send_group",
+                                  lambda gid, text, limit=None:
+                                  (sent.append(text), 1)[1]):
+            self._runner()._deliver(
+                False, "先说结论。然后是理由。最后补一句。", [])
+        self.assertEqual(sent, ["先说结论。", "然后是理由。", "最后补一句。"])
+        self.assertEqual(len(slept), 2)
+
+    def test_bubble_split_disabled_sends_whole(self):
+        sent = []
+        p = mock.patch.object(qq_bot, "QQ_BUBBLES_MAX", 0)
+        p.start()
+        self.addCleanup(p.stop)
+        with mock.patch.object(
+                qq_api, "send_group",
+                lambda gid, text, limit=None: (sent.append(text), 1)[1]):
+            self._runner()._deliver(False, "一。二。三。", [])
+        self.assertEqual(sent, ["一。二。三。"])
+
     def test_empty_reply_is_not_sent(self):
         sent = []
         with mock.patch.object(
