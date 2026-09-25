@@ -98,6 +98,14 @@ class ParseTest(unittest.TestCase):
 class DecideGuardTest(_StateIsolationMixin, unittest.TestCase):
     """不该判断的时候必须一个调用都不发出去。"""
 
+    def setUp(self):
+        super().setUp()
+        # test_empty_group_list_means_all_groups 走的是真实判断链路，必须挡住
+        # 落盘——否则会把 mock 数据写进 agents/qq/interject/ 的真实日志里
+        p = mock.patch.object(interject, "_log_verdict")
+        p.start()
+        self.addCleanup(p.stop)
+
     def _mode(self, value):
         p = mock.patch.object(interject, "QQ_INTERJECT_MODE", value)
         p.start()
