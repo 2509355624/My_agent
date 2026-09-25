@@ -109,6 +109,23 @@ def get_forward_msg(forward_id, timeout=10):
     return _call("get_forward_msg", {"id": forward_id}, timeout=timeout)
 
 
+# 取名字用的两个接口超时给得很短：它们是纯锦上添花（把 group_123 显示成
+# 群名），NapCat 没开时应该立刻放弃，而不是让整个管理页等二十秒。
+_NAME_TIMEOUT = 3
+
+
+def get_group_list(timeout=_NAME_TIMEOUT):
+    """机器人加入的群列表，用于把 group_<群号> 显示成群名。"""
+    data = _call("get_group_list", timeout=timeout)
+    return data if isinstance(data, list) else []
+
+
+def get_friend_list(timeout=_NAME_TIMEOUT):
+    """好友列表，用于把 private_<QQ号> 显示成昵称。"""
+    data = _call("get_friend_list", timeout=timeout)
+    return data if isinstance(data, list) else []
+
+
 # ─── Markdown → QQ 纯文本 ────────────────────────────
 
 # 处理顺序有讲究：图片 ![alt](url) 必须在普通链接之前，否则会先被

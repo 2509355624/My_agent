@@ -122,6 +122,24 @@
   button:disabled { opacity: 0.4; cursor: not-allowed; }
   button.ghost { background: none; color: var(--text-dim); border: 1px solid var(--border); }
   button.ghost:hover { color: var(--text); border-color: var(--text-mute); opacity: 1; }
+  button.danger {
+    background: none; color: var(--error);
+    border: 1px solid rgba(248, 113, 113, 0.4);
+    padding: 6px 14px; font-size: 12px;
+  }
+  button.danger:hover { background: rgba(248, 113, 113, 0.1); opacity: 1; }
+
+  .sess { display: flex; flex-direction: column; gap: 8px; }
+  .sess-row {
+    display: flex; align-items: center; gap: 12px; padding: 10px 12px;
+    border-radius: var(--radius-sm); background: var(--bg-input);
+  }
+  .sess-row .info { flex: 1; min-width: 0; }
+  .sess-row .nm { font-size: 13px; word-break: break-all; }
+  .sess-row .sub { font-size: 11px; color: var(--text-mute); }
+  .sess-row.main .nm { color: var(--accent); }
+  .sess-empty { font-size: 12px; color: var(--text-mute); }
+  .sess-foot { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
 
   .status { font-size: 12px; color: var(--text-mute); }
   .status.ok { color: var(--success); }
@@ -196,6 +214,17 @@
         <button id="save">保存</button>
         <button class="ghost" id="reload">放弃修改</button>
         <span class="status" id="status"></span>
+      </div>
+
+      <div class="card">
+        <h2>会话管理</h2>
+        <div class="hint">每个群、每个私聊各有一条独立的会话线，互不影响。删掉某一条 = 重置那条对话，
+          这个 agent 的人设、工具与技能白名单都不动。删除不可恢复。</div>
+        <div class="sess" id="sessList"></div>
+        <div class="sess-foot">
+          <button class="ghost" id="sessReload">刷新</button>
+          <span class="status" id="sessStatus"></span>
+        </div>
       </div>
     </div>
   </div>
@@ -470,6 +499,7 @@ async function loadDetail() {
 
   snap = snapshot();
   status('');
+  loadSessions();
 }
 
 async function selectAgent(id) {
@@ -520,6 +550,108 @@ async function save() {
   }
 }
 
+// ─── 会话管理 ────────────────────────────────────────
+// 一个 agent 下可能挂着许多条互不相干的会话线（QQ 每个群 / 每个私聊一条），
+// 都落在 agents/<id>/sessions/ 里。这里是唯一的删除入口，所以只做「列出来 +
+// 二次确认 + 删一条」，不做批量：删除不可逆，一次误点一个已经够呛。
+let sessions = [];
+
+function fmtSize(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1048576).toFixed(1) + ' MB';
+}
+
+function fmtAgo(ts) {
+  const d = new Date((ts || 0) * 1000);
+  const diff = (Date.now() - d.getTime()) / 1000;
+  if (diff < 60) return '刚刚';
+  if (diff < 3600) return Math.floor(diff / 60) + ' 分钟前';
+  if (diff < 86400) return Math.floor(diff / 3600) + ' 小时前';
+  if (diff < 604800) return Math.floor(diff / 86400) + ' 天前';
+  const p = (x) => String(x).padStart(2, '0');
+  return p(d.getMonth() + 1) + '-' + p(d.getDate())
+    + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+function sessStatus(msg, cls) {
+  const el = $('sessStatus');
+  el.textContent = msg || '';
+  el.className = 'status' + (cls ? ' ' + cls : '');
+}
+
+function renderSessions() {
+  const box = $('sessList');
+  box.textContent = '';
+  if (!sessions.length) {
+    const empty = document.createElement('div');
+    empty.className = 'sess-empty';
+    empty.textContent = '还没有任何会话记录。';
+    box.appendChild(empty);
+    return;
+  }
+  sessions.forEach((s) => {
+    const row = document.createElement('div');
+    row.className = 'sess-row' + (s.kind === 'main' ? ' main' : '');
+
+    const info = document.createElement('div');
+    info.className = 'info';
+    const nm = document.createElement('div');
+    nm.className = 'nm';
+    nm.textContent = s.name || s.key;
+    const sub = document.createElement('div');
+    sub.className = 'sub';
+    sub.textContent = (s.messages || 0) + ' 条消息 · ' + fmtSize(s.size || 0)
+      + ' · 最后活动 ' + fmtAgo(s.mtime);
+    info.appendChild(nm);
+    info.appendChild(sub);
+    row.appendChild(info);
+
+    const del = document.createElement('button');
+    del.className = 'danger';
+    del.textContent = '删除';
+    del.addEventListener('click', () => removeSession(s, del));
+    row.appendChild(del);
+
+    box.appendChild(row);
+  });
+}
+
+async function loadSessions() {
+  if (!cur) return;
+  sessions = [];
+  $('sessList').textContent = '';
+  try {
+    const d = await api('/api/agent/' + encodeURIComponent(cur) + '/sessions');
+    sessions = d.sessions || [];
+    renderSessions();
+    // 名字要问 QQ 协议端，拿不到只是显示得糙一点，不影响删除
+    sessStatus(d.names_ok ? '' : 'NapCat 没连上，群里只显示群号（不影响删除）',
+               d.names_ok ? '' : 'err');
+  } catch (e) {
+    sessStatus(e.message, 'err');
+  }
+}
+
+async function removeSession(s, btn) {
+  const title = s.name || s.key;
+  const what = s.kind === 'main' ? '主会话（网页端对话）' : '「' + title + '」的全部聊天记录';
+  if (!confirm('删除' + what + '？\n\n共 ' + (s.messages || 0) + ' 条消息，删除后无法恢复。\n'
+      + '该会话下次对话会从零开始，人设与白名单不变。')) return;
+
+  btn.disabled = true;
+  sessStatus('删除中…');
+  try {
+    await api('/api/agent/' + encodeURIComponent(cur) + '/sessions/'
+      + encodeURIComponent(s.key), { method: 'DELETE' });
+    await loadSessions();      // 先重拉（会重置状态栏），再报结果
+    sessStatus('已删除「' + title + '」，下次对话从零开始', 'ok');
+  } catch (e) {
+    sessStatus(e.message, 'err');
+    btn.disabled = false;
+  }
+}
+
 async function boot() {
   try {
     const d = await api('/api/agents');
@@ -543,6 +675,7 @@ $('save').addEventListener('click', save);
 $('reload').addEventListener('click', () => {
   loadDetail().catch((e) => status(e.message, 'err'));
 });
+$('sessReload').addEventListener('click', loadSessions);
 $('provider').addEventListener('change', () => {
   const pid = $('provider').value || detail.global_provider;
   $('model').placeholder = '默认 ' + (defaultModelOf(pid) || '—');

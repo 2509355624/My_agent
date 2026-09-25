@@ -126,6 +126,112 @@ def session_file(agent_id, key=None):
     return os.path.join(AGENTS_DIR, aid, "session.jsonl")
 
 
+# 主会话在管理接口里的表示。真正的主会话文件是 session.jsonl（不在
+# sessions/ 目录里），这里用一个合法、好记且不会与 QQ 侧相撞的名字代替
+# ——QQ 的 key 一律带 group_ / private_ 前缀。
+MAIN_SESSION_KEY = "main"
+
+
+def _session_kind(key):
+    """从 key 推断这条会话线是什么，供界面分类显示。"""
+    if key.startswith("private_"):
+        return "private", key[len("private_"):]
+    if key.startswith("group_"):
+        return "group", key[len("group_"):]
+    return "other", key
+
+
+def _session_stat(path):
+    """一条会话线的体量：消息条数 / 字节数 / 最后修改时间；读不到返回 None。
+
+    首行是 system 头（人设锚点），不算「聊过的内容」，从条数里扣掉。
+    """
+    try:
+        size = os.path.getsize(path)
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    lines = 0
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    lines += 1
+    except (OSError, UnicodeDecodeError):
+        pass
+    return {"messages": max(lines - 1, 0), "size": size, "mtime": mtime}
+
+
+def list_sessions(agent_id):
+    """列出该 agent 的所有会话线：主会话 + sessions/ 下每一条。
+
+    只读本地文件，不碰网络——群名/昵称要问 QQ 协议端，慢且可能不可用，
+    由上层按需补，补不上也不影响列表本身。
+    最近有活动的排最前：想重置哪个群，通常就是刚在说话的那个。
+    """
+    aid = safe_agent_id(agent_id)
+    if aid is None:
+        return []
+
+    items = []
+    stat = _session_stat(session_file(aid))
+    if stat:
+        items.append(dict(stat, key=MAIN_SESSION_KEY, kind="main",
+                          target_id="", name="主会话（网页端）"))
+
+    sess_dir = os.path.join(AGENTS_DIR, aid, "sessions")
+    try:
+        names = sorted(os.listdir(sess_dir))
+    except OSError:
+        names = []
+    for fname in names:
+        if not fname.endswith(".jsonl"):
+            continue
+        key = fname[:-len(".jsonl")]
+        # safe_session_key 顺带把点开头的杂物（备份目录之类）挡在外面
+        if safe_session_key(key) is None:
+            continue
+        stat = _session_stat(os.path.join(sess_dir, fname))
+        if stat is None:
+            continue
+        kind, target_id = _session_kind(key)
+        items.append(dict(stat, key=key, kind=kind, target_id=target_id,
+                          name=""))
+
+    items.sort(key=lambda x: x["mtime"], reverse=True)
+    return items
+
+
+def delete_session(agent_id, key):
+    """删除一条会话线，返回 (是否成功, 错误信息)。
+
+    不可逆：删掉的就是聊天记录本身，所以调用方必须二次确认（管理页拦一道）。
+
+    删完不需要任何收尾动作：下一轮对话加载时发现会话缺 system 头会自动
+    重建，而人设、白名单、触发词都在 agent.json / prompt.md 里，不受影响
+    ——这正是「重置这个群」想要的效果。
+    """
+    aid = safe_agent_id(agent_id)
+    if aid is None:
+        return False, "非法的 agent id"
+
+    if key == MAIN_SESSION_KEY:
+        path = session_file(aid)
+    else:
+        safe = safe_session_key(key)
+        if safe is None:
+            return False, "非法的会话 key"
+        path = session_file(aid, safe)
+
+    if not os.path.exists(path):
+        return False, "会话不存在"
+    try:
+        os.remove(path)
+    except OSError as e:
+        return False, "删除失败：" + str(e)
+    return True, ""
+
+
 def resolve(agent_id):
     """把请求里的 agent_id 解析成可用的 agent id。
 

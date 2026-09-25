@@ -516,6 +516,91 @@ def put_agent_detail(agent_id):
     return jsonify(detail)
 
 
+# ─── 会话管理（列出 / 删除某条会话线）────────────────
+# QQ 适配层让一个 agent 下挂多条互不相干的会话线（每个群、每个私聊各一条，
+# 见 app/agents.py 的 session_file）。网页端原来的「清空」只够得着主会话，
+# 想单独重置某个群没有入口——这里补上，语义就是「删掉这个群的聊天记录，
+# 下次从零开始」。人设 / 白名单 / 触发词都在 agent.json 与 prompt.md 里，
+# 不受影响。
+
+
+def _decorate_session_names(items):
+    """把群名 / 昵称补进每条会话线的 name，返回「名字是否全拿到了」。
+
+    名字要问 QQ 协议端，属于锦上添花：NapCat 没开、这台机器压根没接 QQ、
+    或者只是没进过某个群的好友——拿不到就退回只显示号，列表照样给全。
+    所以这里把异常吞掉并如实回报 ok=False，而不是让整个接口失败。
+    """
+    kinds = {i["kind"] for i in items}
+    if not ({"group", "private"} & kinds):
+        return True
+
+    # 局部 import：不接 QQ 的 agent 列表压根走不到这里，没必要在启动时加载
+    from app import qq_api
+
+    names, ok = {}, True
+    if "group" in kinds:
+        try:
+            for g in qq_api.get_group_list():
+                gid = str(g.get("group_id", ""))
+                if gid:
+                    names["group_" + gid] = g.get("group_name") or ""
+        except Exception:
+            ok = False
+    if "private" in kinds:
+        try:
+            for f in qq_api.get_friend_list():
+                uid = str(f.get("user_id", ""))
+                if uid:
+                    names["private_" + uid] = (f.get("remark")
+                                               or f.get("nickname") or "")
+        except Exception:
+            ok = False
+
+    for item in items:
+        if item["kind"] == "main":
+            continue          # 主会话的 name 在 list_sessions 里已写好
+        label = names.get(item["key"], "")
+        if item["kind"] == "private":
+            item["name"] = (label or "私聊") + "（" + item["target_id"] + "）"
+        elif item["kind"] == "group":
+            item["name"] = (label or "群") + "（" + item["target_id"] + "）"
+        else:
+            item["name"] = item["key"]
+    return ok
+
+
+@app.route("/api/agent/<agent_id>/sessions")
+def get_agent_sessions(agent_id):
+    """列出该 agent 的所有会话线（主会话 + 每个群 / 私聊各一条）。"""
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    items = agent_store.list_sessions(aid)
+    names_ok = _decorate_session_names(items)
+    return jsonify({"sessions": items, "names_ok": names_ok, "agent": aid})
+
+
+@app.route("/api/agent/<agent_id>/sessions/<key>", methods=["DELETE"])
+def delete_agent_session(agent_id, key):
+    """删除一条会话线（= 重置这条对话）。不可恢复。
+
+    与 PUT 同一道门：管理类写操作默认只允许本机。二次确认在前端做，
+    后端不做「要不要删」的判断——它只守住「谁有资格删」。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+
+    ok, msg = agent_store.delete_session(aid, key)
+    if not ok:
+        return jsonify({"error": msg}), (404 if msg == "会话不存在" else 400)
+    return jsonify({"ok": True, "agent": aid, "key": key})
+
+
 # ─── 文档 API ────────────────────────────────────────
 
 @app.route("/api/documents")
