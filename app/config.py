@@ -281,9 +281,3 @@ QQ_INTERJECT_CONTEXT_MAX_CHARS = int(
 # 发出去的回复会以这个名字记进群聊缓存——主模型靠它认出「哪些是我刚说过的」，
 # 认不出来就会换个说法复读上一句。
 QQ_BOT_NAME = os.getenv("QQ_BOT_NAME", "小小怪").strip() or "小小怪"
-
-# 回复拆成几条「气泡」发（像真人连发短消息，而不是一整面墙）。0 = 不拆，
-# 整条发。条与条之间留一段打字间隔（上限，实际随机 0.5~上限秒）。
-# 切分规则见 app/bubbles.py：段落→句子→分句，短回复不拆，超上限合并。
-QQ_BUBBLES_MAX = int(os.getenv("QQ_BUBBLES_MAX", "4"))
-QQ_BUBBLE_DELAY = float(os.getenv("QQ_BUBBLE_DELAY", "1.5"))

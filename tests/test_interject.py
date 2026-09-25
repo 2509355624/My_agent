@@ -27,11 +27,21 @@ def _group_event(text="大家好", group_id=1041079621, user_id=111, self_id=999
 
 
 class _StateIsolationMixin:
-    """冷却 / 节流是模块级字典，用例之间必须清干净，否则互相串。"""
+    """隔离模块级状态：冷却 / 节流字典 + 真实 settings.json。
+
+    冷却 / 节流是模块级字典，用例之间必须清干净，否则互相串；
+    load_settings 读的是 agents/qq/settings.json（用户在管理页点过静音），
+    走真实 decide 链路的用例必须挡住，否则用户拨的开关会让用例集体翻车
+    ——跟 _log_verdict 漏挡是同一类污染。
+    """
 
     def setUp(self):
         self._clear()
         self.addCleanup(self._clear)
+        p = mock.patch.object(interject.agent_store, "load_settings",
+                              return_value={})
+        p.start()
+        self.addCleanup(p.stop)
 
     @staticmethod
     def _clear():
