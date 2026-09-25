@@ -1,20 +1,22 @@
-"""发表情包工具：从收藏库里按情绪/场景挑一张，发到当前会话。
+"""发表情包工具：模型从每轮注入的 [表情包库] 清单里报编号，按号发图。
 
 表情包从哪来：qq_bot 每轮自动收藏群里的小图/GIF（见 app/stickers.py），
-识图模型打了情绪标签。模型想活跃气氛时用 query 说想要什么（"大笑""无语"），
-这里挑最匹配的一张用本地文件直发——不经过外链，不怕图床链接过期。
+识图模型写了「画面 + 情绪」。整库清单挂在每轮的上下文里（stickers.catalog，
+走 extra_context 通道出流即弃），模型自己看清单挑编号报过来——选哪张是
+模型的自主决策，这里不做任何标签匹配或随机兜底。
 
 注意：工具名刻意不是 send_qq_message——那会让适配层以为"本轮已自己发过"
 而吞掉正文回复。这里只发图，正文照常走自动回发，图 + 文字各一条消息。
 """
 
-import os
-
 from app import qq_api, stickers
 from app.config import QQ_AGENT_ID
 
+# 一次调用最多发几张：清单里明说可连报，这里兜一道防刷屏
+_MAX_PER_CALL = 3
 
-def _send_sticker(query, target=None, target_id=None):
+
+def _send_sticker(nums, target=None, target_id=None):
     cur_target, cur_id = qq_api.current_context()
 
     target = (target or "").strip().lower() or None
@@ -36,40 +38,51 @@ def _send_sticker(query, target=None, target_id=None):
     if target not in ("group", "private"):
         return "target 只能是 group 或 private，收到：" + str(target)
 
-    rec = stickers.pick(QQ_AGENT_ID, query or "")
-    if not rec:
-        return ("表情包库还是空的——平时群里有人发小图/GIF 会自动收藏，"
-                "攒几张之后就能甩了。")
+    picks = stickers.records_by_numbers(QQ_AGENT_ID, nums)
+    if not picks:
+        return ("没认出有效的表情包编号。看每轮上下文里的 [表情包库] 清单，"
+                "填编号数字（如 3，连发填 3,7）。")
 
-    file_uri = "file:///" + stickers.abs_path(
-        QQ_AGENT_ID, rec).replace("\\", "/").lstrip("/")
-    seg = {"type": "image", "data": {"file": file_uri}}
-    try:
-        if target == "group":
-            qq_api.send_group(target_id, [seg])
-        else:
-            qq_api.send_private(target_id, [seg])
-    except Exception as e:
-        return "发送失败：" + str(e)
-    tags = "、".join(rec.get("tags") or []) or "无标签"
-    return "已发表情包（标签：%s）" % tags
+    sent, failed = [], []
+    for n, rec in picks[:_MAX_PER_CALL]:
+        desc = (rec.get("desc") or "").strip()
+        if not desc:
+            desc = "、".join(rec.get("tags") or []) or "无描述"
+        file_uri = "file:///" + stickers.abs_path(
+            QQ_AGENT_ID, rec).replace("\\", "/").lstrip("/")
+        seg = {"type": "image", "data": {"file": file_uri}}
+        try:
+            if target == "group":
+                qq_api.send_group(target_id, [seg])
+            else:
+                qq_api.send_private(target_id, [seg])
+            sent.append("%d号（%s）" % (n, desc))
+        except Exception as e:
+            failed.append("%d号：%s" % (n, e))
+
+    if sent and not failed:
+        return "已发表情包：%s" % "、".join(sent)
+    if sent and failed:
+        return "发了 %s；失败：%s" % ("、".join(sent), "；".join(failed))
+    return "发送失败：" + "；".join(failed)
 
 
 tool = {
     "name": "send_sticker",
     "description": (
-        "发一个表情包。表情包来自平时自动收藏的群里好图（库存上限 100 张），"
-        "已按情绪打好标签。query 填想表达的情绪或场景（如 大笑/无语/摸鱼），"
-        "填「随便」就随机来一张；标签没对上时也会随机兜底，当抽卡就好。"
-        "一张图配一句短话最自然，别一口气连发三张以上。"
+        "发一个表情包。每轮上下文里的 [表情包库] 清单就是你的全部存货"
+        "（上限 50 张，平时自动收藏群里的小图/GIF），看中哪张填哪张的编号"
+        "（如 3，连发填 3,7）。很多话不用打字，直接甩一张就是回复；"
+        "群友发了好笑的，回敬一张也很好接。"
     ),
     "function": _send_sticker,
     "parameters": {
         "type": "object",
         "properties": {
-            "query": {
+            "nums": {
                 "type": "string",
-                "description": "想要的情绪或场景关键词，如「大笑」「无语」；「随便」= 随机",
+                "description":
+                    "表情包编号，来自 [表情包库] 清单；如「3」，连发「3,7」",
             },
             "target": {
                 "type": "string",
@@ -81,6 +94,6 @@ tool = {
                 "description": "群号或 QQ 号；不填则用当前会话",
             },
         },
-        "required": ["query"],
+        "required": ["nums"],
     },
 }

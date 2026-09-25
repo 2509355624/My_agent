@@ -8,14 +8,16 @@
 判定"是不是表情包"用尺寸就行：动图（GIF）一律算；静态图最长边不超过
 STICKER_MAX_EDGE 的算。群相册照片动辄几千像素，这条线能把照片挡在外面。
 
-标签用识图模型打一次（每张图只打一次，md5 去重后不会重复调）。失败不拦
-收藏——没标签的图照样入库，只是 send_sticker 挑不到它。
+标签用识图模型打一次（每张图只打一次，md5 去重后不会重复调）。打的是
+「画面内容 + 情绪标签」：模型选表情靠的是每轮注入的清单一行字，只有情绪词
+撑不起"看图挑图"，得让它知道画面里画的是什么。失败不拦收藏——没标签的图
+照样入库，只是清单里只能干列标签。
 
 存哪：agents/<agent_id>/stickers/
     <md5前8位>.<后缀>                    图片本体（原始字节，不压缩——
                                          甩出去的就是群里看到的那张）
     index.jsonl                           一行一条：
-    {"md5","file","tags","sender","t","url","w","h"}
+    {"md5","file","desc","tags","sender","t","url","w","h"}
 """
 
 import hashlib
@@ -23,7 +25,7 @@ import io
 import json
 import logging
 import os
-import random
+import re
 import threading
 import time
 
@@ -35,9 +37,9 @@ log = logging.getLogger("stickers")
 # 静态图最长边上限：超过按照片处理，不入库
 STICKER_MAX_EDGE = 640
 
-# 收藏上限：库存满了就不再收新的（用户口径：最多给 AI 100 个选择）。
+# 收藏上限：库存满了就不再收新的（用户口径：最多给 AI 50 个选择）。
 # 不做淘汰——删旧留新需要"哪张好"的判断，现在没有这个信号，先简单停收。
-STICKER_LIMIT = 100
+STICKER_LIMIT = 50
 
 _EXT = {"image/jpeg": "jpg", "image/png": "png",
         "image/gif": "gif", "image/webp": "webp"}
@@ -84,22 +86,30 @@ def _is_sticker(raw):
 
 
 def _tag(data_url):
-    """让识图模型给表情包打标签，返回标签列表；失败返回空表。"""
+    """让识图模型给表情包写「画面 + 情绪」，返回 (描述, 标签列表)；失败空表。
+
+    只有情绪词撑不起选图：模型每轮看的是清单一行字，得知道画面里是什么
+    （"猫瘫在桌上打滚"和"熊猫头瞪眼"都是"无语"，但用起来完全两码事）。
+    """
     from app.config import VISION_TIMEOUT
     from app.vision import describe
 
     prompt = (
-        "这是QQ聊天里的表情包。给它打3-5个标签，表示它的情绪和使用场景"
-        "（例如：无语、大笑、摸鱼、害怕、点赞、好耶、裂开）。"
-        "只输出标签本身，用逗号分隔，不要解释。"
+        "这是QQ聊天里的表情包。先用不超过12个字描述画面内容"
+        "（例如：猫瘫在桌上打滚、熊猫头瞪眼），然后用｜隔开，"
+        "再给3-5个情绪或使用场景标签（如：无语、大笑、摸鱼、好耶）。"
+        "只输出这一行，不要解释。"
     )
     try:
         text = describe(data_url, timeout=VISION_TIMEOUT, prompt=prompt)
     except Exception as exc:
         log.warning("表情包打标签失败（存无标签版）：%s", exc)
-        return []
-    tags = [t.strip() for t in text.replace("，", ",").split(",")]
-    return [t for t in tags if t and len(t) <= 12][:6]
+        return "", []
+    desc, _, tag_part = text.strip().partition("｜")
+    if not tag_part:
+        desc, _, tag_part = desc.partition("|")
+    tags = [t.strip() for t in tag_part.replace("，", ",").split(",")]
+    return desc.strip()[:20], [t for t in tags if t and len(t) <= 12][:6]
 
 
 def collect(agent_id, items):
@@ -150,11 +160,11 @@ def collect(agent_id, items):
                 continue
             try:
                 from app.vision import to_data_url
-                tags = _tag(to_data_url(raw))
+                desc, tags = _tag(to_data_url(raw))
             except Exception:
-                tags = []
+                desc, tags = "", []
             rec = {
-                "md5": digest, "file": name, "tags": tags,
+                "md5": digest, "file": name, "desc": desc, "tags": tags,
                 "sender": sender or "", "t": int(time.time()),
                 "url": url, "w": w, "h": h,
             }
@@ -174,29 +184,47 @@ def abs_path(agent_id, rec):
     return os.path.join(_dir(agent_id), rec.get("file", ""))
 
 
-def pick(agent_id, query):
-    """按标签挑一张表情包，返回索引记录；空库返回 None。
+def catalog(agent_id):
+    """渲染给模型看的表情包清单（带稳定编号），空库返回空串。
 
-    query 是模型用自然语言说的情绪/场景（"大笑""无语"）。匹配规则宽松：
-    标签和 query 互含就算命中。query 带"随便/随机"时不挑直接随机。
-    标签匹配不上也随机兜底一张——甩表情不是精准检索，真人经常乱甩，
-    频繁甩的场合里"有图可用"比"图完全对题"要紧。
-    文件已被手动删掉的条目跳过。
+    编号 = 该记录在 index.jsonl 里的行号（从 1 起）。索引只追加不重排，
+    所以编号跨轮稳定——模型这轮报 7 号，下轮 7 号还是同一张。文件已被
+    手动删掉的条目不进清单，但编号照算（清单一出一变，不能让旧号错位）。
+
+    每行 = 编号 + 画面描述 + 头几个情绪标签。挑图靠的是这一行字，描述
+    加标签都比纯标签好使；旧条目没 desc 就退回标签拼接。
     """
     d = _dir(agent_id)
-    entries = [r for r in _load_index(agent_id)
-               if os.path.exists(os.path.join(d, r.get("file", "")))]
-    if not entries:
-        return None
-    q = (query or "").strip()
-    if not q or any(w in q for w in ("随便", "随机", "来一个", "整一个")):
-        return random.choice(entries)
-    scored = []
-    for r in entries:
-        hit = sum(1 for t in r.get("tags") or [] if t and (t in q or q in t))
-        if hit:
-            scored.append((hit, r))
-    if not scored:
-        return random.choice(entries)
-    best = max(h for h, _ in scored)
-    return random.choice([r for h, r in scored if h == best])
+    lines = []
+    for i, r in enumerate(_load_index(agent_id), 1):
+        if not os.path.exists(os.path.join(d, r.get("file", ""))):
+            continue
+        desc = (r.get("desc") or "").strip()
+        tags = [t for t in (r.get("tags") or []) if t]
+        if desc and tags:
+            label = "%s（%s）" % (desc, "/".join(tags[:3]))
+        else:
+            label = desc or "、".join(tags) or "（没打上标签）"
+        lines.append("%d. %s" % (i, label))
+    if not lines:
+        return ""
+    return ("[表情包库] 想甩表情就调 send_sticker 报编号"
+            "（可一次报多个，如 3 或 3,7）：\n" + "\n".join(lines))
+
+
+def records_by_numbers(agent_id, nums_text):
+    """把模型报的编号解析成索引记录，返回 [(编号, 记录), ...]。
+
+    编号语义与 catalog 严格一致：index.jsonl 行号。越界/无效编号跳过；
+    文件已被手动删掉的条目当不存在。返回空列表 = 没一个号能用。
+    """
+    d = _dir(agent_id)
+    entries = _load_index(agent_id)
+    out = []
+    for n in (int(s) for s in re.findall(r"\d+", str(nums_text or ""))):
+        if not 1 <= n <= len(entries):
+            continue
+        rec = entries[n - 1]
+        if os.path.exists(os.path.join(d, rec.get("file", ""))):
+            out.append((n, rec))
+    return out

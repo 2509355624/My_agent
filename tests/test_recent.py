@@ -324,6 +324,26 @@ class RunTurnContextTest(_TmpAgentsMixin, unittest.TestCase):
         seen = self._run(target="private", target_id="1")
         self.assertIsNone(seen["extra"])
 
+    def test_sticker_menu_injected_for_group_and_private(self):
+        # 表情包清单挂同一条 extra_context 通道：群聊跟在背景后面，
+        # 私聊单独成段（库全 agent 共享，私聊也甩得出来）
+        sdir = os.path.join(self.root, "qq", "stickers")
+        os.makedirs(sdir, exist_ok=True)
+        with open(os.path.join(sdir, "index.jsonl"), "w",
+                  encoding="utf-8") as f:
+            f.write(json.dumps({"md5": "1", "file": "a.png",
+                                "desc": "猫瘫在桌上打滚", "tags": ["摆烂"]},
+                               ensure_ascii=False) + "\n")
+        with open(os.path.join(sdir, "a.png"), "wb") as g:
+            g.write(b"x")
+        recent.remember("qq", "9", "李四", "刚才在聊吃饭")
+        seen = self._run()
+        self.assertIn("刚才在聊吃饭", seen["extra"])
+        self.assertIn("[表情包库]", seen["extra"])
+        self.assertIn("猫瘫在桌上打滚", seen["extra"])
+        seen = self._run(target="private", target_id="1")
+        self.assertIn("[表情包库]", seen["extra"])
+
     def test_empty_context_passes_none(self):
         seen = self._run()
         self.assertIsNone(seen["extra"])

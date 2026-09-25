@@ -561,6 +561,13 @@ class SessionRunner:
             if mem:
                 extra_context = (extra_context + "\n\n" + mem
                                  if extra_context else mem)
+        # 表情包清单：把整库目录亮给模型，看图挑编号自己发。挂在同一条
+        # extra_context 通道，出流即弃。私聊也注入——库是全 agent 共享的，
+        # 私聊里照样可以甩群里收的表情。
+        menu = stickers.catalog(QQ_AGENT_ID)
+        if menu:
+            extra_context = (extra_context + "\n\n" + menu
+                             if extra_context else menu)
 
         # 工具层靠线程本地变量知道「此刻在为哪个会话服务」，
         # send_qq_message 不带参数时就发回这里

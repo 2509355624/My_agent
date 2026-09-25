@@ -42,8 +42,12 @@ class _StateIsolationMixin:
                               return_value={})
         p.start()
         self.addCleanup(p.stop)
-        # _run_turn 开头会做表情包收藏（网络下载）——一律挡掉
+        # _run_turn 开头会做表情包收藏（网络下载）——一律挡掉；
+        # 清单注入同理，别让它读真实库存
         p = mock.patch.object(qq_bot.stickers, "collect", return_value=0)
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(qq_bot.stickers, "catalog", return_value="")
         p.start()
         self.addCleanup(p.stop)
 
