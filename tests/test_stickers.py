@@ -231,5 +231,93 @@ class ByNumbersTest(_SeedMixin, unittest.TestCase):
                          stickers.STICKER_LIMIT)
 
 
+class DeleteTest(_SeedMixin, unittest.TestCase):
+    """删表情包：打墓碑不删行（编号稳定）+ 删文件 + 库存位置让出来。"""
+
+    def _entries(self):
+        return [
+            {"md5": "1", "file": "a.png", "desc": "第一张", "tags": []},
+            {"md5": "2", "file": "b.png", "desc": "第二张", "tags": []},
+            {"md5": "3", "file": "c.png", "desc": "第三张", "tags": []},
+        ]
+
+    def test_delete_marks_and_removes_file(self):
+        self._seed(self._entries())
+        done, skipped = stickers.delete("qq", "2")
+        self.assertEqual([n for n, _ in done], [2])
+        self.assertEqual(skipped, [])
+        self.assertFalse(os.path.exists(
+            os.path.join(stickers._dir("qq"), "b.png")))
+        index = stickers._load_index("qq")
+        self.assertTrue(index[1].get("deleted"))
+        self.assertFalse(index[0].get("deleted"))   # 只标记删的那张
+
+    def test_numbering_stays_stable_after_delete(self):
+        # 关键：删 2 号之后，3 号必须还是原来那张。删索引行会让后面的号
+        # 全部前移，模型记住的号就指错图了——所以是打标记不是删行。
+        self._seed(self._entries())
+        stickers.delete("qq", "2")
+        text = stickers.catalog("qq")
+        self.assertIn("1. 第一张", text)
+        self.assertNotIn("第二张", text)
+        self.assertIn("3. 第三张", text)
+        self.assertEqual([r["file"] for _, r in
+                          stickers.records_by_numbers("qq", "3")], ["c.png"])
+
+    def test_deleted_number_cannot_be_sent_or_deleted_again(self):
+        self._seed(self._entries())
+        stickers.delete("qq", "2")
+        self.assertEqual(stickers.records_by_numbers("qq", "2"), [])
+        done, skipped = stickers.delete("qq", "2")
+        self.assertEqual(done, [])
+        self.assertEqual(skipped, [2])
+
+    def test_out_of_range_and_garbage(self):
+        self._seed(self._entries())
+        done, skipped = stickers.delete("qq", "99")
+        self.assertEqual(done, [])
+        self.assertEqual(skipped, [99])
+        self.assertEqual(stickers.delete("qq", "abc"), ([], []))
+
+    def test_delete_frees_a_slot_for_new_stickers(self):
+        # 库存满了 → 删一张 → 新图收得进来（上限按活着的条目算）
+        self._setup_tmp()
+        os.makedirs(stickers._dir("qq"), exist_ok=True)
+        with open(stickers._index_path("qq"), "w", encoding="utf-8") as f:
+            for i in range(stickers.STICKER_LIMIT):
+                f.write(json.dumps(
+                    {"md5": str(i), "file": "s%d.png" % i, "tags": []},
+                    ensure_ascii=False) + "\n")
+                with open(os.path.join(
+                        stickers._dir("qq"), "s%d.png" % i), "wb") as g:
+                    g.write(b"x")
+        stickers.delete("qq", "1")
+        from PIL import Image
+        import io
+        buf = io.BytesIO()
+        Image.new("RGB", (300, 300)).save(buf, format="PNG")
+        with mock.patch.object(stickers, "fetch_image",
+                               return_value=buf.getvalue()), \
+                mock.patch.object(stickers, "_tag", return_value=("", [])):
+            n = stickers.collect("qq", [("http://x/new.png", "甲")])
+        self.assertEqual(n, 1)
+
+    def test_deleted_sticker_can_be_collected_again(self):
+        # 删过的图再被发到群里，要当新图收——墓碑不该永久拉黑这张图
+        self._seed([{"md5": "1", "file": "a.png", "desc": "x", "tags": [],
+                     "url": "http://x/a.png"}])
+        stickers.delete("qq", "1")
+        from PIL import Image
+        import io
+        buf = io.BytesIO()
+        Image.new("RGB", (300, 300)).save(buf, format="PNG")
+        with mock.patch.object(stickers, "fetch_image",
+                               return_value=buf.getvalue()) as fetch, \
+                mock.patch.object(stickers, "_tag", return_value=("", [])):
+            n = stickers.collect("qq", [("http://x/a.png", "甲")])
+        self.assertEqual(n, 1)
+        fetch.assert_called_once()      # 没有被墓碑的 URL 拦在下载前
+
+
 if __name__ == "__main__":
     unittest.main()

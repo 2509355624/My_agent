@@ -17,7 +17,12 @@ STICKER_MAX_EDGE 的算。群相册照片动辄几千像素，这条线能把照
     <md5前8位>.<后缀>                    图片本体（原始字节，不压缩——
                                          甩出去的就是群里看到的那张）
     index.jsonl                           一行一条：
-    {"md5","file","desc","tags","sender","t","url","w","h"}
+    {"md5","file","desc","tags","sender","t","url","w","h","deleted"}
+
+删：模型自己觉得哪张不好用，调 delete_sticker 按编号删。删的是「索引行
+打 deleted 标记 + 删图片文件」而不是删行——编号是行号，删行会让后面的
+号全部前移，模型记住的号就指错图了。上限按活着的条目算，所以删出来的
+位置能让新图进来。
 """
 
 import hashlib
@@ -38,7 +43,7 @@ log = logging.getLogger("stickers")
 STICKER_MAX_EDGE = 640
 
 # 收藏上限：库存满了就不再收新的（用户口径：最多给 AI 50 个选择）。
-# 不做淘汰——删旧留新需要"哪张好"的判断，现在没有这个信号，先简单停收。
+# 不做自动淘汰——哪张该删没有判断依据，交给模型用 delete_sticker 自己删。
 STICKER_LIMIT = 50
 
 _EXT = {"image/jpeg": "jpg", "image/png": "png",
@@ -70,6 +75,39 @@ def _load_index(agent_id):
     except (OSError, ValueError) as exc:
         log.warning("表情包索引读不出来（忽略）：%s", exc)
         return []
+
+
+def _live(entries):
+    """过滤掉已删除的条目（墓碑）。库存计数、去重都只看活着的。"""
+    return [r for r in entries if not r.get("deleted")]
+
+
+def _write_index(agent_id, entries):
+    """整份重写索引（打删除标记时用）。调用方需持有 _lock。
+
+    先写 .tmp 再 os.replace：重写途中崩了也不会留下半份索引。
+    """
+    path = _index_path(agent_id)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            for r in entries:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        os.replace(tmp, path)
+        return True
+    except OSError as exc:
+        log.warning("表情包索引重写失败：%s", exc)
+        return False
+
+
+def _label(rec):
+    """一条记录渲染成清单里的一行说明（画面 + 头几个标签）。"""
+    desc = (rec.get("desc") or "").strip()
+    tags = [t for t in (rec.get("tags") or []) if t]
+    if desc and tags:
+        return "%s（%s）" % (desc, "/".join(tags[:3]))
+    return desc or "、".join(tags) or "（没打上标签）"
 
 
 def _is_sticker(raw):
@@ -123,8 +161,9 @@ def collect(agent_id, items):
         if not url:
             continue
         # 下载前先看一眼索引：同一个 URL 之前收过就不用再下（下载前查是
-        # 快速路径；锁内还有一道 md5/URL 查重，防并发窗口里的重复）
-        if url in {r.get("url") for r in _load_index(agent_id)}:
+        # 快速路径；锁内还有一道 md5/URL 查重，防并发窗口里的重复）。
+        # 只跟活着的条目比——删过的图再发一次，说明它还想进库，那就收。
+        if url in {r.get("url") for r in _live(_load_index(agent_id))}:
             continue
         try:
             raw = fetch_image(url)
@@ -136,11 +175,13 @@ def collect(agent_id, items):
         # 「查重-落盘-记索引」整体持锁：两条会话线程同时进来不会重复入库
         with _lock:
             index = _load_index(agent_id)
-            if digest in {r.get("md5") for r in index}:
+            live = _live(index)
+            if digest in {r.get("md5") for r in live}:
                 continue
-            if url in {r.get("url") for r in index}:
+            if url in {r.get("url") for r in live}:
                 continue
-            if len(index) >= STICKER_LIMIT:
+            # 上限按「活着的」算：删过的位置要让给新图，否则删了也白删
+            if len(live) >= STICKER_LIMIT:
                 # 库满了就停收，不淘汰——哪张该删没有判断依据，别瞎删
                 global _full_warned
                 if not _full_warned:
@@ -188,8 +229,9 @@ def catalog(agent_id):
     """渲染给模型看的表情包清单（带稳定编号），空库返回空串。
 
     编号 = 该记录在 index.jsonl 里的行号（从 1 起）。索引只追加不重排，
-    所以编号跨轮稳定——模型这轮报 7 号，下轮 7 号还是同一张。文件已被
-    手动删掉的条目不进清单，但编号照算（清单一出一变，不能让旧号错位）。
+    所以编号跨轮稳定——模型这轮报 7 号，下轮 7 号还是同一张。已删除的
+    条目和文件被手动删掉的条目都不进清单，但编号照算（清单一出一变，
+    不能让旧号错位）。
 
     每行 = 编号 + 画面描述 + 头几个情绪标签。挑图靠的是这一行字，描述
     加标签都比纯标签好使；旧条目没 desc 就退回标签拼接。
@@ -197,15 +239,11 @@ def catalog(agent_id):
     d = _dir(agent_id)
     lines = []
     for i, r in enumerate(_load_index(agent_id), 1):
+        if r.get("deleted"):
+            continue
         if not os.path.exists(os.path.join(d, r.get("file", ""))):
             continue
-        desc = (r.get("desc") or "").strip()
-        tags = [t for t in (r.get("tags") or []) if t]
-        if desc and tags:
-            label = "%s（%s）" % (desc, "/".join(tags[:3]))
-        else:
-            label = desc or "、".join(tags) or "（没打上标签）"
-        lines.append("%d. %s" % (i, label))
+        lines.append("%d. %s" % (i, _label(r)))
     if not lines:
         return ""
     return ("[表情包库] 想甩表情就调 send_sticker 报编号"
@@ -216,7 +254,8 @@ def records_by_numbers(agent_id, nums_text):
     """把模型报的编号解析成索引记录，返回 [(编号, 记录), ...]。
 
     编号语义与 catalog 严格一致：index.jsonl 行号。越界/无效编号跳过；
-    文件已被手动删掉的条目当不存在。返回空列表 = 没一个号能用。
+    已删除的条目、文件已被手动删掉的条目都当不存在。返回空列表 = 没一个
+    号能用。
     """
     d = _dir(agent_id)
     entries = _load_index(agent_id)
@@ -225,6 +264,39 @@ def records_by_numbers(agent_id, nums_text):
         if not 1 <= n <= len(entries):
             continue
         rec = entries[n - 1]
+        if rec.get("deleted"):
+            continue
         if os.path.exists(os.path.join(d, rec.get("file", ""))):
             out.append((n, rec))
     return out
+
+
+def delete(agent_id, nums_text):
+    """按编号删表情包，返回 (删掉的[(编号, 说明)], 没删成的[编号])。
+
+    删法：给索引行打 deleted 标记 + 删掉本地图片文件，**不删索引行**。
+    编号 = 行号，删行会让后面所有号前移，模型这轮记住的号下轮就指错图了。
+    打标记之后那个号永久空着，跟"文件被手动删掉"是同一种处理（清单里
+    不再出现，编号照算）。删过的图再被发到群里，会当成新图重新收。
+    """
+    with _lock:
+        entries = _load_index(agent_id)
+        done, skipped = [], []
+        for n in (int(s) for s in re.findall(r"\d+", str(nums_text or ""))):
+            if not 1 <= n <= len(entries) or entries[n - 1].get("deleted"):
+                skipped.append(n)
+                continue
+            rec = entries[n - 1]
+            rec["deleted"] = True
+            try:
+                os.remove(abs_path(agent_id, rec))
+            except OSError:
+                pass              # 文件本来就不在也无所谓，标记生效即可
+            done.append((n, _label(rec)))
+        if done:
+            _write_index(agent_id, entries)
+            global _full_warned
+            _full_warned = False  # 腾出位置了，下次满了再提醒一次
+            log.info("表情包删除 %d 张：%s", len(done),
+                     ",".join(str(n) for n, _ in done))
+        return done, skipped
