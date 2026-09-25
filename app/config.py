@@ -270,12 +270,12 @@ QQ_INTERJECT_COOLDOWN = int(os.getenv("QQ_INTERJECT_COOLDOWN", "180"))
 # 群聊刷屏时不能每条都问。0 表示不限制（不建议）。
 QQ_INTERJECT_MIN_GAP = int(os.getenv("QQ_INTERJECT_MIN_GAP", "15"))
 
-# 判断时看多少条群聊上下文 / 字数上限。判断是每群高频调用，口子比
-# QQ_CONTEXT_* 收得更紧——prompt 越短越省钱。
+# 判断时看多少条群聊上下文 / 字数上限。窗口要能盖住一个冷却期里攒下的消息，
+# 不然冷却结束只能看到最新一条，冷却期的发言全错过了。
 QQ_INTERJECT_CONTEXT_MESSAGES = int(
-    os.getenv("QQ_INTERJECT_CONTEXT_MESSAGES", "12"))
+    os.getenv("QQ_INTERJECT_CONTEXT_MESSAGES", "20"))
 QQ_INTERJECT_CONTEXT_MAX_CHARS = int(
-    os.getenv("QQ_INTERJECT_CONTEXT_MAX_CHARS", "600"))
+    os.getenv("QQ_INTERJECT_CONTEXT_MAX_CHARS", "1000"))
 
 # 机器人在群里的名字（跟 agents/<id>/prompt.md 的人设保持一致）。机器人自己
 # 发出去的回复会以这个名字记进群聊缓存——主模型靠它认出「哪些是我刚说过的」，
