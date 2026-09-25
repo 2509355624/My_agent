@@ -709,47 +709,17 @@ class DeliverTest(unittest.TestCase):
             self._runner()._deliver(False, "正常回复", [])
         self.assertEqual(sent, ["正常回复"])
 
-    def test_reply_with_reply_to_prepends_at_segment(self):
-        # 群聊回复在正文前垫一个 @ 段（消息段列表，不是拼 "@xxx" 文本），
-        # QQ 会给对方弹提醒。主动接话也走这条路——它在接某人的话。
-        sent = []
-        with mock.patch.object(
-                qq_api, "send_group",
-                lambda gid, msg, limit=None: (sent.append(msg), 1)[1]):
-            self._runner()._deliver(False, "接一句", [], reply_to="12345")
-        self.assertEqual(len(sent), 1)
-        at, text = sent[0]
-        self.assertEqual(at, {"type": "at", "data": {"qq": "12345"}})
-        self.assertEqual(text, {"type": "text", "data": {"text": "接一句"}})
-
-    def test_reply_without_reply_to_stays_plain_text(self):
-        # 没有回复对象（如私聊、异常路径）就照旧整条纯文本发
+    def test_reply_is_plain_text_no_at_segment(self):
+        # 回复是整条纯文本——不再垫 @ 消息段，模型自己在正文里称呼人
+        # （"233，你说的我知道呀"）。@ 段会真提醒对方，跟别的自动回复
+        # 机器人互相 @ 就是死循环。
         sent = []
         with mock.patch.object(
                 qq_api, "send_group",
                 lambda gid, msg, limit=None: (sent.append(msg), 1)[1]):
             self._runner()._deliver(False, "正常回复", [])
         self.assertEqual(sent, ["正常回复"])
-
-    def test_oversized_reply_falls_back_to_plain_split(self):
-        # 正文超过单条上限时 @ 段垫不进分段接口，退回纯文本自动分段
-        p = mock.patch.object(qq_bot, "QQ_REPLY_MAX_CHARS", 5)
-        p.start()
-        self.addCleanup(p.stop)
-        sent = []
-        with mock.patch.object(
-                qq_api, "send_group",
-                lambda gid, msg, limit=None: (sent.append(msg), 1)[1]):
-            self._runner()._deliver(False, "一句话太长超上限了", [],
-                                    reply_to="12345")
-        self.assertEqual(sent, ["一句话太长超上限了"])  # 纯文本，没带 @ 段
-
-    def test_at_segment_rejects_non_numeric(self):
-        self.assertIsNone(qq_api.at_segment(""))
-        self.assertIsNone(qq_api.at_segment(None))
-        self.assertIsNone(qq_api.at_segment("abc"))
-        self.assertEqual(qq_api.at_segment("12345"),
-                         {"type": "at", "data": {"qq": "12345"}})
+        self.assertNotIsInstance(sent[0], list)
 
     def test_empty_reply_is_not_sent(self):
         sent = []

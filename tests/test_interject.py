@@ -455,27 +455,6 @@ class RunTurnVoluntaryTest(_StateIsolationMixin, unittest.TestCase):
                                "images": [], "quotes": [], "tentative": True}])
         self.assertNotIn("batch", seen)
 
-    def test_voluntary_turn_passes_speaker_id_to_deliver(self):
-        # 主动接话也是在接最后那条消息那个人的话——发言人的 QQ 号要从
-        # batch 一路带到 _deliver，否则 @ 段发不出来
-        runner = self._runner()
-        delivered = []
-        with mock.patch.object(runner, "_deliver",
-                               lambda *a, **kw: delivered.append(kw)), \
-                mock.patch.object(qq_bot, "_merge_batch",
-                                  return_value="接一句"):
-            verdict = {"choice": "接", "want": True, "cooled": True,
-                       "pass": True, "latency_ms": 10.0,
-                       "context_chars": 10, "raw": "接"}
-            with mock.patch.object(interject, "decide",
-                                   return_value=verdict), \
-                    mock.patch.object(interject, "speaking",
-                                      return_value=True):
-                runner._run_turn([
-                    {"text": "在吗", "sender": "张三", "user_id": "111",
-                     "images": [], "quotes": [], "tentative": True}])
-        self.assertEqual(delivered[0].get("reply_to"), "111")
-
     def test_voluntary_reply_sees_latest_image(self):
         # 判断模型只看得到 "[图片]" 占位符；判「接」之后要把最近一张真正的图
         # 带给主模型，不然它对着看不见的东西只能装懂
@@ -548,14 +527,6 @@ class DispatchTentativeTest(_StateIsolationMixin, unittest.TestCase):
             bot._dispatch(_group_event("大家好啊"))
         self.assertEqual(len(submitted), 1)
         self.assertTrue(submitted[0]["tentative"])
-
-    def test_user_id_is_passed_for_at_back(self):
-        # 群聊回复要在正文前 @ 触发这轮的发言人（含主动接话），QQ 号必须
-        # 一路带到 submit——丢了号码就发不了 at 段
-        bot, submitted = self._bot()
-        with mock.patch.object(qq_bot.interject, "enabled", return_value=True):
-            bot._dispatch(_group_event("大家好啊"))
-        self.assertEqual(submitted[0]["user_id"], "111")
 
     def test_at_without_content_is_dropped_not_tentative(self):
         # @ 了机器人却什么都没发（按错了、或话还没说完）。让机器人凭空开口很
