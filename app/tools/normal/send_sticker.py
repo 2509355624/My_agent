@@ -5,15 +5,30 @@
 走 extra_context 通道出流即弃），模型自己看清单挑编号报过来——选哪张是
 模型的自主决策，这里不做任何标签匹配或随机兜底。
 
+频率：用户口径是"频繁发表情才像真人"，所以节流闸放宽到
+STICKER_MIN_INTERVAL 秒一次（按会话各算各的）。被闸住时返回提示话让
+模型先聊两句——不抛错，正文照常走。
+
 注意：工具名刻意不是 send_qq_message——那会让适配层以为"本轮已自己发过"
 而吞掉正文回复。这里只发图，正文照常走自动回发，图 + 文字各一条消息。
 """
 
+import threading
+import time
+
 from app import qq_api, stickers
 from app.config import QQ_AGENT_ID
 
+# 两次发表情包的最小间隔（秒）。节流记在发送**之前**：失败也计入，
+# 否则发送一直挂的时候会无限连发。
+STICKER_MIN_INTERVAL = 15.0
+
 # 一次调用最多发几张：清单里明说可连报，这里兜一道防刷屏
 _MAX_PER_CALL = 3
+
+# 按会话各算各的：(target, target_id) → 上次发送时刻（monotonic）
+_send_state = {}
+_state_lock = threading.Lock()
 
 
 def _send_sticker(nums, target=None, target_id=None):
@@ -42,6 +57,17 @@ def _send_sticker(nums, target=None, target_id=None):
     if not picks:
         return ("没认出有效的表情包编号。看每轮上下文里的 [表情包库] 清单，"
                 "填编号数字（如 3，连发填 3,7）。")
+
+    # 频率闸：先记时刻再发送（发送失败也计入），太密就温和地挡回去。
+    # 放在编号解析之后——报错号不该白白吃掉一次间隔。
+    now = time.monotonic()
+    with _state_lock:
+        last = _send_state.get((target, target_id))
+        if last is not None and now - last < STICKER_MIN_INTERVAL:
+            wait = int(STICKER_MIN_INTERVAL - (now - last)) + 1
+            return ("表情包发得太密啦，隔 %d 秒左右再甩（15 秒一次的节奏）。"
+                    "先用文字接一句，下条再配图。" % wait)
+        _send_state[(target, target_id)] = now
 
     sent, failed = [], []
     for n, rec in picks[:_MAX_PER_CALL]:
@@ -72,8 +98,9 @@ tool = {
     "description": (
         "发一个表情包。每轮上下文里的 [表情包库] 清单就是你的全部存货"
         "（上限 50 张，平时自动收藏群里的小图/GIF），看中哪张填哪张的编号"
-        "（如 3，连发填 3,7）。很多话不用打字，直接甩一张就是回复；"
-        "群友发了好笑的，回敬一张也很好接。"
+        "（如 3，连发填 3,7）。想发就发，很多话不用打字，直接甩一张就是"
+        "回复——频繁发表情才像真人。节奏限制是 15 秒一次，被挡回来就先用"
+        "文字聊，下条再配图。"
     ),
     "function": _send_sticker,
     "parameters": {
