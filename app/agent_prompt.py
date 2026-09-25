@@ -47,6 +47,11 @@ def _build_tool_list(agent_id=None):
         params = tool.get("parameters") or {}
         props = params.get("properties") or {}
         required = set(params.get("required") or [])
+        # 按 agent 藏参数/换描述：比如 QQ 机器人不该知道有「角色底模」这回事
+        hidden = set((tool.get("hidden_params") or {}).get(agent_id) or ())
+        props = {k: v for k, v in props.items() if k not in hidden}
+        desc = (tool.get("description_overrides") or {}).get(agent_id) \
+            or tool["description"]
         if props:
             sig_parts = []
             for pname, pdef in props.items():
@@ -56,7 +61,7 @@ def _build_tool_list(agent_id=None):
             sig = ", ".join(sig_parts)
         else:
             sig = ""
-        lines.append("- **" + tool["name"] + "**(" + sig + "): " + tool["description"])
+        lines.append("- **" + tool["name"] + "**(" + sig + "): " + desc)
     return "\n".join(lines)
 
 

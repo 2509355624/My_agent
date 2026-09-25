@@ -11,14 +11,25 @@
 TOOLS = []
 
 
-def register_tool(name, description, function, parameters):
-    """注册一个工具"""
-    TOOLS.append({
+def register_tool(name, description, function, parameters,
+                  description_overrides=None, hidden_params=None):
+    """注册一个工具。
+
+    description_overrides / hidden_params 是可选的按 agent 定制：
+    {agent_id: 描述} / {agent_id: [要藏起来的参数名]}。agent_prompt
+    构建 prompt 时按调用方 agent 挑着用（如 QQ 机器人不显示角色底模）。
+    """
+    entry = {
         "name": name,
         "description": description,
         "function": function,
         "parameters": parameters,
-    })
+    }
+    if description_overrides:
+        entry["description_overrides"] = description_overrides
+    if hidden_params:
+        entry["hidden_params"] = hidden_params
+    TOOLS.append(entry)
 
 
 def execute_tool(name, args):

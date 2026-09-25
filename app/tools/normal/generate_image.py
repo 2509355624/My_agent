@@ -68,7 +68,106 @@ def _wait_for_completion(prompt_id, timeout=IMAGE_GEN_TIMEOUT):
 
 # ─── 工具函数 ────────────────────────────────────────
 
-def _generate_image(prompt, skill="image_gen_v1", use_character=True):
+def _parse_loras(lora_str):
+    """「名字:强度,名字:强度」-> [(name, strength), ...]。
+
+    格式刻意从简（小模型要写得出来）：强度一个数同时给 model 和 clip。
+    写错抛 ValueError，消息里带上原因，让模型能自己纠正。
+    """
+    specs = []
+    for part in lora_str.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        name, sep, raw = part.rpartition(":")
+        if not sep or not name.strip():
+            raise ValueError("lora 参数格式应为「文件名:强度」：" + part)
+        try:
+            strength = float(raw)
+        except ValueError:
+            raise ValueError("lora 强度要是数字：" + part)
+        specs.append((name.strip(), strength))
+    if not specs:
+        raise ValueError("lora 参数是空的")
+    return specs
+
+
+def _lora_chain(workflow):
+    """按 checkpoint→lora 链的顺序返回 lora 节点 id 列表。
+
+    兼容 LoraLoader（带 clip）和 LoraLoaderModelOnly（krea2 用的，只挂 model）。
+    不硬编码节点 id（两个工作流的 id 编号不同），沿 model 输入的连线走：
+    第一个槽的 model 来自 checkpoint 加载节点，后面每个槽的 model 来自前一个槽。
+    """
+    loaders = {nid: node for nid, node in workflow.items()
+               if node.get("class_type") in ("LoraLoader",
+                                             "LoraLoaderModelOnly")}
+    sources = {}
+    for nid, node in loaders.items():
+        src = (node.get("inputs") or {}).get("model")
+        sources[nid] = src[0] if isinstance(src, list) and src else None
+    ckpts = {nid for nid, node in workflow.items()
+             if "CheckpointLoader" in (node.get("class_type") or "")}
+    chain, current = [], next(
+        (nid for nid, src in sources.items() if src in ckpts), None)
+    while current is not None and current not in chain:
+        chain.append(current)
+        current = next((nid for nid, src in sources.items()
+                        if src == current and nid not in chain), None)
+    return chain
+
+
+def _available_loras():
+    """从 ComfyUI 实时拉 lora 清单；拿不到返回 None（不拦截，交给 ComfyUI 自己拒）。
+
+    清单不塞进工具描述——几十个文件名每轮都发不值当，只在写错时才拿来救场。
+    """
+    try:
+        resp = requests.get(COMFYUI_URL + "/object_info/LoraLoader", timeout=10)
+        resp.raise_for_status()
+        return list(resp.json()["LoraLoader"]["input"]["required"]["lora_name"][0])
+    except Exception:
+        return None
+
+
+def _apply_loras(workflow, lora_str):
+    """把 AI 指定的 lora 填进槽位。传了就**完全接管**：没填满的槽强度归零，
+    工作流里默认那组 lora 不再掺和——避免「指定了角色 lora 但饱和度修正
+    还在捣乱」的混搭怪相。出错返回模型能转述的一句话，成功返回 None。
+    """
+    try:
+        specs = _parse_loras(lora_str)
+    except ValueError as e:
+        return str(e)
+    names = _available_loras()
+    if names:
+        bad = [n for n, _ in specs if n not in names]
+        if bad:
+            return ("错误: 这些 lora 不存在: " + ", ".join(bad)
+                    + "。可用 lora: " + ", ".join(names))
+    chain = _lora_chain(workflow)
+    if not chain:
+        return "错误: 当前工作流没有 lora 槽，去掉 lora 参数用默认的画就行"
+    specs = specs[:len(chain)]          # 传多了按槽位截断，不报错
+    for i, nid in enumerate(chain):
+        inputs = workflow[nid]["inputs"]
+        model_only = workflow[nid]["class_type"] == "LoraLoaderModelOnly"
+        if i < len(specs):
+            name, strength = specs[i]
+            inputs["lora_name"] = name
+            inputs["strength_model"] = strength
+            if not model_only:
+                inputs["strength_clip"] = strength
+        else:
+            # 闲槽等效关闭：强度归零（ModelOnly 没有 clip 输入，别塞进去，
+            # 否则 ComfyUI 会报未知输入）
+            inputs["strength_model"] = 0.0
+            if not model_only:
+                inputs["strength_clip"] = 0.0
+    return None
+
+
+def _generate_image(prompt, skill="image_gen_v1", use_character=False, lora=None):
     # 提交前先看一眼：已经中断就别再往 ComfyUI 队列里塞新任务了
     if is_cancelled():
         return "已中断：用户取消了本次生成。"
@@ -76,6 +175,12 @@ def _generate_image(prompt, skill="image_gen_v1", use_character=True):
     gate = _qq_gate()
     if gate is not None:
         return gate
+
+    # QQ 会话强制无底模：QQ 的工具描述里根本没有角色选项，就算模型
+    # 手滑传了 use_character=true 也不生效——角色描述只在网页端可见。
+    from app import qq_api
+    if qq_api.current_context()[0] is not None:
+        use_character = False
 
     skill_data = load_skill(skill)
     if not skill_data or not skill_data["workflow"]:
@@ -96,6 +201,13 @@ def _generate_image(prompt, skill="image_gen_v1", use_character=True):
     workflow_str = workflow_str.replace("__CHARACTER__", character_escaped)
 
     workflow = json.loads(workflow_str)
+
+    # 用户点名换 lora 才走这段；不传 lora 时一行替换逻辑都不执行，
+    # 工作流原样提交，跟从前完全一样。
+    if lora:
+        err = _apply_loras(workflow, lora)
+        if err:
+            return err
 
     # 提交到 ComfyUI
     prompt_id = _queue_prompt(workflow)
@@ -136,18 +248,36 @@ tool = {
     "description": "调用 ComfyUI 生成图片，支持批量生成。多个提示词用 --- 分隔，一次调用可生成多张图。"
                   "【红线】严禁生成色情、擦边或性暗示内容（涩图、过度暴露、性姿势、涩味玩梗）；"
                   "这类请求直接拒绝，不要改写提示词绕过。"
-                  "【底模两种模式】use_character=true时使用Skill自带角色底模(固定角色，prompt只写动作/环境/构图)；"
-                  "use_character=false时无底模，你必须自己在prompt中写出完整角色提示词(发型/发色/体型/胸围/服装/年龄等)，再叠加动作和环境。"
+                  "【底模两种模式】默认无底模(use_character=false)，你在 prompt 中自己写出完整角色提示词"
+                  "(发型/发色/体型/服装/年龄等)；仅当需要 Skill 里的固定角色时才传 use_character=true。"
                   "【默认 Skill】没特别说明就用 image_gen_v1，不要无理由换。"
                   "仅当用户明确点名 krea2（如「用 krea2」「krea2 生图」）时才传 skill=krea2——"
-                  "它是备选的 Krea2 Turbo + retroanime lora 工作流，一次只出一张，prompt 不要带 --- 分隔。",
+                  "它是备选的 Krea2 Turbo + retroanime lora 工作流，一次只出一张，prompt 不要带 --- 分隔。"
+                  "【lora】用户点名要换 lora 时才传 lora 参数，平时不要传。格式「文件名:强度」，"
+                  "多个逗号分隔（如 \"x.safetensors:0.8,y.safetensors:0.5\"）；文件名要完整"
+                  "(.safetensors 结尾)，写错会返回可用清单；传了就完全接管本次的 lora，"
+                  "槽位 image_gen_v1 3 个 / krea2 1 个，没填满的槽自动关闭。",
+    # QQ 机器人看不到角色底模这套：Sumire 的角色描述只给网页端用。
+    "description_overrides": {
+        QQ_AGENT_ID:
+            "调用 ComfyUI 生成图片，支持批量生成。多个提示词用 --- 分隔，一次调用可生成多张图。"
+            "【红线】严禁生成色情、擦边或性暗示内容（涩图、过度暴露、性姿势、涩味玩梗）；"
+            "这类请求直接拒绝，不要改写提示词绕过。"
+            "【默认 Skill】没特别说明就用 image_gen_v1，不要无理由换；"
+            "用户点名 krea2 才传 skill=krea2（一次一张，prompt 不要带 ---）。"
+            "【lora】用户点名要换 lora 时才传 lora 参数，平时不要传。格式「文件名:强度」，"
+            "多个逗号分隔（如 \"x.safetensors:0.8\"）；文件名要完整(.safetensors 结尾)，"
+            "写错会返回可用清单；最多 3 个，传了就完全接管本次的 lora。",
+    },
+    "hidden_params": {QQ_AGENT_ID: ["use_character"]},
     "function": _generate_image,
     "parameters": {
         "type": "object",
         "properties": {
             "prompt": {"type": "string", "description": "英文提示词，逗号分隔的标签。多张图用 --- 分隔，例如: prompt1 --- prompt2 --- prompt3。无底模时须包含完整角色描述"},
             "skill": {"type": "string", "description": "Skill名称，默认image_gen_v1。可选值见系统提示 Available Skills 里标 [底模]/[无底模] 的生图类；krea2 仅在用户点名时用"},
-            "use_character": {"type": "boolean", "description": "是否使用该Skill自带的角色底模（默认true）。设为false时无底模，你必须把完整角色提示词写进prompt"}
+            "use_character": {"type": "boolean", "description": "是否使用该Skill自带的角色描述（默认false）。设为true时固定该角色，你只写动作/环境/构图"},
+            "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传"}
         },
         "required": ["prompt"]
     }
