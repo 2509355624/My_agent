@@ -6,6 +6,7 @@ import time
 import random
 import uuid
 from flask import request
+from app import image_jobs
 from app.cancel import Cancelled, is_cancelled
 from app.config import COMFYUI_URL, IMAGE_GEN_TIMEOUT, QQ_AGENT_ID
 from app.skills import load_skill
@@ -56,26 +57,13 @@ def _wait_for_completion(prompt_id, timeout=IMAGE_GEN_TIMEOUT):
         # 放在 try 之外：下面的 except 是裸的，包进去会被它吞掉
         if is_cancelled():
             raise Cancelled("用户中断了等待")
-        try:
-            resp = requests.get(COMFYUI_URL + "/history/" + prompt_id, timeout=10)
-            resp.raise_for_status()
-            history = resp.json()
-            if prompt_id in history:
-                return history[prompt_id]
-        except:
-            pass
+        # 轮询本身交给 image_jobs：后台投递线程用的是同一份实现，两处各写
+        # 一遍迟早会长歪（一边改了超时、另一边没改）。
+        entry = image_jobs.poll_once(prompt_id)
+        if entry is not None:
+            return entry
         time.sleep(2)
     raise TimeoutError("生成超时 (" + str(timeout) + "s)")
-
-
-def _get_output_images(history_entry):
-    images = []
-    outputs = history_entry.get("outputs", {})
-    for node_id, node_output in outputs.items():
-        if "images" in node_output:
-            for img in node_output["images"]:
-                images.append(img["filename"])
-    return images
 
 
 # ─── 工具函数 ────────────────────────────────────────
@@ -111,13 +99,28 @@ def _generate_image(prompt, skill="image_gen_v1", use_character=True):
 
     # 提交到 ComfyUI
     prompt_id = _queue_prompt(workflow)
+
+    # QQ 会话：提交完立刻返回，图由后台线程画好后自己发回原群（见
+    # image_jobs）。留在这儿同步等会把适配层的并发槽（默认 2 个）占住几分钟
+    # ——文本回复和别的群都得陪着等显卡。会话身份在提交这一刻快照下来。
+    from app import qq_api
+    target, target_id = qq_api.current_context()
+    if target is not None:
+        ok, pending = image_jobs.submit(target, target_id, prompt_id)
+        if not ok:
+            return ("这个会话已经排着 %d 张了，画完这些再说。"
+                    "不要跟对方提这张图，当没画过，接着把话说完。" % pending)
+        return ("已经在画了，画好会自动发到群里。"
+                "不要输出图片地址，也不要说「图在下面 / 稍等」，"
+                "直接把想说的话说完就行。")
+
     try:
         history_entry = _wait_for_completion(prompt_id)
     except Cancelled:
         # 不把 Cancelled 抛给 execute_tool：那会被描述成"工具执行失败"，
         # 让模型以为工具坏了。中断是一个正常结局，说清楚就行。
         return "已中断：用户取消了等待。图片可能仍在后台生成，可到 ComfyUI 界面查看。"
-    images = _get_output_images(history_entry)
+    images = image_jobs.output_images(history_entry)
 
     if not images:
         return "错误: 生成完成但未找到输出图片"
