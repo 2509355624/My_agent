@@ -35,6 +35,12 @@ SCNET_API_KEY = os.getenv("SCNET_API_KEY", "")
 SCNET_BASE_URL = os.getenv("SCNET_BASE_URL", "https://api.scnet.cn/api/llm/v1")
 SCNET_MODEL = os.getenv("SCNET_MODEL", "DeepSeek-V4.1-Flash-Event")
 
+# SCNet 第二个 Token Plan（另一把 key、另一个 1000 万 credits 账本）。
+# 套餐模型是 DeepSeek-V4.1-Flash（不带 Event 后缀）；这个 key 的 /models
+# 会列出全平台模型，但免费额度只覆盖套餐模型，其他模型要真金白银。
+SCNET2_API_KEY = os.getenv("SCNET2_API_KEY", "")
+SCNET2_MODEL = os.getenv("SCNET2_MODEL", "DeepSeek-V4.1-Flash")
+
 # 动态 API 地址和模型名（根据 provider 切换）
 if LLM_PROVIDER == "deepseek":
     API_URL = DEEPSEEK_BASE_URL.rstrip("/") + "/chat/completions"
@@ -104,6 +110,16 @@ PROVIDERS = {
         "base_url": SCNET_BASE_URL,
         "model": SCNET_MODEL,
         "api_key": SCNET_API_KEY,
+        "needs_key": False,
+        "vision": False,
+    },
+    # SCNet 第二把 key（1000 万 credits 账本独立）。默认用 scnet（2000 万
+    # 那本），这把留作备胎/分流——管理页可切。
+    "scnet2": {
+        "label": "SCNet 超算 2",
+        "base_url": SCNET_BASE_URL,
+        "model": SCNET2_MODEL,
+        "api_key": SCNET2_API_KEY,
         "needs_key": False,
         "vision": False,
     },
