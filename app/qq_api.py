@@ -9,6 +9,7 @@ NapCat（OneBot 11）HTTP API 封装 + QQ 文本适配
 先降级成纯文本，再按段落切成若干条。
 """
 
+import logging
 import os
 import re
 import threading
@@ -18,8 +19,68 @@ import requests
 
 from app.config import QQ_HTTP_URL, QQ_TOKEN, QQ_REPLY_MAX_CHARS
 
+log = logging.getLogger("qq_api")
+
 # 连发多条之间的间隔。切分后的消息如果瞬间连发，容易被 QQ 判定为异常
 _SEND_INTERVAL = 0.3
+
+
+# ─── 发送日志：把「发给了谁」打进适配层终端 ─────────────
+
+# NapCat 自己的日志有发送行但没有正文，适配层这边只有接收没有发送，
+# 排查「它到底回给了谁」得两边对——干脆在发送的必经之路（本文件）补一行，
+# 带上群名/昵称和内容预览。名字懒加载一次缓存住，拿不到就显示号码，
+# 绝不因为取名字失败而拦发送。
+_name_lock = threading.Lock()
+_names = {}                 # {"group_<id>": 群名, "private_<id>": 昵称}
+_names_fetched_at = 0.0     # 上次尝试拉名单的时刻（失败也要隔一阵才重试）
+_NAMES_RETRY_AFTER = 600
+
+
+def _display_name(kind, target_id):
+    """group_<id> → 群名，private_<id> → 昵称；拿不到返回空串。"""
+    global _names_fetched_at
+    key = "%s_%s" % (kind, int(target_id))
+    with _name_lock:
+        if key not in _names and time.time() - _names_fetched_at > _NAMES_RETRY_AFTER:
+            _names_fetched_at = time.time()
+            for fetch, k, id_field, name_field in (
+                    (get_group_list, "group", "group_id", "group_name"),
+                    (get_friend_list, "private", "user_id", "nickname")):
+                try:
+                    for item in fetch():
+                        _names["%s_%s" % (k, int(item.get(id_field, 0)))] = (
+                            item.get(name_field) or "")
+                except Exception:
+                    pass          # 名单拿不到无所谓，发送才是正事
+        return _names.get(key, "")
+
+
+def _send_log(kind, target_id, chunk):
+    """一条实际发出的 QQ 消息打一行日志。kind: group / private。"""
+    name = _display_name(kind, target_id)
+    label = "群聊" if kind == "group" else "私聊"
+    who = "%s(%s)" % (name, target_id) if name else str(target_id)
+    log.info("发送 -> %s [%s]: %s", label, who, _preview(chunk))
+
+
+def _preview(chunk):
+    """把一条待发消息压成单行预览：文本取正文，其余段落用占位符。"""
+    if isinstance(chunk, str):
+        s = chunk
+    else:
+        parts = []
+        for seg in chunk:
+            t = seg.get("type")
+            if t == "text":
+                parts.append((seg.get("data") or {}).get("text", ""))
+            elif t == "image":
+                parts.append("[图片]")
+            else:
+                parts.append("[%s]" % t)
+        s = "".join(parts)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s[:60] + ("…" if len(s) > 60 else "")
 
 
 # ─── 当前会话上下文（供工具层读取）────────────────────
@@ -252,6 +313,7 @@ def send_private(user_id, message, limit=None):
             time.sleep(_SEND_INTERVAL)
         _call("send_private_msg",
               {"user_id": int(user_id), "message": chunk}, timeout=30)
+        _send_log("private", user_id, chunk)
     return len(chunks)
 
 
@@ -264,6 +326,7 @@ def send_group(group_id, message, limit=None):
             time.sleep(_SEND_INTERVAL)
         _call("send_group_msg",
               {"group_id": int(group_id), "message": chunk}, timeout=30)
+        _send_log("group", group_id, chunk)
     return len(chunks)
 
 
@@ -276,4 +339,5 @@ def send_image(target, target_id, image_path, caption=""):
     action = "send_%s_msg" % target
     key = "user_id" if target == "private" else "group_id"
     _call(action, {key: int(target_id), "message": segs}, timeout=60)
+    _send_log(target, target_id, segs)
     return 1
