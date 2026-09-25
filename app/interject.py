@@ -51,7 +51,6 @@ import logging
 import os
 import threading
 import time
-from collections import deque
 
 from app import agents as agent_store
 from app import recent
@@ -85,10 +84,6 @@ _SYSTEM = """你在帮一个 QQ 群机器人判断：此刻要不要主动开口
 注意：你只能看到「[图片]」这样的占位符，看不到图的内容——好奇可以，
 别假装你看清了图里画的是什么。
 
-下面给你的内容末尾会有一行机器人自己的状态（多久前刚开过口、最近说了
-几句）。它只是用来防止连着刷屏的：刚说过话就歇口气再接，其余时候
-正常来，不用刻意矜持。
-
 只回答两个字之一：「接」或「不接」。不要任何解释、不要标点、不要思考过程。"""
 
 # 主动开口时给模型的正文。这里**不能**把群聊消息当提问喂进去——没人点名它，
@@ -104,10 +99,6 @@ INTERJECT_PROMPT = (
 _state_lock = threading.Lock()
 _last_spoke = {}        # (agent_id, group_id) -> 上次开口的时间戳
 _last_judged = {}       # (agent_id, group_id) -> 上次判断的时间戳
-_speech_times = {}      # (agent_id, group_id) -> deque[时间戳]，给判断模型算「最近说了几句」
-
-# 统计「最近说了几句」的窗口。太长没意义——10 分钟前的发言对现在的时机感没影响。
-_SPEECH_WINDOW = 600
 
 
 def enabled():
@@ -153,29 +144,8 @@ def mark_spoke(agent_id, group_id):
     都要调它（被 @ 的回复也算说话）。冷却管的是这张嘴，不只是接话这个动作；
     否则刚 @ 完就接话，接出来的话跟刚回的内容撞车。
     """
-    now = time.time()
     with _state_lock:
-        _last_spoke[(agent_id, group_id)] = now
-        times = _speech_times.setdefault((agent_id, group_id), deque())
-        times.append(now)
-        while times and now - times[0] > _SPEECH_WINDOW:
-            times.popleft()
-
-
-def _speech_status(agent_id, group_id):
-    """给判断模型的一行时机提示。
-
-    冷却硬闸只防刷屏，节奏感得靠判断自己拿捏——所以把「多久前刚开口、
-    最近说了几句」明着告诉它，让它决定这次要不要忍。
-    """
-    now = time.time()
-    with _state_lock:
-        times = list(_speech_times.get((agent_id, group_id), ()))
-    times = [t for t in times if now - t <= _SPEECH_WINDOW]
-    if not times:
-        return "机器人最近 10 分钟没开过口。"
-    return "机器人 %d 秒前刚开过口，最近 10 分钟说了 %d 句。" % (
-        int(now - times[-1]), len(times))
+        _last_spoke[(agent_id, group_id)] = time.time()
 
 
 def _parse(out):
@@ -268,9 +238,7 @@ def decide(agent_id, group_id):
     try:
         out = call_llm(
             [{"role": "system", "content": _SYSTEM},
-             {"role": "user", "content": "群聊记录：\n" + state
-              + "\n\n" + _speech_status(agent_id, gid)
-              + "\n刚说完话歇口气就行，其余时候正常接——别憋着。"}],
+             {"role": "user", "content": "群聊记录：\n" + state}],
             provider=provider, model=model, timeout=60)
     except Exception:
         log.exception("接话判断调用失败，这次当「不接」")

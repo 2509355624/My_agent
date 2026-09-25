@@ -8,7 +8,6 @@
 import json
 import time
 import unittest
-from collections import deque
 from unittest import mock
 
 from app import interject
@@ -39,7 +38,6 @@ class _StateIsolationMixin:
         with interject._state_lock:
             interject._last_spoke.clear()
             interject._last_judged.clear()
-            interject._speech_times.clear()
 
 
 class ModeTest(unittest.TestCase):
@@ -246,17 +244,6 @@ class DecideVerdictTest(_StateIsolationMixin, unittest.TestCase):
         self.assertEqual(kwargs.get("provider"), "deepseek")
         self.assertEqual(kwargs.get("model"), "deepseek-flash")
 
-    def test_speech_status_is_passed_to_the_judge(self):
-        # 节奏感靠判断自己拿捏，前提是它知道机器人刚才说没说话
-        interject.mark_spoke("qq", "1041079621")
-        p = mock.patch.object(interject, "call_llm", return_value="不接")
-        llm = p.start()
-        self.addCleanup(p.stop)
-        interject.decide("qq", "1041079621")
-        content = llm.call_args[0][0][-1]["content"]
-        self.assertIn("刚开过口", content)
-        self.assertIn("歇口气", content)
-
     def test_system_prompt_keeps_pro_active_bias(self):
         # 口径的活跃度方向是被反复调过的（放宽→收紧→再放宽），钉住当前值：
         # 用户拍板「要主动，不要矜持」——拿不准倾向接，别再把方向写反
@@ -307,35 +294,6 @@ class CooldownTest(_StateIsolationMixin, unittest.TestCase):
         self.addCleanup(p.stop)
         interject.mark_spoke("qq", "1")
         self.assertTrue(interject._cooldown_ok("qq", "2"))
-
-
-class SpeechStatusTest(_StateIsolationMixin, unittest.TestCase):
-    """喂给判断模型的时机状态：多久前刚开口、最近说了几句。"""
-
-    def test_never_spoke(self):
-        self.assertEqual(interject._speech_status("qq", "1"),
-                         "机器人最近 10 分钟没开过口。")
-
-    def test_counts_recent_speeches(self):
-        interject.mark_spoke("qq", "1")
-        time.sleep(0.01)
-        interject.mark_spoke("qq", "1")
-        status = interject._speech_status("qq", "1")
-        self.assertIn("说了 2 句", status)
-        self.assertIn("秒前刚开过口", status)
-
-    def test_old_speeches_fall_out_of_window(self):
-        now = time.time()
-        with interject._state_lock:
-            interject._speech_times[("qq", "1")] = deque(
-                [now - 700, now - 800])
-        self.assertEqual(interject._speech_status("qq", "1"),
-                         "机器人最近 10 分钟没开过口。")
-
-    def test_status_is_per_group(self):
-        interject.mark_spoke("qq", "1")
-        self.assertEqual(interject._speech_status("qq", "2"),
-                         "机器人最近 10 分钟没开过口。")
 
 
 class ShadowLogTest(_StateIsolationMixin, unittest.TestCase):
