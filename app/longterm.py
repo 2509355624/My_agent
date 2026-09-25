@@ -54,6 +54,15 @@ _SYSTEM = """下面是一个 QQ 群一段时间里的聊天记录。请把它整
    有值得记的就写成「昵称：…」；记录里没提的不要编。
 3. 总长 300 字以内，直接输出回忆正文，不要开场白、不要解释。"""
 
+# 会话窗口滚出来的那批（memory.trim_window 转交）。窗口里已有原文兜底，
+# 这条记忆只补「更早的我聊过什么、跟谁」——所以要短，且优先记人。
+_TURN_SYSTEM = """下面是一段 QQ 群里你（群机器人）参与过的对话记录。请把它整理成一条
+日后翻看的记忆。要求：
+1. 概括这段对话聊了什么、你回应了什么，一件事两三句就够，不是流水账。
+2. **优先记住常和你聊天的人**：谁偏好什么、托过你什么事、有什么没聊完的，
+   值得记的就写成「昵称：…」；记录里没有的不要编。
+3. 总长 150 字以内，直接输出记忆正文，不要开场白、不要解释。"""
+
 
 def _dir(agent_id):
     aid = agent_store.safe_agent_id(agent_id) or "main"
@@ -86,6 +95,78 @@ def digest_async(agent_id, group_id, lines):
                          daemon=True, name="memory-digest").start()
     except Exception:
         log.exception("长期记忆：摘要线程启动失败")
+
+
+def digest_messages_async(agent_id, group_id, msgs):
+    """把会话窗口滚出来的历史消息（dict 列表）交给后台线程生成记忆。
+
+    与 digest_async 的区别：那边收的是 recent 归档的原始 JSON 行（全群所有
+    人的消息），这边收的是已解析的会话消息 dict（user/assistant/tool_result，
+    user 内容里本来就带着说话人名字）。走更短的 _TURN_SYSTEM、150 字上限。
+    永不抛错、永不阻塞——调用点在 save_history 里。
+    """
+    lines = []
+    for m in msgs or []:
+        if not isinstance(m, dict) or m.get("role") == "system":
+            continue
+        content = str(m.get("content") or "").strip()
+        if content:
+            lines.append(content)
+    if not lines:
+        return
+    try:
+        threading.Thread(target=_digest_turns,
+                         args=(agent_id, str(group_id), lines),
+                         daemon=True, name="memory-digest").start()
+    except Exception:
+        log.exception("长期记忆：窗口摘要线程启动失败")
+
+
+def _digest_turns(agent_id, group_id, lines):
+    """窗口记忆：调模型生成 150 字摘要并追加落盘。失败只记日志。"""
+    body = "\n".join(lines)
+    if len(body) > _SOURCE_MAX_CHARS:
+        body = body[-_SOURCE_MAX_CHARS:]
+
+    # provider/model 必须显式取：后台隐形调用漏传会回退全局默认 provider
+    #（与归档摘要、接话判断同一个坑）。
+    cfg = agent_store.agent_config(agent_id)
+    provider = cfg.get("provider") or None
+    model = cfg.get("model") or None
+
+    try:
+        summary = call_llm(
+            [{"role": "system", "content": _TURN_SYSTEM},
+             {"role": "user", "content": "对话记录：\n" + body}],
+            provider=provider, model=model, timeout=QQ_MEMORY_DIGEST_TIMEOUT)
+    except Exception:
+        log.exception("窗口记忆摘要调用失败（群%s，%d 条）", group_id, len(lines))
+        return
+    summary = (summary or "").strip()
+    if not summary:
+        return
+    _append(agent_id, group_id, {
+        "t": int(time.time()),
+        "d": time.strftime("%Y-%m-%d"),
+        "n": len(lines),
+        "s": summary,
+    })
+    log.info("长期记忆[群%s] 窗口摘要已存（%d 条消息 → %d 字）",
+             group_id, len(lines), len(summary))
+
+
+def _append(agent_id, group_id, rec):
+    """一条记忆追加落盘。写失败只记日志。"""
+    path = _path(agent_id, group_id)
+    if not path:
+        return
+    with _WRITE_LOCK:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except OSError as exc:
+            log.warning("写长期记忆失败 %s：%s", path, exc)
 
 
 def _parse_lines(lines):
@@ -131,24 +212,12 @@ def _digest(agent_id, group_id, recs):
     summary = (summary or "").strip()
     if not summary:
         return
-
-    path = _path(agent_id, group_id)
-    if not path:
-        return
-    rec = {
+    _append(agent_id, group_id, {
         "t": int(time.time()),
         "d": time.strftime("%Y-%m-%d"),
         "n": len(recs),
         "s": summary,
-    }
-    with _WRITE_LOCK:
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        except OSError as exc:
-            log.warning("写长期记忆失败 %s：%s", path, exc)
-            return
+    })
     log.info("长期记忆[群%s] 已存一条摘要（%d 条消息 → %d 字）",
              group_id, len(recs), len(summary))
 

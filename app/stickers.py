@@ -42,9 +42,10 @@ log = logging.getLogger("stickers")
 # 静态图最长边上限：超过按照片处理，不入库
 STICKER_MAX_EDGE = 640
 
-# 收藏上限：库存满了就不再收新的（用户口径：最多给 AI 50 个选择）。
+# 收藏上限：库存满了就不再收新的（用户口径：最多给 AI 20 个选择——
+# 清单每轮都全量注入，20 条是「够挑」和「不烧 token」的平衡点）。
 # 不做自动淘汰——哪张该删没有判断依据，交给模型用 delete_sticker 自己删。
-STICKER_LIMIT = 50
+STICKER_LIMIT = 20
 
 _EXT = {"image/jpeg": "jpg", "image/png": "png",
         "image/gif": "gif", "image/webp": "webp"}

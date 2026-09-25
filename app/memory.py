@@ -23,7 +23,7 @@ import re
 import threading
 import time
 from app.agents import session_file as _agent_session_file
-from app.config import CONTEXT_BUDGET
+from app.config import CONTEXT_BUDGET, CONTEXT_MAX_TURNS
 from app.llm import current_usage
 
 
@@ -64,7 +64,12 @@ def save_history(history, agent_id=None, session_key=None):
     agent_id 决定写哪个 agent 的会话文件（不传用默认 agent）。
     session_key 用于「一个 agent 下挂多条互不相干的会话线」的场景（QQ 接入
     时每个私聊用户 / 每个群各一条），不传就是该 agent 的主会话。
+
+    落盘前先过一遍轮数窗口（见 trim_window）：窗口外的轮次在这里就摘走，
+    于是下一轮 load_history 读回来的已经是裁剪后的历史。**只裁要写的这份
+    副本**，不动调用方手上的 list——本轮该看什么还看什么。
     """
+    history = trim_window(history, agent_id=agent_id, session_key=session_key)
     path = _agent_session_file(agent_id, session_key)
     parent = os.path.dirname(path)
     if parent:
@@ -374,3 +379,106 @@ def _compact(history, system_msgs, other_msgs, budget, provider=None, model=None
 def _compact_if_needed_for_history(history, agent_id=None):
     """兼容旧调用点的高层入口"""
     return trim_history(history, agent_id)
+
+
+def _group_id_from_key(session_key):
+    """会话 key → 群号。只有群会话才产生长期记忆，私聊返回空串。
+
+    longterm 那边按「群」存记忆文件（memory/group_<群号>.jsonl），私聊没有
+    对应的位置；硬拼一个会让私聊记录混进群记忆里。
+    """
+    key = str(session_key or "")
+    if not key.startswith("group_"):
+        return ""
+    return key[len("group_"):]
+
+
+def trim_window(history, agent_id=None, session_key=None, max_turns=None):
+    """按轮数开窗：只留最近 max_turns 轮完整对话，更早的摘成长期记忆。
+
+    与 trim_history（按 token 预算整段摘要）是两条路，这里刻意不读 API 用量：
+    usage 是线程本地的，QQ 侧跨线程复用会读到 0，token 判据因此长期不触发。
+    轮数是纯本地计算，跨线程、跨消息都一样，判据天然可靠。
+
+    滚出去的轮次不是丢掉——交给 longterm 摘成一条短摘要存进记忆库，之后
+    每轮随「这个群更早的记忆」注入。**摘摘要在后台线程跑**，这里不等它：
+    记忆晚几十秒落盘没有任何影响，但同步调一次 API 会卡住本轮回复。
+
+    摘不摘得成都不影响开窗：摘要失败只记日志，窗口照样收紧（历史不该因为
+    一次后台调用失败就继续膨胀）。
+
+    只有群会话走「滚出 → 记忆库」这条路；非群会话（网页 / 私聊）没有记忆库
+    可去，回退给 trim_history 做 token 预算压缩（滚出去的摘成一条摘要顶在
+    会话里，不是硬丢）。
+    """
+    if max_turns is None:
+        max_turns = CONTEXT_MAX_TURNS
+    if max_turns <= 0:
+        return history
+
+    system_msgs = [m for m in history if m.get("role") == "system"]
+    other_msgs = [m for m in history if m.get("role") != "system"]
+    if not other_msgs:
+        return history
+
+    turns = _split_turns(other_msgs)
+    if len(turns) <= max_turns:
+        return history
+
+    old_turns = turns[:-max_turns]
+    group_id = _group_id_from_key(session_key)
+    if not group_id or not agent_id:
+        # 非群会话（网页主会话 / QQ 私聊）没有长期记忆库可去，走原来的
+        # token 预算压缩：滚出去的会摘成一条摘要顶在会话里，不是硬丢。
+        return trim_history(history, agent_id)
+
+    _digest_turns_async(agent_id, group_id, old_turns)
+
+    result = list(system_msgs)
+    for turn in turns[-max_turns:]:
+        result.extend(turn)
+    return result
+
+
+# (agent_id, group_id) → 已经交给长期记忆的消息指纹集合。
+# save_history 在一次回复里会被调用很多次（每个 SESSION_EVENTS 存一次盘），
+# 同一批滚出窗口的消息会反复出现在 old_turns 里；不去重就会重复摘要，
+# 记忆库里塞满雷同条目。指纹用 (role, content)，跨轮也稳定。
+_digest_seen = {}
+_digest_seen_lock = threading.Lock()
+_DIGEST_SEEN_CAP = 4000
+
+
+def _digest_turns_async(agent_id, group_id, old_turns):
+    """把滚出窗口的轮次交给 longterm 摘成一条记忆。失败只记日志。"""
+    msgs = []
+    for turn in old_turns:
+        msgs.extend(turn)
+    if not msgs:
+        return
+
+    key = (agent_id, group_id)
+    with _digest_seen_lock:
+        seen = _digest_seen.setdefault(key, set())
+        fresh = []
+        for m in msgs:
+            fp = (m.get("role"), str(m.get("content")))
+            if fp in seen:
+                continue
+            seen.add(fp)
+            fresh.append(m)
+        if len(seen) > _DIGEST_SEEN_CAP:
+            # 指纹集合只为「一次回复内多次落盘」去重，超限整体清空即可；
+            # 代价极小——最多把重合的旧消息多摘一次。
+            seen.clear()
+            seen.update((m.get("role"), str(m.get("content"))) for m in fresh)
+    if not fresh:
+        return
+    try:
+        from app import longterm
+        longterm.digest_messages_async(agent_id, group_id, fresh)
+        print("[window] 群%s：%d 轮滚出窗口，%d 条转交长期记忆"
+              % (group_id, len(old_turns), len(fresh)))
+    except Exception as exc:
+        # 导入失败/线程起不来都不能连带毁掉 save_history
+        print("[window] 转交长期记忆失败：%s: %s" % (type(exc).__name__, exc))

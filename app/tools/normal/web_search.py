@@ -1,6 +1,15 @@
 """网页搜索工具：优先豆包搜索，未配置/失败时回退 DuckDuckGo"""
 import requests
-from app.config import SEARCH_API_KEY, DOUBAO_SEARCH_ENDPOINT
+from app.config import (SEARCH_API_KEY, DOUBAO_SEARCH_ENDPOINT,
+                        WEB_SEARCH_MAX_CHARS)
+
+
+def _truncate(text):
+    """搜索结果截断。结果会作为 tool_result **永久留在历史里**，不截断的话
+    用过一次之后每轮请求都要重发这几千 token（实测一次搜索塞过 3200 token）。"""
+    if text and WEB_SEARCH_MAX_CHARS > 0 and len(text) > WEB_SEARCH_MAX_CHARS:
+        return text[:WEB_SEARCH_MAX_CHARS] + "\n…（结果已截断，需要细节可换个更具体的词再搜）"
+    return text
 
 
 def _format_results(query, items, limit):
@@ -46,8 +55,8 @@ def _web_search(query, max_results=5):
     try:
         result = _doubao_search(query, max_results)
         if result:
-            return result
-        return _ddgs_search(query, max_results)
+            return _truncate(result)
+        return _truncate(_ddgs_search(query, max_results))
     except Exception as e:
         return "搜索失败: " + str(e)
 

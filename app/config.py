@@ -191,6 +191,27 @@ MAX_TURNS = int(os.getenv("MAX_TURNS", "10"))
 # 单个 agent 可在 agent.json 里用 context_budget 覆盖（0 = 用这里的全局值）。
 CONTEXT_BUDGET = int(os.getenv("CONTEXT_BUDGET", "32000"))
 
+# 会话历史窗口：**保留最近多少轮完整对话**，更早的滚出窗口交给长期记忆。
+#
+# 判据刻意用「轮数」而不是 token：轮数是本地算的，不受 API usage 影响。
+# usage 走的是 threading.local，而 QQ 适配层用 asyncio.to_thread 从线程池取
+# 线程，同一会话的不同消息落在不同的线程上，读到的 total_tokens 常常是 0 ——
+# 这就是「CONTEXT_BUDGET=32000 却从来没压缩过」的根因（实测过一个群攒到
+# 8.2 万 token 全量重发）。按轮数裁不需要读 usage，根因直接消失。
+#
+# 折算参考：群里一轮平均 3.2 条记录（user + assistant + 夹着的 tool_result）
+# ≈ 137 token，实测 20 轮 = 64 条 = 2751 token。0 = 关掉窗口裁剪。
+CONTEXT_MAX_TURNS = int(os.getenv("CONTEXT_MAX_TURNS", "20"))
+
+# 滚出窗口的那批轮次要摘成的摘要字数上限。比群聊归档摘要（300 字）更短：
+# 细节由窗口里的原文兜着，摘要只需要留住「常聊的群友 + 他的偏好」。
+MEMORY_TURN_DIGEST_CHARS = int(os.getenv("MEMORY_TURN_DIGEST_CHARS", "150"))
+
+# 搜索结果截断上限（字符）。联网搜索单次返回动辄三四千字，而它会作为
+# tool_result **永久留在历史里**——不截断的话，用过一次之后每一轮请求都要
+# 重发这几千 token。截断只影响「查资料的详尽程度」，不影响聊天。
+WEB_SEARCH_MAX_CHARS = int(os.getenv("WEB_SEARCH_MAX_CHARS", "800"))
+
 # 后台管理接口是否允许非本机访问。默认只允许回环地址——服务监听 0.0.0.0
 # 且没有任何鉴权，一个能改 agent 配置的口子不该顺带暴露到整个局域网。
 # 需要从别的设备打开管理页时，在 .env 里设成 true。
