@@ -734,6 +734,67 @@ class DeliverTest(unittest.TestCase):
             runner._deliver(False, "回你", [])
         self.assertEqual(sent, ["1"])
 
+    # ── 开口之后的连带动作：冷却重置 + 自己的话进群聊缓存 ──
+
+    def _spoke_recorder(self):
+        p = mock.patch.object(qq_bot.interject, "mark_spoke")
+        marker = p.start()
+        self.addCleanup(p.stop)
+        return marker
+
+    def _remember_recorder(self):
+        p = mock.patch.object(qq_bot.recent, "remember")
+        rec = p.start()
+        self.addCleanup(p.stop)
+        return rec
+
+    def test_group_reply_marks_spoke_and_records_recent(self):
+        # 冷却管的是这张嘴：被 @ 的正常回复也要重置接话冷却；自己的发言要进
+        # 群聊缓存，否则背景里看不到自己刚说过什么，模型会复读
+        self._spoke_recorder()
+        rec = self._remember_recorder()
+        with mock.patch.object(
+                qq_api, "send_group",
+                lambda gid, text, limit=None: 1):
+            self._runner()._deliver(False, "刚回的一句话", [])
+        qq_bot.interject.mark_spoke.assert_called_once_with(
+            qq_bot.QQ_AGENT_ID, "9")
+        rec.assert_called_once_with(qq_bot.QQ_AGENT_ID, "9",
+                                    qq_bot.QQ_BOT_NAME, "刚回的一句话")
+
+    def test_private_reply_neither_marks_nor_records(self):
+        self._spoke_recorder()
+        rec = self._remember_recorder()
+        runner = qq_bot.SessionRunner(None, "private_1", "private", "1")
+        with mock.patch.object(
+                qq_api, "send_private",
+                lambda uid, text, limit=None: 1):
+            runner._deliver(False, "回你", [])
+        qq_bot.interject.mark_spoke.assert_not_called()
+        rec.assert_not_called()
+
+    def test_failed_send_does_not_mark_or_record(self):
+        self._spoke_recorder()
+        rec = self._remember_recorder()
+
+        def boom(gid, text, limit=None):
+            raise RuntimeError("发不出去")
+
+        with mock.patch.object(qq_api, "send_group", boom):
+            self._runner()._deliver(False, "发不出去的话", [])
+        qq_bot.interject.mark_spoke.assert_not_called()
+        rec.assert_not_called()
+
+    def test_tool_sent_only_does_not_record_reply_text(self):
+        # 工具自己发的话不经过这里，没有可记录的正文；空回复也一样
+        self._spoke_recorder()
+        rec = self._remember_recorder()
+        with mock.patch.object(qq_api, "send_group",
+                               lambda gid, text, limit=None: 1):
+            self._runner()._deliver(True, "工具已经发过了", [])
+        qq_bot.interject.mark_spoke.assert_not_called()
+        rec.assert_not_called()
+
 
 # ─── 主动发送工具 ───────────────────────────────────
 

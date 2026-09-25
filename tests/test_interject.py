@@ -156,6 +156,20 @@ class DecideGuardTest(_StateIsolationMixin, unittest.TestCase):
             self.assertIsNone(interject.decide("qq", "1041079621"))
         llm.assert_not_called()
 
+    def test_on_mode_skips_judging_entirely_during_cooldown(self):
+        # 正式模式下冷却中连判断都不做——判完反正开不了口，白花一次调用。
+        # 影子模式不在此列（观察期要照判），由 DecideVerdictTest 覆盖。
+        self._mode("on")
+        p = mock.patch.object(interject, "QQ_INTERJECT_GROUPS", [])
+        p.start()
+        self.addCleanup(p.stop)
+        interject.mark_spoke("qq", "1041079621")       # 刚开口过
+        with mock.patch.object(interject.recent, "format_recent",
+                               return_value="张三：在吗"), \
+                mock.patch.object(interject, "call_llm") as llm:
+            self.assertIsNone(interject.decide("qq", "1041079621"))
+        llm.assert_not_called()
+
 
 class DecideVerdictTest(_StateIsolationMixin, unittest.TestCase):
     def setUp(self):
@@ -197,7 +211,7 @@ class DecideVerdictTest(_StateIsolationMixin, unittest.TestCase):
 
     def test_take_blocked_by_cooldown(self):
         self._llm("接")
-        interject._mark_spoke("qq", "1041079621")      # 刚开口过
+        interject.mark_spoke("qq", "1041079621")      # 刚开口过
         v = interject.decide("qq", "1041079621")
         self.assertTrue(v["want"])
         self.assertFalse(v["cooled"])
@@ -254,14 +268,14 @@ class CooldownTest(_StateIsolationMixin, unittest.TestCase):
         p = mock.patch.object(interject, "QQ_INTERJECT_COOLDOWN", 0)
         p.start()
         self.addCleanup(p.stop)
-        interject._mark_spoke("qq", "1")
+        interject.mark_spoke("qq", "1")
         self.assertTrue(interject._cooldown_ok("qq", "1"))
 
     def test_cooldown_blocks_then_expires(self):
         p = mock.patch.object(interject, "QQ_INTERJECT_COOLDOWN", 60)
         p.start()
         self.addCleanup(p.stop)
-        interject._mark_spoke("qq", "1")
+        interject.mark_spoke("qq", "1")
         self.assertFalse(interject._cooldown_ok("qq", "1"))
 
         with interject._state_lock:
@@ -272,7 +286,7 @@ class CooldownTest(_StateIsolationMixin, unittest.TestCase):
         p = mock.patch.object(interject, "QQ_INTERJECT_COOLDOWN", 60)
         p.start()
         self.addCleanup(p.stop)
-        interject._mark_spoke("qq", "1")
+        interject.mark_spoke("qq", "1")
         self.assertTrue(interject._cooldown_ok("qq", "2"))
 
 
@@ -312,14 +326,18 @@ class ShadowLogTest(_StateIsolationMixin, unittest.TestCase):
                 interject.decide("qq", "1")
             log_verdict.assert_not_called()
 
-    def test_on_logs_when_blocked_by_cooldown(self):
-        with mock.patch.object(interject, "QQ_INTERJECT_MODE", "on"):
+    def test_shadow_still_judges_and_logs_during_cooldown(self):
+        # on 模式冷却中连判断都不做（见 DecideGuardTest），影子模式不跳：
+        # 观察期就是要把每条消息的判断都记下来，冷却照走、日志照记
+        with mock.patch.object(interject, "QQ_INTERJECT_MODE", "shadow"):
             log_verdict, p = self._log()
             self.addCleanup(p.stop)
-            interject._mark_spoke("qq", "1")
+            interject.mark_spoke("qq", "1")
             with mock.patch.object(interject, "call_llm", return_value="接"):
-                interject.decide("qq", "1")
+                v = interject.decide("qq", "1")
             self.assertEqual(log_verdict.call_count, 1)
+            self.assertTrue(v["want"])
+            self.assertFalse(v["cooled"])
 
     def test_shadow_does_not_burn_cooldown_when_it_cannot_speak(self):
         # 影子模式不发言，但它照样走冷却——这样日志里「会开口」的次数

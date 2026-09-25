@@ -276,3 +276,8 @@ QQ_INTERJECT_CONTEXT_MESSAGES = int(
     os.getenv("QQ_INTERJECT_CONTEXT_MESSAGES", "12"))
 QQ_INTERJECT_CONTEXT_MAX_CHARS = int(
     os.getenv("QQ_INTERJECT_CONTEXT_MAX_CHARS", "600"))
+
+# 机器人在群里的名字（跟 agents/<id>/prompt.md 的人设保持一致）。机器人自己
+# 发出去的回复会以这个名字记进群聊缓存——主模型靠它认出「哪些是我刚说过的」，
+# 认不出来就会换个说法复读上一句。
+QQ_BOT_NAME = os.getenv("QQ_BOT_NAME", "小小怪").strip() or "小小怪"

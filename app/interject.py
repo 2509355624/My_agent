@@ -91,7 +91,9 @@ _SYSTEM = """你在帮一个 QQ 群机器人判断：此刻要不要主动开口
 # 这段只负责说清「现在该你主动接一句」这件事。
 INTERJECT_PROMPT = (
     "（没人点名你。你刚看到群里在聊上面那些，想顺势接一句——"
-    "说一句自然的、像群里人说的话就行。别 @ 谁，也别解释你在做什么。）"
+    "说一句自然的、像群里人说的话就行。别 @ 谁，也别解释你在做什么。"
+    "上下文里你自己名字开头的那几行，是你自己刚说过的话——"
+    "别换个说法重复，也别接着自己上一句往下说。）"
 )
 
 _state_lock = threading.Lock()
@@ -135,7 +137,13 @@ def _cooldown_ok(agent_id, group_id):
     return last is None or (time.time() - last) >= QQ_INTERJECT_COOLDOWN
 
 
-def _mark_spoke(agent_id, group_id):
+def mark_spoke(agent_id, group_id):
+    """记下「机器人这个群刚开过口」。
+
+    调用方不止主动接话一处——qq_bot 的 _deliver 在任何一次回复真正发出去后
+    都要调它（被 @ 的回复也算说话）。冷却管的是这张嘴，不只是接话这个动作；
+    否则刚 @ 完就接话，接出来的话跟刚回的内容撞车。
+    """
     with _state_lock:
         _last_spoke[(agent_id, group_id)] = time.time()
 
@@ -190,8 +198,8 @@ def _log_verdict(agent_id, group_id, verdict):
 def decide(agent_id, group_id):
     """判断这个群此刻值不值得主动开口。
 
-    返回 None 表示「这次不判断」（功能没开、群不在试点名单、节流中、没上下文、
-    调用失败）。返回 dict 时字段含义：
+    返回 None 表示「这次不判断」（功能没开、群不在试点名单、冷却中、节流中、
+    没上下文、调用失败）。返回 dict 时字段含义：
         choice      模型给的判断，「接」或「不接」
         want        模型说该接
         cooled      发言冷却已过
@@ -203,6 +211,10 @@ def decide(agent_id, group_id):
         return None
     gid = str(group_id)
     if QQ_INTERJECT_GROUPS and gid not in QQ_INTERJECT_GROUPS:
+        return None
+    # 正式模式下冷却中连判断都不做——判断也是一次 API 调用，判完反正开不了
+    # 口，白花时间白刷日志。影子模式不跳：观察期就是要看它对每条消息的判断。
+    if speaking() and not _cooldown_ok(agent_id, gid):
         return None
     if not _gap_ok(agent_id, gid):
         return None
@@ -247,7 +259,7 @@ def decide(agent_id, group_id):
     }
 
     if verdict["pass"]:
-        _mark_spoke(agent_id, gid)
+        mark_spoke(agent_id, gid)
 
     # 影子模式全记（就是要看它「不接」判得对不对）；正式模式只记「想接却被
     # 冷却挡掉」这种，否则日志会跟着群消息量一起涨。

@@ -44,7 +44,7 @@ from app import interject, qq_api, recent
 from app.agent import run_agent_stream
 from app.agent_prompt import build_stable_prompt, sync_session_system
 from app.config import (
-    BASE_DIR, COMFYUI_URL, QQ_AGENT_ID, QQ_BLACKLIST_USERS,
+    BASE_DIR, COMFYUI_URL, QQ_AGENT_ID, QQ_BOT_NAME, QQ_BLACKLIST_USERS,
     QQ_CONTEXT_MAX_CHARS, QQ_CONTEXT_MESSAGES,
     QQ_DEBOUNCE_SECONDS, QQ_GROUP_AT_ONLY, QQ_GROUP_KEYWORDS,
     QQ_MAX_CONCURRENCY, QQ_PENDING_MAX_CHARS, QQ_PENDING_MAX_ITEMS,
@@ -542,10 +542,12 @@ class SessionRunner:
         """把结果发回 QQ。图片走 ComfyUI 的 /view 地址。"""
         send_text = (qq_api.send_group if self.target == "group"
                      else qq_api.send_private)
+        spoke = False
 
         if not sent_by_tool and reply.strip():
             try:
                 send_text(self.target_id, reply)
+                spoke = True
             except Exception:
                 log.exception("回发文字失败 %s", self.session_key)
 
@@ -553,8 +555,18 @@ class SessionRunner:
             url = COMFYUI_URL.rstrip("/") + "/view?filename=" + quote(name)
             try:
                 qq_api.send_image(self.target, self.target_id, url)
+                spoke = True
             except Exception:
                 log.exception("回发图片失败 %s", self.session_key)
+
+        # 只要它真的开了口，两件事跟着来（只对群聊）：
+        # 1) 冷却重新计时——30 秒管的是这张嘴，被 @ 的回复也算说话，否则
+        #    刚回完就接话，接出来的内容跟刚回的撞车；
+        # 2) 发言进群聊缓存——背景里看不到自己刚说过什么，模型就会换个
+        #    说法复读上一句（实测复读过）。
+        if spoke and self.target == "group":
+            interject.mark_spoke(QQ_AGENT_ID, self.target_id)
+            recent.remember(QQ_AGENT_ID, self.target_id, QQ_BOT_NAME, reply)
 
 
 # ─── 适配层主体 ──────────────────────────────────────
