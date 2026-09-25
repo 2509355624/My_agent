@@ -222,6 +222,12 @@ def split_message(text, limit=None):
 
 # ─── 消息段 ──────────────────────────────────────────
 
+def at_segment(qq_id):
+    """构造 @ 消息段。qq_id 必须是数字串，空/非法返回 None（调用方跳过）。"""
+    s = str(qq_id or "").strip()
+    return {"type": "at", "data": {"qq": s}} if s.isdigit() else None
+
+
 def text_segment(text):
     return {"type": "text", "data": {"text": text}}
 

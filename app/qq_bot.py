@@ -48,7 +48,7 @@ from app.config import (
     QQ_CONTEXT_MAX_CHARS, QQ_CONTEXT_MESSAGES,
     QQ_DEBOUNCE_SECONDS, QQ_GROUP_AT_ONLY, QQ_GROUP_KEYWORDS,
     QQ_MAX_CONCURRENCY, QQ_PENDING_MAX_CHARS, QQ_PENDING_MAX_ITEMS,
-    QQ_PRIVATE_ENABLE, QQ_QUOTE_MAX_CHARS, QQ_TOKEN, QQ_WHITELIST_GROUPS,
+    QQ_PRIVATE_ENABLE, QQ_QUOTE_MAX_CHARS, QQ_REPLY_MAX_CHARS, QQ_TOKEN, QQ_WHITELIST_GROUPS,
     QQ_WHITELIST_USERS, QQ_WS_URL,
 )
 from app.memory import load_history, save_history
@@ -376,13 +376,14 @@ class SessionRunner:
         self._task = None
 
     def submit(self, text, sender_name="", images=None, quotes=None,
-               tentative=False):
+               tentative=False, user_id=""):
         """tentative=True 表示「这条没 @ 机器人、也没命中触发词」——它不是
         非回不可的消息，要不要开口得先问一次判断模型（见 _run_turn 开头）。
+        user_id 是发言人的 QQ 号：群聊回复要在正文前 @ 回去，没有号码发不了。
         """
         item = {"text": text, "sender": sender_name,
                 "images": images or [], "quotes": quotes or [],
-                "tentative": bool(tentative)}
+                "tentative": bool(tentative), "user_id": str(user_id or "")}
         self._pending.append(item)
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._loop())
@@ -439,6 +440,9 @@ class SessionRunner:
         voluntary = all(it.get("tentative") for it in batch)
         if voluntary and not self._should_interject():
             return
+        # 回复对象 = 这轮最后那条消息的发言人（batch 按时间序）。被 @ 时是
+        # 回他，主动接话时是接他的话——两种都 @ 回去，指向性强。
+        reply_to = (batch[-1].get("user_id") or "") if batch else ""
         if voluntary:
             # 主动开口不是「回复谁」——那些群消息也不是对它说的，所以不能当
             # 正文喂进去，否则模型会以为自己被问了。上下文由 extra_context
@@ -536,15 +540,33 @@ class SessionRunner:
             except Exception:
                 log.exception("收尾落盘失败 %s", self.session_key)
 
-        self._deliver(sent_by_tool, "".join(reply_parts), images)
+        self._deliver(sent_by_tool, "".join(reply_parts), images,
+                      reply_to=reply_to)
 
-    def _deliver(self, sent_by_tool, reply, images):
-        """把结果发回 QQ。图片走 ComfyUI 的 /view 地址。"""
+    def _deliver(self, sent_by_tool, reply, images, reply_to=""):
+        """把结果发回 QQ。图片走 ComfyUI 的 /view 地址。
+
+        群聊且有 reply_to（触发这轮的发言人 QQ 号）时，正文前垫一个 @ 段——
+        QQ 会给对方弹提醒，指向性强。正文超长要走自动分段时 @ 段垫不进去
+        （分段接口只认纯文本），宁可退回整条发不带 @，也不把长回复截断。
+        """
         send_text = (qq_api.send_group if self.target == "group"
                      else qq_api.send_private)
         spoke = False
+        text_sent = False
 
-        if not sent_by_tool and reply.strip():
+        at = qq_api.at_segment(reply_to) if self.target == "group" else None
+        if at and not sent_by_tool and reply.strip() \
+                and len(reply) <= QQ_REPLY_MAX_CHARS:
+            # 带 @ 走消息段，一次性发（不走自动分段）
+            try:
+                qq_api.send_group(self.target_id,
+                                  [at, qq_api.text_segment(reply)])
+                spoke = text_sent = True
+            except Exception:
+                log.exception("回发文字失败 %s", self.session_key)
+
+        if not text_sent and not sent_by_tool and reply.strip():
             try:
                 send_text(self.target_id, reply)
                 spoke = True
@@ -637,7 +659,8 @@ class QQBot:
             if reason == REASON_NO_MENTION and interject.enabled():
                 self._runner_for(
                     _session_key(target, target_id), target, target_id
-                ).submit(text, sender, image_urls, quotes, tentative=True)
+                ).submit(text, sender, image_urls, quotes, tentative=True,
+                         user_id=user_id)
             else:
                 log.debug("跳过 %s %s：%s", target, target_id, reason)
             return
@@ -658,7 +681,7 @@ class QQBot:
         log.info("← %s %s（%s）: %s%s", target, target_id, reason,
                  text[:60].replace("\n", " "), extra)
         self._runner_for(session_key, target, target_id).submit(
-            text, sender, image_urls, quotes)
+            text, sender, image_urls, quotes, user_id=user_id)
 
     async def _probe(self):
         """启动时探一下协议端在不在，不在就只警告、照常去连 WS。"""
