@@ -130,6 +130,36 @@ class _SeedMixin(_TmpAgentMixin):
                     g.write(b"x")
 
 
+class LoadIndexTest(_TmpAgentMixin, unittest.TestCase):
+    """_load_index 逐行容错：坏行/非 dict 行只丢那一行，好行照读。
+
+    实测背景：索引里混进过一行 JSON 字符串，records_by_numbers 里
+    rec.get 直接炸出 'str' object has no attribute 'get'。
+    """
+
+    def _write_raw(self, *raw_lines):
+        self._setup_tmp()
+        os.makedirs(stickers._dir("qq"), exist_ok=True)
+        with open(stickers._index_path("qq"), "w", encoding="utf-8") as f:
+            f.write("\n".join(raw_lines) + "\n")
+
+    def test_skips_non_dict_and_broken_lines(self):
+        good = '{"md5": "1", "file": "a.png"}'
+        self._write_raw(
+            good,
+            '"一整行是个字符串"',      # json 合法但不是 dict
+            '{"md5": 缺引号',          # json 不合法
+            "",                        # 空行
+            '{"md5": "2", "file": "b.png"}',
+        )
+        recs = stickers._load_index("qq")
+        self.assertEqual([r["md5"] for r in recs], ["1", "2"])
+
+    def test_all_bad_lines_yield_empty_not_crash(self):
+        self._write_raw('"字符串"', '{也坏')
+        self.assertEqual(stickers._load_index("qq"), [])
+
+
 class CatalogTest(_SeedMixin, unittest.TestCase):
     """清单渲染：编号稳定、desc+标签、缺 desc 退回标签、缺文件不进清单。"""
 

@@ -66,15 +66,32 @@ def _index_path(agent_id):
 
 
 def _load_index(agent_id):
-    """读全量索引。文件不存在/坏行跳过——收藏是锦上添花，不该报错。"""
+    """读全量索引。文件不存在/坏行跳过——收藏是锦上添花，不该报错。
+
+    逐行解析、坏行只丢那一行：一方面别让一行烂数据把整份库存当空
+    （空库存会让去重放行重复图），另一方面索引里混进过非 dict 的行
+    （实测 'str' object has no attribute 'get' 就是从这来的）。
+    """
     try:
         with open(_index_path(agent_id), "r", encoding="utf-8") as f:
-            return [json.loads(l) for l in f if l.strip()]
+            lines = f.readlines()
     except FileNotFoundError:
         return []
-    except (OSError, ValueError) as exc:
+    except OSError as exc:
         log.warning("表情包索引读不出来（忽略）：%s", exc)
         return []
+    out = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict):
+            out.append(rec)
+    return out
 
 
 def _live(entries):

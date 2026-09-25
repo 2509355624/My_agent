@@ -137,6 +137,9 @@ def _record_usage(usage, elapsed=None):
 
 def _call_provider(eff, body, timeout):
     """按 provider 分派请求。返回回复文本。"""
+    # 每次真实请求打一行用了谁——管理页切了模型之后，这里就是「实际生效」的
+    # 唯一铁证（配置链路对不对，看这行比看后台展示准）。
+    print(f"[llm] {eff['provider']} / {eff['model']} @{_now()}")
     if eff["provider"] == "ollama":
         return _call_ollama(eff["base_url"], body, timeout)
 
