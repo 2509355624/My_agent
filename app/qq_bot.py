@@ -275,6 +275,10 @@ def _session_key(target, target_id):
 # 理由（黑名单、群不在白名单、@ 了却什么都没发）都该照旧丢掉。
 REASON_NO_MENTION = "未 @ 且未命中关键词"
 
+# 主动接话时往前翻多少条消息找「最近一张图」。判断模型的上下文是
+# QQ_INTERJECT_CONTEXT_MESSAGES(12) 条，图再老多半已经不在当前话题里了。
+_INTERJECT_IMAGE_LOOKBACK = 12
+
 
 def _should_reply(ev, target, target_id, text, at_me, has_image=False,
                   has_quote=False):
@@ -438,9 +442,16 @@ class SessionRunner:
         if voluntary:
             # 主动开口不是「回复谁」——那些群消息也不是对它说的，所以不能当
             # 正文喂进去，否则模型会以为自己被问了。上下文由 extra_context
-            # 的群聊背景负责（图在其中就是一行 "[图片]"），这里只留一句说明。
+            # 的群聊背景负责，这里只留一句说明。
             batch = [{"text": interject.INTERJECT_PROMPT, "sender": "",
                       "images": [], "quotes": []}]
+            # 判断模型看不见图（上下文里图只是 "[图片]" 占位符）。它判「接」
+            # 往往就是好奇那张图——把最近一张真正捞出来给主模型看，不然只能
+            # 对着看不见的东西装懂。多张取最新一张，够接话用了。
+            img = recent.latest_image(QQ_AGENT_ID, self.target_id,
+                                      _INTERJECT_IMAGE_LOOKBACK)
+            if img:
+                batch[0]["images"] = [img]
 
         text = _merge_batch(batch)
         # 图片段单独收集：只发图不打字是合法用法（"帮我看下这个"），
@@ -592,7 +603,8 @@ class QQBot:
         # 同样是群聊的一部分（它另外还会作为正文进会话历史）。
         if target == "group" and (text or image_urls):
             recent.remember(QQ_AGENT_ID, target_id, sender or user_id,
-                            text or "[图片]", user_id)
+                            text or "[图片]", user_id,
+                            image=(image_urls[0] if image_urls else ""))
 
         # 自己发的消息也会被上报（reportSelfMessage），要跳过，否则会自问自答。
         # 放在记缓存之前会把「自己说过的话」从上下文里挖掉，所以放它后面。

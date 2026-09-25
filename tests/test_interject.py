@@ -335,6 +335,13 @@ class ShadowLogTest(_StateIsolationMixin, unittest.TestCase):
 class RunTurnVoluntaryTest(_StateIsolationMixin, unittest.TestCase):
     """worker 线程里：这批消息没点名机器人时，先问判断模型再决定跑不跑。"""
 
+    def setUp(self):
+        super().setUp()
+        # 默认「群里没有最近的图」，免得用例读到真实缓存里的图地址
+        p = mock.patch.object(qq_bot.recent, "latest_image", return_value="")
+        p.start()
+        self.addCleanup(p.stop)
+
     def _runner(self):
         return qq_bot.SessionRunner(None, "group_1041079621", "group",
                                     "1041079621")
@@ -384,6 +391,23 @@ class RunTurnVoluntaryTest(_StateIsolationMixin, unittest.TestCase):
             runner._run_turn([{"text": "在吗", "sender": "张三",
                                "images": [], "quotes": [], "tentative": True}])
         self.assertNotIn("batch", seen)
+
+    def test_voluntary_reply_sees_latest_image(self):
+        # 判断模型只看得到 "[图片]" 占位符；判「接」之后要把最近一张真正的图
+        # 带给主模型，不然它对着看不见的东西只能装懂
+        runner = self._runner()
+        seen = self._capture_merge()
+        verdict = {"choice": "接", "want": True, "cooled": True, "pass": True,
+                   "latency_ms": 10.0, "context_chars": 10, "raw": "接"}
+        with mock.patch.object(interject, "decide", return_value=verdict), \
+                mock.patch.object(interject, "speaking", return_value=True), \
+                mock.patch.object(qq_bot.recent, "latest_image",
+                                  return_value="http://x/pic.jpg") as li:
+            runner._run_turn([{"text": "在吗", "sender": "张三",
+                               "images": [], "quotes": [], "tentative": True}])
+        li.assert_called_once_with("qq", "1041079621",
+                                   qq_bot._INTERJECT_IMAGE_LOOKBACK)
+        self.assertEqual(seen["batch"][0]["images"], ["http://x/pic.jpg"])
 
     def test_mixed_batch_goes_the_normal_way(self):
         # 只要混进一条被 @ 的，就照常回，不必问判断模型

@@ -47,12 +47,15 @@ def _path(agent_id, group_id):
     return os.path.join(_dir(agent_id), key + ".jsonl")
 
 
-def remember(agent_id, group_id, name, text, user_id="", when=None):
+def remember(agent_id, group_id, name, text, user_id="", when=None, image=""):
     """记一条群消息，返回是否写入成功。空正文直接跳过。
 
     正文里的换行会被压成空格：每行一条记录，正文带换行会让文件本身变成
     不可解析的（读回来是一堆半截 JSON）。纯图消息由调用方给 "[图片]" 之类
     的占位文案——群里的图也是群聊的一部分，缺了上下文会看起来断片。
+
+    image 是这条消息带的图片地址（多张取第一张）：上下文里图只渲染成
+    "[图片]" 占位符，但地址留在记录里，接话时要「看最近那张图」就靠它。
     """
     body = " ".join((text or "").split())
     if not body:
@@ -68,6 +71,8 @@ def remember(agent_id, group_id, name, text, user_id="", when=None):
         "n": str(name or ""),
         "x": body,
     }
+    if image:
+        rec["m"] = str(image)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
@@ -80,8 +85,23 @@ def remember(agent_id, group_id, name, text, user_id="", when=None):
     return True
 
 
+def _archive_path(path):
+    """裁剪时丢弃行的去处：recent/archive/<key>_<日期>.jsonl。
+
+    按天一个文件（文件名带日期，每条记录自带时间戳），攒下来是以后做长期
+    记忆 / 训练数据的原料——滚动缓存只服务「刚才在聊什么」，历史在这里。
+    """
+    base = os.path.splitext(os.path.basename(path))[0]
+    name = "%s_%s.jsonl" % (base, time.strftime("%Y-%m-%d"))
+    return os.path.join(os.path.dirname(path), "archive", name)
+
+
 def _trim(path):
-    """行数超标时重写一次，只留最近 KEEP_LINES 条。"""
+    """行数超标时重写一次，只留最近 KEEP_LINES 条。
+
+    丢掉的行先追加进 archive（追加失败只记警告，不影响缓存本身重写）——
+    这些是真实群聊记录，留着以后翻旧账。
+    """
     try:
         with open(path, "r", encoding="utf-8") as f:
             lines = f.readlines()
@@ -89,9 +109,16 @@ def _trim(path):
         return
     if len(lines) <= MAX_LINES:
         return
+    dropped, keep = lines[:-KEEP_LINES], lines[-KEEP_LINES:]
+    try:
+        os.makedirs(os.path.dirname(_archive_path(path)), exist_ok=True)
+        with open(_archive_path(path), "a", encoding="utf-8") as f:
+            f.writelines(dropped)
+    except OSError as exc:
+        log.warning("归档群聊缓存失败 %s：%s", path, exc)
     try:
         with open(path, "w", encoding="utf-8") as f:
-            f.writelines(lines[-KEEP_LINES:])
+            f.writelines(keep)
     except OSError as exc:
         log.warning("裁剪群聊缓存失败 %s：%s", path, exc)
 
@@ -119,6 +146,19 @@ def load_recent(agent_id, group_id, limit):
         if isinstance(rec, dict) and rec.get("x"):
             out.append(rec)
     return out
+
+
+def latest_image(agent_id, group_id, within=12):
+    """最近 within 条里最新的一张图片地址；没有返回空串。
+
+    给主动接话用：判断模型在上下文里只看得到「[图片]」占位符，判了「接」
+    之后把真正的图捞出来给主模型看——不然它对着看不见的东西只能装懂。
+    只往前翻 within 条：太老的图多半已经不是当前话题了。
+    """
+    for rec in reversed(load_recent(agent_id, group_id, within)):
+        if rec.get("m"):
+            return rec["m"]
+    return ""
 
 
 def _render(rec):

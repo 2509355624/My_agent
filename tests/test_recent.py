@@ -119,6 +119,51 @@ class RecentStoreTest(_TmpAgentsMixin, unittest.TestCase):
         self.assertEqual([m["x"] for m in recent.load_recent("qq", "9", 100)],
                          ["m3", "m4", "m5"])
 
+    def test_image_url_kept_in_record(self):
+        # 图在上下文里只渲染成 "[图片]" 占位符，但地址要留在记录里——
+        # 接话时「把最近那张图捞出来给主模型看」靠的就是它
+        recent.remember("qq", "9", "甲", "[图片]", image="http://x/1.jpg")
+        recent.remember("qq", "9", "乙", "哈哈哈")
+        recs = recent.load_recent("qq", "9", 5)
+        self.assertEqual(recs[0].get("m"), "http://x/1.jpg")
+        self.assertNotIn("m", recs[1])
+
+    def test_latest_image_returns_newest(self):
+        recent.remember("qq", "9", "甲", "[图片]", image="http://x/old.jpg")
+        recent.remember("qq", "9", "乙", "什么图")
+        recent.remember("qq", "9", "丙", "[图片]", image="http://x/new.jpg")
+        self.assertEqual(recent.latest_image("qq", "9"), "http://x/new.jpg")
+
+    def test_latest_image_empty_when_no_image(self):
+        recent.remember("qq", "9", "甲", "纯文字聊天")
+        self.assertEqual(recent.latest_image("qq", "9"), "")
+        self.assertEqual(recent.latest_image("qq", "9", within=1), "")
+
+    def test_latest_image_window_limits_lookback(self):
+        # 太老的图多半已经不在当前话题里，往前翻的条数要有闸
+        recent.remember("qq", "9", "甲", "[图片]", image="http://x/old.jpg")
+        for i in range(3):
+            recent.remember("qq", "9", "乙", "闲聊%d" % i)
+        self.assertEqual(recent.latest_image("qq", "9", within=2), "")
+
+    def test_trim_archives_dropped_lines(self):
+        """裁剪丢掉的行进 archive（按天一个文件），滚动缓存归滚动缓存，
+        历史记录留着——以后做长期记忆 / 训练数据用得上。"""
+        for name, value in (("MAX_LINES", 5), ("KEEP_LINES", 3)):
+            p = mock.patch.object(recent, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+        for i in range(6):
+            recent.remember("qq", "9", "甲", "m%d" % i)
+        arc = os.path.join(self.root, "qq", "recent", "archive")
+        files = os.listdir(arc)
+        self.assertEqual(len(files), 1)
+        # 文件名本身就是「日期」——归档文件必须长这样，写坏名字的归档不算归档
+        self.assertRegex(files[0], r"^group_9_\d{4}-\d{2}-\d{2}\.jsonl$")
+        with open(os.path.join(arc, files[0]), encoding="utf-8") as f:
+            archived = [json.loads(l)["x"] for l in f if l.strip()]
+        self.assertEqual(archived, ["m0", "m1", "m2"])
+
 
 class FormatRecentTest(_TmpAgentsMixin, unittest.TestCase):
     def setUp(self):
