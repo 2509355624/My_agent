@@ -135,11 +135,20 @@ def _record_usage(usage, elapsed=None):
           f"(未命中 {miss}){tail} @{_now()}")
 
 
+def _log_effective(eff, stream):
+    """每次真实请求打一行用了谁——管理页切了模型之后，这里就是「实际生效」的
+    唯一铁证（配置链路对不对，看这行比看后台展示准）。
+
+    两个入口都要打：call_llm（摘要/接话判断）走 _call_provider，主对话走
+    call_llm_stream，后者不经过 _call_provider——只打一处会让主对话全程无声。
+    """
+    print(f"[llm] {eff['provider']} / {eff['model']} "
+          f"{'stream' if stream else 'sync'} @{_now()}")
+
+
 def _call_provider(eff, body, timeout):
     """按 provider 分派请求。返回回复文本。"""
-    # 每次真实请求打一行用了谁——管理页切了模型之后，这里就是「实际生效」的
-    # 唯一铁证（配置链路对不对，看这行比看后台展示准）。
-    print(f"[llm] {eff['provider']} / {eff['model']} @{_now()}")
+    _log_effective(eff, stream=False)
     if eff["provider"] == "ollama":
         return _call_ollama(eff["base_url"], body, timeout)
 
@@ -263,6 +272,7 @@ def call_llm_stream(messages, timeout=600, provider=None, model=None,
     timeout 在流式下是"两次数据块之间的最大间隔"，而非整次响应上限。
     """
     eff = get_effective_config(provider, model)
+    _log_effective(eff, stream=True)
     if eff["provider"] == "ollama":
         yield "content", _call_ollama(
             eff["base_url"], {"model": eff["model"], "messages": messages}, timeout)
