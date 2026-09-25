@@ -242,3 +242,10 @@ QQ_DEBOUNCE_SECONDS = float(os.getenv("QQ_DEBOUNCE_SECONDS", "1.5"))
 # 累计，装不下就丢掉更旧的）。两个都 <=0 表示不限制（不建议）。
 QQ_PENDING_MAX_ITEMS = int(os.getenv("QQ_PENDING_MAX_ITEMS", "20"))
 QQ_PENDING_MAX_CHARS = int(os.getenv("QQ_PENDING_MAX_CHARS", "2000"))
+
+# 群聊背景：被 @ 时顺带把群里最近这几条消息送去，让它知道刚才在聊什么。
+# 原先收到群消息、不 @ 就整个丢掉，模型每轮只看得到「有人问了它一句」，
+# 所以只能一问一答、像个问答助手。0 表示不带（退回旧行为）。
+QQ_CONTEXT_MESSAGES = int(os.getenv("QQ_CONTEXT_MESSAGES", "30"))
+# 背景的字数上限，从最新往前累计。群聊刷屏时不封顶会吃光单轮预算。
+QQ_CONTEXT_MAX_CHARS = int(os.getenv("QQ_CONTEXT_MAX_CHARS", "1500"))

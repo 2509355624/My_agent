@@ -40,11 +40,12 @@ try:
 except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
-from app import qq_api
+from app import qq_api, recent
 from app.agent import run_agent_stream
 from app.agent_prompt import build_stable_prompt, sync_session_system
 from app.config import (
     BASE_DIR, COMFYUI_URL, QQ_AGENT_ID, QQ_BLACKLIST_USERS,
+    QQ_CONTEXT_MAX_CHARS, QQ_CONTEXT_MESSAGES,
     QQ_DEBOUNCE_SECONDS, QQ_GROUP_AT_ONLY, QQ_GROUP_KEYWORDS,
     QQ_MAX_CONCURRENCY, QQ_PENDING_MAX_CHARS, QQ_PENDING_MAX_ITEMS,
     QQ_PRIVATE_ENABLE, QQ_QUOTE_MAX_CHARS, QQ_TOKEN, QQ_WHITELIST_GROUPS,
@@ -444,6 +445,16 @@ class SessionRunner:
             # 没变时 sync 返回 False，一个字节都没动过，前缀缓存不受影响。
             history = load_history(QQ_AGENT_ID, self.session_key)
 
+        # 群里垫一层「刚才在聊什么」的背景，让回复接得上话，而不是干巴巴地
+        # 只答那一句。走 extra_context 而不是拼进 text：拼进 text 会写进会话
+        # 历史，每轮重复堆一份，十几轮就把预算占满；这条通道每轮现取现用、
+        # 出流即弃（与状态栏同一处理，见 app/agent.py 的 _status_message）。
+        extra_context = ""
+        if self.target == "group":
+            extra_context = recent.format_recent(
+                QQ_AGENT_ID, self.target_id,
+                QQ_CONTEXT_MESSAGES, QQ_CONTEXT_MAX_CHARS)
+
         # 工具层靠线程本地变量知道「此刻在为哪个会话服务」，
         # send_qq_message 不带参数时就发回这里
         qq_api.bind_context(self.session_key, self.target, self.target_id)
@@ -452,7 +463,8 @@ class SessionRunner:
 
         try:
             for ev in run_agent_stream(text, history, agent_id=QQ_AGENT_ID,
-                                       image=data_urls or None):
+                                       image=data_urls or None,
+                                       extra_context=extra_context or None):
                 etype = ev.get("type")
                 # 先落盘再处理（与 main.py 的契约一致）
                 if etype in SESSION_EVENTS:
@@ -522,11 +534,6 @@ class QQBot:
         if not isinstance(ev, dict) or ev.get("post_type") != "message":
             return
 
-        # 自己发的消息也会被上报（reportSelfMessage），要跳过，否则会自问自答
-        self_id = str(ev.get("self_id", ""))
-        if self_id and str(ev.get("user_id", "")) == self_id:
-            return
-
         mtype = ev.get("message_type")
         if mtype == "group":
             target, target_id = "group", str(ev.get("group_id", ""))
@@ -539,14 +546,30 @@ class QQBot:
 
         text, at_me, image_urls = _parse_segments(ev)
         quotes = _extract_quotes(ev)
+        self_id = str(ev.get("self_id", ""))
+        user_id = str(ev.get("user_id", ""))
+        sender = ((ev.get("sender") or {}).get("card")
+                  or (ev.get("sender") or {}).get("nickname") or "")
+
+        # 群消息**一律**先记进「最近群聊」缓存，不管回不回、也不管是不是自己
+        # 发的。原先不 @ 机器人的消息在这里就直接丢了，模型每轮只看得到「有人
+        # 问了它一句」，所以只能一问一答。记在判定之前是有意的——要回的那条
+        # 同样是群聊的一部分（它另外还会作为正文进会话历史）。
+        if target == "group" and (text or image_urls):
+            recent.remember(QQ_AGENT_ID, target_id, sender or user_id,
+                            text or "[图片]", user_id)
+
+        # 自己发的消息也会被上报（reportSelfMessage），要跳过，否则会自问自答。
+        # 放在记缓存之前会把「自己说过的话」从上下文里挖掉，所以放它后面。
+        if self_id and user_id == self_id:
+            return
+
         ok, reason = _should_reply(ev, target, target_id, text, at_me,
                                    bool(image_urls), bool(quotes))
         if not ok:
             log.debug("跳过 %s %s：%s", target, target_id, reason)
             return
 
-        sender = ((ev.get("sender") or {}).get("card")
-                  or (ev.get("sender") or {}).get("nickname") or "")
         session_key = _session_key(target, target_id)
 
         # 群里要带上说话人，否则模型不知道是谁在问；私聊不用。

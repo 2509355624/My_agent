@@ -250,12 +250,17 @@ def _error_reply(exc):
     return "❌ 执行出错：" + text
 
 
-def _status_message(history):
+def _status_message(history, extra_context=None):
     """构造状态栏消息，追加在请求消息数组的末尾。
 
     动态内容只出现在尾部：状态栏每轮变化只 miss 它自己那几十 token，
     前面的稳定 system + 全部历史（只追加）都能命中 prefix cache。
     绝不把状态栏放在前部——那会让之后所有历史按原价重算。
+
+    extra_context: 只在这一轮生效的补充上下文（QQ 侧传「群里最近的对话」）。
+    挂在状态栏同一条消息里，出流即弃，**不写回 history**。写回去的话，这类
+    内容每轮都要重新注入一遍，十几轮下来历史里堆着十几份重复的背景，既占
+    预算、又让摘要越压越浑。
     """
     from app.agent_prompt import build_status_bar
 
@@ -266,7 +271,11 @@ def _status_message(history):
             break
 
     msg_count = len([m for m in history if m.get("role") != "system"])
-    return {"role": "system", "content": build_status_bar(message_count=msg_count, last_tool=last_tool)}
+    status = build_status_bar(message_count=msg_count, last_tool=last_tool)
+    # 空串和纯空白都不拼——否则会多出一段空行，白占位置还让前缀比对失准
+    extra = (extra_context or "").strip()
+    content = (extra + "\n\n" + status) if extra else status
+    return {"role": "system", "content": content}
 
 
 # 用户手动中断后写进历史的一条说明。必须留——否则下一轮模型看到自己那条半截
@@ -276,7 +285,7 @@ _ABORT_NOTE = "⚠️ 用户手动中断了上一条回复，其内容可能不�
 
 
 def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_results=None,
-                     agent_id=None, image=None, cancel_event=None):
+                     agent_id=None, image=None, cancel_event=None, extra_context=None):
     """
     Agent Loop: 生成器版本，逐事件返回
     事件类型: user / assistant / tool_call / tool_result / aborted
@@ -308,6 +317,9 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
       **工具一旦跑起来就只能靠工具内部自己检查**，生图那个轮询循环就是干这个的。
       收工走正常流程：落盘 + 出 aborted 事件，不做任何强制中断，进程和会话
       文件都保持干净。
+    extra_context: 可选，只在这一轮生效的补充上下文（QQ 侧传「群里最近的
+      对话」）。挂在末尾那条状态栏消息里、**不写回 history**，所以每轮现取
+      现用，不会在历史里重复堆积。详见 _status_message。
     """
     from app.config import MAX_TURNS, provider_vision
 
@@ -379,7 +391,7 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
             if attach_mode and turn_count == 1:
                 _attach_images(llm_history, images)
             # 状态栏追加在尾部，动态变化不毒化前缀缓存
-            llm_history.append(_status_message(history))
+            llm_history.append(_status_message(history, extra_context))
             # 流式调用：
             # - 思考内容(reasoning)即时下发给前端展示。**只出不进**——绝不写回
             #   history，模型侧要求思考内容不参与后续上下文，写回去还会毒化前缀缓存。
