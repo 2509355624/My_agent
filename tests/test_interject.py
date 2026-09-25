@@ -255,7 +255,13 @@ class DecideVerdictTest(_StateIsolationMixin, unittest.TestCase):
         interject.decide("qq", "1041079621")
         content = llm.call_args[0][0][-1]["content"]
         self.assertIn("刚开过口", content)
-        self.assertIn("先忍忍", content)
+        self.assertIn("歇口气", content)
+
+    def test_system_prompt_keeps_pro_active_bias(self):
+        # 口径的活跃度方向是被反复调过的（放宽→收紧→再放宽），钉住当前值：
+        # 用户拍板「要主动，不要矜持」——拿不准倾向接，别再把方向写反
+        self.assertIn("拿不准的时候倾向「接」", interject._SYSTEM)
+        self.assertNotIn("先忍忍", interject._SYSTEM)
 
     def test_judge_is_marked_before_calling(self):
         # 失败也要计入节流，否则调用一直挂会疯狂重试
