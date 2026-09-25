@@ -40,7 +40,7 @@ try:
 except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
-from app import qq_api, recent
+from app import interject, qq_api, recent
 from app.agent import run_agent_stream
 from app.agent_prompt import build_stable_prompt, sync_session_system
 from app.config import (
@@ -269,6 +269,13 @@ def _session_key(target, target_id):
     return "%s_%s" % (target, target_id)
 
 
+# _should_reply 拒绝的原因之一，单独提出来是因为 _dispatch 要按它分流：
+# 只有「没被 @、也没命中触发词」这一类才值得再问一句「那我要不要主动接
+# 一句」——它意味着「这条不是冲机器人来的，但也许可以搭个话」。别的拒绝
+# 理由（黑名单、群不在白名单、@ 了却什么都没发）都该照旧丢掉。
+REASON_NO_MENTION = "未 @ 且未命中关键词"
+
+
 def _should_reply(ev, target, target_id, text, at_me, has_image=False,
                   has_quote=False):
     """判定这条消息要不要回。返回 (bool, 原因)，原因只用于日志。
@@ -302,7 +309,7 @@ def _should_reply(ev, target, target_id, text, at_me, has_image=False,
             return True, "命中关键词 " + kw
     if not QQ_GROUP_AT_ONLY:
         return (has_content, "群全量模式")
-    return False, "未 @ 且未命中关键词"
+    return False, REASON_NO_MENTION
 
 
 # ─── 一批消息的合并 ──────────────────────────────────
@@ -364,9 +371,14 @@ class SessionRunner:
         self._pending = []
         self._task = None
 
-    def submit(self, text, sender_name="", images=None, quotes=None):
+    def submit(self, text, sender_name="", images=None, quotes=None,
+               tentative=False):
+        """tentative=True 表示「这条没 @ 机器人、也没命中触发词」——它不是
+        非回不可的消息，要不要开口得先问一次判断模型（见 _run_turn 开头）。
+        """
         item = {"text": text, "sender": sender_name,
-                "images": images or [], "quotes": quotes or []}
+                "images": images or [], "quotes": quotes or [],
+                "tentative": bool(tentative)}
         self._pending.append(item)
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._loop())
@@ -405,8 +417,31 @@ class SessionRunner:
                 log.warning("取图失败（第 %d 张）：%s", i, exc)
         return out, len(urls) - len(picked)
 
+    def _should_interject(self):
+        """这批消息没点名机器人，问一次判断模型：此刻值不值得主动开口。
+
+        跑在 worker 线程里（调用方已经是 to_thread）。不放在 _dispatch 是有
+        意的：模型首次加载要几十秒，堵在 WS 消息循环上会把所有群一起卡住。
+        """
+        verdict = interject.decide(QQ_AGENT_ID, self.target_id)
+        if not verdict or not verdict["pass"]:
+            return False
+        return interject.speaking()
+
     def _run_turn(self, batch):
         """在 worker 线程里跑一轮（run_agent_stream 是同步生成器）。"""
+        # 整批都是「没点名机器人」的消息时，先让判断模型决定要不要开口。只要
+        # 混进一条 @ 或命中触发词的，就照常回，不必问。
+        voluntary = all(it.get("tentative") for it in batch)
+        if voluntary and not self._should_interject():
+            return
+        if voluntary:
+            # 主动开口不是「回复谁」——那些群消息也不是对它说的，所以不能当
+            # 正文喂进去，否则模型会以为自己被问了。上下文由 extra_context
+            # 的群聊背景负责（图在其中就是一行 "[图片]"），这里只留一句说明。
+            batch = [{"text": interject.INTERJECT_PROMPT, "sender": "",
+                      "images": [], "quotes": []}]
+
         text = _merge_batch(batch)
         # 图片段单独收集：只发图不打字是合法用法（"帮我看下这个"），
         # 不能因为 text 为空就把整轮丢掉
@@ -567,7 +602,20 @@ class QQBot:
         ok, reason = _should_reply(ev, target, target_id, text, at_me,
                                    bool(image_urls), bool(quotes))
         if not ok:
-            log.debug("跳过 %s %s：%s", target, target_id, reason)
+            # 只有「没被 @、也没命中触发词」这一类才交给主动接话——它意味着
+            # 「这条不是冲机器人来的，但也许能搭个话」。@ 了却什么都没发、
+            # 在黑名单、群不在白名单这些照旧丢掉：前者说明对方还没说完或按错
+            # 了，让机器人凭空开口很奇怪；后两者是用户明确划的界。
+            #
+            # 判断不放这儿——_dispatch 跑在 WS 消息循环上，而这里要调模型，
+            # 会把所有群一起卡住。所以照常入队，由 worker 线程在解抖窗口之后
+            # 决定要不要开口（见 SessionRunner._run_turn）。
+            if reason == REASON_NO_MENTION and interject.enabled():
+                self._runner_for(
+                    _session_key(target, target_id), target, target_id
+                ).submit(text, sender, image_urls, quotes, tentative=True)
+            else:
+                log.debug("跳过 %s %s：%s", target, target_id, reason)
             return
 
         session_key = _session_key(target, target_id)

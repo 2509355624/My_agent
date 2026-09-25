@@ -249,3 +249,30 @@ QQ_PENDING_MAX_CHARS = int(os.getenv("QQ_PENDING_MAX_CHARS", "2000"))
 QQ_CONTEXT_MESSAGES = int(os.getenv("QQ_CONTEXT_MESSAGES", "30"))
 # 背景的字数上限，从最新往前累计。群聊刷屏时不封顶会吃光单轮预算。
 QQ_CONTEXT_MAX_CHARS = int(os.getenv("QQ_CONTEXT_MAX_CHARS", "1500"))
+
+# ─── 主动接话 ─────────────────────────────────────────
+# 让机器人在群里像个人一样自己开口，而不是只在被 @ 时回复。没 @ 也没命中
+# 触发词的消息，会先问一次模型「此刻值不值得插一句」，判「接」且过了冷却闸
+# 才叫主模型开口。详见 app/interject.py 开头（含为什么不用本地小模型的实测）。
+#
+# off 完全不做（默认，零开销）；shadow 照常判断、记日志，但不发言——用来
+# 观察判得准不准；on 才真的开口。**建议先 shadow 跑一两天**。
+QQ_INTERJECT_MODE = os.getenv("QQ_INTERJECT_MODE", "off").strip().lower()
+
+# 只在这些群里生效，留空表示所有群。主动说话说错撤不回来，建议先填一个群。
+QQ_INTERJECT_GROUPS = _env_list("QQ_INTERJECT_GROUPS")
+
+# 同一个群两次主动开口的最小间隔（秒）。这是防刷屏的硬闸：判错一次是意外，
+# 连着说就是骚扰。0 表示不限制（不建议）。
+QQ_INTERJECT_COOLDOWN = int(os.getenv("QQ_INTERJECT_COOLDOWN", "180"))
+
+# 同一个群两次「判断」之间的最小间隔（秒）。判断本身也是一次 API 调用，
+# 群聊刷屏时不能每条都问。0 表示不限制（不建议）。
+QQ_INTERJECT_MIN_GAP = int(os.getenv("QQ_INTERJECT_MIN_GAP", "15"))
+
+# 判断时看多少条群聊上下文 / 字数上限。判断是每群高频调用，口子比
+# QQ_CONTEXT_* 收得更紧——prompt 越短越省钱。
+QQ_INTERJECT_CONTEXT_MESSAGES = int(
+    os.getenv("QQ_INTERJECT_CONTEXT_MESSAGES", "12"))
+QQ_INTERJECT_CONTEXT_MAX_CHARS = int(
+    os.getenv("QQ_INTERJECT_CONTEXT_MAX_CHARS", "600"))

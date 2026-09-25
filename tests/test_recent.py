@@ -164,6 +164,12 @@ class DispatchRecordsGroupTest(_TmpAgentsMixin, unittest.TestCase):
             p = mock.patch.object(qq_bot, name, value)
             p.start()
             self.addCleanup(p.stop)
+        # 这个类测的是「不 @ 也记缓存」。主动接话开着时，不 @ 的消息还会被交给
+        # 判断链路，turns 断言就不再是空的——那是另一条链路的用例该管的事
+        # （tests/test_interject.py），这里显式关掉，别受 .env 当前配置影响。
+        p = mock.patch.object(qq_bot.interject, "enabled", return_value=False)
+        p.start()
+        self.addCleanup(p.stop)
 
     def _event(self, text="", user_id="1", group_id="9", mtype="group",
                self_id="999", at=False, image=False):

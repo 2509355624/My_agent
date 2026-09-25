@@ -621,6 +621,11 @@ class DispatchQuoteTest(unittest.TestCase):
             p = mock.patch.object(qq_bot, name, value)
             p.start()
             self.addCleanup(p.stop)
+        # 主动接话是另一条链路，有自己的用例（tests/test_interject.py）。这里
+        # 要固定的是触发规则本身，所以显式关掉它，不受 .env 当前配置影响。
+        p = mock.patch.object(qq_bot.interject, "enabled", return_value=False)
+        p.start()
+        self.addCleanup(p.stop)
 
     def _dispatch(self, segs, at=True):
         captured = {}
