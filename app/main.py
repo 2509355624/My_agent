@@ -587,12 +587,69 @@ def get_agent_sessions(agent_id):
                           name="", session=False))
     items.sort(key=lambda x: x["mtime"], reverse=True)
     names_ok = _decorate_session_names(items)
-    # 每个群顺手带上「主动发言」开关的当前值，管理页渲染用
-    muted = set(agent_store.load_settings(aid).get("interject_muted") or [])
+    # 每个群顺手带上「主动发言」「生图」两个开关的当前值，管理页渲染用
+    settings = agent_store.load_settings(aid)
+    muted = set(settings.get("interject_muted") or [])
+    img_muted = set(settings.get("image_gen_muted") or [])
     for item in items:
         if item["kind"] == "group":
             item["interject"] = item["target_id"] not in muted
-    return jsonify({"sessions": items, "names_ok": names_ok, "agent": aid})
+            item["image_gen"] = item["target_id"] not in img_muted
+    return jsonify({"sessions": items, "names_ok": names_ok, "agent": aid,
+                    "image_gen_on": settings.get("image_gen") is not False})
+
+
+@app.route("/api/agent/<agent_id>/image_gen", methods=["PUT"])
+def set_agent_image_gen(agent_id):
+    """切该 agent 的生图总闸（一键关闭/恢复全部 QQ 生图）。热生效。
+
+    settings.json 的 image_gen 字段：False = 全关；缺省 = 开。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body.get("enabled"), bool):
+        return jsonify({"error": "需要布尔字段 enabled"}), 400
+
+    settings = agent_store.load_settings(aid)
+    settings["image_gen"] = body["enabled"]
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "image_gen": body["enabled"]})
+
+
+@app.route("/api/agent/<agent_id>/image_gen/<group_id>", methods=["PUT"])
+def set_agent_image_gen_group(agent_id, group_id):
+    """切某个群的生图开关（总闸开着时才有效）。热生效。
+
+    存 settings.json 的 image_gen_muted（「关」的语义，与 interject_muted
+    同型）：名单里的群不能生图，不在名单的可以。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if "enabled" not in body or not isinstance(body["enabled"], bool):
+        return jsonify({"error": "需要布尔字段 enabled"}), 400
+
+    settings = agent_store.load_settings(aid)
+    muted = set(settings.get("image_gen_muted") or [])
+    if body["enabled"]:
+        muted.discard(str(group_id))
+    else:
+        muted.add(str(group_id))
+    settings["image_gen_muted"] = sorted(muted)
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "group": str(group_id),
+                    "image_gen": body["enabled"]})
 
 
 @app.route("/api/agent/<agent_id>/interject/<group_id>", methods=["PUT"])

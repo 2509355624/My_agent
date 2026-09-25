@@ -226,6 +226,11 @@
         <h2>会话管理</h2>
         <div class="hint">每个群、每个私聊各有一条独立的会话线，互不影响。删掉某一条 = 重置那条对话，
           这个 agent 的人设、工具与技能白名单都不动。删除不可恢复。</div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
+          <button class="toggle" id="imgGenAll">QQ 生图·开</button>
+          <span class="hint">一键关闭 / 恢复这个 agent 在所有 QQ 会话的生图（网页端不受影响）。
+            单独某个群不想让它画，用群行里的「生图」开关。</span>
+        </div>
         <div class="sess" id="sessList"></div>
         <div class="sess-foot">
           <button class="ghost" id="sessReload">刷新</button>
@@ -621,6 +626,13 @@ function renderSessions() {
       tg.textContent = s.interject ? '主动发言·开' : '主动发言·关';
       tg.addEventListener('click', () => toggleInterject(s, tg));
       row.appendChild(tg);
+
+      // 「生图」开关：关掉 = 这个群点生图工具会被直接拒绝（总闸优先）。
+      const ig = document.createElement('button');
+      ig.className = 'toggle' + (s.image_gen ? ' on' : '');
+      ig.textContent = s.image_gen ? '生图·开' : '生图·关';
+      ig.addEventListener('click', () => toggleImageGen(s, ig));
+      row.appendChild(ig);
     }
 
     // 没有会话线的群（收到过消息但从没回过）没有聊天记录可删
@@ -644,6 +656,7 @@ async function loadSessions() {
     const d = await api('/api/agent/' + encodeURIComponent(cur) + '/sessions');
     sessions = d.sessions || [];
     renderSessions();
+    renderImageGenAll(d.image_gen_on !== false);
     // 名字要问 QQ 协议端，拿不到只是显示得糙一点，不影响删除
     sessStatus(d.names_ok ? '' : 'NapCat 没连上，群里只显示群号（不影响删除）',
                d.names_ok ? '' : 'err');
@@ -668,6 +681,57 @@ async function toggleInterject(s, btn) {
     renderSessions();
     sessStatus('「' + name + '」已' + (target ? '开启' : '关闭')
       + '主动发言，立即生效', 'ok');
+  } catch (e) {
+    sessStatus(e.message, 'err');
+    btn.disabled = false;
+  }
+}
+
+// ─── 生图开关 ────────────────────────────────────────
+// 总闸一键关全部 QQ 生图；单群开关只管各自群。都存 settings.json，热生效。
+
+function renderImageGenAll(on) {
+  const btn = $('imgGenAll');
+  btn.className = 'toggle' + (on ? ' on' : '');
+  btn.textContent = on ? 'QQ 生图·开' : 'QQ 生图·全关';
+  btn.disabled = false;
+}
+
+async function toggleImageGenAll() {
+  const btn = $('imgGenAll');
+  const target = !btn.className.includes(' on');   // 当前状态取反
+  if (!target && !confirm('一键关闭全部生图？\n\n'
+      + '这个 agent 在所有群和私聊里都点不动生图工具，网页端不受影响。')) return;
+  btn.disabled = true;
+  try {
+    await api('/api/agent/' + encodeURIComponent(cur) + '/image_gen',
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: target }) });
+    renderImageGenAll(target);
+    sessStatus('QQ 生图已全部' + (target ? '开启' : '关闭') + '，立即生效', 'ok');
+  } catch (e) {
+    sessStatus(e.message, 'err');
+    btn.disabled = false;
+  }
+}
+
+async function toggleImageGen(s, btn) {
+  const target = !s.image_gen;
+  const name = s.name || s.target_id;
+  if (!target && !confirm('关掉「' + name + '」的生图？\n\n'
+      + '它在这个群里点生图会被拒绝（总闸不受影响，全局关闭时这里开关无效）。')) return;
+  btn.disabled = true;
+  try {
+    await api('/api/agent/' + encodeURIComponent(cur) + '/image_gen/'
+      + encodeURIComponent(s.target_id),
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: target }) });
+    s.image_gen = target;
+    renderSessions();
+    sessStatus('「' + name + '」已' + (target ? '开启' : '关闭')
+      + '生图，立即生效', 'ok');
   } catch (e) {
     sessStatus(e.message, 'err');
     btn.disabled = false;
@@ -717,6 +781,7 @@ $('reload').addEventListener('click', () => {
   loadDetail().catch((e) => status(e.message, 'err'));
 });
 $('sessReload').addEventListener('click', loadSessions);
+$('imgGenAll').addEventListener('click', toggleImageGenAll);
 $('provider').addEventListener('change', () => {
   const pid = $('provider').value || detail.global_provider;
   $('model').placeholder = '默认 ' + (defaultModelOf(pid) || '—');

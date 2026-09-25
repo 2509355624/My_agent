@@ -155,5 +155,45 @@ class ChunkSizeTest(unittest.TestCase):
         self.assertEqual(result["chunk_size"], 600)
 
 
+class ImageGenGateTest(unittest.TestCase):
+    """QQ 侧生图开关的工具闸：generate_image 入口按线程上下文拒绝。
+
+    开关本体存 settings.json（管理页切，热生效），这里只测闸本身：
+    非 QQ 会话放行、被拒时返回可转述的话、拒绝路径绝不碰 ComfyUI。
+    """
+
+    def test_gate_passes_outside_qq(self):
+        # 网页端对话没有 QQ 绑定 → 不受限
+        from app.tools.normal import generate_image as gi
+        with mock.patch("app.qq_api.current_context",
+                        return_value=(None, None)):
+            self.assertIsNone(gi._qq_gate())
+
+    def test_gate_blocks_when_denied(self):
+        from app.tools.normal import generate_image as gi
+        with mock.patch("app.qq_api.current_context",
+                        return_value=("group", "111")), \
+                mock.patch("app.agents.image_gen_allowed",
+                           return_value=(False, "生图功能已被管理员全局关闭")):
+            out = gi._qq_gate()
+        self.assertIn("管理员", out)
+
+    def test_generate_image_refuses_without_touching_comfyui(self):
+        from app.tools.normal import generate_image as gi
+        with mock.patch.object(gi, "_qq_gate",
+                               return_value="错误：生图已被关闭"), \
+                mock.patch.object(gi, "_queue_prompt") as queue:
+            out = gi._generate_image("1girl")
+        self.assertIn("错误", out)
+        queue.assert_not_called()     # 闸住了就不能往 ComfyUI 队列塞任务
+
+    def test_generate_image_passes_when_allowed(self):
+        # 闸放行后照常走 skill 加载（这里让它失败在 skill 上，证明确实过了闸）
+        from app.tools.normal import generate_image as gi
+        with mock.patch.object(gi, "_qq_gate", return_value=None):
+            out = gi._generate_image("1girl", skill="不存在的skill")
+        self.assertIn("找不到 Skill", out)
+
+
 if __name__ == "__main__":
     unittest.main()

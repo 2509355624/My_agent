@@ -7,8 +7,29 @@ import random
 import uuid
 from flask import request
 from app.cancel import Cancelled, is_cancelled
-from app.config import COMFYUI_URL, IMAGE_GEN_TIMEOUT
+from app.config import COMFYUI_URL, IMAGE_GEN_TIMEOUT, QQ_AGENT_ID
 from app.skills import load_skill
+
+
+# ─── QQ 侧生图开关 ───────────────────────────────────
+
+def _qq_gate():
+    """QQ 会话里的生图总闸 + 单群闸；非 QQ 会话（网页端）不受限。
+
+    靠 qq_api 的线程本地绑定知道「此刻在为哪个 QQ 会话服务」。管理页
+    关掉后下一轮就生效（settings.json 走 mtime 缓存），不用重启。拒绝
+    时返回一句模型能转述的话，而不是抛错——让它正常回话「生图被关了」，
+    别让整轮变成工具执行失败。
+    """
+    from app import qq_api
+    from app.agents import image_gen_allowed
+    target, target_id = qq_api.current_context()
+    if target is None:
+        return None
+    ok, why = image_gen_allowed(QQ_AGENT_ID, target, target_id)
+    return None if ok else ("错误：" + why
+                            + "，本次不生成图片。别再重试，"
+                              "直接告诉对方现在画不了。")
 
 
 # ─── ComfyUI 内部函数 ────────────────────────────────
@@ -63,6 +84,10 @@ def _generate_image(prompt, skill="image_gen_v1", use_character=True):
     # 提交前先看一眼：已经中断就别再往 ComfyUI 队列里塞新任务了
     if is_cancelled():
         return "已中断：用户取消了本次生成。"
+
+    gate = _qq_gate()
+    if gate is not None:
+        return gate
 
     skill_data = load_skill(skill)
     if not skill_data or not skill_data["workflow"]:

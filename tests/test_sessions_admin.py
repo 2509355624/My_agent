@@ -343,6 +343,70 @@ class InterjectToggleApiTest(SessionsTestBase):
         self.assertNotIn("interject", d["sessions"][0])
 
 
+class ImageGenToggleApiTest(SessionsTestBase):
+    """生图开关：全局总闸 + 单群名单，settings.json 热生效。
+
+    判定逻辑在 agents.image_gen_allowed，执行闸在 generate_image 工具入口
+    （这里测 API 与持久化，工具闸的线程上下文测试见 test_tools_registry）。
+    """
+
+    def test_sessions_carry_state_and_global_default_on(self):
+        self.write_session("qq", key="group_111")
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertTrue(d["image_gen_on"])           # 没配过 = 开
+        self.assertTrue(d["sessions"][0]["image_gen"])
+
+    def test_global_off_persists_and_reflects(self):
+        resp = self.client.put("/api/agent/qq/image_gen",
+                               json={"enabled": False})
+        self.assertEqual(resp.status_code, 200)
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertFalse(d["image_gen_on"])
+        self.assertIs(agents.load_settings("qq")["image_gen"], False)
+
+    def test_global_route_requires_enabled_bool(self):
+        for bad in ({}, {"enabled": "yes"}, {"enabled": 1}):
+            resp = self.client.put("/api/agent/qq/image_gen", json=bad)
+            self.assertEqual(resp.status_code, 400)
+
+    def test_group_mute_persists_and_reflects(self):
+        self.write_session("qq", key="group_111")
+        resp = self.client.put("/api/agent/qq/image_gen/111",
+                               json={"enabled": False})
+        self.assertEqual(resp.status_code, 200)
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertFalse(d["sessions"][0]["image_gen"])
+        self.assertEqual(agents.load_settings("qq")["image_gen_muted"], ["111"])
+
+    def test_group_unmute_removes_from_list(self):
+        agents.save_settings("qq", {"image_gen_muted": ["111"]})
+        self.client.put("/api/agent/qq/image_gen/111", json={"enabled": True})
+        self.assertEqual(agents.load_settings("qq")["image_gen_muted"], [])
+
+    def test_routes_remote_blocked_by_default(self):
+        resp = self.client.put("/api/agent/qq/image_gen",
+                               json={"enabled": False},
+                               environ_base={"REMOTE_ADDR": "8.8.8.8"})
+        self.assertEqual(resp.status_code, 403)
+        resp = self.client.put("/api/agent/qq/image_gen/111",
+                               json={"enabled": False},
+                               environ_base={"REMOTE_ADDR": "8.8.8.8"})
+        self.assertEqual(resp.status_code, 403)
+
+    def test_policy_global_switch_beats_group_list(self):
+        # 总闸优先于单群名单；私聊只看总闸；名单里没有的群照常
+        self.assertTrue(agents.image_gen_allowed("qq", "group", "111")[0])
+        agents.save_settings("qq", {"image_gen_muted": ["111"]})
+        self.assertFalse(agents.image_gen_allowed("qq", "group", "111")[0])
+        self.assertTrue(agents.image_gen_allowed("qq", "group", "222")[0])
+        self.assertTrue(agents.image_gen_allowed("qq", "private", "111")[0])
+        agents.save_settings("qq", {"image_gen": False,
+                                    "image_gen_muted": ["111"]})
+        self.assertFalse(agents.image_gen_allowed("qq", "private", "999")[0])
+        # 拒绝时给理由（模型要能转述），放行时理由为空
+        self.assertTrue(agents.image_gen_allowed("qq", "group", "111")[1])
+
+
 class RecentGroupMergeTest(SessionsTestBase):
     """只收过消息、没回复过的群也要进管理页列表（统一开关主动发言）。"""
 

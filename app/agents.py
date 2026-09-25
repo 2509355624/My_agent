@@ -120,6 +120,22 @@ def save_settings(agent_id, settings):
     return True
 
 
+def image_gen_allowed(agent_id, target, target_id):
+    """QQ 侧生图能不能用。返回 (True, "") 或 (False, 拒绝理由)。
+
+    两层闸都在 settings.json（热生效，不用重启）：
+    - image_gen: 全局总闸，False = 这个 agent 的 QQ 会话里一律不能生图；
+    - image_gen_muted: 单群名单，「关」的语义——名单里的群不能生图。
+    只在 QQ 会话里管（target 非 None 才有绑定）；网页端对话不受限。
+    """
+    s = load_settings(agent_id)
+    if s.get("image_gen") is False:
+        return False, "生图功能已被管理员全局关闭"
+    if target == "group" and str(target_id) in (s.get("image_gen_muted") or []):
+        return False, "生图功能在本群已被管理员关闭"
+    return True, ""
+
+
 def safe_agent_id(agent_id):
     """校验并规范化 agent_id；非法返回 None。
 
