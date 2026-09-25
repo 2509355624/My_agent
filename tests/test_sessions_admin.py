@@ -256,5 +256,92 @@ class SessionApiTest(SessionsTestBase):
         self.assertEqual(resp.status_code, 200)
 
 
+class SettingsStoreTest(SessionsTestBase):
+    """settings.json：agent 级运行时开关的存取。"""
+
+    def test_missing_file_means_empty_settings(self):
+        self.assertEqual(agents.load_settings("qq"), {})
+
+    def test_save_then_load_roundtrip(self):
+        self.assertTrue(agents.save_settings("qq", {"interject_muted": ["111"]}))
+        self.assertEqual(agents.load_settings("qq"),
+                         {"interject_muted": ["111"]})
+
+    def test_save_invalidates_cache(self):
+        agents.save_settings("qq", {"a": 1})
+        agents.save_settings("qq", {"a": 2})
+        self.assertEqual(agents.load_settings("qq"), {"a": 2})
+
+    def test_corrupt_file_degrades_to_empty(self):
+        os.makedirs(os.path.join(self.root, "qq"), exist_ok=True)
+        with open(os.path.join(self.root, "qq", "settings.json"), "w",
+                  encoding="utf-8") as f:
+            f.write("{broken")
+        self.assertEqual(agents.load_settings("qq"), {})
+
+    def test_non_dict_file_degrades_to_empty(self):
+        os.makedirs(os.path.join(self.root, "qq"), exist_ok=True)
+        with open(os.path.join(self.root, "qq", "settings.json"), "w",
+                  encoding="utf-8") as f:
+            f.write("[1, 2]")
+        self.assertEqual(agents.load_settings("qq"), {})
+
+    def test_illegal_agent_id_rejected(self):
+        self.assertIsNone(agents.settings_path("../etc"))
+        self.assertFalse(agents.save_settings("../etc", {"a": 1}))
+        self.assertEqual(agents.load_settings("../etc"), {})
+
+    def test_rejects_non_dict_payload(self):
+        self.assertFalse(agents.save_settings("qq", ["not", "a", "dict"]))
+
+
+class InterjectToggleApiTest(SessionsTestBase):
+    """群聊「主动发言」开关：管理页切换 → settings.json → 热生效。"""
+
+    def test_sessions_carry_interject_state_default_on(self):
+        self.write_session("qq", key="group_111")
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertTrue(d["sessions"][0]["interject"])
+
+    def test_put_mute_persists_and_reflects(self):
+        self.write_session("qq", key="group_111")
+        resp = self.client.put("/api/agent/qq/interject/111",
+                               json={"enabled": False})
+        self.assertEqual(resp.status_code, 200)
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertFalse(d["sessions"][0]["interject"])
+        self.assertEqual(agents.load_settings("qq")["interject_muted"],
+                         ["111"])
+
+    def test_put_unmute_removes_from_list(self):
+        agents.save_settings("qq", {"interject_muted": ["111"]})
+        self.client.put("/api/agent/qq/interject/111", json={"enabled": True})
+        self.assertEqual(agents.load_settings("qq")["interject_muted"], [])
+
+    def test_put_requires_enabled_bool(self):
+        self.write_session("qq", key="group_111")
+        for bad in ({}, {"enabled": "yes"}, {"enabled": 1}):
+            resp = self.client.put("/api/agent/qq/interject/111", json=bad)
+            self.assertEqual(resp.status_code, 400)
+
+    def test_put_remote_blocked_by_default(self):
+        resp = self.client.put("/api/agent/qq/interject/111",
+                               json={"enabled": False},
+                               environ_base={"REMOTE_ADDR": "8.8.8.8"})
+        self.assertEqual(resp.status_code, 403)
+
+    def test_put_remote_allowed_when_opted_in(self):
+        with mock.patch.object(main, "ADMIN_ALLOW_REMOTE", True):
+            resp = self.client.put("/api/agent/qq/interject/111",
+                                   json={"enabled": False},
+                                   environ_base={"REMOTE_ADDR": "8.8.8.8"})
+        self.assertEqual(resp.status_code, 200)
+
+    def test_private_sessions_carry_no_interject_field(self):
+        self.write_session("qq", key="private_222")
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertNotIn("interject", d["sessions"][0])
+
+
 if __name__ == "__main__":
     unittest.main()

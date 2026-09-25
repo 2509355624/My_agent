@@ -126,6 +126,35 @@ class DecideGuardTest(_StateIsolationMixin, unittest.TestCase):
             self.assertIsNone(interject.decide("qq", "1041079621"))
         llm.assert_not_called()
 
+    def test_muted_group_returns_none(self):
+        # 管理页把群静音后，settings.json 热生效——判断一个都不发
+        self._mode("shadow")
+        p = mock.patch.object(interject.agent_store, "load_settings",
+                              return_value={"interject_muted":
+                                            ["1041079621"]})
+        p.start()
+        self.addCleanup(p.stop)
+        with mock.patch.object(interject, "call_llm") as llm:
+            self.assertIsNone(interject.decide("qq", "1041079621"))
+        llm.assert_not_called()
+
+    def test_mute_is_per_group(self):
+        self._mode("shadow")
+        p = mock.patch.object(interject, "QQ_INTERJECT_GROUPS", [])
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(interject.agent_store, "load_settings",
+                              return_value={"interject_muted": ["999"]})
+        p.start()
+        self.addCleanup(p.stop)
+        with mock.patch.object(interject.recent, "format_recent",
+                               return_value="张三：在吗"), \
+                mock.patch.object(interject, "call_llm",
+                                  return_value="不接") as llm:
+            verdict = interject.decide("qq", "1041079621")
+        self.assertIsNotNone(verdict)
+        llm.assert_called_once()
+
     def test_empty_group_list_means_all_groups(self):
         self._mode("shadow")
         p = mock.patch.object(interject, "QQ_INTERJECT_GROUPS", [])

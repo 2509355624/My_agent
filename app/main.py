@@ -578,7 +578,42 @@ def get_agent_sessions(agent_id):
         return err
     items = agent_store.list_sessions(aid)
     names_ok = _decorate_session_names(items)
+    # 每个群顺手带上「主动发言」开关的当前值，管理页渲染用
+    muted = set(agent_store.load_settings(aid).get("interject_muted") or [])
+    for item in items:
+        if item["kind"] == "group":
+            item["interject"] = item["target_id"] not in muted
     return jsonify({"sessions": items, "names_ok": names_ok, "agent": aid})
+
+
+@app.route("/api/agent/<agent_id>/interject/<group_id>", methods=["PUT"])
+def set_agent_interject(agent_id, group_id):
+    """切某个群的「主动发言」开关。热生效，不用重启。
+
+    管理类写操作与 DELETE 同一道门：默认只允许本机。设置存 settings.json
+    （agent 级运行时开关），不动 agent.json（那是重启级配置）。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if "enabled" not in body or not isinstance(body["enabled"], bool):
+        return jsonify({"error": "需要布尔字段 enabled"}), 400
+
+    settings = agent_store.load_settings(aid)
+    muted = set(settings.get("interject_muted") or [])
+    if body["enabled"]:
+        muted.discard(str(group_id))
+    else:
+        muted.add(str(group_id))
+    settings["interject_muted"] = sorted(muted)
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "group": str(group_id),
+                    "interject": body["enabled"]})
 
 
 @app.route("/api/agent/<agent_id>/sessions/<key>", methods=["DELETE"])

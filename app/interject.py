@@ -195,11 +195,21 @@ def _log_verdict(agent_id, group_id, verdict):
         log.warning("写接话判断日志失败 %s：%s", path, exc)
 
 
+def muted_groups(agent_id):
+    """该 agent 被管理页静音的群列表（settings.json 的 interject_muted）。
+
+    热生效：管理页保存即写盘，这里 mtime 缓存读，下一轮消息就生效，
+    不用重启。名单是「关」的语义——env 的试点白名单管「谁可以」，这里
+    管「谁被按了静音」，两层独立。
+    """
+    return agent_store.load_settings(agent_id).get("interject_muted") or []
+
+
 def decide(agent_id, group_id):
     """判断这个群此刻值不值得主动开口。
 
-    返回 None 表示「这次不判断」（功能没开、群不在试点名单、冷却中、节流中、
-    没上下文、调用失败）。返回 dict 时字段含义：
+    返回 None 表示「这次不判断」（功能没开、群不在试点名单、被静音、
+    冷却中、节流中、没上下文、调用失败）。返回 dict 时字段含义：
         choice      模型给的判断，「接」或「不接」
         want        模型说该接
         cooled      发言冷却已过
@@ -211,6 +221,8 @@ def decide(agent_id, group_id):
         return None
     gid = str(group_id)
     if QQ_INTERJECT_GROUPS and gid not in QQ_INTERJECT_GROUPS:
+        return None
+    if gid in muted_groups(agent_id):
         return None
     # 正式模式下冷却中连判断都不做——判断也是一次 API 调用，判完反正开不了
     # 口，白花时间白刷日志。影子模式不跳：观察期就是要看它对每条消息的判断。

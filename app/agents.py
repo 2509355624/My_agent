@@ -61,6 +61,63 @@ def clear_cache():
     """
     _cfg_cache.clear()
     _persona_cache.clear()
+    _settings_cache.clear()
+
+
+# ─── agent 级运行时设置（settings.json，管理页在线改的开关放这里）───
+# 配置（agent.json）描述「这个 agent 是谁」，改完通常要重启或走 clear_cache；
+# 设置（settings.json）描述「运行中想临时拨动的开关」，必须热生效——
+# mtime 缓存足够：管理页保存即写盘，下一轮对话就读到新值。
+
+SETTINGS_FILE = "settings.json"
+_settings_cache = {}
+
+
+def settings_path(agent_id):
+    """settings.json 的路径；非法 id 返回 None。"""
+    d = agent_dir(agent_id)
+    return None if d is None else os.path.join(d, SETTINGS_FILE)
+
+
+def load_settings(agent_id):
+    """读该 agent 的运行时设置；文件不存在/坏掉时返回 {}（绝不抛错——
+    它在每轮消息的热路径上，坏了宁可全用默认值也不能让消息处理挂掉）。"""
+    path = settings_path(agent_id)
+    if path is None:
+        return {}
+    try:
+        mt = os.path.getmtime(path)
+    except OSError:
+        return {}
+    cached = _settings_cache.get(agent_id)
+    if cached and cached[0] == mt:
+        return cached[1]
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (ValueError, OSError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    _settings_cache[agent_id] = (mt, data)
+    return data
+
+
+def save_settings(agent_id, settings):
+    """覆盖写入 settings.json，返回是否成功。管理页的写入口。"""
+    path = settings_path(agent_id)
+    if path is None or not isinstance(settings, dict):
+        return False
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except OSError:
+        return False
+    _settings_cache.pop(agent_id, None)
+    return True
 
 
 def safe_agent_id(agent_id):
