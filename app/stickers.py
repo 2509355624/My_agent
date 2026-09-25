@@ -321,6 +321,8 @@ def records_by_numbers(agent_id, nums_text):
         if not 1 <= n <= len(entries):
             continue
         rec = entries[n - 1]
+        if not isinstance(rec, dict):
+            continue          # 索引坏行：_load_index 已滤一道，这里再兜一道
         if rec.get("deleted"):
             continue
         if os.path.exists(os.path.join(d, rec.get("file", ""))):

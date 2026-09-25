@@ -144,6 +144,16 @@ def _call(action, payload=None, timeout=20):
     except ValueError:
         raise RuntimeError("OneBot 返回不是 JSON：" + resp.text[:200])
 
+    if not isinstance(data, dict):
+        # POST 已经完成：请求送达且 NapCat 已处理——发送类 action 走到这一步，
+        # 消息多半已经发出去了。实测偶发响应不是预期对象（json() 解析成字符串），
+        # 之前在这里 data.get 崩掉、被上层当「发送失败」上报，模型便以为图没发
+        # 出去，下文接着编「发不出来」——比丢一次返回值严重得多。按成功处理，
+        # 原文进日志留证。
+        log.warning("OneBot %s 返回非对象响应，按成功处理：%s",
+                    action, str(data)[:120])
+        return {}
+
     if data.get("status") == "failed" or data.get("retcode") not in (0, None):
         raise RuntimeError("OneBot 调用失败 %s: %s" % (action, str(data)[:300]))
     return data.get("data") or {}
