@@ -259,6 +259,42 @@ def list_sessions(agent_id):
     return items
 
 
+def recent_group_stats(agent_id):
+    """群聊观察缓存的体量：{群号: {messages, size, mtime}}。
+
+    群消息一律先记进 recent/（旁观记忆），但只有真正回复过的群才有
+    sessions/ 会话线。管理页要把「收到过消息但从没回过」的群也列出来
+    （不然开关都找不到它们），就靠这份统计补行。
+    """
+    aid = safe_agent_id(agent_id)
+    if aid is None:
+        return {}
+    d = os.path.join(AGENTS_DIR, aid, "recent")
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        return {}
+    stats = {}
+    for fname in names:
+        if not fname.startswith("group_") or not fname.endswith(".jsonl"):
+            continue
+        gid = fname[len("group_"):-len(".jsonl")]
+        if not gid.isdigit():
+            continue
+        path = os.path.join(d, fname)
+        try:
+            size = os.path.getsize(path)
+            mtime = os.path.getmtime(path)
+            with open(path, "r", encoding="utf-8") as f:
+                lines = sum(1 for line in f if line.strip())
+        except (OSError, UnicodeDecodeError):
+            continue
+        # recent 缓存没有 system 头，行数就是消息条数（别复用 _session_stat，
+        # 那个会扣首行）
+        stats[gid] = {"messages": lines, "size": size, "mtime": mtime}
+    return stats
+
+
 def delete_session(agent_id, key):
     """删除一条会话线，返回 (是否成功, 错误信息)。
 

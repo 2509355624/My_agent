@@ -577,6 +577,15 @@ def get_agent_sessions(agent_id):
     if err:
         return err
     items = agent_store.list_sessions(aid)
+    # 「收到过消息但从没回过」的群没有会话线（被 @ 之前一直潜水），
+    # 管理页也要列出它们才能统一开关主动发言。有会话线的以会话为准。
+    for gid, stat in agent_store.recent_group_stats(aid).items():
+        key = "group_" + gid
+        if any(i["key"] == key for i in items):
+            continue
+        items.append(dict(stat, key=key, kind="group", target_id=gid,
+                          name="", session=False))
+    items.sort(key=lambda x: x["mtime"], reverse=True)
     names_ok = _decorate_session_names(items)
     # 每个群顺手带上「主动发言」开关的当前值，管理页渲染用
     muted = set(agent_store.load_settings(aid).get("interject_muted") or [])

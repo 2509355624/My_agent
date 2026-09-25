@@ -343,5 +343,54 @@ class InterjectToggleApiTest(SessionsTestBase):
         self.assertNotIn("interject", d["sessions"][0])
 
 
+class RecentGroupMergeTest(SessionsTestBase):
+    """只收过消息、没回复过的群也要进管理页列表（统一开关主动发言）。"""
+
+    def write_recent(self, aid, gid, lines=("m1", "m2")):
+        d = os.path.join(self.root, aid, "recent")
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, "group_%s.jsonl" % gid)
+        with open(path, "w", encoding="utf-8") as f:
+            for x in lines:
+                f.write(json.dumps({"t": 1, "n": "甲", "x": x}, ensure_ascii=False)
+                        + "\n")
+        return path
+
+    def test_recent_only_group_is_merged_with_session_flag(self):
+        self.write_recent("qq", "333")
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        row = self.by_key(d["sessions"])["group_333"]
+        self.assertFalse(row["session"])
+        self.assertEqual(row["target_id"], "333")
+        self.assertEqual(row["messages"], 2)
+        self.assertTrue(row["interject"])
+
+    def test_sessions_with_history_are_not_duplicated(self):
+        self.write_session("qq", key="group_111")
+        self.write_recent("qq", "111")
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        rows = [i for i in d["sessions"] if i["key"] == "group_111"]
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0].get("session", True))
+
+    def test_non_group_or_non_numeric_files_are_ignored(self):
+        d = os.path.join(self.root, "qq", "recent")
+        os.makedirs(d, exist_ok=True)
+        for fname in ("private_1.jsonl", "group_abc.jsonl", "group_.jsonl",
+                      "notes.txt"):
+            with open(os.path.join(d, fname), "w", encoding="utf-8") as f:
+                f.write("{}\n")
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertEqual([i for i in d["sessions"] if i.get("session") is False],
+                         [])
+
+    def test_recent_stats_helper_counts_groups(self):
+        self.write_recent("qq", "333")
+        self.write_recent("qq", "444", lines=())
+        stats = agents.recent_group_stats("qq")
+        self.assertEqual(sorted(stats), ["333", "444"])
+        self.assertEqual(stats["333"]["messages"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -623,11 +623,14 @@ function renderSessions() {
       row.appendChild(tg);
     }
 
-    const del = document.createElement('button');
-    del.className = 'danger';
-    del.textContent = '删除';
-    del.addEventListener('click', () => removeSession(s, del));
-    row.appendChild(del);
+    // 没有会话线的群（收到过消息但从没回过）没有聊天记录可删
+    if (s.session !== false) {
+      const del = document.createElement('button');
+      del.className = 'danger';
+      del.textContent = '删除';
+      del.addEventListener('click', () => removeSession(s, del));
+      row.appendChild(del);
+    }
 
     box.appendChild(row);
   });
