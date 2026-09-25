@@ -27,6 +27,14 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
+# SCNet 超算互联网（Token Plan 套餐）。注意：控制台页面上写的「专用地址
+# /api/aim/v1」是错的（实测恒 404），真正能用的是通用 OpenAI 兼容端点
+# /api/llm/v1。套餐只支持 DeepSeek-V4.1-Flash-Event 一个模型，别的不认
+# （403 "The current model does not support Token Plan"）。
+SCNET_API_KEY = os.getenv("SCNET_API_KEY", "")
+SCNET_BASE_URL = os.getenv("SCNET_BASE_URL", "https://api.scnet.cn/api/llm/v1")
+SCNET_MODEL = os.getenv("SCNET_MODEL", "DeepSeek-V4.1-Flash-Event")
+
 # 动态 API 地址和模型名（根据 provider 切换）
 if LLM_PROVIDER == "deepseek":
     API_URL = DEEPSEEK_BASE_URL.rstrip("/") + "/chat/completions"
@@ -85,6 +93,17 @@ PROVIDERS = {
         "base_url": OLLAMA_BASE_URL,
         "model": OLLAMA_MODEL,
         "api_key": "",
+        "needs_key": False,
+        "vision": False,
+    },
+    # SCNet 超算互联网（国家超算 Token Plan，免费 credits 计费）。模型是
+    # DeepSeek-V4.1-Flash（带深度思考），套餐页面只承诺文本生成/深度思考，
+    # 没提图像理解 → vision 按 False 走识图预处理，稳妥。
+    "scnet": {
+        "label": "SCNet 超算",
+        "base_url": SCNET_BASE_URL,
+        "model": SCNET_MODEL,
+        "api_key": SCNET_API_KEY,
         "needs_key": False,
         "vision": False,
     },
