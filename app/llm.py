@@ -5,10 +5,13 @@ LLM 调用封装（支持多 Provider 动态路由）
 import codecs
 import json
 import threading
+import time
 import requests
 from app.cancel import is_cancelled
 from app.config import (API_URL, API_KEY, MODEL, LLM_PROVIDER,
-                        PROVIDERS, OLLAMA_BASE_URL, CONTEXT_BUDGET)
+                        PROVIDERS, OLLAMA_BASE_URL, CONTEXT_BUDGET,
+                        LLM_FALLBACK_CHAIN, LLM_REQUEST_TIMEOUT,
+                        LLM_FALLBACK_TTL)
 
 # 跨调用状态（缓存优化用）：记录最近一次请求的 token 用量与命中率。
 #
@@ -61,20 +64,27 @@ def get_effective_config(provider=None, model=None):
     }
 
 
-def call_llm(messages, timeout=600, provider=None, model=None):
-    """调用 LLM，返回回复文本。
+def call_llm(messages, timeout=None, provider=None, model=None):
+    """调用 LLM，返回回复文本（失败时按降级链依次往下试）。
 
-    - provider: 'volc' / 'doubao' / 'deepseek' / 'ollama'；默认当前生效 provider
+    - provider: 'volc' / 'doubao' / 'deepseek' / 'scnet' / 'scnet2' / 'ollama'
     - model: 覆盖该 provider 的默认模型
+    - timeout: 单次尝试的超时；不传用 LLM_REQUEST_TIMEOUT
     兼容旧调用 call_llm(messages)：用当前生效配置。
     """
-    eff = get_effective_config(provider, model)
-    resp_body = {
-        "messages": messages,
-        "stream": False,
-        "model": eff["model"],
-    }
-    return _call_provider(eff, resp_body, timeout)
+    timeout = timeout or LLM_REQUEST_TIMEOUT
+    targets = _chain_targets(provider, model)
+    last_err = None
+    for i, (pid, mname) in enumerate(targets):
+        eff = get_effective_config(pid, mname)
+        _log_effective(eff, stream=False, attempt=(i + 1, len(targets)))
+        body = {"messages": messages, "stream": False, "model": eff["model"]}
+        try:
+            return _call_provider(eff, body, timeout)
+        except Exception as e:
+            last_err = e
+            _mark_dead((pid, mname), _brief(e))
+    raise last_err
 
 
 def _extract_error(resp):
@@ -135,20 +145,112 @@ def _record_usage(usage, elapsed=None):
           f"(未命中 {miss}){tail} @{_now()}")
 
 
-def _log_effective(eff, stream):
+def _log_effective(eff, stream, attempt=None):
     """每次真实请求打一行用了谁——管理页切了模型之后，这里就是「实际生效」的
     唯一铁证（配置链路对不对，看这行比看后台展示准）。
 
     两个入口都要打：call_llm（摘要/接话判断）走 _call_provider，主对话走
     call_llm_stream，后者不经过 _call_provider——只打一处会让主对话全程无声。
+
+    attempt=(第几次, 共几次) 时带上序号，降级切换在日志里一眼可见：
+    `[llm] volc / deepseek-v4-flash-ga [1/3] stream` 后面紧跟一行 `[2/3]`，
+    就说明主模型失败、已经切到备胎了。
     """
-    print(f"[llm] {eff['provider']} / {eff['model']} "
-          f"{'stream' if stream else 'sync'} @{_now()}")
+    tag = "stream" if stream else "sync"
+    if attempt:
+        tag += " [%d/%d]" % attempt
+    print(f"[llm] {eff['provider']} / {eff['model']} {tag} @{_now()}")
+
+
+# ─── 候选链与失效记忆 ────────────────────────────────
+# 某个候选失败后短期不再试它，省掉「每条消息都先白撞一次」的等待。跨线程
+# 共享（同一个模型对所有会话都是坏的），所以不能像 _USAGE_LOCAL 那样按线程
+# 分开存。到期自动恢复，额度充值/服务恢复后不用重启。
+_DEAD = {}
+_DEAD_LOCK = threading.Lock()
+
+
+def parse_chain(text):
+    """解析 "provider:model,provider2:model2" → [(provider, model), ...]。
+
+    容忍空格、空项、只写 provider（用它的默认模型）；未知 provider 直接丢
+    （写错了就当作没这一项，总比把请求发给一个不存在的地址好）。
+    """
+    out = []
+    for part in (text or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        pid, _, mname = part.partition(":")
+        pid = pid.strip().lower()
+        cfg = PROVIDERS.get(pid)
+        if not cfg:
+            continue
+        out.append((pid, mname.strip() or cfg["model"]))
+    return out
+
+
+def _brief(err, limit=60):
+    """错误信息压成一行，够写进日志和拉黑理由就行。"""
+    text = " ".join(str(err).split())
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
+def _mark_dead(key, reason):
+    """把这个候选拉黑一段时间。失败是常态（额度用完、模型退役），只记日志。"""
+    with _DEAD_LOCK:
+        _DEAD[key] = time.time() + LLM_FALLBACK_TTL
+    print(f"[chain] {key[0]} / {key[1]} 拉黑 {LLM_FALLBACK_TTL:.0f}s"
+          f"（{reason}）@{_now()}")
+
+
+def reset_chain_state():
+    """清空失效记忆（测试用，也可在管理页做「立刻重试主模型」）。"""
+    with _DEAD_LOCK:
+        _DEAD.clear()
+
+
+def candidates(provider=None, model=None):
+    """本次请求依次尝试的 (provider, model) 列表。
+
+    链头是调用方指定的那个（agent 配置 / 管理页选择），后面接降级链里其余
+    项，重复的去掉——所以管理页手动切换依然优先，链只负责兜底。
+
+    已被拉黑的直接跳过（省掉「每条消息都先白撞一次」的等待）；如果全都被拉黑
+    了就照原样全试一遍：「全都不可用」意味着情况变了（比如额度刚到账），
+    直接报错不如重试一轮。
+    """
+    head = None
+    pid = (provider or "").strip().lower()
+    if pid in PROVIDERS:
+        head = (pid, (model or "").strip() or PROVIDERS[pid]["model"])
+
+    seen, ordered = set(), []
+    for item in ([head] if head else []) + parse_chain(LLM_FALLBACK_CHAIN):
+        if item in seen:
+            continue
+        seen.add(item)
+        ordered.append(item)
+    if not ordered:
+        return []
+
+    now = time.time()
+    alive = [c for c in ordered if _DEAD.get(c, 0) <= now]
+    return alive or ordered
+
+
+def _chain_targets(provider, model):
+    """把候选列表兜到「至少有一个」——链关掉且调用方也没指定时，仍按老路走
+    get_effective_config 的默认 provider。"""
+    cands = candidates(provider, model)
+    if cands:
+        return cands
+    eff = get_effective_config(provider, model)
+    return [(eff["provider"], eff["model"])]
 
 
 def _call_provider(eff, body, timeout):
-    """按 provider 分派请求。返回回复文本。"""
-    _log_effective(eff, stream=False)
+    """按 provider 分派请求。返回回复文本（用了谁由调用方打日志）。"""
     if eff["provider"] == "ollama":
         return _call_ollama(eff["base_url"], body, timeout)
 
@@ -253,26 +355,8 @@ def _parse_sse_line(line):
     return out
 
 
-def call_llm_stream(messages, timeout=600, provider=None, model=None,
-                    cancel_event=None):
-    """流式调用 LLM，逐块产出 (kind, text)。
-
-    kind 只有两种：
-      - "reasoning"：思考内容，**仅供展示，绝不能写回 messages**——
-        模型侧要求思考内容不参与后续上下文，写回去还会毒化前缀缓存。
-      - "content"：正文增量。
-
-    cancel_event: 可选，threading.Event。置位即停止读取并关闭上游连接。
-      **这是用户点「停止」后唯一能立刻生效的位置**——被中断时模型往往正在
-      长篇思考，早一步断开就少生成一批 token（也就少计费）。半截正文由
-      agent 循环按"已收到多少算多少"落盘，这里不负责收尾。
-
-    Ollama 走非流式，整体作为单个 content 块产出（行为与 call_llm 一致），
-    该分支无法中断。
-    timeout 在流式下是"两次数据块之间的最大间隔"，而非整次响应上限。
-    """
-    eff = get_effective_config(provider, model)
-    _log_effective(eff, stream=True)
+def _stream_once(eff, messages, timeout, cancel_event):
+    """对固定的 (provider, model) 发一次流式请求，逐块产出 (kind, text)。"""
     if eff["provider"] == "ollama":
         yield "content", _call_ollama(
             eff["base_url"], {"model": eff["model"], "messages": messages}, timeout)
@@ -305,6 +389,51 @@ def call_llm_stream(messages, timeout=600, provider=None, model=None,
         resp.close()
 
 
+def call_llm_stream(messages, timeout=None, provider=None, model=None,
+                    cancel_event=None):
+    """流式调用 LLM，逐块产出 (kind, text)；失败时按降级链依次往下试。
+
+    kind 只有两种：
+      - "reasoning"：思考内容，**仅供展示，绝不能写回 messages**——
+        模型侧要求思考内容不参与后续上下文，写回去还会毒化前缀缓存。
+      - "content"：正文增量。
+
+    cancel_event: 可选，threading.Event。置位即停止读取并关闭上游连接。
+      **这是用户点「停止」后唯一能立刻生效的位置**——被中断时模型往往正在
+      长篇思考，早一步断开就少生成一批 token（也就少计费）。半截正文由
+      agent 循环按"已收到多少算多少"落盘，这里不负责收尾。
+
+    换模型的边界是「正文」：一旦已经产出过 content 再失败，就不再往下切，
+    直接把异常抛给上层——换个模型重来会让用户看到两段接不上的话。思考内容
+    （reasoning）不算开工，它只是展示，切了重想不影响正确性。用户点了停止
+    也不再尝试下一个（没人等着看，没必要花这笔钱）。
+
+    Ollama 走非流式，整体作为单个 content 块产出（行为与 call_llm 一致），
+    该分支无法中断。
+    timeout 在流式下是"两次数据块之间的最大间隔"，而非整次响应上限。
+    """
+    timeout = timeout or LLM_REQUEST_TIMEOUT
+    targets = _chain_targets(provider, model)
+    last_err = None
+    for i, (pid, mname) in enumerate(targets):
+        if is_cancelled(cancel_event):
+            return
+        eff = get_effective_config(pid, mname)
+        _log_effective(eff, stream=True, attempt=(i + 1, len(targets)))
+        spoke = False
+        try:
+            for kind, text in _stream_once(eff, messages, timeout, cancel_event):
+                if kind == "content":
+                    spoke = True
+                yield kind, text
+            return
+        except Exception as e:
+            if spoke:
+                raise
+            last_err = e
+            _mark_dead((pid, mname), _brief(e))
+    raise last_err
+
+
 def _now():
-    import time
     return time.strftime("%H:%M:%S")

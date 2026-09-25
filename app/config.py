@@ -41,6 +41,25 @@ SCNET_MODEL = os.getenv("SCNET_MODEL", "DeepSeek-V4.1-Flash-Event")
 SCNET2_API_KEY = os.getenv("SCNET2_API_KEY", "")
 SCNET2_MODEL = os.getenv("SCNET2_MODEL", "DeepSeek-V4.1-Flash")
 
+# ─── 主备模型降级链 ──────────────────────────────────
+# 一次请求失败（额度不足 / 超时 / 5xx / 模型退役）时依次往下试的顺序。
+# 格式 "provider:model,provider:model"，第一项是主模型；留空 = 关闭降级。
+# 调用方指定了 provider/model（管理页、agent 配置）时，那一项会排在链头，
+# 链里重复的项自动去掉——所以管理页手动切换依然优先。
+LLM_FALLBACK_CHAIN = os.getenv(
+    "LLM_FALLBACK_CHAIN",
+    "volc:deepseek-v4-flash-ga-260731,"
+    "volc:deepseek-v4-pro-ga-260813,"
+    "scnet2:DeepSeek-V4.1-Flash")
+
+# 单次尝试的超时。流式下这是「两块数据之间的最大间隔」而不是总时长——
+# 60 秒一个字节都没回就认为卡死，换下一个候选。原先默认 600 秒等于不切。
+LLM_REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "60"))
+
+# 某个候选失败后「拉黑」多久不再试。到期自动回头重试主模型，所以额度
+# 充值、服务恢复之后能自愈，不用重启进程。
+LLM_FALLBACK_TTL = float(os.getenv("LLM_FALLBACK_TTL", "600"))
+
 # 动态 API 地址和模型名（根据 provider 切换）
 if LLM_PROVIDER == "deepseek":
     API_URL = DEEPSEEK_BASE_URL.rstrip("/") + "/chat/completions"
