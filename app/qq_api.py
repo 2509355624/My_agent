@@ -56,6 +56,11 @@ def _display_name(kind, target_id):
         return _names.get(key, "")
 
 
+def group_display_name(group_id):
+    """群号 → 群名，拿不到返回空串。给接话判断等日志复用。"""
+    return _display_name("group", group_id)
+
+
 def _send_log(kind, target_id, chunk):
     """一条实际发出的 QQ 消息打一行日志。kind: group / private。"""
     name = _display_name(kind, target_id)

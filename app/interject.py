@@ -60,28 +60,28 @@ from app.config import (
     QQ_INTERJECT_MODE,
 )
 from app.llm import call_llm
+from app.qq_api import group_display_name
 
 log = logging.getLogger("interject")
 
 # 判断标准的写法就是这个功能的全部「策略」。Laya 那轮测试证明了模型给什么
 # 标准就按什么标准判——所以「什么算该接话」要调，改的是这段而不是代码。
-# 口径 = 「适中」打底（有明确落点才接）+ 好奇心（2026-09-25 用户加的）：
-# 看到新东西/图会想凑一句。注意判断模型只看得到「[图片]」占位符。
+# 口径 = 活跃（2026-09-25 用户拍板：拿不准倾向接，乱回靠判断 prompt 治不了
+# 也不用治——频率由管理页的发言间隔统一管，提示词只管「像不像个活人」）。
+# 注意判断模型只看得到「[图片]」占位符。
 _SYSTEM = """你在帮一个 QQ 群机器人判断：此刻要不要主动开口接一句话。
 
 下面给你群里最近的对话，按时间顺序排列，最后一条是刚发出来的。
 机器人没被 @，也没人点它的名，它只是自己判断要不要插一句。
 
 判断口径（像个人，有点表达欲和好奇心，不是客服）：
-- 该接：有人提问且好几条内没人回应、明确求推荐/找人、吐槽抱怨没人接、
-        冷场好一会儿没人说话、或者有人发了图/新梗你好奇想问一句
-- 不接（这几条比「该接」更要紧——主动开口是打扰，说多了就是骚扰）：
-  - 已经有人在接了：有人回答了那个问题、有人附和、话题已经被别人接走。
-    这种时候插一句就是抢话，哪怕你觉得有得说也不接
-  - 两三个人在聊他们自己的事、互相点名对话（「XX 你那个…」这种）
-  - 只是刷屏：表情包、复读、短促的「哈哈」「6」「？」「确实」
-  - 最后一条跟前面的话题接不上，你也说不出具体要接哪句
-- 拿不准就「不接」。漏掉一次闲聊没人会在意，插错一次会被当成乱回话。
+- 该接：有人在提问还没人回答、求推荐、找人、吐槽抱怨、抛出观点想讨论、
+        冷场没人接话、话说到一半明显还需要人回应
+- 好奇也算该接：有人发了张图、提到没见过的新东西/新梗/奇怪的报错，
+        想问一句「这是啥」「在哪弄的」就说
+- 群里聊得热闹、有你能插上话的空隙，也算该接
+- 不接：两个人的私事、无意义刷屏、明显是别人之间的事不需要第三个人插嘴
+- 拿不准的时候倾向「接」——真人插话本来就不需要充分的理由
 
 注意：你只能看到「[图片]」这样的占位符，看不到图的内容——好奇可以，
 别假装你看清了图里画的是什么。
@@ -173,22 +173,29 @@ def _log_path(agent_id, group_id):
     return os.path.join(agent_store.AGENTS_DIR, aid, "interject", key + ".jsonl")
 
 
+def _log_decision(group_id, verdict):
+    """每次判断的结果都打一行终端日志（任何模式都打），带群名方便对群。
+
+    注意频率闸挡掉的消息根本走不到判断这一步（正式模式冷却中连判断都
+    不做），所以「长时间没有这行」= 冷却中，不是判断变笨了。
+    """
+    name = group_display_name(group_id)
+    who = "%s(%s)" % (name, group_id) if name else str(group_id)
+    if verdict["pass"]:
+        tail = "接，开口"
+    elif verdict["want"]:
+        tail = "接，但冷却中，憋住"
+    else:
+        tail = "不接"
+    log.info("接话判断 -> 群聊 [%s]: %s（耗时%.1fs）",
+             who, tail, verdict["latency_ms"] / 1000.0)
+
+
 def _log_verdict(agent_id, group_id, verdict):
     """把一次判断落盘。影子模式靠它复盘，所以带上判据和模型原话。
 
-    同时往标准日志打一条：影子模式开着的时候用户多半正盯着控制台。
+    终端日志由 _log_decision 负责（每次判断必打），这里只管写文件。
     """
-    if verdict["pass"]:
-        tail = ("→ 会开口（影子模式，不发出）" if QQ_INTERJECT_MODE == "shadow"
-                else "→ 会开口")
-    elif verdict["want"]:
-        tail = "→ 想接，但冷却中"
-    else:
-        tail = "→ 不接"
-    log.info("接话判断[%s] 群%s：%s 耗时%.1fs %s",
-             QQ_INTERJECT_MODE, group_id, verdict["choice"],
-             verdict["latency_ms"] / 1000.0, tail)
-
     path = _log_path(agent_id, group_id)
     if not path:
         return
@@ -279,6 +286,10 @@ def decide(agent_id, group_id):
 
     if verdict["pass"]:
         mark_spoke(agent_id, gid)
+
+    # 每次判断的结果都打到终端：管理页的频率闸挡掉的消息根本不会走到这里
+    # （冷却中连判断都不做），所以这行就是「判断了」的全集，一行不漏。
+    _log_decision(gid, verdict)
 
     # 影子模式全记（就是要看它「不接」判得对不对）；正式模式只记「想接却被
     # 冷却挡掉」这种，否则日志会跟着群消息量一起涨。

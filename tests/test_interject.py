@@ -295,14 +295,13 @@ class DecideVerdictTest(_StateIsolationMixin, unittest.TestCase):
         self.assertEqual(kwargs.get("provider"), "deepseek")
         self.assertEqual(kwargs.get("model"), "deepseek-flash")
 
-    def test_system_prompt_keeps_strict_bias(self):
+    def test_system_prompt_keeps_pro_active_bias(self):
         # 口径方向是被反复调过的（放宽→收紧→再放宽），钉住当前值：
-        # 2026-09-25 实测日志里连判 12 次「接」一次没挡住 → 用户拍板收紧，
-        # 方向改成「拿不准就不接」，别再把方向写反
-        self.assertIn("拿不准就「不接」", interject._SYSTEM)
-        self.assertNotIn("拿不准的时候倾向「接」", interject._SYSTEM)
-        # 「已经有人在接就别插」是这次收紧的关键一条，别被改掉
-        self.assertIn("已经有人在接了", interject._SYSTEM)
+        # 2026-09-25 深夜用户拍板「提示词改成活跃即可」——频率管控归管理页
+        # 的发言间隔（180 秒），判断口径只管像不像个活人，别再把方向写反
+        self.assertIn("拿不准的时候倾向「接」", interject._SYSTEM)
+        self.assertNotIn("拿不准就「不接」", interject._SYSTEM)
+
 
     def test_judge_is_marked_before_calling(self):
         # 失败也要计入节流，否则调用一直挂会疯狂重试
@@ -322,6 +321,70 @@ class DecideVerdictTest(_StateIsolationMixin, unittest.TestCase):
         with interject._state_lock:
             self.assertIn(("qq", "1041079621"), interject._last_judged)
 
+
+class DecisionLogTest(_StateIsolationMixin, unittest.TestCase):
+    """每次接话判断都要在终端打一行结果（带群名）——用户盯适配层窗口用。"""
+
+    def setUp(self):
+        super().setUp()
+        for name, value in (("QQ_INTERJECT_MODE", "on"),
+                            ("QQ_INTERJECT_GROUPS", []),
+                            ("QQ_INTERJECT_MIN_GAP", 0)):
+            p = mock.patch.object(interject, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+        # 冷却秒数挂在 agent_store（settings 层）；这里设 0 = 不限频，
+        # 「接」就直接 pass；test_want_but_cooled_logs_hold 单独覆盖
+        p = mock.patch.object(interject.agent_store, "interject_cooldown",
+                              return_value=0)
+        p.start()
+        self.addCleanup(p.stop)
+        # 群名走 qq_api 的缓存查询，测试里固定返回
+        p = mock.patch.object(interject, "group_display_name",
+                              return_value="被子教")
+        p.start()
+        self.addCleanup(p.stop)
+        # 文件落盘挡掉（终端日志才是本组用例的对象）
+        p = mock.patch.object(interject, "_log_verdict")
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _judge(self, answer, last_spoke=None):
+        p = mock.patch.object(interject, "call_llm", return_value=answer)
+        p.start()
+        self.addCleanup(p.stop)
+        if last_spoke is not None:
+            with interject._state_lock:
+                interject._last_spoke[("qq", "1041446471")] = last_spoke
+        with self.assertLogs("interject", level="INFO") as cm:
+            interject.decide("qq", "1041446471")
+        return "\n".join(cm.output)
+
+    def test_pass_logs_open(self):
+        out = self._judge("接")
+        self.assertIn("接话判断 -> 群聊 [被子教(1041446471)]: 接，开口", out)
+
+    def test_want_but_cooled_logs_hold(self):
+        # 正式模式下冷却中的消息不会走到判断（decide 提前返回 None），
+        # 这个分支只在影子模式/竞态下出现——直接测格式化函数本身
+        with self.assertLogs("interject", level="INFO") as cm:
+            interject._log_decision("1041446471", {
+                "choice": "接", "want": True, "cooled": False,
+                "pass": False, "latency_ms": 1200.0})
+        self.assertIn("接话判断 -> 群聊 [被子教(1041446471)]: 接，但冷却中，憋住",
+                      "\n".join(cm.output))
+
+    def test_decline_logs_no(self):
+        out = self._judge("不接")
+        self.assertIn("接话判断 -> 群聊 [被子教(1041446471)]: 不接", out)
+
+    def test_no_name_falls_back_to_id(self):
+        # 名单拿不到也得打日志，退回群号
+        p = mock.patch.object(interject, "group_display_name", return_value="")
+        p.start()
+        self.addCleanup(p.stop)
+        out = self._judge("接")
+        self.assertIn("接话判断 -> 群聊 [1041446471]", out)
 
 class CooldownTest(_StateIsolationMixin, unittest.TestCase):
     """冷却判断走 agent_store.interject_cooldown（settings 层，管理页可调）。"""
