@@ -23,6 +23,42 @@ import app.qq_api as qq_api
 import app.qq_bot as qq_bot
 from app.tools.normal import send_qq_message
 
+# 模块级隔离：本文件里有几处用例会走到真实的「落盘」代码路径
+# （_dispatch → recent.remember 记群聊背景、_deliver → 把自己说的话也记进去），
+# 不把 AGENTS_DIR 挪走就会往 agents/qq/recent/ 里写测试夹具（群号 9 的张三），
+# 每次跑测试都长几行——已经污染过真实数据目录一次，所以整份文件跑在临时目录里。
+_tmp_root = None
+_patch = None
+
+
+def setUpModule():
+    global _tmp_root, _patch
+    _tmp_root = tempfile.TemporaryDirectory()
+    root = os.path.join(_tmp_root.name, "agents")
+    os.makedirs(os.path.join(root, "qq"), exist_ok=True)
+    _patch = mock.patch.object(agents, "AGENTS_DIR", root)
+    _patch.start()
+
+
+def tearDownModule():
+    global _tmp_root, _patch
+    if _patch is not None:
+        _patch.stop()
+        _patch = None
+    if _tmp_root is not None:
+        _tmp_root.cleanup()
+        _tmp_root = None
+
+
+class DataDirIsolationTest(unittest.TestCase):
+    """守住上面那段 setUpModule：少了它，本文件会往真实 agents/ 里写夹具。"""
+
+    def test_agents_dir_points_into_temp(self):
+        real = os.path.realpath(agents.AGENTS_DIR)
+        self.assertTrue(
+            real.startswith(os.path.realpath(tempfile.gettempdir())),
+            "测试期间的 AGENTS_DIR 必须是临时目录，实际是 %s" % real)
+
 
 # ─── Markdown 降级 ──────────────────────────────────
 

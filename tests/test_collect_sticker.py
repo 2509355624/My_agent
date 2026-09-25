@@ -4,12 +4,16 @@ ingest 是 collect 拆出来的单张入口，成败都要给一句能转述的�
 选图（最近第几张）和文案映射，不碰下载。全 mock，不落真实库。
 """
 
+import os
+import shutil
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
 sys.path.insert(0, ".")
 
+from app import agents as agent_store         # noqa: E402
 from app import stickers                      # noqa: E402
 from app.tools.normal import collect_sticker  # noqa: E402
 
@@ -19,11 +23,20 @@ def _raw(size=100):
 
 
 class _IndexBase(unittest.TestCase):
-    """index.jsonl 指到临时文件，别碰真实库存。"""
+    """整个 AGENTS_DIR 指到临时目录，别碰真实库存。
+
+    **必须连目录一起换掉，只 patch `_index_path` 是不够的**：tearDown 要清空
+    库存目录，而 `stickers._dir()` 读的是 agent_store.AGENTS_DIR——只换索引
+    文件路径的话它照样指向真实的 agents/qq/stickers，跑一次测试就把用户的
+    表情包库（含目录）整个删掉。2026-09-26 为此丢过两次库存，第二次就是这里。
+    """
 
     def setUp(self):
-        p = mock.patch.object(stickers, "_index_path",
-                              return_value=self._path())
+        self._tmp_root = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp_root.cleanup)
+        root = os.path.join(self._tmp_root.name, "agents")
+        os.makedirs(os.path.join(root, "qq"), exist_ok=True)
+        p = mock.patch.object(agent_store, "AGENTS_DIR", root)
         p.start()
         self.addCleanup(p.stop)
         self._clean()
@@ -31,22 +44,11 @@ class _IndexBase(unittest.TestCase):
     def tearDown(self):
         self._clean()
 
-    def _path(self):
-        import tempfile, os
-        if not hasattr(self, "_tmp"):
-            self._tmp = tempfile.NamedTemporaryFile(
-                suffix=".jsonl", delete=False)
-            self._tmp.close()
-        return self._tmp.name
-
     def _clean(self):
-        import tempfile, os
-        import shutil
+        """清空库存。只认临时目录——指到仓库就报错，绝不静默删真实数据。"""
         d = stickers._dir("qq")
+        assert self._tmp_root.name in d, "拒绝清空非临时目录：%s" % d
         shutil.rmtree(d, ignore_errors=True)
-        if hasattr(self, "_tmp") and os.path.exists(self._tmp.name):
-            os.remove(self._tmp.name)
-            del self._tmp
 
 
 class IngestTest(_IndexBase):
@@ -209,6 +211,22 @@ class CollectToolTest(unittest.TestCase):
                                return_value=("fail", None, "下载失败（链接可能过期了）")):
             out = collect_sticker.tool["function"]("")
         self.assertIn("下载失败", out)
+
+
+class CleanGuardTest(_IndexBase):
+    """清空动作只准落在临时目录——丢库事故的最后一道闸。
+
+    这条守的不是功能，是「测试别删用户数据」：以后谁改了 setUp、把
+    AGENTS_DIR 又指回仓库，下面第二例会直接失败，而不是默默把真实库存删掉。
+    """
+
+    def test_library_dir_is_temporary(self):
+        self.assertIn(self._tmp_root.name, stickers._dir("qq"))
+
+    def test_clean_refuses_repo_dir(self):
+        with mock.patch.object(agent_store, "AGENTS_DIR", "agents"):
+            with self.assertRaises(AssertionError):
+                self._clean()
 
 
 class CollectStillWorksTest(_IndexBase):
