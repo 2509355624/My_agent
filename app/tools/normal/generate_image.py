@@ -134,6 +134,8 @@ def _generate_image(prompt, skill="image_gen_v1", use_character=True):
 tool = {
     "name": "generate_image",
     "description": "调用 ComfyUI 生成图片，支持批量生成。多个提示词用 --- 分隔，一次调用可生成多张图。"
+                  "【红线】严禁生成色情、擦边或性暗示内容（涩图、过度暴露、性姿势、涩味玩梗）；"
+                  "这类请求直接拒绝，不要改写提示词绕过。"
                   "【底模两种模式】use_character=true时使用Skill自带角色底模(固定角色，prompt只写动作/环境/构图)；"
                   "use_character=false时无底模，你必须自己在prompt中写出完整角色提示词(发型/发色/体型/胸围/服装/年龄等)，再叠加动作和环境。"
                   "【默认 Skill】没特别说明就用 image_gen_v1，不要无理由换。"
