@@ -21,7 +21,7 @@ from app.config import QQ_AGENT_ID
 
 # 两次发表情包的最小间隔（秒）。节流记在发送**之前**：失败也计入，
 # 否则发送一直挂的时候会无限连发。
-STICKER_MIN_INTERVAL = 15.0
+STICKER_MIN_INTERVAL = 30.0
 
 # 一次调用最多发几张：清单里明说可连报，这里兜一道防刷屏
 _MAX_PER_CALL = 3
@@ -65,7 +65,7 @@ def _send_sticker(nums, target=None, target_id=None):
         last = _send_state.get((target, target_id))
         if last is not None and now - last < STICKER_MIN_INTERVAL:
             wait = int(STICKER_MIN_INTERVAL - (now - last)) + 1
-            return ("表情包发得太密啦，隔 %d 秒左右再甩（15 秒一次的节奏）。"
+            return ("表情包发得太密啦，隔 %d 秒左右再甩（30 秒一次的节奏）。"
                     "先用文字接一句，下条再配图。" % wait)
         _send_state[(target, target_id)] = now
 
@@ -99,7 +99,7 @@ tool = {
         "发一个表情包。每轮上下文里的 [表情包库] 清单就是你的全部存货"
         "（上限 50 张，平时自动收藏群里的小图/GIF），看中哪张填哪张的编号"
         "（如 3，连发填 3,7）。想发就发，很多话不用打字，直接甩一张就是"
-        "回复——频繁发表情才像真人。节奏限制是 15 秒一次，被挡回来就先用"
+        "回复——频繁发表情才像真人。节奏限制是 30 秒一次，被挡回来就先用"
         "文字聊，下条再配图。"
     ),
     "function": _send_sticker,

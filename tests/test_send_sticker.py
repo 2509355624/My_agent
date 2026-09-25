@@ -46,13 +46,13 @@ class _Base(unittest.TestCase):
 
 
 class ThrottleTest(_Base):
-    """15 秒频率闸：太密挡回、到点放行、各会话独立。"""
+    """30 秒频率闸：太密挡回、到点放行、各会话独立。"""
 
     def test_second_call_within_interval_is_blocked(self):
         self.assertIn("已发表情包", self._call("1"))
         blocked = self._call("1")
         self.assertIn("太密", blocked)
-        self.assertIn("15", blocked)
+        self.assertIn(str(int(send_sticker.STICKER_MIN_INTERVAL)), blocked)
         self.assertEqual(self.send.call_count, 1)   # 第二次没真发
 
     def test_call_after_interval_passes(self):
@@ -69,7 +69,7 @@ class ThrottleTest(_Base):
             self.assertIn("已发表情包", self._call("1"))
 
     def test_invalid_nums_do_not_consume_interval(self):
-        # 报错号不该白白吃掉一次 15 秒间隔
+        # 报错号不该白白吃掉一次 30 秒间隔
         with mock.patch.object(send_sticker.stickers,
                                "records_by_numbers", return_value=[]):
             self.assertIn("没认出", self._call("99"))
