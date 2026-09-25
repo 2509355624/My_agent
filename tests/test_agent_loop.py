@@ -8,6 +8,7 @@ pre_tool_results 注入、思考内容（reasoning）只出不进、异常兜底
 
 import json
 import os
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -516,6 +517,57 @@ class AgentModelConfigTest(unittest.TestCase):
         self._patch_llm()
         self._run()
         self.assertIsNone(self.seen[0]["provider"])
+
+
+class TurnFingerprintLogTest(unittest.TestCase):
+    """每次迭代都要留一行指纹日志。
+
+    同一轮里出现重复正文时，光看落盘数据分不清是「模型自己抄了上文」还是
+    「上游网关把同一份响应重放了两遍」——两个日志行的输出 hash 相同才是模型
+    复读，输入规模也一致才谈得上重放。这行是事后唯一能定性的证据。
+    """
+
+    def setUp(self):
+        for target, value in (
+            ("trim_history", lambda h, agent_id=None, **kw: h),
+            ("execute_tool", lambda name, args: "工具结果:" + name),
+        ):
+            p = mock.patch.object(agent, target, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _logs(self, replies):
+        fake = _ScriptedLLM(replies)
+        with mock.patch.object(agent, "call_llm_stream", fake):
+            with self.assertLogs("agent", level="INFO") as cm:
+                list(agent.run_agent_stream("你好", []))
+        return [l for l in cm.output if "[turn]" in l]
+
+    def test_one_line_per_iteration(self):
+        # 第一轮带工具调用才会继续迭代，第二轮才是收尾的正文
+        lines = self._logs(["[[TOOL:get_time]][[/TOOL]]", "好了"])
+        self.assertEqual(len(lines), 2)
+        self.assertIn("#1", lines[0])
+        self.assertIn("#2", lines[1])
+
+    def test_line_carries_input_size_output_size_and_hash(self):
+        lines = self._logs(["一段话"])
+        self.assertRegex(lines[0], r"输入=\d+条/\d+字")
+        self.assertRegex(lines[0], r"输出=\d+字")
+        self.assertRegex(lines[0], r"hash=[0-9a-f]{8}")
+
+    def test_same_text_same_hash_other_text_other_hash(self):
+        same = "重复的话[[TOOL:get_time]][[/TOOL]]"
+        lines = self._logs([same, same, "换了说法"])
+        hashes = [re.search(r"hash=([0-9a-f]{8})", l).group(1)
+                  for l in lines]
+        self.assertEqual(hashes[0], hashes[1])
+        self.assertNotEqual(hashes[0], hashes[2])
+
+    def test_tool_names_are_listed(self):
+        lines = self._logs(["[[TOOL:get_time]][[/TOOL]]", "好了"])
+        self.assertIn("get_time", lines[0])
+        self.assertRegex(lines[1], r"工具=-$")
 
 
 if __name__ == "__main__":

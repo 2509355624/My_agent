@@ -85,6 +85,11 @@ _IMAGE_PATH_RE = re.compile(r"/api/image/([^\s)\"'，。]+)")
 _CQ_RE = re.compile(r"\[CQ:([a-z_]+)((?:,[^\]]*)?)\]")
 
 
+def _norm_reply(text):
+    """回复正文的归一化形式，用于同轮去重：只抹平空白差异，不改字。"""
+    return " ".join((text or "").split())
+
+
 # ─── 会话线的 system 头 ──────────────────────────────
 
 def _ensure_system_prompt(session_key):
@@ -611,6 +616,9 @@ class SessionRunner:
         qq_api.bind_context(self.session_key, self.target, self.target_id)
         sent_by_tool = False
         reply_parts, images = [], []
+        # 同一轮里模型有时会把上一段原样再生成一遍（工具结果回来后失了记性），
+        # 堆进同一条消息就是复读。按归一化正文去重，只丢完全重复的段。
+        seen_replies = set()
 
         try:
             for ev in run_agent_stream(text, history, agent_id=QQ_AGENT_ID,
@@ -625,7 +633,15 @@ class SessionRunner:
                     except Exception:
                         log.exception("落盘失败 %s", self.session_key)
                 if etype == "assistant":
-                    reply_parts.append(ev.get("content", ""))
+                    piece = ev.get("content", "") or ""
+                    norm = _norm_reply(piece)
+                    if norm and norm in seen_replies:
+                        log.info("丢弃同轮重复回复（%d 字）：%s",
+                                 len(piece), norm[:40])
+                    else:
+                        if norm:
+                            seen_replies.add(norm)
+                        reply_parts.append(piece)
                 elif etype == "tool_result":
                     if ev.get("name") == "send_qq_message":
                         sent_by_tool = True
@@ -642,7 +658,10 @@ class SessionRunner:
             except Exception:
                 log.exception("收尾落盘失败 %s", self.session_key)
 
-        self._deliver(sent_by_tool, "".join(reply_parts), images)
+        # 同一轮的多段正文用换行分隔——空串直接拼会把「图在路上了」和
+        # 「你要的图来了」黏成一行，群里看着像说错了话。
+        reply = "\n".join(p for p in reply_parts if p.strip())
+        self._deliver(sent_by_tool, reply, images)
 
     def _deliver(self, sent_by_tool, reply, images):
         """把结果发回 QQ。图片走 ComfyUI 的 /view 地址。"""

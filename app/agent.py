@@ -3,6 +3,7 @@ Agent Loop
 核心循环：LLM -> 工具调用 -> 执行 -> 结果塞回 -> 重复
 """
 
+import hashlib
 import json
 import logging
 import re
@@ -448,6 +449,16 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
                 break
 
             tool_calls = parse_tool_calls(reply)
+
+            # 每次迭代留一行指纹。同一轮里若某段正文重复出现，看输出指纹能分清
+            # 是模型自己抄了上文，还是上游网关把同一份响应重放了两遍（输入指纹
+            # 也一样才叫重放）。没有这行，光看落盘数据两边都证不了。
+            log.info("[turn] #%d 输入=%d条/%d字 输出=%d字 hash=%s 工具=%s",
+                     turn_count, len(llm_history),
+                     sum(len(m.get("content") or "") for m in llm_history),
+                     len(reply),
+                     hashlib.md5(reply.encode("utf-8")).hexdigest()[:8],
+                     ",".join(c["name"] for c in tool_calls) or "-")
 
             # 提取回复正文（去掉所有工具块及其参数）
             reply_text = _strip_tool_blocks(reply).strip()

@@ -1105,5 +1105,71 @@ class SingleInstanceTest(unittest.TestCase):
             self.assertTrue(qq_bot._acquire_single_instance())
 
 
+class TurnReplyDedupTest(unittest.TestCase):
+    """同一轮里重复的正文只发一次，多段之间换行。
+
+    线上事故：一轮里模型先说了「泳装白丝可以…」，调完工具（发图）之后失了
+    记性，把同一段原样又生成一遍，两段被空串拼进一条消息，群里看着就是复读。
+    """
+
+    _BATCH = [{"text": "你好", "sender": "233", "images": []}]
+
+    def _run(self, events):
+        sent = {}
+
+        def fake_stream(text, history, agent_id=None, image=None, **kw):
+            return iter(events)
+
+        runner = qq_bot.SessionRunner(None, "group_9", "group", "9")
+        runner._deliver = lambda sent_by_tool, reply, images: sent.update(
+            reply=reply)
+        with mock.patch.object(qq_bot, "run_agent_stream", fake_stream), \
+             mock.patch.object(qq_bot, "load_history", lambda *a, **k: []), \
+             mock.patch.object(qq_bot, "_ensure_system_prompt",
+                               lambda *a: None), \
+             mock.patch.object(qq_bot, "save_history", lambda *a, **k: None), \
+             mock.patch.object(qq_bot.stickers, "collect", return_value=0), \
+             mock.patch.object(qq_bot.stickers, "catalog", return_value=""):
+            runner._run_turn(list(self._BATCH))
+        return sent.get("reply")
+
+    @staticmethod
+    def _said(*texts):
+        return [{"type": "assistant", "content": t} for t in texts]
+
+    def test_duplicate_reply_is_sent_once(self):
+        reply = self._run(self._said("泳装白丝可以 行不", "图在路上了",
+                                     "泳装白丝可以 行不", "白毛猫耳来了"))
+        self.assertEqual(reply, "泳装白丝可以 行不\n图在路上了\n白毛猫耳来了")
+
+    def test_whitespace_difference_still_counts_as_duplicate(self):
+        reply = self._run(self._said("一样的话", " 一样的话 \n"))
+        self.assertEqual(reply, "一样的话")
+
+    def test_distinct_replies_are_all_kept(self):
+        reply = self._run(self._said("第一句", "第二句", "第三句"))
+        self.assertEqual(reply, "第一句\n第二句\n第三句")
+
+    def test_parts_are_not_glued_together(self):
+        # 空串拼接会得到「图在路上了白毛猫耳来了」——群里看着像说错话
+        reply = self._run(self._said("图在路上了", "白毛猫耳来了"))
+        self.assertNotIn("路上了白毛", reply)
+        self.assertEqual(reply, "图在路上了\n白毛猫耳来了")
+
+    def test_blank_part_is_dropped(self):
+        reply = self._run(self._said("", "  \n ", "有话说"))
+        self.assertEqual(reply, "有话说")
+
+    def test_dedup_is_scoped_to_one_turn(self):
+        # 跨轮不算复读：同一句话在两次独立回复里都要发出去
+        self.assertEqual(self._run(self._said("同样一句")), "同样一句")
+        self.assertEqual(self._run(self._said("同样一句")), "同样一句")
+
+    def test_norm_reply_collapses_whitespace(self):
+        self.assertEqual(qq_bot._norm_reply(" a\n b\t\tc "), "a b c")
+        self.assertEqual(qq_bot._norm_reply(""), "")
+        self.assertEqual(qq_bot._norm_reply(None), "")
+
+
 if __name__ == "__main__":
     unittest.main()
