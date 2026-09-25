@@ -448,9 +448,17 @@ _digest_seen = {}
 _digest_seen_lock = threading.Lock()
 _DIGEST_SEEN_CAP = 4000
 
+# (agent_id, group_id) → 攒批中的滚出消息。窗口满之后每来一条消息就滚出
+# 1~3 条，逐条摘要会把记忆库塞满 2 条消息的碎片、每条消息都多一次 API
+# 调用。攒够约 20 轮（用户口径「每 20 轮一条摘要」）再摘一次。
+# 代价：进程重启时攒着没到阈值的（最多约 40 条）不摘了——原文在
+# recent/archive/ 里仍有全量，丢的只是那条没生成的摘要。
+_digest_pending = {}
+_DIGEST_BATCH_MIN = 40
+
 
 def _digest_turns_async(agent_id, group_id, old_turns):
-    """把滚出窗口的轮次交给 longterm 摘成一条记忆。失败只记日志。"""
+    """把滚出窗口的轮次攒批后交给 longterm 摘成一条记忆。失败只记日志。"""
     msgs = []
     for turn in old_turns:
         msgs.extend(turn)
@@ -472,13 +480,19 @@ def _digest_turns_async(agent_id, group_id, old_turns):
             # 代价极小——最多把重合的旧消息多摘一次。
             seen.clear()
             seen.update((m.get("role"), str(m.get("content"))) for m in fresh)
-    if not fresh:
-        return
+        if not fresh:
+            return
+        pending = _digest_pending.setdefault(key, [])
+        pending.extend(fresh)
+        if len(pending) < _DIGEST_BATCH_MIN:
+            return
+        batch = pending[:]
+        pending.clear()
     try:
         from app import longterm
-        longterm.digest_messages_async(agent_id, group_id, fresh)
-        print("[window] 群%s：%d 轮滚出窗口，%d 条转交长期记忆"
-              % (group_id, len(old_turns), len(fresh)))
+        longterm.digest_messages_async(agent_id, group_id, batch)
+        print("[window] 群%s：攒够 %d 条滚出消息，批量转交长期记忆"
+              % (group_id, len(batch)))
     except Exception as exc:
         # 导入失败/线程起不来都不能连带毁掉 save_history
         print("[window] 转交长期记忆失败：%s: %s" % (type(exc).__name__, exc))
