@@ -10,6 +10,7 @@ import time
 import unittest
 from unittest import mock
 
+from app import agents as agent_store
 from app import interject
 from app import qq_bot
 
@@ -40,6 +41,17 @@ class _StateIsolationMixin:
         self.addCleanup(self._clear)
         p = mock.patch.object(interject.agent_store, "load_settings",
                               return_value={})
+        p.start()
+        self.addCleanup(p.stop)
+        # 概率门带随机，判断间隔默认 15 秒——两者都会让其它用例变得时灵时不
+        # 灵。这里统一钉成「每次都判」，要看门本身的行为去 ChanceGateTest /
+        # GapFromSettingsTest。
+        p = mock.patch.object(interject.agent_store, "interject_chance",
+                              return_value=100)
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(interject.agent_store, "interject_min_gap",
+                              return_value=0)
         p.start()
         self.addCleanup(p.stop)
         # _run_turn 开头会做表情包收藏（网络下载）——一律挡掉；
@@ -196,6 +208,10 @@ class DecideGuardTest(_StateIsolationMixin, unittest.TestCase):
         p = mock.patch.object(interject, "QQ_INTERJECT_GROUPS", [])
         p.start()
         self.addCleanup(p.stop)
+        p = mock.patch.object(interject.agent_store, "interject_min_gap",
+                              return_value=600)
+        p.start()
+        self.addCleanup(p.stop)
         interject._mark_judged("qq", "1041079621")     # 刚判过
         with mock.patch.object(interject.recent, "format_recent",
                                return_value="张三：在吗"), \
@@ -222,8 +238,7 @@ class DecideVerdictTest(_StateIsolationMixin, unittest.TestCase):
     def setUp(self):
         super().setUp()
         for name, value in (("QQ_INTERJECT_MODE", "shadow"),
-                            ("QQ_INTERJECT_GROUPS", []),
-                            ("QQ_INTERJECT_MIN_GAP", 0)):
+                            ("QQ_INTERJECT_GROUPS", [])):
             p = mock.patch.object(interject, name, value)
             p.start()
             self.addCleanup(p.stop)
@@ -307,7 +322,8 @@ class DecideVerdictTest(_StateIsolationMixin, unittest.TestCase):
         # 失败也要计入节流，否则调用一直挂会疯狂重试
         with interject._state_lock:
             interject._last_judged.clear()
-        p = mock.patch.object(interject, "QQ_INTERJECT_MIN_GAP", 600)
+        p = mock.patch.object(interject.agent_store, "interject_min_gap",
+                              return_value=600)
         p.start()
         self.addCleanup(p.stop)
         p = mock.patch.object(interject, "call_llm",
@@ -328,8 +344,7 @@ class DecisionLogTest(_StateIsolationMixin, unittest.TestCase):
     def setUp(self):
         super().setUp()
         for name, value in (("QQ_INTERJECT_MODE", "on"),
-                            ("QQ_INTERJECT_GROUPS", []),
-                            ("QQ_INTERJECT_MIN_GAP", 0)):
+                            ("QQ_INTERJECT_GROUPS", [])):
             p = mock.patch.object(interject, name, value)
             p.start()
             self.addCleanup(p.stop)
@@ -415,15 +430,117 @@ class CooldownTest(_StateIsolationMixin, unittest.TestCase):
         self.assertTrue(interject._cooldown_ok("qq", "2"))
 
 
+class ChanceGateTest(_StateIsolationMixin, unittest.TestCase):
+    """概率门：没摇中就不许惊动模型。默认 12%（≈1/8），0 / 100 是两端。"""
+
+    def setUp(self):
+        super().setUp()
+        for name, value in (("QQ_INTERJECT_MODE", "shadow"),
+                            ("QQ_INTERJECT_GROUPS", [])):
+            p = mock.patch.object(interject, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+        p = mock.patch.object(interject.recent, "format_recent",
+                              return_value="张三：在吗")
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(interject, "_log_verdict")
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _chance(self, value):
+        p = mock.patch.object(interject.agent_store, "interject_chance",
+                              return_value=value)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _rand(self, value):
+        """钉住骰子：只换 interject 眼里那个 random，不动全局。"""
+        p = mock.patch.object(interject, "random",
+                              mock.Mock(random=lambda: value))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _decide(self):
+        with mock.patch.object(interject, "call_llm",
+                               return_value="接") as llm:
+            return interject.decide("qq", "1"), llm
+
+    def test_zero_never_judges(self):
+        self._chance(0)
+        self._rand(0.0)
+        v, llm = self._decide()
+        self.assertIsNone(v)
+        llm.assert_not_called()
+
+    def test_hundred_always_judges(self):
+        self._chance(100)
+        self._rand(0.99)
+        v, llm = self._decide()
+        self.assertIsNotNone(v)
+        llm.assert_called_once()
+
+    def test_roll_above_chance_is_skipped(self):
+        self._chance(12)          # 摇出 50%，比 12% 大 → 不判
+        self._rand(0.5)
+        v, llm = self._decide()
+        self.assertIsNone(v)
+        llm.assert_not_called()
+
+    def test_roll_within_chance_judges(self):
+        self._chance(50)          # 摇出 20%，比 50% 小 → 判
+        self._rand(0.2)
+        v, llm = self._decide()
+        self.assertIsNotNone(v)
+        llm.assert_called_once()
+
+    def test_gate_leaves_no_stamp_when_skipped(self):
+        # 摇不中连时间戳都不能记：否则「刚判过」会把它后面真正该判的也挡掉
+        self._chance(0)
+        self._rand(0.0)
+        self._decide()
+        with interject._state_lock:
+            self.assertNotIn(("qq", "1"), interject._last_judged)
+
+    def test_default_is_about_one_in_eight(self):
+        # 默认 12%：主动开口是点缀，绝大多数消息不该付这次调用的钱
+        self.assertEqual(agent_store.DEFAULT_INTERJECT_CHANCE, 12)
+
+
+class GapFromSettingsTest(_StateIsolationMixin, unittest.TestCase):
+    """判断间隔改从 settings 层读（管理页可调），不再吃 .env 的常量。"""
+
+    def _gap(self, value):
+        p = mock.patch.object(interject.agent_store, "interject_min_gap",
+                              return_value=value)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_zero_gap_always_ok(self):
+        self._gap(0)
+        interject._mark_judged("qq", "1")
+        self.assertTrue(interject._gap_ok("qq", "1"))
+
+    def test_gap_blocks_then_expires(self):
+        self._gap(60)
+        interject._mark_judged("qq", "1")
+        self.assertFalse(interject._gap_ok("qq", "1"))
+        with interject._state_lock:
+            interject._last_judged[("qq", "1")] = time.time() - 61
+        self.assertTrue(interject._gap_ok("qq", "1"))
+
+    def test_gap_is_per_group(self):
+        self._gap(60)
+        interject._mark_judged("qq", "1")
+        self.assertTrue(interject._gap_ok("qq", "2"))
+
+
 class ShadowLogTest(_StateIsolationMixin, unittest.TestCase):
     """影子模式全记（要看它「不接」判得对不对）；正式模式只记被冷却挡掉的。"""
 
     def setUp(self):
         super().setUp()
         p = mock.patch.object(interject, "QQ_INTERJECT_GROUPS", [])
-        p.start()
-        self.addCleanup(p.stop)
-        p = mock.patch.object(interject, "QQ_INTERJECT_MIN_GAP", 0)
         p.start()
         self.addCleanup(p.stop)
         p = mock.patch.object(interject.recent, "format_recent",

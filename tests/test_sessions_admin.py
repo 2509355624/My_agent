@@ -434,6 +434,142 @@ class CooldownResolveTest(SessionsTestBase):
         self.assertNotIn("interject", d["sessions"][0])
 
 
+class ChanceApiTest(SessionsTestBase):
+    """触发概率：全局百分比 + 单群覆盖，settings.json 层热生效。"""
+
+    def test_default_is_twelve_percent(self):
+        self.assertEqual(agents.interject_chance("qq", "111"),
+                         agents.DEFAULT_INTERJECT_CHANCE)
+        self.assertEqual(agents.DEFAULT_INTERJECT_CHANCE, 12)
+
+    def test_global_then_override(self):
+        agents.save_settings("qq", {"interject_chance": 30,
+                                    "interject_chance_overrides": {"111": 0}})
+        self.assertEqual(agents.interject_chance("qq", "333"), 30)
+        self.assertEqual(agents.interject_chance("qq", "111"), 0)
+
+    def test_out_of_range_is_clamped(self):
+        agents.save_settings("qq", {"interject_chance": 500})
+        self.assertEqual(agents.interject_chance("qq", "111"), 100)
+        agents.save_settings("qq", {"interject_chance": -5})
+        self.assertEqual(agents.interject_chance("qq", "111"), 0)
+
+    def test_bad_types_fall_back_to_default(self):
+        agents.save_settings("qq", {"interject_chance": "abc",
+                                    "interject_chance_overrides":
+                                        {"111": True}})
+        self.assertEqual(agents.interject_chance("qq", "111"),
+                         agents.DEFAULT_INTERJECT_CHANCE)
+
+    def test_sessions_carry_global_and_override(self):
+        self.write_session("qq", key="group_111")
+        agents.save_settings("qq", {"interject_chance": 25,
+                                    "interject_chance_overrides": {"111": 50}})
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertEqual(d["interject_chance"], 25)
+        self.assertEqual(d["sessions"][0]["chance_override"], 50)
+
+    def test_put_global_persists(self):
+        resp = self.client.put("/api/agent/qq/interject_chance",
+                               json={"chance": 8})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(agents.load_settings("qq")["interject_chance"], 8)
+
+    def test_put_global_rejects_bad_values(self):
+        for bad in ({}, {"chance": "8"}, {"chance": -1}, {"chance": 101},
+                    {"chance": None}, {"chance": True}):
+            resp = self.client.put("/api/agent/qq/interject_chance", json=bad)
+            self.assertEqual(resp.status_code, 400, bad)
+
+    def test_put_group_override_and_clear(self):
+        self.client.put("/api/agent/qq/interject_chance/111",
+                        json={"chance": 100})
+        s = agents.load_settings("qq")["interject_chance_overrides"]
+        self.assertEqual(s["111"], 100)
+        # null = 删覆盖，回落全局
+        self.client.put("/api/agent/qq/interject_chance/111",
+                        json={"chance": None})
+        self.assertEqual(
+            agents.load_settings("qq")["interject_chance_overrides"], {})
+
+    def test_put_group_rejects_bad_values(self):
+        for bad in ({}, {"chance": "x"}, {"chance": 200}):
+            resp = self.client.put("/api/agent/qq/interject_chance/111",
+                                   json=bad)
+            self.assertEqual(resp.status_code, 400, bad)
+
+    def test_put_remote_blocked_by_default(self):
+        resp = self.client.put("/api/agent/qq/interject_chance",
+                               json={"chance": 50},
+                               environ_base={"REMOTE_ADDR": "8.8.8.8"})
+        self.assertEqual(resp.status_code, 403)
+
+
+class GapApiTest(SessionsTestBase):
+    """判断间隔：全局秒数 + 单群覆盖，settings.json 层热生效。"""
+
+    def test_default_is_env_value(self):
+        self.assertEqual(agents.interject_min_gap("qq", "111"),
+                         config.QQ_INTERJECT_MIN_GAP)
+
+    def test_global_then_override(self):
+        agents.save_settings("qq", {"interject_min_gap": 30,
+                                    "interject_min_gap_overrides": {"111": 0}})
+        self.assertEqual(agents.interject_min_gap("qq", "333"), 30)
+        self.assertEqual(agents.interject_min_gap("qq", "111"), 0)
+
+    def test_out_of_range_is_clamped(self):
+        agents.save_settings("qq", {"interject_min_gap": 99999})
+        self.assertEqual(agents.interject_min_gap("qq", "111"), 3600)
+
+    def test_bad_types_fall_back_to_env(self):
+        agents.save_settings("qq", {"interject_min_gap": "abc"})
+        self.assertEqual(agents.interject_min_gap("qq", "111"),
+                         config.QQ_INTERJECT_MIN_GAP)
+
+    def test_sessions_carry_global_and_override(self):
+        self.write_session("qq", key="group_111")
+        agents.save_settings("qq", {"interject_min_gap": 20,
+                                    "interject_min_gap_overrides": {"111": 5}})
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertEqual(d["interject_min_gap"], 20)
+        self.assertEqual(d["sessions"][0]["gap_override"], 5)
+
+    def test_put_global_persists(self):
+        resp = self.client.put("/api/agent/qq/interject_min_gap",
+                               json={"min_gap": 45})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(agents.load_settings("qq")["interject_min_gap"], 45)
+
+    def test_put_global_rejects_bad_values(self):
+        for bad in ({}, {"min_gap": "45"}, {"min_gap": -1},
+                    {"min_gap": 3601}, {"min_gap": None}):
+            resp = self.client.put("/api/agent/qq/interject_min_gap", json=bad)
+            self.assertEqual(resp.status_code, 400, bad)
+
+    def test_put_group_override_and_clear(self):
+        self.client.put("/api/agent/qq/interject_min_gap/111",
+                        json={"min_gap": 5})
+        ov = agents.load_settings("qq")["interject_min_gap_overrides"]
+        self.assertEqual(ov["111"], 5)
+        self.client.put("/api/agent/qq/interject_min_gap/111",
+                        json={"min_gap": None})
+        self.assertEqual(
+            agents.load_settings("qq")["interject_min_gap_overrides"], {})
+
+    def test_put_group_rejects_bad_values(self):
+        for bad in ({}, {"min_gap": "x"}, {"min_gap": 4000}):
+            resp = self.client.put("/api/agent/qq/interject_min_gap/111",
+                                   json=bad)
+            self.assertEqual(resp.status_code, 400, bad)
+
+    def test_put_remote_blocked_by_default(self):
+        resp = self.client.put("/api/agent/qq/interject_min_gap",
+                               json={"min_gap": 30},
+                               environ_base={"REMOTE_ADDR": "8.8.8.8"})
+        self.assertEqual(resp.status_code, 403)
+
+
 class ImageGenToggleApiTest(SessionsTestBase):
     """生图开关：全局总闸 + 单群名单，settings.json 热生效。
 

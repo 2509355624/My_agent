@@ -21,7 +21,7 @@ import os
 import re
 
 from app.config import (AGENTS_DIR, DEFAULT_AGENT_ID, PROVIDERS,
-                        QQ_INTERJECT_COOLDOWN)
+                        QQ_INTERJECT_COOLDOWN, QQ_INTERJECT_MIN_GAP)
 
 
 # 字母数字开头，后跟字母数字 / 下划线 / 连字符；限长防超长文件名。
@@ -167,6 +167,61 @@ def interject_cooldown(agent_id, group_id):
     if clamped is None:
         clamped = _clamp_cooldown(QQ_INTERJECT_COOLDOWN) or 0
     return clamped
+
+
+# 触发概率：0~100 的整数百分比。0 = 从不主动开口；100 = 每批都去问模型。
+# 默认 12%（≈1/8）——主动开口是点缀，绝大多数消息不该惊动模型。
+DEFAULT_INTERJECT_CHANCE = 12
+
+# 判断间隔的合法范围（秒）。0 = 不限（但还有概率门在前面挡着）。
+INTERJECT_GAP_MIN = 0
+INTERJECT_GAP_MAX = 3600
+
+
+def _clamp_percent(v):
+    """收敛成 0~100 的整数；不是数字返回 None（让调用方回落默认）。"""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return max(0, min(100, int(v)))
+
+
+def interject_chance(agent_id, group_id):
+    """这个群「收到消息后去问一次模型」的概率（百分比整数，热生效）。
+
+    三层取值与冷却同型：interject_chance_overrides[群号] > interject_chance
+    > DEFAULT_INTERJECT_CHANCE。概率门挡掉的批次压根不调模型，这是省调用
+    最有效的一道闸——它挡在冷却和判断之前。
+    """
+    s = load_settings(agent_id)
+    overrides = s.get("interject_chance_overrides")
+    v = overrides.get(str(group_id)) if isinstance(overrides, dict) else None
+    if v is None:
+        v = s.get("interject_chance")
+    clamped = _clamp_percent(v)
+    return DEFAULT_INTERJECT_CHANCE if clamped is None else clamped
+
+
+def interject_min_gap(agent_id, group_id):
+    """两次判断之间的最小秒数（热生效，不用重启）。
+
+    判断本身也是一次 API 调用，群聊刷屏时不能每条都问。三层取值同冷却：
+    interject_min_gap_overrides[群号] > interject_min_gap > .env 的
+    QQ_INTERJECT_MIN_GAP。0 = 不做这道闸（只剩概率门挡着）。
+    """
+    s = load_settings(agent_id)
+    overrides = s.get("interject_min_gap_overrides")
+    v = overrides.get(str(group_id)) if isinstance(overrides, dict) else None
+    if v is None:
+        v = s.get("interject_min_gap")
+    if v is None:
+        v = QQ_INTERJECT_MIN_GAP
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return _clamp_gap(QQ_INTERJECT_MIN_GAP)
+    return _clamp_gap(v)
+
+
+def _clamp_gap(v):
+    return max(INTERJECT_GAP_MIN, min(INTERJECT_GAP_MAX, int(v)))
 
 
 def safe_agent_id(agent_id):

@@ -592,17 +592,27 @@ def get_agent_sessions(agent_id):
     muted = set(settings.get("interject_muted") or [])
     img_muted = set(settings.get("image_gen_muted") or [])
     overrides = settings.get("interject_cooldown_overrides") or {}
+    chance_ov = settings.get("interject_chance_overrides") or {}
+    gap_ov = settings.get("interject_min_gap_overrides") or {}
     for item in items:
         if item["kind"] == "group":
             item["interject"] = item["target_id"] not in muted
             item["image_gen"] = item["target_id"] not in img_muted
             ov = overrides.get(str(item["target_id"]))
             item["cooldown_override"] = ov if isinstance(ov, (int, float)) else None
-    # 全局主动发言冷却（settings 里没设就回落 .env 默认），管理页输入框用
+            ch = chance_ov.get(str(item["target_id"]))
+            item["chance_override"] = ch if isinstance(ch, (int, float)) else None
+            gp = gap_ov.get(str(item["target_id"]))
+            item["gap_override"] = gp if isinstance(gp, (int, float)) else None
+    # 全局主动发言三件套（settings 里没设就回落默认），管理页输入框用
     return jsonify({"sessions": items, "names_ok": names_ok, "agent": aid,
                     "image_gen_on": settings.get("image_gen") is not False,
                     "interject_cooldown":
-                        agent_store.interject_cooldown(aid, "")})
+                        agent_store.interject_cooldown(aid, ""),
+                    "interject_chance":
+                        agent_store.interject_chance(aid, ""),
+                    "interject_min_gap":
+                        agent_store.interject_min_gap(aid, "")})
 
 
 @app.route("/api/agent/<agent_id>/image_gen", methods=["PUT"])
@@ -759,6 +769,142 @@ def set_interject_cooldown_group(agent_id, group_id):
         return jsonify({"error": "写入 settings.json 失败"}), 500
     return jsonify({"ok": True, "agent": aid, "group": str(group_id),
                     "cooldown": cd})
+
+
+def _percent_from_body(body):
+    """解析 0~100 的整数百分比；非数字/越界返回 None（写入层明确拒绝）。"""
+    v = body.get("chance")
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    if not 0 <= v <= 100:
+        return None
+    return int(v)
+
+
+def _gap_from_body(body):
+    """解析判断间隔秒数（0~3600）。0 = 不做这道闸。"""
+    v = body.get("min_gap")
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    if not (agent_store.INTERJECT_GAP_MIN <= v <= agent_store.INTERJECT_GAP_MAX):
+        return None
+    return int(v)
+
+
+def _put_override(aid, group_id, field, value):
+    """写 settings.json 的 <field>_overrides[群号]；value=None 表示删覆盖。"""
+    settings = agent_store.load_settings(aid)
+    name = field + "_overrides"
+    overrides = settings.get(name)
+    if not isinstance(overrides, dict):
+        overrides = {}
+    if value is None:
+        overrides.pop(str(group_id), None)
+    else:
+        overrides[str(group_id)] = value
+    settings[name] = overrides
+    if not agent_store.save_settings(aid, settings):
+        return False
+    return True
+
+
+@app.route("/api/agent/<agent_id>/interject_chance", methods=["PUT"])
+def set_interject_chance(agent_id):
+    """设全局主动发言的触发概率（百分比整数）。热生效。
+
+    12 ≈ 1/8（默认）；0 = 从不主动开口；100 = 每批消息都去问模型。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    chance = _percent_from_body(body)
+    if chance is None:
+        return jsonify({"error": "需要数字字段 chance（0~100）"}), 400
+    settings = agent_store.load_settings(aid)
+    settings["interject_chance"] = chance
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "chance": chance})
+
+
+@app.route("/api/agent/<agent_id>/interject_chance/<group_id>",
+           methods=["PUT"])
+def set_interject_chance_group(agent_id, group_id):
+    """设单群触发概率覆盖。chance=null 删除覆盖（回落全局值）。"""
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if "chance" not in body:
+        return jsonify({"error": "需要字段 chance（0~100 的数字，或 null）"}), 400
+    if body["chance"] is None:
+        chance = None
+    else:
+        chance = _percent_from_body(body)
+        if chance is None:
+            return jsonify({"error": "chance 要么是 0~100 的数字，"
+                                     "要么是 null（删除覆盖）"}), 400
+    if not _put_override(aid, group_id, "interject_chance", chance):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "group": str(group_id),
+                    "chance": chance})
+
+
+@app.route("/api/agent/<agent_id>/interject_min_gap", methods=["PUT"])
+def set_interject_min_gap(agent_id):
+    """设全局「两次判断之间的最小秒数」。热生效。
+
+    判断也是一次 API 调用，这道闸防刷屏时每条都问。0 = 不做这道闸
+    （那就只剩概率门挡着）。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    gap = _gap_from_body(body)
+    if gap is None:
+        return jsonify({"error": "需要数字字段 min_gap（0~3600 秒）"}), 400
+    settings = agent_store.load_settings(aid)
+    settings["interject_min_gap"] = gap
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "min_gap": gap})
+
+
+@app.route("/api/agent/<agent_id>/interject_min_gap/<group_id>",
+           methods=["PUT"])
+def set_interject_min_gap_group(agent_id, group_id):
+    """设单群判断间隔覆盖。min_gap=null 删除覆盖（回落全局值）。"""
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if "min_gap" not in body:
+        return jsonify({"error": "需要字段 min_gap（0~3600 的数字，或 null）"}), 400
+    if body["min_gap"] is None:
+        gap = None
+    else:
+        gap = _gap_from_body(body)
+        if gap is None:
+            return jsonify({"error": "min_gap 要么是 0~3600 的数字，"
+                                     "要么是 null（删除覆盖）"}), 400
+    if not _put_override(aid, group_id, "interject_min_gap", gap):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "group": str(group_id),
+                    "min_gap": gap})
 
 
 @app.route("/api/agent/<agent_id>/sessions/<key>", methods=["DELETE"])

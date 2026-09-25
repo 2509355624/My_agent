@@ -240,6 +240,24 @@
           <span class="hint">没被 @ 时最多每这么多秒主动接一次话，0 = 不限频。
             想让某个群单独不同，点群行里的「频率」按钮。</span>
         </div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
+          <label class="hint" for="chanceAll">触发概率</label>
+          <input id="chanceAll" type="number" min="0" max="100" step="1"
+                 style="width:76px;" />
+          <span class="hint">%</span>
+          <button class="ghost" id="chanceAllSave">保存</button>
+          <span class="hint">收到一批消息后去问一次模型的概率，默认 12（≈1/8）。
+            0 = 从不主动开口，100 = 每批都问。单群可单独设，见群行的「概率」。</span>
+        </div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
+          <label class="hint" for="gapAll">判断间隔</label>
+          <input id="gapAll" type="number" min="0" max="3600" step="5"
+                 style="width:76px;" />
+          <span class="hint">秒</span>
+          <button class="ghost" id="gapAllSave">保存</button>
+          <span class="hint">两次「要不要接话」的判断之间至少隔这么久——判断也是一次调用。
+            0 = 不做这道闸（那就只剩概率门挡着）。</span>
+        </div>
         <div class="sess" id="sessList"></div>
         <div class="sess-foot">
           <button class="ghost" id="sessReload">刷新</button>
@@ -650,6 +668,22 @@ function renderSessions() {
         ? '频率:' + s.cooldown_override + 's' : '频率·跟全局';
       cf.addEventListener('click', () => editCooldown(s, cf));
       row.appendChild(cf);
+
+      // 「概率」按钮：这个群收到消息后去问模型的概率；单群覆盖。
+      const chb = document.createElement('button');
+      chb.className = 'ghost';
+      chb.textContent = s.chance_override != null
+        ? '概率:' + s.chance_override + '%' : '概率·跟全局';
+      chb.addEventListener('click', () => editChance(s, chb));
+      row.appendChild(chb);
+
+      // 「判断间隔」按钮：两次判断之间的最小秒数；单群覆盖。
+      const gb = document.createElement('button');
+      gb.className = 'ghost';
+      gb.textContent = s.gap_override != null
+        ? '判断:' + s.gap_override + 's' : '判断·跟全局';
+      gb.addEventListener('click', () => editGap(s, gb));
+      row.appendChild(gb);
     }
 
     // 没有会话线的群（收到过消息但从没回过）没有聊天记录可删
@@ -675,6 +709,8 @@ async function loadSessions() {
     renderSessions();
     renderImageGenAll(d.image_gen_on !== false);
     $('coolAll').value = d.interject_cooldown != null ? d.interject_cooldown : '';
+    $('chanceAll').value = d.interject_chance != null ? d.interject_chance : '';
+    $('gapAll').value = d.interject_min_gap != null ? d.interject_min_gap : '';
     // 名字要问 QQ 协议端，拿不到只是显示得糙一点，不影响删除
     sessStatus(d.names_ok ? '' : 'NapCat 没连上，群里只显示群号（不影响删除）',
                d.names_ok ? '' : 'err');
@@ -810,6 +846,80 @@ async function editCooldown(s, btn) {
   }
 }
 
+// ─── 触发概率 / 判断间隔 ────────────────────────────
+// 跟「频率」同一套结构：全局一个值，单群可覆盖，存 settings.json 热生效。
+
+async function saveNumericAll(id, path, field, label, unit, min, max) {
+  const v = Number($(id).value);
+  if (!Number.isInteger(v) || v < min || v > max) {
+    sessStatus(label + '要填 ' + min + '~' + max + ' 的整数', 'err');
+    return;
+  }
+  try {
+    await api('/api/agent/' + encodeURIComponent(cur) + path,
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [field]: v }) });
+    sessStatus(label + '已设为 ' + v + unit + '，立即生效', 'ok');
+  } catch (e) {
+    sessStatus(e.message, 'err');
+  }
+}
+
+async function editNumeric(s, btn, o) {
+  const name = s.name || s.target_id;
+  const curVal = o.get(s);
+  const raw = prompt('「' + name + '」的' + o.label + '\n\n' + o.hint,
+                     curVal == null ? '' : curVal);
+  if (raw === null) return;            // 取消
+  const t = String(raw).trim();
+  let v = null;                        // null = 删除覆盖，回落全局
+  if (t !== '') {
+    const n = Number(t);
+    if (!Number.isInteger(n) || n < o.min || n > o.max) {
+      sessStatus(o.label + '要填 ' + o.min + '~' + o.max + ' 的整数，'
+        + '留空表示跟全局', 'err');
+      return;
+    }
+    v = n;
+  }
+  btn.disabled = true;
+  try {
+    await api('/api/agent/' + encodeURIComponent(cur) + o.path
+      + encodeURIComponent(s.target_id),
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [o.field]: v }) });
+    o.set(s, v);
+    renderSessions();
+    sessStatus('「' + name + '」' + o.label + '已'
+      + (v == null ? '恢复跟全局一致' : '设为 ' + v + o.unit) + '，立即生效', 'ok');
+  } catch (e) {
+    sessStatus(e.message, 'err');
+    btn.disabled = false;
+  }
+}
+
+function editChance(s, btn) {
+  editNumeric(s, btn, {
+    label: '触发概率', field: 'chance', path: '/interject_chance/',
+    min: 0, max: 100, unit: '%',
+    hint: '收到一批消息后去问一次模型的概率。0 = 这个群从不主动开口；'
+        + '100 = 每批都问。留空 = 删掉单独设置，跟全局一样。',
+    get: (x) => x.chance_override, set: (x, v) => { x.chance_override = v; }
+  });
+}
+
+function editGap(s, btn) {
+  editNumeric(s, btn, {
+    label: '判断间隔', field: 'min_gap', path: '/interject_min_gap/',
+    min: 0, max: 3600, unit: ' 秒',
+    hint: '两次「要不要接话」的判断之间至少隔这么久——判断也是一次调用。'
+        + '0 = 不做这道闸。留空 = 删掉单独设置，跟全局一样。',
+    get: (x) => x.gap_override, set: (x, v) => { x.gap_override = v; }
+  });
+}
+
 async function removeSession(s, btn) {
   const title = s.name || s.key;
   const what = s.kind === 'main' ? '主会话（网页端对话）' : '「' + title + '」的全部聊天记录';
@@ -855,6 +965,12 @@ $('reload').addEventListener('click', () => {
 $('sessReload').addEventListener('click', loadSessions);
 $('imgGenAll').addEventListener('click', toggleImageGenAll);
 $('coolAllSave').addEventListener('click', saveCooldownAll);
+$('chanceAllSave').addEventListener('click', () =>
+  saveNumericAll('chanceAll', '/interject_chance', 'chance', '触发概率',
+                 '%', 0, 100));
+$('gapAllSave').addEventListener('click', () =>
+  saveNumericAll('gapAll', '/interject_min_gap', 'min_gap', '判断间隔',
+                 ' 秒', 0, 3600));
 $('provider').addEventListener('change', () => {
   const pid = $('provider').value || detail.global_provider;
   $('model').placeholder = '默认 ' + (defaultModelOf(pid) || '—');

@@ -38,17 +38,29 @@ multilingual 分支）来做，因为它是这两天的热点、免费、单次�
             不准，跑一两天翻日志再决定放不放开。
     on      判「接」且过了冷却闸就真的开口。
 
-## 两道闸
+## 三道闸（按顺序，越靠前越省钱）
 
-    MIN_GAP   两次**判断**之间的最小间隔——判断本身也是 API 调用，群聊刷屏
-              时不能每条都问。
+    CHANCE    概率门：收到一批消息先摇一次骰子，没摇中就直接结束，连模型
+              都不问。默认 12%（≈1/8），管理页可调、单群可覆盖。它是省调用
+              最有效的一道——挡在其余两道闸之前。
+    MIN_GAP   两次**判断**之间的最小间隔——判断也是 API 调用，群聊刷屏时
+              不能每条都问。0 = 不做这道闸（只剩概率门）。
     COOLDOWN  两次**发言**之间的最小间隔——防刷屏。判错一次是意外，连着说
               就是骚扰，这道闸比判断准不准更要紧。
+
+## 关于概率门「会不会错过好时机」
+
+会。1/8 意味着 7/8 的批次连看都不看一眼，其中当然有该接的。**这是有意的
+取舍**：真人也不是每句都接，而且主动开口是点缀不是职责——真被点名时走的
+是另一条路（@ 或触发词压根不过这些闸）。想让它更爱说话就调大概率，别去
+加「连着 N 次没判就强制判一次」之类的补偿逻辑：那等于把省下来的调用又
+加回去，还让频率变得不可预测。
 """
 
 import json
 import logging
 import os
+import random
 import threading
 import time
 
@@ -56,7 +68,7 @@ from app import agents as agent_store
 from app import recent
 from app.config import (
     QQ_INTERJECT_CONTEXT_MAX_CHARS, QQ_INTERJECT_CONTEXT_MESSAGES,
-    QQ_INTERJECT_GROUPS, QQ_INTERJECT_MIN_GAP,
+    QQ_INTERJECT_GROUPS,
     QQ_INTERJECT_MODE,
 )
 from app.llm import call_llm
@@ -119,13 +131,24 @@ def speaking():
     return QQ_INTERJECT_MODE == "on"
 
 
+def _chance_ok(agent_id, group_id):
+    """概率门：这一批消息摇不摇得中。百分比 0 = 永不，100 = 每批都判。"""
+    chance = agent_store.interject_chance(agent_id, group_id)
+    if chance <= 0:
+        return False
+    if chance >= 100:
+        return True
+    return random.random() * 100 < chance
+
+
 def _gap_ok(agent_id, group_id):
     """距离上次判断是否够久。判断也要调 API，群聊刷屏时不能每条都问。"""
-    if QQ_INTERJECT_MIN_GAP <= 0:
+    gap = agent_store.interject_min_gap(agent_id, group_id)
+    if gap <= 0:
         return True
     with _state_lock:
         last = _last_judged.get((agent_id, group_id))
-    return last is None or (time.time() - last) >= QQ_INTERJECT_MIN_GAP
+    return last is None or (time.time() - last) >= gap
 
 
 def _mark_judged(agent_id, group_id):
@@ -237,6 +260,10 @@ def decide(agent_id, group_id):
     if QQ_INTERJECT_GROUPS and gid not in QQ_INTERJECT_GROUPS:
         return None
     if gid in muted_groups(agent_id):
+        return None
+    # 概率门放最外层：摇不中的批次连时间戳都不记，最省。日志也不打——群里
+    # 每来一批消息都打一行「没摇中」会把真正的判断日志淹掉。
+    if not _chance_ok(agent_id, gid):
         return None
     # 正式模式下冷却中连判断都不做——判断也是一次 API 调用，判完反正开不了
     # 口，白花时间白刷日志。影子模式不跳：观察期就是要看它对每条消息的判断。
