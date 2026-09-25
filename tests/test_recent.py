@@ -314,9 +314,10 @@ class RunTurnContextTest(_TmpAgentsMixin, unittest.TestCase):
         recent.remember("qq", "9", "李四", "刚才在聊吃饭")
         seen = self._run()
         self.assertIn("刚才在聊吃饭", seen["extra"])
-        # 关键：不能拼进正文，否则会写进 history、每轮重复堆一份
+        # 关键：不能拼进正文，否则会写进 history、每轮重复堆一份。
+        # 正文会带发言人的署名（合并时补的，纯图消息也要能认出是谁发的）
         self.assertNotIn("刚才在聊吃饭", seen["text"])
-        self.assertEqual(seen["text"], "在吗")
+        self.assertEqual(seen["text"], "张三：在吗")
 
     def test_private_gets_no_context(self):
         recent.remember("qq", "1", "李四", "私聊的话")

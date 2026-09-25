@@ -319,7 +319,7 @@ def _should_reply(ev, target, target_id, text, at_me, has_image=False,
 
 # ─── 一批消息的合并 ──────────────────────────────────
 
-def _merge_batch(batch, max_items=None, max_chars=None):
+def _merge_batch(batch, max_items=None, max_chars=None, prefix=True):
     """把攒下来的一批消息拼成一条文本，并施加两道闸。
 
     静默窗口只负责「等连发到齐」，它自己不限制攒下多少：群里被刷屏时
@@ -331,6 +331,11 @@ def _merge_batch(batch, max_items=None, max_chars=None):
 
     **最新的那条永远保留**，哪怕它自己就超过字数上限——否则会把用户刚说
     的话整个吞掉，那比超长更糟。两个上限 <=0 表示该项不限制。
+
+    prefix=True（群聊）时给消息署名：合并窗口里可能混着好几个人的消息，
+    谁说的哪句必须跟着走——尤其纯图消息，不署名模型会把图安到正好在
+    说话的那个人头上。dispatch 已给「要回的」文本加过前缀，startswith
+    挡住重复；主动接话入队的（tentative）没加过，在这里补上。
     """
     if max_items is None:
         max_items = QQ_PENDING_MAX_ITEMS
@@ -349,6 +354,18 @@ def _merge_batch(batch, max_items=None, max_chars=None):
     lines, total = [], 0
     for it in reversed(items):
         t = it["text"]
+        who = it.get("sender") or ""
+        n_img = len(it.get("images") or [])
+        if prefix and who and t and not t.startswith(who + "："):
+            t = who + "：" + t
+        if n_img:
+            # 图的署名跟着消息走：有字的在句尾标张数，纯图的给一行占位
+            if t:
+                t += "（发了%d张图）" % n_img
+            elif prefix and who:
+                t = who + "：[图片]"
+            else:
+                t = "[图片]"
         if lines and max_chars > 0 and total + len(t) > max_chars:
             break
         if t:
@@ -450,13 +467,18 @@ class SessionRunner:
                       "images": [], "quotes": []}]
             # 判断模型看不见图（上下文里图只是 "[图片]" 占位符）。它判「接」
             # 往往就是好奇那张图——把最近一张真正捞出来给主模型看，不然只能
-            # 对着看不见的东西装懂。多张取最新一张，够接话用了。
-            img = recent.latest_image(QQ_AGENT_ID, self.target_id,
-                                      _INTERJECT_IMAGE_LOOKBACK)
-            if img:
-                batch[0]["images"] = [img]
+            # 对着看不见的东西装懂。多张取最新一张，够接话用了。图必须带上
+            # 「是谁发的」：不署名的话，模型会把它安到最近在发言的那个人头上。
+            rec = recent.latest_image_record(QQ_AGENT_ID, self.target_id,
+                                             _INTERJECT_IMAGE_LOOKBACK)
+            if rec:
+                batch[0]["images"] = [rec["m"]]
+                pic_owner = rec.get("n") or rec.get("u") or ""
+                if pic_owner:
+                    batch[0]["text"] += "\n（上面说的那张最近图片，是 %s 发的）" \
+                        % pic_owner
 
-        text = _merge_batch(batch)
+        text = _merge_batch(batch, prefix=(self.target == "group"))
         # 图片段单独收集：只发图不打字是合法用法（"帮我看下这个"），
         # 不能因为 text 为空就把整轮丢掉
         image_urls = [u for it in batch for u in (it.get("images") or [])]

@@ -158,17 +158,23 @@ def load_recent(agent_id, group_id, limit):
     return out
 
 
-def latest_image(agent_id, group_id, within=12):
-    """最近 within 条里最新的一张图片地址；没有返回空串。
+def latest_image_record(agent_id, group_id, within=12):
+    """最近 within 条里最新一条带图记录（整条 dict，含发送者）；没有返回 None。
 
-    给主动接话用：判断模型在上下文里只看得到「[图片]」占位符，判了「接」
-    之后把真正的图捞出来给主模型看——不然它对着看不见的东西只能装懂。
-    只往前翻 within 条：太老的图多半已经不是当前话题了。
+    接话场景除了图本身还得知道是谁发的——只给 URL 不署名，模型会把图
+    安到正好在说话的那个人头上（张冠李戴）。只往前翻 within 条：太老的
+    图多半已经不是当前话题了。
     """
     for rec in reversed(load_recent(agent_id, group_id, within)):
         if rec.get("m"):
-            return rec["m"]
-    return ""
+            return rec
+    return None
+
+
+def latest_image(agent_id, group_id, within=12):
+    """最近 within 条里最新的一张图片地址；没有返回空串。"""
+    rec = latest_image_record(agent_id, group_id, within)
+    return rec["m"] if rec else ""
 
 
 def _render(rec):

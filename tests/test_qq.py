@@ -121,6 +121,34 @@ class MergeBatchTest(unittest.TestCase):
         out = qq_bot._merge_batch(self._batch("有", "", "有"))
         self.assertEqual(out, "有\n有")
 
+    def test_image_only_message_is_signed(self):
+        # 纯图消息没有文字，署名必须单独补一行——不署名模型会把图安到
+        # 正好在说话的那个人头上（真事：被子教发的图被认成猫大侠发的）
+        batch = [{"text": "猫大侠：今天真热", "sender": "猫大侠"},
+                 {"text": "", "sender": "被子教", "images": ["http://x/1.jpg"]}]
+        out = qq_bot._merge_batch(batch)
+        self.assertEqual(out, "猫大侠：今天真热\n被子教：[图片]")
+
+    def test_text_with_image_counts_pictures_inline(self):
+        # 带字又带图的，句尾标注张数，模型才能把图片块对回发图的人
+        batch = [{"text": "看这个", "sender": "阿强",
+                  "images": ["http://x/1.jpg", "http://x/2.jpg"]}]
+        self.assertEqual(qq_bot._merge_batch(batch),
+                         "阿强：看这个（发了2张图）")
+
+    def test_unsigned_tentative_item_gets_sender_prefix(self):
+        # 主动接话入队的消息（tentative）没经过 dispatch 的加名，合并时补上；
+        # 已经带名的（dispatch 加过的）不重复加
+        batch = [{"text": "在吗", "sender": "张三"},
+                 {"text": "张三：@机器人 你好", "sender": "张三"}]
+        self.assertEqual(qq_bot._merge_batch(batch),
+                         "张三：在吗\n张三：@机器人 你好")
+
+    def test_private_chat_does_not_sign(self):
+        # 私聊不需要署名（对面就一个人），保持旧行为
+        batch = [{"text": "你好", "sender": "李四"}]
+        self.assertEqual(qq_bot._merge_batch(batch, prefix=False), "你好")
+
     def test_empty_batch(self):
         self.assertEqual(qq_bot._merge_batch([]), "")
 
