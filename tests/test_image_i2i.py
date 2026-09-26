@@ -296,7 +296,12 @@ class I2IFlowTest(unittest.TestCase):
         self.assertEqual(wf["25"]["class_type"], "VAEEncode")
         self.assertEqual(wf["24"]["inputs"]["image"], "i2isrc_x.png")
         self.assertEqual(wf["2"]["inputs"]["denoise"], 0.6)
-        self.assertEqual(wf["19"]["inputs"]["denoise"], 0.25)   # 精修段不动
+        # 图生图不做双采样：第二段（LatentUpscaleBy 1.2 → 换 anima13 精修）
+        # 已删。源图本来就大（长边 1216），再叠一段必然爆显存。
+        self.assertNotIn("18", wf)
+        self.assertNotIn("19", wf)
+        self.assertNotIn("20", wf)
+        self.assertEqual(wf["3"]["inputs"]["samples"][0], "2")   # 解码直吃第一段
         # 种子是「带引号的数字串」——load_skill 的 __SEED__ 预处理留下的形态，
         # 既有的文生图一直这么提交，ComfyUI 会转成 INT。这里只钉「换了新种子」。
         self.assertTrue(str(wf["2"]["inputs"]["seed"]).isdigit())
@@ -321,6 +326,10 @@ class I2IFlowTest(unittest.TestCase):
         self.assertEqual(wf["2"]["inputs"]["lora_name"],
                          "add_contrast_XL.safetensors")
         self.assertIn("night city", wf["5"]["inputs"]["text"])
+        # 也只有一次采样：图生图这条路不叠第二段
+        samplers = [n for n in wf.values()
+                    if n.get("class_type") == "KSampler"]
+        self.assertEqual(len(samplers), 1)
 
     def test_krea2_is_refused(self):
         out, wf = self._run(prompt="x", skill="krea2", source_image="1")
