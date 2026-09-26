@@ -85,6 +85,10 @@ _TOOL_HINTS = [
      "- 批量生成图片用 --- 分隔多个 prompt，只调用一次 generate_image"),
     (("generate_image",),
      "- generate_image 的 prompt 参数必须是英文"),
+    (("generate_image",),
+     "- **引用图片 ≠ 图生图**：只有对方明确说要「改这张图」（图生图 / 垫图 / 照着这张改 /"
+     " 把X换成Y）才传 source_image；「看特征 / 复刻 / 参考这个风格 / 照着画一张新的」"
+     "都是**文生图**——引用图你看得见，照它写 prompt 即可，不要传 source_image"),
     (("write_file",),
      "- 想创建新 Skill？用 write_file 写入 skill.md / character.txt / workflow.json"),
     (("-",),
