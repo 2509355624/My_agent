@@ -299,16 +299,26 @@ class ToolDescriptionTest(unittest.TestCase):
     def test_qq_hides_character_param_and_mode(self):
         block = self._block(QQ_AGENT_ID)
         self.assertNotIn("use_character", block)
-        self.assertNotIn("底模两种模式", block)
+        self.assertNotIn("【底模】", block)
 
     def test_web_sees_character_param_and_mode(self):
         block = self._block("main")
         self.assertIn("use_character", block)
-        self.assertIn("底模两种模式", block)
+        self.assertIn("【底模】", block)
 
     def test_both_see_lora_doc(self):
         self.assertIn("lora", self._block(QQ_AGENT_ID))
         self.assertIn("lora", self._block("main"))
+
+    def test_default_image_skill_is_anima(self):
+        """默认生图渠道 = anima（2026-09-26 用户定：三个渠道都留，只是默认跑 anime）。"""
+        import inspect
+        from app.tools.normal.generate_image import _generate_image, tool
+        default = inspect.signature(_generate_image).parameters["skill"].default
+        self.assertEqual(default, "anima")
+        self.assertIn("默认 Skill】anima", tool["description"])
+        self.assertIn("默认 Skill】anima",
+                      tool["description_overrides"][QQ_AGENT_ID])
 
 
 if __name__ == "__main__":

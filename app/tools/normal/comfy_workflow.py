@@ -330,7 +330,7 @@ tool = {
     "parameters": {
         "type": "object",
         "properties": {
-            "skill": {"type": "string", "description": "skill 名，默认 image_gen_v1"}
+            "skill": {"type": "string", "description": "skill 名。默认 image_gen_v1（本工具调参逻辑按它的标准单链结构写；anima 是双段结构、krea2 只有 ModelOnly lora，改这两个要先传对应 skill 名 get_workflow 看清结构再动手）"}
         },
         "required": []
     }
@@ -350,7 +350,7 @@ tool_update = {
     "parameters": {
         "type": "object",
         "properties": {
-            "skill": {"type": "string", "description": "skill 名，默认 image_gen_v1"},
+            "skill": {"type": "string", "description": "skill 名。默认 image_gen_v1（本工具调参逻辑按它的标准单链结构写；anima 是双段结构、krea2 只有 ModelOnly lora，改这两个要先传对应 skill 名 get_workflow 看清结构再动手）"},
             "ops": {
                 "type": "array",
                 "description": "要执行的操作列表（每条可不同 op）",
