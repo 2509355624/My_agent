@@ -303,15 +303,15 @@ def _abort(prompt_id):
     三步都尽力而为——ComfyUI 可能已经崩了，那也没得清；清理失败不该再抛错，
     因为调用方接下来还要去发「超时了请重画」那句话。
     """
-    for path, payload in (("/interrupt", None),
+    # /interrupt 带 prompt_id 做定向中断：只有当前正在跑的就是这张时才会停，
+    # 否则 ComfyUI 直接跳过。不带 id 是全局中断，会把别的 worker（web/qq_bot
+    # 共用一个 ComfyUI）正在跑的图劈掉——出过这种事故。
+    for path, payload in (("/interrupt", {"prompt_id": prompt_id}),
                           ("/queue", {"delete": [prompt_id]}),
                           ("/free", {"unload_models": True,
                                      "free_memory": True})):
         try:
-            if payload is None:
-                requests.post(COMFYUI_URL + path, timeout=10)
-            else:
-                requests.post(COMFYUI_URL + path, json=payload, timeout=15)
+            requests.post(COMFYUI_URL + path, json=payload, timeout=15)
         except Exception:
             log.debug("清理 ComfyUI(%s) 失败，忽略", path)
 

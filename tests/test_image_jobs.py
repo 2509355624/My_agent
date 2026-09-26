@@ -252,6 +252,9 @@ class ProcessTest(_Base):
         urls = [u for u, _ in posts]
         self.assertTrue(any(u.endswith("/interrupt") for u in urls))
         self.assertTrue(any(u.endswith("/free") for u in urls))
+        # 中断必须是定向的：只杀自己这张，不能全局劈到别的 worker 正在跑的图
+        self.assertIn({"prompt_id": "pid"},
+                      [p for u, p in posts if u.endswith("/interrupt")])
         # 队列里那一份也要按 prompt_id 删掉
         self.assertIn({"delete": ["pid"]},
                       [p for u, p in posts if u.endswith("/queue")])
