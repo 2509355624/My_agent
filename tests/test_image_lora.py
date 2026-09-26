@@ -76,6 +76,14 @@ class LoraChainTest(unittest.TestCase):
                      "inputs": {"model": ["1", 0]}}}
         self.assertEqual(generate_image._lora_chain(wf), ["14"])
 
+    def test_gguf_unet_loader_counts_as_start(self):
+        # krea2 实际工作流：GGUF 模型走 UnetLoaderGGUF，不是 CheckpointLoader——
+        # 起点识别必须把它也算上，否则整条 lora 链找不到 → 误报"没有 lora 槽"
+        wf = {"1": {"class_type": "UnetLoaderGGUF", "inputs": {}},
+              "14": {"class_type": "LoraLoaderModelOnly",
+                     "inputs": {"model": ["1", 0]}}}
+        self.assertEqual(generate_image._lora_chain(wf), ["14"])
+
     def test_no_lora_workflow(self):
         wf = {"4": {"class_type": "CheckpointLoaderSimple", "inputs": {}},
               "9": {"class_type": "SaveImage", "inputs": {}}}

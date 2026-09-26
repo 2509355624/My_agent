@@ -107,7 +107,8 @@ def _lora_chain(workflow):
         src = (node.get("inputs") or {}).get("model")
         sources[nid] = src[0] if isinstance(src, list) and src else None
     ckpts = {nid for nid, node in workflow.items()
-             if "CheckpointLoader" in (node.get("class_type") or "")}
+             if "CheckpointLoader" in (node.get("class_type") or "")
+             or "UnetLoader" in (node.get("class_type") or "")}
     chain, current = [], next(
         (nid for nid, src in sources.items() if src in ckpts), None)
     while current is not None and current not in chain:
