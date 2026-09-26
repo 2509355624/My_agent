@@ -67,7 +67,9 @@ def save_history(history, agent_id=None, session_key=None):
 
     落盘前先过一遍轮数窗口（见 trim_window）：窗口外的轮次在这里就摘走，
     于是下一轮 load_history 读回来的已经是裁剪后的历史。**只裁要写的这份
-    副本**，不动调用方手上的 list——本轮该看什么还看什么。
+    副本**，不动调用方手上的 list——本轮该看什么还看什么。唯一的例外是
+    非群会话的 token 预算压缩（见 trim_window）：压缩不幂等，不原地收缩的
+    话同轮的后续保存会把压好的历史原样冲回去。
     """
     history = trim_window(history, agent_id=agent_id, session_key=session_key)
     path = _agent_session_file(agent_id, session_key)
@@ -308,9 +310,13 @@ def trim_history(history, agent_id=None, usage=None, budget=None,
         return history
 
     if should:
-        _LAST_COMPACT_TOKENS[key] = total_tokens
-        return _compact(history, system_msgs, other_msgs, budget,
-                        provider=provider, model=model)
+        result = _compact(history, system_msgs, other_msgs, budget,
+                          provider=provider, model=model)
+        if result is not history:
+            # 只有真压下去了才记水位。摘要失败不能占住冷却位——不然之后的
+            # 每次触发都被冷却挡住，历史永远压不动，只能干等强制线。
+            _LAST_COMPACT_TOKENS[key] = total_tokens
+        return result
 
     # 默认：不压缩。命中率越高越不该动（每 token 都是命中价）
     return history
@@ -437,8 +443,16 @@ def trim_window(history, agent_id=None, session_key=None, max_turns=None):
         # hit_rate 给 0 = 到警戒线就压，私聊场景宁可早压也别养肥历史。
         est = (estimate_messages(system_msgs)
                + estimate_messages(other_msgs))
-        return trim_history(history, agent_id,
-                            usage={"total_tokens": est, "hit_rate": 0.0})
+        result = trim_history(history, agent_id,
+                              usage={"total_tokens": est, "hit_rate": 0.0})
+        if result is not history:
+            # 原地收缩调用方手上的 list。压缩**不是幂等**的：一轮里
+            # save_history 会被调很多次，副本式裁剪下第一次压缩写了瘦文件、
+            # 水位也记上了，同轮的后续保存却被冷却挡住 → 又把胖历史原样写
+            # 回去，压缩成果直接被冲掉（实测私聊压完 547 条原样回弹）。
+            # 原地收缩后，后续保存看到的就是瘦历史，判据天然不再触发。
+            history[:] = result
+        return result
 
     _digest_turns_async(agent_id, group_id, old_turns)
 

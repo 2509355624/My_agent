@@ -401,5 +401,69 @@ class SummaryFailureDegradeTest(unittest.TestCase):
                 self.fail("摘要失败不该抛出，实际抛了 %r" % (e,))
 
 
+class TrimWindowPrivateTest(unittest.TestCase):
+    """非群会话（QQ 私聊 / 网页主会话）的本地估算压缩路径。
+
+    核心回归：压缩不幂等——一轮里 save_history 会被调很多次，第一次压缩
+    写了瘦文件、水位也记上了，同轮后续保存被冷却挡住，又把胖历史原样写
+    回去，压缩成果被冲掉（实测私聊 547 条压完原样回弹、compact_summary
+    一条不剩）。修复 = 压缩成功后原地收缩调用方的 list。
+    """
+
+    def setUp(self):
+        p = mock.patch.object(memory, "_LAST_COMPACT_TOKENS", {})
+        p.start()
+        self.addCleanup(p.stop)
+
+    @staticmethod
+    def _fat_private_history(turns=25, chars=2000):
+        """25 轮 × 约 2000 中文字符：est ≈ 30000 > 警戒线 24000，且 > 20 轮窗口。"""
+        h = [_msg("system", "sys")]
+        for i in range(turns):
+            h.append(_msg("user", "问%d " % i + "字" * chars))
+            h.append(_msg("assistant", "答%d " % i + "字" * chars))
+        return h
+
+    def _trim(self, h, summarize):
+        with mock.patch.object(memory, "_summarize_old_turns", summarize):
+            return memory.trim_window(h, agent_id="qq",
+                                      session_key="private_123")
+
+    def test_fat_private_history_compacts_and_shrinks_caller_list(self):
+        h = self._fat_private_history()
+        out = self._trim(h, mock.Mock(return_value="这是摘要"))
+        # 摘要消息顶进来了，历史大幅变瘦
+        self.assertIn("compact_summary", [m.get("tool_name") for m in out])
+        self.assertLess(len(out), 15)
+        # 关键断言：调用方手上的 list 也被原地收缩，同轮后续保存不会回弹
+        self.assertEqual(len(h), len(out))
+
+    def test_second_save_after_compaction_does_not_resummarize(self):
+        h = self._fat_private_history()
+        summarize = mock.Mock(return_value="这是摘要")
+        self._trim(h, summarize)          # 第一次：压缩 + 原地收缩
+        self._trim(h, summarize)          # 第二次：list 已经瘦了，不该再摘要
+        self.assertEqual(summarize.call_count, 1)
+
+    def test_summary_failure_keeps_list_and_watermark_clean(self):
+        h = self._fat_private_history()
+
+        def boom(msgs, **kw):
+            raise RuntimeError("LLM 请求失败 HTTP 429")
+
+        out = self._trim(h, boom)
+        self.assertIs(out, h)             # 失败降级：原样交回
+        self.assertEqual(len(h), 51)      # 调用方 list 没被动过
+        self.assertEqual(memory._LAST_COMPACT_TOKENS, {})  # 失败不占冷却位
+
+    def test_retry_after_failure_can_succeed(self):
+        h = self._fat_private_history()
+        summarize = mock.Mock(side_effect=[RuntimeError("429"), "这是摘要"])
+        self._trim(h, summarize)          # 第一次失败：不记水位
+        self._trim(h, summarize)          # 第二次：冷却挡不住，重试成功
+        self.assertEqual(summarize.call_count, 2)
+        self.assertIn("compact_summary", [m.get("tool_name") for m in h])
+
+
 if __name__ == "__main__":
     unittest.main()
