@@ -197,7 +197,11 @@ def _generate_image(prompt, skill="image_gen_v1", use_character=False, lora=None
         character = ""
     # 转义 character 里的换行和特殊字符
     character_escaped = character.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '')
-    workflow_str = workflow_str.replace('"__MULTI_PROMPTS__"', json.dumps(prompt))
+    # __MULTI_PROMPTS__ 可以独占一个 JSON 字符串（image_gen_v1），也可以
+    # 嵌在更大字符串里（krea2 的 node4 = "Yoneyama Mai Style, __MULTI_PROMPTS__"，
+    # 工作流自带固定风格前缀）。统一按「字符串内部转义替换」处理，两种都兼容。
+    prompt_escaped = prompt.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '')
+    workflow_str = workflow_str.replace("__MULTI_PROMPTS__", prompt_escaped)
     workflow_str = workflow_str.replace("__SEED__", str(seed))
     workflow_str = workflow_str.replace("__CHARACTER__", character_escaped)
 
