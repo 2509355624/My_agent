@@ -777,7 +777,8 @@ class SessionRunner:
         self._deliver(sent_by_tool, reply, images)
 
     def _deliver(self, sent_by_tool, reply, images):
-        """把结果发回 QQ。图片先过一遍 image_out（转 JPEG，顺便甩掉工作流元数据）。"""
+        """把结果发回 QQ。图片过一遍 image_out（甩掉工作流元数据），格式看管理页开关。"""
+        from app.agents import image_send_format
         send_text = (qq_api.send_group if self.target == "group"
                      else qq_api.send_private)
         spoke = False
@@ -789,10 +790,12 @@ class SessionRunner:
             except Exception:
                 log.exception("回发文字失败 %s", self.session_key)
 
+        # 一轮里的多张图用同一个格式，别每张都去读一遍 settings（热路径）
+        fmt = image_send_format(QQ_AGENT_ID, self.target, self.target_id)
         for name in images:
             try:
                 qq_api.send_image(self.target, self.target_id,
-                                  image_out.prepare_for_send(name))
+                                  image_out.prepare_for_send(name, fmt))
                 spoke = True
             except Exception:
                 log.exception("回发图片失败 %s", self.session_key)

@@ -8,18 +8,21 @@ ComfyUI 会往 PNG 的 tEXt 块里塞一份工作流 JSON（`prompt` 键，实�
 
 ## 做法
 
-发送前把图重新编码成 JPEG，元数据自然留不住；顺带把体积压到原图的 1/7
-左右（实测 1.19 MB → 0.18 MB），群里发得快，也不占相册。**ComfyUI output
-目录里的原图一个字节都不动**，自己复现、调试照旧。
+发送前把图重新编码：默认 JPEG（元数据自然留不住，顺带把体积压到原图的
+1/7 左右，实测 1.19 MB → 0.18 MB）；管理页可以把某个会话切成 PNG——PNG
+用无损重编码 + 显式传一个空 `PngInfo`，像素与原图逐点一致，只有那块 tEXt
+没了。**ComfyUI output 目录里的原图一个字节都不动**，自己复现、调试照旧。
 
 ## 关键取舍
 
+- **两种格式都必须是「另存一份」**：png 也不是把原图直接发出去，宁可多一次
+  编码也不能让原图带上外发路径（原图要留着自己用）。
 - **转不出来就回落**：任何一步失败都退化成 ComfyUI 的原图 URL。宁可
   带着元数据发出去，也不能让图卡在这一步发不出来。
 - **产物放系统 temp**：一次性文件不往项目目录里堆。每次写入顺手清掉
   一小时前的旧产物——NapCat 读文件是异步的，删早了会发不出去。
 - **带 alpha 的先铺白底**：PNG 有透明通道时直接 convert("RGB") 会把透明
-  区压成黑色，看着像坏图。
+  区压成黑色，看着像坏图。这条只对 JPEG 那条路成立——png 是无损保留 alpha 的。
 """
 
 import io
@@ -38,6 +41,10 @@ log = logging.getLogger("image_out")
 
 # 92 是肉眼与 PNG 几乎无差的位置（实测 920×1232 只要 0.18 MB）。
 JPEG_QUALITY = 92
+
+# 支持的对外格式。generate_image 那边的取值见 agents.image_send_format。
+FORMATS = ("jpg", "png")
+DEFAULT_FORMAT = "jpg"
 
 # 产物的保留时长（秒）。NapCat 拉取 file:// 是异步的，留足余量再删。
 KEEP_SECONDS = 3600
@@ -88,12 +95,18 @@ def _flatten(im):
     return im.convert("RGB")
 
 
-def prepare_for_send(filename):
-    """把一张 ComfyUI 输出图转成可对外发送的 JPEG。
+def prepare_for_send(filename, fmt=DEFAULT_FORMAT):
+    """把一张 ComfyUI 输出图转成可对外发送的图（fmt = "jpg" 或 "png"）。
+
+    两种格式都会甩掉 ComfyUI 塞进 PNG tEXt 块里的工作流 JSON：jpg 靠重编码，
+    png 靠显式传一个空 PngInfo（像素无损）。发的都是 temp 里的副本，ComfyUI
+    output 里的原图一个字节都不动。
 
     成功返回本地文件路径（协议端用 file:// 读它，见 qq_api.image_segment）；
     任何一步失败都返回 ComfyUI 的原图 URL，保证图照样发得出去。
     """
+    if fmt not in FORMATS:
+        fmt = DEFAULT_FORMAT
     try:
         from PIL import Image
 
@@ -106,9 +119,16 @@ def prepare_for_send(filename):
         d = _out_dir()
         _sweep(d)
         stem = os.path.splitext(os.path.basename(str(filename)))[0] or "img"
-        dst = os.path.join(d, "%s_%s.jpg" % (stem, uuid.uuid4().hex[:8]))
-        _flatten(im).save(dst, "JPEG", quality=JPEG_QUALITY, optimize=True)
+        dst = os.path.join(d, "%s_%s.%s" % (stem, uuid.uuid4().hex[:8], fmt))
+        if fmt == "png":
+            from PIL import PngImagePlugin
+            # 空 PngInfo = 一个 tEXt 都不写。不传它的话 Pillow 会沿用
+            # 打开时读到的那些块，工作流就跟着出去了。
+            im.save(dst, "PNG", pnginfo=PngImagePlugin.PngInfo(),
+                    optimize=True)
+        else:
+            _flatten(im).save(dst, "JPEG", quality=JPEG_QUALITY, optimize=True)
         return dst
     except Exception as exc:
-        log.warning("转 JPEG 失败，按原图发出 %s：%s", filename, exc)
+        log.warning("转 %s 失败，按原图发出 %s：%s", fmt, filename, exc)
         return _fallback(filename)

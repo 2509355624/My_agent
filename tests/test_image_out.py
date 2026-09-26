@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
-"""app/image_out.py：对外发图前的 JPEG 转换与回落。
+"""app/image_out.py：对外发图前的重编码（jpg / png）与回落。
 
 这个模块是「图不把工作流带出去」的唯一落点，两条底线都得钉住：
-转成功必须是 JPEG（PNG 里的 tEXt 工作流元数据留不下），转失败必须
+转成功必须是目标格式、且不带 PNG 里的 tEXt 工作流元数据；转失败必须
 回落成 ComfyUI 原图 URL（图还得发得出去，不能卡在这一步）。
+
+png 那条路还多一条：必须是**无损**的——选 png 的全部意义就在这。
 
 零网络：下载那一层整个 mock 掉，只用内存里的假 PNG 当素材。
 """
@@ -58,11 +60,13 @@ class PrepareTest(unittest.TestCase):
             except OSError:
                 pass
 
-    def _run(self, resp=None, exc=None, filename="Anima_00001_.png"):
+    def _run(self, resp=None, exc=None, filename="Anima_00001_.png", fmt=None):
         get = (mock.Mock(side_effect=exc) if exc is not None
                else mock.Mock(return_value=resp))
         with mock.patch.object(image_out._session, "get", get):
-            return image_out.prepare_for_send(filename)
+            if fmt is None:
+                return image_out.prepare_for_send(filename)
+            return image_out.prepare_for_send(filename, fmt)
 
     def test_converts_to_jpeg_and_drops_metadata(self):
         got = self._run(_Resp(_png_bytes()))
@@ -102,6 +106,50 @@ class PrepareTest(unittest.TestCase):
         rgb = Image.open(got).convert("RGB")
         self.assertTrue(all(c > 240 for c in rgb.getpixel((8, 8))),
                         rgb.getpixel((8, 8)))
+
+    def test_png_format_drops_metadata(self):
+        """切成 png 也不能把工作流带出去——这才是这个模块存在的理由。"""
+        got = self._run(_Resp(_png_bytes()), fmt="png")
+        self.assertTrue(os.path.isfile(got), got)
+        self.assertTrue(got.lower().endswith(".png"))
+        with Image.open(got) as im:
+            self.assertEqual(im.format, "PNG")
+            self.assertNotIn("prompt", im.info)
+            self.assertNotIn("workflow", im.info)
+
+    def test_png_format_is_lossless(self):
+        """无损 = 像素逐点一致；不然凭什么比 jpg 大十倍。"""
+        src = _png_bytes(size=(48, 40))
+        got = self._run(_Resp(src), fmt="png")
+        with Image.open(got) as im:
+            out = im.convert("RGB").tobytes()
+        with Image.open(io.BytesIO(src)) as im:
+            want = im.convert("RGB").tobytes()
+        self.assertEqual(out, want)
+
+    def test_png_format_keeps_alpha(self):
+        """jpg 那条路要铺白底；png 是无损，透明通道得留着。"""
+        im = Image.new("RGBA", (16, 16), (10, 20, 30, 0))
+        buf = io.BytesIO()
+        im.save(buf, "PNG")
+        got = self._run(_Resp(buf.getvalue()), fmt="png")
+        with Image.open(got) as out:
+            self.assertEqual(out.mode, "RGBA")
+            self.assertEqual(out.getpixel((8, 8)), (10, 20, 30, 0))
+
+    def test_png_format_keeps_pixel_size(self):
+        got = self._run(_Resp(_png_bytes(size=(70, 30))), fmt="png")
+        with Image.open(got) as im:
+            self.assertEqual(im.size, (70, 30))
+
+    def test_unknown_format_falls_back_to_jpg(self):
+        """野值不能透给 PIL 的 save(format=...)——那会直接抛错把图卡住。"""
+        got = self._run(_Resp(_png_bytes()), fmt="webp")
+        self.assertTrue(got.lower().endswith(".jpg"), got)
+
+    def test_png_format_falls_back_to_view_url_on_failure(self):
+        got = self._run(exc=OSError("connection refused"), fmt="png")
+        self.assertIn("/view?filename=Anima_00001_.png", got)
 
     def test_sweep_drops_expired_and_keeps_fresh(self):
         old = os.path.join(self.d, "old.jpg")

@@ -31,7 +31,7 @@ import time
 
 import requests
 
-from app.config import COMFYUI_URL, IMAGE_GEN_TIMEOUT
+from app.config import COMFYUI_URL, IMAGE_GEN_TIMEOUT, QQ_AGENT_ID
 
 log = logging.getLogger("image_jobs")
 
@@ -149,9 +149,11 @@ def _send_text(target, target_id, text):
 
 
 def _send_image(target, target_id, filename):
-    """发回原会话。先过 image_out 转 JPEG，顺带甩掉 PNG 里的工作流元数据。"""
+    """发回原会话。先过 image_out 甩掉 PNG 里的工作流元数据，编码格式看管理页开关。"""
     from app import image_out, qq_api
-    qq_api.send_image(target, target_id, image_out.prepare_for_send(filename))
+    from app.agents import image_send_format
+    fmt = image_send_format(QQ_AGENT_ID, target, target_id)
+    qq_api.send_image(target, target_id, image_out.prepare_for_send(filename, fmt))
 
 
 def _run(target, target_id, prompt_id):

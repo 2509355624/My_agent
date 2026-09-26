@@ -137,6 +137,37 @@ def image_gen_allowed(agent_id, target, target_id):
     return True, ""
 
 
+# 对外发图的编码格式。只决定「发出去那一张」怎么编码——ComfyUI output
+# 里的原图永远不动（见 app/image_out.py）。png 更大但无损，jpg 省流量。
+IMAGE_SEND_FORMATS = ("jpg", "png")
+IMAGE_SEND_FORMAT_DEFAULT = "jpg"
+
+
+def image_send_format(agent_id, target, target_id):
+    """这个 QQ 会话发图用哪种格式，返回 "jpg" 或 "png"（不会是 None）。
+
+    settings.json 三层取值（热生效，不用重启）：
+    - image_send_format_overrides[群号]：单群覆盖（管理页群行里的「格式」按钮）；
+    - image_send_format：全局总开关；
+    - 都没有时回落 jpg —— 和加这个开关之前的行为一致。
+
+    覆盖只认群（与 image_gen_muted 同口径）：私聊沿用全局值，不做单聊设置。
+    值非法（比如手改坏了 settings.json）一律当没设——绝不把野值透给 PIL 的
+    save(format=...)，那会直接抛错把图卡住。
+    """
+    s = load_settings(agent_id)
+    if target == "group":
+        overrides = s.get("image_send_format_overrides")
+        if isinstance(overrides, dict):
+            v = overrides.get(str(target_id))
+            if v in IMAGE_SEND_FORMATS:
+                return v
+    v = s.get("image_send_format")
+    if v in IMAGE_SEND_FORMATS:
+        return v
+    return IMAGE_SEND_FORMAT_DEFAULT
+
+
 # 主动发言冷却的合法范围（秒）。0 = 不限频；上限防手滑输成天文数字。
 INTERJECT_COOLDOWN_MIN = 0
 INTERJECT_COOLDOWN_MAX = 3600

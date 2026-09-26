@@ -233,6 +233,13 @@
           <span class="hint">一键关闭 / 恢复这个 agent 在所有 QQ 会话的生图（网页端不受影响）。
             单独某个群不想让它画，用群行里的「生图」开关。</span>
         </div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
+          <button class="toggle" id="imgFmtAll">发图格式·JPG</button>
+          <span class="hint">QQ 里发出去的图用 JPG（省流量）还是 PNG（无损）。
+            PNG 单张约 1.4~2.2 MB，比 JPG（约 0.18 MB）大十倍，群里发得慢也更占相册。
+            只影响发出去那一张，ComfyUI output 里的原图永远不动。
+            某个群想单独用别的格式，用群行里的「格式」开关。</span>
+        </div>
         <div class="hint" style="font-weight:600;margin:8px 0 4px;">私聊</div>
         <div class="sess-foot" style="margin-bottom: 8px;">
           <button class="toggle" id="privAll">私聊·开</button>
@@ -681,6 +688,15 @@ function renderSessions() {
       ig.addEventListener('click', () => toggleImageGen(s, ig));
       row.appendChild(ig);
 
+      // 「格式」按钮：这个群的图发 jpg 还是 png；没单独设过就跟全局。
+      const fm = document.createElement('button');
+      fm.className = 'ghost';
+      fm.textContent = s.image_send_format
+        ? '格式:' + s.image_send_format.toUpperCase() : '格式·跟全局';
+      fm.title = '点一下切换：跟全局 → JPG → PNG → 跟全局';
+      fm.addEventListener('click', () => editImageFmt(s, fm));
+      row.appendChild(fm);
+
       // 「频率」按钮：这个群主动发言的间隔秒数；单群覆盖，跟全局可不同。
       const cf = document.createElement('button');
       cf.className = 'ghost';
@@ -740,6 +756,7 @@ async function loadSessions() {
     sessAgents = d.session_prompt_agents || {};
     renderSessions();
     renderImageGenAll(d.image_gen_on !== false);
+    renderImageFmtAll(d.image_send_format);
     privState.on = d.private_enable !== false;
     privState.wlOn = d.private_whitelist_on !== false;
     privState.list = d.private_whitelist || [];
@@ -898,6 +915,64 @@ async function toggleImageGen(s, btn) {
     renderSessions();
     sessStatus('「' + name + '」已' + (target ? '开启' : '关闭')
       + '生图，立即生效', 'ok');
+  } catch (e) {
+    sessStatus(e.message, 'err');
+    btn.disabled = false;
+  }
+}
+
+// ─── 发图格式开关 ────────────────────────────────────
+// 总开关定 jpg / png；群行里的按钮做单群覆盖（缺省跟全局）。
+// 只管发出去那一张，ComfyUI output 里的原图永远不动。
+
+function renderImageFmtAll(fmt) {
+  const btn = $('imgFmtAll');
+  const png = fmt === 'png';
+  btn.className = 'toggle' + (png ? ' on' : '');
+  btn.textContent = png ? '发图格式·PNG' : '发图格式·JPG';
+  btn.disabled = false;
+}
+
+async function toggleImageFmtAll() {
+  const btn = $('imgFmtAll');
+  const target = btn.className.includes(' on') ? 'jpg' : 'png';
+  if (target === 'png' && !confirm('全局改成发 PNG？\n\n'
+      + 'PNG 无损，但单张约 1.4~2.2 MB（JPG 约 0.18 MB），'
+      + '群里发得慢，也更占对方相册。\n'
+      + 'ComfyUI output 里的原图不受影响，照旧是 PNG 原样。')) return;
+  btn.disabled = true;
+  try {
+    await api('/api/agent/' + encodeURIComponent(cur) + '/image_send_format',
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ format: target }) });
+    renderImageFmtAll(target);
+    sessStatus('发图格式已切到 ' + target.toUpperCase() + '，立即生效', 'ok');
+  } catch (e) {
+    sessStatus(e.message, 'err');
+    btn.disabled = false;
+  }
+}
+
+// 跟全局 → jpg → png → 跟全局。null 表示删掉这个群的覆盖。
+const FMT_CYCLE = [null, 'jpg', 'png'];
+
+async function editImageFmt(s, btn) {
+  const name = s.name || s.target_id;
+  const curVal = s.image_send_format == null ? null : s.image_send_format;
+  const target = FMT_CYCLE[(FMT_CYCLE.indexOf(curVal) + 1) % FMT_CYCLE.length];
+  btn.disabled = true;
+  try {
+    await api('/api/agent/' + encodeURIComponent(cur) + '/image_send_format/'
+      + encodeURIComponent(s.target_id),
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ format: target }) });
+    s.image_send_format = target;
+    renderSessions();
+    sessStatus('「' + name + '」发图格式已'
+      + (target == null ? '恢复跟全局一致' : '设为 ' + target.toUpperCase())
+      + '，立即生效', 'ok');
   } catch (e) {
     sessStatus(e.message, 'err');
     btn.disabled = false;
@@ -1170,6 +1245,7 @@ $('reload').addEventListener('click', () => {
 });
 $('sessReload').addEventListener('click', loadSessions);
 $('imgGenAll').addEventListener('click', toggleImageGenAll);
+$('imgFmtAll').addEventListener('click', toggleImageFmtAll);
 $('privAll').addEventListener('click', togglePrivateAll);
 $('privWlOn').addEventListener('click', togglePrivateWlOn);
 $('privAdd').addEventListener('click', () => privEdit('add'));

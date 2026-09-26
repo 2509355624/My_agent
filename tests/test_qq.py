@@ -910,6 +910,48 @@ class DeliverTest(unittest.TestCase):
         self.assertTrue(seen[0].lower().endswith(".jpg"))
         os.remove(seen[0])
 
+    def test_group_can_be_switched_to_png(self):
+        """单群设成 png：发出去的是本地 PNG（无损），且不带工作流元数据。
+
+        这里要**再套一层** AGENTS_DIR：本文件的模块级临时目录是所有用例共享的，
+        而按字母序这条跑在 test_images_are_sent_as_local_jpeg（钉死 .jpg）之前，
+        写到共享目录里就会把那条用例串成假失败。
+        """
+        import io
+        from PIL import Image, PngImagePlugin
+
+        from app.config import QQ_AGENT_ID
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        p = mock.patch.object(agents, "AGENTS_DIR",
+                             os.path.join(tmp.name, "agents"))
+        p.start()
+        self.addCleanup(p.stop)
+        agents.clear_cache()
+        self.addCleanup(agents.clear_cache)
+        agents.save_settings(QQ_AGENT_ID,
+                             {"image_send_format_overrides": {"9": "png"}})
+
+        buf = io.BytesIO()
+        info = PngImagePlugin.PngInfo()
+        info.add_text("prompt", '{"1": {"class_type": "VAELoader"}}')
+        Image.new("RGB", (16, 16), (10, 20, 30)).save(buf, "PNG", pnginfo=info)
+        resp = mock.Mock(content=buf.getvalue())
+        resp.raise_for_status = lambda: None
+
+        seen = []
+        with mock.patch.object(
+                qq_api, "send_image",
+                lambda target, tid, path, caption="": (seen.append(path), 1)[1]), \
+             mock.patch.object(image_out._session, "get", return_value=resp):
+            self._runner()._deliver(True, "", ["a.png"])
+        self.assertEqual(len(seen), 1)
+        self.assertTrue(seen[0].lower().endswith(".png"), seen[0])
+        with Image.open(seen[0]) as im:
+            self.assertNotIn("prompt", im.info)
+        os.remove(seen[0])
+
     def test_private_runner_uses_private_send(self):
         sent = []
         runner = qq_bot.SessionRunner(None, "private_1", "private", "1")

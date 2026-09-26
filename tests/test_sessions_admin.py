@@ -634,6 +634,104 @@ class ImageGenToggleApiTest(SessionsTestBase):
         self.assertTrue(agents.image_gen_allowed("qq", "group", "111")[1])
 
 
+class ImageSendFormatApiTest(SessionsTestBase):
+    """发图格式开关：全局 jpg/png + 单群覆盖，settings.json 热生效。
+
+    只决定「发出去那一张」怎么编码；执行点落在 image_out.prepare_for_send
+    （那条路测在 test_image_out），这里测取值层级、持久化与接口。
+    """
+
+    def test_default_is_jpg(self):
+        self.assertEqual(agents.image_send_format("qq", "group", "111"), "jpg")
+        self.assertEqual(agents.image_send_format("qq", None, None), "jpg")
+        self.assertEqual(agents.IMAGE_SEND_FORMAT_DEFAULT, "jpg")
+
+    def test_global_then_group_override(self):
+        agents.save_settings("qq", {"image_send_format": "png",
+                                    "image_send_format_overrides":
+                                        {"111": "jpg"}})
+        self.assertEqual(agents.image_send_format("qq", None, None), "png")
+        self.assertEqual(agents.image_send_format("qq", "group", "111"), "jpg")
+        self.assertEqual(agents.image_send_format("qq", "group", "222"), "png")
+
+    def test_private_ignores_group_overrides(self):
+        """覆盖只认群（与 image_gen_muted 同口径）：私聊只吃全局值。"""
+        agents.save_settings("qq", {"image_send_format": "jpg",
+                                    "image_send_format_overrides":
+                                        {"111": "png"}})
+        self.assertEqual(agents.image_send_format("qq", "private", "111"),
+                         "jpg")
+
+    def test_illegal_values_degrade_to_jpg(self):
+        """手改坏 settings.json 不能把野值透给 PIL（save 会直接抛错卡住发图）。"""
+        agents.save_settings("qq", {"image_send_format": "webp",
+                                    "image_send_format_overrides":
+                                        {"111": "PNG "}})
+        self.assertEqual(agents.image_send_format("qq", "group", "111"), "jpg")
+        self.assertEqual(agents.image_send_format("qq", "group", "222"), "jpg")
+
+    def test_sessions_carry_global_and_override(self):
+        self.write_session("qq", key="group_111")
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertEqual(d["image_send_format"], "jpg")
+        self.assertIsNone(d["sessions"][0]["image_send_format"])
+
+    def test_put_global_persists_and_reflects(self):
+        resp = self.client.put("/api/agent/qq/image_send_format",
+                               json={"format": "png"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(agents.load_settings("qq")["image_send_format"], "png")
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertEqual(d["image_send_format"], "png")
+
+    def test_put_global_accepts_uppercase(self):
+        self.client.put("/api/agent/qq/image_send_format",
+                        json={"format": "PNG"})
+        self.assertEqual(agents.load_settings("qq")["image_send_format"], "png")
+
+    def test_put_global_rejects_bad_values(self):
+        for bad in ({}, {"format": "webp"}, {"format": None}, {"format": 1},
+                    {"format": True}, {"format": ""}):
+            resp = self.client.put("/api/agent/qq/image_send_format", json=bad)
+            self.assertEqual(resp.status_code, 400, bad)
+
+    def test_put_group_override_and_clear(self):
+        self.write_session("qq", key="group_111")
+        resp = self.client.put("/api/agent/qq/image_send_format/111",
+                               json={"format": "png"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            agents.load_settings("qq")["image_send_format_overrides"]["111"],
+            "png")
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertEqual(d["sessions"][0]["image_send_format"], "png")
+        # null = 删覆盖，回落全局
+        self.client.put("/api/agent/qq/image_send_format/111",
+                        json={"format": None})
+        self.assertEqual(
+            agents.load_settings("qq")["image_send_format_overrides"], {})
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertIsNone(d["sessions"][0]["image_send_format"])
+
+    def test_put_group_rejects_bad_values(self):
+        for bad in ({}, {"format": "webp"}, {"format": 1}):
+            resp = self.client.put("/api/agent/qq/image_send_format/111",
+                                   json=bad)
+            self.assertEqual(resp.status_code, 400, bad)
+
+    def test_routes_remote_blocked_by_default(self):
+        for path in ("/api/agent/qq/image_send_format",
+                     "/api/agent/qq/image_send_format/111"):
+            resp = self.client.put(path, json={"format": "png"},
+                                   environ_base={"REMOTE_ADDR": "8.8.8.8"})
+            self.assertEqual(resp.status_code, 403, path)
+
+    def test_private_session_carries_no_override_field(self):
+        self.write_session("qq", key="private_222")
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertNotIn("image_send_format", d["sessions"][0])
+
+
 class RecentGroupMergeTest(SessionsTestBase):
     """只收过消息、没回复过的群也要进管理页列表（统一开关主动发言）。"""
 

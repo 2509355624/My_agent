@@ -595,6 +595,7 @@ def get_agent_sessions(agent_id):
     overrides = settings.get("interject_cooldown_overrides") or {}
     chance_ov = settings.get("interject_chance_overrides") or {}
     gap_ov = settings.get("interject_min_gap_overrides") or {}
+    fmt_ov = settings.get("image_send_format_overrides") or {}
     for item in items:
         if item["kind"] == "group":
             item["interject"] = item["target_id"] not in muted
@@ -605,6 +606,10 @@ def get_agent_sessions(agent_id):
             item["chance_override"] = ch if isinstance(ch, (int, float)) else None
             gp = gap_ov.get(str(item["target_id"]))
             item["gap_override"] = gp if isinstance(gp, (int, float)) else None
+            # None = 没单独设过，管理页显示「格式·跟全局」
+            fo = fmt_ov.get(str(item["target_id"]))
+            item["image_send_format"] = (
+                fo if fo in agent_store.IMAGE_SEND_FORMATS else None)
     # 全局主动发言三件套（settings 里没设就回落默认），管理页输入框用
     # 私聊闸当前值：settings 优先，键缺失回落 .env（跟 qq_bot._private_gate 同口径）
     if "private_enable" in settings:
@@ -617,6 +622,9 @@ def get_agent_sessions(agent_id):
         priv_wl = [str(x) for x in (QQ_WHITELIST_USERS or [])]
     return jsonify({"sessions": items, "names_ok": names_ok, "agent": aid,
                     "image_gen_on": settings.get("image_gen") is not False,
+                    # 全局发图格式（群覆盖之外的总开关）。target=None 走的就是全局那层。
+                    "image_send_format":
+                        agent_store.image_send_format(aid, None, None),
                     "private_enable": priv_on,
                     "private_whitelist": priv_wl,
                     "private_whitelist_on":
@@ -684,6 +692,68 @@ def set_agent_image_gen_group(agent_id, group_id):
         return jsonify({"error": "写入 settings.json 失败"}), 500
     return jsonify({"ok": True, "agent": aid, "group": str(group_id),
                     "image_gen": body["enabled"]})
+
+
+def _image_send_format_from_body(body):
+    """解析发图格式（jpg / png，大小写不敏感）；非法返回 None。"""
+    v = body.get("format")
+    if isinstance(v, str) and v.strip().lower() in agent_store.IMAGE_SEND_FORMATS:
+        return v.strip().lower()
+    return None
+
+
+@app.route("/api/agent/<agent_id>/image_send_format", methods=["PUT"])
+def set_agent_image_send_format(agent_id):
+    """设该 agent 的全局发图格式（QQ 里发出去的图用 jpg 还是 png）。热生效。
+
+    settings.json 的 image_send_format 字段：缺省 = jpg（加这个开关之前的行为）。
+    只管发出去那一张，ComfyUI output 里的原图不动；网页端不受影响。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    fmt = _image_send_format_from_body(body)
+    if fmt is None:
+        return jsonify({"error": "format 只能是 jpg 或 png"}), 400
+
+    settings = agent_store.load_settings(aid)
+    settings["image_send_format"] = fmt
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "image_send_format": fmt})
+
+
+@app.route("/api/agent/<agent_id>/image_send_format/<group_id>", methods=["PUT"])
+def set_agent_image_send_format_group(agent_id, group_id):
+    """设单群发图格式覆盖。format=null 删除覆盖（回落全局值）。热生效。
+
+    存 settings.json 的 image_send_format_overrides（与
+    interject_cooldown_overrides 同型：键缺 = 跟全局）。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if "format" not in body:
+        return jsonify({"error": "需要字段 format（jpg / png，或 null）"}), 400
+    fmt = None
+    if body["format"] is not None:
+        fmt = _image_send_format_from_body(body)
+        if fmt is None:
+            return jsonify({"error": "format 要么是 jpg / png，"
+                                     "要么是 null（删除覆盖，跟全局）"}), 400
+
+    if not _put_override(aid, group_id, "image_send_format", fmt):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "group": str(group_id),
+                    "image_send_format": fmt})
 
 
 @app.route("/api/agent/<agent_id>/private_enable", methods=["PUT"])

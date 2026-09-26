@@ -5,11 +5,15 @@
 分流）。
 """
 
+import os
+import tempfile
 import unittest
 from unittest import mock
 
+import app.agents as agents
 from app import image_jobs
 from app import qq_api
+from app.config import QQ_AGENT_ID
 from app.tools.normal import generate_image
 
 
@@ -207,17 +211,45 @@ class DeliverTest(_Base):
 class SendImageTest(unittest.TestCase):
     """后台投递那条发图出口同样要过 image_out —— 两条路都不能把工作流带出去。"""
 
-    def test_goes_through_image_out(self):
-        from app import image_out
+    def setUp(self):
+        # _send_image 现在要读发图格式（load_settings），必须把 AGENTS_DIR 拨到
+        # 临时目录：否则读的是真的 agents/qq/settings.json，结果跟着本机配置跑。
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        p = mock.patch.object(agents, "AGENTS_DIR",
+                              os.path.join(self.tmp.name, "agents"))
+        p.start()
+        self.addCleanup(p.stop)
+        agents.clear_cache()
+        self.addCleanup(agents.clear_cache)
 
-        sent = []
-        with mock.patch.object(image_out, "prepare_for_send",
-                               lambda f: "C:/tmp/y.jpg"), \
-             mock.patch.object(qq_api, "send_image",
-                               lambda target, tid, path, caption="":
-                               sent.append((target, tid, path))):
+    def _capture(self, fmts, sent):
+        from app import image_out
+        return mock.patch.object(
+            image_out, "prepare_for_send",
+            lambda f, fmt="jpg": (fmts.append(fmt), "C:/tmp/y." + fmt)[1]), \
+            mock.patch.object(qq_api, "send_image",
+                              lambda target, tid, path, caption="":
+                              sent.append((target, tid, path)))
+
+    def test_goes_through_image_out(self):
+        sent, fmts = [], []
+        p1, p2 = self._capture(fmts, sent)
+        with p1, p2:
             image_jobs._send_image("group", "9", "b.png")
         self.assertEqual(sent, [("group", "9", "C:/tmp/y.jpg")])
+        self.assertEqual(fmts, ["jpg"])          # 没配过 = jpg
+
+    def test_group_override_reaches_send_path(self):
+        """单群设成 png 时，后台投递这条出口也得跟着走 png。"""
+        agents.save_settings(QQ_AGENT_ID, {"image_send_format": "jpg",
+                                           "image_send_format_overrides":
+                                               {"9": "png"}})
+        sent, fmts = [], []
+        p1, p2 = self._capture(fmts, sent)
+        with p1, p2:
+            image_jobs._send_image("group", "9", "b.png")
+        self.assertEqual(fmts, ["png"])
 
     def test_falls_back_to_comfy_url(self):
         """转换拉不到图时回落原图 URL，图照样发得出去。"""
