@@ -75,7 +75,7 @@ def get_effective_config(provider=None, model=None):
 def call_llm(messages, timeout=None, provider=None, model=None):
     """调用 LLM，返回回复文本（失败时按降级链依次往下试）。
 
-    - provider: 'volc' / 'doubao' / 'deepseek' / 'scnet' / 'scnet2' / 'ollama'
+    - provider: 'volc' / 'doubao' / 'deepseek' / 'scnet' / 'scnet2' / 'mimo' / 'ollama'
     - model: 覆盖该 provider 的默认模型
     - timeout: 单次尝试的超时；不传用 LLM_REQUEST_TIMEOUT
     兼容旧调用 call_llm(messages)：用当前生效配置。

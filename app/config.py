@@ -41,6 +41,14 @@ SCNET_MODEL = os.getenv("SCNET_MODEL", "DeepSeek-V4.1-Flash-Event")
 SCNET2_API_KEY = os.getenv("SCNET2_API_KEY", "")
 SCNET2_MODEL = os.getenv("SCNET2_MODEL", "DeepSeek-V4.1-Flash")
 
+# 小米 MiMo 开放平台（OpenAI 兼容端点）。mimo-v2.6-flash 按量价：
+# 缓存命中输入 ¥0.02/百万、普通输入 ¥1/百万、输出 ¥2/百万。
+# 注意：Token Plan 套餐额度与普通 API 余额**互不通用**（官方文档明说，
+# 套餐是给 Claude Code / Codex 等编程工具订阅用的），这里走的是按量计费。
+MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
+MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
+MIMO_MODEL = os.getenv("MIMO_MODEL", "mimo-v2.6-flash")
+
 # ─── 主备模型降级链 ──────────────────────────────────
 # 一次请求失败（额度不足 / 超时 / 5xx / 模型退役）时依次往下试的顺序。
 # 格式 "provider:model,provider:model"，第一项是主模型；留空 = 关闭降级。
@@ -50,7 +58,10 @@ LLM_FALLBACK_CHAIN = os.getenv(
     "LLM_FALLBACK_CHAIN",
     "volc:deepseek-v4-flash-ga-260731,"
     "volc:deepseek-v4-pro-ga-260813,"
-    "scnet2:DeepSeek-V4.1-Flash")
+    "volc:doubao-seed-2-1-turbo-260628,"
+    "volc:glm-5-2-260617,"
+    "mimo:mimo-v2.6-flash,"
+    "deepseek:deepseek-flash")
 
 # 单次尝试的超时。流式下这是「两块数据之间的最大间隔」而不是总时长——
 # 60 秒一个字节都没回就认为卡死，换下一个候选。原先默认 600 秒等于不切。
@@ -141,6 +152,17 @@ PROVIDERS = {
         "api_key": SCNET2_API_KEY,
         "needs_key": False,
         "vision": False,
+    },
+    # 小米 MiMo。mimo-v2.6-flash 官方标注全模态（文本/图像/语音），vision=True
+    # 让带图请求直接多模态下发，省掉 DeepSeek 识图预处理那一跳。
+    # 模型名不含 vl/vision/omni 关键字，所以必须靠这个开关显式声明。
+    "mimo": {
+        "label": "小米 MiMo",
+        "base_url": MIMO_BASE_URL,
+        "model": MIMO_MODEL,
+        "api_key": MIMO_API_KEY,
+        "needs_key": False,
+        "vision": True,
     },
 }
 
