@@ -238,13 +238,16 @@
           <span class="hint">私聊总开关：关掉 = 任何人的私聊都不再回复（白名单也不看），群聊不受影响。热生效。</span>
         </div>
         <div class="sess-foot" style="margin-bottom: 8px;">
+          <button class="toggle" id="privWlOn">白名单·开</button>
           <label class="hint" for="privUser">白名单</label>
           <input id="privUser" placeholder="QQ 号" style="width:110px;"
                  spellcheck="false" autocomplete="off">
           <button class="ghost" id="privAdd">添加</button>
           <span id="privWl" style="margin-left:6px;"></span>
         </div>
-        <div class="hint" style="margin:0 0 8px 2px;">名单外的 QQ（包括陌生人临时会话）一律静默不回、不出图；
+        <div class="hint" style="margin:0 0 8px 2px;">白名单开关关掉 = 名单不生效，
+          任何人的私聊都能聊（黑名单和上面的私聊总开关照常拦）。
+          开着时：名单外的 QQ（包括陌生人临时会话）一律静默不回、不出图，
           清空名单 = 谁都私聊不了。点号码可移除。热生效，不用重启。</div>
         <div class="hint" style="font-weight:600;margin:8px 0 4px;">群聊</div>
         <div class="sess-foot" style="margin-bottom: 8px;">
@@ -725,6 +728,7 @@ async function loadSessions() {
     renderSessions();
     renderImageGenAll(d.image_gen_on !== false);
     privState.on = d.private_enable !== false;
+    privState.wlOn = d.private_whitelist_on !== false;
     privState.list = d.private_whitelist || [];
     renderPrivate();
     $('coolAll').value = d.interject_cooldown != null ? d.interject_cooldown : '';
@@ -814,17 +818,21 @@ async function toggleImageGen(s, btn) {
 // ─── 私聊闸 ──────────────────────────────────────────
 // 总开关 + 白名单，都存 settings.json，热生效。空名单 = 谁都私聊不了。
 
-let privState = { on: true, list: [] };
+let privState = { on: true, wlOn: true, list: [] };
 
 function renderPrivate() {
   const btn = $('privAll');
   btn.className = 'toggle' + (privState.on ? ' on' : '');
   btn.textContent = privState.on ? '私聊·开' : '私聊·全关';
   btn.disabled = false;
+  const wlBtn = $('privWlOn');
+  wlBtn.className = 'toggle' + (privState.wlOn ? ' on' : '');
+  wlBtn.textContent = privState.wlOn ? '白名单·开' : '白名单·关';
+  wlBtn.disabled = false;
   const box = $('privWl');
   box.textContent = '';
   if (!privState.list.length) {
-    box.textContent = '（空 = 谁都私聊不了）';
+    box.textContent = privState.wlOn ? '（空 = 谁都私聊不了）' : '（白名单已停用，谁都能聊）';
     return;
   }
   privState.list.forEach((uid) => {
@@ -852,6 +860,25 @@ async function togglePrivateAll() {
     privState.on = target;
     renderPrivate();
     sessStatus('私聊已全部' + (target ? '开启' : '关闭') + '，立即生效', 'ok');
+  } catch (e) {
+    sessStatus(e.message, 'err');
+    btn.disabled = false;
+  }
+}
+
+async function togglePrivateWlOn() {
+  const target = !privState.wlOn;
+  if (!target && !confirm('关闭白名单？\n\n任何人的私聊都能聊（黑名单和私聊总开关照常拦）。')) return;
+  const btn = $('privWlOn');
+  btn.disabled = true;
+  try {
+    await api('/api/agent/' + encodeURIComponent(cur) + '/private_whitelist_on',
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: target }) });
+    privState.wlOn = target;
+    renderPrivate();
+    sessStatus('白名单已' + (target ? '开启' : '关闭（谁都能私聊）') + '，立即生效', 'ok');
   } catch (e) {
     sessStatus(e.message, 'err');
     btn.disabled = false;
@@ -1055,6 +1082,7 @@ $('reload').addEventListener('click', () => {
 $('sessReload').addEventListener('click', loadSessions);
 $('imgGenAll').addEventListener('click', toggleImageGenAll);
 $('privAll').addEventListener('click', togglePrivateAll);
+$('privWlOn').addEventListener('click', togglePrivateWlOn);
 $('privAdd').addEventListener('click', () => privEdit('add'));
 $('privUser').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') privEdit('add');

@@ -619,6 +619,8 @@ def get_agent_sessions(agent_id):
                     "image_gen_on": settings.get("image_gen") is not False,
                     "private_enable": priv_on,
                     "private_whitelist": priv_wl,
+                    "private_whitelist_on":
+                        settings.get("private_whitelist_on") is not False,
                     "interject_cooldown":
                         agent_store.interject_cooldown(aid, ""),
                     "interject_chance":
@@ -701,6 +703,31 @@ def set_agent_private_enable(agent_id):
     if not agent_store.save_settings(aid, settings):
         return jsonify({"error": "写入 settings.json 失败"}), 500
     return jsonify({"ok": True, "agent": aid, "private_enable": body["enabled"]})
+
+
+@app.route("/api/agent/<agent_id>/private_whitelist_on", methods=["PUT"])
+def set_agent_private_whitelist_on(agent_id):
+    """切白名单开关。False = 名单不生效，任何人的私聊都放行（临时放开用）。
+
+    存 settings.json 的 private_whitelist_on 字段，缺省视为 True。
+    黑名单和私聊总开关不受影响，照常拦截。热生效。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body.get("enabled"), bool):
+        return jsonify({"error": "需要布尔字段 enabled"}), 400
+
+    settings = agent_store.load_settings(aid)
+    settings["private_whitelist_on"] = body["enabled"]
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid,
+                    "private_whitelist_on": body["enabled"]})
 
 
 @app.route("/api/agent/<agent_id>/private_whitelist", methods=["PUT"])

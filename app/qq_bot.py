@@ -300,10 +300,12 @@ _INTERJECT_IMAGE_LOOKBACK = 12
 def _private_gate(user_id):
     """私聊闸：settings.json 优先（管理页热改，不用重启），缺省回落 .env。
 
-    settings 里写了 private_enable / private_whitelist 就听 settings 的；
-    两个键都没写的老部署按 .env 的 QQ_PRIVATE_ENABLE / QQ_WHITELIST_USERS
-    照旧跑（名单空 = 不限制）。管理页一旦写过白名单，语义就是真白名单：
-    名单外一律不回，空名单 = 谁都私聊不了。
+    settings 里写了 private_enable / private_whitelist / private_whitelist_on
+    就听 settings 的；这些键都没写的老部署按 .env 的 QQ_PRIVATE_ENABLE /
+    QQ_WHITELIST_USERS 照旧跑（名单空 = 不限制）。管理页一旦写过白名单，
+    语义就是真白名单：名单外一律不回，空名单 = 谁都私聊不了。
+    private_whitelist_on=False = 白名单开关关掉，名单不生效、谁都能聊
+    （用户 2026-09-26 加的需求，方便临时放开）。
     load_settings 按 mtime 缓存，管理页改完下一条消息就生效。
     """
     from app.agents import load_settings
@@ -316,7 +318,9 @@ def _private_gate(user_id):
             return False, "私聊已被管理员关闭"
     elif not QQ_PRIVATE_ENABLE:
         return False, "私聊未开启"
-    if "private_whitelist" in s:
+    if s.get("private_whitelist_on") is False:
+        pass    # 白名单开关关着：不看名单，任何人的私聊都放行（黑名单/总开关照拦）
+    elif "private_whitelist" in s:
         wl = [str(x) for x in (s.get("private_whitelist") or [])]
         if str(user_id) not in wl:
             return False, ("私聊白名单为空" if not wl else "不在私聊白名单")

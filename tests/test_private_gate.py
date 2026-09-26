@@ -98,6 +98,42 @@ class PrivateGateTest(unittest.TestCase):
         ok, _ = self._reply()
         self.assertFalse(ok)
 
+    def test_whitelist_toggle_off_lets_anyone_in(self):
+        # 白名单开关关掉 = 名单不生效，名单外的人也能聊
+        self.write_settings(private_whitelist=["2509355624"],
+                            private_whitelist_on=False)
+        ok, _ = self._reply(user_id="999")
+        self.assertTrue(ok)
+
+    def test_whitelist_toggle_off_beats_empty_list(self):
+        # 即使名单是空（本会谁都进不来），开关关掉后也放行
+        self.write_settings(private_whitelist=[], private_whitelist_on=False)
+        ok, _ = self._reply()
+        self.assertTrue(ok)
+
+    def test_whitelist_toggle_on_resticts_again(self):
+        # 开关再打开，名单立刻恢复生效（热更新来回切）
+        self.write_settings(private_whitelist=["2509355624"],
+                            private_whitelist_on=False)
+        self.write_settings(private_whitelist=["2509355624"],
+                            private_whitelist_on=True)
+        ok, why = self._reply(user_id="999")
+        self.assertFalse(ok)
+        self.assertIn("白名单", why)
+
+    def test_whitelist_toggle_off_still_blocked_by_master_and_blacklist(self):
+        # 开关关掉 ≠ 无条件放行：私聊总开关和黑名单照常拦
+        self.write_settings(private_whitelist_on=False)
+        p = mock.patch.object(qq_bot, "QQ_BLACKLIST_USERS", ["1"])
+        p.start()
+        self.addCleanup(p.stop)
+        ok, _ = self._reply(user_id="1")
+        self.assertFalse(ok)
+        self.write_settings(private_enable=False, private_whitelist_on=False)
+        ok, why = self._reply(user_id="999")
+        self.assertFalse(ok)
+        self.assertIn("管理员", why)
+
     def test_blacklist_beats_whitelist(self):
         self.write_settings(private_whitelist=["1"])
         p = mock.patch.object(qq_bot, "QQ_BLACKLIST_USERS", ["1"])
@@ -181,6 +217,27 @@ class PrivateAdminApiTest(unittest.TestCase):
         d = r.get_json()
         self.assertFalse(d["private_enable"])
         self.assertEqual(d["private_whitelist"], ["42"])
+
+    def test_whitelist_toggle_writes_settings(self):
+        r = self.client.put(self.url("private_whitelist_on"),
+                            json={"enabled": False})
+        self.assertEqual(r.status_code, 200)
+        s = agents.load_settings("qq")
+        self.assertFalse(s["private_whitelist_on"])
+
+    def test_whitelist_toggle_needs_bool(self):
+        r = self.client.put(self.url("private_whitelist_on"),
+                            json={"enabled": "off"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_sessions_payload_carries_whitelist_toggle(self):
+        agents.save_settings("qq", {"private_whitelist_on": False})
+        r = self.client.get(self.url("sessions"))
+        self.assertFalse(r.get_json()["private_whitelist_on"])
+        # 键没写时默认开启
+        agents.save_settings("qq", {"private_enable": True})
+        r = self.client.get(self.url("sessions"))
+        self.assertTrue(r.get_json()["private_whitelist_on"])
 
 
 if __name__ == "__main__":
