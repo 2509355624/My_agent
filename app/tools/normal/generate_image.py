@@ -319,7 +319,9 @@ tool = {
                   "prompt 只写一段画面描述，**不要用 --- 分隔**。"
                   "【换渠道】仅当用户点名或明确需要时才换：说 krea2（如「用 krea2」）传 skill=krea2"
                   "（Krea2 Turbo + retroanime lora，一次一张）；要一次出多张（多个提示词用 --- 分隔）"
-                  "或要用固定角色底模时传 skill=image_gen_v1。"
+                  "或要用固定角色底模时传 skill=image_gen_v1；用户要**在画面里写出文字（尤其中文）**、"
+                  "要**写实照片感**、或点名 qwen / 通义时传 skill=qwen_image_v1"
+                  "（Qwen-Image 2.1，此时提示词改写自然语言句子、不要写标签，一次一张、约 100 秒）。"
                   "【底模】除 image_gen_v1 外都没有固定角色，你在 prompt 中自己写出完整角色提示词"
                   "(发型/发色/体型/服装/年龄等)；只有 image_gen_v1 配 use_character=true 时用它的固定角色。"
                   "【lora】用户点名要换 lora 时才传 lora 参数，平时不要传。格式「文件名:强度」，"
@@ -341,7 +343,9 @@ tool = {
             "【默认 Skill】anima（Anima 2B 动漫模型，双段精修，一次一张）—— 不传 skill 就用它，"
             "prompt 只写一段画面描述，**不要用 --- 分隔**。"
             "【换渠道】仅当用户点名或明确需要时才换：krea2 传 skill=krea2；"
-            "要一次出多张时传 skill=image_gen_v1（多个提示词用 --- 分隔）。"
+            "要一次出多张时传 skill=image_gen_v1（多个提示词用 --- 分隔）；"
+            "对方要**画面里写出文字（尤其中文）**、要写实照片感、或点名 qwen 时传 "
+            "skill=qwen_image_v1（此时提示词改写自然语言句子、不要写标签，一次一张、约 100 秒）。"
             "【lora】用户点名要换 lora 时才传 lora 参数，平时不要传。格式「文件名:强度」，"
             "多个逗号分隔（如 \"x.safetensors:0.8\"）；文件名要完整(.safetensors 结尾)，"
             "写错会返回可用清单；最多 3 个，传了就完全接管本次的 lora。"
@@ -361,8 +365,8 @@ tool = {
     "parameters": {
         "type": "object",
         "properties": {
-            "prompt": {"type": "string", "description": "英文提示词，逗号分隔的标签。默认（anima）只写一段，不要用 --- 分隔；只有 skill=image_gen_v1 时才用 --- 分隔多张。画面里没有固定角色时须包含完整角色描述。图生图时写「要变成什么样」（目标画面），不用再描述源图里已有的构图"},
-            "skill": {"type": "string", "description": "Skill名称，默认anima（不传就用它）。可选值见系统提示 Available Skills 里标 [底模]/[无底模] 的生图类；krea2 / image_gen_v1 仅在用户点名或需要多张时才用"},
+            "prompt": {"type": "string", "description": "提示词。默认（anima / krea2 / image_gen_v1）写逗号分隔的标签式英文短句，只写一段、不要用 --- 分隔（只有 skill=image_gen_v1 时才用 --- 分隔多张）；**skill=qwen_image_v1 时改写自然语言完整句子**（不写 masterpiece 这类标签）。画面里没有固定角色时须包含完整角色描述。图生图时写「要变成什么样」（目标画面），不用再描述源图里已有的构图"},
+            "skill": {"type": "string", "description": "Skill名称，默认anima（不传就用它）。可选值见系统提示 Available Skills 里标 [底模]/[无底模] 的生图类；krea2 / image_gen_v1 / qwen_image_v1 仅在用户点名或场景匹配时才用（qwen_image_v1 用于画面内写字、写实照片感）"},
             "use_character": {"type": "boolean", "description": "是否使用该Skill自带的角色描述（默认false）。只有 image_gen_v1 有角色底模，设为true时固定该角色，你只写动作/环境/构图"},
             "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传"},
             "source_image": {"type": "string", "description": "图生图的源图，**必须给值才算图生图**。QQ 会话：1 = 对方引用的那张图（引用里有多张就填 2、3）；对方没引用会取不到，工具报错后照原话转述即可。网页端：填图片链接或本地路径。仅 anima / image_gen_v1 支持，且只在用户明确说「图生图 / 垫图 / 照着这张改」时才传"},
