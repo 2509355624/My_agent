@@ -606,7 +606,8 @@ def get_agent_sessions(agent_id):
             item["chance_override"] = ch if isinstance(ch, (int, float)) else None
             gp = gap_ov.get(str(item["target_id"]))
             item["gap_override"] = gp if isinstance(gp, (int, float)) else None
-            # None = 没单独设过，管理页显示「格式·跟全局」
+        if item["kind"] in ("group", "private"):
+            # 发图格式覆盖：群和私聊都认（None = 没单独设过，管理页显示「格式·跟全局」）
             fo = fmt_ov.get(str(item["target_id"]))
             item["image_send_format"] = (
                 fo if fo in agent_store.IMAGE_SEND_FORMATS else None)

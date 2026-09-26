@@ -654,12 +654,20 @@ class ImageSendFormatApiTest(SessionsTestBase):
         self.assertEqual(agents.image_send_format("qq", "group", "111"), "jpg")
         self.assertEqual(agents.image_send_format("qq", "group", "222"), "png")
 
-    def test_private_ignores_group_overrides(self):
-        """覆盖只认群（与 image_gen_muted 同口径）：私聊只吃全局值。"""
+    def test_private_has_its_own_override(self):
+        """私聊也能单独设：跟群共用一张覆盖表，键就是会话号。
+
+        这跟本模块早先「覆盖只认群」的口径不同（当时照抄 image_gen_muted）。
+        改的原因：格式是**给对方看**的，私聊里对方一样嫌 jpg 糊；生图开关
+        只管自己，所以两者不必同口径。
+        """
         agents.save_settings("qq", {"image_send_format": "jpg",
                                     "image_send_format_overrides":
                                         {"111": "png"}})
         self.assertEqual(agents.image_send_format("qq", "private", "111"),
+                         "png")
+        # 没覆盖过的私聊照样吃全局
+        self.assertEqual(agents.image_send_format("qq", "private", "999"),
                          "jpg")
 
     def test_illegal_values_degrade_to_jpg(self):
@@ -726,10 +734,26 @@ class ImageSendFormatApiTest(SessionsTestBase):
                                    environ_base={"REMOTE_ADDR": "8.8.8.8"})
             self.assertEqual(resp.status_code, 403, path)
 
-    def test_private_session_carries_no_override_field(self):
+    def test_private_session_carries_override_field(self):
+        """列表接口要给私聊行也带上格式字段，管理页才画得出那个按钮。"""
         self.write_session("qq", key="private_222")
+        agents.save_settings("qq", {"image_send_format_overrides":
+                                        {"222": "png"}})
         d = self.client.get("/api/agent/qq/sessions").get_json()
-        self.assertNotIn("image_send_format", d["sessions"][0])
+        self.assertEqual(d["sessions"][0]["image_send_format"], "png")
+
+    def test_put_override_accepts_private_id(self):
+        """写接口不区分会话类型：同一段 URL，私聊号照样能写能删。"""
+        self.write_session("qq", key="private_222")
+        resp = self.client.put("/api/agent/qq/image_send_format/222",
+                               json={"format": "png"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(agents.image_send_format("qq", "private", "222"),
+                         "png")
+        self.client.put("/api/agent/qq/image_send_format/222",
+                        json={"format": None})
+        self.assertEqual(agents.image_send_format("qq", "private", "222"),
+                         "jpg")
 
 
 class RecentGroupMergeTest(SessionsTestBase):

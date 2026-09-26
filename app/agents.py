@@ -147,16 +147,22 @@ def image_send_format(agent_id, target, target_id):
     """这个 QQ 会话发图用哪种格式，返回 "jpg" 或 "png"（不会是 None）。
 
     settings.json 三层取值（热生效，不用重启）：
-    - image_send_format_overrides[群号]：单群覆盖（管理页群行里的「格式」按钮）；
+    - image_send_format_overrides[会话号]：单会话覆盖（管理页行里的「格式」按钮）；
     - image_send_format：全局总开关；
     - 都没有时回落 jpg —— 和加这个开关之前的行为一致。
 
-    覆盖只认群（与 image_gen_muted 同口径）：私聊沿用全局值，不做单聊设置。
+    **群和私聊都认覆盖**，共用同一张表，键就是会话号（群号或对方 QQ 号）。
+    这跟 image_gen_muted 只认群的口径不同：格式是给对方看的，私聊里对方
+    一样嫌 jpg 糊，所以单聊也得能设。两种号同出一个号池，理论上可能撞号，
+    但一个 agent 的会话只有几十个，撞上的概率可以忽略——不值得为它多造
+    一层前缀去换复杂度。
+
+    target 传 None 表示只问全局值（网页端列表接口拿总开关用）。
     值非法（比如手改坏了 settings.json）一律当没设——绝不把野值透给 PIL 的
     save(format=...)，那会直接抛错把图卡住。
     """
     s = load_settings(agent_id)
-    if target == "group":
+    if target is not None:
         overrides = s.get("image_send_format_overrides")
         if isinstance(overrides, dict):
             v = overrides.get(str(target_id))

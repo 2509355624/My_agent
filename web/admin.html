@@ -689,13 +689,7 @@ function renderSessions() {
       row.appendChild(ig);
 
       // 「格式」按钮：这个群的图发 jpg 还是 png；没单独设过就跟全局。
-      const fm = document.createElement('button');
-      fm.className = 'ghost';
-      fm.textContent = s.image_send_format
-        ? '格式:' + s.image_send_format.toUpperCase() : '格式·跟全局';
-      fm.title = '点一下切换：跟全局 → JPG → PNG → 跟全局';
-      fm.addEventListener('click', () => editImageFmt(s, fm));
-      row.appendChild(fm);
+      addImageFmtButton(s, row);
 
       // 「频率」按钮：这个群主动发言的间隔秒数；单群覆盖，跟全局可不同。
       const cf = document.createElement('button');
@@ -724,6 +718,8 @@ function renderSessions() {
 
     // 「提示词」按钮：给这个群/私聊单独自定义人设（会话专属提示词）。
     if (s.kind === 'group' || s.kind === 'private') {
+      // 私聊行没有上面那堆群开关，格式按钮在这里补上（群行已在上面渲染过）。
+      if (s.kind === 'private') addImageFmtButton(s, row);
       const pb = document.createElement('button');
       pb.className = 'ghost';
       pb.textContent = (sessPrompts[s.key] ? '提示词·自定义'
@@ -922,7 +918,7 @@ async function toggleImageGen(s, btn) {
 }
 
 // ─── 发图格式开关 ────────────────────────────────────
-// 总开关定 jpg / png；群行里的按钮做单群覆盖（缺省跟全局）。
+// 总开关定 jpg / png；行里的按钮做单会话覆盖（群、私聊都认，缺省跟全局）。
 // 只管发出去那一张，ComfyUI output 里的原图永远不动。
 
 function renderImageFmtAll(fmt) {
@@ -954,7 +950,19 @@ async function toggleImageFmtAll() {
   }
 }
 
-// 跟全局 → jpg → png → 跟全局。null 表示删掉这个群的覆盖。
+// 发图格式按钮：群和私聊都能单独设。渲染位置由调用方决定
+// ——群行插在「生图」与「频率」之间，私聊行插在「提示词」之前。
+function addImageFmtButton(s, row) {
+  const fm = document.createElement('button');
+  fm.className = 'ghost';
+  fm.textContent = s.image_send_format
+    ? '格式:' + s.image_send_format.toUpperCase() : '格式·跟全局';
+  fm.title = '点一下切换：跟全局 → JPG → PNG → 跟全局';
+  fm.addEventListener('click', () => editImageFmt(s, fm));
+  row.appendChild(fm);
+}
+
+// 跟全局 → jpg → png → 跟全局。null 表示删掉这个会话的覆盖。
 const FMT_CYCLE = [null, 'jpg', 'png'];
 
 async function editImageFmt(s, btn) {
