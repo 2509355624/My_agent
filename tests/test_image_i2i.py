@@ -258,19 +258,23 @@ class I2IFlowTest(unittest.TestCase):
             captured.update(workflow)
             return "pid-i2i"
 
+        gi.image_jobs._reset()
         for patcher in (
             mock.patch.object(gi, "_qq_gate", lambda: None),
-            mock.patch.object(gi, "_queue_prompt", fake_queue),
+            # 提交动作现在发生在 image_jobs 的 worker 里，所以拦的是它那边
+            mock.patch.object(gi.image_jobs, "_queue_prompt", fake_queue),
+            mock.patch.object(gi.image_jobs, "_ensure_worker", lambda: None),
+            mock.patch.object(gi.image_jobs, "wait_done",
+                              lambda pid, timeout=None: {"outputs": {}}),
+            mock.patch.object(gi.image_jobs, "_send_text", lambda *a: None),
             mock.patch.object(gi, "is_cancelled", lambda: False),
             mock.patch.object(qq_api, "current_context", lambda: self.KEY),
-            mock.patch.object(gi.image_jobs, "submit",
-                              lambda t, i, p, force=False: (True, 0)),
-            # 名额预检查读的是模块级 _inflight，钉成 0 免受别的用例影响
-            mock.patch.object(gi.image_jobs, "inflight_count", lambda t, i: 0),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
-        return gi._generate_image(**kw), captured
+        out = gi._generate_image(**kw)
+        gi.image_jobs._drain()          # 队列是同步驱动的，提交那一刻才看得见
+        return out, captured
 
     def _source_ok(self, name="i2isrc_x.png"):
         return (

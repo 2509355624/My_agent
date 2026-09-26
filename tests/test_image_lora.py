@@ -210,44 +210,53 @@ class _GenBase(unittest.TestCase):
     """照抄 test_image_jobs 的做法：HTTP/线程/发送全 mock。"""
 
     def setUp(self):
-        image_jobs._inflight.clear()
+        image_jobs._reset()
         self.submitted = []
+
         def _fake_queue(workflow):
             self.submitted.append(workflow)
             return "pid"
 
-        repls = [
+        for target, repl in (
             ("load_skill", mock.Mock(return_value={
                 "workflow": _chain_workflow(),
                 "character": "1girl, Sumire"})),
-            ("_queue_prompt", _fake_queue),
             ("_qq_gate", mock.Mock(return_value=None)),
             ("is_cancelled", mock.Mock(return_value=False)),
-            ("_wait_for_completion", mock.Mock(return_value={
-                "outputs": {"9": {"images": [{"filename": "a.png"}]}}})),
-        ]
-        for target, repl in repls:
+        ):
             p = mock.patch.object(generate_image, target, repl)
             p.start()
             self.addCleanup(p.stop)
 
-        p = mock.patch.object(image_jobs, "threading",
-                              mock.Mock(Thread=_SyncThread))
-        p.start()
-        self.addCleanup(p.stop)
-        p = mock.patch.object(image_jobs, "_send_image")
-        p.start()
-        self.addCleanup(p.stop)
-        p = mock.patch.object(image_jobs, "_send_text")
+        # 提交挪进了 image_jobs 的 worker：这里拦它那边的出口，并把 worker
+        # 线程挡在门外，由 _call 自己 _drain() 同步驱动。
+        for target, repl in (
+            ("_queue_prompt", _fake_queue),
+            ("_ensure_worker", lambda: None),
+            ("wait_done", mock.Mock(return_value={"outputs": {}})),
+            ("_send_image", mock.Mock()),
+            ("_send_text", mock.Mock()),
+        ):
+            p = mock.patch.object(image_jobs, target, repl)
+            p.start()
+            self.addCleanup(p.stop)
+
+        def _sync_wait(self, poll=2):
+            """测试里没有 worker 线程，网页侧 wait 时自己把队列跑完。"""
+            image_jobs._drain()
+            if self.error is not None:
+                raise self.error
+            return self.entry
+
+        p = mock.patch.object(image_jobs.Job, "wait", _sync_wait)
         p.start()
         self.addCleanup(p.stop)
 
     def _call(self, ctx, **kwargs):
-        from app import image_jobs
         with mock.patch.object(qq_api, "current_context", return_value=ctx):
-            with mock.patch.object(image_jobs, "wait_done",
-                                   return_value={"outputs": {}}):
-                return generate_image.tool["function"]("a cat", **kwargs)
+            out = generate_image.tool["function"]("a cat", **kwargs)
+            image_jobs._drain()
+            return out
 
 
 class _SyncThread:

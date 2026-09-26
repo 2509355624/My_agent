@@ -192,10 +192,12 @@ ENABLE_IMAGE_GEN = os.getenv("ENABLE_IMAGE_GEN", "true").lower() not in ("0", "f
 
 COMFYUI_URL = os.getenv("COMFYUI_URL", "http://127.0.0.1:8188")
 
-# 单次 generate_image 调用的等待上限（秒）。批量生图是逐张串行跑的，
-# 张数越多总耗时越长，所以这里给足时间，避免整批在最后一张前被掐断
-# （超时会丢掉本批已经生成出来的图）。
-IMAGE_GEN_TIMEOUT = int(os.getenv("IMAGE_GEN_TIMEOUT", "3600"))
+# 单张图的出图上限（秒）。**注意这是「一张」的时限，不是「一次调用」的**：
+# 生图在 image_jobs 里是逐张串行排队的，计时从每张**真正开跑**算起（排队时
+# 间不算，否则排在第 5 位的人还没轮到就被判超时了）。到点还没出图就把这张中
+# 断掉、顺手清掉 ComfyUI 里的残留任务和显存，让后面排队的人先跑——一张卡住
+# 的图不该堵着所有人。
+IMAGE_GEN_TIMEOUT = int(os.getenv("IMAGE_GEN_TIMEOUT", "120"))
 
 # ─── Agent ──────────────────────────────────────────
 

@@ -182,7 +182,7 @@ class ImageGenGateTest(unittest.TestCase):
         from app.tools.normal import generate_image as gi
         with mock.patch.object(gi, "_qq_gate",
                                return_value="错误：生图已被关闭"), \
-                mock.patch.object(gi, "_queue_prompt") as queue:
+                mock.patch.object(gi.image_jobs, "_queue_prompt") as queue:
             out = gi._generate_image("1girl")
         self.assertIn("错误", out)
         queue.assert_not_called()     # 闸住了就不能往 ComfyUI 队列塞任务

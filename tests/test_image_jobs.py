@@ -1,8 +1,7 @@
-"""生图后台投递 + generate_image 的 QQ 异步分流测试。
+"""生图队列 + generate_image 的排队/异步分流测试。
 
-原则：零网络、零显卡、零真实线程等待。ComfyUI 的 HTTP、QQ 发送端、线程
-本身全 mock，只测判定逻辑（排队上限 / 成功发回 / 失败说一句 / 同步异步
-分流）。
+原则：零网络、零显卡、零真实线程等待。ComfyUI 的 HTTP、QQ 发送端、worker
+线程全 mock，只测判定逻辑（谁排队、谁被拒、超时怎么收场、失败怎么回话）。
 """
 
 import os
@@ -17,21 +16,15 @@ from app.config import QQ_AGENT_ID
 from app.tools.normal import generate_image
 
 
-class _SyncThread:
-    """替身线程：start() 直接同步跑完，免得测试里真去等后台。"""
-
-    def __init__(self, target=None, args=(), **kwargs):
-        self.target = target
-        self.args = args
-
-    def start(self):
-        if self.target:
-            self.target(*self.args)
-
-
 class _Base(unittest.TestCase):
+    """统一把 worker 线程挡在门外：任务入队后由测试自己 _drain() 驱动。
+
+    真起线程的话，断言就得跟后台线程抢时序；_ensure_worker 一成空操作，队列
+    就变成测试手里的确定性对象。
+    """
+
     def setUp(self):
-        image_jobs._inflight.clear()
+        image_jobs._reset()
         self.sent_images = []
         self.sent_texts = []
 
@@ -41,16 +34,16 @@ class _Base(unittest.TestCase):
         def _fake_text(target, tid, text):
             self.sent_texts.append((target, tid, text))
 
-        p = mock.patch.object(image_jobs, "threading",
-                              mock.Mock(Thread=_SyncThread))
-        p.start()
-        self.addCleanup(p.stop)
-        p = mock.patch.object(image_jobs, "_send_image", _fake_image)
-        p.start()
-        self.addCleanup(p.stop)
-        p = mock.patch.object(image_jobs, "_send_text", _fake_text)
-        p.start()
-        self.addCleanup(p.stop)
+        for target, repl in (("_ensure_worker", lambda: None),
+                             ("_queue_prompt", lambda wf: "pid"),
+                             ("_send_image", _fake_image),
+                             ("_send_text", _fake_text)):
+            p = mock.patch.object(image_jobs, target, repl)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _enqueue(self, ctx=("group", "9"), wf=None):
+        return image_jobs.enqueue(ctx[0], ctx[1], wf or {"1": {}})
 
 
 class PollTest(_Base):
@@ -107,116 +100,157 @@ class WaitTest(_Base):
                     image_jobs.wait_done("pid", timeout=0.001)
 
 
-class SubmitTest(_Base):
-    """排队上限与名额释放。
+class QueueTest(_Base):
+    """谁排队、谁被拒。全局就一条队，多会话一起排。"""
 
-    默认把 _run 挡掉：这一组只关心「接不接、放不放」，真去等出图会打到
-    真实的 ComfyUI 上。
-    """
+    def test_jobs_line_up_across_conversations(self):
+        """不同会话的任务进的是同一条队——这就是「全局串行」的意思。"""
+        a, _ = self._enqueue(("group", "9"))
+        b, _ = self._enqueue(("group", "8"))
+        c, _ = self._enqueue(("private", "123"))
+        self.assertEqual(list(image_jobs._queue), [a, b, c])
+        self.assertEqual(image_jobs.queue_depth(), 3)
 
-    def setUp(self):
-        super().setUp()
-        p = mock.patch.object(image_jobs, "_run")
-        p.start()
-        self.addCleanup(p.stop)
+    def test_ahead_counts_the_running_one(self):
+        a, _ = self._enqueue()
+        b, _ = self._enqueue()
+        self.assertEqual(image_jobs.ahead_of(a), 0)
+        self.assertEqual(image_jobs.ahead_of(b), 1)
+        image_jobs._take_nowait()          # 相当于 worker 开始跑 a
+        self.assertEqual(image_jobs.ahead_of(b), 1)   # a 还在跑，仍在前头
 
-    def _submit(self, pid="p1"):
-        return image_jobs.submit("group", "9", pid)
+    def test_per_session_limit(self):
+        for _ in range(image_jobs.MAX_INFLIGHT):
+            job, reason = self._enqueue()
+            self.assertIsNone(reason)
+            self.assertIsNotNone(job)
+        job, reason = self._enqueue()
+        self.assertIsNone(job)
+        self.assertIn("排着", reason)
 
-    def test_two_jobs_accepted_third_rejected(self):
-        ok1, n1 = self._submit("p1")
-        ok2, _ = self._submit("p2")
-        ok3, n3 = self._submit("p3")
-        self.assertEqual((ok1, n1), (True, 1))
-        self.assertTrue(ok2)
-        self.assertFalse(ok3)
-        self.assertEqual(n3, image_jobs.MAX_INFLIGHT)
+    def test_global_queue_limit_rejects_anyone(self):
+        """全局队排满就拒——不管是谁的会话。这是「别一次塞太多」的总闸。"""
+        for i in range(image_jobs.MAX_QUEUE):
+            # 每次换会话，绕开每会话上限，专门顶全局这条
+            job, reason = self._enqueue(("group", str(i)))
+            self.assertIsNone(reason)
+        job, reason = self._enqueue(("group", "999"))
+        self.assertIsNone(job)
+        self.assertIn("太多", reason)
 
-    def test_force_registers_even_when_full(self):
-        """force = 名额已在排队之前查过，这里再满也必须登记。
-
-        工作流进了 ComfyUI 就一定会出图；不登记，那张图就没人发得出去。
-        """
-        self._submit("p1")
-        self._submit("p2")
-        ok, pending = image_jobs.submit("group", "9", "p3", force=True)
-        self.assertTrue(ok)
-        self.assertEqual(pending, image_jobs.MAX_INFLIGHT + 1)
-
-    def test_slots_are_per_conversation(self):
-        self.assertTrue(self._submit("p1")[0])
-        self.assertTrue(self._submit("p2")[0])
-        self.assertTrue(image_jobs.submit("group", "8", "p3")[0])
-
-    def test_failed_thread_start_does_not_hold_slot(self):
-        p = mock.patch.object(image_jobs, "threading",
-                              mock.Mock(Thread=mock.Mock(
-                                  side_effect=RuntimeError("no thread"))))
-        p.start()
-        self.addCleanup(p.stop)
-        with self.assertRaises(RuntimeError):
-            self._submit("p1")
+    def test_slot_released_after_finish(self):
+        job, _ = self._enqueue()
+        self.assertEqual(image_jobs.inflight_count("group", "9"), 1)
+        image_jobs._take_nowait()
+        image_jobs._finish(job)
         self.assertEqual(image_jobs.inflight_count("group", "9"), 0)
+        self.assertIsNone(self._enqueue()[1])
 
 
-class DeliverTest(_Base):
-    """出图后发回原会话；失败在群里说一句。"""
+class ProcessTest(_Base):
+    """跑任务：出图发回原会话、失败说一句、超时中断并清干净。"""
 
     def _entry(self, names=("a.png",)):
         return {"outputs": {"9": {"images": [{"filename": n} for n in names]}}}
 
-    def test_success_sends_image_back_to_same_conversation(self):
+    def test_success_sends_image_back(self):
         with mock.patch.object(image_jobs, "wait_done",
                                return_value=self._entry()):
-            image_jobs.submit("group", "9", "p1")
+            self._enqueue()
+            image_jobs._drain()
         self.assertEqual(len(self.sent_images), 1)
-        target, tid, url = self.sent_images[0]
-        self.assertEqual((target, tid), ("group", "9"))
-        self.assertIn("a.png", url)
-        self.assertEqual(self.sent_texts, [])   # 只发图，不说话
+        self.assertEqual(self.sent_images[0][:2], ("group", "9"))
+        self.assertIn("a.png", self.sent_images[0][2])
+        self.assertEqual(self.sent_texts, [])       # 只发图，不说话
+        self.assertEqual(image_jobs.queue_depth(), 0)
 
     def test_private_target_kept(self):
         with mock.patch.object(image_jobs, "wait_done",
                                return_value=self._entry()):
-            image_jobs.submit("private", "123", "p1")
+            self._enqueue(("private", "123"))
+            image_jobs._drain()
         self.assertEqual(self.sent_images[0][:2], ("private", "123"))
 
-    def test_slot_released_after_job_finishes(self):
-        """任务跑完（哪怕失败）名额就要还回去，否则这个会话再也画不了。"""
-        with mock.patch.object(image_jobs, "wait_done",
-                               return_value={"outputs": {}}):
-            image_jobs.submit("group", "9", "p1")
-            self.assertEqual(image_jobs.inflight_count("group", "9"), 0)
-            self.assertTrue(image_jobs.submit("group", "9", "p2")[0])
+    def test_timeout_interrupts_and_cleans_comfyui(self):
+        """超时不是「不等了」——要真把它从 ComfyUI 里摘掉并释放显存。
 
-    def test_failure_tells_the_group(self):
+        从前任务已经在 ComfyUI 手里，agent 侧只能放弃等待，僵尸继续占着显存
+        和队列。改成全局串行之后才敢用 /interrupt：那一刻正在跑的就是我们
+        这一张。
+        """
+        posts = []
         with mock.patch.object(image_jobs, "wait_done",
-                               side_effect=TimeoutError("生成超时 (3600s)")):
-            image_jobs.submit("group", "9", "p1")
+                               side_effect=TimeoutError("超时")), \
+                mock.patch.object(image_jobs, "requests",
+                                  mock.Mock(post=lambda url, **kw:
+                                            posts.append((url, kw.get("json"))))):
+            self._enqueue()
+            image_jobs._drain()
+        urls = [u for u, _ in posts]
+        self.assertTrue(any(u.endswith("/interrupt") for u in urls))
+        self.assertTrue(any(u.endswith("/free") for u in urls))
+        # 队列里那一份也要按 prompt_id 删掉
+        self.assertIn({"delete": ["pid"]},
+                      [p for u, p in posts if u.endswith("/queue")])
+
+    def test_timeout_tells_group_to_redo(self):
+        with mock.patch.object(image_jobs, "wait_done",
+                               side_effect=TimeoutError("超时")), \
+                mock.patch.object(image_jobs, "requests",
+                                  mock.Mock(post=lambda *a, **k: None)):
+            self._enqueue()
+            image_jobs._drain()
         self.assertEqual(self.sent_images, [])
         self.assertEqual(len(self.sent_texts), 1)
         self.assertEqual(self.sent_texts[0][:2], ("group", "9"))
-        self.assertIn("图没画出来", self.sent_texts[0][2])
         self.assertIn("超时", self.sent_texts[0][2])
+        self.assertIn("重新生成", self.sent_texts[0][2])
 
     def test_empty_output_counts_as_failure(self):
         with mock.patch.object(image_jobs, "wait_done",
-                               return_value={"outputs": {}}):
-            image_jobs.submit("group", "9", "p1")
+                               return_value={"outputs": {}}), \
+                mock.patch.object(image_jobs, "requests",
+                                  mock.Mock(post=lambda *a, **k: None)):
+            self._enqueue()
+            image_jobs._drain()
         self.assertEqual(self.sent_images, [])
         self.assertTrue(self.sent_texts)
 
     def test_send_failure_falls_back_to_notice(self):
-        """图发出去失败也算失败：照样说一句，不让异常冒出后台线程。"""
+        """图发出去失败也算失败：照样说一句，不让异常冒出 worker 线程。"""
         p = mock.patch.object(image_jobs, "_send_image",
                               side_effect=OSError("down"))
         p.start()
         self.addCleanup(p.stop)
         with mock.patch.object(image_jobs, "wait_done",
                                return_value=self._entry()):
-            image_jobs.submit("group", "9", "p1")
+            self._enqueue()
+            image_jobs._drain()
         self.assertEqual(len(self.sent_texts), 1)
         self.assertIn("图没画出来", self.sent_texts[0][2])
+
+    def test_queue_keeps_running_after_a_failure(self):
+        """前一张失败不该把队卡住——后面的人照跑。"""
+        with mock.patch.object(
+                image_jobs, "wait_done",
+                side_effect=[TimeoutError("超时"), self._entry()]), \
+                mock.patch.object(image_jobs, "requests",
+                                  mock.Mock(post=lambda *a, **k: None)):
+            self._enqueue()
+            self._enqueue()
+            image_jobs._drain()
+        self.assertEqual(len(self.sent_images), 1)   # 第二张发出来了
+        self.assertEqual(image_jobs.queue_depth(), 0)
+
+    def test_web_job_keeps_entry_and_stays_silent(self):
+        """网页侧（target=None）不往任何会话发消息，结果留给 job.entry。"""
+        with mock.patch.object(image_jobs, "wait_done",
+                               return_value=self._entry()):
+            job, _ = self._enqueue((None, None))
+            image_jobs._drain()
+        self.assertIsNotNone(job.entry)
+        self.assertEqual(self.sent_images, [])
+        self.assertEqual(self.sent_texts, [])
 
 
 class SendImageTest(unittest.TestCase):
@@ -277,83 +311,98 @@ class SendImageTest(unittest.TestCase):
 
 
 class GenerateImageSplitTest(unittest.TestCase):
-    """generate_image：QQ 侧提交即返回，网页侧照旧同步等。"""
+    """generate_image：QQ 侧排队即返回，网页侧同步等出图。"""
 
     def setUp(self):
-        image_jobs._inflight.clear()
-        p = mock.patch.object(generate_image, "load_skill",
-                              return_value={"workflow": {"1": {}},
-                                            "character": ""})
-        p.start()
-        self.addCleanup(p.stop)
-        p = mock.patch.object(generate_image, "_queue_prompt",
-                              return_value="pid")
-        p.start()
-        self.addCleanup(p.stop)
-        p = mock.patch.object(generate_image, "_qq_gate", return_value=None)
-        p.start()
-        self.addCleanup(p.stop)
-        p = mock.patch.object(generate_image, "is_cancelled",
-                              return_value=False)
-        p.start()
-        self.addCleanup(p.stop)
-        self.wait = mock.Mock(return_value={
-            "outputs": {"9": {"images": [{"filename": "a.png"}]}}})
-        p = mock.patch.object(generate_image, "_wait_for_completion",
-                              self.wait)
-        p.start()
-        self.addCleanup(p.stop)
-        p = mock.patch.object(image_jobs, "threading",
-                              mock.Mock(Thread=_SyncThread))
-        p.start()
-        self.addCleanup(p.stop)
-        p = mock.patch.object(image_jobs, "_send_image")
-        p.start()
-        self.addCleanup(p.stop)
-        p = mock.patch.object(image_jobs, "_send_text")
+        image_jobs._reset()
+        for target, repl in (
+            ("load_skill", mock.Mock(return_value={
+                "workflow": {"1": {}}, "character": ""})),
+            ("_qq_gate", mock.Mock(return_value=None)),
+            ("is_cancelled", mock.Mock(return_value=False)),
+        ):
+            p = mock.patch.object(generate_image, target, repl)
+            p.start()
+            self.addCleanup(p.stop)
+        for target, repl in (
+            ("_queue_prompt", lambda wf: "pid"),
+            ("_ensure_worker", lambda: None),
+            ("_send_image", mock.Mock()),
+            ("_send_text", mock.Mock()),
+        ):
+            p = mock.patch.object(image_jobs, target, repl)
+            p.start()
+            self.addCleanup(p.stop)
+
+        def _sync_wait(self, poll=2):
+            """测试里没有 worker 线程，wait 时自己把队列同步跑完。
+
+            真等的话 job.done 永远不会 set（没人处理它），用例会挂死。
+            """
+            image_jobs._drain()
+            if self.error is not None:
+                raise self.error
+            return self.entry
+
+        p = mock.patch.object(image_jobs.Job, "wait", _sync_wait)
         p.start()
         self.addCleanup(p.stop)
 
-    def _call(self, ctx):
-        with mock.patch.object(qq_api, "current_context", return_value=ctx):
-            with mock.patch.object(image_jobs, "wait_done",
-                                   return_value={"outputs": {}}):
-                return generate_image.tool["function"]("a cat")
+    def _entry(self):
+        return {"outputs": {"9": {"images": [{"filename": "a.png"}]}}}
+
+    def _call(self, ctx, error=None):
+        kw = ({"side_effect": error} if error is not None
+              else {"return_value": self._entry()})
+        with mock.patch.object(qq_api, "current_context", return_value=ctx), \
+                mock.patch.object(image_jobs, "wait_done", **kw):
+            out = generate_image.tool["function"]("a cat")
+            image_jobs._drain()
+            return out
 
     def test_qq_returns_immediately_without_waiting(self):
         out = self._call(("group", "9"))
         self.assertIn("已经在画了", out)
-        self.wait.assert_not_called()          # 没在这儿等显卡
         self.assertEqual(image_jobs.inflight_count("group", "9"), 0)
+
+    def test_qq_says_how_many_are_ahead(self):
+        """排队时要告诉模型前面还有几张，好让它跟对方交代一句。"""
+        with mock.patch.object(qq_api, "current_context",
+                               return_value=("group", "9")), \
+                mock.patch.object(image_jobs, "wait_done",
+                                  return_value={"outputs": {}}):
+            generate_image.tool["function"]("a cat")        # 先占住队首
+            out = generate_image.tool["function"]("a cat")  # 这一张排在后面
+        self.assertIn("前面还有 1 张", out)
 
     def test_web_still_waits_and_returns_url(self):
         out = self._call((None, None))
-        self.wait.assert_called_once()
         self.assertIn("/api/image/a.png", out)
 
-    def test_qq_queue_full_tells_model_to_drop_it(self):
-        with mock.patch.object(image_jobs, "_run"):
-            self._call(("group", "9"))
-            self._call(("group", "9"))
-        out = self._call(("group", "9"))
-        self.assertIn("排着", out)
-        self.assertIn(str(image_jobs.MAX_INFLIGHT), out)
+    def test_web_reports_timeout(self):
+        out = self._call((None, None), error=TimeoutError("生成超时 (120s)"))
+        self.assertIn("超时", out)
 
     def test_qq_queue_full_does_not_reach_comfyui(self):
-        """名额满时一步都不该往 ComfyUI 走。
+        """被拒时一步都不该碰 ComfyUI——否则就是没人发的孤儿图。
 
         从前是先 _queue_prompt 再查名额：被拒那一次图照样会画出来，可没有
         任何线程登记它，于是永远发不出去——群里看到的就是「图生成了但不发
         群」，模型还被告知「当没画过」。
         """
-        with mock.patch.object(image_jobs, "_run"):
-            self._call(("group", "9"))
-            self._call(("group", "9"))
-        with mock.patch.object(generate_image, "_queue_prompt",
-                               return_value="pid2") as qp:
-            out = self._call(("group", "9"))
+        with mock.patch.object(qq_api, "current_context",
+                               return_value=("group", "9")), \
+                mock.patch.object(image_jobs, "wait_done",
+                                  return_value={"outputs": {}}), \
+                mock.patch.object(image_jobs, "_queue_prompt",
+                                  return_value="pid") as qp:
+            for _ in range(image_jobs.MAX_INFLIGHT):
+                generate_image.tool["function"]("a cat")
+            out = generate_image.tool["function"]("a cat")   # 被拒
+            image_jobs._drain()
         self.assertIn("排着", out)
-        qp.assert_not_called()
+        # 只有真正入了队的那几张被送进 ComfyUI
+        self.assertEqual(qp.call_count, image_jobs.MAX_INFLIGHT)
 
 
 if __name__ == "__main__":

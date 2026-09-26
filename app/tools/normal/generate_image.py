@@ -4,13 +4,11 @@ import os
 
 import requests
 import json
-import time
 import random
-import uuid
 from flask import request
 from app import comfy_src, image_jobs
 from app.cancel import Cancelled, is_cancelled
-from app.config import COMFYUI_URL, IMAGE_GEN_TIMEOUT, QQ_AGENT_ID
+from app.config import COMFYUI_URL, QQ_AGENT_ID
 from app.skills import load_skill, load_workflow
 
 
@@ -43,39 +41,6 @@ def _qq_gate():
     return None if ok else ("错误：" + why
                             + "，本次不生成图片。别再重试，"
                               "直接告诉对方现在画不了。")
-
-
-# ─── ComfyUI 内部函数 ────────────────────────────────
-
-def _queue_prompt(workflow):
-    resp = requests.post(COMFYUI_URL + "/prompt", json={
-        "prompt": workflow,
-        "client_id": "agent_" + str(uuid.uuid4())[:8]
-    }, timeout=30)
-    resp.raise_for_status()
-    return resp.json()["prompt_id"]
-
-
-def _wait_for_completion(prompt_id, timeout=IMAGE_GEN_TIMEOUT):
-    """轮询等待 ComfyUI 出图。批量生图逐张串行，故超时给得较宽（见 config）。
-
-    每次轮询检查一次中断信号：用户点「停止」时立刻放弃等待，让 agent 循环
-    尽快收尾。**这里不去调 ComfyUI 的 /interrupt** —— 它中断的是「当前正在
-    执行」的任务，如果那一刻恰好是用户自己在界面上排的图，会被一起取消。
-    放弃等待更安全：那张图会在后台照常跑完，只是不再有人等它。
-    """
-    start = time.time()
-    while time.time() - start < timeout:
-        # 放在 try 之外：下面的 except 是裸的，包进去会被它吞掉
-        if is_cancelled():
-            raise Cancelled("用户中断了等待")
-        # 轮询本身交给 image_jobs：后台投递线程用的是同一份实现，两处各写
-        # 一遍迟早会长歪（一边改了超时、另一边没改）。
-        entry = image_jobs.poll_once(prompt_id)
-        if entry is not None:
-            return entry
-        time.sleep(2)
-    raise TimeoutError("生成超时 (" + str(timeout) + "s)")
 
 
 # ─── 工具函数 ────────────────────────────────────────
@@ -275,41 +240,48 @@ def _generate_image(prompt, skill="anima", use_character=False, lora=None,
         if err:
             return err
 
-    # QQ 会话：**先查名额，再去排队**。这两步的顺序是整条链的关键——被拒时
-    # 工作流还在手上，ComfyUI 一点算力都没浪费，也不会留下「画了却没人发」的
-    # 孤儿图。（从前反着来：先 _queue_prompt 再查名额，被拒那次图照样会画出来，
-    # 可没有任何线程登记它，于是永远发不出去，群里只看到机器人说「卡的是显卡」。）
+    # 排进**全局串行队列**：同一时刻 ComfyUI 里最多只有一张图在跑，其余老老
+    # 实实排队（见 image_jobs）。从前是这里直接 _queue_prompt 提交、排队发生
+    # 在 ComfyUI 内部——agent 侧看不见也管不着，多个会话并发时 N×2 张一起灌
+    # 进去，显存瞬间见底。会话身份在这一刻快照下来：worker 线程读不到 qq_api
+    # 的线程本地上下文。
     from app import qq_api
     target, target_id = qq_api.current_context()
-    if target is not None:
-        pending = image_jobs.inflight_count(target, target_id)
-        if pending >= image_jobs.MAX_INFLIGHT:
-            return ("这个会话已经排着 %d 张了，画完这些再说。"
-                    "不要跟对方提这张图，当没画过，接着把话说完。" % pending)
-
-    # 提交到 ComfyUI。到这一步才排队：名额够了，图一定会画，也一定会有人发。
-    prompt_id = _queue_prompt(workflow)
+    job, reason = image_jobs.enqueue(target, target_id, workflow)
+    if reason is not None:
+        # 拒收时工作流还在手上，ComfyUI 一点算力都没浪费，也不会留下「画了
+        # 却没人发」的孤儿图。
+        return reason
 
     if target is not None:
-        # 提交完立刻返回，图由后台线程画好后自己发回原群（见 image_jobs）。
-        # 留在这儿同步等会把适配层的并发槽（默认 2 个）占住几分钟——文本回
-        # 复和别的群都得陪着等显卡。会话身份在提交这一刻快照下来。
-        #
-        # force：名额上面已经查过，这里只剩「登记」这一个动作。万一同会话
-        # 并发把名额顶爆（窗口极小），宁可超额一张也必须登记——工作流已经进
-        # 了 ComfyUI，不登记就等于让它变成没人发的孤儿图。
-        image_jobs.submit(target, target_id, prompt_id, force=True)
+        # 提交完立刻返回，图由 worker 画好后自己发回原群。留在这儿同步等会把
+        # 适配层的并发槽（默认 2 个）占住几分钟——文本回复和别的群都得陪着等
+        # 显卡。
+        ahead = image_jobs.ahead_of(job)
+        if ahead > 0:
+            return ("已经排上队了（前面还有 %d 张），排到就画，"
+                    "画好会自动发到群里。"
+                    "不要输出图片地址，也不要说「图在下面 / 稍等」，"
+                    "直接把想说的话说完就行。" % ahead)
         return ("已经在画了，画好会自动发到群里。"
                 + ("垫的是%s。" % source_note if source_note else "")
                 + "不要输出图片地址，也不要说「图在下面 / 稍等」，"
                 "直接把想说的话说完就行。")
 
     try:
-        history_entry = _wait_for_completion(prompt_id)
+        # 网页端：等到「排队 + 出图」全程。任务被超时中断时 image_jobs 会把
+        # TimeoutError 挂到 job.error 上，这里接住当普通工具失败转述。
+        history_entry = job.wait()
     except Cancelled:
         # 不把 Cancelled 抛给 execute_tool：那会被描述成"工具执行失败"，
         # 让模型以为工具坏了。中断是一个正常结局，说清楚就行。
         return "已中断：用户取消了等待。图片可能仍在后台生成，可到 ComfyUI 界面查看。"
+    except TimeoutError as e:
+        return "错误: " + str(e) + "，这张已经中断，换个提示词或稍后再试。"
+    except Exception as e:
+        # 其余失败（提交不上去、跑完了没图、ComfyUI 崩了）照样只回一句错话：
+        # 直接冒到 execute_tool 会被描述成「工具坏了」，模型就该开始编了。
+        return "错误: " + str(e)
     images = image_jobs.output_images(history_entry)
 
     if not images:
