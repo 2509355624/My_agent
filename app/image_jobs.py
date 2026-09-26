@@ -28,7 +28,6 @@ generate_image 原先是同步的：工具不返回，agent 循环就走不下�
 import logging
 import threading
 import time
-from urllib.parse import quote
 
 import requests
 
@@ -150,9 +149,9 @@ def _send_text(target, target_id, text):
 
 
 def _send_image(target, target_id, filename):
-    from app import qq_api
-    url = COMFYUI_URL.rstrip("/") + "/view?filename=" + quote(filename)
-    qq_api.send_image(target, target_id, url)
+    """发回原会话。先过 image_out 转 JPEG，顺带甩掉 PNG 里的工作流元数据。"""
+    from app import image_out, qq_api
+    qq_api.send_image(target, target_id, image_out.prepare_for_send(filename))
 
 
 def _run(target, target_id, prompt_id):

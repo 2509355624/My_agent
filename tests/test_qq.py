@@ -19,6 +19,7 @@ import unittest
 from unittest import mock
 
 import app.agents as agents
+import app.image_out as image_out
 import app.qq_api as qq_api
 import app.qq_bot as qq_bot
 from app.tools.normal import send_qq_message
@@ -876,14 +877,38 @@ class DeliverTest(unittest.TestCase):
         self.assertEqual(sent, [])
 
     def test_images_go_out_as_comfy_view_urls(self):
+        """转 JPEG 失败时回落成 ComfyUI 原图 URL —— 不能因为转换把图卡住。"""
         seen = []
         with mock.patch.object(
                 qq_api, "send_image",
-                lambda target, tid, path, caption="": (seen.append((target, path)), 1)[1]):
+                lambda target, tid, path, caption="": (seen.append((target, path)), 1)[1]), \
+             mock.patch.object(image_out._session, "get",
+                               mock.Mock(side_effect=OSError("comfy 不可达"))):
             self._runner()._deliver(True, "", ["a.png"])
         self.assertEqual(len(seen), 1)
         self.assertEqual(seen[0][0], "group")
         self.assertIn("/view?filename=a.png", seen[0][1])
+
+    def test_images_are_sent_as_local_jpeg(self):
+        """默认路径：发出去的是本地 JPEG，PNG 里的工作流元数据不跟着走。"""
+        import io
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.new("RGB", (16, 16), (10, 20, 30)).save(buf, "PNG")
+        resp = mock.Mock(content=buf.getvalue())
+        resp.raise_for_status = lambda: None
+
+        seen = []
+        with mock.patch.object(
+                qq_api, "send_image",
+                lambda target, tid, path, caption="": (seen.append(path), 1)[1]), \
+             mock.patch.object(image_out._session, "get", return_value=resp):
+            self._runner()._deliver(True, "", ["a.png"])
+        self.assertEqual(len(seen), 1)
+        self.assertNotIn("/view?", seen[0])
+        self.assertTrue(seen[0].lower().endswith(".jpg"))
+        os.remove(seen[0])
 
     def test_private_runner_uses_private_send(self):
         sent = []

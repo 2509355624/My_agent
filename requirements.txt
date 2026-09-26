@@ -3,6 +3,9 @@ requests>=2.28
 python-dotenv>=1.0
 duckduckgo-search>=5.0
 
+# 图片处理：读群里的图 / 表情包打标 / 生图发出去前转 JPEG（甩掉工作流元数据）
+Pillow>=10.0
+
 # RAG 向量知识库（search_kb / ingest_kb / list_kb / delete_kb / chunk_document）
 # 首次调用会下载 BGE-M3 模型（约 2GB），不想用知识库可以不装
 chromadb>=0.5.0

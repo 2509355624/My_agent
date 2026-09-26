@@ -33,18 +33,17 @@ import json
 import logging
 import os
 import re
-from urllib.parse import quote
 
 try:
     import msvcrt                      # Windows 文件锁，用于单实例保护
 except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
-from app import interject, longterm, qq_api, recent, stickers
+from app import image_out, interject, longterm, qq_api, recent, stickers
 from app.agent import run_agent_stream
 from app.agent_prompt import build_stable_prompt
 from app.config import (
-    BASE_DIR, COMFYUI_URL, QQ_AGENT_ID, QQ_BOT_NAME, QQ_BLACKLIST_USERS,
+    BASE_DIR, QQ_AGENT_ID, QQ_BOT_NAME, QQ_BLACKLIST_USERS,
     QQ_CONTEXT_MAX_CHARS, QQ_CONTEXT_MESSAGES,
     QQ_DEBOUNCE_SECONDS, QQ_GROUP_AT_ONLY, QQ_GROUP_KEYWORDS,
     QQ_MAX_CONCURRENCY, QQ_MEMORY_INJECT_LIMIT, QQ_MEMORY_INJECT_MAX_CHARS,
@@ -775,7 +774,7 @@ class SessionRunner:
         self._deliver(sent_by_tool, reply, images)
 
     def _deliver(self, sent_by_tool, reply, images):
-        """把结果发回 QQ。图片走 ComfyUI 的 /view 地址。"""
+        """把结果发回 QQ。图片先过一遍 image_out（转 JPEG，顺便甩掉工作流元数据）。"""
         send_text = (qq_api.send_group if self.target == "group"
                      else qq_api.send_private)
         spoke = False
@@ -788,9 +787,9 @@ class SessionRunner:
                 log.exception("回发文字失败 %s", self.session_key)
 
         for name in images:
-            url = COMFYUI_URL.rstrip("/") + "/view?filename=" + quote(name)
             try:
-                qq_api.send_image(self.target, self.target_id, url)
+                qq_api.send_image(self.target, self.target_id,
+                                  image_out.prepare_for_send(name))
                 spoke = True
             except Exception:
                 log.exception("回发图片失败 %s", self.session_key)

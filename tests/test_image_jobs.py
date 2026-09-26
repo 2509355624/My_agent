@@ -204,6 +204,35 @@ class DeliverTest(_Base):
         self.assertIn("图没画出来", self.sent_texts[0][2])
 
 
+class SendImageTest(unittest.TestCase):
+    """后台投递那条发图出口同样要过 image_out —— 两条路都不能把工作流带出去。"""
+
+    def test_goes_through_image_out(self):
+        from app import image_out
+
+        sent = []
+        with mock.patch.object(image_out, "prepare_for_send",
+                               lambda f: "C:/tmp/y.jpg"), \
+             mock.patch.object(qq_api, "send_image",
+                               lambda target, tid, path, caption="":
+                               sent.append((target, tid, path))):
+            image_jobs._send_image("group", "9", "b.png")
+        self.assertEqual(sent, [("group", "9", "C:/tmp/y.jpg")])
+
+    def test_falls_back_to_comfy_url(self):
+        """转换拉不到图时回落原图 URL，图照样发得出去。"""
+        from app import image_out
+
+        sent = []
+        with mock.patch.object(image_out._session, "get",
+                               mock.Mock(side_effect=OSError("comfy 不可达"))), \
+             mock.patch.object(qq_api, "send_image",
+                               lambda target, tid, path, caption="":
+                               sent.append(path)):
+            image_jobs._send_image("group", "9", "b c.png")
+        self.assertIn("/view?filename=b%20c.png", sent[0])
+
+
 class GenerateImageSplitTest(unittest.TestCase):
     """generate_image：QQ 侧提交即返回，网页侧照旧同步等。"""
 
