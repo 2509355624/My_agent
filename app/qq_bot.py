@@ -297,6 +297,34 @@ REASON_NO_MENTION = "未 @ 且未命中关键词"
 _INTERJECT_IMAGE_LOOKBACK = 12
 
 
+def _private_gate(user_id):
+    """私聊闸：settings.json 优先（管理页热改，不用重启），缺省回落 .env。
+
+    settings 里写了 private_enable / private_whitelist 就听 settings 的；
+    两个键都没写的老部署按 .env 的 QQ_PRIVATE_ENABLE / QQ_WHITELIST_USERS
+    照旧跑（名单空 = 不限制）。管理页一旦写过白名单，语义就是真白名单：
+    名单外一律不回，空名单 = 谁都私聊不了。
+    load_settings 按 mtime 缓存，管理页改完下一条消息就生效。
+    """
+    from app.agents import load_settings
+    try:
+        s = load_settings(QQ_AGENT_ID)
+    except Exception:
+        s = {}
+    if "private_enable" in s:
+        if s.get("private_enable") is False:
+            return False, "私聊已被管理员关闭"
+    elif not QQ_PRIVATE_ENABLE:
+        return False, "私聊未开启"
+    if "private_whitelist" in s:
+        wl = [str(x) for x in (s.get("private_whitelist") or [])]
+        if str(user_id) not in wl:
+            return False, ("私聊白名单为空" if not wl else "不在私聊白名单")
+    elif QQ_WHITELIST_USERS and user_id not in QQ_WHITELIST_USERS:
+        return False, "不在私聊白名单"
+    return True, ""
+
+
 def _should_reply(ev, target, target_id, text, at_me, has_image=False,
                   has_quote=False):
     """判定这条消息要不要回。返回 (bool, 原因)，原因只用于日志。
@@ -313,10 +341,9 @@ def _should_reply(ev, target, target_id, text, at_me, has_image=False,
         return False, "在黑名单里"
 
     if target == "private":
-        if not QQ_PRIVATE_ENABLE:
-            return False, "私聊未开启"
-        if QQ_WHITELIST_USERS and user_id not in QQ_WHITELIST_USERS:
-            return False, "不在私聊白名单"
+        ok, why = _private_gate(user_id)
+        if not ok:
+            return False, why
         return (has_content, "私聊")
 
     group_id = str(target_id)

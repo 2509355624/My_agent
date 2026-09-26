@@ -226,11 +226,27 @@
         <h2>会话管理</h2>
         <div class="hint">每个群、每个私聊各有一条独立的会话线，互不影响。删掉某一条 = 重置那条对话，
           这个 agent 的人设、工具与技能白名单都不动。删除不可恢复。</div>
+        <div class="hint" style="font-weight:600;margin:8px 0 4px;">全部</div>
         <div class="sess-foot" style="margin-bottom: 8px;">
           <button class="toggle" id="imgGenAll">QQ 生图·开</button>
           <span class="hint">一键关闭 / 恢复这个 agent 在所有 QQ 会话的生图（网页端不受影响）。
             单独某个群不想让它画，用群行里的「生图」开关。</span>
         </div>
+        <div class="hint" style="font-weight:600;margin:8px 0 4px;">私聊</div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
+          <button class="toggle" id="privAll">私聊·开</button>
+          <span class="hint">私聊总开关：关掉 = 任何人的私聊都不再回复（白名单也不看），群聊不受影响。热生效。</span>
+        </div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
+          <label class="hint" for="privUser">白名单</label>
+          <input id="privUser" placeholder="QQ 号" style="width:110px;"
+                 spellcheck="false" autocomplete="off">
+          <button class="ghost" id="privAdd">添加</button>
+          <span id="privWl" style="margin-left:6px;"></span>
+        </div>
+        <div class="hint" style="margin:0 0 8px 2px;">名单外的 QQ（包括陌生人临时会话）一律静默不回、不出图；
+          清空名单 = 谁都私聊不了。点号码可移除。热生效，不用重启。</div>
+        <div class="hint" style="font-weight:600;margin:8px 0 4px;">群聊</div>
         <div class="sess-foot" style="margin-bottom: 8px;">
           <label class="hint" for="coolAll">主动发言间隔</label>
           <input id="coolAll" type="number" min="0" max="3600" step="10"
@@ -708,6 +724,9 @@ async function loadSessions() {
     sessions = d.sessions || [];
     renderSessions();
     renderImageGenAll(d.image_gen_on !== false);
+    privState.on = d.private_enable !== false;
+    privState.list = d.private_whitelist || [];
+    renderPrivate();
     $('coolAll').value = d.interject_cooldown != null ? d.interject_cooldown : '';
     $('chanceAll').value = d.interject_chance != null ? d.interject_chance : '';
     $('gapAll').value = d.interject_min_gap != null ? d.interject_min_gap : '';
@@ -789,6 +808,77 @@ async function toggleImageGen(s, btn) {
   } catch (e) {
     sessStatus(e.message, 'err');
     btn.disabled = false;
+  }
+}
+
+// ─── 私聊闸 ──────────────────────────────────────────
+// 总开关 + 白名单，都存 settings.json，热生效。空名单 = 谁都私聊不了。
+
+let privState = { on: true, list: [] };
+
+function renderPrivate() {
+  const btn = $('privAll');
+  btn.className = 'toggle' + (privState.on ? ' on' : '');
+  btn.textContent = privState.on ? '私聊·开' : '私聊·全关';
+  btn.disabled = false;
+  const box = $('privWl');
+  box.textContent = '';
+  if (!privState.list.length) {
+    box.textContent = '（空 = 谁都私聊不了）';
+    return;
+  }
+  privState.list.forEach((uid) => {
+    const chip = document.createElement('button');
+    chip.className = 'ghost';
+    chip.style.marginRight = '6px';
+    chip.textContent = uid + ' ×';
+    chip.title = '点击从白名单移除 ' + uid;
+    chip.addEventListener('click', () => privEdit('remove', uid));
+    box.appendChild(chip);
+  });
+}
+
+async function togglePrivateAll() {
+  const target = !privState.on;
+  if (!target && !confirm('一键关闭全部私聊？\n\n'
+      + '任何人的私聊（包括白名单里的号）都不再回复，群聊不受影响。')) return;
+  const btn = $('privAll');
+  btn.disabled = true;
+  try {
+    await api('/api/agent/' + encodeURIComponent(cur) + '/private_enable',
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: target }) });
+    privState.on = target;
+    renderPrivate();
+    sessStatus('私聊已全部' + (target ? '开启' : '关闭') + '，立即生效', 'ok');
+  } catch (e) {
+    sessStatus(e.message, 'err');
+    btn.disabled = false;
+  }
+}
+
+async function privEdit(op, uid) {
+  if (op === 'add') {
+    uid = String($('privUser').value || '').trim();
+    if (!/^\d+$/.test(uid)) {
+      sessStatus('先填 QQ 号（纯数字）再点添加', 'err');
+      return;
+    }
+  }
+  try {
+    const d = await api('/api/agent/' + encodeURIComponent(cur)
+      + '/private_whitelist',
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ op: op, user_id: uid }) });
+    privState.list = d.private_whitelist || [];
+    if (op === 'add') $('privUser').value = '';
+    renderPrivate();
+    sessStatus('私聊白名单已' + (op === 'add' ? '添加 ' : '移除 ')
+      + uid + '，立即生效', 'ok');
+  } catch (e) {
+    sessStatus(e.message, 'err');
   }
 }
 
@@ -964,6 +1054,11 @@ $('reload').addEventListener('click', () => {
 });
 $('sessReload').addEventListener('click', loadSessions);
 $('imgGenAll').addEventListener('click', toggleImageGenAll);
+$('privAll').addEventListener('click', togglePrivateAll);
+$('privAdd').addEventListener('click', () => privEdit('add'));
+$('privUser').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') privEdit('add');
+});
 $('coolAllSave').addEventListener('click', saveCooldownAll);
 $('chanceAllSave').addEventListener('click', () =>
   saveNumericAll('chanceAll', '/interject_chance', 'chance', '触发概率',

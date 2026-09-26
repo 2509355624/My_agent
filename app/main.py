@@ -13,6 +13,7 @@ from app import cancel as cancel_mod
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         LLM_PROVIDER, PROVIDERS, OLLAMA_BASE_URL, DEFAULT_AGENT_ID,
                         ADMIN_ALLOW_REMOTE, CONTEXT_BUDGET,
+                        QQ_PRIVATE_ENABLE, QQ_WHITELIST_USERS,
                         VISION_PROVIDER, VISION_MODEL, provider_vision)
 from app.skills import list_skills, load_skill
 from app import model_catalog
@@ -605,8 +606,19 @@ def get_agent_sessions(agent_id):
             gp = gap_ov.get(str(item["target_id"]))
             item["gap_override"] = gp if isinstance(gp, (int, float)) else None
     # 全局主动发言三件套（settings 里没设就回落默认），管理页输入框用
+    # 私聊闸当前值：settings 优先，键缺失回落 .env（跟 qq_bot._private_gate 同口径）
+    if "private_enable" in settings:
+        priv_on = settings.get("private_enable") is not False
+    else:
+        priv_on = QQ_PRIVATE_ENABLE
+    if "private_whitelist" in settings:
+        priv_wl = [str(x) for x in (settings.get("private_whitelist") or [])]
+    else:
+        priv_wl = [str(x) for x in (QQ_WHITELIST_USERS or [])]
     return jsonify({"sessions": items, "names_ok": names_ok, "agent": aid,
                     "image_gen_on": settings.get("image_gen") is not False,
+                    "private_enable": priv_on,
+                    "private_whitelist": priv_wl,
                     "interject_cooldown":
                         agent_store.interject_cooldown(aid, ""),
                     "interject_chance":
@@ -666,6 +678,66 @@ def set_agent_image_gen_group(agent_id, group_id):
         return jsonify({"error": "写入 settings.json 失败"}), 500
     return jsonify({"ok": True, "agent": aid, "group": str(group_id),
                     "image_gen": body["enabled"]})
+
+
+@app.route("/api/agent/<agent_id>/private_enable", methods=["PUT"])
+def set_agent_private_enable(agent_id):
+    """切私聊总开关（一键关掉/恢复所有私聊，白名单都不看）。热生效。
+
+    settings.json 的 private_enable 字段：False = 私聊全关；缺省回落 .env。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body.get("enabled"), bool):
+        return jsonify({"error": "需要布尔字段 enabled"}), 400
+
+    settings = agent_store.load_settings(aid)
+    settings["private_enable"] = body["enabled"]
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "private_enable": body["enabled"]})
+
+
+@app.route("/api/agent/<agent_id>/private_whitelist", methods=["PUT"])
+def edit_agent_private_whitelist(agent_id):
+    """私聊白名单增删（op: add / remove）。热生效。
+
+    存 settings.json 的 private_whitelist。只要这个键被写进 settings，
+    语义就是真白名单：名单外的 QQ（包括陌生人临时会话）一律静默不回，
+    名单清空 = 谁都私聊不了。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    op = str(body.get("op") or "")
+    user_id = str(body.get("user_id") or "").strip()
+    if op not in ("add", "remove"):
+        return jsonify({"error": "op 需要 add 或 remove"}), 400
+    if not user_id.isdigit():
+        return jsonify({"error": "user_id 需要是 QQ 号（纯数字）"}), 400
+
+    settings = agent_store.load_settings(aid)
+    wl = [str(x) for x in (settings.get("private_whitelist") or [])]
+    if op == "add":
+        if user_id not in wl:
+            wl.append(user_id)
+    else:
+        wl = [x for x in wl if x != user_id]
+    wl = sorted(set(wl))
+    settings["private_whitelist"] = wl
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "op": op,
+                    "private_whitelist": wl})
 
 
 @app.route("/api/agent/<agent_id>/interject/<group_id>", methods=["PUT"])
