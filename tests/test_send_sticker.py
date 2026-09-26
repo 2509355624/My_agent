@@ -1,4 +1,4 @@
-"""send_sticker 工具测试：15 秒频率闸 + 编号解析 + 发送汇总。
+"""send_sticker 工具测试：30 秒频率闸 + 编号解析 + 发送汇总。
 
 原则：零网络、零真实 agents 目录。库存与发送端全 mock，只测工具本身
 的判定逻辑（频率闸 / 无效编号 / 目标解析）。
@@ -95,10 +95,28 @@ class SendResultTest(_Base):
 
     def test_sends_local_file_uri(self):
         self._call("1")
-        seg = self.send.call_args[0][1][0]
+        # 一条消息、一个图片段：外层是「消息列表」，里层才是段列表
+        msg = self.send.call_args[0][1]
+        self.assertEqual(len(msg), 1)
+        seg = msg[0][0]
         self.assertEqual(seg["type"], "image")
         self.assertTrue(seg["data"]["file"].startswith("file:///"))
         self.assertTrue(seg["data"]["file"].endswith("/a.png"))
+
+    def test_one_segment_is_one_message_not_one_dict(self):
+        """必须传 `[[seg]]`：外层少套一层会炸在日志预览上。
+
+        send_group / send_private 收到 list 是按「多条消息」解释的（每元素
+        一条）。只传 `[seg]` 等于说"这条消息是一个 dict"，_send_log → _preview
+        去遍历它，拿到的是键名（字符串）→ 'str' object has no attribute 'get'。
+        实测图其实已经发出去了，工具却报失败还中断了后面几张。
+        """
+        self._call("1")
+        msg = self.send.call_args[0][1]
+        self.assertIsInstance(msg, list)
+        self.assertEqual(len(msg), 1)             # 一条消息
+        self.assertIsInstance(msg[0], list)       # 消息体是段列表
+        self.assertIsInstance(msg[0][0], dict)    # 里面那个才是段
 
 
 if __name__ == "__main__":

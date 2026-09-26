@@ -132,6 +132,17 @@ class SubmitTest(_Base):
         self.assertFalse(ok3)
         self.assertEqual(n3, image_jobs.MAX_INFLIGHT)
 
+    def test_force_registers_even_when_full(self):
+        """force = 名额已在排队之前查过，这里再满也必须登记。
+
+        工作流进了 ComfyUI 就一定会出图；不登记，那张图就没人发得出去。
+        """
+        self._submit("p1")
+        self._submit("p2")
+        ok, pending = image_jobs.submit("group", "9", "p3", force=True)
+        self.assertTrue(ok)
+        self.assertEqual(pending, image_jobs.MAX_INFLIGHT + 1)
+
     def test_slots_are_per_conversation(self):
         self.assertTrue(self._submit("p1")[0])
         self.assertTrue(self._submit("p2")[0])
@@ -327,6 +338,22 @@ class GenerateImageSplitTest(unittest.TestCase):
         out = self._call(("group", "9"))
         self.assertIn("排着", out)
         self.assertIn(str(image_jobs.MAX_INFLIGHT), out)
+
+    def test_qq_queue_full_does_not_reach_comfyui(self):
+        """名额满时一步都不该往 ComfyUI 走。
+
+        从前是先 _queue_prompt 再查名额：被拒那一次图照样会画出来，可没有
+        任何线程登记它，于是永远发不出去——群里看到的就是「图生成了但不发
+        群」，模型还被告知「当没画过」。
+        """
+        with mock.patch.object(image_jobs, "_run"):
+            self._call(("group", "9"))
+            self._call(("group", "9"))
+        with mock.patch.object(generate_image, "_queue_prompt",
+                               return_value="pid2") as qp:
+            out = self._call(("group", "9"))
+        self.assertIn("排着", out)
+        qp.assert_not_called()
 
 
 if __name__ == "__main__":

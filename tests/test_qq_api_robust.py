@@ -73,5 +73,39 @@ class RecordsByNumbersTest(unittest.TestCase):
         self.assertEqual([n for n, _ in picks], [2])
 
 
+class SingleSegmentMessageTest(unittest.TestCase):
+    """发「一条消息、里面一个图片段」时整条链路要能走通（含日志预览那层）。
+
+    背景（2026-09-26 21:53 群实录）：send_sticker 传的是 `[seg]` 而不是
+    `[[seg]]`，而 send_group 收到 list 是按「多条消息」解释的——于是那个 seg
+    被当成"整条消息"，_send_log → _preview 去遍历它，拿到的是键名（字符串）
+    → 'str' object has no attribute 'get'。图其实已经发出去了（_call 在前），
+    工具却报「发送失败」，还中断了后面几张。
+
+    与上面那次是同一个症状的第二个成因，所以两处都钉：调用方套对层数，
+    _preview 自己也吞得下裸 dict（预览只是日志，不该有能力把发送弄挂）。
+    """
+
+    def setUp(self):
+        self.session = mock.Mock()
+        for name, value in (("_session", self.session),
+                            ("_display_name", mock.Mock(return_value="测试群"))):
+            p = mock.patch.object(qq_api, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_preview_tolerates_bare_segment(self):
+        seg = {"type": "image", "data": {"file": "file:///x.gif"}}
+        self.assertEqual(qq_api._preview(seg), "[图片]")
+
+    def test_single_segment_message_sends_and_logs(self):
+        self.session.post.return_value = _resp(
+            {"status": "ok", "retcode": 0, "data": {}})
+        seg = {"type": "image", "data": {"file": "file:///x.gif"}}
+        qq_api.send_group(123, [[seg]])              # 从前这里会抛
+        sent = self.session.post.call_args[1]["json"]["message"]
+        self.assertEqual(sent, [seg])
+
+
 if __name__ == "__main__":
     unittest.main()

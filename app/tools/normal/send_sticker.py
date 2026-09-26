@@ -78,10 +78,15 @@ def _send_sticker(nums, target=None, target_id=None):
             QQ_AGENT_ID, rec).replace("\\", "/").lstrip("/")
         seg = {"type": "image", "data": {"file": file_uri}}
         try:
+            # 外层还要再套一层：send_group / send_private 收到 list 时，是按
+            # 「多条消息」解释的（每元素一条）——传 [seg] 等于说"这条消息是
+            # 一个 dict"，日志预览去遍历它就会报 'str' object has no attribute
+            # 'get'（图其实发出去了，只是工具误报失败并中断了整批）。[[seg]]
+            # 才是「一条消息、里面一个图片段」。
             if target == "group":
-                qq_api.send_group(target_id, [seg])
+                qq_api.send_group(target_id, [[seg]])
             else:
-                qq_api.send_private(target_id, [seg])
+                qq_api.send_private(target_id, [[seg]])
             sent.append("%d号（%s）" % (n, desc))
         except Exception as e:
             failed.append("%d号：%s" % (n, e))

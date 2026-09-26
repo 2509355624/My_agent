@@ -275,19 +275,30 @@ def _generate_image(prompt, skill="anima", use_character=False, lora=None,
         if err:
             return err
 
-    # 提交到 ComfyUI
-    prompt_id = _queue_prompt(workflow)
-
-    # QQ 会话：提交完立刻返回，图由后台线程画好后自己发回原群（见
-    # image_jobs）。留在这儿同步等会把适配层的并发槽（默认 2 个）占住几分钟
-    # ——文本回复和别的群都得陪着等显卡。会话身份在提交这一刻快照下来。
+    # QQ 会话：**先查名额，再去排队**。这两步的顺序是整条链的关键——被拒时
+    # 工作流还在手上，ComfyUI 一点算力都没浪费，也不会留下「画了却没人发」的
+    # 孤儿图。（从前反着来：先 _queue_prompt 再查名额，被拒那次图照样会画出来，
+    # 可没有任何线程登记它，于是永远发不出去，群里只看到机器人说「卡的是显卡」。）
     from app import qq_api
     target, target_id = qq_api.current_context()
     if target is not None:
-        ok, pending = image_jobs.submit(target, target_id, prompt_id)
-        if not ok:
+        pending = image_jobs.inflight_count(target, target_id)
+        if pending >= image_jobs.MAX_INFLIGHT:
             return ("这个会话已经排着 %d 张了，画完这些再说。"
                     "不要跟对方提这张图，当没画过，接着把话说完。" % pending)
+
+    # 提交到 ComfyUI。到这一步才排队：名额够了，图一定会画，也一定会有人发。
+    prompt_id = _queue_prompt(workflow)
+
+    if target is not None:
+        # 提交完立刻返回，图由后台线程画好后自己发回原群（见 image_jobs）。
+        # 留在这儿同步等会把适配层的并发槽（默认 2 个）占住几分钟——文本回
+        # 复和别的群都得陪着等显卡。会话身份在提交这一刻快照下来。
+        #
+        # force：名额上面已经查过，这里只剩「登记」这一个动作。万一同会话
+        # 并发把名额顶爆（窗口极小），宁可超额一张也必须登记——工作流已经进
+        # 了 ComfyUI，不登记就等于让它变成没人发的孤儿图。
+        image_jobs.submit(target, target_id, prompt_id, force=True)
         return ("已经在画了，画好会自动发到群里。"
                 + ("垫的是%s。" % source_note if source_note else "")
                 + "不要输出图片地址，也不要说「图在下面 / 稍等」，"

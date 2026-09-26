@@ -264,7 +264,9 @@ class I2IFlowTest(unittest.TestCase):
             mock.patch.object(gi, "is_cancelled", lambda: False),
             mock.patch.object(qq_api, "current_context", lambda: self.KEY),
             mock.patch.object(gi.image_jobs, "submit",
-                              lambda t, i, p: (True, 0)),
+                              lambda t, i, p, force=False: (True, 0)),
+            # 名额预检查读的是模块级 _inflight，钉成 0 免受别的用例影响
+            mock.patch.object(gi.image_jobs, "inflight_count", lambda t, i: 0),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)

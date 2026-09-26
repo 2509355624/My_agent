@@ -70,10 +70,19 @@ def _send_log(kind, target_id, chunk):
 
 
 def _preview(chunk):
-    """把一条待发消息压成单行预览：文本取正文，其余段落用占位符。"""
+    """把一条待发消息压成单行预览：文本取正文，其余段落用占位符。
+
+    吞下三种形态：整条是字符串、段列表（`[{...}]`）、以及**漏了外层的单个
+    段**（`{...}`）。最后那种是调用方传参少套一层造成的（`[seg]` 被当成
+    「一个 chunk」），遍历它拿到的是键名而不是段，会报
+    `'str' object has no attribute 'get'`。预览只是日志，不该有把事情弄挂的
+    能力——这里兜住，真正的发送照旧按原样走。
+    """
     if isinstance(chunk, str):
         s = chunk
     else:
+        if isinstance(chunk, dict):
+            chunk = [chunk]
         parts = []
         for seg in chunk:
             t = seg.get("type")

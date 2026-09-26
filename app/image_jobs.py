@@ -101,16 +101,20 @@ def output_images(entry):
     return out
 
 
-def submit(target, target_id, prompt_id):
+def submit(target, target_id, prompt_id, force=False):
     """登记一个在途任务并起后台线程。返回 (是否接下, 当前在途张数)。
 
     接不下（同一会话已经排满）时返回 (False, 在途数)——调用方拿这个数去
     跟模型说「前面还有几张」。
+
+    force=True 表示调用方**已经在排队之前查过名额**（见 generate_image）：
+    这里不再拦。工作流这时已经提交给 ComfyUI、图一定会画出来，不登记就等于
+    亲手造一张没人发的孤儿图——宁可超额一张也不能丢。
     """
     key = _key(target, target_id)
     with _lock:
         cur = _inflight.setdefault(key, [])
-        if len(cur) >= MAX_INFLIGHT:
+        if not force and len(cur) >= MAX_INFLIGHT:
             return False, len(cur)
         cur.append(prompt_id)
     try:
