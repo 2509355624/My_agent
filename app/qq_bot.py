@@ -39,7 +39,7 @@ try:
 except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
-from app import image_out, interject, longterm, qq_api, recent, stickers
+from app import image_out, interject, longterm, notify, qq_api, recent, stickers
 from app.agent import run_agent_stream
 from app.agent_prompt import build_stable_prompt
 from app.config import (
@@ -825,12 +825,23 @@ class QQBot:
         return runner
 
     def _dispatch(self, raw):
-        """处理一条 WS 事件。只认消息事件，其余（心跳、通知）一律忽略。"""
+        """处理一条 WS 事件。消息事件照常派发；掉线通知单独接一下。"""
         try:
             ev = json.loads(raw)
         except (ValueError, TypeError):
             return
-        if not isinstance(ev, dict) or ev.get("post_type") != "message":
+        if not isinstance(ev, dict):
+            return
+        # NapCat 被踢时会推 bot_offline notice，正文里就是掉线原因（tag=tipsTitle、
+        # message=tipsDesc）。从前这里一律按「非 message 就丢」处理，等于对掉线
+        # 零感知；现在至少把原因留下来，交给掉线通知（app/notify.py）带出去。
+        if (ev.get("post_type") == "notice"
+                and ev.get("notice_type") == "bot_offline"):
+            log.warning("协议端掉线：tag=%s msg=%s",
+                        ev.get("tag"), ev.get("message"))
+            notify.note_offline_reason(ev.get("tag"), ev.get("message"))
+            return
+        if ev.get("post_type") != "message":
             return
 
         mtype = ev.get("message_type")
@@ -913,6 +924,9 @@ class QQBot:
         self.sem = asyncio.Semaphore(QQ_MAX_CONCURRENCY)
         log.info("QQ 接入启动：agent=%s，事件源=%s", QQ_AGENT_ID, QQ_WS_URL)
         await self._probe()
+        # 掉线通知：盯 NapCat 的 qrcode.png，机器人要人工扫码时把二维码推到手机。
+        # 放在 _probe 之后 —— 它启动时会先探一次活，判断「是不是已经卡在待扫码」。
+        notify.start_watcher()
 
         kwargs = {"proxy": None} if _WS_SUPPORTS_NO_PROXY else {}
         if QQ_TOKEN:

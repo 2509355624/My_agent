@@ -373,3 +373,13 @@ QQ_MEMORY_INJECT_LIMIT = int(os.getenv("QQ_MEMORY_INJECT_LIMIT", "10"))
 QQ_MEMORY_INJECT_MAX_CHARS = int(os.getenv("QQ_MEMORY_INJECT_MAX_CHARS", "1500"))
 # 摘要调用的超时（秒）。在后台线程跑，卡不到聊天主链路，给宽一点没关系。
 QQ_MEMORY_DIGEST_TIMEOUT = int(os.getenv("QQ_MEMORY_DIGEST_TIMEOUT", "60"))
+
+# ─── 掉线通知（微信推送） ─────────────────────────────
+# 机器人掉线需要扫码时，把二维码推到手机。它自己发不出消息 —— 掉线的号就是
+# 发消息的号 —— 所以必须走一个不在 QQ 里的通道。用 PushPlus：手机扫码登录
+# https://www.pushplus.plus/ 拿 token 填这里，留空则整个功能关闭。
+# 触发点见 app/notify.py：盯 NapCat 的 qrcode.png，一变就推。
+NOTIFY_PUSHPLUS_TOKEN = os.getenv("PUSHPLUS_TOKEN", "").strip()
+# NapCat 需要人工扫码时会重写这个文件，它的修改时间就是掉线时刻。
+NOTIFY_QRCODE_PATH = os.getenv(
+    "NAPCAT_QRCODE_PATH", r"D:\AI\NapCat\napcat\cache\qrcode.png").strip()
