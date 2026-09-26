@@ -125,30 +125,30 @@ def _resp(content=b"", status=200, text=""):
 
 class FetchImageTest(unittest.TestCase):
     def test_returns_raw_bytes(self):
-        with mock.patch("app.vision.requests.get",
+        with mock.patch("app.vision._session.get",
                         return_value=_resp(b"\xff\xd8\xffabc")):
             self.assertEqual(vision.fetch_image("http://x/a.jpg"),
                              b"\xff\xd8\xffabc")
 
     def test_http_error_raises_runtime_error(self):
-        with mock.patch("app.vision.requests.get", return_value=_resp(status=404)):
+        with mock.patch("app.vision._session.get", return_value=_resp(status=404)):
             with self.assertRaises(RuntimeError):
                 vision.fetch_image("http://x/a.jpg")
 
     def test_oversize_raises(self):
-        with mock.patch("app.vision.requests.get",
+        with mock.patch("app.vision._session.get",
                         return_value=_resp(b"x" * 500)):
             with self.assertRaises(RuntimeError) as ctx:
                 vision.fetch_image("http://x/a.jpg", max_bytes=100)
             self.assertIn("过大", str(ctx.exception))
 
     def test_empty_body_raises(self):
-        with mock.patch("app.vision.requests.get", return_value=_resp(b"")):
+        with mock.patch("app.vision._session.get", return_value=_resp(b"")):
             with self.assertRaises(RuntimeError):
                 vision.fetch_image("http://x/a.jpg")
 
     def test_network_error_becomes_runtime_error(self):
-        with mock.patch("app.vision.requests.get",
+        with mock.patch("app.vision._session.get",
                         side_effect=OSError("connection refused")):
             with self.assertRaises(RuntimeError):
                 vision.fetch_image("http://x/a.jpg")
@@ -163,13 +163,13 @@ class DescribeTest(unittest.TestCase):
     def test_returns_stripped_text(self):
         r, body = self._ok()
         r.json.return_value = body
-        with mock.patch("app.vision.requests.post", return_value=r):
+        with mock.patch("app.vision._session.post", return_value=r):
             self.assertEqual(vision.describe("data:image/jpeg;base64,AAA"), "一只猫")
 
     def test_payload_carries_image_and_default_model(self):
         r, body = self._ok("ok")
         r.json.return_value = body
-        with mock.patch("app.vision.requests.post", return_value=r) as post:
+        with mock.patch("app.vision._session.post", return_value=r) as post:
             vision.describe("data:image/jpeg;base64,AAA")
         payload = post.call_args.kwargs["json"]
         self.assertEqual(
@@ -180,7 +180,7 @@ class DescribeTest(unittest.TestCase):
                          config.PROVIDERS[config.VISION_PROVIDER]["model"])
 
     def test_http_error_raises_runtime_error(self):
-        with mock.patch("app.vision.requests.post",
+        with mock.patch("app.vision._session.post",
                         return_value=_resp(status=429, text="QuotaExceeded")):
             with self.assertRaises(RuntimeError):
                 vision.describe("data:image/jpeg;base64,AAA")
@@ -188,7 +188,7 @@ class DescribeTest(unittest.TestCase):
     def test_unparsable_body_raises_runtime_error(self):
         r = _resp(status=200)
         r.json.side_effect = ValueError("not json")
-        with mock.patch("app.vision.requests.post", return_value=r):
+        with mock.patch("app.vision._session.post", return_value=r):
             with self.assertRaises(RuntimeError):
                 vision.describe("data:image/jpeg;base64,AAA")
 

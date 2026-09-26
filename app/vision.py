@@ -21,6 +21,13 @@ from app.config import (PROVIDERS, VISION_MAX_EDGE, VISION_MODEL,
 
 log = logging.getLogger("vision")
 
+# 下载图片与调识图接口都不走本机系统代理：本机常驻 Clash 类工具会把代理写进
+# 注册表，代理进程一换端口或被杀，这两个出网口就全挂——图生图取图失败、识图
+# 失败都是它引起的（2026-09-26 实撞：ProxyError 指向没人监听的 65532）。
+# 与 qq_api / comfy_src / image_out / model_catalog 同款。
+_session = requests.Session()
+_session.trust_env = False
+
 # 提示词：描述画面 + 原样提取文字。实测输出约 340 token，信息密度够用。
 # 「原样」和「不要翻译」两句不能省——少了它们，模型会顺手把报错截图里的
 # 英文翻成中文，而 agent 后续要靠原文去搜错误码。
@@ -113,7 +120,7 @@ def fetch_image(url, timeout=None, max_bytes=None):
 
     limit = QQ_IMAGE_MAX_BYTES if max_bytes is None else max_bytes
     try:
-        resp = requests.get(url, timeout=timeout or QQ_IMAGE_TIMEOUT)
+        resp = _session.get(url, timeout=timeout or QQ_IMAGE_TIMEOUT)
     except Exception as exc:
         raise RuntimeError("图片下载失败：%s" % exc)
     if resp.status_code >= 400:
@@ -159,7 +166,7 @@ def describe(data_url, timeout=None, prompt=None):
     }
 
     try:
-        resp = requests.post(url, json=payload, headers=headers,
+        resp = _session.post(url, json=payload, headers=headers,
                              timeout=timeout or VISION_TIMEOUT)
     except Exception as exc:
         raise RuntimeError("识图请求失败：%s" % exc)

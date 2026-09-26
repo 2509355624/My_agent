@@ -217,7 +217,7 @@ class CallLlmStreamTest(unittest.TestCase):
             return self._Resp(200, ["data: " + json.dumps(
                 {"choices": [{"delta": {"content": "ok"}}]}, ensure_ascii=False)])
 
-        with mock.patch.object(llm.requests, "post", fake_post):
+        with mock.patch.object(llm._session, "post", fake_post):
             out = list(llm.call_llm_stream([{"role": "user", "content": "hi"}],
                                            provider="volc"))
 
@@ -234,7 +234,7 @@ class CallLlmStreamTest(unittest.TestCase):
                                   ensure_ascii=False),
             "data: [DONE]",
         ]
-        with mock.patch.object(llm.requests, "post",
+        with mock.patch.object(llm._session, "post",
                                lambda *a, **kw: self._Resp(200, lines)):
             out = list(llm.call_llm_stream([{"role": "user", "content": "hi"}],
                                            provider="deepseek"))

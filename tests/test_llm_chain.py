@@ -84,10 +84,28 @@ class _ChainBase(unittest.TestCase):
             idx = min(len(calls) - 1, len(responses) - 1)
             return responses[idx]
 
-        p = mock.patch.object(llm.requests, "post", fake_post)
+        p = mock.patch.object(llm._session, "post", fake_post)
         p.start()
         self.addCleanup(p.stop)
         return calls
+
+
+class OutboundProxyTest(unittest.TestCase):
+    """出网口必须无视本机系统代理。
+
+    本机常驻 Clash 类工具会把代理写进注册表；代理进程一旦换端口或被杀，
+    requests 的默认行为就会去连那个没人监听的端口，于是**所有 provider 一起
+    ProxyError**——表现成"模型全挂了"，换哪家都救不回来（2026-09-26 实撞：
+    注册表指向 127.0.0.1:65532，该端口无监听）。所以 llm / vision 的出网必须
+    显式 trust_env=False，与 qq_api / comfy_src / image_out / model_catalog 一致。
+    """
+
+    def test_llm_session_ignores_system_proxy(self):
+        self.assertFalse(llm._session.trust_env)
+
+    def test_vision_session_ignores_system_proxy(self):
+        from app import vision
+        self.assertFalse(vision._session.trust_env)
 
 
 class ParseChainTest(unittest.TestCase):

@@ -23,6 +23,14 @@ _USAGE_LOCAL = threading.local()
 
 _EMPTY_USAGE = {"total_tokens": 0, "hit_tokens": 0, "miss_tokens": 0, "hit_rate": 0.0}
 
+# 出网不走本机系统代理。本机常驻 Clash 类工具会把代理写进注册表，代理进程
+# 一旦换端口或被杀，requests 的默认行为就会去连那个没人监听的端口——于是
+# 所有 provider 一起 ProxyError，换哪家模型都救不回来（2026-09-26 实撞）。
+# 换成直连后 volc / scnet / deepseek 官方全部可达，本地 ollama 更不该走代理。
+# 与 qq_api / comfy_src / image_out / model_catalog 同款。
+_session = requests.Session()
+_session.trust_env = False
+
 
 def _usage():
     """当前线程的用量记录（首次访问时惰性建一份）。"""
@@ -259,7 +267,7 @@ def _call_provider(eff, body, timeout):
         "Authorization": "Bearer " + eff["api_key"],
         "Content-Type": "application/json",
     }
-    resp = requests.post(url, json=body, headers=headers, timeout=timeout)
+    resp = _session.post(url, json=body, headers=headers, timeout=timeout)
     if resp.status_code >= 400:
         _raise_with_detail(resp)
     data = resp.json()
@@ -278,7 +286,7 @@ def _call_ollama(base_url, body, timeout):
         "messages": body.get("messages", []),
         "stream": False,
     }
-    resp = requests.post(url, json=ollama_body, timeout=timeout)
+    resp = _session.post(url, json=ollama_body, timeout=timeout)
     if resp.status_code >= 400:
         _raise_with_detail(resp)
     data = resp.json()
@@ -367,12 +375,12 @@ def _stream_once(eff, messages, timeout, cancel_event):
         "Authorization": "Bearer " + eff["api_key"],
         "Content-Type": "application/json",
     }
-    resp = requests.post(url, json=_build_stream_body(eff, messages, True),
+    resp = _session.post(url, json=_build_stream_body(eff, messages, True),
                          headers=headers, timeout=timeout, stream=True)
     if resp.status_code == 400:
         # 有的模型不认 thinking / stream_options，去掉扩展字段重试一次
         resp.close()
-        resp = requests.post(url, json=_build_stream_body(eff, messages, False),
+        resp = _session.post(url, json=_build_stream_body(eff, messages, False),
                              headers=headers, timeout=timeout, stream=True)
     if resp.status_code >= 400:
         _raise_with_detail(resp)

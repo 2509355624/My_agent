@@ -278,7 +278,7 @@ class LlmStreamCancelTest(unittest.TestCase):
             return resp
 
         with mock.patch.object(llm, "get_effective_config", lambda p, m: eff), \
-                mock.patch.object(llm.requests, "post", fake_post):
+                mock.patch.object(llm._session, "post", fake_post):
             got = []
             for _kind, text in llm.call_llm_stream(
                     [{"role": "user", "content": "x"}],
@@ -301,7 +301,7 @@ class LlmStreamCancelTest(unittest.TestCase):
             ])
 
         with mock.patch.object(llm, "get_effective_config", lambda p, m: eff), \
-                mock.patch.object(llm.requests, "post", fake_post):
+                mock.patch.object(llm._session, "post", fake_post):
             got = [t for _k, t in llm.call_llm_stream(
                 [{"role": "user", "content": "x"}], provider="deepseek")]
 
