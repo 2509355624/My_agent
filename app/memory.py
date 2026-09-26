@@ -430,7 +430,15 @@ def trim_window(history, agent_id=None, session_key=None, max_turns=None):
     if not group_id or not agent_id:
         # 非群会话（网页主会话 / QQ 私聊）没有长期记忆库可去，走原来的
         # token 预算压缩：滚出去的会摘成一条摘要顶在会话里，不是硬丢。
-        return trim_history(history, agent_id)
+        #
+        # 但 trim_history 的判据读的是线程本地 usage——QQ 侧每条消息换线程，
+        # 回退读到的恒为 0，压缩因此**永远不会触发**（私聊攒到 458 条 /
+        # 4.9 万字的根因）。这里改用本地估算当判据：不求精确，够触发就行。
+        # hit_rate 给 0 = 到警戒线就压，私聊场景宁可早压也别养肥历史。
+        est = (estimate_messages(system_msgs)
+               + estimate_messages(other_msgs))
+        return trim_history(history, agent_id,
+                            usage={"total_tokens": est, "hit_rate": 0.0})
 
     _digest_turns_async(agent_id, group_id, old_turns)
 

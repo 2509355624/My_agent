@@ -107,14 +107,27 @@ class IterSseLinesTest(unittest.TestCase):
 
 class BuildStreamBodyTest(unittest.TestCase):
     @staticmethod
-    def _eff(provider):
-        return {"provider": provider, "base_url": "https://x", "model": "m", "api_key": "k"}
+    def _eff(provider, model="m"):
+        return {"provider": provider, "base_url": "https://x", "model": model, "api_key": "k"}
 
     def test_volc_gets_thinking_and_usage_reporting(self):
         body = llm._build_stream_body(self._eff("volc"), [], True)
         self.assertIs(body["stream"], True)
-        # 火山多个 DeepSeek 版本默认关闭思维链，必须显式开启
+        self.assertEqual(body["stream_options"], {"include_usage": True})
+
+    def test_volc_thinking_matrix_by_model(self):
+        # deepseek 系：火山默认关思维链，必须显式开启
+        body = llm._build_stream_body(
+            self._eff("volc", "deepseek-v4-flash-ga-260731"), [], True)
         self.assertEqual(body["thinking"], {"type": "enabled"})
+        # 豆包系：默认带思考，显式关掉换速度
+        body = llm._build_stream_body(
+            self._eff("volc", "doubao-seed-2-1-turbo-260628"), [], True)
+        self.assertEqual(body["thinking"], {"type": "disabled"})
+        # 其他（glm 等）：字段习惯没验证过，不带，走模型默认
+        body = llm._build_stream_body(
+            self._eff("volc", "glm-5-2-260617"), [], True)
+        self.assertNotIn("thinking", body)
         self.assertEqual(body["stream_options"], {"include_usage": True})
 
     def test_deepseek_official_gets_no_extra_fields(self):

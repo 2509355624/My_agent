@@ -262,6 +262,13 @@ def _call_provider(eff, body, timeout):
     if eff["provider"] == "ollama":
         return _call_ollama(eff["base_url"], body, timeout)
 
+    # 豆包系默认带思考，摘要/判断这类同步调用不需要，显式关掉换速度。
+    # deepseek 系不加（默认就是关的，加 enabled 反而让摘要慢下来）。
+    if eff["provider"] in _EXTRA_FIELDS_PROVIDERS:
+        t = _thinking_type(eff["provider"], eff["model"])
+        if t == "disabled":
+            body["thinking"] = {"type": "disabled"}
+
     url = eff["base_url"].rstrip("/") + "/chat/completions"
     headers = {
         "Authorization": "Bearer " + eff["api_key"],
@@ -300,12 +307,31 @@ def _call_ollama(base_url, body, timeout):
 _EXTRA_FIELDS_PROVIDERS = ("volc", "doubao")
 
 
+def _thinking_type(provider, model):
+    """火山系模型 thinking 字段的取值（None = 不带这个字段）。
+
+    - deepseek 系（火山托管）：默认关思维链，必须显式 enabled 才有思考。
+    - 豆包系：默认就带思考，聊天场景要快，显式 disabled 压掉
+      （2026-09-27 用户实测「太慢了」）。
+    - 其他（glm 等）：字段习惯没验证过，不带，走模型默认。
+    """
+    name = (model or "").lower()
+    if "deepseek" in name:
+        return "enabled"
+    if "doubao" in name or provider == "doubao":
+        return "disabled"
+    return None
+
+
 def _build_stream_body(eff, messages, extras=True):
     """构造流式请求体。extras=False 时只带最保守的字段（400 降级重试用）。"""
     body = {"messages": messages, "stream": True, "model": eff["model"]}
     if extras and eff["provider"] in _EXTRA_FIELDS_PROVIDERS:
-        # 火山多个 DeepSeek 版本默认关闭思维链，必须显式开启
-        body["thinking"] = {"type": "enabled"}
+        # 火山多个 DeepSeek 版本默认关闭思维链，必须显式开启；
+        # 豆包相反——默认带思考，显式关掉换速度
+        t = _thinking_type(eff["provider"], eff["model"])
+        if t:
+            body["thinking"] = {"type": t}
         # 末帧回传 usage，否则缓存命中统计在流式下会断掉
         body["stream_options"] = {"include_usage": True}
     return body
