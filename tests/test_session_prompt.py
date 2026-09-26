@@ -34,7 +34,8 @@ class SessionPromptGateTest(unittest.TestCase):
 
     def _system_of(self, session_key):
         qq_bot._ensure_system_prompt(session_key)
-        hist = qq_bot.load_history(qq_bot.QQ_AGENT_ID, session_key)
+        aid = qq_bot._session_prompt_agent(session_key) or qq_bot.QQ_AGENT_ID
+        hist = qq_bot.load_history(aid, session_key)
         return hist[0]["content"] if hist else ""
 
     def test_no_config_keeps_plain_stable(self):
@@ -103,6 +104,30 @@ class SessionPromptGateTest(unittest.TestCase):
         agents.save_settings("qq", {"session_prompt_agents":
                                     {"group_1": "main"}})
         self.assertNotIn("XYZMARK", self._system_of("group_2"))
+
+    def test_borrow_history_lands_in_borrowed_agent_dir(self):
+        self._make_agent("main", "通用助手测试人设XYZMARK")
+        agents.save_settings("qq", {"session_prompt_agents":
+                                    {"group_1": "main"}})
+        self._system_of("group_1")
+        self.assertTrue(os.path.exists(
+            os.path.join(self.root, "main", "sessions", "group_1.jsonl")))
+        self.assertFalse(os.path.exists(
+            os.path.join(self.root, "qq", "sessions", "group_1.jsonl")))
+
+    def test_sync_head_keeps_extra_and_updates(self):
+        # 头里带附加词时，同步不许把它洗掉（sync_session_system 的老毛病）
+        agents.save_settings("qq", {"session_prompts":
+                                    {"group_1": "附加规则ABC"}})
+        self._system_of("group_1")
+        self.assertFalse(qq_bot._sync_session_head("group_1", "qq"))
+        agents.save_settings("qq", {"session_prompts":
+                                    {"group_1": "换成新规则DEF"}})
+        self.assertTrue(qq_bot._sync_session_head("group_1", "qq"))
+        from app.memory import peek_system
+        head = peek_system("qq", "group_1")
+        self.assertIn("新规则DEF", head)
+        self.assertIn("[[TOOL:", head)
 
 
 class SessionPromptApiTest(unittest.TestCase):

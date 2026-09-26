@@ -42,7 +42,7 @@ except ImportError:                    # 非 Windows 平台退化为不做检查
 
 from app import interject, longterm, qq_api, recent, stickers
 from app.agent import run_agent_stream
-from app.agent_prompt import build_stable_prompt, sync_session_system
+from app.agent_prompt import build_stable_prompt
 from app.config import (
     BASE_DIR, COMFYUI_URL, QQ_AGENT_ID, QQ_BOT_NAME, QQ_BLACKLIST_USERS,
     QQ_CONTEXT_MAX_CHARS, QQ_CONTEXT_MESSAGES,
@@ -126,27 +126,55 @@ def _session_prompt_agent(session_key):
     return aid
 
 
-def _ensure_system_prompt(session_key):
-    """把这条会话线的首条固定为稳定的 system 消息（prefix cache 锚点）。
+def _session_head(session_key, aid):
+    """这条会话线应有的 system 头 = 该 agent 稳定层 + 会话附加词。
 
-    与 app/main.py 里的同名函数同构，差别只在多传一个 session_key。
-    会话线在 settings.json 里配了「借用 agent」就整份换成那个 agent 的
-    稳定层（完整的通用助手人设就是这么进来的）；只配了自定义提示词就
-    拼在默认稳定层后面。每轮都走这里，管理页改完下一条消息就生效。
+    返回 (head, 实际生效的 agent_id)。borrow 的 agent 构建失败时回落
+    QQ 默认稳定层。agent_prompt.sync_session_system 不感知会话附加词，
+    QQ 侧的同步一律走这里，别用它。
     """
-    override = _session_prompt_agent(session_key)
     try:
-        stable = build_stable_prompt(override or QQ_AGENT_ID)
+        stable = build_stable_prompt(aid)
     except Exception:
         stable = build_stable_prompt(QQ_AGENT_ID)
+        aid = QQ_AGENT_ID
     extra = _session_prompt_extra(session_key)
     if extra:
         stable = (stable + "\n\n## 会话专属人设（优先于上面的角色定义）\n\n"
                   + extra)
-    keep = [m for m in load_history(QQ_AGENT_ID, session_key)
+    return stable, aid
+
+
+def _ensure_system_prompt(session_key):
+    """把这条会话线的首条固定为稳定的 system 消息（prefix cache 锚点）。
+
+    会话线借用了别的 agent（session_prompt_agents）就**整个换成那个
+    agent 的身份**：system 用它的稳定层，历史也落它自己的目录——
+    它就是这条会话线的主人，不是套壳。每轮重建/同步首条 system，
+    管理页改完下一条消息就生效。
+    """
+    aid = _session_prompt_agent(session_key) or QQ_AGENT_ID
+    head, aid = _session_head(session_key, aid)
+    keep = [m for m in load_history(aid, session_key)
             if m.get("role") != "system"]
-    save_history([{"role": "system", "content": stable}] + keep,
-                 QQ_AGENT_ID, session_key)
+    save_history([{"role": "system", "content": head}] + keep,
+                 aid, session_key)
+
+
+def _sync_session_head(session_key, aid):
+    """人设/配置/附加词变了就把首条 system 换成最新内容。
+
+    内容没变一个字节都不动，保住这条会话的前缀缓存。返回是否替换了。
+    """
+    from app.memory import peek_system
+    head, aid = _session_head(session_key, aid)
+    if peek_system(aid, session_key) == head:
+        return False
+    keep = [m for m in load_history(aid, session_key)
+            if m.get("role") != "system"]
+    save_history([{"role": "system", "content": head}] + keep,
+                 aid, session_key)
+    return True
 
 
 # ─── 事件解析 ────────────────────────────────────────
@@ -653,14 +681,18 @@ class SessionRunner:
         if not text and not data_urls:
             return
 
-        history = load_history(QQ_AGENT_ID, self.session_key)
+        # 借用的会话线由被借的 agent **整轮接管**：跑它的身份、它的工具
+        # 白名单、它的上下文预算；历史也落它自己的 sessions 目录（切回
+        # 默认人设时，小小怪原来的历史原样还在）。
+        run_agent = _session_prompt_agent(self.session_key) or QQ_AGENT_ID
+        history = load_history(run_agent, self.session_key)
         if not history or history[0].get("role") != "system":
             _ensure_system_prompt(self.session_key)
-            history = load_history(QQ_AGENT_ID, self.session_key)
-        elif sync_session_system(QQ_AGENT_ID, self.session_key):
-            # 人设/配置变了，首条 system 已被替换 → 重新读一份带新头的历史。
-            # 没变时 sync 返回 False，一个字节都没动过，前缀缓存不受影响。
-            history = load_history(QQ_AGENT_ID, self.session_key)
+            history = load_history(run_agent, self.session_key)
+        elif _sync_session_head(self.session_key, run_agent):
+            # 人设/配置/附加词变了，首条 system 已被替换 → 重新读一份带
+            # 新头的历史。没变时一个字节都不动，前缀缓存不受影响。
+            history = load_history(run_agent, self.session_key)
 
         # 群里垫一层「刚才在聊什么」的背景，让回复接得上话，而不是干巴巴地
         # 只答那一句。走 extra_context 而不是拼进 text：拼进 text 会写进会话
@@ -671,8 +703,10 @@ class SessionRunner:
             extra_context = recent.format_recent(
                 QQ_AGENT_ID, self.target_id,
                 QQ_CONTEXT_MESSAGES, QQ_CONTEXT_MAX_CHARS)
+        if run_agent == QQ_AGENT_ID and self.target == "group":
             # 长期记忆：最近几条「以前聊过什么」的摘要跟在短背景后面。
             # 走同一条 extra_context 通道——不写回 history，出流即弃。
+            # 借用会话不注入：那是小小怪的记忆，不是接管者的。
             mem = longterm.format_memories(
                 QQ_AGENT_ID, self.target_id,
                 QQ_MEMORY_INJECT_LIMIT, QQ_MEMORY_INJECT_MAX_CHARS)
@@ -681,11 +715,12 @@ class SessionRunner:
                                  if extra_context else mem)
         # 表情包清单：把整库目录亮给模型，看图挑编号自己发。挂在同一条
         # extra_context 通道，出流即弃。私聊也注入——库是全 agent 共享的，
-        # 私聊里照样可以甩群里收的表情。
-        menu = stickers.catalog(QQ_AGENT_ID)
-        if menu:
-            extra_context = (extra_context + "\n\n" + menu
-                             if extra_context else menu)
+        # 私聊里照样可以甩群里收的表情。借用会话不注入：接管者没有这套。
+        if run_agent == QQ_AGENT_ID:
+            menu = stickers.catalog(QQ_AGENT_ID)
+            if menu:
+                extra_context = (extra_context + "\n\n" + menu
+                                 if extra_context else menu)
 
         # 工具层靠线程本地变量知道「此刻在为哪个会话服务」，
         # send_qq_message 不带参数时就发回这里
@@ -697,7 +732,7 @@ class SessionRunner:
         seen_replies = set()
 
         try:
-            for ev in run_agent_stream(text, history, agent_id=QQ_AGENT_ID,
+            for ev in run_agent_stream(text, history, agent_id=run_agent,
                                        image=data_urls or None,
                                        image_owners=image_owners or None,
                                        extra_context=extra_context or None):
@@ -705,7 +740,7 @@ class SessionRunner:
                 # 先落盘再处理（与 main.py 的契约一致）
                 if etype in SESSION_EVENTS:
                     try:
-                        save_history(history, QQ_AGENT_ID, self.session_key)
+                        save_history(history, run_agent, self.session_key)
                     except Exception:
                         log.exception("落盘失败 %s", self.session_key)
                 if etype == "assistant":
@@ -730,7 +765,7 @@ class SessionRunner:
         finally:
             qq_api.clear_context()
             try:
-                save_history(history, QQ_AGENT_ID, self.session_key)
+                save_history(history, run_agent, self.session_key)
             except Exception:
                 log.exception("收尾落盘失败 %s", self.session_key)
 

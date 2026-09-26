@@ -301,7 +301,7 @@ class RunTurnContextTest(_TmpAgentsMixin, unittest.TestCase):
              mock.patch.object(qq_bot, "load_history",
                                lambda *a, **kw: [{"role": "system",
                                                   "content": "s"}]), \
-             mock.patch.object(qq_bot, "sync_session_system",
+             mock.patch.object(qq_bot, "_sync_session_head",
                                lambda *a, **kw: False), \
              mock.patch.object(qq_bot, "save_history", lambda *a, **kw: True), \
              mock.patch.object(qq_bot.qq_api, "bind_context", lambda *a: None), \
