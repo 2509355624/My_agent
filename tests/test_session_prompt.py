@@ -65,6 +65,45 @@ class SessionPromptGateTest(unittest.TestCase):
         agents.save_settings("qq", {"session_prompts": {"group_1": "   "}})
         self.assertNotIn("会话专属人设", self._system_of("group_1"))
 
+    # ── 借用 agent：整份换成那个 agent 的完整系统提示词 ──
+
+    def _make_agent(self, aid, persona):
+        d = os.path.join(self.root, aid)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "agent.json"), "w", encoding="utf-8") as f:
+            f.write('{"name": "借用测试"}')
+        with open(os.path.join(d, "prompt.md"), "w", encoding="utf-8") as f:
+            f.write(persona)
+
+    def test_borrowed_agent_replaces_base(self):
+        self._make_agent("main", "通用助手测试人设XYZMARK")
+        agents.save_settings("qq", {"session_prompt_agents":
+                                    {"group_1": "main"}})
+        sys_prompt = self._system_of("group_1")
+        self.assertIn("通用助手测试人设XYZMARK", sys_prompt)
+        self.assertNotIn("会话专属人设", sys_prompt)
+
+    def test_borrow_plus_extra_coexist(self):
+        self._make_agent("main", "通用助手测试人设XYZMARK")
+        agents.save_settings("qq", {
+            "session_prompt_agents": {"group_1": "main"},
+            "session_prompts": {"group_1": "附加规则ABC"}})
+        sys_prompt = self._system_of("group_1")
+        self.assertIn("通用助手测试人设XYZMARK", sys_prompt)
+        self.assertIn("附加规则ABC", sys_prompt)
+
+    def test_borrow_self_or_missing_falls_back(self):
+        agents.save_settings("qq", {"session_prompt_agents":
+                                    {"group_1": "qq", "group_2": "nope"}})
+        self.assertNotIn("会话专属人设", self._system_of("group_1"))
+        self.assertNotIn("会话专属人设", self._system_of("group_2"))
+
+    def test_borrow_only_affects_its_session(self):
+        self._make_agent("main", "通用助手测试人设XYZMARK")
+        agents.save_settings("qq", {"session_prompt_agents":
+                                    {"group_1": "main"}})
+        self.assertNotIn("XYZMARK", self._system_of("group_2"))
+
 
 class SessionPromptApiTest(unittest.TestCase):
     def setUp(self):
@@ -114,6 +153,51 @@ class SessionPromptApiTest(unittest.TestCase):
                             json={"text": text})
         s = agents.load_settings("qq")["session_prompts"]
         self.assertEqual(s, {"group_1": "A 群人设", "private_42": "私聊人设"})
+
+    # ── 借用 agent 接口 ──
+
+    def _mk_agent(self, aid):
+        d = os.path.join(self.root, aid)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "agent.json"), "w", encoding="utf-8") as f:
+            f.write('{"name": "借用测试"}')
+
+    def test_borrow_save_and_payload(self):
+        self._mk_agent("main")
+        r = self.client.put(self.url("session_prompt/group_1"),
+                            json={"text": "", "agent": "main"})
+        self.assertEqual(r.status_code, 200)
+        s = agents.load_settings("qq")
+        self.assertEqual(s["session_prompt_agents"]["group_1"], "main")
+        d = self.client.get(self.url("sessions")).get_json()
+        self.assertEqual(d["session_prompt_agents"]["group_1"], "main")
+
+    def test_borrow_invalid_rejected(self):
+        r = self.client.put(self.url("session_prompt/group_1"),
+                            json={"text": "", "agent": "nope"})
+        self.assertEqual(r.status_code, 400)
+        self.assertNotIn("session_prompt_agents",
+                         agents.load_settings("qq"))
+
+    def test_borrow_clear_back_to_default(self):
+        self._mk_agent("main")
+        self.client.put(self.url("session_prompt/group_1"),
+                        json={"text": "", "agent": "main"})
+        r = self.client.put(self.url("session_prompt/group_1"),
+                            json={"text": "", "agent": ""})
+        self.assertEqual(r.status_code, 200)
+        s = agents.load_settings("qq")
+        self.assertNotIn("session_prompt_agents", s)
+
+    def test_text_only_save_clears_borrow(self):
+        self._mk_agent("main")
+        self.client.put(self.url("session_prompt/group_1"),
+                        json={"text": "", "agent": "main"})
+        self.client.put(self.url("session_prompt/group_1"),
+                        json={"text": "普通自定义"})
+        s = agents.load_settings("qq")
+        self.assertNotIn("session_prompt_agents", s)
+        self.assertEqual(s["session_prompts"]["group_1"], "普通自定义")
 
 
 if __name__ == "__main__":

@@ -106,14 +106,39 @@ def _session_prompt_extra(session_key):
     return str(prompts.get(session_key) or "").strip()
 
 
+def _session_prompt_agent(session_key):
+    """该会话线「借用」的 agent id（settings.json 的 session_prompt_agents）。
+
+    配了就用那个 agent 的**完整**稳定层 system prompt 当基底（整个换人，
+    不只是加一段）；没配 / 配了自己 / 配了个不存在的 id = 回默认人设。
+    """
+    from app import agents as agent_store
+    try:
+        m = (agent_store.load_settings(QQ_AGENT_ID)
+             .get("session_prompt_agents") or {})
+    except Exception:
+        return ""
+    aid = str(m.get(session_key) or "").strip()
+    if not aid or aid == QQ_AGENT_ID:
+        return ""
+    if agent_store.safe_agent_id(aid) is None:
+        return ""
+    return aid
+
+
 def _ensure_system_prompt(session_key):
     """把这条会话线的首条固定为稳定的 system 消息（prefix cache 锚点）。
 
     与 app/main.py 里的同名函数同构，差别只在多传一个 session_key。
-    会话线在 settings.json 里配了自定义提示词就拼在稳定层后面——
-    每轮都走这里，管理页改完下一条消息就是新人设（热生效）。
+    会话线在 settings.json 里配了「借用 agent」就整份换成那个 agent 的
+    稳定层（完整的通用助手人设就是这么进来的）；只配了自定义提示词就
+    拼在默认稳定层后面。每轮都走这里，管理页改完下一条消息就生效。
     """
-    stable = build_stable_prompt(QQ_AGENT_ID)
+    override = _session_prompt_agent(session_key)
+    try:
+        stable = build_stable_prompt(override or QQ_AGENT_ID)
+    except Exception:
+        stable = build_stable_prompt(QQ_AGENT_ID)
     extra = _session_prompt_extra(session_key)
     if extra:
         stable = (stable + "\n\n## 会话专属人设（优先于上面的角色定义）\n\n"

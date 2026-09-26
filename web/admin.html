@@ -710,7 +710,8 @@ function renderSessions() {
     if (s.kind === 'group' || s.kind === 'private') {
       const pb = document.createElement('button');
       pb.className = 'ghost';
-      pb.textContent = sessPrompts[s.key] ? '提示词·自定义' : '提示词';
+      pb.textContent = (sessPrompts[s.key] ? '提示词·自定义'
+                        : sessAgents[s.key] ? '提示词·借用' : '提示词');
       pb.addEventListener('click', () => togglePromptEditor(s, row));
       row.appendChild(pb);
     }
@@ -736,6 +737,7 @@ async function loadSessions() {
     const d = await api('/api/agent/' + encodeURIComponent(cur) + '/sessions');
     sessions = d.sessions || [];
     sessPrompts = d.session_prompts || {};
+    sessAgents = d.session_prompt_agents || {};
     renderSessions();
     renderImageGenAll(d.image_gen_on !== false);
     privState.on = d.private_enable !== false;
@@ -754,6 +756,7 @@ async function loadSessions() {
 }
 
 let sessPrompts = {};     // session_key -> 会话自定义提示词
+let sessAgents = {};      // session_key -> 借用的 agent id（完整系统提示词）
 let promptEditor = null;  // 当前展开的编辑面板 {key, wrap}
 
 function closePromptEditor() {
@@ -769,6 +772,28 @@ function togglePromptEditor(s, row) {
   ta.style.cssText = 'width:100%; min-height:90px; box-sizing:border-box;';
   ta.placeholder = '留空 = 用默认人设。\n写这个群/私聊专属的提示词，会拼在人设后面，如：\n「在这个群里你说话更毒舌，爱用网络梗，讨论话题偏技术」';
   ta.value = sessPrompts[s.key] || '';
+  // 「借用助手」：整份换成某个 agent 的完整系统提示词（换人干活）
+  const agentRow = document.createElement('div');
+  agentRow.style.cssText = 'margin-top:6px; display:flex; gap:8px; align-items:center;';
+  const agentLabel = document.createElement('span');
+  agentLabel.className = 'hint';
+  agentLabel.textContent = '借用助手';
+  const agentSel = document.createElement('select');
+  agentSel.style.cssText = 'font-size:12px; padding:4px 6px;';
+  const optDef = document.createElement('option');
+  optDef.value = ''; optDef.textContent = '不借用（用本助手人设）';
+  agentSel.appendChild(optDef);
+  agents.filter(a => a.id !== cur).forEach(a => {
+    const o = document.createElement('option');
+    o.value = a.id; o.textContent = a.name + '（' + a.id + '）· 完整系统提示词';
+    agentSel.appendChild(o);
+  });
+  agentSel.value = sessAgents[s.key] || '';
+  const agentHint = document.createElement('span');
+  agentHint.className = 'hint';
+  agentHint.textContent = '选了就用 TA 的完整系统提示词（人设/工具目录全换），下面的自定义词仍然附加在其后';
+  agentRow.appendChild(agentLabel); agentRow.appendChild(agentSel);
+  agentRow.appendChild(agentHint);
   const bar = document.createElement('div');
   bar.style.cssText = 'margin-top:6px; display:flex; gap:8px; align-items:center;';
   const save = document.createElement('button');
@@ -785,9 +810,11 @@ function togglePromptEditor(s, row) {
         + encodeURIComponent(s.key),
         { method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: ta.value }) });
+          body: JSON.stringify({ text: ta.value, agent: agentSel.value }) });
       if (ta.value.trim()) sessPrompts[s.key] = ta.value.trim();
       else delete sessPrompts[s.key];
+      if (agentSel.value) sessAgents[s.key] = agentSel.value;
+      else delete sessAgents[s.key];
       closePromptEditor();
       renderSessions();
       sessStatus('「' + (s.name || s.key) + '」的会话提示词已保存，立即生效', 'ok');
@@ -798,7 +825,7 @@ function togglePromptEditor(s, row) {
   });
   cancel.addEventListener('click', closePromptEditor);
   bar.appendChild(save); bar.appendChild(cancel); bar.appendChild(hint);
-  wrap.appendChild(ta); wrap.appendChild(bar);
+  wrap.appendChild(ta); wrap.appendChild(agentRow); wrap.appendChild(bar);
   promptEditor = { key: s.key, wrap };
   row.parentNode.insertBefore(wrap, row.nextSibling);
   ta.focus();

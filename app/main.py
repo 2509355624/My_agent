@@ -623,6 +623,8 @@ def get_agent_sessions(agent_id):
                         settings.get("private_whitelist_on") is not False,
                     "session_prompts":
                         settings.get("session_prompts") or {},
+                    "session_prompt_agents":
+                        settings.get("session_prompt_agents") or {},
                     "interject_cooldown":
                         agent_store.interject_cooldown(aid, ""),
                     "interject_chance":
@@ -775,7 +777,9 @@ def set_agent_session_prompt(agent_id, session_key):
     """保存某个会话线（group_<群号> / private_<QQ号>）的自定义提示词。
 
     存 settings.json 的 session_prompts 字典；text 空串 = 删除该会话的
-    自定义（回到默认人设）。热生效：qq_bot 每轮重建首条 system。
+    自定义（回到默认人设）。可选字段 agent：借用某个 agent 的完整系统
+    提示词当基底（存 session_prompt_agents，空串=清除借用）。
+    热生效：qq_bot 每轮重建首条 system。
     """
     if not _admin_allowed():
         return jsonify({"error": "管理接口默认只允许本机访问，"
@@ -787,6 +791,13 @@ def set_agent_session_prompt(agent_id, session_key):
     if not isinstance(body.get("text"), str):
         return jsonify({"error": "需要字符串字段 text（空串=清除自定义）"}), 400
 
+    borrow = str(body.get("agent") or "").strip()
+    if borrow:
+        from app.agents import safe_agent_id
+        if safe_agent_id(borrow) is None or borrow not in {
+                a["id"] for a in agent_store.list_agents()}:
+            return jsonify({"error": "要借用的 agent 不存在：" + borrow}), 400
+
     settings = agent_store.load_settings(aid)
     prompts = settings.get("session_prompts")
     if not isinstance(prompts, dict):
@@ -797,10 +808,23 @@ def set_agent_session_prompt(agent_id, session_key):
     else:
         prompts.pop(session_key, None)
     settings["session_prompts"] = prompts
+
+    borrowed = settings.get("session_prompt_agents")
+    if not isinstance(borrowed, dict):
+        borrowed = {}
+    if borrow and borrow != aid:
+        borrowed[session_key] = borrow
+    else:
+        borrowed.pop(session_key, None)
+    if borrowed:
+        settings["session_prompt_agents"] = borrowed
+    else:
+        settings.pop("session_prompt_agents", None)
+
     if not agent_store.save_settings(aid, settings):
         return jsonify({"error": "写入 settings.json 失败"}), 500
     return jsonify({"ok": True, "agent": aid, "session_key": session_key,
-                    "set": bool(text)})
+                    "set": bool(text), "borrowed": borrow or None})
 
 
 @app.route("/api/agent/<agent_id>/interject/<group_id>", methods=["PUT"])
