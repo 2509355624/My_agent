@@ -1,15 +1,27 @@
 """ComfyUI 生图工具"""
 
+import os
+
 import requests
 import json
 import time
 import random
 import uuid
 from flask import request
-from app import image_jobs
+from app import comfy_src, image_jobs
 from app.cancel import Cancelled, is_cancelled
 from app.config import COMFYUI_URL, IMAGE_GEN_TIMEOUT, QQ_AGENT_ID
-from app.skills import load_skill
+from app.skills import load_skill, load_workflow
+
+
+# 支持图生图的 skill：只有这两个各配了一份 workflow_i2i.json。krea2 的工作流
+# 结构不同（单一 unet + 一个 lora 槽），传了 source_image 直接拒，绝不静默
+# 退化成文生图——用户以为在改自己那张图，实际拿到凭空画的一张。
+_I2I_SKILLS = ("anima", "image_gen_v1")
+
+# 图生图默认重绘强度：0.6 落在「构图保留、画风明显换掉」的位置（本机 krea2
+# 的图生图用 0.55，同一量级）。模型可按用户的话上下调。
+I2I_DEFAULT_DENOISE = 0.6
 
 
 # ─── QQ 侧生图开关 ───────────────────────────────────
@@ -168,7 +180,25 @@ def _apply_loras(workflow, lora_str):
     return None
 
 
-def _generate_image(prompt, skill="anima", use_character=False, lora=None):
+def _denoise_value(raw):
+    """把 denoise 参数变成写进工作流的数值字符串。
+
+    不填就用默认值；填了必须落在一个说得过去的位置——0 等于原图不动、
+    低于 0.2 基本看不出改动，都是白白占一次显卡，不如让模型把话说清楚。
+    """
+    if raw is None or str(raw).strip() == "":
+        return "%.2f" % I2I_DEFAULT_DENOISE
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError("denoise 要填数字（0.05~1.0），收到：" + str(raw))
+    if not 0.05 <= value <= 1.0:
+        raise ValueError("denoise 要落在 0.05~1.0 之间，收到：" + str(raw))
+    return "%.2f" % value
+
+
+def _generate_image(prompt, skill="anima", use_character=False, lora=None,
+                    source_image="", denoise=None):
     # 提交前先看一眼：已经中断就别再往 ComfyUI 队列里塞新任务了
     if is_cancelled():
         return "已中断：用户取消了本次生成。"
@@ -187,7 +217,32 @@ def _generate_image(prompt, skill="anima", use_character=False, lora=None):
     if not skill_data or not skill_data["workflow"]:
         return "错误: 找不到 Skill '" + skill + "'"
 
-    workflow_str = json.dumps(skill_data["workflow"])
+    # 图生图：给了源图就换成垫图工作流，并先把源图送进 ComfyUI 的 input
+    # 目录。取图 / 缩放 / 上传任何一步失败都当场返回，**不退回文生图**。
+    workflow = skill_data["workflow"]
+    is_i2i = bool(str(source_image or "").strip())
+    source_note, denoise_txt, uploaded = "", "", ""
+    if is_i2i:
+        if skill not in _I2I_SKILLS:
+            return ("错误: 只有 anima 和 image_gen_v1 支持图生图，" + skill
+                    + " 不行。去掉 source_image，按文生图重来。")
+        try:
+            denoise_txt = _denoise_value(denoise)
+        except ValueError as e:
+            return "错误: " + str(e)
+        i2i = load_workflow(
+            os.path.join(skill_data["path"], "workflow_i2i.json"))
+        if not i2i:
+            return "错误: Skill '" + skill + "' 没有图生图工作流"
+        try:
+            raw, source_note = comfy_src.resolve(source_image)
+            fitted, _size = comfy_src.fit(raw)
+            uploaded = comfy_src.upload(fitted)
+        except RuntimeError as e:
+            return str(e)
+        workflow = i2i
+
+    workflow_str = json.dumps(workflow)
 
     # 替换占位符
     seed = random.randint(1, 2**32 - 1)
@@ -204,6 +259,12 @@ def _generate_image(prompt, skill="anima", use_character=False, lora=None):
     workflow_str = workflow_str.replace("__MULTI_PROMPTS__", prompt_escaped)
     workflow_str = workflow_str.replace("__SEED__", str(seed))
     workflow_str = workflow_str.replace("__CHARACTER__", character_escaped)
+    if is_i2i:
+        # 垫图专用占位符：源图文件名（按 JSON 字符串转义填，避免文件名里的
+        # 引号把 JSON 打破）与重绘强度。这两个只在 workflow_i2i.json 里出现。
+        workflow_str = workflow_str.replace('"__SOURCE_IMAGE__"',
+                                            json.dumps(uploaded))
+        workflow_str = workflow_str.replace('"__DENOISE__"', denoise_txt)
 
     workflow = json.loads(workflow_str)
 
@@ -228,7 +289,8 @@ def _generate_image(prompt, skill="anima", use_character=False, lora=None):
             return ("这个会话已经排着 %d 张了，画完这些再说。"
                     "不要跟对方提这张图，当没画过，接着把话说完。" % pending)
         return ("已经在画了，画好会自动发到群里。"
-                "不要输出图片地址，也不要说「图在下面 / 稍等」，"
+                + ("垫的是%s。" % source_note if source_note else "")
+                + "不要输出图片地址，也不要说「图在下面 / 稍等」，"
                 "直接把想说的话说完就行。")
 
     try:
@@ -245,7 +307,9 @@ def _generate_image(prompt, skill="anima", use_character=False, lora=None):
     # 用相对路径（不带 host）：任何端(手机/平板/PC)访问时都用当前站点 origin 加载
     urls = ["/api/image/" + img for img in images]
 
-    return "生成成功！seed: " + str(seed) + "\n图片地址:\n" + "\n".join(urls)
+    return ("生成成功！seed: " + str(seed)
+            + ("（垫图：%s）" % source_note if source_note else "")
+            + "\n图片地址:\n" + "\n".join(urls))
 
 
 tool = {
@@ -261,7 +325,15 @@ tool = {
                   "【lora】用户点名要换 lora 时才传 lora 参数，平时不要传。格式「文件名:强度」，"
                   "多个逗号分隔（如 \"x.safetensors:0.8,y.safetensors:0.5\"）；文件名要完整"
                   "(.safetensors 结尾)，写错会返回可用清单；传了就完全接管本次的 lora，"
-                  "槽位 image_gen_v1 3 个 / anima 2 个 / krea2 1 个，没填满的槽自动关闭。",
+                  "槽位 image_gen_v1 3 个 / anima 2 个 / krea2 1 个，没填满的槽自动关闭。"
+                  "【图生图】用户给了图、并明确说「图生图 / 垫图 / 照着这张改」时才传 "
+                  "source_image（**必须给值才算图生图**）——**只有 anima 和 image_gen_v1 "
+                  "支持**，krea2 传了会报错。网页端填图片链接或本地路径；QQ 会话里填 "
+                  "1 = 对方引用的那张图（引用里有多张就填 2、3），**没引用就取不到，"
+                  "报错照原话转述即可**。此时 prompt 写「要变成什么样」，"
+                  "源图的构图自动保留。默认重绘强度 0.6：用户说「改动大一点 / 换个画风」"
+                  "传 denoise 0.8~0.9，说「只微调 / 保留原图」传 denoise 0.35~0.45，"
+                  "没提就别传 denoise。",
     # QQ 机器人看不到角色底模这套：Sumire 的角色描述只给网页端用。
     "description_overrides": {
         QQ_AGENT_ID:
@@ -272,17 +344,29 @@ tool = {
             "要一次出多张时传 skill=image_gen_v1（多个提示词用 --- 分隔）。"
             "【lora】用户点名要换 lora 时才传 lora 参数，平时不要传。格式「文件名:强度」，"
             "多个逗号分隔（如 \"x.safetensors:0.8\"）；文件名要完整(.safetensors 结尾)，"
-            "写错会返回可用清单；最多 3 个，传了就完全接管本次的 lora。",
+            "写错会返回可用清单；最多 3 个，传了就完全接管本次的 lora。"
+            "【图生图】对方明确说「图生图 / 垫图 / 照着这张改」时传 source_image=1"
+            "（**必须给值才算图生图**），**只有 anima 和 image_gen_v1 支持**。"
+            "源图**只能来自对方引用的那条消息**：对方引用一张带图的消息、@你、"
+            "说要什么效果，填 1 就是引用那张（一条消息里有多张图就填 2、3）。"
+            "对方没引用、只是自己发了图的话，也照样传 source_image=1——工具会回"
+            "一句提示，你**原话转述**给对方（让他引用那张图再说一次），"
+            "不要自己编一张，也不要改成文生图。不要填链接或路径。"
+            "垫图时 prompt 写「要变成什么样」，原图构图自动保留。默认重绘强度 0.6："
+            "对方说「改动大一点 / 换个画风」传 denoise 0.8~0.9，说「只微调 / 保留原图」"
+            "传 denoise 0.35~0.45，没提就别传。",
     },
     "hidden_params": {QQ_AGENT_ID: ["use_character"]},
     "function": _generate_image,
     "parameters": {
         "type": "object",
         "properties": {
-            "prompt": {"type": "string", "description": "英文提示词，逗号分隔的标签。默认（anima）只写一段，不要用 --- 分隔；只有 skill=image_gen_v1 时才用 --- 分隔多张。画面里没有固定角色时须包含完整角色描述"},
+            "prompt": {"type": "string", "description": "英文提示词，逗号分隔的标签。默认（anima）只写一段，不要用 --- 分隔；只有 skill=image_gen_v1 时才用 --- 分隔多张。画面里没有固定角色时须包含完整角色描述。图生图时写「要变成什么样」（目标画面），不用再描述源图里已有的构图"},
             "skill": {"type": "string", "description": "Skill名称，默认anima（不传就用它）。可选值见系统提示 Available Skills 里标 [底模]/[无底模] 的生图类；krea2 / image_gen_v1 仅在用户点名或需要多张时才用"},
             "use_character": {"type": "boolean", "description": "是否使用该Skill自带的角色描述（默认false）。只有 image_gen_v1 有角色底模，设为true时固定该角色，你只写动作/环境/构图"},
-            "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传"}
+            "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传"},
+            "source_image": {"type": "string", "description": "图生图的源图，**必须给值才算图生图**。QQ 会话：1 = 对方引用的那张图（引用里有多张就填 2、3）；对方没引用会取不到，工具报错后照原话转述即可。网页端：填图片链接或本地路径。仅 anima / image_gen_v1 支持，且只在用户明确说「图生图 / 垫图 / 照着这张改」时才传"},
+            "denoise": {"type": "string", "description": "可选。图生图的重绘强度 0.05~1.0，不填默认 0.6（越大越自由、越小越贴原图）。只在图生图时有效，用户没提就别传"}
         },
         "required": ["prompt"]
     }

@@ -1077,6 +1077,22 @@ class ThreadLocalContextTest(unittest.TestCase):
         qq_api.clear_context()
         self.assertEqual(qq_api.current_context(), (None, None))
 
+    def test_quoted_images_travel_with_the_binding(self):
+        qq_api.bind_context("group_9", "group", "9",
+                            quoted_images=["http://img/a.jpg"])
+        self.assertEqual(qq_api.current_quoted_images(),
+                         ["http://img/a.jpg"])
+
+    def test_quoted_images_default_empty(self):
+        qq_api.bind_context("group_9", "group", "9")
+        self.assertEqual(qq_api.current_quoted_images(), [])
+
+    def test_clear_context_drops_quoted_images_too(self):
+        # 线程是复用的：上一轮引用的图不能带进下一轮
+        qq_api.bind_context("group_9", "group", "9", quoted_images=["http://i"])
+        qq_api.clear_context()
+        self.assertEqual(qq_api.current_quoted_images(), [])
+
 
 # ─── 连接层：代理绕过 + 首次失败重试 ──────────────────
 

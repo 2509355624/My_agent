@@ -102,6 +102,25 @@ def _parse_frontmatter(text):
     return fm
 
 
+def load_workflow(path):
+    """读一份 ComfyUI API 格式的工作流，失败返回 None。
+
+    `: __SEED__` 是裸占位符、不是合法 JSON，先补引号再解析——工作流里写
+    `"seed": __SEED__` 表示每张图换种子，调用侧再把引号连内容一起换成真值。
+    一个 skill 可能有多份（`workflow.json` 文生图 / `workflow_i2i.json` 图生图），
+    所以这里单独暴露出来给调用方按路径取，不只跟着 load_skill 走。
+    """
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read().replace(": __SEED__", ': "__SEED__"')
+        return json.loads(raw)
+    except (OSError, json.JSONDecodeError) as e:
+        print("[警告] 工作流解析失败 " + str(path) + ": " + str(e))
+        return None
+
+
 def load_skill(skill_name):
     """加载 Skill: 返回
     {name, workflow, skill_md, character, version, kind, references}
@@ -115,16 +134,11 @@ def load_skill(skill_name):
         return None
 
     # 生图工作流（可选，只有生图 skill 有）
-    workflow = None
     workflow_path = os.path.join(skill_dir, "workflow.json")
-    if os.path.exists(workflow_path):
-        try:
-            with open(workflow_path, "r", encoding="utf-8") as f:
-                raw = f.read().replace(": __SEED__", ': "__SEED__"')
-                workflow = json.loads(raw)
-        except json.JSONDecodeError as e:
-            print("[警告] Skill '" + skill_name + "' 的 workflow.json 解析失败: " + str(e))
-            return None
+    workflow = load_workflow(workflow_path)
+    if os.path.exists(workflow_path) and workflow is None:
+        # 文件在却读不出来：整体判失败，别让上层拿到一个没有工作流的 skill
+        return None
 
     skill_md = _read_md(skill_dir)
     references = _read_references(skill_dir)

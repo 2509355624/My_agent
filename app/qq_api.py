@@ -96,16 +96,23 @@ def _preview(chunk):
 _local = threading.local()
 
 
-def bind_context(session_key, target, target_id):
-    """绑定当前线程正在处理的 QQ 会话。target 取 "private" / "group"。"""
+def bind_context(session_key, target, target_id, quoted_images=None):
+    """绑定当前线程正在处理的 QQ 会话。target 取 "private" / "group"。
+
+    quoted_images 是**本轮**消息引用（reply）到的图片直链，按被引消息里出现
+    的先后排。图生图靠它才能落到「对方点名的那一张」：模型在群里看不见图片
+    地址（上下文里只有 `[图片]` 占位符），报得出「第几张」却报不出链接，所以
+    候选范围必须由 qq_bot 在开跑前圈死。
+    """
     _local.session_key = session_key
     _local.target = target
     _local.target_id = target_id
+    _local.quoted_images = list(quoted_images or [])
 
 
 def clear_context():
     """摘掉绑定。worker 线程是复用的，不清理会把上一个会话带进下一轮。"""
-    for attr in ("session_key", "target", "target_id"):
+    for attr in ("session_key", "target", "target_id", "quoted_images"):
         if hasattr(_local, attr):
             delattr(_local, attr)
 
@@ -114,6 +121,11 @@ def current_context():
     """返回 (target, target_id)；不在 QQ 会话里时返回 (None, None)。"""
     return (getattr(_local, "target", None),
             getattr(_local, "target_id", None))
+
+
+def current_quoted_images():
+    """本轮引用的消息里带的图片直链，按出现顺序；没绑定或没引用时为空表。"""
+    return list(getattr(_local, "quoted_images", None) or [])
 
 
 # ─── 底层调用 ────────────────────────────────────────

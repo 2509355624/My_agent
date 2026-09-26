@@ -722,8 +722,11 @@ class SessionRunner:
                                  if extra_context else menu)
 
         # 工具层靠线程本地变量知道「此刻在为哪个会话服务」，
-        # send_qq_message 不带参数时就发回这里
-        qq_api.bind_context(self.session_key, self.target, self.target_id)
+        # send_qq_message 不带参数时就发回这里。引用图一并带上：图生图只认
+        # 「对方引用的那张」，而模型在群里看不见图片地址、只报得出「第几张」，
+        # 候选范围必须在这里圈死（见 comfy_src.resolve）。
+        qq_api.bind_context(self.session_key, self.target, self.target_id,
+                            quoted_images=quote_images)
         sent_by_tool = False
         reply_parts, images = [], []
         # 同一轮里模型有时会把上一段原样再生成一遍（工具结果回来后失了记性），
