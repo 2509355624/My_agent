@@ -621,6 +621,8 @@ def get_agent_sessions(agent_id):
                     "private_whitelist": priv_wl,
                     "private_whitelist_on":
                         settings.get("private_whitelist_on") is not False,
+                    "session_prompts":
+                        settings.get("session_prompts") or {},
                     "interject_cooldown":
                         agent_store.interject_cooldown(aid, ""),
                     "interject_chance":
@@ -765,6 +767,40 @@ def edit_agent_private_whitelist(agent_id):
         return jsonify({"error": "写入 settings.json 失败"}), 500
     return jsonify({"ok": True, "agent": aid, "op": op,
                     "private_whitelist": wl})
+
+
+@app.route("/api/agent/<agent_id>/session_prompt/<path:session_key>",
+           methods=["PUT"])
+def set_agent_session_prompt(agent_id, session_key):
+    """保存某个会话线（group_<群号> / private_<QQ号>）的自定义提示词。
+
+    存 settings.json 的 session_prompts 字典；text 空串 = 删除该会话的
+    自定义（回到默认人设）。热生效：qq_bot 每轮重建首条 system。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body.get("text"), str):
+        return jsonify({"error": "需要字符串字段 text（空串=清除自定义）"}), 400
+
+    settings = agent_store.load_settings(aid)
+    prompts = settings.get("session_prompts")
+    if not isinstance(prompts, dict):
+        prompts = {}
+    text = body["text"].strip()
+    if text:
+        prompts[session_key] = text
+    else:
+        prompts.pop(session_key, None)
+    settings["session_prompts"] = prompts
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "session_key": session_key,
+                    "set": bool(text)})
 
 
 @app.route("/api/agent/<agent_id>/interject/<group_id>", methods=["PUT"])

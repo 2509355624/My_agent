@@ -92,12 +92,32 @@ def _norm_reply(text):
 
 # ─── 会话线的 system 头 ──────────────────────────────
 
+def _session_prompt_extra(session_key):
+    """该会话线在 settings.json 里的自定义提示词（管理页按会话编辑）。
+
+    键 session_prompts = {"group_<群号>": "...", "private_<QQ号>": "..."}；
+    没配或空串 = 用默认人设，不打折。
+    """
+    from app.agents import load_settings
+    try:
+        prompts = load_settings(QQ_AGENT_ID).get("session_prompts") or {}
+    except Exception:
+        return ""
+    return str(prompts.get(session_key) or "").strip()
+
+
 def _ensure_system_prompt(session_key):
     """把这条会话线的首条固定为稳定的 system 消息（prefix cache 锚点）。
 
     与 app/main.py 里的同名函数同构，差别只在多传一个 session_key。
+    会话线在 settings.json 里配了自定义提示词就拼在稳定层后面——
+    每轮都走这里，管理页改完下一条消息就是新人设（热生效）。
     """
     stable = build_stable_prompt(QQ_AGENT_ID)
+    extra = _session_prompt_extra(session_key)
+    if extra:
+        stable = (stable + "\n\n## 会话专属人设（优先于上面的角色定义）\n\n"
+                  + extra)
     keep = [m for m in load_history(QQ_AGENT_ID, session_key)
             if m.get("role") != "system"]
     save_history([{"role": "system", "content": stable}] + keep,

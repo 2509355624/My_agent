@@ -247,8 +247,6 @@ def _generate_image(prompt, skill="image_gen_v1", use_character=False, lora=None
 tool = {
     "name": "generate_image",
     "description": "调用 ComfyUI 生成图片，支持批量生成。多个提示词用 --- 分隔，一次调用可生成多张图。"
-                  "【红线】严禁生成色情、擦边或性暗示内容（涩图、过度暴露、性姿势、涩味玩梗）；"
-                  "这类请求直接拒绝，不要改写提示词绕过。"
                   "【底模两种模式】默认无底模(use_character=false)，你在 prompt 中自己写出完整角色提示词"
                   "(发型/发色/体型/服装/年龄等)；仅当需要 Skill 里的固定角色时才传 use_character=true。"
                   "【默认 Skill】没特别说明就用 image_gen_v1，不要无理由换。"
@@ -262,8 +260,6 @@ tool = {
     "description_overrides": {
         QQ_AGENT_ID:
             "调用 ComfyUI 生成图片，支持批量生成。多个提示词用 --- 分隔，一次调用可生成多张图。"
-            "【红线】严禁生成色情、擦边或性暗示内容（涩图、过度暴露、性姿势、涩味玩梗）；"
-            "这类请求直接拒绝，不要改写提示词绕过。"
             "【默认 Skill】没特别说明就用 image_gen_v1，不要无理由换；"
             "用户点名 krea2 才传 skill=krea2（一次一张，prompt 不要带 ---）。"
             "【lora】用户点名要换 lora 时才传 lora 参数，平时不要传。格式「文件名:强度」，"

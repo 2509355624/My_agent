@@ -705,6 +705,15 @@ function renderSessions() {
       row.appendChild(gb);
     }
 
+    // 「提示词」按钮：给这个群/私聊单独自定义人设（会话专属提示词）。
+    if (s.kind === 'group' || s.kind === 'private') {
+      const pb = document.createElement('button');
+      pb.className = 'ghost';
+      pb.textContent = sessPrompts[s.key] ? '提示词·自定义' : '提示词';
+      pb.addEventListener('click', () => togglePromptEditor(s, row));
+      row.appendChild(pb);
+    }
+
     // 没有会话线的群（收到过消息但从没回过）没有聊天记录可删
     if (s.session !== false) {
       const del = document.createElement('button');
@@ -725,6 +734,7 @@ async function loadSessions() {
   try {
     const d = await api('/api/agent/' + encodeURIComponent(cur) + '/sessions');
     sessions = d.sessions || [];
+    sessPrompts = d.session_prompts || {};
     renderSessions();
     renderImageGenAll(d.image_gen_on !== false);
     privState.on = d.private_enable !== false;
@@ -740,6 +750,57 @@ async function loadSessions() {
   } catch (e) {
     sessStatus(e.message, 'err');
   }
+}
+
+let sessPrompts = {};     // session_key -> 会话自定义提示词
+let promptEditor = null;  // 当前展开的编辑面板 {key, wrap}
+
+function closePromptEditor() {
+  if (promptEditor) { promptEditor.wrap.remove(); promptEditor = null; }
+}
+
+function togglePromptEditor(s, row) {
+  if (promptEditor && promptEditor.key === s.key) { closePromptEditor(); return; }
+  closePromptEditor();
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'margin:8px 0 4px 0; padding:8px; border:1px solid var(--line, #333); border-radius:6px;';
+  const ta = document.createElement('textarea');
+  ta.style.cssText = 'width:100%; min-height:90px; box-sizing:border-box;';
+  ta.placeholder = '留空 = 用默认人设。\n写这个群/私聊专属的提示词，会拼在人设后面，如：\n「在这个群里你说话更毒舌，爱用网络梗，讨论话题偏技术」';
+  ta.value = sessPrompts[s.key] || '';
+  const bar = document.createElement('div');
+  bar.style.cssText = 'margin-top:6px; display:flex; gap:8px; align-items:center;';
+  const save = document.createElement('button');
+  save.className = 'ghost'; save.textContent = '保存';
+  const cancel = document.createElement('button');
+  cancel.className = 'ghost'; cancel.textContent = '收起';
+  const hint = document.createElement('span');
+  hint.className = 'hint';
+  hint.textContent = '热生效：下一条消息就是新人设，不用重启';
+  save.addEventListener('click', async () => {
+    save.disabled = true;
+    try {
+      await api('/api/agent/' + encodeURIComponent(cur) + '/session_prompt/'
+        + encodeURIComponent(s.key),
+        { method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: ta.value }) });
+      if (ta.value.trim()) sessPrompts[s.key] = ta.value.trim();
+      else delete sessPrompts[s.key];
+      closePromptEditor();
+      renderSessions();
+      sessStatus('「' + (s.name || s.key) + '」的会话提示词已保存，立即生效', 'ok');
+    } catch (e) {
+      sessStatus(e.message, 'err');
+      save.disabled = false;
+    }
+  });
+  cancel.addEventListener('click', closePromptEditor);
+  bar.appendChild(save); bar.appendChild(cancel); bar.appendChild(hint);
+  wrap.appendChild(ta); wrap.appendChild(bar);
+  promptEditor = { key: s.key, wrap };
+  row.parentNode.insertBefore(wrap, row.nextSibling);
+  ta.focus();
 }
 
 async function toggleInterject(s, btn) {
