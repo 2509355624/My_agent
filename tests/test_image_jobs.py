@@ -380,7 +380,8 @@ class GenerateImageSplitTest(unittest.TestCase):
         self.assertIn("/api/image/a.png", out)
 
     def test_web_reports_timeout(self):
-        out = self._call((None, None), error=TimeoutError("生成超时 (120s)"))
+        out = self._call((None, None), error=TimeoutError(
+            "生成超时 (%ds)" % image_jobs.TASK_TIMEOUT))
         self.assertIn("超时", out)
 
     def test_qq_queue_full_does_not_reach_comfyui(self):
