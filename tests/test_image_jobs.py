@@ -37,7 +37,9 @@ class _Base(unittest.TestCase):
         for target, repl in (("_ensure_worker", lambda: None),
                              ("_queue_prompt", lambda wf: "pid"),
                              ("_send_image", _fake_image),
-                             ("_send_text", _fake_text)):
+                             ("_send_text", _fake_text),
+                             # 超时路径会真去轮询 ComfyUI 的 /queue，测试里挡掉
+                             ("_wait_comfy_idle", lambda timeout=90: True)):
             p = mock.patch.object(image_jobs, target, repl)
             p.start()
             self.addCleanup(p.stop)
@@ -98,6 +100,65 @@ class WaitTest(_Base):
                 with self.assertRaises(TimeoutError):
                     # 给一个正的极小值：0 会被 wait_done 当成「没传」回退默认
                     image_jobs.wait_done("pid", timeout=0.001)
+
+
+class IdleWaitTest(unittest.TestCase):
+    """超时中断后的事件驱动等待：running 清空才放行，ComfyUI 挂了也不卡队。
+
+    故意不继承 _Base——那里把 _wait_comfy_idle 本身 mock 成了空操作，
+    继承它就没东西可测了。
+    """
+
+    def setUp(self):
+        image_jobs._reset()
+
+    def _mock_get(self, payloads):
+        """GET /queue 依次返回 payloads 里的每一份；用尽后停在最后一份。"""
+        seq = iter(payloads)
+
+        def _get(url, timeout=None):
+            try:
+                payload = next(seq)
+            except StopIteration:
+                payload = payloads[-1]
+            return mock.Mock(json=lambda: payload,
+                             raise_for_status=lambda: None)
+
+        return mock.patch.object(image_jobs, "requests",
+                                 mock.Mock(get=_get, post=mock.Mock()))
+
+    def test_returns_true_once_running_empty(self):
+        posts = []
+        with mock.patch.object(image_jobs, "POLL_INTERVAL", 0), \
+                self._mock_get([{"queue_running": [], "queue_pending": []}]) \
+                as reqs:
+            reqs.post.side_effect = \
+                lambda url, **kw: posts.append((url, kw.get("json")))
+            self.assertTrue(image_jobs._wait_comfy_idle(timeout=5))
+        # 空了之后要补一次 /free，把模型缓存也清掉
+        self.assertTrue(any(u.endswith("/free") for u, _ in posts))
+
+    def test_waits_until_running_clears(self):
+        """旧任务还在跑就继续等，退场了才返回 True。"""
+        with mock.patch.object(image_jobs, "POLL_INTERVAL", 0), \
+                self._mock_get([{"queue_running": [{"x": 1}]},
+                                {"queue_running": [{"x": 1}]},
+                                {"queue_running": []}]):
+            self.assertTrue(image_jobs._wait_comfy_idle(timeout=30))
+
+    def test_gives_up_after_timeout(self):
+        """ComfyUI 一直不空（比如挂了）——放弃等待，不能把队列卡死。"""
+        with mock.patch.object(image_jobs, "POLL_INTERVAL", 0), \
+                self._mock_get([{"queue_running": [{"x": 1}]}]):
+            self.assertFalse(image_jobs._wait_comfy_idle(timeout=0.05))
+
+    def test_network_error_counts_as_not_idle(self):
+        """查不到队列状态时当「还没空」继续等，等满时限才放弃。"""
+        with mock.patch.object(image_jobs, "POLL_INTERVAL", 0), \
+                mock.patch.object(image_jobs, "requests",
+                                  mock.Mock(get=mock.Mock(
+                                      side_effect=OSError("down")))):
+            self.assertFalse(image_jobs._wait_comfy_idle(timeout=0.05))
 
 
 class QueueTest(_Base):
@@ -183,7 +244,9 @@ class ProcessTest(_Base):
                                side_effect=TimeoutError("超时")), \
                 mock.patch.object(image_jobs, "requests",
                                   mock.Mock(post=lambda url, **kw:
-                                            posts.append((url, kw.get("json"))))):
+                                            posts.append((url, kw.get("json"))))), \
+                mock.patch.object(image_jobs, "_wait_comfy_idle",
+                                  return_value=True) as idle:
             self._enqueue()
             image_jobs._drain()
         urls = [u for u, _ in posts]
@@ -192,6 +255,8 @@ class ProcessTest(_Base):
         # 队列里那一份也要按 prompt_id 删掉
         self.assertIn({"delete": ["pid"]},
                       [p for u, p in posts if u.endswith("/queue")])
+        # 中断后要等 ComfyUI 真正退场（queue_running 清空）才放行下一个任务
+        idle.assert_called_once()
 
     def test_timeout_tells_group_to_redo(self):
         with mock.patch.object(image_jobs, "wait_done",

@@ -217,6 +217,10 @@ def process(job):
         # 就是我们这一张，所以 /interrupt 是准的——这也是改成全局串行之后
         # 才敢用它（从前不知道在跑的是不是自己的图，只能干等）。
         _abort(job.prompt_id)
+        # /interrupt 是异步的：ComfyUI 要等当前节点跑完这一步才真正停下，
+        # 这期间提交的新任务只会被排进它的 pending。在这里等到 running 清空、
+        # 显存真的腾出来，才把下一个任务交出去——不靠盲等固定秒数。
+        _wait_comfy_idle()
         job.error = exc
         _notice(job)
         return
@@ -310,6 +314,53 @@ def _abort(prompt_id):
                 requests.post(COMFYUI_URL + path, json=payload, timeout=15)
         except Exception:
             log.debug("清理 ComfyUI(%s) 失败，忽略", path)
+
+
+def _wait_comfy_idle(timeout=90):
+    """等 ComfyUI 真正闲下来（queue_running 清空）再返回。
+
+    被中断的任务要等当前节点跑完才退场，早于此提交的新任务只会堆进 ComfyUI
+    的 pending——虽然它不会跟旧任务抢显存（装载被排在退场之后），但旧任务的
+    退场清理和显存回收就和新任务搅在一起，出了慢图分不清是谁的锅。这里轮询
+    到 running 清空、补一次 /free 并记一行资源状态，保证下一张从干净状态起跑。
+
+    ComfyUI 挂了也照常返回（False）——清不了就清不了，不能因为清理把队列卡死。
+    """
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            resp = requests.get(COMFYUI_URL + "/queue", timeout=10)
+            resp.raise_for_status()
+            q = resp.json()
+            if isinstance(q, dict) and not (q.get("queue_running") or []):
+                _report_and_free()
+                return True
+        except Exception:
+            log.debug("查 ComfyUI 队列失败，忽略", exc_info=True)
+        time.sleep(POLL_INTERVAL)
+    log.warning("等 ComfyUI 退场超过 %ds，放弃等待直接继续", timeout)
+    return False
+
+
+def _report_and_free():
+    """补一次 /free，并记一行显存/内存——下次再慢，一眼看出是被谁挤爆的。"""
+    try:
+        requests.post(COMFYUI_URL + "/free",
+                      json={"unload_models": True, "free_memory": True},
+                      timeout=15)
+    except Exception:
+        pass
+    try:
+        resp = requests.get(COMFYUI_URL + "/system_stats", timeout=10)
+        stats = resp.json()
+        dev = (stats.get("devices") or [{}])[0]
+        sysinfo = stats.get("system") or {}
+        g = 2 ** 30
+        log.info("ComfyUI 已空闲，显存余 %.1fGB（共 %.1fGB），内存余 %.1fGB",
+                 dev.get("vram_free", 0) / g, dev.get("vram_total", 0) / g,
+                 sysinfo.get("ram_free", 0) / g)
+    except Exception:
+        pass
 
 
 def poll_once(prompt_id):
