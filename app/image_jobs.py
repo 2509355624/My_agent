@@ -603,11 +603,51 @@ def _maybe_restart_for_clean_start(job):
     _restart_comfy()
 
 
+def _send_image_bytes(target, target_id, path):
+    """直接发一张本地文件（NAI 这种不走 ComfyUI 的图用）。"""
+    from app import qq_api
+    qq_api.send_image(target, target_id, path)
+
+
+def _process_nai(job):
+    """NAI 云端生图分支：完全不碰 ComfyUI。
+
+    图由 NovelAI 的服务器直接出（群主独立 token），worker 只负责把字节发回
+    原会话。job.workflow 在这里其实是 prompt 字符串（enqueue 时这么塞的）。
+    """
+    try:
+        from app import nai
+        png = nai.generate(job.workflow)
+    except Exception as exc:
+        job.error = exc
+        log.warning("NAI 生图失败 %s %s：%s", job.target, job.target_id, exc)
+        _notice(job)
+        return
+    job.skill_done = True
+    if job.target is None:
+        # NAI 仅限 QQ 群，正常走不到这里（generate_image 已挡 web）；保险起见
+        # 仍把图落盘，网页侧可下载。job.entry 直接放文件路径。
+        from app import image_out
+        job.entry = {"images": [image_out.save_bytes(png, "png", "nai")]}
+        return
+    try:
+        from app import image_out
+        path = image_out.save_bytes(png, "png", "nai")
+        _send_image_bytes(job.target, job.target_id, path)
+        log.info("NAI 生图完成已发回 %s %s", job.target, job.target_id)
+    except Exception as exc:
+        job.error = exc
+        _notice(job, stage="send")
+
+
 def process(job):
     """跑一个任务：提交 → 限时等出图 → 发回原会话 / 存给网页侧。
 
     独立成函数是为了能同步调用（测试直接调它，不依赖真线程）。
     """
+    # NAI 云端生图：完全不碰 ComfyUI（token 是群主独立的，图由 NovelAI 出）。
+    if job.skill == "nai":
+        return _process_nai(job)
     # 放在换渠道 /free 之前：重启成功后 _last_skill 会被清成 None（新进程里
     # 一个模型都没加载），换渠道那条就不会再打一次没用的 /free。
     _maybe_restart_for_clean_start(job)
@@ -876,7 +916,7 @@ def _reason(exc):
     return (str(exc) or type(exc).__name__)[:30]
 
 
-def _fail_text(exc, stage="submit"):
+def _fail_text(exc, stage="submit", skill=None):
     """给对方看的失败说明。
 
     超时单独给一句——它最常见，而且对方重画一次就好（重画时模型已经加载在
@@ -885,7 +925,15 @@ def _fail_text(exc, stage="submit"):
 
     stage="send" 是投递阶段挂的（图都画好了，是发回会话那步失败），跟
     ComfyUI 在不在没关系，别往它头上安。
+
+    skill="nai" 走云端 NovelAI，失败是网络/代理问题，跟 ComfyUI 完全无关——
+    绝不把「ComfyUI 没在线」甩给群友看。
     """
+    if skill == "nai":
+        if isinstance(exc, TimeoutError) or _is_unreachable(exc):
+            return ("图没画出来——连不上 NovelAI 的服务器（多半是网络或代理问题）。"
+                    "让对方稍后再试；一直连不上就让群主检查 NAI 的代理设置。")
+        return "图没画出来（NAI：%s）" % _reason(exc)
     if isinstance(exc, TimeoutError):
         return ("画超时了（超过 %d 秒没出图），已经中断这张。"
                 "麻烦重新生成一次。" % TASK_TIMEOUT)
@@ -904,7 +952,7 @@ def _notice(job, stage="submit"):
     if job.target is None:
         return
     try:
-        _send_text(job.target, job.target_id, _fail_text(job.error, stage))
+        _send_text(job.target, job.target_id, _fail_text(job.error, stage, job.skill))
     except Exception:
         log.exception("生图失败说明也发不出去 %s %s", job.target, job.target_id)
 

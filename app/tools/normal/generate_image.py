@@ -168,6 +168,22 @@ def _generate_image(prompt, skill=None, use_character=False, lora=None,
     if gate is not None:
         return gate
 
+    # NAI（NovelAI）云端生图：群主独立 token，与 ComfyUI 完全隔离。
+    # 不碰下面那套 ComfyUI 探活 / 加载 / skill：它走自己的云分支（见
+    # image_jobs._process_nai），token 只给指定群用（app/agents.nai_allowed）。
+    # 必须在 ComfyUI 探活之前就分流，否则没开 ComfyUI 的机器会被卡在探活那句。
+    if skill == "nai":
+        from app import qq_api
+        from app.agents import nai_allowed
+        target, target_id = qq_api.current_context()
+        ok, why = nai_allowed(QQ_AGENT_ID, target, target_id)
+        if not ok:
+            return ("错误：" + why + "，本次不使用 NAI。"
+                    "直接告诉对方现在用不了，别再重试。")
+        if target is None:
+            return "错误：NAI 仅支持 QQ 群使用，网页端用不了。"
+        return _enqueue_nai(prompt, target, target_id)
+
     # 图生图整体停用（_I2I_SKILLS 为空）：只要模型还试着传 source_image，就在
     # 这里当场拦住，**并且把它拉回正路**——它十有八九是看到引用图就以为要「改图」，
     # 而用户要的其实是「看图 → 反推提示词 → 文生图」。所以这句拒收的关键不是
@@ -338,6 +354,28 @@ def _generate_image(prompt, skill=None, use_character=False, lora=None,
             + "\n图片地址:\n" + "\n".join(urls))
 
 
+def _enqueue_nai(prompt, target, target_id):
+    """把一张 NAI 图排进全局串行队列（复用现有队列，见 image_jobs）。
+
+    NAI 是云端调用，也占「这一轮」的并发，跟 ComfyUI 的图混在同一条队列里
+    排队不会更慢，还能让对方看到「前面还有几张」。enqueue 的 workflow 字段
+    在这里塞的是 prompt 字符串——cloud 分支靠 skill 判断怎么用它。
+    """
+    job, reason = image_jobs.enqueue(target, target_id, prompt, skill="nai")
+    if reason is not None:
+        # 拒收时什么算力都没花，也没有孤儿图。
+        return reason
+    ahead = image_jobs.ahead_of(job)
+    if ahead > 0:
+        return ("已经排上队了（前面还有 %d 张），排到就画，"
+                "画好会自动发到群里。"
+                "不要输出图片地址，也不要说「图在下面 / 稍等」，"
+                "直接把想说的话说完就行。" % ahead)
+    return ("已经在画了，画好会自动发到群里。"
+            "不要输出图片地址，也不要说「图在下面 / 稍等」，"
+            "直接把想说的话说完就行。")
+
+
 tool = {
     "name": "generate_image",
     "description": "调用 ComfyUI 生成图片。"
@@ -369,7 +407,11 @@ tool = {
                   "或者对方只是让你看图 / 点评时直接回话。"
                   "用户真要「改这张图 / 垫图 / 把X换成Y」时，照实说改不了图，"
                   "不要硬凑；可以问清他想要什么效果，用 anima 重画一张"
-                  "（说明是新画的、不是改他那张）。",
+                  "（说明是新画的、不是改他那张）。"
+                  "【nai / NovelAI】**仅限管理员为特定群开通 NAI 后**才能用：调用时 "
+                  "skill 传 nai（**只传 prompt，其它参数都不要传**），图由群主自己的 "
+                  "NovelAI 账号在云端出，跟本机 ComfyUI 无关。本群没开通就传了会被直接"
+                  "拒绝，对方只要一张图的话照实说这个渠道本群用不了、让他去找群主开。",
     # QQ 机器人看不到角色底模这套：Sumire 的角色描述只给网页端用。
     "description_overrides": {
         QQ_AGENT_ID:
@@ -399,7 +441,11 @@ tool = {
             "你要做的是**照它反推出提示词，用 anima 画一张新的**，"
             "或者对方只是让你看图 / 点评时直接回话。"
             "对方真要「改这张图 / 垫图 / 把X换成Y」时，照实说改不了图，不要硬凑；"
-            "可以问清他想要什么效果，用 anima 重画一张（说明是新画的、不是改他那张）。",
+            "可以问清他想要什么效果，用 anima 重画一张（说明是新画的、不是改他那张）。"
+            "【nai / NovelAI】**仅限管理员为特定群开通 NAI 后**才能用：调用时 "
+            "skill 传 nai（**只传 prompt，其它参数都不要传**），图由群主自己的 "
+            "NovelAI 账号在云端出，跟本机 ComfyUI 无关。本群没开通就传了会被直接"
+            "拒绝，对方只要一张图的话照实说这个渠道本群用不了、让他去找群主开。",
     },
     "hidden_params": {QQ_AGENT_ID: ["use_character"]},
     "function": _generate_image,

@@ -613,6 +613,8 @@ def get_agent_sessions(agent_id):
     settings = agent_store.load_settings(aid)
     muted = set(settings.get("interject_muted") or [])
     img_muted = set(settings.get("image_gen_muted") or [])
+    nai_groups = set(str(x) for x in (settings.get("nai_groups") or []))
+    nai_enabled = bool(settings.get("nai_enabled"))
     overrides = settings.get("interject_cooldown_overrides") or {}
     chance_ov = settings.get("interject_chance_overrides") or {}
     gap_ov = settings.get("interject_min_gap_overrides") or {}
@@ -621,6 +623,7 @@ def get_agent_sessions(agent_id):
         if item["kind"] == "group":
             item["interject"] = item["target_id"] not in muted
             item["image_gen"] = item["target_id"] not in img_muted
+            item["nai"] = item["target_id"] in nai_groups
             ov = overrides.get(str(item["target_id"]))
             item["cooldown_override"] = ov if isinstance(ov, (int, float)) else None
             ch = chance_ov.get(str(item["target_id"]))
@@ -644,6 +647,7 @@ def get_agent_sessions(agent_id):
         priv_wl = [str(x) for x in (QQ_WHITELIST_USERS or [])]
     return jsonify({"sessions": items, "names_ok": names_ok, "agent": aid,
                     "image_gen_on": settings.get("image_gen") is not False,
+                    "nai_enabled": nai_enabled,
                     # 全局发图格式（群覆盖之外的总开关）。target=None 走的就是全局那层。
                     "image_send_format":
                         agent_store.image_send_format(aid, None, None),
@@ -714,6 +718,58 @@ def set_agent_image_gen_group(agent_id, group_id):
         return jsonify({"error": "写入 settings.json 失败"}), 500
     return jsonify({"ok": True, "agent": aid, "group": str(group_id),
                     "image_gen": body["enabled"]})
+
+
+@app.route("/api/agent/<agent_id>/nai", methods=["PUT"])
+def set_agent_nai(agent_id):
+    """切该 agent 的 NAI 全局总闸（管理页「NAI·开 / 全关」）。热生效。
+
+    settings.json 的 nai_enabled 字段：True = 启用；缺省 = 关（默认关，符合
+    「默认关闭」的要求）。真正的紧急熔断在 .env 的 NAI_ENABLED。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body.get("enabled"), bool):
+        return jsonify({"error": "需要布尔字段 enabled"}), 400
+    settings = agent_store.load_settings(aid)
+    settings["nai_enabled"] = body["enabled"]
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "nai_enabled": body["enabled"]})
+
+
+@app.route("/api/agent/<agent_id>/nai/<group_id>", methods=["PUT"])
+def set_agent_nai_group(agent_id, group_id):
+    """把某个群加入 / 移出 NAI 白名单（总闸开着时才有效）。热生效。
+
+    存 settings.json 的 nai_groups：名单里的群能用群主的 NAI，不在名单的
+    不能用——这是群主「只给那个群」诉求的代码落地。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body.get("enabled"), bool):
+        return jsonify({"error": "需要布尔字段 enabled"}), 400
+    settings = agent_store.load_settings(aid)
+    groups = set(str(x) for x in (settings.get("nai_groups") or []))
+    if body["enabled"]:
+        groups.add(str(group_id))
+    else:
+        groups.discard(str(group_id))
+    settings["nai_groups"] = sorted(groups)
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "group": str(group_id),
+                    "nai": body["enabled"]})
 
 
 def _image_send_format_from_body(body):

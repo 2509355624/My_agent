@@ -12,8 +12,10 @@ from unittest import mock
 
 import app.agents as agents
 from app import image_jobs
+from app import nai
 from app import qq_api
 from app import skills
+from app import image_out
 from app.config import QQ_AGENT_ID
 from app.tools.normal import generate_image
 
@@ -1416,6 +1418,111 @@ class CleanStartTest(_Base):
         """
         self.assertIn("anima_2", image_jobs.CLEAN_START_SKILLS)
         self.assertGreater(image_jobs.CLEAN_START_SKILLS["anima_2"], 5.6)
+
+
+class NaiCloudTest(_Base):
+    """NAI 云端分支：完全不碰 ComfyUI，图由 NovelAI 出，worker 发回原群。"""
+
+    def setUp(self):
+        super().setUp()
+        self.nai_calls = []
+        p = mock.patch.object(nai, "generate",
+                             lambda prompt: self.nai_calls.append(prompt)
+                             or b"PNGDATA")
+        p.start()
+        self.addCleanup(p.stop)
+        self.nai_sent = []          # qq_api.send_image 捕获（cloud 分支走这条）
+        p = mock.patch.object(qq_api, "send_image",
+                             lambda t, tid, path: self.nai_sent.append(
+                                 (t, tid, path)))
+        p.start()
+        self.addCleanup(p.stop)
+        # save_bytes 会真写盘；这里替成固定路径，测试保持密闭（不落真实文件）。
+        p = mock.patch.object(image_out, "save_bytes",
+                             lambda data, ext="png", stem="img": "/fake/nai.png")
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_nai_sends_without_comfyui(self):
+        """一张 nai：调用 NAI、写盘、发回群；ComfyUI 一点没碰。"""
+        self._enqueue(("group", "9"), wf="a cat prompt", skill="nai")
+        image_jobs._drain()
+        self.assertEqual(self.nai_calls, ["a cat prompt"])
+        self.assertEqual(len(self.nai_sent), 1)
+        # ComfyUI 那条发图 / 提交路径都没走
+        self.assertEqual(len(self.sent_images), 0)
+        self.assertEqual(image_jobs.queue_depth(), 0)
+
+    def test_nai_failure_notifies_not_sends(self):
+        """NAI 调用挂了：发一句说明，但不发图、不假装成功。"""
+        p = mock.patch.object(nai, "generate",
+                             mock.Mock(side_effect=RuntimeError("NAI 挂了")))
+        p.start()
+        self.addCleanup(p.stop)
+        self._enqueue(("group", "9"), wf="x", skill="nai")
+        image_jobs._drain()
+        self.assertEqual(len(self.nai_sent), 0)
+        self.assertTrue(any("NAI" in t for _, _, t in self.sent_texts))
+
+
+class NaiRoutingTest(unittest.TestCase):
+    """generate_image：skill=nai 的分流 + 开关判定（不动 ComfyUI）。"""
+
+    def setUp(self):
+        for target, repl in (("_qq_gate", mock.Mock(return_value=None)),
+                             ("is_cancelled", mock.Mock(return_value=False))):
+            p = mock.patch.object(generate_image, target, repl)
+            p.start()
+            self.addCleanup(p.stop)
+        for target, repl in (("_send_image", mock.Mock()),
+                             ("_send_text", mock.Mock()),
+                             ("_ensure_worker", lambda: None),
+                             ("comfy_alive", mock.Mock(return_value=True)),
+                             ("_free_vram_gb", lambda: None),
+                             ("_wait_comfy_idle", lambda timeout=90: True)):
+            p = mock.patch.object(image_jobs, target, repl)
+            p.start()
+            self.addCleanup(p.stop)
+        p = mock.patch.object(image_jobs.Job, "wait",
+                             lambda self, poll=2: self.entry)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _call(self, skill, ctx, nai_ok=True, nai_reason=""):
+        with mock.patch.object(agents, "nai_allowed",
+                               return_value=(nai_ok, nai_reason)), \
+                mock.patch.object(qq_api, "current_context", return_value=ctx), \
+                mock.patch.object(image_jobs, "enqueue",
+                                 return_value=(mock.Mock(done=mock.Mock()),
+                                               None)) as eq, \
+                mock.patch.object(image_jobs, "ahead_of", return_value=0):
+            out = generate_image.tool["function"]("a cat", skill=skill)
+            return out, eq
+
+    def test_nai_refused_when_not_allowed(self):
+        out, eq = self._call("nai", ("group", "9"), nai_ok=False,
+                            nai_reason="本群未开通 NAI")
+        self.assertIn("本群未开通 NAI", out)
+        self.assertFalse(eq.called)              # 没入队
+
+    def test_nai_enqueues_when_allowed(self):
+        out, eq = self._call("nai", ("group", "9"), nai_ok=True)
+        self.assertIn("已经在画了", out)
+        self.assertTrue(eq.called)
+        _, kwargs = eq.call_args
+        self.assertEqual(kwargs.get("skill"), "nai")
+
+    def test_nai_web_refused(self):
+        out, eq = self._call("nai", (None, None), nai_ok=True)
+        self.assertIn("仅支持 QQ 群", out)
+        self.assertFalse(eq.called)
+
+    def test_description_still_a_string(self):
+        # 改 description 容易把隐式字符串拼接弄成 tuple（见模块注释）。
+        self.assertIsInstance(generate_image.tool["description"], str)
+        self.assertIsInstance(
+            generate_image.tool["description_overrides"][QQ_AGENT_ID], str)
+        self.assertIn("nai", generate_image.tool["description"])
 
 
 if __name__ == "__main__":

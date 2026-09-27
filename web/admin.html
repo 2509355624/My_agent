@@ -234,6 +234,12 @@
             单独某个群不想让它画，用群行里的「生图」开关。</span>
         </div>
         <div class="sess-foot" style="margin-bottom: 8px;">
+          <button class="toggle" id="naiAll">NAI·关</button>
+          <span class="hint">NAI（群主独立的 NovelAI 账号）全局总闸：开 = 允许给白名单里的群用；
+            关 = 全部群都不走 NAI。单独的群要「开 NAI」仍用群行里的「NAI」开关，且全局必须开着才生效。
+            群主的要求是只给特定群用，所以默认全关、按需加白名单。</span>
+        </div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
           <button class="toggle" id="imgFmtAll">发图格式·JPG</button>
           <span class="hint">QQ 里发出去的图用 JPG（省流量）还是 PNG（无损）。
             PNG 单张约 1.4~2.2 MB，比 JPG（约 0.18 MB）大十倍，群里发得慢也更占相册。
@@ -697,6 +703,14 @@ function renderSessions() {
       ig.addEventListener('click', () => toggleImageGen(s, ig));
       row.appendChild(ig);
 
+      // 「NAI」开关：把群加入 / 移出群主的 NovelAI 白名单（全局总闸优先）。
+      // 群主要求只给特定群用，所以这是个「加白名单」语义，不在名单就不可用。
+      const ng = document.createElement('button');
+      ng.className = 'toggle' + (s.nai ? ' on' : '');
+      ng.textContent = s.nai ? 'NAI·开' : 'NAI·关';
+      ng.addEventListener('click', () => toggleNai(s, ng));
+      row.appendChild(ng);
+
       // 「格式」按钮：这个群的图发 jpg 还是 png；没单独设过就跟全局。
       addImageFmtButton(s, row);
 
@@ -761,6 +775,7 @@ async function loadSessions() {
     sessAgents = d.session_prompt_agents || {};
     renderSessions();
     renderImageGenAll(d.image_gen_on !== false);
+    renderNaiAll(d.nai_enabled === true);
     renderImageFmtAll(d.image_send_format);
     privState.on = d.private_enable !== false;
     privState.wlOn = d.private_whitelist_on !== false;
@@ -920,6 +935,54 @@ async function toggleImageGen(s, btn) {
     renderSessions();
     sessStatus('「' + name + '」已' + (target ? '开启' : '关闭')
       + '生图，立即生效', 'ok');
+  } catch (e) {
+    sessStatus(e.message, 'err');
+    btn.disabled = false;
+  }
+}
+
+function renderNaiAll(on) {
+  const btn = $('naiAll');
+  btn.className = 'toggle' + (on ? ' on' : '');
+  btn.textContent = on ? 'NAI·开' : 'NAI·关';
+  btn.disabled = false;
+}
+
+async function toggleNaiAll() {
+  const btn = $('naiAll');
+  const target = !btn.className.includes(' on');   // 当前状态取反
+  if (!target && !confirm('一键关闭全部 NAI？\n\n'
+      + '所有群都不再走群主的 NovelAI（群行里的「NAI」开关也会失效）。')) return;
+  btn.disabled = true;
+  try {
+    await api('/api/agent/' + encodeURIComponent(cur) + '/nai',
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: target }) });
+    renderNaiAll(target);
+    sessStatus('NAI 已' + (target ? '开启' : '全部关闭') + '，立即生效', 'ok');
+  } catch (e) {
+    sessStatus(e.message, 'err');
+    btn.disabled = false;
+  }
+}
+
+async function toggleNai(s, btn) {
+  const target = !s.nai;
+  const name = s.name || s.target_id;
+  if (!target && !confirm('把「' + name + '」移出 NAI 白名单？\n\n'
+      + '它在这个群里再调 NAI 会被拒绝（全局总闸不受影响）。')) return;
+  btn.disabled = true;
+  try {
+    await api('/api/agent/' + encodeURIComponent(cur) + '/nai/'
+      + encodeURIComponent(s.target_id),
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: target }) });
+    s.nai = target;
+    renderSessions();
+    sessStatus('「' + name + '」已' + (target ? '加入' : '移出')
+      + 'NAI 白名单，立即生效', 'ok');
   } catch (e) {
     sessStatus(e.message, 'err');
     btn.disabled = false;
@@ -1262,6 +1325,7 @@ $('reload').addEventListener('click', () => {
 });
 $('sessReload').addEventListener('click', loadSessions);
 $('imgGenAll').addEventListener('click', toggleImageGenAll);
+$('naiAll').addEventListener('click', toggleNaiAll);
 $('imgFmtAll').addEventListener('click', toggleImageFmtAll);
 $('privAll').addEventListener('click', togglePrivateAll);
 $('privWlOn').addEventListener('click', togglePrivateWlOn);

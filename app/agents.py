@@ -20,7 +20,7 @@ import json
 import os
 import re
 
-from app.config import (AGENTS_DIR, DEFAULT_AGENT_ID, PROVIDERS,
+from app.config import (AGENTS_DIR, DEFAULT_AGENT_ID, NAI_ENABLED, PROVIDERS,
                         QQ_INTERJECT_COOLDOWN, QQ_INTERJECT_MIN_GAP)
 
 
@@ -134,6 +134,28 @@ def image_gen_allowed(agent_id, target, target_id):
         return False, "生图功能已被管理员全局关闭"
     if target == "group" and str(target_id) in (s.get("image_gen_muted") or []):
         return False, "生图功能在本群已被管理员关闭"
+    return True, ""
+
+
+def nai_allowed(agent_id, target, target_id):
+    """NAI（NovelAI，群主独立 token）能不能用。返回 (True, "") 或 (False, 理由)。
+
+    三层闸（settings.json 热生效，不用重启）：
+    - config.NAI_ENABLED：.env 硬总闸（默认开，纯紧急熔断用）；
+    - nai_enabled：settings 全局总闸（默认关，管理页开）；
+    - nai_groups：单群白名单（默认空），只有名单里的群能用。
+    仅限群聊（target == "group"）；私聊 / 网页一律不可用——这是群主的点名要求：
+    他的 token 只给「那个群」，别的群连碰的机会都没有。
+    """
+    if not NAI_ENABLED:
+        return False, "NAI 已被全局紧急关闭（.env NAI_ENABLED=false）"
+    s = load_settings(agent_id)
+    if not s.get("nai_enabled"):
+        return False, "NAI 未在本 agent 启用（管理页全局开关未开）"
+    if target != "group":
+        return False, "NAI 仅限群聊使用"
+    if str(target_id) not in (s.get("nai_groups") or []):
+        return False, "本群未开通 NAI（管理页未把本群加入白名单）"
     return True, ""
 
 

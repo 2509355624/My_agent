@@ -132,3 +132,17 @@ def prepare_for_send(filename, fmt=DEFAULT_FORMAT):
     except Exception as exc:
         log.warning("转 %s 失败，按原图发出 %s：%s", fmt, filename, exc)
         return _fallback(filename)
+
+
+def save_bytes(data, ext=DEFAULT_FORMAT, stem="img"):
+    """把一段字节（如 NAI 返回的 PNG）写到 temp，返回本地路径。
+
+    与 prepare_for_send 同目录、同过期清理——NapCat 拉取 file:// 是异步的，
+    删早了会发不出去。返回的路径可直接交给 qq_api.send_image。
+    """
+    d = _out_dir()
+    _sweep(d)
+    dst = os.path.join(d, "%s_%s.%s" % (stem, uuid.uuid4().hex[:8], ext))
+    with open(dst, "wb") as f:
+        f.write(data)
+    return dst

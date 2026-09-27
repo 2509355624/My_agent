@@ -316,6 +316,22 @@ DISABLED_IMAGE_SKILLS = [s.strip() for s in
                                    "qwen_image_v1,krea2").split(",")
                          if s.strip()]
 
+# ─── NovelAI（群主独立生图 token）────────────────────
+# NAI 是一个**云端**动漫生图 API，跟本机 ComfyUI 完全独立：token 是群主自己的，
+# 只在管理员为指定群开通后才可用（见 app/agents.nai_allowed），不共享给别的群。
+#
+# 为什么单独配代理：本机常驻 Clash 把代理写进了**注册表**，而项目里所有出网口
+# 一律 trust_env=False（为了 localhost 的 ComfyUI 不被劫持）。NAI 是外网，必须
+# 走代理——这里单独读注册表 / 显式代理，不跟 ComfyUI 那套混在一起。
+#
+# NAI_API_KEY：群主给的持久 token，只放 .env（已在 .gitignore），绝不进仓库。
+# NAI_PROXY：显式代理地址；留空 = 自动读本机注册表系统代理（用户开 VPN 后写在这）。
+# NAI_ENABLED：.env 级的硬总闸（默认开），纯紧急熔断用——真正控制「开不开」的
+#   是管理页 settings.json 的 nai_enabled（默认关）+ 单群白名单 nai_groups。
+NAI_API_KEY = os.getenv("NAI_API_KEY", "")
+NAI_PROXY = os.getenv("NAI_PROXY", "")
+NAI_ENABLED = os.getenv("NAI_ENABLED", "true").lower() not in ("0", "false", "no", "")
+
 # ─── Agent ──────────────────────────────────────────
 
 AGENT_PORT = int(os.getenv("AGENT_PORT", "5174"))
