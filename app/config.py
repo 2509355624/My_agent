@@ -412,3 +412,8 @@ NOTIFY_PUSHPLUS_TOKEN = os.getenv("PUSHPLUS_TOKEN", "").strip()
 # NapCat 需要人工扫码时会重写这个文件，它的修改时间就是掉线时刻。
 NOTIFY_QRCODE_PATH = os.getenv(
     "NAPCAT_QRCODE_PATH", r"D:\AI\NapCat\napcat\cache\qrcode.png").strip()
+
+# 静默告警：连续这么多小时零收发且探活正常 → 推一条「疑似冻结」。
+# 抓的是「冻而不掉」（2026-09-27 事故：协议层活着、消息同步停摆，二维码
+# 机制完全无感）。半夜安静群会误报，用户拍板宁可误报。0 = 关闭。
+NOTIFY_SILENCE_HOURS = float(os.getenv("NOTIFY_SILENCE_HOURS", "4"))

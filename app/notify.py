@@ -19,7 +19,8 @@ import threading
 import time
 import urllib.request
 
-from app.config import NOTIFY_PUSHPLUS_TOKEN, NOTIFY_QRCODE_PATH
+from app.config import (NOTIFY_PUSHPLUS_TOKEN, NOTIFY_QRCODE_PATH,
+                        NOTIFY_SILENCE_HOURS)
 
 log = logging.getLogger("notify")
 
@@ -39,6 +40,21 @@ _lock = threading.Lock()
 _reason_title = ""
 _reason_desc = ""
 _started = False
+
+# 静默告警状态：最后一次收发消息的时刻 + 本轮静默期是否已推过。
+# 启动即视为「刚有活动」——进程刚起来不该立刻告警。
+_last_activity = time.time()
+_silence_alerted = False
+
+
+def note_activity():
+    """qq_bot 每收到/发出一条消息就调一下（自己发的消息 NapCat 也会上报，
+    所以只挂在收消息的入口就同时覆盖了收和发）。恢复活动会重置静默告警，
+    下一次静默满时长可以再报。"""
+    global _last_activity, _silence_alerted
+    with _lock:
+        _last_activity = time.time()
+        _silence_alerted = False
 
 
 def enabled():
@@ -147,6 +163,35 @@ def push_offline(qr_path=None, reason_title="", reason_desc=""):
     return ok, text[:200]
 
 
+def push_silence(hours):
+    """推一条「疑似冻结」到手机。抓的是冻而不掉：协议层活着、消息同步停摆
+    （2026-09-27 事故，二维码机制完全无感）。返回 (ok, 说明)。"""
+    if not enabled():
+        return False, "未配置 PUSHPLUS_TOKEN"
+    payload = {
+        "token": NOTIFY_PUSHPLUS_TOKEN,
+        "title": "QQ 机器人疑似冻结",
+        "content": "<p>%s 已连续 %.0f 小时没有任何收发，但协议探活正常。</p>"
+                   "<p>可能是消息同步停摆（冻而不掉），也可能是群里真的没人说话。</p>"
+                   "<p>去群里喊它一声试试；真没反应就重启 NapCat（大概率要扫码，"
+                   "二维码会自动推过来）。</p>"
+                   % (time.strftime("%m-%d %H:%M:%S"), hours),
+        "template": "html",
+    }
+    try:
+        status, text = _post(payload)
+    except Exception as e:
+        log.warning("静默告警推送异常：%s", e)
+        return False, repr(e)
+    ok = False
+    try:
+        ok = json.loads(text).get("code") == 200
+    except (ValueError, TypeError):
+        pass
+    log.info("静默告警推送%s：%s %s", "成功" if ok else "失败", status, text[:200])
+    return ok, text[:200]
+
+
 class _Watcher:
     """盯二维码文件的轮询器。
 
@@ -180,14 +225,37 @@ class _Watcher:
     def tick(self, now=None):
         """轮询一次；文件变了且过了冷却就推。返回是否推了。"""
         now = time.time() if now is None else now
+        silence_pushed = self._check_silence(now)
         cur = _mtime(self.path)
         if cur is None or cur == self.last_mtime:
-            return False
+            return silence_pushed
         self.last_mtime = cur
         if now - self.last_push < self.cooldown:
             log.info("二维码刷新了，但 %d 秒内推过，跳过", self.cooldown)
+            return silence_pushed
+        return self._push(now) or silence_pushed
+
+    def _check_silence(self, now):
+        """连续 NOTIFY_SILENCE_HOURS 小时零收发且探活正常 → 推「疑似冻结」。
+
+        探活失败说明是真掉线，那是二维码路径的活，这里不抢。一个静默期内
+        只推一次（恢复活动由 note_activity 重置）。宁可误报——半夜安静的
+        群收到一条「疑似冻结」的代价，远小于真冻结无人知晓。
+        """
+        global _silence_alerted
+        if NOTIFY_SILENCE_HOURS <= 0:
             return False
-        return self._push(now)
+        with _lock:
+            last, alerted = _last_activity, _silence_alerted
+        if alerted or now - last < NOTIFY_SILENCE_HOURS * 3600:
+            return False
+        if not _online():
+            return False
+        with _lock:
+            _silence_alerted = True
+        log.warning("已静默 %.1f 小时但探活正常，推疑似冻结告警",
+                    (now - last) / 3600)
+        return push_silence((now - last) / 3600)
 
     def _push(self, now=None):
         t, d = _take_reason()

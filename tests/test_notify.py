@@ -244,5 +244,102 @@ class DispatchOfflineNoticeTest(unittest.TestCase):
         self.assertEqual(notify._take_reason(), ("", ""))
 
 
+class SilenceAlertTest(unittest.TestCase):
+    """静默告警：连续 N 小时零收发 + 探活正常 → 推「疑似冻结」。
+
+    抓的是「冻而不掉」（2026-09-27 事故：协议层活着、消息同步停摆，
+    二维码机制完全无感）。一轮静默只推一次，恢复活动后重置。
+    """
+
+    def setUp(self):
+        self.qr = _TmpQR(self)
+        for name, val in (("NOTIFY_PUSHPLUS_TOKEN", "tok"),
+                          ("NOTIFY_QRCODE_PATH", self.qr.path),
+                          ("NOTIFY_SILENCE_HOURS", 4)):
+            p = mock.patch.object(notify, name, val)
+            p.start()
+            self.addCleanup(p.stop)
+        self.sent = []
+        p = mock.patch.object(notify, "_post", _post_capture(self.sent))
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(notify, "_online", lambda: True)
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(notify, "_last_activity", 0.0)
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(notify, "_silence_alerted", False)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_silent_and_alive_pushes_once(self):
+        """静默满 4 小时 + 在线 → 推一条；同一轮静默内不重复推。"""
+        w = notify._Watcher(self.qr.path)
+        self.assertTrue(w.tick(now=5 * 3600))
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("疑似冻结", self.sent[0]["title"])
+        self.assertFalse(w.tick(now=5 * 3600 + 600))
+        self.assertEqual(len(self.sent), 1)
+
+    def test_recent_activity_no_push(self):
+        """刚有活动不久 → 不推。"""
+        w = notify._Watcher(self.qr.path)
+        self.assertFalse(w.tick(now=2 * 3600))
+        self.assertEqual(self.sent, [])
+
+    def test_offline_does_not_push_silence(self):
+        """探活失败 = 真掉线，二维码路径负责，静默告警不抢。"""
+        with mock.patch.object(notify, "_online", lambda: False):
+            w = notify._Watcher(self.qr.path)
+            self.assertFalse(w.tick(now=9 * 3600))
+        self.assertEqual(self.sent, [])
+
+    def test_activity_resets_alert(self):
+        """恢复活动后重置：下一次静默满时长可以再报。"""
+        w = notify._Watcher(self.qr.path)
+        self.assertTrue(w.tick(now=5 * 3600))
+        notify.note_activity()                       # 活动了
+        self.assertFalse(w.tick(now=5 * 3600 + 600))
+        # 再静默满 4 小时，又能报
+        p = mock.patch.object(notify, "_last_activity", 5 * 3600)
+        p.start()
+        self.addCleanup(p.stop)
+        self.assertTrue(w.tick(now=10 * 3600))
+        self.assertEqual(len(self.sent), 2)
+
+    def test_zero_disables(self):
+        with mock.patch.object(notify, "NOTIFY_SILENCE_HOURS", 0):
+            w = notify._Watcher(self.qr.path)
+            self.assertFalse(w.tick(now=9 * 3600))
+        self.assertEqual(self.sent, [])
+
+
+class DispatchHeartbeatTest(unittest.TestCase):
+    """qq_bot 收到消息事件要打静默告警的心跳（收发共用这一个入口）。"""
+
+    def setUp(self):
+        from app import qq_bot
+        self.qq_bot = qq_bot
+        self.bot = qq_bot.QQBot()
+
+    def test_message_event_notes_activity(self):
+        # 心跳打点在判定之前；关掉接话免得走到 create_task（测试没有事件循环）
+        with mock.patch.object(self.qq_bot.notify, "note_activity") as na, \
+             mock.patch.object(self.qq_bot.interject, "enabled",
+                               lambda: False):
+            self.bot._dispatch(json.dumps({
+                "post_type": "message", "message_type": "group",
+                "group_id": 123, "user_id": 456, "self_id": 999,
+                "sender": {"nickname": "张三"}, "message": "在吗"}))
+        na.assert_called_once()
+
+    def test_non_message_event_no_heartbeat(self):
+        with mock.patch.object(self.qq_bot.notify, "note_activity") as na:
+            self.bot._dispatch(json.dumps({
+                "post_type": "meta_event", "meta_event_type": "heartbeat"}))
+        na.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

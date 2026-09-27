@@ -875,6 +875,9 @@ class QQBot:
             target, target_id = "private", str(ev.get("user_id", ""))
         else:
             return
+        # 静默告警的心跳：收到的消息（含 NapCat 上报的自己发言 = 发送）都算
+        # 活动。恢复活动会重置「疑似冻结」告警，见 app/notify.py。
+        notify.note_activity()
         if not target_id or target_id == "0":
             return
 
