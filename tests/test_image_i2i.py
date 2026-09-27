@@ -208,22 +208,6 @@ class UploadTest(unittest.TestCase):
         self.assertIn("传不进 ComfyUI", str(cm.exception))
 
 
-class DenoiseTest(unittest.TestCase):
-    def test_default(self):
-        self.assertEqual(gi._denoise_value(None), "0.60")
-        self.assertEqual(gi._denoise_value(""), "0.60")
-        self.assertEqual(gi._denoise_value("  "), "0.60")
-
-    def test_values(self):
-        self.assertEqual(gi._denoise_value(0.45), "0.45")
-        self.assertEqual(gi._denoise_value("0.8"), "0.80")
-
-    def test_out_of_range_and_junk(self):
-        for bad in (0, -1, 1.5, "abc", "high"):
-            with self.assertRaises(ValueError):
-                gi._denoise_value(bad)
-
-
 class LoadWorkflowTest(unittest.TestCase):
     def test_missing_returns_none(self):
         self.assertIsNone(load_workflow(os.path.join("skills", "nope",
@@ -249,8 +233,8 @@ class LoadWorkflowTest(unittest.TestCase):
 class _I2IRunner(object):
     """跑 generate_image 本体，拦住提交那一刻看它到底送了什么。
 
-    故意不是 TestCase——两个 i2i 用例类（垫图重绘 / qwen 编辑）共用这套拦截，
-    直接继承 TestCase 的话基类的用例会在子类里再跑一遍。
+    故意不是 TestCase——两个 i2i 用例类（只留 qwen 的拒收 / qwen 编辑）共用这套
+    拦截，直接继承 TestCase 的话基类的用例会在子类里再跑一遍。
     """
 
     KEY = ("group", 999001)
@@ -291,7 +275,7 @@ class _I2IRunner(object):
 
 
 class I2IFlowTest(_I2IRunner, unittest.TestCase):
-    """anima / image_gen_v1 的垫图重绘：denoise 是主角，走 LoadImage→VAEEncode。"""
+    """图生图只留 qwen：anima / image_gen_v1 / krea2 传了当场拒，不静默退化。"""
 
     def test_default_call_is_still_text2img(self):
         out, wf = self._run(prompt="1girl, solo")
@@ -300,52 +284,18 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
         self.assertNotIn("24", wf)
         self.assertEqual(wf["4"]["inputs"]["text"], "@kibro, 1girl, solo")
 
-    def test_anima_switches_to_i2i_workflow(self):
-        p1, p2, p3 = self._source_ok()
-        with p1, p2, p3:
-            out, wf = self._run(prompt="cherry blossoms", skill="anima",
-                                source_image="1")
-        self.assertIn("已经在画了", out)
-        self.assertIn("233 发的图", out)
-        self.assertNotIn("9", wf)                       # 空 latent 被顶掉了
-        self.assertEqual(wf["25"]["class_type"], "VAEEncode")
-        self.assertEqual(wf["24"]["inputs"]["image"], "i2isrc_x.png")
-        self.assertEqual(wf["2"]["inputs"]["denoise"], 0.6)
-        # 图生图不做双采样：第二段（LatentUpscaleBy 1.2 → 换 anima13 精修）
-        # 已删。源图本来就大（长边 1216），再叠一段必然爆显存。
-        self.assertNotIn("18", wf)
-        self.assertNotIn("19", wf)
-        self.assertNotIn("20", wf)
-        self.assertEqual(wf["3"]["inputs"]["samples"][0], "2")   # 解码直吃第一段
-        # 种子是「带引号的数字串」——load_skill 的 __SEED__ 预处理留下的形态，
-        # 既有的文生图一直这么提交，ComfyUI 会转成 INT。这里只钉「换了新种子」。
-        self.assertTrue(str(wf["2"]["inputs"]["seed"]).isdigit())
-        self.assertEqual(wf["4"]["inputs"]["text"],
-                         "@kibro, cherry blossoms")
+    def test_anima_is_no_longer_an_i2i_channel(self):
+        """垫图重绘已下线：anima 带 source_image 直接拒，绝不退化成文生图。"""
+        out, wf = self._run(prompt="x", skill="anima", source_image="1")
+        self.assertIn("支持图生图", out)
+        self.assertIn("anima", out)
+        self.assertEqual(wf, {})
 
-    def test_denoise_parameter_is_injected(self):
-        p1, p2, p3 = self._source_ok()
-        with p1, p2, p3:
-            _, wf = self._run(prompt="x", skill="anima",
-                              source_image="2", denoise=0.85)
-        self.assertEqual(wf["2"]["inputs"]["denoise"], 0.85)
-
-    def test_sd_i2i_keeps_base_and_loras(self):
-        p1, p2, p3 = self._source_ok()
-        with p1, p2, p3:
-            _, wf = self._run(prompt="night city", skill="image_gen_v1",
-                              source_image="1")
-        self.assertTrue(wf["1"]["inputs"]["ckpt_name"]
-                        .endswith("v80.safetensors"))
-        self.assertEqual(wf["7"]["class_type"], "LoadImage")
-        self.assertEqual(wf["9"]["inputs"]["denoise"], 0.6)
-        self.assertEqual(wf["2"]["inputs"]["lora_name"],
-                         "add_contrast_XL.safetensors")
-        self.assertIn("night city", wf["5"]["inputs"]["text"])
-        # 也只有一次采样：图生图这条路不叠第二段
-        samplers = [n for n in wf.values()
-                    if n.get("class_type") == "KSampler"]
-        self.assertEqual(len(samplers), 1)
+    def test_image_gen_v1_is_no_longer_an_i2i_channel(self):
+        out, wf = self._run(prompt="x", skill="image_gen_v1", source_image="1")
+        self.assertIn("支持图生图", out)
+        self.assertIn("image_gen_v1", out)
+        self.assertEqual(wf, {})
 
     def test_krea2_is_refused(self):
         out, wf = self._run(prompt="x", skill="krea2", source_image="1")
@@ -360,22 +310,12 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
         self.assertEqual(out, "这儿没有图")
         self.assertEqual(wf, {})
 
-    def test_bad_denoise_is_caught_before_upload(self):
-        touched = []
-        with mock.patch.object(
-                comfy_src, "resolve",
-                lambda spec: (touched.append(spec), (b"R", ""))[1]):
-            out, wf = self._run(prompt="x", skill="anima",
-                                source_image="1", denoise="9")
-        self.assertIn("denoise", out)
-        self.assertEqual(touched, [])
-        self.assertEqual(wf, {})
-
 
 class QwenI2ITest(_I2IRunner, unittest.TestCase):
-    """qwen 图生图：默认渠道、按指令改、不吃 denoise。
+    """qwen 图生图：唯一渠道、按指令改、不吃 denoise。
 
-    走的是「参考图直进文本编码器」那条路，跟 anima 的 VAEEncode 垫图链完全不同。
+    走的是「参考图直进文本编码器」那条路，跟已下线的 anima 垫图链
+    （LoadImage→VAEEncode）完全不同。
     """
 
     def _qwen(self, **kw):
@@ -413,7 +353,7 @@ class QwenI2ITest(_I2IRunner, unittest.TestCase):
         self.assertEqual(wf["30"]["inputs"]["denoise"], 1.0)
 
     def test_junk_denoise_is_ignored_not_fatal(self):
-        """anima 那边 denoise 写错会当场拒；qwen 不认它，不该因此失败。"""
+        """垫图重绘下线后 denoise 已无渠道消费，写错也不该让 qwen 失败。"""
         out, wf = self._qwen(prompt="x", source_image="1", denoise="随便")
         self.assertIn("已经在画了", out)
         self.assertEqual(wf["30"]["inputs"]["denoise"], 1.0)

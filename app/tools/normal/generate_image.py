@@ -12,27 +12,20 @@ from app.config import COMFYUI_URL, QQ_AGENT_ID
 from app.skills import load_skill, load_workflow
 
 
-# 支持图生图的 skill。krea2 的工作流结构不同（单一 unet + 一个 lora 槽），传了
-# source_image 直接拒，绝不静默退化成文生图——用户以为在改自己那张图，实际拿到
-# 凭空画的一张。
+# 支持图生图的 skill。**只留 qwen**（2026-09-27 用户定）：Qwen-Image 2.1 原生
+# 图生图，按指令改图（把衣服换成红色、背景换成夜景），prompt 写「要改成什么样」。
 #
-# 两条路的能力差得很远，别混为一谈：
-#   qwen_image_v1   Qwen-Image 2.1 原生图生图，**按指令改图**（把衣服换成红色、
-#                   背景换成夜景），prompt 写「要改成什么样」。
-#   anima / image_gen_v1  垫图重绘：把源图 VAEEncode 成 latent，用 denoise 控制
-#                   保留多少原图。做不到指令级修改，只能「以这张为底重画一张」。
-_I2I_SKILLS = ("qwen_image_v1", "anima", "image_gen_v1")
+# anima / image_gen_v1 那套「垫图重绘」（源图 VAEEncode 成 latent + denoise 控制
+# 保留多少原图）已下线——用户嫌效果一般，不如 qwen 直接。krea2 的工作流结构本来
+# 就不同（单一 unet + 一个 lora 槽）。这几个传了 source_image 一律直接拒，**绝不
+# 静默退化成文生图**：用户以为在改自己那张图，实际拿到凭空画的一张。
+_I2I_SKILLS = ("qwen_image_v1",)
 
-# 没点名 skill 时的图生图默认渠道。用户明确要过：图生图一律优先 qwen。
+# 没点名 skill 时的图生图渠道（当前只有这一个）。
 I2I_DEFAULT_SKILL = "qwen_image_v1"
 
 # 没点名 skill 时的文生图默认渠道（历史行为，不动）。
 T2I_DEFAULT_SKILL = "anima"
-
-# 图生图默认重绘强度：0.6 落在「构图保留、画风明显换掉」的位置（本机 krea2
-# 的图生图用 0.55，同一量级）。模型可按用户的话上下调。**只对垫图重绘那两个
-# 渠道有效**——qwen 是编辑模型，没有这个旋钮，见下面的 denoise 分支。
-I2I_DEFAULT_DENOISE = 0.6
 
 
 # ─── QQ 侧生图开关 ───────────────────────────────────
@@ -158,25 +151,12 @@ def _apply_loras(workflow, lora_str):
     return None
 
 
-def _denoise_value(raw):
-    """把 denoise 参数变成写进工作流的数值字符串。
-
-    不填就用默认值；填了必须落在一个说得过去的位置——0 等于原图不动、
-    低于 0.2 基本看不出改动，都是白白占一次显卡，不如让模型把话说清楚。
-    """
-    if raw is None or str(raw).strip() == "":
-        return "%.2f" % I2I_DEFAULT_DENOISE
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        raise ValueError("denoise 要填数字（0.05~1.0），收到：" + str(raw))
-    if not 0.05 <= value <= 1.0:
-        raise ValueError("denoise 要落在 0.05~1.0 之间，收到：" + str(raw))
-    return "%.2f" % value
-
-
 def _generate_image(prompt, skill=None, use_character=False, lora=None,
                     source_image="", denoise=None):
+    # denoise：垫图重绘（anima / image_gen_v1）下线后已经没有渠道消费它了。
+    # 签名里留着只为兜住模型手滑传的参数——删掉的话 execute_tool 的
+    # fn(**args) 会抛 TypeError，被包成「工具执行失败」，模型就以为工具坏了。
+
     # 提交前先看一眼：已经中断就别再往 ComfyUI 队列里塞新任务了
     if is_cancelled():
         return "已中断：用户取消了本次生成。"
@@ -202,24 +182,18 @@ def _generate_image(prompt, skill=None, use_character=False, lora=None,
     if not skill_data or not skill_data["workflow"]:
         return "错误: 找不到 Skill '" + skill + "'"
 
-    # 图生图：给了源图就换成垫图工作流，并先把源图送进 ComfyUI 的 input
+    # 图生图：给了源图就换成图生图工作流，并先把源图送进 ComfyUI 的 input
     # 目录。取图 / 缩放 / 上传任何一步失败都当场返回，**不退回文生图**。
     workflow = skill_data["workflow"]
     source_note, denoise_txt, uploaded = "", "", ""
     if is_i2i:
         if skill not in _I2I_SKILLS:
-            return ("错误: 只有 qwen_image_v1 / anima / image_gen_v1 支持图生图，"
+            return ("错误: 只有 qwen_image_v1 支持图生图，"
                     + skill + " 不行。去掉 source_image，按文生图重来。")
-        if skill == I2I_DEFAULT_SKILL:
-            # Qwen-Image 2.1 的图生图是「按指令改」：官方模板里 denoise 就是
-            # 1.0，没有「保留多少原图」这个旋钮——要改多少，写在 prompt 里。
-            # 模型传了 denoise 也不认，免得它以为调低就是「只微调」。
-            denoise_txt = "1.00"
-        else:
-            try:
-                denoise_txt = _denoise_value(denoise)
-            except ValueError as e:
-                return "错误: " + str(e)
+        # Qwen-Image 2.1 的图生图是「按指令改」：官方模板里 denoise 就是
+        # 1.0，没有「保留多少原图」这个旋钮——要改多少，写在 prompt 里。
+        # 模型传了 denoise 也不认，免得它以为调低就是「只微调」。
+        denoise_txt = "1.00"
         i2i = load_workflow(
             os.path.join(skill_data["path"], "workflow_i2i.json"))
         if not i2i:
@@ -333,11 +307,13 @@ tool = {
     "name": "generate_image",
     "description": "调用 ComfyUI 生成图片。"
                   "【默认 Skill】文生图默认 anima（Anima 2B 动漫模型，双段精修，一次一张），"
-                  "图生图默认 qwen_image_v1（见下面【图生图】）—— 不传 skill 就按这两条走，"
+                  "图生图只走 qwen_image_v1（见下面【图生图】）—— 不传 skill 就按这两条走，"
                   "prompt 只写一段画面描述，**不要用 --- 分隔**。"
                   "【换渠道】仅当用户点名或明确需要时才换：说 krea2（如「用 krea2」）传 skill=krea2"
                   "（Krea2 Turbo + retroanime lora，一次一张）；要一次出多张（多个提示词用 --- 分隔）"
-                  "或要用固定角色底模时传 skill=image_gen_v1；用户要**在画面里写出文字（尤其中文）**、"
+                  "或要用固定角色底模时传 skill=image_gen_v1（**= SD / SDXL 渠道**，"
+                  "用户说「用 sd / sd 生图 / 用那个 sd 模型」指的就是它）；"
+                  "用户要**在画面里写出文字（尤其中文）**、"
                   "要**写实照片感**、或点名 qwen / 通义时传 skill=qwen_image_v1"
                   "（Qwen-Image 2.1，此时提示词改写自然语言句子、不要写标签，一次一张、约 100 秒）。"
                   "【底模】除 image_gen_v1 外都没有固定角色，你在 prompt 中自己写出完整角色提示词"
@@ -352,11 +328,10 @@ tool = {
                   "把X换成Y / 保留构图只改颜色」。**反过来的一律不要传**："
                   "「看一下这张图的特征 / 提取特征 / 复刻一张 / 参考这个风格」"
                   "都是**看图 → 你写提示词 → 文生图**，它拿到的图自己看得见。"
-                  "**图生图默认走 qwen_image_v1（不传 skill 就是它）**——Qwen-Image 2.1 "
-                  "按指令真正改图（换衣服/换背景/加删物件），prompt 直接写「要改成什么样」；"
-                  "**它不认 denoise，别传**。只有要「以这张为底重画一张」的垫图重绘，才传 "
-                  "skill=anima 或 image_gen_v1（这两个才吃 denoise：改动大传 0.8~0.9、"
-                  "只微调传 0.35~0.45，没提就别传）。**krea2 不支持图生图**，传了会报错。"
+                  "**图生图只走 qwen_image_v1（不传 skill 就是它）**——Qwen-Image 2.1 "
+                  "按指令真正改图（换衣服/换背景/加删物件），prompt 直接写「要改成什么样」，"
+                  "**不要传 denoise**。**krea2 / anima / image_gen_v1 都不支持图生图**，"
+                  "传了会报错。"
                   "网页端填图片链接或本地路径；QQ 会话里填 1 = 对方引用的那张图"
                   "（引用里有多张就填 2、3），**没引用就取不到，报错照原话转述即可**。"
                   "此时 prompt 写「要变成什么样」，源图的构图自动保留。",
@@ -365,10 +340,11 @@ tool = {
         QQ_AGENT_ID:
             "调用 ComfyUI 生成图片。"
             "【默认 Skill】文生图默认 anima（Anima 2B 动漫模型，双段精修，一次一张），"
-            "图生图默认 qwen_image_v1（见下面【图生图】）—— 不传 skill 就按这两条走，"
+            "图生图只走 qwen_image_v1（见下面【图生图】）—— 不传 skill 就按这两条走，"
             "prompt 只写一段画面描述，**不要用 --- 分隔**。"
             "【换渠道】仅当用户点名或明确需要时才换：krea2 传 skill=krea2；"
-            "要一次出多张时传 skill=image_gen_v1（多个提示词用 --- 分隔）；"
+            "要一次出多张时传 skill=image_gen_v1（**= SD / SDXL 渠道**，"
+            "对方说「用 sd / sd 生图 / 用那个 sd 模型」指的就是它；多个提示词用 --- 分隔）；"
             "对方要**画面里写出文字（尤其中文）**、要写实照片感、或点名 qwen 时传 "
             "skill=qwen_image_v1（此时提示词改写自然语言句子、不要写标签，一次一张、约 100 秒）。"
             "【lora】用户点名要换 lora 时才传 lora 参数，平时不要传。格式「文件名:强度」，"
@@ -382,12 +358,10 @@ tool = {
             "参考这个风格 / 照着画一张新的 / 用 qwen 生成一个…」这些都是"
             "**看图 → 你写提示词 → 文生图**（引用图你看得见，照它写 prompt 就行），"
             "传了 source_image 就是画错东西。"
-            "**图生图默认走 qwen_image_v1（不传 skill 就是它）**——Qwen-Image 2.1 "
-            "按指令真正改图（换衣服/换背景/加删物件），prompt 直接写「要改成什么样」；"
-            "**它不认 denoise，别传**。只有对方要「以这张为底重画一张」的垫图重绘，"
-            "才传 skill=anima 或 image_gen_v1（这两个才吃 denoise：改动大传 0.8~0.9、"
-            "只微调传 0.35~0.45，没提就别传）。**krea2 不支持图生图**，"
-            "对方点名 krea2 又要垫图，就直接告诉他这个渠道吃不了垫图，"
+            "**图生图只走 qwen_image_v1（不传 skill 就是它）**——Qwen-Image 2.1 "
+            "按指令真正改图（换衣服/换背景/加删物件），prompt 直接写「要改成什么样」，"
+            "**不要传 denoise**。**krea2 / anima / image_gen_v1 都不支持图生图**："
+            "对方点名这些渠道又要垫图，就直接告诉他这个渠道吃不了垫图，"
             "**别偷偷换 skill**。源图只能来自对方**引用的**那条消息：填 1 就是"
             "引用里第一张（多张填 2、3），不要填链接或路径。"
             "说了要改图但没引用 → 工具会回「没看到引用的图片」，"
@@ -400,11 +374,10 @@ tool = {
         "type": "object",
         "properties": {
             "prompt": {"type": "string", "description": "提示词。默认（anima / krea2 / image_gen_v1）写逗号分隔的标签式英文短句，只写一段、不要用 --- 分隔（只有 skill=image_gen_v1 时才用 --- 分隔多张）；**skill=qwen_image_v1 时改写自然语言完整句子**（不写 masterpiece 这类标签）。画面里没有固定角色时须包含完整角色描述。图生图时写「要变成什么样」（目标画面），不用再描述源图里已有的构图"},
-            "skill": {"type": "string", "description": "Skill名称。**不传就是默认**：文生图 anima、图生图 qwen_image_v1。可选值见系统提示 Available Skills 里标 [底模]/[无底模] 的生图类；krea2 / image_gen_v1 / qwen_image_v1 仅在用户点名或场景匹配时才用（qwen_image_v1 用于画面内写字、写实照片感、以及按指令改图）"},
+            "skill": {"type": "string", "description": "Skill名称。**不传就是默认**：文生图 anima、图生图 qwen_image_v1。可选值见系统提示 Available Skills 里标 [底模]/[无底模] 的生图类；krea2 / image_gen_v1（**= SD / SDXL 渠道**）/ qwen_image_v1 仅在用户点名或场景匹配时才用（qwen_image_v1 用于画面内写字、写实照片感、以及按指令改图）"},
             "use_character": {"type": "boolean", "description": "是否使用该Skill自带的角色描述（默认false）。只有 image_gen_v1 有角色底模，设为true时固定该角色，你只写动作/环境/构图"},
             "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传"},
-            "source_image": {"type": "string", "description": "图生图的源图，**必须给值才算图生图**。**没明确说要「改这张图」就不要传**——「看特征 / 复刻 / 参考这个风格」都是文生图（图你自己看得见），传了就是画错东西。只在用户明确说「图生图 / 垫图 / 照着这张改」时才传。QQ 会话：1 = 对方引用的那张图（引用里有多张就填 2、3）；对方没引用会取不到，工具报错后照原话转述即可。网页端：填图片链接或本地路径。支持 qwen_image_v1（默认，按指令改）/ anima / image_gen_v1（垫图重绘）"},
-            "denoise": {"type": "string", "description": "可选。垫图重绘的重绘强度 0.05~1.0，不填默认 0.6（越大越自由、越小越贴原图）。**只对 skill=anima / image_gen_v1 的图生图有效**；qwen_image_v1 是按指令改图，不认这个参数。用户没提就别传"}
+            "source_image": {"type": "string", "description": "图生图的源图，**必须给值才算图生图**。**没明确说要「改这张图」就不要传**——「看特征 / 复刻 / 参考这个风格」都是文生图（图你自己看得见），传了就是画错东西。只在用户明确说「图生图 / 垫图 / 照着这张改」时才传。QQ 会话：1 = 对方引用的那张图（引用里有多张就填 2、3）；对方没引用会取不到，工具报错后照原话转述即可。网页端：填图片链接或本地路径。**图生图只支持 qwen_image_v1**（按指令改图，不传 skill 也是它）"}
         },
         "required": ["prompt"]
     }
