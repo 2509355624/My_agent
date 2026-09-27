@@ -1339,5 +1339,84 @@ class QqInvisibleTest(unittest.TestCase):
         self.assertNotIn("说 krea2", desc)
 
 
+class CleanStartTest(_Base):
+    """「开跑前先要一个干净的 ComfyUI」（2026-09-27 加，见
+    image_jobs.CLEAN_START_SKILLS）。
+
+    场景：anima_2 双底模两张权重各 3988MB + TE 1136MB + VAE 241MB ≈ 9.4GB
+    要同时摊开，而上一张 anima 跑完（打过 /free 也一样）只剩 5.6GB——不重启
+    就是 180 秒超时。19:35 的日志：渠道切换 anima → anima_2、显存余 5.6GB，
+    紧接着「生成超时」。刚起来的 ComfyUI 有 10.8GB，够。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.restarts = []
+        p = mock.patch.object(image_jobs, "_restart_comfy",
+                              lambda *a, **k: self.restarts.append(True) or True)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _run(self, skill, vram):
+        """跑一张 skill 渠道的图；vram = 提交前 ComfyUI 报的空闲显存。"""
+        p = mock.patch.object(image_jobs, "_free_vram_gb", lambda: vram)
+        p.start()
+        self.addCleanup(p.stop)
+        entry = {"outputs": {"9": {"images": [{"filename": "a.png"}]}}}
+        with mock.patch.object(image_jobs, "wait_done", return_value=entry):
+            self._enqueue(skill=skill)
+            image_jobs._drain()
+
+    def test_dirty_comfyui_restarts_before_heavy_channel(self):
+        """anima_2 撞上 5.6GB 的脏状态：先重启，再提交，图照样画完。"""
+        self._run("anima_2", 5.6)
+        self.assertEqual(self.restarts, [True])
+        self.assertEqual(len(self.sent_images), 1)
+
+    def test_clean_comfyui_does_not_restart(self):
+        """刚起来 10.8GB：没必要为它多花 60~90 秒重新加载模型。"""
+        self._run("anima_2", 10.8)
+        self.assertEqual(self.restarts, [])
+
+    def test_normal_channel_never_restarts(self):
+        """普通渠道不受影响——anima 单底模 5.4GB 有自己的 /free 水位兜着，
+        为它重启只是白等一分钟。"""
+        self._run("anima", 0.8)
+        self.assertEqual(self.restarts, [])
+
+    def test_unknown_vram_does_not_restart(self):
+        """显存问不到就别折腾：那种情况 ComfyUI 多半已经不在了，重启请求
+        同样发不出去——照常提交，让 _notice 去说「ComfyUI 没在线」。"""
+        self._run("anima_2", None)
+        self.assertEqual(self.restarts, [])
+        self.assertEqual(len(self.sent_images), 1)
+
+    def test_restart_happens_before_submitting(self):
+        """顺序反了等于没清：必须是「先重启 → 再提交」。"""
+        order = []
+        for name, repl in (("_restart_comfy",
+                            lambda *a, **k: order.append("restart") or True),
+                           ("_queue_prompt",
+                            lambda wf: order.append("submit") or "pid")):
+            p = mock.patch.object(image_jobs, name, repl)
+            p.start()
+            self.addCleanup(p.stop)
+        self._run("anima_2", 5.6)
+        self.assertEqual(order, ["restart", "submit"])
+
+    def test_at_most_one_restart_per_job(self):
+        """每张图最多重启一次——不能退化成重启循环。"""
+        self._run("anima_2", 0.5)
+        self.assertEqual(len(self.restarts), 1)
+
+    def test_threshold_sits_above_the_measured_dirty_vram(self):
+        """阈值必须高于「anima 跑完的实测残值 5.6GB」，否则这条规则永不触发。
+
+        这条是「常量被随手改小」的锁：改成 5.0 就得红。
+        """
+        self.assertIn("anima_2", image_jobs.CLEAN_START_SKILLS)
+        self.assertGreater(image_jobs.CLEAN_START_SKILLS["anima_2"], 5.6)
+
+
 if __name__ == "__main__":
     unittest.main()

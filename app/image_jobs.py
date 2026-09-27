@@ -51,6 +51,12 @@
   间隙正是 TDR 的窗口。**这是软的**：真没有别的活时 qwen 照跑，不会饿死。
 - **重渠道不许排长队**：排到第三张就拒收（`_MAX_HEAVY_QUEUE`）。qwen 一张约
   100 秒，3 张已经把「重活独占显卡」的时间撑到 5 分钟，再多不如让模型说画不了。
+- **要「干净 ComfyUI」的渠道开跑前先重启一次**（2026-09-27 加，见
+  _maybe_restart_for_clean_start）：anima_2（双底模两段）要把两张底模各 3988MB
+  + 文本编码器 1136MB + VAE 241MB ≈ 9.4GB 同时摊开，而上一张跑完（哪怕打过
+  /free）显存只剩 5.6GB——硬提交就是 180 秒超时。刚起来的 ComfyUI 有 10.8GB，
+  够。**事前**重启一次（约 60~90 秒，模型要重新加载）比事后超时划算；跟
+  _maybe_restart_for_ram 那条不冲突：那条是事后补、这条是事前拦。
 - **内存水位过低就重启 ComfyUI**（2026-09-27 加，见 _maybe_restart_for_ram）：
   `/free` 治不了内存——它只把权重从显存搬到 CPU，**不删**，进程 RSS 一个字节
   都不降（实测 8025 → 8025 MB）。而 ComfyUI 的常驻内存每张图涨约 600MB、只涨
@@ -137,6 +143,19 @@ POLL_INTERVAL = 2
 # 「权重 > 1」，是因为冷却的必要性来自 qwen 那套权重的具体尺寸，别的重渠道
 # 不一定共用同一个死因。
 QWEN_SKILL = "qwen_image_v1"
+
+# 开跑前必须先要一个「干净 ComfyUI」的渠道：值 = 至少要有的空闲显存（GB）。
+#
+# anima_2 为什么在里面（2026-09-27 实测）：双底模两段要把两张底模各 3988MB +
+# 文本编码器 1136MB + VAE 241MB ≈ 9.4GB 同时摊开。而上一张 anima 跑完（打过
+# /free 也一样，它只把权重搬到 CPU）显存只剩 5.6GB，硬提交就是 180 秒超时
+# ——19:35 的日志：渠道切换 anima → anima_2、显存余 5.6GB，接着「生成超时」。
+# ComfyUI 刚起来时是 10.8GB，够。所以阈值定在两者之间：8.0GB。
+#
+# ⚠️ 这只能把「必超时」变回「跑得完」，**不保证不崩机**：anima_2 就是那个两段
+# 式，13:50 / 13:53 / 13:57 三次 TDR 都是它。显存够了不等于安全，它保持
+# 「只在对方点名时才用」的定位。
+CLEAN_START_SKILLS = {"anima_2": 8.0}
 
 _lock = threading.Lock()
 _queue = collections.deque()      # 待跑的任务（不含正在跑的那个）
@@ -559,11 +578,39 @@ def _maybe_restart_for_ram():
     _restart_comfy()
 
 
+def _maybe_restart_for_clean_start(job):
+    """这个渠道要「干净的 ComfyUI」才跑得动：显存不够就先重启一次。
+
+    跟 _maybe_restart_for_ram 的区别：那条是**事后**（跑完一张发现内存被啃低
+    了才补），这条是**事前**（明知道这个渠道要 9.4GB，先看够不够再说）。只有
+    事前才拦得住——事后重启的时候那张图已经超时失败了。
+
+    两个「不折腾」的早退：显存**问不到**（None）时什么都不做——那种情况下
+    ComfyUI 多半已经不在了，重启请求同样发不出去，还不如照常提交，让 _notice
+    去说一句「ComfyUI 没在线」，比在这里白等 180 秒诚实。
+
+    每张图最多重启一次（只在提交前判一次），所以不会退化成重启循环——即使
+    重启完显存还是不够，也只是这一张照常提交、照常可能超时。
+    """
+    need = CLEAN_START_SKILLS.get(job.skill or "") or 0
+    if need <= 0:
+        return
+    free = _free_vram_gb()
+    if free is None or free >= need:
+        return
+    log.info("%s 开跑前要 %.1fGB 显存，现在只剩 %.1fGB——先重启 ComfyUI "
+             "要一个干净状态再跑", job.skill, need, free)
+    _restart_comfy()
+
+
 def process(job):
     """跑一个任务：提交 → 限时等出图 → 发回原会话 / 存给网页侧。
 
     独立成函数是为了能同步调用（测试直接调它，不依赖真线程）。
     """
+    # 放在换渠道 /free 之前：重启成功后 _last_skill 会被清成 None（新进程里
+    # 一个模型都没加载），换渠道那条就不会再打一次没用的 /free。
+    _maybe_restart_for_clean_start(job)
     _maybe_release_for_switch(job)
     _maybe_release_for_low_vram()
     try:
