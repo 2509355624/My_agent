@@ -242,7 +242,7 @@ def process(job):
                  job.target, job.target_id, len(names))
     except Exception as exc:
         job.error = exc
-        _notice(job)
+        _notice(job, stage="send")
 
 
 def _finish(job):
@@ -287,6 +287,27 @@ def _reset():
 
 
 # ─── ComfyUI 交互 ────────────────────────────────────
+
+def comfy_alive(timeout=3):
+    """ComfyUI 现在活着吗——入队前先问一句。
+
+    队列在 agent 侧，enqueue 成功**不代表** ComfyUI 在：它挂了照样收单，
+    模型被告知「已经排上队了」，几十秒后 worker 才在 /prompt 上撞到连接
+    失败。群里于是先看到一句凭空承诺、再看到一句「图没画出来」，前后打架。
+
+    探活只挡得住最常见的「ComfyUI 根本没开」；探活过了之后再挂，仍由
+    _notice 兜底——那是「提交完即返回」这个设计自带的，除非把 /prompt
+    挪回调用线程去同步等。
+    """
+    try:
+        requests.get(COMFYUI_URL + "/system_stats",
+                     timeout=timeout).raise_for_status()
+        return True
+    except Exception as exc:
+        log.warning("ComfyUI 探活失败（%s）：%s，本次不入队",
+                    COMFYUI_URL, type(exc).__name__)
+        return False
+
 
 def _queue_prompt(workflow):
     resp = requests.post(COMFYUI_URL + "/prompt", json={
@@ -407,6 +428,25 @@ def output_images(entry):
 
 # ─── 回话 ────────────────────────────────────────────
 
+def _is_unreachable(exc):
+    """这个失败是「连不上 ComfyUI」吗？
+
+    requests 的 ConnectionError 继承 OSError，str() 出来是一长串
+    「HTTPConnectionPool(host='127.0.0.1', port=8188)…」，被 _reason 截 30
+    字就只剩半截乱码丢进群里。这类失败原因单一，值得单独说人话。
+
+    两个例外不算：wait_done 的超时另有说法（是画得慢，不是连不上）；带
+    response 的异常说明 ComfyUI 活着、是它把工作流拒了（requests 的
+    RequestException 一律有 response 属性，只有拿到回应才非 None——所以
+    这里认 response 而不认异常类型，也省得依赖 requests 模块对象）。
+    """
+    if isinstance(exc, TimeoutError):
+        return False
+    if getattr(exc, "response", None) is not None:
+        return False
+    return isinstance(exc, OSError)
+
+
 def _reason(exc):
     """失败原因一句话（截断防刷屏）。"""
     if isinstance(exc, TimeoutError):
@@ -414,16 +454,26 @@ def _reason(exc):
     return (str(exc) or type(exc).__name__)[:30]
 
 
-def _fail_text(exc):
-    """给对方看的失败说明。超时单独给一句——它最常见，而且对方重画一次就好
-    （重画时模型已经加载在显存里，通常几秒到几十秒就出）。"""
+def _fail_text(exc, stage="submit"):
+    """给对方看的失败说明。
+
+    超时单独给一句——它最常见，而且对方重画一次就好（重画时模型已经加载在
+    显存里，通常几秒到几十秒就出）。连不上 ComfyUI 也只给一句人话，不把
+    半截 HTTPConnectionPool 甩出去。
+
+    stage="send" 是投递阶段挂的（图都画好了，是发回会话那步失败），跟
+    ComfyUI 在不在没关系，别往它头上安。
+    """
     if isinstance(exc, TimeoutError):
         return ("画超时了（超过 %d 秒没出图），已经中断这张。"
                 "麻烦重新生成一次。" % TASK_TIMEOUT)
+    if stage != "send" and _is_unreachable(exc):
+        return ("图没画出来——ComfyUI 没在线（%s 连不上）。"
+                "让对方稍后再试。" % COMFYUI_URL)
     return "图没画出来（%s）" % _reason(exc)
 
 
-def _notice(job):
+def _notice(job, stage="submit"):
     """QQ 侧失败了就吭一声——对方点了单，图没了却一声不吭会让人干等。
 
     网页侧不用：异常会由 job.wait() 抛给调用方，再由工具结果告诉模型。
@@ -432,7 +482,7 @@ def _notice(job):
     if job.target is None:
         return
     try:
-        _send_text(job.target, job.target_id, _fail_text(job.error))
+        _send_text(job.target, job.target_id, _fail_text(job.error, stage))
     except Exception:
         log.exception("生图失败说明也发不出去 %s %s", job.target, job.target_id)
 

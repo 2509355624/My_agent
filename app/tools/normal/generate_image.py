@@ -240,6 +240,15 @@ def _generate_image(prompt, skill="anima", use_character=False, lora=None,
         if err:
             return err
 
+    # 入队前先确认 ComfyUI 真的在。队列在 agent 侧，enqueue 从来不碰
+    # ComfyUI，所以它挂了也照样「成功」，模型就会拿到一句「已经排上队了」
+    # 去跟对方承诺，几十秒后 worker 才撞上连接失败——群里先看到承诺、再看
+    # 到「图没画出来」，前后打架。探不到就当场拒掉，让模型老老实实说画不了。
+    if not image_jobs.comfy_alive():
+        return ("错误：ComfyUI 现在没在线（" + COMFYUI_URL + " 连不上），"
+                "这张画不了。直接告诉对方现在画不了、让他稍后再试，"
+                "不要说图已经在画了或者马上就好。")
+
     # 排进**全局串行队列**：同一时刻 ComfyUI 里最多只有一张图在跑，其余老老
     # 实实排队（见 image_jobs）。从前是这里直接 _queue_prompt 提交、排队发生
     # 在 ComfyUI 内部——agent 侧看不见也管不着，多个会话并发时 N×2 张一起灌

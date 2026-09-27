@@ -397,6 +397,8 @@ class GenerateImageSplitTest(unittest.TestCase):
             ("_ensure_worker", lambda: None),
             ("_send_image", mock.Mock()),
             ("_send_text", mock.Mock()),
+            # 入队前探活：默认「ComfyUI 在」，需要测拒收的用例自己再 patch 掉
+            ("comfy_alive", mock.Mock(return_value=True)),
         ):
             p = mock.patch.object(image_jobs, target, repl)
             p.start()
@@ -472,6 +474,89 @@ class GenerateImageSplitTest(unittest.TestCase):
         self.assertIn("排着", out)
         # 只有真正入了队的那几张被送进 ComfyUI
         self.assertEqual(qp.call_count, image_jobs.MAX_INFLIGHT)
+
+    def test_offline_comfyui_refused_before_queueing(self):
+        """ComfyUI 挂了就当场拒掉——接了单模型就会说「排上了」，几十秒后再打脸。
+
+        队列在 agent 侧，enqueue 从来不碰 ComfyUI，所以没有这道探活时它一定
+        会「成功」：模型拿到「已经排上队了」去跟对方承诺，worker 才在 /prompt
+        上撞到连接失败。群里先看到承诺、再看到「图没画出来」。
+        """
+        with mock.patch.object(qq_api, "current_context",
+                               return_value=("group", "9")), \
+                mock.patch.object(image_jobs, "comfy_alive",
+                                  return_value=False), \
+                mock.patch.object(image_jobs, "_queue_prompt") as qp:
+            out = generate_image.tool["function"]("a cat")
+        self.assertIn("没在线", out)
+        self.assertNotIn("排上", out)
+        self.assertEqual(image_jobs.queue_depth(), 0)   # 一张都没进队
+        self.assertFalse(qp.called)                     # 更没碰 ComfyUI
+
+
+class ComfyAliveTest(unittest.TestCase):
+    """入队前探活：探不到就别收单，别让模型先承诺再被打脸。"""
+
+    def _patch_get(self, error=None, raise_on_status=None):
+        """只替换 image_jobs 眼里那个 requests，不动全局 requests。"""
+        def _get(url, timeout=None):
+            if error:
+                raise error
+            resp = mock.Mock()
+            resp.raise_for_status = mock.Mock(side_effect=raise_on_status)
+            return resp
+        p = mock.patch.object(image_jobs, "requests", mock.Mock(get=_get))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_true_when_system_stats_answers(self):
+        self._patch_get()
+        self.assertTrue(image_jobs.comfy_alive())
+
+    def test_false_when_connection_refused(self):
+        """8188 没在听 = 这次事故的现场，必须探得出来。"""
+        self._patch_get(error=OSError("Connection refused"))
+        self.assertFalse(image_jobs.comfy_alive())
+
+    def test_false_when_comfyui_answers_an_error(self):
+        self._patch_get(raise_on_status=OSError("500 Server Error"))
+        self.assertFalse(image_jobs.comfy_alive())
+
+
+class FailTextTest(unittest.TestCase):
+    """失败话术：连接类错误说人话，别把 HTTPConnectionPool 半截乱码丢进群。"""
+
+    _RAW = ("HTTPConnectionPool(host='127.0.0.1', port=8188): "
+            "Max retries exceeded with url: /prompt")
+
+    def test_unreachable_says_offline(self):
+        text = image_jobs._fail_text(OSError(self._RAW))
+        self.assertIn("没在线", text)
+        self.assertNotIn("HTTPConnectionPool", text)
+
+    def test_timeout_keeps_its_own_wording(self):
+        text = image_jobs._fail_text(TimeoutError("生成超时 (600s)"))
+        self.assertIn("超时", text)
+        self.assertIn("重新生成", text)
+
+    def test_send_stage_does_not_blame_comfyui(self):
+        """投递阶段失败跟 ComfyUI 在不在无关，别往它头上安。"""
+        text = image_jobs._fail_text(OSError("down"), stage="send")
+        self.assertIn("图没画出来", text)
+        self.assertNotIn("没在线", text)
+
+    def test_http_error_is_not_reported_as_offline(self):
+        """ComfyUI 活着、只是把工作流拒了——那不是「没在线」。
+
+        判据是「异常带不带 response」：requests 只有真拿到回应才会挂上
+        response，ConnectionError 那个字段恒为 None。
+        """
+        import requests
+        resp = requests.Response()
+        resp.status_code = 400
+        exc = requests.exceptions.HTTPError("400 Bad Request", response=resp)
+        self.assertFalse(image_jobs._is_unreachable(exc))
+        self.assertNotIn("没在线", image_jobs._fail_text(exc))
 
 
 if __name__ == "__main__":
