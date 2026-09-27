@@ -246,8 +246,12 @@ class LoadWorkflowTest(unittest.TestCase):
         self.assertEqual(wf["1"]["inputs"]["seed"], "__SEED__")
 
 
-class I2IFlowTest(unittest.TestCase):
-    """跑 generate_image 本体，拦住提交那一刻看它到底送了什么。"""
+class _I2IRunner(object):
+    """跑 generate_image 本体，拦住提交那一刻看它到底送了什么。
+
+    故意不是 TestCase——两个 i2i 用例类（垫图重绘 / qwen 编辑）共用这套拦截，
+    直接继承 TestCase 的话基类的用例会在子类里再跑一遍。
+    """
 
     KEY = ("group", 999001)
 
@@ -285,6 +289,10 @@ class I2IFlowTest(unittest.TestCase):
             mock.patch.object(comfy_src, "upload", lambda raw, **kw: name),
         )
 
+
+class I2IFlowTest(_I2IRunner, unittest.TestCase):
+    """anima / image_gen_v1 的垫图重绘：denoise 是主角，走 LoadImage→VAEEncode。"""
+
     def test_default_call_is_still_text2img(self):
         out, wf = self._run(prompt="1girl, solo")
         self.assertIn("已经在画了", out)
@@ -295,7 +303,8 @@ class I2IFlowTest(unittest.TestCase):
     def test_anima_switches_to_i2i_workflow(self):
         p1, p2, p3 = self._source_ok()
         with p1, p2, p3:
-            out, wf = self._run(prompt="cherry blossoms", source_image="1")
+            out, wf = self._run(prompt="cherry blossoms", skill="anima",
+                                source_image="1")
         self.assertIn("已经在画了", out)
         self.assertIn("233 发的图", out)
         self.assertNotIn("9", wf)                       # 空 latent 被顶掉了
@@ -317,7 +326,8 @@ class I2IFlowTest(unittest.TestCase):
     def test_denoise_parameter_is_injected(self):
         p1, p2, p3 = self._source_ok()
         with p1, p2, p3:
-            _, wf = self._run(prompt="x", source_image="2", denoise=0.85)
+            _, wf = self._run(prompt="x", skill="anima",
+                              source_image="2", denoise=0.85)
         self.assertEqual(wf["2"]["inputs"]["denoise"], 0.85)
 
     def test_sd_i2i_keeps_base_and_loras(self):
@@ -339,7 +349,8 @@ class I2IFlowTest(unittest.TestCase):
 
     def test_krea2_is_refused(self):
         out, wf = self._run(prompt="x", skill="krea2", source_image="1")
-        self.assertIn("只有 anima 和 image_gen_v1 支持图生图", out)
+        self.assertIn("支持图生图", out)
+        self.assertIn("krea2", out)
         self.assertEqual(wf, {})
 
     def test_source_failure_reports_and_submits_nothing(self):
@@ -354,10 +365,69 @@ class I2IFlowTest(unittest.TestCase):
         with mock.patch.object(
                 comfy_src, "resolve",
                 lambda spec: (touched.append(spec), (b"R", ""))[1]):
-            out, wf = self._run(prompt="x", source_image="1", denoise="9")
+            out, wf = self._run(prompt="x", skill="anima",
+                                source_image="1", denoise="9")
         self.assertIn("denoise", out)
         self.assertEqual(touched, [])
         self.assertEqual(wf, {})
+
+
+class QwenI2ITest(_I2IRunner, unittest.TestCase):
+    """qwen 图生图：默认渠道、按指令改、不吃 denoise。
+
+    走的是「参考图直进文本编码器」那条路，跟 anima 的 VAEEncode 垫图链完全不同。
+    """
+
+    def _qwen(self, **kw):
+        p1, p2, p3 = self._source_ok()
+        with p1, p2, p3:
+            return self._run(**kw)
+
+    def test_source_image_alone_defaults_to_qwen(self):
+        """没点名 skill + 给了源图 → 走 qwen，不是 anima。这是用户要的默认。"""
+        out, wf = self._qwen(prompt="把衣服换成红色卫衣", source_image="1")
+        self.assertIn("已经在画了", out)
+        self.assertIn("233 发的图", out)
+        self.assertEqual(wf["20"]["class_type"], "TextEncodeQwenImage21")
+        # qwen 走的是「参考图直进文本编码器」，不是 anima 的 VAEEncode 垫图链
+        self.assertEqual(wf["13"]["class_type"], "LoadImage")
+        self.assertEqual(wf["13"]["inputs"]["image"], "i2isrc_x.png")
+        self.assertNotIn("25", wf)
+
+    def test_source_image_reaches_the_encoder(self):
+        _, wf = self._qwen(prompt="换成夜景", source_image="1")
+        self.assertEqual(wf["20"]["inputs"]["images.image_1"], ["13", 0])
+        self.assertEqual(wf["20"]["inputs"]["vae"], ["12", 0])
+        self.assertIn("换成夜景", wf["20"]["inputs"]["prompt"])
+
+    def test_latent_comes_from_the_encoder_not_empty_latent(self):
+        """TextEncodeQwenImage21 第三个输出就是 latent——别再挂 EmptyLatentImage。"""
+        _, wf = self._qwen(prompt="x", source_image="1")
+        self.assertEqual(wf["30"]["inputs"]["latent_image"], ["20", 2])
+        self.assertNotIn("EmptyLatentImage",
+                         [n.get("class_type") for n in wf.values()])
+
+    def test_denoise_is_pinned_to_one(self):
+        """编辑模型没有「保留多少原图」这个旋钮，模型传了也不认。"""
+        _, wf = self._qwen(prompt="x", source_image="1", denoise=0.35)
+        self.assertEqual(wf["30"]["inputs"]["denoise"], 1.0)
+
+    def test_junk_denoise_is_ignored_not_fatal(self):
+        """anima 那边 denoise 写错会当场拒；qwen 不认它，不该因此失败。"""
+        out, wf = self._qwen(prompt="x", source_image="1", denoise="随便")
+        self.assertIn("已经在画了", out)
+        self.assertEqual(wf["30"]["inputs"]["denoise"], 1.0)
+
+    def test_explicit_qwen_still_works(self):
+        _, wf = self._qwen(prompt="x", skill="qwen_image_v1", source_image="1")
+        self.assertEqual(wf["20"]["class_type"], "TextEncodeQwenImage21")
+
+    def test_qwen_text2img_workflow_untouched(self):
+        """点名 qwen 但没给源图 → 还是文生图那份，别误切到 i2i。"""
+        out, wf = self._run(prompt="a cat", skill="qwen_image_v1")
+        self.assertIn("已经在画了", out)
+        self.assertNotIn("TextEncodeQwenImage21",
+                         [n.get("class_type") for n in wf.values()])
 
 
 if __name__ == "__main__":

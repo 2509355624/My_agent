@@ -319,15 +319,23 @@ class ToolDescriptionTest(unittest.TestCase):
         self.assertIn("lora", self._block(QQ_AGENT_ID))
         self.assertIn("lora", self._block("main"))
 
-    def test_default_image_skill_is_anima(self):
-        """默认生图渠道 = anima（2026-09-26 用户定：三个渠道都留，只是默认跑 anime）。"""
+    def test_default_image_skill_depends_on_i2i(self):
+        """不点名时的默认渠道：文生图 anima、图生图 qwen（2026-09-27 用户定）。
+
+        signature 的默认值必须是 None——execute_tool 是 fn(**args)，只有「模型
+        压根没传 skill」才会落到默认值，靠它才分得开「没点名」和「点名了 anima」。
+        """
         import inspect
-        from app.tools.normal.generate_image import _generate_image, tool
-        default = inspect.signature(_generate_image).parameters["skill"].default
-        self.assertEqual(default, "anima")
-        self.assertIn("默认 Skill】anima", tool["description"])
-        self.assertIn("默认 Skill】anima",
-                      tool["description_overrides"][QQ_AGENT_ID])
+        from app.tools.normal.generate_image import (
+            _generate_image, tool, I2I_DEFAULT_SKILL, T2I_DEFAULT_SKILL)
+        self.assertIsNone(inspect.signature(_generate_image)
+                          .parameters["skill"].default)
+        self.assertEqual(T2I_DEFAULT_SKILL, "anima")
+        self.assertEqual(I2I_DEFAULT_SKILL, "qwen_image_v1")
+        for desc in (tool["description"],
+                     tool["description_overrides"][QQ_AGENT_ID]):
+            self.assertIn("文生图默认 anima", desc)
+            self.assertIn("图生图默认 qwen_image_v1", desc)
 
 
 if __name__ == "__main__":
