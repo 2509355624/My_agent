@@ -428,16 +428,29 @@ def trim_window(history, agent_id=None, session_key=None, max_turns=None):
         return history
 
     turns = _split_turns(other_msgs)
+    group_id = _group_id_from_key(session_key)
+
+    if group_id and agent_id:
+        # 前缀缓存优化（仅群聊）：不要每轮滚 1 轮——那样窗口开头永远在变，
+        # 群聊每轮全价 miss。攒到窗口的 1.5 倍才剪，一次滚掉全部溢出（≈半个
+        # 窗口），中间几十轮的开头原封不动 → 从「永远 miss」变成「滚一次
+        # miss 一波」。代价：长期记忆一波一波进（每 ~max_turns/2 轮一批），
+        # 用户已接受（2026-09-27）。
+        roll_step = max(1, max_turns // 2)
+        if len(turns) <= max_turns + roll_step:
+            return history
+        _digest_turns_async(agent_id, group_id, turns[:-max_turns])
+        result = list(system_msgs)
+        for turn in turns[-max_turns:]:
+            result.extend(turn)
+        return result
+
+    # 非群会话（网页主会话 / QQ 私聊）没有长期记忆库可去，走 token 预算
+    # 压缩：滚出去的会摘成一条摘要顶在会话里，不是硬丢。
     if len(turns) <= max_turns:
         return history
-
-    old_turns = turns[:-max_turns]
-    group_id = _group_id_from_key(session_key)
     if not group_id or not agent_id:
-        # 非群会话（网页主会话 / QQ 私聊）没有长期记忆库可去，走原来的
-        # token 预算压缩：滚出去的会摘成一条摘要顶在会话里，不是硬丢。
-        #
-        # 但 trim_history 的判据读的是线程本地 usage——QQ 侧每条消息换线程，
+        # trim_history 的判据读的是线程本地 usage——QQ 侧每条消息换线程，
         # 回退读到的恒为 0，压缩因此**永远不会触发**（私聊攒到 458 条 /
         # 4.9 万字的根因）。这里改用本地估算当判据：不求精确，够触发就行。
         # hit_rate 给 0 = 到警戒线就压，私聊场景宁可早压也别养肥历史。
@@ -454,7 +467,7 @@ def trim_window(history, agent_id=None, session_key=None, max_turns=None):
             history[:] = result
         return result
 
-    _digest_turns_async(agent_id, group_id, old_turns)
+    _digest_turns_async(agent_id, group_id, turns[:-max_turns])
 
     result = list(system_msgs)
     for turn in turns[-max_turns:]:

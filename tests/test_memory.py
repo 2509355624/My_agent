@@ -407,10 +407,18 @@ class TrimWindowPrivateTest(unittest.TestCase):
     核心回归：压缩不幂等——一轮里 save_history 会被调很多次，第一次压缩
     写了瘦文件、水位也记上了，同轮后续保存被冷却挡住，又把胖历史原样写
     回去，压缩成果被冲掉（实测私聊 547 条压完原样回弹、compact_summary
-    一条不剩）。修复 = 压缩成功后原地收缩调用方的 list。
+    一条不剩）。    修复 = 压缩成功后原地收缩调用方的 list。
     """
 
     def setUp(self):
+        # 预算/窗口都钉住（fixture 按 est≈30000>24000、25>20 轮设计），
+        # 不跟 .env 走——用户已把 CONTEXT_BUDGET 调到 50000、窗口调到 40
+        p = mock.patch.object(memory, "CONTEXT_BUDGET", 32000)
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(memory, "CONTEXT_MAX_TURNS", 20)
+        p.start()
+        self.addCleanup(p.stop)
         p = mock.patch.object(memory, "_LAST_COMPACT_TOKENS", {})
         p.start()
         self.addCleanup(p.stop)

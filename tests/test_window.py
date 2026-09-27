@@ -52,19 +52,28 @@ class _ResetState:
 
 class TrimWindowTest(_ResetState, unittest.TestCase):
     def test_over_window_keeps_recent_turns(self):
+        # 群聊批量滚出语义（2026-09-27）：攒到 max_turns+max_turns//2 才剪，
+        # 一次滚掉全部溢出。窗口 20 → 31 轮触发，35 轮滚掉 15 轮留 20 轮。
         with mock.patch.object(memory, "_DIGEST_BATCH_MIN", 1), \
              mock.patch.object(longterm, "digest_messages_async") as dig:
-            out = memory.trim_window(_history(25), "qq", "group_9", max_turns=20)
+            out = memory.trim_window(_history(35), "qq", "group_9", max_turns=20)
         roles = [m["role"] for m in out]
         self.assertEqual(roles[0], "system")
         self.assertEqual(roles.count("user"), 20)       # 只剩最近 20 轮
-        self.assertEqual(out[1]["content"], "u5")       # 前 5 轮被摘走
-        self.assertEqual(out[-1]["content"], "a24")
+        self.assertEqual(out[1]["content"], "u15")      # 前 15 轮被摘走
+        self.assertEqual(out[-1]["content"], "a34")
         dig.assert_called_once()
         args = dig.call_args[0]
         self.assertEqual(args[0], "qq")
         self.assertEqual(args[1], "9")
-        self.assertEqual(len(args[2]), 10)              # 5 轮 = 10 条消息
+        self.assertEqual(len(args[2]), 30)              # 15 轮 = 30 条消息
+
+    def test_batch_roll_waits_for_half_window_overflow(self):
+        """溢出不足半个窗口不动剪——前缀保持稳定，这是缓存命中的前提。"""
+        with mock.patch.object(longterm, "digest_messages_async") as dig:
+            out = memory.trim_window(_history(30), "qq", "group_9", max_turns=20)
+        self.assertEqual(len(out), 61)                  # 30 轮 = 触发线上，原样
+        dig.assert_not_called()
 
     def test_within_window_untouched(self):
         with mock.patch.object(longterm, "digest_messages_async") as dig:
@@ -100,8 +109,8 @@ class TrimWindowTest(_ResetState, unittest.TestCase):
         with mock.patch.object(memory, "_DIGEST_BATCH_MIN", 1), \
              mock.patch.object(longterm, "digest_messages_async",
                                side_effect=OSError("boom")):
-            out = memory.trim_window(_history(25), "qq", "group_9", max_turns=20)
-        self.assertEqual([m["content"] for m in out][1], "u5")
+            out = memory.trim_window(_history(35), "qq", "group_9", max_turns=20)
+        self.assertEqual([m["content"] for m in out][1], "u15")
 
 
 class DigestBatchTest(_ResetState, unittest.TestCase):
@@ -109,20 +118,20 @@ class DigestBatchTest(_ResetState, unittest.TestCase):
 
     def test_below_threshold_buffers_without_digest(self):
         with mock.patch.object(longterm, "digest_messages_async") as dig:
-            memory.trim_window(_history(25), "qq", "group_9", max_turns=20)
-        dig.assert_not_called()                          # 10 条 < 40，先攒着
-        self.assertEqual(len(memory._digest_pending[("qq", "9")]), 10)
+            memory.trim_window(_history(35), "qq", "group_9", max_turns=20)
+        dig.assert_not_called()                          # 30 条 < 40，先攒着
+        self.assertEqual(len(memory._digest_pending[("qq", "9")]), 30)
 
     def test_crossing_threshold_flushes_whole_batch(self):
         with mock.patch.object(longterm, "digest_messages_async") as dig:
-            memory.trim_window(_history(25), "qq", "group_9", max_turns=20)
-            # 再滚 30 轮 = 60 条，其中 10 条与上批重合被去重，攒批总数 60 → 触发
-            memory.trim_window(_history(50), "qq", "group_9", max_turns=20)
+            memory.trim_window(_history(35), "qq", "group_9", max_turns=20)
+            # 再滚 50 轮 = 100 条，其中 30 条与上批重合被去重，攒批总数 100 → 触发
+            memory.trim_window(_history(70), "qq", "group_9", max_turns=20)
         dig.assert_called_once()
         batch = dig.call_args[0][2]
-        self.assertEqual(len(batch), 60)                 # 10 + 50（去重后），一次整批
+        self.assertEqual(len(batch), 100)                # 30 + 70（去重后），一次整批
         self.assertEqual(batch[0]["content"], "u0")      # 顺序保持旧→新
-        self.assertEqual(batch[-1]["content"], "a29")
+        self.assertEqual(batch[-1]["content"], "a49")
         self.assertEqual(memory._digest_pending.get(("qq", "9")), [])
 
     def test_big_initial_roll_flushes_immediately(self):
@@ -133,55 +142,58 @@ class DigestBatchTest(_ResetState, unittest.TestCase):
 
     def test_groups_buffered_separately(self):
         with mock.patch.object(longterm, "digest_messages_async") as dig:
-            memory.trim_window(_history(25), "qq", "group_9", max_turns=20)
-            memory.trim_window(_history(25), "qq", "group_8", max_turns=20)
+            memory.trim_window(_history(35), "qq", "group_9", max_turns=20)
+            memory.trim_window(_history(35), "qq", "group_8", max_turns=20)
         dig.assert_not_called()
-        self.assertEqual(len(memory._digest_pending[("qq", "9")]), 10)
-        self.assertEqual(len(memory._digest_pending[("qq", "8")]), 10)
+        self.assertEqual(len(memory._digest_pending[("qq", "9")]), 30)
+        self.assertEqual(len(memory._digest_pending[("qq", "8")]), 30)
 
 
 class DigestDedupTest(_ResetState, unittest.TestCase):
-    """save_history 一次回复内多次落盘，同一批消息只许摘要一次。"""
+    """save_history 一次回复内多次落盘，同一批消息只许摘要一次。
+
+    用 max_turns=10（触发线 16 轮）让轮数好算。
+    """
 
     def test_same_batch_digests_once(self):
-        h = _history(25)
+        h = _history(16)                     # 16 > 10+5 → 触发，滚 6 轮
         with mock.patch.object(memory, "_DIGEST_BATCH_MIN", 1), \
              mock.patch.object(longterm, "digest_messages_async") as dig:
-            memory.trim_window(h, "qq", "group_9", max_turns=20)
-            memory.trim_window(h, "qq", "group_9", max_turns=20)
-            memory.trim_window(h, "qq", "group_9", max_turns=20)
+            memory.trim_window(h, "qq", "group_9", max_turns=10)
+            memory.trim_window(h, "qq", "group_9", max_turns=10)
+            memory.trim_window(h, "qq", "group_9", max_turns=10)
         dig.assert_called_once()
 
     def test_growth_inside_last_turn_only_digests_fresh(self):
         """同一回复内最后一轮继续长（assistant/tool 续在轮尾），不再重复摘要。"""
-        h = _history(20)                     # 正好 20 轮
+        h = _history(15)                     # 15 = 10+5，触发线上不剪
         with mock.patch.object(memory, "_DIGEST_BATCH_MIN", 1), \
              mock.patch.object(longterm, "digest_messages_async") as dig:
-            h.append({"role": "user", "content": "新问题"})       # 第 21 轮开始
-            memory.trim_window(h, "qq", "group_9", max_turns=20)
-            self.assertEqual(dig.call_count, 1)  # 最老一轮被挤出去
+            h.append({"role": "user", "content": "新问题"})       # 第 16 轮开始
+            memory.trim_window(h, "qq", "group_9", max_turns=10)
+            self.assertEqual(dig.call_count, 1)  # 前 6 轮被滚出去
             h.extend([{"role": "assistant", "content": "答1"},
                       {"role": "assistant", "content": "答2"}])  # 轮尾继续长
-            memory.trim_window(h, "qq", "group_9", max_turns=20)
-            memory.trim_window(h, "qq", "group_9", max_turns=20)
+            memory.trim_window(h, "qq", "group_9", max_turns=10)
+            memory.trim_window(h, "qq", "group_9", max_turns=10)
         self.assertEqual(dig.call_count, 1)  # 没有新轮次滚出，不再摘要
         first = dig.call_args[0][2]
-        self.assertEqual(first, [{"role": "user", "content": "u0"},
-                                 {"role": "assistant", "content": "a0"}])
+        self.assertEqual(first[:2], [{"role": "user", "content": "u0"},
+                                     {"role": "assistant", "content": "a0"}])
 
     def test_window_slide_digests_only_newly_rolled(self):
         """窗口滑动：新一轮把更老的挤出去时，只摘新滚出的，不重摘旧的。"""
-        h = _history(20)
+        h = _history(15)
         with mock.patch.object(memory, "_DIGEST_BATCH_MIN", 1), \
              mock.patch.object(longterm, "digest_messages_async") as dig:
-            h.append({"role": "user", "content": "新问题"})       # 21 轮，挤掉 t0
-            memory.trim_window(h, "qq", "group_9", max_turns=20)
-            h.extend(_turn(100))                                  # 22 轮，挤掉 t1
-            memory.trim_window(h, "qq", "group_9", max_turns=20)
+            h.append({"role": "user", "content": "新问题"})       # 16 轮，滚 u0-u5
+            memory.trim_window(h, "qq", "group_9", max_turns=10)
+            h.extend(_turn(100))                                  # 17 轮，新滚 u6
+            memory.trim_window(h, "qq", "group_9", max_turns=10)
         self.assertEqual(dig.call_count, 2)
         self.assertEqual(dig.call_args[0][2],
-                         [{"role": "user", "content": "u1"},
-                          {"role": "assistant", "content": "a1"}])
+                         [{"role": "user", "content": "u6"},
+                          {"role": "assistant", "content": "a6"}])
 
 
 class SaveHistoryIntegrationTest(unittest.TestCase):
@@ -202,12 +214,14 @@ class SaveHistoryIntegrationTest(unittest.TestCase):
         self.addCleanup(memory._digest_pending.clear)
 
     def test_saved_file_stays_within_window(self):
-        h = _history(30)
-        with mock.patch.object(longterm, "digest_messages_async"):
+        # 显式钉住窗口：不依赖 .env 的 CONTEXT_MAX_TURNS（用户已调到 40）
+        h = _history(45)
+        with mock.patch.object(memory, "CONTEXT_MAX_TURNS", 20), \
+             mock.patch.object(longterm, "digest_messages_async"):
             memory.save_history(h, "qq", "group_9")
         loaded = memory.load_history("qq", "group_9")
         self.assertEqual([m["role"] for m in loaded].count("user"), 20)
-        self.assertEqual(loaded[1]["content"], "u10")
+        self.assertEqual(loaded[1]["content"], "u25")
 
 
 class GroupKeyTest(unittest.TestCase):
