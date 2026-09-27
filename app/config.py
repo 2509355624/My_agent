@@ -320,6 +320,13 @@ QQ_BLACKLIST_USERS = _env_list("QQ_BLACKLIST_USERS")
 # agent 一轮可能跑几十秒（生图更久），开太大没什么收益，还容易顶满 LLM 限流
 QQ_MAX_CONCURRENCY = int(os.getenv("QQ_MAX_CONCURRENCY", "2"))
 
+# 单轮硬上限：一轮超过这么久还没跑完就放弃（线程留在后台自生自灭，会话线
+# 立刻恢复干活）。这是「单群卡死传染」的保险丝——2026-09-27 实测出现过
+# runner 卡 ~16 分钟、积压消息全部迟到的事故，且卡点不在任何已设超时的
+# 网络调用上。正常一轮（LLM + 工具）远到不了这个数；MAX_TURNS=10 的极端
+# 链路重试也撑不到 600s，能被砍掉的只有真卡死的轮次。
+QQ_TURN_TIMEOUT = float(os.getenv("QQ_TURN_TIMEOUT", "600"))
+
 # 单条 QQ 消息的字数上限，超出按段落切分成多条发送
 QQ_REPLY_MAX_CHARS = int(os.getenv("QQ_REPLY_MAX_CHARS", "700"))
 

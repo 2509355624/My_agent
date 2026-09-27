@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import re
+import time
 
 try:
     import msvcrt                      # Windows 文件锁，用于单实例保护
@@ -48,8 +49,8 @@ from app.config import (
     QQ_DEBOUNCE_SECONDS, QQ_GROUP_AT_ONLY, QQ_GROUP_KEYWORDS,
     QQ_MAX_CONCURRENCY, QQ_MEMORY_INJECT_LIMIT, QQ_MEMORY_INJECT_MAX_CHARS,
     QQ_PENDING_MAX_CHARS, QQ_PENDING_MAX_ITEMS,
-    QQ_PRIVATE_ENABLE, QQ_QUOTE_MAX_CHARS, QQ_TOKEN, QQ_WHITELIST_GROUPS,
-    QQ_WHITELIST_USERS, QQ_WS_URL,
+    QQ_PRIVATE_ENABLE, QQ_QUOTE_MAX_CHARS, QQ_TOKEN, QQ_TURN_TIMEOUT,
+    QQ_WHITELIST_GROUPS, QQ_WHITELIST_USERS, QQ_WS_URL,
 )
 from app.memory import load_history, save_history
 
@@ -544,11 +545,34 @@ class SessionRunner:
             batch, self._pending = self._pending[:], []
             if not batch:
                 continue
+            t0 = time.monotonic()
             try:
                 async with self.bot.sem:
-                    await asyncio.to_thread(self._run_turn, batch)
+                    waited = time.monotonic() - t0
+                    if waited > 30:
+                        # 并发槽迟迟拿不到 = 有轮次占着坑不干活。2026-09-27
+                        # 的单群卡死事故里，卡点不在任何已设超时的调用上，
+                        # 这行警告就是为下次定位留的探针。
+                        log.warning("%s 等并发槽 %.0f 秒（上限 %d），"
+                                    "疑似有轮次卡死", self.session_key,
+                                    waited, QQ_MAX_CONCURRENCY)
+                    # 整轮硬上限：单群卡死不再传染（保险丝，见 QQ_TURN_TIMEOUT）。
+                    # 超时放弃的是「等结果」这件事——线程还在后台跑，它若真
+                    # 完成了，回复仍会发出去（迟到总比没有强）。
+                    await asyncio.wait_for(
+                        asyncio.to_thread(self._run_turn, batch),
+                        timeout=QQ_TURN_TIMEOUT)
+            except asyncio.TimeoutError:
+                log.error("%s 单轮超时（%d 秒）放弃：n=%d 首条=%r——"
+                          "线程仍在后台，回复可能迟到",
+                          self.session_key, QQ_TURN_TIMEOUT, len(batch),
+                          (batch[0].get("text") or "")[:40])
             except Exception:
                 log.exception("处理 %s 的会话时出错", self.session_key)
+            finally:
+                log.info("▶ %s 一轮结束（%d 条，耗时 %.0f 秒）",
+                         self.session_key, len(batch),
+                         time.monotonic() - t0)
 
     @staticmethod
     def _prepare_images(urls):

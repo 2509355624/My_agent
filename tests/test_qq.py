@@ -15,6 +15,8 @@ import asyncio
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -1288,6 +1290,54 @@ class TurnReplyDedupTest(unittest.TestCase):
         self.assertEqual(qq_bot._norm_reply(" a\n b\t\tc "), "a b c")
         self.assertEqual(qq_bot._norm_reply(""), "")
         self.assertEqual(qq_bot._norm_reply(None), "")
+
+
+# ─── _loop：单轮卡死护栏 ─────────────────────────────
+# 2026-09-27 事故：某群 runner 卡 ~16 分钟，积压消息全部迟到，且卡点不在
+# 任何已设超时的网络调用上。护栏 = wait_for 砍超时轮次 + 并发槽必须归还。
+
+class LoopTurnTimeoutTest(unittest.TestCase):
+    def test_hung_turn_cut_and_sem_released(self):
+        runner = qq_bot.SessionRunner(mock.Mock(), "group_9", "group", "9")
+        runner.bot.sem = asyncio.Semaphore(2)
+        started = threading.Event()
+
+        def hung_turn(batch):              # 模拟卡死的轮次
+            started.set()
+            time.sleep(0.5)                # 比 QQ_TURN_TIMEOUT 长；asyncio.run
+                                           # 收尾要等这个线程退出，别设太长
+
+        async def main():
+            runner.submit("小小怪？", "233")
+            await asyncio.wait_for(runner._loop(), timeout=10)
+
+        with mock.patch.object(qq_bot, "QQ_TURN_TIMEOUT", 0.1), \
+             mock.patch.object(qq_bot, "QQ_DEBOUNCE_SECONDS", 0.01), \
+             mock.patch.object(runner, "_run_turn", hung_turn), \
+             self.assertLogs("qq_bot", level="ERROR") as logs:
+            asyncio.run(main())
+        self.assertTrue(started.is_set())          # 轮次确实开跑过（不是没进）
+        self.assertEqual(runner._pending, [])      # 批次被消费
+        # 并发槽归还：卡死的轮次占的坑必须还回来，否则第二个会话跟着陪葬
+        self.assertEqual(runner.bot.sem._value, 2)
+        self.assertTrue(any("单轮超时" in m for m in logs.output))
+
+    def test_healthy_turn_still_runs(self):
+        runner = qq_bot.SessionRunner(mock.Mock(), "group_9", "group", "9")
+        runner.bot.sem = asyncio.Semaphore(2)
+        seen = []
+
+        async def main():
+            runner.submit("在吗", "张三")
+            await asyncio.wait_for(runner._loop(), timeout=10)
+
+        with mock.patch.object(qq_bot, "QQ_TURN_TIMEOUT", 5), \
+             mock.patch.object(qq_bot, "QQ_DEBOUNCE_SECONDS", 0.01), \
+             mock.patch.object(runner, "_run_turn",
+                               lambda batch: seen.append(batch)):
+            asyncio.run(main())
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0][0]["text"], "在吗")
 
 
 if __name__ == "__main__":
