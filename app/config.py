@@ -226,6 +226,30 @@ COMFYUI_URL = os.getenv("COMFYUI_URL", "http://127.0.0.1:8188")
 # 队的人先跑——一张卡住的图不该堵着所有人。
 IMAGE_GEN_TIMEOUT = int(os.getenv("IMAGE_GEN_TIMEOUT", "180"))
 
+# ─── ComfyUI 内存水位（自动重启）─────────────────────
+#
+# ComfyUI 的常驻内存**只涨不落**：每张图约 +600MB，`/free` 也降不下来
+# （它只把权重从显存搬到 CPU，不删）。16GB 物理内存被挤干之后，GGUF 要从
+# 磁盘重读（实测 5.5 秒 → 68 秒）、采样卡在 0/N 一百秒，最后被
+# IMAGE_GEN_TIMEOUT 掐掉——整机还跟着换页变卡。
+#
+# 唯一能把内存真正还回去的手段是重启进程（走 ComfyUI-Manager 的
+# /manager/reboot，Legacy 模式下 os.execv 原地重启、保留原命令行）。
+#
+# 这里定的是**系统可用内存**的下限：低于它就重启。用绝对水位而不是百分比，
+# 因为要防的是「整机换页」这件事，跟总内存多大无关。
+#
+# 0 = 关掉这个功能（回到从前：只涨，从不主动重启）。
+COMFY_MIN_FREE_RAM_GB = float(os.getenv("COMFY_MIN_FREE_RAM_GB", "3.0"))
+
+# 两次**尝试**重启之间的最小间隔（秒）。防抖用：内存要是被别的程序吃掉的，
+# 重启 ComfyUI 也救不回来，这个间隔保证不会退化成「每张图都重启」。
+# 成功失败都算，所以重启接口被拒时也不会每张图刷一条警告。
+COMFY_RESTART_MIN_GAP = float(os.getenv("COMFY_RESTART_MIN_GAP", "300"))
+
+# 等 ComfyUI 重启回来的上限（秒）。冷启动到能接第一张图约 60 秒，留够余量。
+COMFY_RESTART_WAIT = float(os.getenv("COMFY_RESTART_WAIT", "180"))
+
 # ─── Agent ──────────────────────────────────────────
 
 AGENT_PORT = int(os.getenv("AGENT_PORT", "5174"))

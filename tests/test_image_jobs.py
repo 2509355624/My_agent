@@ -6,6 +6,7 @@
 
 import os
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -630,6 +631,222 @@ class ChannelSwitchTest(_Base):
         self.events.clear()
         self._run()
         self.assertEqual(self.events, ["submit"])
+
+
+class _FakeTime:
+    """替掉 image_jobs 眼里的 time。
+
+    只换模块属性，不动 stdlib 的 time——后者会影响整个进程（含 mock 自己）。
+    clock 默认是**定值**（防抖判定用）；要跑 _restart_comfy 的轮询循环时传
+    一个会走的时钟进去，否则 `while time.time() - start < timeout` 永远成立。
+    """
+
+    def __init__(self, clock=None):
+        self._clock = clock or (lambda: 1000.0)
+        self.slept = []
+
+    def time(self):
+        return self._clock()
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+
+
+class _TickingClock:
+    """每读一次往前走 step 秒——把轮询循环快速推到超时。"""
+
+    def __init__(self, start=1000.0, step=10.0):
+        self.t = start
+        self.step = step
+
+    def __call__(self):
+        self.t += self.step
+        return self.t
+
+
+class RestartOnLowRamTest(unittest.TestCase):
+    """可用内存过低就重启 ComfyUI（走 Manager 的 /manager/reboot）。
+
+    为什么必须是「重启」而不是「/free」：/free 只做
+    model.to(offload_device)——把权重从显存搬到 CPU、**不删**，所以进程
+    RSS 一个字节都不降（2026-09-27 实测 8025 → 8025 MB）。而 ComfyUI 的
+    常驻内存每张图涨约 600MB、只涨不落。16GB 物理内存被挤干之后的症状是
+    「卡」不是「崩」：GGUF 每次从磁盘重读（5.5s → 68s）、采样卡在 0/N 一百
+    秒，最后被 IMAGE_GEN_TIMEOUT 掐掉。
+    """
+
+    def setUp(self):
+        image_jobs._reset()
+        self.stat_calls = []
+        self.reboot_calls = []
+
+    def _patch(self, stats, reboot_status=200, clock=None, reboot_error=None):
+        """装一个假的 requests + 假的 time。
+
+        stats 是 /system_stats 的应答序列：数字 = 那一刻可用多少 GB，异常
+        实例 = 那一刻连不上。序列用完就重复最后一项。
+        reboot_error 用来模拟真实的重启应答——ComfyUI 是先 exit 再回包的，
+        所以真机上拿到的是连接重置而不是 200。
+        """
+        seq = list(stats)
+        box = {"i": 0}
+
+        def _next_stats():
+            idx = min(box["i"], len(seq) - 1)
+            box["i"] += 1
+            item = seq[idx]
+            if isinstance(item, Exception):
+                raise item
+            resp = mock.Mock()
+            resp.status_code = 200
+            resp.raise_for_status = mock.Mock()
+            resp.json = mock.Mock(
+                return_value={"system": {"ram_free": item * 2 ** 30}})
+            return resp
+
+        def _get(url, timeout=None):
+            if url.endswith("/system_stats"):
+                self.stat_calls.append(url)
+                return _next_stats()
+            if url.endswith("/manager/reboot"):
+                self.reboot_calls.append(url)
+                if reboot_error is not None:
+                    raise reboot_error
+                resp = mock.Mock()
+                resp.status_code = reboot_status
+                return resp
+            raise AssertionError("测试没预期的 URL：" + url)
+
+        for name, repl in (("requests", mock.Mock(get=_get)),
+                           ("time", _FakeTime(clock))):
+            p = mock.patch.object(image_jobs, name, repl)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _threshold(self, gb):
+        p = mock.patch.object(image_jobs, "COMFY_MIN_FREE_RAM_GB", gb)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_above_threshold_does_not_restart(self):
+        self._patch([5.0])
+        image_jobs._maybe_restart_for_ram()
+        self.assertEqual(self.reboot_calls, [])
+
+    def test_below_threshold_restarts(self):
+        """1.5GB = 本次事故的现场（实测 1.60GB 可用），必须重启。"""
+        self._patch([1.5])
+        image_jobs._maybe_restart_for_ram()
+        self.assertEqual(len(self.reboot_calls), 1)
+
+    def test_exactly_at_threshold_does_not_restart(self):
+        """等于水位不算「低于」——边界不能来回抖。"""
+        self._patch([3.0])
+        image_jobs._maybe_restart_for_ram()
+        self.assertEqual(self.reboot_calls, [])
+
+    def test_zero_threshold_disables_the_feature(self):
+        """0 = 关掉：连 /system_stats 都不该问。"""
+        self._threshold(0)
+        self._patch([0.5])
+        image_jobs._maybe_restart_for_ram()
+        self.assertEqual(self.reboot_calls, [])
+        self.assertEqual(self.stat_calls, [])
+
+    def test_unreachable_stats_does_not_restart(self):
+        """问不到内存数就别动手——ComfyUI 可能根本没开。"""
+        self._patch([OSError("Connection refused")])
+        image_jobs._maybe_restart_for_ram()
+        self.assertEqual(self.reboot_calls, [])
+
+    def test_min_gap_blocks_a_second_restart(self):
+        """连着两张都低于水位，只重启一次——不然就变成每张都重启。"""
+        self._patch([1.5])
+        image_jobs._maybe_restart_for_ram()
+        image_jobs._maybe_restart_for_ram()
+        self.assertEqual(len(self.reboot_calls), 1)
+
+    def test_rejected_reboot_is_not_retried_on_every_image(self):
+        """重启被拒（403）也算「试过了」。
+
+        不记的话每张图都会再发一次请求、白等 3 秒、还刷一条警告。
+        """
+        self._patch([1.5], reboot_status=403)
+        for _ in range(3):
+            image_jobs._maybe_restart_for_ram()
+        self.assertEqual(len(self.reboot_calls), 1)
+
+    def test_restart_returns_true_when_comfyui_comes_back(self):
+        """轮询到它回来就算成功——中间那几次连不上是正常的。"""
+        self._patch([OSError("down"), OSError("down"), 6.0],
+                    clock=_TickingClock())
+        self.assertTrue(image_jobs._restart_comfy(timeout=120))
+
+    def test_restart_returns_false_when_it_never_comes_back(self):
+        """一直连不上就放弃返回 False，不能在这儿无限等。"""
+        self._patch([OSError("down")], clock=_TickingClock())
+        self.assertFalse(image_jobs._restart_comfy(timeout=30))
+
+    def test_rejected_restart_returns_false_without_waiting(self):
+        self._patch([5.0], reboot_status=403)
+        self.assertFalse(image_jobs._restart_comfy(timeout=120))
+        self.assertEqual(self.stat_calls, [])       # 没轮询，直接放弃
+
+    def test_connection_reset_on_reboot_still_counts_as_restarting(self):
+        """实测：ComfyUI 是**先 exit 再回包**的。
+
+        客户端拿到的是 `ConnectionResetError`（10054），不是 200。这不能当
+        失败——否则它真在重启时我们却判定失败、不等它回来，下一张图就撞上
+        「ComfyUI 没在线」那句话，白等一场。
+        """
+        self._patch([OSError("down"), 6.0],
+                    reboot_error=ConnectionResetError(10054, "reset"),
+                    clock=_TickingClock())
+        self.assertTrue(image_jobs._restart_comfy(timeout=120))
+
+    def test_connection_reset_then_never_back_still_returns_false(self):
+        """连接重置只说明「请求发出去了」，不代表一定会回来。"""
+        self._patch([OSError("down")],
+                    reboot_error=ConnectionResetError(10054, "reset"),
+                    clock=_TickingClock())
+        self.assertFalse(image_jobs._restart_comfy(timeout=30))
+
+    def test_restart_clears_the_remembered_channel(self):
+        """重启后 ComfyUI 里一个模型都没有了，别以为上个渠道还是热的。"""
+        image_jobs._last_skill = "anima"
+        self._patch([6.0], clock=_TickingClock())
+        self.assertTrue(image_jobs._restart_comfy(timeout=120))
+        self.assertIsNone(image_jobs._last_skill)
+
+    def test_worker_checks_ram_after_every_job(self):
+        """worker 必须在每张跑完之后看一眼内存。
+
+        没有这条，_maybe_restart_for_ram 就是个没人调用的死函数——而它失效
+        的方式是静默的：照常出图，只是内存一路涨到卡死。
+        """
+        calls = []
+        job = mock.Mock()
+
+        def _take():
+            if calls.count("take"):
+                raise SystemExit            # 让 worker 线程干净退出
+            calls.append("take")
+            return job
+
+        for name, repl in (("_take", _take),
+                           ("process", lambda j: calls.append("process")),
+                           ("_finish", lambda j: calls.append("finish")),
+                           ("_maybe_restart_for_ram",
+                            lambda: calls.append("ram"))):
+            p = mock.patch.object(image_jobs, name, repl)
+            p.start()
+            self.addCleanup(p.stop)
+
+        t = threading.Thread(target=image_jobs._worker, daemon=True)
+        t.start()
+        t.join(5)
+        self.assertFalse(t.is_alive(), "worker 没按预期退出")
+        self.assertEqual(calls, ["take", "process", "finish", "ram"])
 
 
 if __name__ == "__main__":

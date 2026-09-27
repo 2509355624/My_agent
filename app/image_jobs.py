@@ -42,6 +42,12 @@
   不到，所以 target / target_id 必须随任务带过去（猜错就发错群）。
 - **网页侧同步等，但等的时候不占 worker**：worker 只管跑图，网页请求线程自
   己在 Job.wait 上阻塞，两者分开。
+- **内存水位过低就重启 ComfyUI**（2026-09-27 加，见 _maybe_restart_for_ram）：
+  `/free` 治不了内存——它只把权重从显存搬到 CPU，**不删**，进程 RSS 一个字节
+  都不降（实测 8025 → 8025 MB）。而 ComfyUI 的常驻内存每张图涨约 600MB、只涨
+  不落，挤干物理内存后 GGUF 要从磁盘重读、采样卡死。重启是唯一能把内存真正
+  还回去的手段，代价是下一张要重新加载模型（十几秒到一分钟）。
+  **这跟「换渠道先 /free」不冲突**：那条管显存，这条管内存。
 """
 
 import collections
@@ -53,7 +59,9 @@ import uuid
 import requests
 
 from app.cancel import Cancelled, is_cancelled
-from app.config import COMFYUI_URL, IMAGE_GEN_TIMEOUT, QQ_AGENT_ID
+from app.config import (COMFY_MIN_FREE_RAM_GB, COMFY_RESTART_MIN_GAP,
+                        COMFY_RESTART_WAIT, COMFYUI_URL, IMAGE_GEN_TIMEOUT,
+                        QQ_AGENT_ID)
 
 log = logging.getLogger("image_jobs")
 
@@ -74,6 +82,7 @@ _lock = threading.Lock()
 _queue = collections.deque()      # 待跑的任务（不含正在跑的那个）
 _running = None                   # 正在跑的任务（只为可观测 / 算排队位次）
 _last_skill = None                # 上次提交给 ComfyUI 的渠道，用来判断要不要先 /free
+_last_restart_try = 0.0           # 上次**尝试**重启 ComfyUI 的时刻，防抖（成败都记）
 _per_session = {}                 # (target, target_id) -> 在途张数（含排队）
 _worker_started = False
 _wake = threading.Event()         # 有新任务入队时戳一下 worker
@@ -208,6 +217,10 @@ def _worker():
             log.exception("生图任务处理时抛异常 %s %s", job.target, job.target_id)
         finally:
             _finish(job)
+        # 每跑完一张看一眼内存——ComfyUI 的常驻内存是按张涨的（见
+        # _maybe_restart_for_ram）。放在这里而不是 _take 之前：_take 会阻塞
+        # 等新任务，在那儿检查就变成每秒一次了。
+        _maybe_restart_for_ram()
 
 
 def _maybe_release_for_switch(job):
@@ -232,6 +245,102 @@ def _maybe_release_for_switch(job):
         return
     log.info("渠道切换 %s → %s，先释放上一个渠道的模型", prev, skill)
     _report_and_free()
+
+
+def _free_ram_gb():
+    """问 ComfyUI 系统还剩多少可用内存（GB）；问不到返回 None。
+
+    借 ComfyUI 自己报的数，省一个 psutil 依赖——它报的 `system.ram_free` 与
+    psutil 的 `virtual_memory().available` 语义一致（实测 1.61 vs 1.60 GB）。
+    """
+    try:
+        resp = requests.get(COMFYUI_URL + "/system_stats", timeout=10)
+        resp.raise_for_status()
+        return (resp.json().get("system") or {}).get("ram_free", 0) / 2 ** 30
+    except Exception:
+        log.debug("查 ComfyUI 内存失败，忽略", exc_info=True)
+        return None
+
+
+def _restart_comfy(timeout=COMFY_RESTART_WAIT):
+    """重启 ComfyUI 进程并等它回来；成功返回 True。
+
+    走 ComfyUI-Manager 的 `/manager/reboot`：Legacy 模式（进程里没有
+    `__COMFY_CLI_SESSION__`）下它是 `os.execv` 原地重启、**保留原命令行**，
+    所以不用我们管进程怎么起。要求 Manager 的 `security_level` 不高于
+    normal（在 `user/__manager/config.ini` 里），否则返回 403。
+
+    **它不会返回 200**：ComfyUI 是先 `exit(0)` 再回包的，所以客户端拿到的是
+    连接被强行关闭（实测 `ConnectionResetError` 10054）。那不是失败——恰恰
+    说明它真的在重启，所以这里把它当「已发出，去等它回来」处理。
+
+    重启期间 8188 会拒连，所以轮询到它回来为止。等不到就放弃并记一条错误
+    ——下一张图会撞上 `_notice` 那句「ComfyUI 没在线」，总好过在这里无限等。
+    """
+    try:
+        status = requests.get(COMFYUI_URL + "/manager/reboot",
+                              timeout=15).status_code
+    except Exception as exc:
+        log.info("重启请求以 %s 结束——ComfyUI 先退出再回包，属正常",
+                 type(exc).__name__)
+        status = None                # 不是拒绝，继续往下等它回来
+    if status is not None and status != 200:
+        log.warning("重启 ComfyUI 被拒（HTTP %d）——多半是 ComfyUI-Manager 的 "
+                    "security_level 高于 normal，见 user/__manager/config.ini",
+                    status)
+        return False
+
+    log.info("ComfyUI 正在重启，等它回来（最多 %.0f 秒）", timeout)
+    time.sleep(3)                    # 先等旧进程真的交出去，别刚发完就探到它
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            if requests.get(COMFYUI_URL + "/system_stats",
+                            timeout=5).status_code == 200:
+                log.info("ComfyUI 已重启完成，耗时 %.0f 秒", time.time() - start)
+                # 新进程里一个模型都没加载，别让「换渠道先 /free」以为还是热的。
+                global _last_skill
+                with _lock:
+                    _last_skill = None
+                return True
+        except Exception:
+            pass
+        time.sleep(POLL_INTERVAL)
+    log.error("等 ComfyUI 重启超过 %.0f 秒还没回来", timeout)
+    return False
+
+
+def _maybe_restart_for_ram():
+    """可用内存过低就重启 ComfyUI，把它占的内存真正还回去。
+
+    **为什么必须重启、而不是打 /free**：`/free` 只做
+    `model.to(offload_device)`——把权重从显存搬到 CPU，**不删**。所以进程
+    RSS 一个字节都不降（2026-09-27 实测 8025 → 8025 MB），而它的常驻内存
+    每张图涨约 600MB、只涨不落。挤干物理内存之后的症状是「卡」不是「崩」：
+    GGUF 每次从磁盘重读（5.5 秒 → 68 秒）、采样卡在 0/N 一百秒，整机跟着
+    换页。重启是唯一有效的止血。
+
+    调用点在 worker 里、**每跑完一张检查一次**——内存是按张涨的，所以按张
+    看。队列空的时候重启最划算（没人在等）；队列不空也得重启，否则下一张
+    照样卡死，后面排队的全陪葬。
+
+    代价：重启会丢掉 ComfyUI 里已加载的模型，下一张要重新加载（十几秒到
+    一分钟）。这是拿时间换「不卡死」。
+    """
+    global _last_restart_try
+    if COMFY_MIN_FREE_RAM_GB <= 0:
+        return                       # 功能关掉了
+    now = time.time()
+    if now - _last_restart_try < COMFY_RESTART_MIN_GAP:
+        return                       # 刚试过，别反复折腾（也防失败后每张刷日志）
+    free = _free_ram_gb()
+    if free is None or free >= COMFY_MIN_FREE_RAM_GB:
+        return
+    # 成败都记：不记的话重启被拒时会每张图重试一次，日志刷屏还白等 3 秒。
+    _last_restart_try = now
+    log.warning("系统可用内存只剩 %.1fGB（低于 %.1fGB 水位），重启 ComfyUI 释放",
+                free, COMFY_MIN_FREE_RAM_GB)
+    _restart_comfy()
 
 
 def process(job):
@@ -316,12 +425,13 @@ def _drain():
 def _reset():
     """清空队列与计数（测试用）。不动 _worker_started——测试自己把
     _ensure_worker mock 成空操作，真线程不该被这里牵起来。"""
-    global _running, _last_skill
+    global _running, _last_skill, _last_restart_try
     with _lock:
         _queue.clear()
         _per_session.clear()
         _running = None
         _last_skill = None
+        _last_restart_try = 0.0
 
 
 # ─── ComfyUI 交互 ────────────────────────────────────
