@@ -209,18 +209,23 @@ def _vision_head(owners):
     return "[%s 发来图片，以下是识别结果]" % "、".join(uniq)
 
 
-def _vision_notes(images, owners=None):
+def _vision_notes(images, owners=None, question=""):
     """逐张识图，返回可拼进用户输入的文本行。失败的项也占一行。
 
     owners 与 images 一一对应（可短可缺）；多张图时每张标出是谁发的。
+
+    question 是本轮用户的原话，一并送进识图 prompt（见 vision.build_prompt）。
+    不带的话识图只按通用指令读图，下游文本模型就只能拿到一段泛泛的描述，
+    得自己猜「用户到底想问什么」。
     """
-    from app.vision import describe
+    from app.vision import build_prompt, describe
 
     notes = []
     total = len(images)
     for i, data_url in enumerate(images, 1):
         try:
-            text = describe(data_url).strip()
+            text = describe(data_url,
+                            prompt=build_prompt(question, i, total)).strip()
         except Exception as exc:
             log.warning("识图失败（第 %d/%d 张）：%s", i, total, exc)
             text = ""
@@ -241,8 +246,11 @@ def _with_vision(user_input, images, owners=None):
     加这段头是必要的：识别出来的文字混在用户的话里，多轮之后模型分不清
     哪些是"用户说的"、哪些是"从图里读出来的"，容易把图里的报错当成用户
     的诉求本身。
+
+    user_input 同时作为识图 prompt 里的「用户的需求」传下去——识图看得见
+    需求，描述才有针对性，否则它只能对着一张图泛泛而谈。
     """
-    notes = _vision_notes(images, owners)
+    notes = _vision_notes(images, owners, question=user_input)
     if not notes:
         return user_input
     block = _vision_head(owners) + "\n" + "\n".join(notes)

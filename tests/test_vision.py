@@ -270,5 +270,79 @@ class VisionAttributionTest(unittest.TestCase):
         self.assertNotIn("【第 1 张", out)
 
 
+class VisionQuestionTest(unittest.TestCase):
+    """识图要把用户的问题带进去。
+
+    不带问题的话，识图只按通用指令读图，下游文本模型拿到的是一段泛泛的
+    描述，得自己猜用户想问什么。但「原样提取文字」这条硬要求不能因为加了
+    问题就丢——报错截图里的英文被翻译过，agent 就再也搜不到那个错误码。
+    """
+
+    def test_no_question_falls_back_to_generic_prompt(self):
+        # 只发图不打字是常见用法，不能拼出一个空的「用户的需求：」
+        self.assertEqual(vision.build_prompt(""), vision._PROMPT)
+        self.assertEqual(vision.build_prompt("   "), vision._PROMPT)
+        self.assertNotIn("用户的需求", vision.build_prompt(""))
+
+    def test_question_is_embedded(self):
+        p = vision.build_prompt("这个报错啥意思")
+        self.assertIn("这个报错啥意思", p)
+        self.assertIn("用户的需求", p)
+
+    def test_hard_requirement_survives_the_question(self):
+        # 加问题不能把「原样提取文字」挤掉
+        p = vision.build_prompt("这图里写了啥")
+        self.assertIn("原样提取", p)
+        self.assertIn("不要翻译", p)
+
+    def test_long_question_is_truncated(self):
+        long_q = "问" * (vision.QUESTION_MAX_CHARS + 50)
+        p = vision.build_prompt(long_q)
+        self.assertNotIn("问" * (vision.QUESTION_MAX_CHARS + 1), p)
+        self.assertIn("…", p)
+
+    def test_multi_image_marks_position(self):
+        p = vision.build_prompt("看看这个", 2, 3)
+        self.assertIn("第 2 张", p)
+        self.assertIn("共 3 张", p)
+        # 单张不加这句噪音
+        self.assertNotIn("第 1 张", vision.build_prompt("看看这个", 1, 1))
+
+    def test_with_vision_passes_question_into_prompt(self):
+        seen = {}
+
+        def fake(data_url, prompt=None, timeout=None):
+            seen["prompt"] = prompt
+            return "一只猫"
+
+        with mock.patch("app.vision.describe", side_effect=fake):
+            agent._with_vision("这个报错啥意思", ["data:1"])
+        self.assertIn("这个报错啥意思", seen["prompt"])
+
+    def test_each_image_carries_its_index(self):
+        prompts = []
+
+        def fake(data_url, prompt=None, timeout=None):
+            prompts.append(prompt)
+            return "一只猫"
+
+        with mock.patch("app.vision.describe", side_effect=fake):
+            agent._with_vision("看看", ["data:1", "data:2"])
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("第 1 张", prompts[0])
+        self.assertIn("第 2 张", prompts[1])
+
+    def test_no_question_keeps_generic_prompt_in_call(self):
+        seen = {}
+
+        def fake(data_url, prompt=None, timeout=None):
+            seen["prompt"] = prompt
+            return "一只猫"
+
+        with mock.patch("app.vision.describe", side_effect=fake):
+            agent._with_vision("", ["data:1"])
+        self.assertEqual(seen["prompt"], vision._PROMPT)
+
+
 if __name__ == "__main__":
     unittest.main()

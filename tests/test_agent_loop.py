@@ -181,7 +181,14 @@ class AgentLoopTest(unittest.TestCase):
 
     def _patch_vision(self, text=None, exc=None):
         """替换识图调用：要么返回固定文字，要么抛错（验证降级路径）。"""
-        def fake(_data_url):
+        self.vision_prompts = []
+
+        def fake(_data_url, prompt=None, timeout=None):
+            # prompt 是 2026-09-27 起新增的入参（识图要带上用户问题）。收下
+            # 并留档，方便断言「问题确实传到了识图」——签名不跟着改的话，
+            # 调用方一传 prompt 就会 TypeError，被识图的 try/except 吞成
+            # 「识图失败」，测试仍会"通过"，只有断言能把它揪出来。
+            self.vision_prompts.append(prompt)
             if exc is not None:
                 raise exc
             return text
@@ -189,6 +196,20 @@ class AgentLoopTest(unittest.TestCase):
         p = mock.patch("app.vision.describe", fake)
         p.start()
         self.addCleanup(p.stop)
+
+    def test_user_question_reaches_vision_prompt(self):
+        """识图要看得见用户的问题。
+
+        看不到问题，识图就只能对着一张图泛泛而谈，下游文本模型还得自己猜
+        用户想问什么。这条盯的是整条链路：run_agent_stream → _with_vision
+        → vision.describe 的 prompt 入参。
+        """
+        self._patch_vision("一只猫趴在键盘上。")
+        self._patch_llm(["我看到一只猫。"])
+        list(agent.run_agent_stream("这是什么", self.history, provider="volc",
+                                    image="data:image/jpeg;base64,ZZZ"))
+        self.assertTrue(self.vision_prompts)
+        self.assertIn("这是什么", self.vision_prompts[0])
 
     def test_no_vision_model_gets_recognized_text(self):
         """火山的纯文本模型：图先被识成文字，拼在用户输入后面进正文。
