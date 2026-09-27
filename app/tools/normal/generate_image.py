@@ -306,7 +306,7 @@ def _generate_image(prompt, skill=None, use_character=False, lora=None,
 tool = {
     "name": "generate_image",
     "description": "调用 ComfyUI 生成图片。"
-                  "【默认 Skill】文生图默认 anima（Anima 2B 动漫模型，双段精修，一次一张），"
+                  "【默认 Skill】文生图默认 anima（Anima 2B 动漫模型，单段出图，一次一张），"
                   "图生图只走 qwen_image_v1（见下面【图生图】）—— 不传 skill 就按这两条走，"
                   "prompt 只写一段画面描述，**不要用 --- 分隔**。"
                   "【换渠道】仅当用户点名或明确需要时才换：说 krea2（如「用 krea2」）传 skill=krea2"
@@ -339,7 +339,7 @@ tool = {
     "description_overrides": {
         QQ_AGENT_ID:
             "调用 ComfyUI 生成图片。"
-            "【默认 Skill】文生图默认 anima（Anima 2B 动漫模型，双段精修，一次一张），"
+            "【默认 Skill】文生图默认 anima（Anima 2B 动漫模型，单段出图，一次一张），"
             "图生图只走 qwen_image_v1（见下面【图生图】）—— 不传 skill 就按这两条走，"
             "prompt 只写一段画面描述，**不要用 --- 分隔**。"
             "【换渠道】仅当用户点名或明确需要时才换：krea2 传 skill=krea2；"
