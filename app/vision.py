@@ -208,6 +208,11 @@ def describe(data_url, timeout=None, prompt=None):
         "Content-Type": "application/json",
     }
 
+    # 识图是**隐形调用**（每张图都要跑一次，请求数远多于对话轮数），但它自己
+    # 发 HTTP、不经过 app/llm.py，所以从前完全不产生 `[llm]` 行——排查「哪家
+    # 模型在拖时间」时会漏掉这一大块。打同一个前缀，`grep '\[llm\]'` 就能捞全。
+    log.info("[llm] %s / %s vision", pid, model)
+
     try:
         resp = _session.post(url, json=payload, headers=headers,
                              timeout=timeout or VISION_TIMEOUT)

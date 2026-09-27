@@ -4,6 +4,7 @@ LLM 调用封装（支持多 Provider 动态路由）
 
 import codecs
 import json
+import logging
 import threading
 import time
 import requests
@@ -12,6 +13,10 @@ from app.config import (API_URL, API_KEY, MODEL, LLM_PROVIDER,
                         PROVIDERS, OLLAMA_BASE_URL, CONTEXT_BUDGET,
                         LLM_FALLBACK_CHAIN, LLM_REQUEST_TIMEOUT,
                         LLM_FALLBACK_TTL)
+
+# 诊断行一律走 logging，不走 print——原因见 app/logsetup.py 的模块说明：
+# print 落 stdout，被重定向/管道接管后是块缓冲，日志会「看起来丢了」。
+log = logging.getLogger("llm")
 
 # 跨调用状态（缓存优化用）：记录最近一次请求的 token 用量与命中率。
 #
@@ -150,8 +155,8 @@ def _record_usage(usage, elapsed=None, provider="", model=""):
     u["hit_rate"] = rate
 
     tail = f"  {elapsed:.1f}s" if elapsed is not None else ""
-    print(f"[cache] 命中 {hit} / {total} tokens = {rate*100:.1f}% "
-          f"(未命中 {miss}){tail} @{_now()}")
+    log.info("[cache] 命中 %d / %d tokens = %.1f%% (未命中 %d)%s",
+             hit, total, rate * 100, miss, tail)
 
     try:
         from app import usage as usage_stats
@@ -170,13 +175,16 @@ def _log_effective(eff, stream, attempt=None):
     call_llm_stream，后者不经过 _call_provider——只打一处会让主对话全程无声。
 
     attempt=(第几次, 共几次) 时带上序号，降级切换在日志里一眼可见：
-    `[llm] volc / deepseek-v4-flash-ga [1/3] stream` 后面紧跟一行 `[2/3]`，
-    就说明主模型失败、已经切到备胎了。
+    `[llm] volc / deepseek-v4-flash stream [1/3]` 后面紧跟一行 `[2/3]`，
+    就说明主模型失败、已经切到备胎了。识图（app/vision.py）也打同一前缀，
+    所以 grep 一下 "[llm]" 就能捞到本进程的**全部**模型调用。
+
+    时间戳交给 logging 的 asctime，别再自己拼一份。
     """
     tag = "stream" if stream else "sync"
     if attempt:
         tag += " [%d/%d]" % attempt
-    print(f"[llm] {eff['provider']} / {eff['model']} {tag} @{_now()}")
+    log.info("[llm] %s / %s %s", eff["provider"], eff["model"], tag)
 
 
 # ─── 候选链与失效记忆 ────────────────────────────────
@@ -217,8 +225,8 @@ def _mark_dead(key, reason):
     """把这个候选拉黑一段时间。失败是常态（额度用完、模型退役），只记日志。"""
     with _DEAD_LOCK:
         _DEAD[key] = time.time() + LLM_FALLBACK_TTL
-    print(f"[chain] {key[0]} / {key[1]} 拉黑 {LLM_FALLBACK_TTL:.0f}s"
-          f"（{reason}）@{_now()}")
+    log.info("[chain] %s / %s 拉黑 %.0fs（%s）",
+             key[0], key[1], LLM_FALLBACK_TTL, reason)
 
 
 def reset_chain_state():
@@ -478,7 +486,3 @@ def call_llm_stream(messages, timeout=None, provider=None, model=None,
             last_err = e
             _mark_dead((pid, mname), _brief(e))
     raise last_err
-
-
-def _now():
-    return time.strftime("%H:%M:%S")

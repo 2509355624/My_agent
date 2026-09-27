@@ -18,6 +18,7 @@
 """
 
 import json
+import logging
 import os
 import re
 import threading
@@ -25,6 +26,10 @@ import time
 from app.agents import session_file as _agent_session_file
 from app.config import CONTEXT_BUDGET, CONTEXT_MAX_TURNS
 from app.llm import current_usage
+
+# 走 logging 而不是 print：print 落 stdout，被重定向/管道接管后是块缓冲，
+# 压缩、滚窗口这些诊断会「看起来丢了」。见 app/logsetup.py 模块说明。
+log = logging.getLogger("memory")
 
 
 # ─── 持久化 ──────────────────────────────────────────
@@ -351,8 +356,8 @@ def _compact(history, system_msgs, other_msgs, budget, provider=None, model=None
         keep -= 1
 
     if size > budget:
-        print("[compact] 摘要后仍需约 %d tokens（预算 %d）：最近一轮自身过大，"
-              "应在入口侧限制单条输入长度" % (size, budget))
+        log.warning("[compact] 摘要后仍需约 %d tokens（预算 %d）：最近一轮自身过大，"
+                    "应在入口侧限制单条输入长度", size, budget)
 
     old_turns = turns[:-keep]
     recent_turns = turns[-keep:]
@@ -367,7 +372,8 @@ def _compact(history, system_msgs, other_msgs, budget, provider=None, model=None
     except Exception as e:
         # 降级：不压缩，原样把历史交回去。下一轮若仍超预算会再试一次
         # （强制压缩不受冷却水位限制），所以这里不必重试或补压。
-        print("[compact] 摘要失败，本轮跳过压缩：%s: %s" % (type(e).__name__, e))
+        log.warning("[compact] 摘要失败，本轮跳过压缩：%s: %s",
+                    type(e).__name__, e)
         return history
 
     # 拼装：system + 摘要消息 + 最近几轮 + 状态栏（由 agent 运行时追加）
@@ -526,8 +532,8 @@ def _digest_turns_async(agent_id, group_id, old_turns):
     try:
         from app import longterm
         longterm.digest_messages_async(agent_id, group_id, batch)
-        print("[window] 群%s：攒够 %d 条滚出消息，批量转交长期记忆"
-              % (group_id, len(batch)))
+        log.info("[window] 群%s：攒够 %d 条滚出消息，批量转交长期记忆",
+                 group_id, len(batch))
     except Exception as exc:
         # 导入失败/线程起不来都不能连带毁掉 save_history
-        print("[window] 转交长期记忆失败：%s: %s" % (type(exc).__name__, exc))
+        log.warning("[window] 转交长期记忆失败：%s: %s", type(exc).__name__, exc)

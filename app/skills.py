@@ -17,9 +17,12 @@ Skill 管理
        assets/
 """
 
+import logging
 import os
 import json
 from app.config import SKILLS_DIR
+
+log = logging.getLogger("skills")
 
 
 def _resolve_skill_dir(skill_name):
@@ -117,7 +120,7 @@ def load_workflow(path):
             raw = f.read().replace(": __SEED__", ': "__SEED__"')
         return json.loads(raw)
     except (OSError, json.JSONDecodeError) as e:
-        print("[警告] 工作流解析失败 " + str(path) + ": " + str(e))
+        log.warning("工作流解析失败 %s: %s", path, e)
         return None
 
 

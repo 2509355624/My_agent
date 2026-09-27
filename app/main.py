@@ -10,6 +10,7 @@ from flask import (Flask, request, jsonify, send_from_directory, Response,
                    stream_with_context)
 from app import agents as agent_store
 from app import cancel as cancel_mod
+from app import logsetup
 from app import usage as usage_stats
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         LLM_PROVIDER, PROVIDERS, OLLAMA_BASE_URL, DEFAULT_AGENT_ID,
@@ -1305,6 +1306,11 @@ def _local_ip():
 
 
 def run():
+    # 控制台 + logs/agent.log（轮转）。从前这个进程**根本没配 logging**，
+    # 所有 log.info 都被 lastResort 悄悄丢掉（它只放 WARNING 以上）——网页端
+    # 的模型调用、生图、QQ 推送在日志里全程无声。这里补上。
+    logsetup.setup("agent")
+
     # 启动时确保每个 agent 的会话文件都以稳定 system 头开始（prefix cache 锚点）。
     # agents/ 下一个目录都没有时，也要保证默认 agent 可用，否则第一次聊天
     # 会缺 system 头（各路由虽有兜底，但启动时铺好更省事）。

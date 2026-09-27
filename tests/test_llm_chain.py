@@ -282,19 +282,29 @@ class EmptyChainTest(_ChainBase):
 
 
 class LogFormatTest(unittest.TestCase):
+    """模型调用行走的是 logging（logger 名 `llm`），不是 print。
+
+    这是刻意换的：print 落 stdout，输出一旦被重定向/管道接管就是块缓冲，
+    `logging` 的行还在、这些行却要攒满 8KB 才吐——2026-09-27 用户报
+    「看不到模型调用日志」就是这个原因（见 app/logsetup.py）。
+    """
+
     def test_attempt_is_shown(self):
         eff = {"provider": "volc", "model": "m"}
-        with mock.patch("builtins.print") as p:
+        with self.assertLogs("llm", level="INFO") as cm:
             llm._log_effective(eff, stream=True, attempt=(2, 3))
-        line = p.call_args[0][0]
+        line = cm.output[0]
         self.assertIn("stream [2/3]", line)
         self.assertIn("volc / m", line)
 
-    def test_without_attempt_it_looks_like_before(self):
+    def test_without_attempt_has_no_index(self):
+        """不带序号时不出现 [n/m]——链只有一项时别让日志看着像降级过。"""
         eff = {"provider": "volc", "model": "m"}
-        with mock.patch("builtins.print") as p:
+        with self.assertLogs("llm", level="INFO") as cm:
             llm._log_effective(eff, stream=False)
-        self.assertIn("sync @", p.call_args[0][0])
+        line = cm.output[0]
+        self.assertIn("sync", line)
+        self.assertNotIn("[1/", line)
 
 
 if __name__ == "__main__":

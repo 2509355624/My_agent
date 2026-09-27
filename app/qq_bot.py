@@ -40,8 +40,8 @@ try:
 except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
-from app import (image_out, interject, longterm, notify, qq_api, recent,
-                 stickers, usage)
+from app import (image_out, interject, logsetup, longterm, notify, qq_api,
+                 recent, stickers, usage)
 from app.agent import run_agent_stream
 from app.agent_prompt import build_stable_prompt
 from app.config import (
@@ -1019,10 +1019,9 @@ def _acquire_single_instance():
 
 
 def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    # 控制台 + logs/qq_bot.log（轮转）。模型调用（[llm]）和降级（[chain]）现在
+    # 都走 logging，所以窗口滚动 / 重定向都吃不掉它们。
+    logsetup.setup("qq_bot")
     if not QQ_AGENT_ID:
         log.error("QQ_AGENT_ID 为空，先配好 .env 再启动")
         return
