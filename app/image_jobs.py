@@ -45,12 +45,58 @@
   不到，所以 target / target_id 必须随任务带过去（猜错就发错群）。
 - **网页侧同步等，但等的时候不占 worker**：worker 只管跑图，网页请求线程自
   己在 Job.wait 上阻塞，两者分开。
+- **重渠道排到最后，且几乎不让它连跑两张**（2026-09-27 加，见下面的「重渠道
+  优先度」一节）：qwen_image_v1 权重 5，任何普通渠道（权重 1）都能插到它前面；
+  前一张 qwen 刚跑完 90 秒内，qwen 一律重新排队尾，把间隙让给别的渠道——那个
+  间隙正是 TDR 的窗口。**这是软的**：真没有别的活时 qwen 照跑，不会饿死。
+- **重渠道不许排长队**：排到第三张就拒收（`_MAX_HEAVY_QUEUE`）。qwen 一张约
+  100 秒，3 张已经把「重活独占显卡」的时间撑到 5 分钟，再多不如让模型说画不了。
 - **内存水位过低就重启 ComfyUI**（2026-09-27 加，见 _maybe_restart_for_ram）：
   `/free` 治不了内存——它只把权重从显存搬到 CPU，**不删**，进程 RSS 一个字节
   都不降（实测 8025 → 8025 MB）。而 ComfyUI 的常驻内存每张图涨约 600MB、只涨
   不落，挤干物理内存后 GGUF 要从磁盘重读、采样卡死。重启是唯一能把内存真正
   还回去的手段，代价是下一张要重新加载模型（十几秒到一分钟）。
   **这跟「换渠道先 /free」不冲突**：那条管显存，这条管内存。
+
+## 重渠道优先度（2026-09-27 加）
+
+### 为什么
+
+qwen_image_v1 是唯一「一跑就把 12GB 显卡榨干」的渠道：文本编码器 6018MB +
+unet 4487MB ≈ 10.5GB 权重，而空闲可用只有 10.78GB。当天实测的错误模式是
+**确定性的**：
+
+- **第 1 张必成**（48~50 秒）；
+- **第 2 张必死**——提交后 2~6 秒，日志停在 `got prompt` 那行中间，没有 Python
+  traceback，紧接着 `nvlddmkm` 事件 153（TDR），有时整台机器直接重启。
+
+死因是「第 1 张的残留在 VRAM / RAM 里还没散，第 2 张就要重新摊开那 6000MB 的
+编码器」——出图后显存只剩 2.35GB、内存只剩 4.21GB，两边都装不下。早先「16:09
+成 / 16:12 成」那两次能连上，是因为中间隔了三分钟，缓存自己过期了。
+
+外挂的启动参数全试过、全被推翻（`--vram-headroom` 反而拖垮了整机、
+`--disable-pinned-memory` 第一张就撞出完整 TDR、`--lowvram` 在 DynamicVRAM 下是
+空操作），量化也已经到底（Q4_K_M + w4a8 就是 8GB 显存档的官方最省组合，再往下
+只有 Q4_0，还要掉画质）。**所以只能从 agent 侧管**：别让 qwen 紧接着 qwen 跑。
+
+### 两条规则
+
+1. **权重拉开**：`skill_priority()` 给每个渠道定权重（默认 1；qwen 是 5）。
+   队列按 `(是否非默认, 权重, seq)` 排序，所以任何普通渠道都能插到任何重渠道
+   前面，**不管它是什么时候入队的**。这就是用户要的「有其他渠道生成的时候 qwen
+   必须最后自动顺位到后面」。
+2. **冷却窗**：一张 qwen 跑完之后的 `QWEN_COOLDOWN`（默认 90）秒内，新的 qwen
+   重新扔到队尾，并且按普通优先级参与排序——把让出来的空隙给别的渠道。冷却窗
+   本来正是显存/内存把 6GB 权重还回去所花的时间。
+
+### 有意不做的
+
+- **不做「单列 qwen 通道」**：worker 是全局唯一的，第二条通道只会让两张图并行
+  ——而并行正是要根除的东西。
+- **不饿死 qwen**：上面两条都是「软」的——排序只在有别的活可干时把 qwen 往后放，
+  队列里只剩 qwen 时它照跑。
+- **不额外改 qwen 的分辨率 / cache 设置**：那会掉细节，且没有实测支撑。本来就有
+  `_maybe_release_for_low_vram` 在提交前兜一道 `/free`。
 """
 
 import collections
@@ -64,7 +110,8 @@ import requests
 from app.cancel import Cancelled, is_cancelled
 from app.config import (COMFY_MIN_FREE_RAM_GB, COMFY_MIN_FREE_VRAM_GB,
                         COMFY_RESTART_MIN_GAP, COMFY_RESTART_WAIT, COMFYUI_URL,
-                        IMAGE_GEN_TIMEOUT, QQ_AGENT_ID)
+                        IMAGE_GEN_TIMEOUT, QQ_AGENT_ID, QWEN_COOLDOWN)
+from app.skills import skill_priority
 
 log = logging.getLogger("image_jobs")
 
@@ -75,11 +122,21 @@ MAX_INFLIGHT = 2
 # 排到一小时之后的图，对方早就不看了。超了就让模型回一句「排队的人太多」。
 MAX_QUEUE = 10
 
+# 重渠道（权重 > 1）在队里最多允许多少张（含正在跑的那张）。qwen 一张约
+# 100 秒，3 张就把「重活独占显卡」的时间撑到 5 分钟——再多不如让模型说画不了。
+# 权重本身说明不了队有多长，所以这条单独数。
+MAX_HEAVY_IN_QUEUE = 3
+
 # 单张图从「真正开跑」到出图的时限（秒）。到点还没出图就中断它、让下一个上。
 TASK_TIMEOUT = IMAGE_GEN_TIMEOUT
 
 # 轮询间隔（秒）
 POLL_INTERVAL = 2
+
+# 冷却闸只认这一个渠道（见模块开头「重渠道优先度」）。写成常量而不是判断
+# 「权重 > 1」，是因为冷却的必要性来自 qwen 那套权重的具体尺寸，别的重渠道
+# 不一定共用同一个死因。
+QWEN_SKILL = "qwen_image_v1"
 
 _lock = threading.Lock()
 _queue = collections.deque()      # 待跑的任务（不含正在跑的那个）
@@ -90,6 +147,31 @@ _per_session = {}                 # (target, target_id) -> 在途张数（含排
 _worker_started = False
 _wake = threading.Event()         # 有新任务入队时戳一下 worker
 
+# 排序用。_seq 单调递增，权重相同的任务严格先进先出；_heavy_done_at 记
+# 上一张重渠道**跑完**的时刻（不是提交时刻——冷却要的是「残留在散」的那段）。
+_seq = 0
+_heavy_done_at = 0.0
+
+
+def _order(job):
+    """队列排序键：先普通渠道（按入队先后），再重渠道（按入队先后）。
+
+    排的是「出队顺序」，在**取出时**才排序（见 _take_nowait），所以入队顺序
+    不丢——后入队的普通任务能插到先入队的 qwen 前面，这正是用户要的
+    「有其他渠道生成的时候 qwen 必须最后自动顺位到后面」。
+
+    三个字段：① 权重是不是默认值（False=普通，排前面）；② 权重（都非默认时
+    小的先）；③ 入队序号。故意不用 `job.weight != 1` 而用 `job.weight > 1`：
+    万一以后出现权重 0（更优先），它也该排在最前面，而不是被当成「非默认」。
+    """
+    return (job.weight > 1, job.weight, job.seq)
+
+
+def _heavy_ahead():
+    """已经在等或正在跑的重渠道有几张（含正在跑的那张）。"""
+    return sum(1 for j in _queue if j.weight > 1) \
+        + (1 if _running is not None and _running.weight > 1 else 0)
+
 
 class Job:
     """一次生图任务。
@@ -98,11 +180,15 @@ class Job:
     等结果——注意等的是「排队 + 出图」全程，排队时间不由我们控制。
     """
 
-    def __init__(self, target, target_id, workflow, skill=None):
+    def __init__(self, target, target_id, workflow, skill=None, weight=1, seq=0):
         self.target = target
         self.target_id = target_id
         self.workflow = workflow
         self.skill = skill          # 生图渠道，只用来判断要不要先 /free
+        self.weight = weight        # 队列权重（默认 1 = 普通；qwen 是 5）
+        self.seq = seq              # 入队序号，同权重的按它先进先出
+        self.waits = 0              # 被冷却 / 被插队推回过几次（只为日志）
+        self.skill_done = False     # 已经成功跑完一张？决定跑完要不要开冷却
         self.prompt_id = None
         self.entry = None           # 出图后的 history entry
         self.error = None           # 失败原因（网页侧 wait 时抛出来）
@@ -139,23 +225,32 @@ def queue_depth():
 
 
 def ahead_of(job):
-    """这个任务前面还有几张（含正在跑的那张）。已经开跑就返回 0。"""
+    """这个任务前面还有几张（含正在跑的那张）。已经开跑就返回 0。
+
+    按**出队顺序**数，不是按入队顺序：后入队的普通任务会插到先入队的 qwen
+    前面，模型报给对方的「前面还有 N 张」得跟它实际要等的一致。
+    """
     with _lock:
         if job not in _queue:
             return 0
-        return _queue.index(job) + (1 if _running is not None else 0)
+        order = sorted(_queue, key=_order)
+        return order.index(job) + (1 if _running is not None else 0)
 
 
 def enqueue(target, target_id, workflow, skill=None):
     """把一张图排进全局队列，返回 (job, reason)。
 
     reason 非 None 表示没接（此时 job 为 None），它是一句可以直接转述给对方
-    的话。两种拒收：全局队排太长、这个会话自己排太多。
+    的话。三种拒收：全局队排太长、这个会话自己排太多、重渠道已经排了太多。
 
-    skill 只用来做「换渠道先 /free」的判断（见 _maybe_release_for_switch）。
-    不传就退化成从前那样从不主动释放——老调用方不受影响。
+    skill 用来定两件事：队列权重（`skill_priority`，qwen 排最后）和
+    「换渠道先 /free」的判断（见 _maybe_release_for_switch）。
+    不传 skill 时的行为与从前完全一致（权重 1、从不主动释放）——老调用方
+    不受影响。
     """
+    global _seq
     key = _key(target, target_id)
+    weight = skill_priority(skill)
     with _lock:
         depth = len(_queue) + (1 if _running is not None else 0)
         if depth >= MAX_QUEUE:
@@ -165,9 +260,20 @@ def enqueue(target, target_id, workflow, skill=None):
         if cur >= MAX_INFLIGHT:
             return None, ("这个会话已经排着 %d 张了，画完这些再说。"
                           "不要跟对方提这张图，当没画过，接着把话说完。" % cur)
-        job = Job(target, target_id, workflow, skill)
+        if weight > 1 and _heavy_ahead() >= MAX_HEAVY_IN_QUEUE:
+            # 重渠道一张就把显卡占满好几分钟。排队太长不如让它说一句
+            # 「我现在画不了」——总好过半小时后发一张对方早忘了的图。
+            return None, ("画图那个通道正忙着（已经在排 %d 张重的），这一张先不画。"
+                          "别跟对方提这张图，当没画过，接着把话说完。"
+                          % MAX_HEAVY_IN_QUEUE)
+        _seq += 1
+        job = Job(target, target_id, workflow, skill, weight, _seq)
         _queue.append(job)
         _per_session[key] = cur + 1
+    if weight > 1:
+        # 入队就记一行：模型选渠道的决策只有在这里才看得见，出问题时先查这行。
+        log.info("重渠道 %s 入队（%s %s，权重 %d，前面 %d 张）",
+                 skill, target, target_id, weight, ahead_of(job))
     _wake.set()
     _ensure_worker()
     return job, None
@@ -189,13 +295,77 @@ def _ensure_worker():
         raise
 
 
+def _next_ready():
+    """挑下一个该跑的任务（**调用方必须已持 _lock**）；都不该跑返回 None。
+
+    「重渠道不许连跑」在这里落地：只要**上一张成功的是重渠道**且还没过冷却窗，
+    队里的重渠道就一张都不许开跑——普通渠道照常放行（这正是冷却窗的意义：
+    把间隙让给别人）。全是重渠道、又都在冷却里时返回 None，worker 回去等。
+
+    两个容易踩的点：
+
+    - 判据读的是 `_heavy_done_at`（跑**完**的时刻）而不是提交时刻：要防的是
+      「前一张卸载下来的那几秒正好撞上后一张的模型装载」，从提交起算会把窗口
+      整个错开。
+    - 冷却窗一过就**立刻**把队里的重渠道重新排好（按 _order 取最小），所以
+      冷却结束不需要任何额外的唤醒信号——worker 每秒醒一次，下一轮就看见了。
+      这也意味着「冷却中的重渠道不占用 ahead_of 的名额」是自动成立的。
+    """
+    if not _queue:
+        return None
+    if _cooling():
+        ready = [j for j in _queue if j.weight <= 1]
+        if not ready:
+            return None
+        return min(ready, key=_order)
+    return min(_queue, key=_order)
+
+
+def _cooling():
+    """重渠道现在在冷却里吗（排队阶段的闸）；调用方已持 _lock。"""
+    if QWEN_COOLDOWN <= 0 or _heavy_done_at <= 0:
+        return False
+    return (time.time() - _heavy_done_at) < QWEN_COOLDOWN
+
+
+def _move_back(job):
+    """把一个任务挪到队尾（冷却没到点的重渠道用）；调用方已持 _lock。
+
+    不是 `job.seq = _seq+1` 了事——那样所有冷却里的重渠道会**共享同一个序号**，
+    重排时的先后就变成集合顺序（不确定）。真挪到队尾：重新取号并移到 deque
+    尾部，让「谁先被推回去谁先出来」稳定下来。
+    """
+    global _seq
+    try:
+        _queue.remove(job)
+    except ValueError:
+        return                          # 已经被别的路径取走了
+    _seq += 1
+    job.seq = _seq
+    job.waits += 1
+    _queue.append(job)
+    log.info("重渠道 %s 让行（第 %d 次）：上一张 %s 刚跑完不到 %.0f 秒，"
+             "先让普通渠道上", job.skill, job.waits, QWEN_SKILL, QWEN_COOLDOWN)
+
+
 def _take_nowait():
-    """立刻取一个任务；队列为空返回 None。"""
+    """立刻取一个任务；没有 / 都还在冷却里就返回 None。"""
     global _running
     with _lock:
         if not _queue:
             return None
-        job = _queue.popleft()
+        # 上一张要是重渠道，现在又还在冷却里，先把它挪到队尾——
+        # 否则它会是 _order 的最小项，直接被取走，让行规则形同虚设。
+        if _cooling():
+            for job in [j for j in _queue if j.weight > 1]:
+                _move_back(job)
+        job = _next_ready()
+        if job is None:
+            return None
+        try:
+            _queue.remove(job)
+        except ValueError:
+            return None
         _running = job
         return job
 
@@ -425,6 +595,7 @@ def process(job):
         return
 
     job.entry = entry
+    job.skill_done = True
     if job.target is None:
         return                      # 网页侧自己从 job.entry 取
 
@@ -440,7 +611,7 @@ def process(job):
 
 def _finish(job):
     """还名额、清 _running、唤醒等结果的网页侧。失败路径也一定要走到。"""
-    global _running
+    global _running, _heavy_done_at
     with _lock:
         key = _key(job.target, job.target_id)
         n = _per_session.get(key, 0) - 1
@@ -450,6 +621,13 @@ def _finish(job):
             _per_session.pop(key, None)
         if _running is job:
             _running = None
+        # 只有**真出图了**的重渠道才开冷却窗。失败/超时那张已经把 ComfyUI 的
+        # 队列和显存清干净了（_abort + _wait_comfy_idle），没有残留要等它散，
+        # 再罚它 90 秒只是白等。
+        if job.weight > 1 and job.skill_done:
+            _heavy_done_at = time.time()
+            log.info("重渠道 %s 跑完，%.0f 秒内不再接重活",
+                     job.skill, QWEN_COOLDOWN)
     job.done.set()
 
 
@@ -472,13 +650,15 @@ def _drain():
 def _reset():
     """清空队列与计数（测试用）。不动 _worker_started——测试自己把
     _ensure_worker mock 成空操作，真线程不该被这里牵起来。"""
-    global _running, _last_skill, _last_restart_try
+    global _running, _last_skill, _last_restart_try, _seq, _heavy_done_at
     with _lock:
         _queue.clear()
         _per_session.clear()
         _running = None
         _last_skill = None
         _last_restart_try = 0.0
+        _seq = 0
+        _heavy_done_at = 0.0
 
 
 # ─── ComfyUI 交互 ────────────────────────────────────

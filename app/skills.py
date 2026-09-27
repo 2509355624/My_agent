@@ -184,6 +184,45 @@ def list_skills():
             if os.path.isdir(os.path.join(SKILLS_DIR, d))]
 
 
+# 生图渠道的调度权重（见 image_jobs 的「重渠道优先度」）。
+#
+# 权重 = 该渠道在生图队列里值几个「普通名额」。默认 1；越大越靠后、越不该连跑。
+#
+# 现在只有 qwen 一个是重的：它一跑就把 12GB 显存的显卡榨干（文本编码器 6018MB
+# + unet 4487MB ≈ 10.5GB），**连跑第二张必崩**（提交后 2~6 秒 TDR）。给 5 是为了
+# 让任何普通渠道都能插到它前面——普通渠道之间还是先进先出。
+#
+# 放代码里当默认值而不是只放 skill 的 frontmatter：frontmatter 是给「下一个人
+# 加渠道」用的开关，而 qwen 这条是实测出来的硬约束，不该因为谁会丢一个文件就
+# 失效。frontmatter 里同名字段优先（单个 skill 可以自己声明）。
+_SKILL_PRIORITY = {
+    "qwen_image_v1": 5,             # 唯一的重渠道，必须最靠后
+}
+
+
+def skill_priority(skill_name):
+    """这个生图渠道在队列里的权重；普通渠道是 1。
+
+    skill 名取自 `generate_image` 的参数——它在没点名时已经填好了默认渠道，
+    所以这里不用管「不传 skill」的情况。没见过的名字（新加的渠道、拼错的、
+    写作类 skill）一律按 1 处理：不认识就当普通活，别让它插队。
+    """
+    if not skill_name:
+        return 1
+    data = load_skill(skill_name)
+    if data:
+        raw = _parse_frontmatter(data.get("skill_md") or "").get("priority")
+        if raw:
+            try:
+                n = int(float(raw))
+                if n > 0:
+                    return n
+            except ValueError:
+                log.warning("skill %s 的 priority 不是数字：%r，按默认权重处理",
+                            skill_name, raw)
+    return _SKILL_PRIORITY.get(skill_name, 1)
+
+
 def skill_summary(skill_md):
     """从规范全文里抽一行简介，供 list_skills 展示。
 

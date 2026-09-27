@@ -274,6 +274,22 @@ COMFY_RESTART_WAIT = float(os.getenv("COMFY_RESTART_WAIT", "180"))
 # 这条水位只管「别让残留把本就紧张的空间再吃掉一块」，是保险不是解药。
 COMFY_MIN_FREE_VRAM_GB = float(os.getenv("COMFY_MIN_FREE_VRAM_GB", "5.0"))
 
+# ─── 重渠道（qwen）优先度 ─────────────────────────────
+#
+# qwen_image_v1 一跑就把 12GB 显卡榨干（文本编码器 6018MB + unet 4487MB ≈
+# 10.5GB，空闲可用只有 10.78GB）。当天实测的错误模式是确定性的：**第 1 张必成、
+# 第 2 张必死**（提交后 2~6 秒日志断在 `got prompt` 中间 → nvlddmkm 153，有时
+# 整机重启）。死因是第 1 张的残留还没散，第 2 张就要重新摊开 6000MB 的编码器。
+#
+# 外挂启动参数与更低的量化都已经试到底、全被推翻（见 image_jobs 模块开头），
+# 所以只能从 agent 侧管：**别让 qwen 紧接着 qwen 跑**。
+#
+# 一张 qwen 跑完之后的这个秒数内，新的 qwen 会被扔回队尾——
+# 把让出来的空隙给别的渠道。**它也是权重 5 的冷却窗**：这段时间本来正是
+# 显存/内存把 6GB 权重还回去所花的时间（实测 3 分钟的间隔就足以让它自然恢复）。
+# 0 = 关掉冷却（回到「只按权重排序」）。
+QWEN_COOLDOWN = float(os.getenv("QWEN_COOLDOWN", "90"))
+
 # ─── Agent ──────────────────────────────────────────
 
 AGENT_PORT = int(os.getenv("AGENT_PORT", "5174"))

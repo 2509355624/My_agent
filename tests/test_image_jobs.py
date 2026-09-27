@@ -13,8 +13,28 @@ from unittest import mock
 import app.agents as agents
 from app import image_jobs
 from app import qq_api
+from app import skills
 from app.config import QQ_AGENT_ID
 from app.tools.normal import generate_image
+
+
+class _FakeTime:
+    """替掉 image_jobs 眼里的 time。
+
+    只换模块属性，不动 stdlib 的 time——后者会影响整个进程（含 mock 自己）。
+    clock 默认是**定值**（防抖 / 冷却判定用）；要跑 _restart_comfy 的轮询循环
+    时传一个会走的时钟进去，否则 `while time.time() - start < timeout` 永远成立。
+    """
+
+    def __init__(self, clock=None):
+        self._clock = clock or (lambda: 1000.0)
+        self.slept = []
+
+    def time(self):
+        return self._clock()
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
 
 
 class _Base(unittest.TestCase):
@@ -48,8 +68,8 @@ class _Base(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
-    def _enqueue(self, ctx=("group", "9"), wf=None):
-        return image_jobs.enqueue(ctx[0], ctx[1], wf or {"1": {}})
+    def _enqueue(self, ctx=("group", "9"), wf=None, skill=None):
+        return image_jobs.enqueue(ctx[0], ctx[1], wf or {"1": {}}, skill)
 
 
 class PollTest(_Base):
@@ -210,6 +230,206 @@ class QueueTest(_Base):
         image_jobs._finish(job)
         self.assertEqual(image_jobs.inflight_count("group", "9"), 0)
         self.assertIsNone(self._enqueue()[1])
+
+
+class SkillPriorityTest(unittest.TestCase):
+    """渠道权重：qwen 是唯一的重渠道，其余一律 1。"""
+
+    def test_qwen_is_heavy(self):
+        self.assertGreater(skills.skill_priority("qwen_image_v1"), 1)
+
+    def test_default_and_unknown_are_normal(self):
+        """默认渠道、拼错的名字、写作类 skill —— 全都按普通活处理。
+
+        「不认识就当普通活」是刻意的：权重写错方向（把普通渠道当成重的）
+        会让它被无谓地延后，而延后一次就是让对方多等一张图的时间。
+        """
+        for name in ("anima", "krea2", "image_gen_v1", "goutoujunshi",
+                     "没这个skill", "", None):
+            self.assertEqual(skills.skill_priority(name), 1, name)
+
+    def test_frontmatter_overrides_code_default(self):
+        """skill 自己声明了 priority 就用它——给「以后再加渠道」留的口子。"""
+        with mock.patch.object(skills, "load_skill", mock.Mock(return_value={
+                "skill_md": "---\nkind: 生图\npriority: 7\n---\n\n# x\n"})):
+            self.assertEqual(skills.skill_priority("whatever"), 7)
+
+    def test_bogus_frontmatter_falls_back(self):
+        """frontmatter 写了非数字：退回默认值，不能让一张图因为写错就发不出去。"""
+        with mock.patch.object(skills, "load_skill", mock.Mock(return_value={
+                "skill_md": "---\nkind: 生图\npriority: 高\n---\n\n# x\n"})):
+            self.assertEqual(skills.skill_priority("whatever"), 1)
+
+    def test_skill_with_no_md_falls_back_to_code_default(self):
+        """读不到规范（目录没了 / 文件读不出来）也不能崩——按代码里的表算。"""
+        with mock.patch.object(skills, "load_skill", mock.Mock(return_value=None)):
+            self.assertEqual(skills.skill_priority("qwen_image_v1"), 5)
+
+    def test_the_real_qwen_skill_md_declares_it(self):
+        """真文件里那份 frontmatter 得能解析出来——不然权重只在代码里生效，
+        下一个改这个目录的人看不到「它为什么排最后」。"""
+        self.assertEqual(skills.skill_priority("qwen_image_v1"), 5)
+
+
+class QueuePriorityTest(_Base):
+    """重渠道（qwen）排最后，而且不让它连跑第二张。
+
+    背景：qwen 一套权重 10.5GB / 空闲 10.78GB，**第 1 张必成、第 2 张必死**
+    （提交后 2~6 秒 TDR，两次把整机拖重启）。外挂启动参数和更低量化都已试到底，
+    所以只能从队列侧管：普通渠道永远插到它前面 + 跑完再空一个冷却窗。
+    """
+
+    def test_normal_job_jumps_ahead_of_queued_heavy(self):
+        """核心诉求：qwen 先入队，但后到的 anima 先跑。"""
+        heavy, _ = self._enqueue(skill="qwen_image_v1")
+        normal, _ = self._enqueue(skill="anima")
+        self.assertEqual(image_jobs._take_nowait(), normal)
+        image_jobs._finish(normal)
+        self.assertEqual(image_jobs._take_nowait(), heavy)
+
+    def test_fifo_among_normal_jobs(self):
+        """普通渠道之间还是先进先出——优先级不能把队列变成插队游戏。"""
+        a, _ = self._enqueue(skill="anima")
+        b, _ = self._enqueue(skill="krea2")
+        self.assertEqual(image_jobs._take_nowait(), a)
+        self.assertEqual(image_jobs._take_nowait(), b)
+
+    def test_fifo_among_heavy_jobs(self):
+        """两个 qwen 之间也讲先来后到（排名键的第三个字段管这个）。"""
+        a, _ = self._enqueue(skill="qwen_image_v1")
+        b, _ = self._enqueue(skill="qwen_image_v1")
+        self.assertEqual(image_jobs._take_nowait(), a)
+        self.assertEqual(image_jobs._take_nowait(), b)
+
+    def test_ahead_of_counts_priority_order(self):
+        """报给对方的「前面还有 N 张」要按**出队顺序**数。
+
+        qwen 先入队却排在后面，按入队顺序数就会报成 0 —— 模型于是跟对方说
+        「已经在画了」，而实际前面还压着一张 anima。
+        """
+        self._enqueue(skill="anima")
+        heavy, _ = self._enqueue(skill="qwen_image_v1")
+        self.assertEqual(image_jobs.ahead_of(heavy), 1)
+
+    def test_heavy_queue_has_its_own_ceiling(self):
+        """重活排队另有上限：一张 qwen 就 100 秒，排长了不如直接说画不了。"""
+        for i in range(image_jobs.MAX_HEAVY_IN_QUEUE):
+            # 换会话绕开 per-session 上限，专门顶重渠道这条
+            job, reason = self._enqueue(("group", str(i)), skill="qwen_image_v1")
+            self.assertIsNone(reason)
+        job, reason = self._enqueue(("group", "999"), skill="qwen_image_v1")
+        self.assertIsNone(job)
+        self.assertIn("通道", reason)
+
+    def test_heavy_ceiling_counts_the_running_one(self):
+        """正在跑的那张 qwen 也算占位——否则会在它还没跑完时又灌两张进来。"""
+        first, _ = self._enqueue(("group", "0"), skill="qwen_image_v1")
+        self.assertEqual(image_jobs._take_nowait(), first)    # 开跑，进 _running
+        for i in range(image_jobs.MAX_HEAVY_IN_QUEUE - 1):
+            self._enqueue(("group", str(i + 1)), skill="qwen_image_v1")
+        job, reason = self._enqueue(("group", "999"), skill="qwen_image_v1")
+        self.assertIsNone(job)
+        self.assertIn("通道", reason)
+
+    def test_normal_ceiling_is_not_affected(self):
+        """重渠道的上限绝不能卡到普通渠道头上。"""
+        for i in range(image_jobs.MAX_HEAVY_IN_QUEUE):
+            self._enqueue(("group", "h" + str(i)), skill="qwen_image_v1")
+        job, reason = self._enqueue(("group", "n"), skill="anima")
+        self.assertIsNone(reason)
+        self.assertIsNotNone(job)
+
+
+class HeavyCooldownTest(_Base):
+    """一张 qwen 跑完之后的冷却窗：重渠道重新排队尾，普通渠道先上。
+
+    冷却窗是留给残留权重散掉的——实测「第 1 张出图后显存只剩 2.35GB、
+    内存只剩 4.21GB」，而第 2 张要重新摊开 6000MB 的文本编码器。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.clock = [1000.0]
+        p = mock.patch.object(image_jobs, "time",
+                              _FakeTime(lambda: self.clock[0]))
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(image_jobs, "QWEN_COOLDOWN", 90.0)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _run_heavy(self, ctx=("group", "9")):
+        """真跑完一张 qwen——冷却窗只在「真出图」时才开。"""
+        entry = {"outputs": {"9": {"images": [{"filename": "a.png"}]}}}
+        with mock.patch.object(image_jobs, "wait_done", return_value=entry):
+            job, reason = image_jobs.enqueue(ctx[0], ctx[1], {"1": {}},
+                                             "qwen_image_v1")
+            self.assertIsNone(reason)
+            image_jobs._drain()
+        return job
+
+    def test_heavy_after_heavy_waits_out_the_cooldown(self):
+        self._run_heavy()
+        second, _ = self._enqueue(skill="qwen_image_v1")
+        self.assertIsNone(image_jobs._take_nowait())        # 冷却中：不许开跑
+        self.clock[0] += 91
+        self.assertEqual(image_jobs._take_nowait(), second)
+
+    def test_normal_job_still_runs_during_cooldown(self):
+        """冷却窗不是「停摆」——它的意义正是把空隙让给别的渠道。"""
+        self._run_heavy()
+        normal, _ = self._enqueue(skill="anima")
+        self.assertEqual(image_jobs._take_nowait(), normal)
+
+    def test_cooldown_does_not_open_on_failure(self):
+        """失败/超时那张已经把 ComfyUI 清干净了，没有残留要等——别白罚 90 秒。"""
+        with mock.patch.object(image_jobs, "wait_done",
+                               side_effect=TimeoutError("超时")):
+            image_jobs.enqueue("group", "9", {"1": {}}, "qwen_image_v1")
+            image_jobs._drain()
+        nxt, _ = self._enqueue(skill="qwen_image_v1")
+        self.assertEqual(image_jobs._take_nowait(), nxt)
+
+    def test_no_cooldown_after_a_normal_job(self):
+        """普通渠道跑完不开冷却——否则连画两张 anima 都要白等 90 秒。"""
+        entry = {"outputs": {"9": {"images": [{"filename": "a.png"}]}}}
+        with mock.patch.object(image_jobs, "wait_done", return_value=entry):
+            image_jobs.enqueue("group", "9", {"1": {}}, "anima")
+            image_jobs._drain()
+        nxt, _ = self._enqueue(skill="qwen_image_v1")
+        self.assertEqual(image_jobs._take_nowait(), nxt)
+
+    def test_heavy_during_cooldown_goes_behind_normal(self):
+        """冷却中的 qwen 要真的退到**队尾**，而不只是「暂时不跑」。
+
+        推回队尾要重新取号：不重新取号的话，几个冷却中的重渠道会共用同一个
+        序号，谁先谁后变成集合顺序（不确定）。
+        """
+        self._run_heavy()
+        heavy, _ = self._enqueue(skill="qwen_image_v1")
+        normal, _ = self._enqueue(skill="anima")
+        image_jobs._take_nowait()          # 冷却中：先把 heavy 推到队尾，再取 normal
+        self.assertEqual(list(image_jobs._queue), [heavy])   # heavy 退到队尾，normal 已出队
+        self.assertEqual(heavy.waits, 1)
+        self.clock[0] += 91
+        self.assertEqual(image_jobs._take_nowait(), heavy)
+
+    def test_zero_cooldown_disables_the_gate(self):
+        """QWEN_COOLDOWN=0 就是「只按权重排序」，别把功能做成一开就关不掉。"""
+        p = mock.patch.object(image_jobs, "QWEN_COOLDOWN", 0)
+        p.start()
+        self.addCleanup(p.stop)
+        self._run_heavy()
+        nxt, _ = self._enqueue(skill="qwen_image_v1")
+        self.assertEqual(image_jobs._take_nowait(), nxt)
+
+    def test_wait_counter_records_the_yields(self):
+        """被让行几次要留痕——出问题时这是唯一能看出「qwen 被推了几次」的地方。"""
+        self._run_heavy()
+        heavy, _ = self._enqueue(skill="qwen_image_v1")
+        self.assertEqual(heavy.waits, 0)
+        self.assertIsNone(image_jobs._take_nowait())   # 冷却中，推回队尾
+        self.assertEqual(heavy.waits, 1)
 
 
 class ProcessTest(_Base):
@@ -640,25 +860,6 @@ class ChannelSwitchTest(_Base):
         self.events.clear()
         self._run()
         self.assertEqual(self.events, ["submit"])
-
-
-class _FakeTime:
-    """替掉 image_jobs 眼里的 time。
-
-    只换模块属性，不动 stdlib 的 time——后者会影响整个进程（含 mock 自己）。
-    clock 默认是**定值**（防抖判定用）；要跑 _restart_comfy 的轮询循环时传
-    一个会走的时钟进去，否则 `while time.time() - start < timeout` 永远成立。
-    """
-
-    def __init__(self, clock=None):
-        self._clock = clock or (lambda: 1000.0)
-        self.slept = []
-
-    def time(self):
-        return self._clock()
-
-    def sleep(self, seconds):
-        self.slept.append(seconds)
 
 
 class _TickingClock:
