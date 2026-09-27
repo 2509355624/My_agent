@@ -559,5 +559,78 @@ class FailTextTest(unittest.TestCase):
         self.assertNotIn("没在线", image_jobs._fail_text(exc))
 
 
+class ChannelSwitchTest(_Base):
+    """换渠道先 /free：同渠道连画保持模型热，跨渠道才释放。
+
+    背景（2026-09-27 实测）：12GB 显存 + 16GB 内存撑不住两个渠道的模型同时
+    驻留。anima 单阶段连跑两张都正常，紧接着同一个 ComfyUI 会话里跑 qwen
+    （文本编码器 6GB + unet 4.5GB），采样到一半就 TDR，ComfyUI 变成僵尸。
+    所以 skill 一变就先 /free 把上一个渠道的模型卸掉。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.events = []
+
+        def _free():
+            self.events.append("free")
+
+        def _submit(wf):
+            self.events.append("submit")
+            return "pid"
+
+        for target, repl in (("_report_and_free", _free),
+                             ("_queue_prompt", _submit)):
+            p = mock.patch.object(image_jobs, target, repl)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _run(self, skill=None):
+        """入队一张并同步跑完。wait_done 必须挡掉，否则会真去轮询 ComfyUI。"""
+        entry = {"outputs": {"9": {"images": [{"filename": "a.png"}]}}}
+        with mock.patch.object(image_jobs, "wait_done", return_value=entry):
+            image_jobs.enqueue("group", "9", {"1": {}}, skill)
+            image_jobs._drain()
+
+    def test_first_job_does_not_free(self):
+        """第一次没有「上一个渠道」，没什么可卸的。"""
+        self._run(skill="anima")
+        self.assertEqual(self.events, ["submit"])
+
+    def test_same_skill_twice_never_frees(self):
+        """同渠道连画必须保持模型热的——否则每次都白等一次重新加载。"""
+        self._run(skill="anima")
+        self._run(skill="anima")
+        self.assertEqual(self.events, ["submit", "submit"])
+
+    def test_switch_frees_before_submitting(self):
+        """顺序要紧：先 free 再 submit，否则新任务还是和旧模型抢显存。"""
+        self._run(skill="anima")
+        self.events.clear()
+        self._run(skill="qwen_image_v1")
+        self.assertEqual(self.events, ["free", "submit"])
+
+    def test_switching_back_also_frees(self):
+        """来回切也算切换，两个方向都要释放。"""
+        self._run(skill="anima")
+        self._run(skill="qwen_image_v1")
+        self.events.clear()
+        self._run(skill="anima")
+        self.assertEqual(self.events, ["free", "submit"])
+
+    def test_no_skill_keeps_old_behaviour(self):
+        """老调用方不传 skill：绝不能因此多打 /free，行为要和从前一样。"""
+        self._run()
+        self._run()
+        self.assertEqual(self.events, ["submit", "submit"])
+
+    def test_skill_none_after_real_skill_is_not_a_switch(self):
+        """传 None 不是「换渠道」——不能拿 None 去和 anima 比出一次切换。"""
+        self._run(skill="anima")
+        self.events.clear()
+        self._run()
+        self.assertEqual(self.events, ["submit"])
+
+
 if __name__ == "__main__":
     unittest.main()

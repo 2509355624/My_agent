@@ -255,7 +255,7 @@ def _generate_image(prompt, skill=None, use_character=False, lora=None,
     # 的线程本地上下文。
     from app import qq_api
     target, target_id = qq_api.current_context()
-    job, reason = image_jobs.enqueue(target, target_id, workflow)
+    job, reason = image_jobs.enqueue(target, target_id, workflow, skill)
     if reason is not None:
         # 拒收时工作流还在手上，ComfyUI 一点算力都没浪费，也不会留下「画了
         # 却没人发」的孤儿图。

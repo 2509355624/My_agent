@@ -29,8 +29,15 @@
 
 - **超时从「真正开跑」算起**，不含排队时间。否则排在第 5 位的人还没轮到就被
   判超时了。代价是排队时间不可控，网页侧要一直等着（见 Job.wait）。
-- **只在异常路径 /free**：正常跑完继续用同一个模型更快；而超时往往伴随显存
-  已经被啃满，先清干净再让下一张上，免得连锁崩。
+- **/free 只在两种时候打**：① 异常路径（超时/失败）——超时往往伴随显存已经
+  被啃满，先清干净再让下一张上，免得连锁崩；② **渠道切换**——正常跑完继续
+  用同一个模型更快，但**换渠道时这个理由不成立**：旧渠道的模型下一张根本
+  用不上，留着纯粹占地方。
+- **换渠道先 /free**（2026-09-27 加）：12GB 显存 + 16GB 内存撑不住两个渠道的
+  模型同时驻留（anima 单阶段约 5.4GB，qwen 约 11.1GB——光文本编码器就 6GB）。
+  实测：anima 连跑两张都正常，紧接着同一个 ComfyUI 会话里跑 qwen，采样到一半
+  就触发 nvlddmkm 153（TDR），ComfyUI 整个变成僵尸、8188 永久 500。
+  同渠道连画不受影响，模型还是热的。
 - **会话身份在入队那一刻快照**：qq_api 的上下文是线程本地的，worker 线程取
   不到，所以 target / target_id 必须随任务带过去（猜错就发错群）。
 - **网页侧同步等，但等的时候不占 worker**：worker 只管跑图，网页请求线程自
@@ -66,6 +73,7 @@ POLL_INTERVAL = 2
 _lock = threading.Lock()
 _queue = collections.deque()      # 待跑的任务（不含正在跑的那个）
 _running = None                   # 正在跑的任务（只为可观测 / 算排队位次）
+_last_skill = None                # 上次提交给 ComfyUI 的渠道，用来判断要不要先 /free
 _per_session = {}                 # (target, target_id) -> 在途张数（含排队）
 _worker_started = False
 _wake = threading.Event()         # 有新任务入队时戳一下 worker
@@ -78,10 +86,11 @@ class Job:
     等结果——注意等的是「排队 + 出图」全程，排队时间不由我们控制。
     """
 
-    def __init__(self, target, target_id, workflow):
+    def __init__(self, target, target_id, workflow, skill=None):
         self.target = target
         self.target_id = target_id
         self.workflow = workflow
+        self.skill = skill          # 生图渠道，只用来判断要不要先 /free
         self.prompt_id = None
         self.entry = None           # 出图后的 history entry
         self.error = None           # 失败原因（网页侧 wait 时抛出来）
@@ -125,11 +134,14 @@ def ahead_of(job):
         return _queue.index(job) + (1 if _running is not None else 0)
 
 
-def enqueue(target, target_id, workflow):
+def enqueue(target, target_id, workflow, skill=None):
     """把一张图排进全局队列，返回 (job, reason)。
 
     reason 非 None 表示没接（此时 job 为 None），它是一句可以直接转述给对方
     的话。两种拒收：全局队排太长、这个会话自己排太多。
+
+    skill 只用来做「换渠道先 /free」的判断（见 _maybe_release_for_switch）。
+    不传就退化成从前那样从不主动释放——老调用方不受影响。
     """
     key = _key(target, target_id)
     with _lock:
@@ -141,7 +153,7 @@ def enqueue(target, target_id, workflow):
         if cur >= MAX_INFLIGHT:
             return None, ("这个会话已经排着 %d 张了，画完这些再说。"
                           "不要跟对方提这张图，当没画过，接着把话说完。" % cur)
-        job = Job(target, target_id, workflow)
+        job = Job(target, target_id, workflow, skill)
         _queue.append(job)
         _per_session[key] = cur + 1
     _wake.set()
@@ -198,11 +210,36 @@ def _worker():
             _finish(job)
 
 
+def _maybe_release_for_switch(job):
+    """渠道变了就先让 ComfyUI 把上一个渠道的模型卸掉。
+
+    为什么不能只靠异常路径那条规则（见模块开头「关键取舍」）：那条规则的理由
+    是「正常跑完继续用同一个模型更快」——**换渠道时这个理由不成立**，旧渠道的
+    模型下一张根本用不上，留着只是把显存和内存占住。2026-09-27 实测：anima
+    单阶段连跑两张都正常，紧接着同一个 ComfyUI 会话里跑 qwen（文本编码器
+    6GB + unet 4.5GB），采样到一半就 TDR，ComfyUI 直接变成僵尸。
+
+    skill 为 None（老调用方没传）时整个函数是空操作，行为与从前完全一致；
+    同渠道连画也不打 /free，模型保持热的。
+    """
+    global _last_skill
+    skill = job.skill
+    if skill is None:
+        return
+    prev = _last_skill
+    _last_skill = skill             # 无论打不打 /free 都要记，否则会反复触发
+    if prev is None or prev == skill:
+        return
+    log.info("渠道切换 %s → %s，先释放上一个渠道的模型", prev, skill)
+    _report_and_free()
+
+
 def process(job):
     """跑一个任务：提交 → 限时等出图 → 发回原会话 / 存给网页侧。
 
     独立成函数是为了能同步调用（测试直接调它，不依赖真线程）。
     """
+    _maybe_release_for_switch(job)
     try:
         job.prompt_id = _queue_prompt(job.workflow)
     except Exception as exc:
@@ -279,11 +316,12 @@ def _drain():
 def _reset():
     """清空队列与计数（测试用）。不动 _worker_started——测试自己把
     _ensure_worker mock 成空操作，真线程不该被这里牵起来。"""
-    global _running
+    global _running, _last_skill
     with _lock:
         _queue.clear()
         _per_session.clear()
         _running = None
+        _last_skill = None
 
 
 # ─── ComfyUI 交互 ────────────────────────────────────
