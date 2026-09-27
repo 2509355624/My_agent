@@ -168,7 +168,11 @@ PROVIDERS = {
 
 # 模型名里出现这些词就认为它有视觉能力，用来覆盖上面的 provider 开关。
 # 场景：豆包换成 doubao-1-5-vision、本地换 qwen-vl-max，都不用改代码。
-_VISION_MODEL_HINTS = ("vl", "vision", "omni")
+# 小米 mimo 全系列都是全模态（文本/图像/语音），但模型名 "mimo-v2.6-flash"
+# 不含 vl/vision/omni 关键字——只靠 provider 的 vision 开关会在「只覆盖
+# 模型、没改 provider」时漏判（误当非视觉→多跑一道识图预处理）。把 mimo
+# 也加进关键字，保证只要生效模型是 mimo 就直接多模态下发。
+_VISION_MODEL_HINTS = ("vl", "vision", "omni", "mimo")
 
 
 def provider_vision(provider=None, model=None):

@@ -49,6 +49,12 @@ class ProviderVisionTest(unittest.TestCase):
         self.assertTrue(config.provider_vision("doubao", "doubao-1-5-vision-pro"))
         self.assertTrue(config.provider_vision("ollama", "qwen2.5-vl:7b"))
 
+    def test_mimo_model_is_vision_even_without_mimo_provider(self):
+        # 只在网页面板覆盖了模型（mimo-v2.6-flash）但 provider 仍是默认值时，
+        # 不能误判成非视觉而多跑一道识图预处理。mimo 全系列全模态。
+        self.assertTrue(config.provider_vision("volc", "mimo-v2.6-flash"))
+        self.assertTrue(config.provider_vision("deepseek", "mimo-v2.6-flash"))
+
     def test_unknown_provider_does_not_raise(self):
         self.assertIsInstance(config.provider_vision("nonexistent", "x"), bool)
 
