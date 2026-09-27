@@ -40,7 +40,10 @@ class _Base(unittest.TestCase):
                              ("_send_image", _fake_image),
                              ("_send_text", _fake_text),
                              # 超时路径会真去轮询 ComfyUI 的 /queue，测试里挡掉
-                             ("_wait_comfy_idle", lambda timeout=90: True)):
+                             ("_wait_comfy_idle", lambda timeout=90: True),
+                             # 提交前会查一次显存水位，挡掉（要测那条的见
+                             # ReleaseOnLowVramTest，它自己装返回值）
+                             ("_free_vram_gb", lambda: None)):
             p = mock.patch.object(image_jobs, target, repl)
             p.start()
             self.addCleanup(p.stop)
@@ -400,6 +403,12 @@ class GenerateImageSplitTest(unittest.TestCase):
             ("_send_text", mock.Mock()),
             # 入队前探活：默认「ComfyUI 在」，需要测拒收的用例自己再 patch 掉
             ("comfy_alive", mock.Mock(return_value=True)),
+            # 提交前查显存水位——不挡就会真去 GET 真机的 /system_stats
+            ("_free_vram_gb", lambda: None),
+            # 超时路径会真去轮询 /queue 等它退场：ComfyUI 离线时这里要干等
+            # 90 秒（一个用例就把整个模块拖到 110 秒）。_Base 早就挡了，这个
+            # 类漏了。
+            ("_wait_comfy_idle", lambda timeout=90: True),
         ):
             p = mock.patch.object(image_jobs, target, repl)
             p.start()
@@ -847,6 +856,129 @@ class RestartOnLowRamTest(unittest.TestCase):
         t.join(5)
         self.assertFalse(t.is_alive(), "worker 没按预期退出")
         self.assertEqual(calls, ["take", "process", "finish", "ram"])
+
+
+class ReleaseOnLowVramTest(unittest.TestCase):
+    """显存低于水位就先 /free 再提交（2026-09-27 加）。
+
+    针对的场景：ComfyUI **从不把上一个任务清干净**——日志里那句
+    `Unloaded partially: 2896.25 MB freed, 1591.04 MB remains loaded` 就是
+    证据，残留 1.6~2.1GB 会一路叠上去。anima（峰值约 5.4GB）扛得住，但 qwen
+    一张就要 11.1GB / 11.94GB，连画第三张就触发 nvlddmkm 153、进程消失
+    （16:09 成 / 16:12 成 / 16:14 崩）。
+
+    「换渠道先 /free」那条规则管不到「同渠道连画」，所以补这一条。
+    """
+
+    def setUp(self):
+        image_jobs._reset()
+        self.free_calls = []
+        self.posts = []
+
+    def _patch(self, vram):
+        """vram = _free_vram_gb 的返回值（None 表示问不到）。"""
+        def _fake_free():
+            self.free_calls.append(vram)
+            return vram
+
+        def _post(url, json=None, timeout=None):
+            self.posts.append(url)
+            return mock.Mock(status_code=200)
+
+        def _get(url, timeout=None):
+            resp = mock.Mock()
+            resp.json = lambda: {"devices": [{}], "system": {}}
+            return resp
+
+        for name, repl in (("_free_vram_gb", _fake_free),
+                           ("requests", mock.Mock(get=_get, post=_post))):
+            p = mock.patch.object(image_jobs, name, repl)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _threshold(self, gb):
+        p = mock.patch.object(image_jobs, "COMFY_MIN_FREE_VRAM_GB", gb)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_above_threshold_does_not_free(self):
+        """anima 跑完还剩约 5.5GB——不该动它，模型保持热的。"""
+        self._patch(8.0)
+        self._threshold(5.0)
+        image_jobs._maybe_release_for_low_vram()
+        self.assertEqual(self.posts, [])
+
+    def test_below_threshold_frees(self):
+        """qwen 跑完只剩约 0.8GB——下一张必须先清。"""
+        self._patch(0.8)
+        self._threshold(5.0)
+        image_jobs._maybe_release_for_low_vram()
+        self.assertEqual(self.posts, [image_jobs.COMFYUI_URL + "/free"])
+
+    def test_exactly_at_threshold_does_not_free(self):
+        """判据是「低于」水位才动手，等于水位不算。"""
+        self._patch(5.0)
+        self._threshold(5.0)
+        image_jobs._maybe_release_for_low_vram()
+        self.assertEqual(self.posts, [])
+
+    def test_threshold_is_the_vram_knob_not_the_ram_one(self):
+        """读的必须是显存水位，不是内存水位——两个水位名字只差一个词。
+
+        把内存水位钉到 1.0、显存水位定成 8.0、显存剩 5.0：正确实现该清
+        （5.0 < 8.0），读错配置的话 5.0 >= 1.0 就漏过去了。这条专门用来
+        区分「读了哪个配置」——别的测试区分不出来，顶部那个「关掉」的早退
+        会先把它们挡住。
+        """
+        self._patch(5.0)
+        self._threshold(8.0)
+        p = mock.patch.object(image_jobs, "COMFY_MIN_FREE_RAM_GB", 1.0)
+        p.start()
+        self.addCleanup(p.stop)
+        image_jobs._maybe_release_for_low_vram()
+        self.assertEqual(self.posts, [image_jobs.COMFYUI_URL + "/free"])
+
+    def test_zero_threshold_disables_the_feature(self):
+        self._patch(0.1)
+        self._threshold(0)
+        image_jobs._maybe_release_for_low_vram()
+        self.assertEqual(self.posts, [])
+
+    def test_disabled_does_not_even_query(self):
+        """关掉时连查都不该查——省一次没用的 HTTP。"""
+        self._patch(0.1)
+        self._threshold(0)
+        image_jobs._maybe_release_for_low_vram()
+        self.assertEqual(self.free_calls, [])
+
+    def test_unreachable_stats_does_not_free(self):
+        """问不到就什么都别做——宁可照常提交，也别拿猜的水位瞎清。"""
+        self._patch(None)
+        self._threshold(5.0)
+        image_jobs._maybe_release_for_low_vram()
+        self.assertEqual(self.posts, [])
+
+    def test_process_frees_before_submitting(self):
+        """调用点必须在提交**之前**——顺序反了就等于没清。"""
+        self._threshold(5.0)
+        order = []
+
+        def _spy():
+            order.append("free")
+
+        def _queue(workflow):
+            order.append("submit")
+            raise RuntimeError("提交失败，后面不用跑")
+
+        for name, repl in (("_maybe_release_for_low_vram", _spy),
+                           ("_queue_prompt", _queue),
+                           ("_notice", lambda job, stage="submit": None)):
+            p = mock.patch.object(image_jobs, name, repl)
+            p.start()
+            self.addCleanup(p.stop)
+
+        image_jobs.process(image_jobs.Job("private", "1", {}, None))
+        self.assertEqual(order, ["free", "submit"])
 
 
 if __name__ == "__main__":

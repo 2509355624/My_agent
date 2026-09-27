@@ -250,6 +250,30 @@ COMFY_RESTART_MIN_GAP = float(os.getenv("COMFY_RESTART_MIN_GAP", "300"))
 # 等 ComfyUI 重启回来的上限（秒）。冷启动到能接第一张图约 60 秒，留够余量。
 COMFY_RESTART_WAIT = float(os.getenv("COMFY_RESTART_WAIT", "180"))
 
+# ─── ComfyUI 显存水位（提交前先 /free）───────────────
+#
+# ComfyUI **从不把上一个任务清干净**。日志里那句
+#   Unloaded partially: 2896.25 MB freed, 1591.04 MB remains loaded
+# 就是证据：它每次只卸一部分，残留 1.6~2.1GB 会一路叠上去。实测 qwen 连画
+# 16:09 成 / 16:12 成 / 16:14 崩，看着像残留累积。
+#
+# 现有逻辑只在**换渠道**时打 /free，同渠道连画不释放——qwen 连画正好是唯一
+# 漏掉的那种情况。低于这个水位就补一次 /free，把残留腾出来。
+#
+# 5.0 是量出来的：anima 跑完显存还剩约 5.5GB（模型保持热的，不该动它），
+# qwen 跑完只剩约 0.8GB（下一张必须先清）。所以正常连画 anima 不受影响。
+# 0 = 关掉（回到从前：只在换渠道时释放）。
+#
+# ⚠️ **这条不是 qwen 崩溃的解药**（2026-09-27 16:22 真机实测推翻）：
+# ComfyUI 刚重启、显存全空 10.78GB、连第一张 qwen 照样崩（3 条 nvlddmkm 153）。
+# 真正的天花板是**权重本身**：TE 6018MB + unet 4487MB = 10.5GB，而 12GB 卡
+# 空闲时只有 10.78GB 可用（约 1.16GB 被桌面/浏览器占着），只剩约 0.5GB 给
+# 激活值——1024×1024 采样时不够，所以是概率性崩，不是必崩。
+# 日志 `loaded completely; 5129.88 MB usable` 也印证：算这个「可用」时
+# 6018MB 的编码器还驻留着。
+# 这条水位只管「别让残留把本就紧张的空间再吃掉一块」，是保险不是解药。
+COMFY_MIN_FREE_VRAM_GB = float(os.getenv("COMFY_MIN_FREE_VRAM_GB", "5.0"))
+
 # ─── Agent ──────────────────────────────────────────
 
 AGENT_PORT = int(os.getenv("AGENT_PORT", "5174"))

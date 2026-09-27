@@ -29,10 +29,13 @@
 
 - **超时从「真正开跑」算起**，不含排队时间。否则排在第 5 位的人还没轮到就被
   判超时了。代价是排队时间不可控，网页侧要一直等着（见 Job.wait）。
-- **/free 只在两种时候打**：① 异常路径（超时/失败）——超时往往伴随显存已经
+- **/free 在三种时候打**：① 异常路径（超时/失败）——超时往往伴随显存已经
   被啃满，先清干净再让下一张上，免得连锁崩；② **渠道切换**——正常跑完继续
   用同一个模型更快，但**换渠道时这个理由不成立**：旧渠道的模型下一张根本
-  用不上，留着纯粹占地方。
+  用不上，留着纯粹占地方；③ **显存低于水位**（2026-09-27 加，见
+  _maybe_release_for_low_vram）——ComfyUI 从不把上一个任务清干净（日志
+  `Unloaded partially: … remains loaded`，残留 1.6~2.1GB）。这条只是保险，
+  管不了 qwen 的根因（权重 10.5GB vs 空闲可用 10.78GB），详见那个函数的注释。
 - **换渠道先 /free**（2026-09-27 加）：12GB 显存 + 16GB 内存撑不住两个渠道的
   模型同时驻留（anima 单阶段约 5.4GB，qwen 约 11.1GB——光文本编码器就 6GB）。
   实测：anima 连跑两张都正常，紧接着同一个 ComfyUI 会话里跑 qwen，采样到一半
@@ -59,9 +62,9 @@ import uuid
 import requests
 
 from app.cancel import Cancelled, is_cancelled
-from app.config import (COMFY_MIN_FREE_RAM_GB, COMFY_RESTART_MIN_GAP,
-                        COMFY_RESTART_WAIT, COMFYUI_URL, IMAGE_GEN_TIMEOUT,
-                        QQ_AGENT_ID)
+from app.config import (COMFY_MIN_FREE_RAM_GB, COMFY_MIN_FREE_VRAM_GB,
+                        COMFY_RESTART_MIN_GAP, COMFY_RESTART_WAIT, COMFYUI_URL,
+                        IMAGE_GEN_TIMEOUT, QQ_AGENT_ID)
 
 log = logging.getLogger("image_jobs")
 
@@ -262,6 +265,49 @@ def _free_ram_gb():
         return None
 
 
+def _free_vram_gb():
+    """问 ComfyUI 显存还剩多少（GB）；问不到返回 None。
+
+    与 _free_ram_gb 同一套路：借 ComfyUI 自己报的数，不引 psutil。
+    """
+    try:
+        resp = requests.get(COMFYUI_URL + "/system_stats", timeout=10)
+        resp.raise_for_status()
+        devs = resp.json().get("devices") or [{}]
+        return devs[0].get("vram_free", 0) / 2 ** 30
+    except Exception:
+        log.debug("查 ComfyUI 显存失败，忽略", exc_info=True)
+        return None
+
+
+def _maybe_release_for_low_vram():
+    """显存快见底就先 /free，把上一张的残留腾出来再提交。
+
+    **为什么需要这条**（2026-09-27 加）：_maybe_release_for_switch 只在**换
+    渠道**时释放，同渠道连画不释放。而 ComfyUI **从不把上一个任务清干净**
+    ——日志里那句 `Unloaded partially: 2896.25 MB freed, 1591.04 MB remains
+    loaded` 就是证据，残留 1.6~2.1GB 会一路叠上去。实测 qwen 连画
+    16:09 成 / 16:12 成 / 16:14 崩，看着就是残留累积。
+
+    阈值（默认 5.0GB）是量出来的：anima 跑完还剩约 5.5GB，不该动它；qwen
+    跑完只剩约 0.8GB，下一张必须先清。所以正常连画 anima 不受影响。
+
+    ⚠️ **但它不是 qwen 崩溃的解药**（16:22 真机实测推翻）：ComfyUI 刚重启、
+    显存全空 10.78GB、第一张 qwen 照样崩。真正的天花板是权重本身——
+    TE 6018MB + unet 4487MB = 10.5GB，而空闲可用只有 10.78GB（约 1.16GB
+    被桌面占着），只剩约 0.5GB 给激活值。这条水位只是「别让残留把本就紧张的
+    空间再吃掉一块」，是保险不是解药。
+    """
+    if COMFY_MIN_FREE_VRAM_GB <= 0:
+        return                       # 功能关掉了
+    free = _free_vram_gb()
+    if free is None or free >= COMFY_MIN_FREE_VRAM_GB:
+        return
+    log.info("显存只剩 %.1fGB（低于 %.1fGB 水位），先 /free 再提交",
+             free, COMFY_MIN_FREE_VRAM_GB)
+    _report_and_free()
+
+
 def _restart_comfy(timeout=COMFY_RESTART_WAIT):
     """重启 ComfyUI 进程并等它回来；成功返回 True。
 
@@ -349,6 +395,7 @@ def process(job):
     独立成函数是为了能同步调用（测试直接调它，不依赖真线程）。
     """
     _maybe_release_for_switch(job)
+    _maybe_release_for_low_vram()
     try:
         job.prompt_id = _queue_prompt(job.workflow)
     except Exception as exc:
