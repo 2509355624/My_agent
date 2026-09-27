@@ -13,8 +13,17 @@ from unittest import mock
 from PIL import Image
 
 from app import comfy_src, qq_api, stickers, vision
+from app.config import DISABLED_IMAGE_SKILLS
 from app.skills import load_workflow
 from app.tools.normal import generate_image as gi
+
+# qwen 停用时，下面那些「qwen 图生图怎么工作」的用例测的功能整体不存在了。
+# **跳过而不是删掉**：停用是可逆的（见 config.DISABLED_IMAGE_SKILLS 的注释），
+# 把 qwen 放回来的那天，这些用例应该自动重新跑起来。拒收本身另有用例覆盖
+# （test_image_jobs.DisabledChannelTest）。
+_qwen_off = unittest.skipIf(
+    "qwen_image_v1" in DISABLED_IMAGE_SKILLS,
+    "qwen_image_v1 已停用（config.DISABLED_IMAGE_SKILLS），图生图整体下线")
 
 
 def _png(w, h, mode="RGB"):
@@ -249,6 +258,10 @@ class _I2IRunner(object):
         gi.image_jobs._reset()
         for patcher in (
             mock.patch.object(gi, "_qq_gate", lambda: None),
+            # 入队前探活 / 提交前查显存水位：不挡就会真去 GET 真机的
+            # /system_stats——本模块自称「零网络」，这两条是漏网的。
+            mock.patch.object(gi.image_jobs, "comfy_alive", lambda: True),
+            mock.patch.object(gi.image_jobs, "_free_vram_gb", lambda: None),
             # 提交动作现在发生在 image_jobs 的 worker 里，所以拦的是它那边
             mock.patch.object(gi.image_jobs, "_queue_prompt", fake_queue),
             mock.patch.object(gi.image_jobs, "_ensure_worker", lambda: None),
@@ -303,6 +316,7 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
         self.assertIn("krea2", out)
         self.assertEqual(wf, {})
 
+    @_qwen_off
     def test_source_failure_reports_and_submits_nothing(self):
         with mock.patch.object(comfy_src, "resolve",
                                mock.Mock(side_effect=RuntimeError("这儿没有图"))):
@@ -311,6 +325,7 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
         self.assertEqual(wf, {})
 
 
+@_qwen_off
 class QwenI2ITest(_I2IRunner, unittest.TestCase):
     """qwen 图生图：唯一渠道、按指令改、不吃 denoise。
 

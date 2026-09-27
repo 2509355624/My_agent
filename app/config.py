@@ -290,6 +290,25 @@ COMFY_MIN_FREE_VRAM_GB = float(os.getenv("COMFY_MIN_FREE_VRAM_GB", "5.0"))
 # 0 = 关掉冷却（回到「只按权重排序」）。
 QWEN_COOLDOWN = float(os.getenv("QWEN_COOLDOWN", "90"))
 
+# ─── 停用的生图渠道（硬件跑不动，不是配置问题）──────
+#
+# 逗号分隔的 skill 名；留空 = 全部可用。被列进来的渠道**代码全保留**，只是
+# `generate_image` 不再放行——模型点名也没用，会拿到一句能直接转述的错话。
+#
+# 为什么是 qwen_image_v1（2026-09-27 实测，五次连崩）：
+# 它一套权重 10.5GB（文本编码器 6018MB + unet 4487MB），而 12GB 卡空闲时只有
+# 10.78GB 可用。**单张就能把整机拖崩**——最后一次是 17:42:05 入队、17:43:18
+# 整机重启，日志停在第一张图提交后，队列里**只排了它一张**（`ahead_of=0`）。
+# 所以这不是「连跑才崩」，是「跑不动」。
+#
+# 外挂启动参数（`--vram-headroom` / `--disable-pinned-memory` / `--lowvram`）
+# 与更低量化都已试到底并被推翻，详见 image_jobs 模块开头。**想恢复只有加内存**
+# （16GB → 32GB，各家部署指南的最低要求）。要重新打开：把这里清空即可。
+DISABLED_IMAGE_SKILLS = [s.strip() for s in
+                         os.getenv("DISABLED_IMAGE_SKILLS",
+                                   "qwen_image_v1").split(",")
+                         if s.strip()]
+
 # ─── Agent ──────────────────────────────────────────
 
 AGENT_PORT = int(os.getenv("AGENT_PORT", "5174"))

@@ -236,6 +236,10 @@ class _GenBase(unittest.TestCase):
             ("wait_done", mock.Mock(return_value={"outputs": {}})),
             ("_send_image", mock.Mock()),
             ("_send_text", mock.Mock()),
+            # 入队前探活 / 提交前查显存水位：不挡就会真去 GET 真机的
+            # /system_stats，ComfyUI 没开时这三条用例必挂（跟被测逻辑无关）。
+            ("comfy_alive", lambda: True),
+            ("_free_vram_gb", lambda: None),
         ):
             p = mock.patch.object(image_jobs, target, repl)
             p.start()
@@ -320,26 +324,35 @@ class ToolDescriptionTest(unittest.TestCase):
         self.assertIn("lora", self._block("main"))
 
     def test_default_image_skill_depends_on_i2i(self):
-        """不点名时的默认渠道：文生图 anima、图生图 qwen（2026-09-27 用户定）。
+        """不点名时的默认渠道：文生图 anima；图生图那套**代码保留但已停用**。
 
-        图生图只有 qwen 一个渠道（anima / image_gen_v1 的垫图重绘已下线），所以
-        描述里写的是「只走」而不是「默认」。
+        `I2I_DEFAULT_SKILL` / `_I2I_SKILLS` 仍然指着 qwen（代码一行没删，随时能
+        恢复），但 `DISABLED_IMAGE_SKILLS` 让工具直接拒——所以描述里现在写的是
+        「已停用」。把 qwen 放回来（清空那个配置）之后描述要改回「只走 qwen」，
+        这条断言会跟着反过来，不用再动。
         signature 的默认值必须是 None——execute_tool 是 fn(**args)，只有「模型
         压根没传 skill」才会落到默认值，靠它才分得开「没点名」和「点名了 anima」。
         """
         import inspect
+        from app.config import DISABLED_IMAGE_SKILLS
         from app.tools.normal.generate_image import (
             _generate_image, tool, I2I_DEFAULT_SKILL, T2I_DEFAULT_SKILL,
             _I2I_SKILLS)
         self.assertIsNone(inspect.signature(_generate_image)
                           .parameters["skill"].default)
         self.assertEqual(T2I_DEFAULT_SKILL, "anima")
+        # 图生图的代码原样保留，只是被配置停用了——这两条不能变
         self.assertEqual(I2I_DEFAULT_SKILL, "qwen_image_v1")
         self.assertEqual(_I2I_SKILLS, ("qwen_image_v1",))
+        disabled = "qwen_image_v1" in DISABLED_IMAGE_SKILLS
         for desc in (tool["description"],
                      tool["description_overrides"][QQ_AGENT_ID]):
             self.assertIn("文生图默认 anima", desc)
-            self.assertIn("图生图只走 qwen_image_v1", desc)
+            if disabled:
+                self.assertIn("停用", desc)
+                self.assertNotIn("图生图只走 qwen_image_v1", desc)
+            else:
+                self.assertIn("图生图只走 qwen_image_v1", desc)
 
 
 if __name__ == "__main__":

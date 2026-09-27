@@ -1182,5 +1182,99 @@ class ReleaseOnLowVramTest(unittest.TestCase):
         self.assertEqual(order, ["free", "submit"])
 
 
+class DisabledChannelTest(unittest.TestCase):
+    """停用渠道的硬闸：模型点名也没用，而且一步都不该碰 ComfyUI。
+
+    qwen_image_v1 在这台机器上是「单张就能把整机拖崩」——2026-09-27 实测五次、
+    三次整机重启，最后一次队列里**只排了它一张**（`ahead_of=0`）。所以它必须有
+    一道**代码级**的闸：光靠「不进 skills 白名单」挡不住，白名单只管提示词里列
+    不列，模型记得这个名字照样能把 skill 传进来。
+    """
+
+    def setUp(self):
+        image_jobs._reset()
+        self.comfy = mock.Mock(return_value=True)
+        self.load = mock.Mock(return_value={"workflow": {"1": {}},
+                                            "character": ""})
+        for target, repl in (("comfy_alive", self.comfy),
+                             ("_ensure_worker", lambda: None),
+                             ("_send_image", mock.Mock()),
+                             ("_send_text", mock.Mock()),
+                             ("_free_vram_gb", lambda: None)):
+            p = mock.patch.object(image_jobs, target, repl)
+            p.start()
+            self.addCleanup(p.stop)
+        for target, repl in (("load_skill", self.load),
+                             ("_qq_gate", mock.Mock(return_value=None)),
+                             ("is_cancelled", mock.Mock(return_value=False))):
+            p = mock.patch.object(generate_image, target, repl)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _disabled(self, names):
+        """换掉停用清单——不 patch 就得改真配置才能测「恢复」那条。"""
+        p = mock.patch.object(generate_image, "DISABLED_IMAGE_SKILLS", names)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _call(self, **kw):
+        with mock.patch.object(qq_api, "current_context",
+                               return_value=("group", "9")):
+            return generate_image.tool["function"](**kw)
+
+    def test_named_qwen_is_refused(self):
+        self._disabled(["qwen_image_v1"])
+        out = self._call(prompt="a cat", skill="qwen_image_v1")
+        self.assertIn("停用", out)
+        self.assertFalse(self.comfy.called)     # 一步都没碰 ComfyUI
+        self.assertFalse(self.load.called)      # 连 skill 都没去读
+
+    def test_i2i_is_refused_too(self):
+        """只给 source_image 不给 skill 时会默认落到 qwen——那条路也必须挡住。
+
+        这是最容易漏的一条：模型的意图是「改图」，不是「用 qwen」，所以它不会
+        传 skill，闸要是只看 skill 参数就漏过去了。
+        """
+        self._disabled(["qwen_image_v1"])
+        out = self._call(prompt="把衣服换成红色", source_image="1")
+        self.assertIn("改图", out)
+        self.assertFalse(self.comfy.called)
+
+    def test_refusal_tells_the_model_what_to_do(self):
+        """拒收不能只说「不行」——模型得知道下一步该干嘛，否则它会开始编。"""
+        self._disabled(["qwen_image_v1"])
+        out = self._call(prompt="a cat", skill="qwen_image_v1")
+        self.assertIn("anima", out)             # 给出可用的替代
+        self.assertIn("别跟对方提", out)          # 别把渠道名甩给用户
+
+    def test_other_channels_are_untouched(self):
+        """闸只挡停用的那个，别的渠道照常走。"""
+        self._disabled(["qwen_image_v1"])
+        out = self._call(prompt="a cat", skill="anima")
+        self.assertNotIn("停用", out)
+        self.assertTrue(self.comfy.called)      # 正常路径照旧会探活
+
+    def test_empty_list_re_enables_it(self):
+        """开关清空就恢复——证明这是配置项，不是写死的判断。"""
+        self._disabled([])
+        out = self._call(prompt="a cat", skill="qwen_image_v1")
+        self.assertNotIn("停用", out)
+        self.assertTrue(self.comfy.called)
+
+    def test_real_config_disables_qwen(self):
+        """真配置里 qwen 必须是停用的——这是用户机器跑不动的硬事实。
+
+        万一有人把 config 的默认值改回可用，这条会立刻响。
+        """
+        from app.config import DISABLED_IMAGE_SKILLS
+        self.assertIn("qwen_image_v1", DISABLED_IMAGE_SKILLS)
+
+    def test_real_config_keeps_anima(self):
+        """anima 是默认渠道，绝不能被误列进停用清单（那样就一张图都画不出了）。"""
+        from app.config import DISABLED_IMAGE_SKILLS
+        for name in ("anima", "krea2", "image_gen_v1"):
+            self.assertNotIn(name, DISABLED_IMAGE_SKILLS, name)
+
+
 if __name__ == "__main__":
     unittest.main()
