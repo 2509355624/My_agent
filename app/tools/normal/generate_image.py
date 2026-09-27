@@ -341,23 +341,25 @@ def _generate_image(prompt, skill=None, use_character=False, lora=None,
 tool = {
     "name": "generate_image",
     "description": "调用 ComfyUI 生成图片。"
-                  "【默认 Skill】文生图默认 anima（Anima 2B 动漫模型，单段出图，一次一张），"
-                  "不传 skill 就是它—— prompt 只写一段画面描述，**不要用 --- 分隔**。"
-                  "【换渠道】仅当用户点名或明确需要时才换：说 krea2（如「用 krea2」）传 skill=krea2"
-                  "（Krea2 Turbo + retroanime lora，一次一张）；要一次出多张（多个提示词用 --- 分隔）"
+                  "【默认 Skill】文生图默认 anima（Anima 2B 动漫模型，单底模单段出图，一次一张，"
+                  "768×1024），不传 skill 就是它—— prompt 只写一段画面描述，**不要用 --- 分隔**。"
+                  "【换渠道】仅当用户点名或明确需要时才换：要一次出多张（多个提示词用 --- 分隔）"
                   "或要用固定角色底模时传 skill=image_gen_v1（**= SD / SDXL 渠道**，"
                   "用户说「用 sd / sd 生图 / 用那个 sd 模型」指的就是它）。"
-                  "【qwen_image_v1 已停用】**不要传 skill=qwen_image_v1**——"
-                  "这台机器带不动它（一张就把整机拖崩），传了工具会直接拒。"
-                  "用户点名 qwen / 通义、要**画面里写出文字（尤其中文）**、或要**写实照片感**时："
+                  "【anima_2】**只有用户点名「双底模 / 双采样 / 二次采样 / 精修那版」才传 "
+                  "skill=anima_2**（两段采样、换第二块底模，更精细但每张都有把机器拖崩的风险）。"
+                  "**用户没点名就绝不传它**——别因为「听起来更精细」自己挑。"
+                  "【qwen_image_v1 / krea2 都已停用】**不要传 skill=qwen_image_v1 或 skill=krea2**"
+                  "——这台机器带不动它们，传了工具会直接拒。"
+                  "用户点名 qwen / 通义 / krea2、要**画面里写出文字（尤其中文）**、或要**写实照片感**时："
                   "照常用 anima 画（写实需求可改用 image_gen_v1），**照实说那个渠道现在用不了**，"
-                  "别硬试、也别把渠道名当技术名词甩给用户。"
+                  "别硬试、别拿别的渠道冒充、也别把渠道名当技术名词甩给用户。"
                   "【底模】除 image_gen_v1 外都没有固定角色，你在 prompt 中自己写出完整角色提示词"
                   "(发型/发色/体型/服装/年龄等)；只有 image_gen_v1 配 use_character=true 时用它的固定角色。"
                   "【lora】用户点名要换 lora 时才传 lora 参数，平时不要传。格式「文件名:强度」，"
                   "多个逗号分隔（如 \"x.safetensors:0.8,y.safetensors:0.5\"）；文件名要完整"
                   "(.safetensors 结尾)，写错会返回可用清单；传了就完全接管本次的 lora，"
-                  "槽位 image_gen_v1 3 个 / anima 2 个 / krea2 1 个，没填满的槽自动关闭。"
+                  "槽位 image_gen_v1 3 个 / anima 2 个 / anima_2 2 个，没填满的槽自动关闭。"
                   "【引用图片：只看，不改】**不要传 source_image**（改图 / 图生图"
                   "整体停用，传了工具会直接拒）。用户引用一张图，只是让你**看得见**"
                   "它：你要做的是**照它反推出提示词，用 anima 画一张新的**，"
@@ -369,15 +371,18 @@ tool = {
     "description_overrides": {
         QQ_AGENT_ID:
             "调用 ComfyUI 生成图片。"
-            "【默认 Skill】文生图默认 anima（Anima 2B 动漫模型，单段出图，一次一张），"
-            "不传 skill 就是它 —— prompt 只写一段画面描述，**不要用 --- 分隔**。"
-            "【换渠道】仅当用户点名或明确需要时才换：krea2 传 skill=krea2；"
+            "【默认 Skill】文生图默认 anima（Anima 2B 动漫模型，单底模单段出图，一次一张，"
+            "768×1024），不传 skill 就是它 —— prompt 只写一段画面描述，**不要用 --- 分隔**。"
+            "【换渠道】仅当对方点名或明确需要时才换："
             "要一次出多张时传 skill=image_gen_v1（**= SD / SDXL 渠道**，"
             "对方说「用 sd / sd 生图 / 用那个 sd 模型」指的就是它；多个提示词用 --- 分隔）。"
-            "【qwen_image_v1 已停用】**不要传 skill=qwen_image_v1**——"
-            "这台机器带不动它（一张就把整机拖崩），传了工具会直接拒。"
-            "对方点名 qwen / 通义、要**画面里写出文字（尤其中文）**、或要写实照片感时："
-            "照常用 anima 画，**照实说那个渠道现在用不了**，别硬试、"
+            "【anima_2】**只有对方点名「双底模 / 双采样 / 二次采样 / 精修那版」才传 "
+            "skill=anima_2**（两段采样、换第二块底模，更精细但有崩机风险）。"
+            "**对方没点名就绝不传它**。"
+            "【qwen_image_v1 / krea2 都已停用】**不要传 skill=qwen_image_v1 或 skill=krea2**"
+            "——这台机器带不动它们，传了工具会直接拒。"
+            "对方点名 qwen / 通义 / krea2、要**画面里写出文字（尤其中文）**、或要写实照片感时："
+            "照常用 anima 画，**照实说那个渠道现在用不了**，别硬试、别拿别的渠道冒充、"
             "也别把渠道名当技术名词甩给对方。"
             "【lora】用户点名要换 lora 时才传 lora 参数，平时不要传。格式「文件名:强度」，"
             "多个逗号分隔（如 \"x.safetensors:0.8\"）；文件名要完整(.safetensors 结尾)，"
@@ -394,8 +399,8 @@ tool = {
     "parameters": {
         "type": "object",
         "properties": {
-            "prompt": {"type": "string", "description": "提示词。写逗号分隔的标签式英文短句（anima / krea2 / image_gen_v1 都是这个写法），只写一段、不要用 --- 分隔（只有 skill=image_gen_v1 时才用 --- 分隔多张）。画面里没有固定角色时须包含完整角色描述"},
-            "skill": {"type": "string", "description": "Skill名称。**不传就是默认 anima**。可选值见系统提示 Available Skills 里标 [底模]/[无底模] 的生图类；krea2 / image_gen_v1（**= SD / SDXL 渠道**）仅在用户点名或场景匹配时才用。**qwen_image_v1 已停用，不要传**"},
+            "prompt": {"type": "string", "description": "提示词。写逗号分隔的标签式英文短句（anima / image_gen_v1 都是这个写法），只写一段、不要用 --- 分隔（只有 skill=image_gen_v1 时才用 --- 分隔多张）。画面里没有固定角色时须包含完整角色描述"},
+            "skill": {"type": "string", "description": "Skill名称。**不传就是默认 anima**（单底模）。可选值见系统提示 Available Skills 里标 [底模]/[无底模] 的生图类；image_gen_v1（**= SD / SDXL 渠道**）仅在用户点名或场景匹配时才用；**anima_2（双底模）只在用户点名时才传，绝不主动选**。**qwen_image_v1 / krea2 已停用，不要传**"},
             "use_character": {"type": "boolean", "description": "是否使用该Skill自带的角色描述（默认false）。只有 image_gen_v1 有角色底模，设为true时固定该角色，你只写动作/环境/构图"},
             "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传"},
             "source_image": {"type": "string", "description": "**不要传**。改图 / 图生图整体停用，传了工具会直接拒。引用图片只是让你看得见它——照它反推提示词、用 anima 画一张新的即可；对方真要改图，照实说改不了"}

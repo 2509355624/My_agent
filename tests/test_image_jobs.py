@@ -1273,19 +1273,70 @@ class DisabledChannelTest(unittest.TestCase):
         self.assertNotIn("停用", out)
         self.assertTrue(self.comfy.called)
 
-    def test_real_config_disables_qwen(self):
-        """真配置里 qwen 必须是停用的——这是用户机器跑不动的硬事实。
+    def test_named_krea2_is_refused_too(self):
+        """krea2 和 qwen 一样是硬件跑不动，同一条闸管住。"""
+        self._disabled(["qwen_image_v1", "krea2"])
+        out = self._call(prompt="a cat", skill="krea2")
+        self.assertIn("停用", out)
+        self.assertFalse(self.comfy.called)
+        self.assertFalse(self.load.called)
+
+    def test_real_config_disables_the_unrunnable_channels(self):
+        """真配置里 qwen + krea2 必须是停用的——这是用户机器的硬事实。
 
         万一有人把 config 的默认值改回可用，这条会立刻响。
         """
         from app.config import DISABLED_IMAGE_SKILLS
         self.assertIn("qwen_image_v1", DISABLED_IMAGE_SKILLS)
+        self.assertIn("krea2", DISABLED_IMAGE_SKILLS)
 
-    def test_real_config_keeps_anima(self):
-        """anima 是默认渠道，绝不能被误列进停用清单（那样就一张图都画不出了）。"""
+    def test_real_config_keeps_the_runnable_channels(self):
+        """anima / anima_2 / SD 是**能跑**的渠道，绝不能被误列进停用清单
+        （那样就一张图都画不出了，或者双底模那条再也点不出来）。"""
         from app.config import DISABLED_IMAGE_SKILLS
-        for name in ("anima", "krea2", "image_gen_v1"):
+        for name in ("anima", "anima_2", "image_gen_v1"):
             self.assertNotIn(name, DISABLED_IMAGE_SKILLS, name)
+
+
+class QqInvisibleTest(unittest.TestCase):
+    """停用的渠道要**在 QQ 侧看不见**，不只是调用时被拒。
+
+    两件事分开：① 白名单不列出（模型不会想起来）；② 描述里不再教怎么用
+    （模型记得名字也不会被「指路」）。只做前者挡不住，只做后者也挡不住
+    —— 09-27 已经吃过一次（光靠白名单挡不住模型传参）。
+    """
+
+    DISABLED = ("qwen_image_v1", "krea2")
+    RUNNABLE = ("anima", "anima_2", "image_gen_v1")
+
+    def test_qq_whitelist_hides_disabled_channels(self):
+        from app import agents
+        for name in self.DISABLED:
+            self.assertFalse(agents.allows_skill("qq", name), name)
+        for name in self.RUNNABLE:
+            self.assertTrue(agents.allows_skill("qq", name), name)
+
+    def test_qq_skill_list_does_not_advertise_them(self):
+        from app.agent_prompt import _build_skill_list
+        block = _build_skill_list("qq")
+        for name in self.DISABLED:
+            self.assertNotIn("**" + name + "**", block, name)
+        for name in self.RUNNABLE:
+            self.assertIn("**" + name + "**", block, name)
+
+    def test_qq_description_still_mentions_them_only_to_refuse(self):
+        """描述里出现 qwen/krea2 是**允许**的——但只许出现在「已停用、不要传」
+        的语境里，不许再有「说 krea2 就传 skill=krea2」这种指路话。"""
+        from app.tools.normal.generate_image import tool
+        from app.config import QQ_AGENT_ID
+        desc = tool["description_overrides"][QQ_AGENT_ID]
+        for name in self.DISABLED:
+            self.assertIn(name, desc, name)          # 得让模型知道「点了也没用」
+        self.assertIn("不要传 skill=qwen_image_v1 或 skill=krea2", desc)
+        # 不能再教怎么调它们
+        self.assertNotIn("传 skill=krea2", desc)
+        self.assertNotIn("krea2 传", desc)
+        self.assertNotIn("说 krea2", desc)
 
 
 if __name__ == "__main__":
