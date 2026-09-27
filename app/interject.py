@@ -66,6 +66,7 @@ import time
 
 from app import agents as agent_store
 from app import recent
+from app import usage
 from app.config import (
     QQ_INTERJECT_CONTEXT_MAX_CHARS, QQ_INTERJECT_CONTEXT_MESSAGES,
     QQ_INTERJECT_GROUPS,
@@ -289,10 +290,12 @@ def decide(agent_id, group_id):
     _mark_judged(agent_id, gid)
     t0 = time.time()
     try:
-        out = call_llm(
-            [{"role": "system", "content": _SYSTEM},
-             {"role": "user", "content": "群聊记录：\n" + state}],
-            provider=provider, model=model, timeout=60)
+        # 接话是隐形调用，token 账单列成 interject 类别（app/usage 每日统计）
+        with usage.scope("interject"):
+            out = call_llm(
+                [{"role": "system", "content": _SYSTEM},
+                 {"role": "user", "content": "群聊记录：\n" + state}],
+                provider=provider, model=model, timeout=60)
     except Exception:
         log.exception("接话判断调用失败，这次当「不接」")
         return None

@@ -10,6 +10,7 @@ from flask import (Flask, request, jsonify, send_from_directory, Response,
                    stream_with_context)
 from app import agents as agent_store
 from app import cancel as cancel_mod
+from app import usage as usage_stats
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         LLM_PROVIDER, PROVIDERS, OLLAMA_BASE_URL, DEFAULT_AGENT_ID,
                         ADMIN_ALLOW_REMOTE, CONTEXT_BUDGET,
@@ -93,6 +94,25 @@ def index():
 
 
 # ─── API 路由 ────────────────────────────────────────
+
+@app.route("/api/usage")
+def get_usage():
+    """每日 token 用量（按「会话 / 隐形调用」聚合）。?date=YYYY-MM-DD 可选。
+
+    管理页的「今日用量」表格吃这个接口；也能拿它跟 LLM 后台的账对数。
+    """
+    date = (request.args.get("date") or "").strip() or None
+    if date and not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
+        return jsonify({"error": "date 格式应为 YYYY-MM-DD"}), 400
+    data = usage_stats.daily(date)
+    sessions = data.setdefault("sessions", {})
+    for slot in sessions.values():
+        total_in = (slot.get("hit") or 0) + (slot.get("miss") or 0)
+        slot["hit_rate"] = round((slot.get("hit") or 0) / total_in, 4) \
+            if total_in else 0.0
+    data["dates"] = usage_stats.load_all_dates()
+    return jsonify(data)
+
 
 @app.route("/api/providers")
 def get_providers():

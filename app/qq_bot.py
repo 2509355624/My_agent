@@ -40,7 +40,8 @@ try:
 except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
-from app import image_out, interject, longterm, notify, qq_api, recent, stickers
+from app import (image_out, interject, longterm, notify, qq_api, recent,
+                 stickers, usage)
 from app.agent import run_agent_stream
 from app.agent_prompt import build_stable_prompt
 from app.config import (
@@ -560,7 +561,7 @@ class SessionRunner:
                     # 超时放弃的是「等结果」这件事——线程还在后台跑，它若真
                     # 完成了，回复仍会发出去（迟到总比没有强）。
                     await asyncio.wait_for(
-                        asyncio.to_thread(self._run_turn, batch),
+                        asyncio.to_thread(self._run_turn_scoped, batch),
                         timeout=QQ_TURN_TIMEOUT)
             except asyncio.TimeoutError:
                 log.error("%s 单轮超时（%d 秒）放弃：n=%d 首条=%r——"
@@ -605,6 +606,11 @@ class SessionRunner:
         if not verdict or not verdict["pass"]:
             return False
         return interject.speaking()
+
+    def _run_turn_scoped(self, batch):
+        """给整轮挂上用量归属（app/usage 的每日统计按会话分组靠它）。"""
+        with usage.scope(self.session_key):
+            self._run_turn(batch)
 
     def _run_turn(self, batch):
         """在 worker 线程里跑一轮（run_agent_stream 是同步生成器）。"""

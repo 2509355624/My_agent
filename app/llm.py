@@ -122,13 +122,14 @@ def _raise_with_detail(resp):
     raise RuntimeError(msg)
 
 
-def _record_usage(usage, elapsed=None):
+def _record_usage(usage, elapsed=None, provider="", model=""):
     """把一次响应的 usage 折算成命中率写入**当前线程**的用量记录（流式/非流式共用口径）。
 
     - 火山/DeepSeek 口径：prompt_cache_hit_tokens / prompt_cache_miss_tokens
     - OpenAI 口径兜底：prompt_tokens_details.cached_tokens
     流式下多数服务端只在末帧带 usage，且需要在请求里声明
     stream_options.include_usage。
+    同时归账到 app/usage 的每日统计（归属 = 当前线程的 usage.scope）。
     """
     if not usage:
         return
@@ -151,6 +152,14 @@ def _record_usage(usage, elapsed=None):
     tail = f"  {elapsed:.1f}s" if elapsed is not None else ""
     print(f"[cache] 命中 {hit} / {total} tokens = {rate*100:.1f}% "
           f"(未命中 {miss}){tail} @{_now()}")
+
+    try:
+        from app import usage as usage_stats
+        usage_stats.record(hit or 0, miss or 0,
+                           output=int(usage.get("completion_tokens") or 0),
+                           provider=provider, model=model)
+    except Exception:                # 统计挂了不能影响主链路
+        pass
 
 
 def _log_effective(eff, stream, attempt=None):
@@ -279,7 +288,8 @@ def _call_provider(eff, body, timeout):
         _raise_with_detail(resp)
     data = resp.json()
 
-    _record_usage(data.get("usage"), resp.elapsed.total_seconds())
+    _record_usage(data.get("usage"), resp.elapsed.total_seconds(),
+                  provider=eff["provider"], model=eff["model"])
 
     message = (data.get("choices") or [{}])[0].get("message") or {}
     return message.get("content") or ""
@@ -358,7 +368,7 @@ def _iter_sse_lines(resp):
         yield buf
 
 
-def _parse_sse_line(line):
+def _parse_sse_line(line, provider="", model=""):
     """解析一行 SSE，返回 [(kind, text)]，kind ∈ {"reasoning", "content"}。
 
     非 data 行、坏 JSON、空 delta、[DONE] 一律返回空列表——流里出现噪声
@@ -376,7 +386,7 @@ def _parse_sse_line(line):
         return []
     if not isinstance(chunk, dict):
         return []
-    _record_usage(chunk.get("usage"))
+    _record_usage(chunk.get("usage"), provider=provider, model=model)
 
     out = []
     for choice in chunk.get("choices") or []:
@@ -417,7 +427,8 @@ def _stream_once(eff, messages, timeout, cancel_event):
             # resp.close() 会断开上游，未生成的 token 不再产生也不再计费。
             if is_cancelled(cancel_event):
                 return
-            for kind, text in _parse_sse_line(line):
+            for kind, text in _parse_sse_line(line, eff["provider"],
+                                              eff["model"]):
                 yield kind, text
     finally:
         resp.close()

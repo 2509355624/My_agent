@@ -13,11 +13,22 @@
 """
 
 import json
+import tempfile
 import threading
 import unittest
 from unittest import mock
 
 import app.llm as llm
+from app import usage as usage_stats
+
+
+def setUpModule():
+    """本文件不少用例直接调真的 _record_usage（带假 usage 数据），
+    它会归账到 app/usage——不把 BASE_DIR 挪走就会写脏真实的每日账本。"""
+    p = mock.patch.object(usage_stats, "BASE_DIR",
+                          tempfile.mkdtemp(prefix="wb_usage_test_"))
+    p.start()
+    unittest.addModuleCleanup(p.stop)
 
 _URL = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
 

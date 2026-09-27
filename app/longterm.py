@@ -34,6 +34,7 @@ import threading
 import time
 
 from app import agents as agent_store
+from app import usage
 from app.config import QQ_MEMORY_DIGEST_TIMEOUT
 from app.llm import call_llm
 
@@ -135,10 +136,13 @@ def _digest_turns(agent_id, group_id, lines):
     model = cfg.get("model") or None
 
     try:
-        summary = call_llm(
-            [{"role": "system", "content": _TURN_SYSTEM},
-             {"role": "user", "content": "对话记录：\n" + body}],
-            provider=provider, model=model, timeout=QQ_MEMORY_DIGEST_TIMEOUT)
+        # 长期记忆摘要是后台隐形调用，token 账单列 longterm 类别（app/usage）
+        with usage.scope("longterm"):
+            summary = call_llm(
+                [{"role": "system", "content": _TURN_SYSTEM},
+                 {"role": "user", "content": "对话记录：\n" + body}],
+                provider=provider, model=model,
+                timeout=QQ_MEMORY_DIGEST_TIMEOUT)
     except Exception:
         log.exception("窗口记忆摘要调用失败（群%s，%d 条）", group_id, len(lines))
         return

@@ -291,6 +291,15 @@
           <span class="status" id="sessStatus"></span>
         </div>
       </div>
+
+      <div class="card">
+        <h2>今日用量 <span class="file"><select id="usageDate"
+            style="margin-left:8px;"></select></span></h2>
+        <div class="hint">按「会话 / 隐形调用」聚合的 token 消耗。命中率 = 命中 ÷（命中+未命中），
+          命中越高中间越便宜。vision=识图、interject=接话判断、longterm=长期记忆摘要、
+          compact=上下文压缩摘要，这些是 LLM 后台里「对不上号的请求」的出处。</div>
+        <div class="sess" id="usageTable"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -1298,6 +1307,51 @@ window.addEventListener('beforeunload', (e) => {
   }
 });
 
+async function loadUsage() {
+  const date = $('usageDate').value || '';
+  const resp = await fetch('/api/usage' + (date ? '?date=' + date : ''));
+  if (!resp.ok) throw new Error('用量加载失败 HTTP ' + resp.status);
+  const d = await resp.json();
+  // 日期下拉：可选项 = 已有落盘的日期 + 今天；换日期重新拉取
+  const sel = $('usageDate');
+  const today = new Date().toISOString().slice(0, 10);
+  const dates = Array.from(new Set([...(d.dates || []), today])).sort().reverse();
+  if (sel.options.length !== dates.length ||
+      dates.some((v, i) => sel.options[i].value !== v)) {
+    sel.innerHTML = dates.map((v) => `<option value="${v}">${v}</option>`).join('');
+  }
+  if (d.date) sel.value = d.date;
+  const sessions = d.sessions || {};
+  const rows = Object.entries(sessions).sort((a, b) =>
+    (b[1].hit + b[1].miss) - (a[1].hit + a[1].miss));
+  const fmt = (n) => (n || 0).toLocaleString('zh-CN');
+  const pct = (r) => (r === null || r === undefined) ? '—' : (r * 100).toFixed(1) + '%';
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  if (!rows.length) {
+    $('usageTable').innerHTML = '<div class="hint">这一天还没有记录。</div>';
+    return;
+  }
+  $('usageTable').innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <tr style="text-align:left;opacity:.65;">
+        <th style="padding:4px 8px;">会话 / 类别</th><th>调用</th>
+        <th>命中 tokens</th><th>未命中 tokens</th><th>输出 tokens</th><th>命中率</th>
+      </tr>
+      ${rows.map(([k, v]) => `
+        <tr style="border-top:1px solid rgba(128,128,128,.25);">
+          <td style="padding:4px 8px;">${esc(k)}</td>
+          <td style="text-align:right;padding:4px 8px;">${fmt(v.calls)}</td>
+          <td style="text-align:right;padding:4px 8px;">${fmt(v.hit)}</td>
+          <td style="text-align:right;padding:4px 8px;">${fmt(v.miss)}</td>
+          <td style="text-align:right;padding:4px 8px;">${fmt(v.output)}</td>
+          <td style="text-align:right;padding:4px 8px;">${pct(v.hit_rate)}</td>
+        </tr>`).join('')}
+    </table>`;
+}
+
+$('usageDate').addEventListener('change', () => loadUsage().catch((e) => status(e.message, 'err')));
+
+loadUsage().catch(() => {});
 boot();
 </script>
 </body>

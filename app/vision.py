@@ -176,6 +176,30 @@ def describe(data_url, timeout=None, prompt=None):
                            % (resp.status_code, resp.text[:200]))
 
     try:
-        return (resp.json()["choices"][0]["message"]["content"] or "").strip()
+        data = resp.json()
+    except Exception as exc:
+        raise RuntimeError("识图响应无法解析：%s" % exc)
+
+    # 识图是隐形调用，token 账不进主轮的 [cache] 统计——在这里单独归账，
+    # 挂「vision」类别（跟 LLM 后台对账时，账就齐了）。
+    try:
+        from app import usage as usage_stats
+        u = data.get("usage") or {}
+        hit = u.get("prompt_cache_hit_tokens")
+        miss = u.get("prompt_cache_miss_tokens")
+        if hit is None:
+            details = u.get("prompt_tokens_details") or {}
+            hit = details.get("cached_tokens", 0)
+            miss = (u.get("prompt_tokens") or 0) - (hit or 0)
+        if (hit or 0) + (miss or 0) > 0:
+            with usage_stats.scope("vision"):
+                usage_stats.record(hit or 0, miss or 0,
+                                   output=int(u.get("completion_tokens") or 0),
+                                   provider=pid, model=model)
+    except Exception:
+        pass
+
+    try:
+        return (data["choices"][0]["message"]["content"] or "").strip()
     except Exception as exc:
         raise RuntimeError("识图响应无法解析：%s" % exc)
