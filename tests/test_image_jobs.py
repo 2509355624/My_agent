@@ -1229,16 +1229,28 @@ class DisabledChannelTest(unittest.TestCase):
         self.assertFalse(self.comfy.called)     # 一步都没碰 ComfyUI
         self.assertFalse(self.load.called)      # 连 skill 都没去读
 
-    def test_i2i_is_refused_too(self):
-        """只给 source_image 不给 skill 时会默认落到 qwen——那条路也必须挡住。
+    def test_i2i_is_refused_even_without_naming_qwen(self):
+        """只给 source_image 不给 skill 的那条路**也必须挡住**——而且挡它的是
+        另一道闸（图生图整体停用），跟 qwen 停不停无关。
 
         这是最容易漏的一条：模型的意图是「改图」，不是「用 qwen」，所以它不会
         传 skill，闸要是只看 skill 参数就漏过去了。
         """
         self._disabled(["qwen_image_v1"])
         out = self._call(prompt="把衣服换成红色", source_image="1")
-        self.assertIn("改图", out)
+        self.assertIn("source_image", out)
         self.assertFalse(self.comfy.called)
+
+    def test_i2i_is_refused_with_qwen_enabled(self):
+        """把 qwen 放回来也照样拒——停用的是「图生图」这个功能，不是那个渠道。
+
+        两道闸是分开的：`_I2I_SKILLS` 管「图生图能不能跑」，`DISABLED_IMAGE_
+        SKILLS` 管「这个渠道能不能用」。这条用例把后者清空，只剩前者生效。
+        """
+        self._disabled([])
+        out = self._call(prompt="把衣服换成红色", source_image="1")
+        self.assertIn("source_image", out)
+        self.assertFalse(self.comfy.called)     # 连探活都没做
 
     def test_refusal_tells_the_model_what_to_do(self):
         """拒收不能只说「不行」——模型得知道下一步该干嘛，否则它会开始编。"""

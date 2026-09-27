@@ -12,16 +12,19 @@ from app.config import COMFYUI_URL, DISABLED_IMAGE_SKILLS, QQ_AGENT_ID
 from app.skills import load_skill, load_workflow
 
 
-# 支持图生图的 skill。**只留 qwen**（2026-09-27 用户定）：Qwen-Image 2.1 原生
-# 图生图，按指令改图（把衣服换成红色、背景换成夜景），prompt 写「要改成什么样」。
+# 支持图生图的 skill。**现在一个都没有——图生图整体停用**（2026-09-27 用户定）。
 #
-# anima / image_gen_v1 那套「垫图重绘」（源图 VAEEncode 成 latent + denoise 控制
-# 保留多少原图）已下线——用户嫌效果一般，不如 qwen 直接。krea2 的工作流结构本来
-# 就不同（单一 unet + 一个 lora 槽）。这几个传了 source_image 一律直接拒，**绝不
-# 静默退化成文生图**：用户以为在改自己那张图，实际拿到凭空画的一张。
-_I2I_SKILLS = ("qwen_image_v1",)
+# 用户的原话：引用一张图只是「让 AI 看到这张图」，他要的是**看图 → 反推提示词 →
+# 文生图**，而不是改图。但模型一看见引用图就往图生图上想，屡次跑偏。唯一的图生图
+# 渠道（qwen_image_v1）本身也在这台机器上带不动。所以：**整条图生图链路停用**，
+# 工具收不到这个能力，模型就不会再往那个方向想。
+#
+# 空元组是「停用」的表达方式，不是「没写完」：判据就是它。恢复时把 qwen 填回来
+# （同时清掉 config.DISABLED_IMAGE_SKILLS）即可，下面的 i2i 分支一行都没删。
+_I2I_SKILLS = ()
 
-# 没点名 skill 时的图生图渠道（当前只有这一个）。
+# 没点名 skill 时的图生图渠道。停用期间用不着，留着是为了恢复时一眼能看到
+# 「当初走的是哪个渠道」。
 I2I_DEFAULT_SKILL = "qwen_image_v1"
 
 # 没点名 skill 时的文生图默认渠道（历史行为，不动）。
@@ -165,12 +168,26 @@ def _generate_image(prompt, skill=None, use_character=False, lora=None,
     if gate is not None:
         return gate
 
-    # 没点名 skill 时的默认渠道，**按有没有源图分流**：图生图走 qwen（只有它
-    # 能按指令改图），文生图照旧 anima。execute_tool 是 fn(**args)，模型不传
-    # skill 就落到这里的默认值 None——所以「没点名」和「点名了 anima」分得开。
+    # 图生图整体停用（_I2I_SKILLS 为空）：只要模型还试着传 source_image，就在
+    # 这里当场拦住，**并且把它拉回正路**——它十有八九是看到引用图就以为要「改图」，
+    # 而用户要的其实是「看图 → 反推提示词 → 文生图」。所以这句拒收的关键不是
+    # 「不行」，是「你该干嘛」：照常写 prompt 出一张新的。
+    #
+    # 拦在 skill 解析之前：这时候谁都还没碰 ComfyUI、没读 skill 文件，一次
+    # 白跑都没有；而且模型传没传 skill 也无所谓——图生图这个动作本身已经不存在了。
     is_i2i = bool(str(source_image or "").strip())
+    if is_i2i:
+        return ("错误：不支持传 source_image（改图 / 图生图已停用）。"
+                "**别跟对方解释技术原因，也别提这个参数名**，就说改不了图。"
+                "引用一张图只是让**你看得见**它——你要做的是：**照它反推出提示词，"
+                "用默认的 anima 重新画一张新的**（新图不是改它那张），"
+                "或者对方只是让你看图 / 点评时就直接回话。")
+
+    # 没点名 skill 时的默认渠道：文生图照旧 anima。execute_tool 是 fn(**args)，
+    # 模型不传 skill 就落到这里的默认值 None——所以「没点名」和「点名了 anima」
+    # 分得开。
     if not skill:
-        skill = I2I_DEFAULT_SKILL if is_i2i else T2I_DEFAULT_SKILL
+        skill = T2I_DEFAULT_SKILL
 
     # 停用渠道的硬闸（见 config.DISABLED_IMAGE_SKILLS）。
     #
@@ -178,13 +195,9 @@ def _generate_image(prompt, skill=None, use_character=False, lora=None,
     # 记得这个名字，照样能把 skill 传进来。而 qwen 的代价不是「画得慢」，是
     # **把整机拖崩**——这种事必须有一道代码级的闸，不能指望模型自觉。
     #
-    # 文案有两个讲究：① 不把渠道名当技术名词甩给对方（群里看到 qwen_image_v1
-    # 很奇怪）；② 明说别用别的渠道硬凑——图生图没有替代品，硬凑就是画错东西。
+    # 文案讲究：不把渠道名当技术名词甩给对方（群里看到 qwen_image_v1 很奇怪）；
+    # 同时给出去路，别让模型以为「生图坏了」。
     if skill in DISABLED_IMAGE_SKILLS:
-        if is_i2i:
-            return ("错误：改图（图生图）这个功能已经停用了——它唯一的渠道在这台"
-                    "机器上带不动。**别跟对方解释技术原因**，就说现在改不了图；"
-                    "不要传 source_image，也不要用别的渠道硬凑一张。")
         return ("错误：" + skill + " 这个渠道已经停用（这台机器带不动它）。"
                 "**别跟对方提这个渠道名，也别解释原因**——对方只是要一张图的话，"
                 "直接改用默认的 anima 重画（prompt 改写成 anima 的标签式英文写法）；"
@@ -202,12 +215,16 @@ def _generate_image(prompt, skill=None, use_character=False, lora=None,
 
     # 图生图：给了源图就换成图生图工作流，并先把源图送进 ComfyUI 的 input
     # 目录。取图 / 缩放 / 上传任何一步失败都当场返回，**不退回文生图**。
+    #
+    # **当前走不到这里**：上面已经对 source_image 一刀切拒收了（_I2I_SKILLS
+    # 是空的）。整段保留是为了恢复时改两处即可：把 qwen 填回 _I2I_SKILLS，
+    # 再删掉上面那个 `if is_i2i:` 的早退分支。
     workflow = skill_data["workflow"]
     source_note, denoise_txt, uploaded = "", "", ""
     if is_i2i:
         if skill not in _I2I_SKILLS:
-            return ("错误: 只有 qwen_image_v1 支持图生图，"
-                    + skill + " 不行。去掉 source_image，按文生图重来。")
+            return ("错误: " + skill + " 不支持图生图。"
+                    "去掉 source_image，按文生图重来。")
         # Qwen-Image 2.1 的图生图是「按指令改」：官方模板里 denoise 就是
         # 1.0，没有「保留多少原图」这个旋钮——要改多少，写在 prompt 里。
         # 模型传了 denoise 也不认，免得它以为调低就是「只微调」。
@@ -341,15 +358,13 @@ tool = {
                   "多个逗号分隔（如 \"x.safetensors:0.8,y.safetensors:0.5\"）；文件名要完整"
                   "(.safetensors 结尾)，写错会返回可用清单；传了就完全接管本次的 lora，"
                   "槽位 image_gen_v1 3 个 / anima 2 个 / krea2 1 个，没填满的槽自动关闭。"
-                  "【图生图 / 改图：已停用】**不要再传 source_image 了**——改图唯一的"
-                  "渠道（qwen_image_v1）已经停用，传了工具会直接拒。"
-                  "用户要「改这张图 / 垫图 / 把X换成Y / 保留构图只改颜色」时，"
-                  "**照实说现在改不了图**，不要硬凑一张、也不要偷偷退化成文生图；"
-                  "想帮他可以问清他要什么效果，用 anima 重新画一张（但要说明是新画的、"
-                  "不是改他那张）。"
-                  "**注意**：「看一下这张图的特征 / 提取特征 / 复刻一张 / 参考这个风格」"
-                  "从来就不是图生图——那是**看图 → 你写提示词 → 文生图**，"
-                  "引用图你看得见，照它写 prompt 就行，这条路照常可用。",
+                  "【引用图片：只看，不改】**不要传 source_image**（改图 / 图生图"
+                  "整体停用，传了工具会直接拒）。用户引用一张图，只是让你**看得见**"
+                  "它：你要做的是**照它反推出提示词，用 anima 画一张新的**，"
+                  "或者对方只是让你看图 / 点评时直接回话。"
+                  "用户真要「改这张图 / 垫图 / 把X换成Y」时，照实说改不了图，"
+                  "不要硬凑；可以问清他想要什么效果，用 anima 重画一张"
+                  "（说明是新画的、不是改他那张）。",
     # QQ 机器人看不到角色底模这套：Sumire 的角色描述只给网页端用。
     "description_overrides": {
         QQ_AGENT_ID:
@@ -367,15 +382,12 @@ tool = {
             "【lora】用户点名要换 lora 时才传 lora 参数，平时不要传。格式「文件名:强度」，"
             "多个逗号分隔（如 \"x.safetensors:0.8\"）；文件名要完整(.safetensors 结尾)，"
             "写错会返回可用清单；最多 3 个，传了就完全接管本次的 lora。"
-            "【图生图 / 改图：已停用】**不要再传 source_image**——改图唯一的渠道"
-            "（qwen_image_v1）已经停用，传了工具会直接拒。"
-            "对方要「改这张图 / 垫图 / 把X换成Y」时，**照实说现在改不了图**，"
-            "不要硬凑一张、也不要偷偷退化成文生图；可以问清他想要什么效果，"
-            "用 anima 重新画一张（要说明是新画的，不是改他那张）。"
-            "**注意**：「看一下这张图的特征 / 提取特征 / 复刻一张 / 参考这个风格 / "
-            "照着画一张新的」从来就不是图生图——那是**看图 → 你写提示词 → 文生图**"
-            "（引用图你看得见，照它写 prompt 就行），这条路照常可用，"
-            "不要因为「改图停用了」就把这些也拒掉。",
+            "【引用图片：只看，不改】**不要传 source_image**（改图 / 图生图"
+            "整体停用，传了工具会直接拒）。对方引用一张图，只是让你**看得见**它："
+            "你要做的是**照它反推出提示词，用 anima 画一张新的**，"
+            "或者对方只是让你看图 / 点评时直接回话。"
+            "对方真要「改这张图 / 垫图 / 把X换成Y」时，照实说改不了图，不要硬凑；"
+            "可以问清他想要什么效果，用 anima 重画一张（说明是新画的、不是改他那张）。",
     },
     "hidden_params": {QQ_AGENT_ID: ["use_character"]},
     "function": _generate_image,
@@ -386,7 +398,7 @@ tool = {
             "skill": {"type": "string", "description": "Skill名称。**不传就是默认 anima**。可选值见系统提示 Available Skills 里标 [底模]/[无底模] 的生图类；krea2 / image_gen_v1（**= SD / SDXL 渠道**）仅在用户点名或场景匹配时才用。**qwen_image_v1 已停用，不要传**"},
             "use_character": {"type": "boolean", "description": "是否使用该Skill自带的角色描述（默认false）。只有 image_gen_v1 有角色底模，设为true时固定该角色，你只写动作/环境/构图"},
             "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传"},
-            "source_image": {"type": "string", "description": "**已停用，不要传**。图生图（改图）唯一的渠道已经停用，传了工具会直接拒。用户要「改这张图 / 垫图」时照实说现在改不了图；「看特征 / 复刻 / 参考这个风格」从来不是图生图，照常按文生图处理即可"}
+            "source_image": {"type": "string", "description": "**不要传**。改图 / 图生图整体停用，传了工具会直接拒。引用图片只是让你看得见它——照它反推提示词、用 anima 画一张新的即可；对方真要改图，照实说改不了"}
         },
         "required": ["prompt"]
     }

@@ -17,13 +17,15 @@ from app.config import DISABLED_IMAGE_SKILLS
 from app.skills import load_workflow
 from app.tools.normal import generate_image as gi
 
-# qwen 停用时，下面那些「qwen 图生图怎么工作」的用例测的功能整体不存在了。
-# **跳过而不是删掉**：停用是可逆的（见 config.DISABLED_IMAGE_SKILLS 的注释），
-# 把 qwen 放回来的那天，这些用例应该自动重新跑起来。拒收本身另有用例覆盖
-# （test_image_jobs.DisabledChannelTest）。
+# 图生图已**整体停用**（`generate_image._I2I_SKILLS` 为空，见它的注释），所以
+# 下面那些「qwen 图生图怎么工作」的用例测的功能眼下不存在了。
+#
+# **跳过而不是删掉**：摘停用是可逆的——把 qwen 填回 `_I2I_SKILLS`、清掉
+# `config.DISABLED_IMAGE_SKILLS`，这些用例该自动重新跑起来。
+# 「传了 source_image 一律拒」这条新合同由 I2IFlowTest 覆盖（它是活的，不跳过）。
 _qwen_off = unittest.skipIf(
-    "qwen_image_v1" in DISABLED_IMAGE_SKILLS,
-    "qwen_image_v1 已停用（config.DISABLED_IMAGE_SKILLS），图生图整体下线")
+    not gi._I2I_SKILLS,
+    "图生图已整体停用（generate_image._I2I_SKILLS 为空）")
 
 
 def _png(w, h, mode="RGB"):
@@ -288,7 +290,12 @@ class _I2IRunner(object):
 
 
 class I2IFlowTest(_I2IRunner, unittest.TestCase):
-    """图生图只留 qwen：anima / image_gen_v1 / krea2 传了当场拒，不静默退化。"""
+    """图生图整体停用：**任何**渠道带 source_image 都当场拒，绝不静默退化。
+
+    用户的问题不是「画得不好」，是模型一看见引用图就往改图上想（见
+    generate_image 里 `_I2I_SKILLS` 的注释）。所以这里测的不是「哪个渠道
+    不支持」，而是「**这个动作本身已经没有入口了**」。
+    """
 
     def test_default_call_is_still_text2img(self):
         out, wf = self._run(prompt="1girl, solo")
@@ -297,31 +304,29 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
         self.assertNotIn("24", wf)
         self.assertEqual(wf["4"]["inputs"]["text"], "@kibro, 1girl, solo")
 
-    def test_anima_is_no_longer_an_i2i_channel(self):
-        """垫图重绘已下线：anima 带 source_image 直接拒，绝不退化成文生图。"""
-        out, wf = self._run(prompt="x", skill="anima", source_image="1")
-        self.assertIn("支持图生图", out)
-        self.assertIn("anima", out)
-        self.assertEqual(wf, {})
+    def test_source_image_is_refused_whatever_the_skill(self):
+        """点了名也一样拒——停用的是「图生图」，不是「某个渠道的图生图」。"""
+        for skill in ("anima", "image_gen_v1", "krea2"):
+            out, wf = self._run(prompt="x", skill=skill, source_image="1")
+            self.assertIn("source_image", out)
+            self.assertEqual(wf, {}, skill)
 
-    def test_image_gen_v1_is_no_longer_an_i2i_channel(self):
-        out, wf = self._run(prompt="x", skill="image_gen_v1", source_image="1")
-        self.assertIn("支持图生图", out)
-        self.assertIn("image_gen_v1", out)
-        self.assertEqual(wf, {})
+    def test_refusal_points_at_the_right_thing_to_do(self):
+        """真正的痛点在这儿：模型得知道「引用图 = 看得见」而不是「要改图」。"""
+        out, _ = self._run(prompt="x", source_image="1")
+        self.assertIn("看得见", out)
+        self.assertIn("anima", out)             # 明确给出该走的渠道
+        self.assertIn("反推", out)               # 用户要的正是「反推提示词」
+        self.assertIn("别跟对方解释技术原因", out)
 
-    def test_krea2_is_refused(self):
-        out, wf = self._run(prompt="x", skill="krea2", source_image="1")
-        self.assertIn("支持图生图", out)
-        self.assertIn("krea2", out)
-        self.assertEqual(wf, {})
+    def test_refusal_never_mentions_a_channel_name(self):
+        """拒收时不能把 qwen_image_v1 这种名字甩出去——群里看到很奇怪。"""
+        out, _ = self._run(prompt="x", source_image="1")
+        self.assertNotIn("qwen", out)
 
-    @_qwen_off
-    def test_source_failure_reports_and_submits_nothing(self):
-        with mock.patch.object(comfy_src, "resolve",
-                               mock.Mock(side_effect=RuntimeError("这儿没有图"))):
-            out, wf = self._run(prompt="x", source_image="1")
-        self.assertEqual(out, "这儿没有图")
+    def test_nothing_reaches_comfyui(self):
+        """拦在 skill 解析之前：一次白跑都没有。"""
+        out, wf = self._run(prompt="x", source_image="1")
         self.assertEqual(wf, {})
 
 

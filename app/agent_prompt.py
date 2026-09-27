@@ -86,9 +86,10 @@ _TOOL_HINTS = [
     (("generate_image",),
      "- generate_image 的 prompt 参数必须是英文"),
     (("generate_image",),
-     "- **引用图片 ≠ 图生图**：只有对方明确说要「改这张图」（图生图 / 垫图 / 照着这张改 /"
-     " 把X换成Y）才传 source_image；「看特征 / 复刻 / 参考这个风格 / 照着画一张新的」"
-     "都是**文生图**——引用图你看得见，照它写 prompt 即可，不要传 source_image"),
+     "- **引用图片只是让你「看得见」它，不是让你改它**：不要传 source_image（图生图 /"
+     " 改图整体停用）。对方引用一张图时，照它**反推提示词、用 anima 画一张新的**"
+     "（「看特征 / 复刻 / 参考这个风格 / 照着画一张新的」都是这条路）；"
+     "对方真要「改这张图 / 把X换成Y」就照实说改不了图"),
     (("write_file",),
      "- 想创建新 Skill？用 write_file 写入 skill.md / character.txt / workflow.json"),
     (("-",),

@@ -323,36 +323,45 @@ class ToolDescriptionTest(unittest.TestCase):
         self.assertIn("lora", self._block(QQ_AGENT_ID))
         self.assertIn("lora", self._block("main"))
 
-    def test_default_image_skill_depends_on_i2i(self):
-        """不点名时的默认渠道：文生图 anima；图生图那套**代码保留但已停用**。
+    def test_default_image_skill_is_anima(self):
+        """不点名时的默认渠道恒为 anima——文生图那套没变过。
 
-        `I2I_DEFAULT_SKILL` / `_I2I_SKILLS` 仍然指着 qwen（代码一行没删，随时能
-        恢复），但 `DISABLED_IMAGE_SKILLS` 让工具直接拒——所以描述里现在写的是
-        「已停用」。把 qwen 放回来（清空那个配置）之后描述要改回「只走 qwen」，
-        这条断言会跟着反过来，不用再动。
         signature 的默认值必须是 None——execute_tool 是 fn(**args)，只有「模型
         压根没传 skill」才会落到默认值，靠它才分得开「没点名」和「点名了 anima」。
         """
         import inspect
-        from app.config import DISABLED_IMAGE_SKILLS
         from app.tools.normal.generate_image import (
-            _generate_image, tool, I2I_DEFAULT_SKILL, T2I_DEFAULT_SKILL,
-            _I2I_SKILLS)
+            _generate_image, T2I_DEFAULT_SKILL)
         self.assertIsNone(inspect.signature(_generate_image)
                           .parameters["skill"].default)
         self.assertEqual(T2I_DEFAULT_SKILL, "anima")
-        # 图生图的代码原样保留，只是被配置停用了——这两条不能变
-        self.assertEqual(I2I_DEFAULT_SKILL, "qwen_image_v1")
-        self.assertEqual(_I2I_SKILLS, ("qwen_image_v1",))
-        disabled = "qwen_image_v1" in DISABLED_IMAGE_SKILLS
+
+    def test_i2i_is_off_so_no_source_image_wording(self):
+        """图生图整体停用：描述里必须**劝退** source_image，不能还教怎么用。
+
+        这条是给「模型老是往改图上想」那个毛病上的锁：描述要是留着
+        「不传 skill、只传 source_image 就会自动切到某渠道」这种指路话，
+        等于亲手把它往坑里推。
+        """
+        from app.tools.normal.generate_image import (
+            tool, I2I_DEFAULT_SKILL, _I2I_SKILLS)
+        self.assertEqual(_I2I_SKILLS, ())          # 停用的表达方式就是空
+        self.assertEqual(I2I_DEFAULT_SKILL, "qwen_image_v1")   # 恢复时用得上
         for desc in (tool["description"],
                      tool["description_overrides"][QQ_AGENT_ID]):
             self.assertIn("文生图默认 anima", desc)
-            if disabled:
-                self.assertIn("停用", desc)
-                self.assertNotIn("图生图只走 qwen_image_v1", desc)
-            else:
-                self.assertIn("图生图只走 qwen_image_v1", desc)
+            self.assertIn("不要传 source_image", desc)
+            # 不能再有「只传 source_image 就默认走 qwen」这类指路话
+            self.assertNotIn("只传 source_image", desc)
+            self.assertNotIn("会自动切到 qwen", desc)
+            # 「看图 → 反推提示词 → 文生图」这条路必须写清楚，别被误伤掉
+            self.assertIn("看得见", desc)
+
+    def test_source_image_param_is_marked_off(self):
+        """参数描述也得是「别传」，口径要和上面那两段一致。"""
+        from app.tools.normal.generate_image import tool
+        desc = tool["parameters"]["properties"]["source_image"]["description"]
+        self.assertIn("不要传", desc)
 
 
 if __name__ == "__main__":
