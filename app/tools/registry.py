@@ -75,6 +75,27 @@ if QQ_ENABLE:
     from app.tools.normal.collect_sticker import tool as _collect_sticker_tool
     register_tool(**_collect_sticker_tool)
 
+    # QQ 私聊「文生图预设」向量库：仅 QQ 会话可用（群聊/网页端由工具内部拒绝）
+    from app.tools.rag.preset_tools import (
+        TOOL_SCHEMA as _PRESET_SCHEMA,
+        preset_save as _preset_save_fn,
+        preset_search as _preset_search_fn,
+        preset_list as _preset_list_fn,
+        preset_delete as _preset_delete_fn,
+    )
+    for _pname, _pfn in (
+        ("preset_save", _preset_save_fn),
+        ("preset_search", _preset_search_fn),
+        ("preset_list", _preset_list_fn),
+        ("preset_delete", _preset_delete_fn),
+    ):
+        register_tool(
+            name=_pname,
+            description=_PRESET_SCHEMA[_pname]["function"]["description"],
+            function=_pfn,
+            parameters=_PRESET_SCHEMA[_pname]["function"]["parameters"],
+        )
+
 from app.tools.normal.list_skills import tool as _list_skills_tool
 register_tool(**_list_skills_tool)
 

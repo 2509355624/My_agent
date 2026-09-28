@@ -156,3 +156,18 @@ class VectorStore:
             return len(ids)
         except Exception:
             return 0
+
+    def get_all(self, kb_name: str) -> list[dict]:
+        """返回某知识库下的全部条目（id/content/metadata），用于列全部预设。"""
+        col = self._collection(kb_name)
+        if col.count() == 0:
+            return []
+        result = col.get(include=["documents", "metadatas"])
+        out = []
+        for i, doc_id in enumerate(result["ids"]):
+            out.append({
+                "id": doc_id,
+                "content": result["documents"][i],
+                "metadata": (result["metadatas"][i] or {}),
+            })
+        return out

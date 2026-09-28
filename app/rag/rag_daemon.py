@@ -2,7 +2,7 @@
 """
 RAG 常驻进程：保持 BGE-M3 模型加载，通过 stdin/stdout JSON Lines 通信。
 
-请求格式: {"id":"1","cmd":"ping|search|ingest|list_kb|delete_kb|delete_entry", ...}
+请求格式: {"id":"1","cmd":"ping|search|ingest|list_kb|delete_kb|delete_entry|delete_entries|list_entries", ...}
 响应格式: {"id":"1","ok":true,...} 或 {"id":"1","ok":false,"error":"..."}
 """
 
@@ -159,6 +159,13 @@ def _handle(req: dict, embeddings: LocalEmbeddings, store: VectorStore) -> dict:
                 raise ValueError("kb_name and ids are required")
             deleted = store.delete_entries(kb_name, ids)
             return {"id": req_id, "ok": True, "deleted": deleted}
+
+        if cmd == "list_entries":
+            kb_name = str(req.get("kb_name") or "").strip()
+            if not kb_name:
+                raise ValueError("kb_name is required")
+            entries = store.get_all(kb_name)
+            return {"id": req_id, "ok": True, "entries": entries}
 
         raise ValueError(f"unknown cmd: {cmd}")
     except Exception as exc:
