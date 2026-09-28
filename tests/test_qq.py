@@ -23,8 +23,10 @@ from unittest import mock
 import app.agents as agents
 import app.comfy_status as comfy_status
 import app.image_out as image_out
+import app.notify as notify
 import app.qq_api as qq_api
 import app.qq_bot as qq_bot
+import app.qq_status as qq_status
 from app.tools.normal import send_qq_message
 
 # 模块级隔离：本文件里有几处用例会走到真实的「落盘」代码路径
@@ -1185,7 +1187,17 @@ class ConnectRobustnessTest(unittest.TestCase):
                  mock.patch.object(qq_api, "check_alive",
                                    side_effect=OSError("probe failed")), \
                  mock.patch.object(qq_bot, "_RECONNECT_MIN", 0.01), \
-                 mock.patch.object(qq_bot, "_RECONNECT_MAX", 0.01):
+                 mock.patch.object(qq_bot, "_RECONNECT_MAX", 0.01), \
+                 mock.patch.object(qq_status, "start"), \
+                 mock.patch.object(notify, "start_watcher"):
+                # ⚠️ 这两个后台线程必须挡掉：run() 会起「状态快照」和
+                # 「掉线通知」两条常驻线程，它们不随 wait_for 超时结束，
+                # 会一直活到测试进程退出。不挡的话：
+                #   1. 状态线程每秒覆写**生产**的 state/qq_status.json，
+                #      和正在跑的 qq_bot 抢同一个文件（Windows 报 WinError 5），
+                #      后台页面显示的是测试造的假数据；
+                #   2. 通知线程真去盯 NapCat 的 qrcode.png，可能给用户手机
+                #      推一条假的「机器人掉线」。
                 try:
                     await asyncio.wait_for(bot.run(), timeout=0.15)
                 except asyncio.TimeoutError:
