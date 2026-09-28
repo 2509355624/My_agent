@@ -487,7 +487,7 @@ class NaiI2ITest(unittest.TestCase):
     def test_web_is_refused(self):
         out, cap = self._run(context=(None, None), prompt="x", skill="nai",
                              source_image="1")
-        self.assertIn("仅支持 QQ 群", out)
+        self.assertIn("仅支持 QQ", out)
         self.assertEqual(cap, {})
 
 

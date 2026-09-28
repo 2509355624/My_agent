@@ -184,7 +184,7 @@ def _generate_image(prompt, skill=None, use_character=False, lora=None,
             return ("错误：" + why + "，本次不使用 NAI。"
                     "直接告诉对方现在用不了，别再重试。")
         if target is None:
-            return "错误：NAI 仅支持 QQ 群使用，网页端用不了。"
+            return "错误：NAI 仅支持 QQ 使用，网页端用不了。"
         # 垫图：只认本轮引用的图（comfy_src.resolve 的既有契约），取图失败
         # 就实话实说，绝不退回文生图——对方以为改的是自己那张，收到的却是
         # 凭空画的，比直接报错糟得多。base64 在这里算好快照进队列：

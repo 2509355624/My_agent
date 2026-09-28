@@ -1524,7 +1524,7 @@ class NaiRoutingTest(unittest.TestCase):
 
     def test_nai_web_refused(self):
         out, eq = self._call("nai", (None, None), nai_ok=True)
-        self.assertIn("仅支持 QQ 群", out)
+        self.assertIn("仅支持 QQ", out)
         self.assertFalse(eq.called)
 
     def test_description_still_a_string(self):

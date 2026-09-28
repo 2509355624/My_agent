@@ -143,20 +143,24 @@ def nai_allowed(agent_id, target, target_id):
     三层闸（settings.json 热生效，不用重启）：
     - config.NAI_ENABLED：.env 硬总闸（默认开，纯紧急熔断用）；
     - nai_enabled：settings 全局总闸（默认关，管理页开）；
-    - nai_groups：单群白名单（默认空），只有名单里的群能用。
-    仅限群聊（target == "group"）；私聊 / 网页一律不可用——这是群主的点名要求：
-    他的 token 只给「那个群」，别的群连碰的机会都没有。
+    - 白名单（各自独立、默认空）：群聊看 nai_groups、私聊看 nai_private。
+    只支持 QQ 会话（target 为 "group" / "private"）；网页端一律不可用——token 只给
+    名单里的群 / 人，别的会话连碰的机会都没有。
     """
     if not NAI_ENABLED:
         return False, "NAI 已被全局紧急关闭（.env NAI_ENABLED=false）"
     s = load_settings(agent_id)
     if not s.get("nai_enabled"):
         return False, "NAI 未在本 agent 启用（管理页全局开关未开）"
-    if target != "group":
-        return False, "NAI 仅限群聊使用"
-    if str(target_id) not in (s.get("nai_groups") or []):
-        return False, "本群未开通 NAI（管理页未把本群加入白名单）"
-    return True, ""
+    if target == "group":
+        if str(target_id) not in (s.get("nai_groups") or []):
+            return False, "本群未开通 NAI（管理页未把本群加入白名单）"
+        return True, ""
+    if target == "private":
+        if str(target_id) not in (s.get("nai_private") or []):
+            return False, "你还没开通 NAI（管理页未把你的 QQ 加入私聊白名单）"
+        return True, ""
+    return False, "NAI 仅支持 QQ 使用"
 
 
 # 对外发图的编码格式。只决定「发出去那一张」怎么编码——ComfyUI output

@@ -741,8 +741,16 @@ function renderSessions() {
 
     // 「提示词」按钮：给这个群/私聊单独自定义人设（会话专属提示词）。
     if (s.kind === 'group' || s.kind === 'private') {
-      // 私聊行没有上面那堆群开关，格式按钮在这里补上（群行已在上面渲染过）。
-      if (s.kind === 'private') addImageFmtButton(s, row);
+      // 私聊行没有上面那堆群开关，NAI / 格式按钮在这里补上（群行已在上面渲染过）。
+      if (s.kind === 'private') {
+        // 「NAI」开关：把 QQ 加入 / 移出 NAI 私聊白名单（全局总闸优先）。
+        const ng = document.createElement('button');
+        ng.className = 'toggle' + (s.nai ? ' on' : '');
+        ng.textContent = s.nai ? 'NAI·开' : 'NAI·关';
+        ng.addEventListener('click', () => toggleNai(s, ng));
+        row.appendChild(ng);
+        addImageFmtButton(s, row);
+      }
       const pb = document.createElement('button');
       pb.className = 'ghost';
       pb.textContent = (sessPrompts[s.key] ? '提示词·自定义'
@@ -970,11 +978,14 @@ async function toggleNaiAll() {
 async function toggleNai(s, btn) {
   const target = !s.nai;
   const name = s.name || s.target_id;
+  const isPrivate = s.kind === 'private';
+  const scope = isPrivate ? '它和你私聊时' : '它在这个群里';
   if (!target && !confirm('把「' + name + '」移出 NAI 白名单？\n\n'
-      + '它在这个群里再调 NAI 会被拒绝（全局总闸不受影响）。')) return;
+      + scope + '再调 NAI 会被拒绝（全局总闸不受影响）。')) return;
   btn.disabled = true;
   try {
-    await api('/api/agent/' + encodeURIComponent(cur) + '/nai/'
+    await api('/api/agent/' + encodeURIComponent(cur)
+      + (isPrivate ? '/nai_private/' : '/nai/')
       + encodeURIComponent(s.target_id),
       { method: 'PUT',
         headers: { 'Content-Type': 'application/json' },

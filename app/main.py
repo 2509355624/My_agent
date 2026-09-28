@@ -660,6 +660,7 @@ def get_agent_sessions(agent_id):
     muted = set(settings.get("interject_muted") or [])
     img_muted = set(settings.get("image_gen_muted") or [])
     nai_groups = set(str(x) for x in (settings.get("nai_groups") or []))
+    nai_privates = set(str(x) for x in (settings.get("nai_private") or []))
     nai_enabled = bool(settings.get("nai_enabled"))
     overrides = settings.get("interject_cooldown_overrides") or {}
     chance_ov = settings.get("interject_chance_overrides") or {}
@@ -681,6 +682,9 @@ def get_agent_sessions(agent_id):
             fo = fmt_ov.get(str(item["target_id"]))
             item["image_send_format"] = (
                 fo if fo in agent_store.IMAGE_SEND_FORMATS else None)
+            # NAI 白名单：群行在上面 group 分支里算，这里补私聊行（私聊看 nai_private）。
+            if item["kind"] == "private":
+                item["nai"] = item["target_id"] in nai_privates
     # 全局主动发言三件套（settings 里没设就回落默认），管理页输入框用
     # 私聊闸当前值：settings 优先，键缺失回落 .env（跟 qq_bot._private_gate 同口径）
     if "private_enable" in settings:
@@ -815,6 +819,35 @@ def set_agent_nai_group(agent_id, group_id):
     if not agent_store.save_settings(aid, settings):
         return jsonify({"error": "写入 settings.json 失败"}), 500
     return jsonify({"ok": True, "agent": aid, "group": str(group_id),
+                    "nai": body["enabled"]})
+
+
+@app.route("/api/agent/<agent_id>/nai_private/<qq_id>", methods=["PUT"])
+def set_agent_nai_private(agent_id, qq_id):
+    """把某个 QQ 加入 / 移出 NAI 私聊白名单（总闸开着时才有效）。热生效。
+
+    存 settings.json 的 nai_private：名单里的 QQ 在**私聊**里能用 NAI，不在名单
+    的不能用。与群白名单 nai_groups 相互独立——同一个 QQ 的私聊和群不互推。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body.get("enabled"), bool):
+        return jsonify({"error": "需要布尔字段 enabled"}), 400
+    settings = agent_store.load_settings(aid)
+    users = set(str(x) for x in (settings.get("nai_private") or []))
+    if body["enabled"]:
+        users.add(str(qq_id))
+    else:
+        users.discard(str(qq_id))
+    settings["nai_private"] = sorted(users)
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "qq": str(qq_id),
                     "nai": body["enabled"]})
 
 
