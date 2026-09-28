@@ -206,6 +206,16 @@ class QueueTest(_Base):
         image_jobs._take_nowait()          # 相当于 worker 开始跑 a
         self.assertEqual(image_jobs.ahead_of(b), 1)   # a 还在跑，仍在前头
 
+    def test_nai_depth_counts_only_nai(self):
+        """状态栏的数据源：nai_depth 只数 NAI 的在跑/在排，别的渠道不算。"""
+        self._enqueue(("group", "9"))                    # 普通渠道
+        self._enqueue(("group", "9"), wf="cat", skill="nai")
+        self.assertEqual(image_jobs.nai_depth(), (0, 1))
+        image_jobs._take_nowait()          # 跑起来的是普通渠道那张
+        self.assertEqual(image_jobs.nai_depth(), (0, 1))
+        image_jobs._take_nowait()          # NAI 那张开跑
+        self.assertEqual(image_jobs.nai_depth(), (1, 0))
+
     def test_per_session_limit(self):
         for _ in range(image_jobs.MAX_INFLIGHT):
             job, reason = self._enqueue()

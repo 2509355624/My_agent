@@ -70,12 +70,30 @@ def reset_cache():
 
 
 def status_line():
-    """给状态栏的那一行。措辞直接给模型下指令，别让它猜。"""
+    """给状态栏的那两行（ComfyUI 一行 + NAI 一行）。措辞直接给模型下指令，
+    别让它猜。"""
     s = snapshot()
     if s["online"]:
         if s["running"] or s["pending"]:
-            return ("comfyui: online；正在画 %d 张、排队 %d 张"
-                    % (s["running"], s["pending"]))
-        return "comfyui: online；画图队列空闲，可以接画图请求"
-    return ("comfyui: OFFLINE（%s 连不上）——不要答应画图请求，工具会失败；"
-            "对方要图就直说画图服务暂时离线、稍后再试" % COMFYUI_URL)
+            comfy = ("comfyui: online；正在画 %d 张、排队 %d 张"
+                     % (s["running"], s["pending"]))
+        else:
+            comfy = "comfyui: online；画图队列空闲，可以接画图请求"
+    else:
+        # 只封 ComfyUI 渠道——nai 是云端调用，跟本机 ComfyUI 死活无关，
+        # 别让这句把 NAI 的单也误杀了。
+        comfy = ("comfyui: OFFLINE（%s 连不上）——ComfyUI 渠道的画图请求不要"
+                 "答应、工具会失败；对方要图就直说画图服务暂时离线、稍后再试"
+                 "（nai 渠道不受影响，仍可接单）" % COMFYUI_URL)
+    return comfy + "\n" + nai_line()
+
+
+def nai_line():
+    """NAI 的那一行。队列有活就报数字，空闲也要明说——机器人对「跑完没有」
+    的判断全靠这行，不说死它就会去猜。"""
+    from app import image_jobs     # 局部导入：image_jobs 较重，按需拉起
+    running, pending = image_jobs.nai_depth()
+    if running or pending:
+        return ("nai: 正在画 %d 张、排队 %d 张（NovelAI 云端，与本机 ComfyUI"
+                " 无关）" % (running, pending))
+    return "nai: 空闲（没有在画的 NAI 图）"

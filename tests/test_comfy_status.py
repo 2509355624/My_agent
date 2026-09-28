@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 from app import comfy_status
+from app import image_jobs
 
 
 def _resp(payload, status=200):
@@ -106,8 +107,39 @@ class StatusLineTest(unittest.TestCase):
                 return_value={"online": False, "running": 0, "pending": 0}):
             line = comfy_status.status_line()
         self.assertIn("OFFLINE", line)
-        self.assertIn("不要答应画图请求", line)
+        self.assertIn("画图请求不要答应", line)
         self.assertIn("127.0.0.1:8188", line)
+        # 关键：只封 ComfyUI 渠道，不许顺手把 NAI 的单也杀了
+        self.assertIn("nai 渠道不受影响", line)
+
+    def test_nai_busy_appended(self):
+        with mock.patch.object(
+                comfy_status, "snapshot",
+                return_value={"online": True, "running": 1, "pending": 0}), \
+             mock.patch.object(image_jobs, "nai_depth",
+                               return_value=(1, 2)):
+            line = comfy_status.status_line()
+        self.assertIn("comfyui: online；正在画 1 张", line)
+        self.assertIn("nai: 正在画 1 张、排队 2 张", line)
+
+    def test_nai_idle_line(self):
+        with mock.patch.object(
+                comfy_status, "snapshot",
+                return_value={"online": True, "running": 0, "pending": 0}), \
+             mock.patch.object(image_jobs, "nai_depth",
+                               return_value=(0, 0)):
+            line = comfy_status.status_line()
+        self.assertIn("nai: 空闲", line)
+
+    def test_nai_line_present_even_when_comfy_offline(self):
+        with mock.patch.object(
+                comfy_status, "snapshot",
+                return_value={"online": False, "running": 0, "pending": 0}), \
+             mock.patch.object(image_jobs, "nai_depth",
+                               return_value=(0, 1)):
+            line = comfy_status.status_line()
+        self.assertIn("OFFLINE", line)
+        self.assertIn("nai: 正在画 0 张、排队 1 张", line)
 
 
 class StatusBarWiringTest(unittest.TestCase):
@@ -121,8 +153,11 @@ class StatusBarWiringTest(unittest.TestCase):
             bar = agent_prompt.build_status_bar()
         self.assertIn("<status_bar>", bar)
         self.assertIn("comfyui: online；正在画 1 张、排队 2 张", bar)
+        # NAI 行也必须在：机器人对「NAI 跑完没有」的判断全靠它
+        self.assertIn("nai: 空闲", bar)
         # 行必须在标签内部，不能漏到 </status_bar> 之外
         self.assertLess(bar.index("comfyui:"), bar.index("</status_bar>"))
+        self.assertLess(bar.index("nai:"), bar.index("</status_bar>"))
 
 
 if __name__ == "__main__":

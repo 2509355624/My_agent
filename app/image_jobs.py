@@ -247,6 +247,19 @@ def queue_depth():
         return len(_queue) + (1 if _running is not None else 0)
 
 
+def nai_depth():
+    """NAI 渠道现在有几张在跑 / 在排（给状态栏用的本地事实）。
+
+    ComfyUI 的排队数靠 /queue 探测（comfy_status），NAI 是云端请求，
+    ComfyUI 那边根本看不见——机器人想知道「NAI 画完没有」只能看这里。
+    全局同时只有一张在跑（worker 串行），所以 running 只会是 0 或 1。
+    """
+    with _lock:
+        running = 1 if _running is not None and _running.skill == "nai" else 0
+        pending = sum(1 for j in _queue if j.skill == "nai")
+        return running, pending
+
+
 def ahead_of(job):
     """这个任务前面还有几张（含正在跑的那张）。已经开跑就返回 0。
 
