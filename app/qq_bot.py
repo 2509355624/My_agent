@@ -919,6 +919,13 @@ class QQBot:
         sender = ((ev.get("sender") or {}).get("card")
                   or (ev.get("sender") or {}).get("nickname") or "")
 
+        # 私聊昵称：消息事件里 sender.card/nickname 是免费的，非好友也能拿到。
+        # 比 get_friend_list 兜底更靠谱（朋友列表只覆盖好友），所以这是主入口。
+        # 缓存持久化到 state/qq_names.json，重启不丢（见 app/qq_names.py）。
+        if target == "private" and sender:
+            from app import qq_names
+            qq_names.note_private(target_id, sender)
+
         # 群消息**一律**先记进「最近群聊」缓存，不管回不回、也不管是不是自己
         # 发的。原先不 @ 机器人的消息在这里就直接丢了，模型每轮只看得到「有人
         # 问了它一句」，所以只能一问一答。记在判定之前是有意的——要回的那条

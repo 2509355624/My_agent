@@ -98,6 +98,10 @@
     display: inline-block; padding: 1px 6px; border-radius: 4px;
     background: var(--bg-input); color: var(--text-dim); font-size: 11px;
   }
+  .meta-id {
+    display: inline-block; margin-top: 2px;
+    font-size: 10px; color: var(--text-mute);
+  }
   .flash { animation: f 1s; }
   @keyframes f { from { background: rgba(124,92,255,.18); } to { background: transparent; } }
 </style>
@@ -188,8 +192,8 @@ function setStat(dotId, valId, metaId, cls, text, meta) {
 }
 
 function sessionLabel(s) {
-  if (s.target === "private") return "私聊 " + s.target_id;
-  return "群 " + s.target_id;
+  var prefix = s.target === "private" ? "私聊 " : "群 ";
+  return prefix + (s.name || s.target_id);
 }
 
 function renderSessions(list) {
@@ -206,9 +210,12 @@ function renderSessions(list) {
     var tr = document.createElement("tr");
     if (s.state === "waiting_slot") tr.className = "flash";
     var who = sessionLabel(s);
+    var whoHtml = esc(who);
+    // 有名字时把 ID 放在小灰字下面，保留「这个 ID 是哪个」的可追溯性
+    if (s.name) whoHtml += '<br><span class="meta-id">' + esc(s.target_id) + '</span>';
     var senders = (s.senders || []).slice(0, 3).join("、");
     tr.innerHTML =
-      '<td class="who">' + who +
+      '<td class="who">' + whoHtml +
         (senders ? '<br><span class="tag">' + esc(senders) + '</span>' : '') + '</td>' +
       '<td class="st ' + s.state + '">' + esc(s.state_label || s.state) + '</td>' +
       '<td class="num">' + fmtAgo(s.for) + '</td>' +
@@ -237,9 +244,12 @@ function renderJobs(jobs) {
   rows.forEach(function (pair) {
     var j = pair[0], isRunning = pair[1];
     var tr = document.createElement("tr");
-    var who = j.target === "private" ? "私聊 " + j.target_id : "群 " + j.target_id;
+    var prefix = j.target === "private" ? "私聊 " : "群 ";
+    var who = prefix + (j.name || j.target_id);
+    var whoHtml = esc(who);
+    if (j.name) whoHtml += '<br><span class="meta-id">' + esc(j.target_id) + '</span>';
     tr.innerHTML =
-      '<td class="who">' + who + '</td>' +
+      '<td class="who">' + whoHtml + '</td>' +
       '<td class="st">' + esc(j.skill || "—") +
         (isRunning ? ' <span class="tag">进行中</span>' : '') + '</td>' +
       '<td class="num">' + fmtAgo(j.age) + '</td>' +

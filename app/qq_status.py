@@ -109,6 +109,21 @@ def snapshot(bot=None):
     except Exception:
         idle_for = None
 
+    # ── 群名/私聊昵称（顺手把刷新驱动一下）────────
+    # refresh_lists 内部限速 10 分钟一次，状态后台每 2 秒调它不会刷爆 NapCat。
+    try:
+        from app import qq_names
+        qq_names.refresh_lists()
+        # 给会话/任务打名字（找不到返回 None → 前端回退到 ID）
+        for s in sessions:
+            s["name"] = qq_names.name_for(s.get("target"), s.get("target_id")) or ""
+        for j in [jobs.get("running")] + (jobs.get("queued") or []):
+            if j:
+                j["name"] = qq_names.name_for(
+                    j.get("target"), j.get("target_id")) or ""
+    except Exception as exc:
+        log.warning("名字解析失败：%s", exc)
+
     return {
         "ts": now,
         "bot_alive": True,
@@ -140,6 +155,14 @@ def write_snapshot(bot=None, path=STATE_PATH):
 def _write_loop(bot, path, interval):
     while True:
         try:
+            # 顺便把名字缓存刷一下——refresh_lists 内部限速 10 分钟一次，
+            # 起动时 last_refresh=0 必刷，之后每次写盘顺带检查但不真拉。
+            # 这样起动后第一秒就能看到名字，也不会把 NapCat 打爆。
+            try:
+                from app import qq_names
+                qq_names.refresh_lists()
+            except Exception:
+                pass
             write_snapshot(bot, path)
         except Exception as exc:     # 守护线程不能因为一次异常就静默死掉
             log.warning("状态快照循环异常：%s", exc)
