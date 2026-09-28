@@ -362,6 +362,8 @@ def sync_session_system(agent_id=None, session_key=None):
 
 def build_status_bar(message_count=0, last_tool="none", agent_id=None):
     """构建 Agent 状态栏（动态层，放在 prompt 末尾）"""
+    from app import comfy_status
+
     limit = agent_store.agent_config(agent_id)["skills"]
     if limit is None:
         skill_count = len(list_skills())
@@ -373,6 +375,7 @@ def build_status_bar(message_count=0, last_tool="none", agent_id=None):
         "session_messages: " + str(message_count),
         "last_tool: " + last_tool,
         "skills_available: " + str(skill_count),
+        comfy_status.status_line(),
         "</status_bar>",
     ]
     return "\n".join(lines)

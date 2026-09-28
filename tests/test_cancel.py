@@ -16,8 +16,28 @@ from unittest import mock
 
 import app.agent as agent
 import app.cancel as cancel
+import app.comfy_status as comfy_status
 import app.config as config
 import app.llm as llm
+
+# 状态栏带 ComfyUI 实时探测（build_status_bar → comfy_status.status_line），
+# 测试一律吃内存快照，不走真网络
+_comfy_patch = None
+
+
+def setUpModule():
+    global _comfy_patch
+    _comfy_patch = mock.patch.object(
+        comfy_status, "snapshot",
+        return_value={"online": True, "running": 0, "pending": 0, "ts": 0.0})
+    _comfy_patch.start()
+
+
+def tearDownModule():
+    global _comfy_patch
+    if _comfy_patch is not None:
+        _comfy_patch.stop()
+        _comfy_patch = None
 
 
 class _ScriptedLLM:

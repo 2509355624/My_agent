@@ -21,6 +21,7 @@ import unittest
 from unittest import mock
 
 import app.agents as agents
+import app.comfy_status as comfy_status
 import app.image_out as image_out
 import app.qq_api as qq_api
 import app.qq_bot as qq_bot
@@ -32,22 +33,32 @@ from app.tools.normal import send_qq_message
 # 每次跑测试都长几行——已经污染过真实数据目录一次，所以整份文件跑在临时目录里。
 _tmp_root = None
 _patch = None
+_comfy_patch = None
 
 
 def setUpModule():
-    global _tmp_root, _patch
+    global _tmp_root, _patch, _comfy_patch
     _tmp_root = tempfile.TemporaryDirectory()
     root = os.path.join(_tmp_root.name, "agents")
     os.makedirs(os.path.join(root, "qq"), exist_ok=True)
     _patch = mock.patch.object(agents, "AGENTS_DIR", root)
     _patch.start()
+    # 状态栏带 ComfyUI 实时探测（build_status_bar → comfy_status.status_line），
+    # 测试一律吃内存快照，不走真网络
+    _comfy_patch = mock.patch.object(
+        comfy_status, "snapshot",
+        return_value={"online": True, "running": 0, "pending": 0, "ts": 0.0})
+    _comfy_patch.start()
 
 
 def tearDownModule():
-    global _tmp_root, _patch
+    global _tmp_root, _patch, _comfy_patch
     if _patch is not None:
         _patch.stop()
         _patch = None
+    if _comfy_patch is not None:
+        _comfy_patch.stop()
+        _comfy_patch = None
     if _tmp_root is not None:
         _tmp_root.cleanup()
         _tmp_root = None
