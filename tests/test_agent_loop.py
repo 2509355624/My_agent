@@ -52,10 +52,12 @@ class _ScriptedLLM:
         self.replies = list(replies)
         self.calls = 0
         self.seen_histories = []
+        self.seen_kwargs = []
 
     def __call__(self, messages, **kwargs):
         self.calls += 1
         self.seen_histories.append(messages)
+        self.seen_kwargs.append(kwargs)
         if not self.replies:
             yield "content", "（脚本已用尽）"
             return
@@ -145,6 +147,62 @@ class AgentLoopTest(unittest.TestCase):
         # 注入的工具结果要排在 LLM 循环之前（history[1]）
         self.assertEqual(self.history[1]["role"], "tool_result")
         self.assertEqual(self.history[1]["tool_name"], "get_time")
+
+    # ─── 空回复守卫 ───────────────────────────────────
+    # 背景（2026-09-28）：deepseek 系开思维链后偶发「流正常结束但正文零字」，
+    # 一轮就此静默，用户看到「收到了消息却不回」。守卫 = 换链上下一家重试一次。
+
+    def test_empty_reply_retries_with_next_model(self):
+        fake = self._patch_llm([("reasoning", "只想不说"), "在的"])
+        p = mock.patch.object(agent, "candidates",
+                              return_value=[("volc", "m1"), ("mimo", "m2")])
+        p.start()
+        self.addCleanup(p.stop)
+        events = self._collect("在吗", provider="volc", model="m1")
+        # 第一次空 → 换 mimo/m2 重跑 → 正常回复
+        self.assertEqual(fake.calls, 2)
+        self.assertEqual(fake.seen_kwargs[0].get("provider"), "volc")
+        self.assertEqual(fake.seen_kwargs[0].get("model"), "m1")
+        self.assertEqual(fake.seen_kwargs[1].get("provider"), "mimo")
+        self.assertEqual(fake.seen_kwargs[1].get("model"), "m2")
+        texts = [e["content"] for e in events if e["type"] == "assistant"]
+        self.assertEqual(texts, ["在的"])
+
+    def test_empty_reply_leaves_no_empty_assistant_in_history(self):
+        self._patch_llm([("reasoning", "只想不说"), "在的"])
+        p = mock.patch.object(agent, "candidates",
+                              return_value=[("volc", "m1"), ("mimo", "m2")])
+        p.start()
+        self.addCleanup(p.stop)
+        self._collect("在吗", provider="volc", model="m1")
+        roles = [m["role"] for m in self.history]
+        self.assertNotIn("", [m.get("content") for m in self.history])
+        self.assertEqual(roles.count("assistant"), 1)
+        self.assertEqual(self.history[-1]["content"], "在的")
+
+    def test_empty_reply_twice_gives_up_silently(self):
+        fake = self._patch_llm([("reasoning", "甲"), ("reasoning", "乙")])
+        p = mock.patch.object(agent, "candidates",
+                              return_value=[("volc", "m1"), ("mimo", "m2")])
+        p.start()
+        self.addCleanup(p.stop)
+        events = self._collect("在吗", provider="volc", model="m1")
+        self.assertEqual(fake.calls, 2)
+        self.assertNotIn("assistant", [e["type"] for e in events])
+        # 历史里也不留空 assistant（只有用户那条）
+        self.assertEqual([m["role"] for m in self.history], ["user"])
+
+    def test_single_candidate_empty_retries_same_model(self):
+        fake = self._patch_llm([("reasoning", "嗯"), "好"])
+        p = mock.patch.object(agent, "candidates",
+                              return_value=[("volc", "m1")])
+        p.start()
+        self.addCleanup(p.stop)
+        events = self._collect("在吗", provider="volc", model="m1")
+        self.assertEqual(fake.calls, 2)
+        self.assertEqual(fake.seen_kwargs[1].get("provider"), "volc")
+        texts = [e["content"] for e in events if e["type"] == "assistant"]
+        self.assertEqual(texts, ["好"])
 
     def test_status_bar_appended_at_tail_not_front(self):
         fake = self._patch_llm(["ok"])

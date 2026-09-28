@@ -8,7 +8,8 @@ import json
 import logging
 import re
 from app.cancel import is_cancelled
-from app.llm import call_llm_stream, current_usage, get_effective_config
+from app.llm import (call_llm_stream, candidates, current_stream_meta,
+                     current_usage, get_effective_config)
 from app import agents as agent_store
 from app.memory import trim_history
 from app.tools import execute_tool
@@ -404,6 +405,8 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
 
     turn_count = 0
     aborted = False
+    # 空回复重试计数：每次 run_agent_stream（一条用户消息）最多换模型重试一次。
+    empty_retries = 0
     # 上一轮 LLM 调用的真实用量，供这一轮判断该不该压缩。
     # 初值给空 dict 而不是 None：None 会让 memory 回退去读「当前线程最近一次」，
     # 而 QQ 场景下线程是跨会话复用的，读到的可能是别的群刚留下的数。空 dict
@@ -437,15 +440,40 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
             # - 正文(content)只在本轮累积，等收完再解析工具调用：直接边收边下发
             #   会让 [[TOOL:...]] 标签在页面上闪一下。
             reply_parts = []
+            reasoning_chars = 0
             for kind, text in call_llm_stream(llm_history, provider=provider,
                                               model=model, cancel_event=cancel_event):
                 if kind == "reasoning":
+                    reasoning_chars += len(text)
                     yield {"type": "reasoning", "content": text}
                 else:
                     reply_parts.append(text)
             reply = "".join(reply_parts)
             # 记下本轮真实用量，下一轮拿它判断该不该压缩
             last_usage = current_usage()
+
+            # 空回复守卫：流「正常结束」但正文一字未吐（偶发，开思维链的
+            # deepseek 系最容易犯——reasoning 花完了正文却没动笔）。不拦截的
+            # 话这一轮就静默无声，用户看到的是「收到了消息却不回」。
+            # 处理：历史不落空 assistant（根本没 append），换降级链下一家重跑
+            # 本轮；再空就放弃（用户点了停止的中断不算空回复，走下面的收尾）。
+            if not reply.strip() and not is_cancelled(cancel_event):
+                meta = current_stream_meta()
+                if empty_retries >= 1:
+                    log.warning("[llm-empty] 换模型重试后仍空（reasoning=%d字 finish=%s），本轮放弃",
+                                reasoning_chars, meta.get("finish_reason"))
+                    break
+                empty_retries += 1
+                cands = candidates(provider, model)
+                if len(cands) > 1:
+                    nxt = cands[1]
+                    log.warning("[llm-empty] 空回复（reasoning=%d字 finish=%s）→ 换 %s/%s 重试",
+                                reasoning_chars, meta.get("finish_reason"), nxt[0], nxt[1])
+                    provider, model = nxt
+                else:
+                    log.warning("[llm-empty] 空回复（reasoning=%d字 finish=%s）→ 链上无备选，原模型重试",
+                                reasoning_chars, meta.get("finish_reason"))
+                continue
 
             history.append({"role": "assistant", "content": reply})
 

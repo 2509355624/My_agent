@@ -55,6 +55,26 @@ def current_usage():
     return dict(_usage())
 
 
+# 流式调用的元信息（finish_reason / reasoning 与 content 的字数），同样按线程
+# 隔离。agent 循环在「吐空回复」（流正常结束但正文零字）时拿它打诊断日志：
+# reasoning 字数大 = 思维链把额度花完了、正文没动笔；finish_reason 能区分
+# stop / length 等收尾方式。纯诊断用，不参与任何控制流。
+_STREAM_LOCAL = threading.local()
+
+
+def _stream_meta():
+    d = getattr(_STREAM_LOCAL, "meta", None)
+    if d is None:
+        d = {"finish_reason": None, "reasoning_chars": 0, "content_chars": 0}
+        _STREAM_LOCAL.meta = d
+    return d
+
+
+def current_stream_meta():
+    """当前线程最近一次流式调用的元信息快照（返回拷贝）。"""
+    return dict(_stream_meta())
+
+
 # 主线程视图，只为兼容既有读取方式（含测试）而保留。多线程场景请改用
 # current_usage()，它按线程取，才是准的。
 LAST_USAGE = _usage()
@@ -396,13 +416,18 @@ def _parse_sse_line(line, provider="", model=""):
         return []
     _record_usage(chunk.get("usage"), provider=provider, model=model)
 
+    meta = _stream_meta()
     out = []
     for choice in chunk.get("choices") or []:
+        if choice.get("finish_reason"):
+            meta["finish_reason"] = choice["finish_reason"]
         delta = choice.get("delta") or {}
         # 思考内容在前，正文在后（同一帧里可能同时有，保持这个顺序）
         if delta.get("reasoning_content"):
+            meta["reasoning_chars"] += len(delta["reasoning_content"])
             out.append(("reasoning", delta["reasoning_content"]))
         if delta.get("content"):
+            meta["content_chars"] += len(delta["content"])
             out.append(("content", delta["content"]))
     return out
 
@@ -466,6 +491,9 @@ def call_llm_stream(messages, timeout=None, provider=None, model=None,
     timeout 在流式下是"两次数据块之间的最大间隔"，而非整次响应上限。
     """
     timeout = timeout or LLM_REQUEST_TIMEOUT
+    # 元信息按「一次 call_llm_stream」清零：降级链换模型重试后，读到的是
+    # 最后一次（也就是最终成功那次）的数字，正是诊断想要的口径。
+    _stream_meta().update(finish_reason=None, reasoning_chars=0, content_chars=0)
     targets = _chain_targets(provider, model)
     last_err = None
     for i, (pid, mname) in enumerate(targets):
