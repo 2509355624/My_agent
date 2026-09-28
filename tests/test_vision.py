@@ -181,9 +181,12 @@ class DescribeTest(unittest.TestCase):
         self.assertEqual(
             payload["messages"][0]["content"][1]["image_url"]["url"],
             "data:image/jpeg;base64,AAA")
-        # VISION_MODEL 为空时用该 provider 的默认模型
-        self.assertEqual(payload["model"],
-                         config.PROVIDERS[config.VISION_PROVIDER]["model"])
+        # VISION_MODEL 为空时用该 provider 的默认模型。
+        # provider id 大小写不敏感（app/vision.py 里 .lower() 后再查 PROVIDERS），
+        # .env 里写成 "MiMo" 也能命中 "mimo"——这里跟代码同口径。
+        self.assertEqual(
+            payload["model"],
+            config.PROVIDERS[config.VISION_PROVIDER.lower()]["model"])
 
     def test_http_error_raises_runtime_error(self):
         with mock.patch("app.vision._session.post",
