@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>状态后台</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%237c5cff'/></svg>">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0a0a0f;
+    --bg-elev: #12121a;
+    --bg-input: #1a1a24;
+    --border: #2a2a3a;
+    --border-soft: #1f1f2e;
+    --text: #e8e8f0;
+    --text-dim: #8888a0;
+    --text-mute: #555570;
+    --accent: #7c5cff;
+    --success: #4ade80;
+    --error: #f87171;
+    --warn: #fbbf24;
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
+
+  html, body {
+    min-height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "SF Mono", "JetBrains Mono", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
+    font-size: 13px;
+    line-height: 1.7;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(124, 92, 255, 0.15), transparent);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .wrap { position: relative; z-index: 1; max-width: 1180px; margin: 0 auto; padding: 24px 20px 48px; }
+
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; }
+  h1 { font-size: 18px; font-weight: 500; }
+  .sub { color: var(--text-mute); font-size: 12px; }
+  header .spacer { flex: 1; }
+  a.back { color: var(--text-dim); font-size: 13px; text-decoration: none; }
+  a.back:hover { color: var(--accent); }
+
+  .card {
+    background: var(--bg-elev); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: 16px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 13px; font-weight: 500; color: var(--text-dim); margin-bottom: 4px; }
+  .card .hint { font-size: 12px; color: var(--text-mute); margin-bottom: 12px; }
+
+  /* 顶部三张状态卡 */
+  .row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 16px; }
+  @media (max-width: 860px) { .row { grid-template-columns: 1fr; } }
+  .row .card { margin-bottom: 0; }
+
+  .stat { display: flex; align-items: center; gap: 10px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 10px; }
+  .dot.ok { background: var(--success); }
+  .dot.bad { background: var(--error); }
+  .dot.warn { background: var(--warn); }
+  .dot.unk { background: var(--text-mute); }
+  .stat .val { font-size: 15px; font-weight: 500; }
+  .stat .val.ok { color: var(--success); }
+  .stat .val.bad { color: var(--error); }
+  .stat .val.warn { color: var(--warn); }
+  .stat .val.unk { color: var(--text-mute); }
+  .meta { font-size: 12px; color: var(--text-mute); margin-top: 6px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th {
+    text-align: left; color: var(--text-mute); font-weight: 400;
+    padding: 6px 8px; border-bottom: 1px solid var(--border-soft);
+    white-space: nowrap;
+  }
+  td { padding: 6px 8px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .who { color: var(--text); white-space: nowrap; }
+  .st { white-space: nowrap; }
+  .st.waiting { color: var(--warn); }
+  .st.running { color: var(--success); }
+  .st.debouncing { color: var(--text-dim); }
+  .st.idle { color: var(--text-mute); }
+  .num { color: var(--text-dim); white-space: nowrap; }
+  .preview { color: var(--text-dim); word-break: break-all; }
+  .empty { color: var(--text-mute); font-size: 12px; padding: 8px; }
+  .tag {
+    display: inline-block; padding: 1px 6px; border-radius: 4px;
+    background: var(--bg-input); color: var(--text-dim); font-size: 11px;
+  }
+  .flash { animation: f 1s; }
+  @keyframes f { from { background: rgba(124,92,255,.18); } to { background: transparent; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>状态后台</h1>
+    <span class="sub" id="updated">加载中…</span>
+    <span class="spacer"></span>
+    <a class="back" href="/admin">Agent 管理 →</a>
+  </header>
+
+  <div class="row">
+    <div class="card">
+      <h2>QQ bot 进程</h2>
+      <div class="stat">
+        <span class="dot unk" id="botDot"></span>
+        <span class="val unk" id="botVal">—</span>
+      </div>
+      <div class="meta" id="botMeta">—</div>
+    </div>
+
+    <div class="card">
+      <h2>NapCat 协议端</h2>
+      <div class="stat">
+        <span class="dot unk" id="napDot"></span>
+        <span class="val unk" id="napVal">—</span>
+      </div>
+      <div class="meta" id="napMeta">—</div>
+    </div>
+
+    <div class="card">
+      <h2>ComfyUI</h2>
+      <div class="stat">
+        <span class="dot unk" id="comfyDot"></span>
+        <span class="val unk" id="comfyVal">—</span>
+      </div>
+      <div class="meta" id="comfyMeta">—</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>对话轮次 · 谁在排队</h2>
+    <div class="hint">
+      「排队等并发槽」= 并发槽（QQ_MAX_CONCURRENCY）占满，这个会话在<b>干等</b>——
+      不是卡死，等前面轮次让出槽就会跑。同群的连发会被合并成一轮（攒消息中）。
+    </div>
+    <table id="tblSessions">
+      <thead>
+        <tr>
+          <th>会话</th><th>状态</th><th>已持续</th><th>待处理</th><th>本轮内容</th>
+        </tr>
+      </thead>
+      <tbody id="tbodySessions"></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>生图队列</h2>
+    <div class="hint">全局串行：同一时刻只画一张，其余排队。「已等」从入队那刻算起。</div>
+    <table>
+      <thead>
+        <tr>
+          <th>目标</th><th>渠道</th><th>已等</th><th>前面</th><th>提示词</th>
+        </tr>
+      </thead>
+      <tbody id="tbodyJobs"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+function fmtAgo(s) {
+  if (s === null || s === undefined) return "—";
+  if (s < 60) return s.toFixed(0) + " 秒";
+  if (s < 3600) return (s / 60).toFixed(1) + " 分";
+  return (s / 3600).toFixed(1) + " 小时";
+}
+
+function setStat(dotId, valId, metaId, cls, text, meta) {
+  var dot = document.getElementById(dotId);
+  var val = document.getElementById(valId);
+  dot.className = "dot " + cls;
+  val.className = "val " + cls;
+  val.textContent = text;
+  document.getElementById(metaId).textContent = meta || "";
+}
+
+function sessionLabel(s) {
+  if (s.target === "private") return "私聊 " + s.target_id;
+  return "群 " + s.target_id;
+}
+
+function renderSessions(list) {
+  var tbody = document.getElementById("tbodySessions");
+  tbody.innerHTML = "";
+  if (!list || !list.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">没有活跃会话</td></tr>';
+    return;
+  }
+  // 只显示「有戏」的：排队/跑/攒消息的；空闲的折起来不占屏
+  var active = list.filter(function (s) { return s.state !== "idle"; });
+  var shown = active.length ? active : list.slice(0, 5);
+  shown.forEach(function (s) {
+    var tr = document.createElement("tr");
+    if (s.state === "waiting_slot") tr.className = "flash";
+    var who = sessionLabel(s);
+    var senders = (s.senders || []).slice(0, 3).join("、");
+    tr.innerHTML =
+      '<td class="who">' + who +
+        (senders ? '<br><span class="tag">' + esc(senders) + '</span>' : '') + '</td>' +
+      '<td class="st ' + s.state + '">' + esc(s.state_label || s.state) + '</td>' +
+      '<td class="num">' + fmtAgo(s.for) + '</td>' +
+      '<td class="num">' + (s.pending || 0) + '</td>' +
+      '<td class="preview">' + (s.preview ? esc(s.preview) : "—") + '</td>';
+    tbody.appendChild(tr);
+  });
+  var idleCount = list.filter(function (s) { return s.state === "idle"; }).length;
+  if (idleCount) {
+    var tr = document.createElement("tr");
+    tr.innerHTML = '<td colspan="5" class="empty">另有 ' + idleCount + ' 个会话空闲</td>';
+    tbody.appendChild(tr);
+  }
+}
+
+function renderJobs(jobs) {
+  var tbody = document.getElementById("tbodyJobs");
+  tbody.innerHTML = "";
+  var rows = [];
+  if (jobs && jobs.running) rows.push([jobs.running, true]);
+  (jobs && jobs.queued || []).forEach(function (j) { rows.push([j, false]); });
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">队列空闲</td></tr>';
+    return;
+  }
+  rows.forEach(function (pair) {
+    var j = pair[0], isRunning = pair[1];
+    var tr = document.createElement("tr");
+    var who = j.target === "private" ? "私聊 " + j.target_id : "群 " + j.target_id;
+    tr.innerHTML =
+      '<td class="who">' + who + '</td>' +
+      '<td class="st">' + esc(j.skill || "—") +
+        (isRunning ? ' <span class="tag">进行中</span>' : '') + '</td>' +
+      '<td class="num">' + fmtAgo(j.age) + '</td>' +
+      '<td class="num">' + (isRunning ? "—" : (j.ahead + " 张")) + '</td>' +
+      '<td class="preview">' + (j.prompt ? esc(j.prompt) : "—") + '</td>';
+    tbody.appendChild(tr);
+  });
+}
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+  });
+}
+
+async function refresh() {
+  var d;
+  try {
+    var resp = await fetch("/api/status", { cache: "no-store" });
+    d = await resp.json();
+  } catch (e) {
+    document.getElementById("updated").textContent = "取状态失败（Flask 没起？）";
+    return;
+  }
+
+  document.getElementById("updated").textContent =
+    "更新于 " + new Date().toLocaleTimeString("zh-CN") + " · 2 秒自动刷新";
+
+  // bot 进程：stale = 心跳停了（卡死/没起）
+  var bot = d.bot || {};
+  if (bot.stale) {
+    setStat("botDot", "botVal", "botMeta", "bad", "无心跳",
+      bot.age !== null && bot.age !== undefined
+        ? "状态文件已 " + fmtAgo(bot.age) + " 没更新 —— bot 可能卡死或没启动"
+        : "读不到状态文件（bot 没起过？）");
+  } else {
+    setStat("botDot", "botVal", "botMeta", "ok", "运行中",
+      "状态心跳 " + fmtAgo(bot.age) + " 前");
+  }
+
+  // NapCat
+  var nap = d.napcat || {};
+  if (nap.online === true) {
+    setStat("napDot", "napVal", "napMeta", "ok", "在线",
+      "最后收发 " + fmtAgo(d.last_activity_ago) + " 前" + (nap.detail ? " · " + nap.detail : ""));
+  } else if (nap.online === false) {
+    setStat("napDot", "napVal", "napMeta", "bad", "离线",
+      (nap.detail || "探活失败") + " · 最后收发 " + fmtAgo(d.last_activity_ago) + " 前");
+  } else {
+    setStat("napDot", "napVal", "napMeta", "unk", "未知", "bot 无心跳，探不到");
+  }
+
+  // ComfyUI
+  var c = d.comfy || {};
+  if (c.online === true) {
+    setStat("comfyDot", "comfyVal", "comfyMeta", "ok", "在线",
+      "ComfyUI 内部队列：正在画 " + (c.running || 0) + " 张、排队 " + (c.pending || 0) + " 张");
+  } else if (c.online === false) {
+    setStat("comfyDot", "comfyVal", "comfyMeta", "bad", "离线",
+      "127.0.0.1:8188 连不上 —— ComfyUI 渠道的图会失败（NAI 不受影响）");
+  } else {
+    setStat("comfyDot", "comfyVal", "comfyMeta", "unk", "未知", c.error || "探测异常");
+  }
+
+  renderSessions(d.sessions);
+  renderJobs(d.jobs);
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

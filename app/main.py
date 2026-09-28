@@ -5,6 +5,7 @@ Flask Web 服务入口
 import re
 import json
 import socket
+import time
 import requests
 from flask import (Flask, request, jsonify, send_from_directory, Response,
                    stream_with_context)
@@ -460,6 +461,51 @@ def _agent_detail(aid):
 def admin_page():
     """agent 管理页（独立页面，不动 index.html）。"""
     return send_from_directory(WEB_DIR, "admin.html")
+
+
+@app.route("/status")
+def status_page():
+    """状态后台：队列 / 轮次 / ComfyUI / NapCat 的实时看板。"""
+    return send_from_directory(WEB_DIR, "status.html")
+
+
+@app.route("/api/status")
+def get_status():
+    """状态后台的数据源。
+
+    QQ bot 是**独立进程**，它的内存状态（哪个群在排队、生图队列）本进程
+    读不到，所以走 app/qq_status.py 落盘的 JSON 文件。那个文件停更就说明
+    bot 卡死或没起 —— 用 stale 标出来让前端标红，这正是「任务卡死时看不
+    到后台」最需要的信号。
+
+    ComfyUI 是本进程能直接探的（127.0.0.1 的 HTTP 服务），不必绕 bot 的
+    快照，在这里查更实时。
+    """
+    from app import qq_status, comfy_status
+
+    snap, stale = qq_status.read()
+    snap = snap or {}
+
+    try:
+        c = comfy_status.snapshot()
+        comfy = {"online": c.get("online"), "running": c.get("running", 0),
+                 "pending": c.get("pending", 0)}
+    except Exception as exc:
+        comfy = {"online": None, "running": 0, "pending": 0,
+                 "error": repr(exc)[:120]}
+
+    ts = snap.get("ts")
+    return jsonify({
+        # bot 进程本身：stale = 心跳停了（卡死/没起）
+        "bot": {"stale": stale,
+                "age": (round(time.time() - ts, 1) if ts else None)},
+        "napcat": snap.get("napcat") or {"online": None, "detail": ""},
+        "last_activity_ago": snap.get("last_activity_ago"),
+        "sessions": snap.get("sessions") or [],
+        "jobs": snap.get("jobs")
+                or {"running": None, "queued": [], "depth": 0},
+        "comfy": comfy,
+    })
 
 
 @app.route("/api/agent/<agent_id>")

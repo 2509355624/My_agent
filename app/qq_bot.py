@@ -41,7 +41,7 @@ except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
 from app import (image_out, interject, logsetup, longterm, notify, qq_api,
-                 recent, stickers, usage)
+                 qq_status, recent, stickers, usage)
 from app.agent import run_agent_stream
 from app.agent_prompt import build_stable_prompt
 from app.config import (
@@ -526,6 +526,16 @@ class SessionRunner:
         self.target_id = target_id
         self._pending = []
         self._task = None
+        # 状态后台的可观测字段：本轮处在哪个阶段、从什么时候开始。
+        # 阶段 = debouncing（攒连发）→ waiting_slot（抢并发槽）→ running
+        # （抢到了，在跑模型）→ idle（空闲）。
+        # waiting_slot 才是「我以为卡了」的真正现场：QQ_MAX_CONCURRENCY 个
+        # 槽占满后，后面的会话就停在 `async with self.bot.sem` 那一行干等，
+        # 从日志上什么都看不出来。把它暴露出来，后台才能显示「谁在排队」。
+        self.state = "idle"
+        self.state_since = time.monotonic()
+        self.turn_preview = ""      # 本轮首条消息（谁在问什么）
+        self.batch_senders = []     # 本轮合并了哪些人的消息
 
     def submit(self, text, sender_name="", images=None, quotes=None,
                tentative=False):
@@ -542,14 +552,23 @@ class SessionRunner:
     async def _loop(self):
         while self._pending:
             # 静默窗口：等连发的后续消息到齐再一起处理
+            self.state = "debouncing"
+            self.state_since = time.monotonic()
             await asyncio.sleep(QQ_DEBOUNCE_SECONDS)
             batch, self._pending = self._pending[:], []
             if not batch:
                 continue
             t0 = time.monotonic()
+            # 抢槽前：从这里到拿到 sem 之间，就是「谁在排队」的现场
+            self.state = "waiting_slot"
+            self.state_since = t0
+            self.turn_preview = (batch[0].get("text") or "")[:40]
+            self.batch_senders = [b.get("sender") or "" for b in batch]
             try:
                 async with self.bot.sem:
                     waited = time.monotonic() - t0
+                    self.state = "running"
+                    self.state_since = time.monotonic()
                     if waited > 30:
                         # 并发槽迟迟拿不到 = 有轮次占着坑不干活。2026-09-27
                         # 的单群卡死事故里，卡点不在任何已设超时的调用上，
@@ -574,6 +593,12 @@ class SessionRunner:
                 log.info("▶ %s 一轮结束（%d 条，耗时 %.0f 秒）",
                          self.session_key, len(batch),
                          time.monotonic() - t0)
+                # 成功 / 超时 / 异常都回 idle；while 再查 _pending，有新消息
+                # 就进下一轮（重新置 debouncing）。
+                self.state = "idle"
+                self.state_since = time.monotonic()
+                self.turn_preview = ""
+                self.batch_senders = []
 
     @staticmethod
     def _prepare_images(urls):
@@ -960,6 +985,9 @@ class QQBot:
         # 掉线通知：盯 NapCat 的 qrcode.png，机器人要人工扫码时把二维码推到手机。
         # 放在 _probe 之后 —— 它启动时会先探一次活，判断「是不是已经卡在待扫码」。
         notify.start_watcher()
+        # 状态后台的心跳源：把本进程的内存状态（谁在排队 / 生图队列 / NapCat）
+        # 落成 JSON，Flask 那个进程读它。文件停更 = 本进程卡死，后台会标红。
+        qq_status.start(self)
 
         kwargs = {"proxy": None} if _WS_SUPPORTS_NO_PROXY else {}
         if QQ_TOKEN:

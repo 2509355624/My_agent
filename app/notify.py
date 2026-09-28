@@ -57,6 +57,12 @@ def note_activity():
         _silence_alerted = False
 
 
+def last_activity():
+    """最后一次收发消息的时刻（状态后台用它算「多久没动静」）。"""
+    with _lock:
+        return _last_activity
+
+
 def enabled():
     """没配 token 就整个功能关掉。"""
     return bool(NOTIFY_PUSHPLUS_TOKEN)

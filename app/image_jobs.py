@@ -207,6 +207,7 @@ class Job:
         self.skill = skill          # 生图渠道，只用来判断要不要先 /free
         self.weight = weight        # 队列权重（默认 1 = 普通；qwen 是 5）
         self.seq = seq              # 入队序号，同权重的按它先进先出
+        self.created = time.time()  # 入队时刻：状态后台用它算「已等 N 秒」
         # NAI 图生图的入队时快照：{"image": 纯base64, "strength": 重绘强度}。
         # 必须快照——worker 线程读不到 qq_api 线程本地的「本轮引用图」。
         self.nai_i2i = nai_i2i
@@ -271,6 +272,41 @@ def ahead_of(job):
             return 0
         order = sorted(_queue, key=_order)
         return order.index(job) + (1 if _running is not None else 0)
+
+
+def snapshot():
+    """给状态后台用的队列快照（只读，不改任何状态）。
+
+    返回 {"running": {...}|None, "queued": [ {...} ], "depth": N}。
+    每张暴露 target/target_id/skill/weight/已等秒数/前面还有几张/提示词预览
+    ——正是「谁在排队、排了多久」这个问题需要的全部字段。
+
+    ⚠️ 不能在持锁时调 ahead_of()——_lock 是普通 Lock（非可重入），
+    嵌套获取会直接死锁。位次在这里按出队顺序就地算。
+    """
+    now = time.time()
+    with _lock:
+        running = _running
+        order = sorted(_queue, key=_order)
+        base = 1 if running is not None else 0
+
+        def _j(job, ahead):
+            wf = job.workflow
+            return {
+                "target": job.target,
+                "target_id": job.target_id,
+                "skill": job.skill or "",
+                "weight": job.weight,
+                "age": round(now - job.created, 1),
+                "ahead": ahead,
+                "prompt": (wf[:60] if isinstance(wf, str) else ""),
+            }
+
+        return {
+            "running": (_j(running, 0) if running is not None else None),
+            "queued": [_j(j, base + i) for i, j in enumerate(order)],
+            "depth": len(_queue) + (1 if running is not None else 0),
+        }
 
 
 def enqueue(target, target_id, workflow, skill=None, nai_i2i=None):
