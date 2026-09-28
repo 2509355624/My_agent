@@ -4,10 +4,13 @@
 掉（没开代理 / 非 Windows 时读不到，不影响判定）。
 """
 
+import base64
 import io
 import unittest
 import zipfile
 from unittest import mock
+
+from PIL import Image
 
 from app import agents
 from app import nai
@@ -168,6 +171,81 @@ class ProxyDetectTest(unittest.TestCase):
                 mock.patch.object(nai, "winreg", wr):
             self.assertEqual(nai._nai_proxies(), {
                 "http": "127.0.0.1:65532", "https": "127.0.0.1:65532"})
+
+
+class Img2ImgTest(unittest.TestCase):
+    """nai.generate_img2img：action=img2img、纯 base64 源图、strength 透传。"""
+
+    def _fake_zip(self):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("image_0.png", b"PNG-I2I")
+        return buf.getvalue()
+
+    def _run(self, prompt="make it night", image="QUJD", strength=None):
+        sess = GenerateTest._fake_session(self, body=self._fake_zip())
+        with mock.patch.object(nai, "requests") as req, \
+                mock.patch.object(nai, "NAI_PROXY", ""), \
+                mock.patch.object(nai, "NAI_API_KEY", "pst-test"):
+            req.Session = mock.Mock(return_value=sess)
+            if strength is None:
+                nai.generate_img2img(prompt, image)
+            else:
+                nai.generate_img2img(prompt, image, strength=strength)
+        args, kwargs = sess.post.call_args
+        return kwargs["json"]
+
+    def test_action_and_image_and_strength(self):
+        body = self._run(strength=0.35)
+        self.assertEqual(body["action"], "img2img")
+        self.assertEqual(body["parameters"]["image"], "QUJD")
+        self.assertEqual(body["parameters"]["strength"], 0.35)
+        self.assertEqual(body["parameters"]["noise"], 0.0)
+        # V5 结构与文生图一致（caption 两条照带）
+        self.assertEqual(body["parameters"]["params_version"], 3)
+        self.assertIn("v4_prompt", body["parameters"])
+
+    def test_default_strength(self):
+        body = self._run()
+        self.assertEqual(body["parameters"]["strength"], nai.NAI_I2I_STRENGTH)
+
+    def test_blank_image_raises(self):
+        with self.assertRaises(ValueError):
+            nai.generate_img2img("x", "  ")
+
+    def test_empty_prompt_raises(self):
+        with self.assertRaises(ValueError):
+            nai.generate_img2img("   ", "QUJD")
+
+
+class PrepareImageTest(unittest.TestCase):
+    """nai.prepare_image：对齐 NAI 出图尺寸（居中裁剪，不拉伸）+ 纯 base64。"""
+
+    def _png(self, w, h, mode="RGB"):
+        buf = io.BytesIO()
+        Image.new(mode, (w, h), (200, 120, 90)).save(buf, "PNG")
+        return buf.getvalue()
+
+    def _decode(self, b64):
+        self.assertNotIn(b"://", base64.b64decode(b64)[:64])  # 纯 base64，无 data: 前缀
+        return Image.open(io.BytesIO(base64.b64decode(b64)))
+
+    def test_wide_image_is_center_cropped_not_stretched(self):
+        im = self._decode(nai.prepare_image(self._png(2000, 500)))
+        self.assertEqual(im.size, (nai.NAI_WIDTH, nai.NAI_HEIGHT))
+
+    def test_tall_image_is_center_cropped(self):
+        im = self._decode(nai.prepare_image(self._png(300, 1600)))
+        self.assertEqual(im.size, (nai.NAI_WIDTH, nai.NAI_HEIGHT))
+
+    def test_alpha_is_flattened(self):
+        im = self._decode(nai.prepare_image(self._png(64, 64, "RGBA")))
+        self.assertEqual(im.mode, "RGB")
+        self.assertEqual(im.size, (nai.NAI_WIDTH, nai.NAI_HEIGHT))
+
+    def test_garbage_raises_runtime_error(self):
+        with self.assertRaises(RuntimeError):
+            nai.prepare_image(b"definitely not an image")
 
 
 class AllowedTest(unittest.TestCase):

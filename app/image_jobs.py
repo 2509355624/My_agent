@@ -199,13 +199,17 @@ class Job:
     等结果——注意等的是「排队 + 出图」全程，排队时间不由我们控制。
     """
 
-    def __init__(self, target, target_id, workflow, skill=None, weight=1, seq=0):
+    def __init__(self, target, target_id, workflow, skill=None, weight=1, seq=0,
+                 nai_i2i=None):
         self.target = target
         self.target_id = target_id
         self.workflow = workflow
         self.skill = skill          # 生图渠道，只用来判断要不要先 /free
         self.weight = weight        # 队列权重（默认 1 = 普通；qwen 是 5）
         self.seq = seq              # 入队序号，同权重的按它先进先出
+        # NAI 图生图的入队时快照：{"image": 纯base64, "strength": 重绘强度}。
+        # 必须快照——worker 线程读不到 qq_api 线程本地的「本轮引用图」。
+        self.nai_i2i = nai_i2i
         self.waits = 0              # 被冷却 / 被插队推回过几次（只为日志）
         self.skill_done = False     # 已经成功跑完一张？决定跑完要不要开冷却
         self.prompt_id = None
@@ -256,7 +260,7 @@ def ahead_of(job):
         return order.index(job) + (1 if _running is not None else 0)
 
 
-def enqueue(target, target_id, workflow, skill=None):
+def enqueue(target, target_id, workflow, skill=None, nai_i2i=None):
     """把一张图排进全局队列，返回 (job, reason)。
 
     reason 非 None 表示没接（此时 job 为 None），它是一句可以直接转述给对方
@@ -265,7 +269,8 @@ def enqueue(target, target_id, workflow, skill=None):
     skill 用来定两件事：队列权重（`skill_priority`，qwen 排最后）和
     「换渠道先 /free」的判断（见 _maybe_release_for_switch）。
     不传 skill 时的行为与从前完全一致（权重 1、从不主动释放）——老调用方
-    不受影响。
+    不受影响。nai_i2i 只在 NAI 图生图时传（入队时快照的源图 base64 + 强度，
+    见 Job.nai_i2i）。
     """
     global _seq
     key = _key(target, target_id)
@@ -286,7 +291,8 @@ def enqueue(target, target_id, workflow, skill=None):
                           "别跟对方提这张图，当没画过，接着把话说完。"
                           % MAX_HEAVY_IN_QUEUE)
         _seq += 1
-        job = Job(target, target_id, workflow, skill, weight, _seq)
+        job = Job(target, target_id, workflow, skill, weight, _seq,
+                  nai_i2i=nai_i2i)
         _queue.append(job)
         _per_session[key] = cur + 1
     if weight > 1:
@@ -617,7 +623,12 @@ def _process_nai(job):
     """
     try:
         from app import nai
-        png = nai.generate(job.workflow)
+        i2i = getattr(job, "nai_i2i", None)
+        if i2i:
+            png = nai.generate_img2img(job.workflow, i2i["image"],
+                                       strength=i2i.get("strength"))
+        else:
+            png = nai.generate(job.workflow)
     except Exception as exc:
         job.error = exc
         log.warning("NAI 生图失败 %s %s：%s", job.target, job.target_id, exc)

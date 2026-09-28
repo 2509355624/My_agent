@@ -25,6 +25,7 @@
   对方能看的话。基础版不做重试（群主说群友会斟酌，先跑通再说）。
 """
 
+import base64
 import io
 import logging
 import os
@@ -63,6 +64,11 @@ NAI_NEGATIVE = (
 
 # 生成超时（秒）：connect 30s + read 240s。V5 出一张通常几十秒，给足余量。
 NAI_TIMEOUT = (30, 240)
+
+# 图生图默认重绘强度（NAI 的 strength = 加多少噪声：小 = 贴着原图，大 = 改得
+# 狠）。模型可用 denoise 参数覆盖，钳制在 [_I2I_STRENGTH_MIN, _I2I_STRENGTH_MAX]。
+NAI_I2I_STRENGTH = 0.7
+_I2I_STRENGTH_MIN, _I2I_STRENGTH_MAX = 0.1, 0.9
 
 
 def _nai_proxies():
@@ -108,13 +114,17 @@ def _nai_proxies():
     return {"http": server, "https": server}
 
 
-def _build_body(prompt, seed):
+def _build_body(prompt, seed, image_b64=None, strength=None):
     """V5 必需的请求体。params_version=3 + v4_prompt/v4_negative_prompt
-    两条 caption 结构是 V5 的硬性要求，缺了会 500。"""
-    return {
+    两条 caption 结构是 V5 的硬性要求，缺了会 500。
+
+    传 image_b64 就是图生图（action=img2img）：image 是**不带 data: 前缀**
+    的纯 base64，strength = 重绘噪声（小 = 贴原图），noise 固定 0。
+    """
+    body = {
         "input": prompt,
         "model": NAI_MODEL,
-        "action": "generate",
+        "action": "img2img" if image_b64 else "generate",
         "parameters": {
             "params_version": 3,
             "prompt": prompt,
@@ -149,24 +159,15 @@ def _build_body(prompt, seed):
             },
         },
     }
+    if image_b64:
+        body["parameters"]["image"] = image_b64
+        body["parameters"]["strength"] = strength
+        body["parameters"]["noise"] = 0.0
+    return body
 
 
-def generate(prompt, timeout=NAI_TIMEOUT):
-    """生成一张图，返回 PNG 字节；任何失败都抛异常。
-
-    只接 prompt（模型传来的画面描述）；其余参数全写死（见模块注释）。token
-    缺失时直接抛，不让请求发出去撞 401。
-    """
-    if not NAI_API_KEY:
-        raise RuntimeError("NAI_API_KEY 未配置（群主 token 应在 .env 里）")
-
-    prompt = (prompt or "").strip()
-    if not prompt:
-        raise ValueError("NAI 需要非空的 prompt")
-
-    seed = random.randint(0, 2 ** 31 - 1)
-    body = _build_body(prompt, seed)
-
+def _post_png(body, timeout, seed):
+    """发请求 → 解包。文生图 / 图生图共用这一段（差异全在 body 里）。"""
     session = requests.Session()
     # 关键：不读环境变量 / 注册表（避免 localhost 的 ComfyUI 被劫持），
     # 代理由我们自己显式指定。
@@ -175,8 +176,8 @@ def generate(prompt, timeout=NAI_TIMEOUT):
     if proxies:
         session.proxies = proxies
 
-    log.info("NAI 请求生成：模型 %s，%dx%d，seed %d，代理 %s",
-             NAI_MODEL, NAI_WIDTH, NAI_HEIGHT, seed,
+    log.info("NAI 请求生成：action %s，模型 %s，%dx%d，seed %d，代理 %s",
+             body.get("action"), NAI_MODEL, NAI_WIDTH, NAI_HEIGHT, seed,
              ("是" if proxies else "否"))
 
     resp = session.post(
@@ -205,3 +206,83 @@ def generate(prompt, timeout=NAI_TIMEOUT):
             raise RuntimeError("NAI 返回的 zip 解不开：" + str(exc))
     # 极少数情况下直接返回 png 字节，也兜住。
     return data
+
+
+def _checked_prompt(prompt):
+    prompt = (prompt or "").strip()
+    if not prompt:
+        raise ValueError("NAI 需要非空的 prompt")
+    return prompt
+
+
+def generate(prompt, timeout=NAI_TIMEOUT):
+    """生成一张图（文生图），返回 PNG 字节；任何失败都抛异常。
+
+    只接 prompt（模型传来的画面描述）；其余参数全写死（见模块注释）。token
+    缺失时直接抛，不让请求发出去撞 401。
+    """
+    if not NAI_API_KEY:
+        raise RuntimeError("NAI_API_KEY 未配置（群主 token 应在 .env 里）")
+
+    seed = random.randint(0, 2 ** 31 - 1)
+    body = _build_body(_checked_prompt(prompt), seed)
+    return _post_png(body, timeout, seed)
+
+
+def generate_img2img(prompt, image_b64, strength=NAI_I2I_STRENGTH,
+                     timeout=NAI_TIMEOUT):
+    """图生图（垫图）：image_b64 是 prepare_image 产出的纯 base64。
+
+    strength 语义见 NAI_I2I_STRENGTH 的注释；调用方（generate_image 工具）
+    已做过钳制，这里不再二次裁剪——写错就直接让 NAI 报错，比悄悄改参数好。
+    """
+    if not NAI_API_KEY:
+        raise RuntimeError("NAI_API_KEY 未配置（群主 token 应在 .env 里）")
+    if not (image_b64 or "").strip():
+        raise ValueError("NAI 图生图需要非空的源图 base64")
+
+    seed = random.randint(0, 2 ** 31 - 1)
+    body = _build_body(_checked_prompt(prompt), seed,
+                       image_b64=image_b64, strength=strength)
+    return _post_png(body, timeout, seed)
+
+
+def prepare_image(raw):
+    """源图字节 → NAI 图生图要的**纯 base64**（不带 data: 前缀）。
+
+    NAI 的 img2img 按请求里的 width/height 出图，源图直接对齐到这个尺寸：
+    先居中裁剪到目标比例（不拉伸、不变形），再缩放到 NAI_WIDTH×NAI_HEIGHT。
+    带透明通道的先铺白底（同 vision/comfy_src 的做法，直接转会变黑块）。
+    """
+    try:
+        from PIL import Image
+        im = Image.open(io.BytesIO(raw))
+        im.load()
+    except Exception as exc:
+        raise RuntimeError("这张图读不出来，垫不了图：%s" % exc)
+
+    if im.mode in ("RGBA", "LA", "P"):
+        rgba = im.convert("RGBA")
+        bg = Image.new("RGB", rgba.size, (255, 255, 255))
+        bg.paste(rgba, mask=rgba.split()[-1])
+        im = bg
+    elif im.mode != "RGB":
+        im = im.convert("RGB")
+
+    # 居中裁剪到目标宽高比
+    target_ratio = NAI_WIDTH / float(NAI_HEIGHT)
+    w, h = im.size
+    if w / float(h) > target_ratio:      # 太宽 → 裁两边
+        new_w = int(h * target_ratio)
+        x0 = (w - new_w) // 2
+        im = im.crop((x0, 0, x0 + new_w, h))
+    else:                                # 太高 → 裁上下
+        new_h = int(w / target_ratio)
+        y0 = (h - new_h) // 2
+        im = im.crop((0, y0, w, y0 + new_h))
+    if im.size != (NAI_WIDTH, NAI_HEIGHT):
+        im = im.resize((NAI_WIDTH, NAI_HEIGHT), Image.LANCZOS)
+
+    buf = io.BytesIO()
+    im.save(buf, format="JPEG", quality=90)
+    return base64.b64encode(buf.getvalue()).decode("ascii")

@@ -12,7 +12,7 @@ from unittest import mock
 
 from PIL import Image
 
-from app import comfy_src, qq_api, stickers, vision
+from app import agents, comfy_src, nai, qq_api, stickers, vision
 from app.config import DISABLED_IMAGE_SKILLS
 from app.skills import load_workflow
 from app.tools.normal import generate_image as gi
@@ -388,6 +388,107 @@ class QwenI2ITest(_I2IRunner, unittest.TestCase):
         self.assertIn("已经在画了", out)
         self.assertNotIn("TextEncodeQwenImage21",
                          [n.get("class_type") for n in wf.values()])
+
+
+class NaiI2ITest(unittest.TestCase):
+    """NAI 图生图：引用图 → base64 入队快照，复用 NAI 三层闸（不新增开关）。
+
+    NAI 分流发生在 ComfyUI i2i 拒收**之前**（generate_image 的 nai 分支），
+    所以这里的 source_image 不吃「图生图整体停用」的闭门羹。
+    """
+
+    KEY = ("group", 999001)
+
+    def _run(self, allowed=True, context=None,
+             resolve_result=(b"RAW", "引用的那张图"), **kw):
+        """跑 NAI 分支。覆写一律走参数，**不要在测试体里再叠 patch**——
+        _run 的 addCleanup 晚于外层 with 恢复，会把外层 patch 的值泄漏给
+        后面的用例（真实撞过：no_quote 泄漏进了 ResolveTest）。"""
+        captured = {}
+        fake_job = mock.Mock()
+
+        def fake_enqueue(target, target_id, workflow, skill=None, nai_i2i=None):
+            captured.update({"target": target, "target_id": target_id,
+                             "workflow": workflow, "skill": skill,
+                             "nai_i2i": nai_i2i})
+            return fake_job, None
+
+        def fake_resolve(spec):
+            if isinstance(resolve_result, Exception):
+                raise resolve_result
+            return resolve_result
+
+        why = "" if allowed else "NAI 未在本 agent 启用（管理页全局开关未开）"
+        for patcher in (
+            mock.patch.object(gi, "_qq_gate", lambda: None),
+            mock.patch.object(gi.image_jobs, "enqueue", fake_enqueue),
+            mock.patch.object(gi.image_jobs, "ahead_of", lambda job: 0),
+            mock.patch.object(gi, "is_cancelled", lambda: False),
+            mock.patch.object(qq_api, "current_context",
+                              lambda: self.KEY if context is None else context),
+            mock.patch.object(agents, "nai_allowed",
+                              lambda *a, **k: (allowed, why)),
+            mock.patch.object(comfy_src, "resolve", fake_resolve),
+            mock.patch.object(nai, "prepare_image",
+                              lambda raw: "QUJD-B64"),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        out = gi._generate_image(**kw)
+        return out, captured
+
+    def test_i2i_enqueues_snapshotted_image(self):
+        out, cap = self._run(prompt="make it night", skill="nai",
+                             source_image="1")
+        self.assertIn("垫的是引用的那张图", out)
+        self.assertIn("不要输出图片地址", out)
+        self.assertEqual(cap["skill"], "nai")
+        self.assertEqual(cap["workflow"], "make it night")
+        self.assertEqual(cap["nai_i2i"]["image"], "QUJD-B64")
+        self.assertEqual(cap["nai_i2i"]["note"], "引用的那张图")
+
+    def test_strength_from_denoise(self):
+        _, cap = self._run(prompt="x", skill="nai", source_image="1",
+                           denoise=0.35)
+        self.assertEqual(cap["nai_i2i"]["strength"], 0.35)
+
+    def test_junk_denoise_falls_back_to_default(self):
+        _, cap = self._run(prompt="x", skill="nai", source_image="1",
+                           denoise="随便")
+        self.assertEqual(cap["nai_i2i"]["strength"], nai.NAI_I2I_STRENGTH)
+
+    def test_out_of_range_denoise_is_clamped(self):
+        _, cap = self._run(prompt="x", skill="nai", source_image="1",
+                           denoise=5)
+        self.assertEqual(cap["nai_i2i"]["strength"], 0.9)
+
+    def test_text2img_still_has_no_snapshot(self):
+        out, cap = self._run(prompt="a cat", skill="nai")
+        self.assertIn("已经在画了", out)
+        self.assertNotIn("垫的是", out)
+        self.assertIsNone(cap["nai_i2i"])
+
+    def test_without_quote_refuses_instead_of_degrading(self):
+        """没引用就报错让对方引用，绝不悄悄退回文生图。"""
+        out, cap = self._run(
+            prompt="x", skill="nai", source_image="1",
+            resolve_result=RuntimeError("没看到引用的图片，垫不了图。"))
+        self.assertIn("引用", out)
+        self.assertNotIn("已经在画", out)
+        self.assertEqual(cap, {})
+
+    def test_gate_refusal_covers_i2i_too(self):
+        """NAI 闸没过，i2i 和 t2i 拒法一致——不新增开关。"""
+        out, cap = self._run(allowed=False, prompt="x", skill="nai",
+                             source_image="1")
+        self.assertIn("未在本 agent 启用", out)
+        self.assertEqual(cap, {})
+
+    def test_web_is_refused(self):
+        out, cap = self._run(context=(None, None), prompt="x", skill="nai",
+                             source_image="1")
+        self.assertIn("仅支持 QQ 群", out)
+        self.assertEqual(cap, {})
 
 
 if __name__ == "__main__":

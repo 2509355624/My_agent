@@ -7,6 +7,7 @@ import json
 import random
 from flask import request
 from app import comfy_src, image_jobs
+from app import nai as nai_mod
 from app.cancel import Cancelled, is_cancelled
 from app.config import COMFYUI_URL, DISABLED_IMAGE_SKILLS, QQ_AGENT_ID
 from app.skills import load_skill, load_workflow
@@ -172,8 +173,10 @@ def _generate_image(prompt, skill=None, use_character=False, lora=None,
     # 不碰下面那套 ComfyUI 探活 / 加载 / skill：它走自己的云分支（见
     # image_jobs._process_nai），token 只给指定群用（app/agents.nai_allowed）。
     # 必须在 ComfyUI 探活之前就分流，否则没开 ComfyUI 的机器会被卡在探活那句。
+    # 图生图（垫图）与文生图共用同一套 NAI 闸：nai_allowed 不放行，
+    # i2i 也一样进不来——不新增开关。
     if skill == "nai":
-        from app import qq_api
+        from app import nai, qq_api
         from app.agents import nai_allowed
         target, target_id = qq_api.current_context()
         ok, why = nai_allowed(QQ_AGENT_ID, target, target_id)
@@ -182,7 +185,19 @@ def _generate_image(prompt, skill=None, use_character=False, lora=None,
                     "直接告诉对方现在用不了，别再重试。")
         if target is None:
             return "错误：NAI 仅支持 QQ 群使用，网页端用不了。"
-        return _enqueue_nai(prompt, target, target_id)
+        # 垫图：只认本轮引用的图（comfy_src.resolve 的既有契约），取图失败
+        # 就实话实说，绝不退回文生图——对方以为改的是自己那张，收到的却是
+        # 凭空画的，比直接报错糟得多。base64 在这里算好快照进队列：
+        # worker 线程读不到 qq_api 的线程本地上下文。
+        nai_i2i = None
+        if str(source_image or "").strip():
+            try:
+                raw, note = comfy_src.resolve(source_image)
+                nai_i2i = {"image": nai.prepare_image(raw),
+                           "strength": _nai_strength(denoise), "note": note}
+            except RuntimeError as e:
+                return str(e)
+        return _enqueue_nai(prompt, target, target_id, nai_i2i)
 
     # 图生图整体停用（_I2I_SKILLS 为空）：只要模型还试着传 source_image，就在
     # 这里当场拦住，**并且把它拉回正路**——它十有八九是看到引用图就以为要「改图」，
@@ -354,14 +369,26 @@ def _generate_image(prompt, skill=None, use_character=False, lora=None,
             + "\n图片地址:\n" + "\n".join(urls))
 
 
-def _enqueue_nai(prompt, target, target_id):
+def _nai_strength(denoise):
+    """denoise 参数 → NAI 的 strength（重绘噪声）。不传/写错用默认 0.7，
+    越界钳回 [0.1, 0.9]——垫图不会「完全不变」也不会「完全看不出原图」。"""
+    try:
+        s = float(denoise)
+    except (TypeError, ValueError):
+        return nai_mod.NAI_I2I_STRENGTH
+    return min(0.9, max(0.1, s))
+
+
+def _enqueue_nai(prompt, target, target_id, nai_i2i=None):
     """把一张 NAI 图排进全局串行队列（复用现有队列，见 image_jobs）。
 
     NAI 是云端调用，也占「这一轮」的并发，跟 ComfyUI 的图混在同一条队列里
     排队不会更慢，还能让对方看到「前面还有几张」。enqueue 的 workflow 字段
-    在这里塞的是 prompt 字符串——cloud 分支靠 skill 判断怎么用它。
+    在这里塞的是 prompt 字符串——cloud 分支靠 skill 判断怎么用它；
+    nai_i2i 非 None 时是图生图（快照好的源图 base64 + 强度）。
     """
-    job, reason = image_jobs.enqueue(target, target_id, prompt, skill="nai")
+    job, reason = image_jobs.enqueue(target, target_id, prompt, skill="nai",
+                                     nai_i2i=nai_i2i)
     if reason is not None:
         # 拒收时什么算力都没花，也没有孤儿图。
         return reason
@@ -371,6 +398,10 @@ def _enqueue_nai(prompt, target, target_id):
                 "画好会自动发到群里。"
                 "不要输出图片地址，也不要说「图在下面 / 稍等」，"
                 "直接把想说的话说完就行。" % ahead)
+    if nai_i2i:
+        return ("已经在画了（垫的是%s），画好会自动发到群里。"
+                "不要输出图片地址，也不要说「图在下面 / 稍等」，"
+                "直接把想说的话说完就行。" % nai_i2i["note"])
     return ("已经在画了，画好会自动发到群里。"
             "不要输出图片地址，也不要说「图在下面 / 稍等」，"
             "直接把想说的话说完就行。")
@@ -408,10 +439,16 @@ tool = {
                   "用户真要「改这张图 / 垫图 / 把X换成Y」时，照实说改不了图，"
                   "不要硬凑；可以问清他想要什么效果，用 anima 重画一张"
                   "（说明是新画的、不是改他那张）。"
-                  "【nai / NovelAI】**仅限管理员为特定群开通 NAI 后**才能用：调用时 "
-                  "skill 传 nai（**只传 prompt，其它参数都不要传**），图由群主自己的 "
-                  "NovelAI 账号在云端出，跟本机 ComfyUI 无关。本群没开通就传了会被直接"
-                  "拒绝，对方只要一张图的话照实说这个渠道本群用不了、让他去找群主开。",
+                  "【nai / NovelAI】**仅限管理员为特定群开通 NAI 后**才能用，"
+                  "图由群主自己的 NovelAI 账号在云端出，跟本机 ComfyUI 无关；"
+                  "本群没开通就传了会被直接拒绝，照实说这个渠道本群用不了、"
+                  "让对方去找群主开。"
+                  "文生图：skill 传 nai，**只传 prompt，其它参数都不要传**。"
+                  "图生图（改图 / 垫图）：skill 传 nai + **source_image 传 1**"
+                  "（= 对方本轮**引用**的那张图；对方没引用就画不了，让他引用一条"
+                  "带图的消息再 @ 一次），可选 denoise（0.1~0.9，默认 0.7，"
+                  "越大改得越狠，别主动传）——**只在对方明确要改图 / 垫图时才传 "
+                  "source_image**，看图 / 点评照旧不传。",
     # QQ 机器人看不到角色底模这套：Sumire 的角色描述只给网页端用。
     "description_overrides": {
         QQ_AGENT_ID:
@@ -437,15 +474,21 @@ tool = {
             "多个逗号分隔（如 \"x.safetensors:0.8\"）；文件名要完整(.safetensors 结尾)，"
             "写错会返回可用清单；最多 3 个，传了就完全接管本次的 lora。"
             "【引用图片：只看，不改】**不要传 source_image**（改图 / 图生图"
-            "整体停用，传了工具会直接拒）。对方引用一张图，只是让你**看得见**它："
-            "你要做的是**照它反推出提示词，用 anima 画一张新的**，"
+            "整体停用，传了工具会直接拒）。对方引用一张图，只是让你**看得见**"
+            "它：你要做的是**照它反推出提示词，用 anima 画一张新的**，"
             "或者对方只是让你看图 / 点评时直接回话。"
             "对方真要「改这张图 / 垫图 / 把X换成Y」时，照实说改不了图，不要硬凑；"
             "可以问清他想要什么效果，用 anima 重画一张（说明是新画的、不是改他那张）。"
-            "【nai / NovelAI】**仅限管理员为特定群开通 NAI 后**才能用：调用时 "
-            "skill 传 nai（**只传 prompt，其它参数都不要传**），图由群主自己的 "
-            "NovelAI 账号在云端出，跟本机 ComfyUI 无关。本群没开通就传了会被直接"
-            "拒绝，对方只要一张图的话照实说这个渠道本群用不了、让他去找群主开。",
+            "【nai / NovelAI】**仅限管理员为特定群开通 NAI 后**才能用，"
+            "图由群主自己的 NovelAI 账号在云端出，跟本机 ComfyUI 无关；"
+            "本群没开通就传了会被直接拒绝，照实说这个渠道本群用不了、"
+            "让对方去找群主开。"
+            "文生图：skill 传 nai，**只传 prompt，其它参数都不要传**。"
+            "图生图（改图 / 垫图）：skill 传 nai + **source_image 传 1**"
+            "（= 对方本轮**引用**的那张图；对方没引用就画不了，让他引用一条"
+            "带图的消息再 @ 一次），可选 denoise（0.1~0.9，默认 0.7，"
+            "越大改得越狠，别主动传）——**只在对方明确要改图 / 垫图时才传 "
+            "source_image**，看图 / 点评照旧不传。",
     },
     "hidden_params": {QQ_AGENT_ID: ["use_character"]},
     "function": _generate_image,
@@ -453,10 +496,10 @@ tool = {
         "type": "object",
         "properties": {
             "prompt": {"type": "string", "description": "提示词。写逗号分隔的标签式英文短句（anima / image_gen_v1 都是这个写法），只写一段、不要用 --- 分隔（只有 skill=image_gen_v1 时才用 --- 分隔多张）。画面里没有固定角色时须包含完整角色描述"},
-            "skill": {"type": "string", "description": "Skill名称。**不传就是默认 anima**（单底模）。可选值见系统提示 Available Skills 里标 [底模]/[无底模] 的生图类；image_gen_v1（**= SD / SDXL 渠道**）仅在用户点名或场景匹配时才用；**anima_2（双底模）和 image_gen_v1_hires（SD 高清版）都只在用户点名时才传，绝不主动选**。**qwen_image_v1 / krea2 已停用，不要传**"},
+            "skill": {"type": "string", "description": "Skill名称。**不传就是默认 anima**（单底模）。可选值见系统提示 Available Skills 里标 [底模]/[无底模] 的生图类；image_gen_v1（**= SD / SDXL 渠道**）仅在用户点名或场景匹配时才用；**anima_2（双底模）和 image_gen_v1_hires（SD 高清版）都只在用户点名时才传，绝不主动选**。**qwen_image_v1 / krea2 已停用，不要传**；nai（NovelAI 云端）仅限已开通的群，文生图 / 图生图都走它"},
             "use_character": {"type": "boolean", "description": "是否使用该Skill自带的角色描述（默认false）。只有 image_gen_v1 有角色底模，设为true时固定该角色，你只写动作/环境/构图"},
             "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传"},
-            "source_image": {"type": "string", "description": "**不要传**。改图 / 图生图整体停用，传了工具会直接拒。引用图片只是让你看得见它——照它反推提示词、用 anima 画一张新的即可；对方真要改图，照实说改不了"}
+            "source_image": {"type": "string", "description": "**仅 skill=nai 时可用**（图生图 / 垫图）：填 1 = 垫对方本轮**引用**的那张图（对方没引用会报错），可配 denoise（0.1~0.9，默认 0.7）。其它渠道的图生图已停用，传了会被拒；只是看图 / 点评时任何渠道都不要传这个参数"}
         },
         "required": ["prompt"]
     }
