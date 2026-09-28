@@ -411,12 +411,10 @@ class TrimWindowPrivateTest(unittest.TestCase):
     """
 
     def setUp(self):
-        # 预算/窗口都钉住（fixture 按 est≈30000>24000、25>20 轮设计），
-        # 不跟 .env 走——用户已把 CONTEXT_BUDGET 调到 50000、窗口调到 40
+        # 预算钉住，不跟 .env 走（用户已把 CONTEXT_BUDGET 调到 50000）。
+        # 2026-09-29 起判据只剩 token 预算，CONTEXT_MAX_TURNS 不再参与压缩，
+        # 所以这里也不再 patch 它。
         p = mock.patch.object(memory, "CONTEXT_BUDGET", 32000)
-        p.start()
-        self.addCleanup(p.stop)
-        p = mock.patch.object(memory, "CONTEXT_MAX_TURNS", 20)
         p.start()
         self.addCleanup(p.stop)
         p = mock.patch.object(memory, "_LAST_COMPACT_TOKENS", {})
@@ -425,7 +423,7 @@ class TrimWindowPrivateTest(unittest.TestCase):
 
     @staticmethod
     def _fat_private_history(turns=25, chars=2000):
-        """25 轮 × 约 2000 中文字符：est ≈ 30000 > 警戒线 24000，且 > 20 轮窗口。"""
+        """25 轮 × 2 条 × 约 2000 汉字 ≈ 6 万 token，远超预算 32000。"""
         h = [_msg("system", "sys")]
         for i in range(turns):
             h.append(_msg("user", "问%d " % i + "字" * chars))

@@ -71,6 +71,11 @@ LLM_REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "60"))
 # 充值、服务恢复之后能自愈，不用重启进程。
 LLM_FALLBACK_TTL = float(os.getenv("LLM_FALLBACK_TTL", "600"))
 
+# HTTP 429（请求频率/额度到顶）的专用拉黑时长，默认 24 小时（2026-09-29 用户定）。
+# 429 不是「这条请求失败」，是「这家这一阵都不给了」——免费额度按天重置，
+# 600 秒后重试纯属白撞。拉黑一整天，让降级链直接把请求交给还能用的模型。
+LLM_RATE_LIMIT_TTL = float(os.getenv("LLM_RATE_LIMIT_TTL", "86400"))
+
 # 动态 API 地址和模型名（根据 provider 切换）
 if LLM_PROVIDER == "deepseek":
     API_URL = DEEPSEEK_BASE_URL.rstrip("/") + "/chat/completions"
@@ -197,8 +202,12 @@ def provider_vision(provider=None, model=None):
 VISION_PROVIDER = os.getenv("VISION_PROVIDER", "deepseek")
 # 空 = 用该 provider 的默认模型
 VISION_MODEL = os.getenv("VISION_MODEL", "")
-# 识图是单次同步调用，实测 1.9 秒返回，给 30 秒余量足够；超时按失败降级
-VISION_TIMEOUT = float(os.getenv("VISION_TIMEOUT", "30"))
+# 识图是单次同步调用，正常几秒返回；超时按失败降级。
+# 2026-09-29 从 30 秒放宽到 120 秒：识图走的是 mimo（火山 429 后所有请求都压到它），
+# 高峰期实测单张能拖到 30 秒以上——30 秒会把「慢但成功」的调用误判成失败。
+# 注意：这是 requests 的「单次 socket 操作」超时（含首字节等待），不是整次请求
+# 的总时长上限；服务端若持续滴数据，仍可能超过这个值。
+VISION_TIMEOUT = float(os.getenv("VISION_TIMEOUT", "120"))
 # 发出去前把图缩到最长边这么多像素。QQ 群里的图有 8MB 级的，直接 base64
 # 是 11MB 字符串——既慢又贵，还可能撞服务端请求体上限
 VISION_MAX_EDGE = int(os.getenv("VISION_MAX_EDGE", "1024"))
@@ -345,20 +354,24 @@ MAX_TURNS = int(os.getenv("MAX_TURNS", "10"))
 # 注意它跟模型的物理上下文上限（火山/DeepSeek 是 128K~1M）是两件事——
 # 这里管的是「我愿意为每一轮付多少钱」，不是「模型装不装得下」。超了就
 # 压缩历史（见 app/memory.py）。
+# **这是压缩的唯一判据**（2026-09-29 起）：到预算就压，不再看轮数。
+# 判据用 memory.estimate_messages 的**本地估算**，刻意不读 API 的 usage：
+# usage 走 threading.local，而 QQ 适配层用 asyncio.to_thread 从线程池取线程，
+# 同一会话的不同消息落在不同线程上，读到的 total_tokens 常常是 0 ——
+# 这就是「预算设了却从来没压缩过」的根因（实测一个群攒到 18 万字全量重发）。
 # 折算参考：一个中文字符约 0.6 token，32000 约合 5.3 万汉字、50~60 轮对话。
 # 单个 agent 可在 agent.json 里用 context_budget 覆盖（0 = 用这里的全局值）。
 CONTEXT_BUDGET = int(os.getenv("CONTEXT_BUDGET", "32000"))
 
-# 会话历史窗口：**保留最近多少轮完整对话**，更早的滚出窗口交给长期记忆。
+# 会话历史窗口（**已废弃，只作兼容开关**）。
 #
-# 判据刻意用「轮数」而不是 token：轮数是本地算的，不受 API usage 影响。
-# usage 走的是 threading.local，而 QQ 适配层用 asyncio.to_thread 从线程池取
-# 线程，同一会话的不同消息落在不同的线程上，读到的 total_tokens 常常是 0 ——
-# 这就是「CONTEXT_BUDGET=32000 却从来没压缩过」的根因（实测过一个群攒到
-# 8.2 万 token 全量重发）。按轮数裁不需要读 usage，根因直接消失。
+# 2026-09-27 曾按轮数开窗（保留最近 N 轮），理由是「轮数不用读 usage」。
+# 2026-09-29 又改回 token 判据（见 CONTEXT_BUDGET）：轮数开窗挡不住
+# 「100 轮里塞了 500 条消息」的群——实测那个群到 384 条 / 13.2 万字，
+# 按轮数裁完全压不住，单轮又慢又贵。
 #
-# 折算参考：群里一轮平均 3.2 条记录（user + assistant + 夹着的 tool_result）
-# ≈ 137 token，实测 20 轮 = 64 条 = 2751 token。0 = 关掉窗口裁剪。
+# 现在 trim_window 只在 max_turns<=0 时**关闭裁剪**，正数一律忽略。
+# 保留这个配置项是为了「一键关掉压缩」这条退路。
 CONTEXT_MAX_TURNS = int(os.getenv("CONTEXT_MAX_TURNS", "20"))
 
 # 滚出窗口的那批轮次要摘成的摘要字数上限。比群聊归档摘要（300 字）更短：

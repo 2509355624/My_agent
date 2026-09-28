@@ -70,11 +70,11 @@ def save_history(history, agent_id=None, session_key=None):
     session_key 用于「一个 agent 下挂多条互不相干的会话线」的场景（QQ 接入
     时每个私聊用户 / 每个群各一条），不传就是该 agent 的主会话。
 
-    落盘前先过一遍轮数窗口（见 trim_window）：窗口外的轮次在这里就摘走，
-    于是下一轮 load_history 读回来的已经是裁剪后的历史。**只裁要写的这份
-    副本**，不动调用方手上的 list——本轮该看什么还看什么。唯一的例外是
-    非群会话的 token 预算压缩（见 trim_window）：压缩不幂等，不原地收缩的
-    话同轮的后续保存会把压好的历史原样冲回去。
+    落盘前先过一遍压缩（见 trim_window）：超出 token 预算的最老轮次在这里就
+    摘走，于是下一轮 load_history 读回来的已经是裁剪后的历史。**只裁要写的
+    这份副本**，不动调用方手上的 list——本轮该看什么还看什么。
+    唯一的例外是非群会话：那条路走 trim_history，压缩不幂等，不原地收缩的话
+    同轮的后续保存会把压好的历史原样冲回去（见 trim_window 的注释）。
     """
     history = trim_window(history, agent_id=agent_id, session_key=session_key)
     path = _agent_session_file(agent_id, session_key)
@@ -405,27 +405,28 @@ def _group_id_from_key(session_key):
     return key[len("group_"):]
 
 
-def trim_window(history, agent_id=None, session_key=None, max_turns=None):
-    """按轮数开窗：只留最近 max_turns 轮完整对话，更早的摘成长期记忆。
+def trim_window(history, agent_id=None, session_key=None, max_turns=None,
+                budget=None):
+    """按 **token 预算**压缩会话（2026-09-29 用户定：不再按轮数开窗）。
 
-    与 trim_history（按 token 预算整段摘要）是两条路，这里刻意不读 API 用量：
-    usage 是线程本地的，QQ 侧跨线程复用会读到 0，token 判据因此长期不触发。
-    轮数是纯本地计算，跨线程、跨消息都一样，判据天然可靠。
+    原来按轮数（CONTEXT_MAX_TURNS=100 轮）开窗，实测群会话能攒到 8 万 token
+    （534 条 / 16.6 万字），单轮又慢又贵。改成到预算（CONTEXT_BUDGET，默认 5 万）
+    就压。判据是**本地估算**（estimate_messages），刻意不读线程本地 usage：
+    QQ 侧每条消息换一个线程，usage 恒为 0，token 判据永远不触发（老坑）。
 
-    滚出去的轮次不是丢掉——交给 longterm 摘成一条短摘要存进记忆库，之后
-    每轮随「这个群更早的记忆」注入。**摘摘要在后台线程跑**，这里不等它：
-    记忆晚几十秒落盘没有任何影响，但同步调一次 API 会卡住本轮回复。
+    两条路：
+    - 群会话：把装不进预算的最老轮次滚出去交给 longterm（那是「这个群以前聊过
+      什么」的来源），会话里只留装得下的最近若干轮。**摘摘要在后台线程跑**，
+      这里不等它：记忆晚几十秒落盘没影响，但同步调一次 API 会卡住本轮回复。
+    - 非群会话（网页 / 私聊）：没有记忆库可去，走 trim_history 的 token 预算
+      压缩（滚出去的摘成一条摘要顶在会话里，不是硬丢）。
 
     摘不摘得成都不影响开窗：摘要失败只记日志，窗口照样收紧（历史不该因为
     一次后台调用失败就继续膨胀）。
 
-    只有群会话走「滚出 → 记忆库」这条路；非群会话（网页 / 私聊）没有记忆库
-    可去，回退给 trim_history 做 token 预算压缩（滚出去的摘成一条摘要顶在
-    会话里，不是硬丢）。
+    max_turns 保留只为兼容旧调用点（=0 仍表示关闭），不再参与判据。
     """
-    if max_turns is None:
-        max_turns = CONTEXT_MAX_TURNS
-    if max_turns <= 0:
+    if max_turns is not None and max_turns <= 0:
         return history
 
     system_msgs = [m for m in history if m.get("role") == "system"]
@@ -433,51 +434,44 @@ def trim_window(history, agent_id=None, session_key=None, max_turns=None):
     if not other_msgs:
         return history
 
+    budget = budget or CONTEXT_BUDGET
+    est = estimate_messages(system_msgs) + estimate_messages(other_msgs)
+    if est < budget:
+        return history
+
     turns = _split_turns(other_msgs)
     group_id = _group_id_from_key(session_key)
 
     if group_id and agent_id:
-        # 前缀缓存优化（仅群聊）：不要每轮滚 1 轮——那样窗口开头永远在变，
-        # 群聊每轮全价 miss。攒到窗口的 1.5 倍才剪，一次滚掉全部溢出（≈半个
-        # 窗口），中间几十轮的开头原封不动 → 从「永远 miss」变成「滚一次
-        # miss 一波」。代价：长期记忆一波一波进（每 ~max_turns/2 轮一批），
-        # 用户已接受（2026-09-27）。
-        roll_step = max(1, max_turns // 2)
-        if len(turns) <= max_turns + roll_step:
+        # 从最新往回装，装到预算装不下为止；更老的滚进长期记忆。
+        keep = 0
+        acc = estimate_messages(system_msgs)
+        for turn in reversed(turns):
+            acc += estimate_messages(turn)
+            if acc > budget:
+                break
+            keep += 1
+        keep = max(1, keep)            # 最近一轮再大也得留，否则窗口空掉
+        if keep >= len(turns):
             return history
-        _digest_turns_async(agent_id, group_id, turns[:-max_turns])
+        _digest_turns_async(agent_id, group_id, turns[:-keep])
         result = list(system_msgs)
-        for turn in turns[-max_turns:]:
+        for turn in turns[-keep:]:
             result.extend(turn)
         return result
 
-    # 非群会话（网页主会话 / QQ 私聊）没有长期记忆库可去，走 token 预算
-    # 压缩：滚出去的会摘成一条摘要顶在会话里，不是硬丢。
-    if len(turns) <= max_turns:
-        return history
-    if not group_id or not agent_id:
-        # trim_history 的判据读的是线程本地 usage——QQ 侧每条消息换线程，
-        # 回退读到的恒为 0，压缩因此**永远不会触发**（私聊攒到 458 条 /
-        # 4.9 万字的根因）。这里改用本地估算当判据：不求精确，够触发就行。
-        # hit_rate 给 0 = 到警戒线就压，私聊场景宁可早压也别养肥历史。
-        est = (estimate_messages(system_msgs)
-               + estimate_messages(other_msgs))
-        result = trim_history(history, agent_id,
-                              usage={"total_tokens": est, "hit_rate": 0.0})
-        if result is not history:
-            # 原地收缩调用方手上的 list。压缩**不是幂等**的：一轮里
-            # save_history 会被调很多次，副本式裁剪下第一次压缩写了瘦文件、
-            # 水位也记上了，同轮的后续保存却被冷却挡住 → 又把胖历史原样写
-            # 回去，压缩成果直接被冲掉（实测私聊压完 547 条原样回弹）。
-            # 原地收缩后，后续保存看到的就是瘦历史，判据天然不再触发。
-            history[:] = result
-        return result
-
-    _digest_turns_async(agent_id, group_id, turns[:-max_turns])
-
-    result = list(system_msgs)
-    for turn in turns[-max_turns:]:
-        result.extend(turn)
+    # 非群会话（网页主会话 / QQ 私聊）没有长期记忆库可去，走 token 预算压缩：
+    # 滚出去的会摘成一条摘要顶在会话里，不是硬丢。hit_rate 给 0 = 到警戒线就压，
+    # 私聊场景宁可早压也别养肥历史。
+    result = trim_history(history, agent_id,
+                          usage={"total_tokens": est, "hit_rate": 0.0},
+                          budget=budget)
+    if result is not history:
+        # 原地收缩调用方手上的 list。压缩**不是幂等**的：一轮里 save_history
+        # 会被调很多次，副本式裁剪下第一次压缩写了瘦文件、水位也记上了，同轮的
+        # 后续保存却被冷却挡住 → 又把胖历史原样写回去，压缩成果直接被冲掉
+        # （实测私聊压完 547 条原样回弹）。原地收缩后判据天然不再触发。
+        history[:] = result
     return result
 
 

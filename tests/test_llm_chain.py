@@ -9,6 +9,7 @@
 
 import json
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -163,6 +164,63 @@ class CandidatesTest(_ChainBase):
         t.start()
         t.join()
         self.assertEqual(llm.candidates(), [("scnet2", "b")])
+
+
+class RateLimitBanTest(_ChainBase):
+    """429（频率/额度到顶）要拉黑一整天，而不是默认的 600 秒。
+
+    429 不是「这条请求失败」，是「这家这一阵都不给了」——免费额度按天重置，
+    600 秒后重试纯属白撞。拉黑一整天，让降级链直接把请求交给还能用的模型。
+    其余失败（网络抖动、模型退役）保持短 TTL，到期自愈，不用重启进程。
+    """
+
+    def test_rate_limit_ttl_defaults_to_a_full_day(self):
+        self.assertEqual(config.LLM_RATE_LIMIT_TTL, 86400)
+
+    def test_429_error_gets_the_long_ttl(self):
+        err = RuntimeError("LLM 请求失败 HTTP 429 Too Many Requests @https://x")
+        self.assertEqual(llm._ttl_for(err), llm.LLM_RATE_LIMIT_TTL)
+
+    def test_other_error_gets_the_short_ttl(self):
+        self.assertEqual(llm._ttl_for(RuntimeError("HTTP 500 Server Error")),
+                         llm.LLM_FALLBACK_TTL)
+
+    def test_explicit_ttl_overrides_the_default(self):
+        before = time.time()
+        llm._mark_dead(("volc", "a"), "x", ttl=123)
+        remain = llm._DEAD[("volc", "a")] - before
+        self.assertAlmostEqual(remain, 123, delta=5)
+
+    def test_mark_dead_without_ttl_uses_the_short_default(self):
+        before = time.time()
+        llm._mark_dead(("volc", "a"), "额度不足")
+        remain = llm._DEAD[("volc", "a")] - before
+        self.assertAlmostEqual(remain, llm.LLM_FALLBACK_TTL, delta=5)
+
+    def test_429_through_stream_bans_for_a_day(self):
+        before = time.time()
+        self._patch_post([_Resp(status=429, reason="Too Many Requests"),
+                          _Resp(lines=_sse("ok"))])
+        list(llm.call_llm_stream([{"role": "user", "content": "hi"}]))
+        remain = llm._DEAD[("volc", "a")] - before
+        self.assertGreater(remain, llm.LLM_RATE_LIMIT_TTL - 10)
+
+    def test_429_through_sync_bans_for_a_day(self):
+        before = time.time()
+        self._patch_post([_Resp(status=429, reason="Too Many Requests"),
+                          _Resp(payload={"choices": [
+                              {"message": {"content": "ok"}}]})])
+        llm.call_llm([{"role": "user", "content": "hi"}])
+        remain = llm._DEAD[("volc", "a")] - before
+        self.assertGreater(remain, llm.LLM_RATE_LIMIT_TTL - 10)
+
+    def test_non_429_failure_keeps_the_short_ban(self):
+        before = time.time()
+        self._patch_post([_Resp(status=500, reason="Server Error"),
+                          _Resp(lines=_sse("ok"))])
+        list(llm.call_llm_stream([{"role": "user", "content": "hi"}]))
+        remain = llm._DEAD[("volc", "a")] - before
+        self.assertLess(remain, llm.LLM_FALLBACK_TTL + 10)
 
 
 class StreamFallbackTest(_ChainBase):

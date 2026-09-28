@@ -12,7 +12,7 @@ from app.cancel import is_cancelled
 from app.config import (API_URL, API_KEY, MODEL, LLM_PROVIDER,
                         PROVIDERS, OLLAMA_BASE_URL, CONTEXT_BUDGET,
                         LLM_FALLBACK_CHAIN, LLM_REQUEST_TIMEOUT,
-                        LLM_FALLBACK_TTL)
+                        LLM_FALLBACK_TTL, LLM_RATE_LIMIT_TTL)
 
 # 诊断行一律走 logging，不走 print——原因见 app/logsetup.py 的模块说明：
 # print 落 stdout，被重定向/管道接管后是块缓冲，日志会「看起来丢了」。
@@ -116,7 +116,7 @@ def call_llm(messages, timeout=None, provider=None, model=None):
             return _call_provider(eff, body, timeout)
         except Exception as e:
             last_err = e
-            _mark_dead((pid, mname), _brief(e))
+            _mark_dead((pid, mname), _brief(e), ttl=_ttl_for(e))
     raise last_err
 
 
@@ -241,12 +241,24 @@ def _brief(err, limit=60):
     return text[:limit] + ("…" if len(text) > limit else "")
 
 
-def _mark_dead(key, reason):
+def _ttl_for(err):
+    """这个失败该拉黑多久：429（频率/额度到顶）→ 24 小时，其余用默认 TTL。
+
+    429 不是「这条请求失败」，是「这家这一阵都不给了」——免费额度按天重置，
+    600 秒后重试纯属白撞。拉黑一整天，让降级链直接把请求交给还能用的模型。
+    其余失败（网络抖动、模型退役）保持短 TTL，到期自愈，不用重启。
+    """
+    if "429" in str(err):
+        return LLM_RATE_LIMIT_TTL
+    return LLM_FALLBACK_TTL
+
+
+def _mark_dead(key, reason, ttl=None):
     """把这个候选拉黑一段时间。失败是常态（额度用完、模型退役），只记日志。"""
+    ttl = LLM_FALLBACK_TTL if ttl is None else ttl
     with _DEAD_LOCK:
-        _DEAD[key] = time.time() + LLM_FALLBACK_TTL
-    log.info("[chain] %s / %s 拉黑 %.0fs（%s）",
-             key[0], key[1], LLM_FALLBACK_TTL, reason)
+        _DEAD[key] = time.time() + ttl
+    log.info("[chain] %s / %s 拉黑 %.0fs（%s）", key[0], key[1], ttl, reason)
 
 
 def reset_chain_state():
@@ -512,5 +524,5 @@ def call_llm_stream(messages, timeout=None, provider=None, model=None,
             if spoke:
                 raise
             last_err = e
-            _mark_dead((pid, mname), _brief(e))
+            _mark_dead((pid, mname), _brief(e), ttl=_ttl_for(e))
     raise last_err
