@@ -198,6 +198,33 @@ def push_silence(hours):
     return ok, text[:200]
 
 
+def push_text(title, content):
+    """推一条通用文本到手机（看门狗等用它报状态）。返回 (ok, 说明)。
+
+    与 push_offline / push_silence 共用 PushPlus 通道；没配 token 时静默返回 False。
+    """
+    if not enabled():
+        return False, "未配置 PUSHPLUS_TOKEN"
+    payload = {
+        "token": NOTIFY_PUSHPLUS_TOKEN,
+        "title": title,
+        "content": "<p>%s</p>" % content,
+        "template": "html",
+    }
+    try:
+        status, text = _post(payload)
+    except Exception as e:
+        log.warning("通用推送异常：%s", e)
+        return False, repr(e)
+    ok = False
+    try:
+        ok = json.loads(text).get("code") == 200
+    except (ValueError, TypeError):
+        pass
+    log.info("通用推送%s：%s %s", "成功" if ok else "失败", status, text[:200])
+    return ok, text[:200]
+
+
 class _Watcher:
     """盯二维码文件的轮询器。
 
