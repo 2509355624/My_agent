@@ -96,6 +96,27 @@ if QQ_ENABLE:
             parameters=_PRESET_SCHEMA[_pname]["function"]["parameters"],
         )
 
+    # QQ 私聊「通用长期记忆」向量库：按 QQ 号隔离，自动打标签，仅 QQ 私聊可用
+    from app.tools.rag.memory_tools import (
+        TOOL_SCHEMA as _MEMORY_SCHEMA,
+        memory_save as _memory_save_fn,
+        memory_search as _memory_search_fn,
+        memory_list as _memory_list_fn,
+        memory_delete as _memory_delete_fn,
+    )
+    for _mname, _mfn in (
+        ("memory_save", _memory_save_fn),
+        ("memory_search", _memory_search_fn),
+        ("memory_list", _memory_list_fn),
+        ("memory_delete", _memory_delete_fn),
+    ):
+        register_tool(
+            name=_mname,
+            description=_MEMORY_SCHEMA[_mname]["function"]["description"],
+            function=_mfn,
+            parameters=_MEMORY_SCHEMA[_mname]["function"]["parameters"],
+        )
+
 from app.tools.normal.list_skills import tool as _list_skills_tool
 register_tool(**_list_skills_tool)
 

@@ -127,8 +127,33 @@ def _session_prompt_agent(session_key):
     return aid
 
 
+def _session_env_note(session_key):
+    """生成当前会话环境的系统级说明，让模型一开始就知道自己处在私聊还是群聊、对面是谁。
+
+    之前 agents/qq/prompt.md 写死「在 QQ 群里」，导致私聊也被当成群聊、bot 一直按
+    群友人设在演。这里按 session_key 解析出 target/target_id 动态生成，不靠模型自猜。
+    """
+    target, _, target_id = session_key.partition("_")
+    try:
+        from app import qq_names
+        name = (qq_names.name_for(target, target_id) or "") if target_id else ""
+    except Exception:
+        name = ""
+    if target == "group":
+        where = ("群聊「%s」(群号 %s)" % (name, target_id)) if name else ("群聊(群号 %s)" % target_id)
+        return ("【当前环境】你正处在**群聊**里：%s。群里有多个真人，你是其中一个"
+                "群友——不是客服、不是公众号、别点名所有人、别当主持，按群友的方式接话。"
+                % where)
+    # private（以及其它未知情况按私聊处理，最保守）
+    who = ("对方 QQ %s（昵称 %s）" % (target_id, name)) if name else ("对方 QQ %s" % target_id)
+    return ("【当前环境】你正和%s进行**私聊**（一对一，没有群友在旁边）。"
+            "私聊里你可以给这个人单独存记忆、存生图预设（memory_*/preset_* 工具），"
+            "这些只属于他一个人——别当成群聊，也绝不要把 A 的东西用在 B 身上。"
+            % who)
+
+
 def _session_head(session_key, aid):
-    """这条会话线应有的 system 头 = 该 agent 稳定层 + 会话附加词。
+    """这条会话线应有的 system 头 = 该 agent 稳定层 + 会话附加词 + 环境说明。
 
     返回 (head, 实际生效的 agent_id)。borrow 的 agent 构建失败时回落
     QQ 默认稳定层。agent_prompt.sync_session_system 不感知会话附加词，
@@ -143,6 +168,9 @@ def _session_head(session_key, aid):
     if extra:
         stable = (stable + "\n\n## 会话专属人设（优先于上面的角色定义）\n\n"
                   + extra)
+    # 环境说明是会话级稳定事实，直接钉在系统头里，模型从第一条消息就知道
+    # 自己在私聊还是群聊、对面是谁——而不是永远按群聊人设演。
+    stable = stable + "\n\n" + _session_env_note(session_key)
     return stable, aid
 
 
