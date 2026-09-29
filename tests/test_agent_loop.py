@@ -73,6 +73,83 @@ class _ScriptedLLM:
             yield "content", item
 
 
+class CompactWriteBackTest(unittest.TestCase):
+    """压缩结果必须原地写回 history（2026-09-30）。
+
+    不写回的话压缩只活在这一轮的局部变量里，落盘写的还是压缩前的胖历史，
+    下一轮从盘上读回来重新压一遍 —— 实测群里每个「带工具的回合」都白烧一次
+    13K~18K token 的**全价**摘要调用（0% 命中）+ 8 秒；09-29 共 94 次 ≥10K、
+    合计 2.08M miss token。
+    """
+
+    def setUp(self):
+        p = mock.patch.object(config, "MAX_TURNS", 10)
+        p.start()
+        self.addCleanup(p.stop)
+        self.trim_kwargs = []
+
+    def _patch_trim(self, make_result):
+        def fake(history, agent_id=None, **kw):
+            self.trim_kwargs.append(kw)
+            return make_result(history)
+
+        p = mock.patch.object(agent, "trim_history", fake)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _fat_history(self, turns=6):
+        h = [{"role": "system", "content": "sys"}]
+        for i in range(turns):
+            h.append({"role": "user", "content": "u%d" % i})
+            h.append({"role": "assistant", "content": "a%d" % i})
+        return h
+
+    def _run(self, history, **kwargs):
+        fake = _ScriptedLLM(["好了"])
+        p = mock.patch.object(agent, "call_llm_stream", fake)
+        p.start()
+        self.addCleanup(p.stop)
+        return list(agent.run_agent_stream("你好", history, **kwargs))
+
+    def test_compaction_shrinks_the_caller_history_in_place(self):
+        history = self._fat_history()
+
+        # 模拟 _compact：system + 摘要 + 最近一轮（含刚 append 的这条用户消息）
+        def make_result(h):
+            return ([h[0],
+                     {"role": "tool_result", "tool_name": "compact_summary",
+                      "content": "[上文压缩摘要] 旧内容"}]
+                    + h[-1:])
+
+        self._patch_trim(make_result)
+        self._run(history, agent_id="qq", session_key="group_9")
+
+        # 6 轮胖历史被压成 system + 摘要 + 本轮 user，再追加本轮 assistant
+        self.assertEqual(len(history), 4)
+        self.assertEqual(history[0]["content"], "sys")
+        self.assertIn("[上文压缩摘要]", history[1]["content"])
+        self.assertEqual(history[2]["content"], "你好")
+        self.assertEqual(history[-1]["content"], "好了")
+        # 老的轮次确实没了（不是被复制到别处）
+        self.assertNotIn("u0", str(history))
+
+    def test_session_key_is_forwarded_to_trim_history(self):
+        history = self._fat_history()
+        self._patch_trim(lambda h: h)          # 不压缩，只看入参
+        self._run(history, agent_id="qq", session_key="group_1103174141")
+        self.assertEqual(self.trim_kwargs[-1]["session_key"], "group_1103174141")
+
+    def test_no_compaction_leaves_history_alone(self):
+        """trim_history 原样返回时（不压缩）history 不能被改。"""
+        history = self._fat_history()
+        before = list(history)
+        self._patch_trim(lambda h: h)
+        self._run(history, agent_id="qq")
+        # 只多了本轮的两条（user + assistant），老的 13 条一条没动
+        self.assertEqual(history[:len(before)], before)
+        self.assertEqual(len(history), len(before) + 2)
+
+
 class AgentLoopTest(unittest.TestCase):
     def setUp(self):
         # 不做上下文压缩、不做真实工具调用、不做真实网络请求
@@ -336,6 +413,67 @@ class AgentLoopTest(unittest.TestCase):
         self.assertIn("看不到它的内容", first_user["content"])
         # 正常出最终回复，没有变成错误事件
         self.assertEqual(self.history[-1]["content"], "抱歉，我看不到这张图。")
+
+    def test_long_vision_text_is_truncated_before_entering_history(self):
+        """识图文字块写进 history 前必须截断到 _VISION_NOTE_MAX_CHARS。
+
+        它是历史里最大的一块可压缩脂肪（实测 19 条占群历史 28%，单条 300~1,712
+        字）。不截就会把会话顶破 token 预算 → 压缩开始每轮触发 → 摘要插在系统头
+        正后面 → 整段前缀缓存作废（签名 `命中 6144 / 26xxx = 23.3%`）。
+        """
+        long_text = "画面描述：" + "".join(
+            "第%d处：银白色双马尾，发尾渐变薄荷绿。" % i for i in range(1, 40))
+        self._patch_vision(long_text)
+        self._patch_llm(["看到了。"])
+        list(agent.run_agent_stream("这是什么", self.history, provider="volc",
+                                    image="data:image/jpeg;base64,ZZZ"))
+
+        body = self.history[0]["content"]
+        self.assertIn("[用户发来图片，以下是识别结果]", body)
+        self.assertTrue(body.endswith("…（描述已截断）"))
+        self.assertIn("银白色双马尾", body)           # 头部保留
+        self.assertNotIn("第39处", body)             # 尾部被切掉
+        self.assertNotIn(long_text, body)
+        self.assertLess(len(body), agent._VISION_NOTE_MAX_CHARS + 120)
+
+    def test_short_vision_text_is_not_truncated(self):
+        """没超上限的识图结果一个字节都不许动，也不能加截断标记。"""
+        self._patch_vision("一只猫趴在键盘上。")
+        self._patch_llm(["看到了。"])
+        list(agent.run_agent_stream("这是什么", self.history, provider="volc",
+                                    image="data:image/jpeg;base64,ZZZ"))
+        self.assertIn("一只猫趴在键盘上。", self.history[0]["content"])
+        self.assertNotIn("（描述已截断）", self.history[0]["content"])
+
+    def test_blind_vision_result_is_replaced_by_failure_note(self):
+        """识图模型「成功地没看图」时，它编的内容绝不能进 history。
+
+        实测 deepseek-flash vision 会返回「我无法直接看到图片，但根据你提供的
+        引用信息和需求，我可以帮你梳理关键点…」，然后自行编出一段画面描述，
+        下游照样据此生图。这类返回**不抛异常**，原兜底完全接不住。
+        """
+        blind = ("我无法直接看到图片，但根据你提供的引用信息和需求，"
+                 "我可以帮你梳理关键点：原图是粉色小熊连体泳衣。")
+        self._patch_vision(blind)
+        self._patch_llm(["看不到。"])
+        list(agent.run_agent_stream("照着这张改", self.history, provider="volc",
+                                    image="data:image/jpeg;base64,ZZZ"))
+
+        body = self.history[0]["content"]
+        self.assertIn("识别失败", body)
+        self.assertIn("看不到它的内容", body)
+        self.assertNotIn("粉色小熊连体泳衣", body)
+
+    def test_wu_fa_inside_a_real_description_is_not_a_failure(self):
+        """判据只看「模型自称看不到」——描述画面里的文字含「无法」不算失败。"""
+        self._patch_vision("画面里的报错文字是「无法连接到服务器」。")
+        self._patch_llm(["网关问题。"])
+        list(agent.run_agent_stream("这个报错什么意思", self.history,
+                                    provider="volc",
+                                    image="data:image/jpeg;base64,ZZZ"))
+        body = self.history[0]["content"]
+        self.assertIn("无法连接到服务器", body)
+        self.assertNotIn("识别失败", body)
 
     def test_multiple_images_all_attached_and_numbered(self):
         self._patch_vision("识别结果")

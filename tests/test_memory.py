@@ -401,6 +401,79 @@ class SummaryFailureDegradeTest(unittest.TestCase):
                 self.fail("摘要失败不该抛出，实际抛了 %r" % (e,))
 
 
+class CompactRollOutTest(unittest.TestCase):
+    """群会话压缩时，被压掉的旧轮次要顺带转交长期记忆（2026-09-30）。
+
+    背景：agent.py 现在会把压缩结果**原地写回** history，老轮次就此从会话里
+    消失。而「老轮次滚进长期记忆」以前是 trim_window 群分支的独家职责，agent
+    循环里这道压缩不走那条路 —— 不补这一手，群长期记忆会从压缩生效那天起停更。
+    """
+
+    BUDGET = 12000
+
+    def setUp(self):
+        self.digested = []
+
+        def fake_digest(agent_id, group_id, turns):
+            self.digested.append((agent_id, group_id,
+                                  [m["content"] for t in turns for m in t]))
+
+        for target, value in (
+            ("_LAST_COMPACT_TOKENS", {}),
+            ("_summarize_old_turns", lambda msgs, **kw: "旧内容摘要"),
+            ("_digest_turns_async", fake_digest),
+        ):
+            p = mock.patch.object(memory, target, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    @staticmethod
+    def _fat_history(turns=6, chars=4000):
+        """每轮约 4800 token，预算 12000 装不下最近 3 轮 → 必然触发摘要。"""
+        h = [_msg("system", "sys")]
+        for i in range(turns):
+            h.append(_msg("user", "u%d" % i + "字" * chars))
+            h.append(_msg("assistant", "a%d" % i + "字" * chars))
+        return h
+
+    def _trim(self, session_key=None):
+        self.history = self._fat_history()
+        return memory.trim_history(
+            self.history, agent_id="qq",
+            usage={"total_tokens": 40_000, "hit_rate": 0.0},
+            budget=self.BUDGET, session_key=session_key)
+
+    def test_group_compaction_hands_old_turns_to_longterm(self):
+        out = self._trim(session_key="group_1103174141")
+        self.assertEqual(len(self.digested), 1)
+        agent_id, group_id, contents = self.digested[0]
+        self.assertEqual(agent_id, "qq")
+        self.assertEqual(group_id, "1103174141")
+        self.assertTrue(contents)
+        # 两头都要接住：会话里留摘要，记忆库里留原文
+        self.assertIn("[上文压缩摘要]", out[1]["content"])
+
+    def test_private_compaction_does_not_digest(self):
+        """私聊没有记忆库可去（longterm 按群存），转交只会污染群记忆。"""
+        self._trim(session_key="private_546587874")
+        self.assertEqual(self.digested, [])
+
+    def test_without_session_key_no_digest(self):
+        """网页端不传 session_key —— 行为必须与从前完全一致。"""
+        self._trim()
+        self.assertEqual(self.digested, [])
+
+    def test_summary_failure_digests_nothing(self):
+        """摘要失败时一条都没丢，此时转交等于把还在会话里的消息提前塞进记忆库。"""
+        def boom(msgs, **kw):
+            raise RuntimeError("LLM 请求失败 HTTP 429")
+
+        with mock.patch.object(memory, "_summarize_old_turns", boom):
+            out = self._trim(session_key="group_9")
+        self.assertEqual(self.digested, [])
+        self.assertIs(out, self.history)   # 一条都没丢，原样交回
+
+
 class TrimWindowPrivateTest(unittest.TestCase):
     """非群会话（QQ 私聊 / 网页主会话）的本地估算压缩路径。
 

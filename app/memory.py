@@ -277,7 +277,7 @@ def _dump_messages(msgs):
 
 
 def trim_history(history, agent_id=None, usage=None, budget=None,
-                 provider=None, model=None):
+                 provider=None, model=None, session_key=None):
     """
     缓存感知的上下文压缩。
 
@@ -297,6 +297,8 @@ def trim_history(history, agent_id=None, usage=None, budget=None,
     provider/model: 摘要调用要用的模型。**agent 循环必须传本轮已落定的
       那一份**，否则摘要会回退到全局默认（见 _summarize_old_turns）。
     agent_id 只用于隔离压缩冷却水位（每个 agent 各记一份）。
+    session_key: 可选，`private_<QQ>` / `group_<群号>`。**只用于群会话**：压缩掉
+      的老轮次顺带转交长期记忆（见 _compact 里的说明）。不传 → 不转交。
     """
     key = agent_id or "_default"
     budget = budget or CONTEXT_BUDGET
@@ -329,7 +331,8 @@ def trim_history(history, agent_id=None, usage=None, budget=None,
 
     if should:
         result = _compact(history, system_msgs, other_msgs, budget,
-                          provider=provider, model=model)
+                          provider=provider, model=model,
+                          agent_id=agent_id, session_key=session_key)
         if result is not history:
             # 只有真压下去了才记水位。摘要失败不能占住冷却位——不然之后的
             # 每次触发都被冷却挡住，历史永远压不动，只能干等强制线。
@@ -340,7 +343,8 @@ def trim_history(history, agent_id=None, usage=None, budget=None,
     return history
 
 
-def _compact(history, system_msgs, other_msgs, budget, provider=None, model=None):
+def _compact(history, system_msgs, other_msgs, budget, provider=None, model=None,
+             agent_id=None, session_key=None):
     """执行整段摘要替换：保留最近若干轮完整，旧区交给 LLM 一次性摘要。
 
     **保留几轮不是固定的**：先估一次体积，若「摘要 + 最近 FULL_RECENT_TURNS
@@ -388,6 +392,21 @@ def _compact(history, system_msgs, other_msgs, budget, provider=None, model=None
         log.warning("[compact] 摘要失败，本轮跳过压缩：%s: %s",
                     type(e).__name__, e)
         return history
+
+    # 群会话：这次真正被压掉的旧轮次，顺带转交长期记忆（2026-09-30）。
+    #
+    # 以前这一步由 trim_window 的群分支独家负责（它把装不下的老轮次滚出去交给
+    # longterm）。但 agent 循环里这道压缩不走那条路，而 agent.py 现在会把压缩
+    # 结果**原地写回 history**（见那里的注释），老轮次就此从会话里消失——不补
+    # 这一手，群长期记忆会从「压缩开始生效」那天起停更。
+    #
+    # 放在摘要**成功之后**：摘要失败时 _compact 原样交回历史、一条都不丢，
+    # 此时转交等于把还在会话里的消息提前塞进记忆库。
+    # 与 trim_window 的转交**不冲突**：_digest_turns_async 按 (role, content)
+    # 指纹去重，同一批消息滚两次也只摘一次。转交失败只记日志，不影响本次压缩。
+    group_id = _group_id_from_key(session_key)
+    if group_id and agent_id and old_turns:
+        _digest_turns_async(agent_id, group_id, old_turns)
 
     # 拼装：system + 摘要消息 + 最近几轮 + 状态栏（由 agent 运行时追加）
     result = list(system_msgs)
@@ -539,7 +558,7 @@ def trim_window(history, agent_id=None, session_key=None, max_turns=None,
     # 私聊场景宁可早压也别养肥历史。
     result = trim_history(history, agent_id,
                           usage={"total_tokens": est, "hit_rate": 0.0},
-                          budget=budget)
+                          budget=budget, session_key=session_key)
     if result is not history:
         # 原地收缩调用方手上的 list。压缩**不是幂等**的：一轮里 save_history
         # 会被调很多次，副本式裁剪下第一次压缩写了瘦文件、水位也记上了，同轮的

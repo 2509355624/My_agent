@@ -366,6 +366,40 @@ def _attach_images(llm_history, images):
 # 看见了，顺着用户的"你看这个报错"编出一段分析——那比直接说不看更糟。
 _VISION_FAIL_NOTE = "（这张图片识别失败，你看不到它的内容，请如实说明）"
 
+# 单张识图结果写进历史的字数上限（2026-09-30）。
+#
+# 为什么要截：识图文字块是**写回 history 的**（图片本体不进，但这段文字进），
+# 实测在群里占到历史总字数的 28%（19 条共 13,501 字 / 47,776 字，单条 300~1,712
+# 字）。它就是群会话顶破 token 预算的头号推手——顶破之后压缩开始每轮触发，
+# 而压缩会把摘要插在系统头正后面，一次作废整段前缀缓存（签名 `命中 6144 / 26xxx`）。
+#
+# 截在 400 是有依据的：识图 prompt 要求它先讲主体，实测前 300 字已把角色/发色/
+# 瞳色/姿势说完，再往后的多是背景纹理与修辞。19 条截到 400 字后合计约 7,600 字，
+# 历史降约 12%，估算从 24,879 掉回 24,000 预算以内 → 压缩根本不触发。
+#
+# **⚠️ 只在写进 history 的这一份上截**：当轮发给模型的也是同一份（图片本体不进
+# 历史，模型只有这一次机会看这段文字），所以截断会同时影响当轮。这是有意的——
+# 不截的话省不下来；真需要细节时用户会再问一句。
+_VISION_NOTE_MAX_CHARS = 400
+
+# 「识图模型其实没看到图」的判据（2026-09-30）。
+#
+# 火山/DeepSeek 的视觉模型偶发返回一段**看起来像回答、其实在说自己看不到**的
+# 文字，例如实测两句：
+#   「我无法直接查看或读取你这条消息里的图片内容（当前没有可解析的图片文件/链接）…」
+#   「我无法直接看到图片，但根据你提供的引用信息和需求，我可以帮你梳理关键点…」
+# 后者更坏：它接着**自行编造**了一段画面描述和实施计划，下游照样据此生图。
+#
+# 这类返回**不会抛异常**，所以 _VISION_FAIL_NOTE 那条兜底完全接不住。命中的一律
+# 换成 _VISION_FAIL_NOTE——宁可让模型明说「看不到」，也不要它拿着编的内容当真。
+#
+# 正则只匹配「模型自称看不到」，不匹配描述里出现的"无法"（比如描述画面中的文字）。
+_VISION_BLIND_RE = re.compile(
+    r"我(?:无法|不能|没法)(?:直接)?(?:查看|看到|读取|识别|访问)"
+    r"|无法查看或读取"
+    r"|没有可解析的图片"
+    r"|请(?:你)?重新(?:上传|发送)(?:一下)?(?:这张)?图片")
+
 # 识图结果前面的说明。带发送者时把名字写进去——群里一轮可能混着好几张图，
 # 不写谁发的，模型只能猜，猜错就是把 A 发的图安到 B 头上（「关系网乱」的
 # 头号来源）。发送者未知时退回「用户发来」，宁可笼统也不要乱安人。
@@ -394,6 +428,13 @@ def _vision_notes(images, owners=None, question=""):
     question 是本轮用户的原话，一并送进识图 prompt（见 vision.build_prompt）。
     不带的话识图只按通用指令读图，下游文本模型就只能拿到一段泛泛的描述，
     得自己猜「用户到底想问什么」。
+
+    三条后处理都放在这一处（返回值同时是"当轮发给模型的"和"写回 history 的"）：
+    1. **失败兜底**：describe 抛异常 → _VISION_FAIL_NOTE。
+    2. **「成功返回但没看图」兜底**：见 _VISION_BLIND_RE。这类返回不抛异常，
+       没有它就接不住，模型会拿一段编造的画面描述当真。
+    3. **截断到 _VISION_NOTE_MAX_CHARS**：识图文字块是历史里最大的一块可压缩
+       脂肪（实测占群历史 28%），不截就会把会话顶破预算、逼出每轮压缩。
     """
     from app.vision import build_prompt, describe
 
@@ -406,6 +447,14 @@ def _vision_notes(images, owners=None, question=""):
         except Exception as exc:
             log.warning("识图失败（第 %d/%d 张）：%s", i, total, exc)
             text = ""
+        # 没看图却说了一堆 —— 换掉。这段一旦写进 history 就是永久占位，
+        # 而且下游会把它当事实（实测它编出过「原图是粉色小熊连体泳衣」）。
+        if text and _VISION_BLIND_RE.search(text):
+            log.warning("识图没看到图（第 %d/%d 张），改判失败：%r",
+                        i, total, text[:60])
+            text = ""
+        if len(text) > _VISION_NOTE_MAX_CHARS:
+            text = text[:_VISION_NOTE_MAX_CHARS].rstrip() + "…（描述已截断）"
         body = text or _VISION_FAIL_NOTE
         if total > 1:
             owner = (owners or [])[i - 1] if i - 1 < len(owners or []) else ""
@@ -511,7 +560,7 @@ _ABORT_NOTE = "⚠️ 用户手动中断了上一条回复，其内容可能不�
 
 def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_results=None,
                      agent_id=None, image=None, cancel_event=None, extra_context=None,
-                     image_owners=None):
+                     image_owners=None, session_key=None):
     """
     Agent Loop: 生成器版本，逐事件返回
     事件类型: user / assistant / tool_call / tool_result / aborted
@@ -549,6 +598,10 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
     extra_context: 可选，只在这一轮生效的补充上下文（QQ 侧传「群里最近的
       对话」）。挂在末尾那条状态栏消息里、**不写回 history**，所以每轮现取
       现用，不会在历史里重复堆积。详见 _status_message。
+    session_key: 可选，这条会话线在 QQ 侧的 key（`private_<QQ>` / `group_<群号>`）。
+      **只给上下文压缩用**：压缩掉的老轮次对群会话要顺带转交长期记忆（不然
+      群里「以前聊过什么」会越来越薄），而长期记忆是按群存的，得先知道群号。
+      网页端不传 → None → 行为与从前一致（不做转交）。
     """
     from app.config import MAX_TURNS, provider_vision
 
@@ -623,7 +676,19 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
             # 额度（实测症状：agent 切到 deepseek 后压缩仍报火山的额度错误）。
             trimmed = trim_history(history, agent_id, usage=last_usage,
                                    budget=context_budget,
-                                   provider=provider, model=model)
+                                   provider=provider, model=model,
+                                   session_key=session_key)
+            # 压缩结果必须**原地写回** history（2026-09-30）。
+            # trim_history 返回的是新列表；不写回的话它只活在这一轮的局部变量
+            # 里，落盘时写的还是压缩前的胖历史 → 下一轮重新压一遍。实测症状：
+            # 群里每个「带工具的回合」都白烧一次 13K~18K token 的**全价**摘要
+            # 调用（0% 命中）+ 8 秒，09-29 共 94 次 ≥10K、合计 2.08M miss token。
+            # 写回之后压缩只发生一次，后续轮次读回来的就是压好的历史。
+            # ⚠️ 必须在 _status_message / tail_tokens 之前写回：那两处读 history
+            # 算条数与尾巴，读压缩后的数才对得上本轮真正发出去的东西。
+            if trimmed is not history:
+                history[:] = trimmed
+                trimmed = history
             llm_history = _history_for_llm(trimmed)
             # 带图对话（仅当本轮模型有视觉）：第 1 轮把用户消息升级成多模态，
             # 之后轮次不再带图（图片本体始终不在 history 里，历史中只有文本）

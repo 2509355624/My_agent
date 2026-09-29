@@ -855,7 +855,8 @@ class SessionRunner:
             for ev in run_agent_stream(text, history, agent_id=run_agent,
                                        image=data_urls or None,
                                        image_owners=image_owners or None,
-                                       extra_context=extra_context or None):
+                                       extra_context=extra_context or None,
+                                       session_key=self.session_key):
                 etype = ev.get("type")
                 # 先落盘再处理（与 main.py 的契约一致）
                 if etype in SESSION_EVENTS:
