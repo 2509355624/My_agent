@@ -78,6 +78,15 @@ def _find_generator(workflow):
         inp = nd.get("inputs", {})
         if isinstance(nd.get("class_type"), str) and "width" in inp and "steps" in inp:
             return nid, nd
+    # 标准节点工作流：采样节点就是 KSampler（width/height 在 EmptyLatentImage 上，
+    # 所以上面那条 width+steps 的启发式命中不了它）。
+    #
+    # 这一条必须有：_rebuild_lora 靠 gen_id 把重建后的 LoRA 链重新挂回采样器
+    # 和正负向 CLIPTextEncode。认不出 gen 时那段整体跳过，链接仍指向已删除的
+    # 旧 LoRA 节点——工作流当场断掉，表现是「换 LoRA 之后一张都画不出来」。
+    for nid, nd in workflow.items():
+        if nd.get("class_type") == "KSampler":
+            return nid, nd
     return None, None
 
 
@@ -198,6 +207,14 @@ def _apply_set(workflow, gen, op):
         v = int(v)
     elif k in ("cfg", "denoise", "hires_denoise", "strength_model", "strength_clip"):
         v = float(v)
+    # 标准节点工作流里 width/height 挂在 EmptyLatentImage 上，不在采样器上。
+    # 写进 KSampler 不报错但也不生效（ComfyUI 忽略多余字段），等于改了个寂寞，
+    # 所以这里转投真正的宿主节点。
+    if k in ("width", "height") and gen.get("class_type") == "KSampler":
+        lat_id, lat = _find_node(workflow, "EmptyLatentImage")
+        if lat is not None:
+            lat["inputs"][k] = v
+            return k + "=" + repr(v)
     gen["inputs"][k] = v
     return k + "=" + repr(v)
 

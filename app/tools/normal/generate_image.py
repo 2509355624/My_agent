@@ -28,7 +28,12 @@ _I2I_SKILLS = ()
 # 「当初走的是哪个渠道」。
 I2I_DEFAULT_SKILL = "qwen_image_v1"
 
-# 没点名 skill 时的文生图默认渠道（历史行为，不动）。
+# 没点名 skill 时的文生图默认渠道。
+#
+# 2026-09-29 改回 "anima"：`skills/anima/` 已按**单底模单段**重建（Anima 2B，
+# 768×1024，一次装载、稳定），它才是「不点名就走」的那条。双底模两段那版
+# 拆成了 `skills/anima_2/`，**只在用户点名时才传**。
+# 中间那段「anima 目录不存在、只能临时指 image_gen_v1」的历史，随目录补齐而结束。
 T2I_DEFAULT_SKILL = "anima"
 
 
@@ -85,6 +90,11 @@ def _lora_chain(workflow):
     兼容 LoraLoader（带 clip）和 LoraLoaderModelOnly（krea2 用的，只挂 model）。
     不硬编码节点 id（两个工作流的 id 编号不同），沿 model 输入的连线走：
     第一个槽的 model 来自 checkpoint 加载节点，后面每个槽的 model 来自前一个槽。
+
+    起点识别用**小写包含**：ComfyUI 里同一个加载器有多种拼写——`CheckpointLoaderSimple`
+    （image_gen_v1）、`UnetLoaderGGUF`（krea2）、`UNETLoader`（anima / anima_2）。
+    原来写成 `"UnetLoader" in class_type` 是大小写敏感的，`UNETLoader` 全大写**匹配不上**，
+    于是 anima 的两个 lora 槽整条链找不到，点名换 lora 会误报「当前工作流没有 lora 槽」。
     """
     loaders = {nid: node for nid, node in workflow.items()
                if node.get("class_type") in ("LoraLoader",
@@ -94,8 +104,8 @@ def _lora_chain(workflow):
         src = (node.get("inputs") or {}).get("model")
         sources[nid] = src[0] if isinstance(src, list) and src else None
     ckpts = {nid for nid, node in workflow.items()
-             if "CheckpointLoader" in (node.get("class_type") or "")
-             or "UnetLoader" in (node.get("class_type") or "")}
+             if "checkpointloader" in (node.get("class_type") or "").lower()
+             or "unetloader" in (node.get("class_type") or "").lower()}
     chain, current = [], next(
         (nid for nid, src in sources.items() if src in ckpts), None)
     while current is not None and current not in chain:
@@ -287,7 +297,11 @@ def _generate_image(prompt, skill=None, use_character=False, lora=None,
     # 工作流自带固定风格前缀）。统一按「字符串内部转义替换」处理，两种都兼容。
     prompt_escaped = prompt.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '')
     workflow_str = workflow_str.replace("__MULTI_PROMPTS__", prompt_escaped)
-    workflow_str = workflow_str.replace("__SEED__", str(seed))
+    # 连引号一起换掉：ComfyUI 的 KSampler.seed 是 INT 字段，只替内容、留着引号
+    # 就变成字符串 "123456"，提交时类型校验不过。老写法是给自定义节点用的
+    # （它对 seed 类型不敏感），换成标准 KSampler 后必须落成真数字。
+    workflow_str = workflow_str.replace('"__SEED__"', str(seed))
+    workflow_str = workflow_str.replace("__SEED__", str(seed))  # 兜底：裸占位符
     workflow_str = workflow_str.replace("__CHARACTER__", character_escaped)
     if is_i2i:
         # 垫图专用占位符：源图文件名（按 JSON 字符串转义填，避免文件名里的
