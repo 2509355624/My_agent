@@ -17,9 +17,10 @@
    的结果截断（tool_result 永久占历史，必须掐）。
 
 token 估算口径见 memory.estimate_tokens：汉字 ×0.6 + 其他 ×0.3，每条消息
-另加 4 的角色开销。下面的 _body/_turn 就是按这个口径造的「稳定尺寸砖块」。
+另加 16 的角色开销。下面的 _body/_turn 就是按这个口径造的「稳定尺寸砖块」。
 """
 
+import json
 import os
 import tempfile
 import threading
@@ -32,7 +33,7 @@ import app.longterm as longterm
 from app.tools.normal import web_search
 
 
-# ── 造数据：每轮固定 246 token，方便把预算算清楚 ────────────────
+# ── 造数据：每轮固定 270 token，方便把预算算清楚 ────────────────
 # _CHARS 个汉字（末尾换成序号保证内容唯一——去重指纹靠 (role, content)，
 # 内容全一样的话第二批消息会被当成重复全部吃掉）。
 _CHARS = 200
@@ -44,7 +45,7 @@ def _body(i):
 
 
 def _turn(i):
-    """一轮 = user + assistant，各 123 token（119 内容 + 4 开销）。"""
+    """一轮 = user + assistant，各 135 token（119 内容 + 16 开销）。"""
     return [{"role": "user", "content": _body(i)},
             {"role": "assistant", "content": _body(i)}]
 
@@ -52,15 +53,15 @@ def _turn(i):
 def _history(turns, system=True):
     h = []
     if system:
-        h.append({"role": "system", "content": "人设"})     # 5 token
+        h.append({"role": "system", "content": "人设"})     # 17 token
     for i in range(turns):
         h.extend(_turn(i))
     return h
 
 
-# 5(系统) + 246×12 = 2957 ≤ 3000 < 3203 = 246×13
+# 17(系统) + 270×11 = 2987 ≤ 3000 < 3257 = 17 + 270×12
 _BUDGET = 3000
-_KEEP = 12
+_KEEP = 11
 
 
 class _ResetState:
@@ -77,9 +78,9 @@ class _ResetState:
 class TrimWindowTest(_ResetState, unittest.TestCase):
     def test_turn_estimate_is_stable(self):
         """钉住估算口径：下面的轮数/预算换算全建立在这个前提上。"""
-        self.assertEqual(memory.estimate_messages(_turn(3)), 246)
-        self.assertEqual(memory.estimate_messages(_turn(99)), 246)
-        self.assertEqual(memory.estimate_messages(_history(0)), 5)
+        self.assertEqual(memory.estimate_messages(_turn(3)), 270)
+        self.assertEqual(memory.estimate_messages(_turn(99)), 270)
+        self.assertEqual(memory.estimate_messages(_history(0)), 17)
 
     def test_over_budget_keeps_recent_turns(self):
         # 35 轮 ≈ 8615 token，远超 3000；从最新往回装，装下 12 轮，滚掉 23 轮。
@@ -89,14 +90,14 @@ class TrimWindowTest(_ResetState, unittest.TestCase):
                                      budget=_BUDGET)
         roles = [m["role"] for m in out]
         self.assertEqual(roles[0], "system")
-        self.assertEqual(roles.count("user"), _KEEP)      # 只剩最近 12 轮
-        self.assertEqual(out[1]["content"], _body(23))    # 前 23 轮被摘走
+        self.assertEqual(roles.count("user"), _KEEP)      # 只剩最近 11 轮
+        self.assertEqual(out[1]["content"], _body(24))    # 前 24 轮被摘走
         self.assertEqual(out[-1]["content"], _body(34))
         dig.assert_called_once()
         args = dig.call_args[0]
         self.assertEqual(args[0], "qq")
         self.assertEqual(args[1], "9")
-        self.assertEqual(len(args[2]), 46)                # 23 轮 = 46 条消息
+        self.assertEqual(len(args[2]), 48)                # 24 轮 = 48 条消息
 
     def test_result_fits_the_budget(self):
         """压完必须真的装得进预算——这是「最坏情况花多少钱」的保证。"""
@@ -107,21 +108,21 @@ class TrimWindowTest(_ResetState, unittest.TestCase):
         self.assertLessEqual(memory.estimate_messages(out), _BUDGET)
 
     def test_within_budget_untouched(self):
-        # 12 轮 = 2957 < 3000：原样返回，连对象都不换（保住热前缀）
-        h = _history(12)
+        # 11 轮 = 2987 < 3000：原样返回，连对象都不换（保住热前缀）
+        h = _history(11)
         with mock.patch.object(longterm, "digest_messages_async") as dig:
             out = memory.trim_window(h, "qq", "group_9", budget=_BUDGET)
         self.assertIs(out, h)
-        self.assertEqual(len(out), 25)
+        self.assertEqual(len(out), 23)
         dig.assert_not_called()
 
     def test_just_over_budget_trims_the_oldest_turn(self):
-        # 13 轮 = 3203 > 3000：只滚掉最老的一轮
+        # 12 轮 = 3257 > 3000：只滚掉最老的一轮
         with mock.patch.object(memory, "_DIGEST_BATCH_MIN", 1), \
              mock.patch.object(longterm, "digest_messages_async") as dig:
-            out = memory.trim_window(_history(13), "qq", "group_9",
+            out = memory.trim_window(_history(12), "qq", "group_9",
                                      budget=_BUDGET)
-        self.assertEqual(len(out), 25)
+        self.assertEqual(len(out), 23)
         self.assertEqual(out[1]["content"], _body(1))
         self.assertEqual(len(dig.call_args[0][2]), 2)
 
@@ -168,7 +169,7 @@ class TrimWindowTest(_ResetState, unittest.TestCase):
                                side_effect=OSError("boom")):
             out = memory.trim_window(_history(35), "qq", "group_9",
                                      budget=_BUDGET)
-        self.assertEqual(out[1]["content"], _body(23))
+        self.assertEqual(out[1]["content"], _body(24))
 
 
 class InPlaceShrinkTest(_ResetState, unittest.TestCase):
@@ -197,37 +198,37 @@ class DigestBatchTest(_ResetState, unittest.TestCase):
     """滚出消息攒批：攒够阈值才摘要一次，避免碎片记忆。"""
 
     def test_below_threshold_buffers_without_digest(self):
-        # 14 轮滚掉 2 轮 = 4 条 < 40，先攒着
+        # 14 轮滚掉 3 轮 = 6 条 < 40，先攒着
         with mock.patch.object(longterm, "digest_messages_async") as dig:
             memory.trim_window(_history(14), "qq", "group_9", budget=_BUDGET)
         dig.assert_not_called()
-        self.assertEqual(len(memory._digest_pending[("qq", "9")]), 4)
+        self.assertEqual(len(memory._digest_pending[("qq", "9")]), 6)
 
     def test_crossing_threshold_flushes_whole_batch(self):
         with mock.patch.object(longterm, "digest_messages_async") as dig:
             memory.trim_window(_history(14), "qq", "group_9", budget=_BUDGET)
-            # 再滚 46 条，其中 4 条与上批重合被去重，攒批总数 46 → 触发
+            # 再滚 48 条，其中 6 条与上批重合被去重，攒批总数 48 → 触发
             memory.trim_window(_history(35), "qq", "group_9", budget=_BUDGET)
         dig.assert_called_once()
         batch = dig.call_args[0][2]
-        self.assertEqual(len(batch), 46)                 # 4 + 42（去重后），一次整批
+        self.assertEqual(len(batch), 48)                 # 6 + 42（去重后），一次整批
         self.assertEqual(batch[0]["content"], _body(0))  # 顺序保持旧→新
-        self.assertEqual(batch[-1]["content"], _body(22))
+        self.assertEqual(batch[-1]["content"], _body(23))
         self.assertEqual(memory._digest_pending.get(("qq", "9")), [])
 
     def test_big_initial_roll_flushes_immediately(self):
         with mock.patch.object(longterm, "digest_messages_async") as dig:
             memory.trim_window(_history(60), "qq", "group_9", budget=_BUDGET)
         dig.assert_called_once()
-        self.assertEqual(len(dig.call_args[0][2]), 96)   # 48 轮 = 96 条
+        self.assertEqual(len(dig.call_args[0][2]), 98)   # 49 轮 = 98 条
 
     def test_groups_buffered_separately(self):
         with mock.patch.object(longterm, "digest_messages_async") as dig:
             memory.trim_window(_history(14), "qq", "group_9", budget=_BUDGET)
             memory.trim_window(_history(14), "qq", "group_8", budget=_BUDGET)
         dig.assert_not_called()
-        self.assertEqual(len(memory._digest_pending[("qq", "9")]), 4)
-        self.assertEqual(len(memory._digest_pending[("qq", "8")]), 4)
+        self.assertEqual(len(memory._digest_pending[("qq", "9")]), 6)
+        self.assertEqual(len(memory._digest_pending[("qq", "8")]), 6)
 
 
 class DigestDedupTest(_ResetState, unittest.TestCase):
@@ -250,22 +251,23 @@ class DigestDedupTest(_ResetState, unittest.TestCase):
              mock.patch.object(longterm, "digest_messages_async") as dig:
             memory.trim_window(h, "qq", "group_9", budget=_BUDGET)
             self.assertEqual(dig.call_count, 1)
+            self.assertEqual(dig.call_args_list[0][0][2][0]["content"], _body(0))
             h.extend([{"role": "assistant", "content": "答1"},
                       {"role": "assistant", "content": "答2"}])   # 轮尾继续长
             memory.trim_window(h, "qq", "group_9", budget=_BUDGET)
             memory.trim_window(h, "qq", "group_9", budget=_BUDGET)
-        # 轮尾变长只会把更老的轮挤出去；已摘过的消息不重摘
-        self.assertGreaterEqual(dig.call_count, 1)
-        self.assertEqual(dig.call_args[0][2][0]["content"], _body(0))
-        self.assertNotIn("答1", [m["content"] for m in dig.call_args[0][2]])
+        # 轮尾变长只把更老的轮挤出去：第二批只含新滚出的 turn24，已摘过的
+        # 消息（turn0 起）一条都不重摘。
+        self.assertEqual(dig.call_count, 2)
+        self.assertEqual(dig.call_args_list[1][0][2], _turn(24))
 
     def test_slide_digests_only_newly_rolled(self):
         """预算滑动：新一轮把更老的挤出去时，只摘新滚出的，不重摘旧的。"""
-        h = _history(13)                      # 13 轮 → 滚 turn0
+        h = _history(12)                      # 12 轮 → 滚 turn0
         with mock.patch.object(memory, "_DIGEST_BATCH_MIN", 1), \
              mock.patch.object(longterm, "digest_messages_async") as dig:
             memory.trim_window(h, "qq", "group_9", budget=_BUDGET)
-            h.extend(_turn(13))               # 14 轮 → 滚 turn0..1
+            h.extend(_turn(12))               # 13 轮 → 滚 turn0..1
             memory.trim_window(h, "qq", "group_9", budget=_BUDGET)
         self.assertEqual(dig.call_count, 2)
         self.assertEqual(dig.call_args[0][2], _turn(1))
@@ -296,8 +298,75 @@ class SaveHistoryIntegrationTest(unittest.TestCase):
             memory.save_history(h, "qq", "group_9")
         loaded = memory.load_history("qq", "group_9")
         self.assertEqual([m["role"] for m in loaded].count("user"), _KEEP)
-        self.assertEqual(loaded[1]["content"], _body(23))
+        self.assertEqual(loaded[1]["content"], _body(24))
         self.assertLessEqual(memory.estimate_messages(loaded), _BUDGET)
+
+    def test_agent_budget_applies_to_the_window(self):
+        """agent.json 的 context_budget 必须对 save_history 的滚窗生效。
+
+        QQ 侧压缩走 save_history -> trim_window，那条路拿不到 agent 循环手上
+        的 budget。不兜住的话 per-agent 预算是空头支票——09-29 实测群聊一直
+        按全局 CONTEXT_BUDGET 滚窗，agent.json 里配了也没用。
+        """
+        d = os.path.join(agents.AGENTS_DIR, "qq")
+        os.makedirs(d, exist_ok=True)
+        # 8000 在 agents.MIN_CONTEXT_BUDGET 之上（低于下限会被归一成 0 = 继承全局）
+        with open(os.path.join(d, "agent.json"), "w", encoding="utf-8") as f:
+            json.dump({"context_budget": 8000}, f)
+        agents.clear_cache()
+        with mock.patch.object(longterm, "digest_messages_async"), \
+             mock.patch.object(memory, "CONTEXT_BUDGET", 10 ** 6):
+            memory.save_history(_history(35), "qq", "group_9")
+        loaded = memory.load_history("qq", "group_9")
+        # 全局预算被抬到 1e6；还能压到 29 轮，只可能是读了 agent.json 的 8000
+        self.assertEqual([m["role"] for m in loaded].count("user"), 29)
+
+
+class ReserveTest(_ResetState, unittest.TestCase):
+    """reserve：**不在 history 里、但每轮都进 prompt** 的尾部开销（状态栏 +
+    群聊背景 / 长期记忆 / 表情包清单）。
+
+    它不计入 estimate_messages，不预留的话压缩后真实 prompt 会超预算一整条
+    尾巴——2026-09-29 实测群聊 prompt 37184 > 预算 30000，超出上游前缀缓存
+    容量后每轮都被驱逐（未命中单价是命中的 60 倍）。
+    """
+
+    def test_reserve_pushes_over_the_line(self):
+        h = _history(11)                      # 2987 < 3000，本来不压
+        with mock.patch.object(memory, "_DIGEST_BATCH_MIN", 1), \
+             mock.patch.object(longterm, "digest_messages_async") as dig:
+            out = memory.trim_window(h, "qq", "group_9", budget=_BUDGET,
+                                     reserve=100)
+        self.assertIsNot(out, h)
+        dig.assert_called_once()
+
+    def test_reserve_counts_toward_the_kept_window(self):
+        # 尾部占 500 → 只剩 2500 装历史，最近 9 轮（2430）刚好装下，第 10 轮滚出
+        with mock.patch.object(memory, "_DIGEST_BATCH_MIN", 1), \
+             mock.patch.object(longterm, "digest_messages_async"):
+            out = memory.trim_window(_history(35), "qq", "group_9",
+                                     budget=_BUDGET, reserve=500)
+        self.assertLessEqual(memory.estimate_messages(out), _BUDGET - 500)
+        self.assertEqual([m["role"] for m in out].count("user"), 9)
+
+    def test_reserve_ignored_when_not_needed(self):
+        h = _history(5)
+        self.assertIs(memory.trim_window(h, "qq", "group_9",
+                                         budget=_BUDGET, reserve=500), h)
+
+    def test_negative_reserve_clamped(self):
+        """传负数（调用方算错）不能把预算放大。"""
+        h = _history(11)
+        self.assertIs(memory.trim_window(h, "qq", "group_9",
+                                         budget=_BUDGET, reserve=-10 ** 6), h)
+
+    def test_save_history_forwards_reserve(self):
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(memory, "_agent_session_file",
+                                   return_value=os.path.join(d, "s.jsonl")), \
+                 mock.patch.object(memory, "trim_window", return_value=[]) as tw:
+                memory.save_history(_history(1), "qq", "group_9", reserve=777)
+        self.assertEqual(tw.call_args[1]["reserve"], 777)
 
 
 class GroupKeyTest(unittest.TestCase):

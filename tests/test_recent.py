@@ -21,6 +21,7 @@ from unittest import mock
 import app.agent as agent
 import app.agents as agents
 import app.comfy_status as comfy_status
+import app.memory as memory
 import app.qq_bot as qq_bot
 import app.recent as recent
 
@@ -390,6 +391,26 @@ class StatusMessageContextTest(unittest.TestCase):
         plain = agent._status_message([])["content"]
         self.assertEqual(agent._status_message([], extra_context="   ")["content"],
                          plain)
+
+    def test_status_bar_stays_last(self):
+        """状态栏必须压在最后。
+
+        同一次请求里 extra_context 是固定的（qq_bot 每轮只算一次），会变的
+        只有状态栏（条数 / 上一个工具）。它压在尾巴末端，前面那整块
+        extra_context 才能在 agent 循环的后续轮次里命中前缀缓存；一旦把群
+        背景挪到状态栏后面，每次都从尾巴开头开始重算。
+        """
+        c = agent._status_message([], extra_context="背景")["content"]
+        self.assertLess(c.index("背景"), c.index("<status_bar>"))
+
+    def test_tail_tokens_counts_the_whole_tail(self):
+        """给 memory.save_history 的 reserve 用：这条尾巴不在 history 里。"""
+        h = [{"role": "user", "content": "字" * 100}]
+        base = agent.tail_tokens(h)
+        self.assertGreater(base, 0)
+        self.assertEqual(base,
+                         memory.estimate_messages([agent._status_message(h)]))
+        self.assertGreater(agent.tail_tokens(h, "背景" * 100), base)
 
 
 if __name__ == "__main__":

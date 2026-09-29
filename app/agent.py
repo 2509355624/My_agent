@@ -331,6 +331,19 @@ def _status_message(history, extra_context=None):
     return {"role": "system", "content": content}
 
 
+def tail_tokens(history, extra_context=None):
+    """估算尾部那条状态栏（含 extra_context）占多少 token。
+
+    给 memory.save_history 的 reserve 用。这条消息每轮都拼进 prompt、每轮都
+    按未命中计费，却从不写回 history，所以本地估算（estimate_messages）看不见
+    它——不预留的话，压缩后真实 prompt 会比预算高出一整条尾巴。详见
+    memory.trim_window 的 reserve 参数。
+    """
+    from app.memory import estimate_messages
+
+    return estimate_messages([_status_message(history, extra_context)])
+
+
 # 用户手动中断后写进历史的一条说明。必须留——否则下一轮模型看到自己那条半截
 # 回复，会以为话说完了，容易顺着一个已经作废的前提继续往下讲。用 tool_result
 # 承载：它不是用户说的话，而是「这一轮被系统中止了」这个事实。

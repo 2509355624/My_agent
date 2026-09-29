@@ -42,7 +42,7 @@ except ImportError:                    # 非 Windows 平台退化为不做检查
 
 from app import (image_out, interject, logsetup, longterm, notify, qq_api,
                  qq_status, recent, stickers, usage)
-from app.agent import run_agent_stream
+from app.agent import run_agent_stream, tail_tokens
 from app.agent_prompt import build_stable_prompt
 from app.config import (
     BASE_DIR, QQ_AGENT_ID, QQ_BOT_NAME, QQ_BLACKLIST_USERS,
@@ -850,7 +850,11 @@ class SessionRunner:
         finally:
             qq_api.clear_context()
             try:
-                save_history(history, run_agent, self.session_key)
+                # reserve=尾部状态栏（含 extra_context）的估算：它不在 history
+                # 里、每轮都进 prompt，不预留的话压缩后真实 prompt 会超预算
+                # 一整条尾巴（实测群聊 ~2.5K token）。见 memory.trim_window。
+                save_history(history, run_agent, self.session_key,
+                             reserve=tail_tokens(history, extra_context))
             except Exception:
                 log.exception("收尾落盘失败 %s", self.session_key)
 

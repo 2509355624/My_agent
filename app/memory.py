@@ -58,7 +58,7 @@ def _atomic_replace(src, dst, attempts=5, delay=0.05):
             time.sleep(delay)
 
 
-def save_history(history, agent_id=None, session_key=None):
+def save_history(history, agent_id=None, session_key=None, reserve=0):
     """原子保存某个 agent 的会话到它的 JSONL 文件。
 
     先写同目录临时文件 -> flush + fsync -> os.replace 原子替换。
@@ -69,6 +69,8 @@ def save_history(history, agent_id=None, session_key=None):
     agent_id 决定写哪个 agent 的会话文件（不传用默认 agent）。
     session_key 用于「一个 agent 下挂多条互不相干的会话线」的场景（QQ 接入
     时每个私聊用户 / 每个群各一条），不传就是该 agent 的主会话。
+    reserve: 不在 history 里、但每轮都会进 prompt 的尾部开销（token），
+    转交 trim_window 预留。QQ 侧传 agent.tail_tokens(...)。
 
     落盘前先过一遍压缩（见 trim_window）：超出 token 预算的最老轮次在这里就
     摘走，于是下一轮 load_history 读回来的已经是裁剪后的历史。**只裁要写的
@@ -76,7 +78,8 @@ def save_history(history, agent_id=None, session_key=None):
     唯一的例外是非群会话：那条路走 trim_history，压缩不幂等，不原地收缩的话
     同轮的后续保存会把压好的历史原样冲回去（见 trim_window 的注释）。
     """
-    history = trim_window(history, agent_id=agent_id, session_key=session_key)
+    history = trim_window(history, agent_id=agent_id, session_key=session_key,
+                          reserve=reserve)
     path = _agent_session_file(agent_id, session_key)
     parent = os.path.dirname(path)
     if parent:
@@ -180,6 +183,16 @@ def estimate_tokens(text):
     return int(cjk * 0.6 + (len(s) - cjk) * 0.3)
 
 
+# 每条消息的角色/结构开销（token）。原来写 4——那是 OpenAI 文档里纯文本对话
+# 的口径。实测对不上：把 qq_bot.log 里 [turn] 行的真实 prompt token 与同一行
+# 打出的「条数/字数」做最小二乘（1972 个样本），固定开销之外每条消息还要
+# 20 上下——角色标记、JSON 结构、[[TOOL:...]] 块的分隔符都不在「字数」里，
+# 而 QQ 会话正是几十条工具结果堆起来的。低估的直接后果是「预算 30000」实际
+# 放行到 37000（2026-09-29 实测群聊 prompt，见 trim_window 的 reserve）。
+# 取 16 是保守侧：估大只是早压一点，估小会让预算形同虚设。
+_MSG_OVERHEAD = 16
+
+
 def estimate_messages(msgs):
     """粗估一段消息列表的 token 数（含每条的角色开销）。"""
     total = 0
@@ -194,7 +207,7 @@ def estimate_messages(msgs):
             for part in content:
                 if isinstance(part, dict):
                     total += estimate_tokens(part.get("text") or "")
-        total += 4
+        total += _MSG_OVERHEAD
     return total
 
 
@@ -405,8 +418,26 @@ def _group_id_from_key(session_key):
     return key[len("group_"):]
 
 
+def _agent_budget(agent_id):
+    """该 agent 的 token 预算：agent.json 的 context_budget 优先，0/读不到用全局。
+
+    放在这里而不是只放在 agent 循环里：QQ 侧的压缩走 save_history ->
+    trim_window，那条路拿不到 agent 循环手上的 budget。不在这里兜住的话，
+    per-agent 的 context_budget 对 QQ 就是一张空头支票——2026-09-29 实测：
+    agent.json 里配了也照样按全局 CONTEXT_BUDGET 滚窗，群聊于是长期停在
+    37000 上下的 prompt（超出上游前缀缓存容量，每轮被驱逐）。
+    """
+    if not agent_id:
+        return CONTEXT_BUDGET
+    try:
+        from app.agents import agent_config
+        return agent_config(agent_id).get("context_budget") or CONTEXT_BUDGET
+    except Exception:
+        return CONTEXT_BUDGET
+
+
 def trim_window(history, agent_id=None, session_key=None, max_turns=None,
-                budget=None):
+                budget=None, reserve=0):
     """按 **token 预算**压缩会话（2026-09-29 用户定：不再按轮数开窗）。
 
     原来按轮数（CONTEXT_MAX_TURNS=100 轮）开窗，实测群会话能攒到 8 万 token
@@ -425,6 +456,13 @@ def trim_window(history, agent_id=None, session_key=None, max_turns=None,
     一次后台调用失败就继续膨胀）。
 
     max_turns 保留只为兼容旧调用点（=0 仍表示关闭），不再参与判据。
+
+    reserve: **不在 history 里、但每轮都会进 prompt** 的尾部开销（token）。
+    QQ 侧就是那条状态栏消息——群聊背景 + 长期记忆 + 表情包清单 + 时间/条数，
+    实测群聊有 2.5K 上下。它每轮都按未命中计费，却完全不计入
+    estimate_messages（那条消息由 agent 运行时拼在末尾、从不写回 history），
+    所以不预留的话，压缩完的真实 prompt 会比预算高出这一截——2026-09-29 实测
+    群聊就是这样攒到 37184 token，超出上游前缀缓存的容量后每轮都被驱逐。
     """
     if max_turns is not None and max_turns <= 0:
         return history
@@ -434,8 +472,10 @@ def trim_window(history, agent_id=None, session_key=None, max_turns=None,
     if not other_msgs:
         return history
 
-    budget = budget or CONTEXT_BUDGET
-    est = estimate_messages(system_msgs) + estimate_messages(other_msgs)
+    budget = _agent_budget(agent_id) if budget is None else budget
+    reserve = max(0, reserve)
+    est = (estimate_messages(system_msgs) + estimate_messages(other_msgs)
+           + reserve)
     if est < budget:
         return history
 
@@ -445,7 +485,7 @@ def trim_window(history, agent_id=None, session_key=None, max_turns=None,
     if group_id and agent_id:
         # 从最新往回装，装到预算装不下为止；更老的滚进长期记忆。
         keep = 0
-        acc = estimate_messages(system_msgs)
+        acc = estimate_messages(system_msgs) + reserve
         for turn in reversed(turns):
             acc += estimate_messages(turn)
             if acc > budget:
