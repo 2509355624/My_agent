@@ -82,6 +82,9 @@ _TOOL_HINTS = [
     (("generate_image",),
      "- 生成图片时，先将中文描述扩展为详细的英文标签串再调用 generate_image"),
     (("generate_image",),
+     "- **说要画图就必须真的调 generate_image**：只在回复里写「画着呢 / 在画了 / "
+     "等着收图」而没有工具块，等于没画——群里永远等不到图，比直接说画不了还糟"),
+    (("generate_image",),
      "- 批量生成图片用 --- 分隔多个 prompt，只调用一次 generate_image"),
     (("generate_image",),
      "- generate_image 的 prompt 参数必须是英文"),

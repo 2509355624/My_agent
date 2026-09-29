@@ -153,6 +153,50 @@ def _strip_tool_blocks(text):
     return "".join(result_parts)
 
 
+# ─── 生图空头承诺守卫 ────────────────────────────────
+# 小模型（尤其 flash 档）常把「画个图」当成纯聊天：回一句「画着呢 等着收图」
+# 就交差，**根本没发 [[TOOL:generate_image]]**。群里于是永远等不到图——这比
+# 直接说「画不了」还糟，因为对方真的在等。
+#
+# 实测（2026-09-29 群 1103174141）：
+#   233：那画一个呗，  →  胡桃桃：画着呢 等着收图   （无工具调用、无图）
+#
+# 光在 prompt 里写规矩拦不住小模型（同 DISABLED_IMAGE_SKILLS 那条教训：
+# 「提示词里写了」≠「模型会遵守」），所以这里补一道**代码级**兜底。
+#
+# 判据刻意保守：只认「正在进行 / 已完成」的承诺词，且句子里出现「画不了 /
+# 不画」等明确拒收词时一律不算——那是老实回话，不能触发重来。
+_IMAGE_PROMISE_RE = re.compile(
+    r"画着呢|在画了|正在画|画上了|画起来了|重画中|马上画|这就画|"
+    r"开始画|我去画|帮你画|给你画|画好了|画完了|"
+    r"等着收图|等收图|图在路上了|图马上到|排队画"
+)
+_IMAGE_REFUSAL_RE = re.compile(
+    r"画不了|不画|画不出|没法画|不能画|画不动|别画|不给画|画啥"
+)
+
+_IMAGE_CLAIM_NUDGE = (
+    "系统：你刚才说要画图，但**这一轮没有真正调用 generate_image**，"
+    "所以那张图根本不存在，群里也收不到。现在二选一，别再空口承诺：\n"
+    "① 真要画 → 这一轮必须输出工具块，单独一行、一字不差：\n"
+    "[[TOOL:generate_image]]{\"prompt\": \"<英文标签串>\"}[[/TOOL]]\n"
+    "② 画不了（本群关了 / ComfyUI 掉线 / 对方要的内容不能画）→ 就照实说，"
+    "别再说「画着呢」「在画了」「等着收图」。"
+)
+
+
+def _looks_like_image_promise(text):
+    """这句正文像不像「我在画 / 画好了」的空头承诺。
+
+    带「画不了 / 不画」的句子一律不算——那是拒收，不是承诺。
+    """
+    if not text:
+        return False
+    if _IMAGE_REFUSAL_RE.search(text):
+        return False
+    return bool(_IMAGE_PROMISE_RE.search(text))
+
+
 def _history_for_llm(history):
     """
     将内部 history 转换为 LLM 可识别的格式：
@@ -437,6 +481,14 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
     aborted = False
     # 空回复重试计数：每次 run_agent_stream（一条用户消息）最多换模型重试一次。
     empty_retries = 0
+    # 生图空头承诺守卫的状态（见 _looks_like_image_promise 的注释）：
+    # image_tool_used 记录本轮有没有真调过 generate_image；image_nudged 保证
+    # 「退回重来」最多一次，不会无限拦。
+    image_tool_used = False
+    image_nudged = False
+    # 该 agent 有没有生图工具——没有就根本不该触发这道守卫（写作 agent 说
+    # 「画着呢」是另一回事，不归这里管）。
+    can_generate_image = agent_store.allows_tool(agent_id, "generate_image")
     # 上一轮 LLM 调用的真实用量，供这一轮判断该不该压缩。
     # 初值给空 dict 而不是 None：None 会让 memory 回退去读「当前线程最近一次」，
     # 而 QQ 场景下线程是跨会话复用的，读到的可能是别的群刚留下的数。空 dict
@@ -529,6 +581,22 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
             # 提取回复正文（去掉所有工具块及其参数）
             reply_text = _strip_tool_blocks(reply).strip()
 
+            # ─── 生图空头承诺守卫 ───────────────────────
+            # 说要画、但整轮都没调生图工具 → **这句话不发出去**，塞一条系统
+            # 提示让它重来一次；一次为限，第二次照发（不能无限拦）。
+            if (reply_text and not tool_calls and not image_tool_used
+                    and not image_nudged and can_generate_image
+                    and _looks_like_image_promise(reply_text)):
+                image_nudged = True
+                log.warning("[image-claim] 没调工具却声称在画图，退回重来：%r",
+                            reply_text[:60])
+                history.append({"role": "tool_result",
+                                "content": _IMAGE_CLAIM_NUDGE,
+                                "tool_name": "generate_image"})
+                yield {"type": "tool_result", "name": "generate_image",
+                       "result": _IMAGE_CLAIM_NUDGE}
+                continue
+
             if reply_text:
                 yield {"type": "assistant", "content": reply_text}
 
@@ -545,6 +613,8 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
                     break
                 name = tool_call["name"]
                 args = tool_call["args"]
+                if name == "generate_image":
+                    image_tool_used = True
                 yield {"type": "tool_call", "name": name, "args": args}
 
                 # 第二道白名单拦截：prompt 里不列出是「看不见」，这里是「调不动」。
