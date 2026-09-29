@@ -83,6 +83,53 @@ class TwoStageTest(unittest.TestCase):
                  if n.get("class_type") == "UNETLoader"]
         self.assertEqual(unets, ["miaomiaoRealskin_anima13.safetensors"])
 
+    def test_positive_prompt_is_a_template_not_a_fixed_character(self):
+        """**核心不变量（09-30 修）**：节点 4 必须是可代入的模板，不能是写死的角色。
+
+        踩过的坑：把用户在 ComfyUI 里调好的工作流搬进 skills 时，节点 4 里存的
+        是**那张图当时的完整提示词**（1166 字的银白双马尾角色 + 门口场景）。
+        `generate_image` 的机制是「把工作流串里的 `__MULTI_PROMPTS__` 换成模型
+        给的提示词」——那串字里**没有占位符**，于是模型传什么都被原样丢弃，
+        私聊里连着画了三四张都是同一个角色，用户问「1girl, orange cat ears」
+        出来的还是银白发夹，差点以为是模型不听话。
+
+        所以这条锁两件事：① 有占位符；② 正文里不含具体角色/场景词。
+        **只留画风前缀**（`@kibro` 是 lora 触发词、`anime illustration style`
+        是画风锚点，这两个不能丢）。
+        """
+        wf = _load("anima")
+        text = wf["4"]["inputs"]["text"]
+        self.assertIn("__MULTI_PROMPTS__", text)
+        self.assertTrue(text.startswith("@kibro, anime illustration style,"),
+                        "画风前缀丢了：%r" % text)
+        # 具体角色词一个都不许留——留了就是又写死了
+        for word in ("silver-white", "twin tails", "hairclip", "genkan",
+                     "stockings", "camisole", "pearl"):
+            self.assertNotIn(word, text, "节点 4 又写死了角色：%r" % word)
+        # 模板本身该很短，写死的角色串都上千字
+        self.assertLess(len(text), 120)
+
+    def test_negative_prompt_is_not_a_fixed_character(self):
+        """负向提示词是通用质量词，本来就不该含角色——顺带锁一下别被污染。"""
+        wf = _load("anima")
+        text = wf["8"]["inputs"]["text"]
+        self.assertIn("worst quality", text)
+        self.assertNotIn("__MULTI_PROMPTS__", text)
+
+    def test_seed_stays_a_placeholder(self):
+        """`__SEED__` 必须是占位符——写死成数字就等于每张图一模一样。
+
+        （我改节点 4 时就犯过：用 `json.loads(replace('__SEED__','0'))` 读进来
+        再 `json.dumps` 写回，占位符被永久变成了 0。所以改成字符串级替换，
+        并加这条锁。）
+        """
+        import os
+        p = os.path.join(SKILLS, "anima", "workflow.json")
+        with open(p, encoding="utf-8") as f:
+            raw = f.read()
+        self.assertEqual(raw.count("__SEED__"), 2,
+                         "两个 KSampler 的 seed 都该是 __SEED__ 占位符")
+
     def test_second_pass_refines_not_rebuilds(self):
         """第一段 denoise=1（从零建），第二段 denoise=0.25（精修，不是重画）。"""
         wf = _load("anima")
