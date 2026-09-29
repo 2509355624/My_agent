@@ -305,5 +305,39 @@ class AllowedTest(unittest.TestCase):
         self.assertTrue(ok)
 
 
+class TimeoutTest(unittest.TestCase):
+    """NAI 的 180 秒兜底。
+
+    2026-09-29 用户提：「nai 怎么没有 180 秒钟的超时呀」。原来写死 (30, 240)，
+    比 ComfyUI 渠道的 IMAGE_GEN_TIMEOUT(180) 还宽，于是 NAI 反而成了唯一没有
+    180 秒兜底的渠道。现在 read 直接取 IMAGE_GEN_TIMEOUT——改 .env 一处就同时
+    生效，两个渠道口径一致。
+    """
+
+    def test_read_timeout_follows_image_gen_timeout(self):
+        from app.config import IMAGE_GEN_TIMEOUT
+        self.assertEqual(nai.NAI_TIMEOUT[1], IMAGE_GEN_TIMEOUT)
+
+    def test_timeout_is_passed_to_the_request(self):
+        sess = GenerateTest._fake_session(self)
+        with mock.patch.object(nai, "requests") as req, \
+                mock.patch.object(nai, "NAI_PROXY", ""), \
+                mock.patch.object(nai, "NAI_API_KEY", "pst-test"):
+            req.Session = mock.Mock(return_value=sess)
+            nai.generate("a cat")
+        _, kwargs = sess.post.call_args
+        self.assertEqual(kwargs["timeout"], nai.NAI_TIMEOUT)
+
+    def test_img2img_uses_the_same_timeout(self):
+        sess = GenerateTest._fake_session(self)
+        with mock.patch.object(nai, "requests") as req, \
+                mock.patch.object(nai, "NAI_PROXY", ""), \
+                mock.patch.object(nai, "NAI_API_KEY", "pst-test"):
+            req.Session = mock.Mock(return_value=sess)
+            nai.generate_img2img("x", "QUJD")
+        _, kwargs = sess.post.call_args
+        self.assertEqual(kwargs["timeout"], nai.NAI_TIMEOUT)
+
+
 if __name__ == "__main__":
     unittest.main()

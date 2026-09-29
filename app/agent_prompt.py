@@ -380,7 +380,11 @@ def build_status_bar(message_count=0, last_tool="none", agent_id=None):
         "session_messages: " + str(message_count),
         "last_tool: " + last_tool,
         "skills_available: " + str(skill_count),
-        comfy_status.status_line(),
+        # 状态栏里只留 NAI 队列行——它读的是 agent 侧自己的队列，不是 ComfyUI
+        # 的状态。ComfyUI 的实时死活不再给模型看（2026-09-29 用户要求）：入队
+        # 回执由 generate_image 的返回值给，跑完的回执由 image_jobs.recent_line
+        # 给，模型不需要、也不该从状态栏去猜本机画图服务的状态。
+        comfy_status.nai_line(),
         "</status_bar>",
     ]
     return "\n".join(lines)

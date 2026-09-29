@@ -1535,5 +1535,67 @@ class NaiRoutingTest(unittest.TestCase):
         self.assertIn("nai", generate_image.tool["description"])
 
 
+class RecentOutcomesTest(_Base):
+    """生图回执：模型提交之后就再也收不到消息，全靠 recent_line 知道结果。
+
+    这是 2026-09-29 用户提的「AI 老是说要重新帮忙跑图」的正面修法——回执必须
+    真反映「出没出图」，也必须只报本会话的，否则模型会拿别群的图串台。
+    """
+
+    def _entry(self, names=("a.png",)):
+        return {"outputs": {"9": {"images": [{"filename": n} for n in names]}}}
+
+    def test_success_recorded_and_rendered(self):
+        with mock.patch.object(image_jobs, "wait_done",
+                               return_value=self._entry()):
+            self._enqueue(skill="anima")
+            image_jobs._drain()
+        line = image_jobs.recent_line("group", "9")
+        self.assertIn("1)已出图（anima）", line)
+        # 明确禁止重复提交：小模型在这点上尤其容易想歪
+        self.assertIn("别再问", line)
+
+    def test_failure_recorded_with_reason(self):
+        with mock.patch.object(image_jobs, "wait_done",
+                               side_effect=TimeoutError("超时")), \
+                mock.patch.object(image_jobs, "requests",
+                                  mock.Mock(post=lambda *a, **k: None)):
+            self._enqueue(skill="anima")
+            image_jobs._drain()
+        line = image_jobs.recent_line("group", "9")
+        self.assertIn("1)失败（anima：超时）", line)
+
+    def test_only_the_last_three_and_newest_is_last(self):
+        with mock.patch.object(image_jobs, "wait_done",
+                               return_value=self._entry()):
+            for _ in range(4):
+                self._enqueue(skill="anima")
+                image_jobs._drain()
+        items = image_jobs.recent_outcomes("group", "9", 3)
+        self.assertEqual(len(items), 3)
+        self.assertTrue(all(r["ok"] for r in items))
+        self.assertIn("第 3 条最新", image_jobs.recent_line("group", "9", 3))
+
+    def test_other_sessions_are_not_visible(self):
+        with mock.patch.object(image_jobs, "wait_done",
+                               return_value=self._entry()):
+            self._enqueue(("group", "9"), skill="anima")
+            image_jobs._drain()
+        self.assertNotEqual(image_jobs.recent_line("group", "9"), "")
+        self.assertEqual(image_jobs.recent_line("group", "8"), "")
+
+    def test_web_target_has_no_recall(self):
+        # 网页侧同步等结果，模型直接从工具返回值就知道成没成，不需要回执
+        with mock.patch.object(image_jobs, "wait_done",
+                               return_value=self._entry()):
+            self._enqueue((None, None), skill="anima")
+            image_jobs._drain()
+        self.assertEqual(image_jobs.recent_outcomes(None, None), [])
+        self.assertEqual(image_jobs.recent_line(None, None), "")
+
+    def test_empty_when_nothing_ran(self):
+        self.assertEqual(image_jobs.recent_line("group", "9"), "")
+
+
 if __name__ == "__main__":
     unittest.main()

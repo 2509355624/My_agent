@@ -18,8 +18,8 @@ import app.agents as agent_store
 import app.comfy_status as comfy_status
 import app.config as config
 
-# 状态栏带 ComfyUI 实时探测（build_status_bar → comfy_status.status_line），
-# 测试一律吃内存快照，不走真网络
+# comfy_status.snapshot 一律吃内存快照，任何路径都不走真网络
+# （状态栏已不再探测 ComfyUI，见 app/comfy_status 的模块注释）
 _comfy_patch = None
 
 

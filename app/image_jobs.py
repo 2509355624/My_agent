@@ -160,6 +160,11 @@ CLEAN_START_SKILLS = {"anima_2": 8.0}
 _lock = threading.Lock()
 _queue = collections.deque()      # 待跑的任务（不含正在跑的那个）
 _running = None                   # 正在跑的任务（只为可观测 / 算排队位次）
+
+# 最近跑完（含失败）的几张图，按会话可查——给模型回答「刚才那张画好没有」用。
+# 有界、进程内、重启即空：它只是一条**回执**，不是账本，不需要落盘。
+_RECENT_MAX = 30
+_recent = collections.deque(maxlen=_RECENT_MAX)
 _last_skill = None                # 上次提交给 ComfyUI 的渠道，用来判断要不要先 /free
 _last_restart_try = 0.0           # 上次**尝试**重启 ComfyUI 的时刻，防抖（成败都记）
 _per_session = {}                 # (target, target_id) -> 在途张数（含排队）
@@ -259,6 +264,52 @@ def nai_depth():
         running = 1 if _running is not None and _running.skill == "nai" else 0
         pending = sum(1 for j in _queue if j.skill == "nai")
         return running, pending
+
+
+def recent_outcomes(target, target_id, limit=3):
+    """本会话最近 limit 张图的结局（旧的在前，最新的在后）。
+
+    只认「本会话」的：别的群/私聊画了什么跟当前对话无关，混进来只会让模型
+    串台。target 为 None（网页侧）时没有会话概念，返回空。
+    """
+    if target is None:
+        return []
+    key = _key(target, target_id)
+    with _lock:
+        picked = [r for r in _recent
+                  if _key(r["target"], r["target_id"]) == key]
+    if limit and limit > 0:
+        picked = picked[-limit:]
+    return picked
+
+
+def recent_line(target, target_id, limit=3):
+    """把最近几张的结局渲染成一行给模型看；没有就返回空串。
+
+    为什么需要它（2026-09-29 用户提）：图由 worker 直接发回会话，模型在
+    enqueue 拿到「已经排上队了」之后就**再也收不到任何回执**——它不知道图
+    出没出，于是老说「我再帮你跑一张」。这行就是那条回执，跟着 extra_context
+    每轮现取现用（出流即弃，不写回 history）。
+
+    措辞直接给结论 + 明确禁止重复提交：让模型自己推理「大概画完了」不如直接
+    告诉它结论，小模型在这一点上尤其容易想歪。
+    """
+    items = recent_outcomes(target, target_id, limit)
+    if not items:
+        return ""
+    parts = []
+    for i, r in enumerate(items, 1):
+        skill = r["skill"] or "默认"
+        if r["ok"]:
+            parts.append("%d)已出图（%s）" % (i, skill))
+        else:
+            why = r["err"]
+            parts.append("%d)失败（%s%s）"
+                         % (i, skill, ("：" + why) if why else ""))
+    return ("[最近生图]（按提交顺序，第 %d 条最新）：%s\n"
+            "这些图都已经自动发到会话里了——别再问「要不要重画」，也别重新提交；"
+            "只有对方明确说没收到或者不满意时才重画。"
+            % (len(items), "；".join(parts)))
 
 
 def ahead_of(job):
@@ -775,6 +826,17 @@ def _finish(job):
             _heavy_done_at = time.time()
             log.info("重渠道 %s 跑完，%.0f 秒内不再接重活",
                      job.skill, QWEN_COOLDOWN)
+        # 记一条回执：模型在 enqueue 拿到「已经排上队了」之后就**再也收不到
+        # 任何消息**，全靠这条知道上一张到底出没出图（见 recent_line）。
+        # ok 的判据是「真出图了」且投递没出错——图没发回会话，对群友就等于没画。
+        _recent.append({
+            "target": job.target,
+            "target_id": job.target_id,
+            "skill": job.skill or "",
+            "ok": bool(job.skill_done) and job.error is None,
+            "err": (_reason(job.error) if job.error else ""),
+            "ts": time.time(),
+        })
     job.done.set()
 
 
@@ -801,6 +863,7 @@ def _reset():
     with _lock:
         _queue.clear()
         _per_session.clear()
+        _recent.clear()
         _running = None
         _last_skill = None
         _last_restart_try = 0.0

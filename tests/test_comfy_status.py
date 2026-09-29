@@ -1,7 +1,10 @@
-"""comfy_status：ComfyUI 状态探测与状态栏文案。
+"""comfy_status：ComfyUI 状态探测 + 状态栏的 NAI 队列行。
 
 测试不走真网络：patch `comfy_status._session`，让它返回脚本化的响应。
 缓存相关用例直接操作 `_CACHE` / `reset_cache()`。
+
+2026-09-29：状态栏不再报 ComfyUI 的死活（只留 NAI 行），所以这里没有
+`status_line()` 的用例了——`snapshot()` 现在只服务网页状态后台。
 """
 
 import unittest
@@ -78,86 +81,49 @@ class SnapshotProbeTest(unittest.TestCase):
             self.assertEqual(ses.get.call_count, 4)
 
 
-class StatusLineTest(unittest.TestCase):
-    def setUp(self):
-        comfy_status.reset_cache()
+class NaiLineTest(unittest.TestCase):
+    """状态栏那一行：只报 agent 侧自己的 NAI 队列，不碰 ComfyUI。"""
 
-    def tearDown(self):
-        comfy_status.reset_cache()
-
-    def test_online_idle(self):
-        with mock.patch.object(
-                comfy_status, "snapshot",
-                return_value={"online": True, "running": 0, "pending": 0}):
-            line = comfy_status.status_line()
-        self.assertIn("online", line)
-        self.assertIn("队列空闲", line)
-
-    def test_online_busy(self):
-        with mock.patch.object(
-                comfy_status, "snapshot",
-                return_value={"online": True, "running": 1, "pending": 2}):
-            line = comfy_status.status_line()
-        self.assertIn("正在画 1 张", line)
-        self.assertIn("排队 2 张", line)
-
-    def test_offline_forbids_promising_images(self):
-        with mock.patch.object(
-                comfy_status, "snapshot",
-                return_value={"online": False, "running": 0, "pending": 0}):
-            line = comfy_status.status_line()
-        self.assertIn("OFFLINE", line)
-        self.assertIn("画图请求不要答应", line)
-        self.assertIn("127.0.0.1:8188", line)
-        # 关键：只封 ComfyUI 渠道，不许顺手把 NAI 的单也杀了
-        self.assertIn("nai 渠道不受影响", line)
-
-    def test_nai_busy_appended(self):
-        with mock.patch.object(
-                comfy_status, "snapshot",
-                return_value={"online": True, "running": 1, "pending": 0}), \
-             mock.patch.object(image_jobs, "nai_depth",
-                               return_value=(1, 2)):
-            line = comfy_status.status_line()
-        self.assertIn("comfyui: online；正在画 1 张", line)
+    def test_nai_busy(self):
+        with mock.patch.object(image_jobs, "nai_depth", return_value=(1, 2)):
+            line = comfy_status.nai_line()
         self.assertIn("nai: 正在画 1 张、排队 2 张", line)
 
-    def test_nai_idle_line(self):
-        with mock.patch.object(
-                comfy_status, "snapshot",
-                return_value={"online": True, "running": 0, "pending": 0}), \
-             mock.patch.object(image_jobs, "nai_depth",
-                               return_value=(0, 0)):
-            line = comfy_status.status_line()
+    def test_nai_idle(self):
+        with mock.patch.object(image_jobs, "nai_depth", return_value=(0, 0)):
+            line = comfy_status.nai_line()
         self.assertIn("nai: 空闲", line)
 
-    def test_nai_line_present_even_when_comfy_offline(self):
-        with mock.patch.object(
-                comfy_status, "snapshot",
-                return_value={"online": False, "running": 0, "pending": 0}), \
-             mock.patch.object(image_jobs, "nai_depth",
-                               return_value=(0, 1)):
-            line = comfy_status.status_line()
-        self.assertIn("OFFLINE", line)
-        self.assertIn("nai: 正在画 0 张、排队 1 张", line)
+    def test_never_probes_comfyui(self):
+        # 关键回归：这一行现在是状态栏唯一的动态项，绝不能顺带触发 ComfyUI
+        # 探测（每轮一次 = 两次 HTTP）。探测只留给网页状态后台。
+        with mock.patch.object(image_jobs, "nai_depth", return_value=(0, 0)), \
+                mock.patch.object(comfy_status, "_session") as ses:
+            comfy_status.nai_line()
+        self.assertFalse(ses.get.called)
+
+
+class NoComfyuiLeakTest(unittest.TestCase):
+    """`status_line()` 已经删掉——它曾经把 ComfyUI 的死活直接喂给模型。"""
+
+    def test_status_line_is_gone(self):
+        self.assertFalse(hasattr(comfy_status, "status_line"))
 
 
 class StatusBarWiringTest(unittest.TestCase):
-    """接线测试：build_status_bar 必须真的把状态行拼进去（防重构悄悄断掉）。"""
+    """接线测试：build_status_bar 必须真的拼进 NAI 行、且不泄露 ComfyUI 状态。"""
 
-    def test_status_bar_contains_comfyui_line(self):
+    def test_status_bar_has_nai_but_no_comfyui(self):
         from app import agent_prompt
-        with mock.patch.object(
-                comfy_status, "snapshot",
-                return_value={"online": True, "running": 1, "pending": 2}):
+        with mock.patch.object(image_jobs, "nai_depth", return_value=(0, 0)):
             bar = agent_prompt.build_status_bar()
         self.assertIn("<status_bar>", bar)
-        self.assertIn("comfyui: online；正在画 1 张、排队 2 张", bar)
-        # NAI 行也必须在：机器人对「NAI 跑完没有」的判断全靠它
         self.assertIn("nai: 空闲", bar)
         # 行必须在标签内部，不能漏到 </status_bar> 之外
-        self.assertLess(bar.index("comfyui:"), bar.index("</status_bar>"))
         self.assertLess(bar.index("nai:"), bar.index("</status_bar>"))
+        # 2026-09-29 用户要求：模型不需要、也不该看到本机 ComfyUI 的状态
+        self.assertNotIn("comfyui", bar)
+        self.assertNotIn("OFFLINE", bar)
 
 
 if __name__ == "__main__":

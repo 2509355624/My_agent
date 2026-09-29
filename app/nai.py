@@ -39,7 +39,7 @@ try:
 except ImportError:          # 非 Windows 上压根没有这个模块
     winreg = None
 
-from app.config import NAI_API_KEY, NAI_PROXY
+from app.config import IMAGE_GEN_TIMEOUT, NAI_API_KEY, NAI_PROXY
 
 log = logging.getLogger("nai")
 
@@ -62,8 +62,14 @@ NAI_NEGATIVE = (
     "text, error, mutated, deformed"
 )
 
-# 生成超时（秒）：connect 30s + read 240s。V5 出一张通常几十秒，给足余量。
-NAI_TIMEOUT = (30, 240)
+# 生成超时（秒）：(connect, read)。read 是「两次 socket 读之间」的上限，不是整
+# 请求总时限——NAI 是「服务端憋着算完才吐字节」的用法，所以它实际就是「最多等
+# 多久还没出图」。
+#
+# 2026-09-29：原来写死 240，比 ComfyUI 渠道的 IMAGE_GEN_TIMEOUT(180) 还宽，
+# 于是 NAI 反而成了唯一没有 180 秒兜底的渠道。改成跟 IMAGE_GEN_TIMEOUT 同一个
+# 数：两个渠道口径一致，以后改 .env 一处就同时生效。
+NAI_TIMEOUT = (30, IMAGE_GEN_TIMEOUT)
 
 # 图生图默认重绘强度（NAI 的 strength = 加多少噪声：小 = 贴着原图，大 = 改得
 # 狠）。模型可用 denoise 参数覆盖，钳制在 [_I2I_STRENGTH_MIN, _I2I_STRENGTH_MAX]。

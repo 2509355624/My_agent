@@ -25,8 +25,8 @@ import app.memory as memory
 import app.qq_bot as qq_bot
 import app.recent as recent
 
-# 状态栏带 ComfyUI 实时探测（build_status_bar → comfy_status.status_line），
-# 测试一律吃内存快照，不走真网络
+# comfy_status.snapshot 一律吃内存快照，任何路径都不走真网络
+# （状态栏已不再探测 ComfyUI，见 app/comfy_status 的模块注释）
 _comfy_patch = None
 
 
@@ -365,6 +365,23 @@ class RunTurnContextTest(_TmpAgentsMixin, unittest.TestCase):
         self.assertIn("猫瘫在桌上打滚", seen["extra"])
         seen = self._run(target="private", target_id="1")
         self.assertIn("[表情包库]", seen["extra"])
+
+    def test_recent_image_line_injected(self):
+        # 生图回执：图由 worker 直接发回会话，模型在提交之后就收不到任何回音，
+        # 全靠这条知道「上一张到底出没出图」（2026-09-29 用户提：老是说要重画）。
+        with mock.patch.object(
+                qq_bot.image_jobs, "recent_line",
+                return_value="[最近生图]：1)已出图（anima）"):
+            seen = self._run()
+        self.assertIn("已出图（anima）", seen["extra"])
+        # 与群背景同规矩：走 extra_context，不写进正文/历史
+        self.assertNotIn("已出图", seen["text"])
+
+    def test_no_recent_image_line_when_nothing_ran(self):
+        with mock.patch.object(qq_bot.image_jobs, "recent_line",
+                               return_value=""):
+            seen = self._run()
+        self.assertIsNone(seen["extra"])
 
     def test_empty_context_passes_none(self):
         seen = self._run()

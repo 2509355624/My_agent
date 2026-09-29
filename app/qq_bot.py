@@ -40,8 +40,8 @@ try:
 except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
-from app import (image_out, interject, logsetup, longterm, notify, qq_api,
-                 qq_status, recent, stickers, usage)
+from app import (image_jobs, image_out, interject, logsetup, longterm, notify,
+                 qq_api, qq_status, recent, stickers, usage)
 from app.agent import run_agent_stream, tail_tokens
 from app.agent_prompt import build_stable_prompt
 from app.config import (
@@ -84,6 +84,10 @@ SESSION_EVENTS = ("user", "assistant", "tool_result", "aborted")
 # 网页端 Flask 同时开着。
 _IMAGE_PATH_RE = re.compile(r"/api/image/([^\s)\"'，。]+)")
 _CQ_RE = re.compile(r"\[CQ:([a-z_]+)((?:,[^\]]*)?)\]")
+
+# 每轮往 extra_context 里塞几条「最近生图」回执。3 条是用户点名要的粒度
+# （2026-09-29）——够它回答「刚才那张好了没」，又不至于把尾巴撑长。
+IMAGE_RECALL_COUNT = 3
 
 
 def _norm_reply(text):
@@ -803,6 +807,19 @@ class SessionRunner:
             if menu:
                 extra_context = (extra_context + "\n\n" + menu
                                  if extra_context else menu)
+
+        # 生图回执：图由 worker 直接发回会话，模型在提交那一刻之后就**收不到
+        # 任何回音**——不给它这行，它就会以为图还没跑、反复说「我再帮你画一张」
+        # （2026-09-29 用户提）。会话级事实，走同一条 extra_context 通道
+        # （每轮现取现用、出流即弃，不写回 history）。
+        try:
+            jobs_line = image_jobs.recent_line(self.target, self.target_id,
+                                               IMAGE_RECALL_COUNT)
+            if jobs_line:
+                extra_context = (extra_context + "\n\n" + jobs_line
+                                 if extra_context else jobs_line)
+        except Exception:
+            log.exception("生图回执注入失败 %s", self.session_key)
 
         # 工具层靠线程本地变量知道「此刻在为哪个会话服务」，
         # send_qq_message 不带参数时就发回这里。引用图一并带上：图生图只认

@@ -1,16 +1,21 @@
-"""ComfyUI 实时状态探测——给状态栏（prompt 尾部）用的唯一事实来源。
+"""ComfyUI 实时状态探测 + 状态栏的 NAI 队列行。
 
 背景（2026-09-28）：ComfyUI 凌晨死进程后，机器人没有实时状态来源，只能靠
-历史记忆回答「生图掉线了吗」，说错了也无从纠正。把探测结果放进每轮追加在
-**最尾部**的状态栏（app/agent_prompt.build_status_bar），状态变化只 miss
-尾部那一小段，历史前缀不受影响——与既有状态栏的 time: 字段同一代价。
+历史记忆回答「生图掉线了吗」，说错了也无从纠正。当时的做法是把探测结果放进
+每轮追加在**最尾部**的状态栏（app/agent_prompt.build_status_bar）。
+
+2026-09-29 改：**状态栏不再报 ComfyUI 的死活**。用户的要求是「模型只需要知道
+任务已经推送到排队队列」——入队回执由 generate_image 的返回值给，跑完的回执由
+app/image_jobs.recent_line 给，模型不需要、也不该从状态栏去猜本机画图服务在不在。
+所以 `snapshot()` 现在只服务网页状态后台（app/main.py 的 /api/status），状态栏
+那行只剩 `nai_line()`——它读的是 agent 侧自己的队列，不是 ComfyUI 的状态。
 
 设计要点：
-- 探测结果按 TTL 缓存在进程内：一轮对话可能多次拼状态栏（QQ + 网页、
-  多个会话同轮），20 秒内的重复拼接直接复用，不打爆 ComfyUI。
+- 探测结果按 TTL 缓存在进程内：状态后台 2 秒轮询一次，20 秒内的重复请求直接
+  复用，不打爆 ComfyUI。
 - 出网口一律 trust_env=False（本机 Clash 写注册表代理，不清干净会把
   127.0.0.1 也劫持进死代理，见 MEMORY.md）。所有异常吞掉并按「离线」
-  处理——状态栏宁可保守说掉线，也不能让探测本身炸掉一轮对话。
+  处理——状态后台宁可保守说掉线，也不能让探测本身炸掉请求。
 - 测试约定：patch `comfy_status.snapshot`（纯内存返回值），别让测试
   走真网络；需要测探测逻辑本身时 patch `_session`。
 """
@@ -25,7 +30,7 @@ from app.config import COMFYUI_URL
 _session = requests.Session()
 _session.trust_env = False
 
-_PROBE_TIMEOUT = 2          # 秒；状态栏是每轮必经路径，探测必须快
+_PROBE_TIMEOUT = 2          # 秒；状态后台在轮询，探测必须快
 _TTL = 20.0                 # 秒；缓存窗口
 
 # {"ts": monotonic, "online": bool|None, "running": int, "pending": int}
@@ -69,28 +74,13 @@ def reset_cache():
     _CACHE.update({"ts": 0.0, "online": None, "running": 0, "pending": 0})
 
 
-def status_line():
-    """给状态栏的那两行（ComfyUI 一行 + NAI 一行）。措辞直接给模型下指令，
-    别让它猜。"""
-    s = snapshot()
-    if s["online"]:
-        if s["running"] or s["pending"]:
-            comfy = ("comfyui: online；正在画 %d 张、排队 %d 张"
-                     % (s["running"], s["pending"]))
-        else:
-            comfy = "comfyui: online；画图队列空闲，可以接画图请求"
-    else:
-        # 只封 ComfyUI 渠道——nai 是云端调用，跟本机 ComfyUI 死活无关，
-        # 别让这句把 NAI 的单也误杀了。
-        comfy = ("comfyui: OFFLINE（%s 连不上）——ComfyUI 渠道的画图请求不要"
-                 "答应、工具会失败；对方要图就直说画图服务暂时离线、稍后再试"
-                 "（nai 渠道不受影响，仍可接单）" % COMFYUI_URL)
-    return comfy + "\n" + nai_line()
-
-
 def nai_line():
-    """NAI 的那一行。队列有活就报数字，空闲也要明说——机器人对「跑完没有」
-    的判断全靠这行，不说死它就会去猜。"""
+    """状态栏里 NAI 的那一行。
+
+    队列有活就报数字，空闲也要明说——机器人对「NAI 跑完没有」的判断全靠这行，
+    不说死它就会去猜。注意这是 **agent 侧自己的队列**（image_jobs），不是
+    ComfyUI 的状态：NAI 是云端调用，ComfyUI 那边根本看不见。
+    """
     from app import image_jobs     # 局部导入：image_jobs 较重，按需拉起
     running, pending = image_jobs.nai_depth()
     if running or pending:

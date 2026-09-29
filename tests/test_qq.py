@@ -45,8 +45,8 @@ def setUpModule():
     os.makedirs(os.path.join(root, "qq"), exist_ok=True)
     _patch = mock.patch.object(agents, "AGENTS_DIR", root)
     _patch.start()
-    # 状态栏带 ComfyUI 实时探测（build_status_bar → comfy_status.status_line），
-    # 测试一律吃内存快照，不走真网络
+    # comfy_status.snapshot 一律吃内存快照，任何路径都不走真网络
+    # （状态栏已不再探测 ComfyUI，见 app/comfy_status 的模块注释）
     _comfy_patch = mock.patch.object(
         comfy_status, "snapshot",
         return_value={"online": True, "running": 0, "pending": 0, "ts": 0.0})
