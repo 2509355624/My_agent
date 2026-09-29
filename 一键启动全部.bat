@@ -2,9 +2,9 @@
 cd /d "%~dp0"
 title LAUNCH-ALL
 
-set "WEB_BAT=D:\AI\My_agent\一键启动.bat"
+set "WEB_BAT=%~dp0一键启动.bat"
 set "NAPCAT_BAT=D:\AI\NapCat\启动NapCat.bat"
-set "BOT_BAT=D:\AI\My_agent\启动QQ机器人.bat"
+set "BOT_BAT=%~dp0启动QQ机器人.bat"
 
 set "FORCE_RESTART="
 if /i "%~1"=="force" set "FORCE_RESTART=1"
@@ -101,7 +101,7 @@ if defined FORCE_RESTART (
 )
 start "QQBOT-ADAPTER" cmd /k "%BOT_BAT%"
 ping -n 3 127.0.0.1 >nul
-start "扫码窗口" cmd /k "D:\AI\my_env\Scripts\python.exe" "D:\AI\My_agent\napcat_qr.py" --tries 12 --wait 120
+start "扫码窗口" cmd /k "D:\AI\confyui_env\Scripts\python.exe" "%~dp0napcat_qr.py" --tries 12 --wait 120
 echo       QQBOT-ADAPTER    QQ 适配层
 echo.
 
@@ -111,7 +111,7 @@ tasklist /FI "WINDOWTITLE eq WATCHDOG" 2>nul | findstr /i "cmd.exe" >nul
 if not errorlevel 1 (
     echo       WATCHDOG         已在运行，本次不动
 ) else (
-    start "WATCHDOG" cmd /k "D:\AI\My_agent\启动看门狗.bat"
+    start "WATCHDOG" cmd /k "%~dp0启动看门狗.bat"
     echo       WATCHDOG         心跳看门狗
 )
 echo.

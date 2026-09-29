@@ -1,7 +1,7 @@
 @echo off
 setlocal
 title QQ-SCAN-LOGIN
-set "PY=D:\AI\my_env\Scripts\python.exe"
+set "PY=D:\AI\confyui_env\Scripts\python.exe"
 rem ---------------------------------------------------------------------------
 rem Draws the QR code right in this window (that is how NapCat used to look,
 rem but its own console stays silent as long as ANY account on this machine

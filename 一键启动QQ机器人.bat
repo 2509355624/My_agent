@@ -3,7 +3,7 @@ cd /d "%~dp0"
 title QQ 机器人 - 一键启动
 
 set "NAPCAT_BAT=D:\AI\NapCat\启动NapCat.bat"
-set "BOT_BAT=D:\AI\My_agent\启动QQ机器人.bat"
+set "BOT_BAT=%~dp0启动QQ机器人.bat"
 
 echo ==================================================
 echo   QQ 机器人 一键启动
@@ -49,7 +49,7 @@ start "NapCat - QQ 协议端" cmd /k "%NAPCAT_BAT%"
 ping -n 4 127.0.0.1 >nul
 start "QQBOT-ADAPTER" cmd /k "%BOT_BAT%"
 ping -n 3 127.0.0.1 >nul
-start "扫码窗口" cmd /k "D:\AI\my_env\Scripts\python.exe" "D:\AI\My_agent\napcat_qr.py" --tries 12 --wait 120
+start "扫码窗口" cmd /k "D:\AI\confyui_env\Scripts\python.exe" "%~dp0napcat_qr.py" --tries 12 --wait 120
 echo       两个新窗口已启动
 echo.
 

@@ -15,14 +15,14 @@ echo   本窗口持续输出日志，请勿关闭。
 echo   NapCat 重启后本进程会自动重连，无需手动重启。
 echo.
 
-if not exist "D:\AI\my_env\Scripts\python.exe" (
+if not exist "D:\AI\confyui_env\Scripts\python.exe" (
     echo [ERROR] 找不到 Python:
-    echo         D:\AI\my_env\Scripts\python.exe
+    echo         D:\AI\confyui_env\Scripts\python.exe
     pause
     exit /b 1
 )
 
-D:\AI\my_env\Scripts\python.exe -m app.qq_bot
+D:\AI\confyui_env\Scripts\python.exe -m app.qq_bot
 set "RC=%ERRORLEVEL%"
 
 echo.

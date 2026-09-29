@@ -59,17 +59,18 @@ D:\AI\confyui_env\Scripts\pip install -r requirements.txt
 
 ## 第 5 步：启动
 
-方式 A（推荐，注意路径）：`一键启动QQ机器人.bat` 会依次拉起 NapCat 和机器人适配层。
-**但它硬编码了两条台式机路径**，记事本打开把这两行改成笔记本的实际路径：
+方式 A（推荐）：`一键启动QQ机器人.bat` 会依次拉起 NapCat 和机器人适配层。
+**仓库内的路径已改成 `%~dp0` 自定位**（脚本自己所在的目录），所以整个目录解压到哪儿都不用改。
+只剩两条**仓库外**的路径要按笔记本实际情况改：
 
 ```
-set "NAPCAT_BAT=D:\AI\NapCat\启动NapCat.bat"      → 改成笔记本 NapCat 的启动 bat
-set "BOT_BAT=D:\AI\agent_my_test\启动QQ机器人.bat" → 改成解压目录里的 启动QQ机器人.bat
+D:\AI\NapCat\启动NapCat.bat            → 笔记本 NapCat 的启动 bat
+D:\AI\confyui_env\Scripts\python.exe   → 笔记本的 venv python（第 2 步建的那个）
 ```
 
 方式 B（手动）：先启动 NapCat 并登录，再双击解压目录里的 `启动QQ机器人.bat`。
 
-**bat 文件是 GBK+中文编码，用记事本编辑没问题，但不要用会改行尾/编码的工具。**
+**⚠️ bat 的编码与行尾不能动**：`一键启动全部.bat`、`一键启动QQ机器人.bat`、`启动QQ机器人.bat`、`启动看门狗.bat` 是 **GBK + CRLF**；`一键启动.bat`、`扫码登录.bat`、`检查登录.bat` 是 **ASCII + LF**。记事本"另存为"会把 LF 变成 CRLF，要改就直接编辑原文件、别另存。
 
 ## 第 6 步：验证
 
