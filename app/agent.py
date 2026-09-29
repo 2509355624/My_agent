@@ -36,6 +36,34 @@ TOOL_TAG_RE = re.compile(r'(?:\[\[|<)\s*(?:(TOOL)\s*:\s*)?(\w+)\s*\]\]',
 _WRAPPER_OPEN_RE = re.compile(r'<\s*tool_calls?\s*>\s*$', re.IGNORECASE)
 _WRAPPER_CLOSE_RE = re.compile(r'^\s*<\s*/\s*tool_calls?\s*>', re.IGNORECASE)
 
+# ── Anthropic 式 XML 工具调用（2026-09-29 补）────────────────────
+# 走 Anthropic 兼容端点的模型（mimo / doubao）会把工具调用吐成**自己的原生
+# 格式**，而不是本项目的 `[[TOOL:name]]{json}[[/TOOL]]`：
+#
+#     <tool_call><function=generate_image><parameter=prompt>…</parameter>
+#     <parameter=skill>anima_2</parameter></function></tool_call>
+#
+# 通篇没有 `]]`，TOOL_TAG_RE 一个字符都匹配不上 —— 于是**工具根本没执行、
+# 整段 XML 连着提示词被当正文原样发进聊天**。
+#
+# 实测（09-29，233的粉丝群 1103174141 + 清酒瓶子的私聊 546587874）：日志里
+# 84 条「发送 -> …<tool_call>」，其中 83 条出自 mimo-v2.6-flash，而且**每一条
+# 所在的那一轮 `工具=-`**。用户连问三次「检查工具调用格式是否正确」，模型还给了
+# 一套错的解释（「格式没问题」「是被内容审核拦了」）——所以它不只是不出图，
+# 还在拿假原因骗人。
+#
+# 同时收两种写法：模型实际吐的 `<function=NAME>`，和 Anthropic 文档里的
+# `<invoke name="NAME">`；参数同理收 `<parameter=KEY>` 与 `<parameter name="KEY">`。
+# 值那里允许残留一个引号（实测出现过 `<parameter=nums">50</parameter>`）。
+_XML_FUNC_RE = re.compile(
+    r'<\s*(?:function\s*=\s*["\']?|invoke\s+name\s*=\s*["\'])\s*(\w+)',
+    re.IGNORECASE)
+_XML_FUNC_END_RE = re.compile(r'<\s*/\s*(?:function|invoke)\s*>', re.IGNORECASE)
+_XML_PARAM_RE = re.compile(
+    r'<\s*parameter\s*(?:=\s*["\']?|name\s*=\s*["\'])\s*(\w+)\s*["\']?\s*>'
+    r'(.*?)<\s*/\s*parameter\s*>',
+    re.DOTALL | re.IGNORECASE)
+
 
 def _known_tool_names():
     """已注册工具名集合（懒加载，避免循环导入）"""
@@ -73,6 +101,48 @@ def _iter_tool_tags(text):
             yield m, name
 
 
+def _iter_xml_tool_calls(text):
+    """产出 (start, end, name, args)：Anthropic 式 XML 工具调用的位置与内容。
+
+    start/end 是**整块**（含外层 <tool_call> 壳）在 text 里的下标，供剥块用；
+    name 同样过一遍注册表归一（大小写不一致时归一到注册表名，和 _iter_tool_tags
+    保持同一套规矩）。
+    """
+    low = (text or "").lower()
+    if "<function" not in low and "<invoke" not in low:
+        return
+    known = _known_tool_names()
+    lower_map = {n.lower(): n for n in known}
+    for m in _XML_FUNC_RE.finditer(text):
+        raw = m.group(1)
+        name = raw if raw in known else lower_map.get(raw.lower(), raw)
+        # 函数体：到 </function> / </invoke>，或下一个函数标签，或文末
+        body_end = len(text)
+        end_tag = _XML_FUNC_END_RE.search(text, m.end())
+        nxt = _XML_FUNC_RE.search(text, m.end())
+        if end_tag:
+            body_end = end_tag.start()
+        if nxt and nxt.start() < body_end:
+            body_end = nxt.start()
+        args = {}
+        for pm in _XML_PARAM_RE.finditer(text, m.end(), body_end):
+            args[pm.group(1)] = pm.group(2).strip()
+        # 整块范围：往前吃掉紧贴的 <tool_call> 壳，往后吃掉 </function></tool_call>
+        start = m.start()
+        open_m = _WRAPPER_OPEN_RE.search(text[:start])
+        if open_m:
+            start = open_m.start()
+        end = body_end
+        if end < len(text):
+            end_m = _XML_FUNC_END_RE.match(text, end)
+            if end_m:
+                end = end_m.end()
+        close_m = _WRAPPER_CLOSE_RE.match(text[end:])
+        if close_m:
+            end += close_m.end()
+        yield start, end, name, args
+
+
 def parse_tool_calls(text):
     """从 LLM 回复中解析所有工具调用（支持一次多个）
     兼容格式：
@@ -80,8 +150,9 @@ def parse_tool_calls(text):
     - [[TOOL:name]]{...}            （省略关闭标签，匹配到行尾/下一个工具）
     - [[TOOL: name]] / [[TOOL:NAME]] （容忍空白与大小写）
     - [[name]]                       （小模型常见的省略前缀写法，需命中注册表）
+    - <function=name><parameter=k>v</parameter></function>   （Anthropic 式 XML）
     """
-    result = []
+    found = []
     for m, name in _iter_tool_tags(text):
         rest = text[m.end():]
         # 尝试标准 JSON 参数（{...}）
@@ -108,12 +179,16 @@ def parse_tool_calls(text):
             args = json.loads(args_str)
         except json.JSONDecodeError:
             args = {"raw": args_str}
-        result.append({"name": name, "args": args})
-    return result
+        found.append((m.start(), {"name": name, "args": args}))
+    # 两族混在一段回复里时，按出现位置排，保持模型的原意顺序
+    for start, _end, name, args in _iter_xml_tool_calls(text):
+        found.append((start, {"name": name, "args": args}))
+    found.sort(key=lambda p: p[0])
+    return [call for _pos, call in found]
 
 
-def _strip_tool_blocks(text):
-    """去掉回复中的所有工具调用块（含参数），只保留正文
+def _strip_bracket_tool_blocks(text):
+    """去掉 [[TOOL:name]]{...}[[/TOOL]] 形式的工具块（含参数），只保留正文
     通过花括号配对精确界定每个 [[TOOL:name]] JSON 参数的结束位置，
     这样能正确处理工具块后紧跟正文的情况。
     与 parse_tool_calls 使用同一套识别规则（含简写 [[name]]）。"""
@@ -151,6 +226,31 @@ def _strip_tool_blocks(text):
     # 末尾正文
     result_parts.append(text[pos:])
     return "".join(result_parts)
+
+
+def _strip_xml_tool_blocks(text):
+    """剥掉 Anthropic 式 XML 工具块（含外层 <tool_call> 壳）。"""
+    spans = [(s, e) for s, e, _n, _a in _iter_xml_tool_calls(text)]
+    if not spans:
+        return text
+    parts = []
+    pos = 0
+    for start, end in spans:
+        if start < pos:            # 与前一块重叠，跳过
+            continue
+        parts.append(text[pos:start])
+        pos = end
+    parts.append(text[pos:])
+    return "".join(parts)
+
+
+def _strip_tool_blocks(text):
+    """去掉回复中的所有工具调用块（含参数），只保留正文。
+
+    两族依次过：`[[TOOL:...]]` 家族沿用原来那套精确界定，Anthropic 式 XML
+    家族（见 _iter_xml_tool_calls）另走一遍。分两遍而不是揉在一起，是为了
+    完全不改动已经在跑的方括号逻辑。"""
+    return _strip_xml_tool_blocks(_strip_bracket_tool_blocks(text))
 
 
 # ─── 生图空头承诺守卫 ────────────────────────────────
