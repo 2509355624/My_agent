@@ -207,6 +207,57 @@ class DescribeTest(unittest.TestCase):
                 vision.describe("data:image/jpeg;base64,AAA")
 
 
+# ─── 总超时闸门 ─────────────────────────────────────
+
+class VisionDeadlineTest(unittest.TestCase):
+    """识图/取图必须走「整次请求的总上限」，而不是「单个 socket 操作上限」。
+
+    这是 2026-09-29 那次「群聊一轮 298 秒」的根因：传数字超时的时候，建连能
+    烧满一次、读又能再烧满一次，一次识图吃掉 240 秒，把整条会话线堵死。
+    """
+
+    def _ok(self):
+        r = _resp(status=200)
+        r.json.return_value = {"choices": [{"message": {"content": "猫"}}]}
+        return r
+
+    def test_describe_passes_a_total_deadline(self):
+        with mock.patch("app.vision._session.post",
+                        return_value=self._ok()) as post:
+            vision.describe("data:image/jpeg;base64,AAA")
+        t = post.call_args.kwargs["timeout"]
+        self.assertEqual(t.total, vision.VISION_TIMEOUT)
+        # 建连不能吃掉整个总预算，否则「连不上」自己就能耗满总时长
+        self.assertLessEqual(t.connect_timeout, t.total)
+
+    def test_describe_honours_explicit_timeout(self):
+        with mock.patch("app.vision._session.post",
+                        return_value=self._ok()) as post:
+            vision.describe("data:image/jpeg;base64,AAA", timeout=7)
+        self.assertEqual(post.call_args.kwargs["timeout"].total, 7)
+
+    def test_fetch_image_passes_a_total_deadline(self):
+        with mock.patch("app.vision._session.get",
+                        return_value=_resp(b"\xff\xd8\xffabc")) as get:
+            vision.fetch_image("http://x/a.jpg")
+        self.assertEqual(get.call_args.kwargs["timeout"].total,
+                         config.QQ_IMAGE_TIMEOUT)
+
+    def test_connect_never_exceeds_total(self):
+        """total 比 connect 还小时，不能构造出 connect > total 的自相矛盾配置。"""
+        t = vision._deadline(3)
+        self.assertEqual(t.total, 3)
+        self.assertLessEqual(t.connect_timeout, 3)
+
+    def test_timeout_failure_carries_elapsed(self):
+        """卡住之后要能看出「卡了多久」——异常里带耗时，会一路传到 agent 的告警。"""
+        with mock.patch("app.vision._session.post",
+                        side_effect=OSError("Read timed out")):
+            with self.assertRaises(RuntimeError) as ctx:
+                vision.describe("data:image/jpeg;base64,AAA")
+        self.assertIn("耗时", str(ctx.exception))
+
+
 # ─── 错误提示文案 ───────────────────────────────────
 
 class ErrorReplyTest(unittest.TestCase):

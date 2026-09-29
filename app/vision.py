@@ -13,8 +13,13 @@
 import base64
 import io
 import logging
+import time
 
 import requests
+# 直接引 urllib3 的 Timeout：requests 的 timeout 参数写数字时只是「单个 socket
+# 操作」的上限，要「整次请求的总上限」只能用这个对象（requests 会原样透传，
+# 见 requests/adapters.py 的 HTTPAdapter.send）。
+from urllib3.util import Timeout as _UrllibTimeout
 
 from app.config import (PROVIDERS, VISION_MAX_EDGE, VISION_MODEL,
                         VISION_PROVIDER, VISION_TIMEOUT)
@@ -27,6 +32,27 @@ log = logging.getLogger("vision")
 # 与 qq_api / comfy_src / image_out / model_catalog 同款。
 _session = requests.Session()
 _session.trust_env = False
+
+# ─── 总超时闸门 ──────────────────────────────────────
+# requests 的 timeout 传数字时，那是**单个 socket 操作**的上限，不是整次请求的
+# 上限：建连可以烧满一次，读又能再烧满一次。实测最坏一次识图吃掉 240 秒
+# （120 建连 + 120 读），把整条会话线堵死——2026-09-29 群聊一轮 298 秒就是这么
+# 来的（240 秒卡在识图，后面还有几十秒在等对话模型）。
+# urllib3 的 Timeout(total=...) 才是真正的总闸门：读的配额 = total - 已耗时，
+# 整次调用封顶在 total 之内（urllib3/connectionpool.py 里 read_timeout 就是
+# 这么算出来再 settimeout 到 socket 上的）。
+_CONNECT_TIMEOUT = 10
+
+
+def _deadline(total, connect=_CONNECT_TIMEOUT):
+    """把「整次请求的总时长上限」包成 requests 认识、urllib3 会真正执行的超时。
+
+    建连单独给短值：连不上就快点失败，别把总预算耗在建连上。total 比 connect
+    还小时取 total，免得构造出「连接超时 > 总超时」这种自相矛盾的配置。
+    """
+    total = float(total)
+    return _UrllibTimeout(total=total, connect=min(connect, total), read=total)
+
 
 # 提示词：描述画面 + 原样提取文字。实测输出约 340 token，信息密度够用。
 # 「原样」和「不要翻译」两句不能省——少了它们，模型会顺手把报错截图里的
@@ -163,7 +189,7 @@ def fetch_image(url, timeout=None, max_bytes=None):
 
     limit = QQ_IMAGE_MAX_BYTES if max_bytes is None else max_bytes
     try:
-        resp = _session.get(url, timeout=timeout or QQ_IMAGE_TIMEOUT)
+        resp = _session.get(url, timeout=_deadline(timeout or QQ_IMAGE_TIMEOUT))
     except Exception as exc:
         raise RuntimeError("图片下载失败：%s" % exc)
     if resp.status_code >= 400:
@@ -213,11 +239,13 @@ def describe(data_url, timeout=None, prompt=None):
     # 模型在拖时间」时会漏掉这一大块。打同一个前缀，`grep '\[llm\]'` 就能捞全。
     log.info("[llm] %s / %s vision", pid, model)
 
+    started = time.monotonic()
     try:
         resp = _session.post(url, json=payload, headers=headers,
-                             timeout=timeout or VISION_TIMEOUT)
+                             timeout=_deadline(timeout or VISION_TIMEOUT))
     except Exception as exc:
-        raise RuntimeError("识图请求失败：%s" % exc)
+        raise RuntimeError("识图请求失败（耗时 %.1fs）：%s"
+                           % (time.monotonic() - started, exc))
 
     if resp.status_code >= 400:
         raise RuntimeError("识图失败 HTTP %d：%s"
@@ -248,6 +276,15 @@ def describe(data_url, timeout=None, prompt=None):
         pass
 
     try:
-        return (data["choices"][0]["message"]["content"] or "").strip()
+        text = (data["choices"][0]["message"]["content"] or "").strip()
     except Exception as exc:
-        raise RuntimeError("识图响应无法解析：%s" % exc)
+        raise RuntimeError("识图响应无法解析（耗时 %.1fs）：%s"
+                           % (time.monotonic() - started, exc))
+
+    # 完成日志：从前只有开始那一条，一次识图卡住时日志上只剩个孤零零的起点，
+    # 分不清是「卡在识图」还是「卡在后面的对话」（2026-09-29 排查就吃了这个亏：
+    # 群聊那轮 298 秒，日志里只有一条 16:49:02 的识图起点，之后全静音）。
+    # 故意不带 `[llm]` 前缀——那个前缀的语义是「一行 = 一次模型调用」，
+    # 补一行完成日志不该让它变成两行。
+    log.info("识图完成 %.1fs（%d 字）", time.monotonic() - started, len(text))
+    return text

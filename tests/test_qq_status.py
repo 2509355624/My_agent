@@ -93,6 +93,35 @@ class QqStatusTest(unittest.TestCase):
         self.assertEqual(data["sessions"][0]["state"], "waiting_slot")
         self.assertEqual(data["sessions"][0]["state_label"], "排队等并发槽")
 
+    def test_replace_retries_a_sharing_violation(self):
+        """Flask 读快照的那一瞬间，os.replace 会吃 WinError 5。
+
+        实测两天撞了 84 次。对方的句柄只活到 json.load 读完，退让几毫秒重试
+        就该过去——重试不该让整次写盘失败（那会让后台显示「无心跳」）。
+        """
+        real = os.replace
+        attempts = []
+
+        def flaky(src, dst):
+            if dst == self.path:
+                attempts.append(1)
+                if len(attempts) == 1:
+                    raise PermissionError(5, "拒绝访问")
+            return real(src, dst)
+
+        with mock.patch.object(qq_status.os, "replace", flaky):
+            self.assertTrue(qq_status.write_snapshot(self._bot({}), self.path))
+        self.assertEqual(len(attempts), 2)      # 第一次撞上，第二次过
+        data, stale = qq_status.read(self.path)
+        self.assertFalse(stale)
+        self.assertEqual(data["sessions"], [])
+
+    def test_write_reports_failure_when_still_locked(self):
+        """重试完还锁着就老实返回 False（调用方只记日志，不拖垮 bot）。"""
+        with mock.patch.object(qq_status.os, "replace",
+                               side_effect=PermissionError(5, "拒绝访问")):
+            self.assertFalse(qq_status.write_snapshot(self._bot({}), self.path))
+
     def test_read_missing_file_is_stale(self):
         data, stale = qq_status.read(os.path.join(self.tmp, "nope.json"))
         self.assertIsNone(data)

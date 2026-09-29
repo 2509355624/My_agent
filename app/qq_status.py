@@ -134,6 +134,29 @@ def snapshot(bot=None):
     }
 
 
+# os.replace 在 Windows 上会被「读者正好开着文件」挡回来。Flask 每 2 秒
+# open() 读一次快照（app/main.py 的 /api/status 走 qq_status.read），而 Python
+# 的 open 不带 FILE_SHARE_DELETE——撞上那个微秒窗口，MoveFileEx 就返回
+# 「拒绝访问」（2026-09-29 实测两天撞了 84 次，全是 WinError 5）。
+# 对方的句柄只活到 json.load 读完，所以退让几毫秒重试就够，不必改写入策略
+# （改成非原子写反而会让读者看到半截 JSON，那个代价更大）。
+_REPLACE_ATTEMPTS = 4
+_REPLACE_DELAY = 0.01
+
+
+def _replace_with_retry(tmp, path, attempts=_REPLACE_ATTEMPTS,
+                        delay=_REPLACE_DELAY):
+    """重试几次 os.replace；仍然失败就把最后一次的异常抛给调用方去记日志。"""
+    for i in range(attempts):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(delay)
+
+
 def write_snapshot(bot=None, path=STATE_PATH):
     """原子写一份快照。失败只记日志——状态后台不是主业，不能拖垮 bot。"""
     try:
@@ -145,7 +168,7 @@ def write_snapshot(bot=None, path=STATE_PATH):
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
-        os.replace(tmp, path)
+        _replace_with_retry(tmp, path)
         return True
     except Exception as exc:
         log.warning("写状态快照失败：%s", exc)
