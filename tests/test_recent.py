@@ -21,6 +21,7 @@ from unittest import mock
 import app.agent as agent
 import app.agents as agents
 import app.comfy_status as comfy_status
+import app.longterm as longterm
 import app.memory as memory
 import app.qq_bot as qq_bot
 import app.recent as recent
@@ -346,9 +347,7 @@ class RunTurnContextTest(_TmpAgentsMixin, unittest.TestCase):
         seen = self._run(target="private", target_id="1")
         self.assertIsNone(seen["extra"])
 
-    def test_sticker_menu_injected_for_group_and_private(self):
-        # 表情包清单挂同一条 extra_context 通道：群聊跟在背景后面，
-        # 私聊单独成段（库全 agent 共享，私聊也甩得出来）
+    def _write_sticker(self):
         sdir = os.path.join(self.root, "qq", "stickers")
         os.makedirs(sdir, exist_ok=True)
         with open(os.path.join(sdir, "index.jsonl"), "w",
@@ -358,13 +357,38 @@ class RunTurnContextTest(_TmpAgentsMixin, unittest.TestCase):
                                ensure_ascii=False) + "\n")
         with open(os.path.join(sdir, "a.png"), "wb") as g:
             g.write(b"x")
+
+    def test_sticker_menu_lives_in_stable_head_not_tail(self):
+        # 表情包清单 2026-09-29 从 extra_context 搬进了系统头（前缀缓存）。
+        # 它的内容在会话内不变，留在每轮都变的尾巴里 = 每轮全价重付。
+        self._write_sticker()
+        # 系统头里有它——群聊、私聊都有（库是全 agent 共享的）
+        for key in ("group_9", "private_1"):
+            blocks = qq_bot._stable_blocks(key)
+            self.assertIn("[表情包库]", blocks, key)
+            self.assertIn("猫瘫在桌上打滚", blocks, key)
+        # 尾巴里不再有它：extra_context 只剩真的每轮在变的东西
         recent.remember("qq", "9", "李四", "刚才在聊吃饭")
         seen = self._run()
         self.assertIn("刚才在聊吃饭", seen["extra"])
-        self.assertIn("[表情包库]", seen["extra"])
-        self.assertIn("猫瘫在桌上打滚", seen["extra"])
-        seen = self._run(target="private", target_id="1")
-        self.assertIn("[表情包库]", seen["extra"])
+        self.assertNotIn("[表情包库]", seen["extra"])
+
+    def test_longterm_memory_lives_in_stable_head_for_groups_only(self):
+        # 长期记忆同样搬进了系统头；私聊不注入（那是群里的记忆）
+        longterm._append("qq", "9", {"s": "上次聊到在改识图超时"})
+        self.assertIn("上次聊到在改识图超时", qq_bot._stable_blocks("group_9"))
+        self.assertNotIn("上次聊到在改识图超时",
+                         qq_bot._stable_blocks("private_1"))
+
+    def test_stable_blocks_are_byte_stable(self):
+        # 系统头每次重算必须逐字节一样——不一样的话头会每轮重写，
+        # 反而把整段前缀缓存打没（这是搬到头里的前提条件）。
+        self._write_sticker()
+        longterm._append("qq", "9", {"s": "上次聊到在改识图超时"})
+        first = qq_bot._stable_blocks("group_9")
+        self.assertTrue(first)
+        self.assertEqual([qq_bot._stable_blocks("group_9") for _ in range(3)],
+                         [first] * 3)
 
     def test_recent_image_line_injected(self):
         # 生图回执：图由 worker 直接发回会话，模型在提交之后就收不到任何回音，

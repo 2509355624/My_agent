@@ -516,6 +516,14 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
                 _attach_images(llm_history, images)
             # 状态栏追加在尾部，动态变化不毒化前缀缓存
             llm_history.append(_status_message(history, extra_context))
+            # 把这条尾巴的大小记到当前线程，供 llm._record_usage 在 [cache]
+            # 行里打出来（`尾巴≈N`）。它是每轮必 miss 的部分，等于命中率的
+            # 天花板——不记下来，「这轮为什么这么贵」在日志里看不出来。
+            try:
+                from app import usage as _usage_stats
+                _usage_stats.set_tail(tail_tokens(history, extra_context))
+            except Exception:        # 纯展示，绝不能影响主链路
+                pass
             # 流式调用：
             # - 思考内容(reasoning)即时下发给前端展示。**只出不进**——绝不写回
             #   history，模型侧要求思考内容不参与后续上下文，写回去还会毒化前缀缓存。

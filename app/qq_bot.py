@@ -156,8 +156,34 @@ def _session_env_note(session_key):
             % who)
 
 
+def _stable_blocks(session_key):
+    """会钉进系统头的「稳定参考块」：表情包清单 + 长期记忆（群聊才有）。
+
+    这两块的内容在会话内基本不变（表情包库存已满、不再收藏；长期记忆一天
+    也就写几次），所以放进系统头 = 历史之前 = 前缀缓存里，只付一次钱。
+    它们原先挂在 extra_context（消息数组末尾、每轮都变）里，等于每轮全价
+    重付——2026-09-29 实测这两块占尾巴 ~1160 tokens。
+
+    ⚠️ 必须逐字节稳定：每次调用输出不一样的话，系统头会每轮重写，反而把
+    整段前缀缓存打没。改动前先确认确定性（catalog 按索引行号、记忆按时间序）。
+    """
+    parts = []
+    menu = stickers.catalog(QQ_AGENT_ID)
+    if menu:
+        parts.append(menu)
+    if session_key.startswith("group_"):
+        mem = longterm.format_memories(QQ_AGENT_ID,
+                                       session_key.split("_", 1)[1],
+                                       QQ_MEMORY_INJECT_LIMIT,
+                                       QQ_MEMORY_INJECT_MAX_CHARS)
+        if mem:
+            parts.append(mem)
+    return "\n\n".join(parts)
+
+
 def _session_head(session_key, aid):
-    """这条会话线应有的 system 头 = 该 agent 稳定层 + 会话附加词 + 环境说明。
+    """这条会话线应有的 system 头 = 该 agent 稳定层 + 会话附加词 + 环境说明
+    + 稳定参考块（表情包清单 / 长期记忆）。
 
     返回 (head, 实际生效的 agent_id)。borrow 的 agent 构建失败时回落
     QQ 默认稳定层。agent_prompt.sync_session_system 不感知会话附加词，
@@ -175,6 +201,13 @@ def _session_head(session_key, aid):
     # 环境说明是会话级稳定事实，直接钉在系统头里，模型从第一条消息就知道
     # 自己在私聊还是群聊、对面是谁——而不是永远按群聊人设演。
     stable = stable + "\n\n" + _session_env_note(session_key)
+    # 稳定参考块同样钉在系统头里：内容与原先一字不差，只是从「每轮必 miss
+    # 的尾巴」挪到了「历史之前的前缀缓存」。借用别的 agent 的会话线不注入
+    # ——接管者没有这套表情包和记忆。
+    if aid == QQ_AGENT_ID:
+        blocks = _stable_blocks(session_key)
+        if blocks:
+            stable = stable + "\n\n" + blocks
     return stable, aid
 
 
@@ -789,24 +822,9 @@ class SessionRunner:
             extra_context = recent.format_recent(
                 QQ_AGENT_ID, self.target_id,
                 QQ_CONTEXT_MESSAGES, QQ_CONTEXT_MAX_CHARS)
-        if run_agent == QQ_AGENT_ID and self.target == "group":
-            # 长期记忆：最近几条「以前聊过什么」的摘要跟在短背景后面。
-            # 走同一条 extra_context 通道——不写回 history，出流即弃。
-            # 借用会话不注入：那是小小怪的记忆，不是接管者的。
-            mem = longterm.format_memories(
-                QQ_AGENT_ID, self.target_id,
-                QQ_MEMORY_INJECT_LIMIT, QQ_MEMORY_INJECT_MAX_CHARS)
-            if mem:
-                extra_context = (extra_context + "\n\n" + mem
-                                 if extra_context else mem)
-        # 表情包清单：把整库目录亮给模型，看图挑编号自己发。挂在同一条
-        # extra_context 通道，出流即弃。私聊也注入——库是全 agent 共享的，
-        # 私聊里照样可以甩群里收的表情。借用会话不注入：接管者没有这套。
-        if run_agent == QQ_AGENT_ID:
-            menu = stickers.catalog(QQ_AGENT_ID)
-            if menu:
-                extra_context = (extra_context + "\n\n" + menu
-                                 if extra_context else menu)
+        # 长期记忆 / 表情包清单原先注入在这里，2026-09-29 搬到了系统头
+        # （见 _stable_blocks）——内容一字不变，但从「每轮必 miss 的尾巴」
+        # 挪进了前缀缓存，等于从每轮全价重付变成只付一次。别再挪回来。
 
         # 生图回执：图由 worker 直接发回会话，模型在提交那一刻之后就**收不到
         # 任何回音**——不给它这行，它就会以为图还没跑、反复说「我再帮你画一张」

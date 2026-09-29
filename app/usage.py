@@ -61,6 +61,20 @@ def current_tag():
     return getattr(_local, "tag", None) or "other"
 
 
+def set_tail(n):
+    """记下本轮「尾巴」的估算 token 数（状态栏 + extra_context）。
+
+    尾巴挂在消息数组末尾、每轮都变，所以每轮必 miss——它的大小直接决定
+    命中率天花板（≈ 1 − 尾巴/prompt）。只用于日志展示，不参与计费聚合。
+    """
+    _local.tail = int(n or 0)
+
+
+def current_tail():
+    """当前线程记下的尾巴 token 数；没设过是 0。"""
+    return int(getattr(_local, "tail", 0) or 0)
+
+
 class scope:
     """上下文管理器：把当前线程的用量归属设为 tag（嵌套时内层生效）。"""
 

@@ -175,8 +175,23 @@ def _record_usage(usage, elapsed=None, provider="", model=""):
     u["hit_rate"] = rate
 
     tail = f"  {elapsed:.1f}s" if elapsed is not None else ""
-    log.info("[cache] 命中 %d / %d tokens = %.1f%% (未命中 %d)%s",
-             hit, total, rate * 100, miss, tail)
+    # 两个标记，用来解释「这一轮为什么这么贵」：
+    #   尾巴≈N  —— 状态栏 + extra_context 挂在消息数组末尾，每轮必 miss，
+    #              它就是命中率的天花板（命中率 ≈ 1 − 尾巴/prompt）。
+    #   ⚠冷调用 —— 命中 <50%，多半是压缩重写了历史或被服务端驱逐，前缀整个作废。
+    # 没有这两项时，日志里只能看到一个孤零零的百分比，看不出钱花在哪。
+    mark = ""
+    try:
+        from app import usage as usage_stats
+        _n = usage_stats.current_tail()
+        if _n:
+            mark += "  尾巴≈%d" % _n
+    except Exception:                # 标记失败不能影响主链路
+        pass
+    if rate < 0.5:
+        mark += "  ⚠冷调用"
+    log.info("[cache] 命中 %d / %d tokens = %.1f%% (未命中 %d)%s%s",
+             hit, total, rate * 100, miss, tail, mark)
 
     try:
         from app import usage as usage_stats
