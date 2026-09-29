@@ -9,6 +9,8 @@ mtime 一律显式钉死（不用 time.time()），因为 Windows 上连续两�
 
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -125,7 +127,7 @@ class WatcherTest(unittest.TestCase):
         self.addCleanup(p.stop)
         notify.note_offline_reason("", "")      # 清掉上个用例留下的原因
 
-    def _watcher(self, cooldown=notify._COOLDOWN_SECONDS):
+    def _watcher(self, cooldown=notify._DEBOUNCE_SECONDS):
         return notify._Watcher(self.qr.path, cooldown=cooldown)
 
     def test_startup_ignores_stale_file(self):
@@ -168,6 +170,24 @@ class WatcherTest(unittest.TestCase):
         self.assertEqual(len(self.sent), 1)
         self.qr.touch(b"png-4", at=base + 30)     # 过了冷却，照常推
         self.assertTrue(w.tick(now=2000))
+        self.assertEqual(len(self.sent), 2)
+
+    def test_debounce_shorter_than_qrcode_lifetime(self):
+        """去抖必须短于二维码有效期（NapCat 约 180s 换一张）。
+
+        原来这里是 300s：旧码推完之后码就过期了，换的新码正好落在旧冷却窗口里
+        被吃掉，用户手里永远是一张过期码（2026-09-29「扫了没反应」）。
+        """
+        self.assertLess(notify._DEBOUNCE_SECONDS, 180)
+
+    def test_new_code_after_expiry_is_pushed(self):
+        """按真实时序走一遍：推第一张 → 180s 后码过期换新 → 新码必须推出去。"""
+        w = self._watcher()
+        base = w.last_mtime
+        self.qr.touch(b"png-2", at=base + 5)
+        self.assertTrue(w.tick(now=1000))
+        self.qr.touch(b"png-3", at=base + 185)     # 旧码过期，NapCat 换新
+        self.assertTrue(w.tick(now=1185))
         self.assertEqual(len(self.sent), 2)
 
     def test_failed_push_does_not_start_cooldown(self):
@@ -274,9 +294,16 @@ class RestartHandoffTest(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
-    def _flag_on(self, age=0.0):
+    def _flag_on(self, age=0.0, pid=None):
+        """铺一个重启标记；pid 给定就写成「时刻 pid」的新格式。
+
+        pid=None 写出不带 pid 的老格式 —— 判断不了发起者时按「还活着」处理。
+        """
         with open(self.flag, "w", encoding="utf-8") as f:
-            f.write("x")
+            if pid is None:
+                f.write("x")
+            else:
+                f.write("%.3f %d" % (time.time(), pid))
         if age:
             os.utime(self.flag, (time.time() - age, time.time() - age))
 
@@ -291,6 +318,46 @@ class RestartHandoffTest(unittest.TestCase):
         """看门狗自己挂了、标记留在盘上 → 不能把通知通道永久堵死。"""
         self._flag_on(age=notify._RESTART_FLAG_TTL + 10)
         self.assertFalse(notify.restarting())
+
+    def test_orphan_flag_yields_to_watcher(self):
+        """发起重启的看门狗已经死了 → 标记作废，watcher 必须接手把码推出去。
+
+        2026-09-29 20:30 实测：看门狗拉起「一键启动全部」时自己也被换掉，
+        finally 里的 clear_restarting() 没执行，孤儿标记把通知压了 15 分钟。
+        """
+        self._flag_on(pid=999999)          # 不存在的 pid
+        self.assertFalse(notify.restarting())
+        w = notify._Watcher(self.qr.path)
+        self.qr.touch(b"png-2", at=w.last_mtime + 10)
+        self.assertTrue(w.tick())
+        self.assertEqual(len(self.sent), 1)
+
+    def test_orphan_flag_prime_takes_over(self):
+        """孤儿标记 + 启动时已掉线 → prime 要补推（原来这里被静默吞掉）。"""
+        self._flag_on(pid=999999)
+        self.assertTrue(notify._Watcher(self.qr.path).prime())
+        self.assertEqual(len(self.sent), 1)
+
+    def test_live_flag_keeps_silence(self):
+        """发起者还活着 → 照旧让位，避免同一次掉线收两条通知。"""
+        self._flag_on(pid=os.getpid())
+        self.assertTrue(notify.restarting())
+        w = notify._Watcher(self.qr.path)
+        self.qr.touch(b"png-2", at=w.last_mtime + 10)
+        self.assertFalse(w.tick())
+        self.assertEqual(self.sent, [])
+
+    def test_exited_process_is_not_alive(self):
+        """进程已退出、句柄还被 Popen 握着 → 也必须判成「不在了」。
+
+        专测 WaitForSingleObject 那一半：句柄拿得到不代表进程还活着。真实场景里
+        看门狗被换掉后 pid 往往连句柄都拿不到，但那一半不能是唯一的防线。
+        """
+        p = subprocess.Popen([sys.executable, "-c", "pass"])
+        self.addCleanup(p.wait)
+        while p.poll() is None:
+            time.sleep(0.05)
+        self.assertFalse(notify._pid_alive(p.pid))
 
     def test_tick_defers_to_watchdog(self):
         w = notify._Watcher(self.qr.path)

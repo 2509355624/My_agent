@@ -1,12 +1,45 @@
-"""看门狗逻辑测试：只驱动 _cycle，把网络探测 / 重启 / 推送全 mock 掉。
+"""看门狗逻辑测试：只驱动 _cycle / _probe，把网络探测 / 重启 / 推送全 mock 掉。
 
-覆盖：未到阈值不重启、到阈值触发重启并恢复、重启后要扫码只推一条合并通知、
+覆盖：三态探测（online / offline / dead）、未到阈值不重启、到阈值触发重启并恢复、
+登录态失效满宽限期才重启、重启后要扫码只推一条合并通知、一直没人扫码会退避、
 重启连续失败放弃并退避、退避期内不动作。不涉及真实 NapCat / subprocess。
 """
 
 from unittest import TestCase, mock
 
 from app import watchdog as wd
+
+
+class ProbeStateTest(TestCase):
+    """_probe 的三态：用 6099 WebUI 口区分「进程死了」和「活着但没登录」。"""
+
+    def setUp(self):
+        p = mock.patch.object(wd, "check_alive")
+        self.alive = p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(wd, "_port_open")
+        self.webui = p.start()
+        self.addCleanup(p.stop)
+
+    def test_online(self):
+        self.alive.return_value = (3842266925, "小小怪")
+        self.assertEqual(wd._probe()[0], "online")
+
+    def test_empty_uid_is_offline(self):
+        """拿得到响应但没有登录态 → 离线，不是死。"""
+        self.alive.return_value = (0, "")
+        self.assertEqual(wd._probe()[0], "offline")
+
+    def test_connect_error_with_webui_up_is_offline(self):
+        """:3000 只在登录成功后才监听 —— 连不上但 6099 在听 = 没登录，进程还活着。"""
+        self.alive.side_effect = OSError("refused")
+        self.webui.return_value = True
+        self.assertEqual(wd._probe()[0], "offline")
+
+    def test_connect_error_without_webui_is_dead(self):
+        self.alive.side_effect = OSError("refused")
+        self.webui.return_value = False
+        self.assertEqual(wd._probe()[0], "dead")
 
 
 class WatchdogCycleTest(TestCase):
@@ -32,10 +65,11 @@ class WatchdogCycleTest(TestCase):
 
     @staticmethod
     def new_state():
-        return {"fails": 0, "restart_fails": 0, "backoff_until": 0.0}
+        return {"fails": 0, "restart_fails": 0, "offline_since": None,
+                "backoff_until": 0.0}
 
     def test_below_threshold_no_restart(self):
-        wd._probe.side_effect = [(False, "x"), (False, "x"), (True, "ok")]
+        wd._probe.side_effect = [("dead", "x"), ("dead", "x"), ("online", "ok")]
         s = self.new_state()
         wd._cycle(s, now=0.0)   # fail 1
         wd._cycle(s, now=1.0)   # fail 2
@@ -44,7 +78,8 @@ class WatchdogCycleTest(TestCase):
         wd._trigger_restart.assert_not_called()
 
     def test_threshold_triggers_restart_then_recovers(self):
-        wd._probe.side_effect = [(False, "x"), (False, "x"), (False, "x"), (True, "ok")]
+        wd._probe.side_effect = [("dead", "x"), ("dead", "x"), ("dead", "x"),
+                                 ("online", "ok")]
         s = self.new_state()
         for t in range(3):              # 连续 3 次失败
             wd._cycle(s, now=float(t))
@@ -55,17 +90,53 @@ class WatchdogCycleTest(TestCase):
 
     def test_no_premature_restart_message(self):
         """重启一发起不先发「正在自动重启」——只发结论那一条。"""
-        wd._probe.return_value = (False, "x")
+        wd._probe.return_value = ("dead", "x")
         s = self.new_state()
         for t in range(3):
             wd._cycle(s, now=float(t))
         titles = [c.args[0] for c in wd.push_text.call_args_list]
         self.assertNotIn("QQ 机器人正在自动重启", titles)
 
+    def test_offline_within_grace_does_not_restart(self):
+        """刚发现没登录时先别动 —— 人可能正在扫，NapCat 也可能正在快速登录。"""
+        wd._probe.return_value = ("offline", "no login")
+        s = self.new_state()
+        wd._cycle(s, now=0.0)
+        wd._cycle(s, now=wd.OFFLINE_GRACE - 1)
+        wd._trigger_restart.assert_not_called()
+        self.assertEqual(s["offline_since"], 0.0)
+
+    def test_offline_past_grace_triggers_restart(self):
+        """码过期了还没人扫 → 重启换一张新码（用户 09-29 明确要求）。"""
+        wd._probe.return_value = ("offline", "no login")
+        s = self.new_state()
+        wd._cycle(s, now=0.0)
+        wd._cycle(s, now=wd.OFFLINE_GRACE + 1)
+        wd._trigger_restart.assert_called_once()
+
+    def test_offline_grace_restarts_after_online(self):
+        """中途回过在线 → 离线计时清零，不能拿旧起点凑满宽限期。"""
+        wd._probe.side_effect = [("offline", ""), ("online", "ok"),
+                                 ("offline", ""), ("offline", "")]
+        s = self.new_state()
+        wd._cycle(s, now=0.0)
+        wd._cycle(s, now=10.0)
+        self.assertIsNone(s["offline_since"])
+        wd._cycle(s, now=1000.0)                       # 重新起算
+        wd._cycle(s, now=1000.0 + wd.OFFLINE_GRACE - 1)
+        wd._trigger_restart.assert_not_called()
+
+    def test_dead_resets_offline_clock(self):
+        wd._probe.side_effect = [("offline", ""), ("dead", "x")]
+        s = self.new_state()
+        wd._cycle(s, now=0.0)
+        wd._cycle(s, now=1.0)
+        self.assertIsNone(s["offline_since"])
+
     def test_qr_outcome_sends_one_merged_notification(self):
         """重启后要扫码：只推一条带二维码的通知，不再另发「已恢复」。"""
         wd._await_outcome.return_value = "qr"
-        wd._probe.return_value = (False, "x")
+        wd._probe.return_value = ("dead", "x")
         s = self.new_state()
         for t in range(3):
             wd._cycle(s, now=float(t))
@@ -73,11 +144,11 @@ class WatchdogCycleTest(TestCase):
         self.assertIn("扫码", wd.notify.push_offline.call_args.kwargs["title"])
         self.assertTrue(wd.notify.push_offline.call_args.kwargs["intro"])
         self.assertEqual(wd.push_text.call_count, 0)
-        self.assertEqual(s["restart_fails"], 0)
+        self.assertEqual(s["restart_fails"], 1)
 
     def test_restart_flag_handed_over_and_released(self):
         """重启窗口期把二维码通知权接管过来，无论结果如何都要还回去。"""
-        wd._probe.return_value = (False, "x")
+        wd._probe.return_value = ("dead", "x")
         s = self.new_state()
         for t in range(3):
             wd._cycle(s, now=float(t))
@@ -86,7 +157,7 @@ class WatchdogCycleTest(TestCase):
 
     def test_restart_flag_released_when_trigger_fails(self):
         wd._trigger_restart.return_value = False
-        wd._probe.return_value = (False, "x")
+        wd._probe.return_value = ("dead", "x")
         s = self.new_state()
         for t in range(3):
             wd._cycle(s, now=float(t))
@@ -94,7 +165,7 @@ class WatchdogCycleTest(TestCase):
         wd._await_outcome.assert_not_called()
 
     def test_give_up_after_max_restart_failures(self):
-        wd._probe.return_value = (False, "x")   # 永远失败
+        wd._probe.return_value = ("dead", "x")   # 永远失败
         wd._await_outcome.return_value = "unknown"   # 重启也救不活
         s = self.new_state()
         for t in range(9):               # 3 轮失败 = 3 次触发
@@ -105,8 +176,35 @@ class WatchdogCycleTest(TestCase):
             "QQ 机器人需人工处理",
             "看门狗多次自动重启失败，NapCat 仍无法恢复，请检查。")
 
+    def test_repeated_qr_outcomes_back_off(self):
+        """一直没人扫码：重启 N 次后暂停自动重启，别再整夜反复杀进程。"""
+        wd._probe.return_value = ("offline", "no login")
+        wd._await_outcome.return_value = "qr"
+        s = self.new_state()
+        t = 0.0
+        for _ in range(wd.MAX_RESTART_FAILS):
+            wd._cycle(s, now=t)                      # 起算离线
+            wd._cycle(s, now=t + wd.OFFLINE_GRACE + 1)
+            t += 10 * wd.OFFLINE_GRACE               # 跳到下一轮，别撞上退避
+        self.assertEqual(wd._trigger_restart.call_count, wd.MAX_RESTART_FAILS)
+        self.assertGreater(s["backoff_until"], 0.0)
+        wd.push_text.assert_any_call(
+            "QQ 机器人仍在等待扫码",
+            "已连续自动重启 %d 次仍停在扫码界面，暂停自动重启 %.0f 分钟；"
+            "二维码换新后仍会推给你。"
+            % (wd.MAX_RESTART_FAILS, wd.BACKOFF / 60))
+
+    def test_online_clears_backoff(self):
+        """真恢复了就把退避清掉，别让上一轮的退避耽误下一次掉线。"""
+        s = self.new_state()
+        s["backoff_until"] = 500.0
+        s["restart_fails"] = 1
+        wd._probe.return_value = ("online", "ok")
+        wd._cycle(s, now=600.0)
+        self.assertEqual(s["backoff_until"], 0.0)
+
     def test_backoff_suppresses_action(self):
-        wd._probe.return_value = (False, "x")
+        wd._probe.return_value = ("dead", "x")
         s = self.new_state()
         s["backoff_until"] = 1000.0      # 退避中
         wd._cycle(s, now=500.0)
@@ -114,7 +212,7 @@ class WatchdogCycleTest(TestCase):
 
     def test_recovers_without_trigger_after_backoff(self):
         # 退避期过后、还没到失败阈值时自己恢复了
-        wd._probe.side_effect = [(False, "x"), (True, "ok")]
+        wd._probe.side_effect = [("dead", "x"), ("online", "ok")]
         s = self.new_state()
         s["backoff_until"] = 0.0
         s["restart_fails"] = 1           # 上一轮重启失败过
@@ -129,10 +227,7 @@ class AwaitOutcomeTest(TestCase):
     """_await_outcome 的三态判定：三条件缺一不可。"""
 
     def setUp(self):
-        p = mock.patch.object(wd, "_probe", return_value=(False, "x"))
-        p.start()
-        self.addCleanup(p.stop)
-        p = mock.patch.object(wd, "_port_open", return_value=False)
+        p = mock.patch.object(wd, "_probe", return_value=("dead", "x"))
         p.start()
         self.addCleanup(p.stop)
         p = mock.patch.object(wd, "_qr_written_since", return_value=False)
@@ -146,21 +241,22 @@ class AwaitOutcomeTest(TestCase):
         clock.sleep = lambda s: None
 
     def test_online_wins(self):
-        wd._probe.return_value = (True, "ok")
+        wd._probe.return_value = ("online", "ok")
         self.assertEqual(wd._await_outcome(0.0), "online")
 
-    def test_qr_requires_port_and_grace_and_file(self):
-        wd._port_open.return_value = True
+    def test_qr_requires_grace_and_fresh_file(self):
+        wd._probe.return_value = ("offline", "")
         wd._qr_written_since.return_value = True
         self.assertEqual(wd._await_outcome(0.0), "qr")
 
     def test_qr_not_declared_without_fresh_file(self):
-        wd._port_open.return_value = True
+        wd._probe.return_value = ("offline", "")
         wd._qr_written_since.return_value = False
         self.assertEqual(wd._await_outcome(0.0), "unknown")
 
-    def test_qr_not_declared_when_webui_down(self):
-        wd._port_open.return_value = False
+    def test_dead_is_not_qr(self):
+        """进程都没起来 → 不是「要扫码」。"""
+        wd._probe.return_value = ("dead", "x")
         wd._qr_written_since.return_value = True
         self.assertEqual(wd._await_outcome(0.0), "unknown")
 

@@ -30,9 +30,13 @@ _PUSHPLUS_URL = "https://www.pushplus.plus/send"
 # 而每次 tick 只是 getmtime，3 秒粒度足够快又不费电。
 _POLL_SECONDS = 3
 
-# 推过一次后多久不再推。NapCat 的二维码有效期到了会重写同一个文件，没有这个
+# 同一批二维码只推一次的去抖窗口。NapCat 换码时可能连着写好几次文件，没有这个
 # 闸就会被反复轰炸 —— 而人扫码需要时间，轰炸只会让手机响个不停。
-_COOLDOWN_SECONDS = 300
+#
+# **必须短于二维码有效期**（NapCat 约 180 秒换一张）。原来这里是 300 秒，比有效期
+# 还长，于是「旧码推送 → 码过期换新码」这条新码恰好落在旧冷却窗口里被吃掉，
+# 用户手里永远是一张过期的码（2026-09-29 用户报「扫了没反应」的直接原因之一）。
+_DEBOUNCE_SECONDS = 90
 
 # 启动时二维码文件比这还旧，就当「上一轮的遗留」，不补推。
 _STALE_SECONDS = 300
@@ -41,6 +45,13 @@ _STALE_SECONDS = 300
 # 合成一条推出去。这个标记就是那个窗口期：文件在 = 看门狗正在处理，watcher
 # 让位，同一次掉线就不会收到两条通知。看门狗处理完（或超时）会删掉它；
 # 留 TTL 是防看门狗自己挂了、标记变成永久文件把通知通道堵死。
+#
+# 文件内容形如「<写入时刻> <发起进程 pid>」。**pid 不能省**：看门狗拉起的是
+# 「一键启动全部」，那个批处理会把整套进程（含看门狗自己）换掉，发起进程很可能
+# 在写出结论通知之前就没了 —— 那样 finally 里的 clear_restarting() 永远不会执行，
+# 标记变成孤儿，通知通道被堵到 TTL 到期（2026-09-29 20:30 实测：用户 15 分钟
+# 收不到任何消息，只能摸黑自己找码扫）。带上 pid，restarting() 就能发现发起者
+# 已死并立刻让位，不必等 TTL。
 _RESTART_FLAG = os.path.join(BASE_DIR, "state", "restart.flag")
 _RESTART_FLAG_TTL = 900
 
@@ -82,11 +93,13 @@ def mark_restarting():
     为什么需要：看门狗重启后要告诉用户「已重启 + 要扫码」，watcher 那边
     只知道「二维码变了」也会推一条 —— 两条通知、两条都不完整。用一个跨进程
     的标记文件把窗口期标出来，watcher 见到就让位。
+
+    文件里连发起者的 pid 一起记下：发起进程死了这个标记就该失效（见 restarting）。
     """
     try:
         os.makedirs(os.path.dirname(_RESTART_FLAG), exist_ok=True)
         with open(_RESTART_FLAG, "w", encoding="utf-8") as f:
-            f.write("%.3f" % time.time())
+            f.write("%.3f %d" % (time.time(), os.getpid()))
     except OSError as e:
         log.warning("写重启标记失败：%s", e)
 
@@ -99,14 +112,69 @@ def clear_restarting():
         pass
 
 
-def restarting():
-    """看门狗是否正在自动重启（标记存在且没过期）。"""
+def _pid_alive(pid):
+    """pid 对应的进程是否还在跑。
+
+    **不能用 `os.kill(pid, 0)`** —— Windows 上它的语义是 TerminateProcess，
+    会把进程真的杀掉（不是「只探测」）。这里用 OpenProcess + WaitForSingleObject
+    纯读取地判断：句柄能拿到且没 signal，就是还活着。
+
+    判断不了时返回 True（宁可多压一会儿通知，也不能因为探测失败就重复推送）。
+    """
+    if not pid:
+        return True
     try:
-        age = time.time() - os.path.getmtime(_RESTART_FLAG)
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        # 只要 SYNCHRONIZE 就够 WaitForSingleObject 用了，权限要求最低
+        handle = k32.OpenProcess(0x00100000, False, int(pid))
+        if not handle:
+            return False
+        try:
+            # WAIT_TIMEOUT(258) = 还在跑；WAIT_OBJECT_0(0) = 已经退出
+            return k32.WaitForSingleObject(handle, 0) == 258
+        finally:
+            k32.CloseHandle(handle)
+    except Exception:
+        return True
+
+
+def _read_flag():
+    """读重启标记，返回 (写入时刻, 发起者 pid)。读不到时两者都是 None。"""
+    try:
+        with open(_RESTART_FLAG, encoding="utf-8") as f:
+            parts = f.read().split()
     except OSError:
-        return False
+        return None, None
+    ts = pid = None
+    if parts:
+        try:
+            ts = float(parts[0])
+        except ValueError:
+            ts = None
+    if len(parts) > 1:
+        try:
+            pid = int(parts[1])
+        except ValueError:
+            pid = None
+    return ts, pid
+
+
+def restarting():
+    """看门狗是否正在自动重启（标记存在、没过期、**且发起进程还活着**）。"""
+    ts, pid = _read_flag()
+    if ts is None:
+        # 文件在、但内容读不出时刻（老格式 / 被写坏）：退回看 mtime，
+        # 别让一个坏文件把通知通道永久堵死。
+        ts = _mtime(_RESTART_FLAG)
+        if ts is None:
+            return False
+    age = time.time() - ts
     if age >= _RESTART_FLAG_TTL:
         log.info("重启标记已过期（%.0fs），按无效处理", age)
+        return False
+    if not _pid_alive(pid):
+        log.info("重启标记的发起进程(pid=%s)已不在，交还通知权", pid)
         return False
     return True
 
@@ -325,7 +393,7 @@ class _Watcher:
     能同步驱动（tick 一次看结果），不必陪真线程玩时序。
     """
 
-    def __init__(self, path=None, cooldown=_COOLDOWN_SECONDS):
+    def __init__(self, path=None, cooldown=_DEBOUNCE_SECONDS):
         self.path = path or NOTIFY_QRCODE_PATH
         self.cooldown = cooldown
         # 启动基线：先记下当前值，不把它当成「刚发生的掉线」。
@@ -338,10 +406,20 @@ class _Watcher:
         正常启动时二维码文件要么不存在、要么是上一轮的旧文件，两种情况都不推。
         但如果它**很新**且探活确认不在线，那就是「进程重启前就掉了、还没人扫」
         —— 这时要补一条，否则要等到下一次掉线才知道。
+
+        这是「看门狗重启途中自己被杀、结论通知没发出去」的唯一兜底：qq_bot 被
+        一起重启后，这里能发现「已经掉线 + 有张新码」并把码补推给用户
+        （2026-09-29 20:30 那次就是这么丢的，见 _RESTART_FLAG 的注释）。
         """
         if not self.last_mtime:
             return False
-        if time.time() - self.last_mtime >= _STALE_SECONDS:
+        age = time.time() - self.last_mtime
+        if age >= _STALE_SECONDS:
+            # 码太旧，推出去也没用；交给看门狗——它会在离线满 OFFLINE_GRACE 后
+            # 重启一遍，换来一张新码再推。
+            if not _online():
+                log.info("启动时不在线，但二维码已 %.0fs 前的旧码，等看门狗换新码",
+                         age)
             return False
         if _online():
             return False
@@ -352,7 +430,7 @@ class _Watcher:
         return self._push()
 
     def tick(self, now=None):
-        """轮询一次；文件变了且过了冷却就推。返回是否推了。"""
+        """轮询一次；文件变了且过了去抖就推。返回是否推了。"""
         now = time.time() if now is None else now
         silence_pushed = self._check_silence(now)
         cur = _mtime(self.path)
@@ -395,7 +473,7 @@ class _Watcher:
         t, d = _take_reason()
         ok, _ = push_offline(self.path, t, d)
         if ok:
-            # now 由 tick 透传，好让测试用假时间驱动冷却窗口
+            # now 由 tick 透传，好让测试用假时间驱动去抖窗口
             self.last_push = time.time() if now is None else now
         return ok
 

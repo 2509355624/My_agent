@@ -9,10 +9,18 @@ qrcode.png）。这个进程独立于 qq_bot / NapCat，定时探 NapCat 是否�
 探测对象：NapCat OneBot HTTP（:3000）。复用 app.qq_api.check_alive（自带
 trust_env=False，不受本机 Clash 注册表代理影响）。
 
-判定：
-  - 网络层失败（连不上 / 超时）连续 MAX_FAILS 次 → 判定 NapCat 死了 → 触发重启。
-  - 能连上 → 不管 online 与否都不动：offline 时 NapCat 会出二维码，notify.py 的扫码
-    通知自己会推；重启也救不了「会话失效要扫码」的情况，反而添乱。
+判定（探活三态，见 `_probe`）：
+  - "dead"：连不上（:6099 WebUI 口也没监听 = 进程没了 / 卡死）。连续 MAX_FAILS 次
+    → 触发重启。
+  - "offline"：:6099 在听但 :3000 不通 = 进程活着、**登录态失效**。持续 OFFLINE_GRACE
+    秒（≈二维码有效期）→ 触发重启，换一张新码推给用户。
+
+  ⚠ 「活着但没登录」以前是**不动**的，原文写着「重启也救不了会话失效要扫码，反而添乱」。
+  实测推翻了这个假设：重启走的是 `-q <号>` 快速登录，2026-09-29 20:30 那次重启后
+  NapCat 自己就登回去了，根本不用扫码。而且用户明确要求「掉线就重启，别只丢个二维码
+  让我自己扫 —— 我扫完还没反应」（09-29）。所以现在两种掉线都重启，区别只在确认时长：
+  OFFLINE_GRACE 留够时间给「人正在扫」和「NapCat 自己正在快速登录」，免得白重启一次、
+  还要人多扫一次码。
 
 重启：subprocess 拉起「一键启动全部.bat force auto」（**隐藏窗口**，不阻塞 watchdog）。
   - force = 忽略「6099 还在监听就跳过 NapCat」的保护，强制杀掉再起，处理「进程活着
@@ -20,11 +28,20 @@ trust_env=False，不受本机 Clash 注册表代理影响）。
   - auto  = 启动器跑完直接退出，不留窗口、不等回车。看门狗每重启一次就多一个窗口的话
     桌面上很快就堆满了（09-29 用户抱怨）。
 
+  ⚠ 这个批处理会把**看门狗自己也换掉**（用户实测 09-29 20:30：发起重启的那个看门狗
+  在写出结论通知之前就没了，`finally` 里的 clear_restarting() 没执行，qq_bot 那边的
+  掉线通知被孤儿标记压了 15 分钟）。所以结论通知**不能只指望发起者还活着**：
+  notify.restarting() 会检查标记里记的发起 pid，发现它死了就立刻交还通知权。
+
 **重启后只发一条通知**（09-29 用户要求）：重启一发起就立刻盯结果，等出结论再发，
 不再先发「正在自动重启」、过一会儿再发「要扫码」。三种结论：
   - 已登录（:3000 探通）      → 推「已自动恢复」
   - NapCat 起来但没登录 + 二维码是本次新写的 → 推「已重启，需要扫码」+ 二维码图
   - 超时都没等到               → 推「重启后未恢复」并计入失败次数
+
+「要扫码」也计入失败次数：一直没人扫就每隔 OFFLINE_GRACE 重启一次，连续
+MAX_RESTART_FAILS 次仍停在扫码界面 → 暂停自动重启并退避 BACKOFF 秒（避免整夜
+反复杀进程）。退避期间二维码换新照样由 notify 推给用户，人一扫通就自动恢复。
 
 重启期间用 notify.mark_restarting() 把二维码通知权从 qq_bot 的 watcher 手里接管过来，
 否则同一次掉线会收到两条（一条说重启、一条只说扫码）。连续 MAX_RESTART_FAILS 次重启
@@ -52,9 +69,15 @@ from app.notify import push_text
 log = logging.getLogger("watchdog")
 
 # ── 可调参数 ──────────────────────────────────────────
-PROBE_INTERVAL = 60.0      # 探测间隔（秒）
+PROBE_INTERVAL = 30.0      # 探测间隔（秒）
 PROBE_TIMEOUT = 10.0       # 单次探测超时（秒）
-MAX_FAILS = 3              # 连续失败几次判定为死（≈3 分钟）
+MAX_FAILS = 3              # 连续失败几次判定为死（≈90 秒）
+
+# 「活着但没登录」持续这么久 → 判定「二维码过期了还没人扫」，重启换一张新码。
+# 取 ≈ 二维码有效期（NapCat 约 180 秒）：等短了会把「NapCat 正在快速登录」或
+# 「人正在扫码」误判成没人管，白重启一次、还要人多扫一次码；等长了用户就一直
+# 拿着过期码。
+OFFLINE_GRACE = 180.0
 
 RECOVER_INTERVAL = 3.0     # 重启后复查间隔（秒）—— 要小，扫码通知才「立刻」
 RECOVER_WAIT = 180.0       # 重启后最多等多久；超时算「恢复失败」
@@ -90,13 +113,28 @@ def _acquire_lock():
 
 
 def _probe(timeout=None):
-    """探一次 NapCat。返回 (ok, detail)。"""
+    """探一次 NapCat。返回 (state, detail)，state 三态：
+
+      - "online"  连得上且已登录
+      - "offline" 进程活着但没登录（登录态失效，等着扫码 / 快速登录）
+      - "dead"    连不上，且 WebUI 口也没监听（进程没了或卡死）
+
+    为什么不能只看 :3000 通不通：**3000 只在登录成功后才监听**（登录前只有 6099），
+    所以「3000 连不上」既可能是进程死了、也可能只是没登录 —— 前者重启能救，后者
+    重启是另一回事（换新码 / 快速登录）。用 6099（登录前就监听）把两者分开。
+    """
     try:
         uid, nick = check_alive(
             timeout=PROBE_TIMEOUT if timeout is None else timeout)
-        return True, "%s(%s)" % (nick, uid)
     except Exception as e:
-        return False, "%s: %s" % (type(e).__name__, e)
+        detail = "%s: %s" % (type(e).__name__, e)
+        if _port_open(NAPCAT_WEBUI_PORT):
+            return "offline", detail
+        return "dead", detail
+    if not uid:
+        # 拿到了响应但没有登录态（OneBot 未登录时也可能回 status=ok + user_id 0）
+        return "offline", str(nick or "")
+    return "online", "%s(%s)" % (nick, uid)
 
 
 def _port_open(port, timeout=1.0):
@@ -146,22 +184,25 @@ def _trigger_restart():
 def _await_outcome(since):
     """重启后判定结果：'online'（已登录）/ 'qr'（要扫码）/ 'unknown'（没救活）。
 
-    'qr' 要三个条件同时成立：NapCat 进程起来了（6099 在听）+ 还没登录（:3000 探不通）
-    + 二维码文件是本次重启后新写的。缺一不可 —— 只看端口会把「刚起来、快速登录还没
-    走完」误判成要扫码；只看文件会把上一轮的旧码误判成本次的。
+    'qr' 要三个条件同时成立：NapCat 进程活着但没登录（_probe 给 "offline"，等价于
+    6099 在听而 :3000 不通）+ 这个状态持续够 QR_GRACE + 二维码文件是本次重启后新写的。
+    缺一不可 —— 只看端口会把「刚起来、快速登录还没走完」误判成要扫码；只看文件会把
+    上一轮的旧码误判成本次的。
     """
     deadline = time.time() + RECOVER_WAIT
-    webui_since = None
+    offline_since = None
     while time.time() < deadline:
-        ok, _ = _probe(timeout=PROBE_TIMEOUT_FAST)
-        if ok:
+        st, _ = _probe(timeout=PROBE_TIMEOUT_FAST)
+        if st == "online":
             return "online"
-        if _port_open(NAPCAT_WEBUI_PORT):
-            if webui_since is None:
-                webui_since = time.time()
-            elif (time.time() - webui_since >= QR_GRACE
+        if st == "offline":
+            if offline_since is None:
+                offline_since = time.time()
+            elif (time.time() - offline_since >= QR_GRACE
                   and _qr_written_since(since)):
                 return "qr"
+        else:
+            offline_since = None
         time.sleep(RECOVER_INTERVAL)
     return "unknown"
 
@@ -175,8 +216,11 @@ def _cycle(state, now=None):
     if now < state["backoff_until"]:
         return True  # 退避期内不动作
 
-    ok, detail = _probe()
-    if ok:
+    st, detail = _probe()
+
+    if st == "online":
+        state["offline_since"] = None
+        state["backoff_until"] = 0.0        # 真的好了，把退避一并清掉
         if state["fails"] or state["restart_fails"]:
             log.info("NapCat 恢复在线：%s", detail)
             if state["restart_fails"]:
@@ -187,15 +231,35 @@ def _cycle(state, now=None):
             log.debug("NapCat 在线：%s", detail)
         return True
 
-    state["fails"] += 1
-    log.warning("NapCat 探活失败 (%d/%d)：%s",
-                state["fails"], MAX_FAILS, detail)
-    if state["fails"] < MAX_FAILS:
-        return True
+    if st == "dead":
+        state["offline_since"] = None
+        state["fails"] += 1
+        log.warning("NapCat 探活失败 (%d/%d)：%s",
+                    state["fails"], MAX_FAILS, detail)
+        if state["fails"] < MAX_FAILS:
+            return True
+        return _restart(state, now, "NapCat 心跳丢失")
 
-    # 连续失败到阈值 → 判定死亡，触发重启
-    log.error("NapCat 连续 %d 次无响应，触发重启", state["fails"])
+    # "offline"：进程活着，登录态没了 —— 先给扫码/快速登录留够时间
     state["fails"] = 0
+    if state["offline_since"] is None:
+        state["offline_since"] = now
+        log.warning("NapCat 活着但未登录，先等 %.0f 秒看会不会自己扫码/快速登录",
+                    OFFLINE_GRACE)
+        return True
+    if now - state["offline_since"] < OFFLINE_GRACE:
+        return True
+    return _restart(state, now, "登录态失效、二维码过期仍没人扫")
+
+
+def _restart(state, now, reason):
+    """拉起一键启动、等结论、把结论推给用户。返回 True（继续循环）。
+
+    reason 只进通知文案，用来区分是「心跳丢失」还是「登录态失效」。
+    """
+    log.error("%s，触发重启", reason)
+    state["fails"] = 0
+    state["offline_since"] = None
     since = time.time()
     notify.mark_restarting()
     try:
@@ -218,12 +282,21 @@ def _cycle(state, now=None):
     elif outcome == "qr":
         # 「已重启」和「要扫码」合并成一条 —— 不再先发一条说在重启。
         log.info("重启后需要扫码，已把二维码随通知一起推给用户")
-        state["restart_fails"] = 0
+        state["restart_fails"] += 1
         notify.push_offline(
             NOTIFY_QRCODE_PATH,
             title="QQ 机器人已重启，需要扫码",
-            intro="%s NapCat 心跳丢失，看门狗已自动重启；重启后需要扫码登录。"
-                  % time.strftime("%m-%d %H:%M:%S"))
+            intro="%s %s，看门狗已自动重启；重启后需要扫码登录。"
+                  % (time.strftime("%m-%d %H:%M:%S"), reason))
+        if state["restart_fails"] >= MAX_RESTART_FAILS:
+            log.error("连续 %d 次重启后都还停在扫码界面，暂停自动重启，退避 %.0f 秒",
+                      MAX_RESTART_FAILS, BACKOFF)
+            push_text("QQ 机器人仍在等待扫码",
+                      "已连续自动重启 %d 次仍停在扫码界面，暂停自动重启 %.0f 分钟；"
+                      "二维码换新后仍会推给你。"
+                      % (MAX_RESTART_FAILS, BACKOFF / 60))
+            state["backoff_until"] = now + BACKOFF
+            state["restart_fails"] = 0
     else:
         state["restart_fails"] += 1
         log.error("重启后 NapCat 仍未恢复（%d/%d）",
@@ -243,9 +316,10 @@ def _cycle(state, now=None):
 
 def run():
     _acquire_lock()
-    log.info("看门狗启动：探 NapCat :3000，间隔 %.0fs，连续 %d 次失败触发重启",
-             PROBE_INTERVAL, MAX_FAILS)
-    state = {"fails": 0, "restart_fails": 0, "backoff_until": 0.0}
+    log.info("看门狗启动：探 NapCat :3000，间隔 %.0fs；连不上 %d 次、或未登录 %.0fs 即重启",
+             PROBE_INTERVAL, MAX_FAILS, OFFLINE_GRACE)
+    state = {"fails": 0, "restart_fails": 0, "offline_since": None,
+             "backoff_until": 0.0}
     while True:
         time.sleep(PROBE_INTERVAL)
         _cycle(state)
