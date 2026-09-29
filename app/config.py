@@ -540,3 +540,22 @@ NOTIFY_QRCODE_PATH = os.getenv(
 # 抓的是「冻而不掉」（2026-09-27 事故：协议层活着、消息同步停摆，二维码
 # 机制完全无感）。半夜安静群会误报，用户拍板宁可误报。0 = 关闭。
 NOTIFY_SILENCE_HOURS = float(os.getenv("NOTIFY_SILENCE_HOURS", "4"))
+
+# ── 看门狗的「静默判据」（假在线）──────────────────────────────
+# 看门狗的三态探针**探不出「假在线」**：:3000 接口全好、登录态在，只有
+# 「腾讯 → QQ 客户端」的下行推送死了（2026-09-29 22:36~22:53 实测）。能观测到的
+# 唯一信号是「本该到的消息没到」。所以改看 qq_bot 的静默时长（状态快照里的
+# last_activity_ago），超过 WATCHDOG_SILENCE_SECONDS 一条都没有 → 重启当探针。
+#
+# ⚠️ 重启当探针为什么成立（用户 2026-09-29 的判断，已被日志证实）：
+#   自动登录 → 会话本来是好的，就是「群里本来就安静」→ 静默放过、不通知；
+#   要扫码   → 会话早被腾讯作废，这正是假在线/掉线的本质 → 推二维码。
+# 所以误报的代价只是一次静默重启，真故障却能第一时间暴露。
+WATCHDOG_SILENCE_SECONDS = float(os.getenv("WATCHDOG_SILENCE_SECONDS", "1200"))
+
+# 连续静默时两次重启之间的**起步**间隔（秒）。每静默重启一次就翻倍，封顶
+# WATCHDOG_SILENCE_MAX_GAP；一旦收到消息立刻清零。
+# ⚠️ 没有它就会出事：静默重启成功后 qq_bot 一起重启、静默计时归零，整夜没人
+# 说话就变成每 WATCHDOG_SILENCE_SECONDS 杀一次 QQ —— 反过来招风控。
+WATCHDOG_SILENCE_COOLDOWN = float(os.getenv("WATCHDOG_SILENCE_COOLDOWN", "3600"))
+WATCHDOG_SILENCE_MAX_GAP = float(os.getenv("WATCHDOG_SILENCE_MAX_GAP", "14400"))

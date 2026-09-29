@@ -33,11 +33,17 @@ trust_env=False，不受本机 Clash 注册表代理影响）。
   掉线通知被孤儿标记压了 15 分钟）。所以结论通知**不能只指望发起者还活着**：
   notify.restarting() 会检查标记里记的发起 pid，发现它死了就立刻交还通知权。
 
-**重启后只发一条通知**（09-29 用户要求）：重启一发起就立刻盯结果，等出结论再发，
-不再先发「正在自动重启」、过一会儿再发「要扫码」。三种结论：
-  - 已登录（:3000 探通）      → 推「已自动恢复」
+**重启后只发一条通知，而且只在「要扫码」时发**（09-29 用户拍板）：重启一发起就立刻
+盯结果，等出结论再发，不再先发「正在自动重启」。三种结论：
+  - 已登录（:3000 探通）      → **不通知**（用户原话：「重启可以自动登上来就不用通知」）
   - NapCat 起来但没登录 + 二维码是本次新写的 → 推「已重启，需要扫码」+ 二维码图
   - 超时都没等到               → 推「重启后未恢复」并计入失败次数
+
+**静默判据（假在线，见 `_check_silence`）**：三态探针探不出「接口全好但收不到消息」，
+所以在线时再看一眼 qq_bot 的静默时长（`state/qq_status.json` 的 `last_activity_ago`）：
+超过 `SILENCE_SECONDS` 一条消息都没有 → 重启一次**当探针**。重启后自动登录 = 群里本来
+就安静（静默放过），要扫码 = 会话真被作废（推二维码）。退避按倍数增长，防止整夜没人
+说话变成反复杀 QQ。
 
 「要扫码」也计入失败次数：一直没人扫就每隔 OFFLINE_GRACE 重启一次，连续
 MAX_RESTART_FAILS 次仍停在扫码界面 → 暂停自动重启并退避 BACKOFF 秒（避免整夜
@@ -48,6 +54,7 @@ MAX_RESTART_FAILS 次仍停在扫码界面 → 暂停自动重启并退避 BACKO
 仍救不活 → 停止自动重启 + 推「需人工处理」+ 退避 BACKOFF 秒，避免无限杀进程。
 """
 
+import json
 import logging
 import os
 import socket
@@ -62,7 +69,9 @@ except ImportError:  # 非 Windows 上退化成无锁（本项目不会走到这
     msvcrt = None
 
 from app import notify
-from app.config import BASE_DIR, NOTIFY_QRCODE_PATH
+from app.config import (BASE_DIR, NOTIFY_QRCODE_PATH,
+                        WATCHDOG_SILENCE_COOLDOWN, WATCHDOG_SILENCE_MAX_GAP,
+                        WATCHDOG_SILENCE_SECONDS)
 from app.qq_api import check_alive
 from app.notify import push_text
 
@@ -89,7 +98,18 @@ QR_GRACE = 20.0            # WebUI 起来后再等这么久还没登录 → 判�
 MAX_RESTART_FAILS = 3      # 连续几次重启都救不活 → 放弃自动重启
 BACKOFF = 1800.0           # 放弃后退避多久再试（秒）
 
-_RECOVER_TEXT = "NapCat 心跳丢失，看门狗已自动重启，现已恢复上线。"
+# ── 静默判据（假在线）────────────────────────────────
+# 三态探针探不出「假在线」（:3000 接口全好、登录态在，只有腾讯→客户端的下行
+# 推送死了），唯一可观测的信号是「本该到的消息没到」。所以在线时再看 qq_bot 的
+# 静默时长：超过 SILENCE_SECONDS 一条消息都没有 → 重启一次当探针。
+SILENCE_SECONDS = WATCHDOG_SILENCE_SECONDS     # 多久没消息算「疑似假在线」
+SILENCE_COOLDOWN = WATCHDOG_SILENCE_COOLDOWN   # 连续静默时两次重启的起步间隔
+SILENCE_MAX_GAP = WATCHDOG_SILENCE_MAX_GAP     # 间隔倍增的上限
+
+_STATUS_PATH = os.path.join(BASE_DIR, "state", "qq_status.json")
+# 快照本身比这还旧 → qq_bot 的状态线程也停了（或没起），静默判不了，不动手。
+# 状态快照每 1 秒写一次，120 秒留了很宽的余量。
+STATUS_STALE = 120.0
 
 _ALL_BAT = os.path.join(BASE_DIR, "一键启动全部.bat")
 _LOCK_PATH = os.path.join(BASE_DIR, "state", "watchdog.lock")
@@ -162,6 +182,30 @@ def _qr_written_since(since):
         return False
 
 
+def _silent_seconds(now):
+    """距「最后一次收发消息」过了多少秒；读不到 / 判不了返回 None。
+
+    ⚠️ 不能直接读快照里的 `last_activity_ago` —— 那是**写快照那一刻**算出来的值，
+    qq_bot 的状态线程一停它就冻住，看着永远「刚活动过」。改用快照的 `ts` 反推绝对
+    时刻（last_activity = ts - last_activity_ago）再跟 now 比。
+
+    快照自己太旧（qq_bot 卡死 / 压根没起）→ 返回 None：那是「进程级」的毛病，交给
+    探活那两条分支，静默判据不抢。
+    """
+    try:
+        with open(_STATUS_PATH, encoding="utf-8") as f:
+            snap = json.load(f)
+    except (OSError, ValueError):
+        return None
+    ts = snap.get("ts")
+    ago = snap.get("last_activity_ago")
+    if not isinstance(ts, (int, float)) or not isinstance(ago, (int, float)):
+        return None
+    if abs(now - ts) > STATUS_STALE:
+        return None
+    return max(0.0, now - (ts - ago))
+
+
 def _trigger_restart():
     """拉起「一键启动全部 force auto」，隐藏窗口、不阻塞。返回是否成功发起。"""
     if not os.path.exists(_ALL_BAT):
@@ -207,6 +251,36 @@ def _await_outcome(since):
     return "unknown"
 
 
+def _check_silence(state, now):
+    """在线、但长时间一条消息都没收到 → 疑似假在线，重启一次**当探针**。
+
+    为什么重启能当探针（用户 09-29 的判断，已被当天三次实测证实）：重启后**自动
+    登录**说明会话本来是好的，那就是「群里本来就安静」→ 静默放过、不通知；**需要
+    扫码**说明会话早就被腾讯作废了，而这正是「假在线」的本质 → 推二维码。所以误报
+    的代价只是一次静默重启，真故障却能第一时间暴露出来。
+
+    ⚠️ 退避是必须的，不是优化：静默重启会把 qq_bot 一起重启，而静默计时挂在
+    qq_bot 内存里（`notify._last_activity` 在 import 时置为当下）→ 重启完静默归零。
+    没有退避的话，整夜没人说话就会变成每 SILENCE_SECONDS 杀一次 QQ，反过来招风控。
+    所以每次静默重启后间隔翻倍、封顶 SILENCE_MAX_GAP；一收到消息立刻清零。
+    """
+    silent = _silent_seconds(now)
+    if silent is None:
+        return True                      # 快照读不到 → 不下判断
+    if silent < SILENCE_SECONDS:
+        state["silence_gap"] = 0.0       # 有动静 → 退避清零
+        return True
+    if now < state["silence_until"]:
+        return True                      # 还在上一轮的退避里
+    gap = state["silence_gap"] or SILENCE_COOLDOWN
+    state["silence_gap"] = min(gap * 2.0, SILENCE_MAX_GAP)
+    state["silence_until"] = now + gap
+    log.warning("已静默 %.0f 分钟（阈值 %.0f 分钟）但探活正常，疑似假在线；"
+                "重启一次当探针（下次最早 %.0f 分钟后再判）",
+                silent / 60.0, SILENCE_SECONDS / 60.0, gap / 60.0)
+    return _restart(state, now, "长时间收不到任何消息（疑似假在线）")
+
+
 def _cycle(state, now=None):
     """一个探测周期。state 是跨周期保存的计数器字典。返回 True=继续循环。
 
@@ -222,14 +296,13 @@ def _cycle(state, now=None):
         state["offline_since"] = None
         state["backoff_until"] = 0.0        # 真的好了，把退避一并清掉
         if state["fails"] or state["restart_fails"]:
+            # 恢复本身**不通知**（09-29 用户要求）：能自己登回来就不打扰他。
             log.info("NapCat 恢复在线：%s", detail)
-            if state["restart_fails"]:
-                push_text("QQ 机器人已自动恢复", _RECOVER_TEXT)
             state["fails"] = 0
             state["restart_fails"] = 0
         else:
             log.debug("NapCat 在线：%s", detail)
-        return True
+        return _check_silence(state, now)
 
     if st == "dead":
         state["offline_since"] = None
@@ -276,9 +349,9 @@ def _restart(state, now, reason):
         notify.clear_restarting()
 
     if outcome == "online":
-        log.info("重启后 NapCat 已恢复")
+        # 自动登录 = 会话本来就是好的 → 按用户要求**不通知**。
+        log.info("重启后 NapCat 已恢复（自动登录，按用户要求不通知）")
         state["restart_fails"] = 0
-        push_text("QQ 机器人已自动恢复", _RECOVER_TEXT)
     elif outcome == "qr":
         # 「已重启」和「要扫码」合并成一条 —— 不再先发一条说在重启。
         log.info("重启后需要扫码，已把二维码随通知一起推给用户")
@@ -319,7 +392,7 @@ def run():
     log.info("看门狗启动：探 NapCat :3000，间隔 %.0fs；连不上 %d 次、或未登录 %.0fs 即重启",
              PROBE_INTERVAL, MAX_FAILS, OFFLINE_GRACE)
     state = {"fails": 0, "restart_fails": 0, "offline_since": None,
-             "backoff_until": 0.0}
+             "backoff_until": 0.0, "silence_until": 0.0, "silence_gap": 0.0}
     while True:
         time.sleep(PROBE_INTERVAL)
         _cycle(state)
