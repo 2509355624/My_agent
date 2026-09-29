@@ -9,6 +9,7 @@ NapCat（OneBot 11）HTTP API 封装 + QQ 文本适配
 先降级成纯文本，再按段落切成若干条。
 """
 
+import itertools
 import logging
 import os
 import re
@@ -104,6 +105,12 @@ def _preview(chunk):
 # 哪个 QQ 会话服务」——与 app/cancel.py 传递取消事件是同一套做法。
 _local = threading.local()
 
+# 轮次序号：每 bind_context 一次 +1。工具层靠它判断「这是新一轮还是同一轮里
+# 的第 N 次迭代」——`execute_tool(name, args)` 的签名不便再加参数，而
+# bind_context 恰好**一轮只调一次**（qq_bot 开跑前），是现成的轮次起点。
+# 进程内单调递增，重启归零；只用于相等性比较，不做时间运算。
+_turn_seq = itertools.count(1)
+
 
 def bind_context(session_key, target, target_id, quoted_images=None):
     """绑定当前线程正在处理的 QQ 会话。target 取 "private" / "group"。
@@ -117,11 +124,12 @@ def bind_context(session_key, target, target_id, quoted_images=None):
     _local.target = target
     _local.target_id = target_id
     _local.quoted_images = list(quoted_images or [])
+    _local.turn_id = next(_turn_seq)
 
 
 def clear_context():
     """摘掉绑定。worker 线程是复用的，不清理会把上一个会话带进下一轮。"""
-    for attr in ("session_key", "target", "target_id", "quoted_images"):
+    for attr in ("session_key", "target", "target_id", "quoted_images", "turn_id"):
         if hasattr(_local, attr):
             delattr(_local, attr)
 
@@ -130,6 +138,15 @@ def current_context():
     """返回 (target, target_id)；不在 QQ 会话里时返回 (None, None)。"""
     return (getattr(_local, "target", None),
             getattr(_local, "target_id", None))
+
+
+def current_turn_id():
+    """当前这一轮的编号；不在 QQ 会话里时返回 0。
+
+    0 是个「永远不会和真编号相等」的哨兵：没绑定上下文时工具本来就发不出去，
+    调用方按同一轮处理即可，不必额外分支。
+    """
+    return getattr(_local, "turn_id", 0)
 
 
 def current_quoted_images():
