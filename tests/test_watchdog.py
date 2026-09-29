@@ -2,10 +2,12 @@
 
 覆盖：三态探测（online / offline / dead）、未到阈值不重启、到阈值触发重启并恢复、
 登录态失效满宽限期才重启、重启后要扫码只推一条合并通知、一直没人扫码会退避、
-重启连续失败放弃并退避、退避期内不动作。不涉及真实 NapCat / subprocess。
+重启连续失败放弃并退避、退避期内不动作、静默判据（假在线）、启动互斥（文件锁）。
+不涉及真实 NapCat / subprocess。
 """
 
 from unittest import TestCase, mock
+from unittest.case import skipIf
 
 from app import watchdog as wd
 
@@ -403,3 +405,46 @@ class _FakeClock:
     def __call__(self):
         self.t += wd.RECOVER_INTERVAL
         return self.t
+
+
+@skipIf(wd.msvcrt is None, "文件锁只在 Windows 有")
+class LockTest(TestCase):
+    """`_acquire_lock` 的互斥必须**真的**生效。
+
+    09-29 踩过：run() 里写的是 `_acquire_lock()`，返回值被丢掉 → 句柄被垃圾回收 →
+    Windows 立刻释放锁 → 互斥形同虚设，能同时跑好几个看门狗（watchdog.log 里
+    23:33:16 / 23:33:30 两条「活着但未登录」就是两个实例各写了一条）。
+    """
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.dir, True))
+        self.path = self.dir + "/watchdog.lock"
+        p = mock.patch.object(wd, "_LOCK_PATH", self.path)
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(wd, "_LOCK_FILE", None)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _try_lock(self):
+        """从另一个句柄抢同一把锁，成功返回 True。"""
+        f = open(self.path, "a+")
+        self.addCleanup(f.close)
+        try:
+            wd.msvcrt.locking(f.fileno(), wd.msvcrt.LK_NBLCK, 1)
+            wd.msvcrt.locking(f.fileno(), wd.msvcrt.LK_UNLCK, 1)
+            return True
+        except OSError:
+            return False
+
+    def test_second_instance_exits(self):
+        wd._acquire_lock()
+        with self.assertRaises(SystemExit):
+            wd._acquire_lock()
+
+    def test_lock_survives_discarded_return_value(self):
+        """回归：调用方不接返回值，锁也不能松。"""
+        wd._acquire_lock()          # 故意丢掉返回值
+        self.assertFalse(self._try_lock())

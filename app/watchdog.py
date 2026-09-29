@@ -115,11 +115,20 @@ _ALL_BAT = os.path.join(BASE_DIR, "一键启动全部.bat")
 _LOCK_PATH = os.path.join(BASE_DIR, "state", "watchdog.lock")
 
 
+# 锁文件句柄必须**一直活着**：句柄一关，Windows 就把锁释放了。
+# 09-29 实测踩过：run() 里写的是 `_acquire_lock()`，返回值被丢掉，函数一返回句柄
+# 就被垃圾回收 → 锁立刻失效 → 能同时跑好几个看门狗（watchdog.log 里 23:33:16 和
+# 23:33:30 连着两条「活着但未登录」就是两个实例各写了一条，一个实例在 30 秒内
+# 不可能打印两次）。所以句柄存到模块级变量里，不指望调用方接住返回值。
+_LOCK_FILE = None
+
+
 def _acquire_lock():
     """Windows 文件锁：进程死亡后系统自动释放，不会留下需要清理的死锁文件。
 
-    返回锁文件对象（保活用）。拿不到说明已有实例在跑，直接退出。
+    返回锁文件对象（也存进 `_LOCK_FILE` 保活）。拿不到说明已有实例在跑，直接退出。
     """
+    global _LOCK_FILE
     os.makedirs(os.path.dirname(_LOCK_PATH), exist_ok=True)
     f = open(_LOCK_PATH, "w")
     if msvcrt is None:
@@ -129,6 +138,7 @@ def _acquire_lock():
     except OSError:
         log.warning("看门狗已在运行（锁被占用），退出")
         sys.exit(0)
+    _LOCK_FILE = f
     return f
 
 
