@@ -107,8 +107,12 @@ class PushOfflineTest(unittest.TestCase):
 class WatcherTest(unittest.TestCase):
     def setUp(self):
         self.qr = _TmpQR(self)
+        flag_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(flag_dir.cleanup)
         for name, val in (("NOTIFY_PUSHPLUS_TOKEN", "tok"),
-                          ("NOTIFY_QRCODE_PATH", self.qr.path)):
+                          ("NOTIFY_QRCODE_PATH", self.qr.path),
+                          ("_RESTART_FLAG",
+                           os.path.join(flag_dir.name, "restart.flag"))):
             p = mock.patch.object(notify, name, val)
             p.start()
             self.addCleanup(p.stop)
@@ -242,6 +246,67 @@ class DispatchOfflineNoticeTest(unittest.TestCase):
         self.bot._dispatch("{not json")
         self.bot._dispatch("[]")
         self.assertEqual(notify._take_reason(), ("", ""))
+
+
+class RestartHandoffTest(unittest.TestCase):
+    """看门狗自动重启期间由看门狗统一发通知，watcher 必须让位。
+
+    否则同一次掉线会收到两条：看门狗的「已重启 + 要扫码」和 watcher 的
+    「掉线了，需要扫码」（2026-09-29 用户抱怨）。
+    """
+
+    def setUp(self):
+        self.qr = _TmpQR(self)
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        self.flag = os.path.join(d.name, "restart.flag")
+        for name, val in (("NOTIFY_PUSHPLUS_TOKEN", "tok"),
+                          ("NOTIFY_QRCODE_PATH", self.qr.path),
+                          ("_RESTART_FLAG", self.flag)):
+            p = mock.patch.object(notify, name, val)
+            p.start()
+            self.addCleanup(p.stop)
+        p = mock.patch.object(notify, "_online", lambda: False)
+        p.start()
+        self.addCleanup(p.stop)
+        self.sent = []
+        p = mock.patch.object(notify, "_post", _post_capture(self.sent))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _flag_on(self, age=0.0):
+        with open(self.flag, "w", encoding="utf-8") as f:
+            f.write("x")
+        if age:
+            os.utime(self.flag, (time.time() - age, time.time() - age))
+
+    def test_mark_and_clear_roundtrip(self):
+        self.assertFalse(notify.restarting())
+        notify.mark_restarting()
+        self.assertTrue(notify.restarting())
+        notify.clear_restarting()
+        self.assertFalse(notify.restarting())
+
+    def test_stale_flag_ignored(self):
+        """看门狗自己挂了、标记留在盘上 → 不能把通知通道永久堵死。"""
+        self._flag_on(age=notify._RESTART_FLAG_TTL + 10)
+        self.assertFalse(notify.restarting())
+
+    def test_tick_defers_to_watchdog(self):
+        w = notify._Watcher(self.qr.path)
+        self._flag_on()
+        self.qr.touch(b"png-2", at=w.last_mtime + 10)
+        self.assertFalse(w.tick())
+        self.assertEqual(self.sent, [])
+        # 让位期间收下了 mtime：窗口期结束后不会把旧码补推出来
+        notify.clear_restarting()
+        self.assertFalse(w.tick())
+        self.assertEqual(self.sent, [])
+
+    def test_prime_defers_to_watchdog(self):
+        self._flag_on()
+        self.assertFalse(notify._Watcher(self.qr.path).prime())
+        self.assertEqual(self.sent, [])
 
 
 class SilenceAlertTest(unittest.TestCase):

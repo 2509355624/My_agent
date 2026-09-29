@@ -1,6 +1,9 @@
 @echo off
 cd /d "%~dp0"
 
+rem stable window title: the all-in-one launcher kills the old web window by it
+title AGENT-WEB
+
 echo.
 echo ==================================================
 echo   My Agent - Personal AI Assistant

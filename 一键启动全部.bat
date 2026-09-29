@@ -1,6 +1,6 @@
 @echo off
 cd /d "%~dp0"
-title 全部启动 - Agent 网页 + QQ 机器人
+title LAUNCH-ALL
 
 set "WEB_BAT=D:\AI\agent_my_test\一键启动.bat"
 set "NAPCAT_BAT=D:\AI\NapCat\启动NapCat.bat"
@@ -8,6 +8,10 @@ set "BOT_BAT=D:\AI\agent_my_test\启动QQ机器人.bat"
 
 set "FORCE_RESTART="
 if /i "%~1"=="force" set "FORCE_RESTART=1"
+
+rem auto = 看门狗调起来的（隐藏窗口跑）：跑完直接退出，不等回车、不留窗口
+set "AUTO_RUN="
+if /i "%~2"=="auto" set "AUTO_RUN=1"
 
 echo ==================================================
 echo   全部启动 : Agent 网页 + NapCat + QQ 适配层
@@ -19,17 +23,17 @@ echo.
 
 if not exist "%WEB_BAT%" (
     echo [ERROR] 找不到 "%WEB_BAT%"
-    pause
+    if not defined AUTO_RUN pause
     exit /b 1
 )
 if not exist "%NAPCAT_BAT%" (
     echo [ERROR] 找不到 "%NAPCAT_BAT%"
-    pause
+    if not defined AUTO_RUN pause
     exit /b 1
 )
 if not exist "%BOT_BAT%" (
     echo [ERROR] 找不到 "%BOT_BAT%"
-    pause
+    if not defined AUTO_RUN pause
     exit /b 1
 )
 
@@ -42,6 +46,9 @@ for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":5174 " ^| findstr "L
     echo       结束网页端 PID %%a
     taskkill /PID %%a /F >nul 2>&1
 )
+rem 关掉上一次的网页端窗口（cmd 会跟着命令改名，所以 一键启动.bat 里显式 title 了）
+rem 不带 /T：那个窗口里还挂着 start 拉起来的浏览器，别顺手把人家的浏览器关了
+taskkill /FI "WINDOWTITLE eq AGENT-WEB" /F >nul 2>&1
 tasklist /FI "WINDOWTITLE eq QQBOT-ADAPTER" 2>nul | findstr /i "cmd.exe" >nul
 if not errorlevel 1 (
     taskkill /FI "WINDOWTITLE eq QQBOT-ADAPTER" /T /F >nul 2>&1
@@ -56,6 +63,8 @@ if defined FORCE_RESTART (
             taskkill /PID %%a /F >nul 2>&1
         )
     )
+    rem 关掉上一次的 NapCat 窗口（进程杀完窗口会停在提示符，不清就一直堆）
+    taskkill /FI "WINDOWTITLE eq NapCat - QQ 协议端" /T /F >nul 2>&1
     taskkill /IM QQ.exe /F >nul 2>&1
     taskkill /IM NapCatWinBootMain.exe /F >nul 2>&1
 ) else if defined NAPCAT_RUNNING (
@@ -67,6 +76,8 @@ if defined FORCE_RESTART (
             taskkill /PID %%a /F >nul 2>&1
         )
     )
+    rem 关掉上一次的 NapCat 窗口（进程杀完窗口会停在提示符，不清就一直堆）
+    taskkill /FI "WINDOWTITLE eq NapCat - QQ 协议端" /T /F >nul 2>&1
     taskkill /IM QQ.exe /F >nul 2>&1
     taskkill /IM NapCatWinBootMain.exe /F >nul 2>&1
 )
@@ -75,7 +86,7 @@ echo       完成
 echo.
 
 echo [2/2] 启动
-start "Agent Web" cmd /k "%WEB_BAT%"
+start "AGENT-WEB" cmd /k "%WEB_BAT%"
 echo       Agent Web        网页端  http://localhost:5174
 if defined FORCE_RESTART (
     start "NapCat" cmd /k "%NAPCAT_BAT%"
@@ -109,4 +120,4 @@ echo   登录成功后适配层会自动连上，无需重启任何东西
 echo ==================================================
 echo.
 echo   新开的窗口请勿关闭。本窗口可以关。
-pause
+if not defined AUTO_RUN pause

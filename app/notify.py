@@ -19,15 +19,16 @@ import threading
 import time
 import urllib.request
 
-from app.config import (NOTIFY_PUSHPLUS_TOKEN, NOTIFY_QRCODE_PATH,
+from app.config import (BASE_DIR, NOTIFY_PUSHPLUS_TOKEN, NOTIFY_QRCODE_PATH,
                         NOTIFY_SILENCE_HOURS)
 
 log = logging.getLogger("notify")
 
 _PUSHPLUS_URL = "https://www.pushplus.plus/send"
 
-# 轮询间隔。掉线不是毫秒级事件，10 秒的粒度绰绰有余。
-_POLL_SECONDS = 10
+# 轮询间隔。掉线不是毫秒级事件，但「扫码通知慢了」是真实抱怨（09-29），
+# 而每次 tick 只是 getmtime，3 秒粒度足够快又不费电。
+_POLL_SECONDS = 3
 
 # 推过一次后多久不再推。NapCat 的二维码有效期到了会重写同一个文件，没有这个
 # 闸就会被反复轰炸 —— 而人扫码需要时间，轰炸只会让手机响个不停。
@@ -35,6 +36,13 @@ _COOLDOWN_SECONDS = 300
 
 # 启动时二维码文件比这还旧，就当「上一轮的遗留」，不补推。
 _STALE_SECONDS = 300
+
+# 看门狗自动重启期间，通知统一由看门狗自己发 —— 它把「已重启」和「要扫码」
+# 合成一条推出去。这个标记就是那个窗口期：文件在 = 看门狗正在处理，watcher
+# 让位，同一次掉线就不会收到两条通知。看门狗处理完（或超时）会删掉它；
+# 留 TTL 是防看门狗自己挂了、标记变成永久文件把通知通道堵死。
+_RESTART_FLAG = os.path.join(BASE_DIR, "state", "restart.flag")
+_RESTART_FLAG_TTL = 900
 
 _lock = threading.Lock()
 _reason_title = ""
@@ -66,6 +74,41 @@ def last_activity():
 def enabled():
     """没配 token 就整个功能关掉。"""
     return bool(NOTIFY_PUSHPLUS_TOKEN)
+
+
+def mark_restarting():
+    """看门狗触发自动重启时调用：这段窗口期的掉线通知由看门狗自己发。
+
+    为什么需要：看门狗重启后要告诉用户「已重启 + 要扫码」，watcher 那边
+    只知道「二维码变了」也会推一条 —— 两条通知、两条都不完整。用一个跨进程
+    的标记文件把窗口期标出来，watcher 见到就让位。
+    """
+    try:
+        os.makedirs(os.path.dirname(_RESTART_FLAG), exist_ok=True)
+        with open(_RESTART_FLAG, "w", encoding="utf-8") as f:
+            f.write("%.3f" % time.time())
+    except OSError as e:
+        log.warning("写重启标记失败：%s", e)
+
+
+def clear_restarting():
+    """看门狗处理完（恢复 / 要扫码 / 判定失败）后调用，交还通知权。"""
+    try:
+        os.remove(_RESTART_FLAG)
+    except OSError:
+        pass
+
+
+def restarting():
+    """看门狗是否正在自动重启（标记存在且没过期）。"""
+    try:
+        age = time.time() - os.path.getmtime(_RESTART_FLAG)
+    except OSError:
+        return False
+    if age >= _RESTART_FLAG_TTL:
+        log.info("重启标记已过期（%.0fs），按无效处理", age)
+        return False
+    return True
 
 
 def note_offline_reason(title, desc):
@@ -105,9 +148,17 @@ def _online():
         return False
 
 
-def _build_content(qr_path, reason_title, reason_desc):
-    """正文是 HTML。二维码以 base64 内嵌，图随消息走，不依赖任何图床。"""
-    parts = ["<p>%s 掉线了，需要重新扫码。</p>" % time.strftime("%m-%d %H:%M:%S")]
+def _build_content(qr_path, reason_title, reason_desc, intro=""):
+    """正文是 HTML。二维码以 base64 内嵌，图随消息走，不依赖任何图床。
+
+    intro 给定时用它当开头（看门狗要写「已自动重启」），否则用默认的
+    「掉线了，需要重新扫码」。
+    """
+    parts = []
+    if intro:
+        parts.append("<p>%s</p>" % intro)
+    else:
+        parts.append("<p>%s 掉线了，需要重新扫码。</p>" % time.strftime("%m-%d %H:%M:%S"))
     if reason_title or reason_desc:
         parts.append("<p>原因：%s %s</p>" % (reason_title, reason_desc))
     if qr_path and os.path.isfile(qr_path):
@@ -143,16 +194,20 @@ def _post(payload, timeout=20):
         return resp.status, resp.read().decode("utf-8", "replace")
 
 
-def push_offline(qr_path=None, reason_title="", reason_desc=""):
-    """推一条「掉线要扫码」到手机。返回 (ok, 说明)；失败只记日志，不抛。"""
+def push_offline(qr_path=None, reason_title="", reason_desc="",
+                 title=None, intro=""):
+    """推一条「掉线要扫码」到手机。返回 (ok, 说明)；失败只记日志，不抛。
+
+    title / intro 留给看门狗：它把「已自动重启」和「要扫码」合成一条推出去，
+    不想再套用「掉线了」那套默认文案。
+    """
     if not enabled():
         return False, "未配置 PUSHPLUS_TOKEN"
-    title = "QQ 机器人掉线，需要扫码"
     payload = {
         "token": NOTIFY_PUSHPLUS_TOKEN,
-        "title": title,
+        "title": title or "QQ 机器人掉线，需要扫码",
         "content": _build_content(qr_path or NOTIFY_QRCODE_PATH,
-                                  reason_title, reason_desc),
+                                  reason_title, reason_desc, intro),
         "template": "html",
     }
     try:
@@ -252,6 +307,9 @@ class _Watcher:
             return False
         if _online():
             return False
+        if restarting():
+            log.info("看门狗正在自动重启并负责通知，跳过补推")
+            return False
         log.info("启动时已是待扫码状态，补推一条")
         return self._push()
 
@@ -263,6 +321,11 @@ class _Watcher:
         if cur is None or cur == self.last_mtime:
             return silence_pushed
         self.last_mtime = cur
+        if restarting():
+            # 先把 last_mtime 收下（免得让位期间攒着的旧码在窗口期结束后补推），
+            # 但不推 —— 这一轮的二维码由看门狗随「已重启」一起发。
+            log.info("看门狗正在自动重启并负责通知，跳过二维码推送")
+            return silence_pushed
         if now - self.last_push < self.cooldown:
             log.info("二维码刷新了，但 %d 秒内推过，跳过", self.cooldown)
             return silence_pushed
