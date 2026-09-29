@@ -171,13 +171,40 @@ class DetectorTest(unittest.TestCase):
                   "图在路上了", "排队画"):
             self.assertTrue(agent._looks_like_image_promise(s), s)
 
+    def test_matches_running_promises(self):
+        """群里把生图叫「跑图」——模型跟着说「跑着了 / 跑上了」。原词表只有
+        「画」系，这些一个都不认（2026-09-29 群 1041079621 实测漏网）。"""
+        for s in ("跑着了", "跑着呢", "在跑了", "跑上了", "跑起来了", "重跑中",
+                  "马上跑", "这就跑", "开始跑", "帮你跑", "跑好了", "跑完了",
+                  "排队跑"):
+            self.assertTrue(agent._looks_like_image_promise(s), s)
+
+    def test_matches_completion_claims(self):
+        """断言「图已经存在 / 已经发出去」——当晚三条假回执原样钉住。"""
+        for s in ("爱丽丝，这张也出了 瞅瞅",
+                  "刚连着发了三张 往上翻翻",
+                  "爱丽丝，三张都发群里了 再往上翻",
+                  "刚那版已经发群里了 先看看",
+                  "三张都出了 看图吧",
+                  "刚那张已经出完发群里了",
+                  "在的 NAI那张跑完了"):
+            self.assertTrue(agent._looks_like_image_promise(s), s)
+
     def test_refusals_do_not_match(self):
         for s in ("画不了", "本群关了 画不了", "不画", "画不出", "没法画",
-                  "别画了", "这个不给画"):
+                  "别画了", "这个不给画", "跑不了 本机 ComfyUI 离线",
+                  "这张不跑了", "不发了", "别发了"):
+            self.assertFalse(agent._looks_like_image_promise(s), s)
+
+    def test_honest_failure_report_does_not_match(self):
+        """老实回话里有「出图」二字（「没出图」），绝不能触发退回重来。"""
+        for s in ("图没画出来（NAI：429 Client Error: Too Many Requests）",
+                  "画超时了（超过 180 秒没出图），已经中断这张。麻烦重新生成一次。"):
             self.assertFalse(agent._looks_like_image_promise(s), s)
 
     def test_questions_and_idle_talk_do_not_match(self):
-        for s in ("画胡桃还是画你", "画个啥", "你想画啥", "图呢", "", None):
+        for s in ("画胡桃还是画你", "画个啥", "你想画啥", "图呢", "",
+                  None, "刚才出了点问题"):
             self.assertFalse(agent._looks_like_image_promise(s), s)
 
 

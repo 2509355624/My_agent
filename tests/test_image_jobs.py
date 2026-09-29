@@ -1554,9 +1554,15 @@ class RecentOutcomesTest(_Base):
             self._enqueue(skill="anima")
             image_jobs._drain()
         line = image_jobs.recent_line("group", "9")
-        self.assertIn("1)已出图（anima）", line)
-        # 明确禁止重复提交：小模型在这点上尤其容易想歪
-        self.assertIn("别再问", line)
+        self.assertIn("已完成：", line)
+        self.assertIn("已出图（anima）", line)
+        # 带完成时刻：模型要能分清「刚才那张」和「很久以前那张」
+        self.assertRegex(line, r"\d\d:\d\d 已出图")
+        # 明说「没列出来的 = 还没提交」——这是「AI 撒谎」的正面修法
+        self.assertIn("还没提交", line)
+        # 旧措辞「别再问要不要重画」会把「对方说没看到 → 该重跑」堵死
+        self.assertNotIn("别再问", line)
+        self.assertIn("重跑", line)
 
     def test_failure_recorded_with_reason(self):
         with mock.patch.object(image_jobs, "wait_done",
@@ -1566,7 +1572,7 @@ class RecentOutcomesTest(_Base):
             self._enqueue(skill="anima")
             image_jobs._drain()
         line = image_jobs.recent_line("group", "9")
-        self.assertIn("1)失败（anima：超时）", line)
+        self.assertIn("失败（anima：超时）", line)
 
     def test_only_the_last_three_and_newest_is_last(self):
         with mock.patch.object(image_jobs, "wait_done",
@@ -1577,7 +1583,21 @@ class RecentOutcomesTest(_Base):
         items = image_jobs.recent_outcomes("group", "9", 3)
         self.assertEqual(len(items), 3)
         self.assertTrue(all(r["ok"] for r in items))
-        self.assertIn("第 3 条最新", image_jobs.recent_line("group", "9", 3))
+        self.assertIn("最新在后", image_jobs.recent_line("group", "9", 3))
+
+    def test_inflight_job_is_reported_as_not_yet_drawn(self):
+        """还没跑完的任务也要报出来——否则模型分不清「刚提交」和「早跑完」，
+        会把上一条已完成当成对方刚发的那张（2026-09-29 群 1041079621）。"""
+        self._enqueue(skill="nai")          # 不 _drain：留在队列里
+        line = image_jobs.recent_line("group", "9")
+        self.assertIn("还没出图", line)
+        self.assertIn("排队中", line)
+        self.assertNotIn("已出图", line)
+
+    def test_inflight_of_other_session_is_not_visible(self):
+        self._enqueue(("group", "8"), skill="nai")
+        self.assertEqual(image_jobs.recent_line("group", "9"), "")
+        self.assertIn("还没出图", image_jobs.recent_line("group", "8"))
 
     def test_other_sessions_are_not_visible(self):
         with mock.patch.object(image_jobs, "wait_done",

@@ -286,33 +286,73 @@ def recent_outcomes(target, target_id, limit=3):
     return picked
 
 
+def _inflight_of(target, target_id, limit=3):
+    """本会话**还没出图**的任务（正在跑 + 排队中），按入队顺序，旧的在前。
+
+    回执原先只报「已经跑完的」，模型于是分不清「刚提交、还在跑」和「早就
+    跑完」——它会把上一条已完成当成对方刚发的那张。把在途任务也报出来，
+    「这张到底提交过没有」就从推理题变成看得见的事实。
+    """
+    key = _key(target, target_id)
+    with _lock:
+        items = [(j, "排队中") for j in _queue
+                 if _key(j.target, j.target_id) == key]
+        if _running is not None \
+                and _key(_running.target, _running.target_id) == key:
+            items.append((_running, "正在跑"))
+    items.sort(key=lambda pair: pair[0].seq)
+    if limit and limit > 0:
+        items = items[-limit:]
+    return items
+
+
 def recent_line(target, target_id, limit=3):
-    """把最近几张的结局渲染成一行给模型看；没有就返回空串。
+    """把「已完成」和「还没出图」渲染成一段给模型看；两者都没有就返回空串。
 
     为什么需要它（2026-09-29 用户提）：图由 worker 直接发回会话，模型在
     enqueue 拿到「已经排上队了」之后就**再也收不到任何回执**——它不知道图
-    出没出，于是老说「我再帮你跑一张」。这行就是那条回执，跟着 extra_context
+    出没出，于是老说「我再帮你跑一张」。这段就是那条回执，跟着 extra_context
     每轮现取现用（出流即弃，不写回 history）。
 
-    措辞直接给结论 + 明确禁止重复提交：让模型自己推理「大概画完了」不如直接
-    告诉它结论，小模型在这一点上尤其容易想歪。
+    ⚠️ 2026-09-29 二次修（用户报「AI 会撒谎，不知道前面的生图需求完成没有」）。
+    原版只说「最近 3 条已出图」，**不带时间、不带在途任务**：模型会把上一条的
+    成功读成「对方刚发的那张也成了」；结尾那句「别再问『要不要重画』」更糟——
+    对方说「我没看到」时它反而不敢重画，只会让人「往上翻」。实测当天 130 条
+    声称出图的回复里 **32 条整轮没调过 generate_image**。现在三处改动：
+    ① 每条带完成时刻；② 在途任务单列一段；③ 明说「没列出来的 = 还没提交」，
+    并把「对方说没看到」的正确动作写清楚。
     """
-    items = recent_outcomes(target, target_id, limit)
-    if not items:
+    if target is None:
         return ""
-    parts = []
-    for i, r in enumerate(items, 1):
-        skill = r["skill"] or "默认"
-        if r["ok"]:
-            parts.append("%d)已出图（%s）" % (i, skill))
-        else:
-            why = r["err"]
-            parts.append("%d)失败（%s%s）"
-                         % (i, skill, ("：" + why) if why else ""))
-    return ("[最近生图]（按提交顺序，第 %d 条最新）：%s\n"
-            "这些图都已经自动发到会话里了——别再问「要不要重画」，也别重新提交；"
-            "只有对方明确说没收到或者不满意时才重画。"
-            % (len(items), "；".join(parts)))
+    done = recent_outcomes(target, target_id, limit)
+    doing = _inflight_of(target, target_id, limit)
+    if not done and not doing:
+        return ""
+    lines = ["[最近生图]（只列你在这个会话提交过的，按提交先后，最新在后）"]
+    if done:
+        bits = []
+        for i, r in enumerate(done, 1):
+            when = time.strftime("%H:%M", time.localtime(r.get("ts") or 0))
+            skill = r["skill"] or "默认"
+            if r["ok"]:
+                bits.append("%d) %s 已出图（%s）" % (i, when, skill))
+            else:
+                why = r["err"]
+                bits.append("%d) %s 失败（%s%s）"
+                            % (i, when, skill, ("：" + why) if why else ""))
+        lines.append("已完成：" + "；".join(bits))
+    if doing:
+        bits = []
+        for i, (j, state) in enumerate(doing, len(done) + 1):
+            when = time.strftime("%H:%M", time.localtime(j.created))
+            bits.append("%d) %s 提交（%s），%s"
+                        % (i, when, j.skill or "默认", state))
+        lines.append("**还没出图**：" + "；".join(bits))
+    lines.append(
+        "以上是你真的提交过的。对方贴了新 prompt 但这上面没多出新条目 = 这张"
+        "还没提交，别说「出了/发了」；对方说没看到就是真没出图，直接重跑一张，"
+        "别让他自己往上翻。")
+    return "\n".join(lines)
 
 
 def ahead_of(job):
