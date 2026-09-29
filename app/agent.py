@@ -21,7 +21,20 @@ log = logging.getLogger("agent")
 #   [[TOOL:name]]   [[TOOL: name]]   [[TOOL:NAME]]   [[name]]
 # 简写形式（无 TOOL: 前缀）只有在名字命中注册表时才被认作工具调用，
 # 避免把正文里正常的 [[xxx]] 标记误判成工具。
-TOOL_TAG_RE = re.compile(r'\[\[\s*(?:(TOOL)\s*:\s*)?(\w+)\s*\]\]', re.IGNORECASE)
+#
+# 开头的方括号也容忍被写成尖括号：实测（2026-09-29，233的粉丝群）模型偶发把
+# `[[TOOL:x]]{...}[[/TOOL]]` 吐成 `<TOOL:x]]{...}[[/TOOL]]`，闭合那半是对的、
+# 只有开头错。整块因为不匹配被当正文发到群里，群友直接看到工具源码。
+# 带 TOOL: 前缀时尖括号照收；无前缀的简写仍要求命中注册表，所以
+# 「<a]]」这类正文不会因为放宽开头就被误判成工具。
+TOOL_TAG_RE = re.compile(r'(?:\[\[|<)\s*(?:(TOOL)\s*:\s*)?(\w+)\s*\]\]',
+                         re.IGNORECASE)
+
+# 模型偶尔还会把工具块套进别的框架的壳里（<tool_call>…</tool_call>）。
+# 壳不是工具的一部分，剥块时一起吃掉，否则它会留在正文里被发出去。
+# 同样的实测来源：233的粉丝群里 8 次畸形里全都带这个前缀。
+_WRAPPER_OPEN_RE = re.compile(r'<\s*tool_calls?\s*>\s*$', re.IGNORECASE)
+_WRAPPER_CLOSE_RE = re.compile(r'^\s*<\s*/\s*tool_calls?\s*>', re.IGNORECASE)
 
 
 def _known_tool_names():
@@ -109,8 +122,8 @@ def _strip_tool_blocks(text):
     result_parts = []
     pos = 0  # 当前已扫描位置（属于正文）
     for m, _name in _iter_tool_tags(text):
-        # 保留工具块之前的正文
-        result_parts.append(text[pos:m.start()])
+        # 保留工具块之前的正文；顺手吃掉紧贴着的 <tool_call> 壳
+        result_parts.append(_WRAPPER_OPEN_RE.sub("", text[pos:m.start()]))
         # 找到工具块结束位置（含参数和关闭标签）
         block_end = m.end()
         rest = text[block_end:]
@@ -130,6 +143,10 @@ def _strip_tool_blocks(text):
         after = text[block_end:].lstrip()
         if after.startswith("[[/TOOL]]"):
             block_end = block_end + (len(text[block_end:]) - len(after)) + len("[[/TOOL]]")
+        # 再吃掉紧随其后的 </tool_call> 壳
+        cm = _WRAPPER_CLOSE_RE.match(text[block_end:])
+        if cm:
+            block_end += cm.end()
         pos = block_end
     # 末尾正文
     result_parts.append(text[pos:])

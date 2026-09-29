@@ -7,6 +7,8 @@
 
 覆盖：
 - parse_tool_calls：标准/简写/大小写/空白/缺关闭标签/多调用/非 JSON 参数
+- 畸形形态容错：尖括号开头（<TOOL:x]]）、<tool_call> 外壳——2026-09-29 从
+  233的粉丝群实测抓到的，8 次工具调用因此漏成正文发到群里
 - _strip_tool_blocks：剥离工具块但保留正文
 - _history_for_llm：内部 tool_result -> LLM 的 user role 转换
 """
@@ -89,6 +91,62 @@ class IterToolTagsTest(unittest.TestCase):
     def test_prefix_is_case_insensitive(self):
         tags = list(_iter_tool_tags('[[tool:list_skills]]'))
         self.assertEqual(tags[0][1], "list_skills")
+
+
+class MalformedFormTest(unittest.TestCase):
+    """模型偶尔吐出的畸形形态（2026-09-29 真机取证）。
+
+    样本来自 233的粉丝群会话文件：368 次工具调用里 8 次写成
+    `<tool_call><TOOL:name]]{json}[[/TOOL]]`——闭合那半是对的，只有开头把
+    `[[` 写成了 `<`，还多套了一层 `<tool_call>`。整块因为不匹配被当正文
+    发进群里，群友直接看到工具源码。
+    """
+
+    def test_angle_bracket_opening_accepted(self):
+        self.assertEqual(parse_tool_calls('<TOOL:list_skills]]'),
+                         [{"name": "list_skills", "args": {}}])
+
+    def test_real_leaked_sample_parses(self):
+        # 逐字取自群里那条泄漏消息
+        text = '<tool_call><TOOL:send_sticker]]{"nums": "11"}[[/TOOL]]'
+        calls = parse_tool_calls(text)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["name"], "send_sticker")
+        self.assertEqual(calls[0]["args"], {"nums": "11"})
+
+    def test_angle_opening_with_json_args(self):
+        calls = parse_tool_calls('<TOOL:generate_image]]{"prompt": "x"}[[/TOOL]]')
+        self.assertEqual(calls[0]["name"], "generate_image")
+        self.assertEqual(calls[0]["args"], {"prompt": "x"})
+
+    def test_bare_angle_form_needs_registry_hit(self):
+        # 无 TOOL: 前缀时仍要求名字命中注册表，正文里的 <note]] 不能误判
+        self.assertEqual(parse_tool_calls('正文 <note]] 标记'), [])
+
+    def test_angle_closing_alone_is_not_a_call(self):
+        self.assertEqual(parse_tool_calls('</TOOL]]'), [])
+        self.assertEqual(parse_tool_calls('<TOOL]]'), [])
+
+    def test_strip_swallows_wrapper_and_block(self):
+        text = '<tool_call><TOOL:send_sticker]]{"nums": "11"}[[/TOOL]]'
+        self.assertEqual(_strip_tool_blocks(text).strip(), '')
+
+    def test_strip_swallows_wrapper_before_standard_tag(self):
+        # 另一种变体：标签本身是对的，只是外面多套了壳
+        out = _strip_tool_blocks('我来查一下 <tool_call>[[TOOL:list_skills]][[/TOOL]]')
+        self.assertIn("我来查一下", out)
+        self.assertNotIn("tool_call", out)
+        self.assertNotIn("TOOL:", out)
+
+    def test_strip_swallows_closing_wrapper(self):
+        out = _strip_tool_blocks('[[TOOL:get_time]][[/TOOL]]</tool_call> 好了')
+        self.assertNotIn("tool_call", out)
+        self.assertIn("好了", out)
+
+    def test_plain_angle_brackets_in_prose_untouched(self):
+        text = '条件 a < b 且 c > d，就这样'
+        self.assertEqual(_strip_tool_blocks(text), text)
+        self.assertEqual(parse_tool_calls(text), [])
 
 
 class StripToolBlocksTest(unittest.TestCase):
