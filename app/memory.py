@@ -436,6 +436,15 @@ def _agent_budget(agent_id):
         return CONTEXT_BUDGET
 
 
+# 群聊窗口滞回（2026-09-30）：估算涨到 budget×HIGH 才裁，一次裁到 budget×LOW。
+# 两者之间留出的余量就是「纯追加、前缀稳定、缓存全热」的轮数。
+# 没有它的时候是「到预算就裁、裁到刚好装下」→ 每轮都裁 → 只剩系统头命中
+# （见 trim_window 里的说明）。调大 HIGH = 更少裁剪但 prompt 更大；
+# 调小 LOW = 每次裁得更狠（丢的上下文更多）但两次裁剪间隔更长。
+WINDOW_TRIM_HIGH = 1.3
+WINDOW_TRIM_LOW = 0.6
+
+
 def trim_window(history, agent_id=None, session_key=None, max_turns=None,
                 budget=None, reserve=0):
     """按 **token 预算**压缩会话（2026-09-29 用户定：不再按轮数开窗）。
@@ -449,6 +458,10 @@ def trim_window(history, agent_id=None, session_key=None, max_turns=None,
     - 群会话：把装不进预算的最老轮次滚出去交给 longterm（那是「这个群以前聊过
       什么」的来源），会话里只留装得下的最近若干轮。**摘摘要在后台线程跑**，
       这里不等它：记忆晚几十秒落盘没影响，但同步调一次 API 会卡住本轮回复。
+      **⚠️ 走滞回**（`WINDOW_TRIM_HIGH=1.3` / `WINDOW_TRIM_LOW=0.6`）：到
+      `budget×1.3` 才裁、一次裁到 `budget×0.6`。理由见下面 is_group 分支
+      的注释——「到预算就裁、裁到刚好装下」会变成**每轮都裁**，把服务端
+      前缀缓存打没（只剩系统头能命中）。
     - 非群会话（网页 / 私聊）：没有记忆库可去，走 trim_history 的 token 预算
       压缩（滚出去的摘成一条摘要顶在会话里，不是硬丢）。
 
@@ -476,20 +489,35 @@ def trim_window(history, agent_id=None, session_key=None, max_turns=None,
     reserve = max(0, reserve)
     est = (estimate_messages(system_msgs) + estimate_messages(other_msgs)
            + reserve)
-    if est < budget:
+
+    # 群聊用滞回阈值（高水位才裁），非群会话维持「到预算就交给 trim_history」。
+    group_id = _group_id_from_key(session_key)
+    is_group = bool(group_id and agent_id)
+    high = budget * WINDOW_TRIM_HIGH if is_group else budget
+    if est < high:
         return history
 
     turns = _split_turns(other_msgs)
-    group_id = _group_id_from_key(session_key)
 
-    if group_id and agent_id:
-        # 从最新往回装，装到预算装不下为止；更老的滚进长期记忆。
+    if is_group:
+        # 群聊走**滞回**：到高水位才裁，一次裁到低水位（2026-09-30）。
+        # 为什么不能「到预算就裁、裁到刚好装得下」：估算是保守偏大的
+        # （estimate_tokens 汉字 0.6/字 + 每条 16，实测比真实高 24%~70%），
+        # 而尾部 reserve 又不在 history 里，所以裁完真实 prompt 仍贴着预算
+        # → 下一轮估算又超 → **每轮都裁一次**。每裁一次消息数组就被重建，
+        # 系统头之后的前缀每轮都不一样 → 服务端前缀缓存只剩系统头能命中
+        # （实测签名 `[cache] 命中 6144 / 25xxx ≈ 24%`，占全部未命中 token
+        # 的 28%；09-29 是 09-28 的 2.6 倍，把当天命中率从 85% 拖到 72%）。
+        # 改成「裁得少、裁得狠」之后，两次裁剪之间全是纯追加，前缀稳定 → 全热。
+        # 代价：裁剪前的那一轮 prompt 会短暂冲到 budget×WINDOW_TRIM_HIGH。
+        target = budget * WINDOW_TRIM_LOW
         keep = 0
         acc = estimate_messages(system_msgs) + reserve
         for turn in reversed(turns):
-            acc += estimate_messages(turn)
-            if acc > budget:
+            add = estimate_messages(turn)
+            if acc + add > target:
                 break
+            acc += add
             keep += 1
         keep = max(1, keep)            # 最近一轮再大也得留，否则窗口空掉
         if keep >= len(turns):
@@ -498,6 +526,12 @@ def trim_window(history, agent_id=None, session_key=None, max_turns=None,
         result = list(system_msgs)
         for turn in turns[-keep:]:
             result.extend(turn)
+        # 裁剪动作本身必须留痕：它一次作废整段前缀缓存，是「这轮为什么贵」
+        # 的第一现场，而 `[cache]` 行看不出是裁剪造成的。
+        log.info("[window] 群%s：裁剪历史 %d 条 → %d 条"
+                 "（估算 %d → %d tokens，预算 %d，高水位 %d）",
+                 group_id, len(other_msgs), sum(len(t) for t in turns[-keep:]),
+                 est, acc, budget, int(high))
         return result
 
     # 非群会话（网页主会话 / QQ 私聊）没有长期记忆库可去，走 token 预算压缩：
