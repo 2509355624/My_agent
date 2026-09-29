@@ -42,3 +42,15 @@ state/
 
 # 运行日志（logs/qq_bot.log、logs/agent.log，含模型调用与降级记录）
 logs/
+
+# 排查问题时的本地残留：诊断脚本、diff 转储、临时抓的 stdout/stderr。
+# 都带 `_` 前缀或固定名，跑完就该删；万一忘了也不该被顺手提交进来。
+_local*
+_test*
+server_*.log
+DIAG.bat
+check_proc.ps1
+新建 文本文档.txt
+
+# 向量库的手工备份（搬家/重建时留的副本，不是运行所需）
+vector_store_backup_local/

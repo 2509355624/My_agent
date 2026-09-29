@@ -23,7 +23,7 @@ echo       No old process
 echo.
 echo [2/2] Starting agent...
 start "" "http://localhost:5174"
-D:\AI\confyui_env\Scripts\python.exe agent.py
+D:\AI\my_env\Scripts\python.exe agent.py
 if errorlevel 1 (
   echo.
   echo ERROR: Failed to start agent.
