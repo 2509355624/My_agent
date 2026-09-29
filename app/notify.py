@@ -20,7 +20,7 @@ import time
 import urllib.request
 
 from app.config import (BASE_DIR, NOTIFY_PUSHPLUS_TOKEN, NOTIFY_QRCODE_PATH,
-                        NOTIFY_SILENCE_HOURS)
+                        NOTIFY_SILENCE_HOURS, QQ_BOT_NAME)
 
 log = logging.getLogger("notify")
 
@@ -138,6 +138,36 @@ def _mtime(path):
         return None
 
 
+def _login_uin():
+    """从 NapCat 的 webui.json 读出这个实例要登的号（autoLoginAccount）。
+
+    二维码文件在 ...\\app\\napcat\\cache\\qrcode.png，往回两级就是 napcat 目录，
+    webui.json 就在它下面的 config\\ 里 —— 不用再单独配一个路径。读不到就返回
+    空串，推送里少个号而已，不能因为拿不到号就不推。
+    """
+    try:
+        base = os.path.dirname(os.path.dirname(NOTIFY_QRCODE_PATH))
+        with open(os.path.join(base, "config", "webui.json"),
+                  encoding="utf-8") as f:
+            return str(json.load(f).get("autoLoginAccount") or "").strip()
+    except Exception:
+        return ""
+
+
+def _bot_label():
+    """推送里用来指认「是谁掉了」的标签，形如 胡桃桃(3985441738)。
+
+    一台机器上可能跑着不止一个号（小小怪 / 胡桃桃），光写「QQ 机器人掉线」
+    根本分不清该去扫哪个号 —— 而二维码本身不编码账号，扫错就是把另一个号
+    塞进这个实例。所以名字和 UIN 都带上。
+    """
+    name = (QQ_BOT_NAME or "").strip()
+    uin = _login_uin()
+    if name and uin:
+        return "%s(%s)" % (name, uin)
+    return name or uin or "QQ 机器人"
+
+
 def _online():
     """探活：协议端还能取到登录信息就算在线。"""
     from app import qq_api          # 延迟 import，避免模块级循环依赖
@@ -152,13 +182,16 @@ def _build_content(qr_path, reason_title, reason_desc, intro=""):
     """正文是 HTML。二维码以 base64 内嵌，图随消息走，不依赖任何图床。
 
     intro 给定时用它当开头（看门狗要写「已自动重启」），否则用默认的
-    「掉线了，需要重新扫码」。
+    「掉线了，需要重新扫码」——默认文案带上「是谁掉了」的标签（见 _bot_label），
+    一台机器跑多个号（小小怪 / 胡桃桃）时才分得清该去扫哪个。
     """
+    uin = _login_uin()
     parts = []
     if intro:
         parts.append("<p>%s</p>" % intro)
     else:
-        parts.append("<p>%s 掉线了，需要重新扫码。</p>" % time.strftime("%m-%d %H:%M:%S"))
+        parts.append("<p>%s <b>%s</b> 掉线了，需要重新扫码。</p>"
+                     % (time.strftime("%m-%d %H:%M:%S"), _bot_label()))
     if reason_title or reason_desc:
         parts.append("<p>原因：%s %s</p>" % (reason_title, reason_desc))
     if qr_path and os.path.isfile(qr_path):
@@ -173,6 +206,9 @@ def _build_content(qr_path, reason_title, reason_desc, intro=""):
         parts.append("<p>（没拿到二维码文件）</p>")
     parts.append("<p>扫码方式：把图存到相册 → 手机 QQ → 扫一扫 → 右上角选相册"
                  "里的这张图。（微信自己的「识别图中二维码」扫不了 QQ 登录码）</p>")
+    if uin:
+        parts.append("<p>⚠ 二维码不绑定账号：手机上点确认前先看清楚是不是 "
+                     "<b>%s</b>，别把别的号扫进来。</p>" % uin)
     return "".join(parts)
 
 
@@ -203,6 +239,8 @@ def push_offline(qr_path=None, reason_title="", reason_desc="",
     """
     if not enabled():
         return False, "未配置 PUSHPLUS_TOKEN"
+    if not title:
+        title = "%s 掉线，需要扫码" % _bot_label()
     payload = {
         "token": NOTIFY_PUSHPLUS_TOKEN,
         "title": title or "QQ 机器人掉线，需要扫码",
@@ -231,12 +269,12 @@ def push_silence(hours):
         return False, "未配置 PUSHPLUS_TOKEN"
     payload = {
         "token": NOTIFY_PUSHPLUS_TOKEN,
-        "title": "QQ 机器人疑似冻结",
-        "content": "<p>%s 已连续 %.0f 小时没有任何收发，但协议探活正常。</p>"
+        "title": "%s 疑似冻结" % _bot_label(),
+        "content": "<p>%s <b>%s</b> 已连续 %.0f 小时没有任何收发，但协议探活正常。</p>"
                    "<p>可能是消息同步停摆（冻而不掉），也可能是群里真的没人说话。</p>"
                    "<p>去群里喊它一声试试；真没反应就重启 NapCat（大概率要扫码，"
                    "二维码会自动推过来）。</p>"
-                   % (time.strftime("%m-%d %H:%M:%S"), hours),
+                   % (time.strftime("%m-%d %H:%M:%S"), _bot_label(), hours),
         "template": "html",
     }
     try:
