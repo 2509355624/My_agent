@@ -472,7 +472,7 @@ def trim_window(history, agent_id=None, session_key=None, max_turns=None,
     if not other_msgs:
         return history
 
-    budget = _agent_budget(agent_id) if budget is None else budget
+    budget = _agent_budget(agent_id) if not budget else budget
     reserve = max(0, reserve)
     est = (estimate_messages(system_msgs) + estimate_messages(other_msgs)
            + reserve)
