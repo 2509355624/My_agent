@@ -41,7 +41,7 @@ _WRAPPER_CLOSE_RE = re.compile(r'^\s*<\s*/\s*tool_calls?\s*>', re.IGNORECASE)
 # 格式**，而不是本项目的 `[[TOOL:name]]{json}[[/TOOL]]`：
 #
 #     <tool_call><function=generate_image><parameter=prompt>…</parameter>
-#     <parameter=skill>anima_2</parameter></function></tool_call>
+#     <parameter=skill>anima</parameter></function></tool_call>
 #
 # 通篇没有 `]]`，TOOL_TAG_RE 一个字符都匹配不上 —— 于是**工具根本没执行、
 # 整段 XML 连着提示词被当正文原样发进聊天**。

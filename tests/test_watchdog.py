@@ -2,8 +2,9 @@
 
 覆盖：三态探测（online / offline / dead）、未到阈值不重启、到阈值触发重启并恢复、
 登录态失效满宽限期才重启、重启后要扫码只推一条合并通知、一直没人扫码会退避、
-重启连续失败放弃并退避、退避期内不动作、静默判据（假在线）、启动互斥（文件锁）。
-不涉及真实 NapCat / subprocess。
+重启连续失败放弃并退避、退避期内不动作、静默判据（假在线）、启动互斥（文件锁）、
+ComfyUI 分支（独立计数 / 静默重启 / 失败才求助）。
+不涉及真实 NapCat / ComfyUI / subprocess。
 """
 
 from unittest import TestCase, mock
@@ -394,6 +395,171 @@ class AwaitOutcomeTest(TestCase):
         wd._probe.return_value = ("dead", "x")
         wd._qr_written_since.return_value = True
         self.assertEqual(wd._await_outcome(0.0), "unknown")
+
+
+class ComfyuiWatchTest(TestCase):
+    """ComfyUI 分支：跟 NapCat 平行、独立计数，**静默重启**。
+
+    为什么单独一套：ComfyUI 原先没有任何守护（NapCat 有自愈、qq_bot 有看门狗），
+    崩了只能人工去《启动手册.txt》抄命令起它。2026-09-30 加进来。
+    """
+
+    def setUp(self):
+        self.patchers = [
+            mock.patch.object(wd, "_probe_comfyui"),
+            mock.patch.object(wd, "_trigger_comfy_restart", return_value=True),
+            mock.patch.object(wd, "push_text", return_value=(True, "ok")),
+        ]
+        for p in self.patchers:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patchers:
+            p.stop()
+
+    @staticmethod
+    def new_state(seen=True):
+        """seen=True 模拟「这个进程已经见过 ComfyUI 在线」——多数用例要这个前提。"""
+        return {"comfy_fails": 0, "comfy_restart_fails": 0,
+                "comfy_backoff_until": 0.0, "comfy_seen": seen}
+
+    def test_alive_no_restart(self):
+        wd._probe_comfyui.return_value = (True, "vram_free=9.0GB")
+        wd._comfy_cycle(self.new_state())
+        wd._trigger_comfy_restart.assert_not_called()
+
+    def test_never_seen_alive_is_left_alone(self):
+        """**核心性质（用户 09-30 拍板）**：本来就没开 ComfyUI → 不拉它。
+
+        ComfyUI 是按需启动的，用户常常压根没开。要是「探不到就拉」，他故意
+        不开（省显存跑别的）也会被强行拉起来。所以要有 `comfy_seen` 闩：
+        从没在线过 = 它本来就没开，不动手、连失败都不记。
+        """
+        wd._probe_comfyui.return_value = (False, "refused")
+        state = self.new_state(seen=False)
+        for _ in range(wd.MAX_FAILS * 3):
+            wd._comfy_cycle(state)
+        wd._trigger_comfy_restart.assert_not_called()
+        self.assertEqual(state["comfy_fails"], 0)
+        self.assertFalse(state["comfy_seen"])
+
+    def test_latch_arms_after_first_online(self):
+        """先在线一次（闩置上）→ 再不通，这时才该管。"""
+        state = self.new_state(seen=False)
+        wd._probe_comfyui.return_value = (True, "vram_free=9.0GB")
+        wd._comfy_cycle(state)
+        self.assertTrue(state["comfy_seen"])
+        wd._probe_comfyui.return_value = (False, "refused")
+        for _ in range(wd.MAX_FAILS):
+            wd._comfy_cycle(state)
+        wd._trigger_comfy_restart.assert_called_once()
+
+    def test_below_threshold_no_restart(self):
+        """连续失败但没到 3 次：不动作。"""
+        wd._probe_comfyui.return_value = (False, "refused")
+        state = self.new_state()
+        wd._comfy_cycle(state)
+        wd._comfy_cycle(state)
+        wd._trigger_comfy_restart.assert_not_called()
+        self.assertEqual(state["comfy_fails"], 2)
+
+    def test_third_failure_triggers_restart(self):
+        wd._probe_comfyui.return_value = (False, "refused")
+        state = self.new_state()
+        for _ in range(3):
+            wd._comfy_cycle(state)
+        wd._trigger_comfy_restart.assert_called_once()
+        self.assertEqual(state["comfy_fails"], 0)   # 计数归零，重新数
+
+    def test_restart_is_silent(self):
+        """**核心性质**：拉起来的那一刻不推任何通知（用户 09-30 拍板）。
+
+        ComfyUI 不需要人做任何事，跟 NapCat「恢复不通知」同一原则。
+        """
+        wd._probe_comfyui.return_value = (False, "refused")
+        state = self.new_state()
+        for _ in range(3):
+            wd._comfy_cycle(state)
+        wd.push_text.assert_not_called()
+
+    def test_recovery_is_silent(self):
+        """失败一次后自己好了 —— 也不通知。"""
+        state = self.new_state()
+        wd._probe_comfyui.return_value = (False, "refused")
+        wd._comfy_cycle(state)
+        wd._probe_comfyui.return_value = (True, "vram_free=9.0GB")
+        wd._comfy_cycle(state)
+        wd.push_text.assert_not_called()
+        self.assertEqual(state["comfy_fails"], 0)
+
+    def test_repeated_failure_asks_for_help(self):
+        """连续 MAX_RESTART_FAILS 次都救不活才推「需人工处理」。"""
+        wd._probe_comfyui.return_value = (False, "refused")
+        state = self.new_state()
+        for _ in range(wd.MAX_RESTART_FAILS * 3):
+            wd._comfy_cycle(state)
+        self.assertTrue(wd.push_text.called)
+        title, body = wd.push_text.call_args[0][:2]
+        self.assertIn("人工", title + body)
+        self.assertGreater(state["comfy_backoff_until"], 0.0)
+
+    def test_backoff_skips_probing(self):
+        """退避期内连探都不探。"""
+        state = self.new_state()
+        state["comfy_backoff_until"] = 1000.0
+        wd._comfy_cycle(state, now=10.0)
+        wd._probe_comfyui.assert_not_called()
+
+    def test_bat_missing_is_not_a_crash(self):
+        """启动脚本不在：记一次失败、退避，**不能抛异常**把整个看门狗带崩。"""
+        wd._trigger_comfy_restart.return_value = False
+        wd._probe_comfyui.return_value = (False, "refused")
+        state = self.new_state()
+        for _ in range(wd.MAX_RESTART_FAILS * 3):
+            wd._comfy_cycle(state)
+        self.assertGreater(state["comfy_backoff_until"], 0.0)
+
+    def test_independent_from_napcat_counters(self):
+        """两边的计数器必须分开——ComfyUI 挂了不能把 NapCat 的失败计数也推上去。"""
+        wd._probe_comfyui.return_value = (False, "refused")
+        nap = {"fails": 0, "restart_fails": 0, "offline_since": None,
+               "backoff_until": 0.0, "silence_until": 0.0, "silence_gap": 0.0}
+        comfy = self.new_state()
+        for _ in range(3):
+            wd._comfy_cycle(comfy)
+        self.assertEqual(nap["fails"], 0)
+        self.assertEqual(nap["restart_fails"], 0)
+        self.assertEqual(comfy["comfy_restart_fails"], 1)
+
+
+class ComfyuiProbeTest(TestCase):
+    """`_probe_comfyui` 的判定：HTTP 200 + 有 devices 才算活着。"""
+
+    def _patch(self, payload=None, error=None, status=None):
+        def _get(url, timeout=None):
+            if error:
+                raise error
+            return mock.Mock(json=lambda: payload,
+                             raise_for_status=lambda: None)
+        sess = mock.Mock(get=_get)
+        p = mock.patch.object(wd, "_comfy_session", lambda: sess)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_alive_when_devices_present(self):
+        self._patch(payload={"devices": [{"vram_free": 9 * 2 ** 30}]})
+        alive, detail = wd._probe_comfyui()
+        self.assertTrue(alive)
+        self.assertIn("9.0GB", detail)
+
+    def test_dead_when_no_devices(self):
+        """回了 200 但没有 devices —— 不是 ComfyUI（端口被别的进程占了）。"""
+        self._patch(payload={"system": {}})
+        self.assertFalse(wd._probe_comfyui()[0])
+
+    def test_dead_on_connection_error(self):
+        self._patch(error=OSError("refused"))
+        self.assertFalse(wd._probe_comfyui()[0])
 
 
 class _FakeClock:

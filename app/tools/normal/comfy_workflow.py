@@ -15,6 +15,7 @@ from app.skills import load_skill
 
 # 可调的目标节点（按 class_type 定位）
 CHECKPT = "CheckpointLoaderSimple"
+UNET = "UNETLoader"
 LORA = "LoraLoader"
 UPSCALE = "UpscaleModelLoader"
 GEN_HINTS = ("BatchPromptImageGenerator",)  # 优先识别为“采样生成节点”
@@ -220,11 +221,30 @@ def _apply_set(workflow, gen, op):
 
 
 def _rebuild_lora(workflow, specs):
-    """按 spec 顺序重建 LoRA 链并重连 generator / 负向CLIP文案 """
+    """按 spec 顺序重建 LoRA 链并重连引用。
+
+    ⚠️ 要重连的**不止 generator 一个**（2026-09-30 补）：anima 是两段采样，
+    第二段的 KSampler 挂在 LoRA 链尾（skills/anima/workflow.json 里节点 2 是
+    一段、节点 27 是二段，两者都从链尾节点取 model）。旧实现只改 generator 和
+    负向 CLIPTextEncode，链尾一换，另一段就指向一个**已被删除的节点 id**，
+    工作流当场断掉，表现是「改了 LoRA 之后一张都画不出来」——和
+    `_find_generator` 里那条注释记的坑同源。
+
+    所以先把「指着旧 LoRA 节点的引用」全记下来，重建完统一改指新链尾。
+    """
     ckpt_id, _ = _find_node(workflow, CHECKPT)
+    if ckpt_id is None:
+        # anima 这类「UNETLoader + ModelOnly lora」的工作流没有
+        # CheckpointLoaderSimple，链头挂在 UNETLoader 上。不兜这一下链头就是
+        # None，重建出来的 LoRA 节点 model 会指向 [None, 0]——整条链当场断。
+        ckpt_id, _ = _find_node(workflow, UNET)
     gen_id, gen = _find_generator(workflow)
     used = sorted(int(x) for x in workflow if str(x).lstrip('-').isdigit())
     next_id = (used[-1] + 1) if used else 1
+
+    # 旧 LoRA 节点 id：删掉之后，任何还指着它们的引用都得改指新链尾。
+    old_lora_ids = {nid for nid, nd in workflow.items()
+                    if nd.get("class_type") == LORA}
 
     # 删除所有旧 LoraLoader
     for nid in list(workflow.keys()):
@@ -247,6 +267,18 @@ def _rebuild_lora(workflow, specs):
         }
         target = nid
         new_ids.append(nid)
+
+    # 指着已删 LoRA 节点的引用统一改指新链尾（slot 原样保留：0=model / 1=clip）。
+    # 链头都没找到（target is None）时不动——那说明这个工作流结构本来就不认识，
+    # 写了 [None, 0] 进去只会更难查。
+    if old_lora_ids and target is not None:
+        for nd in workflow.values():
+            inputs = nd.get("inputs")
+            if not isinstance(inputs, dict):
+                continue
+            for key, val in list(inputs.items()):
+                if isinstance(val, list) and val and str(val[0]) in old_lora_ids:
+                    inputs[key] = [target, val[1] if len(val) > 1 else 0]
 
     if gen_id:
         gen["inputs"]["model"] = [target, 0]

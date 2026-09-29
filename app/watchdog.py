@@ -1,8 +1,12 @@
-"""NapCat 心跳看门狗（独立进程）。
+"""NapCat + ComfyUI 心跳看门狗（独立进程）。
 
 目的：NapCat 偶尔直接崩 / 卡死，崩了之后没人知道、扫码通知也不会发（死进程不写
 qrcode.png）。这个进程独立于 qq_bot / NapCat，定时探 NapCat 是否还活着，死了就拉起
 「一键启动全部 force」把三个窗口（Agent Web / NapCat / QQBOT-ADAPTER）全重启。
+
+**另外还盯 ComfyUI（2026-09-30 加，见「ComfyUI 分支」一节）**：它原先**没有任何守护**
+——NapCat 有自愈（杀了 QQ.exe 约 40 秒自己拉起来）、qq_bot 有本看门狗，只有 ComfyUI
+崩了就彻底断，只能人工去《启动手册.txt》里抄那行命令起它。
 
 为什么独立：如果看门狗是 qq_bot 内部的一个线程，适配层自己卡死时就没人能救它了。
 
@@ -52,6 +56,31 @@ MAX_RESTART_FAILS 次仍停在扫码界面 → 暂停自动重启并退避 BACKO
 重启期间用 notify.mark_restarting() 把二维码通知权从 qq_bot 的 watcher 手里接管过来，
 否则同一次掉线会收到两条（一条说重启、一条只说扫码）。连续 MAX_RESTART_FAILS 次重启
 仍救不活 → 停止自动重启 + 推「需人工处理」+ 退避 BACKOFF 秒，避免无限杀进程。
+
+## ComfyUI 分支（2026-09-30 加）
+
+跟 NapCat 那套**平行**、互不干扰：两边各有自己的失败计数和退避，一个挂了不影响另一个。
+探的是 ComfyUI 的 `/system_stats`（:8188），连续 `MAX_FAILS` 次拿不到就拉
+`启动ComfyUI.bat auto`（隐藏窗口）。
+
+四条跟 NapCat 不一样的地方：
+
+1. **只在「它本来在跑」时才管**（用户 09-30 拍板）：ComfyUI 按需启动，用户常常
+   压根没开。所以先探到一次「在线」才认账（`comfy_seen` 闩），之后**从在线变成
+   不通**才动手；从没在线过就不动。否则「故意不开省显存」会被强行拉起来。
+
+2. **静默重启，不通知**（用户 09-30 拍板）：ComfyUI 是本地服务，重启不需要人做任何事
+   ——不像 NapCat 要扫码。所以起来就自己好了，按「恢复不通知」同一个原则处理。只有
+   **连续 MAX_RESTART_FAILS 次都拉不起来**时才推一条「需人工处理」。
+
+3. **没有「登录态」这种中间态**：NapCat 要分 online/offline/dead 三态（因为「进程活着
+   但没登录」需要扫码）。ComfyUI 只有「8188 通」和「不通」两态，判定简单。
+
+4. **不 taskkill**：探活连续 3 次失败时进程多半已经没了，杀不杀一样；反过来万一误判
+   （ComfyUI 正在自己重启、或只是卡了一下），一杀就是把正在跑的图连进程一起干掉。所以
+   bat 只负责起，端口被占时 ComfyUI 自己会报 bind 失败退出。
+
+⚠️ **自己没人守**这个老问题依旧：本进程崩了没人拉它（bat 只看「有没有 WATCHDOG 窗口」）。
 """
 
 import json
@@ -113,6 +142,151 @@ STATUS_STALE = 120.0
 
 _ALL_BAT = os.path.join(BASE_DIR, "一键启动全部.bat")
 _LOCK_PATH = os.path.join(BASE_DIR, "state", "watchdog.lock")
+
+# ── ComfyUI 分支参数（2026-09-30 加）──────────────────
+# 跟 NapCat 同一套时序：30 秒探一次、连续 3 次算死（≈90 秒）。用户 09-30 拍板沿用。
+COMFYUI_URL = "http://127.0.0.1:8188"
+COMFYUI_BAT = os.path.join(BASE_DIR, "启动ComfyUI.bat")
+COMFYUI_TIMEOUT = 5.0      # 探 /system_stats 的超时（秒）——本机口，给足 5 秒够了
+
+# ComfyUI 崩了没人管这件事，只有本进程在兜。自己崩了就没人拉它——这是已知缺口，
+# 不在这里解决（bat 只看窗口标题）。
+_COMFY_SESSION = None
+
+
+def _comfy_session():
+    """探 ComfyUI 用的 requests session，`trust_env=False`。
+
+    跟 qq_api / nai 一个道理：本机所有出网口都不许走环境变量/注册表里的代理
+    （这台机器上跑着 Clash，代理会把 127.0.0.1 也拦掉，表现为 502「目标计算机
+    积极拒绝」——看着像 ComfyUI 挂了，其实是被代理挡了）。
+    """
+    global _COMFY_SESSION
+    if _COMFY_SESSION is None:
+        import requests
+        s = requests.Session()
+        s.trust_env = False
+        _COMFY_SESSION = s
+    return _COMFY_SESSION
+
+
+def _probe_comfyui(timeout=None):
+    """探一次 ComfyUI。返回 (alive, detail)。
+
+    **只有两态**（不像 NapCat 有三态）：ComfyUI 没有「进程活着但没登录」这种需要
+    人介入的中间态，8188 答得上就算活着。
+
+    ⚠️ 判据是「HTTP 200 + 是预期的 JSON」，不是「TCP 连得上」：8188 在 ComfyUI
+    刚启动、还没加载完 custom nodes 时是**不监听**的，TCP 探会得到「连不上」，而
+    那正是「它正在起来」——交给连续失败计数兜住就行。反过来，端口被别的进程占了
+    而它回了别的 JSON，也算不健康。
+    """
+    t = COMFYUI_TIMEOUT if timeout is None else timeout
+    try:
+        resp = _comfy_session().get(COMFYUI_URL + "/system_stats", timeout=t)
+        resp.raise_for_status()
+        devs = (resp.json() or {}).get("devices")
+        if not devs:
+            return False, "回了 200 但没有 devices"
+        return True, "vram_free=%.1fGB" % (
+            (devs[0].get("vram_free") or 0) / 2 ** 30)
+    except Exception as e:
+        return False, "%s: %s" % (type(e).__name__, e)
+
+
+def _trigger_comfy_restart():
+    """拉起「启动ComfyUI.bat auto」，隐藏窗口、不阻塞。返回是否成功发起。"""
+    if not os.path.exists(COMFYUI_BAT):
+        log.error("找不到 %s，无法重启 ComfyUI", COMFYUI_BAT)
+        return False
+    try:
+        subprocess.Popen(
+            ["cmd", "/c", COMFYUI_BAT, "auto"],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except Exception as e:
+        log.error("拉起 ComfyUI 启动脚本失败：%s", e)
+        return False
+
+
+def _comfy_cycle(state, now=None):
+    """ComfyUI 的一个探测周期。返回 True=继续循环。
+
+    跟 `_cycle` 平行的独立分支——两边计数分开，互不干扰。
+
+    ⚠️ **只在「它本来在跑」时才管**（用户 09-30 拍板）：ComfyUI 是按需启动的，
+    用户常常压根没开。要是「探不到就拉」，他故意不开（想省显存跑别的）也会被
+    看门狗强行拉起来。所以加一道**闩**：先探到一次「在线」才认账（`comfy_seen`），
+    之后**从在线变成不通**才动手。从没在线过 = 它本来就没开，不动。
+
+    闩在重启看门狗进程时归零（state 是新建的）：新起的看门狗不该假设 ComfyUI
+    曾经在跑。等它下一次探到在线，闩自己又置上。
+    """
+    now = time.time() if now is None else now
+    if now < state["comfy_backoff_until"]:
+        return True
+
+    alive, detail = _probe_comfyui()
+    if alive:
+        state["comfy_seen"] = True
+        state["comfy_fails"] = 0
+        state["comfy_backoff_until"] = 0.0
+        if state["comfy_restart_fails"]:
+            # 静默恢复：按用户要求不通知。
+            log.info("ComfyUI 已恢复：%s", detail)
+            state["comfy_restart_fails"] = 0
+        else:
+            log.debug("ComfyUI 在线：%s", detail)
+        return True
+
+    if not state["comfy_seen"]:
+        # 从没在线过 = 用户本来就没开它。不动手，也不记失败。
+        log.debug("ComfyUI 不通（本进程还没见它在线过），按「没在跑」处理，不动手")
+        return True
+
+    state["comfy_fails"] += 1
+    log.warning("ComfyUI 探活失败 (%d/%d)：%s",
+                state["comfy_fails"], MAX_FAILS, detail)
+    if state["comfy_fails"] < MAX_FAILS:
+        return True
+    return _comfy_restart(state, now, detail)
+
+
+def _comfy_restart(state, now, detail):
+    """拉起 ComfyUI 启动脚本。**静默**，只在连续失败到上限时才通知。返回 True。"""
+    log.error("ComfyUI 心跳丢失（%s），触发重启", detail)
+    state["comfy_fails"] = 0
+    if not _trigger_comfy_restart():
+        state["comfy_restart_fails"] += 1
+        if state["comfy_restart_fails"] >= MAX_RESTART_FAILS:
+            log.error("连续 %d 次都拉不起 ComfyUI，暂停自动重启，退避 %.0f 秒",
+                      MAX_RESTART_FAILS, BACKOFF)
+            push_text("ComfyUI 需人工处理",
+                      "看门狗多次尝试重启 ComfyUI 都没有成功，请手动双击"
+                      "「启动ComfyUI.bat」检查。")
+            state["comfy_backoff_until"] = now + BACKOFF
+            state["comfy_restart_fails"] = 0
+        return True
+
+    # 静默重启：不推「正在重启」，起来了也不推（跟 NapCat「恢复不通知」同一原则）。
+    # 只有一个例外——连续几次都没起来，才告诉用户要人工看一眼。
+    state["comfy_restart_fails"] += 1
+    if state["comfy_restart_fails"] >= MAX_RESTART_FAILS:
+        log.error("连续 %d 次重启后 ComfyUI 仍未恢复，暂停自动重启，退避 %.0f 秒",
+                  MAX_RESTART_FAILS, BACKOFF)
+        push_text("ComfyUI 需人工处理",
+                  "看门狗已连续自动重启 %d 次，ComfyUI 仍未上线，请检查。"
+                  % MAX_RESTART_FAILS)
+        state["comfy_backoff_until"] = now + BACKOFF
+        state["comfy_restart_fails"] = 0
+    else:
+        log.info("已静默拉起 ComfyUI（第 %d 次尝试，按用户要求不通知）",
+                 state["comfy_restart_fails"])
+    return True
 
 
 # 锁文件句柄必须**一直活着**：句柄一关，Windows 就把锁释放了。
@@ -399,13 +573,22 @@ def _restart(state, now, reason):
 
 def run():
     _acquire_lock()
-    log.info("看门狗启动：探 NapCat :3000，间隔 %.0fs；连不上 %d 次、或未登录 %.0fs 即重启",
-             PROBE_INTERVAL, MAX_FAILS, OFFLINE_GRACE)
+    log.info("看门狗启动：探 NapCat :3000，间隔 %.0fs；连不上 %d 次、或未登录 %.0fs 即重启。"
+             "同时探 ComfyUI :8188，连不上 %d 次即静默拉起「启动ComfyUI.bat」",
+             PROBE_INTERVAL, MAX_FAILS, OFFLINE_GRACE, MAX_FAILS)
     state = {"fails": 0, "restart_fails": 0, "offline_since": None,
-             "backoff_until": 0.0, "silence_until": 0.0, "silence_gap": 0.0}
+             "backoff_until": 0.0, "silence_until": 0.0, "silence_gap": 0.0,
+             "comfy_fails": 0, "comfy_restart_fails": 0,
+             "comfy_backoff_until": 0.0, "comfy_seen": False}
     while True:
         time.sleep(PROBE_INTERVAL)
         _cycle(state)
+        # ComfyUI 独立分支：它抛异常（比如 requests 炸了）不能让 NapCat 的守护停摆
+        # ——那是「一个服务的问题拖垮整个看门狗」，正好是加这条要防的事。
+        try:
+            _comfy_cycle(state)
+        except Exception:
+            log.exception("ComfyUI 探活分支异常，本轮跳过")
 
 
 if __name__ == "__main__":

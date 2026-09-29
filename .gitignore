@@ -14,6 +14,11 @@ agents/
 # Skills（本地技能，不上传）
 skills/
 
+# WorkBuddy 运行时数据（每日工作日志 memory/、自动化定义 automations/）。
+# ⚠️ 这个仓库是 public：memory 里会写本机路径、私有部署细节、翻车记录，
+# automations 里是 UUID 目录——都不该被提交。
+.workbuddy-ai/
+
 # Skills 迁移备份（搬家前的逐字节副本，保留 2 周后手动删除）
 skills_bak_20260915/
 

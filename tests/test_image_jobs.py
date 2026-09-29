@@ -800,6 +800,57 @@ class FailTextTest(unittest.TestCase):
         self.assertFalse(image_jobs._is_unreachable(exc))
         self.assertNotIn("没在线", image_jobs._fail_text(exc))
 
+    def test_comfy_crash_is_told_apart_from_slowness(self):
+        """**ComfyUI 中途崩了 ≠ 画得慢**——这是 09-30 那个坑的锁。
+
+        现场（user/comfyui_8188.prev.log 01:19:41）：ComfyUI 原生崩溃
+        （faulthandler 只有 C 栈、没有 Python 帧 = SIGSEGV 一类硬崩）。可当时
+        那张图等满 180 秒后报的是「画超时了……麻烦重新生成一次」——把「服务没了」
+        说成「这次慢」，用户会一次次白重试。所以现在等图期间会再探一次
+        /system_stats：探不到就改判 `ComfyGone`。
+        """
+        text = image_jobs._fail_text(image_jobs.ComfyGone())
+        self.assertIn("掉线", text)
+        self.assertNotIn("重新生成一次", text)
+        self.assertNotIn("超时", text)
+
+    def test_gone_message_points_at_recovery_not_retry(self):
+        """话术要告诉人「等它自己起来」，而不是「你再画一次」。"""
+        text = image_jobs._fail_text(image_jobs.ComfyGone())
+        self.assertIn("重新起来", text)
+
+
+class ComfyGoneTest(_Base):
+    """等图期间 ComfyUI 没了 → 说「掉线」，不要说「画得慢」。
+
+    单测 `_fail_text(ComfyGone())` 只证明话术对；这里证明**接线**也对：
+    `_drain` 走到超时分支时真的会去探活，探不到就换成 `ComfyGone`。
+    """
+
+    def _timeout_run(self, comfy_alive):
+        """跑一张必然超时的图；comfy_alive = 超时后探活的结果。"""
+        p = mock.patch.object(image_jobs, "_comfy_up", lambda timeout=3: comfy_alive)
+        p.start()
+        self.addCleanup(p.stop)
+        with mock.patch.object(image_jobs, "wait_done",
+                               side_effect=TimeoutError("生成超时 (180s)")):
+            self._enqueue()
+            image_jobs._drain()
+
+    def test_crash_during_wait_becomes_comfy_gone(self):
+        self._timeout_run(comfy_alive=False)
+        self.assertEqual(len(self.sent_texts), 1)
+        text = self.sent_texts[0][2]
+        self.assertIn("掉线", text)
+        self.assertNotIn("重新生成一次", text)
+
+    def test_slow_render_keeps_the_timeout_wording(self):
+        """ComfyUI 还在、只是慢：照旧说「超时，重新生成一次」。"""
+        self._timeout_run(comfy_alive=True)
+        text = self.sent_texts[0][2]
+        self.assertIn("超时", text)
+        self.assertNotIn("掉线", text)
+
 
 class ChannelSwitchTest(_Base):
     """换渠道先 /free：同渠道连画保持模型热，跨渠道才释放。
@@ -1303,10 +1354,10 @@ class DisabledChannelTest(unittest.TestCase):
         self.assertIn("krea2", DISABLED_IMAGE_SKILLS)
 
     def test_real_config_keeps_the_runnable_channels(self):
-        """anima / anima_2 / SD 是**能跑**的渠道，绝不能被误列进停用清单
-        （那样就一张图都画不出了，或者两段采样那条再也点不出来）。"""
+        """anima / SD 是**能跑**的渠道，绝不能被误列进停用清单
+        （那样就一张图都画不出了）。"""
         from app.config import DISABLED_IMAGE_SKILLS
-        for name in ("anima", "anima_2", "image_gen_v1"):
+        for name in ("anima", "image_gen_v1", "image_gen_v1_hires"):
             self.assertNotIn(name, DISABLED_IMAGE_SKILLS, name)
 
 
@@ -1319,7 +1370,7 @@ class QqInvisibleTest(unittest.TestCase):
     """
 
     DISABLED = ("qwen_image_v1", "krea2")
-    RUNNABLE = ("anima", "anima_2", "image_gen_v1")
+    RUNNABLE = ("anima", "image_gen_v1")
 
     def test_qq_whitelist_hides_disabled_channels(self):
         from app import agents
@@ -1355,13 +1406,23 @@ class CleanStartTest(_Base):
     """「开跑前先要一个干净的 ComfyUI」（2026-09-27 加，见
     image_jobs.CLEAN_START_SKILLS）。
 
-    场景：anima_2 两段采样要摊开 底模 3988MB + TE 1136MB + VAE 241MB ≈ 5.4GB，
-    而上一张 anima 跑完（打过 /free 也一样）只剩约 5.5GB——余量太薄，不重启
-    容易 180 秒超时。刚起来的 ComfyUI 有 10.8GB，够。
+    ## 2026-09-30：这张清单被清空了，这些用例改成守「它必须保持惰性」
 
-    2026-09-29：阈值从 8.0 下调到 6.0。原先的 8.0 是「双底模」时代的数——那时
-    工作流挂两块底模（ani11 + realskin），峰值 ≈9.4GB；现在两段共用一块
-    realskin，峰值砍半到 ≈5.4GB（≈ 单底模 anima），8.0 已明显过保守。
+    原先 `CLEAN_START_SKILLS = {"anima_2": 6.0}`——理由是「两段采样要摊开
+    5.4GB，而脏状态只剩 5.5GB，余量太薄」。**这个理由站不住脚**：
+
+      * 09-30 的 comfyui_8188.log 里，那套两段（10+5）工作流在**同一个脏进程**
+        上连跑 8 次全成（10.7~11.7 秒），最密两张只隔 1 秒——ComfyUI 自己的
+        DynamicVRAM 会在两段之间换出不需要的权重，峰值并没有真叠到 5.4GB。
+      * 真正崩过的那次（01:57:30 CUDA error）跑的是**旧的单段 15 步**，跟两段
+        采样没有因果关系。
+      * 代价却是实的：这个门槛在一天里白重启了 **23 次** ComfyUI。
+
+    而它现在更危险——两段那套已经是**默认** anima。要是把 6.0 顺手挪到 anima
+    头上，每张默认图都要先重启一次（60~90 秒），比原来的 bug 更糟。
+
+    所以下面测的是**反过来的性质**：机制留着（改 `{}` 即可重现），但对包括
+    anima 在内的任何渠道都不再触发重启。
     """
 
     def setUp(self):
@@ -1382,55 +1443,32 @@ class CleanStartTest(_Base):
             self._enqueue(skill=skill)
             image_jobs._drain()
 
-    def test_dirty_comfyui_restarts_before_heavy_channel(self):
-        """anima_2 撞上 5.6GB 的脏状态：先重启，再提交，图照样画完。"""
-        self._run("anima_2", 5.6)
-        self.assertEqual(self.restarts, [True])
+    def test_no_channel_is_registered_for_a_clean_start(self):
+        """**核心不变量**：清单必须是空的。
+
+        页面上写 `{"anima": 6.0}` 这类「为两段采样预备重启」的配置一律判红——
+        那会让默认渠道每张图都白等一分钟。
+        """
+        self.assertEqual(image_jobs.CLEAN_START_SKILLS, {})
+
+    def test_default_channel_never_restarts_even_on_a_dirty_state(self):
+        """anima 撞上脏状态（5.6GB）也不重启——它就是两段采样那条，实测够用。"""
+        self._run("anima", 5.6)
+        self.assertEqual(self.restarts, [])
         self.assertEqual(len(self.sent_images), 1)
 
-    def test_clean_comfyui_does_not_restart(self):
-        """刚起来 10.8GB：没必要为它多花 60~90 秒重新加载模型。"""
-        self._run("anima_2", 10.8)
-        self.assertEqual(self.restarts, [])
-
-    def test_normal_channel_never_restarts(self):
-        """普通渠道不受影响——anima 单底模 5.4GB 有自己的 /free 水位兜着，
-        为它重启只是白等一分钟。"""
-        self._run("anima", 0.8)
+    def test_default_channel_never_restarts_on_a_critical_state(self):
+        """哪怕显存低到 0.5GB 也不为它重启——低水位由 `/free` 那道闸管
+        （COMFY_MIN_FREE_VRAM_GB），跟「预备重启」不是一回事。"""
+        self._run("anima", 0.5)
         self.assertEqual(self.restarts, [])
 
     def test_unknown_vram_does_not_restart(self):
         """显存问不到就别折腾：那种情况 ComfyUI 多半已经不在了，重启请求
         同样发不出去——照常提交，让 _notice 去说「ComfyUI 没在线」。"""
-        self._run("anima_2", None)
+        self._run("anima", None)
         self.assertEqual(self.restarts, [])
         self.assertEqual(len(self.sent_images), 1)
-
-    def test_restart_happens_before_submitting(self):
-        """顺序反了等于没清：必须是「先重启 → 再提交」。"""
-        order = []
-        for name, repl in (("_restart_comfy",
-                            lambda *a, **k: order.append("restart") or True),
-                           ("_queue_prompt",
-                            lambda wf: order.append("submit") or "pid")):
-            p = mock.patch.object(image_jobs, name, repl)
-            p.start()
-            self.addCleanup(p.stop)
-        self._run("anima_2", 5.6)
-        self.assertEqual(order, ["restart", "submit"])
-
-    def test_at_most_one_restart_per_job(self):
-        """每张图最多重启一次——不能退化成重启循环。"""
-        self._run("anima_2", 0.5)
-        self.assertEqual(len(self.restarts), 1)
-
-    def test_threshold_sits_above_the_measured_dirty_vram(self):
-        """阈值必须高于「anima 跑完的实测残值 5.6GB」，否则这条规则永不触发。
-
-        这条是「常量被随手改小」的锁：改成 5.0 就得红。
-        """
-        self.assertIn("anima_2", image_jobs.CLEAN_START_SKILLS)
-        self.assertGreater(image_jobs.CLEAN_START_SKILLS["anima_2"], 5.6)
 
 
 class NaiCloudTest(_Base):

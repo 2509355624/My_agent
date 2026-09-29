@@ -162,6 +162,10 @@ class AnthropicXmlFormTest(unittest.TestCase):
 
     下面的样本逐字取自清酒瓶子的私聊会话文件
     （agents/qq/sessions/private_546587874.jsonl）。
+
+    ⚠️ 样本里出现的 `skill=anima_2` 是**当时真实发出来的内容**，`anima_2` 这个
+    渠道后来已删除。**别把它「顺手改成 anima」**——一改就不再是逐字取证，这些
+    用例是靠「原文长什么样」立住的，不是靠渠道名。
     """
 
     def test_real_leaked_generate_image(self):

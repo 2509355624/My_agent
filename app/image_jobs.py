@@ -51,13 +51,13 @@
   间隙正是 TDR 的窗口。**这是软的**：真没有别的活时 qwen 照跑，不会饿死。
 - **重渠道不许排长队**：排到第三张就拒收（`_MAX_HEAVY_QUEUE`）。qwen 一张约
   100 秒，3 张已经把「重活独占显卡」的时间撑到 5 分钟，再多不如让模型说画不了。
-- **要「干净 ComfyUI」的渠道开跑前先重启一次**（2026-09-27 加，见
-  _maybe_restart_for_clean_start）：anima_2（两段采样）要把底模 3988MB
-  + 文本编码器 1136MB + VAE 241MB ≈ 5.4GB 摊开，而上一张跑完（哪怕打过
-  /free）显存只剩约 5.5GB——余量太薄，硬提交容易 180 秒超时。刚起来的 ComfyUI
-  有 10.8GB，
-  够。**事前**重启一次（约 60~90 秒，模型要重新加载）比事后超时划算；跟
-  _maybe_restart_for_ram 那条不冲突：那条是事后补、这条是事前拦。
+- **「开跑前先要一个干净 ComfyUI」这套机制留着，但没有渠道在用了**
+  （2026-09-27 加、2026-09-30 清空，见 _maybe_restart_for_clean_start）：本意是给
+  「峰值显存逼近脏状态余量」的渠道预备一次重启。实践下来唯一挂进去的 anima_2
+  是**误判**——09-30 实测两段采样在脏进程上连跑 8 次全成（见 CLEAN_START_SKILLS
+  注释），那个门槛只在一天里白重启了 23 次 ComfyUI。机制本身留着（改 `{}` 即可
+  重新启用），但没有渠道需要它。跟 _maybe_restart_for_ram 那条不冲突：那条是
+  事后按**内存**水位补，这条是事前按**显存**水位拦。
 - **内存水位过低就重启 ComfyUI**（2026-09-27 加，见 _maybe_restart_for_ram）：
   `/free` 治不了内存——它只把权重从显存搬到 CPU，**不删**，进程 RSS 一个字节
   都不降（实测 8025 → 8025 MB）。而 ComfyUI 的常驻内存每张图涨约 600MB、只涨
@@ -147,18 +147,27 @@ QWEN_SKILL = "qwen_image_v1"
 
 # 开跑前必须先要一个「干净 ComfyUI」的渠道：值 = 至少要有的空闲显存（GB）。
 #
-# anima_2 为什么在里面：两段采样要摊开 底模 3988MB + 文本编码器 1136MB + VAE
-# 241MB ≈ 5.4GB，而上一张 anima 跑完（打过 /free 也一样，它只把权重搬到 CPU）
-# 显存只剩约 5.5GB——余量太薄，硬提交容易 180 秒超时。
-# ComfyUI 刚起来时是 10.8GB，够。所以阈值定在两者之间：6.0GB。
+# ⚠️ 2026-09-30 起**清空**（原为 `{"anima_2": 6.0}`）。原因是那个 6.0 门槛站不住脚：
 #
-# 2026-09-29 从 8.0 下调到 6.0：原先的 8.0 是「双底模」时代的数——那时工作流挂
-# 两块底模（ani11 + realskin），峰值 ≈9.4GB。现在两段共用一块 realskin，峰值
-# 砍半到 ≈5.4GB（≈ 单底模 anima），8.0 已明显过保守。
+#   ① 它唯一的对象 anima_2 已删掉——其中两段采样那套现在是**默认** anima
+#      （`skills/anima/workflow.json`），天天跑、不能每张都重启一次 ComfyUI。
 #
-# ⚠️ 显存够 ≠ 安全：anima_2 仍是两段采样、耗时约翻倍，仍保持「只在对方点名时
-# 才用」的定位。
-CLEAN_START_SKILLS = {"anima_2": 6.0}
+#   ② 更要紧的是：**实测证明那个门槛本身就是过保守的**。翻 09-30 的
+#      comfyui_8188.log，新的两段（10+5）工作流在**同一个脏进程**上连跑 8 次
+#      ——02:00、02:02、02:20、02:24、02:27:44、02:27:56、02:28:07——**一次都没
+#      重启、一次都没崩**，最密的两张只隔 1 秒（02:27:55.617 完 → 02:27:56.030
+#      下一个 got prompt）。每次都是正常的两段 staged（280 patches → 0 patches）
+#      + `Prompt executed in 10.7~11.7 秒`。也就是说「脏状态 5.5GB 装不下 5.4GB
+#      峰值」这个担心是**假的**——ComfyUI 自己的 DynamicVRAM 会在两段之间把
+#      不需要的权重换出去，峰值并没有真的叠加到 5.4GB。
+#
+#   ③ 真正崩过的那次（01:57:30 `CUDA error: unspecified launch failure`）跑的是
+#      **旧的单段 15 步**工作流，跟两段采样没有因果关系。旧结论把两件不相关的事
+#      串成了一条因果链。
+#
+# 所以现在没有任何渠道需要「预备重启」。将来若真要加回来，**必须先看日志里的
+# staged 峰值和真实崩溃点**，别按权重表算 GB 往上堆。
+CLEAN_START_SKILLS = {}
 
 _lock = threading.Lock()
 _queue = collections.deque()      # 待跑的任务（不含正在跑的那个）
@@ -825,7 +834,11 @@ def process(job):
         # 这期间提交的新任务只会被排进它的 pending。在这里等到 running 清空、
         # 显存真的腾出来，才把下一个任务交出去——不靠盲等固定秒数。
         _wait_comfy_idle()
-        job.error = exc
+        # 超时有两种：画得慢，或者 ComfyUI 中途没了。探一下就能分辨（09-30
+        # 实测：ComfyUI 01:19:41 崩了，01:24:00 那张却报「画超时了…麻烦重新
+        # 生成一次」，对方照着重试也不会成）。探活放在 _wait_comfy_idle 之后
+        # ——那张图的中断/清理先跑完，之后进程还在不在才是真信号。
+        job.error = exc if _comfy_up() else ComfyGone()
         _notice(job)
         return
 
@@ -915,6 +928,34 @@ def _reset():
 
 
 # ─── ComfyUI 交互 ────────────────────────────────────
+
+class ComfyGone(RuntimeError):
+    """等图期间 ComfyUI 掉线了——**不是**「画得慢」。
+
+    为什么要单独一个类型：超时有两种，话术必须分开（2026-09-30 实测）。
+    01:19:41 ComfyUI 原生崩溃（faulthandler 只有 C 栈），而 01:24:00 那张报给
+    用户的却是「画超时了（超过 180 秒没出图），麻烦重新生成一次」——把「服务
+    没了」说成「画得慢」，对方会一直重试，而重试一次也不会成。探一下就能分辨，
+    不该让用户去猜。
+    """
+
+    def __str__(self):
+        return "ComfyUI 掉线"
+
+
+def _comfy_up(timeout=3):
+    """ComfyUI 还在不在——只探，不写日志。
+
+    和 comfy_alive 分开，是因为那条日志写着「本次不入队」，而这里是在**等图
+    期间**探的，「不入队」这句话放这儿是错的。
+    """
+    try:
+        requests.get(COMFYUI_URL + "/system_stats",
+                     timeout=timeout).raise_for_status()
+        return True
+    except Exception:
+        return False
+
 
 def comfy_alive(timeout=3):
     """ComfyUI 现在活着吗——入队前先问一句。
@@ -1100,6 +1141,10 @@ def _fail_text(exc, stage="submit", skill=None):
             return ("图没画出来——连不上 NovelAI 的服务器（多半是网络或代理问题）。"
                     "让对方稍后再试；一直连不上就让群主检查 NAI 的代理设置。")
         return "图没画出来（NAI：%s）" % _reason(exc)
+    if isinstance(exc, ComfyGone):
+        # 「掉线」和「超时」是两回事：前者重画也没用，得先把服务拉起来。
+        return ("图没画出来——ComfyUI 中途掉线了（不是画得慢）。"
+                "等它重新起来再让对方重画。")
     if isinstance(exc, TimeoutError):
         return ("画超时了（超过 %d 秒没出图），已经中断这张。"
                 "麻烦重新生成一次。" % TASK_TIMEOUT)
