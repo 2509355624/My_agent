@@ -1,9 +1,10 @@
-"""anima 两个渠道：单底模（默认）与双底模（只点名才用）。
+"""anima 两个渠道：单段（默认）与两段采样（只点名才用）。
 
-为什么要单独一套用例：`anima_2` 是**两段采样**那个实测必崩的工作流，用户要求
-保留它、但**绝不能让它被自动选中**。这个「只有点名才走」的约束只写在提示词里
-是拦不住模型的（同 `DISABLED_IMAGE_SKILLS` 那条教训），所以这里测的是**工作流
-本身的性质**：它必须真的还是两段、第二段真的换底模——数据一变就得有人知道。
+为什么要单独一套用例：`anima_2` 比默认慢一倍（两段各 30 步），用户要求保留它、
+但**绝不能让它被自动选中**。这个「只有点名才走」的约束只写在提示词里是拦不住
+模型的（同 `DISABLED_IMAGE_SKILLS` 那条教训），所以这里测的是**工作流本身的
+性质**：它必须真的还是两段、且**只有一块底模**（2026-09-29 从「双底模」改成
+「一块底模跑两遍」）——数据一变就得有人知道。
 
 零网络、零显卡：只读 skills 目录里的 workflow.json。
 """
@@ -79,21 +80,31 @@ class SingleStageTest(unittest.TestCase):
 
 
 class DoubleStageTest(unittest.TestCase):
-    """anima_2 = 双底模两段：这些性质就是「崩机风险」的来源，改了就变了个东西。"""
+    """anima_2 = 一块底模跑两遍：这些性质就是它「慢一倍但更精细」的定义。
 
-    def test_two_samplers_two_loaders(self):
+    2026-09-29 改：从「两块底模」（第一段 ani11 → 第二段换 realskin）改成
+    **两段共用 realskin 一块**。装载从 2 次降到 1 次，峰值显存从 ≈9.4GB 降到
+    ≈5.4GB。下面第一条就是这次改动的锁——谁再塞回第二个 UNETLoader 就得红。
+    """
+
+    def test_two_samplers_one_loader(self):
+        """**核心不变量**：两个采样器，但只有一个底模装载器。
+
+        同一块底模被两个 KSampler 引用时 ComfyUI 只装载一次（`CacheSet` 按
+        「节点 id + 输入签名」缓存输出，节点 5 只执行一次）。多挂一个
+        UNETLoader 就是两次 4GB 级装载——那正是从前崩机的来源。
+        """
         wf = _load("anima_2")
         t = _types(wf)
         self.assertEqual(t.count("KSampler"), 2)
-        self.assertEqual(t.count("UNETLoader"), 2)
+        self.assertEqual(t.count("UNETLoader"), 1)
 
-    def test_two_different_base_models(self):
-        """两个底模必须真的是**两块不同的**——这是「双底模」的定义。"""
+    def test_single_base_model_is_realskin(self):
+        """两段共用的那块底模必须是 `miaomiaoRealskin_anima13`。"""
         wf = _load("anima_2")
-        unets = sorted(wf[k]["inputs"]["unet_name"] for k, n in wf.items()
-                       if n.get("class_type") == "UNETLoader")
-        self.assertEqual(unets, ["miaomiaoAnimeReality_ani11_3087842.safetensors",
-                                 "miaomiaoRealskin_anima13.safetensors"])
+        unets = [wf[k]["inputs"]["unet_name"] for k, n in wf.items()
+                 if n.get("class_type") == "UNETLoader"]
+        self.assertEqual(unets, ["miaomiaoRealskin_anima13.safetensors"])
 
     def test_second_pass_refines_not_rebuilds(self):
         """第二段 denoise 必须低（0.25 精修），不是 1.0 重画。"""
@@ -109,20 +120,25 @@ class DoubleStageTest(unittest.TestCase):
         self.assertEqual(wf["3"]["inputs"]["samples"], ["19", 0])
 
     def test_resolution_matches_the_single_stage_one(self):
-        """双底模也不能偷偷调高——它本来就比单底模更危险。
+        """两段采样也不能偷偷调高——它本来就比单段更吃力。
 
-        两条渠道的底图尺寸必须一致（都 768×1024）：双底模是「同尺寸精修」，
-        悄悄换个更大的尺寸等于换了个东西。
+        两条渠道的底图起手尺寸必须一致（都 768×1024）：anima_2 是「同尺寸起手 +
+        ×1.2 放大精修」，悄悄换个更大的起手尺寸等于换了个东西。
         """
         wf = _load("anima_2")
         self.assertEqual(wf["9"]["inputs"]["width"], 768)
         self.assertEqual(wf["9"]["inputs"]["height"], 1024)
 
-    def test_second_pass_has_no_loras(self):
-        """第二段底模不挂 lora——原版设计，别「顺手」补上。"""
+    def test_second_pass_bypasses_the_loras(self):
+        """第二段走**裸底模**（不挂 lora）——原版设计，别「顺手」补上。
+
+        所以它引用的是节点 5（loader 本身），而不是节点 15（lora 链的尾）。
+        两条路都挂在同一个节点 5 上，装载才只有一次。
+        """
         wf = _load("anima_2")
-        self.assertEqual(wf["19"]["inputs"]["model"], ["20", 0])
-        self.assertEqual(wf["20"]["class_type"], "UNETLoader")
+        self.assertEqual(wf["19"]["inputs"]["model"], ["5", 0])
+        self.assertEqual(wf["5"]["class_type"], "UNETLoader")
+        self.assertEqual(wf["2"]["inputs"]["model"], ["15", 0])   # 第一段走 lora 链
 
     def test_loras_only_on_the_first_pass(self):
         wf = _load("anima_2")

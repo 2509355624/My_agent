@@ -1304,7 +1304,7 @@ class DisabledChannelTest(unittest.TestCase):
 
     def test_real_config_keeps_the_runnable_channels(self):
         """anima / anima_2 / SD 是**能跑**的渠道，绝不能被误列进停用清单
-        （那样就一张图都画不出了，或者双底模那条再也点不出来）。"""
+        （那样就一张图都画不出了，或者两段采样那条再也点不出来）。"""
         from app.config import DISABLED_IMAGE_SKILLS
         for name in ("anima", "anima_2", "image_gen_v1"):
             self.assertNotIn(name, DISABLED_IMAGE_SKILLS, name)
@@ -1355,10 +1355,13 @@ class CleanStartTest(_Base):
     """「开跑前先要一个干净的 ComfyUI」（2026-09-27 加，见
     image_jobs.CLEAN_START_SKILLS）。
 
-    场景：anima_2 双底模两张权重各 3988MB + TE 1136MB + VAE 241MB ≈ 9.4GB
-    要同时摊开，而上一张 anima 跑完（打过 /free 也一样）只剩 5.6GB——不重启
-    就是 180 秒超时。19:35 的日志：渠道切换 anima → anima_2、显存余 5.6GB，
-    紧接着「生成超时」。刚起来的 ComfyUI 有 10.8GB，够。
+    场景：anima_2 两段采样要摊开 底模 3988MB + TE 1136MB + VAE 241MB ≈ 5.4GB，
+    而上一张 anima 跑完（打过 /free 也一样）只剩约 5.5GB——余量太薄，不重启
+    容易 180 秒超时。刚起来的 ComfyUI 有 10.8GB，够。
+
+    2026-09-29：阈值从 8.0 下调到 6.0。原先的 8.0 是「双底模」时代的数——那时
+    工作流挂两块底模（ani11 + realskin），峰值 ≈9.4GB；现在两段共用一块
+    realskin，峰值砍半到 ≈5.4GB（≈ 单底模 anima），8.0 已明显过保守。
     """
 
     def setUp(self):

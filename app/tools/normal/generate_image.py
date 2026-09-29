@@ -418,8 +418,8 @@ tool = {
                   "**只有对方点名要「高清 / 大图 / 精修 / 再修一遍」时**才传 "
                   "skill=image_gen_v1_hires（SD 两遍高清版，896×1600，比默认慢）——"
                   "**没点名就别自己挑它**。"
-                  "【anima_2】**只有用户点名「双底模 / 双采样 / 二次采样 / 精修那版」才传 "
-                  "skill=anima_2**（两段采样、换第二块底模，更精细但每张都有把机器拖崩的风险）。"
+                  "【anima_2】**只有用户点名「双采样 / 二次采样 / 双底模 / 精修那版」才传 "
+                  "skill=anima_2**（同一块底模跑两遍，更精细但慢一倍，一次一张）。"
                   "**用户没点名就绝不传它**——别因为「听起来更精细」自己挑。"
                   "【qwen_image_v1 / krea2 都已停用】**不要传 skill=qwen_image_v1 或 skill=krea2**"
                   "——这台机器带不动它们，传了工具会直接拒。"
@@ -463,8 +463,8 @@ tool = {
             "**只有对方点名要「高清 / 大图 / 精修 / 再修一遍」时**才传 "
             "skill=image_gen_v1_hires（SD 两遍高清版，896×1600，比默认慢）——"
             "**没点名就别自己挑它**。"
-            "【anima_2】**只有对方点名「双底模 / 双采样 / 二次采样 / 精修那版」才传 "
-            "skill=anima_2**（两段采样、换第二块底模，更精细但有崩机风险）。"
+            "【anima_2】**只有对方点名「双采样 / 二次采样 / 双底模 / 精修那版」才传 "
+            "skill=anima_2**（同一块底模跑两遍，更精细但慢一倍）。"
             "**对方没点名就绝不传它**。"
             "【qwen_image_v1 / krea2 都已停用】**不要传 skill=qwen_image_v1 或 skill=krea2**"
             "——这台机器带不动它们，传了工具会直接拒。"
@@ -499,7 +499,7 @@ tool = {
         "type": "object",
         "properties": {
             "prompt": {"type": "string", "description": "提示词。写逗号分隔的标签式英文短句（anima / image_gen_v1 都是这个写法），只写一段、不要用 --- 分隔（只有 skill=image_gen_v1 时才用 --- 分隔多张）。画面里没有固定角色时须包含完整角色描述"},
-            "skill": {"type": "string", "description": "Skill名称。**不传就是默认 anima**（单底模）。可选值见系统提示 Available Skills 里标 [底模]/[无底模] 的生图类；image_gen_v1（**= SD / SDXL 渠道**）仅在用户点名或场景匹配时才用；**anima_2（双底模）和 image_gen_v1_hires（SD 高清版）都只在用户点名时才传，绝不主动选**。**qwen_image_v1 / krea2 已停用，不要传**；nai（NovelAI 云端）仅限已开通的群，文生图 / 图生图都走它"},
+            "skill": {"type": "string", "description": "Skill名称。**不传就是默认 anima**（单底模）。可选值见系统提示 Available Skills 里标 [底模]/[无底模] 的生图类；image_gen_v1（**= SD / SDXL 渠道**）仅在用户点名或场景匹配时才用；**anima_2（双采样）和 image_gen_v1_hires（SD 高清版）都只在用户点名时才传，绝不主动选**。**qwen_image_v1 / krea2 已停用，不要传**；nai（NovelAI 云端）仅限已开通的群，文生图 / 图生图都走它"},
             "use_character": {"type": "boolean", "description": "是否使用该Skill自带的角色描述（默认false）。只有 image_gen_v1 有角色底模，设为true时固定该角色，你只写动作/环境/构图"},
             "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传"},
             "source_image": {"type": "string", "description": "**仅 skill=nai 时可用**（图生图 / 垫图）：填 1 = 垫对方本轮**引用**的那张图（对方没引用会报错），可配 denoise（0.1~0.9，默认 0.7）。其它渠道的图生图已停用，传了会被拒；只是看图 / 点评时任何渠道都不要传这个参数"}
