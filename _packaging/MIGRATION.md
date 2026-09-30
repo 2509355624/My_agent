@@ -27,6 +27,29 @@ python -m venv D:\AI\confyui_env        # 名字随意，与台式机一致最�
 D:\AI\confyui_env\Scripts\pip install -r requirements.txt
 ```
 
+## 第 1.5 步：装向量模型（RAG 用）—— ⚠️ 漏了这步「知识库 / 预设 / 记忆」全废
+
+包里的 `vector_store/` 只是**向量索引**，它对应的**模型不在包里**，必须单独装。
+
+漏装的症状：AI 回 `[保存失败] RAG daemon 启动失败`，用户看到的是「向量库调用不了」。
+（2026-10-01 笔记本上真实踩过：`~/.cache/modelscope` 压根不存在。）
+
+```
+D:\AI\confyui_env\Scripts\python -c "from modelscope import snapshot_download; snapshot_download('BAAI/bge-m3')"
+```
+
+- 约 **2.3GB**（modelscope 会连带下用不到的 onnx 版，总共约 4.3GB），
+  落在 `C:\Users\<你的用户名>\.cache\modelscope\`。
+- 下完自检 —— 应打印 `[LocalEmbeddings] BAAI/bge-m3 ready on cpu, dim=1024`（约 15 秒），
+  然后按 Ctrl+C 关掉：
+
+  `D:\AI\confyui_env\Scripts\python app/rag/rag_daemon.py`
+
+- **别指望 `.env` 的 `RAG_AUTO_DOWNLOAD=1` 自动下**：daemon 自己会尝试，但客户端
+  只等 **60 秒**（`app/rag/rag_client.py` 的 ready 上限），2.3GB 根本下不完，
+  照样报「启动失败」。**手动装完最稳。**
+- `RAG_EMBED_DEVICE=cpu` 是**故意**的（把显存留给 ComfyUI）。CPU 加载约 15 秒，正常。
+
 ## 第 2 步：装 NapCat 并放网络配置
 
 1. 安装 NapCat（https://napcat.napneke.icu 下载对应版本，或 Shell/Launcher 一键版），装好后找到它的 `napcat/config/` 目录。
