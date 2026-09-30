@@ -17,6 +17,13 @@ from app.skills import load_skill
 CHECKPT = "CheckpointLoaderSimple"
 UNET = "UNETLoader"
 LORA = "LoraLoader"
+# LoRA 加载器有两种：LoraLoader 同时挂 model+clip（SD1.5 系的 image_gen_v1），
+# LoraLoaderModelOnly 只挂 model（anima / anima_2 / krea2 这类 UNETLoader 工作流）。
+# 只认前一种的话 anima 的整条 LoRA 链会被判成「没有 LoRA」，后果不是显示不准而是
+# 真把工作流改坏：update_workflow 会把 KSampler 的 model 直接改指 UNETLoader
+# （两个 LoRA 全掉），并把 CLIPTextEncode 的 clip 接到 UNETLoader 上——而它根本
+# 没有 clip 输出槽，提交必被 ComfyUI 拒。所以两种都要认。
+LORA_CLASSES = (LORA, "LoraLoaderModelOnly")
 UPSCALE = "UpscaleModelLoader"
 GEN_HINTS = ("BatchPromptImageGenerator",)  # 优先识别为“采样生成节点”
 
@@ -91,10 +98,67 @@ def _find_generator(workflow):
     return None, None
 
 
+def _base_loader_ids(workflow):
+    """所有「底模加载器」节点 id，按 dict 顺序。
+
+    用**小写包含**而不是精确匹配：ComfyUI 里同一个加载器有多种拼写——
+    `CheckpointLoaderSimple`（image_gen_v1）、`UnetLoaderGGUF`（krea2）、
+    `UNETLoader`（anima）。写死等号的话 krea2 的底模整个认不出来，
+    摘要里显示「底模模型: 无」、链头也会变成 None。
+    """
+    out = []
+    for nid, nd in workflow.items():
+        ct = (nd.get("class_type") or "").lower()
+        if "checkpointloader" in ct or "unetloader" in ct:
+            out.append(nid)
+    return out
+
+
+def _chain_head(workflow):
+    """LoRA 链该挂上去的那个节点 id（底模加载器）。
+
+    优先沿现有连线回溯：找一个 model 来源**不是另一个 LoRA** 的 LoRA 节点，
+    它指向谁，链头就是谁。这比按类名猜可靠——krea2 的底模是 UnetLoaderGGUF，
+    按 "UNETLoader" 精确匹配会漏，链头成 None，清空 lora 后 gen.model 会写成
+    [None, 0]，工作流当场断。
+
+    不能按 dict 顺序取「第一个 LoRA」：anima 的 dict 顺序是 15 在 16 前面，
+    而 15 是链尾（model 指向 16），拿它当链头会得到另一个 LoRA 的 id。
+    """
+    lora_ids = {nid for nid, nd in workflow.items()
+                if nd.get("class_type") in LORA_CLASSES}
+    for nid in lora_ids:
+        src = (workflow[nid].get("inputs") or {}).get("model")
+        if isinstance(src, list) and src and str(src[0]) not in lora_ids:
+            return str(src[0])
+    # 一个 LoRA 都没有（或全是环）：按类名兜底
+    bases = _base_loader_ids(workflow)
+    return bases[0] if bases else None
+
+
+def _lora_kind(workflow):
+    """这个工作流该用哪种 LoRA 节点重建。
+
+    跟着**现有**节点走，不要凭空换类：anima/krea2 是 LoraLoaderModelOnly
+    （只挂 model），image_gen_v1 是 LoraLoader（model+clip）。重建时把
+    ModelOnly 换成 LoraLoader 会平白多出 clip 连线，而这类工作流的 CLIP 是
+    CLIPLoader 单独喂的，压根不该经过 LoRA。
+    """
+    for nd in workflow.values():
+        if nd.get("class_type") == "LoraLoaderModelOnly":
+            return "LoraLoaderModelOnly"
+    return LORA
+
+
 def _lora_chain(workflow, gen_id):
     """回溯出当前 LoRA 链（按加载顺序，即靠近底模的在前）:
-    [{name, strength_model, strength_clip}, ...]"""
-    lora_by_id = {nid: nd for nid, nd in workflow.items() if nd.get("class_type") == LORA}
+    [{name, strength_model, strength_clip, model_only}, ...]
+
+    ModelOnly 加载器没有 strength_clip，这里留 None，重建时据此跳过该字段
+    （塞进去 ComfyUI 会报未知输入）。
+    """
+    lora_by_id = {nid: nd for nid, nd in workflow.items()
+                  if nd.get("class_type") in LORA_CLASSES}
     traced = []
     if not gen_id:
         return traced
@@ -111,6 +175,7 @@ def _lora_chain(workflow, gen_id):
             "name": inp.get("lora_name"),
             "strength_model": inp.get("strength_model"),
             "strength_clip": inp.get("strength_clip"),
+            "model_only": nd.get("class_type") == "LoraLoaderModelOnly",
         })
         m = inp.get("model")
         node_id = m[0] if m else None
@@ -125,24 +190,66 @@ def _build_summary(workflow):
     gen_inp = gen["inputs"] if gen else {}
 
     params = {}
-    for k in ("seed", "steps", "cfg", "denoise", "width", "height",
-              "sampler_name", "scheduler",
+    for k in ("seed", "steps", "cfg", "denoise", "sampler_name", "scheduler",
               "hires_width", "hires_height", "hires_denoise", "hires_steps"):
         if k in gen_inp:
             params[k] = gen_inp[k]
 
+    # width/height 在标准节点工作流里挂在 EmptyLatentImage 上，采样器上没有。
+    # 摘要要报的是「实际出图尺寸」，所以从 latent 节点取，别指望 gen_inp 里有没有。
+    lat_id, lat = _find_node(workflow, "EmptyLatentImage")
+    if lat:
+        for k in ("width", "height"):
+            if k in lat["inputs"]:
+                params[k] = lat["inputs"][k]
+
     chain = _lora_chain(workflow, gen_id)
 
     lines = ["## 当前工作流生成配置"]
-    lines.append("- 底模模型: " + str(ckpt["inputs"].get("ckpt_name")) if ckpt else "- 底模模型: 无")
+
+    # 底模：image_gen_v1 是 CheckpointLoaderSimple 一个；anima 这类两段采样工作流
+    # 有**两个** UNETLoader（两段各挂一个底模，第二段通常不接 LoRA），都得列出来，
+    # 否则模型只看到一个底模，会以为工作流是单段的。krea2 的 UnetLoaderGGUF 也要算。
+    bases = _base_loader_ids(workflow)
+    if bases:
+        for nid in bases:
+            nd = workflow[nid]
+            inp = nd["inputs"]
+            key = "ckpt_name" if "ckpt_name" in inp else "unet_name"
+            lines.append(f"- 底模[{nid} {nd.get('class_type')}]: {inp.get(key)}")
+    else:
+        lines.append("- 底模模型: 无")
+
     if chain:
-        lines.append("- LoRA 链(" + str(len(chain)) + "):")
+        lines.append("- LoRA 链(" + str(len(chain)) + ")，按加载顺序:")
         for i, l in enumerate(chain, 1):
-            lines.append(f"  {i}. {l['name']}  strength_model={l['strength_model']} strength_clip={l['strength_clip']}")
+            if l.get("model_only"):
+                # ModelOnly 没有 strength_clip，写 0/None 会让人以为 clip 被关了
+                lines.append(f"  {i}. {l['name']}  strength_model={l['strength_model']}"
+                             "  (ModelOnly，只挂 model)")
+            else:
+                lines.append(f"  {i}. {l['name']}  strength_model={l['strength_model']}"
+                             f" strength_clip={l['strength_clip']}")
     else:
         lines.append("- LoRA: 无")
+
     if params:
         lines.append("- 采样参数: " + ", ".join(f"{k}={v}" for k, v in params.items()))
+
+    # 两段采样时把每个采样节点都列出来，并标出 set 参数实际会写到哪个。
+    # 不然模型改了「步数」只影响第一段，却对用户说整个工作流都调了。
+    samplers = [(nid, nd) for nid, nd in workflow.items()
+                if nd.get("class_type") == "KSampler"]
+    if len(samplers) > 1:
+        lines.append("- 采样节点(" + str(len(samplers)) + "段):")
+        for nid, nd in samplers:
+            inp = nd["inputs"]
+            bits = ", ".join(f"{k}={inp[k]}" for k in
+                             ("steps", "cfg", "denoise", "sampler_name", "scheduler")
+                             if k in inp)
+            tag = "  ← set 参数写这里" if nid == gen_id else ""
+            lines.append(f"  [{nid}] {bits}{tag}")
+
     if up:
         lines.append("- 放大模型: " + str(up["inputs"].get("model_name")))
     return "\n".join(lines)
@@ -224,47 +331,57 @@ def _rebuild_lora(workflow, specs):
     """按 spec 顺序重建 LoRA 链并重连引用。
 
     ⚠️ 要重连的**不止 generator 一个**（2026-09-30 补）：anima 是两段采样，
-    第二段的 KSampler 挂在 LoRA 链尾（skills/anima/workflow.json 里节点 2 是
-    一段、节点 27 是二段，两者都从链尾节点取 model）。旧实现只改 generator 和
-    负向 CLIPTextEncode，链尾一换，另一段就指向一个**已被删除的节点 id**，
-    工作流当场断掉，表现是「改了 LoRA 之后一张都画不出来」——和
-    `_find_generator` 里那条注释记的坑同源。
+    旧版里第二段的 KSampler 也挂在 LoRA 链尾（当时节点 2 是一段、27 是二段，
+    两者都从链尾节点取 model）。旧实现只改 generator 和负向 CLIPTextEncode，
+    链尾一换，另一段就指向一个**已被删除的节点 id**，工作流当场断掉，表现是
+    「改了 LoRA 之后一张都画不出来」——和 `_find_generator` 里那条注释记的坑同源。
 
     所以先把「指着旧 LoRA 节点的引用」全记下来，重建完统一改指新链尾。
+    （2026-09-30 换成 anime2 工作流后，二段的 KSampler 19 改挂**另一个底模**
+    UNETLoader 20、不接 LoRA 了，那条重连对它自然不生效——这是工作流本身的
+    设计，不是漏改。）
+
+    ⚠️ 节点类必须跟着现有节点走：anima/krea2 是 LoraLoaderModelOnly（只挂
+    model），image_gen_v1 是 LoraLoader（model+clip）。写死 LoraLoader 的话
+    在 anima 上会往 UNETLoader 要 clip 输出（它没有这个槽），提交必被拒。
     """
-    ckpt_id, _ = _find_node(workflow, CHECKPT)
-    if ckpt_id is None:
-        # anima 这类「UNETLoader + ModelOnly lora」的工作流没有
-        # CheckpointLoaderSimple，链头挂在 UNETLoader 上。不兜这一下链头就是
-        # None，重建出来的 LoRA 节点 model 会指向 [None, 0]——整条链当场断。
-        ckpt_id, _ = _find_node(workflow, UNET)
+    head_id = _chain_head(workflow)
+    if head_id is None:
+        # 连底模加载器都认不出来：这个工作流结构本工具不认识。什么都别动——
+        # 硬重建会写出 [None, 0] 的 model 连线，比不改更糟。
+        return []
     gen_id, gen = _find_generator(workflow)
     used = sorted(int(x) for x in workflow if str(x).lstrip('-').isdigit())
     next_id = (used[-1] + 1) if used else 1
 
-    # 旧 LoRA 节点 id：删掉之后，任何还指着它们的引用都得改指新链尾。
-    old_lora_ids = {nid for nid, nd in workflow.items()
-                    if nd.get("class_type") == LORA}
+    # 跟着现有节点的类重建：ModelOnly 工作流不能换成 LoraLoader（会多出 clip
+    # 连线，而它的 CLIP 是 CLIPLoader 单独喂的），反之亦然。
+    kind = _lora_kind(workflow)
+    model_only = kind == "LoraLoaderModelOnly"
 
-    # 删除所有旧 LoraLoader
+    # 旧 LoRA 节点 id：删掉之后，任何还指着它们的引用都得改指新链尾。
+    # 两种类都算，漏掉 ModelOnly 的话旧节点删不掉、引用也改不动。
+    old_lora_ids = {nid for nid, nd in workflow.items()
+                    if nd.get("class_type") in LORA_CLASSES}
+
+    # 删除所有旧 LoRA 节点
     for nid in list(workflow.keys()):
-        if workflow[nid].get("class_type") == LORA:
+        if workflow[nid].get("class_type") in LORA_CLASSES:
             del workflow[nid]
 
-    target = ckpt_id
+    target = head_id
     new_ids = []
     for spec in specs:
         nid = str(next_id); next_id += 1
-        workflow[nid] = {
-            "class_type": LORA,
-            "inputs": {
-                "model": [target, 0],
-                "clip": [target, 1],
-                "lora_name": str(spec.get("name", "")),
-                "strength_model": spec.get("strength_model", 1),
-                "strength_clip": spec.get("strength_clip", 1),
-            },
+        inputs = {
+            "model": [target, 0],
+            "lora_name": str(spec.get("name", "")),
+            "strength_model": spec.get("strength_model", 1),
         }
+        if not model_only:
+            inputs["clip"] = [target, 1]
+            inputs["strength_clip"] = spec.get("strength_clip", 1)
+        workflow[nid] = {"class_type": kind, "inputs": inputs}
         target = nid
         new_ids.append(nid)
 
@@ -282,11 +399,14 @@ def _rebuild_lora(workflow, specs):
 
     if gen_id:
         gen["inputs"]["model"] = [target, 0]
-        gen["inputs"]["clip"] = [target, 1]
-        # 负向 CLIPTextEncode 的 clip 也挂到最后一级 LoRA
-        for nid, nd in workflow.items():
-            if nd.get("class_type") == "CLIPTextEncode" and "clip" in nd.get("inputs", {}):
-                nd["inputs"]["clip"] = [target, 1]
+        if not model_only:
+            gen["inputs"]["clip"] = [target, 1]
+            # 负向 CLIPTextEncode 的 clip 也挂到最后一级 LoRA。
+            # ModelOnly 工作流**不能**这么做：它的 CLIP 走 CLIPLoader，接上
+            # LoraLoader 的 clip 输出会让文本编码绕一圈，且目标节点没有 clip 槽。
+            for nid, nd in workflow.items():
+                if nd.get("class_type") == "CLIPTextEncode" and "clip" in nd.get("inputs", {}):
+                    nd["inputs"]["clip"] = [target, 1]
     return new_ids
 
 
@@ -379,7 +499,7 @@ tool = {
     "parameters": {
         "type": "object",
         "properties": {
-            "skill": {"type": "string", "description": "skill 名。默认 image_gen_v1（本工具调参逻辑按它的标准单链结构写；anima 是 UNETLoader + 2 个 ModelOnly lora 的单段结构、krea2 只有 ModelOnly lora，改这两个要先传对应 skill 名 get_workflow 看清结构再动手）"}
+            "skill": {"type": "string", "description": "skill 名。默认 image_gen_v1（本工具调参逻辑按它的标准单链结构写；anima 是两段采样（2 个 UNETLoader 底模 + 2 个 ModelOnly lora，二段不接 lora）、krea2 只有 ModelOnly lora，改这两个要先传对应 skill 名 get_workflow 看清结构再动手）"}
         },
         "required": []
     }
@@ -399,7 +519,7 @@ tool_update = {
     "parameters": {
         "type": "object",
         "properties": {
-            "skill": {"type": "string", "description": "skill 名。默认 image_gen_v1（本工具调参逻辑按它的标准单链结构写；anima 是 UNETLoader + 2 个 ModelOnly lora 的单段结构、krea2 只有 ModelOnly lora，改这两个要先传对应 skill 名 get_workflow 看清结构再动手）"},
+            "skill": {"type": "string", "description": "skill 名。默认 image_gen_v1（本工具调参逻辑按它的标准单链结构写；anima 是两段采样（2 个 UNETLoader 底模 + 2 个 ModelOnly lora，二段不接 lora）、krea2 只有 ModelOnly lora，改这两个要先传对应 skill 名 get_workflow 看清结构再动手）"},
             "ops": {
                 "type": "array",
                 "description": "要执行的操作列表（每条可不同 op）",
