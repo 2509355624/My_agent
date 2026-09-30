@@ -1,6 +1,12 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+rem --- venv python auto-detect: desktop my_env / laptop confyui_env ---
+set "PY="
+if not defined PY if exist "D:\AI\my_env\Scripts\python.exe" set "PY=D:\AI\my_env\Scripts\python.exe"
+if not defined PY if exist "D:\AI\confyui_env\Scripts\python.exe" set "PY=D:\AI\confyui_env\Scripts\python.exe"
+if not defined PY if exist "D:\AI\comfy_env\Scripts\python.exe" set "PY=D:\AI\comfy_env\Scripts\python.exe"
+if not defined PY set "PY=python"
 rem 这个标题是一键脚本识别并结束上一个实例的标记，不要改
 title QQBOT-ADAPTER
 
@@ -15,14 +21,14 @@ echo   本窗口持续输出日志，请勿关闭。
 echo   NapCat 重启后本进程会自动重连，无需手动重启。
 echo.
 
-if not exist "D:\AI\confyui_env\Scripts\python.exe" (
+if not exist "%PY%" (
     echo [ERROR] 找不到 Python:
-    echo         D:\AI\confyui_env\Scripts\python.exe
+    echo         %PY%
     pause
     exit /b 1
 )
 
-D:\AI\confyui_env\Scripts\python.exe -m app.qq_bot
+%PY% -m app.qq_bot
 set "RC=%ERRORLEVEL%"
 
 echo.

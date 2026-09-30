@@ -1,5 +1,11 @@
 @echo off
 cd /d "%~dp0"
+rem --- venv python auto-detect: desktop my_env / laptop confyui_env ---
+set "PY="
+if not defined PY if exist "D:\AI\my_env\Scripts\python.exe" set "PY=D:\AI\my_env\Scripts\python.exe"
+if not defined PY if exist "D:\AI\confyui_env\Scripts\python.exe" set "PY=D:\AI\confyui_env\Scripts\python.exe"
+if not defined PY if exist "D:\AI\comfy_env\Scripts\python.exe" set "PY=D:\AI\comfy_env\Scripts\python.exe"
+if not defined PY set "PY=python"
 title QQ 机器人 - 一键启动
 
 set "NAPCAT_BAT=D:\AI\NapCat\启动NapCat.bat"
@@ -49,7 +55,7 @@ start "NapCat - QQ 协议端" cmd /k "%NAPCAT_BAT%"
 ping -n 4 127.0.0.1 >nul
 start "QQBOT-ADAPTER" cmd /k "%BOT_BAT%"
 ping -n 3 127.0.0.1 >nul
-start "扫码窗口" cmd /k "D:\AI\confyui_env\Scripts\python.exe" "%~dp0napcat_qr.py" --tries 12 --wait 120
+start "扫码窗口" cmd /k "%PY%" "%~dp0napcat_qr.py" --tries 12 --wait 120
 echo       两个新窗口已启动
 echo.
 

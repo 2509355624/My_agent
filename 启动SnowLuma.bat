@@ -22,7 +22,7 @@ rem ===========================================================================
 set "SL_DIR=D://AI//SnowLuma"
 set "SL_NODE=%SL_DIR%\node.exe"
 set "SL_MAIN=%SL_DIR%\index.mjs"
-set "QQ_EXE=D://APP//qq//QQ.exe"
+set "QQ_EXE=C:\APP\qq\QQ.exe"
 
 rem auto = 看门狗调起来的（隐藏窗口跑）：跑完直接退出，不等回车
 set "AUTO_RUN="
