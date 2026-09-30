@@ -149,8 +149,9 @@ QWEN_SKILL = "qwen_image_v1"
 #
 # ⚠️ 2026-09-30 起**清空**（原为 `{"anima_2": 6.0}`）。原因是那个 6.0 门槛站不住脚：
 #
-#   ① 它唯一的对象 anima_2 已删掉——其中两段采样那套现在是**默认** anima
-#      （`skills/anima/workflow.json`），天天跑、不能每张都重启一次 ComfyUI。
+#   ① 它唯一的对象 anima_2 已删掉——那套两段采样现在是**全部 4 个动漫渠道**
+#      （`skills/anima_soft|gloss|curvy|clear/workflow.json`，2026-09-30 起
+#      默认 anima_clear），天天跑、不能每张都重启一次 ComfyUI。
 #
 #   ② 更要紧的是：**实测证明那个门槛本身就是过保守的**。翻 09-30 的
 #      comfyui_8188.log，新的两段（10+5）工作流在**同一个脏进程**上连跑 8 次
@@ -233,6 +234,10 @@ class Job:
         self.prompt_id = None
         self.entry = None           # 出图后的 history entry
         self.error = None           # 失败原因（网页侧 wait 时抛出来）
+        # 这张有没有扣过私聊每日额度（generate_image._charge_quota 打的标记）。
+        # 只有它为真、且最后**没出图**，_finish 才退还一个名额。默认 False：
+        # 网页端和群聊都不扣，测试里手搓的 Job 也不扣。
+        self.quota_charged = False
         self.done = threading.Event()
 
     def wait(self, poll=POLL_INTERVAL):
@@ -866,6 +871,7 @@ def process(job):
 def _finish(job):
     """还名额、清 _running、唤醒等结果的网页侧。失败路径也一定要走到。"""
     global _running, _heavy_done_at
+    refund = False
     with _lock:
         key = _key(job.target, job.target_id)
         n = _per_session.get(key, 0) - 1
@@ -885,14 +891,25 @@ def _finish(job):
         # 记一条回执：模型在 enqueue 拿到「已经排上队了」之后就**再也收不到
         # 任何消息**，全靠这条知道上一张到底出没出图（见 recent_line）。
         # ok 的判据是「真出图了」且投递没出错——图没发回会话，对群友就等于没画。
+        ok = bool(job.skill_done) and job.error is None
         _recent.append({
             "target": job.target,
             "target_id": job.target_id,
             "skill": job.skill or "",
-            "ok": bool(job.skill_done) and job.error is None,
+            "ok": ok,
             "err": (_reason(job.error) if job.error else ""),
             "ts": time.time(),
         })
+        # 私聊每日额度：接单时扣过了，但**这张没出图**就得退回去——额度管的是
+        # 「你能拿到几张图」，不是「你能让我们失败几次」。判据跟上面的 ok 同源，
+        # 不另立一套，免得出现「回执说失败、额度却照扣」这种自相矛盾的状态。
+        refund = job.quota_charged and not ok
+    if refund:
+        # 放在锁外：退款要落盘，不该占着队列锁做磁盘 IO。
+        from app import image_quota
+        left = image_quota.refund(job.target_id)
+        log.info("这张没出图，退还私聊额度：%s 今日已用 %d 张",
+                 job.target_id, left)
     job.done.set()
 
 
@@ -1164,8 +1181,16 @@ def _notice(job, stage="submit"):
         return
     try:
         _send_text(job.target, job.target_id, _fail_text(job.error, stage, job.skill))
-    except Exception:
-        log.exception("生图失败说明也发不出去 %s %s", job.target, job.target_id)
+    except Exception as exc:
+        # 对方不是好友时，连这句失败说明都发不出去（QQ 不允许给非好友发私聊）。
+        # 那是同一条策略限制，别在这儿再留一段看着像崩溃的堆栈——qq_bot 那边
+        # 已经有一条说得清的 WARNING 加一次管理员通知了。
+        from app import qq_api
+        if qq_api.friend_required_error(exc):
+            log.warning("生图失败说明也发不出去 %s %s：对方还不是好友",
+                        job.target, job.target_id)
+        else:
+            log.exception("生图失败说明也发不出去 %s %s", job.target, job.target_id)
 
 
 def _send_text(target, target_id, text):

@@ -1,6 +1,7 @@
 """ComfyUI 生图工具"""
 
 import os
+import logging
 
 import requests
 import json
@@ -11,6 +12,8 @@ from app import nai as nai_mod
 from app.cancel import Cancelled, is_cancelled
 from app.config import COMFYUI_URL, DISABLED_IMAGE_SKILLS, QQ_AGENT_ID
 from app.skills import load_skill, load_workflow
+
+log = logging.getLogger("generate_image")
 
 
 # 支持图生图的 skill。**现在一个都没有——图生图整体停用**（2026-09-27 用户定）。
@@ -30,23 +33,37 @@ I2I_DEFAULT_SKILL = "qwen_image_v1"
 
 # 没点名 skill 时的文生图默认渠道。
 #
-# 2026-09-30 18:xx 起：动漫渠道有**两个**，默认是 `anima_realskin`。
-#   - `anima_realskin`（默认）：一段 reality + 两个 LoRA → `LatentUpscaleBy` 1.1×
-#     → 二段换 `miaomiaoRealskin_anima13` 精修。用户 18:12 在 ComfyUI 里调的那版。
-#   - `anima`（点名才用）：两段都吃同一块 `Ani1.1`（「双 reality」）。
-# 两者共用同一套前半段，**差别只在第二段的底模**（外加一段的采样器参数）。
-# 工作流都直接取自用户 ComfyUI 的 `anime2.json`——他每调一次就要重导一次，
+# 2026-09-30 20:3x 起：**本机只剩 4 个动漫渠道，SD 渠道（image_gen_v1）已归档。**
+# 四个都由用户当天的 ComfyUI 工作流直接转来，共用同一套两段采样骨架，
+# **差别在底模组合，表现为画风差异**——所以渠道名按**视觉特征**取，
+# 模型看到名字就能联想效果（用户要求「形象的命名，这样有辨识度」）：
+#
+#   - `anima_clear`（**默认**）：清透素净、光最平。realskin → realskin（同一块底模）。728×1024。
+#   - `anima_soft`：柔光哑光素肌。realskin → reality。728×1024。
+#   - `anima_gloss`：冷调油光亮面。reality → realskin。768×1024 → 1.1× → 848×1128。
+#   - `anima_curvy`：丰腴强光影。harem → reality。728×1024。
+#
+# 命名依据是**同种子两轮实测**（`_compare_channels.py`，对比图见
+# `D:\AI\ComfyUI\output\_channel_compare.png`）：两轮特征一致 → 是模型特征不是种子运气。
+# 最硬的一条是 `anima_curvy` 的体型差异，两轮都明显。
+#
+# ⚠️ 默认渠道换过两次（`anima_soft` → `anima_clear`，2026-09-30 21:3x 用户拍板），
+# **每次换都会连累一批写死名字的地方**（工具描述、拒收话术、4 个 skill.md 的「默认」标记、
+# `comfy_workflow.py` 的默认参数、以及一批测试）。所以：
+#   - 下面这个常量是**唯一真相源**，话术/描述里要提默认渠道名一律 `%` 它，别写字面量；
+#   - 换默认渠道时按 `tests/test_image_channels.py::DefaultChannelTest` 的报错清单挨个改。
+#
+# 工作流都直接取自用户 ComfyUI 里导出的文件——他每调一次就要重导一次，
 # 步数/CFG/采样器/放大倍率**都是他随手调的旋钮，别把这里的数字当契约**。
-# 单独的那个 `anima_2` 目录对上层**不再是可选项**（本机目录还在，但模型不该知道它）。
-# 历史：中间有过「单底模单段 anima + 双底模两段 anima_2」两条并存，
-# 以及更早「anima 目录不存在、只能临时指 image_gen_v1」的阶段，都已结束。
-T2I_DEFAULT_SKILL = "anima_realskin"
+# 历史：更早有过「单底模 anima」「双底模 anima_2」「anima_realskin / anima 两个渠道」
+# 等阶段，都已随本次切换归档到 `skills/_archive_20260930/`。
+T2I_DEFAULT_SKILL = "anima_clear"
 
 
 # ─── QQ 侧生图开关 ───────────────────────────────────
 
 def _qq_gate():
-    """QQ 会话里的生图总闸 + 单群闸；非 QQ 会话（网页端）不受限。
+    """QQ 会话里的生图总闸 + 单群闸 + **私聊每日额度闸**；网页端不受限。
 
     靠 qq_api 的线程本地绑定知道「此刻在为哪个 QQ 会话服务」。管理页
     关掉后下一轮就生效（settings.json 走 mtime 缓存），不用重启。拒绝
@@ -54,14 +71,43 @@ def _qq_gate():
     别让整轮变成工具执行失败。
     """
     from app import qq_api
-    from app.agents import image_gen_allowed
+    from app.agents import image_gen_allowed, image_quota_allowed
     target, target_id = qq_api.current_context()
     if target is None:
         return None
     ok, why = image_gen_allowed(QQ_AGENT_ID, target, target_id)
-    return None if ok else ("错误：" + why
-                            + "，本次不生成图片。别再重试，"
-                              "直接告诉对方现在画不了。")
+    if not ok:
+        return ("错误：" + why
+                + "，本次不生成图片。别再重试，"
+                  "直接告诉对方现在画不了。")
+    # 私聊每日额度（群聊恒放行，见 agents.image_quota_allowed）。文案和上面那条
+    # 刻意不同：这条的出路是「明天再来」，说成「现在画不了」会让对方以为机器坏了
+    # 而反复重试。
+    ok, why = image_quota_allowed(QQ_AGENT_ID, target, target_id)
+    if not ok:
+        return ("错误：" + why
+                + "，本次不生成图片。别再重试，也别说「稍等」「马上好」，"
+                  "直接告诉对方今天的额度用完了、明天再来；"
+                  "对方问起就说这是私聊的每日限制。")
+    return None
+
+
+def _charge_quota(job, target, target_id):
+    """接单成功 → 扣一个私聊额度名额，并在 job 上打标记。
+
+    扣额放在「真正接单之后」（用户 2026-09-30 选的方案）：这样拒收（队列满、
+    渠道停用、ComfyUI 没在线）一张都不扣，而**连点刷队列**又拦得住——额度在
+    提交那一刻就占了。
+
+    `job.quota_charged` 是「这张到底扣没扣」的唯一凭据：worker 的 `_finish`
+    只认它，不靠自己重新推断（推不出来——它看不见这次是私聊还是群聊之外的信息）。
+    """
+    if target != "private":
+        return
+    from app import image_quota
+    n = image_quota.charge(target_id)
+    job.quota_charged = True
+    log.info("私聊生图额度：%s 今日已用 %d 张", target_id, n)
 
 
 # ─── 工具函数 ────────────────────────────────────────
@@ -171,11 +217,18 @@ def _apply_loras(workflow, lora_str):
     return None
 
 
-def _generate_image(prompt, skill=None, use_character=False, lora=None,
-                    source_image="", denoise=None):
-    # denoise：垫图重绘（anima / image_gen_v1）下线后已经没有渠道消费它了。
-    # 签名里留着只为兜住模型手滑传的参数——删掉的话 execute_tool 的
-    # fn(**args) 会抛 TypeError，被包成「工具执行失败」，模型就以为工具坏了。
+def _generate_image(prompt, skill=None, lora=None,
+                    source_image="", denoise=None, use_character=None):
+    # `denoise`：**只有 NAI 图生图**消费它（见下面的 `_nai_strength(denoise)`），
+    # 本机 4 个动漫渠道都不认。`source_image` 同理。
+    #
+    # `use_character`（2026-09-30 随角色底模机制一起下线）：原义是「用这个 skill
+    # 自带的角色底模」，而**只有 image_gen_v1 有 `character.txt`**。SD 归档后
+    # 4 个动漫渠道都没有角色底模，传了也不生效。参数本身已从工具描述和
+    # `parameters` 里删掉（模型看不到它），这里留着是**最后一道兜底**：
+    # `execute_tool` 是 `fn(**args)`（registry.py:40，不做参数过滤），模型万一
+    # 手滑传了它，删掉签名就会抛 TypeError 被包成「工具执行失败」，模型会以为
+    # 工具坏了、反复重试。`__CHARACTER__` 占位符的替换则一并删了——没有工作流再用它。
 
     # 提交前先看一眼：已经中断就别再往 ComfyUI 队列里塞新任务了
     if is_cancelled():
@@ -227,7 +280,7 @@ def _generate_image(prompt, skill=None, use_character=False, lora=None,
         return ("错误：不支持传 source_image（改图 / 图生图已停用）。"
                 "**别跟对方解释技术原因，也别提这个参数名**，就说改不了图。"
                 "引用一张图只是让**你看得见**它——你要做的是：**照它反推出提示词，"
-                "用默认的 anima_realskin 重新画一张新的**（新图不是改它那张），"
+                "用默认的 " + T2I_DEFAULT_SKILL + " 重新画一张新的**（新图不是改它那张），"
                 "或者对方只是让你看图 / 点评时就直接回话。")
 
     # 没点名 skill 时的默认渠道：文生图照旧 T2I_DEFAULT_SKILL。execute_tool 是 fn(**args)，
@@ -247,14 +300,9 @@ def _generate_image(prompt, skill=None, use_character=False, lora=None,
     if skill in DISABLED_IMAGE_SKILLS:
         return ("错误：" + skill + " 这个渠道已经停用（这台机器带不动它）。"
                 "**别跟对方提这个渠道名，也别解释原因**——对方只是要一张图的话，"
-                "直接改用默认的 anima_realskin 重画（prompt 改写成 anima 的标签式英文写法）；"
+                "直接改用默认的 " + T2I_DEFAULT_SKILL + " 重画"
+                "（prompt 改写成动漫的标签式英文写法）；"
                 "对方点名要它，就照实说这个渠道现在用不了。")
-
-    # QQ 会话强制无底模：QQ 的工具描述里根本没有角色选项，就算模型
-    # 手滑传了 use_character=true 也不生效——角色描述只在网页端可见。
-    from app import qq_api
-    if qq_api.current_context()[0] is not None:
-        use_character = False
 
     skill_data = load_skill(skill)
     if not skill_data or not skill_data["workflow"]:
@@ -292,15 +340,9 @@ def _generate_image(prompt, skill=None, use_character=False, lora=None,
 
     # 替换占位符
     seed = random.randint(1, 2**32 - 1)
-    # 是否用 skill 底模：默认用；若关闭则用中性占位（不吃角色本体）
-    character = skill_data.get("character", "")
-    if not use_character:
-        character = ""
-    # 转义 character 里的换行和特殊字符
-    character_escaped = character.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '')
-    # __MULTI_PROMPTS__ 可以独占一个 JSON 字符串（image_gen_v1），也可以
-    # 嵌在更大字符串里（krea2 的 node4 = "Yoneyama Mai Style, __MULTI_PROMPTS__"，
-    # 工作流自带固定风格前缀）。统一按「字符串内部转义替换」处理，两种都兼容。
+    # __MULTI_PROMPTS__ 可以独占一个 JSON 字符串，也可以嵌在更大字符串里
+    # （如节点 4 = "@kibro, __MULTI_PROMPTS__"，工作流自带固定画风/触发词前缀）。
+    # 统一按「字符串内部转义替换」处理，两种都兼容。
     prompt_escaped = prompt.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '')
     workflow_str = workflow_str.replace("__MULTI_PROMPTS__", prompt_escaped)
     # 连引号一起换掉：ComfyUI 的 KSampler.seed 是 INT 字段，只替内容、留着引号
@@ -308,7 +350,6 @@ def _generate_image(prompt, skill=None, use_character=False, lora=None,
     # （它对 seed 类型不敏感），换成标准 KSampler 后必须落成真数字。
     workflow_str = workflow_str.replace('"__SEED__"', str(seed))
     workflow_str = workflow_str.replace("__SEED__", str(seed))  # 兜底：裸占位符
-    workflow_str = workflow_str.replace("__CHARACTER__", character_escaped)
     if is_i2i:
         # 垫图专用占位符：源图文件名（按 JSON 字符串转义填，避免文件名里的
         # 引号把 JSON 打破）与重绘强度。这两个只在 workflow_i2i.json 里出现。
@@ -346,6 +387,8 @@ def _generate_image(prompt, skill=None, use_character=False, lora=None,
         # 拒收时工作流还在手上，ComfyUI 一点算力都没浪费，也不会留下「画了
         # 却没人发」的孤儿图。
         return reason
+    # 接单成功才扣私聊额度（拒收一张不扣）。失败由 worker 的 _finish 退回来。
+    _charge_quota(job, target, target_id)
 
     if target is not None:
         # 提交完立刻返回，图由 worker 画好后自己发回原群。留在这儿同步等会把
@@ -412,6 +455,9 @@ def _enqueue_nai(prompt, target, target_id, nai_i2i=None):
     if reason is not None:
         # 拒收时什么算力都没花，也没有孤儿图。
         return reason
+    # NAI 也占私聊额度（用户 2026-09-30 选的「一起算」）：额度是「私聊每天
+    # 最多几张图」这个承诺，跟图是从本机还是云端出来的无关。
+    _charge_quota(job, target, target_id)
     ahead = image_jobs.ahead_of(job)
     if ahead > 0:
         return ("已经排上队了（前面还有 %d 张），排到就画，"
@@ -430,36 +476,38 @@ def _enqueue_nai(prompt, target, target_id, nai_i2i=None):
 tool = {
     "name": "generate_image",
     "description": "调用 ComfyUI 生成图片。"
-                  "【默认 Skill】文生图默认 anima_realskin（Anima 2B 动漫模型，一次一张，"
-                  "两段采样 + 1.1× 放大，实际出图 848×1128），不传 skill 就是它—— prompt 只写一段画面描述，**不要用 --- 分隔**。"
-                  "【换渠道】仅当用户点名或明确需要时才换：要一次出多张（多个提示词用 --- 分隔）"
-                  "或要用固定角色底模时传 skill=image_gen_v1（**= SD / SDXL 渠道**，"
-                  "用户说「用 sd / sd 生图 / 用那个 sd 模型」指的就是它；单段直出 832×1216，快）。"
-                  "**只有对方点名要「高清 / 大图 / 精修 / 再修一遍」时**才传 "
-                  "skill=image_gen_v1_hires（SD 两遍高清版，896×1600，比默认慢）——"
-                  "**没点名就别自己挑它**。"
-                  "**动漫渠道有两个，都带 anima 前缀，别搞混**：默认 anima_realskin（第二段换成写实皮肤底模）；"
-                  "anima（两段吃同一块底模，叫「双 reality」）——**只有对方点名要「双 reality / "
-                  "不换底模那版」时才传 anima**，平时一律不传 skill，**也别去编别的动漫 skill 名出来**。"
+                  "【默认 Skill】文生图默认 anima_clear（Anima 2B 动漫模型，一次一张，"
+                  "两段采样，实际出图 728×1024），不传 skill 就是它—— prompt 只写一段画面描述，**不要用 --- 分隔**。"
+                  "【四个动漫渠道，按**想要什么画风**挑，不是按模型挑】"
+                  "**本机只有这 4 个生图渠道，渠道名就是画风**，别去编别的 skill 名出来："
+                  "anima_clear（默认）= 光最平最均匀、最素净（用户会说「清透 / 素净 / 自然 / 光别那么硬」）；"
+                  "anima_soft = 柔光哑光、皮肤素净、对比低、层次稍多（「柔一点 / 干净 / 温柔」）；"
+                  "anima_gloss = 冷调偏蓝、油光高光明显、锐利有 3D 渲染感、脸偏成熟"
+                  "（用户会说「亮面 / 油光 / 高光 / 冷色 / 通透 / 清晰」，也会直接叫它「anime2 / 原版」）；"
+                  "anima_curvy = 胸围明显更大、光影强烈、氛围浓"
+                  "（用户会说「丰满 / 大胸 / 身材好 / 光影强 / 氛围感」）。"
+                  "**只有用户明确点名画风、或明确要「更柔 / 更亮 / 更丰满」时才换渠道**；"
+                  "平时一律不传 skill。anima_clear 和 anima_soft 很像，分不清时也走默认。"
                   "【qwen_image_v1 / krea2 都已停用】**不要传 skill=qwen_image_v1 或 skill=krea2**"
                   "——这台机器带不动它们，传了工具会直接拒。"
                   "用户点名 qwen / 通义 / krea2、要**画面里写出文字（尤其中文）**、或要**写实照片感**时："
-                  "照常用默认的 anima_realskin 画（写实需求可改用 image_gen_v1），**照实说那个渠道现在用不了**，"
-                  "别硬试、别拿别的渠道冒充、也别把渠道名当技术名词甩给用户。"
-                  "【底模】除 image_gen_v1 外都没有固定角色，你在 prompt 中自己写出完整角色提示词"
-                  "(发型/发色/体型/服装/年龄等)；只有 image_gen_v1 配 use_character=true 时用它的固定角色。"
+                  "照常用默认的 anima_clear 画（想要皮肤更写实可用 anima_curvy），"
+                  "**照实说那个渠道现在用不了**，别硬试、别拿别的渠道冒充、"
+                  "也别把渠道名当技术名词甩给用户。"
+                  "【角色】4 个渠道**都没有固定角色底模**，你在 prompt 中必须自己写出完整角色提示词"
+                  "(发型/发色/瞳色/体型/服装/年龄等)，不要指望任何渠道自带角色。"
                   "【lora】用户点名要换 lora 时才传 lora 参数，平时不要传。格式「文件名:强度」，"
                   "多个逗号分隔（如 \"x.safetensors:0.8,y.safetensors:0.5\"）；文件名要完整"
                   "(.safetensors 结尾)，写错会返回可用清单；传了就完全接管本次的 lora，"
-                  "槽位 image_gen_v1 3 个 / anima 2 个，没填满的槽自动关闭。"
-                  "【引用图片：默认只看，不改】**本机渠道（anima / image_gen_v1 等）"
-                  "不要传 source_image**（它们的图生图已停用，传了工具会直接拒）；"
+                  "每个渠道 2 个槽，没填满的槽自动关闭。"
+                  "【引用图片：默认只看，不改】**本机 4 个渠道都不要传 source_image**"
+                  "（它们的图生图已停用，传了工具会直接拒）；"
                   "**唯一例外是下面的 nai**。用户引用一张图，只是让你**看得见**"
-                  "它：你要做的是**照它反推出提示词，用 anima_realskin 画一张新的**，"
+                  "它：你要做的是**照它反推出提示词，用默认渠道画一张新的**，"
                   "或者对方只是让你看图 / 点评时直接回话。"
                   "用户真要「改这张图 / 垫图 / 把X换成Y」而 nai 又没开通时，"
                   "照实说本机渠道改不了图，不要硬凑；可以问清他想要什么效果，"
-                  "用 anima_realskin 重画一张（说明是新画的、不是改他那张）。"
+                  "用默认渠道重画一张（说明是新画的、不是改他那张）。"
                   "【nai / NovelAI】**仅限管理员为特定群开通 NAI 后**才能用，"
                   "图由群主自己的 NovelAI 账号在云端出，跟本机 ComfyUI 无关；"
                   "本群没开通就传了会被直接拒绝，照实说这个渠道本群用不了、"
@@ -470,59 +518,20 @@ tool = {
                   "带图的消息再 @ 一次），可选 denoise（0.1~0.9，默认 0.7，"
                   "越大改得越狠，别主动传）——**只在对方明确要改图 / 垫图时才传 "
                   "source_image**，看图 / 点评照旧不传。",
-    # QQ 机器人看不到角色底模这套：Sumire 的角色描述只给网页端用。
-    "description_overrides": {
-        QQ_AGENT_ID:
-            "调用 ComfyUI 生成图片。"
-            "【默认 Skill】文生图默认 anima_realskin（Anima 2B 动漫模型，一次一张，"
-            "两段采样 + 1.1× 放大，实际出图 848×1128），不传 skill 就是它 —— prompt 只写一段画面描述，**不要用 --- 分隔**。"
-            "【换渠道】仅当对方点名或明确需要时才换："
-            "要一次出多张时传 skill=image_gen_v1（**= SD / SDXL 渠道**，"
-            "对方说「用 sd / sd 生图 / 用那个 sd 模型」指的就是它；多个提示词用 --- 分隔；"
-            "单段直出 832×1216，快）。"
-            "**只有对方点名要「高清 / 大图 / 精修 / 再修一遍」时**才传 "
-            "skill=image_gen_v1_hires（SD 两遍高清版，896×1600，比默认慢）——"
-            "**没点名就别自己挑它**。"
-            "**动漫渠道有两个，都带 anima 前缀，别搞混**：默认 anima_realskin（第二段换成写实皮肤底模）；"
-            "anima（两段吃同一块底模，叫「双 reality」）——**只有对方点名要「双 reality / "
-            "不换底模那版」时才传 anima**，平时一律不传 skill，**也别去编别的动漫 skill 名出来**。"
-            "【qwen_image_v1 / krea2 都已停用】**不要传 skill=qwen_image_v1 或 skill=krea2**"
-            "——这台机器带不动它们，传了工具会直接拒。"
-            "对方点名 qwen / 通义 / krea2、要**画面里写出文字（尤其中文）**、或要写实照片感时："
-            "照常用默认的 anima_realskin 画，**照实说那个渠道现在用不了**，别硬试、别拿别的渠道冒充、"
-            "也别把渠道名当技术名词甩给对方。"
-            "【lora】用户点名要换 lora 时才传 lora 参数，平时不要传。格式「文件名:强度」，"
-            "多个逗号分隔（如 \"x.safetensors:0.8\"）；文件名要完整(.safetensors 结尾)，"
-            "写错会返回可用清单；最多 3 个，传了就完全接管本次的 lora。"
-            "【引用图片：默认只看，不改】**本机渠道（anima / image_gen_v1 等）"
-            "不要传 source_image**（它们的图生图已停用，传了工具会直接拒）；"
-            "**唯一例外是下面的 nai**。对方引用一张图，只是让你**看得见**"
-            "它：你要做的是**照它反推出提示词，用 anima_realskin 画一张新的**，"
-            "或者对方只是让你看图 / 点评时直接回话。"
-            "对方真要「改这张图 / 垫图 / 把X换成Y」而 nai 又没开通时，"
-            "照实说本机渠道改不了图，不要硬凑；可以问清他想要什么效果，"
-            "用 anima_realskin 重画一张（说明是新画的、不是改他那张）。"
-            "【nai / NovelAI】**仅限管理员为特定群开通 NAI 后**才能用，"
-            "图由群主自己的 NovelAI 账号在云端出，跟本机 ComfyUI 无关；"
-            "本群没开通就传了会被直接拒绝，照实说这个渠道本群用不了、"
-            "让对方去找群主开。"
-            "文生图：skill 传 nai，**只传 prompt，其它参数都不要传**。"
-            "图生图（改图 / 垫图）：skill 传 nai + **source_image 传 1**"
-            "（= 对方本轮**引用**的那张图；对方没引用就画不了，让他引用一条"
-            "带图的消息再 @ 一次），可选 denoise（0.1~0.9，默认 0.7，"
-            "越大改得越狠，别主动传）——**只在对方明确要改图 / 垫图时才传 "
-            "source_image**，看图 / 点评照旧不传。",
-    },
-    "hidden_params": {QQ_AGENT_ID: ["use_character"]},
+    # 2026-09-30：`description_overrides` / `hidden_params` 都删了。
+    # 它们本来只为「QQ 侧藏掉 use_character 和角色底模那套」而存在；
+    # 角色底模随 SD 渠道一起下线后，两个 agent 看到的描述已经没差别，
+    # 留一份 QQ 专用文案只会多一处要同步维护的副本。
+    # `agent_prompt.py` 取不到 `description_overrides` 时会自动回落到
+    # `tool["description"]`，所以删掉是安全的。
     "function": _generate_image,
     "parameters": {
         "type": "object",
         "properties": {
-            "prompt": {"type": "string", "description": "提示词。写逗号分隔的标签式英文短句（anima / image_gen_v1 都是这个写法），只写一段、不要用 --- 分隔（只有 skill=image_gen_v1 时才用 --- 分隔多张）。画面里没有固定角色时须包含完整角色描述"},
-            "skill": {"type": "string", "description": "Skill名称。**不传就是默认 anima_realskin**。可选值见系统提示 Available Skills 里标 [底模]/[无底模] 的生图类；image_gen_v1（**= SD / SDXL 渠道**）仅在用户点名或场景匹配时才用；**image_gen_v1_hires（SD 高清版）只在用户点名时才传，绝不主动选**。**qwen_image_v1 / krea2 已停用，不要传**；nai（NovelAI 云端）仅限已开通的群，文生图 / 图生图都走它"},
-            "use_character": {"type": "boolean", "description": "是否使用该Skill自带的角色描述（默认false）。只有 image_gen_v1 有角色底模，设为true时固定该角色，你只写动作/环境/构图"},
-            "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传"},
-            "source_image": {"type": "string", "description": "**仅 skill=nai 时可用**（图生图 / 垫图）：填 1 = 垫对方本轮**引用**的那张图（对方没引用会报错），可配 denoise（0.1~0.9，默认 0.7）。其它渠道的图生图已停用，传了会被拒；只是看图 / 点评时任何渠道都不要传这个参数"}
+            "prompt": {"type": "string", "description": "提示词。写逗号分隔的标签式英文短句，**只写一段、不要用 --- 分隔**（本机工作流不会拆 ---，要出多张就分多次调用、每次一个变体）。**必须包含完整角色描述**（发型/发色/瞳色/体型/服装/年龄等）——没有任何渠道自带角色"},
+            "skill": {"type": "string", "description": "Skill名称。**不传就是默认 anima_clear**。可选值只有 4 个动漫渠道（见 Available Skills 的生图类）：anima_clear（默认，清透最平光）/ anima_soft（柔光素肌，层次稍多）/ anima_gloss（冷调油光，用户也叫它 anime2）/ anima_curvy（丰腴强光影）。**只在用户点名画风时才传**。**qwen_image_v1 / krea2 已停用，不要传**；nai（NovelAI 云端）仅限已开通的群，文生图 / 图生图都走它"},
+            "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传，每个渠道 2 个槽"},
+            "source_image": {"type": "string", "description": "**仅 skill=nai 时可用**（图生图 / 垫图）：填 1 = 垫对方本轮**引用**的那张图（对方没引用会报错），可配 denoise（0.1~0.9，默认 0.7）。4 个本机渠道的图生图已停用，传了会被拒；只是看图 / 点评时任何渠道都不要传这个参数"}
         },
         "required": ["prompt"]
     }
