@@ -559,3 +559,29 @@ WATCHDOG_SILENCE_SECONDS = float(os.getenv("WATCHDOG_SILENCE_SECONDS", "1200"))
 # 说话就变成每 WATCHDOG_SILENCE_SECONDS 杀一次 QQ —— 反过来招风控。
 WATCHDOG_SILENCE_COOLDOWN = float(os.getenv("WATCHDOG_SILENCE_COOLDOWN", "3600"))
 WATCHDOG_SILENCE_MAX_GAP = float(os.getenv("WATCHDOG_SILENCE_MAX_GAP", "14400"))
+
+# ⚠️ 静默时**要不要真的重启**。默认 0 = **只记日志、不重启**。
+#
+# 原来是 1（重启当探针），09-30 用户拍板改成默认关。原因是一天 32 次实测：
+#
+#   静默重启 → 一键启动全部 force → taskkill /IM QQ.exe /F → -q 快速登录
+#     → 腾讯判定「刚登过又登」= 异常登录 → 作废会话
+#     → 真掉线（tag=下线通知 / 你的账号当前登录已失效）
+#     → 又没人说话 → 又静默 → 又重启 …… 死循环
+#
+# 09-30 硬证据：08:57:50 静默重启（08:57:59 还报过「已有 QQ 适配层在运行」），
+# 08:58:55 重连成功，**09:00:57 就掉了线**——间隔 3 分钟。05:37 那次更直接：
+# 重启后看门狗自己因为锁冲突退出（05:37:18），机器人反而活下来了。
+#
+# 所以「假在线」很可能是这个循环**制造**出来的，不是根因。先关掉静默重启，
+# 用一天观察真实掉线频率：明显下降 = 推断成立；照旧 1 小时一次 = 真是风控。
+# 想恢复老行为把 .env 里设 WATCHDOG_SILENCE_RESTART=1（改完要重启看门狗）。
+WATCHDOG_SILENCE_RESTART = os.getenv("WATCHDOG_SILENCE_RESTART", "0") not in ("0", "false", "False", "")
+
+# ── ComfyUI 看门狗分支总闸（2026-09-30）──────────────────
+# ⚠️ 默认 0 = 整个 ComfyUI 分支不动作（只探活不重启）。
+# 09-30 凌晨它过度重启：05:20/05:51/06:26 各触发一轮（含 1800 秒退避），
+# 因为 ComfyUI 是**按需启动、常常故意不开**，看门狗却当成「崩了」。
+# 后来给分支加了 `comfy_seen` 闩（只在「本来在跑」时才管），但那一版还没在
+# 真机验过就撞上了这次事故，所以先整体关掉；等真机验证过 comfy_seen 再开。
+WATCHDOG_COMFY_ENABLED = os.getenv("WATCHDOG_COMFY_ENABLED", "0") not in ("0", "false", "False", "")

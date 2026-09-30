@@ -45,9 +45,14 @@ trust_env=False，不受本机 Clash 注册表代理影响）。
 
 **静默判据（假在线，见 `_check_silence`）**：三态探针探不出「接口全好但收不到消息」，
 所以在线时再看一眼 qq_bot 的静默时长（`state/qq_status.json` 的 `last_activity_ago`）：
-超过 `SILENCE_SECONDS` 一条消息都没有 → 重启一次**当探针**。重启后自动登录 = 群里本来
-就安静（静默放过），要扫码 = 会话真被作废（推二维码）。退避按倍数增长，防止整夜没人
-说话变成反复杀 QQ。
+超过 `SILENCE_SECONDS` 一条消息都没有 → 记一条日志。
+
+  ⚠️ **09-30 起默认只记日志、不重启**（`WATCHDOG_SILENCE_RESTART=0`）。原设计是
+  「重启一次**当探针**」，但一天 32 次实测推翻了它：重启走 `一键启动全部 force`，
+  里面 `taskkill /IM QQ.exe /F` 再 `-q` 快速登录，**腾讯把「刚登过又登」当异常登录、
+  转身作废会话** → 真掉线。硬证据：08:57:50 探针重启后 **3 分钟**（09:00:57）就掉线。
+  也就是说「假在线」很可能是这个循环**制造**的。想恢复老行为设
+  `WATCHDOG_SILENCE_RESTART=1`。详细因果见 `_check_silence` 和 config.py。
 
 「要扫码」也计入失败次数：一直没人扫就每隔 OFFLINE_GRACE 重启一次，连续
 MAX_RESTART_FAILS 次仍停在扫码界面 → 暂停自动重启并退避 BACKOFF 秒（避免整夜
@@ -58,6 +63,11 @@ MAX_RESTART_FAILS 次仍停在扫码界面 → 暂停自动重启并退避 BACKO
 仍救不活 → 停止自动重启 + 推「需人工处理」+ 退避 BACKOFF 秒，避免无限杀进程。
 
 ## ComfyUI 分支（2026-09-30 加）
+
+⚠️ **整条分支默认停用**（`WATCHDOG_COMFY_ENABLED=0`）：上线当天凌晨就过度重启
+（05:20 / 05:51 / 06:26 各一轮 + 1800 秒退避），因为 ComfyUI 是**按需启动、常常
+故意不开**，看门狗却当成崩了。`comfy_seen` 闩是事后补的、还没真机验过，所以先整体
+关掉。真要开：`.env` 设 `WATCHDOG_COMFY_ENABLED=1` 并重启看门狗。
 
 跟 NapCat 那套**平行**、互不干扰：两边各有自己的失败计数和退避，一个挂了不影响另一个。
 探的是 ComfyUI 的 `/system_stats`（:8188），连续 `MAX_FAILS` 次拿不到就拉
@@ -99,8 +109,9 @@ except ImportError:  # 非 Windows 上退化成无锁（本项目不会走到这
 
 from app import notify
 from app.config import (BASE_DIR, NOTIFY_QRCODE_PATH,
+                        WATCHDOG_COMFY_ENABLED,
                         WATCHDOG_SILENCE_COOLDOWN, WATCHDOG_SILENCE_MAX_GAP,
-                        WATCHDOG_SILENCE_SECONDS)
+                        WATCHDOG_SILENCE_RESTART, WATCHDOG_SILENCE_SECONDS)
 from app.qq_api import check_alive
 from app.notify import push_text
 
@@ -134,6 +145,8 @@ BACKOFF = 1800.0           # 放弃后退避多久再试（秒）
 SILENCE_SECONDS = WATCHDOG_SILENCE_SECONDS     # 多久没消息算「疑似假在线」
 SILENCE_COOLDOWN = WATCHDOG_SILENCE_COOLDOWN   # 连续静默时两次重启的起步间隔
 SILENCE_MAX_GAP = WATCHDOG_SILENCE_MAX_GAP     # 间隔倍增的上限
+# ⚠️ 默认 False = 静默时**只记日志、不重启**（09-30 用户拍板，理由见 config.py）。
+SILENCE_RESTART = WATCHDOG_SILENCE_RESTART
 
 _STATUS_PATH = os.path.join(BASE_DIR, "state", "qq_status.json")
 # 快照本身比这还旧 → qq_bot 的状态线程也停了（或没起），静默判不了，不动手。
@@ -151,6 +164,9 @@ COMFYUI_TIMEOUT = 5.0      # 探 /system_stats 的超时（秒）——本机口
 
 # ComfyUI 崩了没人管这件事，只有本进程在兜。自己崩了就没人拉它——这是已知缺口，
 # 不在这里解决（bat 只看窗口标题）。
+#
+# ⚠️ 总闸默认关（09-30）：见 `_comfy_cycle` docstring。
+COMFY_ENABLED = WATCHDOG_COMFY_ENABLED
 _COMFY_SESSION = None
 
 
@@ -225,7 +241,14 @@ def _comfy_cycle(state, now=None):
 
     闩在重启看门狗进程时归零（state 是新建的）：新起的看门狗不该假设 ComfyUI
     曾经在跑。等它下一次探到在线，闩自己又置上。
+
+    ⚠️ **09-30 起整条分支默认停用**（`WATCHDOG_COMFY_ENABLED=False`）：它上线当天
+    凌晨就过度重启（05:20 / 05:51 / 06:26 各一轮、还烧到 1800 秒退避），因为
+    `comfy_seen` 闩那一版是事后才补的、还没在真机验过。默认先关，只保留探活日志；
+    等真机确认闩行为正确，再在 `.env` 里设 `WATCHDOG_COMFY_ENABLED=1` 打开。
     """
+    if not COMFY_ENABLED:
+        return True
     now = time.time() if now is None else now
     if now < state["comfy_backoff_until"]:
         return True
@@ -436,17 +459,24 @@ def _await_outcome(since):
 
 
 def _check_silence(state, now):
-    """在线、但长时间一条消息都没收到 → 疑似假在线，重启一次**当探针**。
+    """在线、但长时间一条消息都没收到 → 疑似假在线。
 
-    为什么重启能当探针（用户 09-29 的判断，已被当天三次实测证实）：重启后**自动
-    登录**说明会话本来是好的，那就是「群里本来就安静」→ 静默放过、不通知；**需要
-    扫码**说明会话早就被腾讯作废了，而这正是「假在线」的本质 → 推二维码。所以误报
-    的代价只是一次静默重启，真故障却能第一时间暴露出来。
+    ⚠️ **09-30 起默认只记日志、不重启**（`SILENCE_RESTART=False`）。原设计的逻辑
+    是「重启一次**当探针**」：重启后**自动登录**说明会话本来是好的（就是群里安静），
+    **需要扫码**说明会话早被腾讯作废了。但一天 32 次实测推翻了它 —— 重启走的是
+    `一键启动全部 force`，里面 `taskkill /IM QQ.exe /F` 再 `-q` 快速登录，
+    **腾讯把「刚登过又登」当异常登录，转身就作废会话**。于是：
 
-    ⚠️ 退避是必须的，不是优化：静默重启会把 qq_bot 一起重启，而静默计时挂在
-    qq_bot 内存里（`notify._last_activity` 在 import 时置为当下）→ 重启完静默归零。
-    没有退避的话，整夜没人说话就会变成每 SILENCE_SECONDS 杀一次 QQ，反过来招风控。
-    所以每次静默重启后间隔翻倍、封顶 SILENCE_MAX_GAP；一收到消息立刻清零。
+        没人说话 → 静默 → 重启 → 被腾讯作废 → 真掉线 → 又没人说话 → 又重启 …
+
+    08:57:50 那把探针重启后 3 分钟（09:00:57）就掉线，是这条链的硬证据。
+    也就是说「假在线」很可能是这个循环**制造**出来的，重启当探针是**自证预言**。
+
+    所以现在只观察不动手：默认仍然算退避、仍然写日志，只是不调 `_restart`。
+    要恢复老行为，`.env` 里设 `WATCHDOG_SILENCE_RESTART=1` 并重启看门狗。
+
+    ⚠️ 退避仍然必须留着（即使不重启）：`silence_gap` 是观察期的节流阀，
+    没有它日志会被每分钟一条刷爆。
     """
     silent = _silent_seconds(now)
     if silent is None:
@@ -459,6 +489,12 @@ def _check_silence(state, now):
     gap = state["silence_gap"] or SILENCE_COOLDOWN
     state["silence_gap"] = min(gap * 2.0, SILENCE_MAX_GAP)
     state["silence_until"] = now + gap
+    if not SILENCE_RESTART:
+        log.warning("已静默 %.0f 分钟（阈值 %.0f 分钟）但探活正常——"
+                    "疑似假在线，**只记录不重启**（WATCHDOG_SILENCE_RESTART=0）；"
+                    "下次最早 %.0f 分钟后再看",
+                    silent / 60.0, SILENCE_SECONDS / 60.0, gap / 60.0)
+        return True
     log.warning("已静默 %.0f 分钟（阈值 %.0f 分钟）但探活正常，疑似假在线；"
                 "重启一次当探针（下次最早 %.0f 分钟后再判）",
                 silent / 60.0, SILENCE_SECONDS / 60.0, gap / 60.0)

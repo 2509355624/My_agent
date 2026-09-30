@@ -230,10 +230,17 @@ class WatchdogCycleTest(TestCase):
 
 
 class SilenceProbeTest(TestCase):
-    """静默判据（假在线）：三态探针探不出「接口全好但收不到消息」。
+    """静默判据（假在线）。
 
-    重启当探针 —— 自动登录 = 群里本来就安静（静默放过、不通知），
+    ⚠️ 行为在 2026-09-30 改了：默认**只记日志、不重启**（`SILENCE_RESTART=False`）。
+    原设计是「重启当探针」——自动登录 = 群里本来就安静（静默放过、不通知），
     要扫码 = 会话真被腾讯作废（推二维码）。
+
+    但一天 32 次实测发现重启本身会**制造**掉线：重启走 `一键启动全部 force`，
+    里面 `taskkill /IM QQ.exe /F` 再 `-q` 快速登录，腾讯把「刚登过又登」当异常登录、
+    转身作废会话。硬证据：08:57:50 探针重启后 3 分钟（09:00:57）就掉线。
+
+    所以两条路径都要测：默认不重启（只观察），以及显式开回去时老行为还在。
     """
 
     def setUp(self):
@@ -247,6 +254,7 @@ class SilenceProbeTest(TestCase):
             mock.patch.object(wd.notify, "clear_restarting"),
             mock.patch.object(wd.notify, "push_offline", return_value=(True, "ok")),
             mock.patch.object(wd, "_silent_seconds"),
+            mock.patch.object(wd, "SILENCE_RESTART", False),
         ]
         for p in self.patchers:
             p.start()
@@ -266,29 +274,66 @@ class SilenceProbeTest(TestCase):
         wd._cycle(s, now=1000.0)
         wd._trigger_restart.assert_not_called()
 
-    def test_past_threshold_restarts_silently(self):
-        """静默超阈值 → 重启当探针；自动登录回来不通知。"""
+    # ── 默认：只记录、不重启（09-30 起）──────────────────
+
+    def test_default_is_observe_only(self):
+        """⚠️ 默认必须先断言这个默认值 —— 整条改动的立足点。"""
+        from app import config as cfg
+        self.assertFalse(cfg.WATCHDOG_SILENCE_RESTART,
+                         "静默重启默认必须是关的：它会把 QQ 反复踢下线")
+
+    def test_past_threshold_does_not_restart(self):
+        """静默超阈值 → **不重启**（只写日志）。"""
         wd._silent_seconds.return_value = wd.SILENCE_SECONDS + 1
         s = self.new_state()
         wd._cycle(s, now=1000.0)
+        wd._trigger_restart.assert_not_called()
+        wd.push_text.assert_not_called()
+
+    def test_observe_only_still_counts_cooldown(self):
+        """退避照旧推进 —— 否则日志会被刷爆。"""
+        wd._silent_seconds.return_value = wd.SILENCE_SECONDS + 1
+        s = self.new_state()
+        wd._cycle(s, now=1000.0)
+        self.assertEqual(s["silence_gap"], wd.SILENCE_COOLDOWN * 2)
+        self.assertGreater(s["silence_until"], 1000.0)
+
+    def test_observe_only_still_resets_on_activity(self):
+        """不重启也要在收到消息时清零退避，下次真静默才判得准。"""
+        s = self.new_state()
+        s["silence_gap"] = 99999.0
+        wd._silent_seconds.return_value = 5.0
+        wd._cycle(s, now=1000.0)
+        self.assertEqual(s["silence_gap"], 0.0)
+
+    # ── 显式开回老行为（WATCHDOG_SILENCE_RESTART=1）──────
+
+    def test_past_threshold_restarts_when_opted_in(self):
+        """开回老行为 → 静默超阈值仍然重启当探针；自动登录回来不通知。"""
+        wd._silent_seconds.return_value = wd.SILENCE_SECONDS + 1
+        with mock.patch.object(wd, "SILENCE_RESTART", True):
+            s = self.new_state()
+            wd._cycle(s, now=1000.0)
         wd._trigger_restart.assert_called_once()
         wd.push_text.assert_not_called()
 
-    def test_qr_outcome_notifies(self):
-        """要扫码 = 会话真被作废（假在线坐实）→ 必须通知。"""
+    def test_qr_outcome_notifies_when_opted_in(self):
+        """开回老行为：要扫码 = 会话真被作废 → 必须通知。"""
         wd._silent_seconds.return_value = wd.SILENCE_SECONDS + 1
         wd._await_outcome.return_value = "qr"
-        s = self.new_state()
-        wd._cycle(s, now=1000.0)
+        with mock.patch.object(wd, "SILENCE_RESTART", True):
+            s = self.new_state()
+            wd._cycle(s, now=1000.0)
         wd.notify.push_offline.assert_called_once()
         self.assertEqual(s["restart_fails"], 1)
 
-    def test_cooldown_suppresses_repeat_restart(self):
+    def test_cooldown_suppresses_repeat_restart_when_opted_in(self):
         wd._silent_seconds.return_value = wd.SILENCE_SECONDS + 1
-        s = self.new_state()
-        wd._cycle(s, now=1000.0)
-        wd._trigger_restart.assert_called_once()
-        wd._cycle(s, now=1001.0)          # 刚重启完，还在退避里
+        with mock.patch.object(wd, "SILENCE_RESTART", True):
+            s = self.new_state()
+            wd._cycle(s, now=1000.0)
+            wd._trigger_restart.assert_called_once()
+            wd._cycle(s, now=1001.0)          # 刚重启完，还在退避里
         wd._trigger_restart.assert_called_once()
 
     def test_gap_doubles_then_caps(self):
@@ -409,6 +454,8 @@ class ComfyuiWatchTest(TestCase):
             mock.patch.object(wd, "_probe_comfyui"),
             mock.patch.object(wd, "_trigger_comfy_restart", return_value=True),
             mock.patch.object(wd, "push_text", return_value=(True, "ok")),
+            # ⚠️ 默认总闸是关的（09-30），这里手动打开才测得到分支逻辑。
+            mock.patch.object(wd, "COMFY_ENABLED", True),
         ]
         for p in self.patchers:
             p.start()
@@ -422,6 +469,22 @@ class ComfyuiWatchTest(TestCase):
         """seen=True 模拟「这个进程已经见过 ComfyUI 在线」——多数用例要这个前提。"""
         return {"comfy_fails": 0, "comfy_restart_fails": 0,
                 "comfy_backoff_until": 0.0, "comfy_seen": seen}
+
+    def test_disabled_by_default(self):
+        """⚠️ 默认必须先断言总闸是关的 —— 整条分支停用是 09-30 的决定。"""
+        from app import config as cfg
+        self.assertFalse(cfg.WATCHDOG_COMFY_ENABLED,
+                         "ComfyUI 分支默认必须是关的：它会把没在跑的 ComfyUI 反复拉起来")
+
+    def test_disabled_switch_never_restarts(self):
+        """总闸关掉时：即使连续失败、闩也开着，也**一次都不能重启**。"""
+        wd._probe_comfyui.return_value = (False, "refused")
+        state = self.new_state()
+        with mock.patch.object(wd, "COMFY_ENABLED", False):
+            for _ in range(wd.MAX_FAILS * 3):
+                wd._comfy_cycle(state)
+        wd._trigger_comfy_restart.assert_not_called()
+        self.assertEqual(state["comfy_fails"], 0)
 
     def test_alive_no_restart(self):
         wd._probe_comfyui.return_value = (True, "vram_free=9.0GB")
