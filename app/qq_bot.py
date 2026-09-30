@@ -576,6 +576,47 @@ def _merge_batch(batch, max_items=None, max_chars=None, prefix=True):
 
 # ─── 一条会话线的串行执行器 ──────────────────────────
 
+# 「对方不是好友、私聊发不出去」的管理员通知，每个对象每天最多推一次。这个失败
+# 会**反复发生**（对方每发一条消息就试一次发送），不设闸会把通知刷爆。
+_FRIEND_REQUIRED_NOTIFIED = set()
+
+
+def _note_private_send_failure(target, target_id, exc):
+    """私聊回发失败时给一条**看得见**的信号。返回 True = 已识别并处理。
+
+    背景（2026-09-30 用户报「小小怪无法回复私聊，后台就闪一下，然后就没有了」）：
+    机器人其实**正常处理**了那条私聊——跑了一整轮、模型也生成了回复，卡在最后
+    一步投递：协议端拒收，因为 QQ 不允许给非好友发私聊
+    （`retcode 100 / result=16「发送失败，请先添加对方为好友」`）。
+
+    原先这条只在 `_deliver` 里被 `log.exception` 记成一段堆栈，看着像代码崩了，
+    实际是 QQ 的策略限制——**加好友就能好**。所以这里把它降级成一条说得清的
+    WARNING，并顺手推一次管理员通知；否则用户永远只能看到「闪一下」。
+    """
+    from app import qq_api
+    if target != "private" or not qq_api.friend_required_error(exc):
+        return False
+    log.warning("私聊发不出去：%s 还不是好友（QQ 不允许给陌生人发私聊）。"
+                "让对方先加好友，或改到群里说。", target_id)
+    today = time.strftime("%Y-%m-%d", time.localtime())
+    key = (today, str(target_id))
+    if key in _FRIEND_REQUIRED_NOTIFIED:
+        return True
+    # 只留今天的键，免得这个集合随天数无限涨。
+    for k in [k for k in _FRIEND_REQUIRED_NOTIFIED if k[0] != today]:
+        _FRIEND_REQUIRED_NOTIFIED.discard(k)
+    _FRIEND_REQUIRED_NOTIFIED.add(key)
+    try:
+        notify.push_text(
+            "有人私聊，但我回不了",
+            "QQ %s 发来私聊，机器人处理完了却发不出去——对方还不是好友。<br>"
+            "QQ 不允许给非好友发私聊，让他加一下好友就行。<br>"
+            "（同一个对象每天只推一次这条提醒）" % target_id)
+    except Exception:
+        log.debug("推「私聊发不出去」通知没成功", exc_info=True)
+    return True
+
+
 class SessionRunner:
     """把同一条会话线上的消息排队、合并、串行交给 agent。
 
@@ -910,8 +951,10 @@ class SessionRunner:
             try:
                 send_text(self.target_id, reply)
                 spoke = True
-            except Exception:
-                log.exception("回发文字失败 %s", self.session_key)
+            except Exception as exc:
+                # 非好友拒收是可预期的策略限制，给一句人话；别的失败照旧留堆栈。
+                if not _note_private_send_failure(self.target, self.target_id, exc):
+                    log.exception("回发文字失败 %s", self.session_key)
 
         # 一轮里的多张图用同一个格式，别每张都去读一遍 settings（热路径）
         fmt = image_send_format(QQ_AGENT_ID, self.target, self.target_id)
@@ -920,8 +963,9 @@ class SessionRunner:
                 qq_api.send_image(self.target, self.target_id,
                                   image_out.prepare_for_send(name, fmt))
                 spoke = True
-            except Exception:
-                log.exception("回发图片失败 %s", self.session_key)
+            except Exception as exc:
+                if not _note_private_send_failure(self.target, self.target_id, exc):
+                    log.exception("回发图片失败 %s", self.session_key)
 
         # 只要它真的开了口，两件事跟着来（只对群聊）：
         # 1) 冷却重新计时——30 秒管的是这张嘴，被 @ 的回复也算说话，否则
@@ -972,6 +1016,14 @@ class QQBot:
             target, target_id = "group", str(ev.get("group_id", ""))
         elif mtype == "private":
             target, target_id = "private", str(ev.get("user_id", ""))
+            # 群临时会话（OneBot 里是 private + sub_type=group，带 group_id）：
+            # 这是**非好友唯一能收到回复的通道**，得记住对方是从哪个群找过来的，
+            # 回复被「非好友」拒了才好带着 group_id 重发（见 qq_api._call_private）。
+            # 好友私聊不带 group_id，这里是空操作。
+            if ev.get("group_id"):
+                qq_api.note_temp_session(target_id, ev.get("group_id"))
+                log.info("私聊来自群临时会话：%s（群 %s）", target_id,
+                         ev.get("group_id"))
         else:
             return
         # 静默告警的心跳：收到的消息（含 NapCat 上报的自己发言 = 发送）都算

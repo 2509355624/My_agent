@@ -357,15 +357,170 @@ def image_segment(path_or_url):
 
 # ─── 发送 ────────────────────────────────────────────
 
+# 协议端拒绝给「非好友」发私聊时的固定话术。QQ 的反骚扰策略：机器人账号不能给
+# 陌生人发私聊，必须先加好友。**判据认这句话、不认 retcode**——retcode 100 太
+# 笼统，别的发送失败（风控、频率限制）也用它。
+FRIEND_REQUIRED_HINT = "请先添加对方为好友"
+
+
+def friend_required_error(exc):
+    """这个异常是不是「对方不是好友，所以私聊发不出去」？
+
+    2026-09-30 用户报「小小怪无法回复私聊，后台闪一下然后就没有了」，根因就是
+    它：机器人**正常处理**了那条私聊，最后一步投递被 QQ 拒了。调用方靠这个函数
+    把「策略限制」和「真出故障」分开，前者不该打一整段堆栈。
+    """
+    return FRIEND_REQUIRED_HINT in str(exc)
+
+
+# ─── 群临时会话（非好友唯一的回复通道）────────────────
+
+# user_id -> 那个群的 group_id。非好友从群里发起临时会话时记下来，回复被
+# 「非好友」拒了就带上它重发。**进程内内存即可**：临时会话本身也会过期，
+# 没必要落盘。
+_temp_group = {}
+_temp_lock = threading.Lock()
+
+
+def note_temp_session(user_id, group_id):
+    """记下「这个人是通过哪个群的临时会话找过来的」。
+
+    2026-09-30 实测（胡桃桃 3985441738）：它和机器人共同在 5 个群里，但对 4 个群
+    发 `group_id` 都报 `no such temp session`，只有 **1103174141（233的粉丝群）**
+    成功——说明临时会话是**按群**存在、**得由对方先发起**的。
+
+    两种写入来源：入站事件里若带 `group_id`（`qq_bot._dispatch` 的钩子，实测
+    **通常不带**）会直接记；记不上也没关系，`_probe_temp_group` 会挨个群试出来。
+    """
+    if not user_id or not group_id:
+        return
+    with _temp_lock:
+        _temp_group[str(user_id)] = str(group_id)
+
+
+def temp_group_of(user_id):
+    """这个人上次是从哪个群发起的临时会话；没有就返回 None。"""
+    with _temp_lock:
+        return _temp_group.get(str(user_id))
+
+
+def forget_temp_session(user_id):
+    """忘掉记着的那个群。
+
+    **临时会话会过期**（2026-10-01 00:0x 实测：23:5x 还通的 1103174141，过一会儿
+    就回 `no such temp session` 了）。记住的群一旦失效，如果还拿它去发，就会
+    **每次都失败、而且永远不去重新探测**——所以失效时必须主动忘掉它。
+    """
+    with _temp_lock:
+        _temp_group.pop(str(user_id), None)
+
+
+# 「这个群对这个用户没有活跃临时会话」——试错探测时靠它区分「换个群再试」和
+# 「真出故障了」。
+NO_TEMP_SESSION_HINT = "no such temp session"
+
+
+def _is_no_temp_session(exc):
+    return NO_TEMP_SESSION_HINT in str(exc)
+
+
+# 机器人所在的群号，缓存 5 分钟。临时会话探测要挨个群试，每次现拉群列表太浪费。
+_group_cache = {"ts": 0.0, "ids": []}
+
+
+def _bot_groups():
+    """机器人所在的群号列表；取不到返回空列表（探测就跳过，不影响正常发送）。"""
+    now = time.time()
+    if _group_cache["ids"] and now - _group_cache["ts"] < 300:
+        return list(_group_cache["ids"])
+    try:
+        groups = get_group_list()
+    except Exception:
+        log.debug("取群列表失败，临时会话探测跳过", exc_info=True)
+        return []
+    ids = [str(g.get("group_id")) for g in groups if g.get("group_id")]
+    _group_cache.update(ts=now, ids=ids)
+    return list(ids)
+
+
+def _probe_temp_group(user_id, message, timeout=30):
+    """不知道对方是从哪个群来的，就**挨个群试**一遍。成功返回 True。
+
+    为什么必须试：临时会话是**按群**存在的（2026-09-30 实测：胡桃桃和机器人共同在
+    5 个群里，只有 233的粉丝群 那个通），而**入站事件里根本不带 group_id**——
+    加了「收到就记下群号」的钩子之后跑了两轮真实私聊，日志里 `群临时会话` 一次都
+    没出现过。所以指望入站事件告诉我们用哪个群是行不通的，只能试。
+
+    试错是**安全**的：对没有会话的群，QQ 直接回 `no such temp session`，
+    **消息不会真的发出去**（实测对 4 个群试都是这个错，没有任何人收到东西）。
+    成功的那个记下来，下次直接用，不用再试。
+    """
+    for gid in _bot_groups():
+        try:
+            _call("send_private_msg",
+                  {"user_id": int(user_id), "group_id": int(gid),
+                   "message": message}, timeout=timeout)
+        except RuntimeError as exc:
+            if _is_no_temp_session(exc):
+                continue            # 这个群没有会话，换下一个
+            raise                   # 别的错（风控/超时）照抛，别吞
+        note_temp_session(user_id, gid)
+        log.info("试出群临时会话：%s 在群 %s，已记住", user_id, gid)
+        return True
+    return False
+
+
+def _call_private(user_id, message, timeout=30):
+    """发一条私聊；被「非好友」拒了就改用**群临时会话**重发。
+
+    QQ **不允许**给非好友直接发私聊（result=16「请先添加对方为好友」），但如果
+    对方是从某个群发起的**临时会话**，带上那个群的 `group_id` 就能发出去——
+    NapCat 支持这个参数（OneBot 11 的 `send_private_msg.group_id`）。
+
+    **只在这一种错误上换路子**：别的失败照抛，免得把真故障掩盖成「对方不是好友」。
+
+    记住的群**过期了要重新探测**：临时会话有有效期，缓存里的群可能已经失效；
+    这时如果还傻乎乎拿它发，就会每次都失败、永远不探测（2026-10-01 修的就是这个）。
+    """
+    try:
+        return _call("send_private_msg",
+                     {"user_id": int(user_id), "message": message}, timeout=timeout)
+    except RuntimeError as exc:
+        if not friend_required_error(exc):
+            raise
+        gid = temp_group_of(user_id)
+        if gid is not None:
+            log.info("私聊被拒（%s 还不是好友），用已知的群临时会话重发（群 %s）",
+                     user_id, gid)
+            try:
+                return _call("send_private_msg",
+                             {"user_id": int(user_id), "group_id": int(gid),
+                              "message": message}, timeout=timeout)
+            except RuntimeError as exc2:
+                if not _is_no_temp_session(exc2):
+                    raise
+                # 记着的这个群会话过期了——忘掉它，落到下面重新探测
+                forget_temp_session(user_id)
+                log.info("记着的临时会话群 %s 已过期，忘掉它，改为重新逐群探测", gid)
+        # 还不知道是哪个群（入站事件不带 group_id）——挨个试，试到就记住。
+        log.info("私聊被拒（%s 还不是好友），不知道是哪个群，开始逐群探测", user_id)
+        if _probe_temp_group(user_id, message, timeout):
+            return {}
+        raise
+
+
 def send_private(user_id, message, limit=None):
-    """给某个好友发消息（自动分段）。返回发出的条数。"""
+    """给某个好友发消息（自动分段）。返回发出的条数。
+
+    非好友直接私聊会被 QQ 拒；能救的情况由 `_call_private` 兜底（群临时会话）。
+    **逐条兜底**而不是整段重发：这样已经发出去的段不会重复发一遍。
+    """
     chunks = message if isinstance(message, list) else split_message(
         to_qq_text(message), limit)
     for i, chunk in enumerate(chunks):
         if i:
             time.sleep(_SEND_INTERVAL)
-        _call("send_private_msg",
-              {"user_id": int(user_id), "message": chunk}, timeout=30)
+        _call_private(user_id, chunk)
         _send_log("private", user_id, chunk)
     return len(chunks)
 
@@ -384,13 +539,19 @@ def send_group(group_id, message, limit=None):
 
 
 def send_image(target, target_id, image_path, caption=""):
-    """发一张图（可选带一句文字）。target 取 "private" 或 "group"。"""
+    """发一张图（可选带一句文字）。target 取 "private" 或 "group"。
+
+    私聊走 `_call_private` 同一套「非好友 → 群临时会话」兜底。**图这条尤其要兜**：
+    对方看到「在画了」然后什么都没有，比文字发不出去更让人干等。
+    """
     segs = []
     if caption:
         segs.append(text_segment(to_qq_text(caption)))
     segs.append(image_segment(image_path))
-    action = "send_%s_msg" % target
-    key = "user_id" if target == "private" else "group_id"
-    _call(action, {key: int(target_id), "message": segs}, timeout=60)
+    if target == "private":
+        _call_private(target_id, segs, timeout=60)
+    else:
+        _call("send_group_msg",
+              {"group_id": int(target_id), "message": segs}, timeout=60)
     _send_log(target, target_id, segs)
     return 1

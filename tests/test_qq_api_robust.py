@@ -107,5 +107,209 @@ class SingleSegmentMessageTest(unittest.TestCase):
         self.assertEqual(sent, [seg])
 
 
+class TempSessionFallbackTest(unittest.TestCase):
+    """非好友私聊：被 QQ 拒了就用**群临时会话**重发。
+
+    2026-09-30 实测（胡桃桃 3985441738 私聊小小怪）：机器人正常跑完一整轮，卡在
+    最后一步投递——QQ 不允许给非好友发私聊。但对方是从 **233的粉丝群（1103174141）**
+    发起的**临时会话**，带上那个群的 group_id 就发出去了。
+
+    两条反直觉的事实（都是实测出来的，别想当然）：
+    1. 临时会话**按群存在**——共同群有 7 个，只有 1103174141 通，其余都报
+       `no such temp session`；
+    2. **入站事件里不带 group_id**，所以「等对方发起后自动记」行不通，
+       只能**挨个群试**（试错安全：没会话的群不会真把消息投出去）。
+    """
+
+    def setUp(self):
+        qq_api._temp_group.clear()
+        self.addCleanup(qq_api._temp_group.clear)
+        qq_api._group_cache.update(ts=0.0, ids=[])
+        self.addCleanup(qq_api._group_cache.update, ts=0.0, ids=[])
+        self.session = mock.Mock()
+        p = mock.patch.object(qq_api, "_session", self.session)
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(qq_api, "_send_log")
+        p.start()
+        self.addCleanup(p.stop)
+        # 机器人所在的群：探测就是在这几个群里挨个试
+        p = mock.patch.object(qq_api, "get_group_list",
+                              return_value=[{"group_id": "1041446471"},
+                                            {"group_id": "1103174141"}])
+        p.start()
+        self.addCleanup(p.stop)
+
+    @staticmethod
+    def _ok():
+        return _resp({"status": "ok", "retcode": 0, "data": {"message_id": 1}})
+
+    @staticmethod
+    def _not_friend():
+        return _resp({"status": "failed", "retcode": 100, "data": None,
+                      "wording": "send private message rejected: result=16 "
+                                 "err=发送失败，请先添加对方为好友"})
+
+    @staticmethod
+    def _no_session():
+        return _resp({"status": "failed", "retcode": 100, "data": None,
+                      "wording": "cannot send to user 1 in group 2: "
+                                 "no such temp session"})
+
+    def _payloads(self):
+        return [c.kwargs.get("json") for c in self.session.post.call_args_list]
+
+    def test_plain_send_uses_no_group_id(self):
+        self.session.post.return_value = self._ok()
+        qq_api.send_private("3985441738", "你好")
+        self.assertNotIn("group_id", self._payloads()[0])
+
+    def test_uses_known_temp_session_directly(self):
+        qq_api.note_temp_session("3985441738", "1103174141")
+        self.session.post.side_effect = [self._not_friend(), self._ok()]
+        self.assertEqual(qq_api.send_private("3985441738", "你好"), 1)
+        sent = self._payloads()
+        self.assertEqual(len(sent), 2)          # 没有多余的探测
+        self.assertNotIn("group_id", sent[0])
+        self.assertEqual(sent[1]["group_id"], 1103174141)
+        self.assertEqual(sent[1]["user_id"], 3985441738)
+
+    def test_probes_every_group_when_the_group_is_unknown(self):
+        """入站事件不带 group_id，所以不知道是哪个群——只能挨个试。"""
+        self.session.post.side_effect = [self._not_friend(),   # 普通私聊被拒
+                                         self._no_session(),   # 群 1041446471 没会话
+                                         self._ok()]           # 群 1103174141 通
+        self.assertEqual(qq_api.send_private("3985441738", "你好"), 1)
+        sent = self._payloads()
+        self.assertEqual(len(sent), 3)
+        self.assertEqual(sent[1]["group_id"], 1041446471)
+        self.assertEqual(sent[2]["group_id"], 1103174141)
+
+    def test_probe_remembers_the_winner_so_next_time_is_direct(self):
+        self.session.post.side_effect = [self._not_friend(), self._no_session(),
+                                         self._ok()]
+        qq_api.send_private("3985441738", "第一条")
+        self.assertEqual(qq_api.temp_group_of("3985441738"), "1103174141")
+        # 第二次：一次普通私聊 + 一次带已知群的发送，不该再探测
+        self.session.post.reset_mock()
+        self.session.post.side_effect = [self._not_friend(), self._ok()]
+        qq_api.send_private("3985441738", "第二条")
+        sent = self._payloads()
+        self.assertEqual(len(sent), 2)
+        self.assertEqual(sent[1]["group_id"], 1103174141)
+
+    def test_probe_gives_up_and_raises_when_no_group_has_a_session(self):
+        """所有群都没有活跃临时会话时，老实报错——不能假装发成功。"""
+        self.session.post.side_effect = [self._not_friend(),
+                                         self._no_session(), self._no_session()]
+        with self.assertRaises(RuntimeError) as ctx:
+            qq_api.send_private("3985441738", "你好")
+        self.assertTrue(qq_api.friend_required_error(ctx.exception))
+        self.assertIsNone(qq_api.temp_group_of("3985441738"))
+
+    def test_probe_does_not_swallow_real_errors(self):
+        """探测途中撞上真故障（风控/超时）要照抛，不能被当成「这个群没会话」。"""
+        self.session.post.side_effect = [self._not_friend(),
+                                         self._resp_rate_limited()]
+        with self.assertRaises(RuntimeError) as ctx:
+            qq_api.send_private("3985441738", "你好")
+        self.assertNotIn("no such temp session", str(ctx.exception))
+
+    @staticmethod
+    def _resp_rate_limited():
+        return _resp({"status": "failed", "retcode": 100, "data": None,
+                      "wording": "频率过快，请稍后再试"})
+
+    def test_other_errors_are_not_masked_by_the_fallback(self):
+        """别的失败照抛，不能都算成「对方不是好友」——那会掩盖真故障。"""
+        qq_api.note_temp_session("3985441738", "1103174141")
+        self.session.post.return_value = self._resp_rate_limited()
+        with self.assertRaises(RuntimeError):
+            qq_api.send_private("3985441738", "你好")
+        self.assertEqual(len(self.session.post.call_args_list), 1)
+
+    def test_only_the_failed_chunk_is_retried(self):
+        """分段发送：已发出去的段不能重发（对方会收到两遍）。"""
+        qq_api.note_temp_session("3985441738", "1103174141")
+        self.session.post.side_effect = [self._ok(), self._not_friend(), self._ok()]
+        self.assertEqual(qq_api.send_private("3985441738", ["第一段", "第二段"]), 2)
+        sent = self._payloads()
+        self.assertEqual(len(sent), 3)
+        self.assertEqual(sent[1]["message"], "第二段")
+        self.assertNotIn("group_id", sent[1])
+        self.assertEqual(sent[2]["message"], "第二段")
+        self.assertEqual(sent[2]["group_id"], 1103174141)
+
+    def test_private_image_also_falls_back(self):
+        """图这条尤其要兜：对方看到「在画了」然后什么都没有更难受。"""
+        qq_api.note_temp_session("3985441738", "1103174141")
+        self.session.post.side_effect = [self._not_friend(), self._ok()]
+        qq_api.send_image("private", "3985441738", "D:/x.png")
+        sent = self._payloads()
+        self.assertEqual(len(sent), 2)
+        self.assertEqual(sent[1]["group_id"], 1103174141)
+
+    def test_group_image_still_uses_plain_group_send(self):
+        self.session.post.return_value = self._ok()
+        qq_api.send_image("group", "1103174141", "D:/x.png")
+        sent = self._payloads()
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["group_id"], 1103174141)
+        self.assertEqual(len(self.session.post.call_args_list), 1)
+
+    def test_note_temp_session_ignores_empty_values(self):
+        qq_api.note_temp_session("", "1103174141")
+        qq_api.note_temp_session("3985441738", "")
+        self.assertIsNone(qq_api.temp_group_of("3985441738"))
+
+    def test_stale_remembered_group_falls_back_to_probing(self):
+        """记住的群**过期了**要忘掉它并重新探测，不能拿它一直撞。
+
+        2026-10-01 实测：23:5x 还通的 1103174141，过一会儿就回
+        `no such temp session` —— 临时会话有有效期。老实现拿记住的群发，
+        失败就直接抛，**永远不重新探测**，于是「时灵时不灵」。
+        """
+        qq_api.note_temp_session("3985441738", "1103174141")   # 记着一个已过期的群
+        self.session.post.side_effect = [self._not_friend(),   # 普通私聊被拒
+                                         self._no_session(),   # 记住的群：过期了
+                                         self._no_session(),   # 探测 1041446471
+                                         self._ok()]           # 探测 1103174141：通了
+        self.assertEqual(qq_api.send_private("3985441738", "你好"), 1)
+        sent = self._payloads()
+        self.assertEqual(len(sent), 4)
+        self.assertEqual(sent[1]["group_id"], 1103174141)      # 先试记住的
+        self.assertEqual(sent[3]["group_id"], 1103174141)      # 探测后再发
+        self.assertEqual(qq_api.temp_group_of("3985441738"), "1103174141")
+
+    def test_stale_group_is_forgotten_when_probing_also_fails(self):
+        """过期群 + 探测全失败 → 缓存清掉，抛出的仍是「非好友」这个真因。"""
+        qq_api.note_temp_session("3985441738", "1103174141")
+        self.session.post.side_effect = [self._not_friend(),
+                                         self._no_session(),   # 记住的群过期
+                                         self._no_session(),   # 探测 1041446471
+                                         self._no_session()]   # 探测 1103174141
+        with self.assertRaises(RuntimeError) as ctx:
+            qq_api.send_private("3985441738", "你好")
+        self.assertTrue(qq_api.friend_required_error(ctx.exception))
+        self.assertIsNone(qq_api.temp_group_of("3985441738"))
+
+    def test_real_errors_on_remembered_group_are_not_treated_as_expiry(self):
+        """用记住的群发时撞上**别的**错（风控/频率限制）→ 照抛，缓存也别误删。"""
+        qq_api.note_temp_session("3985441738", "1103174141")
+        self.session.post.side_effect = [
+            self._not_friend(),
+            _resp({"status": "failed", "retcode": 100, "data": None,
+                   "wording": "发送太快，请稍后再试"})]
+        with self.assertRaises(RuntimeError) as ctx:
+            qq_api.send_private("3985441738", "你好")
+        self.assertFalse(qq_api.friend_required_error(ctx.exception))
+        self.assertEqual(qq_api.temp_group_of("3985441738"), "1103174141")
+        self.assertEqual(len(self._payloads()), 2)             # 没有多余探测
+
+    def test_forget_temp_session_is_safe_when_absent(self):
+        qq_api.forget_temp_session("3985441738")               # 没有也不该炸
+        self.assertIsNone(qq_api.temp_group_of("3985441738"))
+
+
 if __name__ == "__main__":
     unittest.main()
