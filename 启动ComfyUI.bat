@@ -2,10 +2,16 @@
 cd /d "%~dp0"
 title COMFYUI
 
-rem ComfyUI å¯åŠ¨å™¨ã€‚
-rem   æ‰‹åŠ¨ï¼šåŒå‡»æœ¬æ–‡ä»¶
-rem   çœ‹é—¨ç‹—ï¼š`å¯åŠ¨ComfyUI.bat auto`ï¼ˆéšè—çª—å£è·‘ï¼Œè·‘å®Œä¸ç­‰å›è½¦ï¼‰
-rem å‘½ä»¤æ¥æº = D:\AI\å¯åŠ¨æ‰‹å†Œ.txt ç¬¬ä¸€è¡Œï¼Œä¸€å­—ä¸æ”¹ç…§æŠ„ã€‚
+rem ComfyUI Æô¶¯Æ÷¡£
+rem   ÊÖ¶¯£ºË«»÷±¾ÎÄ¼ş
+rem   ¿´ÃÅ¹·£º`Æô¶¯ComfyUI.bat auto`£¨Òş²Ø´°¿ÚÅÜ£¬ÅÜÍê²»µÈ»Ø³µ£©
+rem ²ÎÊı³­×Ô D:\AI\run_comfyui.bat ¡ª¡ª ÄÇÊÇÓÃ»§Æ½Ê±ÊÖµãµÄÄÇ·İ£¬Êµ²âÅÜµÃ¶¯¡£
+rem   [!!] ²»Ö±½Óµ÷ run_comfyui.bat£ºËü½áÎ²ÓĞ pause£¬¿´ÃÅ¹·ÊÇÒş²Ø´°¿ÚÀ­ÆğÀ´µÄ£¬
+rem        ¹ÒÔÚÄÇ¶ùÃ»ÈË°´»Ø³µ£¬½ø³Ì¾ÍÓÀÔ¶ÍË²»µô¡£ËùÒÔÖ»³­²ÎÊı£¬²»³­µ÷ÓÃ¡£
+rem        ¸Ä²ÎÊıÇëÁ½±ßÒ»Æğ¸Ä£¨Á½·İÎÄ¼ş¶¼ÔÚ D:\AI ÏÂ£¬²»¹é git ¹Ü£©¡£
+rem Â·¾¶²»Ğ´ËÀ£¬°´»úÆ÷×Ô¶¯Ìô£ºdesktop = comfy_env / ComfyUI£¬laptop = confyui_env
+rem / ComfyUI_v037¡£2026-09-30 Ö®Ç°ÕâÀïĞ´ËÀµÄÊÇ laptop ÄÇÌ×£¬ÔÚÌ¨Ê½»úÉÏÖ±½Ó
+rem ±¨¡¸ÕÒ²»µ½ D:\AI\confyui_env\Scripts\python.exe¡¹£¬¿´ÃÅ¹·½ĞËüÒ²½Ğ²»¶¯¡£
 
 set "AUTO_RUN="
 if /i "%~1"=="auto" set "AUTO_RUN=1"
@@ -15,24 +21,61 @@ echo   ComfyUI  http://127.0.0.1:8188
 echo ==================================================
 echo.
 
-if not exist "D:\AI\confyui_env\Scripts\python.exe" (
-    echo [ERROR] æ‰¾ä¸åˆ° D:\AI\confyui_env\Scripts\python.exe
+rem ©¤©¤ venv python ©¤©¤
+rem [!!] ÕâÀï**²»ÄÜ**ÕÕ³­ Ò»¼üÆô¶¯È«²¿.bat µÄË³Ğò¡£ÄÇ¸ö PY ÊÇ¸ø»úÆ÷ÈË/napcat_qr
+rem      ÓÃµÄ£¬Ê×Ñ¡ D:\AI\my_env£¨agent µÄ venv£¬Ã»ÓĞ torch£©¡£ComfyUI ±ØĞëÓÃ
+rem      ×Ô¼ºÄÇÌ×´ø torch µÄ»·¾³£¬ËùÒÔ my_env ¸ù±¾²»²ÎÓëÌôÑ¡¡£
+set "PY="
+if not defined PY if exist "D:\AI\comfy_env\Scripts\python.exe" set "PY=D:\AI\comfy_env\Scripts\python.exe"
+if not defined PY if exist "D:\AI\confyui_env\Scripts\python.exe" set "PY=D:\AI\confyui_env\Scripts\python.exe"
+if not defined PY set "PY=python"
+
+rem ©¤©¤ ComfyUI Ä¿Â¼ ©¤©¤
+set "CFY_DIR="
+if not defined CFY_DIR if exist "D:\AI\ComfyUI\main.py" set "CFY_DIR=D:\AI\ComfyUI"
+if not defined CFY_DIR if exist "D:\AI\ComfyUI_v037\main.py" set "CFY_DIR=D:\AI\ComfyUI_v037"
+
+set "PY_OK="
+if exist "%PY%" set "PY_OK=1"
+if /i "%PY%"=="python" set "PY_OK=1"
+if not defined PY_OK (
+    echo [ERROR] ÕÒ²»µ½ ComfyUI ÓÃµÄ python£º%PY%
     if not defined AUTO_RUN pause
     exit /b 1
 )
-if not exist "D:\AI\ComfyUI_v037\main.py" (
-    echo [ERROR] æ‰¾ä¸åˆ° D:\AI\ComfyUI_v037\main.py
+if not defined CFY_DIR (
+    echo [ERROR] ÕÒ²»µ½ ComfyUI µÄ main.py£¨ÊÔ¹ı D:\AI\ComfyUI ºÍ D:\AI\ComfyUI_v037£©
     if not defined AUTO_RUN pause
     exit /b 1
 )
+echo   ½âÊÍÆ÷ : %PY%
+echo   ¹¤×÷Ä¿Â¼ : %CFY_DIR%
 
-rem âš ï¸ è¿™é‡Œ**ä¸ taskkill**ã€‚çœ‹é—¨ç‹—æ˜¯ã€Œæ¢æ´»è¿ç»­ 3 æ¬¡å¤±è´¥ã€æ‰å«åˆ°è¿™é‡Œï¼Œ
-rem é‚£ä¼šå„¿è¿›ç¨‹å·²ç»æ²¡äº†ï¼Œæ€ä¸æ€éƒ½ä¸€æ ·ï¼›åè¿‡æ¥ä¸‡ä¸€æ¢æ´»è¯¯åˆ¤ï¼ˆComfyUI æ­£åœ¨
-rem è‡ªå·±é‡å¯ã€æˆ–åªæ˜¯å¡äº†ä¸€ä¸‹ï¼‰ï¼Œä¸€æ€å°±æ˜¯æŠŠæ­£åœ¨è·‘çš„å›¾è¿è¿›ç¨‹ä¸€èµ·å¹²æ‰ã€‚
-rem ç«¯å£è¢«å æ—¶ ComfyUI è‡ªå·±ä¼šæŠ¥ bind å¤±è´¥å¹¶é€€å‡ºï¼Œä¸ä¼šå¼€æˆä¸¤ä¸ªã€‚
+rem [!] ÕâÀï**²» taskkill**¡£¿´ÃÅ¹·ÊÇ¡¸Ì½»îÁ¬Ğø 3 ´ÎÊ§°Ü¡¹²Å½Ğµ½ÕâÀï£¬
+rem ÄÇ»á¶ù½ø³ÌÒÑ¾­Ã»ÁË£¬É±²»É±¶¼Ò»Ñù£»·´¹ıÀ´ÍòÒ»Ì½»îÎóÅĞ£¨ComfyUI ÕıÔÚ
+rem ×Ô¼ºÖØÆô¡¢»òÖ»ÊÇ¿¨ÁËÒ»ÏÂ£©£¬Ò»É±¾ÍÊÇ°ÑÕıÔÚÅÜµÄÍ¼Á¬½ø³ÌÒ»Æğ¸Éµô¡£
+rem ¶Ë¿Ú±»Õ¼Ê± ComfyUI ×Ô¼º»á±¨ bind Ê§°Ü²¢ÍË³ö£¬²»»á¿ª³ÉÁ½¸ö¡£
 
-D:\AI\confyui_env\Scripts\python.exe D:\AI\ComfyUI_v037\main.py --listen 127.0.0.1 --port 8188 --enable-cors-header "*"
+rem [!!] ±ØĞëÏÈ cd ½ø ComfyUI ×Ô¼ºµÄÄ¿Â¼¡£models/ output/ user/ input/ È«ÊÇ°´
+rem      µ±Ç°¹¤×÷Ä¿Â¼ÕÒµÄ ¡ª¡ª ÔÚ D:\AI\My_agent ÏÂÆô¶¯»á¿ª³öÒ»¸ö¡¸¿Õ¡¹ComfyUI£º
+rem      Ã»ÓĞÄ£ĞÍ¡¢Ã»ÓĞ anime2 ¹¤×÷Á÷£¬¶øÇÒËü»áÕ¼×Å 8188 ÈÃÈËÒÔÎªÒ»ÇĞÕı³£¡£
+cd /d "%CFY_DIR%"
+
+rem ²ÎÊı = run_comfyui.bat ÄÇÒ»Ì×£¬Ò»¸ö²»¸Ä£º
+rem   --vram-headroom 1  ¸øÏµÍ³Áô 1GB ÏÔ´æ£¨DynamicVRAM ÓÃ£©
+rem   --force-fp16       ÕÅÁ¿ÄÚ´æ¼õ°ë
+rem   --cache-none       ¾¡Á¿²»»º´æ£¬Ê¡ RAM/VRAM£¨ÕâÌ¨»úÆ÷ 16GB ÄÚ´æ£¬ÖµµÃ£©
+rem ¶îÍâÏÔÊ½¶¤ËÀ --listen 127.0.0.1 --port 8188£¬¸ú .env µÄ COMFYUI_URL ¶ÔÆë¡£
+rem   ÆäÊµÕâÒ²ÊÇ ComfyUI µÄÄ¬ÈÏÖµ£¬Ğ´³öÀ´Ö»ÊÇ·ÀÖ¹ÄÄÌìÄ¬ÈÏÖµ±äÁËÃ»ÈË·¢ÏÖ¡£
+rem --enable-cors-header "*" ÑØÓÃ±¾ÎÄ¼şÔ­À´µÄĞ´·¨£ºagent ÍøÒ³¶Ë(5174)Èç¹ûÒªÖ±½Ó
+rem   ÓÃ JS À­ 8188 µÄÍ¼£¬Ã»Õâ¸öÍ·»á±»ä¯ÀÀÆ÷À¹µô¡£Áô×Å²»°­ÊÂ¡£
+rem
+rem [!] ±ğ±» app/image_jobs.py ¿ªÍ·ÄÇ¾ä¡¸--vram-headroom ·´¶øÍÏ¿åÁËÕû»ú¡¹Æ­ÁË£º
+rem    ÄÇÌõ½áÂÛÊÇ 2026-09-27 Õë¶Ô qwen_image_v1£¨Ò»Ì×È¨ÖØ 10.5GB£©µÄ£¬ÄÇ¸öÇşµÀ
+rem    ÒÑ¾­ÔÚ app/config.py µÄ DISABLED_IMAGE_SKILLS ÀïÍ£ÓÃ¡£anima/SD/anime2
+rem    ÓÃÕâÌ×²ÎÊıÊÇÊµ²âÅÜµÃ¶¯µÄ£¨run_comfyui.bat ÌìÌìÔÚÓÃ£©¡£**±ğË³ÊÖ°Ñ²ÎÊıÉ¾ÁË¡£**
+"%PY%" main.py --listen 127.0.0.1 --port 8188 --enable-cors-header "*" --vram-headroom 1 --force-fp16 --cache-none
 
 echo.
-echo [ComfyUI å·²é€€å‡º] é€€å‡ºç  %ERRORLEVEL%
+echo [ComfyUI ÒÑÍË³ö] ÍË³öÂë %ERRORLEVEL%
 if not defined AUTO_RUN pause

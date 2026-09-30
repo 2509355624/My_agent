@@ -12,6 +12,8 @@ set "WEB_BAT=%~dp0一键启动.bat"
 set "NAPCAT_BAT=D:\AI\NapCat\启动NapCat.bat"
 set "SNOWLUMA_BAT=%~dp0启动SnowLuma.bat"
 set "BOT_BAT=%~dp0启动QQ机器人.bat"
+rem ComfyUI 是**可选**的：缺了只影响生图，聊天照常，所以下面只 WARN 不 exit。
+set "COMFY_BAT=%~dp0启动ComfyUI.bat"
 
 rem ---------------------------------------------------------------------------
 rem  协议端二选一（NapCat / SnowLuma）。两者 OneBot 端口完全一样（3000 HTTP /
@@ -56,11 +58,12 @@ set "AUTO_RUN="
 if /i "%~2"=="auto" set "AUTO_RUN=1"
 
 echo ==================================================
-echo   全部启动 : Agent 网页 + %PROTO_NAME% + QQ 适配层
+echo   全部启动 : Agent 网页 + %PROTO_NAME% + QQ 适配层 + ComfyUI
 echo ==================================================
 echo.
 echo   【注意】会强制结束 QQ 客户端
 echo   协议端是注入到 QQ 进程里的，运行期不能同时开另一个 QQ
+echo   【放心】ComfyUI 不会被杀 —— 8188 在跑就一律不动，正在生成的图不受影响
 echo.
 
 if not exist "%WEB_BAT%" (
@@ -83,7 +86,7 @@ rem 协议端已在跑说明小号已登录，重启要重新扫码 -> 跳过它，只重启网页端和适配层
 set "PROTO_RUNNING="
 for /f %%a in ('netstat -ano 2^>nul ^| findstr ":%PROTO_PORT% " ^| findstr "LISTENING"') do set "PROTO_RUNNING=1"
 
-echo [1/2] 清理旧进程
+echo [1/4] 清理旧进程
 for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":5174 " ^| findstr "LISTENING"') do (
     echo       结束网页端 PID %%a
     taskkill /PID %%a /F >nul 2>&1
@@ -129,7 +132,7 @@ ping -n 5 127.0.0.1 >nul
 echo       完成
 echo.
 
-echo [2/2] 启动
+echo [2/4] 启动
 start "AGENT-WEB" cmd /k "%WEB_BAT%"
 echo       Agent Web        网页端  http://localhost:5174
 if defined FORCE_RESTART (
@@ -156,7 +159,30 @@ echo       QQBOT-ADAPTER    QQ 适配层
 echo.
 
 echo ==================================================
-echo [3/3] 启动看门狗
+echo [3/4] 启动 ComfyUI
+rem ComfyUI 跟协议端是**相反**的处理：协议端没在跑就杀干净重来，ComfyUI 则
+rem 只在「8188 根本没在听」时才拉，**永不 taskkill**。理由：协议端杀错了大不了
+rem 重新扫码；ComfyUI 杀错就是把正在跑的那张图连进程一起干掉，而且重建模型
+rem 缓存要很久。端口被占时 ComfyUI 自己会 bind 失败退出，不会开出两个。
+rem
+rem [!!] 判据是 netstat 探 8188，**不是**窗口标题。本文件其它地方一律按标题认
+rem      窗口，但 ComfyUI 通常是用户自己双击 D:\AI\run_comfyui.bat 起的，那个
+rem      窗口的标题是「ComfyUI (DynamicVRAM - 6GB VRAM + 32GB RAM)」，跟这里
+rem      start 出来的 "COMFYUI" 对不上 —— 按标题判会把「正在跑」误判成「没在跑」，
+rem      再拉一个起来抢 8188。
+set "COMFY_RUNNING="
+for /f %%a in ('netstat -ano 2^>nul ^| findstr ":8188 " ^| findstr "LISTENING"') do set "COMFY_RUNNING=1"
+if not exist "%COMFY_BAT%" (
+    echo       [WARN] 找不到 启动ComfyUI.bat，跳过 ComfyUI（不影响机器人聊天）
+) else if defined COMFY_RUNNING (
+    echo       ComfyUI          已在运行，本次不动
+) else (
+    start "COMFYUI" cmd /k "%COMFY_BAT%"
+    echo       ComfyUI          生图后端  http://127.0.0.1:8188
+)
+echo.
+echo ==================================================
+echo [4/4] 启动看门狗
 tasklist /FI "WINDOWTITLE eq WATCHDOG" 2>nul | findstr /i "cmd.exe" >nul
 if not errorlevel 1 (
     echo       WATCHDOG         已在运行，本次不动
