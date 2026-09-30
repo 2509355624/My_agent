@@ -65,7 +65,8 @@ def _load_services():
     model_name = os.environ.get("LOCAL_EMBEDDING_MODEL", DEFAULT_MODEL)
     auto_download = os.environ.get("RAG_AUTO_DOWNLOAD", "0").strip().lower() in ("1", "true", "yes")
 
-    if _model_cache_hit(model_name) is None and not auto_download:
+    local = _model_cache_hit(model_name)
+    if local is None and not auto_download:
         hint = (
             f"向量模型未找到（{model_name}），RAG 功能不可用。\n"
             "启用方式（任选其一）：\n"
@@ -78,7 +79,13 @@ def _load_services():
         _reply({"id": "0", "ok": False, "event": "model_missing", "model": model_name, "hint": hint})
         sys.exit(1)
 
-    embeddings = LocalEmbeddings(model_name=model_name, device=device)
+    # **把「已经解析好的本地目录」传下去，而不是模型名**（2026-10-01 修）。
+    # 传模型名的话，`LocalEmbeddings._resolve_model_path` 会再调一次
+    # `snapshot_download(model_name)`——那个**没有 local_files_only**，每次都联网
+    # 核对，本地缓存里只要有一个文件没下全（bge-m3 的 `onnx/model.onnx` 就永远
+    # 拿不到，HTTP 416），它就要把重试跑满，实测**每次启动白烧 30 秒**。
+    # 这里 `_model_cache_hit` 已经确认模型在本地了，直接给目录就一步到位。
+    embeddings = LocalEmbeddings(model_name=local or model_name, device=device)
     store = VectorStore(data_dir)
     return embeddings, store
 
