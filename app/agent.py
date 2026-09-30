@@ -315,6 +315,56 @@ _IMAGE_CLAIM_NUDGE = (
 )
 
 
+# ─── 同一次 run 内的「重复调用」去重（2026-09-30）─────────────────────
+#
+# 症状（用户报，群 1041079621）：一句话出了 **2 张**图。
+# 实测证据：日志里两条 `NAI 请求生成` 的 seed 不同 ⇒ 两次独立的
+# `_generate_image`；会话文件里是同一条工具块**连着发了两遍**，第二遍
+# **一个字正文都没有**；`[turn]` 行里同一次 run 出现两条
+# `工具=generate_image`，且两条 hash 不同（排除上游网关重放）。
+#
+# 根因：`[[TOOL:]]` 是**文本协议**、不是原生 function calling —— 模型侧没有
+# 「本轮已经调过这个工具」的状态，每次迭代都从零重新决策；而循环里
+# `for tool_call in tool_calls: execute_tool(...)` **一个去重都没有**，
+# 模型发几次就真跑几次。**注入的回执文案治不了它**（那是软约束），
+# 只有代码级硬闸才不依赖模型自觉——和 DISABLED_IMAGE_SKILLS 同理。
+#
+# 只对**跨迭代**的重复生效：同一条 assistant 消息里发两个一模一样的调用
+# 可能是用户真要两张，必须放行（见下面的 seen_now）。
+#
+# 为什么键要「参数完全相同」而不是「prompt 相同」：同一个 prompt 换
+# 不同 skill 是**合法**用法（实测模型会主动用同 prompt 换动漫渠道再跑
+# 一张，好让对方跟 NAI 对比）。键取整个参数集，才既拦得住重复、又不误伤。
+_DEDUP_TOOLS = ("generate_image",)
+
+_REPEAT_CALL_NOTE = (
+    "系统：这次调用**没有执行**——参数和你**上一轮已经提交过的那次一模一样**，"
+    "再提交只会多出一张重复的图，所以被拦下了。"
+    "**不要再调 generate_image**，也别跟对方解释什么「重复」；"
+    "直接把想说的话说完就收尾（图会自己发到会话里）。"
+)
+
+
+def _call_key(name, args):
+    """把一次工具调用归一成一个可比较的键；不参与去重的工具返回 None。
+
+    空值（None / ""）直接丢掉：模型的 `"skill": null`、`"source_image": ""`
+    与「不传这个参数」在下游是**同一件事**（见 generate_image._generate_image
+    里 `if not skill:` / `if str(source_image or "").strip()`），
+    留着会让同一个调用被算成两个不同的键，去重就失效了。
+    注意 False / 0 是**有意义的值**（如 `denoise=0`），不能丢。
+    """
+    if name not in _DEDUP_TOOLS:
+        return None
+    try:
+        norm = {k: v for k, v in (args or {}).items()
+                if v is not None and v != ""}
+        return name + ":" + json.dumps(norm, sort_keys=True, ensure_ascii=False)
+    except (TypeError, ValueError):
+        # 参数里有 json 序列化不了的东西：宁可不拦，也不能因此抛错断掉整轮。
+        return None
+
+
 def _looks_like_image_promise(text):
     """这句正文像不像「我在画 / 画好了 / 跑完了」的空头承诺。
 
@@ -673,6 +723,9 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
     # 「退回重来」最多一次，不会无限拦。
     image_tool_used = False
     image_nudged = False
+    # 同一次 run 内**已经执行过**的工具调用键（见 _DEDUP_TOOLS / _call_key）。
+    # 跨迭代存活、run 结束即丢：下一条用户消息是全新的一次 run，重新放行。
+    done_calls = set()
     # 该 agent 有没有生图工具——没有就根本不该触发这道守卫（写作 agent 说
     # 「画着呢」是另一回事，不归这里管）。
     can_generate_image = agent_store.allows_tool(agent_id, "generate_image")
@@ -812,6 +865,10 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
                 break
 
             # 依次执行所有工具调用
+            # seen_now：**本条 assistant 消息里**已经放行过的调用键。它的作用是把
+            # 「同一条消息里发两个一模一样的调用」和「跨迭代又发一遍」分开——
+            # 前者可能是用户真要两张，放行；后者才是重复提交，拦下。
+            seen_now = set()
             for tool_call in tool_calls:
                 # 检查点③：每个工具执行前。一旦工具开始跑（生图最长可达
                 # IMAGE_GEN_TIMEOUT），就只剩工具内部自己能检查了。
@@ -824,12 +881,24 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
                     image_tool_used = True
                 yield {"type": "tool_call", "name": name, "args": args}
 
+                key = _call_key(name, args)
+                # 硬闸：同一次 run 内、**参数完全相同**的调用只执行一次
+                # （见 _DEDUP_TOOLS 上面那段注释）。放在白名单之前判——被拦下的
+                # 调用根本不该走到执行，也谈不上「可用不可用」。
+                if key is not None and key in done_calls and key not in seen_now:
+                    log.warning("[dedup] 拦下重复调用 %s（本次 run 内已执行过相同参数）"
+                                "——上一轮就提交过了", name)
+                    result = _REPEAT_CALL_NOTE
                 # 第二道白名单拦截：prompt 里不列出是「看不见」，这里是「调不动」。
                 # 少了这一道，「写作 agent 不能用生图」就只是名义上的隔离。
-                if not agent_store.allows_tool(agent_id, name):
+                elif not agent_store.allows_tool(agent_id, name):
                     result = "该工具在当前 agent 不可用：" + name
                 else:
+                    if key is not None:
+                        done_calls.add(key)
                     result = execute_tool(name, args)
+                if key is not None:
+                    seen_now.add(key)
                 # 先入历史再出流：调用方把「事件出流」当作落盘时机，
                 # 顺序反了这条就赶不上落盘（客户端中断时尤其明显）。
                 # 用 tool_result role 存储，便于前端区分展示
