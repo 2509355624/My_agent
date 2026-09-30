@@ -13,11 +13,23 @@ rem  3001 WS），只有 WebUI 口不同（6099 / 5099），所以切换只影响：启动哪个 bat、
 rem  探活哪个口、以及怎么出扫码窗口。
 rem  [!!] 改这里之后，.env 里的 QQ_WEBUI_PORT 要跟着改 —— 看门狗靠它区分
 rem       「进程没起来」和「起来了但没登录」，探错口就永远判成「进程死了」。
-rem  传参：第 3 个参数 snowluma 可覆盖；环境变量 QQ_PROTOCOL=snowluma 亦可。
+rem  传参：任意位置写 snowluma 都能切（force snowluma / force auto snowluma）；
+rem      环境变量 QQ_PROTOCOL=snowluma、.env 的 QQ_WEBUI_PORT=5099 亦可。
 rem ---------------------------------------------------------------------------
 set "PROTOCOL=napcat"
-if /i "%~3"=="snowluma" set "PROTOCOL=snowluma"
+rem 三个入口任意一个说 snowluma 就算：命令行参数（任意位置）、QQ_PROTOCOL
+rem 环境变量、.env 里的 QQ_WEBUI_PORT。
+rem [!!] 只认 %~3 是错的：手打「force snowluma」时 snowluma 落在 %~2，
+rem      2026-09-30 就因为这一条白跑了半天 NapCat。
+for %%a in (%~1 %~2 %~3) do if /i "%%~a"=="snowluma" set "PROTOCOL=snowluma"
 if /i "%QQ_PROTOCOL%"=="snowluma" set "PROTOCOL=snowluma"
+set "_ENV_PORT="
+if exist "%~dp0.env" (
+    for /f "usebackq tokens=1,* delims==" %%a in ("%~dp0.env") do (
+        if /i "%%~a"=="QQ_WEBUI_PORT" set "_ENV_PORT=%%~b"
+    )
+)
+if "%_ENV_PORT%"=="5099" set "PROTOCOL=snowluma"
 
 if /i "%PROTOCOL%"=="snowluma" (
     set "PROTO_BAT=%SNOWLUMA_BAT%"
@@ -41,7 +53,7 @@ echo   全部启动 : Agent 网页 + %PROTO_NAME% + QQ 适配层
 echo ==================================================
 echo.
 echo   【注意】会强制结束 QQ 客户端
-echo   NapCat 注入在 QQ 进程里，运行期不能同时开 QQ
+echo   协议端是注入到 QQ 进程里的，运行期不能同时开另一个 QQ
 echo.
 
 if not exist "%WEB_BAT%" (
@@ -88,6 +100,7 @@ if defined FORCE_RESTART (
     )
     rem 关掉上一次的 NapCat 窗口（进程杀完窗口会停在提示符，不清就一直堆）
     taskkill /FI "WINDOWTITLE eq NapCat - QQ 协议端" /T /F >nul 2>&1
+    taskkill /FI "WINDOWTITLE eq SNOWLUMA" /T /F >nul 2>&1
     taskkill /IM QQ.exe /F >nul 2>&1
     taskkill /IM NapCatWinBootMain.exe /F >nul 2>&1
 ) else if defined PROTO_RUNNING (
@@ -101,6 +114,7 @@ if defined FORCE_RESTART (
     )
     rem 关掉上一次的 NapCat 窗口（进程杀完窗口会停在提示符，不清就一直堆）
     taskkill /FI "WINDOWTITLE eq NapCat - QQ 协议端" /T /F >nul 2>&1
+    taskkill /FI "WINDOWTITLE eq SNOWLUMA" /T /F >nul 2>&1
     taskkill /IM QQ.exe /F >nul 2>&1
     taskkill /IM NapCatWinBootMain.exe /F >nul 2>&1
 )
@@ -147,7 +161,8 @@ echo.
 echo   需要扫码登录时:
 if /i "%PROTOCOL%"=="snowluma" (
 echo   浏览器打开  http://127.0.0.1:5099
-echo   首次用控制台打印的一次性临时密码登录，然后在里面配 OneBot + 扫码
+echo   密码 SnowLuma@2026（启动SnowLuma.bat 里写死的，只听 127.0.0.1）
+echo   OneBot 端口与令牌已预置在 config\onebot.json，进去只要扫码
 ) else (
 echo   浏览器打开  http://127.0.0.1:6099/webui
 echo   用手机 QQ 扫码，建议用小号
