@@ -685,6 +685,10 @@ def get_agent_sessions(agent_id):
             # NAI 白名单：群行在上面 group 分支里算，这里补私聊行（私聊看 nai_private）。
             if item["kind"] == "private":
                 item["nai"] = item["target_id"] in nai_privates
+                # 私聊每日生图额度：给管理页显示「今日 3/10」和「免额」标记。
+                # 只私聊行有——群聊不限额（见 agents.image_quota_allowed）。
+                item["image_quota"] = agent_store.private_image_quota_info(
+                    aid, item["target_id"])
     # 全局主动发言三件套（settings 里没设就回落默认），管理页输入框用
     # 私聊闸当前值：settings 优先，键缺失回落 .env（跟 qq_bot._private_gate 同口径）
     if "private_enable" in settings:
@@ -705,6 +709,14 @@ def get_agent_sessions(agent_id):
                     "private_whitelist": priv_wl,
                     "private_whitelist_on":
                         settings.get("private_whitelist_on") is not False,
+                    # 私聊每日生图额度（2026-09-30 加）：全局三件套 + 免额名单。
+                    # limit 为 0 = 不限量，管理页显示「不限」。
+                    "private_image_quota_on":
+                        settings.get("private_image_quota_on") is not False,
+                    "private_image_daily_limit":
+                        agent_store.private_image_daily_limit(aid),
+                    "private_image_quota_whitelist":
+                        sorted(agent_store.private_image_quota_whitelist(aid)),
                     "session_prompts":
                         settings.get("session_prompts") or {},
                     "session_prompt_agents":
@@ -959,6 +971,79 @@ def set_agent_private_whitelist_on(agent_id):
         return jsonify({"error": "写入 settings.json 失败"}), 500
     return jsonify({"ok": True, "agent": aid,
                     "private_whitelist_on": body["enabled"]})
+
+
+@app.route("/api/agent/<agent_id>/private_image_quota", methods=["PUT"])
+def set_agent_private_image_quota(agent_id):
+    """设私聊每日生图额度：开关 + 每人每天上限。热生效。
+
+    settings.json 两个字段：
+    - `private_image_quota_on`：False = 不限量（**数字留着**，方便临时放开再开回来）；
+    - `private_image_daily_limit`：每人每天张数，0 = 不限。
+    只对**私聊**生效，群聊一行都不占（见 agents.image_quota_allowed）。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if "enabled" not in body and "limit" not in body:
+        return jsonify({"error": "至少要给 enabled 或 limit 之一"}), 400
+    if "enabled" in body and not isinstance(body["enabled"], bool):
+        return jsonify({"error": "enabled 需要布尔值"}), 400
+    if "limit" in body:
+        v = body["limit"]
+        # 只收非负整数：bool 是 int 的子类，得单独挡掉（True 会变成 1 张）
+        if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+            return jsonify({"error": "limit 需要 0 或正整数（0 = 不限量）"}), 400
+
+    settings = agent_store.load_settings(aid)
+    if "enabled" in body:
+        settings["private_image_quota_on"] = body["enabled"]
+    if "limit" in body:
+        settings["private_image_daily_limit"] = body["limit"]
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid,
+                    "private_image_quota_on":
+                        settings.get("private_image_quota_on") is not False,
+                    # 回**原始**数字而不是生效值：开关关掉时生效值是 0，
+                    # 直接回它会把输入框清成 0，管理员就看不见原配置了。
+                    "private_image_daily_limit":
+                        agent_store.private_image_daily_limit_raw(aid)})
+
+
+@app.route("/api/agent/<agent_id>/private_image_quota_whitelist/<qq_id>",
+           methods=["PUT"])
+def set_agent_private_image_quota_whitelist(agent_id, qq_id):
+    """把某个 QQ 加入 / 移出「私聊生图不限量」名单。热生效。
+
+    存 settings.json 的 `private_image_quota_whitelist`。**和 private_whitelist
+    是两回事**：那个管「谁能私聊」，这个管「谁生图不限量」——混用会导致哪天把
+    私聊白名单打开时，名单里的人顺带变成生图不限量。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body.get("enabled"), bool):
+        return jsonify({"error": "需要布尔字段 enabled"}), 400
+    settings = agent_store.load_settings(aid)
+    users = set(str(x) for x in (settings.get("private_image_quota_whitelist") or []))
+    if body["enabled"]:
+        users.add(str(qq_id))
+    else:
+        users.discard(str(qq_id))
+    settings["private_image_quota_whitelist"] = sorted(users)
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "qq": str(qq_id),
+                    "whitelisted": body["enabled"]})
 
 
 @app.route("/api/agent/<agent_id>/private_whitelist", methods=["PUT"])

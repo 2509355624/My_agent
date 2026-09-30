@@ -137,6 +137,85 @@ def image_gen_allowed(agent_id, target, target_id):
     return True, ""
 
 
+# ─── 私聊每日生图额度 ────────────────────────────────
+
+# 默认每人每天 10 张（2026-09-30 用户拍板：「私聊除非我给白名单，不然单人每天
+# 最多生成 10 个图」）。**默认是开的**——这条需求本身就是要它生效，写成默认关
+# 等于上线后还得手动去管理页点一下。
+PRIVATE_IMAGE_DAILY_LIMIT_DEFAULT = 10
+
+
+def private_image_daily_limit_raw(agent_id):
+    """settings 里存的**原始**上限，不看开关。管理页回显输入框用它——开关关掉时
+    也得能看见原来的数字，否则「临时放开一下」就变成「把配置弄丢了」。
+
+    写坏了回落默认 10 而不是回落「不限」：宁可比对方想的多扣几张，也别因为一个
+    手滑的字符串把限流悄悄变成全开。
+    """
+    s = load_settings(agent_id)
+    v = s.get("private_image_daily_limit")
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return PRIVATE_IMAGE_DAILY_LIMIT_DEFAULT
+    return int(v)
+
+
+def private_image_daily_limit(agent_id):
+    """**生效**的私聊每人每天生图上限。返回 0 表示不限。
+
+    - `private_image_quota_on` 为 False ⇒ 0（管理员临时关掉限流，数字留着）；
+    - 否则就是 settings 里的数字（0 / 负数 = 不限）。
+    """
+    s = load_settings(agent_id)
+    if s.get("private_image_quota_on") is False:
+        return 0
+    return private_image_daily_limit_raw(agent_id)
+
+
+def private_image_quota_whitelist(agent_id):
+    """免额名单：这些 QQ 在私聊里生图不限量。
+
+    **刻意不复用 private_whitelist**（用户 2026-09-30 选的）：那个名单管的是
+    「谁能私聊」，一旦哪天把它打开，名单里的人就会顺带变成「生图不限量」——
+    两件事的语义必须分开，否则以后想临时放开私聊都不敢动。
+    """
+    s = load_settings(agent_id)
+    return set(str(x) for x in (s.get("private_image_quota_whitelist") or []))
+
+
+def image_quota_allowed(agent_id, target, target_id):
+    """私聊每日生图额度闸。返回 (True, "") 或 (False, 拒绝理由)。
+
+    **只对私聊生效**：群聊、网页端一律放行（用户 2026-09-30 明确只要私聊限流）。
+    白名单里的人不限量。限流关掉（上限 0）时整段是空操作。
+
+    这里只**读**计数，不扣——扣额在 `generate_image` 里真正接单之后
+    （见 app/image_quota.py 的 charge），否则「检查」这一步自己就把额度吃了。
+    """
+    if target != "private":
+        return True, ""
+    limit = private_image_daily_limit(agent_id)
+    if limit <= 0:
+        return True, ""
+    if str(target_id) in private_image_quota_whitelist(agent_id):
+        return True, ""
+    from app import image_quota
+    used = image_quota.used(target_id)
+    if used >= limit:
+        return False, ("今天私聊生图的额度用完了（%d/%d 张）" % (used, limit))
+    return True, ""
+
+
+def private_image_quota_info(agent_id, target_id):
+    """管理页私聊行要显示的一条：{"limit": 10, "used": 3, "whitelisted": False}。
+
+    limit 为 0 表示不限量（管理页显示「不限」而不是「0 张」）。
+    """
+    from app import image_quota
+    return {"limit": private_image_daily_limit(agent_id),
+            "used": image_quota.used(target_id),
+            "whitelisted": str(target_id) in private_image_quota_whitelist(agent_id)}
+
+
 def nai_allowed(agent_id, target, target_id):
     """NAI（NovelAI，群主独立 token）能不能用。返回 (True, "") 或 (False, 理由)。
 

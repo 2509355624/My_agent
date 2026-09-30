@@ -263,6 +263,27 @@
           任何人的私聊都能聊（黑名单和上面的私聊总开关照常拦）。
           开着时：名单外的 QQ（包括陌生人临时会话）一律静默不回、不出图，
           清空名单 = 谁都私聊不了。点号码可移除。热生效，不用重启。</div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
+          <button class="toggle" id="privQuotaOn">生图额度·开</button>
+          <label class="hint" for="privQuotaLimit">每人每天</label>
+          <input id="privQuotaLimit" type="number" min="0" max="9999" step="1"
+                 style="width:76px;" />
+          <span class="hint">张</span>
+          <button class="ghost" id="privQuotaSave">保存</button>
+          <span class="hint">0 = 不限量。只算私聊，群聊一张都不占。</span>
+        </div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
+          <label class="hint" for="privQuotaUser">免额名单</label>
+          <input id="privQuotaUser" placeholder="QQ 号" style="width:110px;"
+                 spellcheck="false" autocomplete="off">
+          <button class="ghost" id="privQuotaAdd">添加</button>
+          <span id="privQuotaWl" style="margin-left:6px;"></span>
+        </div>
+        <div class="hint" style="margin:0 0 8px 2px;">名单里的 QQ 私聊生图不限量；
+          其余人每天最多上面那个张数。跑失败的那张会退还，跨天自动归零（按本机日期）。
+          额度是「接单就扣」，所以连点刷队列也拦得住。
+          这里管的是「谁生图不限量」，跟上面的私聊白名单（管「谁能私聊」）是两回事，
+          刻意没合并。热生效，不用重启。</div>
         <div class="hint" style="font-weight:600;margin:8px 0 4px;">群聊</div>
         <div class="sess-foot" style="margin-bottom: 8px;">
           <label class="hint" for="coolAll">主动发言间隔</label>
@@ -750,6 +771,23 @@ function renderSessions() {
         ng.addEventListener('click', () => toggleNai(s, ng));
         row.appendChild(ng);
         addImageFmtButton(s, row);
+        // 「今日 3/10」：这个人的私聊生图额度用量（只读；改额度在上面的私聊区）。
+        // 用满时标红——用户来问「怎么画不了了」时，一眼就能看出是这个原因。
+        const q = s.image_quota;
+        if (q) {
+          const badge = document.createElement('span');
+          badge.className = 'hint';
+          badge.style.marginLeft = '6px';
+          if (q.limit <= 0) {
+            badge.textContent = '生图不限量';
+          } else if (q.whitelisted) {
+            badge.textContent = '生图免额（今日已 ' + q.used + '）';
+          } else {
+            badge.textContent = '今日 ' + q.used + '/' + q.limit;
+            if (q.used >= q.limit) badge.style.color = 'var(--danger, #e24b4a)';
+          }
+          row.appendChild(badge);
+        }
       }
       const pb = document.createElement('button');
       pb.className = 'ghost';
@@ -788,6 +826,10 @@ async function loadSessions() {
     privState.on = d.private_enable !== false;
     privState.wlOn = d.private_whitelist_on !== false;
     privState.list = d.private_whitelist || [];
+    privState.quotaOn = d.private_image_quota_on !== false;
+    privState.quotaLimit = d.private_image_daily_limit != null
+      ? d.private_image_daily_limit : 10;
+    privState.quotaList = d.private_image_quota_whitelist || [];
     renderPrivate();
     $('coolAll').value = d.interject_cooldown != null ? d.interject_cooldown : '';
     $('chanceAll').value = d.interject_chance != null ? d.interject_chance : '';
@@ -1073,7 +1115,8 @@ async function editImageFmt(s, btn) {
 // ─── 私聊闸 ──────────────────────────────────────────
 // 总开关 + 白名单，都存 settings.json，热生效。空名单 = 谁都私聊不了。
 
-let privState = { on: true, wlOn: true, list: [] };
+let privState = { on: true, wlOn: true, list: [],
+                  quotaOn: true, quotaLimit: 10, quotaList: [] };
 
 function renderPrivate() {
   const btn = $('privAll');
@@ -1088,17 +1131,116 @@ function renderPrivate() {
   box.textContent = '';
   if (!privState.list.length) {
     box.textContent = privState.wlOn ? '（空 = 谁都私聊不了）' : '（白名单已停用，谁都能聊）';
+  } else {
+    privState.list.forEach((uid) => {
+      const chip = document.createElement('button');
+      chip.className = 'ghost';
+      chip.style.marginRight = '6px';
+      chip.textContent = uid + ' ×';
+      chip.title = '点击从白名单移除 ' + uid;
+      chip.addEventListener('click', () => privEdit('remove', uid));
+      box.appendChild(chip);
+    });
+  }
+  renderPrivateQuota();
+}
+
+// 私聊每日生图额度（2026-09-30 加）。跟上面的私聊白名单是两套独立配置。
+function renderPrivateQuota() {
+  const btn = $('privQuotaOn');
+  btn.className = 'toggle' + (privState.quotaOn ? ' on' : '');
+  btn.textContent = privState.quotaOn ? '生图额度·开' : '生图额度·关';
+  btn.disabled = false;
+  const inp = $('privQuotaLimit');
+  // 正在输入时别抢——renderPrivate 会在这轮刷新里被调，覆盖掉用户没敲完的数字很烦
+  if (document.activeElement !== inp) inp.value = privState.quotaLimit;
+  const box = $('privQuotaWl');
+  box.textContent = '';
+  if (!privState.quotaList.length) {
+    box.textContent = '（空 = 谁都不免额）';
     return;
   }
-  privState.list.forEach((uid) => {
+  privState.quotaList.forEach((uid) => {
     const chip = document.createElement('button');
     chip.className = 'ghost';
     chip.style.marginRight = '6px';
     chip.textContent = uid + ' ×';
-    chip.title = '点击从白名单移除 ' + uid;
-    chip.addEventListener('click', () => privEdit('remove', uid));
+    chip.title = '点击从免额名单移除 ' + uid;
+    chip.addEventListener('click', () => quotaWlEdit('remove', uid));
     box.appendChild(chip);
   });
+}
+
+async function togglePrivateQuota() {
+  const target = !privState.quotaOn;
+  const btn = $('privQuotaOn');
+  btn.disabled = true;
+  try {
+    const d = await api('/api/agent/' + encodeURIComponent(cur)
+      + '/private_image_quota',
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: target }) });
+    privState.quotaOn = d.private_image_quota_on !== false;
+    privState.quotaLimit = d.private_image_daily_limit;
+    renderPrivate();
+    sessStatus('私聊生图额度已'
+      + (target ? '开启（每人每天 ' + (privState.quotaLimit || '不限') + ' 张）'
+                : '关闭（不限量）') + '，立即生效', 'ok');
+  } catch (e) {
+    sessStatus(e.message, 'err');
+    btn.disabled = false;
+  }
+}
+
+async function savePrivateQuotaLimit() {
+  const raw = String($('privQuotaLimit').value || '').trim();
+  if (!/^\d+$/.test(raw)) {
+    sessStatus('额度要填 0 或正整数（0 = 不限量）', 'err');
+    return;
+  }
+  try {
+    const d = await api('/api/agent/' + encodeURIComponent(cur)
+      + '/private_image_quota',
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ limit: Number(raw) }) });
+    privState.quotaOn = d.private_image_quota_on !== false;
+    privState.quotaLimit = d.private_image_daily_limit;
+    renderPrivate();
+    sessStatus('私聊生图上限已设为 '
+      + (privState.quotaLimit === 0 ? '不限量' : privState.quotaLimit + ' 张/人/天')
+      + '，立即生效', 'ok');
+  } catch (e) {
+    sessStatus(e.message, 'err');
+  }
+}
+
+async function quotaWlEdit(op, uid) {
+  if (op === 'add') {
+    uid = String($('privQuotaUser').value || '').trim();
+    if (!/^\d+$/.test(uid)) {
+      sessStatus('先填 QQ 号（纯数字）再点添加', 'err');
+      return;
+    }
+  }
+  try {
+    await api('/api/agent/' + encodeURIComponent(cur)
+      + '/private_image_quota_whitelist/' + encodeURIComponent(uid),
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: op === 'add' }) });
+    // 接口只回这一个号的结果，名单在本地同步——省一次整表拉取
+    const set = new Set(privState.quotaList);
+    if (op === 'add') set.add(uid); else set.delete(uid);
+    privState.quotaList = Array.from(set).sort();
+    if (op === 'add') $('privQuotaUser').value = '';
+    renderPrivate();
+    sessStatus('免额名单已' + (op === 'add' ? '添加 ' : '移除 ')
+      + uid + '，立即生效', 'ok');
+  } catch (e) {
+    sessStatus(e.message, 'err');
+  }
 }
 
 async function togglePrivateAll() {
@@ -1341,6 +1483,9 @@ $('imgFmtAll').addEventListener('click', toggleImageFmtAll);
 $('privAll').addEventListener('click', togglePrivateAll);
 $('privWlOn').addEventListener('click', togglePrivateWlOn);
 $('privAdd').addEventListener('click', () => privEdit('add'));
+$('privQuotaOn').addEventListener('click', togglePrivateQuota);
+$('privQuotaSave').addEventListener('click', savePrivateQuotaLimit);
+$('privQuotaAdd').addEventListener('click', () => quotaWlEdit('add'));
 $('privUser').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') privEdit('add');
 });
