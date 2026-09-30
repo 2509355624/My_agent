@@ -1170,6 +1170,19 @@ def _fail_text(exc, stage="submit", skill=None):
     skill="nai" 走云端 NovelAI，失败是网络/代理问题，跟 ComfyUI 完全无关——
     绝不把「ComfyUI 没在线」甩给群友看。
     """
+    if stage == "send":
+        # 走到这儿**图一定已经画出来了**（`_notice(stage="send")` 只在
+        # `job.skill_done = True` 之后的投递步骤被调用），所以绝不能再说
+        # 「图没画出来」——那是在撒谎，而且会把对方引向「重画一次」这个
+        # 完全没用的方向。
+        # 2026-10-01 03:44 就是这么坑了胡桃桃：Anima_00276_.png 明明出图了
+        # （3.89MB），它收到的却是「图没画出来（OneBot 调用失败 send_private_msg: ）」。
+        # 根因在 qq_api（QQ 换了种措辞、没被认出来，兜底链路没启动），但
+        # 「说图没画出来」这句谎话是这里说的。
+        from app import qq_api
+        if qq_api.friend_required_error(exc):
+            return "图画好了，但私聊发不出去——得先加好友。加完再喊我一次。"
+        return "图画好了，但没发出去（%s）。稍后再喊我一次。" % _reason(exc)
     if skill == "nai":
         if isinstance(exc, TimeoutError) or _is_unreachable(exc):
             return ("图没画出来——连不上 NovelAI 的服务器（多半是网络或代理问题）。"

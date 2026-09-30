@@ -156,6 +156,18 @@ class TempSessionFallbackTest(unittest.TestCase):
                       "wording": "cannot send to user 1 in group 2: "
                                  "no such temp session"})
 
+    @staticmethod
+    def _verify_identify_fail():
+        """2026-10-01 03:44 实测的**第二种**「非好友」措辞。
+
+        同一个非好友、同一秒：**文字**那条回老措辞（`请先添加对方为好友`），
+        **图**那条回这个。老实现只认前者，于是图这条被判成真故障、兜底链路
+        整个不启动，直接报「图没画出来」——可图已经画好了（Anima_00276_.png）。
+        """
+        return _resp({"status": "failed", "retcode": 100, "data": None,
+                      "wording": "OIDB error 170019003 on 0x11c5_100: "
+                                 "verify identify fail"})
+
     def _payloads(self):
         return [c.kwargs.get("json") for c in self.session.post.call_args_list]
 
@@ -248,6 +260,30 @@ class TempSessionFallbackTest(unittest.TestCase):
         sent = self._payloads()
         self.assertEqual(len(sent), 2)
         self.assertEqual(sent[1]["group_id"], 1103174141)
+
+    def test_image_with_the_new_wording_still_falls_back(self):
+        """276 那次的完整复刻：图 + 新措辞，兜底链路必须照常启动。
+
+        修好之前这里是 2 → 1（一次就抛，图白画了）。
+        """
+        qq_api.note_temp_session("3985441738", "1103174141")
+        self.session.post.side_effect = [self._verify_identify_fail(), self._ok()]
+        qq_api.send_image("private", "3985441738", "D:/x.png")
+        sent = self._payloads()
+        self.assertEqual(len(sent), 2)
+        self.assertNotIn("group_id", sent[0])
+        self.assertEqual(sent[1]["group_id"], 1103174141)
+
+    def test_new_wording_probes_when_the_group_is_unknown(self):
+        """新措辞也得能触发「逐群探测」（不知道是哪个群时）。"""
+        self.session.post.side_effect = [self._verify_identify_fail(),
+                                         self._no_session(),   # 1041446471
+                                         self._ok()]           # 1103174141
+        self.assertEqual(qq_api.send_private("3985441738", "你好"), 1)
+        sent = self._payloads()
+        self.assertEqual(len(sent), 3)
+        self.assertEqual(sent[2]["group_id"], 1103174141)
+        self.assertEqual(qq_api.temp_group_of("3985441738"), "1103174141")
 
     def test_group_image_still_uses_plain_group_send(self):
         self.session.post.return_value = self._ok()

@@ -395,11 +395,29 @@ class PrivateSendFailureTest(unittest.TestCase):
             "result=16 err=发送失败，请先添加对方为好友'}")
         self.assertTrue(qq_api.friend_required_error(exc))
 
+    def test_recognises_the_oidb_verify_identify_wording(self):
+        """**第二种**措辞（2026-10-01 03:44）：图和文字拿到的居然不一样。
+
+        同一秒、同一个非好友：图回 `verify identify fail`，文字回
+        `请先添加对方为好友`。只认后者的代价是图这条直接报失败——而图其实
+        已经画好了（Anima_00276_.png，3.89MB）。
+        """
+        exc = RuntimeError(
+            "OneBot 调用失败 send_private_msg: {'status': 'failed', "
+            "'retcode': 100, 'data': None, 'wording': 'OIDB error 170019003 "
+            "on 0x11c5_100: verify identify fail'}")
+        self.assertTrue(qq_api.friend_required_error(exc))
+
     def test_other_failures_are_not_mistaken_for_it(self):
         for msg in ("OneBot 调用失败 send_private_msg: retcode=100 风控",
                     "HTTPConnectionPool 连不上",
                     ""):
             self.assertFalse(qq_api.friend_required_error(RuntimeError(msg)))
+
+    def test_a_plain_oidb_error_is_not_enough(self):
+        """只认「verify identify fail」这个身份校验失败，别的 OIDB 错不算。"""
+        exc = RuntimeError("OIDB error 170019003 on 0x11c5_100: unknown")
+        self.assertFalse(qq_api.friend_required_error(exc))
 
     def test_non_private_targets_are_left_alone(self):
         import app.qq_bot as qq_bot

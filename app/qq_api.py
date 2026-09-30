@@ -358,9 +358,22 @@ def image_segment(path_or_url):
 # ─── 发送 ────────────────────────────────────────────
 
 # 协议端拒绝给「非好友」发私聊时的固定话术。QQ 的反骚扰策略：机器人账号不能给
-# 陌生人发私聊，必须先加好友。**判据认这句话、不认 retcode**——retcode 100 太
+# 陌生人发私聊，必须先加好友。**判据认这些话术、不认 retcode**——retcode 100 太
 # 笼统，别的发送失败（风控、频率限制）也用它。
-FRIEND_REQUIRED_HINT = "请先添加对方为好友"
+#
+# 为什么是**一组**而不是一句（2026-10-01 03:44 实测）：同一秒、同一个非好友
+# （胡桃桃 3985441738）、同一个进程，**图和文字拿到的措辞居然不一样**——
+#   文字：`发送失败，请先添加对方为好友`（老措辞，result=16）
+#   图片：`OIDB error 170019003 on 0x11c5_100: verify identify fail`（新措辞）
+# 只认老措辞的代价很大：图这条被判成「真故障」，于是 `_call_private` 既不重试
+# 也不探测，直接报失败——可图**明明已经画好了**（Anima_00276_.png，3.89MB），
+# 胡桃桃收到的是「图没画出来（OneBot 调用失败 send_private_msg: ）」。
+# 0x11c5_100 就是 NapCat 发私聊那条 OIDB 命令，170019003 是它的身份校验失败码，
+# 与 result=16 同源：没有可用的私聊通道（不是好友、也没有活跃临时会话）。
+FRIEND_REQUIRED_HINTS = (
+    "请先添加对方为好友",
+    "verify identify fail",
+)
 
 
 def friend_required_error(exc):
@@ -369,8 +382,12 @@ def friend_required_error(exc):
     2026-09-30 用户报「小小怪无法回复私聊，后台闪一下然后就没有了」，根因就是
     它：机器人**正常处理**了那条私聊，最后一步投递被 QQ 拒了。调用方靠这个函数
     把「策略限制」和「真出故障」分开，前者不该打一整段堆栈。
+
+    2026-10-01 补上第二种措辞（见 `FRIEND_REQUIRED_HINTS` 的注释）——漏认它
+    会让「重试 + 群临时会话兜底」整条链路都不启动。
     """
-    return FRIEND_REQUIRED_HINT in str(exc)
+    text = str(exc)
+    return any(hint in text for hint in FRIEND_REQUIRED_HINTS)
 
 
 # ─── 群临时会话（非好友唯一的回复通道）────────────────
@@ -461,9 +478,11 @@ def _probe_temp_group(user_id, message, timeout=30):
                   {"user_id": int(user_id), "group_id": int(gid),
                    "message": message}, timeout=timeout)
         except RuntimeError as exc:
-            if _is_no_temp_session(exc):
-                continue            # 这个群没有会话，换下一个
-            raise                   # 别的错（风控/超时）照抛，别吞
+            # 两种措辞都等于「这个群没有会话」（见 FRIEND_REQUIRED_HINTS），
+            # 换下一个；别的错（风控/超时）照抛，别吞。
+            if _is_no_temp_session(exc) or friend_required_error(exc):
+                continue
+            raise
         note_temp_session(user_id, gid)
         log.info("试出群临时会话：%s 在群 %s，已记住", user_id, gid)
         return True
@@ -497,7 +516,12 @@ def _call_private(user_id, message, timeout=30):
                              {"user_id": int(user_id), "group_id": int(gid),
                               "message": message}, timeout=timeout)
             except RuntimeError as exc2:
-                if not _is_no_temp_session(exc2):
+                # 带上 group_id 还报「不是好友」也是同一种「这个群没会话」——
+                # 措辞可能是 `no such temp session`，也可能又是
+                # `verify identify fail`（QQ 两种都用，见 FRIEND_REQUIRED_HINTS）。
+                # 只认前一种的话，撞上后一种就会在这里直接抛出去，永远不再探测。
+                if not (_is_no_temp_session(exc2)
+                        or friend_required_error(exc2)):
                     raise
                 # 记着的这个群会话过期了——忘掉它，落到下面重新探测
                 forget_temp_session(user_id)

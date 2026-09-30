@@ -521,7 +521,12 @@ class ProcessTest(_Base):
         self.assertTrue(self.sent_texts)
 
     def test_send_failure_falls_back_to_notice(self):
-        """图发出去失败也算失败：照样说一句，不让异常冒出 worker 线程。"""
+        """图发出去失败也算失败：照样说一句，不让异常冒出 worker 线程。
+
+        话术必须是「图画好了、只是没发出去」——**不能说「图没画出来」**：
+        走到这一步图已经画好了，说没画出来是撒谎（2026-10-01 03:44
+        Anima_00276_.png 那次就是这么骗人的）。
+        """
         p = mock.patch.object(image_jobs, "_send_image",
                               side_effect=OSError("down"))
         p.start()
@@ -531,7 +536,8 @@ class ProcessTest(_Base):
             self._enqueue()
             image_jobs._drain()
         self.assertEqual(len(self.sent_texts), 1)
-        self.assertIn("图没画出来", self.sent_texts[0][2])
+        self.assertIn("图画好了", self.sent_texts[0][2])
+        self.assertNotIn("图没画出来", self.sent_texts[0][2])
 
     def test_queue_keeps_running_after_a_failure(self):
         """前一张失败不该把队卡住——后面的人照跑。"""
@@ -783,8 +789,32 @@ class FailTextTest(unittest.TestCase):
     def test_send_stage_does_not_blame_comfyui(self):
         """投递阶段失败跟 ComfyUI 在不在无关，别往它头上安。"""
         text = image_jobs._fail_text(OSError("down"), stage="send")
-        self.assertIn("图没画出来", text)
+        self.assertIn("图画好了", text)
         self.assertNotIn("没在线", text)
+
+    def test_send_stage_never_claims_the_image_was_not_drawn(self):
+        """图都画好了，投递失败时**绝不能说「图没画出来」**（2026-10-01 03:44）。
+
+        现场：Anima_00276_.png 明明出图了（3.89MB），胡桃桃收到的却是
+        「图没画出来（OneBot 调用失败 send_private_msg: ）」——话术把人引向
+        「重画一次」这个完全没用的方向。根因在 qq_api 漏认措辞，但谎话是
+        这里说的，所以在这儿钉住。
+        """
+        for exc in (OSError("down"),
+                    RuntimeError("OneBot 调用失败 send_private_msg: ")):
+            text = image_jobs._fail_text(exc, stage="send")
+            self.assertNotIn("图没画出来", text)
+            self.assertIn("图画好了", text)
+
+    def test_send_stage_names_the_friend_problem_when_that_is_the_cause(self):
+        """非好友发不出去 → 直接说「加好友」，别甩半截 OneBot 报文。"""
+        exc = RuntimeError(
+            "OneBot 调用失败 send_private_msg: {'status': 'failed', "
+            "'retcode': 100, 'data': None, 'wording': 'OIDB error 170019003 "
+            "on 0x11c5_100: verify identify fail'}")
+        text = image_jobs._fail_text(exc, stage="send")
+        self.assertIn("加好友", text)
+        self.assertNotIn("OneBot", text)
 
     def test_http_error_is_not_reported_as_offline(self):
         """ComfyUI 活着、只是把工作流拒了——那不是「没在线」。
