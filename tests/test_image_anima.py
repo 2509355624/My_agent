@@ -1,22 +1,31 @@
-"""anima（唯一的动漫渠道）：两段采样工作流的性质锁。
+"""动漫渠道（`anima` / `anima_realskin`）：两段采样工作流的性质锁。
 
 ## 这套用例锁的是什么
 
-2026-09-30 起动漫渠道**只剩 anima 一个**，工作流直接取自用户在 ComfyUI 里调好的
+2026-09-30 18:xx 起动漫渠道有**两个**，都直接取自用户在 ComfyUI 里调好的
 `anime2`（`D:\\AI\\ComfyUI\\user\\default\\workflows\\anime2.json`）。
-**每次用户在这个文件里调完参数，`skills/anima/workflow.json` 都要跟着重转**
-（UI 格式 → API 格式，步骤见 `skills/anima/skill.md`）。当前拓扑：
+**每次用户在这个文件里调完参数，对应的 `skills/*/workflow.json` 都要跟着重转**
+（UI 格式 → API 格式，步骤见 `skills/anima/skill.md`）。
+
+| | `anima_realskin`（**默认**） | `anima`（点名才用） |
+|---|---|---|
+| 一段底模 | Ani1.1 (reality) | Ani1.1 (reality) |
+| 二段底模 | `miaomiaoRealskin_anima13` | Ani1.1（同一块，所以叫「双 reality」） |
+
+两个渠道**共用同一套结构**，差别只在第二段的底模（外加一段的采样器参数）：
 
     一段：UNETLoader(5, Ani1.1) → LoRA(16 kibro 1.0) → LoRA(15 baka skin 0.5)
-          → KSampler(2) euler/simple 10 步 cfg3 denoise 1.0
-    二段：UNETLoader(20, Ani1.1 同一块) → KSampler(19) euler/simple 10 步
-          cfg7 denoise 0.25（latent 来自 KSampler(2)，**不接 LoRA**）
+          → KSampler(2) → LatentUpscaleBy(24, nearest-exact 1.1×)
+    二段：UNETLoader(20) → KSampler(19) denoise 0.25（latent 来自 24，**不接 LoRA**）
+
+**`LatentUpscaleBy(24)` 夹在两段之间**（`2 → 24 → 19`）：768×1024 的 latent（96×128）
+先放大到 106×141，**实际输出 848×1128**。
 
 这些性质全写在 JSON 里、肉眼看不出来，但每一个都有明确的「为什么」：
 
 - 两段是「细节更多」的来源，所以**两个 KSampler 必须都真的在跑**；
 - 第二段 denoise=0.25 是**精修不是重画**，改成 1.0 就变成画两张不同的图；
-- 分辨率停在 768×1024（**安全锁**，见下）；
+- 分辨率停在 768×1024（**安全锁**，见下），放大倍率停在 1.1×；
 - 节点 4 必须是**可代入的模板**，不能是写死的角色；
 - `__SEED__` 必须是占位符，写死成数字等于每张图一模一样。
 
@@ -24,7 +33,7 @@
 
 > ⚠️ **上游 `5fe5d81` 的 `anima` 和本机这套不是同一个工作流**：上游是
 > 「单底模 + 两段 + `LatentUpscaleBy(scale_by=1)` + 728×1024」，本机是
-> 「两段 + 无放大 + 768×1024」。所以**别照抄上游的用例**，
+> 「两段 + 1.1× 放大 + 768×1024」。所以**别照抄上游的用例**，
 > 节点编号/底模数量都要按本机实际写。安全性的锁要留，只换数值。
 
 > **参数旋钮 vs 架构**：步数、CFG、LoRA 强度是用户随手调的旋钮，**别锁**——
@@ -124,6 +133,11 @@ class TwoStageTest(unittest.TestCase):
            说明这不是一次性的疏忽，而是**每次从 ComfyUI 导工作流都会带上**——
            所以这条锁必须一直在，转工作流时每次都过一遍。
 
+        ④ 同一天 18:12 第四次：节点 4 变成 417 字的
+           「Firefly (Honkai: Star Rail) + 女仆装 + 奶瓶」。
+           这一版是 `anima_realskin` 的来源，**同样在转换时换成了模板**
+           （见 `RealSkinChannelTest::test_prompt_is_a_template_with_the_lora_trigger`）。
+
         所以这条锁两件事：① 有占位符；② 正文里不含具体角色/场景词。
         **只留画风前缀**（`@kibro` 是 lora 触发词，不能丢）。
         """
@@ -133,13 +147,17 @@ class TwoStageTest(unittest.TestCase):
         self.assertTrue(text.startswith("@kibro,"),
                         "画风前缀丢了：%r" % text)
         # 具体角色词一个都不许留——留了就是又写死了。
-        # 前 6 个是坑①的残留词，其余是坑②/③（anime2 三个版本自带）的残留词。
+        # 前 6 个是坑①的残留词，其余是坑②/③/④（anime2 四个版本自带）的残留词。
         for word in ("silver-white", "twin tails", "hairclip", "genkan",
                      "camisole", "pearl",
                      "golden hair", "fox ears", "fox tail", "red hood",
                      "vtuber-style", "neon", "stage background",
                      "sleeveless dress", "thigh-high", "frilled",
-                     "isolated on white", "plain white background"):
+                     "isolated on white", "plain white background",
+                     # 坑④（18:12 版）的残留词
+                     "Firefly", "Honkai", "Star Rail", "flat chest", "petite",
+                     "mint green", "maid headband", "baby bottle",
+                     "pastel pink", "frilly", "blushing"):
             self.assertNotIn(word, text, "节点 4 又写死了角色：%r" % word)
         # 模板本身该很短，写死的角色串都几百上千字
         self.assertLess(len(text), 120)
@@ -193,16 +211,36 @@ class TwoStageTest(unittest.TestCase):
                         wf["2"]["inputs"]["denoise"])
 
     def test_second_pass_reads_the_first_pass_latent(self):
-        """第二段吃第一段的输出——链路别接错（这是「精修」的前提）。"""
+        """第二段吃**放大后**的 latent——链路别接错（这是「精修」的前提）。
+
+        2026-09-30 18:12 用户在两段之间插了 `LatentUpscaleBy(24)`，
+        所以 19 的 latent 来源从 `2` 变成 `24`。**别把这条改回 `2`** ——
+        那等于把放大节点晾在一边（它还占着显存和一次上采样）。
+        """
         wf = _load("anima")
-        self.assertEqual(wf["19"]["inputs"]["latent_image"], ["2", 0])
+        self.assertEqual(wf["19"]["inputs"]["latent_image"], ["24", 0])
+        self.assertEqual(wf["24"]["inputs"]["samples"], ["2", 0])
         self.assertEqual(wf["3"]["inputs"]["samples"], ["19", 0])
 
-    def test_there_is_no_upscale_node(self):
-        """`anime2` 不放大。加了 `LatentUpscaleBy` 会抬分辨率，撞上显存红线
-        （见 ResolutionTest 那段警告）。要放大请用户明确要求，并先量显存。"""
+    def test_upscale_node_sits_between_the_two_passes(self):
+        """放大节点必须有，且必须**夹在两段之间**、倍率封顶 1.1×。
+
+        ⚠️ 2026-09-30 之前这条用例是反过来的（`test_there_is_no_upscale_node`
+        断言**没有**放大节点）。那天 18:12 用户在 ComfyUI 里加了 1.1× 放大
+        并明确要求同步过来，所以锁的方向反了 —— **这是有意的，不是把断言删了**。
+
+        为什么要封顶：`scale_by` 上去是平方级的显存和耗时，而本机
+        （RTX 5070 12GB + 16GB）两段还要先后装两块 3988MB 底模，没余量。
+        768×1024 → 96×128 latent，×1.1 用 `round()` 得 106×141，
+        即实际输出 **848×1128**（`comfy` 的 `LatentUpscaleBy`，见 `nodes.py:1393`）。
+        """
         wf = _load("anima")
-        self.assertNotIn("LatentUpscaleBy", _types(wf))
+        self.assertIn("LatentUpscaleBy", _types(wf))
+        up = wf["24"]
+        self.assertEqual(up["class_type"], "LatentUpscaleBy")
+        self.assertEqual(up["inputs"]["upscale_method"], "nearest-exact")
+        self.assertLessEqual(up["inputs"]["scale_by"], 1.1,
+                             "放大倍率超过 1.1× 了——先量显存再动")
 
     def test_second_pass_has_its_own_bare_base_model(self):
         """第二段指向**它自己的装载节点**（20），**不接 LoRA**——有意如此。
@@ -260,31 +298,146 @@ class ResolutionTest(unittest.TestCase):
 
 
 class VisibilityTest(unittest.TestCase):
-    """QQ 机器人得能看见它（白名单），否则默认渠道也传不进来。"""
+    """QQ 机器人得能看见它们（白名单），否则默认渠道也传不进来。"""
 
-    def test_qq_whitelist_includes_anima(self):
+    def test_qq_whitelist_includes_both_anime_channels(self):
         from app import agents
         self.assertTrue(agents.allows_skill("qq", "anima"))
+        self.assertTrue(agents.allows_skill("qq", "anima_realskin"))
 
-    def test_skill_list_marks_it_as_default(self):
-        """anima 在目录里要标成默认渠道（而不是「点名才用」）。"""
+    def test_default_channel_is_realskin(self):
+        """2026-09-30 18:xx 用户拍板：默认动漫渠道 = `anima_realskin`。
+
+        历史：09-30 白天默认还是 `anima`，那天 18:12 用户把 `anime2.json` 的
+        第二段换成 `miaomiaoRealskin_anima13` 并要求「两个渠道都给，
+        这个当默认」，于是常量跟着搬了。
+        """
+        from app.tools.normal.generate_image import T2I_DEFAULT_SKILL
+        self.assertEqual(T2I_DEFAULT_SKILL, "anima_realskin")
+        self.assertIsNotNone(load_skill(T2I_DEFAULT_SKILL))
+
+    def test_skill_list_marks_exactly_one_anime_channel_as_default(self):
+        """目录里必须**恰好一个**动漫渠道自称「默认」，且那个是 `anima_realskin`。
+
+        注意 `"**anima**"` 这个子串**不会**匹配 `**anima_realskin**`
+        （`anima` 后面跟的是 `_` 不是 `*`），所以两行能分开过滤。
+        """
         from app.agent_prompt import _build_skill_list
-        lines = [l for l in _build_skill_list("qq").splitlines()
-                 if "**anima**" in l]
-        self.assertEqual(len(lines), 1, "anima 应当在目录里出现且只出现一次")
-        self.assertIn("默认", lines[0])
+        lines = _build_skill_list("qq").splitlines()
 
-    def test_descriptions_no_longer_offer_a_second_anime_channel(self):
-        """两份工具描述都不能再提 `anima_2`——渠道已合并，提它只会诱导模型乱传。
+        def line_for(name):
+            hits = [l for l in lines if ("**%s**" % name) in l]
+            self.assertEqual(len(hits), 1, "%s 应当出现且只出现一次" % name)
+            return hits[0]
 
-        本机 `skills/anima_2` 目录还在（用户自己还要用），但**模型不该知道它**：
-        对模型来说动漫渠道只有一个。
+        self.assertIn("默认", line_for("anima_realskin"))
+        self.assertIn("点名", line_for("anima"),
+                      "anima 现在应当是「点名才用」")
+
+        defaults = [l for l in lines if "默认" in l and "anima" in l]
+        self.assertEqual(len(defaults), 1,
+                         "有多个动漫渠道自称默认：%r" % defaults)
+
+    def test_descriptions_never_mention_the_retired_channel(self):
+        """两份工具描述都不能提 `anima_2`——它对本机是死目录，提了只会诱导模型乱传。
+
+        注意：描述里**会**出现 `anima` 和 `anima_realskin`（这是有意暴露给模型的
+        两个动漫渠道），但 `anima_2` 必须一个字都不出现。
         """
         from app.tools.normal.generate_image import tool
         from app.config import QQ_AGENT_ID
         for desc in (tool["description"],
                      tool["description_overrides"][QQ_AGENT_ID]):
             self.assertNotIn("anima_2", desc)
+
+
+class RealSkinChannelTest(unittest.TestCase):
+    """`anima_realskin`（默认渠道）：和 `anima` 同源，只换第二段的底模。
+
+    数据来自用户 2026-09-30 18:12 在 ComfyUI 里存的那版 `anime2.json`。
+    """
+
+    def test_exists_and_is_an_image_skill(self):
+        data = load_skill("anima_realskin")
+        self.assertIsNotNone(data)
+        self.assertEqual(data["kind"], "生图")
+        self.assertTrue(data["workflow"])
+        # 没被标成重渠道——它靠「默认就是它」，不靠队列权重
+        self.assertEqual(skill_priority("anima_realskin"), 1)
+
+    def test_two_samplers_two_loaders_and_one_upscale(self):
+        """核心不变量：两个采样器、两块底模装载器、一个放大节点。"""
+        wf = _load("anima_realskin")
+        t = _types(wf)
+        self.assertEqual(t.count("KSampler"), 2)
+        self.assertEqual(t.count("UNETLoader"), 2)
+        self.assertEqual(t.count("LatentUpscaleBy"), 1)
+
+    def test_second_pass_uses_realskin_the_first_uses_reality(self):
+        """**这就是两个动漫渠道的差异点**，别被同步脚本抹平了。
+
+        `anima` 是「两块都是 Ani1.1 reality」（双 reality）；
+        `anima_realskin` 的第二段换成 RealSkin——是真正的双底模，
+        两段之间会真的换一次模型。
+        """
+        wf = _load("anima_realskin")
+        self.assertEqual(wf["5"]["inputs"]["unet_name"],
+                         "miaomiaoAnimeReality_ani11_3087842.safetensors")
+        self.assertEqual(wf["20"]["inputs"]["unet_name"],
+                         "miaomiaoRealskin_anima13.safetensors")
+
+    def test_upscale_sits_between_the_passes(self):
+        wf = _load("anima_realskin")
+        self.assertEqual(wf["24"]["class_type"], "LatentUpscaleBy")
+        self.assertEqual(wf["24"]["inputs"]["samples"], ["2", 0])
+        self.assertEqual(wf["19"]["inputs"]["latent_image"], ["24", 0])
+        self.assertLessEqual(wf["24"]["inputs"]["scale_by"], 1.1,
+                             "放大倍率超过 1.1× 了——先量显存再动")
+
+    def test_prompt_is_a_template_with_the_lora_trigger(self):
+        """`@kibro` 是 kibro LoRA 的触发词（训练集 165/165 张图都带它），不能丢。"""
+        wf = _load("anima_realskin")
+        self.assertEqual(wf["4"]["inputs"]["text"], "@kibro, __MULTI_PROMPTS__")
+        neg = wf["8"]["inputs"]["text"]
+        self.assertIn("worst quality", neg)
+        self.assertNotIn("__MULTI_PROMPTS__", neg)
+
+    def test_seeds_stay_placeholders(self):
+        p = os.path.join(SKILLS, "anima_realskin", "workflow.json")
+        with open(p, encoding="utf-8") as f:
+            raw = f.read()
+        self.assertEqual(raw.count("__SEED__"), 2,
+                         "两个 KSampler 的 seed 都该是 __SEED__ 占位符")
+
+    def test_second_pass_is_deterministic_refinement(self):
+        """第二段 denoise 0.25 = 精修，所以必须是确定性采样器 `euler`。
+
+        第一段的采样器**不锁**——它 denoise=1.0 是从零建构图，用什么都行，
+        而且那正是用户随手调的旋钮（18:12 那版是 `dpmpp_2m`）。
+        """
+        wf = _load("anima_realskin")
+        self.assertEqual(wf["19"]["inputs"]["sampler_name"], "euler")
+        self.assertEqual(wf["19"]["inputs"]["scheduler"], "simple")
+        self.assertEqual(wf["19"]["inputs"]["denoise"], 0.25)
+        self.assertLess(wf["19"]["inputs"]["denoise"],
+                        wf["2"]["inputs"]["denoise"])
+
+    def test_resolution_and_upscale_stay_within_the_safe_box(self):
+        wf = _load("anima_realskin")
+        self.assertEqual(wf["9"]["inputs"]["width"], 768)
+        self.assertEqual(wf["9"]["inputs"]["height"], 1024)
+        self.assertLessEqual(wf["24"]["inputs"]["scale_by"], 1.1)
+
+    def test_loras_only_on_the_first_pass(self):
+        wf = _load("anima_realskin")
+        loras = {k for k, n in wf.items()
+                 if n.get("class_type") == "LoraLoaderModelOnly"}
+        self.assertEqual(loras, {"15", "16"})
+        self.assertEqual(wf["16"]["inputs"]["model"], ["5", 0])   # 接底模
+        self.assertEqual(wf["15"]["inputs"]["model"], ["16", 0])  # 接上一环
+        self.assertEqual(wf["2"]["inputs"]["model"], ["15", 0])
+        # 第二段走裸底模，**有意不接 LoRA 链尾**
+        self.assertEqual(wf["19"]["inputs"]["model"], ["20", 0])
 
 
 class RestoreTest(unittest.TestCase):
@@ -301,7 +454,9 @@ class RestoreTest(unittest.TestCase):
                      "workflow_2stage.json.bak",
                      "workflow_2pass_noscale.json.bak",
                      "workflow_2stage_twobase.json.bak",
-                     "workflow_anime2_1538.json.bak"):
+                     "workflow_anime2_1538.json.bak",
+                     # 2026-09-30 加 1.1× 放大之前的那版（双 reality、无放大）
+                     "workflow_2reality_noscale.json.bak"):
             p = os.path.join(SKILLS, "anima", name)
             self.assertTrue(os.path.exists(p), name)
             self.assertIsNotNone(load_workflow(p), name)
