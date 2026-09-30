@@ -94,14 +94,17 @@ _TOOL_HINTS = [
     (("generate_image",),
      "- generate_image 的 prompt 参数必须是英文"),
     (("generate_image",),
-     "- 引用图片**默认只看，不改**：4 个本机动漫渠道**都不要传 "
+     "- 引用图片**默认只看，不改**：7 个本机渠道**都不要传 "
      "source_image**（它们的图生图已停用）。对方引用一张图时，照它**反推提示词、"
      "用默认渠道画一张新的**（「看特征 / 复刻 / 参考这个风格 / 照着画一张新的」"
      "都是这条路）。**唯一例外：skill=nai（NovelAI 云端）能做图生图 / 垫图**——"
      "仅限已开通 NAI 的会话，对方明确要改图 / 垫图时传 source_image=1"),
     (("generate_image",),
-     "- 生图渠道只有 4 个动漫渠道（anima_clear 默认 / anima_soft / anima_gloss / "
-     "anima_curvy），**名字就是画风**。用户没说画风就**不传 skill**；"
+     "- 生图渠道只有 7 个。**4 个画风渠道**（名字就是画风）：anima_clear 默认 / "
+     "anima_soft / anima_gloss / anima_curvy。**3 个尺寸渠道**（画风 = anima_gloss，"
+     "只差出图大小，按「快 → 大」排）：hd_fast（1024×1536，最快）/ "
+     "hd_2（1328×2000）/ hd_3（1536×2304，最大但最慢）。"
+     "用户没说画风也没说要更大就**不传 skill**；"
      "**不要自己编渠道名**，也不要把渠道名当技术名词说给对方听"),
     (("write_file",),
      "- 想创建新 Skill？用 write_file 写入 skill.md / workflow.json"),
