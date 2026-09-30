@@ -802,8 +802,15 @@ def _process_nai(job):
         job.entry = {"images": [image_out.save_bytes(png, "png", "nai")]}
         return
     try:
-        from app import image_out
+        from app import image_audit, image_out
         path = image_out.save_bytes(png, "png", "nai")
+        # 审核闸门。拦下时**不设 job.error**：图确实出出来了，只是没过审，
+        # 而且 image_audit 已经回过一句提示了，再报错是重复。
+        if not image_audit.allow_send(path, QQ_AGENT_ID,
+                                      job.target, job.target_id):
+            log.info("NAI 生图被审核拦下，未发回 %s %s",
+                     job.target, job.target_id)
+            return
         _send_image_bytes(job.target, job.target_id, path)
         log.info("NAI 生图完成已发回 %s %s", job.target, job.target_id)
     except Exception as exc:
@@ -862,10 +869,17 @@ def process(job):
         return                      # 网页侧自己从 job.entry 取
 
     try:
-        for name in names:
-            _send_image(job.target, job.target_id, name)
-        log.info("生图完成已发回 %s %s：%d 张",
-                 job.target, job.target_id, len(names))
+        sent = sum(1 for name in names
+                   if _send_image(job.target, job.target_id, name))
+        if sent:
+            log.info("生图完成已发回 %s %s：%d/%d 张",
+                     job.target, job.target_id, sent, len(names))
+        else:
+            # 全被审核拦下了。**不当失败处理**：图确实画出来了、也通知过对方了
+            # （image_audit 自己回的那句提示），再走 _notice 就是重复报错，
+            # 而且会让额度退回去——等于给了一条「靠生成违规图刷额度」的路。
+            log.info("生图全部被审核拦下，未发回 %s %s（%d 张）",
+                     job.target, job.target_id, len(names))
     except Exception as exc:
         job.error = exc
         _notice(job, stage="send")
@@ -1205,8 +1219,19 @@ def _send_text(target, target_id, text):
 
 
 def _send_image(target, target_id, filename):
-    """发回原会话。先过 image_out 甩掉 PNG 里的工作流元数据，编码格式看管理页开关。"""
-    from app import image_out, qq_api
+    """发回原会话。先过 image_out 甩掉 PNG 里的工作流元数据，编码格式看管理页开关。
+
+    返回 True = 真发出去了。审核拦下时返回 False（**不抛异常**）——
+    调用方靠它区分「发了」和「被拦了」，别把拦截记成发送失败。
+
+    ⚠️ 审核审的是 `prepare_for_send` 的产物（本地文件），也就是**真正要发出去
+    的那份字节**，不是 ComfyUI 的原图。见 app/image_audit.py 的模块注释。
+    """
+    from app import image_audit, image_out, qq_api
     from app.agents import image_send_format
     fmt = image_send_format(QQ_AGENT_ID, target, target_id)
-    qq_api.send_image(target, target_id, image_out.prepare_for_send(filename, fmt))
+    path = image_out.prepare_for_send(filename, fmt)
+    if not image_audit.allow_send(path, QQ_AGENT_ID, target, target_id):
+        return False
+    qq_api.send_image(target, target_id, path)
+    return True

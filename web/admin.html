@@ -246,6 +246,15 @@
             只影响发出去那一张，ComfyUI output 里的原图永远不动。
             某个群想单独用别的格式，用群行里的「格式」开关。</span>
         </div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
+          <button class="toggle" id="auditGroups">群聊审核·关</button>
+          <button class="toggle" id="auditPrivate">私聊审核·关</button>
+          <span class="hint">发图前的 NSFW 闸门，<b>群聊和私聊各一个总开关</b>（默认都关）：
+            开 = 那一类会话的生图发出去之前先让识图模型判一次，只拦「性器官裸露 / 明确性行为」；
+            泳装、内衣、比基尼、露腿都照常发。判定违规就不发并回一句提示。
+            <b>识图超时 / 报错一律放行</b>，不会因为识图挂了就把生图堵死。
+            单个群 / 单个私聊想跟总开关不一样，用行里的「审核」开关覆盖。</span>
+        </div>
         <div class="hint" style="font-weight:600;margin:8px 0 4px;">私聊</div>
         <div class="sess-foot" style="margin-bottom: 8px;">
           <button class="toggle" id="privAll">私聊·开</button>
@@ -732,6 +741,9 @@ function renderSessions() {
       ng.addEventListener('click', () => toggleNai(s, ng));
       row.appendChild(ng);
 
+      // 「审核」开关：这个群的生图发出去之前要不要过 NSFW 闸门。
+      addAuditButton(s, row);
+
       // 「格式」按钮：这个群的图发 jpg 还是 png；没单独设过就跟全局。
       addImageFmtButton(s, row);
 
@@ -770,6 +782,7 @@ function renderSessions() {
         ng.textContent = s.nai ? 'NAI·开' : 'NAI·关';
         ng.addEventListener('click', () => toggleNai(s, ng));
         row.appendChild(ng);
+        addAuditButton(s, row);
         addImageFmtButton(s, row);
         // 「今日 3/10」：这个人的私聊生图额度用量（只读；改额度在上面的私聊区）。
         // 用满时标红——用户来问「怎么画不了了」时，一眼就能看出是这个原因。
@@ -823,6 +836,7 @@ async function loadSessions() {
     renderImageGenAll(d.image_gen_on !== false);
     renderNaiAll(d.nai_enabled === true);
     renderImageFmtAll(d.image_send_format);
+    renderAuditGlobals(d.image_audit_globals);
     privState.on = d.private_enable !== false;
     privState.wlOn = d.private_whitelist_on !== false;
     privState.list = d.private_whitelist || [];
@@ -1077,6 +1091,81 @@ async function toggleImageFmtAll() {
 
 // 发图格式按钮：群和私聊都能单独设。渲染位置由调用方决定
 // ——群行插在「生图」与「频率」之间，私聊行插在「提示词」之前。
+// 「审核」开关（群行 / 私聊行共用）。显示的是**生效值**——管理员想知道的是
+// 「这个会话到底审不审」，不是「它有没有单独设过」。点一下写单会话覆盖。
+function addAuditButton(s, row) {
+  const ab = document.createElement('button');
+  ab.className = 'toggle' + (s.image_audit ? ' on' : '');
+  ab.textContent = s.image_audit ? '审核·开' : '审核·关';
+  ab.title = '生图发出去之前让识图模型判一次：只拦性器官裸露 / 明确性行为，'
+    + '泳装内衣照常发。识图失败一律放行。';
+  ab.addEventListener('click', () => toggleAudit(s, ab));
+  row.appendChild(ab);
+}
+
+async function toggleAudit(s, btn) {
+  const target = !s.image_audit;
+  const name = s.name || s.target_id;
+  const isPrivate = s.kind === 'private';
+  if (!target && !confirm('关掉「' + name + '」的图片审核？\n\n'
+      + (isPrivate ? '它和你私聊时' : '它在这个群里')
+      + '生图将不再过 NSFW 闸门，露点图会直接发出去。')) return;
+  btn.disabled = true;
+  try {
+    await api('/api/agent/' + encodeURIComponent(cur) + '/image_audit/'
+      + encodeURIComponent(s.target_id),
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: target }) });
+    s.image_audit = target;
+    renderSessions();
+    sessStatus('「' + name + '」图片审核已' + (target ? '开启' : '关闭')
+      + '，立即生效', 'ok');
+  } catch (e) {
+    sessStatus(e.message, 'err');
+    btn.disabled = false;
+  }
+}
+
+// 两个总开关（群聊 / 私聊）各一套。id 后缀 = 接口路径后缀 = 会话 kind。
+const AUDIT_SCOPES = [
+  { key: 'group', id: 'auditGroups', label: '群聊审核', what: '所有群聊' },
+  { key: 'private', id: 'auditPrivate', label: '私聊审核', what: '所有私聊' },
+];
+
+function renderAuditGlobals(g) {
+  g = g || {};
+  AUDIT_SCOPES.forEach(sc => {
+    const btn = $(sc.id);
+    if (!btn) return;
+    const on = g[sc.key] === true;
+    btn.className = 'toggle' + (on ? ' on' : '');
+    btn.textContent = sc.label + '·' + (on ? '开' : '关');
+  });
+}
+
+async function toggleAuditGlobal(sc) {
+  const btn = $(sc.id);
+  const target = !btn.className.includes(' on');   // 当前状态取反
+  btn.disabled = true;
+  try {
+    await api('/api/agent/' + encodeURIComponent(cur) + '/image_audit_'
+      + (sc.key === 'group' ? 'groups' : 'private'),
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: target }) });
+    btn.className = 'toggle' + (target ? ' on' : '');
+    btn.textContent = sc.label + '·' + (target ? '开' : '关');
+    btn.disabled = false;
+    sessStatus(sc.what + '图片审核已' + (target ? '开启' : '关闭')
+      + '，立即生效', 'ok');
+    await loadSessions();
+  } catch (e) {
+    sessStatus(e.message, 'err');
+    btn.disabled = false;
+  }
+}
+
 function addImageFmtButton(s, row) {
   const fm = document.createElement('button');
   fm.className = 'ghost';
@@ -1480,6 +1569,7 @@ $('sessReload').addEventListener('click', loadSessions);
 $('imgGenAll').addEventListener('click', toggleImageGenAll);
 $('naiAll').addEventListener('click', toggleNaiAll);
 $('imgFmtAll').addEventListener('click', toggleImageFmtAll);
+AUDIT_SCOPES.forEach(sc => $(sc.id).addEventListener('click', () => toggleAuditGlobal(sc)));
 $('privAll').addEventListener('click', togglePrivateAll);
 $('privWlOn').addEventListener('click', togglePrivateWlOn);
 $('privAdd').addEventListener('click', () => privEdit('add'));

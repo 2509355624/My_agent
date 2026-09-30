@@ -279,6 +279,61 @@ def image_send_format(agent_id, target, target_id):
     return IMAGE_SEND_FORMAT_DEFAULT
 
 
+def image_audit_enabled(agent_id, target, target_id):
+    """这个 QQ 会话发图前要不要过一道 NSFW 审核（app/image_audit.py）。
+
+    settings.json 三层取值（热生效，不用重启）：
+    - image_audit_overrides[会话号]：单会话覆盖（管理页行里的「审核」按钮）；
+    - **按会话类型分的两个总开关**：群聊看 `image_audit_groups`、
+      私聊看 `image_audit_private`；
+    - 都没有时回落 **False** —— 默认全关，跟加这个功能之前的行为一致。
+
+    **总开关按群/私聊分开**（2026-10-01 用户要求）：只给群开、私聊不开（或反过来）
+    是常见需求，合成一个的话每次都得再去按会话类型逐个点，很麻烦。
+
+    群和私聊**共用同一张覆盖表**（键就是群号 / 对方 QQ 号），跟
+    image_send_format 同口径，理由也一样：审核拦的是「这张图能不能给对面看」，
+    私聊里对面一样有这个问题。两种号同出一个号池、理论上会撞号，但一个 agent
+    的会话只有几十个，撞上的概率可以忽略。
+
+    **要问「两个总开关现在各是什么」用 `image_audit_globals()`**，
+    别拿 target=None 来问——那个签名是「按会话查生效值」，没有会话就没有答案。
+    """
+    s = load_settings(agent_id)
+    overrides = s.get("image_audit_overrides")
+    if isinstance(overrides, dict):
+        v = overrides.get(str(target_id))
+        if isinstance(v, bool):
+            return v
+    return _audit_flag(s, target)
+
+
+# 审核总开关的两个作用域。值 = settings.json 里 `image_audit_<后缀>` 的后缀，
+# 也等于会话的 kind（群聊 "group" / 私聊 "private"），一处定义别处引用。
+IMAGE_AUDIT_SCOPES = ("group", "private")
+
+# scope → settings.json 的键名。键名用复数（groups / private），因为一个是
+# 「所有群」一个是「所有私聊」，别和会话 kind 的单数混淆。
+_AUDIT_KEYS = {"group": "image_audit_groups", "private": "image_audit_private"}
+
+
+def _audit_flag(settings, scope):
+    """读一个总开关。**只认真正的布尔**——`bool()` 会把字符串 "yes" 当 True，
+    手改坏了 settings.json 就会变成「以为关着其实开着」。"""
+    v = settings.get(_AUDIT_KEYS[scope])
+    return v if isinstance(v, bool) else False
+
+
+def image_audit_globals(agent_id):
+    """管理页顶部两个总开关的当前值，返回 {"group": bool, "private": bool}。
+
+    跟 image_send_format 那边的 `target=None` 写法不同：那个只有一个总开关，
+    塞进同一个签名里没问题；这里有两个，塞不下，所以单开一个函数。
+    """
+    s = load_settings(agent_id)
+    return {sc: _audit_flag(s, sc) for sc in IMAGE_AUDIT_SCOPES}
+
+
 # 主动发言冷却的合法范围（秒）。0 = 不限频；上限防手滑输成天文数字。
 INTERJECT_COOLDOWN_MIN = 0
 INTERJECT_COOLDOWN_MAX = 3600

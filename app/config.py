@@ -212,6 +212,12 @@ VISION_TIMEOUT = float(os.getenv("VISION_TIMEOUT", "120"))
 # 是 11MB 字符串——既慢又贵，还可能撞服务端请求体上限
 VISION_MAX_EDGE = int(os.getenv("VISION_MAX_EDGE", "1024"))
 
+# 生图审核（app/image_audit.py）单张的识图超时。**故意比 VISION_TIMEOUT 短**：
+# 识图预处理卡住只是让这轮对话慢，而审核卡住是**挡在发图这一步前面**，
+# 用户在群里干等。实测正常 1.3~2.1 秒返回，30 秒足够宽松；超时就 fail-open
+# 放行（见那个模块的注释），所以调短不会丢功能，只会少拦几张。
+IMAGE_AUDIT_TIMEOUT = float(os.getenv("IMAGE_AUDIT_TIMEOUT", "30"))
+
 # ─── Web 搜索（豆包搜索）─────────────────────────────
 # 豆包搜索（原 联网搜索/融合信息搜索）专用 API Key，在火山「联网搜索控制台」创建：
 # https://console.volcengine.com/search-infinity/api-key?tab=post_paid

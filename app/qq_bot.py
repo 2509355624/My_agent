@@ -958,14 +958,26 @@ class SessionRunner:
 
         # 一轮里的多张图用同一个格式，别每张都去读一遍 settings（热路径）
         fmt = image_send_format(QQ_AGENT_ID, self.target, self.target_id)
+        from app import image_audit
+        blocked = 0
         for name in images:
             try:
-                qq_api.send_image(self.target, self.target_id,
-                                  image_out.prepare_for_send(name, fmt))
+                path = image_out.prepare_for_send(name, fmt)
+                # 审核闸门：跟 image_jobs 那两个出口共用同一个函数。
+                # 审的是 prepare_for_send 的产物，也就是真正要发出去的那份字节。
+                if not image_audit.allow_send(path, QQ_AGENT_ID,
+                                              self.target, self.target_id):
+                    blocked += 1
+                    continue
+                qq_api.send_image(self.target, self.target_id, path)
                 spoke = True
             except Exception as exc:
                 if not _note_private_send_failure(self.target, self.target_id, exc):
                     log.exception("回发图片失败 %s", self.session_key)
+        # 被拦的图也算「开过口」：审核模块已经回了一句提示到群里，
+        # 冷却得重新计时，不然刚拦完就接着接话。
+        if blocked:
+            spoke = True
 
         # 只要它真的开了口，两件事跟着来（只对群聊）：
         # 1) 冷却重新计时——30 秒管的是这张嘴，被 @ 的回复也算说话，否则

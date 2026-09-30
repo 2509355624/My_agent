@@ -682,6 +682,10 @@ def get_agent_sessions(agent_id):
             fo = fmt_ov.get(str(item["target_id"]))
             item["image_send_format"] = (
                 fo if fo in agent_store.IMAGE_SEND_FORMATS else None)
+            # NSFW 审核开关：**给的是生效值**（不是覆盖值）——按钮就一个「开/关」，
+            # 管理员想知道的是「这个群到底审不审」，不是「它有没有单独设过」。
+            item["image_audit"] = agent_store.image_audit_enabled(
+                aid, item["kind"], item["target_id"])
             # NAI 白名单：群行在上面 group 分支里算，这里补私聊行（私聊看 nai_private）。
             if item["kind"] == "private":
                 item["nai"] = item["target_id"] in nai_privates
@@ -705,6 +709,10 @@ def get_agent_sessions(agent_id):
                     # 全局发图格式（群覆盖之外的总开关）。target=None 走的就是全局那层。
                     "image_send_format":
                         agent_store.image_send_format(aid, None, None),
+                    # NSFW 审核的两个总开关（群聊 / 私聊分开，默认都关）。
+                    # 单会话覆盖见每行的 image_audit。
+                    "image_audit_globals":
+                        agent_store.image_audit_globals(aid),
                     "private_enable": priv_on,
                     "private_whitelist": priv_wl,
                     "private_whitelist_on":
@@ -923,6 +931,77 @@ def set_agent_image_send_format_group(agent_id, group_id):
         return jsonify({"error": "写入 settings.json 失败"}), 500
     return jsonify({"ok": True, "agent": aid, "group": str(group_id),
                     "image_send_format": fmt})
+
+
+def _set_audit_global(agent_id, scope):
+    """两个总开关共用的实现（scope = "group" / "private"）。"""
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body.get("enabled"), bool):
+        return jsonify({"error": "需要布尔字段 enabled"}), 400
+
+    settings = agent_store.load_settings(aid)
+    settings["image_audit_" + ("groups" if scope == "group" else "private")] = \
+        body["enabled"]
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "scope": scope,
+                    "image_audit": body["enabled"]})
+
+
+@app.route("/api/agent/<agent_id>/image_audit_groups", methods=["PUT"])
+def set_agent_image_audit_groups(agent_id):
+    """设**所有群聊**的 NSFW 审核总开关。热生效。
+
+    settings.json 的 image_audit_groups 字段：缺省 = False（默认全关）。
+    开了之后，**所有群**生图发出去之前都会先让识图模型判一次「是否性器官裸露 /
+    明确性行为」，判定违规就不发并回一句提示；识图失败一律放行（fail-open，
+    见 app/image_audit.py）。单个群想单独不同，用行里的「审核」开关覆盖。
+    """
+    return _set_audit_global(agent_id, "group")
+
+
+@app.route("/api/agent/<agent_id>/image_audit_private", methods=["PUT"])
+def set_agent_image_audit_private(agent_id):
+    """设**所有私聊**的 NSFW 审核总开关。热生效。
+
+    跟 image_audit_groups 是**两个独立的开关**——只给群开、私聊不开（或反过来）
+    是常见需求，合成一个的话每次都得再按会话类型逐个点。存
+    settings.json 的 image_audit_private 字段，缺省 = False。
+    """
+    return _set_audit_global(agent_id, "private")
+
+
+@app.route("/api/agent/<agent_id>/image_audit/<group_id>", methods=["PUT"])
+def set_agent_image_audit_group(agent_id, group_id):
+    """设单会话的审核覆盖（群号 / 对方 QQ 号都走这里）。enabled=null 删覆盖。
+
+    存 settings.json 的 image_audit_overrides（与 image_send_format_overrides
+    同型：键缺 = 跟全局）。群和私聊共用一张表，见 agents.image_audit_enabled。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if "enabled" not in body:
+        return jsonify({"error": "需要字段 enabled（true / false，或 null）"}), 400
+    v = body["enabled"]
+    if v is not None and not isinstance(v, bool):
+        return jsonify({"error": "enabled 要么是 true / false，"
+                                 "要么是 null（删除覆盖，跟全局）"}), 400
+
+    if not _put_override(aid, group_id, "image_audit", v):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "group": str(group_id),
+                    "image_audit": v})
 
 
 @app.route("/api/agent/<agent_id>/private_enable", methods=["PUT"])
