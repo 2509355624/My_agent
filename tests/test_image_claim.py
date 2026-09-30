@@ -162,6 +162,45 @@ class NoFalsePositiveTest(_GuardRunner):
         self.assertEqual(fake.calls, 1)
 
 
+class PaotuSlangGuardTest(_GuardRunner):
+    """群 1041079621（ai绘图交流）的真实翻车现场，端到端钉住。
+
+        18:24:19  233：跑呀 nai
+        18:24:23  胡桃桃：跑完了 两张都在群里躺着呢      ← 日志 工具=-
+    """
+
+    def test_the_real_offending_line_is_blocked(self):
+        fake = self._patch_llm([
+            "跑完了 两张都在群里躺着呢",
+            '[[TOOL:generate_image]]{"prompt": "hatsune miku"}[[/TOOL]]',
+            "重新跑了 这次是初音",
+        ])
+        events = self._collect(user_input="跑呀 nai")
+
+        texts = self._texts(events)
+        self.assertNotIn("跑完了 两张都在群里躺着呢", texts)
+        self.assertIn("重新跑了 这次是初音", texts)
+        self.assertEqual([e["name"] for e in events if e["type"] == "tool_call"],
+                         ["generate_image"])
+        self.assertEqual(fake.calls, 3)
+        self.assertEqual(len(self._nudges()), 1)
+
+    def test_the_earlier_offending_line_is_blocked(self):
+        self._patch_llm(["好嘞 那就闷头跑 不回头了", "画上了"])
+        events = self._collect(user_input="跑就对了，不要怀疑")
+        self.assertNotIn("好嘞 那就闷头跑 不回头了", self._texts(events))
+        self.assertEqual(len(self._nudges()), 1)
+
+    def test_an_offer_is_not_treated_as_a_promise(self):
+        """征求同意不该被退回重来——实测误伤过一次。"""
+        fake = self._patch_llm(["我用默认通道给你画一个？"])
+        events = self._collect(user_input="nai 群没开吧")
+        self.assertEqual([e["type"] for e in events], ["user", "assistant"])
+        self.assertEqual(self._texts(events), ["我用默认通道给你画一个？"])
+        self.assertEqual(fake.calls, 1)
+        self.assertEqual(self._nudges(), [])
+
+
 class DetectorTest(unittest.TestCase):
     """判据本身：只认「正在进行 / 已完成」的承诺，明确拒收一律不算。"""
 
@@ -179,6 +218,15 @@ class DetectorTest(unittest.TestCase):
                   "排队跑"):
             self.assertTrue(agent._looks_like_image_promise(s), s)
 
+    def test_matches_colloquial_running_promises(self):
+        """口语版「我去跑了」（2026-09-30 补，上游词表漏过）。
+
+        「好嘞 那就闷头跑 不回头了」是群 1041079621 的真实台词——它没有
+        「跑着了」那种进行态后缀，上游的跑系词表一个都不命中。
+        """
+        for s in ("好嘞 那就闷头跑 不回头了", "再跑一张", "给你跑一张"):
+            self.assertTrue(agent._looks_like_image_promise(s), s)
+
     def test_matches_completion_claims(self):
         """断言「图已经存在 / 已经发出去」——当晚三条假回执原样钉住。"""
         for s in ("爱丽丝，这张也出了 瞅瞅",
@@ -190,10 +238,37 @@ class DetectorTest(unittest.TestCase):
                   "在的 NAI那张跑完了"):
             self.assertTrue(agent._looks_like_image_promise(s), s)
 
+    def test_matches_image_is_in_the_group_variants(self):
+        """「图已经在群里」的各种变体（2026-09-30 补）。
+
+        「两张都在群里躺着呢」是群 1041079621 的翻车原句——用户说「跑呀 nai」，
+        模型回这句却**整轮没调 generate_image**。上游的「发群里」认不出
+        「发**到**群里」「图在群里」「躺在群里」这些说法，实测漏 5 条。
+        """
+        for s in ("跑完了 两张都在群里躺着呢", "图在群里呢 自己翻",
+                  "那张躺在群里了", "已经发到群里了", "图已经出来了",
+                  "生成好了 稍等", "生成完了", "已经生成好了"):
+            self.assertTrue(agent._looks_like_image_promise(s), s)
+
     def test_refusals_do_not_match(self):
         for s in ("画不了", "本群关了 画不了", "不画", "画不出", "没法画",
                   "别画了", "这个不给画", "跑不了 本机 ComfyUI 离线",
-                  "这张不跑了", "不发了", "别发了"):
+                  "这张不跑了", "不发了", "别发了", "不再跑一张了"):
+            self.assertFalse(agent._looks_like_image_promise(s), s)
+
+    def test_offers_and_questions_do_not_match(self):
+        """商量 ≠ 承诺（2026-09-30 补）。
+
+        实测误伤：`'奶龙这头像 nai 群没开，我用默认通道给你画一个？'` 命中了
+        词表里的「给你画」，被当成空头承诺退回重来——那其实是在**征求同意**。
+        判据顺序固定为 拒收 → 提问 → 承诺，提问必须排在承诺前面。
+        """
+        for s in ("我用默认通道给你画一个？",
+                  "要不要我给你画一张",
+                  "用不用我跑一张 nai",
+                  "需要我画吗？",
+                  "要我帮你跑一个吗？",
+                  "给你画一个好不好？"):
             self.assertFalse(agent._looks_like_image_promise(s), s)
 
     def test_honest_failure_report_does_not_match(self):
