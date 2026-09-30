@@ -108,7 +108,7 @@ except ImportError:  # 非 Windows 上退化成无锁（本项目不会走到这
     msvcrt = None
 
 from app import notify
-from app.config import (BASE_DIR, NOTIFY_QRCODE_PATH,
+from app.config import (BASE_DIR, NOTIFY_QRCODE_PATH, WEBUI_PORT,
                         WATCHDOG_COMFY_ENABLED,
                         WATCHDOG_SILENCE_COOLDOWN, WATCHDOG_SILENCE_MAX_GAP,
                         WATCHDOG_SILENCE_RESTART, WATCHDOG_SILENCE_SECONDS)
@@ -132,7 +132,7 @@ RECOVER_INTERVAL = 3.0     # 重启后复查间隔（秒）—— 要小，扫�
 RECOVER_WAIT = 180.0       # 重启后最多等多久；超时算「恢复失败」
 PROBE_TIMEOUT_FAST = 3.0   # 重启窗口内的探测超时，短一点免得拖慢判定
 
-NAPCAT_WEBUI_PORT = 6099   # NapCat WebUI：它起来了就说明进程活着（登录前也监听）
+NAPCAT_WEBUI_PORT = WEBUI_PORT   # 协议端 WebUI：它起来了就说明进程活着（登录前也监听）
 QR_GRACE = 20.0            # WebUI 起来后再等这么久还没登录 → 判定要扫码
 
 MAX_RESTART_FAILS = 3      # 连续几次重启都救不活 → 放弃自动重启
@@ -155,6 +155,13 @@ STATUS_STALE = 120.0
 
 _ALL_BAT = os.path.join(BASE_DIR, "一键启动全部.bat")
 _LOCK_PATH = os.path.join(BASE_DIR, "state", "watchdog.lock")
+
+# ── 协议端（2026-09-30 起可换 NapCat / SnowLuma）──────
+# `一键启动全部.bat` 认第 3 个参数（snowluma）；不传就是 NapCat。
+# 看门狗重启时必须把它透传下去，否则会把协议端拉错 —— 详见 `_trigger_restart`。
+#   判断依据是 WebUI 端口：6099 = NapCat，其他（5099）= SnowLuma。
+# 用端口反推而不是再加一个 env：只会有一个真相源，不会两边配不一致。
+_PROTOCOL_ARG = "" if WEBUI_PORT == 6099 else "snowluma"
 
 # ── ComfyUI 分支参数（2026-09-30 加）──────────────────
 # 跟 NapCat 同一套时序：30 秒探一次、连续 3 次算死（≈90 秒）。用户 09-30 拍板沿用。
@@ -414,13 +421,21 @@ def _silent_seconds(now):
 
 
 def _trigger_restart():
-    """拉起「一键启动全部 force auto」，隐藏窗口、不阻塞。返回是否成功发起。"""
+    """拉起「一键启动全部 force auto」，隐藏窗口、不阻塞。返回是否成功发起。
+
+    ⚠️ 第三个参数（协议端）必须跟着 `_PROTOCOL` 走：`一键启动全部.bat` 默认起
+    NapCat，如果这里不传，那么在跑 SnowLuma 的时候看门狗一重启就会把 NapCat
+    拉起来 —— 两个协议端抢 3000/3001 端口，比不重启更糟。
+    """
     if not os.path.exists(_ALL_BAT):
         log.error("找不到 %s，无法重启", _ALL_BAT)
         return False
+    args = ["cmd", "/c", _ALL_BAT, "force", "auto"]
+    if _PROTOCOL_ARG:
+        args.append(_PROTOCOL_ARG)
     try:
         subprocess.Popen(
-            ["cmd", "/c", _ALL_BAT, "force", "auto"],
+            args,
             creationflags=subprocess.CREATE_NO_WINDOW,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,

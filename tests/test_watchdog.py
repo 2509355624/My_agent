@@ -44,6 +44,23 @@ class ProbeStateTest(TestCase):
         self.webui.return_value = False
         self.assertEqual(wd._probe()[0], "dead")
 
+    def test_webui_port_is_configurable(self):
+        """协议端可换：NapCat WebUI=6099，SnowLuma WebUI=5099。
+
+        `_probe` 判「进程活着吗」就是拿这个口探的，所以它必须跟着协议端走，
+        不能写死 6099 —— 否则换成 SnowLuma 后每次探活都会当成「进程死了」。
+        """
+        from app import config as cfg
+        self.addCleanup(setattr, wd, "NAPCAT_WEBUI_PORT", wd.NAPCAT_WEBUI_PORT)
+        wd.NAPCAT_WEBUI_PORT = 5099
+        self.alive.side_effect = OSError("refused")
+        self.webui.return_value = True
+        wd._probe()
+        self.assertEqual(self.webui.call_args[0][0], 5099)
+        # 默认值必须还是 NapCat 的 6099（现有部署不受影响）
+        self.assertEqual(cfg.WEBUI_PORT, int(
+            __import__("os").getenv("QQ_WEBUI_PORT", "6099")))
+
 
 class WatchdogCycleTest(TestCase):
 
@@ -402,6 +419,44 @@ class SilentSecondsTest(TestCase):
     def test_garbage_json(self):
         self._write("{not json")
         self.assertIsNone(self._call(1000.0))
+
+
+class RestartProtocolTest(TestCase):
+    """看门狗重启必须把「协议端」透传下去。
+
+    一键启动全部.bat 的第 3 个参数决定起 NapCat 还是 SnowLuma，不传就是 NapCat。
+    如果 `_trigger_restart` 忘了透传，那么在跑 SnowLuma 时一旦看门狗触发重启，
+    就会把 NapCat 也拉起来 —— 两个协议端抢 3000/3001，比不重启更糟。
+    """
+
+    def setUp(self):
+        p = mock.patch.object(wd, "subprocess")
+        self.sp = p.start()
+        self.addCleanup(p.stop)
+        self.addCleanup(setattr, wd, "_PROTOCOL_ARG", wd._PROTOCOL_ARG)
+
+    def _args(self):
+        wd._trigger_restart()
+        return wd.subprocess.Popen.call_args[0][0]
+
+    def test_napcat_passes_no_protocol_arg(self):
+        """默认（6099）不传协议端参数 —— 保持原来「不传就是 NapCat」的行为。"""
+        wd._PROTOCOL_ARG = ""
+        args = self._args()
+        self.assertEqual(args[:4], ["cmd", "/c", wd._ALL_BAT, "force"])
+        self.assertEqual(args[4], "auto")
+        self.assertEqual(len(args), 5)
+
+    def test_snowluma_is_passed_through(self):
+        """跑 SnowLuma 时重启必须带 snowluma，否则会拉错协议端。"""
+        wd._PROTOCOL_ARG = "snowluma"
+        args = self._args()
+        self.assertEqual(args[-1], "snowluma")
+
+    def test_protocol_follows_webui_port(self):
+        """协议端由 WebUI 端口反推：只有一个真相源，不会两边配不一致。"""
+        self.assertEqual("" if wd.WEBUI_PORT == 6099 else "snowluma",
+                         wd._PROTOCOL_ARG)
 
 
 class AwaitOutcomeTest(TestCase):

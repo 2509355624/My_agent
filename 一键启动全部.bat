@@ -4,7 +4,30 @@ title LAUNCH-ALL
 
 set "WEB_BAT=%~dp0一键启动.bat"
 set "NAPCAT_BAT=D:\AI\NapCat\启动NapCat.bat"
+set "SNOWLUMA_BAT=%~dp0启动SnowLuma.bat"
 set "BOT_BAT=%~dp0启动QQ机器人.bat"
+
+rem ---------------------------------------------------------------------------
+rem  协议端二选一（NapCat / SnowLuma）。两者 OneBot 端口完全一样（3000 HTTP /
+rem  3001 WS），只有 WebUI 口不同（6099 / 5099），所以切换只影响：启动哪个 bat、
+rem  探活哪个口、以及怎么出扫码窗口。
+rem  [!!] 改这里之后，.env 里的 QQ_WEBUI_PORT 要跟着改 —— 看门狗靠它区分
+rem       「进程没起来」和「起来了但没登录」，探错口就永远判成「进程死了」。
+rem  传参：第 3 个参数 snowluma 可覆盖；环境变量 QQ_PROTOCOL=snowluma 亦可。
+rem ---------------------------------------------------------------------------
+set "PROTOCOL=napcat"
+if /i "%~3"=="snowluma" set "PROTOCOL=snowluma"
+if /i "%QQ_PROTOCOL%"=="snowluma" set "PROTOCOL=snowluma"
+
+if /i "%PROTOCOL%"=="snowluma" (
+    set "PROTO_BAT=%SNOWLUMA_BAT%"
+    set "PROTO_PORT=5099"
+    set "PROTO_NAME=SnowLuma"
+) else (
+    set "PROTO_BAT=%NAPCAT_BAT%"
+    set "PROTO_PORT=6099"
+    set "PROTO_NAME=NapCat"
+)
 
 set "FORCE_RESTART="
 if /i "%~1"=="force" set "FORCE_RESTART=1"
@@ -14,7 +37,7 @@ set "AUTO_RUN="
 if /i "%~2"=="auto" set "AUTO_RUN=1"
 
 echo ==================================================
-echo   全部启动 : Agent 网页 + NapCat + QQ 适配层
+echo   全部启动 : Agent 网页 + %PROTO_NAME% + QQ 适配层
 echo ==================================================
 echo.
 echo   【注意】会强制结束 QQ 客户端
@@ -26,8 +49,8 @@ if not exist "%WEB_BAT%" (
     if not defined AUTO_RUN pause
     exit /b 1
 )
-if not exist "%NAPCAT_BAT%" (
-    echo [ERROR] 找不到 "%NAPCAT_BAT%"
+if not exist "%PROTO_BAT%" (
+    echo [ERROR] 找不到 "%PROTO_BAT%"
     if not defined AUTO_RUN pause
     exit /b 1
 )
@@ -37,9 +60,9 @@ if not exist "%BOT_BAT%" (
     exit /b 1
 )
 
-rem NapCat 已在跑说明小号已登录，重启要重新扫码 -> 跳过它，只重启网页端和适配层
-set "NAPCAT_RUNNING="
-for /f %%a in ('netstat -ano 2^>nul ^| findstr ":6099 " ^| findstr "LISTENING"') do set "NAPCAT_RUNNING=1"
+rem 协议端已在跑说明小号已登录，重启要重新扫码 -> 跳过它，只重启网页端和适配层
+set "PROTO_RUNNING="
+for /f %%a in ('netstat -ano 2^>nul ^| findstr ":%PROTO_PORT% " ^| findstr "LISTENING"') do set "PROTO_RUNNING=1"
 
 echo [1/2] 清理旧进程
 for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":5174 " ^| findstr "LISTENING"') do (
@@ -56,8 +79,8 @@ if not errorlevel 1 (
 )
 
 if defined FORCE_RESTART (
-    echo       [force] 强制重启 NapCat（忽略 6099 监听状态）
-    for %%p in (6099 3000 3001) do (
+    echo       [force] 强制重启 %PROTO_NAME%（忽略 %PROTO_PORT% 监听状态）
+    for %%p in (%PROTO_PORT% 3000 3001) do (
         for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":%%p " ^| findstr "LISTENING"') do (
             echo       结束端口 %%p 的进程 PID %%a
             taskkill /PID %%a /F >nul 2>&1
@@ -67,10 +90,10 @@ if defined FORCE_RESTART (
     taskkill /FI "WINDOWTITLE eq NapCat - QQ 协议端" /T /F >nul 2>&1
     taskkill /IM QQ.exe /F >nul 2>&1
     taskkill /IM NapCatWinBootMain.exe /F >nul 2>&1
-) else if defined NAPCAT_RUNNING (
-    echo       NapCat 已在运行，跳过 - 重启它需要重新扫码
+) else if defined PROTO_RUNNING (
+    echo       %PROTO_NAME% 已在运行，跳过 - 重启它需要重新扫码
 ) else (
-    for %%p in (6099 3000 3001) do (
+    for %%p in (%PROTO_PORT% 3000 3001) do (
         for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":%%p " ^| findstr "LISTENING"') do (
             echo       结束端口 %%p 的进程 PID %%a
             taskkill /PID %%a /F >nul 2>&1
@@ -89,19 +112,25 @@ echo [2/2] 启动
 start "AGENT-WEB" cmd /k "%WEB_BAT%"
 echo       Agent Web        网页端  http://localhost:5174
 if defined FORCE_RESTART (
-    start "NapCat" cmd /k "%NAPCAT_BAT%"
-    echo       NapCat           QQ 协议端 [force]
+    start "%PROTO_NAME%" cmd /k "%PROTO_BAT%"
+    echo       %PROTO_NAME%           QQ 协议端 [force]
     ping -n 4 127.0.0.1 >nul
-) else if defined NAPCAT_RUNNING (
-    echo       NapCat           已在运行，本次不动
+) else if defined PROTO_RUNNING (
+    echo       %PROTO_NAME%           已在运行，本次不动
 ) else (
-    start "NapCat" cmd /k "%NAPCAT_BAT%"
-    echo       NapCat           QQ 协议端
+    start "%PROTO_NAME%" cmd /k "%PROTO_BAT%"
+    echo       %PROTO_NAME%           QQ 协议端
     ping -n 4 127.0.0.1 >nul
 )
 start "QQBOT-ADAPTER" cmd /k "%BOT_BAT%"
 ping -n 3 127.0.0.1 >nul
-start "扫码窗口" cmd /k "D:\AI\confyui_env\Scripts\python.exe" "%~dp0napcat_qr.py" --tries 12 --wait 120
+if /i "%PROTOCOL%"=="snowluma" (
+    rem SnowLuma 不落盘 qrcode.png，码在 WebUI(5099) 里画 —— 开个页面代替扫码窗口
+    rem 首次要用控制台的一次性临时密码登录，之后浏览器会记住
+    start "" "http://127.0.0.1:5099"
+) else (
+    start "扫码窗口" cmd /k "D:\AI\confyui_env\Scripts\python.exe" "%~dp0napcat_qr.py" --tries 12 --wait 120
+)
 echo       QQBOT-ADAPTER    QQ 适配层
 echo.
 
@@ -116,8 +145,13 @@ if not errorlevel 1 (
 )
 echo.
 echo   需要扫码登录时:
+if /i "%PROTOCOL%"=="snowluma" (
+echo   浏览器打开  http://127.0.0.1:5099
+echo   首次用控制台打印的一次性临时密码登录，然后在里面配 OneBot + 扫码
+) else (
 echo   浏览器打开  http://127.0.0.1:6099/webui
 echo   用手机 QQ 扫码，建议用小号
+)
 echo   登录成功后适配层会自动连上，无需重启任何东西
 echo ==================================================
 echo.

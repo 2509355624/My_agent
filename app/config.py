@@ -426,6 +426,14 @@ QQ_HTTP_URL = os.getenv("QQ_HTTP_URL", "http://127.0.0.1:3000").rstrip("/")
 # OneBot 访问令牌（NapCat 网络配置里设的那个）。空表示不鉴权，仅限本机使用
 QQ_TOKEN = os.getenv("QQ_TOKEN", "")
 
+# 协议端的 **WebUI 端口**。NapCat = 6099，SnowLuma = 5099。
+#
+# 这个口只给看门狗用：:3000 只在登录成功后才监听，光看它分不出「进程没起来」和
+# 「起来了但登录态失效」。WebUI 口**登录前就监听**，正好把两者分开。
+# 2026-09-30 起协议端可换（SnowLuma 与 NapCat 的 OneBot 端口 3000/3001 完全一致，
+# 只有 WebUI 口不同），所以这里改成可配。默认保持 6099，不影响现有部署。
+WEBUI_PORT = int(os.getenv("QQ_WEBUI_PORT", "6099"))
+
 # 用哪个 agent 的人设与工具白名单
 QQ_AGENT_ID = os.getenv("QQ_AGENT_ID", "qq")
 
