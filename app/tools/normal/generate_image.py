@@ -31,10 +31,12 @@ I2I_DEFAULT_SKILL = "qwen_image_v1"
 # 没点名 skill 时的文生图默认渠道。
 #
 # 2026-09-30 起："anima" 就是**唯一**的动漫渠道。工作流直接取自用户在 ComfyUI
-# 里调好的 `anime2`：**双底模两段采样**——一段 `UNETLoader(5, Ani1.1)` 经两个
-# LoRA（kibro 1.0 / baka skin 0.5）后 10 步 `euler` cfg5 denoise 1.0 建构图，
-# 二段换 `UNETLoader(20, RealSkin)` 裸底模 5 步 `euler` cfg5 denoise 0.25 精修
-# 皮肤细节；768×1024，实测 ~11s。比旧的单段 30 步 ~20s 更快且细节更稳。
+# 里调好的 `anime2`：**两段采样**——一段 `UNETLoader(5, Ani1.1)` 经两个 LoRA
+# （kibro 1.0 / baka skin 0.5）后 `euler`/simple 10 步 cfg3 denoise 1.0 建构图，
+# 二段走 `UNETLoader(20)` 的裸底模 `euler`/simple 10 步 cfg7 denoise 0.25 精修
+# 细节；768×1024。两个 UNETLoader 装的是**同一个文件**（同文件不会重复吃显存，
+# `model_management` 按 model 对象缓存），所以实际是单底模两段采样。
+# 步数/CFG 是用户随手调的旋钮，随时会变——别把这里的数字当契约。
 # 单独的那个 `anima_2` 目录对上层**不再是可选项**（本机目录还在，但模型不该知道它）。
 # 历史：中间有过「单底模单段 anima + 双底模两段 anima_2」两条并存，
 # 以及更早「anima 目录不存在、只能临时指 image_gen_v1」的阶段，都已结束。
@@ -429,7 +431,7 @@ tool = {
     "name": "generate_image",
     "description": "调用 ComfyUI 生成图片。"
                   "【默认 Skill】文生图默认 anima（Anima 2B 动漫模型，一次一张，"
-                  "768×1024，双底模两段采样），不传 skill 就是它—— prompt 只写一段画面描述，**不要用 --- 分隔**。"
+                  "768×1024，两段采样），不传 skill 就是它—— prompt 只写一段画面描述，**不要用 --- 分隔**。"
                   "【换渠道】仅当用户点名或明确需要时才换：要一次出多张（多个提示词用 --- 分隔）"
                   "或要用固定角色底模时传 skill=image_gen_v1（**= SD / SDXL 渠道**，"
                   "用户说「用 sd / sd 生图 / 用那个 sd 模型」指的就是它；单段直出 832×1216，快）。"
@@ -472,7 +474,7 @@ tool = {
         QQ_AGENT_ID:
             "调用 ComfyUI 生成图片。"
             "【默认 Skill】文生图默认 anima（Anima 2B 动漫模型，一次一张，"
-            "768×1024，双底模两段采样），不传 skill 就是它 —— prompt 只写一段画面描述，**不要用 --- 分隔**。"
+            "768×1024，两段采样），不传 skill 就是它 —— prompt 只写一段画面描述，**不要用 --- 分隔**。"
             "【换渠道】仅当对方点名或明确需要时才换："
             "要一次出多张时传 skill=image_gen_v1（**= SD / SDXL 渠道**，"
             "对方说「用 sd / sd 生图 / 用那个 sd 模型」指的就是它；多个提示词用 --- 分隔；"
