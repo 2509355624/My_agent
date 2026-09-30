@@ -24,10 +24,11 @@ rem      2026-09-30 就因为这一条白跑了半天 NapCat。
 for %%a in (%~1 %~2 %~3) do if /i "%%~a"=="snowluma" set "PROTOCOL=snowluma"
 if /i "%QQ_PROTOCOL%"=="snowluma" set "PROTOCOL=snowluma"
 set "_ENV_PORT="
+rem [!!] 读 .env **必须**用 findstr，不能用 for /f + usebackq：本项目的 .env 是
+rem      **纯 LF**（0 个 CRLF），cmd 的 for /f 会把整篇当一行，%%a 永远匹配不上
+rem      —— 09-30 实测 for/f 得到空、findstr 得到 5099。别改回 for /f。
 if exist "%~dp0.env" (
-    for /f "usebackq tokens=1,* delims==" %%a in ("%~dp0.env") do (
-        if /i "%%~a"=="QQ_WEBUI_PORT" set "_ENV_PORT=%%~b"
-    )
+    for /f "tokens=1,* delims==" %%a in ('findstr /i /b "QQ_WEBUI_PORT=" "%~dp0.env"') do set "_ENV_PORT=%%~b"
 )
 if "%_ENV_PORT%"=="5099" set "PROTOCOL=snowluma"
 
