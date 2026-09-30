@@ -300,13 +300,20 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
     def test_default_call_is_still_text2img(self):
         out, wf = self._run(prompt="1girl, solo")
         self.assertIn("已经在画了", out)
+        # 文生图的标志：起点是**空 latent**，而不是「加载一张图再编码」。
+        # 旧版这里断言的是 `assertNotIn("24", wf)`——那时默认渠道还没有
+        # 1.1× 放大器，所以「没有 24」等于「是单段直出」。2026-09-30 全套切动漫后
+        # 默认渠道 anima_soft 里 **25 号节点是 LatentUpscaleBy 放大器**，
+        # 这条断言就作废了：它跟图生图没有半点关系，别再拿它当判据。
         self.assertEqual(wf["9"]["class_type"], "EmptyLatentImage")
-        self.assertNotIn("24", wf)
+        kinds = {node["class_type"] for node in wf.values()}
+        self.assertNotIn("LoadImage", kinds)
+        self.assertNotIn("VAEEncode", kinds)
         self.assertEqual(wf["4"]["inputs"]["text"], "@kibro, 1girl, solo")
 
     def test_source_image_is_refused_whatever_the_skill(self):
         """点了名也一样拒——停用的是「图生图」，不是「某个渠道的图生图」。"""
-        for skill in ("anima", "image_gen_v1", "krea2"):
+        for skill in ("anima_soft", "anima_gloss", "krea2"):
             out, wf = self._run(prompt="x", skill=skill, source_image="1")
             self.assertIn("source_image", out)
             self.assertEqual(wf, {}, skill)
@@ -315,7 +322,9 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
         """真正的痛点在这儿：模型得知道「引用图 = 看得见」而不是「要改图」。"""
         out, _ = self._run(prompt="x", source_image="1")
         self.assertIn("看得见", out)
-        self.assertIn("anima", out)             # 明确给出该走的渠道
+        # 明确给出该走的渠道——用常量而不是字面量，免得换默认渠道时又漏一条
+        from app.tools.normal.generate_image import T2I_DEFAULT_SKILL
+        self.assertIn(T2I_DEFAULT_SKILL, out)
         self.assertIn("反推", out)               # 用户要的正是「反推提示词」
         self.assertIn("别跟对方解释技术原因", out)
 
@@ -334,7 +343,7 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
 class QwenI2ITest(_I2IRunner, unittest.TestCase):
     """qwen 图生图：唯一渠道、按指令改、不吃 denoise。
 
-    走的是「参考图直进文本编码器」那条路，跟已下线的 anima 垫图链
+    走的是「参考图直进文本编码器」那条路，跟已下线的动漫垫图链
     （LoadImage→VAEEncode）完全不同。
     """
 
@@ -344,12 +353,12 @@ class QwenI2ITest(_I2IRunner, unittest.TestCase):
             return self._run(**kw)
 
     def test_source_image_alone_defaults_to_qwen(self):
-        """没点名 skill + 给了源图 → 走 qwen，不是 anima。这是用户要的默认。"""
+        """没点名 skill + 给了源图 → 走 qwen，不是动漫渠道。这是用户要的默认。"""
         out, wf = self._qwen(prompt="把衣服换成红色卫衣", source_image="1")
         self.assertIn("已经在画了", out)
         self.assertIn("233 发的图", out)
         self.assertEqual(wf["20"]["class_type"], "TextEncodeQwenImage21")
-        # qwen 走的是「参考图直进文本编码器」，不是 anima 的 VAEEncode 垫图链
+        # qwen 走的是「参考图直进文本编码器」，不是动漫渠道的 VAEEncode 垫图链
         self.assertEqual(wf["13"]["class_type"], "LoadImage")
         self.assertEqual(wf["13"]["inputs"]["image"], "i2isrc_x.png")
         self.assertNotIn("25", wf)

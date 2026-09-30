@@ -3,11 +3,10 @@ Skill 管理
 加载、列出 Skills
 
 兼容两种 skill 目录结构：
-1. 本地生图 skill（image_gen_v1 风格）：
+1. 本地生图 skill：
    skills/<name>/
        skill.md          # 小写规则
        workflow.json     # 生图工作流
-       character.txt     # 角色底模
 
 2. 标准/脚手架 skill（GitHub 下载风格）：
    skills/<name>/              # 可能多一层同名嵌套
@@ -126,11 +125,14 @@ def load_workflow(path):
 
 def load_skill(skill_name):
     """加载 Skill: 返回
-    {name, workflow, skill_md, character, version, kind, references}
+    {name, workflow, skill_md, version, kind, references}
     - skill_md: 主规范（SKILL.md 优先生成大写）
     - version: VERSION 文件内容（若有）
     - kind: 规范 frontmatter 声明的类型（生图/写作）；未声明时为空串
     - references: references/ 目录下所有 md 原文（若有）
+
+    （曾经还有 `character` = `character.txt` 的角色底模，2026-09-30 随
+    SD 渠道一起下线——全仓已无 `character.txt`，也没有任何调用方再读它。）
     """
     skill_dir = _resolve_skill_dir(skill_name)
     if not skill_dir:
@@ -151,13 +153,6 @@ def load_skill(skill_name):
 
     
 
-    # 角色底模
-    character = ""
-    char_path = os.path.join(skill_dir, "character.txt")
-    if os.path.exists(char_path):
-        with open(char_path, "r", encoding="utf-8") as f:
-            character = f.read().strip()
-
     version = ""
     ver_path = os.path.join(skill_dir, "VERSION")
     if os.path.exists(ver_path):
@@ -169,7 +164,6 @@ def load_skill(skill_name):
         "path": skill_dir,
         "workflow": workflow,
         "skill_md": skill_md,
-        "character": character,
         "version": version,
         "kind": kind,
         "references": references,
@@ -177,11 +171,18 @@ def load_skill(skill_name):
 
 
 def list_skills():
-    """列出所有可用 Skill（保留顶层目录名）"""
+    """列出所有可用 Skill（保留顶层目录名）
+
+    跳过 `_` 开头的目录：那是**归档/暂存**用的（如 `skills/_archive_20260930/`
+    放被替换掉的老生图渠道）。它们不是 skill，不该出现在任何技能列表里。
+    `_build_skill_list` 本来就会因为「没有 skill.md」而跳过它们，但
+    `list_skills()` 是裸目录列举——不挡的话归档目录会漏进管理页和技能计数。
+    """
     if not os.path.isdir(SKILLS_DIR):
         return []
     return [d for d in os.listdir(SKILLS_DIR)
-            if os.path.isdir(os.path.join(SKILLS_DIR, d))]
+            if not d.startswith("_")
+            and os.path.isdir(os.path.join(SKILLS_DIR, d))]
 
 
 # 生图渠道的调度权重（见 image_jobs 的「重渠道优先度」）。

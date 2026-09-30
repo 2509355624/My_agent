@@ -47,7 +47,10 @@ def _build_tool_list(agent_id=None):
         params = tool.get("parameters") or {}
         props = params.get("properties") or {}
         required = set(params.get("required") or [])
-        # 按 agent 藏参数/换描述：比如 QQ 机器人不该知道有「角色底模」这回事
+        # 按 agent 藏参数 / 换描述（通用机制，见 registry.register_tool）。
+        # 目前**没有任何工具在用**——唯一的使用者（generate_image 藏掉
+        # use_character）随角色底模机制在 2026-09-30 一起下线了。机制留着，
+        # 以后要按端差异定制参数时直接用。
         hidden = set((tool.get("hidden_params") or {}).get(agent_id) or ())
         props = {k: v for k, v in props.items() if k not in hidden}
         desc = (tool.get("description_overrides") or {}).get(agent_id) \
@@ -85,17 +88,23 @@ _TOOL_HINTS = [
      "- **说要画图就必须真的调 generate_image**：只在回复里写「画着呢 / 在画了 / "
      "等着收图」而没有工具块，等于没画——群里永远等不到图，比直接说画不了还糟"),
     (("generate_image",),
-     "- 批量生成图片用 --- 分隔多个 prompt，只调用一次 generate_image"),
+     "- 要出多张图就**分多次调用** generate_image（每次给一个不同的 prompt）；"
+     "**不要用 --- 分隔**——本机工作流不会拆它，`---` 会被原样塞进提示词，"
+     "结果只出一张废图"),
     (("generate_image",),
      "- generate_image 的 prompt 参数必须是英文"),
     (("generate_image",),
-     "- 引用图片**默认只看，不改**：anima 系 / image_gen_v1 等**本机渠道不要传 "
+     "- 引用图片**默认只看，不改**：4 个本机动漫渠道**都不要传 "
      "source_image**（它们的图生图已停用）。对方引用一张图时，照它**反推提示词、"
-     "用 anima_realskin 画一张新的**（「看特征 / 复刻 / 参考这个风格 / 照着画一张新的」"
+     "用默认渠道画一张新的**（「看特征 / 复刻 / 参考这个风格 / 照着画一张新的」"
      "都是这条路）。**唯一例外：skill=nai（NovelAI 云端）能做图生图 / 垫图**——"
      "仅限已开通 NAI 的会话，对方明确要改图 / 垫图时传 source_image=1"),
+    (("generate_image",),
+     "- 生图渠道只有 4 个动漫渠道（anima_clear 默认 / anima_soft / anima_gloss / "
+     "anima_curvy），**名字就是画风**。用户没说画风就**不传 skill**；"
+     "**不要自己编渠道名**，也不要把渠道名当技术名词说给对方听"),
     (("write_file",),
-     "- 想创建新 Skill？用 write_file 写入 skill.md / character.txt / workflow.json"),
+     "- 想创建新 Skill？用 write_file 写入 skill.md / workflow.json"),
     (("-",),
      "- 文件操作仅限 skills 目录和 documents 目录"),
     (("file_info", "search_document", "read_document"),
@@ -139,7 +148,7 @@ def _build_tool_hints(agent_id=None):
 
 
 def _build_skill_list(agent_id=None):
-    """构建 Skill 目录（名字 + 类型 + 底模情况 + 一句话简介）
+    """构建 Skill 目录（名字 + 类型 + 一句话简介）
 
     只列该 agent 白名单内的 skill（None = 全部）。
     """
@@ -154,20 +163,15 @@ def _build_skill_list(agent_id=None):
         # 一行简介：跳过 YAML frontmatter（否则首行是 ---，没有信息量）
         first_line = skill_summary(data["skill_md"])
 
-        # 类型 + 底模标注
         # 类型以 skill.md 的 frontmatter `kind:` 声明为准；没声明才按有无
         # workflow.json 推断。原因：pose_library / image_presets 属于生图链路
         # 但本身不出图、天然没有 workflow.json，只靠文件特征会被误标成「写作」。
         kind = (data.get("kind") or "").strip()
         if not kind:
             kind = "生图" if data.get("workflow") is not None else "写作"
-        has_char = bool((data.get("character") or "").strip())
-        if kind == "生图":
-            base = "带底模" if has_char else "无底模"
-            tag = "[" + base + "]"
-        else:
-            tag = ""
-        descs.append("- **" + s + "**（" + kind + tag + "）: " + first_line)
+        # 曾经这里还标 [带底模] / [无底模]。2026-09-30 角色底模机制随 SD 渠道
+        # 一起下线（全仓已无 character.txt），标签恒为「无底模」，纯噪声 → 去掉。
+        descs.append("- **" + s + "**（" + kind + "）: " + first_line)
     return "\n".join(descs) if descs else "（暂无）"
 
 
@@ -277,7 +281,7 @@ def build_stable_prompt(agent_id=None):
 
     # [P3] Skill 目录
     sections.append((P_SKILLS, "Available Skills",
-        "以下是可用的 Skill（生图类带 [底模] 标注，其余为写作/知识类）。"
+        "以下是可用的 Skill（标「生图」的是能出图的渠道，其余为写作/知识类）。"
         "深入某个 Skill 时先 list_files 看它的文件结构，再 read_file 按需读取：\n"
         + _build_skill_list(agent_id)
     ))

@@ -1,0 +1,671 @@
+"""四个动漫生图渠道（`anima_soft` / `anima_gloss` / `anima_curvy` / `anima_clear`）的架构锁。
+
+## 这套用例锁的是什么
+
+2026-09-30 20:xx 用户拍板：**去掉 SD 渠道（`image_gen_v1`），全套切动漫**。
+四个渠道全部取自用户在 ComfyUI 里调好的双采样工作流：
+
+| 渠道 | 来源 UI 文件 | 一段底模 | 二段底模 | 画布 → 输出 |
+|---|---|---|---|---|
+| **`anima_clear`（默认）** | `单realskin双采样` | Realskin | Realskin（同一块） | 728×1024 |
+| `anima_soft` | `reality和realskin双采样` | Realskin | AnimeReality | 728×1024 |
+| `anima_gloss` | `anime2` | AnimeReality | Realskin | 768×1024 → 848×1128 |
+| `anima_curvy` | `harem和realskin双采样` | Harem | AnimeReality | 728×1024 |
+
+**每次用户在这些 UI 文件里调完参数，对应的 `skills/*/workflow.json` 都要跟着重转**
+（UI 格式 → API 格式，四渠道共用同一套流程，见任一 `skills/anima_*/skill.md` 文末）。
+
+四个渠道**共用同一套两段采样骨架**，差别只在底模组合（表现为画风）：
+
+    一段：UNETLoader(5) ─ LoRA(16 kibro 1.0) ─ LoRA(15 baka skin 0.5) ─┐
+         CLIPLoader(6, Qwen3-0.6B) ─ CLIPTextEncode(4 正向 / 8 负向) ──┤
+         EmptyLatentImage(9) 728×1024 ────────────────────────────────┤
+                                                                      ▼
+                                                    KSampler(2) er_sde/simple 10步 denoise 1.0
+                                                                      │
+                                                    LatentUpscaleBy(25) nearest-exact scale_by
+                                                                      │
+         UNETLoader(28) 裸底模（**不接 LoRA**）───────────────────────┤
+                                                                      ▼
+                                                    KSampler(27) euler/simple 5步 denoise 0.25
+                                                                      │
+                                                    VAEDecode(3) ─ SaveImage(23) prefix=Anima
+
+节点编号在 `anima_gloss` 里整体不同（19/20/24 代替 27/28/25），`anima_clear`
+甚至**只有一块底模**（二段直接指向节点 5）。所以这套用例**不按编号取**，
+而是按 `class_type` + 连线拓扑去认——认出来的是**结构**，不是巧合的数字。
+
+## 锁什么 / 不锁什么
+
+**锁**（架构性的，改了就是改架构）：
+- 两个 KSampler、两块（或一块）底模、一个放大节点、一条 LoRA 链；
+- 谁连谁：二段必须吃**放大后**的 latent、LoRA 只能挂第一段、CLIP 不走 LoRA；
+- denoise 的量级关系（一段 1.0 建构 / 二段 0.25 精修 → 二段必须用确定性 `euler`）；
+- 每渠道的**底模组合**（换底模 = 换画风，值得被注意到）；
+- 分辨率上限、`scale_by` 上限；
+- 节点 4 是可代入模板（含 `@kibro` 触发词 + `__MULTI_PROMPTS__`，不含写死的角色）。
+
+**不锁**（用户随手调的旋钮）：步数、CFG、一段的采样器名。
+锁死了每次调参都要改测试，反而会让人嫌麻烦去删断言。
+
+零网络、零显卡：只读 `skills/*/workflow.json`。
+"""
+
+import json
+import os
+import unittest
+from unittest import mock
+
+from app.skills import list_skills, load_skill, skill_priority
+
+SKILLS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                      "skills")
+
+# 渠道 → (一段底模前缀, 二段底模前缀, 画布宽, 画布高, scale_by)
+#
+# 底模用**前缀**而不是全名，因为真实文件名带一长串 Civitai 后缀
+# （`miaomiaoAnimeReality_ani11_3087842.safetensors`），前缀足以区分、又不会
+# 因为用户重下了一版改名后缀而误报。
+CHANNELS = {
+    "anima_soft":  ("miaomiaoRealskin_anima13", "miaomiaoAnimeReality_ani11",
+                    728, 1024, 1.0),
+    "anima_gloss": ("miaomiaoAnimeReality_ani11", "miaomiaoRealskin_anima13",
+                    768, 1024, 1.1),
+    "anima_curvy": ("miaomiaoHarem_anima16", "miaomiaoAnimeReality_ani11",
+                    728, 1024, 1.0),
+    "anima_clear": ("miaomiaoRealskin_anima13", "miaomiaoRealskin_anima13",
+                    728, 1024, 1.0),
+}
+
+# 默认渠道（不点名 skill 时走它）。`anima_clear` 和 `anima_soft` 一段底模相同、
+# 只差二段，很像——用户明确说过「拿不准就用默认」。
+#
+# ⚠️ 这个值换过两次（`anima_soft` → `anima_clear`，2026-09-30 21:3x）。
+# **换它要连累一批地方**，见 DefaultChannelTest 的说明。
+DEFAULT_CHANNEL = "anima_clear"
+
+# 2026-09-30 归档到 skills/_archive_20260930/ 的老渠道——一个都不许再冒出来。
+RETIRED = ("anima", "anima_realskin", "anima_2", "image_gen_v1")
+
+# 这台 ComfyUI 的**内建**节点。多出来一个就说明混进了自定义节点（那台机器装不上）。
+BUILTIN_NODES = {
+    "VAELoader", "KSampler", "VAEDecode", "CLIPTextEncode", "UNETLoader",
+    "CLIPLoader", "EmptyLatentImage", "LoraLoaderModelOnly", "SaveImage",
+    "LatentUpscaleBy",
+}
+
+LORA_NODES = ("LoraLoaderModelOnly", "LoraLoader")
+
+
+# ─── 取数 / 拓扑小工具 ──────────────────────────────────────────────
+
+def _load(name):
+    data = load_skill(name)
+    assert data and data["workflow"], name + " 加载不到"
+    return data["workflow"]
+
+
+def _raw(name):
+    """磁盘原文——`__SEED__` 是裸占位符，解析后变成字符串，只能数原文。"""
+    with open(os.path.join(SKILLS, name, "workflow.json"), encoding="utf-8") as f:
+        return f.read()
+
+
+def _all(wf, cls):
+    """按 class_type 取节点 id，按数字序排好。"""
+    return sorted((k for k, n in wf.items() if n.get("class_type") == cls),
+                  key=int)
+
+
+def _one(wf, cls):
+    hits = _all(wf, cls)
+    assert len(hits) == 1, "期望恰好一个 %s，实际 %r" % (cls, hits)
+    return hits[0]
+
+
+def _stage1(wf):
+    """一段采样器：latent 来自 `EmptyLatentImage` 的那个。"""
+    latent = _one(wf, "EmptyLatentImage")
+    for k in _all(wf, "KSampler"):
+        if wf[k]["inputs"]["latent_image"][0] == latent:
+            return k
+    raise AssertionError("找不到一段采样器（没有 KSampler 吃 EmptyLatentImage）")
+
+
+def _stage2(wf):
+    """二段采样器：不是一段的那个。"""
+    s1 = _stage1(wf)
+    rest = [k for k in _all(wf, "KSampler") if k != s1]
+    assert len(rest) == 1, "KSampler 数量不是 2：%r" % _all(wf, "KSampler")
+    return rest[0]
+
+
+def _upscale(wf):
+    return _one(wf, "LatentUpscaleBy")
+
+
+def _base_file(wf, model_ref):
+    """沿 LoRA 链走到 UNETLoader，返回底模文件名（找不到返回 None）。"""
+    nid = model_ref[0]
+    seen = set()
+    while nid not in seen:
+        seen.add(nid)
+        n = wf[nid]
+        ct = n.get("class_type")
+        if ct == "UNETLoader":
+            return n["inputs"]["unet_name"]
+        if ct == "CheckpointLoaderSimple":
+            return n["inputs"]["ckpt_name"]
+        if ct in LORA_NODES:
+            nid = n["inputs"]["model"][0]
+            continue
+        return None
+    return None
+
+
+def _lora_chain(wf):
+    """返回 (底模装载节点, [(lora节点, 文件名, 强度), ...])，从采样器那头往里走。"""
+    nid = wf[_stage1(wf)]["inputs"]["model"][0]
+    chain = []
+    while wf[nid].get("class_type") in LORA_NODES:
+        chain.append((nid, wf[nid]["inputs"]["lora_name"],
+                      wf[nid]["inputs"]["strength_model"]))
+        nid = wf[nid]["inputs"]["model"][0]
+    return nid, chain
+
+
+# ─── 渠道集合 ──────────────────────────────────────────────────────
+
+class ChannelSetTest(unittest.TestCase):
+    """恰好四个动漫渠道，老渠道一个都不许回来。"""
+
+    def test_exactly_the_four_channels_exist(self):
+        found = [s for s in list_skills() if s.startswith("anima_")]
+        self.assertEqual(sorted(found), sorted(CHANNELS),
+                         "动漫渠道集合变了——加/删渠道是有意为之吗？")
+
+    def test_each_is_a_scannable_image_skill(self):
+        for name in CHANNELS:
+            data = load_skill(name)
+            self.assertIsNotNone(data, name)
+            self.assertEqual(data["kind"], "生图", name)
+            self.assertIsNotNone(data["workflow"], name)
+
+    def test_none_is_marked_as_heavy(self):
+        """四个都是普通权重——重渠道那套是给 qwen 准备的，跟动漫渠道无关。"""
+        for name in CHANNELS:
+            self.assertEqual(skill_priority(name), 1, name)
+
+    def test_retired_channels_stay_archived(self):
+        """`anima` / `anima_realskin` / `anima_2` / `image_gen_v1` 已归档。
+
+        它们在 `skills/_archive_20260930/` 下，`list_skills()` 跳过 `_` 开头的
+        目录——**这条锁住那个 skip**（曾经它漏进去过，会让管理页多出死渠道）。
+        """
+        skills = list_skills()
+        for name in RETIRED:
+            self.assertNotIn(name, skills, "%s 不该再出现在技能列表里" % name)
+            self.assertIsNone(load_skill(name),
+                              "%s 已经归档，不该还能加载" % name)
+
+
+# ─── 四个渠道共用的骨架 ────────────────────────────────────────────
+
+class SharedSkeletonTest(unittest.TestCase):
+    """四个渠道共用同一套两段采样骨架——逐渠道过一遍。"""
+
+    def test_two_samplers_one_upscale(self):
+        for name in CHANNELS:
+            wf = _load(name)
+            self.assertEqual(len(_all(wf, "KSampler")), 2, name)
+            self.assertEqual(len(_all(wf, "LatentUpscaleBy")), 1, name)
+            self.assertEqual(len(_all(wf, "VAEDecode")), 1, name)
+            self.assertEqual(len(_all(wf, "SaveImage")), 1, name)
+
+    def test_second_pass_reads_the_upscaled_latent(self):
+        """链路：一段 → 放大 → 二段 → 解码。
+
+        **别把二段的 latent 改回直接吃一段** —— 那等于把放大节点晾在一边
+        （它还占着一次上采样）。
+        """
+        for name in CHANNELS:
+            wf = _load(name)
+            s1, s2, up = _stage1(wf), _stage2(wf), _upscale(wf)
+            self.assertEqual(wf[up]["inputs"]["samples"], [s1, 0], name)
+            self.assertEqual(wf[s2]["inputs"]["latent_image"], [up, 0], name)
+            self.assertEqual(wf[_one(wf, "VAEDecode")]["inputs"]["samples"],
+                             [s2, 0], name)
+
+    def test_both_passes_carry_the_prompt_not_a_fixed_character(self):
+        """两段都读节点 4（正向）/ 8（负向）——两段都真的在跑同一段提示词。"""
+        for name in CHANNELS:
+            wf = _load(name)
+            for s in (_stage1(wf), _stage2(wf)):
+                self.assertEqual(wf[s]["inputs"]["positive"], ["4", 0], name)
+                self.assertEqual(wf[s]["inputs"]["negative"], ["8", 0], name)
+
+    def test_first_pass_builds_second_pass_refines(self):
+        """一段 denoise=1 从零建构，二段 denoise=0.25 只精修。
+
+        **只锁 denoise 这个结构量**（步数/CFG/一段采样器都是用户随手调的旋钮）。
+        """
+        for name in CHANNELS:
+            wf = _load(name)
+            d1 = wf[_stage1(wf)]["inputs"]["denoise"]
+            d2 = wf[_stage2(wf)]["inputs"]["denoise"]
+            self.assertEqual(d1, 1, name)
+            self.assertEqual(d2, 0.25, name)
+            self.assertLess(d2, d1, name)
+
+    def test_second_pass_is_deterministic(self):
+        """二段必须是确定性采样器 `euler` + `simple`。
+
+        denoise 只有 0.25、是在既有 latent 上补细节；用 SDE 系（`er_sde`）
+        会把已经干净的图重新注入噪声——表现为头发糊、蕾丝融、手指断。
+        **一段不锁**：它 denoise=1.0 从零建构图，用什么都行。
+        """
+        for name in CHANNELS:
+            wf = _load(name)
+            s2 = wf[_stage2(wf)]["inputs"]
+            self.assertEqual(s2["sampler_name"], "euler", name)
+            self.assertEqual(s2["scheduler"], "simple", name)
+
+    def test_loras_only_on_the_first_pass(self):
+        """LoRA 链只挂第一段：底模 → kibro(1.0) → baka skin(0.5) → 一段采样器。
+
+        两个硬约束：
+        ① 链必须**终止在 UNETLoader**（不是凭空接一个 LoRA）；
+        ② **二段走裸底模**，model 必须直接指向 UNETLoader 节点——「优化」成接
+           LoRA 链尾能让 ComfyUI 少装一次模型，但二段画风会跟着变，用户否掉了。
+        """
+        for name in CHANNELS:
+            wf = _load(name)
+            base_id, chain = _lora_chain(wf)
+            self.assertEqual(wf[base_id]["class_type"], "UNETLoader", name)
+            self.assertEqual(len(chain), 2, name)
+            by_name = {fn: st for _, fn, st in chain}
+            self.assertEqual(len(by_name), 2, "%s 的 LoRA 重名了" % name)
+            kibro = [st for fn, st in by_name.items() if "kibro" in fn]
+            baka = [st for fn, st in by_name.items() if "baka" in fn]
+            self.assertEqual(kibro, [1], name)
+            self.assertEqual(baka, [0.5], name)
+            # 二段不接 LoRA：它的 model 源节点必须是底模装载器
+            s2_model = wf[_stage2(wf)]["inputs"]["model"][0]
+            self.assertEqual(wf[s2_model]["class_type"], "UNETLoader", name)
+
+    def test_clip_does_not_go_through_lora(self):
+        """CLIP 由 `CLIPLoader(6)` 单独喂，**不经过 LoRA**。
+
+        `LoraLoaderModelOnly` 根本没有 clip 输出槽，接到它上面会被 ComfyUI 拒。
+        这条挡住「照抄 SDXL 那套把 clip 也串进 LoRA」。
+        """
+        for name in CHANNELS:
+            wf = _load(name)
+            clip_id = _one(wf, "CLIPLoader")
+            self.assertEqual(wf[clip_id]["inputs"]["clip_name"],
+                             "qwen_3_06b_base.safetensors", name)
+            for enc in ("4", "8"):
+                self.assertEqual(wf[enc]["inputs"]["clip"], [clip_id, 0], name)
+
+    def test_output_is_a_flat_anima_prefix(self):
+        """`SaveImage` 前缀必须是 `Anima`——**不能带 `/`**。
+
+        带 `/` 会被 ComfyUI 当成子目录，机器人回传路径时对不上输出目录。
+        """
+        for name in CHANNELS:
+            wf = _load(name)
+            img = wf[_one(wf, "SaveImage")]
+            self.assertEqual(img["inputs"]["filename_prefix"], "Anima", name)
+            self.assertNotIn("/", img["inputs"]["filename_prefix"], name)
+
+    def test_upscale_factor_is_capped(self):
+        """放大倍率封顶 1.1×——`scale_by` 上去是平方级的显存和耗时。
+
+        本机（RTX 5070 12GB + 16GB）两段要先后装两块底模，没余量。
+        """
+        for name in CHANNELS:
+            wf = _load(name)
+            up = wf[_upscale(wf)]
+            self.assertEqual(up["inputs"]["upscale_method"], "nearest-exact", name)
+            self.assertLessEqual(up["inputs"]["scale_by"], 1.1, name)
+
+
+class WorkflowIntegrityTest(unittest.TestCase):
+    """结构性体检——工作流得是「能提交」的图，不只是字段齐全。"""
+
+    def test_no_custom_nodes(self):
+        for name in CHANNELS:
+            wf = _load(name)
+            used = {n.get("class_type") for n in wf.values()}
+            self.assertTrue(used <= BUILTIN_NODES,
+                            "%s 混进了非内建节点：%r" % (name, used - BUILTIN_NODES))
+
+    def test_every_link_points_at_an_existing_node(self):
+        """任何 `[node_id, slot]` 连线都得指到真实存在的节点上。
+
+        手改 workflow.json（尤其换底模节点）时最容易留下的就是悬空连线——
+        ComfyUI 提交时才报错，那已经太晚了。
+        """
+        for name in CHANNELS:
+            wf = _load(name)
+            for nid, node in wf.items():
+                for key, val in node.get("inputs", {}).items():
+                    if (isinstance(val, list) and len(val) == 2
+                            and isinstance(val[0], str)):
+                        self.assertIn(val[0], wf,
+                                      "%s 节点 %s.%s 指向不存在的节点 %r"
+                                      % (name, nid, key, val[0]))
+
+
+# ─── 每渠道的底模组合（真正的差异点）────────────────────────────────
+
+class BaseModelTest(unittest.TestCase):
+    """底模组合 = 画风。换了就是换了渠道，必须被人看见。"""
+
+    def test_stage_bases_match_the_declared_combo(self):
+        for name, (base1, base2, _, _, _) in CHANNELS.items():
+            wf = _load(name)
+            got1 = _base_file(wf, wf[_stage1(wf)]["inputs"]["model"])
+            got2 = _base_file(wf, wf[_stage2(wf)]["inputs"]["model"])
+            self.assertTrue(got1 and got1.startswith(base1),
+                            "%s 一段底模：期望 %s*，实际 %r" % (name, base1, got1))
+            self.assertTrue(got2 and got2.startswith(base2),
+                            "%s 二段底模：期望 %s*，实际 %r" % (name, base2, got2))
+
+    def test_soft_and_gloss_are_the_same_pair_reversed(self):
+        """`anima_soft` = realskin→reality；`anima_gloss` = reality→realskin。
+
+        这就是「两个渠道其实是同一对底模换个顺序」这件事的锁——用户原来的
+        `anime2.json` 就是这个组合，`anima_soft` 是把它反过来。
+        """
+        soft = CHANNELS["anima_soft"]
+        gloss = CHANNELS["anima_gloss"]
+        self.assertEqual((soft[0], soft[1]), (gloss[1], gloss[0]))
+
+    def test_clear_and_soft_share_the_first_stage_base(self):
+        """`anima_clear` 和 `anima_soft` **第一段底模相同**，只差第二段。
+
+        所以它俩出图很像——这也是「默认渠道在它俩之间换」几乎零成本的原因，
+        以及为什么 skill.md 里反复写「拿不准就用默认」。
+        """
+        self.assertEqual(CHANNELS["anima_clear"][0], CHANNELS["anima_soft"][0])
+        self.assertNotEqual(CHANNELS["anima_clear"][1], CHANNELS["anima_soft"][1])
+
+    def test_clear_reuses_one_base_for_both_passes(self):
+        """`anima_clear` 两段是**同一块** realskin——所以它只有一块底模装载器。
+
+        同文件不会重复吃显存（ComfyUI 的 `model_management` 按 model 对象缓存），
+        所以这是零成本的；但它确实是四个里唯一「单底模」的。
+        """
+        wf = _load("anima_clear")
+        self.assertEqual(len(_all(wf, "UNETLoader")), 1)
+        s1_base = _base_file(wf, wf[_stage1(wf)]["inputs"]["model"])
+        s2_base = _base_file(wf, wf[_stage2(wf)]["inputs"]["model"])
+        self.assertEqual(s1_base, s2_base)
+        # 二段直接指向节点 5（那段底模装载器本身），没有第二块
+        self.assertEqual(wf[_stage2(wf)]["inputs"]["model"],
+                         [_one(wf, "UNETLoader"), 0])
+
+    def test_the_other_three_have_two_loaders(self):
+        for name in ("anima_soft", "anima_gloss", "anima_curvy"):
+            self.assertEqual(len(_all(_load(name), "UNETLoader")), 2, name)
+
+
+# ─── 分辨率 / 输出尺寸 ─────────────────────────────────────────────
+
+class ResolutionTest(unittest.TestCase):
+    """**安全锁**：分辨率是独立杠杆，别往上调。"""
+
+    def test_canvas_matches_the_declared_size(self):
+        """2026-09-27 调到 1024×1536 后，单张图就把整机拖到黑屏关机。
+
+        728×1024 / 768×1024 是实测的安全档。想调高先读 `skills/anima_*/skill.md`
+        里那段警告，别直接改这些数。
+        """
+        for name, (_, _, w, h, _) in CHANNELS.items():
+            latent = _load(name)[_one(_load(name), "EmptyLatentImage")]["inputs"]
+            self.assertEqual((latent["width"], latent["height"]), (w, h), name)
+
+    # 渠道 → 实际输出尺寸（像素）
+    OUTPUT = {
+        "anima_soft": (728, 1024),
+        "anima_gloss": (848, 1128),
+        "anima_curvy": (728, 1024),
+        "anima_clear": (728, 1024),
+    }
+
+    def test_output_size_is_the_canvas_times_the_upscale(self):
+        """实际输出 = 画布 ÷ 8（→ latent）→ `round()` → × scale_by → × 8。
+
+        ComfyUI 的 `LatentUpscaleBy` 先按 8 折成 latent 再放大（`nodes.py:1393`）。
+        只有 `anima_gloss` 用 1.1×：768×1024 → 96×128 → `round(105.6)=106`、
+        `round(140.8)=141` → **848×1128**。其余三个 `scale_by=1`，输出 = 画布。
+        """
+        for name, (_, _, w, h, scale) in CHANNELS.items():
+            got = (round(w / 8 * scale) * 8, round(h / 8 * scale) * 8)
+            self.assertEqual(got, self.OUTPUT[name],
+                             "%s 输出尺寸：期望 %r，按公式算得 %r"
+                             % (name, self.OUTPUT[name], got))
+
+
+# ─── 提示词模板 ────────────────────────────────────────────────────
+
+class PromptTemplateTest(unittest.TestCase):
+    """节点 4 必须是**可代入的模板**，不能是写死的角色。"""
+
+    def test_positive_is_the_kibro_template(self):
+        """模板恒为 `@kibro, __MULTI_PROMPTS__`。
+
+        `@kibro` 是 okitatsuki LoRA 的触发词，**不能丢**——LoRA 文件元数据
+        `ss_tag_frequency` 里它出现 165/165 次（训练集每张图都带）。
+
+        这个坑踩过多次：把用户在 ComfyUI 里调好的工作流搬进 skills 时，节点 4
+        存的是**那张图当时的完整提示词**（几百上千字）。`generate_image` 的机制
+        是「把 `__MULTI_PROMPTS__` 换成模型给的提示词」——那串字里没有占位符，
+        于是模型传什么都被原样丢弃，连着画好几张都是同一个角色。**每次从
+        ComfyUI 导工作流都会带上这个坑，所以这条锁必须一直在。**
+        """
+        for name in CHANNELS:
+            wf = _load(name)
+            self.assertEqual(wf["4"]["inputs"]["text"],
+                             "@kibro, __MULTI_PROMPTS__", name)
+
+    def test_negative_is_the_shared_quality_string(self):
+        for name in CHANNELS:
+            wf = _load(name)
+            neg = wf["8"]["inputs"]["text"]
+            self.assertIn("worst quality", neg, name)
+            self.assertNotIn("__MULTI_PROMPTS__", neg, name)
+
+    def test_seeds_stay_placeholders(self):
+        """两个 KSampler 的 seed 都必须是裸 `__SEED__` 占位符。
+
+        （改节点 4 时踩过：用 `json.loads(replace('__SEED__','0'))` 读进来再
+        `json.dumps` 写回，占位符被永久变成了 0 —— 每张图都一模一样。所以改成
+        字符串级替换，并加这条锁。写死成数字等于每张图同一个种子。）
+        """
+        for name in CHANNELS:
+            self.assertEqual(_raw(name).count("__SEED__"), 2, name)
+
+    def test_no_character_placeholder_anywhere(self):
+        """`__CHARACTER__` 随角色底模机制一起下线了，工作流里不该再有。"""
+        for name in CHANNELS:
+            self.assertNotIn("__CHARACTER__", _raw(name), name)
+            self.assertNotIn("character.txt",
+                             os.listdir(os.path.join(SKILLS, name)), name)
+
+
+# ─── 可见性 / 默认渠道 ─────────────────────────────────────────────
+
+class VisibilityTest(unittest.TestCase):
+    """QQ 机器人得能看见四个渠道，否则默认渠道也传不进来。"""
+
+    def test_qq_whitelist_includes_all_four(self):
+        from app import agents
+        for name in CHANNELS:
+            self.assertTrue(agents.allows_skill("qq", name), name)
+
+    def test_default_channel_constant_is_the_declared_one(self):
+        """不点名时的默认渠道恒为 `DEFAULT_CHANNEL`（当前 = `anima_clear`）。
+
+        signature 的 `skill` 默认值必须是 None——`execute_tool` 是 `fn(**args)`，
+        只有「模型压根没传 skill」才会落到默认值，靠它才分得开「没点名」和
+        「点名了默认渠道」。
+        """
+        import inspect
+        from app.tools.normal.generate_image import (
+            _generate_image, T2I_DEFAULT_SKILL)
+        self.assertEqual(T2I_DEFAULT_SKILL, DEFAULT_CHANNEL)
+        self.assertIsNotNone(load_skill(T2I_DEFAULT_SKILL))
+        self.assertIsNone(inspect.signature(_generate_image)
+                          .parameters["skill"].default)
+
+    def test_skill_list_marks_exactly_one_channel_as_default(self):
+        """技能列表里**恰好一个**动漫渠道自称「默认」，且那个是 `DEFAULT_CHANNEL`。
+
+        这条同时钉住两件事：① skill.md 的标题写了「默认」；② 只有那一个写了。
+        「默认」这两个字**纯粹是从 skill.md 标题读出来的**——
+        `agent_prompt._build_skill_list` 没有任何判定逻辑，所以改默认渠道
+        **必须手改 skill.md 的标题**（漏了这条就会有两个/零个自称默认）。
+        """
+        from app.agent_prompt import _build_skill_list
+        lines = [l for l in _build_skill_list("qq").splitlines()
+                 if any(("**%s**" % n) in l for n in CHANNELS)]
+        self.assertEqual(len(lines), len(CHANNELS), lines)
+        defaults = [l for l in lines if "默认" in l]
+        self.assertEqual(len(defaults), 1, "有多个渠道自称默认：%r" % defaults)
+        self.assertIn(DEFAULT_CHANNEL, defaults[0])
+
+    def test_tool_description_covers_all_four_and_no_retired_names(self):
+        """工具描述要写全四个渠道，且**一个老渠道名都不许出现**。
+
+        `anima` 得用词边界匹配——它是 `anima_soft` / `anima_gloss` 的前缀，
+        直接 `assertNotIn("anima")` 会误伤新渠道名。
+        """
+        import re
+        from app.tools.normal.generate_image import tool
+        desc = tool["description"]
+        for name in CHANNELS:
+            self.assertIn(name, desc, "描述里缺了渠道 %s" % name)
+        self.assertIsNone(re.search(r"\banima\b", desc),
+                          "描述里还留着裸的旧渠道名 anima")
+        for name in ("anima_realskin", "anima_2", "image_gen_v1"):
+            self.assertNotIn(name, desc, "描述里还留着老渠道 %s" % name)
+        # 参数说明里的可选值也要对得上
+        self.assertIn(DEFAULT_CHANNEL, tool["parameters"]["properties"]["skill"]["description"])
+
+
+class DefaultChannelTest(unittest.TestCase):
+    """默认渠道是**唯一真相源**——凡是话术里提到它的地方都必须跟着走。
+
+    ## 这条锁为什么必须存在
+
+    默认渠道在本项目换过**三次**（`anima` → `anima_realskin` → `anima_soft`
+    → `anima_clear`），**每一次都有写死名字的地方漏掉**。最阴的一次是
+    `generate_image` 里那两句**拒收话术**：
+
+        "直接改用默认的 anima_realskin 重画（prompt 改写成 anima 的标签式英文写法）"
+
+    —— 它们是**字符串**，按代码 grep 搜不到、测试也没覆盖，于是渠道归档之后
+    这句话还挂在代码里好几天，模型会照着它去点名一个不存在的渠道。
+    现在话术改成 `+ T2I_DEFAULT_SKILL +` 拼接，本类负责钉住「别再写回字面量」。
+
+    ## 换默认渠道时要改的清单（改完跑本类 + 全量）
+
+    `app/tools/normal/generate_image.py`（常量 + 工具描述 + `skill` 参数说明）、
+    `app/tools/normal/comfy_workflow.py`（两个函数的默认参数 + 两处参数说明）、
+    `app/agent_prompt.py`（`_TOOL_HINTS` 的渠道那行）、
+    4 个 `skills/anima_*/skill.md` 的标题与渠道表。
+    """
+
+    def test_tool_description_names_exactly_the_current_default(self):
+        """描述里要提当前默认，且**不许把别的渠道标成「默认」**。
+
+        「别的渠道（默认）」这种串台写法比漏写更糟——模型会照它去传 skill。
+        """
+        from app.tools.normal.generate_image import tool
+        desc = tool["description"]
+        self.assertIn(DEFAULT_CHANNEL, desc)
+        for other in CHANNELS:
+            if other != DEFAULT_CHANNEL:
+                self.assertNotIn(other + "（默认）", desc,
+                                 "描述里把 %s 也标成了默认" % other)
+
+    def test_skill_param_description_names_the_current_default(self):
+        from app.tools.normal.generate_image import tool
+        prop = tool["parameters"]["properties"]["skill"]["description"]
+        self.assertIn(DEFAULT_CHANNEL, prop)
+        for other in CHANNELS:
+            if other != DEFAULT_CHANNEL:
+                self.assertNotIn(other + "（默认", prop,
+                                 "参数说明里把 %s 也标成了默认" % other)
+
+    def test_comfy_workflow_defaults_follow_the_default_channel(self):
+        """`get_workflow` / `update_workflow` 的默认 `skill` 也得跟着走。
+
+        这里踩过一次：默认值曾经写死 `image_gen_v1`，SD 渠道归档之后
+        **不传 skill 直接抛「没有 workflow.json」**——工具看起来像坏了。
+        """
+        import inspect
+        from app.tools.normal.comfy_workflow import get_workflow, update_workflow
+        for fn in (get_workflow, update_workflow):
+            self.assertEqual(inspect.signature(fn).parameters["skill"].default,
+                             DEFAULT_CHANNEL, fn.__name__)
+
+    def test_refusal_messages_name_the_current_default(self):
+        """两句**拒收话术**都必须指到当前默认渠道（而不是某个历史渠道名）。
+
+        ① 图生图整体停用的那句（模型拿引用图来改图时回给它的）；
+        ② 停用渠道那句（点了 qwen / krea2 时回给它的）。
+
+        两句都拦在**任何网络调用之前**，所以这里能直接调，不需要 mock ComfyUI。
+        """
+        from app.tools.normal import generate_image as gi
+
+        with mock.patch.object(gi, "is_cancelled", lambda: False), \
+                mock.patch.object(gi, "_qq_gate", lambda: None):
+            i2i = gi._generate_image(prompt="x", source_image="1")
+            off = gi._generate_image(prompt="x", skill="qwen_image_v1")
+
+        self.assertIn("source_image", i2i)          # 确实是那句拒收
+        self.assertIn(DEFAULT_CHANNEL, i2i, "图生图拒收话术没指到当前默认渠道")
+        self.assertIn("停用", off)                   # 确实是那句拒收
+        self.assertIn(DEFAULT_CHANNEL, off, "停用渠道拒收话术没指到当前默认渠道")
+
+        # 历史渠道名一个都不许出现在话术里（它们已经不在 skills/ 了）
+        for msg in (i2i, off):
+            for retired in RETIRED:
+                self.assertNotIn(retired + " ", msg,
+                                 "拒收话术里还留着已归档的渠道名 %s" % retired)
+
+    def test_all_four_docs_agree_on_which_channel_is_default(self):
+        """4 个 skill.md 的渠道表要**口径一致**：只有默认那个标「默认」。"""
+        for name in CHANNELS:
+            with open(os.path.join(SKILLS, name, "skill.md"), encoding="utf-8") as f:
+                first = [l for l in f.read().splitlines() if l.startswith("# ")][0]
+            if name == DEFAULT_CHANNEL:
+                self.assertIn("默认", first,
+                              "%s 的 skill.md 标题没标「默认渠道」：%r" % (name, first))
+            else:
+                self.assertNotIn("默认渠道", first,
+                                 "%s 的 skill.md 标题还自称「默认渠道」：%r"
+                                 % (name, first))
+
+
+class SkillDocTest(unittest.TestCase):
+    """每个渠道的 skill.md 得指到**现在还在**的测试文件。"""
+
+    def test_docs_point_at_this_test_module(self):
+        for name in CHANNELS:
+            path = os.path.join(SKILLS, name, "skill.md")
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+            self.assertIn("tests.test_image_channels", text,
+                          "%s 的 skill.md 没指到本测试文件" % name)
+            self.assertNotIn("test_image_anima", text,
+                             "%s 的 skill.md 还在指已归档的测试" % name)
+            self.assertNotIn("test_image_sd", text, name)
+
+
+if __name__ == "__main__":
+    unittest.main()

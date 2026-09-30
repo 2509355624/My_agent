@@ -68,10 +68,16 @@ class SkillLoaderTest(unittest.TestCase):
         self.assertIn("参考A", data["references"])
         self.assertIn("参考B", data["references"])
 
-    def test_character_file_is_stripped(self):
+    def test_no_character_key_is_returned(self):
+        """`character.txt` 机制已下线（2026-09-30，随 SD 渠道）。
+
+        以前 `load_skill` 会把 `character.txt` 读进返回值的 `character` 键。
+        全仓已无该文件、也没有任何调用方再读它，所以键本身也不该再出现——
+        留着只会让人以为还有「角色底模」这回事。
+        """
         self._write("img/skill.md", "生图")
-        self._write("img/character.txt", "  角色底模  ")
-        self.assertEqual(skills.load_skill("img")["character"], "角色底模")
+        self._write("img/character.txt", "  角色底模  ")   # 就算存在也不读
+        self.assertNotIn("character", skills.load_skill("img"))
 
     def test_workflow_seed_placeholder_is_repaired(self):
         # workflow.json 里种子常写成裸的 __SEED__（非法 JSON），加载时应修好

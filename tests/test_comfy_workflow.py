@@ -45,8 +45,50 @@ def _two_stage_model_only():
     }
 
 
+def _single_base_two_stage():
+    """`anima_clear` 形状：**两段采样、但只有一块底模**。
+
+    四个动漫渠道里只有它是这样——`KSampler(27)` 的 model 直接指向
+    `UNETLoader(5)`，**没有第二个 UNETLoader**（所以是 13 个节点，比别的少一个）。
+
+    ⚠️ 这个形状对 `_rebuild_lora` 是个**真陷阱**：节点 27 指的是**底模装载器**
+    而不是 LoRA 节点，所以「重建后把指着旧 LoRA 节点的引用改指新链尾」那段
+    **不能碰它**。一旦被顺手改指 LoRA 链尾，第二段就变成「带 LoRA 精修」，
+    画风会跟着变——那正是用户明确否掉的做法（LoRA 只挂第一段）。
+
+    2026-09-30 21:3x `anima_clear` 成了 `update_workflow` 的默认渠道，
+    所以这个形状从「冷门变体」变成了**每次不传 skill 都会走到的路径**。
+    """
+    return {
+        "1": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_vae.safetensors"}},
+        "2": {"class_type": "KSampler", "inputs": {
+            "model": ["15", 0], "positive": ["4", 0], "negative": ["8", 0],
+            "latent_image": ["9", 0], "steps": 10, "cfg": 5, "denoise": 1.0,
+            "sampler_name": "er_sde", "scheduler": "simple", "seed": "__SEED__"}},
+        "3": {"class_type": "VAEDecode", "inputs": {"samples": ["27", 0], "vae": ["1", 0]}},
+        "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["6", 0], "text": "p"}},
+        "5": {"class_type": "UNETLoader", "inputs": {"unet_name": "base_a.safetensors"}},
+        "6": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen.safetensors"}},
+        "8": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["6", 0], "text": "n"}},
+        "9": {"class_type": "EmptyLatentImage", "inputs": {"width": 728, "height": 1024}},
+        "15": {"class_type": "LoraLoaderModelOnly", "inputs": {
+            "model": ["16", 0], "lora_name": "skin.safetensors", "strength_model": 0.5}},
+        "16": {"class_type": "LoraLoaderModelOnly", "inputs": {
+            "model": ["5", 0], "lora_name": "style.safetensors", "strength_model": 1.0}},
+        "23": {"class_type": "SaveImage",
+               "inputs": {"images": ["3", 0], "filename_prefix": "Anima"}},
+        "25": {"class_type": "LatentUpscaleBy", "inputs": {
+            "samples": ["2", 0], "upscale_method": "nearest-exact", "scale_by": 1.0}},
+        # 二段：model 直接吃底模装载器 5，latent 吃放大节点 25
+        "27": {"class_type": "KSampler", "inputs": {
+            "model": ["5", 0], "positive": ["4", 0], "negative": ["8", 0],
+            "latent_image": ["25", 0], "steps": 5, "cfg": 5, "denoise": 0.25,
+            "sampler_name": "euler", "scheduler": "simple", "seed": "__SEED__"}},
+    }
+
+
 def _sd_lora_chain():
-    """image_gen_v1 形状：CheckpointLoaderSimple + 3 个带 clip 的 LoraLoader。"""
+    """SD 旧形状（image_gen_v1，已归档）：CheckpointLoaderSimple + 3 个带 clip 的 LoraLoader。"""
     return {
         "4": {"class_type": "CheckpointLoaderSimple",
               "inputs": {"ckpt_name": "sd.safetensors"}},
@@ -228,6 +270,41 @@ class RebuildLoraTest(unittest.TestCase):
         self.assertEqual(wf["6"]["inputs"]["clip"], [new[-1], 1])
         self.assertEqual(wf["7"]["inputs"]["clip"], [new[-1], 1])
         self.assertEqual(_dangling(wf), [])
+
+    def test_single_base_two_stage_keeps_second_pass_off_the_lora_chain(self):
+        """**`anima_clear` 形状**（默认渠道）：重建 LoRA 后二段仍直连底模。
+
+        这是本工具最容易踩坏的一条：二段 KSampler(27) 指的是**底模装载器**，
+        不是 LoRA 节点。重建时若把「指向底模的 model 引用」也一起改指新链尾，
+        二段就从「裸底模精修」变成「带 LoRA 精修」——画风跟着变，而用户明确
+        否掉了这种做法（LoRA 只挂第一段）。
+
+        更麻烦的是它**不会报错**：连线是通的，图也出得来，只是画风悄悄变了。
+        所以必须有这条锁。
+        """
+        wf = _single_base_two_stage()
+        base_before = wf["27"]["inputs"]["model"]
+        new = cw._rebuild_lora(wf, [{"name": "a.safetensors", "strength_model": 1},
+                                    {"name": "b.safetensors", "strength_model": 0.5}])
+        self.assertEqual(len(new), 2)
+        # 一段挂到新链尾
+        self.assertEqual(wf["2"]["inputs"]["model"], [new[-1], 0])
+        # 二段**原封不动**，仍直连底模装载器
+        self.assertEqual(wf["27"]["inputs"]["model"], base_before)
+        self.assertEqual(wf["27"]["inputs"]["model"], ["5", 0])
+        # 二段的 model 源节点必须仍是 UNETLoader（不是任何 LoRA 节点）
+        self.assertEqual(wf[wf["27"]["inputs"]["model"][0]]["class_type"],
+                         "UNETLoader")
+        self.assertEqual(_dangling(wf), [])
+
+    def test_single_base_two_stage_keeps_both_stages_wired(self):
+        """同形状下 `set steps` 只写第一段，二段参数一个字节都不许动。"""
+        wf = _single_base_two_stage()
+        cw._rebuild_lora(wf, [{"name": "a.safetensors", "strength_model": 1}])
+        self.assertEqual(wf["27"]["inputs"]["steps"], 5)
+        self.assertEqual(wf["27"]["inputs"]["denoise"], 0.25)
+        self.assertEqual(wf["27"]["inputs"]["latent_image"], ["25", 0])
+        self.assertEqual(wf["25"]["inputs"]["samples"], ["2", 0])
 
     def test_clearing_all_loras_falls_back_to_base(self):
         """显式清空时 gen.model 该直连底模，而不是留下 [None, 0]。"""

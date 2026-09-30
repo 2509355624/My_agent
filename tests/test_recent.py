@@ -395,9 +395,9 @@ class RunTurnContextTest(_TmpAgentsMixin, unittest.TestCase):
         # 全靠这条知道「上一张到底出没出图」（2026-09-29 用户提：老是说要重画）。
         with mock.patch.object(
                 qq_bot.image_jobs, "recent_line",
-                return_value="[最近生图]：1)已出图（anima）"):
+                return_value="[最近生图]：1)已出图（anima_soft）"):
             seen = self._run()
-        self.assertIn("已出图（anima）", seen["extra"])
+        self.assertIn("已出图（anima_soft）", seen["extra"])
         # 与群背景同规矩：走 extra_context，不写进正文/历史
         self.assertNotIn("已出图", seen["text"])
 

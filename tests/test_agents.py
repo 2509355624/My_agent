@@ -165,7 +165,7 @@ class WhitelistTest(AgentsTestBase):
         self.assertTrue(agents.allows_tool("w", "read_file"))
         self.assertFalse(agents.allows_tool("w", "generate_image"))
         self.assertTrue(agents.allows_skill("w", "writing"))
-        self.assertFalse(agents.allows_skill("w", "image_gen_v1"))
+        self.assertFalse(agents.allows_skill("w", "anima_soft"))
 
     def test_empty_whitelist_allows_nothing(self):
         self.make_agent("empty", {"tools": [], "skills": []})

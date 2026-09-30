@@ -15,13 +15,18 @@ from app.agent_prompt import _build_tool_list
 
 
 def _chain_workflow():
-    """checkpoint -> 三个 lora 串成一链 + 提示词节点（模仿 image_gen_v1）。"""
+    """checkpoint -> 三个 lora 串成一链 + 提示词节点（手工造的最小结构）。
+
+    结构不再模仿任何**具体**渠道：`image_gen_v1` 已归档、4 个动漫渠道是
+    UNETLoader + `LoraLoaderModelOnly`。这里只用 `LoraLoader`（model+clip）
+    把「沿 model 连线找槽顺序」这条逻辑单独测出来，不依赖真实节点编号。
+    """
     return {
         "4": {"class_type": "CheckpointLoaderSimple", "inputs": {}},
         "86": {"class_type": "LoraLoader", "inputs": {"model": ["4", 0]}},
         "87": {"class_type": "LoraLoader", "inputs": {"model": ["86", 0]}},
         "88": {"class_type": "LoraLoader", "inputs": {"model": ["87", 0]}},
-        "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "__CHARACTER__"}},
+        "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "__MULTI_PROMPTS__"}},
     }
 
 
@@ -219,8 +224,7 @@ class _GenBase(unittest.TestCase):
 
         for target, repl in (
             ("load_skill", mock.Mock(return_value={
-                "workflow": _chain_workflow(),
-                "character": "1girl, Sumire"})),
+                "workflow": _chain_workflow()})),
             ("_qq_gate", mock.Mock(return_value=None)),
             ("is_cancelled", mock.Mock(return_value=False)),
         ):
@@ -273,18 +277,13 @@ class _SyncThread:
             self.target(*self.args)
 
 
-class QQForceNoCharacterTest(_GenBase):
-    """QQ 会话里 use_character 无论传什么都不生效；网页端照常。"""
+class LoraParamTest(_GenBase):
+    """lora 参数沿 model 链落进工作流；写错时拒收、不提交。
 
-    def test_qq_forces_character_off_even_if_true(self):
-        self._call(("group", "9"), use_character=True)
-        text = __import__("json").dumps(self.submitted[0])
-        self.assertNotIn("Sumire", text)
-
-    def test_web_keeps_character_when_true(self):
-        self._call((None, None), use_character=True)
-        text = __import__("json").dumps(self.submitted[0])
-        self.assertIn("Sumire", text)
+    历史：这里原本是 `QQForceNoCharacterTest`，测的是「QQ 侧强制关掉
+    `use_character` 角色底模」。角色底模机制随 SD 渠道在 2026-09-30 一起下线
+    （全仓已无 `character.txt` / `__CHARACTER__`），那两条用例已无对象，删掉。
+    """
 
     def test_lora_param_reaches_workflow(self):
         p = mock.patch.object(generate_image, "_available_loras",
@@ -309,32 +308,38 @@ class ToolDescriptionTest(unittest.TestCase):
                         return_value=True):
             return _build_tool_list(agent_id)
 
-    def test_qq_hides_character_param_and_mode(self):
-        block = self._block(QQ_AGENT_ID)
-        self.assertNotIn("use_character", block)
-        self.assertNotIn("【底模】", block)
+    def test_neither_side_sees_the_retired_character_param(self):
+        """两个 agent 看到的描述里都不该再出现 `use_character` / `【底模】`。
 
-    def test_web_sees_character_param_and_mode(self):
-        block = self._block("main")
-        self.assertIn("use_character", block)
-        self.assertIn("【底模】", block)
+        角色底模机制 2026-09-30 随 SD 渠道下线，`description_overrides` /
+        `hidden_params` 也一并删了——两端现在看到的是同一份 `tool["description"]`，
+        所以这条锁「两端一致且干净」。
+        """
+        for agent_id in (QQ_AGENT_ID, "main"):
+            block = self._block(agent_id)
+            self.assertNotIn("use_character", block)
+            self.assertNotIn("【底模】", block)
 
     def test_both_see_lora_doc(self):
         self.assertIn("lora", self._block(QQ_AGENT_ID))
         self.assertIn("lora", self._block("main"))
 
-    def test_default_image_skill_is_anima(self):
-        """不点名时的默认渠道恒为 anima——文生图那套没变过。
+    def test_default_image_skill_is_anima_clear(self):
+        """不点名时的默认渠道恒为 anima_clear——2026-09-30 21:3x 用户拍板改的。
+
+        （历史：先是 `anima`，再是 `anima_realskin`、`anima_soft`；前两套都归档到
+        `skills/_archive_20260930/` 了。现在 4 个动漫渠道里 `anima_clear`
+        （realskin → realskin，光最平）是默认。）
 
         signature 的默认值必须是 None——execute_tool 是 fn(**args)，只有「模型
-        压根没传 skill」才会落到默认值，靠它才分得开「没点名」和「点名了 anima」。
+        压根没传 skill」才会落到默认值，靠它才分得开「没点名」和「点名了默认渠道」。
         """
         import inspect
         from app.tools.normal.generate_image import (
             _generate_image, T2I_DEFAULT_SKILL)
         self.assertIsNone(inspect.signature(_generate_image)
                           .parameters["skill"].default)
-        self.assertEqual(T2I_DEFAULT_SKILL, "anima")
+        self.assertEqual(T2I_DEFAULT_SKILL, "anima_clear")
 
     def test_i2i_is_off_so_no_source_image_wording(self):
         """图生图整体停用：描述里必须**劝退** source_image，不能还教怎么用。
@@ -347,15 +352,14 @@ class ToolDescriptionTest(unittest.TestCase):
             tool, I2I_DEFAULT_SKILL, _I2I_SKILLS)
         self.assertEqual(_I2I_SKILLS, ())          # 停用的表达方式就是空
         self.assertEqual(I2I_DEFAULT_SKILL, "qwen_image_v1")   # 恢复时用得上
-        for desc in (tool["description"],
-                     tool["description_overrides"][QQ_AGENT_ID]):
-            self.assertIn("文生图默认 anima", desc)
-            self.assertIn("不要传 source_image", desc)
-            # 不能再有「只传 source_image 就默认走 qwen」这类指路话
-            self.assertNotIn("只传 source_image", desc)
-            self.assertNotIn("会自动切到 qwen", desc)
-            # 「看图 → 反推提示词 → 文生图」这条路必须写清楚，别被误伤掉
-            self.assertIn("看得见", desc)
+        desc = tool["description"]
+        self.assertIn("文生图默认 anima", desc)
+        self.assertIn("不要传 source_image", desc)
+        # 不能再有「只传 source_image 就默认走 qwen」这类指路话
+        self.assertNotIn("只传 source_image", desc)
+        self.assertNotIn("会自动切到 qwen", desc)
+        # 「看图 → 反推提示词 → 文生图」这条路必须写清楚，别被误伤掉
+        self.assertIn("看得见", desc)
 
     def test_source_image_param_is_marked_off(self):
         """参数描述也得是「别传」，口径要和上面那两段一致。"""

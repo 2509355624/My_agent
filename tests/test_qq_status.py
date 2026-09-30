@@ -52,20 +52,20 @@ class ImageJobsSnapshotTest(unittest.TestCase):
         self.assertEqual(s["depth"], 0)
 
     def test_exposes_who_and_how_long(self):
-        image_jobs.enqueue("group", "111", "aaa", skill="anima")
-        image_jobs.enqueue("group", "222", "bbb", skill="anima")
+        image_jobs.enqueue("group", "111", "aaa", skill="anima_soft")
+        image_jobs.enqueue("group", "222", "bbb", skill="anima_soft")
         s = image_jobs.snapshot()
         self.assertEqual(s["depth"], 2)
         ids = [q["target_id"] for q in s["queued"]]
         self.assertIn("222", ids)
         for q in s["queued"]:
-            self.assertEqual(q["skill"], "anima")
+            self.assertEqual(q["skill"], "anima_soft")
             self.assertIn("ahead", q)
             self.assertIn("age", q)
             self.assertGreaterEqual(q["age"], 0)
 
     def test_prompt_is_truncated(self):
-        image_jobs.enqueue("group", "1", "x" * 200, skill="anima")
+        image_jobs.enqueue("group", "1", "x" * 200, skill="anima_soft")
         for q in image_jobs.snapshot()["queued"]:
             self.assertLessEqual(len(q["prompt"]), 60)
 

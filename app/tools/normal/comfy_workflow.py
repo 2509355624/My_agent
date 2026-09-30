@@ -2,7 +2,7 @@
 ComfyUI 工作流查看/调整工具
 
 「当前工作流」= skill 的 workflow.json 模板（generate_image 实际生成用的那份）。
-- get_workflow  : 让 AI「看到」当前工作流（模型 / LoRA链 / 采样参数 / hires / 放大），并可附可用资源清单
+- get_workflow  : 让 AI「看到」当前工作流（模型 / LoRA链 / 采样参数 / 放大），并可附可用资源清单
 - update_workflow: 让 AI 用语义化操作调整（改参数、换模型、增删调 LoRA、换放大），由代码改 JSON，不丢节点图给 LLM 手写
 调整会写回 workflow.json（用户已确认：写回模板，持久生效）。
 """
@@ -17,9 +17,10 @@ from app.skills import load_skill
 CHECKPT = "CheckpointLoaderSimple"
 UNET = "UNETLoader"
 LORA = "LoraLoader"
-# LoRA 加载器有两种：LoraLoader 同时挂 model+clip（SD1.5 系的 image_gen_v1），
-# LoraLoaderModelOnly 只挂 model（anima / anima_2 / krea2 这类 UNETLoader 工作流）。
-# 只认前一种的话 anima 的整条 LoRA 链会被判成「没有 LoRA」，后果不是显示不准而是
+# LoRA 加载器有两种：LoraLoader 同时挂 model+clip（SD1.5 系，已随 image_gen_v1
+# 归档），LoraLoaderModelOnly 只挂 model（anima_soft 等动漫渠道 / krea2 这类
+# UNETLoader 工作流）。
+# 只认前一种的话动漫渠道的整条 LoRA 链会被判成「没有 LoRA」，后果不是显示不准而是
 # 真把工作流改坏：update_workflow 会把 KSampler 的 model 直接改指 UNETLoader
 # （两个 LoRA 全掉），并把 CLIPTextEncode 的 clip 接到 UNETLoader 上——而它根本
 # 没有 clip 输出槽，提交必被 ComfyUI 拒。所以两种都要认。
@@ -277,7 +278,7 @@ def _save(workflow, data):
 
 # ─── 工具 1：查看 ─────────────────────────────────────
 
-def get_workflow(skill="image_gen_v1"):
+def get_workflow(skill="anima_clear"):
     data = _load(skill)
     summary = _build_summary(data["workflow"])
     res_txt = ""
@@ -410,7 +411,7 @@ def _rebuild_lora(workflow, specs):
     return new_ids
 
 
-def update_workflow(skill="image_gen_v1", ops=None):
+def update_workflow(skill="anima_clear", ops=None):
     data = _load(skill)
     wf = data["workflow"]
     msgs = []
@@ -493,13 +494,13 @@ def update_workflow(skill="image_gen_v1", ops=None):
 
 tool = {
     "name": "get_workflow",
-    "description": "查看当前 ComfyUI 生成工作流（skill 模板）：底模模型、LoRA 链及强度、采样器/scheduler/steps/cfg/denoise、hires、放大模型，"
+    "description": "查看当前 ComfyUI 生成工作流（skill 模板）：底模模型、LoRA 链及强度、采样器/scheduler/steps/cfg/denoise、放大模型，"
                   "以及 ComfyUI 当前可用的采样器/调度器/底模/LoRA/放大模型清单。用户要求调整画风/光影/清晰度等之前，先调用本工具了解现状。",
     "function": get_workflow,
     "parameters": {
         "type": "object",
         "properties": {
-            "skill": {"type": "string", "description": "skill 名。默认 image_gen_v1（本工具调参逻辑按它的标准单链结构写；anima 是两段采样（2 个 UNETLoader 底模 + 2 个 ModelOnly lora，二段不接 lora）、krea2 只有 ModelOnly lora，改这两个要先传对应 skill 名 get_workflow 看清结构再动手）"}
+            "skill": {"type": "string", "description": "skill 名。默认 anima_clear（四个动漫渠道之一，也是默认生图渠道）。本工具按**两段采样**结构写：2 个 KSampler（一段建构 + 二段精修，中间夹 LatentUpscaleBy），LoRA 只挂第一段、用 LoraLoaderModelOnly。要改别的渠道（anima_soft / anima_gloss / anima_curvy）先传 skill 名 get_workflow 看清结构再动手——它们节点编号不同，anima_soft/gloss/curvy 是两块底模、anima_clear 只有一块。"}
         },
         "required": []
     }
@@ -519,7 +520,7 @@ tool_update = {
     "parameters": {
         "type": "object",
         "properties": {
-            "skill": {"type": "string", "description": "skill 名。默认 image_gen_v1（本工具调参逻辑按它的标准单链结构写；anima 是两段采样（2 个 UNETLoader 底模 + 2 个 ModelOnly lora，二段不接 lora）、krea2 只有 ModelOnly lora，改这两个要先传对应 skill 名 get_workflow 看清结构再动手）"},
+            "skill": {"type": "string", "description": "skill 名。默认 anima_clear（四个动漫渠道之一，也是默认生图渠道）。本工具按**两段采样**结构写：2 个 KSampler（一段建构 + 二段精修，中间夹 LatentUpscaleBy），LoRA 只挂第一段、用 LoraLoaderModelOnly。要改别的渠道（anima_soft / anima_gloss / anima_curvy）先传 skill 名 get_workflow 看清结构再动手——它们节点编号不同，anima_soft/gloss/curvy 是两块底模、anima_clear 只有一块。"},
             "ops": {
                 "type": "array",
                 "description": "要执行的操作列表（每条可不同 op）",

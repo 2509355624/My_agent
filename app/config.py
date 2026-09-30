@@ -308,7 +308,8 @@ QWEN_COOLDOWN = float(os.getenv("QWEN_COOLDOWN", "90"))
 # 逗号分隔的 skill 名；留空 = 全部可用。被列进来的渠道**代码全保留**，只是
 # `generate_image` 不再放行——模型点名也没用，会拿到一句能直接转述的错话。
 #
-# 本机（RTX 5070 12GB + 16GB 内存）**只有 anima 和 SD 跑得稳**，所以：
+# 本机（RTX 5070 12GB + 16GB 内存）**只有那 4 个动漫渠道跑得稳**
+# （anima_soft / anima_gloss / anima_curvy / anima_clear，2026-09-30 起 SD 也归档了），所以：
 #
 # **qwen_image_v1**（2026-09-27 实测，五次连崩）：
 # 它一套权重 10.5GB（文本编码器 6018MB + unet 4487MB），而 12GB 卡空闲时只有
