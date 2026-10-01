@@ -87,6 +87,27 @@ DEFAULT_CHANNEL = "anima_clear"
 # 2026-09-30 归档到 skills/_archive_20260930/ 的老渠道——一个都不许再冒出来。
 RETIRED = ("anima", "anima_realskin", "anima_2", "image_gen_v1")
 
+# ─── 2026-10-01 新增的 12 个高清渠道（3 档 × 4 画风）─────────────────
+#
+# 它们跟 4 个常规 anima 渠道**共用同一套两段采样骨架**——只是画布更大、
+# 底模按画风换、一段采样器 / 二段步数按档位换。由 `_make_hd_channels.py` 从
+# 「尺寸骨架 + 画风底模组合」展开生成（别手改某一份，否则 12 个会悄悄不一致）。
+#
+# 档位 → (画布宽, 画布高, scale_by, 输出宽, 输出高, 一段采样器, 一段步数, 二段步数)
+HD_TIERS = {
+    "fast": (1024, 1536, 1.0, 1024, 1536, "er_sde", 10, 5),
+    "2":    (1024, 1536, 1.3, 1328, 2000, "dpmpp_2m", 10, 5),
+    "3":    (1024, 1536, 1.5, 1536, 2304, "er_sde", 10, 10),
+}
+# 画风 → (一段底模前缀, 二段底模前缀)——跟 CHANNELS 那四个是同一套组合。
+HD_STYLES = {
+    "clear": ("miaomiaoRealskin_anima13", "miaomiaoRealskin_anima13"),
+    "soft":  ("miaomiaoRealskin_anima13", "miaomiaoAnimeReality_ani11"),
+    "gloss": ("miaomiaoAnimeReality_ani11", "miaomiaoRealskin_anima13"),
+    "curvy": ("miaomiaoHarem_anima16", "miaomiaoAnimeReality_ani11"),
+}
+HD_CHANNELS = ["hd_%s_%s" % (t, s) for t in HD_TIERS for s in HD_STYLES]
+
 # 这台 ComfyUI 的**内建**节点。多出来一个就说明混进了自定义节点（那台机器装不上）。
 BUILTIN_NODES = {
     "VAELoader", "KSampler", "VAEDecode", "CLIPTextEncode", "UNETLoader",
@@ -665,6 +686,217 @@ class SkillDocTest(unittest.TestCase):
             self.assertNotIn("test_image_anima", text,
                              "%s 的 skill.md 还在指已归档的测试" % name)
             self.assertNotIn("test_image_sd", text, name)
+
+
+# ─── 12 个高清渠道（3 档 × 4 画风）──────────────────────────────────
+
+class HdChannelTest(unittest.TestCase):
+    """12 个高清渠道的架构锁。
+
+    2026-10-01 由 `_make_hd_channels.py` 从「尺寸骨架 + 画风底模组合」展开生成。
+    它们跟 4 个常规 anima 渠道**共用同一套两段采样骨架**——只是画布更大、
+    底模按画风换、一段采样器 / 二段步数按档位换。架构断言基本照搬上面的
+    `SharedSkeletonTest` / `BaseModelTest`，只是画布 / 放大倍率 / 采样器按档位走。
+    """
+
+    def test_all_twelve_exist_and_nothing_else(self):
+        """恰好这 12 个 hd_* 渠道；多一个 / 少一个都说明生成脚本跑歪了。"""
+        found = sorted(s for s in list_skills() if s.startswith("hd_"))
+        self.assertEqual(found, sorted(HD_CHANNELS),
+                         "高清渠道集合变了——重跑 _make_hd_channels.py 了吗？")
+
+    def test_each_is_a_scannable_image_skill(self):
+        for name in HD_CHANNELS:
+            data = load_skill(name)
+            self.assertIsNotNone(data, name)
+            self.assertEqual(data["kind"], "生图", name)
+            self.assertIsNotNone(data["workflow"], name)
+
+    def test_qq_whitelist_includes_all_twelve(self):
+        """QQ 机器人必须能看见这 12 个渠道，否则默认渠道传不进来、也点不到。
+
+        这条直接钉住 `agents/qq/agent.json` 的 skills 白名单——**加高清渠道时
+        忘了把它写进白名单**是这类改动最容易踩的坑（模型描述里写了 16 个，
+        白名单却只有 4 个，结果点名 hd_* 直接被 `allows_skill` 拒）。
+        """
+        from app import agents
+        for name in HD_CHANNELS:
+            self.assertTrue(agents.allows_skill("qq", name), name)
+
+    def test_skeleton_is_the_shared_two_stage(self):
+        for name in HD_CHANNELS:
+            wf = _load(name)
+            self.assertEqual(len(_all(wf, "KSampler")), 2, name)
+            self.assertEqual(len(_all(wf, "LatentUpscaleBy")), 1, name)
+            self.assertEqual(len(_all(wf, "VAEDecode")), 1, name)
+            self.assertEqual(len(_all(wf, "SaveImage")), 1, name)
+            self.assertEqual(len(_all(wf, "UNETLoader")), 2, name)
+            self.assertEqual(len(_all(wf, "LoraLoaderModelOnly")), 2, name)
+            self.assertEqual(len(_all(wf, "CLIPLoader")), 1, name)
+            self.assertEqual(len(_all(wf, "EmptyLatentImage")), 1, name)
+
+    def test_topology_stage1_upscale_stage2_decode(self):
+        for name in HD_CHANNELS:
+            wf = _load(name)
+            s1, s2, up = _stage1(wf), _stage2(wf), _upscale(wf)
+            self.assertEqual(wf[up]["inputs"]["samples"], [s1, 0], name)
+            self.assertEqual(wf[s2]["inputs"]["latent_image"], [up, 0], name)
+            self.assertEqual(wf[_one(wf, "VAEDecode")]["inputs"]["samples"],
+                             [s2, 0], name)
+
+    def test_both_passes_read_the_prompt_template(self):
+        for name in HD_CHANNELS:
+            wf = _load(name)
+            for s in (_stage1(wf), _stage2(wf)):
+                self.assertEqual(wf[s]["inputs"]["positive"], ["4", 0], name)
+                self.assertEqual(wf[s]["inputs"]["negative"], ["8", 0], name)
+
+    def test_first_pass_builds_second_pass_refines(self):
+        for name in HD_CHANNELS:
+            wf = _load(name)
+            d1 = wf[_stage1(wf)]["inputs"]["denoise"]
+            d2 = wf[_stage2(wf)]["inputs"]["denoise"]
+            self.assertEqual(d1, 1, name)
+            self.assertEqual(d2, 0.25, name)
+            self.assertLess(d2, d1, name)
+
+    def test_second_pass_is_deterministic(self):
+        for name in HD_CHANNELS:
+            wf = _load(name)
+            s2 = wf[_stage2(wf)]["inputs"]
+            self.assertEqual(s2["sampler_name"], "euler", name)
+            self.assertEqual(s2["scheduler"], "simple", name)
+
+    def test_loras_only_on_the_first_pass(self):
+        for name in HD_CHANNELS:
+            wf = _load(name)
+            base_id, chain = _lora_chain(wf)
+            self.assertEqual(wf[base_id]["class_type"], "UNETLoader", name)
+            self.assertEqual(len(chain), 2, name)
+            by_name = {fn: st for _, fn, st in chain}
+            self.assertEqual(len(by_name), 2, name)
+            kibro = [st for fn, st in by_name.items() if "kibro" in fn]
+            baka = [st for fn, st in by_name.items() if "baka" in fn]
+            self.assertEqual(kibro, [1], name)
+            self.assertEqual(baka, [0.5], name)
+            # 二段不接 LoRA：它的 model 源节点必须是底模装载器
+            s2_model = wf[_stage2(wf)]["inputs"]["model"][0]
+            self.assertEqual(wf[s2_model]["class_type"], "UNETLoader", name)
+
+    def test_clip_does_not_go_through_lora(self):
+        for name in HD_CHANNELS:
+            wf = _load(name)
+            clip_id = _one(wf, "CLIPLoader")
+            self.assertEqual(wf[clip_id]["inputs"]["clip_name"],
+                             "qwen_3_06b_base.safetensors", name)
+            for enc in ("4", "8"):
+                self.assertEqual(wf[enc]["inputs"]["clip"], [clip_id, 0], name)
+
+    def test_base_combos_match_the_style(self):
+        """高清渠道的画风 = 两段底模组合，跟同画风的常规渠道是同一套组合。"""
+        for name in HD_CHANNELS:
+            tier, style = name.split("_")[1], name.split("_")[2]
+            base1, base2 = HD_STYLES[style]
+            wf = _load(name)
+            got1 = _base_file(wf, wf[_stage1(wf)]["inputs"]["model"])
+            got2 = _base_file(wf, wf[_stage2(wf)]["inputs"]["model"])
+            self.assertTrue(got1 and got1.startswith(base1),
+                            "%s 一段底模：期望 %s*，实际 %r" % (name, base1, got1))
+            self.assertTrue(got2 and got2.startswith(base2),
+                            "%s 二段底模：期望 %s*，实际 %r" % (name, base2, got2))
+
+    def test_resolution_matches_the_tier(self):
+        """画布恒为 1024×1536，放大倍率按档位走，输出 = 画布 × scale_by。
+
+        这条锁住「别把高清渠道的画布 / 放大倍率调歪」——它们比常规渠道重得多，
+        画布一旦往上调就会重演 2026-09-27 把整机拖黑屏的事故。
+        """
+        for name in HD_CHANNELS:
+            tier = name.split("_")[1]
+            cw, ch, scale, ow, oh, _, _, _ = HD_TIERS[tier]
+            wf = _load(name)
+            latent = wf[_one(wf, "EmptyLatentImage")]["inputs"]
+            self.assertEqual((latent["width"], latent["height"]), (cw, ch), name)
+            up = wf[_upscale(wf)]
+            self.assertEqual(up["inputs"]["upscale_method"], "nearest-exact", name)
+            self.assertAlmostEqual(up["inputs"]["scale_by"], scale, msg=name)
+            got = (round(cw / 8 * scale) * 8, round(ch / 8 * scale) * 8)
+            self.assertEqual(got, (ow, oh),
+                             "%s 输出：期望 %r，按公式算得 %r" % (name, (ow, oh), got))
+
+    def test_stage1_sampler_and_steps_match_the_tier(self):
+        for name in HD_CHANNELS:
+            tier = name.split("_")[1]
+            _, _, _, _, _, samp1, st1, st2 = HD_TIERS[tier]
+            wf = _load(name)
+            s1 = wf[_stage1(wf)]["inputs"]
+            self.assertEqual(s1["sampler_name"], samp1, name)
+            self.assertEqual(s1["steps"], st1, name)
+            self.assertEqual(wf[_stage2(wf)]["inputs"]["steps"], st2, name)
+
+    def test_output_prefix_is_flat_anima(self):
+        for name in HD_CHANNELS:
+            wf = _load(name)
+            img = wf[_one(wf, "SaveImage")]
+            self.assertEqual(img["inputs"]["filename_prefix"], "Anima", name)
+            self.assertNotIn("/", img["inputs"]["filename_prefix"], name)
+
+    def test_no_custom_nodes(self):
+        for name in HD_CHANNELS:
+            wf = _load(name)
+            used = {n.get("class_type") for n in wf.values()}
+            self.assertTrue(used <= BUILTIN_NODES,
+                            "%s 混进了非内建节点：%r" % (name, used - BUILTIN_NODES))
+
+    def test_every_link_points_at_an_existing_node(self):
+        for name in HD_CHANNELS:
+            wf = _load(name)
+            for nid, node in wf.items():
+                for key, val in node.get("inputs", {}).items():
+                    if (isinstance(val, list) and len(val) == 2
+                            and isinstance(val[0], str)):
+                        self.assertIn(val[0], wf,
+                                      "%s 节点 %s.%s 指向不存在的节点 %r"
+                                      % (name, nid, key, val[0]))
+
+    def test_prompt_template_and_seeds(self):
+        for name in HD_CHANNELS:
+            wf = _load(name)
+            self.assertEqual(wf["4"]["inputs"]["text"],
+                             "@kibro, __MULTI_PROMPTS__", name)
+            neg = wf["8"]["inputs"]["text"]
+            self.assertIn("worst quality", neg, name)
+            self.assertNotIn("__MULTI_PROMPTS__", neg, name)
+            self.assertEqual(_raw(name).count("__SEED__"), 2, name)
+            self.assertNotIn("__CHARACTER__", _raw(name), name)
+
+    def test_skill_md_is_accurate_and_generated(self):
+        """每个 hd 渠道的 skill.md 得指到本渠道、列出正确的两段底模、
+        且声明是生成脚本产物（别手改 workflow.json）。"""
+        for name in HD_CHANNELS:
+            tier, style = name.split("_")[1], name.split("_")[2]
+            base1, base2 = HD_STYLES[style]
+            path = os.path.join(SKILLS, name, "skill.md")
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+            first = [l for l in text.splitlines() if l.startswith("# ")][0]
+            self.assertTrue(first.startswith("# " + name),
+                            "%s 的 skill.md 标题没以渠道名开头：%r" % (name, first))
+            self.assertIn(base1, text, "%s 的 skill.md 没列一段底模 %s" % (name, base1))
+            self.assertIn(base2, text, "%s 的 skill.md 没列二段底模 %s" % (name, base2))
+            self.assertIn("_make_hd_channels.py", text,
+                          "%s 的 skill.md 没说明是生成脚本产物" % name)
+
+    def test_tool_description_covers_all_sixteen(self):
+        """工具描述要写全 16 个渠道（4 画风 + 12 高清），且数对齐。"""
+        from app.tools.normal.generate_image import tool
+        desc = tool["description"]
+        self.assertIn("16 个渠道", desc)
+        for prefix in ("hd_fast_", "hd_2_", "hd_3_"):
+            self.assertIn(prefix, desc, "描述里没提到档位 %s" % prefix)
+        self.assertIn(DEFAULT_CHANNEL, desc)
+        self.assertIn(DEFAULT_CHANNEL,
+                      tool["parameters"]["properties"]["skill"]["description"])
 
 
 if __name__ == "__main__":

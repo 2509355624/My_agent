@@ -500,7 +500,7 @@ tool = {
     "parameters": {
         "type": "object",
         "properties": {
-            "skill": {"type": "string", "description": "skill 名。默认 anima_clear（7 个生图渠道之一，也是默认生图渠道）。本工具按**两段采样**结构写：2 个 KSampler（一段建构 + 二段精修，中间夹 LatentUpscaleBy），LoRA 只挂第一段、用 LoraLoaderModelOnly。要改别的渠道（anima_soft / anima_gloss / anima_curvy / hd_fast / hd_2 / hd_3）先传 skill 名 get_workflow 看清结构再动手——它们节点编号不同，除 anima_clear（只有一块底模）外其余都是两块底模。"}
+            "skill": {"type": "string", "description": "skill 名。默认 anima_clear（16 个生图渠道之一，也是默认生图渠道）。本工具按**两段采样**结构写：2 个 KSampler（一段建构 + 二段精修，中间夹 LatentUpscaleBy），LoRA 只挂第一段、用 LoraLoaderModelOnly。要改别的渠道（anima_soft / anima_gloss / anima_curvy / hd_fast_clear / hd_2_clear / hd_3_clear，或带 _<画风> 后缀的其它档）先传 skill 名 get_workflow 看清结构再动手——它们节点编号不同，除 anima_clear（只有一块底模）外其余都是两块底模。"}
         },
         "required": []
     }
@@ -520,7 +520,7 @@ tool_update = {
     "parameters": {
         "type": "object",
         "properties": {
-            "skill": {"type": "string", "description": "skill 名。默认 anima_clear（7 个生图渠道之一，也是默认生图渠道）。本工具按**两段采样**结构写：2 个 KSampler（一段建构 + 二段精修，中间夹 LatentUpscaleBy），LoRA 只挂第一段、用 LoraLoaderModelOnly。要改别的渠道（anima_soft / anima_gloss / anima_curvy / hd_fast / hd_2 / hd_3）先传 skill 名 get_workflow 看清结构再动手——它们节点编号不同，除 anima_clear（只有一块底模）外其余都是两块底模。"},
+            "skill": {"type": "string", "description": "skill 名。默认 anima_clear（16 个生图渠道之一，也是默认生图渠道）。本工具按**两段采样**结构写：2 个 KSampler（一段建构 + 二段精修，中间夹 LatentUpscaleBy），LoRA 只挂第一段、用 LoraLoaderModelOnly。要改别的渠道（anima_soft / anima_gloss / anima_curvy / hd_fast_clear / hd_2_clear / hd_3_clear，或带 _<画风> 后缀的其它档）先传 skill 名 get_workflow 看清结构再动手——它们节点编号不同，除 anima_clear（只有一块底模）外其余都是两块底模。"},
             "ops": {
                 "type": "array",
                 "description": "要执行的操作列表（每条可不同 op）",
