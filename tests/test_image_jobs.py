@@ -12,6 +12,7 @@ from unittest import mock
 
 import app.agents as agents
 from app import image_jobs
+from app import image_log
 from app import nai
 from app import qq_api
 from app import skills
@@ -50,9 +51,13 @@ class _Base(unittest.TestCase):
         image_jobs._reset()
         self.sent_images = []
         self.sent_texts = []
+        # 编号是贴在图上的 caption，单独记一份：sent_images 保持 (target, tid,
+        # path) 三元组，别为了加一列去动那一堆 [:2] / [2] 的老断言。
+        self.sent_captions = []
 
         def _fake_image(target, tid, url, caption=""):
             self.sent_images.append((target, tid, url))
+            self.sent_captions.append(caption)
 
         def _fake_text(target, tid, text):
             self.sent_texts.append((target, tid, text))
@@ -468,6 +473,15 @@ class ProcessTest(_Base):
             image_jobs._drain()
         self.assertEqual(self.sent_images[0][:2], ("private", "123"))
 
+    def test_the_image_carries_its_tag(self):
+        """出图那张要把自己的编号带上——worker 发的就是入队时定的那个。"""
+        with mock.patch.object(image_jobs, "wait_done",
+                               return_value=self._entry()):
+            job, _ = self._enqueue()
+            image_jobs._drain()
+        self.assertEqual(self.sent_captions, [job.tag])
+        self.assertRegex(job.tag, r"^HT-\d{8}-\d{6}-\d{3}$")
+
     def test_timeout_interrupts_and_cleans_comfyui(self):
         """超时不是「不等了」——要真把它从 ComfyUI 里摘掉并释放显存。
 
@@ -618,6 +632,135 @@ class SendImageTest(unittest.TestCase):
                                sent.append(path)):
             image_jobs._send_image("group", "9", "b c.png")
         self.assertIn("/view?filename=b%20c.png", sent[0])
+
+    def _capture_captions(self):
+        from app import image_out
+        sent = []
+        return mock.patch.object(image_out, "prepare_for_send",
+                                 lambda f, fmt="jpg": "C:/tmp/y.jpg"), \
+            mock.patch.object(qq_api, "send_image",
+                              lambda target, tid, path, caption="":
+                              sent.append((path, caption))), sent
+
+    def test_tag_goes_on_the_message_as_caption(self):
+        """编号必须和图片在**同一条消息**里。
+
+        这是整条链路的前提：群友引用这条消息时，qq_bot 会把正文拉回来
+        （_resolve_quote → get_msg），编号才跟着引用重新进入模型输入。
+        拆成两条消息的话，引用只会拿到空正文，编号就丢了。
+        """
+        p1, p2, sent = self._capture_captions()
+        with p1, p2:
+            image_jobs._send_image("group", "9", "b.png", "HT-20261001-074112-384")
+        self.assertEqual(sent, [("C:/tmp/y.jpg", "HT-20261001-074112-384")])
+
+    def test_no_tag_means_no_caption(self):
+        """不传编号 = 不加那行字，行为与从前完全一致（老调用方不受影响）。"""
+        p1, p2, sent = self._capture_captions()
+        with p1, p2:
+            image_jobs._send_image("group", "9", "b.png")
+        self.assertEqual(sent, [("C:/tmp/y.jpg", "")])
+
+    def test_audit_block_sends_nothing_at_all(self):
+        """被审核拦下时连编号也不发——没图却挂个编号，比什么都不发更糟。"""
+        from app import image_audit
+        p1, p2, sent = self._capture_captions()
+        with p1, p2, mock.patch.object(image_audit, "allow_send",
+                                       return_value=False):
+            ok = image_jobs._send_image("group", "9", "b.png",
+                                        "HT-20261001-074112-384")
+        self.assertFalse(ok)
+        self.assertEqual(sent, [])
+
+
+class JobTagTest(unittest.TestCase):
+    """Job 的编号：入队那一刻定下来，之后不再变。
+
+    编号在**入队**时生成而不是发图时生成，是为了让「发图贴的号」和「以后写
+    进账本的号」必然是同一个值——两处各自生成的话，中间隔着一两分钟，号就
+    对不上了。
+    """
+
+    def setUp(self):
+        image_jobs._reset()
+        p = mock.patch.object(image_jobs, "_ensure_worker", lambda: None)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_generated_for_every_job(self):
+        job = image_jobs.Job("group", "1", {})
+        self.assertRegex(job.tag, r"^HT-\d{8}-\d{6}-\d{3}$")
+
+    def test_explicit_tag_is_kept(self):
+        """测试要固定编号时传得进来。"""
+        job = image_jobs.Job("group", "1", {}, tag="HT-20261001-074112-384")
+        self.assertEqual(job.tag, "HT-20261001-074112-384")
+
+    def test_enqueue_keeps_the_same_tag(self):
+        job, _ = image_jobs.enqueue("group", "1", {})
+        self.assertEqual(image_jobs._queue[-1].tag, job.tag)
+
+    def test_the_tag_is_matchable_by_the_regex(self):
+        """编号必须能被 image_log.TAG_RE 抠出来——不然引用回来也白搭。"""
+        job = image_jobs.Job("group", "1", {})
+        self.assertEqual(image_log.find_tags("引用这条：" + job.tag), [job.tag])
+
+
+class ImageLedgerTest(unittest.TestCase):
+    """图**真发出去了**才记账本。
+
+    判据是「发出去」而不是「画出来」：没发出去的图不该有编号可查——否则对方
+    拿编号问到一句提示词，手上却没有那张图，比查不到更糟。
+    """
+
+    def setUp(self):
+        image_jobs._reset()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self._old = image_log.PATH
+        image_log.PATH = os.path.join(self.tmp.name, "image_log.jsonl")
+        self.addCleanup(setattr, image_log, "PATH", self._old)
+        for target, repl in (("_ensure_worker", lambda: None),
+                             ("_queue_prompt", lambda wf: "pid"),
+                             ("_wait_comfy_idle", lambda timeout=90: True),
+                             ("_free_vram_gb", lambda: None),
+                             ("_send_text", lambda t, tid, x: None)):
+            p = mock.patch.object(image_jobs, target, repl)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _run(self, sent_ok, prompt="1girl, silver hair"):
+        job = image_jobs.Job("group", "9", {}, skill="hd_fast", prompt=prompt)
+        entry = {"outputs": {"9": {"images": [{"filename": "a.png"}]}}}
+        with mock.patch.object(image_jobs, "wait_done", return_value=entry), \
+                mock.patch.object(image_jobs, "_send_image",
+                                  return_value=sent_ok):
+            image_jobs.process(job)
+        return job
+
+    def test_prompt_is_carried_on_the_job(self):
+        self.assertEqual(image_jobs.Job("g", "1", {}, prompt="abc").prompt,
+                         "abc")
+
+    def test_no_prompt_means_empty_string(self):
+        """没传就是空串，不是 None——别让下游拿 None 去拼字符串。"""
+        self.assertEqual(image_jobs.Job("g", "1", {}).prompt, "")
+
+    def test_enqueue_passes_the_prompt(self):
+        job, _ = image_jobs.enqueue("group", "9", {}, prompt="xyz")
+        self.assertEqual(job.prompt, "xyz")
+
+    def test_landed_image_is_recorded(self):
+        job = self._run(True)
+        row = image_log.lookup(job.tag)
+        self.assertEqual(row["prompt"], "1girl, silver hair")
+        self.assertEqual(row["file"], "a.png")
+        self.assertEqual(row["skill"], "hd_fast")
+
+    def test_undelivered_image_is_not_recorded(self):
+        """发出去失败（含被审核拦下）的图，账本里查不到。"""
+        job = self._run(False)
+        self.assertIsNone(image_log.lookup(job.tag))
 
 
 class GenerateImageSplitTest(unittest.TestCase):

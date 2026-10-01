@@ -394,7 +394,10 @@ def _generate_image(prompt, skill=None, lora=None,
     # 的线程本地上下文。
     from app import qq_api
     target, target_id = qq_api.current_context()
-    job, reason = image_jobs.enqueue(target, target_id, workflow, skill)
+    # prompt 一路带到队列里，只为出图后记账本（编号 → 提示词）；出图用的是
+    # 上面填好的 workflow。
+    job, reason = image_jobs.enqueue(target, target_id, workflow, skill,
+                                     prompt=prompt)
     if reason is not None:
         # 拒收时工作流还在手上，ComfyUI 一点算力都没浪费，也不会留下「画了
         # 却没人发」的孤儿图。
@@ -462,6 +465,8 @@ def _enqueue_nai(prompt, target, target_id, nai_i2i=None):
     在这里塞的是 prompt 字符串——cloud 分支靠 skill 判断怎么用它；
     nai_i2i 非 None 时是图生图（快照好的源图 base64 + 强度）。
     """
+    # 不传 prompt：NAI 走 _process_nai，图的 caption 不带编号、也不进账本
+    # （用户选的「只做 anime」）。这里传了也是死数据。
     job, reason = image_jobs.enqueue(target, target_id, prompt, skill="nai",
                                      nai_i2i=nai_i2i)
     if reason is not None:

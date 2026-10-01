@@ -58,6 +58,9 @@ from app.config import ENABLE_IMAGE_GEN
 if ENABLE_IMAGE_GEN:
     from app.tools.normal.generate_image import tool as _generate_image_tool
     register_tool(**_generate_image_tool)
+    # 按编号查回「那张图当初用的什么提示词」：靠的是发图时贴在消息上的编号
+    from app.tools.normal.recall_image import tool as _recall_image_tool
+    register_tool(**_recall_image_tool)
     from app.tools.normal.comfy_workflow import tool as _cw_info, tool_update as _cw_update
     register_tool(**_cw_info)
     register_tool(**_cw_update)

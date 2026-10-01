@@ -114,6 +114,7 @@ import uuid
 
 import requests
 
+from app import image_log
 from app.cancel import Cancelled, is_cancelled
 from app.config import (COMFY_MIN_FREE_RAM_GB, COMFY_MIN_FREE_VRAM_GB,
                         COMFY_RESTART_MIN_GAP, COMFY_RESTART_WAIT, COMFYUI_URL,
@@ -221,14 +222,24 @@ class Job:
     """
 
     def __init__(self, target, target_id, workflow, skill=None, weight=1, seq=0,
-                 nai_i2i=None):
+                 nai_i2i=None, tag=None, prompt=None):
         self.target = target
         self.target_id = target_id
         self.workflow = workflow
         self.skill = skill          # 生图渠道，只用来判断要不要先 /free
+        # 模型写的那段原始提示词（**替换进工作流之前的**）。图发出去之后要连
+        # 编号一起记进账本，否则以后查编号只能查到空——工作流里那份是给
+        # ComfyUI 的，含固定前缀和一堆节点，不适合当「这是什么图」的答案。
+        self.prompt = prompt or ""
         self.weight = weight        # 队列权重（默认 1 = 普通；qwen 是 5）
         self.seq = seq              # 入队序号，同权重的按它先进先出
         self.created = time.time()  # 入队时刻：状态后台用它算「已等 N 秒」
+        # 这张图的编号（形如 HT-20261001-074112-384）。发图时当 caption 贴在
+        # 图片上，群友引用那条消息时编号会跟着引用回到模型眼前
+        # （见 app/image_log.py）。
+        # **在入队这一刻定下来**：worker 发图要用它，之后写账本也要用它，两处
+        # 必须是同一个值。传 tag 只给测试固定编号用。
+        self.tag = tag or image_log.new_tag()
         # NAI 图生图的入队时快照：{"image": 纯base64, "strength": 重绘强度}。
         # 必须快照——worker 线程读不到 qq_api 线程本地的「本轮引用图」。
         self.nai_i2i = nai_i2i
@@ -410,6 +421,7 @@ def snapshot():
                 "weight": job.weight,
                 "age": round(now - job.created, 1),
                 "ahead": ahead,
+                "tag": job.tag,
                 "prompt": (wf[:60] if isinstance(wf, str) else ""),
             }
 
@@ -420,8 +432,11 @@ def snapshot():
         }
 
 
-def enqueue(target, target_id, workflow, skill=None, nai_i2i=None):
+def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None):
     """把一张图排进全局队列，返回 (job, reason)。
+
+    prompt 是模型写的那段原始提示词，只用来**出图后记进账本**（编号 → 提示词，
+    见 app/image_log.py）；生图本身用的是 workflow，这里传不传都不影响出图。
 
     reason 非 None 表示没接（此时 job 为 None），它是一句可以直接转述给对方
     的话。三种拒收：全局队排太长、这个会话自己排太多、重渠道已经排了太多。
@@ -452,7 +467,7 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None):
                           % MAX_HEAVY_IN_QUEUE)
         _seq += 1
         job = Job(target, target_id, workflow, skill, weight, _seq,
-                  nai_i2i=nai_i2i)
+                  nai_i2i=nai_i2i, prompt=prompt)
         _queue.append(job)
         _per_session[key] = cur + 1
     if weight > 1:
@@ -870,10 +885,16 @@ def process(job):
 
     try:
         sent = sum(1 for name in names
-                   if _send_image(job.target, job.target_id, name))
+                   if _send_image(job.target, job.target_id, name, job.tag))
         if sent:
-            log.info("生图完成已发回 %s %s：%d/%d 张",
-                     job.target, job.target_id, sent, len(names))
+            log.info("生图完成已发回 %s %s：%d/%d 张（编号 %s）",
+                     job.target, job.target_id, sent, len(names), job.tag)
+            # 记进账本：编号 → 提示词。**只在真发出去之后记**——没发出去的图
+            # 不该有编号可查，否则查出来一句提示词、对方手上却没有那张图。
+            # 落盘失败也不该影响发图（image_log.save 自己吞掉异常）。
+            image_log.save(job.tag, prompt=job.prompt, file=names[0],
+                           skill=job.skill or "", target=job.target,
+                           target_id=job.target_id)
         else:
             # 全被审核拦下了。**不当失败处理**：图确实画出来了、也通知过对方了
             # （image_audit 自己回的那句提示），再走 _notice 就是重复报错，
@@ -1231,11 +1252,15 @@ def _send_text(target, target_id, text):
         qq_api.send_private(target_id, text)
 
 
-def _send_image(target, target_id, filename):
+def _send_image(target, target_id, filename, tag=""):
     """发回原会话。先过 image_out 甩掉 PNG 里的工作流元数据，编码格式看管理页开关。
 
     返回 True = 真发出去了。审核拦下时返回 False（**不抛异常**）——
     调用方靠它区分「发了」和「被拦了」，别把拦截记成发送失败。
+
+    tag 是这张图的编号，作为 caption 和图片放在**同一条消息**里（见
+    app/image_log.py）：群友引用这条消息时编号会跟着引用回到模型眼前。
+    不传 = 不加那行字，行为与从前完全一致。
 
     ⚠️ 审核审的是 `prepare_for_send` 的产物（本地文件），也就是**真正要发出去
     的那份字节**，不是 ComfyUI 的原图。见 app/image_audit.py 的模块注释。
@@ -1246,5 +1271,5 @@ def _send_image(target, target_id, filename):
     path = image_out.prepare_for_send(filename, fmt)
     if not image_audit.allow_send(path, QQ_AGENT_ID, target, target_id):
         return False
-    qq_api.send_image(target, target_id, path)
+    qq_api.send_image(target, target_id, path, caption=tag or "")
     return True

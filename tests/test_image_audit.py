@@ -345,7 +345,11 @@ class SendHookTest(unittest.TestCase):
     def test_allowed_sends(self):
         rv, send = self._send(True)
         self.assertTrue(rv)
-        send.assert_called_once_with("group", "123", "D:/fake/out.jpg")
+        # 编号是贴在图上的 caption，_send_image **总是**带上这个 kwargs（没编号
+        # 时是空串，等于不加那行字）。别写成不带 caption 的断言——那会假装
+        # 「编号和图片在同一条消息」这件事不存在。
+        send.assert_called_once_with("group", "123", "D:/fake/out.jpg",
+                                     caption="")
 
     def test_send_image_returns_bool(self):
         """返回值必须是布尔 —— 调用方（process）靠它数「发出去几张」。"""
