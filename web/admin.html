@@ -804,7 +804,8 @@ function renderSessions() {
       }
       const pb = document.createElement('button');
       pb.className = 'ghost';
-      pb.textContent = (sessPrompts[s.key] ? '提示词·自定义'
+      pb.textContent = (sessSystems[s.key] ? '提示词·人设'
+                        : sessPrompts[s.key] ? '提示词·自定义'
                         : sessAgents[s.key] ? '提示词·借用' : '提示词');
       pb.addEventListener('click', () => togglePromptEditor(s, row));
       row.appendChild(pb);
@@ -832,6 +833,7 @@ async function loadSessions() {
     sessions = d.sessions || [];
     sessPrompts = d.session_prompts || {};
     sessAgents = d.session_prompt_agents || {};
+    sessSystems = d.session_system_prompts || {};
     renderSessions();
     renderImageGenAll(d.image_gen_on !== false);
     renderNaiAll(d.nai_enabled === true);
@@ -856,8 +858,9 @@ async function loadSessions() {
   }
 }
 
-let sessPrompts = {};     // session_key -> 会话自定义提示词
+let sessPrompts = {};     // session_key -> 会话附加词（拼在人设后面）
 let sessAgents = {};      // session_key -> 借用的 agent id（完整系统提示词）
+let sessSystems = {};     // session_key -> 完整独立系统提示词（最高优先级）
 let promptEditor = null;  // 当前展开的编辑面板 {key, wrap}
 
 function closePromptEditor() {
@@ -869,6 +872,24 @@ function togglePromptEditor(s, row) {
   closePromptEditor();
   const wrap = document.createElement('div');
   wrap.style.cssText = 'margin:8px 0 4px 0; padding:8px; border:1px solid var(--line, #333); border-radius:6px;';
+  // 人设覆盖：只顶 prompt.md 那一层，工具协议 / 工具列表 / Skill 目录 /
+  // 环境说明仍由后端每轮动态拼装。所以这里只写「角色」，别抄工具目录。
+  const sysLabel = document.createElement('div');
+  sysLabel.className = 'hint';
+  sysLabel.style.cssText = 'margin-bottom:4px;';
+  sysLabel.textContent = '人设覆盖（顶替 prompt.md，其余自动拼装）';
+  const sysTa = document.createElement('textarea');
+  sysTa.style.cssText = 'width:100%; min-height:150px; box-sizing:border-box; '
+    + 'font-family:ui-monospace,Consolas,monospace; font-size:12px;';
+  sysTa.placeholder = '留空 = 用 agent 自己的 prompt.md。\n'
+    + '非空 = 用它顶替 prompt.md 那一层（角色人设），其余照常自动拼装：\n'
+    + '工具调用协议、工具列表、安全规则、Skill 目录、环境说明、表情包/记忆。\n\n'
+    + '所以这里只写「角色」——不要抄工具目录，抄了会跟自动拼的那份重复。';
+  sysTa.value = sessSystems[s.key] || '';
+  const taLabel = document.createElement('div');
+  taLabel.className = 'hint';
+  taLabel.style.cssText = 'margin:10px 0 4px 0;';
+  taLabel.textContent = '会话附加词（拼在人设后面）';
   const ta = document.createElement('textarea');
   ta.style.cssText = 'width:100%; min-height:90px; box-sizing:border-box;';
   ta.placeholder = '留空 = 用默认人设。\n写这个群/私聊专属的提示词，会拼在人设后面，如：\n「在这个群里你说话更毒舌，爱用网络梗，讨论话题偏技术」';
@@ -892,7 +913,7 @@ function togglePromptEditor(s, row) {
   agentSel.value = sessAgents[s.key] || '';
   const agentHint = document.createElement('span');
   agentHint.className = 'hint';
-  agentHint.textContent = '选了就用 TA 的完整系统提示词（人设/工具目录全换），下面的自定义词仍然附加在其后';
+  agentHint.textContent = '选了就用 TA 的完整系统提示词（人设/工具目录全换），附加词仍然拼在其后；上面填了人设覆盖则本条不生效';
   agentRow.appendChild(agentLabel); agentRow.appendChild(agentSel);
   agentRow.appendChild(agentHint);
   const bar = document.createElement('div');
@@ -911,11 +932,14 @@ function togglePromptEditor(s, row) {
         + encodeURIComponent(s.key),
         { method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: ta.value, agent: agentSel.value }) });
+          body: JSON.stringify({ text: ta.value, agent: agentSel.value,
+                                 system: sysTa.value }) });
       if (ta.value.trim()) sessPrompts[s.key] = ta.value.trim();
       else delete sessPrompts[s.key];
       if (agentSel.value) sessAgents[s.key] = agentSel.value;
       else delete sessAgents[s.key];
+      if (sysTa.value.trim()) sessSystems[s.key] = sysTa.value.trim();
+      else delete sessSystems[s.key];
       closePromptEditor();
       renderSessions();
       sessStatus('「' + (s.name || s.key) + '」的会话提示词已保存，立即生效', 'ok');
@@ -926,7 +950,9 @@ function togglePromptEditor(s, row) {
   });
   cancel.addEventListener('click', closePromptEditor);
   bar.appendChild(save); bar.appendChild(cancel); bar.appendChild(hint);
-  wrap.appendChild(ta); wrap.appendChild(agentRow); wrap.appendChild(bar);
+  wrap.appendChild(sysLabel); wrap.appendChild(sysTa);
+  wrap.appendChild(taLabel); wrap.appendChild(ta);
+  wrap.appendChild(agentRow); wrap.appendChild(bar);
   promptEditor = { key: s.key, wrap };
   row.parentNode.insertBefore(wrap, row.nextSibling);
   ta.focus();

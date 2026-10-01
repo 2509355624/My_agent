@@ -131,6 +131,33 @@ def _session_prompt_agent(session_key):
     return aid
 
 
+def _session_system_prompt(session_key):
+    """该会话线的**人设覆盖**（settings.json 的 session_system_prompts）。
+
+    非空 = 顶替 agents/<id>/prompt.md 那一层，其余各段（工具调用协议、工具列表、
+    安全规则、行为规则、Skill 目录、环境说明、稳定参考块）照常动态拼装。
+    想给某个群 / 私聊单独改人设就走这里。别整份替换——那会把工具目录和
+    Skill 目录写成快照，之后加工具加技能就全对不上了。
+    """
+    from app.agents import load_settings
+    try:
+        m = load_settings(QQ_AGENT_ID).get("session_system_prompts") or {}
+    except Exception:
+        return ""
+    return str(m.get(session_key) or "").strip()
+
+
+def _effective_agent(session_key):
+    """这条会话线实际生效的 agent。
+
+    配了人设覆盖就回 QQ 默认——覆盖是本会话专属的，比借用更具体，所以让借用
+    让位；历史也仍落 QQ 自己的目录（跟「借用」不同：借用是整轮被接管）。
+    """
+    if _session_system_prompt(session_key):
+        return QQ_AGENT_ID
+    return _session_prompt_agent(session_key) or QQ_AGENT_ID
+
+
 def _session_env_note(session_key):
     """生成当前会话环境的系统级说明，让模型一开始就知道自己处在私聊还是群聊、对面是谁。
 
@@ -185,14 +212,19 @@ def _session_head(session_key, aid):
     """这条会话线应有的 system 头 = 该 agent 稳定层 + 会话附加词 + 环境说明
     + 稳定参考块（表情包清单 / 长期记忆）。
 
+    优先级从高到低：人设覆盖 > 借用助手 > 会话附加词 > 默认人设。
+    人设覆盖只顶 prompt.md 那一层，工具目录 / Skill 目录 / 环境说明照常拼装。
+
     返回 (head, 实际生效的 agent_id)。borrow 的 agent 构建失败时回落
     QQ 默认稳定层。agent_prompt.sync_session_system 不感知会话附加词，
     QQ 侧的同步一律走这里，别用它。
     """
+    override = _session_system_prompt(session_key)
     try:
-        stable = build_stable_prompt(aid)
+        stable = build_stable_prompt(aid, persona_override=override or None)
     except Exception:
-        stable = build_stable_prompt(QQ_AGENT_ID)
+        stable = build_stable_prompt(QQ_AGENT_ID,
+                                     persona_override=override or None)
         aid = QQ_AGENT_ID
     extra = _session_prompt_extra(session_key)
     if extra:
@@ -219,7 +251,7 @@ def _ensure_system_prompt(session_key):
     它就是这条会话线的主人，不是套壳。每轮重建/同步首条 system，
     管理页改完下一条消息就生效。
     """
-    aid = _session_prompt_agent(session_key) or QQ_AGENT_ID
+    aid = _effective_agent(session_key)
     head, aid = _session_head(session_key, aid)
     keep = [m for m in load_history(aid, session_key)
             if m.get("role") != "system"]
@@ -844,7 +876,7 @@ class SessionRunner:
         # 借用的会话线由被借的 agent **整轮接管**：跑它的身份、它的工具
         # 白名单、它的上下文预算；历史也落它自己的 sessions 目录（切回
         # 默认人设时，小小怪原来的历史原样还在）。
-        run_agent = _session_prompt_agent(self.session_key) or QQ_AGENT_ID
+        run_agent = _effective_agent(self.session_key)
         history = load_history(run_agent, self.session_key)
         if not history or history[0].get("role") != "system":
             _ensure_system_prompt(self.session_key)

@@ -24,8 +24,9 @@ def _load_skill(skill_name):
 
 tool = {
     "name": "load_skill",
-    "description": "读取某个 Skill 的主规范文档（会一并带出 references/ 全部内容，上下文开销大）。"
-                  "只想读其中某一个文件时，请改用 list_files + read_file 按需读取。",
+    # 不点名 list_files / read_file：有这俩工具的 agent 会在 _TOOL_HINTS 里
+    # 拿到同样的指引，没这俩的（如 qq）只会被指使去调不存在的工具
+    "description": "读取某个 Skill 的主规范文档（会一并带出 references/ 全部内容，上下文开销大）。",
     "function": _load_skill,
     "parameters": {
         "type": "object",

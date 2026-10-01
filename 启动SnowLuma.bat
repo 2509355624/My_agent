@@ -2,6 +2,11 @@
 cd /d "%~dp0"
 title SNOWLUMA
 
+rem auto = 看门狗调起来的（隐藏窗口跑）：跑完直接退出，不等回车
+set "AUTO_RUN="
+if /i "%~1"=="auto" set "AUTO_RUN=1"
+
+
 rem ===========================================================================
 rem  SnowLuma 协议端启动器（NapCat 的替代品，2026-09-30 起可切换）
 rem
@@ -19,14 +24,21 @@ rem
 rem  数据目录（config/ data/）是**相对当前工作目录**的，所以必须 pushd 进来。
 rem ===========================================================================
 
-set "SL_DIR=D://AI//SnowLuma"
+set "SL_DIR=D:\AI\SnowLuma"
 set "SL_NODE=%SL_DIR%\node.exe"
 set "SL_MAIN=%SL_DIR%\index.mjs"
-set "QQ_EXE=C:\APP\qq\QQ.exe"
+rem [!!] QQ 路径**不能**写死 C: —— 台式机 QQ 在 D:\APP\qq，笔记本可能在 C:。
+rem      2026-10-01 实测：写 C:\APP\qq\QQ.exe 在台式机上不存在 → SnowLuma 找不到 QQ
+rem      就 exit /b 1，整个协议端起不来。改成自动探测双盘符。
+set "QQ_EXE="
+if exist "D:\APP\qq\QQ.exe" set "QQ_EXE=D:\APP\qq\QQ.exe"
+if not defined QQ_EXE if exist "C:\APP\qq\QQ.exe" set "QQ_EXE=C:\APP\qq\QQ.exe"
+if not defined QQ_EXE (
+    echo [ERROR] QQ.exe not found - neither D:\APP\qq\QQ.exe nor C:\APP\qq\QQ.exe
+    if not defined AUTO_RUN pause
+    exit /b 1
+)
 
-rem auto = 看门狗调起来的（隐藏窗口跑）：跑完直接退出，不等回车
-set "AUTO_RUN="
-if /i "%~1"=="auto" set "AUTO_RUN=1"
 
 if not exist "%SL_NODE%" (
     echo [ERROR] 找不到 "%SL_NODE%"

@@ -204,7 +204,39 @@ _DEFAULT_ROLE = (
 )
 
 
-def build_stable_prompt(agent_id=None):
+def _example_tools(agent_id):
+    """按白名单挑两个真工具当格式示例：一个无参、一个带必填参。
+
+    示例里的工具名会被模型模仿，所以必须来自该 agent 的白名单——
+    否则模型照着去调它根本用不了的工具，撞墙几次后会误判成「我看不见工具」。
+    """
+    no_arg = arg = None
+    for t in TOOLS:
+        if not agent_store.allows_tool(agent_id, t["name"]):
+            continue
+        params = t.get("parameters") or {}
+        req = params.get("required") or []
+        if req:
+            if arg is None:
+                arg = (t["name"], req[0],
+                       (params.get("properties") or {}).get(req[0], {}))
+        elif no_arg is None:
+            no_arg = t["name"]
+        if no_arg and arg:
+            break
+    return no_arg, arg
+
+
+def _example_value(spec):
+    t = (spec or {}).get("type")
+    if t in ("integer", "number"):
+        return "1"
+    if t == "boolean":
+        return "true"
+    return '"示例值"'
+
+
+def build_stable_prompt(agent_id=None, persona_override=None):
     """
     构建某个 agent 的稳定层 System Prompt（前缀缓存锚点）。
     内容：角色定义 + 工具调用格式 + 工具列表 + 安全规则 + 行为规则 + Skill 目录 + 环境信息
@@ -212,15 +244,24 @@ def build_stable_prompt(agent_id=None):
 
     人设取自 agents/<id>/prompt.md；工具与 Skill 目录按该 agent 的白名单过滤；
     缓存按 agent 分开存（不同 agent 的人设不同，共用槽位会串味）。
+
+    persona_override 非空时**只顶替 prompt.md 那一层**，其余各段照常动态拼装。
+    会话级改人设走这里；别整份替换——那会把工具目录 / Skill 目录 / 环境说明
+    一起写死成快照，之后加工具加技能就全对不上了。
     """
     key = agent_store.safe_agent_id(agent_id) or "_default"
+    override = (persona_override or "").strip()
 
     fp = _calc_fingerprint(agent_id)
+    # 覆盖内容必须进指纹，否则同一 agent 下多个会话会互相串用缓存
+    if override:
+        import hashlib
+        fp += "|ov:" + hashlib.md5(override.encode()).hexdigest()
     if key in _stable_cache and _stable_fp.get(key) == fp:
         return _stable_cache[key]
 
-    # 人设：agent 自己的 prompt.md，缺失时退回默认角色
-    persona = agent_store.persona_text(agent_id).strip() or _DEFAULT_ROLE
+    # 人设：会话覆盖 > agent 自己的 prompt.md > 默认角色
+    persona = override or agent_store.persona_text(agent_id).strip() or _DEFAULT_ROLE
 
     sections = []
 
@@ -228,6 +269,16 @@ def build_stable_prompt(agent_id=None):
     sections.append((P_ROLE, "Role", persona))
 
     # [P1] 工具调用格式（核心协议，不能丢）
+    # 示例里的工具名必须来自本 agent 白名单：模型会照着示例调工具，
+    # 拿别的 agent 的工具当例子会让它撞墙后误判成「我这边没有工具」
+    demo, demo_arg_spec = _example_tools(agent_id)
+    demo = demo or "工具名"
+    if demo_arg_spec:
+        _dn, _dp, _ds = demo_arg_spec
+        demo_arg = ("[[TOOL:%s]]{\"%s\": %s}[[/TOOL]]"
+                    % (_dn, _dp, _example_value(_ds)))
+    else:
+        demo_arg = "[[TOOL:%s]]{\"参数名\": \"参数值\"}[[/TOOL]]" % demo
     sections.append((P_ROLE, "Tool Call Format",
         "调用工具时，在回复中**单独一行**输出以下格式，必须一字不差：\n"
         "\n"
@@ -242,22 +293,18 @@ def build_stable_prompt(agent_id=None):
         "6. 工具块前后不要加反引号、不要写进代码块\n"
         "7. **不要**用 <tool_call> / <tool_calls> / </tool_call> 之类的标签把工具块包起来\n"
         "\n"
-        "正确示例：\n"
-        "用户：查看当前所有 skills\n"
-        "助手：[[TOOL:list_skills]][[/TOOL]]\n"
-        "\n"
-        "用户：看看 writing 这个 skill 里有什么\n"
-        "助手：[[TOOL:list_files]]{\"path\": \"writing\"}[[/TOOL]]\n"
-        "\n"
-        "用户：读一下 writing/01-structure/write-structure.md\n"
-        "助手：[[TOOL:read_file]]{\"path\": \"writing/01-structure/write-structure.md\"}[[/TOOL]]\n"
+        "正确示例（下面用到的都是本 agent 真实可用的工具）：\n"
+        "无参数时：\n"
+        + ("[[TOOL:%s]][[/TOOL]]\n" % demo)
+        + "\n有参数时（参数名必须与 Available Tools 里写的完全一致）：\n"
+        + demo_arg + "\n"
         "\n"
         "错误写法（会被当成普通文本，工具不会执行）：\n"
-        "<TOOL:list_skills]] ← 开头写成了尖括号，必须是两个方括号 [[\n"
-        "<tool_call>[[TOOL:list_skills]][[/TOOL]] ← 外面多套了一层标签\n"
-        "[[list_skills]] ← 缺少 TOOL: 前缀\n"
-        "[[TOOL: list_skills]] ← 冒号后多了空格\n"
-        "```[[TOOL:list_skills]][[/TOOL]]``` ← 包在代码块里"
+        + ("<TOOL:%s]] ← 开头写成了尖括号，必须是两个方括号 [[\n" % demo)
+        + ("<tool_call>[[TOOL:%s]][[/TOOL]] ← 外面多套了一层标签\n" % demo)
+        + ("[[%s]] ← 缺少 TOOL: 前缀\n" % demo)
+        + ("[[TOOL: %s]] ← 冒号后多了空格\n" % demo)
+        + ("```[[TOOL:%s]][[/TOOL]]``` ← 包在代码块里" % demo)
     ))
 
     # [P2] 工具列表（简述，详细规范由 load_skill 按需读取）
@@ -285,9 +332,20 @@ def build_stable_prompt(agent_id=None):
     ))
 
     # [P3] Skill 目录
+    # 「怎么深入」按白名单给：没有 list_files/read_file 的 agent（如 qq），
+    # 原来那句会指使它去调不存在的工具，撞墙几次后误判成「我看不见 skill」
+    if (agent_store.allows_tool(agent_id, "list_files")
+            and agent_store.allows_tool(agent_id, "read_file")):
+        how = "深入某个 Skill 时先 list_files 看它的文件结构，再 read_file 按需读取："
+    elif agent_store.allows_tool(agent_id, "load_skill"):
+        how = "想深入某个 Skill 就用 load_skill 读它的主规范："
+    else:
+        how = ""
     sections.append((P_SKILLS, "Available Skills",
         "以下是可用的 Skill（标「生图」的是能出图的渠道，其余为写作/知识类）。"
-        "深入某个 Skill 时先 list_files 看它的文件结构，再 read_file 按需读取：\n"
+        "**这份目录就是本 agent 手上全部的 Skill 与生图渠道，需要时直接照着它回答；"
+        "没有「列出 Skill / 列出渠道」这类工具，不要试着去调。**"
+        + how + "\n"
         + _build_skill_list(agent_id)
     ))
 

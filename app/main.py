@@ -729,6 +729,8 @@ def get_agent_sessions(agent_id):
                         settings.get("session_prompts") or {},
                     "session_prompt_agents":
                         settings.get("session_prompt_agents") or {},
+                    "session_system_prompts":
+                        settings.get("session_system_prompts") or {},
                     "interject_cooldown":
                         agent_store.interject_cooldown(aid, ""),
                     "interject_chance":
@@ -1166,11 +1168,13 @@ def edit_agent_private_whitelist(agent_id):
 @app.route("/api/agent/<agent_id>/session_prompt/<path:session_key>",
            methods=["PUT"])
 def set_agent_session_prompt(agent_id, session_key):
-    """保存某个会话线（group_<群号> / private_<QQ号>）的自定义提示词。
+    """保存某个会话线（group_<群号> / private_<QQ号>）的提示词配置。
 
-    存 settings.json 的 session_prompts 字典；text 空串 = 删除该会话的
-    自定义（回到默认人设）。可选字段 agent：借用某个 agent 的完整系统
-    提示词当基底（存 session_prompt_agents，空串=清除借用）。
+    三个字段各自独立、互不覆盖，空串 = 清除该项：
+    - text   → session_prompts（会话附加词，拼在人设后面）
+    - agent  → session_prompt_agents（借用某个 agent 的完整系统提示词当基底）
+    - system → session_system_prompts（人设覆盖：只顶 prompt.md 那一层，
+               工具列表 / Skill 目录 / 环境说明照常动态拼装；优先于借用）
     热生效：qq_bot 每轮重建首条 system。
     """
     if not _admin_allowed():
@@ -1182,6 +1186,8 @@ def set_agent_session_prompt(agent_id, session_key):
     body = request.get_json(silent=True) or {}
     if not isinstance(body.get("text"), str):
         return jsonify({"error": "需要字符串字段 text（空串=清除自定义）"}), 400
+    if "system" in body and not isinstance(body.get("system"), str):
+        return jsonify({"error": "system 需要字符串（空串=清除独立提示词）"}), 400
 
     borrow = str(body.get("agent") or "").strip()
     if borrow:
@@ -1191,6 +1197,22 @@ def set_agent_session_prompt(agent_id, session_key):
             return jsonify({"error": "要借用的 agent 不存在：" + borrow}), 400
 
     settings = agent_store.load_settings(aid)
+
+    # 完整独立提示词：优先级最高。存成独立字典，不跟另外两项互相覆盖——
+    # 这样清了它，原来的借用/附加词还能原样回来。
+    systems = settings.get("session_system_prompts")
+    if not isinstance(systems, dict):
+        systems = {}
+    system = str(body.get("system") or "").strip()
+    if system:
+        systems[session_key] = system
+    else:
+        systems.pop(session_key, None)
+    if systems:
+        settings["session_system_prompts"] = systems
+    else:
+        settings.pop("session_system_prompts", None)
+
     prompts = settings.get("session_prompts")
     if not isinstance(prompts, dict):
         prompts = {}
@@ -1216,7 +1238,8 @@ def set_agent_session_prompt(agent_id, session_key):
     if not agent_store.save_settings(aid, settings):
         return jsonify({"error": "写入 settings.json 失败"}), 500
     return jsonify({"ok": True, "agent": aid, "session_key": session_key,
-                    "set": bool(text), "borrowed": borrow or None})
+                    "set": bool(text), "borrowed": borrow or None,
+                    "system": bool(system)})
 
 
 @app.route("/api/agent/<agent_id>/interject/<group_id>", methods=["PUT"])
