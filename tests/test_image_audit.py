@@ -24,7 +24,7 @@ from unittest import mock
 
 sys.path.insert(0, ".")
 
-from app import agents, image_audit  # noqa: E402
+from app import agents, image_audit, main  # noqa: E402
 
 
 def _write_png(data=b"\x89PNG\r\n\x1a\n" + b"x" * 64):
@@ -380,6 +380,134 @@ class AgentSettingTest(unittest.TestCase):
         s = {"image_audit_overrides": {"123": True, "456": True}}
         self.assertEqual(self._globals(s),
                          {"group": False, "private": False})
+
+
+class PromptOverrideTest(unittest.TestCase):
+    """自定义审核提示词（2026-10-01 用户要求「提示词我要能自己改」）。
+
+    它整份替换 `_PROMPT`，所以两件事都要钉：**存进去的能生效**，以及
+    **没存 / 存坏了回落内置默认**——后者更要紧。配置写坏绝不能把闸门放松，
+    这是 fail-closed 那条原则在配置层的延伸。
+    """
+
+    def _setting(self, settings):
+        with mock.patch.object(agents, "load_settings", return_value=settings):
+            return agents.image_audit_prompt("qq")
+
+    def test_missing_is_empty(self):
+        self.assertEqual(self._setting({}), "")
+
+    def test_blank_is_empty(self):
+        """全空白 = 没设（管理页留空保存走的就是这条路）。"""
+        self.assertEqual(self._setting({"image_audit_prompt": "   \n  "}), "")
+
+    def test_non_string_is_empty(self):
+        """手改坏了存成数字 / null / 列表，一律当没设。"""
+        for bad in (123, None, [], {"a": 1}, True):
+            self.assertEqual(self._setting({"image_audit_prompt": bad}), "",
+                             repr(bad))
+
+    def test_string_is_stripped(self):
+        self.assertEqual(self._setting({"image_audit_prompt": "  从严  "}), "从严")
+
+    def test_resolve_prefers_custom(self):
+        with mock.patch.object(agents, "load_settings",
+                               return_value={"image_audit_prompt": "我的口径"}):
+            self.assertEqual(image_audit.resolve_prompt("qq"), "我的口径")
+
+    def test_resolve_falls_back_to_default(self):
+        with mock.patch.object(agents, "load_settings", return_value={}):
+            self.assertEqual(image_audit.resolve_prompt("qq"),
+                             image_audit.default_prompt())
+
+    def test_resolve_falls_back_when_settings_blow_up(self):
+        """读配置出岔子也不能变成「用空提示词去审」——那等于不审。"""
+        with mock.patch.object(agents, "load_settings",
+                               side_effect=OSError("settings 读挂了")):
+            self.assertEqual(image_audit.resolve_prompt("qq"),
+                             image_audit.default_prompt())
+
+    def test_check_defaults_to_builtin_prompt(self):
+        """check() 不传 prompt（测试、或直接调用）时仍然是内置那份。"""
+        path = _write_png()
+        try:
+            with mock.patch("app.vision.describe",
+                            return_value='{"allow": true}') as desc:
+                image_audit.check(path)
+            self.assertEqual(desc.call_args[1]["prompt"], image_audit._PROMPT)
+        finally:
+            os.remove(path)
+
+    def test_allow_send_uses_the_custom_prompt(self):
+        """端到端：管理页存的那份真的被发去识图，而不是继续用内置的。"""
+        path = _write_png()
+        try:
+            with mock.patch.object(agents, "image_audit_enabled",
+                                   return_value=True), \
+                 mock.patch.object(agents, "load_settings",
+                                   return_value={"image_audit_prompt":
+                                                 "我的口径"}), \
+                 mock.patch("app.vision.describe",
+                            return_value='{"allow": true}') as desc:
+                self.assertTrue(image_audit.allow_send(
+                    path, "qq", "group", "123"))
+            self.assertEqual(desc.call_args[1]["prompt"], "我的口径")
+        finally:
+            os.remove(path)
+
+
+class PromptAdminEndpointTest(unittest.TestCase):
+    """管理页那个「审核提示词」按钮走的后端接口。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = os.path.join(self.tmp.name, "agents")
+        os.makedirs(root, exist_ok=True)
+        p = mock.patch.object(agents, "AGENTS_DIR", root)
+        p.start()
+        self.addCleanup(p.stop)
+        agents.clear_cache()
+        self.addCleanup(agents.clear_cache)
+        p = mock.patch.object(main, "ADMIN_ALLOW_REMOTE", True)
+        p.start()
+        self.addCleanup(p.stop)
+        self.client = main.app.test_client()
+
+    def url(self):
+        return "/api/agent/qq/image_audit_prompt"
+
+    def test_save_then_read_back(self):
+        r = self.client.put(self.url(), json={"prompt": "我的口径"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["prompt"], "我的口径")
+        self.assertFalse(r.get_json()["using_default"])
+        self.assertEqual(agents.image_audit_prompt("qq"), "我的口径")
+
+    def test_blank_restores_the_builtin_default(self):
+        self.client.put(self.url(), json={"prompt": "我的口径"})
+        r = self.client.put(self.url(), json={"prompt": "   "})
+        self.assertTrue(r.get_json()["using_default"])
+        self.assertEqual(agents.image_audit_prompt("qq"), "")
+        self.assertEqual(r.get_json()["effective"], image_audit.default_prompt())
+
+    def test_missing_field_is_rejected(self):
+        self.assertEqual(self.client.put(self.url(), json={}).status_code, 400)
+
+    def test_non_string_is_rejected(self):
+        self.assertEqual(
+            self.client.put(self.url(), json={"prompt": 123}).status_code, 400)
+
+    def test_too_long_is_rejected(self):
+        r = self.client.put(self.url(), json={"prompt": "长" * 5000})
+        self.assertEqual(r.status_code, 400)
+
+    def test_sessions_payload_carries_both_prompt_fields(self):
+        """编辑器靠 default 填初始内容，所以两个字段都得出现在列表接口里。"""
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertEqual(d["image_audit_prompt"], "")
+        self.assertEqual(d["image_audit_prompt_default"],
+                         image_audit.default_prompt())
 
 
 class SendHookTest(unittest.TestCase):

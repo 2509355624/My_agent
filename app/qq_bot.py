@@ -912,6 +912,20 @@ class SessionRunner:
         except Exception:
             log.exception("生图回执注入失败 %s", self.session_key)
 
+        # 私聊生图额度状态：额度拒过一次之后，那句拒绝会作为 tool_result 留在
+        # history 里，模型会一直照着它回话——哪怕管理员已经把人加进免额名单
+        # （2026-10-01 用户报「加了白名单，AI 还说我限额了」）。这行给它当下
+        # 的锚点，与上面那条回执同通道：每轮现取现用、出流即弃，不写回 history。
+        try:
+            from app.agents import image_quota_line
+            quota_line = image_quota_line(QQ_AGENT_ID, self.target,
+                                          self.target_id)
+            if quota_line:
+                extra_context = (extra_context + "\n\n" + quota_line
+                                 if extra_context else quota_line)
+        except Exception:
+            log.exception("额度状态注入失败 %s", self.session_key)
+
         # 工具层靠线程本地变量知道「此刻在为哪个会话服务」，
         # send_qq_message 不带参数时就发回这里。引用图一并带上：图生图只认
         # 「对方引用的那张」，而模型在群里看不见图片地址、只报得出「第几张」，

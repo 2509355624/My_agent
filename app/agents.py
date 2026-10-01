@@ -205,6 +205,49 @@ def image_quota_allowed(agent_id, target, target_id):
     return True, ""
 
 
+def image_quota_line(agent_id, target, target_id):
+    """给模型看的一行「这个私聊会话现在的生图额度状态」；没什么可说时返回空串。
+
+    **为什么需要它**（2026-10-01 用户报「加了白名单，AI 还说我限额了」）：
+    额度拒一次之后，那句「今天私聊生图的额度用完了」会作为 tool_result 永久
+    留在会话历史里。管理员随后把人加进免额名单，**模型不知道**——它照着历史
+    里的旧拒绝继续回话，而且因为那句里写着「别再重试」，它连工具都不再调一次
+    （实测那几轮日志全是 `工具=-`，一次都没重新检查）。结果就是「白名单明明
+    生效了，机器人却咬死说限额」。
+
+    额度闸本身没错（`image_quota_allowed` 确实放行白名单），错在模型手里
+    没有**当下**的事实。这行跟着 extra_context 每轮现取现用、出流即弃
+    （与 `[最近生图]` 同一通道），给它一个当前锚点。
+
+    **只在额度开着时输出**：限流关掉（上限 0）就没什么可说的，别白占尾巴。
+    不省「还没用满」这一种——正是这种「历史说满了、其实没满」的错位要治，
+    只挑几种状态输出等于把同一类 bug 又留一半。
+
+    结尾那句「以本行为准」不是客套：模型手里同时有这行（每轮新）和历史里的
+    旧拒绝（永不消失），得明确告诉它该信哪个，否则它常常挑旧的说。
+    """
+    if target != "private":
+        return ""
+    limit = private_image_daily_limit(agent_id)
+    if limit <= 0:
+        return ""
+    if str(target_id) in private_image_quota_whitelist(agent_id):
+        state = "这个人在免额名单里，**不限量**，可以直接画。"
+    else:
+        from app import image_quota
+        used = image_quota.used(target_id)
+        if used >= limit:
+            state = ("今天已用 %d/%d 张，**已经用满**，要等明天才恢复；"
+                     "别再调 generate_image，直接告诉对方明天再来。"
+                     % (used, limit))
+        else:
+            state = ("今天已用 %d/%d 张，**还能画 %d 张**，现在可以接单。"
+                     % (used, limit, limit - used))
+    return ("[私聊生图额度] " + state
+            + "（这行是当前状态、每轮都重新算，**以它为准**；"
+              "历史里那句「额度用完」若与它冲突，已经不作数了。）")
+
+
 def private_image_quota_info(agent_id, target_id):
     """管理页私聊行要显示的一条：{"limit": 10, "used": 3, "whitelisted": False}。
 
@@ -332,6 +375,23 @@ def image_audit_globals(agent_id):
     """
     s = load_settings(agent_id)
     return {sc: _audit_flag(s, sc) for sc in IMAGE_AUDIT_SCOPES}
+
+
+# 自定义审核提示词的 settings.json 键名。
+_AUDIT_PROMPT_KEY = "image_audit_prompt"
+
+
+def image_audit_prompt(agent_id):
+    """自定义的审核提示词；没设 / 设成空白 → 返回 ""（调用方回落内置默认）。
+
+    2026-10-01 用户要求「审核的提示词我要能自己改」。原先它写死在
+    app/image_audit.py 的 `_PROMPT` 里，想调一句就得改代码 + 重启适配层。
+
+    **只认非空字符串**：手改坏了存成 null / 数字 / 空串，一律当「没设」，
+    回落内置默认。绝不因为配置写坏就把闸门放空——这条比「尊重用户输入」重要。
+    """
+    v = load_settings(agent_id).get(_AUDIT_PROMPT_KEY)
+    return v.strip() if isinstance(v, str) else ""
 
 
 # 主动发言冷却的合法范围（秒）。0 = 不限频；上限防手滑输成天文数字。

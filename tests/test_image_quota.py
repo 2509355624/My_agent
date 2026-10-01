@@ -209,6 +209,79 @@ class QuotaGateTest(_TempQuota):
                          {"limit": 5, "used": 1, "whitelisted": False})
 
 
+class QuotaLineTest(_TempQuota):
+    """agents.image_quota_line：给模型的「当前额度状态」锚点。
+
+    2026-10-01 用户报「加了白名单，AI 还说我限额了」。查下来额度闸没问题
+    （白名单确实放行），坏在模型侧：那句「额度用完了」作为 tool_result 留在
+    会话历史里，模型之后一直照着它回话，连工具都不再调一次。这行的意义就是
+    让**当下**每轮都能压过历史，所以每种状态都钉一遍——尤其白名单那条，
+    必须明说旧拒绝作废，否则模型会跟历史里那句打架。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.settings = {}
+        p = mock.patch.object(agents, "load_settings",
+                              side_effect=lambda aid: dict(self.settings))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def line(self, target="private", target_id="42"):
+        return agents.image_quota_line("qq", target, target_id)
+
+    def test_group_and_web_get_nothing(self):
+        """额度只管私聊，群聊/网页端不该多出这一行白占尾巴。"""
+        self.settings = {"private_image_daily_limit": 1}
+        self.assertEqual(self.line("group", "42"), "")
+        self.assertEqual(self.line(None, "42"), "")
+
+    def test_quota_off_gets_nothing(self):
+        self.settings = {"private_image_daily_limit": 0}
+        self.assertEqual(self.line(), "")
+
+    def test_under_limit_says_how_many_left(self):
+        self.settings = {"private_image_daily_limit": 3}
+        image_quota.charge("42")
+        s = self.line()
+        self.assertIn("1/3", s)
+        self.assertIn("还能画 2 张", s)
+
+    def test_at_limit_says_exhausted(self):
+        self.settings = {"private_image_daily_limit": 3}
+        for _ in range(3):
+            image_quota.charge("42")
+        self.assertIn("已经用满", self.line())
+
+    def test_every_line_says_it_outranks_history(self):
+        """每种状态都得带上「以它为准」——模型手里同时有这行（每轮新）和
+        历史里的旧拒绝（永不消失），不点名谁大，它常常挑旧的说。"""
+        cases = (
+            ("没用满", {"private_image_daily_limit": 3}, 1),
+            ("用满", {"private_image_daily_limit": 1}, 1),
+            ("免额", {"private_image_daily_limit": 1,
+                      "private_image_quota_whitelist": ["42"]}, 1),
+        )
+        for name, settings, charges in cases:
+            with self.subTest(name):
+                self.settings = settings
+                image_quota.reset()
+                for _ in range(charges):
+                    image_quota.charge("42")
+                self.assertIn("以它为准", self.line())
+
+    def test_whitelisted_says_unlimited_and_voids_old_refusal(self):
+        """白名单这条只写「不限量」不够——必须同时**明说历史里的旧拒绝不作数**，
+        不然模型手里是两个互相矛盾的信号，还是会挑那个旧的说。"""
+        self.settings = {"private_image_daily_limit": 1,
+                         "private_image_quota_whitelist": ["42"]}
+        for _ in range(9):
+            image_quota.charge("42")
+        s = self.line()
+        self.assertIn("不限量", s)
+        self.assertIn("不作数", s)
+
+
 class ChargeWiringTest(_TempQuota):
     """generate_image._charge_quota：只私聊扣，并留下可退款的凭据。"""
 
@@ -251,6 +324,9 @@ class QqGateMessageTest(_TempQuota):
         # 出路必须是「明天再来」，不是「机器坏了」——后者会让对方反复重试
         self.assertIn("明天", out)
         self.assertIn("别再重试", out)
+        # 「这一轮」这个限定词别删：不限定的话模型会读成**永久**禁令，之后
+        # 管理员把人加进免额名单了它也不再调一次工具确认（2026-10-01 用户报）。
+        self.assertIn("这一轮", out)
 
     def test_under_quota_passes_the_gate(self):
         with mock.patch.object(qq_api, "current_context",
