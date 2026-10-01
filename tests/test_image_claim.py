@@ -16,6 +16,7 @@ from unittest import mock
 import app.agent as agent
 import app.comfy_status as comfy_status
 import app.config as config
+from app import image_jobs
 
 _comfy_patch = None
 
@@ -83,8 +84,9 @@ class _GuardRunner(unittest.TestCase):
         self.addCleanup(p.stop)
         return fake
 
-    def _collect(self, user_input="画一个"):
-        return list(agent.run_agent_stream(user_input, self.history))
+    def _collect(self, user_input="画一个", session_key=None):
+        return list(agent.run_agent_stream(user_input, self.history,
+                                           session_key=session_key))
 
     @staticmethod
     def _texts(events):
@@ -93,7 +95,7 @@ class _GuardRunner(unittest.TestCase):
     def _nudges(self):
         return [m for m in self.history
                 if m.get("role") == "tool_result"
-                and "没有真正调用" in (m.get("content") or "")]
+                and "听起来像在汇报生图进度" in (m.get("content") or "")]
 
 
 class PromiseWithoutCallTest(_GuardRunner):
@@ -160,6 +162,66 @@ class NoFalsePositiveTest(_GuardRunner):
         self.assertEqual([e["type"] for e in events], ["user", "assistant"])
         self.assertEqual(self._texts(events), ["画着呢 等着收图"])
         self.assertEqual(fake.calls, 1)
+
+
+class HonestProgressIsNotABlankPromiseTest(_GuardRunner):
+    """本会话真有图在跑时，「还在画 / 出了自动发」是实话，不能退回重来。
+
+    实测（2026-10-01 08:13，logs/qq_bot.log）：模型上一轮已经把 hd_3 提交进
+    队列，这一轮如实汇报「还在跑，出图时间本来就比二档长不少」，却被判成空头
+    承诺；而那段 nudge 又断言「那张图根本不存在」——模型只能去补一次，于是
+    队列里多出一张 hd_3。根因是判据「**本 run** 没调工具」是 run 级的，而 QQ
+    路径下 generate_image 提交完立刻返回，「上一轮提交、这一轮汇报进度」本来
+    就是常态（见 agent._session_has_image_activity）。
+    """
+
+    _HONEST = "上一张三档跑着呢 出图时间本来就比二档长不少"
+
+    def setUp(self):
+        super().setUp()
+        image_jobs._reset()
+        self.addCleanup(image_jobs._reset)
+        # enqueue 会顺手起 worker 线程（image_jobs._ensure_worker）。这个类只
+        # 需要「队列里有东西」这个事实，不需要真线程——不挡的话它会活到进程
+        # 结束，跟别的测试抢队列，症状是随机几个用例失败（见 test_image_jobs
+        # 的 _Base，那边也是这么挡的）。
+        p = mock.patch.object(image_jobs, "_ensure_worker", lambda: None)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_the_line_really_looks_like_a_promise(self):
+        """先钉住前提：这句确实命中了词表，否则下面几条就是空跑。"""
+        self.assertTrue(agent._looks_like_image_promise(self._HONEST))
+
+    def test_an_in_flight_job_makes_the_report_legitimate(self):
+        image_jobs.enqueue("group", "9", {"1": {}})
+        fake = self._patch_llm([self._HONEST])
+        events = self._collect(session_key="group_9")
+        self.assertEqual(self._texts(events), [self._HONEST])
+        self.assertEqual(fake.calls, 1)
+        self.assertEqual(self._nudges(), [])
+
+    def test_without_any_job_the_same_line_is_still_blocked(self):
+        """队列是空的，这句话就是空口承诺——守卫照常开火。"""
+        self._patch_llm([self._HONEST, "画上了"])
+        events = self._collect(session_key="group_9")
+        self.assertEqual(self._texts(events), ["画上了"])
+        self.assertEqual(len(self._nudges()), 1)
+
+    def test_another_sessions_job_does_not_excuse_it(self):
+        image_jobs.enqueue("group", "8", {"1": {}})
+        self._patch_llm([self._HONEST, "画上了"])
+        events = self._collect(session_key="group_9")
+        self.assertEqual(self._texts(events), ["画上了"])
+        self.assertEqual(len(self._nudges()), 1)
+
+    def test_without_a_session_key_it_behaves_as_before(self):
+        """网页端不传 session_key（那边 generate_image 是同步等的）。"""
+        image_jobs.enqueue("group", "9", {"1": {}})
+        self._patch_llm([self._HONEST, "画上了"])
+        events = self._collect()
+        self.assertEqual(self._texts(events), ["画上了"])
+        self.assertEqual(len(self._nudges()), 1)
 
 
 class PaotuSlangGuardTest(_GuardRunner):
@@ -275,6 +337,20 @@ class DetectorTest(unittest.TestCase):
         """老实回话里有「出图」二字（「没出图」），绝不能触发退回重来。"""
         for s in ("图没画出来（NAI：429 Client Error: Too Many Requests）",
                   "画超时了（超过 180 秒没出图），已经中断这张。麻烦重新生成一次。"):
+            self.assertFalse(agent._looks_like_image_promise(s), s)
+
+    def test_explaining_about_rendering_time_does_not_match(self):
+        """「出图**时间**」是解释，不是「图已出」的断言（2026-10-01 收窄）。
+
+        原词表收裸的「出图」，于是「出图时间本来就比二档长不少」这种纯解释也
+        被判成空头承诺退回重来；下一轮模型真的又调了一次 generate_image，队列
+        里多出一张重复的图（logs/qq_bot.log L14426 触发、L14429 真的补了一次）。
+        现在只认完成态：已出图 / 出图了 / 刚出了 这些。
+        """
+        for s in ("上一张三档（hd_3）还在跑 出图时间本来就比二档长不少",
+                  "本机一共 7 个，分两类：画风 4 个，尺寸 3 个",
+                  "动作飘了是提示词被稀释了——hd_3 那版我把冷汗、表情、"
+                  "衣服堆在一长串里"):
             self.assertFalse(agent._looks_like_image_promise(s), s)
 
     def test_questions_and_idle_talk_do_not_match(self):

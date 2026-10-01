@@ -826,14 +826,53 @@ class GenerateImageSplitTest(unittest.TestCase):
         self.assertEqual(image_jobs.inflight_count("group", "9"), 0)
 
     def test_qq_says_how_many_are_ahead(self):
-        """排队时要告诉模型前面还有几张，好让它跟对方交代一句。"""
+        """排队时要告诉模型前面还有几张，好让它跟对方交代一句。
+
+        第二张必须换个词：**同样的词会被查重拦下**（见
+        test_the_same_request_while_in_flight_is_not_submitted_twice），
+        那是另一条规则，这里要测的是排队提示本身。
+        """
         with mock.patch.object(qq_api, "current_context",
                                return_value=("group", "9")), \
                 mock.patch.object(image_jobs, "wait_done",
                                   return_value={"outputs": {}}):
             generate_image.tool["function"]("a cat")        # 先占住队首
-            out = generate_image.tool["function"]("a cat")  # 这一张排在后面
+            out = generate_image.tool["function"]("a dog")  # 这一张排在后面
         self.assertIn("前面还有 1 张", out)
+
+    def test_the_same_request_while_in_flight_is_not_submitted_twice(self):
+        """同一件事还没出图又被提交一遍 → 不再排第二张（2026-10-01）。
+
+        QQ 路径提交完立刻返回，模型这轮只拿到「排上了」；下一轮它要是没看到
+        那条回执（上下文被压缩，或空头承诺守卫把如实汇报判成空头承诺），就会
+        再提交一次——队列里于是多出一张一模一样的图。实测 2026-10-01 08:13
+        就是这么连出两张 hd_3 的。
+        """
+        with mock.patch.object(qq_api, "current_context",
+                               return_value=("group", "9")), \
+                mock.patch.object(image_jobs, "wait_done",
+                                  return_value={"outputs": {}}):
+            generate_image.tool["function"]("a cat")
+            out = generate_image.tool["function"]("a cat")   # 原样再来一遍
+        self.assertIn("没有执行", out)
+        self.assertEqual(image_jobs.inflight_count("group", "9"), 1)
+
+    def test_another_session_may_submit_the_same_request(self):
+        """查重按会话隔离：别人说同一句话当然要照画。
+
+        它照样会被排到别人后面（队列是全局串行的），所以断言的是「没被查重
+        拦下」，不是「立刻开画」。
+        """
+        with mock.patch.object(image_jobs, "wait_done",
+                                return_value={"outputs": {}}):
+            with mock.patch.object(qq_api, "current_context",
+                                   return_value=("group", "9")):
+                generate_image.tool["function"]("a cat")
+            with mock.patch.object(qq_api, "current_context",
+                                   return_value=("group", "8")):
+                out = generate_image.tool["function"]("a cat")
+        self.assertNotIn("没有执行", out)
+        self.assertEqual(image_jobs.inflight_count("group", "8"), 1)
 
     def test_web_still_waits_and_returns_url(self):
         out = self._call((None, None))
@@ -857,9 +896,10 @@ class GenerateImageSplitTest(unittest.TestCase):
                                   return_value={"outputs": {}}), \
                 mock.patch.object(image_jobs, "_queue_prompt",
                                   return_value="pid") as qp:
-            for _ in range(image_jobs.MAX_INFLIGHT):
-                generate_image.tool["function"]("a cat")
-            out = generate_image.tool["function"]("a cat")   # 被拒
+            # 每张换个词：同样的词会被查重拦下，那就测不到「名额满」这条了。
+            for i in range(image_jobs.MAX_INFLIGHT):
+                generate_image.tool["function"]("cat %d" % i)
+            out = generate_image.tool["function"]("cat over")   # 被拒
             image_jobs._drain()
         self.assertIn("排着", out)
         # 只有真正入了队的那几张被送进 ComfyUI
@@ -882,6 +922,125 @@ class GenerateImageSplitTest(unittest.TestCase):
         self.assertNotIn("排上", out)
         self.assertEqual(image_jobs.queue_depth(), 0)   # 一张都没进队
         self.assertFalse(qp.called)                     # 更没碰 ComfyUI
+
+
+class _QueueOnlyTest(unittest.TestCase):
+    """只跟队列记账打交道的用例：绝不能让它顺手起真 worker。
+
+    enqueue() 会调 _ensure_worker 起一个常驻线程，而这个线程**不会**被 _reset
+    收掉（_worker_started 是进程级的，见 _reset 的注释）。真起起来它就活到进程
+    结束，跑到别的模块的用例里去抢任务，症状是随机某个用例失败——比如
+    ProcessTest 里 _wait_comfy_idle 被调了两次（2026-10-01 实测，就是这么踩的）。
+    """
+
+    def setUp(self):
+        image_jobs._reset()
+        p = mock.patch.object(image_jobs, "_ensure_worker", lambda: None)
+        p.start()
+        self.addCleanup(p.stop)
+
+
+class PendingDuplicateTest(_QueueOnlyTest):
+    """同一件事还没出图又被提交一遍 → 不再排第二张（2026-10-01）。
+
+    为什么要拦在代码层：QQ 路径下 generate_image 提交完立刻返回，模型那一轮
+    只拿到「排上了」；下一轮它要是没看到这条回执（上下文被压缩，或空头承诺
+    守卫把如实汇报判成空头承诺），就会再提交一次，队列里多出一张一模一样的
+    图——实测 2026-10-01 08:13 就是这么连出两张 hd_3 的。
+    """
+
+    def _enqueue(self, prompt="a cat", skill=None, lora=None,
+                 target="group", target_id="9"):
+        intent = generate_image._intent_key(prompt, skill, lora)
+        job, reason = image_jobs.enqueue(target, target_id, {"1": {}}, skill,
+                                         prompt=prompt, intent=intent)
+        self.assertIsNone(reason)
+        return job, intent
+
+    def test_the_same_intent_in_flight_is_a_duplicate(self):
+        job, intent = self._enqueue()
+        self.assertIs(image_jobs.find_pending_duplicate("group", "9", intent),
+                      job)
+
+    def test_a_different_prompt_is_not_a_duplicate(self):
+        self._enqueue(prompt="a cat")
+        other = generate_image._intent_key("a dog", None, None)
+        self.assertIsNone(image_jobs.find_pending_duplicate("group", "9", other))
+
+    def test_a_different_channel_is_not_a_duplicate(self):
+        """换渠道是另一张图——hd_2 和 hd_3 不能互相顶掉。"""
+        self._enqueue(skill=None)
+        other = generate_image._intent_key("a cat", "hd_3", None)
+        self.assertIsNone(image_jobs.find_pending_duplicate("group", "9", other))
+
+    def test_another_sessions_intent_does_not_collide(self):
+        """别的会话排着一张同样的图，跟这个会话没关系。"""
+        _, intent = self._enqueue(target="group", target_id="8")
+        self.assertIsNone(image_jobs.find_pending_duplicate("group", "9", intent))
+        self.assertIsNotNone(
+            image_jobs.find_pending_duplicate("group", "8", intent))
+
+    def test_a_job_without_intent_never_matches(self):
+        image_jobs.enqueue("group", "9", {"1": {}})
+        intent = generate_image._intent_key("a cat", None, None)
+        self.assertIsNone(image_jobs.find_pending_duplicate("group", "9", intent))
+
+    def test_a_running_job_is_still_in_flight(self):
+        """已经开跑但还没出图，照样算重复——对方什么都还没看到。"""
+        job, intent = self._enqueue()
+        image_jobs._take_nowait()
+        self.assertIs(image_jobs.find_pending_duplicate("group", "9", intent),
+                      job)
+
+    def test_a_landed_image_is_no_longer_a_duplicate(self):
+        """出过图之后再点一次同样的是有意为之。
+
+        实测 2026-10-01 08:18 有人明说「三档同一份词条原样重跑一张 你看看
+        这次细节对不对」——这种当重复拦下等于把正常需求堵死。
+        """
+        job, intent = self._enqueue()
+        image_jobs._take_nowait()
+        image_jobs._finish(job)
+        self.assertIsNone(image_jobs.find_pending_duplicate("group", "9", intent))
+
+
+class RecentActivityTest(_QueueOnlyTest):
+    """守卫开火前问的那句「本会话有没有在途 / 刚出图」（2026-10-01）。
+
+    没有它，「上一轮提交、这一轮汇报进度」会被判成空头承诺退回重来，而那段
+    nudge 会让模型真的再提交一遍——正是重复出图的老路（见
+    image_jobs.recent_activity 的注释）。
+    """
+
+    def test_a_queued_job_counts(self):
+        image_jobs.enqueue("group", "9", {"1": {}})
+        self.assertEqual(image_jobs.recent_activity("group", "9"), 1)
+
+    def test_a_running_job_counts(self):
+        image_jobs.enqueue("group", "9", {"1": {}})
+        image_jobs._take_nowait()
+        self.assertEqual(image_jobs.recent_activity("group", "9"), 1)
+
+    def test_a_just_landed_image_counts(self):
+        job, _ = image_jobs.enqueue("group", "9", {"1": {}})
+        image_jobs._take_nowait()
+        image_jobs._finish(job)
+        self.assertEqual(image_jobs.recent_activity("group", "9"), 1)
+
+    def test_a_long_gone_image_does_not_count(self):
+        job, _ = image_jobs.enqueue("group", "9", {"1": {}})
+        image_jobs._take_nowait()
+        image_jobs._finish(job)
+        # within 取负 = 窗口外。用 0 不行：Windows 的时钟精度会让 ts 和 now
+        # 读到同一刻，`now - ts <= 0` 照样成立。
+        self.assertEqual(image_jobs.recent_activity("group", "9", within=-1), 0)
+
+    def test_another_session_does_not_count(self):
+        image_jobs.enqueue("group", "8", {"1": {}})
+        self.assertEqual(image_jobs.recent_activity("group", "9"), 0)
+
+    def test_no_target_is_zero(self):
+        self.assertEqual(image_jobs.recent_activity(None, None), 0)
 
 
 class ComfyAliveTest(unittest.TestCase):
@@ -1122,6 +1281,10 @@ class RestartOnLowRamTest(unittest.TestCase):
 
     def setUp(self):
         image_jobs._reset()
+        # 水位必须钉死：默认值会被 .env 覆盖（本机 COMFY_MIN_FREE_RAM_GB=1.0），
+        # 于是用例里的 1.5GB 不再「低于水位」，重启永远不触发——判定逻辑没坏，
+        # 是这条用例在跟着环境走。钉成 3.0，跟 .env 无关。
+        self._threshold(3.0)
         self.stat_calls = []
         self.reboot_calls = []
 

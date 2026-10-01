@@ -222,11 +222,16 @@ class Job:
     """
 
     def __init__(self, target, target_id, workflow, skill=None, weight=1, seq=0,
-                 nai_i2i=None, tag=None, prompt=None):
+                 nai_i2i=None, tag=None, prompt=None, intent=None):
         self.target = target
         self.target_id = target_id
         self.workflow = workflow
         self.skill = skill          # 生图渠道，只用来判断要不要先 /free
+        # 这次提交的「意图指纹」——模型给的原始 prompt + skill + lora（见
+        # generate_image._intent_key）。用来识别「同一件事被提交了两遍」。
+        # 不能拿 workflow 当指纹：那里面填进了随机 seed，两次一模一样的
+        # 请求也会算出两个不同的值。
+        self.intent = intent or ""
         # 模型写的那段原始提示词（**替换进工作流之前的**）。图发出去之后要连
         # 编号一起记进账本，否则以后查编号只能查到空——工作流里那份是给
         # ComfyUI 的，含固定前缀和一堆节点，不适合当「这是什么图」的答案。
@@ -383,6 +388,59 @@ def recent_line(target, target_id, limit=3):
     return "\n".join(lines)
 
 
+# 守卫判「模型是不是在空口承诺」时，多久以内出过图还算「它没瞎说」。
+RECENT_DONE_WINDOW = 900.0
+
+
+def recent_activity(target, target_id, within=RECENT_DONE_WINDOW):
+    """本会话「还在跑 + 刚出图」的条数。给 agent 的生图空头承诺守卫用。
+
+    那道守卫的判据是「**这一轮**没调 generate_image 却声称在画图」，而
+    「这一轮」是 run 级的（见 agent._IMAGE_CLAIM_NUDGE 上方那段注释）。QQ
+    路径下提交完立刻返回（generate_image._generate_image），所以「上一轮提交、
+    这一轮汇报进度」本来就是常态——不查队列的话，如实汇报会被判成空头承诺
+    退回重来，而 nudge 里那句「那张图根本不存在」会让模型真的再提交一遍。
+
+    实测（2026-10-01 08:13，logs/qq_bot.log）：模型说「上一张三档（hd_3）还在
+    跑 出图时间本来就比二档长不少」，被判成空头承诺；下一轮它真的又调了一次
+    generate_image，队列里多出一张 hd_3。
+    """
+    if target is None:
+        return 0
+    key = _key(target, target_id)
+    now = time.time()
+    with _lock:
+        n = sum(1 for j in _queue if _key(j.target, j.target_id) == key)
+        if _running is not None and _key(_running.target, _running.target_id) == key:
+            n += 1
+        n += sum(1 for r in _recent
+                 if _key(r["target"], r["target_id"]) == key
+                 and now - (r.get("ts") or 0.0) <= within)
+    return n
+
+
+def find_pending_duplicate(target, target_id, intent):
+    """本会话里「还没出图、意图又完全一样」的任务；没有就返回 None。
+
+    只认**在途**的（排队中 / 正在跑）：已经出过图的那张，对方看过之后再点一次
+    同样的是有意为之——实测 2026-10-01 08:18 有人明确说「三档同一份词条原样
+    重跑一张 你看看这次细节对不对」，把这种情况当重复拦下等于把正常需求堵死。
+    在途的才算重复：对方什么都还没看到。
+    """
+    if target is None or not intent:
+        return None
+    key = _key(target, target_id)
+    with _lock:
+        for j in _queue:
+            if _key(j.target, j.target_id) == key and j.intent == intent:
+                return j
+        if (_running is not None
+                and _key(_running.target, _running.target_id) == key
+                and _running.intent == intent):
+            return _running
+    return None
+
+
 def ahead_of(job):
     """这个任务前面还有几张（含正在跑的那张）。已经开跑就返回 0。
 
@@ -432,7 +490,8 @@ def snapshot():
         }
 
 
-def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None):
+def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
+            intent=None):
     """把一张图排进全局队列，返回 (job, reason)。
 
     prompt 是模型写的那段原始提示词，只用来**出图后记进账本**（编号 → 提示词，
@@ -445,7 +504,8 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None):
     「换渠道先 /free」的判断（见 _maybe_release_for_switch）。
     不传 skill 时的行为与从前完全一致（权重 1、从不主动释放）——老调用方
     不受影响。nai_i2i 只在 NAI 图生图时传（入队时快照的源图 base64 + 强度，
-    见 Job.nai_i2i）。
+    见 Job.nai_i2i）。intent 是这次请求的意图指纹，只用于查重（见
+    find_pending_duplicate），不传就是「不参与查重」。
     """
     global _seq
     key = _key(target, target_id)
@@ -467,7 +527,7 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None):
                           % MAX_HEAVY_IN_QUEUE)
         _seq += 1
         job = Job(target, target_id, workflow, skill, weight, _seq,
-                  nai_i2i=nai_i2i, prompt=prompt)
+                  nai_i2i=nai_i2i, prompt=prompt, intent=intent)
         _queue.append(job)
         _per_session[key] = cur + 1
     if weight > 1:

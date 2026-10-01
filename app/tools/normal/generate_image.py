@@ -235,6 +235,28 @@ def _apply_loras(workflow, lora_str):
     return None
 
 
+def _intent_key(prompt, skill, lora):
+    """一次生图请求的「意图指纹」：模型给的那三样原始参数。
+
+    不能拿 workflow 当指纹——那里面每次都会填进随机 seed，两次一模一样的
+    请求也会算出两个不同的值，查重就永远不中。空值归一掉：skill 不传和传
+    "" 在下游是同一件事。
+    """
+    return json.dumps([str(prompt or ""), str(skill or ""),
+                       str(lora or "")], ensure_ascii=False)
+
+
+# 同一件事在还没出图之前又被提交一遍时的回执。不是「拒收」——那张图确实存在，
+# 只是不需要第二张，所以措辞必须让模型明白「已经有了」，否则它会以为没提交上，
+# 转头又试一次（这正是 2026-10-01 重复出图的老路）。
+_DUPLICATE_NOTE = (
+    "系统：这次调用**没有执行**——这个会话里已经有一张**参数完全一样**的图还"
+    "没出，它就在队列里（见尾巴上的 [最近生图]）。不用再提交，也别跟对方解释"
+    "什么「重复」；直接把想说的话说完就收尾，图会自己发到会话里。"
+    "对方真要一张不一样的，他会明说。"
+)
+
+
 def _generate_image(prompt, skill=None, lora=None,
                     source_image="", denoise=None, use_character=None):
     # `denoise`：**只有 NAI 图生图**消费它（见下面的 `_nai_strength(denoise)`），
@@ -284,7 +306,12 @@ def _generate_image(prompt, skill=None, lora=None,
                            "strength": _nai_strength(denoise), "note": note}
             except RuntimeError as e:
                 return str(e)
-        return _enqueue_nai(prompt, target, target_id, nai_i2i)
+        intent = _intent_key(prompt, skill, lora)
+        if image_jobs.find_pending_duplicate(target, target_id, intent) is not None:
+            log.info("拦下重复生图（NAI）：%s %s 已有一张同参数的图在途",
+                     target, target_id)
+            return _DUPLICATE_NOTE
+        return _enqueue_nai(prompt, target, target_id, nai_i2i, intent)
 
     # 图生图整体停用（_I2I_SKILLS 为空）：只要模型还试着传 source_image，就在
     # 这里当场拦住，**并且把它拉回正路**——它十有八九是看到引用图就以为要「改图」，
@@ -400,10 +427,19 @@ def _generate_image(prompt, skill=None, lora=None,
     # 的线程本地上下文。
     from app import qq_api
     target, target_id = qq_api.current_context()
+    # 同一件事还没出图又被提交一遍：不再排第二张。模型这一轮要么是没看到
+    # 上一轮的回执（上下文被压缩 / 守卫误判成空头承诺），要么是把「再跑一张」
+    # 当成了默认动作——两种都不该真的多出一张图。只在**在途**时拦（见
+    # image_jobs.find_pending_duplicate）。
+    intent = _intent_key(prompt, skill, lora)
+    if image_jobs.find_pending_duplicate(target, target_id, intent) is not None:
+        log.info("拦下重复生图：%s %s 已有一张同参数的图在途，不再排第二张",
+                 target, target_id)
+        return _DUPLICATE_NOTE
     # prompt 一路带到队列里，只为出图后记账本（编号 → 提示词）；出图用的是
     # 上面填好的 workflow。
     job, reason = image_jobs.enqueue(target, target_id, workflow, skill,
-                                     prompt=prompt)
+                                     prompt=prompt, intent=intent)
     if reason is not None:
         # 拒收时工作流还在手上，ComfyUI 一点算力都没浪费，也不会留下「画了
         # 却没人发」的孤儿图。
@@ -463,7 +499,7 @@ def _nai_strength(denoise):
     return min(0.9, max(0.1, s))
 
 
-def _enqueue_nai(prompt, target, target_id, nai_i2i=None):
+def _enqueue_nai(prompt, target, target_id, nai_i2i=None, intent=None):
     """把一张 NAI 图排进全局串行队列（复用现有队列，见 image_jobs）。
 
     NAI 是云端调用，也占「这一轮」的并发，跟 ComfyUI 的图混在同一条队列里
@@ -474,7 +510,7 @@ def _enqueue_nai(prompt, target, target_id, nai_i2i=None):
     # 不传 prompt：NAI 走 _process_nai，图的 caption 不带编号、也不进账本
     # （用户选的「只做 anime」）。这里传了也是死数据。
     job, reason = image_jobs.enqueue(target, target_id, prompt, skill="nai",
-                                     nai_i2i=nai_i2i)
+                                     nai_i2i=nai_i2i, intent=intent)
     if reason is not None:
         # 拒收时什么算力都没花，也没有孤儿图。
         return reason

@@ -416,10 +416,11 @@ class NaiI2ITest(unittest.TestCase):
         captured = {}
         fake_job = mock.Mock()
 
-        def fake_enqueue(target, target_id, workflow, skill=None, nai_i2i=None):
+        def fake_enqueue(target, target_id, workflow, skill=None, nai_i2i=None,
+                         prompt=None, intent=None):
             captured.update({"target": target, "target_id": target_id,
                              "workflow": workflow, "skill": skill,
-                             "nai_i2i": nai_i2i})
+                             "nai_i2i": nai_i2i, "intent": intent})
             return fake_job, None
 
         def fake_resolve(spec):
@@ -455,6 +456,9 @@ class NaiI2ITest(unittest.TestCase):
         self.assertEqual(cap["workflow"], "make it night")
         self.assertEqual(cap["nai_i2i"]["image"], "QUJD-B64")
         self.assertEqual(cap["nai_i2i"]["note"], "引用的那张图")
+        # NAI 也要带意图指纹，否则同一个会话里连点两次会排出两张一样的图
+        # （见 image_jobs.find_pending_duplicate）。
+        self.assertTrue(cap["intent"])
 
     def test_strength_from_denoise(self):
         _, cap = self._run(prompt="x", skill="nai", source_image="1",

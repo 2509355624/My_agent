@@ -282,7 +282,10 @@ _IMAGE_PROMISE_RE = re.compile(
     # ── 完成态（2026-09-29 补）───────────────────────────────────────
     # 「断言图已经存在 / 已经发出去」比「正在画」更容易漏，也更容易骗到人。
     # 不收裸的「出了」——「出了点问题」会误伤。
-    r"出图|也出了|都出了|这单出了|已经出了|刚出了|"
+    # 2026-10-01 收窄：原先收裸的「出图」，结果「出图**时间**本来就比二档长
+    # 不少」这种纯解释也被判成承诺（logs/qq_bot.log L14426 就是这么误伤的），
+    # 改成只认完成态。
+    r"已出图|出图了|也出了|都出了|这单出了|已经出了|刚出了|"
     r"发群里|发出去了|发过去了|发了.{0,2}张|"
     # ── 「图已经在群里」型（2026-09-30 补）──────────────────────────
     # 上游的「发群里」认不出「发**到**群里」「图在群里」「躺在群里」这些变体，
@@ -305,13 +308,23 @@ _IMAGE_OFFER_RE = re.compile(
     r"要不要|用不用|需不需要|需要我|要我|吗[？?]|[？?]\s*$"
 )
 
+# ⚠️ 2026-10-01：这道守卫的判据「**本轮**没调工具」是 run 级的，而 QQ 路径下
+# generate_image 提交完立刻返回（见 generate_image._generate_image），所以
+# 「上一轮提交、这一轮汇报进度」是常态。原版不查队列，把这种如实汇报也判成
+# 空头承诺，而下面这段文案又断言「那张图根本不存在」——模型只能去补一次，于是
+# 队列里多出一张重复的图（logs/qq_bot.log L14426 触发 → L14429 真的又调了
+# generate_image）。现在开火前先查本会话有没有在途/刚出图的任务
+# （_session_has_image_activity），文案也不再断言图不存在。
 _IMAGE_CLAIM_NUDGE = (
-    "系统：你刚才说要画图，但**这一轮没有真正调用 generate_image**，"
-    "所以那张图根本不存在，群里也收不到。现在二选一，别再空口承诺：\n"
-    "① 真要画 → 这一轮必须输出工具块，单独一行、一字不差：\n"
+    "系统：你刚才那句话听起来像在汇报生图进度，但**这一轮你没有调用 "
+    "generate_image**。先看一眼尾巴上的 [最近生图]，再决定怎么说：\n"
+    "① 那上面有在途或刚出图的任务 → 说明是真的，照实说就行，别再补一句"
+    "「已经发到群里了」这种你并不知道的事；\n"
+    "② 那上面确实什么都没有 → 别再空口承诺，二选一：真要画就这一轮输出"
+    "工具块，单独一行、一字不差：\n"
     "[[TOOL:generate_image]]{\"prompt\": \"<英文标签串>\"}[[/TOOL]]\n"
-    "② 画不了（本群关了 / ComfyUI 掉线 / 对方要的内容不能画）→ 就照实说，"
-    "别再说「画着呢」「跑着了」「已经出了」「刚发群里了」这种话。"
+    "画不了（本群关了 / ComfyUI 掉线 / 对方要的内容不能画）就照实说，"
+    "别再说「画着呢」「跑着了」「已经出了」这种话。"
 )
 
 
@@ -379,6 +392,32 @@ def _looks_like_image_promise(text):
     if _IMAGE_OFFER_RE.search(text):
         return False
     return bool(_IMAGE_PROMISE_RE.search(text))
+
+
+def _session_has_image_activity(session_key):
+    """本会话此刻有没有在途 / 刚出图的生图任务。
+
+    空头承诺守卫开火前必须先问这个：守卫看的是「**本 run** 有没有调工具」，
+    而 QQ 路径提交完就返回，「上一轮提交、这一轮汇报进度」是常态。有东西在跑
+    （或刚跑完），模型说「还在画 / 出了自动发」就是实话，不能退回重来。
+    见 _IMAGE_CLAIM_NUDGE 上方那段注释。
+
+    session_key 形如 `group_<群号>` / `private_<QQ>`（qq_bot 就是这么拼的），
+    与 image_jobs 的 (target, target_id) 一一对应。网页端不传 session_key，
+    返回 False——那边 generate_image 是同步等的，模型本来就拿得到真结果。
+    """
+    if not session_key:
+        return False
+    target, _, target_id = str(session_key).partition("_")
+    if not target or not target_id:
+        return False
+    try:
+        from app import image_jobs
+        return image_jobs.recent_activity(target, target_id) > 0
+    except Exception:
+        # 查不了就当作「没有」：宁可漏放一次，也不能因为这里出错把整轮回复吞掉。
+        log.warning("[image-claim] 查生图队列失败，本次不拦", exc_info=True)
+        return False
 
 
 def _history_for_llm(history):
@@ -844,9 +883,12 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
             # ─── 生图空头承诺守卫 ───────────────────────
             # 说要画、但整轮都没调生图工具 → **这句话不发出去**，塞一条系统
             # 提示让它重来一次；一次为限，第二次照发（不能无限拦）。
+            # 开火前先查队列（_session_has_image_activity）：本会话有在途 /
+            # 刚出图的任务时，「还在跑、出了自动发」是实话，不是空头承诺。
             if (reply_text and not tool_calls and not image_tool_used
                     and not image_nudged and can_generate_image
-                    and _looks_like_image_promise(reply_text)):
+                    and _looks_like_image_promise(reply_text)
+                    and not _session_has_image_activity(session_key)):
                 image_nudged = True
                 log.warning("[image-claim] 没调工具却声称在画图，退回重来：%r",
                             reply_text[:60])
