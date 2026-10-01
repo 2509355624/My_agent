@@ -239,6 +239,9 @@ class Job:
         self.weight = weight        # 队列权重（默认 1 = 普通；qwen 是 5）
         self.seq = seq              # 入队序号，同权重的按它先进先出
         self.created = time.time()  # 入队时刻：状态后台用它算「已等 N 秒」
+        # 真正开跑的时刻（process 一进来就打）。只用来算「这张画了多久」——
+        # 从 created 算会把排队时间也算进去，排在第 5 位的那张看着像画了十分钟。
+        self.started = None
         # 这张图的编号（形如 HT-20261001-074112-384）。发图时当 caption 贴在
         # 图片上，群友引用那条消息时编号会跟着引用回到模型眼前
         # （见 app/image_log.py）。
@@ -887,7 +890,8 @@ def _process_nai(job):
                      job.target, job.target_id)
             return
         _send_image_bytes(job.target, job.target_id, path)
-        log.info("NAI 生图完成已发回 %s %s", job.target, job.target_id)
+        log.info("NAI 生图完成已发回 %s %s（耗时 %.1f 秒）",
+                 job.target, job.target_id, _elapsed(job))
     except Exception as exc:
         job.error = exc
         _notice(job, stage="send")
@@ -898,6 +902,7 @@ def process(job):
 
     独立成函数是为了能同步调用（测试直接调它，不依赖真线程）。
     """
+    job.started = time.time()       # 排队到此为止，后面都算「画这张用了多久」
     # NAI 云端生图：完全不碰 ComfyUI（token 是群主独立的，图由 NovelAI 出）。
     if job.skill == "nai":
         return _process_nai(job)
@@ -945,10 +950,12 @@ def process(job):
 
     try:
         sent = sum(1 for name in names
-                   if _send_image(job.target, job.target_id, name, job.tag))
+                   if _send_image(job.target, job.target_id, name, job.tag,
+                                  skill=job.skill or ""))
         if sent:
-            log.info("生图完成已发回 %s %s：%d/%d 张（编号 %s）",
-                     job.target, job.target_id, sent, len(names), job.tag)
+            log.info("生图完成已发回 %s %s：%d/%d 张（编号 %s，渠道 %s，耗时 %.1f 秒）",
+                     job.target, job.target_id, sent, len(names), job.tag,
+                     job.skill or "默认", _elapsed(job))
             # 记进账本：编号 → 提示词。**只在真发出去之后记**——没发出去的图
             # 不该有编号可查，否则查出来一句提示词、对方手上却没有那张图。
             # 落盘失败也不该影响发图（image_log.save 自己吞掉异常）。
@@ -1312,15 +1319,44 @@ def _send_text(target, target_id, text):
         qq_api.send_private(target_id, text)
 
 
-def _send_image(target, target_id, filename, tag=""):
+def _elapsed(job):
+    """这张图从**真正开跑**到此刻的秒数（不含排队）。
+
+    started 没打上（异常路径、测试手搓的 Job）就退回入队时刻——宁可把排队
+    时间算进去，也别在日志里报个负数或 None。
+    """
+    return max(0.0, time.time() - (job.started or job.created))
+
+
+def _caption(tag, path, skill, image_out):
+    """图上那行字：`编号 · 分辨率 · 渠道`。
+
+    编号**必须在最前且原样**——它是群友引用那条消息时被正则抠回来的锚点
+    （见 app/image_log.py，TAG_RE 只认 `HT-` 开头那一串）。后面两项纯粹是给
+    人看的附注，读不出来就少一项，不影响编号。
+
+    没编号时整行都不加（返回 ""）：老调用方不传 tag 的行为与从前一致。
+    """
+    if not tag:
+        return ""
+    bits = [str(tag)]
+    size = image_out.local_size(path)
+    if size:
+        bits.append(size)
+    if skill:
+        bits.append(str(skill))
+    return " · ".join(bits)
+
+
+def _send_image(target, target_id, filename, tag="", skill=""):
     """发回原会话。先过 image_out 甩掉 PNG 里的工作流元数据，编码格式看管理页开关。
 
     返回 True = 真发出去了。审核拦下时返回 False（**不抛异常**）——
     调用方靠它区分「发了」和「被拦了」，别把拦截记成发送失败。
 
-    tag 是这张图的编号，作为 caption 和图片放在**同一条消息**里（见
-    app/image_log.py）：群友引用这条消息时编号会跟着引用回到模型眼前。
-    不传 = 不加那行字，行为与从前完全一致。
+    tag / skill 是这张图的编号和生图渠道，作为 caption 和图片放在**同一条
+    消息**里（见 app/image_log.py）：群友引用这条消息时编号会跟着引用回到
+    模型眼前。不传 tag = 不加那行字，行为与从前完全一致。
 
     ⚠️ 审核审的是 `prepare_for_send` 的产物（本地文件），也就是**真正要发出去
     的那份字节**，不是 ComfyUI 的原图。见 app/image_audit.py 的模块注释。
@@ -1331,5 +1367,6 @@ def _send_image(target, target_id, filename, tag=""):
     path = image_out.prepare_for_send(filename, fmt)
     if not image_audit.allow_send(path, QQ_AGENT_ID, target, target_id):
         return False
-    qq_api.send_image(target, target_id, path, caption=tag or "")
+    qq_api.send_image(target, target_id, path,
+                      caption=_caption(tag, path, skill, image_out))
     return True

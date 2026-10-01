@@ -2,6 +2,11 @@
 
 零网络、零落盘：图片下载与 ComfyUI 上传全部 mock 掉。这里唯一碰磁盘的是
 「本地路径」那两条用例——它们故意拿本测试文件自己当那张图。
+
+图生图 2026-10-01 重开：常规档 `anima_*` + 高清快档 `hd_fast_*` + 高清二档
+`hd_2_*`，共 12 个渠道（`hd_3_*` 不给）。**「什么时候才允许垫图」这条边界不在
+这里测**——它写在工具描述里（见 test_image_lora 的 description 用例）。这里只管
+「模型传了 source_image 之后，工作流到底怎么走」。
 """
 
 import io
@@ -13,19 +18,11 @@ from unittest import mock
 from PIL import Image
 
 from app import agents, comfy_src, nai, qq_api, stickers, vision
-from app.config import DISABLED_IMAGE_SKILLS
 from app.skills import load_workflow
 from app.tools.normal import generate_image as gi
 
-# 图生图已**整体停用**（`generate_image._I2I_SKILLS` 为空，见它的注释），所以
-# 下面那些「qwen 图生图怎么工作」的用例测的功能眼下不存在了。
-#
-# **跳过而不是删掉**：摘停用是可逆的——把 qwen 填回 `_I2I_SKILLS`、清掉
-# `config.DISABLED_IMAGE_SKILLS`，这些用例该自动重新跑起来。
-# 「传了 source_image 一律拒」这条新合同由 I2IFlowTest 覆盖（它是活的，不跳过）。
-_qwen_off = unittest.skipIf(
-    not gi._I2I_SKILLS,
-    "图生图已整体停用（generate_image._I2I_SKILLS 为空）")
+SKILLS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                      "skills")
 
 
 def _png(w, h, mode="RGB"):
@@ -160,6 +157,14 @@ class FitTest(unittest.TestCase):
         _, (w, h) = comfy_src.fit(_png(100, 100))
         self.assertEqual((w, h), (1216, 1216))
 
+    def test_custom_long_side(self):
+        """高清档按自己的画布缩（长边 1536），不是恒定的 1216。
+
+        小图也照样放大到画布长边——垫图出来的尺寸就等于这一步的尺寸。
+        """
+        _, (w, h) = comfy_src.fit(_png(512, 768), max_side=1536)
+        self.assertEqual((w, h), (1024, 1536))
+
     def test_alpha_is_flattened(self):
         raw, _ = comfy_src.fit(_png(64, 64, "RGBA"))
         im = Image.open(io.BytesIO(raw))
@@ -241,11 +246,76 @@ class LoadWorkflowTest(unittest.TestCase):
         self.assertEqual(wf["1"]["inputs"]["seed"], "__SEED__")
 
 
+class I2IWorkflowShapeTest(unittest.TestCase):
+    """12 份 `workflow_i2i.json` 的骨架形状。
+
+    骨架由 `_make_i2i_workflows.py` 从同目录的文生图骨架生成，**很容易漏跑一个
+    渠道**——漏了那个渠道垫图会当场报「没有图生图工作流」。这里逐份验结构，
+    不认任何具体节点编号（每个渠道的 id 都不一样）。
+
+    只读文件，不碰网络。
+    """
+
+    def _load(self, skill):
+        wf = load_workflow(os.path.join(SKILLS, skill, "workflow_i2i.json"))
+        self.assertIsNotNone(wf, "%s 缺 workflow_i2i.json" % skill)
+        return wf
+
+    def test_all_twelve_have_the_i2i_shape(self):
+        self.assertEqual(len(gi._I2I_SKILLS), 12)
+        for skill in gi._I2I_SKILLS:
+            with self.subTest(skill=skill):
+                wf = self._load(skill)
+                kinds = [n["class_type"] for n in wf.values()]
+                # 图生图的全部差别就在 latent 从哪来：空 latent 换成编码源图
+                self.assertNotIn("EmptyLatentImage", kinds)
+                self.assertEqual(kinds.count("LoadImage"), 1)
+                self.assertEqual(kinds.count("VAEEncode"), 1)
+                # 采样/放大那一整套照抄文生图，一样不少
+                self.assertEqual(kinds.count("KSampler"), 2)
+                self.assertEqual(kinds.count("LatentUpscaleBy"), 1)
+
+    def test_the_two_placeholders_are_there_to_be_filled(self):
+        """运行时只替换这两个占位符，骨架里必须原样留着它们。"""
+        for skill in gi._I2I_SKILLS:
+            with self.subTest(skill=skill):
+                wf = self._load(skill)
+                self.assertTrue(any(
+                    (n.get("inputs") or {}).get("image") == "__SOURCE_IMAGE__"
+                    for n in wf.values()), "LoadImage 没留 __SOURCE_IMAGE__")
+                self.assertTrue(any(
+                    (n.get("inputs") or {}).get("denoise") == "__DENOISE__"
+                    for n in wf.values()), "一段 KSampler 没留 __DENOISE__")
+
+    def test_the_encoder_feeds_the_first_stage(self):
+        """一段必须吃 VAEEncode 出来的 latent——接错了就等于没垫图。"""
+        for skill in gi._I2I_SKILLS:
+            with self.subTest(skill=skill):
+                wf = self._load(skill)
+                enc = [nid for nid, n in wf.items()
+                       if n["class_type"] == "VAEEncode"][0]
+                stage1 = [nid for nid, n in wf.items()
+                          if n["class_type"] == "KSampler"
+                          and n["inputs"].get("latent_image") == [enc, 0]]
+                self.assertEqual(len(stage1), 1,
+                                 "没有唯一的一段 KSampler 吃 VAEEncode 的 latent")
+
+    def test_hd_3_has_no_i2i_workflow_at_all(self):
+        """三档不给图生图：白名单排除了它，连骨架都不该存在（免得两处各说各话）。"""
+        for style in ("clear", "soft", "gloss", "curvy"):
+            skill = "hd_3_" + style
+            self.assertTrue(os.path.isdir(os.path.join(SKILLS, skill)),
+                            "文生图渠道 %s 应该还在" % skill)
+            self.assertFalse(
+                os.path.exists(os.path.join(SKILLS, skill, "workflow_i2i.json")),
+                "%s 不该有图生图骨架" % skill)
+
+
 class _I2IRunner(object):
     """跑 generate_image 本体，拦住提交那一刻看它到底送了什么。
 
-    故意不是 TestCase——两个 i2i 用例类（只留 qwen 的拒收 / qwen 编辑）共用这套
-    拦截，直接继承 TestCase 的话基类的用例会在子类里再跑一遍。
+    故意不是 TestCase——两个 i2i 用例类（本机 12 渠道 / NAI 云端）共用这套拦截，
+    直接继承 TestCase 的话基类的用例会在子类里再跑一遍。
     """
 
     KEY = ("group", 999001)
@@ -279,131 +349,167 @@ class _I2IRunner(object):
         gi.image_jobs._drain()          # 队列是同步驱动的，提交那一刻才看得见
         return out, captured
 
-    def _source_ok(self, name="i2isrc_x.png"):
+    def _feed(self, name="i2isrc_x.png", seen=None):
+        """把「取图 → 缩放 → 上传」三步全换成假的。
+
+        `seen` 非 None 时顺手记下 fit 的 max_side——那是源图被缩到多少的凭据。
+        """
+        def fake_fit(raw, max_side=None):
+            if seen is not None:
+                seen["max_side"] = max_side
+            return b"FIT", (max_side or comfy_src.MAX_SIDE, 8)
+
         return (
             mock.patch.object(comfy_src, "resolve",
-                              lambda spec: (b"RAW", "233 发的图")),
-            mock.patch.object(comfy_src, "fit",
-                              lambda raw, **kw: (b"FIT", (1216, 1216))),
-            mock.patch.object(comfy_src, "upload", lambda raw, **kw: name),
+                              lambda spec: (b"RAW", "引用的那张图")),
+            mock.patch.object(comfy_src, "fit", fake_fit),
+            mock.patch.object(comfy_src, "upload", lambda raw: name),
         )
 
 
 class I2IFlowTest(_I2IRunner, unittest.TestCase):
-    """图生图整体停用：**任何**渠道带 source_image 都当场拒，绝不静默退化。
+    """本机 12 渠道的图生图：换骨架、填占位符、按本档画布缩源图。
 
-    用户的问题不是「画得不好」，是模型一看见引用图就往改图上想（见
-    generate_image 里 `_I2I_SKILLS` 的注释）。所以这里测的不是「哪个渠道
-    不支持」，而是「**这个动作本身已经没有入口了**」。
+    出图尺寸 = 「源图缩到本档画布长边」再乘二段放大倍率，**跟源图原始尺寸无关**。
+    所以「高清档垫图」出来还是高清档那个尺寸——这正是 `hd_fast_*` / `hd_2_*`
+    能被垫的理由，也是 `hd_3_*` 被排除的理由（它自己就慢）。
     """
+
+    def _kinds(self, wf):
+        return {n["class_type"] for n in wf.values()}
+
+    def _one(self, wf, class_type):
+        hits = [nid for nid, n in wf.items() if n["class_type"] == class_type]
+        self.assertEqual(len(hits), 1, "预期恰好一个 %s，实际 %s"
+                         % (class_type, hits))
+        return hits[0]
 
     def test_default_call_is_still_text2img(self):
+        """不传 source_image 就**一行图生图逻辑都不走**——文生图原样不动。"""
         out, wf = self._run(prompt="1girl, solo")
         self.assertIn("已经在画了", out)
-        # 文生图的标志：起点是**空 latent**，而不是「加载一张图再编码」。
-        # 旧版这里断言的是 `assertNotIn("24", wf)`——那时默认渠道还没有
-        # 1.1× 放大器，所以「没有 24」等于「是单段直出」。2026-09-30 全套切动漫后
-        # 默认渠道 anima_soft 里 **25 号节点是 LatentUpscaleBy 放大器**，
-        # 这条断言就作废了：它跟图生图没有半点关系，别再拿它当判据。
-        self.assertEqual(wf["9"]["class_type"], "EmptyLatentImage")
-        kinds = {node["class_type"] for node in wf.values()}
+        kinds = self._kinds(wf)
+        self.assertIn("EmptyLatentImage", kinds)
         self.assertNotIn("LoadImage", kinds)
         self.assertNotIn("VAEEncode", kinds)
-        self.assertEqual(wf["4"]["inputs"]["text"], "@kibro, 1girl, solo")
+        self.assertNotIn("垫的是", out)
+        texts = [n["inputs"].get("text") for n in wf.values()
+                 if n["class_type"] == "CLIPTextEncode"]
+        self.assertIn("@kibro, 1girl, solo", texts)   # 模板前缀没被弄丢
 
-    def test_source_image_is_refused_whatever_the_skill(self):
-        """点了名也一样拒——停用的是「图生图」，不是「某个渠道的图生图」。"""
-        for skill in ("anima_soft", "anima_gloss", "krea2"):
-            out, wf = self._run(prompt="x", skill=skill, source_image="1")
-            self.assertIn("source_image", out)
-            self.assertEqual(wf, {}, skill)
+    def test_source_image_switches_to_i2i(self):
+        """给了源图：骨架换成 LoadImage → VAEEncode → 一段采样。"""
+        p1, p2, p3 = self._feed()
+        with p1, p2, p3:
+            out, wf = self._run(prompt="把衣服换成红色", source_image="1")
+        self.assertIn("已经在画了", out)
+        self.assertIn("垫的是引用的那张图", out)      # 垫了哪张要回给模型，免得它说错
+        kinds = self._kinds(wf)
+        self.assertIn("LoadImage", kinds)
+        self.assertIn("VAEEncode", kinds)
+        self.assertNotIn("EmptyLatentImage", kinds)
+        load = self._one(wf, "LoadImage")
+        self.assertEqual(wf[load]["inputs"]["image"], "i2isrc_x.png")
+        enc = self._one(wf, "VAEEncode")
+        self.assertEqual(wf[enc]["inputs"]["pixels"], [load, 0])
 
-    def test_refusal_points_at_the_right_thing_to_do(self):
-        """真正的痛点在这儿：模型得知道「引用图 = 看得见」而不是「要改图」。"""
-        out, _ = self._run(prompt="x", source_image="1")
-        self.assertIn("看得见", out)
-        # 明确给出该走的渠道——用常量而不是字面量，免得换默认渠道时又漏一条
-        from app.tools.normal.generate_image import T2I_DEFAULT_SKILL
-        self.assertIn(T2I_DEFAULT_SKILL, out)
-        self.assertIn("反推", out)               # 用户要的正是「反推提示词」
-        self.assertIn("别跟对方解释技术原因", out)
+    def test_the_first_stage_takes_the_encoded_source(self):
+        """一段的 latent 来自编码后的源图，denoise 定死 0.6（不给模型调）。"""
+        p1, p2, p3 = self._feed()
+        with p1, p2, p3:
+            _, wf = self._run(prompt="x", source_image="1")
+        enc = self._one(wf, "VAEEncode")
+        stage1 = [nid for nid, n in wf.items()
+                  if n["class_type"] == "KSampler"
+                  and n["inputs"].get("latent_image") == [enc, 0]]
+        self.assertEqual(len(stage1), 1)
+        self.assertEqual(wf[stage1[0]]["inputs"]["denoise"], gi.I2I_DENOISE)
 
-    def test_refusal_never_mentions_a_channel_name(self):
-        """拒收时不能把 qwen_image_v1 这种名字甩出去——群里看到很奇怪。"""
-        out, _ = self._run(prompt="x", source_image="1")
-        self.assertNotIn("qwen", out)
+    def test_denoise_from_the_model_is_ignored(self):
+        """模型传了 denoise 也不认——它一调就会以为「调低 = 只微调」。"""
+        p1, p2, p3 = self._feed()
+        with p1, p2, p3:
+            out, wf = self._run(prompt="x", source_image="1", denoise=0.2)
+        self.assertIn("已经在画了", out)
+        enc = self._one(wf, "VAEEncode")
+        stage1 = [nid for nid, n in wf.items()
+                  if n["class_type"] == "KSampler"
+                  and n["inputs"].get("latent_image") == [enc, 0]][0]
+        self.assertEqual(wf[stage1]["inputs"]["denoise"], gi.I2I_DENOISE)
 
-    def test_nothing_reaches_comfyui(self):
-        """拦在 skill 解析之前：一次白跑都没有。"""
-        out, wf = self._run(prompt="x", source_image="1")
+    def test_source_is_scaled_to_the_channels_own_canvas(self):
+        """源图缩到**本档画布的长边**，不是 comfy_src 默认的 1216。
+
+        缩错了高清档就名不副实：垫一张小图出来还是小图。
+        """
+        for skill, expect in (("anima_clear", 1024),    # 728×1024
+                              ("hd_fast_clear", 1536),  # 1024×1536
+                              ("hd_2_gloss", 1536)):    # 1024×1536
+            with self.subTest(skill=skill):
+                seen = {}
+                p1, p2, p3 = self._feed(seen=seen)
+                with p1, p2, p3:
+                    out, _ = self._run(prompt="x", skill=skill, source_image="1")
+                self.assertIn("已经在画了", out)
+                self.assertEqual(seen["max_side"], expect, skill)
+
+    def test_every_supported_tier_can_be_fed(self):
+        """常规档 / 高清快档 / 高清二档都能垫——12 个渠道一个都不许漏。"""
+        for skill in ("anima_soft", "anima_curvy", "hd_fast_gloss",
+                      "hd_2_clear", "hd_2_curvy"):
+            with self.subTest(skill=skill):
+                p1, p2, p3 = self._feed()
+                with p1, p2, p3:
+                    out, wf = self._run(prompt="x", skill=skill,
+                                        source_image="1")
+                self.assertIn("已经在画了", out)
+                self.assertIn("VAEEncode", self._kinds(wf))
+
+    def test_second_stage_upscale_survives(self):
+        """二段放大照抄不动——高清二档垫图出来还是 1.3× 那个尺寸。"""
+        p1, p2, p3 = self._feed()
+        with p1, p2, p3:
+            _, wf = self._run(prompt="x", skill="hd_2_clear", source_image="1")
+        up = self._one(wf, "LatentUpscaleBy")
+        self.assertEqual(wf[up]["inputs"]["scale_by"], 1.3)
+
+    def test_hd_3_is_refused_and_touches_nothing(self):
+        """三档不给图生图：点名也一样拒，一步都不往 ComfyUI 送。"""
+        out, wf = self._run(prompt="x", skill="hd_3_clear", source_image="1")
+        self.assertIn("不支持图生图", out)
         self.assertEqual(wf, {})
 
+    def test_source_failure_reports_and_submits_nothing(self):
+        """取不到源图就报错，**绝不悄悄退回文生图**。
 
-@_qwen_off
-class QwenI2ITest(_I2IRunner, unittest.TestCase):
-    """qwen 图生图：唯一渠道、按指令改、不吃 denoise。
+        对方以为改的是自己那张，收到的却是凭空画的，比直接报错糟得多。
+        """
+        with mock.patch.object(comfy_src, "resolve",
+                               side_effect=RuntimeError("这儿没有图")):
+            out, wf = self._run(prompt="x", source_image="1")
+        self.assertEqual(out, "这儿没有图")
+        self.assertEqual(wf, {})
 
-    走的是「参考图直进文本编码器」那条路，跟已下线的动漫垫图链
-    （LoadImage→VAEEncode）完全不同。
-    """
+    def test_upload_failure_reports_and_submits_nothing(self):
+        p1, p2, _ = self._feed()
+        with p1, p2, mock.patch.object(comfy_src, "upload",
+                                       side_effect=RuntimeError("传不进去")):
+            out, wf = self._run(prompt="x", source_image="1")
+        self.assertEqual(out, "传不进去")
+        self.assertEqual(wf, {})
 
-    def _qwen(self, **kw):
-        p1, p2, p3 = self._source_ok()
-        with p1, p2, p3:
-            return self._run(**kw)
-
-    def test_source_image_alone_defaults_to_qwen(self):
-        """没点名 skill + 给了源图 → 走 qwen，不是动漫渠道。这是用户要的默认。"""
-        out, wf = self._qwen(prompt="把衣服换成红色卫衣", source_image="1")
+    def test_blank_source_image_is_not_i2i(self):
+        """空串等于没传（`if str(source_image or "").strip()`）——别把它当垫图。"""
+        out, wf = self._run(prompt="x", source_image="")
         self.assertIn("已经在画了", out)
-        self.assertIn("233 发的图", out)
-        self.assertEqual(wf["20"]["class_type"], "TextEncodeQwenImage21")
-        # qwen 走的是「参考图直进文本编码器」，不是动漫渠道的 VAEEncode 垫图链
-        self.assertEqual(wf["13"]["class_type"], "LoadImage")
-        self.assertEqual(wf["13"]["inputs"]["image"], "i2isrc_x.png")
-        self.assertNotIn("25", wf)
-
-    def test_source_image_reaches_the_encoder(self):
-        _, wf = self._qwen(prompt="换成夜景", source_image="1")
-        self.assertEqual(wf["20"]["inputs"]["images.image_1"], ["13", 0])
-        self.assertEqual(wf["20"]["inputs"]["vae"], ["12", 0])
-        self.assertIn("换成夜景", wf["20"]["inputs"]["prompt"])
-
-    def test_latent_comes_from_the_encoder_not_empty_latent(self):
-        """TextEncodeQwenImage21 第三个输出就是 latent——别再挂 EmptyLatentImage。"""
-        _, wf = self._qwen(prompt="x", source_image="1")
-        self.assertEqual(wf["30"]["inputs"]["latent_image"], ["20", 2])
-        self.assertNotIn("EmptyLatentImage",
-                         [n.get("class_type") for n in wf.values()])
-
-    def test_denoise_is_pinned_to_one(self):
-        """编辑模型没有「保留多少原图」这个旋钮，模型传了也不认。"""
-        _, wf = self._qwen(prompt="x", source_image="1", denoise=0.35)
-        self.assertEqual(wf["30"]["inputs"]["denoise"], 1.0)
-
-    def test_junk_denoise_is_ignored_not_fatal(self):
-        """垫图重绘下线后 denoise 已无渠道消费，写错也不该让 qwen 失败。"""
-        out, wf = self._qwen(prompt="x", source_image="1", denoise="随便")
-        self.assertIn("已经在画了", out)
-        self.assertEqual(wf["30"]["inputs"]["denoise"], 1.0)
-
-    def test_explicit_qwen_still_works(self):
-        _, wf = self._qwen(prompt="x", skill="qwen_image_v1", source_image="1")
-        self.assertEqual(wf["20"]["class_type"], "TextEncodeQwenImage21")
-
-    def test_qwen_text2img_workflow_untouched(self):
-        """点名 qwen 但没给源图 → 还是文生图那份，别误切到 i2i。"""
-        out, wf = self._run(prompt="a cat", skill="qwen_image_v1")
-        self.assertIn("已经在画了", out)
-        self.assertNotIn("TextEncodeQwenImage21",
-                         [n.get("class_type") for n in wf.values()])
+        self.assertIn("EmptyLatentImage", self._kinds(wf))
 
 
 class NaiI2ITest(unittest.TestCase):
     """NAI 图生图：引用图 → base64 入队快照，复用 NAI 三层闸（不新增开关）。
 
-    NAI 分流发生在 ComfyUI i2i 拒收**之前**（generate_image 的 nai 分支），
-    所以这里的 source_image 不吃「图生图整体停用」的闭门羹。
+    NAI 走自己的云分支（generate_image 里的 nai 分流在 ComfyUI 那套之前），
+    所以这里的 source_image 与本机渠道的 `_I2I_SKILLS` 白名单无关。
     """
 
     KEY = ("group", 999001)

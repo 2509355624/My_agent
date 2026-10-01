@@ -633,23 +633,28 @@ class DefaultChannelTest(unittest.TestCase):
             self.assertEqual(inspect.signature(fn).parameters["skill"].default,
                              DEFAULT_CHANNEL, fn.__name__)
 
-    def test_refusal_messages_name_the_current_default(self):
-        """两句**拒收话术**都必须指到当前默认渠道（而不是某个历史渠道名）。
+    def test_refusal_messages_are_actionable_and_leak_no_retired_channel(self):
+        """两句**拒收话术**都得给出路，且不许出现已归档的渠道名。
 
-        ① 图生图整体停用的那句（模型拿引用图来改图时回给它的）；
-        ② 停用渠道那句（点了 qwen / krea2 时回给它的）。
+        ① 垫图被拒的那句（点到了不给垫图的档，如 `hd_3_*`）：要让模型知道
+           「去掉 source_image 按文生图重来」，或换一个支持垫图的档。
+           —— 这里**不要求**它指到默认渠道：用户点名 hd_3 时把他往 anima_clear
+           引是降级，正确出路是「同一个渠道别垫图」或「换到 hd_2 / hd_fast」。
+        ② 停用渠道那句（点了 qwen / krea2 时回给它的）：必须指到**当前**默认渠道。
 
-        两句都拦在**任何网络调用之前**，所以这里能直接调，不需要 mock ComfyUI。
+        两句都拦在**任何网络调用之前**（垫图那句只读一次本地 skill 文件），
+        所以这里能直接调，不需要 mock ComfyUI。
         """
         from app.tools.normal import generate_image as gi
 
         with mock.patch.object(gi, "is_cancelled", lambda: False), \
                 mock.patch.object(gi, "_qq_gate", lambda: None):
-            i2i = gi._generate_image(prompt="x", source_image="1")
+            i2i = gi._generate_image(prompt="x", skill="hd_3_clear",
+                                     source_image="1")
             off = gi._generate_image(prompt="x", skill="qwen_image_v1")
 
-        self.assertIn("source_image", i2i)          # 确实是那句拒收
-        self.assertIn(DEFAULT_CHANNEL, i2i, "图生图拒收话术没指到当前默认渠道")
+        self.assertIn("不支持图生图", i2i)            # 确实是那句拒收
+        self.assertIn("source_image", i2i)          # 且给出了路：去掉它
         self.assertIn("停用", off)                   # 确实是那句拒收
         self.assertIn(DEFAULT_CHANNEL, off, "停用渠道拒收话术没指到当前默认渠道")
 

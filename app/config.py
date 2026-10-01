@@ -283,6 +283,14 @@ COMFY_RESTART_WAIT = float(os.getenv("COMFY_RESTART_WAIT", "180"))
 # qwen 跑完只剩约 0.8GB（下一张必须先清）。所以正常连画 anima 不受影响。
 # 0 = 关掉（回到从前：只在换渠道时释放）。
 #
+# ⚠️ **2026-10-01：5.0 是 12GB 卡上的数，本机是 6GB 卡，5.0 已经成了纯损失。**
+# 本机（RTX 3060 Laptop / 6GB）anima 跑完还剩约 4.9GB —— **低于 5.0**，于是
+# 每次提交都触发一次 /free，把刚跑热、下一张马上还要用的模型整个卸掉，下一张
+# 再从磁盘重读。日志里 11:22:59 那条「显存只剩 4.9GB（低于 5.0GB 水位）」就是
+# 它。这不是「保险」，是每张图白付一次加载。
+# 6GB 卡上 DynamicVRAM 平时把权重留在内存、只按需搬进显存，空闲显存常在
+# 4.5~5GB；真掉到 2GB 以下才是「残留把本就紧张的空间吃掉了」。所以定 2.0。
+#
 # ⚠️ **这条不是 qwen 崩溃的解药**（2026-09-27 16:22 真机实测推翻）：
 # ComfyUI 刚重启、显存全空 10.78GB、连第一张 qwen 照样崩（3 条 nvlddmkm 153）。
 # 真正的天花板是**权重本身**：TE 6018MB + unet 4487MB = 10.5GB，而 12GB 卡
@@ -291,7 +299,7 @@ COMFY_RESTART_WAIT = float(os.getenv("COMFY_RESTART_WAIT", "180"))
 # 日志 `loaded completely; 5129.88 MB usable` 也印证：算这个「可用」时
 # 6018MB 的编码器还驻留着。
 # 这条水位只管「别让残留把本就紧张的空间再吃掉一块」，是保险不是解药。
-COMFY_MIN_FREE_VRAM_GB = float(os.getenv("COMFY_MIN_FREE_VRAM_GB", "5.0"))
+COMFY_MIN_FREE_VRAM_GB = float(os.getenv("COMFY_MIN_FREE_VRAM_GB", "2.0"))
 
 # ─── 重渠道（qwen）优先度 ─────────────────────────────
 #

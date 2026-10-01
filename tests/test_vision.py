@@ -10,6 +10,8 @@
 """
 
 import io
+import os
+import tempfile
 import unittest
 from unittest import mock
 
@@ -158,6 +160,69 @@ class FetchImageTest(unittest.TestCase):
                         side_effect=OSError("connection refused")):
             with self.assertRaises(RuntimeError):
                 vision.fetch_image("http://x/a.jpg")
+
+
+class LocalFileUrlTest(unittest.TestCase):
+    """引用**机器人自己发的图**时，协议端回传的是 file://，得能读盘。
+
+    背景：2026-09-30~10-01 的日志里有 44 次「No connection adapters were
+    found for 'file:///...'」——fetch_image 只认 http，而机器人自己发的图走的是
+    image_out 的临时目录（见 vision._local_image_path）。这条最常用的路
+    （引用刚发的那张来改）当时一次都没通过。
+    """
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        patcher = mock.patch("app.image_out._out_dir",
+                             return_value=self.dir.name)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _uri(self, name, raw=b"\x89PNG fake"):
+        path = os.path.join(self.dir.name, name)
+        with open(path, "wb") as f:
+            f.write(raw)
+        return "file:///" + path.replace("\\", "/")
+
+    def test_reads_the_local_copy(self):
+        uri = self._uri("Anima_00471__bcaae650.png")
+        with mock.patch("app.vision._session.get") as get:
+            self.assertEqual(vision.fetch_image(uri), b"\x89PNG fake")
+            get.assert_not_called()
+
+    def test_percent_escapes_are_decoded(self):
+        uri = self._uri("a b.png", b"spaced")
+        with mock.patch("app.vision._session.get"):
+            self.assertEqual(vision.fetch_image(uri), b"spaced")
+
+    def test_expired_copy_says_so(self):
+        uri = "file:///" + os.path.join(
+            self.dir.name, "gone.png").replace("\\", "/")
+        with mock.patch("app.vision._session.get"):
+            with self.assertRaises(RuntimeError) as ctx:
+                vision.fetch_image(uri)
+            self.assertIn("过期", str(ctx.exception))
+
+    def test_oversize_local_copy_raises(self):
+        uri = self._uri("big.png", b"x" * 500)
+        with mock.patch("app.vision._session.get"):
+            with self.assertRaises(RuntimeError) as ctx:
+                vision.fetch_image(uri, max_bytes=100)
+            self.assertIn("过大", str(ctx.exception))
+
+    def test_outside_our_dir_is_not_read(self):
+        # file:// 能读任意本机文件，而 QQ 段的 url 是外部输入——只认自家目录。
+        fh = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        fh.write(b"secret")
+        fh.close()
+        self.addCleanup(os.remove, fh.name)
+        uri = "file:///" + fh.name.replace("\\", "/")
+        with mock.patch("app.vision._session.get",
+                        return_value=_resp(status=404)) as get:
+            with self.assertRaises(RuntimeError):
+                vision.fetch_image(uri)
+            get.assert_called_once()
 
 
 # ─── 识图调用 ───────────────────────────────────────

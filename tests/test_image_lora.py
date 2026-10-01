@@ -341,31 +341,43 @@ class ToolDescriptionTest(unittest.TestCase):
                           .parameters["skill"].default)
         self.assertEqual(T2I_DEFAULT_SKILL, "anima_clear")
 
-    def test_i2i_is_off_so_no_source_image_wording(self):
-        """图生图整体停用：描述里必须**劝退** source_image，不能还教怎么用。
+    def test_i2i_is_on_for_the_right_tiers_only(self):
+        """图生图 2026-10-01 重开：常规档 + 高清快档 / 二档，**三档不给**。
 
-        这条是给「模型老是往改图上想」那个毛病上的锁：描述要是留着
-        「不传 skill、只传 source_image 就会自动切到某渠道」这种指路话，
-        等于亲手把它往坑里推。
+        三档不给跟图生图的开销无关（实测只比文生图多 3~6 秒），是三档自己贵
+        （1.5× + 二段 10 步，纯执行 ~150 秒）。
         """
-        from app.tools.normal.generate_image import (
-            tool, I2I_DEFAULT_SKILL, _I2I_SKILLS)
-        self.assertEqual(_I2I_SKILLS, ())          # 停用的表达方式就是空
-        self.assertEqual(I2I_DEFAULT_SKILL, "qwen_image_v1")   # 恢复时用得上
+        from app.tools.normal.generate_image import _I2I_SKILLS
+        self.assertEqual(len(_I2I_SKILLS), 12)
+        for s in ("anima_clear", "anima_curvy", "hd_fast_clear", "hd_2_curvy"):
+            self.assertIn(s, _I2I_SKILLS)
+        for s in ("hd_3_clear", "hd_3_curvy"):
+            self.assertNotIn(s, _I2I_SKILLS)
+
+    def test_description_keeps_the_look_dont_edit_boundary(self):
+        """重开的边界：描述必须把「默认只看」写在前面，别教模型见引用图就垫图。
+
+        2026-09-27 停用整条链路，就是因为模型「一看见引用图就往改图上想」。
+        所以这里钉的不是「有没有这个能力」，是**什么时候才允许用**。
+        """
+        from app.tools.normal.generate_image import tool
         desc = tool["description"]
         self.assertIn("文生图默认 anima", desc)
-        self.assertIn("不要传 source_image", desc)
-        # 不能再有「只传 source_image 就默认走 qwen」这类指路话
+        self.assertIn("引用图片：默认只看，不改", desc)
+        self.assertIn("看得见", desc)                  # 「看图 → 反推提示词」这条路
+        self.assertIn("只有对方明确要", desc)            # 垫图要明确意图
+        self.assertIn("hd_3_", desc)                   # 不支持的那档要说出来
+        self.assertNotIn("图生图已停用", desc)
+        # 不能有「不传 skill、只传 source_image 就自动切渠道」这种指路话
         self.assertNotIn("只传 source_image", desc)
-        self.assertNotIn("会自动切到 qwen", desc)
-        # 「看图 → 反推提示词 → 文生图」这条路必须写清楚，别被误伤掉
-        self.assertIn("看得见", desc)
 
-    def test_source_image_param_is_marked_off(self):
-        """参数描述也得是「别传」，口径要和上面那两段一致。"""
+    def test_source_image_param_states_when_to_use_it(self):
+        """参数描述口径要和上面那段一致：什么时候才传、哪些渠道能垫。"""
         from app.tools.normal.generate_image import tool
         desc = tool["parameters"]["properties"]["source_image"]["description"]
-        self.assertIn("不要传", desc)
+        self.assertIn("只在对方明确要", desc)
+        self.assertIn("hd_3_", desc)
+        self.assertNotIn("已停用", desc)
 
 
 if __name__ == "__main__":

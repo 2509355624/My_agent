@@ -75,6 +75,13 @@ class ToQqTextTest(unittest.TestCase):
         body = tag + "[图片]"
         self.assertIn(tag, qq_api.to_qq_text(body))
 
+    def test_the_full_caption_keeps_the_tag_intact(self):
+        """真实 caption 是「编号 · 分辨率 · 渠道」——后面两项不能把编号挤变形，
+        也不能让正则抠不出来（群友引用的是这一整行）。"""
+        tag = image_log.new_tag()
+        body = "%s · 1024×1536 · anima_soft" % tag
+        self.assertEqual(image_log.find_tags(qq_api.to_qq_text(body)), [tag])
+
 
 class FindTagsTest(unittest.TestCase):
     """从引用回来的正文里把编号抠出来。"""

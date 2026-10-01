@@ -16,20 +16,28 @@ from app.skills import load_skill, load_workflow
 log = logging.getLogger("generate_image")
 
 
-# 支持图生图的 skill。**现在一个都没有——图生图整体停用**（2026-09-27 用户定）。
+# 支持图生图（垫图）的 skill：常规档 + 高清快档 + 高清二档，共 12 个。
 #
-# 用户的原话：引用一张图只是「让 AI 看到这张图」，他要的是**看图 → 反推提示词 →
-# 文生图**，而不是改图。但模型一看见引用图就往图生图上想，屡次跑偏。唯一的图生图
-# 渠道（qwen_image_v1）本身也在这台机器上带不动。所以：**整条图生图链路停用**，
-# 工具收不到这个能力，模型就不会再往那个方向想。
+# 2026-10-01 重新开通。2026-09-27 停用它的原因**不是画得不好**，是模型一看见
+# 引用图就往改图上想——而用户要的是「看图 → 反推提示词 → 文生图」。所以这次重开
+# 的边界写在两处（本文件末尾的工具描述 + agent_prompt 的 generate_image 条目），
+# 口径一致：**引用图默认仍然只看**，只有对方明确说「改这张 / 垫这张 / 把X换成Y」
+# 才传 source_image。
 #
-# 空元组是「停用」的表达方式，不是「没写完」：判据就是它。恢复时把 qwen 填回来
-# （同时清掉 config.DISABLED_IMAGE_SKILLS）即可，下面的 i2i 分支一行都没删。
-_I2I_SKILLS = ()
+# **hd_3_* 不给**：三档本身就贵（1.5× + 二段 10 步，实测纯执行 ~150 秒），叠上
+# 图生图要两分半以上。注意这跟图生图的开销无关——图生图只比文生图多一次
+# VAEEncode（实测 +3~6 秒，见 `_make_i2i_workflows.py`），是三档自己贵。
+#
+# 图生图骨架（`workflow_i2i.json`）由 `_make_i2i_workflows.py` 从同目录的文生图
+# 骨架生成：删 EmptyLatentImage、加 LoadImage + VAEEncode、一段 denoise 换占位符。
+# 二段的放大倍率照抄不动——所以出图尺寸是「源图缩到本档画布长边」再乘它。
+_I2I_TIERS = ("anima", "hd_fast", "hd_2")   # hd_3 不给图生图
+_I2I_STYLES = ("clear", "soft", "gloss", "curvy")
+_I2I_SKILLS = tuple(t + "_" + s for t in _I2I_TIERS for s in _I2I_STYLES)
 
-# 没点名 skill 时的图生图渠道。停用期间用不着，留着是为了恢复时一眼能看到
-# 「当初走的是哪个渠道」。
-I2I_DEFAULT_SKILL = "qwen_image_v1"
+# 图生图一段的重绘强度。**不给模型调**——它一调就会以为「调低 = 只微调」，
+# 而对方要的是「照这张重画一张」。0.6 是实测既保得住构图、又出得来细节的位置。
+I2I_DENOISE = 0.6
 
 # 没点名 skill 时的文生图默认渠道。
 #
@@ -257,10 +265,32 @@ _DUPLICATE_NOTE = (
 )
 
 
+def _canvas_long_side(workflow):
+    """本档画布的长边，读不出来返回 None。
+
+    图生图的出图尺寸 = 「源图缩到画布长边」再乘二段的放大倍率，**跟源图原始尺寸
+    无关**。不缩的话：垫一张小图，高清档出来还是小图，「高清」就名不副实；垫一张
+    4000×3000 的大图，一段的 latent 会被撑到爆显存。
+
+    画布就写在**文生图骨架**的 `EmptyLatentImage` 里（图生图骨架把它删了，换成
+    LoadImage + VAEEncode），所以这里读的是同一个 skill 目录的 `workflow.json`——
+    不另立元数据，也就不会跟骨架走散。
+    """
+    for node in (workflow or {}).values():
+        if node.get("class_type") == "EmptyLatentImage":
+            ins = node.get("inputs") or {}
+            try:
+                return max(int(ins.get("width", 0)), int(ins.get("height", 0)))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 def _generate_image(prompt, skill=None, lora=None,
                     source_image="", denoise=None, use_character=None):
-    # `denoise`：**只有 NAI 图生图**消费它（见下面的 `_nai_strength(denoise)`），
-    # 本机 16 个渠道都不认。`source_image` 同理。
+    # `denoise`：**只有 NAI 图生图**消费它（见下面的 `_nai_strength(denoise)`）。
+    # 本机渠道的图生图强度由 `I2I_DENOISE` 定死，不收这个参数——见下面的 i2i 分支。
+    # `source_image` 两边都认（本机走 workflow_i2i.json，NAI 走云端）。
     #
     # `use_character`（2026-09-30 随角色底模机制一起下线）：原义是「用这个 skill
     # 自带的角色底模」，而**只有 image_gen_v1 有 `character.txt`**。SD 归档后
@@ -313,20 +343,12 @@ def _generate_image(prompt, skill=None, lora=None,
             return _DUPLICATE_NOTE
         return _enqueue_nai(prompt, target, target_id, nai_i2i, intent)
 
-    # 图生图整体停用（_I2I_SKILLS 为空）：只要模型还试着传 source_image，就在
-    # 这里当场拦住，**并且把它拉回正路**——它十有八九是看到引用图就以为要「改图」，
-    # 而用户要的其实是「看图 → 反推提示词 → 文生图」。所以这句拒收的关键不是
-    # 「不行」，是「你该干嘛」：照常写 prompt 出一张新的。
+    # 垫图（图生图）：**模型传了 source_image 才算**，走下面那个 i2i 分支。
     #
-    # 拦在 skill 解析之前：这时候谁都还没碰 ComfyUI、没读 skill 文件，一次
-    # 白跑都没有；而且模型传没传 skill 也无所谓——图生图这个动作本身已经不存在了。
+    # 引用一张图本身**不触发它**——默认仍然是「只看，照它反推提示词画一张新的」。
+    # 这条边界写在工具描述里（见本文件末尾的【引用图片】段），别在这里放宽：
+    # 2026-09-27 整条链路停用，就是因为模型「一看见引用图就往改图上想」。
     is_i2i = bool(str(source_image or "").strip())
-    if is_i2i:
-        return ("错误：不支持传 source_image（改图 / 图生图已停用）。"
-                "**别跟对方解释技术原因，也别提这个参数名**，就说改不了图。"
-                "引用一张图只是让**你看得见**它——你要做的是：**照它反推出提示词，"
-                "用默认的 " + T2I_DEFAULT_SKILL + " 重新画一张新的**（新图不是改它那张），"
-                "或者对方只是让你看图 / 点评时就直接回话。")
 
     # 没点名 skill 时的默认渠道：文生图照旧 T2I_DEFAULT_SKILL。execute_tool 是 fn(**args)，
     # 模型不传 skill 就落到这里的默认值 None——所以「没点名」和「点名了默认渠道」
@@ -354,28 +376,28 @@ def _generate_image(prompt, skill=None, lora=None,
         return "错误: 找不到 Skill '" + skill + "'"
 
     # 图生图：给了源图就换成图生图工作流，并先把源图送进 ComfyUI 的 input
-    # 目录。取图 / 缩放 / 上传任何一步失败都当场返回，**不退回文生图**。
-    #
-    # **当前走不到这里**：上面已经对 source_image 一刀切拒收了（_I2I_SKILLS
-    # 是空的）。整段保留是为了恢复时改两处即可：把 qwen 填回 _I2I_SKILLS，
-    # 再删掉上面那个 `if is_i2i:` 的早退分支。
+    # 目录。取图 / 缩放 / 上传任何一步失败都当场返回，**不退回文生图**——
+    # 对方以为改的是自己那张，收到的却是凭空画的，比直接报错糟得多。
     workflow = skill_data["workflow"]
     source_note, denoise_txt, uploaded = "", "", ""
     if is_i2i:
         if skill not in _I2I_SKILLS:
-            return ("错误: " + skill + " 不支持图生图。"
-                    "去掉 source_image，按文生图重来。")
-        # Qwen-Image 2.1 的图生图是「按指令改」：官方模板里 denoise 就是
-        # 1.0，没有「保留多少原图」这个旋钮——要改多少，写在 prompt 里。
-        # 模型传了 denoise 也不认，免得它以为调低就是「只微调」。
-        denoise_txt = "1.00"
+            return ("错误: " + skill + " 不支持图生图（垫图）。"
+                    "去掉 source_image 按文生图重来；对方确实要垫图的话，"
+                    "换一个支持垫图的渠道（常规档、高清快档 / 二档都行）。")
+        denoise_txt = "%.2f" % I2I_DENOISE
         i2i = load_workflow(
             os.path.join(skill_data["path"], "workflow_i2i.json"))
         if not i2i:
             return "错误: Skill '" + skill + "' 没有图生图工作流"
         try:
             raw, source_note = comfy_src.resolve(source_image)
-            fitted, _size = comfy_src.fit(raw)
+            # 缩到本档画布的长边（不是 comfy_src 默认的 1216）：图生图的出图
+            # 尺寸就是「这一步缩出来的尺寸 × 二段放大倍率」，所以高清档必须
+            # 按自己的画布缩，否则垫图出来的还是源图那个大小。
+            fitted, _size = comfy_src.fit(
+                raw, max_side=_canvas_long_side(skill_data["workflow"])
+                or comfy_src.MAX_SIDE)
             uploaded = comfy_src.upload(fitted)
         except RuntimeError as e:
             return str(e)
@@ -569,14 +591,17 @@ tool = {
                   "多个逗号分隔（如 \"x.safetensors:0.8,y.safetensors:0.5\"）；文件名要完整"
                   "(.safetensors 结尾)，写错会返回可用清单；传了就完全接管本次的 lora，"
                   "每个渠道 2 个槽，没填满的槽自动关闭。"
-                  "【引用图片：默认只看，不改】**本机 16 个渠道都不要传 source_image**"
-                  "（它们的图生图已停用，传了工具会直接拒）；"
-                  "**唯一例外是下面的 nai**。用户引用一张图，只是让你**看得见**"
-                  "它：你要做的是**照它反推出提示词，用默认渠道画一张新的**，"
-                  "或者对方只是让你看图 / 点评时直接回话。"
-                  "用户真要「改这张图 / 垫图 / 把X换成Y」而 nai 又没开通时，"
-                  "照实说本机渠道改不了图，不要硬凑；可以问清他想要什么效果，"
-                  "用默认渠道重画一张（说明是新画的、不是改他那张）。"
+                  "【引用图片：默认只看，不改】用户引用一张图，**默认只是让你看得见它**："
+                  "照它反推出提示词、用默认渠道画一张新的（「看特征 / 复刻 / 参考这个风格 / "
+                  "照着画一张新的」都是这条路），或者对方只是让你看图 / 点评时直接回话。"
+                  "**只有对方明确要「改这张图 / 垫这张图 / 把X换成Y」时才传 source_image**"
+                  "——光是引用了图不算。"
+                  "【垫图（图生图）】`source_image` 填 1 = 垫对方本轮**引用**的那张图"
+                  "（对方没引用就垫不了，让他引用一条带图的消息再 @ 你一次）。"
+                  "能垫图的渠道有 12 个：常规档 `anima_<画风>`、`hd_fast_<画风>`、"
+                  "`hd_2_<画风>`；**`hd_3_<画风>` 不支持垫图**（最慢那档不给）。"
+                  "垫图出来的图**尺寸跟着渠道走**（高清档就是高清），跟对方那张原图多大无关；"
+                  "重绘强度是渠道定死的，不用你操心。"
                   "【nai / NovelAI】**仅限管理员为特定群开通 NAI 后**才能用，"
                   "图由群主自己的 NovelAI 账号在云端出，跟本机 ComfyUI 无关；"
                   "本群没开通就传了会被直接拒绝，照实说这个渠道本群用不了、"
@@ -600,7 +625,7 @@ tool = {
             "prompt": {"type": "string", "description": "提示词。写逗号分隔的标签式英文短句，**只写一段、不要用 --- 分隔**（本机工作流不会拆 ---，要出多张就分多次调用、每次一个变体）。**必须包含完整角色描述**（发型/发色/瞳色/体型/服装/年龄等）——没有任何渠道自带角色"},
             "skill": {"type": "string", "description": "Skill名称。**不传就是默认 anima_clear**。可选值共 16 个（= 4 画风 × 4 档尺寸，见 Available Skills 的生图类）——4 个**画风**渠道（普通档 anima_<画风>，728~768×1024）：anima_clear（默认，清透最平光）/ anima_soft（柔光素肌，层次稍多）/ anima_gloss（冷调油光，用户也叫它 anime2）/ anima_curvy（丰腴强光影）；再叠 3 档**大图**（画风当后缀）：hd_fast_<画风>（1024×1536，不放大最快）/ hd_2_<画风>（1328×2000，1.3× 放大，中间档）/ hd_3_<画风>（1536×2304，1.5× 放大，最大最慢，最吃显存）。**只在用户点名画风 / 尺寸时才传**，平时不传。**qwen_image_v1 / krea2 已停用，不要传**；nai（NovelAI 云端）仅限已开通的群，文生图 / 图生图都走它"},
             "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传，每个渠道 2 个槽"},
-            "source_image": {"type": "string", "description": "**仅 skill=nai 时可用**（图生图 / 垫图）：填 1 = 垫对方本轮**引用**的那张图（对方没引用会报错），可配 denoise（0.1~0.9，默认 0.7）。16 个本机渠道的图生图已停用，传了会被拒；只是看图 / 点评时任何渠道都不要传这个参数"}
+            "source_image": {"type": "string", "description": "垫图 / 图生图：填 1 = 垫对方本轮**引用**的那张图（对方没引用会报错）。**只在对方明确要改图 / 垫图时才传**；光是引用了图、或者只是看图 / 点评，任何渠道都不要传这个参数。本机 12 个渠道支持（anima_* / hd_fast_* / hd_2_*；hd_3_* 不支持），skill=nai 也支持。本机渠道的重绘强度是定死的，传 denoise 也没用"}
         },
         "required": ["prompt"]
     }

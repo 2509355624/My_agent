@@ -47,7 +47,13 @@ FORMATS = ("jpg", "png")
 DEFAULT_FORMAT = "jpg"
 
 # 产物的保留时长（秒）。NapCat 拉取 file:// 是异步的，留足余量再删。
-KEEP_SECONDS = 3600
+#
+# 2026-10-01 从 3600 提到 86400：用户回头引用「几小时前那张」是常事，而引用
+# 机器人自己发的图时，协议端回传的就是这个 file:// 路径（见 vision.
+# _local_image_path）—— 1 小时一过就取不到图了（实测 12:20 引用 11:17 那张
+# Anima_00455，文件已被 _sweep 清掉）。24 小时按每天 ~100 张、单张 1~3MB 算，
+# 稳态也就几百 MB，_sweep 照旧按时间清。
+KEEP_SECONDS = 86400
 
 
 # 与 qq_api 同款：回环地址不该被环境变量 / 注册表里的代理劫持——本机常驻
@@ -146,3 +152,22 @@ def save_bytes(data, ext=DEFAULT_FORMAT, stem="img"):
     with open(dst, "wb") as f:
         f.write(data)
     return dst
+
+
+def local_size(path):
+    """本地图的**实际像素尺寸**，形如 "1024×1536"；读不出来返回 ""。
+
+    量的是 `prepare_for_send` 的产物，也就是对方真正收到的那张——工作流里的
+    EmptyLatentImage 只是中间尺寸，后面还有 LatentUpscaleBy，拿它当「分辨率」
+    会说小一截。
+
+    失败一律返回空串：这行字只是给图加的附注，读不出来就不写这一项，绝不能
+    因为它把图卡在这一步。path 是回落用的 ComfyUI URL 时也走这条路。
+    """
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            w, h = im.size
+        return "%d×%d" % (w, h)
+    except Exception:
+        return ""

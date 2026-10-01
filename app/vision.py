@@ -13,6 +13,8 @@
 import base64
 import io
 import logging
+import os
+import re
 import time
 
 import requests
@@ -179,15 +181,68 @@ def to_data_url(raw):
     return "data:%s;base64,%s" % (mime, base64.b64encode(data).decode("ascii"))
 
 
+def _local_image_path(url):
+    """`file://` 指向本机时给出磁盘路径，不是就返回 None。
+
+    机器人**自己发**的图走的就是这条路：image_out.prepare_for_send 把产物拷进
+    临时目录、用 file:// 交给协议端（见 qq_api.image_segment）。用户**引用机器人
+    自己发的图**时，协议端回传的 url 就是这个 file:// —— requests 不认，会抛
+    InvalidSchema（"No connection adapters were found"）。于是「引用刚发的那张
+    来改」这条最常用的路一直取不到图（2026-09-30~10-01 日志里 44 次）。
+
+    只认自家产物目录：file:// 能读任意本机文件，而 QQ 段的 url 是外部输入，
+    不给它开这个口子。
+    """
+    s = str(url or "").strip()
+    if not s.lower().startswith("file://"):
+        return None
+    from urllib.parse import unquote, urlparse
+
+    from app.image_out import _out_dir
+
+    path = unquote(urlparse(s).path or "")
+    if re.match(r"^/[A-Za-z]:", path):   # Windows 的 file:///C:/x 解析出来是 /C:/x
+        path = path[1:]
+    if not path:
+        return None
+    try:
+        root = os.path.abspath(_out_dir())
+        if os.path.commonpath([root, os.path.abspath(path)]) != root:
+            return None
+    except (OSError, ValueError):        # 跨盘符 commonpath 会抛 ValueError
+        return None
+    return path
+
+
 def fetch_image(url, timeout=None, max_bytes=None):
     """下载一张网络图片，返回原始字节。失败抛 RuntimeError。
 
     QQ 的图片段带的是腾讯图床的直链（multimedia.nt.qq.com.cn），实测 GET
     即可拿到 JPEG，不需要额外的鉴权头。
+
+    例外：引用机器人自己发的图时 url 是 file://，那条走本地读盘
+    （见 _local_image_path）。
     """
     from app.config import QQ_IMAGE_MAX_BYTES, QQ_IMAGE_TIMEOUT
 
     limit = QQ_IMAGE_MAX_BYTES if max_bytes is None else max_bytes
+
+    local = _local_image_path(url)
+    if local is not None:
+        try:
+            with open(local, "rb") as f:
+                raw = f.read(limit + 1) if limit else f.read()
+        except FileNotFoundError:
+            raise RuntimeError(
+                "图片读不出来：这张图的本地临时副本已经过期清掉了（%s）" % local)
+        except OSError as exc:
+            raise RuntimeError("图片读不出来（%s）：%s" % (local, exc))
+        if limit and len(raw) > limit:
+            raise RuntimeError("图片过大（%d 字节，上限 %d）" % (len(raw), limit))
+        if not raw:
+            raise RuntimeError("图片内容为空")
+        return raw
+
     try:
         resp = _session.get(url, timeout=_deadline(timeout or QQ_IMAGE_TIMEOUT))
     except Exception as exc:

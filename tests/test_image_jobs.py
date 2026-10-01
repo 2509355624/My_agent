@@ -55,9 +55,9 @@ class _Base(unittest.TestCase):
         # path) 三元组，别为了加一列去动那一堆 [:2] / [2] 的老断言。
         self.sent_captions = []
 
-        def _fake_image(target, tid, url, caption=""):
+        def _fake_image(target, tid, url, tag="", skill=""):
             self.sent_images.append((target, tid, url))
-            self.sent_captions.append(caption)
+            self.sent_captions.append(tag)
 
         def _fake_text(target, tid, text):
             self.sent_texts.append((target, tid, text))
@@ -661,6 +661,27 @@ class SendImageTest(unittest.TestCase):
             image_jobs._send_image("group", "9", "b.png")
         self.assertEqual(sent, [("C:/tmp/y.jpg", "")])
 
+    def test_caption_carries_size_and_skill(self):
+        """编号后面跟分辨率、渠道——编号仍在前且原样（引用靠它被抠回来）。"""
+        from app import image_out
+        p1, p2, sent = self._capture_captions()
+        with p1, p2, \
+             mock.patch.object(image_out, "local_size", return_value="1024×1536"):
+            image_jobs._send_image("group", "9", "b.png",
+                                   "HT-20261001-074112-384", skill="anima_soft")
+        self.assertEqual(
+            sent, [("C:/tmp/y.jpg", "HT-20261001-074112-384 · 1024×1536 · anima_soft")])
+
+    def test_caption_survives_missing_size(self):
+        """量不出分辨率（图读不出来 / 回落到 ComfyUI URL）时只少这一项，别多出空档。"""
+        from app import image_out
+        p1, p2, sent = self._capture_captions()
+        with p1, p2, \
+             mock.patch.object(image_out, "local_size", return_value=""):
+            image_jobs._send_image("group", "9", "b.png",
+                                   "HT-20261001-074112-384", skill="anima_soft")
+        self.assertEqual(sent, [("C:/tmp/y.jpg", "HT-20261001-074112-384 · anima_soft")])
+
     def test_audit_block_sends_nothing_at_all(self):
         """被审核拦下时连编号也不发——没图却挂个编号，比什么都不发更糟。"""
         from app import image_audit
@@ -671,6 +692,28 @@ class SendImageTest(unittest.TestCase):
                                         "HT-20261001-074112-384")
         self.assertFalse(ok)
         self.assertEqual(sent, [])
+
+
+class ElapsedTest(unittest.TestCase):
+    """日志里的耗时只算「开跑到发出去」，排队时间不算——否则排在第 5 位的
+    那张，日志会写着它画了十分钟，实际是等了十分钟。"""
+
+    def _job(self):
+        return image_jobs.Job("group", "9", {"1": {}})
+
+    def test_counts_from_start_not_enqueue(self):
+        job = self._job()
+        job.created = 1000.0 - 600      # 排了十分钟
+        job.started = 1000.0 - 42       # 真正画了 42 秒
+        with mock.patch.object(image_jobs, "time", _FakeTime(lambda: 1000.0)):
+            self.assertAlmostEqual(image_jobs._elapsed(job), 42.0)
+
+    def test_falls_back_to_enqueue_when_never_started(self):
+        """异常路径没打上 started 时退回入队时刻——宁可多算，也别报负数。"""
+        job = self._job()
+        job.created = 1000.0 - 7
+        with mock.patch.object(image_jobs, "time", _FakeTime(lambda: 1000.0)):
+            self.assertAlmostEqual(image_jobs._elapsed(job), 7.0)
 
 
 class JobTagTest(unittest.TestCase):
@@ -1281,7 +1324,7 @@ class RestartOnLowRamTest(unittest.TestCase):
 
     def setUp(self):
         image_jobs._reset()
-        # 水位必须钉死：默认值会被 .env 覆盖（本机 COMFY_MIN_FREE_RAM_GB=1.0），
+        # 水位必须钉死：默认值会被 .env 覆盖（本机 COMFY_MIN_FREE_RAM_GB=2.0），
         # 于是用例里的 1.5GB 不再「低于水位」，重启永远不触发——判定逻辑没坏，
         # 是这条用例在跟着环境走。钉成 3.0，跟 .env 无关。
         self._threshold(3.0)
@@ -1626,28 +1669,49 @@ class DisabledChannelTest(unittest.TestCase):
         self.assertFalse(self.comfy.called)     # 一步都没碰 ComfyUI
         self.assertFalse(self.load.called)      # 连 skill 都没去读
 
-    def test_i2i_is_refused_even_without_naming_qwen(self):
-        """只给 source_image 不给 skill 的那条路**也必须挡住**——而且挡它的是
-        另一道闸（图生图整体停用），跟 qwen 停不停无关。
+    def test_i2i_without_naming_a_channel_uses_the_default(self):
+        """只给 source_image 不给 skill：落到默认渠道（anima_clear），它支持垫图。
 
-        这是最容易漏的一条：模型的意图是「改图」，不是「用 qwen」，所以它不会
-        传 skill，闸要是只看 skill 参数就漏过去了。
-        """
-        self._disabled(["qwen_image_v1"])
-        out = self._call(prompt="把衣服换成红色", source_image="1")
-        self.assertIn("source_image", out)
-        self.assertFalse(self.comfy.called)
-
-    def test_i2i_is_refused_with_qwen_enabled(self):
-        """把 qwen 放回来也照样拒——停用的是「图生图」这个功能，不是那个渠道。
-
-        两道闸是分开的：`_I2I_SKILLS` 管「图生图能不能跑」，`DISABLED_IMAGE_
-        SKILLS` 管「这个渠道能不能用」。这条用例把后者清空，只剩前者生效。
+        这条以前是「必须挡住」（那时图生图整体停用）。现在反过来：模型说「改图」
+        而不点名渠道，就该按默认渠道垫图，而不是被拒。
+        顺带钉住源图的缩放目标——必须按**本档画布的长边**缩，不是 comfy_src
+        默认的 1216。图生图的出图尺寸就是这一步缩出来的尺寸再乘二段放大倍率，
+        缩错了高清档就名不副实。
         """
         self._disabled([])
-        out = self._call(prompt="把衣服换成红色", source_image="1")
-        self.assertIn("source_image", out)
-        self.assertFalse(self.comfy.called)     # 连探活都没做
+        self.load.return_value = {
+            "workflow": {"9": {"class_type": "EmptyLatentImage",
+                               "inputs": {"width": 728, "height": 1024}}},
+            "path": os.path.join("skills", "anima_clear")}
+        seen = {}
+
+        def fake_fit(raw, max_side=None):
+            seen["max_side"] = max_side
+            return b"FIT", (728, 1024)
+
+        with mock.patch.object(generate_image, "load_workflow",
+                               lambda p: {"30": {"class_type": "LoadImage"}}), \
+                mock.patch.object(generate_image.comfy_src, "resolve",
+                                  lambda spec: (b"RAW", "引用的那张图")), \
+                mock.patch.object(generate_image.comfy_src, "fit", fake_fit), \
+                mock.patch.object(generate_image.comfy_src, "upload",
+                                  lambda raw: "i2isrc_x.png"):
+            out = self._call(prompt="把衣服换成红色", source_image="1")
+
+        self.assertIn("已经在画了", out)
+        self.assertEqual(seen["max_side"], 1024)     # 728×1024 画布的长边
+        self.assertTrue(self.comfy.called)           # 走到底了：探活过 ComfyUI
+
+    def test_i2i_is_refused_on_hd_3(self):
+        """三档不给图生图：点名也一样拒，而且一步都不碰 ComfyUI。
+
+        「不给」跟图生图的开销无关（实测只比文生图多 3~6 秒），是三档自己贵。
+        """
+        self._disabled([])
+        out = self._call(prompt="把衣服换成红色", skill="hd_3_clear",
+                         source_image="1")
+        self.assertIn("不支持图生图", out)
+        self.assertFalse(self.comfy.called)
 
     def test_refusal_tells_the_model_what_to_do(self):
         """拒收不能只说「不行」——模型得知道下一步该干嘛，否则它会开始编。"""
