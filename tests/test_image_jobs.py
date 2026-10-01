@@ -1876,6 +1876,17 @@ class NaiCloudTest(_Base):
 
     def setUp(self):
         super().setUp()
+        # 审核开关读的是 settings.json（热路径），拨到临时目录：否则本机
+        # agents/qq/settings.json 里 image_audit_groups=true 会让这些用例
+        # 走真审核，假路径读图失败 → fail-closed 拦下 → 断言全崩。
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        p = mock.patch.object(agents, "AGENTS_DIR",
+                              os.path.join(self.tmp.name, "agents"))
+        p.start()
+        self.addCleanup(p.stop)
+        agents.clear_cache()
+        self.addCleanup(agents.clear_cache)
         self.nai_calls = []
         p = mock.patch.object(nai, "generate",
                              lambda prompt: self.nai_calls.append(prompt)
@@ -1914,6 +1925,15 @@ class NaiCloudTest(_Base):
         image_jobs._drain()
         self.assertEqual(len(self.nai_sent), 0)
         self.assertTrue(any("NAI" in t for _, _, t in self.sent_texts))
+
+    def test_nai_blocked_by_audit_sends_nothing(self):
+        """审核拦下 NAI 的图：不发图、不报错（提示由 image_audit 自己回）。"""
+        from app import image_audit
+        with mock.patch.object(image_audit, "allow_send", return_value=False):
+            self._enqueue(("group", "9"), wf="x", skill="nai")
+            image_jobs._drain()
+        self.assertEqual(len(self.nai_sent), 0)
+        self.assertEqual(self.sent_texts, [])
 
 
 class NaiRoutingTest(unittest.TestCase):

@@ -1,11 +1,14 @@
 """发图审核闸门（app/image_audit.py）的锁。
 
-这个模块只有两条规则，但两条都是「错了会很痛」的那种，所以逐条钉住：
+这个模块只有三条规则，但每条都是「错了会很痛」的那种，所以逐条钉住：
 
-1. **判定违规才拦**，其余一律放行 —— 识图超时 / 报错 / 回复解析不出来
-   全部 fail-open。用户 2026-10-01 明确选的（理由见模块注释：识图 provider
-   一抖就把所有图堵死，用户会以为自己的描述有问题）。
-2. **开关没开时一次网络都不发** —— 三个发图点都挂了它，热路径上多一次
+1. **fail-closed** —— 识图超时 / 报错 / 回复解析不出来 / 图读不出来，一律
+   拦下不发。用户 2026-10-01 明确选的（改前是 fail-open）。代价是识图 provider
+   一抖所有图都发不出去，所以失败路径回的是另一句提示（FAILED_NOTICE）。
+2. **口径从严** —— 大面积皮肤裸露 / 性暗示 / 暧昧动作，命中任一就拦，拿不准
+   也拦。这条钉在 `_PROMPT` 的关键词上（PromptPolicyTest）——只测 parse_verdict
+   的话，把提示词改回宽松版都不会有测试变红。
+3. **开关没开时一次网络都不发** —— 三个发图点都挂了它，热路径上多一次
    识图调用就是每张图白等两秒。
 
 另外钉住「拦下之后不再抛异常」：调用方（image_jobs / qq_bot）都靠返回值
@@ -78,41 +81,41 @@ class ParseVerdictTest(unittest.TestCase):
         self.assertEqual(v.reason, "")
 
 
-class CheckFailOpenTest(unittest.TestCase):
-    """check() 的三条失败路径必须全部放行，而且**不抛异常**。"""
+class CheckFailClosedTest(unittest.TestCase):
+    """check() 的四条失败路径必须全部拦下（fail-closed），而且**不抛异常**。"""
 
-    def test_missing_file_is_fail_open(self):
+    def test_missing_file_is_fail_closed(self):
         v = image_audit.check("D:/definitely/not/here.jpg")
-        self.assertTrue(v.allow)
+        self.assertFalse(v.allow)
         self.assertTrue(v.failed)
 
-    def test_empty_file_is_fail_open(self):
+    def test_empty_file_is_fail_closed(self):
         path = _write_png(b"")
         try:
             v = image_audit.check(path)
-            self.assertTrue(v.allow)
+            self.assertFalse(v.allow)
             self.assertTrue(v.failed)
         finally:
             os.remove(path)
 
-    def test_vision_error_is_fail_open(self):
+    def test_vision_error_is_fail_closed(self):
         path = _write_png()
         try:
             with mock.patch("app.vision.describe",
                             side_effect=RuntimeError("识图请求失败（耗时 30.0s）")):
                 v = image_audit.check(path)
-            self.assertTrue(v.allow)
+            self.assertFalse(v.allow)
             self.assertTrue(v.failed)
         finally:
             os.remove(path)
 
-    def test_unparseable_reply_is_fail_open(self):
+    def test_unparseable_reply_is_fail_closed(self):
         path = _write_png()
         try:
             with mock.patch("app.vision.describe",
                             return_value="我觉得这张图还行吧"):
                 v = image_audit.check(path)
-            self.assertTrue(v.allow)
+            self.assertFalse(v.allow)
             self.assertTrue(v.failed)
         finally:
             os.remove(path)
@@ -136,12 +139,50 @@ class CheckVerdictTest(unittest.TestCase):
         self.assertFalse(v.failed)
         self.assertEqual(v.category, "nudity")
 
-    def test_swimsuit_passes(self):
-        """用户定的边界：泳装 / 内衣一律放行。这条是需求本身。"""
+    def test_bare_skin_is_blocked(self):
+        """用户 2026-10-01 收紧的边界：泳装 / 内衣这类大面积裸露也一律拦。"""
         v = self._check_with(
-            '{"allow": true, "reason": "泳装展示，未违规", "category": "ok"}')
+            '{"allow": false, "reason": "泳装，大面积皮肤裸露", "category": "skin"}')
+        self.assertFalse(v.allow)
+        self.assertFalse(v.failed)
+        self.assertEqual(v.category, "skin")
+
+    def test_fully_clothed_passes(self):
+        v = self._check_with(
+            '{"allow": true, "reason": "正常着装", "category": "ok"}')
         self.assertTrue(v.allow)
         self.assertFalse(v.failed)
+
+
+class PromptPolicyTest(unittest.TestCase):
+    """口径本身就是需求，得钉在提示词上。
+
+    以前这条是靠 `test_swimsuit_passes` 反向钉的（泳装放行）；口径反转后，只测
+    `parse_verdict` 是钉不住的——把 `_PROMPT` 改回宽松版，上面那些用例照样全绿。
+    所以这里直接查关键词。
+    """
+
+    def test_prompt_is_strict_about_bare_skin(self):
+        p = image_audit._PROMPT
+        self.assertIn("大面积", p)
+        self.assertIn("泳装", p)          # 旧版把它列在「允许」里，现在必须是禁止项
+
+    def test_prompt_also_blocks_suggestive_and_flirty(self):
+        """用户原话：「只要敢露和性暗示和暧昧动作直接给我禁止发送」。"""
+        p = image_audit._PROMPT
+        self.assertIn("性暗示", p)
+        self.assertIn("暧昧动作", p)
+
+    def test_prompt_tells_model_to_block_when_unsure(self):
+        """从严是这次的要求本身：拿不准 → 不合格。"""
+        p = image_audit._PROMPT
+        self.assertIn("拿不准", p)
+        self.assertIn("不合格", p)
+
+    def test_skin_category_is_kept_in_logs(self):
+        v = image_audit.parse_verdict(
+            '{"allow": false, "reason": "露肩露背", "category": "skin"}')
+        self.assertEqual(v.category, "skin")
 
 
 class AllowSendTest(unittest.TestCase):
@@ -181,14 +222,14 @@ class AllowSendTest(unittest.TestCase):
                 self.path, "qq", "group", "123"))
         self.assertEqual(notify.call_count, 1)
 
-    def test_vision_failure_still_passes(self):
-        """fail-open 的端到端验证：识图挂了，图照样发。"""
+    def test_vision_failure_blocks(self):
+        """fail-closed 的端到端验证：识图挂了，图发不出去，并且回一句提示。"""
         with self._with_enabled(True), \
              mock.patch("app.vision.describe", side_effect=RuntimeError("boom")), \
              mock.patch.object(image_audit, "_notify_blocked") as notify:
-            self.assertTrue(image_audit.allow_send(
+            self.assertFalse(image_audit.allow_send(
                 self.path, "qq", "group", "123"))
-        notify.assert_not_called()
+        self.assertEqual(notify.call_count, 1)
 
     def test_web_target_always_passes(self):
         """target=None（网页端）直接放行，连开关都不读。"""
@@ -199,8 +240,13 @@ class AllowSendTest(unittest.TestCase):
         gate.assert_not_called()
         desc.assert_not_called()
 
-    def test_settings_read_error_is_fail_open(self):
-        """连 settings 都读不出来时别把图卡住。"""
+    def test_settings_read_error_does_not_block(self):
+        """读不到 settings 时放行 —— 这**不是** fail-open 的残留。
+
+        它和「识图失败」是两码事：读不到 settings 意味着不知道开关是什么状态，
+        而不是「知道要审但审不了」。settings 坏了就把所有图堵死，等于 bot 主
+        功能停摆，代价远大于收益。要连这条也拦，得先把开关状态挪到别处存。
+        """
         with mock.patch.object(agents, "image_audit_enabled",
                                side_effect=OSError("settings 读挂了")), \
              mock.patch("app.vision.describe") as desc:
@@ -218,6 +264,19 @@ class NotifyTest(unittest.TestCase):
         self.assertNotIn("乳", image_audit.BLOCKED_NOTICE)
         self.assertNotIn("下体", image_audit.BLOCKED_NOTICE)
         self.assertTrue(image_audit.BLOCKED_NOTICE.strip())
+
+    def test_failed_verdict_gets_failed_notice(self):
+        """审核没生效 → 说「服务没响应」，不能说成「没过审」。
+
+        fail-closed 之后两种拦截都发得出去，但原因完全不同：混成一句的话，
+        识图一抖用户就去改本来没问题的提示词。
+        """
+        v = image_audit.Verdict(False, reason="识图失败：timeout", failed=True)
+        with mock.patch("app.qq_api.send_group") as sg:
+            image_audit._notify_blocked("group", "123", v)
+        sg.assert_called_once_with("123", image_audit.FAILED_NOTICE)
+        self.assertNotEqual(image_audit.FAILED_NOTICE,
+                            image_audit.BLOCKED_NOTICE)
 
     def test_notify_uses_group_and_private_channels(self):
         v = image_audit.Verdict(False, reason="x", category="nudity")

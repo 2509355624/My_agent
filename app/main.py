@@ -959,9 +959,10 @@ def set_agent_image_audit_groups(agent_id):
     """设**所有群聊**的 NSFW 审核总开关。热生效。
 
     settings.json 的 image_audit_groups 字段：缺省 = False（默认全关）。
-    开了之后，**所有群**生图发出去之前都会先让识图模型判一次「是否性器官裸露 /
-    明确性行为」，判定违规就不发并回一句提示；识图失败一律放行（fail-open，
-    见 app/image_audit.py）。单个群想单独不同，用行里的「审核」开关覆盖。
+    开了之后，**所有群**生图发出去之前都会先让识图模型判一次（大面积皮肤裸露 /
+    性暗示 / 暧昧动作，口径从严）；判违规**或审核没生效**都不发，各回一句提示
+    （fail-closed，见 app/image_audit.py）。单个群想单独不同，用行里的「审核」
+    开关覆盖。
     """
     return _set_audit_global(agent_id, "group")
 
