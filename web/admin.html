@@ -249,11 +249,31 @@
         <div class="sess-foot" style="margin-bottom: 8px;">
           <button class="toggle" id="auditGroups">群聊审核·关</button>
           <button class="toggle" id="auditPrivate">私聊审核·关</button>
+          <button class="ghost" id="auditPromptBtn">审核提示词</button>
           <span class="hint">发图前的 NSFW 闸门，<b>群聊和私聊各一个总开关</b>（默认都关）：
-            开 = 那一类会话的生图发出去之前先让识图模型判一次，只拦「性器官裸露 / 明确性行为」；
-            泳装、内衣、比基尼、露腿都照常发。判定违规就不发并回一句提示。
-            <b>识图超时 / 报错一律放行</b>，不会因为识图挂了就把生图堵死。
-            单个群 / 单个私聊想跟总开关不一样，用行里的「审核」开关覆盖。</span>
+            开 = 那一类会话的生图发出去之前先让识图模型判一次，命中
+            <b>大面积皮肤裸露 / 性暗示 / 暧昧动作</b>任一就不发并回一句提示，拿不准也拦。
+            <b>识图超时 / 报错一律拦下不发</b>（fail-closed），所以识图服务一抖所有图都会发不出去。
+            单个群 / 单个私聊想跟总开关不一样，用行里的「审核」开关覆盖。
+            「审核提示词」按钮可以自己改判定口径。</span>
+        </div>
+        <div id="auditPromptWrap" style="display:none; margin:0 0 8px 0; padding:8px;
+             border:1px solid var(--line, #333); border-radius:6px;">
+          <div class="hint" style="margin-bottom:6px;">
+            整份替换内置的审核提示词。<b>必须保留最后那句「只输出一行 JSON」</b>
+            （字段 allow / reason / category，category 只能是 ok|skin|sexual|nudity|other）
+            ——丢了它模型回的话解析不出来，会被当成审核失败，<b>所有图都发不出去</b>。
+            留空保存 = 恢复内置默认。
+          </div>
+          <textarea id="auditPromptText"
+                    style="width:100%; min-height:220px; box-sizing:border-box;
+                           font-family:inherit;"></textarea>
+          <div style="margin-top:6px; display:flex; gap:8px; align-items:center;">
+            <button class="ghost" id="auditPromptSave">保存</button>
+            <button class="ghost" id="auditPromptReset">恢复默认</button>
+            <button class="ghost" id="auditPromptClose">收起</button>
+            <span class="hint" id="auditPromptState"></span>
+          </div>
         </div>
         <div class="hint" style="font-weight:600;margin:8px 0 4px;">私聊</div>
         <div class="sess-foot" style="margin-bottom: 8px;">
@@ -837,6 +857,8 @@ async function loadSessions() {
     renderNaiAll(d.nai_enabled === true);
     renderImageFmtAll(d.image_send_format);
     renderAuditGlobals(d.image_audit_globals);
+    auditPrompt.custom = d.image_audit_prompt || '';
+    auditPrompt.default = d.image_audit_prompt_default || '';
     privState.on = d.private_enable !== false;
     privState.wlOn = d.private_whitelist_on !== false;
     privState.list = d.private_whitelist || [];
@@ -1162,6 +1184,47 @@ async function toggleAuditGlobal(sc) {
     await loadSessions();
   } catch (e) {
     sessStatus(e.message, 'err');
+    btn.disabled = false;
+  }
+}
+
+// 审核提示词：custom = 用户存的那份（空 = 用内置），default = 内置那份。
+// 两个都存下来，是为了「打开编辑器时填现在**实际生效**的那份」——让用户从
+// 现成的口径上改，而不是对着空白框从头写（写漏输出格式就会把所有图拦死）。
+let auditPrompt = { custom: '', default: '' };
+
+function auditPromptState(msg, kind) {
+  const el = $('auditPromptState');
+  el.textContent = msg || '';
+  el.style.color = kind === 'err' ? '#e55' : (kind === 'ok' ? '#5c5' : '');
+}
+
+function toggleAuditPrompt() {
+  const wrap = $('auditPromptWrap');
+  if (wrap.style.display !== 'none') { wrap.style.display = 'none'; return; }
+  $('auditPromptText').value = auditPrompt.custom || auditPrompt.default;
+  auditPromptState(auditPrompt.custom ? '当前用的是自定义那份' : '当前用的是内置默认', '');
+  wrap.style.display = '';
+  $('auditPromptText').focus();
+}
+
+async function saveAuditPrompt() {
+  const ta = $('auditPromptText');
+  const btn = $('auditPromptSave');
+  btn.disabled = true;
+  try {
+    const r = await api('/api/agent/' + encodeURIComponent(cur)
+      + '/image_audit_prompt',
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: ta.value }) });
+    auditPrompt.custom = r.prompt || '';
+    auditPromptState(r.using_default ? '已保存：恢复内置默认' : '已保存自定义提示词',
+                     'ok');
+    sessStatus('审核提示词已更新，立即生效', 'ok');
+  } catch (e) {
+    auditPromptState(e.message, 'err');
+  } finally {
     btn.disabled = false;
   }
 }
@@ -1570,6 +1633,15 @@ $('imgGenAll').addEventListener('click', toggleImageGenAll);
 $('naiAll').addEventListener('click', toggleNaiAll);
 $('imgFmtAll').addEventListener('click', toggleImageFmtAll);
 AUDIT_SCOPES.forEach(sc => $(sc.id).addEventListener('click', () => toggleAuditGlobal(sc)));
+$('auditPromptBtn').addEventListener('click', toggleAuditPrompt);
+$('auditPromptSave').addEventListener('click', saveAuditPrompt);
+$('auditPromptReset').addEventListener('click', () => {
+  $('auditPromptText').value = auditPrompt.default;
+  auditPromptState('已填入内置默认，点「保存」才生效', '');
+});
+$('auditPromptClose').addEventListener('click', () => {
+  $('auditPromptWrap').style.display = 'none';
+});
 $('privAll').addEventListener('click', togglePrivateAll);
 $('privWlOn').addEventListener('click', togglePrivateWlOn);
 $('privAdd').addEventListener('click', () => privEdit('add'));

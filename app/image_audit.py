@@ -42,6 +42,18 @@
 三层，全在 settings.json（热生效，不用重启），见 `agents.image_audit_enabled`：
 按会话类型的两个总开关 `image_audit_groups` / `image_audit_private`，再加单会话
 `image_audit_overrides[会话号]`。默认**全关**（加这个功能之前的行为）。
+
+## 提示词可以自己改
+
+上面 `_PROMPT` 是**内置默认**。settings.json 里设 `image_audit_prompt`（管理页
+「审核提示词」按钮）就整份替换掉它，留空 / 删掉 = 回落默认（见
+`agents.image_audit_prompt`）。2026-10-01 用户要求能自己改口径，之前它写死在
+代码里，调一句得改代码 + 重启适配层。
+
+⚠️ 换掉之后 `_PROMPT` 里那三条约定就**不再受保护**了：模型必须回一行 JSON
+（`parse_verdict` 只认这个）、`category` 只能是 `_CATEGORIES` 里那几个。自定义
+的提示词要是没写输出格式，会解析失败 → fail-closed → **所有图都发不出去**。
+管理页的编辑器默认把内置那份填进去，照着改就丢不了。
 """
 
 import json
@@ -52,7 +64,8 @@ from app.config import IMAGE_AUDIT_TIMEOUT
 
 log = logging.getLogger("image_audit")
 
-# 审核提示词。三个要点不能丢：
+# 审核提示词（**内置默认**，可被 settings.json 的 image_audit_prompt 整份替换）。
+# 三个要点不能丢：
 #   1. **把三档口径都具体化**（大面积裸露 / 性暗示 / 暧昧动作），各给一串例子
 #      ——只写「禁止裸露和性暗示」，模型每张图的尺子都不一样，列全了界线才稳定。
 #      口径是**从严**，所以同时写明「拿不准判不合格」；
@@ -159,8 +172,29 @@ def parse_verdict(text):
                        data.get("category"), str) else "other")
 
 
-def check(path, timeout=None):
+def default_prompt():
+    """内置默认提示词。管理页拿它给编辑器当初始内容 / 「恢复默认」的填充。"""
+    return _PROMPT
+
+
+def resolve_prompt(agent_id):
+    """这个 agent 实际要用的提示词：自定义的优先，没设就是内置默认。
+
+    读 settings 失败**不抛**，回落内置默认——闸门宁可继续用从严的那份，
+    也不该因为读配置出岔子就变成不审。
+    """
+    try:
+        from app.agents import image_audit_prompt
+        return image_audit_prompt(agent_id) or _PROMPT
+    except Exception as exc:
+        log.warning("读自定义审核提示词失败，用内置默认：%s", exc)
+        return _PROMPT
+
+
+def check(path, timeout=None, prompt=None):
     """审一张本地图（`image_out.prepare_for_send` 的产物）。
+
+    prompt 不传 = 用内置默认；`allow_send` 会把自定义的那份传进来。
 
     **不抛异常**：读不到文件、识图失败、解析不出来，一律返回**拦截**的 Verdict
     （allow=False，failed=True）。调用方不需要 try/except。
@@ -181,7 +215,8 @@ def check(path, timeout=None):
         return _fail_closed("压缩失败：%s" % exc)
 
     try:
-        text = vision.describe(data_url, timeout=timeout, prompt=_PROMPT)
+        text = vision.describe(data_url, timeout=timeout,
+                               prompt=prompt or _PROMPT)
     except Exception as exc:
         return _fail_closed("识图失败：%s" % exc)
 
@@ -233,7 +268,7 @@ def allow_send(path, agent_id, target, target_id):
         log.warning("读审核开关失败，按放行处理：%s", exc)
         return True
 
-    verdict = check(path)
+    verdict = check(path, prompt=resolve_prompt(agent_id))
     if verdict.allow:
         return True
 

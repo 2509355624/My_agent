@@ -219,6 +219,11 @@ VISION_MAX_EDGE = int(os.getenv("VISION_MAX_EDGE", "1024"))
 # 更容易误拦——识图偶尔慢一点，本来合规的图也发不出去。别乱调短。
 IMAGE_AUDIT_TIMEOUT = float(os.getenv("IMAGE_AUDIT_TIMEOUT", "30"))
 
+# 自定义审核提示词的长度上限（字符）。审核提示词**每张图都要重发一遍**，
+# 它是尾巴的一部分、每次都全价计费，所以给个上限防手滑贴进来一整篇文章。
+# 内置默认那份约 300 字，2000 给了很宽的余量，够写一版更细的口径。
+IMAGE_AUDIT_PROMPT_MAX = int(os.getenv("IMAGE_AUDIT_PROMPT_MAX", "2000"))
+
 # ─── Web 搜索（豆包搜索）─────────────────────────────
 # 豆包搜索（原 联网搜索/融合信息搜索）专用 API Key，在火山「联网搜索控制台」创建：
 # https://console.volcengine.com/search-infinity/api-key?tab=post_paid

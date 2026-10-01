@@ -11,11 +11,12 @@ from flask import (Flask, request, jsonify, send_from_directory, Response,
                    stream_with_context)
 from app import agents as agent_store
 from app import cancel as cancel_mod
+from app import image_audit
 from app import logsetup
 from app import usage as usage_stats
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         LLM_PROVIDER, PROVIDERS, OLLAMA_BASE_URL, DEFAULT_AGENT_ID,
-                        ADMIN_ALLOW_REMOTE, CONTEXT_BUDGET,
+                        ADMIN_ALLOW_REMOTE, CONTEXT_BUDGET, IMAGE_AUDIT_PROMPT_MAX,
                         QQ_PRIVATE_ENABLE, QQ_WHITELIST_USERS,
                         VISION_PROVIDER, VISION_MODEL, provider_vision)
 from app.skills import list_skills, load_skill
@@ -713,6 +714,13 @@ def get_agent_sessions(agent_id):
                     # 单会话覆盖见每行的 image_audit。
                     "image_audit_globals":
                         agent_store.image_audit_globals(aid),
+                    # 自定义审核提示词：prompt 是用户存的那份（可能为空 = 用默认），
+                    # default 是内置默认。编辑器要拿 default 当初始内容，用户才能
+                    # 从「现在实际在用的口径」开始改，而不是对着空白框瞎写。
+                    "image_audit_prompt":
+                        agent_store.image_audit_prompt(aid),
+                    "image_audit_prompt_default":
+                        image_audit.default_prompt(),
                     "private_enable": priv_on,
                     "private_whitelist": priv_wl,
                     "private_whitelist_on":
@@ -976,6 +984,48 @@ def set_agent_image_audit_private(agent_id):
     settings.json 的 image_audit_private 字段，缺省 = False。
     """
     return _set_audit_global(agent_id, "private")
+
+
+@app.route("/api/agent/<agent_id>/image_audit_prompt", methods=["PUT"])
+def set_agent_image_audit_prompt(agent_id):
+    """设**自定义的审核提示词**（整份替换内置默认）。热生效。
+
+    body: {"prompt": "..."}。传空串 / null / 空白 = 删掉自定义，回落内置默认
+    （不是「用空提示词去审」——那等于不审，见 agents.image_audit_prompt）。
+
+    ⚠️ 自定义的提示词必须自己保留「只输出一行 JSON」那条约定（`parse_verdict`
+    只认它，`category` 只能是 ok|skin|sexual|nudity|other）。丢了输出格式 =
+    每张图都解析失败 = fail-closed = **所有图都发不出去**。所以这里只做长度
+    上限和类型校验，不替用户往文本里塞东西——塞了他就不知道自己到底在审什么了。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if "prompt" not in body:
+        return jsonify({"error": "需要字段 prompt（字符串；空串 = 恢复默认）"}), 400
+    v = body["prompt"]
+    if v is not None and not isinstance(v, str):
+        return jsonify({"error": "prompt 要么是字符串，要么是 null"}), 400
+    v = (v or "").strip()
+    if len(v) > IMAGE_AUDIT_PROMPT_MAX:
+        return jsonify({"error": "提示词太长（%d 字，上限 %d）：审核提示词每张图都要"
+                                 "重发一遍，写长了纯烧 token"
+                                 % (len(v), IMAGE_AUDIT_PROMPT_MAX)}), 400
+
+    settings = agent_store.load_settings(aid)
+    if v:
+        settings["image_audit_prompt"] = v
+    else:
+        settings.pop("image_audit_prompt", None)
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "prompt": v,
+                    "using_default": not v,
+                    "effective": v or image_audit.default_prompt()})
 
 
 @app.route("/api/agent/<agent_id>/image_audit/<group_id>", methods=["PUT"])

@@ -342,10 +342,16 @@ class RunTurnContextTest(_TmpAgentsMixin, unittest.TestCase):
         self.assertNotIn("刚才在聊吃饭", seen["text"])
         self.assertEqual(seen["text"], "张三：在吗")
 
-    def test_private_gets_no_context(self):
+    def test_private_gets_no_recent_context(self):
+        """私聊不垫「刚才在聊什么」那层背景——只有群才垫。
+
+        断言别写成「extra 必须是 None」：私聊现在还有一行生图额度状态
+        （`agents.image_quota_line`，2026-10-01 加），那是另一回事，跟这里
+        要防的「私聊也被塞了群背景」无关。
+        """
         recent.remember("qq", "1", "李四", "私聊的话")
         seen = self._run(target="private", target_id="1")
-        self.assertIsNone(seen["extra"])
+        self.assertNotIn("私聊的话", seen["extra"] or "")
 
     def _write_sticker(self):
         sdir = os.path.join(self.root, "qq", "stickers")
