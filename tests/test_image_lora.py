@@ -346,12 +346,18 @@ class ToolDescriptionTest(unittest.TestCase):
 
         三档不给跟图生图的开销无关（实测只比文生图多 3~6 秒），是三档自己贵
         （1.5× + 二段 10 步，纯执行 ~150 秒）。
+
+        2026-10-02 又加了 `qwen_image_v1`——那是**编辑**不是重绘（另一套骨架，
+        见 tests/test_image_i2i.py 的 QwenEditFlowTest），动漫那 12 个一格没动。
         """
-        from app.tools.normal.generate_image import _I2I_SKILLS
-        self.assertEqual(len(_I2I_SKILLS), 12)
-        for s in ("anima_clear", "anima_curvy", "hd_fast_clear", "hd_2_curvy"):
+        from app.tools.normal.generate_image import (
+            _I2I_ANIMA_SKILLS, _I2I_SKILLS)
+        self.assertEqual(len(_I2I_ANIMA_SKILLS), 12)
+        self.assertEqual(len(_I2I_SKILLS), 13)
+        for s in ("anima_clear", "anima_curvy", "hd_fast_clear", "hd_2_curvy",
+                  "qwen_image_v1"):
             self.assertIn(s, _I2I_SKILLS)
-        for s in ("hd_3_clear", "hd_3_curvy"):
+        for s in ("hd_3_clear", "hd_3_curvy", "krea2", "image_gen_v1"):
             self.assertNotIn(s, _I2I_SKILLS)
 
     def test_description_keeps_the_look_dont_edit_boundary(self):
@@ -378,6 +384,28 @@ class ToolDescriptionTest(unittest.TestCase):
         self.assertIn("只在对方明确要", desc)
         self.assertIn("hd_3_", desc)
         self.assertNotIn("已停用", desc)
+
+    def test_description_teaches_the_two_i2i_modes(self):
+        """图生图现在有**两种机制**，描述必须把「哪种请求走哪个渠道」写清楚。
+
+        模型只看得到这段文字（工作流差别它看不见）。少了这层，它会把「把外套
+        换成红色」送去动漫档重绘——出来的是一张画风变了、构图也跑了的新图，
+        对方要的「只改一处」根本没实现。
+        """
+        from app.tools.normal.generate_image import tool
+        desc = tool["description"]
+        self.assertIn("图生图：本机有两种", desc)
+        for key in ("改图", "重绘", "qwen_image_v1", "一句改图指令",
+                    "不要把整张图重新描述"):
+            self.assertIn(key, desc, "描述里缺了「%s」" % key)
+        # 两种模式的 prompt 写法不同，这条也得写在参数上（模型最常看的地方）
+        prop = tool["parameters"]["properties"]["source_image"]["description"]
+        self.assertIn("改图", prop)
+        self.assertIn("重绘", prop)
+        self.assertIn("qwen_image_v1", prop)
+        self.assertIn("改动指令", prop)
+        # 动漫 12 档一个字都没删
+        self.assertIn("anima_*", prop)
 
 
 if __name__ == "__main__":

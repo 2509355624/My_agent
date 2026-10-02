@@ -24,6 +24,11 @@ anima_*（常规）+ hd_fast_* + hd_2_*，共 12 个渠道。
 **hd_3_* 不做**：三档本身就贵（1.5× + 二段 10 步，实测单张 ~150 秒），叠上图生图
 要两分半以上，不值当。
 
+**qwen_image_v1 不归这个脚本管**：它的图生图是**编辑**不是重绘——参考图走
+`TextEncodeQwenImage21` 的 conditioning，不是 `LoadImage → VAEEncode`，denoise
+也必须写死 1（骨架吃的是节点吐的空 latent）。那份 `workflow_i2i.json` 是手写的，
+`channels()` 里刻意没有它，别把它加进来让脚本按重绘的模板覆写。
+
 ## 用法
 
     python _make_i2i_workflows.py          # 先干跑

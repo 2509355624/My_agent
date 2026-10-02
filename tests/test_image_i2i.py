@@ -3,13 +3,22 @@
 零网络、零落盘：图片下载与 ComfyUI 上传全部 mock 掉。这里唯一碰磁盘的是
 「本地路径」那两条用例——它们故意拿本测试文件自己当那张图。
 
-图生图 2026-10-01 重开：常规档 `anima_*` + 高清快档 `hd_fast_*` + 高清二档
-`hd_2_*`，共 12 个渠道（`hd_3_*` 不给）。**「什么时候才允许垫图」这条边界不在
-这里测**——它写在工具描述里（见 test_image_lora 的 description 用例）。这里只管
+本机图生图有**两套机制**，白名单都在 `_I2I_SKILLS` 里，形状却完全不同：
+
+- **重绘**（2026-10-01 重开）：动漫 12 档 `anima_*` / `hd_fast_*` / `hd_2_*`
+  （`hd_3_*` 不给）。`LoadImage → VAEEncode` 把源图编成 latent，一段按
+  `I2I_DENOISE` 重新采样——整张重画，构图大致在。
+- **编辑**（2026-10-02 开放）：`qwen_image_v1`。源图**不进 latent**，走
+  `TextEncodeQwenImage21` 的参考图通道，KSampler 吃那个节点吐的空 latent、
+  denoise 写死 1。见 `QwenEditFlowTest`。
+
+**「什么时候才允许垫图」这条边界不在这里测**——它写在工具描述里
+（见 test_image_lora 的 description 用例）。这里只管
 「模型传了 source_image 之后，工作流到底怎么走」。
 """
 
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -247,10 +256,11 @@ class LoadWorkflowTest(unittest.TestCase):
 
 
 class I2IWorkflowShapeTest(unittest.TestCase):
-    """12 份 `workflow_i2i.json` 的骨架形状。
+    """`workflow_i2i.json` 的骨架形状——**两种机制分开验**。
 
-    骨架由 `_make_i2i_workflows.py` 从同目录的文生图骨架生成，**很容易漏跑一个
-    渠道**——漏了那个渠道垫图会当场报「没有图生图工作流」。这里逐份验结构，
+    动漫那 12 份由 `_make_i2i_workflows.py` 从同目录的文生图骨架生成，
+    **很容易漏跑一个渠道**——漏了那个渠道垫图会当场报「没有图生图工作流」。
+    qwen 那份是**手写**的（机制不同，脚本刻意不生成它）。这里逐份验结构，
     不认任何具体节点编号（每个渠道的 id 都不一样）。
 
     只读文件，不碰网络。
@@ -261,9 +271,18 @@ class I2IWorkflowShapeTest(unittest.TestCase):
         self.assertIsNotNone(wf, "%s 缺 workflow_i2i.json" % skill)
         return wf
 
+    def test_the_whitelist_is_twelve_redraw_plus_qwen(self):
+        """白名单 = 12 个重绘档 + qwen 一个编辑档，一个不多一个不少。"""
+        self.assertEqual(len(gi._I2I_ANIMA_SKILLS), 12)
+        self.assertEqual(gi._I2I_SKILLS, gi._I2I_ANIMA_SKILLS + ("qwen_image_v1",))
+        for skill in ("anima_clear", "anima_curvy", "hd_fast_clear",
+                      "hd_2_curvy", "qwen_image_v1"):
+            self.assertIn(skill, gi._I2I_SKILLS)
+        for skill in ("hd_3_clear", "hd_3_curvy", "krea2", "image_gen_v1"):
+            self.assertNotIn(skill, gi._I2I_SKILLS)
+
     def test_all_twelve_have_the_i2i_shape(self):
-        self.assertEqual(len(gi._I2I_SKILLS), 12)
-        for skill in gi._I2I_SKILLS:
+        for skill in gi._I2I_ANIMA_SKILLS:
             with self.subTest(skill=skill):
                 wf = self._load(skill)
                 kinds = [n["class_type"] for n in wf.values()]
@@ -276,8 +295,8 @@ class I2IWorkflowShapeTest(unittest.TestCase):
                 self.assertEqual(kinds.count("LatentUpscaleBy"), 1)
 
     def test_the_two_placeholders_are_there_to_be_filled(self):
-        """运行时只替换这两个占位符，骨架里必须原样留着它们。"""
-        for skill in gi._I2I_SKILLS:
+        """运行时只替换这两个占位符，重绘骨架里必须原样留着它们。"""
+        for skill in gi._I2I_ANIMA_SKILLS:
             with self.subTest(skill=skill):
                 wf = self._load(skill)
                 self.assertTrue(any(
@@ -289,7 +308,7 @@ class I2IWorkflowShapeTest(unittest.TestCase):
 
     def test_the_encoder_feeds_the_first_stage(self):
         """一段必须吃 VAEEncode 出来的 latent——接错了就等于没垫图。"""
-        for skill in gi._I2I_SKILLS:
+        for skill in gi._I2I_ANIMA_SKILLS:
             with self.subTest(skill=skill):
                 wf = self._load(skill)
                 enc = [nid for nid, n in wf.items()
@@ -299,6 +318,34 @@ class I2IWorkflowShapeTest(unittest.TestCase):
                           and n["inputs"].get("latent_image") == [enc, 0]]
                 self.assertEqual(len(stage1), 1,
                                  "没有唯一的一段 KSampler 吃 VAEEncode 的 latent")
+
+    def test_qwen_edit_skeleton_is_a_different_shape(self):
+        """qwen 的骨架**不是**「LoadImage → VAEEncode」那一套，也不吃 `__DENOISE__`。
+
+        参考图进的是 `TextEncodeQwenImage21`（视觉 token + reference_latents），
+        latent 由那个节点的第三个输出给出——**空** latent。所以 denoise 必须写死
+        1：给 0.6 等于在全零 latent 上半重绘，参考图的位置信息直接被搅乱。
+        骨架里要是留着 `__DENOISE__`，运行时会把重绘档那个 0.6 灌进来。
+        """
+        wf = self._load("qwen_image_v1")
+        kinds = [n["class_type"] for n in wf.values()]
+        self.assertEqual(kinds.count("LoadImage"), 1)
+        self.assertEqual(kinds.count("TextEncodeQwenImage21"), 1)
+        self.assertNotIn("VAEEncode", kinds)
+        self.assertNotIn("EmptyLatentImage", kinds)
+        self.assertNotIn("EmptySD3LatentImage", kinds)
+        self.assertEqual(kinds.count("KSampler"), 1)
+        self.assertNotIn("__DENOISE__", json.dumps(wf))
+        load = [nid for nid, n in wf.items() if n["class_type"] == "LoadImage"][0]
+        self.assertEqual(wf[load]["inputs"]["image"], "__SOURCE_IMAGE__")
+        enc = [nid for nid, n in wf.items()
+               if n["class_type"] == "TextEncodeQwenImage21"][0]
+        self.assertEqual(wf[enc]["inputs"]["images.image_1"], [load, 0])
+        ks = [n for n in wf.values() if n["class_type"] == "KSampler"][0]["inputs"]
+        self.assertEqual(ks["latent_image"], [enc, 2])
+        self.assertEqual(ks["positive"], [enc, 0])
+        self.assertEqual(ks["negative"], [enc, 1])
+        self.assertEqual(ks["denoise"], 1)
 
     def test_hd_3_has_no_i2i_workflow_at_all(self):
         """三档不给图生图：白名单排除了它，连骨架都不该存在（免得两处各说各话）。"""
@@ -366,15 +413,6 @@ class _I2IRunner(object):
             mock.patch.object(comfy_src, "upload", lambda raw: name),
         )
 
-
-class I2IFlowTest(_I2IRunner, unittest.TestCase):
-    """本机 12 渠道的图生图：换骨架、填占位符、按本档画布缩源图。
-
-    出图尺寸 = 「源图缩到本档画布长边」再乘二段放大倍率，**跟源图原始尺寸无关**。
-    所以「高清档垫图」出来还是高清档那个尺寸——这正是 `hd_fast_*` / `hd_2_*`
-    能被垫的理由，也是 `hd_3_*` 被排除的理由（它自己就慢）。
-    """
-
     def _kinds(self, wf):
         return {n["class_type"] for n in wf.values()}
 
@@ -383,6 +421,15 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
         self.assertEqual(len(hits), 1, "预期恰好一个 %s，实际 %s"
                          % (class_type, hits))
         return hits[0]
+
+
+class I2IFlowTest(_I2IRunner, unittest.TestCase):
+    """本机 12 个**重绘**渠道的图生图：换骨架、填占位符、按本档画布缩源图。
+
+    出图尺寸 = 「源图缩到本档画布长边」再乘二段放大倍率，**跟源图原始尺寸无关**。
+    所以「高清档垫图」出来还是高清档那个尺寸——这正是 `hd_fast_*` / `hd_2_*`
+    能被垫的理由，也是 `hd_3_*` 被排除的理由（它自己就慢）。
+    """
 
     def test_default_call_is_still_text2img(self):
         """不传 source_image 就**一行图生图逻辑都不走**——文生图原样不动。"""
@@ -503,6 +550,113 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
         out, wf = self._run(prompt="x", source_image="")
         self.assertIn("已经在画了", out)
         self.assertIn("EmptyLatentImage", self._kinds(wf))
+
+
+class QwenEditFlowTest(_I2IRunner, unittest.TestCase):
+    """qwen 的图生图 = **编辑**：源图当参考图进文本编码节点，不是进 latent。
+
+    跟上面那 12 档最要命的区别是 **denoise 必须是 1**：KSampler 吃的是
+    `TextEncodeQwenImage21` 吐出来的**空** latent（形状照第一张参考图），参考图
+    的位置信息全在 conditioning 里。运行时要是把重绘档那个 0.6 灌进去，就等于在
+    一张全零 latent 上做半重绘——构图直接乱掉，改图变成凭空重画。
+    """
+
+    def _edit(self, **kw):
+        p1, p2, p3 = self._feed()
+        with p1, p2, p3:
+            return self._run(prompt="change her coat to red, keep everything "
+                                     "else exactly the same",
+                             skill="qwen_image_v1", source_image="1", **kw)
+
+    def test_edit_channel_is_open(self):
+        """白名单里有它：传 source_image 不再被拒，回执也说清了垫的是哪张。"""
+        out, wf = self._edit()
+        self.assertIn("已经在画了", out)
+        self.assertIn("垫的是引用的那张图", out)
+        kinds = self._kinds(wf)
+        self.assertIn("LoadImage", kinds)
+        self.assertIn("TextEncodeQwenImage21", kinds)
+        # 重绘那条链一格都没掺进来
+        self.assertNotIn("VAEEncode", kinds)
+        self.assertNotIn("EmptySD3LatentImage", kinds)
+
+    def test_the_instruction_reaches_the_edit_encoder(self):
+        """指令进的是 `TextEncodeQwenImage21.prompt`——写错地方等于没下指令。"""
+        _, wf = self._edit()
+        enc = self._one(wf, "TextEncodeQwenImage21")
+        self.assertIn("change her coat to red",
+                      wf[enc]["inputs"]["prompt"])
+
+    def test_the_reference_enters_through_the_encoder(self):
+        """源图文件名填进 LoadImage，且 LoadImage 接到编码节点的 images.image_1。"""
+        _, wf = self._edit()
+        load = self._one(wf, "LoadImage")
+        self.assertEqual(wf[load]["inputs"]["image"], "i2isrc_x.png")
+        enc = self._one(wf, "TextEncodeQwenImage21")
+        self.assertEqual(wf[enc]["inputs"]["images.image_1"], [load, 0])
+
+    def test_denoise_stays_one(self):
+        """denoise 定死 1，模型传什么都不改——它一调就以为「调低 = 只微调」。"""
+        for kw in ({}, {"denoise": 0.2}, {"denoise": 0.9}):
+            with self.subTest(**kw):
+                _, wf = self._edit(**kw)
+                ks = [n for n in wf.values()
+                      if n["class_type"] == "KSampler"][0]
+                self.assertEqual(ks["inputs"]["denoise"], 1)
+
+    def test_no_placeholder_survives_the_submit(self):
+        """占位符一个都不许带着走：`__DENOISE__` 漏在骨架里会被灌进 0.6。"""
+        _, wf = self._edit()
+        self.assertNotIn("__", json.dumps(wf, ensure_ascii=False))
+
+    def test_seed_is_still_honoured(self):
+        """种子在本渠道照样有效（对方点名要「用这个种子再改一次」）。"""
+        p1, p2, p3 = self._feed()
+        with p1, p2, p3:
+            out, wf = self._run(prompt="x", skill="qwen_image_v1",
+                                source_image="1", seed=12345)
+        self.assertIn("已经在画了", out)
+        ks = [n for n in wf.values() if n["class_type"] == "KSampler"][0]
+        self.assertEqual(ks["inputs"]["seed"], 12345)
+
+    def test_source_fits_the_default_side_not_a_canvas(self):
+        """源图按 `comfy_src.MAX_SIDE` 归一化：本渠道的骨架没有 EmptyLatentImage，
+        读不出画布长边，落回默认值——出图尺寸由骨架里 `resolution` 那个面积档决定。
+        """
+        seen = {}
+        p1, p2, p3 = self._feed(seen=seen)
+        with p1, p2, p3:
+            out, _ = self._run(prompt="x", skill="qwen_image_v1",
+                               source_image="1")
+        self.assertIn("已经在画了", out)
+        self.assertEqual(seen["max_side"], comfy_src.MAX_SIDE)
+
+    def test_source_failure_submits_nothing(self):
+        """取不到源图就报错，**绝不退回文生图**——改图失败却凭空画一张，
+        对方看不出那张不是他给的那张。"""
+        with mock.patch.object(comfy_src, "resolve",
+                               side_effect=RuntimeError("这儿没有图")):
+            out, wf = self._run(prompt="x", skill="qwen_image_v1",
+                                source_image="1")
+        self.assertEqual(out, "这儿没有图")
+        self.assertEqual(wf, {})
+
+    def test_refusal_for_other_channels_points_here(self):
+        """不给垫图的档被拒时，话术里要指出「只改一处」走 qwen——
+        不然模型只会把它换成动漫档，出图画风和构图一起跑。"""
+        out, wf = self._run(prompt="x", skill="hd_3_clear", source_image="1")
+        self.assertIn("不支持图生图", out)
+        self.assertIn("qwen_image_v1", out)
+        self.assertEqual(wf, {})
+
+    def test_text2img_on_qwen_is_untouched(self):
+        """不传 source_image 时走原来的文生图骨架，一格图生图逻辑都不掺。"""
+        out, wf = self._run(prompt="a corgi on a beach", skill="qwen_image_v1")
+        self.assertIn("已经在画了", out)
+        kinds = self._kinds(wf)
+        self.assertIn("EmptySD3LatentImage", kinds)
+        self.assertNotIn("LoadImage", kinds)
+        self.assertNotIn("TextEncodeQwenImage21", kinds)
 
 
 class NaiI2ITest(unittest.TestCase):
