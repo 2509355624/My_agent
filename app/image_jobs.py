@@ -222,11 +222,16 @@ class Job:
     """
 
     def __init__(self, target, target_id, workflow, skill=None, weight=1, seq=0,
-                 nai_i2i=None, tag=None, prompt=None, intent=None):
+                 nai_i2i=None, tag=None, prompt=None, intent=None, seed=None):
         self.target = target
         self.target_id = target_id
         self.workflow = workflow
         self.skill = skill          # 生图渠道，只用来判断要不要先 /free
+        # 这张图的种子（提交那一刻就定死，见 generate_image._resolve_seed）。
+        # **必须在入队时快照**：worker 线程拿不到工作流里那个数（seed 已经混在
+        # 几十个节点里），而 caption 要贴它、账本要存它，两处都得用同一个值。
+        # None = 这次没带种子（老调用方 / NAI 那种云端图），caption 上就不写。
+        self.seed = seed
         # 这次提交的「意图指纹」——模型给的原始 prompt + skill + lora（见
         # generate_image._intent_key）。用来识别「同一件事被提交了两遍」。
         # 不能拿 workflow 当指纹：那里面填进了随机 seed，两次一模一样的
@@ -494,7 +499,7 @@ def snapshot():
 
 
 def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
-            intent=None):
+            intent=None, seed=None):
     """把一张图排进全局队列，返回 (job, reason)。
 
     prompt 是模型写的那段原始提示词，只用来**出图后记进账本**（编号 → 提示词，
@@ -508,7 +513,9 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
     不传 skill 时的行为与从前完全一致（权重 1、从不主动释放）——老调用方
     不受影响。nai_i2i 只在 NAI 图生图时传（入队时快照的源图 base64 + 强度，
     见 Job.nai_i2i）。intent 是这次请求的意图指纹，只用于查重（见
-    find_pending_duplicate），不传就是「不参与查重」。
+    find_pending_duplicate），不传就是「不参与查重」。seed 是这张的种子，
+    只在**发图那行 caption 和出图后的账本**里用（生图本身用的是 workflow 里
+    那个已经填好的数），不传就是没种子、caption 上不多那段。
     """
     global _seq
     key = _key(target, target_id)
@@ -530,7 +537,7 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
                           % MAX_HEAVY_IN_QUEUE)
         _seq += 1
         job = Job(target, target_id, workflow, skill, weight, _seq,
-                  nai_i2i=nai_i2i, prompt=prompt, intent=intent)
+                  nai_i2i=nai_i2i, prompt=prompt, intent=intent, seed=seed)
         _queue.append(job)
         _per_session[key] = cur + 1
     if weight > 1:
@@ -951,17 +958,21 @@ def process(job):
     try:
         sent = sum(1 for name in names
                    if _send_image(job.target, job.target_id, name, job.tag,
-                                  skill=job.skill or ""))
+                                  skill=job.skill or "", seed=job.seed))
         if sent:
-            log.info("生图完成已发回 %s %s：%d/%d 张（编号 %s，渠道 %s，耗时 %.1f 秒）",
+            log.info("生图完成已发回 %s %s：%d/%d 张（编号 %s，渠道 %s，"
+                     "seed %s，耗时 %.1f 秒）",
                      job.target, job.target_id, sent, len(names), job.tag,
-                     job.skill or "默认", _elapsed(job))
-            # 记进账本：编号 → 提示词。**只在真发出去之后记**——没发出去的图
+                     job.skill or "默认", job.seed, _elapsed(job))
+            # 记进账本：编号 → 提示词 + 种子。**只在真发出去之后记**——没发出去的图
             # 不该有编号可查，否则查出来一句提示词、对方手上却没有那张图。
             # 落盘失败也不该影响发图（image_log.save 自己吞掉异常）。
+            # seed 存的是**这一个数**：动漫渠道两段采样共用它（见
+            # generate_image 里 __SEED__ 的全局替换），查回来就够复现。
             image_log.save(job.tag, prompt=job.prompt, file=names[0],
                            skill=job.skill or "", target=job.target,
-                           target_id=job.target_id)
+                           target_id=job.target_id,
+                           seed="" if job.seed is None else job.seed)
         else:
             # 全被审核拦下了。**不当失败处理**：图确实画出来了、也通知过对方了
             # （image_audit 自己回的那句提示），再走 _notice 就是重复报错，
@@ -1328,14 +1339,22 @@ def _elapsed(job):
     return max(0.0, time.time() - (job.started or job.created))
 
 
-def _caption(tag, path, skill, image_out):
-    """图上那行字：`编号 · 分辨率 · 渠道`。
+def _caption(tag, path, skill, image_out, seed=None):
+    """图上那行字：`编号 · 分辨率 · 渠道 · seed 数字`。
 
     编号**必须在最前且原样**——它是群友引用那条消息时被正则抠回来的锚点
-    （见 app/image_log.py，TAG_RE 只认 `HT-` 开头那一串）。后面两项纯粹是给
+    （见 app/image_log.py，TAG_RE 只认 `HT-` 开头那一串）。后面几项纯粹是给
     人看的附注，读不出来就少一项，不影响编号。
 
-    没编号时整行都不加（返回 ""）：老调用方不传 tag 的行为与从前一致。
+    为什么要在这行里带 seed（2026-10-02 用户提，需求是「图有多手多脚，拿种子
+    改提示词重画」）：caption 跟图片在**同一条消息**里，群友引用它时整行正文
+    回到模型眼前——种子于是自己就回来了，不用模型先猜编号再去查账本。这是
+    唯一一条不依赖模型记忆的通路（理由同 image_log 模块开头那段）。
+
+    没种子时（NAI 那种云端图 / 老调用方）不多写那一段，整行与从前一致。
+
+    ⚠️ 每一项都只放**字母数字和 `-`**：这行会过一遍 `qq_api.to_qq_text` 做
+    Markdown 降级，`_` `*` 反引号 那些会被吃掉或改变排版。
     """
     if not tag:
         return ""
@@ -1345,18 +1364,21 @@ def _caption(tag, path, skill, image_out):
         bits.append(size)
     if skill:
         bits.append(str(skill))
+    if seed is not None:
+        bits.append("seed %d" % int(seed))
     return " · ".join(bits)
 
 
-def _send_image(target, target_id, filename, tag="", skill=""):
+def _send_image(target, target_id, filename, tag="", skill="", seed=None):
     """发回原会话。先过 image_out 甩掉 PNG 里的工作流元数据，编码格式看管理页开关。
 
     返回 True = 真发出去了。审核拦下时返回 False（**不抛异常**）——
     调用方靠它区分「发了」和「被拦了」，别把拦截记成发送失败。
 
-    tag / skill 是这张图的编号和生图渠道，作为 caption 和图片放在**同一条
-    消息**里（见 app/image_log.py）：群友引用这条消息时编号会跟着引用回到
-    模型眼前。不传 tag = 不加那行字，行为与从前完全一致。
+    tag / skill / seed 是这张图的编号、渠道和种子，作为 caption 和图片放在
+    **同一条消息**里（见 app/image_log.py 与本文件 `_caption`）：群友引用这条
+    消息时它们会跟着引用回到模型眼前。不传 tag = 不加那行字，行为与从前一致；
+    不传 seed = 那一段不写。
 
     ⚠️ 审核审的是 `prepare_for_send` 的产物（本地文件），也就是**真正要发出去
     的那份字节**，不是 ComfyUI 的原图。见 app/image_audit.py 的模块注释。
@@ -1368,5 +1390,5 @@ def _send_image(target, target_id, filename, tag="", skill=""):
     if not image_audit.allow_send(path, QQ_AGENT_ID, target, target_id):
         return False
     qq_api.send_image(target, target_id, path,
-                      caption=_caption(tag, path, skill, image_out))
+                      caption=_caption(tag, path, skill, image_out, seed))
     return True

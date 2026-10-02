@@ -276,15 +276,62 @@ def _apply_loras(workflow, lora_str):
     return None
 
 
-def _intent_key(prompt, skill, lora):
-    """一次生图请求的「意图指纹」：模型给的那三样原始参数。
+def _intent_key(prompt, skill, lora, seed=None):
+    """一次生图请求的「意图指纹」：模型给的那几样原始参数。
 
-    不能拿 workflow 当指纹——那里面每次都会填进随机 seed，两次一模一样的
-    请求也会算出两个不同的值，查重就永远不中。空值归一掉：skill 不传和传
+    不能拿 workflow 当指纹——不点名种子时里面每次都填随机 seed，两次一模一样
+    的请求也会算出两个不同的值，查重就永远不中。空值归一掉：skill 不传和传
     "" 在下游是同一件事。
+
+    `seed` **只在对方点名种子时才并进指纹**（调用方不点名就传 None）：点名
+    种子的那次提交是「拿这个数再画一张」，跟同时发出的随机提交根本不是一回事，
+    不该被重复提交守卫吞掉；而两次**同种子同提示词**的连点仍然算重复。
     """
-    return json.dumps([str(prompt or ""), str(skill or ""),
-                       str(lora or "")], ensure_ascii=False)
+    bits = [str(prompt or ""), str(skill or ""), str(lora or "")]
+    if seed is not None:
+        bits.append(str(seed))
+    return json.dumps(bits, ensure_ascii=False)
+
+
+SEED_MAX = 2 ** 32 - 1
+
+
+def _resolve_seed(raw):
+    """把模型/对方给的种子折成一个真种子。返回 (seed, 点名了吗, 错话)。
+
+    为什么**越界报错而不是钳位**：种子是用来复现的。对方说「用 42 号种子」，
+    钳到别的数就得到一张对不上的图，他还以为是自己记错了——一句错话比一张
+    悄悄不同的图有用得多。
+
+    为什么要认字符串：模型填参数时 `seed: "1234567890"` 和 `seed: 1234567890`
+    都常见（`execute_tool` 是 `fn(**args)`，不做类型清洗）。
+
+    `True`/`False` 单独挡：bool 是 int 的子类，不挡就会把「True」当成种子 1
+    悄悄画一张（同 `private_image_quota` 那个接口里对 True 的处理）。
+    """
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return random.randint(1, SEED_MAX), False, ""
+    if isinstance(raw, bool):
+        return None, False, ("错误：seed 得是个数字（0 ~ %d），不能是 true/false。"
+                             "不知道种子是多少就别传这个参数。" % SEED_MAX)
+    if isinstance(raw, str):
+        text = raw.strip().replace("_", "").replace(",", "").replace(" ", "")
+        try:
+            value = int(text)
+        except ValueError:
+            return None, False, ("错误：seed「%s」不是一个数字。种子就是图号旁边"
+                                 "那串纯数字，照原样填；不确定就别传，系统会随机。"
+                                 % raw)
+    elif isinstance(raw, int):
+        value = raw
+    else:                       # float / dict / 其它模型现编的东西
+        return None, False, ("错误：seed 得是 0 ~ %d 的整数，不能是 %r。"
+                             "不确定就别传这个参数。" % (SEED_MAX, raw))
+    if not 0 <= value <= SEED_MAX:
+        return None, False, ("错误：种子 %d 超出范围（只能是 0 ~ %d 的整数）。"
+                             "对方给的那个号八成抄错了，跟他再确认一次。"
+                             % (value, SEED_MAX))
+    return value, True, ""
 
 
 # 同一件事在还没出图之前又被提交一遍时的回执。不是「拒收」——那张图确实存在，
@@ -319,11 +366,15 @@ def _canvas_long_side(workflow):
     return None
 
 
-def _generate_image(prompt, skill=None, lora=None,
-                    source_image="", denoise=None, use_character=None):
+def _generate_image(prompt, skill=None, lora=None, source_image="",
+                    denoise=None, seed=None, use_character=None):
     # `denoise`：**只有 NAI 图生图**消费它（见下面的 `_nai_strength(denoise)`）。
     # 本机渠道的图生图强度由 `I2I_DENOISE` 定死，不收这个参数——见下面的 i2i 分支。
     # `source_image` 两边都认（本机走 workflow_i2i.json，NAI 走云端）。
+    #
+    # `seed`：**只有本机渠道认**（NAI 那条分支见下面，它直接拒）。不传 = 系统
+    # 随机；传了就把这个数填进工作流，用于「同一个种子、换提示词」再画一张。
+    # 校验和「为什么越界报错而不是钳位」写在 `_resolve_seed` 里。
     #
     # `use_character`（2026-09-30 随角色底模机制一起下线）：原义是「用这个 skill
     # 自带的角色底模」，而**只有 image_gen_v1 有 `character.txt`**。SD 归档后
@@ -350,6 +401,14 @@ def _generate_image(prompt, skill=None, lora=None,
     if skill == "nai":
         from app import nai, qq_api
         from app.agents import nai_allowed
+        # 种子这事儿到 NAI 门口就停：它是云端出的图，模型版本、参数都在别人
+        # 机器上，同一个数在 NAI 那边不保证还是同一张图（用户 2026-10-02 明确
+        # 「NAI 加种子无意义」）。但**必须明说**，不能默默忽略——不然对方以为
+        # 「同种子换提示词」这套在 NAI 上也成立，照着做就对不上图了。
+        if seed is not None and str(seed).strip():
+            return ("错误：NAI 是云端出图，种子指定不了（它那边同一个数也不保证"
+                    "复现同一张）。要按种子重画只能走本机渠道：anima_* / hd_*_* / "
+                    "qwen_image_v1 / image_gen_v1 / krea2。")
         target, target_id = qq_api.current_context()
         ok, why = nai_allowed(QQ_AGENT_ID, target, target_id)
         if not ok:
@@ -404,6 +463,13 @@ def _generate_image(prompt, skill=None, lora=None,
                 "（prompt 改写成动漫的标签式英文写法）；"
                 "对方点名要它，就照实说这个渠道现在用不了。")
 
+    # 种子在**动手之前**定下来（停用渠道那道闸之后：那种请求本来就不会画，
+    # 先报渠道的问题更有用）。垫图要上传源图、skill 要读文件，一个抄错的种子
+    # 不该先把这些做完再报错。
+    seed, seed_pinned, seed_err = _resolve_seed(seed)
+    if seed_err:
+        return seed_err
+
     skill_data = load_skill(skill)
     if not skill_data or not skill_data["workflow"]:
         return "错误: 找不到 Skill '" + skill + "'"
@@ -438,8 +504,12 @@ def _generate_image(prompt, skill=None, lora=None,
 
     workflow_str = json.dumps(workflow)
 
-    # 替换占位符
-    seed = random.randint(1, 2**32 - 1)
+    # 替换占位符。seed 已经在上面定好了（对方点名就照用，没点名才随机）。
+    #
+    # ⚠️ 动漫系渠道（anima_* / hd_*_*）是**两段采样**，工作流里有两个 KSampler、
+    # 两处 `__SEED__`，而下面这两行是**全局替换** ⇒ 一二段拿到的是同一个数。
+    # 所以「这张图的种子」始终就是报出去的那一个数：把它填回 ComfyUI 的两个
+    # KSampler 就能复现。别看到「两个采样器」就以为要报两个种子。
     # __MULTI_PROMPTS__ 可以独占一个 JSON 字符串，也可以嵌在更大字符串里
     # （如节点 4 = "@kibro, __MULTI_PROMPTS__"，工作流自带固定画风/触发词前缀）。
     # 统一按「字符串内部转义替换」处理，两种都兼容。
@@ -486,15 +556,16 @@ def _generate_image(prompt, skill=None, lora=None,
     # 上一轮的回执（上下文被压缩 / 守卫误判成空头承诺），要么是把「再跑一张」
     # 当成了默认动作——两种都不该真的多出一张图。只在**在途**时拦（见
     # image_jobs.find_pending_duplicate）。
-    intent = _intent_key(prompt, skill, lora)
+    intent = _intent_key(prompt, skill, lora, seed if seed_pinned else None)
     if image_jobs.find_pending_duplicate(target, target_id, intent) is not None:
         log.info("拦下重复生图：%s %s 已有一张同参数的图在途，不再排第二张",
                  target, target_id)
         return _DUPLICATE_NOTE
     # prompt 一路带到队列里，只为出图后记账本（编号 → 提示词）；出图用的是
-    # 上面填好的 workflow。
+    # 上面填好的 workflow。seed 同样一路带到底：发图那行 caption 要贴它、
+    # 账本要存它（见 image_jobs._caption / image_log.save）。
     job, reason = image_jobs.enqueue(target, target_id, workflow, skill,
-                                     prompt=prompt, intent=intent)
+                                     prompt=prompt, intent=intent, seed=seed)
     if reason is not None:
         # 拒收时工作流还在手上，ComfyUI 一点算力都没浪费，也不会留下「画了
         # 却没人发」的孤儿图。
@@ -666,7 +737,8 @@ tool = {
             "prompt": {"type": "string", "description": "提示词。写逗号分隔的标签式英文短句，**默认只写一段、不要用 --- 分隔**（只有 skill=image_gen_v1 认 ` --- ` 分隔、一次出多张；其它渠道会把 --- 当普通文字，要出多张就分多次调用、每次一个变体）。**必须包含完整角色描述**（发型/发色/瞳色/体型/服装/年龄等）——没有任何渠道自带角色"},
             "skill": {"type": "string", "description": "Skill名称。**不传就是默认 anima_clear**。可选值共 16 个（= 4 画风 × 4 档尺寸，见 Available Skills 的生图类）——4 个**画风**渠道（普通档 anima_<画风>，728~768×1024）：anima_clear（默认，清透最平光）/ anima_soft（柔光素肌，层次稍多）/ anima_gloss（冷调油光，用户也叫它 anime2）/ anima_curvy（丰腴强光影）；再叠 3 档**大图**（画风当后缀）：hd_fast_<画风>（1024×1536，不放大最快）/ hd_2_<画风>（1328×2000，1.3× 放大，中间档）/ hd_3_<画风>（1536×2304，1.5× 放大，最大最慢，最吃显存）。**只在用户点名画风 / 尺寸时才传**，平时不传。另有 qwen_image_v1（通义，**832×1216 竖版**，要**画面写中文文字 / 写实照片感 / 长自然语言提示词**时走它）；image_gen_v1（**SD / SDXL**，832×1216，**唯一能一次出多张**的渠道：prompt 用 ` --- ` 分隔；不支持垫图。用户点名「用 sd」或要一次出多个变体才用它）；krea2（Krea2 Turbo + 米山舞画风，832×1216 直出，**只在用户点名时用**，别主动推荐）；nai（NovelAI 云端）仅限已开通的群，文生图 / 图生图都走它"},
             "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传，每个渠道 2 个槽"},
-            "source_image": {"type": "string", "description": "垫图 / 图生图：填 1 = 垫对方本轮**引用**的那张图（对方没引用会报错）。**只在对方明确要改图 / 垫图时才传**；光是引用了图、或者只是看图 / 点评，任何渠道都不要传这个参数。本机 12 个渠道支持（anima_* / hd_fast_* / hd_2_*；hd_3_* 不支持），skill=nai 也支持。本机渠道的重绘强度是定死的，传 denoise 也没用"}
+            "source_image": {"type": "string", "description": "垫图 / 图生图：填 1 = 垫对方本轮**引用**的那张图（对方没引用会报错）。**只在对方明确要改图 / 垫图时才传**；光是引用了图、或者只是看图 / 点评，任何渠道都不要传这个参数。本机 12 个渠道支持（anima_* / hd_fast_* / hd_2_*；hd_3_* 不支持），skill=nai 也支持。本机渠道的重绘强度是定死的，传 denoise 也没用"},
+            "seed": {"type": "integer", "description": "生图种子，**只在对方点名要「用某个种子重画 / 换提示词再来一张」时才传**，平时一律不传（不传=随机）。范围 0 ~ 4294967295 的整数，填错格式/超界会直接报错，别猜。种子会跟着编号印在图那行 caption 上（`编号 · 分辨率 · 渠道 · seed 数字`），对方引用那条消息时能一起带回来。⚠️ 同一个种子只有配**同样的提示词 + 同样的渠道 + 同样的 lora**才画得出同一张图（改提示词重画=构图大体在、细节变）；动漫渠道是两段采样、两段共用这一个种子，所以只有这一个数。**只有本机渠道认**（anima_* / hd_* / qwen_image_v1 / image_gen_v1 / krea2），skill=nai 传了会被拒；image_gen_v1 一次出多张时第 k 张 = 这个数 + k - 1"}
         },
         "required": ["prompt"]
     }

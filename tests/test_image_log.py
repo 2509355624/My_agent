@@ -82,6 +82,19 @@ class ToQqTextTest(unittest.TestCase):
         body = "%s · 1024×1536 · anima_soft" % tag
         self.assertEqual(image_log.find_tags(qq_api.to_qq_text(body)), [tag])
 
+    def test_the_seed_segment_survives_too(self):
+        """种子上 caption 就得算一条通路：降级后那串数字还要**读得出来**。
+
+        编号有正则兜底，种子没有——它靠模型直接读那一行。所以这里盯两件事：
+        渠道名里的 `_` 没被当成 emphasis 吃掉（anima_soft 原样），数字没被拆散。
+        """
+        tag = image_log.new_tag()
+        body = "%s · 1024×1536 · anima_soft · seed 4100493889" % tag
+        out = qq_api.to_qq_text(body)
+        self.assertEqual(image_log.find_tags(out), [tag])
+        self.assertIn("anima_soft", out)
+        self.assertIn("seed 4100493889", out)
+
 
 class FindTagsTest(unittest.TestCase):
     """从引用回来的正文里把编号抠出来。"""

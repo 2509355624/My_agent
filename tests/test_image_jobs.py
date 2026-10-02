@@ -4,6 +4,7 @@
 线程全 mock，只测判定逻辑（谁排队、谁被拒、超时怎么收场、失败怎么回话）。
 """
 
+import json
 import os
 import tempfile
 import threading
@@ -54,10 +55,13 @@ class _Base(unittest.TestCase):
         # 编号是贴在图上的 caption，单独记一份：sent_images 保持 (target, tid,
         # path) 三元组，别为了加一列去动那一堆 [:2] / [2] 的老断言。
         self.sent_captions = []
+        # seed 也单独记一份：它决定 caption 上那行字有没有最后一段。
+        self.sent_seeds = []
 
-        def _fake_image(target, tid, url, tag="", skill=""):
+        def _fake_image(target, tid, url, tag="", skill="", seed=None):
             self.sent_images.append((target, tid, url))
             self.sent_captions.append(tag)
+            self.sent_seeds.append(seed)
 
         def _fake_text(target, tid, text):
             self.sent_texts.append((target, tid, text))
@@ -75,8 +79,9 @@ class _Base(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
-    def _enqueue(self, ctx=("group", "9"), wf=None, skill=None):
-        return image_jobs.enqueue(ctx[0], ctx[1], wf or {"1": {}}, skill)
+    def _enqueue(self, ctx=("group", "9"), wf=None, skill=None, seed=None):
+        return image_jobs.enqueue(ctx[0], ctx[1], wf or {"1": {}}, skill,
+                                  seed=seed)
 
 
 class PollTest(_Base):
@@ -482,6 +487,26 @@ class ProcessTest(_Base):
         self.assertEqual(self.sent_captions, [job.tag])
         self.assertRegex(job.tag, r"^HT-\d{8}-\d{6}-\d{3}$")
 
+    def test_the_image_carries_its_seed(self):
+        """种子同样由 worker 原样转发：它在入队那一刻就定死了。
+
+        worker 拿不到工作流里那个数（seed 混在几十个节点里），所以 caption 上
+        那一段只能靠 Job.seed 这份快照——转发错了，对方抄下来的就是假种子。
+        """
+        with mock.patch.object(image_jobs, "wait_done",
+                               return_value=self._entry()):
+            self._enqueue(seed=4100493889)
+            image_jobs._drain()
+        self.assertEqual(self.sent_seeds, [4100493889])
+
+    def test_no_seed_reaches_the_sender_as_none(self):
+        """没种子（NAI 云端图 / 老调用方）就传 None——caption 上那段不写。"""
+        with mock.patch.object(image_jobs, "wait_done",
+                               return_value=self._entry()):
+            self._enqueue()
+            image_jobs._drain()
+        self.assertEqual(self.sent_seeds, [None])
+
     def test_timeout_interrupts_and_cleans_comfyui(self):
         """超时不是「不等了」——要真把它从 ComfyUI 里摘掉并释放显存。
 
@@ -693,6 +718,42 @@ class SendImageTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(sent, [])
 
+    def test_caption_carries_the_seed(self):
+        """seed 排在最后一段：编号还在最前，引用时照样被 TAG_RE 抠回来。
+
+        这一行是给「拿种子改提示词重画」用的（2026-10-02 用户提）：caption 和
+        图片在同一条消息里，群友引用它时整行回到模型眼前，种子于是自己就回来了
+        ——不依赖模型记不记得。
+        """
+        from app import image_out
+        p1, p2, sent = self._capture_captions()
+        with p1, p2, \
+             mock.patch.object(image_out, "local_size", return_value="1024×1536"):
+            image_jobs._send_image("group", "9", "b.png",
+                                   "HT-20261001-074112-384",
+                                   skill="anima_soft", seed=4100493889)
+        self.assertEqual(
+            sent, [("C:/tmp/y.jpg",
+                    "HT-20261001-074112-384 · 1024×1536 · anima_soft "
+                    "· seed 4100493889")])
+
+    def test_caption_writes_seed_zero(self):
+        """0 是一个合法种子，不是「没传」——用 `if seed:` 判就把这张的种子弄丢了。"""
+        from app import image_out
+        p1, p2, sent = self._capture_captions()
+        with p1, p2, \
+             mock.patch.object(image_out, "local_size", return_value=""):
+            image_jobs._send_image("group", "9", "b.png",
+                                   "HT-20261001-074112-384", seed=0)
+        self.assertEqual(sent, [("C:/tmp/y.jpg", "HT-20261001-074112-384 · seed 0")])
+
+    def test_caption_without_seed_says_nothing_about_it(self):
+        """没种子时不写「seed 空」之类的占位——整行与加这个功能之前一致。"""
+        p1, p2, sent = self._capture_captions()
+        with p1, p2:
+            image_jobs._send_image("group", "9", "b.png", "HT-20261001-074112-384")
+        self.assertNotIn("seed", sent[0][1])
+
 
 class ElapsedTest(unittest.TestCase):
     """日志里的耗时只算「开跑到发出去」，排队时间不算——否则排在第 5 位的
@@ -772,8 +833,9 @@ class ImageLedgerTest(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
-    def _run(self, sent_ok, prompt="1girl, silver hair"):
-        job = image_jobs.Job("group", "9", {}, skill="hd_fast", prompt=prompt)
+    def _run(self, sent_ok, prompt="1girl, silver hair", seed=None):
+        job = image_jobs.Job("group", "9", {}, skill="hd_fast", prompt=prompt,
+                             seed=seed)
         entry = {"outputs": {"9": {"images": [{"filename": "a.png"}]}}}
         with mock.patch.object(image_jobs, "wait_done", return_value=entry), \
                 mock.patch.object(image_jobs, "_send_image",
@@ -799,6 +861,26 @@ class ImageLedgerTest(unittest.TestCase):
         self.assertEqual(row["prompt"], "1girl, silver hair")
         self.assertEqual(row["file"], "a.png")
         self.assertEqual(row["skill"], "hd_fast")
+
+    def test_the_seed_is_recorded_too(self):
+        """账本里的 seed 就是那张图真正跑的那一个（动漫渠道两段共用它）。
+
+        对方只报了编号、没引用那条消息时（比如隔了一天再来问），caption 上的
+        种子早就不在模型眼前了——这时只有账本答得出「这张用的什么种子」。
+        """
+        job = self._run(True, seed=4100493889)
+        self.assertEqual(image_log.lookup(job.tag)["seed"], 4100493889)
+
+    def test_seed_zero_is_recorded_as_zero(self):
+        self.assertEqual(image_log.lookup(self._run(True, seed=0).tag)["seed"], 0)
+
+    def test_no_seed_records_an_empty_string(self):
+        """NAI 那种云端图没种子可记：存空串，不存 None。
+
+        跟 prompt 一样——空串意味着「这张的种子我们不知道」，而 recall_image
+        要据此回一句「种子没记下」，不能让下游拿 None 去拼字符串。
+        """
+        self.assertEqual(image_log.lookup(self._run(True).tag)["seed"], "")
 
     def test_undelivered_image_is_not_recorded(self):
         """发出去失败（含被审核拦下）的图，账本里查不到。"""
@@ -965,6 +1047,169 @@ class GenerateImageSplitTest(unittest.TestCase):
         self.assertNotIn("排上", out)
         self.assertEqual(image_jobs.queue_depth(), 0)   # 一张都没进队
         self.assertFalse(qp.called)                     # 更没碰 ComfyUI
+
+
+class SeedSubmissionTest(unittest.TestCase):
+    """generate_image 的 seed 参数：能填、填进去的就是那一个数、填错当场报错。
+
+    需求（2026-10-02 用户）：「图有多手多脚，我要拿到种子，改一下提示词，在这个
+    种子的基础上再生成」。它成立的前提是**报出去的那个数字真的就是跑过的那一个**
+    ——所以下面大半用例都在盯这一条：不多填、不少填、不钳位、不悄悄换一个。
+
+    mock 布置与 GenerateImageSplitTest 相同（继承它会把那十条用例重跑一遍，
+    所以这里只借它的 setUp）。
+    """
+
+    def setUp(self):
+        GenerateImageSplitTest.setUp(self)
+
+    def _entry(self):
+        return GenerateImageSplitTest._entry(self)
+
+    def _anima(self):
+        """动漫渠道的骨架：两段采样，两个 KSampler、两处 `__SEED__`。"""
+        return {"2": {"class_type": "KSampler",
+                      "inputs": {"seed": "__SEED__", "steps": 10}},
+                "27": {"class_type": "KSampler",
+                       "inputs": {"seed": "__SEED__", "steps": 5}}}
+
+    def _submit(self, prompt="a cat", **kw):
+        generate_image.load_skill.return_value = {
+            "workflow": kw.pop("workflow", self._anima())}
+        with mock.patch.object(qq_api, "current_context",
+                               return_value=("group", "9")):
+            return generate_image.tool["function"](prompt, **kw)
+
+    def _job(self):
+        self.assertEqual(len(image_jobs._queue), 1)
+        return image_jobs._queue[0]
+
+    def test_pinned_seed_lands_in_both_samplers(self):
+        """两个采样器共用**同一个数**，不是两个种子。
+
+        占位符是全局字符串替换（见 generate_image 里那段 ⚠️ 注释），所以「这张图
+        的种子」始终就是 caption 上报出去的那一个：把它填回 ComfyUI 的两个
+        KSampler 就能复现。别看到「双采样器」就以为要报两个号。
+        """
+        self._submit("a cat", seed=42)
+        job = self._job()
+        self.assertEqual(job.workflow["2"]["inputs"]["seed"], 42)
+        self.assertEqual(job.workflow["27"]["inputs"]["seed"], 42)
+
+    def test_no_placeholder_survives_the_substitution(self):
+        """漏一处 `__SEED__` 就等于这张没按种子跑（ComfyUI 提交会失败）。"""
+        self._submit("a cat", seed=42)
+        self.assertNotIn("__SEED__", json.dumps(self._job().workflow))
+
+    def test_recorded_seed_is_the_one_that_ran(self):
+        """caption 和账本用的是 Job.seed——它必须和工作流里那个数相同。
+
+        两处分开算的话（比如发图时再随机一次），对方抄到的种子就跟这张图无关了。
+        """
+        self._submit("a cat", seed=42)
+        self.assertEqual(self._job().seed, 42)
+
+    def test_omitted_seed_is_random_but_still_recorded(self):
+        """不点名种子时系统随机——随机出来的那个照样要记着，否则这张的种子当场
+        就丢了，下次想复现无从查起。"""
+        self._submit("a cat")
+        job = self._job()
+        self.assertTrue(1 <= job.seed <= generate_image.SEED_MAX)
+        self.assertEqual(job.workflow["2"]["inputs"]["seed"], job.seed)
+
+    def test_empty_string_seed_counts_as_not_given(self):
+        """模型常把没填的参数塞成空串：它该等同于「没传」（随机），而不是报错。"""
+        self._submit("a cat", seed="")
+        self.assertTrue(1 <= self._job().seed <= generate_image.SEED_MAX)
+
+    def test_seed_zero_is_a_real_seed(self):
+        """0 是合法种子，不是「没传」。用 `if seed:` 判会把这张的种子弄丢。"""
+        self._submit("a cat", seed=0)
+        self.assertEqual(self._job().seed, 0)
+
+    def test_digit_string_is_accepted(self):
+        """`seed: "1234567890"` 和 `seed: 1234567890` 都常见：execute_tool 是
+        fn(**args)，不做类型清洗。"""
+        self._submit("a cat", seed="4100493889")
+        self.assertEqual(self._job().seed, 4100493889)
+
+    def _refused(self, raw, *why):
+        out = self._submit("a cat", seed=raw)
+        self.assertEqual(image_jobs.queue_depth(), 0)    # 一张都没进队
+        for w in why:
+            self.assertIn(w, out)
+        return out
+
+    def test_out_of_range_is_refused_not_clamped(self):
+        """钳到范围内 = 画一张对不上的图，对方还以为自己记错了号。
+
+        宁可一句错话让他回头再确认一次——见 generate_image._resolve_seed。
+        """
+        self._refused(generate_image.SEED_MAX + 1, "超出范围")
+        self._refused(-1, "超出范围")
+
+    def test_non_numeric_is_refused(self):
+        self._refused("abc", "不是一个数字")
+
+    def test_bool_is_refused(self):
+        """bool 是 int 的子类：不挡就会把 True 当成种子 1 悄悄画一张。"""
+        self._refused(True, "不能是 true/false")
+
+    def test_float_is_refused(self):
+        self._refused(1.5, "整数")
+
+    def test_bad_seed_bails_before_reading_the_skill(self):
+        """种子在动手之前就定下来：一个抄错的号不该先把源图上传、工作流读满
+        再报错（load_skill、垫图上传、探活都在它后面，见 _generate_image 顺序）。"""
+        self._refused("abc", "不是一个数字")
+        generate_image.load_skill.assert_not_called()
+
+    def test_nai_refuses_a_seed_out_loud(self):
+        """NAI 是云端出图，同一个数在它那边不保证复现（用户 2026-10-02：本机
+        才有种子的意义）。但**必须明说**——默默忽略的话，对方会以为「同种子
+        换提示词」在 NAI 上也成立，照着做就对不上图。"""
+        out = self._submit("a cat", skill="nai", seed=42)
+        self.assertIn("NAI", out)
+        self.assertIn("种子", out)
+        self.assertEqual(image_jobs.queue_depth(), 0)
+
+    def test_pinned_seed_splits_the_duplicate_check(self):
+        """点名的种子进意图指纹：同种子同提示词提交两遍算重复（那张就在队里），
+        换个种子则是「真要两张」，照排。"""
+        with mock.patch.object(image_jobs, "wait_done",
+                               return_value={"outputs": {}}), \
+                mock.patch.object(qq_api, "current_context",
+                                  return_value=("group", "9")):
+            generate_image.load_skill.return_value = {"workflow": self._anima()}
+            generate_image.tool["function"]("a cat", seed=1)
+            same = generate_image.tool["function"]("a cat", seed=1)
+            other = generate_image.tool["function"]("a cat", seed=2)
+        self.assertIn("没有执行", same)
+        self.assertNotIn("没有执行", other)
+        self.assertEqual(image_jobs.inflight_count("group", "9"), 2)
+
+    def test_random_seed_does_not_split_the_duplicate_check(self):
+        """**没点名时的随机数绝不进指纹**：否则模型两次「画一只猫」会被算成两个
+        意图，查重直接失效——那正是 2026-10-01 重复出图的老路。"""
+        with mock.patch.object(image_jobs, "wait_done",
+                               return_value={"outputs": {}}), \
+                mock.patch.object(qq_api, "current_context",
+                                  return_value=("group", "9")):
+            generate_image.load_skill.return_value = {"workflow": self._anima()}
+            generate_image.tool["function"]("a cat")
+            out = generate_image.tool["function"]("a cat")
+        self.assertIn("没有执行", out)
+        self.assertEqual(image_jobs.inflight_count("group", "9"), 1)
+
+    def test_web_receipt_names_the_seed_it_ran(self):
+        """网页端同步拿结果，回执里那个数就是这张图跑的种子。"""
+        generate_image.load_skill.return_value = {"workflow": self._anima()}
+        with mock.patch.object(qq_api, "current_context",
+                               return_value=(None, None)), \
+                mock.patch.object(image_jobs, "wait_done",
+                                  return_value=self._entry()):
+            out = generate_image.tool["function"]("a cat", seed=42)
+        self.assertIn("seed: 42", out)
 
 
 class _QueueOnlyTest(unittest.TestCase):
