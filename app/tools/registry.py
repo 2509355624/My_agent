@@ -129,6 +129,11 @@ register_tool(**_list_files_tool)
 from app.tools.normal.read_file import tool as _read_file_tool
 register_tool(**_read_file_tool)
 
+# grep_file：skills 内文本文件按行检索（正则/子串 + 可选限定列），
+# 专为 anima-tags 标签库查询设计，但通用。比 read_file 整表读省上下文。
+from app.tools.normal.grep_file import tool as _grep_file_tool
+register_tool(**_grep_file_tool)
+
 from app.tools.normal.write_file import tool as _write_file_tool
 register_tool(**_write_file_tool)
 
