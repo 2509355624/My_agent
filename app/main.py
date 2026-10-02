@@ -14,11 +14,17 @@ from app import cancel as cancel_mod
 from app import image_audit
 from app import logsetup
 from app import usage as usage_stats
+# 别名 `vision_mod` 是**必须**的：本文件里已有一个叫 `vision` 的路由函数
+# （POST /api/vision，网页端「让 AI 看图」），模块名直接被它盖掉，
+# 写成 `from app import vision` 会在调用处炸 AttributeError:
+# 'function' object has no attribute 'default_prompt'。
+from app import vision as vision_mod
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         LLM_PROVIDER, PROVIDERS, OLLAMA_BASE_URL, DEFAULT_AGENT_ID,
                         ADMIN_ALLOW_REMOTE, CONTEXT_BUDGET, IMAGE_AUDIT_PROMPT_MAX,
                         QQ_PRIVATE_ENABLE, QQ_WHITELIST_USERS,
-                        VISION_PROVIDER, VISION_MODEL, provider_vision)
+                        VISION_PROMPT_MAX, VISION_PROVIDER, VISION_MODEL,
+                        provider_vision)
 from app.skills import list_skills, load_skill
 from app import model_catalog
 from app.agent_prompt import build_stable_prompt, sync_session_system
@@ -721,6 +727,12 @@ def get_agent_sessions(agent_id):
                         agent_store.image_audit_prompt(aid),
                     "image_audit_prompt_default":
                         image_audit.default_prompt(),
+                    # 自定义**识图（通用读图）提示词**：同上，prompt 是用户存的
+                    # 那份（空 = 用内置默认），default 给编辑框当初始内容。
+                    # 2026-10-02 用户要求「识图老是分析不清楚，提示词我要能自己改」。
+                    # 只管 agent 收图转文字那一条链路，审核和表情包各自写死。
+                    "vision_prompt": agent_store.vision_prompt(aid),
+                    "vision_prompt_default": vision_mod.default_prompt(),
                     "private_enable": priv_on,
                     "private_whitelist": priv_wl,
                     "private_whitelist_on":
@@ -969,10 +981,10 @@ def set_agent_image_audit_groups(agent_id):
     """设**所有群聊**的 NSFW 审核总开关。热生效。
 
     settings.json 的 image_audit_groups 字段：缺省 = False（默认全关）。
-    开了之后，**所有群**生图发出去之前都会先让识图模型判一次（大面积皮肤裸露 /
-    性暗示 / 暧昧动作，口径从严）；判违规**或审核没生效**都不发，各回一句提示
-    （fail-closed，见 app/image_audit.py）。单个群想单独不同，用行里的「审核」
-    开关覆盖。
+    开了之后，**所有群**生图发出去之前都会先让识图模型判一次（裸露 / 性暗示 /
+    暧昧动作，口径适中：泳装内衣这类穿着本身放行，配性暗示动作或表情才算）；
+    判违规**或审核没生效**都不发，各回一句提示（fail-closed，见 app/image_audit.py）。
+    单个群想单独不同，用行里的「审核」开关覆盖。
     """
     return _set_audit_global(agent_id, "group")
 
@@ -1028,6 +1040,52 @@ def set_agent_image_audit_prompt(agent_id):
     return jsonify({"ok": True, "agent": aid, "prompt": v,
                     "using_default": not v,
                     "effective": v or image_audit.default_prompt()})
+
+
+@app.route("/api/agent/<agent_id>/vision_prompt", methods=["PUT"])
+def set_agent_vision_prompt(agent_id):
+    """设**自定义的识图提示词**（整份替换内置默认那份通用读图要求）。热生效。
+
+    body: {"prompt": "..."}。传空串 / null / 空白 = 删掉自定义，回落内置默认
+    （见 agents.vision_prompt）。
+
+    与审核提示词最大的不同：**这里丢了输出格式 nothing 会坏**。识图的输出只是
+    一段文字，拼进用户输入给下游模型看，写宽写窄都只是「读得细不细」，不像
+    审核那样解析失败就 fail-closed 把每张图拦下。所以校验只有类型 + 长度上限
+    （上限的理由见 config.VISION_PROMPT_MAX：识图每张图都要重发这一段）。
+
+    唯一的软约定：文本里可以放 `{question}` 占位符，用户问题会替到那个位置；
+    不放则在末尾补一行「用户的需求：…」。两种写法都保证识图模型知道用户想问
+    什么——不带问题的话它只会泛泛描述一遍（见 app/vision.py 的注释）。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if "prompt" not in body:
+        return jsonify({"error": "需要字段 prompt（字符串；空串 = 恢复默认）"}), 400
+    v = body["prompt"]
+    if v is not None and not isinstance(v, str):
+        return jsonify({"error": "prompt 要么是字符串，要么是 null"}), 400
+    v = (v or "").strip()
+    if len(v) > VISION_PROMPT_MAX:
+        return jsonify({"error": "提示词太长（%d 字，上限 %d）：识图每张图都要"
+                                 "重发一遍，写长了纯烧 token"
+                                 % (len(v), VISION_PROMPT_MAX)}), 400
+
+    settings = agent_store.load_settings(aid)
+    if v:
+        settings["vision_prompt"] = v
+    else:
+        settings.pop("vision_prompt", None)
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "prompt": v,
+                    "using_default": not v,
+                    "effective": v or vision_mod.default_prompt()})
 
 
 @app.route("/api/agent/<agent_id>/image_audit/<group_id>", methods=["PUT"])

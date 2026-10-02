@@ -508,6 +508,70 @@ _VISION_BLIND_RE = re.compile(
     r"|没有可解析的图片"
     r"|请(?:你)?重新(?:上传|发送)(?:一下)?(?:这张)?图片")
 
+# 「识图模型看到了，但按内容政策拒绝描述」的判据（2026-10-01）。
+#
+# 与 _VISION_BLIND_RE 是两回事：那条抓「自称看不到图」，这条抓「拒绝描述」。
+# 私聊里发露骨图时几乎每张都触发，实测 6 次带图请求：4 次纯拒绝、1 次能力失败
+# （「我还没有学会回答这个问题」）、1 次是**拒绝开头 + 有效内容**——它拒绝描述
+# 身体，但照用户问的那句答了头发（「发丝结构混乱、与蝴蝶结边缘融合模糊」），
+# 下游据此把提示词从 1876 字补到 1922 字，加了 silky / neat / messy strands。
+#
+# 所以**不能一命中就整段丢掉**——那会把唯一有用的那次一起扔了。做法是按句剥离：
+# 删掉命中政策的句子，剩下的还有实质内容就保留（顺带把拒绝话术这段噪音也去了），
+# 没有就退回 _VISION_FAIL_NOTE。宁可让模型明说「看不到」，也不要它拿拒绝话术
+# 当画面描述去生图。
+_VISION_REFUSE_RE = re.compile(
+    # 自称拒绝：我(无法|不能|没法)…(描述|提供|进行|展开|处理|回答|满足|提取)
+    # 代词那截要放宽到「这个/该/此」——实测出现过「我无法按**这个**要求描述」，
+    # 只写「你的/您的」会漏掉它，剥完还剩一句拒绝话术。
+    r"我(?:无法|不能|没法)(?:按(?:照)?(?:你的|您的|这个|该|此)?(?:要求|请求)"
+    r"|为你|为您|逐项)?(?:提供|进行|展开|描述|处理|回答|满足|提取)"
+    # 中文内容安全话术：正常画面描述不会出现的固定搭配
+    r"|色情低俗|违背公序良俗|公序良俗|安全准则|不适宜公开描述|内容安全规范"
+    r"|不符合(?:相关规范|法律法规|健康)"
+    r"|请你(?:提供合规|遵守相关规范)|合规、健康|合法合规"
+    # 拒绝话术的收尾（「如果你有合规的图片…」「如果你需要，我可以…」），
+    # 以及能力失败。
+    # [!!] 不能只写「如果你(?:有|需要)」：实测一条**正常**返回写「如果你需要让
+    #      文本模型理解这张图，可以将其概括为…」，那是有效内容，被整句误剥。
+    #      所以必须把「如果你…」限死在拒绝收尾的那几个搭配上。
+    r"|如果你(?:有(?:其他)?合规的图片|有其他问题|需要[，,]?(?:我|可以))"
+    r"|我还没有学会回答"
+)
+
+# 按中文句末标点切句（保留标点）。用于剥离拒绝话术，见 _vision_usable。
+_SENT_SPLIT_RE = re.compile(r"(?<=[。！？；\n])")
+
+# 剥离拒绝话术后，剩不足这么多字就当作「没读到东西」。
+# 识图 prompt 要求的是成段描述，真描述不会只有十几个字；留一条下限是为了
+# 接住「拒绝句被剥掉、只剩一句客套收尾」的情况（实测「如果你有其他问题，
+# 我非常乐意为你提供帮助。」）。
+_VISION_MIN_USABLE = 20
+
+
+def _vision_usable(text):
+    """识图返回能不能用；不能用返回空串。
+
+    两种不能用：自称看不到（_VISION_BLIND_RE）、按内容政策拒绝描述
+    （_VISION_REFUSE_RE）。后者按句剥离而非整段丢掉，理由见 _VISION_REFUSE_RE
+    上方——混合返回里那半段有效内容是要留的。
+
+    **一句都没命中时原样返回，不做任何重排**（2026-10-01 修）。此前无条件按句
+    拼回去，有两个坑：一是有效返回可以短到「一只猫」，拼完过不了 _VISION_MIN_USABLE
+    被误判成"没读到"；二是拼接会吃掉正文里的空行/列表换行，等于连正常描述也动了。
+    下限只在**确实剥掉过句子**时才用来兜底。
+    """
+    if not text:
+        return ""
+    if _VISION_BLIND_RE.search(text):
+        return ""
+    sents = [s for s in _SENT_SPLIT_RE.split(text) if s.strip()]
+    kept = [s for s in sents if not _VISION_REFUSE_RE.search(s)]
+    if len(kept) == len(sents):
+        return text.strip()
+    out = "".join(kept).strip()
+    return out if len(out) >= _VISION_MIN_USABLE else ""
+
 # 识图结果前面的说明。带发送者时把名字写进去——群里一轮可能混着好几张图，
 # 不写谁发的，模型只能猜，猜错就是把 A 发的图安到 B 头上（「关系网乱」的
 # 头号来源）。发送者未知时退回「用户发来」，宁可笼统也不要乱安人。
@@ -528,7 +592,7 @@ def _vision_head(owners):
     return "[%s 发来图片，以下是识别结果]" % "、".join(uniq)
 
 
-def _vision_notes(images, owners=None, question=""):
+def _vision_notes(images, owners=None, question="", base=None):
     """逐张识图，返回可拼进用户输入的文本行。失败的项也占一行。
 
     owners 与 images 一一对应（可短可缺）；多张图时每张标出是谁发的。
@@ -537,10 +601,16 @@ def _vision_notes(images, owners=None, question=""):
     不带的话识图只按通用指令读图，下游文本模型就只能拿到一段泛泛的描述，
     得自己猜「用户到底想问什么」。
 
+    base 是**用户在管理页自定义的读图要求**（settings.json 的 vision_prompt，
+    见 agents.vision_prompt）。None / 空串 = 用内置默认那两份，行为与从前一致。
+    问题照样带进去，只是那段的写法换成用户自己的（见 vision.build_prompt）。
+
     三条后处理都放在这一处（返回值同时是"当轮发给模型的"和"写回 history 的"）：
     1. **失败兜底**：describe 抛异常 → _VISION_FAIL_NOTE。
-    2. **「成功返回但没看图」兜底**：见 _VISION_BLIND_RE。这类返回不抛异常，
-       没有它就接不住，模型会拿一段编造的画面描述当真。
+    2. **「成功返回但没用」兜底**：见 _vision_usable —— 自称看不到
+       （_VISION_BLIND_RE）整段换掉；按内容政策拒绝描述（_VISION_REFUSE_RE）
+       按句剥离，剩下的还有实质内容就留。这类返回都不抛异常，没有它就接不住，
+       模型会拿一段编造的画面描述、或一句拒绝话术，当真去生图。
     3. **截断到 _VISION_NOTE_MAX_CHARS**：识图文字块是历史里最大的一块可压缩
        脂肪（实测占群历史 28%），不截就会把会话顶破预算、逼出每轮压缩。
     """
@@ -551,16 +621,21 @@ def _vision_notes(images, owners=None, question=""):
     for i, data_url in enumerate(images, 1):
         try:
             text = describe(data_url,
-                            prompt=build_prompt(question, i, total)).strip()
+                            prompt=build_prompt(question, i, total,
+                                                base=base)).strip()
         except Exception as exc:
             log.warning("识图失败（第 %d/%d 张）：%s", i, total, exc)
             text = ""
-        # 没看图却说了一堆 —— 换掉。这段一旦写进 history 就是永久占位，
-        # 而且下游会把它当事实（实测它编出过「原图是粉色小熊连体泳衣」）。
-        if text and _VISION_BLIND_RE.search(text):
-            log.warning("识图没看到图（第 %d/%d 张），改判失败：%r",
-                        i, total, text[:60])
-            text = ""
+        # 没看图却说了一堆，或看到了但按内容政策拒绝描述 —— 都换掉/剥掉。
+        # 这段一旦写进 history 就是永久占位，而且下游会把它当事实
+        # （实测它编出过「原图是粉色小熊连体泳衣」，也拿「我无法描述这张
+        # 色情图片」当画面描述去生图）。
+        if text:
+            cleaned = _vision_usable(text)
+            if cleaned != text:
+                log.warning("识图返回不可用（第 %d/%d 张），剥离后剩 %d 字：%r",
+                            i, total, len(cleaned), text[:60])
+            text = cleaned
         if len(text) > _VISION_NOTE_MAX_CHARS:
             text = text[:_VISION_NOTE_MAX_CHARS].rstrip() + "…（描述已截断）"
         body = text or _VISION_FAIL_NOTE
@@ -574,7 +649,7 @@ def _vision_notes(images, owners=None, question=""):
     return notes
 
 
-def _with_vision(user_input, images, owners=None):
+def _with_vision(user_input, images, owners=None, agent_id=None):
     """把识图结果并入用户输入文本（图片本体不进 history，只留这段文字）。
 
     加这段头是必要的：识别出来的文字混在用户的话里，多轮之后模型分不清
@@ -583,8 +658,13 @@ def _with_vision(user_input, images, owners=None):
 
     user_input 同时作为识图 prompt 里的「用户的需求」传下去——识图看得见
     需求，描述才有针对性，否则它只能对着一张图泛泛而谈。
+
+    agent_id 用来取**这个 agent 自定义的读图要求**（管理页那张「识图提示词」
+    卡存的 vision_prompt）。没传 / 没设 → 空串 → 回落内置默认。一次调用只读
+    一份 settings，不在每张图上重复取。
     """
-    notes = _vision_notes(images, owners, question=user_input)
+    base = agent_store.vision_prompt(agent_id) if agent_id else ""
+    notes = _vision_notes(images, owners, question=user_input, base=base)
     if not notes:
         return user_input
     block = _vision_head(owners) + "\n" + "\n".join(notes)
@@ -740,7 +820,8 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
         if provider_vision(eff["provider"], eff["model"]):
             attach_mode = True
         else:
-            user_input = _with_vision(user_input, images, image_owners)
+            user_input = _with_vision(user_input, images, image_owners,
+                                      agent_id)
 
     history.append({"role": "user", "content": user_input})
     yield {"type": "user", "content": user_input}

@@ -407,6 +407,29 @@ def image_audit_prompt(agent_id):
     return v.strip() if isinstance(v, str) else ""
 
 
+# 自定义**识图（通用读图）提示词**的 settings.json 键名。
+_VISION_PROMPT_KEY = "vision_prompt"
+
+
+def vision_prompt(agent_id):
+    """自定义的识图提示词；没设 / 设成空白 → 返回 ""（调用方回落内置默认）。
+
+    2026-10-02 用户要求：「识图模型老是分析不清楚图片，我要能在管理页自己改
+    通用那份的提示词。」原先它写死在 app/vision.py 的 `_PROMPT` 里，想调一句
+    就得改代码 + 重启。
+
+    跟 `image_audit_prompt` 同款口径：**只认非空字符串**——手改坏了存成
+    null / 数字 / 空串一律当「没设」，回落内置默认。这里回落是**安全的**
+    （内置那份是能用、也只是不够细），不像审核那边回落会改变闸门语义。
+
+    ⚠️ 只管**通用读图**这一条链路（agent 收图 → 转文字）。生图前的 NSFW
+    审核提示词在 `image_audit_prompt`，表情包打标签写死在 `stickers._tag`，
+    两处都不吃这个开关。
+    """
+    v = load_settings(agent_id).get(_VISION_PROMPT_KEY)
+    return v.strip() if isinstance(v, str) else ""
+
+
 # 主动发言冷却的合法范围（秒）。0 = 不限频；上限防手滑输成天文数字。
 INTERJECT_COOLDOWN_MIN = 0
 INTERJECT_COOLDOWN_MAX = 3600

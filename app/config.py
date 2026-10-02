@@ -224,6 +224,12 @@ IMAGE_AUDIT_TIMEOUT = float(os.getenv("IMAGE_AUDIT_TIMEOUT", "30"))
 # 内置默认那份约 300 字，2000 给了很宽的余量，够写一版更细的口径。
 IMAGE_AUDIT_PROMPT_MAX = int(os.getenv("IMAGE_AUDIT_PROMPT_MAX", "2000"))
 
+# 自定义**识图（通用读图）提示词**的长度上限（字符），2026-10-02 加。
+# 口径与上面那条一致：识图也是**每张图都要重发一遍**的隐形调用，写长了纯烧
+# token；但它不像审核那样「丢了输出格式就全拦」，所以长度之外不再做别的校验。
+# 内置默认那份约 100 字，2000 够写一版很细的读图要求。
+VISION_PROMPT_MAX = int(os.getenv("VISION_PROMPT_MAX", "2000"))
+
 # ─── Web 搜索（豆包搜索）─────────────────────────────
 # 豆包搜索（原 联网搜索/融合信息搜索）专用 API Key，在火山「联网搜索控制台」创建：
 # https://console.volcengine.com/search-infinity/api-key?tab=post_paid

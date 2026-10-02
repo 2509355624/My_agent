@@ -275,6 +275,36 @@
             <span class="hint" id="auditPromptState"></span>
           </div>
         </div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
+          <button class="ghost" id="visionPromptBtn">识图提示词</button>
+          <span class="hint"><b>对方发图给机器人时</b>，把图读成文字用的那份要求
+            （对话模型没有视觉能力，靠识图模型当它的眼睛）。内置默认是
+            「描述画面 + 原样提取文字，不翻译」——觉得它<b>读得不细、抓不到重点</b>，
+            可以在这里整份换成自己的写法，热生效、不用重启。
+            文本里放 <b>{question}</b> 的位置会被替换成对方这轮的原话；没放则自动补在
+            末尾一行，所以「带上问题」这件事丢不掉。
+            <b>只管这一条链路</b>：生图发出去前的 NSFW 审核（上面那个「审核提示词」）、
+            表情包打标签各有各的提示词，都不吃这个开关。</span>
+        </div>
+        <div id="visionPromptWrap" style="display:none; margin:0 0 8px 0; padding:8px;
+             border:1px solid var(--line, #333); border-radius:6px;">
+          <div class="hint" style="margin-bottom:6px;">
+            整份替换内置的识图提示词。输出是一段<b>给另一个模型看的纯文本</b>，
+            没有必须遵守的格式，写宽写窄只影响它读得细不细。
+            建议保留「<b>原样提取图中的文字，不要翻译、不要改写</b>」这句——
+            少了它，报错截图里的英文会被翻成中文，后面就没法拿原文去搜错误码。
+            留空保存 = 恢复内置默认。
+          </div>
+          <textarea id="visionPromptText"
+                    style="width:100%; min-height:180px; box-sizing:border-box;
+                           font-family:inherit;"></textarea>
+          <div style="margin-top:6px; display:flex; gap:8px; align-items:center;">
+            <button class="ghost" id="visionPromptSave">保存</button>
+            <button class="ghost" id="visionPromptReset">恢复默认</button>
+            <button class="ghost" id="visionPromptClose">收起</button>
+            <span class="hint" id="visionPromptState"></span>
+          </div>
+        </div>
         <div class="hint" style="font-weight:600;margin:8px 0 4px;">私聊</div>
         <div class="sess-foot" style="margin-bottom: 8px;">
           <button class="toggle" id="privAll">私聊·开</button>
@@ -861,6 +891,8 @@ async function loadSessions() {
     renderAuditGlobals(d.image_audit_globals);
     auditPrompt.custom = d.image_audit_prompt || '';
     auditPrompt.default = d.image_audit_prompt_default || '';
+    visionPrompt.custom = d.vision_prompt || '';
+    visionPrompt.default = d.vision_prompt_default || '';
     privState.on = d.private_enable !== false;
     privState.wlOn = d.private_whitelist_on !== false;
     privState.list = d.private_whitelist || [];
@@ -1250,6 +1282,47 @@ async function saveAuditPrompt() {
     sessStatus('审核提示词已更新，立即生效', 'ok');
   } catch (e) {
     auditPromptState(e.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// 识图（通用读图）提示词：跟审核那张卡同一个套路，custom 存用户那份、
+// default 存内置那份。后端才是权威（vision.build_prompt 的 base 分支），
+// 这里只负责「打开时填现在实际生效的那份」，让用户从现成的文案上改。
+let visionPrompt = { custom: '', default: '' };
+
+function visionPromptState(msg, kind) {
+  const el = $('visionPromptState');
+  el.textContent = msg || '';
+  el.style.color = kind === 'err' ? '#e55' : (kind === 'ok' ? '#5c5' : '');
+}
+
+function toggleVisionPrompt() {
+  const wrap = $('visionPromptWrap');
+  if (wrap.style.display !== 'none') { wrap.style.display = 'none'; return; }
+  $('visionPromptText').value = visionPrompt.custom || visionPrompt.default;
+  visionPromptState(visionPrompt.custom ? '当前用的是自定义那份' : '当前用的是内置默认', '');
+  wrap.style.display = '';
+  $('visionPromptText').focus();
+}
+
+async function saveVisionPrompt() {
+  const ta = $('visionPromptText');
+  const btn = $('visionPromptSave');
+  btn.disabled = true;
+  try {
+    const r = await api('/api/agent/' + encodeURIComponent(cur)
+      + '/vision_prompt',
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: ta.value }) });
+    visionPrompt.custom = r.prompt || '';
+    visionPromptState(r.using_default ? '已保存：恢复内置默认' : '已保存自定义提示词',
+                      'ok');
+    sessStatus('识图提示词已更新，下一张图就生效', 'ok');
+  } catch (e) {
+    visionPromptState(e.message, 'err');
   } finally {
     btn.disabled = false;
   }
@@ -1667,6 +1740,15 @@ $('auditPromptReset').addEventListener('click', () => {
 });
 $('auditPromptClose').addEventListener('click', () => {
   $('auditPromptWrap').style.display = 'none';
+});
+$('visionPromptBtn').addEventListener('click', toggleVisionPrompt);
+$('visionPromptSave').addEventListener('click', saveVisionPrompt);
+$('visionPromptReset').addEventListener('click', () => {
+  $('visionPromptText').value = visionPrompt.default;
+  visionPromptState('已填入内置默认，点「保存」才生效', '');
+});
+$('visionPromptClose').addEventListener('click', () => {
+  $('visionPromptWrap').style.display = 'none';
 });
 $('privAll').addEventListener('click', togglePrivateAll);
 $('privWlOn').addEventListener('click', togglePrivateWlOn);

@@ -59,6 +59,14 @@ def _deadline(total, connect=_CONNECT_TIMEOUT):
 # 提示词：描述画面 + 原样提取文字。实测输出约 340 token，信息密度够用。
 # 「原样」和「不要翻译」两句不能省——少了它们，模型会顺手把报错截图里的
 # 英文翻成中文，而 agent 后续要靠原文去搜错误码。
+#
+# 这两份（_PROMPT / _PROMPT_WITH_QUESTION）是**内置默认**，用户可以在管理页
+# 整份换掉：settings.json 的 `vision_prompt`（热生效，读写接口见 main.py 的
+# /api/agent/<id>/vision_prompt，取值见 agents.vision_prompt）。2026-10-02 用户
+# 要求「识图的提示词我要能自己改，老是分析不清楚」。**没设自定义时行为与从前
+# 一字不差**；设了也只是换掉读图要求，「用户的需求」那条照样带（见
+# build_prompt 的 base 分支）。审核（image_audit）和表情包打标签（stickers）
+# 各自的提示词**不受这个开关影响**——它们传的是自己的 prompt。
 _PROMPT = (
     "请描述这张图片的内容，并原样提取其中的所有文字。\n"
     "文字部分不要翻译、不要改写、不要总结，保持原有换行与顺序。"
@@ -87,24 +95,65 @@ _PROMPT_WITH_QUESTION = (
 # 一轮静默窗口合并几条就能上千字，全塞进去只会挤占识图自己的输出预算。
 QUESTION_MAX_CHARS = 300
 
+# 自定义提示词里放「用户问题」的占位符（2026-10-02 加，配合管理页的
+# vision_prompt）。为什么用花括号而不是 `%s`：用户贴进去的文本里出现 `%`
+# 是常态（「100% 还原」「利润率 30%」），走 % 格式化会当场抛
+# ValueError: unsupported format character。replace() 对内容完全无要求。
+QUESTION_PLACEHOLDER = "{question}"
 
-def build_prompt(question="", index=0, total=1):
+
+def default_prompt():
+    """内置默认那份**通用读图**提示词，给管理页当初始内容用。
+
+    （审核提示词在 app/image_audit.py，表情包标签在 app/stickers.py，
+    那两份各自独立、不归这里管。）
+    """
+    return _PROMPT
+
+
+def build_prompt(question="", index=0, total=1, base=None):
     """按用户问题组装识图 prompt。
 
+    base = **自定义的读图要求**（管理页 vision_prompt 存的那份）。传了就不
+    碰内置默认，用户问题按两种情况进去：
+      - 文本里有 `{question}` → 在原位替换（他想把需求放在开头、或想要
+        「先答需求再描述」的顺序，由他自己排）；
+      - 没有占位符 → 尾部补一行「用户的需求：…」。**不补不行**：识图模型
+        看不见用户说了什么，只按通用指令读图，下游文本模型拿到的就是一段
+        泛泛的描述（见 _PROMPT_WITH_QUESTION 的注释）——但也不替用户改写
+        他的正文，塞多了他不知道自己到底在让模型读什么。
+      没问题时两种情况都只是 base 本身。
+
+    base 不传（= 没设自定义）走内置那两份：
     没问题时退回通用的 _PROMPT——「只发图不打字」是常见用法（"帮我看下
     这个"），不能因此拼出一个空的「用户的需求：」。
 
     total > 1 时在开头标出这是第几张：一批多图是逐张送进去的，不标的话
-    模型会以为手上这张就是全部。
+    模型会以为手上这张就是全部。（内置那份**没问题时**没有这个头，是历史
+    行为，钉在 tests/test_vision.py 里，别顺手"修"成统一的。）
     """
     q = (question or "").strip()
-    if not q:
-        return _PROMPT
     if len(q) > QUESTION_MAX_CHARS:
         q = q[:QUESTION_MAX_CHARS] + "…"
     head = ""
     if total > 1:
         head = "（这是第 %d 张，共 %d 张）\n" % (index, total)
+    if base:
+        text = base
+        if q:
+            if QUESTION_PLACEHOLDER in text:
+                text = text.replace(QUESTION_PLACEHOLDER, q)
+            else:
+                text = text + "\n用户的需求：" + q
+        elif QUESTION_PLACEHOLDER in text:
+            # 「只发图不打字」是常见用法：占位符不能孤零零留在文案里，
+            # 不然模型会看到一个空的「用户的需求：」。替换成空串，正文里
+            # 那几个引出它的字（"答："之类）由用户自己认——不去猜着删，
+            # 猜错就是在改他写的文案。
+            text = text.replace(QUESTION_PLACEHOLDER, "")
+        return head + text
+    if not q:
+        return _PROMPT
     return head + _PROMPT_WITH_QUESTION % q
 
 

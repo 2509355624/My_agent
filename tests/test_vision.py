@@ -395,6 +395,101 @@ class VisionAttributionTest(unittest.TestCase):
         self.assertNotIn("【第 1 张", out)
 
 
+class VisionRefusalFilterTest(unittest.TestCase):
+    """识图模型「看到了但按内容政策拒绝描述」时，拒绝话术不能流进下游。
+
+    私聊发露骨图几乎每张都触发。实测 8 次带图返回：6 次纯拒绝、1 次能力失败
+    （「我还没有学会回答这个问题」）、1 次是**拒绝开头 + 有效内容**（拒绝描述
+    身体，但照用户问的那句答了头发，下游据此把提示词补了 46 字）。
+
+    所以口径是：整段丢掉会连那次有用的内容一起扔；一句不丢又会让「我无法描述
+    这张色情图片」被当成画面描述去生图。做法是按句剥离（agent._vision_usable）。
+    """
+
+    # 实测原话，逐条钉住
+    _PURE_REFUSALS = [
+        "我无法按要求描述这张图片。图片包含露骨的色情内容，不符合我的安全准则，"
+        "因此我不能提供详细描述或提取其中的文字。如果你有其他合规的图片需要描述，"
+        "我可以帮忙。",
+        "你所提供的内容包含色情低俗、违背公序良俗的不良信息，这类内容不符合相关"
+        "规范和健康的交流导向，我不能按照你的要求进行描述和提取相关内容，请你提供"
+        "合规、健康的内容进行交流。",
+        "这张图包含色情裸露与性暗示内容，属于不适宜公开描述的范围，我无法为你逐项"
+        "展开画面细节或提取其中的文字。如果你有合规的图片需要描述，可以换一张，"
+        "我会继续帮你。",
+        "抱歉，我无法按这个要求描述或补充该图片。图片内容涉及色情低俗画面，不符合"
+        "内容安全规范。如果你需要，我可以帮你处理其他合规的图片描述或文字提取需求。",
+    ]
+
+    def test_pure_refusals_are_dropped(self):
+        for text in self._PURE_REFUSALS:
+            self.assertEqual(agent._vision_usable(text), "", text[:30])
+
+    def test_capability_failure_is_dropped(self):
+        """「我还没有学会回答这个问题」+ 客套收尾 —— 也当没读到。"""
+        text = ("对不起，我还没有学会回答这个问题。"
+                "如果你有其他问题，我非常乐意为你提供帮助。")
+        self.assertEqual(agent._vision_usable(text), "")
+
+    def test_refusal_plus_real_content_keeps_the_content(self):
+        """混合返回里那半段有效内容必须留——它是唯一有用的那次。"""
+        refusal = "这张图片包含露骨的色情内容，我无法按你的要求进行完整描述或提取细节。"
+        bad = "图中画面涉及裸露、性暗示姿势及液体等不适宜元素，不符合内容安全规范。"
+        good = ("关于你提到的头发问题——从可见画面来看，角色后脑勺到马尾区域的发丝"
+                "确实存在明显的结构混乱：发束走向不自然、发丝与发饰边缘融合模糊、"
+                "部分发丝出现断裂或重复叠加的伪影。")
+        out = agent._vision_usable(refusal + bad + good)
+        self.assertIn("发束走向不自然", out)
+        self.assertNotIn("我无法按你的要求", out)
+        self.assertNotIn("色情", out)
+
+    def test_blind_result_is_dropped(self):
+        blind = ("我无法直接看到图片，但根据你提供的引用信息和需求，我可以帮你梳理"
+                 "关键点：原图是粉色小熊连体泳衣。")
+        self.assertEqual(agent._vision_usable(blind), "")
+
+    def test_short_valid_description_survives(self):
+        """有效返回可以短到「一只猫」，不能因为凑不够下限就当成没读到。"""
+        self.assertEqual(agent._vision_usable("一只猫"), "一只猫")
+        self.assertEqual(agent._vision_usable("一只猫趴在键盘上。"),
+                         "一只猫趴在键盘上。")
+
+    def test_valid_description_is_not_reformatted(self):
+        """没命中任何拒绝话术时正文一个字节都不许动（空行/换行原样留）。"""
+        text = "画面内容描述：\n一只猫。\n\n原样提取文字：\n喵"
+        self.assertEqual(agent._vision_usable(text), text)
+
+    def test_if_you_need_to_explain_is_not_a_refusal(self):
+        """「如果你需要让文本模型理解这张图，可以概括为…」是有效内容，不是拒绝收尾。"""
+        text = ("这是一张经典暴走漫画风格的简笔画表情包，画面主体是一个用粗黑线条"
+                "勾勒的简笔画人头，眼神呈现出一种斜视、偷瞄的表情。"
+                "如果你需要让文本模型理解这张图，可以将其概括为「一个歪眼斜视、"
+                "流着口水、脸上泛红傻笑的简笔画暴漫表情」。")
+        out = agent._vision_usable(text)
+        self.assertIn("如果你需要让文本模型理解这张图", out)
+
+    def test_refusal_becomes_failure_note_end_to_end(self):
+        """走完 _with_vision：拒绝话术进不了拼给下游的文本。"""
+        p = mock.patch("app.vision.describe",
+                       return_value=self._PURE_REFUSALS[0])
+        p.start()
+        self.addCleanup(p.stop)
+        out = agent._with_vision("帮我看看", ["data:1"], ["温知澄"])
+        self.assertIn("识别失败", out)
+        self.assertNotIn("色情", out)
+
+    def test_mixed_result_keeps_content_end_to_end(self):
+        """混合返回：有效那半段照常进下游，拒绝那半段不留。"""
+        mixed = ("这张图片包含露骨的色情内容，我无法按你的要求进行完整描述。"
+                 "角色后脑勺到马尾区域的发丝存在明显的结构混乱，发束走向不自然。")
+        p = mock.patch("app.vision.describe", return_value=mixed)
+        p.start()
+        self.addCleanup(p.stop)
+        out = agent._with_vision("帮我看看", ["data:1"], ["温知澄"])
+        self.assertIn("发束走向不自然", out)
+        self.assertNotIn("色情", out)
+
+
 class VisionQuestionTest(unittest.TestCase):
     """识图要把用户的问题带进去。
 
