@@ -51,6 +51,10 @@
 锁死了每次调参都要改测试，反而会让人嫌麻烦去删断言。
 
 零网络、零显卡：只读 `skills/*/workflow.json`。
+
+（2026-10-02 起本文件末尾还锁了一个**非动漫**渠道 `nffa`（Illustrious 系 + 手脸
+两段修复，见 `NffaChannelTest`）——它跟上面那套两段采样骨架**无关**，别套用
+`CHANNELS` / `BUILTIN_NODES` 那批常量。）
 """
 
 import json
@@ -915,7 +919,7 @@ class HdChannelTest(unittest.TestCase):
         from app.tools.normal.generate_image import tool
         desc = tool["description"]
         # 「16 个」现在指的是**动漫渠道**那一族（本机另有 qwen_image_v1、
-        # image_gen_v1、krea2 三个非动漫渠道，加上云端的 nai 共 20 个可传名字），
+        # image_gen_v1、krea2、nffa 四个非动漫渠道，加上云端的 nai 共 21 个可传名字），
         # 所以字面量带着「动漫」两个字。
         self.assertIn("16 个动漫渠道", desc)
         for prefix in ("hd_fast_", "hd_2_", "hd_3_"):
@@ -923,6 +927,128 @@ class HdChannelTest(unittest.TestCase):
         self.assertIn(DEFAULT_CHANNEL, desc)
         self.assertIn(DEFAULT_CHANNEL,
                       tool["parameters"]["properties"]["skill"]["description"])
+
+
+class NffaChannelTest(unittest.TestCase):
+    """`nffa`（2026-10-02 上线）的形状锁。
+
+    它跟上面那 16 个动漫渠道**不是一套骨架**：底模是 Illustrious 系 SDXL
+    （`CheckpointLoaderSimple`，不是 UNETLoader），画风 LoRA 只有**一个槽**，
+    而且出图前后固定跑**两段修复**（`FaceDetailer` + YOLO 检测框，先手后脸）。
+    所以它用的是自定义节点（comfyui-impact-pack），`test_no_custom_nodes`
+    那两条只圈动漫渠道，别把它套进去。
+
+    锁的是结构（谁修手、谁修脸、LoRA 挂在哪、seed 几处），不锁步数/CFG——
+    那些是用户随手调的旋钮。零网络、零显卡：只读 `skills/nffa/`。
+    """
+
+    NAME = "nffa"
+
+    def _wf(self):
+        return _load(self.NAME)
+
+    def test_base_and_single_lora_slot(self):
+        """底模 + 唯一那个画风 LoRA：槽只有 1 个，传 `lora=` 会把它顶掉。"""
+        wf = self._wf()
+        ckpt = _one(wf, "CheckpointLoaderSimple")
+        self.assertTrue(wf[ckpt]["inputs"]["ckpt_name"]
+                        .startswith("waiIllustriousSDXL"),
+                        wf[ckpt]["inputs"]["ckpt_name"])
+        slots = _all(wf, "LoraLoader") + _all(wf, "LoraLoaderModelOnly")
+        self.assertEqual(len(slots), 1, slots)
+        lo = wf[slots[0]]
+        self.assertTrue(lo["inputs"]["lora_name"].startswith("NffaV1.3"),
+                        lo["inputs"]["lora_name"])
+        self.assertEqual(lo["inputs"]["strength_model"], 1)
+        self.assertEqual(lo["inputs"]["strength_clip"], 1)
+        # 画风 LoRA 必须挂在底模之后（两个采样器和两段修复都吃它的输出）
+        self.assertEqual(lo["inputs"]["model"], [ckpt, 0])
+        self.assertNotIn("Dogma", json.dumps(wf))   # 那台机器上还没这个文件
+
+    def test_two_stage_sampling_then_two_detailers(self):
+        """采样骨架：一段 → 1.1× 放大 → 二段 → VAEDecode → 修手 → 修脸 → 存图。
+
+        顺序是本渠道最大的结构差别，**先手后脸**不能颠倒（两段都改像素，
+        后者覆盖前者；用户测成功的那张就是这个顺序）。
+        """
+        wf = self._wf()
+        samplers = _all(wf, "KSampler")
+        self.assertEqual(len(samplers), 2, samplers)
+        up = _one(wf, "LatentUpscaleBy")
+        # 按连线认「二段」：吃放大结果的那个采样器——不认编号
+        stage2 = [k for k in samplers if wf[k]["inputs"]["latent_image"][0] == up]
+        self.assertEqual(len(stage2), 1, "二段采样器没接在放大之后")
+        stage1 = [k for k in samplers if k != stage2[0]][0]
+        self.assertEqual(wf[up]["inputs"]["samples"][0], stage1)
+        self.assertLessEqual(wf[up]["inputs"]["scale_by"], 1.1)
+        decode = _one(wf, "VAEDecode")
+        self.assertEqual(wf[decode]["inputs"]["samples"][0], stage2[0])
+        detailers = _all(wf, "FaceDetailer")
+        self.assertEqual(len(detailers), 2, detailers)
+        hand = [k for k in detailers
+                if wf[k]["inputs"]["image"][0] == decode]
+        self.assertEqual(len(hand), 1, "没有一段修复直接吃 VAEDecode")
+        face = [k for k in detailers if wf[k]["inputs"]["image"][0] == hand[0]]
+        self.assertEqual(len(face), 1, "二段修复没接在一段修复之后（先手后脸）")
+        save = _one(wf, "SaveImage")
+        self.assertEqual(wf[save]["inputs"]["images"][0], face[0])
+        self.assertEqual(wf[save]["inputs"]["filename_prefix"], "Nffa")
+
+    def test_detectors_are_hand_then_face(self):
+        wf = self._wf()
+        decode = _one(wf, "VAEDecode")
+        by_detector = {}
+        for k in _all(wf, "FaceDetailer"):
+            det = wf[k]["inputs"]["bbox_detector"][0]
+            by_detector[wf[det]["inputs"]["model_name"]] = k
+        self.assertEqual(sorted(by_detector),
+                         ["bbox/face_yolov8m.pt", "bbox/hand_yolov8s.pt"])
+        self.assertEqual(wf[by_detector["bbox/hand_yolov8s.pt"]]["inputs"]["image"][0],
+                         decode, "修手那段的检测器不该是脸模型")
+
+    def test_prompt_is_bare_placeholder_and_negative_is_baked(self):
+        """正向词**不拼任何画风前缀**（krea2 会拼 `Yoneyama Mai Style`），
+        负面词写死在工作流里——所以模型再往 prompt 叠一串负面词就是重复。"""
+        wf = self._wf()
+        texts = [n["inputs"]["text"] for n in wf.values()
+                 if n.get("class_type") == "CLIPTextEncode"]
+        self.assertIn("__MULTI_PROMPTS__", texts)
+        self.assertTrue(any("worst quality" in t for t in texts))
+        self.assertNotIn("@kibro", json.dumps(wf))
+        # 修手那段的正向词固定写死（跟主提示词无关）
+        self.assertTrue(any(t.startswith("good hand") for t in texts))
+
+    def test_one_seed_for_all_four_samplers(self):
+        """两个 KSampler + 两个 FaceDetailer 共用**同一个** `__SEED__`——
+        caption 只报得出一个数，凑不齐 4 处就说明有人手改过。"""
+        raw = _raw(self.NAME)
+        self.assertEqual(raw.count("__SEED__"), 4, raw.count("__SEED__"))
+        self.assertNotIn("__CHARACTER__", raw)
+        self.assertNotIn("__DENOISE__", raw)      # 不支持垫图，没有重绘占位符
+
+    def test_canvas_is_portrait_single(self):
+        wf = self._wf()
+        lat = wf[_one(wf, "EmptyLatentImage")]["inputs"]
+        self.assertEqual((lat["width"], lat["height"]), (1024, 1536))
+        self.assertEqual(lat["batch_size"], 1)
+
+    def test_no_i2i_workflow_and_not_whitelisted(self):
+        """它明确**不支持图生图**：既没有 `workflow_i2i.json`，也不在
+        `_I2I_SKILLS` 里——传 source_image 会当场被拒，别悄悄退回文生图。"""
+        from app.tools.normal.generate_image import _I2I_SKILLS
+        self.assertNotIn(self.NAME, _I2I_SKILLS)
+        self.assertFalse(os.path.exists(
+            os.path.join(SKILLS, self.NAME, "workflow_i2i.json")))
+
+    def test_every_link_points_at_an_existing_node(self):
+        wf = self._wf()
+        for nid, node in wf.items():
+            for key, val in node.get("inputs", {}).items():
+                if (isinstance(val, list) and len(val) == 2
+                        and isinstance(val[0], str)):
+                    self.assertIn(val[0], wf,
+                                  "nffa 节点 %s.%s 指向不存在的节点 %r"
+                                  % (nid, key, val[0]))
 
 
 if __name__ == "__main__":

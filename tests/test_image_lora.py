@@ -357,7 +357,7 @@ class ToolDescriptionTest(unittest.TestCase):
         for s in ("anima_clear", "anima_curvy", "hd_fast_clear", "hd_2_curvy",
                   "qwen_image_v1"):
             self.assertIn(s, _I2I_SKILLS)
-        for s in ("hd_3_clear", "hd_3_curvy", "krea2", "image_gen_v1"):
+        for s in ("hd_3_clear", "hd_3_curvy", "krea2", "image_gen_v1", "nffa"):
             self.assertNotIn(s, _I2I_SKILLS)
 
     def test_description_keeps_the_look_dont_edit_boundary(self):
@@ -371,7 +371,9 @@ class ToolDescriptionTest(unittest.TestCase):
         self.assertIn("文生图默认 anima", desc)
         self.assertIn("引用图片：默认只看，不改", desc)
         self.assertIn("看得见", desc)                  # 「看图 → 反推提示词」这条路
-        self.assertIn("只有对方明确要", desc)            # 垫图要明确意图
+        self.assertIn("光是引用了图，永远不构成图生图", desc)
+        self.assertIn("图生图的门槛", desc)             # 明说的门槛单独成段
+        self.assertIn("没明说就当没这回事", desc)
         self.assertIn("hd_3_", desc)                   # 不支持的那档要说出来
         self.assertNotIn("图生图已停用", desc)
         # 不能有「不传 skill、只传 source_image 就自动切渠道」这种指路话
@@ -382,6 +384,7 @@ class ToolDescriptionTest(unittest.TestCase):
         from app.tools.normal.generate_image import tool
         desc = tool["parameters"]["properties"]["source_image"]["description"]
         self.assertIn("只在对方明确要", desc)
+        self.assertIn("默认不传", desc)
         self.assertIn("hd_3_", desc)
         self.assertNotIn("已停用", desc)
 
@@ -391,21 +394,35 @@ class ToolDescriptionTest(unittest.TestCase):
         模型只看得到这段文字（工作流差别它看不见）。少了这层，它会把「把外套
         换成红色」送去动漫档重绘——出来的是一张画风变了、构图也跑了的新图，
         对方要的「只改一处」根本没实现。
+
+        2026-10-02 用户拍板加了反向的约束：**qwen 不是图生图默认渠道**（一张
+        1~2 分钟，别的 20~30 秒）。所以这里钉的不只是「两种模式都在」，还有
+        「默认那条是动漫重绘、选 qwen 得有理由」。
         """
         from app.tools.normal.generate_image import tool
         desc = tool["description"]
-        self.assertIn("图生图：本机有两种", desc)
+        self.assertIn("图生图走哪条：默认动漫重绘", desc)
         for key in ("改图", "重绘", "qwen_image_v1", "一句改图指令",
                     "不要把整张图重新描述"):
             self.assertIn(key, desc, "描述里缺了「%s」" % key)
+        # qwen 那道必须带「慢」的价格标签，不能写得像默认选项
+        self.assertIn("不是默认选项", desc)
+        self.assertIn("1~2 分钟", desc)
+        # 机器人自己画的图（带渠道 + seed 那行）被引用 → 重绘那条
+        self.assertIn("渠道名和种子", desc)
         # 两种模式的 prompt 写法不同，这条也得写在参数上（模型最常看的地方）
         prop = tool["parameters"]["properties"]["source_image"]["description"]
         self.assertIn("改图", prop)
         self.assertIn("重绘", prop)
         self.assertIn("qwen_image_v1", prop)
         self.assertIn("改动指令", prop)
+        self.assertIn("默认走动漫 12 档重绘", prop)
         # 动漫 12 档一个字都没删
         self.assertIn("anima_*", prop)
+        # skill 参数不能再写「改图就选 qwen / 本机最强」这种无门槛诱导语
+        skill = tool["parameters"]["properties"]["skill"]["description"]
+        self.assertIn("图生图默认不走它", skill)
+        self.assertNotIn("最强", skill)
 
 
 if __name__ == "__main__":

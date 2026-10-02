@@ -267,7 +267,7 @@ class SkillPriorityTest(unittest.TestCase):
         会让它被无谓地延后，而延后一次就是让对方多等一张图的时间。
         """
         for name in ("anima_soft", "anima_gloss", "krea2", "image_gen_v1",
-                     "goutoujunshi", "没这个skill", "", None):
+                     "nffa", "goutoujunshi", "没这个skill", "", None):
             self.assertEqual(skills.skill_priority(name), 1, name)
 
     def test_frontmatter_overrides_code_default(self):
@@ -2014,14 +2014,15 @@ class QqWhitelistTest(unittest.TestCase):
     ⚠️ 2026-10-01 起 `DISABLED_IMAGE_SKILLS` 已清空，所以这里测的**不再是
     「停用渠道」**，而是「QQ 本身提不提供哪些渠道」。同日用户拍板把
     `image_gen_v1`（SD）与 `krea2` 也放给 QQ——它们以前只在 `agents/draw` 里。
+    2026-10-02 又放了新上的 `nffa`。
     现在 QQ 侧的隐藏项只剩**已归档的老渠道**和**画图助手专用 / 未上线**的那些。
     """
 
-    # QQ 提供的：16 个动漫渠道（4 画风 × 4 尺寸档）+ qwen + SD + krea2
+    # QQ 提供的：16 个动漫渠道（4 画风 × 4 尺寸档）+ qwen + SD + krea2 + nffa
     VISIBLE = tuple("%s_%s" % (tier, style)
                     for tier in ("anima", "hd_fast", "hd_2", "hd_3")
                     for style in ("clear", "soft", "gloss", "curvy")) + (
-                        "qwen_image_v1", "image_gen_v1", "krea2")
+                        "qwen_image_v1", "image_gen_v1", "krea2", "nffa")
     # QQ 不提供的：已归档的老名字 + draw 专用 / 还没上线的渠道
     HIDDEN = ("anima", "anima_2", "anima_realskin",
               "image_gen_v1_hires", "nsfw_pose_gen", "pose_library")
@@ -2052,6 +2053,19 @@ class QqWhitelistTest(unittest.TestCase):
         # qwen 依旧可用，尺寸也还写着
         self.assertIn("qwen_image_v1", desc)
         self.assertIn("832×1216", desc)
+
+    def test_description_teaches_when_to_use_nffa(self):
+        """新渠道必须**带着用法**进描述（2026-10-02 的规矩：加能力不写模型
+        看得见的用法 = 白加）。这里钉三件最容易说错的事：只在点名时用、
+        提示词全自己写（不拼画风前缀）、不支持垫图。"""
+        from app.tools.normal.generate_image import tool
+        desc = tool["description"]
+        self.assertIn("skill=nffa", desc)
+        self.assertIn("1024×1536", desc)
+        self.assertIn("不拼任何画风前缀", desc)
+        self.assertIn("不支持垫图", desc)
+        # 参数枚举里也得有它，否则模型传值会被当成非法
+        self.assertIn("nffa", tool["parameters"]["properties"]["skill"]["description"])
 
 
 class CleanStartTest(_Base):
