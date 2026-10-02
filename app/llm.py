@@ -12,7 +12,8 @@ from app.cancel import is_cancelled
 from app.config import (API_URL, API_KEY, MODEL, LLM_PROVIDER,
                         PROVIDERS, OLLAMA_BASE_URL, CONTEXT_BUDGET,
                         LLM_FALLBACK_CHAIN, LLM_REQUEST_TIMEOUT,
-                        LLM_FALLBACK_TTL, LLM_RATE_LIMIT_TTL)
+                        LLM_FALLBACK_TTL, LLM_RATE_LIMIT_TTL,
+                        provider_vision)
 
 # 诊断行一律走 logging，不走 print——原因见 app/logsetup.py 的模块说明：
 # print 落 stdout，被重定向/管道接管后是块缓冲，日志会「看起来丢了」。
@@ -282,11 +283,18 @@ def reset_chain_state():
         _DEAD.clear()
 
 
-def candidates(provider=None, model=None):
+def candidates(provider=None, model=None, require_vision=False):
     """本次请求依次尝试的 (provider, model) 列表。
 
     链头是调用方指定的那个（agent 配置 / 管理页选择），后面接降级链里其余
     项，重复的去掉——所以管理页手动切换依然优先，链只负责兜底。
+
+    require_vision=True：只留**能直接读图**的候选（config.provider_vision）。
+    带图的轮次必须这么调——图片是以多模态（base64）塞进 messages 的，纯文本
+    模型收到 base64 不报错、而是**整条请求挂死**（见 config.PROVIDERS 上方
+    注释，实测 ReadTimeout）。降级链里有 volc 系纯文本 provider，带图时降到
+    它就是白等一个超时。过滤后若一个都不剩（调用方没指定有视觉的模型），
+    退回原样——宁可照老路试，也不返回空表。
 
     已被拉黑的直接跳过（省掉「每条消息都先白撞一次」的等待）；如果全都被拉黑
     了就照原样全试一遍：「全都不可用」意味着情况变了（比如额度刚到账），
@@ -306,15 +314,20 @@ def candidates(provider=None, model=None):
     if not ordered:
         return []
 
+    if require_vision:
+        vision_ok = [c for c in ordered if provider_vision(c[0], c[1])]
+        if vision_ok:
+            ordered = vision_ok
+
     now = time.time()
     alive = [c for c in ordered if _DEAD.get(c, 0) <= now]
     return alive or ordered
 
 
-def _chain_targets(provider, model):
+def _chain_targets(provider, model, require_vision=False):
     """把候选列表兜到「至少有一个」——链关掉且调用方也没指定时，仍按老路走
     get_effective_config 的默认 provider。"""
-    cands = candidates(provider, model)
+    cands = candidates(provider, model, require_vision)
     if cands:
         return cands
     eff = get_effective_config(provider, model)
@@ -495,7 +508,7 @@ def _stream_once(eff, messages, timeout, cancel_event):
 
 
 def call_llm_stream(messages, timeout=None, provider=None, model=None,
-                    cancel_event=None):
+                    cancel_event=None, require_vision=False):
     """流式调用 LLM，逐块产出 (kind, text)；失败时按降级链依次往下试。
 
     kind 只有两种：
@@ -516,12 +529,16 @@ def call_llm_stream(messages, timeout=None, provider=None, model=None,
     Ollama 走非流式，整体作为单个 content 块产出（行为与 call_llm 一致），
     该分支无法中断。
     timeout 在流式下是"两次数据块之间的最大间隔"，而非整次响应上限。
+
+    require_vision=True：降级链只走能直接读图的候选。**带图的轮次必须置位**——
+    messages 里塞的是 base64 多模态内容，纯文本 provider 收到不会报错而是挂死
+    （见 `candidates`）。
     """
     timeout = timeout or LLM_REQUEST_TIMEOUT
     # 元信息按「一次 call_llm_stream」清零：降级链换模型重试后，读到的是
     # 最后一次（也就是最终成功那次）的数字，正是诊断想要的口径。
     _stream_meta().update(finish_reason=None, reasoning_chars=0, content_chars=0)
-    targets = _chain_targets(provider, model)
+    targets = _chain_targets(provider, model, require_vision)
     last_err = None
     for i, (pid, mname) in enumerate(targets):
         if is_cancelled(cancel_event):

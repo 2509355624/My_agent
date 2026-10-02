@@ -365,5 +365,58 @@ class LogFormatTest(unittest.TestCase):
         self.assertNotIn("[1/", line)
 
 
+class RequireVisionTest(_ChainBase):
+    """带图轮次：降级链只走**能读图**的候选（2026-10-02 修的坑）。
+
+    背景：图片是以多模态（base64）塞进 messages 的。纯文本 provider 收到
+    base64 不会报错，而是**整条请求挂死**（见 config.PROVIDERS 上方注释）。
+    而 agent 判「本轮模型有没有视觉」用的是**配置**的模型，降级链却会切到链上
+    别的 provider —— 配了有视觉的模型（deepseek）一旦失败降到纯文本（volc），
+    就会把 base64 丢给纯文本模型，白等一个超时。所以带图时必须收窄链。
+    """
+
+    CHAIN = "volc:a,deepseek:d,mimo:m"
+
+    def test_vision_only_keeps_capable_candidates(self):
+        # volc（纯文本）被剔掉，deepseek / mimo（provider 声明有视觉）留下
+        self.assertEqual(llm.candidates(None, None, require_vision=True),
+                         [("deepseek", "d"), ("mimo", "m")])
+
+    def test_vision_only_keeps_a_vision_head(self):
+        # 管理页选了有视觉的模型 → 它照样排链头，只是后面不再挂 volc
+        self.assertEqual(llm.candidates("deepseek", "d", require_vision=True),
+                         [("deepseek", "d"), ("mimo", "m")])
+
+    def test_default_keeps_everything(self):
+        # 不带图（默认）→ 一个字都没变，volc 还在链上
+        self.assertEqual(llm.candidates(None, None),
+                         [("volc", "a"), ("deepseek", "d"), ("mimo", "m")])
+
+    def test_falls_back_to_original_when_no_vision_candidate(self):
+        # 链里一个能读图的都没有 → 退回原样，不返回空表（宁可照老路试）
+        with mock.patch.object(llm, "LLM_FALLBACK_CHAIN", "volc:a,scnet2:b"):
+            self.assertEqual(llm.candidates(None, None, require_vision=True),
+                             [("volc", "a"), ("scnet2", "b")])
+
+    def test_stream_skips_text_only_provider_when_vision_required(self):
+        # 链头（deepseek）失败后应降到 mimo，而不是纯文本的 volc
+        calls = self._patch_post([_Resp(status=500, reason="Server Error"),
+                                  _Resp(lines=_sse("备胎的回复"))])
+        out = list(llm.call_llm_stream([{"role": "user", "content": "hi"}],
+                                       require_vision=True))
+        self.assertEqual(out, [("content", "备胎的回复")])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(
+            calls[0]["url"],
+            config.PROVIDERS["deepseek"]["base_url"].rstrip("/")
+            + "/chat/completions")
+        self.assertEqual(
+            calls[1]["url"],
+            config.PROVIDERS["mimo"]["base_url"].rstrip("/")
+            + "/chat/completions")
+        self.assertNotIn(config.PROVIDERS["volc"]["base_url"],
+                         [c["url"] for c in calls])
+
+
 if __name__ == "__main__":
     unittest.main()

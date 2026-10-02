@@ -903,8 +903,14 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
             #   会让 [[TOOL:...]] 标签在页面上闪一下。
             reply_parts = []
             reasoning_chars = 0
-            for kind, text in call_llm_stream(llm_history, provider=provider,
-                                              model=model, cancel_event=cancel_event):
+            # 本轮若把图以多模态塞进了 messages（只有第 1 轮，见上面
+            # `_attach_images`），降级链必须只走能读图的候选——纯文本 provider
+            # 收到 base64 不会报错而是挂死（见 llm.candidates 的 require_vision）。
+            # 后续轮次 messages 里已经没有图，链照旧全量，别白白收窄。
+            for kind, text in call_llm_stream(
+                    llm_history, provider=provider, model=model,
+                    cancel_event=cancel_event,
+                    require_vision=attach_mode and turn_count == 1):
                 if kind == "reasoning":
                     reasoning_chars += len(text)
                     yield {"type": "reasoning", "content": text}
