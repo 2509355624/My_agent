@@ -5,9 +5,10 @@
 1. **fail-closed** —— 识图超时 / 报错 / 回复解析不出来 / 图读不出来，一律
    拦下不发。用户 2026-10-01 明确选的（改前是 fail-open）。代价是识图 provider
    一抖所有图都发不出去，所以失败路径回的是另一句提示（FAILED_NOTICE）。
-2. **口径从严** —— 大面积皮肤裸露 / 性暗示 / 暧昧动作，命中任一就拦，拿不准
-   也拦。这条钉在 `_PROMPT` 的关键词上（PromptPolicyTest）——只测 parse_verdict
-   的话，把提示词改回宽松版都不会有测试变红。
+2. **口径适中** —— 拦的是裸露 / 性暗示 / 暧昧动作，而**穿着本身不算**（泳装、
+   内衣、浴巾都放行，配上性暗示动作或表情才算）。这条钉在 `_PROMPT` 的关键词上
+   （PromptPolicyTest）——只测 parse_verdict 的话，把提示词改回从严版都不会有
+   测试变红。
 3. **开关没开时一次网络都不发** —— 三个发图点都挂了它，热路径上多一次
    识图调用就是每张图白等两秒。
 
@@ -139,10 +140,15 @@ class CheckVerdictTest(unittest.TestCase):
         self.assertFalse(v.failed)
         self.assertEqual(v.category, "nudity")
 
-    def test_bare_skin_is_blocked(self):
-        """用户 2026-10-01 收紧的边界：泳装 / 内衣这类大面积裸露也一律拦。"""
+    def test_skin_verdict_is_still_honoured(self):
+        """模型回了 `skin` 档拒绝，照样拦——判定语义没变，变的只是**什么算 skin**。
+
+        2026-10-01 口径从「从严」回到「适中」后，泳装 / 内衣本身不再违规，
+        `skin` 这一档只剩「露肩露背之类被模型判成性化」时才用得上。这里只锁
+        「verdict 被原样转发」，不再断言泳装必须被拦（那是 PromptPolicyTest 的事）。
+        """
         v = self._check_with(
-            '{"allow": false, "reason": "泳装，大面积皮肤裸露", "category": "skin"}')
+            '{"allow": false, "reason": "露肩露背", "category": "skin"}')
         self.assertFalse(v.allow)
         self.assertFalse(v.failed)
         self.assertEqual(v.category, "skin")
@@ -157,24 +163,37 @@ class CheckVerdictTest(unittest.TestCase):
 class PromptPolicyTest(unittest.TestCase):
     """口径本身就是需求，得钉在提示词上。
 
-    以前这条是靠 `test_swimsuit_passes` 反向钉的（泳装放行）；口径反转后，只测
-    `parse_verdict` 是钉不住的——把 `_PROMPT` 改回宽松版，上面那些用例照样全绿。
-    所以这里直接查关键词。
+    以前这条是靠 `test_swimsuit_passes` 反向钉的（泳装放行）；中途反转到「从严」
+    （泳装一律拦），2026-10-01 又回到**适中**——所以现在钉的是那句判定原则
+    「服装和场景不是判定依据，动作和表情才是」，而不是某个服装词的出现与否。
+    只测 `parse_verdict` 是钉不住的：把 `_PROMPT` 换成另一套口径，那些用例照样全绿。
     """
 
-    def test_prompt_is_strict_about_bare_skin(self):
-        p = image_audit._PROMPT
-        self.assertIn("大面积", p)
-        self.assertIn("泳装", p)          # 旧版把它列在「允许」里，现在必须是禁止项
+    def test_prompt_passes_normal_swimwear_and_loungewear(self):
+        """泳装 / 内衣 / 浴巾这类**正常穿着**必须写在放行侧——这是适中口径的核心。
 
-    def test_prompt_also_blocks_suggestive_and_flirty(self):
-        """用户原话：「只要敢露和性暗示和暧昧动作直接给我禁止发送」。"""
+        从严那版把「泳装、比基尼、内衣……」整串列在**禁止项**里；这版必须反过来，
+        紧跟着一句「正常穿着不算」。两处一起钉，免得哪天又被改回从严。
+        """
         p = image_audit._PROMPT
+        self.assertIn("泳装", p)
+        self.assertIn("内衣", p)
+        self.assertIn("正常穿着不算", p)
+
+    def test_prompt_says_clothing_is_not_the_criterion(self):
+        """判定原则：服装和场景不是依据，动作和表情才是——这句是适中口径的锚。"""
+        p = image_audit._PROMPT
+        self.assertIn("动作和表情才是", p)
+
+    def test_prompt_blocks_nudity_and_suggestive_acts(self):
+        """真正要拦的三档仍在：裸露 / 性暗示 / 暧昧动作。"""
+        p = image_audit._PROMPT
+        self.assertIn("性器官", p)
         self.assertIn("性暗示", p)
         self.assertIn("暧昧动作", p)
 
     def test_prompt_tells_model_to_block_when_unsure(self):
-        """从严是这次的要求本身：拿不准 → 不合格。"""
+        """拿不准仍然偏拦（只是范围收窄到「看不出来」这一种）。"""
         p = image_audit._PROMPT
         self.assertIn("拿不准", p)
         self.assertIn("不合格", p)
