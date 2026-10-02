@@ -686,9 +686,13 @@ class RunTurnQuoteTest(unittest.TestCase):
 
     def _run(self, batch, get_message):
         seen = {}
+        self.seen = seen
 
         def fake_stream(text, history, agent_id=None, image=None, **kw):
             seen["text"] = text
+            # 生图的图生图硬闸读的是线程本地里的**对方原话**，这里顺手取一份
+            # 断言用（bind 在跑循环之前，见 qq_bot._run_turn）。
+            seen["user_text"] = qq_api.current_turn_text()
             return iter(())
 
         runner = qq_bot.SessionRunner(None, "group_9", "group", "9")
@@ -725,6 +729,27 @@ class RunTurnQuoteTest(unittest.TestCase):
               "quotes": [{"kind": "reply", "id": "999"}]}],
             boom)
         self.assertEqual(text, "[引用的消息无法读取]\n\n这句怎么回")
+
+    def test_bound_user_text_excludes_the_quote_block(self):
+        """绑给工具层的「原话」必须是对方自己打的那句，不含引用块。
+
+        图生图硬闸拿它判「这轮有没有明说要改图」（见
+        `generate_image._i2i_gate`）。引用块里常常是上一次生图的整段提示词，
+        里面出现「换成 / 去掉 / 重画」的概率很高——那是机器自己写的话，拼进去
+        等于让闸门自己骗自己。
+        """
+        msg = {"sender": {"nickname": "天枢"},
+               "message": [{"type": "text",
+                            "data": {"text": "1girl, red coat, 把背景换成海边"}}]}
+        text = self._run(
+            [{"text": "她身上穿的什么颜色", "sender": "233", "images": [],
+              "quotes": [{"kind": "reply", "id": "1"}]}],
+            lambda mid, **kw: msg)
+        self.assertIn("换成", text)                       # 模型看得见引用块
+        # 合并窗口会给对方那句打上「谁说的」前缀，那是原话的一部分，留着无妨；
+        # 关键是引用块里那句机器自己写的「换成」不能混进来。
+        self.assertEqual(self.seen["user_text"], "233：她身上穿的什么颜色")
+        self.assertNotIn("换成", self.seen["user_text"])
 
 
 class StickerCollectTest(unittest.TestCase):
@@ -1149,6 +1174,27 @@ class ThreadLocalContextTest(unittest.TestCase):
         qq_api.bind_context("group_9", "group", "9", quoted_images=["http://i"])
         qq_api.clear_context()
         self.assertEqual(qq_api.current_quoted_images(), [])
+
+    def test_user_text_travels_with_the_binding(self):
+        qq_api.bind_context("group_9", "group", "9", user_text="把她外套换成红色")
+        self.assertEqual(qq_api.current_turn_text(), "把她外套换成红色")
+
+    def test_user_text_is_none_when_there_is_no_turn(self):
+        """None（不在 QQ 轮里）和 ""（在轮里但对方没打字）是两回事。
+
+        生图的图生图硬闸靠这个区分决定「放行」还是「拦」，见
+        `generate_image._i2i_gate`——把 None 当空串会让网页端的调用全被拦掉。
+        """
+        self.assertIsNone(qq_api.current_turn_text())
+        qq_api.bind_context("group_9", "group", "9")
+        self.assertIsNone(qq_api.current_turn_text())
+        qq_api.bind_context("group_9", "group", "9", user_text="")
+        self.assertEqual(qq_api.current_turn_text(), "")
+
+    def test_clear_context_drops_user_text(self):
+        qq_api.bind_context("group_9", "group", "9", user_text="改一下")
+        qq_api.clear_context()
+        self.assertIsNone(qq_api.current_turn_text())
 
 
 # ─── 连接层：代理绕过 + 首次失败重试 ──────────────────

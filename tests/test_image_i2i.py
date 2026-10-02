@@ -278,7 +278,7 @@ class I2IWorkflowShapeTest(unittest.TestCase):
         for skill in ("anima_clear", "anima_curvy", "hd_fast_clear",
                       "hd_2_curvy", "qwen_image_v1"):
             self.assertIn(skill, gi._I2I_SKILLS)
-        for skill in ("hd_3_clear", "hd_3_curvy", "krea2", "image_gen_v1"):
+        for skill in ("hd_3_clear", "hd_3_curvy", "krea2", "image_gen_v1", "nffa"):
             self.assertNotIn(skill, gi._I2I_SKILLS)
 
     def test_all_twelve_have_the_i2i_shape(self):

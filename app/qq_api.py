@@ -112,24 +112,33 @@ _local = threading.local()
 _turn_seq = itertools.count(1)
 
 
-def bind_context(session_key, target, target_id, quoted_images=None):
+def bind_context(session_key, target, target_id, quoted_images=None,
+                 user_text=None):
     """绑定当前线程正在处理的 QQ 会话。target 取 "private" / "group"。
 
     quoted_images 是**本轮**消息引用（reply）到的图片直链，按被引消息里出现
     的先后排。图生图靠它才能落到「对方点名的那一张」：模型在群里看不见图片
     地址（上下文里只有 `[图片]` 占位符），报得出「第几张」却报不出链接，所以
     候选范围必须由 qq_bot 在开跑前圈死。
+
+    user_text 是本轮**对方自己打字的那段话**（不含引用块——引用块里可能整段
+    是上一次生图的提示词，拿它判「有没有明说要图生图」会自己骗自己）。
+    生图工具靠它拦「一看见引用图就往改图上想」的误判，见
+    `generate_image._i2i_gate`。不传 = 这一轮没有可判的原话（网页端）。
     """
     _local.session_key = session_key
     _local.target = target
     _local.target_id = target_id
     _local.quoted_images = list(quoted_images or [])
     _local.turn_id = next(_turn_seq)
+    if user_text is not None:
+        _local.user_text = str(user_text)
 
 
 def clear_context():
     """摘掉绑定。worker 线程是复用的，不清理会把上一个会话带进下一轮。"""
-    for attr in ("session_key", "target", "target_id", "quoted_images", "turn_id"):
+    for attr in ("session_key", "target", "target_id", "quoted_images",
+                 "turn_id", "user_text"):
         if hasattr(_local, attr):
             delattr(_local, attr)
 
@@ -152,6 +161,19 @@ def current_turn_id():
 def current_quoted_images():
     """本轮引用的消息里带的图片直链，按出现顺序；没绑定或没引用时为空表。"""
     return list(getattr(_local, "quoted_images", None) or [])
+
+
+def current_turn_text():
+    """本轮**对方自己打的那段话**；不在 QQ 轮里时返回 None（不是空串）。
+
+    这个 None / "" 的区分是整条判据的地基：
+
+    - `None` = 不在 QQ 会话轮里（网页端、单元测试里直接调工具）——没有原话
+      可判，调用方**不该**拿它当「对方没说要图生图」；
+    - `""` = 在 QQ 轮里，但对方这轮一个字没打（只发了图 / 只引用了图）——
+      这恰恰是「没明说要图生图」，调用方要按没说要处理。
+    """
+    return getattr(_local, "user_text", None)
 
 
 # ─── 底层调用 ────────────────────────────────────────

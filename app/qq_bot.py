@@ -860,6 +860,12 @@ class SessionRunner:
                 stickers.note_image((self.target, self.target_id), _u, _w)
             except Exception:
                 pass
+        # 对方**自己打字**的那一段，在引用块拼进来之前先留一份。生图工具靠它
+        # 判「这轮到底有没有明说要图生图」（见 generate_image._i2i_gate），
+        # 所以绝不能拿拼好引用块的版本去判：引用块里常常是上一次生图的整段
+        # 提示词，里面出现「换成 / 去掉 / 重画」这类词的概率很高，那是机器
+        # 自己写的话，不是对方的要求。
+        own_text = text
         if quote_blocks:
             text = "\n\n".join(quote_blocks + ([text] if text else []))
 
@@ -931,7 +937,7 @@ class SessionRunner:
         # 「对方引用的那张」，而模型在群里看不见图片地址、只报得出「第几张」，
         # 候选范围必须在这里圈死（见 comfy_src.resolve）。
         qq_api.bind_context(self.session_key, self.target, self.target_id,
-                            quoted_images=quote_images)
+                            quoted_images=quote_images, user_text=own_text)
         sent_by_tool = False
         reply_parts, images = [], []
         # 同一轮里模型有时会把上一段原样再生成一遍（工具结果回来后失了记性），
