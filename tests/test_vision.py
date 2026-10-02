@@ -228,6 +228,21 @@ class LocalFileUrlTest(unittest.TestCase):
 # ─── 识图调用 ───────────────────────────────────────
 
 class DescribeTest(unittest.TestCase):
+    """OpenAI 兼容那条路（火山 / deepseek / mimo / scnet）。
+
+    ⚠️ provider 必须**钉死**：describe() 默认读 VISION_PROVIDER，而 .env 里那条
+    现在指向本地 ollama（2026-10-03 切本地省成本）——不钉的话这些用例会跟着本机
+    配置漂到 ollama 分支上去（payload 形状完全不同，等于没在测原来那条路）。
+    """
+
+    def setUp(self):
+        p1 = mock.patch.object(vision, "VISION_PROVIDER", "mimo")
+        p2 = mock.patch.object(vision, "VISION_MODEL", "")
+        p1.start()
+        p2.start()
+        self.addCleanup(p1.stop)
+        self.addCleanup(p2.stop)
+
     def _ok(self, content=" 一只猫 "):
         return _resp(status=200), {"choices": [{"message": {"content": content}}]}
 
@@ -246,12 +261,9 @@ class DescribeTest(unittest.TestCase):
         self.assertEqual(
             payload["messages"][0]["content"][1]["image_url"]["url"],
             "data:image/jpeg;base64,AAA")
-        # VISION_MODEL 为空时用该 provider 的默认模型。
-        # provider id 大小写不敏感（app/vision.py 里 .lower() 后再查 PROVIDERS），
-        # .env 里写成 "MiMo" 也能命中 "mimo"——这里跟代码同口径。
-        self.assertEqual(
-            payload["model"],
-            config.PROVIDERS[config.VISION_PROVIDER.lower()]["model"])
+        # VISION_MODEL 为空时用该 provider 的默认模型（这里钉的是 mimo）。
+        # provider id 大小写不敏感（app/vision.py 里 .lower() 后再查 PROVIDERS）。
+        self.assertEqual(payload["model"], config.PROVIDERS["mimo"]["model"])
 
     def test_http_error_raises_runtime_error(self):
         with mock.patch("app.vision._session.post",
@@ -267,9 +279,14 @@ class DescribeTest(unittest.TestCase):
                 vision.describe("data:image/jpeg;base64,AAA")
 
     def test_unknown_vision_provider_raises(self):
-        with mock.patch.object(config, "VISION_PROVIDER", "nonexistent"):
-            with self.assertRaises(RuntimeError):
+        # 要 patch **vision 自己那个绑定**：describe() 用的是 `from app.config
+        # import VISION_PROVIDER` 进来的名字，patch config 上的同名属性它看不见。
+        # 改前这条是**假通过**——真去打了 mimo 的 API，靠网络失败凑出一个
+        # RuntimeError，看着绿其实什么都没验。
+        with mock.patch.object(vision, "VISION_PROVIDER", "nonexistent"):
+            with self.assertRaises(RuntimeError) as ctx:
                 vision.describe("data:image/jpeg;base64,AAA")
+        self.assertIn("未配置", str(ctx.exception))
 
 
 # ─── 总超时闸门 ─────────────────────────────────────
@@ -280,6 +297,12 @@ class VisionDeadlineTest(unittest.TestCase):
     这是 2026-09-29 那次「群聊一轮 298 秒」的根因：传数字超时的时候，建连能
     烧满一次、读又能再烧满一次，一次识图吃掉 240 秒，把整条会话线堵死。
     """
+
+    def setUp(self):
+        # 钉住 provider：这些用例只关心超时闸门，不该跟着 .env 漂到 ollama 分支。
+        p = mock.patch.object(vision, "VISION_PROVIDER", "mimo")
+        p.start()
+        self.addCleanup(p.stop)
 
     def _ok(self):
         r = _resp(status=200)
@@ -321,6 +344,76 @@ class VisionDeadlineTest(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 vision.describe("data:image/jpeg;base64,AAA")
         self.assertIn("耗时", str(ctx.exception))
+
+
+# ─── 本地 ollama 那条路（2026-10-03）─────────────────
+
+class OllamaDescribeTest(unittest.TestCase):
+    """本地识图走 ollama 的**原生 /api/chat**，不走它的 OpenAI 兼容端点。
+
+    两个原因（都不是风格问题）：
+    1. 兼容端点不接受 `options`，没法把 num_gpu 传成 0 —— 而要求正是「跑内存、
+       别占显存」（显存留给 ComfyUI 生图）；
+    2. 兼容端点在 /v1 下面，而 OLLAMA_BASE_URL 是给 /api/chat 用的裸地址，
+       直接拼 /chat/completions 实测 404。
+    """
+
+    def _ok(self, content=" 一只猫 "):
+        r = _resp(status=200)
+        r.json.return_value = {"message": {"content": content},
+                               "prompt_eval_count": 811, "eval_count": 42}
+        return r
+
+    def test_hits_native_chat_endpoint(self):
+        with mock.patch("app.vision._session.post",
+                        return_value=self._ok()) as post:
+            vision.describe("data:image/jpeg;base64,AAA", provider="ollama")
+        self.assertTrue(post.call_args.args[0].endswith("/api/chat"))
+
+    def test_images_are_bare_base64_and_cpu_forced(self):
+        with mock.patch("app.vision._session.post",
+                        return_value=self._ok()) as post:
+            vision.describe("data:image/jpeg;base64,QUJD", provider="ollama")
+        payload = post.call_args.kwargs["json"]
+        # 原生接口吃的是**纯 base64**，带 data: 前缀会被当成坏图
+        self.assertEqual(payload["messages"][0]["images"], ["QUJD"])
+        # 强制 CPU：显存留给 ComfyUI
+        self.assertEqual(payload["options"]["num_gpu"], 0)
+        self.assertFalse(payload["stream"])
+        self.assertIn("keep_alive", payload)
+
+    def test_returns_native_message_content(self):
+        with mock.patch("app.vision._session.post", return_value=self._ok()):
+            self.assertEqual(
+                vision.describe("data:image/jpeg;base64,AAA", provider="ollama"),
+                "一只猫")
+
+    def test_explicit_provider_does_not_borrow_vision_model(self):
+        """显式传 provider 时 model 留空 = 用**该 provider 的默认模型**，
+        不能回落 VISION_MODEL —— 否则给审核指定了云端 provider，却把读图那个
+        本地模型名套了上去。"""
+        with mock.patch.object(vision, "VISION_MODEL", "qwen3-vl:2b"), \
+             mock.patch("app.vision._session.post",
+                        return_value=self._ok()) as post:
+            vision.describe("data:image/jpeg;base64,AAA", provider="ollama")
+        self.assertEqual(post.call_args.kwargs["json"]["model"],
+                         config.PROVIDERS["ollama"]["model"])
+
+    def test_timeout_failure_carries_elapsed(self):
+        with mock.patch("app.vision._session.post",
+                        side_effect=OSError("Read timed out")):
+            with self.assertRaises(RuntimeError) as ctx:
+                vision.describe("data:image/jpeg;base64,AAA", provider="ollama")
+        self.assertIn("耗时", str(ctx.exception))
+
+    def test_usage_uses_ollama_counters(self):
+        """ollama 的用量字段名跟 OpenAI 不一样（prompt_eval_count / eval_count）。
+        记错就等于本地识图在用量表里查不到账。"""
+        with mock.patch("app.vision._session.post", return_value=self._ok()), \
+             mock.patch("app.usage.record") as rec:
+            vision.describe("data:image/jpeg;base64,AAA", provider="ollama")
+        self.assertEqual(rec.call_args.args[1], 811)            # miss
+        self.assertEqual(rec.call_args.kwargs.get("output"), 42)
 
 
 # ─── 错误提示文案 ───────────────────────────────────

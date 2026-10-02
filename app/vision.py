@@ -23,8 +23,9 @@ import requests
 # 见 requests/adapters.py 的 HTTPAdapter.send）。
 from urllib3.util import Timeout as _UrllibTimeout
 
-from app.config import (PROVIDERS, VISION_MAX_EDGE, VISION_MODEL,
-                        VISION_PROVIDER, VISION_TIMEOUT)
+from app.config import (OLLAMA_VISION_KEEP_ALIVE, OLLAMA_VISION_NUM_GPU, PROVIDERS,
+                        VISION_MAX_EDGE, VISION_MODEL, VISION_PROVIDER,
+                        VISION_TIMEOUT)
 
 log = logging.getLogger("vision")
 
@@ -309,34 +310,33 @@ def fetch_image(url, timeout=None, max_bytes=None):
 
 # ─── 识图 ────────────────────────────────────────────
 
-def describe(data_url, timeout=None, prompt=None):
-    """调 VISION_PROVIDER 识图，返回文字。失败抛 RuntimeError。
+def describe(data_url, timeout=None, prompt=None, provider=None, model=None):
+    """调识图 provider 识图，返回文字。失败抛 RuntimeError。
 
     prompt 不传用默认的「描述画面+原样提取文字」；表情包打标签等场景
     传自己的。只暴露"成功拿到文字"和"失败"两种结果，让调用方能用一句
     try/except 覆盖全部异常——识图失败不该让整轮对话挂掉。
+
+    provider / model 不传 = 走读图那条链路（VISION_PROVIDER / VISION_MODEL）。
+    显式传 = 这一次临时换一家（本地 ollama / 另一家云端），不动全局配置。
+
+    2026-10-03 起**没有内置调用方**这么传了：生图审核原本按会话传「本地 / 云端」，
+    当天用户拍板撤掉本地档（本地热态 24~42 秒、审核 30 秒就 fail-closed，等于把
+    每张图都拦死）。这两个参数留着是为了「不改 .env 也能按次换一家」这条口子。
+
+    ⚠️ 显式传了 provider 时，model 留空就用**该 provider 的默认模型**，不回落
+    VISION_MODEL——否则指定了云端 provider，却会把读图那个本地模型名套上去。
     """
-    pid = (VISION_PROVIDER or "").lower()
+    eff_provider = provider if provider is not None else VISION_PROVIDER
+    pid = (eff_provider or "").lower()
     cfg = PROVIDERS.get(pid)
     if not cfg:
-        raise RuntimeError("识图 provider 未配置：%r" % VISION_PROVIDER)
+        raise RuntimeError("识图 provider 未配置：%r" % eff_provider)
 
-    model = VISION_MODEL or cfg["model"]
-    url = cfg["base_url"].rstrip("/") + "/chat/completions"
-    payload = {
-        "model": model,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt or _PROMPT},
-                {"type": "image_url", "image_url": {"url": data_url}},
-            ],
-        }],
-    }
-    headers = {
-        "Authorization": "Bearer " + cfg["api_key"],
-        "Content-Type": "application/json",
-    }
+    if provider is None:
+        model = VISION_MODEL or cfg["model"]
+    else:
+        model = model or cfg["model"]
 
     # 识图是**隐形调用**（每张图都要跑一次，请求数远多于对话轮数），但它自己
     # 发 HTTP、不经过 app/llm.py，所以从前完全不产生 `[llm]` 行——排查「哪家
@@ -344,6 +344,34 @@ def describe(data_url, timeout=None, prompt=None):
     log.info("[llm] %s / %s vision", pid, model)
 
     started = time.monotonic()
+    if pid == "ollama":
+        data = _post_ollama(cfg, model, data_url, prompt or _PROMPT, timeout, started)
+        _record_usage_ollama(data, pid, model)
+        try:
+            text = (data["message"]["content"] or "").strip()
+        except Exception as exc:
+            raise RuntimeError("识图响应无法解析（耗时 %.1fs）：%s"
+                               % (time.monotonic() - started, exc))
+    else:
+        data = _post_openai(cfg, model, data_url, prompt or _PROMPT, timeout, started)
+        _record_usage_openai(data, pid, model)
+        try:
+            text = (data["choices"][0]["message"]["content"] or "").strip()
+        except Exception as exc:
+            raise RuntimeError("识图响应无法解析（耗时 %.1fs）：%s"
+                               % (time.monotonic() - started, exc))
+
+    # 完成日志：从前只有开始那一条，一次识图卡住时日志上只剩个孤零零的起点，
+    # 分不清是「卡在识图」还是「卡在后面的对话」（2026-09-29 排查就吃了这个亏：
+    # 群聊那轮 298 秒，日志里只有一条 16:49:02 的识图起点，之后全静音）。
+    # 故意不带 `[llm]` 前缀——那个前缀的语义是「一行 = 一次模型调用」，
+    # 补一行完成日志不该让它变成两行。
+    log.info("识图完成 %.1fs（%d 字）", time.monotonic() - started, len(text))
+    return text
+
+
+def _post(url, payload, headers, timeout, started):
+    """发一次识图请求。超时用**整次请求的总闸门**（见 _deadline 的注释）。"""
     try:
         resp = _session.post(url, json=payload, headers=headers,
                              timeout=_deadline(timeout or VISION_TIMEOUT))
@@ -356,39 +384,82 @@ def describe(data_url, timeout=None, prompt=None):
                            % (resp.status_code, resp.text[:200]))
 
     try:
-        data = resp.json()
+        return resp.json()
     except Exception as exc:
         raise RuntimeError("识图响应无法解析：%s" % exc)
 
-    # 识图是隐形调用，token 账不进主轮的 [cache] 统计——在这里单独归账，
-    # 挂「vision」类别（跟 LLM 后台对账时，账就齐了）。
+
+def _post_openai(cfg, model, data_url, prompt, timeout, started):
+    """OpenAI 兼容的 /chat/completions（火山 / deepseek / mimo / scnet 都走这条）。"""
+    url = cfg["base_url"].rstrip("/") + "/chat/completions"
+    payload = {
+        "model": model,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ],
+        }],
+    }
+    headers = {
+        "Authorization": "Bearer " + cfg["api_key"],
+        "Content-Type": "application/json",
+    }
+    return _post(url, payload, headers, timeout, started)
+
+
+def _post_ollama(cfg, model, data_url, prompt, timeout, started):
+    """本地 ollama 走**原生 /api/chat**，不走它的 OpenAI 兼容端点。
+
+    两个原因，都不是风格问题：
+    1. 兼容端点不接受 `options`，没法指定 `num_gpu` —— 而我们要的正是
+       「跑内存、别占显存」（2026-10-03 用户要求，显存留给 ComfyUI 生图）；
+    2. 兼容端点在 /v1 下面，而 `OLLAMA_BASE_URL` 是给 /api/chat 用的裸地址
+       （`http://127.0.0.1:11434`），直接拼 /chat/completions 实测 404。
+
+    另外 `images` 要**纯 base64**，不能带 `data:image/jpeg;base64,` 前缀。
+    """
+    b64 = data_url.split(",", 1)[1] if data_url.startswith("data:") else data_url
+    url = cfg["base_url"].rstrip("/") + "/api/chat"
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt, "images": [b64]}],
+        "stream": False,
+        "keep_alive": OLLAMA_VISION_KEEP_ALIVE,
+        "options": {"num_gpu": OLLAMA_VISION_NUM_GPU},
+    }
+    return _post(url, payload, None, timeout, started)
+
+
+def _record_usage(hit, miss, output, pid, model):
+    """识图是隐形调用，token 账不进主轮的 [cache] 统计——在这里单独归账，
+    挂「vision」类别（跟 LLM 后台对账时，账就齐了）。"""
+    if (hit or 0) + (miss or 0) <= 0:
+        return
     try:
         from app import usage as usage_stats
-        u = data.get("usage") or {}
-        hit = u.get("prompt_cache_hit_tokens")
-        miss = u.get("prompt_cache_miss_tokens")
-        if hit is None:
-            details = u.get("prompt_tokens_details") or {}
-            hit = details.get("cached_tokens", 0)
-            miss = (u.get("prompt_tokens") or 0) - (hit or 0)
-        if (hit or 0) + (miss or 0) > 0:
-            with usage_stats.scope("vision"):
-                usage_stats.record(hit or 0, miss or 0,
-                                   output=int(u.get("completion_tokens") or 0),
-                                   provider=pid, model=model)
+        with usage_stats.scope("vision"):
+            usage_stats.record(hit or 0, miss or 0, output=output,
+                               provider=pid, model=model)
     except Exception:
         pass
 
-    try:
-        text = (data["choices"][0]["message"]["content"] or "").strip()
-    except Exception as exc:
-        raise RuntimeError("识图响应无法解析（耗时 %.1fs）：%s"
-                           % (time.monotonic() - started, exc))
 
-    # 完成日志：从前只有开始那一条，一次识图卡住时日志上只剩个孤零零的起点，
-    # 分不清是「卡在识图」还是「卡在后面的对话」（2026-09-29 排查就吃了这个亏：
-    # 群聊那轮 298 秒，日志里只有一条 16:49:02 的识图起点，之后全静音）。
-    # 故意不带 `[llm]` 前缀——那个前缀的语义是「一行 = 一次模型调用」，
-    # 补一行完成日志不该让它变成两行。
-    log.info("识图完成 %.1fs（%d 字）", time.monotonic() - started, len(text))
-    return text
+def _record_usage_openai(data, pid, model):
+    u = data.get("usage") or {}
+    hit = u.get("prompt_cache_hit_tokens")
+    miss = u.get("prompt_cache_miss_tokens")
+    if hit is None:
+        details = u.get("prompt_tokens_details") or {}
+        hit = details.get("cached_tokens", 0)
+        miss = (u.get("prompt_tokens") or 0) - (hit or 0)
+    _record_usage(hit or 0, miss or 0, int(u.get("completion_tokens") or 0),
+                  pid, model)
+
+
+def _record_usage_ollama(data, pid, model):
+    """ollama 原生口径：prompt_eval_count / eval_count。本地没有缓存计费，
+    hit 恒为 0（记账只为了在用量表里看得见「本地跑了多少」）。"""
+    _record_usage(0, int(data.get("prompt_eval_count") or 0),
+                  int(data.get("eval_count") or 0), pid, model)
