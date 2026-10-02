@@ -206,7 +206,7 @@ def image_quota_allowed(agent_id, target, target_id):
 
 
 def image_quota_line(agent_id, target, target_id):
-    """给模型看的一行「这个私聊会话现在的生图额度状态」；没什么可说时返回空串。
+    """给模型看的一行「这个私聊会话现在的生图额度状态」；非私聊返回空串。
 
     **为什么需要它**（2026-10-01 用户报「加了白名单，AI 还说我限额了」）：
     额度拒一次之后，那句「今天私聊生图的额度用完了」会作为 tool_result 永久
@@ -219,33 +219,46 @@ def image_quota_line(agent_id, target, target_id):
     没有**当下**的事实。这行跟着 extra_context 每轮现取现用、出流即弃
     （与 `[最近生图]` 同一通道），给它一个当前锚点。
 
-    **只在额度开着时输出**：限流关掉（上限 0）就没什么可说的，别白占尾巴。
-    不省「还没用满」这一种——正是这种「历史说满了、其实没满」的错位要治，
-    只挑几种状态输出等于把同一类 bug 又留一半。
+    **只在私聊输出**：群聊、网页端一律不限流，不该多出这一行白占尾巴
+    （用户 2026-10-01 明确「群聊其实没有生图限制，不用管」）。
+
+    三种状态**都要说话**，包括限流被关掉的那种。早先 `limit <= 0` 直接返回
+    空串，理由是「没什么可说就别占尾巴」——那正好把上面这个 bug 又开了一个
+    口子：管理员为了救人临时把限流关掉，历史里那句「额度用完」就成了**唯一**
+    还有得看的信号，模型继续说限额。空串在这里不是「省字」，是「沉默」，而
+    沉默对模型来说等于没有反驳证据。
 
     结尾那句「以本行为准」不是客套：模型手里同时有这行（每轮新）和历史里的
     旧拒绝（永不消失），得明确告诉它该信哪个，否则它常常挑旧的说。
     """
     if target != "private":
         return ""
+    tail = ("（这行是当前状态、每轮都重新算，**以它为准**；"
+            "历史里那句「额度用完」若与它冲突，已经不作数了。）")
     limit = private_image_daily_limit(agent_id)
     if limit <= 0:
-        return ""
+        return ("[私聊生图额度] 管理员**已经把限流关掉**（或还没设上限），"
+                "这个人不限张数，直接画。" + tail)
     if str(target_id) in private_image_quota_whitelist(agent_id):
         state = "这个人在免额名单里，**不限量**，可以直接画。"
     else:
         from app import image_quota
         used = image_quota.used(target_id)
         if used >= limit:
-            state = ("今天已用 %d/%d 张，**已经用满**，要等明天才恢复；"
-                     "别再调 generate_image，直接告诉对方明天再来。"
-                     % (used, limit))
+            state = ("今天已用 %d/%d 张，**已经用满**，要等**明天 00:00**（本地"
+                     "日期一翻篇）才恢复；别再调 generate_image，"
+                     "直接告诉对方明天再来。" % (used, limit))
         else:
-            state = ("今天已用 %d/%d 张，**还能画 %d 张**，现在可以接单。"
+            state = ("今天已用 %d/%d 张，**还能画 %d 张**，现在可以接单"
+                     "（额度**接单就扣**，不是出图才扣）。"
                      % (used, limit, limit - used))
-    return ("[私聊生图额度] " + state
-            + "（这行是当前状态、每轮都重新算，**以它为准**；"
-              "历史里那句「额度用完」若与它冲突，已经不作数了。）")
+            from app import image_jobs
+            inflight = image_jobs.inflight_count(target, target_id)
+            if inflight:
+                state += ("其中 %d 张还在排队/生成中，**图还没发出去**——"
+                          "对方说「没收到图」时先想这几张，别当没画过。"
+                          % inflight)
+    return "[私聊生图额度] " + state + tail
 
 
 def private_image_quota_info(agent_id, target_id):

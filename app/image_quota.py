@@ -52,7 +52,10 @@ _lock = threading.Lock()
 def _today():
     """本地日期（Asia/Shanghai，跟机器人日志同一个时区）。
 
-    刻意不用 UTC：额度是给「用户感觉的一天」用的，晚上 8 点重置才是对的。
+    刻意不用 UTC：额度是给「用户感觉的一天」用的。
+    账本因此**在本地 00:00 翻页归零**——不是「20:00 重置」那种更讲究的排法
+    （那样得另存时刻，这里没做）。给模型的那句话照这个事实写
+    （见 agents.image_quota_line 的「明天 00:00」），别改口。
     """
     return time.strftime("%Y-%m-%d", time.localtime())
 

@@ -236,9 +236,24 @@ class QuotaLineTest(_TempQuota):
         self.assertEqual(self.line("group", "42"), "")
         self.assertEqual(self.line(None, "42"), "")
 
-    def test_quota_off_gets_nothing(self):
+    def test_quota_off_still_speaks(self):
+        """限流关掉**不能**返回空串（2026-10-01 二次修）。
+
+        原版这里断言 `== ""`，理由是「没什么可说就别占尾巴」。但空串对模型
+        来说不是「省字」而是「沉默」：管理员临时关掉限流救人时，历史里那句
+        「额度用完」成了唯一还看得见的信号，于是又犯「加了白名单还说我限额」
+        那个 bug——同一类，只是这次是关开关触发的。
+        """
         self.settings = {"private_image_daily_limit": 0}
-        self.assertEqual(self.line(), "")
+        s = self.line()
+        self.assertIn("限流关掉", s)
+        self.assertIn("以它为准", s)
+
+    def test_switch_off_gets_the_same_line(self):
+        """`private_image_quota_on: False` 和「上限 0」是同一件事，都要说话。"""
+        self.settings = {"private_image_daily_limit": 5,
+                         "private_image_quota_on": False}
+        self.assertIn("限流关掉", self.line())
 
     def test_under_limit_says_how_many_left(self):
         self.settings = {"private_image_daily_limit": 3}
@@ -247,11 +262,41 @@ class QuotaLineTest(_TempQuota):
         self.assertIn("1/3", s)
         self.assertIn("还能画 2 张", s)
 
+    def test_under_limit_says_the_charge_is_at_submit_time(self):
+        """「已用 2/3」里有扣了但图还没回来的。不点明，对方一说「没收到图」
+        模型就以为账错了，跟着重画。"""
+        self.settings = {"private_image_daily_limit": 3}
+        self.assertIn("接单就扣", self.line())
+
+    def test_inflight_jobs_are_broken_out(self):
+        """在途几张要单列——它是「已用」和「已收到」之间那段差额的唯一出处。"""
+        self.settings = {"private_image_daily_limit": 5}
+        image_quota.charge("42")
+        image_quota.charge("42")
+        with mock.patch.object(image_jobs, "inflight_count",
+                               return_value=2):
+            s = self.line()
+        self.assertIn("其中 2 张还在排队", s)
+        self.assertIn("没收到图", s)
+
+    def test_no_inflight_line_when_nothing_is_running(self):
+        """没有在途就别硬加一句「其中 0 张」——那是噪声。"""
+        self.settings = {"private_image_daily_limit": 5}
+        image_quota.charge("42")
+        self.assertNotIn("还在排队", self.line())
+
     def test_at_limit_says_exhausted(self):
         self.settings = {"private_image_daily_limit": 3}
         for _ in range(3):
             image_quota.charge("42")
         self.assertIn("已经用满", self.line())
+
+    def test_exhausted_names_the_reset_moment(self):
+        """「明天恢复」要说清是**几点**。账本按本地日期翻页归零（00:00），
+        不说模型就会许「两小时后再来」这种做不到的承诺。"""
+        self.settings = {"private_image_daily_limit": 1}
+        image_quota.charge("42")
+        self.assertIn("00:00", self.line())
 
     def test_every_line_says_it_outranks_history(self):
         """每种状态都得带上「以它为准」——模型手里同时有这行（每轮新）和
@@ -301,6 +346,93 @@ class ChargeWiringTest(_TempQuota):
         job = image_jobs.Job(None, None, {}, skill="anima_clear")
         generate_image._charge_quota(job, None, None)
         self.assertFalse(job.quota_charged)
+
+
+class QuotaReceiptTailTest(_TempQuota):
+    """提交回执末尾那句实时余额。
+
+    额度行（`agents.image_quota_line`）一轮只算一次、算的是开跑**之前**的数，
+    而额度闸每次调工具都现读账本。同一轮连画两张时两者就会打架（行说「还能画
+    3 张」、工具拒了）。把刚扣完的数拼进回执，模型手里就有跟闸同源的最新值。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.settings = {"private_image_daily_limit": 3}
+        p = mock.patch.object(agents, "load_settings",
+                              side_effect=lambda aid: dict(self.settings))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_charge_returns_the_fresh_balance(self):
+        job = image_jobs.Job("private", "42", {}, skill="anima_clear")
+        tail = generate_image._charge_quota(job, "private", "42")
+        self.assertIn("1/3", tail)
+        self.assertIn("剩 2 张", tail)
+
+    def test_second_submit_in_the_same_turn_shows_the_new_number(self):
+        """这一条就是它存在的理由：同轮两张，回执里的数必须往前走。"""
+        for used, left in ((1, 2), (2, 1), (3, 0)):
+            job = image_jobs.Job("private", "42", {}, skill="anima_clear")
+            tail = generate_image._charge_quota(job, "private", "42")
+            with self.subTest(used=used):
+                self.assertIn("%d/3" % used, tail)
+                self.assertIn("剩 %d 张" % left, tail)
+
+    def test_group_and_web_get_an_empty_tail(self):
+        for target, tid in (("group", "9"), (None, None)):
+            job = image_jobs.Job(target, tid, {}, skill="anima_clear")
+            self.assertEqual(generate_image._charge_quota(job, target, tid), "")
+
+    def test_exempt_users_get_no_number(self):
+        """免额名单 / 限流关掉时别报「剩 999 张」，那种情况下没数可报。"""
+        for settings in ({"private_image_daily_limit": 3,
+                          "private_image_quota_whitelist": ["42"]},
+                         {"private_image_daily_limit": 0}):
+            self.settings = settings
+            image_quota.reset()
+            job = image_jobs.Job("private", "42", {}, skill="anima_clear")
+            self.assertEqual(generate_image._charge_quota(job, "private", "42"),
+                             "")
+
+    def test_nai_receipt_carries_the_balance(self):
+        """NAI 也拼（用户选的「一起算」）——它同样占私聊额度。"""
+        job = image_jobs.Job("private", "42", {}, skill="nai")
+        with mock.patch.object(image_jobs, "enqueue", return_value=(job, None)):
+            out = generate_image._enqueue_nai("a girl", "private", "42")
+        self.assertIn("已经在画了", out)
+        self.assertIn("剩 2 张", out)
+
+    def test_comfyui_receipt_carries_the_balance(self):
+        """本机渠道同上（`target is not None` 那条分支）。
+
+        mock 的套路照 `DisabledChannelTest`：探活 / worker / 发图全挡掉，
+        让 `enqueue` 真的把任务排进内存队列，这样回执走的是本机那条。
+        """
+        from app.tools.normal import generate_image as gi
+        for target, repl in (("comfy_alive", mock.Mock(return_value=True)),
+                             ("_ensure_worker", lambda: None),
+                             ("_send_image", mock.Mock()),
+                             ("_send_text", mock.Mock()),
+                             ("_free_vram_gb", lambda: None)):
+            p = mock.patch.object(image_jobs, target, repl)
+            p.start()
+            self.addCleanup(p.stop)
+        for target, repl in (("load_skill",
+                              mock.Mock(return_value={"workflow": {"1": {}}})),
+                             ("_qq_gate", mock.Mock(return_value=None)),
+                             ("is_cancelled", mock.Mock(return_value=False))):
+            p = mock.patch.object(gi, target, repl)
+            p.start()
+            self.addCleanup(p.stop)
+        image_jobs._reset()
+        self.addCleanup(image_jobs._reset)
+        with mock.patch.object(qq_api, "current_context",
+                               return_value=("private", "42")):
+            out = gi.tool["function"](prompt="a cat", skill="anima_clear")
+        self.assertIn("已经在画了", out)
+        self.assertIn("剩 2 张", out)
+        self.assertEqual(image_quota.used("42"), 1)
 
 
 class QqGateMessageTest(_TempQuota):

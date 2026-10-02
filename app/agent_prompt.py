@@ -175,7 +175,7 @@ def _build_skill_list(agent_id=None):
         if not kind:
             kind = "生图" if data.get("workflow") is not None else "写作"
         # 曾经这里还标 [带底模] / [无底模]。2026-09-30 角色底模机制随 SD 渠道
-        # 一起下线（全仓已无 character.txt），标签恒为「无底模」，纯噪声 → 去掉。
+        # 一起下线（代码不再读 character.txt），标签恒为「无底模」，纯噪声 → 去掉。
         descs.append("- **" + s + "**（" + kind + "）: " + first_line)
     return "\n".join(descs) if descs else "（暂无）"
 

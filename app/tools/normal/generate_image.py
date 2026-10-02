@@ -42,6 +42,10 @@ I2I_DENOISE = 0.6
 # 没点名 skill 时的文生图默认渠道。
 #
 # 2026-09-30 20:3x 起：**本机只剩 4 个动漫渠道，SD 渠道（image_gen_v1）已归档。**
+# （2026-10-01 用户又拍板把 SD 保留回来——`skills/image_gen_v1/` 留在原地、
+# `agents/draw/agent.json` 白名单里有它，所以它**又是可用渠道**了。
+# 同日补齐：工具描述里已经写上它（ Anima 家族 16 个 + qwen + image_gen_v1 + krea2 +
+# nai 共 19 个名字），QQ 白名单也放了它和 krea2——上面那条「已知的遗留不一致」结案。）
 # 四个都由用户当天的 ComfyUI 工作流直接转来，共用同一套两段采样骨架，
 # **差别在底模组合，表现为画风差异**——所以渠道名按**视觉特征**取，
 # 模型看到名字就能联想效果（用户要求「形象的命名，这样有辨识度」）：
@@ -124,7 +128,7 @@ def _qq_gate():
 
 
 def _charge_quota(job, target, target_id):
-    """接单成功 → 扣一个私聊额度名额，并在 job 上打标记。
+    """接单成功 → 扣一个私聊额度名额，并在 job 上打标记；返回一句实时余额。
 
     扣额放在「真正接单之后」（用户 2026-09-30 选的方案）：这样拒收（队列满、
     渠道停用、ComfyUI 没在线）一张都不扣，而**连点刷队列**又拦得住——额度在
@@ -132,13 +136,37 @@ def _charge_quota(job, target, target_id):
 
     `job.quota_charged` 是「这张到底扣没扣」的唯一凭据：worker 的 `_finish`
     只认它，不靠自己重新推断（推不出来——它看不见这次是私聊还是群聊之外的信息）。
+
+    返回值是给提交回执拼尾巴用的（见 `_quota_balance`），不该说话时为空串。
+    调用方都把它接上；单元测试直接调这个函数、忽略返回值也没问题。
     """
     if target != "private":
-        return
+        return ""
     from app import image_quota
     n = image_quota.charge(target_id)
     job.quota_charged = True
     log.info("私聊生图额度：%s 今日已用 %d 张", target_id, n)
+    return _quota_balance(target_id, n)
+
+
+def _quota_balance(target_id, used):
+    """刚扣完额度后那句「现在还剩几张」，拼进提交回执。
+
+    为什么额度行（`agents.image_quota_line`）还不够：它一轮**只算一次**，算的
+    是本轮开跑之前的数。同一轮里连画两张时模型看到的还是那个旧数，而额度闸
+    每次调工具都现读账本——「行说还能画 3 张、工具却拒了」就是这么来的。扣完
+    当下把数写进回执，模型手里就有了和闸同源的最新值。
+
+    限流关掉 / 免额名单里时不返回：那种情况下没数可报，硬加一句「不限量」
+    只会挤掉真正要说的那句「画好会自动发」。
+    """
+    from app.agents import (private_image_daily_limit,
+                            private_image_quota_whitelist)
+    limit = private_image_daily_limit(QQ_AGENT_ID)
+    if limit <= 0 or str(target_id) in private_image_quota_whitelist(QQ_AGENT_ID):
+        return ""
+    return ("（今天私聊额度 %d/%d，**剩 %d 张**，这是刚扣完的实时数，"
+            "别照本轮开头那行额度说。）" % (used, limit, max(0, limit - used)))
 
 
 # ─── 工具函数 ────────────────────────────────────────
@@ -472,7 +500,7 @@ def _generate_image(prompt, skill=None, lora=None,
         # 却没人发」的孤儿图。
         return reason
     # 接单成功才扣私聊额度（拒收一张不扣）。失败由 worker 的 _finish 退回来。
-    _charge_quota(job, target, target_id)
+    quota_tail = _charge_quota(job, target, target_id)
 
     if target is not None:
         # 提交完立刻返回，图由 worker 画好后自己发回原群。留在这儿同步等会把
@@ -483,11 +511,11 @@ def _generate_image(prompt, skill=None, lora=None,
             return ("已经排上队了（前面还有 %d 张），排到就画，"
                     "画好会自动发到群里。"
                     "不要输出图片地址，也不要说「图在下面 / 稍等」，"
-                    "直接把想说的话说完就行。" % ahead)
+                    "直接把想说的话说完就行。" % ahead + quota_tail)
         return ("已经在画了，画好会自动发到群里。"
                 + ("垫的是%s。" % source_note if source_note else "")
                 + "不要输出图片地址，也不要说「图在下面 / 稍等」，"
-                "直接把想说的话说完就行。")
+                "直接把想说的话说完就行。" + quota_tail)
 
     try:
         # 网页端：等到「排队 + 出图」全程。任务被超时中断时 image_jobs 会把
@@ -543,20 +571,20 @@ def _enqueue_nai(prompt, target, target_id, nai_i2i=None, intent=None):
         return reason
     # NAI 也占私聊额度（用户 2026-09-30 选的「一起算」）：额度是「私聊每天
     # 最多几张图」这个承诺，跟图是从本机还是云端出来的无关。
-    _charge_quota(job, target, target_id)
+    quota_tail = _charge_quota(job, target, target_id)
     ahead = image_jobs.ahead_of(job)
     if ahead > 0:
         return ("已经排上队了（前面还有 %d 张），排到就画，"
                 "画好会自动发到群里。"
                 "不要输出图片地址，也不要说「图在下面 / 稍等」，"
-                "直接把想说的话说完就行。" % ahead)
+                "直接把想说的话说完就行。" % ahead + quota_tail)
     if nai_i2i:
         return ("已经在画了（垫的是%s），画好会自动发到群里。"
                 "不要输出图片地址，也不要说「图在下面 / 稍等」，"
-                "直接把想说的话说完就行。" % nai_i2i["note"])
+                "直接把想说的话说完就行。" % nai_i2i["note"] + quota_tail)
     return ("已经在画了，画好会自动发到群里。"
             "不要输出图片地址，也不要说「图在下面 / 稍等」，"
-            "直接把想说的话说完就行。")
+            "直接把想说的话说完就行。" + quota_tail)
 
 
 tool = {
@@ -564,7 +592,7 @@ tool = {
     "description": "调用 ComfyUI 生成图片。"
                   "【默认 Skill】文生图默认 anima_clear（Anima 2B 动漫模型，一次一张，"
                   "两段采样，实际出图 728×1024），不传 skill 就是它—— prompt 只写一段画面描述，**不要用 --- 分隔**。"
-                  "【16 个渠道 = 4 画风 × 4 档尺寸】**本机只有这 16 个生图渠道，别去编别的 skill 名出来**。"
+                  "【16 个动漫渠道 = 4 画风 × 4 档尺寸】**本机的动漫渠道只有这 16 个，别去编别的 skill 名出来**。"
                   "第一类是**画风**渠道（4 个，按**想要什么画风**挑，不是按模型挑），渠道名就是画风："
                   "anima_clear（默认）= 光最平最均匀、最素净（用户会说「清透 / 素净 / 自然 / 光别那么硬」）；"
                   "anima_soft = 柔光哑光、皮肤素净、对比低、层次稍多（「柔一点 / 干净 / 温柔」）；"
@@ -584,13 +612,21 @@ tool = {
                   "平时一律不传 skill。anima_clear 和 anima_soft 很像，分不清时也走默认。"
                   "**用户只说「高清」但没提要更大 → 还是走默认的 anima_clear**，"
                   "别自作主张去用 hd_*（那三个又慢又占显存）。"
-                  "【qwen_image_v1 / krea2 都已停用】**不要传 skill=qwen_image_v1 或 skill=krea2**"
-                  "——这台机器带不动它们，传了工具会直接拒。"
-                  "用户点名 qwen / 通义 / krea2、要**画面里写出文字（尤其中文）**、或要**写实照片感**时："
-                  "照常用默认的 anima_clear 画（想要皮肤更写实可用 anima_curvy），"
-                  "**照实说那个渠道现在用不了**，别硬试、别拿别的渠道冒充、"
-                  "也别把渠道名当技术名词甩给用户。"
-                  "【角色】16 个渠道**都没有固定角色底模**，你在 prompt 中必须自己写出完整角色提示词"
+                  "【qwen_image_v1（通义）】**要画面里写出文字（尤其中文）**、要"
+                  "**写实照片感（真人摄影 / 商品图 / 场景照）**、或提示词是**一长段自然语言描述**时，"
+                  "传 skill=qwen_image_v1（**832×1216 竖版**）。它的 prompt 要写**自然语言句子**"
+                  "（完整主谓宾、像在跟人描述画面），**不要写标签堆、也不要写负面提示词**，"
+                  "不传 lora；只出单张，要多个变体就分多次调用。"
+                  "【krea2】只在**用户明确点名 krea2**（或说「米山舞 / retroanime 那个工作流」）"
+                  "时才传 skill=krea2；它是**备选，别主动推荐、别拿它当默认**。画风是 Yoneyama Mai"
+                  "（米山舞），832×1216 单段直出（已去掉 2x 超分，不再出超大图）；"
+                  "提示词按**标签式英文**写，风格前缀工作流会自动拼上、**不要自己再写一遍**。"
+                  "【image_gen_v1（SD / SDXL）】只在**用户点名「用 sd / sd 模型」**，"
+                  "或**要一次出多张变体**时传 skill=image_gen_v1（832×1216，SDXL 底模）。"
+                  "它是**唯一支持一次出多张**的渠道：prompt 里用 ` --- ` 分隔几段就出几张"
+                  "（其它渠道会把 --- 当成普通文字，只有它认）。"
+                  "它**不支持垫图 / 改图**，对方要改图就换常规档。"
+                  "【角色】所有本机渠道**都没有固定角色底模**，你在 prompt 中必须自己写出完整角色提示词"
                   "(发型/发色/瞳色/体型/服装/年龄等)，不要指望任何渠道自带角色。"
                   "【lora】用户点名要换 lora 时才传 lora 参数，平时不要传。格式「文件名:强度」，"
                   "多个逗号分隔（如 \"x.safetensors:0.8,y.safetensors:0.5\"）；文件名要完整"
@@ -627,8 +663,8 @@ tool = {
     "parameters": {
         "type": "object",
         "properties": {
-            "prompt": {"type": "string", "description": "提示词。写逗号分隔的标签式英文短句，**只写一段、不要用 --- 分隔**（本机工作流不会拆 ---，要出多张就分多次调用、每次一个变体）。**必须包含完整角色描述**（发型/发色/瞳色/体型/服装/年龄等）——没有任何渠道自带角色"},
-            "skill": {"type": "string", "description": "Skill名称。**不传就是默认 anima_clear**。可选值共 16 个（= 4 画风 × 4 档尺寸，见 Available Skills 的生图类）——4 个**画风**渠道（普通档 anima_<画风>，728~768×1024）：anima_clear（默认，清透最平光）/ anima_soft（柔光素肌，层次稍多）/ anima_gloss（冷调油光，用户也叫它 anime2）/ anima_curvy（丰腴强光影）；再叠 3 档**大图**（画风当后缀）：hd_fast_<画风>（1024×1536，不放大最快）/ hd_2_<画风>（1328×2000，1.3× 放大，中间档）/ hd_3_<画风>（1536×2304，1.5× 放大，最大最慢，最吃显存）。**只在用户点名画风 / 尺寸时才传**，平时不传。**qwen_image_v1 / krea2 已停用，不要传**；nai（NovelAI 云端）仅限已开通的群，文生图 / 图生图都走它"},
+            "prompt": {"type": "string", "description": "提示词。写逗号分隔的标签式英文短句，**默认只写一段、不要用 --- 分隔**（只有 skill=image_gen_v1 认 ` --- ` 分隔、一次出多张；其它渠道会把 --- 当普通文字，要出多张就分多次调用、每次一个变体）。**必须包含完整角色描述**（发型/发色/瞳色/体型/服装/年龄等）——没有任何渠道自带角色"},
+            "skill": {"type": "string", "description": "Skill名称。**不传就是默认 anima_clear**。可选值共 16 个（= 4 画风 × 4 档尺寸，见 Available Skills 的生图类）——4 个**画风**渠道（普通档 anima_<画风>，728~768×1024）：anima_clear（默认，清透最平光）/ anima_soft（柔光素肌，层次稍多）/ anima_gloss（冷调油光，用户也叫它 anime2）/ anima_curvy（丰腴强光影）；再叠 3 档**大图**（画风当后缀）：hd_fast_<画风>（1024×1536，不放大最快）/ hd_2_<画风>（1328×2000，1.3× 放大，中间档）/ hd_3_<画风>（1536×2304，1.5× 放大，最大最慢，最吃显存）。**只在用户点名画风 / 尺寸时才传**，平时不传。另有 qwen_image_v1（通义，**832×1216 竖版**，要**画面写中文文字 / 写实照片感 / 长自然语言提示词**时走它）；image_gen_v1（**SD / SDXL**，832×1216，**唯一能一次出多张**的渠道：prompt 用 ` --- ` 分隔；不支持垫图。用户点名「用 sd」或要一次出多个变体才用它）；krea2（Krea2 Turbo + 米山舞画风，832×1216 直出，**只在用户点名时用**，别主动推荐）；nai（NovelAI 云端）仅限已开通的群，文生图 / 图生图都走它"},
             "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传，每个渠道 2 个槽"},
             "source_image": {"type": "string", "description": "垫图 / 图生图：填 1 = 垫对方本轮**引用**的那张图（对方没引用会报错）。**只在对方明确要改图 / 垫图时才传**；光是引用了图、或者只是看图 / 点评，任何渠道都不要传这个参数。本机 12 个渠道支持（anima_* / hd_fast_* / hd_2_*；hd_3_* 不支持），skill=nai 也支持。本机渠道的重绘强度是定死的，传 denoise 也没用"}
         },

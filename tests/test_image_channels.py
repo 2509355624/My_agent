@@ -3,6 +3,8 @@
 ## 这套用例锁的是什么
 
 2026-09-30 20:xx 用户拍板：**去掉 SD 渠道（`image_gen_v1`），全套切动漫**。
+（2026-10-01 用户又拍板把 SD 保留回来——所以它现在**是可用渠道**、不在 `RETIRED`
+里；见下面 `RETIRED` 上方的说明。本文件锁的仍是那 4 个动漫常规渠道。）
 四个渠道全部取自用户在 ComfyUI 里调好的双采样工作流：
 
 | 渠道 | 来源 UI 文件 | 一段底模 | 二段底模 | 画布 → 输出 |
@@ -84,8 +86,15 @@ CHANNELS = {
 # **换它要连累一批地方**，见 DefaultChannelTest 的说明。
 DEFAULT_CHANNEL = "anima_clear"
 
-# 2026-09-30 归档到 skills/_archive_20260930/ 的老渠道——一个都不许再冒出来。
-RETIRED = ("anima", "anima_realskin", "anima_2", "image_gen_v1")
+# 归档到 skills/_archive_20260930/ 的老渠道——一个都不许再冒出来。
+#
+# ⚠️ `image_gen_v1` **不在这个名单里**：2026-10-01 用户拍板「qwen 解封、image_gen_v1
+# 保留」，SD 渠道重新算**可用渠道**（`agents/draw/agent.json` 白名单里有它），
+# 所以它的目录留在 `skills/` 下、`list_skills()` 照常吐出它。
+# 同日结案：它的名字已经**写进工具描述**（16 动漫 + qwen + image_gen_v1 + krea2 +
+# nai），QQ 白名单也放了它和 `krea2`。以前那条「已知遗留不一致 —— 模型看得见却
+# 不知道什么时候该用」不成立了；`QqWhitelistTest`（test_image_jobs）钉的是新契约。
+RETIRED = ("anima", "anima_realskin", "anima_2")
 
 # ─── 2026-10-01 新增的 12 个高清渠道（3 档 × 4 画风）─────────────────
 #
@@ -218,10 +227,14 @@ class ChannelSetTest(unittest.TestCase):
             self.assertEqual(skill_priority(name), 1, name)
 
     def test_retired_channels_stay_archived(self):
-        """`anima` / `anima_realskin` / `anima_2` / `image_gen_v1` 已归档。
+        """`anima` / `anima_realskin` / `anima_2` 已归档。
 
         它们在 `skills/_archive_20260930/` 下，`list_skills()` 跳过 `_` 开头的
         目录——**这条锁住那个 skip**（曾经它漏进去过，会让管理页多出死渠道）。
+
+        ⚠️ 这条 2026-10-01 真的红过一次：注释里写了好几天「已归档」，但归档目录
+        根本没建、`skills/anima` 一直在原地——所以「归档」必须**物理上挪走**才算数，
+        光改注释和名单没用。`image_gen_v1` 那天被用户拍板保留，已移出名单。
         """
         skills = list_skills()
         for name in RETIRED:
@@ -570,8 +583,10 @@ class VisibilityTest(unittest.TestCase):
             self.assertIn(name, desc, "描述里缺了渠道 %s" % name)
         self.assertIsNone(re.search(r"\banima\b", desc),
                           "描述里还留着裸的旧渠道名 anima")
-        for name in ("anima_realskin", "anima_2", "image_gen_v1"):
+        for name in ("anima_realskin", "anima_2"):
             self.assertNotIn(name, desc, "描述里还留着老渠道 %s" % name)
+        # `image_gen_v1` 2026-10-01 起是**保留渠道**，所以不再按「老渠道」排除；
+        # 但它也确实没被写进描述（见 RETIRED 上面的说明）——这里不断言它的出现与否。
         # 参数说明里的可选值也要对得上
         self.assertIn(DEFAULT_CHANNEL, tool["parameters"]["properties"]["skill"]["description"])
 
@@ -640,18 +655,21 @@ class DefaultChannelTest(unittest.TestCase):
            「去掉 source_image 按文生图重来」，或换一个支持垫图的档。
            —— 这里**不要求**它指到默认渠道：用户点名 hd_3 时把他往 anima_clear
            引是降级，正确出路是「同一个渠道别垫图」或「换到 hd_2 / hd_fast」。
-        ② 停用渠道那句（点了 qwen / krea2 时回给它的）：必须指到**当前**默认渠道。
+        ② 停用渠道那句：必须指到**当前**默认渠道。
+           2026-10-01 起真配置里**已经没有停用渠道**（全部解封），所以这里
+           **显式 patch** 一份停用名单来验机制，不再依赖真配置。
 
         两句都拦在**任何网络调用之前**（垫图那句只读一次本地 skill 文件），
         所以这里能直接调，不需要 mock ComfyUI。
         """
         from app.tools.normal import generate_image as gi
 
-        with mock.patch.object(gi, "is_cancelled", lambda: False), \
+        with mock.patch.object(gi, "DISABLED_IMAGE_SKILLS", ["krea2"]), \
+                mock.patch.object(gi, "is_cancelled", lambda: False), \
                 mock.patch.object(gi, "_qq_gate", lambda: None):
             i2i = gi._generate_image(prompt="x", skill="hd_3_clear",
                                      source_image="1")
-            off = gi._generate_image(prompt="x", skill="qwen_image_v1")
+            off = gi._generate_image(prompt="x", skill="krea2")
 
         self.assertIn("不支持图生图", i2i)            # 确实是那句拒收
         self.assertIn("source_image", i2i)          # 且给出了路：去掉它
@@ -896,7 +914,10 @@ class HdChannelTest(unittest.TestCase):
         """工具描述要写全 16 个渠道（4 画风 + 12 高清），且数对齐。"""
         from app.tools.normal.generate_image import tool
         desc = tool["description"]
-        self.assertIn("16 个渠道", desc)
+        # 「16 个」现在指的是**动漫渠道**那一族（本机另有 qwen_image_v1、
+        # image_gen_v1、krea2 三个非动漫渠道，加上云端的 nai 共 20 个可传名字），
+        # 所以字面量带着「动漫」两个字。
+        self.assertIn("16 个动漫渠道", desc)
         for prefix in ("hd_fast_", "hd_2_", "hd_3_"):
             self.assertIn(prefix, desc, "描述里没提到档位 %s" % prefix)
         self.assertIn(DEFAULT_CHANNEL, desc)

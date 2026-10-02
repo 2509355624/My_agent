@@ -1626,10 +1626,15 @@ class ReleaseOnLowVramTest(unittest.TestCase):
 class DisabledChannelTest(unittest.TestCase):
     """停用渠道的硬闸：模型点名也没用，而且一步都不该碰 ComfyUI。
 
-    qwen_image_v1 在这台机器上是「单张就能把整机拖崩」——2026-09-27 实测五次、
-    三次整机重启，最后一次队列里**只排了它一张**（`ahead_of=0`）。所以它必须有
-    一道**代码级**的闸：光靠「不进 skills 白名单」挡不住，白名单只管提示词里列
-    不列，模型记得这个名字照样能把 skill 传进来。
+    这是**机制**用例：每个都显式把某个渠道塞进 `DISABLED_IMAGE_SKILLS` 再验，
+    所以跟「现在有没有渠道真被停用」无关。
+
+    为什么需要这道闸：光靠「不进 skills 白名单」挡不住——白名单只管提示词里
+    列不列，模型记得这个名字照样能把 skill 传进来。停用必须落在代码里。
+
+    ⚠️ 2026-10-01 用户拍板**全部解封**，`DISABLED_IMAGE_SKILLS` 已清空
+    （qwen_image_v1 与 krea2 都放开）。所以本类里的 krea2 只是**举例用的名字**，
+    不代表它真的停用——真配置的状态由 `test_real_config_disables_nothing` 钉。
     """
 
     def setUp(self):
@@ -1662,9 +1667,9 @@ class DisabledChannelTest(unittest.TestCase):
                                return_value=("group", "9")):
             return generate_image.tool["function"](**kw)
 
-    def test_named_qwen_is_refused(self):
-        self._disabled(["qwen_image_v1"])
-        out = self._call(prompt="a cat", skill="qwen_image_v1")
+    def test_named_krea2_is_refused(self):
+        self._disabled(["krea2"])
+        out = self._call(prompt="a cat", skill="krea2")
         self.assertIn("停用", out)
         self.assertFalse(self.comfy.called)     # 一步都没碰 ComfyUI
         self.assertFalse(self.load.called)      # 连 skill 都没去读
@@ -1715,8 +1720,8 @@ class DisabledChannelTest(unittest.TestCase):
 
     def test_refusal_tells_the_model_what_to_do(self):
         """拒收不能只说「不行」——模型得知道下一步该干嘛，否则它会开始编。"""
-        self._disabled(["qwen_image_v1"])
-        out = self._call(prompt="a cat", skill="qwen_image_v1")
+        self._disabled(["krea2"])
+        out = self._call(prompt="a cat", skill="krea2")
         # 给出可用的替代——用常量而不是字面量，免得换默认渠道时又漏一条
         from app.tools.normal.generate_image import T2I_DEFAULT_SKILL
         self.assertIn(T2I_DEFAULT_SKILL, out)
@@ -1724,7 +1729,7 @@ class DisabledChannelTest(unittest.TestCase):
 
     def test_other_channels_are_untouched(self):
         """闸只挡停用的那个，别的渠道照常走。"""
-        self._disabled(["qwen_image_v1"])
+        self._disabled(["krea2"])
         out = self._call(prompt="a cat", skill="anima_soft")
         self.assertNotIn("停用", out)
         self.assertTrue(self.comfy.called)      # 正常路径照旧会探活
@@ -1732,26 +1737,19 @@ class DisabledChannelTest(unittest.TestCase):
     def test_empty_list_re_enables_it(self):
         """开关清空就恢复——证明这是配置项，不是写死的判断。"""
         self._disabled([])
-        out = self._call(prompt="a cat", skill="qwen_image_v1")
+        out = self._call(prompt="a cat", skill="krea2")
         self.assertNotIn("停用", out)
         self.assertTrue(self.comfy.called)
 
-    def test_named_krea2_is_refused_too(self):
-        """krea2 和 qwen 一样是硬件跑不动，同一条闸管住。"""
-        self._disabled(["qwen_image_v1", "krea2"])
-        out = self._call(prompt="a cat", skill="krea2")
-        self.assertIn("停用", out)
-        self.assertFalse(self.comfy.called)
-        self.assertFalse(self.load.called)
+    def test_real_config_disables_nothing(self):
+        """真配置里**没有任何渠道被停用**——2026-10-01 用户拍板全部解封。
 
-    def test_real_config_disables_the_unrunnable_channels(self):
-        """真配置里 qwen + krea2 必须是停用的——这是用户机器的硬事实。
-
-        万一有人把 config 的默认值改回可用，这条会立刻响。
+        这条以前钉的是「qwen + krea2 必须停用」。用户解封后反过来钉：列表必须
+        是空的，免得哪天有人（或某个残留的 .env）又悄悄把渠道关掉、让用户点名的
+        渠道莫名其妙画不出来。
         """
         from app.config import DISABLED_IMAGE_SKILLS
-        self.assertIn("qwen_image_v1", DISABLED_IMAGE_SKILLS)
-        self.assertIn("krea2", DISABLED_IMAGE_SKILLS)
+        self.assertEqual(list(DISABLED_IMAGE_SKILLS), [])
 
     def test_real_config_keeps_the_runnable_channels(self):
         """四个动漫渠道是**能跑**的渠道，绝不能被误列进停用清单
@@ -1761,44 +1759,54 @@ class DisabledChannelTest(unittest.TestCase):
             self.assertNotIn(name, DISABLED_IMAGE_SKILLS, name)
 
 
-class QqInvisibleTest(unittest.TestCase):
-    """停用的渠道要**在 QQ 侧看不见**，不只是调用时被拒。
+class QqWhitelistTest(unittest.TestCase):
+    """QQ 白名单要**精确**：只放它该用的渠道，别的一律看不见。
 
-    两件事分开：① 白名单不列出（模型不会想起来）；② 描述里不再教怎么用
-    （模型记得名字也不会被「指路」）。只做前者挡不住，只做后者也挡不住
-    —— 09-27 已经吃过一次（光靠白名单挡不住模型传参）。
+    白名单不列出 = 模型想不起来，这比「调用时被拒」更早一层；两件事都要做
+    —— 09-27 已经吃过一次（光靠白名单挡不住模型传参，所以停用还得有代码闸，
+    见 DisabledChannelTest）。
+
+    ⚠️ 2026-10-01 起 `DISABLED_IMAGE_SKILLS` 已清空，所以这里测的**不再是
+    「停用渠道」**，而是「QQ 本身提不提供哪些渠道」。同日用户拍板把
+    `image_gen_v1`（SD）与 `krea2` 也放给 QQ——它们以前只在 `agents/draw` 里。
+    现在 QQ 侧的隐藏项只剩**已归档的老渠道**和**画图助手专用 / 未上线**的那些。
     """
 
-    DISABLED = ("qwen_image_v1", "krea2")
-    RUNNABLE = ("anima_soft", "anima_gloss", "anima_curvy", "anima_clear")
+    # QQ 提供的：16 个动漫渠道（4 画风 × 4 尺寸档）+ qwen + SD + krea2
+    VISIBLE = tuple("%s_%s" % (tier, style)
+                    for tier in ("anima", "hd_fast", "hd_2", "hd_3")
+                    for style in ("clear", "soft", "gloss", "curvy")) + (
+                        "qwen_image_v1", "image_gen_v1", "krea2")
+    # QQ 不提供的：已归档的老名字 + draw 专用 / 还没上线的渠道
+    HIDDEN = ("anima", "anima_2", "anima_realskin",
+              "image_gen_v1_hires", "nsfw_pose_gen", "pose_library")
 
-    def test_qq_whitelist_hides_disabled_channels(self):
+    def test_qq_whitelist_matches_the_offered_channels(self):
         from app import agents
-        for name in self.DISABLED:
-            self.assertFalse(agents.allows_skill("qq", name), name)
-        for name in self.RUNNABLE:
+        for name in self.VISIBLE:
             self.assertTrue(agents.allows_skill("qq", name), name)
+        for name in self.HIDDEN:
+            self.assertFalse(agents.allows_skill("qq", name), name)
 
-    def test_qq_skill_list_does_not_advertise_them(self):
+    def test_qq_skill_list_only_advertises_the_offered_channels(self):
         from app.agent_prompt import _build_skill_list
         block = _build_skill_list("qq")
-        for name in self.DISABLED:
-            self.assertNotIn("**" + name + "**", block, name)
-        for name in self.RUNNABLE:
+        for name in self.VISIBLE:
             self.assertIn("**" + name + "**", block, name)
+        for name in self.HIDDEN:
+            self.assertNotIn("**" + name + "**", block, name)
 
-    def test_qq_description_still_mentions_them_only_to_refuse(self):
-        """描述里出现 qwen/krea2 是**允许**的——但只许出现在「已停用、不要传」
-        的语境里，不许再有「说 krea2 就传 skill=krea2」这种指路话。"""
+    def test_description_no_longer_calls_krea2_disabled(self):
+        """krea2 解封后，描述里不能再写「已停用 / 不要传」这种话——
+        它现在是**备选渠道**，只在用户点名时才用。"""
         from app.tools.normal.generate_image import tool
         desc = tool["description"]
-        for name in self.DISABLED:
-            self.assertIn(name, desc, name)          # 得让模型知道「点了也没用」
-        self.assertIn("不要传 skill=qwen_image_v1 或 skill=krea2", desc)
-        # 不能再教怎么调它们
-        self.assertNotIn("传 skill=krea2", desc)
-        self.assertNotIn("krea2 传", desc)
-        self.assertNotIn("说 krea2", desc)
+        self.assertNotIn("已停用", desc)
+        self.assertNotIn("不要传 skill=krea2", desc)
+        self.assertIn("krea2", desc)
+        # qwen 依旧可用，尺寸也还写着
+        self.assertIn("qwen_image_v1", desc)
+        self.assertIn("832×1216", desc)
 
 
 class CleanStartTest(_Base):

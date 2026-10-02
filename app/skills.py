@@ -132,7 +132,10 @@ def load_skill(skill_name):
     - references: references/ 目录下所有 md 原文（若有）
 
     （曾经还有 `character` = `character.txt` 的角色底模，2026-09-30 随
-    SD 渠道一起下线——全仓已无 `character.txt`，也没有任何调用方再读它。）
+    SD 渠道一起下线——**代码侧**没有任何地方再读它。磁盘上 `character.txt`
+    还留着 4 份（image_gen_v1 / image_gen_v1_hires / nsfw_pose_gen /
+    writing），是死文件；2026-10-01 已把工作流里的 `__CHARACTER__` 占位符
+    全部清掉，当时漏清了会把这个字面量直接喂进提示词。）
     """
     skill_dir = _resolve_skill_dir(skill_name)
     if not skill_dir:
