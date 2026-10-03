@@ -85,9 +85,42 @@
   .sessCol h2 { font-size: 13px; font-weight: 500; color: var(--text-dim); }
   .sessCol .hint { font-size: 11px; color: var(--text-mute); }
   .sessCol .sess-list { flex: 1; overflow-y: auto; min-height: 0; }
-  /* 320px 装不下「全选/反选/清空/全部群/全部私聊/已选/批量人设/清除」一行，
-     允许换行 */
+  /* 会话列顶部只放两个入口（批量人设 / 清除人设），一行放得下，不用换行 */
   .sessCol .sess-foot { margin-top: 0; flex-wrap: wrap; gap: 8px; }
+
+  /* ── 批量人设弹窗 ──────────────────────────────────────────────
+     2026-10-04 用户反馈：面板原来渲染在中间列「会话管理」卡片里，而按钮在
+     右列——中间列内容长，点完按钮面板常弹在屏幕外，找不到输入框在哪。
+     改成居中浮层：位置与页面滚动无关，点按钮就出现在眼前。 */
+  .modal-mask {
+    position: fixed; inset: 0; z-index: 60;
+    background: rgba(0, 0, 0, 0.62);
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  .modal {
+    background: var(--bg-elev); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 18px 20px;
+    width: 580px; max-width: 100%; max-height: 88vh; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .modal h3 { font-size: 14px; font-weight: 500; }
+  .modal .hint { font-size: 12px; color: var(--text-mute); line-height: 1.6; }
+  .modal label.blk { font-size: 12px; color: var(--text-dim); display: block; }
+  .modal textarea { min-height: 110px; }
+  /* 作用范围：三张单选卡片 */
+  .modal .ranges { display: flex; gap: 8px; flex-wrap: wrap; }
+  .modal .ranges label {
+    display: flex; align-items: center; gap: 6px; cursor: pointer;
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 7px 12px; font-size: 12px; color: var(--text-dim);
+  }
+  .modal .ranges label.on { border-color: var(--accent); color: var(--text);
+                            background: rgba(124, 92, 255, 0.12); }
+  .modal .ranges label.off { opacity: 0.35; cursor: not-allowed; }
+  .modal .ranges input { width: auto; margin: 0; }
+  .modal .foot { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
+  .modal .foot .spacer { flex: 1; }
 
   .meta { font-size: 12px; color: var(--text-mute); }
 
@@ -435,8 +468,8 @@
           <span class="hint">两次「要不要接话」的判断之间至少隔这么久——判断也是一次调用。
             0 = 不做这道闸（那就只剩概率门挡着）。</span>
         </div>
-        <!-- 批量人设面板：三个输入框，放中间这一列才铺得开；右列只有 320px。 -->
-        <div id="sessBulkPanel"></div>
+        <!-- 批量人设面板已改成居中浮层（#bulkMask，挂在 .wrap 之后）——
+             原先放这儿时，点右列的按钮它弹在中间列，用户看不见。 -->
       </div>
 
       <div class="card">
@@ -458,14 +491,10 @@
       </div>
       <div class="sess-foot" id="sessBulkBar"
            style="display:none; margin:0;">
-        <button class="ghost" id="selAll">全选</button>
-        <button class="ghost" id="selInvert">反选</button>
-        <button class="ghost" id="selNone">清空</button>
-        <button class="ghost" id="selGroups">全部群</button>
-        <button class="ghost" id="selPrivates">全部私聊</button>
-        <span class="hint" id="selCount">0</span>
-        <button class="ghost" id="bulkApply">批量人设…</button>
-        <button class="danger" id="bulkClear">清除</button>
+        <button id="bulkApply">批量人设…</button>
+        <button class="ghost" id="bulkClear">清除人设…</button>
+        <span class="hint" id="selCount"></span>
+        <button class="ghost" id="selNone" style="display:none;">清空勾选</button>
       </div>
       <div class="sess-list" id="sessList"></div>
       <div class="sess-foot" style="margin-top:0;">
@@ -474,6 +503,11 @@
       </div>
     </aside>
   </div>
+</div>
+
+<!-- 批量人设 / 清除的浮层容器。内容每次打开时重建。 -->
+<div class="modal-mask" id="bulkMask" style="display:none;">
+  <div class="modal" id="bulkModal"></div>
 </div>
 
 <script>
@@ -1102,41 +1136,9 @@ function applySearch(text) {
   renderSessions();
 }
 
-function selectableSessions() {
-  return visibleSessions().filter(s => s.kind === 'group' || s.kind === 'private');
-}
-
-// 一整类的会话（**不看搜索**）——「全部群 / 全部私聊」用。
+// 一整类的会话（**不看搜索**）——弹窗里「全部群聊 / 全部私聊」两个范围用。
 function sessionsOfKind(kind) {
   return sessions.filter(s => s.kind === kind);
-}
-
-// 「全部群 / 全部私聊」：一键把整类勾上，并直接弹开批量人设面板。
-// 三条语义 2026-10-04 用户拍板：
-// ① 范围 = **列表里已有的**会话（含「收过消息但还没回过」的群，它们
-//    session=false 但设了人设同样有效，等开线就生效）；不额外问 QQ 协议端
-//    要全量群/好友名单——那会让列表凭空多出一堆没聊过的行。
-// ② **无视搜索**：按钮字面就是「全部」。顺手把搜索词清掉，让列表露出全部，
-//    所见即所选；不清的话会出现「只看到 3 行、却已选 8 条」的怪象。
-//    直接改 searchText 变量而不走 applySearch()——后者会把不可见的勾选收窄掉，
-//    正好会删掉我们刚选上的那些。
-// ③ 勾选是**叠加**（与现有「全选」同型）：已经手选过的别类会话不清掉。
-function selectAllOfKind(kind) {
-  const rows = sessionsOfKind(kind);
-  if (!rows.length) {
-    sessStatus(kind === 'group' ? '这个 agent 还没有任何群会话。'
-                               : '这个 agent 还没有任何私聊会话。', 'err');
-    return;
-  }
-  if (searchText) {
-    searchText = '';
-    $('sessSearch').value = '';
-  }
-  rows.forEach(s => selKeys.add(s.key));
-  renderSessions();
-  // true = 强制按新的选中集重建面板（不 toggle 收起）；第二参只影响标题措辞，
-  // 让人一眼看出这次是「整类」而不是随手勾了几条。
-  openBulkPanel(true, kind === 'group' ? '全部群' : '全部私聊');
 }
 
 function syncCheckboxes() {
@@ -1148,123 +1150,245 @@ function syncCheckboxes() {
 function renderSelBar() {
   const bar = $('sessBulkBar');
   // 显示条件看**全量**会话，不是筛选结果：否则搜了个没命中的关键词，连
-  // 「全部群」这个能救场的按钮都跟着消失，只能先手动清搜索才用得上。
-  if (!sessions.some(s => s.kind === 'group' || s.kind === 'private')) {
-    bar.style.display = 'none';
-    return;
-  }
-  bar.style.display = 'flex';
+  // 「批量人设…」这个入口都跟着消失。它跟筛选无关，永远可用。
+  const hasAny = sessions.some(
+    (s) => s.kind === 'group' || s.kind === 'private');
+  bar.style.display = hasAny ? 'flex' : 'none';
   const n = selKeys.size;
-  $('selCount').textContent = '已选 ' + n + ' 条';
-  $('bulkApply').disabled = !n;
-  $('bulkClear').disabled = !n;
+  // 勾选只是弹窗里的「已勾选」那个范围，不再是入口的前置条件——所以
+  // 没勾选时这两个按钮照样能点（2026-10-04 用户反馈：以前是灰的，点不动）。
+  $('selCount').textContent = n ? '已勾选 ' + n + ' 条' : '';
+  $('selNone').style.display = n ? '' : 'none';
 }
 
-function closeBulkPanel() {
-  $('sessBulkPanel').textContent = '';
-  bulkOpen = false;
+// ─── 批量人设 / 批量清除（居中浮层）─────────────────────────
+// 2026-10-04 用户反馈后重做。旧版是一排「全选 / 反选 / 清空 / 全部群 /
+// 全部私聊」按钮，面板渲染在中间列——两条都难用：那排按钮看不出在干什么，
+// 面板又弹在屏幕外，点完只看到「没反应」。
+// 现在只有一个入口「批量人设…」→ 居中弹窗，**作用范围在弹窗里选**：
+// 全部群聊 / 全部私聊 / 已勾选的 N 条。行上的勾选框留着，勾了就多一个范围可选。
+let bulkMode = null;    // null=关着；'apply'=设人设；'clear'=清除
+let bulkRange = '';     // 'group' | 'private' | 'picked'
+
+const BULK_RANGE_NAME = { group: '全部群聊', private: '全部私聊',
+                          picked: '已勾选' };
+
+function bulkRanges() {
+  const g = sessionsOfKind('group').length;
+  const p = sessionsOfKind('private').length;
+  const k = selKeys.size;
+  return [
+    { id: 'group', label: '全部群聊（' + g + ' 个）', ok: g > 0,
+      keys: () => sessionsOfKind('group').map(s => s.key) },
+    { id: 'private', label: '全部私聊（' + p + ' 个）', ok: p > 0,
+      keys: () => sessionsOfKind('private').map(s => s.key) },
+    { id: 'picked', label: '已勾选的 ' + k + ' 条', ok: k > 0,
+      keys: () => Array.from(selKeys) },
+  ];
 }
 
-function bulkHint(text, cls) {
-  const el = document.createElement('span');
-  el.className = 'hint';
-  if (cls === 'err') el.style.color = 'var(--danger, #e24b4a)';
-  el.textContent = text;
-  return el;
+function closeBulkModal() {
+  $('bulkMask').style.display = 'none';
+  $('bulkModal').textContent = '';
+  bulkMode = null;
 }
 
-function openBulkPanel(force, scopeLabel) {
-  if (bulkOpen) {
-    // force = 由「全部群 / 全部私聊」调起：选中集刚从别处换过，面板要按新的
-    // 重建（标题里的条数、点「应用」时打包的 keys 都是开面板那一刻的快照）。
-    // 不带参数 = 点「批量人设…」按钮，再点一次就是收起。
-    if (!force) { closeBulkPanel(); return; }
-    closeBulkPanel();
-  }
-  const keys = Array.from(selKeys);
-  if (!keys.length) return;
-  const box = $('sessBulkPanel');
+function openBulkModal(mode) {
+  bulkMode = mode;
+  const ranges = bulkRanges();
+  // 默认范围**每次打开都重算**，规则简单可预测：勾了会话就按「已勾选」，
+  // 否则落到第一个可用的（一般就是「全部群聊」）。不记上次的选择——选项就
+  // 摆在弹窗最上面，一眼能看见、一次点击能换，记住反而容易猜错。
+  const firstOk = ranges.find(r => r.ok);
+  bulkRange = selKeys.size ? 'picked' : (firstOk ? firstOk.id : '');
+
+  const box = $('bulkModal');
   box.textContent = '';
-  const wrap = document.createElement('div');
-  wrap.style.cssText = 'margin:0 0 10px 0; padding:10px; '
-    + 'border:1px solid var(--line, #333); border-radius:6px;';
 
-  const title = document.createElement('div');
-  title.className = 'hint';
-  title.style.cssText = 'margin-bottom:8px;';
-  title.textContent = '批量应用人设 —— 将写入'
-    + (scopeLabel ? '「' + scopeLabel + '」共 ' : '已选的 ')
-    + keys.length + ' 条会话。'
-    + '留空 = 该项不动；三项都留空就别点。';
+  const h = document.createElement('h3');
+  h.textContent = mode === 'apply' ? '批量设置人设' : '批量清除人设';
+  box.appendChild(h);
 
-  // ① 人设覆盖：顶替 prompt.md 的人设段
-  const sysLabel = bulkHint('人设覆盖（顶替 prompt.md 的人设段，不是叠加）');
-  sysLabel.style.cssText = 'display:block; margin:6px 0 4px 0;';
-  const sysTa = document.createElement('textarea');
-  sysTa.style.cssText = 'width:100%; min-height:120px; box-sizing:border-box; '
-    + 'font-family:ui-monospace,Consolas,monospace; font-size:12px;';
-  sysTa.placeholder = '留空 = 这些会话的人设覆盖保持原样（没有就继续用 prompt.md）。\n'
-    + '填了 = 用它顶替 prompt.md 那一层（角色人设），其余照常自动拼装：\n'
-    + '工具调用协议、工具列表、安全规则、Skill 目录、环境说明、表情包/记忆、生图方法。\n\n'
-    + '⚠️ 所以这里只写「角色」——别抄工具目录，抄了会跟自动拼的那份重复。';
+  const sub = document.createElement('div');
+  sub.className = 'hint';
+  sub.textContent = mode === 'apply'
+    ? '选作用范围 → 填要改的项 → 应用。留空的项不动。热生效，不用重启。'
+    : '选作用范围 → 确认后把这几条会话的「人设覆盖 / 会话附加词 / 借用助手」'
+      + '全部清掉，回到 agent 自己的 prompt.md。';
+  box.appendChild(sub);
 
-  // ② 会话附加词：拼在人设后面
-  const taLabel = bulkHint('会话附加词（拼在人设后面）');
-  taLabel.style.cssText = 'display:block; margin:10px 0 4px 0;';
-  const ta = document.createElement('textarea');
-  ta.style.cssText = 'width:100%; min-height:70px; box-sizing:border-box;';
-  ta.placeholder = '留空 = 不动。填了 = 这 N 条会话都拼上同一段附加词，如：\n'
-    + '「说话更毒舌，爱用网络梗，讨论偏技术」';
+  const rl = document.createElement('label');
+  rl.className = 'blk';
+  rl.textContent = '作用范围';
+  box.appendChild(rl);
 
-  // ③ 借用助手
-  const agentRow = document.createElement('div');
-  agentRow.style.cssText = 'margin-top:10px; display:flex; gap:8px; '
-    + 'align-items:center; flex-wrap:wrap;';
-  const agentLabel = bulkHint('借用助手');
-  const agentSel = document.createElement('select');
-  agentSel.style.cssText = 'font-size:12px; padding:4px 6px;';
-  const optKeep = document.createElement('option');
-  optKeep.value = ''; optKeep.textContent = '— 不改动 —';
-  agentSel.appendChild(optKeep);
-  agents.filter(a => a.id !== cur).forEach((a) => {
-    const o = document.createElement('option');
-    o.value = a.id;
-    o.textContent = a.name + '（' + a.id + '）· 完整系统提示词';
-    agentSel.appendChild(o);
+  const wrapR = document.createElement('div');
+  wrapR.className = 'ranges';
+  const boxes = {};
+  ranges.forEach((r) => {
+    const lab = document.createElement('label');
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = 'bulkRange';
+    input.value = r.id;
+    input.checked = (r.id === bulkRange);
+    input.disabled = !r.ok;
+    input.addEventListener('change', () => {
+      if (!input.checked) return;
+      bulkRange = r.id;
+      refresh();
+    });
+    lab.appendChild(input);
+    lab.appendChild(document.createTextNode(r.label));
+    wrapR.appendChild(lab);
+    boxes[r.id] = lab;
   });
-  agentRow.appendChild(agentLabel);
-  agentRow.appendChild(agentSel);
-  agentRow.appendChild(bulkHint('选了 = 这 N 条都改用 TA 的完整系统提示词'
-    + '（人设/工具目录全换）；人设覆盖优先于它'));
+  box.appendChild(wrapR);
 
-  const bar = document.createElement('div');
-  bar.style.cssText = 'margin-top:10px; display:flex; gap:8px; '
-    + 'align-items:center; flex-wrap:wrap;';
-  const apply = document.createElement('button');
-  apply.className = 'ghost';
-  apply.textContent = '应用到已选 ' + keys.length + ' 条';
-  const close = document.createElement('button');
-  close.className = 'ghost';
-  close.textContent = '收起';
+  if (!ranges.some(r => r.ok)) {
+    const none = document.createElement('div');
+    none.className = 'hint';
+    none.style.color = 'var(--error)';
+    none.textContent = '这个 agent 还没有任何群 / 私聊会话，也没有勾选任何一条。';
+    box.appendChild(none);
+  }
+
+  // 只有「设人设」才需要这三个输入；「清除」只要范围 + 确认。
+  let sysTa = null, ta = null, agentSel = null;
+  if (mode === 'apply') {
+    const l1 = document.createElement('label');
+    l1.className = 'blk';
+    l1.textContent = '人设覆盖（顶替 prompt.md 的人设段，不是叠加）';
+    sysTa = document.createElement('textarea');
+    sysTa.placeholder = '留空 = 这些会话的人设覆盖保持原样（没有就继续用 prompt.md）。\n'
+      + '填了 = 用它顶替 prompt.md 那一层（角色人设），其余照常自动拼装：\n'
+      + '工具调用协议、工具列表、安全规则、Skill 目录、环境说明、表情包/记忆、生图方法。\n\n'
+      + '⚠️ 所以这里只写「角色」——别抄工具目录，抄了会跟自动拼的那份重复。';
+    box.appendChild(l1);
+    box.appendChild(sysTa);
+
+    const l2 = document.createElement('label');
+    l2.className = 'blk';
+    l2.textContent = '会话附加词（拼在人设后面）';
+    ta = document.createElement('textarea');
+    ta.style.minHeight = '70px';
+    ta.placeholder = '留空 = 不动。填了 = 这些会话都拼上同一段附加词，如：\n'
+      + '「说话更毒舌，爱用网络梗，讨论偏技术」';
+    box.appendChild(l2);
+    box.appendChild(ta);
+
+    const row = document.createElement('div');
+    row.className = 'ranges';
+    row.style.alignItems = 'center';
+    const l3 = document.createElement('label');
+    l3.className = 'blk';
+    l3.style.margin = '0';
+    l3.textContent = '借用助手';
+    agentSel = document.createElement('select');
+    agentSel.style.cssText = 'width:auto; min-width:240px; font-size:12px;';
+    const optKeep = document.createElement('option');
+    optKeep.value = '';
+    optKeep.textContent = '— 不改动 —';
+    agentSel.appendChild(optKeep);
+    agents.filter(a => a.id !== cur).forEach((a) => {
+      const o = document.createElement('option');
+      o.value = a.id;
+      o.textContent = a.name + '（' + a.id + '）· 完整系统提示词';
+      agentSel.appendChild(o);
+    });
+    row.appendChild(l3);
+    row.appendChild(agentSel);
+    box.appendChild(row);
+
+    const hint3 = document.createElement('div');
+    hint3.className = 'hint';
+    hint3.textContent = '选了借用 = 这些会话都改用 TA 的完整系统提示词'
+      + '（人设 / 工具目录全换）；人设覆盖优先于它。';
+    box.appendChild(hint3);
+
+    const warn = document.createElement('div');
+    warn.className = 'hint';
+    warn.textContent = '⚠️ 每条被改的会话下次发言都会整段前缀缓存作废'
+      + '（≈15K token），一次改到位最省。';
+    box.appendChild(warn);
+  }
+
+  const foot = document.createElement('div');
+  foot.className = 'foot';
   const st = document.createElement('span');
   st.className = 'status';
-  bar.appendChild(apply); bar.appendChild(close); bar.appendChild(st);
-  bar.appendChild(bulkHint('热生效：下一条消息就是新人设，不用重启。'
-    + '每条被改的会话会各付一次前缀缓存作废（≈15K token），一次改到位最省'));
+  const sp = document.createElement('span');
+  sp.className = 'spacer';
+  const cancel = document.createElement('button');
+  cancel.className = 'ghost';
+  cancel.textContent = '取消';
+  const go = document.createElement('button');
+  if (mode === 'clear') go.className = 'danger';
+  foot.appendChild(st);
+  foot.appendChild(sp);
+  foot.appendChild(cancel);
+  foot.appendChild(go);
+  box.appendChild(foot);
 
-  close.addEventListener('click', closeBulkPanel);
-  apply.addEventListener('click', async () => {
-    const body = { keys: keys };
-    if (sysTa.value.trim()) body.system = sysTa.value;
-    if (ta.value.trim()) body.text = ta.value;
-    if (agentSel.value) body.agent = agentSel.value;
-    if (!body.system && !body.text && !body.agent) {
-      st.textContent = '三项都留空 = 什么都不做；想清除请用「批量清除人设」';
-      st.className = 'status err';
-      return;
-    }
-    apply.disabled = true;
+  const curKeys = () => {
+    const r = ranges.find(x => x.id === bulkRange);
+    return r ? r.keys() : [];
+  };
+  const refresh = () => {
+    ranges.forEach((r) => {
+      boxes[r.id].className = (r.id === bulkRange ? 'on' : '')
+        + (r.ok ? '' : ' off');
+    });
+    const n = curKeys().length;
+    const nm = BULK_RANGE_NAME[bulkRange] || '';
+    go.textContent = mode === 'apply'
+      ? '应用到' + nm + '（' + n + ' 条）'
+      : '清除' + nm + '的人设（' + n + ' 条）';
+    go.disabled = !n;
+  };
+  refresh();
+
+  $('bulkMask').style.display = 'flex';
+  cancel.addEventListener('click', closeBulkModal);
+  go.addEventListener('click', async () => {
+    const keys = curKeys();
+    if (!keys.length) return;
+    go.disabled = true;
     try {
+      if (mode === 'clear') {
+        const names = sessions.filter(s => keys.indexOf(s.key) >= 0)
+          .map(s => s.name || s.key);
+        if (!confirm('清除这 ' + keys.length + ' 条会话的全部提示词配置？\n\n'
+            + names.slice(0, 12).join('、') + (names.length > 12 ? ' 等' : '')
+            + '\n\n三项（人设覆盖 / 会话附加词 / 借用助手）都会清掉，'
+            + '回到 agent 自己的 prompt.md。只清单项请用每条后面的「改人设」按钮。')) {
+          go.disabled = false;
+          return;
+        }
+        const d = await api('/api/agent/' + encodeURIComponent(cur)
+          + '/session_prompt_bulk',
+          { method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ keys: keys, clear: true }) });
+        keys.forEach((k) => {
+          delete sessSystems[k]; delete sessPrompts[k]; delete sessAgents[k];
+        });
+        renderSessions();
+        closeBulkModal();
+        sessStatus('已清除 ' + (d.cleared || 0) + ' 条会话的提示词配置，立即生效',
+                   'ok');
+        return;
+      }
+      const body = { keys: keys };
+      if (sysTa.value.trim()) body.system = sysTa.value;
+      if (ta.value.trim()) body.text = ta.value;
+      if (agentSel.value) body.agent = agentSel.value;
+      if (!body.system && !body.text && !body.agent) {
+        st.textContent = '三项都留空 = 什么都不做。想清掉人设请用「清除人设…」';
+        st.className = 'status err';
+        go.disabled = false;
+        return;
+      }
       const d = await api('/api/agent/' + encodeURIComponent(cur)
         + '/session_prompt_bulk',
         { method: 'PUT',
@@ -1277,53 +1401,16 @@ function openBulkPanel(force, scopeLabel) {
         if (body.agent) sessAgents[k] = body.agent;
       });
       renderSessions();
-      closeBulkPanel();
+      closeBulkModal();
       sessStatus('已对 ' + (d.applied || 0) + ' 条会话应用，立即生效'
         + ((d.skipped || []).length ? '（跳过 ' + d.skipped.length
             + ' 个非法 key）' : ''), 'ok');
     } catch (e) {
       st.textContent = e.message;
       st.className = 'status err';
-      apply.disabled = false;
+      go.disabled = false;
     }
   });
-
-  wrap.appendChild(title);
-  wrap.appendChild(sysLabel); wrap.appendChild(sysTa);
-  wrap.appendChild(taLabel); wrap.appendChild(ta);
-  wrap.appendChild(agentRow);
-  wrap.appendChild(bar);
-  box.appendChild(wrap);
-  bulkOpen = true;
-}
-
-async function clearBulkPrompt() {
-  const keys = Array.from(selKeys);
-  if (!keys.length) return;
-  const names = sessions.filter(s => selKeys.has(s.key))
-    .map(s => s.name || s.key);
-  if (!confirm('清除这 ' + keys.length + ' 条会话的全部提示词配置？\n\n'
-      + names.slice(0, 12).join('、') + (names.length > 12 ? ' 等' : '')
-      + '\n\n三项（人设覆盖 / 会话附加词 / 借用助手）都会清掉，'
-      + '它们回到 agent 自己的 prompt.md。只清单项请用每条后面的「提示词」按钮。')) {
-    return;
-  }
-  try {
-    const d = await api('/api/agent/' + encodeURIComponent(cur)
-      + '/session_prompt_bulk',
-      { method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keys: keys, clear: true }) });
-    keys.forEach((k) => {
-      delete sessSystems[k]; delete sessPrompts[k]; delete sessAgents[k];
-    });
-    renderSessions();
-    closeBulkPanel();
-    sessStatus('已清除 ' + (d.cleared || 0) + ' 条会话的提示词配置，立即生效',
-               'ok');
-  } catch (e) {
-    sessStatus(e.message, 'err');
-  }
 }
 
 async function loadSessions() {
@@ -1332,7 +1419,7 @@ async function loadSessions() {
   $('sessList').textContent = '';
   // 换 agent / 刷新时清空勾选：selKeys 是跨 agent 的 key 集合，留着会误伤
   selKeys = new Set();
-  closeBulkPanel();
+  closeBulkModal();
   // 搜索词也一起清：换 agent 后旧关键词多半匹配不上，留着只会让人以为列表空了。
   // 注意**只有这里清**——renderSessions() 不碰它，所以改完一条人设重渲染时
   // 搜索还在（不然刚改的那条会从眼前消失，正是用户要避免的翻找）。
@@ -1377,7 +1464,6 @@ let sessAgents = {};      // session_key -> 借用的 agent id（完整系统提
 let sessSystems = {};     // session_key -> 完整独立系统提示词（最高优先级）
 let promptEditor = null;  // 当前展开的编辑面板 {key, wrap}
 let selKeys = new Set();  // 勾选的会话 key（批量应用人设用）
-let bulkOpen = false;     // 批量面板是否展开
 let searchText = '';      // 会话搜索框的关键词（前端过滤，不请求后端）
 
 function closePromptEditor() {
@@ -2208,27 +2294,21 @@ $('reload').addEventListener('click', () => {
   loadDetail().catch((e) => status(e.message, 'err'));
 });
 $('sessReload').addEventListener('click', loadSessions);
-$('selAll').addEventListener('click', () => {
-  selectableSessions().forEach(s => selKeys.add(s.key));
-  syncCheckboxes(); renderSelBar();
-});
-$('selInvert').addEventListener('click', () => {
-  selectableSessions().forEach((s) => {
-    if (selKeys.has(s.key)) selKeys.delete(s.key); else selKeys.add(s.key);
-  });
-  syncCheckboxes(); renderSelBar();
-});
 $('selNone').addEventListener('click', () => {
   selKeys = new Set(); syncCheckboxes(); renderSelBar();
 });
-// 一键整类：勾上该类全部会话 + 直接弹开人设面板（2026-10-04 用户要的
-// 「一键给全部群 / 全部私聊设人设」）。语义见 selectAllOfKind 上方注释。
-$('selGroups').addEventListener('click', () => selectAllOfKind('group'));
-$('selPrivates').addEventListener('click', () => selectAllOfKind('private'));
-// 包一层再传：**别写成 addEventListener('click', openBulkPanel)** —— 事件对象会
-// 顶到第一个参数位上（force 变成 MouseEvent，truthy），面板就只会重建、收不起来。
-$('bulkApply').addEventListener('click', () => openBulkPanel());
-$('bulkClear').addEventListener('click', clearBulkPrompt);
+// 批量人设 / 清除：弹居中浮层，**范围在浮层里选**（全部群聊 / 全部私聊 /
+// 已勾选的 N 条）。别写成 addEventListener('click', openBulkModal) —— 事件对象
+// 会顶到第一个参数位（mode 变成 MouseEvent），弹窗会按错误的分支出。
+$('bulkApply').addEventListener('click', () => openBulkModal('apply'));
+$('bulkClear').addEventListener('click', () => openBulkModal('clear'));
+// 点遮罩空白处关闭；Esc 也关。
+$('bulkMask').addEventListener('click', (e) => {
+  if (e.target === $('bulkMask')) closeBulkModal();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && bulkMode) closeBulkModal();
+});
 // 搜索：边打边筛（'input' 不是 'change'——change 要等失焦才触发，手感很迟钝）。
 $('sessSearch').addEventListener('input', (e) => applySearch(e.target.value));
 // Esc 清空，光标留在框里，方便接着搜下一个。
