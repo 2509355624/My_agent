@@ -266,6 +266,13 @@ def _sync_session_head(session_key, aid):
     """人设/配置/附加词变了就把首条 system 换成最新内容。
 
     内容没变一个字节都不动，保住这条会话的前缀缓存。返回是否替换了。
+
+    ⚠️ 这里换一次头，这条会话的**整段前缀缓存就作废**（system 是第一条消息，
+    前缀缓存只认「从头开始逐字节相同的最长前缀」，头一变后面全废）。
+    所以这行日志必须留着：换头是**静默**发生的（人设改了、长期记忆写了、
+    表情包清单变了都会触发），不打日志就没法知道「这条会话为什么突然全价」。
+    2026-10-03 实测：改一次 prompt.md → 31 条会话的头全部漂移，每条下次
+    来消息各全价重读一遍约 22K 字（≈15K token）。**改人设前先攒着一起改。**
     """
     from app.memory import peek_system
     head, aid = _session_head(session_key, aid)
@@ -275,6 +282,8 @@ def _sync_session_head(session_key, aid):
             if m.get("role") != "system"]
     save_history([{"role": "system", "content": head}] + keep,
                  aid, session_key)
+    log.info("[head] %s 的 system 头已重写（%d 字）→ 这条会话前缀缓存作废，"
+             "下一轮按全价重读", session_key, len(head))
     return True
 
 

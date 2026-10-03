@@ -129,6 +129,33 @@ class SessionPromptGateTest(unittest.TestCase):
         self.assertIn("新规则DEF", head)
         self.assertIn("[[TOOL:", head)
 
+    def test_sync_head_logs_the_invalidation(self):
+        """换头必须留痕。
+
+        换头是**静默**发生的（人设改了、长期记忆写了、表情包清单变了都会
+        触发），而它一发生这条会话的整段前缀缓存就作废、下一轮按全价重读。
+        不留日志就没法回答「这条会话今天为什么突然全价」——2026-10-03 就是
+        因为没这行，只能靠「落盘头 vs 现算头」逐条比对才发现 31 条全漂移。
+        """
+        self._system_of("group_1")
+        agents.save_settings("qq", {"session_prompts":
+                                    {"group_1": "换一批规则XYZ"}})
+        with mock.patch.object(qq_bot.log, "info") as spy:
+            self.assertTrue(qq_bot._sync_session_head("group_1", "qq"))
+        self.assertTrue(
+            any(c.args and "[head]" in str(c.args[0])
+                for c in spy.call_args_list),
+            "换头没打 [head] 日志：%r" % spy.call_args_list)
+
+    def test_sync_head_silent_when_unchanged(self):
+        """一字不差时不许打日志、更不许重写——那正是保住前缀缓存的地方。"""
+        self._system_of("group_1")
+        with mock.patch.object(qq_bot.log, "info") as spy:
+            self.assertFalse(qq_bot._sync_session_head("group_1", "qq"))
+        self.assertFalse(
+            [c for c in spy.call_args_list
+             if c.args and "[head]" in str(c.args[0])])
+
 
 class SessionPromptApiTest(unittest.TestCase):
     def setUp(self):

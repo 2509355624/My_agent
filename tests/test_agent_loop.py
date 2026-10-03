@@ -227,21 +227,40 @@ class AgentLoopTest(unittest.TestCase):
 
     # ─── 空回复守卫 ───────────────────────────────────
     # 背景（2026-09-28）：deepseek 系开思维链后偶发「流正常结束但正文零字」，
-    # 一轮就此静默，用户看到「收到了消息却不回」。守卫 = 换链上下一家重试一次。
+    # 一轮就此静默，用户看到「收到了消息却不回」。守卫 = 重试。
+    # 2026-10-03 改重试顺序：**先原地重试同模型，再换降级链下一家**。
+    # 原因：上游前缀缓存按模型分桶，换一次模型 = 整段 prompt 全价重读
+    # （实测 21,327 tokens 从 95% 命中掉到 0%）；而空回复是采样抖动，
+    # 原地重试基本就好了。
 
-    def test_empty_reply_retries_with_next_model(self):
+    def test_empty_reply_retries_same_model_first(self):
+        """第一次重试必须**原地**——换模型等于把整段前缀缓存扔掉。"""
         fake = self._patch_llm([("reasoning", "只想不说"), "在的"])
         p = mock.patch.object(agent, "candidates",
                               return_value=[("volc", "m1"), ("mimo", "m2")])
         p.start()
         self.addCleanup(p.stop)
         events = self._collect("在吗", provider="volc", model="m1")
-        # 第一次空 → 换 mimo/m2 重跑 → 正常回复
         self.assertEqual(fake.calls, 2)
         self.assertEqual(fake.seen_kwargs[0].get("provider"), "volc")
         self.assertEqual(fake.seen_kwargs[0].get("model"), "m1")
-        self.assertEqual(fake.seen_kwargs[1].get("provider"), "mimo")
-        self.assertEqual(fake.seen_kwargs[1].get("model"), "m2")
+        # 关键：第二次还是 volc/m1，不是 mimo/m2
+        self.assertEqual(fake.seen_kwargs[1].get("provider"), "volc")
+        self.assertEqual(fake.seen_kwargs[1].get("model"), "m1")
+        texts = [e["content"] for e in events if e["type"] == "assistant"]
+        self.assertEqual(texts, ["在的"])
+
+    def test_empty_reply_switches_model_only_on_second_empty(self):
+        """原地重试也空，才换降级链下一家（质量兜底照旧，只是晚一步）。"""
+        fake = self._patch_llm([("reasoning", "甲"), ("reasoning", "乙"), "在的"])
+        p = mock.patch.object(agent, "candidates",
+                              return_value=[("volc", "m1"), ("mimo", "m2")])
+        p.start()
+        self.addCleanup(p.stop)
+        events = self._collect("在吗", provider="volc", model="m1")
+        self.assertEqual(fake.calls, 3)
+        self.assertEqual([k.get("provider") for k in fake.seen_kwargs],
+                         ["volc", "volc", "mimo"])
         texts = [e["content"] for e in events if e["type"] == "assistant"]
         self.assertEqual(texts, ["在的"])
 
@@ -257,14 +276,16 @@ class AgentLoopTest(unittest.TestCase):
         self.assertEqual(roles.count("assistant"), 1)
         self.assertEqual(self.history[-1]["content"], "在的")
 
-    def test_empty_reply_twice_gives_up_silently(self):
-        fake = self._patch_llm([("reasoning", "甲"), ("reasoning", "乙")])
+    def test_empty_reply_three_times_gives_up_silently(self):
+        """预算 = 原地 1 次 + 换人 1 次，都空就放弃（不再往下烧）。"""
+        fake = self._patch_llm([("reasoning", "甲"), ("reasoning", "乙"),
+                                ("reasoning", "丙")])
         p = mock.patch.object(agent, "candidates",
                               return_value=[("volc", "m1"), ("mimo", "m2")])
         p.start()
         self.addCleanup(p.stop)
         events = self._collect("在吗", provider="volc", model="m1")
-        self.assertEqual(fake.calls, 2)
+        self.assertEqual(fake.calls, 3)
         self.assertNotIn("assistant", [e["type"] for e in events])
         # 历史里也不留空 assistant（只有用户那条）
         self.assertEqual([m["role"] for m in self.history], ["user"])

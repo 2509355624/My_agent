@@ -923,24 +923,37 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
             # 空回复守卫：流「正常结束」但正文一字未吐（偶发，开思维链的
             # deepseek 系最容易犯——reasoning 花完了正文却没动笔）。不拦截的
             # 话这一轮就静默无声，用户看到的是「收到了消息却不回」。
-            # 处理：历史不落空 assistant（根本没 append），换降级链下一家重跑
-            # 本轮；再空就放弃（用户点了停止的中断不算空回复，走下面的收尾）。
+            #
+            # 重试顺序：**先原地重试同一个模型，再换降级链下一家**。
+            # 空回复是采样抖动，不是模型坏了；而**换模型会把整段前缀缓存打没**
+            # ——上游缓存按模型分桶，实测换一次模型 = 21,327 tokens 全价：
+            #   02:33:55 命中 19456/20489 = 95.0%
+            #   02:33:55 [llm-empty] → 换 mimo
+            #   02:34:08 命中 0/21327 = 0.0% ⚠冷调用
+            # 原地重试那次前缀照旧命中，只有原地也不行时才值得付全价换人。
+            # 预算：原地 1 次 + 换人 1 次，都空就放弃（历史不留空 assistant）。
             if not reply.strip() and not is_cancelled(cancel_event):
                 meta = current_stream_meta()
-                if empty_retries >= 1:
-                    log.warning("[llm-empty] 换模型重试后仍空（reasoning=%d字 finish=%s），本轮放弃",
+                if empty_retries >= 2:
+                    log.warning("[llm-empty] 原地重试 + 换模型重试后仍空"
+                                "（reasoning=%d字 finish=%s），本轮放弃",
                                 reasoning_chars, meta.get("finish_reason"))
                     break
-                empty_retries += 1
                 cands = candidates(provider, model)
-                if len(cands) > 1:
-                    nxt = cands[1]
-                    log.warning("[llm-empty] 空回复（reasoning=%d字 finish=%s）→ 换 %s/%s 重试",
-                                reasoning_chars, meta.get("finish_reason"), nxt[0], nxt[1])
-                    provider, model = nxt
+                if empty_retries == 0 or len(cands) <= 1:
+                    same = cands[0] if cands else (provider, model)
+                    log.warning("[llm-empty] 空回复（reasoning=%d字 finish=%s）"
+                                "→ 原地重试 %s/%s（不换模型，前缀缓存照旧命中）",
+                                reasoning_chars, meta.get("finish_reason"),
+                                same[0], same[1])
                 else:
-                    log.warning("[llm-empty] 空回复（reasoning=%d字 finish=%s）→ 链上无备选，原模型重试",
-                                reasoning_chars, meta.get("finish_reason"))
+                    nxt = cands[1]
+                    log.warning("[llm-empty] 空回复（reasoning=%d字 finish=%s）"
+                                "→ 原地重试仍空，换 %s/%s（本次整段前缀作废）",
+                                reasoning_chars, meta.get("finish_reason"),
+                                nxt[0], nxt[1])
+                    provider, model = nxt
+                empty_retries += 1
                 continue
 
             history.append({"role": "assistant", "content": reply})
