@@ -80,6 +80,40 @@ class ResolveTest(unittest.TestCase):
                               lambda: list(quoted or [])),
         )
 
+    def _qq_own(self, own=None, quoted=None):
+        """QQ 会话，带上**他自己本轮发的图**（以及可选的引用）。
+
+        与 `_qq` 分开而不是加参数：`_qq` 的返回值被一堆旧用例解包成两元组，
+        改签名会把它们全炸掉。
+        """
+        p1, p2 = self._qq(quoted)
+        p3 = mock.patch.object(qq_api, "current_own_images",
+                               lambda: list(own or []))
+        return p1, p2, p3
+
+    def test_qq_falls_back_to_the_own_image(self):
+        """没引用，但**他自己发了图** → 就用那张（2026-10-04 用户拍板）。
+
+        现场：他发图 + 说「qwen 图生图，加上文字」，旧代码只认引用 → 回
+        「没看到引用的图片」，连着三轮没出图。发图本身就是在递素材。
+        """
+        p1, p2, p3 = self._qq_own(["http://img/mine.jpg"])
+        with p1, p2, p3, mock.patch.object(vision, "fetch_image",
+                                           lambda u: b"RAW:" + u.encode()):
+            raw, note = comfy_src.resolve("1")
+        self.assertEqual(raw, b"RAW:http://img/mine.jpg")
+        self.assertIn("刚发", note)      # 垫的是哪张要说清楚，别让它说错
+
+    def test_qq_quote_wins_over_the_own_image(self):
+        """两张都在时**引用优先**——引用是更明确的「就这张」。"""
+        p1, p2, p3 = self._qq_own(["http://img/mine.jpg"],
+                                  quoted=["http://img/quoted.jpg"])
+        with p1, p2, p3, mock.patch.object(vision, "fetch_image",
+                                           lambda u: b"RAW:" + u.encode()):
+            raw, note = comfy_src.resolve("1")
+        self.assertEqual(raw, b"RAW:http://img/quoted.jpg")
+        self.assertEqual(note, "引用的那张图")
+
     def test_qq_lone_quote_is_just_the_quoted_one(self):
         p1, p2 = self._qq(["http://img/a.jpg"])
         with p1, p2, mock.patch.object(vision, "fetch_image",
@@ -96,18 +130,24 @@ class ResolveTest(unittest.TestCase):
         self.assertEqual(raw, b"RAW:http://img/b.jpg")
         self.assertIn("第 2 张", note)
 
-    def test_qq_without_quote_asks_for_a_reference(self):
-        p1, p2 = self._qq([])
-        with p1, p2:
+    def test_qq_without_any_image_asks_for_one(self):
+        """本轮一张图都没有（引用空的、自己也没发）→ 报错，绝不凭空画。"""
+        p1, p2, p3 = self._qq_own([])
+        with p1, p2, p3:
             with self.assertRaises(RuntimeError) as cm:
                 comfy_src.resolve("1")
-        self.assertIn("引用", str(cm.exception))
+        self.assertIn("把图发出来", str(cm.exception))
 
-    def test_qq_ignores_images_merely_sent_earlier(self):
-        """核心契约：自己发的图不算数，绝不退回「本会话最近那张」。"""
+    def test_qq_ignores_images_from_earlier_turns(self):
+        """核心契约：**几轮之前**发过的图不算数，绝不退回「本会话最近那张」。
+
+        判据是「**这一轮**」而不是「谁发的」——本轮他自己发的算数（见
+        test_qq_falls_back_to_the_own_image），几轮前的缓冲不算：随手垫一张
+        不相干的图，比让他重发一次糟得多。
+        """
         stickers.note_image(self.KEY, "http://img/loose.jpg", "233")
-        p1, p2 = self._qq([])
-        with p1, p2:
+        p1, p2, p3 = self._qq_own([])
+        with p1, p2, p3:
             with self.assertRaises(RuntimeError):
                 comfy_src.resolve("1")
 

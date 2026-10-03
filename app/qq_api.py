@@ -113,7 +113,7 @@ _turn_seq = itertools.count(1)
 
 
 def bind_context(session_key, target, target_id, quoted_images=None,
-                 user_text=None):
+                 own_images=None, user_text=None):
     """绑定当前线程正在处理的 QQ 会话。target 取 "private" / "group"。
 
     quoted_images 是**本轮**消息引用（reply）到的图片直链，按被引消息里出现
@@ -121,15 +121,21 @@ def bind_context(session_key, target, target_id, quoted_images=None,
     地址（上下文里只有 `[图片]` 占位符），报得出「第几张」却报不出链接，所以
     候选范围必须由 qq_bot 在开跑前圈死。
 
+    own_images 是**本轮对方自己发出来的**图，按消息先后。`quoted_images` 为空
+    时图生图退回用它——2026-10-04 用户拍板：发张图 + 报一句「图生图」就该能
+    跑，不必再引用一遍那条图片消息。它的指向同样是确定的（就在本轮这条消息
+    里），不会像「本会话最近一张」那样翻出几轮前不相干的图。
+
     user_text 是本轮**对方自己打字的那段话**（不含引用块——引用块里可能整段
     是上一次生图的提示词，拿它判「有没有明说要图生图」会自己骗自己）。
-    生图工具靠它拦「一看见引用图就往改图上想」的误判，见
-    `generate_image._i2i_gate`。不传 = 这一轮没有可判的原话（网页端）。
+    生图工具靠它拦「无缘无故改图」的误判，见 `generate_image._i2i_gate`。
+    不传 = 这一轮没有可判的原话（网页端）。
     """
     _local.session_key = session_key
     _local.target = target
     _local.target_id = target_id
     _local.quoted_images = list(quoted_images or [])
+    _local.own_images = list(own_images or [])
     _local.turn_id = next(_turn_seq)
     if user_text is not None:
         _local.user_text = str(user_text)
@@ -138,7 +144,7 @@ def bind_context(session_key, target, target_id, quoted_images=None,
 def clear_context():
     """摘掉绑定。worker 线程是复用的，不清理会把上一个会话带进下一轮。"""
     for attr in ("session_key", "target", "target_id", "quoted_images",
-                 "turn_id", "user_text"):
+                 "own_images", "turn_id", "user_text"):
         if hasattr(_local, attr):
             delattr(_local, attr)
 
@@ -161,6 +167,15 @@ def current_turn_id():
 def current_quoted_images():
     """本轮引用的消息里带的图片直链，按出现顺序；没绑定或没引用时为空表。"""
     return list(getattr(_local, "quoted_images", None) or [])
+
+
+def current_own_images():
+    """本轮对方**自己发出来的**图片直链，按消息先后；没绑定或没发图时为空表。
+
+    刻意与 `current_quoted_images` 分开、不合并：图生图只在其中一份里取源图
+    （引用优先，空了才退回这份），合并会让「第几张」的序号含义变糊。
+    """
+    return list(getattr(_local, "own_images", None) or [])
 
 
 def current_turn_text():

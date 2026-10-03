@@ -52,7 +52,7 @@ class GateUnitTest(unittest.TestCase):
     )
     # ② 只是引用了图 / 只要看 → 拦
     NOT_EXPLICIT = (
-        "",                                # 只发了图 / 只引用了图，一个字没打
+        "",                                # 只引用了一张图、一个字没打（他自己发图另算，见 OwnImagePassesTest）
         "看看这张图，她是什么发色",
         "这张真好看，谢谢你",
         "这张图的构图怎么样",
@@ -186,14 +186,46 @@ class PromptSurfaceTest(unittest.TestCase):
         block = "\n".join(text for needs, text in _TOOL_HINTS
                           if "generate_image" in needs)
         self.assertTrue(block, "generate_image 的使用提示不见了")
-        self.assertIn("引用图片**默认只看，不改**", block)
-        self.assertIn("只有对方这轮明说要图生图", block)
+        self.assertIn("图生图有**两条入口**", block)
+        self.assertIn("对方这一轮自己发了图", block)
         self.assertIn("系统会把这次调用直接拒掉", block)   # 跟硬闸同一口径
         self.assertIn("图生图**默认走动漫重绘**", block)
         self.assertIn("1~2 分钟", block)
         # 旧口径（「改图就选 qwen / 本机最强」）不该再出现在提示词里
         self.assertNotIn("改图最强", block)
         self.assertNotIn("本机改图（图生图）最强的渠道", block)
+
+
+class OwnImagePassesTest(unittest.TestCase):
+    """**对方自己发了图 = 放行**（2026-10-04 用户拍板）。
+
+    他的原话：「你把图生图的二次确认给我直接去除」「确认个gb，直接就跑了」。
+    01:48~01:54 连着三轮没出图，就是因为这里只认原话——他发了图还得再补一句
+    「图生图」。把素材递过来本身就是「改这张」，不该再要一次确认。
+    """
+
+    def setUp(self):
+        qq_api.clear_context()
+        self.addCleanup(qq_api.clear_context)
+
+    def _bind(self, own=None, quoted=None, text=""):
+        qq_api.bind_context("group_9", "group", "9",
+                            quoted_images=quoted or [], own_images=own or [],
+                            user_text=text)
+
+    def test_own_image_passes_without_a_word(self):
+        self._bind(own=["http://img/a.jpg"])
+        self.assertEqual(gi._i2i_gate(True), "")
+
+    def test_own_image_passes_even_with_a_look_only_sentence(self):
+        """「这张真好看」平时是拦的；他自己发了图，那就是要改。"""
+        self._bind(own=["http://img/a.jpg"], text="这张真好看")
+        self.assertEqual(gi._i2i_gate(True), "")
+
+    def test_lone_quote_is_still_blocked(self):
+        """只**引用**别人的图、一个字没说要改 → 仍然拦（10-02 的保护没丢）。"""
+        self._bind(quoted=["http://img/a.jpg"])
+        self.assertNotEqual(gi._i2i_gate(True), "")
 
 
 if __name__ == "__main__":

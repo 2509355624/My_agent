@@ -372,8 +372,8 @@ class ToolDescriptionTest(unittest.TestCase):
         self.assertIn("引用图片：默认只看，不改", desc)
         self.assertIn("看得见", desc)                  # 「看图 → 反推提示词」这条路
         self.assertIn("光是引用了图，永远不构成图生图", desc)
-        self.assertIn("图生图的门槛", desc)             # 明说的门槛单独成段
-        self.assertIn("没明说就当没这回事", desc)
+        self.assertIn("图生图的门槛", desc)             # 门槛单独成段
+        self.assertIn("两条都不满足就当没这回事", desc)
         self.assertIn("hd_3_", desc)                   # 不支持的那档要说出来
         self.assertNotIn("图生图已停用", desc)
         # 不能有「不传 skill、只传 source_image 就自动切渠道」这种指路话
@@ -383,7 +383,7 @@ class ToolDescriptionTest(unittest.TestCase):
         """参数描述口径要和上面那段一致：什么时候才传、哪些渠道能垫。"""
         from app.tools.normal.generate_image import tool
         desc = tool["parameters"]["properties"]["source_image"]["description"]
-        self.assertIn("只在对方明确要", desc)
+        self.assertIn("对方自己发了图", desc)
         self.assertIn("默认不传", desc)
         self.assertIn("hd_3_", desc)
         self.assertNotIn("已停用", desc)

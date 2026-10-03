@@ -843,6 +843,10 @@ class SessionRunner:
             for u in (it.get("images") or []):
                 image_urls.append(u)
                 image_owners.append(who)
+        # 「对方自己发的图」先单独留一份：下面 `image_urls = quote_images + ...`
+        # 会把引用图拼到前面，之后就分不出谁是本来就在这条消息里的了。
+        # 图生图没有引用时退回这份（见 comfy_src.resolve / qq_api.own_images）。
+        own_images = list(image_urls)
 
         # 引用/转发的正文不在这条消息里，得回头问协议端。放在这里而不是
         # _dispatch 里，是因为那时还没判定「这条要不要回」——否则群里每来
@@ -945,11 +949,12 @@ class SessionRunner:
             log.exception("额度状态注入失败 %s", self.session_key)
 
         # 工具层靠线程本地变量知道「此刻在为哪个会话服务」，
-        # send_qq_message 不带参数时就发回这里。引用图一并带上：图生图只认
-        # 「对方引用的那张」，而模型在群里看不见图片地址、只报得出「第几张」，
-        # 候选范围必须在这里圈死（见 comfy_src.resolve）。
+        # send_qq_message 不带参数时就发回这里。两批图一并带上：引用图 + 对方
+        # 自己发的图。模型在群里看不见图片地址、只报得出「第几张」，源图候选
+        # 必须在这里圈死；引用为空时退回「他自己发的那张」（见 comfy_src.resolve）。
         qq_api.bind_context(self.session_key, self.target, self.target_id,
-                            quoted_images=quote_images, user_text=own_text)
+                            quoted_images=quote_images, own_images=own_images,
+                            user_text=own_text)
         sent_by_tool = False
         reply_parts, images = [], []
         # 同一轮里模型有时会把上一段原样再生成一遍（工具结果回来后失了记性），

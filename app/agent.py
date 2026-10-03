@@ -1110,8 +1110,16 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
                         done_calls.add(key)
                     result = execute_tool(name, args)
                     if name == "generate_image":
-                        image_used_in_run = True
                         image_last_result = result
+                        # **只有真提交成功的回执才算「已提交」**——判据与
+                        # `_queued_note_for_user` 同一份（成功回执以「已经排上
+                        # 队了 / 已经在画了」开头）。失败（没源图 / 没意图 /
+                        # 重复 / 超时 / 取消）**不算**：不掐断循环，让模型看到
+                        # 错误后自己说句实话。
+                        # 2026-10-04 修：原先不管成败一律置位，于是工具报错时
+                        # 日志也写「已提交生图任务」、模型那句「画好自动发过来」
+                        # 照样发进群里 —— 用户等半天，队列里一张都没有。
+                        image_used_in_run = bool(_queued_note_for_user(result))
                 if key is not None:
                     seen_now.add(key)
                 # 先入历史再出流：调用方把「事件出流」当作落盘时机，

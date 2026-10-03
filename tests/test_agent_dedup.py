@@ -93,6 +93,12 @@ class _DedupRunner(unittest.TestCase):
 
         def _fake_exec(name, args):
             self.executed.append((name, args))
+            if name == "generate_image":
+                # 掐断的判据是「**真提交成功**的回执」（agent._queued_note_for_user
+                # 认的就是这句开头）。占位符不算成功——2026-10-04 起工具报错
+                # 不再置位、也不再掐断，所以这里必须照真实成功回执写。
+                return ("已经排上队了（前面还有 1 张），排到就画，画好会自动发到群里。"
+                        "不要输出图片地址，也不要说「图在下面 / 稍等」。")
             return "工具结果:" + name
 
         p = mock.patch.object(agent, "execute_tool", _fake_exec)
@@ -159,11 +165,18 @@ class SubmitStopsTheLoopTest(_DedupRunner):
         self.assertNotIn("不该出现", texts)
 
     def test_a_tool_only_turn_still_stops(self):
-        """本轮只调工具、一个字正文都没有：照样掐断，且不出 assistant 事件。"""
+        """本轮只调工具、一个字正文都没有：照样掐断，并补一句「已排上队」。
+
+        不能一声不响——图在队列里、用户那边却什么都没有。补的只取成功回执里
+        给人看的前半段（「已经排上队了（前面还有 N 张）」），不带给模型的指令。
+        """
         fake = self._patch_llm([_block("1girl"), "不该出现"])
         events = self._collect()
         self.assertEqual(fake.calls, 1)
-        self.assertEqual(self._assistant_texts(events), [])
+        texts = self._assistant_texts(events)
+        self.assertEqual(len(texts), 1)
+        self.assertIn("已经排上队了", texts[0])
+        self.assertNotIn("不要输出图片地址", texts[0])
 
     def test_repeat_call_in_the_next_iteration_never_happens(self):
         """旧用例的意图仍然成立：第二轮绝不会再执行一次生图。"""
@@ -175,6 +188,49 @@ class SubmitStopsTheLoopTest(_DedupRunner):
         self._collect()
         self.assertEqual(len(self.executed), 1)
         self.assertEqual(self._names(), ["generate_image"])
+
+
+class FailedSubmitKeepsGoingTest(_DedupRunner):
+    """工具**报错**≠已提交：不掐断、不谎报（2026-10-04 修）。
+
+    现场（`agents/main/sessions/private_2509355624.jsonl` 行 141/142）：用户发图
+    说「qwen 图生图，加上文字」，模型调了工具、**同一条消息的正文**先说了「画好
+    自动发过来」，工具回执却是「没看到能垫的图，垫不了图」。旧代码不管成败一律
+    置位 → 日志写 `[image-stop] 已提交生图任务`、循环被掐断，用户等一张永远不来
+    的图，还以为是队列丢了。判据换成「真提交成功的回执」（`_queued_note_for_user`）
+    之后：报错不置位、不掐断，模型下一轮看到错误就能说句实话。
+    """
+
+    FAILED = "没看到能垫的图，垫不了图。让对方**把图发出来**再 @ 你一次。"
+
+    def test_failed_submit_does_not_stop_the_loop(self):
+        fake = self._patch_llm([_block("1girl"),
+                                "没垫上，你把图发出来我再试"])
+        with mock.patch.object(agent, "execute_tool", lambda n, a: self.FAILED):
+            events = self._collect()
+        self.assertEqual(fake.calls, 2)              # 还有第二轮：模型看得到错误
+        texts = self._assistant_texts(events)
+        self.assertIn("没垫上，你把图发出来我再试", texts)
+        self.assertNotIn("已经排上队了", "".join(texts))   # 不许补那句假话
+
+    def test_failed_submit_does_not_eat_the_one_image_quota(self):
+        """失败那次没占掉「一轮一张」的名额——换个参数再来一次仍然放行。
+
+        工具回执本来就教它「去掉 source_image 再调一次就行」，那条路不能被
+        一轮一张的闸堵死。
+        """
+        fake = self._patch_llm([_block("1girl"), _block("a dog"), "收尾"])
+        seen = []
+
+        def _exec(name, args):
+            seen.append(args)
+            return (self.FAILED if len(seen) == 1
+                    else "已经排上队了（前面还有 1 张），排到就画。")
+
+        with mock.patch.object(agent, "execute_tool", _exec):
+            self._collect()
+        self.assertEqual(len(seen), 2)    # 第二次真执行了
+        self.assertEqual(fake.calls, 2)   # 第二次成功 → 掐断，「收尾」没跑
 
 
 class OneImagePerRunTest(_DedupRunner):
