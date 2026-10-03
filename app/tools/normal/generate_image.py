@@ -121,6 +121,55 @@ _I2I_NO_INTENT_NOTE = (
 )
 
 
+# ── 尺寸档守卫（2026-10-04）────────────────────────────────────────
+# 「高清」在中文里是两个意思：**带「档」是档位名**（用户从 ComfyUI 导工作流时
+# 就是这么叫的：高清快档 / 高清二档 / 高清三档），**不带「档」是画质形容词**
+# （高清一点 / 清晰 / 画质好），后者要的是「别糊」而不是「要更大尺寸」。
+#
+# 为什么要有这层：实测 9B（qwen3.8-9b-heretic）**只学得会正向映射**——
+# 描述里写「高清二档 → hd_2_*」它记住了，但「只说了画质形容词就不传 skill」
+# 这条**负向规则它执行不了**：7 个 case 各跑 2 遍，光说「高清」的两个都传了
+# hd_fast/hd_2，「清晰点」传了 hd_fast。而这条判据是确定性的（有没有「档」字
+# / 有没有像素数字），拿代码判一次比指望小模型记住可靠。
+# 跟 `_i2i_gate` 同一个证据源（qq_api 的本轮原话），网页端没有原话 → 不拦。
+_HD_TER_RE = re.compile(
+    r"(?:高清|超清)?\s*"
+    r"(快\s*档|一\s*档|二\s*档|三\s*档|1档|2档|3档)"        # 档位名
+    r"|(?:1\d{3}|2\d{3})\s*[x×*]\s*(?:1\d{3}|2\d{3})"        # 1328×2000
+    r"|(?:当|做|作)\s*壁纸|竖屏长图|要最大",                  # 明确用途
+)
+_HD_QUALITY_ONLY_RE = re.compile(
+    r"高清|清晰|清楚|画质|精细|高清度|不糊|别糊|别太糊|太糊|模糊|模糊点")
+
+
+def _hd_tier_guard(skill, default_skill):
+    """模型传了 hd_* 档，但对方原话里没有档位依据 → 降回默认档，返回 (skill, note)。
+
+    只在 QQ 会话轮里判（拿不到原话时一律放行，理由同 `_i2i_gate`）。
+    **只降不升**：对方明明报了「二档」而模型没传 skill，不在这里补——补了就是
+    代码替模型猜用户意图，而"报了档却没传"在实测里没出现过（9B 恰恰相反，
+    是见到「高清」就乱传）。真要补也不能猜画风，只能等模型自己传。
+    """
+    if not skill or not skill.startswith("hd_"):
+        return skill, ""
+    from app import qq_api
+
+    text = qq_api.current_turn_text()
+    if text is None:                      # 网页端 / 单测：无证据，不拦
+        return skill, ""
+    if _HD_TER_RE.search(text):
+        return skill, ""                   # 有档位依据，放行
+    if not _HD_QUALITY_ONLY_RE.search(text):
+        return skill, ""                   # 连画质词都没提，判不准，别乱动
+    log.info("尺寸档降级：原话只有画质形容词（%r），不带 skill 参数降回 %s",
+             text[:60], default_skill)
+    return default_skill, (
+        "（系统已自动调整：对方原话里只有「%s」这类画质形容词、没报任何档位名或"
+        "具体像素，所以没用 %s，已按默认的 %s 出图。对方真要更大尺寸，"
+        "下次让他直接说「二档」「三档」或报像素。）"
+    )
+
+
 def _i2i_gate(is_i2i):
     """对方没明说要图生图 → 返回一句拒绝话术；该放行返回 ""。
 
@@ -660,6 +709,10 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     if seed_err:
         return seed_err
 
+    # 尺寸档守卫：模型见到「高清」就传 hd_*，但对方可能只是说画质形容词。
+    # 放在停用渠道闸之后 —— 真被停用时报渠道的问题更有用。
+    skill, hd_note = _hd_tier_guard(skill, T2I_DEFAULT_SKILL)
+
     skill_data = load_skill(skill)
     if not skill_data or not skill_data["workflow"]:
         return "错误: 找不到 Skill '" + skill + "'"
@@ -668,7 +721,7 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 目录。取图 / 缩放 / 上传任何一步失败都当场返回，**不退回文生图**——
     # 对方以为改的是自己那张，收到的却是凭空画的，比直接报错糟得多。
     workflow = skill_data["workflow"]
-    source_note, denoise_txt, uploaded = "", "", ""
+    source_note, denoise_txt, uploaded = hd_note, "", ""
     if is_i2i:
         if skill not in _I2I_SKILLS:
             return ("错误: " + skill + " 不支持图生图（垫图 / 改图）。"
@@ -684,7 +737,9 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
         if not i2i:
             return "错误: Skill '" + skill + "' 没有图生图工作流"
         try:
-            raw, source_note = comfy_src.resolve(source_image)
+            raw, src_note = comfy_src.resolve(source_image)
+            # 降级提示（`hd_note`）不能被垫图说明顶掉，两条都要传给回执
+            source_note = (src_note + hd_note) if hd_note else src_note
             # 缩到本档画布的长边（不是 comfy_src 默认的 1216）：图生图的出图
             # 尺寸就是「这一步缩出来的尺寸 × 二段放大倍率」，所以高清档必须
             # 按自己的画布缩，否则垫图出来的还是源图那个大小。
@@ -801,7 +856,7 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     urls = ["/api/image/" + img for img in images]
 
     return ("生成成功！seed: " + str(seed)
-            + ("（垫图：%s）" % source_note if source_note else "")
+            + ("（%s）" % source_note if source_note else "")
             + "\n图片地址:\n" + "\n".join(urls))
 
 
@@ -855,12 +910,18 @@ tool = {
                   "- 尺寸档（**画风当后缀**，跟画风正交）：`anima_<画风>` 728~768×1024 默认不放大 / "
                   "`hd_fast_<画风>` 1024×1536 不放大、速度跟常规一样 / `hd_2_<画风>` 1328×2000 / "
                   "`hd_3_<画风>` 1536×2304 最大最慢最吃显存\n"
-                  "- **换渠道的门槛：只有用户点名画风 / 点名尺寸、或明确要「更柔 / 更亮 / 更丰满 / 更大」时才传**，平时一律不传。"
+                  "**换渠道的门槛：只有用户点名画风 / 点名尺寸、或明确要「更柔 / 更亮 / 更丰满 / 更大」时才传，平时一律不传。**"
                   "clear 和 soft 像，分不清也走默认\n"
-                  "- **⚠️ 用户说「高清 / 高清一点 / 清晰 / 大图 / 画质好」，一律不传 skill**，"
-                  "就当没听见这些词，照默认的 anima_clear 出图。他要的是「不糊」，不是「当壁纸」。\n"
-                  "- 只有他点了**具体尺寸**（如「1328×2000」）或明说「要最大 / 当壁纸 / 竖屏长图」才传 hd_*。"
-                  "说尺寸没说画风 → 用 clear 系\n"
+                  "**⚠️ 换不换尺寸档，只看一件事：他话里有没有「档位名或具体像素」。**\n"
+                  "  ① **报了档位或像素**（快档 / 二档 / 三档 / `高清快档` / `高清二档` / `高清三档`，"
+                  "或直接报「1328×2000」这类数字，或明说「当壁纸 / 要最大 / 竖屏长图」）"
+                  "→ **换 hd_ 渠道**，对号入座："
+                  "快档→`hd_fast_<画风>`、二档→`hd_2_<画风>`、三档→`hd_3_<画风>`；没说画风就用 clear 系。"
+                  "他连档都报出来了，要的就是那张更大的图，别当没听见\n"
+                  "  ② **只说了画质形容词**（高清 / 清晰 / 清楚 / 画质好 / 精细 / 不糊 / 大图，一个档位名都没有）"
+                  "→ **不传 skill**，照默认 anima_clear 出图。这种词说的是「别糊」，不是「要更大尺寸」；"
+                  "为它换成 hd_ 只是白等 30 秒、白吃显存，画质并不会更好\n"
+                  "  判据就一句：**带数字或带「档」字 = 换档；只是形容词 = 别动。**\n"
                   "【三个备选渠道都是「点名才用」，别主动推荐、别当默认】\n"
                   "- **qwen_image_v1**（通义，1024×1536，**慢：一张 40 秒~1 分钟**）：要**画面里写出文字（尤其中文）**、"
                   "要**写实照片感**（真人摄影 / 商品图 / 场景照）、或提示词是**一长段自然语言描述**时才用。"
@@ -941,7 +1002,7 @@ tool = {
         "type": "object",
         "properties": {
             "prompt": {"type": "string", "description": "提示词。**开头先写角色名**（认得出就写：英文 tag 渠道 `rudeus greyrat, mushoku tensei`；qwen 的自然语言句子里写「鲁迪乌斯（无职转生）」）——没有任何渠道自带角色，**名字才是还原度最高的那一行**，外貌只补与原设定不同的部分。\n默认渠道写**逗号分隔的标签式英文短句，只写一段、不要用 --- 分隔**（只有 skill=image_gen_v1 认 ` --- ` 分隔、一次出多张；其它渠道会把 --- 当普通文字，要出多张就分多次调用、每次一个变体）。\n两个例外：skill=qwen_image_v1 写**自然语言句子**（不写标签堆）；**它当改图渠道用时（同时传 source_image）只写一句改动指令**，例如 `change her coat to red, keep the pose, face and background exactly the same`——**不要把整张图重新描述一遍**。"},
-            "skill": {"type": "string", "description": "渠道名。**不传就是默认 anima_clear**。可选值见 Available Skills 的生图类（16 个动漫渠道 = 4 画风 × 4 尺寸档，另有 qwen_image_v1 / image_gen_v1 / krea2 / nffa / nai / nai_wide），各自画风、尺寸、适用场景、速度都在那一行里。\n**只在用户点名画风 / 尺寸 / 渠道时才传，平时一律不传**。分不清就照 Available Skills 的那行摘要选，选错了用户会说；不确定细节时可以 load_skill 读那个渠道的主规范。"},
+            "skill": {"type": "string", "description": "渠道名。**不传就是默认 anima_clear**。可选值见 Available Skills 的生图类（16 个动漫渠道 = 4 画风 × 4 尺寸档，另有 qwen_image_v1 / image_gen_v1 / krea2 / nffa / nai / nai_wide），各自画风、尺寸、适用场景、速度都在那一行里。\n**只在用户点名画风 / 尺寸 / 渠道时才传，平时一律不传**。**「高清快档 / 高清二档 / 高清三档」算点名尺寸，要传对应 hd_fast_ / hd_2_ / hd_3_**；但光说「高清 / 清晰 / 画质好」不算，那只是形容词，照默认不传。\n分不清就照 Available Skills 的那行摘要选，选错了用户会说；不确定细节时可以 load_skill 读那个渠道的主规范。"},
             "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传，每个渠道 2 个槽"},
             "source_image": {"type": "string", "description": "垫图 / 图生图：填 1 = 垫本轮出现的那张图（优先取对方引用的，其次他自己刚发的；两样都没有会报错）。\n**默认不传**。只有①他自己这一轮发了图、②他明说要动这张图（「图生图 / 垫图 / 改图 / 重绘」或点名要改什么）时才可以传；两条都不满足会被系统当场拒掉、一张都不画。只是引用别人的图看看 / 点评 / 照它反推画张新的，**任何渠道都不要传**。\n传了之后**默认走动漫档重绘**（anima_* / hd_fast_* / hd_2_*，20~30 秒，prompt 照旧完整标签串；hd_3_* 不支持），**只有「只动那一处、其余一分不动」或对方点名 qwen 才用 skill=qwen_image_v1**。skill=nai 也支持。本机渠道的重绘强度是定死的，传 denoise 也没用。"},
             "seed": {"type": "integer", "description": "生图种子，**只在对方点名要「用某个种子重画 / 换提示词再来一张」时才传**，平时一律不传（不传=随机）。范围 0 ~ 4294967295 的整数，填错格式/超界会直接报错，别猜。种子会跟着编号印在图那行 caption 上（`编号 · 分辨率 · 渠道 · seed 数字`），对方引用那条消息时能一起带回来。⚠️ 同一个种子只有配**同样的提示词 + 同样的渠道 + 同样的 lora**才画得出同一张图（改提示词重画=构图大体在、细节变）；动漫渠道是两段采样、两段共用这一个种子，所以只有这一个数。**只有本机渠道认**（anima_* / hd_* / qwen_image_v1 / image_gen_v1 / krea2 / nffa），skill=nai 传了会被拒；image_gen_v1 一次出多张时第 k 张 = 这个数 + k - 1"}

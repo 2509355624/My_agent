@@ -201,5 +201,48 @@ class ImageGuideTest(unittest.TestCase):
         self.assertEqual(agents.image_guide_text("../.."), "")
 
 
+class ImageGuideContentTest(unittest.TestCase):
+    """`agents/qq/image_guide.md` 里的两条硬判据（2026-10-04）。
+
+    这段是系统头第二大块，进 prompt 就等于每轮都带。以下两条不是可选的
+    文案，是实测踩出来的坑，删了模型立刻犯。
+    """
+
+    @staticmethod
+    def _guide():
+        import io
+        with io.open(agents.image_guide_path("qq"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_no_weight_syntax_teaching(self):
+        """不许再教权重语法——本机工作流没有解析器。
+
+        老版本有一整节「模型差异」，讲 SD `(tag:1.2)` / NAI `{tag}` /
+        niji `::` 各家写法。那些渠道 09-30 已归档；现在所有渠道的
+        `__MULTI_PROMPTS__` 都是**原样插入的纯文本**，写了权重只会被当成
+        字面垃圾词送进底模。保留的必须是「别写」的警告。
+        """
+        g = self._guide()
+        self.assertIn("权重语法一个都别写", g,
+                      "权重语法警告不见了，模型会开始写 (masterpiece:1.2)")
+        self.assertNotIn("SD / SDXL / Pony", g,
+                         "「模型差异」那节已删，别把权重语法讲回来")
+
+    def test_character_name_hallucination_guard(self):
+        """必须有「不编角色名」的判据。
+
+        实测：9B 画「神里绫华」写出 `Shiori Sakura`（不存在）还照画。
+        GSND 标签库收录有限，`kamisato_ayaka` 也不在库里，所以
+        「认不出就写外貌 + 作品名」是唯一稳的路子。
+        """
+        g = self._guide()
+        self.assertIn("只写你真有把握的", g, "角色名幻觉判据不见了")
+        self.assertIn("load_skill", g,
+                      "要留一条查库的出路（anima-tags），别让模型只能瞎猜")
+        # 拿真实踩坑的假 tag 当反例钉住
+        self.assertIn("Shiori Sakura", g,
+                      "保留实测反例（9B 给神里绫华编的假 tag）")
+
+
 if __name__ == "__main__":
     unittest.main()

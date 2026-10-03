@@ -1153,7 +1153,7 @@ class ToolDescriptionBudgetTest(unittest.TestCase):
         "默认渠道": "不传就是默认 anima_clear",
         "别编渠道名": "别编别的 skill 名出来",
         "换渠道门槛": "只有用户点名画风 / 点名尺寸",
-        "高清但没更大": "一律不传 skill",
+        "高清但没更大": "只是形容词 = 别动",
         "clear_soft难分": "分不清也走默认",
         "角色名最前": "名字写在 prompt 最前面",
         "qwen也写名字": "自然语言句子里照样要写名字",
@@ -1209,11 +1209,19 @@ class ToolDescriptionBudgetTest(unittest.TestCase):
         「来张高清的初音未来」连跑三次，实测给出「无工具块 /
         hd_fast_clear / 不传」三种结果。
 
-        现在合并成一条祈使句：**「高清 / 大图」这类词一律不传 skill**，
-        只有点了具体尺寸或明说「要最大 / 当壁纸」才上 hd_*。
+        2026-10-04：**「高清」有两个意思，得按有没有「档」字分开判**——
+        用户是照 ComfyUI 里导出的工作流名字说话的（高清快档 / 高清二档 /
+        高清三档），那是**点名了尺寸档、必须传**；而光秃秃的「高清 / 清晰 /
+        画质好」只是形容词，**不传**。两条都得写进描述，否则要么吞掉用户
+        点名的档位，要么把形容词当换档理由。
         """
         desc = self._tool()["description"]
-        self.assertIn("一律不传 skill", desc)
+        # 不带「档」的画质形容词 → 不换档
+        self.assertIn("只是形容词 = 别动", desc)
+        # 带「档」的点名档位 → 必须换
+        for token in ("高清快档", "高清二档", "高清三档"):
+            self.assertIn(token, desc,
+                          "描述里必须留着 %s 这种带「档」的点名写法" % token)
         self.assertIn("当壁纸", desc)
         # 旧的两句自相矛盾的说法，一句都不许再出现
         self.assertNotIn("没说多大 → `hd_fast_clear`", desc)
@@ -1234,6 +1242,125 @@ class ToolDescriptionBudgetTest(unittest.TestCase):
         for ch in ("anima_soft", "anima_gloss", "anima_curvy"):
             self.assertNotIn(ch, param,
                              "skill 参数里重复列了 %s（Available Skills 已有一份）" % ch)
+
+
+class HdTierGuardTest(unittest.TestCase):
+    """尺寸档守卫 `_hd_tier_guard`（2026-10-04）。
+
+    为什么描述里已经写了判据、还要这层代码：**9B 执行不了负向规则。**
+    实测（qwen3.8-9b-heretic，7 个 case 各 2 遍）——
+      · 带「档」的（高清二档 / 高清三档 / 高清快档）→ 5/6 传对 hd_* 档；
+      · 不带「档」的（高清 / 高清一点 / 清晰点）→ **只有 1/6 传对**，
+        其余传成 hd_fast / hd_2 / hd_3，还有一个干脆没调工具。
+    也就是说「别为形容词换档」这条它学不会，而「把形容词当换档理由」学得
+    很好。判据本身是确定性的（有没有「档」字 / 有没有像素数字），拿代码判
+    一次比指望小模型记住可靠 —— 跟 `_i2i_gate` 同一个证据源、同一套思路。
+    """
+
+    @staticmethod
+    def _guard(skill, text, default="anima_clear"):
+        from app.tools.normal import generate_image as gi
+        from app import qq_api
+        with mock.patch.object(qq_api, "current_turn_text",
+                               return_value=text):
+            return gi._hd_tier_guard(skill, default)
+
+    def test_tier_named_keeps_hd_channel(self):
+        """用户报了档位 → 放行，hd_* 原样保留。"""
+        for text, why in (
+            ("画一张绫华，高清二档", "带档"),
+            ("来个鲁迪乌斯，高清三档", "带档"),
+            ("画个黑发少女，高清快档", "快档"),
+            ("来个二档的", "光说档位"),
+            ("要 1328×2000 那张", "直接报像素"),
+            ("来张当壁纸的", "明说用途"),
+        ):
+            for skill in ("hd_2_clear", "hd_3_clear", "hd_fast_soft"):
+                got, note = self._guard(skill, text)
+                self.assertEqual(skill, got,
+                                 "「%s」（%s）报了档位却被降级了" % (text, why))
+                self.assertEqual("", note, "放行时不该带回执备注")
+
+    def test_quality_word_only_downgrades(self):
+        """只有画质形容词 → 降回默认档 + 带回执说明。"""
+        for text in ("画一张绫华，高清", "高清一点", "清晰点",
+                     "画质好点", "要精细的", "别太糊"):
+            got, note = self._guard("hd_fast_clear", text)
+            self.assertEqual("anima_clear", got,
+                             "「%s」只是画质形容词，不该换 hd_ 档" % text)
+            self.assertIn("自动调整", note,
+                          "降级必须告诉对方，否则他以为自己要到了大图")
+
+    def test_no_evidence_passes_through(self):
+        """网页端（拿不到原话）不拦 —— 没有证据不能当成「他没说要」。"""
+        from app import qq_api
+        from app.tools.normal import generate_image as gi
+        with mock.patch.object(qq_api, "current_turn_text",
+                               return_value=None):
+            self.assertEqual("hd_3_clear", gi._hd_tier_guard("hd_3_clear",
+                                                             "anima_clear")[0])
+
+    def test_unrelated_text_passes_through(self):
+        """既没档位也没画质词 → 判不准，别乱动（可能是引用/上文语境）。"""
+        for text in ("照这张画一张", "跟刚才一样的", "再来一张"):
+            got, note = self._guard("hd_2_clear", text)
+            self.assertEqual("hd_2_clear", got,
+                             "「%s」信息不足，不该动模型选的档位" % text)
+            self.assertEqual("", note)
+
+    def test_non_hd_skill_untouched(self):
+        """非 hd_* 渠道（qwen/krea2/nffa/nai）一律不管。"""
+        for skill in ("anima_soft", "qwen_image_v1", "krea2", "nai"):
+            self.assertEqual(skill, self._guard(skill, "高清一点")[0])
+
+    def test_guard_runs_after_nai_branch(self):
+        """守卫必须**排在 NAI 分流之后**。
+
+        NAI 是云端渠道，压根不读本机 skill 目录，画布/档位那套概念对它没有
+        意义；把它拦下来降级成 anima_clear 只会让 NAI 根本没画成。
+        位置错了不会让任何现有用例变红（`nai` 压根不是 hd_ 前缀，守卫自己
+        会放行），所以必须拿源码位置单独钉住。
+        """
+        import inspect
+        from app.tools.normal import generate_image as gi
+        src = inspect.getsource(gi._generate_image)
+        i_nai = src.index("if skill in image_jobs.NAI_SKILLS:")
+        # 注意取**第一处**调用：守卫若被挪到 NAI 前面，源码里就会出现两次
+        # 调用，只断言「后一处在 NAI 之后」会漏掉它。
+        i_guard = src.index("skill, hd_note = _hd_tier_guard("
+                            if "skill, hd_note = _hd_tier_guard(" in src
+                            else "_hd_tier_guard(")
+        self.assertEqual(1, src.count("_hd_tier_guard(skill"),
+                         "_generate_image 里守卫被调了不止一次，"
+                         "顺序判据会失效——只留一处")
+        self.assertLess(i_nai, i_guard,
+                        "守卫跑到 NAI 分流前面去了，NAI 会被误降级")
+        # 且守卫必须在读 skill 目录之前（降级后要重新解析渠道）
+        self.assertLess(i_guard, src.index("skill_data = load_skill(skill)"))
+
+    def test_guard_only_downgrades_never_upgrades(self):
+        """只降不升：对方报了「二档」而模型没传 skill，**不在这里补**。
+
+        补了等于代码替模型猜意图，而且猜画风没依据（该 hd_2_clear 还是
+        hd_2_soft？）。实测里「报了档却没传」没出现过 —— 9B 是反过来的，
+        见到「高清」就乱传，那才是要治的。
+        """
+        got, note = self._guard(None, "画一张绫华，高清二档")
+        self.assertIsNone(got, "守卫只该拦 hd_ → 默认，不该凭空造渠道")
+        self.assertEqual("", note)
+
+    def test_receipt_note_survives_source_image(self):
+        """垫图分支里 `source_note` 会被 comfy_src.resolve 覆写，
+        降级说明必须一起传下去，不能被顶掉。"""
+        import inspect
+        from app.tools.normal import generate_image as gi
+        src = inspect.getsource(gi._generate_image)
+        self.assertIn("hd_note", src,
+                      "垫图分支拿到的 source_note 必须并上 hd_note，"
+                      "否则降级提示会被垫图说明顶掉")
+        # 且不能是裸赋值（那会丢）
+        self.assertNotIn("raw, source_note = comfy_src.resolve", src,
+                         "不能直接覆写 source_note，会把降级提示冲掉")
 
 
 if __name__ == "__main__":
