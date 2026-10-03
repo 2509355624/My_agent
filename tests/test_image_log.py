@@ -12,8 +12,25 @@ import tempfile
 import time
 import unittest
 
+import app.config as config
 from app import image_log
 from app import qq_api
+
+
+class StateIsolationTest(unittest.TestCase):
+    """跑测试不许往真实 state/ 里灌假记录（2026-10-03）。
+
+    实测：全量测试会把脚本里的 "a cat" 图写进真实 state/image_log.jsonl，
+    累计 80 行（10-01 起）——对账时全是噪声。模块默认路径已改由
+    config.state_path 兜住，这条测试钉住它别再退回去。
+    """
+
+    def test_default_path_is_not_the_real_ledger(self):
+        # setUp 里 no patch 时读的是模块原始常量，这里直接看它指向哪
+        self.assertNotEqual(
+            os.path.dirname(image_log.PATH),
+            os.path.join(config.BASE_DIR, "state"),
+            "测试进程的账本路径落在真实 state/ 下了，跑测试会污染真实数据")
 
 
 class NewTagTest(unittest.TestCase):

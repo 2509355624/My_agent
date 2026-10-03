@@ -61,13 +61,14 @@ import re
 import threading
 import time
 
-from app.config import BASE_DIR
+from app.config import state_path
 
 log = logging.getLogger("image_log")
 
-# 账本：一行一张图，编号 → 提示词。测试可以改它指向临时目录；
-# 生产恒为 state/image_log.jsonl（state/ 在 .gitignore 里，不进仓库）。
-PATH = os.path.join(BASE_DIR, "state", "image_log.jsonl")
+# 账本：一行一张图，编号 → 提示词。测试可以改它指向临时目录；测试进程默认
+# 就已经落在临时目录（见 config.state_path）。生产恒为 state/image_log.jsonl
+# （state/ 在 .gitignore 里，不进仓库）。
+PATH = state_path("image_log.jsonl")
 
 _lock = threading.Lock()
 

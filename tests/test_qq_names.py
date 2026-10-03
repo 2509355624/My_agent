@@ -10,7 +10,23 @@ import time
 import unittest
 from unittest import mock
 
+import app.config as config
 from app import qq_names
+
+
+class StateIsolationTest(unittest.TestCase):
+    """跑测试不许拿夹具盖掉真实群名缓存（2026-10-03）。
+
+    实测：全量测试把 state/qq_names.json 写成了
+    {"group":{"1":"旧群名"},"private":{"1":"张三"}}，机器人从此把 1 号群叫
+    「旧群名」直到下次刷新列表。模块默认路径已改由 config.state_path 兜住。
+    """
+
+    def test_default_path_is_not_the_real_cache(self):
+        self.assertNotEqual(
+            os.path.dirname(qq_names.PATH),
+            os.path.join(config.BASE_DIR, "state"),
+            "测试进程的缓存路径落在真实 state/ 下了，跑测试会污染真实数据")
 
 
 def _reset():

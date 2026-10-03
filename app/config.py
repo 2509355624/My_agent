@@ -4,10 +4,38 @@
 """
 
 import os
+import sys
+import tempfile
+
 from dotenv import load_dotenv
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROOT_DIR = BASE_DIR
+
+# ─── state/ 路径与测试隔离 ───────────────────────────
+# state/ 下都是**运行期真实数据**（生图账本、群名缓存…），测试跑一遍不能往里
+# 写假数据。原先靠各测试文件自己 patch 模块里的 PATH，但总有人忘：2026-10-03
+# 实测跑一次全量测试就把 state/qq_names.json 又覆盖成夹具内容、往
+# state/image_log.jsonl 灌了一行 "a cat" 假记录（累计已 80 行）。
+#
+# 判据与 app/usage.py 一致：unittest / pytest 驱动进程时一定会 import 同名顶层
+# 模块，而生产进程（main.py / qq_bot.py）不会。测试里**显式** patch 模块的
+# PATH 仍然优先——调用点读的始终是模块属性，不经过这里。
+_TEST_STATE_DIR = None
+
+
+def state_path(filename):
+    """state/ 下某个文件的路径。
+
+    测试进程一律导向临时目录（同一个进程内固定不变，好让多个测试共享一份）；
+    生产进程恒为 <BASE_DIR>/state/<filename>。
+    """
+    global _TEST_STATE_DIR
+    if "unittest" in sys.modules or "pytest" in sys.modules:
+        if _TEST_STATE_DIR is None:
+            _TEST_STATE_DIR = tempfile.mkdtemp(prefix="agent_state_test_")
+        return os.path.join(_TEST_STATE_DIR, filename)
+    return os.path.join(BASE_DIR, "state", filename)
 
 _env_path = os.path.join(BASE_DIR, ".env")
 if os.path.exists(_env_path):

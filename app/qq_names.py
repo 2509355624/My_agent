@@ -25,11 +25,12 @@ import os
 import threading
 import time
 
-from app.config import BASE_DIR
+from app.config import state_path
 
 log = logging.getLogger("qq_names")
 
-PATH = os.path.join(BASE_DIR, "state", "qq_names.json")
+# 测试进程默认落在临时目录（见 config.state_path）——不能拿夹具内容盖掉真实缓存
+PATH = state_path("qq_names.json")
 
 # 距上次刷新多久内不重拉。群/朋友列表变动极少，1 小时更稳；这里取 10 分钟
 # 兼顾「刚加的新群尽快看得到」。
