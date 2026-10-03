@@ -150,7 +150,9 @@ def _i2i_gate(is_i2i):
 # 同日补齐：工具描述里已经写上它（Anima 家族 16 个 + qwen + image_gen_v1 + krea2 +
 # nai），QQ 白名单也放了它和 krea2——上面那条「已知的遗留不一致」结案。
 # 2026-10-02 又加了 `nffa`（Illustrious 系画风 + 手/脸两段修复，一张 40~75 秒，
-# 用户点名才走）：可传名字现在是 16 + qwen + image_gen_v1 + krea2 + nffa + nai = 21 个。）
+# 用户点名才走）；2026-10-03 再加 `nai_wide`（NAI 横版 1216×832，跟 `nai` 竖版
+# 共用同一套闸 / 额度 / 队列，只是文生图的构图方向不同）：可传名字现在是
+# 16 + qwen + image_gen_v1 + krea2 + nffa + nai + nai_wide = 22 个。）
 # 四个都由用户当天的 ComfyUI 工作流直接转来，共用同一套两段采样骨架，
 # **差别在底模组合，表现为画风差异**——所以渠道名按**视觉特征**取，
 # 模型看到名字就能联想效果（用户要求「形象的命名，这样有辨识度」）：
@@ -510,8 +512,9 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # image_jobs._process_nai），token 只给指定群用（app/agents.nai_allowed）。
     # 必须在 ComfyUI 探活之前就分流，否则没开 ComfyUI 的机器会被卡在探活那句。
     # 图生图（垫图）与文生图共用同一套 NAI 闸：nai_allowed 不放行，
-    # i2i 也一样进不来——不新增开关。
-    if skill == "nai":
+    # i2i 也一样进不来——不新增开关。横竖两个渠道（`nai` / `nai_wide`）也共用
+    # 同一套闸和同一份额度，没有任何新开关。
+    if skill in image_jobs.NAI_SKILLS:
         from app import nai, qq_api
         from app.agents import nai_allowed
         # 种子这事儿到 NAI 门口就停：它是云端出的图，模型版本、参数都在别人
@@ -531,14 +534,18 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
             return "错误：NAI 仅支持 QQ 使用，网页端用不了。"
         # 垫图：只认本轮引用的图（comfy_src.resolve 的既有契约），取图失败
         # 就实话实说，绝不退回文生图——对方以为改的是自己那张，收到的却是
-        # 凭空画的，比直接报错糟得多。base64 在这里算好快照进队列：
-        # worker 线程读不到 qq_api 的线程本地上下文。
+        # 凭空画的，比直接报错糟得多。base64 和**出图尺寸**在这里一起算好、
+        # 快照进队列：worker 线程读不到 qq_api 的线程本地上下文。
+        # 尺寸跟着**源图比例**走、跟渠道横竖无关（见 nai.prepare_image）——
+        # 垫一张竖图进来不该被裁成横的。
         nai_i2i = None
         if str(source_image or "").strip():
             try:
                 raw, note = comfy_src.resolve(source_image)
-                nai_i2i = {"image": nai.prepare_image(raw),
-                           "strength": _nai_strength(denoise), "note": note}
+                image_b64, span_w, span_h = nai.prepare_image(raw)
+                nai_i2i = {"image": image_b64,
+                           "strength": _nai_strength(denoise), "note": note,
+                           "width": span_w, "height": span_h}
             except RuntimeError as e:
                 return str(e)
         intent = _intent_key(prompt, skill, lora)
@@ -546,7 +553,7 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
             log.info("拦下重复生图（NAI）：%s %s 已有一张同参数的图在途",
                      target, target_id)
             return _DUPLICATE_NOTE
-        return _enqueue_nai(prompt, target, target_id, nai_i2i, intent)
+        return _enqueue_nai(prompt, target, target_id, nai_i2i, intent, skill)
 
     # 垫图（图生图）：**模型传了 source_image 才算**，走下面那个 i2i 分支，
     # 而「能不能算」已经在上游过了一道硬闸（`_i2i_gate`，就在这个函数开头）。
@@ -747,17 +754,21 @@ def _nai_strength(denoise):
     return min(0.9, max(0.1, s))
 
 
-def _enqueue_nai(prompt, target, target_id, nai_i2i=None, intent=None):
+def _enqueue_nai(prompt, target, target_id, nai_i2i=None, intent=None,
+                 skill="nai"):
     """把一张 NAI 图排进全局串行队列（复用现有队列，见 image_jobs）。
 
     NAI 是云端调用，也占「这一轮」的并发，跟 ComfyUI 的图混在同一条队列里
     排队不会更慢，还能让对方看到「前面还有几张」。enqueue 的 workflow 字段
     在这里塞的是 prompt 字符串——cloud 分支靠 skill 判断怎么用它；
-    nai_i2i 非 None 时是图生图（快照好的源图 base64 + 强度）。
+    nai_i2i 非 None 时是图生图（快照好的源图 base64 + 强度 + 出图尺寸）。
+
+    `skill` 是**真实渠道名**（`nai` 竖版 / `nai_wide` 横版）：worker 靠它决定
+    文生图的横竖，所以这里不能写死成 "nai"。
     """
     # 不传 prompt：NAI 走 _process_nai，图的 caption 不带编号、也不进账本
     # （用户选的「只做 anime」）。这里传了也是死数据。
-    job, reason = image_jobs.enqueue(target, target_id, prompt, skill="nai",
+    job, reason = image_jobs.enqueue(target, target_id, prompt, skill=skill,
                                      nai_i2i=nai_i2i, intent=intent)
     if reason is not None:
         # 拒收时什么算力都没花，也没有孤儿图。
@@ -819,7 +830,8 @@ tool = {
                   "提示词按**标签式英文**写，风格前缀工作流会自动拼上、**不要自己再写一遍**。"
                   "【nffa】只在**用户明确点名 nffa**（或指着 nffa 画出来的那张要同款画风）时才传"
                   " skill=nffa；它跟 krea2 一样是**备选，别主动推荐、别当默认**。画风是 Illustrious 系"
-                  "底模 `waiIllustriousSDXL_v150` + 画风 LoRA `NffaV1.3`，**1024×1536 竖版、一次一张**，"
+                  "底模 `waiIllustriousSDXL_v150` + 画风 LoRA `NffaV1.3`（链尾再叠一层描边），"
+                  "**1024×1536 竖版、一次一张**，"
                   "出图前固定跑两段修复（先修手、再修脸）。提示词写**标签式英文**、完整角色描述"
                   "**全自己写**——这个渠道**不拼任何画风前缀**（跟 krea2 不同），负面词也写死在工作流里、"
                   "**别再往 prompt 里叠一串负面词**。"
@@ -837,8 +849,8 @@ tool = {
                   "【lora】用户点名要换 lora 时才传 lora 参数，平时不要传。格式「文件名:强度」，"
                   "多个逗号分隔（如 \"x.safetensors:0.8,y.safetensors:0.5\"）；文件名要完整"
                   "(.safetensors 结尾)，写错会返回可用清单；传了就完全接管本次的 lora，"
-                  "每个渠道 2 个槽，没填满的槽自动关闭——**nffa 是例外：它只有 1 个槽**，"
-                  "就是那张画风 lora，对它传 lora 等于把 nffa 的画风顶掉。"
+                  "每个渠道 2 个槽，没填满的槽自动关闭——**nffa 也一样是 2 个槽**"
+                  "（画风 + 描边），对它传 lora 会把 nffa 的画风顶掉、画的就不是那个味了。"
                   "【引用图片：默认只看，不改】用户引用一张图，**默认只是让你看得见它**："
                   "照它反推提示词、用默认渠道画一张**全新的**（「看特征 / 复刻 / 参考这个风格 / "
                   "照着画一张新的 / 这图什么来头」全是这条路），或者对方只是让你看图点评时直接回话。"
@@ -874,16 +886,24 @@ tool = {
                   "**分不清是要改还是要新的就问一句**，别自己猜。"
                   "取不到源图会当场报错——**绝不退回文生图凭空画一张**，"
                   "对方以为改的是自己那张，收到别的构图比直接说改不了糟得多。"
-                  "【nai / NovelAI】**仅限管理员为特定群开通 NAI 后**才能用，"
+                  "【nai / nai_wide / NovelAI】**仅限管理员为特定群开通 NAI 后**才能用，"
                   "图由群主自己的 NovelAI 账号在云端出，跟本机 ComfyUI 无关；"
                   "本群没开通就传了会被直接拒绝，照实说这个渠道本群用不了、"
                   "让对方去找群主开。"
-                  "文生图：skill 传 nai，**只传 prompt，其它参数都不要传**。"
-                  "图生图（改图 / 垫图）：skill 传 nai + **source_image 传 1**"
+                  "文生图：skill 传 nai（**竖版 832×1216**）或 nai_wide（**横版 1216×832**），"
+                  "**只传 prompt，其它参数都不要传**。两张图成本一样，区别只有构图方向——"
+                  "对方要的是**横向的画面**时才传 nai_wide（风景 / 全景 / 房间 / 横躺、"
+                  "「宽的」「横的」「壁纸」「横幅」「封面」这类说法），"
+                  "没提方向的都走 nai。**「画布是竖的但内容可以横躺」不算**——构图方向看的是"
+                  "整张图的形状，不是你脑子里那个人物的姿势。"
+                  "图生图（改图 / 垫图）：skill 传 nai（或 nai_wide）+ **source_image 传 1**"
                   "（= 对方本轮**引用**的那张图；对方没引用就画不了，让他引用一条"
                   "带图的消息再 @ 一次），可选 denoise（0.1~0.9，默认 0.7，"
                   "越大改得越狠，别主动传）——**只在对方明确要改图 / 垫图时才传 "
-                  "source_image**，看图 / 点评照旧不传。",
+                  "source_image**，看图 / 点评照旧不传。"
+                  "**垫图时出图尺寸跟着源图比例走**，传 nai 还是 nai_wide 都一样"
+                  "（垫一张竖图，出来还是竖的）——所以对方说「把这张竖图改成横的」时"
+                  "别应承，直接说改不了；想换构图只能重新写提示词画一张新的。",
     # 2026-09-30：`description_overrides` / `hidden_params` 都删了。
     # 它们本来只为「QQ 侧藏掉 use_character 和角色底模那套」而存在；
     # 角色底模随 SD 渠道一起下线后，两个 agent 看到的描述已经没差别，
@@ -895,7 +915,7 @@ tool = {
         "type": "object",
         "properties": {
             "prompt": {"type": "string", "description": "提示词。写逗号分隔的标签式英文短句，**默认只写一段、不要用 --- 分隔**（只有 skill=image_gen_v1 认 ` --- ` 分隔、一次出多张；其它渠道会把 --- 当普通文字，要出多张就分多次调用、每次一个变体）。**必须包含完整角色描述**（发型/发色/瞳色/体型/服装/年龄等）——没有任何渠道自带角色。两个例外：skill=qwen_image_v1 写**自然语言句子**（不写标签堆）；**它当改图渠道用时（同时传 source_image）只写一句改动指令**，例如 `change her coat to red, keep the pose, face and background exactly the same`——**不要把整张图重新描述一遍**"},
-            "skill": {"type": "string", "description": "Skill名称。**不传就是默认 anima_clear**。可选值共 16 个（= 4 画风 × 4 档尺寸，见 Available Skills 的生图类）——4 个**画风**渠道（普通档 anima_<画风>，728~768×1024）：anima_clear（默认，清透最平光）/ anima_soft（柔光素肌，层次稍多）/ anima_gloss（冷调油光，用户也叫它 anime2）/ anima_curvy（丰腴强光影）；再叠 3 档**大图**（画风当后缀）：hd_fast_<画风>（1024×1536，不放大最快）/ hd_2_<画风>（1328×2000，1.3× 放大，中间档）/ hd_3_<画风>（1536×2304，1.5× 放大，最大最慢，最吃显存）。**只在用户点名画风 / 尺寸时才传**，平时不传。另有 qwen_image_v1（通义，**1024×1536 竖版**，要**画面写中文文字 / 写实照片感 / 长自然语言提示词**时走它；**图生图默认不走它**——动漫档重绘是默认那条，只有「只动那一处、其余一分不动」或者对方点名它时才 `source_image=1` + 一句改动指令，**它慢，一张 40 秒~1 分钟**）；image_gen_v1（**SD / SDXL**，832×1216，**唯一能一次出多张**的渠道：prompt 用 ` --- ` 分隔；不支持垫图。用户点名「用 sd」或要一次出多个变体才用它）；krea2（Krea2 Turbo + 米山舞画风，832×1216 直出，**只在用户点名时用**，别主动推荐）；nffa（Illustrious 系画风 + 手脸两段修复，画布 **1024×1536**、出图 1128×1688，标签式英文、不拼风格前缀、负面词已写死，**只在用户点名时用**，一张 40~75 秒，不支持垫图）；nai（NovelAI 云端）仅限已开通的群，文生图 / 图生图都走它"},
+            "skill": {"type": "string", "description": "Skill名称。**不传就是默认 anima_clear**。可选值共 16 个（= 4 画风 × 4 档尺寸，见 Available Skills 的生图类）——4 个**画风**渠道（普通档 anima_<画风>，728~768×1024）：anima_clear（默认，清透最平光）/ anima_soft（柔光素肌，层次稍多）/ anima_gloss（冷调油光，用户也叫它 anime2）/ anima_curvy（丰腴强光影）；再叠 3 档**大图**（画风当后缀）：hd_fast_<画风>（1024×1536，不放大最快）/ hd_2_<画风>（1328×2000，1.3× 放大，中间档）/ hd_3_<画风>（1536×2304，1.5× 放大，最大最慢，最吃显存）。**只在用户点名画风 / 尺寸时才传**，平时不传。另有 qwen_image_v1（通义，**1024×1536 竖版**，要**画面写中文文字 / 写实照片感 / 长自然语言提示词**时走它；**图生图默认不走它**——动漫档重绘是默认那条，只有「只动那一处、其余一分不动」或者对方点名它时才 `source_image=1` + 一句改动指令，**它慢，一张 40 秒~1 分钟**）；image_gen_v1（**SD / SDXL**，832×1216，**唯一能一次出多张**的渠道：prompt 用 ` --- ` 分隔；不支持垫图。用户点名「用 sd」或要一次出多个变体才用它）；krea2（Krea2 Turbo + 米山舞画风，832×1216 直出，**只在用户点名时用**，别主动推荐）；nffa（Illustrious 系画风 + 手脸两段修复，画布 **1024×1536**、出图 1128×1688，标签式英文、不拼风格前缀、负面词已写死，**只在用户点名时用**，一张 40~75 秒，不支持垫图）；nai / nai_wide（NovelAI 云端，**仅限已开通的群**，文生图 / 图生图都走它：nai = 竖版 **832×1216**，nai_wide = 横版 **1216×832**，对方要横向构图时才用后者；垫图时出图尺寸跟着源图比例走、跟渠道横竖无关）"},
             "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传，每个渠道 2 个槽"},
             "source_image": {"type": "string", "description": "垫图 / 图生图：填 1 = 垫对方本轮**引用**的那张图（对方没引用会报错）。**默认不传**——**只在对方明确要**图生图时才传：他得说出「图生图 / 垫图 / 改图 / 重绘」这类词，或者点名要动什么（「把图里这个角色换成 XXX」「去掉那把伞」「基于这张重新画一张」）。**光是引用了图、或者只是看图 / 点评 / 照它反推提示词画张新的，任何渠道都不要传这个参数**；系统会查本轮对方的原话，没提改图就传了会被当场拒掉、一张都不画。传了之后**默认走动漫 12 档重绘**（anima_* / hd_fast_* / hd_2_*，20~30 秒，prompt 照旧写完整标签串；hd_3_* 不支持），**只有「只动那一处、其余一分不动」或者对方点名 qwen 才用 skill=qwen_image_v1**（慢，一张 1~2 分钟，prompt 只写一句改动指令）。skill=nai 也支持。本机渠道的强度是定死的（重绘 0.6、改图 1），传 denoise 也没用"},
             "seed": {"type": "integer", "description": "生图种子，**只在对方点名要「用某个种子重画 / 换提示词再来一张」时才传**，平时一律不传（不传=随机）。范围 0 ~ 4294967295 的整数，填错格式/超界会直接报错，别猜。种子会跟着编号印在图那行 caption 上（`编号 · 分辨率 · 渠道 · seed 数字`），对方引用那条消息时能一起带回来。⚠️ 同一个种子只有配**同样的提示词 + 同样的渠道 + 同样的 lora**才画得出同一张图（改提示词重画=构图大体在、细节变）；动漫渠道是两段采样、两段共用这一个种子，所以只有这一个数。**只有本机渠道认**（anima_* / hd_* / qwen_image_v1 / image_gen_v1 / krea2 / nffa），skill=nai 传了会被拒；image_gen_v1 一次出多张时第 k 张 = 这个数 + k - 1"}

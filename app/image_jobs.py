@@ -322,16 +322,23 @@ def queue_depth():
         return len(_queue) + (1 if _running is not None else 0)
 
 
+# NAI 的两个渠道名（2026-10-03 加 `nai_wide` 横版）。所有「是不是 NAI」的判断
+# 都走这个元组——`job.skill` 存的是**真实渠道名**，云端分支靠它区分横竖。
+NAI_SKILLS = ("nai", "nai_wide")
+
+
 def nai_depth():
     """NAI 渠道现在有几张在跑 / 在排（给状态栏用的本地事实）。
 
     ComfyUI 的排队数靠 /queue 探测（comfy_status），NAI 是云端请求，
     ComfyUI 那边根本看不见——机器人想知道「NAI 画完没有」只能看这里。
     全局同时只有一张在跑（worker 串行），所以 running 只会是 0 或 1。
+    横竖两个渠道一起算：问的是「NAI 忙不忙」，跟出的是横是竖无关。
     """
     with _lock:
-        running = 1 if _running is not None and _running.skill == "nai" else 0
-        pending = sum(1 for j in _queue if j.skill == "nai")
+        running = 1 if (_running is not None
+                        and _running.skill in NAI_SKILLS) else 0
+        pending = sum(1 for j in _queue if j.skill in NAI_SKILLS)
         return running, pending
 
 
@@ -910,10 +917,15 @@ def _process_nai(job):
         from app import nai
         i2i = getattr(job, "nai_i2i", None)
         if i2i:
-            png = nai.generate_img2img(job.workflow, i2i["image"],
-                                       strength=i2i.get("strength"))
+            # 图生图的尺寸**跟着源图走**（prepare_image 算好并快照进 i2i），
+            # 跟渠道横竖无关；缺尺寸的老快照退回竖版兜底。
+            png = nai.generate_img2img(
+                job.workflow, i2i["image"], strength=i2i.get("strength"),
+                width=i2i.get("width", nai.NAI_WIDTH),
+                height=i2i.get("height", nai.NAI_HEIGHT))
         else:
-            png = nai.generate(job.workflow)
+            # 文生图看渠道：`nai_wide` 出横版 1216×832。
+            png = nai.generate(job.workflow, wide=(job.skill == "nai_wide"))
     except Exception as exc:
         job.error = exc
         log.warning("NAI 生图失败 %s %s：%s", job.target, job.target_id, exc)
@@ -951,7 +963,7 @@ def process(job):
     """
     job.started = time.time()       # 排队到此为止，后面都算「画这张用了多久」
     # NAI 云端生图：完全不碰 ComfyUI（token 是群主独立的，图由 NovelAI 出）。
-    if job.skill == "nai":
+    if job.skill in NAI_SKILLS:
         return _process_nai(job)
     # 放在换渠道 /free 之前：重启成功后 _last_skill 会被清成 None（新进程里
     # 一个模型都没加载），换渠道那条就不会再打一次没用的 /free。
@@ -1326,8 +1338,8 @@ def _fail_text(exc, stage="submit", skill=None):
     stage="send" 是投递阶段挂的（图都画好了，是发回会话那步失败），跟
     ComfyUI 在不在没关系，别往它头上安。
 
-    skill="nai" 走云端 NovelAI，失败是网络/代理问题，跟 ComfyUI 完全无关——
-    绝不把「ComfyUI 没在线」甩给群友看。
+    skill 是 NAI 那两个渠道（`nai` / `nai_wide`）时走云端 NovelAI，失败是网络 /
+    代理问题，跟 ComfyUI 完全无关——绝不把「ComfyUI 没在线」甩给群友看。
     """
     if stage == "send":
         # 走到这儿**图一定已经画出来了**（`_notice(stage="send")` 只在
@@ -1342,7 +1354,7 @@ def _fail_text(exc, stage="submit", skill=None):
         if qq_api.friend_required_error(exc):
             return "图画好了，但私聊发不出去——得先加好友。加完再喊我一次。"
         return "图画好了，但没发出去（%s）。稍后再喊我一次。" % _reason(exc)
-    if skill == "nai":
+    if skill in NAI_SKILLS:
         if isinstance(exc, TimeoutError) or _is_unreachable(exc):
             return ("图没画出来——连不上 NovelAI 的服务器（多半是网络或代理问题）。"
                     "让对方稍后再试；一直连不上就让群主检查 NAI 的代理设置。")

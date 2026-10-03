@@ -2282,9 +2282,14 @@ class NaiCloudTest(_Base):
         agents.clear_cache()
         self.addCleanup(agents.clear_cache)
         self.nai_calls = []
-        p = mock.patch.object(nai, "generate",
-                             lambda prompt: self.nai_calls.append(prompt)
-                             or b"PNGDATA")
+        self.nai_wide = []          # 每次调用带的 wide 标志（渠道横竖）
+
+        def fake_generate(prompt, wide=False, timeout=None):
+            self.nai_calls.append(prompt)
+            self.nai_wide.append(wide)
+            return b"PNGDATA"
+
+        p = mock.patch.object(nai, "generate", fake_generate)
         p.start()
         self.addCleanup(p.stop)
         self.nai_sent = []          # qq_api.send_image 捕获（cloud 分支走这条）
@@ -2304,10 +2309,30 @@ class NaiCloudTest(_Base):
         self._enqueue(("group", "9"), wf="a cat prompt", skill="nai")
         image_jobs._drain()
         self.assertEqual(self.nai_calls, ["a cat prompt"])
+        self.assertEqual(self.nai_wide, [False])    # 竖版渠道
         self.assertEqual(len(self.nai_sent), 1)
         # ComfyUI 那条发图 / 提交路径都没走
         self.assertEqual(len(self.sent_images), 0)
         self.assertEqual(image_jobs.queue_depth(), 0)
+
+    def test_nai_wide_asks_for_landscape(self):
+        """`nai_wide` 渠道：还是同一套云端分支，只是让 NAI 出横版。"""
+        self._enqueue(("group", "9"), wf="a wide cat", skill="nai_wide")
+        image_jobs._drain()
+        self.assertEqual(self.nai_calls, ["a wide cat"])
+        self.assertEqual(self.nai_wide, [True])
+        self.assertEqual(len(self.nai_sent), 1)
+        self.assertEqual(len(self.sent_images), 0)
+        self.assertEqual(image_jobs.queue_depth(), 0)
+
+    def test_nai_depth_counts_both_orientations(self):
+        """状态栏的 nai 队列数把横竖两个渠道一起算（问的是「忙不忙」）。"""
+        self._enqueue(("group", "9"), wf="x", skill="nai")
+        self._enqueue(("group", "9"), wf="y", skill="nai_wide")
+        running, pending = image_jobs.nai_depth()
+        self.assertEqual(running + pending, 2)
+        image_jobs._drain()
+        self.assertEqual(image_jobs.nai_depth(), (0, 0))
 
     def test_nai_failure_notifies_not_sends(self):
         """NAI 调用挂了：发一句说明，但不发图、不假装成功。"""
@@ -2377,6 +2402,22 @@ class NaiRoutingTest(unittest.TestCase):
         _, kwargs = eq.call_args
         self.assertEqual(kwargs.get("skill"), "nai")
 
+    def test_nai_wide_enqueues_with_its_own_name(self):
+        """横版渠道进同一个云端分支，但 job.skill 要保留自己的渠道名
+        （worker 靠它决定文生图的横竖）。"""
+        out, eq = self._call("nai_wide", ("group", "9"), nai_ok=True)
+        self.assertIn("已经在画了", out)
+        self.assertTrue(eq.called)
+        _, kwargs = eq.call_args
+        self.assertEqual(kwargs.get("skill"), "nai_wide")
+
+    def test_nai_wide_refused_when_not_allowed(self):
+        """横竖共用同一套闸：没开通的群传 nai_wide 也不画。"""
+        out, eq = self._call("nai_wide", ("group", "9"), nai_ok=False,
+                             nai_reason="本群未开通 NAI")
+        self.assertIn("本群未开通 NAI", out)
+        self.assertFalse(eq.called)
+
     def test_nai_web_refused(self):
         out, eq = self._call("nai", (None, None), nai_ok=True)
         self.assertIn("仅支持 QQ", out)
@@ -2388,6 +2429,10 @@ class NaiRoutingTest(unittest.TestCase):
         # 两端共用同一份 description，所以这里只验它本身。
         self.assertIsInstance(generate_image.tool["description"], str)
         self.assertIn("nai", generate_image.tool["description"])
+        # 横版渠道也必须写进描述，否则模型永远不知道有这么个选择
+        self.assertIn("nai_wide", generate_image.tool["description"])
+        self.assertIn("nai_wide", generate_image.tool["parameters"]
+                      ["properties"]["skill"]["description"])
 
 
 class RecentOutcomesTest(_Base):

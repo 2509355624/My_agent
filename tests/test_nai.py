@@ -35,12 +35,12 @@ class GenerateTest(unittest.TestCase):
         sess.post = mock.Mock(return_value=resp)
         return sess
 
-    def _run(self, sess, prompt="a cat", proxies="", key="pst-test"):
+    def _run(self, sess, prompt="a cat", proxies="", key="pst-test", wide=False):
         with mock.patch.object(nai, "requests") as req, \
                 mock.patch.object(nai, "NAI_PROXY", proxies), \
                 mock.patch.object(nai, "NAI_API_KEY", key):
             req.Session = mock.Mock(return_value=sess)
-            return nai.generate(prompt)
+            return nai.generate(prompt, wide=wide)
 
     def test_builds_v5_request_and_unzips(self):
         # 造一个真 zip，里面 image_0.png
@@ -68,6 +68,18 @@ class GenerateTest(unittest.TestCase):
         sess = self._fake_session()
         with self.assertRaises(RuntimeError):
             self._run(sess, key="")
+
+    def test_wide_uses_landscape_size(self):
+        """`nai_wide` 渠道：wide=True → 横版 1216×832（竖版转 90°，像素数一样）。"""
+        sess = self._fake_session()
+        self._run(sess, wide=True)
+        _, kwargs = sess.post.call_args
+        p = kwargs["json"]["parameters"]
+        self.assertEqual((p["width"], p["height"]),
+                         (nai.NAI_WIDE_WIDTH, nai.NAI_WIDE_HEIGHT))
+        self.assertEqual((p["width"], p["height"]), (1216, 832))
+        # 横版必须真的比竖版宽，别把两个常量写反
+        self.assertGreater(nai.NAI_WIDE_WIDTH, nai.NAI_WIDE_HEIGHT)
 
     def test_unzips_when_content_type_is_octet_stream(self):
         # NAI 真实返回 binary/octet-stream（不是 application/zip）。靠 magic 字节
@@ -182,18 +194,32 @@ class Img2ImgTest(unittest.TestCase):
             z.writestr("image_0.png", b"PNG-I2I")
         return buf.getvalue()
 
-    def _run(self, prompt="make it night", image="QUJD", strength=None):
+    def _run(self, prompt="make it night", image="QUJD", strength=None,
+             size=None):
         sess = GenerateTest._fake_session(self, body=self._fake_zip())
         with mock.patch.object(nai, "requests") as req, \
                 mock.patch.object(nai, "NAI_PROXY", ""), \
                 mock.patch.object(nai, "NAI_API_KEY", "pst-test"):
             req.Session = mock.Mock(return_value=sess)
-            if strength is None:
-                nai.generate_img2img(prompt, image)
-            else:
-                nai.generate_img2img(prompt, image, strength=strength)
+            extra = {}
+            if strength is not None:
+                extra["strength"] = strength
+            if size is not None:
+                extra["width"], extra["height"] = size
+            nai.generate_img2img(prompt, image, **extra)
         args, kwargs = sess.post.call_args
         return kwargs["json"]
+
+    def test_carries_the_size_computed_for_the_source(self):
+        """尺寸原样透传：prepare_image 算出来多大，NAI 就按多大出图。"""
+        p = self._run(size=(512, 1536))["parameters"]
+        self.assertEqual((p["width"], p["height"]), (512, 1536))
+
+    def test_defaults_to_portrait_when_no_size_given(self):
+        # 兜底：老快照（没有 width/height）退回竖版，不会拿 None 去撞 NAI
+        p = self._run()["parameters"]
+        self.assertEqual((p["width"], p["height"]),
+                         (nai.NAI_WIDTH, nai.NAI_HEIGHT))
 
     def test_action_and_image_and_strength(self):
         body = self._run(strength=0.35)
@@ -218,30 +244,82 @@ class Img2ImgTest(unittest.TestCase):
             nai.generate_img2img("   ", "QUJD")
 
 
+class FitSizeTest(unittest.TestCase):
+    """nai.fit_size：源图比例 → NAI 能用的尺寸（64 的倍数、总像素≈竖版基准）。"""
+
+    def test_always_multiple_of_64_and_within_bounds(self):
+        for w, h in [(4000, 3000), (2000, 500), (300, 1600), (500, 500),
+                     (12345, 678), (1920, 1080), (37, 91), (64, 64)]:
+            tw, th = nai.fit_size(w, h)
+            self.assertEqual(tw % nai._NAI_SIZE_STEP, 0, (w, h))
+            self.assertEqual(th % nai._NAI_SIZE_STEP, 0, (w, h))
+            for side in (tw, th):
+                self.assertGreaterEqual(side, nai._NAI_SIZE_MIN, (w, h))
+                self.assertLessEqual(side, nai._NAI_SIZE_MAX, (w, h))
+
+    def test_landscape_stays_landscape_and_portrait_stays_portrait(self):
+        tw, th = nai.fit_size(1920, 1080)
+        self.assertGreater(tw, th)
+        tw, th = nai.fit_size(1080, 1920)
+        self.assertGreater(th, tw)
+        # 极端宽（8:1）会被上限夹住，但方向不能翻
+        tw, th = nai.fit_size(4000, 500)
+        self.assertGreater(tw, th)
+
+    def test_baseline_ratios_round_trip(self):
+        self.assertEqual(nai.fit_size(832, 1216), (832, 1216))
+        self.assertEqual(nai.fit_size(1216, 832), (1216, 832))
+        self.assertEqual(nai.fit_size(1024, 1024), (1024, 1024))
+
+    def test_ratio_is_kept_for_ordinary_photos(self):
+        for w, h in [(1200, 1600), (1600, 1200), (3000, 2000), (800, 800)]:
+            tw, th = nai.fit_size(w, h)
+            self.assertAlmostEqual(tw / float(th), w / float(h), delta=0.06,
+                                   msg=(w, h, tw, th))
+
+    def test_unusable_size_falls_back_to_portrait(self):
+        for bad in [(0, 0), (None, None), ("x", "y"), (-5, 10)]:
+            self.assertEqual(nai.fit_size(*bad),
+                             (nai.NAI_WIDTH, nai.NAI_HEIGHT), bad)
+
+
 class PrepareImageTest(unittest.TestCase):
-    """nai.prepare_image：对齐 NAI 出图尺寸（居中裁剪，不拉伸）+ 纯 base64。"""
+    """nai.prepare_image：按**源图比例**折算尺寸 + 纯 base64。
+
+    2026-10-03 起不再一律裁成竖版——垫图是「改造这张」，构图该跟原图一致；
+    裁剪只剩「消掉 64 倍数取整那点偏差」的量。
+    """
 
     def _png(self, w, h, mode="RGB"):
         buf = io.BytesIO()
         Image.new(mode, (w, h), (200, 120, 90)).save(buf, "PNG")
         return buf.getvalue()
 
-    def _decode(self, b64):
+    def _decode(self, prepared):
+        b64, w, h = prepared
         self.assertNotIn(b"://", base64.b64decode(b64)[:64])  # 纯 base64，无 data: 前缀
-        return Image.open(io.BytesIO(base64.b64decode(b64)))
+        im = Image.open(io.BytesIO(base64.b64decode(b64)))
+        # 报出来的尺寸必须跟真图一致——worker 拿它当 NAI 的 width/height，
+        # 不一致就等于「垫一张 A 尺寸的图、要一张 B 尺寸的图」。
+        self.assertEqual(im.size, (w, h))
+        return im
 
-    def test_wide_image_is_center_cropped_not_stretched(self):
-        im = self._decode(nai.prepare_image(self._png(2000, 500)))
-        self.assertEqual(im.size, (nai.NAI_WIDTH, nai.NAI_HEIGHT))
+    def test_landscape_source_stays_landscape(self):
+        im = self._decode(nai.prepare_image(self._png(1920, 1080)))
+        self.assertGreater(im.size[0], im.size[1])
 
-    def test_tall_image_is_center_cropped(self):
-        im = self._decode(nai.prepare_image(self._png(300, 1600)))
-        self.assertEqual(im.size, (nai.NAI_WIDTH, nai.NAI_HEIGHT))
+    def test_portrait_source_stays_portrait(self):
+        im = self._decode(nai.prepare_image(self._png(1080, 1920)))
+        self.assertGreater(im.size[1], im.size[0])
+
+    def test_source_ratio_is_kept(self):
+        im = self._decode(nai.prepare_image(self._png(1200, 1600)))   # 3:4
+        self.assertAlmostEqual(im.size[0] / float(im.size[1]), 0.75,
+                               delta=0.06)
 
     def test_alpha_is_flattened(self):
         im = self._decode(nai.prepare_image(self._png(64, 64, "RGBA")))
         self.assertEqual(im.mode, "RGB")
-        self.assertEqual(im.size, (nai.NAI_WIDTH, nai.NAI_HEIGHT))
 
     def test_garbage_raises_runtime_error(self):
         with self.assertRaises(RuntimeError):

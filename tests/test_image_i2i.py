@@ -669,10 +669,15 @@ class NaiI2ITest(unittest.TestCase):
     KEY = ("group", 999001)
 
     def _run(self, allowed=True, context=None,
-             resolve_result=(b"RAW", "引用的那张图"), **kw):
+             resolve_result=(b"RAW", "引用的那张图"),
+             prepared=("QUJD-B64", 1216, 832), **kw):
         """跑 NAI 分支。覆写一律走参数，**不要在测试体里再叠 patch**——
         _run 的 addCleanup 晚于外层 with 恢复，会把外层 patch 的值泄漏给
-        后面的用例（真实撞过：no_quote 泄漏进了 ResolveTest）。"""
+        后面的用例（真实撞过：no_quote 泄漏进了 ResolveTest）。
+
+        `prepared` 是 nai.prepare_image 的返回值（base64 + 出图宽高）——
+        真实实现按**源图比例**算尺寸，测试里直接给一个固定值。
+        """
         captured = {}
         fake_job = mock.Mock()
 
@@ -699,8 +704,7 @@ class NaiI2ITest(unittest.TestCase):
             mock.patch.object(agents, "nai_allowed",
                               lambda *a, **k: (allowed, why)),
             mock.patch.object(comfy_src, "resolve", fake_resolve),
-            mock.patch.object(nai, "prepare_image",
-                              lambda raw: "QUJD-B64"),
+            mock.patch.object(nai, "prepare_image", lambda raw: prepared),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -716,6 +720,9 @@ class NaiI2ITest(unittest.TestCase):
         self.assertEqual(cap["workflow"], "make it night")
         self.assertEqual(cap["nai_i2i"]["image"], "QUJD-B64")
         self.assertEqual(cap["nai_i2i"]["note"], "引用的那张图")
+        # 出图尺寸必须一起快照——worker 线程只拿得到这份快照
+        self.assertEqual(cap["nai_i2i"]["width"], 1216)
+        self.assertEqual(cap["nai_i2i"]["height"], 832)
         # NAI 也要带意图指纹，否则同一个会话里连点两次会排出两张一样的图
         # （见 image_jobs.find_pending_duplicate）。
         self.assertTrue(cap["intent"])
@@ -762,6 +769,35 @@ class NaiI2ITest(unittest.TestCase):
                              source_image="1")
         self.assertIn("仅支持 QQ", out)
         self.assertEqual(cap, {})
+
+    # ---- 横版渠道 `nai_wide`（2026-10-03 加） ----
+
+    def test_wide_channel_keeps_its_name_in_the_job(self):
+        """`nai_wide` 必须原样进 job.skill——worker 靠它决定文生图的横竖。"""
+        out, cap = self._run(prompt="a cat", skill="nai_wide")
+        self.assertIn("已经在画了", out)
+        self.assertEqual(cap["skill"], "nai_wide")
+        self.assertEqual(cap["workflow"], "a cat")
+        self.assertIsNone(cap["nai_i2i"])
+
+    def test_wide_channel_shares_the_nai_gate(self):
+        """横竖是同一套闸：没开通 NAI 的群，nai_wide 同样进不来。"""
+        out, cap = self._run(allowed=False, prompt="x", skill="nai_wide")
+        self.assertIn("未在本 agent 启用", out)
+        self.assertEqual(cap, {})
+
+    def test_i2i_size_follows_the_source_not_the_channel(self):
+        """垫图尺寸取自源图比例——同一个横屏渠道垫竖图，快照里仍是竖的。"""
+        _, cap = self._run(prompt="x", skill="nai_wide", source_image="1",
+                           prepared=("QUJD-B64", 832, 1216))
+        self.assertEqual((cap["nai_i2i"]["width"], cap["nai_i2i"]["height"]),
+                         (832, 1216))
+
+    def test_wide_and_portrait_are_separate_intents(self):
+        """同一个 prompt 走两个渠道不该被当成重复提交（指纹含 skill）。"""
+        _, plain = self._run(prompt="1girl", skill="nai")
+        _, wide = self._run(prompt="1girl", skill="nai_wide")
+        self.assertNotEqual(plain["intent"], wide["intent"])
 
 
 if __name__ == "__main__":
