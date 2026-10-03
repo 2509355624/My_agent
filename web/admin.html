@@ -85,7 +85,8 @@
   .sessCol h2 { font-size: 13px; font-weight: 500; color: var(--text-dim); }
   .sessCol .hint { font-size: 11px; color: var(--text-mute); }
   .sessCol .sess-list { flex: 1; overflow-y: auto; min-height: 0; }
-  /* 320px 装不下「全选/反选/清空/已选/批量人设/清除」一行，允许换行 */
+  /* 320px 装不下「全选/反选/清空/全部群/全部私聊/已选/批量人设/清除」一行，
+     允许换行 */
   .sessCol .sess-foot { margin-top: 0; flex-wrap: wrap; gap: 8px; }
 
   .meta { font-size: 12px; color: var(--text-mute); }
@@ -460,6 +461,8 @@
         <button class="ghost" id="selAll">全选</button>
         <button class="ghost" id="selInvert">反选</button>
         <button class="ghost" id="selNone">清空</button>
+        <button class="ghost" id="selGroups">全部群</button>
+        <button class="ghost" id="selPrivates">全部私聊</button>
         <span class="hint" id="selCount">0</span>
         <button class="ghost" id="bulkApply">批量人设…</button>
         <button class="danger" id="bulkClear">清除</button>
@@ -1103,6 +1106,39 @@ function selectableSessions() {
   return visibleSessions().filter(s => s.kind === 'group' || s.kind === 'private');
 }
 
+// 一整类的会话（**不看搜索**）——「全部群 / 全部私聊」用。
+function sessionsOfKind(kind) {
+  return sessions.filter(s => s.kind === kind);
+}
+
+// 「全部群 / 全部私聊」：一键把整类勾上，并直接弹开批量人设面板。
+// 三条语义 2026-10-04 用户拍板：
+// ① 范围 = **列表里已有的**会话（含「收过消息但还没回过」的群，它们
+//    session=false 但设了人设同样有效，等开线就生效）；不额外问 QQ 协议端
+//    要全量群/好友名单——那会让列表凭空多出一堆没聊过的行。
+// ② **无视搜索**：按钮字面就是「全部」。顺手把搜索词清掉，让列表露出全部，
+//    所见即所选；不清的话会出现「只看到 3 行、却已选 8 条」的怪象。
+//    直接改 searchText 变量而不走 applySearch()——后者会把不可见的勾选收窄掉，
+//    正好会删掉我们刚选上的那些。
+// ③ 勾选是**叠加**（与现有「全选」同型）：已经手选过的别类会话不清掉。
+function selectAllOfKind(kind) {
+  const rows = sessionsOfKind(kind);
+  if (!rows.length) {
+    sessStatus(kind === 'group' ? '这个 agent 还没有任何群会话。'
+                               : '这个 agent 还没有任何私聊会话。', 'err');
+    return;
+  }
+  if (searchText) {
+    searchText = '';
+    $('sessSearch').value = '';
+  }
+  rows.forEach(s => selKeys.add(s.key));
+  renderSessions();
+  // true = 强制按新的选中集重建面板（不 toggle 收起）；第二参只影响标题措辞，
+  // 让人一眼看出这次是「整类」而不是随手勾了几条。
+  openBulkPanel(true, kind === 'group' ? '全部群' : '全部私聊');
+}
+
 function syncCheckboxes() {
   $('sessList').querySelectorAll('input[type=checkbox]').forEach((cb) => {
     cb.checked = selKeys.has(cb.dataset.key);
@@ -1111,7 +1147,12 @@ function syncCheckboxes() {
 
 function renderSelBar() {
   const bar = $('sessBulkBar');
-  if (!selectableSessions().length) { bar.style.display = 'none'; return; }
+  // 显示条件看**全量**会话，不是筛选结果：否则搜了个没命中的关键词，连
+  // 「全部群」这个能救场的按钮都跟着消失，只能先手动清搜索才用得上。
+  if (!sessions.some(s => s.kind === 'group' || s.kind === 'private')) {
+    bar.style.display = 'none';
+    return;
+  }
   bar.style.display = 'flex';
   const n = selKeys.size;
   $('selCount').textContent = '已选 ' + n + ' 条';
@@ -1132,8 +1173,14 @@ function bulkHint(text, cls) {
   return el;
 }
 
-function openBulkPanel() {
-  if (bulkOpen) { closeBulkPanel(); return; }
+function openBulkPanel(force, scopeLabel) {
+  if (bulkOpen) {
+    // force = 由「全部群 / 全部私聊」调起：选中集刚从别处换过，面板要按新的
+    // 重建（标题里的条数、点「应用」时打包的 keys 都是开面板那一刻的快照）。
+    // 不带参数 = 点「批量人设…」按钮，再点一次就是收起。
+    if (!force) { closeBulkPanel(); return; }
+    closeBulkPanel();
+  }
   const keys = Array.from(selKeys);
   if (!keys.length) return;
   const box = $('sessBulkPanel');
@@ -1145,7 +1192,9 @@ function openBulkPanel() {
   const title = document.createElement('div');
   title.className = 'hint';
   title.style.cssText = 'margin-bottom:8px;';
-  title.textContent = '批量应用人设 —— 将写入已选的 ' + keys.length + ' 条会话。'
+  title.textContent = '批量应用人设 —— 将写入'
+    + (scopeLabel ? '「' + scopeLabel + '」共 ' : '已选的 ')
+    + keys.length + ' 条会话。'
     + '留空 = 该项不动；三项都留空就别点。';
 
   // ① 人设覆盖：顶替 prompt.md 的人设段
@@ -2172,7 +2221,13 @@ $('selInvert').addEventListener('click', () => {
 $('selNone').addEventListener('click', () => {
   selKeys = new Set(); syncCheckboxes(); renderSelBar();
 });
-$('bulkApply').addEventListener('click', openBulkPanel);
+// 一键整类：勾上该类全部会话 + 直接弹开人设面板（2026-10-04 用户要的
+// 「一键给全部群 / 全部私聊设人设」）。语义见 selectAllOfKind 上方注释。
+$('selGroups').addEventListener('click', () => selectAllOfKind('group'));
+$('selPrivates').addEventListener('click', () => selectAllOfKind('private'));
+// 包一层再传：**别写成 addEventListener('click', openBulkPanel)** —— 事件对象会
+// 顶到第一个参数位上（force 变成 MouseEvent，truthy），面板就只会重建、收不起来。
+$('bulkApply').addEventListener('click', () => openBulkPanel());
 $('bulkClear').addEventListener('click', clearBulkPrompt);
 // 搜索：边打边筛（'input' 不是 'change'——change 要等失焦才触发，手感很迟钝）。
 $('sessSearch').addEventListener('input', (e) => applySearch(e.target.value));
