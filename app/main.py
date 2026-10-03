@@ -1486,6 +1486,34 @@ def set_agent_interject(agent_id, group_id):
                     "interject": body["enabled"]})
 
 
+@app.route("/api/agent/<agent_id>/groups_muted", methods=["PUT"])
+def set_groups_muted(agent_id):
+    """切「所有群都不回」总开关。热生效，不用重启。
+
+    开了之后群里连 @ 都不接（私聊照常），用于把机器人当纯私人工具。
+    与逐群的 at_only 正交：那条收窄到「只认 @」，这条是「彻底不理群」。
+    存 settings.json 的 groups_muted=true。
+
+    写之前必须 read-modify-write（同 at_only：settings.json 还有 tools/skills
+    白名单、会话人设、NAI 名单等键，整体覆盖会冲掉）。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if "enabled" not in body or not isinstance(body["enabled"], bool):
+        return jsonify({"error": "需要布尔字段 enabled"}), 400
+
+    settings = agent_store.load_settings(aid)
+    settings["groups_muted"] = bool(body["enabled"])
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "groups_muted": bool(body["enabled"])})
+
+
 @app.route("/api/agent/<agent_id>/at_only/<group_id>", methods=["PUT"])
 def set_group_at_only(agent_id, group_id):
     """切某个群的「只认 @」开关。热生效，不用重启。

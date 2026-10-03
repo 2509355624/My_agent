@@ -152,6 +152,26 @@ def at_only_groups(agent_id):
     return set(str(x) for x in (s.get("at_only_groups") or []))
 
 
+def groups_muted(agent_id):
+    """全局群聊静音（settings.json 的 groups_muted）。返回 True / 集合 / 空。
+
+    `True` = **所有群都不回**（连 @ 也不接），私聊照常。用于把机器人当纯
+    私人工具：群里的消息一律不理。存一组群号 = 只静音这几个群（部分静音）。
+
+    与 `at_only_groups` 的区别别混：那条是「收窄到只认 @」，这条是「彻底
+    不理群」。与 `interject_muted` 也不一样：那条管「能不能主动开口」，
+    这条管「被叫了也不回」。
+
+    返回空/False = 不静音。读盘失败时调用方会退回 False（热路径不抛）。
+    """
+    v = load_settings(agent_id).get("groups_muted")
+    if v is True:
+        return True
+    if isinstance(v, (list, tuple, set)):
+        return set(str(x) for x in v)
+    return False
+
+
 # ─── 私聊每日生图额度 ────────────────────────────────
 
 # 默认每人每天 10 张（2026-09-30 用户拍板：「私聊除非我给白名单，不然单人每天

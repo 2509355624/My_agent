@@ -526,6 +526,21 @@ def _at_only_groups():
         return set()
 
 
+def _groups_muted():
+    """全局群聊静音（settings.json 的 groups_muted）。
+
+    与 `at_only_groups` 正交：那只是「收窄到只认 @」，这个是**全都不回**
+    ——群里连 @ 都不生效，私聊照常。用于把机器人当纯私人工具：群里的消息
+    一律不接，私聊才理。存 true = 所有群静音；存一组群号 = 只静音这几个。
+    读盘失败返回 False（不静音）——热路径上宁可多回一句也不能整条链路挂掉。
+    """
+    from app import agents as agent_store
+    try:
+        return agent_store.groups_muted(QQ_AGENT_ID)
+    except Exception:
+        return False
+
+
 def _should_reply(ev, target, target_id, text, at_me, has_image=False,
                   has_quote=False):
     """判定这条消息要不要回。返回 (bool, 原因)，原因只用于日志。
@@ -535,7 +550,7 @@ def _should_reply(ev, target, target_id, text, at_me, has_image=False,
     它们整个丢掉。注意「有内容」判据是 `text or has_image or has_quote`
     ——这些也算内容，但**不 @ 的群里仍然不看**，触发规则没放宽。
 
-    触发顺序：黑名单 → 群白名单 → @ → 关键词 → 全量模式。被管理页设成
+    触发顺序：黑名单 → 群白名单 → **全局静音** → @ → 关键词 → 全量模式。被管理页设成
     「只认 @」的群会跳过关键词那一档（见 _at_only_groups）。
     """
     user_id = str(ev.get("user_id", ""))
@@ -553,6 +568,11 @@ def _should_reply(ev, target, target_id, text, at_me, has_image=False,
     group_id = str(target_id)
     if QQ_WHITELIST_GROUPS and group_id not in QQ_WHITELIST_GROUPS:
         return False, "群不在白名单"
+
+    # 全局静音：在 @ 之前挡，连 @ 都不回（私聊不受影响）。
+    muted = _groups_muted()
+    if muted is True or (muted and group_id in muted):
+        return False, "群聊已静音"
 
     if at_me:
         return (has_content, "被 @")

@@ -1371,5 +1371,79 @@ class HdTierGuardTest(unittest.TestCase):
                          "不能直接覆写 source_note，会把降级提示冲掉")
 
 
+
+class T2iGuardTest(unittest.TestCase):
+    """文生图守卫：对方明说「文生图」→ 不许垫图。
+
+    实测（2026-10-04，qwen3.8-9b-heretic，各跑 2 遍）：对方说
+    「不要图生图了，文生图」，9B 两次里一次传了 `source_image`、一次才没传。
+    跟 `_hd_tier_guard` 同一个病根——**负向指令它执行不了**。所以代码判。
+    """
+
+    def _guard(self, is_i2i, text):
+        from unittest import mock
+        from app.tools.normal import generate_image as gi
+        with mock.patch("app.qq_api.current_turn_text", return_value=text):
+            return gi._t2i_guard(is_i2i)
+
+    def test_explicit_t2i_drops_source(self):
+        for text in ("不要图生图了，文生图", "文生图", "纯文生图",
+                     "不要垫图", "别用参考图", "重新生成", "重画一张"):
+            ok, note = self._guard(True, text)
+            self.assertTrue(ok, "不该拦下整次调用（%s）" % text)
+            self.assertIn("文生图", note,
+                          "「%s」明说文生图，却没告诉对方已去掉垫图" % text)
+            self.assertNotIn("%s", note, "回执里留着未替换的占位符")
+            # 回执那边会再套一层「（垫图：%s）」，note 自带括号就变成「（（…））」
+            self.assertFalse(note.startswith("（") and note.endswith("）"),
+                             "note 自带外层括号，会被回执套成「（（…））」：%r" % note)
+
+    def test_no_intent_keeps_i2i(self):
+        """没说文生图 → 不动 i2i，别误伤正常的垫图。"""
+        for text in ("改这件外套", "图生图", "垫图重绘", "跑图"):
+            ok, note = self._guard(True, text)
+            self.assertEqual((ok, note), (True, ""),
+                             "「%s」没说文生图，却把垫图去掉了" % text)
+
+    def test_not_i2i_is_noop(self):
+        self.assertEqual(self._guard(False, "文生图"), (True, ""))
+
+    def test_web_no_user_text_passes(self):
+        """网页端/单测没有原话这个证据源，一律不拦（与 _i2i_gate 同原则）。"""
+        from unittest import mock
+        from app.tools.normal import generate_image as gi
+        with mock.patch("app.qq_api.current_turn_text", return_value=None):
+            self.assertEqual(gi._t2i_guard(True), (True, ""))
+
+    def test_gate_runs_before_nai_split(self):
+        """必须挡在 NAI 分流之前——NAI 走云端但共用同一个 source_image，
+        放后面就会漏判。"""
+        import inspect
+        from app.tools.normal import generate_image as gi
+        src = inspect.getsource(gi._generate_image)
+        self.assertLess(src.index("_t2i_guard(is_i2i)"),
+                        src.index("if skill in image_jobs.NAI_SKILLS:"),
+                        "文生图守卫在 NAI 分流之后 → NAI 垫图漏判")
+
+    def test_resets_is_i2i_before_branches(self):
+        """改完 source_image 必须重算 is_i2i，否则下面所有分支仍按垫图走。"""
+        import inspect
+        from app.tools.normal import generate_image as gi
+        src = inspect.getsource(gi._generate_image)
+        i_call = src.index("_t2i_guard(is_i2i)")
+        # 紧接着应是清空 + 重算
+        tail = src[i_call:i_call + 200]
+        self.assertIn('source_image = ""', tail)
+        self.assertIn("is_i2i = False", tail)
+
+    def test_note_reaches_receipt(self):
+        """改判说明必须进回执通道 source_note，否则对方不知道图变了。"""
+        import inspect
+        from app.tools.normal import generate_image as gi
+        src = inspect.getsource(gi._generate_image)
+        self.assertIn("hd_note + t2i_note", src,
+                      "t2i_note 没并进 source_note，回执里看不到")
+
+
 if __name__ == "__main__":
     unittest.main()

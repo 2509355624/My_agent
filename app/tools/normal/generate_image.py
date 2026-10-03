@@ -200,6 +200,49 @@ def _i2i_gate(is_i2i):
     return _I2I_NO_INTENT_NOTE
 
 
+# ── 文生图守卫（2026-10-04）────────────────────────────────────────
+# `_i2i_gate` 的镜像：那边管「没说要改就不许垫图」，这边管**明说了文生图
+# 就不许垫图**。
+#
+# 为什么需要（实测 qwen3.8-9b-heretic，2 遍）：对方说「不要图生图了，文生图」，
+# 9B 两次里一次传了 `source_image`、一次才没传。跟 `_hd_tier_guard` 同一个病根
+# ——**负向指令它执行不了**（「别垫图」/「不要图生图」都是负向），而正向映射
+# 「文生图 = 不传 source_image」它学得会。与其指望它记住禁令，不如代码判。
+_T2I_ONLY_RE = re.compile(
+    r"文生图|纯文生"
+    r"|不(?:要|用|走)?(?:图生图|垫图|参照图|参考图)"
+    r"|别(?:用)?(?:图生图|垫图|参照图|参考图)"
+    r"|重新生成|重画|从头画|重新画"
+)
+
+# 刻意**不带外层括号**：回执那边会用「（垫图：%s）」把它括起来，套两层
+# 就变成「（（…））」。同理别用句号收尾——拼接处本来就有。
+_T2I_FORCED_NOTE = (
+    "系统已自动调整：对方本轮明说了「文生图」，所以没垫图、没参照他发的那张，"
+    "按他自己描述 / 反推的提示词重新画了一张"
+)
+
+
+def _t2i_guard(is_i2i):
+    """对方明说「文生图」而模型却传了 source_image → 挡掉垫图，放行文生图。
+
+    返回 (是否继续, 给回执的说明)。与 `_i2i_gate` 一样，只在 QQ 轮里判
+    （`current_turn_text()` 为 None = 网页端/单测，没有原话这个证据源，不拦）。
+    """
+    if not is_i2i:
+        return True, ""
+    from app import qq_api
+
+    text = qq_api.current_turn_text()
+    if text is None:
+        return True, ""
+    m = _T2I_ONLY_RE.search(text)
+    if not m:
+        return True, ""
+    log.info("去掉垫图：本轮原话明说了「%s」，按文生图重画", m.group(0))
+    return True, _T2I_FORCED_NOTE
+
+
 # 没点名 skill 时的文生图默认渠道。
 #
 # 2026-09-30 20:3x 起：**本机只剩 4 个动漫渠道，SD 渠道（image_gen_v1）已归档。**
@@ -628,6 +671,16 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     if refused:
         return refused
 
+    # 反向：对方**明说了文生图**而模型却传了 source_image → 去掉垫图，按文生图
+    # 重画。必须在 `is_i2i` 算出来**之后、`if skill in NAI` 分流之前**：
+    # ① 改完要重新算 is_i2i，下面所有分支都以它为准；② NAI 走云端也是同一个
+    # source_image 参数，不该漏判。跟 `_i2i_gate` 一对，一个拦「没说要改的」，
+    # 一个拦「明说不要改的」。
+    _, t2i_note = _t2i_guard(is_i2i)
+    if t2i_note:
+        source_image = ""
+        is_i2i = False
+
     # NAI（NovelAI）云端生图：群主独立 token，与 ComfyUI 完全隔离。
     # 不碰下面那套 ComfyUI 探活 / 加载 / skill：它走自己的云分支（见
     # image_jobs._process_nai），token 只给指定群用（app/agents.nai_allowed）。
@@ -724,7 +777,9 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 目录。取图 / 缩放 / 上传任何一步失败都当场返回，**不退回文生图**——
     # 对方以为改的是自己那张，收到的却是凭空画的，比直接报错糟得多。
     workflow = skill_data["workflow"]
-    source_note, denoise_txt, uploaded = hd_note, "", ""
+    # 降级 / 改判说明都走 source_note 这一个通道进回执。t2i_note 在
+    # is_i2i 被清成 False 后走到这里，所以也要带上。
+    source_note, denoise_txt, uploaded = hd_note + t2i_note, "", ""
     if is_i2i:
         if skill not in _I2I_SKILLS:
             return ("错误: " + skill + " 不支持图生图（垫图 / 改图）。"

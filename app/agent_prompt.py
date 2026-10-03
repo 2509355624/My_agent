@@ -15,6 +15,17 @@ from app.skills import list_skills, load_skill, skill_summary
 from app.tools.registry import TOOLS
 
 
+def _brief_mode():
+    """简短模式开关（.env PROMPT_BRIEF，默认关）。
+
+    给小上下文模型（如本地 ollama 9B，num_ctx 16384）用：把工具描述压成
+    首句、砍掉 _TOOL_HINTS 与 Skill 目录的细节说明。人设与协议不动——
+    那是模型能不能干活的前提，砍了它就不叫工具不叫人了。
+    """
+    return str(os.getenv("PROMPT_BRIEF", "")).strip().lower() in (
+        "1", "true", "yes", "on")
+
+
 # ─── Section 优先级定义 ────────────────────────────
 # priority 越小越重要，上下文裁剪时优先保留
 P_ROLE = 1          # 角色定义（永远保留）
@@ -35,11 +46,33 @@ _stable_cache = {}   # {agent_id: prompt 文本}
 _stable_fp = {}      # {agent_id: 指纹}
 
 
-def _build_tool_list(agent_id=None):
+def _brief_desc(desc, limit=60):
+    """工具描述压成一句话（简短模式用）。
+
+    只取**第一个句子**——工具描述的惯例是「用途（详细规则…）」，用途一定在
+    第一句里，后面全是给小模型看的细则。小模型（9B）不会主动 load_skill，
+    但它也不需要细则：它只要知道「有这个工具、大概能干什么、参数怎么填」。
+    细则留着是给真需要时 load_skill 的人看的，不该每轮都塞进系统头。
+    """
+    d = (desc or "").strip()
+    if not d:
+        return ""
+    for sep in ("。", "\n", "；"):
+        i = d.find(sep)
+        if i > 0:
+            d = d[:i]
+            break
+    d = d.strip().rstrip("。：:")
+    return d[:limit] + ("…" if len(d) > limit else "")
+
+
+def _build_tool_list(agent_id=None, brief=False):
     """构建工具列表：名称(参数签名): 描述
 
     带上参数签名，避免模型靠猜参数名反复试错（小模型尤其明显）。
     `*` 标记必填参数。只列该 agent 白名单内的工具（None = 全部）。
+
+    brief=True 时描述只留首句（见 _brief_desc）——小模型上下文吃紧时用。
     """
     lines = []
     for tool in TOOLS:
@@ -56,6 +89,8 @@ def _build_tool_list(agent_id=None):
         props = {k: v for k, v in props.items() if k not in hidden}
         desc = (tool.get("description_overrides") or {}).get(agent_id) \
             or tool["description"]
+        if brief:
+            desc = _brief_desc(desc)
         if props:
             sig_parts = []
             for pname, pdef in props.items():
@@ -175,14 +210,20 @@ def _build_tool_hints(agent_id=None):
     return "\n".join(lines)
 
 
-def _build_skill_list(agent_id=None):
+def _build_skill_list(agent_id=None, brief=False):
     """构建 Skill 目录（名字 + 类型 + 一句话简介）
 
     只列该 agent 白名单内的 skill（None = 全部）。
+
+    brief=True 时只列名字：生图渠道的名字本身就是参数值（hd_2_clear、
+    qwen_image_v1…），9B 要的就是「有哪些渠道可选」，一句话简介它读不进去，
+    反而把窗口挤掉（实测 Skill 目录 1349 字，占系统头 6%）。
     """
     skill_list = [s for s in list_skills() if agent_store.allows_skill(agent_id, s)]
     if not skill_list:
         return "（暂无）"
+    if brief:
+        return "、".join(skill_list)
     descs = []
     for s in skill_list:
         data = load_skill(s)
@@ -341,10 +382,19 @@ def build_stable_prompt(agent_id=None, persona_override=None):
 
     # [P2] 工具列表（简述，详细规范由 load_skill 按需读取）
     # 使用提示按该 agent 的白名单裁剪：看不到的工具，不出现它的用法说明
-    hints = _build_tool_hints(agent_id)
+    #
+    # brief=True（.env PROMPT_BRIEF=true）给小上下文模型用：描述只留首句、
+    # hints 整段不要。实测 9B 挂在 ollama 的 16K 窗口上时，光工具描述就吃掉
+    # 系统头 39%，叠加人设后输入超预算近 3 倍 → 模型写工具参数写到一半被
+    # 物理窗口切断（[tool-truncated]），表现成「话说得漂亮但没调工具」。
+    brief = _brief_mode()
+    if brief:
+        hints = ""
+    else:
+        hints = _build_tool_hints(agent_id)
     sections.append((P_TOOLS, "Available Tools",
         "参数名后带 * 表示必填，必须严格使用下列参数名：\n"
-        + _build_tool_list(agent_id)
+        + _build_tool_list(agent_id, brief=brief)
         + (("\n\n提示：\n" + hints) if hints else "")
     ))
 
@@ -374,11 +424,13 @@ def build_stable_prompt(agent_id=None, persona_override=None):
     else:
         how = ""
     sections.append((P_SKILLS, "Available Skills",
-        "以下是可用的 Skill（标「生图」的是能出图的渠道，其余为写作/知识类）。"
-        "**这份目录就是本 agent 手上全部的 Skill 与生图渠道，需要时直接照着它回答；"
-        "没有「列出 Skill / 列出渠道」这类工具，不要试着去调。**"
-        + how + "\n"
-        + _build_skill_list(agent_id)
+        ("以下是可用的 Skill 与生图渠道，需要时直接照着它选。"
+         if brief else
+         "以下是可用的 Skill（标「生图」的是能出图的渠道，其余为写作/知识类）。"
+         "**这份目录就是本 agent 手上全部的 Skill 与生图渠道，需要时直接照着它回答；"
+         "没有「列出 Skill / 列出渠道」这类工具，不要试着去调。**")
+        + ("" if brief else how) + "\n"
+        + _build_skill_list(agent_id, brief=brief)
     ))
 
     # [P4] 环境信息（相对稳定，启动时确定）

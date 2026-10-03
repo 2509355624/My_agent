@@ -244,5 +244,195 @@ class ImageGuideContentTest(unittest.TestCase):
                       "保留实测反例（9B 给神里绫华编的假 tag）")
 
 
+
+class BriefModeTest(unittest.TestCase):
+    """简短模式（.env PROMPT_BRIEF）：给小上下文模型砍系统头。
+
+    实测背景（2026-10-04）：本地 ollama 9B 的 num_ctx 是 16384，
+    `physical_budget` 把它压到 11468；而 qq 的系统头有 22514 字 ≈ 预算的
+    两倍 → 输入超预算近 3 倍，模型写 generate_image 的参数写到一半被物理
+    窗口切断（`[tool-truncated]`），群里表现成「话说得漂亮但没调工具」
+    连失败 3 次。所以砍系统头是治根，不是省 token。
+    """
+
+    def _sp(self, brief):
+        from unittest import mock
+        import app.agent_prompt as ap
+        ap._stable_cache.clear()
+        ap._stable_fp.clear()
+        with mock.patch.dict(os.environ,
+                             {"PROMPT_BRIEF": "1" if brief else "0"}):
+            return ap.build_system_prompt(agent_id="qq")
+
+    def test_brief_shrinks_system_head_hard(self):
+        full, brief = self._sp(False), self._sp(True)
+        self.assertLess(len(brief), len(full) * 0.5,
+                        "简短模式没砍下来（%d -> %d）" % (len(full), len(brief)))
+        # 关键判据：必须能装进 ollama 的压缩预算 11468，否则压缩照样触发
+        self.assertLessEqual(
+            len(brief), 11468,
+            "砍完仍超 ollama 物理预算 11468 字，压缩闸门照样每轮触发")
+
+    def test_brief_keeps_tool_names_and_params(self):
+        """砍的是描述，不是工具本身——名字与参数签名必须留着。
+
+        少了它 9B 根本没法把参数填对（它不会主动 load_skill）。
+        """
+        brief = self._sp(True)
+        for name, param in (("generate_image", "prompt*"),
+                            ("send_qq_message", "message*"),
+                            ("web_search", "query*")):
+            self.assertIn(name, brief, "工具 %s 被砍没了" % name)
+            self.assertIn(param.split("*")[0], brief,
+                          "工具 %s 的参数名不见了" % name)
+
+    def test_brief_drops_hints_entirely(self):
+        """_TOOL_HINTS 那 2170 字细则要整段消失——它是「怎么用」不是「有什么」。"""
+        from app.agent_prompt import _build_tool_hints
+        hints = _build_tool_hints("qq")
+        self.assertIn("提示：", self._sp(False))
+        self.assertNotIn(hints[:40], self._sp(True),
+                         "简短模式仍塞着 hints 全文")
+
+    def test_brief_skill_list_is_names_only(self):
+        """Skill 目录在简短模式下只列名字（渠道名本身就是 skill 参数值）。
+
+        这里必须单独钉住：改回去不一定让系统头超预算（13361 也超，但
+        两种超法不一样），所以光靠 test_brief_shrinks_system_head_hard
+        抓不到「skill 目录没压」这种回归。
+        """
+        from app.agent_prompt import _build_skill_list
+        full = _build_skill_list("qq", brief=False)
+        brief = _build_skill_list("qq", brief=True)
+        self.assertIn("（", full, "完整模式应该有类型标注")
+        self.assertNotIn("（", brief, "简短模式不该再有类型标注（没压）")
+        self.assertLess(len(brief), len(full) * 0.5,
+                        "skill 目录没压下来（%d -> %d）" % (len(full), len(brief)))
+        # 名字必须还在——那是渠道参数值，砍掉模型就没法填 skill 了
+        self.assertIn("anima_clear", brief)
+
+    def test_brief_keeps_tool_call_protocol(self):
+        """协议段不能砍。砍了它模型就不认识 [[TOOL:...]] 了，
+        会退化成 XML 标签写法（工具静默不执行）。"""
+        brief = self._sp(True)
+        self.assertIn("[[TOOL:", brief)
+        self.assertIn("TOOL:", brief)
+
+    def test_brief_off_by_default(self):
+        """没设 PROMPT_BRIEF 时必须走完整模式——云端模型上下文充裕，
+        不该被小模型的限制拖累。"""
+        from unittest import mock
+        import app.agent_prompt as ap
+        ap._stable_cache.clear()
+        ap._stable_fp.clear()
+        env = {k: v for k, v in os.environ.items() if k != "PROMPT_BRIEF"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertFalse(ap._brief_mode())
+
+
+class PersonaTrimmedTest(unittest.TestCase):
+    """人设砍到只剩身份+说话方式（2026-10-04 用户要求）。
+
+    起因是 9B 上下文超载：原 prompt.md 7165 字里 6771 字是审核话术、
+    边界细则、拒绝话术——用户自己本地玩，这些纯占位置。
+    **但「身份 + 说话方式 + 生图铁律」必须留着**：砍到只剩一句话的话，
+    模型会既不认自己是谁，也不会调工具。
+    """
+
+    def _persona(self):
+        from app import agents as agent_store
+        return agent_store.persona_text("qq")
+
+    def test_persona_is_small(self):
+        p = self._persona()
+        self.assertLess(len(p), 1500,
+                        "人设还剩 %d 字，审核/边界细则没砍干净" % len(p))
+
+    def test_keeps_identity_and_voice(self):
+        p = self._persona()
+        self.assertIn("大大怪", p, "身份丢了")
+        self.assertIn("## 一、身份", p)
+        self.assertIn("## 三、说话方式", p)
+        self.assertIn("句尾不带标点", p, "说话方式是人格核心，不能砍")
+
+    def test_keeps_image_rule(self):
+        """生图铁律是「不调工具」这个 bug 的直接对策，必须留着。"""
+        p = self._persona()
+        self.assertIn("直接调 generate_image", p)
+        self.assertIn("绝不把提示词写进正文", p)
+
+    def test_audit_sections_gone(self):
+        """审核/边界/拒绝话术整段删掉。"""
+        p = self._persona()
+        for gone in ("最高优先级 · 内容审核层", "群聊拦截清单",
+                     "私聊拒绝话术", "群聊拒绝话术", "试探边界",
+                     "群聊只答被问的（铁律）"):
+            self.assertNotIn(gone, p, "「%s」还在人设里" % gone)
+
+
+class GroupsMutedTest(unittest.TestCase):
+    """群聊总开关：开了所有群都不回，私聊照常（当纯私人工具用）。"""
+
+    def test_settings_true_mutes_every_group(self):
+        from app import agents as agent_store
+        with mock.patch.object(agent_store, "load_settings",
+                               return_value={"groups_muted": True}):
+            self.assertIs(agent_store.groups_muted("qq"), True)
+
+    def test_settings_list_mutes_only_those(self):
+        from app import agents as agent_store
+        with mock.patch.object(agent_store, "load_settings",
+                               return_value={"groups_muted": ["111", "222"]}):
+            got = agent_store.groups_muted("qq")
+            self.assertEqual(got, {"111", "222"})
+
+    def test_absent_means_not_muted(self):
+        from app import agents as agent_store
+        with mock.patch.object(agent_store, "load_settings", return_value={}):
+            self.assertFalse(agent_store.groups_muted("qq"))
+
+    def test_bot_gate_blocks_even_at(self):
+        """连 @ 都不回——直接验行为，别测源码位置。
+
+        之前用 `src.index()` 比位置，两次都被假通过骗过去：① 找的是第一处
+        `if at_me:` 提及，插它前面断言照样成立；② 插第二个"群聊已静音"副本
+        到 @ 之后，原件还在前面，断言还是成立。位置断言在有重复文本的函数里
+        根本不可靠。这里改成跑真函数：被 @ 的群在开关打开时必须不回。
+        """
+        import app.qq_bot as qb
+        ev = {"user_id": "1"}
+        for at in (True, False):
+            with mock.patch.object(qb, "_groups_muted", return_value=True):
+                ok, why = qb._should_reply(ev, "group", "999", "大大怪", at)
+            self.assertFalse(ok, "at_me=%s 竟然回了（静音开关失效）" % at)
+            self.assertIn("静音", why)
+
+    def test_bot_gate_not_muted_still_replies(self):
+        """反向：开关没开时行为必须跟以前一样（别把群聊功能整体关死）。"""
+        import app.qq_bot as qb
+        ev = {"user_id": "1"}
+        with mock.patch.object(qb, "_groups_muted", return_value=False):
+            ok, why = qb._should_reply(ev, "group", "999", "大大怪", True)
+        self.assertTrue(ok, "没静音却被拦了：%s" % why)
+
+    def test_private_unaffected_by_group_mute(self):
+        """群静音**不能**波及私聊——这是它的全部意义。"""
+        import app.qq_bot as qb
+        ev = {"user_id": "1"}
+        with mock.patch.object(qb, "_groups_muted", return_value=True), \
+             mock.patch.object(qb, "_private_gate", return_value=(True, "")):
+            ok, why = qb._should_reply(ev, "private", "1", "在吗", False)
+        self.assertTrue(ok, "私聊被群静音误伤：%s" % why)
+
+    def test_bot_gate_returns_reason(self):
+        import app.qq_bot as qb
+        from app import agents as agent_store
+        ev = {"user_id": "1"}
+        with mock.patch.object(qb, "_groups_muted", return_value=True):
+            ok, why = qb._should_reply(ev, "group", "999", "大大怪", True)
+        self.assertFalse(ok)
+        self.assertIn("静音", why)
+
+
 if __name__ == "__main__":
     unittest.main()
