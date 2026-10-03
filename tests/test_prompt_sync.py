@@ -130,5 +130,76 @@ class SyncSessionSystemTest(unittest.TestCase):
         self.assertEqual(len(memory.load_history("a", "group_1")), 1)
 
 
+class ImageGuideTest(unittest.TestCase):
+    """生图方法独立成段：**不随会话自定义人设一起被顶掉**。
+
+    「四、通用生图方法」原先写在 prompt.md 里，而 prompt.md **整份**就是
+    build_stable_prompt 的 Role 段；会话级自定义人设（persona_override）是
+    整份顶替 Role 的 —— 于是给某条会话设了人设，生图方法就跟着没了，生图
+    质量莫名其妙地掉，而且越"定制"的会话越容易中招，极难查。
+    2026-10-03 抽成 agents/<id>/image_guide.md，进独立 section。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = os.path.join(self.tmp.name, "agents")
+        os.makedirs(self.root, exist_ok=True)
+        for obj, name in ((agents, "AGENTS_DIR"),):
+            p = mock.patch.object(obj, name, self.root)
+            p.start()
+            self.addCleanup(p.stop)
+        agents.clear_cache()
+        self.addCleanup(agents.clear_cache)
+        # 稳定层缓存不归 clear_session_cache 管，得手动清（key 是 agent id，
+        # 跨用例会串）
+        prompt_mod._stable_cache.clear()
+        prompt_mod._stable_fp.clear()
+        self.addCleanup(prompt_mod._stable_cache.clear)
+        self.addCleanup(prompt_mod._stable_fp.clear)
+
+    def _mk_agent(self, aid, persona="你是A"):
+        d = os.path.join(self.root, aid)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "agent.json"), "w", encoding="utf-8") as f:
+            json.dump({}, f)
+        path = os.path.join(d, "prompt.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(persona)
+        _bump(path)
+
+    def _mk_guide(self, aid, text):
+        path = os.path.join(self.root, aid, "image_guide.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        _bump(path)
+
+    def test_guide_survives_persona_override(self):
+        self._mk_agent("g")
+        self._mk_guide("g", "画手要写 five fingers")
+        self.assertIn("five fingers", prompt_mod.build_stable_prompt("g"))
+
+        over = prompt_mod.build_stable_prompt("g", persona_override="你只会说喵")
+        self.assertIn("你只会说喵", over)          # 人设确实被换了
+        self.assertIn("five fingers", over)        # ← 关键：生图方法没被吃掉
+
+    def test_no_guide_file_means_no_section(self):
+        """没有 image_guide.md 的 agent（多数都没有）不该多出空段。"""
+        self._mk_agent("g2")
+        self.assertNotIn("生图方法", prompt_mod.build_stable_prompt("g2"))
+
+    def test_editing_guide_bumps_revision(self):
+        """改生图方法要能热加载 —— 它必须进 revision 指纹。"""
+        self._mk_agent("g3")
+        self._mk_guide("g3", "第一版")
+        r1 = agents.revision("g3")
+        self._mk_guide("g3", "第二版")
+        self.assertNotEqual(r1, agents.revision("g3"))
+
+    def test_guide_path_is_none_for_bad_agent_id(self):
+        self.assertIsNone(agents.image_guide_path("../.."))
+        self.assertEqual(agents.image_guide_text("../.."), "")
+
+
 if __name__ == "__main__":
     unittest.main()

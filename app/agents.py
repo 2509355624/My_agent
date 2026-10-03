@@ -929,8 +929,46 @@ def save_persona(agent_id, text):
     return True
 
 
+# 生图方法文档（可选）。单独成文件而不是写在 prompt.md 里，理由见
+# image_guide_text 的注释。
+IMAGE_GUIDE_FILE = "image_guide.md"
+
+
+def image_guide_path(agent_id):
+    """生图方法文档的绝对路径；agent_id 非法时返回 None。
+
+    路径写死成固定文件名（不像 prompt_file 那样可在 agent.json 里配）：
+    它对应的是 build_stable_prompt 里一个**固定段落**，不参与人设覆盖，
+    配来配去只会让「哪些会话拿得到生图方法」变得不可预测。
+    """
+    aid = safe_agent_id(agent_id)
+    if aid is None:
+        return None
+    return os.path.join(AGENTS_DIR, aid, IMAGE_GUIDE_FILE)
+
+
+def image_guide_text(agent_id):
+    """生图方法文档正文；文件不存在返回空串（多数 agent 都没有）。
+
+    为什么要单独一个文件，而不是跟着人设写在 prompt.md 里：
+    **prompt.md 整份就是 build_stable_prompt 的 Role 段**，而会话级自定义
+    人设（persona_override）是**整份顶替** Role 的。写在一起的后果是
+    「一旦给某条会话设了自定义人设，生图方法连同人设一起被顶掉」——
+    生图质量莫名其妙地掉，而且极难查（会话越"定制"越容易中招）。
+    抽成独立文件后它进的是**独立 section**，任何会话都拿得到。
+    """
+    path = image_guide_path(agent_id)
+    if not path:
+        return ""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
 def revision(agent_id):
-    """该 agent 配置的版本串（agent.json 与人设文件的 mtime 拼接）。
+    """该 agent 配置的版本串（agent.json、人设文件、生图方法文档的 mtime 拼接）。
 
     给上层缓存用：system prompt 的稳定层把版本串算进指纹，于是改了配置
     或人设就自动重建，不用重启服务。
@@ -940,7 +978,7 @@ def revision(agent_id):
         return "-"
     cfg = agent_config(aid)
     parts = [aid]
-    for fname in ("agent.json", cfg["prompt_file"]):
+    for fname in ("agent.json", cfg["prompt_file"], IMAGE_GUIDE_FILE):
         path = os.path.join(AGENTS_DIR, aid, fname)
         try:
             parts.append(str(os.path.getmtime(path)))

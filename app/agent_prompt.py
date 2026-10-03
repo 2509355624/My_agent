@@ -19,6 +19,7 @@ from app.tools.registry import TOOLS
 # priority 越小越重要，上下文裁剪时优先保留
 P_ROLE = 1          # 角色定义（永远保留）
 P_TOOL_FORMAT = 1   # 工具调用格式（核心协议）
+P_IMAGE = 1         # 生图方法（独立于人设，不随 persona_override 被顶掉）
 P_TOOLS = 2         # 工具列表
 P_SECURITY = 2      # 安全规则
 P_RULES = 3         # 行为规则
@@ -279,6 +280,15 @@ def build_stable_prompt(agent_id=None, persona_override=None):
 
     # [P1] 角色（来自 agent 人设）
     sections.append((P_ROLE, "Role", persona))
+
+    # [P1] 生图方法（独立段落，**不随人设覆盖一起被顶掉**）
+    # 这段原先写在 prompt.md 的「四、通用生图方法」里，而 prompt.md 整份就是
+    # 上面的 Role 段——会话级自定义人设（persona_override）一非空，它就被整份
+    # 顶掉，生图质量莫名其妙地掉。抽出来单列后，任何会话都拿得到。
+    # 插在 Role 之后：sections.sort 是稳定排序，同 priority 保持插入顺序。
+    guide = agent_store.image_guide_text(agent_id)
+    if guide:
+        sections.append((P_IMAGE, "生图方法", guide))
 
     # [P1] 工具调用格式（核心协议，不能丢）
     # 示例里的工具名必须来自本 agent 白名单：模型会照着示例调工具，
