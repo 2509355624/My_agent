@@ -141,8 +141,24 @@ class BuildStreamBodyTest(unittest.TestCase):
         self.assertNotIn("thinking", body)
         self.assertEqual(body["stream_options"], {"include_usage": True})
 
-    def test_deepseek_official_gets_no_extra_fields(self):
+    def test_deepseek_official_gets_thinking_disabled(self):
+        """DeepSeek 官方**默认开**思考，必须显式关（2026-10-04 实测）。
+
+        现场：同一份真实系统头，不关思考那轮 completion 22036 token（其中
+        21k 是推理）、耗时 99 秒；显式 disabled 后思考 0 字、completion 1 token。
+        这条线原先被白名单挡在外面，注释写着"显式关掉"其实从没下发过。
+        """
         body = llm._build_stream_body(self._eff("deepseek"), [], True)
+        self.assertEqual(body["thinking"], {"type": "disabled"})
+        self.assertEqual(body["stream_options"], {"include_usage": True})
+
+    def test_scnet_is_still_not_in_the_whitelist(self):
+        """scnet 的模型名里也含 "deepseek"，但它的字段习惯没实测过，别顺手加。
+
+        _build_stream_body 的 400 降级重试是兜底，不是"加了也无妨"的许可。
+        """
+        body = llm._build_stream_body(
+            self._eff("scnet", "DeepSeek-V4.1-Flash-Event"), [], True)
         self.assertNotIn("thinking", body)
         self.assertNotIn("stream_options", body)
 
@@ -150,6 +166,40 @@ class BuildStreamBodyTest(unittest.TestCase):
         body = llm._build_stream_body(self._eff("volc"), [], False)
         self.assertNotIn("thinking", body)
         self.assertNotIn("stream_options", body)
+
+
+class CacheLogReasoningTest(unittest.TestCase):
+    """`[cache]` 行末尾的 think= 字数（2026-10-04 加）。
+
+    起因：一轮带图的私聊调用 out=22036、耗时 99 秒，日志里看不出这 22k 是
+    「正文长」还是「想太久」——真因是关思考的白名单漏了 DeepSeek 官方。
+    有这一项之后，「思考到底关没关」可以直接从日志读出来。
+    """
+
+    _USAGE = {"prompt_tokens": 100, "completion_tokens": 22036,
+              "prompt_cache_hit_tokens": 80, "prompt_cache_miss_tokens": 20}
+
+    def test_stream_call_reports_reasoning_chars(self):
+        llm._stream_meta().update(finish_reason=None, reasoning_chars=21000,
+                                  content_chars=900)
+        with self.assertLogs("llm", level="INFO") as cm:
+            llm._record_usage(dict(self._USAGE), elapsed=99.0,
+                              provider="deepseek", model="deepseek-flash",
+                              kind="stream")
+        self.assertIn("think=21000", "\n".join(cm.output))
+
+    def test_sync_call_does_not_borrow_leftover_reasoning(self):
+        """同步调用不涉及思维链，不能被同一线程上一轮流式的残留值污染。
+
+        （这就是"只在 kind == stream 时读 _stream_meta"那条判断存在的理由。）
+        """
+        llm._stream_meta().update(finish_reason=None, reasoning_chars=21000,
+                                  content_chars=900)
+        with self.assertLogs("llm", level="INFO") as cm:
+            llm._record_usage(dict(self._USAGE), elapsed=1.0,
+                              provider="deepseek", model="deepseek-flash",
+                              kind="sync")
+        self.assertNotIn("think=", "\n".join(cm.output))
 
 
 class UsageThreadIsolationTest(unittest.TestCase):

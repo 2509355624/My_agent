@@ -202,9 +202,20 @@ def _record_usage(usage, elapsed=None, provider="", model="", kind="llm"):
     out = int(usage.get("completion_tokens") or 0)
     # out= 是 2026-10-03 补的：output 按 ¥4/M 计费，是全天账单里最贵的一项，
     # 而这一行原来只报命中率——只看日志根本看不出钱花在哪。
-    log.info("[cache] %s %s/%s 命中 %d / %d tokens = %.1f%% (未命中 %d) out=%d%s%s",
+    # think= 是 2026-10-04 补的（按**字数**）：思维链同样混在 completion 里按
+    # output 计费，out= 大得离谱时看不出是「正文长」还是「想太久」。那天的
+    # 现场就是 out=22036 / 耗时 99 秒，根因是关思考的白名单漏了 DeepSeek 官方。
+    # 字数从流式的 reasoning delta 现数（_stream_meta），跨 provider 都准；
+    # 同步调用不涉及思维链，这一项为空。
+    think = ""
+    if kind == "stream":
+        try:
+            think = " think=%d" % _stream_meta()["reasoning_chars"]
+        except Exception:
+            think = ""
+    log.info("[cache] %s %s/%s 命中 %d / %d tokens = %.1f%% (未命中 %d) out=%d%s%s%s",
              tag, provider or "-", model or "-",
-             hit, total, rate * 100, miss, out, tail, mark)
+             hit, total, rate * 100, miss, out, think, tail, mark)
 
     try:
         from app import usage as usage_stats
@@ -409,25 +420,35 @@ def _call_ollama(base_url, body, timeout):
 
 
 # ─── 流式（SSE）──────────────────────────────────────
-# thinking / stream_options 这两个扩展字段只在火山方舟侧确认支持；DeepSeek
-# 官方的思考能力由模型自身决定，塞未知字段可能被判 400。所以按 provider
-# 白名单下发，并在真撞上 400 时降级重试一次。
-_EXTRA_FIELDS_PROVIDERS = ("volc", "doubao")
+# thinking / stream_options 按 provider 白名单下发，真撞上 400 时降级重试一次
+# （见 _stream_once）。
+#
+# 2026-10-04 实测（api.deepseek.com / deepseek-flash，流式与非流式都试了）：
+# 这两个字段 DeepSeek 官方**全收**，HTTP 200，usage 照常回。原先只放火山，
+# 注释里担心「DeepSeek 官方塞未知字段会被判 400」——实测不成立。
+# 而 deepseek-flash 是**默认开思考**的：同一份真实系统头，不关思考那轮
+# completion 22036 token（其中 reasoning 占 21k）、耗时 99 秒；显式 disabled
+# 后思考 0 字、completion 1 token。这条线从 10-03 晚切过来就一直没关过思考，
+# 是当时"贵在 output"那笔账的回潮。
+_EXTRA_FIELDS_PROVIDERS = ("volc", "doubao", "deepseek")
 
 
 def _thinking_type(provider, model):
-    """火山系模型 thinking 字段的取值（None = 不带这个字段）。
+    """模型 thinking 字段的取值（None = 不带这个字段）。
 
-    2026-10-03 起**火山系一律显式关思维链**，理由是钱：账单实测推理 token
-    按 output ¥4/M 计费，占全天 ¥7.54 的 72%；同一份真实系统头只切这个开关，
-    completion 537 → 6 token、9.0s → 1.6s。本机只跑生图，不需要思维链。
+    2026-10-03 起**一律显式关思维链**，理由是钱：推理 token 按 output 计费
+    （火山 ¥4/M，DeepSeek 官方 ¥4/M 同档），实测占过全天账单的 72%；同一份
+    真实系统头只切这个开关，completion 537 → 6 token、9.0s → 1.6s。
+    本机只跑生图，不需要思维链。2026-10-04 实测 DeepSeek 官方默认**开**思考，
+    同样收 disabled（见 _EXTRA_FIELDS_PROVIDERS 上方注释）。
 
-    - deepseek 系（火山托管）：模型默认关，但流式请求必须显式 disabled 才压得住。
+    - deepseek 系：默认开或默认关都显式 disabled，不赌默认值——之前正是靠
+      "不加字段"赌了一次，白烧了一天的思考 token。
     - 豆包系：默认就带思考，显式 disabled 压掉（2026-09-27 用户实测「太慢了」）。
     - 其他（glm 等）：字段习惯没验证过，不带，走模型默认。
     """
     name = (model or "").lower()
-    if "deepseek" in name or "doubao" in name or provider == "doubao":
+    if provider in ("deepseek", "doubao") or "deepseek" in name or "doubao" in name:
         return "disabled"
     return None
 
@@ -436,12 +457,13 @@ def _build_stream_body(eff, messages, extras=True):
     """构造流式请求体。extras=False 时只带最保守的字段（400 降级重试用）。"""
     body = {"messages": messages, "stream": True, "model": eff["model"]}
     if extras and eff["provider"] in _EXTRA_FIELDS_PROVIDERS:
-        # 火山多个 DeepSeek 版本默认关闭思维链，必须显式开启；
-        # 豆包相反——默认带思考，显式关掉换速度
+        # 各家默认值相反（火山托管版默认关、豆包/DeepSeek 官方默认带），统一按
+        # _thinking_type 的结论下发，不赌默认值。
         t = _thinking_type(eff["provider"], eff["model"])
         if t:
             body["thinking"] = {"type": t}
-        # 末帧回传 usage，否则缓存命中统计在流式下会断掉
+        # 末帧回传 usage，否则缓存命中统计在流式下会断掉（DeepSeek 官方实测
+        # 不带这个字段也回 usage，带着更稳）。
         body["stream_options"] = {"include_usage": True}
     return body
 
