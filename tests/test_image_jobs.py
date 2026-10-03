@@ -1162,7 +1162,7 @@ class GenerateImageSplitTest(unittest.TestCase):
 
     def test_qq_returns_immediately_without_waiting(self):
         out = self._call(("group", "9"))
-        self.assertIn("已经在画了", out)
+        self.assertIn("任务已提交", out)
         self.assertEqual(image_jobs.inflight_count("group", "9"), 0)
 
     def test_qq_says_how_many_are_ahead(self):
@@ -2239,7 +2239,7 @@ class DisabledChannelTest(unittest.TestCase):
                                   lambda raw: "i2isrc_x.png"):
             out = self._call(prompt="把衣服换成红色", source_image="1")
 
-        self.assertIn("已经在画了", out)
+        self.assertIn("任务已提交", out)
         self.assertEqual(seen["max_side"], 1024)     # 728×1024 画布的长边
         self.assertTrue(self.comfy.called)           # 走到底了：探活过 ComfyUI
 
@@ -2561,7 +2561,7 @@ class NaiRoutingTest(unittest.TestCase):
 
     def test_nai_enqueues_when_allowed(self):
         out, eq = self._call("nai", ("group", "9"), nai_ok=True)
-        self.assertIn("已经在画了", out)
+        self.assertIn("任务已提交", out)
         self.assertTrue(eq.called)
         _, kwargs = eq.call_args
         self.assertEqual(kwargs.get("skill"), "nai")
@@ -2570,7 +2570,7 @@ class NaiRoutingTest(unittest.TestCase):
         """横版渠道进同一个云端分支，但 job.skill 要保留自己的渠道名
         （worker 靠它决定文生图的横竖）。"""
         out, eq = self._call("nai_wide", ("group", "9"), nai_ok=True)
-        self.assertIn("已经在画了", out)
+        self.assertIn("任务已提交", out)
         self.assertTrue(eq.called)
         _, kwargs = eq.call_args
         self.assertEqual(kwargs.get("skill"), "nai_wide")

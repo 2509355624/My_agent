@@ -956,6 +956,9 @@ class SessionRunner:
                             quoted_images=quote_images, own_images=own_images,
                             user_text=own_text)
         sent_by_tool = False
+        # 后台直发的生图回执（见 generate_image._qq_receipt）：有它就不再采纳
+        # 模型本轮的正文——它一转述排队张数就瞎编，后台那句才是真的。
+        receipt_spoke = ""
         reply_parts, images = [], []
         # 同一轮里模型有时会把上一段原样再生成一遍（工具结果回来后失了记性），
         # 堆进同一条消息就是复读。按归一化正文去重，只丢完全重复的段。
@@ -988,8 +991,14 @@ class SessionRunner:
                     if ev.get("name") == "send_qq_message":
                         sent_by_tool = True
                     elif ev.get("name") == "generate_image":
-                        images.extend(
-                            _IMAGE_PATH_RE.findall(str(ev.get("result") or "")))
+                        res = str(ev.get("result") or "")
+                        # 工具已经把回执直接发进会话了（带 image_jobs 的标记）→
+                        # 记下那句人话，收尾按「开过口」记冷却与群背景；本轮的
+                        # 模型正文随后整体丢弃（见下面的 receipt_spoke 分支）。
+                        line = image_jobs.receipt_line(res)
+                        if line:
+                            receipt_spoke = line
+                        images.extend(_IMAGE_PATH_RE.findall(res))
         except Exception:
             log.exception("agent 循环异常 %s", self.session_key)
             reply_parts.append("（这边出了点问题，稍后再试）")
@@ -1004,13 +1013,21 @@ class SessionRunner:
             except Exception:
                 log.exception("收尾落盘失败 %s", self.session_key)
 
+        if receipt_spoke:
+            # 回执已经由后台直接发进会话，模型这几句（爱编排队张数）就不要了。
+            reply_parts = []
         # 同一轮的多段正文用换行分隔——空串直接拼会把「图在路上了」和
         # 「你要的图来了」黏成一行，群里看着像说错了话。
         reply = "\n".join(p for p in reply_parts if p.strip())
-        self._deliver(sent_by_tool, reply, images)
+        self._deliver(sent_by_tool, reply, images, receipt_spoke)
 
-    def _deliver(self, sent_by_tool, reply, images):
-        """把结果发回 QQ。图片过一遍 image_out（甩掉工作流元数据），格式看管理页开关。"""
+    def _deliver(self, sent_by_tool, reply, images, receipt_spoke=""):
+        """把结果发回 QQ。图片过一遍 image_out（甩掉工作流元数据），格式看管理页开关。
+
+        `receipt_spoke` 是**后台已经直发**的那句生图回执（见
+        `generate_image._qq_receipt`）：这种情况下正文已被丢弃，但机器人确实
+        开过口，冷却计时与群聊背景照记——不然刚回完就接着接话。
+        """
         from app.agents import image_send_format
         send_text = (qq_api.send_group if self.target == "group"
                      else qq_api.send_private)
@@ -1048,6 +1065,9 @@ class SessionRunner:
         if blocked:
             spoke = True
 
+        # 后台直发的回执也算「开过口」：温度/冷却要重新计时。
+        if receipt_spoke:
+            spoke = True
         # 只要它真的开了口，两件事跟着来（只对群聊）：
         # 1) 冷却重新计时——30 秒管的是这张嘴，被 @ 的回复也算说话，否则
         #    刚回完就接话，接出来的内容跟刚回的撞车；
@@ -1055,7 +1075,8 @@ class SessionRunner:
         #    说法复读上一句（实测复读过）。
         if spoke and self.target == "group":
             interject.mark_spoke(QQ_AGENT_ID, self.target_id)
-            recent.remember(QQ_AGENT_ID, self.target_id, QQ_BOT_NAME, reply)
+            recent.remember(QQ_AGENT_ID, self.target_id, QQ_BOT_NAME,
+                            reply or receipt_spoke)
 
 
 # ─── 适配层主体 ──────────────────────────────────────

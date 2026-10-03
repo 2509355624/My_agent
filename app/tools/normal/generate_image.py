@@ -282,6 +282,69 @@ def _quota_balance(target_id, used):
             "别照本轮开头那行额度说。）" % (used, limit, max(0, limit - used)))
 
 
+# ─── 提交回执：后台直发（2026-10-04 用户拍板）─────────────
+#
+# 用户原话：「AI 提交任务之后直接发一个回执，就说任务已经提交、前面还有 XX 在
+# 排队，这个是**直接发的、不是经过 AI**——它老是瞎编东西，我要的是最直接的来自
+# 后台的回执。」张数是 `image_jobs.ahead_of` 现算的，本来是真的；坏就坏在它得
+# 经模型那张嘴转述一遍 —— 一转述就编。所以提交成功那一刻**工具自己发**。
+#
+# 只直发 QQ 会话（`target is not None`）：网页端本来就要等出图，没有这条回执。
+# 直发成功的回执以 `image_jobs.RECEIPT_SENT_MARK` 开头，agent.py 的掐断判据与
+# qq_bot 的「本轮别再采纳模型正文」都认它（格式只有一个真相源，别在这儿重写）。
+_RECEIPT_QUEUED = "任务已提交，前面还有 %d 张在排队。"
+_RECEIPT_RUNNING = "任务已提交，正在画了。"
+
+
+def _receipt_text(ahead):
+    """后台直发的回执正文：短、纯状态、像系统回执（不给模型留编的余地）。"""
+    if ahead > 0:
+        return _RECEIPT_QUEUED % ahead
+    return _RECEIPT_RUNNING
+
+
+def _send_receipt(target, target_id, receipt):
+    """把回执**直接**发进会话；发成功返回 True。
+
+    发不出去（适配层掉线、私聊非好友）返回 False——调用方退回老文案让模型
+    转述，**绝不在这儿假装发过**：那正是这次要修的毛病。
+    """
+    try:
+        image_jobs._send_text(target, target_id, receipt)
+    except Exception:
+        log.exception("生图回执直发失败 %s %s", target, target_id)
+        return False
+    return True
+
+
+def _qq_receipt(job, target, target_id, source_note="", quota_tail=""):
+    """QQ 侧提交成功后的回执（本机 / NAI 两条提交路径共用）。
+
+    能直发就直发——返回以 `image_jobs.RECEIPT_SENT_MARK` 开头的文本，交给
+    agent.py 掐断循环、qq_bot 闭嘴；发不出去才退回老文案（由模型转述），
+    至少不会整轮一声不响。
+
+    `quota_tail` 是**给模型看的**实时余额（只有私聊且限流时非空），直发那条
+    不带它——回执要短、要像系统回执，别把额度说明也念给群里听。
+    """
+    ahead = image_jobs.ahead_of(job)
+    receipt = _receipt_text(ahead)
+    tail = (("（垫的是%s。）" % source_note) if source_note else "") + quota_tail
+    if _send_receipt(target, target_id, receipt):
+        return (image_jobs.RECEIPT_SENT_MARK + receipt + "\n"
+                + "（上面那句系统已经直接发到会话里了：**不要再复述排队 / 张数**，"
+                  "也不用说「稍等 / 马上好」，本轮别再为这件事说什么。）"
+                + tail)
+    if ahead > 0:
+        return ("已经排上队了（前面还有 %d 张），排到就画，"
+                "画好会自动发到群里。"
+                "不要输出图片地址，也不要说「图在下面 / 稍等」，"
+                "直接把想说的话说完就行。" % ahead + tail)
+    return ("已经在画了，画好会自动发到群里。"
+            "不要输出图片地址，也不要说「图在下面 / 稍等」，"
+            "直接把想说的话说完就行。" + tail)
+
+
 # ─── 工具函数 ────────────────────────────────────────
 
 def _parse_loras(lora_str):
@@ -711,17 +774,9 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     if target is not None:
         # 提交完立刻返回，图由 worker 画好后自己发回原群。留在这儿同步等会把
         # 适配层的并发槽（默认 2 个）占住几分钟——文本回复和别的群都得陪着等
-        # 显卡。
-        ahead = image_jobs.ahead_of(job)
-        if ahead > 0:
-            return ("已经排上队了（前面还有 %d 张），排到就画，"
-                    "画好会自动发到群里。"
-                    "不要输出图片地址，也不要说「图在下面 / 稍等」，"
-                    "直接把想说的话说完就行。" % ahead + quota_tail)
-        return ("已经在画了，画好会自动发到群里。"
-                + ("垫的是%s。" % source_note if source_note else "")
-                + "不要输出图片地址，也不要说「图在下面 / 稍等」，"
-                "直接把想说的话说完就行。" + quota_tail)
+        # 显卡。回执由工具**直接发**（见 _qq_receipt），不由模型转述。
+        return _qq_receipt(job, target, target_id,
+                           source_note=source_note, quota_tail=quota_tail)
 
     try:
         # 网页端：等到「排队 + 出图」全程。任务被超时中断时 image_jobs 会把
@@ -782,19 +837,11 @@ def _enqueue_nai(prompt, target, target_id, nai_i2i=None, intent=None,
     # NAI 也占私聊额度（用户 2026-09-30 选的「一起算」）：额度是「私聊每天
     # 最多几张图」这个承诺，跟图是从本机还是云端出来的无关。
     quota_tail = _charge_quota(job, target, target_id)
-    ahead = image_jobs.ahead_of(job)
-    if ahead > 0:
-        return ("已经排上队了（前面还有 %d 张），排到就画，"
-                "画好会自动发到群里。"
-                "不要输出图片地址，也不要说「图在下面 / 稍等」，"
-                "直接把想说的话说完就行。" % ahead + quota_tail)
-    if nai_i2i:
-        return ("已经在画了（垫的是%s），画好会自动发到群里。"
-                "不要输出图片地址，也不要说「图在下面 / 稍等」，"
-                "直接把想说的话说完就行。" % nai_i2i["note"] + quota_tail)
-    return ("已经在画了，画好会自动发到群里。"
-            "不要输出图片地址，也不要说「图在下面 / 稍等」，"
-            "直接把想说的话说完就行。" + quota_tail)
+    # 回执同样由工具**直接发**（见 _qq_receipt）：NAI 也占同一条队列，
+    # 「前面还有几张」一样是后台现算的，没理由让模型去转述。
+    return _qq_receipt(job, target, target_id,
+                       source_note=(nai_i2i["note"] if nai_i2i else ""),
+                       quota_tail=quota_tail)
 
 
 tool = {

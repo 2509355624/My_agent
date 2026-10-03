@@ -375,8 +375,21 @@ def _queued_note_for_user(result):
     群里很怪。掐断时模型若一个字正文都没说（被空头承诺守卫退回来重来那次），
     就用这半句垫上，群里总得有句「已排上队，前面还有 N 张」。
     不是提交成功的回执（报错 / 被重复闸拦下）则返回 ""——那种不补。
+
+    ⚠️ 2026-10-04 起 QQ 侧主路是**后台直发**（`generate_image._qq_receipt`）：
+    那种回执以 `image_jobs.RECEIPT_SENT_MARK` 开头，人话那半句就是**已经发进
+    会话**的那句（短版：任务已提交，前面还有 N 张在排队）。它照样算「已提交」，
+    掐断判据必须认；至于兜底补话，qq_bot 会丢掉（回执早发出去了）。
+    下面那套老文案只在直发失败退回时用得上。
     """
     text = str(result or "")
+    # 回执「后台直发」那条（generate_image._qq_receipt，2026-10-04）：人话那半句
+    # 就是已经发进会话的那句，取出来照样算「已提交」——掐断判据必须认它，否则
+    # 一轮一张的硬闸整条失效。兜底补话照旧走（qq_bot 会丢掉这次补话：它已经发过）。
+    from app import image_jobs
+    direct = image_jobs.receipt_line(text)
+    if direct:
+        return direct
     if not (text.startswith("已经排上队了") or text.startswith("已经在画了")):
         return ""
     cut = text.find("不要输出图片地址")

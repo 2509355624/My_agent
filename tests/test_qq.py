@@ -1311,7 +1311,9 @@ class TurnReplyDedupTest(unittest.TestCase):
             return iter(events)
 
         runner = qq_bot.SessionRunner(None, "group_9", "group", "9")
-        runner._deliver = lambda sent_by_tool, reply, images: sent.update(
+        # 第 4 个参数是「后台已直发的生图回执」（见 qq_bot._deliver）——
+        # 这个类只关心正文怎么拼，不再手写签名，跟着走。
+        runner._deliver = lambda sent_by_tool, reply, images, *a: sent.update(
             reply=reply)
         with mock.patch.object(qq_bot, "run_agent_stream", fake_stream), \
              mock.patch.object(qq_bot, "load_history", lambda *a, **k: []), \

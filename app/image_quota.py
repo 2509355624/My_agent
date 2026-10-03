@@ -34,12 +34,16 @@ import os
 import threading
 import time
 
-from app.config import BASE_DIR
+from app.config import state_path
 
 log = logging.getLogger("image_quota")
 
-# 测试可以改它指向临时目录；生产恒为 state/image_quota.json。
-PATH = os.path.join(BASE_DIR, "state", "image_quota.json")
+# 测试进程恒落在临时目录（见 config.state_path）——额度是**真实用户看得见的
+# 账**，拿夹具里的 "42" 往真实 state/ 里扣，会让别人今天的额度凭空少几张
+# （2026-10-04 实测：真实账本里攒了 "42": 25，全是跑测试扣的）。
+# 单个用例仍可显式 patch 这个常量指向自己的临时文件，显式优先。
+# 生产恒为 state/image_quota.json。
+PATH = state_path("image_quota.json")
 
 # 内存镜像：磁盘写失败时的兜底，也是「本进程刚刚扣过多少」的唯一事实。
 # 结构同文件 {"date": ..., "used": {...}}。

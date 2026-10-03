@@ -25,11 +25,27 @@ import unittest
 from unittest import mock
 
 import app.agents as agents
+import app.config as config
 import app.image_jobs as image_jobs
 import app.image_quota as image_quota
 import app.main as main
 import app.qq_api as qq_api
 from app.tools.normal import generate_image
+
+
+class StateIsolationTest(unittest.TestCase):
+    """跑测试不许往真实 state/image_quota.json 里扣假额度（2026-10-04）。
+
+    实测：真实账本里攒了 `"42": 25`——全是测试账号扣的。而额度是**给真人看的
+    每日上限**，脏了这个数，别人今天就少画几张。模块默认路径已由
+    `config.state_path` 兜住，这条钉住它别再退回去。
+    """
+
+    def test_default_path_is_not_the_real_ledger(self):
+        self.assertNotEqual(
+            os.path.dirname(image_quota.PATH),
+            os.path.join(config.BASE_DIR, "state"),
+            "测试进程的账本路径落在真实 state/ 下了，跑测试会写脏真实额度")
 
 
 class _TempQuota(unittest.TestCase):
@@ -396,12 +412,20 @@ class QuotaReceiptTailTest(_TempQuota):
                              "")
 
     def test_nai_receipt_carries_the_balance(self):
-        """NAI 也拼（用户选的「一起算」）——它同样占私聊额度。"""
+        """NAI 也拼（用户选的「一起算」）——它同样占私聊额度。
+
+        回执本体自 2026-10-04 起由工具**直接发**（`_qq_receipt`），所以这里把
+        发送挡掉、并顺手断言它真的直发了（不经模型那张嘴）。
+        """
         job = image_jobs.Job("private", "42", {}, skill="nai")
-        with mock.patch.object(image_jobs, "enqueue", return_value=(job, None)):
+        sent = []
+        with mock.patch.object(image_jobs, "enqueue", return_value=(job, None)), \
+                mock.patch.object(image_jobs, "_send_text",
+                                  lambda t, tid, x: sent.append((t, tid, x))):
             out = generate_image._enqueue_nai("a girl", "private", "42")
-        self.assertIn("已经在画了", out)
+        self.assertIn("任务已提交", out)
         self.assertIn("剩 2 张", out)
+        self.assertEqual([(t, tid) for t, tid, _ in sent], [("private", "42")])
 
     def test_comfyui_receipt_carries_the_balance(self):
         """本机渠道同上（`target is not None` 那条分支）。
@@ -430,7 +454,7 @@ class QuotaReceiptTailTest(_TempQuota):
         with mock.patch.object(qq_api, "current_context",
                                return_value=("private", "42")):
             out = gi.tool["function"](prompt="a cat", skill="anima_clear")
-        self.assertIn("已经在画了", out)
+        self.assertIn("任务已提交", out)
         self.assertIn("剩 2 张", out)
         self.assertEqual(image_quota.used("42"), 1)
 

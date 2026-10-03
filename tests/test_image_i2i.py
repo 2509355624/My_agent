@@ -474,7 +474,7 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
     def test_default_call_is_still_text2img(self):
         """不传 source_image 就**一行图生图逻辑都不走**——文生图原样不动。"""
         out, wf = self._run(prompt="1girl, solo")
-        self.assertIn("已经在画了", out)
+        self.assertIn("任务已提交", out)
         kinds = self._kinds(wf)
         self.assertIn("EmptyLatentImage", kinds)
         self.assertNotIn("LoadImage", kinds)
@@ -489,7 +489,7 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
         p1, p2, p3 = self._feed()
         with p1, p2, p3:
             out, wf = self._run(prompt="把衣服换成红色", source_image="1")
-        self.assertIn("已经在画了", out)
+        self.assertIn("任务已提交", out)
         self.assertIn("垫的是引用的那张图", out)      # 垫了哪张要回给模型，免得它说错
         kinds = self._kinds(wf)
         self.assertIn("LoadImage", kinds)
@@ -517,7 +517,7 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
         p1, p2, p3 = self._feed()
         with p1, p2, p3:
             out, wf = self._run(prompt="x", source_image="1", denoise=0.2)
-        self.assertIn("已经在画了", out)
+        self.assertIn("任务已提交", out)
         enc = self._one(wf, "VAEEncode")
         stage1 = [nid for nid, n in wf.items()
                   if n["class_type"] == "KSampler"
@@ -537,7 +537,7 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
                 p1, p2, p3 = self._feed(seen=seen)
                 with p1, p2, p3:
                     out, _ = self._run(prompt="x", skill=skill, source_image="1")
-                self.assertIn("已经在画了", out)
+                self.assertIn("任务已提交", out)
                 self.assertEqual(seen["max_side"], expect, skill)
 
     def test_every_supported_tier_can_be_fed(self):
@@ -549,7 +549,7 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
                 with p1, p2, p3:
                     out, wf = self._run(prompt="x", skill=skill,
                                         source_image="1")
-                self.assertIn("已经在画了", out)
+                self.assertIn("任务已提交", out)
                 self.assertIn("VAEEncode", self._kinds(wf))
 
     def test_second_stage_upscale_survives(self):
@@ -588,7 +588,7 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
     def test_blank_source_image_is_not_i2i(self):
         """空串等于没传（`if str(source_image or "").strip()`）——别把它当垫图。"""
         out, wf = self._run(prompt="x", source_image="")
-        self.assertIn("已经在画了", out)
+        self.assertIn("任务已提交", out)
         self.assertIn("EmptyLatentImage", self._kinds(wf))
 
 
@@ -611,7 +611,7 @@ class QwenEditFlowTest(_I2IRunner, unittest.TestCase):
     def test_edit_channel_is_open(self):
         """白名单里有它：传 source_image 不再被拒，回执也说清了垫的是哪张。"""
         out, wf = self._edit()
-        self.assertIn("已经在画了", out)
+        self.assertIn("任务已提交", out)
         self.assertIn("垫的是引用的那张图", out)
         kinds = self._kinds(wf)
         self.assertIn("LoadImage", kinds)
@@ -655,7 +655,7 @@ class QwenEditFlowTest(_I2IRunner, unittest.TestCase):
         with p1, p2, p3:
             out, wf = self._run(prompt="x", skill="qwen_image_v1",
                                 source_image="1", seed=12345)
-        self.assertIn("已经在画了", out)
+        self.assertIn("任务已提交", out)
         ks = [n for n in wf.values() if n["class_type"] == "KSampler"][0]
         self.assertEqual(ks["inputs"]["seed"], 12345)
 
@@ -668,7 +668,7 @@ class QwenEditFlowTest(_I2IRunner, unittest.TestCase):
         with p1, p2, p3:
             out, _ = self._run(prompt="x", skill="qwen_image_v1",
                                source_image="1")
-        self.assertIn("已经在画了", out)
+        self.assertIn("任务已提交", out)
         self.assertEqual(seen["max_side"], comfy_src.MAX_SIDE)
 
     def test_source_failure_submits_nothing(self):
@@ -692,7 +692,7 @@ class QwenEditFlowTest(_I2IRunner, unittest.TestCase):
     def test_text2img_on_qwen_is_untouched(self):
         """不传 source_image 时走原来的文生图骨架，一格图生图逻辑都不掺。"""
         out, wf = self._run(prompt="a corgi on a beach", skill="qwen_image_v1")
-        self.assertIn("已经在画了", out)
+        self.assertIn("任务已提交", out)
         kinds = self._kinds(wf)
         self.assertIn("EmptySD3LatentImage", kinds)
         self.assertNotIn("LoadImage", kinds)
@@ -745,6 +745,9 @@ class NaiI2ITest(unittest.TestCase):
                               lambda *a, **k: (allowed, why)),
             mock.patch.object(comfy_src, "resolve", fake_resolve),
             mock.patch.object(nai, "prepare_image", lambda raw: prepared),
+            # 回执自 2026-10-04 起由工具**直接发**（_qq_receipt）——不挡住的
+            # 话这条分支会真去连适配层发消息。
+            mock.patch.object(gi.image_jobs, "_send_text", lambda *a: None),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -755,7 +758,7 @@ class NaiI2ITest(unittest.TestCase):
         out, cap = self._run(prompt="make it night", skill="nai",
                              source_image="1")
         self.assertIn("垫的是引用的那张图", out)
-        self.assertIn("不要输出图片地址", out)
+        self.assertIn("任务已提交", out)
         self.assertEqual(cap["skill"], "nai")
         self.assertEqual(cap["workflow"], "make it night")
         self.assertEqual(cap["nai_i2i"]["image"], "QUJD-B64")
@@ -784,7 +787,7 @@ class NaiI2ITest(unittest.TestCase):
 
     def test_text2img_still_has_no_snapshot(self):
         out, cap = self._run(prompt="a cat", skill="nai")
-        self.assertIn("已经在画了", out)
+        self.assertIn("任务已提交", out)
         self.assertNotIn("垫的是", out)
         self.assertIsNone(cap["nai_i2i"])
 
@@ -815,7 +818,7 @@ class NaiI2ITest(unittest.TestCase):
     def test_wide_channel_keeps_its_name_in_the_job(self):
         """`nai_wide` 必须原样进 job.skill——worker 靠它决定文生图的横竖。"""
         out, cap = self._run(prompt="a cat", skill="nai_wide")
-        self.assertIn("已经在画了", out)
+        self.assertIn("任务已提交", out)
         self.assertEqual(cap["skill"], "nai_wide")
         self.assertEqual(cap["workflow"], "a cat")
         self.assertIsNone(cap["nai_i2i"])
