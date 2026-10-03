@@ -290,6 +290,31 @@ class AgentLoopTest(unittest.TestCase):
         # 历史里也不留空 assistant（只有用户那条）
         self.assertEqual([m["role"] for m in self.history], ["user"])
 
+    # ─── 严格模式（strict=True，网页端）───────────────────
+    # 网页端模型面板选的是「就用它」：不降级、不兜底，失败就是失败。
+    # QQ 侧不传 strict，照旧顺链兜底（群里没人盯着，宁可换一家也别不回话）。
+
+    def test_strict_reaches_the_llm_call(self):
+        fake = self._patch_llm(["好"])
+        self._collect("你好", provider="volc", model="m1", strict=True)
+        self.assertTrue(fake.seen_kwargs[0].get("strict"))
+
+    def test_strict_empty_reply_never_switches_model(self):
+        """strict 下即便候选表里还有别人也不换家：空两次就放弃。"""
+        fake = self._patch_llm([("reasoning", "甲"), ("reasoning", "乙"),
+                                ("reasoning", "丙")])
+        p = mock.patch.object(agent, "candidates",
+                              return_value=[("volc", "m1"), ("mimo", "m2")])
+        cands = p.start()
+        self.addCleanup(p.stop)
+        events = self._collect("在吗", provider="volc", model="m1", strict=True)
+        self.assertEqual(fake.calls, 3)
+        self.assertEqual([k.get("provider") for k in fake.seen_kwargs],
+                         ["volc", "volc", "volc"])
+        self.assertNotIn("assistant", [e["type"] for e in events])
+        # 候选表也要按 strict 口径问（不是问完再自己过滤）
+        self.assertIn(mock.call("volc", "m1", strict=True), cands.call_args_list)
+
     def test_single_candidate_empty_retries_same_model(self):
         fake = self._patch_llm([("reasoning", "嗯"), "好"])
         p = mock.patch.object(agent, "candidates",

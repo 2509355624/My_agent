@@ -154,6 +154,19 @@ class WebApiTest(unittest.TestCase):
             self.assertIsNone(fake.call_args.kwargs.get("cancel_event"))
         self.assertEqual(cancel_mod.active_count(), 0)
 
+    def test_chat_pins_the_selected_model(self):
+        """网页端选谁就是谁：/api/chat 必须带 strict=True（不降级）。
+
+        2026-10-03：面板选的模型原本只是链头，链尾会顶上——界面显示 ollama、
+        实际是 deepseek 答的，账单和直觉对不上。网页端不要兜底。
+        """
+        with mock.patch.object(main, "run_agent_stream") as fake:
+            fake.return_value = iter([{"type": "assistant", "content": "ok"}])
+            self.client.post("/api/chat", json={
+                "message": "你好", "provider": "ollama",
+                "model": "qwen2.5:7b"})
+            self.assertIs(fake.call_args.kwargs.get("strict"), True)
+
     # ─── /api/chat ───────────────────────────────────
 
     def test_chat_rejects_empty_message(self):

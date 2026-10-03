@@ -418,5 +418,55 @@ class RequireVisionTest(_ChainBase):
                          [c["url"] for c in calls])
 
 
+class StrictModeTest(_ChainBase):
+    """strict=True：网页端「我选谁就是谁」——不降级、不兜底（2026-10-03）。
+
+    背景：网页端模型面板选的那个原本只是**链头**，链尾会顶上。三处会让面板上
+    的名字和真正答话的模型不是同一个：① 链头失败顺链降级 ② 空回复换家
+    ③ 链头在拉黑期内被静默跳过。网页端要的是排他——失败就是失败，至少账单、
+    日志和面板对得上。QQ 侧不用 strict，照旧靠链兜底。
+    """
+
+    def test_strict_keeps_only_the_head(self):
+        self.assertEqual(llm.candidates("scnet2", "b", strict=True),
+                         [("scnet2", "b")])
+
+    def test_strict_ignores_the_rest_of_the_chain(self):
+        self.assertEqual(llm.candidates("volc", "a", strict=True), [("volc", "a")])
+
+    def test_strict_tries_even_a_banned_model(self):
+        # 明确选了它就照样发，不被失效记忆拦下——拦下等于偷偷换人
+        llm._mark_dead(("volc", "a"), "额度不足")
+        self.assertEqual(llm.candidates("volc", "a", strict=True), [("volc", "a")])
+
+    def test_strict_without_head_still_uses_the_chain(self):
+        # 调用方压根没指定模型时 strict 不生效：否则返回空表=请求必然失败
+        self.assertEqual(llm.candidates(None, None, strict=True),
+                         [("volc", "a"), ("scnet2", "b")])
+
+    def test_strict_stream_does_not_fall_back(self):
+        calls = self._patch_post([_Resp(status=500, reason="Server Error")])
+        with self.assertRaises(Exception):
+            list(llm.call_llm_stream([{"role": "user", "content": "hi"}],
+                                     provider="volc", model="a", strict=True))
+        self.assertEqual(len(calls), 1)
+
+    def test_non_strict_stream_still_falls_back(self):
+        # 反向对照：同一个失败，不带 strict 就该顺链换家（QQ 侧的行为）
+        calls = self._patch_post([_Resp(status=500, reason="Server Error"),
+                                  _Resp(lines=_sse("备胎的回复"))])
+        out = list(llm.call_llm_stream([{"role": "user", "content": "hi"}],
+                                       provider="volc", model="a"))
+        self.assertEqual(out, [("content", "备胎的回复")])
+        self.assertEqual(len(calls), 2)
+
+    def test_strict_sync_call_does_not_fall_back(self):
+        calls = self._patch_post([_Resp(status=500, reason="Server Error")])
+        with self.assertRaises(Exception):
+            llm.call_llm([{"role": "user", "content": "hi"}],
+                         provider="volc", model="a", strict=True)
+        self.assertEqual(len(calls), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

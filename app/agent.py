@@ -748,7 +748,7 @@ _ABORT_NOTE = "⚠️ 用户手动中断了上一条回复，其内容可能不�
 
 def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_results=None,
                      agent_id=None, image=None, cancel_event=None, extra_context=None,
-                     image_owners=None, session_key=None):
+                     image_owners=None, session_key=None, strict=False):
     """
     Agent Loop: 生成器版本，逐事件返回
     事件类型: user / assistant / tool_call / tool_result / aborted
@@ -790,6 +790,11 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
       **只给上下文压缩用**：压缩掉的老轮次对群会话要顺带转交长期记忆（不然
       群里「以前聊过什么」会越来越薄），而长期记忆是按群存的，得先知道群号。
       网页端不传 → None → 行为与从前一致（不做转交）。
+    strict: 可选，True 表示**只用本轮指定的那个模型**，不降级、不兜底。
+      网页端用：「我选谁就是谁，失败就是失败」。此时
+      ① 降级链与失效记忆都不参与（选了它照样发）；
+      ② 空回复守卫只原地重试同一模型，绝不换家（见下面的守卫）。
+      QQ 侧不传 → False → 依旧靠链兜底（群里没人盯着，宁可换一家也别不回话）。
     """
     from app.config import MAX_TURNS, provider_vision
 
@@ -909,7 +914,7 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
             # 后续轮次 messages 里已经没有图，链照旧全量，别白白收窄。
             for kind, text in call_llm_stream(
                     llm_history, provider=provider, model=model,
-                    cancel_event=cancel_event,
+                    cancel_event=cancel_event, strict=strict,
                     require_vision=attach_mode and turn_count == 1):
                 if kind == "reasoning":
                     reasoning_chars += len(text)
@@ -932,6 +937,7 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
             #   02:34:08 命中 0/21327 = 0.0% ⚠冷调用
             # 原地重试那次前缀照旧命中，只有原地也不行时才值得付全价换人。
             # 预算：原地 1 次 + 换人 1 次，都空就放弃（历史不留空 assistant）。
+            # strict（网页端）没有「下一家」这个选项：只保留原地重试，模型不变。
             if not reply.strip() and not is_cancelled(cancel_event):
                 meta = current_stream_meta()
                 if empty_retries >= 2:
@@ -939,8 +945,9 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
                                 "（reasoning=%d字 finish=%s），本轮放弃",
                                 reasoning_chars, meta.get("finish_reason"))
                     break
-                cands = candidates(provider, model)
-                if empty_retries == 0 or len(cands) <= 1:
+                cands = candidates(provider, model, strict=strict)
+                # strict（网页端）：压根没有「下一家」可换，永远走原地重试。
+                if strict or empty_retries == 0 or len(cands) <= 1:
                     same = cands[0] if cands else (provider, model)
                     log.warning("[llm-empty] 空回复（reasoning=%d字 finish=%s）"
                                 "→ 原地重试 %s/%s（不换模型，前缀缓存照旧命中）",

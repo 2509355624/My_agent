@@ -274,10 +274,13 @@ def chat():
         # 生图那种长阻塞的轮询循环只有走这条链路才停得下来。
         cancel_mod.bind(cancel_event)
         try:
+            # strict=True：网页端「我选谁就是谁」——不降级、不兜底，失败就是
+            # 失败。模型面板上的那个名字必须等于真正答话的模型：以前链尾会
+            # 顶上，界面却照旧显示你选的那个，账单和直觉对不上。
             for event in run_agent_stream(turn_input, h, provider=provider,
                                           model=model, pre_tool_results=pre_results,
                                           agent_id=agent_id, image=image,
-                                          cancel_event=cancel_event):
+                                          cancel_event=cancel_event, strict=True):
                 # 先落盘再推送：内容一旦可见于前端，磁盘上就已经有了
                 if event.get("type") in SESSION_EVENTS:
                     try:

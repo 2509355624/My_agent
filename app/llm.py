@@ -98,16 +98,17 @@ def get_effective_config(provider=None, model=None):
     }
 
 
-def call_llm(messages, timeout=None, provider=None, model=None):
+def call_llm(messages, timeout=None, provider=None, model=None, strict=False):
     """调用 LLM，返回回复文本（失败时按降级链依次往下试）。
 
     - provider: 'volc' / 'doubao' / 'deepseek' / 'scnet' / 'scnet2' / 'mimo' / 'ollama'
     - model: 覆盖该 provider 的默认模型
     - timeout: 单次尝试的超时；不传用 LLM_REQUEST_TIMEOUT
+    - strict: True 只打指定的那一个，失败不再顺链换家（见 candidates）
     兼容旧调用 call_llm(messages)：用当前生效配置。
     """
     timeout = timeout or LLM_REQUEST_TIMEOUT
-    targets = _chain_targets(provider, model)
+    targets = _chain_targets(provider, model, strict=strict)
     last_err = None
     for i, (pid, mname) in enumerate(targets):
         eff = get_effective_config(pid, mname)
@@ -301,11 +302,16 @@ def reset_chain_state():
         _DEAD.clear()
 
 
-def candidates(provider=None, model=None, require_vision=False):
+def candidates(provider=None, model=None, require_vision=False, strict=False):
     """本次请求依次尝试的 (provider, model) 列表。
 
     链头是调用方指定的那个（agent 配置 / 管理页选择），后面接降级链里其余
     项，重复的去掉——所以管理页手动切换依然优先，链只负责兜底。
+
+    strict=True：**只要链头，不兜底**（网页端「我选谁就是谁」，失败即失败）。
+    此时降级链与失效记忆都不参与——模型之前失败过也照样发（用户明确选的它），
+    失败原样抛给调用方。调用方没指定链头时不生效，退回下面的老路：否则会返回
+    空表，等于把请求变成必然失败。
 
     require_vision=True：只留**能直接读图**的候选（config.provider_vision）。
     带图的轮次必须这么调——图片是以多模态（base64）塞进 messages 的，纯文本
@@ -322,6 +328,11 @@ def candidates(provider=None, model=None, require_vision=False):
     pid = (provider or "").strip().lower()
     if pid in PROVIDERS:
         head = (pid, (model or "").strip() or PROVIDERS[pid]["model"])
+
+    # 严格模式：只有链头，一条链尾都不接。_DEAD 也不查——用户明确选了这个模型，
+    # 之前失败过是上一轮的事，这一轮照样发，失败直接把异常抛上去。
+    if strict and head:
+        return [head]
 
     seen, ordered = set(), []
     for item in ([head] if head else []) + parse_chain(LLM_FALLBACK_CHAIN):
@@ -342,10 +353,10 @@ def candidates(provider=None, model=None, require_vision=False):
     return alive or ordered
 
 
-def _chain_targets(provider, model, require_vision=False):
+def _chain_targets(provider, model, require_vision=False, strict=False):
     """把候选列表兜到「至少有一个」——链关掉且调用方也没指定时，仍按老路走
     get_effective_config 的默认 provider。"""
-    cands = candidates(provider, model, require_vision)
+    cands = candidates(provider, model, require_vision, strict)
     if cands:
         return cands
     eff = get_effective_config(provider, model)
@@ -529,7 +540,7 @@ def _stream_once(eff, messages, timeout, cancel_event):
 
 
 def call_llm_stream(messages, timeout=None, provider=None, model=None,
-                    cancel_event=None, require_vision=False):
+                    cancel_event=None, require_vision=False, strict=False):
     """流式调用 LLM，逐块产出 (kind, text)；失败时按降级链依次往下试。
 
     kind 只有两种：
@@ -554,12 +565,16 @@ def call_llm_stream(messages, timeout=None, provider=None, model=None,
     require_vision=True：降级链只走能直接读图的候选。**带图的轮次必须置位**——
     messages 里塞的是 base64 多模态内容，纯文本 provider 收到不会报错而是挂死
     （见 `candidates`）。
+
+    strict=True：只打调用方指定的那一个模型，失败不换家（见 `candidates`）。
+    注意换模型的边界（"已吐过 content 就不换"）在严格模式下已经用不上——压根
+    没有下一家可换，异常直接抛给调用方。
     """
     timeout = timeout or LLM_REQUEST_TIMEOUT
     # 元信息按「一次 call_llm_stream」清零：降级链换模型重试后，读到的是
     # 最后一次（也就是最终成功那次）的数字，正是诊断想要的口径。
     _stream_meta().update(finish_reason=None, reasoning_chars=0, content_chars=0)
-    targets = _chain_targets(provider, model, require_vision)
+    targets = _chain_targets(provider, model, require_vision, strict)
     last_err = None
     for i, (pid, mname) in enumerate(targets):
         if is_cancelled(cancel_event):
