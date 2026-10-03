@@ -109,9 +109,13 @@ class WebApiTest(unittest.TestCase):
         """
         rid = "rid-stop-test"
 
-        def slow_llm(messages, provider=None, model=None, cancel_event=None):
+        def slow_llm(messages, cancel_event=None, **kwargs):
             # 必须产出 reasoning：正文会被 agent 攒着等收完再解析工具调用，
             # 流上根本看不到中间状态，也就没机会在中途插入这条停止请求。
+            # **kwargs 是刻意的：call_llm_stream 的签名会随功能加参数
+            # （timeout / provider / model / require_vision…），桩函数硬列参数
+            # 会在下次加参数时直接 TypeError，被测的链路根本没跑起来就"通过"
+            # 或"失败"了（2026-10-03 就踩过一次 require_vision）。
             for i in range(200):
                 if cancel_event is not None and cancel_event.is_set():
                     return
