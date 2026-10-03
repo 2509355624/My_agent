@@ -117,7 +117,11 @@ def snapshot(bot=None):
         # 给会话/任务打名字（找不到返回 None → 前端回退到 ID）
         for s in sessions:
             s["name"] = qq_names.name_for(s.get("target"), s.get("target_id")) or ""
-        for j in [jobs.get("running")] + (jobs.get("queued") or []):
+        # 两条通道都要打名字：jobs 里前三个键是本地通道，jobs["nai"] 是云端
+        # 通道（2026-10-03 拆分，见 image_jobs.snapshot）。
+        nai = jobs.get("nai") or {}
+        for j in ([jobs.get("running")] + (jobs.get("queued") or [])
+                  + (nai.get("running") or []) + (nai.get("queued") or [])):
             if j:
                 j["name"] = qq_names.name_for(
                     j.get("target"), j.get("target_id")) or ""

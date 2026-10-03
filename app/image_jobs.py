@@ -106,6 +106,28 @@ unet 4487MB ≈ 10.5GB 权重，而空闲可用只有 10.78GB。当天实测的�
   队列里只剩 qwen 时它照跑。
 - **不额外改 qwen 的分辨率 / cache 设置**：那会掉细节，且没有实测支撑。本来就有
   `_maybe_release_for_low_vram` 在提交前兜一道 `/free`。
+
+## 两条通道（2026-10-03 用户提「NAI 是云端的，来我本地队列排什么队」）
+
+队列从「一条」变成「两条」，划分标准是**占不占本机显卡**：
+
+- **本地通道**（`_COMFY`）：ComfyUI 那一堆渠道，单 worker 串行。上面写的权重
+  排序、冷却窗、换渠道 /free、内存水位重启**全归它**——那些机制的存在理由都是
+  显卡（`chan.local` 一票否决云端通道用它们）。
+- **NAI 通道**（`_NAI`）：`nai` / `nai_wide` 走 NovelAI 云端，本机只落盘、审核、
+  发消息，一帧渲染都不占。所以它**并行**跑（`NAI_CONCURRENCY` 个 worker），
+  不再排在本地图后面——拆之前 NAI 点完要等前面十几张本地图，最多十分钟。
+
+两条通道各有一套 queue / running / 每会话计数 / 唤醒信号 / 入队序号，共用同一把
+`_lock`（临界区都只有几行、没有磁盘 IO，为并行再拆一套锁不划算）。跨通道的查询
+（查重、回执、每会话在途、`recent_activity`）自己遍历两条。
+
+有意**不做同会话保序**（用户选的）：两条队列并行，同一会话的 NAI 图可能比本地图
+先发出。要保序就得跨队列同步——一张 NAI 得等本地队前面那张出来，正好把这条通道
+的意义抵消掉。
+
+名额是**分通道各算**的：本地 20/5，NAI 20/5（`NAI_*` 常量，同值但独立定义，
+将来想单独收紧不用碰本地）。所以理论上两条队各能排 20 张。
 """
 
 import collections
@@ -155,6 +177,19 @@ MAX_QUEUE = 20
 # （见 skills._SKILL_PRIORITY），动漫档 anima_* / hd_* 不受它影响。
 MAX_HEAVY_IN_QUEUE = 3
 
+# ── NAI 云端通道的名额（2026-10-03 拆通道时定）─────────────────
+#
+# 跟本地那一组**同值但独立定义**：NAI 只对开了白名单的群开放，成本是群主的
+# token（按量付），将来想单独收紧改这三个数就行，不用碰本地的 20/5。
+#
+# 并发给 2 而不是 1：NAI 单张 5~15 秒，一个群连点两张、或者两个群同时点，
+# 1 个 worker 就又排起来了——而这条通道的意义正是「云端不排本地那条队」。
+# 也不能太大：同一进程里每张图都要落盘 + 审核 + 发消息，三个云端请求同时
+# 回来时这些本地动作会挤在一起。
+NAI_CONCURRENCY = 2
+NAI_MAX_QUEUE = 20
+NAI_MAX_INFLIGHT = 5
+
 # 单张图从「真正开跑」到出图的时限（秒）。到点还没出图就中断它、让下一个上。
 TASK_TIMEOUT = IMAGE_GEN_TIMEOUT
 
@@ -199,24 +234,76 @@ QWEN_SKILL = "qwen_image_v1"
 # staged 峰值和真实崩溃点**，别按权重表算 GB 往上堆。
 CLEAN_START_SKILLS = {}
 
+# NAI 的两个渠道名（2026-10-03 加 `nai_wide` 横版）。所有「是不是 NAI」的判断
+# 都走这个元组——`job.skill` 存的是**真实渠道名**，云端分支靠它区分横竖。
+NAI_SKILLS = ("nai", "nai_wide")
+
 _lock = threading.Lock()
-_queue = collections.deque()      # 待跑的任务（不含正在跑的那个）
-_running = None                   # 正在跑的任务（只为可观测 / 算排队位次）
+
+
+class _Channel:
+    """一条独立队列 + 自己的 worker 线程。
+
+    2026-10-03 之前这里只有一条队列，NAI 也得跟着本地图排——可它走的是云端，
+    本机一帧都不渲染，排在十几张本地图后面纯属白等。现在按「占不占本机显卡」
+    分成两条：
+
+    - **本地通道**（ComfyUI，`local=True`）：权重排序、冷却窗、换渠道 /free、
+      内存水位重启**全归它**——那些机制的存在理由都是显卡（见模块开头）。
+    - **NAI 通道**（云端，`local=False`）：`workers` 个 worker 并行跑，不排序、
+      不冷却。本机只负责落盘、审核、发消息。
+
+    两条通道共用同一把 `_lock`：临界区都只有几行、没有磁盘 IO，为并行再拆一套
+    锁得不偿失。跨通道的查询（查重、回执、每会话在途）自己遍历两条。
+    """
+
+    def __init__(self, name, workers=1, local=True, max_queue=MAX_QUEUE,
+                 max_inflight=MAX_INFLIGHT, max_heavy=MAX_HEAVY_IN_QUEUE):
+        self.name = name
+        self.local = local
+        self.workers = workers
+        self.max_queue = max_queue
+        self.max_inflight = max_inflight
+        self.max_heavy = max_heavy
+        self.queue = collections.deque()   # 待跑的任务（不含正在跑的）
+        self.running = []                  # 正在跑的（本地恒 0/1 个）
+        self.per_session = {}              # (target, target_id) -> 在途张数（含排队）
+        self.seq = 0                       # 入队序号，同权重的按它先进先出
+        self.wake = threading.Event()      # 有新任务入队时戳一下 worker
+        self.worker_started = False
+        # 下面三个只有本地通道用（全是为显卡发明的，见「重渠道优先度」）：
+        self.heavy_done_at = 0.0           # 上一张重渠道**跑完**的时刻
+        self.last_skill = None             # 上次提交给 ComfyUI 的渠道（判要不要 /free）
+        self.last_restart_try = 0.0        # 上次**尝试**重启 ComfyUI 的时刻（防抖）
+
+    def depth(self):
+        """这条通道还有几个在等 / 在跑。"""
+        return len(self.queue) + len(self.running)
+
+
+_COMFY = _Channel("comfy", workers=1, local=True)
+_NAI = _Channel("nai", workers=NAI_CONCURRENCY, local=False,
+                max_queue=NAI_MAX_QUEUE, max_inflight=NAI_MAX_INFLIGHT)
 
 # 最近跑完（含失败）的几张图，按会话可查——给模型回答「刚才那张画好没有」用。
 # 有界、进程内、重启即空：它只是一条**回执**，不是账本，不需要落盘。
+# 两条通道共用（模型关心的是「这个会话的图出没出」，跟哪条通道无关）。
 _RECENT_MAX = 30
 _recent = collections.deque(maxlen=_RECENT_MAX)
-_last_skill = None                # 上次提交给 ComfyUI 的渠道，用来判断要不要先 /free
-_last_restart_try = 0.0           # 上次**尝试**重启 ComfyUI 的时刻，防抖（成败都记）
-_per_session = {}                 # (target, target_id) -> 在途张数（含排队）
-_worker_started = False
-_wake = threading.Event()         # 有新任务入队时戳一下 worker
 
-# 排序用。_seq 单调递增，权重相同的任务严格先进先出；_heavy_done_at 记
-# 上一张重渠道**跑完**的时刻（不是提交时刻——冷却要的是「残留在散」的那段）。
-_seq = 0
-_heavy_done_at = 0.0
+
+def _channel_of(skill):
+    """这个 skill 该进哪条通道。NAI 的两个渠道名走云端，其余全归本地。"""
+    return _NAI if skill in NAI_SKILLS else _COMFY
+
+
+def _channel_of_job(job):
+    """任务所属通道。
+
+    `job.chan` 是入队时定的；测试里手搓的 Job 没带，就按 skill 反推——这样
+    `_finish` 对两条通道是同一份代码，不用调用方再传一遍。
+    """
+    return getattr(job, "chan", None) or _channel_of(getattr(job, "skill", None))
 
 
 def _order(job):
@@ -233,10 +320,11 @@ def _order(job):
     return (job.weight > 1, job.weight, job.seq)
 
 
-def _heavy_ahead():
-    """已经在等或正在跑的重渠道有几张（含正在跑的那张）。"""
-    return sum(1 for j in _queue if j.weight > 1) \
-        + (1 if _running is not None and _running.weight > 1 else 0)
+def _heavy_ahead(chan=None):
+    """这条通道里已经在等或正在跑的重渠道有几张（含正在跑的）。"""
+    chan = chan or _COMFY
+    return sum(1 for j in chan.queue if j.weight > 1) \
+        + sum(1 for j in chan.running if j.weight > 1)
 
 
 class Job:
@@ -247,11 +335,16 @@ class Job:
     """
 
     def __init__(self, target, target_id, workflow, skill=None, weight=1, seq=0,
-                 nai_i2i=None, tag=None, prompt=None, intent=None, seed=None):
+                 nai_i2i=None, tag=None, prompt=None, intent=None, seed=None,
+                 chan=None):
         self.target = target
         self.target_id = target_id
         self.workflow = workflow
-        self.skill = skill          # 生图渠道，只用来判断要不要先 /free
+        # 生图渠道：决定进哪条通道（见 _channel_of）、要不要先 /free、权重多少
+        self.skill = skill
+        # 所属通道（enqueue 时定）。手工构造的 Job 这里是 None，_channel_of_job
+        # 会按 skill 反推——测试里那一堆 Job(...) 不用改。
+        self.chan = chan
         # 这张图的种子（提交那一刻就定死，见 generate_image._resolve_seed）。
         # **必须在入队时快照**：worker 线程拿不到工作流里那个数（seed 已经混在
         # 几十个节点里），而 caption 要贴它、账本要存它，两处都得用同一个值。
@@ -311,35 +404,33 @@ def _key(target, target_id):
 
 
 def inflight_count(target, target_id):
-    """这个会话还有几张在途（含排队中）。"""
+    """这个会话还有几张在途（含排队中）——**两条通道一起算**。
+
+    模型看到的是「这个人还有几张图在路上」，跟他点的是本地还是云端无关：
+    上面那句「对方说没收到图时先想这几张」（见 agents.private_quota_line）
+    数漏一张就会让它把「在跑的 NAI 图」当成没画过，再提交一遍。
+    """
+    key = _key(target, target_id)
     with _lock:
-        return _per_session.get(_key(target, target_id), 0)
+        return sum(c.per_session.get(key, 0) for c in (_COMFY, _NAI))
 
 
 def queue_depth():
-    """队列里还有几个在等（含正在跑的那个）。"""
+    """两条通道加起来还有几个在等 / 在跑（总量，供测试与状态页用）。"""
     with _lock:
-        return len(_queue) + (1 if _running is not None else 0)
-
-
-# NAI 的两个渠道名（2026-10-03 加 `nai_wide` 横版）。所有「是不是 NAI」的判断
-# 都走这个元组——`job.skill` 存的是**真实渠道名**，云端分支靠它区分横竖。
-NAI_SKILLS = ("nai", "nai_wide")
+        return _COMFY.depth() + _NAI.depth()
 
 
 def nai_depth():
-    """NAI 渠道现在有几张在跑 / 在排（给状态栏用的本地事实）。
+    """NAI 通道现在有几张在跑 / 在排（给状态栏用的本地事实）。
 
     ComfyUI 的排队数靠 /queue 探测（comfy_status），NAI 是云端请求，
     ComfyUI 那边根本看不见——机器人想知道「NAI 画完没有」只能看这里。
-    全局同时只有一张在跑（worker 串行），所以 running 只会是 0 或 1。
+    并发是 `NAI_CONCURRENCY`（默认 2），所以 running 可能是 0/1/2。
     横竖两个渠道一起算：问的是「NAI 忙不忙」，跟出的是横是竖无关。
     """
     with _lock:
-        running = 1 if (_running is not None
-                        and _running.skill in NAI_SKILLS) else 0
-        pending = sum(1 for j in _queue if j.skill in NAI_SKILLS)
-        return running, pending
+        return len(_NAI.running), len(_NAI.queue)
 
 
 def recent_outcomes(target, target_id, limit=3):
@@ -368,12 +459,13 @@ def _inflight_of(target, target_id, limit=3):
     """
     key = _key(target, target_id)
     with _lock:
-        items = [(j, "排队中") for j in _queue
+        items = [(j, "排队中") for c in (_COMFY, _NAI) for j in c.queue
                  if _key(j.target, j.target_id) == key]
-        if _running is not None \
-                and _key(_running.target, _running.target_id) == key:
-            items.append((_running, "正在跑"))
-    items.sort(key=lambda pair: pair[0].seq)
+        for c in (_COMFY, _NAI):
+            items += [(j, "正在跑") for j in c.running
+                      if _key(j.target, j.target_id) == key]
+    # 按**入队时刻**排，不按 seq：seq 是每条通道各自发号的，跨通道没有可比性。
+    items.sort(key=lambda pair: pair[0].created)
     if limit and limit > 0:
         items = items[-limit:]
     return items
@@ -450,9 +542,9 @@ def recent_activity(target, target_id, within=RECENT_DONE_WINDOW):
     key = _key(target, target_id)
     now = time.time()
     with _lock:
-        n = sum(1 for j in _queue if _key(j.target, j.target_id) == key)
-        if _running is not None and _key(_running.target, _running.target_id) == key:
-            n += 1
+        n = sum(1 for c in (_COMFY, _NAI)
+                for j in list(c.queue) + c.running
+                if _key(j.target, j.target_id) == key)
         n += sum(1 for r in _recent
                  if _key(r["target"], r["target_id"]) == key
                  and now - (r.get("ts") or 0.0) <= within)
@@ -471,13 +563,10 @@ def find_pending_duplicate(target, target_id, intent):
         return None
     key = _key(target, target_id)
     with _lock:
-        for j in _queue:
-            if _key(j.target, j.target_id) == key and j.intent == intent:
-                return j
-        if (_running is not None
-                and _key(_running.target, _running.target_id) == key
-                and _running.intent == intent):
-            return _running
+        for c in (_COMFY, _NAI):
+            for j in list(c.queue) + c.running:
+                if _key(j.target, j.target_id) == key and j.intent == intent:
+                    return j
     return None
 
 
@@ -486,18 +575,26 @@ def ahead_of(job):
 
     按**出队顺序**数，不是按入队顺序：后入队的普通任务会插到先入队的 qwen
     前面，模型报给对方的「前面还有 N 张」得跟它实际要等的一致。
+
+    只数**自己那条通道**的（2026-10-03 拆通道后）：NAI 不会再排在本地图后面，
+    这里要是把两条加在一起，模型就会对一张其实立刻开画的 NAI 图说「前面还有
+    十几张」——比不报还糟。
     """
+    chan = _channel_of_job(job)
     with _lock:
-        if job not in _queue:
+        if job not in chan.queue:
             return 0
-        order = sorted(_queue, key=_order)
-        return order.index(job) + (1 if _running is not None else 0)
+        order = sorted(chan.queue, key=_order)
+        return order.index(job) + len(chan.running)
 
 
 def snapshot():
     """给状态后台用的队列快照（只读，不改任何状态）。
 
-    返回 {"running": {...}|None, "queued": [ {...} ], "depth": N}。
+    返回 {"running": {...}|None, "queued": [ {...} ], "depth": N, "nai": {...}}。
+    前三个键还是**本地通道**的老形状（前端 web/status.html 直接读它们，别改），
+    "nai" 是云端通道的同构视图（它的 running 是列表——并发 NAI_CONCURRENCY），
+    "depth" 是两条通道加起来的。
     每张暴露 target/target_id/skill/weight/已等秒数/前面还有几张/提示词预览
     ——正是「谁在排队、排了多久」这个问题需要的全部字段。
 
@@ -506,10 +603,6 @@ def snapshot():
     """
     now = time.time()
     with _lock:
-        running = _running
-        order = sorted(_queue, key=_order)
-        base = 1 if running is not None else 0
-
         def _j(job, ahead):
             wf = job.workflow
             return {
@@ -523,25 +616,42 @@ def snapshot():
                 "prompt": (wf[:60] if isinstance(wf, str) else ""),
             }
 
+        def _view(chan, single):
+            order = sorted(chan.queue, key=_order)
+            running = [_j(j, 0) for j in chan.running]
+            if single:                      # 本地通道：老前端要的是对象或 None
+                head = running[0] if running else None
+            else:
+                head = running
+            return {
+                "running": head,
+                "queued": [_j(j, len(running) + i)
+                           for i, j in enumerate(order)],
+                "depth": chan.depth(),
+            }
+
+        comfy = _view(_COMFY, single=True)
         return {
-            "running": (_j(running, 0) if running is not None else None),
-            "queued": [_j(j, base + i) for i, j in enumerate(order)],
-            "depth": len(_queue) + (1 if running is not None else 0),
+            "running": comfy["running"],
+            "queued": comfy["queued"],
+            "depth": _COMFY.depth() + _NAI.depth(),
+            "nai": _view(_NAI, single=False),
         }
 
 
 def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
             intent=None, seed=None):
-    """把一张图排进全局队列，返回 (job, reason)。
+    """把一张图排进**它该去的那条通道**的队列，返回 (job, reason)。
 
     prompt 是模型写的那段原始提示词，只用来**出图后记进账本**（编号 → 提示词，
     见 app/image_log.py）；生图本身用的是 workflow，这里传不传都不影响出图。
 
     reason 非 None 表示没接（此时 job 为 None），它是一句可以直接转述给对方
-    的话。三种拒收：全局队排太长、这个会话自己排太多、重渠道已经排了太多。
+    的话。三种拒收：这条队排太长、这个会话自己排太多、重渠道已经排了太多。
 
-    skill 用来定两件事：队列权重（`skill_priority`，qwen 排最后）和
-    「换渠道先 /free」的判断（见 _maybe_release_for_switch）。
+    skill 用来定三件事：进哪条通道（NAI 走云端那条，见 _channel_of）、队列
+    权重（`skill_priority`，qwen 排最后）和「换渠道先 /free」的判断
+    （见 _maybe_release_for_switch）。
     不传 skill 时的行为与从前完全一致（权重 1、从不主动释放）——老调用方
     不受影响。nai_i2i 只在 NAI 图生图时传（入队时快照的源图 base64 + 强度，
     见 Job.nai_i2i）。intent 是这次请求的意图指纹，只用于查重（见
@@ -549,152 +659,178 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
     只在**发图那行 caption 和出图后的账本**里用（生图本身用的是 workflow 里
     那个已经填好的数），不传就是没种子、caption 上不多那段。
     """
-    global _seq
     key = _key(target, target_id)
+    chan = _channel_of(skill)
     weight = skill_priority(skill)
     with _lock:
-        depth = len(_queue) + (1 if _running is not None else 0)
-        if depth >= MAX_QUEUE:
+        depth = chan.depth()
+        if depth >= chan.max_queue:
             return None, ("现在排队的人太多了（前面还有 %d 张），这一张先不画。"
                           "别跟对方提这张图，当没画过，接着把话说完。" % depth)
-        cur = _per_session.get(key, 0)
-        if cur >= MAX_INFLIGHT:
+        cur = chan.per_session.get(key, 0)
+        if cur >= chan.max_inflight:
             return None, ("这个会话已经排着 %d 张了，画完这些再说。"
                           "不要跟对方提这张图，当没画过，接着把话说完。" % cur)
-        if weight > 1 and _heavy_ahead() >= MAX_HEAVY_IN_QUEUE:
+        if weight > 1 and _heavy_ahead(chan) >= chan.max_heavy:
             # 重渠道一张就把显卡占满好几分钟。排队太长不如让它说一句
             # 「我现在画不了」——总好过半小时后发一张对方早忘了的图。
             return None, ("画图那个通道正忙着（已经在排 %d 张重的），这一张先不画。"
                           "别跟对方提这张图，当没画过，接着把话说完。"
-                          % MAX_HEAVY_IN_QUEUE)
-        _seq += 1
-        job = Job(target, target_id, workflow, skill, weight, _seq,
-                  nai_i2i=nai_i2i, prompt=prompt, intent=intent, seed=seed)
-        _queue.append(job)
-        _per_session[key] = cur + 1
+                          % chan.max_heavy)
+        chan.seq += 1
+        job = Job(target, target_id, workflow, skill, weight, chan.seq,
+                  nai_i2i=nai_i2i, prompt=prompt, intent=intent, seed=seed,
+                  chan=chan)
+        chan.queue.append(job)
+        chan.per_session[key] = cur + 1
     if weight > 1:
         # 入队就记一行：模型选渠道的决策只有在这里才看得见，出问题时先查这行。
         log.info("重渠道 %s 入队（%s %s，权重 %d，前面 %d 张）",
                  skill, target, target_id, weight, ahead_of(job))
-    _wake.set()
+    chan.wake.set()
     _ensure_worker()
     return job, None
 
 
 def _ensure_worker():
-    """确保唯一的 worker 线程在跑。重复调用无副作用。"""
-    global _worker_started
-    with _lock:
-        if _worker_started:
-            return
-        _worker_started = True
-    try:
-        threading.Thread(target=_worker, daemon=True,
-                         name="image-worker").start()
-    except Exception:
-        with _lock:                 # 线程没起来就别占着「已启动」的位
-            _worker_started = False
-        raise
+    """确保**每条通道**的 worker 线程都在跑，缺哪条补哪条。
+
+    保持零参数是刻意的：测试里到处把它替成 `lambda: None`（见
+    tests/test_image_jobs.py 的 _COMFY_IO_BLOCKERS），改签名会一次性弄红
+    七八个用例；而「把所有通道的 worker 都拉起来」本来就是要的行为——闲着的
+    线程只是每秒醒一次看一眼自己的队列。
+    """
+    for chan in (_COMFY, _NAI):
+        with _lock:
+            if chan.worker_started:
+                continue
+            chan.worker_started = True
+        try:
+            for i in range(chan.workers):
+                threading.Thread(
+                    target=_worker, args=(chan,), daemon=True,
+                    name="image-worker-%s-%d" % (chan.name, i)).start()
+        except Exception:
+            with _lock:             # 线程没起来就别占着「已启动」的位
+                chan.worker_started = False
+            raise
 
 
-def _next_ready():
-    """挑下一个该跑的任务（**调用方必须已持 _lock**）；都不该跑返回 None。
+def _next_ready(chan=None):
+    """挑这条通道下一个该跑的任务（**调用方必须已持 _lock**）；没有返回 None。
 
-    「重渠道不许连跑」在这里落地：只要**上一张成功的是重渠道**且还没过冷却窗，
+    「重渠道不许连跑」只对**本地通道**有意义（`chan.local`）：那条规则要防的是
+    显存残留撞上下一张的模型装载，NAI 走云端、本机没有显存可等，冷却窗对它
+    纯粹是白等，所以云端通道不参与。
+
+    本地那段逻辑：只要**上一张成功的是重渠道**且还没过冷却窗，
     队里的重渠道就一张都不许开跑——普通渠道照常放行（这正是冷却窗的意义：
     把间隙让给别人）。全是重渠道、又都在冷却里时返回 None，worker 回去等。
 
     两个容易踩的点：
 
-    - 判据读的是 `_heavy_done_at`（跑**完**的时刻）而不是提交时刻：要防的是
+    - 判据读的是 `chan.heavy_done_at`（跑**完**的时刻）而不是提交时刻：要防的是
       「前一张卸载下来的那几秒正好撞上后一张的模型装载」，从提交起算会把窗口
       整个错开。
     - 冷却窗一过就**立刻**把队里的重渠道重新排好（按 _order 取最小），所以
       冷却结束不需要任何额外的唤醒信号——worker 每秒醒一次，下一轮就看见了。
       这也意味着「冷却中的重渠道不占用 ahead_of 的名额」是自动成立的。
     """
-    if not _queue:
+    chan = chan or _COMFY
+    if not chan.queue:
         return None
-    if _cooling():
-        ready = [j for j in _queue if j.weight <= 1]
+    if chan.local and _cooling(chan):
+        ready = [j for j in chan.queue if j.weight <= 1]
         if not ready:
             return None
         return min(ready, key=_order)
-    return min(_queue, key=_order)
+    return min(chan.queue, key=_order)
 
 
-def _cooling():
-    """重渠道现在在冷却里吗（排队阶段的闸）；调用方已持 _lock。"""
-    if QWEN_COOLDOWN <= 0 or _heavy_done_at <= 0:
+def _cooling(chan=None):
+    """这条通道的重渠道现在在冷却里吗（排队阶段的闸）；调用方已持 _lock。"""
+    chan = chan or _COMFY
+    if QWEN_COOLDOWN <= 0 or chan.heavy_done_at <= 0:
         return False
-    return (time.time() - _heavy_done_at) < QWEN_COOLDOWN
+    return (time.time() - chan.heavy_done_at) < QWEN_COOLDOWN
 
 
-def _move_back(job):
+def _move_back(chan, job):
     """把一个任务挪到队尾（冷却没到点的重渠道用）；调用方已持 _lock。
 
     不是 `job.seq = _seq+1` 了事——那样所有冷却里的重渠道会**共享同一个序号**，
     重排时的先后就变成集合顺序（不确定）。真挪到队尾：重新取号并移到 deque
     尾部，让「谁先被推回去谁先出来」稳定下来。
     """
-    global _seq
     try:
-        _queue.remove(job)
+        chan.queue.remove(job)
     except ValueError:
         return                          # 已经被别的路径取走了
-    _seq += 1
-    job.seq = _seq
+    chan.seq += 1
+    job.seq = chan.seq
     job.waits += 1
-    _queue.append(job)
+    chan.queue.append(job)
     log.info("重渠道 %s 让行（第 %d 次）：上一张 %s 刚跑完不到 %.0f 秒，"
              "先让普通渠道上", job.skill, job.waits, QWEN_SKILL, QWEN_COOLDOWN)
 
 
-def _take_nowait():
-    """立刻取一个任务；没有 / 都还在冷却里就返回 None。"""
-    global _running
+def _take_nowait(chan=None):
+    """立刻取一个任务；没有 / 都还在冷却里就返回 None。
+
+    不传 chan 时按本地通道取——老调用方（和测试里的 `_take_nowait()` 当
+    worker 用）行为不变。
+    """
+    chan = chan or _COMFY
     with _lock:
-        if not _queue:
+        if not chan.queue:
             return None
         # 上一张要是重渠道，现在又还在冷却里，先把它挪到队尾——
         # 否则它会是 _order 的最小项，直接被取走，让行规则形同虚设。
-        if _cooling():
-            for job in [j for j in _queue if j.weight > 1]:
-                _move_back(job)
-        job = _next_ready()
+        if chan.local and _cooling(chan):
+            for job in [j for j in chan.queue if j.weight > 1]:
+                _move_back(chan, job)
+        job = _next_ready(chan)
         if job is None:
             return None
         try:
-            _queue.remove(job)
+            chan.queue.remove(job)
         except ValueError:
             return None
-        _running = job
+        chan.running.append(job)
         return job
 
 
-def _take():
-    """取下一个任务；没有就阻塞等（每秒醒一次，保证收得到新入队信号）。"""
+def _take(chan):
+    """取这条通道的下一个任务；没有就阻塞等（每秒醒一次，保证收得到入队信号）。
+
+    同一通道有多个 worker（NAI 是 2 个）时，它们抢同一个 `chan.wake`：Event
+    被其中一个 clear 掉之后，其余的也会在 1 秒内自然醒来重新看一眼队列——
+    延迟上限就是这一秒，不值得为它换 Condition。
+    """
     while True:
-        job = _take_nowait()
+        job = _take_nowait(chan)
         if job is not None:
             return job
-        _wake.wait(1)
-        _wake.clear()
+        chan.wake.wait(1)
+        chan.wake.clear()
 
 
-def _worker():
-    """唯一的工作线程：一张接一张，串行到底。"""
+def _worker(chan):
+    """这条通道的工作线程：本地一张接一张串行；云端 N 个线程并行。"""
     while True:
-        job = _take()
+        job = _take(chan)
         try:
             process(job)
         except Exception:
             log.exception("生图任务处理时抛异常 %s %s", job.target, job.target_id)
         finally:
             _finish(job)
+        if not chan.local:
+            continue
         # 每跑完一张看一眼内存——ComfyUI 的常驻内存是按张涨的（见
         # _maybe_restart_for_ram）。放在这里而不是 _take 之前：_take 会阻塞
-        # 等新任务，在那儿检查就变成每秒一次了。
+        # 等新任务，在那儿检查就变成每秒一次了。**只有本地通道要做**：
+        # 云端那张图跟 ComfyUI 的内存一个字节的关系都没有。
         _maybe_restart_for_ram()
 
 
@@ -710,12 +846,12 @@ def _maybe_release_for_switch(job):
     skill 为 None（老调用方没传）时整个函数是空操作，行为与从前完全一致；
     同渠道连画也不打 /free，模型保持热的。
     """
-    global _last_skill
+    chan = _COMFY
     skill = job.skill
     if skill is None:
         return
-    prev = _last_skill
-    _last_skill = skill             # 无论打不打 /free 都要记，否则会反复触发
+    prev = chan.last_skill
+    chan.last_skill = skill         # 无论打不打 /free 都要记，否则会反复触发
     if prev is None or prev == skill:
         return
     log.info("渠道切换 %s → %s，先释放上一个渠道的模型", prev, skill)
@@ -806,10 +942,9 @@ def _restart_comfy(timeout=COMFY_RESTART_WAIT):
     重启期间 8188 会拒连，所以轮询到它回来为止。等不到就放弃并记一条错误
     ——下一张图会撞上 `_notice` 那句「ComfyUI 没在线」，总好过在这里无限等。
     """
-    global _last_restart_try
     # 任何一次重启都重置防抖（2026-10-03）：超时那条路现在也会重启，不记的
     # 话 worker 紧接着的 _maybe_restart_for_ram 会再重启一次，白等一轮。
-    _last_restart_try = time.time()
+    _COMFY.last_restart_try = time.time()
     try:
         status = requests.get(COMFYUI_URL + "/manager/reboot",
                               timeout=15).status_code
@@ -832,9 +967,8 @@ def _restart_comfy(timeout=COMFY_RESTART_WAIT):
                             timeout=5).status_code == 200:
                 log.info("ComfyUI 已重启完成，耗时 %.0f 秒", time.time() - start)
                 # 新进程里一个模型都没加载，别让「换渠道先 /free」以为还是热的。
-                global _last_skill
                 with _lock:
-                    _last_skill = None
+                    _COMFY.last_skill = None
                 return True
         except Exception:
             pass
@@ -860,17 +994,16 @@ def _maybe_restart_for_ram():
     代价：重启会丢掉 ComfyUI 里已加载的模型，下一张要重新加载（十几秒到
     一分钟）。这是拿时间换「不卡死」。
     """
-    global _last_restart_try
     if COMFY_MIN_FREE_RAM_GB <= 0:
         return                       # 功能关掉了
     now = time.time()
-    if now - _last_restart_try < COMFY_RESTART_MIN_GAP:
+    if now - _COMFY.last_restart_try < COMFY_RESTART_MIN_GAP:
         return                       # 刚试过，别反复折腾（也防失败后每张刷日志）
     free = _free_ram_gb()
     if free is None or free >= COMFY_MIN_FREE_RAM_GB:
         return
     # 成败都记：不记的话重启被拒时会每张图重试一次，日志刷屏还白等 3 秒。
-    _last_restart_try = now
+    _COMFY.last_restart_try = now
     log.warning("系统可用内存只剩 %.1fGB（低于 %.1fGB 水位），重启 ComfyUI 释放",
                 free, COMFY_MIN_FREE_RAM_GB)
     _restart_comfy()
@@ -965,7 +1098,7 @@ def process(job):
     # NAI 云端生图：完全不碰 ComfyUI（token 是群主独立的，图由 NovelAI 出）。
     if job.skill in NAI_SKILLS:
         return _process_nai(job)
-    # 放在换渠道 /free 之前：重启成功后 _last_skill 会被清成 None（新进程里
+    # 放在换渠道 /free 之前：重启成功后 _COMFY.last_skill 会被清成 None（新进程里
     # 一个模型都没加载），换渠道那条就不会再打一次没用的 /free。
     _maybe_restart_for_clean_start(job)
     _maybe_release_for_switch(job)
@@ -1057,23 +1190,29 @@ def process(job):
 
 
 def _finish(job):
-    """还名额、清 _running、唤醒等结果的网页侧。失败路径也一定要走到。"""
-    global _running, _heavy_done_at
+    """还名额、把任务移出 running、唤醒等结果的网页侧。失败路径也一定要走到。
+
+    两条通道共用这一份：通道从任务自己身上取（见 _channel_of_job），所以
+    `_take` 那边不用把 chan 一层层传下来。
+    """
+    chan = _channel_of_job(job)
     refund = False
     with _lock:
         key = _key(job.target, job.target_id)
-        n = _per_session.get(key, 0) - 1
+        n = chan.per_session.get(key, 0) - 1
         if n > 0:
-            _per_session[key] = n
+            chan.per_session[key] = n
         else:
-            _per_session.pop(key, None)
-        if _running is job:
-            _running = None
+            chan.per_session.pop(key, None)
+        try:
+            chan.running.remove(job)
+        except ValueError:
+            pass                        # 没在跑（测试手搓的 Job）——不是错误
         # 只有**真出图了**的重渠道才开冷却窗。失败/超时那张已经把 ComfyUI 的
         # 队列和显存清干净了（_abort + _wait_comfy_idle），没有残留要等它散，
-        # 再罚它 90 秒只是白等。
-        if job.weight > 1 and job.skill_done:
-            _heavy_done_at = time.time()
+        # 再罚它 90 秒只是白等。云端通道不参与：它没有显存要等（见 _next_ready）。
+        if chan.local and job.weight > 1 and job.skill_done:
+            chan.heavy_done_at = time.time()
             log.info("重渠道 %s 跑完，%.0f 秒内不再接重活",
                      job.skill, QWEN_COOLDOWN)
         # 记一条回执：模型在 enqueue 拿到「已经排上队了」之后就**再也收不到
@@ -1102,13 +1241,14 @@ def _finish(job):
 
 
 def _drain():
-    """把队列里的任务同步跑完，不依赖 worker 线程（测试用）。
+    """把**两条通道**里的任务同步跑完，不依赖 worker 线程（测试用）。
 
     有了它，测试就能像从前那样「调用 → 立刻断言提交了什么」，不必陪真线程
-    玩时序。
+    玩时序。本地通道优先取：拆通道之前只有一条队列，测试里本地任务先入队、
+    就该先跑——先取本地能让那批老用例的先后关系原样保留。
     """
     while True:
-        job = _take_nowait()
+        job = _take_nowait(_COMFY) or _take_nowait(_NAI)
         if job is None:
             return
         try:
@@ -1118,18 +1258,18 @@ def _drain():
 
 
 def _reset():
-    """清空队列与计数（测试用）。不动 _worker_started——测试自己把
+    """清空两条通道的队列与计数（测试用）。不动 worker_started——测试自己把
     _ensure_worker mock 成空操作，真线程不该被这里牵起来。"""
-    global _running, _last_skill, _last_restart_try, _seq, _heavy_done_at
     with _lock:
-        _queue.clear()
-        _per_session.clear()
+        for chan in (_COMFY, _NAI):
+            chan.queue.clear()
+            chan.per_session.clear()
+            chan.running = []
+            chan.seq = 0
+            chan.heavy_done_at = 0.0
+            chan.last_skill = None
+            chan.last_restart_try = 0.0
         _recent.clear()
-        _running = None
-        _last_skill = None
-        _last_restart_try = 0.0
-        _seq = 0
-        _heavy_done_at = 0.0
 
 
 # ─── ComfyUI 交互 ────────────────────────────────────

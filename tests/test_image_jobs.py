@@ -251,14 +251,14 @@ class IdleWaitTest(unittest.TestCase):
 
 
 class QueueTest(_Base):
-    """谁排队、谁被拒。全局就一条队，多会话一起排。"""
+    """谁排队、谁被拒。本地就一条队，多会话一起排（NAI 另有云端通道）。"""
 
     def test_jobs_line_up_across_conversations(self):
         """不同会话的任务进的是同一条队——这就是「全局串行」的意思。"""
         a, _ = self._enqueue(("group", "9"))
         b, _ = self._enqueue(("group", "8"))
         c, _ = self._enqueue(("private", "123"))
-        self.assertEqual(list(image_jobs._queue), [a, b, c])
+        self.assertEqual(list(image_jobs._COMFY.queue), [a, b, c])
         self.assertEqual(image_jobs.queue_depth(), 3)
 
     def test_ahead_counts_the_running_one(self):
@@ -270,13 +270,18 @@ class QueueTest(_Base):
         self.assertEqual(image_jobs.ahead_of(b), 1)   # a 还在跑，仍在前头
 
     def test_nai_depth_counts_only_nai(self):
-        """状态栏的数据源：nai_depth 只数 NAI 的在跑/在排，别的渠道不算。"""
-        self._enqueue(("group", "9"))                    # 普通渠道
+        """状态栏的数据源：nai_depth 只数 NAI 通道的在跑/在排，本地图不算。
+
+        拆通道之前这两张是排在**同一条队**里的（老版本靠连调两次
+        `_take_nowait()` 让 NAI 那张轮上）；现在它们各排各的——本地那张跑不跑
+        都影响不到 NAI 的计数，这正是拆通道要的结果。
+        """
+        self._enqueue(("group", "9"))                    # 本地渠道
         self._enqueue(("group", "9"), wf="cat", skill="nai")
+        image_jobs._take_nowait()          # 本地那张开跑
         self.assertEqual(image_jobs.nai_depth(), (0, 1))
-        image_jobs._take_nowait()          # 跑起来的是普通渠道那张
-        self.assertEqual(image_jobs.nai_depth(), (0, 1))
-        image_jobs._take_nowait()          # NAI 那张开跑
+        self.assertEqual(image_jobs.queue_depth(), 2)    # 总量是两条加起来的
+        image_jobs._take_nowait(image_jobs._NAI)         # NAI 那张开跑
         self.assertEqual(image_jobs.nai_depth(), (1, 0))
 
     def test_per_session_limit(self):
@@ -335,6 +340,158 @@ class QueueTest(_Base):
         image_jobs._finish(job)
         self.assertEqual(image_jobs.inflight_count("group", "9"), 0)
         self.assertIsNone(self._enqueue()[1])
+
+
+class ChannelSplitTest(_Base):
+    """两条通道：本地（ComfyUI）与云端（NAI）各排各的（2026-10-03 拆）。
+
+    拆之前 NAI 跟本地图混在同一条 FIFO 里——一张 NAI 要等前面十几张本地图
+    跑完（最多十分钟），可它走的是云端、本机一帧都不渲染，纯属白等。现在它
+    有自己的队列、自己的名额、自己的 worker。
+    """
+
+    def test_nai_goes_to_the_cloud_channel(self):
+        """点一张 NAI：进的是云端队列，本地队列里看不见它。"""
+        job, reason = self._enqueue(wf="cat", skill="nai")
+        self.assertIsNone(reason)
+        self.assertEqual(list(image_jobs._COMFY.queue), [])
+        self.assertEqual(list(image_jobs._NAI.queue), [job])
+        self.assertIs(job.chan, image_jobs._NAI)
+
+    def test_nai_does_not_queue_behind_local_images(self):
+        """本地堆着 5 张，NAI 该多快就多快。
+
+        这是拆通道的核心收益，而且**必须从 ahead_of 上看出来**：模型是照它报
+        「前面还有 N 张」的，要是还把两条队列加在一起数，它就会对一张立刻开画
+        的 NAI 说「前面还有 5 张」——比不报还糟。
+        """
+        for i in range(5):                  # 每个会话各一张，绕开每会话上限
+            job, reason = self._enqueue(("group", str(i)), skill="anima_clear")
+            self.assertIsNone(reason)
+        nai, reason = self._enqueue(("group", "9"), wf="cat", skill="nai")
+        self.assertIsNone(reason)
+        self.assertIsNotNone(nai)           # 少了这句，NAI 被拒时下面两条会空过
+        self.assertEqual(image_jobs.ahead_of(nai), 0)
+        self.assertEqual(image_jobs._take_nowait(image_jobs._NAI), nai)
+
+    def test_limits_are_per_channel(self):
+        """本地名额满了，NAI 照样进得来——两条队各算各的。"""
+        for _ in range(image_jobs.MAX_INFLIGHT):
+            self._enqueue(skill="anima_clear")
+        self.assertIsNotNone(self._enqueue(skill="anima_clear")[1])   # 本地已满
+        job, reason = self._enqueue(wf="cat", skill="nai")
+        self.assertIsNone(reason)
+        self.assertIsNotNone(job)
+
+    def test_cloud_channel_has_its_own_queue_limit(self):
+        """云端队排到 NAI_MAX_QUEUE 才拒收，本地的 20 张填不满它。"""
+        for i in range(image_jobs.NAI_MAX_QUEUE):
+            job, reason = self._enqueue(("group", str(i)), wf="x", skill="nai")
+            self.assertIsNone(reason)
+            self.assertIsNotNone(job)
+        _, reason = self._enqueue(("group", "999"), wf="x", skill="nai")
+        self.assertTrue(reason)
+        self.assertIn("太多", reason)
+
+    def test_cloud_channel_allows_parallel_takes(self):
+        """云端通道能同时有 NAI_CONCURRENCY 个任务在跑（本地恒 0/1）。
+
+        守的是 `_take_nowait` 里「已经在跑几张」这件事：本地的串行是靠单
+        worker 保证的，云端要是照抄一句 `if running: return None`，并发就悄悄
+        退化回 1——不会报错，只会又排起队来。
+        """
+        jobs = [self._enqueue(("group", str(i)), wf="x", skill="nai")[0]
+                for i in range(image_jobs.NAI_CONCURRENCY)]
+        taken = [image_jobs._take_nowait(image_jobs._NAI) for _ in jobs]
+        self.assertEqual(taken, jobs)
+        self.assertEqual(image_jobs.nai_depth(),
+                         (image_jobs.NAI_CONCURRENCY, 0))
+        for j in jobs:
+            image_jobs._finish(j)
+        self.assertEqual(image_jobs.nai_depth(), (0, 0))
+
+    def test_heavy_cooldown_is_local_only(self):
+        """重渠道的冷却窗不该管到云端通道——那条规则是为显存发明的。
+
+        构造：本地刚跑完一张 qwen（冷却窗生效中）。此时本地队里的重渠道被推回
+        队尾、一张也开不了跑；云端通道没有冷却这回事，它那张应该立刻取走。
+        """
+        image_jobs._COMFY.heavy_done_at = image_jobs.time.time()
+        heavy, _ = self._enqueue(("group", "1"), skill="qwen_image_v1")
+        nai, _ = self._enqueue(("group", "2"), wf="cat", skill="nai")
+        self.assertIsNotNone(heavy)
+        self.assertIsNone(image_jobs._take_nowait(image_jobs._COMFY))  # 本地：冷却
+        self.assertEqual(image_jobs._take_nowait(image_jobs._NAI), nai)
+
+    def test_inflight_counts_both_channels(self):
+        """「这个人还有几张在路上」要两条一起数（私聊额度那行靠它）。"""
+        self._enqueue(("private", "42"), skill="anima_clear")
+        self._enqueue(("private", "42"), wf="cat", skill="nai")
+        self.assertEqual(image_jobs.inflight_count("private", "42"), 2)
+
+    def test_snapshot_exposes_both_queues(self):
+        """状态页：老三个键还是本地通道，nai 是云端通道，depth 是合计。"""
+        self._enqueue(skill="anima_clear")
+        self._enqueue(wf="cat", skill="nai")
+        self._enqueue(wf="dog", skill="nai_wide")
+        s = image_jobs.snapshot()
+        self.assertEqual(len(s["queued"]), 1)
+        self.assertEqual([j["skill"] for j in s["queued"]], ["anima_clear"])
+        self.assertEqual(s["nai"]["depth"], 2)
+        self.assertEqual([j["skill"] for j in s["nai"]["queued"]],
+                         ["nai", "nai_wide"])
+        self.assertEqual(s["nai"]["running"], [])     # 云端是列表，不是 None
+        self.assertEqual(s["depth"], 3)               # 两条加起来
+
+
+class WorkerSpawnTest(unittest.TestCase):
+    """`_ensure_worker` 要给两条通道各起线程：本地 1 个，云端 NAI_CONCURRENCY 个。
+
+    真起线程会跟别的用例抢时序（它们统统一 `_ensure_worker` 挡掉），所以这里
+    把 `threading` 换成假的，只数它被怎么调起来——顺带验「已经起过就不再起」。
+    """
+
+    class _FakeThread:
+        """假线程：start() 那一刻才记账（跟真线程一样，构造不等于跑起来）。"""
+
+        def __init__(self, sink, target=None, args=(), daemon=None, name=""):
+            self.sink, self.args, self.name = sink, args, name
+
+        def start(self):
+            self.sink.append((self.name, self.args))
+
+    def setUp(self):
+        image_jobs._reset()
+        self.addCleanup(image_jobs._reset)
+        self.addCleanup(setattr, image_jobs._COMFY, "worker_started", False)
+        self.addCleanup(setattr, image_jobs._NAI, "worker_started", False)
+        self.started = []
+        fake = mock.Mock()
+        fake.Thread = lambda **kw: WorkerSpawnTest._FakeThread(self.started, **kw)
+        p = mock.patch.object(image_jobs, "threading", fake)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_one_thread_per_worker_slot(self):
+        image_jobs._COMFY.worker_started = False
+        image_jobs._NAI.worker_started = False
+        image_jobs._ensure_worker()
+        self.assertEqual(
+            [name for name, _ in self.started],
+            ["image-worker-comfy-0"] +
+            ["image-worker-nai-%d" % i
+             for i in range(image_jobs.NAI_CONCURRENCY)])
+        # 每个线程拿到的都是自己那条通道——拿错了就是把云端任务喂给 ComfyUI
+        self.assertEqual([args[0] for _, args in self.started],
+                         [image_jobs._COMFY, image_jobs._NAI, image_jobs._NAI])
+
+    def test_second_call_starts_nothing(self):
+        image_jobs._COMFY.worker_started = False
+        image_jobs._NAI.worker_started = False
+        image_jobs._ensure_worker()
+        self.started.clear()
+        image_jobs._ensure_worker()
+        self.assertEqual(self.started, [])
 
 
 class SkillPriorityTest(unittest.TestCase):
@@ -514,7 +671,7 @@ class HeavyCooldownTest(_Base):
         heavy, _ = self._enqueue(skill="qwen_image_v1")
         normal, _ = self._enqueue(skill="anima_soft")
         image_jobs._take_nowait()          # 冷却中：先把 heavy 推到队尾，再取 normal
-        self.assertEqual(list(image_jobs._queue), [heavy])   # heavy 退到队尾，normal 已出队
+        self.assertEqual(list(image_jobs._COMFY.queue), [heavy])   # heavy 退到队尾，normal 已出队
         self.assertEqual(heavy.waits, 1)
         self.clock[0] += 91
         self.assertEqual(image_jobs._take_nowait(), heavy)
@@ -885,7 +1042,7 @@ class JobTagTest(unittest.TestCase):
 
     def test_enqueue_keeps_the_same_tag(self):
         job, _ = image_jobs.enqueue("group", "1", {})
-        self.assertEqual(image_jobs._queue[-1].tag, job.tag)
+        self.assertEqual(image_jobs._COMFY.queue[-1].tag, job.tag)
 
     def test_the_tag_is_matchable_by_the_regex(self):
         """编号必须能被 image_log.TAG_RE 抠出来——不然引用回来也白搭。"""
@@ -1152,8 +1309,8 @@ class SeedSubmissionTest(unittest.TestCase):
             return generate_image.tool["function"](prompt, **kw)
 
     def _job(self):
-        self.assertEqual(len(image_jobs._queue), 1)
-        return image_jobs._queue[0]
+        self.assertEqual(len(image_jobs._COMFY.queue), 1)
+        return image_jobs._COMFY.queue[0]
 
     def test_pinned_seed_lands_in_both_samplers(self):
         """两个采样器共用**同一个数**，不是两个种子。
@@ -1836,23 +1993,23 @@ class RestartOnLowRamTest(unittest.TestCase):
 
     def test_restart_clears_the_remembered_channel(self):
         """重启后 ComfyUI 里一个模型都没有了，别以为上个渠道还是热的。"""
-        image_jobs._last_skill = "anima_soft"
+        image_jobs._COMFY.last_skill = "anima_soft"
         self._patch([6.0], clock=_TickingClock())
         self.assertTrue(image_jobs._restart_comfy(timeout=120))
-        self.assertIsNone(image_jobs._last_skill)
+        self.assertIsNone(image_jobs._COMFY.last_skill)
 
-    def test_worker_checks_ram_after_every_job(self):
-        """worker 必须在每张跑完之后看一眼内存。
+    def _drive_worker(self, chan):
+        """跑一个 worker 线程，记录它按什么顺序调了哪些步骤（跑完一张就退）。
 
-        没有这条，_maybe_restart_for_ram 就是个没人调用的死函数——而它失效
-        的方式是静默的：照常出图，只是内存一路涨到卡死。
+        `_take` 第二次被调就抛 SystemExit 让线程干净退出——不然它会在
+        `chan.wake.wait(1)` 上一直转。
         """
         calls = []
         job = mock.Mock()
 
-        def _take():
+        def _take(c):
             if calls.count("take"):
-                raise SystemExit            # 让 worker 线程干净退出
+                raise SystemExit
             calls.append("take")
             return job
 
@@ -1865,11 +2022,31 @@ class RestartOnLowRamTest(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
-        t = threading.Thread(target=image_jobs._worker, daemon=True)
+        t = threading.Thread(target=image_jobs._worker, args=(chan,),
+                             daemon=True)
         t.start()
         t.join(5)
         self.assertFalse(t.is_alive(), "worker 没按预期退出")
-        self.assertEqual(calls, ["take", "process", "finish", "ram"])
+        return calls
+
+    def test_worker_checks_ram_after_every_job(self):
+        """本地 worker 必须在每张跑完之后看一眼内存。
+
+        没有这条，_maybe_restart_for_ram 就是个没人调用的死函数——而它失效
+        的方式是静默的：照常出图，只是内存一路涨到卡死。
+        """
+        self.assertEqual(self._drive_worker(image_jobs._COMFY),
+                         ["take", "process", "finish", "ram"])
+
+    def test_cloud_worker_never_touches_comfyui_memory(self):
+        """云端通道跑完一张**不去看** ComfyUI 的内存水位。
+
+        守的是 `_worker` 里那句 `if not chan.local: continue`：少了它，NAI
+        每出一张图都会去探一次 ComfyUI 的内存，内存偏低时甚至会在一个只跑
+        云端的机器上无端触发重启。
+        """
+        self.assertEqual(self._drive_worker(image_jobs._NAI),
+                         ["take", "process", "finish"])
 
 
 class ReleaseOnLowVramTest(unittest.TestCase):

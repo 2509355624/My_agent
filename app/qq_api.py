@@ -184,6 +184,12 @@ def current_turn_text():
 # trust_env=False 让这个 session 完全不理会环境变量与注册表里的代理设置。
 _session = requests.Session()
 _session.trust_env = False
+# 这个 session 是**跨线程共用**的：agent 的工具线程、qq_bot、生图 worker
+# （2026-10-03 起本地 1 个 + 云端 NAI_CONCURRENCY 个）都会并发走 _call。
+# 能共用是因为 `_call` 从不动 session 上的可变状态——headers 逐请求传、不碰
+# cookie，而 urllib3 的连接池本身是线程安全的。以后要在这里加 session 级别的
+# header / 认证 / 重试钩子，就得先想想并发（那才是 requests.Session 真正不
+# 安全的用法）。
 
 
 def _call(action, payload=None, timeout=20):
