@@ -309,5 +309,61 @@ class HistoryForLlmTest(unittest.TestCase):
         self.assertEqual(out[2], history[2])
 
 
+class TruncatedToolCallTest(unittest.TestCase):
+    """回复被硬截断时的工具块（2026-10-04）。
+
+    现场：本地 ollama 的 num_ctx 只有 16384，而全局压缩预算 30000 是给
+    云端 128K 窗口设的——预算线高过物理墙 1.8 倍，压缩永远来不及触发，
+    prompt 撞满窗口（实测 prompt_eval_count=16377/16384, done=length），
+    模型只剩 7 token 可写，工具块的 JSON 写到一半就被砍断。
+    """
+
+    # 从真实会话里抓的那一条（len=276）：{ 开了但永远闭不上
+    CUT = ('[[TOOL:generate_image]]{"prompt": "anime style girl, 12-13 years old,'
+           ' head and shoulders close-up, round baby')
+
+    def test_truncated_flagged_not_empty_args(self):
+        """截断块要标出来，而不是悄悄变成 args={}。
+
+        args={} 会让执行层报 "missing 1 required positional argument"，
+        模型看不懂自己错在哪，于是原样重写一遍、再被截断，反复几轮。
+        """
+        calls = parse_tool_calls(self.CUT)
+        self.assertEqual(len(calls), 1)
+        args = calls[0]["args"]
+        self.assertTrue(args.get("__truncated__"))
+        # 真正收到的那半截要留着（提示语要靠它算长度）
+        self.assertIn("anime style girl", args.get("_partial") or "")
+        # 关键：不能是空参数——那是"报缺参数"的根源
+        self.assertNotEqual(args, {})
+
+    def test_normal_block_not_flagged(self):
+        """闭合正常的块绝不能被误判成截断（否则每次调用都不执行）。"""
+        for good in ('[[TOOL:generate_image]]{"prompt": "a cat"}[[/TOOL]]',
+                     '[[TOOL:generate_image]]{"prompt": "a cat"}',
+                     '[[TOOL:list_skills]]'):
+            for c in parse_tool_calls(good):
+                self.assertFalse(c["args"].get("__truncated__"),
+                                 "正常块被误标成截断: %r" % good)
+
+    def test_truncated_json_never_leaks_to_chat(self):
+        """最重要的一条：残缺的 JSON 文本绝不能发进聊天。
+
+        原先 strip 只吃掉 [[TOOL:name]] 标签，残缺的 JSON 原样留在正文里，
+        用户在私聊里收到的是一串断掉的 JSON。
+        """
+        self.assertEqual(_strip_tool_blocks(self.CUT).strip(), "")
+
+    def test_body_before_truncated_block_kept(self):
+        """块之前说过的话要留住——不能因为截断把整轮回复都吞掉。"""
+        mixed = "马上就好。\n" + self.CUT
+        self.assertEqual(_strip_tool_blocks(mixed).strip(), "马上就好。")
+
+    def test_body_after_complete_block_kept(self):
+        """回归：闭合正常的块后面跟正文，仍要保留正文。"""
+        txt = '[[TOOL:generate_image]]{"prompt": "a"}[[/TOOL]]画完了'
+        self.assertEqual(_strip_tool_blocks(txt), "画完了")
+
+
 if __name__ == "__main__":
     unittest.main()

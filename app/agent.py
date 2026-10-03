@@ -157,6 +157,8 @@ def parse_tool_calls(text):
         rest = text[m.end():]
         # 尝试标准 JSON 参数（{...}）
         args_str = ""
+        truncated = False
+        partial = ""
         if rest.lstrip().startswith("{"):
             # 花括号配对，考虑 JSON 里的嵌套
             brace_match = rest.lstrip()
@@ -172,6 +174,17 @@ def parse_tool_calls(text):
                         break
             if end_idx is not None:
                 args_str = brace_match[:end_idx]
+            else:
+                # `{` 开了但没闭合 → 回复在工具块中途被硬截断（2026-10-04 实测
+                # 本地 ollama 撞满 num_ctx 16384 时就是这个形态）。
+                # 原来这里 args_str 留空 → args={} → 执行层报
+                # 「missing 1 required positional argument: 'prompt'」，
+                # 模型完全看不懂自己哪里错了，于是原样再写一遍、再截断，
+                # 反复几轮直到降级。标出来好让它知道是"写太长被砍了"。
+                truncated = True
+                # partial 存真正收到的那半截（给提示语算长度用），别存后面
+                # 兜底用的 "{}"。
+                partial = brace_match
         if not args_str:
             # 无参数或参数非 JSON
             args_str = "{}"
@@ -179,6 +192,8 @@ def parse_tool_calls(text):
             args = json.loads(args_str)
         except json.JSONDecodeError:
             args = {"raw": args_str}
+        if truncated:
+            args = {"__truncated__": True, "_partial": partial}
         found.append((m.start(), {"name": name, "args": args}))
     # 两族混在一段回复里时，按出现位置排，保持模型的原意顺序
     for start, _end, name, args in _iter_xml_tool_calls(text):
@@ -204,6 +219,7 @@ def _strip_bracket_tool_blocks(text):
         rest = text[block_end:]
         lstrip_rest = rest.lstrip()
         offset = len(rest) - len(lstrip_rest)  # 前导空白
+        closed = False
         if lstrip_rest.startswith("{"):
             depth = 0
             for idx, ch in enumerate(lstrip_rest):
@@ -213,7 +229,20 @@ def _strip_bracket_tool_blocks(text):
                     depth -= 1
                     if depth == 0:
                         block_end = block_end + offset + idx + 1
+                        closed = True
                         break
+            if not closed:
+                # JSON 没闭合 = 回复被硬截断（上下文撞 num_ctx、连接断、
+                # 达到 max_tokens……）。2026-10-04 实测本地 ollama 撞满
+                # 16384 窗口时就是这个形态：模型只写出工具块的前半截。
+                # 原来这里 block_end 停在标签处，于是**残缺的 JSON 文本被当
+                # 正文原样发进私聊**（用户看到的是一串断掉的 JSON）。
+                # 截断块只可能出现在回复末尾（生成到那儿就没了），所以从标签
+                # 一路吞到文末；宁可少发一句正文，也不把协议碎片发给用户。
+                block_end = len(text)
+                log.warning("[tool-truncated] %s 的参数 JSON 未闭合（回复被截断，"
+                            "已吞掉尾部 %d 字，不发给用户）",
+                            _name, len(text) - m.end())
         # 跳过关闭标签 [[/TOOL]]
         after = text[block_end:].lstrip()
         if after.startswith("[[/TOOL]]"):
@@ -1096,6 +1125,17 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
                     break
                 name = tool_call["name"]
                 args = tool_call["args"]
+                # 回复在工具块中途被硬截断 → 参数没写完（见 parse_tool_calls
+                # 里的说明）。**不执行**：拿半截参数调工具只会得到
+                # 「missing 1 required positional argument」这种模型读不懂的
+                # 报错，于是它原样重写一遍、再被截断，反复几轮直到降级
+                # （2026-10-04 实测就是这个循环）。换成一句它能照做的提示：
+                # 参数写短、别再重复同一段。
+                truncated = bool(args.get("__truncated__"))
+                if truncated:
+                    log.warning("[tool-truncated] %s 的调用参数只写了 %d 字就没了，"
+                                "本轮不执行（模型回复被截断）",
+                                name, len(args.get("_partial") or ""))
                 if name == "generate_image":
                     image_tool_used = True
                 yield {"type": "tool_call", "name": name, "args": args}
@@ -1104,7 +1144,14 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
                 # 硬闸：同一次 run 内、**参数完全相同**的调用只执行一次
                 # （见 _DEDUP_TOOLS 上面那段注释）。放在白名单之前判——被拦下的
                 # 调用根本不该走到执行，也谈不上「可用不可用」。
-                if key is not None and key in done_calls and key not in seen_now:
+                if truncated:
+                    result = (
+                        "这次调用**没有执行**：你的回复在写完参数之前就被截断了"
+                        "（只收到 %d 字），参数不完整。\n"
+                        "不要再原样重写同一段——那样还会被截断。"
+                        "改用**短得多**的参数重试一次，或先用一句话问清需求。"
+                        % len(args.get("_partial") or ""))
+                elif key is not None and key in done_calls and key not in seen_now:
                     log.warning("[dedup] 拦下重复调用 %s（本次 run 内已执行过相同参数）"
                                 "——上一轮就提交过了", name)
                     result = _REPEAT_CALL_NOTE

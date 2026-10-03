@@ -544,5 +544,56 @@ class TrimWindowPrivateTest(unittest.TestCase):
         self.assertIn("compact_summary", [m.get("tool_name") for m in h])
 
 
+class PhysicalBudgetCapTest(unittest.TestCase):
+    """压缩预算不得越过模型物理窗口（2026-10-04）。
+
+    CONTEXT_BUDGET 是给云端 128K~1M 窗口设的全局值（默认 30000），而本地
+    ollama 的 num_ctx 只有 16384。预算线高过物理墙时，压缩这道闸门形同
+    虚设——prompt 撞满窗口、生成被硬截断之后，"才想起来超了"已经晚了。
+    实测症状：工具块的 JSON 写到一半被砍，残缺文本发进私聊。
+    """
+
+    def test_ollama_capped_to_window(self):
+        from app.config import physical_budget
+        # 16384 * 0.7 = 11468
+        self.assertEqual(physical_budget("ollama", "qwen3.8-9b-heretic", 30000),
+                         11468)
+
+    def test_cloud_providers_uncapped(self):
+        """云端 provider 一个都不能被封顶（它们装得下 30000）。"""
+        from app.config import physical_budget
+        for pid in ("deepseek", "volc", "doubao", "scnet", "mimo"):
+            self.assertEqual(physical_budget(pid, "some-model", 30000), 30000,
+                             "%s 不该被封顶" % pid)
+
+    def test_small_budget_not_raised(self):
+        """本来就小于窗口的预算保持原样（封顶只降不升）。"""
+        from app.config import physical_budget
+        self.assertEqual(physical_budget("ollama", "m", 8000), 8000)
+
+    def test_trim_history_applies_cap(self):
+        """trim_history 这条路（agent 循环）也要封顶。"""
+        h = [_msg("system", "sys"), _msg("user", "问题"), _msg("assistant", "答")]
+        with mock.patch.object(memory, "_summarize_old_turns"), \
+             mock.patch.object(memory, "_compact", return_value=h) as compact:
+            # usage 报 30000（等于未封顶的预算）→ 不封顶就不会触发压缩
+            memory.trim_history(list(h), "qq",
+                                usage={"total_tokens": 30000, "hit_rate": 0.0},
+                                budget=30000, provider="ollama",
+                                model="qwen3.8-9b-heretic")
+        self.assertTrue(compact.called,
+                        "provider=ollama 时 30000 的占用就该触发压缩了")
+
+    def test_agent_budget_uses_agent_provider(self):
+        """QQ侧压缩（save_history -> trim_window）按 agent.json 的 provider 封顶。"""
+        cfg = {"provider": "ollama", "model": "qwen3.8-9b-heretic",
+               "context_budget": 30000}
+        with mock.patch.object(agents, "agent_config", return_value=cfg):
+            self.assertEqual(memory._agent_budget("qq"), 11468)
+        cfg2 = dict(cfg, provider="deepseek", model="deepseek-flash")
+        with mock.patch.object(agents, "agent_config", return_value=cfg2):
+            self.assertEqual(memory._agent_budget("qq"), 30000)
+
+
 if __name__ == "__main__":
     unittest.main()

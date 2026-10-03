@@ -469,6 +469,41 @@ MAX_TURNS = int(os.getenv("MAX_TURNS", "10"))
 # 单个 agent 可在 agent.json 里用 context_budget 覆盖（0 = 用这里的全局值）。
 CONTEXT_BUDGET = int(os.getenv("CONTEXT_BUDGET", "32000"))
 
+# 各provider 的**物理上下文窗口**（token）。用于给 CONTEXT_BUDGET 封顶：
+# 预算是「我愿意为这一轮付多少钱」，物理窗口是「模型装不装得下」——
+# 预算线高过物理墙时，压缩这条闸门就形同虚设（prompt 撞满窗口后才想起
+# 已经超了，可那时已经截断完了）。
+#
+# 只列**明显小于全局预算**的 provider。云端（volc/deepseek/scnet/mimo）都是
+# 128K~1M，装得下 32000，不列= 不封顶，行为与从前完全一致。
+#
+# ollama 的窗口不是模型属性，而是 Modelfile 里写死的 num_ctx（实测这台
+# 机器上 qwen3.8-9b-heretic = 16384）。要改就改 Modelfile 的 num_ctx，
+# 这里只是读同一个数、提前一步拦住，别指望它等于模型上限。
+_PROVIDER_CONTEXT_WINDOW = {
+    "ollama": int(os.getenv("OLLAMA_NUM_CTX", "16384")),
+}
+
+# 压缩后的目标水位 = 窗口的这个比例。留出的余量给状态栏、extra_context
+# 这些挂在尾巴上的东西（实测≈465 token）以及本轮新发的消息。
+_CONTEXT_WINDOW_SAFE_RATIO = 0.7
+
+
+def physical_budget(provider=None, model=None, budget=None):
+    """把 token 预算压到模型物理窗口以内。
+
+    provider 不在 _PROVIDER_CONTEXT_WINDOW 里（或窗口 >= 预算）就原样返回，
+    所以对云端 provider 是彻底的 no-op。
+    """
+    if budget is None:
+        budget = CONTEXT_BUDGET
+    pid = (provider or LLM_PROVIDER or "").lower()
+    window = _PROVIDER_CONTEXT_WINDOW.get(pid)
+    if not window:
+        return budget
+    cap = int(window * _CONTEXT_WINDOW_SAFE_RATIO)
+    return min(budget, cap) if cap > 0 else budget
+
 # 会话历史窗口（**已废弃，只作兼容开关**）。
 #
 # 2026-09-27 曾按轮数开窗（保留最近 N 轮），理由是「轮数不用读 usage」。

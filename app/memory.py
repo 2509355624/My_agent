@@ -24,7 +24,7 @@ import re
 import threading
 import time
 from app.agents import session_file as _agent_session_file
-from app.config import CONTEXT_BUDGET, CONTEXT_MAX_TURNS
+from app.config import CONTEXT_BUDGET, CONTEXT_MAX_TURNS, physical_budget
 from app.llm import current_usage
 
 # 走 logging 而不是 print：print 落 stdout，被重定向/管道接管后是块缓冲，
@@ -301,7 +301,13 @@ def trim_history(history, agent_id=None, usage=None, budget=None,
       的老轮次顺带转交长期记忆（见 _compact 里的说明）。不传 → 不转交。
     """
     key = agent_id or "_default"
-    budget = budget or CONTEXT_BUDGET
+    # 预算先按**模型物理窗口**封顶（2026-10-04）。CONTEXT_BUDGET 是给云端
+    # 128K~1M 窗口的全局值，而本地 ollama 的 num_ctx 只有 16384 —— 预算线比
+    # 物理墙高 1.8 倍时，压缩永远来不及触发，prompt 直接撞满窗口。实测：
+    # prompt_eval_count=16377/16384，done=length，模型只剩 7 token 可写，
+    # 工具块的 JSON 写到一半被硬截断 → 参数解析成 {}、工具报缺参数，
+    # 而残缺的 JSON 文本被当正文发进私聊（用户看到的是"断掉的一串 JSON"）。
+    budget = physical_budget(provider, model, budget or CONTEXT_BUDGET)
 
     system_msgs = [m for m in history if m.get("role") == "system"]
     other_msgs = [m for m in history if m.get("role") != "system"]
@@ -463,12 +469,18 @@ def _agent_budget(agent_id):
     37000 上下的 prompt（超出上游前缀缓存容量，每轮被驱逐）。
     """
     if not agent_id:
-        return CONTEXT_BUDGET
+        return physical_budget(None, None, CONTEXT_BUDGET)
     try:
         from app.agents import agent_config
-        return agent_config(agent_id).get("context_budget") or CONTEXT_BUDGET
+        cfg = agent_config(agent_id)
+        # 顺带按 provider 封顶：QQ 侧的压缩走 save_history -> trim_window，
+        # 那条路拿不到本轮 provider（也没必要拿——QQ 用的一直是 agent.json
+        # 里配的那份，网页端的请求级覆盖不影响这里），但**物理窗口是硬墙**，
+        # 见physical_budget 的注释：不封顶的话本地模型一路撞满 num_ctx。
+        return physical_budget(cfg.get("provider"), cfg.get("model"),
+                               cfg.get("context_budget") or CONTEXT_BUDGET)
     except Exception:
-        return CONTEXT_BUDGET
+        return physical_budget(None, None, CONTEXT_BUDGET)
 
 
 # 群聊窗口滞回（2026-09-30）：估算涨到 budget×HIGH 才裁，一次裁到 budget×LOW。
