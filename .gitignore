@@ -80,3 +80,10 @@ check_proc.ps1
 
 # 向量库的手工备份（搬家/重建时留的副本，不是运行所需）
 vector_store_backup_local/
+
+# 本人聊天风格分析产物（含私人聊天，绝不入库；属本机临时件，跑完可删）
+_owner_233_*.jsonl
+_owner_233_*.md
+_owner_233_style_stats.json
+_analyze_owner.py
+_analyze_owner_full.py
