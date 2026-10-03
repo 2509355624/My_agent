@@ -736,7 +736,7 @@ class RoleNameRuleTest(unittest.TestCase):
 
     def test_tool_description_puts_the_name_first(self):
         desc = self._desc()
-        self.assertIn("认得出就先写名字", desc)
+        self.assertIn("认得出就把名字写在 prompt 最前面", desc)
         self.assertIn("名字写在 prompt 最前面", desc)
         # 外貌降为补充——不然模型照样堆一长串设定，还容易和原作打架
         self.assertIn("只补与原设定不同的地方", desc)
@@ -973,7 +973,8 @@ class HdChannelTest(unittest.TestCase):
         # 「16 个」现在指的是**动漫渠道**那一族（本机另有 qwen_image_v1、
         # image_gen_v1、krea2、nffa 四个非动漫渠道，加上云端的 nai 共 21 个可传名字），
         # 所以字面量带着「动漫」两个字。
-        self.assertIn("16 个动漫渠道", desc)
+        self.assertIn("16 个", desc)
+        self.assertIn("动漫渠道", desc)
         for prefix in ("hd_fast_", "hd_2_", "hd_3_"):
             self.assertIn(prefix, desc, "描述里没提到档位 %s" % prefix)
         self.assertIn(DEFAULT_CHANNEL, desc)
@@ -1124,6 +1125,115 @@ class NffaChannelTest(unittest.TestCase):
                     self.assertIn(val[0], wf,
                                   "nffa 节点 %s.%s 指向不存在的节点 %r"
                                   % (nid, key, val[0]))
+
+
+class ToolDescriptionBudgetTest(unittest.TestCase):
+    """工具描述改成要点式之后，**判据一条都不许丢**（2026-10-04）。
+
+    背景：接本地 ollama 小模型当主对话时，发现「工具描述给太少」和
+    「给太多」两头都要命——
+
+    - 给太少：9B 不会主动去 `load_skill`，所以**决策判据必须在工具描述
+      里**（什么时候换渠道、什么时候传 source_image、角色名必写…），
+      挪进 skill 文档等于这些判据对小模型不可见。
+    - 给太多：`generate_image` 一条 description 就吃掉系统头 1/4，
+      而 9B 的窗口只有 16384，挤掉的是留给对话的额度。
+
+    所以这次精简的**唯一合法理由**是「渠道画面特征/参数细节在
+    `Available Skills` 的一行摘要和 skill 文档里已经有一份」，不是删判据。
+    下面这组断言就是防止「下次再精简时顺手把判据也删了」。
+
+    另一条同样重要：渠道名清单在 `skill` 参数里**不再重复**——
+    它已经在 `Available Skills` 里逐行列出，重复两遍只是白占位置。
+    """
+
+    #: 每一条都是模型必须看到的**判据**，不是渠道细节。
+    #: 措辞别锁死（描述本来就会重写），但语义必须在场。
+    RULES = {
+        "默认渠道": "不传就是默认 anima_clear",
+        "别编渠道名": "别编别的 skill 名出来",
+        "换渠道门槛": "只有用户点名画风 / 点名尺寸",
+        "高清但没更大": "一律不传 skill",
+        "clear_soft难分": "分不清也走默认",
+        "角色名最前": "名字写在 prompt 最前面",
+        "qwen也写名字": "自然语言句子里照样要写名字",
+        "用户报名字不省": "原样写进去",
+        "认不出要承认": "我没认出来",
+        "nffa槽会顶画风": "画风顶掉",
+        "引用图不等于图生图": "永远不构成图生图",
+        "source门槛两条": "两条都不满足",
+        "指示代词不算意图": "指示代词不算意图",
+        "分不清就问": "是要改这张，还是照它画一张新的",
+        "图生图默认重绘": "重绘（默认走这条）",
+        "引用自己刚画的": "尤其走这条",
+        "hd3不支持垫图": "不支持垫图",
+        "改图只写一句": "不要把整张图重新描述一遍",
+        "绝不退回文生图": "绝不退回文生图凭空画一张",
+        "一次只改一处": "一次只交代一处改动最稳",
+        "nai需开通": "仅限管理员为特定群开通",
+        "横版才nai_wide": "才传 nai_wide",
+        "竖改横做不到": "别应承",
+        "唯一多张渠道": "唯一支持一次出多张",
+        "分隔只有它认": "只有 skill=image_gen_v1 认",
+        "lora格式": "文件名:强度",
+        "seed范围": "0 ~ 4294967295",
+    }
+
+    @staticmethod
+    def _tool():
+        from app.tools.normal.generate_image import tool
+        return tool
+
+    def test_every_rule_survives(self):
+        tool = self._tool()
+        blob = tool["description"] + " " + " ".join(
+            (p.get("description") or "")
+            for p in tool["parameters"]["properties"].values())
+        missing = sorted(k for k, needle in self.RULES.items() if needle not in blob)
+        self.assertEqual([], missing,
+                         "工具描述精简时丢了这些判据：%s" % "、".join(missing))
+
+    def test_description_stays_lean(self):
+        """留个天花板，防止改回去又变成长散文。"""
+        desc = self._tool()["description"]
+        self.assertLess(len(desc), 5000,
+                        "主 description 又涨回 %d 字（精简前是 4965）" % len(desc))
+
+    def test_hd_jargon_is_not_a_size_request(self):
+        """「高清 / 大图」这类词**不能**触发换尺寸档——它俩曾经自相矛盾。
+
+        旧描述里同时写着两句：
+          「只说『大图 / 高清』没说多大 → hd_fast_clear」
+          「只说『高清』但没提要更大 → 仍然默认 anima_clear」
+        一句让它上去、一句让它下来。9B 撞上这句时是随机的：同一句
+        「来张高清的初音未来」连跑三次，实测给出「无工具块 /
+        hd_fast_clear / 不传」三种结果。
+
+        现在合并成一条祈使句：**「高清 / 大图」这类词一律不传 skill**，
+        只有点了具体尺寸或明说「要最大 / 当壁纸」才上 hd_*。
+        """
+        desc = self._tool()["description"]
+        self.assertIn("一律不传 skill", desc)
+        self.assertIn("当壁纸", desc)
+        # 旧的两句自相矛盾的说法，一句都不许再出现
+        self.assertNotIn("没说多大 → `hd_fast_clear`", desc)
+        self.assertNotIn("仍然默认 anima_clear**，别自作主张上 hd_", desc)
+
+    def test_skill_param_does_not_relist_channels(self):
+        """`skill` 参数不再重复列 16 个渠道。
+
+        `Available Skills` 里已经逐行给出一行摘要（渠道名 + 画风 + 何时用），
+        参数描述里再抄一遍是纯浪费。留一句「见 Available Skills」+ 上限。
+        """
+        param = self._tool()["parameters"]["properties"]["skill"]["description"]
+        self.assertIn("Available Skills", param,
+                      "应该把渠道清单指到 Available Skills 那份一行摘要")
+        self.assertLess(len(param), 400,
+                        "skill 参数又涨回 %d 字（精简前是 947）" % len(param))
+        # 至少别把四个画风全名逐一抄一遍
+        for ch in ("anima_soft", "anima_gloss", "anima_curvy"):
+            self.assertNotIn(ch, param,
+                             "skill 参数里重复列了 %s（Available Skills 已有一份）" % ch)
 
 
 if __name__ == "__main__":

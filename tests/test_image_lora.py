@@ -368,11 +368,11 @@ class ToolDescriptionTest(unittest.TestCase):
         """
         from app.tools.normal.generate_image import tool
         desc = tool["description"]
-        self.assertIn("文生图默认 anima", desc)
+        self.assertIn("不传 skill 就是 anima_clear", desc)
         self.assertIn("引用图片：默认只看，不改", desc)
         self.assertIn("看得见", desc)                  # 「看图 → 反推提示词」这条路
         self.assertIn("光是引用了图，永远不构成图生图", desc)
-        self.assertIn("图生图的门槛", desc)             # 门槛单独成段
+        self.assertIn("source_image 的门槛", desc)     # 门槛单独成段
         self.assertIn("两条都不满足就当没这回事", desc)
         self.assertIn("hd_3_", desc)                   # 不支持的那档要说出来
         self.assertNotIn("图生图已停用", desc)
@@ -383,7 +383,7 @@ class ToolDescriptionTest(unittest.TestCase):
         """参数描述口径要和上面那段一致：什么时候才传、哪些渠道能垫。"""
         from app.tools.normal.generate_image import tool
         desc = tool["parameters"]["properties"]["source_image"]["description"]
-        self.assertIn("对方自己发了图", desc)
+        self.assertIn("他自己这一轮发了图", desc)
         self.assertIn("默认不传", desc)
         self.assertIn("hd_3_", desc)
         self.assertNotIn("已停用", desc)
@@ -412,17 +412,20 @@ class ToolDescriptionTest(unittest.TestCase):
         self.assertIn("渠道名和种子", desc)
         # 两种模式的 prompt 写法不同，这条也得写在参数上（模型最常看的地方）
         prop = tool["parameters"]["properties"]["source_image"]["description"]
-        self.assertIn("改图", prop)
-        self.assertIn("重绘", prop)
         self.assertIn("qwen_image_v1", prop)
-        self.assertIn("改动指令", prop)
-        self.assertIn("默认走动漫 12 档重绘", prop)
+        self.assertIn("默认走动漫档重绘", prop)
         # 动漫 12 档一个字都没删
         self.assertIn("anima_*", prop)
-        # skill 参数不能再写「改图就选 qwen / 本机最强」这种无门槛诱导语
+        # skill 参数不能再写「改图就选 qwen / 本机最强」这种无门槛诱导语。
+        # 2026-10-04 起它改成只把渠道清单指到 Available Skills（「分不清就照
+        # 那一行摘要选」），诱导语自然消失——但**主 description 里那句
+        # 「图生图默认也不走它」必须还在**，否则模型会去 skill 摘要里找
+        # qwen 的适用场景、把它当图生图默认。
         skill = tool["parameters"]["properties"]["skill"]["description"]
-        self.assertIn("图生图默认不走它", skill)
         self.assertNotIn("最强", skill)
+        self.assertNotIn("改图就选", skill)
+        self.assertIn("Available Skills", skill)
+        self.assertIn("图生图默认也不走它", desc)
 
 
 if __name__ == "__main__":
