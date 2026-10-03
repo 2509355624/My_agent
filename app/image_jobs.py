@@ -714,12 +714,23 @@ def _free_vram_gb():
     """问 ComfyUI 显存还剩多少（GB）；问不到返回 None。
 
     与 _free_ram_gb 同一套路：借 ComfyUI 自己报的数，不引 psutil。
+
+    它同时是「提交前水位」的**唯一记录点**（2026-10-03 加）：日志里原先所有
+    内存读数都是 `_report_and_free()` 打的，而那是 **POST /free 之后**的数
+    （模型已经卸了），不是这张图开跑前的数——于是 `COMFY_MIN_FREE_RAM_GB`
+    该定 3.0 还是 5.0 一直没有依据。同一个 `/system_stats` 响应里就有
+    `system.ram_free`，白拿，就在这里记一行：把超时/变慢的图和它一对照，
+    死区就能量出来，不用继续猜。
     """
     try:
         resp = requests.get(COMFYUI_URL + "/system_stats", timeout=10)
         resp.raise_for_status()
-        devs = resp.json().get("devices") or [{}]
-        return devs[0].get("vram_free", 0) / 2 ** 30
+        stats = resp.json()
+        devs = stats.get("devices") or [{}]
+        vram = devs[0].get("vram_free", 0) / 2 ** 30
+        ram = (stats.get("system") or {}).get("ram_free", 0) / 2 ** 30
+        log.info("开跑前水位：显存余 %.1fGB，内存余 %.1fGB", vram, ram)
+        return vram
     except Exception:
         log.debug("查 ComfyUI 显存失败，忽略", exc_info=True)
         return None
