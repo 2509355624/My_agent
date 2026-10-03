@@ -163,10 +163,13 @@ def _hd_tier_guard(skill, default_skill):
         return skill, ""                   # 连画质词都没提，判不准，别乱动
     log.info("尺寸档降级：原话只有画质形容词（%r），不带 skill 参数降回 %s",
              text[:60], default_skill)
+    # 把原话里**实际命中的那个词**回给对方，别只说「这类词」——
+    # 他得知道到底是哪个词让系统换了渠道，下次才好改口。
+    hit = _HD_QUALITY_ONLY_RE.search(text).group(0)
     return default_skill, (
-        "（系统已自动调整：对方原话里只有「%s」这类画质形容词、没报任何档位名或"
+        "（系统已自动调整：对方原话里的「%s」只是画质形容词、没报任何档位名或"
         "具体像素，所以没用 %s，已按默认的 %s 出图。对方真要更大尺寸，"
-        "下次让他直接说「二档」「三档」或报像素。）"
+        "下次让他直接说「二档」「三档」或报像素。）" % (hit, skill, default_skill)
     )
 
 

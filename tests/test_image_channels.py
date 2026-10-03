@@ -1283,13 +1283,21 @@ class HdTierGuardTest(unittest.TestCase):
 
     def test_quality_word_only_downgrades(self):
         """只有画质形容词 → 降回默认档 + 带回执说明。"""
-        for text in ("画一张绫华，高清", "高清一点", "清晰点",
-                     "画质好点", "要精细的", "别太糊"):
+        for text, hit in (("画一张绫华，高清", "高清"), ("高清一点", "高清"),
+                          ("清晰点", "清晰"), ("画质好点", "画质"),
+                          ("要精细的", "精细"), ("别太糊", "别太糊")):
             got, note = self._guard("hd_fast_clear", text)
             self.assertEqual("anima_clear", got,
                              "「%s」只是画质形容词，不该换 hd_ 档" % text)
             self.assertIn("自动调整", note,
                           "降级必须告诉对方，否则他以为自己要到了大图")
+            # %s 忘了替换就会原样出现在给用户看的话里（接缝处就是这么漏的）
+            self.assertNotIn("%s", note,
+                             "回执里还留着未替换的 %%s 占位符：%r" % note)
+            self.assertNotIn("{}%", note)
+            # 且要带上原话里**实际命中的那个词**，让他知道是哪个词触发的
+            self.assertIn("「%s」" % hit, note,
+                          "回执没点名是哪个词触发的降级：%r" % note)
 
     def test_no_evidence_passes_through(self):
         """网页端（拿不到原话）不拦 —— 没有证据不能当成「他没说要」。"""
