@@ -60,6 +60,9 @@ _test*
 _qwen*
 # 本地识图模型的探针与它生成的测试图（属本机临时件）
 _vision*
+# 缓存命中率分析脚本 + SCNet 连通性探针（属本机临时件，跑完删）
+_cache*
+_scnet*
 server_*.log
 DIAG.bat
 check_proc.ps1

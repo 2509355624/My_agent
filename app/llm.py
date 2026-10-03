@@ -182,8 +182,13 @@ def _record_usage(usage, elapsed=None, provider="", model=""):
     #   ⚠冷调用 —— 命中 <50%，多半是压缩重写了历史或被服务端驱逐，前缀整个作废。
     # 没有这两项时，日志里只能看到一个孤零零的百分比，看不出钱花在哪。
     mark = ""
+    tag = "-"
     try:
         from app import usage as usage_stats
+        # 会话归属 + 实际模型都打进这一行（2026-10-03）。原来只有百分比，
+        # 出了冷调用根本查不出是「哪个会话 / 哪家模型」——日志是多会话并发
+        # 交错的，光靠上下文猜不准。这两个字段是后面做归因分析的唯一抓手。
+        tag = usage_stats.current_tag()
         _n = usage_stats.current_tail()
         if _n:
             mark += "  尾巴≈%d" % _n
@@ -191,7 +196,8 @@ def _record_usage(usage, elapsed=None, provider="", model=""):
         pass
     if rate < 0.5:
         mark += "  ⚠冷调用"
-    log.info("[cache] 命中 %d / %d tokens = %.1f%% (未命中 %d)%s%s",
+    log.info("[cache] %s %s/%s 命中 %d / %d tokens = %.1f%% (未命中 %d)%s%s",
+             tag, provider or "-", model or "-",
              hit, total, rate * 100, miss, tail, mark)
 
     try:
