@@ -410,17 +410,16 @@ class ChannelSplitTest(_Base):
             image_jobs._finish(j)
         self.assertEqual(image_jobs.nai_depth(), (0, 0))
 
-    def test_heavy_cooldown_is_local_only(self):
-        """重渠道的冷却窗不该管到云端通道——那条规则是为显存发明的。
+    def test_two_channels_do_not_block_each_other(self):
+        """两条通道互不阻塞——本地那张在队里，云端照取不误。
 
-        构造：本地刚跑完一张 qwen（冷却窗生效中）。此时本地队里的重渠道被推回
-        队尾、一张也开不了跑；云端通道没有冷却这回事，它那张应该立刻取走。
+        原用例是「重渠道的冷却窗只管本地、不管云端」。2026-10-04 冷却窗关掉后
+        前半句不成立了，但「拆两条通道」的核心诉求（云端不排本地那条队）还在，
+        改成直接验证它，别被一起改坏。
         """
-        image_jobs._COMFY.heavy_done_at = image_jobs.time.time()
-        heavy, _ = self._enqueue(("group", "1"), skill="qwen_image_v1")
+        local, _ = self._enqueue(("group", "1"), skill="qwen_image_v1")
         nai, _ = self._enqueue(("group", "2"), wf="cat", skill="nai")
-        self.assertIsNotNone(heavy)
-        self.assertIsNone(image_jobs._take_nowait(image_jobs._COMFY))  # 本地：冷却
+        self.assertEqual(image_jobs._take_nowait(image_jobs._COMFY), local)
         self.assertEqual(image_jobs._take_nowait(image_jobs._NAI), nai)
 
     def test_inflight_counts_both_channels(self):
@@ -495,10 +494,16 @@ class WorkerSpawnTest(unittest.TestCase):
 
 
 class SkillPriorityTest(unittest.TestCase):
-    """渠道权重：qwen 是唯一的重渠道，其余一律 1。"""
+    """渠道权重：2026-10-04 起全部是 1（qwen 那套重渠道机制已按用户要求关闭）。"""
 
-    def test_qwen_is_heavy(self):
-        self.assertGreater(skills.skill_priority("qwen_image_v1"), 1)
+    def test_no_channel_is_heavy_anymore(self):
+        """qwen 曾是唯一的重渠道（权重 5），2026-10-04 用户拍板关掉。
+
+        原委：他连着跑漫画加字（连环 qwen i2i），被「qwen 永远排最后 + 跑完还
+        隔 90 秒」卡成每张等 2.5~3 分钟。现在它与普通渠道同权、按入队顺序排。
+        恢复路径见 `config.QWEN_COOLDOWN` 的注释（**三处要一起改**）。
+        """
+        self.assertEqual(skills.skill_priority("qwen_image_v1"), 1)
 
     def test_default_and_unknown_are_normal(self):
         """默认渠道、拼错的名字、写作类 skill —— 全都按普通活处理。
@@ -525,29 +530,37 @@ class SkillPriorityTest(unittest.TestCase):
     def test_skill_with_no_md_falls_back_to_code_default(self):
         """读不到规范（目录没了 / 文件读不出来）也不能崩——按代码里的表算。"""
         with mock.patch.object(skills, "load_skill", mock.Mock(return_value=None)):
-            self.assertEqual(skills.skill_priority("qwen_image_v1"), 5)
+            self.assertEqual(skills.skill_priority("qwen_image_v1"), 1)
 
-    def test_the_real_qwen_skill_md_declares_it(self):
-        """真文件里那份 frontmatter 得能解析出来——不然权重只在代码里生效，
-        下一个改这个目录的人看不到「它为什么排最后」。"""
-        self.assertEqual(skills.skill_priority("qwen_image_v1"), 5)
+    def test_qwen_skill_md_no_longer_declares_priority(self):
+        """真文件里那份 frontmatter 也必须**没有** priority——光清代码没用。
+
+        2026-10-04 关机制时就是这么踩的：权重不止写在 `_SKILL_PRIORITY` 里，
+        `skills/qwen_image_v1/SKILL.md` 的 frontmatter 也写了一份，而且
+        frontmatter 优先（见 `skill_priority` 的实现）。只删代码那张表的话，
+        机制会从 SKILL.md 里悄悄复活。
+        """
+        self.assertEqual(skills.skill_priority("qwen_image_v1"), 1)
+        data = skills.load_skill("qwen_image_v1")
+        self.assertIsNotNone(data)
+        self.assertNotIn("priority",
+                         skills._parse_frontmatter(data["skill_md"]),
+                         "SKILL.md 的 frontmatter 又声明了 priority")
 
 
 class QueuePriorityTest(_Base):
-    """重渠道（qwen）排最后，而且不让它连跑第二张。
+    """队列是纯先进先出——2026-10-04 起不再有「重渠道排最后」。
 
-    背景：qwen 一套权重 10.5GB / 空闲 10.78GB，**第 1 张必成、第 2 张必死**
-    （提交后 2~6 秒 TDR，两次把整机拖重启）。外挂启动参数和更低量化都已试到底，
-    所以只能从队列侧管：普通渠道永远插到它前面 + 跑完再空一个冷却窗。
+    原设计：qwen 权重 5，任何普通渠道（权重 1）都能插到它前面，跑完还要空一个
+    冷却窗——防的是 qwen 连跑第二张 TDR（一套权重 10.5GB / 空闲 10.78GB，
+    第 1 张必成、第 2 张必死）。用户 2026-10-04 拍板关掉，现在谁先入队谁先跑。
     """
 
-    def test_normal_job_jumps_ahead_of_queued_heavy(self):
-        """核心诉求：qwen 先入队，但后到的 anima 先跑。"""
-        heavy, _ = self._enqueue(skill="qwen_image_v1")
-        normal, _ = self._enqueue(skill="anima_soft")
-        self.assertEqual(image_jobs._take_nowait(), normal)
-        image_jobs._finish(normal)
-        self.assertEqual(image_jobs._take_nowait(), heavy)
+    def test_qwen_keeps_its_queue_position(self):
+        """核心：qwen 先入队就先跑，不再给后到的普通渠道让位。"""
+        first, _ = self._enqueue(skill="qwen_image_v1")
+        self._enqueue(skill="anima_soft")
+        self.assertEqual(image_jobs._take_nowait(), first)
 
     def test_fifo_among_normal_jobs(self):
         """普通渠道之间还是先进先出——优先级不能把队列变成插队游戏。"""
@@ -573,25 +586,19 @@ class QueuePriorityTest(_Base):
         heavy, _ = self._enqueue(skill="qwen_image_v1")
         self.assertEqual(image_jobs.ahead_of(heavy), 1)
 
-    def test_heavy_queue_has_its_own_ceiling(self):
-        """重活排队另有上限：一张 qwen 就 100 秒，排长了不如直接说画不了。"""
-        for i in range(image_jobs.MAX_HEAVY_IN_QUEUE):
+    def test_no_heavy_ceiling_anymore(self):
+        """qwen 不再有「队里最多 3 张」的拒收——连排 6 张全收。
+
+        老上限 `MAX_HEAVY_IN_QUEUE`（第 4 张直接拒）正是用户连着跑漫画加字时
+        被拦的原因之一：第 4 张进来时模型只能回一句「画不了」。它的判据是
+        `job.weight > 1`，权重清零后自动失效。
+        """
+        n = image_jobs.MAX_HEAVY_IN_QUEUE + 3
+        for i in range(n):
             # 换会话绕开 per-session 上限，专门顶重渠道这条
             job, reason = self._enqueue(("group", str(i)), skill="qwen_image_v1")
-            self.assertIsNone(reason)
-        job, reason = self._enqueue(("group", "999"), skill="qwen_image_v1")
-        self.assertIsNone(job)
-        self.assertIn("通道", reason)
-
-    def test_heavy_ceiling_counts_the_running_one(self):
-        """正在跑的那张 qwen 也算占位——否则会在它还没跑完时又灌两张进来。"""
-        first, _ = self._enqueue(("group", "0"), skill="qwen_image_v1")
-        self.assertEqual(image_jobs._take_nowait(), first)    # 开跑，进 _running
-        for i in range(image_jobs.MAX_HEAVY_IN_QUEUE - 1):
-            self._enqueue(("group", str(i + 1)), skill="qwen_image_v1")
-        job, reason = self._enqueue(("group", "999"), skill="qwen_image_v1")
-        self.assertIsNone(job)
-        self.assertIn("通道", reason)
+            self.assertIsNone(reason, "第 %d 张不该被拒" % (i + 1))
+            self.assertIsNotNone(job)
 
     def test_normal_ceiling_is_not_affected(self):
         """重渠道的上限绝不能卡到普通渠道头上。"""
@@ -602,26 +609,16 @@ class QueuePriorityTest(_Base):
         self.assertIsNotNone(job)
 
 
-class HeavyCooldownTest(_Base):
-    """一张 qwen 跑完之后的冷却窗：重渠道重新排队尾，普通渠道先上。
+class NoCooldownTest(_Base):
+    """qwen 跑完之后不再隔 90 秒——2026-10-04 关掉冷却窗后的行为。
 
-    冷却窗是留给残留权重散掉的——实测「第 1 张出图后显存只剩 2.35GB、
-    内存只剩 4.21GB」，而第 2 张要重新摊开 6000MB 的文本编码器。
+    原设计见 image_jobs 的「重渠道优先度」：冷却窗是留给残留权重散掉的（qwen
+    连跑第二张会 TDR）。用户 2026-10-04 拍板关掉——他连环跑漫画加字，每张被卡
+    2.5~3 分钟。现在 qwen 跑完立刻能接着跑。
     """
 
-    def setUp(self):
-        super().setUp()
-        self.clock = [1000.0]
-        p = mock.patch.object(image_jobs, "time",
-                              _FakeTime(lambda: self.clock[0]))
-        p.start()
-        self.addCleanup(p.stop)
-        p = mock.patch.object(image_jobs, "QWEN_COOLDOWN", 90.0)
-        p.start()
-        self.addCleanup(p.stop)
-
     def _run_heavy(self, ctx=("group", "9")):
-        """真跑完一张 qwen——冷却窗只在「真出图」时才开。"""
+        """真跑完一张 qwen。"""
         entry = {"outputs": {"9": {"images": [{"filename": "a.png"}]}}}
         with mock.patch.object(image_jobs, "wait_done", return_value=entry):
             job, reason = image_jobs.enqueue(ctx[0], ctx[1], {"1": {}},
@@ -630,30 +627,31 @@ class HeavyCooldownTest(_Base):
             image_jobs._drain()
         return job
 
-    def test_heavy_after_heavy_waits_out_the_cooldown(self):
+    def test_qwen_after_qwen_runs_immediately(self):
+        """核心：qwen 跑完，下一张 qwen 立刻能开跑，不再等 90 秒。"""
         self._run_heavy()
         second, _ = self._enqueue(skill="qwen_image_v1")
-        self.assertIsNone(image_jobs._take_nowait())        # 冷却中：不许开跑
-        self.clock[0] += 91
         self.assertEqual(image_jobs._take_nowait(), second)
 
-    def test_normal_job_still_runs_during_cooldown(self):
-        """冷却窗不是「停摆」——它的意义正是把空隙让给别的渠道。"""
-        self._run_heavy()
-        normal, _ = self._enqueue(skill="anima_soft")
-        self.assertEqual(image_jobs._take_nowait(), normal)
+    def test_waits_stays_zero(self):
+        """不再有「让行」这回事，计数恒为 0。
 
-    def test_cooldown_does_not_open_on_failure(self):
-        """失败/超时那张已经把 ComfyUI 清干净了，没有残留要等——别白罚 90 秒。"""
-        with mock.patch.object(image_jobs, "wait_done",
-                               side_effect=TimeoutError("超时")):
-            image_jobs.enqueue("group", "9", {"1": {}}, "qwen_image_v1")
-            image_jobs._drain()
-        nxt, _ = self._enqueue(skill="qwen_image_v1")
-        self.assertEqual(image_jobs._take_nowait(), nxt)
+        老实现里 `waits` 其实也不是「让行几次」而是「每秒被轮询几次」（见
+        image_jobs 那个「已知坑」），关掉之后它连虚增的机会都没有。
+        """
+        self._run_heavy()
+        heavy, _ = self._enqueue(skill="qwen_image_v1")
+        self.assertEqual(heavy.waits, 0)
+        image_jobs._take_nowait()
+        self.assertEqual(heavy.waits, 0)
+
+    def test_no_cooldown_window_opens(self):
+        """跑完不再开冷却窗（`_finish` 的判据是 `job.weight > 1`，权重已是 1）。"""
+        self._run_heavy()
+        self.assertEqual(image_jobs._COMFY.heavy_done_at, 0.0)
 
     def test_no_cooldown_after_a_normal_job(self):
-        """普通渠道跑完不开冷却——否则连画两张 anima 都要白等 90 秒。"""
+        """普通渠道跑完照旧不开冷却。"""
         entry = {"outputs": {"9": {"images": [{"filename": "a.png"}]}}}
         with mock.patch.object(image_jobs, "wait_done", return_value=entry):
             image_jobs.enqueue("group", "9", {"1": {}}, "anima_soft")
@@ -661,37 +659,26 @@ class HeavyCooldownTest(_Base):
         nxt, _ = self._enqueue(skill="qwen_image_v1")
         self.assertEqual(image_jobs._take_nowait(), nxt)
 
-    def test_heavy_during_cooldown_goes_behind_normal(self):
-        """冷却中的 qwen 要真的退到**队尾**，而不只是「暂时不跑」。
+    def test_old_gate_still_works_if_re_enabled(self):
+        """机制没删、只是关了：把权重与冷却一起打开，旧行为还在（可回滚）。
 
-        推回队尾要重新取号：不重新取号的话，几个冷却中的重渠道会共用同一个
-        序号，谁先谁后变成集合顺序（不确定）。
+        这就是 `config.QWEN_COOLDOWN` 注释里那条恢复路径——顺手证明它有效，
+        免得哪天真崩了才发现改回去也不管用。
         """
+        self.clock = [1000.0]
+        for target, value in (
+            ("time", _FakeTime(lambda: self.clock[0])),
+            ("QWEN_COOLDOWN", 90.0),
+            ("skill_priority", lambda s: 5 if s == "qwen_image_v1" else 1),
+        ):
+            p = mock.patch.object(image_jobs, target, value)
+            p.start()
+            self.addCleanup(p.stop)
         self._run_heavy()
-        heavy, _ = self._enqueue(skill="qwen_image_v1")
-        normal, _ = self._enqueue(skill="anima_soft")
-        image_jobs._take_nowait()          # 冷却中：先把 heavy 推到队尾，再取 normal
-        self.assertEqual(list(image_jobs._COMFY.queue), [heavy])   # heavy 退到队尾，normal 已出队
-        self.assertEqual(heavy.waits, 1)
+        second, _ = self._enqueue(skill="qwen_image_v1")
+        self.assertIsNone(image_jobs._take_nowait())        # 冷却中：不许开跑
         self.clock[0] += 91
-        self.assertEqual(image_jobs._take_nowait(), heavy)
-
-    def test_zero_cooldown_disables_the_gate(self):
-        """QWEN_COOLDOWN=0 就是「只按权重排序」，别把功能做成一开就关不掉。"""
-        p = mock.patch.object(image_jobs, "QWEN_COOLDOWN", 0)
-        p.start()
-        self.addCleanup(p.stop)
-        self._run_heavy()
-        nxt, _ = self._enqueue(skill="qwen_image_v1")
-        self.assertEqual(image_jobs._take_nowait(), nxt)
-
-    def test_wait_counter_records_the_yields(self):
-        """被让行几次要留痕——出问题时这是唯一能看出「qwen 被推了几次」的地方。"""
-        self._run_heavy()
-        heavy, _ = self._enqueue(skill="qwen_image_v1")
-        self.assertEqual(heavy.waits, 0)
-        self.assertIsNone(image_jobs._take_nowait())   # 冷却中，推回队尾
-        self.assertEqual(heavy.waits, 1)
+        self.assertEqual(image_jobs._take_nowait(), second)
 
 
 class ProcessTest(_Base):
