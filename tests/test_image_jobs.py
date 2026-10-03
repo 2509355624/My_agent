@@ -288,6 +288,36 @@ class QueueTest(_Base):
         self.assertIsNone(job)
         self.assertIn("排着", reason)
 
+    def test_one_session_can_queue_five_in_a_row(self):
+        """一个会话能连排 5 张。
+
+        2026-10-03 用户提的：原来在途上限是 2，第 3 张起被拒收，而拒收理由里
+        明写着「别跟对方提这张图，当没画过」——所以对方看到的是「连点 5 张只
+        来 2 张」，连句解释都没有。
+
+        ⚠️ 这条**故意写死 5**，不引用 `MAX_INFLIGHT`：上面那条符号化的用例在
+        常量被改回 2 时一样会绿，而它抓不住的就是这种「退回旧值」的回归。想
+        调这个数就把这条数字一起改——它就是需求的记录。
+        """
+        for i in range(5):
+            job, reason = self._enqueue(wf={"1": {"p": i}})
+            self.assertIsNone(reason, "第 %d 张不该被拒" % (i + 1))
+            self.assertIsNotNone(job)
+        job, reason = self._enqueue(wf={"1": {"p": "over"}})
+        self.assertIsNone(job)
+        self.assertIn("排着", reason)
+
+    def test_global_queue_has_room_for_several_sessions(self):
+        """全局队列要容得下好几个会话各排满——一个会话最多占 1/4。
+
+        5（MAX_INFLIGHT）× 4 = 20（MAX_QUEUE）。这条守的是 2026-10-03 那个
+        耦合：把每会话上限提到 5 却留着全局 10 的话，**两个活跃群就能把队列
+        占满**，第三个群一张都排不进来，直接收到「排队的人太多」。
+        """
+        self.assertGreaterEqual(image_jobs.MAX_QUEUE,
+                                image_jobs.MAX_INFLIGHT * 4,
+                                "全局队列要放得下至少 4 个排满的会话")
+
     def test_global_queue_limit_rejects_anyone(self):
         """全局队排满就拒——不管是谁的会话。这是「别一次塞太多」的总闸。"""
         for i in range(image_jobs.MAX_QUEUE):
