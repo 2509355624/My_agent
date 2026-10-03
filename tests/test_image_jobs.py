@@ -2681,5 +2681,94 @@ class RecentOutcomesTest(_Base):
         self.assertEqual(image_jobs.recent_line("group", "9"), "")
 
 
+class TaskTimeoutBySkillTest(unittest.TestCase):
+    """按渠道分级的出图时限（2026-10-04 加）。
+
+    背景：用户说「我任务都在 80 秒以下」，要全局改 80。但实测日志里
+    （`渠道 X，seed Y，耗时 Z 秒` 统计）各渠道中位数差 4 倍——anima_clear
+    16.6s 而 hd_3_curvy 68.3s，一个全局数必然在两头出错。所以改成查表。
+
+    这几条钉的是**分流本身**：快渠道真的拿到 80、重渠道不会被误杀、
+    没配的渠道保持旧行为（不然新渠道一上线就静默变慢）。
+    """
+
+    def test_light_channels_get_the_short_limit(self):
+        for skill in ("anima_clear", "anima_soft", "image_gen_v1",
+                      "hd_2_clear", "hd_fast_clear"):
+            self.assertEqual(image_jobs.task_timeout(skill), 80, skill)
+
+    def test_heavy_channels_keep_enough_headroom(self):
+        # 中位 50~70s 的那几个：给 80s 只剩 10~30s 余量，排队一叠加就误杀
+        for skill in ("qwen_image_v1", "nffa", "hd_3_clear", "hd_3_curvy"):
+            self.assertEqual(image_jobs.task_timeout(skill), 180, skill)
+
+    def test_unknown_skill_falls_back_to_global(self):
+        """没配的渠道仍走 TASK_TIMEOUT——新渠道不能因为漏配就变慢。"""
+        self.assertEqual(image_jobs.task_timeout("将来新增的渠道"),
+                         image_jobs.TASK_TIMEOUT)
+        self.assertEqual(image_jobs.task_timeout(None), image_jobs.TASK_TIMEOUT)
+
+    def test_accepts_a_job_or_a_skill_name(self):
+        """process() 手里有 job，异常路径上只有渠道名——两种都得收。"""
+        job = image_jobs.Job("group", "9", {}, skill="anima_clear")
+        self.assertEqual(image_jobs.task_timeout(job), 80)
+        self.assertEqual(image_jobs.task_timeout("anima_clear"), 80)
+
+    def test_survives_garbage_input(self):
+        """热路径上不能因为一个怪值就抛——抛了整张图的处理就断了。
+
+        只有**不可 hash** 的值会让 `dict.get` 抛 TypeError（实测 object()、123、
+        None 都安全返回默认值），所以用例只拿 list/dict 撞——拿别的测不到
+        那个 except，测了等于没测。
+        """
+        # 挡掉真实 HTTP：这条断言不该去连 ComfyUI（慢 40 多秒只为证明一句
+        # 纯函数的返回值不抛，不值）。
+        with mock.patch.object(image_jobs, "_comfy_up", return_value=True), \
+                mock.patch.object(image_jobs, "_restart_comfy"), \
+                mock.patch.object(image_jobs, "_free_ram_gb", return_value=9.0), \
+                mock.patch.object(image_jobs, "_free_vram_gb", return_value=9.0):
+            for junk in (object(), 123, None, ["x"], {"k": 1}, ("t",)):
+                self.assertEqual(image_jobs.task_timeout(junk),
+                                 image_jobs.TASK_TIMEOUT, repr(junk))
+
+    def test_limit_is_what_wait_done_receives(self):
+        """真正传给 wait_done 的必须是查表结果，不是全局值。
+
+        钉这一条是因为超时判定有三条路径（process / _fail_text 的文案 /
+        重启原因那句），它们都读同一个函数——但只有 process 那条是
+        「真的会等这么久」，其余只是给人看的字。
+        """
+        seen = []
+
+        def fake_wait_done(prompt_id, timeout=None):
+            seen.append(timeout)
+            raise TimeoutError("生成超时 (%ds)" % timeout)
+
+        for skill, want in (("anima_clear", 80), ("qwen_image_v1", 180)):
+            seen.clear()
+            job = image_jobs.Job("group", "9", {}, skill=skill)
+            job.target = None          # 免得 _notice 真去发消息
+            with mock.patch.object(image_jobs, "_maybe_restart_for_clean_start"), \
+                    mock.patch.object(image_jobs, "_maybe_release_for_switch"), \
+                    mock.patch.object(image_jobs, "_maybe_release_for_low_vram"), \
+                    mock.patch.object(image_jobs, "_queue_prompt",
+                                      return_value="pid-" + skill), \
+                    mock.patch.object(image_jobs, "_comfy_up", return_value=False), \
+                    mock.patch.object(image_jobs, "_restart_comfy") as rst, \
+                    mock.patch.object(image_jobs, "wait_done", fake_wait_done):
+                image_jobs.process(job)
+            # 超时后那条分支会探活并可能重启 ComfyUI：探不到活就不重启（真实现
+            # 也是这么判的），否则这条用例会白等 COMFY_RESTART_WAIT 那么久。
+            self.assertFalse(rst.called, skill)
+            self.assertEqual(seen, [want], skill)
+
+    def test_fail_text_uses_the_same_limit(self):
+        """给用户看的那句也要跟着变，否则说「超过 180 秒」而实际只等了 80。"""
+        self.assertIn("超过 80 秒", image_jobs._fail_text(
+            TimeoutError("x"), skill="anima_clear"))
+        self.assertIn("超过 180 秒", image_jobs._fail_text(
+            TimeoutError("x"), skill="qwen_image_v1"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -215,6 +215,51 @@ NAI_MAX_INFLIGHT = 5
 # 单张图从「真正开跑」到出图的时限（秒）。到点还没出图就中断它、让下一个上。
 TASK_TIMEOUT = IMAGE_GEN_TIMEOUT
 
+# 按渠道分级的超时（2026-10-04 加）。**一个全局数必然在两头出错**：用户看到
+# 「我任务都在 80 秒以下」就想定 80，但实测（`logs/qq_bot.log` 里「渠道 X，
+# seed Y，耗时 Z 秒」统计）：
+#
+#   anima_clear      n=294  中位 16.6  最慢 152.8
+#   image_gen_v1     n=13   中位 26.3  最慢  41.6
+#   hd_2_clear       n=37   中位 35.1  最慢  82.5
+#   qwen_image_v1    n=58   中位 50.3  最慢 119.6
+#   nffa             n=19   中位 53.7  最慢  93.4
+#   hd_3_clear       n=13   中位 60.6  最慢  83.9
+#   hd_3_curvy       n=3    中位 68.3  最慢  87.4
+#
+# 定 80 的话：anima 那 152.8s 那次会被砍（它是内存吃紧换页拖慢的，不是画不动），
+# hd_3_curvy 中位就 68.3s —— 只剩 12 秒余量，**排队等待一叠加就误杀**；qwen 也有
+# 约 10~15% 在 80s 以上。反过来留 180 全局，anima_clear（中位 16.6s）真卡死时用户
+# 要白等 3 分钟。所以**按渠道查表**：表里没有的用 TASK_TIMEOUT（保持原行为，
+# 新渠道不会因为漏配就变慢）。
+#
+# 键是 `job.skill`，不是渠道文件名——Job.skill 存的是渠道名。
+SKILL_TIMEOUTS = {
+    # 轻量 SD 系：中位 16~35s，给 80s 已经很宽（2~4 倍中位数）
+    "anima_clear": 80, "anima_curvy": 80, "anima_gloss": 80,
+    "anima_soft": 80, "anima": 80, "image_gen_v1": 80,
+    "hd_2_clear": 80, "hd_2_curvy": 80, "hd_2_gloss": 80,
+    "hd_fast_clear": 80, "hd_fast_gloss": 80,
+    # 重的一档：中位 50~70s，80s 顶不住
+    "qwen_image_v1": 180, "nffa": 180,
+    "hd_3_clear": 180, "hd_3_curvy": 180, "hd_3_gloss": 180,
+    "krea2": 180,
+}
+
+
+def task_timeout(job_or_skill):
+    """这个渠道单张图的出图时限（秒）。
+
+    接 Job 或渠道名都收——`process()` 拿得到 job，判定日志与文案在异常路径上
+    有时只手里一个渠道名。原 TASK_TIMEOUT 保留为**兜底默认值**，没配的渠道
+    行为不变。
+    """
+    skill = getattr(job_or_skill, "skill", job_or_skill)
+    try:
+        return SKILL_TIMEOUTS.get(skill) or TASK_TIMEOUT
+    except TypeError:                       # 传了个怪东西，别在热路径上抛
+        return TASK_TIMEOUT
+
 # 轮询间隔（秒）
 POLL_INTERVAL = 2
 
@@ -255,6 +300,29 @@ QWEN_SKILL = "qwen_image_v1"
 # 所以现在没有任何渠道需要「预备重启」。将来若真要加回来，**必须先看日志里的
 # staged 峰值和真实崩溃点**，别按权重表算 GB 往上堆。
 CLEAN_START_SKILLS = {}
+
+# 按渠道的**事前内存**水位（GB）：开跑前系统可用内存低于它就重启 ComfyUI。
+# 与 CLEAN_START_SKILLS（显存）分表，因为两者是独立的两条资源，量级也不同。
+#
+# ⚠️ **2026-10-04 实测后保持为空 —— 这条路被数据否决了，别按直觉填回去。**
+# 原本想给 qwen 挂 8.0GB（它的权重 10.5GB，而 03:40 那次提交时内存余 4.0GB）。
+# 拿日志里 275 次「开跑前水位」与后续成败配对统计，判别力接近零：
+#
+#   提交时内存 <4GB： 75 张，失败 1 张（1%）
+#   提交时内存 ≥4GB：199 张，失败 8 张（4%）   ← 反而更高
+#
+# 而且 275 次采样里**最高只有 7.2GB**，<8GB 占 100% —— 定 8.0 等于每张 qwen 都
+# 重启，那只是把「重渠道」换了个名字，用户 10-04 刚把它拍板关掉。
+#
+# 更要命的是失败本身跟提交时水位无关：9 次失败里 **8 次发生在内存还够的时候**
+# （提交时 4.0 / 4.3 / 4.8 / 5.1 / 6.0GB）。真正的死因是**跑起来之后** qwen 一口
+# 吃掉 10GB+ 把内存压到 0.1~0.5GB，ComfyUI 被系统杀 —— 那一刻已经提交了，水位
+# 读数是事后诸葛亮。
+#
+# 结论：事前水位拦不住，能拦住的只有**降低峰值**（ComfyUI 启动加 `--fast-disk`，
+# 权重走 NVMe 而不是全压内存）或**换更大的物理内存**。真要加回来，必须先拿出
+# 「某阈值下失败率显著更高」的证据。
+CLEAN_START_RAM = {}
 
 # NAI 的两个渠道名（2026-10-03 加 `nai_wide` 横版）。所有「是不是 NAI」的判断
 # 都走这个元组——`job.skill` 存的是**真实渠道名**，云端分支靠它区分横竖。
@@ -1032,27 +1100,41 @@ def _maybe_restart_for_ram():
 
 
 def _maybe_restart_for_clean_start(job):
-    """这个渠道要「干净的 ComfyUI」才跑得动：显存不够就先重启一次。
+    """这个渠道要「干净的 ComfyUI」才跑得动：显存/内存不够就先重启一次。
 
     跟 _maybe_restart_for_ram 的区别：那条是**事后**（跑完一张发现内存被啃低
-    了才补），这条是**事前**（明知道这个渠道要 9.4GB，先看够不够再说）。只有
+    了才补），这条是**事前**（明知道这个渠道要 10.5GB，先看够不够再说）。只有
     事前才拦得住——事后重启的时候那张图已经超时失败了。
 
-    两个「不折腾」的早退：显存**问不到**（None）时什么都不做——那种情况下
+    2026-10-04：新增**内存**这一路。原来的 CLEAN_START_SKILLS 只看显存，而 qwen
+    崩的是内存——10-04 03:40 那次现场：提交时内存余 4.0GB（高于全局 3.0 水位，
+    放行），跑起来 qwen 一口吃掉 10GB+，03:40:55 掉到 0.5GB、ComfyUI 被系统杀，
+    180s 超时失败。全局 3.0GB 那条水位是给 5.4GB 的 anima 定的，**跟 qwen 不在
+    一个量级**（当天日志里「内存余 0.1/0.3/0.5GB」反复出现，全是 qwen）。
+
+    两个「不折腾」的早退：读不到数（None）时什么都不做——那种情况下
     ComfyUI 多半已经不在了，重启请求同样发不出去，还不如照常提交，让 _notice
     去说一句「ComfyUI 没在线」，比在这里白等 180 秒诚实。
 
     每张图最多重启一次（只在提交前判一次），所以不会退化成重启循环——即使
-    重启完显存还是不够，也只是这一张照常提交、照常可能超时。
+    重启完还是不够，也只是这一张照常提交、照常可能超时。
     """
-    need = CLEAN_START_SKILLS.get(job.skill or "") or 0
-    if need <= 0:
+    skill = job.skill or ""
+    need_vram = CLEAN_START_SKILLS.get(skill) or 0
+    need_ram = CLEAN_START_RAM.get(skill) or 0
+    if need_vram <= 0 and need_ram <= 0:
         return
-    free = _free_vram_gb()
-    if free is None or free >= need:
+    vram, ram = _free_vram_gb(), _free_ram_gb()
+    # 水位取「更紧的那个先满足」：两边都要够才放行，但先报出来的是差得最远的
+    # 那个，日志里一眼能看出到底是哪一边卡住了。
+    lack = ""
+    if need_vram > 0 and vram is not None and vram < need_vram:
+        lack = "要 %.1fGB 显存，现在只剩 %.1fGB" % (need_vram, vram)
+    elif need_ram > 0 and ram is not None and ram < need_ram:
+        lack = "要 %.1fGB 内存，现在只剩 %.1fGB" % (need_ram, ram)
+    if not lack:
         return
-    log.info("%s 开跑前要 %.1fGB 显存，现在只剩 %.1fGB——先重启 ComfyUI "
-             "要一个干净状态再跑", job.skill, need, free)
+    log.info("%s 开跑前%s——先重启 ComfyUI 要一个干净状态再跑", skill, lack)
     _restart_comfy()
 
 
@@ -1133,7 +1215,7 @@ def process(job):
         return
 
     try:
-        entry = wait_done(job.prompt_id, TASK_TIMEOUT)
+        entry = wait_done(job.prompt_id, task_timeout(job))
     except TimeoutError as exc:
         # 关键：中断 + 从队列摘掉 + 释放显存。串行队列下「当前正在执行」的
         # 就是我们这一张，所以 /interrupt 是准的——这也是改成全局串行之后
@@ -1153,7 +1235,7 @@ def process(job):
             # ① **退不了场**（not idle）：卡在一次不返回的 CUDA 调用里
             #    （TDR / 僵尸），`/interrupt` 设的协作标志它永远读不到，
             #    后面每一张都会撞上同一个忙队列、逐张超时；
-            # ② **退场了、但这张烧满了 TASK_TIMEOUT**（idle）：说明机器
+            # ② **退场了、但这张烧满了时限**（idle）：说明机器
             #    状态已经不对了。2026-10-03 实测的级联：03:05:09 超时（内存
             #    还有 6.3GB）之后，03:08:19 紧接着又超时（内存 0.1GB）——
             #    第一张慢死，第二张接着死。清一次比继续往下塞划算。
@@ -1163,7 +1245,7 @@ def process(job):
             # 「ComfyUI 没在线」——那句话比这里诚实。
             why = ("被中断后 %.0f 秒仍未退场（活着但卡住）" % COMFY_IDLE_WAIT
                    if not idle else
-                   "退场了，但这张烧满了 %.0f 秒（状态已不对）" % TASK_TIMEOUT)
+                   "退场了，但这张烧满了 %.0f 秒（状态已不对）" % task_timeout(job))
             log.warning("ComfyUI %s，重启它", why)
             _restart_comfy()
             alive = _comfy_up()      # 重启成没成，以重启后再探一次为准
@@ -1527,7 +1609,7 @@ def _fail_text(exc, stage="submit", skill=None):
                 "等它重新起来再让对方重画。")
     if isinstance(exc, TimeoutError):
         return ("画超时了（超过 %d 秒没出图），已经中断这张。"
-                "麻烦重新生成一次。" % TASK_TIMEOUT)
+                "麻烦重新生成一次。" % task_timeout(skill))
     if stage != "send" and _is_unreachable(exc):
         return ("图没画出来——ComfyUI 没在线（%s 连不上）。"
                 "让对方稍后再试。" % COMFYUI_URL)
