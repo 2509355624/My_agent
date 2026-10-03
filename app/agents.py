@@ -66,9 +66,10 @@ def clear_cache():
 
 
 # ─── agent 级运行时设置（settings.json，管理页在线改的开关放这里）───
-# 配置（agent.json）描述「这个 agent 是谁」，改完通常要重启或走 clear_cache；
-# 设置（settings.json）描述「运行中想临时拨动的开关」，必须热生效——
-# mtime 缓存足够：管理页保存即写盘，下一轮对话就读到新值。
+# 配置（agent.json）描述「这个 agent 是谁」，设置（settings.json）描述
+# 「运行中想临时拨动的开关」。两者都按 mtime 热加载：管理页保存即写盘，
+# 下一轮对话就读到新值，无需重启。保存接口另外会 clear_cache()，挡掉
+# 「读 → 写 → 立刻再读」撞上 mtime 精度、命中旧缓存的情况。
 
 SETTINGS_FILE = "settings.json"
 _settings_cache = {}
