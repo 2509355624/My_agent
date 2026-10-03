@@ -127,10 +127,10 @@ class BuildStreamBodyTest(unittest.TestCase):
         self.assertEqual(body["stream_options"], {"include_usage": True})
 
     def test_volc_thinking_matrix_by_model(self):
-        # deepseek 系：火山默认关思维链，必须显式开启
+        # deepseek 系：显式关（2026-10-03 起，推理 token 按 output ¥4/M 计费太贵）
         body = llm._build_stream_body(
             self._eff("volc", "deepseek-v4-flash-ga-260731"), [], True)
-        self.assertEqual(body["thinking"], {"type": "enabled"})
+        self.assertEqual(body["thinking"], {"type": "disabled"})
         # 豆包系：默认带思考，显式关掉换速度
         body = llm._build_stream_body(
             self._eff("volc", "doubao-seed-2-1-turbo-260628"), [], True)

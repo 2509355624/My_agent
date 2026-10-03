@@ -345,8 +345,9 @@ def _call_provider(eff, body, timeout):
     if eff["provider"] == "ollama":
         return _call_ollama(eff["base_url"], body, timeout)
 
-    # 豆包系默认带思考，摘要/判断这类同步调用不需要，显式关掉换速度。
-    # deepseek 系不加（默认就是关的，加 enabled 反而让摘要慢下来）。
+    # 摘要/判断这类同步调用同样不需要思维链，显式关掉换速度。火山系统一发
+    # disabled（见 _thinking_type）；deepseek 系以前靠「不加字段」依赖模型默认，
+    # 现在也显式声明，免得哪次默认值一变就悄悄变贵。
     if eff["provider"] in _EXTRA_FIELDS_PROVIDERS:
         t = _thinking_type(eff["provider"], eff["model"])
         if t == "disabled":
@@ -394,15 +395,16 @@ _EXTRA_FIELDS_PROVIDERS = ("volc", "doubao")
 def _thinking_type(provider, model):
     """火山系模型 thinking 字段的取值（None = 不带这个字段）。
 
-    - deepseek 系（火山托管）：默认关思维链，必须显式 enabled 才有思考。
-    - 豆包系：默认就带思考，聊天场景要快，显式 disabled 压掉
-      （2026-09-27 用户实测「太慢了」）。
+    2026-10-03 起**火山系一律显式关思维链**，理由是钱：账单实测推理 token
+    按 output ¥4/M 计费，占全天 ¥7.54 的 72%；同一份真实系统头只切这个开关，
+    completion 537 → 6 token、9.0s → 1.6s。本机只跑生图，不需要思维链。
+
+    - deepseek 系（火山托管）：模型默认关，但流式请求必须显式 disabled 才压得住。
+    - 豆包系：默认就带思考，显式 disabled 压掉（2026-09-27 用户实测「太慢了」）。
     - 其他（glm 等）：字段习惯没验证过，不带，走模型默认。
     """
     name = (model or "").lower()
-    if "deepseek" in name:
-        return "enabled"
-    if "doubao" in name or provider == "doubao":
+    if "deepseek" in name or "doubao" in name or provider == "doubao":
         return "disabled"
     return None
 
