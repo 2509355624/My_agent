@@ -66,13 +66,77 @@ def _brief_desc(desc, limit=60):
     return d[:limit] + ("…" if len(d) > limit else "")
 
 
+# brief 模式下**参数级描述必须保留**的工具（2026-10-04 实测后加）。
+#
+# 为什么按工具白名单而不是「全都保留参数说明」：保留全部参数说明会让系统头
+# 从 4.8k 字涨回 13k 字（实测值），brief 就白省了。但 generate_image 的参数
+# 说明是**不可替代**的——它的四个参数全靠说明才讲得清：
+#   skill         = 渠道名（不传走默认 anima_clear；qwen/nai/nffa 各是什么）
+#   source_image  = **只认数字 1**（填链接、填 'last'、填 '[图片]' 一律被拒）
+#   prompt        = 标签串 vs 自然语言句子，各渠道写法不同
+#   seed          = 只本机渠道认，nai 传了直接报错
+# 砍掉之后 9B 实测（同一条「qwen 重绘一下这只手」，各跑 3 遍）：
+#   brief 关 → 3/3  skill=qwen_image_v1 + source_image=1   ✅
+#   brief 开 → 0/3  1 遍不调工具、2 遍传 source_image='last' / '[233 发来的图片]' ❌
+# 它传不出合法值就等于垫不了图，而垫不了图时它转而干更糟的事：**编造**
+# ——「✅ 已完成重绘」+ 假的 markdown 图片链接、或者一本正经地讲它没有生图
+# 能力、让你去用 Photoshop（实测原话「qwen 重绘，把 6 根手指换成 5 根」，
+# 它答「我无法直接编辑或重绘你上传的图片」，还推荐用 GIMP）。
+#
+# 所以判据不是「这个工具有多少参数」，而是「**砍掉参数说明它还能不能干活**」。
+# 查资料类的（web_search / load_skill）砍掉照样能调，生图这种**每个参数都有
+# 硬格式约束**的砍掉就废。
+_BRIEF_KEEP_PARAMS = ("generate_image",)
+
+# brief 模式下给这几个参数**追加**的一句硬约束。理由同上：这些是「填错就
+# 报错 / 填错就静默走默认渠道」的坑，而首句描述里恰好没提。
+#
+# `skill` 尤其要紧：首句只有「渠道名」三个字（小模型据此完全不知道有哪些
+# 渠道、也不知道不传会走哪个），而渠道名在 Available Skills 里是**中文
+# 逗号分隔的一整行**、没标哪个是默认——9B 实测会在这行里随便挑一个
+# （「qwen 重绘一下这只手」挑了 nai）。这里点明默认并说清「点名才传」。
+_BRIEF_PARAM_EXTRA = {
+    "skill": "渠道名，**只在对方点名画风/尺寸/渠道时才传**，平时不传=默认 "
+             "anima_clear。点名「高清二档」=hd_2_*、「三档」=hd_3_*、"
+             "「快档」=hd_fast_*；点名 qwen/通义=qwen_image_v1、"
+             "点名 nai=nai、点名 nffa=nffa。",
+    "source_image": "垫图/图生图，**只填数字 1**（=本轮那张图），"
+                    "**填链接、'last'、'[图片]' 一律报错**。默认不传。",
+}
+
+
+def _brief_param_desc(tool_name, pname, pdef, limit=110):
+    """brief 模式下参数说明的压缩版：保留**格式约束与关键词**。
+
+    只截长度、不砍句子 Unlike `_brief_desc`（那个取首句会把「垫图 / 图生图：
+    填 1 = ...」这种格式约束一起砍掉——正是 2026-10-04 那个 bug 的成因）。
+    超长时从**句子边界**收尾，保住第一句里的「填什么值」。
+    """
+    d = ((pdef or {}).get("description") or "").strip()
+    if not d:
+        return ""
+    # 这个参数在 _BRIEF_PARAM_EXTRA 里另有更准的说法时，首句只留「它是干什么的」
+    # 那一小段（重复的整句会挤掉后面追加的硬约束，白占上下文）。
+    if pname in _BRIEF_PARAM_EXTRA:
+        head = d.split("：")[0].split("。")[0].strip()
+        return head
+    for sep in ("。", "\n"):
+        i = d.find(sep)
+        if i > 0:
+            d = d[:i + 1]
+            break
+    d = d.strip().replace("\n", " ")
+    return d if len(d) <= limit else d[:limit].rstrip() + "…"
+
+
 def _build_tool_list(agent_id=None, brief=False):
     """构建工具列表：名称(参数签名): 描述
 
     带上参数签名，避免模型靠猜参数名反复试错（小模型尤其明显）。
     `*` 标记必填参数。只列该 agent 白名单内的工具（None = 全部）。
 
-    brief=True 时描述只留首句（见 _brief_desc）——小模型上下文吃紧时用。
+    brief=True 时描述只留首句（见 _brief_desc），但 `_BRIEF_KEEP_PARAMS`
+    里的工具额外保留参数级说明——理由见那个常量的注释。
     """
     lines = []
     for tool in TOOLS:
@@ -96,7 +160,16 @@ def _build_tool_list(agent_id=None, brief=False):
             for pname, pdef in props.items():
                 ptype = (pdef or {}).get("type", "any")
                 star = "*" if pname in required else ""
-                sig_parts.append(f"{pname}{star}:{ptype}")
+                one = f"{pname}{star}:{ptype}"
+                if brief and tool["name"] in _BRIEF_KEEP_PARAMS:
+                    pd = _brief_param_desc(tool["name"], pname, pdef)
+                    extra = _BRIEF_PARAM_EXTRA.get(pname)
+                    if extra:
+                        # 追加句本身就是完整说法，首句只当标题；重复前缀去掉
+                        pd = extra if not pd or extra.startswith(pd) else (pd + " " + extra)
+                    if pd:
+                        one += "=" + pd
+                sig_parts.append(one)
             sig = ", ".join(sig_parts)
         else:
             sig = ""

@@ -1445,5 +1445,111 @@ class T2iGuardTest(unittest.TestCase):
                       "t2i_note 没并进 source_note，回执里看不到")
 
 
+class I2iForceTest(unittest.TestCase):
+    """垫图补齐守卫：对方明说要改图、模型却没传 source_image → 补上垫图。
+
+    `_i2i_gate` 的反向守卫（跟 `_t2i_guard` 成对）。实测（2026-10-04 修完
+    brief 之后，qwen3.8-9b-heretic）：「qwen 重绘一下这只手」跑 3 遍，
+    skill 全对，但仍有 1 遍 `source_image` 空 —— 那一遍会退化成**文生图**，
+    凭空重画一张，跟「改这张」不是一回事，而用户看不出区别。
+    """
+
+    def _force(self, text, has_image=True):
+        from unittest import mock
+        from app.tools.normal import generate_image as gi
+        with mock.patch("app.qq_api.current_turn_text", return_value=text), \
+             mock.patch("app.qq_api.current_own_images",
+                        return_value=["http://x/1.jpg"] if has_image else []):
+            return gi._i2i_force()
+
+    def test_explicit_edit_forces_source(self):
+        for text in ("qwen 重绘一下这只手", "把这张图的手指改一下",
+                     "去掉多余的那根手指", "重绘一版", "换个手"):
+            self.assertTrue(self._force(text), "明说改图却没补垫图：%s" % text)
+
+    def test_quote_only_does_not_force(self):
+        # 只引用、不说要改 → 不补。那种十有八九只是「给你看」。
+        self.assertEqual("", self._force("这张挺好看"))
+        self.assertEqual("", self._force("233，这图挺好看的"))
+
+    def test_asking_about_it_does_not_force(self):
+        # 问「支持垫图吗」不是在要求垫图。误垫的代价比漏垫大。
+        self.assertEqual("", self._force("支持垫图吗"))
+        self.assertEqual("", self._force("重绘是什么意思"))
+
+    def test_plain_t2i_does_not_force(self):
+        self.assertEqual("", self._force("画个蓝发少女"))
+
+    def test_not_in_qq_turn_passes(self):
+        from app.tools.normal import generate_image as gi
+        from unittest import mock
+        with mock.patch("app.qq_api.current_turn_text", return_value=None):
+            self.assertEqual("", gi._i2i_force())
+
+
+class BriefToolParamTest(unittest.TestCase):
+    """简短模式必须**保留** generate_image 的参数级说明（2026-10-04）。
+
+    踩坑记录：brief 最初把参数说明整段砍掉，只留工具级首句
+    「调用 ComfyUI 生成图片」。同一条原话「qwen 重绘一下这只手」各跑 3 遍：
+
+      brief 关 → 3/3  skill=qwen_image_v1 + source_image=1   ✅
+      brief 开 → 0/3  1 遍压根不调工具、2 遍传
+                     source_image='last' / '[233 发来的图片]'（非法值）
+
+    非法值会被 comfy_src._pick 拒掉 → 垫不了图 → 它转而**编造**
+    （「✅ 已完成重绘」+ 假 markdown 图片链接，或一本正经地说它没有生图
+    能力、建议你去用 Photoshop）。所以这里断言的是**信息不能丢**。
+    """
+
+    def _line(self, brief):
+        from app import agent_prompt as ap
+        from unittest import mock
+        with mock.patch.dict("os.environ", {"PROMPT_BRIEF":
+                                            "1" if brief else "0"}):
+            for line in ap._build_tool_list("qq", brief=brief).splitlines():
+                if line.startswith("- **generate_image**"):
+                    return line
+        self.fail("工具列表里没有 generate_image")
+
+    def test_brief_keeps_skill_channel_hint(self):
+        line = self._line(True)
+        self.assertIn("anima_clear", line, "brief 下丢了默认渠道名")
+        self.assertIn("qwen_image_v1", line, "brief 下丢了 qwen 渠道映射")
+
+    def test_brief_keeps_source_image_legal_value(self):
+        line = self._line(True)
+        self.assertIn("只填数字 1", line,
+                      "brief 下没说清 source_image 只认 1 → 模型会传 last/占位符")
+
+    def test_brief_keeps_seed_constraint(self):
+        # seed 的坑是「nai 传了直接报错」，属于填错即失败的硬约束。
+        self.assertIn("seed", self._line(True))
+        self.assertIn("才传", self._line(True))
+
+    def test_brief_other_tools_stay_terse(self):
+        # 反向约束：别把 brief 修成「等于没 brief」。查资料类工具
+        # 砍掉描述照样能调，保留它们只是白占上下文。
+        from app import agent_prompt as ap
+        from unittest import mock
+        with mock.patch.dict("os.environ", {"PROMPT_BRIEF": "1"}):
+            tools = ap._build_tool_list("qq", brief=True)
+        for line in tools.splitlines():
+            if line.startswith("- **web_search**"):
+                self.assertLess(len(line), 80,
+                                "web_search 在 brief 下没被压短：" + line)
+                break
+        else:
+            self.fail("工具列表里没有 web_search")
+
+    def test_not_brief_unchanged(self):
+        # 非 brief 模式**本来就不带**参数级说明（工具级首句 + 完整参数说明
+        # 在别处，见 P_IMAGE 那段生图方法）。这里钉住的是「brief 的改动没
+        # 顺手把非 brief 也改了」——两条路径的差异必须一直在。
+        line = self._line(False)
+        self.assertNotIn("=", line.split(":")[0], "非 brief 下参数行不该有 =说明")
+        self.assertIn("source_image:string", line)
+
+
 if __name__ == "__main__":
     unittest.main()
