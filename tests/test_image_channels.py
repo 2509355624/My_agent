@@ -715,6 +715,58 @@ class SkillDocTest(unittest.TestCase):
             self.assertNotIn("test_image_sd", text, name)
 
 
+class RoleNameRuleTest(unittest.TestCase):
+    """角色还原靠**名字**，不靠外貌堆砌（2026-10-04 拍板）。
+
+    现场：同一轮「婚礼」需求，AI 连跑 5 个渠道。写了 `rudeus greyrat,
+    mushoku tensei` 的 nai / anima / nffa 都像，唯独 qwen 那版把名字丢了、
+    只写「一位年轻男子」，角色全走形。
+
+    根因是规则本身把「角色」定义成了外貌清单（发型 / 发色 / 瞳色 / 体型 /
+    服装 / 年龄），一个字都没提名字——模型照着清单交差，自然只写外貌。
+
+    这组断言钉住四件事：名字写最前、qwen 的自然语言不算例外、
+    用户报的名字不许省、认不出要说明。
+    """
+
+    @staticmethod
+    def _desc():
+        from app.tools.normal.generate_image import tool
+        return tool["description"]
+
+    def test_tool_description_puts_the_name_first(self):
+        desc = self._desc()
+        self.assertIn("认得出就先写名字", desc)
+        self.assertIn("名字写在 prompt 最前面", desc)
+        # 外貌降为补充——不然模型照样堆一长串设定，还容易和原作打架
+        self.assertIn("只补与原设定不同的地方", desc)
+
+    def test_qwen_is_not_an_exception(self):
+        """qwen 那条最容易被误解成「写自然语言就不用写专有名词」。
+
+        它自己的 skill.md 还写着「像在跟人描述画面」，不点破这层，模型
+        切进描述模式就会把角色退化成「一位少女」。
+        """
+        self.assertIn("自然语言句子里照样要写名字", self._desc())
+
+    def test_prompt_param_also_says_start_with_the_name(self):
+        from app.tools.normal.generate_image import tool
+        param = tool["parameters"]["properties"]["prompt"]["description"]
+        self.assertIn("开头先写角色名", param)
+
+    def test_user_supplied_name_must_be_kept_verbatim(self):
+        self.assertIn("一个字都不许省", self._desc())
+
+    def test_unknown_character_must_be_admitted(self):
+        self.assertIn("是按外形画的", self._desc())
+
+    def test_qwen_skill_md_carries_the_same_rule(self):
+        path = os.path.join(SKILLS, "qwen_image_v1", "SKILL.md")
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("写自然语言 ≠ 省略专有名词", text)
+
+
 # ─── 12 个高清渠道（3 档 × 4 画风）──────────────────────────────────
 
 class HdChannelTest(unittest.TestCase):
