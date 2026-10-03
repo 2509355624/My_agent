@@ -13,6 +13,7 @@ from unittest import mock
 from app import agents as agent_store
 from app import interject
 from app import qq_bot
+from app import qq_names
 
 
 def _group_event(text="大家好", group_id=1041079621, user_id=111, self_id=999):
@@ -60,6 +61,14 @@ class _StateIsolationMixin:
         p.start()
         self.addCleanup(p.stop)
         p = mock.patch.object(qq_bot.stickers, "catalog", return_value="")
+        p.start()
+        self.addCleanup(p.stop)
+        # _dispatch 处理私聊消息时会 note_private 把昵称写进 state/qq_names.json
+        # （见 app/qq_bot.py 里那条）——那是**生产状态文件**，测试跑一遍就把用户
+        # 真实的群名/昵称表覆盖成夹具数据。2026-10-03 实测：跑完一次，
+        # state/qq_names.json 只剩 {"group":{"1":"旧群名"},"private":{"1":"张三"}}，
+        # 于是所有会话系统头里的昵称集体消失 → 整段前缀缓存作废。
+        p = mock.patch.object(qq_names, "_persist")
         p.start()
         self.addCleanup(p.stop)
 

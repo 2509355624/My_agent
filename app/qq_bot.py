@@ -163,24 +163,27 @@ def _session_env_note(session_key):
 
     之前 agents/qq/prompt.md 写死「在 QQ 群里」，导致私聊也被当成群聊、bot 一直按
     群友人设在演。这里按 session_key 解析出 target/target_id 动态生成，不靠模型自猜。
+
+    ⚠️ **这里绝不能出现群名/昵称**（2026-10-03 撤掉）。这段文字被钉进 system 头，
+    也就是**前缀缓存的最前面**；而昵称来自 `qq_names` 这个**会变的**缓存
+    （`state/qq_names.json` 被测试覆写过一次、重启后要等 `refresh_lists` 才填上、
+    群主改名也会变），于是「有昵称」和「没昵称」两种头来回翻转——每翻一次，
+    这条会话的整段前缀缓存作废，下一轮按全价重读 24K token。
+    实测就是这么翻的：31 条会话的落盘头与现算头**全部**对不上，diff 出来正是
+    `…（昵称 233）进行私聊` → `…2509355624进行私聊`。
+    模型想知道对面叫什么，从对话正文里看得到（群消息自带昵称前缀），
+    这里只需要「私聊还是群聊 + 对象 id」这两件稳定事实。
     """
     target, _, target_id = session_key.partition("_")
-    try:
-        from app import qq_names
-        name = (qq_names.name_for(target, target_id) or "") if target_id else ""
-    except Exception:
-        name = ""
     if target == "group":
-        where = ("群聊「%s」(群号 %s)" % (name, target_id)) if name else ("群聊(群号 %s)" % target_id)
-        return ("【当前环境】你正处在**群聊**里：%s。群里有多个真人，你是其中一个"
+        return ("【当前环境】你正处在**群聊**里（群号 %s）。群里有多个真人，你是其中一个"
                 "群友——不是客服、不是公众号、别点名所有人、别当主持，按群友的方式接话。"
-                % where)
+                % target_id)
     # private（以及其它未知情况按私聊处理，最保守）
-    who = ("对方 QQ %s（昵称 %s）" % (target_id, name)) if name else ("对方 QQ %s" % target_id)
-    return ("【当前环境】你正和%s进行**私聊**（一对一，没有群友在旁边）。"
+    return ("【当前环境】你正和对方 QQ %s 进行**私聊**（一对一，没有群友在旁边）。"
             "私聊里你可以给这个人单独存记忆、存生图预设（memory_*/preset_* 工具），"
             "这些只属于他一个人——别当成群聊，也绝不要把 A 的东西用在 B 身上。"
-            % who)
+            % target_id)
 
 
 def _stable_blocks(session_key):
