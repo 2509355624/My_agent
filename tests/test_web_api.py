@@ -628,6 +628,31 @@ class AgentAdminApiTest(unittest.TestCase):
         for fn in ("visibleSessions", "renderSearchBar", "applySearch"):
             self.assertIn("function " + fn, html, "缺少搜索函数：" + fn)
 
+    def test_admin_page_has_three_column_session_layout(self):
+        """会话列表独占右列；行内那排开关收进「…」。
+
+        2026-10-03 用户提的：34 条会话要往下拖很久，左右却大片留白。改法是
+        左（agent 列表）/ 中（设置卡片）/ 右（会话列表）三列，会话行压成两行
+        文字，开关点行才展开。
+
+        这里只钉「结构在」——同样是纯 DOM 拼装，把 id 或 class 改掉只会让右列
+        **静默退回老样子**；展开行为靠真无头浏览器冒烟验。
+        """
+        html = self.client.get("/admin").data.decode("utf-8")
+        self.assertIn('id="sessCol"', html, "缺右列容器")
+        self.assertIn('class="sess-list" id="sessList"', html,
+                      "会话列表要挂在右列里（class 也别改，CSS 靠它选中）")
+        # 列表确实在右列**之后**——顺序反了就说明又被搬回中间那张卡片里了
+        self.assertLess(html.index('id="sessCol"'), html.index('id="sessList"'))
+        # 批量人设面板是三个输入框，320px 的右列铺不开，留在中间那列
+        self.assertIn('id="sessBulkPanel"', html)
+        self.assertNotIn('id="sessBulkPanel"',
+                         html[html.index('id="sessCol"'):],
+                         "批量面板不该塞进 320px 的右列")
+        for fn in ("buildTools", "toggleTools", "buildPromptEditor",
+                   "sessSubText", "sessPromptLabel"):
+            self.assertIn("function " + fn, html, "缺少函数：" + fn)
+
 
 if __name__ == "__main__":
     unittest.main()

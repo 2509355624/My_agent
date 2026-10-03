@@ -42,7 +42,7 @@
     z-index: 0;
   }
 
-  .wrap { position: relative; z-index: 1; max-width: 1080px; margin: 0 auto; padding: 24px 20px 48px; }
+  .wrap { position: relative; z-index: 1; max-width: 1680px; margin: 0 auto; padding: 24px 20px 48px; }
 
   header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; }
   h1 { font-size: 18px; font-weight: 500; }
@@ -51,12 +51,16 @@
   a.back { color: var(--text-dim); font-size: 13px; text-decoration: none; }
   a.back:hover { color: var(--accent); }
 
+  /* 三栏：左 = agent 列表（200），右 = 会话列表（320，sticky 不动），
+     中间 = 设置卡片们（占满剩余，flex:1）。会话多了终于不用拉很长。 */
   .layout { display: flex; gap: 20px; align-items: flex-start; }
 
   .list {
     width: 200px; flex: 0 0 200px;
     background: var(--bg-elev); border: 1px solid var(--border-soft);
     border-radius: var(--radius); padding: 8px;
+    position: sticky; top: 16px;
+    max-height: calc(100vh - 32px); overflow-y: auto;
   }
   .list-item { padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer; }
   .list-item:hover { background: var(--bg-input); }
@@ -67,6 +71,22 @@
   .list-item.active .tag { color: #a892ff; }
 
   .panel { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+
+  /* 右列：会话列表。sticky + max-height 跟左栏同步，34 条都装得下。
+     不再跟 .panel 一起被 main 卡片拖着往下拉。 */
+  .sessCol {
+    width: 320px; flex: 0 0 320px;
+    background: var(--bg-elev); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: 12px;
+    position: sticky; top: 16px;
+    max-height: calc(100vh - 32px); display: flex; flex-direction: column;
+    gap: 10px;
+  }
+  .sessCol h2 { font-size: 13px; font-weight: 500; color: var(--text-dim); }
+  .sessCol .hint { font-size: 11px; color: var(--text-mute); }
+  .sessCol .sess-list { flex: 1; overflow-y: auto; min-height: 0; }
+  /* 320px 装不下「全选/反选/清空/已选/批量人设/清除」一行，允许换行 */
+  .sessCol .sess-foot { margin-top: 0; flex-wrap: wrap; gap: 8px; }
 
   .meta { font-size: 12px; color: var(--text-mute); }
 
@@ -151,16 +171,55 @@
   #sessSearch { width: auto; flex: 1 1 auto; min-width: 120px;
                 padding: 6px 10px; font-size: 12px; }
 
+  /* 右栏用：紧凑行，只一行。点行 = 选中（高亮），「…」菜单展开设置。
+     弹出的「提示词」编辑器直接插在这一行下面，仍然贴会话列里、不绕去中间。
+     `promptEditor.key` 是绝对 key，不变比按行号定位就稳。 */
+  .sess-list .sess-row { flex-wrap: nowrap; padding: 6px 8px; gap: 8px;
+                          align-items: center; }
+  .sess-list .sess-row .info { flex: 1 1 auto; min-width: 0; }
+  .sess-list .sess-row .nm { font-size: 12px; line-height: 1.35;
+                              white-space: nowrap; overflow: hidden;
+                              text-overflow: ellipsis; }
+  /* 副行：**QQ 号留在这**——右列的用途就是「按号找到这条」，号必须看得见。
+     消息数 / 最后活动 是次要信息，号后面跟着，溢出就截断。 */
+  .sess-list .sess-row .sub { font-size: 10px; line-height: 1.3; margin-top: 1px;
+                              white-space: nowrap; overflow: hidden;
+                              text-overflow: ellipsis; }
+  .sess-list .sess-row > button { padding: 3px 8px; font-size: 11px; }
+  .sess-list .sess-row.active { outline: 1px solid var(--accent); outline-offset: -1px; }
+  .sess-list .sess-row:hover { background: rgba(124, 92, 255, 0.10); }
+  /* 「…」= 展开这条会话的全部开关（点行也能展开） */
+  .sess-list .sess-row .more-btn {
+    flex: 0 0 auto; padding: 2px 6px; font-size: 14px; line-height: 1;
+    background: transparent; border: 1px solid var(--border-soft); color: var(--text-dim);
+    cursor: pointer; border-radius: var(--radius-sm);
+  }
+  .sess-list .sess-row .more-btn:hover { color: var(--text); }
+  /* 点行 / 点「…」展开的开关区：插在这一行下面，仍然在会话列里。
+     原来是每行都铺开 8 个按钮（34 条 = 往下拖很久），现在默认收起。 */
+  .sess-tools {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    margin: 0 0 6px 0; padding: 8px;
+    background: var(--bg-input); border: 1px solid var(--border-soft);
+    border-radius: var(--radius-sm);
+  }
+  .sess-tools > button { padding: 3px 8px; font-size: 11px; white-space: nowrap; }
+  .sess-tools .hint { font-size: 11px; }
+
   .status { font-size: 12px; color: var(--text-mute); }
   .status.ok { color: var(--success); }
   .status.err { color: var(--error); }
 
   .hidden { display: none !important; }
 
-  @media (max-width: 720px) {
-    .layout { flex-direction: column; }
-    .list { width: 100%; flex: none; display: flex; gap: 6px; overflow-x: auto; }
+  @media (max-width: 1100px) {
+    /* 中右都靠下叠，左右不能同排（中间塞不下 1060 - 200 - 320 - 40 gap） */
+    .layout { flex-wrap: wrap; }
+    .list { width: 100%; flex: none; display: flex; gap: 6px; overflow-x: auto;
+            position: static; }
     .list-item { flex: none; }
+    .sessCol { width: 100%; flex: none; position: static;
+               max-height: 360px; }
     textarea { min-height: 240px; }
     .row { flex-direction: column; gap: 12px; }
   }
@@ -229,7 +288,8 @@
       <div class="card">
         <h2>会话管理</h2>
         <div class="hint">每个群、每个私聊各有一条独立的会话线，互不影响。删掉某一条 = 重置那条对话，
-          这个 agent 的人设、工具与技能白名单都不动。删除不可恢复。</div>
+          这个 agent 的人设、工具与技能白名单都不动。删除不可恢复。
+          <b>会话列表已挪到右侧那一列</b>（可搜 QQ 号 / 群名，点行展开该会话的开关）。</div>
         <div class="hint" style="font-weight:600;margin:8px 0 4px;">全部</div>
         <div class="sess-foot" style="margin-bottom: 8px;">
           <button class="toggle" id="imgGenAll">QQ 生图·开</button>
@@ -374,27 +434,8 @@
           <span class="hint">两次「要不要接话」的判断之间至少隔这么久——判断也是一次调用。
             0 = 不做这道闸（那就只剩概率门挡着）。</span>
         </div>
-        <div class="sess-foot" id="sessSearchBar">
-          <input id="sessSearch" type="text" autocomplete="off" spellcheck="false"
-                 placeholder="搜 QQ 号 / 群名 / 昵称（输 1041 就能定位 1041079621）">
-          <button class="ghost" id="sessSearchClear">清空</button>
-          <span class="hint" id="sessSearchCount"></span>
-        </div>
-        <div class="sess-foot" id="sessBulkBar"
-             style="display:none; margin:0 0 10px 0;">
-          <button class="ghost" id="selAll">全选</button>
-          <button class="ghost" id="selInvert">反选</button>
-          <button class="ghost" id="selNone">清空选择</button>
-          <span class="hint" id="selCount">已选 0 条</span>
-          <button class="ghost" id="bulkApply">批量应用人设…</button>
-          <button class="danger" id="bulkClear">批量清除人设</button>
-        </div>
+        <!-- 批量人设面板：三个输入框，放中间这一列才铺得开；右列只有 320px。 -->
         <div id="sessBulkPanel"></div>
-        <div class="sess" id="sessList"></div>
-        <div class="sess-foot">
-          <button class="ghost" id="sessReload">刷新</button>
-          <span class="status" id="sessStatus"></span>
-        </div>
       </div>
 
       <div class="card">
@@ -406,6 +447,29 @@
         <div class="sess" id="usageTable"></div>
       </div>
     </div>
+
+    <aside class="sessCol" id="sessCol">
+      <h2>会话列表 <span class="hint" id="sessSearchCount"></span></h2>
+      <div class="sess-foot" id="sessSearchBar">
+        <input id="sessSearch" type="text" autocomplete="off" spellcheck="false"
+               placeholder="搜 QQ 号 / 群名 / 昵称">
+        <button class="ghost" id="sessSearchClear">清空</button>
+      </div>
+      <div class="sess-foot" id="sessBulkBar"
+           style="display:none; margin:0;">
+        <button class="ghost" id="selAll">全选</button>
+        <button class="ghost" id="selInvert">反选</button>
+        <button class="ghost" id="selNone">清空</button>
+        <span class="hint" id="selCount">0</span>
+        <button class="ghost" id="bulkApply">批量人设…</button>
+        <button class="danger" id="bulkClear">清除</button>
+      </div>
+      <div class="sess-list" id="sessList"></div>
+      <div class="sess-foot" style="margin-top:0;">
+        <button class="ghost" id="sessReload">刷新</button>
+        <span class="status" id="sessStatus"></span>
+      </div>
+    </aside>
   </div>
 </div>
 
@@ -784,19 +848,8 @@ function renderSessions() {
   }
   vis.forEach((s) => {
     const row = document.createElement('div');
-    row.className = 'sess-row' + (s.kind === 'main' ? ' main' : '');
-
-    const info = document.createElement('div');
-    info.className = 'info';
-    const nm = document.createElement('div');
-    nm.className = 'nm';
-    nm.textContent = s.name || s.key;
-    const sub = document.createElement('div');
-    sub.className = 'sub';
-    sub.textContent = (s.messages || 0) + ' 条消息 · ' + fmtSize(s.size || 0)
-      + ' · 最后活动 ' + fmtAgo(s.mtime);
-    info.appendChild(nm);
-    info.appendChild(sub);
+    row.className = 'sess-row' + (s.kind === 'main' ? ' main' : '')
+      + (sessTools && sessTools.key === s.key ? ' active' : '');
 
     // 勾选框：群聊/私聊行才有（主会话是网页端，不参与 QQ 批量人设）。
     // 只改 selKeys 再同步，不整表重渲染——重渲染会把展开的编辑面板一起弄掉。
@@ -814,114 +867,188 @@ function renderSessions() {
       });
       row.appendChild(cb);
     }
+
+    const info = document.createElement('div');
+    info.className = 'info';
+    const nm = document.createElement('div');
+    nm.className = 'nm';
+    nm.textContent = s.name || s.key;
+    nm.title = nm.textContent;                 // 名字被截断了还能悬浮看全
+    const sub = document.createElement('div');
+    sub.className = 'sub';
+    sub.textContent = sessSubText(s);
+    sub.title = sub.textContent;
+    info.appendChild(nm);
+    info.appendChild(sub);
     row.appendChild(info);
 
-    // 群会话才有的「主动发言」开关：关掉 = 这个群不再主动接话（被 @ 不受影响）。
-    // 存 settings.json，热生效不用重启。
-    if (s.kind === 'group') {
-      const tg = document.createElement('button');
-      tg.className = 'toggle' + (s.interject ? ' on' : '');
-      tg.textContent = s.interject ? '主动发言·开' : '主动发言·关';
-      tg.addEventListener('click', () => toggleInterject(s, tg));
-      row.appendChild(tg);
-
-      // 「生图」开关：关掉 = 这个群点生图工具会被直接拒绝（总闸优先）。
-      const ig = document.createElement('button');
-      ig.className = 'toggle' + (s.image_gen ? ' on' : '');
-      ig.textContent = s.image_gen ? '生图·开' : '生图·关';
-      ig.addEventListener('click', () => toggleImageGen(s, ig));
-      row.appendChild(ig);
-
-      // 「NAI」开关：把群加入 / 移出群主的 NovelAI 白名单（全局总闸优先）。
-      // 群主要求只给特定群用，所以这是个「加白名单」语义，不在名单就不可用。
-      const ng = document.createElement('button');
-      ng.className = 'toggle' + (s.nai ? ' on' : '');
-      ng.textContent = s.nai ? 'NAI·开' : 'NAI·关';
-      ng.addEventListener('click', () => toggleNai(s, ng));
-      row.appendChild(ng);
-
-      // 「审核」开关：这个群的生图发出去之前要不要过 NSFW 闸门。
-      addAuditButton(s, row);
-
-      // 「格式」按钮：这个群的图发 jpg 还是 png；没单独设过就跟全局。
-      addImageFmtButton(s, row);
-
-      // 「频率」按钮：这个群主动发言的间隔秒数；单群覆盖，跟全局可不同。
-      const cf = document.createElement('button');
-      cf.className = 'ghost';
-      cf.textContent = s.cooldown_override != null
-        ? '频率:' + s.cooldown_override + 's' : '频率·跟全局';
-      cf.addEventListener('click', () => editCooldown(s, cf));
-      row.appendChild(cf);
-
-      // 「概率」按钮：这个群收到消息后去问模型的概率；单群覆盖。
-      const chb = document.createElement('button');
-      chb.className = 'ghost';
-      chb.textContent = s.chance_override != null
-        ? '概率:' + s.chance_override + '%' : '概率·跟全局';
-      chb.addEventListener('click', () => editChance(s, chb));
-      row.appendChild(chb);
-
-      // 「判断间隔」按钮：两次判断之间的最小秒数；单群覆盖。
-      const gb = document.createElement('button');
-      gb.className = 'ghost';
-      gb.textContent = s.gap_override != null
-        ? '判断:' + s.gap_override + 's' : '判断·跟全局';
-      gb.addEventListener('click', () => editGap(s, gb));
-      row.appendChild(gb);
-    }
-
-    // 「提示词」按钮：给这个群/私聊单独自定义人设（会话专属提示词）。
+    // 「改人设」按钮：点一下就在这一行下面展开编辑器（用户点右列主要就是干这个）。
+    // 按钮文字顺带标出这条现在有没有设过人设。
     if (s.kind === 'group' || s.kind === 'private') {
-      // 私聊行没有上面那堆群开关，NAI / 格式按钮在这里补上（群行已在上面渲染过）。
-      if (s.kind === 'private') {
-        // 「NAI」开关：把 QQ 加入 / 移出 NAI 私聊白名单（全局总闸优先）。
-        const ng = document.createElement('button');
-        ng.className = 'toggle' + (s.nai ? ' on' : '');
-        ng.textContent = s.nai ? 'NAI·开' : 'NAI·关';
-        ng.addEventListener('click', () => toggleNai(s, ng));
-        row.appendChild(ng);
-        addAuditButton(s, row);
-        addImageFmtButton(s, row);
-        // 「今日 3/10」：这个人的私聊生图额度用量（只读；改额度在上面的私聊区）。
-        // 用满时标红——用户来问「怎么画不了了」时，一眼就能看出是这个原因。
-        const q = s.image_quota;
-        if (q) {
-          const badge = document.createElement('span');
-          badge.className = 'hint';
-          badge.style.marginLeft = '6px';
-          if (q.limit <= 0) {
-            badge.textContent = '生图不限量';
-          } else if (q.whitelisted) {
-            badge.textContent = '生图免额（今日已 ' + q.used + '）';
-          } else {
-            badge.textContent = '今日 ' + q.used + '/' + q.limit;
-            if (q.used >= q.limit) badge.style.color = 'var(--danger, #e24b4a)';
-          }
-          row.appendChild(badge);
-        }
-      }
       const pb = document.createElement('button');
       pb.className = 'ghost';
-      pb.textContent = (sessSystems[s.key] ? '提示词·人设'
-                        : sessPrompts[s.key] ? '提示词·自定义'
-                        : sessAgents[s.key] ? '提示词·借用' : '提示词');
-      pb.addEventListener('click', () => togglePromptEditor(s, row));
+      pb.textContent = sessPromptLabel(s);
+      pb.title = '给这条会话单独设人设 / 附加词 / 借用别的助手';
+      pb.addEventListener('click', (e) => {
+        e.stopPropagation();
+        togglePromptEditor(s);
+      });
       row.appendChild(pb);
     }
 
-    // 没有会话线的群（收到过消息但从没回过）没有聊天记录可删
-    if (s.session !== false) {
-      const del = document.createElement('button');
-      del.className = 'danger';
-      del.textContent = '删除';
-      del.addEventListener('click', () => removeSession(s, del));
-      row.appendChild(del);
-    }
+    // 「…」：展开这条会话的全部开关（主动发言 / 生图 / NAI / 审核 / 格式 /
+    // 频率 / 概率 / 判断 / 删除）。默认收起——铺开 8 个按钮 × 34 条 = 拖很久。
+    const more = document.createElement('button');
+    more.className = 'more-btn';
+    more.textContent = '…';
+    more.title = '展开这条会话的所有开关';
+    more.addEventListener('click', (e) => { e.stopPropagation(); toggleTools(s); });
+    row.appendChild(more);
+
+    // 点行 = 展开/收起开关区（勾选框和上面两个按钮各自处理，不冒泡到这里）
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('input,button')) return;
+      toggleTools(s);
+    });
 
     box.appendChild(row);
+
+    // 展开态跟着重渲染一起重建：每个开关回调都会调 renderSessions()，
+    // 不重建的话「点一下开关，面板就没了」。
+    let anchor = row;
+    if (sessTools && sessTools.key === s.key) {
+      anchor = buildTools(s);
+      box.insertBefore(anchor, row.nextSibling);
+    }
+    if (promptEditor && promptEditor.key === s.key) {
+      const w = buildPromptEditor(s);
+      promptEditor.wrap = w;
+      box.insertBefore(w, anchor.nextSibling);
+    }
   });
   renderSelBar();
+}
+
+// 副行：QQ 号 + 消息数 + 最后活动（+ 关掉的开关）。
+// **QQ 号必须留在这**——右列存在的意义就是「按号找到这条」。
+function sessSubText(s) {
+  const id = s.target_id != null ? String(s.target_id)
+           : (s.kind === 'main' ? '网页端' : s.key);
+  let t = id + ' · ' + (s.messages || 0) + ' 条 · ' + fmtAgo(s.mtime);
+  if (s.kind === 'group') {
+    if (!s.interject) t += ' · 不主动';
+    if (!s.image_gen) t += ' · 禁图';
+  }
+  return t;
+}
+
+function sessPromptLabel(s) {
+  return sessSystems[s.key] ? '人设·覆盖'
+       : sessAgents[s.key] ? '借用'
+       : sessPrompts[s.key] ? '附加词'
+       : '改人设';
+}
+
+let sessTools = null;   // {key}：哪条会话展开了开关区。只记 key，内容每次渲染重建。
+
+function toggleTools(s) {
+  if (sessTools && sessTools.key === s.key) sessTools = null;
+  else sessTools = { key: s.key };
+  renderSessions();
+}
+
+// 开关区：原来直接铺在行里，现在收进「…」里。
+function buildTools(s) {
+  const row = document.createElement('div');
+  row.className = 'sess-tools';
+
+  if (s.kind === 'group') {
+    // 「主动发言」开关：关掉 = 这个群不再主动接话（被 @ 不受影响）。
+    // 存 settings.json，热生效不用重启。
+    const tg = document.createElement('button');
+    tg.className = 'toggle' + (s.interject ? ' on' : '');
+    tg.textContent = s.interject ? '主动发言·开' : '主动发言·关';
+    tg.addEventListener('click', () => toggleInterject(s, tg));
+    row.appendChild(tg);
+
+    // 「生图」开关：关掉 = 这个群点生图工具会被直接拒绝（总闸优先）。
+    const ig = document.createElement('button');
+    ig.className = 'toggle' + (s.image_gen ? ' on' : '');
+    ig.textContent = s.image_gen ? '生图·开' : '生图·关';
+    ig.addEventListener('click', () => toggleImageGen(s, ig));
+    row.appendChild(ig);
+  }
+
+  // 「NAI」开关：把群 / QQ 加入或移出群主的 NovelAI 白名单（全局总闸优先）。
+  // 群主要求只给特定群用，所以这是个「加白名单」语义，不在名单就不可用。
+  if (s.kind === 'group' || s.kind === 'private') {
+    const ng = document.createElement('button');
+    ng.className = 'toggle' + (s.nai ? ' on' : '');
+    ng.textContent = s.nai ? 'NAI·开' : 'NAI·关';
+    ng.addEventListener('click', () => toggleNai(s, ng));
+    row.appendChild(ng);
+
+    // 「审核」开关：这条会话的生图发出去之前要不要过 NSFW 闸门。
+    addAuditButton(s, row);
+
+    // 「格式」按钮：这条的图发 jpg 还是 png；没单独设过就跟全局。
+    addImageFmtButton(s, row);
+
+    if (s.kind === 'private') {
+      // 「今日 3/10」：这个人的私聊生图额度用量（只读；改额度在上面的私聊区）。
+      // 用满时标红——用户来问「怎么画不了了」时，一眼就能看出是这个原因。
+      const q = s.image_quota;
+      if (q) {
+        const badge = document.createElement('span');
+        badge.className = 'hint';
+        if (q.limit <= 0) {
+          badge.textContent = '生图不限量';
+        } else if (q.whitelisted) {
+          badge.textContent = '生图免额（今日已 ' + q.used + '）';
+        } else {
+          badge.textContent = '今日 ' + q.used + '/' + q.limit;
+          if (q.used >= q.limit) badge.style.color = 'var(--danger, #e24b4a)';
+        }
+        row.appendChild(badge);
+      }
+    }
+  }
+
+  if (s.kind === 'group') {
+    // 「频率」按钮：这个群主动发言的间隔秒数；单群覆盖，跟全局可不同。
+    const cf = document.createElement('button');
+    cf.className = 'ghost';
+    cf.textContent = s.cooldown_override != null
+      ? '频率:' + s.cooldown_override + 's' : '频率·跟全局';
+    cf.addEventListener('click', () => editCooldown(s, cf));
+    row.appendChild(cf);
+
+    // 「概率」按钮：这个群收到消息后去问模型的概率；单群覆盖。
+    const chb = document.createElement('button');
+    chb.className = 'ghost';
+    chb.textContent = s.chance_override != null
+      ? '概率:' + s.chance_override + '%' : '概率·跟全局';
+    chb.addEventListener('click', () => editChance(s, chb));
+    row.appendChild(chb);
+
+    // 「判断间隔」按钮：两次判断之间的最小秒数；单群覆盖。
+    const gb = document.createElement('button');
+    gb.className = 'ghost';
+    gb.textContent = s.gap_override != null
+      ? '判断:' + s.gap_override + 's' : '判断·跟全局';
+    gb.addEventListener('click', () => editGap(s, gb));
+    row.appendChild(gb);
+  }
+
+  // 没有会话线的群（收到过消息但从没回过）没有聊天记录可删
+  if (s.session !== false) {
+    const del = document.createElement('button');
+    del.className = 'danger';
+    del.textContent = '删除';
+    del.addEventListener('click', () => removeSession(s, del));
+    row.appendChild(del);
+  }
+  return row;
 }
 
 // ─── 批量应用人设（勾选多个群/私聊 → 一次改完）─────────
@@ -1208,9 +1335,10 @@ function closePromptEditor() {
   if (promptEditor) { promptEditor.wrap.remove(); promptEditor = null; }
 }
 
-function togglePromptEditor(s, row) {
-  if (promptEditor && promptEditor.key === s.key) { closePromptEditor(); return; }
-  closePromptEditor();
+// 编辑器本体：**只造不插** —— 插的位置由 renderSessions() 按 promptEditor.key
+// 决定（挂在那一行下面）。这样每个开关回调触发重渲染之后编辑器还在原处，
+// 不会被整表重建吞掉。
+function buildPromptEditor(s) {
   const wrap = document.createElement('div');
   wrap.style.cssText = 'margin:8px 0 4px 0; padding:8px; border:1px solid var(--line, #333); border-radius:6px;';
   // 人设覆盖：只顶 prompt.md 那一层，工具协议 / 工具列表 / Skill 目录 /
@@ -1235,6 +1363,7 @@ function togglePromptEditor(s, row) {
   ta.style.cssText = 'width:100%; min-height:90px; box-sizing:border-box;';
   ta.placeholder = '留空 = 用默认人设。\n写这个群/私聊专属的提示词，会拼在人设后面，如：\n「在这个群里你说话更毒舌，爱用网络梗，讨论话题偏技术」';
   ta.value = sessPrompts[s.key] || '';
+  ta.dataset.role = 'extra';   // 展开后把光标落在这里（这是最常填的一项）
   // 「借用助手」：整份换成某个 agent 的完整系统提示词（换人干活）
   const agentRow = document.createElement('div');
   agentRow.style.cssText = 'margin-top:6px; display:flex; gap:8px; align-items:center;';
@@ -1294,9 +1423,24 @@ function togglePromptEditor(s, row) {
   wrap.appendChild(sysLabel); wrap.appendChild(sysTa);
   wrap.appendChild(taLabel); wrap.appendChild(ta);
   wrap.appendChild(agentRow); wrap.appendChild(bar);
-  promptEditor = { key: s.key, wrap };
-  row.parentNode.insertBefore(wrap, row.nextSibling);
-  ta.focus();
+  return wrap;
+}
+
+function togglePromptEditor(s) {
+  if (promptEditor && promptEditor.key === s.key) {
+    closePromptEditor();
+    renderSessions();
+    return;
+  }
+  closePromptEditor();
+  promptEditor = { key: s.key, wrap: null };
+  renderSessions();          // 编辑器在 renderSessions 里按 key 挂到那一行下面
+  const w = promptEditor && promptEditor.wrap;
+  if (w) {
+    // 落在「会话附加词」上（人设覆盖是第二常用的，想填的人自己往上点）
+    const ta = w.querySelector('[data-role=extra]');
+    if (ta) { ta.scrollIntoView({ block: 'nearest' }); ta.focus(); }
+  }
 }
 
 async function toggleInterject(s, btn) {
