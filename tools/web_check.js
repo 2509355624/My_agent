@@ -26,7 +26,7 @@ const D = 60000;
 function mkSession(o) {
   return Object.assign({
     messages: 3, mtime: NOW, session: true,
-    interject: true, image_gen: true, nai: false,
+    interject: true, at_only: false, image_gen: true, nai: false,
     image_audit: false, image_send_format: null,
     cooldown_override: null, chance_override: null, gap_override: null,
   }, o);
@@ -247,6 +247,44 @@ const FULL = [
         && JSON.stringify((cbody.keys || []).slice().sort())
            === JSON.stringify(['group_111', 'group_222']),
         JSON.stringify(cbody));
+
+  // ── 「只认@」开关：逐群加严，只有真 @ 才回 ──────────────
+  // 展开第一条群行（group_111）的开关区。列表顺序 = mtime 倒序，第一条就是它。
+  Array.from($('sessList').querySelectorAll('.more-btn'))[0].click();
+  const toolBtns = () => Array.from(
+    $('sessList').querySelectorAll('.sess-tools button'));
+  const byText = (prefix) => toolBtns()
+    .find((b) => b.textContent.indexOf(prefix) === 0);
+  check('群行开关区里有「只认@·关」，且与「主动发言」并列',
+        byText('只认@') && byText('只认@').textContent === '只认@·关'
+        && !!byText('主动发言'),
+        toolBtns().map((b) => b.textContent).join(' | '));
+  calls.length = 0;
+  byText('只认@').click();
+  await sleep(60);
+  const putAt = calls.filter((c) => c.url.indexOf('/at_only/') >= 0);
+  check('点它发 PUT /at_only/111，body enabled=true',
+        putAt.length === 1 && putAt[0].url.indexOf('/at_only/111') >= 0
+        && JSON.parse(putAt[0].body).enabled === true,
+        putAt.length ? putAt[0].url + ' ' + putAt[0].body : 'no call');
+  check('按钮翻成「只认@·开」', byText('只认@').textContent === '只认@·开',
+        byText('只认@').textContent);
+  check('副行出现「只认@」标记',
+        /· 只认@/.test($('sessList').querySelectorAll('.sess-row .sub')[0]
+          .textContent),
+        $('sessList').querySelectorAll('.sess-row .sub')[0].textContent);
+  // 关掉 → 副行标记跟着消失（别只测开的方向）
+  calls.length = 0;
+  byText('只认@').click();
+  await sleep(60);
+  const offAt = calls.filter((c) => c.url.indexOf('/at_only/') >= 0);
+  check('再点一次发 enabled=false',
+        offAt.length === 1 && JSON.parse(offAt[0].body).enabled === false,
+        offAt.length ? offAt[0].body : 'no call');
+  check('副行标记消失',
+        !/· 只认@/.test($('sessList').querySelectorAll('.sess-row .sub')[0]
+          .textContent),
+        $('sessList').querySelectorAll('.sess-row .sub')[0].textContent);
   dom.window.close();
 
   // ── 场景二：一条群都没有 ─────────────────────────────

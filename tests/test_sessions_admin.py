@@ -339,6 +339,60 @@ class InterjectToggleApiTest(SessionsTestBase):
         self.assertEqual(resp.status_code, 200)
 
 
+class AtOnlyApiTest(SessionsTestBase):
+    """群聊「只认 @」开关：管理页切换 → settings.json → 热生效。
+
+    与 InterjectToggleApiTest 正交：那条管「能不能主动开口」，这条管「叫它
+    的时候要不要 @」。两个都开 = 只有 @ 才有反应。
+    """
+
+    def test_sessions_carry_at_only_default_off(self):
+        self.write_session("qq", key="group_111")
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertFalse(d["sessions"][0]["at_only"])
+
+    def test_put_on_persists_and_reflects(self):
+        self.write_session("qq", key="group_111")
+        resp = self.client.put("/api/agent/qq/at_only/111",
+                               json={"enabled": True})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(agents.load_settings("qq")["at_only_groups"], ["111"])
+        self.assertEqual(agents.at_only_groups("qq"), {"111"})
+        d = self.client.get("/api/agent/qq/sessions").get_json()
+        self.assertTrue(d["sessions"][0]["at_only"])
+
+    def test_put_off_removes_from_list(self):
+        agents.save_settings("qq", {"at_only_groups": ["111"]})
+        resp = self.client.put("/api/agent/qq/at_only/111",
+                               json={"enabled": False})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(agents.load_settings("qq")["at_only_groups"], [])
+
+    def test_put_keeps_every_other_setting(self):
+        """settings.json 里还堆着工具白名单、会话人设、NAI 名单——整体覆盖会
+        把它们冲光，所以这条写操作必须 read-modify-write。"""
+        agents.save_settings("qq", {"interject_muted": ["222"],
+                                    "image_gen": True,
+                                    "nai_groups": ["333"]})
+        self.client.put("/api/agent/qq/at_only/111", json={"enabled": True})
+        s = agents.load_settings("qq")
+        self.assertEqual(s["at_only_groups"], ["111"])
+        self.assertEqual(s["interject_muted"], ["222"])
+        self.assertIs(s["image_gen"], True)
+        self.assertEqual(s["nai_groups"], ["333"])
+
+    def test_put_requires_enabled_bool(self):
+        for bad in ({}, {"enabled": "yes"}, {"enabled": 1}):
+            resp = self.client.put("/api/agent/qq/at_only/111", json=bad)
+            self.assertEqual(resp.status_code, 400, bad)
+
+    def test_put_remote_blocked_by_default(self):
+        resp = self.client.put("/api/agent/qq/at_only/111",
+                               json={"enabled": True},
+                               environ_base={"REMOTE_ADDR": "8.8.8.8"})
+        self.assertEqual(resp.status_code, 403)
+
+
 class CooldownApiTest(SessionsTestBase):
     """主动发言频率：全局秒数 + 单群覆盖，settings.json 层热生效。"""
 

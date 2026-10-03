@@ -138,6 +138,20 @@ def image_gen_allowed(agent_id, target, target_id):
     return True, ""
 
 
+def at_only_groups(agent_id):
+    """「只认 @」的群名单（settings.json 的 at_only_groups）。
+
+    掐掉的是**免 @ 的关键词**那条路：名单里的群，`QQ_GROUP_KEYWORDS` 那套呼叫词
+    一律不认，只有真 @ 到才回。全局 `QQ_GROUP_AT_ONLY` 管的是「所有群要不要走
+    全量模式」，这里给单个群**加严**——某个群嫌它话多，要求必须点名。
+
+    与 `interject_muted` 是两件事，别混：那条管「能不能主动开口」，这条管
+    「叫它的时候要不要 @」。某群两个都开 = 只有 @ 才有反应。
+    """
+    s = load_settings(agent_id)
+    return set(str(x) for x in (s.get("at_only_groups") or []))
+
+
 # ─── 私聊每日生图额度 ────────────────────────────────
 
 # 默认每人每天 10 张（2026-09-30 用户拍板：「私聊除非我给白名单，不然单人每天

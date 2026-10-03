@@ -668,6 +668,7 @@ def get_agent_sessions(agent_id):
     # 每个群顺手带上「主动发言」「生图」两个开关的当前值，管理页渲染用
     settings = agent_store.load_settings(aid)
     muted = set(settings.get("interject_muted") or [])
+    at_only = set(str(x) for x in (settings.get("at_only_groups") or []))
     img_muted = set(settings.get("image_gen_muted") or [])
     nai_groups = set(str(x) for x in (settings.get("nai_groups") or []))
     nai_privates = set(str(x) for x in (settings.get("nai_private") or []))
@@ -679,6 +680,7 @@ def get_agent_sessions(agent_id):
     for item in items:
         if item["kind"] == "group":
             item["interject"] = item["target_id"] not in muted
+            item["at_only"] = str(item["target_id"]) in at_only
             item["image_gen"] = item["target_id"] not in img_muted
             item["nai"] = item["target_id"] in nai_groups
             ov = overrides.get(str(item["target_id"]))
@@ -1482,6 +1484,40 @@ def set_agent_interject(agent_id, group_id):
         return jsonify({"error": "写入 settings.json 失败"}), 500
     return jsonify({"ok": True, "agent": aid, "group": str(group_id),
                     "interject": body["enabled"]})
+
+
+@app.route("/api/agent/<agent_id>/at_only/<group_id>", methods=["PUT"])
+def set_group_at_only(agent_id, group_id):
+    """切某个群的「只认 @」开关。热生效，不用重启。
+
+    开了之后这个群**不再认 QQ_GROUP_KEYWORDS 那套免 @ 呼叫词**，只有真 @ 到
+    才回。存 settings.json 的 at_only_groups（「加严」的语义），与
+    interject_muted 的「关掉主动发言」正交——某群两个都开 = 只有 @ 才有反应。
+
+    写之前必须 read-modify-write：settings.json 里还有 tools/skills 白名单、
+    会话人设、NAI 名单等一大堆键，整体覆盖会把它们冲掉。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if "enabled" not in body or not isinstance(body["enabled"], bool):
+        return jsonify({"error": "需要布尔字段 enabled"}), 400
+
+    settings = agent_store.load_settings(aid)
+    only = set(str(x) for x in (settings.get("at_only_groups") or []))
+    if body["enabled"]:
+        only.add(str(group_id))
+    else:
+        only.discard(str(group_id))
+    settings["at_only_groups"] = sorted(only)
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "group": str(group_id),
+                    "at_only": body["enabled"]})
 
 
 def _cooldown_from_body(body):

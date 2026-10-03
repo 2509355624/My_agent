@@ -641,6 +641,83 @@ class ShouldReplyTest(unittest.TestCase):
         self.assertFalse(ok)
 
 
+class AtOnlyGroupTest(unittest.TestCase):
+    """「只认 @」的群：关键词那条路被掐掉，只有真 @ 才回。
+
+    2026-10-04 用户要求：ai绘图交流群嫌它话多，必须点名才回。与
+    interject_muted（关主动发言）正交——那条管「能不能主动开口」，这条管
+    「叫它的时候要不要 @」，两个都开 = 只有 @ 才有反应。
+    """
+
+    def setUp(self):
+        for name, value in (
+            ("QQ_PRIVATE_ENABLE", True),
+            ("QQ_GROUP_AT_ONLY", True),
+            ("QQ_GROUP_KEYWORDS", ["小助手"]),
+            ("QQ_WHITELIST_GROUPS", []),
+            ("QQ_WHITELIST_USERS", []),
+            ("QQ_BLACKLIST_USERS", []),
+        ):
+            p = mock.patch.object(qq_bot, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _only(self, groups):
+        p = mock.patch.object(qq_bot, "_at_only_groups", lambda: set(groups))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _reply(self, target_id="9", text="小助手在吗", at_me=False):
+        return qq_bot._should_reply({"user_id": "1"}, "group", target_id,
+                                    text, at_me)
+
+    def test_keyword_works_without_the_gate(self):
+        ok, reason = self._reply()
+        self.assertTrue(ok)
+        self.assertIn("关键词", reason)
+
+    def test_keyword_ignored_in_an_at_only_group(self):
+        self._only(["9"])
+        ok, reason = self._reply()
+        self.assertFalse(ok)
+        self.assertIn("未 @", reason)
+
+    def test_at_still_wakes_an_at_only_group(self):
+        """加严只掐关键词，@ 这条主路一步都不能少。"""
+        self._only(["9"])
+        ok, reason = self._reply(at_me=True)
+        self.assertTrue(ok)
+        self.assertIn("被 @", reason)
+
+    def test_other_groups_keep_the_keyword(self):
+        self._only(["9"])
+        ok, reason = self._reply(target_id="8")
+        self.assertTrue(ok)
+        self.assertIn("关键词", reason)
+
+    def test_private_chats_are_not_affected(self):
+        """私聊没有 @ 的概念，名单对它无效。"""
+        self._only(["1"])
+        ok, _ = qq_bot._should_reply({"user_id": "1"}, "private", "1",
+                                     "小助手在吗", False)
+        self.assertTrue(ok)
+
+    def test_gate_reads_the_real_settings_file(self):
+        """_at_only_groups 真的去读 settings.json，不是只测被 patch 的替身。"""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        p = mock.patch.object(agents, "AGENTS_DIR", tmp.name)
+        p.start()
+        self.addCleanup(p.stop)
+        agents.clear_cache()
+        self.addCleanup(agents.clear_cache)
+        agents.save_settings("qq", {"at_only_groups": ["1041079621"]})
+        self.assertEqual(qq_bot._at_only_groups(), {"1041079621"})
+        ok, reason = self._reply(target_id="1041079621")
+        self.assertFalse(ok, "名单是从配置文件读出来的，关键词也不该放行")
+        self.assertIn("未 @", reason)
+
+
 class QuoteTriggerTest(unittest.TestCase):
     """只引用、不写字的消息也算「有内容」。
 

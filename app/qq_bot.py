@@ -512,6 +512,20 @@ def _private_gate(user_id):
     return True, ""
 
 
+def _at_only_groups():
+    """本 agent 设成「只认 @」的群（settings.json 的 at_only_groups）。
+
+    循环导入：`app.agents` 只在函数里取——跟本模块其它地方一个写法。
+    读盘失败（设置文件坏了）返回空集而不是抛错：它在每轮消息的热路径上，
+    宁可退回全局规则（关键词照旧生效），也不能让消息处理整个挂掉。
+    """
+    from app import agents as agent_store
+    try:
+        return agent_store.at_only_groups(QQ_AGENT_ID)
+    except Exception:
+        return set()
+
+
 def _should_reply(ev, target, target_id, text, at_me, has_image=False,
                   has_quote=False):
     """判定这条消息要不要回。返回 (bool, 原因)，原因只用于日志。
@@ -520,6 +534,9 @@ def _should_reply(ev, target, target_id, text, at_me, has_image=False,
     引用一条消息不写字（"这句怎么回"），都是常见用法，以前只看 text 会把
     它们整个丢掉。注意「有内容」判据是 `text or has_image or has_quote`
     ——这些也算内容，但**不 @ 的群里仍然不看**，触发规则没放宽。
+
+    触发顺序：黑名单 → 群白名单 → @ → 关键词 → 全量模式。被管理页设成
+    「只认 @」的群会跳过关键词那一档（见 _at_only_groups）。
     """
     user_id = str(ev.get("user_id", ""))
     has_content = bool(text) or bool(has_image) or bool(has_quote)
@@ -539,9 +556,11 @@ def _should_reply(ev, target, target_id, text, at_me, has_image=False,
 
     if at_me:
         return (has_content, "被 @")
-    for kw in QQ_GROUP_KEYWORDS:
-        if kw in text:
-            return True, "命中关键词 " + kw
+    # 「只认 @」的群（管理页可逐群开）：关键词这条路直接掐掉，只有真 @ 才回。
+    if group_id not in _at_only_groups():
+        for kw in QQ_GROUP_KEYWORDS:
+            if kw in text:
+                return True, "命中关键词 " + kw
     if not QQ_GROUP_AT_ONLY:
         return (has_content, "群全量模式")
     return False, REASON_NO_MENTION

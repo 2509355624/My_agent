@@ -612,18 +612,35 @@ class AgentAdminApiTest(unittest.TestCase):
     def test_admin_page_has_bulk_persona_controls(self):
         """批量应用人设的控件必须在页面上。
 
-        2026-10-03 用户提的需求：勾选账号/群聊，一键应用指定人设（一条条点太累）。
-        前端是纯 DOM 拼装、没有模板也没有构建步骤，删掉一个 id 只会让按钮**静默
-        消失**、没有任何报错——所以在这里把 id 和函数名钉住。
+        2026-10-04 改成**居中浮层**：作用范围（全部群聊 / 全部私聊 / 已勾选）
+        在浮层里选，会话列表顶部只留「批量人设…」「清除人设…」两个入口。原先
+        是列表顶上摆一排「全选 / 反选 / 全部群 / 全部私聊」，用户看不出在干
+        什么；面板又渲染在中间列，点右列的按钮它弹在屏幕外。
+
+        前端是纯 DOM 拼装、没有模板也没有构建步骤，删掉一个 id 只会让按钮
+        **静默消失**、没有任何报错——所以在这里把 id 和函数名钉住。行为（范围
+        算得对不对、发出去的 keys 对不对）由 tools/web_check.js 跑 jsdom 真验。
         """
         html = self.client.get("/admin").data.decode("utf-8")
-        for el in ("sessBulkBar", "selAll", "selInvert", "selNone", "selCount",
-                   "bulkApply", "bulkClear", "sessBulkPanel"):
+        for el in ("sessBulkBar", "bulkApply", "bulkClear", "selCount",
+                   "selNone", "bulkMask", "bulkModal"):
             self.assertIn('id="%s"' % el, html, "缺少批量人设控件：" + el)
-        for fn in ("selectableSessions", "syncCheckboxes", "renderSelBar",
-                   "openBulkPanel", "closeBulkPanel", "clearBulkPrompt"):
+        for fn in ("bulkRanges", "openBulkModal", "closeBulkModal",
+                   "renderSelBar", "sessionsOfKind", "syncCheckboxes"):
             self.assertIn("function " + fn, html, "缺少批量人设函数：" + fn)
         self.assertIn("session_prompt_bulk", html)
+
+    def test_admin_page_has_at_only_toggle(self):
+        """群聊「只认 @」开关必须在页面上。
+
+        2026-10-04 用户要求：某个群嫌它话多，必须点名才回。开关与「主动发言」
+        并列在群行的「…」里——同样是纯 DOM 拼装，删掉只会静默消失。
+        """
+        html = self.client.get("/admin").data.decode("utf-8")
+        self.assertIn("function toggleAtOnly", html, "缺「只认@」开关函数")
+        self.assertIn("/at_only/", html, "缺「只认@」开关的后端路径")
+        self.assertIn("只认@·开", html)
+        self.assertIn("只认@·关", html)
 
     def test_admin_page_has_session_search_controls(self):
         """按 QQ 号/群名搜会话的控件必须在页面上。
@@ -657,11 +674,14 @@ class AgentAdminApiTest(unittest.TestCase):
                       "会话列表要挂在右列里（class 也别改，CSS 靠它选中）")
         # 列表确实在右列**之后**——顺序反了就说明又被搬回中间那张卡片里了
         self.assertLess(html.index('id="sessCol"'), html.index('id="sessList"'))
-        # 批量人设面板是三个输入框，320px 的右列铺不开，留在中间那列
-        self.assertIn('id="sessBulkPanel"', html)
-        self.assertNotIn('id="sessBulkPanel"',
-                         html[html.index('id="sessCol"'):],
-                         "批量面板不该塞进 320px 的右列")
+        # 批量人设浮层必须在**右列之外**（挂在三列后面居中显示）。原先它塞在
+        # 中间列里，而按钮在右列——中间列内容特别长，点完按钮浮层出现在屏幕外。
+        start = html.index('id="sessCol"')
+        end = html.index('</aside>', start)
+        self.assertNotIn('id="bulkMask"', html[start:end],
+                         "批量人设浮层不该塞回右列里")
+        self.assertGreater(html.index('id="bulkMask"'), end,
+                           "浮层要挂在三列之后，才能居中显示")
         for fn in ("buildTools", "toggleTools", "buildPromptEditor",
                    "sessSubText", "sessPromptLabel"):
             self.assertIn("function " + fn, html, "缺少函数：" + fn)
