@@ -206,6 +206,149 @@ class SessionPromptApiTest(unittest.TestCase):
         s = agents.load_settings("qq")["session_prompts"]
         self.assertEqual(s, {"group_1": "A 群人设", "private_42": "私聊人设"})
 
+
+class SessionPromptBulkApiTest(unittest.TestCase):
+    """批量应用会话提示词（管理页勾选多个群/私聊，一键应用同一个人设）。
+
+    2026-10-03 用户提的需求：「可以勾选账号，或者群聊，然后一键应用我指定的
+    人设，先单个搞很累的」。语义当场拍板：**只写填了的字段，没填的一律不动**
+    —— 不是「留空 = 清除」（那会顺手清掉这些会话别处设的附加词/借用），
+    想清除走 clear=true 或单条接口。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = os.path.join(self.tmp.name, "agents")
+        os.makedirs(self.root, exist_ok=True)
+        p = mock.patch.object(agents, "AGENTS_DIR", self.root)
+        p.start()
+        self.addCleanup(p.stop)
+        # 造一个可借用的 agent（list_agents 是实时扫目录的）
+        d = os.path.join(self.root, "main")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "agent.json"), "w", encoding="utf-8") as f:
+            f.write("{}")
+        agents.clear_cache()
+        self.addCleanup(agents.clear_cache)
+        p = mock.patch.object(main, "ADMIN_ALLOW_REMOTE", True)
+        p.start()
+        self.addCleanup(p.stop)
+        self.client = main.app.test_client()
+
+    def url(self, path):
+        return "/api/agent/qq/" + path
+
+    def bulk(self, **body):
+        return self.client.put(self.url("session_prompt_bulk"), json=body)
+
+    # ─── 正常路径 ────────────────────────────────────
+
+    def test_applies_one_persona_to_many_sessions(self):
+        r = self.bulk(keys=["group_1", "group_2", "private_42"],
+                      system="你是只会说喵的猫娘。")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["applied"], 3)
+        s = agents.load_settings("qq")["session_system_prompts"]
+        self.assertEqual(sorted(s), ["group_1", "group_2", "private_42"])
+        self.assertEqual(s["group_2"], "你是只会说喵的猫娘。")
+
+    def test_untouched_fields_stay(self):
+        """只填 system → 已有的附加词/借用原样不动（用户拍板的语义）。"""
+        agents.save_settings("qq", {
+            "session_prompts": {"group_1": "已有的附加词"},
+            "session_prompt_agents": {"group_1": "main"},
+            "session_system_prompts": {"group_1": "旧人设"}})
+        r = self.bulk(keys=["group_1"], system="新人设")
+        self.assertEqual(r.status_code, 200)
+        s = agents.load_settings("qq")
+        self.assertEqual(s["session_system_prompts"]["group_1"], "新人设")
+        self.assertEqual(s["session_prompts"]["group_1"], "已有的附加词")
+        self.assertEqual(s["session_prompt_agents"]["group_1"], "main")
+
+    def test_three_fields_can_be_set_together(self):
+        r = self.bulk(keys=["group_1"], system="人设X", text="附加Y",
+                      agent="main")
+        self.assertEqual(r.status_code, 200)
+        s = agents.load_settings("qq")
+        self.assertEqual(s["session_system_prompts"]["group_1"], "人设X")
+        self.assertEqual(s["session_prompts"]["group_1"], "附加Y")
+        self.assertEqual(s["session_prompt_agents"]["group_1"], "main")
+
+    def test_clear_removes_all_three_and_drops_empty_keys(self):
+        agents.save_settings("qq", {
+            "session_prompts": {"group_1": "a", "group_2": "b"},
+            "session_prompt_agents": {"group_1": "main"},
+            "session_system_prompts": {"group_1": "c"}})
+        r = self.bulk(keys=["group_1", "group_2"], clear=True)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["cleared"], 2)
+        s = agents.load_settings("qq")
+        # 三项都空了 → 整个键删掉，settings.json 别留空壳
+        self.assertNotIn("session_system_prompts", s)
+        self.assertNotIn("session_prompt_agents", s)
+        self.assertNotIn("session_prompts", s)
+
+    def test_clear_leaves_other_sessions_alone(self):
+        agents.save_settings("qq", {"session_prompts": {"group_1": "a",
+                                                       "group_9": "留着"}})
+        self.bulk(keys=["group_1"], clear=True)
+        s = agents.load_settings("qq")["session_prompts"]
+        self.assertEqual(s, {"group_9": "留着"})
+
+    # ─── 入参校验 ────────────────────────────────────
+
+    def test_illegal_keys_are_skipped_not_fatal(self):
+        r = self.bulk(keys=["group_1", "../../etc/passwd", "a/b", ""],
+                      system="X")
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()
+        self.assertEqual(d["keys"], ["group_1"])
+        self.assertEqual(len(d["skipped"]), 3)
+        self.assertEqual(list(agents.load_settings("qq")
+                              ["session_system_prompts"]), ["group_1"])
+
+    def test_all_illegal_keys_is_400(self):
+        self.assertEqual(self.bulk(keys=["../x", "a/b"], system="X")
+                         .status_code, 400)
+
+    def test_duplicate_keys_are_deduped(self):
+        r = self.bulk(keys=["group_1", "group_1"], system="X")
+        self.assertEqual(r.get_json()["keys"], ["group_1"])
+        self.assertEqual(r.get_json()["applied"], 1)
+
+    def test_needs_keys(self):
+        self.assertEqual(self.bulk(system="X").status_code, 400)
+        self.assertEqual(self.bulk(keys=[], system="X").status_code, 400)
+        self.assertEqual(self.bulk(keys="group_1", system="X").status_code, 400)
+
+    def test_too_many_keys_is_400(self):
+        r = self.bulk(keys=["group_%d" % i for i in range(501)], system="X")
+        self.assertEqual(r.status_code, 400)
+
+    def test_needs_at_least_one_field(self):
+        self.assertEqual(self.bulk(keys=["group_1"]).status_code, 400)
+        # 只有空白也不算填了
+        self.assertEqual(self.bulk(keys=["group_1"], system="  ",
+                                   text="").status_code, 400)
+
+    def test_non_string_field_is_400(self):
+        self.assertEqual(self.bulk(keys=["group_1"], system=123).status_code,
+                         400)
+        self.assertEqual(self.bulk(keys=["group_1"], text=["x"]).status_code,
+                         400)
+
+    def test_borrow_must_exist(self):
+        r = self.bulk(keys=["group_1"], agent="查无此人")
+        self.assertEqual(r.status_code, 400)
+        self.assertNotIn("session_prompt_agents", agents.load_settings("qq"))
+
+    def test_borrow_self_is_rejected_not_silent(self):
+        """借自己 = 等于不借。必须报错，不能 200 却什么都不写（那最难查）。"""
+        r = self.bulk(keys=["group_1"], agent="qq")
+        self.assertEqual(r.status_code, 400)
+        self.assertNotIn("session_prompt_agents", agents.load_settings("qq"))
+
     # ── 借用 agent 接口 ──
 
     def _mk_agent(self, aid):

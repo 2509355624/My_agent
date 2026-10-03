@@ -596,6 +596,22 @@ class AgentAdminApiTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIn(b"Agent", resp.data)
 
+    def test_admin_page_has_bulk_persona_controls(self):
+        """批量应用人设的控件必须在页面上。
+
+        2026-10-03 用户提的需求：勾选账号/群聊，一键应用指定人设（一条条点太累）。
+        前端是纯 DOM 拼装、没有模板也没有构建步骤，删掉一个 id 只会让按钮**静默
+        消失**、没有任何报错——所以在这里把 id 和函数名钉住。
+        """
+        html = self.client.get("/admin").data.decode("utf-8")
+        for el in ("sessBulkBar", "selAll", "selInvert", "selNone", "selCount",
+                   "bulkApply", "bulkClear", "sessBulkPanel"):
+            self.assertIn('id="%s"' % el, html, "缺少批量人设控件：" + el)
+        for fn in ("selectableSessions", "syncCheckboxes", "renderSelBar",
+                   "openBulkPanel", "closeBulkPanel", "clearBulkPrompt"):
+            self.assertIn("function " + fn, html, "缺少批量人设函数：" + fn)
+        self.assertIn("session_prompt_bulk", html)
+
 
 if __name__ == "__main__":
     unittest.main()

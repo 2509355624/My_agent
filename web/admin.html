@@ -371,6 +371,16 @@
           <span class="hint">两次「要不要接话」的判断之间至少隔这么久——判断也是一次调用。
             0 = 不做这道闸（那就只剩概率门挡着）。</span>
         </div>
+        <div class="sess-foot" id="sessBulkBar"
+             style="display:none; margin:0 0 10px 0;">
+          <button class="ghost" id="selAll">全选</button>
+          <button class="ghost" id="selInvert">反选</button>
+          <button class="ghost" id="selNone">清空选择</button>
+          <span class="hint" id="selCount">已选 0 条</span>
+          <button class="ghost" id="bulkApply">批量应用人设…</button>
+          <button class="danger" id="bulkClear">批量清除人设</button>
+        </div>
+        <div id="sessBulkPanel"></div>
         <div class="sess" id="sessList"></div>
         <div class="sess-foot">
           <button class="ghost" id="sessReload">刷新</button>
@@ -748,6 +758,7 @@ function renderSessions() {
     empty.className = 'sess-empty';
     empty.textContent = '还没有任何会话记录。';
     box.appendChild(empty);
+    renderSelBar();
     return;
   }
   sessions.forEach((s) => {
@@ -765,6 +776,23 @@ function renderSessions() {
       + ' · 最后活动 ' + fmtAgo(s.mtime);
     info.appendChild(nm);
     info.appendChild(sub);
+
+    // 勾选框：群聊/私聊行才有（主会话是网页端，不参与 QQ 批量人设）。
+    // 只改 selKeys 再同步，不整表重渲染——重渲染会把展开的编辑面板一起弄掉。
+    if (s.kind === 'group' || s.kind === 'private') {
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.dataset.key = s.key;
+      cb.checked = selKeys.has(s.key);
+      cb.title = '勾选后可用上面的「批量应用人设」一次改多条';
+      cb.style.cssText = 'flex:0 0 auto; width:15px; height:15px; '
+        + 'margin:0; cursor:pointer;';
+      cb.addEventListener('change', () => {
+        if (cb.checked) selKeys.add(s.key); else selKeys.delete(s.key);
+        renderSelBar();
+      });
+      row.appendChild(cb);
+    }
     row.appendChild(info);
 
     // 群会话才有的「主动发言」开关：关掉 = 这个群不再主动接话（被 @ 不受影响）。
@@ -872,12 +900,199 @@ function renderSessions() {
 
     box.appendChild(row);
   });
+  renderSelBar();
+}
+
+// ─── 批量应用人设（勾选多个群/私聊 → 一次改完）─────────
+// 需求（2026-10-03 用户提）：一条条点太累。语义当场拍板：
+// **只写填了的字段，没填的一律不动**（不是「留空=清除」，那会顺手清掉
+// 这些会话别处设的附加词/借用）；想清除走「批量清除人设」或单条面板。
+
+function selectableSessions() {
+  return sessions.filter(s => s.kind === 'group' || s.kind === 'private');
+}
+
+function syncCheckboxes() {
+  $('sessList').querySelectorAll('input[type=checkbox]').forEach((cb) => {
+    cb.checked = selKeys.has(cb.dataset.key);
+  });
+}
+
+function renderSelBar() {
+  const bar = $('sessBulkBar');
+  if (!selectableSessions().length) { bar.style.display = 'none'; return; }
+  bar.style.display = 'flex';
+  const n = selKeys.size;
+  $('selCount').textContent = '已选 ' + n + ' 条';
+  $('bulkApply').disabled = !n;
+  $('bulkClear').disabled = !n;
+}
+
+function closeBulkPanel() {
+  $('sessBulkPanel').textContent = '';
+  bulkOpen = false;
+}
+
+function bulkHint(text, cls) {
+  const el = document.createElement('span');
+  el.className = 'hint';
+  if (cls === 'err') el.style.color = 'var(--danger, #e24b4a)';
+  el.textContent = text;
+  return el;
+}
+
+function openBulkPanel() {
+  if (bulkOpen) { closeBulkPanel(); return; }
+  const keys = Array.from(selKeys);
+  if (!keys.length) return;
+  const box = $('sessBulkPanel');
+  box.textContent = '';
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'margin:0 0 10px 0; padding:10px; '
+    + 'border:1px solid var(--line, #333); border-radius:6px;';
+
+  const title = document.createElement('div');
+  title.className = 'hint';
+  title.style.cssText = 'margin-bottom:8px;';
+  title.textContent = '批量应用人设 —— 将写入已选的 ' + keys.length + ' 条会话。'
+    + '留空 = 该项不动；三项都留空就别点。';
+
+  // ① 人设覆盖：顶替 prompt.md 的人设段
+  const sysLabel = bulkHint('人设覆盖（顶替 prompt.md 的人设段，不是叠加）');
+  sysLabel.style.cssText = 'display:block; margin:6px 0 4px 0;';
+  const sysTa = document.createElement('textarea');
+  sysTa.style.cssText = 'width:100%; min-height:120px; box-sizing:border-box; '
+    + 'font-family:ui-monospace,Consolas,monospace; font-size:12px;';
+  sysTa.placeholder = '留空 = 这些会话的人设覆盖保持原样（没有就继续用 prompt.md）。\n'
+    + '填了 = 用它顶替 prompt.md 那一层（角色人设），其余照常自动拼装：\n'
+    + '工具调用协议、工具列表、安全规则、Skill 目录、环境说明、表情包/记忆、生图方法。\n\n'
+    + '⚠️ 所以这里只写「角色」——别抄工具目录，抄了会跟自动拼的那份重复。';
+
+  // ② 会话附加词：拼在人设后面
+  const taLabel = bulkHint('会话附加词（拼在人设后面）');
+  taLabel.style.cssText = 'display:block; margin:10px 0 4px 0;';
+  const ta = document.createElement('textarea');
+  ta.style.cssText = 'width:100%; min-height:70px; box-sizing:border-box;';
+  ta.placeholder = '留空 = 不动。填了 = 这 N 条会话都拼上同一段附加词，如：\n'
+    + '「说话更毒舌，爱用网络梗，讨论偏技术」';
+
+  // ③ 借用助手
+  const agentRow = document.createElement('div');
+  agentRow.style.cssText = 'margin-top:10px; display:flex; gap:8px; '
+    + 'align-items:center; flex-wrap:wrap;';
+  const agentLabel = bulkHint('借用助手');
+  const agentSel = document.createElement('select');
+  agentSel.style.cssText = 'font-size:12px; padding:4px 6px;';
+  const optKeep = document.createElement('option');
+  optKeep.value = ''; optKeep.textContent = '— 不改动 —';
+  agentSel.appendChild(optKeep);
+  agents.filter(a => a.id !== cur).forEach((a) => {
+    const o = document.createElement('option');
+    o.value = a.id;
+    o.textContent = a.name + '（' + a.id + '）· 完整系统提示词';
+    agentSel.appendChild(o);
+  });
+  agentRow.appendChild(agentLabel);
+  agentRow.appendChild(agentSel);
+  agentRow.appendChild(bulkHint('选了 = 这 N 条都改用 TA 的完整系统提示词'
+    + '（人设/工具目录全换）；人设覆盖优先于它'));
+
+  const bar = document.createElement('div');
+  bar.style.cssText = 'margin-top:10px; display:flex; gap:8px; '
+    + 'align-items:center; flex-wrap:wrap;';
+  const apply = document.createElement('button');
+  apply.className = 'ghost';
+  apply.textContent = '应用到已选 ' + keys.length + ' 条';
+  const close = document.createElement('button');
+  close.className = 'ghost';
+  close.textContent = '收起';
+  const st = document.createElement('span');
+  st.className = 'status';
+  bar.appendChild(apply); bar.appendChild(close); bar.appendChild(st);
+  bar.appendChild(bulkHint('热生效：下一条消息就是新人设，不用重启。'
+    + '每条被改的会话会各付一次前缀缓存作废（≈15K token），一次改到位最省'));
+
+  close.addEventListener('click', closeBulkPanel);
+  apply.addEventListener('click', async () => {
+    const body = { keys: keys };
+    if (sysTa.value.trim()) body.system = sysTa.value;
+    if (ta.value.trim()) body.text = ta.value;
+    if (agentSel.value) body.agent = agentSel.value;
+    if (!body.system && !body.text && !body.agent) {
+      st.textContent = '三项都留空 = 什么都不做；想清除请用「批量清除人设」';
+      st.className = 'status err';
+      return;
+    }
+    apply.disabled = true;
+    try {
+      const d = await api('/api/agent/' + encodeURIComponent(cur)
+        + '/session_prompt_bulk',
+        { method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body) });
+      // 本地状态跟着改，免得再拉一次 sessions
+      keys.forEach((k) => {
+        if (body.system) sessSystems[k] = body.system;
+        if (body.text) sessPrompts[k] = body.text;
+        if (body.agent) sessAgents[k] = body.agent;
+      });
+      renderSessions();
+      closeBulkPanel();
+      sessStatus('已对 ' + (d.applied || 0) + ' 条会话应用，立即生效'
+        + ((d.skipped || []).length ? '（跳过 ' + d.skipped.length
+            + ' 个非法 key）' : ''), 'ok');
+    } catch (e) {
+      st.textContent = e.message;
+      st.className = 'status err';
+      apply.disabled = false;
+    }
+  });
+
+  wrap.appendChild(title);
+  wrap.appendChild(sysLabel); wrap.appendChild(sysTa);
+  wrap.appendChild(taLabel); wrap.appendChild(ta);
+  wrap.appendChild(agentRow);
+  wrap.appendChild(bar);
+  box.appendChild(wrap);
+  bulkOpen = true;
+}
+
+async function clearBulkPrompt() {
+  const keys = Array.from(selKeys);
+  if (!keys.length) return;
+  const names = sessions.filter(s => selKeys.has(s.key))
+    .map(s => s.name || s.key);
+  if (!confirm('清除这 ' + keys.length + ' 条会话的全部提示词配置？\n\n'
+      + names.slice(0, 12).join('、') + (names.length > 12 ? ' 等' : '')
+      + '\n\n三项（人设覆盖 / 会话附加词 / 借用助手）都会清掉，'
+      + '它们回到 agent 自己的 prompt.md。只清单项请用每条后面的「提示词」按钮。')) {
+    return;
+  }
+  try {
+    const d = await api('/api/agent/' + encodeURIComponent(cur)
+      + '/session_prompt_bulk',
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys: keys, clear: true }) });
+    keys.forEach((k) => {
+      delete sessSystems[k]; delete sessPrompts[k]; delete sessAgents[k];
+    });
+    renderSessions();
+    closeBulkPanel();
+    sessStatus('已清除 ' + (d.cleared || 0) + ' 条会话的提示词配置，立即生效',
+               'ok');
+  } catch (e) {
+    sessStatus(e.message, 'err');
+  }
 }
 
 async function loadSessions() {
   if (!cur) return;
   sessions = [];
   $('sessList').textContent = '';
+  // 换 agent / 刷新时清空勾选：selKeys 是跨 agent 的 key 集合，留着会误伤
+  selKeys = new Set();
+  closeBulkPanel();
   try {
     const d = await api('/api/agent/' + encodeURIComponent(cur) + '/sessions');
     sessions = d.sessions || [];
@@ -916,6 +1131,8 @@ let sessPrompts = {};     // session_key -> 会话附加词（拼在人设后面
 let sessAgents = {};      // session_key -> 借用的 agent id（完整系统提示词）
 let sessSystems = {};     // session_key -> 完整独立系统提示词（最高优先级）
 let promptEditor = null;  // 当前展开的编辑面板 {key, wrap}
+let selKeys = new Set();  // 勾选的会话 key（批量应用人设用）
+let bulkOpen = false;     // 批量面板是否展开
 
 function closePromptEditor() {
   if (promptEditor) { promptEditor.wrap.remove(); promptEditor = null; }
@@ -1728,6 +1945,21 @@ $('reload').addEventListener('click', () => {
   loadDetail().catch((e) => status(e.message, 'err'));
 });
 $('sessReload').addEventListener('click', loadSessions);
+$('selAll').addEventListener('click', () => {
+  selectableSessions().forEach(s => selKeys.add(s.key));
+  syncCheckboxes(); renderSelBar();
+});
+$('selInvert').addEventListener('click', () => {
+  selectableSessions().forEach((s) => {
+    if (selKeys.has(s.key)) selKeys.delete(s.key); else selKeys.add(s.key);
+  });
+  syncCheckboxes(); renderSelBar();
+});
+$('selNone').addEventListener('click', () => {
+  selKeys = new Set(); syncCheckboxes(); renderSelBar();
+});
+$('bulkApply').addEventListener('click', openBulkPanel);
+$('bulkClear').addEventListener('click', clearBulkPrompt);
 $('imgGenAll').addEventListener('click', toggleImageGenAll);
 $('naiAll').addEventListener('click', toggleNaiAll);
 $('imgFmtAll').addEventListener('click', toggleImageFmtAll);

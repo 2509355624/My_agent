@@ -1350,6 +1350,107 @@ def set_agent_session_prompt(agent_id, session_key):
                     "system": bool(system)})
 
 
+@app.route("/api/agent/<agent_id>/session_prompt_bulk", methods=["PUT"])
+def set_agent_session_prompt_bulk(agent_id):
+    """批量保存多条会话线的提示词配置（管理页勾选多个群/私聊一键应用）。
+
+    body：
+      keys   : ["group_123", "private_456", ...] 必填、非空、最多 500 条
+      clear  : true → 把这几条会话的三项配置**全部清掉**（回到 agent 自己的
+               prompt.md），此时忽略下面三个字段
+      text   : 会话附加词（非空才写）
+      agent  : 借用助手 id（非空才写）
+      system : 人设覆盖（非空才写）
+
+    **只写非空字段 —— 没填的一律不动**（2026-10-03 用户拍板）。所以「只想清掉
+    某一个字段」走单条接口 /api/agent/<id>/session_prompt/<key>，或整条 clear。
+
+    ⚠️ 三项语义别搞混（与单条接口一致）：`system` 是**顶替** prompt.md 的人设段
+    （不是叠加，抄工具目录会跟自动拼的那份重复）；`text` 是**拼**在人设后面；
+    `agent` 是整份借用 TA 的系统提示词。优先级 system > agent > text。
+    ⚠️ 每条被改的会话下次发言都会**整段前缀缓存作废**（system 是消息数组第一条，
+    前缀缓存只认从头逐字节相同的最长前缀），约 15K token 全价 —— 一次改到位最省。
+
+    实现上**一次 load_settings → 改 → 一次 save_settings**：绝不循环调单条接口，
+    那会写 N 次盘，而且每次都在旧快照上改，彼此覆盖。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+
+    body = request.get_json(silent=True) or {}
+    raw = body.get("keys")
+    if not isinstance(raw, list) or not raw:
+        return jsonify({"error": "需要非空数组字段 keys"}), 400
+    if len(raw) > 500:
+        return jsonify({"error": "一次最多 500 条会话"}), 400
+
+    keys, skipped = [], []
+    for k in raw:
+        safe = agent_store.safe_session_key(k)
+        if safe is None:
+            skipped.append(str(k)[:64])
+        elif safe not in keys:
+            keys.append(safe)
+    if not keys:
+        return jsonify({"error": "keys 里没有合法的会话 key"}), 400
+
+    for f in ("text", "system"):
+        if f in body and not isinstance(body.get(f), str):
+            return jsonify({"error": "%s 需要字符串" % f}), 400
+    text = str(body.get("text") or "").strip()
+    system = str(body.get("system") or "").strip()
+    borrow = str(body.get("agent") or "").strip()
+    if borrow:
+        if agent_store.safe_agent_id(borrow) is None or borrow not in {
+                a["id"] for a in agent_store.list_agents()}:
+            return jsonify({"error": "要借用的 agent 不存在：" + borrow}), 400
+    do_clear = bool(body.get("clear"))
+    # 三项各自独立、互不覆盖（与单条接口同一套存储键）。**没填的不动**；
+    # 借自己 = 等于不借，直接当没填（否则会 200 却什么都不写，很难查）。
+    fields = (("session_system_prompts", system),
+              ("session_prompts", text),
+              ("session_prompt_agents", borrow))
+    writes = [] if do_clear else [(n, v) for n, v in fields if v and v != aid]
+    if not do_clear and not writes:
+        return jsonify({"error": "text / agent / system 至少要填一项"
+                                 "（借自己 = 等于不借），或者传 clear=true 清除"}), 400
+
+    settings = agent_store.load_settings(aid)
+    applied, cleared = 0, set()
+    if do_clear:
+        for name, _value in fields:
+            d = settings.get(name)
+            if not isinstance(d, dict):
+                continue
+            for k in keys:
+                if k in d:
+                    d.pop(k, None)
+                    cleared.add(k)
+            if d:
+                settings[name] = d
+            else:
+                settings.pop(name, None)      # 空了就删键，settings.json 别留空壳
+    else:
+        for name, value in writes:
+            d = settings.get(name)
+            if not isinstance(d, dict):
+                d = {}
+            for k in keys:
+                d[k] = value
+            settings[name] = d
+        applied = len(keys)
+
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    return jsonify({"ok": True, "agent": aid, "keys": keys,
+                    "applied": applied, "cleared": len(cleared),
+                    "skipped": skipped})
+
+
 @app.route("/api/agent/<agent_id>/interject/<group_id>", methods=["PUT"])
 def set_agent_interject(agent_id, group_id):
     """切某个群的「主动发言」开关。热生效，不用重启。
