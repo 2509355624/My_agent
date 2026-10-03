@@ -1471,6 +1471,54 @@ class ComfyGoneTest(_Base):
         self.assertNotIn("掉线", text)
 
 
+class StuckComfyRestartTest(_Base):
+    """超时中断后 ComfyUI「活着但卡住」→ 重启它，别让后面每一张陪葬。
+
+    2026-10-03 加。为什么必须重启：`/interrupt` 设的是一个**协作**标志，节点
+    跑完一步才去读它。卡在一次不返回的 CUDA 调用里（TDR / 僵尸）时，这个标志
+    永远读不到 → `queue_running` 永远不清空 → 后面每一张都撞上同一个忙队列，
+    一张接一张地超时（09-30 的级联）。这种状态不会自己好。
+
+    判据是「探得到 + 等满 COMFY_IDLE_WAIT 还没退场」。⚠️ 真挂了（探不到）
+    **不能**重启——`_restart_comfy` 会白等满 COMFY_RESTART_WAIT(180s) 才放弃，
+    而下一张本来也只会撞上「ComfyUI 没在线」。
+    """
+
+    def _timeout_run(self, idle, alive):
+        """跑一张必然超时的图；idle/alive = 清理与探活的结果。"""
+        self.restarts = []
+        for target, repl in (
+                ("_wait_comfy_idle", lambda timeout=90: idle),
+                ("_comfy_up", lambda timeout=3: alive),
+                ("_restart_comfy", lambda *a, **k: self.restarts.append(1) or True)):
+            p = mock.patch.object(image_jobs, target, repl)
+            p.start()
+            self.addCleanup(p.stop)
+        with mock.patch.object(image_jobs, "wait_done",
+                               side_effect=TimeoutError("生成超时 (180s)")):
+            self._enqueue()
+            image_jobs._drain()
+
+    def test_alive_but_stuck_triggers_restart(self):
+        """探得到却退不了场 = 卡住 → 重启一次；话术仍按「超时」说。"""
+        self._timeout_run(idle=False, alive=True)
+        self.assertEqual(len(self.restarts), 1)
+        text = self.sent_texts[0][2]
+        self.assertIn("超时", text)
+        self.assertNotIn("掉线", text)
+
+    def test_dead_comfy_is_not_restarted(self):
+        """真挂了不重启：白等 180 秒没意义，说「掉线」比说「重试」诚实。"""
+        self._timeout_run(idle=False, alive=False)
+        self.assertEqual(self.restarts, [])
+        self.assertIn("掉线", self.sent_texts[0][2])
+
+    def test_normal_cleanup_never_restarts(self):
+        """正常退场（多数情况）一张都不该重启——重启要丢热的模型。"""
+        self._timeout_run(idle=True, alive=True)
+        self.assertEqual(self.restarts, [])
+
+
 class ChannelSwitchTest(_Base):
     """换渠道先 /free：同渠道连画保持模型热，跨渠道才释放。
 

@@ -141,6 +141,11 @@ TASK_TIMEOUT = IMAGE_GEN_TIMEOUT
 # 轮询间隔（秒）
 POLL_INTERVAL = 2
 
+# 超时中断后，等 ComfyUI 真正退场的上限（秒）。等不到就是「活着但卡住」——
+# 卡在一次不返回的调用里，`/interrupt` 设的协作标志它永远读不到，于是
+# `queue_running` 永远不清空。这种状态不会自己好，必须重启（见 process）。
+COMFY_IDLE_WAIT = 90
+
 # 冷却闸只认这一个渠道（见模块开头「重渠道优先度」）。写成常量而不是判断
 # 「权重 > 1」，是因为冷却的必要性来自 qwen 那套权重的具体尺寸，别的重渠道
 # 不一定共用同一个死因。
@@ -935,12 +940,26 @@ def process(job):
         # /interrupt 是异步的：ComfyUI 要等当前节点跑完这一步才真正停下，
         # 这期间提交的新任务只会被排进它的 pending。在这里等到 running 清空、
         # 显存真的腾出来，才把下一个任务交出去——不靠盲等固定秒数。
-        _wait_comfy_idle()
+        idle = _wait_comfy_idle()
         # 超时有两种：画得慢，或者 ComfyUI 中途没了。探一下就能分辨（09-30
         # 实测：ComfyUI 01:19:41 崩了，01:24:00 那张却报「画超时了…麻烦重新
         # 生成一次」，对方照着重试也不会成）。探活放在 _wait_comfy_idle 之后
         # ——那张图的中断/清理先跑完，之后进程还在不在才是真信号。
-        job.error = exc if _comfy_up() else ComfyGone()
+        alive = _comfy_up()
+        if not idle and alive:
+            # 探得到、却等满 COMFY_IDLE_WAIT 还不退场 = 「活着但卡住」：多半
+            # 卡在一次不返回的 CUDA 调用里（TDR / 僵尸），`/interrupt` 设的
+            # 协作标志它永远读不到。**这种状态不会自己好**——不重启的话，
+            # 后面每一张都会撞上同一个忙队列，一张接一张地超时（09-30 的
+            # 级联就是这么来的）。这里重启一次，把级联掐断在源头。
+            # ⚠️ 只对「活着但卡住」重启：真挂了就别重启——`_restart_comfy`
+            # 会白等满 COMFY_RESTART_WAIT(180s) 才放弃，而下一张本来也只会
+            # 撞上「ComfyUI 没在线」，那句话比这里诚实。
+            log.warning("ComfyUI 被中断后 %.0f 秒仍未退场（活着但卡住），重启它",
+                        COMFY_IDLE_WAIT)
+            _restart_comfy()
+            alive = _comfy_up()      # 重启成没成，以重启后再探一次为准
+        job.error = exc if alive else ComfyGone()
         _notice(job)
         return
 
@@ -1139,7 +1158,7 @@ def _abort(prompt_id):
             log.debug("清理 ComfyUI(%s) 失败，忽略", path)
 
 
-def _wait_comfy_idle(timeout=90):
+def _wait_comfy_idle(timeout=COMFY_IDLE_WAIT):
     """等 ComfyUI 真正闲下来（queue_running 清空）再返回。
 
     被中断的任务要等当前节点跑完才退场，早于此提交的新任务只会堆进 ComfyUI
