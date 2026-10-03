@@ -2050,9 +2050,9 @@ class QqWhitelistTest(unittest.TestCase):
         self.assertNotIn("已停用", desc)
         self.assertNotIn("不要传 skill=krea2", desc)
         self.assertIn("krea2", desc)
-        # qwen 依旧可用，尺寸也还写着
+        # qwen 依旧可用，尺寸也还写着（2026-10-03 起文生图是 1024×1536）
         self.assertIn("qwen_image_v1", desc)
-        self.assertIn("832×1216", desc)
+        self.assertIn("1024×1536 竖版", desc)
 
     def test_description_teaches_when_to_use_nffa(self):
         """新渠道必须**带着用法**进描述（2026-10-02 的规矩：加能力不写模型
