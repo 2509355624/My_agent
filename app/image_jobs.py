@@ -779,6 +779,10 @@ def _restart_comfy(timeout=COMFY_RESTART_WAIT):
     重启期间 8188 会拒连，所以轮询到它回来为止。等不到就放弃并记一条错误
     ——下一张图会撞上 `_notice` 那句「ComfyUI 没在线」，总好过在这里无限等。
     """
+    global _last_restart_try
+    # 任何一次重启都重置防抖（2026-10-03）：超时那条路现在也会重启，不记的
+    # 话 worker 紧接着的 _maybe_restart_for_ram 会再重启一次，白等一轮。
+    _last_restart_try = time.time()
     try:
         status = requests.get(COMFYUI_URL + "/manager/reboot",
                               timeout=15).status_code
@@ -957,17 +961,23 @@ def process(job):
         # 生成一次」，对方照着重试也不会成）。探活放在 _wait_comfy_idle 之后
         # ——那张图的中断/清理先跑完，之后进程还在不在才是真信号。
         alive = _comfy_up()
-        if not idle and alive:
-            # 探得到、却等满 COMFY_IDLE_WAIT 还不退场 = 「活着但卡住」：多半
-            # 卡在一次不返回的 CUDA 调用里（TDR / 僵尸），`/interrupt` 设的
-            # 协作标志它永远读不到。**这种状态不会自己好**——不重启的话，
-            # 后面每一张都会撞上同一个忙队列，一张接一张地超时（09-30 的
-            # 级联就是这么来的）。这里重启一次，把级联掐断在源头。
-            # ⚠️ 只对「活着但卡住」重启：真挂了就别重启——`_restart_comfy`
-            # 会白等满 COMFY_RESTART_WAIT(180s) 才放弃，而下一张本来也只会
-            # 撞上「ComfyUI 没在线」，那句话比这里诚实。
-            log.warning("ComfyUI 被中断后 %.0f 秒仍未退场（活着但卡住），重启它",
-                        COMFY_IDLE_WAIT)
+        if alive:
+            # 只要 ComfyUI 还活着就清一次——两种成因都算数：
+            # ① **退不了场**（not idle）：卡在一次不返回的 CUDA 调用里
+            #    （TDR / 僵尸），`/interrupt` 设的协作标志它永远读不到，
+            #    后面每一张都会撞上同一个忙队列、逐张超时；
+            # ② **退场了、但这张烧满了 TASK_TIMEOUT**（idle）：说明机器
+            #    状态已经不对了。2026-10-03 实测的级联：03:05:09 超时（内存
+            #    还有 6.3GB）之后，03:08:19 紧接着又超时（内存 0.1GB）——
+            #    第一张慢死，第二张接着死。清一次比继续往下塞划算。
+            # 两种情况 ComfyUI 都**不会自己好**。
+            # ⚠️ 真挂了（not alive）**不能**重启：`_restart_comfy` 会白等满
+            # COMFY_RESTART_WAIT(180s) 才放弃，而下一张本来也只会撞上
+            # 「ComfyUI 没在线」——那句话比这里诚实。
+            why = ("被中断后 %.0f 秒仍未退场（活着但卡住）" % COMFY_IDLE_WAIT
+                   if not idle else
+                   "退场了，但这张烧满了 %.0f 秒（状态已不对）" % TASK_TIMEOUT)
+            log.warning("ComfyUI %s，重启它", why)
             _restart_comfy()
             alive = _comfy_up()      # 重启成没成，以重启后再探一次为准
         job.error = exc if alive else ComfyGone()

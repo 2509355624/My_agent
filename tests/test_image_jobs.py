@@ -41,6 +41,70 @@ class _FakeTime:
         self.slept.append(seconds)
 
 
+def _no_net_requests():
+    """一个**永不出网**的 requests 替身。
+
+    requests 这一层挡住，比逐条去挡调用点可靠：_abort / _report_and_free 里的
+    /interrupt、/queue、/free 打的是**真机**——机器人正在出图时跑测试，会把
+    那张真的掐掉、把模型卸掉。而挡函数又会连行为一起挡掉（ProcessTest 正是靠
+    真跑 _abort 来断言 /interrupt 的载荷），所以挡在 requests 这一层最合适。
+
+    /system_stats 和 /queue 给形状正确的空壳：_report_and_free 要拿它记一行
+    显存/内存，_wait_comfy_idle 要判 queue_running 清空。给空 dict 的话前者
+    只是少记一行日志，后者会一直判「没退场」——所以形状必须对。
+    """
+    def _resp(payload):
+        resp = mock.Mock()
+        resp.status_code = 200
+        resp.raise_for_status = mock.Mock()
+        resp.json = mock.Mock(return_value=payload)
+        return resp
+
+    def _get(url, *a, **k):
+        url = str(url)
+        if url.endswith("/system_stats"):
+            return _resp({"devices": [{}], "system": {}})
+        if url.endswith("/queue"):
+            return _resp({"queue_running": [], "queue_pending": []})
+        return _resp({})
+
+    return mock.Mock(get=_get, post=lambda *a, **k: _resp({}))
+
+
+# 会真碰 ComfyUI 的入口——测试里必须**全部**挡掉。
+#
+# 这份清单只留一份，是因为各写各的已经漏过两次：先漏 _wait_comfy_idle
+# （ComfyUI 离线时干等 90 秒），2026-10-03 又漏 _restart_comfy——B' 把它接进
+# 超时路径之后，GenerateImageSplitTest 里一个用例就把**用户的 ComfyUI 真重启
+# 了**（comfyui_8188.log 里凭空多出一个 startup，跑测从 14 秒涨到 60 秒）。
+_COMFY_IO_BLOCKERS = (
+    ("_ensure_worker", lambda: None),
+    ("_queue_prompt", lambda wf: "pid"),
+    ("comfy_alive", lambda timeout=3: True),
+    ("_comfy_up", lambda timeout=3: True),
+    ("_wait_comfy_idle", lambda timeout=90: True),
+    ("_restart_comfy", lambda *a, **k: True),
+    ("_free_vram_gb", lambda: None),
+)
+
+
+def _block_comfy_io(case, send_image=None, send_text=None):
+    """把 requests 和 _COMFY_IO_BLOCKERS 全部挡掉，并登记到 case 的 cleanup。
+
+    send_image / send_text 由调用方传：各用例的替身不一样（有的要记账），
+    而且这两个本来就该被替掉——发图/发文本会真去碰 QQ 接口。
+    """
+    pairs = [("requests", _no_net_requests())] + list(_COMFY_IO_BLOCKERS)
+    if send_image is not None:
+        pairs.append(("_send_image", send_image))
+    if send_text is not None:
+        pairs.append(("_send_text", send_text))
+    for target, repl in pairs:
+        p = mock.patch.object(image_jobs, target, repl)
+        p.start()
+        case.addCleanup(p.stop)
+
+
 class _Base(unittest.TestCase):
     """统一把 worker 线程挡在门外：任务入队后由测试自己 _drain() 驱动。
 
@@ -66,18 +130,7 @@ class _Base(unittest.TestCase):
         def _fake_text(target, tid, text):
             self.sent_texts.append((target, tid, text))
 
-        for target, repl in (("_ensure_worker", lambda: None),
-                             ("_queue_prompt", lambda wf: "pid"),
-                             ("_send_image", _fake_image),
-                             ("_send_text", _fake_text),
-                             # 超时路径会真去轮询 ComfyUI 的 /queue，测试里挡掉
-                             ("_wait_comfy_idle", lambda timeout=90: True),
-                             # 提交前会查一次显存水位，挡掉（要测那条的见
-                             # ReleaseOnLowVramTest，它自己装返回值）
-                             ("_free_vram_gb", lambda: None)):
-            p = mock.patch.object(image_jobs, target, repl)
-            p.start()
-            self.addCleanup(p.stop)
+        _block_comfy_io(self, send_image=_fake_image, send_text=_fake_text)
 
     def _enqueue(self, ctx=("group", "9"), wf=None, skill=None, seed=None):
         return image_jobs.enqueue(ctx[0], ctx[1], wf or {"1": {}}, skill,
@@ -901,23 +954,11 @@ class GenerateImageSplitTest(unittest.TestCase):
             p = mock.patch.object(generate_image, target, repl)
             p.start()
             self.addCleanup(p.stop)
-        for target, repl in (
-            ("_queue_prompt", lambda wf: "pid"),
-            ("_ensure_worker", lambda: None),
-            ("_send_image", mock.Mock()),
-            ("_send_text", mock.Mock()),
-            # 入队前探活：默认「ComfyUI 在」，需要测拒收的用例自己再 patch 掉
-            ("comfy_alive", mock.Mock(return_value=True)),
-            # 提交前查显存水位——不挡就会真去 GET 真机的 /system_stats
-            ("_free_vram_gb", lambda: None),
-            # 超时路径会真去轮询 /queue 等它退场：ComfyUI 离线时这里要干等
-            # 90 秒（一个用例就把整个模块拖到 110 秒）。_Base 早就挡了，这个
-            # 类漏了。
-            ("_wait_comfy_idle", lambda timeout=90: True),
-        ):
-            p = mock.patch.object(image_jobs, target, repl)
-            p.start()
-            self.addCleanup(p.stop)
+        # 这个类从前是**自己抄一份**清单的，于是漏了两次：先漏 _wait_comfy_idle
+        # （ComfyUI 离线时干等 90 秒），2026-10-03 又漏 _restart_comfy——B' 把它
+        # 接进超时路径之后，test_web_reports_timeout 把用户的 ComfyUI 真重启了。
+        # 改成共用 _block_comfy_io 那份清单，漏不了。
+        _block_comfy_io(self, send_image=mock.Mock(), send_text=mock.Mock())
 
         def _sync_wait(self, poll=2):
             """测试里没有 worker 线程，wait 时自己把队列同步跑完。
@@ -1471,17 +1512,22 @@ class ComfyGoneTest(_Base):
         self.assertNotIn("掉线", text)
 
 
-class StuckComfyRestartTest(_Base):
-    """超时中断后 ComfyUI「活着但卡住」→ 重启它，别让后面每一张陪葬。
+class TimeoutRestartTest(_Base):
+    """超时之后**只要 ComfyUI 还活着**就重启它，别让后面每一张陪葬。
 
-    2026-10-03 加。为什么必须重启：`/interrupt` 设的是一个**协作**标志，节点
-    跑完一步才去读它。卡在一次不返回的 CUDA 调用里（TDR / 僵尸）时，这个标志
-    永远读不到 → `queue_running` 永远不清空 → 后面每一张都撞上同一个忙队列，
-    一张接一张地超时（09-30 的级联）。这种状态不会自己好。
+    2026-10-03 加。两种成因都算数：
 
-    判据是「探得到 + 等满 COMFY_IDLE_WAIT 还没退场」。⚠️ 真挂了（探不到）
-    **不能**重启——`_restart_comfy` 会白等满 COMFY_RESTART_WAIT(180s) 才放弃，
-    而下一张本来也只会撞上「ComfyUI 没在线」。
+    ① **退不了场**：`/interrupt` 设的是一个**协作**标志，节点跑完一步才去读它。
+       卡在一次不返回的 CUDA 调用里（TDR / 僵尸）时这个标志永远读不到 →
+       `queue_running` 永远不清空 → 后面每一张都撞上同一个忙队列，一张接一张
+       地超时（09-30 的级联）。
+    ② **退场了、但这张烧满了 180 秒**：说明机器状态已经不对了。实测级联：
+       03:05:09 超时（内存还有 6.3GB）之后，03:08:19 紧接着又超时（内存 0.1GB）
+       ——第一张慢死，第二张接着死。
+
+    两种情况 ComfyUI 都**不会自己好**。⚠️ 真挂了（探不到）**不能**重启——
+    `_restart_comfy` 会白等满 COMFY_RESTART_WAIT(180s) 才放弃，而下一张本来也
+    只会撞上「ComfyUI 没在线」。
     """
 
     def _timeout_run(self, idle, alive):
@@ -1499,9 +1545,17 @@ class StuckComfyRestartTest(_Base):
             self._enqueue()
             image_jobs._drain()
 
-    def test_alive_but_stuck_triggers_restart(self):
+    def test_stuck_after_interrupt_triggers_restart(self):
         """探得到却退不了场 = 卡住 → 重启一次；话术仍按「超时」说。"""
         self._timeout_run(idle=False, alive=True)
+        self.assertEqual(len(self.restarts), 1)
+        text = self.sent_texts[0][2]
+        self.assertIn("超时", text)
+        self.assertNotIn("掉线", text)
+
+    def test_slow_timeout_also_restarts(self):
+        """退场了、但这张烧满了 180 秒 → 机器状态已经不对，也清一次。"""
+        self._timeout_run(idle=True, alive=True)
         self.assertEqual(len(self.restarts), 1)
         text = self.sent_texts[0][2]
         self.assertIn("超时", text)
@@ -1512,11 +1566,6 @@ class StuckComfyRestartTest(_Base):
         self._timeout_run(idle=False, alive=False)
         self.assertEqual(self.restarts, [])
         self.assertIn("掉线", self.sent_texts[0][2])
-
-    def test_normal_cleanup_never_restarts(self):
-        """正常退场（多数情况）一张都不该重启——重启要丢热的模型。"""
-        self._timeout_run(idle=True, alive=True)
-        self.assertEqual(self.restarts, [])
 
 
 class ChannelSwitchTest(_Base):
