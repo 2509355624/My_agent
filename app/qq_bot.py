@@ -815,12 +815,12 @@ class SessionRunner:
             batch = [{"text": interject.INTERJECT_PROMPT, "sender": "",
                       "images": [], "quotes": []}]
             # 判断模型看不见图（上下文里图只是 "[图片]" 占位符）。它判「接」
-            # 往往就是好奇那张图——把最近两张真正捞出来给主模型看，不然只能
-            # 对着看不见的东西装懂。两张是因为群里经常连着甩表情，光看最新
-            # 一张常常不够。每张都带上「是谁发的」：不署名的话，模型会把它
-            # 安到最近在发言的那个人头上。
+            # 往往就是好奇那张图——把**最近一张**捞出来给主模型看，不然只能
+            # 对着看不见的东西装懂。只看最新一张（2026-10-04 用户要求）：多捞
+            # 几张会把更早话题里的图也一起喂进去，判断反而被带偏。带上「是谁
+            # 发的」：不署名的话，模型会把它安到最近在发言的那个人头上。
             recs = recent.recent_image_records(QQ_AGENT_ID, self.target_id,
-                                               _INTERJECT_IMAGE_LOOKBACK, 2)
+                                               _INTERJECT_IMAGE_LOOKBACK, 1)
             if recs:
                 batch[0]["images"] = [r["m"] for r in recs]
                 owners = []

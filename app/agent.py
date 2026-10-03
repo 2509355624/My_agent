@@ -357,6 +357,33 @@ _REPEAT_CALL_NOTE = (
     "直接把想说的话说完就收尾（图会自己发到会话里）。"
 )
 
+# 一次请求里的第二次生图调用（2026-10-04 用户要求：生图 agent 一轮只出一张）。
+# 与上面那条的区别：上面是「参数完全相同」，这条是「参数不同也算」——模型每次
+# 重提都会改写几个字，只有「本 run 是否已经出过一张」这个粗判据才拦得住。
+_REPEAT_IMAGE_NOTE = (
+    "系统：这次调用**没有执行**——**一次请求只允许提交一张图**，本次已经"
+    "提交过一张了，再提交只会多出一张重复的。"
+    "**别再调 generate_image**，把想说的话说完就收尾（图会自己发到会话里）。"
+)
+
+
+def _queued_note_for_user(result):
+    """生图提交成功时，从回执里取出给**人**看的半句，供掐断循环时兜底。
+
+    回执是写给模型的——「已经排上队了（前面还有 N 张），排到就画，画好会自动
+    发到群里。」是人话，后面那句「不要输出图片地址…」是给它的指令，直接扔进
+    群里很怪。掐断时模型若一个字正文都没说（被空头承诺守卫退回来重来那次），
+    就用这半句垫上，群里总得有句「已排上队，前面还有 N 张」。
+    不是提交成功的回执（报错 / 被重复闸拦下）则返回 ""——那种不补。
+    """
+    text = str(result or "")
+    if not (text.startswith("已经排上队了") or text.startswith("已经在画了")):
+        return ""
+    cut = text.find("不要输出图片地址")
+    if cut > 0:
+        text = text[:cut]
+    return text.strip().rstrip("，。") + "。"
+
 
 def _call_key(name, args):
     """把一次工具调用归一成一个可比较的键；不参与去重的工具返回 None。
@@ -851,6 +878,19 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
     # 同一次 run 内**已经执行过**的工具调用键（见 _DEDUP_TOOLS / _call_key）。
     # 跨迭代存活、run 结束即丢：下一条用户消息是全新的一次 run，重新放行。
     done_calls = set()
+    # 生图工具在本次 run 里放行过没有（2026-10-04 用户要求）：生图 agent 一轮
+    # 只许提交一张——之后的生图调用**无论参数一不一样**都拦下，而且**提交成功即
+    # 掐断整个循环**。参数精确比对拦不住它（每轮重提都会改写几个字，实测
+    # 「下面那格」→「下面那一格」），模型也不是聊天机器人：图一落下就该收工，
+    # 否则它每轮都再吐一遍「收到，就一条…」（实测一次请求复读了 5 段）。
+    image_used_in_run = False
+    # 本次 run 是否已经吐出过 assistant 正文——决定掐断时要不要替它补一句
+    # 「已排上队」。模型被「空头承诺守卫」退回来重来那次，提交的这一轮常常
+    # 一个字正文都没有，不补的话群里就一声不响。
+    reported_any = False
+    # 最后一次生图回执：掐断时从里面取「给**人**看」的那半句（见
+    # _queued_note_for_user）。只有提交成功的回执才取得到。
+    image_last_result = ""
     # 该 agent 有没有生图工具——没有就根本不该触发这道守卫（写作 agent 说
     # 「画着呢」是另一回事，不归这里管）。
     can_generate_image = agent_store.allows_tool(agent_id, "generate_image")
@@ -1024,6 +1064,7 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
 
             if reply_text:
                 yield {"type": "assistant", "content": reply_text}
+                reported_any = True
 
             if not tool_calls:
                 # 无工具调用，结束
@@ -1054,6 +1095,12 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
                     log.warning("[dedup] 拦下重复调用 %s（本次 run 内已执行过相同参数）"
                                 "——上一轮就提交过了", name)
                     result = _REPEAT_CALL_NOTE
+                # 生图硬闸（2026-10-04）：本次 run 已经提交过一张，后面的生图调用
+                # **一律**拦下——不管参数是否相同。上面那道精确比对挡不住改写措辞
+                # 的重提，而「一次请求只出一张」是用户的硬要求（生图 agent）。
+                elif name == "generate_image" and image_used_in_run:
+                    log.warning("[dedup] 拦下本 run 的第二次生图调用（一次请求只出一张）")
+                    result = _REPEAT_IMAGE_NOTE
                 # 第二道白名单拦截：prompt 里不列出是「看不见」，这里是「调不动」。
                 # 少了这一道，「写作 agent 不能用生图」就只是名义上的隔离。
                 elif not agent_store.allows_tool(agent_id, name):
@@ -1062,6 +1109,9 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
                     if key is not None:
                         done_calls.add(key)
                     result = execute_tool(name, args)
+                    if name == "generate_image":
+                        image_used_in_run = True
+                        image_last_result = result
                 if key is not None:
                     seen_now.add(key)
                 # 先入历史再出流：调用方把「事件出流」当作落盘时机，
@@ -1075,6 +1125,23 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
                 yield {"type": "tool_result", "name": name, "result": result}
 
             if aborted:
+                break
+
+            # 生图已提交 → 掐断循环（2026-10-04 用户要求）：生图 agent 的活干完
+            # 就收工——图一进队列，模型不该再迭代（它每轮都会再吐一遍「收到，
+            # 就一条…」，群里看着就是复读）。图由 worker 画好后自己发回原会话，
+            # 不需要模型再说话；模型**本轮已经吐出的正文照发**（那几句「排上队了、
+            # 前面还有 N 张」正是要留的提示）。
+            if image_used_in_run:
+                # 群里不能一声不响：本轮模型一个字正文都没说（典型是被空头
+                # 承诺守卫退回来重来的那次），补一句他能看懂的「已排上队」；
+                # 已经说过话的就别画蛇添足。
+                if not reported_any:
+                    note = _queued_note_for_user(image_last_result)
+                    if note:
+                        yield {"type": "assistant", "content": note}
+                        reported_any = True
+                log.info("[image-stop] 本次 run 已提交生图任务，掐断循环不再迭代")
                 break
 
             # 循环继续 → 执行完所有工具 → LLM 再思考一次

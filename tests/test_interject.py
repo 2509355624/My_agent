@@ -663,10 +663,11 @@ class RunTurnVoluntaryTest(_StateIsolationMixin, unittest.TestCase):
                                "images": [], "quotes": [], "tentative": True}])
         self.assertNotIn("batch", seen)
 
-    def test_voluntary_reply_sees_latest_images(self):
-        # 判断模型只看得到 "[图片]" 占位符；判「接」之后要把最近两张真正的图
-        # 带给主模型（群里经常连着甩表情，一张常常不够），而且得带署名——
-        # 不告诉模型图是谁发的，它会把图安到最近在发言的那个人头上
+    def test_voluntary_reply_sees_the_latest_image(self):
+        # 判断模型只看得到 "[图片]" 占位符；判「接」之后把**最近一张**真正的图
+        # 带给主模型（2026-10-04 用户要求：只看最新一张，多捞会把更早话题里的
+        # 图也一起喂进去，判断反而被带偏），而且得带署名——不告诉模型图是谁
+        # 发的，它会把图安到最近在发言的那个人头上
         runner = self._runner()
         seen = self._capture_merge()
         verdict = {"choice": "接", "want": True, "cooled": True, "pass": True,
@@ -676,17 +677,13 @@ class RunTurnVoluntaryTest(_StateIsolationMixin, unittest.TestCase):
                 mock.patch.object(qq_bot.recent, "recent_image_records",
                                   return_value=[
                                       {"m": "http://x/pic2.jpg",
-                                       "n": "被子教"},
-                                      {"m": "http://x/pic1.jpg",
-                                       "n": "猫大侠"}]) as ri:
+                                       "n": "被子教"}]) as ri:
             runner._run_turn([{"text": "在吗", "sender": "张三",
                                "images": [], "quotes": [], "tentative": True}])
         ri.assert_called_once_with("qq", "1041079621",
-                                   qq_bot._INTERJECT_IMAGE_LOOKBACK, 2)
-        self.assertEqual(seen["batch"][0]["images"],
-                         ["http://x/pic2.jpg", "http://x/pic1.jpg"])
+                                   qq_bot._INTERJECT_IMAGE_LOOKBACK, 1)
+        self.assertEqual(seen["batch"][0]["images"], ["http://x/pic2.jpg"])
         self.assertIn("被子教", seen["batch"][0]["text"])
-        self.assertIn("猫大侠", seen["batch"][0]["text"])
 
     def test_mixed_batch_goes_the_normal_way(self):
         # 只要混进一条被 @ 的，就照常回，不必问判断模型

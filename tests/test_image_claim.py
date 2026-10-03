@@ -59,10 +59,20 @@ class _ScriptedLLM:
 
 
 class _GuardRunner(unittest.TestCase):
+    # 生图工具的真实成功回执（同 generate_image.py 的返回）：掐断循环时兜底的
+    # 「已排上队」就是从它里面取「给**人**看」的那半句（去掉写给模型的指令），
+    # mock 成 "工具结果:generate_image" 就取不到了。
+    _QUEUED = ("已经排上队了（前面还有 1 张），排到就画，画好会自动发到群里。"
+               "不要输出图片地址，也不要说「图在下面 / 稍等」，"
+               "直接把想说的话说完就行。")
+
     def setUp(self):
+        def _fake_exec(name, args):
+            return self._QUEUED if name == "generate_image" else "工具结果:" + name
+
         for target, value in (
             ("trim_history", lambda h, agent_id=None, **kw: h),
-            ("execute_tool", lambda name, args: "工具结果:" + name),
+            ("execute_tool", _fake_exec),
         ):
             p = mock.patch.object(agent, target, value)
             p.start()
@@ -109,11 +119,13 @@ class PromiseWithoutCallTest(_GuardRunner):
 
         texts = self._texts(events)
         self.assertNotIn("画着呢 等着收图", texts)   # 空头承诺没发出去
-        self.assertIn("画上了", texts)               # 重来后正常收尾
-        # 退回重来那一次，模型真的发出了工具调用
+        # 退回重来那一次，模型真的发出了工具调用；**提交成功即掐断循环**，
+        # 它没机会再吐「画上了」——由掐断逻辑补一句「已排上队」兜底。
+        self.assertTrue(any("已经排上队了" in t or "已经在画了" in t
+                            for t in texts))
         self.assertEqual([e["name"] for e in events if e["type"] == "tool_call"],
                          ["generate_image"])
-        self.assertEqual(fake.calls, 3)
+        self.assertEqual(fake.calls, 2)
         self.assertEqual(len(self._nudges()), 1)
 
     def test_the_nudge_is_persisted_so_it_survives_a_restart(self):
@@ -143,6 +155,7 @@ class NoFalsePositiveTest(_GuardRunner):
         self.assertEqual(self._nudges(), [])
 
     def test_a_real_tool_call_is_untouched(self):
+        """真调了生图工具：提交成功 → 掐断循环（不再让它多吐几段复读）。"""
         fake = self._patch_llm([
             '[[TOOL:generate_image]]{"prompt": "1girl"}[[/TOOL]]',
             "画上了",
@@ -150,7 +163,7 @@ class NoFalsePositiveTest(_GuardRunner):
         events = self._collect()
         self.assertEqual([e["name"] for e in events if e["type"] == "tool_call"],
                          ["generate_image"])
-        self.assertEqual(fake.calls, 2)
+        self.assertEqual(fake.calls, 1)      # 提交后掐断，没有第二轮
         self.assertEqual(self._nudges(), [])
 
     def test_an_agent_without_the_image_tool_is_untouched(self):
@@ -241,10 +254,13 @@ class PaotuSlangGuardTest(_GuardRunner):
 
         texts = self._texts(events)
         self.assertNotIn("跑完了 两张都在群里躺着呢", texts)
-        self.assertIn("重新跑了 这次是初音", texts)
+        # 提交成功即掐断，模型没机会吐「重新跑了 这次是初音」——
+        # 由掐断逻辑补一句「已排上队」兜底。
+        self.assertTrue(any("已经排上队了" in t or "已经在画了" in t
+                            for t in texts))
         self.assertEqual([e["name"] for e in events if e["type"] == "tool_call"],
                          ["generate_image"])
-        self.assertEqual(fake.calls, 3)
+        self.assertEqual(fake.calls, 2)
         self.assertEqual(len(self._nudges()), 1)
 
     def test_the_earlier_offending_line_is_blocked(self):
