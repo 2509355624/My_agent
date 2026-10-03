@@ -43,6 +43,14 @@ _daily = {}
 _dirty = set()          # 有未落盘改动的日期
 _last_flush = 0.0
 
+# {tag: 这条会话线最近一次调用的命中率}。**必须跨线程共享**：QQ 侧每条消息
+# 换一个线程（asyncio.to_thread 从线程池取），而压缩跑在 save_history 里，
+# 读不到发起那次调用的线程上的 usage。memory.trim_window 靠它判断「这条会话线
+# 现在热不热」——2026-10-03 之前那里硬塞 hit_rate=0.0，等于把
+# LOW_HIT_RATE=0.3 这个「命中率高就别压」的保护整个关掉了。
+_last_hit = {}
+_HIT_KEEP = 500         # 只留最近用过的若干条，防止长期运行无限增长
+
 
 def _today():
     return time.strftime("%Y-%m-%d")
@@ -97,16 +105,37 @@ def record(hit, miss, output=0, provider="", model=""):
     global _last_flush
     date = _today()
     with _lock:
+        tag = current_tag()
         day = _daily.setdefault(date, {})
-        slot = day.setdefault(current_tag(), {})
+        slot = day.setdefault(tag, {})
         slot["calls"] = slot.get("calls", 0) + 1
         slot["hit"] = slot.get("hit", 0) + int(hit or 0)
         slot["miss"] = slot.get("miss", 0) + int(miss or 0)
         slot["output"] = slot.get("output", 0) + int(output or 0)
+        # 顺带更新「这条会话线最近热不热」。在锁内直接写，不走 note_hit_rate
+        # ——_lock 是普通 Lock，重入会死锁。
+        tot = int(hit or 0) + int(miss or 0)
+        if tot > 0:
+            _last_hit[tag] = float(hit or 0) / tot
+            if len(_last_hit) > _HIT_KEEP:
+                for k in list(_last_hit)[:_HIT_KEEP // 2]:
+                    _last_hit.pop(k, None)
         _dirty.add(date)
         due = time.time() - _last_flush >= _FLUSH_INTERVAL
     if due:
         flush()
+
+
+def last_hit_rate(tag):
+    """某条会话线最近一次调用的命中率（0~1）；没记过返回 None。
+
+    调用方要区分「已知很热」和「不知道」——不知道时应当退回保守行为，
+    不能当成 0（那会误触提前压缩）。
+    """
+    if not tag:
+        return None
+    with _lock:
+        return _last_hit.get(str(tag))
 
 
 def flush():

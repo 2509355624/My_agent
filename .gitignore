@@ -63,6 +63,16 @@ _vision*
 # 缓存命中率分析脚本 + SCNet 连通性探针（属本机临时件，跑完删）
 _cache*
 _scnet*
+# 命中率归因脚本：头部拆解 / 历史体量 / 命中率直方图 / 按会话摊费用 /
+# 工具结果构成 / 群线走势（属本机临时件，跑完删）
+_head_size.py
+_hist_size.py
+_hit_hist.py
+_session_cost.py
+_toolresult_size.py
+_group_compose.py
+_group_trend.py
+_waste*.py
 server_*.log
 DIAG.bat
 check_proc.ps1

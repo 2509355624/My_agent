@@ -38,6 +38,7 @@ from unittest import mock
 import app.agents as agents
 import app.memory as memory
 import app.longterm as longterm
+from app import usage
 from app.tools.normal import web_search
 
 
@@ -89,6 +90,18 @@ class _ResetState:
         memory._digest_pending.clear()
         self.addCleanup(memory._digest_seen.clear)
         self.addCleanup(memory._digest_pending.clear)
+        # usage._last_hit 是模块级的「这条会话线最近热不热」，跨用例会互相
+        # 污染（trim_window 的非群分支现在读它）。不在这里清掉的话，
+        # test_private_session_falls_back_to_trim_history 会读到别的用例
+        # 留下的命中率，断言随机翻车。
+        usage._last_hit.clear()
+        self.addCleanup(usage._last_hit.clear)
+        # ⚠️ 别让 usage.record 落盘：它写的是 BASE_DIR/usage/<今天>.json，
+        # 也就是**生产用量账本**（test_usage.py 有 patch BASE_DIR，这里没有）。
+        # 首次 record 距 _last_flush=0.0 已超 10 秒 → 必触发 flush。
+        p = mock.patch.object(usage, "flush")
+        p.start()
+        self.addCleanup(p.stop)
 
 
 class TrimWindowTest(_ResetState, unittest.TestCase):
@@ -192,9 +205,25 @@ class TrimWindowTest(_ResetState, unittest.TestCase):
         dig.assert_not_called()
         th.assert_called_once()
         self.assertEqual(out, [{"role": "user", "content": "旧路"}])
-        # 私聊不给 hit_rate（线程本地 usage 在 QQ 跨线程下恒为 0），给 0 即「到线就压」
+        # 这条会话线还没记过命中率 → 退回老行为（给 0 = 到警戒线就压）
         self.assertEqual(th.call_args[1]["usage"]["hit_rate"], 0.0)
         self.assertEqual(th.call_args[1]["budget"], _BUDGET)
+
+    def test_private_session_passes_real_hit_rate_through(self):
+        """会话线已知很热时，必须把**真实命中率**交给 trim_history。
+
+        2026-10-03 之前这里硬塞 0.0，等于把 LOW_HIT_RATE=0.3 那个「命中率高
+        就别压」的保护关掉：私聊实测命中 88~94%，却照样在 0.75×预算就压，
+        而每次压缩都把摘要插在系统头正后面 → **整段前缀缓存全量作废**。
+        群聊侧早就不裁了（滞回），私聊压缩是仅存的前缀重写源。
+        """
+        # 走真实路径：qq_bot 每轮用 scope(session_key) 包住调用，llm 记用量时
+        # 顺手把命中率写进 usage._last_hit
+        with usage.scope("user_123"):
+            usage.record(910, 90)
+        with mock.patch.object(memory, "trim_history", return_value=[]) as th:
+            memory.trim_window(_history(35), "qq", "user_123", budget=_BUDGET)
+        self.assertAlmostEqual(th.call_args[1]["usage"]["hit_rate"], 0.91)
 
     def test_web_session_without_key_falls_back(self):
         with mock.patch.object(longterm, "digest_messages_async") as dig, \

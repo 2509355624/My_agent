@@ -332,7 +332,8 @@ def trim_history(history, agent_id=None, usage=None, budget=None,
     if should:
         result = _compact(history, system_msgs, other_msgs, budget,
                           provider=provider, model=model,
-                          agent_id=agent_id, session_key=session_key)
+                          agent_id=agent_id, session_key=session_key,
+                          forced=forced)
         if result is not history:
             # 只有真压下去了才记水位。摘要失败不能占住冷却位——不然之后的
             # 每次触发都被冷却挡住，历史永远压不动，只能干等强制线。
@@ -344,7 +345,7 @@ def trim_history(history, agent_id=None, usage=None, budget=None,
 
 
 def _compact(history, system_msgs, other_msgs, budget, provider=None, model=None,
-             agent_id=None, session_key=None):
+             agent_id=None, session_key=None, forced=False):
     """执行整段摘要替换：保留最近若干轮完整，旧区交给 LLM 一次性摘要。
 
     **保留几轮不是固定的**：先估一次体积，若「摘要 + 最近 FULL_RECENT_TURNS
@@ -417,6 +418,21 @@ def _compact(history, system_msgs, other_msgs, budget, provider=None, model=None
     })
     for t in recent_turns:
         result.extend(t)
+
+    # 压缩动作必须留痕：摘要插在系统头正后面，**一次作废整段前缀缓存**
+    # （system 在最前面，改它等于后面全部重算）。这是「这轮为什么贵」的第一
+    # 现场，而 `[cache]` 行只看得出命中率掉，看不出是谁干的。`[window]` 那行
+    # 只管群聊裁剪，非群走的是这条。2026-10-03 补。
+    try:
+        after = estimate_messages(result) - estimate_messages(system_msgs)
+    except Exception:
+        after = -1
+    log.info("[compact] %s：压缩 %d 轮 → 摘要 + 最近 %d 轮"
+             "（历史 %d 条 → %d 条，估算 %d → %d tokens，预算 %d，%s）",
+             session_key or agent_id or "-", len(turns), keep,
+             len(other_msgs), len(result) - len(system_msgs),
+             estimate_messages(other_msgs), after, budget,
+             "强制" if forced else "提前")
     return result
 
 
@@ -554,10 +570,22 @@ def trim_window(history, agent_id=None, session_key=None, max_turns=None,
         return result
 
     # 非群会话（网页主会话 / QQ 私聊）没有长期记忆库可去，走 token 预算压缩：
-    # 滚出去的会摘成一条摘要顶在会话里，不是硬丢。hit_rate 给 0 = 到警戒线就压，
-    # 私聊场景宁可早压也别养肥历史。
+    # 滚出去的会摘成一条摘要顶在会话里，不是硬丢。
+    #
+    # ⚠️ hit_rate 用**这条会话线最近一次调用的真实命中率**（2026-10-03 改）。
+    # 原来这里硬塞 0.0，理由是「私聊宁可早压也别养肥历史」——但那是拿
+    # LOW_HIT_RATE=0.3 这个「命中率高就别压」的保护去换的：私聊实测命中
+    # 88~94%，却照样在 0.75×预算（22,500）就压。而每次压缩都把摘要插在
+    # 系统头正后面，**整段前缀全量作废**（system 在最前面，改它等于后面全部
+    # 重算）。群聊侧早就不裁了（滞回阈值，全期 `[window] 裁剪历史` = 0 次），
+    # 私聊压缩于是成了仅存的前缀重写源。
+    # 真实命中率从 usage.last_hit_rate 取（跨线程按会话 tag 存，见那里的说明）；
+    # 取不到才退回 0.0 = 老行为。压缩本身很贵，宁可不压。
+    from app import usage as usage_stats
+    hit_rate = usage_stats.last_hit_rate(session_key)
     result = trim_history(history, agent_id,
-                          usage={"total_tokens": est, "hit_rate": 0.0},
+                          usage={"total_tokens": est,
+                                 "hit_rate": 0.0 if hit_rate is None else hit_rate},
                           budget=budget, session_key=session_key)
     if result is not history:
         # 原地收缩调用方手上的 list。压缩**不是幂等**的：一轮里 save_history

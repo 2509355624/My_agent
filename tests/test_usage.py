@@ -65,6 +65,50 @@ class RecordAggregateTest(UsageBase):
         self.assertEqual(usage.daily()["sessions"]["group_9"]["calls"], 2)
 
 
+class LastHitRateTest(UsageBase):
+    """usage.last_hit_rate：给「这条会话线最近热不热」留一份**跨线程**记录。
+
+    memory.trim_window 的非群分支靠它决定要不要提前压缩（2026-10-03 之前
+    那里硬塞 hit_rate=0.0）。QQ 侧每条消息换线程，压缩跑在 save_history 里，
+    所以这份记录必须按**会话 tag** 存，不能读「当前线程」的 usage。
+    """
+
+    def setUp(self):
+        super().setUp()
+        usage._last_hit.clear()
+        self.addCleanup(usage._last_hit.clear)
+
+    def test_unknown_tag_returns_none(self):
+        """没记过必须是 None，不能是 0——0 会被当成「冷」而误触提前压缩。"""
+        self.assertIsNone(usage.last_hit_rate("group_9"))
+        self.assertIsNone(usage.last_hit_rate(""))
+        self.assertIsNone(usage.last_hit_rate(None))
+
+    def test_records_latest_rate_per_tag(self):
+        with usage.scope("group_9"):
+            usage.record(880, 120)          # 0.88
+            usage.record(500, 500)          # 0.50，覆盖
+        with usage.scope("private_1"):
+            usage.record(990, 10)           # 0.99
+        self.assertAlmostEqual(usage.last_hit_rate("group_9"), 0.50)
+        self.assertAlmostEqual(usage.last_hit_rate("private_1"), 0.99)
+
+    def test_zero_total_does_not_overwrite(self):
+        """0/0 的调用（理论上不该有）不能把已知命中率抹成 0。"""
+        with usage.scope("group_9"):
+            usage.record(880, 120)
+            usage.record(0, 0)
+        self.assertAlmostEqual(usage.last_hit_rate("group_9"), 0.88)
+
+    def test_table_is_capped(self):
+        """长期运行不能无限增长。"""
+        with mock.patch.object(usage, "_HIT_KEEP", 4):
+            for i in range(10):
+                with usage.scope("s%d" % i):
+                    usage.record(1, 0)
+        self.assertLessEqual(len(usage._last_hit), 4)
+
+
 class FlushTest(UsageBase):
     def test_flush_writes_file_and_clears_dirty(self):
         with usage.scope("group_9"):
