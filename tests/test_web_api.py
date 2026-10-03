@@ -612,6 +612,22 @@ class AgentAdminApiTest(unittest.TestCase):
             self.assertIn("function " + fn, html, "缺少批量人设函数：" + fn)
         self.assertIn("session_prompt_bulk", html)
 
+    def test_admin_page_has_session_search_controls(self):
+        """按 QQ 号/群名搜会话的控件必须在页面上。
+
+        2026-10-03 用户提的：找一个 QQ 改人设要一条条翻。同样是纯 DOM 拼装、
+        删个 id 只会让搜索框**静默消失**，所以把 id 和函数名钉住。
+
+        ⚠️ 这里只钉「控件在」，不钉过滤行为——那是纯前端逻辑，没有 JS 运行时
+        可跑；行为靠真无头浏览器冒烟验（见 2026-10-03 的记录）。
+        """
+        html = self.client.get("/admin").data.decode("utf-8")
+        for el in ("sessSearchBar", "sessSearch", "sessSearchClear",
+                   "sessSearchCount"):
+            self.assertIn('id="%s"' % el, html, "缺少搜索控件：" + el)
+        for fn in ("visibleSessions", "renderSearchBar", "applySearch"):
+            self.assertIn("function " + fn, html, "缺少搜索函数：" + fn)
+
 
 if __name__ == "__main__":
     unittest.main()

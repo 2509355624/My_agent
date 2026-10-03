@@ -147,6 +147,9 @@
   .sess-row.main .nm { color: var(--accent); }
   .sess-empty { font-size: 12px; color: var(--text-mute); }
   .sess-foot { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+  /* 搜索框：覆盖上面 input 那条 width:100%，让它在 flex 行里只占剩余宽度 */
+  #sessSearch { width: auto; flex: 1 1 auto; min-width: 120px;
+                padding: 6px 10px; font-size: 12px; }
 
   .status { font-size: 12px; color: var(--text-mute); }
   .status.ok { color: var(--success); }
@@ -370,6 +373,12 @@
           <button class="ghost" id="gapAllSave">保存</button>
           <span class="hint">两次「要不要接话」的判断之间至少隔这么久——判断也是一次调用。
             0 = 不做这道闸（那就只剩概率门挡着）。</span>
+        </div>
+        <div class="sess-foot" id="sessSearchBar">
+          <input id="sessSearch" type="text" autocomplete="off" spellcheck="false"
+                 placeholder="搜 QQ 号 / 群名 / 昵称（输 1041 就能定位 1041079621）">
+          <button class="ghost" id="sessSearchClear">清空</button>
+          <span class="hint" id="sessSearchCount"></span>
         </div>
         <div class="sess-foot" id="sessBulkBar"
              style="display:none; margin:0 0 10px 0;">
@@ -753,6 +762,7 @@ function sessStatus(msg, cls) {
 function renderSessions() {
   const box = $('sessList');
   box.textContent = '';
+  renderSearchBar();
   if (!sessions.length) {
     const empty = document.createElement('div');
     empty.className = 'sess-empty';
@@ -761,7 +771,18 @@ function renderSessions() {
     renderSelBar();
     return;
   }
-  sessions.forEach((s) => {
+  const vis = visibleSessions();
+  if (!vis.length) {
+    // 有别于「一条都没有」：列表是有内容的，只是被搜没了。说清楚是哪句关键词，
+    // 免得以为会话丢了他。
+    const empty = document.createElement('div');
+    empty.className = 'sess-empty';
+    empty.textContent = '没有匹配「' + searchText.trim() + '」的会话。';
+    box.appendChild(empty);
+    renderSelBar();
+    return;
+  }
+  vis.forEach((s) => {
     const row = document.createElement('div');
     row.className = 'sess-row' + (s.kind === 'main' ? ' main' : '');
 
@@ -908,8 +929,51 @@ function renderSessions() {
 // **只写填了的字段，没填的一律不动**（不是「留空=清除」，那会顺手清掉
 // 这些会话别处设的附加词/借用）；想清除走「批量清除人设」或单条面板。
 
+// ─── 会话搜索（按 QQ 号 / 群名 / 昵称 快速定位）───────────
+// 需求（2026-10-03 用户提）：找一个 QQ 改人设要一条条翻。语义当场拍板：
+// ① 匹配 **QQ 号 + 群名/昵称**（不只号码，只记得群名时也能搜到）；
+// ② 号码按**子串**匹配（输 1041 就能定位 1041079621）；
+// ③ 全选 / 反选**只作用于筛选出来的行**（看不见的行不该被选中，否则批量
+//    应用人设会误伤）；不加「只看群聊/私聊」的类型筛选（用户明确不要）。
+//
+// 全部在前端做：`/api/agent/<id>/sessions` 一次就把 name / target_id 都返回了，
+// 没必要再打一次后端。
+
+function visibleSessions() {
+  const q = (searchText || '').trim().toLowerCase();
+  if (!q) return sessions;
+  return sessions.filter((s) => {
+    // 只比 target_id（QQ 号）和 name（群名/昵称）——**故意不比 key**：
+    // key 是 `group_123` 这种，搜 "group" 会把所有群都匹配上，纯噪音。
+    const id = s.target_id != null ? String(s.target_id).toLowerCase() : '';
+    const nm = (s.name || '').toLowerCase();
+    return id.indexOf(q) >= 0 || nm.indexOf(q) >= 0;
+  });
+}
+
+function renderSearchBar() {
+  const q = (searchText || '').trim();
+  const box = $('sessSearchBar');
+  box.style.display = sessions.length ? 'flex' : 'none';
+  const n = visibleSessions().length;
+  $('sessSearchCount').textContent = q
+    ? ('匹配 ' + n + ' / ' + sessions.length + ' 条')
+    : (sessions.length ? '共 ' + sessions.length + ' 条' : '');
+  $('sessSearchClear').disabled = !q;
+}
+
+function applySearch(text) {
+  searchText = text || '';
+  // 筛选一变，**把已选收窄到还看得见的行**：看不见却仍被选中的行会在批量
+  // 应用时被一起写掉，那正是用户担心的误伤。收窄后计数立刻可见，好过
+  // 事后发现改错了会话。
+  const vis = new Set(visibleSessions().map(s => s.key));
+  Array.from(selKeys).forEach((k) => { if (!vis.has(k)) selKeys.delete(k); });
+  renderSessions();
+}
+
 function selectableSessions() {
-  return sessions.filter(s => s.kind === 'group' || s.kind === 'private');
+  return visibleSessions().filter(s => s.kind === 'group' || s.kind === 'private');
 }
 
 function syncCheckboxes() {
@@ -1093,6 +1157,11 @@ async function loadSessions() {
   // 换 agent / 刷新时清空勾选：selKeys 是跨 agent 的 key 集合，留着会误伤
   selKeys = new Set();
   closeBulkPanel();
+  // 搜索词也一起清：换 agent 后旧关键词多半匹配不上，留着只会让人以为列表空了。
+  // 注意**只有这里清**——renderSessions() 不碰它，所以改完一条人设重渲染时
+  // 搜索还在（不然刚改的那条会从眼前消失，正是用户要避免的翻找）。
+  searchText = '';
+  $('sessSearch').value = '';
   try {
     const d = await api('/api/agent/' + encodeURIComponent(cur) + '/sessions');
     sessions = d.sessions || [];
@@ -1133,6 +1202,7 @@ let sessSystems = {};     // session_key -> 完整独立系统提示词（最高
 let promptEditor = null;  // 当前展开的编辑面板 {key, wrap}
 let selKeys = new Set();  // 勾选的会话 key（批量应用人设用）
 let bulkOpen = false;     // 批量面板是否展开
+let searchText = '';      // 会话搜索框的关键词（前端过滤，不请求后端）
 
 function closePromptEditor() {
   if (promptEditor) { promptEditor.wrap.remove(); promptEditor = null; }
@@ -1960,6 +2030,15 @@ $('selNone').addEventListener('click', () => {
 });
 $('bulkApply').addEventListener('click', openBulkPanel);
 $('bulkClear').addEventListener('click', clearBulkPrompt);
+// 搜索：边打边筛（'input' 不是 'change'——change 要等失焦才触发，手感很迟钝）。
+$('sessSearch').addEventListener('input', (e) => applySearch(e.target.value));
+// Esc 清空，光标留在框里，方便接着搜下一个。
+$('sessSearch').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { $('sessSearch').value = ''; applySearch(''); }
+});
+$('sessSearchClear').addEventListener('click', () => {
+  $('sessSearch').value = ''; applySearch(''); $('sessSearch').focus();
+});
 $('imgGenAll').addEventListener('click', toggleImageGenAll);
 $('naiAll').addEventListener('click', toggleNaiAll);
 $('imgFmtAll').addEventListener('click', toggleImageFmtAll);
