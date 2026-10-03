@@ -933,7 +933,8 @@ class NffaChannelTest(unittest.TestCase):
     """`nffa`（2026-10-02 上线）的形状锁。
 
     它跟上面那 16 个动漫渠道**不是一套骨架**：底模是 Illustrious 系 SDXL
-    （`CheckpointLoaderSimple`，不是 UNETLoader），画风 LoRA 只有**一个槽**，
+    （`CheckpointLoaderSimple`，不是 UNETLoader），LoRA 是**两个槽串联**
+    （画风 `NffaV1.3` → 描边 `add_outline_XL`，2026-10-03 用户按 UI 实测固化），
     而且出图前后固定跑**两段修复**（`FaceDetailer` + YOLO 检测框，先手后脸）。
     所以它用的是自定义节点（comfyui-impact-pack），`test_no_custom_nodes`
     那两条只圈动漫渠道，别把它套进去。
@@ -947,22 +948,44 @@ class NffaChannelTest(unittest.TestCase):
     def _wf(self):
         return _load(self.NAME)
 
-    def test_base_and_single_lora_slot(self):
-        """底模 + 唯一那个画风 LoRA：槽只有 1 个，传 `lora=` 会把它顶掉。"""
+    def test_base_and_two_lora_slots(self):
+        """底模 + 两个 LoRA 槽**串联**：画风槽 `NffaV1.3` 挂在底模之后，
+        描边槽 `add_outline_XL` 串在它后面，下游一律吃**链尾**。
+
+        链条顺序是本渠道的关键：漏改引用的话下游还挂在画风槽上，
+        add_outline 就**静默不生效**（不报错、只是没描边），所以这里
+        还要逐条查「除了链尾，还有谁指着画风槽」。
+        """
         wf = self._wf()
         ckpt = _one(wf, "CheckpointLoaderSimple")
         self.assertTrue(wf[ckpt]["inputs"]["ckpt_name"]
                         .startswith("waiIllustriousSDXL"),
                         wf[ckpt]["inputs"]["ckpt_name"])
         slots = _all(wf, "LoraLoader") + _all(wf, "LoraLoaderModelOnly")
-        self.assertEqual(len(slots), 1, slots)
-        lo = wf[slots[0]]
-        self.assertTrue(lo["inputs"]["lora_name"].startswith("NffaV1.3"),
-                        lo["inputs"]["lora_name"])
-        self.assertEqual(lo["inputs"]["strength_model"], 1)
-        self.assertEqual(lo["inputs"]["strength_clip"], 1)
-        # 画风 LoRA 必须挂在底模之后（两个采样器和两段修复都吃它的输出）
-        self.assertEqual(lo["inputs"]["model"], [ckpt, 0])
+        self.assertEqual(len(slots), 2, slots)
+        # 画风槽：挂在底模之后，双强度 1.0
+        style = [k for k in slots
+                 if wf[k]["inputs"]["lora_name"].startswith("NffaV1.3")]
+        self.assertEqual(len(style), 1, style)
+        style = style[0]
+        self.assertEqual(wf[style]["inputs"]["strength_model"], 1)
+        self.assertEqual(wf[style]["inputs"]["strength_clip"], 1)
+        self.assertEqual(wf[style]["inputs"]["model"], [ckpt, 0])
+        # 描边槽：串在画风槽之后（0.3 是用户自己调出来那个强度）
+        outline = [k for k in slots if k != style][0]
+        self.assertEqual(wf[outline]["inputs"]["lora_name"],
+                         "add_outline_XL.safetensors")
+        self.assertEqual(wf[outline]["inputs"]["model"], [style, 0])
+        self.assertEqual(wf[outline]["inputs"]["clip"], [style, 1])
+        self.assertEqual(wf[outline]["inputs"]["strength_model"], 0.3)
+        # 除了描边槽自己，**不该有人还指着画风槽**——指着它等于绕开了描边
+        for nid, node in wf.items():
+            if nid == outline:
+                continue
+            for key, val in node.get("inputs", {}).items():
+                if isinstance(val, list) and val and val[0] == style:
+                    self.fail("节点 %s.%s 还挂在画风槽 %s 上，应改指链尾 %s"
+                              % (nid, key, style, outline))
         self.assertNotIn("Dogma", json.dumps(wf))   # 那台机器上还没这个文件
 
     def test_two_stage_sampling_then_two_detailers(self):
