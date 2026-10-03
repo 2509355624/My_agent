@@ -148,8 +148,10 @@ def _raise_with_detail(resp):
     raise RuntimeError(msg)
 
 
-def _record_usage(usage, elapsed=None, provider="", model=""):
+def _record_usage(usage, elapsed=None, provider="", model="", kind="llm"):
     """把一次响应的 usage 折算成命中率写入**当前线程**的用量记录（流式/非流式共用口径）。
+
+    kind 只进调用流水（stream = 主对话，sync = 摘要/判断这类隐形调用）。
 
     - 火山/DeepSeek 口径：prompt_cache_hit_tokens / prompt_cache_miss_tokens
     - OpenAI 口径兜底：prompt_tokens_details.cached_tokens
@@ -196,15 +198,18 @@ def _record_usage(usage, elapsed=None, provider="", model=""):
         pass
     if rate < 0.5:
         mark += "  ⚠冷调用"
-    log.info("[cache] %s %s/%s 命中 %d / %d tokens = %.1f%% (未命中 %d)%s%s",
+    out = int(usage.get("completion_tokens") or 0)
+    # out= 是 2026-10-03 补的：output 按 ¥4/M 计费，是全天账单里最贵的一项，
+    # 而这一行原来只报命中率——只看日志根本看不出钱花在哪。
+    log.info("[cache] %s %s/%s 命中 %d / %d tokens = %.1f%% (未命中 %d) out=%d%s%s",
              tag, provider or "-", model or "-",
-             hit, total, rate * 100, miss, tail, mark)
+             hit, total, rate * 100, miss, out, tail, mark)
 
     try:
         from app import usage as usage_stats
-        usage_stats.record(hit or 0, miss or 0,
-                           output=int(usage.get("completion_tokens") or 0),
-                           provider=provider, model=model)
+        usage_stats.record(hit or 0, miss or 0, output=out,
+                           provider=provider, model=model,
+                           elapsed=elapsed, kind=kind)
     except Exception:                # 统计挂了不能影响主链路
         pass
 
@@ -281,6 +286,13 @@ def _mark_dead(key, reason, ttl=None):
     with _DEAD_LOCK:
         _DEAD[key] = time.time() + ttl
     log.info("[chain] %s / %s 拉黑 %.0fs（%s）", key[0], key[1], ttl, reason)
+    # 失败也落一行流水（2026-10-03 补）：账单按「请求数」算，失败同样占一次
+    # 调用。只打日志不进账本的话，「账单 N 次 vs 日志 M 次」这种缺口永远查不出来。
+    try:
+        from app import usage as usage_stats
+        usage_stats.log_fail(key[0], key[1], reason)
+    except Exception:                # 统计挂了不能影响主链路
+        pass
 
 
 def reset_chain_state():
@@ -364,7 +376,7 @@ def _call_provider(eff, body, timeout):
     data = resp.json()
 
     _record_usage(data.get("usage"), resp.elapsed.total_seconds(),
-                  provider=eff["provider"], model=eff["model"])
+                  provider=eff["provider"], model=eff["model"], kind="sync")
 
     message = (data.get("choices") or [{}])[0].get("message") or {}
     return message.get("content") or ""
@@ -462,7 +474,8 @@ def _parse_sse_line(line, provider="", model=""):
         return []
     if not isinstance(chunk, dict):
         return []
-    _record_usage(chunk.get("usage"), provider=provider, model=model)
+    _record_usage(chunk.get("usage"), provider=provider, model=model,
+                  kind="stream")
 
     meta = _stream_meta()
     out = []

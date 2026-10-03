@@ -977,6 +977,22 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
                      hashlib.md5(reply.encode("utf-8")).hexdigest()[:8],
                      ",".join(c["name"] for c in tool_calls) or "-")
 
+            # 同一条 turn 也落一行流水（2026-10-03 补）：token 账在 llm 层记，
+            # 但「这一轮到底调没调工具、输出多长」只有这里知道。写进流水后，
+            # 对账脚本不必去 grep 会轮转的日志，就能算出「生图指令的成功率」。
+            try:
+                from app import usage as _usage
+                _usage.log_call({
+                    "kind": "turn", "n": turn_count,
+                    "in_msgs": len(llm_history),
+                    "in_chars": sum(len(m.get("content") or "")
+                                    for m in llm_history),
+                    "out_chars": len(reply),
+                    "tools": [c["name"] for c in tool_calls] or None,
+                })
+            except Exception:        # 统计挂了不能影响主链路
+                pass
+
             # 提取回复正文（去掉所有工具块及其参数）
             reply_text = _strip_tool_blocks(reply).strip()
 

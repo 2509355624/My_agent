@@ -24,6 +24,9 @@ class UsageBase(unittest.TestCase):
         p = mock.patch.object(usage, "_daily", {})
         p.start()
         self.addCleanup(p.stop)
+        p = mock.patch.object(usage, "_by_model", {})
+        p.start()
+        self.addCleanup(p.stop)
         p = mock.patch.object(usage, "_dirty", set())
         p.start()
         self.addCleanup(p.stop)
@@ -58,11 +61,22 @@ class RecordAggregateTest(UsageBase):
         usage.record(1, 1)
         self.assertIn("other", usage.daily()["sessions"])
 
-    def test_provider_model_accepted_but_not_grouping(self):
+    def test_provider_model_grouped_for_billing(self):
+        """「不同模型到底花了多少」必须能从账本直接读出来。
+
+        2026-10-03 之前 record() 收了 provider/model 却只写日志、不做聚合，
+        结果只能靠 grep 日志数行数，和账单永远对不上。
+        """
         with usage.scope("group_9"):
             usage.record(10, 0, 1, provider="mimo", model="mimo-v2.6-flash")
-            usage.record(10, 0, 1, provider="volc", model="glm-5-2")
-        self.assertEqual(usage.daily()["sessions"]["group_9"]["calls"], 2)
+            usage.record(10, 0, 1, provider="mimo", model="mimo-v2.6-flash")
+            usage.record(1, 0, 0, provider="deepseek", model="deepseek-flash")
+        by = usage.daily()["by_model"]
+        self.assertEqual(by["mimo/mimo-v2.6-flash"],
+                         {"calls": 2, "hit": 20, "miss": 0, "output": 2})
+        self.assertEqual(by["deepseek/deepseek-flash"],
+                         {"calls": 1, "hit": 1, "miss": 0, "output": 0})
+        self.assertEqual(usage.daily()["sessions"]["group_9"]["calls"], 3)
 
 
 class LastHitRateTest(UsageBase):
@@ -115,8 +129,8 @@ class FlushTest(UsageBase):
             usage.record(100, 50)
         usage.flush()
         path = os.path.join(self.tmp.name, "usage")
-        files = os.listdir(path)
-        self.assertEqual(len(files), 1)
+        files = [f for f in os.listdir(path) if f.endswith(".json")]
+        self.assertEqual(len(files), 1)      # 流水是 .jsonl，不算在这里
         data = json.load(open(os.path.join(path, files[0]), encoding="utf-8"))
         self.assertEqual(data["sessions"]["group_9"]["hit"], 100)
         # 落盘后 daily() 从文件也能读回
@@ -149,6 +163,59 @@ class FlushTest(UsageBase):
         with usage.scope("group_9"):
             usage.record(10, 0)             # 同日续记要叠加，不能劈两半
         self.assertEqual(usage.daily()["sessions"]["group_9"]["hit"], 110)
+
+
+class CallLogTest(UsageBase):
+    """调用流水（usage/calls-<date>.jsonl）：一行 = 一次真实调用，失败也记。
+
+    2026-10-03 补。账单是按「请求数」算的，失败同样占一次调用；只打日志的
+    失败不进账本，「账单 N 次 vs 日志 M 次」这种缺口就永远解释不了。
+    """
+
+    def _rows(self):
+        path = usage.calls_path()
+        with open(path, encoding="utf-8") as f:
+            return [json.loads(l) for l in f if l.strip()]
+
+    def test_record_appends_one_line_per_call(self):
+        with usage.scope("group_9"):
+            usage.record(100, 50, 7, provider="deepseek",
+                         model="deepseek-flash", elapsed=1.5, kind="stream")
+        rows = self._rows()
+        self.assertEqual(len(rows), 1)
+        r = rows[0]
+        self.assertEqual(r["tag"], "group_9")
+        self.assertEqual((r["prov"], r["model"]), ("deepseek", "deepseek-flash"))
+        self.assertEqual((r["hit"], r["miss"], r["out"]), (100, 50, 7))
+        self.assertEqual(r["ms"], 1500)      # 秒 -> 毫秒
+        self.assertEqual(r["kind"], "stream")
+        self.assertTrue(r["ok"])
+
+    def test_failed_call_is_logged_too(self):
+        with usage.scope("group_9"):
+            usage.log_fail("volc", "deepseek-v4-flash-ga-260731",
+                           "HTTP 429 Too Many Requests @ark.cn-beijing")
+        rows = self._rows()
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(rows[0]["ok"])
+        self.assertEqual(rows[0]["prov"], "volc")
+        self.assertIn("429", rows[0]["err"])
+        # 失败不进 token 聚合，只占一行流水
+        self.assertEqual(usage.daily()["sessions"], {})
+
+    def test_stream_and_vision_kinds_are_kept(self):
+        """kind 是区分「主对话 / 识图」的唯一抓手，必须原样落到流水里。"""
+        with usage.scope("vision"):
+            usage.record(3, 0, 9, provider="deepseek", model="deepseek-flash",
+                         kind="vision")
+        self.assertEqual(self._rows()[0]["kind"], "vision")
+
+    def test_jsonl_does_not_show_up_as_a_day(self):
+        """load_all_dates 只认 <date>.json，别把流水文件当成一天。"""
+        with usage.scope("group_9"):
+            usage.record(1, 1, provider="deepseek", model="deepseek-flash")
+        usage.flush()
+        self.assertEqual(usage.load_all_dates(), [usage._today()])
 
 
 if __name__ == "__main__":
