@@ -315,5 +315,81 @@ class CallLlmStreamTest(unittest.TestCase):
         self.assertEqual(out, [("reasoning", "想"), ("content", "答")])
 
 
+class CallOllamaTest(unittest.TestCase):
+    """本地 ollama 那条路（_call_ollama）必须显式关思考，且填诊断字段。
+
+    2026-10-04 实测：qwen3.8-9b-heretic 的 `ollama show` 里 thinking
+    default=true，思考内容走独立的 `message.thinking` 字段。原先请求不关
+    思考、返回又只取 `message.content`，于是思考吃光额度时正文是空字符串
+    ——**思考其实存在，只是被丢掉**，界面上表现为「没输出」。
+
+    同一句提问的对照（真实打本机 ollama）：
+        改前 reasoning=13137 字 / 耗时 45.0s
+        改后 reasoning=0 字     / 耗时约 1s
+    """
+
+    class _Resp:
+        def __init__(self, status, payload):
+            self.status_code = status
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    def _post(self, payload):
+        return self._Resp(200, payload)
+
+    def test_think_false_is_sent(self):
+        """请求体必须带 think:False，否则模型默认开思考。"""
+        seen = {}
+
+        def _post(url, json=None, timeout=None):
+            seen.update(json)
+            return self._post({"message": {"content": "答"}})
+
+        with mock.patch.object(llm._session, "post", _post):
+            out = llm._call_ollama("http://127.0.0.1:11434",
+                                   {"model": "m", "messages": []}, 10)
+        self.assertIn("think", seen, "请求体没有 think 字段 ⇒ 落回模型默认值")
+        self.assertIs(seen["think"], False)
+        self.assertEqual(out, "答")
+
+    def test_thinking_never_leaks_into_content(self):
+        """thinking 再长也不进 content（content 空就是空，不拿思考顶替）。"""
+        body = {"message": {"content": "", "thinking": "想了 5000 字"}}
+        with mock.patch.object(llm._session, "post",
+                               lambda *a, **kw: self._post(body)):
+            out = llm._call_ollama("http://127.0.0.1:11434",
+                                   {"model": "m", "messages": []}, 10)
+        self.assertEqual(out, "", "空正文被思考内容顶替了 ⇒ 下游拿到假回复")
+
+    def test_diag_fields_filled(self):
+        """reasoning/finish 要填：ollama 提前 return，不经过 _parse_sse_line，
+        不填的话空回复日志永远显示 reasoning=0字 finish=None（看着像没思考）。"""
+        llm._stream_meta().update(finish_reason=None, reasoning_chars=0,
+                                  content_chars=0)
+        body = {"done_reason": "stop",
+                "message": {"content": "答", "thinking": ""}}
+        with mock.patch.object(llm._session, "post",
+                               lambda *a, **kw: self._post(body)):
+            llm._call_ollama("http://127.0.0.1:11434",
+                             {"model": "m", "messages": []}, 10)
+        meta = llm._stream_meta()
+        self.assertEqual(meta["finish_reason"], "stop")
+        self.assertEqual(meta["reasoning_chars"], 0)
+        self.assertEqual(meta["content_chars"], 1)
+
+    def test_tool_calls_not_required(self):
+        """本项目工具协议是正文里的 [[TOOL:name]]{json} 文本块，不是原生
+        function calling ⇒ tool_calls 字段丢不丢都不影响工具能被解析。"""
+        body = {"done_reason": "stop",
+                "message": {"content": '[[TOOL:generate_image]]{"prompt":"x"}'}}
+        with mock.patch.object(llm._session, "post",
+                               lambda *a, **kw: self._post(body)):
+            out = llm._call_ollama("http://127.0.0.1:11434",
+                                   {"model": "m", "messages": []}, 10)
+        self.assertIn("[[TOOL:generate_image]]", out)
+
+
 if __name__ == "__main__":
     unittest.main()

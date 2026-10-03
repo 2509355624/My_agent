@@ -405,18 +405,49 @@ def _call_provider(eff, body, timeout):
 
 
 def _call_ollama(base_url, body, timeout):
-    """Ollama 原生 /api/chat 接口（OpenAI 兼容的 send 字段）"""
+    """Ollama 原生 /api/chat 接口（原生口径，非 OpenAI 兼容端点）。
+
+    `think:False` 是必需的，不能省：本地模型（qwen3.8-9b-heretic 等）**默认
+    开思考**（`ollama show` 的 capabilities 里 default=true），而思考内容走
+    另一个 `message.thinking` 字段。原先这里既不关思考、返回时又只取
+    `message.content`，于是思考把额度花完时正文就是空字符串——**思考其实
+    存在，只是被丢掉了**，界面上表现为「没输出」（2026-10-04 实测：同一句
+    「用一句话说明光合作用」，思考 2963 字 / 正文 51 字，关掉后 0 字 / 45 字，
+    耗时 21s → 0.5s）。
+
+    注意：**不关思考也不会影响工具调用**。本项目的工具协议是正文里的
+    `[[TOOL:name]]{json}` 文本块（app/agent.py 的 _iter_xml_tool_calls 解析），
+    不是原生 function calling，所以 ollama 的 tool_calls 字段丢不丢无所谓。
+    实测带不带 think，两次都正常吐出协议块。
+
+    顺带把两个诊断字段填上：ollama 这条路提前 return，从不经过
+    _parse_sse_line，所以 `reasoning=0字 finish=None` 一直是「统计缺失」而不是
+    「思考为零」——agent 的空回复日志因此看不出真相。填上之后，空回复日志
+    能直接告诉你是「思考吃光正文」还是「模型真什么都没说」。
+    """
     url = base_url.rstrip("/") + "/api/chat"
     ollama_body = {
         "model": body.get("model"),
         "messages": body.get("messages", []),
         "stream": False,
+        "think": False,
     }
     resp = _session.post(url, json=ollama_body, timeout=timeout)
     if resp.status_code >= 400:
         _raise_with_detail(resp)
     data = resp.json()
-    return data["message"]["content"]
+    msg = data.get("message") or {}
+    content = msg.get("content") or ""
+    # 思考虽已关掉，这里仍记录字数：万一某天模型仍吐 thinking，诊断日志要能
+    # 区分「思考吃掉正文」和「模型什么都没说」，而不是像现在这样永远显示 0。
+    meta = _stream_meta()
+    meta["finish_reason"] = data.get("done_reason") or meta["finish_reason"]
+    meta["reasoning_chars"] += len(msg.get("thinking") or "")
+    meta["content_chars"] += len(content)
+    if not content:
+        log.warning("[ollama-empty] 正文为空（thinking=%d字 finish=%s）",
+                    meta["reasoning_chars"], meta["finish_reason"])
+    return content
 
 
 # ─── 流式（SSE）──────────────────────────────────────
