@@ -717,6 +717,10 @@ def get_agent_sessions(agent_id):
         priv_wl = [str(x) for x in (QQ_WHITELIST_USERS or [])]
     return jsonify({"sessions": items, "names_ok": names_ok, "agent": aid,
                     "image_gen_on": settings.get("image_gen") is not False,
+                    # 群聊总闸（2026-10-04）：开着 = 所有群都不回、私聊照常。
+                    # 生效值直接取 qq_bot 判的那一份（`groups_muted()` 返回
+                    # True 或群号列表，两者都算开），别在前端另算一套。
+                    "groups_muted_on": bool(agent_store.groups_muted(aid)),
                     "nai_enabled": nai_enabled,
                     # 全局发图格式（群覆盖之外的总开关）。target=None 走的就是全局那层。
                     "image_send_format":

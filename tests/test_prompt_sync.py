@@ -433,6 +433,29 @@ class GroupsMutedTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("静音", why)
 
+    def test_sessions_api_reports_groups_muted(self):
+        """sessions 接口要给管理页 `groups_muted_on`——按钮的初始状态靠它。
+
+        ⚠️ 值必须**直接取** `agent_store.groups_muted()`（qq_bot 判的那一份），
+        别在前端另算：那份可能是 True 也可能是群号列表（只静音部分群），
+        两种都算「开」，前端只判布尔。
+        """
+        from app import agents as agent_store
+        with open("app/main.py", encoding="utf-8") as f:
+            src = f.read()
+        self.assertIn('"groups_muted_on"', src,
+                      "sessions 接口没返回 groups_muted_on，"
+                      "管理页按钮会一直显示「开」")
+        self.assertIn("agent_store.groups_muted(aid)", src,
+                      "groups_muted_on 没直接取生效值")
+        # 列表形态也得算「开」——bool(['111']) 是 True，语义正好
+        for stored, want in ((True, True), (["111", "222"], True),
+                             ({"111"}, True), (False, False), (None, False)):
+            with mock.patch.object(agent_store, "load_settings",
+                                   return_value={"groups_muted": stored}):
+                got = bool(agent_store.groups_muted("qq"))
+            self.assertEqual(got, want, "settings 里 %r → %r" % (stored, got))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -45,7 +45,7 @@ const detail = {
   global_provider: 'deepseek', provider: '', model: '',
   context_budget: 30000, global_context_budget: 30000,
   tools: null, skills: null,
-  image_gen_on: true, nai_enabled: false,
+  image_gen_on: true, nai_enabled: false, groups_muted_on: false,
   session_prompts: {}, session_prompt_agents: {}, session_system_prompts: {},
   interject_cooldown: 30, interject_chance: 0.3, interject_min_gap: 60,
   private_enable: true, private_whitelist: [], private_whitelist_on: true,
@@ -78,7 +78,7 @@ function boot(sessions, calls) {
         if (s.indexOf('/sessions') >= 0) {
           return resp({
             sessions, names_ok: true, agent: 'qq', image_gen_on: true,
-            nai_enabled: false, session_prompts: {},
+            nai_enabled: false, groups_muted_on: false, session_prompts: {},
             session_prompt_agents: {}, session_system_prompts: {},
           });
         }
@@ -285,6 +285,98 @@ const FULL = [
         !/· 只认@/.test($('sessList').querySelectorAll('.sess-row .sub')[0]
           .textContent),
         $('sessList').querySelectorAll('.sess-row .sub')[0].textContent);
+
+  // ── 群聊总开关（2026-10-04）─────────────────────────
+  // agent 级总闸：开了所有群都不回。断言重点在两处容易做错的地方：
+  //  ① 请求体是 {enabled:true} 且 URL **不带** /<群号>（它是全局的，不是逐群的）
+  //  ② 群行开关置灰但**私聊行不置灰**（私聊不受群聊总闸影响）
+  //
+  // 前置：群行开关区默认收在「…」里。
+  // ⚠️ **一次只能展开一条**（`sessTools` 是单数），点「…」还会
+  // `renderSessions()` **整表重建 DOM**（节点引用当场失效）。所以下面
+  // 逐条「展开→断言→再展开下一条」，而不是一次性全展开。
+  //
+  // ⚠️⚠️ `.sess-tools` 是 `.sess-row` 的**兄弟**（`box.insertBefore(zone,
+  // row.nextSibling)`），不是子节点 —— 找它必须走 `nextElementSibling`，
+  // 用 `row.querySelector('.sess-tools')` 永远 null（会让下面全部假通过）。
+  const gmBtn = () => $('groupsMutedAll');
+  check('总开关按钮存在，默认文案是「群聊总开关·开」',
+        !!gmBtn() && gmBtn().textContent === '群聊总开关·开',
+        gmBtn() ? gmBtn().textContent : '按钮不存在');
+
+  // 展开第 idx 条该 kind 的会话行，返回它开关区里 (文字, disabled) 的列表
+  const openRowTools = async (kind, idx) => {
+    const rows = () => Array.from($('sessList')
+      .querySelectorAll('.sess-row[data-kind="' + kind + '"]'));
+    const zoneOf = (r) => (r && r.nextElementSibling
+      && r.nextElementSibling.classList.contains('sess-tools'))
+      ? r.nextElementSibling : null;
+    if (!rows()[idx]) return null;
+    if (!zoneOf(rows()[idx])) {
+      rows()[idx].querySelector('.more-btn').click();
+      await sleep(40);
+    }
+    const z = zoneOf(rows()[idx]);
+    return z ? Array.from(z.querySelectorAll('button'))
+      .map((b) => [b.textContent, b.disabled]) : null;
+  };
+  const fmt = (lst) => (lst || []).map(([t, d]) => t + (d ? '(灰)' : '(亮)'))
+    .join(',');
+
+  const gBefore = await openRowTools('group', 0);
+  const pBefore = await openRowTools('private', 0);
+  check('前置：群行/私聊行都展开到开关区（展开失败会让下面假通过）',
+        gBefore && gBefore.length > 0 && pBefore && pBefore.length > 0,
+        'group0=' + fmt(gBefore) + ' / private0=' + fmt(pBefore));
+
+  calls.length = 0;
+  gmBtn().click();
+  await sleep(60);
+  const putGm = calls.filter((c) => c.url.indexOf('/groups_muted') >= 0);
+  check('点它发 PUT /groups_muted 且不带群号',
+        putGm.length === 1 && /\/groups_muted$/.test(putGm[0].url)
+        && JSON.parse(putGm[0].body).enabled === true,
+        putGm.length ? putGm[0].url + ' ' + putGm[0].body : 'no call');
+  check('按钮翻成「群聊总开关·全关」',
+        gmBtn().textContent === '群聊总开关·全关', gmBtn().textContent);
+  check('总闸自己仍可点（它是解除静音的入口，置灰会把自己锁死）',
+        gmBtn().disabled === false, String(gmBtn().disabled));
+
+  // 逐条查：每条群行都该灰、每条私聊行都该亮（别只判第一条）。
+  const gRows = Array.from(
+    $('sessList').querySelectorAll('.sess-row[data-kind="group"]')).length;
+  const pRows = Array.from(
+    $('sessList').querySelectorAll('.sess-row[data-kind="private"]')).length;
+  let allGroupsGrey = true, allPrivatesLit = true, saw = [];
+  for (let i = 0; i < gRows; i++) {
+    const lst = await openRowTools('group', i);
+    saw.push('群' + i + '[' + fmt(lst) + ']');
+    if (!lst || !lst.length || !lst.every(([, d]) => d === true)) allGroupsGrey = false;
+  }
+  for (let i = 0; i < pRows; i++) {
+    const lst = await openRowTools('private', i);
+    saw.push('私' + i + '[' + fmt(lst) + ']');
+    if (!lst || !lst.length || !lst.every(([, d]) => d === false)) allPrivatesLit = false;
+  }
+  check('**每条**群行的开关都置灰', allGroupsGrey, saw.join(' '));
+  check('**每条**私聊行的开关都不置灰（私聊不受群聊总闸管）',
+        allPrivatesLit, saw.join(' '));
+
+  // 关掉 → 群行恢复可点（别只测开的方向）
+  calls.length = 0;
+  gmBtn().click();
+  await sleep(60);
+  const offGm = calls.filter((c) => c.url.indexOf('/groups_muted') >= 0);
+  check('再点一次发 enabled=false',
+        offGm.length === 1 && JSON.parse(offGm[0].body).enabled === false,
+        offGm.length ? offGm[0].body : 'no call');
+  let allLit = true, saw2 = [];
+  for (let i = 0; i < gRows; i++) {
+    const lst = await openRowTools('group', i);
+    saw2.push('群' + i + '[' + fmt(lst) + ']');
+    if (!lst || !lst.length || !lst.every(([, d]) => d === false)) allLit = false;
+  }
+  check('解除后群行开关恢复可点', allLit, saw2.join(' '));
   dom.window.close();
 
   // ── 场景二：一条群都没有 ─────────────────────────────

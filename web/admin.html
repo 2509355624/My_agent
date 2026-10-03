@@ -326,6 +326,12 @@
           <b>会话列表已挪到右侧那一列</b>（可搜 QQ 号 / 群名，点行展开该会话的开关）。</div>
         <div class="hint" style="font-weight:600;margin:8px 0 4px;">全部</div>
         <div class="sess-foot" style="margin-bottom: 8px;">
+          <button class="toggle" id="groupsMutedAll">群聊总开关·开</button>
+          <span class="hint">一键让这个 agent <b>不理任何群</b>（群里连 @ 都不回），私聊照常。
+            当成纯私人 AI 工具时开这个。跟群行里的「只认@」「主动发言」正交——
+            那两条是逐群的，这一条是全部群一起静音。</span>
+        </div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
           <button class="toggle" id="imgGenAll">QQ 生图·开</button>
           <span class="hint">一键关闭 / 恢复这个 agent 在所有 QQ 会话的生图（网页端不受影响）。
             单独某个群不想让它画，用群行里的「生图」开关。</span>
@@ -887,6 +893,9 @@ function renderSessions() {
     const row = document.createElement('div');
     row.className = 'sess-row' + (s.kind === 'main' ? ' main' : '')
       + (sessTools && sessTools.key === s.key ? ' active' : '');
+    // 群聊总开关置灰时要按 kind 挑出群行（`renderGroupsMutedAll` 靠它）。
+    // 私聊不受群聊总闸影响，所以必须分清 —— 别改成「除了主会话都置灰」。
+    row.dataset.kind = s.kind;
 
     // 勾选框：群聊/私聊行才有（主会话是网页端，不参与 QQ 批量人设）。
     // 只改 selKeys 再同步，不整表重渲染——重渲染会把展开的编辑面板一起弄掉。
@@ -964,6 +973,9 @@ function renderSessions() {
     }
   });
   renderSelBar();
+  // 群聊总闸的置灰必须在**DOM 建完之后**做（上面 forEach 里才刚插进去的
+  // .sess-tools），所以放函数末尾而不是开头。
+  applyGroupsMutedGrey();
 }
 
 // 副行：QQ 号 + 消息数 + 最后活动（+ 关掉的开关）。
@@ -1443,6 +1455,7 @@ async function loadSessions() {
     sessSystems = d.session_system_prompts || {};
     renderSessions();
     renderImageGenAll(d.image_gen_on !== false);
+    renderGroupsMutedAll(d.groups_muted_on === true);
     renderNaiAll(d.nai_enabled === true);
     renderImageFmtAll(d.image_send_format);
     renderAuditGlobals(d.image_audit_globals);
@@ -1646,6 +1659,65 @@ function renderImageGenAll(on) {
   btn.className = 'toggle' + (on ? ' on' : '');
   btn.textContent = on ? 'QQ 生图·开' : 'QQ 生图·全关';
   btn.disabled = false;
+}
+
+// ─── 群聊总开关 ──────────────────────────────────────
+// 开了 = 这个 agent 在**所有群**里都不回（连 @ 都不接），私聊照常。
+// 与逐群的 at_only / interject 正交：那两条只收窄单个群，这一条把群全灭。
+// 后端闸门在 qq_bot._should_reply 的 `if at_me:` 之前（见 app/qq_bot.py）。
+
+function applyGroupsMutedGrey() {
+  // 群聊总开关开着时，把**群行**里那些逐群开关置灰（群里压根不接话，
+  // 点了也白点）；私聊行不动。
+  //
+  // ⚠️ 必须在 `renderSessions()` 末尾统一调，**不能**只在点总闸那一刻调：
+  // 全表有 17 处 `renderSessions()`（切 agent、勾选、展开、每个开关回调…），
+  // 每次都重建 DOM、重建开关区，置灰会被下一次重渲染抹掉。
+  //
+  // ⚠️ `.sess-tools` 是 `.sess-row` 的**兄弟**（`box.insertBefore(zone,
+  // row.nextSibling)`），不是子节点 —— 不能 `btn.closest('[data-kind=...]')`
+  // （那样一个都找不到，置灰会静默失效）。按「开关区前面那个是群行」来认。
+  const btn = $('groupsMutedAll');
+  const on = !!(btn && btn.dataset.muted === '1');
+  document.querySelectorAll('#sessList .sess-tools').forEach(zone => {
+    const row = zone.previousElementSibling;
+    const isGroup = !!(row && row.dataset && row.dataset.kind === 'group');
+    zone.querySelectorAll('button').forEach(b => { b.disabled = on && isGroup; });
+  });
+}
+
+function renderGroupsMutedAll(on) {
+  const btn = $('groupsMutedAll');
+  if (!btn) return;
+  btn.className = 'toggle' + (on ? ' on' : '');
+  // 开着的时候按钮本身保持可点——它就是**解除**静音的入口，置灰会把自己锁死。
+  btn.textContent = on ? '群聊总开关·全关' : '群聊总开关·开';
+  btn.disabled = false;
+  btn.dataset.muted = on ? '1' : '0';      // 取反判据，见 toggleGroupsMutedAll
+  applyGroupsMutedGrey();
+}
+
+async function toggleGroupsMutedAll() {
+  const btn = $('groupsMutedAll');
+  // ⚠️ 取反判据用 `dataset.muted`，**别用** `className.includes(' on')`——
+  // 静音态的文案是「全关」而 class 里恰恰带 ' on'（亮色=已静音），
+  // 照抄 renderImageGenAll 那套写法会把状态取反（前端自检抓到过这个）。
+  const target = btn.dataset.muted !== '1';
+  if (!target && !confirm('恢复群聊回复？\n\n'
+      + '这个 agent 会重新在所有群里响应（被 @、关键词、主动发言都按各自设置走）。')) return;
+  btn.disabled = true;
+  try {
+    await api('/api/agent/' + encodeURIComponent(cur) + '/groups_muted',
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: target }) });
+    renderGroupsMutedAll(target);
+    sessStatus('群聊总开关已' + (target ? '关闭：所有群都不回，私聊不受影响'
+      : '恢复（群里的回复照旧）') + '，立即生效', 'ok');
+  } catch (e) {
+    sessStatus(e.message, 'err');
+    btn.disabled = false;
+  }
 }
 
 async function toggleImageGenAll() {
@@ -2356,6 +2428,7 @@ $('sessSearch').addEventListener('keydown', (e) => {
 $('sessSearchClear').addEventListener('click', () => {
   $('sessSearch').value = ''; applySearch(''); $('sessSearch').focus();
 });
+$('groupsMutedAll').addEventListener('click', toggleGroupsMutedAll);
 $('imgGenAll').addEventListener('click', toggleImageGenAll);
 $('naiAll').addEventListener('click', toggleNaiAll);
 $('imgFmtAll').addEventListener('click', toggleImageFmtAll);
