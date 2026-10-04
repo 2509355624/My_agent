@@ -199,6 +199,27 @@ class TrimHistoryTest(unittest.TestCase):
         h = [_msg("system", "sys")]
         self.assertIs(self._trim(h, 33_000, 0.0), h)
 
+    def test_unknown_usage_falls_back_to_char_estimate(self):
+        """usage 拿不到（total=0）时按字数估算兜底判据。
+
+        现场（2026-10-04）：网页端打本地 MiMo 撞窗 400，而 400 那次调用记不
+        进 usage → 下一轮判据拿到的还是 0 → 永远不压 → 400 死循环。估算口径
+        偏保守（0.6 token/中文字），只在没有真实数据时兜底。
+        """
+        big = "画" * 3000                    # 每条估算 ≈ 1800 + 开销
+        h = [_msg("system", "sys")]
+        for i in range(6):                   # 6 轮 > FULL_RECENT_TURNS(3)
+            h.append(_msg("user", big))
+            h.append(_msg("assistant", big))
+        out = memory.trim_history(h, usage={}, budget=20_000)
+        self.assertIsNot(out, h)
+        self.assertEqual(out[1]["tool_name"], "compact_summary")
+
+    def test_unknown_usage_small_history_stays_untouched(self):
+        """估算远低于预算：兜底判据不能把小会话也压了（首轮照旧不压）。"""
+        h = self._history_with_turns(6)
+        self.assertIs(memory.trim_history(h, usage={}, budget=20_000), h)
+
 
 class CompactKeepDegradeTest(unittest.TestCase):
     """摘要之后仍然超预算时，保留轮数要自动递减。

@@ -318,6 +318,14 @@ def trim_history(history, agent_id=None, usage=None, budget=None,
     if usage is None:
         usage = current_usage()
     total_tokens = usage.get("total_tokens", 0) or 0
+    if total_tokens <= 0:
+        # usage 未知（会话首轮 / 上一轮 400 没记到数 / 不回 usage 的调用路径）
+        # 时退回字数估算。不兜底的话「已经胖过线的会话」永远等不到一个能记
+        # usage 的成功调用——每轮都原样把超窗 prompt 发出去，400 死循环。
+        # 2026-10-04 实锤：网页端打本地 MiMo，e438afe 修好 usage 上报后仍撞
+        # 17840>16384，因为撞窗那次调用本身就记不进 usage，判据拿到的还是 0。
+        total_tokens = (estimate_messages(system_msgs)
+                        + estimate_messages(other_msgs))
     hit_rate = usage.get("hit_rate", 1.0)
 
     should = False
