@@ -59,6 +59,29 @@ def _normalize(text):
                   "", (text or "").strip())
 
 
+# 群聊/私聊消息都带署名前缀（qq_bot 入口 `sender + "：" + text`，合并窗口里
+# 也是 "%s：%s"），实测 2026-10-04 233粉丝群：确认词正则锚定行首，拿原始
+# 文本判「胡桃桃：好」永远不命中 → pending 反复作废 → 模型重出卡死循环、
+# 一张图都没真正入队。剥掉署名与 @ 前缀再逐行判。
+_ATTRIBUTION_RE = re.compile(r"^\s*[^：:\n]{1,20}[：:]\s*")
+_AT_RE = re.compile(r"^\s*@\S+\s*")
+
+
+def _candidate_lines(text):
+    """剥掉每行的署名 / @ 前缀，返回去空后的候选行（保序）。"""
+    out = []
+    for line in (text or "").splitlines():
+        prev = None
+        while prev != line:
+            prev = line
+            line = _ATTRIBUTION_RE.sub("", line, count=1)
+            line = _AT_RE.sub("", line, count=1)
+        line = line.strip()
+        if line:
+            out.append(line)
+    return out
+
+
 def is_confirm(text):
     """这条消息是不是在确认开跑。宁可漏判（作废重出卡）不可误判（白花钱）。"""
     t = _normalize(text)
@@ -121,7 +144,8 @@ def consume_if_confirmed(target, target_id, text):
         pend = _PENDING.pop((target, target_id), None)
     if pend is None:
         return None
-    if not is_confirm(text):
+    # 合并窗口可能混进好几行（署名各不相同）：任何一行是确认就算确认。
+    if not any(is_confirm(line) for line in _candidate_lines(text)):
         log.info("确认闸：pending 作废（对方说的是 %r，不是确认）",
                  (text or "")[:40])
         return None

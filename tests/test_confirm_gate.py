@@ -178,5 +178,49 @@ class ConsumeTest(unittest.TestCase):
         rc.assert_called_once()
 
 
+class AttributionPrefixTest(unittest.TestCase):
+    """2026-10-04 233粉丝群实录：群聊文本带署名前缀（「胡桃桃：好」），
+    确认词锚定行首全部漏判 → pending 反复作废 → 模型重出卡死循环，
+    一张图都没真正入队（最后那句「图已跑完」是模型编的）。"""
+
+    def test_group_prefix_recognized(self):
+        for t in ("胡桃桃：好", "胡桃桃：好！", "清酒瓶子：确认",
+                  "@大大怪（生图机器人，贼拉快，种类多） 好"):
+            lines = confirm_gate._candidate_lines(t)
+            self.assertTrue(
+                any(confirm_gate.is_confirm(l) for l in lines), t)
+
+    def test_group_prefix_modify_still_discards(self):
+        for t in ("胡桃桃：换成白丝", "胡桃桃：用qwen跑",
+                  "@大大怪（生图机器人，贼拉快，种类多） 走三档"):
+            lines = confirm_gate._candidate_lines(t)
+            self.assertFalse(
+                any(confirm_gate.is_confirm(l) for l in lines), t)
+
+    def test_merged_batch_any_line_confirms(self):
+        # 合并窗口混了几条：一行确认就算确认，其余行不影响。
+        text = "胡桃桃：好\n糕手不是高手：这个画质针不戳"
+        lines = confirm_gate._candidate_lines(text)
+        self.assertTrue(any(confirm_gate.is_confirm(l) for l in lines))
+
+    def test_consume_with_prefixed_text_enqueues(self):
+        confirm_gate._PENDING[("group", "1103174141")] = {
+            "kind": "comfy", "skill": "qwen_image_v1", "prompt": "1girl",
+            "seed": None, "intent": "k", "workflow": {"w": 1}, "note": "",
+        }
+        job = mock.Mock()
+        with mock.patch("app.image_jobs.comfy_alive", return_value=True), \
+             mock.patch("app.image_jobs.enqueue",
+                        return_value=(job, None)) as en, \
+             mock.patch("app.tools.normal.generate_image._charge_quota",
+                        return_value=""), \
+             mock.patch("app.tools.normal.generate_image._qq_receipt",
+                        return_value="回执"):
+            reply = confirm_gate.consume_if_confirmed(
+                "group", "1103174141", "胡桃桃：好")
+        self.assertEqual(reply, "回执")
+        en.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
