@@ -21,7 +21,8 @@ from app import usage as usage_stats
 # 'function' object has no attribute 'default_prompt'。
 from app import vision as vision_mod
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
-                        LLM_PROVIDER, PROVIDERS, OLLAMA_BASE_URL, DEFAULT_AGENT_ID,
+                        LLM_PROVIDER, LLM_FALLBACK_CHAIN, PROVIDERS,
+                        OLLAMA_BASE_URL, DEFAULT_AGENT_ID,
                         ADMIN_ALLOW_REMOTE, CONTEXT_BUDGET, IMAGE_AUDIT_PROMPT_MAX,
                         QQ_PRIVATE_ENABLE, QQ_WHITELIST_USERS,
                         VISION_PROMPT_MAX, VISION_PROVIDER, VISION_MODEL,
@@ -426,11 +427,23 @@ def _agent_or_400(agent_id):
 
 
 def _agent_detail(aid):
-    """管理页需要的完整状态。provider / model 为空串表示「继承全局默认」。"""
+    """管理页需要的完整状态。provider / model 为空串表示「继承全局默认」。
+
+    继承的语义（2026-10-04 用户定）= **走 .env 的整条降级链**：链头先上，
+    失败顺位往下；选了具体 provider 才是钉死那一家（strict，不换家）。
+    所以「实际生效」在继承时取链头，而不是固定的 LLM_PROVIDER。
+    """
     cfg = agent_store.agent_config(aid)
     raw = agent_store.agent_raw_config(aid)
-    eff_provider = cfg["provider"] or LLM_PROVIDER
-    eff_model = cfg["model"] or PROVIDERS.get(eff_provider, {}).get("model", "")
+    from app.llm import parse_chain
+    chain = parse_chain(LLM_FALLBACK_CHAIN)
+    if cfg["provider"] or cfg["model"]:
+        eff_provider = cfg["provider"] or LLM_PROVIDER
+        eff_model = cfg["model"] or PROVIDERS.get(eff_provider, {}).get("model", "")
+    else:
+        # 继承全局 = 降级链链头（链空才退 LLM_PROVIDER）
+        eff_provider = chain[0][0] if chain else LLM_PROVIDER
+        eff_model = chain[0][1] if chain else MODEL
     # 识图实际生效的那份：界面选过就按界面那份，否则退回 .env。
     # active_choice 内部会重读 settings（mtime 缓存），所以管理页改完立刻变。
     _v_pid, _v_model = vision_mod.active_choice(aid)
@@ -450,6 +463,11 @@ def _agent_detail(aid):
                       for k, v in PROVIDERS.items()],
         "global_provider": LLM_PROVIDER,
         "global_model": MODEL,
+        # 全局降级链（继承全局时文本模型实际跑的顺序），管理页拿它把
+        # 「继承全局」的真正含义亮出来，别让人以为继承=固定某一家
+        "global_chain": [{"pid": pid, "model": model,
+                          "label": PROVIDERS.get(pid, {}).get("label", pid)}
+                         for pid, model in chain],
         # 把「继承」算进去后实际会用的模型，让用户改完能立刻看到是什么效果
         "effective_provider": eff_provider,
         "effective_model": eff_model,

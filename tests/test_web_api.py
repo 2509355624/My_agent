@@ -19,6 +19,19 @@ import app.agent as agent
 import app.cancel as cancel_mod
 import app.comfy_status as comfy_status
 import app.main as main
+
+
+def _chain_all():
+    """当前生效的全局降级链（.env 优先），[(pid, model), ...]。"""
+    from app.llm import parse_chain
+    return parse_chain(main.LLM_FALLBACK_CHAIN)
+
+
+def _chain_head():
+    c = _chain_all()
+    if c:
+        return c[0]
+    return (main.LLM_PROVIDER, main.PROVIDERS[main.LLM_PROVIDER]["model"])
 import app.agents as agents
 import app.memory as memory
 import app.tools.normal.documents as documents
@@ -516,11 +529,17 @@ class AgentAdminApiTest(unittest.TestCase):
         self.assertEqual(d["description"], "描述")
         self.assertEqual(d["prompt"], "你是助手")
         self.assertEqual(d["prompt_file"], "prompt.md")
-        # 没配就是空串，并由 *_effective 字段告诉界面实际会用谁
+        # 没配就是空串，并由 *_effective 字段告诉界面实际会用谁。
+        # 继承全局 = 走降级链（2026-10-04 用户定），生效值是链头而不是
+        # 固定的 LLM_PROVIDER。
         self.assertEqual(d["provider"], "")
         self.assertEqual(d["global_provider"], main.LLM_PROVIDER)
-        self.assertEqual(d["effective_provider"], main.LLM_PROVIDER)
-        self.assertEqual(d["effective_model"], main.PROVIDERS[main.LLM_PROVIDER]["model"])
+        head_pid, head_model = _chain_head()
+        self.assertEqual(d["effective_provider"], head_pid)
+        self.assertEqual(d["effective_model"], head_model)
+        # 降级链整条随 detail 下发（管理页要把「继承」的含义亮出来）
+        self.assertEqual([c["pid"] for c in d["global_chain"]],
+                         [pid for pid, _ in _chain_all()])
         self.assertEqual(d["tools"], ["read_file"])
         self.assertTrue(any(p["id"] == "volc" for p in d["providers"]))
 
@@ -562,7 +581,8 @@ class AgentAdminApiTest(unittest.TestCase):
         d = self.client.put("/api/agent/main", json={
             "provider": "", "model": ""}).get_json()
         self.assertEqual(d["provider"], "")
-        self.assertEqual(d["effective_provider"], main.LLM_PROVIDER)
+        # 清空 = 回到降级链链头（继承全局），不是固定的 LLM_PROVIDER
+        self.assertEqual(d["effective_provider"], _chain_head()[0])
 
     def test_put_creates_config_when_absent(self):
         self._write_agent("newone")
