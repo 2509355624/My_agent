@@ -496,12 +496,15 @@ def _revise(text, data_urls, history, channel=None, at_me=False):
 
 def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     """直达管道入口。返回值：
-    - None      ：不接管（总开关关闭 / 主动接话轮 / 关键词轮的闲聊——静默）
-    - ""        ：已接管且回执已直发（出图回执），本轮别再说话
+    - None      ：不接管（总开关关闭 / 主动接话轮）
+    - ""        ：已接管但闭嘴（关键词轮引用图 + 夸奖这类 skip——吞掉整轮，
+                  绝不让它掉回 agent 接话）
     - 其他文本  ：接管并把这段发回会话（菜单/反推/错误提示）
 
-    @ 轮（at_me=True）一切兜底都是菜单（引用图轮是反推）；关键词/全量轮
-    兜底一律静默——2026-10-05 用户拍板，止住「群里提到名字就刷菜单」。
+    2026-10-05 用户拍板（233 粉丝群实录：闲聊句命中关键词掉回 agent 接话
+    「大大怪，到」）：**@ 轮和关键词轮，没引用发言/图片时结局只有两种——
+    生图或菜单**，绝不回聊天。带引用图轮 skip 时 @ 轮回反推文本、关键词轮
+    闭嘴（""）。
     """
     text = _strip_own_names(_strip_attribution(own_text))
     # 菜单与裸 @：零 LLM，直接回常量（管道关着也照回——它本来就免费）。
@@ -531,8 +534,9 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
                 return "没认出引用的图，重发一次，或直接 @我 渠道 描述。"
             _remember_job(session_key, ch, tags)
             return _enqueue(ch, tags, text)
-        # 其余（有意见 / 无渠道词）→ 改图管道。
-        return _revise(text, data_urls, history, channel=ch, at_me=at_me)
+        # 其余（有意见 / 无渠道词）→ 改图管道；skip=关键词轮闭嘴吞轮。
+        reply = _revise(text, data_urls, history, channel=ch, at_me=at_me)
+        return reply if reply is not None else ""
 
     # 「再来一张」（不引用、不带渠道词）：同提示词换种子重跑，零转译。
     last = _last_job(session_key)
@@ -583,15 +587,16 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
                 + MENU_TEXT)
 
     # 画图动词（「画一只猫」）或裸 @ + 描述 → 一次转译（LLM 顺带判渠道）。
+    # 转译失败 @ 轮和关键词轮都回格式提示——闲聊轮绝不掉回 agent 接话
+    # （233 粉丝群 02:06 实录教训）。
     if _INTENT_RE.search(text) or at_me:
         data = _translate(text, history)
         if data:
             _remember_job(session_key, data["skill"], data["prompt"])
             return _enqueue(data["skill"], data["prompt"], text)
-        if at_me:
-            return ("这条没转译成生图指令。照格式来：@我 渠道 描述\n\n"
-                    + MENU_TEXT)
-        return None                     # 关键词轮转译失败 → 静默
+        return ("这条没转译成生图指令。照格式来：@我 渠道 描述\n\n"
+                + MENU_TEXT)
 
-    # 关键词命中但纯闲聊（别的机器人的聊天提到名字）→ 静默不理。
-    return None
+    # 关键词命中但没渠道词没画图动词（「进黑名单你都喊不出大大怪」）→
+    # 照样回菜单，绝不掉回 agent 接话。
+    return MENU_TEXT

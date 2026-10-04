@@ -9,9 +9,10 @@
 - 裸 @ + 描述 / 画图动词 → 一次转译（LLM 顺带判渠道）
 - 引用正文 + 只打渠道词 → 引用内容当描述，锁定渠道扩写
 - 引用回执 +「再来一张」→ 同提示词换种子重跑，零转译
-- 引用图 + 意见 → 改图管道；意见不是修改请求（skip）→ @ 轮回菜单、
-  关键词轮静默
-- @ 轮兜底 = 菜单；关键词轮兜底 = 静默（None）——止住菜单刷屏
+- 引用图 + 意见 → 改图管道；意见不是修改请求（skip）→ @ 轮回反推文本、
+  关键词轮闭嘴吞轮（""）
+- @ 轮和关键词轮兜底 = 菜单——没引用/没图的轮要么生图要么菜单，
+  绝不掉回 agent 接话（233 粉丝群 02:06 实录教训）
 """
 import unittest
 from unittest import mock
@@ -109,12 +110,14 @@ class MenuAndGateTest(unittest.TestCase):
         self.assertIn(MENU_TEXT, out)
         self.assertEqual(m_llm.call_count, 1)
 
-    def test_keyword_chatter_is_silent(self):
-        # 关键词命中但纯闲聊（小小怪的聊天里提到名字）→ 静默不理，零 LLM
+    def test_keyword_chatter_returns_menu_not_agent(self):
+        # 233 粉丝群 02:06 实录：闲聊句命中关键词曾掉回 agent 接话
+        # （「大大怪，到」）。用户拍板：关键词轮没引用/没图 → 一律菜单，
+        # 绝不回聊天，零 LLM
         with mock.patch.object(direct_gen.llm, "call_llm") as m_llm:
-            out = direct_gen.decide("感觉这下大大怪比小小怪提词准一倍了",
+            out = direct_gen.decide("进黑名单你都喊不出大大怪",
                                     [], False, at_me=False)
-        self.assertIsNone(out)
+        self.assertEqual(out, direct_gen.MENU_TEXT)
         m_llm.assert_not_called()
 
 
@@ -209,14 +212,14 @@ class DirectEnqueueTest(unittest.TestCase):
                 m_gen.assert_not_called()
 
     def test_llm_failure_at_vs_keyword(self):
-        # @ 轮失败 → 提示 + 菜单；关键词轮失败 → 静默
+        # 转译失败：@ 轮和关键词轮都回格式提示+菜单，谁也不掉回 agent
         with mock.patch.object(direct_gen.llm, "call_llm",
                                side_effect=RuntimeError("429")), \
              mock.patch.object(gi, "_generate_image") as m_gen:
             out_at = direct_gen.decide("画一只猫", [], False, at_me=True)
             out_kw = direct_gen.decide("画一只猫", [], False, at_me=False)
         self.assertIn(MENU_TEXT, out_at)
-        self.assertIsNone(out_kw)
+        self.assertIn(MENU_TEXT, out_kw)
         m_gen.assert_not_called()
 
     def test_tool_error_is_humanized(self):
@@ -413,12 +416,11 @@ class RevisionPipelineTest(unittest.TestCase):
                                       skill="hd_fast_clear",
                                       _skip_confirm=True)
 
-    def test_praise_is_skipped_silently_on_keyword_round(self):
-        # 群实录 2026-10-05 01:08：引用图 +「比大大怪快五秒左右」（夸奖）
-        # → 关键词轮静默。
+    def test_praise_is_swallowed_on_keyword_round(self):
+        # 关键词轮引用图 + 夸奖（skip）→ 闭嘴吞轮（""），绝不掉回 agent
         out, m_llm, m_gen = self._decide(
             "比大大怪快五秒左右", '{"skip": true}')
-        self.assertIsNone(out)
+        self.assertEqual(out, "")
         m_gen.assert_not_called()
 
     def test_praise_on_at_round_returns_reverse_text(self):
