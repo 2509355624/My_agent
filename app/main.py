@@ -4,6 +4,7 @@ Flask Web 服务入口
 
 import re
 import json
+import base64
 import socket
 import time
 import requests
@@ -24,7 +25,7 @@ from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         ADMIN_ALLOW_REMOTE, CONTEXT_BUDGET, IMAGE_AUDIT_PROMPT_MAX,
                         QQ_PRIVATE_ENABLE, QQ_WHITELIST_USERS,
                         VISION_PROMPT_MAX, VISION_PROVIDER, VISION_MODEL,
-                        provider_vision)
+                        QQ_AGENT_ID, provider_vision)
 from app.skills import list_skills, load_skill
 from app import model_catalog
 from app.agent_prompt import build_stable_prompt, sync_session_system
@@ -430,6 +431,10 @@ def _agent_detail(aid):
     raw = agent_store.agent_raw_config(aid)
     eff_provider = cfg["provider"] or LLM_PROVIDER
     eff_model = cfg["model"] or PROVIDERS.get(eff_provider, {}).get("model", "")
+    # 识图实际生效的那份：界面选过就按界面那份，否则退回 .env。
+    # active_choice 内部会重读 settings（mtime 缓存），所以管理页改完立刻变。
+    _v_pid, _v_model = vision_mod.active_choice(aid)
+    _v_from_env = not agent_store.vision_choice(aid)[0]
     return {
         "id": aid,
         "name": cfg["name"] or aid,
@@ -451,9 +456,13 @@ def _agent_detail(aid):
         # 带图能力：生效模型能不能直接读图。不能的话，带图请求会先经过识图
         # 预处理——识图固定走 vision_provider，与该 agent 自己的模型无关。
         "vision": provider_vision(eff_provider, eff_model),
-        "vision_provider": VISION_PROVIDER,
-        "vision_model": (VISION_MODEL
-                         or PROVIDERS.get(VISION_PROVIDER, {}).get("model", "")),
+        # 识图（对方发图给机器人时当眼睛用的那个）：给**实际生效**的那份，
+        # 下方 novisual 提示里要显示它；`vision_from_env` = 有没有在界面上配过
+        # （true 时用的是 .env 的值，改 .env 要重启才变）。
+        "vision_provider": _v_pid,
+        "vision_model": (_v_model
+                         or PROVIDERS.get(_v_pid, {}).get("model", "")),
+        "vision_from_env": _v_from_env,
         # 上下文预算：0 → 继承全局。session_tokens 是主会话的粗估体量，
         # 让「改完到底有没有用」立刻可见（网页端会话就是这一条）。
         # QQ 那些群各自一条会话线，不在这里体现，看日志里的 [cache] 行。
@@ -1518,6 +1527,167 @@ def set_groups_muted(agent_id):
     return jsonify({"ok": True, "agent": aid, "groups_muted": bool(body["enabled"])})
 
 
+def _local_vision_model_ids():
+    """本机 ollama 里**真能读图**的模型名集合。探不到返回空集（= 跳过校验）。
+
+    判据两条同时成立：ollama 报了 vision（`is True`，None 是不确定、不算），
+    且名字里有真视觉架构标记（`_ollama_vision_untrustworthy` 说明为什么不能
+    只看 capabilities）。清单接口和保存校验都调这个——两处判据必须一致，
+    否则会出现「下拉里看不到但能存进去」或反之。
+
+    ⚠️ 别把它写成集合推导式里的 `and not`：vision=True 的真模型会被
+    `is not True` 一起滤掉，结果本地清单整个变空、下拉里一个本地模型都没有
+    （我踩过一次）。写成显式循环，条件只有一个地方。
+    """
+    try:
+        cat = model_catalog.list_models("ollama")
+    except Exception:                               # noqa: BLE001
+        return set()
+    good = set()
+    for m in cat.get("models") or []:
+        mid = m.get("id") or ""
+        if m.get("vision") is not True:
+            continue
+        if _ollama_vision_untrustworthy(mid):
+            continue
+        good.add(mid)
+    return good
+
+
+# ─── 识图模型（对方发图给机器人时当眼睛用的那个）────────────
+# 下拉里的选项**现查**不写死：本地模型会 `ollama pull`、云端模型会下线，
+# 写死的清单必然腐烂（与 model_catalog 同一理由）。云端只列 PROVIDERS 里
+# 标了 vision 的那些，本地列 /api/tags 里 capabilities 含 vision 的。
+#
+# 本地识图**很慢**（2026-10-04 实测 qwen3-vl:2b 冷启 42 秒、同一张图重复请求
+# 103 秒、第三次直接 180 秒超时），所以选项里带上「本地 · 慢」字样，让用户在
+# 界面上就看到代价，不用切过去踩一轮才后悔。
+_VISION_LOCAL_SLOW_NOTE = "本地 · 慢（几十秒~几分钟，失败就拿不到图）"
+
+
+def _ollama_vision_untrustworthy(model_id):
+    """这个本地模型「报了 vision 但实测不读图」→ 别列进识图下拉。
+
+    ollama 的 /api/tags 里 capabilities 是**按模型名猜**的，不是实测：纯文本的
+    qwen3.5-abliterated:9b 与 nexusriot/Qwen3.5-Uncensored-...:9b 都报 vision，
+    真发一张图过去它不读（同款现象在 qwen3.8-9b-heretic 上实测过：HTTP 400
+    does not support multimodal）。列出来等于骗用户切过去、然后每轮识图失败。
+
+    判据看**模型名里有没有真的视觉架构标记**（vl / vision / omni），不看
+    capabilities。新装了别的视觉模型时这里不用改——只挡「名字里没有任何
+    视觉标记」的那批，不写死具体名字。
+    """
+    name = (model_id or "").lower()
+    if any(k in name for k in ("vl", "vision", "-vl-", "omni")):
+        return False
+    # 没有任何视觉架构标记 → 一律不信 capabilities。
+    return True
+
+
+@app.route("/api/vision/models")
+def vision_models():
+    """列出可选的识图模型：云端带 vision 的 provider + 本地 ollama 视觉模型。
+
+    带上当前生效的那个（`current`），好让前端默认选中它。
+    `agent` 参数决定读谁的配置（管理页切 agent 时要跟着变），缺省用 QQ_AGENT_ID。
+    """
+    from app import vision as vmod
+
+    aid = (request.args.get("agent") or QQ_AGENT_ID).strip()
+    if agent_store.safe_agent_id(aid) is None:
+        aid = QQ_AGENT_ID
+    cur_pid, cur_model = vmod.active_choice(aid)
+    items = []
+    for pid, cfg in PROVIDERS.items():
+        if not provider_vision(pid, None):
+            continue
+        # llama 是本地服务，标「云端」会误导（实测它识图 3.6 秒，也不慢）。
+        if pid == "llama":
+            note = "本地 llama.cpp，几秒"
+        else:
+            note = "云端，1~2 秒"
+        items.append({
+            "value": pid + ":",
+            "provider": pid,
+            "model": "",
+            "label": "%s · %s（%s）"
+                     % (cfg.get("label", pid), cfg.get("model", ""), note),
+        })
+    # 本地：判据只有一处（_local_vision_model_ids），别在下拉里另写一份
+    local = []
+    items_error = ""
+    try:
+        cat = model_catalog.list_models("ollama")
+        good = _local_vision_model_ids()
+        for mid in sorted(good):
+            local.append({
+                "value": "ollama:" + mid,
+                "provider": "ollama",
+                "model": mid,
+                "label": "%s（%s）" % (mid, _VISION_LOCAL_SLOW_NOTE),
+            })
+        if cat.get("error"):
+            items_error = "本地模型清单不完整（%s）" % cat["error"]
+    except Exception as e:                        # noqa: BLE001
+        # ollama 没开不是错误：云端那几项照样能用，只是本地那几项缺席。
+        items_error = "拿不到本地模型清单（%s）" % e
+    items.extend(local)
+
+    cur_value = (cur_pid + ":" + (cur_model or "")) if cur_pid else ""
+    return jsonify({"items": items, "current": cur_value,
+                    "error": items_error,
+                    "from_env": not agent_store.vision_choice(aid)[0]})
+
+
+@app.route("/api/agent/<agent_id>/vision_model", methods=["PUT"])
+def set_vision_model(agent_id):
+    """切识图模型。热生效，不用重启（vision.active_choice 每次调用重读配置）。
+
+    body: {"value": "ollama:qwen3-vl:2b"} 或 {"value": ""}（= 退回 .env）。
+
+    ⚠️ 只影响「对方发图给机器人时把它读成文字」这条**对话**链路。
+    生图发出去前的 NSFW 审核不跟着切（用户 2026-10-04 拍板）——审核是
+    fail-closed 且超时只有 30 秒，本地那个速度会把每张图都拦死。见
+    vision.audit_choice。
+
+    校验查 PROVIDERS 有没有这个 provider、本地模型在不在 ollama 清单里：
+    写错名字的话，表现是每轮识图都 HTTP 404，而用户看不出是自己拼错了。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if "value" not in body or not isinstance(body["value"], str):
+        return jsonify({"error": "需要字符串字段 value"}), 400
+    value = body["value"].strip()
+
+    if value:
+        pid, _, model = value.partition(":")
+        pid = pid.strip()
+        if pid not in PROVIDERS:
+            return jsonify({"error": "没有这个 provider：%r" % pid}), 400
+        if pid == "ollama" and model.strip():
+            names = _local_vision_model_ids()
+            if names and model.strip() not in names:
+                return jsonify({"error": "本机 ollama 里没有这个能读图的模型：%r"
+                                 % model.strip()}), 400
+
+    # 写之前 read-modify-write（settings.json 还有 tools/skills 白名单等键）
+    settings = agent_store.load_settings(aid)
+    if value:
+        settings[agent_store.VISION_MODEL_KEY] = value
+    else:
+        settings.pop(agent_store.VISION_MODEL_KEY, None)
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    pid, model = vision_mod.active_choice(aid)
+    return jsonify({"ok": True, "agent": aid, "value": value,
+                    "effective_provider": pid, "effective_model": model})
+
+
 @app.route("/api/agent/<agent_id>/at_only/<group_id>", methods=["PUT"])
 def set_group_at_only(agent_id, group_id):
     """切某个群的「只认 @」开关。热生效，不用重启。
@@ -1816,6 +1986,65 @@ def _safe_base_filename(fname):
     if not cleaned:
         cleaned = "unnamed.txt"
     return cleaned
+
+
+@app.route("/api/vision/test", methods=["POST"])
+def vision_test():
+    """拿一张图试读一次，把**结果和耗时**回给界面。
+
+    为什么必须有这个：本地识图慢到「切过去才发现」是不行的——用户切完才发现
+    每张图要等两分钟，就晚了（2026-10-04 实测 qwen3-vl:2b 冷启 42 秒、同一张图
+    重复请求 103 秒、第三次直接 180 秒超时）。而且慢的那个还有输出质量问题：
+    qwen2.5-vl-abliterated:3b 试同一张图只回了「小小怪」三个字（图上确实有
+    「大大怪」水印，它把水印当答案了）。这些光看模型名看不出来。
+
+    传 `value` = 试**指定**那个（还没保存也能先试）；不传 = 试当前生效的。
+    审核那条链路不参与（这里只测「对方发图给机器人」的识图）。
+
+    ⚠️ 超时故意给 200 秒：本地实测能到 180 秒还在跑，给 30 秒会永远失败。
+    这是个手动按钮、不是对话热路径，慢一点无妨。
+    """
+    from app import vision as vmod
+
+    data = request.get_json(silent=True) or {}
+    value = (data.get("value") or "").strip()
+    if value:
+        pid, _, model = value.partition(":")
+        pid, model = pid.strip(), model.strip()
+        if pid not in PROVIDERS:
+            return jsonify({"error": "没有这个 provider：%r" % pid}), 400
+    else:
+        pid, model = vmod.active_choice()
+
+    raw = (data.get("image_base64") or "").strip()
+    if not raw:
+        return jsonify({"error": "缺少 image_base64"}), 400
+    if raw.startswith("data:"):
+        raw = raw.split(",", 1)[1]
+    try:
+        blob = base64.b64decode(raw, validate=False)
+    except Exception as e:                            # noqa: BLE001
+        return jsonify({"error": "base64 解不开：%s" % e}), 400
+    if not blob:
+        return jsonify({"error": "图片是空的"}), 400
+
+    try:
+        data_url = vmod.to_data_url(blob)
+    except Exception as e:                            # noqa: BLE001
+        return jsonify({"error": "压缩失败：%s" % e}), 400
+
+    t0 = time.monotonic()
+    try:
+        text = vmod.describe(data_url, timeout=200, prompt=vmod.default_prompt(),
+                             provider=pid, model=model or None)
+    except Exception as e:                            # noqa: BLE001
+        return jsonify({"error": "识图失败（%.1f 秒）：%s"
+                                 % (time.monotonic() - t0, e),
+                        "elapsed": round(time.monotonic() - t0, 1),
+                        "provider": pid, "model": model}), 200
+    return jsonify({"ok": True, "text": text,
+                    "elapsed": round(time.monotonic() - t0, 1),
+                    "provider": pid, "model": model})
 
 
 @app.route("/api/documents/upload", methods=["POST"])

@@ -67,6 +67,28 @@ class ProviderVisionTest(unittest.TestCase):
                           "%s 缺 vision 字段" % pid)
 
 
+class LlamaProviderTest(unittest.TestCase):
+    """2026-10-04 接入 llama.cpp（llama-server 8081，主对话+识图都指向它）。
+
+    三处漏配的后果都很隐蔽：vision 漏标 = 带图请求不过识图预处理、直接
+    撞进无 mmproj 的服务端 500；窗口漏进 _PROVIDER_CONTEXT_WINDOW = 压缩
+    闸门失效、prompt 撞满 16384 物理墙（ollama/granite 那次的前车之鉴）；
+    base_url 漏 /v1 = 请求打到不存在的 /chat/completions 上 404。
+    """
+
+    def test_llama_provider_wired(self):
+        cfg = config.PROVIDERS["llama"]
+        self.assertTrue(cfg["vision"], "llama 的 vision 标志丢了")
+        self.assertTrue(config.provider_vision("llama", cfg["model"]))
+        self.assertIn("/v1", cfg["base_url"],
+                      "llama-server 只有 OpenAI 兼容端点，base_url 必须带 /v1")
+
+    def test_llama_context_window_capped(self):
+        # 窗口 16384 × 0.7 = 11468，与 ollama 同一堵物理墙
+        self.assertEqual(config.physical_budget("llama", None, 30000), 11468)
+        self.assertEqual(config.physical_budget("llama", None, 8000), 8000)
+
+
 # ─── 压缩与类型识别 ─────────────────────────────────
 
 class SniffMimeTest(unittest.TestCase):
@@ -238,10 +260,13 @@ class DescribeTest(unittest.TestCase):
     def setUp(self):
         p1 = mock.patch.object(vision, "VISION_PROVIDER", "mimo")
         p2 = mock.patch.object(vision, "VISION_MODEL", "")
-        p1.start()
-        p2.start()
-        self.addCleanup(p1.stop)
-        self.addCleanup(p2.stop)
+        # 2026-10-04：settings.json 里存了真实识图选择（llama:），active_choice()
+        # 会读到它、绕过上面两个 patch——测试必须钉死走「无选择 → .env 默认」
+        # 这条分支，否则跟着本机配置漂。
+        p3 = mock.patch.object(vision, "active_choice", return_value=(None, ""))
+        for p in (p1, p2, p3):
+            p.start()
+            self.addCleanup(p.stop)
 
     def _ok(self, content=" 一只猫 "):
         return _resp(status=200), {"choices": [{"message": {"content": content}}]}
@@ -283,7 +308,9 @@ class DescribeTest(unittest.TestCase):
         # import VISION_PROVIDER` 进来的名字，patch config 上的同名属性它看不见。
         # 改前这条是**假通过**——真去打了 mimo 的 API，靠网络失败凑出一个
         # RuntimeError，看着绿其实什么都没验。
-        with mock.patch.object(vision, "VISION_PROVIDER", "nonexistent"):
+        # active_choice 也要钉住：settings.json 里的真实选择会盖过 VISION_PROVIDER。
+        with mock.patch.object(vision, "VISION_PROVIDER", "nonexistent"), \
+                mock.patch.object(vision, "active_choice", return_value=(None, "")):
             with self.assertRaises(RuntimeError) as ctx:
                 vision.describe("data:image/jpeg;base64,AAA")
         self.assertIn("未配置", str(ctx.exception))
@@ -300,9 +327,13 @@ class VisionDeadlineTest(unittest.TestCase):
 
     def setUp(self):
         # 钉住 provider：这些用例只关心超时闸门，不该跟着 .env 漂到 ollama 分支。
+        # active_choice 一并钉住：settings.json 的真实选择（llama:）会盖过 patch。
         p = mock.patch.object(vision, "VISION_PROVIDER", "mimo")
         p.start()
         self.addCleanup(p.stop)
+        q = mock.patch.object(vision, "active_choice", return_value=(None, ""))
+        q.start()
+        self.addCleanup(q.stop)
 
     def _ok(self):
         r = _resp(status=200)

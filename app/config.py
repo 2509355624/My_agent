@@ -120,6 +120,15 @@ else:
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 
+# llama.cpp 的 llama-server（2026-10-04 接入，主对话+识图都指向它）。
+# base_url **带 /v1**：llama-server 只有 OpenAI 兼容端点（/v1/chat/completions），
+# 没有 ollama 那个 /api/chat——provider 分派里它走通用 OpenAI 分支，URL 直接
+# 拼在这个尾巴上。model 名 llama-server 不校验（服务端就载了一个模型），这里
+# 填文件名只是让日志/下拉里能认出是谁。识图能力取决于启动时有没有 --mmproj，
+# 有 = vision True（实测 MiMo Q5_K_M + mmproj f16 一张图 3.6 秒）。
+LLAMA_BASE_URL = os.getenv("LLAMA_BASE_URL", "http://127.0.0.1:8081/v1")
+LLAMA_MODEL = os.getenv("LLAMA_MODEL", "MiMo-V2.6-Distill-Qwen-9B-Q5_K_M")
+
 # provider 元信息：每种提供商的默认 base_url / model / 是否需要 api_key
 # vision 表示「这个 provider 的默认模型能不能读图」。它决定带图请求走哪条路：
 # 有视觉的直接多模态下发；没有的先过一道识图（见 app/vision.py）转成文字。
@@ -164,6 +173,18 @@ PROVIDERS = {
         "api_key": "",
         "needs_key": False,
         "vision": False,
+    },
+    # llama.cpp 的 llama-server（2026-10-04）：OpenAI 兼容端点，主对话+识图
+    # 都走它。vision=True 的前提是启动命令带了 --mmproj（见 start-server.bat）；
+    # 不带 mmproj 时带图请求会 500，表现为该轮识图失败降级纯文本。
+    # 注意与 ollama 是**两个独立服务**（8081 vs 11434），同时常驻会各占一份显存。
+    "llama": {
+        "label": "llama.cpp 本地",
+        "base_url": LLAMA_BASE_URL,
+        "model": LLAMA_MODEL,
+        "api_key": "",
+        "needs_key": False,
+        "vision": True,
     },
     # SCNet 超算互联网（国家超算 Token Plan，免费 credits 计费）。模型是
     # DeepSeek-V4.1-Flash（带深度思考），套餐页面只承诺文本生成/深度思考，
@@ -482,6 +503,9 @@ CONTEXT_BUDGET = int(os.getenv("CONTEXT_BUDGET", "32000"))
 # 这里只是读同一个数、提前一步拦住，别指望它等于模型上限。
 _PROVIDER_CONTEXT_WINDOW = {
     "ollama": int(os.getenv("OLLAMA_NUM_CTX", "16384")),
+    # llama-server 的窗口由启动参数 -c 决定（start-server.bat 里 16384），
+    # 两边保持同一个数：改启动脚本时这里要跟着改。
+    "llama": int(os.getenv("LLAMA_NUM_CTX", "16384")),
 }
 
 # 压缩后的目标水位 = 窗口的这个比例。留出的余量给状态栏、extra_context

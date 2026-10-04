@@ -119,6 +119,7 @@ class ModelCallLogTest(unittest.TestCase):
         pid = sorted(vision.PROVIDERS)[0]
         with mock.patch.object(vision, "VISION_PROVIDER", pid), \
                 mock.patch.object(vision, "VISION_MODEL", "vm-test"), \
+                mock.patch.object(vision, "active_choice", return_value=(None, "")), \
                 mock.patch.object(vision._session, "post", return_value=resp):
             with self.assertLogs("vision", level="INFO") as cm:
                 vision.describe("data:image/jpeg;base64,AAA")
