@@ -733,13 +733,15 @@ class SessionRunner:
         self.batch_senders = []     # 本轮合并了哪些人的消息
 
     def submit(self, text, sender_name="", images=None, quotes=None,
-               tentative=False):
+               tentative=False, at_me=False):
         """tentative=True 表示「这条没 @ 机器人、也没命中触发词」——它不是
         非回不可的消息，要不要开口得先问一次判断模型（见 _run_turn 开头）。
+        at_me=True 表示这条是**真 @**（区别于关键词命中/全量模式）：直达管道
+        的兜底行为看它（@ 轮兜底回菜单，关键词轮兜底静默）。
         """
         item = {"text": text, "sender": sender_name,
                 "images": images or [], "quotes": quotes or [],
-                "tentative": bool(tentative)}
+                "tentative": bool(tentative), "at_me": bool(at_me)}
         self._pending.append(item)
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._loop())
@@ -849,6 +851,9 @@ class SessionRunner:
         # 整批都是「没点名机器人」的消息时，先让判断模型决定要不要开口。只要
         # 混进一条 @ 或命中触发词的，就照常回，不必问。
         voluntary = all(it.get("tentative") for it in batch)
+        # 真 @（区别于关键词命中/全量模式）：直达管道的兜底行为看它——
+        # @ 轮兜底回菜单，关键词轮兜底静默（2026-10-05 用户拍板）。
+        at_me = any(it.get("at_me") for it in batch)
         if voluntary and not self._should_interject():
             return
         # 回复对象不在协议层指定——模型自己在正文里称呼人（"233，你说的
@@ -897,12 +902,18 @@ class SessionRunner:
         # _dispatch 里，是因为那时还没判定「这条要不要回」——否则群里每来
         # 一条消息都要白跑一次 HTTP。这也是 IO，必须在 worker 线程上做。
         quote_blocks, quote_images = [], []
+        quoted_text = ""            # 第一条引用的正文原文（直达管道用）
         for it in batch:
             who = it.get("sender") or ""
             for q in (it.get("quotes") or []):
                 block, q_images = _resolve_quote(q, QQ_QUOTE_MAX_CHARS)
                 if not block:
                     continue
+                # 正文原文（去掉「[引用 xx 的消息]」头）留给直达管道的
+                # 「引用提示词 + 渠道词」场景；只收第一条，多引用不叠加。
+                if not quoted_text:
+                    quoted_text = re.sub(r"^\[引用[^\]]*\]\s*",
+                                         "", block, count=1)
                 # 署名必须跟着「引用这条消息的人」，不能只写被引的人——
                 # 否则模型看到一段没有主人的引用，只能猜是谁在说话。
                 if who and not block.startswith(who + "："):
@@ -999,7 +1010,7 @@ class SessionRunner:
         # 必须在这里圈死；引用为空时退回「他自己发的那张」（见 comfy_src.resolve）。
         qq_api.bind_context(self.session_key, self.target, self.target_id,
                             quoted_images=quote_images, own_images=own_images,
-                            user_text=own_text)
+                            user_text=own_text, quoted_text=quoted_text)
         # 生图确认闸（2026-10-04）：上一轮的生图被 confirm_gate 拦下等确认，
         # 这条消息若是确认话（好/确认/跑吧…）就原样入队发回执、接管整轮；
         # 不是确认话就作废 pending 放行。主动接话轮不消费（群聊路人的「好」
@@ -1031,13 +1042,29 @@ class SessionRunner:
         # agent 循环只留给总开关关闭（DIRECT_GEN=0）和主动接话轮。
         # 见 app/direct_gen.py。
         direct_reply = direct_gen.decide(own_text, history, voluntary,
-                                         data_urls=data_urls or None)
+                                         data_urls=data_urls or None,
+                                         at_me=at_me)
         if direct_reply is not None:
             try:
                 if direct_reply:
                     self._deliver(False, direct_reply, [], "")
             finally:
                 qq_api.clear_context()
+            # 指令落史：只落成功入队的轮（""）。菜单/错误提示不落——转译
+            # 上下文的最近 10 条里就不该有这些（2026-10-05 用户点名）。
+            # 不落的话「刚才那只」这类指代也没有依据可查。
+            if direct_reply == "":
+                try:
+                    job = direct_gen._last_job(self.session_key)
+                    history.append({"role": "user", "content": own_text})
+                    if job:
+                        history.append({
+                            "role": "assistant",
+                            "content": "[直达生图] %s：%s"
+                                       % (job["skill"], job["prompt"][:200])})
+                    save_history(history, run_agent, self.session_key)
+                except Exception:
+                    log.exception("直达轮落史失败 %s", self.session_key)
             return
         sent_by_tool = False
         # 后台直发的生图回执（见 generate_image._qq_receipt）：有它就不再采纳
@@ -1287,7 +1314,8 @@ class QQBot:
         log.info("← %s %s（%s）: %s%s", target, target_id, reason,
                  text[:60].replace("\n", " "), extra)
         self._runner_for(session_key, target, target_id).submit(
-            text, sender, image_urls, quotes)
+            text, sender, image_urls, quotes,
+            at_me=(reason.startswith("被 @") or reason == "私聊"))
 
     async def _probe(self):
         """启动时探一下协议端在不在，不在就只警告、照常去连 WS。"""

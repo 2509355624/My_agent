@@ -710,7 +710,7 @@ class DispatchTentativeTest(_StateIsolationMixin, unittest.TestCase):
 
         class _Runner:
             def submit(self, text, sender="", images=None, quotes=None,
-                       tentative=False, user_id=""):
+                       tentative=False, user_id="", at_me=False):
                 submitted.append({"text": text, "sender": sender,
                                   "tentative": tentative,
                                   "user_id": user_id})

@@ -1,28 +1,35 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""直达生图管道（2026-10-04）。
+"""直达生图管道（2026-10-04，10-05 两次扩版）。
 
 动机：agent 路径一轮动辄几万 token（系统头 + 历史 + 工具协议 + 多轮循环），
 而「@我 画一只猫」这种请求本质只需要一次轻量转译。这条管道用**一次 LLM 调用**
-把用户原话转成 {渠道, 提示词}，代码直接入队——整轮不过 agent。
+把请求转成 {渠道, 提示词}，代码直接入队——整轮不过 agent。
 
-结构：
-- /菜单（或裸 @、或任何不是工具指令的 @ 轮）→ 写死的常量文本，零 LLM。
-- 生图意图（正则粗判）→ 一次 call_llm 转译成 JSON → 校验 → 直接调
-  generate_image 的入队代码（复用渠道/档位/NAI 分流/额度/查重全套既有逻辑，
-  唯一区别是跳过确认卡——用户打了指令本身就是确认）。
-- 带图轮（用户引用已生成的图提意见）→ 识图 + 会话上次任务的提示词 +
-  用户意见，一次 LLM 调用输出修正后的提示词 → 重新入队。
-- **agent 已退场（2026-10-05 用户拍板）**：@ 轮要么走工具要么回菜单，
-  绝不为聊天进 agent 循环。唯一例外是总开关关闭（ENABLED=False）和
-  主动接话轮（voluntary，行为维持原样）。
+结构（2026-10-05 渠道解析收归代码后）：
+- /菜单（或裸 @）→ 写死的常量文本，零 LLM。
+- 渠道词打头（「三档,glss,初音未来」「默认初音未来」）→ **代码正则先抽
+  渠道**（档位最核心：画风词打错/没打 → 档位默认 clear），LLM 只做剩下的
+  描述扩写——渠道映射从此确定性 100%。
+- 裸 @ + 描述 / 画图动词 → 一次转译（LLM 顺带判渠道，判不出用默认）。
+- 引用正文 + 只打渠道词（「大大怪 三档」引用一条带提示词的消息）→ 引用
+  正文当描述，走锁定渠道扩写。
+- 引用生图回执 +「再来一张」→ 同提示词换种子重跑（_LAST_JOB 现成有），零转译。
+- 引用图 + 意见 → 识图 + 会话上次任务的提示词 + 意见 → 一次修正调用 → 重跑；
+  修正调用可输出 skip（意见不是修改请求，比如纯夸奖）→ 按 @/关键词分别回
+  菜单或静默。
+- **agent 已退场（2026-10-05 用户拍板）**：@ 轮要么走工具要么回菜单。
+  关键词命中但纯闲聊（别的机器人的聊天里提到名字）→ **静默不理**，止住
+  菜单刷屏。唯一放行是总开关关闭（ENABLED=False）和主动接话轮（voluntary）。
 """
+import difflib
 import json
 import logging
 import os
 import re
 
 from app import image_jobs, llm, qq_api
+from app.config import QQ_GROUP_KEYWORDS
 from app.confirm_gate import _ATTRIBUTION_RE
 from app.skills import list_skills
 
@@ -61,14 +68,81 @@ def _allowed_skills():
 
 _MENU_RE = re.compile(r"^\s*[\/／!！]?\s*(菜单|帮助|帮助菜单|help|指令)\s*$",
                       re.I)
-# 生图意图粗判。宁可漏（漏了走 agent，多花钱但不出错）不可滥（滥了闲聊也被
-# 拉去转译）。「生成」后面 0~4 字内接「图」才算，避免「生成一下总结」误中。
+# 生图意图粗判（画图动词）。「生成」后面 0~4 字内接「图」才算，避免
+# 「生成一下总结」误中。
 _INTENT_RE = re.compile(r"画|绘|来张|来一张|来幅|生成.{0,4}图|图.{0,2}一[张幅]")
-# 渠道开头的写法（「默认 纳西妲」「二档 gloss 女骑士」）：不带画图动词也算
-# 生图指令——用户就要这种「渠道词一打直接跑」的用法。标点/空格都当分隔。
-_CHANNEL_LEAD_RE = re.compile(
-    r"^(默认|快档|二档|三档|nai|clear|curvy|gloss|soft)\s*[，,、：:\s]\s*\S+",
-    re.I)
+# 「再来一张」：引用回执（或不引用）时同提示词换种子重跑。
+_AGAIN_RE = re.compile(r"再来一张|重画|再画|重跑|换种子|再跑一张")
+# 引用正文里的噪音：菜单和生图回执不能当提示词用。
+_NOISE_QUOTE_RE = re.compile(r"HT-\d{8}|任务已提交|生图完成")
+_RECENT_NOISE_RE = re.compile(r"^🎨|任务已提交|生图完成|HT-\d{8}")
+
+# ─── 渠道解析（代码直判，LLM 不再碰渠道） ─────────────────
+# 档位是最核心的关键词；画风词是可选项。用户口径（2026-10-05）：档位打了、
+# 画风词打错或没打 → 按该档默认画风 clear。
+_TIER_MAP = {"三档": "3", "3档": "3", "二档": "2", "2档": "2",
+             "快档": "fast", "一档": "fast", "1档": "fast"}
+_TIER_RE = re.compile(r"(三档|二档|快档|[123]档|默认)")
+_STYLE_RE = re.compile(r"\b(clear|curvy|gloss|soft)\b|清晰|肉感|油亮|柔和|柔软",
+                       re.I)
+_STYLE_ALIASES = {"clear": "clear", "curvy": "curvy", "gloss": "gloss",
+                  "soft": "soft", "清晰": "clear", "肉感": "curvy",
+                  "油亮": "gloss", "柔和": "soft", "柔软": "soft"}
+_NAI_RE = re.compile(r"^nai\b\s*", re.I)
+
+
+def _parse_channel(text):
+    """代码直判渠道。返回 (skill or None, 剩余描述)。
+
+    - 「三档 gloss 初音未来」→ hd_3_gloss / 初音未来
+    - 「三档,glss,初音未来」 → hd_3_gloss / 初音未来（glss 贴回 gloss）
+    - 「三档 猫」            → hd_3_clear / 猫（画风没打，档位默认）
+    - 「默认初音未来」       → anima_clear / 初音未来（无分隔符也认）
+    - 「gloss 一个女孩」     → anima_gloss / 一个女孩（只打画风）
+    - 「nai 1girl, ...」     → nai / 1girl, ...（原样留给扩写）
+    - 没有任何渠道词         → (None, 原文)
+    """
+    text = text.strip()
+    m = _NAI_RE.match(text)
+    if m:
+        return "nai", text[m.end():].strip(" ，,、:：") or text
+    tier = style = None
+    tm = _TIER_RE.search(text)
+    if tm:
+        tier = _TIER_MAP.get(tm.group(1), "base")   # 「默认」→ base
+    sm = _STYLE_RE.search(text)
+    if sm:
+        style = _STYLE_ALIASES.get(sm.group(0).lower(),
+                                   _STYLE_ALIASES.get(sm.group(0)))
+    if tier is None and style is None:
+        return None, text
+    # 画风词没匹配到但档位在：档位后紧跟的一小段纯 ASCII 可能是打错的画风
+    # （glss/sof），贴得回来就修正，贴不回来按档位默认 clear。
+    if tier is not None and style is None:
+        segs = [s for s in re.split(r"[\s,，、:：]+", text[tm.end():].strip())
+                if s]
+        cand = segs[0].strip(".。!！?？") if segs else ""
+        if cand and cand.isascii() and 3 <= len(cand) <= 8 \
+                and not _INTENT_RE.search(cand):
+            close = difflib.get_close_matches(
+                cand.lower(), _HD_STYLES, n=1, cutoff=0.75)
+            if close:
+                style = close[0]
+                text = text.replace(cand, " ", 1)
+    if tier == "base":
+        skill = "anima_" + style if style else _DEFAULT_SKILL
+    elif tier:
+        skill = "hd_%s_%s" % (tier, style or "clear")
+    else:
+        skill = "anima_" + style
+    desc = text
+    if sm:
+        desc = desc[:sm.start()] + " " + desc[sm.end():]
+    if tm:
+        desc = desc.replace(tm.group(0), " ", 1)
+    desc = re.sub(r"^[\s,，、:：]+|[\s,，、:：]+$", "", desc)
+    return skill, desc
+
 
 MENU_TEXT = (
     "🎨 生图直达（不闲聊，发指令直接出图）\n"
@@ -79,8 +153,10 @@ MENU_TEXT = (
     "【二档】二档 赛博朋克城市夜景\n"
     "【三档】三档 水晶城堡\n"
     "【画风词】clear清晰 / curvy肉感 / gloss油亮 / soft柔和"
-    "（跟在档位或「默认」后面）\n"
+    "（跟在档位或「默认」后面；打错或没打就按该档默认）\n"
     "【NAI 云端】nai 1girl, masterpiece, best quality\n"
+    "【引用出图】引用一条带描述的消息 + 只发「三档」这样的渠道词\n"
+    "【再来一张】引用出图回执 +「再来一张」（同提示词换种子）\n"
     "【改图】引用要改的那张图 + 说改什么（「多手多脚了」「衣服换红色」）\n"
     "【反推】引用图 +「反推提示词」\n"
     "描述用中文就行，我转成画法。"
@@ -105,6 +181,16 @@ _TRANSLATE_TEMPLATE = (
     "用户请求：{text}"
 )
 
+_LOCKED_TEMPLATE = (
+    "你是生图提示词扩写器。渠道已定：{skill}，不要改。"
+    "把用户的描述转成 danbooru 标签式英文提示词（逗号分隔短语），"
+    "禁止权重语法 (tag:1.2)、{{tag}}、::；具体角色没把握就写外貌特征+作品名，"
+    "不要编造不存在的角色名。\n"
+    "描述本来就是英文标签的（引用来的提示词），整理合并后原样保留，别翻成中文。\n"
+    "只输出 JSON 本体：{{\"skill\": \"{skill}\", \"prompt\": \"英文提示词\"}}\n"
+    "最近对话：\n{recent}\n"
+    "用户描述：{text}"
+)
 
 _REVISE_TEMPLATE = (
     "你是生图提示词修正器。用户引用了一张 AI 生成的图并提出修改意见。"
@@ -115,6 +201,8 @@ _REVISE_TEMPLATE = (
     "没有原提示词就从画面描述反推骨架再改\n"
     "- danbooru 标签式英文，逗号分隔短语；禁止权重语法 (tag:1.2)、{{tag}}、::\n"
     "- 具体角色没把握就写外貌特征+作品名，不要编造不存在的角色名\n"
+    "- **用户的话不是修改意见**（夸奖、闲聊、问别的事）→ 输出 "
+    "{{\"skip\": true}}\n"
     "画面描述：\n{seen}\n"
     "原提示词（渠道 {last_skill}）：\n{last_prompt}\n"
     "最近对话：\n{recent}\n"
@@ -124,8 +212,8 @@ _REVISE_TEMPLATE = (
 # 修正管道用的识图指令：只描述画面本身，别客套。
 _SEE_PROMPT = "用中文简洁描述这张图的内容：人物、姿势、服装、场景、显著问题。"
 
-# 会话最近一次直达入队的任务（修正管道的「原提示词」来源）。
-# 内存态就够：修正场景发生在刚出图之后，进程重启丢了也就是少个上下文。
+# 会话最近一次直达入队的任务（修正/重跑管道的「原提示词」来源）。
+# 内存态就够：这些场景发生在刚出图之后，进程重启丢了也就是少个上下文。
 _LAST_JOB = {}
 _JOB_LOCK = __import__("threading").Lock()
 
@@ -148,14 +236,43 @@ def _strip_attribution(text):
         for line in (text or "").split("\n"))
 
 
+def _strip_own_names(text):
+    """剥掉消息开头的机器人自己的名字（含文字 @ 的括号扩展）。
+
+    群实录（2026-10-05 01:07）：「@大大怪（生图机器人，贼拉快，种类多） 三档
+    soft 初音未来」顶着昵称扩展，渠道词永远匹配不上。名字表 = 群触发关键词
+    （QQ_GROUP_KEYWORDS，就是机器人的名字们）。
+    """
+    t = (text or "").strip()
+    for _ in range(3):                       # 最多剥三层（名字叠名字很少见）
+        t = re.sub(r"^[＠@]\s*", "", t)
+        for kw in sorted(QQ_GROUP_KEYWORDS, key=len, reverse=True):
+            # 名字后面的括号扩展（「大大怪（生图机器人，贼拉快，种类多）」）
+            # 和分隔符都可有可无：「大大怪 三档」「大大怪三档」都要剥干净。
+            m = re.match(
+                re.escape(kw) + r"(?:\s*[（(][^）)]{0,40}[）)])?\s*", t)
+            if m:
+                t = t[m.end():]
+                break
+        else:
+            break
+    return t.strip()
+
+
 def _recent_lines(history, limit=10):
-    """会话历史的最近几条，压成「用户：…/AI：…」短行给转译调用看指代。"""
+    """会话历史的最近几条，压成「用户：…/AI：…」短行给转译调用看指代。
+
+    菜单和生图回执整行滤掉（2026-10-05 用户点名）：不然最近 10 条全是
+    「🎨 生图直达…」，指代上下文等于没有。
+    """
     lines = []
     for m in history or []:
         if m.get("role") == "system":
             continue
         c = m.get("content")
         if not isinstance(c, str) or not c.strip():
+            continue
+        if _RECENT_NOISE_RE.search(c):
             continue
         who = "用户" if m.get("role") == "user" else "AI"
         lines.append("%s：%s" % (who, c.strip()[:120]))
@@ -173,6 +290,20 @@ def _extract_json(text):
         return None
     if not isinstance(data, dict):
         return None
+    return data
+
+
+def _ask(content):
+    """一次 LLM 调用 + 抠 JSON。拿不到有效结果返回 None。"""
+    try:
+        reply = llm.call_llm(
+            [{"role": "user", "content": content}], timeout=30)
+    except Exception as e:
+        log.warning("[direct] LLM 调用失败：%s", e)
+        return None
+    data = _extract_json(reply)
+    if not data:
+        log.warning("[direct] 输出不是 JSON（%r）", (reply or "")[:120])
     return data
 
 
@@ -200,36 +331,49 @@ def _enqueue(skill, prompt, text):
     return result
 
 
-def _translate(text, history):
-    """一次 LLM 调用把原话转成 {skill, prompt}；拿不到有效结果返回 None。"""
-    prompt = _TRANSLATE_TEMPLATE.format(
-        recent=_recent_lines(history) or "（无）", text=text)
-    try:
-        reply = llm.call_llm(
-            [{"role": "user", "content": prompt}], timeout=30)
-    except Exception as e:
-        log.warning("[direct] 转译调用失败：%s", e)
-        return None
-    data = _extract_json(reply)
+def _translate(text, history, skill=None):
+    """一次 LLM 调用转成 {skill, prompt}。
+
+    skill 给定 → 渠道锁定，LLM 只扩写描述（「引用提示词 + 渠道词」路径）；
+    不给 → 整句交给 LLM 判渠道（画图动词 / 裸 @ 描述路径）。
+    拿不到有效结果返回 None。
+    """
+    if skill:
+        tmpl = _LOCKED_TEMPLATE
+    else:
+        tmpl = _TRANSLATE_TEMPLATE
+    content = tmpl.format(skill=skill, recent=_recent_lines(history) or "（无）",
+                          text=text)
+    data = _ask(content)
     if not data:
-        log.warning("[direct] 转译输出不是 JSON（%r）", (reply or "")[:120])
         return None
     user_prompt = (data.get("prompt") or "").strip()
-    skill = (data.get("skill") or "").strip()
-    if not user_prompt or not skill:
+    out_skill = (data.get("skill") or "").strip() or skill or _DEFAULT_SKILL
+    if not user_prompt:
         return None
-    if skill not in _allowed_skills():
-        log.warning("[direct] 转译给了未知渠道 %r，降回默认 %s",
-                    skill, _DEFAULT_SKILL)
-        skill = _DEFAULT_SKILL
-    return {"skill": skill, "prompt": user_prompt}
+    if out_skill not in _allowed_skills():
+        log.warning("[direct] 未知渠道 %r，降回默认 %s", out_skill,
+                    _DEFAULT_SKILL)
+        out_skill = _DEFAULT_SKILL
+    return {"skill": out_skill, "prompt": user_prompt}
 
 
-def _revise(text, data_urls, history):
-    """改图管道：引用图 + 意见 → 识图 + 原提示词 → 一次修正调用 → 重新入队。"""
+def _revise(text, data_urls, history, channel=None):
+    """改图管道：引用图 + 意见 → 识图 + 原提示词 → 一次修正调用 → 重跑。
+
+    返回 None = 意见不是修改请求（skip），调用方按 @/关键词分别回菜单/静默。
+    """
     from app.vision import describe
     session_key = qq_api.current_session_key()
     last = _last_job(session_key)
+    quoted = (qq_api.current_quoted_text() or "").strip()
+    # 「再来一张」：引用回执（或干说）→ 同提示词换种子重跑，零转译。
+    if _AGAIN_RE.search(text) and (last or _NOISE_QUOTE_RE.search(quoted)):
+        if last:
+            skill = channel or last["skill"]
+            _remember_job(session_key, skill, last["prompt"])
+            return _enqueue(skill, last["prompt"], text)
+        return "没找到最近一次生图的记录，重新描述想要什么吧：@我 渠道 描述。"
     try:
         seen = (describe(data_urls[0], prompt=_SEE_PROMPT) or "").strip()
     except Exception:
@@ -244,22 +388,32 @@ def _revise(text, data_urls, history):
         last_prompt=(last or {}).get("prompt", "（无）"),
         recent=_recent_lines(history) or "（无）",
         text=text)
-    data = _translate(ask, history)
+    data = _ask(ask)
     if not data:
         return "改图请求没解析出来，换个说法再试（如「手改成插兜」）。"
-    _remember_job(session_key, data["skill"], data["prompt"])
-    return _enqueue(data["skill"], data["prompt"], text)
+    if data.get("skip"):
+        return None
+    prompt = (data.get("prompt") or "").strip()
+    if not prompt:
+        return "改图请求没解析出来，换个说法再试（如「手改成插兜」）。"
+    skill = channel or (data.get("skill") or "").strip()
+    if skill not in _allowed_skills():
+        skill = last["skill"] if last and last["skill"] in _allowed_skills() \
+            else _DEFAULT_SKILL
+    _remember_job(session_key, skill, prompt)
+    return _enqueue(skill, prompt, text)
 
 
-def decide(own_text, history, voluntary, data_urls=None):
+def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     """直达管道入口。返回值：
-    - None      ：不接管（仅限总开关关闭 / 主动接话轮），agent 照旧
+    - None      ：不接管（总开关关闭 / 主动接话轮 / 关键词轮的闲聊——静默）
     - ""        ：已接管且回执已直发（出图回执），本轮别再说话
     - 其他文本  ：接管并把这段发回会话（菜单/错误提示）
 
-    @ 轮一律接管——工具或菜单，绝不放聊天进 agent（2026-10-05 用户拍板）。
+    @ 轮（at_me=True）一切兜底都是菜单；关键词/全量轮兜底一律静默——
+    2026-10-05 用户拍板，止住「群里提到名字就刷菜单」。
     """
-    text = _strip_attribution(own_text).strip()
+    text = _strip_own_names(_strip_attribution(own_text))
     # 菜单与裸 @：零 LLM，直接回常量（管道关着也照回——它本来就免费）。
     if not text or _MENU_RE.match(text):
         return MENU_TEXT
@@ -268,21 +422,60 @@ def decide(own_text, history, voluntary, data_urls=None):
     # 主动接话轮（没人 @ 它）不进管道，行为维持原样。
     if voluntary:
         return None
-    # 带图轮：用户引用已生成的图提意见 → 改图管道（「反推」类已被前面的
-    # recall_gate 接管，到不了这里）。
+
+    session_key = qq_api.current_session_key()
+    quoted = (qq_api.current_quoted_text() or "").strip()
+    ch, desc = _parse_channel(text)
+
+    # 引用图轮：改图 / 反推已被 recall_gate 接走，到这说明是提意见。
     if data_urls:
-        return _revise(text, data_urls, history)
-    # 生图意图（画图动词，或渠道词开头的「默认 纳西妲」式写法）→ 一次转译
-    # → 直接入队。
-    if _INTENT_RE.search(text) or _CHANNEL_LEAD_RE.match(text):
+        reply = _revise(text, data_urls, history, channel=ch)
+        return reply if reply is not None else (MENU_TEXT if at_me else None)
+
+    # 「再来一张」（不引用、不带渠道词）：同提示词换种子重跑，零转译。
+    last = _last_job(session_key)
+    if not ch and _AGAIN_RE.search(text) and last:
+        _remember_job(session_key, last["skill"], last["prompt"])
+        return _enqueue(last["skill"], last["prompt"], text)
+
+    # 只打了渠道词（「大大怪 三档」+ 引用 / 干发「三档」）。
+    if ch and not desc:
+        if quoted and not _NOISE_QUOTE_RE.search(quoted) \
+                and not quoted.startswith("🎨"):
+            data = _translate(quoted, history, skill=ch)
+            if data:
+                _remember_job(session_key, data["skill"], data["prompt"])
+                return _enqueue(data["skill"], data["prompt"], text)
+            return ("引用的内容没转成生图指令，引用一条带画面描述的消息"
+                    "再试，或直接 @我 渠道 描述。")
+        # 引用回执（HT- 编号）或干说「再来一张」→ 重跑上次任务，渠道可换。
+        if last and (_AGAIN_RE.search(text)
+                     or _NOISE_QUOTE_RE.search(quoted)):
+            skill = ch if ch in _allowed_skills() else last["skill"]
+            _remember_job(session_key, skill, last["prompt"])
+            return _enqueue(skill, last["prompt"], text)
+        return ("只发渠道词的话，引用一条带描述的消息（提示词或你想要的内容）"
+                "再发一遍渠道词，或直接 @我 渠道 描述。")
+
+    # 渠道词打头（「三档 clear 初音未来」）→ 锁定渠道，LLM 只扩写描述。
+    if ch:
+        data = _translate(desc, history, skill=ch)
+        if data:
+            _remember_job(session_key, data["skill"], data["prompt"])
+            return _enqueue(data["skill"], data["prompt"], text)
+        return ("这条没转译成生图指令。照格式来：@我 渠道 描述\n\n"
+                + MENU_TEXT)
+
+    # 画图动词（「画一只猫」）或裸 @ + 描述 → 一次转译（LLM 顺带判渠道）。
+    if _INTENT_RE.search(text) or at_me:
         data = _translate(text, history)
-        if not data:
-            # 转译翻车（链路挂了 / 模型说这跟画图无关）：不进 agent，
-            # 回菜单让人照格式再打一遍。
+        if data:
+            _remember_job(session_key, data["skill"], data["prompt"])
+            return _enqueue(data["skill"], data["prompt"], text)
+        if at_me:
             return ("这条没转译成生图指令。照格式来：@我 渠道 描述\n\n"
                     + MENU_TEXT)
-        _remember_job(qq_api.current_session_key(), data["skill"],
-                      data["prompt"])
-        return _enqueue(data["skill"], data["prompt"], text)
-    # 其余一切 @ 轮（闲聊、问问题、无意义文本）→ 菜单，绝不进 agent。
-    return MENU_TEXT
+        return None                     # 关键词轮转译失败 → 静默
+
+    # 关键词命中但纯闲聊（别的机器人的聊天提到名字）→ 静默不理。
+    return None

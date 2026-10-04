@@ -113,7 +113,7 @@ _turn_seq = itertools.count(1)
 
 
 def bind_context(session_key, target, target_id, quoted_images=None,
-                 own_images=None, user_text=None):
+                 own_images=None, user_text=None, quoted_text=None):
     """绑定当前线程正在处理的 QQ 会话。target 取 "private" / "group"。
 
     quoted_images 是**本轮**消息引用（reply）到的图片直链，按被引消息里出现
@@ -136,6 +136,7 @@ def bind_context(session_key, target, target_id, quoted_images=None,
     _local.target_id = target_id
     _local.quoted_images = list(quoted_images or [])
     _local.own_images = list(own_images or [])
+    _local.quoted_text = str(quoted_text or "")
     _local.turn_id = next(_turn_seq)
     if user_text is not None:
         _local.user_text = str(user_text)
@@ -144,7 +145,7 @@ def bind_context(session_key, target, target_id, quoted_images=None,
 def clear_context():
     """摘掉绑定。worker 线程是复用的，不清理会把上一个会话带进下一轮。"""
     for attr in ("session_key", "target", "target_id", "quoted_images",
-                 "own_images", "turn_id", "user_text"):
+                 "own_images", "turn_id", "user_text", "quoted_text"):
         if hasattr(_local, attr):
             delattr(_local, attr)
 
@@ -167,6 +168,13 @@ def current_turn_id():
 def current_quoted_images():
     """本轮引用的消息里带的图片直链，按出现顺序；没绑定或没引用时为空表。"""
     return list(getattr(_local, "quoted_images", None) or [])
+
+
+def current_quoted_text():
+    """本轮引用的**第一条**消息的正文原文（不含「[引用 xx 的消息]」头和
+    署名前缀）。直达管道的「引用提示词 + 渠道词」场景靠它；没引用时为空串。
+    """
+    return getattr(_local, "quoted_text", "") or ""
 
 
 def current_session_key():

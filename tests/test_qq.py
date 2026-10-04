@@ -927,7 +927,7 @@ class DispatchQuoteTest(unittest.TestCase):
 
         class FakeRunner:
             def submit(self, text, sender, images, quotes=None,
-                       tentative=False, user_id=""):
+                       tentative=False, user_id="", at_me=False):
                 captured.update(text=text, sender=sender,
                                 images=images, quotes=quotes,
                                 user_id=user_id)
