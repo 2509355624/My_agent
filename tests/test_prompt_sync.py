@@ -237,6 +237,27 @@ class ImageGuideContentTest(unittest.TestCase):
         """
         g = self._guide()
         self.assertIn("别编", g, "角色名幻觉判据不见了")
+
+    def test_fresh_prompt_on_new_request(self):
+        """必须有「新请求=全新提示词」的判据（2026-10-04 私聊实测）。
+
+        实测：胡桃桃私聊里换「神里绫华」「香菱」，MiMo 只换角色名，
+        把胡桃的棒棒糖/黑背心/JK 裙/喷泉回头整套抄进新角色的提示词。
+        正向规则（重新填四槽位）比负向规则（别抄）9B 学得动。
+        """
+        g = self._guide()
+        self.assertIn("全新提示词", g, "「新请求=全新提示词」判据不见了")
+        self.assertIn("保持 / 同款 /", g,
+                      "「只继承明确说的槽位」判据不见了")
+
+    def test_operation_words_stay_out_of_prompt(self):
+        """必须有「prompt 字段只放画面内容」的判据（2026-10-04 实测）。
+
+        实测：「高清重绘」四个字被当画面词写进 prompt 送进底模。
+        """
+        g = self._guide()
+        self.assertIn("绝不写进 prompt", g,
+                      "「操作指令不进 prompt」判据不见了")
         self.assertIn("load_skill", g,
                       "要留一条查库的出路（anima-tags），别让模型只能瞎猜")
         # 拿真实踩坑的假 tag 当反例钉住
