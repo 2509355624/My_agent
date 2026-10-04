@@ -481,10 +481,6 @@ def _session_key(target, target_id):
 # 理由（黑名单、群不在白名单、@ 了却什么都没发）都该照旧丢掉。
 REASON_NO_MENTION = "未 @ 且未命中关键词"
 
-# 主动接话时往前翻多少条消息找「最近一张图」。判断模型的上下文是
-# QQ_INTERJECT_CONTEXT_MESSAGES(12) 条，图再老多半已经不在当前话题里了。
-_INTERJECT_IMAGE_LOOKBACK = 12
-
 
 def _private_gate(user_id):
     """私聊闸：settings.json 优先（管理页热改，不用重启），缺省回落 .env。
@@ -864,23 +860,9 @@ class SessionRunner:
             # 的群聊背景负责，这里只留一句说明。
             batch = [{"text": interject.INTERJECT_PROMPT, "sender": "",
                       "images": [], "quotes": []}]
-            # 判断模型看不见图（上下文里图只是 "[图片]" 占位符）。它判「接」
-            # 往往就是好奇那张图——把**最近一张**捞出来给主模型看，不然只能
-            # 对着看不见的东西装懂。只看最新一张（2026-10-04 用户要求）：多捞
-            # 几张会把更早话题里的图也一起喂进去，判断反而被带偏。带上「是谁
-            # 发的」：不署名的话，模型会把它安到最近在发言的那个人头上。
-            recs = recent.recent_image_records(QQ_AGENT_ID, self.target_id,
-                                               _INTERJECT_IMAGE_LOOKBACK, 1)
-            if recs:
-                batch[0]["images"] = [r["m"] for r in recs]
-                owners = []
-                for r in recs:
-                    who = r.get("n") or r.get("u") or ""
-                    if who and who not in owners:
-                        owners.append(who)
-                if owners:
-                    batch[0]["text"] += "\n（最近的 %d 张图片是 %s 发的）" \
-                        % (len(recs), " 和 ".join(owners))
+            # 「把最近一张图捞出来给接话轮看」已于 2026-10-05 按用户要求整个
+            # 移除：识图只认本轮明确给的图（消息本体 + 引用块），绝不翻最近
+            # 消息的图——翻出来的图和当前话题对不上，反推/生图全跑偏。
 
         text = _merge_batch(batch, prefix=(self.target == "group"))
         # 图片段单独收集：只发图不打字是合法用法（"帮我看下这个"），

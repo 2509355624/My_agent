@@ -606,10 +606,6 @@ class RunTurnVoluntaryTest(_StateIsolationMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
-        # 默认「群里没有最近的图」，免得用例读到真实缓存里的图地址
-        p = mock.patch.object(qq_bot.recent, "latest_image", return_value="")
-        p.start()
-        self.addCleanup(p.stop)
 
     def _runner(self):
         return qq_bot.SessionRunner(None, "group_1041079621", "group",
@@ -663,11 +659,10 @@ class RunTurnVoluntaryTest(_StateIsolationMixin, unittest.TestCase):
                                "images": [], "quotes": [], "tentative": True}])
         self.assertNotIn("batch", seen)
 
-    def test_voluntary_reply_sees_the_latest_image(self):
-        # 判断模型只看得到 "[图片]" 占位符；判「接」之后把**最近一张**真正的图
-        # 带给主模型（2026-10-04 用户要求：只看最新一张，多捞会把更早话题里的
-        # 图也一起喂进去，判断反而被带偏），而且得带署名——不告诉模型图是谁
-        # 发的，它会把图安到最近在发言的那个人头上
+    def test_voluntary_reply_never_picks_recent_images(self):
+        # 2026-10-05 用户拍板：识图只认本轮明确给的图（消息本体+引用块），
+        # 接话轮绝不翻最近消息的图——翻出来的图和当前话题对不上，反推/生图
+        # 全跑偏。
         runner = self._runner()
         seen = self._capture_merge()
         verdict = {"choice": "接", "want": True, "cooled": True, "pass": True,
@@ -680,10 +675,9 @@ class RunTurnVoluntaryTest(_StateIsolationMixin, unittest.TestCase):
                                        "n": "被子教"}]) as ri:
             runner._run_turn([{"text": "在吗", "sender": "张三",
                                "images": [], "quotes": [], "tentative": True}])
-        ri.assert_called_once_with("qq", "1041079621",
-                                   qq_bot._INTERJECT_IMAGE_LOOKBACK, 1)
-        self.assertEqual(seen["batch"][0]["images"], ["http://x/pic2.jpg"])
-        self.assertIn("被子教", seen["batch"][0]["text"])
+        ri.assert_not_called()                       # 根本不该去捞最近图
+        self.assertEqual(seen["batch"][0]["images"], [])
+        self.assertNotIn("pic2", seen["batch"][0]["text"])
 
     def test_mixed_batch_goes_the_normal_way(self):
         # 只要混进一条被 @ 的，就照常回，不必问判断模型
