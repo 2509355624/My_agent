@@ -235,8 +235,15 @@ def check(path, timeout=None, prompt=None):
         return _fail_closed("压缩失败：%s" % exc)
 
     try:
+        # 显式传 provider/model = **绕过管理页上的识图选择**，永远用 .env 配的
+        # 那个（vision.audit_choice）。用户 2026-10-04 拍板：审核不跟着界面切。
+        # 判据是失败方向 —— 审核是 fail-closed 且超时只有 30 秒
+        # （IMAGE_AUDIT_TIMEOUT），本地小模型实测几十秒到几分钟 ⇒ 跟着切会把
+        # 每张图都判成「识图失败」直接拦下来，图片根本发不出去。
+        a_pid, a_model = vision.audit_choice()
         text = vision.describe(data_url, timeout=timeout,
-                               prompt=prompt or _PROMPT)
+                               prompt=prompt or _PROMPT,
+                               provider=a_pid, model=a_model)
     except Exception as exc:
         return _fail_closed("识图失败：%s" % exc)
 

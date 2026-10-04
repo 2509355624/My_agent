@@ -6,8 +6,19 @@
 模型把那一长串 base64 当普通文本读，token 涨到几万，服务端一直不返回。所以
 带图请求必须先在这里过一道：图 → 文字 → 正常进 agent 循环。
 
-本模块只做三件事：下载 / 压缩 → 转 data URL → 调 VISION_PROVIDER 要一段文字。
+本模块只做三件事：下载 / 压缩 → 转 data URL → 调识图 provider 要一段文字。
 不落盘、不进 history、不碰 agent 循环的任何状态。
+
+识图用哪家**可以运行时切**（2026-10-04）：管理页「识图模型」下拉写进
+agents/<id>/settings.json 的 vision_model（"provider:model"），本模块的
+active_choice() 每次调用都重读（load_settings 自带 mtime 缓存，代价可忽略），
+所以切换**热生效、不用重启**。没配过就退回 .env 的 VISION_PROVIDER/VISION_MODEL
+——老配置继续有效。
+
+⚠️ **审核不跟着切**（用户 2026-10-04 拍板）：app/image_audit.py 走
+audit_choice()，永远用 .env 配的那个（云端）。理由是审核是 fail-closed 且超时
+只有 30 秒，本地小模型实测要几十秒到几分钟（2026-10-04 实测跑 4 分半没返回），
+跟着切会把每张图都拦下来、根本发不出去。
 """
 
 import base64
@@ -23,11 +34,45 @@ import requests
 # 见 requests/adapters.py 的 HTTPAdapter.send）。
 from urllib3.util import Timeout as _UrllibTimeout
 
-from app.config import (OLLAMA_VISION_KEEP_ALIVE, OLLAMA_VISION_NUM_GPU, PROVIDERS,
+from app.config import (OLLAMA_VISION_KEEP_ALIVE, OLLAMA_VISION_NUM_GPU,
+                        OLLAMA_BASE_URL, PROVIDERS, QQ_AGENT_ID,
                         VISION_MAX_EDGE, VISION_MODEL, VISION_PROVIDER,
                         VISION_TIMEOUT)
 
 log = logging.getLogger("vision")
+
+
+def active_choice(agent_id=None):
+    """当前生效的识图 (provider, model)。管理页没配过 = 走 .env 那两个常量。
+
+    每次调用都重读 settings（agent_store.load_settings 自带 mtime 缓存），
+    所以在管理页切完立刻生效，不用重启进程。**故意不在 import 时定格**——
+    定格了就等于又变成要改 .env + 重启的老路。
+
+    返回的 model 允许是空串：意思是「该 provider 的默认模型」（如 deepseek
+    不指定 model 时用它自己的 deepseek-flash）。
+    """
+    try:
+        from app import agents as agent_store
+        pid, model = agent_store.vision_choice(agent_id or QQ_AGENT_ID)
+    except Exception:                    # noqa: BLE001
+        # 配置层坏了不该让识图跟着挂——退回 .env，行为与改动前完全一致。
+        log.warning("读识图选择失败，改用 .env 的配置", exc_info=True)
+        return (VISION_PROVIDER, VISION_MODEL)
+    if not pid:
+        return (VISION_PROVIDER, VISION_MODEL)
+    return (pid, model)
+
+
+def audit_choice():
+    """生图审核用的 (provider, model) —— **永远走 .env，不跟着界面切**。
+
+    用户 2026-10-04 拍板。判据是审核的失败方向：它是 fail-closed 且超时只有
+    30 秒（IMAGE_AUDIT_TIMEOUT），本地小模型实测要几十秒到几分钟 ⇒ 跟着切
+    会把每张图都判成"识图失败"直接拦下来，图片根本发不出去。
+    对话那条链路（active_choice）慢一点只是这一轮慢，失败还能退化成纯文本。
+    """
+    return (VISION_PROVIDER, VISION_MODEL)
 
 # 下载图片与调识图接口都不走本机系统代理：本机常驻 Clash 类工具会把代理写进
 # 注册表，代理进程一换端口或被杀，这两个出网口就全挂——图生图取图失败、识图
@@ -314,19 +359,21 @@ def describe(data_url, timeout=None, prompt=None, provider=None, model=None):
     """调识图 provider 识图，返回文字。失败抛 RuntimeError。
 
     prompt 不传用默认的「描述画面+原样提取文字」；表情包打标签等场景
-    传自己的。只暴露"成功拿到文字"和"失败"两种结果，让调用方能用一句
-    try/except 覆盖全部异常——识图失败不该让整轮对话挂掉。
+    传自己的。
 
-    provider / model 不传 = 走读图那条链路（VISION_PROVIDER / VISION_MODEL）。
-    显式传 = 这一次临时换一家（本地 ollama / 另一家云端），不动全局配置。
+    provider / model **都不传** = 走管理页「识图模型」选的那个（没选过就
+    退回 .env 的 VISION_PROVIDER/VISION_MODEL，见 active_choice）。这跟
+    2026-10-03 之前不一样：以前是直接读 .env 常量，现在每次调用重读配置，
+    所以在界面上切换**热生效、不用重启**。
 
-    2026-10-03 起**没有内置调用方**这么传了：生图审核原本按会话传「本地 / 云端」，
-    当天用户拍板撤掉本地档（本地热态 24~42 秒、审核 30 秒就 fail-closed，等于把
-    每张图都拦死）。这两个参数留着是为了「不改 .env 也能按次换一家」这条口子。
+    显式传 provider = 这一次临时换一家，**完全绕过界面选择**。审核就走这条
+    （audit_choice 固定给 .env 那份），别让它被界面上的选择带跑。
 
     ⚠️ 显式传了 provider 时，model 留空就用**该 provider 的默认模型**，不回落
     VISION_MODEL——否则指定了云端 provider，却会把读图那个本地模型名套上去。
     """
+    if provider is None and model is None:
+        provider, model = active_choice()
     eff_provider = provider if provider is not None else VISION_PROVIDER
     pid = (eff_provider or "").lower()
     cfg = PROVIDERS.get(pid)
@@ -334,7 +381,7 @@ def describe(data_url, timeout=None, prompt=None, provider=None, model=None):
         raise RuntimeError("识图 provider 未配置：%r" % eff_provider)
 
     if provider is None:
-        model = VISION_MODEL or cfg["model"]
+        model = model or VISION_MODEL or cfg["model"]
     else:
         model = model or cfg["model"]
 

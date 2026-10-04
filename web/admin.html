@@ -379,6 +379,9 @@
           </div>
         </div>
         <div class="sess-foot" style="margin-bottom: 8px;">
+          <select id="visionModelSel" class="pick" style="max-width:340px;"></select>
+          <button class="ghost" id="visionModelTest">试读一张</button>
+          <span class="hint" id="visionModelState"></span>
           <button class="ghost" id="visionPromptBtn">识图提示词</button>
           <span class="hint"><b>对方发图给机器人时</b>，把图读成文字用的那份要求
             （对话模型没有视觉能力，靠识图模型当它的眼睛）。内置默认是
@@ -563,6 +566,24 @@ function defaultModelOf(pid) {
   return p ? p.model : '';
 }
 
+// 「继承全局」的真实语义 = 走 .env 的整条降级链（链头先上，失败顺位往下），
+// 选了具体 provider 才是钉死那一家。链由后端随 detail 下发（global_chain）。
+function chainHead() {
+  const c = (detail && detail.global_chain || [])[0];
+  return c ? c.pid : (detail && detail.global_provider) || '';
+}
+
+function chainLabel() {
+  const c = (detail && detail.global_chain || []);
+  if (!c.length) return labelOf(detail && detail.global_provider);
+  return '降级链·' + c.map((x) => x.label).join('→');
+}
+
+function chainTitle() {
+  const c = (detail && detail.global_chain || []);
+  return c.map((x) => x.label + ' / ' + x.model).join(' → ');
+}
+
 // ─── 模型预选 ────────────────────────────────────────
 // 清单由后端去问 provider 自己（/api/models?provider=），不在前端写死：模型 ID
 // 会下线也会改名，写死的清单会静默指向不存在的模型 —— 症状是「切过去之后请求
@@ -696,13 +717,15 @@ function renderList() {
 }
 
 function renderEffective() {
-  const pid = $('provider').value || detail.global_provider;
+  const typed = $('provider').value;
+  const pid = typed || chainHead();
   const mid = $('model').value.trim() || defaultModelOf(pid);
 
   const box = $('eff');
   box.textContent = '';
   const b1 = document.createElement('b');
-  b1.textContent = labelOf(pid);
+  b1.textContent = typed ? labelOf(pid) : chainLabel();
+  if (!typed) b1.title = chainTitle();
   const b2 = document.createElement('b');
   b2.textContent = mid || '—';
   box.append('实际生效：', b1, ' / ', b2);
@@ -763,7 +786,8 @@ async function loadDetail() {
   sel.textContent = '';
   const inherit = document.createElement('option');
   inherit.value = '';
-  inherit.textContent = '继承全局（' + labelOf(detail.global_provider) + '）';
+  inherit.textContent = '继承全局（走降级链）';
+  inherit.title = chainTitle();
   sel.appendChild(inherit);
   (detail.providers || []).forEach((p) => {
     const opt = document.createElement('option');
@@ -776,7 +800,7 @@ async function loadDetail() {
   $('budget').value = detail.context_budget ? String(detail.context_budget) : '';
   $('budget').placeholder = '全局 ' + (detail.global_context_budget || 0).toLocaleString();
 
-  const pid = sel.value || detail.global_provider;
+  const pid = sel.value || chainHead();
   $('model').placeholder = '默认 ' + (defaultModelOf(pid) || '—');
   renderEffective();
   loadCatalog(pid);
@@ -1463,6 +1487,9 @@ async function loadSessions() {
     auditPrompt.default = d.image_audit_prompt_default || '';
     visionPrompt.custom = d.vision_prompt || '';
     visionPrompt.default = d.vision_prompt_default || '';
+    // 识图模型下拉：清单现查（/api/vision/models），别用详情里那两份字段拼——
+    // 那只是「当前用的」，不含候选列表。每次切 agent 都要重拉。
+    loadVisionModels();
     privState.on = d.private_enable !== false;
     privState.wlOn = d.private_whitelist_on !== false;
     privState.list = d.private_whitelist || [];
@@ -1974,6 +2001,132 @@ function visionPromptState(msg, kind) {
   el.style.color = kind === 'err' ? '#e55' : (kind === 'ok' ? '#5c5' : '');
 }
 
+// ─── 识图模型（对方发图给机器人时当眼睛用的那个）──────────
+// 下拉里的选项是后端现查的（本地模型会 pull、云端会下线，写死必然腐烂）。
+// 切换**热生效不用重启**：后端 vision.active_choice() 每次调用都重读配置。
+let visionModelItems = [];
+
+function visionModelState(msg, kind) {
+  const el = $('visionModelState');
+  el.textContent = msg || '';
+  el.style.color = kind === 'err' ? '#e55' : (kind === 'ok' ? '#5c5' : '');
+}
+
+function renderVisionModels(d) {
+  const sel = $('visionModelSel');
+  sel.textContent = '';
+  visionModelItems = (d && d.items) || [];
+
+  const envOpt = document.createElement('option');
+  envOpt.value = '';
+  envOpt.textContent = '跟随 .env（' + ((d && d.current) || '未配置') + '）';
+  sel.appendChild(envOpt);
+
+  visionModelItems.forEach((it) => {
+    const o = document.createElement('option');
+    o.value = it.value;
+    o.textContent = it.label;
+    sel.appendChild(o);
+  });
+  // from_env=true 表示没在界面配过 → 选中「跟随 .env」那一项
+  const want = (d && d.from_env) ? '' : ((d && d.current) || '');
+  sel.value = want;
+  const hit = Array.prototype.some.call(sel.options, (o) => o.value === want);
+  if (!hit) {
+    // 配的那个模型本机已经没了（卸载/改名）——别静默显示成 .env，
+    // 让用户看得见「配的啥」和「现在实际用啥」不一致。
+    const o = document.createElement('option');
+    o.value = want;
+    o.textContent = want + '（本机已不存在，识图会失败）';
+    sel.appendChild(o);
+    sel.value = want;
+    visionModelState('配的模型本机已经找不到了，识图会失败，请重选', 'err');
+  } else if (d && d.error) {
+    visionModelState(d.error, 'err');
+  } else {
+    visionModelState('');
+  }
+}
+
+async function loadVisionModels() {
+  try {
+    // 带上当前 agent：识图选择是**每个 agent 一份**（存在它的 settings.json），
+    // 不带参数后端会一律按 QQ_AGENT_ID 读，切到别的 agent 就显示错了。
+    const d = await api('/api/vision/models?agent='
+      + encodeURIComponent(cur || ''));
+    renderVisionModels(d);
+  } catch (e) {
+    visionModelState('拿不到识图模型清单：' + e.message, 'err');
+  }
+}
+
+async function saveVisionModel() {
+  const sel = $('visionModelSel');
+  const v = sel.value;
+  const btn = $('visionModelTest');
+  sel.disabled = true;
+  btn.disabled = true;
+  try {
+    const r = await api('/api/agent/' + encodeURIComponent(cur) + '/vision_model',
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: v }) });
+    const who = (r.effective_provider || '?')
+      + (r.effective_model ? ' · ' + r.effective_model : '（默认模型）');
+    visionModelState(v ? ('已切换，立即生效：' + who)
+      : ('已改回跟随 .env：' + who), 'ok');
+    // 列表里那几项的"慢"标签是一次性的静态文案，切完刷新一次让状态区归位
+    await loadVisionModels();
+  } catch (e) {
+    visionModelState(e.message, 'err');
+  } finally {
+    sel.disabled = false;
+    btn.disabled = false;
+  }
+}
+
+// 切之前先真读一张：本地识图慢到「切过去才发现」就晚了（实测 qwen3-vl:2b
+// 冷启 42 秒、重复请求 103 秒、第三次 180 秒超时），而且慢的那个还有输出质量
+// 问题（qwen2.5-vl-abliterated:3b 试同一张图只回「小小怪」三个字）。
+// 这些光看模型名看不出来，得真跑一次。
+async function testVisionModel() {
+  const sel = $('visionModelSel');
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.onchange = async () => {
+    const f = input.files && input.files[0];
+    if (!f) return;
+    const btn = $('visionModelTest');
+    btn.disabled = true;
+    // 本地可能跑两三分钟，先把「正在读」说清楚，不然像卡死了
+    visionModelState('正在读这张图…本地模型可能要好几分钟，耐心等', '');
+    try {
+      const b64 = await new Promise((res, rej) => {
+        const fr = new FileReader();
+        fr.onload = () => res(String(fr.result).split(',')[1] || '');
+        fr.onerror = () => rej(new Error('读文件失败'));
+        fr.readAsDataURL(f);
+      });
+      const r = await api('/api/vision/test',
+        { method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_base64: b64, value: sel.value }) });
+      if (r.error) {
+        visionModelState(r.error + '（' + r.elapsed + ' 秒）', 'err');
+      } else {
+        const slow = r.elapsed > 20 ? ' ⚠️很慢，每张图都要等这么久' : '';
+        visionModelState(r.elapsed + ' 秒：' + (r.text || '(空)') + slow, 'ok');
+      }
+    } catch (e) {
+      visionModelState('试读失败：' + e.message, 'err');
+    } finally {
+      btn.disabled = false;
+    }
+  };
+  input.click();
+}
+
 function toggleVisionPrompt() {
   const wrap = $('visionPromptWrap');
   if (wrap.style.display !== 'none') { wrap.style.display = 'none'; return; }
@@ -2442,6 +2595,8 @@ $('auditPromptReset').addEventListener('click', () => {
 $('auditPromptClose').addEventListener('click', () => {
   $('auditPromptWrap').style.display = 'none';
 });
+$('visionModelSel').addEventListener('change', saveVisionModel);
+$('visionModelTest').addEventListener('click', testVisionModel);
 $('visionPromptBtn').addEventListener('click', toggleVisionPrompt);
 $('visionPromptSave').addEventListener('click', saveVisionPrompt);
 $('visionPromptReset').addEventListener('click', () => {
@@ -2468,7 +2623,7 @@ $('gapAllSave').addEventListener('click', () =>
   saveNumericAll('gapAll', '/interject_min_gap', 'min_gap', '判断间隔',
                  ' 秒', 0, 3600));
 $('provider').addEventListener('change', () => {
-  const pid = $('provider').value || detail.global_provider;
+  const pid = $('provider').value || chainHead();
   $('model').placeholder = '默认 ' + (defaultModelOf(pid) || '—');
   renderEffective();
   loadCatalog(pid);

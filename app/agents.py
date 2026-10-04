@@ -172,6 +172,33 @@ def groups_muted(agent_id):
     return False
 
 
+# ─── 识图模型（对方发图给机器人时当眼睛用的那个）────────────
+# 存 settings.json 的 vision_model，形如 "provider:model"（如
+# "ollama:qwen3-vl:2b"、"deepseek:"）。**没存 = 用 .env 的
+# VISION_PROVIDER / VISION_MODEL**（config.py 读的），所以老配置继续有效、
+# 这个键不存在也不影响任何行为。
+#
+# 为什么存字符串而不是两个字段：模型名本身带冒号（"ollama:qwen3-vl:2b"），
+# 拆成两个键反而要处理"哪个冒号是分隔符"。合起来存，解析时**只按第一个
+# 冒号切**，剩下的整段都当模型名。
+VISION_MODEL_KEY = "vision_model"
+
+
+def vision_choice(agent_id):
+    """读识图模型的选择。返回 (provider, model) 或 (None, None) = 走 .env。
+
+    provider 为空串表示"用该 provider 的默认模型"（如 deepseek 不带 model）。
+    """
+    raw = load_settings(agent_id).get(VISION_MODEL_KEY)
+    if not raw or not isinstance(raw, str):
+        return (None, None)
+    pid, _, model = raw.partition(":")
+    pid = pid.strip()
+    if not pid:
+        return (None, None)
+    return (pid, model.strip())
+
+
 # ─── 私聊每日生图额度 ────────────────────────────────
 
 # 默认每人每天 10 张（2026-09-30 用户拍板：「私聊除非我给白名单，不然单人每天
