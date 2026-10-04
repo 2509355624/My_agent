@@ -41,7 +41,7 @@ except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
 from app import (image_jobs, image_out, interject, logsetup, longterm, notify,
-                 qq_api, qq_status, recent, stickers, usage)
+                 qq_api, qq_status, recent, recall_gate, stickers, usage)
 from app.agent import run_agent_stream, tail_tokens
 from app.agent_prompt import build_stable_prompt
 from app.config import (
@@ -998,6 +998,19 @@ class SessionRunner:
         qq_api.bind_context(self.session_key, self.target, self.target_id,
                             quoted_images=quote_images, own_images=own_images,
                             user_text=own_text)
+        # 反推闸门（2026-10-04）：对方在要「看图反推提示词」时，代码直接调
+        # 识图把结果发回去，模型整轮不参与——9B 会把历史里上次生图的提示词
+        # 搬出来交差，给了明确指令也时灵时不灵。判据代码判，见 app/recall_gate.py。
+        # 闸门不接（没图 / 不是反推 / 自家 HT 图 / 识图失败）就原样放行。
+        gate_reply = recall_gate.decide(own_text=own_text, full_text=text,
+                                        data_urls=data_urls or None,
+                                        voluntary=voluntary)
+        if gate_reply is not None:
+            try:
+                self._deliver(False, gate_reply, [], "")
+            finally:
+                qq_api.clear_context()
+            return
         sent_by_tool = False
         # 后台直发的生图回执（见 generate_image._qq_receipt）：有它就不再采纳
         # 模型本轮的正文——它一转述排队张数就瞎编，后台那句才是真的。
