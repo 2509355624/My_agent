@@ -496,6 +496,14 @@ def _build_stream_body(eff, messages, extras=True):
         # 末帧回传 usage，否则缓存命中统计在流式下会断掉（DeepSeek 官方实测
         # 不带这个字段也回 usage，带着更稳）。
         body["stream_options"] = {"include_usage": True}
+    elif extras and eff["provider"] == "llama":
+        # llama-server 支持 include_usage（OpenAI 兼容口径），但**不声明就不回**
+        # → _record_usage 拿到空直接 return → total_tokens 恒 0 → trim_history
+        # 的压缩判据永不成立 → 历史无界增长撞 num_ctx。2026-10-04 实锤：网页端
+        # 打本地 MiMo，request 17587 tokens > 16384 窗口 HTTP 400。llama 回的
+        # usage 无缓存字段，走 _record_usage 的 OpenAI 兜底口径（hit=0，
+        # miss=prompt_tokens），total 正好是压缩判据要的 prompt 大小。
+        body["stream_options"] = {"include_usage": True}
     return body
 
 

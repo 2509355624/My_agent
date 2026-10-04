@@ -162,6 +162,18 @@ class BuildStreamBodyTest(unittest.TestCase):
         self.assertNotIn("thinking", body)
         self.assertNotIn("stream_options", body)
 
+    def test_llama_declares_usage_reporting(self):
+        """llama 流式必须声明 include_usage——usage 断了压缩判据就死了。
+
+        现场（2026-10-04）：网页端打本地 MiMo，llama-server 不声明就不回
+        usage → _record_usage 恒空 → total_tokens 恒 0 → trim_history 永不
+        触发 → request 17587 tokens 撞 16384 窗口 HTTP 400。
+        """
+        body = llm._build_stream_body(
+            self._eff("llama", "MiMo-V2.6-Distill-Qwen-9B-Q5_K_M"), [], True)
+        self.assertEqual(body["stream_options"], {"include_usage": True})
+        self.assertNotIn("thinking", body)  # llama 不进 thinking 白名单
+
     def test_extras_can_be_stripped_for_400_retry(self):
         body = llm._build_stream_body(self._eff("volc"), [], False)
         self.assertNotIn("thinking", body)
