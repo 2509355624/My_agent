@@ -9,6 +9,7 @@ import json
 import random
 from flask import request
 from app import comfy_src, image_jobs
+from app import char_guard
 from app import nai as nai_mod
 from app.cancel import Cancelled, is_cancelled
 from app.config import COMFYUI_URL, DISABLED_IMAGE_SKILLS, QQ_AGENT_ID
@@ -779,6 +780,13 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 最前：连 NAI 分流 / 垫图判断都不必走，拒掉后模型拿着指路回执去调
     # recall_image（或直接转述 caption）才是正路。
     refused = _prompt_ask_guard()
+    if refused:
+        return refused
+
+    # 角色点名守卫（2026-10-04）：原话点名角色 A、prompt 写的却是角色 B
+    # → 拒回要求整条重写（实测「画纳西妲」抄出整套胡桃模板，正向规则
+    # 压不住高频锚定）。放在 NAI 分流前，两条渠道共用。
+    refused = char_guard.check(prompt)
     if refused:
         return refused
 
