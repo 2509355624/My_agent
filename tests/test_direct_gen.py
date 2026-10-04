@@ -37,10 +37,30 @@ class ChannelParseTest(unittest.TestCase):
                 ("默认 gloss 一个女孩", "anima_gloss", "一个女孩"),
                 ("gloss 一个女孩", "anima_gloss", "一个女孩"),  # 只打画风
                 ("三档 猫", "hd_3_clear", "猫"),               # 画风没打
+                ("一档curvy 初音未来", "hd_fast_curvy", "初音未来"),  # 连写
                 ("nai 1girl, masterpiece", "nai", "1girl, masterpiece")):
             with self.subTest(text=text):
                 got_skill, got_desc = direct_gen._parse_channel(text)
                 self.assertEqual((got_skill, got_desc), (skill, desc))
+
+    def test_fixed_channel_words(self):
+        # 用户点名的固定渠道也要代码直判，不劳 LLM（2026-10-05）
+        for text, skill, desc in (
+                ("sd 一只猫", "image_gen_v1", "一只猫"),
+                ("krea2 一个女孩", "krea2", "一个女孩"),
+                ("qwen 写实街拍", "qwen_image_v1", "写实街拍"),
+                ("nffa 插画少女", "nffa", "插画少女"),
+                ("这个猪 跑 nai", "nai", "这个猪"),   # 渠道词不限位置+动词残渣
+                ("nai 伊藤润二画风", "nai", "伊藤润二画风")):
+            with self.subTest(text=text):
+                self.assertEqual(direct_gen._parse_channel(text),
+                                 (skill, desc))
+
+    def test_fixed_word_inside_english_prompt_is_ignored(self):
+        # 档位在场时固定渠道词不参与（英文提示词里撞词不误判）
+        self.assertEqual(
+            direct_gen._parse_channel("三档 1girl, solo, sd style"),
+            ("hd_3_clear", "1girl, solo, sd style"))
 
     def test_typo_style_falls_back(self):
         # 画风词打错：贴得回来（glss→gloss）就修正；贴不回来按档位默认 clear，
@@ -228,18 +248,40 @@ class QuotedPromptTest(unittest.TestCase):
             direct_gen._LAST_JOB.pop("group_1", None)
         return out, m_llm, m_gen
 
-    def test_quoted_prompt_with_channel_word(self):
-        # 用户口径：引用某条聊天记录的提示词 +「大大怪 三档」→ 直接生成
+    def test_quoted_english_prompt_passes_through_without_llm(self):
+        # 2026-10-05 用户场景：引用自己粘贴的英文提示词 +「快档 gloss」→
+        # 原样入队零转译（之前要过一遍模型，可能改坏还烧钱）。
+        out, m_llm, m_gen = self._decide(
+            "快档 gloss", "x",
+            quoted="1girl, solo, white dress, standing in a garden")
+        self.assertEqual(out, "")
+        m_llm.assert_not_called()
+        m_gen.assert_called_once_with(
+            "1girl, solo, white dress, standing in a garden",
+            skill="hd_fast_gloss", _skip_confirm=True)
+
+    def test_quoted_chinese_prompt_goes_through_translate(self):
+        # 中文引用照旧走锁定渠道扩写
         out, m_llm, m_gen = self._decide(
             "三档",
             '{"skill": "hd_3_clear", "prompt": "1girl, hat"}',
-            quoted="1girl, white dress, standing in a garden")
+            quoted="一个女孩在花园里")
         self.assertEqual(out, "")
         m_gen.assert_called_once_with("1girl, hat", skill="hd_3_clear",
                                       _skip_confirm=True)
         sent = m_llm.call_args[0][0][0]["content"]
-        self.assertIn("white dress", sent)      # 引用正文进了扩写调用
+        self.assertIn("花园", sent)
         self.assertIn("渠道已定：hd_3_clear", sent)
+
+    def test_quoted_reverse_reply_runs_directly(self):
+        # 引用机器人的反推回复 + 渠道词 → 剥头直用 tag，零 LLM
+        out, m_llm, m_gen = self._decide(
+            "三档", "x",
+            quoted=direct_gen._REVERSE_HEADER + "\n1girl, twintails, aqua hair")
+        self.assertEqual(out, "")
+        m_llm.assert_not_called()
+        m_gen.assert_called_once_with("1girl, twintails, aqua hair",
+                                      skill="hd_3_clear", _skip_confirm=True)
 
     def test_quoted_menu_is_rejected(self):
         out, m_llm, m_gen = self._decide("三档", "x", quoted=MENU_TEXT)
@@ -279,16 +321,22 @@ class AgainTest(unittest.TestCase):
 
 
 class RevisionPipelineTest(unittest.TestCase):
-    """改图管道：引用图 + 意见 → 识图 + 上次任务 → 修正调用 → 重新入队。"""
+    """改图管道：引用图 → 英文 tag 反推（唯一事实来源）→ 修正调用 → 重跑。
 
-    def _decide(self, text, llm_reply, seen="一个女孩，六根手指",
-                last_job=None, at_me=False):
+    原提示词只在引用自家 HT 图（账本可查）时进场——2026-10-05 群实录：
+    引用别人的图时上一轮原提示词把模型锚死，出图跟引用图毫无关系。
+    """
+
+    def _decide(self, text, llm_reply, seen="1girl, solo, blue hair",
+                quoted="", at_me=False, last_job=None, lookup_row=None):
         with mock.patch.object(direct_gen, "llm") as m_llm_mod, \
              mock.patch.object(direct_gen.qq_api, "current_session_key",
                                return_value="group_1"), \
              mock.patch.object(direct_gen.qq_api, "current_quoted_text",
-                               return_value=""), \
+                               return_value=quoted), \
              mock.patch("app.vision.describe", return_value=seen), \
+             mock.patch.object(direct_gen.image_log, "lookup",
+                               return_value=lookup_row), \
              mock.patch.object(gi, "_generate_image",
                                return_value=RECEIPT) as m_gen:
             m_llm_mod.call_llm.return_value = llm_reply
@@ -302,55 +350,131 @@ class RevisionPipelineTest(unittest.TestCase):
             direct_gen._LAST_JOB.pop("group_1", None)
         return out, m_llm_mod.call_llm, m_gen
 
-    def test_revision_uses_vision_and_last_prompt(self):
+    def test_revision_uses_tags_as_source_of_truth(self):
         out, m_llm, m_gen = self._decide(
-            "多手多脚了",
-            '{"skill": "anima_clear", "prompt": "1girl, five fingers"}',
-            last_job={"skill": "anima_clear", "prompt": "1girl, old"})
+            "手改成插兜",
+            '{"skill": "anima_clear", "prompt": "1girl, hands in pockets"}')
         self.assertEqual(out, "")
-        m_gen.assert_called_once_with("1girl, five fingers",
+        m_gen.assert_called_once_with("1girl, hands in pockets",
                                       skill="anima_clear", _skip_confirm=True)
         sent = m_llm.call_args[0][0][0]["content"]
-        self.assertIn("六根手指", sent)      # 识图描述进来了
-        self.assertIn("1girl, old", sent)    # 原提示词进来了
-        self.assertIn("多手多脚了", sent)    # 用户意见进来了
+        self.assertIn("blue hair", sent)        # 英文 tag 反推进来了
+        self.assertIn("手改成插兜", sent)        # 用户意见进来了
+        self.assertNotIn("1girl, old", sent)    # 没有账本就不给原提示词
 
-    def test_revision_channel_word_overrides_skill(self):
-        # 引用图 + 只说「三档」→ 沿用画面和原提示词，渠道换档重跑
-        out, _, m_gen = self._decide(
-            "三档",
-            '{"skill": "hd_3_clear", "prompt": "miku, fixed"}',
-            last_job={"skill": "anima_clear", "prompt": "miku, old"})
+    def test_own_image_uses_logged_prompt(self):
+        # 引用自家 HT 图：账本里的当时提示词最可信，进场当锚
+        out, m_llm, _ = self._decide(
+            "手改成插兜",
+            '{"skill": "hd_3_curvy", "prompt": "miku, fixed"}',
+            quoted="编号 HT-20261005-010329-595",
+            lookup_row={"prompt": "logged, miku", "skill": "hd_3_curvy"})
         self.assertEqual(out, "")
-        self.assertEqual(m_gen.call_args.kwargs["skill"], "hd_3_clear")
+        sent = m_llm.call_args[0][0][0]["content"]
+        self.assertIn("logged, miku", sent)
+        self.assertIn("最可信", sent)
+
+    def test_foreign_image_ignores_last_job(self):
+        # 引用别人的图：上一轮任务的原提示词绝不进场（锚死事故的根因）
+        out, m_llm, m_gen = self._decide(
+            "手改成插兜",
+            '{"skill": "anima_clear", "prompt": "1girl, fixed"}',
+            last_job={"skill": "anima_clear", "prompt": "1girl, old"})
+        self.assertEqual(out, "")
+        sent = m_llm.call_args[0][0][0]["content"]
+        self.assertNotIn("1girl, old", sent)
+        self.assertIn("忽略此项", sent)
+        m_gen.assert_called_once()
+
+    def test_bare_at_with_image_returns_reverse_text(self):
+        # 2026-10-05 用户口径：引用图 + 只 @（没别的说）→ 反推提示词返回，
+        # 不生成
+        out, m_llm, m_gen = self._decide("", '{"skip": true}', at_me=True)
+        self.assertIn(direct_gen._REVERSE_HEADER, out)
+        self.assertIn("blue hair", out)
+        m_llm.assert_not_called()
+        m_gen.assert_not_called()
+
+    def test_channel_with_image_generates_from_reverse_zero_llm(self):
+        # 引用图 + 只打档位（「三档」）→ 反推后直接生成，零 LLM
+        out, m_llm, m_gen = self._decide("三档", "x", at_me=True)
+        self.assertEqual(out, "")
+        m_llm.assert_not_called()
+        m_gen.assert_called_once_with("1girl, solo, blue hair",
+                                      skill="hd_3_clear", _skip_confirm=True)
+
+    def test_generic_i2i_filler_with_channel(self):
+        # 引用图 +「快档 基于图片帮我生成」→ 空话不算意见，反推后直接生成
+        out, m_llm, m_gen = self._decide(
+            "快档 基于图片帮我生成", "x", at_me=True)
+        self.assertEqual(out, "")
+        m_llm.assert_not_called()
+        m_gen.assert_called_once_with("1girl, solo, blue hair",
+                                      skill="hd_fast_clear",
+                                      _skip_confirm=True)
 
     def test_praise_is_skipped_silently_on_keyword_round(self):
         # 群实录 2026-10-05 01:08：引用图 +「比大大怪快五秒左右」（夸奖）
-        # 白跑识图后报错。现在 skip 判定交给修正调用：关键词轮静默。
+        # → 关键词轮静默。
         out, m_llm, m_gen = self._decide(
-            "比大大怪快五秒左右", '{"skip": true}',
-            last_job={"skill": "anima_clear", "prompt": "1girl"})
+            "比大大怪快五秒左右", '{"skip": true}')
         self.assertIsNone(out)
         m_gen.assert_not_called()
 
-    def test_praise_on_at_round_returns_menu(self):
-        out, _, m_gen = self._decide(
-            "画得真好", '{"skip": true}', at_me=True,
-            last_job={"skill": "anima_clear", "prompt": "1girl"})
-        self.assertEqual(out, MENU_TEXT)
+    def test_praise_on_at_round_returns_reverse_text(self):
+        # @ 轮意见不是修改请求 → 按用户口径回反推文本（不刷菜单）
+        out, _, m_gen = self._decide("画得真好", '{"skip": true}', at_me=True)
+        self.assertIn(direct_gen._REVERSE_HEADER, out)
         m_gen.assert_not_called()
 
     def test_revision_without_any_context_guides_user(self):
-        out, m_llm, m_gen = self._decide("多手多脚了", "x", seen="")
+        out, m_llm, m_gen = self._decide("手改成插兜", "x", seen="")
         self.assertIn("没认出引用的图", out)
         m_gen.assert_not_called()
 
     def test_revision_fails_translating_returns_error(self):
-        out, _, m_gen = self._decide(
-            "多手多脚了", "不是 JSON",
-            last_job={"skill": "anima_clear", "prompt": "1girl"})
+        out, _, m_gen = self._decide("手改成插兜", "不是 JSON")
         self.assertIn("没解析出来", out)
         m_gen.assert_not_called()
+
+
+class EnglishDirectTest(unittest.TestCase):
+    """档位 + 英文提示词 → 原样直通零转译（用户贴的就是最终 prompt）。"""
+
+    def test_english_prompt_passes_through_without_llm(self):
+        text = "快档 gloss 1girl, solo, blue hair, classroom"
+        with mock.patch.object(direct_gen.llm, "call_llm") as m_llm, \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=""), \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="group_1"), \
+             mock.patch.object(gi, "_generate_image",
+                               return_value=RECEIPT) as m_gen:
+            out = direct_gen.decide(text, [], False, at_me=True)
+            direct_gen._LAST_JOB.pop("group_1", None)
+        self.assertEqual(out, "")
+        m_llm.assert_not_called()
+        m_gen.assert_called_once_with("1girl, solo, blue hair, classroom",
+                                      skill="hd_fast_gloss",
+                                      _skip_confirm=True)
+
+    def test_chinese_desc_still_translated(self):
+        # 中文描述照旧走扩写，别把直通判据写宽了
+        with mock.patch.object(direct_gen.llm, "call_llm",
+                               return_value='{"skill": "hd_fast_clear", '
+                                            '"prompt": "shiba"}') as m_llm, \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=""), \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="group_1"), \
+             mock.patch.object(gi, "_generate_image",
+                               return_value=RECEIPT) as m_gen:
+            out = direct_gen.decide("快档 一只柴犬在草地上", [], False)
+            direct_gen._LAST_JOB.pop("group_1", None)
+        self.assertEqual(out, "")
+        self.assertEqual(m_llm.call_count, 1)
+        m_gen.assert_called_once_with("shiba", skill="hd_fast_clear",
+                                      _skip_confirm=True)
 
 
 class SkipConfirmTest(unittest.TestCase):
