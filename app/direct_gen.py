@@ -64,20 +64,26 @@ _MENU_RE = re.compile(r"^\s*[\/／!！]?\s*(菜单|帮助|帮助菜单|help|指�
 # 生图意图粗判。宁可漏（漏了走 agent，多花钱但不出错）不可滥（滥了闲聊也被
 # 拉去转译）。「生成」后面 0~4 字内接「图」才算，避免「生成一下总结」误中。
 _INTENT_RE = re.compile(r"画|绘|来张|来一张|来幅|生成.{0,4}图|图.{0,2}一[张幅]")
+# 渠道开头的写法（「默认 纳西妲」「二档 gloss 女骑士」）：不带画图动词也算
+# 生图指令——用户就要这种「渠道词一打直接跑」的用法。标点/空格都当分隔。
+_CHANNEL_LEAD_RE = re.compile(
+    r"^(默认|快档|二档|三档|nai|clear|curvy|gloss|soft)\s*[，,、：:\s]\s*\S+",
+    re.I)
 
 MENU_TEXT = (
-    "🎨 直达生图（不经过 AI 对话，秒排队）\n"
-    "格式：@我 + 渠道 + 描述\n"
-    "【默认】画：一只戴帽子的橘猫\n"
+    "🎨 生图直达（不闲聊，发指令直接出图）\n"
+    "@我 + 一句话，示例：\n"
+    "【最简】默认 纳西妲\n"
+    "【默认+画风】默认 gloss 一个女孩\n"
     "【快档】快档 一只柴犬在草地上\n"
     "【二档】二档 赛博朋克城市夜景\n"
     "【三档】三档 水晶城堡\n"
-    "【画风】清晰 clear / 肉感 curvy / 油亮 gloss / 柔和 soft"
-    "（跟在档位后面，如「二档 gloss 一个女骑士」）\n"
-    "【云端】nai <英文提示词>\n"
-    "【改图】引用要改的那张图 + 说要改什么（如「多手多脚了」「衣服换成红色」）\n"
-    "【反推】引用图 + 说「反推提示词」\n"
-    "描述用中文就行，我会转成对应画法。本机器人只管生图，不闲聊。"
+    "【画风词】clear清晰 / curvy肉感 / gloss油亮 / soft柔和"
+    "（跟在档位或「默认」后面）\n"
+    "【NAI 云端】nai 1girl, masterpiece, best quality\n"
+    "【改图】引用要改的那张图 + 说改什么（「多手多脚了」「衣服换红色」）\n"
+    "【反推】引用图 +「反推提示词」\n"
+    "描述用中文就行，我转成画法。"
 )
 
 _TRANSLATE_TEMPLATE = (
@@ -86,6 +92,8 @@ _TRANSLATE_TEMPLATE = (
     "渠道规则：\n"
     "- hd 渠道命名 = hd_档_画风：档∈{{fast,2,3}}，画风∈{{clear清晰,curvy肉感,"
     "gloss油亮,soft柔和}}（如「快档」=hd_fast_*、「二档」=hd_2_*）\n"
+    "- 「默认」= " + _DEFAULT_SKILL + "；「默认 + 画风词」= anima_画风"
+    "（如「默认 gloss 纳西妲」= anima_gloss）\n"
     "- 固定渠道：" + " ".join(_FIXED_SKILLS) + "\n"
     "- 用户点名了档位/渠道就映射过去；没点名（包括只说「高清」这种画质词）"
     "一律用 " + _DEFAULT_SKILL + "\n"
@@ -264,8 +272,9 @@ def decide(own_text, history, voluntary, data_urls=None):
     # recall_gate 接管，到不了这里）。
     if data_urls:
         return _revise(text, data_urls, history)
-    # 生图意图（正则粗判）→ 一次转译 → 直接入队。
-    if _INTENT_RE.search(text):
+    # 生图意图（画图动词，或渠道词开头的「默认 纳西妲」式写法）→ 一次转译
+    # → 直接入队。
+    if _INTENT_RE.search(text) or _CHANNEL_LEAD_RE.match(text):
         data = _translate(text, history)
         if not data:
             # 转译翻车（链路挂了 / 模型说这跟画图无关）：不进 agent，

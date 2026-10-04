@@ -43,6 +43,20 @@ class MenuAndGateTest(unittest.TestCase):
                 self.assertEqual(direct_gen.decide(t, [], False),
                                  direct_gen.MENU_TEXT)
 
+    def test_channel_lead_runs_without_draw_verb(self):
+        # 「默认 纳西妲」式写法：渠道词开头就算生图指令，不需要画/生成动词。
+        # 两条用例照群聊实录出题（2026-10-05 00:48 用户连发两条都被回菜单）。
+        for t in ("默认 纳西妲", "默认，纳西妲", "默认 clear 纳西妲",
+                  "二档 gloss 女骑士", "nai 1girl, masterpiece"):
+            with self.subTest(t=t):
+                with mock.patch.object(direct_gen, "llm") as m_llm_mod, \
+                     mock.patch.object(gi, "_generate_image",
+                                       return_value=RECEIPT):
+                    m_llm_mod.call_llm.return_value = (
+                        '{"skill": "anima_clear", "prompt": "nahida"}')
+                    out = direct_gen.decide(t, [], False)
+                self.assertEqual(out, "")
+
 
 class DirectEnqueueTest(unittest.TestCase):
     def _decide(self, llm_reply, text="画一只戴帽子的橘猫", history=None):
