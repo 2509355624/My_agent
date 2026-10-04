@@ -307,6 +307,54 @@ def _t2i_guard(is_i2i):
     return True, _T2I_FORCED_NOTE
 
 
+# ── 要提示词守卫（2026-10-04）────────────────────────────────────────
+# 对方在要「提示词/词条/种子」这段**文本**，不是要新图——9B 却调
+# generate_image 去生成。实测（2026-10-04 早，2509355624 私聊日志）：
+# 「这个的提示词是什么？」「提示词给我」「停下来，给我提示词」连续 3 轮
+# 全调了 generate_image，白烧 3 张额度，正确工具 recall_image 一次没用。
+# recall_image 的描述里写得明明白白（brief 模式也保留着首句），但 9B 不看
+# ——跟 `_hd_tier_guard` 同一个病根：**描述里写判据没用，得代码判**。
+
+_PROMPT_NOUN_RE = re.compile(r"提示词|词条|prompt|种子|seed", re.I)
+
+# 要「文本」的信号词。含「停/先别/别画」——「停下来，给我提示词」这种
+# 先要停手再要词条的，更不能当成生图指令放过去。
+_PROMPT_ASK_RE = re.compile(
+    r"给我|发我|发一下|发来|是什么|是多少|多少|怎么写|看看|看一下|停|先别|别画"
+)
+
+_PROMPT_ASK_NOTE = (
+    "已拦截：对方只是在**要提示词/种子**，不是要新画一张——本次生图已拒绝，"
+    "别再重试 generate_image。正确做法：用 recall_image 工具，把对方引用消息里"
+    "那个图号（形如 HT-20261001-081132-772）填进 tag 参数，查到后把提示词原样"
+    "转述给他；引用里没有图号就问他是哪一张。渠道、分辨率、seed 就写在发图"
+    "那条消息的 caption 里，不用查就能答。"
+)
+
+
+def _prompt_ask_guard():
+    """对方在要提示词/种子而模型却要生图 → 拒掉，并指路 recall_image。
+
+    与 `_i2i_gate` 同一原则：只在 QQ 轮里判（`current_turn_text()` 为 None =
+    网页端/单测，没有原话这个证据源，一律放行）。
+    误拦的代价也核过：真要画的原话（「用这个种子再画一张」「把提示词改成
+    黑丝」「再画一张，种子不变」）既不含「给我/是什么/停」这类要文本的信号
+    词，也进不了这道闸——**只拦纯要词条的**。
+    """
+    from app import qq_api
+
+    text = qq_api.current_turn_text()
+    if text is None:
+        return ""
+    if not _PROMPT_NOUN_RE.search(text):
+        return ""
+    if not _PROMPT_ASK_RE.search(text):
+        return ""
+    log.info("拦下生图：本轮原话是在要提示词/种子（%r），不是要新图，指路 recall_image",
+             text[:60])
+    return _PROMPT_ASK_NOTE
+
+
 # 没点名 skill 时的文生图默认渠道。
 #
 # 2026-09-30 20:3x 起：**本机只剩 4 个动漫渠道，SD 渠道（image_gen_v1）已归档。**
@@ -726,6 +774,13 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     gate = _qq_gate()
     if gate is not None:
         return gate
+
+    # 对方在要提示词/种子 → 一张图都不该出（见 `_prompt_ask_guard`）。放在
+    # 最前：连 NAI 分流 / 垫图判断都不必走，拒掉后模型拿着指路回执去调
+    # recall_image（或直接转述 caption）才是正路。
+    refused = _prompt_ask_guard()
+    if refused:
+        return refused
 
     # 图生图的触发判据（对方没明说要图生图就别垫图，见 `_i2i_gate`）。
     # 放在 NAI 分流**之前**：那是同一个 `source_image` 参数，不该因为走的
