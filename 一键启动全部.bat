@@ -58,7 +58,7 @@ set "AUTO_RUN="
 if /i "%~2"=="auto" set "AUTO_RUN=1"
 
 echo ==================================================
-echo   全部启动 : Agent 网页 + %PROTO_NAME% + QQ 适配层 + ComfyUI
+echo   全部启动 : Agent 网页 + %PROTO_NAME% + QQ 适配层 + ComfyUI + llama.cpp
 echo ==================================================
 echo.
 echo   【注意】会强制结束 QQ 客户端
@@ -132,6 +132,25 @@ ping -n 5 127.0.0.1 >nul
 echo       完成
 echo.
 
+rem 2026-10-04 切 llama.cpp：ollama 退役。它开机自启，留着白占 5GB 显存，
+rem 每次启动顺手杀掉（ollama app.exe 是托盘进程）。
+taskkill /IM ollama.exe /F >nul 2>&1
+taskkill /IM "ollama app.exe" /F >nul 2>&1
+rem llama.cpp 引擎（主对话+识图都指向它）：8081 没在听才拉，永不 taskkill，
+rem 理由同 ComfyUI——起晚了适配层顶多先走云端降级链，杀错了没必要。
+set "LLAMA_RUNNING="
+for /f %%a in ('netstat -ano 2^>nul ^| findstr ":8081 " ^| findstr "LISTENING"') do set "LLAMA_RUNNING=1"
+if exist "D:\AI\llama.cpp\start-server.bat" (
+    if defined LLAMA_RUNNING (
+        echo       llama-server     已在运行，本次不动
+    ) else (
+        start "LLAMA-SERVER" /min cmd /k "D:\AI\llama.cpp\start-server.bat"
+        echo       llama-server     MiMo 9B  http://127.0.0.1:8081
+    )
+) else (
+    echo       [WARN] 找不到 D:\AI\llama.cpp\start-server.bat，主对话先走云端降级链
+)
+echo.
 echo [2/4] 启动
 start "AGENT-WEB" cmd /k "%WEB_BAT%"
 echo       Agent Web        网页端  http://localhost:5174
