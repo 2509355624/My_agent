@@ -81,6 +81,14 @@ _AGAIN_RE = re.compile(r"再来一张|重画|再画|重跑|换种子|再跑一�
 # 引用正文里的噪音：菜单和生图回执不能当提示词用。
 _NOISE_QUOTE_RE = re.compile(r"HT-\d{8}|任务已提交|生图完成")
 _RECENT_NOISE_RE = re.compile(r"^🎨|任务已提交|生图完成|HT-\d{8}")
+# 引用块里的**占位符**：图片取不到 url（"​[图片]"）、下载失败（"（图片）"）、
+# get_msg 拉不到被引消息（"[引用的消息无法读取]"——引用机器人自己发的回执
+# 就是这种）。2026-10-05 02:59 实录：占位符被当提示词喂进转译，9B 把最近
+# 对话里的旧 tag 原样抄出来，生成与引用毫无关系。一律当「没有引用」处理。
+_PLACEHOLDER_QUOTE_RE = re.compile(
+    r"^\[[^\[\]]{0,14}(?:图片|表情|无法读取)[^\[\]]{0,14}\]$"
+    r"|^（(?:图片|表情)）$"
+    r"|（没有可读内容）|无法读取")
 
 # ─── 渠道解析（代码直判，LLM 不再碰渠道） ─────────────────
 # 档位是最核心的关键词；画风词是可选项。用户口径（2026-10-05）：档位打了、
@@ -554,11 +562,19 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
                 return _enqueue(ch, body, text)
         if quoted and not _NOISE_QUOTE_RE.search(quoted) \
                 and not quoted.startswith("🎨"):
+            # 引用正文是占位符（图取不到/消息读不出）→ 绝不喂转译：9B 会
+            # 把最近对话里的旧 tag 抄出来（02:59 实录），直接告诉用户重发。
+            if _PLACEHOLDER_QUOTE_RE.search(quoted):
+                return ("引用的内容没能取到（图片可能已过期，或引用的是我发的"
+                        "消息）。把图/文字重新发出来再发渠道词，或直接 "
+                        "@我 渠道 描述。")
             # 引用的本来就是英文提示词 → 原样入队，过模型只会改坏。
             if _is_english_tags(quoted):
                 _remember_job(session_key, ch, quoted)
                 return _enqueue(ch, quoted, text)
-            data = _translate(quoted, history, skill=ch)
+            # 转译**不带最近历史**：引用正文是唯一描述来源，历史里有旧 tag
+            # 时小模型照抄（负向规则它执行不了，只能断来源）。
+            data = _translate(quoted, [], skill=ch)
             if data:
                 _remember_job(session_key, data["skill"], data["prompt"])
                 return _enqueue(data["skill"], data["prompt"], text)

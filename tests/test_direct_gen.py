@@ -235,7 +235,7 @@ class DirectEnqueueTest(unittest.TestCase):
 class QuotedPromptTest(unittest.TestCase):
     """引用正文当提示词：引用一条带描述的消息 + 只发渠道词。"""
 
-    def _decide(self, text, llm_reply, quoted, last_job=None):
+    def _decide(self, text, llm_reply, quoted, last_job=None, history=None):
         with mock.patch.object(direct_gen.llm, "call_llm",
                                return_value=llm_reply) as m_llm, \
              mock.patch.object(direct_gen.qq_api, "current_quoted_text",
@@ -247,7 +247,7 @@ class QuotedPromptTest(unittest.TestCase):
             if last_job:
                 direct_gen._remember_job("group_1", last_job["skill"],
                                          last_job["prompt"])
-            out = direct_gen.decide(text, [], False, at_me=False)
+            out = direct_gen.decide(text, history or [], False, at_me=False)
             direct_gen._LAST_JOB.pop("group_1", None)
         return out, m_llm, m_gen
 
@@ -303,6 +303,34 @@ class QuotedPromptTest(unittest.TestCase):
         m_llm.assert_not_called()
         m_gen.assert_called_once_with("miku, old", skill="hd_3_clear",
                                       _skip_confirm=True)
+
+    def test_quoted_placeholder_is_rejected_not_translated(self):
+        # 2026-10-05 02:59 实录：引用机器人自己发的回执时 get_msg 拉不到，
+        # 占位符被当提示词喂转译，9B 把历史里的旧 tag 抄出来，生成与引用
+        # 毫无关系。现在占位符引用一律拒绝并提示重发，零 LLM。
+        for quoted in ("[引用的消息无法读取]", "[图片]", "（图片）",
+                       "（没有可读内容）"):
+            with self.subTest(quoted=quoted):
+                out, m_llm, m_gen = self._decide("sd", "x", quoted=quoted)
+                self.assertIn("没能取到", out)
+                m_llm.assert_not_called()
+                m_gen.assert_not_called()
+
+    def test_quoted_translate_never_sees_history(self):
+        # 引用 + 渠道词的转译调用不带最近历史：历史里有旧 tag 时 9B 照抄
+        #（02:59 实录，连「krea2,」前缀都是从历史拼的）。引用正文是唯一
+        # 描述来源，历史直接断掉。
+        old_tags = "1girl, solo, red hair, drill hair, twin drills"
+        out, m_llm, m_gen = self._decide(
+            "sd",
+            '{"skill": "image_gen_v1", "prompt": "1girl, hat"}',
+            quoted="一个女孩在花园里",
+            history=[{"role": "assistant",
+                      "content": "[直达生图] krea2：%s" % old_tags}])
+        self.assertEqual(out, "")
+        sent = m_llm.call_args[0][0][0]["content"]
+        self.assertNotIn("red hair", sent)
+        self.assertNotIn("krea2：", sent)
 
 
 class AgainTest(unittest.TestCase):
