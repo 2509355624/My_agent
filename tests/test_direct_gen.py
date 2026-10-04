@@ -352,25 +352,29 @@ class AgainTest(unittest.TestCase):
 
 
 class RevisionPipelineTest(unittest.TestCase):
-    """改图管道：引用图 → 英文 tag 反推（唯一事实来源）→ 修正调用 → 重跑。
+    """改图管道：引用图 + 意见 → **一次带图调用**（钉死 DeepSeek 官方）→ 重跑。
 
-    原提示词只在引用自家 HT 图（账本可查）时进场——2026-10-05 群实录：
-    引用别人的图时上一轮原提示词把模型锚死，出图跟引用图毫无关系。
+    2026-10-05 用户拍板：图直接给视觉模型「看图+按意见改」，不再先识图
+    转文字再让文本模型二次加工（2 次 API → 1 次）。原提示词只在引用自家
+    HT 图（账本可查）时进场——引用别人的图时上一轮原提示词会把模型锚死。
     """
 
-    def _decide(self, text, llm_reply, seen="1girl, solo, blue hair",
-                quoted="", at_me=False, last_job=None, lookup_row=None):
+    def _decide(self, text, seen='{"skill": "anima_clear", '
+                                '"prompt": "1girl, fixed"}',
+                quoted="", at_me=False, last_job=None, lookup_row=None,
+                describe_side_effect=None):
         with mock.patch.object(direct_gen, "llm") as m_llm_mod, \
              mock.patch.object(direct_gen.qq_api, "current_session_key",
                                return_value="group_1"), \
              mock.patch.object(direct_gen.qq_api, "current_quoted_text",
                                return_value=quoted), \
-             mock.patch("app.vision.describe", return_value=seen), \
+             mock.patch("app.vision.describe",
+                        side_effect=describe_side_effect,
+                        return_value=seen) as m_describe, \
              mock.patch.object(direct_gen.image_log, "lookup",
                                return_value=lookup_row), \
              mock.patch.object(gi, "_generate_image",
                                return_value=RECEIPT) as m_gen:
-            m_llm_mod.call_llm.return_value = llm_reply
             if last_job:
                 direct_gen._remember_job("group_1", last_job["skill"],
                                          last_job["prompt"])
@@ -379,56 +383,63 @@ class RevisionPipelineTest(unittest.TestCase):
                                     False, data_urls=["data:image/jpeg;base64,A"],
                                     at_me=at_me)
             direct_gen._LAST_JOB.pop("group_1", None)
-        return out, m_llm_mod.call_llm, m_gen
+        return out, m_describe, m_llm_mod.call_llm, m_gen
 
-    def test_revision_uses_tags_as_source_of_truth(self):
-        out, m_llm, m_gen = self._decide(
+    def test_revision_single_call_sees_image_and_opinion(self):
+        out, m_describe, m_llm, m_gen = self._decide(
             "手改成插兜",
             '{"skill": "anima_clear", "prompt": "1girl, hands in pockets"}')
         self.assertEqual(out, "")
         m_gen.assert_called_once_with("1girl, hands in pockets",
                                       skill="anima_clear", _skip_confirm=True)
-        sent = m_llm.call_args[0][0][0]["content"]
-        self.assertIn("blue hair", sent)        # 英文 tag 反推进来了
+        m_describe.assert_called_once()          # 只有一次带图调用
+        self.assertEqual(m_describe.call_args.kwargs.get("provider"),
+                         "deepseek")             # 钉死 DeepSeek 官方
+        sent = m_describe.call_args.kwargs["prompt"]
         self.assertIn("手改成插兜", sent)        # 用户意见进来了
-        self.assertNotIn("1girl, old", sent)    # 没有账本就不给原提示词
+        self.assertIn("忽略此项", sent)          # 没有账本就不给原提示词
+        m_llm.assert_not_called()                # 转译链路完全不参与
 
     def test_own_image_uses_logged_prompt(self):
         # 引用自家 HT 图：账本里的当时提示词最可信，进场当锚
-        out, m_llm, _ = self._decide(
+        out, m_describe, _, _ = self._decide(
             "手改成插兜",
             '{"skill": "hd_3_curvy", "prompt": "miku, fixed"}',
             quoted="编号 HT-20261005-010329-595",
             lookup_row={"prompt": "logged, miku", "skill": "hd_3_curvy"})
         self.assertEqual(out, "")
-        sent = m_llm.call_args[0][0][0]["content"]
+        sent = m_describe.call_args.kwargs["prompt"]
         self.assertIn("logged, miku", sent)
         self.assertIn("最可信", sent)
 
     def test_foreign_image_ignores_last_job(self):
         # 引用别人的图：上一轮任务的原提示词绝不进场（锚死事故的根因）
-        out, m_llm, m_gen = self._decide(
+        out, m_describe, _, m_gen = self._decide(
             "手改成插兜",
             '{"skill": "anima_clear", "prompt": "1girl, fixed"}',
             last_job={"skill": "anima_clear", "prompt": "1girl, old"})
         self.assertEqual(out, "")
-        sent = m_llm.call_args[0][0][0]["content"]
+        sent = m_describe.call_args.kwargs["prompt"]
         self.assertNotIn("1girl, old", sent)
         self.assertIn("忽略此项", sent)
         m_gen.assert_called_once()
 
     def test_bare_at_with_image_returns_reverse_text(self):
         # 2026-10-05 用户口径：引用图 + 只 @（没别的说）→ 反推提示词返回，
-        # 不生成
-        out, m_llm, m_gen = self._decide("", '{"skip": true}', at_me=True)
+        # 不生成（走 _recall_tags，同样钉死 deepseek）
+        out, m_describe, m_llm, m_gen = self._decide(
+            "", seen="1girl, solo, blue hair", at_me=True)
         self.assertIn(direct_gen._REVERSE_HEADER, out)
         self.assertIn("blue hair", out)
+        self.assertEqual(m_describe.call_args.kwargs.get("provider"),
+                         "deepseek")
         m_llm.assert_not_called()
         m_gen.assert_not_called()
 
     def test_channel_with_image_generates_from_reverse_zero_llm(self):
         # 引用图 + 只打档位（「三档」）→ 反推后直接生成，零 LLM
-        out, m_llm, m_gen = self._decide("三档", "x", at_me=True)
+        out, m_describe, m_llm, m_gen = self._decide(
+            "三档", seen="1girl, solo, blue hair", at_me=True)
         self.assertEqual(out, "")
         m_llm.assert_not_called()
         m_gen.assert_called_once_with("1girl, solo, blue hair",
@@ -436,35 +447,42 @@ class RevisionPipelineTest(unittest.TestCase):
 
     def test_generic_i2i_filler_with_channel(self):
         # 引用图 +「快档 基于图片帮我生成」→ 空话不算意见，反推后直接生成
-        out, m_llm, m_gen = self._decide(
-            "快档 基于图片帮我生成", "x", at_me=True)
+        out, _, m_llm, m_gen = self._decide(
+            "快档 基于图片帮我生成", seen="1girl, solo, blue hair", at_me=True)
         self.assertEqual(out, "")
         m_llm.assert_not_called()
         m_gen.assert_called_once_with("1girl, solo, blue hair",
                                       skill="hd_fast_clear",
                                       _skip_confirm=True)
 
+    def test_praise_on_at_round_returns_reverse_text(self):
+        # @ 轮意见不是修改请求 → 一次调用里直接给出反推（不刷菜单、不二调）
+        out, m_describe, _, m_gen = self._decide(
+            "画得真好", seen='{"reverse": "1girl, solo, blue hair"}',
+            at_me=True)
+        self.assertIn(direct_gen._REVERSE_HEADER, out)
+        self.assertIn("blue hair", out)
+        m_describe.assert_called_once()
+        m_gen.assert_not_called()
+
     def test_praise_is_swallowed_on_keyword_round(self):
-        # 关键词轮引用图 + 夸奖（skip）→ 闭嘴吞轮（""），绝不掉回 agent
-        out, m_llm, m_gen = self._decide(
-            "比大大怪快五秒左右", '{"skip": true}')
+        # 关键词轮引用图 + 夸奖（reverse）→ 闭嘴吞轮（""），绝不掉回 agent
+        out, _, _, m_gen = self._decide(
+            "比大大怪快五秒左右",
+            seen='{"reverse": "1girl, solo, blue hair"}')
         self.assertEqual(out, "")
         m_gen.assert_not_called()
 
-    def test_praise_on_at_round_returns_reverse_text(self):
-        # @ 轮意见不是修改请求 → 按用户口径回反推文本（不刷菜单）
-        out, _, m_gen = self._decide("画得真好", '{"skip": true}', at_me=True)
-        self.assertIn(direct_gen._REVERSE_HEADER, out)
-        m_gen.assert_not_called()
-
-    def test_revision_without_any_context_guides_user(self):
-        out, m_llm, m_gen = self._decide("手改成插兜", "x", seen="")
-        self.assertIn("没认出引用的图", out)
-        m_gen.assert_not_called()
-
-    def test_revision_fails_translating_returns_error(self):
-        out, _, m_gen = self._decide("手改成插兜", "不是 JSON")
+    def test_revision_unparseable_returns_error(self):
+        out, _, _, m_gen = self._decide("手改成插兜", seen="不是 JSON")
         self.assertIn("没解析出来", out)
+        m_gen.assert_not_called()
+
+    def test_revision_call_failure_returns_error(self):
+        out, m_describe, _, m_gen = self._decide(
+            "手改成插兜", describe_side_effect=RuntimeError("429"))
+        self.assertIn("没发出去", out)
+        m_describe.assert_called_once()
         m_gen.assert_not_called()
 
 

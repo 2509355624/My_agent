@@ -18,11 +18,11 @@
 - 引用生图回执 +「再来一张」→ 同提示词换种子重跑（_LAST_JOB 现成有），零转译。
 - 引用图 + @（没别的说）→ **反推提示词**发回去，不生成；引用图 + 档位
   （「三档」，或「快档 基于图片帮我生成」这类空话）→ 反推后直接生成。
-- 引用图 + 意见 → 改图：识图反推英文 tag（唯一事实来源）→ 一次修正调用 →
-  重跑。原提示词只在引用的是**自家 HT 图**（账本可查）时才给模型——
-  2026-10-05 群实录教训：引用别人的图，上一轮的原提示词会把模型锚死，
-  出图跟引用的图毫无关系。意见不是修改请求（skip）→ @ 轮回反推文本、
-  关键词轮静默。
+- 引用图 + 意见 → 改图：**一次带图调用**（钉死 DeepSeek 官方，2026-10-05
+  用户拍板）——图直接给视觉模型，「看图 + 按意见改」一步出完整英文
+  prompt，不再识图转文字后二次调用（2 次 API → 1 次，零中间损耗）。
+  原提示词只在引用的是**自家 HT 图**（账本可查）时才给模型；意见不是
+  修改请求 → @ 轮回反推文本、关键词轮静默。
 - **agent 已退场（2026-10-05 用户拍板）**：@ 轮要么走工具要么回菜单。
   关键词命中但纯闲聊（别的机器人的聊天里提到名字）→ **静默不理**，止住
   菜单刷屏。唯一放行是总开关关闭（ENABLED=False）和主动接话轮（voluntary）。
@@ -248,20 +248,18 @@ _LOCKED_TEMPLATE = (
 )
 
 _REVISE_TEMPLATE = (
-    "你是生图提示词修正器。用户引用了一张图并提出要求。"
+    "你是生图提示词修正器。用户给你一张图并提出要求。"
     "只输出 JSON 本体，格式：{{\"skill\": \"渠道id\", \"prompt\": \"修正后的"
     "完整英文提示词\"}}\n"
-    "- **画面反推（英文 tag）是唯一事实来源**：prompt 必须覆盖它的全部要点，"
-    "用户没提到的细节原样保留\n"
-    "- 原提示词{anchor_note}：与画面反推冲突时，一律以画面反推为准\n"
+    "- 先看清楚画面（人物、发色发型、瞳色、表情、服装、姿势、场景），"
+    "prompt 必须覆盖画面全部要点，用户没提到的细节原样保留\n"
+    "- 原提示词{anchor_note}：与画面冲突时，一律以画面为准\n"
     "- skill 沿用「原渠道」，除非用户点名要换\n"
     "- danbooru 标签式英文，逗号分隔短语；禁止权重语法 (tag:1.2)、{{tag}}、::\n"
     "- 具体角色没把握就写外貌特征+作品名，不要编造不存在的角色名\n"
-    "- **用户的话不是修改/生图请求**（夸奖、闲聊、问别的事）→ 输出 "
-    "{{\"skip\": true}}\n"
-    "画面反推（英文 tag）：\n{tags}\n"
+    "- **用户的话不是修改/生图请求**（夸奖、闲聊、问别的事）→ 改输出 "
+    "{{\"reverse\": \"这张图的英文tag反推\"}}\n"
     "原提示词（渠道 {last_skill}）：\n{last_prompt}\n"
-    "最近对话：\n{recent}\n"
     "用户的话：{text}"
 )
 
@@ -412,8 +410,9 @@ def _translate(text, history, skill=None):
 
 
 def _recall_tags(data_urls):
-    """引用图 → 英文 danbooru tag 反推（改图与「反推返回」共用的事实来源）。
+    """引用图 → 英文 danbooru tag 反推（「反推返回」「反推后生成」共用）。
 
+    **钉死 DeepSeek 官方**（2026-10-05 用户拍板：带图的调用不走降级链）。
     最多看 3 张，全部失败返回 ""。
     """
     from app.vision import describe
@@ -421,7 +420,8 @@ def _recall_tags(data_urls):
     outs = []
     for i, data_url in enumerate(urls, 1):
         try:
-            text = (describe(data_url, prompt=_TAGS_PROMPT) or "").strip()
+            text = (describe(data_url, prompt=_TAGS_PROMPT,
+                             provider="deepseek") or "").strip()
         except Exception:
             log.exception("[direct] 引用图反推失败（第 %d 张）", i)
             continue
@@ -439,19 +439,23 @@ def _reverse_text(tags):
 
 
 def _revise(text, data_urls, history, channel=None, at_me=False):
-    """改图管道：引用图 + 意见 → 英文 tag 反推（唯一事实来源）→ 一次修正
-    调用 → 重跑。
+    """改图管道：引用图 + 意见 → **一次带图调用** → 重跑。
 
-    原提示词只在「引用的是自家 HT 图」（账本可查到当时真实提示词）时才给
-    模型——2026-10-05 群实录：引用别人的图时，上一轮的原提示词会把模型
-    锚死，出图跟引用图毫无关系。
+    图直接发给视觉模型（钉死 DeepSeek 官方，2026-10-05 用户拍板）：
+    「看图 + 按意见改」一步出完整英文 prompt。不再先识图转文字、再让
+    文本模型二次加工——那多烧一次 API，还多一层文字损耗（2 次 → 1 次）。
 
-    返回 None = 意见不是修改请求（skip）：@ 轮回反推文本、关键词轮静默，
-    由本函数内部处理。
+    原提示词只在「引用的是自家 HT 图」（账本可查到当时真实提示词）时才
+    给模型——2026-10-05 群实录：引用别人的图时，上一轮的原提示词会把
+    模型锚死，出图跟引用图毫无关系。
+
+    返回 None = 意见不是修改请求（reverse）：@ 轮回反推文本、关键词轮
+    静默，由本函数内部处理。
     """
+    from app.vision import describe
     session_key = qq_api.current_session_key()
     quoted = (qq_api.current_quoted_text() or "").strip()
-    # 「再来一张」：引用回执（或干说）→ 同提示词换种子重跑，零转译。
+    # 「再来一张」：引用回执（或干说）→ 同提示词换种子重跑，零调用。
     last = _last_job(session_key)
     if _AGAIN_RE.search(text) and (last or _NOISE_QUOTE_RE.search(quoted)):
         if last:
@@ -459,10 +463,9 @@ def _revise(text, data_urls, history, channel=None, at_me=False):
             _remember_job(session_key, skill, last["prompt"])
             return _enqueue(skill, last["prompt"], text)
         return "没找到最近一次生图的记录，重新描述想要什么吧：@我 渠道 描述。"
-    tags = _recall_tags(data_urls[:1])
-    # 自家图有账本：HT 编号在引用正文/原话里找，账本里的提示词比看图现推准。
+    # 自家图有账本：HT 编号在引用正文/原话里找，账本里的提示词最可信。
     anchor_skill, anchor_prompt = "（无）", "（无）"
-    anchor_note = "没有（引用的不是本机器人画的图），忽略此项，从画面反推构建"
+    anchor_note = "没有（引用的不是本机器人画的图），忽略此项，以画面为准"
     try:
         own_tags = image_log.find_tags(quoted + " " + text)
     except Exception:
@@ -474,23 +477,24 @@ def _revise(text, data_urls, history, channel=None, at_me=False):
             anchor_prompt = row["prompt"].strip()
             anchor_skill = (row.get("skill") or "").strip() or "（无）"
             anchor_note = "是这张图当时的真实提示词（账本可查），最可信"
-    if not tags and anchor_prompt == "（无）":
-        return ("没认出引用的图，也没找到最近一次生图的记录。"
-                "重新描述想要什么吧：@我 渠道 描述。")
     ask = _REVISE_TEMPLATE.format(
-        tags=tags or "（识图失败，以原提示词为准）",
         anchor_note=anchor_note,
         last_skill=anchor_skill,
         last_prompt=anchor_prompt,
-        recent=_recent_lines(history) or "（无）",
         text=text)
-    data = _ask(ask)
+    try:
+        reply = describe(data_urls[0], prompt=ask, provider="deepseek")
+    except Exception:
+        log.exception("[direct] 改图调用失败")
+        return "改图请求没发出去，稍后再试。"
+    data = _extract_json(reply)
     if not data:
         return "改图请求没解析出来，换个说法再试（如「手改成插兜」）。"
-    if data.get("skip"):
-        # 没有修改意图 → @ 轮默认反推给他（2026-10-05 用户口径：
-        # 引用图没说档位就是反推即可）；关键词轮静默止刷屏。
-        return _reverse_text(tags) if at_me else None
+    rev = (data.get("reverse") or "").strip()
+    if rev:
+        # 不是修改请求 → @ 轮把反推给他（2026-10-05 用户口径）；
+        # 关键词轮静默止刷屏。
+        return _reverse_text(rev) if at_me else None
     prompt = (data.get("prompt") or "").strip()
     if not prompt:
         return "改图请求没解析出来，换个说法再试（如「手改成插兜」）。"
