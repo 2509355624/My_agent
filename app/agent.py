@@ -817,7 +817,8 @@ _ABORT_NOTE = "⚠️ 用户手动中断了上一条回复，其内容可能不�
 
 def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_results=None,
                      agent_id=None, image=None, cancel_event=None, extra_context=None,
-                     image_owners=None, session_key=None, strict=False):
+                     image_owners=None, session_key=None, strict=False,
+                     force_vision=False):
     """
     Agent Loop: 生成器版本，逐事件返回
     事件类型: user / assistant / tool_call / tool_result / aborted
@@ -891,7 +892,12 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
     attach_mode = False
     if images:
         eff = get_effective_config(provider, model)
-        if provider_vision(eff["provider"], eff["model"]):
+        # force_vision=True（QQ 侧 2026-10-04 用户定）：就算链头的云模型自己
+        # 能读图，也**先走识图预处理**（per-agent vision_model，本地 llama
+        # MiMo，零成本）转成文字再进正文——云端多模态直读按图片 token 计费，
+        # 群里带图消息一多就是白烧钱。网页端不传，保持原判据（有视觉直读）。
+        if (provider_vision(eff["provider"], eff["model"])
+                and not force_vision):
             attach_mode = True
         else:
             user_input = _with_vision(user_input, images, image_owners,

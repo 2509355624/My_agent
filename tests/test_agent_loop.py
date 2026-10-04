@@ -445,6 +445,26 @@ class AgentLoopTest(unittest.TestCase):
         self.assertIn("504 Gateway Timeout", self.history[0]["content"])
         self.assertNotIn("ZZZ", self.history[0]["content"])
 
+    def test_force_vision_bypasses_multimodal_attach(self):
+        """force_vision=True（QQ 侧 2026-10-04 用户定）：云模型能读图也先识图。
+
+        判据是省钱：云端多模态直读按图片 token 计费，群里带图消息一多就是
+        白烧钱；QQ 一律先走识图预处理（per-agent vision_model = 本地 llama
+        MiMo，零成本），文本模型只收文字。网页端不传 force_vision，行为
+        不变（有视觉直读，见 test_multimodal... 那组）。
+        """
+        self._patch_vision("一只猫趴在键盘上。")
+        fake = self._patch_llm(["我看到一只猫。"])
+        list(agent.run_agent_stream("这是什么", self.history, provider="deepseek",
+                                    image="data:image/jpeg;base64,ZZZ",
+                                    force_vision=True))
+        # 走了识图（deepseek 本身 vision=True，没有 force_vision 会直读）
+        self.assertTrue(self.vision_prompts)
+        # 没有任何多模态结构、没落下 base64
+        self.assertFalse(any(isinstance(m.get("content"), list)
+                             for m in fake.seen_histories[0]))
+        self.assertNotIn("ZZZ", str(fake.seen_histories[0]))
+
     def test_vision_failure_degrades_instead_of_breaking_turn(self):
         """识图挂掉不能让整轮对话失败：降级成"看不到这张图"，照常回答。"""
         self._patch_vision(exc=RuntimeError("识图请求失败：超时"))
