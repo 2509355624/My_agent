@@ -793,7 +793,11 @@ def _status_message(history, extra_context=None):
     # 空串和纯空白都不拼——否则会多出一段空行，白占位置还让前缀比对失准
     extra = (extra_context or "").strip()
     content = (extra + "\n\n" + status) if extra else status
-    return {"role": "system", "content": content}
+    # 角色必须是 user 而不是 system：llama.cpp 的 Jinja 聊天模板要求 system
+    # 只能出现在消息数组开头（2026-10-04 Fable 实测 HTTP 500：System message
+    # must be at the beginning）。状态栏永远挂在末尾，role=system 必撞；云端
+    # 对尾部的 user / system 一视同仁，改成 user 无副作用。
+    return {"role": "user", "content": content}
 
 
 def tail_tokens(history, extra_context=None):

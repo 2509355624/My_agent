@@ -425,7 +425,9 @@ class StatusMessageContextTest(unittest.TestCase):
 
     def test_context_goes_into_status_message(self):
         msg = agent._status_message([], extra_context="[群里最近的对话]\n张三：在吗")
-        self.assertEqual(msg["role"], "system")
+        # 必须是 user：llama.cpp Jinja 模板要求 system 只能在数组开头，
+        # 状态栏挂在末尾（2026-10-04 Fable 500 实锤）。
+        self.assertEqual(msg["role"], "user")
         self.assertIn("[群里最近的对话]", msg["content"])
         self.assertIn("<status_bar>", msg["content"])
 

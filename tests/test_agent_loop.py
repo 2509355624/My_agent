@@ -336,6 +336,11 @@ class AgentLoopTest(unittest.TestCase):
         # 动态状态栏必须追加在末尾；放在头部会毒化 prefix cache
         self.assertIn("<status_bar>", sent[-1]["content"])
         self.assertNotIn("<status_bar>", sent[0]["content"])
+        # 尾巴不能是 system：llama.cpp 的 Jinja 模板要求 system 只能在开头
+        # （2026-10-04 Fable 实测 HTTP 500 "System message must be at the
+        # beginning"）。状态栏已改 user 角色，这里钉死防回退。
+        self.assertEqual(sent[-1]["role"], "user")
+        self.assertTrue(all(m["role"] != "system" for m in sent[1:]))
 
     def test_reasoning_is_streamed_but_never_stored(self):
         self._patch_llm([
