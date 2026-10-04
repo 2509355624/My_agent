@@ -332,6 +332,127 @@ class QuotedPromptTest(unittest.TestCase):
         self.assertNotIn("red hair", sent)
         self.assertNotIn("krea2：", sent)
 
+    def test_doubao_wrapped_english_extracts_and_passes_through(self):
+        # 2026-10-05 用户场景：豆包回复整段复制来引用（客套话 + 英文段），
+        # 抽出英文本体直通，客套话绝不进转译。
+        quoted = ("好的，那么我给你的提示词是下面的，你可以直接去复制粘贴"
+                  "进行使用：\n1girl, solo, long hair, blue eyes, white "
+                  "dress, standing in a garden")
+        out, m_llm, m_gen = self._decide("三档", "x", quoted=quoted)
+        self.assertEqual(out, "")
+        m_llm.assert_not_called()
+        m_gen.assert_called_once_with(
+            "1girl, solo, long hair, blue eyes, white dress, "
+            "standing in a garden",
+            skill="hd_3_clear", _skip_confirm=True)
+
+    def test_quoted_plus_extra_words_merges_into_translate(self):
+        # 引用 + 渠道词 + 额外话（「三档 帮我加个帽子」）→ 引用正文和补充
+        # 合并进转译，引用不再被丢掉。
+        out, m_llm, m_gen = self._decide(
+            "三档 帮我加个帽子",
+            '{"skill": "hd_3_clear", "prompt": "1girl, hat"}',
+            quoted="1girl in a garden")
+        self.assertEqual(out, "")
+        sent = m_llm.call_args[0][0][0]["content"]
+        self.assertIn("1girl in a garden", sent)     # 引用正文进来了
+        self.assertIn("帮我加个帽子", sent)           # 补充话进来了
+        m_gen.assert_called_once_with("1girl, hat",
+                                      skill="hd_3_clear",
+                                      _skip_confirm=True)
+
+    def test_quote_without_channel_word_never_burns_api(self):
+        # 引用 + 没渠道词 + 说话（「生图」「这词什么意思」）→ 零 API 固定
+        # 指路，不再烧一次转译对着「生图」两个字瞎编。
+        for text in ("生图", "这个词是什么意思", "能不能给我改"):
+            with self.subTest(text=text):
+                out, m_llm, m_gen = self._decide(
+                    text, '{"skill": "anima_clear", "prompt": "x"}',
+                    quoted="1girl, solo, red hair")
+                self.assertIn("没说渠道", out)
+                m_llm.assert_not_called()
+                m_gen.assert_not_called()
+
+
+class QuoteImageIntentTest(unittest.TestCase):
+    """引用图的生成/图生图意图（2026-10-05 用户拍板的边界）。"""
+
+    def _decide(self, text, llm_reply='{"skill": "anima_clear", "prompt": "x"}',
+                seen="1girl, solo, blue hair", quoted="", at_me=False,
+                lookup_row=None):
+        with mock.patch.object(direct_gen.llm, "call_llm",
+                               return_value=llm_reply), \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="group_1"), \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=quoted), \
+             mock.patch("app.vision.describe", return_value=seen), \
+             mock.patch.object(direct_gen.image_log, "lookup",
+                               return_value=lookup_row), \
+             mock.patch.object(gi, "_generate_image",
+                               return_value=RECEIPT) as m_gen:
+            out = direct_gen.decide(text, [], False,
+                                    data_urls=["data:image/jpeg;base64,A"],
+                                    at_me=at_me)
+            direct_gen._LAST_JOB.pop("group_1", None)
+        return out, m_gen
+
+    def test_gen_intent_without_channel_reverses_then_generates(self):
+        # 引用图 +「帮我生成这个 / 跑一下这张图片」（没渠道）→ 用户口径：
+        # 默认反推 → 重画，别反问。
+        for text in ("帮我生成这个", "跑一下这张图片", "处理一下这张图"):
+            with self.subTest(text=text):
+                out, m_gen = self._decide(text)
+                self.assertEqual(out, "")
+                m_gen.assert_called_once_with("1girl, solo, blue hair",
+                                              skill="anima_clear",
+                                              _skip_confirm=True)
+
+    def test_i2i_intent_pins_source_image(self):
+        # 引用图 +「图生图 把头发换成银色」→ 垫图重绘（source_image=1）。
+        out, m_gen = self._decide(
+            "图生图 把头发换成银色",
+            seen='{"skill": "anima_clear", "prompt": "1girl, silver hair"}')
+        self.assertEqual(out, "")
+        m_gen.assert_called_once_with("1girl, silver hair",
+                                      skill="anima_clear",
+                                      _skip_confirm=True, source_image="1")
+
+    def test_i2i_with_hd3_falls_back_to_redraw_capable(self):
+        # 「三档 图生图」→ hd_3 不支持重绘，自动落回默认动漫档
+        out, m_gen = self._decide(
+            "三档 图生图",
+            seen='{"skill": "anima_clear", "prompt": "1girl, fixed"}')
+        self.assertEqual(out, "")
+        self.assertEqual(m_gen.call_args.kwargs["skill"], "anima_clear")
+        self.assertEqual(m_gen.call_args.kwargs["source_image"], "1")
+
+    def test_qwen_i2i_instruction_passes_through_zero_llm(self):
+        # 点名 qwen 图生图：一句改动指令直通（qwen 参考图编辑吃自然语言），
+        # 连视觉调用都不用。
+        out, m_gen = self._decide(
+            "qwen 图生图 把外套换成红色",
+            seen="不该被用到", at_me=True)
+        self.assertEqual(out, "")
+        m_gen.assert_called_once_with("把外套换成红色",
+                                      skill="qwen_image_v1",
+                                      _skip_confirm=True, source_image="1")
+
+    def test_channel_with_image_still_generates_from_reverse(self):
+        # 原有行为不回归：引用图 +「三档」→ 反推后直接生成（不垫图）。
+        out, m_gen = self._decide("三档", at_me=True)
+        self.assertEqual(out, "")
+        m_gen.assert_called_once_with("1girl, solo, blue hair",
+                                      skill="hd_3_clear",
+                                      _skip_confirm=True)
+
+    def test_bare_at_with_image_still_returns_reverse_text(self):
+        # 原有行为不回归：引用图 + 裸 @ → 反推文本，不生成。
+        out, m_gen = self._decide("", at_me=True)
+        self.assertIn(direct_gen._REVERSE_HEADER, out)
+        self.assertIn("blue hair", out)
+        m_gen.assert_not_called()
+
 
 class AgainTest(unittest.TestCase):
     def test_again_redoes_last_job_without_llm(self):
@@ -386,12 +507,15 @@ class RevisionPipelineTest(unittest.TestCase):
         return out, m_describe, m_llm_mod.call_llm, m_gen
 
     def test_revision_single_call_sees_image_and_opinion(self):
+        # 「手改成插兜」含改图动词（「改成」）→ 按图生图垫图（与垫图闸门
+        # 同源词表），默认动漫档重绘。
         out, m_describe, m_llm, m_gen = self._decide(
             "手改成插兜",
             '{"skill": "anima_clear", "prompt": "1girl, hands in pockets"}')
         self.assertEqual(out, "")
         m_gen.assert_called_once_with("1girl, hands in pockets",
-                                      skill="anima_clear", _skip_confirm=True)
+                                      skill="anima_clear", _skip_confirm=True,
+                                      source_image="1")
         m_describe.assert_called_once()          # 只有一次带图调用
         self.assertEqual(m_describe.call_args.kwargs.get("provider"),
                          "deepseek")             # 钉死 DeepSeek 官方
@@ -399,6 +523,24 @@ class RevisionPipelineTest(unittest.TestCase):
         self.assertIn("手改成插兜", sent)        # 用户意见进来了
         self.assertIn("忽略此项", sent)          # 没有账本就不给原提示词
         m_llm.assert_not_called()                # 转译链路完全不参与
+
+    def test_edit_opinion_without_verbs_regenerates_t2i(self):
+        # 「手怎么多了一根」没有改图动词 → 不垫图，反推修正后重画一张
+        out, m_describe, m_llm, m_gen = self._decide(
+            "手怎么多了一根",
+            '{"skill": "anima_clear", "prompt": "1girl, five fingers"}')
+        self.assertEqual(out, "")
+        m_gen.assert_called_once_with("1girl, five fingers",
+                                      skill="anima_clear",
+                                      _skip_confirm=True)
+        self.assertNotIn("source_image", m_gen.call_args.kwargs)
+        sent = m_describe.call_args.kwargs["prompt"]
+        self.assertIn("手怎么多了一根", sent)     # 用户意见进来了
+        self.assertIn("忽略此项", sent)          # 没有账本就不给原提示词
+        m_llm.assert_not_called()                # 转译链路完全不参与
+        m_describe.assert_called_once()          # 只有一次带图调用
+        self.assertEqual(m_describe.call_args.kwargs.get("provider"),
+                         "deepseek")             # 钉死 DeepSeek 官方
 
     def test_own_image_uses_logged_prompt(self):
         # 引用自家 HT 图：账本里的当时提示词最可信，进场当锚
