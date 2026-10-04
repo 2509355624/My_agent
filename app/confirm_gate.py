@@ -106,10 +106,16 @@ def _card_text(pend):
 
 
 def intercept(kind, *, skill, prompt, seed=None, intent=None, workflow=None,
-              nai_i2i=None, note=""):
+              nai_i2i=None, note="", skip_confirm=False):
     """生图提交前的最后一道闸。返回 None=放行（网页端），返回 str=已拦下等确认
-    （以 RECEIPT_SENT_MARK 开头，工具原样返回，agent 掐断本轮）。"""
+    （以 RECEIPT_SENT_MARK 开头，工具原样返回，agent 掐断本轮）。
+
+    skip_confirm：直达生图管道（direct_gen）专用——用户打的指令本身就是确认，
+    不再拦（agent 路径保持 False）。
+    """
     from app import image_jobs, qq_api
+    if skip_confirm:
+        return None
     target, target_id = qq_api.current_context()
     if target is None:
         return None

@@ -156,6 +156,7 @@ class BotKeepsQuietTest(unittest.TestCase):
         send = lambda gid, text, limit=None: (sent.append(text), 1)[1]
         with mock.patch.object(qq_bot, "run_agent_stream",
                                lambda *a, **k: iter(events)), \
+                mock.patch.object(qq_bot.direct_gen, "ENABLED", False), \
                 mock.patch.object(qq_bot, "load_history", lambda *a, **k: []), \
                 mock.patch.object(qq_bot, "_ensure_system_prompt", lambda *a: None), \
                 mock.patch.object(qq_bot, "save_history", lambda *a, **k: None), \

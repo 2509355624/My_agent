@@ -40,7 +40,8 @@ try:
 except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
-from app import (confirm_gate, image_jobs, image_out, interject, logsetup,
+from app import (confirm_gate, direct_gen, image_jobs, image_out, interject,
+                 logsetup,
                  longterm, notify, qq_api, qq_status, recent, recall_gate,
                  stickers, usage)
 from app.agent import run_agent_stream, tail_tokens
@@ -1021,6 +1022,19 @@ class SessionRunner:
         if gate_reply is not None:
             try:
                 self._deliver(False, gate_reply, [], "")
+            finally:
+                qq_api.clear_context()
+            return
+        # 直达生图管道（2026-10-04）：@ + 生图意图 → 一次轻量 LLM 调用把原话
+        # 转成「渠道+提示词」，代码直接入队——整轮不过 agent（agent 一轮系统头
+        # +历史+工具协议动辄几万 token，这里一次调用只要几百）。/菜单与裸 @ 回
+        # 写死的常量，零 LLM。不接管的轮（闲聊/带图/主动接话）原样落回 agent。
+        # 见 app/direct_gen.py。
+        direct_reply = direct_gen.decide(own_text, history, voluntary)
+        if direct_reply is not None:
+            try:
+                if direct_reply:
+                    self._deliver(False, direct_reply, [], "")
             finally:
                 qq_api.clear_context()
             return

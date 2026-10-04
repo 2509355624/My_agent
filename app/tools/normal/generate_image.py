@@ -751,7 +751,11 @@ def _canvas_long_side(workflow):
 
 
 def _generate_image(prompt, skill=None, lora=None, source_image="",
-                    denoise=None, seed=None, use_character=None):
+                    denoise=None, seed=None, use_character=None,
+                    _skip_confirm=False):
+    # `_skip_confirm`：直达生图管道（app/direct_gen.py）专用——用户打的就是
+    # 「渠道+描述」的明确指令，等于已经确认过了，再拦一发确认卡纯属多一轮。
+    # agent 路径保持默认 False（拦）。
     # `denoise`：**只有 NAI 图生图**消费它（见下面的 `_nai_strength(denoise)`）。
     # 本机渠道的图生图强度由 `I2I_DENOISE` 定死，不收这个参数——见下面的 i2i 分支。
     # `source_image` 两边都认（本机走 workflow_i2i.json，NAI 走云端）。
@@ -872,7 +876,8 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
         # 二次确认闸（2026-10-04）：QQ 轮拦下发确认卡，对方回「好」才真入队。
         from app import confirm_gate
         gate = confirm_gate.intercept("nai", skill=skill, prompt=prompt,
-                                      intent=intent, nai_i2i=nai_i2i)
+                                      intent=intent, nai_i2i=nai_i2i,
+                                      skip_confirm=_skip_confirm)
         if gate is not None:
             return gate
         return _enqueue_nai(prompt, target, target_id, nai_i2i, intent, skill)
@@ -1026,7 +1031,8 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     from app import confirm_gate
     gate = confirm_gate.intercept("comfy", skill=skill, prompt=prompt, seed=seed,
                                   intent=intent, workflow=workflow,
-                                  note=source_note)
+                                  note=source_note,
+                                  skip_confirm=_skip_confirm)
     if gate is not None:
         return gate
     # prompt 一路带到队列里，只为出图后记账本（编号 → 提示词）；出图用的是
