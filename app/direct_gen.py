@@ -7,20 +7,22 @@
 把用户原话转成 {渠道, 提示词}，代码直接入队——整轮不过 agent。
 
 结构：
-- /菜单（或裸 @）→ 写死的常量文本，零 LLM。
+- /菜单（或裸 @、或任何不是工具指令的 @ 轮）→ 写死的常量文本，零 LLM。
 - 生图意图（正则粗判）→ 一次 call_llm 转译成 JSON → 校验 → 直接调
   generate_image 的入队代码（复用渠道/档位/NAI 分流/额度/查重全套既有逻辑，
   唯一区别是跳过确认卡——用户打了指令本身就是确认）。
-- 判不像生图、转译失败、带图轮 → 返回 None 放行，agent 照旧接管。
-
-v1 边界：只做文生图直达；图生图（引用图改图）继续走 agent。
+- 带图轮（用户引用已生成的图提意见）→ 识图 + 会话上次任务的提示词 +
+  用户意见，一次 LLM 调用输出修正后的提示词 → 重新入队。
+- **agent 已退场（2026-10-05 用户拍板）**：@ 轮要么走工具要么回菜单，
+  绝不为聊天进 agent 循环。唯一例外是总开关关闭（ENABLED=False）和
+  主动接话轮（voluntary，行为维持原样）。
 """
 import json
 import logging
 import os
 import re
 
-from app import image_jobs, llm
+from app import image_jobs, llm, qq_api
 from app.confirm_gate import _ATTRIBUTION_RE
 from app.skills import list_skills
 
@@ -73,8 +75,9 @@ MENU_TEXT = (
     "【画风】清晰 clear / 肉感 curvy / 油亮 gloss / 柔和 soft"
     "（跟在档位后面，如「二档 gloss 一个女骑士」）\n"
     "【云端】nai <英文提示词>\n"
-    "描述用中文就行，我会转成对应画法。"
-    "要改图/反推提示词/闲聊，直接说话即可。"
+    "【改图】引用要改的那张图 + 说要改什么（如「多手多脚了」「衣服换成红色」）\n"
+    "【反推】引用图 + 说「反推提示词」\n"
+    "描述用中文就行，我会转成对应画法。本机器人只管生图，不闲聊。"
 )
 
 _TRANSLATE_TEMPLATE = (
@@ -93,6 +96,41 @@ _TRANSLATE_TEMPLATE = (
     "最近对话（用于理解「刚才那只」「换成卡通风格」这类指代）：\n{recent}\n"
     "用户请求：{text}"
 )
+
+
+_REVISE_TEMPLATE = (
+    "你是生图提示词修正器。用户引用了一张 AI 生成的图并提出修改意见。"
+    "只输出 JSON 本体，格式：{{\"skill\": \"渠道id\", \"prompt\": \"修正后的"
+    "完整英文提示词\"}}\n"
+    "- skill 沿用「原渠道」，除非用户点名要换\n"
+    "- prompt = 在原提示词基础上按用户意见改出来的**完整**提示词；"
+    "没有原提示词就从画面描述反推骨架再改\n"
+    "- danbooru 标签式英文，逗号分隔短语；禁止权重语法 (tag:1.2)、{{tag}}、::\n"
+    "- 具体角色没把握就写外貌特征+作品名，不要编造不存在的角色名\n"
+    "画面描述：\n{seen}\n"
+    "原提示词（渠道 {last_skill}）：\n{last_prompt}\n"
+    "最近对话：\n{recent}\n"
+    "用户意见：{text}"
+)
+
+# 修正管道用的识图指令：只描述画面本身，别客套。
+_SEE_PROMPT = "用中文简洁描述这张图的内容：人物、姿势、服装、场景、显著问题。"
+
+# 会话最近一次直达入队的任务（修正管道的「原提示词」来源）。
+# 内存态就够：修正场景发生在刚出图之后，进程重启丢了也就是少个上下文。
+_LAST_JOB = {}
+_JOB_LOCK = __import__("threading").Lock()
+
+
+def _remember_job(session_key, skill, prompt):
+    with _JOB_LOCK:
+        _LAST_JOB[session_key] = {"skill": skill, "prompt": prompt}
+
+
+def _last_job(session_key):
+    with _JOB_LOCK:
+        job = _LAST_JOB.get(session_key)
+        return dict(job) if job else None
 
 
 def _strip_attribution(text):
@@ -137,11 +175,81 @@ def _humanize_error(result):
     return first if first.endswith("。") else first + "。"
 
 
-def decide(own_text, history, voluntary):
+def _enqueue(skill, prompt, text):
+    """转译结果落队。返回要发回会话的文本；成功且回执已直发返回 ""。"""
+    from app.tools.normal import generate_image as gi
+    try:
+        result = gi._generate_image(prompt, skill=skill, _skip_confirm=True)
+    except Exception:
+        log.exception("[direct] 直接入队失败")
+        return "生图请求没发出去，稍后再试。"
+    log.info("[direct] 直达入队：%s %r（原话 %r）", skill, prompt[:50],
+             text[:50])
+    if result.startswith(image_jobs.RECEIPT_SENT_MARK):
+        return ""          # 回执已由工具直发，本轮闭嘴
+    if result.startswith("错误："):
+        return _humanize_error(result)
+    return result
+
+
+def _translate(text, history):
+    """一次 LLM 调用把原话转成 {skill, prompt}；拿不到有效结果返回 None。"""
+    prompt = _TRANSLATE_TEMPLATE.format(
+        recent=_recent_lines(history) or "（无）", text=text)
+    try:
+        reply = llm.call_llm(
+            [{"role": "user", "content": prompt}], timeout=30)
+    except Exception as e:
+        log.warning("[direct] 转译调用失败：%s", e)
+        return None
+    data = _extract_json(reply)
+    if not data:
+        log.warning("[direct] 转译输出不是 JSON（%r）", (reply or "")[:120])
+        return None
+    user_prompt = (data.get("prompt") or "").strip()
+    skill = (data.get("skill") or "").strip()
+    if not user_prompt or not skill:
+        return None
+    if skill not in _allowed_skills():
+        log.warning("[direct] 转译给了未知渠道 %r，降回默认 %s",
+                    skill, _DEFAULT_SKILL)
+        skill = _DEFAULT_SKILL
+    return {"skill": skill, "prompt": user_prompt}
+
+
+def _revise(text, data_urls, history):
+    """改图管道：引用图 + 意见 → 识图 + 原提示词 → 一次修正调用 → 重新入队。"""
+    from app.vision import describe
+    session_key = qq_api.current_session_key()
+    last = _last_job(session_key)
+    try:
+        seen = (describe(data_urls[0], prompt=_SEE_PROMPT) or "").strip()
+    except Exception:
+        log.exception("[direct] 改图识图失败")
+        seen = ""
+    if not seen and not last:
+        return ("没认出引用的图，也没找到最近一次生图的记录。"
+                "重新描述想要什么吧：@我 渠道 描述。")
+    ask = _REVISE_TEMPLATE.format(
+        seen=seen or "（识图失败）",
+        last_skill=(last or {}).get("skill", "（无）"),
+        last_prompt=(last or {}).get("prompt", "（无）"),
+        recent=_recent_lines(history) or "（无）",
+        text=text)
+    data = _translate(ask, history)
+    if not data:
+        return "改图请求没解析出来，换个说法再试（如「手改成插兜」）。"
+    _remember_job(session_key, data["skill"], data["prompt"])
+    return _enqueue(data["skill"], data["prompt"], text)
+
+
+def decide(own_text, history, voluntary, data_urls=None):
     """直达管道入口。返回值：
-    - None      ：不接管，agent 照旧
+    - None      ：不接管（仅限总开关关闭 / 主动接话轮），agent 照旧
     - ""        ：已接管且回执已直发（出图回执），本轮别再说话
     - 其他文本  ：接管并把这段发回会话（菜单/错误提示）
+
+    @ 轮一律接管——工具或菜单，绝不放聊天进 agent（2026-10-05 用户拍板）。
     """
     text = _strip_attribution(own_text).strip()
     # 菜单与裸 @：零 LLM，直接回常量（管道关着也照回——它本来就免费）。
@@ -149,46 +257,23 @@ def decide(own_text, history, voluntary):
         return MENU_TEXT
     if not ENABLED:
         return None
-    # 主动接话轮（没人 @ 它）不进管道；带图轮 v1 也不进（图生图走 agent）。
+    # 主动接话轮（没人 @ 它）不进管道，行为维持原样。
     if voluntary:
         return None
-    if not _INTENT_RE.search(text):
-        return None
-
-    prompt = _TRANSLATE_TEMPLATE.format(
-        recent=_recent_lines(history) or "（无）", text=text)
-    try:
-        reply = llm.call_llm(
-            [{"role": "user", "content": prompt}], timeout=30)
-    except Exception as e:
-        log.warning("[direct] 转译调用失败，放行 agent：%s", e)
-        return None
-    data = _extract_json(reply)
-    if not data:
-        log.warning("[direct] 转译输出不是 JSON（%r），放行 agent",
-                    (reply or "")[:120])
-        return None
-    user_prompt = (data.get("prompt") or "").strip()
-    skill = (data.get("skill") or "").strip()
-    if not user_prompt or not skill:
-        # 模型判断「这跟画图无关」→ 放行 agent。
-        return None
-    if skill not in _allowed_skills():
-        log.warning("[direct] 转译给了未知渠道 %r，降回默认 %s",
-                    skill, _DEFAULT_SKILL)
-        skill = _DEFAULT_SKILL
-
-    from app.tools.normal import generate_image as gi
-    try:
-        result = gi._generate_image(user_prompt, skill=skill,
-                                    _skip_confirm=True)
-    except Exception:
-        log.exception("[direct] 直接入队失败")
-        return "生图请求没发出去，稍后再试或直接跟 AI 说。"
-    log.info("[direct] 直达入队：%s %r（原话 %r）", skill, user_prompt[:50],
-             text[:50])
-    if result.startswith(image_jobs.RECEIPT_SENT_MARK):
-        return ""          # 回执已由工具直发，本轮闭嘴
-    if result.startswith("错误："):
-        return _humanize_error(result)
-    return result
+    # 带图轮：用户引用已生成的图提意见 → 改图管道（「反推」类已被前面的
+    # recall_gate 接管，到不了这里）。
+    if data_urls:
+        return _revise(text, data_urls, history)
+    # 生图意图（正则粗判）→ 一次转译 → 直接入队。
+    if _INTENT_RE.search(text):
+        data = _translate(text, history)
+        if not data:
+            # 转译翻车（链路挂了 / 模型说这跟画图无关）：不进 agent，
+            # 回菜单让人照格式再打一遍。
+            return ("这条没转译成生图指令。照格式来：@我 渠道 描述\n\n"
+                    + MENU_TEXT)
+        _remember_job(qq_api.current_session_key(), data["skill"],
+                      data["prompt"])
+        return _enqueue(data["skill"], data["prompt"], text)
+    # 其余一切 @ 轮（闲聊、问问题、无意义文本）→ 菜单，绝不进 agent。
+    return MENU_TEXT

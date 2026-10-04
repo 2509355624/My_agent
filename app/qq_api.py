@@ -169,6 +169,11 @@ def current_quoted_images():
     return list(getattr(_local, "quoted_images", None) or [])
 
 
+def current_session_key():
+    """本轮绑定的会话键（如 group_123 / private_456）；网页 / 单测里为 None。"""
+    return getattr(_local, "session_key", None)
+
+
 def current_own_images():
     """本轮对方**自己发出来的**图片直链，按消息先后；没绑定或没发图时为空表。
 

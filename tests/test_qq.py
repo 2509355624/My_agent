@@ -780,6 +780,7 @@ class RunTurnQuoteTest(unittest.TestCase):
              mock.patch.object(qq_bot, "save_history", lambda *a, **k: None), \
              mock.patch.object(qq_bot.stickers, "collect", return_value=0), \
              mock.patch.object(qq_bot.stickers, "catalog", return_value=""), \
+             mock.patch.object(qq_bot.direct_gen, "ENABLED", False), \
              mock.patch.object(qq_api, "get_message", get_message):
             runner._run_turn(batch)
         return seen.get("text")
@@ -852,7 +853,8 @@ class StrictModeTest(unittest.TestCase):
                                lambda *a: None), \
              mock.patch.object(qq_bot, "save_history", lambda *a, **k: None), \
              mock.patch.object(qq_bot.stickers, "collect", return_value=0), \
-             mock.patch.object(qq_bot.stickers, "catalog", return_value=""):
+             mock.patch.object(qq_bot.stickers, "catalog", return_value=""), \
+             mock.patch.object(qq_bot.direct_gen, "ENABLED", False):
             runner._run_turn([{"text": "你好", "sender": "233", "images": []}])
         self.assertIs(seen.get("strict"), True)
 
@@ -871,7 +873,8 @@ class StickerCollectTest(unittest.TestCase):
              mock.patch.object(qq_bot, "save_history", lambda *a, **k: None), \
              mock.patch.object(qq_bot.stickers, "collect",
                                return_value=0) as collect, \
-             mock.patch.object(qq_bot.stickers, "catalog", return_value=""):
+             mock.patch.object(qq_bot.stickers, "catalog", return_value=""), \
+             mock.patch.object(qq_bot.direct_gen, "ENABLED", False):
             runner._run_turn(batch)
         return collect
 
@@ -1426,7 +1429,8 @@ class TurnReplyDedupTest(unittest.TestCase):
                                lambda *a: None), \
              mock.patch.object(qq_bot, "save_history", lambda *a, **k: None), \
              mock.patch.object(qq_bot.stickers, "collect", return_value=0), \
-             mock.patch.object(qq_bot.stickers, "catalog", return_value=""):
+             mock.patch.object(qq_bot.stickers, "catalog", return_value=""), \
+             mock.patch.object(qq_bot.direct_gen, "ENABLED", False):
             runner._run_turn(list(self._BATCH))
         return sent.get("reply")
 

@@ -2,15 +2,18 @@
 # -*- coding: utf-8 -*-
 """直达生图管道（app/direct_gen.py）测试。
 
-核心契约：
-- /菜单、裸 @ → 菜单常量，零 LLM
+核心契约（2026-10-05 agent 退场版）：
+- /菜单、裸 @、任何非工具 @ 轮 → 菜单常量，零 LLM，绝不放行 agent
 - 生图意图 → 一次转译调用 → 校验 JSON → 直接入队（跳过确认卡）
-- 闲聊 / 主动接话 / 转译失败 / 非画图请求 → None 放行 agent
+- 引用图 + 意见 → 识图 + 会话上次任务 → 修正调用 → 重新入队
+- 转译失败 → 错误提示 + 菜单，不进 agent
+- 只有 ENABLED=False / 主动接话轮才返回 None
 """
 import unittest
 from unittest import mock
 
 from app import direct_gen, image_jobs
+from app.direct_gen import MENU_TEXT
 from app.tools.normal import generate_image as gi
 
 RECEIPT = image_jobs.RECEIPT_SENT_MARK + "回执"
@@ -33,9 +36,12 @@ class MenuAndGateTest(unittest.TestCase):
         # 主动接话轮（没人 @ 它）就算带着画图动词也不进管道
         self.assertIsNone(direct_gen.decide("画一只猫", [], True))
 
-    def test_non_image_text_passes_through(self):
-        self.assertIsNone(direct_gen.decide("今天天气不错", [], False))
-        self.assertIsNone(direct_gen.decide("生成一下总结", [], False))
+    def test_non_image_text_returns_menu_not_agent(self):
+        # agent 退场：@ 了但不是生图指令 → 菜单（绝不进 agent 循环）
+        for t in ("今天天气不错", "生成一下总结", "你好"):
+            with self.subTest(t=t):
+                self.assertEqual(direct_gen.decide(t, [], False),
+                                 direct_gen.MENU_TEXT)
 
 
 class DirectEnqueueTest(unittest.TestCase):
@@ -77,25 +83,27 @@ class DirectEnqueueTest(unittest.TestCase):
         self.assertEqual(m_gen.call_args.kwargs["skill"],
                          direct_gen._DEFAULT_SKILL)
 
-    def test_non_image_verdict_passes_through(self):
+    def test_non_image_verdict_returns_menu(self):
+        # 模型判「跟画图无关」→ 回菜单让人照格式来，不进 agent
         out, m_llm, m_gen = self._decide('{"skill": "", "prompt": ""}')
-        self.assertIsNone(out)
+        self.assertIn(MENU_TEXT, out)
         m_gen.assert_not_called()
 
-    def test_broken_json_passes_through(self):
+    def test_broken_json_returns_menu_not_agent(self):
         for bad in ("我不是 JSON", '{"skill": "anima_clear"',
                     '前置废话 {"skill": ok}'):
             with self.subTest(bad=bad):
                 out, m_llm, m_gen = self._decide(bad)
-                self.assertIsNone(out)
+                self.assertIn(MENU_TEXT, out)
                 m_gen.assert_not_called()
 
-    def test_llm_failure_passes_through(self):
+    def test_llm_failure_returns_hint_not_agent(self):
         with mock.patch.object(direct_gen.llm, "call_llm",
                                side_effect=RuntimeError("429")), \
              mock.patch.object(gi, "_generate_image") as m_gen:
             out = direct_gen.decide("画一只猫", [], False)
-        self.assertIsNone(out)
+        self.assertIn("渠道", out)          # 错误提示带格式引导
+        self.assertIn(MENU_TEXT, out)
         m_gen.assert_not_called()
 
     def test_tool_error_is_humanized(self):
@@ -114,6 +122,52 @@ class DirectEnqueueTest(unittest.TestCase):
              mock.patch.object(gi, "_generate_image", return_value="排队中"):
             out = direct_gen.decide("nai 画一只猫", [], False)
         self.assertEqual(out, "排队中")
+
+
+class RevisionPipelineTest(unittest.TestCase):
+    """改图管道：引用图 + 意见 → 识图 + 上次任务 → 修正调用 → 重新入队。"""
+
+    def _decide(self, text, llm_reply, seen="一个女孩，六根手指", last_job=None):
+        with mock.patch.object(direct_gen, "llm") as m_llm_mod, \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="group_1"), \
+             mock.patch("app.vision.describe", return_value=seen), \
+             mock.patch.object(gi, "_generate_image",
+                               return_value=RECEIPT) as m_gen:
+            m_llm_mod.call_llm.return_value = llm_reply
+            if last_job:
+                direct_gen._remember_job("group_1", last_job["skill"],
+                                         last_job["prompt"])
+            out = direct_gen.decide("多手多脚了", [{"role": "user",
+                                                    "content": "画个女孩"}],
+                                    False, data_urls=["data:image/jpeg;base64,A"])
+            direct_gen._LAST_JOB.pop("group_1", None)
+        return out, m_llm_mod.call_llm, m_gen
+
+    def test_revision_uses_vision_and_last_prompt(self):
+        out, m_llm, m_gen = self._decide(
+            "多手多脚了",
+            '{"skill": "anima_clear", "prompt": "1girl, five fingers"}',
+            last_job={"skill": "anima_clear", "prompt": "1girl, old"})
+        self.assertEqual(out, "")
+        m_gen.assert_called_once_with("1girl, five fingers",
+                                      skill="anima_clear", _skip_confirm=True)
+        sent = m_llm.call_args[0][0][0]["content"]
+        self.assertIn("六根手指", sent)      # 识图描述进来了
+        self.assertIn("1girl, old", sent)    # 原提示词进来了
+        self.assertIn("多手多脚了", sent)    # 用户意见进来了
+
+    def test_revision_without_any_context_guides_user(self):
+        out, m_llm, m_gen = self._decide("多手多脚了", "x", seen="")
+        self.assertIn("没认出引用的图", out)
+        m_gen.assert_not_called()
+
+    def test_revision_fails_translating_returns_error(self):
+        out, _, m_gen = self._decide(
+            "多手多脚了", "不是 JSON",
+            last_job={"skill": "anima_clear", "prompt": "1girl"})
+        self.assertIn("没解析出来", out)
+        m_gen.assert_not_called()
 
 
 class SkipConfirmTest(unittest.TestCase):

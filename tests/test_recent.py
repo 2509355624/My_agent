@@ -329,7 +329,8 @@ class RunTurnContextTest(_TmpAgentsMixin, unittest.TestCase):
              mock.patch.object(qq_bot.qq_api, "bind_context",
                                lambda *a, **kw: None), \
              mock.patch.object(qq_bot.qq_api, "clear_context", lambda: None), \
-             mock.patch.object(runner, "_deliver", lambda *a, **kw: None):
+             mock.patch.object(runner, "_deliver", lambda *a, **kw: None), \
+             mock.patch.object(qq_bot.direct_gen, "ENABLED", False):
             runner._run_turn([{"text": text, "sender": "张三"}])
         return seen
 

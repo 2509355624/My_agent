@@ -1025,12 +1025,13 @@ class SessionRunner:
             finally:
                 qq_api.clear_context()
             return
-        # 直达生图管道（2026-10-04）：@ + 生图意图 → 一次轻量 LLM 调用把原话
-        # 转成「渠道+提示词」，代码直接入队——整轮不过 agent（agent 一轮系统头
-        # +历史+工具协议动辄几万 token，这里一次调用只要几百）。/菜单与裸 @ 回
-        # 写死的常量，零 LLM。不接管的轮（闲聊/带图/主动接话）原样落回 agent。
+        # 直达生图管道（2026-10-04，10-05 扩成 agent 退场版）：@ 轮要么走工具
+        # 要么回菜单——生图意图 → 一次轻量 LLM 转译直接入队；引用图+意见 →
+        # 改图管道（识图+原提示词→修正→重生成）；其余一切 @ → 菜单常量。
+        # agent 循环只留给总开关关闭（DIRECT_GEN=0）和主动接话轮。
         # 见 app/direct_gen.py。
-        direct_reply = direct_gen.decide(own_text, history, voluntary)
+        direct_reply = direct_gen.decide(own_text, history, voluntary,
+                                         data_urls=data_urls or None)
         if direct_reply is not None:
             try:
                 if direct_reply:
