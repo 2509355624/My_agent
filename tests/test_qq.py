@@ -829,6 +829,34 @@ class RunTurnQuoteTest(unittest.TestCase):
         self.assertNotIn("换成", self.seen["user_text"])
 
 
+class StrictModeTest(unittest.TestCase):
+    """QQ 适配层必须给 run_agent_stream 传 strict=True。
+
+    2026-10-04 实测：本地 llama 一次 400/500 被 3600s 拉黑后，QQ 侧顺着
+    兜底链整晚静默降级到 deepseek——管理界面明明指定了模型，测试全白测。
+    QQ 的语义从此是「指定谁就只打谁」：strict 不查拉黑表、失败原地重试、
+    绝不换家。没指定模型的 agent 走 candidates() 的兜底链，不受影响。
+    """
+
+    def test_qq_passes_strict_true(self):
+        seen = {}
+
+        def fake_stream(text, history, agent_id=None, image=None, **kw):
+            seen.update(kw)
+            return iter(())
+
+        runner = qq_bot.SessionRunner(None, "group_9", "group", "9")
+        with mock.patch.object(qq_bot, "run_agent_stream", fake_stream), \
+             mock.patch.object(qq_bot, "load_history", lambda *a, **k: []), \
+             mock.patch.object(qq_bot, "_ensure_system_prompt",
+                               lambda *a: None), \
+             mock.patch.object(qq_bot, "save_history", lambda *a, **k: None), \
+             mock.patch.object(qq_bot.stickers, "collect", return_value=0), \
+             mock.patch.object(qq_bot.stickers, "catalog", return_value=""):
+            runner._run_turn([{"text": "你好", "sender": "233", "images": []}])
+        self.assertIs(seen.get("strict"), True)
+
+
 class StickerCollectTest(unittest.TestCase):
     """群聊每轮开头要收藏图片（跟回不回无关）；私聊不收。"""
 

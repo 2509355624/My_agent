@@ -1034,11 +1034,15 @@ class SessionRunner:
         seen_replies = set()
 
         try:
+            # strict=True：管理界面指定了模型就只打它，失败原地重试、不查拉黑表、
+            # 不顺链换家（本地模型一次 400/500 被 3600s 拉黑后整晚静默降级到
+            # deepseek，测试全白测）。没指定模型的 agent 照旧走兜底链。
             for ev in run_agent_stream(text, history, agent_id=run_agent,
                                        image=data_urls or None,
                                        image_owners=image_owners or None,
                                        extra_context=extra_context or None,
-                                       session_key=self.session_key):
+                                       session_key=self.session_key,
+                                       strict=True):
                 etype = ev.get("type")
                 # 先落盘再处理（与 main.py 的契约一致）
                 if etype in SESSION_EVENTS:
