@@ -236,7 +236,7 @@ class ImageGuideContentTest(unittest.TestCase):
         「认不出就写外貌 + 作品名」是唯一稳的路子。
         """
         g = self._guide()
-        self.assertIn("只写你真有把握的", g, "角色名幻觉判据不见了")
+        self.assertIn("别编", g, "角色名幻觉判据不见了")
         self.assertIn("load_skill", g,
                       "要留一条查库的出路（anima-tags），别让模型只能瞎猜")
         # 拿真实踩坑的假 tag 当反例钉住
@@ -277,14 +277,20 @@ class BriefModeTest(unittest.TestCase):
         """砍的是描述，不是工具本身——名字与参数签名必须留着。
 
         少了它 9B 根本没法把参数填对（它不会主动 load_skill）。
+        2026-10-04 晚白名单砍成 4 个纯生图工具：send_qq_message / web_search
+        等整体出局（不在列表里），断言反过来钉「确实不在」。
         """
         brief = self._sp(True)
         for name, param in (("generate_image", "prompt*"),
-                            ("send_qq_message", "message*"),
-                            ("web_search", "query*")):
+                            ("recall_image", "tag*"),
+                            ("load_skill", "name*")):
             self.assertIn(name, brief, "工具 %s 被砍没了" % name)
             self.assertIn(param.split("*")[0], brief,
                           "工具 %s 的参数名不见了" % name)
+        for gone in ("send_qq_message", "web_search", "memory_save",
+                     "preset_save", "send_sticker"):
+            self.assertNotIn("**%s**" % gone, brief,
+                             "工具 %s 已出白名单，不该再列出" % gone)
 
     def test_brief_drops_hints_entirely(self):
         """_TOOL_HINTS 那 2170 字细则要整段消失——它是「怎么用」不是「有什么」。"""
@@ -349,11 +355,15 @@ class PersonaTrimmedTest(unittest.TestCase):
                         "人设还剩 %d 字，审核/边界细则没砍干净" % len(p))
 
     def test_keeps_identity_and_voice(self):
+        """2026-10-04 晚再砍：说话方式整节删掉，只留一句分行短句的要求。
+
+        「要图就直接画」那类性格铺陈也删了——生图 AI 只剩身份 + 铁律。
+        """
         p = self._persona()
         self.assertIn("大大怪", p, "身份丢了")
         self.assertIn("## 一、身份", p)
-        self.assertIn("## 三、说话方式", p)
-        self.assertIn("句尾不带标点", p, "说话方式是人格核心，不能砍")
+        self.assertIn("分行短句", p, "说话方式压缩后至少留一句格式要求")
+        self.assertNotIn("## 三、说话方式", p, "说话方式整节该删了")
 
     def test_keeps_image_rule(self):
         """生图铁律是「不调工具」这个 bug 的直接对策，必须留着。"""

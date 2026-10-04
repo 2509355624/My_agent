@@ -1585,19 +1585,18 @@ class BriefToolParamTest(unittest.TestCase):
         self.assertIn("才传", self._line(True))
 
     def test_brief_other_tools_stay_terse(self):
-        # 反向约束：别把 brief 修成「等于没 brief」。查资料类工具
-        # 砍掉描述照样能调，保留它们只是白占上下文。
+        # 反向约束：别把 brief 修成「等于没 brief」。2026-10-04 晚白名单
+        # 砍成 4 个纯生图工具后，名单外的工具（web_search 等）整行不出现
+        # ——比「压短」更彻底。
         from app import agent_prompt as ap
         from unittest import mock
         with mock.patch.dict("os.environ", {"PROMPT_BRIEF": "1"}):
             tools = ap._build_tool_list("qq", brief=True)
-        for line in tools.splitlines():
-            if line.startswith("- **web_search**"):
-                self.assertLess(len(line), 80,
-                                "web_search 在 brief 下没被压短：" + line)
-                break
-        else:
-            self.fail("工具列表里没有 web_search")
+        for gone in ("web_search", "send_qq_message", "memory_save",
+                     "preset_save", "send_sticker", "collect_sticker"):
+            self.assertNotIn("**%s**" % gone, tools,
+                             "工具 %s 已出白名单，brief 下不该再列出" % gone)
+        self.assertIn("**generate_image**", tools, "生图工具必须在场")
 
     def test_not_brief_unchanged(self):
         # 非 brief 模式**本来就不带**参数级说明（工具级首句 + 完整参数说明

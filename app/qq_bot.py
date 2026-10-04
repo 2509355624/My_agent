@@ -198,7 +198,11 @@ def _stable_blocks(session_key):
     整段前缀缓存打没。改动前先确认确定性（catalog 按索引行号、记忆按时间序）。
     """
     parts = []
-    menu = stickers.catalog(QQ_AGENT_ID)
+    # 表情包清单只在 send_sticker 还在白名单时注入：纯生图 agent 用不到它，
+    # 882 字钉在头里纯属死重（2026-10-04 白名单砍到 4 个生图工具后补的判据）。
+    from app.agents import allows_tool
+    menu = (stickers.catalog(QQ_AGENT_ID)
+            if allows_tool(QQ_AGENT_ID, "send_sticker") else "")
     if menu:
         parts.append(menu)
     if session_key.startswith("group_"):

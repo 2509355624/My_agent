@@ -460,5 +460,37 @@ class StatusMessageContextTest(unittest.TestCase):
         self.assertGreater(agent.tail_tokens(h, "背景" * 100), base)
 
 
+class StickerMenuGateTest(_TmpAgentsMixin, unittest.TestCase):
+    """表情包清单只在 send_sticker 还在白名单时才进系统头（2026-10-04）。
+
+    白名单砍成 4 个纯生图工具后 send_sticker 出局——882 字清单再钉在头里
+    就是死重，白占 9B 的 16384 窗口。
+    """
+
+    def setUp(self):
+        self._setup_tmp()
+
+    def _blocks(self, tools):
+        with open(os.path.join(self.root, "qq", "agent.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"tools": tools}, f)
+        if hasattr(agents, "clear_cache"):
+            agents.clear_cache()
+        p = mock.patch.object(qq_bot.stickers, "catalog",
+                              return_value="[表情包库] MENU")
+        p.start()
+        self.addCleanup(p.stop)
+        return qq_bot._stable_blocks("private_1")
+
+    def test_menu_injected_when_sticker_allowed(self):
+        self.assertIn("MENU", self._blocks(["send_sticker"]))
+
+    def test_menu_dropped_when_sticker_not_whitelisted(self):
+        self.assertNotIn("MENU", self._blocks(["generate_image"]))
+
+    def test_menu_present_when_no_whitelist(self):
+        self.assertIn("MENU", self._blocks(None))
+
+
 if __name__ == "__main__":
     unittest.main()
