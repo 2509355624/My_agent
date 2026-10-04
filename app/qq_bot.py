@@ -40,8 +40,9 @@ try:
 except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
-from app import (image_jobs, image_out, interject, logsetup, longterm, notify,
-                 qq_api, qq_status, recent, recall_gate, stickers, usage)
+from app import (confirm_gate, image_jobs, image_out, interject, logsetup,
+                 longterm, notify, qq_api, qq_status, recent, recall_gate,
+                 stickers, usage)
 from app.agent import run_agent_stream, tail_tokens
 from app.agent_prompt import build_stable_prompt
 from app.config import (
@@ -998,6 +999,18 @@ class SessionRunner:
         qq_api.bind_context(self.session_key, self.target, self.target_id,
                             quoted_images=quote_images, own_images=own_images,
                             user_text=own_text)
+        # 生图确认闸（2026-10-04）：上一轮的生图被 confirm_gate 拦下等确认，
+        # 这条消息若是确认话（好/确认/跑吧…）就原样入队发回执、接管整轮；
+        # 不是确认话就作废 pending 放行。主动接话轮不消费（群聊路人的「好」
+        # 不该引爆一张没确认过的图）。见 app/confirm_gate.py。
+        confirm_reply = (None if voluntary else confirm_gate.consume_if_confirmed(
+            self.target, self.target_id, own_text))
+        if confirm_reply is not None:
+            try:
+                self._deliver(False, confirm_reply, [], "")
+            finally:
+                qq_api.clear_context()
+            return
         # 反推闸门（2026-10-04）：对方在要「看图反推提示词」时，代码直接调
         # 识图把结果发回去，模型整轮不参与——9B 会把历史里上次生图的提示词
         # 搬出来交差，给了明确指令也时灵时不灵。判据代码判，见 app/recall_gate.py。

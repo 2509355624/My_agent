@@ -861,6 +861,12 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
             log.info("拦下重复生图（NAI）：%s %s 已有一张同参数的图在途",
                      target, target_id)
             return _DUPLICATE_NOTE
+        # 二次确认闸（2026-10-04）：QQ 轮拦下发确认卡，对方回「好」才真入队。
+        from app import confirm_gate
+        gate = confirm_gate.intercept("nai", skill=skill, prompt=prompt,
+                                      intent=intent, nai_i2i=nai_i2i)
+        if gate is not None:
+            return gate
         return _enqueue_nai(prompt, target, target_id, nai_i2i, intent, skill)
 
     # 垫图（图生图）：**模型传了 source_image 才算**，走下面那个 i2i 分支，
@@ -1006,6 +1012,15 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
         log.info("拦下重复生图：%s %s 已有一张同参数的图在途，不再排第二张",
                  target, target_id)
         return _DUPLICATE_NOTE
+    # 二次确认闸（2026-10-04）：QQ 轮拦下发确认卡（渠道/种子/提示词全文），
+    # 对方回「好」由 confirm_gate 原样入队；网页端放行。放在所有守卫之后、
+    # 入队之前——存下的就是最终参数，确认后不需要重算任何东西。
+    from app import confirm_gate
+    gate = confirm_gate.intercept("comfy", skill=skill, prompt=prompt, seed=seed,
+                                  intent=intent, workflow=workflow,
+                                  note=source_note)
+    if gate is not None:
+        return gate
     # prompt 一路带到队列里，只为出图后记账本（编号 → 提示词）；出图用的是
     # 上面填好的 workflow。seed 同样一路带到底：发图那行 caption 要贴它、
     # 账本要存它（见 image_jobs._caption / image_log.save）。
