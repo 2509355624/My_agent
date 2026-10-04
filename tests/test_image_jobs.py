@@ -2695,12 +2695,13 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
     def test_light_channels_get_the_short_limit(self):
         for skill in ("anima_clear", "anima_soft", "image_gen_v1",
                       "hd_2_clear", "hd_fast_clear"):
-            self.assertEqual(image_jobs.task_timeout(skill), 80, skill)
+            self.assertEqual(image_jobs.task_timeout(skill), 120, skill)
 
     def test_heavy_channels_keep_enough_headroom(self):
-        # 中位 50~70s 的那几个：给 80s 只剩 10~30s 余量，排队一叠加就误杀
+        # 中位 70~98s（MiMo 占显存整体慢四成后）：给 120s 只剩两三成余量，
+        # 排队一叠加就误杀——重渠道顶到 300（5 分钟，与 .env 兜底对齐）
         for skill in ("qwen_image_v1", "nffa", "hd_3_clear", "hd_3_curvy"):
-            self.assertEqual(image_jobs.task_timeout(skill), 180, skill)
+            self.assertEqual(image_jobs.task_timeout(skill), 300, skill)
 
     def test_unknown_skill_falls_back_to_global(self):
         """没配的渠道仍走 TASK_TIMEOUT——新渠道不能因为漏配就变慢。"""
@@ -2711,8 +2712,8 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
     def test_accepts_a_job_or_a_skill_name(self):
         """process() 手里有 job，异常路径上只有渠道名——两种都得收。"""
         job = image_jobs.Job("group", "9", {}, skill="anima_clear")
-        self.assertEqual(image_jobs.task_timeout(job), 80)
-        self.assertEqual(image_jobs.task_timeout("anima_clear"), 80)
+        self.assertEqual(image_jobs.task_timeout(job), 120)
+        self.assertEqual(image_jobs.task_timeout("anima_clear"), 120)
 
     def test_survives_garbage_input(self):
         """热路径上不能因为一个怪值就抛——抛了整张图的处理就断了。
@@ -2744,7 +2745,7 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
             seen.append(timeout)
             raise TimeoutError("生成超时 (%ds)" % timeout)
 
-        for skill, want in (("anima_clear", 80), ("qwen_image_v1", 180)):
+        for skill, want in (("anima_clear", 120), ("qwen_image_v1", 300)):
             seen.clear()
             job = image_jobs.Job("group", "9", {}, skill=skill)
             job.target = None          # 免得 _notice 真去发消息
@@ -2763,10 +2764,10 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
             self.assertEqual(seen, [want], skill)
 
     def test_fail_text_uses_the_same_limit(self):
-        """给用户看的那句也要跟着变，否则说「超过 180 秒」而实际只等了 80。"""
-        self.assertIn("超过 80 秒", image_jobs._fail_text(
+        """给用户看的那句也要跟着变，否则说「超过 300 秒」而实际只等了 120。"""
+        self.assertIn("超过 120 秒", image_jobs._fail_text(
             TimeoutError("x"), skill="anima_clear"))
-        self.assertIn("超过 180 秒", image_jobs._fail_text(
+        self.assertIn("超过 300 秒", image_jobs._fail_text(
             TimeoutError("x"), skill="qwen_image_v1"))
 
 

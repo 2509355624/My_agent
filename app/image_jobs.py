@@ -234,16 +234,22 @@ TASK_TIMEOUT = IMAGE_GEN_TIMEOUT
 # 新渠道不会因为漏配就变慢）。
 #
 # 键是 `job.skill`，不是渠道文件名——Job.skill 存的是渠道名。
+#
+# 2026-10-04 二次上调：llama.cpp 的 MiMo 常驻占显存后，ComfyUI 每张图整体慢
+# 约 40%（用户实测），80/180 两档都会开始误杀——轻量最慢 152.8s 的那次
+# ×1.4 ≈ 214s，重渠道 119.6s 也会顶到 180。两档同比例放大到 120/300，
+# 保持「2~4 倍中位数」的原设计余量；300 正好是 .env 兜底 IMAGE_GEN_TIMEOUT
+# 的新值（5 分钟），三层闸门重新对齐。
 SKILL_TIMEOUTS = {
-    # 轻量 SD 系：中位 16~35s，给 80s 已经很宽（2~4 倍中位数）
-    "anima_clear": 80, "anima_curvy": 80, "anima_gloss": 80,
-    "anima_soft": 80, "anima": 80, "image_gen_v1": 80,
-    "hd_2_clear": 80, "hd_2_curvy": 80, "hd_2_gloss": 80,
-    "hd_fast_clear": 80, "hd_fast_gloss": 80,
-    # 重的一档：中位 50~70s，80s 顶不住
-    "qwen_image_v1": 180, "nffa": 180,
-    "hd_3_clear": 180, "hd_3_curvy": 180, "hd_3_gloss": 180,
-    "krea2": 180,
+    # 轻量 SD 系：原中位 16~35s，慢四成后 22~49s，120s 仍是 2~5 倍余量
+    "anima_clear": 120, "anima_curvy": 120, "anima_gloss": 120,
+    "anima_soft": 120, "anima": 120, "image_gen_v1": 120,
+    "hd_2_clear": 120, "hd_2_curvy": 120, "hd_2_gloss": 120,
+    "hd_fast_clear": 120, "hd_fast_gloss": 120,
+    # 重的一档：慢四成后中位 70~98s，80s 顶不住
+    "qwen_image_v1": 300, "nffa": 300,
+    "hd_3_clear": 300, "hd_3_curvy": 300, "hd_3_gloss": 300,
+    "krea2": 300,
 }
 
 
