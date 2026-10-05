@@ -666,6 +666,35 @@ class EnglishDirectTest(unittest.TestCase):
         m_gen.assert_called_once_with("shiba", skill="hd_fast_clear",
                                       _skip_confirm=True)
 
+    def test_bare_english_private_passthrough_default_channel(self):
+        # 2026-10-05 用户口径：私聊裸发英文提示词（没打渠道词）→ 英文就是
+        # 最终提示词，直通默认渠道零调用；群关键词轮不放行（别人贴的英文
+        # 句子不该触发生成）。
+        with mock.patch.object(direct_gen.llm, "call_llm") as m_llm, \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=""), \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="group_1"), \
+             mock.patch.object(gi, "_generate_image",
+                               return_value=RECEIPT) as m_gen:
+            out = direct_gen.decide("1girl, solo, silver hair, moonlight",
+                                    [], False, at_me=True)
+            direct_gen._LAST_JOB.pop("group_1", None)
+        self.assertEqual(out, "")
+        m_llm.assert_not_called()
+        m_gen.assert_called_once_with("1girl, solo, silver hair, moonlight",
+                                      skill="anima_clear",
+                                      _skip_confirm=True)
+
+    def test_bare_english_keyword_round_not_intercepted(self):
+        with mock.patch.object(direct_gen.llm, "call_llm") as m_llm, \
+             mock.patch.object(gi, "_generate_image") as m_gen:
+            out = direct_gen.decide("just chatting about anime stuff",
+                                    [], False, at_me=False)
+        self.assertEqual(out, MENU_TEXT)
+        m_llm.assert_not_called()
+        m_gen.assert_not_called()
+
 
 class SkipConfirmTest(unittest.TestCase):
     def test_intercept_skips_when_told(self):

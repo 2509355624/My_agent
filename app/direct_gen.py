@@ -701,8 +701,8 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
             skill = ch if ch in _allowed_skills() else last["skill"]
             _remember_job(session_key, skill, last["prompt"])
             return _enqueue(skill, last["prompt"], text)
-        return ("只发渠道词的话，引用一条带描述的消息（提示词或你想要的内容）"
-                "再发一遍渠道词，或直接 @我 渠道 描述。")
+        return ("只发渠道词的话，后面直接跟上描述再发（如「三档 女骑士」），"
+                "或引用一条带描述的消息再发渠道词。")
 
     # 引用了消息但没渠道词（「生图」「帮我改改」「这词什么意思」都算）→
     # 零 API 给确定反馈。烧一次转译也只会对着「生图」两个字瞎编
@@ -727,6 +727,13 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
             return _enqueue(data["skill"], data["prompt"], text)
         return ("这条没转译成生图指令。照格式来：@我 渠道 描述\n\n"
                 + MENU_TEXT)
+
+    # 裸英文提示词（私聊直接粘贴、没打渠道词）→ 用户口径（2026-10-05）：
+    # 英文就是最终提示词，直通默认渠道零调用。只在 @ 轮（含私聊）放行——
+    # 群关键词轮里别人贴的英文句子不该触发生成。
+    if at_me and not quoted and _is_english_tags(text):
+        _remember_job(session_key, _DEFAULT_SKILL, text)
+        return _enqueue(_DEFAULT_SKILL, text, text)
 
     # 画图动词（「画一只猫」）或裸 @ + 描述 → 一次转译（LLM 顺带判渠道）。
     # 转译失败 @ 轮和关键词轮都回格式提示——闲聊轮绝不掉回 agent 接话
