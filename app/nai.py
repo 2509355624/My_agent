@@ -56,7 +56,10 @@ log = logging.getLogger("nai")
 NAI_ENDPOINT = "https://image.novelai.net/ai/generate-image"
 
 # 默认写死的参数。模型只传 prompt，其余全在这里定。
-NAI_MODEL = "nai-diffusion-5-curated"          # V5 精选版
+# 2026-10-05 用户拍板：从 `nai-diffusion-5-curated`（V5 精选版）切到
+# `nai-diffusion-5-full`（V5 完整版）——同一个 V5 架构、请求体一字不用改，
+# 只是不套那层精选过滤。`nai` / `nai_wide` 两个渠道共用这一条。
+NAI_MODEL = "nai-diffusion-5-full"             # V5 完整版
 NAI_WIDTH = 832                                 # 竖版（默认，渠道 `nai`）
 NAI_HEIGHT = 1216
 # 横版（渠道 `nai_wide`，2026-10-03 加）：就是竖版转 90°，像素数完全相同，

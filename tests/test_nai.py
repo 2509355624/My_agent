@@ -54,7 +54,7 @@ class GenerateTest(unittest.TestCase):
         self.assertEqual(args[0], nai.NAI_ENDPOINT)
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer pst-test")
         body = kwargs["json"]
-        self.assertEqual(body["model"], "nai-diffusion-5-curated")
+        self.assertEqual(body["model"], "nai-diffusion-5-full")
         # V5 的硬性结构：params_version=3 + 两条 caption
         self.assertEqual(body["parameters"]["params_version"], 3)
         self.assertIn("v4_prompt", body["parameters"])
