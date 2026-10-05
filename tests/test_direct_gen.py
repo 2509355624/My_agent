@@ -507,15 +507,15 @@ class RevisionPipelineTest(unittest.TestCase):
         return out, m_describe, m_llm_mod.call_llm, m_gen
 
     def test_revision_single_call_sees_image_and_opinion(self):
-        # 「手改成插兜」含改图动词（「改成」）→ 按图生图垫图（与垫图闸门
-        # 同源词表），默认动漫档重绘。
+        # 「手改成插兜」只说了改动内容、没点名图生图 → **不垫图**（10-05
+        # 用户拍板：反复垫图会越改越糊），反推修正后重画一张。
         out, m_describe, m_llm, m_gen = self._decide(
             "手改成插兜",
             '{"skill": "anima_clear", "prompt": "1girl, hands in pockets"}')
         self.assertEqual(out, "")
         m_gen.assert_called_once_with("1girl, hands in pockets",
-                                      skill="anima_clear", _skip_confirm=True,
-                                      source_image="1")
+                                      skill="anima_clear",
+                                      _skip_confirm=True)
         m_describe.assert_called_once()          # 只有一次带图调用
         self.assertEqual(m_describe.call_args.kwargs.get("provider"),
                          "deepseek")             # 钉死 DeepSeek 官方

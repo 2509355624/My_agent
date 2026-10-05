@@ -31,26 +31,20 @@ class GateUnitTest(unittest.TestCase):
     def _bind(self, text):
         qq_api.bind_context("group_9", "group", "9", user_text=text)
 
-    # ① 明说要动这张图 → 放行
+    # ① 点名了机制（图生图/垫图/重绘/改图/修图/p图/i2i…）→ 放行
     EXPLICIT = (
         "图生图",
         "帮她垫个图",
         "垫这张图",
-        "把图里这个角色换成 XXX",
-        "去掉她手里那把伞",
-        "基于这张重新画一张",
         "照这张重绘一遍",
-        "背景改成海边",
-        "给她换一件红色的外套",
-        "改为夜景",
-        "这张图上色",
-        "把文字删掉其余别动",
-        "change her coat to red",
-        "REMOVE the umbrella",
+        "帮我修一下图",
+        "帮我p个图",
         "i2i 一下",
         "IMG2IMG",
+        "图生图 把衣服换成jk",
     )
-    # ② 只是引用了图 / 只要看 → 拦
+    # ② 只说改动内容 / 没说机制 / 只是引用了图 / 只要看 → 拦（10-05 收紧：
+    # 「换成/去掉」这类动词句一律改提示词重新画，反复垫图会越改越糊）
     NOT_EXPLICIT = (
         "",                                # 只引用了一张图、一个字没打（他自己发图另算，见 OwnImagePassesTest）
         "看看这张图，她是什么发色",
@@ -63,6 +57,15 @@ class GateUnitTest(unittest.TestCase):
         "她改了什么？我没看出来",           # 「改」在聊剧情，不是改图
         "换我做头像吧",                     # 「换」是换话题，没要动这张图
         "her hair color? nice work",
+        "把图里这个角色换成 XXX",
+        "去掉她手里那把伞",
+        "基于这张重新画一张",
+        "背景改成海边",
+        "给她换一件红色的外套",
+        "改为夜景",
+        "把衣服换成jk",
+        "change her coat to red",
+        "REMOVE the umbrella",
     )
 
     def test_explicit_requests_pass(self):
@@ -103,14 +106,15 @@ class GateUnitTest(unittest.TestCase):
         self.assertEqual(gi._i2i_gate(True), "")
 
     def test_word_list_carries_no_bare_demonstratives(self):
-        """词表里不许出现「这张 / 这图 / 原图」这类裸指示代词。
+        """触发正则里不许出现「这张 / 这图 / 原图」这类裸指示代词。
 
         它们出现在**看图**的话里比出现在改图的话里还频繁，收进来后这道闸等于
         没有：对方只要引用图时说了「这张」，模型就能垫图。
         """
+        pattern = gi._I2I_EXPLICIT_RE.pattern
         for word in ("这张", "这图", "原图", "这幅", "这个图", "那张",
                      "参考这张", "用这张", "拿这张"):
-            self.assertNotIn(word, gi._I2I_ASK_WORDS)
+            self.assertNotIn(word, pattern)
 
 
 class GenerateImageGateCallTest(unittest.TestCase):
@@ -161,7 +165,7 @@ class GenerateImageGateCallTest(unittest.TestCase):
                 mock.patch.object(gi, "_qq_gate", lambda: None), \
                 mock.patch.object(gi, "load_skill", lambda skill: None):
             qq_api.bind_context("group_9", "group", "9",
-                                user_text="把她的外套换成红色")
+                                user_text="图生图 把她的外套换成红色")
             out = gi._generate_image(prompt="change her coat to red",
                                      skill="qwen_image_v1", source_image="1")
         self.assertNotEqual(out, gi._I2I_NO_INTENT_NOTE)

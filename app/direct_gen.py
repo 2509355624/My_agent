@@ -211,12 +211,14 @@ def _redraw_capable(skill):
 
 
 def _i2i_intent(text):
-    """这轮原话里有没有「要动这张图」的意思。词表直接复用 `_i2i_gate` 的
-    那份——路由判据和垫图闸门同源，绝不会「路由判成图生图、闸门又拦下」。"""
-    from app.tools.normal.generate_image import _I2I_ASK_WORDS, _I2I_EDIT_RE
-    low = (text or "").lower()
-    return any(w in low for w in _I2I_ASK_WORDS) \
-        or bool(_I2I_EDIT_RE.search(low))
+    """这轮原话里有没有**点名图生图机制**（图生图/垫图/重绘/改图/修图/i2i…）。
+
+    2026-10-05 用户拍板：只说「把衣服换成jk」这类改动内容、没说机制名的，
+    **不垫图**——改提示词重新画一张（反复垫图会越改越糊，denoise 0.6
+    每代丢四成原图信息）。判据直接复用垫图闸门的 `_I2I_EXPLICIT_RE`
+    ——路由判据和垫图闸门同源，绝不会「路由判成图生图、闸门又拦下」。"""
+    from app.tools.normal.generate_image import _I2I_EXPLICIT_RE
+    return bool(_I2I_EXPLICIT_RE.search((text or "").lower()))
 
 
 def _parse_channel(text):

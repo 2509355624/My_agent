@@ -1463,9 +1463,17 @@ class I2iForceTest(unittest.TestCase):
             return gi._i2i_force()
 
     def test_explicit_edit_forces_source(self):
-        for text in ("qwen 重绘一下这只手", "把这张图的手指改一下",
-                     "去掉多余的那根手指", "重绘一版", "换个手"):
-            self.assertTrue(self._force(text), "明说改图却没补垫图：%s" % text)
+        for text in ("qwen 重绘一下这只手", "重绘一版",
+                     "图生图 把衣服换成jk", "垫图改一下背景"):
+            self.assertTrue(self._force(text), "点名图生图却没补垫图：%s" % text)
+
+    def test_verb_only_edits_do_not_force(self):
+        # 10-05 收紧：只说改动内容、没说机制名 → 不补垫图，改提示词重画
+        # （反复垫图会越改越糊）。
+        for text in ("把这张图的手指改一下", "去掉多余的那根手指",
+                     "换个手", "把衣服换成jk"):
+            self.assertEqual("", self._force(text),
+                             "只说改动内容却补了垫图：%s" % text)
 
     def test_quote_only_does_not_force(self):
         # 只引用、不说要改 → 不补。那种十有八九只是「给你看」。
