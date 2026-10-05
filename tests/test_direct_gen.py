@@ -9,8 +9,8 @@
 - 裸 @ + 描述 / 画图动词 → 一次转译（LLM 顺带判渠道）
 - 引用正文 + 只打渠道词 → 引用内容当描述，锁定渠道扩写
 - 引用回执 +「再来一张」→ 同提示词换种子重跑，零转译
-- 引用图 + 意见 → 改图管道；意见不是修改请求（skip）→ @ 轮回反推文本、
-  关键词轮闭嘴吞轮（""）
+- 引用图 + 意见 → 改图管道（**一律真识图**）；明说机制词时必出图，没点名
+  机制词且模型判「不是修改请求」→ @ 轮回反推文本、关键词轮闭嘴吞轮（""）
 - @ 轮和关键词轮兜底 = 菜单——没引用/没图的轮要么生图要么菜单，
   绝不掉回 agent 接话（233 粉丝群 02:06 实录教训）
 """
@@ -505,10 +505,11 @@ class AgainTest(unittest.TestCase):
 
 
 class RevisionPipelineTest(unittest.TestCase):
-    """改图管道：引用图 + 意见 → 按「账本有没有」分流（2026-10-05 拍板）。
+    """改图管道：引用图 + 意见 → 一次带图调用（2026-10-05 拍板）。
 
-    自家 HT 图 + 没点名识图 → **纯文本修正**（账本提示词当基底，走降级链，
-    不花识图钱）；点名识图或别人的图 → 一次带图调用（钉死 DeepSeek 官方）。
+    引用带图改图**一律真识图**（账本提示词只当「最可信旁证」写进 prompt）。
+    明说机制词（图生图/垫图/改图/重绘）→ 关掉 reverse 逃逸口，必须出 prompt；
+    没点名机制词才允许「不是修改请求 → 回反推」，且 @ 轮才回、关键词轮静默。
     """
 
     def _decide(self, text, seen='{"skill": "anima_clear", '
@@ -575,48 +576,51 @@ class RevisionPipelineTest(unittest.TestCase):
         self.assertNotIn("provider",
                          m_describe.call_args.kwargs)  # 跟识图配置走
 
-    def test_own_image_text_only_revision(self):
-        # 引用自家 HT 图 + 意见 → **纯文本修正**（10-05 用户拍板：账本里有
-        # 当时真实提示词，看图是白花的钱）；不带历史、不带图，走降级链。
+    def test_own_image_also_sees_image(self):
+        # 2026-10-05 用户拍板：引用自家 HT 图改图**也一律真识图**——账本里存
+        # 的是当时那句提示词，和画面实际内容可能已经对不上（背景改透明那次
+        # 没看图，出图就不是用户要的）。账本降级成「最可信旁证」写进 prompt。
         out, m_describe, m_llm, m_gen = self._decide(
             "手改成插兜",
-            llm_reply='{"prompt": "miku, hands in pockets"}',
+            seen='{"skill": "hd_3_curvy", "prompt": "miku, hands in pockets"}',
             quoted="编号 HT-20261005-010329-595",
             lookup_row={"prompt": "logged, miku", "skill": "hd_3_curvy"})
         self.assertEqual(out, "")
-        m_describe.assert_not_called()           # 不看图
-        sent = m_llm.call_args[0][0][0]["content"]
-        self.assertIn("logged, miku", sent)      # 账本提示词当基底
+        m_describe.assert_called_once()          # 真看图（纯文本修正已退役）
+        m_llm.assert_not_called()                # 文本修正链路整个不再参与
+        sent = m_describe.call_args.kwargs["prompt"]
+        self.assertIn("logged, miku", sent)      # 账本提示词当旁证进场
         self.assertIn("手改成插兜", sent)        # 用户意见进来了
-        self.assertNotIn("最近对话", sent)       # 历史不进场（防抄旧 tag）
         m_gen.assert_called_once_with("miku, hands in pockets",
                                       skill="hd_3_curvy",
                                       _skip_confirm=True)
 
-    def test_own_image_skip_on_at_round_returns_logged_prompt(self):
-        # 自家图 + 夸奖（skip）+ @ 轮 → 把当时的提示词回给他（等于反推还准）
+    def test_own_image_praise_on_at_round_returns_reverse(self):
+        # 自家图 + 夸奖（没点名机制词）+ @ 轮 → 识图后模型判「不是修改请求」
+        # → 把反推给他（画面为准，不再回账本里那句可能已过时的旧提示词）
         out, m_describe, m_llm, m_gen = self._decide(
-            "画得真好",
-            llm_reply='{"skip": true}', at_me=True,
+            "画得真好", at_me=True,
+            seen='{"reverse": "miku, blue hair, smiling"}',
             quoted="编号 HT-20261005-010329-595",
             lookup_row={"prompt": "logged, miku", "skill": "hd_3_curvy"})
         self.assertIn(direct_gen._REVERSE_HEADER, out)
-        self.assertIn("logged, miku", out)
-        m_describe.assert_not_called()
+        self.assertIn("blue hair", out)
+        m_describe.assert_called_once()
+        m_llm.assert_not_called()
         m_gen.assert_not_called()
 
-    def test_own_image_skip_on_keyword_round_swallows_turn(self):
+    def test_own_image_praise_on_keyword_round_swallows_turn(self):
         # 自家图 + 夸奖 + 关键词轮 → 闭嘴吞轮，绝不掉回 agent
         out, _, _, m_gen = self._decide(
             "画得真好",
-            llm_reply='{"skip": true}',
+            seen='{"reverse": "miku, blue hair"}',
             quoted="编号 HT-20261005-010329-595",
             lookup_row={"prompt": "logged, miku", "skill": "hd_3_curvy"})
         self.assertEqual(out, "")
         m_gen.assert_not_called()
 
     def test_vision_ask_overrides_ledger(self):
-        # 明说「识图」→ 强制看真图（画面和提示词有出入时靠这个兜底）
+        # 明说「识图」照样有效（现在识图本来就是默认，这条守住别退化）
         out, m_describe, m_llm, m_gen = self._decide(
             "识图 帮我改一下手",
             lookup_row={"prompt": "logged, miku", "skill": "hd_3_curvy"})
@@ -624,6 +628,35 @@ class RevisionPipelineTest(unittest.TestCase):
         m_describe.assert_called_once()
         m_llm.assert_not_called()                # 不走文本修正
         m_gen.assert_called_once()
+
+    def test_i2i_explicit_drops_escape_hatch_from_prompt(self):
+        # 2026-10-05 用户拍板：明说「图生图」= 确定的改图请求，模板里不能留
+        # 「不是修改请求 → 输出 reverse」这条逃逸口。
+        _, m_describe, _, _ = self._decide(
+            "图生图 把头发换成银色",
+            seen='{"skill": "anima_clear", "prompt": "1girl, silver hair"}')
+        sent = m_describe.call_args.kwargs["prompt"]
+        self.assertIn("没有「不是修改请求」这个选项", sent)
+        self.assertNotIn("reverse 字段", sent)
+
+    def test_vague_opinion_keeps_escape_hatch(self):
+        # 没点名机制词（真闲聊）→ 逃逸口照旧保留，模板里给 reverse 说明
+        _, m_describe, _, _ = self._decide(
+            "画得真好",
+            seen='{"reverse": "1girl, solo, blue hair"}')
+        sent = m_describe.call_args.kwargs["prompt"]
+        self.assertIn("reverse 字段", sent)
+
+    def test_i2i_explicit_never_returns_reverse_text(self):
+        # 用户报障原样复现：明说图生图，模型却只回了 reverse。绝不把反推当
+        # 结果发回去（那正是「很奇怪」的那次），而是让他换个说法。
+        out, m_describe, _, m_gen = self._decide(
+            "图生图 改动部分异常肢体",
+            seen='{"reverse": "这张图的英文tag反推"}', at_me=True)
+        m_describe.assert_called_once()
+        self.assertNotIn(direct_gen._REVERSE_HEADER, out)
+        self.assertIn("没解析出来", out)
+        m_gen.assert_not_called()
 
     def test_own_image_bare_at_returns_logged_prompt_zero_calls(self):
         # 自家图 + 裸 @ → 直接回账本提示词，识图和 LLM 都不调
