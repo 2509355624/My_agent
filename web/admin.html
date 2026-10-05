@@ -418,16 +418,30 @@
         </div>
         <div class="sess-foot" style="margin-bottom: 8px;">
           <button class="toggle" id="privWlOn">白名单·开</button>
-          <label class="hint" for="privUser">白名单</label>
+          <label class="hint" for="privUser">添加</label>
           <input id="privUser" placeholder="QQ 号" style="width:110px;"
                  spellcheck="false" autocomplete="off">
           <button class="ghost" id="privAdd">添加</button>
-          <span id="privWl" style="margin-left:6px;"></span>
         </div>
+        <div style="margin:0 0 6px 2px; display:flex; gap:8px;
+                    align-items:center; flex-wrap:wrap;">
+          <input id="privWlSearch" placeholder="搜 QQ 号 / 昵称"
+                 style="width:150px;" spellcheck="false" autocomplete="off">
+          <button class="ghost" id="privWlFAll" style="padding:2px 10px;">全部</button>
+          <button class="ghost" id="privWlFOn" style="padding:2px 10px;">审核·开</button>
+          <button class="ghost" id="privWlFOff" style="padding:2px 10px;">审核·关</button>
+          <span class="hint" id="privWlCount"></span>
+        </div>
+        <div id="privWlList" style="margin:0 2px 8px 2px; max-height:260px;
+                    overflow-y:auto; background:var(--bg-elev);
+                    border:1px solid var(--border-soft);
+                    border-radius:var(--radius);"></div>
         <div class="hint" style="margin:0 0 8px 2px;">白名单开关关掉 = 名单不生效，
           任何人的私聊都能聊（黑名单和上面的私聊总开关照常拦）。
           开着时：名单外的 QQ（包括陌生人临时会话）一律静默不回、不出图，
-          清空名单 = 谁都私聊不了。点号码可移除。热生效，不用重启。</div>
+          清空名单 = 谁都私聊不了。「未聊过」= 名单里有号但还没聊过天，没有会话
+          可查审核状态。点行内「审核·开/关」直接改，和会话列表里的开关是同一个。
+          热生效，不用重启。</div>
         <div class="sess-foot" style="margin-bottom: 8px;">
           <button class="toggle" id="privQuotaOn">生图额度·开</button>
           <label class="hint" for="privQuotaLimit">每人每天</label>
@@ -1902,6 +1916,7 @@ async function toggleAudit(s, btn) {
         body: JSON.stringify({ enabled: target }) });
     s.image_audit = target;
     renderSessions();
+    renderPrivateWlList();   // 私聊白名单列表里也嵌了这个开关（函数提升，安全）
     sessStatus('「' + name + '」图片审核已' + (target ? '开启' : '关闭')
       + '，立即生效', 'ok');
   } catch (e) {
@@ -2197,6 +2212,105 @@ async function editImageFmt(s, btn) {
 
 let privState = { on: true, wlOn: true, list: [],
                   quotaOn: true, quotaLimit: 10, quotaList: [] };
+// 白名单管理列表的搜索 / 审核筛选状态（2026-10-05 用户要求：列表化 + 搜索 +
+// 按审核状态快速区分）。'all' | 'on' | 'off'；'off' 只算明确关了的会话，
+// 未聊过（没有会话记录）哪个筛选都不进，只在「全部」里出现。
+let privWlFilter = 'all';
+let privWlQuery = '';
+
+function privSessionOf(uid) {
+  return sessions.find(s => s.kind === 'private'
+    && String(s.target_id) === String(uid)) || null;
+}
+
+function renderPrivateWlList() {
+  const box = $('privWlList');
+  if (!box) return;
+  // 筛选按钮的亮灭：选中的用 toggle on（亮色），其余 ghost
+  const fBtns = { all: $('privWlFAll'), on: $('privWlFOn'), off: $('privWlFOff') };
+  Object.entries(fBtns).forEach(([k, b]) => {
+    b.className = k === privWlFilter ? 'toggle on' : 'ghost';
+    b.style.padding = '2px 10px';
+  });
+  box.textContent = '';
+  const total = privState.list.length;
+  if (!total) {
+    box.style.padding = '8px';
+    box.textContent = privState.wlOn
+      ? '名单为空（= 谁都私聊不了）。在上面输入 QQ 号点「添加」。'
+      : '名单为空（白名单已停用，谁都能聊）。';
+    $('privWlCount').textContent = '';
+    return;
+  }
+  const q = privWlQuery.trim().toLowerCase();
+  let shown = 0, onCnt = 0, offCnt = 0, unknownCnt = 0;
+  privState.list.slice()
+    .sort((a, b) => String(a).localeCompare(String(b), undefined,
+                                           { numeric: true }))
+    .forEach((uid) => {
+      const s = privSessionOf(uid);
+      const name = s ? (s.name || '') : '';
+      const audit = s ? !!s.image_audit : null;   // null = 未聊过
+      if (audit === true) onCnt++;
+      else if (audit === false) offCnt++;
+      else unknownCnt++;
+      if (q && !String(uid).includes(q)
+          && !(name && name.toLowerCase().includes(q))) return;
+      if (privWlFilter === 'on' && audit !== true) return;
+      if (privWlFilter === 'off' && audit !== false) return;
+      shown++;
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;'
+        + 'padding:4px 8px;'
+        + 'border-bottom:1px solid var(--border-soft);';
+      const id = document.createElement('span');
+      id.textContent = uid;
+      id.style.cssText = 'font-family:ui-monospace,monospace;font-size:12px;'
+        + 'min-width:104px;';
+      row.appendChild(id);
+      const nm = document.createElement('span');
+      nm.className = 'hint';
+      nm.textContent = name || '未聊过';
+      nm.title = name || '名单里有号但还没聊过天';
+      nm.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;'
+        + 'white-space:nowrap;';
+      row.appendChild(nm);
+      if (s) {
+        // 和会话列表同一个开关：toggleAudit 改完会调 renderSessions()，
+        // 这里再补一次名单列表的刷新（见函数尾部挂载）。
+        addAuditButton(s, row);
+      } else {
+        const unknown = document.createElement('span');
+        unknown.className = 'hint';
+        unknown.textContent = '未聊过';
+        row.appendChild(unknown);
+      }
+      const rm = document.createElement('button');
+      rm.className = 'ghost';
+      rm.textContent = '移除';
+      rm.style.padding = '2px 10px';
+      rm.addEventListener('click', () => {
+        if (confirm('把 ' + uid + (name ? '（' + name + '）' : '')
+            + ' 移出私聊白名单？\n\n移除后 TA 的私聊将被静默（不出声不出图）。'))
+          privEdit('remove', uid);
+      });
+      row.appendChild(rm);
+      box.appendChild(row);
+    });
+  if (!shown) {
+    box.style.padding = '8px';
+    const empty = document.createElement('span');
+    empty.className = 'hint';
+    empty.textContent = q ? '没有匹配「' + privWlQuery.trim() + '」的号码'
+      : (privWlFilter === 'on' ? '没有开了审核的会话'
+         : privWlFilter === 'off' ? '没有关了审核的会话' : '');
+    box.appendChild(empty);
+  } else {
+    box.style.padding = '0';
+  }
+  $('privWlCount').textContent = '共 ' + total + ' 人 · 审核开 ' + onCnt
+    + ' / 关 ' + offCnt + (unknownCnt ? ' / 未聊过 ' + unknownCnt : '');
+}
 
 function renderPrivate() {
   const btn = $('privAll');
@@ -2207,21 +2321,7 @@ function renderPrivate() {
   wlBtn.className = 'toggle' + (privState.wlOn ? ' on' : '');
   wlBtn.textContent = privState.wlOn ? '白名单·开' : '白名单·关';
   wlBtn.disabled = false;
-  const box = $('privWl');
-  box.textContent = '';
-  if (!privState.list.length) {
-    box.textContent = privState.wlOn ? '（空 = 谁都私聊不了）' : '（白名单已停用，谁都能聊）';
-  } else {
-    privState.list.forEach((uid) => {
-      const chip = document.createElement('button');
-      chip.className = 'ghost';
-      chip.style.marginRight = '6px';
-      chip.textContent = uid + ' ×';
-      chip.title = '点击从白名单移除 ' + uid;
-      chip.addEventListener('click', () => privEdit('remove', uid));
-      box.appendChild(chip);
-    });
-  }
+  renderPrivateWlList();
   renderPrivateQuota();
 }
 
@@ -2609,6 +2709,20 @@ $('visionPromptClose').addEventListener('click', () => {
 $('privAll').addEventListener('click', togglePrivateAll);
 $('privWlOn').addEventListener('click', togglePrivateWlOn);
 $('privAdd').addEventListener('click', () => privEdit('add'));
+// 白名单管理列表：搜索 + 审核筛选（只重渲染列表，不整页刷新）
+$('privWlSearch').addEventListener('input', () => {
+  privWlQuery = $('privWlSearch').value;
+  renderPrivateWlList();
+});
+$('privWlFAll').addEventListener('click', () => {
+  privWlFilter = 'all'; renderPrivateWlList();
+});
+$('privWlFOn').addEventListener('click', () => {
+  privWlFilter = 'on'; renderPrivateWlList();
+});
+$('privWlFOff').addEventListener('click', () => {
+  privWlFilter = 'off'; renderPrivateWlList();
+});
 $('privQuotaOn').addEventListener('click', togglePrivateQuota);
 $('privQuotaSave').addEventListener('click', savePrivateQuotaLimit);
 $('privQuotaAdd').addEventListener('click', () => quotaWlEdit('add'));
