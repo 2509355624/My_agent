@@ -102,6 +102,12 @@ _PLACEHOLDER_QUOTE_RE = re.compile(
     r"^\[[^\[\]]{0,14}(?:图片|表情|无法读取)[^\[\]]{0,14}\]$"
     r"|^（(?:图片|表情)）$"
     r"|（没有可读内容）|无法读取")
+# **自己发的**纯图消息：正文只剩「[图片]」占位符（qq_api 把图片 CQ 转译成
+# 这个），一张或多张连排、可有空白。2026-10-05 用户拍板：只发图、没给任何
+# 生图指令 = **绝不跑图**——归一成空文本走「空文本+图 → 反推」分支。
+# 16:33 私聊实录：占位符被当成真话掉进 _revise 改图管道，识图完直接入队
+# 生图了。真实意见（「改成猫」「三档」）不受影响——占位符后面有字就不归一。
+_IMG_ONLY_RE = re.compile(r"^\s*(?:\[图片\]\s*)+$")
 
 # ─── 渠道解析（代码直判，LLM 不再碰渠道） ─────────────────
 # 档位是最核心的关键词；画风词是可选项。用户口径（2026-10-05）：档位打了、
@@ -815,6 +821,8 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     闭嘴（""）。
     """
     text = _strip_own_names(_strip_attribution(own_text))
+    if _IMG_ONLY_RE.match(text):
+        text = ""       # 裸图（只发图没说话）：见 _IMG_ONLY_RE 处的拍板
     session_key = qq_api.current_session_key()
     quoted = (qq_api.current_quoted_text() or "").strip()
     # 详细使用指南（/菜单、使用指南）：零 LLM，常量直回。比菜单判断更前，

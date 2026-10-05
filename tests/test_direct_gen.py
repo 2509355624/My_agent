@@ -901,6 +901,51 @@ class MultiImageReverseTest(unittest.TestCase):
         m_gen.assert_not_called()
 
 
+class BareImageTest(unittest.TestCase):
+    """裸图（只发图、一个字没说）绝不跑图（2026-10-05 用户拍板）。
+
+    纯图消息的正文不是空串而是「[图片]」占位符——16:33 私聊实录：占位符
+    被当成真话掉进改图管道，识图完直接入队生图了。归一成空文本走「空文本
+    +图 → 反推」分支；占位符后面带真实意见的不受影响。
+    """
+
+    def _decide(self, text, at_me=True, seen="1girl, smile"):
+        with mock.patch.object(direct_gen, "llm") as _m_llm_mod, \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="private_9"), \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=""), \
+             mock.patch("app.vision.describe",
+                        return_value=seen) as m_describe, \
+             mock.patch.object(gi, "_generate_image",
+                               return_value=RECEIPT) as m_gen:
+            out = direct_gen.decide(text, [], False,
+                                    data_urls=["data:image/jpeg;base64,A"],
+                                    at_me=at_me)
+        return out, m_describe, m_gen
+
+    def test_placeholder_only_image_reverse_not_generate(self):
+        out, m_describe, m_gen = self._decide("[图片]")
+        m_gen.assert_not_called()                # 绝不入队
+        m_describe.assert_called_once()          # 反推只花一次识图
+        self.assertIn("反推", out)
+
+    def test_multiple_placeholders_still_reverse(self):
+        out, _m_describe, m_gen = self._decide("[图片] [图片] ")
+        m_gen.assert_not_called()
+        self.assertIn("反推", out)
+
+    def test_image_plus_real_opinion_still_generates(self):
+        # 图 + 真实意见（「[图片] 手改成插兜」是带图消息的正文形态）→
+        # 照旧走改图管道，归一规则不能把真话一起吞掉
+        out, m_describe, m_gen = self._decide(
+            "[图片] 手改成插兜",
+            seen='{"skill": "anima_clear", "prompt": "1girl, fixed"}')
+        self.assertEqual(out, "")
+        m_gen.assert_called_once()
+        m_describe.assert_called_once()
+
+
 class PrivateQATest(unittest.TestCase):
     """私聊单轮问答：问号结尾 → 单次调用直答；群聊铁律不破。"""
 
