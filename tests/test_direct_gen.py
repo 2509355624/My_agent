@@ -17,7 +17,7 @@
 import unittest
 from unittest import mock
 
-from app import direct_gen, image_jobs
+from app import direct_gen, image_jobs, random_tags
 from app.direct_gen import MENU_TEXT
 from app.tools.normal import generate_image as gi
 
@@ -991,6 +991,79 @@ class PrivateQATest(unittest.TestCase):
             out = direct_gen.decide("在吗？", [], False, at_me=True)
             self.addCleanup(direct_gen.pop_qa, "private_9")
         self.assertEqual(out, MENU_TEXT)
+
+
+class RandomCommandTest(unittest.TestCase):
+    """随机口令（2026-10-05）：/随机萝莉 /随机兽耳 /随机女仆 /今日老婆。
+
+    策展词池直拼提示词 → 零 LLM，默认档入队；关键词轮也认（@ 不 @ 都行），
+    主动接话轮绝不触发。
+    """
+
+    def _decide(self, text, voluntary=False, at_me=True):
+        with mock.patch.object(direct_gen, "llm") as m_llm_mod, \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="group_1"), \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=""), \
+             mock.patch.object(gi, "_generate_image",
+                               return_value=RECEIPT) as m_gen:
+            out = direct_gen.decide(text, [], voluntary, at_me=at_me)
+            self.addCleanup(direct_gen._LAST_JOB.pop, "group_1", None)
+        return out, m_gen, m_llm_mod
+
+    def test_random_loli_enqueues_zero_llm(self):
+        out, m_gen, m_llm = self._decide("/随机萝莉")
+        self.assertEqual(out, "")
+        m_llm.call_llm.assert_not_called()
+        m_gen.assert_called_once()
+        self.assertIn("loli", m_gen.call_args.args[0])
+        self.assertEqual(m_gen.call_args.kwargs["skill"], "anima_clear")
+
+    def test_random_kemono_without_slash_in_keyword_round(self):
+        # 关键词轮（不 @）也认纯口令
+        out, m_gen, m_llm = self._decide("随机兽耳", at_me=False)
+        self.assertEqual(out, "")
+        m_llm.call_llm.assert_not_called()
+        self.assertIn("animal_ears", m_gen.call_args.args[0])
+
+    def test_random_maid(self):
+        out, m_gen, _m_llm = self._decide("随机女仆")
+        self.assertEqual(out, "")
+        self.assertIn("maid", m_gen.call_args.args[0])
+
+    def test_waifu_uses_pool_character(self):
+        out, m_gen, m_llm = self._decide("/今日老婆")
+        self.assertEqual(out, "")
+        m_llm.call_llm.assert_not_called()
+        first_tag = m_gen.call_args.args[0].split(",")[0].strip()
+        self.assertIn(first_tag,
+                      {e["tag"] for e in random_tags.DEFAULT_WAIFU_POOL})
+
+    def test_voluntary_round_never_triggers(self):
+        # 主动接话轮（没人喊它）绝不出图
+        out, m_gen, _m_llm = self._decide("随机萝莉", voluntary=True)
+        self.assertIsNone(out)
+        m_gen.assert_not_called()
+
+    def test_command_with_extra_text_not_matched(self):
+        # 口令后跟别的话 → 不是口令，走正常管道（画图动词 → 转译）
+        with mock.patch.object(direct_gen, "llm") as m_llm_mod, \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="group_1"), \
+             mock.patch.object(gi, "_generate_image",
+                               return_value=RECEIPT) as m_gen:
+            m_llm_mod.call_llm.return_value = (
+                '{"skill": "anima_clear", "prompt": "random girl"}')
+            out = direct_gen.decide("随机萝莉 来一张", [], False, at_me=True)
+            self.addCleanup(direct_gen._LAST_JOB.pop, "group_1", None)
+        self.assertEqual(out, "")
+        self.assertEqual(m_gen.call_args.args[0], "random girl")
+
+    def test_more_channels_text(self):
+        out, m_gen, _m_llm = self._decide("/更多渠道")
+        self.assertEqual(out, direct_gen.MORE_CHAN_TEXT)
+        m_gen.assert_not_called()
 
 
 if __name__ == "__main__":

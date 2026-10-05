@@ -41,7 +41,7 @@ import logging
 import os
 import re
 
-from app import image_jobs, image_log, llm, qq_api
+from app import image_jobs, image_log, llm, qq_api, random_tags
 from app.config import QQ_GROUP_KEYWORDS
 from app.confirm_gate import _ATTRIBUTION_RE
 from app.skills import list_skills
@@ -317,12 +317,13 @@ MENU_TEXT = (
     "默认 纳西妲\n"
     "三档 gloss 一个女孩\n"
     "快档 1girl, blue hair（英文直接跑）\n"
+    "口令：今日老婆 ｜ 随机萝莉 / 随机兽耳 / 随机女仆\n"
     "渠道：默认/快档(一档)/二档/三档 + 画风 clear/curvy/gloss/soft"
     "（没打按默认）｜ sd / krea2 / qwen / nffa / nai\n"
     "引用提示词 + 渠道词 → 照跑；出图回执 +「再来一张」→ 换种子重跑\n"
     "引用图：只@我 = 反推提示词 ｜ 加档位 = 直接生成 ｜ 说改什么 = 改图"
     " ｜ 说「图生图」= 照原图改\n"
-    "发「使用指南」或「/菜单」看详细版"
+    "发「/更多渠道」看全部跑法 ｜ 「使用指南」看详细版"
 )
 
 GUIDE_TEXT = (
@@ -348,8 +349,32 @@ GUIDE_TEXT = (
     "【改图】引用图 + 明说「图生图」+ 改什么（「图生图 把头发换成银色」）"
     "→ 照着原图改，构图不变；不点名渠道默认动漫档，点名 qwen 走精修（慢）\n"
     "【看真图】引用图 + 说「识图 / 反推 / 看图」→ 强制看图（不用账本缓存）\n"
+    "【随机口令】零门槛直接玩：\n"
+    "  今日老婆 → 随机角色 + 随机穿搭出一张（每人随机，可反复抽）\n"
+    "  随机萝莉 / 随机兽耳 / 随机女仆 → 全新随机角色，每张都不重样\n"
     "提示词用中文描述就行，我来转成画法。"
 )
+
+# 「/更多渠道」：把全部跑法罗列一遍（2026-10-05 用户定的新菜单结构——
+# 主菜单只留入口，想看细的再主动要）。
+MORE_CHAN_TEXT = (
+    "🧭 全部跑法\n"
+    "【档位】默认 < 快档(一档) < 二档 < 三档，后面直接跟描述"
+    "（例：三档 女骑士）\n"
+    "【画风】clear 清晰 / curvy 肉感 / gloss 油亮 / soft 柔和，跟在档位后"
+    "（例：二档 gloss 少女），没打按该档默认\n"
+    "【固定渠道】sd / krea2 / qwen / nffa / nai"
+    "（例：qwen 水晶城堡；sd 支持多段描述用 --- 分隔一次多张）\n"
+    "【随机口令】今日老婆 ｜ 随机萝莉 / 随机兽耳 / 随机女仆\n"
+    "【引用玩法】引用提示词 + 渠道词 = 照跑；引用图 + 只@我 = 反推；"
+    "引用图 + 档位 = 反推后生成；引用图 + 图生图 + 改法 = 照原图改；"
+    "出图回执 +「再来一张」= 换种子重跑"
+)
+
+# 随机口令与今日老婆（2026-10-05）：斜杠可带可不带，认纯口令。
+_RANDOM_CMD_RE = re.compile(r"^\s*/?\s*随机(萝莉|兽耳|女仆)\s*$")
+_WAIFU_CMD_RE = re.compile(r"^\s*/?\s*今日老婆\s*$")
+_MORE_CHAN_RE = re.compile(r"^\s*/?\s*更多渠道\s*$")
 
 _TRANSLATE_TEMPLATE = (
     "你是生图指令解析器。把用户的请求转成 JSON，只输出 JSON 本体，"
@@ -787,6 +812,21 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     # 主动接话轮（没人 @ 它）不进管道，行为维持原样。
     if voluntary:
         return None
+
+    # ── 随机口令（2026-10-05）：/随机萝莉 /随机兽耳 /随机女仆 /今日老婆 ──
+    # 策展词池直拼提示词，零 LLM；走默认档入队，额度闸门照常拦。
+    m = _RANDOM_CMD_RE.match(text)
+    if m:
+        prompt = random_tags.sample_prompt(m.group(1))
+        _remember_job(session_key, _DEFAULT_SKILL, prompt)
+        return _enqueue(_DEFAULT_SKILL, prompt, text)
+    if _WAIFU_CMD_RE.match(text):
+        _cn, prompt = random_tags.draw_waifu()
+        _remember_job(session_key, _DEFAULT_SKILL, prompt)
+        return _enqueue(_DEFAULT_SKILL, prompt, text)
+    # 「/更多渠道」：全部跑法罗列（零 API）。
+    if _MORE_CHAN_RE.match(text):
+        return MORE_CHAN_TEXT
 
     ch, desc = _parse_channel(text)
 
