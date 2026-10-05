@@ -164,8 +164,9 @@ import requests
 from app import image_log
 from app.cancel import Cancelled, is_cancelled
 from app.config import (COMFY_MIN_FREE_RAM_GB, COMFY_MIN_FREE_VRAM_GB,
-                        COMFY_RESTART_MIN_GAP, COMFY_RESTART_WAIT, COMFYUI_URL,
-                        IMAGE_GEN_TIMEOUT, QQ_AGENT_ID, QWEN_COOLDOWN)
+                        COMFY_RELEASE_AFTER_SAME, COMFY_RESTART_MIN_GAP,
+                        COMFY_RESTART_WAIT, COMFYUI_URL, IMAGE_GEN_TIMEOUT,
+                        QQ_AGENT_ID, QWEN_COOLDOWN)
 from app.skills import skill_priority
 
 log = logging.getLogger("image_jobs")
@@ -371,6 +372,7 @@ class _Channel:
         # 下面三个只有本地通道用（全是为显卡发明的，见「重渠道优先度」）：
         self.heavy_done_at = 0.0           # 上一张重渠道**跑完**的时刻
         self.last_skill = None             # 上次提交给 ComfyUI 的渠道（判要不要 /free）
+        self.same_run = 0                  # 同渠道已连续提交的张数（连画 N 张后 /free）
         self.last_restart_try = 0.0        # 上次**尝试**重启 ComfyUI 的时刻（防抖）
 
     def depth(self):
@@ -938,7 +940,7 @@ def _worker(chan):
 
 
 def _maybe_release_for_switch(job):
-    """渠道变了就先让 ComfyUI 把上一个渠道的模型卸掉。
+    """渠道变了就先让 ComfyUI 把上一个渠道的模型卸掉；同渠道连画满 N 张也放一次。
 
     为什么不能只靠异常路径那条规则（见模块开头「关键取舍」）：那条规则的理由
     是「正常跑完继续用同一个模型更快」——**换渠道时这个理由不成立**，旧渠道的
@@ -946,8 +948,15 @@ def _maybe_release_for_switch(job):
     单阶段连跑两张都正常，紧接着同一个 ComfyUI 会话里跑 qwen（文本编码器
     6GB + unet 4.5GB），采样到一半就 TDR，ComfyUI 直接变成僵尸。
 
-    skill 为 None（老调用方没传）时整个函数是空操作，行为与从前完全一致；
-    同渠道连画也不打 /free，模型保持热的。
+    skill 为 None（老调用方没传）时整个函数是空操作，行为与从前完全一致。
+
+    **同渠道连画释放**（2026-10-05 加，`COMFY_RELEASE_AFTER_SAME`，0=关）：
+    ComfyUI 从不把上一张清干净——每张跑完 `Unloaded partially: ... remains
+    loaded`，残留 1.6~2.1GB 一路叠上去。qwen 权重 10.5GB / 显存 11.94GB，
+    叠两张之后 UNet 装不下、每步从内存搬 4.5GB，速度 ×8、撞超时（用户实录：
+    第 3 张起超级慢→卡死）。所以同一个渠道**连续提交满 N 张后，下一张提交
+    前先打一次 /free** 把显存腾干净——第 N+1 张付一次冷启动（约 30~60s），
+    换不来卡死态（那个态 /free 也救不回来，只能重启）。
     """
     chan = _COMFY
     skill = job.skill
@@ -955,8 +964,20 @@ def _maybe_release_for_switch(job):
         return
     prev = chan.last_skill
     chan.last_skill = skill         # 无论打不打 /free 都要记，否则会反复触发
-    if prev is None or prev == skill:
+    if prev is None:                # 刚重启完/冷启动，这张算新一轮第 1 张
+        chan.same_run = 1
         return
+    if prev == skill:
+        # 同渠道连画：数满 N 张就先 /free，别让残留把下一张挤进换页态。
+        if 0 < COMFY_RELEASE_AFTER_SAME <= chan.same_run:
+            log.info("同渠道 %s 已连画 %d 张，先 /free 释放显存再提交第 %d 张",
+                     skill, chan.same_run, chan.same_run + 1)
+            chan.same_run = 1       # /free 之后模型全冷，这张算新一轮第 1 张
+            _report_and_free()
+        else:
+            chan.same_run += 1
+        return
+    chan.same_run = 1               # 换渠道，重新计数
     log.info("渠道切换 %s → %s，先释放上一个渠道的模型", prev, skill)
     _report_and_free()
 
@@ -1072,6 +1093,7 @@ def _restart_comfy(timeout=COMFY_RESTART_WAIT):
                 # 新进程里一个模型都没加载，别让「换渠道先 /free」以为还是热的。
                 with _lock:
                     _COMFY.last_skill = None
+                    _COMFY.same_run = 0
                 return True
         except Exception:
             pass
@@ -1417,6 +1439,7 @@ def _reset():
             chan.seq = 0
             chan.heavy_done_at = 0.0
             chan.last_skill = None
+            chan.same_run = 0
             chan.last_restart_try = 0.0
         _recent.clear()
 

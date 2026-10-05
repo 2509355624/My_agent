@@ -1743,12 +1743,14 @@ class TimeoutRestartTest(_Base):
 
 
 class ChannelSwitchTest(_Base):
-    """换渠道先 /free：同渠道连画保持模型热，跨渠道才释放。
+    """换渠道先 /free：跨渠道必释放。
 
     背景（2026-09-27 实测）：12GB 显存 + 16GB 内存撑不住两个渠道的模型同时
     驻留。动漫渠道（现默认 anima_clear）连跑两张都正常，紧接着同一个 ComfyUI 会话里跑 qwen
     （文本编码器 6GB + unet 4.5GB），采样到一半就 TDR，ComfyUI 变成僵尸。
     所以 skill 一变就先 /free 把上一个渠道的模型卸掉。
+    同渠道连画原本永不释放，2026-10-05 起连画满 COMFY_RELEASE_AFTER_SAME
+    张后也放一次（见 SameChannelReleaseTest）。
     """
 
     def setUp(self):
@@ -1813,6 +1815,84 @@ class ChannelSwitchTest(_Base):
         self.events.clear()
         self._run()
         self.assertEqual(self.events, ["submit"])
+
+
+class SameChannelReleaseTest(_Base):
+    """同渠道连画满 N 张后，下一张提交前先 /free（2026-10-05 加）。
+
+    背景（用户实录）：qwen 权重 10.5GB / 显存 11.94GB，ComfyUI 每张跑完
+    残留 1.6~2.1GB 不清，连画第 3 张起 UNet 装不下、每步从内存搬 4.5GB、
+    速度 ×8 → 卡死撞超时。所以同渠道连画满 COMFY_RELEASE_AFTER_SAME 张后
+    强制放一次显存：第 3 张付 30~60s 冷启动，换不进「/free 也救不回」的
+    换页死态。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.events = []
+
+        def _free():
+            self.events.append("free")
+
+        def _submit(wf):
+            self.events.append("submit")
+            return "pid"
+
+        for target, repl in (("_report_and_free", _free),
+                             ("_queue_prompt", _submit)):
+            p = mock.patch.object(image_jobs, target, repl)
+            p.start()
+            self.addCleanup(p.stop)
+        # 钉死阈值，别跟着 .env 漂（.env 优先于 config 默认值）
+        p = mock.patch.object(image_jobs, "COMFY_RELEASE_AFTER_SAME", 2)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _run(self, skill):
+        entry = {"outputs": {"9": {"images": [{"filename": "a.png"}]}}}
+        with mock.patch.object(image_jobs, "wait_done", return_value=entry):
+            image_jobs.enqueue("group", "9", {"1": {}}, skill)
+            image_jobs._drain()
+
+    def test_third_consecutive_submit_frees_first(self):
+        """连画第 3 张：先 free 再 submit，顺序不能反。"""
+        self._run("qwen_image_v1")
+        self._run("qwen_image_v1")
+        self.events.clear()
+        self._run("qwen_image_v1")
+        self.assertEqual(self.events, ["free", "submit"])
+
+    def test_first_two_stay_hot(self):
+        """前 2 张不打 /free——释放不能退化成每张都冷启动。"""
+        self._run("qwen_image_v1")
+        self._run("qwen_image_v1")
+        self.assertEqual(self.events, ["submit", "submit"])
+
+    def test_cycle_every_third(self):
+        """释放后重新计数：节奏是第 3、6、9…张冷启动。"""
+        for _ in range(6):
+            self._run("qwen_image_v1")
+        # 6 张 = 6 次 submit + 2 次 free（第 3、6 张提交前）
+        self.assertEqual(self.events,
+                         ["submit", "submit", "free", "submit",
+                          "submit", "free", "submit", "submit"])
+
+    def test_switch_resets_counter(self):
+        """中途换渠道归零：切回来之后又要连画满 N 张才放。"""
+        self._run("qwen_image_v1")
+        self._run("qwen_image_v1")
+        self._run("anima_soft")          # 换渠道 free，计数归 1
+        self._run("qwen_image_v1")       # 切回，计数 1
+        self.events.clear()
+        self._run("qwen_image_v1")       # 才第 2 张，必须保持热
+        self.assertEqual(self.events, ["submit"])
+
+    def test_zero_disables(self):
+        """0 = 回到从前：同渠道连画永不释放。"""
+        with mock.patch.object(image_jobs, "COMFY_RELEASE_AFTER_SAME", 0):
+            for _ in range(4):
+                self._run("qwen_image_v1")
+        self.assertEqual(self.events, ["submit"] * 4)
 
 
 class _TickingClock:
