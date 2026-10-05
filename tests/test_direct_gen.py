@@ -473,17 +473,16 @@ class AgainTest(unittest.TestCase):
 
 
 class RevisionPipelineTest(unittest.TestCase):
-    """改图管道：引用图 + 意见 → **一次带图调用**（钉死 DeepSeek 官方）→ 重跑。
+    """改图管道：引用图 + 意见 → 按「账本有没有」分流（2026-10-05 拍板）。
 
-    2026-10-05 用户拍板：图直接给视觉模型「看图+按意见改」，不再先识图
-    转文字再让文本模型二次加工（2 次 API → 1 次）。原提示词只在引用自家
-    HT 图（账本可查）时进场——引用别人的图时上一轮原提示词会把模型锚死。
+    自家 HT 图 + 没点名识图 → **纯文本修正**（账本提示词当基底，走降级链，
+    不花识图钱）；点名识图或别人的图 → 一次带图调用（钉死 DeepSeek 官方）。
     """
 
     def _decide(self, text, seen='{"skill": "anima_clear", '
                                 '"prompt": "1girl, fixed"}',
                 quoted="", at_me=False, last_job=None, lookup_row=None,
-                describe_side_effect=None):
+                describe_side_effect=None, llm_reply=None):
         with mock.patch.object(direct_gen, "llm") as m_llm_mod, \
              mock.patch.object(direct_gen.qq_api, "current_session_key",
                                return_value="group_1"), \
@@ -496,6 +495,8 @@ class RevisionPipelineTest(unittest.TestCase):
                                return_value=lookup_row), \
              mock.patch.object(gi, "_generate_image",
                                return_value=RECEIPT) as m_gen:
+            if llm_reply is not None:
+                m_llm_mod.call_llm.return_value = llm_reply
             if last_job:
                 direct_gen._remember_job("group_1", last_job["skill"],
                                          last_job["prompt"])
@@ -542,17 +543,77 @@ class RevisionPipelineTest(unittest.TestCase):
         self.assertEqual(m_describe.call_args.kwargs.get("provider"),
                          "deepseek")             # 钉死 DeepSeek 官方
 
-    def test_own_image_uses_logged_prompt(self):
-        # 引用自家 HT 图：账本里的当时提示词最可信，进场当锚
-        out, m_describe, _, _ = self._decide(
+    def test_own_image_text_only_revision(self):
+        # 引用自家 HT 图 + 意见 → **纯文本修正**（10-05 用户拍板：账本里有
+        # 当时真实提示词，看图是白花的钱）；不带历史、不带图，走降级链。
+        out, m_describe, m_llm, m_gen = self._decide(
             "手改成插兜",
-            '{"skill": "hd_3_curvy", "prompt": "miku, fixed"}',
+            llm_reply='{"prompt": "miku, hands in pockets"}',
             quoted="编号 HT-20261005-010329-595",
             lookup_row={"prompt": "logged, miku", "skill": "hd_3_curvy"})
         self.assertEqual(out, "")
-        sent = m_describe.call_args.kwargs["prompt"]
-        self.assertIn("logged, miku", sent)
-        self.assertIn("最可信", sent)
+        m_describe.assert_not_called()           # 不看图
+        sent = m_llm.call_args[0][0][0]["content"]
+        self.assertIn("logged, miku", sent)      # 账本提示词当基底
+        self.assertIn("手改成插兜", sent)        # 用户意见进来了
+        self.assertNotIn("最近对话", sent)       # 历史不进场（防抄旧 tag）
+        m_gen.assert_called_once_with("miku, hands in pockets",
+                                      skill="hd_3_curvy",
+                                      _skip_confirm=True)
+
+    def test_own_image_skip_on_at_round_returns_logged_prompt(self):
+        # 自家图 + 夸奖（skip）+ @ 轮 → 把当时的提示词回给他（等于反推还准）
+        out, m_describe, m_llm, m_gen = self._decide(
+            "画得真好",
+            llm_reply='{"skip": true}', at_me=True,
+            quoted="编号 HT-20261005-010329-595",
+            lookup_row={"prompt": "logged, miku", "skill": "hd_3_curvy"})
+        self.assertIn(direct_gen._REVERSE_HEADER, out)
+        self.assertIn("logged, miku", out)
+        m_describe.assert_not_called()
+        m_gen.assert_not_called()
+
+    def test_own_image_skip_on_keyword_round_swallows_turn(self):
+        # 自家图 + 夸奖 + 关键词轮 → 闭嘴吞轮，绝不掉回 agent
+        out, _, _, m_gen = self._decide(
+            "画得真好",
+            llm_reply='{"skip": true}',
+            quoted="编号 HT-20261005-010329-595",
+            lookup_row={"prompt": "logged, miku", "skill": "hd_3_curvy"})
+        self.assertEqual(out, "")
+        m_gen.assert_not_called()
+
+    def test_vision_ask_overrides_ledger(self):
+        # 明说「识图」→ 强制看真图（画面和提示词有出入时靠这个兜底）
+        out, m_describe, m_llm, m_gen = self._decide(
+            "识图 帮我改一下手",
+            lookup_row={"prompt": "logged, miku", "skill": "hd_3_curvy"})
+        self.assertEqual(out, "")
+        m_describe.assert_called_once()
+        m_llm.assert_not_called()                # 不走文本修正
+        m_gen.assert_called_once()
+
+    def test_own_image_bare_at_returns_logged_prompt_zero_calls(self):
+        # 自家图 + 裸 @ → 直接回账本提示词，识图和 LLM 都不调
+        out, m_describe, m_llm, m_gen = self._decide(
+            "", quoted="编号 HT-20261005-010329-595", at_me=True,
+            lookup_row={"prompt": "logged, miku", "skill": "hd_3_curvy"})
+        self.assertIn(direct_gen._REVERSE_HEADER, out)
+        self.assertIn("logged, miku", out)
+        m_describe.assert_not_called()
+        m_llm.assert_not_called()
+        m_gen.assert_not_called()
+
+    def test_own_image_with_channel_word_uses_ledger_zero_calls(self):
+        # 自家图 +「三档」→ 账本提示词 + 新渠道直接入队，零识图零 LLM
+        out, m_describe, m_llm, m_gen = self._decide(
+            "三档", quoted="编号 HT-20261005-010329-595",
+            lookup_row={"prompt": "logged, miku", "skill": "hd_3_curvy"})
+        self.assertEqual(out, "")
+        m_describe.assert_not_called()
+        m_llm.assert_not_called()
+        m_gen.assert_called_once_with("logged, miku", skill="hd_3_clear",
+                                      _skip_confirm=True)
 
     def test_foreign_image_ignores_last_job(self):
         # 引用别人的图：上一轮任务的原提示词绝不进场（锚死事故的根因）

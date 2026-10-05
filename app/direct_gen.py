@@ -22,11 +22,13 @@
   引用图 +「帮我生成这个 / 跑一下这张图」（没渠道）→ 默认档反推后重画；
   引用图 +「图生图 / 换成…」→ **垫图改图**（source_image=1，默认动漫档
   重绘，点名 qwen 走参考图编辑、改动指令直通零调用）。
-- 引用图 + 意见 → 改图：**一次带图调用**（钉死 DeepSeek 官方，2026-10-05
-  用户拍板）——图直接给视觉模型，「看图 + 按意见改」一步出完整英文
-  prompt，不再识图转文字后二次调用（2 次 API → 1 次，零中间损耗）。
-  原提示词只在引用的是**自家 HT 图**（账本可查）时才给模型；意见不是
-  修改请求 → @ 轮回反推文本、关键词轮静默。
+- 引用图 + 意见 → 改图，**按「账本有没有这张图」分流省钱**（2026-10-05
+  用户拍板）：引用**自家 HT 图**且没点名识图 → **纯文本修正**（账本里
+  当时的真实提示词 + 意见 → 改出新 prompt，走降级链，不花识图钱）；
+  点名识图（识图/反推/看图…）或引用**别人的图** → **一次带图调用**（钉死
+  DeepSeek 官方）。引用图 + @ / 档位 /「生成这个」也优先用账本提示词
+  （零调用），账本没中才看图反推。意见不是修改请求 → @ 轮回提示词、
+  关键词轮静默。
 - 引用消息但没渠道词（「生图」「这词什么意思」）→ **零 API**，固定指路
   文本——别烧调用更别瞎猜（2026-10-05 用户点名的三种边界全落在这）。
 - **agent 已退场（2026-10-05 用户拍板）**：@ 轮要么走工具要么回菜单。
@@ -520,25 +522,62 @@ def _reverse_text(tags):
     return _REVERSE_HEADER + "\n" + tags
 
 
+# 引用图轮里用户**点名要识图**（识图/反推/看图/优化提示词…）才把图发给
+# 视觉模型。自家图账本里存着当时的真实提示词，改字就行——看图是白花的钱
+# （2026-10-05 用户拍板）。想看真图（比如画面和提示词有出入）就明说「识图」。
+_VISION_ASK_RE = re.compile(r"识图|反推|看图|读图|识别|图里|优化提示词")
+
+
+def _ledger_hit(source):
+    """引用正文/原话里的 HT 编号 → 账本 (提示词, 渠道)。没中返回 ("", "")。
+
+    账本是本机器人每次生图落下的账：编号对应当时**真实用掉**的提示词，
+    比看图现推准。引用别人的图查不到，返回空。
+    """
+    try:
+        tags = image_log.find_tags(source or "")
+    except Exception:
+        log.exception("[direct] 账本查询失败")
+        return "", ""
+    if not tags:
+        return "", ""
+    row = image_log.lookup(tags[0]) or {}
+    return (row.get("prompt") or "").strip(), (row.get("skill") or "").strip()
+
+
+# 引用自家图 + 意见的**纯文本修正**模板（2026-10-05 用户拍板：账本里有当时
+# 真实提示词，改字就行，不必把图发给视觉模型——识图输入比纯文本贵，且文本
+# 调用走降级链，火山免费额度正好顶上）。不带最近历史：账本提示词 + 用户的话
+# 就是全部事实来源，历史里有旧 tag 时小模型照抄（02:59 实录教训）。
+_TEXT_REVISE_TEMPLATE = (
+    "你是生图提示词修正器。用户引用了本机器人之前生成的一张图并提出要求。"
+    "只输出 JSON 本体，格式：{{\"prompt\": \"修改后的完整英文提示词\"}}\n"
+    "- 下面的「原提示词」是那张图当时的真实提示词，最可信：以它为基底按用户"
+    "要求改，用户没提到的细节原样保留\n"
+    "- danbooru 标签式英文，逗号分隔短语；禁止权重语法 (tag:1.2)、{{tag}}、::\n"
+    "- 具体角色没把握就写外貌特征+作品名，不要编造不存在的角色名\n"
+    "- **用户的话不是修改请求**（夸奖、闲聊、问别的事）→ 输出 {{\"skip\": true}}\n"
+    "原提示词（渠道 {skill}）：\n{prompt}\n"
+    "用户的话：{text}"
+)
+
+
 def _revise(text, data_urls, history, channel=None, at_me=False,
             source_image=False):
-    """改图管道：引用图 + 意见 → **一次带图调用** → 重跑。
+    """改图管道：引用图 + 意见 → 一次调用 → 重跑。
 
-    图直接发给视觉模型（钉死 DeepSeek 官方，2026-10-05 用户拍板）：
-    「看图 + 按意见改」一步出完整英文 prompt。不再先识图转文字、再让
-    文本模型二次加工——那多烧一次 API，还多一层文字损耗（2 次 → 1 次）。
+    按「账本有没有这张图」分流（2026-10-05 用户拍板）：
+    - 引用**自家图**（账本命中当时真实提示词）且没点名识图 → **纯文本
+      修正**：账本提示词 + 意见 → 改出新 prompt，走降级链（省一次识图钱）；
+    - 点名识图（识图/反推/看图… `_VISION_ASK_RE`）或引用**别人的图** →
+      **一次带图调用**（钉死 DeepSeek 官方）——不看图就没有信息源。
 
-    source_image=True（用户原话有图生图意图，`_i2i_intent` 判的）→ 入队时
-    垫本轮引用的那张图（重绘而非重画）；渠道不可重绘就降回默认动漫档。
+    source_image=True（用户原话点名了图生图机制，`_i2i_intent` 判的）→
+    入队时垫本轮引用的那张图（重绘而非重画）；渠道不可重绘就降回默认动漫档。
 
-    原提示词只在「引用的是自家 HT 图」（账本可查到当时真实提示词）时才
-    给模型——2026-10-05 群实录：引用别人的图时，上一轮的原提示词会把
-    模型锚死，出图跟引用图毫无关系。
-
-    返回 None = 意见不是修改请求（reverse）：@ 轮回反推文本、关键词轮
-    静默，由本函数内部处理。
+    返回 None = 意见不是修改请求（skip）：@ 轮回提示词文本、关键词轮静默，
+    由本函数内部处理。
     """
-    from app.vision import describe
     session_key = qq_api.current_session_key()
     quoted = (qq_api.current_quoted_text() or "").strip()
     # 「再来一张」：引用回执（或干说）→ 同提示词换种子重跑，零调用。
@@ -549,25 +588,39 @@ def _revise(text, data_urls, history, channel=None, at_me=False,
             _remember_job(session_key, skill, last["prompt"])
             return _enqueue(skill, last["prompt"], text)
         return "没找到最近一次生图的记录，重新描述想要什么吧：@我 渠道 描述。"
-    # 自家图有账本：HT 编号在引用正文/原话里找，账本里的提示词最可信。
-    anchor_skill, anchor_prompt = "（无）", "（无）"
-    anchor_note = "没有（引用的不是本机器人画的图），忽略此项，以画面为准"
-    try:
-        own_tags = image_log.find_tags(quoted + " " + text)
-    except Exception:
-        log.exception("[direct] 账本查询失败")
-        own_tags = []
-    if own_tags:
-        row = image_log.lookup(own_tags[0]) or {}
-        if (row.get("prompt") or "").strip():
-            anchor_prompt = row["prompt"].strip()
-            anchor_skill = (row.get("skill") or "").strip() or "（无）"
-            anchor_note = "是这张图当时的真实提示词（账本可查），最可信"
+    anchor_prompt, anchor_skill = _ledger_hit(quoted + " " + text)
+    # ── 自家图 + 没点名识图 → 纯文本修正（省一次识图调用）──────────
+    if anchor_prompt and not _VISION_ASK_RE.search(text):
+        data = _ask(_TEXT_REVISE_TEMPLATE.format(
+            skill=anchor_skill or "（无）", prompt=anchor_prompt, text=text))
+        if not data:
+            return "改图请求没解析出来，换个说法再试（如「手改成插兜」）。"
+        if data.get("skip"):
+            # 没有修改意图 → @ 轮把当时的提示词给他（等于反推，还更准）；
+            # 关键词轮静默止刷屏。
+            return _reverse_text(anchor_prompt) if at_me else None
+        prompt = (data.get("prompt") or "").strip()
+        if not prompt:
+            return "改图请求没解析出来，换个说法再试（如「手改成插兜」）。"
+        skill = channel or anchor_skill
+        if skill not in _allowed_skills():
+            skill = _DEFAULT_SKILL
+        if source_image and not _redraw_capable(skill):
+            skill = _DEFAULT_SKILL
+        _remember_job(session_key, skill, prompt)
+        return _enqueue(skill, prompt, text, source_image=source_image)
+    # ── 点名识图 / 别人的图 → 一次带图调用（钉死 DeepSeek 官方）─────
+    if anchor_prompt:
+        anchor_note = "是这张图当时的真实提示词（账本可查），最可信"
+    else:
+        anchor_skill, anchor_prompt = "（无）", "（无）"
+        anchor_note = "没有（引用的不是本机器人画的图），忽略此项，以画面为准"
     ask = _REVISE_TEMPLATE.format(
         anchor_note=anchor_note,
         last_skill=anchor_skill,
         last_prompt=anchor_prompt,
         text=text)
+    from app.vision import describe
     try:
         reply = describe(data_urls[0], prompt=ask, provider="deepseek")
     except Exception:
@@ -607,10 +660,17 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     闭嘴（""）。
     """
     text = _strip_own_names(_strip_attribution(own_text))
+    session_key = qq_api.current_session_key()
+    quoted = (qq_api.current_quoted_text() or "").strip()
     # 菜单与裸 @：零 LLM，直接回常量（管道关着也照回——它本来就免费）。
-    # 例外：带着引用图的空话/菜单词 → 按用户口径默认反推提示词（不生成）。
+    # 例外：带着引用图的空话/菜单词 → 按用户口径给反推提示词（不生成）；
+    # 自家图直接回账本里的当时提示词（2026-10-05 用户拍板：比看图现推准
+    # 还省一次识图），想看真图就明说「识图」。
     if not text or _MENU_RE.match(text):
         if data_urls and ENABLED and not voluntary:
+            own_prompt, _skill = _ledger_hit(quoted)
+            if own_prompt:
+                return _reverse_text(own_prompt)
             return _reverse_text(_recall_tags(data_urls))
         return MENU_TEXT
     if not ENABLED:
@@ -619,8 +679,6 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     if voluntary:
         return None
 
-    session_key = qq_api.current_session_key()
-    quoted = (qq_api.current_quoted_text() or "").strip()
     ch, desc = _parse_channel(text)
 
     # ── 引用图轮 ──────────────────────────────────────────
@@ -642,17 +700,20 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
             # 默认动漫档重绘：视觉模型出修正后的完整 tag，入队垫图。
             return _revise(text, data_urls, history, channel=ch,
                            at_me=at_me, source_image=True)
-        # 引用图 + 只打渠道/档位 → 反推 → 直接生成（1 次识图调用，零 LLM）。
+        # 引用图 + 只打渠道/档位 → 自家图直接用账本提示词（零调用），
+        # 别人的图才看图反推（1 次识图），然后入队生成。
         if ch and not desc:
-            tags = _recall_tags(data_urls[:1])
+            own_prompt, _skill = _ledger_hit(quoted)
+            tags = own_prompt or _recall_tags(data_urls[:1])
             if not tags:
                 return "没认出引用的图，重发一次，或直接 @我 渠道 描述。"
             _remember_job(session_key, ch, tags)
             return _enqueue(ch, tags, text)
         # 引用图 +「帮我生成这个 / 跑一下这张图」（没渠道）→ 用户口径：
-        # 默认反推 → 重画，别反问。
+        # 反推 → 重画，别反问。自家图同样先用账本提示词（零调用）。
         if not ch and desc and _IMG_GEN_INTENT_RE.search(desc):
-            tags = _recall_tags(data_urls[:1])
+            own_prompt, _skill = _ledger_hit(quoted)
+            tags = own_prompt or _recall_tags(data_urls[:1])
             if not tags:
                 return "没认出引用的图，重发一次，或直接 @我 渠道 描述。"
             _remember_job(session_key, _DEFAULT_SKILL, tags)
