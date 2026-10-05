@@ -145,6 +145,30 @@ _QUOTE_NO_CHAN_TEXT = (
     "二档 / 三档 / sd / krea2 / qwen / nffa / nai）就能直接跑；"
     "要照着改图就引用图片并说「图生图」。")
 
+# ─── 看图说话（单次识图，不进改图管道） ───────────────────
+# 触发词收得窄：不能含「看图/识图」（那是反推 tag 的口），也不能含裸
+# 「这是什么」——「这是什么破手，改成插兜」会被劫走不进改图。
+_DESCRIBE_RE = re.compile(
+    r"画的?(?:是|了)什么|什么画风|什么风格|描述一下|介绍一下|讲讲|说说"
+    r"|什么内容|帮我?看看|这是啥")
+_DESCRIBE_PROMPT = (
+    "用中文自然语言描述这张图片：主体是谁/什么、外貌服装、动作姿势、"
+    "场景背景、画风。150 字以内，直接描述，不分点、不寒暄。")
+
+# ─── 私聊单轮问答（单次调用，无工具无循环） ───────────────
+# agent 循环一轮能滚出十几万 token（while 拉工具结果再续写），单次管道
+# 固定一次调用封顶——成本差百倍（2026-10-05 用户拍板）。所以问答永远
+# 单轮：答完即收口，群聊绝不启用（保持「生图或菜单」铁律）。
+_QA_RE = re.compile(r"[?？]\s*$")
+_QA_SYSTEM = (
+    "你是 QQ 机器人「大大怪」的私聊问答模式。用中文简短回答（尽量不超过"
+    "120 字），只回答当前这一个问题：不追问、不反问、不列长清单。"
+    "如果用户其实想生成图片，提示他按「@我 渠道 描述」的格式发。")
+# 本轮问答的落史暂存：session_key -> (user_text, reply)。qq_bot 送出回复
+# 后 pop 出来落 history，下一轮问答才有上下文。没被 pop 的（排队轮）
+# 会在下一个非空 direct_reply 轮被冲掉，不积累。
+_QA_LAST = {}
+
 # 引用图轮的反推式识图指令：要**英文 danbooru tag 全量细节**（改图和反推
 # 共用）。别用「简洁描述」——2026-10-05 群实录教训：一两百字的简述喂给修正
 # 调用，出图跟引用的图毫无关系。
@@ -468,6 +492,35 @@ def _ask(content):
     return data
 
 
+def _qa_answer(text, history):
+    """私聊单轮问答：一次 LLM 调用直答，无工具、无循环。
+
+    历史只带最近 6 条（防上下文滚大），答完把本轮存进 _QA_LAST 供
+    qq_bot 落史。失败返回 ""（decide 会兜底回菜单）。
+    """
+    msgs = [{"role": "system", "content": _QA_SYSTEM}]
+    recent = [m for m in (history or [])
+              if m.get("role") in ("user", "assistant")
+              and isinstance(m.get("content"), str) and m["content"].strip()]
+    for m in recent[-6:]:
+        msgs.append({"role": m["role"], "content": m["content"][:500]})
+    msgs.append({"role": "user", "content": text})
+    try:
+        reply = (llm.call_llm(msgs, timeout=30) or "").strip()
+    except Exception as e:
+        log.warning("[direct] 问答调用失败：%s", e)
+        return ""
+    reply = reply[:800]
+    if reply:
+        _QA_LAST[qq_api.current_session_key()] = (text, reply)
+    return reply
+
+
+def pop_qa(session_key):
+    """取走本轮问答的落史记录（user_text, reply），没有返回 None。"""
+    return _QA_LAST.pop(session_key, None)
+
+
 def _humanize_error(result):
     """工具返回的「错误：…」文案是写给模型看的，尾巴带着指示语句。
     直达管道直接发给真人，只留第一句。"""
@@ -531,13 +584,16 @@ def _translate(text, history, skill=None):
     return {"skill": out_skill, "prompt": user_prompt}
 
 
-def _recall_tags(data_urls):
+def _recall_tags(data_urls, numbered=True):
     """引用图 → 英文 danbooru tag 反推（「反推返回」「反推后生成」共用）。
 
     走 .env 的识图配置（VISION_PROVIDER/VISION_MODEL，2026-10-05 起是
     火山 doubao-seed-2.1-turbo；此前钉死 DeepSeek 官方）。识图调用本来
     就不过降级链，不指定 provider = 跟着配置走。最多看 3 张，全部失败
     返回 ""。
+
+    numbered=True（回给用户看）多图带「（第 N 张）」前缀；False（结果
+    直接当生成提示词入队）多图用「, 」拼接——中文前缀进提示词是污染。
     """
     from app.vision import describe
     urls = (data_urls or [])[:3]
@@ -550,8 +606,9 @@ def _recall_tags(data_urls):
             continue
         if not text:
             continue
-        outs.append("（第 %d 张）%s" % (i, text) if len(urls) > 1 else text)
-    return "\n\n".join(outs)
+        outs.append("（第 %d 张）%s" % (i, text)
+                    if numbered and len(urls) > 1 else text)
+    return ", ".join(outs) if not numbered else "\n\n".join(outs)
 
 
 def _reverse_text(tags):
@@ -759,7 +816,10 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         # 图（账本没中）没有种子可复刻，照旧随机。
         if ch and not desc:
             own_prompt, _skill, own_seed = _ledger_hit(quoted)
-            tags = own_prompt or _recall_tags(data_urls[:1])
+            # 多图反推放开到 3 张（2026-10-05 用户拍板）：turbo 免费烧得
+            # 起。numbered=False——合并结果直接当生成提示词，「（第 N 张）」
+            # 中文前缀是污染。
+            tags = own_prompt or _recall_tags(data_urls[:3], numbered=False)
             if not tags:
                 return "没认出引用的图，重发一次，或直接 @我 渠道 描述。"
             _remember_job(session_key, ch, tags)
@@ -775,6 +835,17 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
                 return "没认出引用的图，重发一次，或直接 @我 渠道 描述。"
             _remember_job(session_key, _DEFAULT_SKILL, tags)
             return _enqueue(_DEFAULT_SKILL, tags, text)
+        # 看图说话（@ 轮、没渠道词）：「这画的是什么/什么画风」→ 单次识图
+        # 中文描述，不进改图管道（那口是奔着生成提示词去的）。
+        if at_me and not ch and _DESCRIBE_RE.search(text):
+            from app.vision import describe
+            try:
+                reply = (describe(data_urls[0],
+                                  prompt=_DESCRIBE_PROMPT) or "").strip()
+            except Exception:
+                log.exception("[direct] 看图说话失败")
+                return "图没看成，稍后再试。"
+            return reply or "没认出这张图，重发一次试试。"
         # 其余（有意见 / 无渠道词）→ 改图管道；skip=关键词轮闭嘴吞轮。
         reply = _revise(text, data_urls, history, channel=ch, at_me=at_me)
         return reply if reply is not None else ""
@@ -847,6 +918,15 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
             return _enqueue(data["skill"], data["prompt"], text)
         return ("这条没转译成生图指令。照格式来：@我 渠道 描述\n\n"
                 + MENU_TEXT)
+
+    # 私聊单轮问答（2026-10-05）：问号结尾 + 没渠道词 + 非画图动词 →
+    # 单次 LLM 直答，无工具无循环。只认私聊（session 前缀 private_）——
+    # 群聊保持「生图或菜单」铁律。放在裸英文直通之前：「who are you?」
+    # 这类英文问句不该被当成提示词去生图。
+    if (at_me and not ch and (session_key or "").startswith("private_")
+            and _QA_RE.search(text) and not _INTENT_RE.search(text)):
+        reply = _qa_answer(text, history)
+        return reply or MENU_TEXT
 
     # 裸英文提示词（私聊直接粘贴、没打渠道词）→ 用户口径（2026-10-05）：
     # 英文就是最终提示词，直通默认渠道零调用。只在 @ 轮（含私聊）放行——

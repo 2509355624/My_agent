@@ -1047,6 +1047,18 @@ class SessionRunner:
                     save_history(history, run_agent, self.session_key)
                 except Exception:
                     log.exception("直达轮落史失败 %s", self.session_key)
+            else:
+                # 私聊单轮问答（direct_gen._qa_answer）：问答对落史，下一轮
+                # 问答才有上下文。只落真问答轮（_QA_LAST 里有记录的）。
+                qa = direct_gen.pop_qa(self.session_key)
+                if qa:
+                    try:
+                        history.append({"role": "user", "content": qa[0]})
+                        history.append({"role": "assistant",
+                                        "content": qa[1]})
+                        save_history(history, run_agent, self.session_key)
+                    except Exception:
+                        log.exception("问答轮落史失败 %s", self.session_key)
             return
         sent_by_tool = False
         # 后台直发的生图回执（见 generate_image._qq_receipt）：有它就不再采纳

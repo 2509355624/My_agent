@@ -820,5 +820,178 @@ class SkipConfirmTest(unittest.TestCase):
                                        prompt="cat"))
 
 
+class DescribeImageTest(unittest.TestCase):
+    """看图说话：@ 轮 + 引用图 + 描述类问题 → 单次识图中文描述。
+
+    不进改图管道（那口是奔着生成提示词去的）；只认 @ 轮；渠道词在场时不
+    劫（「sd 这画的是什么」仍走改图）；图生图机制词优先级更高。
+    """
+
+    def _decide(self, text, urls=("img1",), at_me=True,
+                describe_reply="红色的正方形。"):
+        with mock.patch.object(direct_gen, "llm") as m_llm_mod, \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="group_1"), \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=""), \
+             mock.patch("app.vision.describe",
+                        return_value=describe_reply) as m_describe, \
+             mock.patch.object(gi, "_generate_image",
+                               return_value=RECEIPT) as m_gen:
+            out = direct_gen.decide(text, [], False, data_urls=list(urls),
+                                    at_me=at_me)
+        return out, m_describe, m_gen, m_llm_mod
+
+    def test_describe_question_answers_in_chinese(self):
+        out, m_describe, m_gen, m_llm = self._decide("这画的是什么？")
+        self.assertEqual(out, "红色的正方形。")
+        m_describe.assert_called_once()
+        self.assertEqual(m_describe.call_args.kwargs.get("prompt"),
+                         direct_gen._DESCRIBE_PROMPT)
+        m_gen.assert_not_called()
+        m_llm.call_llm.assert_not_called()      # 纯识图，文本链路不参与
+
+    def test_describe_not_hijack_channel_revise(self):
+        # 渠道词在场 → 改图管道优先，识图 prompt 不是看图说话那套
+        out, m_describe, _m_gen, _m_llm = self._decide("sd 这画的是什么")
+        self.assertNotEqual(m_describe.call_args.kwargs.get("prompt"),
+                            direct_gen._DESCRIBE_PROMPT)
+        self.assertIn("改图请求没解析出来", out)
+
+    def test_keyword_round_no_describe(self):
+        # 关键词轮不启用看图说话（群聊保持安静口径）
+        _out, m_describe, _m_gen, _m_llm = self._decide("这画的是什么",
+                                                        at_me=False)
+        self.assertNotEqual(m_describe.call_args.kwargs.get("prompt"),
+                            direct_gen._DESCRIBE_PROMPT)
+
+
+class MultiImageReverseTest(unittest.TestCase):
+    """多图反推：渠道+档位分支放开到 3 张合并；生成路径不带中文序号。"""
+
+    def _decide(self, text, urls, describe_side):
+        with mock.patch.object(direct_gen, "llm") as _m_llm_mod, \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="group_1"), \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=""), \
+             mock.patch("app.vision.describe",
+                        side_effect=describe_side), \
+             mock.patch.object(gi, "_generate_image",
+                               return_value=RECEIPT) as m_gen:
+            out = direct_gen.decide(text, [], False, data_urls=list(urls),
+                                    at_me=True)
+        return out, m_gen
+
+    def test_tier_branch_merges_three_images_unnumbered(self):
+        out, m_gen = self._decide(
+            "三档", ["a", "b", "c"],
+            ["1girl", "2girls", "3girls"])
+        self.assertEqual(out, "")
+        self.assertEqual(m_gen.call_count, 1)
+        self.assertEqual(m_gen.call_args.args[0],
+                         "1girl, 2girls, 3girls")
+        self.assertNotIn("（第", m_gen.call_args.args[0])
+
+    def test_bare_at_reverse_keeps_numbering(self):
+        # 裸 @ + 多图（回给人看的反推文本）保留「（第 N 张）」序号
+        out, m_gen = self._decide(
+            "", ["a", "b"], ["tags one", "tags two"])
+        self.assertIn("（第 2 张）tags two", out)
+        m_gen.assert_not_called()
+
+
+class PrivateQATest(unittest.TestCase):
+    """私聊单轮问答：问号结尾 → 单次调用直答；群聊铁律不破。"""
+
+    def _decide(self, text, history=None, key="private_9", at_me=True,
+                llm_reply="NovelAI 是一个 AI 绘画服务。"):
+        with mock.patch.object(direct_gen.llm, "call_llm",
+                               return_value=llm_reply) as m_llm, \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value=key), \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=""), \
+             mock.patch.object(gi, "_generate_image",
+                               return_value=RECEIPT) as m_gen:
+            out = direct_gen.decide(text, list(history or []), False,
+                                    at_me=at_me)
+            self.addCleanup(direct_gen.pop_qa, key)
+        return out, m_llm, m_gen
+
+    def test_private_question_gets_single_llm_answer(self):
+        out, m_llm, m_gen = self._decide("你知道NovelAI是什么吗？")
+        self.assertEqual(out, "NovelAI 是一个 AI 绘画服务。")
+        m_llm.assert_called_once()              # 单次调用，无循环
+        m_gen.assert_not_called()
+        msgs = m_llm.call_args.args[0]
+        self.assertEqual(msgs[0]["role"], "system")
+        self.assertEqual(msgs[-1]["role"], "user")
+        self.assertEqual(msgs[-1]["content"], "你知道NovelAI是什么吗？")
+        # 本轮问答进了落史暂存，qq_bot 送出后 pop 落史
+        self.assertEqual(direct_gen.pop_qa("private_9"),
+                         ("你知道NovelAI是什么吗？",
+                          "NovelAI 是一个 AI 绘画服务。"))
+
+    def test_english_question_not_treated_as_prompt(self):
+        # 「who are you?」是英文问句，不该被裸英文直通拿去生图
+        out, m_llm, m_gen = self._decide("who are you?")
+        self.assertEqual(out, "NovelAI 是一个 AI 绘画服务。")
+        m_gen.assert_not_called()
+        m_llm.assert_called_once()
+
+    def test_group_question_still_menu(self):
+        # 群聊铁律：问句结尾照样菜单，绝不聊天。**@ 轮也要测**——只测
+        # 关键词轮（at_me=False）的话，at_me 那层短路会把 session 判定
+        # 的破坏掩护过去（反证实测）。
+        out, m_llm, m_gen = self._decide("你知道NovelAI是什么吗？",
+                                         key="group_1", at_me=False)
+        self.assertEqual(out, MENU_TEXT)
+        m_llm.assert_not_called()
+        m_gen.assert_not_called()
+        self.assertIsNone(direct_gen.pop_qa("group_1"))
+
+    def test_group_at_round_question_still_not_chat(self):
+        # 群聊 @ 轮 + 问号 → 也不进问答，走转译兜底回菜单
+        out, m_llm, m_gen = self._decide(
+            "你知道NovelAI是什么吗？", key="group_1", at_me=True,
+            llm_reply='{"skill": "", "prompt": ""}')
+        self.assertIn(MENU_TEXT, out)
+        m_gen.assert_not_called()
+
+    def test_drawing_intent_not_hijacked(self):
+        # 「画一只猫？」有画图动词 → 走转译生图，不进问答
+        out, m_llm, m_gen = self._decide(
+            "画一只猫？",
+            llm_reply='{"skill": "anima_clear", "prompt": "cat"}')
+        self.assertEqual(out, "")
+        m_gen.assert_called_once_with("cat", skill="anima_clear",
+                                      _skip_confirm=True)
+
+    def test_history_window_capped_and_system_head_skipped(self):
+        hist = [{"role": "system", "content": "head"}]
+        for i in range(8):
+            hist.append({"role": "user", "content": "q%d" % i})
+            hist.append({"role": "assistant", "content": "a%d" % i})
+        out, m_llm, _m_gen = self._decide("还在吗？", history=hist)
+        self.assertEqual(out, "NovelAI 是一个 AI 绘画服务。")
+        msgs = m_llm.call_args.args[0]
+        # system(问答人设) + 最近 6 条 + 本轮 = 8
+        self.assertEqual(len(msgs), 8)
+        self.assertEqual(msgs[1]["content"], "q5")   # 截到最后 6 条：q5 起
+        self.assertNotIn("head", [m["content"] for m in msgs])
+
+    def test_llm_failure_falls_back_to_menu(self):
+        with mock.patch.object(direct_gen.llm, "call_llm",
+                               side_effect=RuntimeError("down")), \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="private_9"), \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=""):
+            out = direct_gen.decide("在吗？", [], False, at_me=True)
+            self.addCleanup(direct_gen.pop_qa, "private_9")
+        self.assertEqual(out, MENU_TEXT)
+
+
 if __name__ == "__main__":
     unittest.main()
