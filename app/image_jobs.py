@@ -252,6 +252,9 @@ SKILL_TIMEOUTS = {
     "qwen_image_v1": 300, "nffa": 300,
     "hd_3_clear": 300, "hd_3_curvy": 300, "hd_3_gloss": 300,
     "krea2": 300,
+    # cunny（2026-10-05 加）：二段精修 2048×3072，单张估 2~4 分钟，
+    # 用户拍板配 300（.env 兜底 180 对它必误杀）
+    "cunny": 300,
 }
 
 
@@ -954,9 +957,10 @@ def _maybe_release_for_switch(job):
     ComfyUI 从不把上一张清干净——每张跑完 `Unloaded partially: ... remains
     loaded`，残留 1.6~2.1GB 一路叠上去。qwen 权重 10.5GB / 显存 11.94GB，
     叠两张之后 UNet 装不下、每步从内存搬 4.5GB，速度 ×8、撞超时（用户实录：
-    第 3 张起超级慢→卡死）。所以同一个渠道**连续提交满 N 张后，下一张提交
-    前先打一次 /free** 把显存腾干净——第 N+1 张付一次冷启动（约 30~60s），
-    换不来卡死态（那个态 /free 也救不回来，只能重启）。
+    第 3 张起超级慢→卡死）。**同一个渠道连续提交满 N 张后，下一张提交前
+    直接重启 ComfyUI**（2026-10-05 用户拍板：不打 /free——残留叠进换页态
+    后 /free 救不回来，重启是唯一能把显存+内存都真正还回去的手段；
+    约 60~90 秒不能出图，用户知情选定）。
     """
     chan = _COMFY
     skill = job.skill
@@ -968,12 +972,16 @@ def _maybe_release_for_switch(job):
         chan.same_run = 1
         return
     if prev == skill:
-        # 同渠道连画：数满 N 张就先 /free，别让残留把下一张挤进换页态。
+        # 同渠道连画：数满 N 张就整个重启 ComfyUI（显存+内存清零）。
         if 0 < COMFY_RELEASE_AFTER_SAME <= chan.same_run:
-            log.info("同渠道 %s 已连画 %d 张，先 /free 释放显存再提交第 %d 张",
-                     skill, chan.same_run, chan.same_run + 1)
-            chan.same_run = 1       # /free 之后模型全冷，这张算新一轮第 1 张
-            _report_and_free()
+            log.info("同渠道 %s 已连画 %d 张，下一张提交前彻底重启 ComfyUI",
+                     skill, chan.same_run)
+            chan.same_run = 1       # 重启后一个模型都不在，这张算新一轮第 1 张
+            if not _restart_comfy():
+                # 重启被拒/没回来：退回打一发 /free，至少把显存残留清了，
+                # 不能让队列原地卡死。
+                log.warning("ComfyUI 重启失败，退回 /free 清显存")
+                _report_and_free()
         else:
             chan.same_run += 1
         return

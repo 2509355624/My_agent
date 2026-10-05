@@ -1818,18 +1818,22 @@ class ChannelSwitchTest(_Base):
 
 
 class SameChannelReleaseTest(_Base):
-    """同渠道连画满 N 张后，下一张提交前先 /free（2026-10-05 加）。
+    """同渠道连画满 N 张后，下一张提交前彻底重启 ComfyUI（2026-10-05）。
 
     背景（用户实录）：qwen 权重 10.5GB / 显存 11.94GB，ComfyUI 每张跑完
     残留 1.6~2.1GB 不清，连画第 3 张起 UNet 装不下、每步从内存搬 4.5GB、
-    速度 ×8 → 卡死撞超时。所以同渠道连画满 COMFY_RELEASE_AFTER_SAME 张后
-    强制放一次显存：第 3 张付 30~60s 冷启动，换不进「/free 也救不回」的
-    换页死态。
+    速度 ×8 → 卡死撞超时。残留叠进换页态后 /free 救不回来，当天先是改成
+    连画 N 张打 /free，随后用户拍板升级成**直接重启**（显存+内存清零，
+    每次约 60~90 秒不能出图，知情选定）。
     """
 
     def setUp(self):
         super().setUp()
         self.events = []
+
+        def _restart():
+            self.events.append("restart")
+            return True
 
         def _free():
             self.events.append("free")
@@ -1838,7 +1842,8 @@ class SameChannelReleaseTest(_Base):
             self.events.append("submit")
             return "pid"
 
-        for target, repl in (("_report_and_free", _free),
+        for target, repl in (("_restart_comfy", _restart),
+                             ("_report_and_free", _free),
                              ("_queue_prompt", _submit)):
             p = mock.patch.object(image_jobs, target, repl)
             p.start()
@@ -1854,28 +1859,38 @@ class SameChannelReleaseTest(_Base):
             image_jobs.enqueue("group", "9", {"1": {}}, skill)
             image_jobs._drain()
 
-    def test_third_consecutive_submit_frees_first(self):
-        """连画第 3 张：先 free 再 submit，顺序不能反。"""
+    def test_third_consecutive_submit_restarts_first(self):
+        """连画第 3 张：先重启再 submit，顺序不能反。"""
         self._run("qwen_image_v1")
         self._run("qwen_image_v1")
         self.events.clear()
         self._run("qwen_image_v1")
-        self.assertEqual(self.events, ["free", "submit"])
+        self.assertEqual(self.events, ["restart", "submit"])
 
     def test_first_two_stay_hot(self):
-        """前 2 张不打 /free——释放不能退化成每张都冷启动。"""
+        """前 2 张不重启——不能退化成每张都重启。"""
         self._run("qwen_image_v1")
         self._run("qwen_image_v1")
         self.assertEqual(self.events, ["submit", "submit"])
 
     def test_cycle_every_third(self):
-        """释放后重新计数：节奏是第 3、6、9…张冷启动。"""
+        """重启后重新计数：节奏是第 3、6、9…张冷启动。"""
         for _ in range(6):
             self._run("qwen_image_v1")
-        # 6 张 = 6 次 submit + 2 次 free（第 3、6 张提交前）
+        # 6 张 = 6 次 submit + 2 次重启（第 3、6 张提交前）
         self.assertEqual(self.events,
-                         ["submit", "submit", "free", "submit",
-                          "submit", "free", "submit", "submit"])
+                         ["submit", "submit", "restart", "submit",
+                          "submit", "restart", "submit", "submit"])
+
+    def test_restart_failure_falls_back_to_free(self):
+        """重启被拒/没回来：退回打一发 /free，队列不能原地卡死。"""
+        with mock.patch.object(image_jobs, "_restart_comfy",
+                               return_value=False):
+            self._run("qwen_image_v1")
+            self._run("qwen_image_v1")
+            self.events.clear()
+            self._run("qwen_image_v1")
+        self.assertEqual(self.events, ["free", "submit"])
 
     def test_switch_resets_counter(self):
         """中途换渠道归零：切回来之后又要连画满 N 张才放。"""

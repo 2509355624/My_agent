@@ -61,7 +61,7 @@ _HD_TIERS = ("fast", "2", "3")
 _HD_STYLES = ("clear", "curvy", "gloss", "soft")
 _FIXED_SKILLS = ("anima_clear", "anima_curvy", "anima_gloss", "anima_soft",
                  "image_gen_v1", "image_gen_v1_hires", "krea2", "nffa",
-                 "qwen_image_v1", *image_jobs.NAI_SKILLS)
+                 "cunny", "qwen_image_v1", *image_jobs.NAI_SKILLS)
 _DEFAULT_SKILL = "anima_clear"
 
 
@@ -125,8 +125,9 @@ _STYLE_ALIASES = {"clear": "clear", "curvy": "curvy", "gloss": "gloss",
 # 固定渠道词：用户点名就锁定，不劳 LLM。前后不能是字母数字（防 sdXL、
 # 「qwen2」这类词中片段误中）。
 _FIXED_CHAN_MAP = {"sd": "image_gen_v1", "krea2": "krea2",
-                   "qwen": "qwen_image_v1", "nffa": "nffa", "nai": "nai"}
-_FIXED_CHAN_RE = re.compile(r"(?<![a-z0-9])(sd|krea2|qwen|nffa|nai)(?![a-z0-9])",
+                   "qwen": "qwen_image_v1", "nffa": "nffa", "nai": "nai",
+                   "cunny": "cunny"}
+_FIXED_CHAN_RE = re.compile(r"(?<![a-z0-9])(sd|krea2|qwen|nffa|nai|cunny)(?![a-z0-9])",
                             re.I)
 # 「基于图片帮我生成」这类空话：引用图 + 渠道词时不算修改意见，
 # 意思就是「反推这张图然后按渠道跑」。
@@ -368,8 +369,9 @@ MORE_CHAN_TEXT = (
     "（例：三档 女骑士）\n"
     "【画风】clear 清晰 / curvy 肉感 / gloss 油亮 / soft 柔和，跟在档位后"
     "（例：二档 gloss 少女），没打按该档默认\n"
-    "【固定渠道】sd / krea2 / qwen / nffa / nai"
-    "（例：qwen 水晶城堡；sd 支持多段描述用 --- 分隔一次多张）\n"
+    "【固定渠道】sd / krea2 / qwen / nffa / cunny / nai"
+    "（例：qwen 水晶城堡；sd 支持多段描述用 --- 分隔一次多张；"
+    "cunny = 两段超分重渠道，单张约 2~4 分钟）\n"
     "【随机口令】今日老婆 ｜ 随机萝莉 / 随机兽耳 / 随机女仆\n"
     "【引用玩法】引用提示词 + 渠道词 = 照跑；引用图 + 只@我 = 反推；"
     "引用图 + 档位 = 反推后生成；引用图 + 图生图 + 改法 = 照原图改；"
@@ -702,7 +704,7 @@ def _ledger_hit(source):
 
 # 认 seed 的本机渠道前缀（与 generate_image 工具描述里那句清单同源）：
 # NAI 不认 seed（传了直接报错），所以换档复刻只往这些渠道带种子。
-_LOCAL_SEED_SKILL_RE = re.compile(r"^(anima_|hd_|qwen_image_v1|image_gen_v1|krea2|nffa)")
+_LOCAL_SEED_SKILL_RE = re.compile(r"^(anima_|hd_|qwen_image_v1|image_gen_v1|krea2|nffa|cunny)")
 
 
 # 引用自家图 + 意见的**纯文本修正**模板（2026-10-05 用户拍板：账本里有当时

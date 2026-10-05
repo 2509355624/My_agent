@@ -51,6 +51,8 @@ class ChannelParseTest(unittest.TestCase):
                 ("krea2 一个女孩", "krea2", "一个女孩"),
                 ("qwen 写实街拍", "qwen_image_v1", "写实街拍"),
                 ("nffa 插画少女", "nffa", "插画少女"),
+                ("cunny 一个女孩", "cunny", "一个女孩"),   # 2026-10-05 新渠道
+                ("跑个cunny 白发兽耳", "cunny", "跑个  白发兽耳"),  # 动词残渣同 nai
                 ("这个猪 跑 nai", "nai", "这个猪"),   # 渠道词不限位置+动词残渣
                 ("nai 伊藤润二画风", "nai", "伊藤润二画风")):
             with self.subTest(text=text):
@@ -1230,6 +1232,62 @@ class PromptAskTest(unittest.TestCase):
         self.assertEqual(out, "")
         m_gen.assert_called_once()
         self.assertEqual(m_gen.call_args.args[0], "1girl, cat")  # 转译结果
+
+
+class WorkflowParamsTest(unittest.TestCase):
+    """钉死 sd 新参数与 cunny 工作流结构（2026-10-05 用户拍板）。"""
+
+    def test_sd_adopted_mimoi_series_params(self):
+        # sd（image_gen_v1）换成截图（妹妹系列）那套：544×960 / cfg3 /
+        # euler+karras / hires 开；LoRA 三连原本就有，不动。
+        import json
+        with open("skills/image_gen_v1/workflow.json", encoding="utf-8") as f:
+            wf = json.loads(f.read().replace("__SEED__", "1"))
+        bp = wf["53"]["inputs"]
+        self.assertEqual(bp["width"], 544)
+        self.assertEqual(bp["height"], 960)
+        self.assertEqual(bp["cfg"], 3)
+        self.assertEqual(bp["scheduler"], "karras")
+        self.assertTrue(bp["enable_hires"])
+        self.assertEqual((bp["hires_width"], bp["hires_height"]), (1080, 1920))
+        # LoRA 三连还在（contrast/saturation/outline，负强度）
+        loras = [wf[k]["inputs"] for k in ("101", "102", "103")]
+        self.assertTrue(all(x["strength_model"] < 0 for x in loras))
+
+    def test_cunny_workflow_structure(self):
+        # cunny = cunnyfuncky 的 API 化：两段 KSampler + 分块超分链，
+        # 两个采样器都要有 __SEED__（全局替换后同种子，两段确定成对）。
+        import json
+        with open("skills/cunny/workflow.json", encoding="utf-8") as f:
+            wf = json.load(f)
+        types = [n["class_type"] for n in wf.values()]
+        for t in ("ImageTile+", "easy hiresFix", "ImageUntile+",
+                  "VAEEncodeTiled", "VAEDecodeTiled"):
+            self.assertIn(t, types)
+        loras = [n["inputs"] for n in wf.values()
+                 if n["class_type"] == "LoraLoader"]
+        self.assertEqual(len(loras), 3)
+        self.assertTrue(all(x["strength_model"] < 0 for x in loras))
+        ks = [n["inputs"] for n in wf.values() if n["class_type"] == "KSampler"]
+        self.assertEqual(len(ks), 2)
+        self.assertTrue(all(k["seed"] == "__SEED__" for k in ks))
+        self.assertEqual((ks[0]["steps"], ks[0]["cfg"], ks[0]["denoise"]),
+                         (45, 4.97, 1.0))
+        self.assertEqual((ks[1]["steps"], ks[1]["denoise"]), (20, 0.35))
+
+    def test_cunny_build_t2i_fills_placeholders(self):
+        # 占位符机制对 cunny 生效：提示词进得去、种子替换成裸数字
+        import json
+        out = gi.build_t2i_workflow("cunny", "1girl, test", 424242)
+        self.assertIsNotNone(out)
+        text = out if isinstance(out, str) else json.dumps(out)
+        self.assertIn("1girl, test", text)
+        self.assertNotIn("__SEED__", text)
+        self.assertNotIn("__MULTI_PROMPTS__", text)
+        wf = out if isinstance(out, dict) else json.loads(out)
+        self.assertTrue(all(k["seed"] == 424242 for k in
+                            [n["inputs"] for n in wf.values()
+                             if n["class_type"] == "KSampler"]))
 
 
 if __name__ == "__main__":
