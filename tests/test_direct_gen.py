@@ -87,11 +87,24 @@ class ChannelParseTest(unittest.TestCase):
 
 class MenuAndGateTest(unittest.TestCase):
     def test_menu_keywords_return_constant(self):
-        for t in ("菜单", "/菜单", "！菜单", "help", "帮助", "指令",
+        for t in ("菜单", "！菜单", "help", "帮助", "指令",
                   ""):                      # 裸 @/裸名字（剥完啥都不剩）
             with self.subTest(t=t):
                 self.assertEqual(direct_gen.decide(t, [], False),
                                  direct_gen.MENU_TEXT)
+
+    def test_guide_keywords_return_detailed_constant(self):
+        # 2026-10-05 用户拍板：/菜单 和「使用指南」= 详细版；裸「菜单」
+        # 维持短菜单。全部零 LLM。
+        for t in ("/菜单", "／菜单", "使用指南", "详细使用指南",
+                  "使用说明", "胡桃桃：使用指南"):
+            with self.subTest(t=t):
+                with mock.patch.object(direct_gen.llm, "call_llm") as m_llm:
+                    out = direct_gen.decide(t, [], False)
+                self.assertEqual(out, direct_gen.GUIDE_TEXT)
+                m_llm.assert_not_called()
+        # 短菜单里要指路到详细版
+        self.assertIn("使用指南", direct_gen.MENU_TEXT)
 
     def test_attribution_prefix_is_stripped_before_menu_match(self):
         self.assertEqual(
