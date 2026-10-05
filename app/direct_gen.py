@@ -343,7 +343,8 @@ GUIDE_TEXT = (
     "【画风】clear清晰 / curvy肉感 / gloss油亮 / soft柔和；"
     "跟在档位后，打错或没打按该档默认\n"
     "【渠道】sd（一次多张，多段描述用 --- 分隔）/ krea2 / "
-    "qwen（慢·写实·能在图里写中文文字）/ nffa（插画）/ nai（云端）\n"
+    "qwen（慢·写实·能在图里写中文文字）/ nffa（插画）/ "
+    "cunny（超分重渠道·单张 2~4 分钟）/ nai（云端）\n"
     "【引用文字】引用带提示词的消息 + 只发渠道词（如「三档」「nai」）→ 照跑；"
     "豆包那种包着客套话的整段复制也认，自动抽英文本体；中英混合也行\n"
     "【引用自己的出图】\n"
@@ -381,7 +382,9 @@ MORE_CHAN_TEXT = (
 # 随机口令与今日老婆（2026-10-05）：斜杠可带可不带，认纯口令。
 _RANDOM_CMD_RE = re.compile(r"^\s*/?\s*随机(萝莉|兽耳|女仆)\s*$")
 _WAIFU_CMD_RE = re.compile(r"^\s*/?\s*今日老婆\s*$")
-_MORE_CHAN_RE = re.compile(r"^\s*/?\s*更多渠道\s*$")
+# 「/更多渠道」按**关键词**识别（2026-10-05 用户口径）：消息里含「更多渠道」即回
+# 全部跑法，不再要求整条精确匹配——用户实际发过「：更多渠道」（全角冒号）掉进兜底。
+_MORE_CHAN_RE = re.compile(r"更多渠道")
 
 _TRANSLATE_TEMPLATE = (
     "你是生图指令解析器。把用户的请求转成 JSON，只输出 JSON 本体，"
@@ -864,8 +867,8 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         _remember_job(session_key, _DEFAULT_SKILL, prompt)
         return _enqueue(_DEFAULT_SKILL, prompt, text,
                         resample_fn=_random_resample("waifu"))
-    # 「/更多渠道」：全部跑法罗列（零 API）。
-    if _MORE_CHAN_RE.match(text):
+    # 「/更多渠道」：全部跑法罗列（零 API）。关键词命中即可（见 _MORE_CHAN_RE）。
+    if _MORE_CHAN_RE.search(text):
         return MORE_CHAN_TEXT
 
     # 引用（图片或消息）+「提示词」→ 直接把提示词发回去，不生成（10-05

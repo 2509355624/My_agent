@@ -1108,9 +1108,19 @@ class RandomCommandTest(unittest.TestCase):
         self.assertEqual(m_gen.call_args.args[0], "random girl")
 
     def test_more_channels_text(self):
-        out, m_gen, _m_llm = self._decide("/更多渠道")
-        self.assertEqual(out, direct_gen.MORE_CHAN_TEXT)
-        m_gen.assert_not_called()
+        # 2026-10-05 用户口径：按**关键词**识别——带全角冒号、夹在别的话里都算，
+        # 不再要求整条精确匹配（用户实际发过「：更多渠道」掉进了兜底）。
+        for t in ("/更多渠道", "更多渠道", "：更多渠道", "／更多渠道",
+                  "大大怪 更多渠道", "还有更多渠道吗"):
+            with self.subTest(t=t):
+                out, m_gen, _m_llm = self._decide(t)
+                self.assertEqual(out, direct_gen.MORE_CHAN_TEXT)
+                m_gen.assert_not_called()
+
+    def test_cunny_listed_in_both_menus(self):
+        # 2026-10-05：cunny 渠道要同时出现在「使用指南」和「/更多渠道」里。
+        self.assertIn("cunny", direct_gen.GUIDE_TEXT)
+        self.assertIn("cunny", direct_gen.MORE_CHAN_TEXT)
 
     # ── 被拦静默重抽（2026-10-05）：图是机器人推的服务，不回「未过审」──
 
