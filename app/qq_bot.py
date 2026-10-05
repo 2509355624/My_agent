@@ -1018,9 +1018,10 @@ class SessionRunner:
             finally:
                 qq_api.clear_context()
             return
-        # 直达生图管道（2026-10-04，10-05 扩成 agent 退场版）：@ 轮要么走工具
-        # 要么回菜单——生图意图 → 一次轻量 LLM 转译直接入队；引用图+意见 →
-        # 改图管道（识图+原提示词→修正→重生成）；其余一切 @ → 菜单常量。
+        # 直达生图管道（2026-10-04，10-05 两次扩版）：@ 轮和关键词轮都过一次
+        # 轻量 LLM（direct_gen.decide）——AI 判意图：生图 → 直接入队；聊天/
+        # 提问 → 把 reply 发出去；引用图+意见 → 改图管道（识图→修正→重生成）。
+        # **不再有「命中触发词就回菜单」这条兜底**（2026-10-05 23:xx 用户拍板）。
         # agent 循环只留给总开关关闭（DIRECT_GEN=0）和主动接话轮。
         # 见 app/direct_gen.py。
         direct_reply = direct_gen.decide(own_text, history, voluntary,
@@ -1048,8 +1049,8 @@ class SessionRunner:
                 except Exception:
                     log.exception("直达轮落史失败 %s", self.session_key)
             else:
-                # 私聊单轮问答（direct_gen._qa_answer）：问答对落史，下一轮
-                # 问答才有上下文。只落真问答轮（_QA_LAST 里有记录的）。
+                # 聊天回话轮（direct_gen._translate 的 {reply} 态）：问答对
+                # 落史，下一轮才有上下文。只落真回话轮（_QA_LAST 里有记录的）。
                 qa = direct_gen.pop_qa(self.session_key)
                 if qa:
                     try:
