@@ -323,6 +323,7 @@ MENU_TEXT = (
     "引用提示词 + 渠道词 → 照跑；出图回执 +「再来一张」→ 换种子重跑\n"
     "引用图：只@我 = 反推提示词 ｜ 加档位 = 直接生成 ｜ 说改什么 = 改图"
     " ｜ 说「图生图」= 照原图改\n"
+    "引用回执/图片 +「提示词」→ 把提示词发你\n"
     "发「/更多渠道」看全部跑法 ｜ 「使用指南」看详细版"
 )
 
@@ -346,6 +347,7 @@ GUIDE_TEXT = (
     "  引用图 + 说改什么（「把衣服换成jk」）→ 拿当时的提示词直接改，最快\n"
     "  引用图 + 只@我 → 返回这张图的反推提示词\n"
     "  引用图 + 档位（如「三档」）或「生成这个」→ 反推后直接生成\n"
+    "  引用回执或图片 +「提示词」→ 直接把这张图的提示词发你\n"
     "【改图】引用图 + 明说「图生图」+ 改什么（「图生图 把头发换成银色」）"
     "→ 照着原图改，构图不变；不点名渠道默认动漫档，点名 qwen 走精修（慢）\n"
     "【看真图】引用图 + 说「识图 / 反推 / 看图」→ 强制看图（不用账本缓存）\n"
@@ -669,6 +671,11 @@ def _reverse_text(tags):
 # （2026-10-05 用户拍板）。想看真图（比如画面和提示词有出入）就明说「识图」。
 _VISION_ASK_RE = re.compile(r"识图|反推|看图|读图|识别|图里|优化提示词")
 
+# 引用 +「提示词」→ 直接把提示词发回去（2026-10-05 用户口径）。实录
+# （group_482079537，10-04）：引用自家回执说「提示词给一下」，被当成画图
+# 请求重新跑了一张——要提示词就该给提示词，这是查账/查账本，不是生图。
+_PROMPT_ASK_RE = re.compile(r"提示词")
+
 
 def _ledger_hit(source):
     """引用正文/原话里的 HT 编号 → 账本 (提示词, 渠道, 种子)。没中返回 ("", "", "")。
@@ -853,6 +860,22 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     # 「/更多渠道」：全部跑法罗列（零 API）。
     if _MORE_CHAN_RE.match(text):
         return MORE_CHAN_TEXT
+
+    # 引用（图片或消息）+「提示词」→ 直接把提示词发回去，不生成（10-05
+    # 用户口径）。优先级：账本（HT 编号，零调用最准）→ 老回执
+    # 「提示词：…」剥取（零调用）→ 引用图看图反推（turbo 1 次）。
+    # 图片引用的 quoted 可能为空，所以两者任一在场即触发。
+    if (quoted or data_urls) and _PROMPT_ASK_RE.search(text):
+        own_prompt, _skill, _own_seed = _ledger_hit(quoted)
+        if own_prompt:
+            return _reverse_text(own_prompt)
+        m_old = re.search(r"提示词[：:]\s*(.+)", quoted, re.S)
+        if m_old:
+            return _reverse_text(m_old.group(1).strip())
+        if data_urls:
+            return _reverse_text(_recall_tags(data_urls))
+        return ("引用里没找到提示词。引用我发的出图回执，或引用图片说"
+                "「提示词」。")
 
     ch, desc = _parse_channel(text)
 
