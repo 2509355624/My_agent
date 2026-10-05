@@ -154,6 +154,7 @@ unet 4487MB ≈ 10.5GB 权重，而空闲可用只有 10.78GB。当天实测的�
 
 import collections
 import logging
+import random
 import threading
 import time
 import uuid
@@ -736,7 +737,7 @@ def snapshot():
 
 
 def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
-            intent=None, seed=None):
+            intent=None, seed=None, resample_fn=None):
     """把一张图排进**它该去的那条通道**的队列，返回 (job, reason)。
 
     prompt 是模型写的那段原始提示词，只用来**出图后记进账本**（编号 → 提示词，
@@ -777,6 +778,12 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
         job = Job(target, target_id, workflow, skill, weight, chan.seq,
                   nai_i2i=nai_i2i, prompt=prompt, intent=intent, seed=seed,
                   chan=chan)
+        # 随机口令的「被拦静默重抽」钩子（2026-10-05）：resample_fn 是无参
+        # 可调用体，被审核拦下时由 worker 调它换一条新提示词，同 job 重跑。
+        # 最多重抽 2 次（3 尝试）；普通生图不传，拦截行为与从前完全一致。
+        job.resample_fn = resample_fn
+        job.retry_left = 2 if resample_fn else 0
+        job.audit_silent = bool(resample_fn)
         chan.queue.append(job)
         chan.per_session[key] = cur + 1
     if weight > 1:
@@ -1271,9 +1278,15 @@ def process(job):
         return                      # 网页侧自己从 job.entry 取
 
     try:
+        # audit_silent（随机口令）→ _send_image 里审核拦下时**不回话**，
+        # 话术由这里统一管：重抽期间完全静默，重抽尽才回一句软话术。
+        silent = getattr(job, "audit_silent", False)
+        # notify 只在静默 job 上降级——普通 job 的调用形态与从前完全一致
+        # （worker 层有别的 _send_image 替身按老签名接，别无条件加参）。
         sent = sum(1 for name in names
                    if _send_image(job.target, job.target_id, name, job.tag,
-                                  skill=job.skill or "", seed=job.seed))
+                                  skill=job.skill or "", seed=job.seed,
+                                  **({"notify": False} if silent else {})))
         if sent:
             log.info("生图完成已发回 %s %s：%d/%d 张（编号 %s，渠道 %s，"
                      "seed %s，耗时 %.1f 秒）",
@@ -1288,6 +1301,32 @@ def process(job):
                            skill=job.skill or "", target=job.target,
                            target_id=job.target_id,
                            seed="" if job.seed is None else job.seed)
+        elif silent and getattr(job, "resample_fn", None) and job.retry_left > 0:
+            # 随机口令被拦 → **静默重抽**（2026-10-05 用户拍板）：图是机器人
+            # 自己推的服务，不是用户点的单，回「未过审」没道理。换一条新
+            # 提示词、掷新种子，同 job 重跑——不重新入队（不再扣额度、不占
+            # 新的并发槽，worker 线程内串行重跑没有死锁风险）。tag 保持不变。
+            job.retry_left -= 1
+            new_prompt = job.resample_fn()
+            if new_prompt:
+                from app.tools.normal import generate_image as gi
+                new_seed = random.randint(0, 2 ** 31 - 1)
+                wf = gi.build_t2i_workflow(job.skill, new_prompt, new_seed)
+                if wf is not None:
+                    log.info("随机图被审核拦下，静默重抽（剩 %d 次）%s %s",
+                             job.retry_left, job.target, job.target_id)
+                    job.workflow = wf
+                    job.prompt = new_prompt
+                    job.seed = new_seed
+                    job.error = None
+                    job.started = time.time()
+                    return process(job)
+            # 重抽拿不出新提示词 / 模板没了 → 落到下面的兜底话术
+            _notify_random_blocked(job)
+        elif silent:
+            # 重抽已尽（或拿不出新提示词）：回一句软话术，**不提审核**——
+            # 用户视角这只是机器人自己出的图没画好。
+            _notify_random_blocked(job)
         else:
             # 全被审核拦下了。**不当失败处理**：图确实画出来了、也通知过对方了
             # （image_audit 自己回的那句提示），再走 _notice 就是重复报错，
@@ -1723,7 +1762,28 @@ def _caption(tag, path, skill, image_out, seed=None):
     return " · ".join(bits)
 
 
-def _send_image(target, target_id, filename, tag="", skill="", seed=None):
+# 随机口令重抽尽后的兜底话术（image_audit 的 BLOCKED_NOTICE/FAILED_NOTICE
+# 都不合适：那是「用户点的单被拦」的话术，随机图是机器人自己推的服务）。
+RANDOM_BLOCKED_NOTICE = "这轮抽到的画面没画好，再发一次口令试试～"
+
+
+def _notify_random_blocked(job):
+    """随机口令重抽尽的兜底话术。**绝不提审核**——用户视角这只是机器人
+    自己出的图没画好，提「审核」反而引人去故意试探边界。发不出去就算了，
+    不抛异常（跟 _notify_blocked 同一纪律）。"""
+    from app import qq_api
+    try:
+        if job.target == "group":
+            qq_api.send_group(job.target_id, RANDOM_BLOCKED_NOTICE)
+        else:
+            qq_api.send_private(job.target_id, RANDOM_BLOCKED_NOTICE)
+    except Exception as exc:
+        log.warning("随机图兜底话术发送失败 %s %s：%s",
+                    job.target, job.target_id, exc)
+
+
+def _send_image(target, target_id, filename, tag="", skill="", seed=None,
+                notify=True):
     """发回原会话。先过 image_out 甩掉 PNG 里的工作流元数据，编码格式看管理页开关。
 
     返回 True = 真发出去了。审核拦下时返回 False（**不抛异常**）——
@@ -1741,7 +1801,8 @@ def _send_image(target, target_id, filename, tag="", skill="", seed=None):
     from app.agents import image_send_format
     fmt = image_send_format(QQ_AGENT_ID, target, target_id)
     path = image_out.prepare_for_send(filename, fmt)
-    if not image_audit.allow_send(path, QQ_AGENT_ID, target, target_id):
+    if not image_audit.allow_send(path, QQ_AGENT_ID, target, target_id,
+                                  notify=notify):
         return False
     qq_api.send_image(target, target_id, path,
                       caption=_caption(tag, path, skill, image_out, seed))

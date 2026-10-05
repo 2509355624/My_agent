@@ -278,6 +278,16 @@ class AllowSendTest(unittest.TestCase):
                 self.path, "qq", "group", "123"))
         self.assertEqual(notify.call_count, 1)
 
+    def test_notify_false_silent_block(self):
+        """notify=False（随机口令静默重抽）：拦下但**不回话**，话术归 image_jobs。"""
+        with self._with_enabled(True), \
+             mock.patch("app.vision.describe",
+                        return_value='{"allow": false, "category": "pose"}'), \
+             mock.patch.object(image_audit, "_notify_blocked") as notify:
+            self.assertFalse(image_audit.allow_send(
+                self.path, "qq", "group", "123", notify=False))
+        notify.assert_not_called()
+
     def test_web_target_always_passes(self):
         """target=None（网页端）直接放行，连开关都不读。"""
         with mock.patch.object(agents, "image_audit_enabled") as gate, \

@@ -553,13 +553,32 @@ def _humanize_error(result):
     return first if first.endswith("。") else first + "。"
 
 
-def _enqueue(skill, prompt, text, source_image=False, seed=None):
+def _random_resample(kind):
+    """随机口令被审核拦下时，worker 用来换一条新提示词的可调用体。
+
+    kind：萝莉 / 兽耳 / 女仆（同主题重抽）或 waifu（整个角色重抽）。
+    任何异常都吞掉返回 ""——重抽失败走兜底话术，不该炸 worker 线程。
+    """
+    def fn():
+        try:
+            if kind == "waifu":
+                return random_tags.draw_waifu()[1]
+            return random_tags.sample_prompt(kind)
+        except Exception:
+            log.exception("[direct] 随机重抽失败（%s）", kind)
+            return ""
+    return fn
+
+
+def _enqueue(skill, prompt, text, source_image=False, seed=None,
+             resample_fn=None):
     """转译结果落队。返回要发回会话的文本；成功且回执已直发返回 ""。
 
     source_image=True → 垫本轮引用的那张图（传 "1"，下游 comfy_src.resolve
     解析；引用图取不到会报错回给用户）。仅图生图路由会传。
     seed 非空 → 复刻账本里那张图的种子（引用 HT 图换档场景），下游
     _resolve_seed 会校验范围；只往本机渠道传（NAI 拒收 seed）。
+    resample_fn 非空 → 随机口令的「被拦静默重抽」钩子（见 _random_resample）。
     """
     from app.tools.normal import generate_image as gi
     extra = {}
@@ -567,6 +586,8 @@ def _enqueue(skill, prompt, text, source_image=False, seed=None):
         extra["source_image"] = "1"
     if seed:
         extra["seed"] = seed
+    if resample_fn:
+        extra["resample_fn"] = resample_fn
     try:
         result = gi._generate_image(
             prompt, skill=skill, _skip_confirm=True, **extra)
@@ -815,15 +836,20 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
 
     # ── 随机口令（2026-10-05）：/随机萝莉 /随机兽耳 /随机女仆 /今日老婆 ──
     # 策展词池直拼提示词，零 LLM；走默认档入队，额度闸门照常拦。
+    # resample_fn：图是**机器人自己推的服务**，被审核拦下时 worker 静默换一条
+    # 重抽（最多 2 次），绝不回「未过审」——用户点的单被拦才走那套话术。
     m = _RANDOM_CMD_RE.match(text)
     if m:
-        prompt = random_tags.sample_prompt(m.group(1))
+        theme = m.group(1)
+        prompt = random_tags.sample_prompt(theme)
         _remember_job(session_key, _DEFAULT_SKILL, prompt)
-        return _enqueue(_DEFAULT_SKILL, prompt, text)
+        return _enqueue(_DEFAULT_SKILL, prompt, text,
+                        resample_fn=_random_resample(theme))
     if _WAIFU_CMD_RE.match(text):
         _cn, prompt = random_tags.draw_waifu()
         _remember_job(session_key, _DEFAULT_SKILL, prompt)
-        return _enqueue(_DEFAULT_SKILL, prompt, text)
+        return _enqueue(_DEFAULT_SKILL, prompt, text,
+                        resample_fn=_random_resample("waifu"))
     # 「/更多渠道」：全部跑法罗列（零 API）。
     if _MORE_CHAN_RE.match(text):
         return MORE_CHAN_TEXT

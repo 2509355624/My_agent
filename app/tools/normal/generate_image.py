@@ -716,12 +716,64 @@ def _canvas_long_side(workflow):
     return None
 
 
+def apply_prompt_placeholders(workflow_str, prompt, seed):
+    """把提示词和种子填进工作流 JSON 字符串，返回工作流 dict。
+
+    从 `_generate_image` 抽出来（2026-10-05）：随机口令被审核拦下后 worker
+    要**同 job 重跑**，重跑时得用同一套规则重建工作流——规则只留这一份，
+    两处共用，别让转义规则悄悄分叉。
+
+    替换规则（原样保留，别动）：
+    - `__MULTI_PROMPTS__` → 转义后的提示词。可以独占一个 JSON 字符串，也
+      可以嵌在更大字符串里（如节点 4 = "@kibro, __MULTI_PROMPTS__"，工作流
+      自带固定画风/触发词前缀）。统一按「字符串内部转义替换」处理。
+    - `"__SEED__"`（连引号）→ 裸数字。ComfyUI 的 KSampler.seed 是 INT 字段，
+      只替内容、留着引号就变成字符串 "123456"，提交时类型校验不过；老写法
+      是给自定义节点用的（对 seed 类型不敏感），换标准 KSampler 后必须落成
+      真数字。`__SEED__` 裸占位符兜底再替一遍。
+    - ⚠️ 动漫系渠道（anima_* / hd_*_*）是**两段采样**，工作流里有两个
+      KSampler、两处 `__SEED__`，而这里是**全局替换** ⇒ 一二段拿到同一个数。
+      「这张图的种子」始终就是报出去的那一个数。
+    """
+    prompt_escaped = (prompt.replace('\\', '\\\\').replace('"', '\\"')
+                      .replace('\n', '\\n').replace('\r', ''))
+    workflow_str = workflow_str.replace("__MULTI_PROMPTS__", prompt_escaped)
+    workflow_str = workflow_str.replace('"__SEED__"', str(seed))
+    workflow_str = workflow_str.replace("__SEED__", str(seed))  # 兜底：裸占位符
+    return json.loads(workflow_str)
+
+
+def _apply_i2i_placeholders(workflow, uploaded, denoise_txt):
+    """图生图专用占位符（只在 workflow_i2i.json 里出现）。"""
+    for key, val in (('"__SOURCE_IMAGE__"', json.dumps(uploaded)),
+                     ('"__DENOISE__"', denoise_txt)):
+        s = json.dumps(workflow).replace(key, val)
+        workflow = json.loads(s)
+    return workflow
+
+
+def build_t2i_workflow(skill, prompt, seed):
+    """按渠道模板 + 提示词 + 种子构建**文生图**工作流 dict。
+
+    供 worker 的「随机口令被拦静默重抽」用（image_jobs.process）。skill 不
+    存在或没有工作流返回 None（重抽路径拿到 None 就放弃重试，走兜底话术）。
+    """
+    sd = load_skill(skill)
+    if not sd or not sd["workflow"]:
+        return None
+    return apply_prompt_placeholders(json.dumps(sd["workflow"]),
+                                     prompt, seed)
+
+
 def _generate_image(prompt, skill=None, lora=None, source_image="",
                     denoise=None, seed=None, use_character=None,
-                    _skip_confirm=False):
+                    _skip_confirm=False, resample_fn=None):
     # `_skip_confirm`：直达生图管道（app/direct_gen.py）专用——用户打的就是
     # 「渠道+描述」的明确指令，等于已经确认过了，再拦一发确认卡纯属多一轮。
     # agent 路径保持默认 False（拦）。
+    # `resample_fn`（2026-10-05）：**随机口令专用**——无参可调用体，被审核拦下
+    # 时由 worker 调它换一条新提示词同 job 重跑（静默，不回「未过审」，见
+    # image_jobs.process 的拦截分支）。普通生图不传，拦截行为与从前一致。
     # `denoise`：**只有 NAI 图生图**消费它（见下面的 `_nai_strength(denoise)`）。
     # 本机渠道的图生图强度由 `I2I_DENOISE` 定死，不收这个参数——见下面的 i2i 分支。
     # `source_image` 两边都认（本机走 workflow_i2i.json，NAI 走云端）。
@@ -933,31 +985,11 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
         workflow = i2i
 
     workflow_str = json.dumps(workflow)
-
-    # 替换占位符。seed 已经在上面定好了（对方点名就照用，没点名才随机）。
-    #
-    # ⚠️ 动漫系渠道（anima_* / hd_*_*）是**两段采样**，工作流里有两个 KSampler、
-    # 两处 `__SEED__`，而下面这两行是**全局替换** ⇒ 一二段拿到的是同一个数。
-    # 所以「这张图的种子」始终就是报出去的那一个数：把它填回 ComfyUI 的两个
-    # KSampler 就能复现。别看到「两个采样器」就以为要报两个种子。
-    # __MULTI_PROMPTS__ 可以独占一个 JSON 字符串，也可以嵌在更大字符串里
-    # （如节点 4 = "@kibro, __MULTI_PROMPTS__"，工作流自带固定画风/触发词前缀）。
-    # 统一按「字符串内部转义替换」处理，两种都兼容。
-    prompt_escaped = prompt.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '')
-    workflow_str = workflow_str.replace("__MULTI_PROMPTS__", prompt_escaped)
-    # 连引号一起换掉：ComfyUI 的 KSampler.seed 是 INT 字段，只替内容、留着引号
-    # 就变成字符串 "123456"，提交时类型校验不过。老写法是给自定义节点用的
-    # （它对 seed 类型不敏感），换成标准 KSampler 后必须落成真数字。
-    workflow_str = workflow_str.replace('"__SEED__"', str(seed))
-    workflow_str = workflow_str.replace("__SEED__", str(seed))  # 兜底：裸占位符
+    workflow = apply_prompt_placeholders(workflow_str, prompt, seed)
     if is_i2i:
         # 垫图专用占位符：源图文件名（按 JSON 字符串转义填，避免文件名里的
         # 引号把 JSON 打破）与重绘强度。这两个只在 workflow_i2i.json 里出现。
-        workflow_str = workflow_str.replace('"__SOURCE_IMAGE__"',
-                                            json.dumps(uploaded))
-        workflow_str = workflow_str.replace('"__DENOISE__"', denoise_txt)
-
-    workflow = json.loads(workflow_str)
+        workflow = _apply_i2i_placeholders(workflow, uploaded, denoise_txt)
 
     # 用户点名换 lora 才走这段；不传 lora 时一行替换逻辑都不执行，
     # 工作流原样提交，跟从前完全一样。
@@ -1005,7 +1037,8 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 上面填好的 workflow。seed 同样一路带到底：发图那行 caption 要贴它、
     # 账本要存它（见 image_jobs._caption / image_log.save）。
     job, reason = image_jobs.enqueue(target, target_id, workflow, skill,
-                                     prompt=prompt, intent=intent, seed=seed)
+                                     prompt=prompt, intent=intent, seed=seed,
+                                     resample_fn=resample_fn)
     if reason is not None:
         # 拒收时工作流还在手上，ComfyUI 一点算力都没浪费，也不会留下「画了
         # 却没人发」的孤儿图。

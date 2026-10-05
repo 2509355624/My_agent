@@ -1065,6 +1065,38 @@ class RandomCommandTest(unittest.TestCase):
         self.assertEqual(out, direct_gen.MORE_CHAN_TEXT)
         m_gen.assert_not_called()
 
+    # ── 被拦静默重抽（2026-10-05）：图是机器人推的服务，不回「未过审」──
+
+    def test_random_commands_pass_resample_fn(self):
+        out, m_gen, _m_llm = self._decide("/随机萝莉")
+        fn = m_gen.call_args.kwargs.get("resample_fn")
+        self.assertTrue(callable(fn))
+        self.assertIn("loli", fn())          # 重抽还是同主题
+        self.assertIn("solo", fn())
+
+    def test_waifu_resample_redraws_from_pool(self):
+        out, m_gen, _m_llm = self._decide("/今日老婆")
+        fn = m_gen.call_args.kwargs.get("resample_fn")
+        pool = {e["tag"] for e in random_tags.DEFAULT_WAIFU_POOL}
+        self.assertIn(m_gen.call_args.args[0].split(",")[0].strip(), pool)
+        self.assertIn(fn().split(",")[0].strip(), pool)   # 重抽换角色、仍出自池
+
+    def test_user_requested_prompt_has_no_resample(self):
+        # 用户点的单被拦 → 照旧回「未过审」，绝不静默换图
+        with mock.patch.object(direct_gen, "llm") as m_llm_mod, \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="group_1"), \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=""), \
+             mock.patch.object(gi, "_generate_image",
+                               return_value=RECEIPT) as m_gen:
+            m_llm_mod.call_llm.return_value = (
+                '{"skill": "anima_clear", "prompt": "a cat"}')
+            out = direct_gen.decide("画一只猫", [], False, at_me=True)
+            self.addCleanup(direct_gen._LAST_JOB.pop, "group_1", None)
+        self.assertEqual(out, "")
+        self.assertIsNone(m_gen.call_args.kwargs.get("resample_fn"))
+
 
 if __name__ == "__main__":
     unittest.main()

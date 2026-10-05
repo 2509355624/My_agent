@@ -2771,5 +2771,109 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
             TimeoutError("x"), skill="qwen_image_v1"))
 
 
+class SilentRetryTest(_Base):
+    """随机口令被审核拦下 → **静默重抽**（2026-10-05）。
+
+    图是机器人自己推的服务，不该把「未过审」甩给用户：拦下 → resample_fn
+    换提示词同 job 重跑（不重新入队、不再扣额度），重抽期间零话术，重抽尽
+    才回一句**不提审核**的软话术。用户点的单（无 resample_fn）行为不变。
+    """
+
+    def _patch_send(self, results):
+        """_send_image 替身：按 results 顺序决定放行/拦截，记录 notify。"""
+        seen = []
+        def fake_send(target, tid, name, tag="", skill="", seed=None,
+                      notify=True):
+            seen.append({"notify": notify, "seed": seed})
+            return results.pop(0) if results else False
+        p = mock.patch.object(image_jobs, "_send_image", fake_send)
+        p.start()
+        self.addCleanup(p.stop)
+        return seen
+
+    def _run(self, resample_fn=None, prompt="p0"):
+        entry = {"outputs": {"9": {"images": [{"filename": "a.png"}]}}}
+        with mock.patch.object(image_jobs, "wait_done", return_value=entry), \
+             mock.patch.object(image_jobs.image_log, "save") as m_save:
+            job, reason = image_jobs.enqueue("group", "9", {"1": {}},
+                                             "anima_clear", prompt=prompt,
+                                             resample_fn=resample_fn)
+            self.assertIsNone(reason)
+            image_jobs._drain()
+        return job, m_save
+
+    def test_retry_until_pass_is_silent(self):
+        seen = self._patch_send([False, False, True])   # 前两张拦，第三张过
+        draws = []
+        def resample():
+            draws.append(len(draws))
+            return "p%d" % (len(draws),)
+        job, m_save = self._run(resample_fn=resample)
+        self.assertEqual(len(seen), 3)                  # 3 次尝试
+        self.assertFalse(seen[0]["notify"])             # 重抽期间全部静默
+        self.assertFalse(seen[1]["notify"])
+        self.assertFalse(seen[2]["notify"])             # silent 标记全程不变
+        self.assertEqual(job.prompt, "p2")              # 账本记的是发出那张
+        self.assertEqual(job.retry_left, 0)
+        self.assertEqual(self.sent_texts, [])           # 自始至终零话术
+        m_save.assert_called_once()                     # 只有发出那张进账本
+        self.assertEqual(m_save.call_args.kwargs["prompt"], "p2")
+
+    def test_retry_exhausted_sends_soft_notice(self):
+        self._patch_send([])                            # 全拦
+        with mock.patch("app.qq_api.send_group") as sg:
+            job, _ = self._run(resample_fn=lambda: "pn")
+        self.assertEqual(sg.call_args.args,
+                         ("9", image_jobs.RANDOM_BLOCKED_NOTICE))
+        self.assertNotIn("审核", image_jobs.RANDOM_BLOCKED_NOTICE)
+        self.assertEqual(job.retry_left, 0)
+        self.assertEqual(job.prompt, "pn")              # 重抽尽：停在最后一条
+
+    def test_resample_returns_empty_falls_back_to_notice(self):
+        # 重抽拿不出新提示词 → 不重跑，直接兜底话术
+        self._patch_send([False])
+        with mock.patch("app.qq_api.send_group") as sg:
+            self._run(resample_fn=lambda: "")
+        self.assertEqual(sg.call_args.args,
+                         ("9", image_jobs.RANDOM_BLOCKED_NOTICE))
+
+    def test_user_job_keeps_old_blocked_behavior(self):
+        # 用户点的单（无 resample_fn）：拦下即回 image_audit 的话术，不重抽。
+        # 话术本身在 allow_send 里发（此处 mock 掉），worker 层零动作。
+        seen = self._patch_send([False])
+        with mock.patch("app.qq_api.send_group") as sg:
+            self._run()                                 # 不传 resample_fn
+        self.assertEqual(len(seen), 1)
+        self.assertTrue(seen[0]["notify"])
+        sg.assert_not_called()
+
+
+class BuildWorkflowTest(unittest.TestCase):
+    """build_t2i_workflow：重抽重建工作流的规则与 _generate_image 共用一份。
+
+    转义规则原来内联在 _generate_image 里，抽出来给 worker 的静默重抽复用——
+    这里钉住规则本体：提示词转义、种子落成真数字、占位符零残留。
+    """
+
+    def test_escape_seed_and_no_placeholder_left(self):
+        wf = generate_image.build_t2i_workflow(
+            "anima_clear", 'a"b\\c\nd __SEED__ mess', 42)
+        s = json.dumps(wf)
+        self.assertNotIn("__MULTI_PROMPTS__", s)
+        self.assertNotIn("__SEED__", s)                 # 引号版和裸版都清干净
+        # 种子替换是**全局**的：提示词里恰好写着 __SEED__ 也会被换掉——
+        # 既有行为（与重构前同一份代码），这里钉住它防将来悄悄变向。
+        self.assertIn('a\\"b\\\\c\\nd 42 mess', s)
+        # 种子是 INT：节点里必须是数字 42，不是字符串 "42"
+        seeds = [n["inputs"]["seed"] for n in wf.values()
+                 if isinstance(n, dict) and "seed" in n.get("inputs", {})]
+        self.assertTrue(seeds and all(v == 42 for v in seeds))
+        self.assertTrue(all(isinstance(v, int) for v in seeds))
+
+    def test_missing_skill_returns_none(self):
+        self.assertIsNone(generate_image.build_t2i_workflow(
+            "no_such_skill_xyz", "x", 1))
+
+
 if __name__ == "__main__":
     unittest.main()

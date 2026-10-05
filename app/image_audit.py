@@ -289,13 +289,17 @@ def _notify_blocked(target, target_id, verdict):
         log.warning("审核拦截后通知失败 %s %s：%s", target, target_id, exc)
 
 
-def allow_send(path, agent_id, target, target_id):
+def allow_send(path, agent_id, target, target_id, notify=True):
     """发图前的总闸。**True = 可以发**。
 
     这是三个发图点唯一需要调用的函数：
     - 这个会话没开审核 → 直接 True（一次 settings 读，不发网络请求）；
     - 开了 → 审。**判违规和审核没生效都返回 False**（fail-closed），
       各自回一句提示；只有明确判合格才 True。
+
+    notify=False（2026-10-05）：拦下时**不回话**——随机口令的静默重抽用，
+    话术由 image_jobs 统一管（重抽期间出声会暴露内部机制，重抽尽才回一句
+    不提审核的软话术）。默认 True = 老行为，判违规/没生效各自回话。
 
     target 传 None（网页端）时按「没开会话」处理——审核只管 QQ 外发那一步，
     网页端是自己在本地看的。
@@ -320,5 +324,6 @@ def allow_send(path, agent_id, target, target_id):
 
     log.info("图未过审，拦下不发 %s %s：failed=%s category=%s reason=%s",
              target, target_id, verdict.failed, verdict.category, verdict.reason)
-    _notify_blocked(target, target_id, verdict)
+    if notify:
+        _notify_blocked(target, target_id, verdict)
     return False
