@@ -449,6 +449,13 @@ def _post_openai(cfg, model, data_url, prompt, timeout, started):
             ],
         }],
     }
+    # 火山系（volc/doubao）显式关思维链：Seed 2.1 系列是深度思考模型，
+    # 不关的话识图也会先烧一大段 reasoning——推理 token 按 output 计费，
+    # 识图又是请求量最大的一类调用（与 llm._thinking_type 同一笔账，
+    # 2026-10-05 实测 disabled 后 completion 22036→1）。deepseek 不带字段
+    # 维持现状（那条识图链路已验证过，不赌改动）。
+    if cfg is PROVIDERS.get("volc") or cfg is PROVIDERS.get("doubao"):
+        payload["thinking"] = {"type": "disabled"}
     headers = {
         "Authorization": "Bearer " + cfg["api_key"],
         "Content-Type": "application/json",

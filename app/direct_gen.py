@@ -475,17 +475,23 @@ def _humanize_error(result):
     return first if first.endswith("。") else first + "。"
 
 
-def _enqueue(skill, prompt, text, source_image=False):
+def _enqueue(skill, prompt, text, source_image=False, seed=None):
     """转译结果落队。返回要发回会话的文本；成功且回执已直发返回 ""。
 
     source_image=True → 垫本轮引用的那张图（传 "1"，下游 comfy_src.resolve
     解析；引用图取不到会报错回给用户）。仅图生图路由会传。
+    seed 非空 → 复刻账本里那张图的种子（引用 HT 图换档场景），下游
+    _resolve_seed 会校验范围；只往本机渠道传（NAI 拒收 seed）。
     """
     from app.tools.normal import generate_image as gi
+    extra = {}
+    if source_image:
+        extra["source_image"] = "1"
+    if seed:
+        extra["seed"] = seed
     try:
         result = gi._generate_image(
-            prompt, skill=skill, _skip_confirm=True,
-            **({"source_image": "1"} if source_image else {}))
+            prompt, skill=skill, _skip_confirm=True, **extra)
     except Exception:
         log.exception("[direct] 直接入队失败")
         return "生图请求没发出去，稍后再试。"
@@ -528,16 +534,17 @@ def _translate(text, history, skill=None):
 def _recall_tags(data_urls):
     """引用图 → 英文 danbooru tag 反推（「反推返回」「反推后生成」共用）。
 
-    **钉死 DeepSeek 官方**（2026-10-05 用户拍板：带图的调用不走降级链）。
-    最多看 3 张，全部失败返回 ""。
+    走 .env 的识图配置（VISION_PROVIDER/VISION_MODEL，2026-10-05 起是
+    火山 doubao-seed-2.1-turbo；此前钉死 DeepSeek 官方）。识图调用本来
+    就不过降级链，不指定 provider = 跟着配置走。最多看 3 张，全部失败
+    返回 ""。
     """
     from app.vision import describe
     urls = (data_urls or [])[:3]
     outs = []
     for i, data_url in enumerate(urls, 1):
         try:
-            text = (describe(data_url, prompt=_TAGS_PROMPT,
-                             provider="deepseek") or "").strip()
+            text = (describe(data_url, prompt=_TAGS_PROMPT) or "").strip()
         except Exception:
             log.exception("[direct] 引用图反推失败（第 %d 张）", i)
             continue
@@ -561,20 +568,28 @@ _VISION_ASK_RE = re.compile(r"识图|反推|看图|读图|识别|图里|优化�
 
 
 def _ledger_hit(source):
-    """引用正文/原话里的 HT 编号 → 账本 (提示词, 渠道)。没中返回 ("", "")。
+    """引用正文/原话里的 HT 编号 → 账本 (提示词, 渠道, 种子)。没中返回 ("", "", "")。
 
     账本是本机器人每次生图落下的账：编号对应当时**真实用掉**的提示词，
-    比看图现推准。引用别人的图查不到，返回空。
+    比看图现推准。引用别人的图查不到，返回空。seed 是那张图生下来用的
+    种子（空串 = 没记录），供「换档复刻」用。
     """
     try:
         tags = image_log.find_tags(source or "")
     except Exception:
         log.exception("[direct] 账本查询失败")
-        return "", ""
+        return "", "", ""
     if not tags:
-        return "", ""
+        return "", "", ""
     row = image_log.lookup(tags[0]) or {}
-    return (row.get("prompt") or "").strip(), (row.get("skill") or "").strip()
+    return ((row.get("prompt") or "").strip(),
+            (row.get("skill") or "").strip(),
+            str(row.get("seed") or "").strip())
+
+
+# 认 seed 的本机渠道前缀（与 generate_image 工具描述里那句清单同源）：
+# NAI 不认 seed（传了直接报错），所以换档复刻只往这些渠道带种子。
+_LOCAL_SEED_SKILL_RE = re.compile(r"^(anima_|hd_|qwen_image_v1|image_gen_v1|krea2|nffa)")
 
 
 # 引用自家图 + 意见的**纯文本修正**模板（2026-10-05 用户拍板：账本里有当时
@@ -620,7 +635,7 @@ def _revise(text, data_urls, history, channel=None, at_me=False,
             _remember_job(session_key, skill, last["prompt"])
             return _enqueue(skill, last["prompt"], text)
         return "没找到最近一次生图的记录，重新描述想要什么吧：@我 渠道 描述。"
-    anchor_prompt, anchor_skill = _ledger_hit(quoted + " " + text)
+    anchor_prompt, anchor_skill, _anchor_seed = _ledger_hit(quoted + " " + text)
     # ── 自家图 + 没点名识图 → 纯文本修正（省一次识图调用）──────────
     if anchor_prompt and not _VISION_ASK_RE.search(text):
         data = _ask(_TEXT_REVISE_TEMPLATE.format(
@@ -654,7 +669,8 @@ def _revise(text, data_urls, history, channel=None, at_me=False,
         text=text)
     from app.vision import describe
     try:
-        reply = describe(data_urls[0], prompt=ask, provider="deepseek")
+        # 不指定 provider = 跟识图配置走（.env，现在是 doubao-seed-2.1-turbo）。
+        reply = describe(data_urls[0], prompt=ask)
     except Exception:
         log.exception("[direct] 改图调用失败")
         return "改图请求没发出去，稍后再试。"
@@ -704,7 +720,7 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     # 还省一次识图），想看真图就明说「识图」。
     if not text or _MENU_RE.match(text):
         if data_urls and ENABLED and not voluntary:
-            own_prompt, _skill = _ledger_hit(quoted)
+            own_prompt, _skill, _own_seed = _ledger_hit(quoted)
             if own_prompt:
                 return _reverse_text(own_prompt)
             return _reverse_text(_recall_tags(data_urls))
@@ -737,18 +753,23 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
             return _revise(text, data_urls, history, channel=ch,
                            at_me=at_me, source_image=True)
         # 引用图 + 只打渠道/档位 → 自家图直接用账本提示词（零调用），
-        # 别人的图才看图反推（1 次识图），然后入队生成。
+        # 别人的图才看图反推（1 次识图），然后入队生成。自家图命中时**连
+        # 种子一起复刻**（2026-10-05 用户拍板）：同提示词新种子=构图细节
+        # 必然变，用户要的「原样跑」是构图贴近原图、只换画质档位。别人的
+        # 图（账本没中）没有种子可复刻，照旧随机。
         if ch and not desc:
-            own_prompt, _skill = _ledger_hit(quoted)
+            own_prompt, _skill, own_seed = _ledger_hit(quoted)
             tags = own_prompt or _recall_tags(data_urls[:1])
             if not tags:
                 return "没认出引用的图，重发一次，或直接 @我 渠道 描述。"
             _remember_job(session_key, ch, tags)
-            return _enqueue(ch, tags, text)
+            seed = own_seed if (own_seed and
+                                _LOCAL_SEED_SKILL_RE.match(ch)) else None
+            return _enqueue(ch, tags, text, seed=seed)
         # 引用图 +「帮我生成这个 / 跑一下这张图」（没渠道）→ 用户口径：
         # 反推 → 重画，别反问。自家图同样先用账本提示词（零调用）。
         if not ch and desc and _IMG_GEN_INTENT_RE.search(desc):
-            own_prompt, _skill = _ledger_hit(quoted)
+            own_prompt, _skill, _own_seed = _ledger_hit(quoted)
             tags = own_prompt or _recall_tags(data_urls[:1])
             if not tags:
                 return "没认出引用的图，重发一次，或直接 @我 渠道 描述。"

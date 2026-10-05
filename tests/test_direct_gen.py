@@ -531,8 +531,8 @@ class RevisionPipelineTest(unittest.TestCase):
                                       skill="anima_clear",
                                       _skip_confirm=True)
         m_describe.assert_called_once()          # 只有一次带图调用
-        self.assertEqual(m_describe.call_args.kwargs.get("provider"),
-                         "deepseek")             # 钉死 DeepSeek 官方
+        self.assertNotIn("provider",
+                         m_describe.call_args.kwargs)  # 跟识图配置走
         sent = m_describe.call_args.kwargs["prompt"]
         self.assertIn("手改成插兜", sent)        # 用户意见进来了
         self.assertIn("忽略此项", sent)          # 没有账本就不给原提示词
@@ -553,8 +553,8 @@ class RevisionPipelineTest(unittest.TestCase):
         self.assertIn("忽略此项", sent)          # 没有账本就不给原提示词
         m_llm.assert_not_called()                # 转译链路完全不参与
         m_describe.assert_called_once()          # 只有一次带图调用
-        self.assertEqual(m_describe.call_args.kwargs.get("provider"),
-                         "deepseek")             # 钉死 DeepSeek 官方
+        self.assertNotIn("provider",
+                         m_describe.call_args.kwargs)  # 跟识图配置走
 
     def test_own_image_text_only_revision(self):
         # 引用自家 HT 图 + 意见 → **纯文本修正**（10-05 用户拍板：账本里有
@@ -628,6 +628,41 @@ class RevisionPipelineTest(unittest.TestCase):
         m_gen.assert_called_once_with("logged, miku", skill="hd_3_clear",
                                       _skip_confirm=True)
 
+    def test_own_image_tier_change_replays_ledger_seed(self):
+        # 换档复刻（2026-10-05 用户拍板）：引用 HT 图 +「三档」→ 账本提示词
+        # 和账本种子一起入队，构图贴近原图、只换画质工作流。
+        out, m_describe, m_llm, m_gen = self._decide(
+            "三档", quoted="编号 HT-20261005-010329-595",
+            lookup_row={"prompt": "logged, miku", "skill": "anima_clear",
+                        "seed": "414004422"})
+        self.assertEqual(out, "")
+        m_describe.assert_not_called()
+        m_llm.assert_not_called()
+        m_gen.assert_called_once_with("logged, miku", skill="hd_3_clear",
+                                      _skip_confirm=True, seed="414004422")
+
+    def test_own_image_seed_not_passed_to_nai_channel(self):
+        # NAI 不认 seed（传了直接报错）：引用 HT 图 +「nai」→ 不带种子入队。
+        out, m_describe, m_llm, m_gen = self._decide(
+            "nai", quoted="编号 HT-20261005-010329-595",
+            lookup_row={"prompt": "logged, miku", "skill": "anima_clear",
+                        "seed": "414004422"})
+        self.assertEqual(out, "")
+        m_gen.assert_called_once_with("logged, miku", skill="nai",
+                                      _skip_confirm=True)
+        self.assertNotIn("seed", m_gen.call_args.kwargs)
+
+    def test_own_image_without_seed_stays_random(self):
+        # 老账本记录没有 seed（空串）→ 照旧随机，不传 seed 参数。
+        out, m_describe, m_llm, m_gen = self._decide(
+            "三档", quoted="编号 HT-20261005-010329-595",
+            lookup_row={"prompt": "logged, miku", "skill": "anima_clear",
+                        "seed": ""})
+        self.assertEqual(out, "")
+        m_gen.assert_called_once_with("logged, miku", skill="hd_3_clear",
+                                      _skip_confirm=True)
+        self.assertNotIn("seed", m_gen.call_args.kwargs)
+
     def test_foreign_image_ignores_last_job(self):
         # 引用别人的图：上一轮任务的原提示词绝不进场（锚死事故的根因）
         out, m_describe, _, m_gen = self._decide(
@@ -642,13 +677,12 @@ class RevisionPipelineTest(unittest.TestCase):
 
     def test_bare_at_with_image_returns_reverse_text(self):
         # 2026-10-05 用户口径：引用图 + 只 @（没别的说）→ 反推提示词返回，
-        # 不生成（走 _recall_tags，同样钉死 deepseek）
+        # 不生成（走 _recall_tags，跟识图配置走）
         out, m_describe, m_llm, m_gen = self._decide(
             "", seen="1girl, solo, blue hair", at_me=True)
         self.assertIn(direct_gen._REVERSE_HEADER, out)
         self.assertIn("blue hair", out)
-        self.assertEqual(m_describe.call_args.kwargs.get("provider"),
-                         "deepseek")
+        self.assertNotIn("provider", m_describe.call_args.kwargs)
         m_llm.assert_not_called()
         m_gen.assert_not_called()
 
