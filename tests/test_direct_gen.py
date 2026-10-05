@@ -461,6 +461,23 @@ class QuoteImageIntentTest(unittest.TestCase):
                                       skill="hd_3_clear",
                                       _skip_confirm=True)
 
+    def test_run_this_phrase_with_channel_generates_directly(self):
+        # 2026-10-05 用户口径：引用图 + 渠道词 +「跑这张 / 跑这个」→ 直接用该
+        # 渠道跑（账本/反推），**不进改图管道**（否则会回占位符废话）。
+        for t in ("cunny跑这张", "cunny 跑这个", "cunny 跑一下"):
+            with self.subTest(t=t):
+                out, m_gen = self._decide(t, at_me=True)
+                self.assertEqual(out, "")
+                m_gen.assert_called_once_with("1girl, solo, blue hair",
+                                              skill="cunny", _skip_confirm=True)
+
+    def test_run_this_regex_only_matches_filler(self):
+        # 「跑这张」式空话命中；带真实改动内容的不命中（照旧走改图）。
+        for t in ("跑这张", "跑一版这张", "生成这个", "来一张", "跑这个", "跑一下"):
+            self.assertTrue(direct_gen._RUN_THIS_RE.match(t), t)
+        for t in ("把头发换成银色", "画成银发", "换个背景", "加上猫耳"):
+            self.assertFalse(direct_gen._RUN_THIS_RE.match(t), t)
+
     def test_bare_at_with_image_still_returns_reverse_text(self):
         # 原有行为不回归：引用图 + 裸 @ → 反推文本，不生成。
         out, m_gen = self._decide("", at_me=True)
