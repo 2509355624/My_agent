@@ -1724,6 +1724,72 @@ class PromptAskRemovedTest(unittest.TestCase):
         self.assertEqual(m_gen.call_args.args[0], "1girl, cat")  # 转译结果
 
 
+class ViewPromptKeywordTest(unittest.TestCase):
+    """「查看提示词」直通（2026-10-06 晚）：打这 5 个字 → 直接发账本提示词，零 LLM。
+
+    和已删的「引用+提示词」旁路的区别：只认**这 5 个字**，不会把「角色换成花火」
+    这种改图轮误吞。查哪张图靠 `_ledger_hit`（从引用正文+原话抽 HT 编号查账本）。
+    """
+
+    def _decide(self, text, quoted="", data_urls=None, lookup_row=None,
+                describe_reply="1girl, reversed, tags",
+                llm_reply='{"skill": "anima_clear", "prompt": "1girl, cat"}'):
+        with mock.patch.object(direct_gen.llm, "call_llm",
+                               return_value=llm_reply) as m_llm, \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="group_1"), \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=quoted), \
+             mock.patch("app.vision.describe",
+                        return_value=describe_reply) as m_describe, \
+             mock.patch.object(direct_gen.image_log, "lookup",
+                               return_value=lookup_row), \
+             mock.patch.object(gi, "_generate_image",
+                               return_value=RECEIPT) as m_gen:
+            out = direct_gen.decide(text, [], False,
+                                    data_urls=data_urls, at_me=False)
+            direct_gen._LAST_JOB.pop("group_1", None)
+        return out, m_describe, m_llm, m_gen
+
+    def test_keyword_returns_ledger_prompt_without_llm(self):
+        """引用带 HT 编号的图 +「查看提示词」→ 直接回账本提示词，零 LLM。"""
+        out, m_describe, m_llm, m_gen = self._decide(
+            "查看提示词",
+            quoted="HT-20261004-155628-040 · 728×1024 · anima_clear · "
+                   "seed 2226632694",
+            lookup_row={"prompt": "1girl, purple twin drills",
+                        "skill": "anima_clear", "seed": "2226632694"})
+        self.assertIn("1girl, purple twin drills", out)
+        m_llm.assert_not_called()
+        m_describe.assert_not_called()
+        m_gen.assert_not_called()
+
+    def test_keyword_without_number_tells_the_user(self):
+        """打了「查看提示词」但没编号 → 回提示，不误触发 AI 生图。"""
+        out, m_describe, m_llm, m_gen = self._decide("查看提示词")
+        self.assertIn("没识别到图片编号", out)
+        m_llm.assert_not_called()
+        m_gen.assert_not_called()
+
+    def test_keyword_in_text_also_works(self):
+        """HT 编号直接写在正文里（没引用）也能查到。"""
+        out, _d, _l, _g = self._decide(
+            "查看提示词 HT-20261004-155628-040",
+            lookup_row={"prompt": "1girl, test", "skill": "anima_clear"})
+        self.assertIn("1girl, test", out)
+
+    def test_plain_prompt_question_not_hijacked(self):
+        """只含「提示词」不含「查看提示词」（如「这个提示词是什么」）→ 不触发，走 AI。"""
+        out, m_describe, m_llm, m_gen = self._decide(
+            "这个提示词是什么",
+            quoted="HT-20261004-155628-040 · anima_clear · seed 1",
+            data_urls=["data:image/jpeg;base64,A"],
+            lookup_row={"prompt": "1girl, purple twin drills",
+                        "skill": "anima_clear"})
+        # 不含「查看提示词」→ 不被直通劫走，落进引用图轮（真识图）。
+        m_describe.assert_called_once()
+
+
 class WorkflowParamsTest(unittest.TestCase):
     """钉死 sd 新参数与 cunny 工作流结构（2026-10-05 用户拍板）。"""
 
