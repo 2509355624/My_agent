@@ -203,6 +203,18 @@ class AttributionPrefixTest(unittest.TestCase):
         lines = confirm_gate._candidate_lines(text)
         self.assertTrue(any(confirm_gate.is_confirm(l) for l in lines))
 
+    def test_ascii_colon_is_never_a_signature_separator(self):
+        # 2026-10-05 私聊实录：正则原先也认半角 `:`，NAI 权重串
+        # `nai 0.5::artist:x::` 和画面比例 `9:16` 里的冒号被当署名切了一刀，
+        # 点名的渠道连同开头一起被吃掉 → 落回 anima。私聊没有署名前缀，
+        # 行首第一个半角冒号永远在指令本体里。**只认全角「：」。**
+        for t in ("nai 9:16 1.05::light_rays::, 0.8::soft_focus::",
+                  "1.1::artist:okonogi_nao:: masterpiece",
+                  "-1::bad_hand::"):
+            self.assertEqual(confirm_gate._candidate_lines(t), [t], t)
+        # 真署名（全角）照旧剥掉
+        self.assertEqual(confirm_gate._candidate_lines("胡桃桃：好"), ["好"])
+
     def test_consume_with_prefixed_text_enqueues(self):
         confirm_gate._PENDING[("group", "1103174141")] = {
             "kind": "comfy", "skill": "qwen_image_v1", "prompt": "1girl",
