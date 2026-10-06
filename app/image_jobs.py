@@ -1226,8 +1226,11 @@ def _process_nai(job):
         path = image_out.save_bytes(png, "png", "nai")
         # 审核闸门。拦下时**不设 job.error**：图确实出出来了，只是没过审，
         # 而且 image_audit 已经回过一句提示了，再报错是重复。
-        if not image_audit.allow_send(path, QQ_AGENT_ID,
-                                      job.target, job.target_id):
+        if not image_audit.allow_send(
+                path, QQ_AGENT_ID, job.target, job.target_id,
+                meta={"tag": job.tag, "skill": job.skill or "", "seed": None,
+                      "caption": "", "file": "",
+                      "prompt": job.workflow or ""}):
             log.info("NAI 生图被审核拦下，未发回 %s %s",
                      job.target, job.target_id)
             return
@@ -1319,6 +1322,7 @@ def process(job):
         sent = sum(1 for name in names
                    if _send_image(job.target, job.target_id, name, job.tag,
                                   skill=job.skill or "", seed=job.seed,
+                                  prompt=job.prompt or "",
                                   **({"notify": False} if silent else {})))
         if sent:
             log.info("生图完成已发回 %s %s：%d/%d 张（编号 %s，渠道 %s，"
@@ -1817,7 +1821,7 @@ def _notify_random_blocked(job):
 
 
 def _send_image(target, target_id, filename, tag="", skill="", seed=None,
-                notify=True):
+                notify=True, prompt=""):
     """发回原会话。先过 image_out 甩掉 PNG 里的工作流元数据，编码格式看管理页开关。
 
     返回 True = 真发出去了。审核拦下时返回 False（**不抛异常**）——
@@ -1828,6 +1832,10 @@ def _send_image(target, target_id, filename, tag="", skill="", seed=None,
     消息时它们会跟着引用回到模型眼前。不传 tag = 不加那行字，行为与从前一致；
     不传 seed = 那一段不写。
 
+    prompt（2026-10-06）只为**被拦时**服务：它和上面几项一起进人工二审队列，
+    管理员点「过审」补发时，图有了、账本也补得上（编号 → 提示词）。正常发送
+    路径不用它（账本由调用方在确认发出后记）。
+
     ⚠️ 审核审的是 `prepare_for_send` 的产物（本地文件），也就是**真正要发出去
     的那份字节**，不是 ComfyUI 的原图。见 app/image_audit.py 的模块注释。
     """
@@ -1835,9 +1843,14 @@ def _send_image(target, target_id, filename, tag="", skill="", seed=None,
     from app.agents import image_send_format
     fmt = image_send_format(QQ_AGENT_ID, target, target_id)
     path = image_out.prepare_for_send(filename, fmt)
+    # caption 提到审核**之前**算：被拦时它要跟着图一起进人工二审队列，管理员
+    # 点「过审」补发的就是这一行原文——跟没被拦过的图一个字都不差。
+    caption = _caption(tag, path, skill, image_out, seed)
     if not image_audit.allow_send(path, QQ_AGENT_ID, target, target_id,
-                                  notify=notify):
+                                  notify=notify,
+                                  meta={"tag": tag, "skill": skill,
+                                        "seed": seed, "caption": caption,
+                                        "file": filename, "prompt": prompt}):
         return False
-    qq_api.send_image(target, target_id, path,
-                      caption=_caption(tag, path, skill, image_out, seed))
+    qq_api.send_image(target, target_id, path, caption=caption)
     return True

@@ -379,6 +379,26 @@
           </div>
         </div>
         <div class="sess-foot" style="margin-bottom: 8px;">
+          <button class="ghost" id="reviewBtn">人工二审 <span class="hint"
+              id="reviewBadge"></span></button>
+          <span class="hint">审核 AI 拦下的图全留在这，<b>你自己看着判</b>：
+            确实只是擦边、没沾违规 → 点「过审并重新发送」，这张图会
+            <b>按正常格式原样补发</b>回原来那个群 / 私聊（caption 一字不改，
+            对方看不出它进过二审）；确实违规 → 点「驳回」，图留着备查、不删。
+            不点就一直是待审，图不会自己作废。</span>
+        </div>
+        <div id="reviewWrap" style="display:none; margin:0 0 8px 0; padding:8px;
+             border:1px solid var(--line, #333); border-radius:6px;">
+          <div style="margin-bottom:6px; display:flex; gap:10px; align-items:center;">
+            <button class="ghost" id="reviewRefresh">刷新</button>
+            <label class="hint" style="display:flex; gap:4px; align-items:center;">
+              <input type="checkbox" id="reviewOnlyPending" checked> 只看待审
+            </label>
+            <span class="hint" id="reviewState"></span>
+          </div>
+          <div id="reviewList"></div>
+        </div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
           <select id="visionModelSel" class="pick" style="max-width:340px;"></select>
           <button class="ghost" id="visionModelTest">试读一张</button>
           <span class="hint" id="visionModelState"></span>
@@ -1497,6 +1517,8 @@ async function loadSessions() {
     renderNaiAll(d.nai_enabled === true);
     renderImageFmtAll(d.image_send_format);
     renderAuditGlobals(d.image_audit_globals);
+    // 二审角标跟着 agent 走（队列按 agent 落）：开着面板就顺带刷一次列表。
+    loadReview();
     auditPrompt.custom = d.image_audit_prompt || '';
     auditPrompt.default = d.image_audit_prompt_default || '';
     visionPrompt.custom = d.vision_prompt || '';
@@ -1930,6 +1952,132 @@ const AUDIT_SCOPES = [
   { key: 'group', id: 'auditGroups', label: '群聊审核', what: '所有群聊' },
   { key: 'private', id: 'auditPrivate', label: '私聊审核', what: '所有私聊' },
 ];
+
+// ─── 人工二审：审核 AI 拦下的图，管理员看着图自己判 ────────────────────
+//
+// 数据来自 /api/agent/<id>/image_review，图在 state/review/ 下、走
+// /api/review/image/<文件名> 取（那条路由只认这一层目录里的文件名）。
+// 点「过审」是**真发回去**：后端走 qq_api.send_image 那条路、caption 用拦下时
+// 存的那份原文，所以对方收到的跟一张没被拦过的图一个字都不差。
+
+function reviewImgSrc(p) {
+  // 后端存的是绝对路径，接口只要最后一截文件名。
+  return '/api/review/image/'
+    + encodeURIComponent(String(p || '').split(/[\\/]/).pop());
+}
+
+async function loadReview() {
+  const only = $('reviewOnlyPending').checked;
+  try {
+    const d = await api('/api/agent/' + encodeURIComponent(cur)
+                        + '/image_review?' + (only ? 'state=pending&' : '')
+                        + 'limit=50');
+    renderReview(d.items || []);
+    $('reviewBadge').textContent = d.pending ? ('· 待审 ' + d.pending) : '';
+    $('reviewState').textContent = '';
+  } catch (e) {
+    $('reviewState').textContent = e.message;
+    $('reviewState').className = 'hint err';
+  }
+}
+
+function renderReview(items) {
+  const box = $('reviewList');
+  box.textContent = '';
+  if (!items.length) {
+    const e = document.createElement('div');
+    e.className = 'hint';
+    e.textContent = '没有待审的图。';
+    box.appendChild(e);
+    return;
+  }
+  for (const it of items) renderReviewItem(box, it);
+}
+
+function renderReviewItem(box, it) {
+  const card = document.createElement('div');
+  card.style.cssText = 'display:flex; gap:10px; padding:8px; margin-bottom:8px; '
+    + 'border:1px solid var(--line, #333); border-radius:6px;'
+    + ' align-items:flex-start;';
+
+  const img = document.createElement('img');
+  img.src = reviewImgSrc(it.path);
+  img.title = '点开看大图';
+  img.style.cssText = 'width:120px; border-radius:4px; cursor:zoom-in;'
+    + ' flex:0 0 auto;';
+  img.onclick = () => window.open(img.src, '_blank');
+  card.appendChild(img);
+
+  const body = document.createElement('div');
+  body.style.cssText = 'flex:1; min-width:0;';
+
+  const head = document.createElement('div');
+  head.style.marginBottom = '4px';
+  head.textContent = (it.name || ('群 ' + it.target_id))
+    + ' · ' + fmtAgo(it.ts) + ' · ' + (it.skill || '默认档');
+  body.appendChild(head);
+
+  const reason = document.createElement('div');
+  reason.className = 'hint';
+  reason.textContent = '审核判「' + (it.category || 'other') + '」'
+    + (it.failed ? '（审核没生效，不算判违规）' : '')
+    + '：' + (it.reason || '没给理由');
+  body.appendChild(reason);
+
+  if (it.tag) {
+    const t = document.createElement('div');
+    t.className = 'hint';
+    t.textContent = '编号 ' + it.tag + (it.seed ? ' · seed ' + it.seed : '');
+    body.appendChild(t);
+  }
+  // 提示词可能很长，用 textContent 塞进 <div> 而不是 innerHTML：这里是用户
+  // 自己写的串，按文本走绝不会被当成标签解析。
+  if (it.prompt) {
+    const p = document.createElement('div');
+    p.className = 'hint';
+    p.textContent = '提示词：' + it.prompt;
+    p.style.cssText = 'word-break:break-all;';
+    body.appendChild(p);
+  }
+
+  const btns = document.createElement('div');
+  btns.style.cssText = 'margin-top:6px; display:flex; gap:8px;';
+  const ok = document.createElement('button');
+  ok.className = 'ghost';
+  ok.textContent = '过审并重新发送';
+  ok.onclick = () => reviewDecide(it.id, 'approve');
+  const no = document.createElement('button');
+  no.className = 'ghost';
+  no.textContent = '驳回（确认违规）';
+  no.onclick = () => reviewDecide(it.id, 'reject');
+  btns.appendChild(ok);
+  btns.appendChild(no);
+  body.appendChild(btns);
+
+  card.appendChild(body);
+  box.appendChild(card);
+}
+
+async function reviewDecide(id, act) {
+  try {
+    const d = await api('/api/agent/' + encodeURIComponent(cur)
+                        + '/image_review/' + encodeURIComponent(id) + '/' + act,
+                        { method: 'POST' });
+    sessStatus(d.msg || '已处理', d.ok ? 'ok' : 'err');
+    await loadReview();
+  } catch (e) {
+    sessStatus(e.message, 'err');
+  }
+}
+
+$('reviewBtn').onclick = async () => {
+  const wrap = $('reviewWrap');
+  const open = wrap.style.display === 'none';
+  wrap.style.display = open ? 'block' : 'none';
+  if (open) await loadReview();
+};
+$('reviewRefresh').onclick = () => loadReview();
+$('reviewOnlyPending').onchange = () => loadReview();
 
 function renderAuditGlobals(g) {
   g = g || {};

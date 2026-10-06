@@ -36,6 +36,13 @@
 再审这个文件——审的就是**真正要发出去的那份字节**，不是 ComfyUI 的原图。
 好处是顺带覆盖了「转格式之后才出问题」的情况，也不用再下载一次。
 
+## 误拦有补救：人工二审
+
+判违规**不等于作废**。拦下的图会连 caption 一起留进 `state/review/`，管理页
+「人工二审」里能直接看到图，点「过审」就按正常格式补发回原会话（见
+app/image_review.py）。所以「宁可错拦」这套口径的代价是**可回收**的：错拦
+只是让管理员多点一下，不是把用户那张图扔了。
+
 ## 开关
 
 三层，全在 settings.json（热生效，不用重启），见 `agents.image_audit_enabled`：
@@ -289,7 +296,7 @@ def _notify_blocked(target, target_id, verdict):
         log.warning("审核拦截后通知失败 %s %s：%s", target, target_id, exc)
 
 
-def allow_send(path, agent_id, target, target_id, notify=True):
+def allow_send(path, agent_id, target, target_id, notify=True, meta=None):
     """发图前的总闸。**True = 可以发**。
 
     这是三个发图点唯一需要调用的函数：
@@ -300,6 +307,11 @@ def allow_send(path, agent_id, target, target_id, notify=True):
     notify=False（2026-10-05）：拦下时**不回话**——随机口令的静默重抽用，
     话术由 image_jobs 统一管（重抽期间出声会暴露内部机制，重抽尽才回一句
     不提审核的软话术）。默认 True = 老行为，判违规/没生效各自回话。
+
+    meta（2026-10-06）：发图口顺手带过来的上下文（编号 / 渠道 / 种子 /
+    caption / 提示词 / 原图名），只为**被拦时**进人工二审队列用——管理员在
+    后台点「过审」，这张图要能原样补发回去（见 app/image_review.py）。
+    不传也能用，只是那条记录少几项信息。
 
     target 传 None（网页端）时按「没开会话」处理——审核只管 QQ 外发那一步，
     网页端是自己在本地看的。
@@ -324,6 +336,17 @@ def allow_send(path, agent_id, target, target_id, notify=True):
 
     log.info("图未过审，拦下不发 %s %s：failed=%s category=%s reason=%s",
              target, target_id, verdict.failed, verdict.category, verdict.reason)
+    # 人工二审（2026-10-06 用户要的）：这张图**留一份**到后台，管理员看着图
+    # 点「过审」就按正常格式补发。最严白名单本来就吞掉不少擦边图，没有这条
+    # 通道，误拦只能作废。图已经画好了，留着不费事。
+    # 挂在这里而不是三个发图口各挂一次：那是本函数存在的意义（唯一闸门）。
+    try:
+        from app import image_review
+        image_review.record(path, target, target_id, agent_id=agent_id,
+                            verdict=verdict, meta=meta)
+    except Exception as exc:
+        # 补救通道自己炸了，绝不能把审核闸门也带下去。
+        log.warning("进人工二审队列失败（图照旧按拦截处理）：%s", exc)
     if notify:
         _notify_blocked(target, target_id, verdict)
     return False

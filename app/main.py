@@ -4,6 +4,7 @@ Flask Web 服务入口
 
 import re
 import json
+import os
 import base64
 import socket
 import time
@@ -1076,6 +1077,95 @@ def set_agent_image_audit_prompt(agent_id):
     return jsonify({"ok": True, "agent": aid, "prompt": v,
                     "using_default": not v,
                     "effective": v or image_audit.default_prompt()})
+
+
+# ─── 人工二审（审核 AI 判违规 → 管理员看着图点「过审」补发）──────────
+#
+# 队列由 app/image_review.py 管：审核闸门 allow_send 判 False 时把图留一份进
+# state/review/，这里只负责「列出来」和「点一下」。图和记录都在 state/ 下，
+# 跟生图账本同一套落盘约定（.gitignore 里，不进仓库）。
+
+
+@app.route("/api/agent/<agent_id>/image_review")
+def get_image_review(agent_id):
+    """人工二审队列。
+
+    query：`state=pending|approved|rejected`（不传 = 全部）、`limit`（默认 50）。
+    按时间倒序（最新在前）；每条附会话名，管理员要看着图判断是谁要的、什么时候。
+    """
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    from app import image_review
+    state = (request.args.get("state") or "").strip() or None
+    try:
+        limit = int(request.args.get("limit") or 50)
+    except ValueError:
+        limit = 50
+    rows = image_review.items(state=state, limit=max(1, min(limit, 200)))
+    out = []
+    try:
+        from app import qq_names
+        for r in rows:
+            item = dict(r)
+            item["name"] = qq_names.name_for(r.get("target"),
+                                             r.get("target_id")) or ""
+            out.append(item)
+    except Exception:
+        app.logger.warning("二审队列补会话名失败，按无名显示")
+        out = rows
+    return jsonify({"ok": True, "agent": aid, "items": out,
+                    "pending": image_review.pending_count()})
+
+
+@app.route("/api/agent/<agent_id>/image_review/<item_id>/approve",
+           methods=["POST"])
+def approve_image_review(agent_id, item_id):
+    """人工过审 → **按正常格式**把这张图补发回原会话。
+
+    「正常格式」是字面意思：caption 用拦下时存的那份原文、走 `qq_api.send_image`
+    同一条路，对方收到的跟一张没被拦过的图一个字都不差。发完了补记生图账本
+    （编号 → 提示词），否则「引用这张图问提示词」查不到。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    from app import image_review
+    ok, msg = image_review.approve(item_id)
+    return jsonify({"ok": ok, "agent": aid, "id": item_id, "msg": msg,
+                    "pending": image_review.pending_count()}), \
+        (200 if ok else 400)
+
+
+@app.route("/api/agent/<agent_id>/image_review/<item_id>/reject",
+           methods=["POST"])
+def reject_image_review(agent_id, item_id):
+    """确认违规 → 标记拒发。图**留着不删**（备查，也防手滑点错还能翻回来）。"""
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    from app import image_review
+    ok, msg = image_review.reject(item_id)
+    return jsonify({"ok": ok, "agent": aid, "id": item_id, "msg": msg,
+                    "pending": image_review.pending_count()}), \
+        (200 if ok else 400)
+
+
+@app.route("/api/review/image/<path:name>")
+def serve_review_image(name):
+    """二审队列里那张图。只认 state/review 这一层目录下的文件名。"""
+    from app import image_review
+    d = image_review.REVIEW_DIR
+    safe = os.path.basename(name)
+    if not os.path.isfile(os.path.join(d, safe)):
+        return jsonify({"error": "没有这张图"}), 404
+    return send_from_directory(d, safe)
 
 
 @app.route("/api/agent/<agent_id>/vision_prompt", methods=["PUT"])

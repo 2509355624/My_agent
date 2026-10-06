@@ -122,7 +122,11 @@ class _Base(unittest.TestCase):
         # seed 也单独记一份：它决定 caption 上那行字有没有最后一段。
         self.sent_seeds = []
 
-        def _fake_image(target, tid, url, tag="", skill="", seed=None):
+        # `prompt=`（2026-10-06）：只在这些图**被审核拦下**时才用得上——进人工
+        # 二审队列要带着它，管理员点过审补发后账本才补得上（编号 → 提示词）。
+        # 替身接住它就行，老断言看的是前六项。
+        def _fake_image(target, tid, url, tag="", skill="", seed=None,
+                        prompt=""):
             self.sent_images.append((target, tid, url))
             self.sent_captions.append(tag)
             self.sent_seeds.append(seed)
@@ -2878,7 +2882,7 @@ class SilentRetryTest(_Base):
         """_send_image 替身：按 results 顺序决定放行/拦截，记录 notify。"""
         seen = []
         def fake_send(target, tid, name, tag="", skill="", seed=None,
-                      notify=True):
+                      notify=True, prompt=""):
             seen.append({"notify": notify, "seed": seed})
             return results.pop(0) if results else False
         p = mock.patch.object(image_jobs, "_send_image", fake_send)
