@@ -83,12 +83,18 @@ CHANNELS = {
                     728, 1024, 1.0),
 }
 
-# 默认渠道（不点名 skill 时走它）。`anima_clear` 和 `anima_soft` 一段底模相同、
-# 只差二段，很像——用户明确说过「拿不准就用默认」。
+# 默认生图渠道（不点名 skill 时走它）。2026-10-06 用户拍板：「我们默认渠道就是
+# sILVR，把它做成默认渠道就行了，不用加那个什么默认渠道管理」——所以它是**写死**
+# 的，没有管理页旋钮。
 #
-# ⚠️ 这个值换过两次（`anima_soft` → `anima_clear`，2026-09-30 21:3x）。
-# **换它要连累一批地方**，见 DefaultChannelTest 的说明。
-DEFAULT_CHANNEL = "anima_clear"
+# ⚠️ 这个值换过三次（`anima` → `anima_realskin` → `anima_soft` → `anima_clear`
+# → `silver`），**每一次都有写死名字的地方漏掉**，见 DefaultChannelTest 的说明。
+DEFAULT_CHANNEL = "silver"
+
+# `comfy_workflow` 那两个工具（get/update_workflow）的默认 skill。它跟上面的
+# 默认生图渠道**是两回事**：那两个工具按「两段采样」骨架读写工作流，拿
+# `anima_clear` 当样本渠道，silver 那种结构套不上去。
+WORKFLOW_TOOL_CHANNEL = "anima_clear"
 
 # 归档到 skills/_archive_20260930/ 的老渠道——一个都不许再冒出来。
 #
@@ -544,7 +550,7 @@ class VisibilityTest(unittest.TestCase):
             self.assertTrue(agents.allows_skill("qq", name), name)
 
     def test_default_channel_constant_is_the_declared_one(self):
-        """不点名时的默认渠道恒为 `DEFAULT_CHANNEL`（当前 = `anima_clear`）。
+        """不点名时的默认渠道恒为 `DEFAULT_CHANNEL`（当前 = `silver`）。
 
         signature 的 `skill` 默认值必须是 None——`execute_tool` 是 `fn(**args)`，
         只有「模型压根没传 skill」才会落到默认值，靠它才分得开「没点名」和
@@ -559,20 +565,23 @@ class VisibilityTest(unittest.TestCase):
                           .parameters["skill"].default)
 
     def test_skill_list_marks_exactly_one_channel_as_default(self):
-        """技能列表里**恰好一个**动漫渠道自称「默认」，且那个是 `DEFAULT_CHANNEL`。
+        """整个 Skill 目录里**恰好一个**渠道自称默认，且那个是 `DEFAULT_CHANNEL`。
 
-        这条同时钉住两件事：① skill.md 的标题写了「默认」；② 只有那一个写了。
         「默认」这两个字**纯粹是从 skill.md 标题读出来的**——
-        `agent_prompt._build_skill_list` 没有任何判定逻辑，所以改默认渠道
+        `agent_prompt._build_skill_list` 没有任何判定逻辑，所以换默认渠道
         **必须手改 skill.md 的标题**（漏了这条就会有两个/零个自称默认）。
+        动漫那一族的标题只许说「该族默认画风」，不许说「默认生图渠道」。
         """
         from app.agent_prompt import _build_skill_list
-        lines = [l for l in _build_skill_list("qq").splitlines()
-                 if any(("**%s**" % n) in l for n in CHANNELS)]
-        self.assertEqual(len(lines), len(CHANNELS), lines)
-        defaults = [l for l in lines if "默认" in l]
+        lines = _build_skill_list("qq").splitlines()
+        defaults = [l for l in lines if "默认生图渠道" in l]
         self.assertEqual(len(defaults), 1, "有多个渠道自称默认：%r" % defaults)
         self.assertIn(DEFAULT_CHANNEL, defaults[0])
+        for name in CHANNELS:
+            line = [l for l in lines if "**%s**" % name in l]
+            self.assertEqual(len(line), 1, name)
+            self.assertNotIn("默认生图渠道", line[0],
+                             "%s 的标题还自称默认生图渠道" % name)
 
     def test_tool_description_covers_all_four_and_no_retired_names(self):
         """工具描述要写全四个渠道，且**一个老渠道名都不许出现**。
@@ -600,9 +609,9 @@ class DefaultChannelTest(unittest.TestCase):
 
     ## 这条锁为什么必须存在
 
-    默认渠道在本项目换过**三次**（`anima` → `anima_realskin` → `anima_soft`
-    → `anima_clear`），**每一次都有写死名字的地方漏掉**。最阴的一次是
-    `generate_image` 里那两句**拒收话术**：
+    默认渠道在本项目换过**四次**（`anima` → `anima_realskin` → `anima_soft`
+    → `anima_clear` → `silver`，2026-10-06），**每一次都有写死名字的地方漏掉**。
+    最阴的一次是 `generate_image` 里那两句**拒收话术**：
 
         "直接改用默认的 anima_realskin 重画（prompt 改写成 anima 的标签式英文写法）"
 
@@ -613,9 +622,12 @@ class DefaultChannelTest(unittest.TestCase):
     ## 换默认渠道时要改的清单（改完跑本类 + 全量）
 
     `app/tools/normal/generate_image.py`（常量 + 工具描述 + `skill` 参数说明）、
-    `app/tools/normal/comfy_workflow.py`（两个函数的默认参数 + 两处参数说明）、
-    `app/agent_prompt.py`（`_TOOL_HINTS` 的渠道那行）、
-    4 个 `skills/anima_*/skill.md` 的标题与渠道表。
+    `app/direct_gen.py`（`_DEFAULT_SKILL` + 菜单 / 指南 / 两个模板里的渠道段）、
+    `app/agent_prompt.py`（`_TOOL_HINTS` 的渠道那行 + `_BRIEF_PARAM_EXTRA`）、
+    当前默认渠道自己的 `skills/<它>/skill.md` 标题、
+    4 个 `skills/anima_*/skill.md` 的渠道表（别再自称默认）。
+    **例外**：`comfy_workflow.py` 那两个工具的默认 skill 是「两段采样骨架的样本
+    渠道」，跟生图默认渠道无关，见 `WORKFLOW_TOOL_CHANNEL`。
     """
 
     def test_tool_description_names_exactly_the_current_default(self):
@@ -640,17 +652,27 @@ class DefaultChannelTest(unittest.TestCase):
                 self.assertNotIn(other + "（默认", prop,
                                  "参数说明里把 %s 也标成了默认" % other)
 
-    def test_comfy_workflow_defaults_follow_the_default_channel(self):
-        """`get_workflow` / `update_workflow` 的默认 `skill` 也得跟着走。
+    def test_comfy_workflow_defaults_follow_the_sample_channel(self):
+        """`get_workflow` / `update_workflow` 的默认 `skill` 钉在样本渠道上。
 
         这里踩过一次：默认值曾经写死 `image_gen_v1`，SD 渠道归档之后
         **不传 skill 直接抛「没有 workflow.json」**——工具看起来像坏了。
+
+        2026-10-06 默认**生图**渠道换成 silver 时，这两个默认值**故意没跟**：
+        那两个工具按「两段采样」骨架读写工作流，`anima_clear` 才是套得上去的
+        样本渠道。所以这里断言的是 `WORKFLOW_TOOL_CHANNEL`，不是
+        `DEFAULT_CHANNEL`——但参数说明必须把「它不是默认生图渠道」讲明白，
+        否则模型会以为不传 skill 的生图也走 anima_clear。
         """
         import inspect
-        from app.tools.normal.comfy_workflow import get_workflow, update_workflow
-        for fn in (get_workflow, update_workflow):
+        from app.tools.normal import comfy_workflow as cw
+        for fn in (cw.get_workflow, cw.update_workflow):
             self.assertEqual(inspect.signature(fn).parameters["skill"].default,
-                             DEFAULT_CHANNEL, fn.__name__)
+                             WORKFLOW_TOOL_CHANNEL, fn.__name__)
+        for name, spec in (("get_workflow", cw.tool), ("update_workflow", cw.tool_update)):
+            self.assertEqual(spec["name"], name)
+            prop = spec["parameters"]["properties"]["skill"]["description"]
+            self.assertIn("默认生图渠道是 silver", prop, name)
 
     def test_refusal_messages_are_actionable_and_leak_no_retired_channel(self):
         """两句**拒收话术**都得给出路，且不许出现已归档的渠道名。
@@ -686,18 +708,24 @@ class DefaultChannelTest(unittest.TestCase):
                 self.assertNotIn(retired + " ", msg,
                                  "拒收话术里还留着已归档的渠道名 %s" % retired)
 
-    def test_all_four_docs_agree_on_which_channel_is_default(self):
-        """4 个 skill.md 的渠道表要**口径一致**：只有默认那个标「默认」。"""
-        for name in CHANNELS:
+    def test_docs_agree_on_which_channel_is_default(self):
+        """默认渠道的 skill.md 标题标「默认」，其余（含动漫那四个）都不许标。
+
+        动漫那一族自己的文档以前写着「`anima_clear`（默认）· 不点名就用它」，
+        2026-10-06 起那不成立，也不许写回来：不点名走的是 `silver`。
+        """
+        def title(name):
             with open(os.path.join(SKILLS, name, "skill.md"), encoding="utf-8") as f:
-                first = [l for l in f.read().splitlines() if l.startswith("# ")][0]
-            if name == DEFAULT_CHANNEL:
-                self.assertIn("默认", first,
-                              "%s 的 skill.md 标题没标「默认渠道」：%r" % (name, first))
-            else:
-                self.assertNotIn("默认渠道", first,
-                                 "%s 的 skill.md 标题还自称「默认渠道」：%r"
-                                 % (name, first))
+                return [l for l in f.read().splitlines() if l.startswith("# ")][0]
+
+        self.assertIn("默认生图渠道", title(DEFAULT_CHANNEL),
+                      "%s 的 skill.md 标题没标「默认生图渠道」" % DEFAULT_CHANNEL)
+        for name in tuple(CHANNELS) + ("jank",):
+            first = title(name)
+            self.assertNotIn("默认生图渠道", first,
+                             "%s 的 skill.md 标题还自称默认生图渠道：%r" % (name, first))
+            self.assertNotIn("（默认）", first,
+                             "%s 的 skill.md 标题还带着旧的「（默认）」：%r" % (name, first))
 
 
 class SkillDocTest(unittest.TestCase):
@@ -1150,7 +1178,7 @@ class ToolDescriptionBudgetTest(unittest.TestCase):
     #: 每一条都是模型必须看到的**判据**，不是渠道细节。
     #: 措辞别锁死（描述本来就会重写），但语义必须在场。
     RULES = {
-        "默认渠道": "不传就是默认 anima_clear",
+        "默认渠道": "不传就是默认渠道 silver",
         "别编渠道名": "别编别的 skill 名出来",
         "换渠道门槛": "只有用户点名画风 / 点名尺寸",
         "高清但没更大": "只是形容词 = 别动",
@@ -1161,11 +1189,12 @@ class ToolDescriptionBudgetTest(unittest.TestCase):
         "认不出要承认": "我没认出来",
         "nffa槽会顶画风": "画风顶掉",
         "引用图不等于图生图": "永远不构成图生图",
-        "source门槛两条": "两条都不满足",
-        "指示代词不算意图": "指示代词不算意图",
-        "分不清就问": "是要改这张，还是照它画一张新的",
-        "图生图默认重绘": "重绘（默认走这条）",
-        "引用自己刚画的": "尤其走这条",
+        "source门槛只认点名": "只有明说「qwen 图生图」才传",
+        "改动内容不算垫图": "这类**改动内容**不算",
+        "分不清就问": "别自己猜",
+        "图生图只走qwen": "图生图只有一条路：qwen_image_v1",
+        "动漫重绘已撤掉": "重绘已经从用法里撤掉",
+        "引用自己的图沿用渠道": "用那张图当初的渠道",
         "hd3不支持垫图": "不支持垫图",
         "改图只写一句": "不要把整张图重新描述一遍",
         "绝不退回文生图": "绝不退回文生图凭空画一张",
@@ -1409,7 +1438,7 @@ class T2iGuardTest(unittest.TestCase):
         self.assertEqual(self._guard(False, "文生图"), (True, ""))
 
     def test_web_no_user_text_passes(self):
-        """网页端/单测没有原话这个证据源，一律不拦（与 _i2i_gate 同原则）。"""
+        """网页端/单测没有原话这个证据源，一律不拦（拿不到证据就别动模型的决定）。"""
         from unittest import mock
         from app.tools.normal import generate_image as gi
         with mock.patch("app.qq_api.current_turn_text", return_value=None):
@@ -1445,54 +1474,48 @@ class T2iGuardTest(unittest.TestCase):
                       "t2i_note 没并进 source_note，回执里看不到")
 
 
-class I2iForceTest(unittest.TestCase):
-    """垫图补齐守卫：对方明说要改图、模型却没传 source_image → 补上垫图。
+class I2iForceRemovedTest(unittest.TestCase):
+    """「代码抢在模型前面补垫图」那道反向守卫已删除（2026-10-06 用户拍板）。
 
-    `_i2i_gate` 的反向守卫（跟 `_t2i_guard` 成对）。实测（2026-10-04 修完
-    brief 之后，qwen3.8-9b-heretic）：「qwen 重绘一下这只手」跑 3 遍，
-    skill 全对，但仍有 1 遍 `source_image` 空 —— 那一遍会退化成**文生图**，
-    凭空重画一张，跟「改这张」不是一回事，而用户看不出区别。
+    它原来跟 `_i2i_gate` 成对：原话命中机制词而模型没传 `source_image` → 代码
+    自己把垫图补上。删它的依据是用户那句话——「改成让 AI 它自己去判断，没有兜底
+    没有问题」。**补垫图比拒收更危险**：那是代码替用户决定「这张要拿去垫」，
+    一旦词表误命中（「重绘是什么意思」当年就在拦截名单里、却在这条里被算成
+    命令），对方拿到的就是一张被垫糊了的图，而他只是问了一句。
     """
 
-    def _force(self, text, has_image=True):
+    def test_symbol_is_gone(self):
+        from app.tools.normal import generate_image as gi
+        self.assertFalse(hasattr(gi, "_i2i_force"), "_i2i_force 又回来了")
+
+    def test_no_source_image_means_text_to_image_whatever_the_words_are(self):
+        """原话再怎么「像要改图」，模型没传 `source_image` 就是文生图。
+
+        探针：`load_skill` 收到的必须是默认渠道，且**谁都不许去读源图**。
+        """
+        import inspect
         from unittest import mock
         from app.tools.normal import generate_image as gi
-        with mock.patch("app.qq_api.current_turn_text", return_value=text), \
-             mock.patch("app.qq_api.current_own_images",
-                        return_value=["http://x/1.jpg"] if has_image else []):
-            return gi._i2i_force()
+        self.assertNotIn("is_i2i = _i2i", inspect.getsource(gi._generate_image))
+        boom = mock.Mock(side_effect=AssertionError("不该去读源图"))
+        with mock.patch.object(gi, "is_cancelled", lambda: False), \
+                mock.patch.object(gi, "_qq_gate", lambda: None), \
+                mock.patch.object(gi.char_guard, "check", lambda p: None), \
+                mock.patch.object(gi, "load_skill", lambda skill: None), \
+                mock.patch.object(gi.comfy_src, "resolve", boom), \
+                mock.patch("app.qq_api.current_turn_text",
+                           return_value="图生图 把衣服换成jk"):
+            out = gi._generate_image(prompt="change her coat to red")
+        self.assertIn(gi.T2I_DEFAULT_SKILL, out)   # 落默认渠道，没被代码补成垫图
 
-    def test_explicit_edit_forces_source(self):
-        for text in ("qwen 重绘一下这只手", "重绘一版",
-                     "图生图 把衣服换成jk", "垫图改一下背景"):
-            self.assertTrue(self._force(text), "点名图生图却没补垫图：%s" % text)
-
-    def test_verb_only_edits_do_not_force(self):
-        # 10-05 收紧：只说改动内容、没说机制名 → 不补垫图，改提示词重画
-        # （反复垫图会越改越糊）。
-        for text in ("把这张图的手指改一下", "去掉多余的那根手指",
-                     "换个手", "把衣服换成jk"):
-            self.assertEqual("", self._force(text),
-                             "只说改动内容却补了垫图：%s" % text)
-
-    def test_quote_only_does_not_force(self):
-        # 只引用、不说要改 → 不补。那种十有八九只是「给你看」。
-        self.assertEqual("", self._force("这张挺好看"))
-        self.assertEqual("", self._force("233，这图挺好看的"))
-
-    def test_asking_about_it_does_not_force(self):
-        # 问「支持垫图吗」不是在要求垫图。误垫的代价比漏垫大。
-        self.assertEqual("", self._force("支持垫图吗"))
-        self.assertEqual("", self._force("重绘是什么意思"))
-
-    def test_plain_t2i_does_not_force(self):
-        self.assertEqual("", self._force("画个蓝发少女"))
-
-    def test_not_in_qq_turn_passes(self):
+    def test_t2i_guard_is_still_there_but_alone(self):
+        """同族的 `_t2i_guard`（明说文生图却不传 source_image）**留着**——
+        用户 10-06 点名拆的是图生图那三处，没提这条。这里钉住「没被顺手删掉」，
+        也钉住它不再有个反向孪生。
+        """
         from app.tools.normal import generate_image as gi
-        from unittest import mock
-        with mock.patch("app.qq_api.current_turn_text", return_value=None):
-            self.assertEqual("", gi._i2i_force())
+        self.assertTrue(callable(gi._t2i_guard))
+        self.assertFalse(hasattr(gi, "_i2i_gate"))
 
 
 class PromptAskGuardRemovedTest(unittest.TestCase):
@@ -1557,7 +1580,8 @@ class BriefToolParamTest(unittest.TestCase):
 
     def test_brief_keeps_skill_channel_hint(self):
         line = self._line(True)
-        self.assertIn("anima_clear", line, "brief 下丢了默认渠道名")
+        self.assertIn("默认 silver", line, "brief 下丢了默认渠道名")
+        self.assertIn("hd_fast_", line, "brief 下丢了档位映射")
         self.assertIn("qwen_image_v1", line, "brief 下丢了 qwen 渠道映射")
 
     def test_brief_keeps_source_image_legal_value(self):

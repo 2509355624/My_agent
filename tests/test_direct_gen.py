@@ -66,8 +66,8 @@ class ChannelParseTest(unittest.TestCase):
                 ("三档 soft 初音未来", "hd_3_soft", "初音未来"),
                 ("二档 gloss 女骑士", "hd_2_gloss", "女骑士"),
                 ("快档 一只柴犬在草地上", "hd_fast_clear", "一只柴犬在草地上"),
-                ("默认初音未来", "anima_clear", "初音未来"),   # 无分隔符
-                ("默认，纳西妲", "anima_clear", "纳西妲"),
+                ("默认初音未来", "silver", "初音未来"),   # 无分隔符（2026-10-06 默认渠道 = silver）
+                ("默认，纳西妲", "silver", "纳西妲"),
                 ("默认 gloss 一个女孩", "anima_gloss", "一个女孩"),
                 ("gloss 一个女孩", "anima_gloss", "一个女孩"),  # 只打画风
                 ("三档 猫", "hd_3_clear", "猫"),               # 画风没打
@@ -551,44 +551,69 @@ class QuoteImageIntentTest(unittest.TestCase):
 
     def test_gen_intent_without_channel_reverses_then_generates(self):
         # 引用图 +「帮我生成这个 / 跑一下这张图片」（没渠道）→ 用户口径：
-        # 默认反推 → 重画，别反问。
+        # 默认反推 → 重画，别反问。2026-10-06 起「默认」= silver。
         for text in ("帮我生成这个", "跑一下这张图片", "处理一下这张图"):
             with self.subTest(text=text):
                 out, m_gen = self._decide(text)
                 self.assertEqual(out, "")
                 m_gen.assert_called_once_with("1girl, solo, blue hair",
-                                              skill="anima_clear",
+                                              skill="silver",
                                               _skip_confirm=True)
 
-    def test_i2i_intent_pins_source_image(self):
-        # 引用图 +「图生图 把头发换成银色」→ 垫图重绘（source_image=1）。
+    def test_the_model_decides_whether_to_pad(self):
+        """垫不垫图 = 那一次调用里模型输出的 `source_image`（2026-10-06 拆闸）。
+
+        以前是代码扫原话：命中「图生图」就**强行** `source_image=1`。现在原话
+        照旧送给模型，它说垫才垫——它说「改提示词重画」就重画，一个字节都不垫。
+        """
         out, m_gen = self._decide(
             "图生图 把头发换成银色",
-            seen='{"skill": "anima_clear", "prompt": "1girl, silver hair"}')
+            seen='{"skill": "qwen_image_v1", "prompt": "1girl, silver hair",'
+                 ' "source_image": 1}')
         self.assertEqual(out, "")
         m_gen.assert_called_once_with("1girl, silver hair",
-                                      skill="anima_clear",
-                                      _skip_confirm=True, source_image="1")
-
-    def test_i2i_with_hd3_falls_back_to_redraw_capable(self):
-        # 「三档 图生图」→ hd_3 不支持重绘，自动落回默认动漫档
-        out, m_gen = self._decide(
-            "三档 图生图",
-            seen='{"skill": "anima_clear", "prompt": "1girl, fixed"}')
-        self.assertEqual(out, "")
-        self.assertEqual(m_gen.call_args.kwargs["skill"], "anima_clear")
-        self.assertEqual(m_gen.call_args.kwargs["source_image"], "1")
-
-    def test_qwen_i2i_instruction_passes_through_zero_llm(self):
-        # 点名 qwen 图生图：一句改动指令直通（qwen 参考图编辑吃自然语言），
-        # 连视觉调用都不用。
-        out, m_gen = self._decide(
-            "qwen 图生图 把外套换成红色",
-            seen="不该被用到", at_me=True)
-        self.assertEqual(out, "")
-        m_gen.assert_called_once_with("把外套换成红色",
                                       skill="qwen_image_v1",
                                       _skip_confirm=True, source_image="1")
+
+    def test_no_source_image_from_the_model_means_no_pad(self):
+        """同一条原话，模型没填 `source_image` → 就是文生图，代码不补。"""
+        out, m_gen = self._decide(
+            "图生图 把头发换成银色",
+            seen='{"skill": "silver", "prompt": "1girl, silver hair"}')
+        self.assertEqual(out, "")
+        m_gen.assert_called_once_with("1girl, silver hair", skill="silver",
+                                      _skip_confirm=True)
+
+    def test_i2i_with_hd3_is_not_silently_downgraded(self):
+        """「三档 图生图」不再被代码悄悄降回动漫档。
+
+        旧的 `_redraw_capable` 会把渠道换成 `anima_clear`——出图风味全变，对方
+        要的是 hd_3，拿到的却是 728×1024。现在渠道照模型/渠道词说的走，
+        **能不能垫图由 generate_image 报错说话**（那里只剩能力判断）。
+        """
+        out, m_gen = self._decide(
+            "三档 图生图 把头发修一下",
+            seen='{"skill": "hd_3_clear", "prompt": "1girl, fixed",'
+                 ' "source_image": 1}')
+        self.assertEqual(out, "")
+        self.assertEqual(m_gen.call_args.kwargs["skill"], "hd_3_clear")
+        self.assertEqual(m_gen.call_args.kwargs["source_image"], "1")
+
+    def test_qwen_i2i_locks_the_channel_but_the_model_pads(self):
+        """点名 qwen 图生图：渠道词由代码认出并锁定，垫图与否仍听模型。
+
+        2026-10-06 拆的是「扫原话认机制词 → 零调用直接入队垫图」那条路由；
+        现在这一轮照样进改图管道（一次带图调用），模型 JSON 里给
+        `source_image: 1` 才真的垫。
+        """
+        out, m_gen = self._decide(
+            "qwen 图生图 把外套换成红色",
+            seen='{"prompt": "change her coat to red, keep everything else'
+                 ' exactly the same", "source_image": 1}', at_me=True)
+        self.assertEqual(out, "")
+        m_gen.assert_called_once_with(
+            "change her coat to red, keep everything else exactly the same",
+            skill="qwen_image_v1", _skip_confirm=True, source_image="1")
 
     def test_channel_with_image_still_generates_from_reverse(self):
         # 原有行为不回归：引用图 +「三档」→ 反推后直接生成（不垫图）。
@@ -766,15 +791,21 @@ class RevisionPipelineTest(unittest.TestCase):
         m_llm.assert_not_called()                # 不走文本修正
         m_gen.assert_called_once()
 
-    def test_i2i_explicit_drops_escape_hatch_from_prompt(self):
-        # 2026-10-05 用户拍板：明说「图生图」= 确定的改图请求，模板里不能留
-        # 「不是修改请求 → 输出 reverse」这条逃逸口。
-        _, m_describe, _, _ = self._decide(
-            "图生图 把头发换成银色",
-            seen='{"skill": "anima_clear", "prompt": "1girl, silver hair"}')
-        sent = m_describe.call_args.kwargs["prompt"]
-        self.assertIn("没有「不是修改请求」这个选项", sent)
-        self.assertNotIn("reverse 字段", sent)
+    def test_escape_hatch_is_always_open(self):
+        """「不是修改请求 → 输出 reverse」这条逃逸口**常开**（2026-10-06）。
+
+        以前代码扫原话：明说「图生图」就把这句从模板里抹掉，等于拿关键词替
+        模型判过一次。那套条件拼接（`_ESCAPE_ALLOWED` / `_ESCAPE_FORBIDDEN`）
+        已删，两种轮次拿到的模板都带 reverse 说明。
+        """
+        for text in ("图生图 把头发换成银色", "画得真好"):
+            with self.subTest(text=text):
+                _, m_describe, _, _ = self._decide(
+                    text, seen='{"skill": "silver", "prompt": "x"}')
+                sent = m_describe.call_args.kwargs["prompt"]
+                self.assertIn("reverse 字段", sent)
+        for gone in ("_ESCAPE_ALLOWED", "_ESCAPE_FORBIDDEN"):
+            self.assertFalse(hasattr(direct_gen, gone), gone + " 又回来了")
 
     def test_vague_opinion_keeps_escape_hatch(self):
         # 没点名机制词（真闲聊）→ 逃逸口照旧保留，模板里给 reverse 说明
@@ -784,15 +815,26 @@ class RevisionPipelineTest(unittest.TestCase):
         sent = m_describe.call_args.kwargs["prompt"]
         self.assertIn("reverse 字段", sent)
 
-    def test_i2i_explicit_never_returns_reverse_text(self):
-        # 用户报障原样复现：明说图生图，模型却只回了 reverse。绝不把反推当
-        # 结果发回去（那正是「很奇怪」的那次），而是让他换个说法。
+    def test_model_reverse_answer_is_believed_even_for_an_i2i_sentence(self):
+        """模型判「这轮不是修改请求」就照它：@ 轮回反推，关键词轮闭嘴。
+
+        2026-10-05 那条「明说图生图就不许回反推文本」是代码否决模型最典型的
+        一处——原话命中机制词，就把模型输出的 reverse 硬说成「没解析出来」。
+        10-06 拆闸之后它不再有豁免权：判据只写在模板里，结论听模型的。
+        """
         out, m_describe, _, m_gen = self._decide(
             "图生图 改动部分异常肢体",
             seen='{"reverse": "这张图的英文tag反推"}', at_me=True)
         m_describe.assert_called_once()
-        self.assertNotIn(direct_gen._REVERSE_HEADER, out)
-        self.assertIn("没解析出来", out)
+        self.assertIn(direct_gen._REVERSE_HEADER, out)
+        self.assertIn("这张图的英文tag反推", out)
+        m_gen.assert_not_called()
+
+        # 同一条回复在关键词轮里闭嘴吞轮（不刷屏），也不入队
+        out, _, _, m_gen = self._decide(
+            "图生图 改动部分异常肢体",
+            seen='{"reverse": "这张图的英文tag反推"}', at_me=False)
+        self.assertEqual(out, "")
         m_gen.assert_not_called()
 
     def test_own_image_bare_at_returns_logged_prompt_zero_calls(self):
@@ -1559,7 +1601,8 @@ class RandomCommandTest(unittest.TestCase):
         m_llm.call_llm.assert_not_called()
         m_gen.assert_called_once()
         self.assertIn("loli", m_gen.call_args.args[0])
-        self.assertEqual(m_gen.call_args.kwargs["skill"], "anima_clear")
+        self.assertEqual(m_gen.call_args.kwargs["skill"],
+                         direct_gen._DEFAULT_SKILL)
 
     def test_random_kemono_without_slash_in_keyword_round(self):
         # 关键词轮（不 @）也认纯口令
@@ -1654,17 +1697,20 @@ class RandomCommandTest(unittest.TestCase):
         self.assertIsNone(m_gen.call_args.kwargs.get("resample_fn"))
 
 
-class PromptAskRemovedTest(unittest.TestCase):
-    """「引用 + 提示词 → 直接回词条、一次 LLM 都不跑」这条旁路**已删**（2026-10-06）。
+class PromptAskNarrowTest(unittest.TestCase):
+    """「提示词」关键词闸门必须**窄**：改图请求一个字都不许被它吞掉。
 
-    删它是因为它只认「提示词」三个字、不认意图：233 群「引用这张图，我要她
-    抓手的手势，角色换成花火」是**改图请求**，却被当成查账，后面那句改图意见
-    根本没进过模型。用户原话：「能就我们让 AI 来做的，我们就直接让 AI 来做，
-    不要为了省那几毛钱」。
+    历史：这条旁路原先只认「提示词」三个字、不认意图，233 群「引用这张图，
+    我要她抓手的手势，角色换成花火」是**改图请求**却被当成查账，后面那句改图
+    意见根本没进过模型 → 2026-10-06 整条删掉。删掉之后用户实测另一个毛病：
+    引用自家图只打「提示词」，没人接得住，掉进改图管道**又跑了一张图**
+    （19:21 群 580929233 实录）→ 当晚按用户口径把关键词加回来，但收得很窄
+    （「可以加多几个提取的指令…这样容错高一点」）：只认**在要词条**的说法
+    （`_PROMPT_ASK_RE`）和整句只有「提示词」两个字（`_PROMPT_BARE_RE`）。
 
-    删掉之后这类轮落进引用图轮 → `_revise`：账本提示词照样作为「最可信旁证」
-    喂给模型（见 `_REVISE_TEMPLATE` 的 anchor_prompt），要词条还是要改图由
-    模型自己判。下面几条钉的就是「提示词没被丢掉、也没再走捷径」。
+    所以这个类钉的不是「旁路没了」，而是「旁路窄到不会撞改图轮」：账本提示词
+    照样作为「最可信旁证」喂给改图那次调用（`_REVISE_TEMPLATE` 的
+    anchor_prompt），要词条还是要改图，含改动内容的一律走模型。
     """
 
     def _decide(self, text, quoted="", data_urls=None, lookup_row=None,
@@ -1687,9 +1733,23 @@ class PromptAskRemovedTest(unittest.TestCase):
             direct_gen._LAST_JOB.pop("group_1", None)
         return out, m_describe, m_llm, m_gen
 
-    def test_the_bypass_is_gone(self):
-        self.assertFalse(hasattr(direct_gen, "_PROMPT_ASK_RE"),
-                         "「提示词」关键词旁路又加回来了？")
+    def test_keyword_gate_stays_narrow(self):
+        """闸门只认「在要词条」的说法；带改动内容/否定的一律不中。
+
+        这条代替了原来那句 `assertFalse(hasattr(_PROMPT_ASK_RE))`——关键词
+        按 2026-10-06 晚用户口径加回来了，红线从「不许存在」变成「不许宽到
+        吞掉改图轮」。
+        """
+        misses = ("提示词不变，角色换成花火，手势改成抓手",
+                  "把提示词里的衣服改成红色", "不要提示词，直接画",
+                  "这个提示词是什么", "silver 生成")
+        for text in misses:
+            self.assertIsNone(direct_gen._PROMPT_ASK_RE.search(text), text)
+            self.assertIsNone(direct_gen._PROMPT_BARE_RE.match(text), text)
+        hits = ("提示词", "给我提示词", "提取提示词", "词条发我一份")
+        for text in hits:
+            self.assertTrue(direct_gen._PROMPT_ASK_RE.search(text)
+                            or direct_gen._PROMPT_BARE_RE.match(text), text)
 
     def test_quote_with_edit_instruction_reaches_the_revise_pipeline(self):
         """233 群那条原话：带「提示词」但其实是改图请求 → 必须真识图，不被吞。"""
@@ -1725,10 +1785,12 @@ class PromptAskRemovedTest(unittest.TestCase):
 
 
 class ViewPromptKeywordTest(unittest.TestCase):
-    """「查看提示词」直通（2026-10-06 晚）：打这 5 个字 → 直接发账本提示词，零 LLM。
+    """「要词条」直通（2026-10-06 晚）：命中关键词 → 直接发账本提示词，零 LLM。
 
-    和已删的「引用+提示词」旁路的区别：只认**这 5 个字**，不会把「角色换成花火」
-    这种改图轮误吞。查哪张图靠 `_ledger_hit`（从引用正文+原话抽 HT 编号查账本）。
+    和已删的「引用+提示词」旁路的区别：只认**在要词条**的说法（给我提示词 /
+    提取提示词 / 整句只有「提示词」两个字），不会把「角色换成花火」「把提示词
+    里的衣服改成红色」这种改图轮误吞。查哪张图靠 `_ledger_hit`（从引用正文+
+    原话抽 HT 编号查账本）。
     """
 
     def _decide(self, text, quoted="", data_urls=None, lookup_row=None,
@@ -1788,6 +1850,85 @@ class ViewPromptKeywordTest(unittest.TestCase):
                         "skill": "anima_clear"})
         # 不含「查看提示词」→ 不被直通劫走，落进引用图轮（真识图）。
         m_describe.assert_called_once()
+
+    # ── 2026-10-06 19:21 群 580929233 实录：用户引用自家图只打「提示词」，
+    # 直通不认（当时只认死「查看提示词」5 个字），整轮掉进改图管道 → 又跑了
+    # 一张图。用户口径：「可以加多几个提取的指令…这样容错高一点」。
+    def test_bare_keyword_returns_ledger_prompt(self):
+        """整句只有「提示词」两个字 + 引用带编号 → 回账本提示词，一个调用都不烧。"""
+        out, m_describe, m_llm, m_gen = self._decide(
+            "提示词",
+            quoted="HT-20261006-191917-458 · 2048×3072 · jank · seed 4119332997",
+            data_urls=["data:image/jpeg;base64,A"],
+            lookup_row={"prompt": "izumi_sagiri, 1girl, solo",
+                        "skill": "jank", "seed": "4119332997"})
+        self.assertIn("izumi_sagiri, 1girl, solo", out)
+        self.assertIn("jank", out)
+        m_describe.assert_not_called()      # 绝不重新识图跑图
+        m_gen.assert_not_called()
+        m_llm.assert_not_called()
+
+    def test_ask_wordings_all_hit_the_ledger(self):
+        """几种「要词条」的说法都得命中，且都不许碰识图/生图。"""
+        for text in ("给我提示词", "提取提示词", "提取一下提示词", "我要提示词",
+                     "发我提示词", "提示词给我", "词条发我一份", "提示词。"):
+            out, m_describe, _l, m_gen = self._decide(
+                text,
+                quoted="HT-20261006-191917-458 · jank · seed 1",
+                data_urls=["data:image/jpeg;base64,A"],
+                lookup_row={"prompt": "1girl, kept", "skill": "jank"})
+            self.assertIn("1girl, kept", out, text)
+            m_describe.assert_not_called()
+            m_gen.assert_not_called()
+
+    def test_bare_keyword_without_ledger_hit_is_not_hijacked(self):
+        """整句「提示词」但引用的不是自家图（账本没中）→ 不劫这轮，照常看图反推。
+
+        一句「没识别到图片编号」答非所问：他要的就是这张图的词条，别人的图
+        该走识图反推。显式说法（给我提示词）才回那句提示。
+        """
+        out, m_describe, _l, m_gen = self._decide(
+            "提示词", quoted="随便一张别人发的图",
+            data_urls=["data:image/jpeg;base64,A"], lookup_row=None)
+        self.assertNotIn("没识别到图片编号", out)
+        m_describe.assert_called_once()
+
+
+class ReviseChannelListTest(unittest.TestCase):
+    """改图管道的模板必须自带渠道 id 清单（2026-10-06 19:22 实录的修复）。
+
+    引用图 +「silver 生成」那次跑成了 jank：`_parse_channel` 认不出 silver
+    （3bc54e8 起自定义渠道只走 AI 判），整轮落到 `_revise`，而它的模板只写着
+    「skill 沿用原渠道，除非用户点名要换」——**一个渠道 id 都没列**，模型无从
+    知道 silver 是渠道，于是沿用了账本里的 jank。改图管道不走 `_MASTER_TEMPLATE`，
+    那份模板里的 silver/jank 说明它看不到。
+    """
+
+    def test_template_lists_the_custom_channels(self):
+        t = direct_gen._REVISE_TEMPLATE
+        for name in ("silver", "jank"):
+            self.assertIn(name, t, "改图模板里没提渠道 %s" % name)
+
+    def test_template_lists_the_fixed_and_tier_channels(self):
+        t = direct_gen._REVISE_TEMPLATE
+        for name in ("nai", "qwen_image_v1", "image_gen_v1", "krea2", "nffa",
+                     "cunny", "miao", "anima_clear", "hd_3_"):
+            self.assertIn(name, t, "改图模板里没提渠道 %s" % name)
+
+    def test_template_warns_custom_channels_have_no_i2i(self):
+        """silver/jank 没有垫图骨架——模板得告诉模型垫图轮别填它们。
+
+        不写这句的后果：用户说「silver 图生图」，模型填 silver，代码那头
+        `_redraw_capable` 判不过就**静默降回 anima_clear**，出图风味全变。
+        """
+        self.assertIn("文生图专用", direct_gen._REVISE_TEMPLATE)
+
+    def test_template_still_formats(self):
+        """加了清单别把 `.format` 的花括号写坏（模板里 JSON 示例是转义过的）。"""
+        out = direct_gen._REVISE_TEMPLATE.format(
+            escape="", search="", anchor_note="n", last_skill="jank",
+            last_prompt="p", lang="l", text="silver 生成")
+        self.assertIn("silver", out)
 
 
 class WorkflowParamsTest(unittest.TestCase):

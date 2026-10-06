@@ -914,8 +914,9 @@ class SessionRunner:
                 stickers.note_image((self.target, self.target_id), _u, _w)
             except Exception:
                 pass
-        # 对方**自己打字**的那一段，在引用块拼进来之前先留一份。生图工具靠它
-        # 判「这轮到底有没有明说要图生图」（见 generate_image._i2i_gate），
+        # 对方**自己打字**的那一段，在引用块拼进来之前先留一份。生图侧那两道
+        # 守卫靠它判原话（`_hd_tier_guard` / `_t2i_guard`；图生图的关键词闸
+        # 2026-10-06 已拆，改由模型自己判），
         # 所以绝不能拿拼好引用块的版本去判：引用块里常常是上一次生图的整段
         # 提示词，里面出现「换成 / 去掉 / 重画」这类词的概率很高，那是机器
         # 自己写的话，不是对方的要求。

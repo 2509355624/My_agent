@@ -293,7 +293,8 @@ QWEN_SKILL = "qwen_image_v1"
 #
 #   ① 它唯一的对象 anima_2 已删掉——那套两段采样现在是**全部 4 个动漫渠道**
 #      （`skills/anima_soft|gloss|curvy|clear/workflow.json`，2026-09-30 起
-#      默认 anima_clear），天天跑、不能每张都重启一次 ComfyUI。
+#      这一族以 anima_clear 打底；默认生图渠道 2026-10-06 已改成 silver，
+#      见 `generate_image.T2I_DEFAULT_SKILL`），天天跑、不能每张都重启一次 ComfyUI。
 #      （2026-10-01 另加了 `hd_fast` / `hd_2` / `hd_3` 三个尺寸渠道，画布
 #      1024×1536 起步、再按 1× / 1.3× / 1.5× 放大，比这 4 个重得多——
 #      但**仍然不设门槛**，理由同 ②。）
@@ -1797,7 +1798,39 @@ def _caption(tag, path, skill, image_out, seed=None):
         bits.append(str(skill))
     if seed is not None:
         bits.append("seed %d" % int(seed))
-    return " · ".join(bits)
+    line = " · ".join(bits)
+    # 后面那段附言**可在管理页改**（settings.json 的 `caption_note`，见
+    # agents.caption_note）。2026-10-06 用户拍板：「那些字我就希望我可以自己
+    # 去附加这一些内容……一点换行、二点换行」。没设就用内置默认（引用这张图
+    # 的三条用法——他实测下来「引用图一直出问题」的就是这三条没讲清）。
+    # 附言只在有编号时跟着走：`_caption` 没 tag 就整行不发，附言也不该单独刷一条。
+    note = _caption_note_text()
+    return line + ("\n" + note if note else "")
+
+
+# 出图 caption 附言的内置默认（管理页整段可改；把框**清空** = 这段不要了，
+# 只发 `编号 · 分辨率 · 渠道 · seed` 那一行）。
+# 三条各占一行——用户要的正是「一点换行、二点换行」。
+_CAPTION_NOTE_DEFAULT = (
+    "1、引用这张图 +「提取提示词」= 把这张当初用的提示词发给你\n"
+    "2、引用这张图 + 说需求 = 照这张图改提示词，用同一渠道重画\n"
+    "3、要只改画面里那一处 = 引用这张图 +「qwen 图生图 + 怎么改」（慢，1~2 分钟）"
+)
+
+
+def _caption_note_text():
+    """这段附言的当前内容：管理页设了就用设的（空串 = 不要附言），没设用默认。"""
+    try:
+        from app.agents import caption_note
+        note = caption_note(QQ_AGENT_ID)
+    except Exception:                        # 配置读坏了也不能把发图这一路弄断
+        return _CAPTION_NOTE_DEFAULT
+    return _CAPTION_NOTE_DEFAULT if note is None else note
+
+
+def caption_note_default():
+    """内置的那份附言（管理页 GET 用它当编辑框的初始内容）。"""
+    return _CAPTION_NOTE_DEFAULT
 
 
 # 随机口令重抽尽后的兜底话术（image_audit 的 BLOCKED_NOTICE/FAILED_NOTICE

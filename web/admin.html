@@ -433,6 +433,27 @@
             <span class="hint" id="visionPromptState"></span>
           </div>
         </div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
+          <button class="ghost" id="receiptNoteBtn">提交回执附言</button>
+          <button class="ghost" id="captionNoteBtn">出图附言</button>
+          <span class="hint">生图的两段<b>附属文字</b>可以自己改：一段跟在「任务已提交，
+            正在画了。当前渠道：X」后面（告诉群友怎么点名渠道），一段跟在出图那行
+            「<b>编号 · 分辨率 · 渠道 · seed</b>」后面（告诉群友引用这张图能干什么）。
+            想分行就直接在框里换行。<b>把框清空再保存 = 这段不要了</b>，只发原来那一行；
+            从没设过则用内置默认。热生效、不用重启。</span>
+        </div>
+        <div id="noteWrap" style="display:none; margin:0 0 8px 0; padding:8px;
+             border:1px solid var(--line, #333); border-radius:6px;">
+          <div class="hint" id="noteTitle"
+               style="margin-bottom:6px; font-weight:600;"></div>
+          <textarea id="noteText"
+                    style="width:100%; min-height:120px; box-sizing:border-box;"></textarea>
+          <div style="margin-top:6px; display:flex; gap:8px; align-items:center;">
+            <button class="ghost" id="noteSave">保存</button>
+            <button class="ghost" id="noteClose">收起</button>
+            <span class="hint" id="noteState"></span>
+          </div>
+        </div>
         <div class="hint" style="font-weight:600;margin:8px 0 4px;">私聊</div>
         <div class="sess-foot" style="margin-bottom: 8px;">
           <button class="toggle" id="privAll">私聊·开</button>
@@ -1525,6 +1546,19 @@ async function loadSessions() {
     auditPrompt.default = d.image_audit_prompt_default || '';
     visionPrompt.custom = d.vision_prompt || '';
     visionPrompt.default = d.vision_prompt_default || '';
+    // 两张附言：null = 从没设过（编辑框预填内置默认），空串 = 明确不要这段。
+    notes.receipt = { stored: d.receipt_note == null ? null : d.receipt_note,
+                      default: d.receipt_note_default || '',
+                      path: 'receipt_note',
+                      title: '提交回执附言（跟在「任务已提交…当前渠道：X」后面）' };
+    notes.caption = { stored: d.caption_note == null ? null : d.caption_note,
+                      default: d.caption_note_default || '',
+                      path: 'caption_note',
+                      title: '出图附言（跟在「编号 · 分辨率 · 渠道 · seed」那行后面）' };
+    // 换了 agent 就把附言面板收起来：框里留着上一个 agent 的文案，
+    // 用户点「保存」就把它写进现在这个 agent 了。
+    $('noteWrap').style.display = 'none';
+    noteCur = null;
     // 识图模型下拉：清单现查（/api/vision/models），别用详情里那两份字段拼——
     // 那只是「当前用的」，不含候选列表。每次切 agent 都要重拉。
     loadVisionModels();
@@ -2170,6 +2204,14 @@ async function saveAuditPrompt() {
 // 这里只负责「打开时填现在实际生效的那份」，让用户从现成的文案上改。
 let visionPrompt = { custom: '', default: '' };
 
+// 两张**附言**（提交回执 / 出图 caption）。stored 三态要分清：
+//   null = 从没设过 → 实际在用内置默认；'' = 明确「这段不要」；其余 = 自定义。
+// 所以 `stored || default` 那种写法在这儿是错的（会把「不要」显示成默认）。
+let notes = { receipt: { stored: null, default: '', path: 'receipt_note',
+                         title: '提交回执附言' },
+              caption: { stored: null, default: '', path: 'caption_note',
+                         title: '出图附言' } };
+
 function visionPromptState(msg, kind) {
   const el = $('visionPromptState');
   el.textContent = msg || '';
@@ -2327,6 +2369,58 @@ async function saveVisionPrompt() {
     sessStatus('识图提示词已更新，下一张图就生效', 'ok');
   } catch (e) {
     visionPromptState(e.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ─── 两张附言（提交回执 / 出图 caption）────────────────────
+// 一个面板轮着编这两份，noteCur 记着现在开的是哪份。
+// 后端是三态（agents._note_setting）：键不存在 = 没设过（用内置默认），
+// 空串 = 明确「这段不要」，其余 = 自定义。所以预填**不能**写
+// `stored || default`——那会把「不要」显示成默认，用户点保存又把它打开了。
+let noteCur = null;
+
+function noteState(msg, kind) {
+  const el = $('noteState');
+  el.textContent = msg || '';
+  el.style.color = kind === 'err' ? '#e55' : (kind === 'ok' ? '#5c5' : '');
+}
+
+function toggleNote(which) {
+  const wrap = $('noteWrap');
+  if (wrap.style.display !== 'none' && noteCur === which) {
+    wrap.style.display = 'none';
+    noteCur = null;
+    return;
+  }
+  const n = notes[which];
+  noteCur = which;
+  $('noteTitle').textContent = n.title;
+  $('noteText').value = n.stored === null ? n.default : n.stored;
+  noteState(n.stored === null ? '当前用的是内置默认'
+          : (n.stored === '' ? '当前不附加任何文字（只发原来那一行）'
+                             : '当前用的是你自己写的那份'), '');
+  wrap.style.display = '';
+  $('noteText').focus();
+}
+
+async function saveNote() {
+  if (!noteCur) return;
+  const n = notes[noteCur];
+  const btn = $('noteSave');
+  btn.disabled = true;
+  try {
+    const r = await api('/api/agent/' + encodeURIComponent(cur) + '/' + n.path,
+      { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: $('noteText').value }) });
+    n.stored = r.note;
+    noteState(n.stored === '' ? '已保存：这段不发了（只发原来那一行）'
+                              : '已保存你自己写的那份', 'ok');
+    sessStatus(n.title.split('（')[0] + '已更新，下一张图就生效', 'ok');
+  } catch (e) {
+    noteState(e.message, 'err');
   } finally {
     btn.disabled = false;
   }
@@ -2865,6 +2959,13 @@ $('visionPromptReset').addEventListener('click', () => {
 });
 $('visionPromptClose').addEventListener('click', () => {
   $('visionPromptWrap').style.display = 'none';
+});
+$('receiptNoteBtn').addEventListener('click', () => toggleNote('receipt'));
+$('captionNoteBtn').addEventListener('click', () => toggleNote('caption'));
+$('noteSave').addEventListener('click', saveNote);
+$('noteClose').addEventListener('click', () => {
+  $('noteWrap').style.display = 'none';
+  noteCur = null;
 });
 $('privAll').addEventListener('click', togglePrivateAll);
 $('privWlOn').addEventListener('click', togglePrivateWlOn);

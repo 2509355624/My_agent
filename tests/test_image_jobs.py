@@ -890,13 +890,20 @@ class SendImageTest(unittest.TestCase):
         self.assertIn("/view?filename=b%20c.png", sent[0])
 
     def _capture_captions(self):
+        """抓 `_send_image` 发出去的 caption。
+
+        附言那一段（`caption_note`，管理页可编辑）在下面 `CaptionNoteTest`
+        单独测；这一族的用例只关心**第一行**那条信息串（编号 · 分辨率 ·
+        渠道 · seed），所以这里统一把附言关掉，免得断言里塞满整段文案。
+        """
         from app import image_out
         sent = []
         return mock.patch.object(image_out, "prepare_for_send",
                                  lambda f, fmt="jpg": "C:/tmp/y.jpg"), \
             mock.patch.object(qq_api, "send_image",
                               lambda target, tid, path, caption="":
-                              sent.append((path, caption))), sent
+                              sent.append((path, caption.splitlines()[0]
+                                           if caption else ""))), sent
 
     def test_tag_goes_on_the_message_as_caption(self):
         """编号必须和图片在**同一条消息**里。
@@ -984,6 +991,36 @@ class SendImageTest(unittest.TestCase):
         with p1, p2:
             image_jobs._send_image("group", "9", "b.png", "HT-20261001-074112-384")
         self.assertNotIn("seed", sent[0][1])
+
+
+class CaptionNoteTest(unittest.TestCase):
+    """出图 caption 后面那段附言：管理页可编辑，三态（2026-10-06 用户拍板）。
+
+    没设 = 内置默认；空串 = 这段不要；其余 = 用户自己写的那份。
+    附言只在**有编号**时跟着走——`_caption` 没 tag 整行都不发。
+    """
+
+    def _note(self, stored):
+        with mock.patch.object(agents, "caption_note", return_value=stored):
+            return image_jobs._caption("HT-1", "b.png", "silver", image_out)
+
+    def test_unset_falls_back_to_the_builtin_default(self):
+        lines = self._note(None).splitlines()
+        self.assertEqual(lines[0], "HT-1 · silver")
+        self.assertIn("引用这张图", lines[1])
+
+    def test_empty_string_switches_the_note_off(self):
+        self.assertEqual(self._note("").splitlines(), ["HT-1 · silver"])
+
+    def test_custom_note_is_appended_verbatim(self):
+        self.assertEqual(self._note("要图喊我").splitlines(),
+                         ["HT-1 · silver", "要图喊我"])
+
+    def test_no_tag_sends_nothing_at_all(self):
+        """没编号 = 整行不发，附言也不该单独刷一条。"""
+        with mock.patch.object(agents, "caption_note", return_value=None):
+            self.assertEqual(
+                image_jobs._caption("", "b.png", "silver", image_out), "")
 
 
 class ElapsedTest(unittest.TestCase):
@@ -2309,14 +2346,25 @@ class DisabledChannelTest(unittest.TestCase):
         self.assertFalse(self.comfy.called)     # 一步都没碰 ComfyUI
         self.assertFalse(self.load.called)      # 连 skill 都没去读
 
-    def test_i2i_without_naming_a_channel_uses_the_default(self):
-        """只给 source_image 不给 skill：落到默认渠道（anima_clear），它支持垫图。
+    def test_i2i_without_naming_a_channel_refuses_the_default(self):
+        """只给 source_image 不给 skill：落默认渠道 silver，然后**明确拒收**。
 
-        这条以前是「必须挡住」（那时图生图整体停用）。现在反过来：模型说「改图」
-        而不点名渠道，就该按默认渠道垫图，而不是被拒。
-        顺带钉住源图的缩放目标——必须按**本档画布的长边**缩，不是 comfy_src
-        默认的 1216。图生图的出图尺寸就是这一步缩出来的尺寸再乘二段放大倍率，
-        缩错了高清档就名不副实。
+        这条以前写的是「落到默认渠道，它支持垫图」。2026-10-06 用户把默认渠道
+        换成 silver（文生图专用、没有垫图骨架），同时拍板「没有兜底……不需要
+        代码去给它硬兜底」——所以这里**不许**静默换成某个动漫档：报错、把话讲
+        清楚（图生图只走 qwen_image_v1 + source_image），一张都不画。
+        """
+        self._disabled([])
+        out = self._call(prompt="把衣服换成红色", source_image="1")
+        self.assertIn("不支持图生图", out)
+        self.assertIn("qwen_image_v1", out)
+        self.assertFalse(self.comfy.called)     # 一步都没碰 ComfyUI
+
+    def test_i2i_source_is_scaled_to_the_channel_canvas(self):
+        """点名会垫图的渠道时，源图按**本档画布的长边**缩，不是 comfy_src 的 1216。
+
+        图生图的出图尺寸就是这一步缩出来的尺寸再乘二段放大倍率，缩错了高清档
+        就名不副实。
         """
         self._disabled([])
         self.load.return_value = {
@@ -2336,7 +2384,8 @@ class DisabledChannelTest(unittest.TestCase):
                 mock.patch.object(generate_image.comfy_src, "fit", fake_fit), \
                 mock.patch.object(generate_image.comfy_src, "upload",
                                   lambda raw: "i2isrc_x.png"):
-            out = self._call(prompt="把衣服换成红色", source_image="1")
+            out = self._call(prompt="把衣服换成红色", skill="anima_clear",
+                             source_image="1")
 
         self.assertIn("任务已提交", out)
         self.assertEqual(seen["max_side"], 1024)     # 728×1024 画布的长边

@@ -324,12 +324,13 @@ class ToolDescriptionTest(unittest.TestCase):
         self.assertIn("lora", self._block(QQ_AGENT_ID))
         self.assertIn("lora", self._block("main"))
 
-    def test_default_image_skill_is_anima_clear(self):
-        """不点名时的默认渠道恒为 anima_clear——2026-09-30 21:3x 用户拍板改的。
+    def test_default_image_skill_is_silver(self):
+        """不点名时的默认渠道恒为 silver——2026-10-06 用户拍板改的。
 
-        （历史：先是 `anima`，再是 `anima_realskin`、`anima_soft`；前两套都归档到
-        `skills/_archive_20260930/` 了。现在 4 个动漫渠道里 `anima_clear`
-        （realskin → realskin，光最平）是默认。）
+        （历史：先是 `anima`，再是 `anima_realskin`、`anima_soft`，2026-09-30
+        21:3x 改成 `anima_clear`，**2026-10-06 换成 silver**。原话：「我们默认
+        渠道就是 sILVR，把它做成默认渠道就行了，不用加那个什么默认渠道管理」
+        ——所以只有一个写死的常量，没有管理页下拉。）
 
         signature 的默认值必须是 None——execute_tool 是 fn(**args)，只有「模型
         压根没传 skill」才会落到默认值，靠它才分得开「没点名」和「点名了默认渠道」。
@@ -339,7 +340,7 @@ class ToolDescriptionTest(unittest.TestCase):
             _generate_image, T2I_DEFAULT_SKILL)
         self.assertIsNone(inspect.signature(_generate_image)
                           .parameters["skill"].default)
-        self.assertEqual(T2I_DEFAULT_SKILL, "anima_clear")
+        self.assertEqual(T2I_DEFAULT_SKILL, "silver")
 
     def test_i2i_is_on_for_the_right_tiers_only(self):
         """图生图 2026-10-01 重开：常规档 + 高清快档 / 二档，**三档不给**。
@@ -368,64 +369,64 @@ class ToolDescriptionTest(unittest.TestCase):
         """
         from app.tools.normal.generate_image import tool
         desc = tool["description"]
-        self.assertIn("不传 skill 就是 anima_clear", desc)
+        self.assertIn("不传 skill 就是 silver", desc)
         self.assertIn("引用图片：默认只看，不改", desc)
         self.assertIn("看得见", desc)                  # 「看图 → 反推提示词」这条路
         self.assertIn("光是引用了图，永远不构成图生图", desc)
         self.assertIn("source_image 的门槛", desc)     # 门槛单独成段
-        self.assertIn("两条都不满足就当没这回事", desc)
+        self.assertIn("只有明说「qwen 图生图」才传", desc)
         self.assertIn("hd_3_", desc)                   # 不支持的那档要说出来
         self.assertNotIn("图生图已停用", desc)
         # 不能有「不传 skill、只传 source_image 就自动切渠道」这种指路话
         self.assertNotIn("只传 source_image", desc)
 
     def test_source_image_param_states_when_to_use_it(self):
-        """参数描述口径要和上面那段一致：什么时候才传、哪些渠道能垫。"""
+        """参数描述口径要和上面那段一致：垫的是哪张、什么时候才传、强度归谁定。
+
+        「什么时候传 / 传了配哪个渠道」那几条钉在 `test_image_i2i_gate.py`，
+        这里只补它没覆盖的三件事。
+        """
         from app.tools.normal.generate_image import tool
         desc = tool["parameters"]["properties"]["source_image"]["description"]
-        self.assertIn("他自己这一轮发了图", desc)
+        self.assertIn("他自己刚发的", desc)         # 没引用时垫本轮他自己发的图
         self.assertIn("默认不传", desc)
-        self.assertIn("hd_3_", desc)
+        self.assertIn("重绘强度是定死的", desc)      # denoise 不由模型调
         self.assertNotIn("已停用", desc)
 
-    def test_description_teaches_the_two_i2i_modes(self):
-        """图生图现在有**两种机制**，描述必须把「哪种请求走哪个渠道」写清楚。
+    def test_description_teaches_the_one_i2i_path(self):
+        """图生图现在**只有一条路**：`skill=qwen_image_v1` + `source_image`。
 
-        模型只看得到这段文字（工作流差别它看不见）。少了这层，它会把「把外套
-        换成红色」送去动漫档重绘——出来的是一张画风变了、构图也跑了的新图，
-        对方要的「只改一处」根本没实现。
+        模型只看得到这段文字（工作流差别它看不见），所以「哪条路能垫图」必须由
+        描述说清。旧版这里钉的是「两种机制、默认走动漫重绘」——2026-10-06 用户
+        拍板撤掉那条：「Anima 的图生图没有 Qwen 好用……图生图只需要一个 Qwen 的
+        途径即可」。**撤的是用法文案，不是后端骨架**：`_I2I_SKILLS` 那 12 档一个
+        没删（钉在上面的 `test_i2i_is_on_for_the_right_tiers_only`）。
 
-        2026-10-02 用户拍板加了反向的约束：**qwen 不是图生图默认渠道**（一张
-        1~2 分钟，别的 20~30 秒）。所以这里钉的不只是「两种模式都在」，还有
-        「默认那条是动漫重绘、选 qwen 得有理由」。
+        qwen 一张 1~2 分钟，所以「点名才走、不是改图的默认做法」的价格标签必须在。
         """
         from app.tools.normal.generate_image import tool
         desc = tool["description"]
-        self.assertIn("图生图走哪条：默认动漫重绘", desc)
-        for key in ("改图", "重绘", "qwen_image_v1", "一句改图指令",
-                    "不要把整张图重新描述"):
+        self.assertIn("图生图只有一条路：qwen_image_v1", desc)
+        for key in ("一句改动指令", "不要把整张图重新描述",
+                    "重绘已经从用法里撤掉"):
             self.assertIn(key, desc, "描述里缺了「%s」" % key)
         # qwen 那道必须带「慢」的价格标签，不能写得像默认选项
-        self.assertIn("不是默认选项", desc)
         self.assertIn("1~2 分钟", desc)
-        # 机器人自己画的图（带渠道 + seed 那行）被引用 → 重绘那条
-        self.assertIn("渠道名和种子", desc)
+        self.assertIn("不是改图的默认做法", desc)
+        # 机器人自己画的图（带渠道 + seed 那行）被引用 → 沿用原渠道重新生成
+        self.assertIn("编号 / 渠道 / 种子", desc)
         # 两种模式的 prompt 写法不同，这条也得写在参数上（模型最常看的地方）
         prop = tool["parameters"]["properties"]["source_image"]["description"]
         self.assertIn("qwen_image_v1", prop)
-        self.assertIn("默认走动漫档重绘", prop)
-        # 动漫 12 档一个字都没删
+        # 动漫 12 档一个字都没删（撤的是用法，不是能力）
         self.assertIn("anima_*", prop)
         # skill 参数不能再写「改图就选 qwen / 本机最强」这种无门槛诱导语。
         # 2026-10-04 起它改成只把渠道清单指到 Available Skills（「分不清就照
-        # 那一行摘要选」），诱导语自然消失——但**主 description 里那句
-        # 「图生图默认也不走它」必须还在**，否则模型会去 skill 摘要里找
-        # qwen 的适用场景、把它当图生图默认。
+        # 那一行摘要选」），诱导语自然消失。
         skill = tool["parameters"]["properties"]["skill"]["description"]
         self.assertNotIn("最强", skill)
         self.assertNotIn("改图就选", skill)
         self.assertIn("Available Skills", skill)
-        self.assertIn("图生图默认也不走它", desc)
 
 
 if __name__ == "__main__":

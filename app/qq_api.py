@@ -128,7 +128,9 @@ def bind_context(session_key, target, target_id, quoted_images=None,
 
     user_text 是本轮**对方自己打字的那段话**（不含引用块——引用块里可能整段
     是上一次生图的提示词，拿它判「有没有明说要图生图」会自己骗自己）。
-    生图工具靠它拦「无缘无故改图」的误判，见 `generate_image._i2i_gate`。
+    生图侧现在还剩两道守卫吃它：`_hd_tier_guard`（只有画质形容词却传了 hd_*）
+    和 `_t2i_guard`（明说文生图却传了 source_image）。图生图那道关键词硬闸
+    2026-10-06 已拆，口径改写在提示词里交给模型判。
     不传 = 这一轮没有可判的原话（网页端）。
     """
     _local.session_key = session_key

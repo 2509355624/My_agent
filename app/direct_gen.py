@@ -33,16 +33,17 @@
 - 引用生图回执 +「再来一张」→ 同提示词换种子重跑（_LAST_JOB 现成有），零转译。
 - 引用图 + @（没别的说）→ **反推提示词**发回去，不生成；引用图 + 档位
   （「三档」，或「快档 基于图片帮我生成」这类空话）→ 反推后直接生成；
-  引用图 +「帮我生成这个 / 跑一下这张图」（没渠道）→ 默认档反推后重画；
-  引用图 +「图生图 / 换成…」→ **垫图改图**（source_image=1，默认动漫档
-  重绘，点名 qwen 走参考图编辑、改动指令直通零调用）。
+  引用图 +「帮我生成这个 / 跑一下这张图」（没渠道）→ 默认档反推后重画。
 - 引用图 + 意见 → 改图，**一律真识图**（2026-10-05 用户拍板：账本里存的是
   当时那句提示词，和画面实际内容可能已经对不上——背景改透明那次没看图，
   出图就不是用户要的）。一次带图调用，账本提示词只当「最可信旁证」写进
-  prompt，不再作唯一事实来源。用户**明说机制词**（图生图/垫图/改图/重绘）
-  时，模板里**不给 reverse 逃逸口**——意图已经定死，必须出 prompt；
-  没点名机制词（「画得真好」这类真闲聊）才允许回反推，且 @ 轮才回、
-  关键词轮静默。引用图 + @ / 档位 /「生成这个」仍优先用账本提示词（零调用）。
+  prompt，不再作唯一事实来源。**垫不垫图由模型判**（2026-10-06 用户拍板，
+  原话：「什么出现图生图、垫图、改图、重绘，这个硬编码给我去掉就行了，改成
+  让 AI 它自己去判断」）：代码不再扫原话认机制词，模型输出的
+  `source_image` 字段决定这一轮入队垫哪张图。引用图本身**不要求**垫图，
+  文案口径写死在 `_REVISE_TEMPLATE` 的【图生图】段。模型判「不是修改请求」
+  （夸奖、闲聊）时 @ 轮回反推文本、关键词轮静默。引用图 + @ / 档位 /
+  「生成这个」仍优先用账本提示词（零调用）。
 - 引用消息但没渠道词（「生图」「这词什么意思」）→ 也交给 AI：引用正文和
   用户原话合并成一条描述喂 `_translate`，AI 自己决定是照着画还是答话。
 - **agent 已退场（2026-10-05 用户拍板）**：@ 轮要么走工具要么回话。
@@ -99,7 +100,11 @@ _HD_STYLES = ("clear", "curvy", "gloss", "soft")
 _FIXED_SKILLS = ("anima_clear", "anima_curvy", "anima_gloss", "anima_soft",
                  "image_gen_v1", "image_gen_v1_hires", "krea2", "nffa",
                  "cunny", "miao", "qwen_image_v1", *image_jobs.NAI_SKILLS)
-_DEFAULT_SKILL = "anima_clear"
+# 默认渠道（2026-10-06 用户拍板：「我们默认渠道就是 sILVR，把它做成默认渠道
+# 就行了」——**不做管理页的默认渠道下拉**，写死）。与
+# `generate_image.T2I_DEFAULT_SKILL` 保持同一个值；silver / jank 不进
+# `_FIXED_SKILLS`，由 `_allowed_skills()` 现场扫 skills/ 目录放行。
+_DEFAULT_SKILL = "silver"
 
 
 def _allowed_skills():
@@ -273,22 +278,15 @@ def _quote_merge(quoted, desc):
     return desc
 
 
-def _redraw_capable(skill):
-    """垫图重绘只认动漫档（anima_* / hd_fast_* / hd_2_*）——hd_3 不支持，
-    固定渠道里只有 qwen（参考图编辑，单独走）和 NAI。"""
-    return (skill.startswith("anima_") or skill.startswith("hd_fast_")
-            or skill.startswith("hd_2_"))
-
-
-def _i2i_intent(text):
-    """这轮原话里有没有**点名图生图机制**（图生图/垫图/重绘/改图/修图/i2i…）。
-
-    2026-10-05 用户拍板：只说「把衣服换成jk」这类改动内容、没说机制名的，
-    **不垫图**——改提示词重新画一张（反复垫图会越改越糊，denoise 0.6
-    每代丢四成原图信息）。判据直接复用垫图闸门的 `_I2I_EXPLICIT_RE`
-    ——路由判据和垫图闸门同源，绝不会「路由判成图生图、闸门又拦下」。"""
-    from app.tools.normal.generate_image import _I2I_EXPLICIT_RE
-    return bool(_I2I_EXPLICIT_RE.search((text or "").lower()))
+# 这里原先有两道**代码判图生图**的闸，2026-10-06 按用户要求删掉，一个不留：
+#   - `_i2i_intent(text)`：扫原话找机制词（图生图/垫图/改图/重绘/i2i），
+#     命中就把这轮路由成垫图轮、还给 qwen 开了「改动指令直通」的零调用旁路；
+#   - `_redraw_capable(skill)`：垫图轮只认动漫档，模型填了别的渠道就**静默
+#     降回默认档**——「一说图生图就掉回 anima」那个怪事的病根就是这一行。
+# 用户原话：「什么出现图生图、垫图、改图、重绘，这个硬编码给我去掉就行了，
+# 改成让 AI 它自己去判断」「没有兜底没有问题。因为大模型它自己就知道怎么去做，
+# 我们不需要代码去给它硬兜底的」。现在垫不垫图只看模型输出的 `source_image`
+# 字段（判据写在 `_REVISE_TEMPLATE` 的文案里），渠道也不再由代码换。
 
 
 def _lead_commands(text):
@@ -370,7 +368,7 @@ def _parse_channel(text):
     - 「三档 gloss 初音未来」→ hd_3_gloss / 初音未来
     - 「三档,glss,初音未来」 → hd_3_gloss / 初音未来（glss 贴回 gloss）
     - 「三档 猫」            → hd_3_clear / 猫（画风没打，档位默认）
-    - 「默认初音未来」       → anima_clear / 初音未来（无分隔符也认）
+    - 「默认初音未来」       → silver / 初音未来（无分隔符也认；「默认」= 默认渠道）
     - 「一档curvy 初音」     → hd_fast_curvy / 初音（连写也认）
     - 「gloss 一个女孩」     → anima_gloss / 一个女孩（只打画风）
     - 「sd 一只猫」          → image_gen_v1 / 一只猫（固定渠道词）
@@ -532,8 +530,8 @@ def _lead_typo_channel(text):
 _FINAL_PROMPT_NO_CHAN_TEXT = (
     "这段带权号的提示词我照原样收下了，但这轮没说渠道，我不敢替你选"
     "（选错就是整张图换风味）。在前面补一个渠道词再发："
-    "nai（画师串/权号这种写法就是它的）/ 默认 / 快档 / 二档 / 三档 / "
-    "sd / krea2 / qwen / nffa。")
+    "nai（画师串/权号这种写法就是它的）/ silver（默认渠道）/ 快档 / 二档 / 三档 / "
+    "sd / krea2 / qwen / nffa / jank。")
 
 
 MENU_TEXT = (
@@ -543,7 +541,8 @@ MENU_TEXT = (
     "贴一段英文提示词\n"
     "\n"
     "引用一张图：\n"
-    "+「三档」照着画 ｜ 只@我 反推 ｜ 「提示词」给词 ｜ 说改什么 = 改图\n"
+    "+「三档」照着画 ｜ 只@我 反推 ｜ 「提取提示词」给词\n"
+    "+ 说需求 = 照这张改词重画 ｜ 「qwen 图生图」= 只改那一处\n"
     "\n"
     "「/更多渠道」= 档位/画风/其他AI ｜ 「使用指南」= 详细玩法"
 )
@@ -551,27 +550,31 @@ MENU_TEXT = (
 GUIDE_TEXT = (
     "🎨 详细使用指南\n"
     "【快速上手】@我 或喊「大大怪」+ 渠道 + 描述：\n"
-    "  默认 纳西妲（默认档，最快）\n"
+    "  silver 水晶城堡（不写渠道就走它——默认渠道，出图快）\n"
+    "  快档 女骑士（=一档，动漫那族的中间档）\n"
     "  二档 gloss 女骑士（二档=更精细，gloss=油亮画风）\n"
     "  三档 clear 水晶城堡（三档=最高清）\n"
-    "  快档 1girl, blue hair（英文提示词原样直接跑，不改动）\n"
-    "  私聊直接发一整段英文提示词（不带渠道词）→ 也直接跑，走默认档\n"
-    "【档位】默认 < 快档(=一档) < 二档 < 三档，越往后越清晰越慢\n"
+    "  只说画风词（clear/soft/gloss/curvy）→ 动漫最小档，最快\n"
+    "  快档 1girl, blue hair（英文也照样过一遍 AI，渠道按你点名的锁死）\n"
+    "  一整段英文提示词直接发（不写渠道词）→ 也过一次 AI，由它判渠道再跑\n"
+    "【档位】只说画风词 = 动漫最小档（最快）＜ 快档(=一档) ＜ 二档 ＜ 三档；"
+    "不写渠道词 = 默认渠道 silver\n"
     "【画风】clear清晰 / curvy肉感 / gloss油亮 / soft柔和；"
     "跟在档位后，打错或没打按该档默认\n"
-    "【渠道】sd（一次多张，多段描述用 --- 分隔）/ krea2 / "
-    "qwen（慢·写实·能在图里写中文文字）/ nffa（插画）/ "
+    "【渠道】silver（默认）/ jank（点名才用）/ sd（一次多张，多段描述用 --- 分隔）/ "
+    "krea2 / qwen（慢·写实·能在图里写中文文字）/ nffa（插画）/ "
     "cunny（超分重渠道·单张 2~4 分钟）/ miao（皮肤质感滑嫩）/ nai（云端）\n"
     "【引用文字】引用带提示词的消息 + 只发渠道词（如「三档」「nai」）→ 照跑；"
     "豆包那种包着客套话的整段复制也认，自动抽英文本体；中英混合也行\n"
     "【引用自己的出图】\n"
-    "  引用出图回执 +「再来一张」→ 同提示词换种子重跑\n"
-    "  引用图 + 说改什么（「把衣服换成jk」）→ 拿当时的提示词直接改，最快\n"
+    "  引用回执或图片 +「提示词 / 给我提示词 / 提取提示词」→ 直接把这张图当初用的提示词发你（零调用）\n"
+    "  引用图 + 说需求（「把头发改成银色」）→ 拿当时的提示词并上你的需求改写，"
+    "沿用这张图原来的渠道重画一张\n"
     "  引用图 + 只@我 → 返回这张图的反推提示词\n"
     "  引用图 + 档位（如「三档」）或「生成这个」→ 反推后直接生成\n"
-    "  引用回执或图片 +「查看提示词」→ 直接把这张图当初用的提示词发你（零调用）\n"
-    "【改图】引用图 + 明说「图生图」+ 改什么（「图生图 把头发换成银色」）"
-    "→ 照着原图改，构图不变；不点名渠道默认动漫档，点名 qwen 走精修（慢）\n"
+    "  引用出图回执 +「再来一张」→ 同提示词换种子重跑\n"
+    "【图生图】只有一条路：引用图 +「qwen 图生图 + 怎么改」→ 只动你点的那一处，"
+    "其余不动（慢，一张 1~2 分钟）；不点名就不垫图\n"
     "【看真图】引用图 + 说「识图 / 反推 / 看图」→ 强制看图（不用账本缓存）\n"
     "【随机口令】零门槛直接玩：\n"
     "  今日老婆 → 随机角色 + 随机穿搭出一张（每人随机，可反复抽）\n"
@@ -583,18 +586,22 @@ GUIDE_TEXT = (
 # 主菜单只留入口，想看细的再主动要）。
 MORE_CHAN_TEXT = (
     "🧭 全部跑法\n"
-    "【档位】默认 < 快档(一档) < 二档 < 三档，后面直接跟描述"
-    "（例：三档 女骑士）\n"
+    "写法只有一个：「渠道名 + 你的需求」（例：三档 女骑士 / jank 银发初音未来）\n"
+    "【默认渠道】不写渠道词 = silver（Anima 系 Turbo，最快）\n"
+    "【档位】一档(=快档) < 二档 < 三档，后面直接跟描述"
+    "（越大越清晰也越慢；例：三档 女骑士）\n"
     "【画风】clear 清晰 / curvy 肉感 / gloss 油亮 / soft 柔和，跟在档位后"
     "（例：二档 gloss 少女），没打按该档默认\n"
-    "【固定渠道】sd / krea2 / qwen / nffa / cunny / miao / nai"
-    "（例：qwen 水晶城堡；sd 支持多段描述用 --- 分隔一次多张；"
+    "【点名渠道】jank / sd / krea2 / qwen / nffa / cunny / miao / nai"
+    "（例：qwen 水晶城堡；jank = 你自定义的 NoobAI 渠道；"
+    "sd 支持多段描述用 --- 分隔一次多张；"
     "cunny = 两段超分重渠道，单张约 2~4 分钟；"
     "miao = 皮肤质感滑嫩，2x 超分出 2048×3072）\n"
     "【随机口令】今日老婆 ｜ 随机萝莉 / 随机兽耳 / 随机女仆\n"
-    "【引用玩法】引用提示词 + 渠道词 = 照跑；引用图 + 只@我 = 反推；"
-    "引用图 + 档位 = 反推后生成；引用图 + 图生图 + 改法 = 照原图改；"
-    "出图回执 +「再来一张」= 换种子重跑"
+    "【引用玩法】引用提示词 + 渠道词 = 照跑；引用图 +「提取提示词」= 给你这张"
+    "当初用的词；引用图 + 说需求 = 改词后用同一渠道重画；引用图 + 只@我 = 反推；"
+    "引用图 + 档位 = 反推后生成；引用图 +「qwen 图生图 + 怎么改」= 只改那一处"
+    "（慢，1~2 分钟）；出图回执 +「再来一张」= 换种子重跑"
 )
 
 # 随机口令与今日老婆（2026-10-05）：斜杠可带可不带，认纯口令。
@@ -652,51 +659,51 @@ def _prompt_lang(skill):
 #   - 每个渠道的尺寸/快慢（本地实测值）
 #   - `chan_hint`：代码从原话里认出的开头渠道词，直接告诉模型（免它误判）
 _MASTER_TEMPLATE = (
-    "你是大大怪，一个生图 AI。看用户说的话，理解他想要什么画面，写成提示词，"
-    "调工具画出来。用户只是在聊天、问问题、要提示词时，就直接回话，不要调工具。\n"
+    "你是大大怪，一个生图 AI。听懂用户要什么画面，写成提示词调工具画出来。"
+    "他只是在聊天、问问题、要提示词就直接回话，不要调工具。\n"
     "\n"
     "【工具】要动手时，只输出一行 JSON，前后不要写别的字：\n"
     "- {{\"tool\": \"generate_image\", \"prompt\": \"英文提示词\", "
     "\"skill\": \"渠道，可省\", \"source_image\": 1, \"seed\": 123}}\n"
-    "  画一张图。prompt 必填、必须是英文。source_image 只在用户要「改这张 / "
-    "垫图 / 图生图」而且这一轮确实有图时填 1；seed 只在用户点名要某个种子时填；"
-    "用不上的参数一律省略。\n"
+    "  画一张图。prompt 必填、必须是英文。**source_image 默认不填**（判据见下面"
+    "【图生图】）；seed 只在用户点名要某个种子时填；用不上的参数一律省略。\n"
     "- {{\"tool\": \"recall_image\", \"id\": \"HT-20261005-123456-789\"}}\n"
-    "  查一张图当初真正用的提示词和种子。用户引用一张带编号的图问「这张什么词」"
-    "时用它。\n"
+    "  查一张图当初用的提示词和种子：用户引用带编号的图问「这张什么词」时用它。\n"
     "不需要动手时，输出 {{\"reply\": \"你要说的话\"}}。\n"
     "\n"
-    "【渠道 skill】不填 = " + _DEFAULT_SKILL + "。用户点名了渠道就照他说的填。\n"
-    "画风四种，跟在档位后面：clear 清晰 / soft 柔和 / gloss 油亮 / curvy 肉感\n"
-    "尺寸四档，id 就是「档位_画风」拼起来的：\n"
-    "- 默认档 = anima_<画风>，728×1024，最快（例 anima_clear）\n"
-    "- 快档   = hd_fast_<画风>，1024×1536（例 hd_fast_clear）\n"
-    "- 二档   = hd_2_<画风>，1328×2000（例 hd_2_gloss）\n"
-    "- 三档   = hd_3_<画风>，1536×2304，最慢（例 hd_3_clear）\n"
-    "  用户说「三档 gloss」→ hd_3_gloss；只说「二档」没提画风 → hd_2_clear。\n"
-    "固定渠道（用户说左边这些词，就填右边那个 id）：\n"
-    "- nai / nai_wide = NovelAI 云端；nai 是竖版 832×1216，nai_wide 是横版 1216×832。"
-    "这两条认画师串和权重语法。\n"
-    "- qwen / 千问 / 通义 = qwen_image_v1，云端、慢，prompt 写完整英文句子；"
-    "图生图精修走它。\n"
-    "- sd = image_gen_v1，能一次出多张（prompt 里用 --- 分段）。\n"
-    "- krea2 / nffa / cunny / miao 是用户点名才用的特殊渠道"
-    "（cunny 和 miao 很慢，单张好几分钟）。\n"
-    "- silver / jank 是你导的自定义渠道（底模+LoRA 已烘焙）：**只在用户明说**"
-    " silver 或 jank 时填（如「用 silver 画」）；都是文生图专用、没图生图骨架，"
-    "对方要垫图/改图就换 anime 档或 qwen。注意 silver 也可能是发色词"
-    "（silver hair），只有用户明显在指渠道时才填，提示词里的 silver hair 是画发色不是渠道。\n"
+    "【渠道 skill】不填 = " + _DEFAULT_SKILL + "（默认渠道）。用户点名渠道就照他说的填。\n"
+    "画风四种（接在档位后）：clear 清晰 / soft 柔和 / gloss 油亮 / curvy 肉感\n"
+    "尺寸四档，id = 档位_画风（档位说的是尺寸，与默认渠道无关）：\n"
+    "- 最小档 = anima_clear 等 anima_<画风>，728×1024，最快；只说画风没说档位时就是它\n"
+    "- 快档（=一档）= hd_fast_<画风>，1024×1536\n"
+    "- 二档 = hd_2_<画风>，1328×2000\n"
+    "- 三档 = hd_3_<画风>，1536×2304，最慢\n"
+    "  「三档 gloss」→ hd_3_gloss；只说「二档」没提画风 → hd_2_clear。\n"
+    "固定渠道（说左边这些词就填右边的 id）：\n"
+    "- nai / nai_wide = NovelAI 云端，竖 832×1216 / 横 1216×832，认画师串和权重语法。\n"
+    "- qwen / 千问 / 通义 = qwen_image_v1，云端、慢，prompt 写完整英文句子。\n"
+    "- sd = image_gen_v1，一次出多张（prompt 里用 --- 分段）。\n"
+    "- krea2 / nffa / cunny / miao：点名才用（cunny / miao 一张好几分钟）。\n"
+    "- silver = **默认渠道**（不填 skill 走的就是它）、jank = 自定义 NoobAI 渠道，"
+    "两条都要**明说渠道名**才填，都是文生图专用、没有图生图骨架。"
+    "⚠️「银发 / silver hair」是画发色、不是点名渠道。\n"
     "{chan_hint}"
     "\n"
+    "【图生图：默认不做，只认点名】`source_image` 一律默认不填：只有用户"
+    "**明说「qwen 图生图」+ 要改什么**才填 1，配 skill=qwen_image_v1、"
+    "prompt 只写一句改动指令（一张 1~2 分钟，不点名不走）。\n"
+    "  引用一张图**不等于**要改它：引用带编号的自家图 + 说需求 → 看图、"
+    "拿它当初的提示词并进新需求改写，**沿用原图当初的渠道**重新生成"
+    "（没点名换渠道就别换）。\n"
     "【提示词怎么写】\n"
     "- 中文需求翻成英文再写，prompt 里不许出现中文"
     "（要出现在画面里的文字除外，用引号原样写）。\n"
     "- 用户给的**画师串**和权重语法（`1.2::tag::`、`artist:xxx`）原样保留，"
     "别翻译、别删、别改成平铺 tag；渠道是 nai 时它就是画风来源，必须用上。\n"
-    "- prompt 只写画面内容，「重绘 / 高清 / 加强细节」这类操作词不要写进去。\n"
-    "- **每一轮都是新请求**：角色、服装、动作、场景全按这一轮重新写，"
+    "- prompt 只写画面内容，「重绘 / 高清 / 加强细节」这类操作词别写进去。\n"
+    "- **每一轮都是新请求**：角色、服装、动作、场景全按这轮重新写，"
     "别把上一轮画过的东西抄过来。\n"
-    "- 认不出的角色照外貌特征写，不要编不存在的角色名。\n"
+    "- 认不出的角色照外貌特征写，别编不存在的角色名。\n"
     "{search}"
     "\n"
     "【最近对话】\n{recent}\n"
@@ -730,33 +737,46 @@ _SEARCH_HEADER = (
 _REVISE_TEMPLATE = (
     "你是生图提示词修正器。用户给你一张图并提出要求。"
     "只输出 JSON 本体，格式：{{\"skill\": \"渠道id\", \"prompt\": \"修正后的"
-    "完整英文提示词\"}}\n"
+    "完整英文提示词\", \"source_image\": 1}}（用不上的参数一律省略）\n"
     "- 先看清楚画面（人物、发色发型、瞳色、表情、服装、姿势、场景），"
     "prompt 必须覆盖画面全部要点，用户没提到的细节原样保留\n"
     "- 原提示词{anchor_note}：与画面冲突时，一律以画面为准\n"
     "- skill 沿用「原渠道」，除非用户点名要换\n"
+    # 渠道清单必须写在这里：改图管道不走 `_MASTER_TEMPLATE`，模板里没有 id
+    # 表时模型听不懂「换 silver」，只会沿用原渠道（2026-10-06 19:22 群
+    # 580929233 实录：引用图 +「silver 生成」→ 又跑了一次 jank）。
+    "- 渠道 id 只有这些（用户点名换渠道时照左边说的话填右边那个）：\n"
+    "  **默认渠道 = silver**（用户没点名渠道、引用的又不是自家图时就用它）；\n"
+    "  动漫档 = anima_clear / anima_soft / anima_gloss / anima_curvy（728×1024，只说画风没说档位时用它）；\n"
+    "  快档（=一档）= hd_fast_<画风>，二档 = hd_2_<画风>，三档 = hd_3_<画风>"
+    "（画风只有 clear/soft/gloss/curvy 四种，例「三档 gloss」= hd_3_gloss）；\n"
+    "  nai / nai_wide = 说「nai」（画师串和权重语法认这两个）；\n"
+    "  qwen_image_v1 = 说「qwen / 千问 / 通义」；image_gen_v1 = 说「sd」；\n"
+    "  krea2 / nffa / cunny / miao = 原话点名才填；\n"
+    "  jank = 原话明说「jank」才填（用户自定义渠道）。\n"
+    "  ⚠️ silver 和 jank 是**文生图专用**、没有垫图骨架。「银发 / silver hair」"
+    "是画发色、不是点名渠道，别因为它就改填 silver。\n"
+    "【图生图：默认不做，只走 qwen 一条】`source_image` 这个字段**默认不填**——"
+    "填了就是把引用的这张图垫进去改，代价很大。只有用户**明说「qwen 图生图」**"
+    "（点名 qwen、要在这张图上改）时才填 1，同时 skill 填 qwen_image_v1、"
+    "prompt 只写**一句改动指令**（例 `change her coat to red, keep the pose, "
+    "face and background exactly the same`），不要把整张图重新描述一遍。\n"
+    "  用户说「把衣服换成jk」「换个姿势」这类**需求**而没点名 qwen 图生图 → "
+    "**不垫图**：看这张图、把要改的内容并进提示词，用文生图重新画一张。"
+    "**引用一张图本身不是垫图要求。**\n"
     "- {lang}\n"
     "- 禁止权重语法 (tag:1.2)、{{tag}}、::\n"
     "- 具体角色没把握就写外貌特征+作品名，不要编造不存在的角色名\n"
-    "{escape}"
+    # 逃逸口**一直开着**：以前代码扫原话认机制词，认到就换成「必须出 prompt」
+    # 那段（`_ESCAPE_FORBIDDEN`，2026-10-06 随图生图硬编码一起删）。现在由模型
+    # 自己判「这轮是改图还是随口评价」，它判成评价就只回反推。
+    "- **用户的话不是修改/生图请求**（夸奖、闲聊、问别的事）→ 只输出一个 "
+    "reverse 字段，值 = 这张图真实的英文 danbooru tag 反推"
+    "（reverse 的值要填真实 tag，别照抄这句话）\n"
     "{search}"
     "原提示词（渠道 {last_skill}）：\n{last_prompt}\n"
     "用户的话：{text}"
 )
-
-# 逃逸口只在这种情况下开：用户**没点名机制词**、只是在图下面随口评价。
-# 「画得真好」这种真闲聊不该被硬改一张图出来。
-_ESCAPE_ALLOWED = (
-    "- **用户的话不是修改/生图请求**（夸奖、闲聊、问别的事）→ 只输出一个 "
-    "reverse 字段，值 = 这张图真实的英文 danbooru tag 反推"
-    "（reverse 的值要填真实 tag，别照抄这句话）\n")
-
-# 用户明说机制词（图生图/垫图/改图/重绘）→ 意图已经定死，模型没有改判的余地。
-# 2026-10-05 用户拍板：明说了图生图还回一段反推提示词，很奇怪。
-_ESCAPE_FORBIDDEN = (
-    "- 用户已经点名「图生图 / 改图」这类机制词，这是**确定的改图请求**："
-    "必须给出 prompt，没有「不是修改请求」这个选项；用户的话再短再笼统，"
-    "也要把它并进画面描述，拿不准的地方保留画面原样\n")
 
 # 会话最近一次直达入队的任务（修正/重跑管道的「原提示词」来源）。
 # 内存态就够：这些场景发生在刚出图之后，进程重启丢了也就是少个上下文。
@@ -887,7 +907,8 @@ def _enqueue(skill, prompt, text, source_image=False, seed=None,
     """转译结果落队。返回要发回会话的文本；成功且回执已直发返回 ""。
 
     source_image=True → 垫本轮引用的那张图（传 "1"，下游 comfy_src.resolve
-    解析；引用图取不到会报错回给用户）。仅图生图路由会传。
+    解析；引用图取不到会报错回给用户）。**只有模型在改图 JSON 里自己填了
+    `source_image` 才会是 True**（2026-10-06 起代码不再扫原话判）。
     seed 非空 → 复刻账本里那张图的种子（引用 HT 图换档场景），下游
     _resolve_seed 会校验范围；只往本机渠道传（NAI 拒收 seed）。
     resample_fn 非空 → 随机口令的「被拦静默重抽」钩子（见 _random_resample）。
@@ -1078,10 +1099,27 @@ def _reverse_text(tags):
     return _REVERSE_HEADER + "\n" + tags
 
 
-# ⚠️ 原先这里有一个 `_PROMPT_ASK_RE = re.compile(r"提示词")`，配合下面
-# `decide()` 里那条「引用 + 提示词 → 直接回词条、不跑 LLM」的直通分支使用。
-# 2026-10-06 随分支一起删（删它的理由见 decide() 里的注释）：只认关键词不认
-# 意图，把改图请求误判成查账。
+# 「要词条」直通（2026-10-06 晚用户要，当晚放宽）：命中 → 直接把这张图
+# 当初真实用的提示词发回去，零 LLM、比让 AI 现推准。
+#
+# 原先只认死「查看提示词」5 个字，用户实打「提示词」/「给我提示词」全不中，
+# 于是掉进改图管道重新跑了一张图（2026-10-06 19:21 群 580929233 实录）。
+# 用户口径：「可以加多几个提取的指令…这样容错高一点」。
+# 收两条，都要求**是在要词条**、不是在聊词条：
+#   ① `_PROMPT_ASK_RE`：动词 + 提示词/词条（给我提示词、提取一下词条…），
+#      或反过来说（提示词给我 / 词条发我一份）。前面挡一个「不/别」，
+#      免得「不要提示词，直接画」被劫。
+#   ② `_PROMPT_BARE_RE`：整句**只有**这两个字（可带标点）。他最常这么打。
+#      「这个提示词是什么」有别的字，两条都不中——照旧走 AI，不误吞。
+# 查哪张图：引用机器人发的带 HT 编号的回执/图，或正文直接贴了 HT 编号
+# ——`_ledger_hit` 从引用正文+原话里抽编号去账本查。
+_PROMPT_ASK_RE = re.compile(
+    r"(?<![不别])(?:查看|查一下|提取|还原|看看|瞅瞅|告诉我|给我|发我|发个|发一份"
+    r"|我要|我想要|想要|要|求|贴出|贴)(?:一?下|一个|一份)?\s*(?:提示词|词条|prompt)"
+    r"|(?:提示词|词条)\s*(?:给我|发我|发出来|发一下|发一份|贴给我|贴出来|来一份)",
+    re.I)
+_PROMPT_BARE_RE = re.compile(
+    r"^\s*(?:提示词|词条|prompt)\s*[。.!！~～？?]*\s*$", re.I)
 
 
 def _ledger_hit(source):
@@ -1109,20 +1147,20 @@ def _ledger_hit(source):
 _LOCAL_SEED_SKILL_RE = re.compile(r"^(anima_|hd_|qwen_image_v1|image_gen_v1|krea2|nffa|cunny|miao)")
 
 
-def _revise(text, data_urls, history, channel=None, at_me=False,
-            source_image=False, doc=None):
+def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):
     """改图管道：引用图 + 意见 → 一次调用 → 重跑。
 
     引用带图改图**一律真识图**（2026-10-05 用户拍板）：账本里存的是当时那句
     提示词，和画面实际内容可能已经对不上（背景改透明那次没看图，出图就不是
     用户要的）。账本提示词降级为「最可信旁证」写进 prompt，不再是唯一来源。
 
-    source_image=True（用户原话点名了图生图机制，`_i2i_intent` 判的）→
-    入队时垫本轮引用的那张图（重绘而非重画），渠道不可重绘就降回默认动漫档；
-    同时**关掉 reverse 逃逸口**——意图已定死，必须出 prompt。
+    垫不垫图（`source_image`）**由模型在这一次调用里判**：它输出 JSON 里带
+    `source_image: 1` 才入队垫图，判据是模板里的【图生图】段（用户明说
+    「qwen 图生图」才垫）。代码不再扫原话认机制词，也不再因为「要垫图」
+    就换渠道——那是 2026-10-06 拆掉的静默降档。
 
-    返回 None = 意见不是修改请求（只在**没点名机制词**时可能）：@ 轮回反推
-    文本、关键词轮静默，由本函数内部处理；用户明说了机制词就不可能走到 None。
+    返回 None = 模型判定这轮不是修改请求（夸奖、闲聊、问别的）：@ 轮回反推
+    文本、关键词轮静默，由本函数内部处理。
     """
     session_key = qq_api.current_session_key()
     quoted = (qq_api.current_quoted_text() or "").strip()
@@ -1142,7 +1180,6 @@ def _revise(text, data_urls, history, channel=None, at_me=False,
         anchor_skill, anchor_prompt = "（无）", "（无）"
         anchor_note = "没有（引用的不是本机器人画的图），忽略此项，以画面为准"
     ask = _REVISE_TEMPLATE.format(
-        escape=_ESCAPE_FORBIDDEN if source_image else _ESCAPE_ALLOWED,
         search=(_SEARCH_HEADER.format(doc=doc) if doc else ""),
         anchor_note=anchor_note,
         last_skill=anchor_skill,
@@ -1160,22 +1197,21 @@ def _revise(text, data_urls, history, channel=None, at_me=False,
     if not data:
         return "改图请求没解析出来，换个说法再试（如「手改成插兜」）。"
     rev = (data.get("reverse") or "").strip()
-    # 用户明说了机制词（source_image）→ 模板里根本没给这条逃逸口，模型不该
-    # 走到这。万一它还是不听话，宁可让他换个说法，也别把反推当结果发回去
-    # ——「明说图生图却回一段反推提示词」正是 2026-10-05 用户报的怪事。
-    if rev and not source_image:
-        # 不是修改请求 → @ 轮把反推给他（2026-10-05 用户口径）；
+    if rev:
+        # 模型判定「这轮不是修改请求」→ @ 轮把反推给他（2026-10-05 用户口径）；
         # 关键词轮静默止刷屏。
         return _reverse_text(rev) if at_me else None
     prompt = (data.get("prompt") or "").strip()
     if not prompt:
         return "改图请求没解析出来，换个说法再试（如「手改成插兜」）。"
+    # 垫不垫图 = **模型在 JSON 里说的算**（2026-10-06 拆掉代码扫原话认机制词，
+    # 判据改写在 `_REVISE_TEMPLATE` 的【图生图】段）。模型没填 / 填 0 = 文生图。
+    si = data.get("source_image")
+    source_image = si is True or str(si or "").strip() == "1"
     skill = channel or (data.get("skill") or "").strip()
     if skill not in _allowed_skills():
         skill = anchor_skill if anchor_skill in _allowed_skills() \
             else _DEFAULT_SKILL
-    if source_image and not _redraw_capable(skill):
-        skill = _DEFAULT_SKILL
     _remember_job(session_key, skill, prompt)
     return _enqueue(skill, prompt, text, source_image=source_image)
 
@@ -1243,14 +1279,13 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     if _MORE_CHAN_RE.search(text):
         return MORE_CHAN_TEXT
 
-    # 「查看提示词」直通（2026-10-06 晚用户要）：打这 5 个字 → 直接把这张图
-    # 当初真实用的提示词发回去，零 LLM、比让 AI 现推准。
-    # 只认这 5 个字（不像之前被删的那条——那是「任何含『提示词』+ 有引用」就
-    # 吞整轮，把「角色换成花火」这类改图轮误判成查账；这次关键词足够具体，
-    # 不会撞改图请求）。查哪张图：引用机器人发的带 HT 编号的回执/图，或正文
-    # 直接贴了 HT 编号——`_ledger_hit` 从引用正文+原话里抽编号去账本查。
-    # 没引用/没编号 → 回一句提示，不误触发 AI 生图（其他没打这 5 字的轮照常走 AI）。
-    if "查看提示词" in text:
+    # 「要词条」直通（2026-10-06 晚用户要，当晚放宽关键词）：命中 → 直接把
+    # 这张图当初真实用的提示词发回去，零 LLM、比让 AI 现推准。判据与话术见
+    # `_PROMPT_ASK_RE` / `_PROMPT_BARE_RE` 处的注释。
+    # 没引用/没编号：显式说法（给我提示词…）回一句提示，不误触发 AI 生图；
+    # 整句只有「提示词」两个字的**不劫这轮**——账本没中说明引用的不是自家图，
+    # 该走下面的流程看图反推，一句「没识别到编号」答非所问。
+    if _PROMPT_ASK_RE.search(text) or _PROMPT_BARE_RE.match(text):
         prompt, skill, seed = _ledger_hit(quoted + " " + text)
         if prompt:
             extra = ""
@@ -1260,8 +1295,9 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
                 extra += "种子：" + seed + "\n"
             return ("这张图当初用的提示词：\n" + prompt
                     + ("\n" + extra if extra else ""))
-        return ("没识别到图片编号（HT-…）。引用机器人发的带编号的图，"
-                "或直接把编号发我。")
+        if _PROMPT_ASK_RE.search(text):
+            return ("没识别到图片编号（HT-…）。引用机器人发的带编号的图，"
+                    "或直接把编号发我。")
 
     ch, desc = _parse_channel(text)
     if ch is None and at_me:
@@ -1290,21 +1326,10 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         if desc and (_GENERIC_I2I_RE.match(desc)
                      or (ch and _RUN_THIS_RE.match(desc))):
             desc = ""       # 「基于图片帮我生成 / 跑这张」是空话，不算意见
-        # 图生图意图（词表与垫图闸门同源）优先：先于「渠道+反推」，否则
-        # 「三档 图生图」会被当成普通反推、还落在不支持重绘的 hd_3 上。
-        if desc and _i2i_intent(text):
-            if ch == "qwen_image_v1" and desc:
-                # qwen 参考图编辑：只吃一句改动指令，直通零调用。
-                # 机制词（图生图/垫图…）不是指令本体，剥掉再给。
-                inst = re.sub(r"图生图|垫[个一?张]?图?|改图|重绘", "", desc)
-                inst = inst.strip(" ，,、:：")
-                if inst:
-                    _remember_job(session_key, ch, inst)
-                    return _enqueue(ch, inst, text, source_image=True)
-                desc = ""                       # 只说了机制词 → 走下面修正
-            # 默认动漫档重绘：视觉模型出修正后的完整 tag，入队垫图。
-            return _revise(text, data_urls, history, channel=ch,
-                           at_me=at_me, source_image=True, doc=doc)
+        # 2026-10-06：这里原先有一整块「代码认机制词 → 判定图生图」的路由
+        # （`_i2i_intent` 命中就走 qwen 直通 / 默认动漫档垫图）。按用户要求
+        # 全删——引用图轮统一进下面的改图管道 `_revise`，垫不垫图由模型在
+        # 那一次调用里输出的 `source_image` 决定（判据见 `_REVISE_TEMPLATE`）。
         # 引用图 + 只打渠道/档位 → 自家图直接用账本提示词（零调用），
         # 别人的图才看图反推（1 次识图），然后入队生成。自家图命中时**连
         # 种子一起复刻**（2026-10-05 用户拍板）：同提示词新种子=构图细节
@@ -1342,8 +1367,9 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
                 log.exception("[direct] 看图说话失败")
                 return "图没看成，稍后再试。"
             return reply or "没认出这张图，重发一次试试。"
-        # 其余（有意见 / 无渠道词）→ 改图管道；模型判「不是修改请求」时
-        # @ 轮回反推文本、关键词轮闭嘴吞轮（明说机制词的轮不会走到这）。
+        # 其余（有意见 / 无渠道词）→ 改图管道：看图 + 账本提示词 + 用户这句
+        # 需求，一次调用出提示词重新生成；要垫图由模型自己在这一次里说。
+        # 模型判「不是修改请求」时 @ 轮回反推文本、关键词轮闭嘴吞轮。
         reply = _revise(text, data_urls, history, channel=ch, at_me=at_me,
                         doc=doc)
         return reply if reply is not None else ""

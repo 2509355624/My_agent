@@ -21,6 +21,7 @@ import unittest
 from unittest import mock
 
 from app import agent as agent_mod
+from app import agents as agent_store
 from app import image_jobs, qq_api, qq_bot
 from app.tools.normal import generate_image as gi
 
@@ -80,8 +81,14 @@ class _SubmitHarness(unittest.TestCase):
 class DirectReceiptTest(_SubmitHarness):
     def test_qq_receipt_is_sent_by_the_backend(self):
         out = self._submit(("group", "9"))
-        self.assertEqual(self.sent,
-                         [("group", "9", "任务已提交，正在画了。")])
+        self.assertEqual(len(self.sent), 1)
+        target, tid, text = self.sent[0]
+        self.assertEqual((target, tid), ("group", "9"))
+        # 第一行永远是那句状态（`receipt_line` 就取它，掐断循环与「本轮别
+        # 再复述」都靠这一行对齐）
+        self.assertEqual(text.splitlines()[0], "任务已提交，正在画了。")
+        # 2026-10-06 用户：「提交任务的时候，可以说明生图的渠道是什么」
+        self.assertIn("当前渠道：silver", text)
         self.assertTrue(out.startswith(MARK))
         # 给模型那段里，第一行就是发出去的那句（qq_bot 靠 receipt_line 取它）
         self.assertEqual(image_jobs.receipt_line(out), "任务已提交，正在画了。")
@@ -92,13 +99,16 @@ class DirectReceiptTest(_SubmitHarness):
                                return_value=("group", "9")):
             gi.tool["function"]("a cat")          # 先占住队首
             out = gi.tool["function"]("a dog")    # 这一张排在后面
-        self.assertEqual(self.sent[-1][2], "任务已提交，前面还有 1 张在排队。")
+        self.assertEqual(self.sent[-1][2].splitlines()[0],
+                         "任务已提交，前面还有 1 张在排队。")
         self.assertTrue(out.startswith(MARK))
 
     def test_private_chat_goes_to_the_private_session(self):
         self._submit(("private", "42"))
-        self.assertEqual(self.sent,
-                         [("private", "42", "任务已提交，正在画了。")])
+        self.assertEqual(len(self.sent), 1)
+        target, tid, text = self.sent[0]
+        self.assertEqual((target, tid), ("private", "42"))
+        self.assertEqual(text.splitlines()[0], "任务已提交，正在画了。")
 
     def test_web_side_sends_no_receipt(self):
         """网页端本来就要同步等到出图，没有这条回执（也发不出去）。"""
@@ -107,6 +117,40 @@ class DirectReceiptTest(_SubmitHarness):
             out = self._submit((None, None))
         self.assertEqual(self.sent, [])
         self.assertIn("生成成功", out)
+
+
+class ReceiptNoteTest(_SubmitHarness):
+    """附言那段的三态（2026-10-06 用户：「那些字我就希望我可以自己去附加」）。
+
+    没设 = 内置默认；设成空串 = 这段不要；其余 = 用户自己写的那份。
+    """
+
+    def _note(self, stored):
+        with mock.patch.object(agent_store, "receipt_note",
+                               return_value=stored):
+            return gi._receipt_text(0, "silver")
+
+    def test_unset_falls_back_to_the_builtin_default(self):
+        text = self._note(None)
+        self.assertIn("渠道名 + 你的需求", text)
+        self.assertIn("更多渠道", text)
+
+    def test_empty_string_switches_the_note_off(self):
+        """清空 = 「这段不要了」，只留状态行和渠道行。"""
+        text = self._note("")
+        self.assertEqual(text.splitlines(),
+                         ["任务已提交，正在画了。", "当前渠道：silver"])
+
+    def test_custom_note_replaces_the_default(self):
+        text = self._note("画好我喊你")
+        self.assertEqual(text.splitlines()[-1], "画好我喊你")
+        self.assertNotIn("更多渠道", text)
+
+    def test_channel_line_survives_without_a_skill(self):
+        """老调用方 / 手工构造的 Job 没带 skill：少报一行，不硬编渠道名。"""
+        with mock.patch.object(agent_store, "receipt_note",
+                               return_value=""):
+            self.assertEqual(gi._receipt_text(0), "任务已提交，正在画了。")
 
 
 class ReceiptSendFailureTest(_SubmitHarness):

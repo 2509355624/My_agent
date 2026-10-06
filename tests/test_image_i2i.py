@@ -469,11 +469,15 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
     出图尺寸 = 「源图缩到本档画布长边」再乘二段放大倍率，**跟源图原始尺寸无关**。
     所以「高清档垫图」出来还是高清档那个尺寸——这正是 `hd_fast_*` / `hd_2_*`
     能被垫的理由，也是 `hd_3_*` 被排除的理由（它自己就慢）。
+
+    2026-10-06：默认渠道换成了 `silver`（NoobAI 单段、没有图生图骨架），所以这一
+    类的调用**都显式点名 `anima_clear`**——原先靠默认值落到会垫图的动漫档。
+    「默认渠道 + source_image = 报错」那条新口径钉在 `test_image_i2i_gate.py`。
     """
 
     def test_default_call_is_still_text2img(self):
         """不传 source_image 就**一行图生图逻辑都不走**——文生图原样不动。"""
-        out, wf = self._run(prompt="1girl, solo")
+        out, wf = self._run(prompt="1girl, solo", skill="anima_clear")
         self.assertIn("任务已提交", out)
         kinds = self._kinds(wf)
         self.assertIn("EmptyLatentImage", kinds)
@@ -488,7 +492,8 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
         """给了源图：骨架换成 LoadImage → VAEEncode → 一段采样。"""
         p1, p2, p3 = self._feed()
         with p1, p2, p3:
-            out, wf = self._run(prompt="把衣服换成红色", source_image="1")
+            out, wf = self._run(prompt="把衣服换成红色", skill="anima_clear",
+                                source_image="1")
         self.assertIn("任务已提交", out)
         self.assertIn("垫的是引用的那张图", out)      # 垫了哪张要回给模型，免得它说错
         kinds = self._kinds(wf)
@@ -504,7 +509,7 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
         """一段的 latent 来自编码后的源图，denoise 定死 0.6（不给模型调）。"""
         p1, p2, p3 = self._feed()
         with p1, p2, p3:
-            _, wf = self._run(prompt="x", source_image="1")
+            _, wf = self._run(prompt="x", skill="anima_clear", source_image="1")
         enc = self._one(wf, "VAEEncode")
         stage1 = [nid for nid, n in wf.items()
                   if n["class_type"] == "KSampler"
@@ -516,7 +521,8 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
         """模型传了 denoise 也不认——它一调就会以为「调低 = 只微调」。"""
         p1, p2, p3 = self._feed()
         with p1, p2, p3:
-            out, wf = self._run(prompt="x", source_image="1", denoise=0.2)
+            out, wf = self._run(prompt="x", skill="anima_clear",
+                                source_image="1", denoise=0.2)
         self.assertIn("任务已提交", out)
         enc = self._one(wf, "VAEEncode")
         stage1 = [nid for nid, n in wf.items()
@@ -573,7 +579,8 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
         """
         with mock.patch.object(comfy_src, "resolve",
                                side_effect=RuntimeError("这儿没有图")):
-            out, wf = self._run(prompt="x", source_image="1")
+            out, wf = self._run(prompt="x", skill="anima_clear",
+                                source_image="1")
         self.assertEqual(out, "这儿没有图")
         self.assertEqual(wf, {})
 
@@ -581,7 +588,8 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
         p1, p2, _ = self._feed()
         with p1, p2, mock.patch.object(comfy_src, "upload",
                                        side_effect=RuntimeError("传不进去")):
-            out, wf = self._run(prompt="x", source_image="1")
+            out, wf = self._run(prompt="x", skill="anima_clear",
+                                source_image="1")
         self.assertEqual(out, "传不进去")
         self.assertEqual(wf, {})
 

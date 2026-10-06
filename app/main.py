@@ -427,6 +427,86 @@ def _agent_or_400(agent_id):
     return aid, None
 
 
+# 两张**附言**的内置默认（管理页拿它当编辑框初始内容）。这两个模块都不在
+# main 的顶层依赖里（image_jobs 会拉起 worker、generate_image 是工具层），
+# 所以照本文件其它地方一样在函数内延迟 import。
+def _receipt_note_default():
+    from app.tools.normal.generate_image import receipt_note_default
+    return receipt_note_default()
+
+
+def _caption_note_default():
+    from app.image_jobs import caption_note_default
+    return caption_note_default()
+
+
+# 附言的长度上限（两张共用）。它是要**刷屏发进群里**的文字，不是提示词：
+# 写长了每条回执都带着走，所以卡得比 VISION_PROMPT_MAX 紧。
+_NOTE_TEXT_MAX = 400
+
+
+@app.route("/api/agent/<agent_id>/receipt_note", methods=["PUT"])
+def set_agent_receipt_note(agent_id):
+    """设**提交回执的附言**（跟在「任务已提交…」+「当前渠道：X」后面那段）。热生效。"""
+    return _set_note(agent_id, "receipt_note")
+
+
+@app.route("/api/agent/<agent_id>/caption_note", methods=["PUT"])
+def set_agent_caption_note(agent_id):
+    """设**出图 caption 的附言**（跟在 `编号 · 分辨率 · 渠道 · seed` 那行后面）。热生效。"""
+    return _set_note(agent_id, "caption_note")
+
+
+def _set_note(agent_id, key):
+    """两张附言共用的写入口。
+
+    body: {"note": "..."}。语义按用户 2026-10-06 的口径分三种，别混：
+    - 传字符串（**含空串**）→ 原样存。空串 = 「这段我不要」，回执/caption
+      就只发原来那一行；
+    - 传 null → 删键，回到内置默认；
+    - 不是字符串 → 400。
+
+    ⚠️ 与 `set_agent_vision_prompt` 最大的不同：那边空串当「恢复默认」，这边
+    空串是「关闭附言」——附言是给人看的装饰，关掉不影响任何功能，而「把框清空
+    还想让我看到默认那段」才是会让人莫名其妙的。那边也不能照抄：审核/识图
+    提示词写坏了会改变模型行为，附言写坏了只是刷屏多几行字，所以上限之外
+    不做任何内容校验（不加「恢复默认」按钮，2026-10-06 用户明确不要）。
+    """
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    aid, err = _agent_or_400(agent_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if "note" not in body:
+        return jsonify({"error": "需要字段 note（字符串；空串 = 不要这段附言，"
+                                 "null = 用内置默认）"}), 400
+    v = body["note"]
+    if v is None:
+        settings = agent_store.load_settings(aid)
+        settings.pop(key, None)
+        if not agent_store.save_settings(aid, settings):
+            return jsonify({"error": "写入 settings.json 失败"}), 500
+        return jsonify({"ok": True, "agent": aid, "note": None,
+                        "using_default": True})
+    if not isinstance(v, str):
+        return jsonify({"error": "note 要么是字符串，要么是 null"}), 400
+    v = v.strip()
+    if len(v) > _NOTE_TEXT_MAX:
+        return jsonify({"error": "附言太长（%d 字，上限 %d）：这段每次发图都要"
+                                 "刷屏一遍，写长了没人看" % (len(v), _NOTE_TEXT_MAX)}), 400
+    settings = agent_store.load_settings(aid)
+    settings[key] = v
+    if not agent_store.save_settings(aid, settings):
+        return jsonify({"error": "写入 settings.json 失败"}), 500
+    default = (_receipt_note_default() if key == "receipt_note"
+               else _caption_note_default())
+    return jsonify({"ok": True, "agent": aid, "note": v,
+                    "using_default": False,
+                    "effective": v or default})
+
+
 def _agent_detail(aid):
     """管理页需要的完整状态。provider / model 为空串表示「继承全局默认」。
 
@@ -770,6 +850,15 @@ def get_agent_sessions(agent_id):
                     # 只管 agent 收图转文字那一条链路，审核和表情包各自写死。
                     "vision_prompt": agent_store.vision_prompt(aid),
                     "vision_prompt_default": vision_mod.default_prompt(),
+                    # 两张**附言**（2026-10-06 用户要求「生图后的描述我也希望
+                    # 可以自己加字」）：提交回执那行后面、出图 caption 那行后面
+                    # 各接一段，都能在这儿改。存的那份给原值（null = 从没设过，
+                    # 前端就预填 default；空串 = 用户明确不要这段字，别拿
+                    # default 盖回去）。
+                    "receipt_note": settings.get("receipt_note"),
+                    "receipt_note_default": _receipt_note_default(),
+                    "caption_note": settings.get("caption_note"),
+                    "caption_note_default": _caption_note_default(),
                     "private_enable": priv_on,
                     "private_whitelist": priv_wl,
                     "private_whitelist_on":

@@ -492,6 +492,46 @@ def vision_prompt(agent_id):
     return v.strip() if isinstance(v, str) else ""
 
 
+# ─── 两张「附言」：提交回执 / 出图 caption 后面那段可自己改的话 ───
+#
+# 2026-10-06 用户拍板：「那些字我就希望我可以自己去附加这一些内容……一点换行、
+# 二点换行、三点换行」「这个生图后的描述也可以我自己去 agent 管理界面进行编辑」。
+# 所以两处都留了口子：
+#   - `receipt_note`：跟在「任务已提交，正在画了。」+「当前渠道：X」后面；
+#     默认内容 = 常用渠道 + 「渠道名 + 你的需求」的用法（见 generate_image）。
+#   - `caption_note`：跟在图的 `编号 · 分辨率 · 渠道 · seed` 那行后面；
+#     默认内容 = 引用这张图的三条用法（见 image_jobs）。
+#
+# 口径与 `vision_prompt` 同款「只认字符串」，但**空串有含义**：
+#   - 键不存在 / 存成 null、数字 → 返回 None = 「没设」，调用方用内置默认；
+#   - 存成空串（管理页把框清空）→ 返回 "" = 「这段附言我不要」，回执/caption
+#     就只发原来那一行。附言是给人看的装饰，关掉不会改变任何闸门语义，所以
+#     这里容许空串当显式关闭，不像审核提示词那样必须 fail-closed。
+# 管理页**没有「恢复默认」按钮**（2026-10-06 用户：「什么叫恢复默认啊？这恢复
+# 默认，有点奇怪」）——编辑框打开时就预填当前实际在用的那份。
+_RECEIPT_NOTE_KEY = "receipt_note"
+_CAPTION_NOTE_KEY = "caption_note"
+
+
+def _note_setting(agent_id, key):
+    """settings.json 里的那份附言。没设 → None；设成空串 → ""（= 不要附言）。"""
+    s = load_settings(agent_id)
+    if key not in s:
+        return None
+    v = s[key]
+    return v.strip() if isinstance(v, str) else None
+
+
+def receipt_note(agent_id):
+    """自定义的提交回执附言；None = 没设（调用方回落内置默认），"" = 关掉。"""
+    return _note_setting(agent_id, _RECEIPT_NOTE_KEY)
+
+
+def caption_note(agent_id):
+    """自定义的出图 caption 附言；None = 没设（回落内置默认），"" = 关掉。"""
+    return _note_setting(agent_id, _CAPTION_NOTE_KEY)
+
+
 # 主动发言冷却的合法范围（秒）。0 = 不限频；上限防手滑输成天文数字。
 INTERJECT_COOLDOWN_MIN = 0
 INTERJECT_COOLDOWN_MAX = 3600
