@@ -1402,6 +1402,42 @@ class SingleInstanceTest(unittest.TestCase):
         with mock.patch.object(qq_bot, "msvcrt", None):
             self.assertTrue(qq_bot._acquire_single_instance())
 
+    def test_pid_file_records_self_and_parent(self):
+        """`.qq_bot.pid` 是「重启QQ机器人.bat」唯一能用的认人依据，格式要钉住。
+
+        **不能改成按窗口标题杀进程**：本机这些窗口是 Windows Terminal 托管的，
+        一个 WindowsTerminal.exe 里挂着好几个标签页（实测 QQBOT-ADAPTER 和
+        SNOWLUMA 是同一个进程，标题随当前标签页变），按标题杀会把协议端一起
+        端掉 —— 那就得重新扫码。所以第一段写自己，第二段写父进程（`cmd /k`
+        起的，结束它才能把那个标签页收掉）。
+        """
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(qq_bot, "BASE_DIR", d):
+                self.assertTrue(qq_bot._acquire_single_instance())
+                self._release()
+                with open(os.path.join(d, ".qq_bot.pid")) as f:
+                    parts = f.read().split()
+            self.assertEqual(parts, [str(os.getpid()), str(os.getppid())])
+
+    def test_drop_pid_file_only_removes_own(self):
+        """收尾只删自己写的那份：内容第一段不是自己就别动。
+
+        老进程收尾慢于新进程启动时，文件里已经是新实例的 PID 了，删掉它会让
+        重启脚本认不出正在跑的那个。
+        """
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, ".qq_bot.pid")
+            with mock.patch.object(qq_bot, "BASE_DIR", d):
+                with open(path, "w") as f:
+                    f.write("999999 1\n")
+                qq_bot._drop_pid_file()
+                self.assertTrue(os.path.exists(path), "别人的 PID 文件被删了")
+
+                with open(path, "w") as f:
+                    f.write("%d 1\n" % os.getpid())
+                qq_bot._drop_pid_file()
+                self.assertFalse(os.path.exists(path), "自己的 PID 文件没删掉")
+
 
 class TurnReplyDedupTest(unittest.TestCase):
     """同一轮里重复的正文只发一次，多段之间换行。

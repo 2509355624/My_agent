@@ -35,6 +35,11 @@ vector_store/
 # QQ 适配层单实例锁（运行时状态文件）
 .qq_bot.lock
 
+# QQ 适配层的 PID 记录（qq_bot 启动时写、优雅退出时删）。
+# 「重启QQ机器人.bat」靠它精确定位进程 —— 那台机器上一个 WindowsTerminal.exe
+# 里挂着好几个标签页，按窗口标题杀会连协议端一起端掉。运行时状态，不入库。
+.qq_bot.pid
+
 # Python 缓存
 __pycache__/
 *.pyc

@@ -1385,7 +1385,36 @@ def _acquire_single_instance():
         handle.close()
         return False
     _SINGLETON_HANDLE = handle          # 持有引用，避免被 GC 提前关掉
+
+    # 把 PID 落到 `.qq_bot.pid`，给「重启QQ机器人.bat」精确结束**这一个**进程用。
+    # ⚠️ 它**不能**按窗口标题杀：本机这些窗口是 Windows Terminal 托管的，一个
+    # WindowsTerminal.exe 里挂着好几个标签页（实测 QQBOT-ADAPTER 和 SNOWLUMA
+    # 是同一个进程，标题随当前标签页变），按标题杀会把协议端一起端掉——那就得
+    # 重新扫码了。第一行是自己，第二行是父进程（`cmd /k` 起的，结束它才能把
+    # 那个标签页收掉）。
+    try:
+        with open(os.path.join(BASE_DIR, ".qq_bot.pid"), "w") as f:
+            f.write("%d %d\n" % (os.getpid(), os.getppid()))
+    except OSError as e:
+        log.warning("写 PID 文件失败（%s）——「重启QQ机器人.bat」会退回按连接找进程", e)
     return True
+
+
+def _drop_pid_file():
+    """优雅退出时删掉 PID 文件。
+
+    内容第一段不是自己就别动——可能已经是新实例写的了（老进程收尾慢于新进程
+    启动时会发生）。被 taskkill /F 强杀时这个函数根本不会跑，留个死 PID 也不
+    要紧：「重启QQ机器人.bat」杀之前会先确认那个 PID 还是 python.exe。
+    """
+    path = os.path.join(BASE_DIR, ".qq_bot.pid")
+    try:
+        with open(path) as f:
+            parts = f.read().split()
+        if parts and parts[0] == str(os.getpid()):
+            os.remove(path)
+    except (OSError, ValueError):
+        pass
 
 
 def main():
@@ -1403,6 +1432,8 @@ def main():
         asyncio.run(QQBot().run())
     except KeyboardInterrupt:
         log.info("已停止")
+    finally:
+        _drop_pid_file()
 
 
 if __name__ == "__main__":
