@@ -1873,15 +1873,28 @@ class SearchHookTest(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
-    def _prefetch(self, doc="", boom=False, text="画个胡桃"):
-        """跑一次 _prefetch_search，返回 (返回的 doc, 搜索 mock)。"""
-        from app import search_agent
+    def _prefetch(self, doc="", boom=False, text="画个胡桃", det=""):
+        """跑一次 `_prefetch_search`，返回 (返回的资料包, 搜索 mock)。
 
-        def fake(need):
+        ⚠️ 两段都要 mock：
+          - `search_agent.search` —— 走 LLM，用例里绝不出网；
+          - `search_tags.extract` —— 它会去读**真的** 32.8 万行标签库
+            （首次约 0.5 s + 110 MB），而且结果随库变，不能进单测。
+        """
+        from app import search_agent
+        from app.tools.normal import search_tags
+
+        def fake(need, hint=""):
             if boom:
                 raise RuntimeError("搜索炸了")
             return doc
 
+        dp = mock.patch.object(
+            search_tags, "extract",
+            return_value={"doc": det, "hint": "已经查过的词：X",
+                          "confirmed": ["X"], "ambiguous": []})
+        dp.start()
+        self.addCleanup(dp.stop)
         sp = mock.patch.object(search_agent, "search", side_effect=fake)
         m_search = sp.start()
         self.addCleanup(sp.stop)
@@ -1934,6 +1947,91 @@ class SearchHookTest(unittest.TestCase):
         out = direct_gen._MASTER_TEMPLATE.format(
             recent="", text="t", chan_hint="", search="")
         self.assertIn("【用户】", out)
+
+
+class DocPackTest(unittest.TestCase):
+    """资料包 = 定点抽取（代码，确定性）+ 搜索 Agent（LLM，补漏）。
+
+    用户 2026-10-06 原话：「我们进行搜索应该是一套工作流，跑一次搜索，然后
+    组合成差不多 500~1000 个字的这样一套东西发给这个生图 API，让它去可以
+    参考这个写法。」
+
+    这里钉住拼接顺序、hint 透传、和总长度上限。
+    """
+
+    def setUp(self):
+        p = mock.patch.object(direct_gen, "SEARCH_ENABLED", True)
+        p.start()
+        self.addCleanup(p.stop)
+        from app.tools.normal import search_tags
+        from app import search_agent
+        self.st = search_tags
+        self.sa = search_agent
+
+    def _run(self, det="", agent="", text="画个胡桃"):
+        from app.tools.normal import search_tags
+        from app import search_agent
+
+        dp = mock.patch.object(
+            search_tags, "extract",
+            return_value={"doc": det, "hint": "h", "confirmed": [],
+                          "ambiguous": []})
+        dp.start()
+        self.addCleanup(dp.stop)
+        sp = mock.patch.object(search_agent, "search",
+                               side_effect=lambda need, hint="": agent)
+        m = sp.start()
+        self.addCleanup(sp.stop)
+        return direct_gen._prefetch_search(text), m
+
+    def test_deterministic_part_comes_first(self):
+        """定点抽取排前面：它是确定性真值，LLM 那段是补漏。"""
+        out, _ = self._run(det="【定点】连衣裙 → dress", agent="【Agent】泳装 → swimsuit")
+        self.assertIn("连衣裙", out)
+        self.assertIn("swimsuit", out)
+        self.assertLess(out.index("连衣裙"), out.index("swimsuit"))
+
+    def test_hint_is_forwarded_to_the_agent(self):
+        """成本全靠这条：告诉模型哪些词代码已经查实了，别重复查。"""
+        _, m = self._run(det="【定点】x", agent="y")
+        self.assertEqual(m.call_args[1].get("hint"), "h")
+
+    def test_agent_still_gets_the_raw_need(self):
+        _, m = self._run(agent="y", text="画个银狼在打游戏")
+        self.assertEqual(m.call_args[0][0], "画个银狼在打游戏")
+
+    def test_deterministic_part_alone_is_enough(self):
+        """搜索 Agent 返回空（比如它判定「无需查库」）时，定点抽取照样交出去。"""
+        out, _ = self._run(det="【定点】连衣裙 → dress", agent="")
+        self.assertIn("dress", out)
+
+    def test_agent_part_alone_is_enough(self):
+        out, _ = self._run(det="", agent="【Agent】泳装 → swimsuit")
+        self.assertIn("swimsuit", out)
+
+    def test_both_empty_gives_empty(self):
+        out, _ = self._run(det="", agent="")
+        self.assertEqual(out, "")
+
+    def test_extract_failure_falls_back_to_the_agent(self):
+        from app.tools.normal import search_tags
+        from app import search_agent
+        with mock.patch.object(search_tags, "extract",
+                               side_effect=RuntimeError("库炸了")):
+            with mock.patch.object(search_agent, "search",
+                                   side_effect=lambda need, hint="": "【Agent】y"):
+                out = direct_gen._prefetch_search("画个胡桃")
+        self.assertEqual(out, "【Agent】y")
+
+    def test_total_length_is_capped(self):
+        out, _ = self._run(det="甲" * 900, agent="乙" * 900)
+        self.assertLessEqual(len(out), direct_gen.DOC_MAX_CHARS + 1)
+
+    def test_cap_keeps_the_deterministic_head(self):
+        """超长时从尾巴截——定点抽取是真值，不能被截掉。"""
+        out, _ = self._run(det="甲" * 900, agent="乙" * 900)
+        self.assertTrue(out.startswith("甲"))
+        self.assertIn("…", out)
 
 
 class DecidePrefetchTest(unittest.TestCase):

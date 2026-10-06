@@ -688,15 +688,26 @@ _MASTER_TEMPLATE = (
     "【用户】\n{text}"
 )
 
-# 标签库资料段（{search} 槽）。有资料时明写「以此为准」，并给出资料缺失时的
-# 退路——用户点名要求：**数据缺失就按实际情况补，但一定要参考搜索给回来的**。
+# 标签库资料段（{search} 槽）。用户点名要求：**数据缺失就按实际情况补，
+# 但一定要参考搜索给回来的**。
+#
+# 2026-10-06 措辞收紧：资料包从「几个角色名」变成「500~1000 字的候选池 +
+# 同族写法参考」之后，**里面必然带一些不相关的噪音**（中文滑窗对「三档」
+# 这种词会命中 `gear_third`）。原来那句「资料里给了的一律照它写」会把噪音
+# 直接钉进提示词——所以改成明写「候选池，不相符的直接忽略」，但保留
+# 「给了 tag 名的照抄」这条防编造的核心约束。
 _SEARCH_HEADER = (
-    "\n【标签库资料】以下是刚从 Danbooru 标签库里查到的真实条目"
-    "（格式：中文名 → tag 名（作品名））。\n"
-    "**角色和作品以这份资料为准**，直接用它给的 tag 名，别自己凭印象写。\n"
-    "同一个中文名有多个候选时，结合用户的需求和最近的对话挑最合适的那个。\n"
-    "资料里没有的东西（普通描述词、画法）你自己按需要补；"
-    "但**资料里给了的，一律照它写**，别改动。\n"
+    "\n【标签库资料】以下是刚从 Danbooru 标签库（32.8 万条真实条目）里查出来的。\n"
+    "格式是 `中文 → tag 名`；`｜同族：…` 是同一个主体在库里还能怎么修饰，"
+    "给你参考写法用的。\n"
+    "**这份资料怎么用**：\n"
+    "1. 它是**候选池和写法参考**，不是必须全用。只取和用户需求相符的；"
+    "明显不相符的（用户要「女孩」而资料里给了个无关角色）**直接忽略**。\n"
+    "2. **角色和作品以这份资料为准**——资料里给了 tag 名的，照抄，"
+    "别自己凭印象写。\n"
+    "3. 同一个中文名有多个候选时，结合用户的需求和最近的对话挑最合适的那个。\n"
+    "4. 资料里没有的东西（普通描述词、画法、画面氛围）你自己按需要补；"
+    "但**凡是资料给了 tag 名的，一律照它写**，别改动拼写。\n"
     "{doc}\n"
 )
 
@@ -888,14 +899,34 @@ def _enqueue(skill, prompt, text, source_image=False, seed=None,
     return result
 
 
-def _prefetch_search(text):
-    """跑一次搜索 Agent，返回资料文本；关掉或失败返回 ""。
+# 资料包总上限。用户 2026-10-06 定的：一次搜索组合成 500~1000 字发给生图 API。
+# 分两段拼：代码定点抽取（≤600 字，确定性）+ 搜索 Agent（≤600 字，补漏）。
+# 真超了从**尾巴**截——尾巴是 Agent 那段，定点抽取是确定性的真值，不能动。
+DOC_MAX_CHARS = 1000
 
-    **用户 2026-10-06 拍板：全部流程默认先走一遍搜索 Agent，再由最后的
-    单次生图 API 出提示词。** 所以搜索提到 `decide()` 入口统一做一次，
-    `_translate` 和 `_revise` 共用——原先只有 `_translate` 内部会搜，
-    而改图管道 `_revise` 根本不经过它，导致群里最常见的「图生图，角色换XX」
-    从来没走过搜索。
+
+def _prefetch_search(text):
+    """组装一份资料包：代码定点抽取 + 搜索 Agent 补漏。失败返回 ""。
+
+    **用户 2026-10-06 拍板：全部流程默认先走一遍搜索，再由最后的单次生图
+    API 出提示词。** 所以搜索提到 `decide()` 入口统一做一次，`_translate`
+    和 `_revise` 共用——原先只有 `_translate` 内部会搜，而改图管道 `_revise`
+    根本不经过它，导致群里最常见的「图生图，角色换XX」从来没走过搜索。
+
+    **同一天的第二轮改动**：用户原话「我们进行搜索应该是一套工作流，跑一次
+    搜索，然后组合成差不多 500~1000 个字的这样一套东西发给这个生图 API，
+    让它去可以参考这个写法」。所以这里变成两段：
+
+      ① `search_tags.extract()` —— 代码扫库，**0 token、微秒级、不可能编造**。
+         用户原话里字面出现的词直接定成 tag（连衣裙→dress、白色围裙→white_apron），
+         还顺带给同族标签（dress → white_dress / floral_print_dress…）。
+      ② `search_agent.search(hint=…)` —— 1 次 LLM，只补 ① 补不到的：
+         同义词桥接、歧义角色、库外名词、联网。
+
+    为什么 ① 放在前面：用户的目标是「AI 不要犯错」。确定性抽取错不了，而
+    LLM 层要为每个词各跑一轮才等价——那正是 10-06 上午实测出 4,325 miss
+    token / 单场 14,487 token 的原因。让代码干确定的活，LLM 只干需要判断的活，
+    两边都变好。
 
     失败/查不到返回 ""，调用方按「没有资料」继续走原来的路——搜索是增强，
     不是主链路，它挂了不该让生图也挂。
@@ -905,12 +936,29 @@ def _prefetch_search(text):
     text = (text or "").strip()
     if not text:
         return ""
+
+    parts, hint = [], ""
+    try:
+        from app.tools.normal.search_tags import extract
+        got = extract(text)
+        if got.get("doc"):
+            parts.append(got["doc"])
+            hint = got.get("hint") or ""
+    except Exception:
+        log.exception("[direct] 定点抽取失败，只走搜索 Agent")
+
     try:
         from app import search_agent
-        return search_agent.search(text) or ""
+        doc = search_agent.search(text, hint=hint) or ""
+        if doc:
+            parts.append(doc)
     except Exception:
         log.exception("[direct] 前置搜索失败，按无资料继续")
-        return ""
+
+    out = "\n\n".join(parts)
+    if len(out) > DOC_MAX_CHARS:
+        out = out[:DOC_MAX_CHARS].rstrip() + "…"
+    return out
 
 
 def _translate(text, history, skill=None, weighted=False, no_default=False,

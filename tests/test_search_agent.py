@@ -255,7 +255,27 @@ class ScopeTest(_Base):
         self.assertIn("不许编", sa.SEARCH_PROMPT)
 
     def test_prompt_caps_doc_length(self):
-        self.assertIn("1000 字", sa.SEARCH_PROMPT)
+        # 2026-10-06 从 1000 降到 600：定点抽取会先交一份 300~600 字的确定性
+        # 资料，这一层只补漏，两层加起来才是用户要的 500~1000 字。
+        self.assertIn("600 字", sa.SEARCH_PROMPT)
+
+    def test_doc_cap_leaves_room_for_the_deterministic_part(self):
+        self.assertEqual(sa.MAX_DOC_CHARS, 600)
+
+    def test_prompt_tells_it_to_bridge_synonyms(self):
+        """定点抽取按**字面**匹配，用户的说法和库里不一样就漏。
+
+        这一层最主要的价值就是补这个：用户说「泳衣」库里叫「泳装」、
+        说「初音」库里叫「初音未来」。不提这一条，模型只会去查原词。
+        """
+        self.assertIn("同义词", sa.SEARCH_PROMPT)
+
+    def test_prompt_documents_the_random_mode(self):
+        self.assertIn("random", sa.SEARCH_PROMPT)
+
+    def test_prompt_tells_it_not_to_repeat_the_deterministic_pass(self):
+        """成本全靠这条压下来——重复查代码已经查实的词是纯浪费。"""
+        self.assertIn("别重复查", sa.SEARCH_PROMPT)
 
     def test_need_is_passed_verbatim(self):
         seen = self._llm(["资料"])
@@ -320,6 +340,96 @@ class WebSearchTest(_Base):
         joined = "\n".join(m["content"] for m in seen[1])
         self.assertIn("tag_胡桃", joined)
         self.assertIn("网页结果", joined)
+
+
+class HintTest(_Base):
+    """`hint` = 代码定点抽取的结果摘要（2026-10-06 加）。
+
+    它**不是历史**——是**同一轮**里代码先跑出来的一步。塞进来只为一件事：
+    让模型别把同样的词再查一遍。成本全靠这一条压下来。
+    """
+
+    def test_hint_reaches_the_prompt(self):
+        seen = self._llm(["资料"])
+        sa.search("画个胡桃", hint="已经查过的词：连衣裙、撑伞")
+        content = seen[0][0]["content"]
+        self.assertIn("连衣裙", content)
+        self.assertIn("【定点抽取结果", content)
+
+    def test_no_hint_leaves_no_block(self):
+        seen = self._llm(["资料"])
+        sa.search("画个胡桃")
+        # 提示词正文里本来就提到「定点抽取结果」（告诉模型先看它），
+        # 所以这里钉的是**那个块本身**有没有出现
+        self.assertNotIn("【定点抽取结果", seen[0][0]["content"])
+
+    def test_hint_is_not_a_backdoor_for_history(self):
+        """守卫：hint 不能变成夹带会话历史的暗门。"""
+        seen = self._llm(["资料"])
+        sa.search("画个胡桃", hint="已经查过的词：胡桃")
+        self.assertNotIn("最近对话", seen[0][0]["content"])
+
+    def test_need_is_still_passed_verbatim_alongside_hint(self):
+        seen = self._llm(["资料"])
+        sa.search("画个银狼在打游戏", hint="x")
+        self.assertIn("画个银狼在打游戏", seen[0][0]["content"])
+
+    def test_hint_still_produces_one_single_user_message(self):
+        seen = self._llm(["资料"])
+        sa.search("画个胡桃", hint="x")
+        self.assertEqual(len(seen[0]), 1)
+        self.assertEqual(seen[0][0]["role"], "user")
+
+
+class RandomToolTest(_Base):
+    """随机模式（用户 2026-10-06：「我要一个随机的画师出来……我们是不是
+    应该有个随机的工具？」）。
+
+    契约：random 模式下**多传参数**；普通查词保持 `fn(query)` 一个位置参数
+    ——别把调用形状改复杂，测试里的 mock 全是按单参数写的。
+    """
+
+    def test_random_call_is_routed_with_its_own_kwargs(self):
+        self.tool.side_effect = lambda **kw: "【随机】%s" % kw
+        seen = self._llm([
+            '[[TOOL:search_tags]]{"random": true, "cat": "1", "count": 2}',
+            "资料",
+        ])
+        sa.search("随机画师")
+        kw = self.tool.call_args[1]
+        self.assertTrue(kw.get("random"))
+        self.assertEqual(kw.get("cat"), "1")
+        self.assertEqual(kw.get("count"), 2)
+        joined = "\n".join(m["content"] for m in seen[1])
+        self.assertIn("随机", joined)
+
+    def test_random_defaults_count_to_three(self):
+        self.tool.side_effect = lambda **kw: "x"
+        self._llm(['[[TOOL:search_tags]]{"random": true}', "资料"])
+        sa.search("随机画师")
+        self.assertEqual(self.tool.call_args[1].get("count"), 3)
+
+    def test_random_carries_the_pattern_through(self):
+        self.tool.side_effect = lambda **kw: "x"
+        self._llm(['[[TOOL:search_tags]]{"random": true, "cat": "0", '
+                   '"pattern": "dress"}', "资料"])
+        sa.search("随机服饰")
+        self.assertEqual(self.tool.call_args[1].get("pattern"), "dress")
+
+    def test_plain_query_keeps_the_single_positional_arg(self):
+        self._llm(['[[TOOL:search_tags]]{"query": "胡桃"}', "资料"])
+        sa.search("画个胡桃")
+        self.tool.assert_called_once_with("胡桃")
+
+    def test_no_query_and_no_random_is_still_rejected(self):
+        self._llm(['[[TOOL:search_tags]]{}', "资料"])
+        sa.search("画个胡桃")
+        self.tool.assert_not_called()
+
+    def test_web_search_still_requires_a_query(self):
+        self._llm(['[[TOOL:web_search]]{"random": true}', "资料"])
+        sa.search("画个胡桃")
+        self.web.assert_not_called()
 
 
 if __name__ == "__main__":
