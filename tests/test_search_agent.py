@@ -140,6 +140,39 @@ class LoopTest(_Base):
         self.tool.assert_not_called()
 
 
+class NoNeedTest(_Base):
+    """模型判定「无需查库」时必须归一成空资料。
+
+    否则这四个字会原样塞进生图模板的 {search} 槽，下游还得自己无视它。
+    背景（2026-10-06 实测）：不给这个出口时，模型面对「三档」「泳衣颜色变浅」
+    这类不含专有名词的请求会反复换词空转，跑满 8 轮、24 次调用、14,487 token。
+    """
+
+    def test_no_need_reply_becomes_empty_doc(self):
+        self._llm(["无需查库"])
+        self.assertEqual(sa.search("三档 clear"), "")
+        self.tool.assert_not_called()
+
+    def test_no_need_with_trailing_punctuation(self):
+        self._llm(["无需查库。"])
+        self.assertEqual(sa.search("泳衣颜色变浅"), "")
+
+    def test_no_need_after_a_tool_round(self):
+        """先查了一轮才发现没东西可查，也要认。"""
+        self._llm([
+            '[[TOOL:search_tags]]{"query": "x"}',
+            "无需查库",
+        ])
+        self.assertEqual(sa.search("三档"), "")
+        self.assertEqual(self.tool.call_count, 1)
+
+    def test_real_doc_merely_mentioning_the_phrase_is_kept(self):
+        """只有「整条回复就是这四个字」才算——资料里顺带提到不算。"""
+        doc = "角色：胡桃 → hu_tao_(genshin_impact)。（本条不适用「无需查库」）"
+        self._llm([doc])
+        self.assertEqual(sa.search("画个胡桃"), doc)
+
+
 class FailureTest(_Base):
     def test_llm_exception_returns_empty(self):
         p = mock.patch.object(sa.llm, "call_llm", side_effect=RuntimeError("boom"))
@@ -201,9 +234,19 @@ class ScopeTest(_Base):
         """网页搜索贵得多，提示词必须把它限成「查不到 / 拿不准才用」。"""
         self.assertIn("只在标签库查不到", sa.SEARCH_PROMPT)
 
-    def test_prompt_forces_a_tool_call_on_round_one(self):
+    def test_prompt_forces_a_tool_call_when_a_proper_noun_exists(self):
         """真实事故：模型第 1 轮直接凭记忆写资料，冷门角色的 tag 全是编的。"""
-        self.assertIn("第一轮必须先调工具", sa.SEARCH_PROMPT)
+        self.assertIn("有专有名词", sa.SEARCH_PROMPT)
+        self.assertIn("第一轮就先调工具查它", sa.SEARCH_PROMPT)
+
+    def test_prompt_gives_an_exit_for_pure_descriptions(self):
+        """真实事故：没有专有名词时模型硬找词查，一场 8 轮 24 次调用烧 14,487 token。
+
+        提示词必须给出「一个工具都别调」的明确出口，否则它会反复换词空转。
+        """
+        self.assertIn("没有专有名词", sa.SEARCH_PROMPT)
+        self.assertIn("一个工具都别调", sa.SEARCH_PROMPT)
+        self.assertIn("无需查库", sa.SEARCH_PROMPT)
 
     def test_tool_table_has_exactly_two_entries(self):
         self.assertEqual(set(sa._TOOLS), {"search_tags", "web_search"})
