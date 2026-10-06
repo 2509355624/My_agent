@@ -78,6 +78,18 @@ log = logging.getLogger(__name__)
 # 关——不然跑真实 _run_turn 的用例会截胡，甚至真调转译 API。
 ENABLED = os.getenv("DIRECT_GEN", "1") == "1"
 
+# 标签库前置搜索（.env DIRECT_SEARCH=0 可关）。
+#
+# 开：转译之前先让 search_agent 查一遍标签库，把「角色名 → 真实 tag」的候选
+#     资料塞进模板。解决两个问题：**角色不对**、**提示词不符合要求**。
+# 关：完全走老路，一个字都不多花。
+#
+# 关掉它的场景：搜索 Agent 出问题要紧急熔断、或者想对比「有没有搜索」的
+# 效果差。关掉后 _translate 的模板里那一格是空的，模型按自己的判断写。
+# 成本（实测）：搜索 Agent 约 1,254 token/张（2 轮），资料本身约 350 token
+# 进转译调用。500 张/天合计约 80 万，占 600 万文本额度的 13%。
+SEARCH_ENABLED = os.getenv("DIRECT_SEARCH", "1") == "1"
+
 # ─── 渠道清单 ────────────────────────────────────────────
 # hd 渠道是「档位_画风」的组合命名（skills/ 下真实存在）；其余是固定渠道名。
 # 别让这个集合和 skills/ 目录漂移：_allowed_skills() 每次现场核对目录，
@@ -669,10 +681,23 @@ _MASTER_TEMPLATE = (
     "- **每一轮都是新请求**：角色、服装、动作、场景全按这一轮重新写，"
     "别把上一轮画过的东西抄过来。\n"
     "- 认不出的角色照外貌特征写，不要编不存在的角色名。\n"
+    "{search}"
     "\n"
     "【最近对话】\n{recent}\n"
     "\n"
     "【用户】\n{text}"
+)
+
+# 标签库资料段（{search} 槽）。有资料时明写「以此为准」，并给出资料缺失时的
+# 退路——用户点名要求：**数据缺失就按实际情况补，但一定要参考搜索给回来的**。
+_SEARCH_HEADER = (
+    "\n【标签库资料】以下是刚从 Danbooru 标签库里查到的真实条目"
+    "（格式：中文名 → tag 名（作品名））。\n"
+    "**角色和作品以这份资料为准**，直接用它给的 tag 名，别自己凭印象写。\n"
+    "同一个中文名有多个候选时，结合用户的需求和最近的对话挑最合适的那个。\n"
+    "资料里没有的东西（普通描述词、画法）你自己按需要补；"
+    "但**资料里给了的，一律照它写**，别改动。\n"
+    "{doc}\n"
 )
 
 _REVISE_TEMPLATE = (
@@ -885,9 +910,20 @@ def _translate(text, history, skill=None, weighted=False, no_default=False):
                    （调用方回问），**不静默落默认档**烧一张错风味的图。
     """
     named = (skill or "").strip()
+    # 前置搜索：先让 search_agent 查标签库，把真实条目拿回来当资料。
+    # **只传用户这一轮的原话**——搜索 Agent 不吃历史、不背人设（用户钉死的
+    # 定位）。失败/查不到返回 ""，模板里那一格就是空的，照老路走。
+    doc = ""
+    if SEARCH_ENABLED:
+        try:
+            from app import search_agent
+            doc = search_agent.search(text)
+        except Exception:
+            log.exception("[direct] 标签库前置搜索失败，按无资料继续")
     content = _MASTER_TEMPLATE.format(
         recent=_recent_lines(history) or "（无）",
         text=text,
+        search=(_SEARCH_HEADER.format(doc=doc) if doc else ""),
         chan_hint=("\n用户开头点名了渠道：**%s**，就用它。\n" % named) if named
                   else "")
     data = _ask(content)

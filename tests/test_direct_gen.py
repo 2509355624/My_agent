@@ -35,6 +35,27 @@ from app.tools.normal import generate_image as gi
 
 RECEIPT = image_jobs.RECEIPT_SENT_MARK + "回执"
 
+# 前置搜索（`_translate` 里的 search_agent）默认关掉。
+#
+# 为什么必须显式关：这些用例测的是**转译本身**，而搜索会给每次转译多打一次
+# LLM。更麻烦的是 search_agent 用的是同一个 `app.llm` 模块对象——用例里
+# `mock.patch.object(direct_gen.llm, "call_llm")` 会**连带把搜索那一路也
+# mock 掉**，返回 MagicMock 而不是字符串，parse_tool_calls 拿到它行为未定义。
+# 与其让每个用例各自处理，不如模块级统一关掉；要测搜索这一层的看
+# `SearchHookTest`（它自己开）。
+_search_off = None
+
+
+def setUpModule():
+    global _search_off
+    _search_off = mock.patch.object(direct_gen, "SEARCH_ENABLED", False)
+    _search_off.start()
+
+
+def tearDownModule():
+    if _search_off:
+        _search_off.stop()
+
 
 class ChannelParseTest(unittest.TestCase):
     """渠道解析收归代码：判据必须确定性，用群聊实录出题。"""
@@ -993,9 +1014,9 @@ class MasterPromptTest(unittest.TestCase):
     以及**钉死它别再长回去**：模板本身不许超过 1500 字。
     """
 
-    def _rendered(self, text="t", chan_hint="", recent=""):
+    def _rendered(self, text="t", chan_hint="", recent="", search=""):
         return direct_gen._MASTER_TEMPLATE.format(
-            recent=recent, text=text, chan_hint=chan_hint)
+            recent=recent, text=text, chan_hint=chan_hint, search=search)
 
     def test_template_has_the_four_sections(self):
         t = self._rendered()
@@ -1830,6 +1851,76 @@ class WorkflowParamsTest(unittest.TestCase):
         gen = [n["inputs"] for n in wf.values()
                if n["class_type"] == "BatchPromptImageGenerator"][0]
         self.assertEqual(gen["seed"], 424242)
+
+
+class SearchHookTest(unittest.TestCase):
+    """`_translate` 的前置搜索钩子（`.env DIRECT_SEARCH`）。
+
+    契约：搜索 Agent **只负责查标签库**，拿回来的资料塞进转译 prompt；
+    查不到 / 炸了 / 关掉了 → 模板里那一格留空，**照老路走，不连累生图**。
+
+    用户对这块的定位说得极死：「唯一任务就是搜索」。所以这里同时钉住
+    **传给搜索 Agent 的只有用户这一轮的原话**——不许夹带历史、不许夹带渠道词。
+    """
+
+    def setUp(self):
+        p = mock.patch.object(direct_gen, "SEARCH_ENABLED", True)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _run(self, doc="", boom=False, text="画个胡桃"):
+        """跑一次 _translate，返回 (喂给转译 LLM 的 prompt, 搜索被调用的参数)。"""
+        from app import search_agent
+
+        def fake(need):
+            if boom:
+                raise RuntimeError("搜索炸了")
+            return doc
+
+        sp = mock.patch.object(search_agent, "search", side_effect=fake)
+        m_search = sp.start()
+        self.addCleanup(sp.stop)
+        with mock.patch.object(
+                direct_gen.llm, "call_llm",
+                return_value='{"skill": "anima_clear", "prompt": "hu tao"}') as m_llm:
+            direct_gen._translate(text, [])
+        return m_llm.call_args[0][0][0]["content"], m_search
+
+    def test_doc_is_injected_into_the_prompt(self):
+        prompt, m_search = self._run("角色：胡桃 → hu_tao_(genshin_impact)（原神）")
+        self.assertIn("【标签库资料】", prompt)
+        self.assertIn("hu_tao_(genshin_impact)", prompt)
+        m_search.assert_called_once()
+
+    def test_empty_doc_leaves_no_section(self):
+        prompt, _ = self._run("")
+        self.assertNotIn("【标签库资料】", prompt)
+
+    def test_search_failure_does_not_break_translation(self):
+        prompt, _ = self._run(boom=True)
+        self.assertNotIn("【标签库资料】", prompt)
+        self.assertIn("【用户】", prompt)      # 模板照常渲染
+
+    def test_only_the_raw_need_is_passed(self):
+        """搜索 Agent 不吃历史、不吃渠道词——只拿用户原话。"""
+        _, m_search = self._run("资料", text="画个胡桃")
+        self.assertEqual(m_search.call_args[0][0], "画个胡桃")
+
+    def test_disabled_flag_skips_search_entirely(self):
+        with mock.patch.object(direct_gen, "SEARCH_ENABLED", False):
+            from app import search_agent
+            with mock.patch.object(search_agent, "search") as m_search:
+                with mock.patch.object(
+                        direct_gen.llm, "call_llm",
+                        return_value='{"skill": "anima_clear", "prompt": "x"}'):
+                    direct_gen._translate("画个胡桃", [])
+        m_search.assert_not_called()
+
+    def test_template_still_renders_without_search(self):
+        """老路必须原样能跑：没有 search 槽的调用方不该炸。"""
+        out = direct_gen._MASTER_TEMPLATE.format(
+            recent="", text="t", chan_hint="", search="")
+        self.assertIn("【用户】", out)
 
 
 if __name__ == "__main__":
