@@ -69,7 +69,7 @@ import re
 from app import image_jobs, image_log, llm, qq_api, random_tags
 from app.config import QQ_GROUP_KEYWORDS
 from app.confirm_gate import _ATTRIBUTION_RE
-from app.skills import list_skills
+from app.skills import list_skills, load_skill
 
 log = logging.getLogger(__name__)
 
@@ -110,6 +110,18 @@ def _allowed_skills():
     # 不参与目录核对，否则永远被误杀。
     try:
         present = set(list_skills())
+        # 用户自定义的生图渠道（silver / jank 这类）落进 skills/ 就是可用渠道，
+        # 不用再写死进 _FIXED_SKILLS——否则 AI 即使被告知这两个渠道、传了
+        # skill=silver，也会被下面这层（out_skill not in _allowed_skills）静默
+        # 降级成默认档，等于白告诉 AI（2026-10-06 实录：silver 和泉纱雾 被画成
+        # hd_3_clear）。只收「磁盘上存在且确为 生图 类」的目录，避免把写作类
+        # skill 当生图渠道放行。
+        for sk in (present - allowed - set(image_jobs.NAI_SKILLS)):
+            sd = load_skill(sk)
+            if sd and sd.get("kind") == "生图":
+                allowed.add(sk)
+        # 仍以磁盘实况收口：写死名单里目录已被删的渠道剔除（防点名已归档渠道
+        # 还去 enqueue 报「找不到 workflow」）。NAI 是虚拟云端渠道，不参与核对。
         allowed &= present | set(image_jobs.NAI_SKILLS)
     except Exception:
         log.exception("list_skills 失败，渠道校验跳过目录核对")
@@ -670,6 +682,10 @@ _MASTER_TEMPLATE = (
     "- sd = image_gen_v1，能一次出多张（prompt 里用 --- 分段）。\n"
     "- krea2 / nffa / cunny / miao 是用户点名才用的特殊渠道"
     "（cunny 和 miao 很慢，单张好几分钟）。\n"
+    "- silver / jank 是你导的自定义渠道（底模+LoRA 已烘焙）：**只在用户明说**"
+    " silver 或 jank 时填（如「用 silver 画」）；都是文生图专用、没图生图骨架，"
+    "对方要垫图/改图就换 anime 档或 qwen。注意 silver 也可能是发色词"
+    "（silver hair），只有用户明显在指渠道时才填，提示词里的 silver hair 是画发色不是渠道。\n"
     "{chan_hint}"
     "\n"
     "【提示词怎么写】\n"

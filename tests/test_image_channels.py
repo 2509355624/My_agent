@@ -1593,5 +1593,75 @@ class BriefToolParamTest(unittest.TestCase):
         self.assertIn("source_image:string", line)
 
 
+class CustomChannelTest(unittest.TestCase):
+    """用户自定义渠道 silver / jank 必须靠 **AI 提示词** 暴露给模型（2026-10-06）。
+
+    ## 这条锁的来龙去脉
+
+    渠道路由是两条路：① 代码直判 `_parse_channel`（关键词→渠道，硬路由）；
+    ② AI 判 `_translate` / `_MASTER_TEMPLATE`（模型自己决定 skill）。
+
+    silver / jank **只走第 ② 条路**——代码不认这俩词（`_parse_channel` 对
+    「silver 和泉纱雾」返回 (None, …)），于是交给 `_translate` 的 AI 去决定 skill。
+    所以模型必须**在提示词里看到 silver / jank 是合法 skill**，才会传
+    `skill="silver"` / `"jank"`。
+
+    2026-10-06 之前的坑：只改了 `generate_image` 的工具描述，但 QQ 直达路径读的是
+    `_MASTER_TEMPLATE`，那份渠道清单里没有 silver / jank，模型不知道这俩是合法
+    skill，于是落回 anime 档（群聊实录「silver 和泉纱雾」被画成了 hd_3_clear）。
+
+    ## 用户铁律（别破）
+
+    **禁止在 `_parse_channel` 里硬编码 silver / jank 的关键词→渠道映射**
+    （那是代码替模型拍板，用户明确不要）。正确做法就是把它写进 AI 提示词，
+    让模型自己选。下面的 `test_custom_channels_are_not_hardcoded_in_parser`
+    就是钉住这条红线。
+    """
+
+    def test_master_template_lists_silver_and_jank(self):
+        """QQ 直达路径的 AI 提示词必须列出这两个渠道名。"""
+        from app.direct_gen import _MASTER_TEMPLATE
+        self.assertIn("silver", _MASTER_TEMPLATE)
+        self.assertIn("jank", _MASTER_TEMPLATE)
+
+    def test_tool_description_lists_silver_and_jank(self):
+        """agent / 网页路径的工具描述也得提（双保险）。"""
+        from app.tools.normal.generate_image import tool
+        self.assertIn("silver", tool["description"])
+        self.assertIn("jank", tool["description"])
+
+    def test_custom_channels_are_allowed_skills(self):
+        """模型传 skill=silver / jank 时，不能被 `_allowed_skills` 拒掉。"""
+        from app.direct_gen import _allowed_skills
+        allowed = _allowed_skills()
+        self.assertIn("silver", allowed)
+        self.assertIn("jank", allowed)
+
+    def test_custom_channels_have_workflows(self):
+        from app.skills import load_skill
+        for name in ("silver", "jank"):
+            data = load_skill(name)
+            self.assertIsNotNone(data, name)
+            self.assertEqual(data["kind"], "生图", name)
+            self.assertIsNotNone(data["workflow"], name)
+
+    def test_custom_channels_are_not_hardcoded_in_parser(self):
+        """红线：silver / jank 不许进代码级关键词路由（`_FIXED_CHAN_MAP` / 正则），
+        也**不许**写死进 `_FIXED_SKILLS` 允许名单。
+
+        它们靠「落进 skills/ 即是可用渠道」由 `_allowed_skills()` 动态放行
+        （见同文件那处改动），而不是写死在任何代码名单里。这条锁保证以后有人
+        图省事把它们加进硬路由 / 硬名单时立刻报错——用户明确不要这种硬编码。
+        """
+        from app.direct_gen import _FIXED_CHAN_MAP, _FIXED_CHAN_RE, _FIXED_SKILLS
+        self.assertNotIn("silver", _FIXED_CHAN_MAP)
+        self.assertNotIn("jank", _FIXED_CHAN_MAP)
+        self.assertNotIn("silver", _FIXED_SKILLS)
+        self.assertNotIn("jank", _FIXED_SKILLS)
+        # 用户在消息里点名这两个词，也不能被那道正则命中
+        self.assertIsNone(_FIXED_CHAN_RE.search("silver 和泉纱雾"))
+        self.assertIsNone(_FIXED_CHAN_RE.search("用 jank 画一张"))
+
+
 if __name__ == "__main__":
     unittest.main()
