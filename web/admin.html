@@ -265,6 +265,7 @@
     <h1>Agent 管理</h1>
     <span class="sub" id="sub">加载中</span>
     <span class="spacer"></span>
+    <button class="ghost" id="reviewJumpBtn" style="margin-right:10px;">人工二审 <span class="hint" id="reviewBadgeTop"></span></button>
     <a class="back" href="/">返回聊天</a>
   </header>
 
@@ -1974,6 +1975,8 @@ async function loadReview() {
                         + 'limit=50');
     renderReview(d.items || []);
     $('reviewBadge').textContent = d.pending ? ('· 待审 ' + d.pending) : '';
+    const top = $('reviewBadgeTop');
+    if (top) top.textContent = d.pending ? ('· 待审 ' + d.pending) : '';
     $('reviewState').textContent = '';
   } catch (e) {
     $('reviewState').textContent = e.message;
@@ -2075,6 +2078,14 @@ $('reviewBtn').onclick = async () => {
   const open = wrap.style.display === 'none';
   wrap.style.display = open ? 'block' : 'none';
   if (open) await loadReview();
+};
+// 顶部常驻「人工二审」直达按钮：不管在哪张卡片上，点一下就展开二审面板、
+// 拉取最新队列并滚到那里；徽标上的待审数跟面板里的那枚同步。
+$('reviewJumpBtn').onclick = async () => {
+  const wrap = $('reviewWrap');
+  if (wrap.style.display === 'none') wrap.style.display = 'block';
+  await loadReview();
+  wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
 };
 $('reviewRefresh').onclick = () => loadReview();
 $('reviewOnlyPending').onchange = () => loadReview();
