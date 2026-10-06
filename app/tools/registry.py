@@ -134,6 +134,12 @@ register_tool(**_read_file_tool)
 from app.tools.normal.grep_file import tool as _grep_file_tool
 register_tool(**_grep_file_tool)
 
+# search_tags：标签库结构化检索（内存索引 + 中文滑窗最长匹配）。
+# 比 grep_file 快约 2 万倍（3~5 µs vs 77 ms），返回候选列表而非原始行。
+# 定位是**召回**：中文名歧义严重（初音未来 111 个候选），挑选交给 LLM。
+from app.tools.normal.search_tags import tool as _search_tags_tool
+register_tool(**_search_tags_tool)
+
 from app.tools.normal.write_file import tool as _write_file_tool
 register_tool(**_write_file_tool)
 
