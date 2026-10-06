@@ -1252,8 +1252,10 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     # 放在这里而不是 `_translate` 里面，是为了让下面**所有**会产出提示词的
     # 分支共用同一份资料——改图管道 `_revise` 原先根本不经过 `_translate`，
     # 所以群里最常见的「图生图，角色换XX」一直没走过搜索。
-    # 一次请求只搜一次；上面的早退分支（菜单 / 裸图 / 随机口令 / 提示词反问）
-    # 都已经 return，不会白搜。
+    # 一次请求只搜一次；上面的早退分支（菜单 / 裸图 / 随机口令）都已经 return，
+    # 不会白搜。（原先这里还列着「提示词反问」那条早退，2026-10-06 随硬编码
+    # 一起删了——见上面那段注释。它没了不影响这行结论：引用图轮现在会走到
+    # 搜索，而那正是用户要的「改图也先搜一遍」。）
     doc = _prefetch_search(
         _quote_merge(quoted, text) if quoted.strip() else text)
 
