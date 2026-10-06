@@ -1168,6 +1168,73 @@ def serve_review_image(name):
     return send_from_directory(d, safe)
 
 
+# ─── 人工二审·独立全局界面（/review）──────────────────────────────
+# 跟上面的 per-agent 路由逻辑一致，只是**不绑 agent**：一个 URL 看全部
+# agent / 群 / 私聊被拦的图。approve/reject 走的是队列记录里存的
+# target/target_id，本来就不需要 agent，所以这里直接按 id 操作。
+
+
+@app.route("/review")
+def review_page():
+    """人工二审独立界面：全局看板，一条 URL 看所有 agent / 群 / 私聊被拦的图。"""
+    return send_from_directory(WEB_DIR, "review.html")
+
+
+@app.route("/api/image_review")
+def get_image_review_global():
+    """人工二审全局队列（独立界面用）：不分 agent，一次看全部。
+
+    query：`state=pending|approved|rejected`（不传 = 全部）、`limit`（默认 200）。
+    每条附会话名（qq_names）+ agent，管理员看着图判断是谁、哪个 bot 要的、什么时候。
+    """
+    from app import image_review
+    state = (request.args.get("state") or "").strip() or None
+    try:
+        limit = int(request.args.get("limit") or 200)
+    except ValueError:
+        limit = 200
+    rows = image_review.items(state=state, limit=max(1, min(limit, 500)))
+    out = []
+    try:
+        from app import qq_names
+        for r in rows:
+            item = dict(r)
+            item["name"] = qq_names.name_for(r.get("target"),
+                                             r.get("target_id")) or ""
+            out.append(item)
+    except Exception:
+        app.logger.warning("二审全局队列补会话名失败，按无名显示")
+        out = rows
+    return jsonify({"ok": True, "items": out,
+                    "pending": image_review.pending_count()})
+
+
+@app.route("/api/image_review/<item_id>/approve", methods=["POST"])
+def approve_image_review_global(item_id):
+    """全局过审（独立界面用）：逻辑与 agent 版一致，只是不绑 agent。"""
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    from app import image_review
+    ok, msg = image_review.approve(item_id)
+    return jsonify({"ok": ok, "id": item_id, "msg": msg,
+                    "pending": image_review.pending_count()}), \
+        (200 if ok else 400)
+
+
+@app.route("/api/image_review/<item_id>/reject", methods=["POST"])
+def reject_image_review_global(item_id):
+    """全局驳回（独立界面用）。"""
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    from app import image_review
+    ok, msg = image_review.reject(item_id)
+    return jsonify({"ok": ok, "id": item_id, "msg": msg,
+                    "pending": image_review.pending_count()}), \
+        (200 if ok else 400)
+
+
 @app.route("/api/agent/<agent_id>/vision_prompt", methods=["PUT"])
 def set_agent_vision_prompt(agent_id):
     """设**自定义的识图提示词**（整份替换内置默认那份通用读图要求）。热生效。

@@ -427,3 +427,72 @@ class RoutesTest(_TmpCase):
     def test_image_route_404_on_missing(self):
         self.assertEqual(404,
                          self.client.get("/api/review/image/nope.jpg").status_code)
+
+
+class GlobalRoutesTest(_TmpCase):
+    """独立全局界面那三个接口：列全局队列 / 过审 / 驳回（不绑 agent）。
+
+    与 RoutesTest 的唯一差别：URL 里没有 agent 段，且列表是**跨 agent 聚合**
+    的——一个界面看全部 bot / 群 / 私聊被拦的图。
+    """
+
+    def setUp(self):
+        _TmpCase.setUp(self)
+        from app import main
+        self.client = main.app.test_client()
+
+    def _blocked(self, target="group", target_id="233", **kw):
+        return image_review.record(self.src, target, target_id,
+                                   verdict=Verdict(False, reason="擦边",
+                                                   category="clothing"),
+                                   meta={"tag": "HT-1", "skill": "hd_3_clear",
+                                         "seed": 7, "caption": "HT-1 · seed 7",
+                                         "prompt": "1girl, dress"}, **kw)
+
+    def test_global_list_returns_all_items(self):
+        self._blocked()
+        r = self.client.get("/api/image_review")
+        self.assertEqual(200, r.status_code)
+        d = r.get_json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(1, len(d["items"]))
+        self.assertEqual(1, d["pending"])
+
+    def test_global_list_aggregates_across_agents(self):
+        """全局列表不分 agent：两个不同 bot 的图都该出现。"""
+        self._blocked(agent_id="qq")
+        self._blocked(agent_id="other_bot", target="private", target_id="999")
+        d = self.client.get("/api/image_review").get_json()
+        self.assertEqual(2, len(d["items"]))
+        agents = {it["agent"] for it in d["items"]}
+        self.assertEqual({"qq", "other_bot"}, agents)
+
+    def test_global_list_can_filter_processed(self):
+        rid = self._blocked()
+        with mock.patch("app.qq_api.send_image"):
+            self.client.post("/api/image_review/%s/approve" % rid)
+        d = self.client.get("/api/image_review?state=pending").get_json()
+        self.assertEqual(0, len(d["items"]))
+        d = self.client.get("/api/image_review?state=approved").get_json()
+        self.assertEqual(1, len(d["items"]))
+
+    def test_global_approve_resends(self):
+        rid = self._blocked()
+        with mock.patch("app.qq_api.send_image") as send:
+            r = self.client.post("/api/image_review/%s/approve" % rid)
+        self.assertEqual(200, r.status_code, r.get_json())
+        self.assertTrue(r.get_json()["ok"])
+        self.assertTrue(send.called)
+
+    def test_global_reject_marks_it(self):
+        rid = self._blocked()
+        with mock.patch("app.qq_api.send_image") as send:
+            r = self.client.post("/api/image_review/%s/reject" % rid)
+        self.assertEqual(200, r.status_code, r.get_json())
+        self.assertFalse(send.called)
+        self.assertEqual(image_review.REJECTED, image_review.get(rid)["state"])
+
+    def test_global_unknown_id_is_400_not_a_crash(self):
+        r = self.client.post("/api/image_review/RV-nope/approve")
+        self.assertEqual(400, r.status_code)
+        self.assertFalse(r.get_json()["ok"])

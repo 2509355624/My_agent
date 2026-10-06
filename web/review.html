@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>人工二审 · 全局看板</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%237c5cff'/></svg>">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0a0a0f;
+    --bg-elev: #12121a;
+    --bg-input: #1a1a24;
+    --border: #2a2a3a;
+    --border-soft: #1f1f2e;
+    --text: #e8e8f0;
+    --text-dim: #8888a0;
+    --text-mute: #555570;
+    --accent: #7c5cff;
+    --success: #4ade80;
+    --error: #f87171;
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
+
+  html, body {
+    min-height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "SF Mono", "JetBrains Mono", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
+    font-size: 14px;
+    line-height: 1.7;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(124, 92, 255, 0.15), transparent);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .wrap { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; padding: 24px 20px 48px; }
+
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+  h1 { font-size: 18px; font-weight: 500; }
+  .sub { color: var(--text-mute); font-size: 12px; }
+  .spacer { flex: 1; }
+  a.back { color: var(--text-dim); font-size: 13px; text-decoration: none; }
+  a.back:hover { color: var(--accent); }
+
+  .bar {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    background: var(--bg-elev); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: 12px 14px; margin-bottom: 18px;
+  }
+  .badge {
+    font-size: 13px; color: var(--text-dim);
+  }
+  .badge b { color: var(--accent); }
+  button {
+    background: var(--bg-input); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 6px 12px; font-size: 13px; cursor: pointer;
+    font-family: inherit;
+  }
+  button:hover { border-color: var(--accent); }
+  button.ghost { background: transparent; }
+  button.ok { border-color: var(--success); color: var(--success); }
+  button.ok:hover { background: rgba(74, 222, 128, 0.12); }
+  button.no { border-color: var(--error); color: var(--error); }
+  button.no:hover { background: rgba(248, 113, 113, 0.12); }
+  label.toggle { font-size: 12px; color: var(--text-dim); display: flex; gap: 5px; align-items: center; cursor: pointer; }
+  .hint { font-size: 12px; color: var(--text-mute); }
+  .err { color: var(--error); }
+  .state { font-size: 12px; color: var(--text-dim); margin-left: auto; }
+
+  #list { display: flex; flex-direction: column; gap: 14px; }
+
+  .card {
+    display: flex; gap: 14px; padding: 12px;
+    background: var(--bg-elev); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); align-items: flex-start;
+  }
+  .card.done { opacity: 0.55; }
+  .thumb {
+    width: 180px; border-radius: 6px; cursor: zoom-in; flex: 0 0 auto;
+    background: var(--bg-input); display: block;
+  }
+  .body { flex: 1; min-width: 0; }
+  .head { margin-bottom: 6px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .name { font-size: 15px; font-weight: 500; }
+  .tag-type {
+    font-size: 11px; padding: 1px 7px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--text-dim);
+  }
+  .tag-type.group { border-color: #4a7dff; color: #8ab0ff; }
+  .tag-type.private { border-color: #4ade80; color: #8ee0a8; }
+  .meta { font-size: 12px; color: var(--text-mute); }
+  .reason { color: var(--text-dim); margin: 4px 0; }
+  .reason .cat { color: var(--accent); }
+  .reason .warn { color: #f0c060; }
+  .kv { font-size: 12px; color: var(--text-mute); word-break: break-all; }
+  .prompt { font-size: 12px; color: var(--text-dim); word-break: break-all; margin-top: 4px; white-space: pre-wrap; }
+  .actions { margin-top: 10px; display: flex; gap: 8px; }
+  .decided { font-size: 12px; margin-top: 8px; }
+  .decided.approved { color: var(--success); }
+  .decided.rejected { color: var(--error); }
+
+  .empty { text-align: center; color: var(--text-mute); padding: 48px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>人工二审</h1>
+    <span class="sub">全局看板 · 所有 agent / 群 / 私聊被拦的图都在这里</span>
+    <span class="spacer"></span>
+    <a class="back" href="/admin">返回管理页</a>
+  </header>
+
+  <div class="bar">
+    <span class="badge">待审 <b id="badge">0</b></span>
+    <button class="ghost" id="refresh">刷新</button>
+    <label class="toggle"><input type="checkbox" id="onlyPending" checked> 只看待审</label>
+    <label class="toggle"><input type="checkbox" id="auto" checked> 自动刷新（30s）</label>
+    <span class="state" id="state"></span>
+  </div>
+
+  <div id="list"></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+async function api(path, opts) {
+  const resp = await fetch(path, opts);
+  let data = null;
+  try { data = await resp.json(); } catch (e) { data = null; }
+  if (!resp.ok) {
+    throw new Error((data && data.error) || ('请求失败 HTTP ' + resp.status));
+  }
+  return data;
+}
+
+function fmtAgo(ts) {
+  const d = new Date((ts || 0) * 1000);
+  const diff = (Date.now() - d.getTime()) / 1000;
+  if (diff < 60) return '刚刚';
+  if (diff < 3600) return Math.floor(diff / 60) + ' 分钟前';
+  if (diff < 86400) return Math.floor(diff / 3600) + ' 小时前';
+  if (diff < 604800) return Math.floor(diff / 86400) + ' 天前';
+  const p = (x) => String(x).padStart(2, '0');
+  return p(d.getMonth() + 1) + '-' + p(d.getDate())
+    + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+function reviewImgSrc(p) {
+  return '/api/review/image/'
+    + encodeURIComponent(String(p || '').split(/[\\/]/).pop());
+}
+
+function typeBadge(target) {
+  if (target === 'group') return '<span class="tag-type group">群聊</span>';
+  return '<span class="tag-type private">私聊</span>';
+}
+
+async function loadReview() {
+  const only = $('onlyPending').checked;
+  try {
+    const d = await api('/api/image_review?'
+                        + (only ? 'state=pending&' : '')
+                        + 'limit=200');
+    render(d.items || []);
+    $('badge').textContent = d.pending || 0;
+    $('state').textContent = '已加载 ' + (d.items || []).length + ' 条';
+    $('state').className = 'state';
+  } catch (e) {
+    $('state').textContent = e.message;
+    $('state').className = 'state err';
+  }
+}
+
+function render(items) {
+  const box = $('list');
+  box.textContent = '';
+  if (!items.length) {
+    const e = document.createElement('div');
+    e.className = 'empty';
+    e.textContent = '没有待审的图。';
+    box.appendChild(e);
+    return;
+  }
+  for (const it of items) renderItem(box, it);
+}
+
+function renderItem(box, it) {
+  const card = document.createElement('div');
+  card.className = 'card' + (it.state !== 'pending' ? ' done' : '');
+
+  const img = document.createElement('img');
+  img.className = 'thumb';
+  img.src = reviewImgSrc(it.path);
+  img.title = '点开看大图';
+  img.onclick = () => window.open(img.src, '_blank');
+  card.appendChild(img);
+
+  const body = document.createElement('div');
+  body.className = 'body';
+
+  const head = document.createElement('div');
+  head.className = 'head';
+  head.innerHTML = '<span class="name">' + escapeHtml(it.name || ('对象 ' + it.target_id))
+    + '</span>' + typeBadge(it.target)
+    + '<span class="meta">' + escapeHtml(String(it.target_id || ''))
+    + ' · bot ' + escapeHtml(String(it.agent || '-'))
+    + ' · ' + fmtAgo(it.ts) + '</span>';
+  body.appendChild(head);
+
+  const reason = document.createElement('div');
+  reason.className = 'reason';
+  reason.innerHTML = '审核判「<span class="cat">'
+    + escapeHtml(it.category || 'other') + '</span>'
+    + (it.failed ? ' <span class="warn">（审核没生效，不算判违规）</span>' : '')
+    + '：' + escapeHtml(it.reason || '没给理由');
+  body.appendChild(reason);
+
+  if (it.tag) {
+    const kv = document.createElement('div');
+    kv.className = 'kv';
+    kv.textContent = '编号 ' + it.tag + (it.seed ? ' · seed ' + it.seed : '')
+      + (it.skill ? ' · ' + it.skill : '');
+    body.appendChild(kv);
+  }
+  if (it.prompt) {
+    const p = document.createElement('div');
+    p.className = 'prompt';
+    p.textContent = '提示词：' + it.prompt;
+    body.appendChild(p);
+  }
+
+  if (it.state === 'pending') {
+    const acts = document.createElement('div');
+    acts.className = 'actions';
+    const ok = document.createElement('button');
+    ok.className = 'ok';
+    ok.textContent = '过审并重新发送';
+    ok.onclick = () => decide(it.id, 'approve');
+    const no = document.createElement('button');
+    no.className = 'no';
+    no.textContent = '驳回（确认违规）';
+    no.onclick = () => decide(it.id, 'reject');
+    acts.appendChild(ok);
+    acts.appendChild(no);
+    body.appendChild(acts);
+  } else {
+    const dec = document.createElement('div');
+    dec.className = 'decided ' + it.state;
+    dec.textContent = (it.state === 'approved' ? '已通过审并重新发送' : '已确认违规（不发送）')
+      + (it.decided_ts ? ' · ' + fmtAgo(it.decided_ts) : '');
+    body.appendChild(dec);
+  }
+
+  card.appendChild(body);
+  box.appendChild(card);
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+async function decide(id, act) {
+  try {
+    const d = await api('/api/image_review/' + encodeURIComponent(id) + '/' + act,
+                        { method: 'POST' });
+    $('state').textContent = d.msg || '已处理';
+    $('state').className = 'state';
+    await loadReview();
+  } catch (e) {
+    $('state').textContent = e.message;
+    $('state').className = 'state err';
+  }
+}
+
+$('refresh').onclick = () => loadReview();
+$('onlyPending').onchange = () => loadReview();
+
+let timer = null;
+function setupAuto() {
+  if (timer) { clearInterval(timer); timer = null; }
+  if ($('auto').checked) {
+    timer = setInterval(loadReview, 30000);
+  }
+}
+$('auto').onchange = setupAuto;
+
+loadReview();
+setupAuto();
+</script>
+</body>
+</html>
