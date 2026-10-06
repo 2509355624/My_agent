@@ -1495,61 +1495,39 @@ class I2iForceTest(unittest.TestCase):
             self.assertEqual("", gi._i2i_force())
 
 
-class PromptAskGuardTest(unittest.TestCase):
-    """要提示词守卫：对方在要提示词/种子 → generate_image 必须被拒。
+class PromptAskGuardRemovedTest(unittest.TestCase):
+    """「要提示词守卫」已删除（2026-10-06 用户拍板），这里钉住**别再加回来**。
 
-    实测（2026-10-04 早，私聊 2509355624 日志）：「这个的提示词是什么？」
-    「提示词给我」「停下来，给我提示词」连续 3 轮，9B 全调了 generate_image
-    （白烧 3 张额度），正确工具 recall_image 一次没用。跟 `_hd_tier_guard`
-    同一个病根——描述里写了判据它不看，得代码拦。
+    那道闸（原 `generate_image._prompt_ask_guard`）的判据是
+    「提示词/种子 + 给我/是什么/停」，只认关键词、不认意图。实测误伤：
+    233 群「引用这张图，我要她抓手的手势，角色换成花火」是**改图请求**，
+    只因正文带「提示词」三个字就被整单拒掉。
+
+    用户原话：「我们加了太多这种硬编码的规则了，导致 AI 它变得特别傻…
+    能就我们让 AI 来做的，我们就直接让 AI 来做，不要为了省那几毛钱」。
     """
 
-    def _guard(self, text):
-        from unittest import mock
+    def test_guard_is_gone(self):
         from app.tools.normal import generate_image as gi
-        with mock.patch("app.qq_api.current_turn_text", return_value=text):
-            return gi._prompt_ask_guard()
+        self.assertFalse(hasattr(gi, "_prompt_ask_guard"))
+        self.assertFalse(hasattr(gi, "_PROMPT_NOUN_RE"))
+        self.assertFalse(hasattr(gi, "_PROMPT_ASK_RE"))
 
-    def test_real_log_phrases_blocked(self):
-        """今天日志里的三句原话，必须全被拦下并指路 recall_image。"""
-        for text in ("这个的提示词是什么？", "提示词给我",
-                     "停下来，给我提示词", "种子是多少",
-                     "233，这图用的什么词条？看看"):
-            note = self._guard(text)
-            self.assertTrue(note, "「%s」在要提示词，却没拦" % text)
-            self.assertIn("recall_image", note, "回执没指路 recall_image")
-            self.assertIn("已拒绝", note, "回执没明说已拒绝")
-            # 别再让它重试 generate_image
-            self.assertIn("别再重试", note)
-
-    def test_real_gen_requests_pass(self):
-        """真要画的原话不许误伤（含带提示词/种子字样但要动手的）。"""
-        for text in ("用这个种子再画一张", "把提示词改成黑丝画一张",
-                     "再画一张，种子不变", "跑一个nffa", "要白丝",
-                     "加点脸红，然后跑gloss 高清三档",
-                     "画个蓝发少女，提示词你自由发挥"):
-            self.assertEqual("", self._guard(text),
-                             "「%s」是真要画，却被拦了" % text)
-
-    def test_no_noun_passes(self):
-        self.assertEqual("", self._guard("跑一个nffa"))
-        self.assertEqual("", self._guard("停下来"))  # 没提提示词，不归这道闸管
-
-    def test_not_in_qq_turn_passes(self):
-        """网页端/单测没有原话这个证据源，一律放行（与 _i2i_gate 同原则）。"""
-        from unittest import mock
-        from app.tools.normal import generate_image as gi
-        with mock.patch("app.qq_api.current_turn_text", return_value=None):
-            self.assertEqual("", gi._prompt_ask_guard())
-
-    def test_guard_runs_before_i2i_gate(self):
-        """必须挂在最前：这类调用一张图都不该出，垫图判断都不必走。"""
+    def test_generate_image_source_has_no_prompt_keyword_gate(self):
+        """生图主流程里不许再出现按「提示词」字样拒单的代码。"""
         import inspect
         from app.tools.normal import generate_image as gi
         src = inspect.getsource(gi._generate_image)
-        self.assertLess(src.index("_prompt_ask_guard()"),
-                        src.index("_i2i_gate(is_i2i)"),
-                        "要提示词守卫必须挡在垫图守卫之前")
+        # 查调用形态（带括号）：注释里会提到它解释「为什么删」，那是该留的。
+        self.assertNotIn("_prompt_ask_guard()", src)
+
+    def test_asking_for_prompt_is_left_to_the_model(self):
+        """要词条的原话不再被代码拦——该由模型判（调 recall_image 还是生成）。"""
+        import inspect
+        from app.tools.normal import generate_image as gi
+        src = inspect.getsource(gi._generate_image)
+        # 留着这条注释，是给后来人看的：别因为「它又白烧了一张」就加回来。
+        self.assertIn("2026-10-06 用户拍板删除", src)
 
 
 class BriefToolParamTest(unittest.TestCase):

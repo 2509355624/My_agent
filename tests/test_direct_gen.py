@@ -1654,13 +1654,17 @@ class RandomCommandTest(unittest.TestCase):
         self.assertIsNone(m_gen.call_args.kwargs.get("resample_fn"))
 
 
-class PromptAskTest(unittest.TestCase):
-    """引用 +「提示词」→ 直接把提示词发回去，不生成。
+class PromptAskRemovedTest(unittest.TestCase):
+    """「引用 + 提示词 → 直接回词条、一次 LLM 都不跑」这条旁路**已删**（2026-10-06）。
 
-    实录（group_482079537，10-04）：引用自家回执说「提示词给一下」，被当成
-    画图请求重新跑了一张。用户口径：要提示词就给提示词。优先级：账本
-    （HT 编号，零调用）→ 老回执「提示词：…」剥取（零调用）→ 引用图反推
-    （识图 1 次）。
+    删它是因为它只认「提示词」三个字、不认意图：233 群「引用这张图，我要她
+    抓手的手势，角色换成花火」是**改图请求**，却被当成查账，后面那句改图意见
+    根本没进过模型。用户原话：「能就我们让 AI 来做的，我们就直接让 AI 来做，
+    不要为了省那几毛钱」。
+
+    删掉之后这类轮落进引用图轮 → `_revise`：账本提示词照样作为「最可信旁证」
+    喂给模型（见 `_REVISE_TEMPLATE` 的 anchor_prompt），要词条还是要改图由
+    模型自己判。下面几条钉的就是「提示词没被丢掉、也没再走捷径」。
     """
 
     def _decide(self, text, quoted="", data_urls=None, lookup_row=None,
@@ -1683,57 +1687,34 @@ class PromptAskTest(unittest.TestCase):
             direct_gen._LAST_JOB.pop("group_1", None)
         return out, m_describe, m_llm, m_gen
 
-    def test_own_receipt_returns_ledger_prompt_zero_calls(self):
-        # 引用自家 HT 回执 +「提示词给一下」→ 账本提示词直回，零调用零生成
+    def test_the_bypass_is_gone(self):
+        self.assertFalse(hasattr(direct_gen, "_PROMPT_ASK_RE"),
+                         "「提示词」关键词旁路又加回来了？")
+
+    def test_quote_with_edit_instruction_reaches_the_revise_pipeline(self):
+        """233 群那条原话：带「提示词」但其实是改图请求 → 必须真识图，不被吞。"""
         out, m_describe, m_llm, m_gen = self._decide(
-            "提示词给一下",
+            "提示词不变，角色换成花火，手势改成抓手",
             quoted="HT-20261004-155628-040 · 728×1024 · anima_clear · "
                    "seed 2226632694",
+            data_urls=["data:image/jpeg;base64,A"],
             lookup_row={"prompt": "1girl, purple twin drills",
                         "skill": "anima_clear"})
-        self.assertIn(direct_gen._REVERSE_HEADER, out)
-        self.assertIn("1girl, purple twin drills", out)
-        m_describe.assert_not_called()
-        m_llm.assert_not_called()
-        m_gen.assert_not_called()
-
-    def test_old_receipt_prompt_line_is_stripped(self):
-        # 老格式回执（将画：渠道 seed：… 提示词：tags）→ 剥「提示词：」后段
-        out, m_describe, m_llm, m_gen = self._decide(
-            "提示词呢",
-            quoted="将画：anima_clear seed：3771704523 "
-                   "提示词：1fish, big fat fish, chubby round body")
-        self.assertIn("1fish, big fat fish, chubby round body", out)
-        self.assertNotIn("将画：", out)
-        m_describe.assert_not_called()
-        m_llm.assert_not_called()
-        m_gen.assert_not_called()
-
-    def test_other_image_uses_vision_reverse(self):
-        # 引用别人的图 +「提示词」→ 看图反推一次，文本回给，不生成
-        out, m_describe, m_llm, m_gen = self._decide(
-            "这个提示词发我一下", data_urls=["data:image/jpeg;base64,A"])
-        self.assertIn("1girl, reversed, tags", out)
         m_describe.assert_called_once()
-        m_llm.assert_not_called()
         m_gen.assert_not_called()
 
-    def test_prompt_ask_beats_channel_generation(self):
-        # 引用 +「三档 提示词」→ 「提示词」优先：给提示词，不生成
-        out, m_describe, m_llm, m_gen = self._decide(
-            "三档 提示词",
+    def test_ledger_prompt_still_reaches_the_model(self):
+        """账本提示词没被丢——它作为「最可信旁证」进改图/反推那次调用。"""
+        _out, m_describe, _llm, _gen = self._decide(
+            "这个提示词是什么",
             quoted="HT-20261004-155628-040 · anima_clear · seed 1",
-            lookup_row={"prompt": "logged, tags", "skill": "anima_clear"})
-        self.assertIn("logged, tags", out)
-        m_gen.assert_not_called()
-
-    def test_nothing_found_gives_guidance(self):
-        # 引用无编号文本 +「提示词」→ 指路，不瞎跑
-        out, m_describe, m_llm, m_gen = self._decide(
-            "提示词呢", quoted="昨天那条消息")
-        self.assertIn("没找到提示词", out)
-        m_describe.assert_not_called()
-        m_gen.assert_not_called()
+            data_urls=["data:image/jpeg;base64,A"],
+            lookup_row={"prompt": "1girl, purple twin drills",
+                        "skill": "anima_clear"})
+        m_describe.assert_called_once()
+        # 调用形态是 describe(data_url, prompt=ask)：prompt 走关键字参数。
+        sent = (m_describe.call_args.kwargs.get("prompt") or "")
+        self.assertIn("1girl, purple twin drills", sent)
 
     def test_without_quote_not_hijacked(self):
         # 没引用 +「帮我写提示词 画一只猫」→ 照旧走转译生图，不被劫走

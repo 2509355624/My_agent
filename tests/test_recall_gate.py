@@ -30,11 +30,17 @@ class IntentTest(unittest.TestCase):
                   "图生文一下", "识别这张图"):
             self.assertIsNotNone(recall_gate._intent(t), t)
 
-    def test_noun_plus_ask_combo_hits(self):
-        """与 _prompt_ask_guard 同一套组合判据：要词条的文本请求。"""
+    def test_noun_plus_ask_combo_no_longer_hits(self):
+        """「提示词/种子 + 给我/是什么」的组合判据**已删**（2026-10-06）。
+
+        它跟已删除的 `_prompt_ask_guard` 是同一套判据：只认关键词，把
+        「引用这张图，手势改成抓手，角色换成花火」这类**改图请求**吞成
+        「反推提示词」。现在只认上面那些**显式**反推动词——对方没明说要反推，
+        就交回模型自己判。
+        """
         for t in ("这个的提示词是什么", "提示词给我", "这张的种子是多少",
                   "停下来，给我提示词"):
-            self.assertIsNotNone(recall_gate._intent(t), t)
+            self.assertIsNone(recall_gate._intent(t), t)
 
     def test_normal_generation_never_hits(self):
         """红线：生图请求不能被反推闸门吞掉。"""

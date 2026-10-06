@@ -1062,10 +1062,10 @@ def _reverse_text(tags):
     return _REVERSE_HEADER + "\n" + tags
 
 
-# 引用 +「提示词」→ 直接把提示词发回去（2026-10-05 用户口径）。实录
-# （group_482079537，10-04）：引用自家回执说「提示词给一下」，被当成画图
-# 请求重新跑了一张——要提示词就该给提示词，这是查账/查账本，不是生图。
-_PROMPT_ASK_RE = re.compile(r"提示词")
+# ⚠️ 原先这里有一个 `_PROMPT_ASK_RE = re.compile(r"提示词")`，配合下面
+# `decide()` 里那条「引用 + 提示词 → 直接回词条、不跑 LLM」的直通分支使用。
+# 2026-10-06 随分支一起删（删它的理由见 decide() 里的注释）：只认关键词不认
+# 意图，把改图请求误判成查账。
 
 
 def _ledger_hit(source):
@@ -1227,21 +1227,15 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     if _MORE_CHAN_RE.search(text):
         return MORE_CHAN_TEXT
 
-    # 引用（图片或消息）+「提示词」→ 直接把提示词发回去，不生成（10-05
-    # 用户口径）。优先级：账本（HT 编号，零调用最准）→ 老回执
-    # 「提示词：…」剥取（零调用）→ 引用图看图反推（turbo 1 次）。
-    # 图片引用的 quoted 可能为空，所以两者任一在场即触发。
-    if (quoted or data_urls) and _PROMPT_ASK_RE.search(text):
-        own_prompt, _skill, _own_seed = _ledger_hit(quoted)
-        if own_prompt:
-            return _reverse_text(own_prompt)
-        m_old = re.search(r"提示词[：:]\s*(.+)", quoted, re.S)
-        if m_old:
-            return _reverse_text(m_old.group(1).strip())
-        if data_urls:
-            return _reverse_text(_recall_tags(data_urls))
-        return ("引用里没找到提示词。引用我发的出图回执，或引用图片说"
-                "「提示词」。")
+    # ⚠️ 这里原先有一条「引用 + 提示词」直通：正文只要含「提示词」三个字且
+    # 有引用，就整轮吞掉、把账本提示词直接发回去，**一次 LLM 都不跑**。
+    # 2026-10-06 用户拍板删除——它就是「引用这张图，我要她抓手的手势，角色
+    # 换成花火」这类**改图请求**失效的真凶：明明没在要词条，只因为正文带
+    # 「提示词」就被当成查账，用户后面那句改图意见根本没进过模型。
+    # 删掉之后这类轮落进下面的引用图轮 → `_revise`：账本提示词照样作为
+    # 「最可信旁证」喂给模型（见 _REVISE_TEMPLATE 的 anchor_prompt），
+    # 是要词条还是要改图由模型自己判。用户口径：
+    #   「能就我们让 AI 来做的，我们就直接让 AI 来做，不要为了省那几毛钱」
 
     ch, desc = _parse_channel(text)
     if ch is None and at_me:
