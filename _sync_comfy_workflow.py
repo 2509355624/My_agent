@@ -108,46 +108,84 @@ def detect_prefix(text):
     return (t[:i + 1] + " ") if i > 0 else ""
 
 
-def apply_placeholders(api, prefix=None):
-    """返回 (改动说明列表, 警告列表)。"""
-    changes, warns = [], []
+def _positive_ids(api):
+    """正向提示词节点的 id 列表。
 
-    # 正向节点 = 第一个 KSampler 的 positive 指向谁
+    常规骨架 = **KSampler.positive 指向谁**。但有的工作流**根本没有 KSampler**
+    （采样在自定义节点内部，如 `BatchPromptImageGenerator`），提示词从
+    `multi_prompts` 槽进去 —— 那就认那个槽的上游节点。
+    （2026-10-05 加 miao 渠道时遇到；那个自定义节点的槽名就叫 `multi_prompts`，
+    跟本项目的 `__MULTI_PROMPTS__` 占位符同名。）
+    """
     samplers = [nid for nid, nd in api.items()
                 if nd["class_type"] == "KSampler"]
-    if not samplers:
-        warns.append("找不到 KSampler，无法定位正向提示词节点")
-        pos_ids = []
-    else:
-        pos_ids = []
+    if samplers:
+        ids = []
         for s in samplers:
             ref = api[s]["inputs"].get("positive")
             if isinstance(ref, list) and str(ref[0]) in api:
-                pos_ids.append(str(ref[0]))
+                ids.append(str(ref[0]))
+        return ids
+    ids = []
+    for nd in api.values():
+        ref = nd["inputs"].get("multi_prompts")
+        if isinstance(ref, list) and ref and str(ref[0]) in api:
+            ids.append(str(ref[0]))
+    return ids
 
+
+def _seed_ids(api):
+    """要吃 `__SEED__` 的节点 id：KSampler 优先，没有就找任何有 seed 输入的节点。"""
+    ids = [nid for nid, nd in api.items()
+           if nd["class_type"] == "KSampler" and "seed" in nd["inputs"]]
+    if ids:
+        return ids
+    return [nid for nid, nd in api.items()
+            if "seed" in nd["inputs"]
+            and not isinstance(nd["inputs"]["seed"], list)]
+
+
+def apply_placeholders(api, prefix=None, warn_missing_prefix=True):
+    """返回 (改动说明列表, 警告列表)。
+
+    `warn_missing_prefix=False`：调用方已用 `--prefix` 明确指定前缀（含空串），
+    就别再报「没识别出触发词前缀」——有些渠道**本来就没有**画风前缀，
+    画风来自底模和 LoRA（如 miao）。
+    """
+    changes, warns = [], []
+
+    pos_ids = _positive_ids(api)
     if not pos_ids:
-        warns.append("KSampler.positive 没连到节点，正向提示词没换成模板！")
+        warns.append("找不到 KSampler，也没找到 multi_prompts 的上游 —— "
+                     "无法定位正向提示词节点")
 
     for pid in dict.fromkeys(pos_ids):
-        old = api[pid]["inputs"].get("text", "")
+        # 提示词槽名：CLIPTextEncode 是 `text`，PrimitiveStringMultiline 是 `value`
+        fld = next((f for f in ("text", "value")
+                    if f in api[pid]["inputs"]
+                    and not isinstance(api[pid]["inputs"][f], list)), None)
+        if fld is None:
+            warns.append("节点%s(%s) 找不到可写的提示词字段"
+                         % (pid, api[pid]["class_type"]))
+            continue
+        old = api[pid]["inputs"][fld]
         pfx = prefix if prefix is not None else detect_prefix(old)
         new = pfx + "__MULTI_PROMPTS__"
         if old != new:
-            changes.append("节点%s 正向提示词：%d 字写死的词 → %r"
-                           % (pid, len(old), new))
-            api[pid]["inputs"]["text"] = new
-        if pfx == "":
+            changes.append("节点%s.%s 正向提示词：%d 字写死的词 → %r"
+                           % (pid, fld, len(old), new))
+            api[pid]["inputs"][fld] = new
+        if pfx == "" and warn_missing_prefix:
             warns.append("节点%s 没识别出触发词前缀（原文不以 @ 开头）——"
                          "确认这样画风还对" % pid)
 
-    # 所有 KSampler 的 seed → 裸占位符
+    # seed → 裸占位符
     n = 0
-    for nid in samplers:
-        if "seed" in api[nid]["inputs"]:
-            api[nid]["inputs"]["seed"] = "__SEED__"
-            n += 1
+    for nid in _seed_ids(api):
+        api[nid]["inputs"]["seed"] = "__SEED__"
+        n += 1
     if n:
-        changes.append("%d 个 KSampler 的 seed → __SEED__ 占位符" % n)
+        changes.append("%d 个节点的 seed → __SEED__ 占位符" % n)
     return changes, warns
 
 
@@ -261,7 +299,12 @@ def main():
     ap.add_argument("skill", help="目标渠道目录名，如 anima")
     ap.add_argument("--write", action="store_true", help="体检全绿后写盘")
     ap.add_argument("--prefix", default=None,
-                    help="正向提示词前缀（默认从原文自动识别，如 '@kibro, '）")
+                    help="正向提示词前缀（默认从原文自动识别，如 '@kibro, '）；"
+                         "显式传空串 = 这个渠道没有画风前缀，别报警告")
+    ap.add_argument("--drop", default="",
+                    help="要从工作流里剔掉的节点 id（逗号分隔）。用于丢掉用户"
+                         "留在画布上但没接线的死节点——例如 EnvString 读环境变量，"
+                         "没设就抛错，会让整个渠道报一个毫不相关的错")
     ap.add_argument("--ui-dir", default=COMFY_WF_DIR)
     args = ap.parse_args()
 
@@ -281,7 +324,15 @@ def main():
     api = ui_to_api(ui)
     print("转换完成：%d 个节点" % len(api))
 
-    changes, warns = apply_placeholders(api, args.prefix)
+    for did in [d.strip() for d in args.drop.split(",") if d.strip()]:
+        if did in api:
+            print("剔除节点 %s(%s)（--drop）" % (did, api[did]["class_type"]))
+            del api[did]
+        else:
+            print("⚠ --drop 指定的节点 %s 不在工作流里" % did)
+
+    changes, warns = apply_placeholders(
+        api, args.prefix, warn_missing_prefix=args.prefix is None)
     print("\n【占位符】")
     for c in changes:
         print("  -", c)
@@ -332,6 +383,7 @@ def main():
         print("（这是 dry-run，加 --write 才写盘）")
         return 0
 
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
     bak = dst.replace(".json", "_prev.json.bak")
     if os.path.exists(dst):
         io.open(bak, "w", encoding="utf-8", newline="\n").write(
