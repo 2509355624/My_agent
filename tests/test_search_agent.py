@@ -22,10 +22,16 @@ from app import search_agent as sa
 
 class _Base(unittest.TestCase):
     def setUp(self):
-        # 工具也 mock 掉：跑的是循环，不是标签库
-        p = mock.patch.object(sa, "search_tags",
-                              side_effect=lambda q: "【命中】%s → tag_%s" % (q, q))
-        self.tool = p.start()
+        # 工具也 mock 掉：跑的是循环，不是标签库 / 网络。
+        # 必须 patch `_TOOLS` 这张表——`_run_tool` 是从它取函数的，
+        # 只 patch `sa.search_tags` 已经不起作用（2026-10-06 加了第二个工具
+        # web_search，把这张表做成了唯一入口）。
+        self.tool = mock.Mock(
+            side_effect=lambda q: "【命中】%s → tag_%s" % (q, q))
+        self.web = mock.Mock(side_effect=lambda q, n=5: "网页结果：%s" % q)
+        p = mock.patch.dict(sa._TOOLS, {"search_tags": self.tool,
+                                        "web_search": self.web})
+        p.start()
         self.addCleanup(p.stop)
 
     def _llm(self, replies):
@@ -112,7 +118,13 @@ class LoopTest(_Base):
         out = sa.search("画个胡桃", max_rounds=3)
         self.assertEqual(len(seen), 3)
         self.assertEqual(self.tool.call_count, 3)
-        self.assertEqual(out, "")   # 从没进过收尾轮 → 没有资料
+        # 从没进过收尾轮 → 没有整理好的资料，但**绝不能返回空**：
+        # 把最后一轮的工具结果兜出去。2026-10-06 实录：5 轮 40+ 次调用、
+        # 6,199 miss token，最后返回空串，整场全白烧。
+        self.assertIn("tag_x", out)
+
+    def test_default_round_cap_is_ten(self):
+        self.assertEqual(sa.MAX_ROUNDS, 10)
 
     def test_unknown_tool_is_rejected_not_executed(self):
         self._llm([
@@ -140,7 +152,9 @@ class FailureTest(_Base):
         self.assertEqual(sa.search("画个胡桃"), "")
 
     def test_tool_exception_does_not_propagate(self):
-        p = mock.patch.object(sa, "search_tags", side_effect=RuntimeError("库炸了"))
+        p = mock.patch.dict(
+            sa._TOOLS,
+            {"search_tags": mock.Mock(side_effect=RuntimeError("库炸了"))})
         p.start()
         self.addCleanup(p.stop)
         self._llm(['[[TOOL:search_tags]]{"query": "胡桃"}', "资料"])
@@ -178,9 +192,21 @@ class ScopeTest(_Base):
         for bad in ("最近对话", "历史", "{recent}", "{text}", "{chan_hint}"):
             self.assertNotIn(bad, sa.SEARCH_PROMPT)
 
-    def test_prompt_only_offers_search_tags(self):
+    def test_prompt_offers_the_two_tools_only(self):
         self.assertIn("search_tags", sa.SEARCH_PROMPT)
+        self.assertIn("web_search", sa.SEARCH_PROMPT)
         self.assertNotIn("generate_image", sa.SEARCH_PROMPT)
+
+    def test_web_search_is_gated_to_last_resort(self):
+        """网页搜索贵得多，提示词必须把它限成「查不到 / 拿不准才用」。"""
+        self.assertIn("只在标签库查不到", sa.SEARCH_PROMPT)
+
+    def test_prompt_forces_a_tool_call_on_round_one(self):
+        """真实事故：模型第 1 轮直接凭记忆写资料，冷门角色的 tag 全是编的。"""
+        self.assertIn("第一轮必须先调工具", sa.SEARCH_PROMPT)
+
+    def test_tool_table_has_exactly_two_entries(self):
+        self.assertEqual(set(sa._TOOLS), {"search_tags", "web_search"})
 
     def test_prompt_forbids_inventing_tags(self):
         self.assertIn("不许编", sa.SEARCH_PROMPT)
@@ -199,6 +225,58 @@ class ScopeTest(_Base):
         sa.search("画个胡桃")
         self.assertEqual(len(seen[0]), 1)
         self.assertEqual(seen[0][0]["role"], "user")
+
+
+class WebSearchTest(_Base):
+    """第二个工具：联网搜索（用户 2026-10-06 要求加上）。"""
+
+    def test_web_search_call_is_routed(self):
+        seen = self._llm([
+            '[[TOOL:web_search]]{"query": "银狼 崩坏星穹铁道"}',
+            "资料",
+        ])
+        sa.search("画个银狼")
+        self.web.assert_called_once()
+        self.assertEqual(self.web.call_args[0][0], "银狼 崩坏星穹铁道")
+        joined = "\n".join(m["content"] for m in seen[1])
+        self.assertIn("网页结果", joined)
+
+    def test_search_tags_not_touched_when_web_is_used(self):
+        self._llm(['[[TOOL:web_search]]{"query": "x"}', "资料"])
+        sa.search("画个胡桃")
+        self.tool.assert_not_called()
+
+    def test_max_results_is_clamped_to_ten(self):
+        self._llm(['[[TOOL:web_search]]{"query": "x", "max_results": 999}', "资料"])
+        sa.search("画个胡桃")
+        self.assertEqual(self.web.call_args[0][1], 10)
+
+    def test_bad_max_results_falls_back_to_five(self):
+        self._llm(['[[TOOL:web_search]]{"query": "x", "max_results": "多"}', "资料"])
+        sa.search("画个胡桃")
+        self.assertEqual(self.web.call_args[0][1], 5)
+
+    def test_tool_result_is_truncated(self):
+        """工具结果要一直留在 messages 里，不截断 10 轮就能把上下文撑爆。"""
+        self.web.side_effect = lambda q, n=5: "长" * 9000
+        seen = self._llm(['[[TOOL:web_search]]{"query": "x"}', "资料"])
+        sa.search("画个胡桃")
+        tool_msg = seen[1][-1]["content"]        # 最后一轮追加的那条工具结果
+        self.assertIn("结果已截断", tool_msg)
+        self.assertLess(len(tool_msg), sa.MAX_TOOL_CHARS + 200)
+
+    def test_both_tools_in_one_round(self):
+        seen = self._llm([
+            '[[TOOL:search_tags]]{"query": "胡桃"}\n'
+            '[[TOOL:web_search]]{"query": "胡桃 原神"}',
+            "资料",
+        ])
+        sa.search("画个胡桃")
+        self.tool.assert_called_once_with("胡桃")
+        self.web.assert_called_once()
+        joined = "\n".join(m["content"] for m in seen[1])
+        self.assertIn("tag_胡桃", joined)
+        self.assertIn("网页结果", joined)
 
 
 if __name__ == "__main__":

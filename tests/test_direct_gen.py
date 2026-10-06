@@ -1854,13 +1854,18 @@ class WorkflowParamsTest(unittest.TestCase):
 
 
 class SearchHookTest(unittest.TestCase):
-    """`_translate` 的前置搜索钩子（`.env DIRECT_SEARCH`）。
+    """前置搜索钩子（`.env DIRECT_SEARCH`）。
 
-    契约：搜索 Agent **只负责查标签库**，拿回来的资料塞进转译 prompt；
+    契约：搜索 Agent **只负责查资料**，拿回来的资料塞进转译 prompt；
     查不到 / 炸了 / 关掉了 → 模板里那一格留空，**照老路走，不连累生图**。
 
     用户对这块的定位说得极死：「唯一任务就是搜索」。所以这里同时钉住
     **传给搜索 Agent 的只有用户这一轮的原话**——不许夹带历史、不许夹带渠道词。
+
+    2026-10-06 用户拍板「全部流程默认先走一遍搜索 Agent」之后，搜索从
+    `_translate` 内部提到了 `decide()` 入口（`_prefetch_search`）。所以这里
+    分两段钉：① `_prefetch_search` 本身的行为；② `_translate` / `_revise`
+    拿到 doc 后有没有正确塞进模板。
     """
 
     def setUp(self):
@@ -1868,8 +1873,8 @@ class SearchHookTest(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
-    def _run(self, doc="", boom=False, text="画个胡桃"):
-        """跑一次 _translate，返回 (喂给转译 LLM 的 prompt, 搜索被调用的参数)。"""
+    def _prefetch(self, doc="", boom=False, text="画个胡桃"):
+        """跑一次 _prefetch_search，返回 (返回的 doc, 搜索 mock)。"""
         from app import search_agent
 
         def fake(need):
@@ -1880,40 +1885,48 @@ class SearchHookTest(unittest.TestCase):
         sp = mock.patch.object(search_agent, "search", side_effect=fake)
         m_search = sp.start()
         self.addCleanup(sp.stop)
+        return direct_gen._prefetch_search(text), m_search
+
+    def _translate(self, doc="", text="画个胡桃"):
+        """跑一次 _translate，返回喂给转译 LLM 的 prompt。"""
         with mock.patch.object(
                 direct_gen.llm, "call_llm",
                 return_value='{"skill": "anima_clear", "prompt": "hu tao"}') as m_llm:
-            direct_gen._translate(text, [])
-        return m_llm.call_args[0][0][0]["content"], m_search
+            direct_gen._translate(text, [], doc=doc)
+        return m_llm.call_args[0][0][0]["content"]
 
     def test_doc_is_injected_into_the_prompt(self):
-        prompt, m_search = self._run("角色：胡桃 → hu_tao_(genshin_impact)（原神）")
+        doc, m_search = self._prefetch("角色：胡桃 → hu_tao_(genshin_impact)（原神）")
+        m_search.assert_called_once()
+        prompt = self._translate(doc=doc)
         self.assertIn("【标签库资料】", prompt)
         self.assertIn("hu_tao_(genshin_impact)", prompt)
-        m_search.assert_called_once()
 
     def test_empty_doc_leaves_no_section(self):
-        prompt, _ = self._run("")
-        self.assertNotIn("【标签库资料】", prompt)
+        self.assertNotIn("【标签库资料】", self._translate(doc=""))
 
     def test_search_failure_does_not_break_translation(self):
-        prompt, _ = self._run(boom=True)
+        doc, _ = self._prefetch(boom=True)
+        self.assertEqual(doc, "")
+        prompt = self._translate(doc=doc)
         self.assertNotIn("【标签库资料】", prompt)
         self.assertIn("【用户】", prompt)      # 模板照常渲染
 
     def test_only_the_raw_need_is_passed(self):
         """搜索 Agent 不吃历史、不吃渠道词——只拿用户原话。"""
-        _, m_search = self._run("资料", text="画个胡桃")
+        _, m_search = self._prefetch("资料", text="画个胡桃")
         self.assertEqual(m_search.call_args[0][0], "画个胡桃")
 
     def test_disabled_flag_skips_search_entirely(self):
         with mock.patch.object(direct_gen, "SEARCH_ENABLED", False):
             from app import search_agent
             with mock.patch.object(search_agent, "search") as m_search:
-                with mock.patch.object(
-                        direct_gen.llm, "call_llm",
-                        return_value='{"skill": "anima_clear", "prompt": "x"}'):
-                    direct_gen._translate("画个胡桃", [])
+                out = direct_gen._prefetch_search("画个胡桃")
+        m_search.assert_not_called()
+        self.assertEqual(out, "")
+
+    def test_empty_text_skips_search(self):
+        _, m_search = self._prefetch("资料", text="   ")
         m_search.assert_not_called()
 
     def test_template_still_renders_without_search(self):
@@ -1921,6 +1934,61 @@ class SearchHookTest(unittest.TestCase):
         out = direct_gen._MASTER_TEMPLATE.format(
             recent="", text="t", chan_hint="", search="")
         self.assertIn("【用户】", out)
+
+
+class DecidePrefetchTest(unittest.TestCase):
+    """`decide()` 入口统一算一次搜索，并把 doc 传给下游（2026-10-06 拍板）。
+
+    这一条钉的是**「全部流程默认走」到底有没有落到代码上**：搜索不再是
+    `_translate` 的私事，而是 decide 算好往下发。
+    """
+
+    def test_decide_prefetches_once_and_passes_doc_down(self):
+        with mock.patch.object(direct_gen, "_prefetch_search",
+                               return_value="资料X") as m_pre:
+            with mock.patch.object(direct_gen, "_translate",
+                                   return_value={"skill": "anima_clear",
+                                                 "prompt": "p"}) as m_tr:
+                with mock.patch.object(direct_gen, "_enqueue",
+                                       return_value="ok"):
+                    with mock.patch.object(direct_gen, "_remember_job"):
+                        direct_gen.decide("大大怪 画个胡桃", [], False,
+                                          at_me=True)
+        m_pre.assert_called_once()
+        self.assertEqual(m_tr.call_args[1].get("doc"), "资料X")
+
+
+class ReviseSearchTest(unittest.TestCase):
+    """改图管道 `_revise` 也要吃前置搜索的资料。
+
+    2026-10-06 查真机日志发现的缺口：`_revise` 走 `app.vision.describe()`，
+    **根本不经过 `_translate`**，所以群里最常见的「图生图，角色换XX」
+    从来没走过搜索（芽衣 / 琪亚娜 / 伊洛玛丽三轮日志里零文本 LLM 调用）。
+    """
+
+    def _run_revise(self, **kw):
+        """跑一次 _revise，返回它喂给识图模型的 prompt。"""
+        seen = {}
+
+        def fake_describe(url, prompt=None):
+            seen["prompt"] = prompt or ""
+            return '{"skill": "anima_clear", "prompt": "raiden mei, 1girl"}'
+
+        with mock.patch("app.vision.describe", side_effect=fake_describe):
+            with mock.patch.object(direct_gen, "_enqueue", return_value="ok"):
+                with mock.patch.object(direct_gen, "_remember_job"):
+                    direct_gen._revise("角色换芽衣", ["http://x/1.png"], [],
+                                       channel="anima_clear", **kw)
+        return seen.get("prompt", "")
+
+    def test_revise_injects_doc(self):
+        prompt = self._run_revise(doc="角色：芽衣 → raiden_mei（崩坏3）")
+        self.assertIn("【标签库资料】", prompt)
+        self.assertIn("raiden_mei", prompt)
+
+    def test_revise_without_doc_leaves_no_section(self):
+        prompt = self._run_revise()
+        self.assertNotIn("【标签库资料】", prompt)
 
 
 if __name__ == "__main__":

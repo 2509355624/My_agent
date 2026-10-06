@@ -712,6 +712,7 @@ _REVISE_TEMPLATE = (
     "- 禁止权重语法 (tag:1.2)、{{tag}}、::\n"
     "- 具体角色没把握就写外貌特征+作品名，不要编造不存在的角色名\n"
     "{escape}"
+    "{search}"
     "原提示词（渠道 {last_skill}）：\n{last_prompt}\n"
     "用户的话：{text}"
 )
@@ -887,7 +888,33 @@ def _enqueue(skill, prompt, text, source_image=False, seed=None,
     return result
 
 
-def _translate(text, history, skill=None, weighted=False, no_default=False):
+def _prefetch_search(text):
+    """跑一次搜索 Agent，返回资料文本；关掉或失败返回 ""。
+
+    **用户 2026-10-06 拍板：全部流程默认先走一遍搜索 Agent，再由最后的
+    单次生图 API 出提示词。** 所以搜索提到 `decide()` 入口统一做一次，
+    `_translate` 和 `_revise` 共用——原先只有 `_translate` 内部会搜，
+    而改图管道 `_revise` 根本不经过它，导致群里最常见的「图生图，角色换XX」
+    从来没走过搜索。
+
+    失败/查不到返回 ""，调用方按「没有资料」继续走原来的路——搜索是增强，
+    不是主链路，它挂了不该让生图也挂。
+    """
+    if not SEARCH_ENABLED:
+        return ""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    try:
+        from app import search_agent
+        return search_agent.search(text) or ""
+    except Exception:
+        log.exception("[direct] 前置搜索失败，按无资料继续")
+        return ""
+
+
+def _translate(text, history, skill=None, weighted=False, no_default=False,
+               doc=None):
     """一次 LLM 调用 → 生图任务，或一句聊天回复。**所有提示词都由它产出**。
 
     2026-10-05 晚用户拍板重做：**只有一条模板 `_MASTER_TEMPLATE`**（人设 +
@@ -910,16 +937,9 @@ def _translate(text, history, skill=None, weighted=False, no_default=False):
                    （调用方回问），**不静默落默认档**烧一张错风味的图。
     """
     named = (skill or "").strip()
-    # 前置搜索：先让 search_agent 查标签库，把真实条目拿回来当资料。
-    # **只传用户这一轮的原话**——搜索 Agent 不吃历史、不背人设（用户钉死的
-    # 定位）。失败/查不到返回 ""，模板里那一格就是空的，照老路走。
-    doc = ""
-    if SEARCH_ENABLED:
-        try:
-            from app import search_agent
-            doc = search_agent.search(text)
-        except Exception:
-            log.exception("[direct] 标签库前置搜索失败，按无资料继续")
+    # 搜索资料由调用方（`decide`）统一算好传进来——**一次请求只搜一次**，
+    # 所有分支共用。没传就是空串，模板里那一格为空，照老路走。
+    doc = doc or ""
     content = _MASTER_TEMPLATE.format(
         recent=_recent_lines(history) or "（无）",
         text=text,
@@ -1026,7 +1046,7 @@ _LOCAL_SEED_SKILL_RE = re.compile(r"^(anima_|hd_|qwen_image_v1|image_gen_v1|krea
 
 
 def _revise(text, data_urls, history, channel=None, at_me=False,
-            source_image=False):
+            source_image=False, doc=None):
     """改图管道：引用图 + 意见 → 一次调用 → 重跑。
 
     引用带图改图**一律真识图**（2026-10-05 用户拍板）：账本里存的是当时那句
@@ -1059,6 +1079,7 @@ def _revise(text, data_urls, history, channel=None, at_me=False,
         anchor_note = "没有（引用的不是本机器人画的图），忽略此项，以画面为准"
     ask = _REVISE_TEMPLATE.format(
         escape=_ESCAPE_FORBIDDEN if source_image else _ESCAPE_ALLOWED,
+        search=(_SEARCH_HEADER.format(doc=doc) if doc else ""),
         anchor_note=anchor_note,
         last_skill=anchor_skill,
         last_prompt=anchor_prompt,
@@ -1185,6 +1206,15 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         elif cands:
             return _LEAD_AMBIGUOUS_TEXT % " / ".join(cands)
 
+    # ── 前置搜索：全部流程默认先走一遍搜索 Agent（用户 2026-10-06 拍板）──
+    # 放在这里而不是 `_translate` 里面，是为了让下面**所有**会产出提示词的
+    # 分支共用同一份资料——改图管道 `_revise` 原先根本不经过 `_translate`，
+    # 所以群里最常见的「图生图，角色换XX」一直没走过搜索。
+    # 一次请求只搜一次；上面的早退分支（菜单 / 裸图 / 随机口令 / 提示词反问）
+    # 都已经 return，不会白搜。
+    doc = _prefetch_search(
+        _quote_merge(quoted, text) if quoted.strip() else text)
+
     # ── 引用图轮 ──────────────────────────────────────────
     if data_urls:
         if desc and (_GENERIC_I2I_RE.match(desc)
@@ -1204,7 +1234,7 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
                 desc = ""                       # 只说了机制词 → 走下面修正
             # 默认动漫档重绘：视觉模型出修正后的完整 tag，入队垫图。
             return _revise(text, data_urls, history, channel=ch,
-                           at_me=at_me, source_image=True)
+                           at_me=at_me, source_image=True, doc=doc)
         # 引用图 + 只打渠道/档位 → 自家图直接用账本提示词（零调用），
         # 别人的图才看图反推（1 次识图），然后入队生成。自家图命中时**连
         # 种子一起复刻**（2026-10-05 用户拍板）：同提示词新种子=构图细节
@@ -1244,7 +1274,8 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
             return reply or "没认出这张图，重发一次试试。"
         # 其余（有意见 / 无渠道词）→ 改图管道；模型判「不是修改请求」时
         # @ 轮回反推文本、关键词轮闭嘴吞轮（明说机制词的轮不会走到这）。
-        reply = _revise(text, data_urls, history, channel=ch, at_me=at_me)
+        reply = _revise(text, data_urls, history, channel=ch, at_me=at_me,
+                        doc=doc)
         return reply if reply is not None else ""
 
     # ── 成品提示词轮（带 NAI 权号 `::`）：过一次 AI，权号语法一个字不许动 ──
@@ -1263,7 +1294,7 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
             return ("权号串我只看到渠道词，正文是空的。把整段提示词一起发，"
                     "别只有渠道词。")
         data = _translate(body, history, skill=skill, weighted=True,
-                          no_default=True)
+                          no_default=True, doc=doc)
         if data and data.get("reply"):
             # 模型判断这串不是下单（比如群里贴串讨论）→ 直接回话，不入队。
             return data["reply"]
@@ -1293,7 +1324,7 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
             # 这两条零转译旁路都已删除）。
             # 转译**不带最近历史**：引用正文是唯一描述来源，历史里有旧 tag
             # 时小模型照抄（负向规则它执行不了，只能断来源）。
-            data = _translate(quoted, [], skill=ch)
+            data = _translate(quoted, [], skill=ch, doc=doc)
             if data and data.get("reply"):
                 return data["reply"]
             if data:
@@ -1319,7 +1350,7 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         # 历史（「换成卡通风格 三档」的指代要靠它）。
         src = _quote_merge(quoted, desc)
         hist = [] if quoted.strip() else history
-        data = _translate(src, hist, skill=ch)
+        data = _translate(src, hist, skill=ch, doc=doc)
         if data and data.get("reply"):
             # 模型判这轮不是下单（点名了渠道也只是在聊）→ 直接回话。
             return data["reply"]
@@ -1333,7 +1364,7 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     # 2026-10-05 用户拍板：删掉 `_INTENT_RE`/`at_me` 闸与菜单兜底——
     # 「AI 识别用户的意图，是画图就画，是聊天就回话」，一次请求一次回复。
     src = _quote_merge(quoted, text) if quoted.strip() else text
-    data = _translate(src, [] if quoted.strip() else history)
+    data = _translate(src, [] if quoted.strip() else history, doc=doc)
     if data and data.get("reply"):
         return data["reply"]
     if data:
