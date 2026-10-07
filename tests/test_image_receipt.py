@@ -137,9 +137,23 @@ class ReceiptNoteTest(_SubmitHarness):
 
     def test_default_note_mentions_the_4x_channel(self):
         """回执附言给 silver-hd 一行曝光（2026-10-07 用户拍板）——它是点名渠道，
-        不在「常用」里，但回执每张图都刷一遍才是它的曝光位。"""
+        单独占一行讲用法，不混进渠道清单里。"""
         text = self._note(None)
         self.assertIn("silver-hd", text)
+
+    def test_default_note_lists_every_nameable_channel(self):
+        """2026-10-07 用户拍板「把我全部的可用渠道都加上去」——能点名的 11 个
+        都要在回执里出现（原「常用」那行只列 5 个，sd / krea2 / nffa / miao /
+        cunny 一直没有曝光位）。
+
+        `image_gen_v1_hires` / `nai_wide` 没有短名、点名不到，故意不列。
+        """
+        text = self._note(None)
+        for name in ("silver", "anima", "qwen", "nai", "jank", "sd",
+                     "krea2", "nffa", "miao", "cunny", "silver-hd"):
+            self.assertIn(name, text, name)
+        for name in ("image_gen_v1_hires", "nai_wide"):
+            self.assertNotIn(name, text, name)
 
     def test_empty_string_switches_the_note_off(self):
         """清空 = 「这段不要了」，只留状态行和渠道行。"""
