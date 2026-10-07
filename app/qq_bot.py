@@ -42,7 +42,7 @@ except ImportError:                    # 非 Windows 平台退化为不做检查
 
 from app import (confirm_gate, direct_gen, image_jobs, image_out, interject,
                  logsetup,
-                 longterm, notify, qq_api, qq_status, recent, recall_gate,
+                 longterm, notify, qq_api, qq_status, recent,
                  stickers, usage)
 from app.agent import run_agent_stream, tail_tokens
 from app.agent_prompt import build_stable_prompt
@@ -552,6 +552,12 @@ def _should_reply(ev, target, target_id, text, at_me, has_image=False,
     它们整个丢掉。注意「有内容」判据是 `text or has_image or has_quote`
     ——这些也算内容，但**不 @ 的群里仍然不看**，触发规则没放宽。
 
+    **私聊例外（2026-10-07 用户拍板）**：私聊里「有内容」只认 text。单发
+    一张图 / 只引用一条消息而不写字，**什么都不做**——图不进 AI 的眼（但
+    进了会话历史），等用户接着发一条文本，那一轮再把邻近的图带上处理。
+    原先 private 分支 `return (has_content, ...)` 会让一张裸图直接触发整轮，
+    就是「用户话还没说完，AI 已经反推完图」那个 bug 的根。
+
     触发顺序：黑名单 → 群白名单 → **全局静音** → @ → 关键词 → 全量模式。被管理页设成
     「只认 @」的群会跳过关键词那一档（见 _at_only_groups）。
     """
@@ -565,7 +571,10 @@ def _should_reply(ev, target, target_id, text, at_me, has_image=False,
         ok, why = _private_gate(user_id)
         if not ok:
             return False, why
-        return (has_content, "私聊")
+        # 私聊只认文本：裸图 / 裸引用一律不回，交给下一轮带文本时一并处理。
+        if not text:
+            return False, "私聊无文本（裸图/裸引用，不看）"
+        return True, "私聊"
 
     group_id = str(target_id)
     if QQ_WHITELIST_GROUPS and group_id not in QQ_WHITELIST_GROUPS:
@@ -1003,19 +1012,6 @@ class SessionRunner:
         if confirm_reply is not None:
             try:
                 self._deliver(False, confirm_reply, [], "")
-            finally:
-                qq_api.clear_context()
-            return
-        # 反推闸门（2026-10-04）：对方在要「看图反推提示词」时，代码直接调
-        # 识图把结果发回去，模型整轮不参与——9B 会把历史里上次生图的提示词
-        # 搬出来交差，给了明确指令也时灵时不灵。判据代码判，见 app/recall_gate.py。
-        # 闸门不接（没图 / 不是反推 / 自家 HT 图 / 识图失败）就原样放行。
-        gate_reply = recall_gate.decide(own_text=own_text, full_text=text,
-                                        data_urls=data_urls or None,
-                                        voluntary=voluntary)
-        if gate_reply is not None:
-            try:
-                self._deliver(False, gate_reply, [], "")
             finally:
                 qq_api.clear_context()
             return

@@ -58,13 +58,13 @@ def tearDownModule():
 
 
 def _pc(text):
-    """`_parse_channel` 的**前两个**返回值 (skill, desc)。
+    """`_parse_channel` 的返回值 (skill, desc)。
 
-    2026-10-07 起它返回三元组，多了个 `alt`（正文里还剩的第二个渠道词）。
-    老用例只关心前两个；要测 alt 的用 `_parse_channel` 直接解三元。
+    2026-10-07 起它回到两元组（原先那个 `alt` 第二渠道词上报已删——用户拍板
+    「严格从左到右取第一个命中的」，不再上报）。保留这个小包装只为老用例
+    少改字。
     """
-    skill, desc, _alt = direct_gen._parse_channel(text)
-    return skill, desc
+    return direct_gen._parse_channel(text)
 
 
 class ChannelParseTest(unittest.TestCase):
@@ -201,80 +201,37 @@ class ChannelParseTest(unittest.TestCase):
                          ("hd_3_soft", "初音未来"))
 
 
-class AltChannelReportTest(unittest.TestCase):
-    """两个渠道词并存时，代码**上报第二个词**、不替 AI 裁决（2026-10-07）。
+class LeftmostChannelTest(unittest.TestCase):
+    """两个渠道词并存时，**严格取从左到右第一个命中的**（2026-10-07 用户拍板）。
 
-    病根：`_parse_channel` 只认固定渠道词和档位词，自定义渠道（silver / jank）
-    两类都不进 → 「silver 三档」里 silver 匹配不到，被当成画面内容留在 desc，
-    档位词却锁死了渠道，chan_hint 还写「就用它（hd_3_clear）」，AI 无从反驳。
-    用户 2026-10-07 点破：「三档二档快档是之前为了 anima 区分做的，现在反而
-    造成冲突」——档位是 anima 族的尺寸维度，渠道名是正交的另一维。
+    用户原话：「他打 Six 三档，那就走 Six；如果是三档 Six，那就走三档——就看
+    哪一个排在第一」。原先那套「上报第二个词让 AI 判」的 alt 机制已删。
     """
 
-    def test_second_channel_word_is_reported(self):
-        for text, skill, desc, alt in (
-                ("silver 三档", "hd_3_clear", "silver", "silver"),
-                ("三档 silver", "hd_3_clear", "silver", "silver"),
-                ("jank 二档", "hd_2_clear", "jank", "jank"),
-                ("二档 jank", "hd_2_clear", "jank", "jank"),
-                ("silver 快档", "hd_fast_clear", "silver", "silver"),
-                ("silver 三档 gloss", "hd_3_gloss", "silver", "silver"),
-                ("silver 三档 女骑士", "hd_3_clear", "silver  女骑士", "silver"),
-                # 固定渠道词被留在 desc 里时也要报（别名，不是 id）
-                ("三档 qwen", "hd_3_clear", "qwen", "qwen"),
-                ("画个女孩 三档 qwen", "hd_3_clear", "画个女孩  qwen", "qwen")):
+    def test_leftmost_channel_word_wins(self):
+        for text, skill in (
+                ("silver 三档", "hd_3_clear"),
+                ("三档 silver", "hd_3_clear"),
+                ("jank 二档", "hd_2_clear"),
+                ("二档 jank", "hd_2_clear"),
+                ("silver 快档", "hd_fast_clear"),
+                ("silver 三档 gloss", "hd_3_gloss"),
+                ("silver 三档 女骑士", "hd_3_clear"),
+                # 固定渠道词排在档位词前面 → 固定词赢
+                ("nai 三档", "nai"),
+                # 档位词排在固定词前面 → 档位词赢
+                ("三档 qwen", "hd_3_clear"),
+                ("画个女孩 三档 qwen", "hd_3_clear")):
             with self.subTest(text=text):
-                self.assertEqual(direct_gen._parse_channel(text),
-                                 (skill, desc, alt))
+                self.assertEqual(direct_gen._parse_channel(text)[0], skill)
 
-    def test_no_alt_when_only_one_channel_word(self):
-        for text in ("三档 gloss 初音未来", "gloss 一个女孩", "sd 一只猫",
-                     "nai 三档", "三档 猫", "三档 女骑士", "默认初音未来"):
-            with self.subTest(text=text):
-                _, _, alt = direct_gen._parse_channel(text)
-                self.assertIsNone(alt, "只有一个渠道词时不该报 alt")
-
-    def test_english_tag_run_does_not_fake_a_channel(self):
-        # `sd style` / `soft lighting` 这类 tag 流里的片段不是点名单。
-        # 边界必须用 [0-9A-Za-z]（不能用 \w——\w 匹配 CJK，会把中文正文误判）。
-        for text in ("三档 1girl, solo, sd style",
-                     "1girl, soft lighting, blue hair",
-                     "sd style 的女孩 三档"):
-            with self.subTest(text=text):
-                _, _, alt = direct_gen._parse_channel(text)
-                self.assertIsNone(alt)
-
-    def test_underscore_joined_name_is_not_a_channel(self):
-        # `silver_hair`、`silvers` 都是画面内容/近似词，不是渠道。
-        for text in ("silver_hair 的少女", "一只银发少女", "silver silvers 三档"):
-            with self.subTest(text=text):
-                _, _, alt = direct_gen._parse_channel(text)
-                self.assertIsNone(alt)
-
-    def test_chan_hint_spells_out_both_words(self):
-        """两个渠道词时，chan_hint 要把两个词都摊给模型并讲清维度关系。
-
-        钉住「不替 AI 裁决」这条：提示词里**不允许**再出现那个替用户拍板的
-        口径（「就用它」配在错误渠道上）。
-        """
-        captured = {}
-
-        def fake_ask(content):
-            captured["content"] = content
-            return {"reply": "好的"}
-
-        with mock.patch.object(direct_gen, "_ask", side_effect=fake_ask):
-            direct_gen._translate("silver 三档", [], skill="hd_3_clear",
-                                  alt="silver")
-        c = captured["content"]
-        self.assertIn("hd_3_clear", c)
-        self.assertIn("silver", c)
-        self.assertIn("两个", c)
-        # 讲清维度关系
-        self.assertIn("尺寸", c)
-        self.assertIn("渠道名", c)
-        # 不许给「就用它」这种拍板口径
-        self.assertNotIn("就用它", c)
+    def test_no_alt_pollution_in_desc(self):
+        # 认不出的自定义渠道词（silver / jank）留在正文里，等 AI 判——代码
+        # 不上报、不裁决。
+        self.assertEqual(direct_gen._parse_channel("silver 三档"),
+                         ("hd_3_clear", "silver"))
+        self.assertEqual(direct_gen._parse_channel("silver 三档 女骑士"),
+                         ("hd_3_clear", "silver  女骑士"))
 
     def test_chan_hint_stays_a_command_when_unambiguous(self):
         """只有一个渠道词时维持老口径（「就用它」），别把 AI 搞犹豫。"""
@@ -625,7 +582,12 @@ class QuotedPromptTest(unittest.TestCase):
 
 
 class QuoteImageIntentTest(unittest.TestCase):
-    """引用图的生成/图生图意图（2026-10-05 用户拍板的边界）。"""
+    """引用图的生成/图生图意图（2026-10-05 拍板 + 2026-10-07 全交 AI）。
+
+    2026-10-07 用户拍板：发图 + 指令**默认走 AI**，代码不再认死话术
+    （`_GENERIC_I2I_RE` / `_RUN_THIS_RE` / `_IMG_GEN_INTENT_RE` 全删）。所以
+    「帮我生成这个 / 跑这张」这类**当成普通意见交给 AI**，由模型判渠道+垫图。
+    """
 
     def _decide(self, text, llm_reply='{"skill": "anima_clear", "prompt": "x"}',
                 seen="1girl, solo, blue hair", quoted="", at_me=False,
@@ -647,12 +609,14 @@ class QuoteImageIntentTest(unittest.TestCase):
             direct_gen._LAST_JOB.pop("group_1", None)
         return out, m_gen
 
-    def test_gen_intent_without_channel_reverses_then_generates(self):
-        # 引用图 +「帮我生成这个 / 跑一下这张图片」（没渠道）→ 用户口径：
-        # 默认反推 → 重画，别反问。2026-10-06 起「默认」= silver。
+    def test_gen_intent_goes_through_ai(self):
+        # 2026-10-07：这些「帮我生成这个」的原话不再由代码认死话术，整句交给
+        # AI；没有账本 → 识图一次，模型出提示词入队。
         for text in ("帮我生成这个", "跑一下这张图片", "处理一下这张图"):
             with self.subTest(text=text):
-                out, m_gen = self._decide(text)
+                out, m_gen = self._decide(
+                    text, seen='{"skill": "silver", "prompt": "1girl, solo, '
+                               'blue hair"}')
                 self.assertEqual(out, "")
                 m_gen.assert_called_once_with("1girl, solo, blue hair",
                                               skill="silver",
@@ -721,22 +685,17 @@ class QuoteImageIntentTest(unittest.TestCase):
                                       skill="hd_3_clear",
                                       _skip_confirm=True)
 
-    def test_run_this_phrase_with_channel_generates_directly(self):
-        # 2026-10-05 用户口径：引用图 + 渠道词 +「跑这张 / 跑这个」→ 直接用该
-        # 渠道跑（账本/反推），**不进改图管道**（否则会回占位符废话）。
+    def test_run_this_phrase_with_channel_goes_to_ai(self):
+        # 2026-10-07：「跑这张 / 跑这个」这类空话不再由代码认死（`_RUN_THIS_RE`
+        # 已删），整句交给 AI 判。没有账本 → 识图一次。
         for t in ("cunny跑这张", "cunny 跑这个", "cunny 跑一下"):
             with self.subTest(t=t):
-                out, m_gen = self._decide(t, at_me=True)
+                out, m_gen = self._decide(
+                    t, seen='{"skill": "cunny", "prompt": "1girl, solo, '
+                            'blue hair"}')
                 self.assertEqual(out, "")
                 m_gen.assert_called_once_with("1girl, solo, blue hair",
                                               skill="cunny", _skip_confirm=True)
-
-    def test_run_this_regex_only_matches_filler(self):
-        # 「跑这张」式空话命中；带真实改动内容的不命中（照旧走改图）。
-        for t in ("跑这张", "跑一版这张", "生成这个", "来一张", "跑这个", "跑一下"):
-            self.assertTrue(direct_gen._RUN_THIS_RE.match(t), t)
-        for t in ("把头发换成银色", "画成银发", "换个背景", "加上猫耳"):
-            self.assertFalse(direct_gen._RUN_THIS_RE.match(t), t)
 
     def test_bare_at_with_image_still_returns_reverse_text(self):
         # 原有行为不回归：引用图 + 裸 @ → 反推文本，不生成。
@@ -765,11 +724,11 @@ class AgainTest(unittest.TestCase):
 
 
 class RevisionPipelineTest(unittest.TestCase):
-    """改图管道：引用图 + 意见 → 一次带图调用（2026-10-05 拍板）。
+    """改图管道：引用图 + 意见 → 一次调用（2026-10-07 起分两条）。
 
-    引用带图改图**一律真识图**（账本提示词只当「最可信旁证」写进 prompt）。
-    明说机制词（图生图/垫图/改图/重绘）→ 关掉 reverse 逃逸口，必须出 prompt；
-    没点名机制词才允许「不是修改请求 → 回反推」，且 @ 轮才回、关键词轮静默。
+    引用带图改图**自家图走纯文本**（账本优先、不预先识图——2026-10-07 用户
+    拍板：「没必要每一次引用我的生成结果就一直在识图」）；**别人的图走真识图**
+    （没有账本可依）。逃逸口（「不是修改请求 → 输出 reverse」）常开。
     """
 
     def _decide(self, text, seen='{"skill": "anima_clear", '
@@ -786,6 +745,9 @@ class RevisionPipelineTest(unittest.TestCase):
                         return_value=seen) as m_describe, \
              mock.patch.object(direct_gen.image_log, "lookup",
                                return_value=lookup_row), \
+             mock.patch("app.llm.call_llm",
+                        side_effect=describe_side_effect,
+                        return_value=llm_reply or seen) as m_text, \
              mock.patch.object(gi, "_generate_image",
                                return_value=RECEIPT) as m_gen:
             if llm_reply is not None:
@@ -798,19 +760,18 @@ class RevisionPipelineTest(unittest.TestCase):
                                     False, data_urls=["data:image/jpeg;base64,A"],
                                     at_me=at_me)
             direct_gen._LAST_JOB.pop("group_1", None)
-        return out, m_describe, m_llm_mod.call_llm, m_gen
+        return out, m_describe, m_llm_mod.call_llm, m_gen, m_text
 
     def test_revision_single_call_sees_image_and_opinion(self):
-        # 「手改成插兜」只说了改动内容、没点名图生图 → **不垫图**（10-05
-        # 用户拍板：反复垫图会越改越糊），反推修正后重画一张。
-        out, m_describe, m_llm, m_gen = self._decide(
+        # 别人的图 +「手改成插兜」→ 真识图一次，修正后重画（不垫图）。
+        out, m_describe, m_llm, m_gen, _ = self._decide(
             "手改成插兜",
             '{"skill": "anima_clear", "prompt": "1girl, hands in pockets"}')
         self.assertEqual(out, "")
         m_gen.assert_called_once_with("1girl, hands in pockets",
                                       skill="anima_clear",
                                       _skip_confirm=True)
-        m_describe.assert_called_once()          # 只有一次带图调用
+        m_describe.assert_called_once()          # 别人的图：一次带图调用
         self.assertNotIn("provider",
                          m_describe.call_args.kwargs)  # 跟识图配置走
         sent = m_describe.call_args.kwargs["prompt"]
@@ -820,7 +781,7 @@ class RevisionPipelineTest(unittest.TestCase):
 
     def test_edit_opinion_without_verbs_regenerates_t2i(self):
         # 「手怎么多了一根」没有改图动词 → 不垫图，反推修正后重画一张
-        out, m_describe, m_llm, m_gen = self._decide(
+        out, m_describe, m_llm, m_gen, _ = self._decide(
             "手怎么多了一根",
             '{"skill": "anima_clear", "prompt": "1girl, five fingers"}')
         self.assertEqual(out, "")
@@ -836,19 +797,20 @@ class RevisionPipelineTest(unittest.TestCase):
         self.assertNotIn("provider",
                          m_describe.call_args.kwargs)  # 跟识图配置走
 
-    def test_own_image_also_sees_image(self):
-        # 2026-10-05 用户拍板：引用自家 HT 图改图**也一律真识图**——账本里存
-        # 的是当时那句提示词，和画面实际内容可能已经对不上（背景改透明那次
-        # 没看图，出图就不是用户要的）。账本降级成「最可信旁证」写进 prompt。
-        out, m_describe, m_llm, m_gen = self._decide(
+    def test_own_image_uses_ledger_without_vision(self):
+        # 2026-10-07 用户拍板：引用**自家 HT 图**改图**不预先识图**——账本里
+        # 就是当时真跑的提示词，画面同源；改「发色」这类直接在那段文字上改。
+        # 走纯文本调用（`call_llm`），`describe` 一次都不调（省钱）。
+        out, m_describe, m_llm, m_gen, m_text = self._decide(
             "手改成插兜",
             seen='{"skill": "hd_3_curvy", "prompt": "miku, hands in pockets"}',
             quoted="编号 HT-20261005-010329-595",
             lookup_row={"prompt": "logged, miku", "skill": "hd_3_curvy"})
         self.assertEqual(out, "")
-        m_describe.assert_called_once()          # 真看图（纯文本修正已退役）
-        m_llm.assert_not_called()                # 文本修正链路整个不再参与
-        sent = m_describe.call_args.kwargs["prompt"]
+        m_describe.assert_not_called()           # 自家图不预先识图
+        m_text.assert_called_once()              # 纯文本改提示词
+        m_llm.assert_not_called()                # 不走 _translate 转译链路
+        sent = m_text.call_args[0][0][0]["content"]
         self.assertIn("logged, miku", sent)      # 账本提示词当旁证进场
         self.assertIn("手改成插兜", sent)        # 用户意见进来了
         m_gen.assert_called_once_with("miku, hands in pockets",
@@ -856,22 +818,23 @@ class RevisionPipelineTest(unittest.TestCase):
                                       _skip_confirm=True)
 
     def test_own_image_praise_on_at_round_returns_reverse(self):
-        # 自家图 + 夸奖（没点名机制词）+ @ 轮 → 识图后模型判「不是修改请求」
-        # → 把反推给他（画面为准，不再回账本里那句可能已过时的旧提示词）
-        out, m_describe, m_llm, m_gen = self._decide(
+        # 自家图 + 夸奖（没点名机制词）+ @ 轮 → 纯文本调用后模型判「不是修改
+        # 请求」→ 把 reverse 反推给他
+        out, m_describe, m_llm, m_gen, m_text = self._decide(
             "画得真好", at_me=True,
             seen='{"reverse": "miku, blue hair, smiling"}',
             quoted="编号 HT-20261005-010329-595",
             lookup_row={"prompt": "logged, miku", "skill": "hd_3_curvy"})
         self.assertIn(direct_gen._REVERSE_HEADER, out)
         self.assertIn("blue hair", out)
-        m_describe.assert_called_once()
+        m_describe.assert_not_called()           # 自家图不预先识图
+        m_text.assert_called_once()
         m_llm.assert_not_called()
         m_gen.assert_not_called()
 
     def test_own_image_praise_on_keyword_round_swallows_turn(self):
         # 自家图 + 夸奖 + 关键词轮 → 闭嘴吞轮，绝不掉回 agent
-        out, _, _, m_gen = self._decide(
+        out, _, _, m_gen, _ = self._decide(
             "画得真好",
             seen='{"reverse": "miku, blue hair"}',
             quoted="编号 HT-20261005-010329-595",
@@ -880,10 +843,9 @@ class RevisionPipelineTest(unittest.TestCase):
         m_gen.assert_not_called()
 
     def test_vision_ask_overrides_ledger(self):
-        # 明说「识图」照样有效（现在识图本来就是默认，这条守住别退化）
-        out, m_describe, m_llm, m_gen = self._decide(
-            "识图 帮我改一下手",
-            lookup_row={"prompt": "logged, miku", "skill": "hd_3_curvy"})
+        # 别人的图（账本没中）→ 照旧真识图一次
+        out, m_describe, m_llm, m_gen, _ = self._decide(
+            "识图 帮我改一下手")
         self.assertEqual(out, "")
         m_describe.assert_called_once()
         m_llm.assert_not_called()                # 不走文本修正
@@ -898,7 +860,7 @@ class RevisionPipelineTest(unittest.TestCase):
         """
         for text in ("图生图 把头发换成银色", "画得真好"):
             with self.subTest(text=text):
-                _, m_describe, _, _ = self._decide(
+                _, m_describe, _, _, _ = self._decide(
                     text, seen='{"skill": "silver", "prompt": "x"}')
                 sent = m_describe.call_args.kwargs["prompt"]
                 self.assertIn("reverse 字段", sent)
@@ -907,7 +869,7 @@ class RevisionPipelineTest(unittest.TestCase):
 
     def test_vague_opinion_keeps_escape_hatch(self):
         # 没点名机制词（真闲聊）→ 逃逸口照旧保留，模板里给 reverse 说明
-        _, m_describe, _, _ = self._decide(
+        _, m_describe, _, _, _ = self._decide(
             "画得真好",
             seen='{"reverse": "1girl, solo, blue hair"}')
         sent = m_describe.call_args.kwargs["prompt"]
@@ -920,7 +882,7 @@ class RevisionPipelineTest(unittest.TestCase):
         一处——原话命中机制词，就把模型输出的 reverse 硬说成「没解析出来」。
         10-06 拆闸之后它不再有豁免权：判据只写在模板里，结论听模型的。
         """
-        out, m_describe, _, m_gen = self._decide(
+        out, m_describe, _, m_gen, _ = self._decide(
             "图生图 改动部分异常肢体",
             seen='{"reverse": "这张图的英文tag反推"}', at_me=True)
         m_describe.assert_called_once()
@@ -929,7 +891,7 @@ class RevisionPipelineTest(unittest.TestCase):
         m_gen.assert_not_called()
 
         # 同一条回复在关键词轮里闭嘴吞轮（不刷屏），也不入队
-        out, _, _, m_gen = self._decide(
+        out, _, _, m_gen, _ = self._decide(
             "图生图 改动部分异常肢体",
             seen='{"reverse": "这张图的英文tag反推"}', at_me=False)
         self.assertEqual(out, "")
@@ -937,18 +899,19 @@ class RevisionPipelineTest(unittest.TestCase):
 
     def test_own_image_bare_at_returns_logged_prompt_zero_calls(self):
         # 自家图 + 裸 @ → 直接回账本提示词，识图和 LLM 都不调
-        out, m_describe, m_llm, m_gen = self._decide(
+        out, m_describe, m_llm, m_gen, m_text = self._decide(
             "", quoted="编号 HT-20261005-010329-595", at_me=True,
             lookup_row={"prompt": "logged, miku", "skill": "hd_3_curvy"})
         self.assertIn(direct_gen._REVERSE_HEADER, out)
         self.assertIn("logged, miku", out)
         m_describe.assert_not_called()
+        m_text.assert_not_called()
         m_llm.assert_not_called()
         m_gen.assert_not_called()
 
     def test_own_image_with_channel_word_uses_ledger_zero_calls(self):
         # 自家图 +「三档」→ 账本提示词 + 新渠道直接入队，零识图零 LLM
-        out, m_describe, m_llm, m_gen = self._decide(
+        out, m_describe, m_llm, m_gen, _ = self._decide(
             "三档", quoted="编号 HT-20261005-010329-595",
             lookup_row={"prompt": "logged, miku", "skill": "hd_3_curvy"})
         self.assertEqual(out, "")
@@ -960,7 +923,7 @@ class RevisionPipelineTest(unittest.TestCase):
     def test_own_image_tier_change_replays_ledger_seed(self):
         # 换档复刻（2026-10-05 用户拍板）：引用 HT 图 +「三档」→ 账本提示词
         # 和账本种子一起入队，构图贴近原图、只换画质工作流。
-        out, m_describe, m_llm, m_gen = self._decide(
+        out, m_describe, m_llm, m_gen, _ = self._decide(
             "三档", quoted="编号 HT-20261005-010329-595",
             lookup_row={"prompt": "logged, miku", "skill": "anima_clear",
                         "seed": "414004422"})
@@ -972,7 +935,7 @@ class RevisionPipelineTest(unittest.TestCase):
 
     def test_own_image_seed_not_passed_to_nai_channel(self):
         # NAI 不认 seed（传了直接报错）：引用 HT 图 +「nai」→ 不带种子入队。
-        out, m_describe, m_llm, m_gen = self._decide(
+        out, m_describe, m_llm, m_gen, _ = self._decide(
             "nai", quoted="编号 HT-20261005-010329-595",
             lookup_row={"prompt": "logged, miku", "skill": "anima_clear",
                         "seed": "414004422"})
@@ -983,7 +946,7 @@ class RevisionPipelineTest(unittest.TestCase):
 
     def test_own_image_without_seed_stays_random(self):
         # 老账本记录没有 seed（空串）→ 照旧随机，不传 seed 参数。
-        out, m_describe, m_llm, m_gen = self._decide(
+        out, m_describe, m_llm, m_gen, _ = self._decide(
             "三档", quoted="编号 HT-20261005-010329-595",
             lookup_row={"prompt": "logged, miku", "skill": "anima_clear",
                         "seed": ""})
@@ -994,7 +957,7 @@ class RevisionPipelineTest(unittest.TestCase):
 
     def test_foreign_image_ignores_last_job(self):
         # 引用别人的图：上一轮任务的原提示词绝不进场（锚死事故的根因）
-        out, m_describe, _, m_gen = self._decide(
+        out, m_describe, _, m_gen, _ = self._decide(
             "手改成插兜",
             '{"skill": "anima_clear", "prompt": "1girl, fixed"}',
             last_job={"skill": "anima_clear", "prompt": "1girl, old"})
@@ -1007,7 +970,7 @@ class RevisionPipelineTest(unittest.TestCase):
     def test_bare_at_with_image_returns_reverse_text(self):
         # 2026-10-05 用户口径：引用图 + 只 @（没别的说）→ 反推提示词返回，
         # 不生成（走 _recall_tags，跟识图配置走）
-        out, m_describe, m_llm, m_gen = self._decide(
+        out, m_describe, m_llm, m_gen, _ = self._decide(
             "", seen="1girl, solo, blue hair", at_me=True)
         self.assertIn(direct_gen._REVERSE_HEADER, out)
         self.assertIn("blue hair", out)
@@ -1017,26 +980,31 @@ class RevisionPipelineTest(unittest.TestCase):
 
     def test_channel_with_image_generates_from_reverse_zero_llm(self):
         # 引用图 + 只打档位（「三档」）→ 反推后直接生成，零 LLM
-        out, m_describe, m_llm, m_gen = self._decide(
+        out, m_describe, m_llm, m_gen, _ = self._decide(
             "三档", seen="1girl, solo, blue hair", at_me=True)
         self.assertEqual(out, "")
         m_llm.assert_not_called()
         m_gen.assert_called_once_with("1girl, solo, blue hair",
                                       skill="hd_3_clear", _skip_confirm=True)
 
-    def test_generic_i2i_filler_with_channel(self):
-        # 引用图 +「快档 基于图片帮我生成」→ 空话不算意见，反推后直接生成
-        out, _, m_llm, m_gen = self._decide(
-            "快档 基于图片帮我生成", seen="1girl, solo, blue hair", at_me=True)
+    def test_channel_plus_filler_goes_to_ai(self):
+        # 2026-10-07：「快档 基于图片帮我生成」这种带渠道词+空话的轮，不再由
+        # 代码认死话术（`_GENERIC_I2I_RE` 已删），整句交给 AI 判。
+        out, m_describe, m_llm, m_gen, _ = self._decide(
+            "快档 基于图片帮我生成",
+            seen='{"skill": "hd_fast_clear", "prompt": "1girl, solo, blue hair"}',
+            at_me=True)
         self.assertEqual(out, "")
-        m_llm.assert_not_called()
+        m_describe.assert_called_once()          # 别人的图 → 识图一次
+        sent = m_describe.call_args.kwargs["prompt"]
+        self.assertIn("基于图片帮我生成", sent)  # 原话交给 AI
         m_gen.assert_called_once_with("1girl, solo, blue hair",
                                       skill="hd_fast_clear",
                                       _skip_confirm=True)
 
     def test_praise_on_at_round_returns_reverse_text(self):
         # @ 轮意见不是修改请求 → 一次调用里直接给出反推（不刷菜单、不二调）
-        out, m_describe, _, m_gen = self._decide(
+        out, m_describe, _, m_gen, _ = self._decide(
             "画得真好", seen='{"reverse": "1girl, solo, blue hair"}',
             at_me=True)
         self.assertIn(direct_gen._REVERSE_HEADER, out)
@@ -1046,19 +1014,19 @@ class RevisionPipelineTest(unittest.TestCase):
 
     def test_praise_is_swallowed_on_keyword_round(self):
         # 关键词轮引用图 + 夸奖（reverse）→ 闭嘴吞轮（""），绝不掉回 agent
-        out, _, _, m_gen = self._decide(
+        out, _, _, m_gen, _ = self._decide(
             "比大大怪快五秒左右",
             seen='{"reverse": "1girl, solo, blue hair"}')
         self.assertEqual(out, "")
         m_gen.assert_not_called()
 
     def test_revision_unparseable_returns_error(self):
-        out, _, _, m_gen = self._decide("手改成插兜", seen="不是 JSON")
+        out, _, _, m_gen, _ = self._decide("手改成插兜", seen="不是 JSON")
         self.assertIn("没解析出来", out)
         m_gen.assert_not_called()
 
     def test_revision_call_failure_returns_error(self):
-        out, m_describe, _, m_gen = self._decide(
+        out, m_describe, _, m_gen, _ = self._decide(
             "手改成插兜", describe_side_effect=RuntimeError("429"))
         self.assertIn("没发出去", out)
         m_describe.assert_called_once()
@@ -1451,49 +1419,49 @@ class SkipConfirmTest(unittest.TestCase):
 
 
 class DescribeImageTest(unittest.TestCase):
-    """看图说话：@ 轮 + 引用图 + 描述类问题 → 单次识图中文描述。
+    """看图说话：@ 轮 + 引用图 + 描述类问题 → 2026-10-07 起交给**改图管道**。
 
-    不进改图管道（那口是奔着生成提示词去的）；只认 @ 轮；渠道词在场时不
-    劫（「sd 这画的是什么」仍走改图）；图生图机制词优先级更高。
+    原先代码认死「画的什么 / 什么画风」这类话术直调识图（`_DESCRIBE_RE`），
+    已删。现在所有「引用图 + 有话说」统一进 `_revise`：模型判这轮不是修改
+    请求就回一段反推文本（`reverse`），判是改图就出提示词。别人的图走识图。
+
+    这里钉住两件事：① 「这画的是什么」仍能得到一句中文/文本回答（不再由
+    代码直调识图，而是走 AI）；② 渠道词在场时照样进改图管道，不能因为
+    「提问」就把渠道词丢了。
     """
 
     def _decide(self, text, urls=("img1",), at_me=True,
-                describe_reply="红色的正方形。"):
+                describe_reply='{"reverse": "红色的正方形。"}', quoted="",
+                lookup_row=None):
         with mock.patch.object(direct_gen, "llm") as m_llm_mod, \
              mock.patch.object(direct_gen.qq_api, "current_session_key",
                                return_value="group_1"), \
              mock.patch.object(direct_gen.qq_api, "current_quoted_text",
-                               return_value=""), \
+                               return_value=quoted), \
              mock.patch("app.vision.describe",
                         return_value=describe_reply) as m_describe, \
+             mock.patch.object(direct_gen.image_log, "lookup",
+                               return_value=lookup_row), \
              mock.patch.object(gi, "_generate_image",
                                return_value=RECEIPT) as m_gen:
             out = direct_gen.decide(text, [], False, data_urls=list(urls),
                                     at_me=at_me)
         return out, m_describe, m_gen, m_llm_mod
 
-    def test_describe_question_answers_in_chinese(self):
-        out, m_describe, m_gen, m_llm = self._decide("这画的是什么？")
-        self.assertEqual(out, "红色的正方形。")
-        m_describe.assert_called_once()
-        self.assertEqual(m_describe.call_args.kwargs.get("prompt"),
-                         direct_gen._DESCRIBE_PROMPT)
+    def test_describe_question_goes_through_revise(self):
+        # 没渠道词 + 描述类问题 → 改图管道，模型判不是修改请求 → 回反推文本
+        out, m_describe, m_gen, _ = self._decide("这画的是什么？")
+        self.assertIn(direct_gen._REVERSE_HEADER, out)
+        self.assertIn("红色的正方形", out)
+        m_describe.assert_called_once()          # 别人的图仍识图一次
         m_gen.assert_not_called()
-        m_llm.call_llm.assert_not_called()      # 纯识图，文本链路不参与
 
-    def test_describe_not_hijack_channel_revise(self):
-        # 渠道词在场 → 改图管道优先，识图 prompt 不是看图说话那套
-        out, m_describe, _m_gen, _m_llm = self._decide("sd 这画的是什么")
-        self.assertNotEqual(m_describe.call_args.kwargs.get("prompt"),
-                            direct_gen._DESCRIBE_PROMPT)
-        self.assertIn("改图请求没解析出来", out)
-
-    def test_keyword_round_no_describe(self):
-        # 关键词轮不启用看图说话（群聊保持安静口径）
-        _out, m_describe, _m_gen, _m_llm = self._decide("这画的是什么",
-                                                        at_me=False)
-        self.assertNotEqual(m_describe.call_args.kwargs.get("prompt"),
-                            direct_gen._DESCRIBE_PROMPT)
+    def test_describe_with_channel_still_revises(self):
+        # 渠道词在场 → 走改图管道（模型在这一次调用里判），不另走识图问答
+        out, m_describe, _m_gen, _ = self._decide(
+            "sd 这画的是什么", describe_reply="不是 JSON")
+        self.assertIn("没解析出来", out)
+        m_describe.assert_called_once()
 
 
 class MultiImageReverseTest(unittest.TestCase):
@@ -1796,19 +1764,15 @@ class RandomCommandTest(unittest.TestCase):
 
 
 class PromptAskNarrowTest(unittest.TestCase):
-    """「提示词」关键词闸门必须**窄**：改图请求一个字都不许被它吞掉。
+    """「提取提示词」直通**只认这 5 个字**（2026-10-07 用户拍板）。
 
-    历史：这条旁路原先只认「提示词」三个字、不认意图，233 群「引用这张图，
-    我要她抓手的手势，角色换成花火」是**改图请求**却被当成查账，后面那句改图
-    意见根本没进过模型 → 2026-10-06 整条删掉。删掉之后用户实测另一个毛病：
-    引用自家图只打「提示词」，没人接得住，掉进改图管道**又跑了一张图**
-    （19:21 群 580929233 实录）→ 当晚按用户口径把关键词加回来，但收得很窄
-    （「可以加多几个提取的指令…这样容错高一点」）：只认**在要词条**的说法
-    （`_PROMPT_ASK_RE`）和整句只有「提示词」两个字（`_PROMPT_BARE_RE`）。
+    历史：原先是两条正则（`_PROMPT_ASK_RE` 动词+提示词/词条、`_PROMPT_BARE_RE`
+    只认裸「提示词」）。用户 2026-10-07 拍板全删：「我就只需要这一句话就行了…
+    提取提示词…它只需要这 5 个字，其他的全部给我删掉，其他的全部都给我跑 AI」。
+    理由是正则永远盖不全用户的说法（「我要这个图片的提示词」「这个提示词是
+    什么」…），而大模型能覆盖 99%。
 
-    所以这个类钉的不是「旁路没了」，而是「旁路窄到不会撞改图轮」：账本提示词
-    照样作为「最可信旁证」喂给改图那次调用（`_REVISE_TEMPLATE` 的
-    anchor_prompt），要词条还是要改图，含改动内容的一律走模型。
+    所以这个类钉：**只有裸「提取提示词」命中账本直通**，其余一律走 AI。
     """
 
     def _decide(self, text, quoted="", data_urls=None, lookup_row=None,
@@ -1831,26 +1795,26 @@ class PromptAskNarrowTest(unittest.TestCase):
             direct_gen._LAST_JOB.pop("group_1", None)
         return out, m_describe, m_llm, m_gen
 
-    def test_keyword_gate_stays_narrow(self):
-        """闸门只认「在要词条」的说法；带改动内容/否定的一律不中。
-
-        这条代替了原来那句 `assertFalse(hasattr(_PROMPT_ASK_RE))`——关键词
-        按 2026-10-06 晚用户口径加回来了，红线从「不许存在」变成「不许宽到
-        吞掉改图轮」。
-        """
+    def test_only_extract_prompt_hits(self):
+        """只认裸「提取提示词」（可带标点/空格）；别的说法一律不中。"""
+        hits = ("提取提示词", "提取提示词。", " 提取提示词！")
+        for text in hits:
+            self.assertTrue(direct_gen._PROMPT_BARE_RE.match(text), text)
         misses = ("提示词不变，角色换成花火，手势改成抓手",
                   "把提示词里的衣服改成红色", "不要提示词，直接画",
-                  "这个提示词是什么", "silver 生成")
+                  "这个提示词是什么", "silver 生成", "提示词", "给我提示词",
+                  "查看提示词", "词条发我一份", "我要这个图片的提示词")
         for text in misses:
-            self.assertIsNone(direct_gen._PROMPT_ASK_RE.search(text), text)
             self.assertIsNone(direct_gen._PROMPT_BARE_RE.match(text), text)
-        hits = ("提示词", "给我提示词", "提取提示词", "词条发我一份")
-        for text in hits:
-            self.assertTrue(direct_gen._PROMPT_ASK_RE.search(text)
-                            or direct_gen._PROMPT_BARE_RE.match(text), text)
+        self.assertFalse(hasattr(direct_gen, "_PROMPT_ASK_RE"),
+                         "_PROMPT_ASK_RE 又回来了（用户明确要求删掉）")
 
     def test_quote_with_edit_instruction_reaches_the_revise_pipeline(self):
-        """233 群那条原话：带「提示词」但其实是改图请求 → 必须真识图，不被吞。"""
+        """233 群那条原话：带「提示词」但其实是改图请求 → 不被吞。
+
+        账本中的是自家图 → 走纯文本改图（`_revise` 不预先识图），原话照样交给
+        AI 判；这里钉住「没被直通劫走」（不返回账本原文）。
+        """
         out, m_describe, m_llm, m_gen = self._decide(
             "提示词不变，角色换成花火，手势改成抓手",
             quoted="HT-20261004-155628-040 · 728×1024 · anima_clear · "
@@ -1858,20 +1822,21 @@ class PromptAskNarrowTest(unittest.TestCase):
             data_urls=["data:image/jpeg;base64,A"],
             lookup_row={"prompt": "1girl, purple twin drills",
                         "skill": "anima_clear"})
-        m_describe.assert_called_once()
-        m_gen.assert_not_called()
+        m_gen.assert_called_once()                       # 走 AI 判 → 生图
+        self.assertNotIn("这张图当初用的提示词", out)   # 没被直通劫走
 
     def test_ledger_prompt_still_reaches_the_model(self):
-        """账本提示词没被丢——它作为「最可信旁证」进改图/反推那次调用。"""
-        _out, m_describe, _llm, _gen = self._decide(
+        """账本提示词没被丢——它作为「最可信旁证」进改图/反推那次调用。
+
+        自家图 → 纯文本调用（`call_llm`），账本原文进 prompt。
+        """
+        _out, _d, m_llm, _gen = self._decide(
             "这个提示词是什么",
             quoted="HT-20261004-155628-040 · anima_clear · seed 1",
             data_urls=["data:image/jpeg;base64,A"],
             lookup_row={"prompt": "1girl, purple twin drills",
                         "skill": "anima_clear"})
-        m_describe.assert_called_once()
-        # 调用形态是 describe(data_url, prompt=ask)：prompt 走关键字参数。
-        sent = (m_describe.call_args.kwargs.get("prompt") or "")
+        sent = m_llm.call_args[0][0][0]["content"]
         self.assertIn("1girl, purple twin drills", sent)
 
     def test_without_quote_not_hijacked(self):
@@ -1883,12 +1848,10 @@ class PromptAskNarrowTest(unittest.TestCase):
 
 
 class ViewPromptKeywordTest(unittest.TestCase):
-    """「要词条」直通（2026-10-06 晚）：命中关键词 → 直接发账本提示词，零 LLM。
+    """「提取提示词」直通（2026-10-07 收窄）：命中 → 直接发账本提示词，零 LLM。
 
-    和已删的「引用+提示词」旁路的区别：只认**在要词条**的说法（给我提示词 /
-    提取提示词 / 整句只有「提示词」两个字），不会把「角色换成花火」「把提示词
-    里的衣服改成红色」这种改图轮误吞。查哪张图靠 `_ledger_hit`（从引用正文+
-    原话抽 HT 编号查账本）。
+    只认裸「提取提示词」5 个字。查哪张图靠 `_ledger_hit`（从引用正文+原话抽
+    HT 编号查账本）；账本没中就不劫这轮（交回下面的流程）。
     """
 
     def _decide(self, text, quoted="", data_urls=None, lookup_row=None,
@@ -1912,9 +1875,9 @@ class ViewPromptKeywordTest(unittest.TestCase):
         return out, m_describe, m_llm, m_gen
 
     def test_keyword_returns_ledger_prompt_without_llm(self):
-        """引用带 HT 编号的图 +「查看提示词」→ 直接回账本提示词，零 LLM。"""
+        """引用带 HT 编号的图 +「提取提示词」→ 直接回账本提示词，零 LLM。"""
         out, m_describe, m_llm, m_gen = self._decide(
-            "查看提示词",
+            "提取提示词",
             quoted="HT-20261004-155628-040 · 728×1024 · anima_clear · "
                    "seed 2226632694",
             lookup_row={"prompt": "1girl, purple twin drills",
@@ -1924,38 +1887,39 @@ class ViewPromptKeywordTest(unittest.TestCase):
         m_describe.assert_not_called()
         m_gen.assert_not_called()
 
-    def test_keyword_without_number_tells_the_user(self):
-        """打了「查看提示词」但没编号 → 回提示，不误触发 AI 生图。"""
-        out, m_describe, m_llm, m_gen = self._decide("查看提示词")
-        self.assertIn("没识别到图片编号", out)
-        m_llm.assert_not_called()
-        m_gen.assert_not_called()
-
     def test_keyword_in_text_also_works(self):
-        """HT 编号直接写在正文里（没引用）也能查到。"""
+        """HT 编号直接写在引用正文里（没引用）也能查到。"""
         out, _d, _l, _g = self._decide(
-            "查看提示词 HT-20261004-155628-040",
+            "提取提示词",
+            quoted="HT-20261004-155628-040 · anima_clear · seed 1",
             lookup_row={"prompt": "1girl, test", "skill": "anima_clear"})
         self.assertIn("1girl, test", out)
 
-    def test_plain_prompt_question_not_hijacked(self):
-        """只含「提示词」不含「查看提示词」（如「这个提示词是什么」）→ 不触发，走 AI。"""
+    def test_plain_prompt_question_goes_to_ai(self):
+        """只有「提示词」不含「提取提示词」→ 不触发直通，落进引用图轮（走 AI）。
+
+        账本命中的是**自家图** → 走纯文本改图（`_revise` 不预先识图），所以
+        describe 不调、账本原文当旁证进 AI 调用。
+        """
         out, m_describe, m_llm, m_gen = self._decide(
             "这个提示词是什么",
             quoted="HT-20261004-155628-040 · anima_clear · seed 1",
             data_urls=["data:image/jpeg;base64,A"],
             lookup_row={"prompt": "1girl, purple twin drills",
                         "skill": "anima_clear"})
-        # 不含「查看提示词」→ 不被直通劫走，落进引用图轮（真识图）。
+        m_describe.assert_not_called()   # 自家图 → 不预先识图
+
+    def test_bare_keyword_without_ledger_hit_is_not_hijacked(self):
+        """「提取提示词」但引用的不是自家图（账本没中）→ 不劫这轮，照常看图反推。"""
+        out, m_describe, _l, m_gen = self._decide(
+            "提取提示词", quoted="随便一张别人发的图",
+            data_urls=["data:image/jpeg;base64,A"], lookup_row=None)
         m_describe.assert_called_once()
 
-    # ── 2026-10-06 19:21 群 580929233 实录：用户引用自家图只打「提示词」，
-    # 直通不认（当时只认死「查看提示词」5 个字），整轮掉进改图管道 → 又跑了
-    # 一张图。用户口径：「可以加多几个提取的指令…这样容错高一点」。
-    def test_bare_keyword_returns_ledger_prompt(self):
-        """整句只有「提示词」两个字 + 引用带编号 → 回账本提示词，一个调用都不烧。"""
+    def test_extract_keyword_returns_ledger_prompt(self):
+        """实打「提取提示词」+ 引用带编号 → 回账本提示词，一个调用都不烧。"""
         out, m_describe, m_llm, m_gen = self._decide(
-            "提示词",
+            "提取提示词",
             quoted="HT-20261006-191917-458 · 2048×3072 · jank · seed 4119332997",
             data_urls=["data:image/jpeg;base64,A"],
             lookup_row={"prompt": "izumi_sagiri, 1girl, solo",
@@ -1966,27 +1930,26 @@ class ViewPromptKeywordTest(unittest.TestCase):
         m_gen.assert_not_called()
         m_llm.assert_not_called()
 
-    def test_ask_wordings_all_hit_the_ledger(self):
-        """几种「要词条」的说法都得命中，且都不许碰识图/生图。"""
-        for text in ("给我提示词", "提取提示词", "提取一下提示词", "我要提示词",
+    def test_other_wordings_go_to_ai(self):
+        """2026-10-07 用户拍板：只有「提取提示词」直通，其余说法全部走 AI。
+
+        「给我提示词 / 我要提示词 / 词条发我一份」这类不再零调用直通——它们
+        会落进引用图轮的改图管道（自家图走纯文本修正、别人的图识图），由 AI
+        判是不是在要词条。这里钉住「不被直通劫走」。
+        """
+        for text in ("给我提示词", "提取一下提示词", "我要提示词",
                      "发我提示词", "提示词给我", "词条发我一份", "提示词。"):
             out, m_describe, _l, m_gen = self._decide(
                 text,
                 quoted="HT-20261006-191917-458 · jank · seed 1",
                 data_urls=["data:image/jpeg;base64,A"],
                 lookup_row={"prompt": "1girl, kept", "skill": "jank"})
-            self.assertIn("1girl, kept", out, text)
-            m_describe.assert_not_called()
-            m_gen.assert_not_called()
+            self.assertNotIn("1girl, kept", out, text)   # 不再零调用直通
 
     def test_bare_keyword_without_ledger_hit_is_not_hijacked(self):
-        """整句「提示词」但引用的不是自家图（账本没中）→ 不劫这轮，照常看图反推。
-
-        一句「没识别到图片编号」答非所问：他要的就是这张图的词条，别人的图
-        该走识图反推。显式说法（给我提示词）才回那句提示。
-        """
+        """「提取提示词」但引用的不是自家图（账本没中）→ 不劫这轮，照常看图反推。"""
         out, m_describe, _l, m_gen = self._decide(
-            "提示词", quoted="随便一张别人发的图",
+            "提取提示词", quoted="随便一张别人发的图",
             data_urls=["data:image/jpeg;base64,A"], lookup_row=None)
         self.assertNotIn("没识别到图片编号", out)
         m_describe.assert_called_once()

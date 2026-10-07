@@ -193,39 +193,9 @@ _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 # 开头点名的渠道词前面可能残留的前导噪音（@ 剥完的空格、打错的「：，/」）。
 # 只在这儿容错，正文里的标点一律不动。
 _LEAD_SEP_RE = re.compile(r"^[\s,，、:：/!！。]+")
-# 「基于图片帮我生成」这类空话：引用图 + 渠道词时不算修改意见，
-# 意思就是「反推这张图然后按渠道跑」。
-_GENERIC_I2I_RE = re.compile(
-    r"^(?:帮我|给我|请)?(?:基于|按照|根据|参考|用)这?(?:张|个)?(?:图片|图|照片|画)"
-    r"(?:帮我|给我)?(?:直接)?(?:生成|画|跑|出|出图|来一张?|来一幅?|生图)?"
-    r"(?:一?[张幅])?[吧呀啊哦。.!！？?，,\s~～]*$")
-# 「跑这张 / 跑一版这张 / 生成这个 / 来一张」= 照这张跑的意思，同样不算修改
-# 意见（2026-10-05 用户口径：引用图 + 渠道词 +「跑这个」→ 直接用该渠道跑，
-# 别掉进改图管道）。带真实改动内容的（「画成银发」）不匹配，照旧走改图。
-_RUN_THIS_RE = re.compile(
-    r"^(?:帮我|给我|请|直接)?(?:跑|生成|画|出|来|处理|重跑|复刻|还原)"
-    r"(?:一?下|一?版|一?[张幅个])*(?:这|那)?(?:张|个|版|图片|图|画)?"
-    r"[吧呀啊哦。.!！？?，,\s~～]*$")
 # 描述尾巴上的动词残渣：「这个猪 跑 nai」剥掉渠道词后剩「这个猪 跑」。
 _DESC_TAIL_RE = re.compile(
     r"\s*(?:帮我|给我)?\s*(?:跑|画一张|生成一张|来一张|来一幅|出一张?图?|生图)\s*$")
-
-# 引用图 +「帮我生成这个 / 跑一下这张图片 / 处理一下这张图」（没打渠道）→
-# 用户口径（2026-10-05）：默认反推 → 重画，别反问。动词和「这/个/张/图」
-# 必须紧挨着，避免「帮我把生成的图改一下」这种改图话误中。
-_IMG_GEN_INTENT_RE = re.compile(
-    r"(?:帮我|给我|请)?(?:直接)?(?:生成|跑|处理|画|出|来)(?:一?下|一?[张幅个])?"
-    r"这?(?:张|个)?(?:图片|图|画|个)")
-
-# ─── 看图说话（单次识图，不进改图管道） ───────────────────
-# 触发词收得窄：不能含「看图/识图」（那是反推 tag 的口），也不能含裸
-# 「这是什么」——「这是什么破手，改成插兜」会被劫走不进改图。
-_DESCRIBE_RE = re.compile(
-    r"画的?(?:是|了)什么|什么画风|什么风格|描述一下|介绍一下|讲讲|说说"
-    r"|什么内容|帮我?看看|这是啥")
-_DESCRIBE_PROMPT = (
-    "用中文自然语言描述这张图片：主体是谁/什么、外貌服装、动作姿势、"
-    "场景背景、画风。150 字以内，直接描述，不分点、不寒暄。")
 
 # ─── 单次调用封顶（无工具无循环） ─────────────────────────
 # agent 循环一轮能滚出十几万 token（while 拉工具结果再续写），单次管道
@@ -287,63 +257,6 @@ def _quote_merge(quoted, desc):
 # 改成让 AI 它自己去判断」「没有兜底没有问题。因为大模型它自己就知道怎么去做，
 # 我们不需要代码去给它硬兜底的」。现在垫不垫图只看模型输出的 `source_image`
 # 字段（判据写在 `_REVISE_TEMPLATE` 的文案里），渠道也不再由代码换。
-
-
-def _alt_channel(desc):
-    """正文里还剩下**另一个渠道名**吗？返回命中的渠道名，没有返回 None。
-
-    为什么要有这个（2026-10-07）：`_parse_channel` 只认两类词——固定渠道
-    （`_FIXED_CHAN_RE`）和档位（`_TIER_RE`）。自定义渠道（`silver` / `jank`）
-    **两类都不进**，于是「silver 三档」里 silver 谁都匹配不到，游标落到档位词、
-    锁成 `hd_3_clear`，把 `silver` 当成**画面内容**留在 desc 里。实测：
-    `silver 三档` / `jank 二档` / `silver 快档` 全是这个下场。
-
-    用户 2026-10-07 点破了实质：「三档二档快档是之前为了 anima 区分做的，
-    现在反而造成冲突」——**档位是 anima 族的尺寸维度，渠道名是正交的另一维**，
-    两个词不是同一层东西，代码不该按"谁靠前谁赢"把另一个吞成正文。
-
-    这里只做**上报**，不做裁决：把 desc 里剩余的渠道名报出去，让 chan_hint
-    把矛盾写清楚、交给 AI 判（AI 决策是用户的红线；见 `_translate` 的
-    `chan_hint` 三种写法）。名单从 `_allowed_skills()` **现取**——silver /
-    jank 这类自定义渠道进了 skills/ 就自动在内，不写死任何一个名字。
-
-    ⚠️ 只认**完整的渠道词**（前后不挨字母数字下划线），避免把提示词里的
-    `silver_hair`、`silvers` 误判成渠道；这也与 `_FIXED_CHAN_RE` 的边界口径一致。
-
-    认两类词：
-      ① 渠道 **id**（`silver` / `jank` / `image_gen_v1`…）——从 `_allowed_skills()`
-         现取，silver / jank 这类自定义渠道进了 skills/ 就自动在内，不写死；
-      ② 渠道 **别名**（用户实际会打的词），取 `_FIXED_CHAN_MAP` 的键（sd / qwen /
-         nai / nffa / cunny / miao / krea2）——它们代表的是**已被代码吃掉的那个
-         渠道之外**的另一个渠道词，比如「三档 qwen」里的 qwen 被留在了 desc。
-    返回的是**用户看到的那个词**（别名优先，因为它才是原话里的字面），
-    这样报进提示词时能和用户说的话对上。
-    """
-    if not desc:
-        return None
-    try:
-        # 别名（用户打的词）优先于 id：原话里出现的是「qwen」不是「qwen_image_v1」。
-        names = sorted(set(_FIXED_CHAN_MAP) | set(_allowed_skills()),
-                       key=len, reverse=True)
-    except Exception:
-        log.exception("取渠道名单失败，跳过第二渠道词上报")
-        return None
-    for name in names:
-        m = re.search(r"(?<![0-9A-Za-z_])" + re.escape(name) + r"(?![0-9A-Za-z_])",
-                      desc, re.I)
-        if not m:
-            continue
-        # 英文 tag 串里的假阳性：`sd style` / `sd_background, 1girl, solo`
-        # 这类里 sd 是画风词/片段，不是点名单——它后面紧跟逗号或**另一个英文
-        # 词**时（说明整段在逗号分隔的 tag 流里）就不上报。中文语境下用户不会
-        # 把渠道词夹在 tag 流里（「三档 qwen」的 qwen 后面是句尾/中文）。
-        # ⚠️ 必须用 `[0-9A-Za-z]` 而不是 `\w`：Python 的 `\w` 默认匹配 CJK，
-        # 用 `\w` 会把「silver 三档 女骑士」里的 女 也判成英文词、把真候选漏掉。
-        tail = desc[m.end():m.end() + 12]
-        if re.match(r"\s*(?:,|，|[0-9A-Za-z])", tail):
-            continue
-        return name
-    return None
 
 
 def _lead_commands(text):
@@ -408,7 +321,7 @@ def _fix_typo_style(rest):
 
 
 def _parse_channel(text):
-    """代码直判渠道。返回 `(skill or None, 剩余描述, alt or None)`。
+    """代码直判渠道。返回 `(skill or None, 剩余描述)`。
 
     代码只干一件事：**认出用户点名的渠道/档位/画风词**，映射成一个渠道 id；
     提示词怎么写全交给 AI（2026-10-05 用户拍板：「ai 必须参与决策，绝对不能
@@ -422,28 +335,24 @@ def _parse_channel(text):
     （`柔和室内光`、`soft lighting`），全文乱搜会抢渠道、还会把那个词从正文
     里删掉。
 
-    **第三个返回值 `alt`（2026-10-07 加）**：正文里还剩的**另一个渠道名**。
-    因为上面那套"谁靠前谁赢"对**自定义渠道**（silver / jank）是失效的——它们
-    不进 `_FIXED_CHAN_RE` 也不进 `_TIER_RE`，于是「silver 三档」里 silver
-    谁都匹配不到、被当成正文留下，档位词却锁死了渠道。用户原话点破了实质：
-    「三档二档快档是之前为了 anima 区分做的，现在反而造成冲突」。
-    所以这里**不替用户裁决**，把第二个渠道名如实报上去，让 `_translate` /
-    `_revise` 写进提示词交给 AI 判（见 `_alt_channel`）。
+    **多个渠道词（2026-10-07 用户拍板）**：**严格取从左到右第一个命中的**，
+    不做二次上报、不做兜底裁决（「他打 Six 三档，那就走 Six；如果是三档 Six，
+    那就走三档——就看哪一个排在第一」）。AI 判不准 → 走默认渠道。
 
-    - 「三档 gloss 初音未来」→ hd_3_gloss / 初音未来 / None
-    - 「三档,glss,初音未来」 → hd_3_gloss / 初音未来 / None（glss 贴回 gloss）
-    - 「三档 猫」            → hd_3_clear / 猫 / None（画风没打，档位默认）
-    - 「默认初音未来」       → silver / 初音未来 / None（「默认」= 默认渠道）
-    - 「一档curvy 初音」     → hd_fast_curvy / 初音 / None（连写也认）
-    - 「gloss 一个女孩」     → anima_gloss / 一个女孩 / None（只打画风）
-    - 「sd 一只猫」          → image_gen_v1 / 一只猫 / None（固定渠道词）
-    - 「NAI，…，三档」       → nai / … / None（谁靠前谁优先）
-    - 「这个猪 跑 nai」      → nai / 这个猪 / None（渠道词不限位置）
-    - 「nai，少女 柔和光线」  → nai / 少女 柔和光线 / None（**开头**渠道词最高优先）
-    - 「1girl, soft lighting」→ (None, 原文, None)  ← soft 是画面内容，不是画风词
-    - 「silver 三档」        → hd_3_clear / silver / "silver"  ← **alt 上报**
-    - 「jank 二档」          → hd_2_clear / jank / "jank"      ← **alt 上报**
-    - 没有任何渠道词         → (None, 原文, None)
+    - 「三档 gloss 初音未来」→ hd_3_gloss / 初音未来
+    - 「三档,glss,初音未来」 → hd_3_gloss / 初音未来（glss 贴回 gloss）
+    - 「三档 猫」            → hd_3_clear / 猫（画风没打，档位默认）
+    - 「默认初音未来」       → silver / 初音未来（「默认」= 默认渠道）
+    - 「一档curvy 初音」     → hd_fast_curvy / 初音（连写也认）
+    - 「gloss 一个女孩」     → anima_gloss / 一个女孩（只打画风）
+    - 「sd 一只猫」          → image_gen_v1 / 一只猫（固定渠道词）
+    - 「NAI，…，三档」       → nai / …（谁靠前谁优先）
+    - 「这个猪 跑 nai」      → nai / 这个猪（渠道词不限位置）
+    - 「nai，少女 柔和光线」  → nai / 少女 柔和光线（**开头**渠道词最高优先）
+    - 「1girl, soft lighting」→ (None, 原文)  ← soft 是画面内容，不是画风词
+    - 「silver 三档」        → hd_3_clear / silver（silver 认不出，落档位；silver
+                                留在正文里，由 AI 判是不是渠道）
+    - 没有任何渠道词         → (None, 原文)
     """
     text = text.strip()
     # ① 写在**开头**的固定渠道词最高优先，档位/画风词一律不许顶掉它
@@ -457,7 +366,7 @@ def _parse_channel(text):
         skill = _FIXED_CHAN_MAP[hm.group(0).lower()]
         desc = _DESC_TAIL_RE.sub("", lead[hm.end():].strip())
         desc = re.sub(r"^[\s,，、:：]+|[\s，、]+$", "", desc)
-        return skill, desc, _alt_channel(desc)
+        return skill, desc
 
     tier, style, rest = _lead_commands(text)
     if tier is not None and style is None:
@@ -474,14 +383,14 @@ def _parse_channel(text):
         if tm:
             hits.append((tm.start(), "tier", tm))
         if not hits:
-            return None, text, None
+            return None, text
         _pos, kind, m = min(hits, key=lambda h: h[0])
         if kind == "fixed":
             skill = _FIXED_CHAN_MAP[m.group(0).lower()]
             desc = text[:m.start()] + " " + text[m.end():]
             desc = _DESC_TAIL_RE.sub("", desc.strip())
             desc = re.sub(r"^[\s,，、:：\-]+|[\s,，、:：\-]+$", "", desc)
-            return skill, desc, _alt_channel(desc)
+            return skill, desc
         # 句子中间的档位词：它后面紧跟的画风词一并认，档位词本身抠掉。
         tier, style, rest = _lead_commands(text[m.start():])
         if style is None:
@@ -491,7 +400,7 @@ def _parse_channel(text):
     skill = _tier_skill(tier, style)
     desc = _DESC_TAIL_RE.sub("", rest.strip())
     desc = re.sub(r"^[\s,，、:：]+|[\s,，、:：]+$", "", desc)
-    return skill, desc, _alt_channel(desc)
+    return skill, desc
 
 
 # ─── 成品提示词轮（NAI 权重串 `::`）与 AI 判渠道 ────────────
@@ -800,9 +709,9 @@ _SEARCH_HEADER = (
 )
 
 _REVISE_TEMPLATE = (
-    "你是生图提示词修正器。用户给你一张图并提出要求。"
-    "只输出 JSON 本体，格式：{{\"skill\": \"渠道id\", \"prompt\": \"修正后的"
-    "完整英文提示词\", \"source_image\": 1}}（用不上的参数一律省略）\n"
+    "你是生图提示词修正器。用户引用一张图并提出要求（也可能只是让你看看、"
+    "或问你点别的）。只输出 JSON 本体，格式：{{\"skill\": \"渠道id\", \"prompt\": "
+    "\"修正后的完整英文提示词\", \"source_image\": 1}}（用不上的参数一律省略）\n"
     "- 先看清楚画面（人物、发色发型、瞳色、表情、服装、姿势、场景），"
     "prompt 必须覆盖画面全部要点，用户没提到的细节原样保留\n"
     "- 原提示词{anchor_note}：与画面冲突时，一律以画面为准\n"
@@ -1064,7 +973,7 @@ def _prefetch_search(text):
 
 
 def _translate(text, history, skill=None, weighted=False, no_default=False,
-               doc=None, alt=None):
+               doc=None):
     """一次 LLM 调用 → 生图任务，或一句聊天回复。**所有提示词都由它产出**。
 
     2026-10-05 晚用户拍板重做：**只有一条模板 `_MASTER_TEMPLATE`**（人设 +
@@ -1080,41 +989,18 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
     参数：
       skill        代码从用户原话里认出的渠道词，作为 chan_hint 明写给模型，
                    同时兜底（模型没给或给了个不存在的渠道时用它）。传 None
-                   表示「没认出渠道词」，完全交给模型判。
-      alt          正文里**还剩的另一个渠道名**（`_alt_channel` 报上来的）。
-                   非空 = 这轮原话里有两个渠道词，`skill` 那个未必是用户要的
-                   ——chan_hint 改成把两个词都摊给模型、说明维度关系让它判
-                   （2026-10-07 修「silver 三档」那类冲突，见 `_alt_channel`）。
+                   表示「没认出渠道词」，完全交给模型判。多个渠道词时，这里是
+                   **从左到右第一个命中的那个**（2026-10-07 用户拍板）。
       weighted     保留形参：成品串（`::` 权号）现在与普通请求共用同一条模板，
                    权号规则写在模板的「提示词怎么写」段里。**不再影响模板选择。**
       no_default   True → 模型既没判出渠道、代码也没认出来时返回 None
                    （调用方回问），**不静默落默认档**烧一张错风味的图。
     """
     named = (skill or "").strip()
-    alt = (alt or "").strip()
     # 搜索资料由调用方（`decide`）统一算好传进来——**一次请求只搜一次**，
     # 所有分支共用。没传就是空串，模板里那一格为空，照老路走。
     doc = doc or ""
-    if named and alt and alt != named:
-        # 两个渠道词并存 → **不替模型裁决**，把矛盾摊开、讲清维度关系。
-        # 2026-10-07 用户点破：「三档二档快档是之前为了 anima 区分做的，
-        # 现在反而造成冲突」——档位是 anima 族的尺寸维度，渠道名是正交的另一
-        # 维，两个词不在同一层。原来的 chan_hint 写「就用它」，等于替用户拍板
-        # 定了靠前那个，用户点名 silver 却拿到了 hd_3_clear。
-        #
-        # 两个词的"身份"如实描述：`named` 是代码已经锁定成 id 的那个，
-        # `alt` 是原话里剩下的那个（可能是渠道名、也可能是被代码吃掉的档位
-        # 之外的另一个渠道词）。不预设谁对——让模型按原话判。
-        hint = ("\n⚠️ 用户原话里有**两个可能的渠道词**：一个是代码认到并映射成 "
-                "**%s** 的那个，另一个是原话里还剩下的 **%s**。"
-                "注意：档位词（三档 / 二档 / 快档 / 一档）是 anima 那套"
-                "「画风 × 尺寸档」里的**尺寸维度**，而 silver / jank / qwen / "
-                "nai / sd 这些是**渠道名**——两者不同维度，不是二选一。"
-                "**照用户原话判他真正点名的是哪个渠道**（档位只当画质说明；"
-                "只说档位没说渠道名时，档位才决定渠道）。"
-                "判不准就在 reply 里回一句问清楚，**不许猜、也不许两个都塞进"
-                "提示词**。\n" % (named, alt))
-    elif named:
+    if named:
         hint = "\n用户开头点名了渠道：**%s**，就用它。\n" % named
     else:
         hint = ""
@@ -1191,27 +1077,19 @@ def _reverse_text(tags):
     return _REVERSE_HEADER + "\n" + tags
 
 
-# 「要词条」直通（2026-10-06 晚用户要，当晚放宽）：命中 → 直接把这张图
-# 当初真实用的提示词发回去，零 LLM、比让 AI 现推准。
+# 「提取提示词」直通（2026-10-07 用户拍板，收窄到**这 5 个字**）：命中 →
+# 引用/正文里带 HT 编号时，直接把这张图当初真实用的提示词发回去，零 LLM、
+# 比让 AI 现推准。这是**唯一保留**的硬编码话术，因为它落在自家账本上、足够确定。
 #
-# 原先只认死「查看提示词」5 个字，用户实打「提示词」/「给我提示词」全不中，
-# 于是掉进改图管道重新跑了一张图（2026-10-06 19:21 群 580929233 实录）。
-# 用户口径：「可以加多几个提取的指令…这样容错高一点」。
-# 收两条，都要求**是在要词条**、不是在聊词条：
-#   ① `_PROMPT_ASK_RE`：动词 + 提示词/词条（给我提示词、提取一下词条…），
-#      或反过来说（提示词给我 / 词条发我一份）。前面挡一个「不/别」，
-#      免得「不要提示词，直接画」被劫。
-#   ② `_PROMPT_BARE_RE`：整句**只有**这两个字（可带标点）。他最常这么打。
-#      「这个提示词是什么」有别的字，两条都不中——照旧走 AI，不误吞。
-# 查哪张图：引用机器人发的带 HT 编号的回执/图，或正文直接贴了 HT 编号
-# ——`_ledger_hit` 从引用正文+原话里抽编号去账本查。
-_PROMPT_ASK_RE = re.compile(
-    r"(?<![不别])(?:查看|查一下|提取|还原|看看|瞅瞅|告诉我|给我|发我|发个|发一份"
-    r"|我要|我想要|想要|要|求|贴出|贴)(?:一?下|一个|一份)?\s*(?:提示词|词条|prompt)"
-    r"|(?:提示词|词条)\s*(?:给我|发我|发出来|发一下|发一份|贴给我|贴出来|来一份)",
-    re.I)
+# 用户原话：「我就只需要这一句话就行了…提取提示词…它只需要这 5 个字，其他的
+# 全部给我删掉，其他的全部都给我跑 AI」「你永远无法揣测用户意图…交给大模型，
+# 至少能覆盖 99%」。所以原先那条 `_PROMPT_ASK_RE`（动词 + 提示词/词条…）
+# 已删：用户说「我要这个图片的提示词」「这个提示词是什么」这类，正则永远盖
+# 不全，一律交给 AI（工具 `recall_image` 与模板已覆盖）。
+# 只认裸的「提取提示词」（可带标点/空格）。账本没中（引用的不是自家图）就
+# 不劫这轮，照旧走下面的流程。
 _PROMPT_BARE_RE = re.compile(
-    r"^\s*(?:提示词|词条|prompt)\s*[。.!！~～？?]*\s*$", re.I)
+    r"^\s*提取提示词\s*[。.!！~～？?]*\s*$")
 
 
 def _ledger_hit(source):
@@ -1239,8 +1117,7 @@ def _ledger_hit(source):
 _LOCAL_SEED_SKILL_RE = re.compile(r"^(anima_|hd_|qwen_image_v1|image_gen_v1|krea2|nffa|cunny|miao)")
 
 
-def _revise(text, data_urls, history, channel=None, at_me=False, doc=None,
-            alt=None):
+def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):
     """改图管道：引用图 + 意见 → 一次调用 → 重跑。
 
     引用带图改图**一律真识图**（2026-10-05 用户拍板）：账本里存的是当时那句
@@ -1252,16 +1129,11 @@ def _revise(text, data_urls, history, channel=None, at_me=False, doc=None,
     「qwen 图生图」才垫）。代码不再扫原话认机制词，也不再因为「要垫图」
     就换渠道——那是 2026-10-06 拆掉的静默降档。
 
-    `alt` = `_alt_channel` 报上来的第二个渠道名（原话里有两个渠道词时）；
-    非空就把它一起写进提示词，让模型自己判哪个是渠道（2026-10-07 修
-    「silver 三档」那类冲突——**代码只上报、不裁决**）。
-
     返回 None = 模型判定这轮不是修改请求（夸奖、闲聊、问别的）：@ 轮回反推
     文本、关键词轮静默，由本函数内部处理。
     """
     session_key = qq_api.current_session_key()
     quoted = (qq_api.current_quoted_text() or "").strip()
-    alt = (alt or "").strip()
     # 「再来一张」：引用回执（或干说）→ 同提示词换种子重跑，零调用。
     last = _last_job(session_key)
     if _AGAIN_RE.search(text) and (last or _NOISE_QUOTE_RE.search(quoted)):
@@ -1271,19 +1143,12 @@ def _revise(text, data_urls, history, channel=None, at_me=False, doc=None,
             return _enqueue(skill, last["prompt"], text)
         return "没找到最近一次生图的记录，重新描述想要什么吧：@我 渠道 描述。"
     anchor_prompt, anchor_skill, _anchor_seed = _ledger_hit(quoted + " " + text)
-    # ── 一律一次带图调用（钉死 DeepSeek 官方）——不看图就没有信息源 ─────
-    if anchor_prompt:
+    own = bool(anchor_prompt)        # 引用的**是不是自家图**（账本命中）
+    if own:
         anchor_note = "是这张图当时的真实提示词（账本可查），最可信"
     else:
         anchor_skill, anchor_prompt = "（无）", "（无）"
         anchor_note = "没有（引用的不是本机器人画的图），忽略此项，以画面为准"
-    # 两个渠道词并存 → 在提示词里点破，让模型判（口径与 `_translate` 的
-    # chan_hint 一致：渠道名与档位词不同维度，别替用户二选一）。
-    if channel and alt and alt != channel:
-        anchor_note += ("。⚠️ 原话里还有第二个渠道词「%s」——%s 是渠道、"
-                        "「%s」是 anima 尺寸族的档位词，两者不同维度；"
-                        "先判哪个是用户点名的渠道，判不准就别猜"
-                        % (alt, channel, alt))
     ask = _REVISE_TEMPLATE.format(
         search=(_SEARCH_HEADER.format(doc=doc) if doc else ""),
         anchor_note=anchor_note,
@@ -1291,10 +1156,20 @@ def _revise(text, data_urls, history, channel=None, at_me=False, doc=None,
         last_prompt=anchor_prompt,
         lang=_prompt_lang(channel or anchor_skill),
         text=text)
+    from app.llm import call_llm
     from app.vision import describe
     try:
-        # 不指定 provider = 跟识图配置走（.env，现在是 doubao-seed-2.1-turbo）。
-        reply = describe(data_urls[0], prompt=ask)
+        if own:
+            # ── 自家图：账本优先，**不预先识图**（2026-10-07 用户拍板）──────
+            # 账本里躺着当时真跑的那段提示词，和画面同源，改「发色红→银」这类
+            # 需求直接在那段文字上改就行，没必要每次都看一眼图。用户原话：
+            # 「没有必要每一次用户引用我的生成结果的图片的时候，就一直在识图」。
+            # 走**纯文本**调用（`call_llm`，不是 `describe`），零识图开销。
+            reply = call_llm([{"role": "user", "content": ask}])
+        else:
+            # 别人的图：没有账本可依，一律真识图（1 次）。
+            # 不指定 provider = 跟识图配置走（.env，现在是 doubao-seed-2.1-turbo）。
+            reply = describe(data_urls[0], prompt=ask)
     except Exception:
         log.exception("[direct] 改图调用失败")
         return "改图请求没发出去，稍后再试。"
@@ -1353,6 +1228,9 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         return None
     # 只发图、没说话（_IMG_ONLY_RE 把正文归一成空）→ 反推这张图的提示词。
     # 自家图先查账本（零调用最准），别人的图才识图（1 次）。
+    # ⚠️ 2026-10-07：用户明确要求**保留**这条行为（群里单发图 = 想要词条）。
+    # 私聊场景的「裸图不触发」改在 `_should_reply`（私聊只认文本）里拦，
+    # 不走这里——这里照旧反推，别动。
     if not text and data_urls and ENABLED and not voluntary:
         own_prompt, _skill, _own_seed = _ledger_hit(quoted)
         if own_prompt:
@@ -1384,13 +1262,13 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     if _MORE_CHAN_RE.search(text):
         return MORE_CHAN_TEXT
 
-    # 「要词条」直通（2026-10-06 晚用户要，当晚放宽关键词）：命中 → 直接把
-    # 这张图当初真实用的提示词发回去，零 LLM、比让 AI 现推准。判据与话术见
-    # `_PROMPT_ASK_RE` / `_PROMPT_BARE_RE` 处的注释。
-    # 没引用/没编号：显式说法（给我提示词…）回一句提示，不误触发 AI 生图；
-    # 整句只有「提示词」两个字的**不劫这轮**——账本没中说明引用的不是自家图，
-    # 该走下面的流程看图反推，一句「没识别到编号」答非所问。
-    if _PROMPT_ASK_RE.search(text) or _PROMPT_BARE_RE.match(text):
+    # 「提取提示词」直通（2026-10-07 用户拍板收窄到**就这 5 个字**）：命中 →
+    # 把这张图当初真实用的提示词发回去，零 LLM、比让 AI 现推准。
+    # 引用的图带 HT 编号 → 账本直通（这是唯一保留的硬编码，因为它足够确定）。
+    # **其余一切说法**（「我要这个提示词」「这图提示词是什么」「给我词条」…）
+    # 一律交给下面的 AI 判——用户原话：「你永远无法揣测用户意图…你交给大模型，
+    # 至少能覆盖 99%」。模板/工具（`recall_image`）已覆盖这类请求。
+    if _PROMPT_BARE_RE.search(text):
         prompt, skill, seed = _ledger_hit(quoted + " " + text)
         if prompt:
             extra = ""
@@ -1400,11 +1278,8 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
                 extra += "种子：" + seed + "\n"
             return ("这张图当初用的提示词：\n" + prompt
                     + ("\n" + extra if extra else ""))
-        if _PROMPT_ASK_RE.search(text):
-            return ("没识别到图片编号（HT-…）。引用机器人发的带编号的图，"
-                    "或直接把编号发我。")
 
-    ch, desc, alt = _parse_channel(text)
+    ch, desc = _parse_channel(text)
     if ch is None and at_me:
         # 开头的 ASCII 词代码认不出（「MAI 正面提示词…」这种手滑的渠道词）：
         # 只贴得回一个渠道就直接锁定，几个都像就回问一句——不赌、也不掉回
@@ -1412,7 +1287,6 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         typo, typo_desc, cands = _lead_typo_channel(text)
         if typo:
             ch, desc = typo, typo_desc
-            alt = _alt_channel(desc)
         elif cands:
             return _LEAD_AMBIGUOUS_TEXT % " / ".join(cands)
 
@@ -1428,19 +1302,18 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         _quote_merge(quoted, text) if quoted.strip() else text)
 
     # ── 引用图轮 ──────────────────────────────────────────
+    # 2026-10-07 用户拍板：**发图 + 指令默认走 AI**，把原先这批
+    # 「代码认死话术」的路由全删（`_GENERIC_I2I_RE` / `_RUN_THIS_RE` /
+    # `_IMG_GEN_INTENT_RE` / `_DESCRIBE_RE` 都删了）。用户原话：「你期望
+    # 用户说这六句话，但实际上他说的话根本匹配不到这六句话…必须走 AI」。
+    # 分三种：
+    #   ① 引用图 + 只打渠道/档位（没意见）→ 自家图直接账本提示词（零调用），
+    #      别人的图才识图反推（1 次）→ 入队。自家图连种子一起复刻。
+    #   ② 其余（有意见 / 有渠道 / 都没）→ 改图管道 `_revise`：把图 + 用户这句
+    #      交给 AI，一次调用出提示词。**要垫图由模型自己在 JSON 里填
+    #      `source_image`**，代码不扫机制词。图生文（「这画的是什么」）也走
+    #      这里——模型判不是修改请求就回一段反推文本。
     if data_urls:
-        if desc and (_GENERIC_I2I_RE.match(desc)
-                     or (ch and _RUN_THIS_RE.match(desc))):
-            desc = ""       # 「基于图片帮我生成 / 跑这张」是空话，不算意见
-        # 2026-10-06：这里原先有一整块「代码认机制词 → 判定图生图」的路由
-        # （`_i2i_intent` 命中就走 qwen 直通 / 默认动漫档垫图）。按用户要求
-        # 全删——引用图轮统一进下面的改图管道 `_revise`，垫不垫图由模型在
-        # 那一次调用里输出的 `source_image` 决定（判据见 `_REVISE_TEMPLATE`）。
-        # 引用图 + 只打渠道/档位 → 自家图直接用账本提示词（零调用），
-        # 别人的图才看图反推（1 次识图），然后入队生成。自家图命中时**连
-        # 种子一起复刻**（2026-10-05 用户拍板）：同提示词新种子=构图细节
-        # 必然变，用户要的「原样跑」是构图贴近原图、只换画质档位。别人的
-        # 图（账本没中）没有种子可复刻，照旧随机。
         if ch and not desc:
             own_prompt, _skill, own_seed = _ledger_hit(quoted)
             # 多图反推放开到 3 张（2026-10-05 用户拍板）：turbo 免费烧得
@@ -1453,31 +1326,8 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
             seed = own_seed if (own_seed and
                                 _LOCAL_SEED_SKILL_RE.match(ch)) else None
             return _enqueue(ch, tags, text, seed=seed)
-        # 引用图 +「帮我生成这个 / 跑一下这张图」（没渠道）→ 用户口径：
-        # 反推 → 重画，别反问。自家图同样先用账本提示词（零调用）。
-        if not ch and desc and _IMG_GEN_INTENT_RE.search(desc):
-            own_prompt, _skill, _own_seed = _ledger_hit(quoted)
-            tags = own_prompt or _recall_tags(data_urls[:1])
-            if not tags:
-                return "没认出引用的图，重发一次，或直接 @我 渠道 描述。"
-            _remember_job(session_key, _DEFAULT_SKILL, tags)
-            return _enqueue(_DEFAULT_SKILL, tags, text)
-        # 看图说话（@ 轮、没渠道词）：「这画的是什么/什么画风」→ 单次识图
-        # 中文描述，不进改图管道（那口是奔着生成提示词去的）。
-        if at_me and not ch and _DESCRIBE_RE.search(text):
-            from app.vision import describe
-            try:
-                reply = (describe(data_urls[0],
-                                  prompt=_DESCRIBE_PROMPT) or "").strip()
-            except Exception:
-                log.exception("[direct] 看图说话失败")
-                return "图没看成，稍后再试。"
-            return reply or "没认出这张图，重发一次试试。"
-        # 其余（有意见 / 无渠道词）→ 改图管道：看图 + 账本提示词 + 用户这句
-        # 需求，一次调用出提示词重新生成；要垫图由模型自己在这一次里说。
-        # 模型判「不是修改请求」时 @ 轮回反推文本、关键词轮闭嘴吞轮。
         reply = _revise(text, data_urls, history, channel=ch, at_me=at_me,
-                        doc=doc, alt=alt)
+                        doc=doc)
         return reply if reply is not None else ""
 
     # ── 成品提示词轮（带 NAI 权号 `::`）：过一次 AI，权号语法一个字不许动 ──
@@ -1552,7 +1402,7 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         # 历史（「换成卡通风格 三档」的指代要靠它）。
         src = _quote_merge(quoted, desc)
         hist = [] if quoted.strip() else history
-        data = _translate(src, hist, skill=ch, doc=doc, alt=alt)
+        data = _translate(src, hist, skill=ch, doc=doc)
         if data and data.get("reply"):
             # 模型判这轮不是下单（点名了渠道也只是在聊）→ 直接回话。
             return data["reply"]
