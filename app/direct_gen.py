@@ -186,6 +186,13 @@ _TIER_MAP = {"三档": "3", "3档": "3", "二档": "3", "2档": "3",
              "快档": "3", "一档": "3", "1档": "3", "anima": "3"}
 _TIER_RE = re.compile(r"(三档|二档|一档|快档|[123]档|默认"
                       r"|(?<![0-9A-Za-z_])anima(?![0-9A-Za-z_]))", re.I)
+# 出图方向词（2026-10-07 加）：**指令词，不是画面内容**。在这里从「给 AI 看的
+# 正文」里抠掉，免得模型把它当描述写进提示词（中文写进英文 tag 串就是垃圾）。
+# ⚠️ 判据**不在这儿**——`image_jobs.turn_is_landscape()` 读的是本轮**原话**
+#    （`qq_api.current_turn_text`），所以抠掉不影响横屏生效。
+# 只认这三个明确的词；「横向」「横的」不认——它们太容易出现在正常描述里
+# （「横向构图」「横的条纹」），认了就是误伤。
+_LANDSCAPE_STRIP_RE = re.compile(r"[，,、:：]?\s*(?:横屏|横版|横图)\s*[，,、:：]?")
 # 英文画风词的前后不能是字母或下划线：「一档curvy」连写也要认（CJK 后面 \b
 # 不成立，2026-10-05 踩过），但「glossy」这种词中片段不能算。⚠️ 下划线也必须
 # 挡住——10-05 私聊实录：画师串里的 `0.8::soft_focus::` 被认成画风 soft，
@@ -1438,6 +1445,9 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     「别人艾特大大怪，大大怪给他一个回复」「正常交流就行了，问一次回一次」。
     """
     text = _strip_own_names(_strip_attribution(own_text))
+    # 「横屏 / 横版 / 横图」是出图方向指令，不是画面内容 → 抠掉再给 AI 看
+    # （判据在 image_jobs，读的是原话，所以这儿抠掉不影响横屏生效）。
+    text = _LANDSCAPE_STRIP_RE.sub(" ", text).strip()
     if _IMG_ONLY_RE.match(text):
         text = ""       # 裸图（只发图没说话）：见 _IMG_ONLY_RE 处的拍板
     session_key = qq_api.current_session_key()

@@ -155,6 +155,7 @@ unet 4487MB ≈ 10.5GB 权重，而空闲可用只有 10.78GB。当天实测的�
 import collections
 import logging
 import random
+import re
 import threading
 import time
 import uuid
@@ -446,7 +447,7 @@ class Job:
 
     def __init__(self, target, target_id, workflow, skill=None, weight=1, seq=0,
                  nai_i2i=None, tag=None, prompt=None, intent=None, seed=None,
-                 chan=None):
+                 chan=None, landscape=False):
         self.target = target
         self.target_id = target_id
         self.workflow = workflow
@@ -484,6 +485,13 @@ class Job:
         # NAI 图生图的入队时快照：{"image": 纯base64, "strength": 重绘强度}。
         # 必须快照——worker 线程读不到 qq_api 线程本地的「本轮引用图」。
         self.nai_i2i = nai_i2i
+        # 横屏（2026-10-07）：入队时快照的「本轮原话说了横屏/横版/横图」。
+        # 跟上面 nai_i2i 是**同一个理由**：`process()` 跑在常驻的 image-worker
+        # 线程里，而 qq_api 的上下文是 threading.local()、只在 qq_bot 的会话
+        # 线程绑过 → worker 里读 `current_turn_text()` 恒为 None。
+        # （2026-10-07 实测：主线程绑 'silver 横屏 一个女孩'，子线程读出 None。
+        #   教训：判据一律在入队线程算，别在 worker 里现读。）
+        self.landscape = bool(landscape)
         self.waits = 0              # 被冷却 / 被插队推回过几次（只为日志）
         self.skill_done = False     # 已经成功跑完一张？决定跑完要不要开冷却
         self.prompt_id = None
@@ -750,7 +758,7 @@ def snapshot():
 
 
 def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
-            intent=None, seed=None, resample_fn=None):
+            intent=None, seed=None, resample_fn=None, landscape=None):
     """把一张图排进**它该去的那条通道**的队列，返回 (job, reason)。
 
     prompt 是模型写的那段原始提示词，只用来**出图后记进账本**（编号 → 提示词，
@@ -772,6 +780,14 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
     key = _key(target, target_id)
     chan = _channel_of(skill)
     weight = skill_priority(skill)
+    # 横屏（2026-10-07）：判据**只能在这里**算——入队线程就是 qq_bot 的会话
+    # 线程，qq_api 的上下文还绑着；等 worker 拿到这个 job 时线程本地变量早就
+    # 不是本轮了（见 Job.landscape 那段）。所以先拍板、存进 job。
+    # landscape=None = 按本轮原话自动判（QQ 侧那两个调用方走这条）；显式
+    # True/False 留给确认闸——它是在**下一条消息**（「好」）里重入队的，
+    # 那时候的原话里根本没有「横屏」这个词，只能靠当初快照的值。
+    if landscape is None:
+        landscape = turn_is_landscape()
     with _lock:
         depth = chan.depth()
         if depth >= chan.max_queue:
@@ -790,7 +806,7 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
         chan.seq += 1
         job = Job(target, target_id, workflow, skill, weight, chan.seq,
                   nai_i2i=nai_i2i, prompt=prompt, intent=intent, seed=seed,
-                  chan=chan)
+                  chan=chan, landscape=landscape)
         # 随机口令的「被拦静默重抽」钩子（2026-10-05）：resample_fn 是无参
         # 可调用体，被审核拦下时由 worker 调它换一条新提示词，同 job 重跑。
         # 最多重抽 2 次（3 尝试）；普通生图不传，拦截行为与从前完全一致。
@@ -1212,8 +1228,13 @@ def _process_nai(job):
                 width=i2i.get("width", nai.NAI_WIDTH),
                 height=i2i.get("height", nai.NAI_HEIGHT))
         else:
-            # 文生图看渠道：`nai_wide` 出横版 1216×832。
-            png = nai.generate(job.workflow, wide=(job.skill == "nai_wide"))
+            # 文生图看渠道：`nai_wide` 出横版 1216×832；入队时快照说本轮原话
+            # 带「横屏 / 横版 / 横图」也走横版（用户口径：「说 nai 横屏」=
+            # nai_wide，见上面那段注释）。**读快照不现读原话**——worker 线程
+            # 里读不到，见 Job.landscape。
+            png = nai.generate(
+                job.workflow,
+                wide=(job.skill == "nai_wide" or job.landscape))
     except Exception as exc:
         job.error = exc
         log.warning("NAI 生图失败 %s %s：%s", job.target, job.target_id, exc)
@@ -1262,7 +1283,13 @@ def process(job):
     _maybe_release_for_switch(job)
     _maybe_release_for_low_vram()
     try:
-        job.prompt_id = _queue_prompt(job.workflow)
+        # 横屏：入队时快照的 `job.landscape`（见 Job.landscape 那段）。放在
+        # `_queue_prompt` 之前、而不是 `_generate_image` 里，是为了连静默重抽
+        # 那条「重建 job.workflow 再递归调 process」的路径也一起覆盖——
+        # 快照存在 job 上，重抽几次都对调得一样。
+        wf = (landscape_workflow(job.workflow) if job.landscape
+              else job.workflow)
+        job.prompt_id = _queue_prompt(wf)
     except Exception as exc:
         job.error = exc
         _notice(job)
@@ -1513,6 +1540,87 @@ def comfy_alive(timeout=3):
         log.warning("ComfyUI 探活失败（%s）：%s，本次不入队",
                     COMFYUI_URL, type(exc).__name__)
         return False
+
+
+# ── 横屏（2026-10-07）────────────────────────────────────────
+# 用户口径：「到时候我们就说，silver，横屏，这样就可以触发了」。所以判据就是
+# **本轮原话里有没有那三个词**——与 `generate_image._hd_tier_guard` /
+# `_t2i_guard` 同一个证据源（`qq_api.current_turn_text`，理由见那边的长注释）。
+#
+# ⚠️ 但这个证据源**只能在入队线程读**：`_hd_tier_guard` 是在工具里同步判的
+#    （会话线程，上下文还绑着），而这里要落到 worker 线程执行。所以判据在
+#    `enqueue()` 里算一次、存进 `job.landscape`，`process()` 只读快照。
+#    2026-10-07 第一版就是直接在 `process()` 里读 `current_turn_text()`，
+#    单测（同线程调 process）全绿、生产必挂——worker 读出来恒为 None。
+#    教训：**「跟某某守卫同源」不等于「可以在同一个位置读」**，先问这行代码
+#    跑在哪个线程。
+#
+# 落地 = 把工作流里**那个尺寸节点的宽高对调**。为什么不像 `nai_wide` 那样每个
+# 渠道存一份横版工作流：本机 13 个渠道的尺寸节点 id 各不相同（8/9/15/23/30/53），
+# class_type 也有三种，逐个复制要手工维护 13 份；对调只需认「哪个节点带
+# width+height」这一条，而且以后新增渠道自动生效。
+# 后面几级放大全是**倍率**（`LatentUpscaleBy` / `ImageUpscaleWithModel`），
+# 所以只改这一处，最终尺寸自动跟着翻。
+_LANDSCAPE_RE = re.compile(r"(横屏|横版|横图)")
+# 带画布的节点类型（实测这三种）。**按 class_type 认、不按节点 id**——id 各渠道不同。
+_SIZE_NODE_TYPES = ("EmptyLatentImage", "EmptySD3LatentImage",
+                    "BatchPromptImageGenerator")
+
+
+def turn_is_landscape():
+    """本轮原话里有没有「横屏 / 横版 / 横图」。
+
+    拿不到原话（网页端 / 单测直接调工具）→ False，即**不改尺寸**。跟
+    `_hd_tier_guard` 一样：没有证据源就不替调用方猜。
+
+    ⚠️ **只能在会话线程调**（`enqueue` 里那一处）。worker 线程读出来是 None。
+    """
+    from app import qq_api
+    text = qq_api.current_turn_text()
+    return bool(text) and bool(_LANDSCAPE_RE.search(text))
+
+
+def _find_size_node(workflow):
+    """找那个「带画布」的节点 id；找不到返回 None。"""
+    for nid, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        if node.get("class_type") not in _SIZE_NODE_TYPES:
+            continue
+        inputs = node.get("inputs")
+        if isinstance(inputs, dict) and "width" in inputs and "height" in inputs:
+            return nid
+    return None
+
+
+def landscape_workflow(workflow):
+    """把尺寸节点的宽高对调，返回**新的** workflow（不改原对象）。
+
+    找不到尺寸节点 / 宽高不是数 → 原样返回（绝不因为这点事把图卡住）。
+    返回新对象而不是原地改：静默重抽那条分支会重建 `job.workflow` 再递归调
+    `process`，原地改会被对调两次（等于没改）。
+
+    `BatchPromptImageGenerator` 还带一组 `hires_width` / `hires_height`
+    （`enable_hires` 默认 false），一并换掉——不然哪天开了它，放大那级还是竖的。
+    """
+    nid = _find_size_node(workflow)
+    if nid is None:
+        return workflow
+    node = workflow[nid]
+    inputs = node["inputs"]
+    w, h = inputs.get("width"), inputs.get("height")
+    if not (isinstance(w, int) and isinstance(h, int)):
+        return workflow
+    new_inputs = dict(inputs)
+    new_inputs["width"], new_inputs["height"] = h, w
+    if "hires_width" in new_inputs and "hires_height" in new_inputs:
+        new_inputs["hires_width"], new_inputs["hires_height"] = (
+            new_inputs["hires_height"], new_inputs["hires_width"])
+    new_node = dict(node)
+    new_node["inputs"] = new_inputs
+    out = dict(workflow)
+    out[nid] = new_node
+    return out
 
 
 def _queue_prompt(workflow):

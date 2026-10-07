@@ -135,6 +135,10 @@ def intercept(kind, *, skill, prompt, seed=None, intent=None, workflow=None,
             "kind": kind, "skill": skill, "prompt": prompt, "seed": seed,
             "intent": intent, "workflow": workflow, "nai_i2i": nai_i2i,
             "note": note,
+            # 横屏（2026-10-07）：**在这里快照**。确认是在下一条消息（「好」）
+            # 里才发生的，那时 `current_turn_text()` 已经是「好」，横屏这个词
+            # 早没了；而 enqueue 那一刻的线程本地变量也不是本轮了。
+            "landscape": image_jobs.turn_is_landscape(),
         }
     card = _card_text(_PENDING[(target, target_id)])
     from app.tools.normal.generate_image import _send_receipt
@@ -175,7 +179,8 @@ def consume_if_confirmed(target, target_id, text):
         job, reason = image_jobs.enqueue(target, target_id, pend["prompt"],
                                          skill=pend["skill"],
                                          nai_i2i=pend["nai_i2i"],
-                                         intent=pend["intent"])
+                                         intent=pend["intent"],
+                                         landscape=pend.get("landscape"))
         if reason is not None:
             return reason
         quota_tail = gi._charge_quota(job, target, target_id)
@@ -188,7 +193,8 @@ def consume_if_confirmed(target, target_id, text):
         return ("错误：ComfyUI 现在没在线，刚那张画不了。等它开了再让 AI 重新出。")
     job, reason = image_jobs.enqueue(target, target_id, pend["workflow"],
                                      pend["skill"], prompt=pend["prompt"],
-                                     intent=pend["intent"], seed=pend["seed"])
+                                     intent=pend["intent"], seed=pend["seed"],
+                                     landscape=pend.get("landscape"))
     if reason is not None:
         return reason
     quota_tail = gi._charge_quota(job, target, target_id)

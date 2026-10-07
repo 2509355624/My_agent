@@ -3034,5 +3034,215 @@ class BuildWorkflowTest(unittest.TestCase):
             "no_such_skill_xyz", "x", 1))
 
 
+class LandscapeTest(_Base):
+    """横屏（2026-10-07）：本轮原话说「横屏 / 横版 / 横图」→ 尺寸节点宽高对调。
+
+    判据跟 `generate_image._hd_tier_guard` 同源（读本轮原话
+    `qq_api.current_turn_text`），所以「认得出」和「认不出时一个字都不改」
+    两件都要钉——后者更要紧，误伤会直接改掉用户没要的尺寸。
+
+    为什么不是每个渠道存一份横版工作流（像 `nai_wide` 那样）：本机 13 个渠道的
+    尺寸节点 id 各不相同（8/9/15/23/30/53）、class_type 也有三种，逐个复制要
+    手工维护 13 份；对调只需认「哪个节点带 width+height」这一条。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(qq_api.clear_context)
+
+    def _bind(self, text):
+        qq_api.bind_context("group_9", "group", "9", user_text=text)
+
+    # ── 判据 ────────────────────────────────────────────────
+    def test_the_three_words_are_recognized(self):
+        for t in ("silver 横屏 一个女孩", "anima 横版 女孩", "画个横图"):
+            self._bind(t)
+            self.assertTrue(image_jobs.turn_is_landscape(), t)
+
+    def test_lookalike_words_are_not_recognized(self):
+        """「横向」「横的」不认——它们太容易出现在正常描述里，认了就是误伤。"""
+        for t in ("横向构图一个女孩", "横的条纹", "silver 一个女孩", ""):
+            self._bind(t)
+            self.assertFalse(image_jobs.turn_is_landscape(), t)
+
+    def test_no_turn_text_means_no_change(self):
+        """拿不到原话（网页端 / 单测直接调工具）→ 不改尺寸，别替调用方猜。"""
+        qq_api.clear_context()
+        self.assertFalse(image_jobs.turn_is_landscape())
+
+    # ── 对调 ────────────────────────────────────────────────
+    def test_every_local_channel_canvas_is_swapped(self):
+        for skill in ("hd_3_clear", "hd_3_soft", "silver", "silver-hd",
+                      "image_gen_v1", "jank", "qwen_image_v1", "krea2",
+                      "nffa", "cunny", "miao"):
+            wf = skills.load_skill(skill)["workflow"]
+            nid = image_jobs._find_size_node(wf)
+            self.assertIsNotNone(nid, skill)
+            ins = wf[nid]["inputs"]
+            before = (ins["width"], ins["height"])
+            got = image_jobs.landscape_workflow(wf)[nid]["inputs"]
+            self.assertEqual((got["width"], got["height"]),
+                             (before[1], before[0]), skill)
+
+    def test_the_original_workflow_is_never_mutated(self):
+        """返回新对象而不是原地改：静默重抽会重建 `job.workflow` 再递归调
+        `process`，原地改会被对调两次（等于没改）。"""
+        wf = skills.load_skill("hd_3_clear")["workflow"]
+        snapshot = json.loads(json.dumps(wf))
+        out = image_jobs.landscape_workflow(wf)
+        self.assertIsNot(out, wf)
+        self.assertEqual(wf, snapshot)
+
+    def test_hires_pair_follows_the_canvas(self):
+        """`BatchPromptImageGenerator` 还带一组 hires_width / hires_height
+        （enable_hires 默认 false），一并换掉——不然哪天开了它放大那级还是竖的。"""
+        wf = skills.load_skill("jank")["workflow"]
+        nid = image_jobs._find_size_node(wf)
+        ins = image_jobs.landscape_workflow(wf)[nid]["inputs"]
+        self.assertEqual((ins["hires_width"], ins["hires_height"]),
+                         (1536, 1024))
+
+    def test_workflow_without_a_size_node_is_untouched(self):
+        wf = {"1": {"class_type": "KSampler", "inputs": {"steps": 10}}}
+        self.assertIs(image_jobs.landscape_workflow(wf), wf)
+
+    def test_non_numeric_size_is_untouched(self):
+        """宽高不是数（模板占位符之类）→ 原样返回，绝不因为这点事把图卡住。"""
+        wf = {"9": {"class_type": "EmptyLatentImage",
+                    "inputs": {"width": "__W__", "height": 1536}}}
+        self.assertIs(image_jobs.landscape_workflow(wf), wf)
+
+    # ── 落到提交上 ──────────────────────────────────────────
+    def _enqueue_bound(self, text, skill, workflow=None):
+        """在**绑定了本轮原话**的线程里真跑一遍 `enqueue`，返回 job。
+
+        必须走真 `enqueue`——判据是在那儿拍板的（见 `Job.landscape`）。手搓
+        `Job` 会绕开被测的那一步：第一版就是这么写的，于是「同线程 process」
+        全绿、生产必挂（worker 线程读不到线程本地变量）。
+        """
+        self._bind(text)
+        job, reason = image_jobs.enqueue(
+            "group", "9", workflow, skill=skill)
+        self.assertIsNone(reason)
+        return job
+
+    def _process_and_capture(self, job):
+        """真跑一遍 `process`，把交给 ComfyUI 的那份 workflow 抓回来。"""
+        seen = []
+
+        def fake_queue(w):
+            seen.append(w)
+            return "pid"
+
+        job.target = None                   # 免得 _notice 真去发消息
+        with mock.patch.object(image_jobs, "_maybe_restart_for_clean_start"), \
+                mock.patch.object(image_jobs, "_maybe_release_for_switch"), \
+                mock.patch.object(image_jobs, "_maybe_release_for_low_vram"), \
+                mock.patch.object(image_jobs, "_queue_prompt", fake_queue), \
+                mock.patch.object(image_jobs, "wait_done",
+                                  side_effect=TimeoutError("x")), \
+                mock.patch.object(image_jobs, "_comfy_up",
+                                  return_value=False), \
+                mock.patch.object(image_jobs, "_restart_comfy"):
+            image_jobs.process(job)
+        self.assertEqual(len(seen), 1)
+        return seen[0]
+
+    def _queued_canvas(self, text, skill):
+        wf = skills.load_skill(skill)["workflow"]
+        return self._canvas_of(
+            self._process_and_capture(self._enqueue_bound(text, skill, wf)))
+
+    def _canvas_of(self, wf):
+        nid = image_jobs._find_size_node(wf)
+        ins = wf[nid]["inputs"]
+        return (ins["width"], ins["height"])
+
+    def test_process_queues_the_landscape_workflow(self):
+        self.assertEqual(self._queued_canvas("silver 横屏 一个女孩", "silver"),
+                         (1536, 1024))
+
+    def test_process_keeps_the_canvas_without_the_word(self):
+        self.assertEqual(self._queued_canvas("silver 一个女孩", "silver"),
+                         (1024, 1536))
+
+    def test_process_swaps_the_anima_canvas_too(self):
+        self.assertEqual(
+            self._queued_canvas("anima 横屏 一个女孩", "hd_3_clear"),
+            (1536, 1024))
+
+    def test_the_decision_is_taken_at_enqueue_time_not_in_the_worker(self):
+        """**这就是第一版真正的 bug**（2026-10-07 修）。
+
+        `process()` 跑在常驻的 `image-worker-*` 线程里，而 qq_api 的上下文是
+        `threading.local()`、只在 qq_bot 的会话线程（asyncio 事件循环那一条）
+        绑过 → 在 worker 里读 `current_turn_text()` 恒为 None，生产上横屏
+        **一次都不会生效**。实测：主线程绑 `'silver 横屏 一个女孩'`，子线程
+        读出 None。
+
+        所以判据必须在入队时快照。这里把原话清掉（模拟 worker 拿不到上下文）
+        再 process——快照还在，尺寸就该照换。
+        """
+        job = self._enqueue_bound("silver 横屏 一个女孩", "silver",
+                                  skills.load_skill("silver")["workflow"])
+        qq_api.clear_context()      # 模拟 worker：本轮上下文早没了
+        self.assertIsNone(qq_api.current_turn_text())
+        self.assertEqual(self._canvas_of(self._process_and_capture(job)),
+                         (1536, 1024))
+
+    def test_the_snapshot_survives_a_real_thread_hop(self):
+        """复刻生产拓扑：**入队在会话线程，`process` 在另一个线程**。
+
+        第一版在 `process()` 里现读 `current_turn_text()`，这条必挂（worker
+        线程读出来是 None）。断言在线程里抛不会传出来，所以自己接住再重抛。
+        """
+        job = self._enqueue_bound("silver 横屏 一个女孩", "silver",
+                                  skills.load_skill("silver")["workflow"])
+        box = {}
+
+        def work():
+            try:
+                box["wf"] = self._process_and_capture(job)
+            except BaseException as exc:
+                box["err"] = exc
+
+        t = threading.Thread(target=work, name="fake-image-worker")
+        t.start()
+        t.join()
+        if "err" in box:
+            raise box["err"]
+        self.assertEqual(self._canvas_of(box["wf"]), (1536, 1024))
+
+    def test_enqueue_without_turn_text_stays_portrait(self):
+        """网页端 / 单测直接入队：没有原话这个证据源 → 不改尺寸。"""
+        qq_api.clear_context()
+        job, reason = image_jobs.enqueue("group", "9", {"1": {}}, "silver")
+        self.assertIsNone(reason)
+        self.assertFalse(job.landscape)
+
+    # ── NAI ────────────────────────────────────────────────
+    def _run_nai(self, text, skill="nai"):
+        """跑一遍 NAI 分支，返回 `nai.generate` 收到的 wide 值。"""
+        job = self._enqueue_bound(text, skill, "a girl")
+        job.target = None                   # 出完图就返回，别走发图那半
+        with mock.patch.object(nai, "generate",
+                               return_value=b"png") as g, \
+                mock.patch.object(image_out, "save_bytes",
+                                  return_value="/tmp/x.png"):
+            image_jobs._process_nai(job)
+        return g.call_args.kwargs.get("wide")
+
+    def test_nai_landscape_reuses_the_existing_wide_channel(self):
+        """「nai 横屏」= 复用已有的 `nai_wide`（云端只有横竖两档，不新开路径）。"""
+        self.assertTrue(self._run_nai("nai 横屏 一个女孩"))
+
+    def test_nai_without_the_word_stays_portrait(self):
+        self.assertFalse(self._run_nai("nai 一个女孩"))
+
+    def test_nai_wide_channel_needs_no_word(self):
+        """`nai_wide` 是独立渠道名，本来就走横版——别被这次改动弄丢。"""
+        self.assertTrue(self._run_nai("随便", skill="nai_wide"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -334,6 +334,21 @@ class DirectEnqueueTest(unittest.TestCase):
         self.assertEqual(m_llm.call_count, 1)
         self.assertEqual(m_llm.call_args[0][0][0]["role"], "user")
 
+    def test_landscape_word_is_not_fed_to_the_ai(self):
+        """「横屏 / 横版 / 横图」是**出图方向指令**，不是画面内容 → 给 AI 看之前
+        抠掉，免得被当成描述写进提示词（中文写进英文 tag 串就是垃圾）。
+
+        判据**不在这儿**——`image_jobs.turn_is_landscape()` 读的是本轮**原话**，
+        所以这儿抠掉不影响横屏生效。这条只钉「别把方向词当描述喂进去」。
+        """
+        out, m_llm, m_gen = self._decide(
+            '{"skill": "silver", "prompt": "1girl"}',
+            text="silver 横屏 一个女孩")
+        seen = str(m_llm.call_args[0][0][0]["content"])
+        self.assertNotIn("横屏", seen)
+        self.assertIn("silver", seen)
+        self.assertIn("一个女孩", seen)
+
     def test_recent_history_filters_menu_and_receipts(self):
         # 最近10条上下文要滤掉菜单和回执（2026-10-05 用户点名），指令本身留着
         hist = [{"role": "assistant", "content": MENU_TEXT},

@@ -135,9 +135,49 @@ class ConsumeTest(unittest.TestCase):
             reply = confirm_gate.consume_if_confirmed("group", "123", "确认")
         self.assertEqual(reply, "回执")
         en.assert_called_once_with("group", "123", {"w": 1}, "anima_clear",
-                                   prompt="1girl", intent="k", seed=42)
+                                   prompt="1girl", intent="k", seed=42,
+                                   landscape=None)
         rc.assert_called_once()
         self.assertNotIn(("group", "123"), confirm_gate._PENDING)
+
+    def test_landscape_survives_the_confirm_gate(self):
+        """横屏（2026-10-07）：确认是在**下一条消息**（「好」）里发生的，那时
+        原话里早就没有「横屏」了 → 必须用当初快照的值。否则「silver 横屏…」
+        → 确认卡 → 「好」这一路会把横屏丢掉，出成竖图。"""
+        self._pending_comfy()
+        confirm_gate._PENDING[("group", "123")]["landscape"] = True
+        job = mock.Mock()
+        with mock.patch("app.image_jobs.comfy_alive", return_value=True), \
+             mock.patch("app.image_jobs.enqueue",
+                        return_value=(job, None)) as en, \
+             mock.patch("app.tools.normal.generate_image._charge_quota",
+                        return_value=""), \
+             mock.patch("app.tools.normal.generate_image._qq_receipt",
+                        return_value="回执"):
+            confirm_gate.consume_if_confirmed("group", "123", "好")
+        self.assertTrue(en.call_args.kwargs["landscape"])
+
+    def test_intercept_snapshots_the_landscape_word(self):
+        """卡发出去那一刻就把横屏判据存下来（`intercept` 跑在会话线程，
+        `qq_api` 的上下文还绑着；等到确认时线程本地变量早不是本轮了）。"""
+        with mock.patch("app.qq_api.current_context",
+                        return_value=("group", "123")), \
+             mock.patch("app.qq_api.current_turn_text",
+                        return_value="silver 横屏 一个女孩"), \
+             mock.patch("app.tools.normal.generate_image._send_receipt"):
+            confirm_gate.intercept("comfy", skill="silver", prompt="1girl",
+                                   workflow={"w": 1})
+        self.assertTrue(confirm_gate._PENDING[("group", "123")]["landscape"])
+
+    def test_intercept_without_the_word_snapshots_false(self):
+        with mock.patch("app.qq_api.current_context",
+                        return_value=("group", "123")), \
+             mock.patch("app.qq_api.current_turn_text",
+                        return_value="silver 一个女孩"), \
+             mock.patch("app.tools.normal.generate_image._send_receipt"):
+            confirm_gate.intercept("comfy", skill="silver", prompt="1girl",
+                                   workflow={"w": 1})
+        self.assertFalse(confirm_gate._PENDING[("group", "123")]["landscape"])
 
     def test_comfy_dead_on_confirm_returns_error(self):
         self._pending_comfy()
