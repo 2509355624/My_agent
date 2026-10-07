@@ -29,7 +29,7 @@ import json
 import unittest
 from unittest import mock
 
-from app import direct_gen, image_jobs, random_tags
+from app import direct_gen, image_jobs, qq_bot, random_tags
 from app.direct_gen import MENU_TEXT
 from app.tools.normal import generate_image as gi
 
@@ -1730,6 +1730,13 @@ class RandomCommandTest(unittest.TestCase):
         self.assertIn("miao", direct_gen.GUIDE_TEXT)
         self.assertIn("miao", direct_gen.MORE_CHAN_TEXT)
 
+    def test_direct_prefix_documented_in_menus(self):
+        # 2026-10-07 用户拍板：/直通- 用法要两个菜单都写清楚。
+        for menu in (direct_gen.MORE_CHAN_TEXT, direct_gen.GUIDE_TEXT):
+            self.assertIn("/直通-", menu)
+            self.assertIn("直通", menu)
+            self.assertIn("|", menu)
+
     # ── 被拦静默重抽（2026-10-05）：图是机器人推的服务，不回「未过审」──
 
     def test_random_commands_pass_resample_fn(self):
@@ -1761,6 +1768,109 @@ class RandomCommandTest(unittest.TestCase):
             self.addCleanup(direct_gen._LAST_JOB.pop, "group_1", None)
         self.assertEqual(out, "")
         self.assertIsNone(m_gen.call_args.kwargs.get("resample_fn"))
+
+
+class DirectPrefixTest(unittest.TestCase):
+    """/直通- 前缀：严格匹配、零 token 直出（2026-10-07 用户拍板）。
+
+    格式 `/直通-渠道|英文提示词`；渠道认不出 → 落回原管道（交 AI），不猜。
+    """
+
+    def _decide(self, text, llm_reply='{"skill": "anima_clear", "prompt": "x"}',
+                quoted="", data_urls=None):
+        with mock.patch.object(direct_gen.llm, "call_llm",
+                               return_value=llm_reply) as m_llm, \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=quoted), \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="group_1"), \
+             mock.patch.object(gi, "_generate_image",
+                               return_value=RECEIPT) as m_gen:
+            out = direct_gen.decide(text, [], False, at_me=True,
+                                    data_urls=data_urls)
+            self.addCleanup(direct_gen._LAST_JOB.pop, "group_1", None)
+        return out, m_llm, m_gen
+
+    def test_silver_prefix_direct(self):
+        out, m_llm, m_gen = self._decide("/直通-silver|1girl, blue hair")
+        self.assertEqual(out, "")
+        m_gen.assert_called_once_with("1girl, blue hair", skill="silver",
+                                      _skip_confirm=True)
+        m_llm.assert_not_called()           # 零 LLM
+
+    def test_tier_style_prefix_direct(self):
+        out, m_llm, m_gen = self._decide("/直通-三档 gloss|1girl, blue hair")
+        self.assertEqual(out, "")
+        m_gen.assert_called_once_with("1girl, blue hair", skill="hd_3_gloss",
+                                      _skip_confirm=True)
+        m_llm.assert_not_called()
+
+    def test_named_channel_prefix_direct(self):
+        out, m_llm, m_gen = self._decide("/直通-qwen|1girl, blue hair")
+        self.assertEqual(out, "")
+        m_gen.assert_called_once_with("1girl, blue hair",
+                                      skill="qwen_image_v1", _skip_confirm=True)
+        m_llm.assert_not_called()
+
+    def test_prompt_verbatim_with_dash_and_weight(self):
+        # 提示词里的 `-`、`::` 权号一律不碰（这就是不用 `-` 当分隔符的理由）。
+        prompt = "1girl-blue hair, -1::lowres::"
+        out, m_llm, m_gen = self._decide("/直通-silver|" + prompt)
+        self.assertEqual(out, "")
+        self.assertEqual(m_gen.call_args.args[0], prompt)
+
+    def test_fullwidth_slash_works(self):
+        out, _m_llm, m_gen = self._decide("／直通-silver|1girl")
+        self.assertEqual(out, "")
+        m_gen.assert_called_once()
+
+    def test_unknown_channel_falls_back_to_ai(self):
+        # 渠道认不出 → 不直通，落回原管道（m_llm 被调用，m_gen 用 AI 给的 skill）。
+        out, m_llm, m_gen = self._decide("/直通-xyz|1girl",
+                                         llm_reply='{"skill": "anima_clear",'
+                                                   ' "prompt": "1girl"}')
+        m_llm.assert_called()
+        m_gen.assert_called_once_with("1girl", skill="anima_clear",
+                                      _skip_confirm=True)
+
+    def test_missing_bar_returns_hint(self):
+        out, m_llm, m_gen = self._decide("/直通-silver-1girl, blue hair")
+        self.assertIn("/直通-", out)
+        m_gen.assert_not_called()
+        m_llm.assert_not_called()
+
+    def test_empty_after_head_returns_hint(self):
+        out, m_llm, m_gen = self._decide("/直通-")
+        self.assertIn("直通", out)
+        m_gen.assert_not_called()
+        m_llm.assert_not_called()
+
+    def test_empty_prompt_returns_hint(self):
+        out, m_llm, m_gen = self._decide("/直通-silver|")
+        self.assertIn("提示词", out)
+        m_gen.assert_not_called()
+        m_llm.assert_not_called()
+
+    def test_no_prefix_not_affected(self):
+        # 不带前缀的普通消息照旧走 AI（前缀是唯一开关）。
+        out, m_llm, m_gen = self._decide("silver 1girl, blue hair",
+                                         llm_reply='{"skill": "silver",'
+                                                   ' "prompt": "1girl"}')
+        m_llm.assert_called()
+
+    def test_gate_treats_prefix_as_at_me(self):
+        ok, why = qq_bot._should_reply({"user_id": "1"}, "group", "9",
+                                       "/直通-silver|1girl", at_me=False)
+        self.assertTrue(ok)
+        self.assertEqual(why, "直通前缀")
+
+    def test_prefix_with_image_passes_source_image(self):
+        # 引用图 + /直通-qwen → 垫这张图（qwen 图生图靠它绕过去）。
+        _out, _m_llm, m_gen = self._decide("/直通-qwen|change hair to silver")
+        self.assertNotIn("source_image", m_gen.call_args.kwargs)  # 无图轮
+        _out2, _m_llm2, m_gen2 = self._decide(
+            "/直通-qwen|change hair to silver", data_urls=["img1"])
+        self.assertEqual(m_gen2.call_args.kwargs.get("source_image"), "1")
 
 
 class PromptAskNarrowTest(unittest.TestCase):

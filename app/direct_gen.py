@@ -562,6 +562,17 @@ GUIDE_TEXT = (
     "\n"
     "【随机口令】今日老婆 ｜ 随机萝莉 / 兽耳 / 女仆\n"
     "\n"
+    "【直通·零消耗】\n"
+    "　老手有现成英文提示词 → 加前缀直发，不花 token\n"
+    "　/直通-渠道|英文提示词\n"
+    "　例：/直通-silver|1girl, blue hair\n"
+    "　　/直通-三档 gloss|1girl, blue hair\n"
+    "　　/直通-qwen|1girl, blue hair\n"
+    "　用 | 隔开渠道和提示词\n"
+    "　提示词**原样直发**（不翻译、不过 AI、秒出）\n"
+    "　引用一张图 = 用该渠道垫这张图\n"
+    "　（如 /直通-qwen|change hair to silver）\n"
+    "\n"
     "提示词用中文描述就行，我来转成画法。"
 )
 
@@ -572,6 +583,15 @@ MORE_CHAN_TEXT = (
     "🧭 全部跑法 · 一行一项\n"
     "写法：渠道名 + 你的需求\n"
     "例：三档 女骑士 ｜ jank 银发初音未来 ｜ qwen 水晶城堡\n"
+    "\n"
+    "【直通·零消耗】老手直接用英文提示词\n"
+    "　/直通-渠道|英文提示词\n"
+    "　例：/直通-silver|1girl, blue hair\n"
+    "　　/直通-三档 gloss|1girl, blue hair\n"
+    "　　/直通-qwen|1girl, blue hair\n"
+    "　用 | 隔开渠道和提示词；提示词原样直发\n"
+    "　（不翻译、不过 AI、不花 token，秒出）\n"
+    "　引用一张图 = 该渠道垫这张图（如 /直通-qwen|…）\n"
     "\n"
     "【默认】不写渠道词 → silver（最快）\n"
     "\n"
@@ -610,6 +630,72 @@ _WAIFU_CMD_RE = re.compile(r"^\s*/?\s*今日老婆\s*$")
 # 「/更多渠道」按**关键词**识别（2026-10-05 用户口径）：消息里含「更多渠道」即回
 # 全部跑法，不再要求整条精确匹配——用户实际发过「：更多渠道」（全角冒号）掉进兜底。
 _MORE_CHAN_RE = re.compile(r"更多渠道")
+
+# ─── 「/直通-」零 token 直出（2026-10-07 用户拍板）──────────
+#
+# 用户原话：「如果我要保留渠道+提示词直接生成…就应该是特定格式前缀来保证…
+# 自己人想要跑的话，就不需要消耗 token 了」「严格点吧，默认后面接英文提示词」。
+#
+# **为什么必须带前缀**：裸写「silver 三档 1girl」代码不敢直接跑——它可能是
+# 聊天、是讨论、是问句，必须过一次 AI 才知道是不是下单。前缀是用户**主动
+# 拍板「这就是下单」**的信号，代码才敢跳过 AI、跳过搜索，零 token 直发。
+#
+# 格式：`/直通-<渠道段>|<英文提示词>`
+#   - 前缀 `/直通-`（全角/半角斜杠都认），**顶格**（前面可留空格）。
+#   - 渠道段与提示词之间用 **`|`（半角竖线）** 分隔——**刻意**不用 `-`：连字符
+#     在提示词里到处都是（`blue-hair`、NAI 负号权号 `-1::tag::`），拿它当分隔
+#     必撞车（10-07 实测 `三档-gloss-1girl` 会把 gloss 吞进正文）。`|` 在
+#     danbooru/NAI 标签流里几乎不出现，语义又天然是「分段」。
+#   - **第一个 `|` 之前** = 渠道段（里面用空格隔档位/画风：`三档 gloss`）。
+#   - **第一个 `|` 之后** = 提示词，**原样直发**（`|`、`-`、`::` 一律不碰）。
+#   - 没写 `|`（整条都是渠道段）→ 解析不出提示词 → 回一句提示，不入队。
+# 严格匹配（用户要求）：渠道段解析不出渠道 → 落回原管道（交 AI），不猜。
+_DIRECT_RE = re.compile(r"^\s*[\/／]\s*直通\s*[-－—]\s*(?P<body>.*?)\s*$",
+                        re.S)
+# 光有前缀、后面空的（`/直通-`）：`body` 为空，单独回格式提示。
+_DIRECT_HEAD_RE = re.compile(r"^\s*[\/／]\s*直通\s*[-－—]\s*$")
+
+
+def _parse_direct(text):
+    """`/直通-` 前缀解析。返回 (skill, prompt, err)。
+
+    命中前缀且渠道可认、提示词非空 → (skill, prompt, "")，调用方直接入队。
+    其余情况 err 非空（调用方原样发回会话），skill 为 None：
+      - 没写 `|`            → 提醒「用 | 分隔渠道和提示词」
+      - 渠道段认不出         → 返回 ("", "", None) 哨兵：**落回原管道**（交 AI），
+                              not 直通（严格匹配，不猜）。
+    """
+    m = _DIRECT_RE.match(text)
+    if not m:
+        return None, None, None
+    body = m.group("body").strip()
+    if not body:
+        return None, None, ("直通格式：`/直通-渠道|英文提示词`\n"
+                            "例：/直通-silver|1girl, blue hair\n"
+                            "　　/直通-三档 gloss|1girl, blue hair")
+    if "|" not in body:
+        # 整条都是渠道段，没给提示词——多半是忘了写 `|`。
+        return None, None, ("直通格式：`/直通-渠道|英文提示词`\n"
+                            "渠道和提示词之间要用 `|` 隔开。\n"
+                            "例：/直通-silver|1girl, blue hair\n"
+                            "　　/直通-三档 gloss|1girl, blue hair")
+    chan_seg, prompt = body.split("|", 1)
+    prompt = prompt.strip()
+    chan_seg = chan_seg.strip()
+    if not prompt:
+        return None, None, ("`|` 后面没写提示词。补上英文提示词再发，"
+                            "例：/直通-silver|1girl, blue hair")
+    # 渠道段 → 渠道 id。silver 是**默认档**，`_parse_channel` 平时不把它当点名
+    # （不写渠道=走它）；直通里显式写了就按默认档处理（用户给的例子里有它）。
+    if chan_seg.strip().lower() == _DEFAULT_SKILL:
+        return _DEFAULT_SKILL, prompt, ""
+    skill, _desc = _parse_channel(chan_seg)
+    if not skill:
+        # 渠道段认不出 → 不直通，交回原管道（严格匹配）。用哨兵区分于 err。
+        return "", None, None
+    if skill not in _allowed_skills():
+        return "", None, None
+    return skill, prompt, ""
 
 # ─── 提示词的「写法 + 语言」按渠道分家 ─────────────────────
 # 2026-10-05 用户点名要明确写进模板：「如果我给的是中文的需求，他要翻译成
@@ -1239,6 +1325,21 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         text = ""       # 裸图（只发图没说话）：见 _IMG_ONLY_RE 处的拍板
     session_key = qq_api.current_session_key()
     quoted = (qq_api.current_quoted_text() or "").strip()
+    # ── 「/直通-」零 token 直出（放在最前，比菜单更优先）────────────────
+    # 用户明确带前缀 = 拍板「这是下单」→ 跳过 AI、跳过搜索，直接入队。
+    # 渠道认不出 → 返回哨兵 ("")，**落回下面原管道**（严格匹配，不猜）。
+    if _DIRECT_RE.match(text):
+        d_skill, d_prompt, d_err = _parse_direct(text)
+        if d_err:
+            return d_err
+        if d_skill:
+            _remember_job(session_key, d_skill, d_prompt)
+            # 本轮带图（引用了 / 自己刚发）→ 垫这张图（qwen 图生图就靠这个）。
+            # 不带图 = 纯文生图，跟平时一样。source_image="1" 由 comfy_src
+            # 在生成时解析成「本轮引用的那张」。
+            return _enqueue(d_skill, d_prompt, text,
+                            source_image=bool(data_urls))
+        # d_skill == ""：渠道段认不出 → 不直通，继续往下交 AI。
     # 详细使用指南（/菜单、使用指南）：零 LLM，常量直回。比菜单判断更前，
     # 因为「/菜单」含「菜单」二字，得先于短菜单分支。
     if _GUIDE_RE.match(text):

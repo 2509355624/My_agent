@@ -481,6 +481,11 @@ def _session_key(target, target_id):
 # 理由（黑名单、群不在白名单、@ 了却什么都没发）都该照旧丢掉。
 REASON_NO_MENTION = "未 @ 且未命中关键词"
 
+# 「/直通-」前缀 = 用户明确下单，**等同被 @**（2026-10-07 用户拍板）：
+# 自己人刷图时不想 @、也不想花 token，带上这个前缀就直接触发。比关键词档
+# 更前——关键词可能被群里闲聊误撞，前缀是刻意写的命令，不会误伤。
+_DIRECT_PREFIX_RE = re.compile(r"^\s*[\/／]\s*直通\s*[-－—]")
+
 
 def _private_gate(user_id):
     """私聊闸：settings.json 优先（管理页热改，不用重启），缺省回落 .env。
@@ -587,6 +592,9 @@ def _should_reply(ev, target, target_id, text, at_me, has_image=False,
 
     if at_me:
         return (has_content, "被 @")
+    # 「/直通-」前缀等同被 @：用户刻意写的下单命令，直接放行（见上方常量注释）。
+    if _DIRECT_PREFIX_RE.match(text):
+        return True, "直通前缀"
     # 「只认 @」的群（管理页可逐群开）：关键词这条路直接掐掉，只有真 @ 才回。
     if group_id not in _at_only_groups():
         for kw in QQ_GROUP_KEYWORDS:
