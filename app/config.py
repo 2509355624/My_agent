@@ -148,10 +148,16 @@ PROVIDERS = {
         "vision": False,
     },
     # 豆包（Doubao 自家模型）
+    # 2026-10-07：默认模型换成 doubao-seed-2-1-turbo-260628（多模态，能读图）。
+    # 用户在管理页把「识图模型」选成豆包时，下拉存的是 `doubao:`（模型留空），
+    # 生效时回落到**这里的默认模型**——所以默认值必须是能读图的那个，否则
+    # 识图会拿纯文本模型去读 base64，整条请求挂死（见文件顶部的说明）。
+    # 纯文本的旧型号（doubao-1-5-thinking-pro-*）仍可显式指定，届时靠模型名
+    # 判定为准（见 _VISION_MODEL_HINTS），不会误当视觉模型。
     "doubao": {
         "label": "豆包",
         "base_url": VOLC_BASE_URL,   # 火山方舟兼容 OpenAI 接口
-        "model": os.getenv("DOUBAO_MODEL", "doubao-1-5-thinking-pro-250615"),
+        "model": os.getenv("DOUBAO_MODEL", "doubao-seed-2-1-turbo-260628"),
         "api_key": VOLC_API_KEY,
         "needs_key": False,
         "vision": False,
@@ -226,7 +232,10 @@ PROVIDERS = {
 # 不含 vl/vision/omni 关键字——只靠 provider 的 vision 开关会在「只覆盖
 # 模型、没改 provider」时漏判（误当非视觉→多跑一道识图预处理）。把 mimo
 # 也加进关键字，保证只要生效模型是 mimo 就直接多模态下发。
-_VISION_MODEL_HINTS = ("vl", "vision", "omni", "mimo")
+# "seed" 同理：豆包 Seed 系列（doubao-seed-2-1-*）是多模态，而 doubao
+# provider 的开关仍是 False（纯文本的 doubao-1-5-thinking-pro-* 还在用），
+# 靠模型名兜住——换回纯文本型号时这里不命中，自然退回非视觉，不会挂死。
+_VISION_MODEL_HINTS = ("vl", "vision", "omni", "mimo", "seed")
 
 
 def provider_vision(provider=None, model=None):

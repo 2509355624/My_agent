@@ -142,7 +142,7 @@ agent_my_test/
 | `DEEPSEEK_API_KEY` | — | DeepSeek 官方 Key |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/v1` | |
 | `DEEPSEEK_MODEL` | `deepseek-chat` | |
-| `DOUBAO_MODEL` | `doubao-1-5-thinking-pro-250615` | 豆包自家模型 |
+| `DOUBAO_MODEL` | `doubao-seed-2-1-turbo-260628` | 豆包自家模型（多模态，可作识图） |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | 本地 Ollama |
 | `OLLAMA_MODEL` | `qwen2.5:7b` | |
 | `SEARCH_API_KEY` | — | 豆包搜索专用 Key（与方舟 Key 不同）；未配置时 `web_search` 回退 DuckDuckGo |
