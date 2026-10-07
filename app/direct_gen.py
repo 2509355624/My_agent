@@ -515,8 +515,8 @@ def _lead_typo_channel(text):
 _FINAL_PROMPT_NO_CHAN_TEXT = (
     "这段带权号的提示词我照原样收下了，但这轮没说渠道，我不敢替你选"
     "（选错就是整张图换风味）。在前面补一个渠道词再发："
-    "nai（画师串/权号这种写法就是它的）/ silver（默认渠道）/ 快档 / 二档 / 三档 / "
-    "sd / krea2 / qwen / nffa / jank。")
+    "nai（画师串/权号这种写法就是它的）/ silver（默认渠道）/ silver-hd（4x超清）/ "
+    "快档 / 二档 / 三档 / sd / krea2 / qwen / nffa / jank。")
 
 
 MENU_TEXT = (
@@ -552,6 +552,7 @@ GUIDE_TEXT = (
     "　　　打错或没打 → 按该档默认\n"
     "\n"
     "【点名渠道】把渠道名写最前面就行\n"
+    "　silver-hd　4x超清 · 4928×7360（约28MB）\n"
     "　jank　NoobAI 自定义（有权号词就用它）\n"
     "　qwen　慢·写实·能在图里写中文字\n"
     "　sd　　一次多张，多段用 --- 分隔\n"
@@ -615,6 +616,7 @@ MORE_CHAN_TEXT = (
     "　　　不写就按该档默认\n"
     "\n"
     "【点名渠道】把渠道名写在最前面就行\n"
+    "　silver-hd　4x超清 · 4928×7360（约28MB）\n"
     "　jank　NoobAI 自定义（有权号词就用它）\n"
     "　qwen　慢·写实·能在图里写中文字\n"
     "　sd　　一次多张，多段用 --- 分隔\n"
@@ -783,9 +785,11 @@ _MASTER_TEMPLATE = (
     "- qwen / 千问 / 通义 = qwen_image_v1，云端、慢，prompt 写完整英文句子。\n"
     "- sd = image_gen_v1，一次出多张（prompt 里用 --- 分段）。\n"
     "- krea2 / nffa / cunny / miao：点名才用（cunny / miao 一张好几分钟）。\n"
-    "- silver = **默认渠道**（不填 skill 走的就是它）、jank = 自定义 NoobAI 渠道，"
-    "两条都要**明说渠道名**才填，都是文生图专用、没有图生图骨架。"
-    "⚠️「银发 / silver hair」是画发色、不是点名渠道。\n"
+    "- silver = **默认渠道**（不填 skill 就是它）、jank = 自定义 NoobAI 渠道，"
+    "明说才填、都是文生图专用、无图生图骨架。"
+    "⚠️「银发 / silver hair」是发色、不是渠道。\n"
+    "- silver-hd = silver 的 4x 超清版（只换放大，4928×7360）；"
+    "明说「silver-hd / silver 超清」才填，否则走 silver。\n"
     "{chan_hint}"
     "\n"
     "【图生图：默认不做，只认点名】`source_image` 一律默认不填：只有用户"
@@ -853,8 +857,9 @@ _REVISE_TEMPLATE = (
     "  qwen_image_v1 = 说「qwen / 千问 / 通义」；image_gen_v1 = 说「sd」；\n"
     "  krea2 / nffa / cunny / miao = 原话点名才填；\n"
     "  jank = 原话明说「jank」才填（用户自定义渠道）。\n"
-    "  ⚠️ silver 和 jank 是**文生图专用**、没有垫图骨架。「银发 / silver hair」"
-    "是画发色、不是点名渠道，别因为它就改填 silver。\n"
+    "  silver-hd = silver 的 4x 超清版，原话明说「silver-hd」或「silver 超清」才填。\n"
+    "  ⚠️ silver / silver-hd 和 jank 都是**文生图专用**、没有垫图骨架。"
+    "「银发 / silver hair」是画发色、不是点名渠道，别因为它就改填 silver。\n"
     "【图生图：默认不做，只走 qwen 一条】`source_image` 这个字段**默认不填**——"
     "填了就是把引用的这张图垫进去改，代价很大。只有用户**明说「qwen 图生图」**"
     "（点名 qwen、要在这张图上改）时才填 1，同时 skill 填 qwen_image_v1、"

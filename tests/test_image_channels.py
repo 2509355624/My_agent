@@ -1642,49 +1642,55 @@ class CustomChannelTest(unittest.TestCase):
     就是钉住这条红线。
     """
 
-    def test_master_template_lists_silver_and_jank(self):
-        """QQ 直达路径的 AI 提示词必须列出这两个渠道名。"""
+    def test_master_template_lists_custom_channels(self):
+        """QQ 直达路径的 AI 提示词必须列出这些渠道名。"""
         from app.direct_gen import _MASTER_TEMPLATE
-        self.assertIn("silver", _MASTER_TEMPLATE)
-        self.assertIn("jank", _MASTER_TEMPLATE)
+        for name in ("silver", "silver-hd", "jank"):
+            with self.subTest(name=name):
+                self.assertIn(name, _MASTER_TEMPLATE)
 
-    def test_tool_description_lists_silver_and_jank(self):
+    def test_tool_description_lists_custom_channels(self):
         """agent / 网页路径的工具描述也得提（双保险）。"""
         from app.tools.normal.generate_image import tool
-        self.assertIn("silver", tool["description"])
-        self.assertIn("jank", tool["description"])
+        for name in ("silver", "silver-hd", "jank"):
+            with self.subTest(name=name):
+                self.assertIn(name, tool["description"])
 
     def test_custom_channels_are_allowed_skills(self):
-        """模型传 skill=silver / jank 时，不能被 `_allowed_skills` 拒掉。"""
+        """模型传 skill=silver / silver-hd / jank 时，不能被 `_allowed_skills` 拒掉。"""
         from app.direct_gen import _allowed_skills
         allowed = _allowed_skills()
-        self.assertIn("silver", allowed)
-        self.assertIn("jank", allowed)
+        for name in ("silver", "silver-hd", "jank"):
+            with self.subTest(name=name):
+                self.assertIn(name, allowed)
 
     def test_custom_channels_have_workflows(self):
         from app.skills import load_skill
-        for name in ("silver", "jank"):
-            data = load_skill(name)
-            self.assertIsNotNone(data, name)
-            self.assertEqual(data["kind"], "生图", name)
-            self.assertIsNotNone(data["workflow"], name)
+        for name in ("silver", "silver-hd", "jank"):
+            with self.subTest(name=name):
+                data = load_skill(name)
+                self.assertIsNotNone(data, name)
+                self.assertEqual(data["kind"], "生图", name)
+                self.assertIsNotNone(data["workflow"], name)
 
     def test_custom_channels_are_not_hardcoded_in_parser(self):
-        """红线：silver / jank 不许进代码级关键词路由（`_FIXED_CHAN_MAP` / 正则），
-        也**不许**写死进 `_FIXED_SKILLS` 允许名单。
+        """红线：silver / silver-hd / jank 不许进代码级关键词路由
+        （`_FIXED_CHAN_MAP` / 正则），也**不许**写死进 `_FIXED_SKILLS` 允许名单。
 
         它们靠「落进 skills/ 即是可用渠道」由 `_allowed_skills()` 动态放行
         （见同文件那处改动），而不是写死在任何代码名单里。这条锁保证以后有人
         图省事把它们加进硬路由 / 硬名单时立刻报错——用户明确不要这种硬编码。
         """
         from app.direct_gen import _FIXED_CHAN_MAP, _FIXED_CHAN_RE, _FIXED_SKILLS
-        self.assertNotIn("silver", _FIXED_CHAN_MAP)
-        self.assertNotIn("jank", _FIXED_CHAN_MAP)
-        self.assertNotIn("silver", _FIXED_SKILLS)
-        self.assertNotIn("jank", _FIXED_SKILLS)
-        # 用户在消息里点名这两个词，也不能被那道正则命中
+        for name in ("silver", "silver-hd", "jank"):
+            with self.subTest(name=name):
+                self.assertNotIn(name, _FIXED_CHAN_MAP)
+                self.assertNotIn(name, _FIXED_SKILLS)
+        # 用户在消息里点名这几个词，也不能被那道正则命中
         self.assertIsNone(_FIXED_CHAN_RE.search("silver 和泉纱雾"))
         self.assertIsNone(_FIXED_CHAN_RE.search("用 jank 画一张"))
+        self.assertIsNone(_FIXED_CHAN_RE.search("silver-hd 女骑士"))
+        self.assertIsNone(_FIXED_CHAN_RE.search("silver超清 女骑士"))
 
 
 if __name__ == "__main__":

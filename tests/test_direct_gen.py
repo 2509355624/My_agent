@@ -1142,7 +1142,9 @@ class MasterPromptTest(unittest.TestCase):
     - 「不用动手就回 {"reply": ...}」——AI 得能聊天，不是只会画图
     - 渠道清单（渠道名是我们自己起的，模型猜不出来的本地事实，必须给）
     - 中文翻英文 / 画师串原样保留 / 新请求不许抄上一轮
-    以及**钉死它别再长回去**：模板本身不许超过 1500 字。
+    以及**钉死它别再长回去**：模板本身不许超过 1700 字。
+    （2026-10-07 从 1600 提到 1700：新增 `silver-hd` 渠道必须在渠道清单里
+    占一行——这是模型猜不出来的本地事实，属于合法增长，不是「给渠道写专属规则」。）
     """
 
     def _rendered(self, text="t", chan_hint="", recent="", search=""):
@@ -1161,7 +1163,18 @@ class MasterPromptTest(unittest.TestCase):
         self.assertIn("generate_image", t)
         self.assertIn("recall_image", t)
         # 模板本身要短：一句话一个工具，不给每个渠道写专属规则。
-        self.assertLess(len(t), 1600, "模板超长了，工具列表应该一句话一个")
+        self.assertLess(len(t), 1700, "模板超长了，工具列表应该一句话一个")
+
+    def test_custom_channels_are_listed_for_the_ai(self):
+        """自定义渠道（silver / silver-hd / jank）是本地事实，模型猜不出来，
+        必须写进渠道清单，否则 AI 拿到 skill=silver-hd 也不知道那是什么。
+        """
+        t = self._rendered()
+        for ch in ("silver", "silver-hd", "jank"):
+            with self.subTest(ch=ch):
+                self.assertIn(ch, t)
+        # silver-hd 只能点名触发，模板要给出触发词与「否则走 silver」的口径
+        self.assertIn("silver 超清", t)
 
     def test_channel_ids_are_spelled_out_in_words_the_ai_can_map(self):
         """渠道 id 是我们自己起的，用户说的是中文口语，模板必须把两边对上。

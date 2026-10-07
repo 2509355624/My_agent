@@ -1050,11 +1050,13 @@ tool = {
                   "- **image_gen_v1**（SD / SDXL，832×1216）：**唯一支持一次出多张**的渠道——"
                   "prompt 里用 ` --- ` 分隔几段就出几张（其它渠道会把 --- 当普通文字）。"
                   "只在用户点名「用 sd / sd 模型」或要多个变体时用。不支持垫图\n\n"
-                  "【silver = 默认渠道；jank 点名才用】`silver` 就是不传 skill 时走的那条"
+                  "【silver = 默认渠道；silver-hd / jank 点名才用】`silver` 就是不传 skill 时走的那条"
                   "（Anima 底模 + 6 个 LoRA 已烘焙在工作流里，1024×1536），用户明说"
                   "「用 silver 画」时也可以显式传 `skill=silver`，效果一样。"
                   "`jank`（NoobAI 底模 + 4 个 LoRA，1024×1536，二段 2x 放大）**只在用户"
-                  "明说 jank 时传**。两条都是**文生图专用、没有图生图骨架**；"
+                  "明说 jank 时传**。`silver-hd`（同 silver 工作流，只把末尾放大换成 4x，"
+                  "出 4928×7360、一张约 28MB）**只在用户明说「silver-hd」或「silver 超清」时传**。"
+                  "三条都是**文生图专用、没有图生图骨架**；"
                   "prompt 照常写标签式英文、不传 lora 就用工作流里那套现成的；"
                   "对方要垫图/改图别选它们（图生图只走 qwen_image_v1）。\n"
                   "⚠️ `silver` 还常见作**发色词**（silver hair / 银发）——用户说「银发」"
@@ -1126,7 +1128,7 @@ tool = {
         "type": "object",
         "properties": {
             "prompt": {"type": "string", "description": "提示词。**开头先写角色名**（认得出就写：英文 tag 渠道 `rudeus greyrat, mushoku tensei`；qwen 的自然语言句子里写「鲁迪乌斯（无职转生）」）——没有任何渠道自带角色，**名字才是还原度最高的那一行**，外貌只补与原设定不同的部分。\n默认渠道写**逗号分隔的标签式英文短句，只写一段、不要用 --- 分隔**（只有 skill=image_gen_v1 认 ` --- ` 分隔、一次出多张；其它渠道会把 --- 当普通文字，要出多张就分多次调用、每次一个变体）。\n两个例外：skill=qwen_image_v1 写**自然语言句子**（不写标签堆）；**它当改图渠道用时（同时传 source_image）只写一句改动指令**，例如 `change her coat to red, keep the pose, face and background exactly the same`——**不要把整张图重新描述一遍**。"},
-            "skill": {"type": "string", "description": "渠道名。**不传就是默认渠道 " + T2I_DEFAULT_SKILL + "**（用户自定义的 Anima 渠道）。可选值见 Available Skills 的生图类（16 个动漫渠道 = 4 画风 × 4 尺寸档，另有 silver / jank / qwen_image_v1 / image_gen_v1 / krea2 / nffa / nai / nai_wide），各自画风、尺寸、适用场景、速度都在那一行里。\n**只在用户点名画风 / 尺寸 / 渠道时才传，平时一律不传**。**「高清快档 / 高清二档 / 高清三档」算点名尺寸，要传对应 hd_fast_ / hd_2_ / hd_3_**；但光说「高清 / 清晰 / 画质好」不算，那只是形容词，照默认不传。\n分不清就照 Available Skills 的那行摘要选，选错了用户会说；不确定细节时可以 load_skill 读那个渠道的主规范。"},
+            "skill": {"type": "string", "description": "渠道名。**不传就是默认渠道 " + T2I_DEFAULT_SKILL + "**（用户自定义的 Anima 渠道）。可选值见 Available Skills 的生图类（16 个动漫渠道 = 4 画风 × 4 尺寸档，另有 silver / silver-hd / jank / qwen_image_v1 / image_gen_v1 / krea2 / nffa / nai / nai_wide），各自画风/尺寸/场景/速度见那一行里。\n**只在用户点名画风 / 尺寸 / 渠道时才传，平时一律不传**。**「高清快档 / 高清二档 / 高清三档」算点名尺寸，要传对应 hd_fast_ / hd_2_ / hd_3_**；但光说「高清 / 清晰 / 画质好」不算，那只是形容词，照默认不传。\n分不清就照 Available Skills 那行摘要选，选错用户会说；细节可 load_skill 读该渠道主规范。"},
             "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传，每个渠道 2 个槽"},
             "source_image": {"type": "string", "description": "垫图 / 图生图：填 1 = 垫本轮出现的那张图（优先取对方引用的，其次他自己刚发的；两样都没有会报错）。\n**默认不传**。只有对方**明说要在这张图上改**（说出「图生图 / 垫图」这类机制名，通常还会点名 qwen）时才传。只说「把衣服换成jk」这类**改动内容**不算——那是照这张图**改提示词重新画一张新的**（不垫图）。引用一张图本身**永远不是**垫图要求：看看 / 点评 / 反推 / 照它画新的，都不传。\n传了就**必须配 `skill=qwen_image_v1`**（参考图编辑，只改那一句交代的地方、其余原样；慢，一张 1~2 分钟），prompt 只写**一句改动指令**。\nskill=nai 也支持垫图（云端）。动漫档（anima_* / hd_*）的重绘骨架还在，但**用法上已撤掉**，别再拿它当图生图渠道。本机渠道的重绘强度是定死的，传 denoise 也没用。"},
             "seed": {"type": "integer", "description": "生图种子，**只在对方点名要「用某个种子重画 / 换提示词再来一张」时才传**，平时一律不传（不传=随机）。范围 0 ~ 4294967295 的整数，填错格式/超界会直接报错，别猜。种子会跟着编号印在图那行 caption 上（`编号 · 分辨率 · 渠道 · seed 数字`），对方引用那条消息时能一起带回来。⚠️ 同一个种子只有配**同样的提示词 + 同样的渠道 + 同样的 lora**才画得出同一张图（改提示词重画=构图大体在、细节变）；动漫渠道是两段采样、两段共用这一个种子，所以只有这一个数。**只有本机渠道认**（anima_* / hd_* / qwen_image_v1 / image_gen_v1 / krea2 / nffa），skill=nai 传了会被拒；image_gen_v1 一次出多张时第 k 张 = 这个数 + k - 1"}
