@@ -312,11 +312,12 @@ class I2IWorkflowShapeTest(unittest.TestCase):
         return wf
 
     def test_the_whitelist_is_twelve_redraw_plus_qwen(self):
-        """白名单 = 12 个重绘档 + qwen 一个编辑档，一个不多一个不少。"""
+        """白名单 = 12 个重绘档 + qwen 一个编辑档 + qwen-hd 超清编辑档。"""
         self.assertEqual(len(gi._I2I_ANIMA_SKILLS), 12)
-        self.assertEqual(gi._I2I_SKILLS, gi._I2I_ANIMA_SKILLS + ("qwen_image_v1",))
+        self.assertEqual(gi._I2I_SKILLS,
+                         gi._I2I_ANIMA_SKILLS + ("qwen_image_v1", "qwen-hd"))
         for skill in ("anima_clear", "anima_curvy", "hd_fast_clear",
-                      "hd_2_curvy", "qwen_image_v1"):
+                      "hd_2_curvy", "qwen_image_v1", "qwen-hd"):
             self.assertIn(skill, gi._I2I_SKILLS)
         for skill in ("hd_3_clear", "hd_3_curvy", "krea2", "image_gen_v1", "nffa"):
             self.assertNotIn(skill, gi._I2I_SKILLS)
@@ -360,32 +361,37 @@ class I2IWorkflowShapeTest(unittest.TestCase):
                                  "没有唯一的一段 KSampler 吃 VAEEncode 的 latent")
 
     def test_qwen_edit_skeleton_is_a_different_shape(self):
-        """qwen 的骨架**不是**「LoadImage → VAEEncode」那一套，也不吃 `__DENOISE__`。
+        """qwen / qwen-hd 的骨架**不是**「LoadImage → VAEEncode」那一套，也不吃 `__DENOISE__`。
 
         参考图进的是 `TextEncodeQwenImage21`（视觉 token + reference_latents），
         latent 由那个节点的第三个输出给出——**空** latent。所以 denoise 必须写死
         1：给 0.6 等于在全零 latent 上半重绘，参考图的位置信息直接被搅乱。
         骨架里要是留着 `__DENOISE__`，运行时会把重绘档那个 0.6 灌进来。
+        qwen-hd 只是把末尾放大换成 4x，骨架形状跟 qwen_image_v1 完全一致。
         """
-        wf = self._load("qwen_image_v1")
-        kinds = [n["class_type"] for n in wf.values()]
-        self.assertEqual(kinds.count("LoadImage"), 1)
-        self.assertEqual(kinds.count("TextEncodeQwenImage21"), 1)
-        self.assertNotIn("VAEEncode", kinds)
-        self.assertNotIn("EmptyLatentImage", kinds)
-        self.assertNotIn("EmptySD3LatentImage", kinds)
-        self.assertEqual(kinds.count("KSampler"), 1)
-        self.assertNotIn("__DENOISE__", json.dumps(wf))
-        load = [nid for nid, n in wf.items() if n["class_type"] == "LoadImage"][0]
-        self.assertEqual(wf[load]["inputs"]["image"], "__SOURCE_IMAGE__")
-        enc = [nid for nid, n in wf.items()
-               if n["class_type"] == "TextEncodeQwenImage21"][0]
-        self.assertEqual(wf[enc]["inputs"]["images.image_1"], [load, 0])
-        ks = [n for n in wf.values() if n["class_type"] == "KSampler"][0]["inputs"]
-        self.assertEqual(ks["latent_image"], [enc, 2])
-        self.assertEqual(ks["positive"], [enc, 0])
-        self.assertEqual(ks["negative"], [enc, 1])
-        self.assertEqual(ks["denoise"], 1)
+        for skill in ("qwen_image_v1", "qwen-hd"):
+            with self.subTest(skill=skill):
+                wf = self._load(skill)
+                kinds = [n["class_type"] for n in wf.values()]
+                self.assertEqual(kinds.count("LoadImage"), 1)
+                self.assertEqual(kinds.count("TextEncodeQwenImage21"), 1)
+                self.assertNotIn("VAEEncode", kinds)
+                self.assertNotIn("EmptyLatentImage", kinds)
+                self.assertNotIn("EmptySD3LatentImage", kinds)
+                self.assertEqual(kinds.count("KSampler"), 1)
+                self.assertNotIn("__DENOISE__", json.dumps(wf))
+                load = [nid for nid, n in wf.items()
+                        if n["class_type"] == "LoadImage"][0]
+                self.assertEqual(wf[load]["inputs"]["image"], "__SOURCE_IMAGE__")
+                enc = [nid for nid, n in wf.items()
+                       if n["class_type"] == "TextEncodeQwenImage21"][0]
+                self.assertEqual(wf[enc]["inputs"]["images.image_1"], [load, 0])
+                ks = [n for n in wf.values()
+                      if n["class_type"] == "KSampler"][0]["inputs"]
+                self.assertEqual(ks["latent_image"], [enc, 2])
+                self.assertEqual(ks["positive"], [enc, 0])
+                self.assertEqual(ks["negative"], [enc, 1])
+                self.assertEqual(ks["denoise"], 1)
 
     def test_hd_3_has_no_i2i_workflow_at_all(self):
         """三档不给图生图：白名单排除了它，连骨架都不该存在（免得两处各说各话）。"""

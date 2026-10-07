@@ -214,13 +214,14 @@ _TOOL_HINTS = [
      "照它**反推提示词、画一张新的**。听着像要改又没说明白，就先问一句"
      "「是要改这张，还是照它画一张新的？」"),
     (("generate_image",),
-     "- 图生图**只有一条路：`skill=qwen_image_v1` + `source_image=1`**，"
+     "- 图生图**只有 qwen 系两条路：`skill=qwen_image_v1`（2x，默认）/ "
+     "`skill=qwen-hd`（4x 超清，明说「qwen 超清」才用）+ `source_image=1`**，"
      "prompt **只写一句改动指令**（例：`change her coat to red, keep the pose, "
      "face and background exactly the same`），**不要把整张图重新描述一遍**，"
      "一次只改一处最稳。它是参考图编辑——那一处改了、其余原样，这是动漫档做不到的精度。"
      "**慢：一张 1~2 分钟**（动漫档 20~30 秒），所以只在对方点名时才走。"
      "**动漫档（anima_* / hd_*）的重绘已从用法里撤掉**（2026-10-06 用户拍板："
-     "图生图只要 qwen 一条途径），别再拿它当图生图渠道、也别跟对方提这条路。"
+     "图生图只要 qwen 系途径，qwen_image_v1 或 qwen-hd），别再拿它当图生图渠道、也别跟对方提这条路。"
      "skill=nai / nai_wide（NovelAI 云端，仅限已开通 NAI 的会话）也支持垫图"),
     (("generate_image",),
      "- NAI 在云端出图，有**竖横两个渠道**：`nai` 竖版 832×1216（默认）、"

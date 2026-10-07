@@ -66,10 +66,12 @@ log = logging.getLogger("generate_image")
 # **这 12 份骨架还在磁盘上**（屏蔽不挪文件），但对应的渠道不可点名了。
 # ② qwen 的编辑式改图：骨架是**手写**的 `skills/qwen_image_v1/workflow_i2i.json`
 # （跟上面那个生成脚本无关，机制完全不同），denoise 定死在文件里 = 1。
+# 2026-10-07 加 `qwen-hd`：同一份手改骨架，只把末尾放大换成 4x（node 60 →
+# `4xUltrasharpV10`），所以「qwen 超清 + 垫图改图」也走得通。
 _I2I_TIERS = ("anima", "hd_fast", "hd_2")   # hd_3 不给图生图
 _I2I_STYLES = ("clear", "soft", "gloss", "curvy")
 _I2I_ANIMA_SKILLS = tuple(t + "_" + s for t in _I2I_TIERS for s in _I2I_STYLES)
-_I2I_SKILLS = _I2I_ANIMA_SKILLS + ("qwen_image_v1",)
+_I2I_SKILLS = _I2I_ANIMA_SKILLS + ("qwen_image_v1", "qwen-hd")
 
 # ① 一段的重绘强度。**不给模型调**——它一调就会以为「调低 = 只微调」，
 # 而对方要的是「照这张重画一张」。0.6 是实测既保得住构图、又出得来细节的位置。
@@ -1067,11 +1069,12 @@ tool = {
                   "- **qwen_image_v1**（通义，1024×1536，**慢：一张 40 秒~1 分钟**）：要**画面里写出文字（尤其中文）**、"
                   "要**写实照片感**（真人摄影 / 商品图 / 场景照）、或提示词是**一长段自然语言描述**时才用。"
                   "它的 prompt 写**完整主谓宾的自然语言句子**，不写标签堆、不写负面词、不传 lora；只出单张，要多个变体分多次调用。"
-                  "它也是**图生图唯一的那条路**（见下面【图生图只有一条路：qwen】）\n"
+                  "它（和它的 4x 版 qwen-hd）是**图生图的两条路**（见下面【图生图只有 qwen 系】）\n"
                   "- **qwen-hd**（qwen 的 4x 超清版，1024×1536 → **4096×6144**）："
                   "**只在用户明说「qwen-hd」或「qwen 超清」时传**，否则一律用 qwen。"
                   "比 qwen 更慢、单张更大（png ≈23MB），别主动推荐、别在群里连刷。"
-                  "**只做文生图**（图生图/改图仍走 qwen_image_v1，那条还是 2x）\n"
+                  "文生图/图生图**都支持**（它的图生图骨架同样只换了放大，出图一样是 4x）；"
+                  "说「qwen 超清 图生图」= 它 + `source_image=1`\n"
                   "- **krea2**（米山舞 retroanime，832×1216 直出）：只在用户点名 krea2 / 米山舞时传。"
                   "标签式英文，风格前缀工作流自动拼，**不要自己再写一遍**\n"
                   "- **nffa**（Illustrious 系，1024×1536，**慢：一张 40~75 秒**）：只在用户点名 nffa 时传。"
@@ -1088,7 +1091,7 @@ tool = {
                   "出 4928×7360、一张约 28MB）**只在用户明说「silver-hd」或「silver 超清」时传**。"
                   "三条都是**文生图专用、没有图生图骨架**；"
                   "prompt 照常写标签式英文、不传 lora 就用工作流里那套现成的；"
-                  "对方要垫图/改图别选它们（图生图只走 qwen_image_v1）。\n"
+                  "对方要垫图/改图别选它们（图生图只走 qwen_image_v1 / qwen-hd）。\n"
                   "⚠️ `silver` 还常见作**发色词**（silver hair / 银发）——用户说「银发」"
                   "是在描述画面，不是点名渠道，别因为句子里有 silver 就传 skill；"
                   "但**默认本来就走 silver**，「银发的 X」直接写进 prompt、不传 skill 就行。\n\n"
@@ -1124,9 +1127,11 @@ tool = {
                   "只说「把衣服换成jk」「换个姿势」这类**改动内容**、没说要动这张图的，按"
                   "**改提示词重新画一张**处理（t2i，不垫图）。\n"
                   "**分不清是要改这张还是画一张新的就问一句**，别自己猜。\n\n"
-                  "【图生图只有一条路：qwen_image_v1】`source_image` 填 1 = 垫**本轮出现的那张图**"
+                  "【图生图只有 qwen 系两条：qwen_image_v1（2x）/ qwen-hd（4x 超清）】"
+                  "`source_image` 填 1 = 垫**本轮出现的那张图**"
                   "（优先取对方引用的；他没引用就取他自己刚发的；两样都没有就垫不了，让他把图发出来再 @ 你一次）。\n"
-                  "- 传法：`skill=qwen_image_v1` + `source_image=1`，prompt 只写**一句改动指令**"
+                  "- 传法：`skill=qwen_image_v1` + `source_image=1`（默认），或明说「qwen 超清 / qwen超清 / qwen-hd」时"
+                  "换成 `skill=qwen-hd`；prompt 只写**一句改动指令**"
                   "（祈使句：改哪里→改成什么，末尾补 keep everything else exactly the same），"
                   "**不要把整张图重新描述一遍**（那等于给模型一堆「这里也可以改」的许可）。"
                   "一次只交代一处改动最稳，要改三件事就分三次调用。\n"

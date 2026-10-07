@@ -354,9 +354,9 @@ class ToolDescriptionTest(unittest.TestCase):
         from app.tools.normal.generate_image import (
             _I2I_ANIMA_SKILLS, _I2I_SKILLS)
         self.assertEqual(len(_I2I_ANIMA_SKILLS), 12)
-        self.assertEqual(len(_I2I_SKILLS), 13)
+        self.assertEqual(len(_I2I_SKILLS), 14)
         for s in ("anima_clear", "anima_curvy", "hd_fast_clear", "hd_2_curvy",
-                  "qwen_image_v1"):
+                  "qwen_image_v1", "qwen-hd"):
             self.assertIn(s, _I2I_SKILLS)
         for s in ("hd_3_clear", "hd_3_curvy", "krea2", "image_gen_v1", "nffa"):
             self.assertNotIn(s, _I2I_SKILLS)
@@ -406,7 +406,7 @@ class ToolDescriptionTest(unittest.TestCase):
         """
         from app.tools.normal.generate_image import tool
         desc = tool["description"]
-        self.assertIn("图生图只有一条路：qwen_image_v1", desc)
+        self.assertIn("图生图只有 qwen 系两条", desc)
         for key in ("一句改动指令", "不要把整张图重新描述",
                     "重绘已经从用法里撤掉"):
             self.assertIn(key, desc, "描述里缺了「%s」" % key)
