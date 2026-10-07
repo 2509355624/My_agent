@@ -141,6 +141,27 @@ class ReceiptNoteTest(_SubmitHarness):
         text = self._note(None)
         self.assertIn("silver-hd", text)
 
+    def test_default_note_mentions_landscape(self):
+        """回执给横屏一行曝光（2026-10-07 用户拍板）。
+
+        横屏的判据是**本轮原话**里的词（`image_jobs.turn_is_landscape` 认
+        「横屏 / 横版 / 横图」），不写出来用户根本不知道有这功能。
+        只写「横屏」一个词——另外两个是代码顺手认的同义词，回执每张图都跟着
+        发、能短就短（用户 10-07 选的「只写横屏」）。
+        """
+        text = self._note(None)
+        self.assertIn("要横屏", text)
+        self.assertIn("silver 横屏", text)
+
+    def test_default_note_stays_five_lines(self):
+        """回执跟着**每一张图**发，行数是最直接的成本 → 钉住。
+
+        现 7 行 = 状态行（任务已提交…）+ 渠道行（当前渠道：…）+ 附言 5 行
+        （想换渠道就发… / 渠道：… / 要 4x 超清… / 要横屏… / 更多玩法…）。
+        以后想再加一行，先想清楚值不值。
+        """
+        self.assertEqual(len(self._note(None).splitlines()), 7)
+
     def test_default_note_lists_every_nameable_channel(self):
         """2026-10-07 用户拍板「把我全部的可用渠道都加上去」——能点名的 11 个
         都要在回执里出现（原「常用」那行只列 5 个，sd / krea2 / nffa / miao /
