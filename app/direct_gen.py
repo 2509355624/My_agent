@@ -207,11 +207,26 @@ _STYLE_ALIASES = {"clear": "clear", "curvy": "curvy", "gloss": "gloss",
 # 连词，不挡的话 `anime_nffa_1`、`artist:okonogi_nai` 里的词会被当成点名词，
 # 从中间把提示词剪断（2026-10-05 实测）。
 _FIXED_CHAN_MAP = {"sd": "image_gen_v1", "krea2": "krea2",
-                   "qwen": "qwen_image_v1", "nffa": "nffa", "nai": "nai",
+                   "qwen": "qwen_image_v1", "qwen-hd": "qwen-hd",
+                   "nffa": "nffa", "nai": "nai",
                    "cunny": "cunny", "miao": "miao"}
 _FIXED_CHAN_RE = re.compile(
-    r"(?<![0-9A-Za-z_])(sd|krea2|qwen|nffa|nai|cunny|miao)(?![0-9A-Za-z_])",
+    r"(?<![0-9A-Za-z_])(sd|krea2|qwen-hd|qwen|nffa|nai|cunny|miao)"
+    r"(?![0-9A-Za-z_])",
     re.I)
+
+
+def _fixed_chan(token, text):
+    """固定渠道词 → 渠道 id（与「qwen」→ qwen_image_v1 同一类「认渠道名」逻辑）。
+
+    「qwen 超清 / qwen超清」（用户点名 qwen 的 4x 超清版）统一锁定 qwen-hd；
+    这是用户明说的渠道名，必须认，不是替 AI 拍板意图（prompt / 垫图与否仍由
+    AI 决定）。qwen-hd 也作为字面渠道名直接命中。
+    """
+    token = token.lower()
+    if token == "qwen" and "超清" in text:
+        return "qwen-hd"
+    return _FIXED_CHAN_MAP.get(token, token)
 # 中文正则在画风判定里当「命令区边界」用，见 _parse_channel。
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 # 开头点名的渠道词前面可能残留的前导噪音（@ 剥完的空格、打错的「：，/」）。
@@ -401,7 +416,7 @@ def _parse_channel(text):
     lead = _LEAD_SEP_RE.sub("", text, count=1)
     hm = _FIXED_CHAN_RE.match(lead)
     if hm:
-        skill = _FIXED_CHAN_MAP[hm.group(0).lower()]
+        skill = _fixed_chan(hm.group(0), text)
         desc = _DESC_TAIL_RE.sub("", lead[hm.end():].strip())
         desc = re.sub(r"^[\s,，、:：]+|[\s，、]+$", "", desc)
         return skill, desc
@@ -424,7 +439,7 @@ def _parse_channel(text):
             return None, text
         _pos, kind, m = min(hits, key=lambda h: h[0])
         if kind == "fixed":
-            skill = _FIXED_CHAN_MAP[m.group(0).lower()]
+            skill = _fixed_chan(m.group(0), text)
             desc = text[:m.start()] + " " + text[m.end():]
             desc = _DESC_TAIL_RE.sub("", desc.strip())
             desc = re.sub(r"^[\s,，、:：\-]+|[\s,，、:：\-]+$", "", desc)
@@ -473,7 +488,7 @@ def _named_channel(text):
     first_w = text.find("::")
     if not m or (first_w >= 0 and m.start() > first_w):
         return None, text
-    skill = _FIXED_CHAN_MAP[m.group(0).lower()]
+    skill = _fixed_chan(m.group(0), text)
     # 只抠掉那一个词本身，**其余字节一律不动**（换行、连续空格、结尾逗号都
     # 原样保留——用户要的是「一个字不改」，替他压段落或抹掉标点就是改）。
     # 只清开头那个因抠词留下的孤立分隔符，且不碰 `-`：`-1::tag::` 的负号
