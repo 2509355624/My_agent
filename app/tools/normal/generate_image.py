@@ -357,9 +357,12 @@ _RECEIPT_RUNNING = "任务已提交，正在画了。"
 _RECEIPT_CHANNEL = "当前渠道：%s"
 # 附言的内置默认（管理页 `receipt_note` 一整段可改掉，见 agents.receipt_note）。
 # 刻意短：这是刷屏的系统回执，不是使用手册——全部渠道另有 /更多渠道。
+# 2026-10-07 用户拍板加一行 4x 超清：silver-hd 是点名渠道、不在「常用」里，
+# 但光靠 /更多渠道 没人翻，回执每张图都刷一遍才是它的曝光位。只加一行，别扩。
 _RECEIPT_NOTE_DEFAULT = (
     "想换渠道就发「渠道名 + 你的需求」（例：jank 银发初音未来）。\n"
     "常用：silver（默认）/ 快档 / 二档 / 三档 / qwen / nai / jank\n"
+    "要 4x 超清：发「silver-hd + 你的需求」（也认「silver超清」）\n"
     "全部渠道：@%s /更多渠道"
 )
 

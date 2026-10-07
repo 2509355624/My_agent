@@ -276,6 +276,11 @@ class MenuAndGateTest(unittest.TestCase):
         # 短菜单里要指路到详细版
         self.assertIn("使用指南", direct_gen.MENU_TEXT)
 
+    def test_menu_mentions_the_4x_channel(self):
+        """短菜单给 silver-hd 一行曝光（2026-10-07 用户拍板）——短菜单本身
+        不列渠道，但「4x 超清」这条得让用户看得见。"""
+        self.assertIn("silver-hd", direct_gen.MENU_TEXT)
+
     def test_attribution_prefix_is_stripped_before_menu_match(self):
         self.assertEqual(
             direct_gen.decide("胡桃桃：菜单", [], False),

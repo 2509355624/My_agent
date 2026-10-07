@@ -135,6 +135,12 @@ class ReceiptNoteTest(_SubmitHarness):
         self.assertIn("渠道名 + 你的需求", text)
         self.assertIn("更多渠道", text)
 
+    def test_default_note_mentions_the_4x_channel(self):
+        """回执附言给 silver-hd 一行曝光（2026-10-07 用户拍板）——它是点名渠道，
+        不在「常用」里，但回执每张图都刷一遍才是它的曝光位。"""
+        text = self._note(None)
+        self.assertIn("silver-hd", text)
+
     def test_empty_string_switches_the_note_off(self):
         """清空 = 「这段不要了」，只留状态行和渠道行。"""
         text = self._note("")
