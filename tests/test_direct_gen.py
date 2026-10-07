@@ -1147,9 +1147,11 @@ class MasterPromptTest(unittest.TestCase):
     - 「不用动手就回 {"reply": ...}」——AI 得能聊天，不是只会画图
     - 渠道清单（渠道名是我们自己起的，模型猜不出来的本地事实，必须给）
     - 中文翻英文 / 画师串原样保留 / 新请求不许抄上一轮
-    以及**钉死它别再长回去**：模板本身不许超过 1700 字。
+    以及**钉死它别再长回去**：模板本身不许超过 1800 字。
     （2026-10-07 从 1600 提到 1700：新增 `silver-hd` 渠道必须在渠道清单里
     占一行——这是模型猜不出来的本地事实，属于合法增长，不是「给渠道写专属规则」。）
+    （2026-10-07 再提到 1800：新增【别反问】段——用户明确下单时不许反问确认，
+    这是行为规则、不是给某个渠道写专属规则，同样是合法增长。）
     """
 
     def _rendered(self, text="t", chan_hint="", recent="", search=""):
@@ -1168,7 +1170,7 @@ class MasterPromptTest(unittest.TestCase):
         self.assertIn("generate_image", t)
         self.assertIn("recall_image", t)
         # 模板本身要短：一句话一个工具，不给每个渠道写专属规则。
-        self.assertLess(len(t), 1700, "模板超长了，工具列表应该一句话一个")
+        self.assertLess(len(t), 1800, "模板超长了，工具列表应该一句话一个")
 
     def test_custom_channels_are_listed_for_the_ai(self):
         """自定义渠道（silver / silver-hd / jank）是本地事实，模型猜不出来，
@@ -1180,6 +1182,24 @@ class MasterPromptTest(unittest.TestCase):
                 self.assertIn(ch, t)
         # silver-hd 只能点名触发，模板要给出触发词与「否则走 silver」的口径
         self.assertIn("silver 超清", t)
+
+    def test_template_forbids_asking_back(self):
+        """模板里必须有一条「明确下单就直接出图、不许反问确认」的硬规则。
+
+        2026-10-07 用户拍板：私聊 2509355624 实录 5 轮「我都说了生成，他还
+        反问」（引用反推回复 +「silver 生成」→ 回「三档？还是默认最小档？
+        需要我用它直接生成一张吗？」）；全量扫 sessions/*.jsonl，680 条 LLM
+        回复里 137 条带问句，收紧到「原话有 生成/跑/画 却只回问句」约 10 条、
+        跨 6 个会话。病根是模板允许 `{"reply": …}` 却没关门——钉住这句，
+        别让它被删。
+        """
+        t = self._rendered()
+        self.assertIn("【别反问】", t)
+        self.assertIn("直接出图", t)
+        # 三个最常被反问的句子要明写在禁令里，模型才知道那是「不许问的」
+        for bad in ("要不要画", "哪个档位", "这样可以吗"):
+            with self.subTest(bad=bad):
+                self.assertIn(bad, t)
 
     def test_channel_ids_are_spelled_out_in_words_the_ai_can_map(self):
         """渠道 id 是我们自己起的，用户说的是中文口语，模板必须把两边对上。
