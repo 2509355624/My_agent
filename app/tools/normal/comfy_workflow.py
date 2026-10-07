@@ -278,7 +278,7 @@ def _save(workflow, data):
 
 # ─── 工具 1：查看 ─────────────────────────────────────
 
-def get_workflow(skill="anima_clear"):
+def get_workflow(skill="hd_3_clear"):
     data = _load(skill)
     summary = _build_summary(data["workflow"])
     res_txt = ""
@@ -411,7 +411,7 @@ def _rebuild_lora(workflow, specs):
     return new_ids
 
 
-def update_workflow(skill="anima_clear", ops=None):
+def update_workflow(skill="hd_3_clear", ops=None):
     data = _load(skill)
     wf = data["workflow"]
     msgs = []
@@ -500,7 +500,7 @@ tool = {
     "parameters": {
         "type": "object",
         "properties": {
-            "skill": {"type": "string", "description": "skill 名。默认 anima_clear（16 个「画风 × 尺寸档」渠道之一；**它不是默认生图渠道**，默认生图渠道是 silver）。本工具按**两段采样**结构写：2 个 KSampler（一段建构 + 二段精修，中间夹 LatentUpscaleBy），LoRA 只挂第一段、用 LoraLoaderModelOnly。要改别的渠道（anima_soft / anima_gloss / anima_curvy / hd_fast_clear / hd_2_clear / hd_3_clear，或带 _<画风> 后缀的其它档）先传 skill 名 get_workflow 看清结构再动手——它们节点编号不同，除 anima_clear（只有一块底模）外其余都是两块底模。"}
+            "skill": {"type": "string", "description": "skill 名。默认 hd_3_clear（动漫族 2026-10-07 起**只剩这一档**：`hd_3_<画风>`，4 个画风 = clear/soft/gloss/curvy；**它不是默认生图渠道**，默认生图渠道是 silver）。本工具按**两段采样**结构写：2 个 KSampler（一段建构 + 二段精修，中间夹 LatentUpscaleBy），LoRA 只挂第一段、用 LoraLoaderModelOnly，末尾另有一对像素放大节点（40 / 41）。要改别的画风（hd_3_soft / hd_3_gloss / hd_3_curvy）先传 skill 名 get_workflow 看清结构再动手——它们节点编号一致、只是底模不同。"}
         },
         "required": []
     }
@@ -520,7 +520,7 @@ tool_update = {
     "parameters": {
         "type": "object",
         "properties": {
-            "skill": {"type": "string", "description": "skill 名。默认 anima_clear（16 个「画风 × 尺寸档」渠道之一；**它不是默认生图渠道**，默认生图渠道是 silver）。本工具按**两段采样**结构写：2 个 KSampler（一段建构 + 二段精修，中间夹 LatentUpscaleBy），LoRA 只挂第一段、用 LoraLoaderModelOnly。要改别的渠道（anima_soft / anima_gloss / anima_curvy / hd_fast_clear / hd_2_clear / hd_3_clear，或带 _<画风> 后缀的其它档）先传 skill 名 get_workflow 看清结构再动手——它们节点编号不同，除 anima_clear（只有一块底模）外其余都是两块底模。"},
+            "skill": {"type": "string", "description": "skill 名。默认 hd_3_clear（动漫族 2026-10-07 起**只剩这一档**：`hd_3_<画风>`，4 个画风 = clear/soft/gloss/curvy；**它不是默认生图渠道**，默认生图渠道是 silver）。本工具按**两段采样**结构写：2 个 KSampler（一段建构 + 二段精修，中间夹 LatentUpscaleBy），LoRA 只挂第一段、用 LoraLoaderModelOnly，末尾另有一对像素放大节点（40 / 41）。要改别的画风（hd_3_soft / hd_3_gloss / hd_3_curvy）先传 skill 名 get_workflow 看清结构再动手——它们节点编号一致、只是底模不同。"},
             "ops": {
                 "type": "array",
                 "description": "要执行的操作列表（每条可不同 op）",

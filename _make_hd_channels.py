@@ -1,14 +1,20 @@
-"""把 3 个尺寸档 × 4 个画风展开成 12 个生图渠道。
+"""把「三档 × 4 个画风」展开成 4 个生图渠道。
 
-## 为什么是「组合」而不是 12 份手工工作流
+## 为什么是「组合」而不是 4 份手工工作流
 
-尺寸档（hd_fast / hd_2 / hd_3）之间只差三件事：放大倍率、一段采样器、二段
-步数；画风（clear / soft / gloss / curvy）只差**两段各用哪块底模**。两者正交，
-所以 12 份工作流 = 3 份尺寸骨架 × 4 组底模名字，没必要手抄。
+画风（clear / soft / gloss / curvy）之间只差**两段各用哪块底模**；尺寸骨架
+是同一份（三档：1024×1536 画布 → 1.5× latent → 1536×2304 → 末尾 2x 像素放大
+→ 3072×4608）。两者正交，所以 4 份工作流 = 1 份骨架 × 4 组底模名字，没必要手抄。
 
-**唯一改的就是 `UNETLoader(5)`（一段）和 `UNETLoader(20)`（二段）的
-`unet_name`** —— 采样器、步数、CFG、放大倍率、画布、提示词模板全部照抄档位
-骨架。这样以后用户调某个档位的旋钮，重跑本脚本就能同步到 4 个画风上。
+**改的只有三处**：`UNETLoader(5)`（一段）和 `UNETLoader(20)`（二段）的
+`unet_name`，加上本脚本统一注入的一对放大节点（`40` / `41`）。
+
+> 历史：本脚本原先把 3 个尺寸档（hd_fast / hd_2 / hd_3）× 4 画风展开成 12 个
+> 渠道。2026-10-07 用户拍板**取消快档 / 最小档 / 二档，只留三档**，并给三档末尾
+> 加 2x 像素放大（原话：「只留一个三档，到时候就是你说 anima，就跑三档加上 x2
+> 像素」）。裸骨架目录（`skills/hd_3`）当时已不在磁盘上，所以现在拿**已有的
+> `hd_3_clear`** 当骨架——它本身就是三档骨架 + clear 底模，而 5 / 20 两处每轮
+> 都会重写，拿它当骨架与拿裸骨架等价。
 
 ## 用法
 
@@ -21,7 +27,6 @@
 import copy
 import json
 import os
-import shutil
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -31,9 +36,15 @@ REALSKIN = "miaomiaoRealskin_anima13.safetensors"
 REALITY = "miaomiaoAnimeReality_ani11_3087842.safetensors"
 HAREM = "miaomiaoHarem_anima16.safetensors"
 
+# ── 末尾的 2x 像素放大（2026-10-07 加）──────────────────
+# 与 silver / silver-hd 同一族的放大模型，只是倍率取 2x。纯像素放大：
+# 不重采样、不加步数，接在 VAEDecode 之后、SaveImage 之前。
+UPSCALE_MODEL = "2x_Ani4Kv2_G6i2_Compact_107500.pth"
+UPSCALE_LOAD_NODE = "40"
+UPSCALE_APPLY_NODE = "41"
+
 # ── 画风 = 底模组合（一段 → 二段）────────────────────────
-# 组合照抄 4 个常规渠道（anima_clear / soft / gloss / curvy），
-# 那四个的画风就是这套组合跑出来的实测结果。
+# 组合照抄取消前 4 个常规渠道（anima_clear / soft / gloss / curvy）的实测结果。
 STYLES = [
     ("clear", "清透素净", REALSKIN, REALSKIN,
      "最柔和均匀、光最平、哑光、素净、对比最低",
@@ -49,13 +60,10 @@ STYLES = [
      "丰满 / 大胸 / 身材好 / 光影强 / 氛围感"),
 ]
 
-# ── 尺寸档：骨架取自现有哪一个渠道 + 参数实况（写进 skill.md 用）──
+# ── 尺寸：只剩三档（2026-10-07 用户拍板）──────────────────
+# (tier_key, 中文名, 骨架渠道, latent 放大, 最终输出, 一段采样, 一段步, 二段采样, 二段步)
 TIERS = [
-    ("fast", "高清快档", "hd_fast", "1×（不放大）", "1024×1536",
-     "er_sde", 10, "euler", 5),
-    ("2", "高清二档", "hd_2", "1.3×", "1328×2000",
-     "dpmpp_2m", 10, "euler", 5),
-    ("3", "高清三档", "hd_3", "1.5×", "1536×2304",
+    ("3", "高清三档", "hd_3_clear", "1.5×", "3072×4608",
      "er_sde", 10, "euler", 10),
 ]
 
@@ -74,6 +82,51 @@ def _dump(path, wf):
         f.write(txt + "\n")
 
 
+def _add_2x_upscale(wf):
+    """在 VAEDecode 之后、SaveImage 之前插一对像素放大节点。
+
+    节点号写死 40 / 41（跟 silver / silver-hd 同一套编号，方便对照）。
+
+    **必须幂等**：本脚本的骨架 `src` 就是某个 `hd_3_*` 渠道，而它自己已经是
+    注入过的产物——重跑时 40 / 41 一定已经在里面。这时只把连线 / 模型名对齐，
+    不重插（重插会撞号）。只有**号被别的节点占了**才报错，那是骨架换了。
+    """
+    saves = [k for k, v in wf.items() if v.get("class_type") == "SaveImage"]
+    if len(saves) != 1:
+        raise SystemExit("期望恰好 1 个 SaveImage，实际 %d 个" % len(saves))
+    save = saves[0]
+
+    load = wf.get(UPSCALE_LOAD_NODE)
+    apply_node = wf.get(UPSCALE_APPLY_NODE)
+    if load is not None or apply_node is not None:
+        if not (load and load.get("class_type") == "UpscaleModelLoader"
+                and apply_node
+                and apply_node.get("class_type") == "ImageUpscaleWithModel"):
+            raise SystemExit(
+                "节点 %s/%s 被别的节点占了（%r / %r），骨架变了，先改号"
+                % (UPSCALE_LOAD_NODE, UPSCALE_APPLY_NODE,
+                   (load or {}).get("class_type"),
+                   (apply_node or {}).get("class_type")))
+        load["inputs"]["model_name"] = UPSCALE_MODEL
+        apply_node["inputs"]["upscale_model"] = [UPSCALE_LOAD_NODE, 0]
+        wf[save]["inputs"]["images"] = [UPSCALE_APPLY_NODE, 0]
+        return wf
+
+    src = wf[save]["inputs"]["images"]          # 形如 ["3", 0] = VAEDecode
+    if not isinstance(src, list) or len(src) != 2:
+        raise SystemExit("SaveImage.images 不是连线：%r" % (src,))
+    wf[UPSCALE_LOAD_NODE] = {
+        "class_type": "UpscaleModelLoader",
+        "inputs": {"model_name": UPSCALE_MODEL},
+    }
+    wf[UPSCALE_APPLY_NODE] = {
+        "class_type": "ImageUpscaleWithModel",
+        "inputs": {"upscale_model": [UPSCALE_LOAD_NODE, 0], "image": src},
+    }
+    wf[save]["inputs"]["images"] = [UPSCALE_APPLY_NODE, 0]
+    return wf
+
+
 SKILL_MD = """---
 kind: 生图
 ---
@@ -82,7 +135,9 @@ kind: 生图
 
 **{tier_cn}** 的尺寸，**{style_cn}** 的画风。
 
-尺寸档管「出多大」，画风管「底模怎么搭」——本渠道是两者的交叉。
+> 2026-10-07 用户拍板：anima 族的**快档 / 最小档 / 二档全取消，只剩三档**
+> （`hd_3_<画风>` 这 4 个）。用户说「**anima**」或「三档 / 高清」→ 走本渠道；
+> 没提画风就是 `hd_3_clear`。末尾带 2x 像素放大，输出 **3072×4608**。
 
 | | 本渠道 |
 |---|---|
@@ -90,15 +145,16 @@ kind: 生图
 | 二段底模 | `{s2}` |
 | 一段采样 | `{samp1}` · {st1} 步 · cfg 5 |
 | 二段采样 | `{samp2}` · {st2} 步 · cfg 5 · denoise 0.25 |
-| 放大 | `{scale}`（`nearest-exact`，夹在两段之间） |
-| 画布 → 输出 | 1024×1536 → **{out}** |
+| 放大（latent）| `{scale}`（`nearest-exact`，夹在两段之间） |
+| 放大（像素）| `{up_model}`（`ImageUpscaleWithModel`，接在末尾） |
+| 画布 → 输出 | 1024×1536 → 1536×2304 → **{out}** |
 
 ## 画风：{style_cn}
 
 {style_desc}。点词：{style_words}。
 
-**画风 = 两段底模的组合**，跟同画风的常规渠道（`anima_{style}`）是同一套组合，
-只是画布更大。四个画风：
+**画风 = 两段底模的组合**，跟取消前那 4 个常规渠道（`anima_clear` 等）是同一套
+组合，只是画布更大、末尾多一道像素放大。四个画风：
 
 | 画风 | 一段 → 二段 | 点词 |
 |---|---|---|
@@ -107,16 +163,16 @@ kind: 生图
 | `gloss` | AnimeReality → Realskin | 亮面 / 油光 / 冷色 |
 | `curvy` | Harem → AnimeReality | 丰满 / 大胸 / 光影强 |
 
-> 用户只说「{tier_short}」没说画风 → 走 `{tier}_clear`（默认画风，跟全局默认
-> `anima_clear` 口径一致）。
+> 用户只说「anima / {tier_short}」没说画风 → 走 `hd_3_clear`（默认画风）。
 
 ## 尺寸：{tier_cn}
 
-三档排序：`hd_fast_*`（1× → 1024×1536）< `hd_2_*`（1.3× → 1328×2000）
-< `hd_3_*`（1.5× → 1536×2304）。
+**这是 anima 族现在唯一的一档**——快档（`hd_fast_*`）、最小档（`anima_*`）、
+二档（`hd_2_*`）已于 2026-10-07 全部取消。用户还在说「二档 / 快档」时，
+**当没说过、照跑三档**（代码里旧档位词一律映射到 `hd_3_*`）。
 
-> ⚠️ 这 12 个渠道都比 4 个常规渠道**重**（画布 1024×1536 起步），显存吃紧时
-> 优先走常规渠道。本机 6GB 显存。
+> ⚠️ 它是最重的一档：画布 1024×1536 起步，末尾还要 2x 像素放大到 3072×4608。
+> 本机 6GB 显存，显存吃紧时会比较慢。
 
 ## 提示词
 
@@ -125,17 +181,22 @@ kind: 生图
 
 ## 怎么来的（别手改 workflow.json）
 
-本渠道由 `_make_hd_channels.py` 从**尺寸骨架** + **画风底模组合**生成：
+本渠道由 `_make_hd_channels.py` 从**尺寸骨架** + **画风底模组合**生成，
+末尾那对放大节点（`40` / `41`）也是脚本统一注入的：
 
 ```bat
-cd /d D:\\AI\\My_agent
+cd /d D:\\AI\\agent_my_test
 python _make_hd_channels.py --write
 ```
 
-骨架来自 ComfyUI 里那份 `{src}` 工作流（用
-`_sync_comfy_workflow.py "{src}" <渠道> --prefix "@kibro, "` 重导）。
-**改尺寸参数改骨架、改画风改底模，然后重跑脚本**——手改某一份会让 12 个渠道
-之间悄悄不一致。
+骨架取自现有渠道 `{src}`（用
+`_sync_comfy_workflow.py "<ComfyUI 里的工作流名>" {src} --prefix "@kibro, "` 重导）。
+**改尺寸参数改骨架、改画风改底模、改放大模型改脚本里的 `UPSCALE_MODEL`，
+然后重跑脚本**——手改某一份会让 4 个渠道之间悄悄不一致。
+
+改完跑 **`python -m unittest tests.test_image_channels`** 验收——渠道集合、
+两段拓扑、末尾放大、输出尺寸这些架构断言都在那个文件里钉着，
+`tests.test_image_channels` 也是「谁动了渠道必须同步改测试」的入口。
 """
 
 
@@ -148,9 +209,12 @@ def main(write):
             wf = copy.deepcopy(base)
             wf["5"]["inputs"]["unet_name"] = s1
             wf["20"]["inputs"]["unet_name"] = s2
-            print("%-16s  %s → %s" % (chan,
-                                      s1.replace(".safetensors", ""),
-                                      s2.replace(".safetensors", "")))
+            _add_2x_upscale(wf)
+            print("%-16s  %s → %s  +2x(%s)" % (
+                chan,
+                s1.replace(".safetensors", ""),
+                s2.replace(".safetensors", ""),
+                UPSCALE_MODEL))
             made.append(chan)
             if not write:
                 continue
@@ -162,7 +226,7 @@ def main(write):
                     chan=chan, tier_cn=tier_cn, style_cn=style_cn,
                     tier_short=tier_cn, tier=tkey, s1=s1, s2=s2,
                     samp1=samp1, st1=st1, samp2=samp2, st2=st2,
-                    scale=scale, out=out, style=style_cn,
+                    scale=scale, out=out, style=style_cn, up_model=UPSCALE_MODEL,
                     style_desc=style_desc, style_words=style_words,
                     src=src))
     print("\n共 %d 个渠道%s" % (len(made), "" if write else "（干跑，加 --write 才写）"))

@@ -74,14 +74,14 @@ class ChannelParseTest(unittest.TestCase):
         for text, skill, desc in (
                 ("三档 clear 初音未来", "hd_3_clear", "初音未来"),
                 ("三档 soft 初音未来", "hd_3_soft", "初音未来"),
-                ("二档 gloss 女骑士", "hd_2_gloss", "女骑士"),
-                ("快档 一只柴犬在草地上", "hd_fast_clear", "一只柴犬在草地上"),
+                ("二档 gloss 女骑士", "hd_3_gloss", "女骑士"),
+                ("快档 一只柴犬在草地上", "hd_3_clear", "一只柴犬在草地上"),
                 ("默认初音未来", "silver", "初音未来"),   # 无分隔符（2026-10-06 默认渠道 = silver）
                 ("默认，纳西妲", "silver", "纳西妲"),
-                ("默认 gloss 一个女孩", "anima_gloss", "一个女孩"),
-                ("gloss 一个女孩", "anima_gloss", "一个女孩"),  # 只打画风
+                ("默认 gloss 一个女孩", "hd_3_gloss", "一个女孩"),
+                ("gloss 一个女孩", "hd_3_gloss", "一个女孩"),  # 只打画风
                 ("三档 猫", "hd_3_clear", "猫"),               # 画风没打
-                ("一档curvy 初音未来", "hd_fast_curvy", "初音未来"),  # 连写
+                ("一档curvy 初音未来", "hd_3_curvy", "初音未来"),  # 连写
                 ("nai 1girl, masterpiece", "nai", "1girl, masterpiece")):
             with self.subTest(text=text):
                 got_skill, got_desc = _pc(text)
@@ -120,7 +120,7 @@ class ChannelParseTest(unittest.TestCase):
 
     def test_head_channel_word_beats_style_word(self):
         # 2026-10-05 私聊 2509355624 实录：「nai，真人 Cos 阿米娅…柔和…」被
-        # 「柔和」抢走画风 → anima_soft。用户原话「我写了 nai 了！前缀已经是
+        # 「柔和」抢走画风 → hd_3_soft。用户原话「我写了 nai 了！前缀已经是
         # nai 了！」：**开头的渠道词最高优先**，画风词只是画面内容留在描述里。
         for text, skill, desc in (
                 ("nai，真人 Cos 阿米娅，蓝白制服，柔和光线",
@@ -138,7 +138,7 @@ class ChannelParseTest(unittest.TestCase):
     def test_style_words_inside_the_body_are_not_channel_words(self):
         # 2026-10-05 实录（用户原话「英文提示词直接绕过 ai 结果导致一大堆的
         # 问题」）：画风词以前是 `_STYLE_RE.search(text)` **全文乱搜**，于是
-        # `1girl, soft lighting` 的 soft 被当画风词——渠道抢成 anima_soft，
+        # `1girl, soft lighting` 的 soft 被当画风词——渠道抢成 hd_3_soft，
         # 那个词还被从正文里删掉（→ `1girl,   lighting`）。现在只在开头
         # 命令区认画风词，正文原样返回。
         for text in ("1girl, soft lighting, blue hair, best quality",
@@ -158,7 +158,7 @@ class ChannelParseTest(unittest.TestCase):
     def test_reported_private_log_nai_case_locks_nai(self):
         # 2026-10-05 私聊 2831674699 实录（用户报「明明都已经说了 nai 和中文
         # 需求了，还是调用 anima」）：日志里第 28、34 行两条都是
-        # `nai，真人 Cos 阿米娅…柔和室内光…`，被「柔和」抢成 anima_soft。
+        # `nai，真人 Cos 阿米娅…柔和室内光…`，被「柔和」抢成 hd_3_soft。
         # 现在开头的 nai 锁死渠道，正文整段原样交给 AI。
         text = ("nai，真人 Cos 阿米娅，角色服装以蓝白色为主，保留阿米娅的标志性"
                 "配色与耳部装饰，人物站在书房落地镜前自拍，柔和室内光，低饱和"
@@ -212,9 +212,9 @@ class LeftmostChannelTest(unittest.TestCase):
         for text, skill in (
                 ("silver 三档", "hd_3_clear"),
                 ("三档 silver", "hd_3_clear"),
-                ("jank 二档", "hd_2_clear"),
-                ("二档 jank", "hd_2_clear"),
-                ("silver 快档", "hd_fast_clear"),
+                ("jank 二档", "hd_3_clear"),
+                ("二档 jank", "hd_3_clear"),
+                ("silver 快档", "hd_3_clear"),
                 ("silver 三档 gloss", "hd_3_gloss"),
                 ("silver 三档 女骑士", "hd_3_clear"),
                 # 固定渠道词排在档位词前面 → 固定词赢
@@ -327,9 +327,9 @@ class DirectEnqueueTest(unittest.TestCase):
 
     def test_translated_json_enqueues_directly(self):
         out, m_llm, m_gen = self._decide(
-            '{"skill": "hd_2_gloss", "prompt": "1girl, hat"}')
+            '{"skill": "hd_3_gloss", "prompt": "1girl, hat"}')
         self.assertEqual(out, "")
-        m_gen.assert_called_once_with("1girl, hat", skill="hd_2_gloss",
+        m_gen.assert_called_once_with("1girl, hat", skill="hd_3_gloss",
                                       _skip_confirm=True)
         self.assertEqual(m_llm.call_count, 1)
         self.assertEqual(m_llm.call_args[0][0][0]["role"], "user")
@@ -343,7 +343,7 @@ class DirectEnqueueTest(unittest.TestCase):
                  "content": "[直达生图] hd_3_clear：miku"},
                 {"role": "user", "content": "那只猫真可爱"}]
         out, m_llm, _ = self._decide(
-            '{"skill": "anima_clear", "prompt": "cat"}',
+            '{"skill": "hd_3_clear", "prompt": "cat"}',
             text="把它画出来", history=hist)
         self.assertEqual(out, "")
         sent = m_llm.call_args[0][0][0]["content"]
@@ -363,10 +363,10 @@ class DirectEnqueueTest(unittest.TestCase):
         # 群实录 2026-10-05 01:07：裸 @ + 描述没有动词，之前被回菜单，
         # 现在默认档直跑
         out, m_llm, m_gen = self._decide(
-            '{"skill": "anima_clear", "prompt": "hatsune miku"}',
+            '{"skill": "hd_3_clear", "prompt": "hatsune miku"}',
             text="初音未来，全身照，anime，正身平齐视角")
         self.assertEqual(out, "")
-        m_gen.assert_called_once_with("hatsune miku", skill="anima_clear",
+        m_gen.assert_called_once_with("hatsune miku", skill="hd_3_clear",
                                       _skip_confirm=True)
 
     def test_channel_lead_locks_skill_and_skips_channel_judgement(self):
@@ -389,10 +389,10 @@ class DirectEnqueueTest(unittest.TestCase):
         self.assertEqual(m_gen.call_args.kwargs["skill"], "hd_3_gloss")
 
     def test_head_channel_word_survives_translation(self):
-        # 全链路：开头点名 nai + 描述里有画风词 → 代码锁 nai，模型回 anima_soft
+        # 全链路：开头点名 nai + 描述里有画风词 → 代码锁 nai，模型回 hd_3_soft
         # 也不许顶掉（2026-10-05 私聊实录的那一条）。
         out, _m, m_gen = self._decide(
-            '{"skill": "anima_soft", "prompt": "1girl, cosplay, soft light"}',
+            '{"skill": "hd_3_soft", "prompt": "1girl, cosplay, soft light"}',
             text="nai，真人 Cos 阿米娅，柔和光线")
         self.assertEqual(out, "")
         self.assertEqual(m_gen.call_args.kwargs["skill"], "nai")
@@ -405,7 +405,7 @@ class DirectEnqueueTest(unittest.TestCase):
         m_gen.assert_not_called()
 
     def test_broken_json_not_taken_over(self):
-        for bad in ("我不是 JSON", '{"skill": "anima_clear"',
+        for bad in ("我不是 JSON", '{"skill": "hd_3_clear"',
                     '前置废话 {"skill": ok}'):
             with self.subTest(bad=bad):
                 out, m_llm, m_gen = self._decide(bad)
@@ -457,15 +457,15 @@ class QuotedPromptTest(unittest.TestCase):
         # 正文也不再抽英文段直通，锁定渠道过一次 AI。
         out, m_llm, m_gen = self._decide(
             "快档 gloss",
-            '{"skill": "hd_fast_gloss", "prompt": "1girl, solo, white dress"}',
+            '{"skill": "hd_3_gloss", "prompt": "1girl, solo, white dress"}',
             quoted="1girl, solo, white dress, standing in a garden")
         self.assertEqual(out, "")
         self.assertEqual(m_llm.call_count, 1)
         sent = m_llm.call_args[0][0][0]["content"]
-        self.assertIn("用户开头点名了渠道：**hd_fast_gloss**", sent)
+        self.assertIn("用户开头点名了渠道：**hd_3_gloss**", sent)
         self.assertIn("1girl, solo, white dress, standing in a garden", sent)
         m_gen.assert_called_once_with("1girl, solo, white dress",
-                                      skill="hd_fast_gloss",
+                                      skill="hd_3_gloss",
                                       _skip_confirm=True)
 
     def test_quoted_chinese_prompt_goes_through_translate(self):
@@ -577,7 +577,7 @@ class QuotedPromptTest(unittest.TestCase):
         for text in ("生图", "这个词是什么意思", "能不能给我改"):
             with self.subTest(text=text):
                 out, m_llm, m_gen = self._decide(
-                    text, '{"skill": "anima_clear", "prompt": "x"}',
+                    text, '{"skill": "hd_3_clear", "prompt": "x"}',
                     quoted="1girl, solo, red hair")
                 self.assertEqual(out, "")
                 self.assertEqual(m_llm.call_count, 1)
@@ -594,7 +594,7 @@ class QuoteImageIntentTest(unittest.TestCase):
     「帮我生成这个 / 跑这张」这类**当成普通意见交给 AI**，由模型判渠道+垫图。
     """
 
-    def _decide(self, text, llm_reply='{"skill": "anima_clear", "prompt": "x"}',
+    def _decide(self, text, llm_reply='{"skill": "hd_3_clear", "prompt": "x"}',
                 seen="1girl, solo, blue hair", quoted="", at_me=False,
                 lookup_row=None):
         with mock.patch.object(direct_gen.llm, "call_llm",
@@ -654,7 +654,7 @@ class QuoteImageIntentTest(unittest.TestCase):
     def test_i2i_with_hd3_is_not_silently_downgraded(self):
         """「三档 图生图」不再被代码悄悄降回动漫档。
 
-        旧的 `_redraw_capable` 会把渠道换成 `anima_clear`——出图风味全变，对方
+        旧的 `_redraw_capable` 会把渠道换成 `hd_3_clear`——出图风味全变，对方
         要的是 hd_3，拿到的却是 728×1024。现在渠道照模型/渠道词说的走，
         **能不能垫图由 generate_image 报错说话**（那里只剩能力判断）。
         """
@@ -736,7 +736,7 @@ class RevisionPipelineTest(unittest.TestCase):
     （没有账本可依）。逃逸口（「不是修改请求 → 输出 reverse」）常开。
     """
 
-    def _decide(self, text, seen='{"skill": "anima_clear", '
+    def _decide(self, text, seen='{"skill": "hd_3_clear", '
                                 '"prompt": "1girl, fixed"}',
                 quoted="", at_me=False, last_job=None, lookup_row=None,
                 describe_side_effect=None, llm_reply=None):
@@ -771,10 +771,10 @@ class RevisionPipelineTest(unittest.TestCase):
         # 别人的图 +「手改成插兜」→ 真识图一次，修正后重画（不垫图）。
         out, m_describe, m_llm, m_gen, _ = self._decide(
             "手改成插兜",
-            '{"skill": "anima_clear", "prompt": "1girl, hands in pockets"}')
+            '{"skill": "hd_3_clear", "prompt": "1girl, hands in pockets"}')
         self.assertEqual(out, "")
         m_gen.assert_called_once_with("1girl, hands in pockets",
-                                      skill="anima_clear",
+                                      skill="hd_3_clear",
                                       _skip_confirm=True)
         m_describe.assert_called_once()          # 别人的图：一次带图调用
         self.assertNotIn("provider",
@@ -788,10 +788,10 @@ class RevisionPipelineTest(unittest.TestCase):
         # 「手怎么多了一根」没有改图动词 → 不垫图，反推修正后重画一张
         out, m_describe, m_llm, m_gen, _ = self._decide(
             "手怎么多了一根",
-            '{"skill": "anima_clear", "prompt": "1girl, five fingers"}')
+            '{"skill": "hd_3_clear", "prompt": "1girl, five fingers"}')
         self.assertEqual(out, "")
         m_gen.assert_called_once_with("1girl, five fingers",
-                                      skill="anima_clear",
+                                      skill="hd_3_clear",
                                       _skip_confirm=True)
         self.assertNotIn("source_image", m_gen.call_args.kwargs)
         sent = m_describe.call_args.kwargs["prompt"]
@@ -937,7 +937,7 @@ class RevisionPipelineTest(unittest.TestCase):
         # 和账本种子一起入队，构图贴近原图、只换画质工作流。
         out, m_describe, m_llm, m_gen, _ = self._decide(
             "三档", quoted="编号 HT-20261005-010329-595",
-            lookup_row={"prompt": "logged, miku", "skill": "anima_clear",
+            lookup_row={"prompt": "logged, miku", "skill": "hd_3_clear",
                         "seed": "414004422"})
         self.assertEqual(out, "")
         m_describe.assert_not_called()
@@ -949,7 +949,7 @@ class RevisionPipelineTest(unittest.TestCase):
         # NAI 不认 seed（传了直接报错）：引用 HT 图 +「nai」→ 不带种子入队。
         out, m_describe, m_llm, m_gen, _ = self._decide(
             "nai", quoted="编号 HT-20261005-010329-595",
-            lookup_row={"prompt": "logged, miku", "skill": "anima_clear",
+            lookup_row={"prompt": "logged, miku", "skill": "hd_3_clear",
                         "seed": "414004422"})
         self.assertEqual(out, "")
         m_gen.assert_called_once_with("logged, miku", skill="nai",
@@ -960,7 +960,7 @@ class RevisionPipelineTest(unittest.TestCase):
         # 老账本记录没有 seed（空串）→ 照旧随机，不传 seed 参数。
         out, m_describe, m_llm, m_gen, _ = self._decide(
             "三档", quoted="编号 HT-20261005-010329-595",
-            lookup_row={"prompt": "logged, miku", "skill": "anima_clear",
+            lookup_row={"prompt": "logged, miku", "skill": "hd_3_clear",
                         "seed": ""})
         self.assertEqual(out, "")
         m_gen.assert_called_once_with("logged, miku", skill="hd_3_clear",
@@ -971,8 +971,8 @@ class RevisionPipelineTest(unittest.TestCase):
         # 引用别人的图：上一轮任务的原提示词绝不进场（锚死事故的根因）
         out, m_describe, _, m_gen, _ = self._decide(
             "手改成插兜",
-            '{"skill": "anima_clear", "prompt": "1girl, fixed"}',
-            last_job={"skill": "anima_clear", "prompt": "1girl, old"})
+            '{"skill": "hd_3_clear", "prompt": "1girl, fixed"}',
+            last_job={"skill": "hd_3_clear", "prompt": "1girl, old"})
         self.assertEqual(out, "")
         sent = m_describe.call_args.kwargs["prompt"]
         self.assertNotIn("1girl, old", sent)
@@ -1004,14 +1004,14 @@ class RevisionPipelineTest(unittest.TestCase):
         # 代码认死话术（`_GENERIC_I2I_RE` 已删），整句交给 AI 判。
         out, m_describe, m_llm, m_gen, _ = self._decide(
             "快档 基于图片帮我生成",
-            seen='{"skill": "hd_fast_clear", "prompt": "1girl, solo, blue hair"}',
+            seen='{"skill": "hd_3_clear", "prompt": "1girl, solo, blue hair"}',
             at_me=True)
         self.assertEqual(out, "")
         m_describe.assert_called_once()          # 别人的图 → 识图一次
         sent = m_describe.call_args.kwargs["prompt"]
         self.assertIn("基于图片帮我生成", sent)  # 原话交给 AI
         m_gen.assert_called_once_with("1girl, solo, blue hair",
-                                      skill="hd_fast_clear",
+                                      skill="hd_3_clear",
                                       _skip_confirm=True)
 
     def test_praise_on_at_round_returns_reverse_text(self):
@@ -1065,7 +1065,7 @@ class EnglishDirectTest(unittest.TestCase):
     """英文提示词也过一次 AI（2026-10-05 用户拍板：绝不能绕过 ai）。
 
     以前「档位 + 英文提示词」和「私聊裸英文」都是零转译直通，副作用是代码
-    全文乱搜画风词——`1girl, soft lighting` 被判成 anima_soft，soft 还被从
+    全文乱搜画风词——`1girl, soft lighting` 被判成 hd_3_soft，soft 还被从
     正文里删掉。现在一律走 `_translate`。
     """
 
@@ -1085,25 +1085,25 @@ class EnglishDirectTest(unittest.TestCase):
     def test_tier_plus_english_goes_through_ai(self):
         text = "快档 gloss 1girl, solo, blue hair, classroom"
         out, m_llm, m_gen = self._decide(
-            text, '{"skill": "hd_fast_gloss", "prompt": '
+            text, '{"skill": "hd_3_gloss", "prompt": '
                   '"1girl, solo, blue hair, classroom"}')
         self.assertEqual(out, "")
         self.assertEqual(m_llm.call_count, 1)
         sent = m_llm.call_args[0][0][0]["content"]
-        self.assertIn("用户开头点名了渠道：**hd_fast_gloss**", sent)
+        self.assertIn("用户开头点名了渠道：**hd_3_gloss**", sent)
         self.assertIn("1girl, solo, blue hair, classroom", sent)
         m_gen.assert_called_once_with("1girl, solo, blue hair, classroom",
-                                      skill="hd_fast_gloss",
+                                      skill="hd_3_gloss",
                                       _skip_confirm=True)
 
     def test_chinese_desc_still_translated(self):
         # 中文描述照旧走扩写
         out, m_llm, m_gen = self._decide(
             "快档 一只柴犬在草地上",
-            '{"skill": "hd_fast_clear", "prompt": "shiba"}')
+            '{"skill": "hd_3_clear", "prompt": "shiba"}')
         self.assertEqual(out, "")
         self.assertEqual(m_llm.call_count, 1)
-        m_gen.assert_called_once_with("shiba", skill="hd_fast_clear",
+        m_gen.assert_called_once_with("shiba", skill="hd_3_clear",
                                       _skip_confirm=True)
 
     def test_bare_english_private_goes_through_ai(self):
@@ -1111,12 +1111,12 @@ class EnglishDirectTest(unittest.TestCase):
         # 写提示词。
         out, m_llm, m_gen = self._decide(
             "1girl, solo, silver hair, moonlight",
-            '{"skill": "anima_clear", "prompt": '
+            '{"skill": "hd_3_clear", "prompt": '
             '"1girl, solo, silver hair, moonlight"}')
         self.assertEqual(out, "")
         self.assertEqual(m_llm.call_count, 1)
         m_gen.assert_called_once_with("1girl, solo, silver hair, moonlight",
-                                      skill="anima_clear",
+                                      skill="hd_3_clear",
                                       _skip_confirm=True)
 
     def test_bare_english_keyword_round_now_goes_to_ai(self):
@@ -1208,19 +1208,28 @@ class MasterPromptTest(unittest.TestCase):
         但下面这行什么 hd_2_*，AI 它知道这个是什么意思吗？用户说快档、二档、
         三档，AI 知道它说的是什么吗？它知道快档是 hd_fast 吗？用户说用千问去
         跑图，AI 肯定能理解呀。」
+
+        2026-10-07 只剩三档，所以映射从「三档口语 → 三个 id」塌成一条：
+        `anima` / `三档` / `高清` → `hd_3_<画风>`。旧档位词（快档 / 二档）
+        仍然必须**明写「已取消」**——不然模型还照着老印象映射到
+        `hd_fast_*` / `hd_2_*` 这两个已经不存在的 id。
         """
         t = self._rendered()
         # 四种画风要有中文对照
         for pair in ("clear 清晰", "soft 柔和", "gloss 油亮", "curvy 肉感"):
             with self.subTest(pair=pair):
                 self.assertIn(pair, t)
-        # 档位口语 → id 的映射要写死（否则 AI 对不上「二档」）
-        self.assertIn("快档", t)
-        self.assertIn("hd_fast_", t)
-        self.assertIn("二档", t)
-        self.assertIn("hd_2_", t)
+        # 档位口语 → id 的映射要写死（只剩三档，所以只映射到 hd_3_*）
+        self.assertIn("anima", t)
         self.assertIn("三档", t)
         self.assertIn("hd_3_", t)
+        # 旧档位词要明说「已取消」，且那两个 id 一个都不许再出现
+        for gone in ("快档", "二档"):
+            with self.subTest(gone=gone):
+                self.assertIn(gone, t)
+        for gone_id in ("hd_fast_", "hd_2_"):
+            with self.subTest(gone_id=gone_id):
+                self.assertNotIn(gone_id, t)
         # 固定渠道的中文叫法也要给
         self.assertIn("千问", t)
         self.assertIn("qwen_image_v1", t)
@@ -1246,7 +1255,7 @@ class MasterPromptTest(unittest.TestCase):
     def test_channel_list_is_given(self):
         # 渠道名是本地事实，模型猜不出来，必须给。
         t = self._rendered()
-        for s in ("anima_clear", "hd_3_", "nai", "qwen_image_v1", "krea2"):
+        for s in ("hd_3_clear", "hd_3_", "nai", "qwen_image_v1", "krea2"):
             with self.subTest(skill=s):
                 self.assertIn(s, t)
 
@@ -1259,7 +1268,7 @@ class MasterPromptTest(unittest.TestCase):
     def test_prompt_lang_still_splits_by_channel_for_revise(self):
         # `_prompt_lang` 现在只服务改图模板 `_REVISE_TEMPLATE`，别再删。
         self.assertIn("句子", direct_gen._prompt_lang("qwen_image_v1"))
-        for s in ("anima_clear", "hd_3_clear", "nai", "miao"):
+        for s in ("hd_3_clear", "hd_3_clear", "nai", "miao"):
             with self.subTest(skill=s):
                 self.assertIn("danbooru", direct_gen._prompt_lang(s))
 
@@ -1376,7 +1385,7 @@ class VerbatimWeightedPromptTest(unittest.TestCase):
     def test_ai_cannot_overrule_the_named_channel(self):
         # 点名词在场 → 代码锁死；模型就算回别的渠道也不采纳。
         out, m_llm, m_gen = self._decide(
-            self.SAMPLE, llm_reply=self._echo("anima_clear", self.BODY))
+            self.SAMPLE, llm_reply=self._echo("hd_3_clear", self.BODY))
         self.assertEqual(out, "")
         self.assertEqual(m_llm.call_count, 1)
         self.assertEqual(m_gen.call_args.kwargs["skill"], "nai")
@@ -1451,7 +1460,7 @@ class VerbatimWeightedPromptTest(unittest.TestCase):
         # 转译轮同一套优先级：代码点名 > 模型判的（以前是「模型值 or 代码值」,
         # 等于把用户点名的渠道交给模型复议）。
         with mock.patch.object(direct_gen.llm, "call_llm",
-                               return_value='{"skill": "anima_clear", '
+                               return_value='{"skill": "hd_3_clear", '
                                             '"prompt": "cat"}'):
             got = direct_gen._translate("画猫", [], skill="nai")
         self.assertEqual(got["skill"], "nai")
@@ -1471,11 +1480,11 @@ class SkipConfirmTest(unittest.TestCase):
              mock.patch.object(qq_api, "current_turn_text",
                                return_value="画一只猫"):
             self.assertIsNone(
-                confirm_gate.intercept("comfy", skill="anima_clear",
+                confirm_gate.intercept("comfy", skill="hd_3_clear",
                                        prompt="cat", skip_confirm=True))
             # 不带 skip_confirm 的 agent 路径照旧拦
             self.assertIsNotNone(
-                confirm_gate.intercept("comfy", skill="anima_clear",
+                confirm_gate.intercept("comfy", skill="hd_3_clear",
                                        prompt="cat"))
 
 
@@ -1704,7 +1713,7 @@ class BareImageTest(unittest.TestCase):
         # 照旧走改图管道，归一规则不能把真话一起吞掉
         out, m_describe, m_gen = self._decide(
             "[图片] 手改成插兜",
-            seen='{"skill": "anima_clear", "prompt": "1girl, fixed"}')
+            seen='{"skill": "hd_3_clear", "prompt": "1girl, fixed"}')
         self.assertEqual(out, "")
         m_gen.assert_called_once()
         m_describe.assert_called_once()
@@ -1773,9 +1782,9 @@ class UnifiedIntentTest(unittest.TestCase):
         # 「大大怪 画一只猫」→ AI 判「要画图」→ 走生图
         out, m_llm, m_gen = self._decide(
             "大大怪 画一只猫",
-            llm_reply='{"skill": "anima_clear", "prompt": "cat"}')
+            llm_reply='{"skill": "hd_3_clear", "prompt": "cat"}')
         self.assertEqual(out, "")
-        m_gen.assert_called_once_with("cat", skill="anima_clear",
+        m_gen.assert_called_once_with("cat", skill="hd_3_clear",
                                       _skip_confirm=True)
 
     def test_named_channel_drawing_still_generates(self):
@@ -1870,7 +1879,7 @@ class RandomCommandTest(unittest.TestCase):
              mock.patch.object(gi, "_generate_image",
                                return_value=RECEIPT) as m_gen:
             m_llm_mod.call_llm.return_value = (
-                '{"skill": "anima_clear", "prompt": "random girl"}')
+                '{"skill": "hd_3_clear", "prompt": "random girl"}')
             out = direct_gen.decide("随机萝莉 来一张", [], False, at_me=True)
             self.addCleanup(direct_gen._LAST_JOB.pop, "group_1", None)
         self.assertEqual(out, "")
@@ -1929,7 +1938,7 @@ class RandomCommandTest(unittest.TestCase):
              mock.patch.object(gi, "_generate_image",
                                return_value=RECEIPT) as m_gen:
             m_llm_mod.call_llm.return_value = (
-                '{"skill": "anima_clear", "prompt": "a cat"}')
+                '{"skill": "hd_3_clear", "prompt": "a cat"}')
             out = direct_gen.decide("画一只猫", [], False, at_me=True)
             self.addCleanup(direct_gen._LAST_JOB.pop, "group_1", None)
         self.assertEqual(out, "")
@@ -1942,7 +1951,7 @@ class DirectPrefixTest(unittest.TestCase):
     格式 `/直通-渠道|英文提示词`；渠道认不出 → 落回原管道（交 AI），不猜。
     """
 
-    def _decide(self, text, llm_reply='{"skill": "anima_clear", "prompt": "x"}',
+    def _decide(self, text, llm_reply='{"skill": "hd_3_clear", "prompt": "x"}',
                 quoted="", data_urls=None):
         with mock.patch.object(direct_gen.llm, "call_llm",
                                return_value=llm_reply) as m_llm, \
@@ -1993,10 +2002,10 @@ class DirectPrefixTest(unittest.TestCase):
     def test_unknown_channel_falls_back_to_ai(self):
         # 渠道认不出 → 不直通，落回原管道（m_llm 被调用，m_gen 用 AI 给的 skill）。
         out, m_llm, m_gen = self._decide("/直通-xyz|1girl",
-                                         llm_reply='{"skill": "anima_clear",'
+                                         llm_reply='{"skill": "hd_3_clear",'
                                                    ' "prompt": "1girl"}')
         m_llm.assert_called()
-        m_gen.assert_called_once_with("1girl", skill="anima_clear",
+        m_gen.assert_called_once_with("1girl", skill="hd_3_clear",
                                       _skip_confirm=True)
 
     def test_missing_bar_returns_hint(self):
@@ -2053,7 +2062,7 @@ class PromptAskNarrowTest(unittest.TestCase):
 
     def _decide(self, text, quoted="", data_urls=None, lookup_row=None,
                 describe_reply="1girl, reversed, tags",
-                llm_reply='{"skill": "anima_clear", "prompt": "1girl, cat"}'):
+                llm_reply='{"skill": "hd_3_clear", "prompt": "1girl, cat"}'):
         with mock.patch.object(direct_gen.llm, "call_llm",
                                return_value=llm_reply) as m_llm, \
              mock.patch.object(direct_gen.qq_api, "current_session_key",
@@ -2093,11 +2102,11 @@ class PromptAskNarrowTest(unittest.TestCase):
         """
         out, m_describe, m_llm, m_gen = self._decide(
             "提示词不变，角色换成花火，手势改成抓手",
-            quoted="HT-20261004-155628-040 · 728×1024 · anima_clear · "
+            quoted="HT-20261004-155628-040 · 728×1024 · hd_3_clear · "
                    "seed 2226632694",
             data_urls=["data:image/jpeg;base64,A"],
             lookup_row={"prompt": "1girl, purple twin drills",
-                        "skill": "anima_clear"})
+                        "skill": "hd_3_clear"})
         m_gen.assert_called_once()                       # 走 AI 判 → 生图
         self.assertNotIn("这张图当初用的提示词", out)   # 没被直通劫走
 
@@ -2108,10 +2117,10 @@ class PromptAskNarrowTest(unittest.TestCase):
         """
         _out, _d, m_llm, _gen = self._decide(
             "这个提示词是什么",
-            quoted="HT-20261004-155628-040 · anima_clear · seed 1",
+            quoted="HT-20261004-155628-040 · hd_3_clear · seed 1",
             data_urls=["data:image/jpeg;base64,A"],
             lookup_row={"prompt": "1girl, purple twin drills",
-                        "skill": "anima_clear"})
+                        "skill": "hd_3_clear"})
         sent = m_llm.call_args[0][0][0]["content"]
         self.assertIn("1girl, purple twin drills", sent)
 
@@ -2132,7 +2141,7 @@ class ViewPromptKeywordTest(unittest.TestCase):
 
     def _decide(self, text, quoted="", data_urls=None, lookup_row=None,
                 describe_reply="1girl, reversed, tags",
-                llm_reply='{"skill": "anima_clear", "prompt": "1girl, cat"}'):
+                llm_reply='{"skill": "hd_3_clear", "prompt": "1girl, cat"}'):
         with mock.patch.object(direct_gen.llm, "call_llm",
                                return_value=llm_reply) as m_llm, \
              mock.patch.object(direct_gen.qq_api, "current_session_key",
@@ -2154,10 +2163,10 @@ class ViewPromptKeywordTest(unittest.TestCase):
         """引用带 HT 编号的图 +「提取提示词」→ 直接回账本提示词，零 LLM。"""
         out, m_describe, m_llm, m_gen = self._decide(
             "提取提示词",
-            quoted="HT-20261004-155628-040 · 728×1024 · anima_clear · "
+            quoted="HT-20261004-155628-040 · 728×1024 · hd_3_clear · "
                    "seed 2226632694",
             lookup_row={"prompt": "1girl, purple twin drills",
-                        "skill": "anima_clear", "seed": "2226632694"})
+                        "skill": "hd_3_clear", "seed": "2226632694"})
         self.assertIn("1girl, purple twin drills", out)
         m_llm.assert_not_called()
         m_describe.assert_not_called()
@@ -2167,8 +2176,8 @@ class ViewPromptKeywordTest(unittest.TestCase):
         """HT 编号直接写在引用正文里（没引用）也能查到。"""
         out, _d, _l, _g = self._decide(
             "提取提示词",
-            quoted="HT-20261004-155628-040 · anima_clear · seed 1",
-            lookup_row={"prompt": "1girl, test", "skill": "anima_clear"})
+            quoted="HT-20261004-155628-040 · hd_3_clear · seed 1",
+            lookup_row={"prompt": "1girl, test", "skill": "hd_3_clear"})
         self.assertIn("1girl, test", out)
 
     def test_plain_prompt_question_goes_to_ai(self):
@@ -2179,10 +2188,10 @@ class ViewPromptKeywordTest(unittest.TestCase):
         """
         out, m_describe, m_llm, m_gen = self._decide(
             "这个提示词是什么",
-            quoted="HT-20261004-155628-040 · anima_clear · seed 1",
+            quoted="HT-20261004-155628-040 · hd_3_clear · seed 1",
             data_urls=["data:image/jpeg;base64,A"],
             lookup_row={"prompt": "1girl, purple twin drills",
-                        "skill": "anima_clear"})
+                        "skill": "hd_3_clear"})
         m_describe.assert_not_called()   # 自家图 → 不预先识图
 
     def test_bare_keyword_without_ledger_hit_is_not_hijacked(self):
@@ -2249,14 +2258,14 @@ class ReviseChannelListTest(unittest.TestCase):
     def test_template_lists_the_fixed_and_tier_channels(self):
         t = direct_gen._REVISE_TEMPLATE
         for name in ("nai", "qwen_image_v1", "image_gen_v1", "krea2", "nffa",
-                     "cunny", "miao", "anima_clear", "hd_3_"):
+                     "cunny", "miao", "hd_3_clear", "hd_3_"):
             self.assertIn(name, t, "改图模板里没提渠道 %s" % name)
 
     def test_template_warns_custom_channels_have_no_i2i(self):
         """silver/jank 没有垫图骨架——模板得告诉模型垫图轮别填它们。
 
         不写这句的后果：用户说「silver 图生图」，模型填 silver，代码那头
-        `_redraw_capable` 判不过就**静默降回 anima_clear**，出图风味全变。
+        `_redraw_capable` 判不过就**静默降回 hd_3_clear**，出图风味全变。
         """
         self.assertIn("文生图专用", direct_gen._REVISE_TEMPLATE)
 
@@ -2429,7 +2438,7 @@ class SearchHookTest(unittest.TestCase):
         """跑一次 _translate，返回喂给转译 LLM 的 prompt。"""
         with mock.patch.object(
                 direct_gen.llm, "call_llm",
-                return_value='{"skill": "anima_clear", "prompt": "hu tao"}') as m_llm:
+                return_value='{"skill": "hd_3_clear", "prompt": "hu tao"}') as m_llm:
             direct_gen._translate(text, [], doc=doc)
         return m_llm.call_args[0][0][0]["content"]
 
@@ -2570,7 +2579,7 @@ class DecidePrefetchTest(unittest.TestCase):
         with mock.patch.object(direct_gen, "_prefetch_search",
                                return_value="资料X") as m_pre:
             with mock.patch.object(direct_gen, "_translate",
-                                   return_value={"skill": "anima_clear",
+                                   return_value={"skill": "hd_3_clear",
                                                  "prompt": "p"}) as m_tr:
                 with mock.patch.object(direct_gen, "_enqueue",
                                        return_value="ok"):
@@ -2595,13 +2604,13 @@ class ReviseSearchTest(unittest.TestCase):
 
         def fake_describe(url, prompt=None):
             seen["prompt"] = prompt or ""
-            return '{"skill": "anima_clear", "prompt": "raiden mei, 1girl"}'
+            return '{"skill": "hd_3_clear", "prompt": "raiden mei, 1girl"}'
 
         with mock.patch("app.vision.describe", side_effect=fake_describe):
             with mock.patch.object(direct_gen, "_enqueue", return_value="ok"):
                 with mock.patch.object(direct_gen, "_remember_job"):
                     direct_gen._revise("角色换芽衣", ["http://x/1.png"], [],
-                                       channel="anima_clear", **kw)
+                                       channel="hd_3_clear", **kw)
         return seen.get("prompt", "")
 
     def test_revise_injects_doc(self):

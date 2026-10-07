@@ -336,7 +336,10 @@ class BriefModeTest(unittest.TestCase):
         self.assertLess(len(brief), len(full) * 0.5,
                         "skill 目录没压下来（%d -> %d）" % (len(full), len(brief)))
         # 名字必须还在——那是渠道参数值，砍掉模型就没法填 skill 了
-        self.assertIn("anima_clear", brief)
+        # （2026-10-07 起动漫族只剩 `hd_3_<画风>`；`anima_clear` 那 12 个
+        #  旧渠道已屏蔽，不该再出现在任何对外列表里）
+        self.assertIn("hd_3_clear", brief)
+        self.assertNotIn("anima_clear", brief)
 
     def test_brief_keeps_tool_call_protocol(self):
         """协议段不能砍。砍了它模型就不认识 [[TOOL:...]] 了，

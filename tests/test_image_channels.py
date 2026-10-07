@@ -1,50 +1,55 @@
-"""四个动漫生图渠道（`anima_soft` / `anima_gloss` / `anima_curvy` / `anima_clear`）的架构锁。
+"""动漫生图渠道的架构锁——2026-10-07 起**只剩 4 个 `hd_3_<画风>`**。
+
+## 2026-10-07 的收缩（先读这段，别被别处的旧表带跑）
+
+用户原话：「取消 anima 的快档、普通、二档，只留一个三档，到时候就是你说
+anima，就跑三档加上 x2 像素」。所以：
+
+- 常规档 `anima_*`（728~768×1024）、快档 `hd_fast_*`、二档 `hd_2_*`
+  **12 个渠道全部下架**——目录**还在原地**（那 12 份 `workflow_i2i.json`
+  动漫重绘骨架要留着），但 `list_skills()` 不再吐它们
+  （`app/skills.ARCHIVED_SKILLS`）→ 对外**不再是渠道**，`ARCHIVED_20261007`
+  钉住这点。
+- 活着的只有 `hd_3_clear|soft|gloss|curvy`，末尾多了一道 **2x 像素放大**
+  （`UpscaleModelLoader`(40) → `ImageUpscaleWithModel`(41)），最终输出
+  **3072×4608**（latent 段是 1536×2304）。
+- 代码侧旧档位词（快档 / 二档 / 一档）一律映射到 `hd_3_*`，见
+  `direct_gen._TIER_MAP`；用户说「anima」= 三档。
 
 ## 这套用例锁的是什么
-
-2026-09-30 20:xx 用户拍板：**去掉 SD 渠道（`image_gen_v1`），全套切动漫**。
-（2026-10-01 用户又拍板把 SD 保留回来——所以它现在**是可用渠道**、不在 `RETIRED`
-里；见下面 `RETIRED` 上方的说明。本文件锁的仍是那 4 个动漫常规渠道。）
-四个渠道全部取自用户在 ComfyUI 里调好的双采样工作流：
-
-| 渠道 | 来源 UI 文件 | 一段底模 | 二段底模 | 画布 → 输出 |
-|---|---|---|---|---|
-| **`anima_clear`（默认）** | `单realskin双采样` | Realskin | Realskin（同一块） | 728×1024 |
-| `anima_soft` | `reality和realskin双采样` | Realskin | AnimeReality | 728×1024 |
-| `anima_gloss` | `anime2` | AnimeReality | Realskin | 768×1024 → 848×1128 |
-| `anima_curvy` | `harem和realskin双采样` | Harem | AnimeReality | 728×1024 |
-
-**每次用户在这些 UI 文件里调完参数，对应的 `skills/*/workflow.json` 都要跟着重转**
-（UI 格式 → API 格式，四渠道共用同一套流程，见任一 `skills/anima_*/skill.md` 文末）。
 
 四个渠道**共用同一套两段采样骨架**，差别只在底模组合（表现为画风）：
 
     一段：UNETLoader(5) ─ LoRA(16 kibro 1.0) ─ LoRA(15 baka skin 0.5) ─┐
          CLIPLoader(6, Qwen3-0.6B) ─ CLIPTextEncode(4 正向 / 8 负向) ──┤
-         EmptyLatentImage(9) 728×1024 ────────────────────────────────┤
+         EmptyLatentImage(9) 1024×1536 ───────────────────────────────┤
                                                                       ▼
                                                     KSampler(2) er_sde/simple 10步 denoise 1.0
                                                                       │
-                                                    LatentUpscaleBy(25) nearest-exact scale_by
+                                                    LatentUpscaleBy(18) nearest-exact 1.5×
                                                                       │
-         UNETLoader(28) 裸底模（**不接 LoRA**）───────────────────────┤
+         UNETLoader(20) 裸底模（**不接 LoRA**）───────────────────────┤
                                                                       ▼
-                                                    KSampler(27) euler/simple 5步 denoise 0.25
+                                                    KSampler(19) euler/simple 10步 denoise 0.25
                                                                       │
-                                                    VAEDecode(3) ─ SaveImage(23) prefix=Anima
+                                                    VAEDecode(3) ─ ImageUpscaleWithModel(41) ×2
+                                                                      │
+                                                    SaveImage(23) prefix=Anima
 
-节点编号在 `anima_gloss` 里整体不同（19/20/24 代替 27/28/25），`anima_clear`
-甚至**只有一块底模**（二段直接指向节点 5）。所以这套用例**不按编号取**，
-而是按 `class_type` + 连线拓扑去认——认出来的是**结构**，不是巧合的数字。
+⚠️ 上面这套编号是 `hd_3_*` 这一族的（4 个渠道**编号一致**，跟已归档的
+`anima_gloss` 那种「19/20/24 代替 27/28/25」不是一回事）。不过用例仍然
+**不按编号取**，而是按 `class_type` + 连线拓扑去认——认出来的是**结构**，
+不是巧合的数字。
 
 ## 锁什么 / 不锁什么
 
 **锁**（架构性的，改了就是改架构）：
-- 两个 KSampler、两块（或一块）底模、一个放大节点、一条 LoRA 链；
-- 谁连谁：二段必须吃**放大后**的 latent、LoRA 只能挂第一段、CLIP 不走 LoRA；
+- 两个 KSampler、两块底模、一个 latent 放大节点、一个像素放大节点、一条 LoRA 链；
+- 谁连谁：二段必须吃**放大后**的 latent、LoRA 只能挂第一段、CLIP 不走 LoRA、
+  存图必须吃**像素放大之后**的图；
 - denoise 的量级关系（一段 1.0 建构 / 二段 0.25 精修 → 二段必须用确定性 `euler`）；
 - 每渠道的**底模组合**（换底模 = 换画风，值得被注意到）；
-- 分辨率上限、`scale_by` 上限；
+- 分辨率与放大倍率（画布 1024×1536 / latent 1.5× / 像素 2× → 3072×4608）；
 - 节点 4 是可代入模板（含 `@kibro` 触发词 + `__MULTI_PROMPTS__`，不含写死的角色）。
 
 **不锁**（用户随手调的旋钮）：步数、CFG、一段的采样器名。
@@ -67,21 +72,36 @@ from app.skills import list_skills, load_skill, skill_priority
 SKILLS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                       "skills")
 
-# 渠道 → (一段底模前缀, 二段底模前缀, 画布宽, 画布高, scale_by)
+# 渠道 → (一段底模前缀, 二段底模前缀, 画布宽, 画布高, latent 放大倍率)
+#
+# 动漫族**现在只剩这一族**：4 个 `hd_3_<画风>`。
+#
+# 2026-10-07 用户拍板：「取消 anima 的快档、普通、二档，只留一个三档，到时候
+# 就是你说 anima，就跑三档加上 x2 像素」。所以常规档（`anima_*`，728~768×1024）
+# 与快档 / 二档（`hd_fast_*` / `hd_2_*`）**全部下架**——目录留着，只是
+# `list_skills()` 不再吐它们（见 `app/skills.ARCHIVED_SKILLS`）。
 #
 # 底模用**前缀**而不是全名，因为真实文件名带一长串 Civitai 后缀
 # （`miaomiaoAnimeReality_ani11_3087842.safetensors`），前缀足以区分、又不会
 # 因为用户重下了一版改名后缀而误报。
 CHANNELS = {
-    "anima_soft":  ("miaomiaoRealskin_anima13", "miaomiaoAnimeReality_ani11",
-                    728, 1024, 1.0),
-    "anima_gloss": ("miaomiaoAnimeReality_ani11", "miaomiaoRealskin_anima13",
-                    768, 1024, 1.1),
-    "anima_curvy": ("miaomiaoHarem_anima16", "miaomiaoAnimeReality_ani11",
-                    728, 1024, 1.0),
-    "anima_clear": ("miaomiaoRealskin_anima13", "miaomiaoRealskin_anima13",
-                    728, 1024, 1.0),
+    "hd_3_clear": ("miaomiaoRealskin_anima13", "miaomiaoRealskin_anima13",
+                   1024, 1536, 1.5),
+    "hd_3_soft":  ("miaomiaoRealskin_anima13", "miaomiaoAnimeReality_ani11",
+                   1024, 1536, 1.5),
+    "hd_3_gloss": ("miaomiaoAnimeReality_ani11", "miaomiaoRealskin_anima13",
+                   1024, 1536, 1.5),
+    "hd_3_curvy": ("miaomiaoHarem_anima16", "miaomiaoAnimeReality_ani11",
+                   1024, 1536, 1.5),
 }
+
+# 2026-10-07 下架（屏蔽）的 12 个渠道（常规档 4 + 快档 4 + 二档 4）。
+# 目录还在 `skills/` 下，但 `list_skills()` 不再吐它们——一个都不许再冒出来。
+ARCHIVED_20261007 = tuple(
+    ["anima_" + s for s in ("clear", "curvy", "gloss", "soft")]
+    + ["hd_fast_" + s for s in ("clear", "curvy", "gloss", "soft")]
+    + ["hd_2_" + s for s in ("clear", "curvy", "gloss", "soft")]
+)
 
 # 默认生图渠道（不点名 skill 时走它）。2026-10-06 用户拍板：「我们默认渠道就是
 # sILVR，把它做成默认渠道就行了，不用加那个什么默认渠道管理」——所以它是**写死**
@@ -93,8 +113,8 @@ DEFAULT_CHANNEL = "silver"
 
 # `comfy_workflow` 那两个工具（get/update_workflow）的默认 skill。它跟上面的
 # 默认生图渠道**是两回事**：那两个工具按「两段采样」骨架读写工作流，拿
-# `anima_clear` 当样本渠道，silver 那种结构套不上去。
-WORKFLOW_TOOL_CHANNEL = "anima_clear"
+# `hd_3_clear` 当样本渠道，silver 那种结构套不上去。
+WORKFLOW_TOOL_CHANNEL = "hd_3_clear"
 
 # 归档到 skills/_archive_20260930/ 的老渠道——一个都不许再冒出来。
 #
@@ -106,17 +126,16 @@ WORKFLOW_TOOL_CHANNEL = "anima_clear"
 # 不知道什么时候该用」不成立了；`QqWhitelistTest`（test_image_jobs）钉的是新契约。
 RETIRED = ("anima", "anima_realskin", "anima_2")
 
-# ─── 2026-10-01 新增的 12 个高清渠道（3 档 × 4 画风）─────────────────
+# ─── 高清渠道（2026-10-07 起只剩三档：1 档 × 4 画风）────────────────
 #
-# 它们跟 4 个常规 anima 渠道**共用同一套两段采样骨架**——只是画布更大、
-# 底模按画风换、一段采样器 / 二段步数按档位换。由 `_make_hd_channels.py` 从
-# 「尺寸骨架 + 画风底模组合」展开生成（别手改某一份，否则 12 个会悄悄不一致）。
+# 由 `_make_hd_channels.py` 从「尺寸骨架 + 画风底模组合」展开生成，
+# 末尾再统一注入一对像素放大节点（`40` / `41`）。别手改某一份，
+# 否则 4 个会悄悄不一致。
 #
-# 档位 → (画布宽, 画布高, scale_by, 输出宽, 输出高, 一段采样器, 一段步数, 二段步数)
+# 档位 → (画布宽, 画布高, latent scale_by, 一段输出宽, 一段输出高,
+#          一段采样器, 一段步数, 二段步数)
 HD_TIERS = {
-    "fast": (1024, 1536, 1.0, 1024, 1536, "er_sde", 10, 5),
-    "2":    (1024, 1536, 1.3, 1328, 2000, "dpmpp_2m", 10, 5),
-    "3":    (1024, 1536, 1.5, 1536, 2304, "er_sde", 10, 10),
+    "3": (1024, 1536, 1.5, 1536, 2304, "er_sde", 10, 10),
 }
 # 画风 → (一段底模前缀, 二段底模前缀)——跟 CHANNELS 那四个是同一套组合。
 HD_STYLES = {
@@ -127,11 +146,18 @@ HD_STYLES = {
 }
 HD_CHANNELS = ["hd_%s_%s" % (t, s) for t in HD_TIERS for s in HD_STYLES]
 
+# 末尾那道**像素放大**：`UpscaleModelLoader`(40) → `ImageUpscaleWithModel`(41)。
+# 最终输出 = 上面「一段输出」× PIXEL_UPSCALE = 1536×2304 → **3072×4608**。
+PIXEL_UPSCALE = 2
+UPSCALE_MODEL = "2x_Ani4Kv2_G6i2_Compact_107500.pth"
+UPSCALE_LOAD_NODE = "40"
+UPSCALE_APPLY_NODE = "41"
+
 # 这台 ComfyUI 的**内建**节点。多出来一个就说明混进了自定义节点（那台机器装不上）。
 BUILTIN_NODES = {
     "VAELoader", "KSampler", "VAEDecode", "CLIPTextEncode", "UNETLoader",
     "CLIPLoader", "EmptyLatentImage", "LoraLoaderModelOnly", "SaveImage",
-    "LatentUpscaleBy",
+    "LatentUpscaleBy", "UpscaleModelLoader", "ImageUpscaleWithModel",
 }
 
 LORA_NODES = ("LoraLoaderModelOnly", "LoraLoader")
@@ -217,12 +243,35 @@ def _lora_chain(wf):
 # ─── 渠道集合 ──────────────────────────────────────────────────────
 
 class ChannelSetTest(unittest.TestCase):
-    """恰好四个动漫渠道，老渠道一个都不许回来。"""
+    """动漫族**只剩 4 个**（`hd_3_<画风>`），旧档位一个都不许回来。"""
 
-    def test_exactly_the_four_channels_exist(self):
-        found = [s for s in list_skills() if s.startswith("anima_")]
-        self.assertEqual(sorted(found), sorted(CHANNELS),
+    def test_the_anima_family_is_exactly_the_four_hd_3_channels(self):
+        found = sorted(s for s in list_skills()
+                       if s.startswith(("anima_", "hd_")))
+        self.assertEqual(found, sorted(CHANNELS),
                          "动漫渠道集合变了——加/删渠道是有意为之吗？")
+
+    def test_the_twelve_legacy_tiers_are_masked_not_deleted(self):
+        """2026-10-07 下架的 12 个旧渠道（常规档 4 + 快档 4 + 二档 4）。
+
+        **是「屏蔽」不是「删掉」**：目录还在 `skills/` 下——那 12 份
+        `workflow_i2i.json`（动漫重绘骨架）要留着，用户只要求取消**尺寸档**、
+        没要求砍掉图生图能力。屏蔽只挡「对外可见」这一层：`list_skills()`
+        不再吐它们（`app/skills.ARCHIVED_SKILLS`）→ 管理页、技能计数、
+        渠道白名单、工具描述、`direct_gen._allowed_skills()` 全都看不到，
+        模型点不到；而 `load_skill()` 走纯文件系统路径，照样能加载。
+
+        所以这里**两条都要断**：
+        ① `list_skills()` 里没有（对外不可见）；
+        ② `load_skill()` 仍然能加载（文件没动，动漫图生图那条路没断）。
+        """
+        skills = list_skills()
+        for name in ARCHIVED_20261007:
+            self.assertNotIn(name, skills, "%s 不该再出现在技能列表里" % name)
+            data = load_skill(name)
+            self.assertIsNotNone(
+                data, "%s 的目录不该被挪走——屏蔽只挡对外可见这一层" % name)
+            self.assertIsNotNone(data["workflow"], name)
 
     def test_each_is_a_scannable_image_skill(self):
         for name in CHANNELS:
@@ -363,15 +412,19 @@ class SharedSkeletonTest(unittest.TestCase):
             self.assertNotIn("/", img["inputs"]["filename_prefix"], name)
 
     def test_upscale_factor_is_capped(self):
-        """放大倍率封顶 1.1×——`scale_by` 上去是平方级的显存和耗时。
+        """latent 放大倍率 = **1.5**（三档唯一的值），不许再往上调。
 
         本机（RTX 5070 12GB + 16GB）两段要先后装两块底模，没余量。
+
+        ⚠️ 末尾还有一道 **2x 像素放大**——那是独立的一步
+        （`ImageUpscaleWithModel`，见 `test_pixel_upscale_is_2x_and_wired_last`），
+        跟这里的 latent 倍率**不是一回事**，别把两者混着调。
         """
         for name in CHANNELS:
             wf = _load(name)
             up = wf[_upscale(wf)]
             self.assertEqual(up["inputs"]["upscale_method"], "nearest-exact", name)
-            self.assertLessEqual(up["inputs"]["scale_by"], 1.1, name)
+            self.assertLessEqual(up["inputs"]["scale_by"], 1.5, name)
 
 
 class WorkflowIntegrityTest(unittest.TestCase):
@@ -417,41 +470,48 @@ class BaseModelTest(unittest.TestCase):
                             "%s 二段底模：期望 %s*，实际 %r" % (name, base2, got2))
 
     def test_soft_and_gloss_are_the_same_pair_reversed(self):
-        """`anima_soft` = realskin→reality；`anima_gloss` = reality→realskin。
+        """`hd_3_soft` = realskin→reality；`hd_3_gloss` = reality→realskin。
 
         这就是「两个渠道其实是同一对底模换个顺序」这件事的锁——用户原来的
-        `anime2.json` 就是这个组合，`anima_soft` 是把它反过来。
+        `anime2.json` 就是这个组合，`hd_3_soft` 是把它反过来。
         """
-        soft = CHANNELS["anima_soft"]
-        gloss = CHANNELS["anima_gloss"]
+        soft = CHANNELS["hd_3_soft"]
+        gloss = CHANNELS["hd_3_gloss"]
         self.assertEqual((soft[0], soft[1]), (gloss[1], gloss[0]))
 
     def test_clear_and_soft_share_the_first_stage_base(self):
-        """`anima_clear` 和 `anima_soft` **第一段底模相同**，只差第二段。
+        """`hd_3_clear` 和 `hd_3_soft` **第一段底模相同**，只差第二段。
 
-        所以它俩出图很像——这也是「默认渠道在它俩之间换」几乎零成本的原因，
+        所以它俩出图很像——这也是「默认画风 clear」几乎零成本的原因，
         以及为什么 skill.md 里反复写「拿不准就用默认」。
         """
-        self.assertEqual(CHANNELS["anima_clear"][0], CHANNELS["anima_soft"][0])
-        self.assertNotEqual(CHANNELS["anima_clear"][1], CHANNELS["anima_soft"][1])
+        self.assertEqual(CHANNELS["hd_3_clear"][0], CHANNELS["hd_3_soft"][0])
+        self.assertNotEqual(CHANNELS["hd_3_clear"][1], CHANNELS["hd_3_soft"][1])
 
     def test_clear_reuses_one_base_for_both_passes(self):
-        """`anima_clear` 两段是**同一块** realskin——所以它只有一块底模装载器。
+        """`hd_3_clear` 两段读**同一个底模文件**（realskin → realskin）。
 
         同文件不会重复吃显存（ComfyUI 的 `model_management` 按 model 对象缓存），
-        所以这是零成本的；但它确实是四个里唯一「单底模」的。
-        """
-        wf = _load("anima_clear")
-        self.assertEqual(len(_all(wf, "UNETLoader")), 1)
-        s1_base = _base_file(wf, wf[_stage1(wf)]["inputs"]["model"])
-        s2_base = _base_file(wf, wf[_stage2(wf)]["inputs"]["model"])
-        self.assertEqual(s1_base, s2_base)
-        # 二段直接指向节点 5（那段底模装载器本身），没有第二块
-        self.assertEqual(wf[_stage2(wf)]["inputs"]["model"],
-                         [_one(wf, "UNETLoader"), 0])
+        所以这是零成本的。
 
-    def test_the_other_three_have_two_loaders(self):
-        for name in ("anima_soft", "anima_gloss", "anima_curvy"):
+        ⚠️ 跟取消前的 `anima_clear` 不一样：那边两个采样器共用**一个**
+        `UNETLoader` 节点；这边的骨架恒为**两个**节点（`5` 一段 / `20` 二段），
+        只是 `unet_name` 相同——`_make_hd_channels.py` 按这两个号写底模，不合并节点。
+        """
+        wf = _load("hd_3_clear")
+        loaders = _all(wf, "UNETLoader")
+        self.assertEqual(len(loaders), 2)
+        files = {wf[n]["inputs"]["unet_name"] for n in loaders}
+        self.assertEqual(len(files), 1, "hd_3_clear 两段底模应该是同一块")
+        self.assertTrue(next(iter(files)).startswith("miaomiaoRealskin_anima13"))
+        base_id, _chain = _lora_chain(wf)
+        s2_model = wf[_stage2(wf)]["inputs"]["model"][0]
+        self.assertEqual(wf[base_id]["inputs"]["unet_name"],
+                         wf[s2_model]["inputs"]["unet_name"])
+
+    def test_all_four_have_two_loaders(self):
+        """四个渠道的骨架都是**两个** UNETLoader（`5` 一段 / `20` 二段）。"""
+        for name in CHANNELS:
             self.assertEqual(len(_all(_load(name), "UNETLoader")), 2, name)
 
 
@@ -463,7 +523,7 @@ class ResolutionTest(unittest.TestCase):
     def test_canvas_matches_the_declared_size(self):
         """2026-09-27 调到 1024×1536 后，单张图就把整机拖到黑屏关机。
 
-        728×1024 / 768×1024 是实测的安全档。想调高先读 `skills/anima_*/skill.md`
+        728×1024 / 768×1024 是实测的安全档。想调高先读 `skills/hd_3_*/skill.md`
         里那段警告，别直接改这些数。
         """
         for name, (_, _, w, h, _) in CHANNELS.items():
@@ -472,21 +532,26 @@ class ResolutionTest(unittest.TestCase):
 
     # 渠道 → 实际输出尺寸（像素）
     OUTPUT = {
-        "anima_soft": (728, 1024),
-        "anima_gloss": (848, 1128),
-        "anima_curvy": (728, 1024),
-        "anima_clear": (728, 1024),
+        "hd_3_clear": (3072, 4608),
+        "hd_3_soft": (3072, 4608),
+        "hd_3_gloss": (3072, 4608),
+        "hd_3_curvy": (3072, 4608),
     }
 
     def test_output_size_is_the_canvas_times_the_upscale(self):
-        """实际输出 = 画布 ÷ 8（→ latent）→ `round()` → × scale_by → × 8。
+        """实际输出 = 画布 ÷ 8（→ latent）→ `round()` → × scale_by → × 8 → **× 2**。
 
-        ComfyUI 的 `LatentUpscaleBy` 先按 8 折成 latent 再放大（`nodes.py:1393`）。
-        只有 `anima_gloss` 用 1.1×：768×1024 → 96×128 → `round(105.6)=106`、
-        `round(140.8)=141` → **848×1128**。其余三个 `scale_by=1`，输出 = 画布。
+        ComfyUI 的 `LatentUpscaleBy` 先按 8 折成 latent 再放大（`nodes.py:1393`）：
+        1024×1536 → 128×192 → ×1.5 → `round(192)=192`、`round(288)=288` → ×8 =
+        **1536×2304**；末尾 `ImageUpscaleWithModel` 再 ×2 → **3072×4608**。
+
+        ⚠️ 2026-10-07 之前只有 1.1× 那种「latent 放大」，没有末尾那道像素放大。
+        用户拍板「anima = 三档 + x2 像素」后输出翻倍——**这是用户要的**，
+        别看到 3072×4608 就以为算错了。
         """
         for name, (_, _, w, h, scale) in CHANNELS.items():
-            got = (round(w / 8 * scale) * 8, round(h / 8 * scale) * 8)
+            latent_out = (round(w / 8 * scale) * 8, round(h / 8 * scale) * 8)
+            got = (latent_out[0] * PIXEL_UPSCALE, latent_out[1] * PIXEL_UPSCALE)
             self.assertEqual(got, self.OUTPUT[name],
                              "%s 输出尺寸：期望 %r，按公式算得 %r"
                              % (name, self.OUTPUT[name], got))
@@ -584,20 +649,21 @@ class VisibilityTest(unittest.TestCase):
                              "%s 的标题还自称默认生图渠道" % name)
 
     def test_tool_description_covers_all_four_and_no_retired_names(self):
-        """工具描述要写全四个渠道，且**一个老渠道名都不许出现**。
+        """工具描述要写全四个渠道，且**一个已归档的渠道 id 都不许出现**。
 
-        `anima` 得用词边界匹配——它是 `anima_soft` / `anima_gloss` 的前缀，
-        直接 `assertNotIn("anima")` 会误伤新渠道名。
+        ⚠️ 裸的 `anima` **不再算旧渠道名**：2026-10-07 起它是用户点三档的口语词
+        （用户原话「你说 anima，就跑三档加上 x2 像素」），描述里必须留着它当判据。
+        要挡的是那些**带下划线的完整 id**（`anima_clear` / `hd_fast_*` / `hd_2_*`）——
+        它们已经不在 `skills/` 了，写进描述模型就会照着编出不存在的渠道名。
         """
-        import re
         from app.tools.normal.generate_image import tool
         desc = tool["description"]
         for name in CHANNELS:
             self.assertIn(name, desc, "描述里缺了渠道 %s" % name)
-        self.assertIsNone(re.search(r"\banima\b", desc),
-                          "描述里还留着裸的旧渠道名 anima")
-        for name in ("anima_realskin", "anima_2"):
-            self.assertNotIn(name, desc, "描述里还留着老渠道 %s" % name)
+        for gone in ARCHIVED_20261007 + ("anima_realskin", "anima_2"):
+            self.assertNotIn(gone, desc, "描述里还留着已归档的渠道 %s" % gone)
+        # 裸 `anima` 是**口语档位词**，必须在场（否则模型认不出「说 anima」）
+        self.assertIn("anima", desc)
         # `image_gen_v1` 2026-10-01 起是**保留渠道**，所以不再按「老渠道」排除；
         # 但它也确实没被写进描述（见 RETIRED 上面的说明）——这里不断言它的出现与否。
         # 参数说明里的可选值也要对得上
@@ -795,19 +861,21 @@ class RoleNameRuleTest(unittest.TestCase):
         self.assertIn("写自然语言 ≠ 省略专有名词", text)
 
 
-# ─── 12 个高清渠道（3 档 × 4 画风）──────────────────────────────────
+# ─── 4 个高清渠道（2026-10-07 起只剩三档：1 档 × 4 画风）─────────────
 
 class HdChannelTest(unittest.TestCase):
-    """12 个高清渠道的架构锁。
+    """4 个 `hd_3_<画风>` 渠道的架构锁——**动漫族现在只剩这一族**。
 
-    2026-10-01 由 `_make_hd_channels.py` 从「尺寸骨架 + 画风底模组合」展开生成。
-    它们跟 4 个常规 anima 渠道**共用同一套两段采样骨架**——只是画布更大、
-    底模按画风换、一段采样器 / 二段步数按档位换。架构断言基本照搬上面的
-    `SharedSkeletonTest` / `BaseModelTest`，只是画布 / 放大倍率 / 采样器按档位走。
+    由 `_make_hd_channels.py` 从「尺寸骨架 + 画风底模组合」展开生成，
+    末尾统一注入一对像素放大节点（`40` / `41`）。
+
+    2026-10-07 用户拍板取消快档 / 最小档 / 二档，16 个变 4 个；骨架仍是那套
+    两段采样，只是画布 1024×1536、latent 放大 1.5×、末尾再多一道 2x 像素放大
+    （→ 3072×4608）。架构断言基本照搬上面的 `SharedSkeletonTest` / `BaseModelTest`。
     """
 
-    def test_all_twelve_exist_and_nothing_else(self):
-        """恰好这 12 个 hd_* 渠道；多一个 / 少一个都说明生成脚本跑歪了。"""
+    def test_only_the_four_third_tier_channels_exist(self):
+        """恰好这 4 个 hd_* 渠道；多一个 / 少一个都说明生成脚本跑歪了。"""
         found = sorted(s for s in list_skills() if s.startswith("hd_"))
         self.assertEqual(found, sorted(HD_CHANNELS),
                          "高清渠道集合变了——重跑 _make_hd_channels.py 了吗？")
@@ -819,12 +887,12 @@ class HdChannelTest(unittest.TestCase):
             self.assertEqual(data["kind"], "生图", name)
             self.assertIsNotNone(data["workflow"], name)
 
-    def test_qq_whitelist_includes_all_twelve(self):
-        """QQ 机器人必须能看见这 12 个渠道，否则默认渠道传不进来、也点不到。
+    def test_qq_whitelist_includes_all_four(self):
+        """QQ 机器人必须能看见这 4 个渠道，否则默认画风传不进来、也点不到。
 
         这条直接钉住 `agents/qq/agent.json` 的 skills 白名单——**加高清渠道时
-        忘了把它写进白名单**是这类改动最容易踩的坑（模型描述里写了 16 个，
-        白名单却只有 4 个，结果点名 hd_* 直接被 `allows_skill` 拒）。
+        忘了把它写进白名单**是这类改动最容易踩的坑（模型描述里写了，
+        白名单却没有，结果点名 hd_* 直接被 `allows_skill` 拒）。
         """
         from app import agents
         for name in HD_CHANNELS:
@@ -841,6 +909,32 @@ class HdChannelTest(unittest.TestCase):
             self.assertEqual(len(_all(wf, "LoraLoaderModelOnly")), 2, name)
             self.assertEqual(len(_all(wf, "CLIPLoader")), 1, name)
             self.assertEqual(len(_all(wf, "EmptyLatentImage")), 1, name)
+            # 末尾那道像素放大：装载器 1 + 应用 1
+            self.assertEqual(len(_all(wf, "UpscaleModelLoader")), 1, name)
+            self.assertEqual(len(_all(wf, "ImageUpscaleWithModel")), 1, name)
+
+    def test_pixel_upscale_is_2x_and_wired_last(self):
+        """末尾那对放大节点（`40` / `41`）必须是 2x，且**接在解码之后**。
+
+        链路：一段 → latent 放大(18) → 二段 → 解码(3) → **像素放大(41) → 存图(23)**。
+        2026-10-07 用户拍板「anima = 三档 + x2 像素」，所以这一段是**刻意加的**，
+        不是脚本跑歪。
+        """
+        for name in HD_CHANNELS:
+            wf = _load(name)
+            load, apply_node = UPSCALE_LOAD_NODE, UPSCALE_APPLY_NODE
+            self.assertEqual(wf[load]["class_type"], "UpscaleModelLoader", name)
+            self.assertEqual(wf[load]["inputs"]["model_name"], UPSCALE_MODEL, name)
+            self.assertEqual(wf[apply_node]["class_type"],
+                             "ImageUpscaleWithModel", name)
+            self.assertEqual(wf[apply_node]["inputs"]["upscale_model"], [load, 0],
+                             name)
+            # 源图 = 解码节点（3），不是二段采样器
+            self.assertEqual(wf[apply_node]["inputs"]["image"],
+                             [_one(wf, "VAEDecode"), 0], name)
+            # SaveImage 读的是放大结果，不是解码结果
+            self.assertEqual(wf[_one(wf, "SaveImage")]["inputs"]["images"],
+                             [apply_node, 0], name)
 
     def test_topology_stage1_upscale_stage2_decode(self):
         for name in HD_CHANNELS:
@@ -913,7 +1007,7 @@ class HdChannelTest(unittest.TestCase):
                             "%s 二段底模：期望 %s*，实际 %r" % (name, base2, got2))
 
     def test_resolution_matches_the_tier(self):
-        """画布恒为 1024×1536，放大倍率按档位走，输出 = 画布 × scale_by。
+        """画布恒为 1024×1536，latent 放大 1.5×，末尾再 ×2 像素 → **3072×4608**。
 
         这条锁住「别把高清渠道的画布 / 放大倍率调歪」——它们比常规渠道重得多，
         画布一旦往上调就会重演 2026-09-27 把整机拖黑屏的事故。
@@ -929,7 +1023,12 @@ class HdChannelTest(unittest.TestCase):
             self.assertAlmostEqual(up["inputs"]["scale_by"], scale, msg=name)
             got = (round(cw / 8 * scale) * 8, round(ch / 8 * scale) * 8)
             self.assertEqual(got, (ow, oh),
-                             "%s 输出：期望 %r，按公式算得 %r" % (name, (ow, oh), got))
+                             "%s latent 段输出：期望 %r，按公式算得 %r"
+                             % (name, (ow, oh), got))
+            self.assertEqual((ow * PIXEL_UPSCALE, oh * PIXEL_UPSCALE),
+                             (3072, 4608),
+                             "%s 最终输出该是 latent 段 × %dx 像素"
+                             % (name, PIXEL_UPSCALE))
 
     def test_stage1_sampler_and_steps_match_the_tier(self):
         for name in HD_CHANNELS:
@@ -994,17 +1093,25 @@ class HdChannelTest(unittest.TestCase):
             self.assertIn("_make_hd_channels.py", text,
                           "%s 的 skill.md 没说明是生成脚本产物" % name)
 
-    def test_tool_description_covers_all_sixteen(self):
-        """工具描述要写全 16 个渠道（4 画风 + 12 高清），且数对齐。"""
+    def test_tool_description_covers_all_four(self):
+        """工具描述要写全这 4 个渠道，且**不许再提**已归档的 12 个旧档位。
+
+        模型只会照着描述里出现的名字传 skill——描述里留着 `anima_clear` /
+        `hd_2_clear`，它就会编出不存在的渠道名，`allows_skill` 再拒掉，
+        用户看到的是「莫名其妙失败了」。
+        """
         from app.tools.normal.generate_image import tool
         desc = tool["description"]
-        # 「16 个」现在指的是**动漫渠道**那一族（本机另有 qwen_image_v1、
-        # image_gen_v1、krea2、nffa 四个非动漫渠道，加上云端的 nai 共 21 个可传名字），
-        # 所以字面量带着「动漫」两个字。
-        self.assertIn("16 个", desc)
+        for name in HD_CHANNELS:
+            self.assertIn(name, desc, "工具描述没写渠道 %s" % name)
+        self.assertIn("只剩三档", desc)
+        for gone in ARCHIVED_20261007:
+            self.assertNotIn(gone, desc, "工具描述还在提已归档的 %s" % gone)
         self.assertIn("动漫渠道", desc)
-        for prefix in ("hd_fast_", "hd_2_", "hd_3_"):
+        for prefix in ("hd_3_",):
             self.assertIn(prefix, desc, "描述里没提到档位 %s" % prefix)
+        for gone in ("hd_fast_", "hd_2_"):
+            self.assertNotIn(gone, desc, "描述里还留着已取消的档位 %s" % gone)
         self.assertIn(DEFAULT_CHANNEL, desc)
         self.assertIn(DEFAULT_CHANNEL,
                       tool["parameters"]["properties"]["skill"]["description"])
@@ -1180,7 +1287,7 @@ class ToolDescriptionBudgetTest(unittest.TestCase):
     RULES = {
         "默认渠道": "不传就是默认渠道 silver",
         "别编渠道名": "别编别的 skill 名出来",
-        "换渠道门槛": "只有用户点名画风 / 点名尺寸",
+        "换渠道门槛": "只有用户点名画风",
         "高清但没更大": "只是形容词 = 别动",
         "clear_soft难分": "分不清也走默认",
         "角色名最前": "名字写在 prompt 最前面",
@@ -1239,18 +1346,21 @@ class ToolDescriptionBudgetTest(unittest.TestCase):
         hd_fast_clear / 不传」三种结果。
 
         2026-10-04：**「高清」有两个意思，得按有没有「档」字分开判**——
-        用户是照 ComfyUI 里导出的工作流名字说话的（高清快档 / 高清二档 /
-        高清三档），那是**点名了尺寸档、必须传**；而光秃秃的「高清 / 清晰 /
-        画质好」只是形容词，**不传**。两条都得写进描述，否则要么吞掉用户
-        点名的档位，要么把形容词当换档理由。
+        用户是照 ComfyUI 里导出的工作流名字说话的（高清三档 / anima），
+        那是**点名了尺寸档、必须传**；而光秃秃的「高清 / 清晰 / 画质好」只是
+        形容词，**不传**。两条都得写进描述，否则要么吞掉用户点名的档位，
+        要么把形容词当换档理由。
+
+        2026-10-07 只剩三档，所以「高清快档 / 高清二档」这两个写法退场，
+        `anima` 成为等价的点名词。
         """
         desc = self._tool()["description"]
         # 不带「档」的画质形容词 → 不换档
         self.assertIn("只是形容词 = 别动", desc)
-        # 带「档」的点名档位 → 必须换
-        for token in ("高清快档", "高清二档", "高清三档"):
+        # 点名的写法 → 必须换
+        for token in ("高清三档", "anima", "三档"):
             self.assertIn(token, desc,
-                          "描述里必须留着 %s 这种带「档」的点名写法" % token)
+                          "描述里必须留着 %s 这种点名写法" % token)
         self.assertIn("当壁纸", desc)
         # 旧的两句自相矛盾的说法，一句都不许再出现
         self.assertNotIn("没说多大 → `hd_fast_clear`", desc)
@@ -1268,7 +1378,7 @@ class ToolDescriptionBudgetTest(unittest.TestCase):
         self.assertLess(len(param), 400,
                         "skill 参数又涨回 %d 字（精简前是 947）" % len(param))
         # 至少别把四个画风全名逐一抄一遍
-        for ch in ("anima_soft", "anima_gloss", "anima_curvy"):
+        for ch in ("hd_3_soft", "hd_3_gloss", "hd_3_curvy"):
             self.assertNotIn(ch, param,
                              "skill 参数里重复列了 %s（Available Skills 已有一份）" % ch)
 
@@ -1287,7 +1397,7 @@ class HdTierGuardTest(unittest.TestCase):
     """
 
     @staticmethod
-    def _guard(skill, text, default="anima_clear"):
+    def _guard(skill, text, default="silver"):
         from app.tools.normal import generate_image as gi
         from app import qq_api
         with mock.patch.object(qq_api, "current_turn_text",
@@ -1297,26 +1407,27 @@ class HdTierGuardTest(unittest.TestCase):
     def test_tier_named_keeps_hd_channel(self):
         """用户报了档位 → 放行，hd_* 原样保留。"""
         for text, why in (
-            ("画一张绫华，高清二档", "带档"),
+            ("画一张绫华，高清二档", "带档（旧档位词照认）"),
             ("来个鲁迪乌斯，高清三档", "带档"),
-            ("画个黑发少女，高清快档", "快档"),
+            ("画个黑发少女，高清快档", "快档（旧档位词照认）"),
             ("来个二档的", "光说档位"),
-            ("要 1328×2000 那张", "直接报像素"),
+            ("来个 anima 的", "说 anima（≡ 三档）"),
+            ("要 3072×4608 那张", "直接报像素"),
             ("来张当壁纸的", "明说用途"),
         ):
-            for skill in ("hd_2_clear", "hd_3_clear", "hd_fast_soft"):
+            for skill in ("hd_3_clear", "hd_3_soft", "hd_3_gloss"):
                 got, note = self._guard(skill, text)
                 self.assertEqual(skill, got,
                                  "「%s」（%s）报了档位却被降级了" % (text, why))
                 self.assertEqual("", note, "放行时不该带回执备注")
 
     def test_quality_word_only_downgrades(self):
-        """只有画质形容词 → 降回默认档 + 带回执说明。"""
+        """只有画质形容词 → 降回默认渠道 + 带回执说明。"""
         for text, hit in (("画一张绫华，高清", "高清"), ("高清一点", "高清"),
                           ("清晰点", "清晰"), ("画质好点", "画质"),
                           ("要精细的", "精细"), ("别太糊", "别太糊")):
-            got, note = self._guard("hd_fast_clear", text)
-            self.assertEqual("anima_clear", got,
+            got, note = self._guard("hd_3_clear", text)
+            self.assertEqual("silver", got,
                              "「%s」只是画质形容词，不该换 hd_ 档" % text)
             self.assertIn("自动调整", note,
                           "降级必须告诉对方，否则他以为自己要到了大图")
@@ -1335,26 +1446,26 @@ class HdTierGuardTest(unittest.TestCase):
         with mock.patch.object(qq_api, "current_turn_text",
                                return_value=None):
             self.assertEqual("hd_3_clear", gi._hd_tier_guard("hd_3_clear",
-                                                             "anima_clear")[0])
+                                                             "silver")[0])
 
     def test_unrelated_text_passes_through(self):
         """既没档位也没画质词 → 判不准，别乱动（可能是引用/上文语境）。"""
         for text in ("照这张画一张", "跟刚才一样的", "再来一张"):
-            got, note = self._guard("hd_2_clear", text)
-            self.assertEqual("hd_2_clear", got,
+            got, note = self._guard("hd_3_clear", text)
+            self.assertEqual("hd_3_clear", got,
                              "「%s」信息不足，不该动模型选的档位" % text)
             self.assertEqual("", note)
 
     def test_non_hd_skill_untouched(self):
-        """非 hd_* 渠道（qwen/krea2/nffa/nai）一律不管。"""
-        for skill in ("anima_soft", "qwen_image_v1", "krea2", "nai"):
+        """非 hd_* 渠道（silver/qwen/krea2/nai）一律不管。"""
+        for skill in ("silver", "qwen_image_v1", "krea2", "nai"):
             self.assertEqual(skill, self._guard(skill, "高清一点")[0])
 
     def test_guard_runs_after_nai_branch(self):
         """守卫必须**排在 NAI 分流之后**。
 
         NAI 是云端渠道，压根不读本机 skill 目录，画布/档位那套概念对它没有
-        意义；把它拦下来降级成 anima_clear 只会让 NAI 根本没画成。
+        意义；把它拦下来降级成 silver 只会让 NAI 根本没画成。
         位置错了不会让任何现有用例变红（`nai` 压根不是 hd_ 前缀，守卫自己
         会放行），所以必须拿源码位置单独钉住。
         """
@@ -1378,8 +1489,8 @@ class HdTierGuardTest(unittest.TestCase):
     def test_guard_only_downgrades_never_upgrades(self):
         """只降不升：对方报了「二档」而模型没传 skill，**不在这里补**。
 
-        补了等于代码替模型猜意图，而且猜画风没依据（该 hd_2_clear 还是
-        hd_2_soft？）。实测里「报了档却没传」没出现过 —— 9B 是反过来的，
+        补了等于代码替模型猜意图，而且猜画风没依据（该 hd_3_clear 还是
+        hd_3_soft？）。实测里「报了档却没传」没出现过 —— 9B 是反过来的，
         见到「高清」就乱传，那才是要治的。
         """
         got, note = self._guard(None, "画一张绫华，高清二档")
@@ -1581,7 +1692,7 @@ class BriefToolParamTest(unittest.TestCase):
     def test_brief_keeps_skill_channel_hint(self):
         line = self._line(True)
         self.assertIn("默认 silver", line, "brief 下丢了默认渠道名")
-        self.assertIn("hd_fast_", line, "brief 下丢了档位映射")
+        self.assertIn("hd_3_", line, "brief 下丢了档位映射")
         self.assertIn("qwen_image_v1", line, "brief 下丢了 qwen 渠道映射")
 
     def test_brief_keeps_source_image_legal_value(self):

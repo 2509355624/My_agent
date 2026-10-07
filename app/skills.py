@@ -173,18 +173,40 @@ def load_skill(skill_name):
     }
 
 
-def list_skills():
-    """列出所有可用 Skill（保留顶层目录名）
+# 2026-10-07：这些渠道的**目录还在原地**（保留文生图骨架 + 图生图骨架），
+# 但**不再作为渠道对外**——用户拍板取消 anima 族的快档 / 最小档 / 二档，只留
+# 三档 `hd_3_<画风>`。原话：「取消 anima 的快档、普通、二档，只留一个三档，
+# 到时候就是你说 anima，就跑三档加上 x2 像素」。
+#
+# ⚠️ 为什么是「屏蔽」而不是「挪走」：挪走会连带丢掉那 12 份
+# `workflow_i2i.json`（动漫重绘骨架），而用户只要求取消**尺寸档**、
+# 没要求砍掉图生图能力。屏蔽只挡「对外可见」这一层：
+# `list_skills()` 不吐它们 → 管理页、技能计数、渠道白名单、工具描述、
+# `direct_gen._allowed_skills()` 全都看不到，模型也就点不到它们；
+# 而 `load_skill()` 走的是纯文件系统路径（`_resolve_skill_dir`），
+# **照样能加载**，所以动漫图生图那条路没断。
+ARCHIVED_SKILLS = tuple(
+    ["anima_" + s for s in ("clear", "curvy", "gloss", "soft")]
+    + ["hd_fast_" + s for s in ("clear", "curvy", "gloss", "soft")]
+    + ["hd_2_" + s for s in ("clear", "curvy", "gloss", "soft")]
+)
 
-    跳过 `_` 开头的目录：那是**归档/暂存**用的（如 `skills/_archive_20260930/`
-    放被替换掉的老生图渠道）。它们不是 skill，不该出现在任何技能列表里。
-    `_build_skill_list` 本来就会因为「没有 skill.md」而跳过它们，但
-    `list_skills()` 是裸目录列举——不挡的话归档目录会漏进管理页和技能计数。
+
+def list_skills():
+    """列出所有**对外可见**的 Skill（保留顶层目录名）
+
+    两类要挡：
+    - `_` 开头的目录：那是**归档/暂存**用的（如 `skills/_archive_20260930/`
+      放被替换掉的老生图渠道）。它们不是 skill，不该出现在任何技能列表里。
+      `_build_skill_list` 本来就会因为「没有 skill.md」而跳过它们，但
+      `list_skills()` 是裸目录列举——不挡的话归档目录会漏进管理页和技能计数。
+    - `ARCHIVED_SKILLS`：**留在原地但已下架**的渠道（见上面的说明）。
     """
     if not os.path.isdir(SKILLS_DIR):
         return []
     return [d for d in os.listdir(SKILLS_DIR)
             if not d.startswith("_")
+            and d not in ARCHIVED_SKILLS
             and os.path.isdir(os.path.join(SKILLS_DIR, d))]
 
 

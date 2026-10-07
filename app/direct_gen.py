@@ -98,11 +98,16 @@ SEARCH_ENABLED = os.getenv("DIRECT_SEARCH", "1") == "1"
 # ─── 渠道清单 ────────────────────────────────────────────
 # hd 渠道是「档位_画风」的组合命名（skills/ 下真实存在）；其余是固定渠道名。
 # 别让这个集合和 skills/ 目录漂移：_allowed_skills() 每次现场核对目录，
-# 对不上的（被归档/新增）以目录为准加减。
-_HD_TIERS = ("fast", "2", "3")
+# 对不上的（被屏蔽/新增）以目录为准加减。
+# 2026-10-07 用户拍板：anima 族的**快档 / 最小档 / 二档全取消，只剩三档**
+# （`hd_3_<画风>`，末尾带 2x 像素放大 → 3072×4608）。原话：「取消 anima 的快档、
+# 普通、二档，只留一个三档，到时候就是你说 anima，就跑三档加上 x2 像素」。
+# 12 个旧目录**原地保留、只是被屏蔽**（`app/skills.ARCHIVED_SKILLS` →
+# `list_skills()` 不再吐它们，但 `load_skill` 照样能加载，i2i 重绘骨架要用）。
+# `_allowed_skills()` 现场扫目录后自然只剩这 4 个。
+_HD_TIERS = ("3",)
 _HD_STYLES = ("clear", "curvy", "gloss", "soft")
-_FIXED_SKILLS = ("anima_clear", "anima_curvy", "anima_gloss", "anima_soft",
-                 "image_gen_v1", "image_gen_v1_hires", "krea2", "nffa",
+_FIXED_SKILLS = ("image_gen_v1", "image_gen_v1_hires", "krea2", "nffa",
                  "cunny", "miao", "qwen_image_v1", *image_jobs.NAI_SKILLS)
 # 默认渠道（2026-10-06 用户拍板：「我们默认渠道就是 sILVR，把它做成默认渠道
 # 就行了」——**不做管理页的默认渠道下拉**，写死）。与
@@ -114,7 +119,7 @@ _DEFAULT_SKILL = "silver"
 def _allowed_skills():
     allowed = set(_FIXED_SKILLS)
     allowed.update("hd_%s_%s" % (t, s) for t in _HD_TIERS for s in _HD_STYLES)
-    # 以 skills/ 目录实况校正：目录里没有了就剔除（防归档后照发）。
+    # 以 skills/ 目录实况校正：目录里没有了就剔除（防屏蔽后照发）。
     # ⚠️ NAI 是**虚拟渠道**（image_jobs 云分支，skills/ 下没有目录），
     # 不参与目录核对，否则永远被误杀。
     try:
@@ -129,7 +134,7 @@ def _allowed_skills():
             sd = load_skill(sk)
             if sd and sd.get("kind") == "生图":
                 allowed.add(sk)
-        # 仍以磁盘实况收口：写死名单里目录已被删的渠道剔除（防点名已归档渠道
+        # 仍以磁盘实况收口：写死名单里目录已被删的渠道剔除（防点名已屏蔽渠道
         # 还去 enqueue 报「找不到 workflow」）。NAI 是虚拟云端渠道，不参与核对。
         allowed &= present | set(image_jobs.NAI_SKILLS)
     except Exception:
@@ -170,9 +175,17 @@ _IMG_ONLY_RE = re.compile(r"^\s*(?:\[图片\]\s*)+$")
 # ─── 渠道解析（代码直判，LLM 不再碰渠道） ─────────────────
 # 档位是最核心的关键词；画风词是可选项。用户口径（2026-10-05）：档位打了、
 # 画风词打错或没打 → 按该档默认画风 clear。
-_TIER_MAP = {"三档": "3", "3档": "3", "二档": "2", "2档": "2",
-             "快档": "fast", "一档": "fast", "1档": "fast"}
-_TIER_RE = re.compile(r"(三档|二档|一档|快档|[123]档|默认)")
+# 2026-10-07 只剩三档，所以**所有档位词一律映射到 "3"**：用户还在说「二档 /
+# 快档 / 一档」时按用户口径「当没说过、照跑三档」。词照旧从正文里抠掉，
+# 不许漏进提示词。
+# `anima` 也当「档位词」用——用户原话「你说 anima，就跑三档加上 x2 像素」，
+# 它与「三档」完全等价，后面可跟画风词（`anima soft` → hd_3_soft）。
+# ⚠️ 它是这里面**唯一**的 ASCII 词，必须带边界：danbooru 标签和模型名里到处
+# 是下划线连词（`miaomiaoRealskin_anima13`），不挡就会从中间误命中。
+_TIER_MAP = {"三档": "3", "3档": "3", "二档": "3", "2档": "3",
+             "快档": "3", "一档": "3", "1档": "3", "anima": "3"}
+_TIER_RE = re.compile(r"(三档|二档|一档|快档|[123]档|默认"
+                      r"|(?<![0-9A-Za-z_])anima(?![0-9A-Za-z_]))", re.I)
 # 英文画风词的前后不能是字母或下划线：「一档curvy」连写也要认（CJK 后面 \b
 # 不成立，2026-10-05 踩过），但「glossy」这种词中片段不能算。⚠️ 下划线也必须
 # 挡住——10-05 私聊实录：画师串里的 `0.8::soft_focus::` 被认成画风 soft，
@@ -288,7 +301,9 @@ def _lead_commands(text):
         rest = _LEAD_SEP_RE.sub("", rest, count=1)
         m = _TIER_RE.match(rest)
         if m and tier is None:
-            tier = _TIER_MAP.get(m.group(1), "base")
+            # `.lower()` 只为 `anima`（`_TIER_RE` 带 re.I，`ANIMA` 也得认）；
+            # 中文键不受影响。
+            tier = _TIER_MAP.get(m.group(1).lower(), "base")
             rest = rest[m.end():]
             continue
         m = _STYLE_RE.match(rest)
@@ -304,12 +319,16 @@ def _lead_commands(text):
 
 
 def _tier_skill(tier, style):
-    """档位 + 画风 → 渠道 id（档位最核心；画风没打/打错按该档默认 clear）。"""
-    if tier == "base":
-        return "anima_" + style if style else _DEFAULT_SKILL
-    if tier:
-        return "hd_%s_%s" % (tier, style or "clear")
-    return "anima_" + style
+    """档位 + 画风 → 渠道 id。
+
+    2026-10-07 只剩三档，所以不再按档位分支：打了任何档位词（三档 / 二档 /
+    快档 / 一档 / anima…）或只打了画风词，**一律落 `hd_3_<画风>`**；画风没打
+    或打错就是 `hd_3_clear`。唯一例外是「默认」且没说画风——那是「默认渠道」
+    的意思，照旧回 `silver`。
+    """
+    if tier == "base" and not style:
+        return _DEFAULT_SKILL
+    return "hd_3_%s" % (style or "clear")
 
 
 def _fix_typo_style(rest):
@@ -351,11 +370,12 @@ def _parse_channel(text):
     那就走三档——就看哪一个排在第一」）。AI 判不准 → 走默认渠道。
 
     - 「三档 gloss 初音未来」→ hd_3_gloss / 初音未来
+    - 「anima soft 初音」    → hd_3_soft / 初音（`anima` ≡ 三档）
     - 「三档,glss,初音未来」 → hd_3_gloss / 初音未来（glss 贴回 gloss）
-    - 「三档 猫」            → hd_3_clear / 猫（画风没打，档位默认）
+    - 「三档 猫」            → hd_3_clear / 猫（画风没打，默认 clear）
+    - 「二档 curvy 初音」    → hd_3_curvy / 初音（旧档位词一律落三档）
     - 「默认初音未来」       → silver / 初音未来（「默认」= 默认渠道）
-    - 「一档curvy 初音」     → hd_fast_curvy / 初音（连写也认）
-    - 「gloss 一个女孩」     → anima_gloss / 一个女孩（只打画风）
+    - 「gloss 一个女孩」     → hd_3_gloss / 一个女孩（只打画风）
     - 「sd 一只猫」          → image_gen_v1 / 一只猫（固定渠道词）
     - 「NAI，…，三档」       → nai / …（谁靠前谁优先）
     - 「这个猪 跑 nai」      → nai / 这个猪（渠道词不限位置）
@@ -516,7 +536,7 @@ _FINAL_PROMPT_NO_CHAN_TEXT = (
     "这段带权号的提示词我照原样收下了，但这轮没说渠道，我不敢替你选"
     "（选错就是整张图换风味）。在前面补一个渠道词再发："
     "nai（画师串/权号这种写法就是它的）/ silver（默认渠道）/ silver-hd（4x超清）/ "
-    "快档 / 二档 / 三档 / sd / krea2 / qwen / nffa / jank。")
+    "anima（三档）/ sd / krea2 / qwen / nffa / jank。")
 
 
 MENU_TEXT = (
@@ -539,14 +559,14 @@ GUIDE_TEXT = (
     "\n"
     "【怎么写】渠道名写在最前面，后面接需求\n"
     "　silver 水晶城堡 ｜ 不写渠道就走它（默认·最快）\n"
-    "　快档 女骑士 ｜ 快档 = 一档（动漫族中间档）\n"
-    "　二档 gloss 女骑士 ｜ 二档更精细 · gloss 油亮\n"
-    "　三档 clear 水晶城堡 ｜ 三档最高清\n"
-    "　快档 1girl, blue hair ｜ 英文照过 AI\n"
-    "　只说画风词（clear/soft/gloss/curvy）→ 动漫最小档\n"
+    "　anima 女骑士 ｜ 三档 + 2x 像素放大（3072×4608）\n"
+    "　anima gloss 女骑士 ｜ gloss 油亮\n"
+    "　三档 clear 水晶城堡 ｜ 跟 anima 等价\n"
+    "　anima 1girl, blue hair ｜ 英文照过 AI\n"
+    "　只说画风词（clear/soft/gloss/curvy）→ 也是三档\n"
     "\n"
-    "【档位】快档(=一档) ＜ 二档 ＜ 三档\n"
-    "　　　越大越清晰越慢 · 不写渠道词 = silver\n"
+    "【档位】只剩三档（快档 / 最小档 / 二档 2026-10-07 取消）\n"
+    "　　　说 anima 或三档都行 · 不写渠道词 = silver\n"
     "\n"
     "【画风】clear 清晰 ｜ curvy 肉感\n"
     "　　　gloss 油亮 ｜ soft 柔和\n"
@@ -609,8 +629,8 @@ MORE_CHAN_TEXT = (
     "\n"
     "【默认】不写渠道词 → silver（最快）\n"
     "\n"
-    "【档位】快档(=一档) ＜ 二档 ＜ 三档\n"
-    "　　　越大越清晰、也越慢\n"
+    "【档位】只剩三档（快档 / 最小档 / 二档 已取消）\n"
+    "　　　anima 或三档都行 · 末尾 2x 放大 → 3072×4608\n"
     "\n"
     "【画风】clear 清晰 ｜ curvy 肉感\n"
     "　　　gloss 油亮 ｜ soft 柔和\n"
@@ -718,7 +738,7 @@ def _parse_direct(text):
 # 英文再跑图」——**这条必须明写**，不然模型看到中文输入很容易把中文原样抄进
 # prompt（以前是靠「danbooru 标签式英文」顺带暗示，不够硬）。
 # 写法分家（对齐 skills/qwen_image_v1/SKILL.md）：
-#   - 标签渠道（anima_* / hd_* / image_gen_v1 / krea2 / nffa / nai）
+#   - 标签渠道（hd_* / image_gen_v1 / krea2 / nffa / nai）
 #     → 逗号分隔的英文 danbooru 标签串
 #   - qwen_image_v1 → **完整主谓宾的自然语言句子**，不写标签堆、不写负面词
 #     （SKILL.md 原话：「这里写自然语言句子，不写标签」「英文最好，中文也认」）
@@ -757,7 +777,7 @@ def _prompt_lang(skill):
 # AI 自己判「要不要动手 / 调哪个工具 / 哪个渠道 / 提示词怎么写」。
 #
 # 三处**代码仍然要给**的东西（模型不可能自己知道的本地事实，不是「指挥 AI」）：
-#   - 渠道名清单（anima_clear / hd_3_* / nai … 是我们自己起的，模型猜不出来）
+#   - 渠道名清单（hd_3_* / nai … 是我们自己起的，模型猜不出来）
 #   - 每个渠道的尺寸/快慢（本地实测值）
 #   - `chan_hint`：代码从原话里认出的开头渠道词，直接告诉模型（免它误判）
 _MASTER_TEMPLATE = (
@@ -791,13 +811,10 @@ _MASTER_TEMPLATE = (
     "渠道档位没点名用默认，细节自己补。\n"
     "\n"
     "【渠道 skill】不填 = " + _DEFAULT_SKILL + "（默认渠道）。用户点名渠道就照他说的填。\n"
-    "画风四种（接在档位后）：clear 清晰 / soft 柔和 / gloss 油亮 / curvy 肉感\n"
-    "尺寸四档，id = 档位_画风（档位说的是尺寸，与默认渠道无关）：\n"
-    "- 最小档 = anima_clear 等 anima_<画风>，728×1024，最快；只说画风没说档位时就是它\n"
-    "- 快档（=一档）= hd_fast_<画风>，1024×1536\n"
-    "- 二档 = hd_2_<画风>，1328×2000\n"
-    "- 三档 = hd_3_<画风>，1536×2304，最慢\n"
-    "  「三档 gloss」→ hd_3_gloss；只说「二档」没提画风 → hd_2_clear。\n"
+    "画风四种：clear 清晰 / soft 柔和 / gloss 油亮 / curvy 肉感\n"
+    "尺寸只剩一档（2026-10-07 起快档 / 最小档 / 二档全取消），id = hd_3_<画风>：\n"
+    "- 「anima」「三档」「高清」都是它，末尾带 2x 像素放大 → 3072×4608，最慢\n"
+    "- 没说画风 → hd_3_clear（「anima gloss」→ hd_3_gloss）；只说画风也是它\n"
     "固定渠道（说左边这些词就填右边的 id）：\n"
     "- nai / nai_wide = NovelAI 云端，竖 832×1216 / 横 1216×832，认画师串和权重语法。\n"
     "- qwen / 千问 / 通义 = qwen_image_v1，云端、慢，prompt 写完整英文句子。\n"
@@ -868,9 +885,9 @@ _REVISE_TEMPLATE = (
     # 580929233 实录：引用图 +「silver 生成」→ 又跑了一次 jank）。
     "- 渠道 id 只有这些（用户点名换渠道时照左边说的话填右边那个）：\n"
     "  **默认渠道 = silver**（用户没点名渠道、引用的又不是自家图时就用它）；\n"
-    "  动漫档 = anima_clear / anima_soft / anima_gloss / anima_curvy（728×1024，只说画风没说档位时用它）；\n"
-    "  快档（=一档）= hd_fast_<画风>，二档 = hd_2_<画风>，三档 = hd_3_<画风>"
-    "（画风只有 clear/soft/gloss/curvy 四种，例「三档 gloss」= hd_3_gloss）；\n"
+    "  anima（= 三档）= hd_3_<画风>（末尾带 2x 像素放大 → 3072×4608；"
+    "画风只有 clear/soft/gloss/curvy 四种，例「anima gloss」= hd_3_gloss，"
+    "没说画风 = hd_3_clear）；\n"
     "  nai / nai_wide = 说「nai」（画师串和权重语法认这两个）；\n"
     "  qwen_image_v1 = 说「qwen / 千问 / 通义」；image_gen_v1 = 说「sd」；\n"
     "  krea2 / nffa / cunny / miao = 原话点名才填；\n"

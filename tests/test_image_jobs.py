@@ -370,7 +370,7 @@ class ChannelSplitTest(_Base):
         的 NAI 说「前面还有 5 张」——比不报还糟。
         """
         for i in range(5):                  # 每个会话各一张，绕开每会话上限
-            job, reason = self._enqueue(("group", str(i)), skill="anima_clear")
+            job, reason = self._enqueue(("group", str(i)), skill="hd_3_clear")
             self.assertIsNone(reason)
         nai, reason = self._enqueue(("group", "9"), wf="cat", skill="nai")
         self.assertIsNone(reason)
@@ -381,8 +381,8 @@ class ChannelSplitTest(_Base):
     def test_limits_are_per_channel(self):
         """本地名额满了，NAI 照样进得来——两条队各算各的。"""
         for _ in range(image_jobs.MAX_INFLIGHT):
-            self._enqueue(skill="anima_clear")
-        self.assertIsNotNone(self._enqueue(skill="anima_clear")[1])   # 本地已满
+            self._enqueue(skill="hd_3_clear")
+        self.assertIsNotNone(self._enqueue(skill="hd_3_clear")[1])   # 本地已满
         job, reason = self._enqueue(wf="cat", skill="nai")
         self.assertIsNone(reason)
         self.assertIsNotNone(job)
@@ -428,18 +428,18 @@ class ChannelSplitTest(_Base):
 
     def test_inflight_counts_both_channels(self):
         """「这个人还有几张在路上」要两条一起数（私聊额度那行靠它）。"""
-        self._enqueue(("private", "42"), skill="anima_clear")
+        self._enqueue(("private", "42"), skill="hd_3_clear")
         self._enqueue(("private", "42"), wf="cat", skill="nai")
         self.assertEqual(image_jobs.inflight_count("private", "42"), 2)
 
     def test_snapshot_exposes_both_queues(self):
         """状态页：老三个键还是本地通道，nai 是云端通道，depth 是合计。"""
-        self._enqueue(skill="anima_clear")
+        self._enqueue(skill="hd_3_clear")
         self._enqueue(wf="cat", skill="nai")
         self._enqueue(wf="dog", skill="nai_wide")
         s = image_jobs.snapshot()
         self.assertEqual(len(s["queued"]), 1)
-        self.assertEqual([j["skill"] for j in s["queued"]], ["anima_clear"])
+        self.assertEqual([j["skill"] for j in s["queued"]], ["hd_3_clear"])
         self.assertEqual(s["nai"]["depth"], 2)
         self.assertEqual([j["skill"] for j in s["nai"]["queued"]],
                          ["nai", "nai_wide"])
@@ -515,7 +515,7 @@ class SkillPriorityTest(unittest.TestCase):
         「不认识就当普通活」是刻意的：权重写错方向（把普通渠道当成重的）
         会让它被无谓地延后，而延后一次就是让对方多等一张图的时间。
         """
-        for name in ("anima_soft", "anima_gloss", "krea2", "image_gen_v1",
+        for name in ("hd_3_soft", "hd_3_gloss", "krea2", "image_gen_v1",
                      "nffa", "goutoujunshi", "没这个skill", "", None):
             self.assertEqual(skills.skill_priority(name), 1, name)
 
@@ -563,12 +563,12 @@ class QueuePriorityTest(_Base):
     def test_qwen_keeps_its_queue_position(self):
         """核心：qwen 先入队就先跑，不再给后到的普通渠道让位。"""
         first, _ = self._enqueue(skill="qwen_image_v1")
-        self._enqueue(skill="anima_soft")
+        self._enqueue(skill="hd_3_soft")
         self.assertEqual(image_jobs._take_nowait(), first)
 
     def test_fifo_among_normal_jobs(self):
         """普通渠道之间还是先进先出——优先级不能把队列变成插队游戏。"""
-        a, _ = self._enqueue(skill="anima_soft")
+        a, _ = self._enqueue(skill="hd_3_soft")
         b, _ = self._enqueue(skill="krea2")
         self.assertEqual(image_jobs._take_nowait(), a)
         self.assertEqual(image_jobs._take_nowait(), b)
@@ -586,7 +586,7 @@ class QueuePriorityTest(_Base):
         qwen 先入队却排在后面，按入队顺序数就会报成 0 —— 模型于是跟对方说
         「已经在画了」，而实际前面还压着一张 anima。
         """
-        self._enqueue(skill="anima_soft")
+        self._enqueue(skill="hd_3_soft")
         heavy, _ = self._enqueue(skill="qwen_image_v1")
         self.assertEqual(image_jobs.ahead_of(heavy), 1)
 
@@ -608,7 +608,7 @@ class QueuePriorityTest(_Base):
         """重渠道的上限绝不能卡到普通渠道头上。"""
         for i in range(image_jobs.MAX_HEAVY_IN_QUEUE):
             self._enqueue(("group", "h" + str(i)), skill="qwen_image_v1")
-        job, reason = self._enqueue(("group", "n"), skill="anima_soft")
+        job, reason = self._enqueue(("group", "n"), skill="hd_3_soft")
         self.assertIsNone(reason)
         self.assertIsNotNone(job)
 
@@ -658,7 +658,7 @@ class NoCooldownTest(_Base):
         """普通渠道跑完照旧不开冷却。"""
         entry = {"outputs": {"9": {"images": [{"filename": "a.png"}]}}}
         with mock.patch.object(image_jobs, "wait_done", return_value=entry):
-            image_jobs.enqueue("group", "9", {"1": {}}, "anima_soft")
+            image_jobs.enqueue("group", "9", {"1": {}}, "hd_3_soft")
             image_jobs._drain()
         nxt, _ = self._enqueue(skill="qwen_image_v1")
         self.assertEqual(image_jobs._take_nowait(), nxt)
@@ -931,9 +931,9 @@ class SendImageTest(unittest.TestCase):
         with p1, p2, \
              mock.patch.object(image_out, "local_size", return_value="1024×1536"):
             image_jobs._send_image("group", "9", "b.png",
-                                   "HT-20261001-074112-384", skill="anima_soft")
+                                   "HT-20261001-074112-384", skill="hd_3_soft")
         self.assertEqual(
-            sent, [("C:/tmp/y.jpg", "HT-20261001-074112-384 · 1024×1536 · anima_soft")])
+            sent, [("C:/tmp/y.jpg", "HT-20261001-074112-384 · 1024×1536 · hd_3_soft")])
 
     def test_caption_survives_missing_size(self):
         """量不出分辨率（图读不出来 / 回落到 ComfyUI URL）时只少这一项，别多出空档。"""
@@ -942,8 +942,8 @@ class SendImageTest(unittest.TestCase):
         with p1, p2, \
              mock.patch.object(image_out, "local_size", return_value=""):
             image_jobs._send_image("group", "9", "b.png",
-                                   "HT-20261001-074112-384", skill="anima_soft")
-        self.assertEqual(sent, [("C:/tmp/y.jpg", "HT-20261001-074112-384 · anima_soft")])
+                                   "HT-20261001-074112-384", skill="hd_3_soft")
+        self.assertEqual(sent, [("C:/tmp/y.jpg", "HT-20261001-074112-384 · hd_3_soft")])
 
     def test_audit_block_sends_nothing_at_all(self):
         """被审核拦下时连编号也不发——没图却挂个编号，比什么都不发更糟。"""
@@ -969,10 +969,10 @@ class SendImageTest(unittest.TestCase):
              mock.patch.object(image_out, "local_size", return_value="1024×1536"):
             image_jobs._send_image("group", "9", "b.png",
                                    "HT-20261001-074112-384",
-                                   skill="anima_soft", seed=4100493889)
+                                   skill="hd_3_soft", seed=4100493889)
         self.assertEqual(
             sent, [("C:/tmp/y.jpg",
-                    "HT-20261001-074112-384 · 1024×1536 · anima_soft "
+                    "HT-20261001-074112-384 · 1024×1536 · hd_3_soft "
                     "· seed 4100493889")])
 
     def test_caption_writes_seed_zero(self):
@@ -1787,7 +1787,7 @@ class ChannelSwitchTest(_Base):
     """换渠道先 /free：跨渠道必释放。
 
     背景（2026-09-27 实测）：12GB 显存 + 16GB 内存撑不住两个渠道的模型同时
-    驻留。动漫渠道（现默认 anima_clear）连跑两张都正常，紧接着同一个 ComfyUI 会话里跑 qwen
+    驻留。动漫渠道（现默认 hd_3_clear）连跑两张都正常，紧接着同一个 ComfyUI 会话里跑 qwen
     （文本编码器 6GB + unet 4.5GB），采样到一半就 TDR，ComfyUI 变成僵尸。
     所以 skill 一变就先 /free 把上一个渠道的模型卸掉。
     同渠道连画原本永不释放，2026-10-05 起连画满 COMFY_RELEASE_AFTER_SAME
@@ -1820,28 +1820,28 @@ class ChannelSwitchTest(_Base):
 
     def test_first_job_does_not_free(self):
         """第一次没有「上一个渠道」，没什么可卸的。"""
-        self._run(skill="anima_soft")
+        self._run(skill="hd_3_soft")
         self.assertEqual(self.events, ["submit"])
 
     def test_same_skill_twice_never_frees(self):
         """同渠道连画必须保持模型热的——否则每次都白等一次重新加载。"""
-        self._run(skill="anima_soft")
-        self._run(skill="anima_soft")
+        self._run(skill="hd_3_soft")
+        self._run(skill="hd_3_soft")
         self.assertEqual(self.events, ["submit", "submit"])
 
     def test_switch_frees_before_submitting(self):
         """顺序要紧：先 free 再 submit，否则新任务还是和旧模型抢显存。"""
-        self._run(skill="anima_soft")
+        self._run(skill="hd_3_soft")
         self.events.clear()
         self._run(skill="qwen_image_v1")
         self.assertEqual(self.events, ["free", "submit"])
 
     def test_switching_back_also_frees(self):
         """来回切也算切换，两个方向都要释放。"""
-        self._run(skill="anima_soft")
+        self._run(skill="hd_3_soft")
         self._run(skill="qwen_image_v1")
         self.events.clear()
-        self._run(skill="anima_soft")
+        self._run(skill="hd_3_soft")
         self.assertEqual(self.events, ["free", "submit"])
 
     def test_no_skill_keeps_old_behaviour(self):
@@ -1852,7 +1852,7 @@ class ChannelSwitchTest(_Base):
 
     def test_skill_none_after_real_skill_is_not_a_switch(self):
         """传 None 不是「换渠道」——不能拿 None 去和 anima 比出一次切换。"""
-        self._run(skill="anima_soft")
+        self._run(skill="hd_3_soft")
         self.events.clear()
         self._run()
         self.assertEqual(self.events, ["submit"])
@@ -1937,7 +1937,7 @@ class SameChannelReleaseTest(_Base):
         """中途换渠道归零：切回来之后又要连画满 N 张才放。"""
         self._run("qwen_image_v1")
         self._run("qwen_image_v1")
-        self._run("anima_soft")          # 换渠道 free，计数归 1
+        self._run("hd_3_soft")          # 换渠道 free，计数归 1
         self._run("qwen_image_v1")       # 切回，计数 1
         self.events.clear()
         self._run("qwen_image_v1")       # 才第 2 张，必须保持热
@@ -2116,7 +2116,7 @@ class RestartOnLowRamTest(unittest.TestCase):
 
     def test_restart_clears_the_remembered_channel(self):
         """重启后 ComfyUI 里一个模型都没有了，别以为上个渠道还是热的。"""
-        image_jobs._COMFY.last_skill = "anima_soft"
+        image_jobs._COMFY.last_skill = "hd_3_soft"
         self._patch([6.0], clock=_TickingClock())
         self.assertTrue(image_jobs._restart_comfy(timeout=120))
         self.assertIsNone(image_jobs._COMFY.last_skill)
@@ -2177,7 +2177,7 @@ class ReleaseOnLowVramTest(unittest.TestCase):
 
     针对的场景：ComfyUI **从不把上一个任务清干净**——日志里那句
     `Unloaded partially: 2896.25 MB freed, 1591.04 MB remains loaded` 就是
-    证据，残留 1.6~2.1GB 会一路叠上去。动漫渠道（现默认 anima_clear，峰值约 5.4GB）扛得住，但 qwen
+    证据，残留 1.6~2.1GB 会一路叠上去。动漫渠道（现默认 hd_3_clear，峰值约 5.4GB）扛得住，但 qwen
     一张就要 11.1GB / 11.94GB，连画第三张就触发 nvlddmkm 153、进程消失
     （16:09 成 / 16:12 成 / 16:14 崩）。
 
@@ -2365,6 +2365,10 @@ class DisabledChannelTest(unittest.TestCase):
 
         图生图的出图尺寸就是这一步缩出来的尺寸再乘二段放大倍率，缩错了高清档
         就名不副实。
+
+        ⚠️ 用的 `anima_clear` 是 2026-10-07 **下架**的渠道：目录还在、`load_skill`
+        照样能加载（屏蔽只挡 `list_skills()`），所以这条照旧成立——它钉的是
+        「按画布缩」这个机制，不是「这个渠道还能被点名」。
         """
         self._disabled([])
         self.load.return_value = {
@@ -2414,7 +2418,7 @@ class DisabledChannelTest(unittest.TestCase):
     def test_other_channels_are_untouched(self):
         """闸只挡停用的那个，别的渠道照常走。"""
         self._disabled(["krea2"])
-        out = self._call(prompt="a cat", skill="anima_soft")
+        out = self._call(prompt="a cat", skill="hd_3_soft")
         self.assertNotIn("停用", out)
         self.assertTrue(self.comfy.called)      # 正常路径照旧会探活
 
@@ -2439,7 +2443,7 @@ class DisabledChannelTest(unittest.TestCase):
         """四个动漫渠道是**能跑**的渠道，绝不能被误列进停用清单
         （那样就一张图都画不出了）。"""
         from app.config import DISABLED_IMAGE_SKILLS
-        for name in ("anima_soft", "anima_gloss", "anima_curvy", "anima_clear"):
+        for name in ("hd_3_soft", "hd_3_gloss", "hd_3_curvy", "hd_3_clear"):
             self.assertNotIn(name, DISABLED_IMAGE_SKILLS, name)
 
 
@@ -2454,17 +2458,23 @@ class QqWhitelistTest(unittest.TestCase):
     「停用渠道」**，而是「QQ 本身提不提供哪些渠道」。同日用户拍板把
     `image_gen_v1`（SD）与 `krea2` 也放给 QQ——它们以前只在 `agents/draw` 里。
     2026-10-02 又放了新上的 `nffa`。
-    现在 QQ 侧的隐藏项只剩**已归档的老渠道**和**画图助手专用 / 未上线**的那些。
+    2026-10-07 动漫族缩到一档（三档）：`anima_*` / `hd_fast_*` / `hd_2_*` 这 12 个
+    目录仍在盘上、`load_skill` 照样能加载（i2i 重绘骨架要用），但被
+    `app/skills.ARCHIVED_SKILLS` 屏蔽——`list_skills()` 不再吐、白名单也不放。
+    现在 QQ 侧的隐藏项 = **那 12 个被屏蔽的旧档** + 已归档的老名字 + 画图助手
+    专用 / 未上线的那几个。
     """
 
-    # QQ 提供的：16 个动漫渠道（4 画风 × 4 尺寸档）+ qwen + SD + krea2 + nffa
-    VISIBLE = tuple("%s_%s" % (tier, style)
-                    for tier in ("anima", "hd_fast", "hd_2", "hd_3")
+    # QQ 提供的：4 个动漫渠道（4 画风 × 1 尺寸档，只剩三档）+ qwen + SD + krea2 + nffa
+    VISIBLE = tuple("hd_3_" + style
                     for style in ("clear", "soft", "gloss", "curvy")) + (
                         "qwen_image_v1", "image_gen_v1", "krea2", "nffa")
-    # QQ 不提供的：已归档的老名字 + draw 专用 / 还没上线的渠道
-    HIDDEN = ("anima", "anima_2", "anima_realskin",
-              "image_gen_v1_hires", "nsfw_pose_gen", "pose_library")
+    # QQ 不提供的：2026-10-07 屏蔽的 12 个旧档 + 已归档的老名字 + draw 专用 / 未上线
+    HIDDEN = tuple("%s_%s" % (tier, style)
+                   for tier in ("anima", "hd_fast", "hd_2")
+                   for style in ("clear", "soft", "gloss", "curvy")) + (
+        "anima", "anima_2", "anima_realskin",
+        "image_gen_v1_hires", "nsfw_pose_gen", "pose_library")
 
     def test_qq_whitelist_matches_the_offered_channels(self):
         from app import agents
@@ -2523,12 +2533,12 @@ class CleanStartTest(_Base):
         采样没有因果关系。
       * 代价却是实的：这个门槛在一天里白重启了 **23 次** ComfyUI。
 
-    而它现在更危险——两段那套已经是**全部四个动漫渠道**（默认 `anima_clear`）。
+    而它现在更危险——两段那套已经是**全部四个动漫渠道**（默认 `hd_3_clear`）。
     要是把 6.0 顺手挪到它们头上，每张默认图都要先重启一次（60~90 秒），
     比原来的 bug 更糟。
 
     所以下面测的是**反过来的性质**：机制留着（改 `{}` 即可重现），但对包括
-    `anima_soft` 在内的任何渠道都不再触发重启。
+    `hd_3_soft` 在内的任何渠道都不再触发重启。
     """
 
     def setUp(self):
@@ -2552,27 +2562,27 @@ class CleanStartTest(_Base):
     def test_no_channel_is_registered_for_a_clean_start(self):
         """**核心不变量**：清单必须是空的。
 
-        页面上写 `{"anima_soft": 6.0}` 这类「为两段采样预备重启」的配置一律判红——
+        页面上写 `{"hd_3_soft": 6.0}` 这类「为两段采样预备重启」的配置一律判红——
         那会让默认渠道每张图都白等一分钟。
         """
         self.assertEqual(image_jobs.CLEAN_START_SKILLS, {})
 
     def test_default_channel_never_restarts_even_on_a_dirty_state(self):
-        """anima_soft 撞上脏状态（5.6GB）也不重启——它就是两段采样那条，实测够用。"""
-        self._run("anima_soft", 5.6)
+        """hd_3_soft 撞上脏状态（5.6GB）也不重启——它就是两段采样那条，实测够用。"""
+        self._run("hd_3_soft", 5.6)
         self.assertEqual(self.restarts, [])
         self.assertEqual(len(self.sent_images), 1)
 
     def test_default_channel_never_restarts_on_a_critical_state(self):
         """哪怕显存低到 0.5GB 也不为它重启——低水位由 `/free` 那道闸管
         （COMFY_MIN_FREE_VRAM_GB），跟「预备重启」不是一回事。"""
-        self._run("anima_soft", 0.5)
+        self._run("hd_3_soft", 0.5)
         self.assertEqual(self.restarts, [])
 
     def test_unknown_vram_does_not_restart(self):
         """显存问不到就别折腾：那种情况 ComfyUI 多半已经不在了，重启请求
         同样发不出去——照常提交，让 _notice 去说「ComfyUI 没在线」。"""
-        self._run("anima_soft", None)
+        self._run("hd_3_soft", None)
         self.assertEqual(self.restarts, [])
         self.assertEqual(len(self.sent_images), 1)
 
@@ -2760,11 +2770,11 @@ class RecentOutcomesTest(_Base):
     def test_success_recorded_and_rendered(self):
         with mock.patch.object(image_jobs, "wait_done",
                                return_value=self._entry()):
-            self._enqueue(skill="anima_soft")
+            self._enqueue(skill="hd_3_soft")
             image_jobs._drain()
         line = image_jobs.recent_line("group", "9")
         self.assertIn("已完成：", line)
-        self.assertIn("已出图（anima_soft）", line)
+        self.assertIn("已出图（hd_3_soft）", line)
         # 带完成时刻：模型要能分清「刚才那张」和「很久以前那张」
         self.assertRegex(line, r"\d\d:\d\d 已出图")
         # 明说「没列出来的 = 还没提交」——这是「AI 撒谎」的正面修法
@@ -2778,16 +2788,16 @@ class RecentOutcomesTest(_Base):
                                side_effect=TimeoutError("超时")), \
                 mock.patch.object(image_jobs, "requests",
                                   mock.Mock(post=lambda *a, **k: None)):
-            self._enqueue(skill="anima_soft")
+            self._enqueue(skill="hd_3_soft")
             image_jobs._drain()
         line = image_jobs.recent_line("group", "9")
-        self.assertIn("失败（anima_soft：超时）", line)
+        self.assertIn("失败（hd_3_soft：超时）", line)
 
     def test_only_the_last_three_and_newest_is_last(self):
         with mock.patch.object(image_jobs, "wait_done",
                                return_value=self._entry()):
             for _ in range(4):
-                self._enqueue(skill="anima_soft")
+                self._enqueue(skill="hd_3_soft")
                 image_jobs._drain()
         items = image_jobs.recent_outcomes("group", "9", 3)
         self.assertEqual(len(items), 3)
@@ -2811,7 +2821,7 @@ class RecentOutcomesTest(_Base):
     def test_other_sessions_are_not_visible(self):
         with mock.patch.object(image_jobs, "wait_done",
                                return_value=self._entry()):
-            self._enqueue(("group", "9"), skill="anima_soft")
+            self._enqueue(("group", "9"), skill="hd_3_soft")
             image_jobs._drain()
         self.assertNotEqual(image_jobs.recent_line("group", "9"), "")
         self.assertEqual(image_jobs.recent_line("group", "8"), "")
@@ -2820,7 +2830,7 @@ class RecentOutcomesTest(_Base):
         # 网页侧同步等结果，模型直接从工具返回值就知道成没成，不需要回执
         with mock.patch.object(image_jobs, "wait_done",
                                return_value=self._entry()):
-            self._enqueue((None, None), skill="anima_soft")
+            self._enqueue((None, None), skill="hd_3_soft")
             image_jobs._drain()
         self.assertEqual(image_jobs.recent_outcomes(None, None), [])
         self.assertEqual(image_jobs.recent_line(None, None), "")
@@ -2833,7 +2843,7 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
     """按渠道分级的出图时限（2026-10-04 加）。
 
     背景：用户说「我任务都在 80 秒以下」，要全局改 80。但实测日志里
-    （`渠道 X，seed Y，耗时 Z 秒` 统计）各渠道中位数差 4 倍——anima_clear
+    （`渠道 X，seed Y，耗时 Z 秒` 统计）各渠道中位数差 4 倍——hd_3_clear
     16.6s 而 hd_3_curvy 68.3s，一个全局数必然在两头出错。所以改成查表。
 
     这几条钉的是**分流本身**：快渠道真的拿到 80、重渠道不会被误杀、
@@ -2841,8 +2851,9 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
     """
 
     def test_light_channels_get_the_short_limit(self):
-        for skill in ("anima_clear", "anima_soft", "image_gen_v1",
-                      "hd_2_clear", "hd_fast_clear"):
+        # 2026-10-07：动漫族只剩 hd_3_*（重档，300），120 这一档现在只剩
+        # 轻量的 SD 系渠道。
+        for skill in ("image_gen_v1",):
             self.assertEqual(image_jobs.task_timeout(skill), 120, skill)
 
     def test_heavy_channels_keep_enough_headroom(self):
@@ -2859,9 +2870,9 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
 
     def test_accepts_a_job_or_a_skill_name(self):
         """process() 手里有 job，异常路径上只有渠道名——两种都得收。"""
-        job = image_jobs.Job("group", "9", {}, skill="anima_clear")
-        self.assertEqual(image_jobs.task_timeout(job), 120)
-        self.assertEqual(image_jobs.task_timeout("anima_clear"), 120)
+        job = image_jobs.Job("group", "9", {}, skill="hd_3_clear")
+        self.assertEqual(image_jobs.task_timeout(job), 300)
+        self.assertEqual(image_jobs.task_timeout("hd_3_clear"), 300)
 
     def test_survives_garbage_input(self):
         """热路径上不能因为一个怪值就抛——抛了整张图的处理就断了。
@@ -2893,7 +2904,7 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
             seen.append(timeout)
             raise TimeoutError("生成超时 (%ds)" % timeout)
 
-        for skill, want in (("anima_clear", 120), ("qwen_image_v1", 300)):
+        for skill, want in (("hd_3_clear", 300), ("image_gen_v1", 120)):
             seen.clear()
             job = image_jobs.Job("group", "9", {}, skill=skill)
             job.target = None          # 免得 _notice 真去发消息
@@ -2912,11 +2923,11 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
             self.assertEqual(seen, [want], skill)
 
     def test_fail_text_uses_the_same_limit(self):
-        """给用户看的那句也要跟着变，否则说「超过 300 秒」而实际只等了 120。"""
-        self.assertIn("超过 120 秒", image_jobs._fail_text(
-            TimeoutError("x"), skill="anima_clear"))
+        """给用户看的那句也要跟着查表走，否则说「超过 300 秒」而实际只等了 120。"""
         self.assertIn("超过 300 秒", image_jobs._fail_text(
-            TimeoutError("x"), skill="qwen_image_v1"))
+            TimeoutError("x"), skill="hd_3_clear"))
+        self.assertIn("超过 120 秒", image_jobs._fail_text(
+            TimeoutError("x"), skill="image_gen_v1"))
 
 
 class SilentRetryTest(_Base):
@@ -2944,7 +2955,7 @@ class SilentRetryTest(_Base):
         with mock.patch.object(image_jobs, "wait_done", return_value=entry), \
              mock.patch.object(image_jobs.image_log, "save") as m_save:
             job, reason = image_jobs.enqueue("group", "9", {"1": {}},
-                                             "anima_clear", prompt=prompt,
+                                             "hd_3_clear", prompt=prompt,
                                              resample_fn=resample_fn)
             self.assertIsNone(reason)
             image_jobs._drain()
@@ -3005,7 +3016,7 @@ class BuildWorkflowTest(unittest.TestCase):
 
     def test_escape_seed_and_no_placeholder_left(self):
         wf = generate_image.build_t2i_workflow(
-            "anima_clear", 'a"b\\c\nd __SEED__ mess', 42)
+            "hd_3_clear", 'a"b\\c\nd __SEED__ mess', 42)
         s = json.dumps(wf)
         self.assertNotIn("__MULTI_PROMPTS__", s)
         self.assertNotIn("__SEED__", s)                 # 引号版和裸版都清干净
