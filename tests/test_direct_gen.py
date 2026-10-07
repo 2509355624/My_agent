@@ -57,6 +57,16 @@ def tearDownModule():
         _search_off.stop()
 
 
+def _pc(text):
+    """`_parse_channel` 的**前两个**返回值 (skill, desc)。
+
+    2026-10-07 起它返回三元组，多了个 `alt`（正文里还剩的第二个渠道词）。
+    老用例只关心前两个；要测 alt 的用 `_parse_channel` 直接解三元。
+    """
+    skill, desc, _alt = direct_gen._parse_channel(text)
+    return skill, desc
+
+
 class ChannelParseTest(unittest.TestCase):
     """渠道解析收归代码：判据必须确定性，用群聊实录出题。"""
 
@@ -74,7 +84,7 @@ class ChannelParseTest(unittest.TestCase):
                 ("一档curvy 初音未来", "hd_fast_curvy", "初音未来"),  # 连写
                 ("nai 1girl, masterpiece", "nai", "1girl, masterpiece")):
             with self.subTest(text=text):
-                got_skill, got_desc = direct_gen._parse_channel(text)
+                got_skill, got_desc = _pc(text)
                 self.assertEqual((got_skill, got_desc), (skill, desc))
 
     def test_fixed_channel_words(self):
@@ -90,21 +100,21 @@ class ChannelParseTest(unittest.TestCase):
                 ("这个猪 跑 nai", "nai", "这个猪"),   # 渠道词不限位置+动词残渣
                 ("nai 伊藤润二画风", "nai", "伊藤润二画风")):
             with self.subTest(text=text):
-                self.assertEqual(direct_gen._parse_channel(text),
+                self.assertEqual(_pc(text),
                                  (skill, desc))
 
     def test_fixed_word_inside_english_prompt_is_ignored(self):
         # 档位在场时固定渠道词不参与（英文提示词里撞词不误判）
         self.assertEqual(
-            direct_gen._parse_channel("三档 1girl, solo, sd style"),
+            _pc("三档 1girl, solo, sd style"),
             ("hd_3_clear", "1girl, solo, sd style"))
 
     def test_typo_style_falls_back(self):
         # 画风词打错：贴得回来（glss→gloss）就修正；贴不回来按档位默认 clear，
         # 原词留在描述里不丢。
-        self.assertEqual(direct_gen._parse_channel("三档,glss,初音未来"),
+        self.assertEqual(_pc("三档,glss,初音未来"),
                          ("hd_3_gloss", "初音未来"))
-        skill, desc = direct_gen._parse_channel("三档,miku,初音未来")
+        skill, desc = _pc("三档,miku,初音未来")
         self.assertEqual(skill, "hd_3_clear")
         self.assertIn("miku", desc)
 
@@ -119,10 +129,10 @@ class ChannelParseTest(unittest.TestCase):
                 ("qwen 柔和光线的少女", "qwen_image_v1", "柔和光线的少女"),
                 ("nffa curvy 少女", "nffa", "curvy 少女")):
             with self.subTest(text=text):
-                self.assertEqual(direct_gen._parse_channel(text),
+                self.assertEqual(_pc(text),
                                  (skill, desc))
         # 不在开头的渠道词照旧让位档位（英文 tag 撞词不误判）
-        self.assertEqual(direct_gen._parse_channel("三档 1girl, solo, sd style"),
+        self.assertEqual(_pc("三档 1girl, solo, sd style"),
                          ("hd_3_clear", "1girl, solo, sd style"))
 
     def test_style_words_inside_the_body_are_not_channel_words(self):
@@ -137,13 +147,13 @@ class ChannelParseTest(unittest.TestCase):
                      "nurse, clear eyes, 1girl",
                      "soft lighting, 1girl"):
             with self.subTest(text=text):
-                self.assertEqual(direct_gen._parse_channel(text), (None, text))
+                self.assertEqual(_pc(text), (None, text))
 
     def test_danbooru_tag_with_underscores_is_not_a_channel_word(self):
         # `anime_nffa_1` 里的 nffa 前后都挨着下划线 → 不是点名词，不能从
         # 中间把提示词剪断。
         text = "solo, anime_nffa_1"
-        self.assertEqual(direct_gen._parse_channel(text), (None, text))
+        self.assertEqual(_pc(text), (None, text))
 
     def test_reported_private_log_nai_case_locks_nai(self):
         # 2026-10-05 私聊 2831674699 实录（用户报「明明都已经说了 nai 和中文
@@ -153,7 +163,7 @@ class ChannelParseTest(unittest.TestCase):
         text = ("nai，真人 Cos 阿米娅，角色服装以蓝白色为主，保留阿米娅的标志性"
                 "配色与耳部装饰，人物站在书房落地镜前自拍，柔和室内光，低饱和"
                 "色调，自然肤色，整体干净、文艺、安静。")
-        skill, desc = direct_gen._parse_channel(text)
+        skill, desc = _pc(text)
         self.assertEqual(skill, "nai")
         self.assertTrue(desc.startswith("真人 Cos 阿米娅"))
         self.assertIn("柔和室内光", desc)
@@ -176,19 +186,107 @@ class ChannelParseTest(unittest.TestCase):
                 # 档位和画风同族，谁前谁后都组合（「二档 gloss」的老用法反过来）
                 ("gloss 三档 猫", "hd_3_gloss")):
             with self.subTest(text=text):
-                self.assertEqual(direct_gen._parse_channel(text)[0], skill)
+                self.assertEqual(_pc(text)[0], skill)
 
     def test_no_channel_word_returns_none(self):
         text = "初音未来，全身照，anime，正身平齐视角"
-        self.assertEqual(direct_gen._parse_channel(text), (None, text))
+        self.assertEqual(_pc(text), (None, text))
 
     def test_own_name_expansion_is_stripped(self):
         # 群实录 2026-10-05 01:07：文字 @ 的昵称带括号扩展，顶着名字渠道词
         # 永远匹配不上。
         stripped = direct_gen._strip_own_names(
             "@大大怪（生图机器人，贼拉快，种类多） 三档 soft 初音未来")
-        self.assertEqual(direct_gen._parse_channel(stripped),
+        self.assertEqual(_pc(stripped),
                          ("hd_3_soft", "初音未来"))
+
+
+class AltChannelReportTest(unittest.TestCase):
+    """两个渠道词并存时，代码**上报第二个词**、不替 AI 裁决（2026-10-07）。
+
+    病根：`_parse_channel` 只认固定渠道词和档位词，自定义渠道（silver / jank）
+    两类都不进 → 「silver 三档」里 silver 匹配不到，被当成画面内容留在 desc，
+    档位词却锁死了渠道，chan_hint 还写「就用它（hd_3_clear）」，AI 无从反驳。
+    用户 2026-10-07 点破：「三档二档快档是之前为了 anima 区分做的，现在反而
+    造成冲突」——档位是 anima 族的尺寸维度，渠道名是正交的另一维。
+    """
+
+    def test_second_channel_word_is_reported(self):
+        for text, skill, desc, alt in (
+                ("silver 三档", "hd_3_clear", "silver", "silver"),
+                ("三档 silver", "hd_3_clear", "silver", "silver"),
+                ("jank 二档", "hd_2_clear", "jank", "jank"),
+                ("二档 jank", "hd_2_clear", "jank", "jank"),
+                ("silver 快档", "hd_fast_clear", "silver", "silver"),
+                ("silver 三档 gloss", "hd_3_gloss", "silver", "silver"),
+                ("silver 三档 女骑士", "hd_3_clear", "silver  女骑士", "silver"),
+                # 固定渠道词被留在 desc 里时也要报（别名，不是 id）
+                ("三档 qwen", "hd_3_clear", "qwen", "qwen"),
+                ("画个女孩 三档 qwen", "hd_3_clear", "画个女孩  qwen", "qwen")):
+            with self.subTest(text=text):
+                self.assertEqual(direct_gen._parse_channel(text),
+                                 (skill, desc, alt))
+
+    def test_no_alt_when_only_one_channel_word(self):
+        for text in ("三档 gloss 初音未来", "gloss 一个女孩", "sd 一只猫",
+                     "nai 三档", "三档 猫", "三档 女骑士", "默认初音未来"):
+            with self.subTest(text=text):
+                _, _, alt = direct_gen._parse_channel(text)
+                self.assertIsNone(alt, "只有一个渠道词时不该报 alt")
+
+    def test_english_tag_run_does_not_fake_a_channel(self):
+        # `sd style` / `soft lighting` 这类 tag 流里的片段不是点名单。
+        # 边界必须用 [0-9A-Za-z]（不能用 \w——\w 匹配 CJK，会把中文正文误判）。
+        for text in ("三档 1girl, solo, sd style",
+                     "1girl, soft lighting, blue hair",
+                     "sd style 的女孩 三档"):
+            with self.subTest(text=text):
+                _, _, alt = direct_gen._parse_channel(text)
+                self.assertIsNone(alt)
+
+    def test_underscore_joined_name_is_not_a_channel(self):
+        # `silver_hair`、`silvers` 都是画面内容/近似词，不是渠道。
+        for text in ("silver_hair 的少女", "一只银发少女", "silver silvers 三档"):
+            with self.subTest(text=text):
+                _, _, alt = direct_gen._parse_channel(text)
+                self.assertIsNone(alt)
+
+    def test_chan_hint_spells_out_both_words(self):
+        """两个渠道词时，chan_hint 要把两个词都摊给模型并讲清维度关系。
+
+        钉住「不替 AI 裁决」这条：提示词里**不允许**再出现那个替用户拍板的
+        口径（「就用它」配在错误渠道上）。
+        """
+        captured = {}
+
+        def fake_ask(content):
+            captured["content"] = content
+            return {"reply": "好的"}
+
+        with mock.patch.object(direct_gen, "_ask", side_effect=fake_ask):
+            direct_gen._translate("silver 三档", [], skill="hd_3_clear",
+                                  alt="silver")
+        c = captured["content"]
+        self.assertIn("hd_3_clear", c)
+        self.assertIn("silver", c)
+        self.assertIn("两个", c)
+        # 讲清维度关系
+        self.assertIn("尺寸", c)
+        self.assertIn("渠道名", c)
+        # 不许给「就用它」这种拍板口径
+        self.assertNotIn("就用它", c)
+
+    def test_chan_hint_stays_a_command_when_unambiguous(self):
+        """只有一个渠道词时维持老口径（「就用它」），别把 AI 搞犹豫。"""
+        captured = {}
+
+        def fake_ask(content):
+            captured["content"] = content
+            return {"reply": "好的"}
+
+        with mock.patch.object(direct_gen, "_ask", side_effect=fake_ask):
+            direct_gen._translate("三档 女骑士", [], skill="hd_3_clear")
+        self.assertIn("就用它", captured["content"])
 
 
 class MenuAndGateTest(unittest.TestCase):
@@ -1234,7 +1332,7 @@ class VerbatimWeightedPromptTest(unittest.TestCase):
 
     def test_weight_tag_words_are_not_style_words(self):
         # `0.8::soft_focus::` 里的 soft 不是画风词（下划线也得挡）。
-        skill, _desc = direct_gen._parse_channel("三档 0.8::soft_focus:: 猫")
+        skill, _desc = _pc("三档 0.8::soft_focus:: 猫")
         self.assertEqual(skill, "hd_3_clear")
 
     def test_unprefixed_prompt_lets_ai_judge(self):
