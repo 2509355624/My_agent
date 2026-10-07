@@ -385,10 +385,17 @@ _RECEIPT_CHANNEL = "当前渠道：%s"
 # 只写「横屏」一个词（用户 10-07 拍板）：另外两个是同义词，不必都列，回执每张图
 # 都跟着发、能短就短。**单独占一行**而不是并进「4x 超清」那行——两件事不相关，
 # 并进去那行会长到看不清。
+# 2026-10-07（晚）加 qwen-hd / qwen 超清 曝光：它是 qwen 的 4x 超清版（4096×6144），
+# 「要 4x 超清」那行本来只讲 silver-hd，现在补上 qwen 那一支；再单独开一行讲它的
+# 图生图触发指令「qwen 超清，图生图，描述」（见 generate_image 提示词里的
+# `_I2I_SKILLS` + `skill=qwen-hd` + `source_image=1` 路由）。两件事不相关，分开两行。
+# ⚠️ 这两行的真身（线上回执）在 `agents/qq/settings.json` 的 `receipt_note`，那份覆盖
+#    优先——改了这里还要同步改 settings.json，否则线上一个字不变。
 _RECEIPT_NOTE_DEFAULT = (
     "想换渠道就发「渠道名 + 你的需求」（例：jank 银发初音未来）。\n"
     "渠道：silver（默认）/ anima（三档）/ qwen / nai / jank / sd / krea2 / nffa / miao / cunny\n"
-    "要 4x 超清：发「silver-hd + 你的需求」（也认「silver超清」）\n"
+    "要 4x 超清：silver 发「silver-hd + 需求」，qwen 发「qwen 超清 + 需求」（也认 silver超清 / qwen超清）\n"
+    "qwen 超清支持图生图：发「qwen 超清，图生图，描述」（附一张图）\n"
     "要横屏：加「横屏」（例：silver 横屏 一个女孩）\n"
     "更多玩法：@%s /更多渠道"
 )

@@ -153,14 +153,27 @@ class ReceiptNoteTest(_SubmitHarness):
         self.assertIn("要横屏", text)
         self.assertIn("silver 横屏", text)
 
+    def test_default_note_mentions_qwen_hd(self):
+        """回执给 qwen 超清（qwen-hd，4096×6144）曝光，并讲清它的图生图触发指令。
+
+        2026-10-07（晚）补：qwen-hd 是 qwen 的 4x 超清版，路由走
+        `skill=qwen-hd` + `source_image=1`（见 generate_image 提示词与
+        `_I2I_SKILLS`）。用户得知道「qwen 超清，图生图，描述」这个入口。
+        """
+        text = self._note(None)
+        self.assertIn("qwen 超清", text)
+        self.assertIn("图生图", text)
+        self.assertIn("qwen 超清，图生图，描述", text)
+
     def test_default_note_stays_five_lines(self):
         """回执跟着**每一张图**发，行数是最直接的成本 → 钉住。
 
-        现 7 行 = 状态行（任务已提交…）+ 渠道行（当前渠道：…）+ 附言 5 行
-        （想换渠道就发… / 渠道：… / 要 4x 超清… / 要横屏… / 更多玩法…）。
+        现 8 行 = 状态行（任务已提交…）+ 渠道行（当前渠道：…）+ 附言 6 行
+        （想换渠道就发… / 渠道：… / 要 4x 超清… / qwen 超清支持图生图… /
+        要横屏… / 更多玩法…）。
         以后想再加一行，先想清楚值不值。
         """
-        self.assertEqual(len(self._note(None).splitlines()), 7)
+        self.assertEqual(len(self._note(None).splitlines()), 8)
 
     def test_default_note_lists_every_nameable_channel(self):
         """2026-10-07 用户拍板「把我全部的可用渠道都加上去」——能点名的 11 个
