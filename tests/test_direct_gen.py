@@ -832,14 +832,17 @@ class RevisionPipelineTest(unittest.TestCase):
         m_llm.assert_not_called()
         m_gen.assert_not_called()
 
-    def test_own_image_praise_on_keyword_round_swallows_turn(self):
-        # 自家图 + 夸奖 + 关键词轮 → 闭嘴吞轮，绝不掉回 agent
+    def test_own_image_praise_on_keyword_round_still_replies(self):
+        # 自家图 + 夸奖 + 关键词轮 → **照旧把反推发回去**（2026-10-07 改）。
+        # 旧行为是「关键词轮闭嘴吞轮」，但群 1103174141 12:02:58 实录证明
+        # 那会把一段已生成好的反推整段丢掉（用户报的"后台有日志群里没回复"）。
         out, _, _, m_gen, _ = self._decide(
             "画得真好",
             seen='{"reverse": "miku, blue hair"}',
             quoted="编号 HT-20261005-010329-595",
             lookup_row={"prompt": "logged, miku", "skill": "hd_3_curvy"})
-        self.assertEqual(out, "")
+        self.assertIn(direct_gen._REVERSE_HEADER, out)
+        self.assertIn("miku, blue hair", out)
         m_gen.assert_not_called()
 
     def test_vision_ask_overrides_ledger(self):
@@ -876,11 +879,13 @@ class RevisionPipelineTest(unittest.TestCase):
         self.assertIn("reverse 字段", sent)
 
     def test_model_reverse_answer_is_believed_even_for_an_i2i_sentence(self):
-        """模型判「这轮不是修改请求」就照它：@ 轮回反推，关键词轮闭嘴。
+        """模型判「这轮不是修改请求」就照它：**@ 轮和关键词轮都回反推**。
 
         2026-10-05 那条「明说图生图就不许回反推文本」是代码否决模型最典型的
         一处——原话命中机制词，就把模型输出的 reverse 硬说成「没解析出来」。
         10-06 拆闸之后它不再有豁免权：判据只写在模板里，结论听模型的。
+        10-07 再改：关键词轮不再静默吞掉——能走到这里说明用户确实给了图、
+        模型确实读了图，没有理由不发（群实录的反推丢失就是这么来的）。
         """
         out, m_describe, _, m_gen, _ = self._decide(
             "图生图 改动部分异常肢体",
@@ -890,11 +895,13 @@ class RevisionPipelineTest(unittest.TestCase):
         self.assertIn("这张图的英文tag反推", out)
         m_gen.assert_not_called()
 
-        # 同一条回复在关键词轮里闭嘴吞轮（不刷屏），也不入队
+        # 同一条回复在关键词轮里照样发（不刷屏 ≠ 丢回复），也不入队
         out, _, _, m_gen, _ = self._decide(
             "图生图 改动部分异常肢体",
             seen='{"reverse": "这张图的英文tag反推"}', at_me=False)
-        self.assertEqual(out, "")
+        self.assertIn(direct_gen._REVERSE_HEADER, out)
+        self.assertIn("这张图的英文tag反推", out)
+        m_gen.assert_not_called()
         m_gen.assert_not_called()
 
     def test_own_image_bare_at_returns_logged_prompt_zero_calls(self):
@@ -1012,16 +1019,32 @@ class RevisionPipelineTest(unittest.TestCase):
         m_describe.assert_called_once()
         m_gen.assert_not_called()
 
-    def test_praise_is_swallowed_on_keyword_round(self):
-        # 关键词轮引用图 + 夸奖（reverse）→ 闭嘴吞轮（""），绝不掉回 agent
+    def test_reverse_is_returned_on_keyword_round(self):
+        # 关键词轮引用图 + 夸奖（reverse）→ **照样回反推**（2026-10-07 改）。
+        # 旧行为是吞成 ""，但那会把已生成的整段反推丢掉（群实录）。关键词轮
+        # 也是"用户在叫我"，丢回复不是止刷屏。
         out, _, _, m_gen, _ = self._decide(
             "比大大怪快五秒左右",
             seen='{"reverse": "1girl, solo, blue hair"}')
-        self.assertEqual(out, "")
+        self.assertIn(direct_gen._REVERSE_HEADER, out)
+        self.assertIn("blue hair", out)
         m_gen.assert_not_called()
 
-    def test_revision_unparseable_returns_error(self):
-        out, _, _, m_gen, _ = self._decide("手改成插兜", seen="不是 JSON")
+    def test_revision_unparseable_falls_back_to_terse_tags(self):
+        # 模型没吐 JSON 但回的就是一段 tag（≥4 字符纯 ASCII）→ 当成反推发，
+        # 不再报「没解析出来」。2026-10-07 群 1103174141 12:02:01 实录：
+        # 识图模型回了散文，旧代码直接回错误话术，用户什么都没有。
+        out, _, _, m_gen, _ = self._decide("手改成插兜", seen="1girl, blue hair")
+        self.assertIn(direct_gen._REVERSE_HEADER, out)
+        self.assertIn("blue hair", out)
+        m_gen.assert_not_called()
+
+    def test_revision_unparseable_non_english_still_errors(self):
+        # 又没 JSON、又不像英文 tag（中文散文）→ 仍按"没解析出来"处理，
+        # 不许把一段中文散文当提示词发回去。
+        out, _, _, m_gen, _ = self._decide(
+            "手改成插兜", seen="不是 JSON",
+            describe_side_effect=[("不是 JSON"), RuntimeError("429")])
         self.assertIn("没解析出来", out)
         m_gen.assert_not_called()
 
@@ -1432,13 +1455,14 @@ class DescribeImageTest(unittest.TestCase):
 
     def _decide(self, text, urls=("img1",), at_me=True,
                 describe_reply='{"reverse": "红色的正方形。"}', quoted="",
-                lookup_row=None):
+                lookup_row=None, describe_side_effect=None):
         with mock.patch.object(direct_gen, "llm") as m_llm_mod, \
              mock.patch.object(direct_gen.qq_api, "current_session_key",
                                return_value="group_1"), \
              mock.patch.object(direct_gen.qq_api, "current_quoted_text",
                                return_value=quoted), \
              mock.patch("app.vision.describe",
+                        side_effect=describe_side_effect,
                         return_value=describe_reply) as m_describe, \
              mock.patch.object(direct_gen.image_log, "lookup",
                                return_value=lookup_row), \
@@ -1456,12 +1480,94 @@ class DescribeImageTest(unittest.TestCase):
         m_describe.assert_called_once()          # 别人的图仍识图一次
         m_gen.assert_not_called()
 
-    def test_describe_with_channel_still_revises(self):
-        # 渠道词在场 → 走改图管道（模型在这一次调用里判），不另走识图问答
-        out, m_describe, _m_gen, _ = self._decide(
-            "sd 这画的是什么", describe_reply="不是 JSON")
-        self.assertIn("没解析出来", out)
+    def test_describe_with_channel_falls_back_to_tags(self):
+        # 渠道词在场 → 走改图管道（模型在这一次调用里判）。模型没吐 JSON、
+        # 又不是英文 tag → 用识图模型自己的提示词兜一次反推（2026-10-07
+        # 新增的兜底）。这里让兜底那次返回真实英文 tag。
+        out, m_describe, m_gen, _ = self._decide(
+            "sd 这画的是什么",
+            describe_side_effect=["不是 JSON", "1girl, solo, blue hair"])
+        self.assertIn("blue hair", out)
+        self.assertEqual(m_describe.call_count, 2)   # 主调用 + 反推兜底
+        m_gen.assert_not_called()
+
+
+class ReverseTriggerTest(unittest.TestCase):
+    """「反推提示词」硬触发（2026-10-07 用户拍板，零 AI 调用）。
+
+    背景（群 1103174141 实测两条 bug）：带图 +「反推提示词」以前被塞进改图
+    管道 `_revise` 的 JSON 模板（主人设），结果 ① 模型回散文 → 报「改图请求
+    没解析出来」；② 关键词轮 JSON 解析成功也被 `at_me=False` 静默丢掉。
+    现在明确命中就直走识图模型自己的提示词，出**纯英文 tag**、原样发。
+    """
+
+    def _decide(self, text, urls=("img1",), at_me=False, quoted="",
+                describe_reply="1girl, solo, blue hair",
+                lookup_row=None):
+        with mock.patch.object(direct_gen, "llm") as m_llm, \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="group_1"), \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=quoted), \
+             mock.patch("app.vision.describe",
+                        return_value=describe_reply) as m_describe, \
+             mock.patch.object(direct_gen.image_log, "lookup",
+                               return_value=lookup_row), \
+             mock.patch.object(direct_gen, "_prefetch_search",
+                               return_value=""), \
+             mock.patch.object(gi, "_generate_image",
+                               return_value=RECEIPT) as m_gen:
+            # AI 那条路桩成"不接管"：没带图时 decide 会落到 _translate。
+            m_llm.call_llm.return_value = "{}"
+            out = direct_gen.decide(text, [], False, data_urls=list(urls),
+                                    at_me=at_me)
+        return out, m_describe, m_gen, m_llm
+
+    def test_trigger_returns_english_tags_verbatim(self):
+        out, m_describe, m_gen, m_llm = self._decide("反推提示词")
+        self.assertEqual(out, "反推的是：\n1girl, solo, blue hair")
         m_describe.assert_called_once()
+        m_llm.assert_not_called()          # 零 AI 调用
+        m_gen.assert_not_called()
+
+    def test_trigger_uses_vision_own_prompt_not_persona(self):
+        # 发给识图模型的是 _TAGS_PROMPT（识图专用），不是主人设模板。
+        _, m_describe, _, _ = self._decide("反推提示词")
+        sent = m_describe.call_args.kwargs["prompt"]
+        self.assertEqual(sent, direct_gen._TAGS_PROMPT)
+        self.assertNotIn("reverse 字段", sent)
+
+    def test_keyword_round_reverse_is_sent(self):
+        # 关键词轮（at_me=False）**照样**把反推发出去——这正是 bug ② 的修复点。
+        out, _, _, _ = self._decide("大大怪 ，反推提示词", at_me=False)
+        self.assertIn("blue hair", out)
+
+    def test_real_world_phrasings_hit(self):
+        for text in ("反推提示词", "大大怪，反推提示词，然后生成",
+                     "识别图片，反推提示词", "反推一下这张图", "反推"):
+            with self.subTest(text=text):
+                out, _, _, _ = self._decide(text)
+                self.assertIn(direct_gen._REVERSE_HEADER, out)
+
+    def test_ledger_wins_when_own_image(self):
+        # 引用自家图（账本命中）→ 直接发当时的真实提示词，不劳识图模型。
+        out, m_describe, _, _ = self._decide(
+            "反推提示词", quoted="编号 HT-20261005-010329-595",
+            lookup_row={"prompt": "logged, miku", "skill": "hd_3_curvy"})
+        self.assertIn("logged, miku", out)
+        m_describe.assert_not_called()
+
+    def test_no_image_falls_through_to_ai(self):
+        # 只打了「反推提示词」没带图 → 不劫这轮，交回 AI（它会问哪张图）。
+        out, m_describe, _, m_llm = self._decide("反推提示词", urls=())
+        m_describe.assert_not_called()
+        # 关键断言：没被反推分支劫走 —— 走的是 AI 转译（llm 被调用）。
+        m_llm.call_llm.assert_called()
+
+    def test_plain_chatter_is_not_hijacked(self):
+        for text in ("识别图片", "这画的是什么", "反推的不对", "提取提示词"):
+            with self.subTest(text=text):
+                self.assertIsNone(direct_gen._REVERSE_RE.match(text), text)
 
 
 class MultiImageReverseTest(unittest.TestCase):
