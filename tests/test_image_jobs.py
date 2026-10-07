@@ -2846,21 +2846,23 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
     （`渠道 X，seed Y，耗时 Z 秒` 统计）各渠道中位数差 4 倍——hd_3_clear
     16.6s 而 hd_3_curvy 68.3s，一个全局数必然在两头出错。所以改成查表。
 
-    这几条钉的是**分流本身**：快渠道真的拿到 80、重渠道不会被误杀、
-    没配的渠道保持旧行为（不然新渠道一上线就静默变慢）。
+    2026-10-07 用户拍板「全部改成 180 秒，不要区分」→ 分档这套**取消**了，
+    SKILL_TIMEOUTS 清空、所有渠道统一走 TASK_TIMEOUT。查表机制本身保留，
+    所以这几条改成钉「**不再分档**」+「没配的渠道仍回落全局」。
     """
 
-    def test_light_channels_get_the_short_limit(self):
-        # 2026-10-07：动漫族只剩 hd_3_*（重档，300），120 这一档现在只剩
-        # 轻量的 SD 系渠道。
-        for skill in ("image_gen_v1",):
-            self.assertEqual(image_jobs.task_timeout(skill), 120, skill)
+    def test_every_channel_gets_the_same_limit(self):
+        """2026-10-07 用户拍板「全部改成 180 秒，是全部，不要区分」→ 分档表清空，
+        所有渠道一律回落 TASK_TIMEOUT（= .env 的 IMAGE_GEN_TIMEOUT，现 180）。
 
-    def test_heavy_channels_keep_enough_headroom(self):
-        # 中位 70~98s（MiMo 占显存整体慢四成后）：给 120s 只剩两三成余量，
-        # 排队一叠加就误杀——重渠道顶到 300（5 分钟，与 .env 兜底对齐）
-        for skill in ("qwen_image_v1", "nffa", "hd_3_clear", "hd_3_curvy"):
-            self.assertEqual(image_jobs.task_timeout(skill), 300, skill)
+        钉的是**不再分档**这件事：任何渠道都不许再拿一个跟别人不一样的数。
+        """
+        for skill in ("image_gen_v1", "qwen_image_v1", "nffa", "hd_3_clear",
+                      "hd_3_curvy", "hd_3_gloss", "hd_3_soft", "krea2",
+                      "cunny", "miao", "silver", "silver-hd", "jank"):
+            self.assertEqual(image_jobs.task_timeout(skill),
+                             image_jobs.TASK_TIMEOUT, skill)
+        self.assertEqual(image_jobs.TASK_TIMEOUT, 180)
 
     def test_unknown_skill_falls_back_to_global(self):
         """没配的渠道仍走 TASK_TIMEOUT——新渠道不能因为漏配就变慢。"""
@@ -2871,8 +2873,8 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
     def test_accepts_a_job_or_a_skill_name(self):
         """process() 手里有 job，异常路径上只有渠道名——两种都得收。"""
         job = image_jobs.Job("group", "9", {}, skill="hd_3_clear")
-        self.assertEqual(image_jobs.task_timeout(job), 300)
-        self.assertEqual(image_jobs.task_timeout("hd_3_clear"), 300)
+        self.assertEqual(image_jobs.task_timeout(job), 180)
+        self.assertEqual(image_jobs.task_timeout("hd_3_clear"), 180)
 
     def test_survives_garbage_input(self):
         """热路径上不能因为一个怪值就抛——抛了整张图的处理就断了。
@@ -2904,7 +2906,9 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
             seen.append(timeout)
             raise TimeoutError("生成超时 (%ds)" % timeout)
 
-        for skill, want in (("hd_3_clear", 300), ("image_gen_v1", 120)):
+        # 2026-10-07 起不再分档：两个渠道拿到的是同一个数（180）。挑一个重的
+        # 一个轻的，正是为了钉住「重渠道不再有特权」。
+        for skill, want in (("hd_3_clear", 180), ("image_gen_v1", 180)):
             seen.clear()
             job = image_jobs.Job("group", "9", {}, skill=skill)
             job.target = None          # 免得 _notice 真去发消息
@@ -2923,11 +2927,10 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
             self.assertEqual(seen, [want], skill)
 
     def test_fail_text_uses_the_same_limit(self):
-        """给用户看的那句也要跟着查表走，否则说「超过 300 秒」而实际只等了 120。"""
-        self.assertIn("超过 300 秒", image_jobs._fail_text(
-            TimeoutError("x"), skill="hd_3_clear"))
-        self.assertIn("超过 120 秒", image_jobs._fail_text(
-            TimeoutError("x"), skill="image_gen_v1"))
+        """给用户看的那句也要跟着查表走，否则说「超过 X 秒」而实际只等了别的数。"""
+        for skill in ("hd_3_clear", "image_gen_v1", "将来新增的渠道"):
+            self.assertIn("超过 180 秒", image_jobs._fail_text(
+                TimeoutError("x"), skill=skill), skill)
 
 
 class SilentRetryTest(_Base):
