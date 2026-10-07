@@ -41,6 +41,40 @@ from app.config import (OLLAMA_VISION_KEEP_ALIVE, OLLAMA_VISION_NUM_GPU,
 
 log = logging.getLogger("vision")
 
+# 识图**专用**降级链（2026-10-07 用户拍板「写死在识图专用链」）。
+#
+# 和主对话的 LLM_FALLBACK_CHAIN 是**两份独立配置**，不能合并：
+# 主对话链是按「文本能力 + 成本」排的（volc → mimo → deepseek），而识图要的是
+# 「能不能读图」——纯文本的 volc 排第一会让每次识图都先撞一次挂死（见文件顶部
+# 那条 base64 挂死说明）。所以这里只放确认能读图的云端家：豆包多模态 Seed →
+# 小米 MiMo（全模态）→ DeepSeek 官方（deepseek-flash 可读图）。
+#
+# 只在**走管理页/.env 那条路**（describe 没显式传 provider）时生效；显式传
+# provider 的调用（生图审核 image_audit、管理页试读）**不参与**——审核是
+# fail-closed 且要固定用 .env 那份，不能被降级链悄悄换成别家。
+VISION_FALLBACK_CHAIN = ("doubao", "mimo", "deepseek")
+
+
+def _chain_candidates(primary_pid, primary_model):
+    """识图要依次尝试的 (provider, model) 列表——选中的那家排第一。
+
+    第一项就是管理页/.env 选的（可能是 ollama/llama 本地），后面接
+    VISION_FALLBACK_CHAIN 里去掉重复的云端家。model 传空串 = 用那家的默认
+    模型（describe 会自己回落 cfg["model"]）。
+
+    为什么允许「本地失败 → 掉云端」：本地模型跑内存、速度慢且可能没 pull，
+    失败就整轮看不到图；掉云端至少能把图读出来。用户要的是「降级链」，不是
+    「本地专用锁」。
+    """
+    out = [(primary_pid, primary_model)]
+    for pid in VISION_FALLBACK_CHAIN:
+        if pid == primary_pid:
+            continue                     # 选中的那家已经在第一项，别重复试
+        if pid not in PROVIDERS:
+            continue                     # 配置里没这家（被删了）就跳过
+        out.append((pid, ""))
+    return out
+
 
 def active_choice(agent_id=None):
     """当前生效的识图 (provider, model)。管理页没配过 = 走 .env 那两个常量。
@@ -364,26 +398,65 @@ def describe(data_url, timeout=None, prompt=None, provider=None, model=None):
     provider / model **都不传** = 走管理页「识图模型」选的那个（没选过就
     退回 .env 的 VISION_PROVIDER/VISION_MODEL，见 active_choice）。这跟
     2026-10-03 之前不一样：以前是直接读 .env 常量，现在每次调用重读配置，
-    所以在界面上切换**热生效、不用重启**。
+    所以在界面上切换**热生效、不用重启**。这条路上若首选那家失败，会**依次
+    降级**到 VISION_FALLBACK_CHAIN（豆包→mimo→deepseek，2026-10-07 加），
+    所以单家额度耗尽/超时不会让整轮图直接看不到。
 
-    显式传 provider = 这一次临时换一家，**完全绕过界面选择**。审核就走这条
-    （audit_choice 固定给 .env 那份），别让它被界面上的选择带跑。
+    显式传 provider = 这一次临时换一家，**完全绕过界面选择、也不走降级链**。
+    审核就走这条（audit_choice 固定给 .env 那份），别让它被界面上的选择或
+    降级链带跑。
 
     ⚠️ 显式传了 provider 时，model 留空就用**该 provider 的默认模型**，不回落
     VISION_MODEL——否则指定了云端 provider，却会把读图那个本地模型名套上去。
     """
     if provider is None and model is None:
-        provider, model = active_choice()
-    eff_provider = provider if provider is not None else VISION_PROVIDER
-    pid = (eff_provider or "").lower()
+        primary_pid, primary_model = active_choice()
+        # active_choice 真跑时 pid 为空会自动退回 .env 那两个常量；但测试/异常
+        # 路径可能直接喂回 (None, "")，这里再兜一道——否则主选家会整个丢掉，
+        # 降级链变成「只剩豆包打头」，与「没配就走 .env」的语义不符。
+        if not primary_pid:
+            primary_pid, primary_model = VISION_PROVIDER, (primary_model or VISION_MODEL)
+        # 主选家写错了（配置里没有这个 provider）属于**配置错误**，要立刻报错。
+        # 不能塞进降级链跟着往下试——那会把一个拼错的 provider 名悄悄变成
+        # 「那就用豆包吧」，用户永远不知道自己的配置根本没生效。
+        if primary_pid not in PROVIDERS:
+            raise RuntimeError("识图 provider 未配置：%r" % primary_pid)
+        candidates = _chain_candidates(primary_pid, primary_model)
+        last_exc = None
+        for i, (pid, mdl) in enumerate(candidates):
+            try:
+                return _describe_one(data_url, timeout, prompt, pid, mdl)
+            except Exception as exc:                 # noqa: BLE001
+                last_exc = exc
+                if i + 1 < len(candidates):
+                    log.warning("识图 %s 失败，降级到下一家（%s）：%s",
+                                pid, candidates[i + 1][0], exc)
+        # 全链都挂：把最后那条异常原样抛出，调用方按「识图失败」降级。
+        raise last_exc
+
+    # 显式指定了 provider：单发一次，不走降级链（audit_choice 那条路）。
+    # provider 为 None 只可能是「只传了 model 没传 provider」（老调用方式），
+    # 这时退回 .env 的 provider，保持与改动前一致的语义。
+    return _describe_one(data_url, timeout, prompt,
+                         provider if provider is not None else VISION_PROVIDER,
+                         model)
+
+
+def _describe_one(data_url, timeout, prompt, provider, model):
+    """对**单独一家**识图 provider 发一次请求，返回文字（成功）或抛异常。
+
+    这是 describe 的实际执行体；降级链只是在外面把候选依次喂进来。
+
+    provider 一定是**具体的 provider id**（调用方已解析好），不会是 None——
+    所以 model 留空时用该家的默认模型，不回落 VISION_MODEL（那条回落逻辑
+    只对「主选家」有意义，已由 describe/_chain_candidates 处理）。
+    """
+    pid = (provider or "").lower()
     cfg = PROVIDERS.get(pid)
     if not cfg:
-        raise RuntimeError("识图 provider 未配置：%r" % eff_provider)
+        raise RuntimeError("识图 provider 未配置：%r" % provider)
 
-    if provider is None:
-        model = model or VISION_MODEL or cfg["model"]
-    else:
-        model = model or cfg["model"]
+    model = model or cfg["model"]
 
     # 识图是**隐形调用**（每张图都要跑一次，请求数远多于对话轮数），但它自己
     # 发 HTTP、不经过 app/llm.py，所以从前完全不产生 `[llm]` 行——排查「哪家

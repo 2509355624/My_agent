@@ -316,6 +316,83 @@ class DescribeTest(unittest.TestCase):
         self.assertIn("未配置", str(ctx.exception))
 
 
+class VisionFallbackChainTest(unittest.TestCase):
+    """识图**专用**降级链（豆包→mimo→deepseek，2026-10-07 用户拍板）。
+
+    关键不变式：
+    1. 走管理页/.env 那条路（不显式传 provider）时，首选失败要**依次降级**，
+       而不是整轮看不到图；
+    2. 显式传 provider（生图审核那条）**绝不**参与降级——审核是 fail-closed，
+       被降级链悄悄换家会破坏「固定用 .env 那份」的约定；
+    3. 首选那家排第一，链里不重复试它；
+    4. 全链都挂才抛出异常。
+    """
+
+    def test_chain_order_is_doubao_mimo_deepseek(self):
+        cands = vision._chain_candidates("doubao", "")
+        self.assertEqual([p for p, _ in cands],
+                         ["doubao", "mimo", "deepseek"])
+
+    def test_primary_is_tried_first_and_not_duplicated(self):
+        cands = vision._chain_candidates("mimo", "")
+        self.assertEqual([p for p, _ in cands], ["mimo", "doubao", "deepseek"])
+
+    def test_primary_model_is_preserved(self):
+        cands = vision._chain_candidates("deepseek", "deepseek-flash")
+        self.assertEqual(cands[0], ("deepseek", "deepseek-flash"))
+
+    def _mock_post(self, results):
+        """按调用顺序返回 results 里的 (status, text|None)；record 各次 URL。"""
+        seen = []
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            seen.append(url)
+            status, text = results[len(seen) - 1]
+            if status == 200:
+                r = _resp(status=200)
+                r.json.return_value = {"choices": [{"message": {"content": text}}]}
+                return r
+            return _resp(status=status, text=text or "")
+
+        return fake_post, seen
+
+    def test_falls_back_to_next_provider_on_failure(self):
+        fake, seen = self._mock_post([(429, "QuotaExceeded"), (200, "一只猫")])
+        with mock.patch.object(vision, "active_choice", return_value=("doubao", "")), \
+                mock.patch("app.vision._session.post", side_effect=fake):
+            self.assertEqual(vision.describe("data:image/jpeg;base64,AAA"), "一只猫")
+        # 两次调用：第一次doubao 挂、第二次 mimo 成功
+        self.assertEqual(len(seen), 2)
+        self.assertIn("xiaomimimo", seen[1])
+
+    def test_all_fail_raises_last_error(self):
+        fake, seen = self._mock_post([(500, "a"), (500, "b"), (429, "c")])
+        with mock.patch.object(vision, "active_choice", return_value=("doubao", "")), \
+                mock.patch("app.vision._session.post", side_effect=fake):
+            with self.assertRaises(RuntimeError) as ctx:
+                vision.describe("data:image/jpeg;base64,AAA")
+        self.assertEqual(len(seen), 3)          # 三家都试过
+        self.assertIn("429", str(ctx.exception))  # 抛的是最后那条
+
+    def test_explicit_provider_does_not_fall_back(self):
+        # 显式传 provider = 审核那条路：失败就失败，不许换家。
+        fake, seen = self._mock_post([(500, "boom")])
+        with mock.patch("app.vision._session.post", side_effect=fake):
+            with self.assertRaises(RuntimeError):
+                vision.describe("data:image/jpeg;base64,AAA", provider="mimo")
+        self.assertEqual(len(seen), 1)
+
+    def test_unknown_primary_provider_raises_before_chaining(self):
+        # 主选家名写错 = 配置错误，立刻报错，别把拼错的名字悄悄换成豆包。
+        with mock.patch.object(vision, "active_choice",
+                               return_value=("nonexistent", "")), \
+                mock.patch("app.vision._session.post") as post:
+            with self.assertRaises(RuntimeError) as ctx:
+                vision.describe("data:image/jpeg;base64,AAA")
+        post.assert_not_called()
+        self.assertIn("未配置", str(ctx.exception))
+
+
 # ─── 总超时闸门 ─────────────────────────────────────
 
 class VisionDeadlineTest(unittest.TestCase):
