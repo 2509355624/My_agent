@@ -621,9 +621,11 @@ _VISION_MIN_USABLE = 20
 def _vision_usable(text):
     """识图返回能不能用；不能用返回空串。
 
-    两种不能用：自称看不到（_VISION_BLIND_RE）、按内容政策拒绝描述
-    （_VISION_REFUSE_RE）。后者按句剥离而非整段丢掉，理由见 _VISION_REFUSE_RE
-    上方——混合返回里那半段有效内容是要留的。
+    三种不能用：自称看不到（`_VISION_BLIND_RE`）、整段是上游 API 的英文
+    拒答/报错（`vision.looks_like_api_refusal`，2026-10-07 加）、按内容政策
+    拒绝描述（`_VISION_REFUSE_RE`）。最后一种按句剥离而非整段丢掉，理由见
+    `_VISION_REFUSE_RE` 上方——混合返回里那半段有效内容是要留的；前两种
+    整段没有可用信息，直接判死。
 
     **一句都没命中时原样返回，不做任何重排**（2026-10-01 修）。此前无条件按句
     拼回去，有两个坑：一是有效返回可以短到「一只猫」，拼完过不了 _VISION_MIN_USABLE
@@ -633,6 +635,11 @@ def _vision_usable(text):
     if not text:
         return ""
     if _VISION_BLIND_RE.search(text):
+        return ""
+    # 整段就是上游 API 的英文拒答 / 报错（见 vision.looks_like_api_refusal）——
+    # 中文话术那条仍走下面的按句剥离，因为「拒绝开头 + 有效内容」要留那半段。
+    from app import vision as vision_mod
+    if vision_mod.looks_like_api_refusal(text):
         return ""
     sents = [s for s in _SENT_SPLIT_RE.split(text) if s.strip()]
     kept = [s for s in sents if not _VISION_REFUSE_RE.search(s)]

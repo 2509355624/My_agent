@@ -1201,10 +1201,24 @@ def _recall_tags(data_urls, numbered=True):
     return ", ".join(outs) if not numbered else "\n\n".join(outs)
 
 
+# 上游拒答时给用户的话（2026-10-07）：绝不能把「The request was rejected…」
+# 那种英文报错当反推结果发出去（实测一天 7 次，群 3 私聊 4）。
+_REVERSE_REFUSED_TEXT = "这张图我读不出来（内容没过审核），换一张再试。"
+
+
 def _reverse_text(tags):
-    """反推结果拼成回复；空 tags 给兜底提示。"""
+    """反推结果拼成回复；空 tags / 上游拒答 都给兜底提示。
+
+    ⚠️ 拒答判据放在这**唯一出口**：反推有三条路（`_REVERSE_RE` 硬触发、
+    改图兜底的 `_is_english_tags`、JSON 里的 `reverse` 字段），它们全都汇到
+    这里，所以在这拦一道就全覆盖了。背景见 vision.looks_like_refusal 上方。
+    """
+    tags = (tags or "").strip()
     if not tags:
         return "没认出这张图，重发一次试试。"
+    from app import vision
+    if vision.looks_like_refusal(tags):
+        return _REVERSE_REFUSED_TEXT
     return _REVERSE_HEADER + "\n" + tags
 
 

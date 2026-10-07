@@ -55,6 +55,73 @@ log = logging.getLogger("vision")
 VISION_FALLBACK_CHAIN = ("doubao", "mimo", "deepseek")
 
 
+# ─── 「上游拒答 / 报错被当成识图结果」的判据（2026-10-07）──────────────
+#
+# 背景：小米 MiMo 的内容过滤器碰到 NSFW **不回错误码，回一句英文散文**：
+#   「The request was rejected because it was considered high risk」
+# 火山豆包被限流时会让识图降级到 MiMo，于是这句散文一路穿过去：
+#   describe() → direct_gen._is_english_tags()（判据只有「ASCII + 有字母」）
+#   → _reverse_text() 加个「反推的是：」前缀发给用户。
+# 实测 10-07 一天 7 次（群 3、私聊 4），用户看到的"反推结果"就是这句英文报错。
+# agent._vision_usable 的 _VISION_REFUSE_RE 全是中文话术，抓不到英文。
+#
+# 所以这里做一道**整段**判据：整段就是拒答/报错 → 判失败，调用方按
+# 「读不出来」降级，绝不把它当画面描述或提示词往下传。
+# ⚠️ 刻意是「整段」而不是「按句剥离」——按句剥离是 agent 那条路的事（它要
+# 保住「拒绝开头 + 有效内容」里那半段有效内容，见 agent._vision_usable）；
+# 这里只负责认出「整段没一句有用」。
+_REFUSE_EN_RE = re.compile(
+    r"the request was rejected"                       # MiMo 原话（实测原文）
+    r"|considered high risk"                          # MiMo 原话后半句
+    r"|request (?:was|has been) (?:rejected|blocked)"
+    r"|content[_ ]policy"
+    r"|i (?:can'?t|cannot|am unable to|won'?t)\s+"
+    r"(?:help|assist|describe|provide|analyze|answer)"
+    r"|(?:i'?m sorry|i am sorry|sorry)[^.]{0,60}?(?:can'?t|cannot|unable to|won'?t)",
+    re.I)
+
+# 中文内容安全话术：整段命中、且**没有 tag 结构**时才算纯拒答（正常返回里
+# 偶尔会夹一句中文，那种不该被整段判死）。
+_REFUSE_CN_RE = re.compile(
+    r"色情低俗|违背公序良俗|公序良俗|内容安全规范|不适宜公开描述"
+    r"|不符合(?:相关规范|法律法规|健康)|安全准则|内容规范")
+
+# 像不像「英文 tag 列表」——把「中文拒答」和「中文里夹 tag 的正常返回」分开。
+_TAGLIKE_RE = re.compile(r"[a-z][a-z0-9_]{2,}\s*,")
+
+# 整段超过这么多字就不再当「纯拒答」：真拒答都很短；长文多半是
+# 「拒绝开头 + 有效内容」，留给 agent._vision_usable 按句剥离。
+_REFUSE_MAX_LEN = 300
+
+
+def looks_like_api_refusal(text):
+    """整段就是**上游 API 的拒答 / 报错**（英文），不是画面描述。
+
+    给 `agent._vision_usable` 用：中文那类内容安全话术它已经能按句剥离
+    （还要保住「拒绝开头 + 有效内容」里那半段），**只有英文这种它接不住**，
+    所以这里只认英文，避免把混合返回整段判死。
+    """
+    t = (text or "").strip()
+    if not t or len(t) > _REFUSE_MAX_LEN:
+        return False
+    return bool(_REFUSE_EN_RE.search(t))
+
+
+def looks_like_refusal(text):
+    """整段就是拒答（英文 API + 中文内容安全），不是画面描述、也不是提示词。
+
+    给 `direct_gen._reverse_text` 用：反推要的是**纯英文 tag**，中英拒答都
+    不该发给用户。这里比 `looks_like_api_refusal` 多认中文话术，但要求
+    **没有 tag 结构**（`_TAGLIKE_RE`）——正常返回里夹一句中文不算拒答。
+    """
+    if looks_like_api_refusal(text):
+        return True
+    t = (text or "").strip()
+    if not t or len(t) > _REFUSE_MAX_LEN:
+        return False
+    return bool(_REFUSE_CN_RE.search(t) and not _TAGLIKE_RE.search(t))
+
+
 def _chain_candidates(primary_pid, primary_model):
     """识图要依次尝试的 (provider, model) 列表——选中的那家排第一。
 

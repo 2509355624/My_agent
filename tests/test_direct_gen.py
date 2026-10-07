@@ -1560,6 +1560,28 @@ class ReverseTriggerTest(unittest.TestCase):
         out, _, _, _ = self._decide("大大怪 ，反推提示词", at_me=False)
         self.assertIn("blue hair", out)
 
+    def test_upstream_refusal_is_not_sent_as_reverse_text(self):
+        """上游拒答**不许**当反推结果发出去（2026-10-07 修）。
+
+        小米 MiMo 碰到 NSFW 回一句英文散文，实测一天 7 次被加了「反推的是：」
+        前缀发给了用户；会话记录里实锤：
+        {"x": "反推的是： The request was rejected because it was considered high risk"}
+        """
+        out, _, _, _ = self._decide(
+            "反推提示词",
+            describe_reply="The request was rejected because it was considered high risk")
+        self.assertEqual(out, direct_gen._REVERSE_REFUSED_TEXT)
+        self.assertNotIn("rejected", out)
+        self.assertNotIn(direct_gen._REVERSE_HEADER, out)
+
+    def test_chinese_policy_refusal_is_not_sent_as_reverse_text(self):
+        out, _, _, _ = self._decide(
+            "反推提示词",
+            describe_reply="该内容涉及色情低俗信息，不符合公序良俗和相关规范，"
+                           "我不能按照你的要求进行描述。")
+        self.assertEqual(out, direct_gen._REVERSE_REFUSED_TEXT)
+        self.assertNotIn("公序良俗", out)
+
     def test_real_world_phrasings_hit(self):
         for text in ("反推提示词", "大大怪，反推提示词，然后生成",
                      "识别图片，反推提示词", "反推一下这张图", "反推"):

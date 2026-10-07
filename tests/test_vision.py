@@ -765,5 +765,69 @@ class VisionQuestionTest(unittest.TestCase):
         self.assertEqual(seen["prompt"], vision._PROMPT)
 
 
+class RefusalDetectorTest(unittest.TestCase):
+    """上游拒答 / 报错被当成识图结果（2026-10-07 修）。
+
+    小米 MiMo 的内容过滤器碰到 NSFW **不回错误码，回一句英文散文**；火山豆包
+    被限流时识图降级到 MiMo，这句散文就一路穿到 `direct_gen._reverse_text`，
+    被加上「反推的是：」前缀发给了用户。实测 10-07 一天 7 次（群 3、私聊 4），
+    用户看到的"反推结果"就是 `The request was rejected...`。
+
+    见 `vision.looks_like_refusal` 上方那段背景。这里钉的是**判据本身**：
+    英文 API 拒答要抓住，正常 tag 列表（哪怕很短）不能误伤。
+    """
+
+    def test_catches_the_real_mimo_rejection(self):
+        """实测原文，逐字照抄。"""
+        self.assertTrue(vision.looks_like_refusal(
+            "The request was rejected because it was considered high risk"))
+
+    def test_catches_common_english_refusals(self):
+        for t in ("I cannot describe this image.",
+                  "I'm sorry, I can't help with that.",
+                  "Sorry, I am unable to assist with this request.",
+                  "Request was blocked by content policy",
+                  "I am unable to provide a description."):
+            with self.subTest(t=t):
+                self.assertTrue(vision.looks_like_refusal(t))
+
+    def test_catches_chinese_policy_refusals(self):
+        for t in ("该内容涉及色情低俗信息，不符合公序良俗和相关规范，"
+                  "我不能按照你的要求进行描述。",
+                  "你所请求生成的内容涉及色情低俗且不适宜的信息，"
+                  "这是违背公序良俗和相关内容规范的。"):
+            with self.subTest(t=t):
+                self.assertTrue(vision.looks_like_refusal(t))
+
+    def test_normal_returns_are_not_refusals(self):
+        for t in ("1girl, solo, silver hair, blue eyes, sitting, knees up, "
+                  "anime style",
+                  "1girl, solo, 银发, cat ears, blue eyes, anime style",
+                  "一只猫", "", "反推的是："):
+            with self.subTest(t=t):
+                self.assertFalse(vision.looks_like_refusal(t))
+
+    def test_long_return_is_never_pure_refusal(self):
+        """长文多半是「拒绝开头 + 有效内容」——那种要留给 agent 按句剥离，
+        整段判死会把里面那半段有效内容一起扔了。"""
+        long_tags = ", ".join("tag_%d" % i for i in range(80))
+        self.assertGreater(len(long_tags), vision._REFUSE_MAX_LEN)
+        self.assertFalse(vision.looks_like_refusal(long_tags))
+
+    def test_api_refusal_check_is_the_narrow_one(self):
+        """两条判据的分工：`looks_like_api_refusal` 只认英文，给 agent 用
+        （中文那类它要按句剥离、保住有效内容）；`looks_like_refusal` 中英都认，
+        给反推出口用（反推要的是纯英文 tag，中文话术一律不该发）。"""
+        mixed = ("这张图片包含露骨的色情内容，我无法按你的要求进行完整描述或提取细节。"
+                 "图中画面涉及裸露、性暗示姿势及液体等不适宜元素，不符合内容安全规范。"
+                 "关于你提到的头发问题——从可见画面来看，角色后脑勺到马尾区域的发丝"
+                 "确实存在明显的结构混乱：发束走向不自然、发丝与发饰边缘融合模糊。")
+        # 整段判据会判它是拒答（反推出口该拦——它根本不是英文 tag）
+        self.assertTrue(vision.looks_like_refusal(mixed))
+        # 窄判据不认（agent 出口不该拦，它要把后半段留下）
+        self.assertFalse(vision.looks_like_api_refusal(mixed))
+        self.assertIn("发束走向不自然", agent._vision_usable(mixed))
+
+
 if __name__ == "__main__":
     unittest.main()
