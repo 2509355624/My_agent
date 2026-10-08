@@ -10,7 +10,8 @@
     ---
     ...
 
-渲染时逐格拼 `固定块 + ", " + 动态[i]` 当提示词，用同一个渠道出 N 张。
+渲染时逐格拼 `固定块 + ", " + 动态[i]`，再用 `---` 连成一份多提示词，**一次提交**
+给批量工作流（`skills/_comic_batch`）——一个 ComfyUI 任务出全部 N 张。
 
 与 app/comic.py 的关系：comic.py 走**旧契约**（`## NN` / `画面:` / `气泡:`，
 每格原样重复整套角色标签），是 CLI 用的；本模块是**新契约**（固定写一次、
@@ -31,6 +32,16 @@ log = logging.getLogger("comic.story")
 
 DEFAULT_PANELS = 10
 MAX_PANELS = 30
+
+# 漫画的渲染渠道：`skills/_comic_batch/`，用 `BatchPromptImageGenerator` 把整批
+# 提示词在**一个** ComfyUI 任务里跑完（模型只加载一次）。**不是可点名的渠道**
+# ——目录名以 `_` 开头，`list_skills()` 会跳过它，AI 点不到。
+#
+# 为什么不用 `silver`：原生 silver 是「一次一张」的骨架（1024×1536、两段采样、
+# 2x 像素放大，实测 ≈48 秒/格）。10 格漫画 = 10 个任务、每格重读一遍权重，
+# 合计 ≈480 秒，还把这个会话的并发名额占满。2026-10-08 用户拍板：
+# 「你用我原生 silver 渠道去跑？10 个图片要 300 多秒钟，排队排死人」。
+COMIC_SKILL = "_comic_batch"
 
 # 编剧提示词：优先读 skill 原文（用户改 skill 就跟着变，单一真相源）；
 # 读不到（skill 被删/改名）时退回这段内置的等价骨架。
@@ -147,18 +158,21 @@ def _validate(fixed, dynamics, panels):
     return True, ""
 
 
-def write_story(brief, panels=DEFAULT_PANELS, style="silver", tries=3):
+def write_story(brief, panels=DEFAULT_PANELS, tries=3):
     """调 LLM 写剧本；不合格就带着错因回炉重写。返回 (固定块, [动态块...])。
 
     回炉是必需的：模型第一次常把正文写成中文、或段数不对；与其让下游解析出
     一堆空字段，不如在这里卡住重来。**单条 user 消息**（本项目约定不用
     system 角色），回炉时把错因追加进同一条消息。
+
+    只报**格数**，不报画风：漫画只有一条渲染路（见 `COMIC_SKILL`），渠道名
+    对编剧没有信息量，写进提示词反而可能被当成标签抄进正文。
     """
     if not (brief or "").strip():
         raise ValueError("剧情不能为空")
     panels = clamp_panels(panels)
     prompt = (_system_prompt(panels)
-              + "\n\n画风：%s\n格数：%d\n设定：%s" % (style, panels, brief.strip()))
+              + "\n\n格数：%d\n设定：%s" % (panels, brief.strip()))
     why = ""
     for attempt in range(1, tries + 1):
         text = _clean(llm.call_llm([{"role": "user", "content": prompt}]))
@@ -177,47 +191,56 @@ def _new_seed():
     return random.randint(0, 2 ** 32 - 1)
 
 
-def render(target, target_id, fixed, dynamics, skill):
-    """逐格渲染并发回会话。**阻塞**——调用方负责把它放进后台线程。
+def render(target, target_id, fixed, dynamics):
+    """整批渲染并发回会话。**阻塞**——调用方负责把它放进后台线程。
 
-    每格单独入队（`MAX_INFLIGHT=5` 不允许一个会话一次排 10 张），等它跑完再排
-    下一张；worker 负责审核 + 发图 + 记账本，所以这里只负责「按顺序喂」。单格
-    失败不拖垮整批，记日志继续下一格。返回成功发出的格数。
+    一次提交：把每格提示词（`assemble()` 拼好的「固定块 + 动态」）用 `---`
+    连成一份多提示词，交给批量工作流，**一个 ComfyUI 任务出全部图**。返回要
+    画的格数（0 = 连提交都没成）。
+
+    ⚠️ 图是**一次全给**，不是一张一张给：工作流开了 `save_inline`，每张画完就
+    落盘，但 ComfyUI 的 history 要等整批跑完才出现 `outputs`，发图由
+    `image_jobs.process` 在任务结束时统一做（它本来就支持一个任务多张图）。
+    所以回执文案不能说「画好一张发一张」。
     """
     from app import image_jobs
     from app.tools.normal import generate_image as gi
 
     prompts = assemble(fixed, dynamics)
-    total, ok = len(prompts), 0
-    log.info("漫画开跑：%d 格，渠道 %s，会话 %s %s", total, skill, target, target_id)
-    for i, prompt in enumerate(prompts, 1):
-        try:
-            seed = _new_seed()
-            wf = gi.build_t2i_workflow(skill, prompt, seed)
-            if wf is None:
-                log.error("[漫画 %d/%d] 渠道 %s 没有文生图工作流", i, total, skill)
-                continue
-            # landscape=False 写死：漫画是竖版，且后台线程读不到本轮原话
-            # （qq_api 的上下文是 threading.local），不能让 enqueue 自己去判。
-            job, reason = image_jobs.enqueue(target, target_id, wf, skill=skill,
-                                             prompt=prompt, seed=seed,
-                                             landscape=False)
-            if reason:
-                log.warning("[漫画 %d/%d] 被拒：%s", i, total, reason)
-                continue
-            gi._charge_quota(job, target, target_id)   # 私聊额度（群聊恒空）
-            job.wait()                                  # 失败会抛 job.error
-            ok += 1
-        except Exception as e:                          # 单格失败不拖垮整批
-            log.error("[漫画 %d/%d] 失败：%s", i, total, e)
-    log.info("漫画收尾：%d/%d 格已发出", ok, total)
-    return ok
+    total = len(prompts)
+    if not total:
+        return 0
+    # `---` 分隔：和批量工作流的 `delimiter` 默认值、以及本模块的契约同一个符号。
+    multi = "\n---\n".join(prompts)
+    seed = _new_seed()
+    wf = gi.build_t2i_workflow(COMIC_SKILL, multi, seed)
+    if wf is None:
+        log.error("漫画渠道 %s 没有文生图工作流", COMIC_SKILL)
+        return 0
+    log.info("漫画开跑：%d 格，渠道 %s，会话 %s %s", total, COMIC_SKILL,
+             target, target_id)
+    try:
+        # landscape=False 写死：漫画是竖版，且后台线程读不到本轮原话
+        # （qq_api 的上下文是 threading.local），不能让 enqueue 自己去判。
+        job, reason = image_jobs.enqueue(target, target_id, wf,
+                                         skill=COMIC_SKILL, prompt=multi,
+                                         seed=seed, landscape=False)
+        if reason:
+            log.warning("漫画被拒：%s", reason)
+            return 0
+        gi._charge_quota(job, target, target_id)   # 私聊额度（群聊恒空）
+        job.wait()                                  # 失败会抛 job.error
+    except Exception as e:
+        log.error("漫画失败：%s", e)
+        return 0
+    log.info("漫画收尾：整批 %d 格跑完", total)
+    return total
 
 
-def start(target, target_id, fixed, dynamics, skill):
+def start(target, target_id, fixed, dynamics):
     """起一个后台线程跑 `render`，立刻返回（工具侧不能阻塞适配层的并发槽）。"""
     t = threading.Thread(target=render,
-                         args=(target, target_id, fixed, dynamics, skill),
+                         args=(target, target_id, fixed, dynamics),
                          name="comic-render", daemon=True)
     t.start()
     return t

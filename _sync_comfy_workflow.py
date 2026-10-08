@@ -160,8 +160,10 @@ def apply_placeholders(api, prefix=None, warn_missing_prefix=True):
                      "无法定位正向提示词节点")
 
     for pid in dict.fromkeys(pos_ids):
-        # 提示词槽名：CLIPTextEncode 是 `text`，PrimitiveStringMultiline 是 `value`
-        fld = next((f for f in ("text", "value")
+        # 提示词槽名：CLIPTextEncode 是 `text`，PrimitiveStringMultiline 是 `value`，
+        # `String Literal` 节点是 `string`（2026-10-08 加：漫画批量工作流拿它装
+        # `---` 分隔的多提示词，槽名对不上会让整次转换卡在「找不到可写字段」）。
+        fld = next((f for f in ("text", "value", "string")
                     if f in api[pid]["inputs"]
                     and not isinstance(api[pid]["inputs"][f], list)), None)
         if fld is None:

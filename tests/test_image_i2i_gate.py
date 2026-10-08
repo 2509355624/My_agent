@@ -186,7 +186,10 @@ class PromptSurfaceTest(unittest.TestCase):
         h = self._hints()
         self.assertTrue(h, "generate_image 的使用提示不见了")
         for key in ("`source_image` 默认一律不传",
-                    "图生图只有一条路：`skill=qwen_image_v1`",
+                    # 2026-10-07 加了 qwen-hd（4x 超清）后，提示词从「只有一条路」
+                    # 改成了「qwen 系两条路」；这条断言当时没跟着改，一直是红的。
+                    "图生图只有 qwen 系两条路",
+                    "`skill=qwen-hd`",
                     "引用一张图本身永远不是垫图要求",
                     "动漫档（anima_* / hd_*）的重绘已从用法里撤掉",
                     "1~2 分钟"):

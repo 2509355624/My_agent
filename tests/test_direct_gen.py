@@ -1394,10 +1394,19 @@ class ComicRoutingTest(unittest.TestCase):
     def test_comic_json_routes_to_the_comic_pipeline(self):
         out, m_comic = self._decide(
             '{"tool": "generate_comic", "brief": "胡桃去挑衣服", '
-            '"panels": 10, "skill": "silver"}')
+            '"panels": 10}')
         self.assertEqual(out, "")          # 回执已直发 → 本轮闭嘴
-        m_comic.assert_called_once_with("胡桃去挑衣服", panels=10,
-                                        skill="silver")
+        m_comic.assert_called_once_with("胡桃去挑衣服", panels=10)
+
+    def test_comic_ignores_a_stray_skill_field(self):
+        """模板里已经没有 `skill` 了（漫画只有一条渲染路），但模型习惯难改，
+        多吐一个字段不许影响路由——`_generate_comic` 收不到它。
+        """
+        out, m_comic = self._decide(
+            '{"tool": "generate_comic", "brief": "胡桃去挑衣服", '
+            '"panels": 6, "skill": "qwen"}')
+        self.assertEqual(out, "")
+        m_comic.assert_called_once_with("胡桃去挑衣服", panels=6)
 
     def test_comic_receipt_silences_the_round(self):
         # 回执是工具直发的，`decide` 必须返回 ""（不是那句话本身），

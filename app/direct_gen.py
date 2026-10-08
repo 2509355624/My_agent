@@ -820,13 +820,14 @@ _MASTER_TEMPLATE = (
     # 只留给总开关关闭和主动接话轮」），所以注册在工具表里的 `generate_comic`
     # 在 QQ 里永远调不到——漫画只能从这条 JSON 契约进来。**别把这条删了。**
     # brief 是**中文**（剧情 + 角色），不适用下面「prompt 必须是英文」那条规则；
-    # 画风 / 格数由 `generate_comic._norm_style` / `comic_story.clamp_panels` 收口。
-    "- {{\"tool\": \"generate_comic\", \"brief\": \"中文剧情\", \"panels\": 10, "
-    "\"skill\": \"silver\"}}\n"
+    # 格数由 `comic_story.clamp_panels` 收口。
+    # **没有 skill 字段**：漫画只有一条渲染路（`comic_story.COMIC_SKILL`），
+    # 2026-10-08 用户拍板「漫画就只有 silver 渠道呀，其他渠道没有漫画的」。
+    # 模型仍可能习惯性多吐一个 skill，`_enqueue_comic` 直接忽略，无害。
+    "- {{\"tool\": \"generate_comic\", \"brief\": \"中文剧情\", \"panels\": 10}}\n"
     "  画**连续多格小漫画**（同一角色、剧情连贯的一串图）：用户要「漫画 / 连环画 / "
     "多格 / 条漫」时用它。brief 写中文剧情和角色（名字照抄），panels 用用户报的格数、"
-    "没报就不填（默认 10，上限 30），skill 默认 silver、点名 qwen/jank/krea2/nffa "
-    "才填。**单张图别用它**。\n"
+    "没报就不填（默认 10，上限 30）。**单张图别用它**。\n"
     "不需要动手时，输出 {{\"reply\": \"你要说的话\"}}。\n"
     # ── 「别反问」（2026-10-07 用户拍板）──────────────────────────
     # 用户原话：「我都明确是要求 ai 直接生成的，结果他又反问我…我希望就是我
@@ -1151,7 +1152,7 @@ def _enqueue_comic(comic, text):
     """漫画轮落队。语义与 `_enqueue` 完全一致：回执已直发返回 ""，否则返回要发的话。
 
     执行体就是 `generate_comic._generate_comic`——和工具路径同一份代码（闸门、
-    剧本、逐格后台渲染、回执直发都在里面），不在这儿重写一遍。
+    剧本、整批后台渲染、回执直发都在里面），不在这儿重写一遍。
     """
     from app.tools.normal import generate_comic as gc
     from app import comic_story
@@ -1159,16 +1160,13 @@ def _enqueue_comic(comic, text):
     if not brief:
         return "漫画这条我没看清要画什么故事，把剧情再说一次。"
     try:
-        result = gc._generate_comic(brief, panels=comic.get("panels"),
-                                    skill=comic.get("skill"))
+        result = gc._generate_comic(brief, panels=comic.get("panels"))
     except Exception:
         log.exception("[direct] 漫画入队失败")
         return "漫画请求没发出去，稍后再试。"
-    style = gc._norm_style(comic.get("skill"))
     panels = comic_story.clamp_panels(comic.get("panels"))
-    log.info("[direct] 漫画入队：%s %d 格 %r（原话 %r）",
-             style, panels, brief[:50], text[:50])
-    _note_desc("[直达漫画] %s %d 格：%s" % (style, panels, brief[:200]))
+    log.info("[direct] 漫画入队：%d 格 %r（原话 %r）", panels, brief[:50], text[:50])
+    _note_desc("[直达漫画] %d 格：%s" % (panels, brief[:200]))
     if result.startswith(image_jobs.RECEIPT_SENT_MARK):
         return ""          # 回执已由工具直发，本轮闭嘴
     if result.startswith("错误："):
@@ -1282,15 +1280,15 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
     # QQ 的 @ 轮不跑主 Agent 循环（见 `qq_bot` 的调度注释），`generate_comic`
     # 那个工具在 QQ 里调不到，漫画只能从这条 JSON 契约进来。
     # brief 是**中文剧情**，不套下面「prompt 必须英文 + 渠道白名单」那套校验：
-    # 画风由 `generate_comic._norm_style` 收敛，格数由 `comic_story.clamp_panels`
-    # 收口，都不需要在这儿再判一遍。
+    # 渠道固定（漫画只有一条渲染路），格数由 `comic_story.clamp_panels` 收口，
+    # 都不需要在这儿再判一遍。
+    # 模型若多吐一个 `skill`（模板里已经没有它了，但习惯难改）**直接丢掉**。
     if (data.get("tool") or "").strip() == "generate_comic":
         brief = (data.get("brief") or data.get("prompt") or "").strip()
         if not brief:
             return None
         return {"comic": {"brief": brief,
-                          "panels": data.get("panels"),
-                          "skill": (data.get("skill") or "").strip()}}
+                          "panels": data.get("panels")}}
     user_prompt = (data.get("prompt") or "").strip()
     if not user_prompt:
         # 模型选择不动手（聊天 / 问答 / 只要提示词）→ 把话原样带出去。
