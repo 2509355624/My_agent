@@ -165,15 +165,25 @@ class ReceiptNoteTest(_SubmitHarness):
         self.assertIn("图生图", text)
         self.assertIn("qwen 超清，图生图，描述", text)
 
+    def test_default_note_mentions_comic(self):
+        """回执给「连续小漫画」一行曝光（2026-10-08 用户拍板）。
+
+        漫画走 `generate_comic` 工具（AI 自己补剧情、默认 10 格逐格画发回），
+        入口是「<画风>漫画，<数量>，<剧情>」。不写出来用户不知道有这玩法。
+        """
+        text = self._note(None)
+        self.assertIn("连续小漫画", text)
+        self.assertIn("silver漫画", text)
+
     def test_default_note_stays_five_lines(self):
         """回执跟着**每一张图**发，行数是最直接的成本 → 钉住。
 
-        现 8 行 = 状态行（任务已提交…）+ 渠道行（当前渠道：…）+ 附言 6 行
+        现 9 行 = 状态行（任务已提交…）+ 渠道行（当前渠道：…）+ 附言 7 行
         （想换渠道就发… / 渠道：… / 要 4x 超清… / qwen 超清支持图生图… /
-        要横屏… / 更多玩法…）。
+        要横屏… / 要连续小漫画… / 更多玩法…）。
         以后想再加一行，先想清楚值不值。
         """
-        self.assertEqual(len(self._note(None).splitlines()), 8)
+        self.assertEqual(len(self._note(None).splitlines()), 9)
 
     def test_default_note_lists_every_nameable_channel(self):
         """2026-10-07 用户拍板「把我全部的可用渠道都加上去」——能点名的 11 个

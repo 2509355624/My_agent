@@ -397,6 +397,7 @@ _RECEIPT_NOTE_DEFAULT = (
     "要 4x 超清：silver 发「silver-hd + 需求」，qwen 发「qwen 超清 + 需求」（也认 silver超清 / qwen超清）\n"
     "qwen 超清支持图生图：发「qwen 超清，图生图，描述」（附一张图）\n"
     "要横屏：加「横屏」（例：silver 横屏 一个女孩）\n"
+    "要连续小漫画：发「<画风>漫画，<数量>，<剧情>」（例：silver漫画，10个，原神的雷电将军在樱花树下）\n"
     "更多玩法：@%s /更多渠道"
 )
 
