@@ -62,13 +62,14 @@ def _generate_comic(brief, panels=None, skill=None):
 
     receipt = ("漫画已开工：%d 格，渠道 %s，正在逐格画，画好一张发一张。"
                % (len(dyns), style))
-    try:
-        if image_jobs._send_text(target, target_id, receipt):
-            return (image_jobs.RECEIPT_SENT_MARK + receipt + "\n"
-                    "（上面那句系统已经直接发到会话里了：**不要再复述张数，"
-                    "也不要说「稍等 / 马上好」**，本轮别再为这件事说什么。）")
-    except Exception:
-        log.exception("漫画回执直发失败 %s %s", target, target_id)
+    # ⚠️ 判据必须走 `gi._send_receipt`（内部 try/except + 返回 True/False）。
+    # **别直接判 `image_jobs._send_text(...)` 的返回值**——那个函数没有 return
+    # 语句、恒返回 None，拿它当判据永远判假 → 回执会「直发一遍 + 再走 fallback
+    # 发一遍」。2026-10-08 实录：私聊 2509355624 收到两条一模一样的「漫画已开工」。
+    if gi._send_receipt(target, target_id, receipt):
+        return (image_jobs.RECEIPT_SENT_MARK + receipt + "\n"
+                "（上面那句系统已经直接发到会话里了：**不要再复述张数，"
+                "也不要说「稍等 / 马上好」**，本轮别再为这件事说什么。）")
     # 直发失败才退回「由模型转述」的老文案，至少不会一声不响。
     return (receipt + "不要输出图片地址，也不要说「图在下面 / 稍等」，"
             "直接把想说的话说完就行。")
