@@ -83,6 +83,9 @@ python agent.py
 
 然后访问 <http://localhost:5174>（同网段的手机/iPad 可用 `http://<本机局域网IP>:5174`）。
 
+> 管理页（`/admin`）的**写接口**默认只对本机开放——能看，但改不了配置。手机/平板
+> 要能改，得在 `.env` 里设 `ADMIN_ALLOW_REMOTE=lan`（只放行内网；`true` = 任何来源）。
+
 > 改了后端（`app/*.py`）需要重启服务；只改前端（`web/index.html`）浏览器硬刷新
 > （Ctrl+Shift+R）即可，因为 `web/` 是静态目录直接托管。
 
@@ -149,6 +152,7 @@ agent_my_test/
 | `COMFYUI_URL` | `http://127.0.0.1:8188` | |
 | `ENABLE_IMAGE_GEN` | `true` | 设为 `false` 时不注册生图相关工具（没装 ComfyUI 的机器应关掉） |
 | `AGENT_PORT` | `5174` | |
+| `ADMIN_ALLOW_REMOTE` | `false` | 管理页写接口的放行范围：`false`=只本机 / `lan`=只内网（手机、平板）/ `true`=任何来源 |
 | `MAX_TURNS` | `10` | Agent 单次请求的最大循环轮次 |
 | `LOCAL_EMBEDDING_MODEL` | `BAAI/bge-m3` | RAG 向量模型 |
 | `RAG_EMBED_DEVICE` | `cuda` | 无 GPU 时改 `cpu` |

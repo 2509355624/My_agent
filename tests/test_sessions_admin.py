@@ -250,8 +250,13 @@ class SessionApiTest(SessionsTestBase):
         self.assertTrue(os.path.exists(self.session_path("qq", "group_111")))
 
     def test_delete_remote_allowed_when_opted_in(self):
+        # 两个开关都要显式给：`ADMIN_ALLOW_REMOTE` 管「放不放非本机」，
+        # `ADMIN_ALLOW_REMOTE_LAN` 管「把放行范围收不收在内网」。只给前者
+        # 的话结果会跟着 .env 走——`.env` 里是 `lan`，8.8.8.8 会被判成外网
+        # 而 403。这条用例测的是「不限来源」那一档，所以把内网收口关掉。
         self.write_session("qq", key="group_111")
-        with mock.patch.object(main, "ADMIN_ALLOW_REMOTE", True):
+        with mock.patch.object(main, "ADMIN_ALLOW_REMOTE", True), \
+                mock.patch.object(main, "ADMIN_ALLOW_REMOTE_LAN", False):
             resp = self.client.delete("/api/agent/qq/sessions/group_111",
                                       environ_base={"REMOTE_ADDR": "8.8.8.8"})
         self.assertEqual(resp.status_code, 200)
@@ -332,7 +337,9 @@ class InterjectToggleApiTest(SessionsTestBase):
         self.assertEqual(resp.status_code, 403)
 
     def test_put_remote_allowed_when_opted_in(self):
-        with mock.patch.object(main, "ADMIN_ALLOW_REMOTE", True):
+        # 同上：显式关掉内网收口，测「不限来源」那一档。
+        with mock.patch.object(main, "ADMIN_ALLOW_REMOTE", True), \
+                mock.patch.object(main, "ADMIN_ALLOW_REMOTE_LAN", False):
             resp = self.client.put("/api/agent/qq/interject/111",
                                    json={"enabled": False},
                                    environ_base={"REMOTE_ADDR": "8.8.8.8"})

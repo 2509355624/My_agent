@@ -576,10 +576,17 @@ MEMORY_TURN_DIGEST_CHARS = int(os.getenv("MEMORY_TURN_DIGEST_CHARS", "150"))
 # 重发这几千 token。截断只影响「查资料的详尽程度」，不影响聊天。
 WEB_SEARCH_MAX_CHARS = int(os.getenv("WEB_SEARCH_MAX_CHARS", "800"))
 
-# 后台管理接口是否允许非本机访问。默认只允许回环地址——服务监听 0.0.0.0
-# 且没有任何鉴权，一个能改 agent 配置的口子不该顺带暴露到整个局域网。
-# 需要从别的设备打开管理页时，在 .env 里设成 true。
-ADMIN_ALLOW_REMOTE = os.getenv("ADMIN_ALLOW_REMOTE", "false").lower() not in ("0", "false", "no", "")
+# 后台管理接口是否允许非本机访问。三档（大小写不敏感）：
+#   "" / "0" / "false"  → 只允许回环地址（默认）
+#   "lan"               → 回环 + 内网地址（手机/平板从同一个路由器进来）
+#   "1" / "true"        → 任何来源
+# 服务监听 0.0.0.0 且**没有任何鉴权**，一个能改 agent 配置的口子不该顺带
+# 暴露到整个网络，所以默认收得最紧。「lan」是给「手机要能改配置」这种常见
+# 诉求留的中间档：比 true 少暴露一层，端口转发/公网直连进来的请求会被挡掉
+# （判定在 app/main.py 的 `_is_lan_addr`）。
+_ADMIN_REMOTE_RAW = os.getenv("ADMIN_ALLOW_REMOTE", "false").strip().lower()
+ADMIN_ALLOW_REMOTE = _ADMIN_REMOTE_RAW not in ("0", "false", "no", "")
+ADMIN_ALLOW_REMOTE_LAN = _ADMIN_REMOTE_RAW == "lan"
 
 # ─── 路径 ───────────────────────────────────────────
 

@@ -624,6 +624,61 @@ class AgentAdminApiTest(unittest.TestCase):
                                    environ_base={"REMOTE_ADDR": "192.168.1.9"})
         self.assertEqual(resp.status_code, 200)
 
+    def test_lan_mode_allows_private_addr(self):
+        """`lan` 档：内网地址能改配置（手机从同一个路由器进来就是这种）。
+
+        2026-10-08 加的中间档。只设 `ADMIN_ALLOW_REMOTE=True` 会把管理口敞给
+        任何来源，而手机要的其实只是「同一个子网能进」。
+        """
+        self._write_agent("main", {})
+        with mock.patch.object(main, "ADMIN_ALLOW_REMOTE", True), \
+                mock.patch.object(main, "ADMIN_ALLOW_REMOTE_LAN", True):
+            resp = self.client.put("/api/agent/main", json={"provider": "volc"},
+                                   environ_base={"REMOTE_ADDR": "192.168.1.9"})
+        self.assertEqual(resp.status_code, 200)
+
+    def test_lan_mode_rejects_public_addr(self):
+        """`lan` 档挡公网来源：端口转发 / 公网直连进来的请求必须还是 403。"""
+        self._write_agent("main", {})
+        with mock.patch.object(main, "ADMIN_ALLOW_REMOTE", True), \
+                mock.patch.object(main, "ADMIN_ALLOW_REMOTE_LAN", True):
+            resp = self.client.put("/api/agent/main", json={"provider": "volc"},
+                                   environ_base={"REMOTE_ADDR": "8.8.8.8"})
+        self.assertEqual(resp.status_code, 403)
+
+    def test_loopback_always_allowed(self):
+        """回环不受档位影响：`lan` 档下本机照样能改。"""
+        self._write_agent("main", {})
+        with mock.patch.object(main, "ADMIN_ALLOW_REMOTE", True), \
+                mock.patch.object(main, "ADMIN_ALLOW_REMOTE_LAN", True):
+            resp = self.client.put("/api/agent/main", json={"provider": "volc"},
+                                   environ_base={"REMOTE_ADDR": "127.0.0.1"})
+        self.assertEqual(resp.status_code, 200)
+
+    def test_is_lan_addr_classifier(self):
+        """内网判定：私有段 / 回环 / 链路本地算内网，公网不算。
+
+        ⚠️ 判据用的是 `ipaddress.is_private`，它的语义是「不可全球路由」而
+        不是「RFC1918」。所以 203.0.113.7（TEST-NET-3）、198.51.100.5、
+        192.0.2.3 这些文档保留段**也算内网**——它们本来就进不了公网，放行
+        无害。反过来 100.64.0.1（运营商 CGNAT）**不算**内网，别拿它当测试
+        样例里的「内网地址」。
+
+        IPv4-mapped 形式（`::ffff:192.168.1.9`）要先剥前缀再判，否则
+        `ipaddress` 会当 IPv6 处理，结果不对。
+        """
+        lan = ("192.168.1.9", "10.0.0.5", "172.16.3.4", "127.0.0.1",
+               "169.254.1.1", "::1", "fe80::1", "fc00::1",
+               "::ffff:192.168.1.9")
+        wan = ("8.8.8.8", "1.1.1.1", "172.32.0.1", "100.64.0.1",
+               "2001:4860:4860::8888", "", "not-an-ip", None)
+        for a in lan:
+            with self.subTest(addr=a):
+                self.assertTrue(main._is_lan_addr(a), a)
+        for a in wan:
+            with self.subTest(addr=a):
+                self.assertFalse(main._is_lan_addr(a), a)
+
     def test_admin_page_is_served(self):
         resp = self.client.get("/admin")
         self.assertEqual(resp.status_code, 200)

@@ -6,6 +6,7 @@ import re
 import json
 import os
 import base64
+import ipaddress
 import socket
 import time
 import requests
@@ -24,7 +25,8 @@ from app import vision as vision_mod
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         LLM_PROVIDER, LLM_FALLBACK_CHAIN, PROVIDERS,
                         OLLAMA_BASE_URL, DEFAULT_AGENT_ID,
-                        ADMIN_ALLOW_REMOTE, CONTEXT_BUDGET, IMAGE_AUDIT_PROMPT_MAX,
+                        ADMIN_ALLOW_REMOTE, ADMIN_ALLOW_REMOTE_LAN,
+                        CONTEXT_BUDGET, IMAGE_AUDIT_PROMPT_MAX,
                         QQ_PRIVATE_ENABLE, QQ_WHITELIST_USERS,
                         VISION_PROMPT_MAX, VISION_PROVIDER, VISION_MODEL,
                         QQ_AGENT_ID, provider_vision)
@@ -415,8 +417,34 @@ def get_skills():
 _LOCAL_ADDRS = ("127.0.0.1", "::1", "::ffff:127.0.0.1", "localhost")
 
 
+def _is_lan_addr(addr):
+    """内网地址判定，用于把 `ADMIN_ALLOW_REMOTE=lan` 的放行范围收在子网内。
+
+    认 RFC1918 私有段、回环、链路本地（169.254 / fe80::）和 IPv6 唯一本地
+    （fc00::/7）——`ipaddress` 的 `is_private` 已覆盖这几类。IPv4-mapped 形式
+    要先剥掉 `::ffff:` 前缀，否则会被当成 IPv6 地址去判，结果不对。
+
+    注意这一档**挡不住同网段的别人**（公共 WiFi 上人人都算内网），它挡的是
+    端口转发 / 公网直连进来的请求。
+    """
+    if not addr:
+        return False
+    a = addr[7:] if addr.startswith("::ffff:") else addr
+    try:
+        ip = ipaddress.ip_address(a)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_loopback or ip.is_link_local
+
+
 def _admin_allowed():
-    return ADMIN_ALLOW_REMOTE or request.remote_addr in _LOCAL_ADDRS
+    if request.remote_addr in _LOCAL_ADDRS:
+        return True
+    if not ADMIN_ALLOW_REMOTE:
+        return False
+    if ADMIN_ALLOW_REMOTE_LAN:
+        return _is_lan_addr(request.remote_addr)
+    return True
 
 
 def _agent_or_400(agent_id):
