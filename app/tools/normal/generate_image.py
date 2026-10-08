@@ -223,6 +223,10 @@ def _t2i_guard(is_i2i):
 # 用户点名才走）；2026-10-03 再加 `nai_wide`（NAI 横版 1216×832，跟 `nai` 竖版
 # 共用同一套闸 / 额度 / 队列，只是文生图的构图方向不同）：可传名字现在是
 # 16 + qwen + image_gen_v1 + krea2 + nffa + nai + nai_wide = 22 个。）
+# 2026-10-08 用户拍板把 `krea2` 一条**按挂的风格 LoRA 拆成 5 条**（krea2米山舞 /
+# krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos），通用 `krea2` 下架：
+# 光说「krea2」不再算点名。`_FIXED_CHAN_MAP` / `_FIXED_CHAN_RE` 里放的是 5 个
+# 中文点名别名（带风格词），目录名是 ASCII（krea2-yoneyama 等）。
 # 四个都由用户当天的 ComfyUI 工作流直接转来，共用同一套两段采样骨架，
 # **差别在底模组合，表现为画风差异**——所以渠道名按**视觉特征**取，
 # 模型看到名字就能联想效果（用户要求「形象的命名，这样有辨识度」）：
@@ -373,8 +377,9 @@ _RECEIPT_CHANNEL = "当前渠道：%s"
 # 附言的内置默认（管理页 `receipt_note` 一整段可改掉，见 agents.receipt_note）。
 # 2026-10-07 用户拍板「把我全部的可用渠道都加上去」：原「常用」那行只列 5 个，
 # `sd` / `krea2` / `nffa` / `miao` / `cunny` 一直没有曝光位。
-# 现在列出**全部能点名的渠道**（11 个）：silver / silver-hd / anima / qwen / nai /
-# jank / sd / krea2 / nffa / miao / cunny。
+# 现在列出**全部能点名的渠道**：silver / silver-hd / anima / qwen / nai /
+# jank / sd / nffa / miao / cunny，外加 2026-10-08 按风格拆出来的 krea2 系 5 条
+# （krea2米山舞 / krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos）= 15 个。
 #   - `silver` / `silver-hd` / `jank` 是磁盘渠道，不在 `_FIXED_CHAN_MAP` 里（红线），
 #     由 AI 认——所以它们**能点名**，只是代码不直判。
 #   - `image_gen_v1_hires` / `nai_wide` 没有短名（`_FIXED_CHAN_RE` 里没有对应词），
@@ -394,7 +399,8 @@ _RECEIPT_CHANNEL = "当前渠道：%s"
 #    优先——改了这里还要同步改 settings.json，否则线上一个字不变。
 _RECEIPT_NOTE_DEFAULT = (
     "想换渠道就发「渠道名 + 你的需求」（例：jank 银发初音未来）。\n"
-    "渠道：silver（默认）/ anima（三档）/ qwen / nai / jank / sd / krea2 / nffa / miao / cunny\n"
+    "渠道：silver（默认）/ anima（三档）/ qwen / nai / jank / sd / nffa / miao / cunny\n"
+    "krea2 系（5 条，按风格拆）：krea2米山舞 / krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos\n"
     "要 4x 超清：silver 发「silver-hd + 需求」，qwen 发「qwen 超清 + 需求」（也认 silver超清 / qwen超清）\n"
     "qwen 超清支持图生图：发「qwen 超清，图生图，描述」（附一张图）\n"
     "要横屏：加「横屏」（例：silver 横屏 一个女孩）\n"
@@ -498,12 +504,12 @@ def _parse_loras(lora_str):
 def _lora_chain(workflow):
     """按 checkpoint→lora 链的顺序返回 lora 节点 id 列表。
 
-    兼容 LoraLoader（带 clip）和 LoraLoaderModelOnly（krea2 用的，只挂 model）。
+    兼容 LoraLoader（带 clip）和 LoraLoaderModelOnly（krea2-* 用的，只挂 model）。
     不硬编码节点 id（两个工作流的 id 编号不同），沿 model 输入的连线走：
     第一个槽的 model 来自 checkpoint 加载节点，后面每个槽的 model 来自前一个槽。
 
     起点识别用**小写包含**：ComfyUI 里同一个加载器有多种拼写——`CheckpointLoaderSimple`
-    （image_gen_v1）、`UnetLoaderGGUF`（krea2）、`UNETLoader`（anima）。
+    （image_gen_v1）、`UnetLoaderGGUF`（krea2-*）、`UNETLoader`（anima）。
     原来写成 `"UnetLoader" in class_type` 是大小写敏感的，`UNETLoader` 全大写**匹配不上**，
     于是 anima 的两个 lora 槽整条链找不到，点名换 lora 会误报「当前工作流没有 lora 槽」。
     """
@@ -796,7 +802,7 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
         if seed is not None and str(seed).strip():
             return ("错误：NAI 是云端出图，种子指定不了（它那边同一个数也不保证"
                     "复现同一张）。要按种子重画只能走本机渠道：anima_* / hd_*_* / "
-                    "qwen_image_v1 / image_gen_v1 / krea2 / nffa。")
+                    "qwen_image_v1 / image_gen_v1 / krea2-* / nffa。")
         target, target_id = qq_api.current_context()
         ok, why = nai_allowed(QQ_AGENT_ID, target, target_id)
         if not ok:
@@ -1084,9 +1090,11 @@ tool = {
                   "比 qwen 更慢、单张更大，别主动推荐、别在群里连刷。"
                   "文生图/图生图**都支持**（它的图生图骨架同样只换了放大，出图一样是 4x）；"
                   "说「qwen 超清 图生图」= 它 + `source_image=1`\n"
-                  "- **krea2**（米山舞 retroanime，832×1216 → 末尾 4x → **3328×4864**）："
-                  "只在用户点名 krea2 / 米山舞时传。"
-                  "标签式英文，风格前缀工作流自动拼，**不要自己再写一遍**\n"
+                  "- **krea2 系 5 条**（krea2米山舞 / krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos）："
+                  "832×1216 → 4x → **3328×4864**，只有风格 LoRA 不同、**点名要带风格词**；"
+                  "krea2米山舞 风格前缀自动拼、**不要自己再写**，其余标签式英文自己写；"
+                  "krea2动漫真人 是转换器，**必须带触发词 `transform the image to realistic photograph`**。"
+                  "⚠️ 通用「krea2」已下架，光说 krea2 不算点名。\n"
                   "- **nffa**（Illustrious 系，1024×1536，**慢：一张 40~75 秒**）：只在用户点名 nffa 时传。"
                   "标签式英文，**完整角色描述全自己写**——它不拼画风前缀、负面词也写死在工作流里，别再叠负面词。"
                   "也是 2 个 lora 槽（画风 + 描边），对它传 lora 会把画风顶掉。不支持垫图，不认 ` --- `\n"
@@ -1109,7 +1117,7 @@ tool = {
                   "【角色：认得出就把名字写在 prompt 最前面】这是**还原度最高的一行**，"
                   "比一长串外貌描述管用得多。实测同一轮需求：写了 "
                   "`rudeus greyrat, mushoku tensei` 的画得像，只写「一位年轻男子」的那版角色全走形。\n"
-                  "- 标签式英文渠道（anima_* / hd_* / image_gen_v1 / krea2 / nffa / nai）名字写"
+                  "- 标签式英文渠道（anima_* / hd_* / image_gen_v1 / krea2-* / nffa / nai）名字写"
                   "英文 tag 放最前：`rudeus greyrat, mushoku tensei`，冷门角色带作品名 "
                   "`hu tao \\(genshin impact\\)`\n"
                   "- **qwen_image_v1 的自然语言句子里照样要写名字**（「鲁迪乌斯（无职转生）」/ "
@@ -1174,10 +1182,10 @@ tool = {
         "type": "object",
         "properties": {
             "prompt": {"type": "string", "description": "提示词。**开头先写角色名**（认得出就写：英文 tag 渠道 `rudeus greyrat, mushoku tensei`；qwen 的自然语言句子里写「鲁迪乌斯（无职转生）」）——没有任何渠道自带角色，**名字才是还原度最高的那一行**，外貌只补与原设定不同的部分。\n默认渠道写**逗号分隔的标签式英文短句，只写一段、不要用 --- 分隔**（只有 skill=image_gen_v1 认 ` --- ` 分隔、一次出多张；其它渠道会把 --- 当普通文字，要出多张就分多次调用、每次一个变体）。\n两个例外：skill=qwen_image_v1 写**自然语言句子**（不写标签堆）；**它当改图渠道用时（同时传 source_image）只写一句改动指令**，例如 `change her coat to red, keep the pose, face and background exactly the same`——**不要把整张图重新描述一遍**。"},
-            "skill": {"type": "string", "description": "渠道名。**不传就是默认渠道 " + T2I_DEFAULT_SKILL + "**（用户自定义的 Anima 渠道）。可选值见 Available Skills 的生图类（4 个动漫渠道 = 4 画风 × 1 尺寸档 `hd_3_<画风>`，另有 silver / silver-hd / jank / qwen_image_v1 / qwen-hd / image_gen_v1 / krea2 / nffa / nai / nai_wide），各自画风/尺寸/场景/速度见那一行里。\n**只在用户点名画风 / 尺寸 / 渠道时才传，平时一律不传**。**说「anima」或「三档」= 点名尺寸，要传 `hd_3_<画风>`（只剩三档）**；但光说「高清 / 清晰 / 画质好」不算，那只是形容词，照默认不传。\n分不清就照 Available Skills 那行摘要选，选错用户会说；细节可 load_skill 读该渠道主规范。"},
+            "skill": {"type": "string", "description": "渠道名。**不传就是默认渠道 " + T2I_DEFAULT_SKILL + "**（用户自定义的 Anima 渠道）。可选值见 Available Skills 的生图类（4 个动漫渠道 = 4 画风 × 1 尺寸档 `hd_3_<画风>`，另有 silver / silver-hd / jank / qwen_image_v1 / qwen-hd / image_gen_v1 / krea2系 / nffa / nai / nai_wide），各自画风/尺寸/场景/速度见那一行里。\n**只在用户点名画风 / 尺寸 / 渠道时才传，平时一律不传**。**说「anima」或「三档」= 点名尺寸，要传 `hd_3_<画风>`（只剩三档）**；但光说「高清 / 清晰 / 画质好」不算，那只是形容词，照默认不传。\n分不清就照 Available Skills 那行摘要选，选错用户会说；细节可 load_skill 读该渠道主规范。"},
             "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传，每个渠道 2 个槽"},
             "source_image": {"type": "string", "description": "垫图 / 图生图：填 1 = 垫本轮出现的那张图（优先取对方引用的，其次他自己刚发的；两样都没有会报错）。\n**默认不传**。只有对方**明说要在这张图上改**（说出「图生图 / 垫图」这类机制名，通常还会点名 qwen）时才传。只说「把衣服换成jk」这类**改动内容**不算——那是照这张图**改提示词重新画一张新的**（不垫图）。引用一张图本身**永远不是**垫图要求：看看 / 点评 / 反推 / 照它画新的，都不传。\n传了就**必须配 `skill=qwen_image_v1`**（参考图编辑，只改那一句交代的地方、其余原样；慢，一张 1~2 分钟），prompt 只写**一句改动指令**。\nskill=nai 也支持垫图（云端）。动漫档（anima_* / hd_*）的重绘骨架还在，但**用法上已撤掉**，别再拿它当图生图渠道。本机渠道的重绘强度是定死的，传 denoise 也没用。"},
-            "seed": {"type": "integer", "description": "生图种子，**只在对方点名要「用某个种子重画 / 换提示词再来一张」时才传**，平时一律不传（不传=随机）。范围 0 ~ 4294967295 的整数，填错格式/超界会直接报错，别猜。种子会跟着编号印在图那行 caption 上（`编号 · 分辨率 · 渠道 · seed 数字`），对方引用那条消息时能一起带回来。⚠️ 同一个种子只有配**同样的提示词 + 同样的渠道 + 同样的 lora**才画得出同一张图（改提示词重画=构图大体在、细节变）；动漫渠道是两段采样、两段共用这一个种子，所以只有这一个数。**只有本机渠道认**（hd_* / qwen_image_v1 / image_gen_v1 / krea2 / nffa），skill=nai 传了会被拒；image_gen_v1 一次出多张时第 k 张 = 这个数 + k - 1"}
+            "seed": {"type": "integer", "description": "生图种子，**只在对方点名要「用某个种子重画 / 换提示词再来一张」时才传**，平时一律不传（不传=随机）。范围 0 ~ 4294967295 的整数，填错格式/超界会直接报错，别猜。种子会跟着编号印在图那行 caption 上（`编号 · 分辨率 · 渠道 · seed 数字`），对方引用那条消息时能一起带回来。⚠️ 同一个种子只有配**同样的提示词 + 同样的渠道 + 同样的 lora**才画得出同一张图（改提示词重画=构图大体在、细节变）；动漫渠道是两段采样、两段共用这一个种子，所以只有这一个数。**只有本机渠道认**（hd_* / qwen_image_v1 / image_gen_v1 / krea2-* / nffa），skill=nai 传了会被拒；image_gen_v1 一次出多张时第 k 张 = 这个数 + k - 1"}
         },
         "required": ["prompt"]
     }

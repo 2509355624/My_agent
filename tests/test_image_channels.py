@@ -1332,7 +1332,10 @@ class ToolDescriptionBudgetTest(unittest.TestCase):
     def test_description_stays_lean(self):
         """留个天花板，防止改回去又变成长散文。"""
         desc = self._tool()["description"]
-        self.assertLess(len(desc), 5000,
+        # 2026-10-08：5000 → 5150。krea2 一条按风格 LoRA 拆成 5 条，
+        # description 里那张「渠道清单」必须跟着变长；旧上限只剩 35 字余量，
+        # 塞不下 5 个名字 + 两条用法（点名带风格词 / 动漫真人的触发词）。
+        self.assertLess(len(desc), 5150,
                         "主 description 又涨回 %d 字（精简前是 4965）" % len(desc))
 
     def test_hd_jargon_is_not_a_size_request(self):

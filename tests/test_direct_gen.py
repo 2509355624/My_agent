@@ -92,7 +92,8 @@ class ChannelParseTest(unittest.TestCase):
         # 用户点名的固定渠道也要代码直判，不劳 LLM（2026-10-05）
         for text, skill, desc in (
                 ("sd 一只猫", "image_gen_v1", "一只猫"),
-                ("krea2 一个女孩", "krea2", "一个女孩"),
+                ("krea2米山舞 一个女孩", "krea2-yoneyama", "一个女孩"),
+                ("krea2 亚洲真人 一个女孩", "krea2-asianmix", "一个女孩"),
                 ("qwen 写实街拍", "qwen_image_v1", "写实街拍"),
                 ("nffa 插画少女", "nffa", "插画少女"),
                 ("cunny 一个女孩", "cunny", "一个女孩"),   # 2026-10-05 新渠道
@@ -103,6 +104,35 @@ class ChannelParseTest(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(_pc(text),
                                  (skill, desc))
+
+    def test_all_five_krea2_channels_are_parseable(self):
+        """krea2 系 5 条（2026-10-08 按风格 LoRA 拆）：全名和夹空格两种写法都要认。
+
+        中文长名是渠道词，`_FIXED_CHAN_RE` 的边界是 `[0-9A-Za-z_]`——CJK 不算
+        边界，所以 `krea2米山舞` 能整体命中；同族长短名共存时**长名必须排在前面**
+        （正则同起点左优先），否则会被短名吃掉。
+        """
+        for name, cid in (("krea2米山舞", "krea2-yoneyama"),
+                          ("krea2日系", "krea2-rella"),
+                          ("krea2亚洲真人", "krea2-asianmix"),
+                          ("krea2动漫真人", "krea2-anime2real"),
+                          ("krea2真人cos", "krea2-coscandid")):
+            with self.subTest(name=name):
+                self.assertEqual(_pc("%s 1girl" % name), (cid, "1girl"))
+                # 名字里夹空格也认（`krea2 米山舞` / `krea2 真人 cos`）
+                spaced = name.replace("krea2", "krea2 ", 1).replace("真人cos", "真人 cos")
+                self.assertEqual(_pc("%s 1girl" % spaced), (cid, "1girl"))
+
+    def test_retired_bare_krea2_is_not_a_channel(self):
+        """通用 `krea2` 已下架：光说「krea2」不算点名。
+
+        下架前它会把整句锁成 krea2 档、把剩下的字当正文；现在必须**整句原样**
+        交出去（`(None, text)`），由模型照默认渠道走——不然用户说「krea2」
+        会被静默当成某个风格渠道。
+        """
+        for text in ("krea2 一个女孩", "krea2 1girl, masterpiece"):
+            with self.subTest(text=text):
+                self.assertEqual(_pc(text), (None, text))
 
     def test_fixed_word_inside_english_prompt_is_ignored(self):
         # 档位在场时固定渠道词不参与（英文提示词里撞词不误判）
@@ -383,7 +413,9 @@ class DirectEnqueueTest(unittest.TestCase):
         回执写「当前渠道：silver」。过一遍命令词映射。
         """
         for word, cid in (("sd", "image_gen_v1"), ("qwen", "qwen_image_v1"),
-                          ("nai", "nai"), ("krea2", "krea2")):
+                          ("nai", "nai"),
+                          ("krea2米山舞", "krea2-yoneyama"),
+                          ("krea2真人cos", "krea2-coscandid")):
             with self.subTest(word=word):
                 out, _, m_gen = self._decide(
                     '{"skill": "%s", "prompt": "cat"}' % word)
@@ -1290,7 +1322,8 @@ class MasterPromptTest(unittest.TestCase):
         hist = [{"role": "user", "content": "描" * 300},
                 {"role": "assistant", "content": "[直达生图] nai：" + "x" * 300}] * 5
         t = self._rendered(text="画一只猫", recent=direct_gen._recent_lines(hist))
-        self.assertLess(len(t), 3300, "整条提示词越过 3300 字预算了")
+        # 2026-10-08：3300 → 3320。同上：krea2 拆 5 条，渠道清单那行变长。
+        self.assertLess(len(t), 3320, "整条提示词越过 3320 字预算了")
 
     def test_ai_may_reply_instead_of_drawing(self):
         self.assertIn('{"reply"', self._rendered())

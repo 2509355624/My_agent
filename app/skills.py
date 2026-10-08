@@ -178,6 +178,13 @@ def load_skill(skill_name):
 # 三档 `hd_3_<画风>`。原话：「取消 anima 的快档、普通、二档，只留一个三档，
 # 到时候就是你说 anima，就跑三档加上 x2 像素」。
 #
+# 2026-10-08 又加一条：`krea2`。用户拍板「原来的 krea2 删掉，只留 5 个带风格的
+# 新名」（原话：「我想要 krea 挂载这些风格……到时候我们就是 krea2米山舞，krea2日系，
+# krea2亚洲真人，krea2动漫真人，krea2真人cos」）。krea2 系按**挂哪个 LoRA** 拆成
+# `krea2-yoneyama` / `krea2-rella` / `krea2-asianmix` / `krea2-anime2real` /
+# `krea2-coscandid` 五条。**通用 `krea2` 这个名字从此不可点名**。
+# 目录同样**原地保留**——它是 `_make_krea2_channels.py` 生成那 5 条时的骨架。
+#
 # ⚠️ 为什么是「屏蔽」而不是「挪走」：挪走会连带丢掉那 12 份
 # `workflow_i2i.json`（动漫重绘骨架），而用户只要求取消**尺寸档**、
 # 没要求砍掉图生图能力。屏蔽只挡「对外可见」这一层：
@@ -185,10 +192,16 @@ def load_skill(skill_name):
 # `direct_gen._allowed_skills()` 全都看不到，模型也就点不到它们；
 # 而 `load_skill()` 走的是纯文件系统路径（`_resolve_skill_dir`），
 # **照样能加载**，所以动漫图生图那条路没断。
+#
+# ⚠️ 屏蔽不等于禁用：`direct_gen._allowed_skills()` 会**现场扫 skills/ 目录**
+# 把 `kind: 生图` 的目录都放行，所以光加进这里不够——`direct_gen._FIXED_CHAN_MAP`
+# / `_FIXED_CHAN_RE` 和 `agents/*/agent.json` 的 `skills` 白名单也要同步清掉，
+# 否则点名 `krea2` 仍会被锁住并跑到（实测过）。
 ARCHIVED_SKILLS = tuple(
     ["anima_" + s for s in ("clear", "curvy", "gloss", "soft")]
     + ["hd_fast_" + s for s in ("clear", "curvy", "gloss", "soft")]
     + ["hd_2_" + s for s in ("clear", "curvy", "gloss", "soft")]
+    + ["krea2"]
 )
 
 

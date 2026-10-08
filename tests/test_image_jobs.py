@@ -2465,15 +2465,19 @@ class QqWhitelistTest(unittest.TestCase):
     专用 / 未上线的那几个。
     """
 
-    # QQ 提供的：4 个动漫渠道（4 画风 × 1 尺寸档，只剩三档）+ qwen + SD + krea2 + nffa
+    # QQ 提供的：4 个动漫渠道（4 画风 × 1 尺寸档，只剩三档）+ qwen + SD + nffa
+    # + 2026-10-08 按风格 LoRA 拆出来的 krea2 系 5 条（通用 `krea2` 已下架）。
     VISIBLE = tuple("hd_3_" + style
                     for style in ("clear", "soft", "gloss", "curvy")) + (
-                        "qwen_image_v1", "image_gen_v1", "krea2", "nffa")
-    # QQ 不提供的：2026-10-07 屏蔽的 12 个旧档 + 已归档的老名字 + draw 专用 / 未上线
+                        "qwen_image_v1", "image_gen_v1", "nffa",
+                        "krea2-yoneyama", "krea2-rella", "krea2-asianmix",
+                        "krea2-anime2real", "krea2-coscandid")
+    # QQ 不提供的：2026-10-07 屏蔽的 12 个旧档 + 已归档的老名字（含通用 krea2）
+    # + draw 专用 / 未上线
     HIDDEN = tuple("%s_%s" % (tier, style)
                    for tier in ("anima", "hd_fast", "hd_2")
                    for style in ("clear", "soft", "gloss", "curvy")) + (
-        "anima", "anima_2", "anima_realskin",
+        "anima", "anima_2", "anima_realskin", "krea2",
         "image_gen_v1_hires", "nsfw_pose_gen", "pose_library")
 
     def test_qq_whitelist_matches_the_offered_channels(self):

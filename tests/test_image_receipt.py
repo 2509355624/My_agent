@@ -178,23 +178,32 @@ class ReceiptNoteTest(_SubmitHarness):
     def test_default_note_stays_five_lines(self):
         """回执跟着**每一张图**发，行数是最直接的成本 → 钉住。
 
-        现 9 行 = 状态行（任务已提交…）+ 渠道行（当前渠道：…）+ 附言 7 行
-        （想换渠道就发… / 渠道：… / 要 4x 超清… / qwen 超清支持图生图… /
-        要横屏… / 要连续小漫画… / 更多玩法…）。
+        现 10 行 = 状态行（任务已提交…）+ 渠道行（当前渠道：…）+ 附言 8 行
+        （想换渠道就发… / 渠道：… / krea2 系 5 条… / 要 4x 超清… /
+        qwen 超清支持图生图… / 要横屏… / 要连续小漫画… / 更多玩法…）。
+
+        2026-10-08：9 → 10。krea2 按风格拆成 5 条，那 5 个名字得有人知道——
+        挤进原来那行会把「渠道：…」撑成一条读不完的长句，单独起一行更清楚。
         以后想再加一行，先想清楚值不值。
         """
-        self.assertEqual(len(self._note(None).splitlines()), 9)
+        self.assertEqual(len(self._note(None).splitlines()), 10)
 
     def test_default_note_lists_every_nameable_channel(self):
-        """2026-10-07 用户拍板「把我全部的可用渠道都加上去」——能点名的 11 个
-        都要在回执里出现（原「常用」那行只列 5 个，sd / krea2 / nffa / miao /
+        """2026-10-07 用户拍板「把我全部的可用渠道都加上去」——能点名的
+        都要在回执里出现（原「常用」那行只列 5 个，sd / nffa / miao /
         cunny 一直没有曝光位）。
+
+        2026-10-08：krea2 拆 5 条后，这里从 11 个变 15 个——**必须钉全名**
+        （`krea2米山舞` 而不是 `krea2`），否则「通用 krea2 已下架」这件事
+        在测试里看不出来。
 
         `image_gen_v1_hires` / `nai_wide` 没有短名、点名不到，故意不列。
         """
         text = self._note(None)
         for name in ("silver", "anima", "qwen", "nai", "jank", "sd",
-                     "krea2", "nffa", "miao", "cunny", "silver-hd"):
+                     "nffa", "miao", "cunny", "silver-hd",
+                     "krea2米山舞", "krea2日系", "krea2亚洲真人",
+                     "krea2动漫真人", "krea2真人cos"):
             self.assertIn(name, text, name)
         for name in ("image_gen_v1_hires", "nai_wide"):
             self.assertNotIn(name, text, name)
