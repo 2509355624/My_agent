@@ -66,8 +66,9 @@ log = logging.getLogger("generate_image")
 # **这 12 份骨架还在磁盘上**（屏蔽不挪文件），但对应的渠道不可点名了。
 # ② qwen 的编辑式改图：骨架是**手写**的 `skills/qwen_image_v1/workflow_i2i.json`
 # （跟上面那个生成脚本无关，机制完全不同），denoise 定死在文件里 = 1。
-# 2026-10-07 加 `qwen-hd`：同一份手改骨架，只把末尾放大换成 4x（node 60 →
-# `4xUltrasharpV10`），所以「qwen 超清 + 垫图改图」也走得通。
+# 2026-10-07 加 `qwen-hd`：同一份手改骨架，只把末尾放大换成 4x（node 60），
+# 所以「qwen 超清 + 垫图改图」也走得通。（放大模型 2026-10-08 换成
+# `4x-AnimeSharp.pth`——原 `4xUltrasharpV10` 出图常超 32 MiB 被腾讯拒收。）
 _I2I_TIERS = ("anima", "hd_fast", "hd_2")   # hd_3 不给图生图
 _I2I_STYLES = ("clear", "soft", "gloss", "curvy")
 _I2I_ANIMA_SKILLS = tuple(t + "_" + s for t in _I2I_TIERS for s in _I2I_STYLES)
