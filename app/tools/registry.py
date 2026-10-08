@@ -64,6 +64,10 @@ if ENABLE_IMAGE_GEN:
     from app.tools.normal.comfy_workflow import tool as _cw_info, tool_update as _cw_update
     register_tool(**_cw_info)
     register_tool(**_cw_update)
+    # 连续小漫画：一句话剧情 → 「固定块 + 动态块 × N」→ 逐格渲染发回。
+    # 与 generate_image 同一取舍（没有 ComfyUI 的机器不该看见一个必然失败的工具）。
+    from app.tools.normal.generate_comic import tool as _generate_comic_tool
+    register_tool(**_generate_comic_tool)
 
 # QQ 主动推送工具：只有开了 QQ 接入才注册。没配 QQ 的机器不该让模型看见
 # 一个必然失败的工具（与 ENABLE_IMAGE_GEN 同一取舍）
