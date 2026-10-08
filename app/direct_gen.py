@@ -815,6 +815,18 @@ _MASTER_TEMPLATE = (
     "【图生图】）；seed 只在用户点名要某个种子时填；用不上的参数一律省略。\n"
     "- {{\"tool\": \"recall_image\", \"id\": \"HT-20261005-123456-789\"}}\n"
     "  查一张图当初用的提示词和种子：用户引用带编号的图问「这张什么词」时用它。\n"
+    # ── 第三个工具：连续小漫画（2026-10-08）──────────────────────────
+    # QQ 侧的 @ 轮**根本不跑主 Agent 循环**（`qq_bot` 的调度注释：「agent 循环
+    # 只留给总开关关闭和主动接话轮」），所以注册在工具表里的 `generate_comic`
+    # 在 QQ 里永远调不到——漫画只能从这条 JSON 契约进来。**别把这条删了。**
+    # brief 是**中文**（剧情 + 角色），不适用下面「prompt 必须是英文」那条规则；
+    # 画风 / 格数由 `generate_comic._norm_style` / `comic_story.clamp_panels` 收口。
+    "- {{\"tool\": \"generate_comic\", \"brief\": \"中文剧情\", \"panels\": 10, "
+    "\"skill\": \"silver\"}}\n"
+    "  画**连续多格小漫画**（同一角色、剧情连贯的一串图）：用户要「漫画 / 连环画 / "
+    "多格 / 条漫」时用它。brief 写中文剧情和角色（名字照抄），panels 用用户报的格数、"
+    "没报就不填（默认 10，上限 30），skill 默认 silver、点名 qwen/jank/krea2/nffa "
+    "才填。**单张图别用它**。\n"
     "不需要动手时，输出 {{\"reply\": \"你要说的话\"}}。\n"
     # ── 「别反问」（2026-10-07 用户拍板）──────────────────────────
     # 用户原话：「我都明确是要求 ai 直接生成的，结果他又反问我…我希望就是我
@@ -960,6 +972,33 @@ def _remember_job(session_key, skill, prompt):
         _LAST_JOB[session_key] = {"skill": skill, "prompt": prompt}
 
 
+# 会话最近一次「直达动作」的一句话，给 `qq_bot` 落史用——下一轮的【最近对话】
+# 里得有 AI 上一轮到底干了什么。单张生图和连续漫画都走这儿，格式统一。
+#
+# 为什么不复用 `_LAST_JOB`：那份的语义是「单张任务」，`_AGAIN_RE`（再来一张）
+# 和 `_revise`（引用图改图）都拿它当**单张提示词**用；漫画的 brief 是中文剧情，
+# 塞进去会被当成提示词重跑一张垃圾图。所以两件事分开记。
+_LAST_DESC = {}
+
+
+def _note_desc(line):
+    """记下本轮直达动作。取不到会话就不记——落史是附赠，不许影响主流程。"""
+    try:
+        key = qq_api.current_session_key()
+    except Exception:
+        return
+    if not key:
+        return
+    with _JOB_LOCK:
+        _LAST_DESC[key] = line
+
+
+def last_direct_desc(session_key):
+    """上一轮直达动作的一句话（qq_bot 落史用）；没干过返回 ""。"""
+    with _JOB_LOCK:
+        return _LAST_DESC.get(session_key, "")
+
+
 def _last_job(session_key):
     with _JOB_LOCK:
         job = _LAST_JOB.get(session_key)
@@ -1100,6 +1139,36 @@ def _enqueue(skill, prompt, text, source_image=False, seed=None,
         return "生图请求没发出去，稍后再试。"
     log.info("[direct] 直达入队：%s %r（原话 %r）", skill, prompt[:50],
              text[:50])
+    _note_desc("[直达生图] %s：%s" % (skill, prompt[:200]))
+    if result.startswith(image_jobs.RECEIPT_SENT_MARK):
+        return ""          # 回执已由工具直发，本轮闭嘴
+    if result.startswith("错误："):
+        return _humanize_error(result)
+    return result
+
+
+def _enqueue_comic(comic, text):
+    """漫画轮落队。语义与 `_enqueue` 完全一致：回执已直发返回 ""，否则返回要发的话。
+
+    执行体就是 `generate_comic._generate_comic`——和工具路径同一份代码（闸门、
+    剧本、逐格后台渲染、回执直发都在里面），不在这儿重写一遍。
+    """
+    from app.tools.normal import generate_comic as gc
+    from app import comic_story
+    brief = (comic.get("brief") or "").strip()
+    if not brief:
+        return "漫画这条我没看清要画什么故事，把剧情再说一次。"
+    try:
+        result = gc._generate_comic(brief, panels=comic.get("panels"),
+                                    skill=comic.get("skill"))
+    except Exception:
+        log.exception("[direct] 漫画入队失败")
+        return "漫画请求没发出去，稍后再试。"
+    style = gc._norm_style(comic.get("skill"))
+    panels = comic_story.clamp_panels(comic.get("panels"))
+    log.info("[direct] 漫画入队：%s %d 格 %r（原话 %r）",
+             style, panels, brief[:50], text[:50])
+    _note_desc("[直达漫画] %s %d 格：%s" % (style, panels, brief[:200]))
     if result.startswith(image_jobs.RECEIPT_SENT_MARK):
         return ""          # 回执已由工具直发，本轮闭嘴
     if result.startswith("错误："):
@@ -1209,6 +1278,19 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
     data = _ask(content)
     if not data:
         return None
+    # ── 漫画（2026-10-08）：第三种形态 ───────────────────────────────
+    # QQ 的 @ 轮不跑主 Agent 循环（见 `qq_bot` 的调度注释），`generate_comic`
+    # 那个工具在 QQ 里调不到，漫画只能从这条 JSON 契约进来。
+    # brief 是**中文剧情**，不套下面「prompt 必须英文 + 渠道白名单」那套校验：
+    # 画风由 `generate_comic._norm_style` 收敛，格数由 `comic_story.clamp_panels`
+    # 收口，都不需要在这儿再判一遍。
+    if (data.get("tool") or "").strip() == "generate_comic":
+        brief = (data.get("brief") or data.get("prompt") or "").strip()
+        if not brief:
+            return None
+        return {"comic": {"brief": brief,
+                          "panels": data.get("panels"),
+                          "skill": (data.get("skill") or "").strip()}}
     user_prompt = (data.get("prompt") or "").strip()
     if not user_prompt:
         # 模型选择不动手（聊天 / 问答 / 只要提示词）→ 把话原样带出去。
@@ -1226,6 +1308,11 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
     # 就要 nai，模型不许在这一步复议顶掉（2026-10-05 私聊事故的另一半——
     # 以前是 `模型值 or 代码值`，等于把点名的渠道交给模型重新裁决）。
     judged = (data.get("skill") or "").strip()
+    # 模型有时填的是**命令词**而不是渠道 id（模板里写着「sd = image_gen_v1」，
+    # 它就直接填 `sd`），而白名单里只有 id → 会静默降级成默认档。
+    # 2026-10-08 实录：用户要 10 张漫画，模型填 skill="sd"，回落 silver。
+    if judged:
+        judged = _fixed_chan(judged, text)
     out_skill = named or judged
     if out_skill not in _allowed_skills():
         allowed = _allowed_skills()
@@ -1643,6 +1730,8 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         if data and data.get("reply"):
             # 模型判断这串不是下单（比如群里贴串讨论）→ 直接回话，不入队。
             return data["reply"]
+        if data and data.get("comic"):
+            return _enqueue_comic(data["comic"], text)
         if not data:
             return _FINAL_PROMPT_NO_CHAN_TEXT
         _remember_job(session_key, data["skill"], data["prompt"])
@@ -1672,6 +1761,8 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
             data = _translate(quoted, [], skill=ch, doc=doc)
             if data and data.get("reply"):
                 return data["reply"]
+            if data and data.get("comic"):
+                return _enqueue_comic(data["comic"], text)
             if data:
                 _remember_job(session_key, data["skill"], data["prompt"])
                 return _enqueue(data["skill"], data["prompt"], text)
@@ -1699,6 +1790,8 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         if data and data.get("reply"):
             # 模型判这轮不是下单（点名了渠道也只是在聊）→ 直接回话。
             return data["reply"]
+        if data and data.get("comic"):
+            return _enqueue_comic(data["comic"], text)
         if data:
             _remember_job(session_key, data["skill"], data["prompt"])
             return _enqueue(data["skill"], data["prompt"], text)
@@ -1712,6 +1805,8 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     data = _translate(src, [] if quoted.strip() else history, doc=doc)
     if data and data.get("reply"):
         return data["reply"]
+    if data and data.get("comic"):
+        return _enqueue_comic(data["comic"], text)
     if data:
         _remember_job(session_key, data["skill"], data["prompt"])
         return _enqueue(data["skill"], data["prompt"], text)

@@ -1043,13 +1043,13 @@ class SessionRunner:
             # 不落的话「刚才那只」这类指代也没有依据可查。
             if direct_reply == "":
                 try:
-                    job = direct_gen._last_job(self.session_key)
+                    # 上一轮直达动作的那句话由 direct_gen 自己记——单张生图和
+                    # 连续漫画的格式不一样，别在这儿拼。
+                    desc = direct_gen.last_direct_desc(self.session_key)
                     history.append({"role": "user", "content": own_text})
-                    if job:
-                        history.append({
-                            "role": "assistant",
-                            "content": "[直达生图] %s：%s"
-                                       % (job["skill"], job["prompt"][:200])})
+                    if desc:
+                        history.append({"role": "assistant",
+                                        "content": desc})
                     save_history(history, run_agent, self.session_key)
                 except Exception:
                     log.exception("直达轮落史失败 %s", self.session_key)

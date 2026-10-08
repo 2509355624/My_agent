@@ -31,6 +31,7 @@ from unittest import mock
 
 from app import direct_gen, image_jobs, qq_bot, random_tags
 from app.direct_gen import MENU_TEXT
+from app.tools.normal import generate_comic as gc
 from app.tools.normal import generate_image as gi
 
 RECEIPT = image_jobs.RECEIPT_SENT_MARK + "回执"
@@ -373,6 +374,21 @@ class DirectEnqueueTest(unittest.TestCase):
         self.assertEqual(out, "")
         self.assertEqual(m_gen.call_args.kwargs["skill"],
                          direct_gen._DEFAULT_SKILL)
+
+    def test_command_word_skill_is_mapped_to_its_id(self):
+        """模型有时填**命令词**而不是渠道 id（模板里写着「sd = image_gen_v1」，
+        它就直接填 `sd`），而白名单里只有 id → 会静默降级成默认档。
+
+        2026-10-08 实录：用户要 10 张漫画，模型填 skill="sd"，回落 silver，
+        回执写「当前渠道：silver」。过一遍命令词映射。
+        """
+        for word, cid in (("sd", "image_gen_v1"), ("qwen", "qwen_image_v1"),
+                          ("nai", "nai"), ("krea2", "krea2")):
+            with self.subTest(word=word):
+                out, _, m_gen = self._decide(
+                    '{"skill": "%s", "prompt": "cat"}' % word)
+                self.assertEqual(out, "")
+                self.assertEqual(m_gen.call_args.kwargs["skill"], cid)
 
     def test_bare_at_description_runs_default(self):
         # 群实录 2026-10-05 01:07：裸 @ + 描述没有动词，之前被回菜单，
@@ -1158,15 +1174,18 @@ class MasterPromptTest(unittest.TestCase):
     工作。」
 
     所以这里钉的是**那一条模板里必须有哪几样东西**：
-    - 两个工具（generate_image / recall_image）+ 一行 JSON 输出格式
+    - 三个工具（generate_image / recall_image / generate_comic）+ 一行 JSON 输出格式
     - 「不用动手就回 {"reply": ...}」——AI 得能聊天，不是只会画图
     - 渠道清单（渠道名是我们自己起的，模型猜不出来的本地事实，必须给）
     - 中文翻英文 / 画师串原样保留 / 新请求不许抄上一轮
-    以及**钉死它别再长回去**：模板本身不许超过 1800 字。
+    以及**钉死它别再长回去**：模板本身不许超过 2100 字。
     （2026-10-07 从 1600 提到 1700：新增 `silver-hd` 渠道必须在渠道清单里
     占一行——这是模型猜不出来的本地事实，属于合法增长，不是「给渠道写专属规则」。）
     （2026-10-07 再提到 1800：新增【别反问】段——用户明确下单时不许反问确认，
     这是行为规则、不是给某个渠道写专属规则，同样是合法增长。）
+    （2026-10-08 提到 2100：新增第三个工具 `generate_comic`。**这不是「给
+    渠道写专属规则」**——QQ 的 @ 轮不跑主 Agent 循环，这条 JSON 契约是连续
+    漫画唯一能进来的路（见 `ComicRoutingTest`），属于工具列表的合法增长。）
     """
 
     def _rendered(self, text="t", chan_hint="", recent="", search=""):
@@ -1180,12 +1199,24 @@ class MasterPromptTest(unittest.TestCase):
             with self.subTest(part=part):
                 self.assertIn(part, t)
 
-    def test_tool_list_has_exactly_the_two_tools(self):
+    def test_tool_list_has_exactly_the_three_tools(self):
         t = self._rendered()
         self.assertIn("generate_image", t)
         self.assertIn("recall_image", t)
+        self.assertIn("generate_comic", t)
         # 模板本身要短：一句话一个工具，不给每个渠道写专属规则。
-        self.assertLess(len(t), 1800, "模板超长了，工具列表应该一句话一个")
+        self.assertLess(len(t), 2100, "模板超长了，工具列表应该一句话一个")
+
+    def test_comic_tool_is_offered_to_the_ai(self):
+        """第三个工具 `generate_comic` 必须在模板里——QQ 的 @ 轮**不跑主
+        Agent 循环**，这条 JSON 契约是连续漫画唯一能进来的路（见
+        `ComicRoutingTest`）。brief 是中文剧情，模板要写清它。
+        """
+        t = self._rendered()
+        self.assertIn("generate_comic", t)
+        self.assertIn("连续多格小漫画", t)
+        self.assertIn("brief", t)
+        self.assertIn("panels", t)
 
     def test_custom_channels_are_listed_for_the_ai(self):
         """自定义渠道（silver / silver-hd / jank）是本地事实，模型猜不出来，
@@ -1252,11 +1283,14 @@ class MasterPromptTest(unittest.TestCase):
 
     def test_full_prompt_stays_within_budget(self):
         # 用户口径：「2000、3000、4000 字，就这么点」。最坏情况（10 条满长历史）
-        # 也不许越过 3000 字。
+        # 也不许越过预算。
+        # 2026-10-08：3000 → 3300（用户拍板）。模板新增第三个工具
+        # `generate_comic`（约 240 字）；旧的 3000 上限在加之前就已经是 3026
+        # ——早就红了 26 字，不是这次撑破的。
         hist = [{"role": "user", "content": "描" * 300},
                 {"role": "assistant", "content": "[直达生图] nai：" + "x" * 300}] * 5
         t = self._rendered(text="画一只猫", recent=direct_gen._recent_lines(hist))
-        self.assertLess(len(t), 3000, "整条提示词越过 3000 字预算了")
+        self.assertLess(len(t), 3300, "整条提示词越过 3300 字预算了")
 
     def test_ai_may_reply_instead_of_drawing(self):
         self.assertIn('{"reply"', self._rendered())
@@ -1322,6 +1356,80 @@ class MasterPromptTest(unittest.TestCase):
                                     False, at_me=True)
         self.assertEqual(out, "我现在没存画师串。")
         m_gen.assert_not_called()
+
+
+class ComicRoutingTest(unittest.TestCase):
+    """连续漫画（2026-10-08）：走 `direct_gen` 的 JSON 契约，不走主 Agent 循环。
+
+    为什么必须在这儿：QQ 的 @ 轮**根本不跑主 Agent 循环**（见 `qq_bot` 的调度
+    注释：「agent 循环只留给总开关关闭和主动接话轮」），所以注册在工具表里的
+    `generate_comic` 在 QQ 里永远调不到。漫画只能从 `_translate` 的 JSON 契约
+    进来，由 `decide` 交给 `generate_comic._generate_comic` 执行。
+
+    实录（2026-10-08 13:04，群 1103174141）：用户发「silver 漫画，10 张，原神的
+    空陪胡桃去挑衣服，胡桃换衣服的全过程」，模型其实读懂了漫画（写了 `dynamic
+    comic book cover illustration`），但契约里没有漫画这一条，只出了一张单图，
+    回执写「当前渠道：silver」。
+    """
+
+    TEXT = "silver 漫画，10 张，原神的空陪胡桃去挑衣服，胡桃换衣服的全过程"
+
+    def _decide(self, llm_reply, result=None, text=None):
+        with mock.patch.object(direct_gen.llm, "call_llm",
+                               return_value=llm_reply), \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=""), \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="group_1"), \
+             mock.patch.object(gc, "_generate_comic",
+                               return_value=(result or RECEIPT)) as m_comic:
+            out = direct_gen.decide(text or self.TEXT, [], False, at_me=True)
+        return out, m_comic
+
+    def setUp(self):
+        # 这两个是模块级 dict，用例之间会串味。
+        direct_gen._LAST_JOB.clear()
+        direct_gen._LAST_DESC.clear()
+
+    def test_comic_json_routes_to_the_comic_pipeline(self):
+        out, m_comic = self._decide(
+            '{"tool": "generate_comic", "brief": "胡桃去挑衣服", '
+            '"panels": 10, "skill": "silver"}')
+        self.assertEqual(out, "")          # 回执已直发 → 本轮闭嘴
+        m_comic.assert_called_once_with("胡桃去挑衣服", panels=10,
+                                        skill="silver")
+
+    def test_comic_receipt_silences_the_round(self):
+        # 回执是工具直发的，`decide` 必须返回 ""（不是那句话本身），
+        # 否则同一句回执会被 qq_bot 再发一遍。
+        out, _ = self._decide(
+            '{"tool": "generate_comic", "brief": "胡桃去挑衣服"}')
+        self.assertEqual(out, "")
+
+    def test_comic_error_is_relayed_in_plain_words(self):
+        """工具的错误文案是写给**模型**看的，尾巴带指示语句（「直接告诉对方
+        这次没成、别重试」）。直达管道直接发真人，`_humanize_error` 只留第一句。
+        """
+        out, _ = self._decide(
+            '{"tool": "generate_comic", "brief": "胡桃去挑衣服"}',
+            result="错误：漫画剧本没写出来（x），这一单一张都没画。"
+                   "直接告诉对方这次没成、别重试。")
+        self.assertEqual(out, "错误：漫画剧本没写出来（x），这一单一张都没画。")
+        self.assertNotIn("别重试", out)
+
+    def test_empty_brief_is_not_enqueued(self):
+        out, m_comic = self._decide('{"tool": "generate_comic", "brief": "  "}')
+        m_comic.assert_not_called()
+        self.assertIsNone(out)              # 转译失败 → 不接管，交回上层
+
+    def test_comic_is_not_recorded_as_a_single_image_job(self):
+        """漫画**不许**进 `_LAST_JOB`——「再来一张」会拿它当单张提示词重跑
+        一张垃圾图（brief 是中文剧情，不是 tag 串）。落史走 `_LAST_DESC`。
+        """
+        self._decide(
+            '{"tool": "generate_comic", "brief": "胡桃去挑衣服"}')
+        self.assertIsNone(direct_gen._last_job("group_1"))
+        self.assertIn("[直达漫画]", direct_gen.last_direct_desc("group_1"))
 
 
 class VerbatimWeightedPromptTest(unittest.TestCase):
