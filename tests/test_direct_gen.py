@@ -2446,18 +2446,32 @@ class WorkflowParamsTest(unittest.TestCase):
     """钉死 sd 新参数与 cunny 工作流结构（2026-10-05 用户拍板）。"""
 
     def test_sd_adopted_mimoi_series_params(self):
-        # sd（image_gen_v1）换成截图（妹妹系列）那套：544×960 / cfg3 /
-        # euler+karras / hires 开；LoRA 三连原本就有，不动。
+        # sd（image_gen_v1）换成截图（妹妹系列）那套：cfg3 / euler+karras /
+        # hires 开；LoRA 三连原本就有，不动。
+        #
+        # 2026-10-09：底图 544×960 → 720×1280、hires 1080×1920 → 1440×2560
+        # （hires_denoise 0.4 → 0.55）、末尾放大 4x → 2x。理由见
+        # skills/image_gen_v1/skill.md 的「2026-10-09：底图 / hires / 放大一起改」。
         import json
         with open("skills/image_gen_v1/workflow.json", encoding="utf-8") as f:
             wf = json.loads(f.read().replace("__SEED__", "1"))
         bp = wf["53"]["inputs"]
-        self.assertEqual(bp["width"], 544)
-        self.assertEqual(bp["height"], 960)
+        self.assertEqual((bp["width"], bp["height"]), (720, 1280))
         self.assertEqual(bp["cfg"], 3)
         self.assertEqual(bp["scheduler"], "karras")
         self.assertTrue(bp["enable_hires"])
-        self.assertEqual((bp["hires_width"], bp["hires_height"]), (1080, 1920))
+        self.assertEqual((bp["hires_width"], bp["hires_height"]), (1440, 2560))
+        self.assertEqual(bp["hires_denoise"], 0.55)
+        # 底图与 hires 的宽高比必须一致：节点内部是
+        # common_upscale(samples, width, height, "lanczos", "disabled")，
+        # 直接拉伸到指定尺寸、不裁切 —— 比例不一致画面就会被压扁。
+        self.assertAlmostEqual(bp["width"] / bp["height"],
+                               bp["hires_width"] / bp["hires_height"], places=3)
+        # 末尾放大 2026-10-09 从 4x 降回 2x：4x 会把最终尺寸顶到
+        # 腾讯 32 MiB 上传上限附近，真实细节反而被锁死。
+        self.assertEqual(wf["200"]["inputs"]["model_name"],
+                         "2x_Ani4Kv2_G6i2_Compact_107500.pth")
+        self.assertEqual(bp["upscale_model"], ["200", 0])
         # LoRA 三连还在（contrast/saturation/outline，负强度）
         loras = [wf[k]["inputs"] for k in ("101", "102", "103")]
         self.assertTrue(all(x["strength_model"] < 0 for x in loras))
