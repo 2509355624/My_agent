@@ -534,6 +534,13 @@ _PROVIDER_CONTEXT_WINDOW = {
     # llama-server 的窗口由启动参数 -c 决定（start-server.bat 里 16384），
     # 两边保持同一个数：改启动脚本时这里要跟着改。
     "llama": int(os.getenv("LLAMA_NUM_CTX", "16384")),
+    # DeepSeek 官方（2026-10-09 实测 GET /models）：
+    #   deepseek-flash (V4.1-Flash) context_window = 1,048,576，max_output 393,216
+    # 云端本来就是「不列 = 不封顶」，这里列出来**只为给「把预算开到最大」的
+    # agent（`agents/writing`）留出 30% 余量**：不列的话预算 100 万就等于物理
+    # 窗口 104.8 万，压缩闸门形同虚设（真撞墙才想起已经超了）。对预算 3 万的
+    # agent 是彻底的 no-op（min(30000, 734003) 还是 30000）。
+    "deepseek": int(os.getenv("DEEPSEEK_CONTEXT_WINDOW", "1048576")),
 }
 
 # 压缩后的目标水位 = 窗口的这个比例。留出的余量给状态栏、extra_context
