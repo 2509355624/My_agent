@@ -1202,28 +1202,37 @@ class Krea2ChannelTest(unittest.TestCase):
             self.assertEqual(wf[s2]["inputs"]["denoise"], 0.5, name)
             self.assertEqual(wf[_one(wf, "VAEDecode")]["inputs"]["samples"][0], s2, name)
 
-    def test_stage2_runs_three_steps(self):
-        """二段固定 3 步（2026-10-09 用户拍板，8 → 3）。
+    def test_stage2_runs_two_steps(self):
+        """二段固定 2 步（2026-10-09 用户拍板，8 → 3 → 2）。
 
-        **为什么砍到 3 步不塌**：`comfy/samplers.py` 的 `set_steps` 是
+        **为什么砍步数不塌**：`comfy/samplers.py` 的 `set_steps` 是
         `new_steps = int(steps/denoise)` 再取 `sigmas[-(steps + 1):]`。所以
-        denoise=0.5 时，`steps=8` 跑的是「16 步表的最后 8 段」、`steps=3`
-        跑的是「6 步表的最后 3 段」——**起点 sigma 都是 σmax/2、终点都是 0，
-        区间完全一样**，只是步长从 σmax/16 粗到 σmax/6（粗 2.67 倍）。
+        denoise=0.5 时，`steps=8` 跑「16 步表的最后 8 段」、`steps=2` 跑
+        「4 步表的最后 2 段」——**起点恒为 σmax/2、终点恒为 0，区间与步数无关**，
+        只是步长从 σmax/16 粗到 σmax/4。
 
-        代价是二段只剩 3 次 Euler 修正、细节可能偏软；换来的是实测
-        130.3s → 约 49s（单张 173.9s → 约 93s，省 47%）。二段跑在
-        1664×2432 上、像素是一段的 4 倍，单步耗时也正好是它的 4.95 倍，
-        所以它是唯一值得动的地方。
+        二段跑在 1664×2432 上（像素是一段的 4 倍），单步耗时是一段的 4~5 倍，
+        8 步时占掉单张 173.9s 里的 130.3s，所以它是唯一值得动的地方。
+
+        **真机 A/B（同 seed 同提示词，只改这一段步数）**：
+        | 步数 | 单张 | vs 3 步的像素差 |
+        |---|---|---|
+        | 3 | 86~88s | — |
+        | **2** | **~69s** | 均值 3.92，仅 **0.1%** 的像素差 >40 |
+        | 1 | ~54s | 均值 9.54，**1.4%** 的像素差 >40 |
+
+        2 步与 3 步肉眼无法区分（蕾丝花边、发丝、书脊纹理都在）；**1 步明显劣化**：
+        蕾丝纹理整片消失、胸衣变成光滑柔焦面，头发里还多出一道橙红色伪影。
+        所以停在 2 步——1 步省下的 15s 不值。
 
         一段仍锁 8 步（见 `test_cfg_is_one_and_negative_is_empty`）：它跑在
-        832×1216 上只占 26s，砍它省不了多少却直接动成图质量。
+        832×1216 上只占 24~32s，砍它省不了多少却直接动成图质量。
         `denoise` 也仍锁 0.5（见上一条）——改它等于换掉整个 sigma 区间。
         """
         for name in KREA2_CHANNELS:
             wf = _load(name)
             s2 = _stage2(wf)
-            self.assertEqual(wf[s2]["inputs"]["steps"], 3, name)
+            self.assertEqual(wf[s2]["inputs"]["steps"], 2, name)
             self.assertEqual(wf[s2]["inputs"]["denoise"], 0.5, name)
 
     def test_final_pixel_upscale_is_2x_not_4x(self):
