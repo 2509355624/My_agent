@@ -208,7 +208,7 @@ _STYLE_ALIASES = {"clear": "clear", "curvy": "curvy", "gloss": "gloss",
 # 从中间把提示词剪断（2026-10-05 实测）。
 #
 # ⚠️ 2026-10-08：**通用 `krea2` 已下架**（`app/skills.ARCHIVED_SKILLS`），
-# krea2 系按挂的 LoRA 拆成 5 条，中文长名进这张表。
+# krea2 系按挂的 LoRA 拆成 8 条，中文长名进这张表。
 # ⚠️ **长名必须在 `_FIXED_CHAN_RE` 里排在 `krea2` 前面**（这里已经没有裸 `krea2`
 # 了，但同族长短名共存时同理）：正则同起点左优先，短名排前面会把长名吃掉。
 # 2026-10-08 实测过：当时 `krea2` 在前，`krea2米山舞 1girl` 被解析成
@@ -220,6 +220,9 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    "krea2亚洲真人": "krea2-asianmix",
                    "krea2动漫真人": "krea2-anime2real",
                    "krea2真人cos": "krea2-coscandid",
+                   "krea2宝可梦": "krea2-pokemon",
+                   "krea2柔光": "krea2-softlight",
+                   "krea2奶油": "krea2-creamy",
                    "qwen": "qwen_image_v1", "qwen-hd": "qwen-hd",
                    "nffa": "nffa", "nai": "nai",
                    "cunny": "cunny", "miao": "miao"}
@@ -227,6 +230,7 @@ _FIXED_CHAN_RE = re.compile(
     r"(?<![0-9A-Za-z_])"
     r"(krea2\s*米山舞|krea2\s*日系|krea2\s*亚洲真人"
     r"|krea2\s*动漫真人|krea2\s*真人\s*cos"
+    r"|krea2\s*宝可梦|krea2\s*柔光|krea2\s*奶油"
     r"|sd|qwen-hd|qwen|nffa|nai|cunny|miao)"
     r"(?![0-9A-Za-z_])",
     re.I)
@@ -560,7 +564,7 @@ def _lead_typo_channel(text):
     if (_is_english_tags(text) or _QA_RE.search(rest)
             or not re.search(r"[\u4e00-\u9fff]", rest)):
         return None, text, ()
-    # 候选池只放 ASCII 词：krea2 那 5 个中文长名也是渠道词，但输入 token 是
+    # 候选池只放 ASCII 词：krea2 那 8 个中文长名也是渠道词，但输入 token 是
     # `_LEAD_TOKEN_RE` 抠出来的 ASCII 词，拿它去跟中文串比编辑距离只会得到
     # 「krea → krea2米山舞」这种看似命中、实则随机的候选，回问文案也没法看。
     cands = difflib.get_close_matches(
@@ -579,7 +583,7 @@ _FINAL_PROMPT_NO_CHAN_TEXT = (
     "（选错就是整张图换风味）。在前面补一个渠道词再发："
     "nai（画师串/权号这种写法就是它的）/ silver（默认渠道）/ silver-hd（4x超清）/ "
     "anima（三档）/ sd / qwen / nffa / jank / krea2米山舞"
-    "（krea2 系 5 条按风格拆，点名要带风格词）。")
+    "（krea2 系 8 条按风格拆，点名要带风格词）。")
 
 
 MENU_TEXT = (
@@ -621,8 +625,9 @@ GUIDE_TEXT = (
     "　qwen　慢·写实·能在图里写中文字\n"
     "　qwen-hd　qwen 的 4x 超清 · 4096×6144（更慢更大，别连刷）\n"
     "　sd　　一次多张，多段用 --- 分隔\n"
-    "　krea2系　5 条按风格拆：krea2米山舞 / krea2日系 / krea2亚洲真人\n"
-    "　　　　　/ krea2动漫真人 / krea2真人cos（点名要带风格词）\n"
+    "　krea2系　8 条按风格拆：krea2米山舞 / krea2日系 / krea2亚洲真人\n"
+    "　　　　　/ krea2动漫真人 / krea2真人cos / krea2宝可梦\n"
+    "　　　　　/ krea2柔光 / krea2奶油（点名要带风格词）\n"
     "　nffa　　插画感\n"
     "　cunny　超分重渠道 · 单张 2~4 分钟\n"
     "　miao　　皮肤质感滑嫩 · 2x 出 3072×4608\n"
@@ -687,8 +692,9 @@ MORE_CHAN_TEXT = (
     "　qwen　慢·写实·能在图里写中文字\n"
     "　qwen-hd　qwen 的 4x 超清 · 4096×6144（更慢更大，别连刷）\n"
     "　sd　　一次多张，多段用 --- 分隔\n"
-    "　krea2系　5 条按风格拆：krea2米山舞 / krea2日系 / krea2亚洲真人\n"
-    "　　　　　/ krea2动漫真人 / krea2真人cos（点名要带风格词）\n"
+    "　krea2系　8 条按风格拆：krea2米山舞 / krea2日系 / krea2亚洲真人\n"
+    "　　　　　/ krea2动漫真人 / krea2真人cos / krea2宝可梦\n"
+    "　　　　　/ krea2柔光 / krea2奶油（点名要带风格词）\n"
     "　nffa　　插画感\n"
     "　cunny　超分重渠道 · 单张约 2~4 分钟\n"
     "　miao　　皮肤质感滑嫩 · 2x 出 3072×4608\n"
@@ -881,7 +887,8 @@ _MASTER_TEMPLATE = (
     "- sd = image_gen_v1，一次出多张（prompt 里用 --- 分段）。\n"
     "- nffa / cunny / miao：点名才用（cunny / miao 一张好几分钟）。\n"
     "- krea2 系按风格 LoRA 分：krea2米山舞 / krea2日系 / krea2亚洲真人 / "
-    "krea2动漫真人 / krea2真人cos；点名带风格词，光说 krea2 不算。\n"
+    "krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油；"
+    "点名带风格词，光说 krea2 不算。\n"
     "- silver = **默认渠道**（不填 skill 就是它）、jank = 自定义 NoobAI 渠道，"
     "明说才填、都是文生图专用、无图生图骨架。"
     "⚠️「银发 / silver hair」是发色、不是渠道。\n"
@@ -956,10 +963,11 @@ _REVISE_TEMPLATE = (
     "  nai / nai_wide = 说「nai」（画师串和权重语法认这两个）；\n"
     "  qwen_image_v1 = 说「qwen / 千问 / 通义」；image_gen_v1 = 说「sd」；\n"
     "  krea2-yoneyama / krea2-rella / krea2-asianmix / krea2-anime2real / "
-    "krea2-coscandid = krea2 系 5 条，用户原话点「krea2米山舞 / krea2日系 / "
-    "krea2亚洲真人 / krea2动漫真人 / krea2真人cos」时对应填；\n"
+    "krea2-coscandid / krea2-pokemon / krea2-softlight / krea2-creamy"
+    " = krea2 系 8 条，用户原话点「krea2米山舞 / krea2日系 / krea2亚洲真人 / "
+    "krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油」时对应填；\n"
     "  ⚠️ 通用「krea2」已下架，原话只说了 krea2 没带风格词时**别填 krea2 系**"
-    "（那 5 个名字都不是他说的），照默认渠道走。\n"
+    "（那 8 个名字都不是他说的），照默认渠道走。\n"
     "  nffa / cunny / miao = 原话点名才填；\n"
     "  jank = 原话明说「jank」才填（用户自定义渠道）。\n"
     "  silver-hd = silver 的 4x 超清版，原话明说「silver-hd」或「silver 超清」才填。\n"

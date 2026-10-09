@@ -378,8 +378,8 @@ _RECEIPT_CHANNEL = "当前渠道：%s"
 # 2026-10-07 用户拍板「把我全部的可用渠道都加上去」：原「常用」那行只列 5 个，
 # `sd` / `krea2` / `nffa` / `miao` / `cunny` 一直没有曝光位。
 # 现在列出**全部能点名的渠道**：silver / silver-hd / anima / qwen / nai /
-# jank / sd / nffa / miao / cunny，外加 2026-10-08 按风格拆出来的 krea2 系 5 条
-# （krea2米山舞 / krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos）= 15 个。
+# jank / sd / nffa / miao / cunny，外加按风格拆出来的 krea2 系 —— 2026-10-08 拆 5 条、
+# 2026-10-09 加 3 条（宝可梦 / 柔光 / 奶油）= 8 条，合计 18 个。
 #   - `silver` / `silver-hd` / `jank` 是磁盘渠道，不在 `_FIXED_CHAN_MAP` 里（红线），
 #     由 AI 认——所以它们**能点名**，只是代码不直判。
 #   - `image_gen_v1_hires` / `nai_wide` 没有短名（`_FIXED_CHAN_RE` 里没有对应词），
@@ -400,7 +400,7 @@ _RECEIPT_CHANNEL = "当前渠道：%s"
 _RECEIPT_NOTE_DEFAULT = (
     "想换渠道就发「渠道名 + 你的需求」（例：jank 银发初音未来）。\n"
     "渠道：silver（默认）/ anima（三档）/ qwen / nai / jank / sd / nffa / miao / cunny\n"
-    "krea2 系（5 条，按风格拆）：krea2米山舞 / krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos\n"
+    "krea2 系（8 条，按风格拆）：krea2米山舞 / krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油\n"
     "要 4x 超清：silver 发「silver-hd + 需求」，qwen 发「qwen 超清 + 需求」（也认 silver超清 / qwen超清）\n"
     "qwen 超清支持图生图：发「qwen 超清，图生图，描述」（附一张图）\n"
     "要横屏：加「横屏」（例：silver 横屏 一个女孩）\n"
@@ -1090,8 +1090,8 @@ tool = {
                   "比 qwen 更慢、单张更大，别主动推荐、别在群里连刷。"
                   "文生图/图生图**都支持**（它的图生图骨架同样只换了放大，出图一样是 4x）；"
                   "说「qwen 超清 图生图」= 它 + `source_image=1`\n"
-                  "- **krea2 系 5 条**（krea2米山舞 / krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos）："
-                  "832×1216 → 4x → **3328×4864**，只有风格 LoRA 不同、**点名要带风格词**；"
+                  "- **krea2 系 8 条**（krea2米山舞 / krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油）："
+                  "832×1216 → 二段 1664×2432 → 2x → **3328×4864**，只有风格 LoRA 不同、**点名要带风格词**；"
                   "krea2米山舞 风格前缀自动拼、**不要自己再写**，其余标签式英文自己写；"
                   "krea2动漫真人 是转换器，**必须带触发词 `transform the image to realistic photograph`**。"
                   "⚠️ 通用「krea2」已下架，光说 krea2 不算点名。\n"

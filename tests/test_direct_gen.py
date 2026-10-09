@@ -105,8 +105,9 @@ class ChannelParseTest(unittest.TestCase):
                 self.assertEqual(_pc(text),
                                  (skill, desc))
 
-    def test_all_five_krea2_channels_are_parseable(self):
-        """krea2 系 5 条（2026-10-08 按风格 LoRA 拆）：全名和夹空格两种写法都要认。
+    def test_all_eight_krea2_channels_are_parseable(self):
+        """krea2 系 8 条（2026-10-08 拆 5 条 → 2026-10-09 加 3 条）：
+        全名和夹空格两种写法都要认。
 
         中文长名是渠道词，`_FIXED_CHAN_RE` 的边界是 `[0-9A-Za-z_]`——CJK 不算
         边界，所以 `krea2米山舞` 能整体命中；同族长短名共存时**长名必须排在前面**
@@ -116,7 +117,10 @@ class ChannelParseTest(unittest.TestCase):
                           ("krea2日系", "krea2-rella"),
                           ("krea2亚洲真人", "krea2-asianmix"),
                           ("krea2动漫真人", "krea2-anime2real"),
-                          ("krea2真人cos", "krea2-coscandid")):
+                          ("krea2真人cos", "krea2-coscandid"),
+                          ("krea2宝可梦", "krea2-pokemon"),
+                          ("krea2柔光", "krea2-softlight"),
+                          ("krea2奶油", "krea2-creamy")):
             with self.subTest(name=name):
                 self.assertEqual(_pc("%s 1girl" % name), (cid, "1girl"))
                 # 名字里夹空格也认（`krea2 米山舞` / `krea2 真人 cos`）
@@ -415,7 +419,9 @@ class DirectEnqueueTest(unittest.TestCase):
         for word, cid in (("sd", "image_gen_v1"), ("qwen", "qwen_image_v1"),
                           ("nai", "nai"),
                           ("krea2米山舞", "krea2-yoneyama"),
-                          ("krea2真人cos", "krea2-coscandid")):
+                          ("krea2真人cos", "krea2-coscandid"),
+                          ("krea2宝可梦", "krea2-pokemon"),
+                          ("krea2奶油", "krea2-creamy")):
             with self.subTest(word=word):
                 out, _, m_gen = self._decide(
                     '{"skill": "%s", "prompt": "cat"}' % word)
@@ -1323,7 +1329,9 @@ class MasterPromptTest(unittest.TestCase):
                 {"role": "assistant", "content": "[直达生图] nai：" + "x" * 300}] * 5
         t = self._rendered(text="画一只猫", recent=direct_gen._recent_lines(hist))
         # 2026-10-08：3300 → 3320。同上：krea2 拆 5 条，渠道清单那行变长。
-        self.assertLess(len(t), 3320, "整条提示词越过 3320 字预算了")
+        # 2026-10-09：3320 → 3340。krea2 再加 3 条（宝可梦 / 柔光 / 奶油），
+        # 清单那行 +31 字（实测渲染 3329）。同样是渠道名，不是散文。
+        self.assertLess(len(t), 3340, "整条提示词越过 3340 字预算了")
 
     def test_ai_may_reply_instead_of_drawing(self):
         self.assertIn('{"reply"', self._rendered())

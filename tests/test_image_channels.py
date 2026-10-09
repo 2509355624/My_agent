@@ -1117,6 +1117,177 @@ class HdChannelTest(unittest.TestCase):
                       tool["parameters"]["properties"]["skill"]["description"])
 
 
+KREA2_CHANNELS = [
+    "krea2-yoneyama", "krea2-rella", "krea2-asianmix", "krea2-anime2real",
+    "krea2-coscandid", "krea2-pokemon", "krea2-softlight", "krea2-creamy",
+]
+
+# 中文点名别名 → 目录名。顺序与 `direct_gen._FIXED_CHAN_RE` 里的分支一致
+# （同族里没有互相做前缀的名字，所以顺序不敏感，但保持一致好核对）。
+KREA2_ALIASES = (
+    ("krea2米山舞", "krea2-yoneyama"),
+    ("krea2日系", "krea2-rella"),
+    ("krea2亚洲真人", "krea2-asianmix"),
+    ("krea2动漫真人", "krea2-anime2real"),
+    ("krea2真人cos", "krea2-coscandid"),
+    ("krea2宝可梦", "krea2-pokemon"),
+    ("krea2柔光", "krea2-softlight"),
+    ("krea2奶油", "krea2-creamy"),
+)
+
+
+class Krea2ChannelTest(unittest.TestCase):
+    """krea2 系 8 条（2026-10-08 拆 5 条 → 2026-10-09 加 3 条）的形状锁。
+
+    2026-10-09 改动：原来 krea2 是 **832×1216 单段 → 4x → 3328×4864**，
+    最终 16.19 MP 全场最大，但**真实细节只有 1.01 MP（全场最低）**——末尾那道
+    像素放大只会重采样、**造不出新细节**，16 倍全是被拉大的那 1.01 MP。
+    现在在一段和二段之间插了 `LatentUpscaleBy(2.0)` + 第二遍扩散，真实细节
+    1.01 → 4.05 MP，最终仍是 3328×4864。
+    """
+
+    def test_all_eight_exist(self):
+        """恰好这 8 条。多一条 / 少一条都说明目录建歪了。"""
+        found = sorted(s for s in list_skills() if s.startswith("krea2-"))
+        self.assertEqual(found, sorted(KREA2_CHANNELS),
+                         "krea2 渠道集合变了——目录建漏了还是名字写错了？")
+
+    def test_each_is_a_scannable_image_skill(self):
+        for name in KREA2_CHANNELS:
+            data = load_skill(name)
+            self.assertIsNotNone(data, name)
+            self.assertEqual(data["kind"], "生图", name)
+            self.assertIsNotNone(data["workflow"], name)
+
+    def test_retired_bare_krea2_is_hidden_but_still_loadable(self):
+        """通用 `krea2` 已下架，但目录**原地保留**（它是生成那 5 条时的骨架）。
+
+        所以两件事必须同时成立：`list_skills()` 里没有它（点名不到、不对外），
+        而 `load_skill()` 照样能读（文件没动）。只改一处会漏。
+        """
+        self.assertNotIn("krea2", list_skills())
+        self.assertIsNotNone(load_skill("krea2"))
+
+    def test_skeleton_is_the_shared_two_stage(self):
+        """第二遍扩散就是这次改动的本体：2 个 KSampler + 1 个 LatentUpscaleBy。"""
+        for name in KREA2_CHANNELS:
+            wf = _load(name)
+            self.assertEqual(len(_all(wf, "KSampler")), 2, name)
+            self.assertEqual(len(_all(wf, "LatentUpscaleBy")), 1, name)
+            self.assertEqual(len(_all(wf, "VAEDecode")), 1, name)
+            self.assertEqual(len(_all(wf, "SaveImage")), 1, name)
+            self.assertEqual(len(_all(wf, "EmptyLatentImage")), 1, name)
+            # krea2 的底模是 GGUF，走 UnetLoaderGGUF（不是 UNETLoader）
+            self.assertEqual(len(_all(wf, "UnetLoaderGGUF")), 1, name)
+            self.assertEqual(len(_all(wf, "CLIPLoader")), 1, name)
+            self.assertEqual(len(_all(wf, "LoraLoaderModelOnly")), 1, name)
+            # 末尾那道像素放大：装载器 1 + 应用 1
+            self.assertEqual(len(_all(wf, "UpscaleModelLoader")), 1, name)
+            self.assertEqual(len(_all(wf, "ImageUpscaleWithModel")), 1, name)
+
+    def test_latent_upscale_is_2x_and_sits_between_the_two_passes(self):
+        """链路必须是一段 → LatentUpscaleBy → 二段 → 解码。
+
+        解码**吃错一段**就等于第二遍白加（图还是 1.01 MP 的真实细节），
+        所以这里逐个连线钉住，而不只是数节点个数。
+        """
+        for name in KREA2_CHANNELS:
+            wf = _load(name)
+            up = _upscale(wf)
+            s1, s2 = _stage1(wf), _stage2(wf)
+            self.assertEqual(wf[up]["inputs"]["samples"][0], s1, name)
+            self.assertEqual(wf[up]["inputs"]["upscale_method"], "nearest-exact", name)
+            self.assertEqual(wf[up]["inputs"]["scale_by"], 2.0, name)
+            self.assertEqual(wf[s2]["inputs"]["latent_image"][0], up, name)
+            self.assertEqual(wf[s2]["inputs"]["denoise"], 0.5, name)
+            self.assertEqual(wf[_one(wf, "VAEDecode")]["inputs"]["samples"][0], s2, name)
+
+    def test_final_pixel_upscale_is_2x_not_4x(self):
+        """末尾放大必须是 2x——这是**硬耦合**，不是随手换的。
+
+        第二遍把真实细节抬到 1664×2432 之后，末尾再挂 4x 就是 6656×9728
+        = 64.8 MP、PNG 约 62 MB，**越过腾讯图片上传的 32 MiB 硬限**
+        （超了报 `highway upload error_code=323`）。降成 2x 之后最终尺寸
+        和改造前一样是 3328×4864。
+        """
+        for name in KREA2_CHANNELS:
+            wf = _load(name)
+            model = wf[_one(wf, "UpscaleModelLoader")]["inputs"]["model_name"]
+            self.assertEqual(model, "2x_Ani4Kv2_G6i2_Compact_107500.pth", name)
+            self.assertNotIn("4x", model,
+                             "%s 末尾又挂回 4x 了——第二遍之后 4x 会越过 32 MiB" % name)
+
+    def test_final_size_is_still_3328x4864(self):
+        """最终尺寸必须和改造前一致（不然用户会发现图变小了）。"""
+        for name in KREA2_CHANNELS:
+            wf = _load(name)
+            lat = wf[_one(wf, "EmptyLatentImage")]["inputs"]
+            scale = wf[_upscale(wf)]["inputs"]["scale_by"]
+            fw = lat["width"] * scale * 2      # 末尾那道 2x 像素放大
+            fh = lat["height"] * scale * 2
+            self.assertEqual((fw, fh), (3328.0, 4864.0),
+                             "%s 最终尺寸算出来是 %gx%g" % (name, fw, fh))
+            # 竖屏：高 > 宽（横屏由 image_jobs.landscape_workflow 对调宽高）
+            self.assertGreater(lat["height"], lat["width"], name)
+
+    def test_cfg_is_one_and_negative_is_empty(self):
+        """cfg=1 时分类器引导无效，负面词写了也白写。
+
+        钉住这个前提：哪天有人把 cfg 调上去，负面词会**突然开始生效**、
+        画风跟着变，而 SKILL.md 里还写着「不要写负面提示词」。
+        """
+        for name in KREA2_CHANNELS:
+            wf = _load(name)
+            s1 = _stage1(wf)
+            self.assertEqual(wf[s1]["inputs"]["cfg"], 1, name)
+            self.assertEqual(wf[s1]["inputs"]["steps"], 8, name)
+            neg = wf[s1]["inputs"]["negative"][0]
+            self.assertEqual(wf[neg]["inputs"]["text"], "", name)
+
+    def test_qq_and_draw_whitelists_include_all_eight(self):
+        """两个 agent 的白名单都要有这 8 条。
+
+        `allows_skill()` **只认** `agents/*/agent.json` 的 skills 白名单：
+        目录建了、工具描述写了，白名单漏了照样点不到（会被静默降级成 silver）。
+        """
+        from app import agents
+        for agent_id in ("qq", "draw"):
+            for name in KREA2_CHANNELS:
+                self.assertTrue(agents.allows_skill(agent_id, name),
+                                "%s 白名单缺 %s" % (agent_id, name))
+
+    def test_chinese_aliases_are_all_routed(self):
+        """8 个中文点名别名都要进 `_FIXED_CHAN_MAP` + 正则，夹空格也认。"""
+        from app.direct_gen import _FIXED_CHAN_MAP, _FIXED_CHAN_RE, _parse_channel
+        for alias, cid in KREA2_ALIASES:
+            with self.subTest(alias=alias):
+                self.assertEqual(_FIXED_CHAN_MAP.get(alias), cid)
+                self.assertEqual(_parse_channel("%s 1girl" % alias), (cid, "1girl"))
+                # 名字里夹空格也认（`krea2 宝可梦` / `krea2 真人 cos`）
+                spaced = alias.replace("krea2", "krea2 ", 1)
+                self.assertEqual(_parse_channel("%s 1girl" % spaced), (cid, "1girl"))
+        # 裸 krea2 已下架，一个都不许命中
+        self.assertIsNone(_FIXED_CHAN_RE.search("krea2 一个女孩"))
+
+    def test_tool_description_lists_all_eight(self):
+        """工具描述那张渠道清单要写全 8 条**别名**，否则模型编不出新渠道名。"""
+        from app.tools.normal.generate_image import tool
+        desc = tool["description"]
+        for alias, _cid in KREA2_ALIASES:
+            self.assertIn(alias, desc, "工具描述没写渠道 %s" % alias)
+        self.assertIn("8 条", desc)
+
+    def test_revise_template_lists_all_eight_ids(self):
+        """改图管道（`_REVISE_TEMPLATE`）里要写全 8 条**目录名**。
+
+        它不走 `_MASTER_TEMPLATE`，渠道清单得自己写一份——两处漏一处，
+        那条管道就认不出新渠道（用户引用一张图 + 点名 krea2奶油 → 静默走默认档）。
+        """
+        from app.direct_gen import _REVISE_TEMPLATE
+        for name in KREA2_CHANNELS:
+            self.assertIn(name, _REVISE_TEMPLATE, "_REVISE_TEMPLATE 缺 %s" % name)
+
+
 class NffaChannelTest(unittest.TestCase):
     """`nffa`（2026-10-02 上线）的形状锁。
 
