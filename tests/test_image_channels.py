@@ -1122,6 +1122,10 @@ KREA2_CHANNELS = [
     "krea2-coscandid", "krea2-pokemon", "krea2-softlight", "krea2-creamy",
 ]
 
+# 含骨架 `krea2` 自己：它已下架（不在 `list_skills()` 里、点名不到），但目录和
+# 文档都还在原地，改骨架时照样得跟着走。形状锁只圈那 8 条在卖的，文档锁得算它。
+KREA2_ALL_DIRS = ["krea2"] + KREA2_CHANNELS
+
 # 中文点名别名 → 目录名。顺序与 `direct_gen._FIXED_CHAN_RE` 里的分支一致
 # （同族里没有互相做前缀的名字，所以顺序不敏感，但保持一致好核对）。
 KREA2_ALIASES = (
@@ -1234,6 +1238,36 @@ class Krea2ChannelTest(unittest.TestCase):
             s2 = _stage2(wf)
             self.assertEqual(wf[s2]["inputs"]["steps"], 2, name)
             self.assertEqual(wf[s2]["inputs"]["denoise"], 0.5, name)
+
+    def test_skill_md_steps_match_the_workflow(self):
+        """文档里的步数必须等于 workflow.json 里的步数——**骨架 `krea2` 也算**。
+
+        2026-10-09 真出过这个漏子：9 份 workflow.json 从 8 步 → 3 步 → 2 步
+        改了两次，9 份 skill.md 却还写着「8 步 / denoise 0.5」，漂了一天没人
+        发现。原因是 `SkillDocTest` 只管「有没有指到本测试文件」，**会变的
+        事实**（步数、尺寸这类）一个都没锁——文档是模型唯一的信息源，它写错
+        就等于模型答错。所以这里补上这一条。
+
+        步数**不硬编码**：从 workflow 里读出来再比，以后再调自动跟着走。
+        顺带钉死 `python _make_krea2_channels.py`——生成脚本已删除，文档里
+        再出现「跑一下生成脚本」就是把人往坑里带（原来 5 份文档里都挂着它）。
+        """
+        for name in KREA2_ALL_DIRS:
+            with self.subTest(channel=name):
+                wf = _load(name)
+                s1, s2 = _stage1(wf), _stage2(wf)
+                with open(os.path.join(SKILLS, name, "skill.md"),
+                          encoding="utf-8") as f:
+                    text = f.read()
+                # 二段那句「N 步 / denoise 0.5」是文档里唯一写死步数的地方
+                self.assertIn("%d 步 / denoise 0.5" % wf[s2]["inputs"]["steps"],
+                              text, "%s 的 skill.md 二段步数跟 workflow 对不上" % name)
+                self.assertIn("%d 步 / " % wf[s1]["inputs"]["steps"], text,
+                              "%s 的 skill.md 一段步数跟 workflow 对不上" % name)
+                self.assertNotIn("python _make_krea2_channels.py", text,
+                                 "%s 的 skill.md 还让人跑已删除的生成脚本" % name)
+                self.assertIn("tests.test_image_channels", text,
+                              "%s 的 skill.md 没指到本测试文件" % name)
 
     def test_final_pixel_upscale_is_2x_not_4x(self):
         """末尾放大必须是 2x——这是**硬耦合**，不是随手换的。

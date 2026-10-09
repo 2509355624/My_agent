@@ -183,7 +183,8 @@ def load_skill(skill_name):
 # krea2亚洲真人，krea2动漫真人，krea2真人cos」）。krea2 系按**挂哪个 LoRA** 拆成
 # `krea2-yoneyama` / `krea2-rella` / `krea2-asianmix` / `krea2-anime2real` /
 # `krea2-coscandid` 五条。**通用 `krea2` 这个名字从此不可点名**。
-# 目录同样**原地保留**——它是 `_make_krea2_channels.py` 生成那 5 条时的骨架。
+# 目录同样**原地保留**——`krea2-*` 各条就是照它复制的（只改节点 4 的风格前缀
+# 和节点 14 的 LoRA 名），改采样 / 尺寸 / 放大模型时它仍是唯一的参照物。
 #
 # ⚠️ 为什么是「屏蔽」而不是「挪走」：挪走会连带丢掉那 12 份
 # `workflow_i2i.json`（动漫重绘骨架），而用户只要求取消**尺寸档**、
