@@ -743,10 +743,12 @@ class DefaultChannelTest(unittest.TestCase):
     def test_refusal_messages_are_actionable_and_leak_no_retired_channel(self):
         """两句**拒收话术**都得给出路，且不许出现已归档的渠道名。
 
-        ① 垫图被拒的那句（点到了不给垫图的档，如 `hd_3_*`）：要让模型知道
-           「去掉 source_image 按文生图重来」，或换一个支持垫图的档。
-           —— 这里**不要求**它指到默认渠道：用户点名 hd_3 时把他往 anima_clear
-           引是降级，正确出路是「同一个渠道别垫图」或「换到 hd_2 / hd_fast」。
+        ① 垫图被拒的那句（点到了没有 i2i 骨架的档，如 `nffa`）：要让模型知道
+           「去掉 source_image 按文生图重来」，或改用 qwen 做「只改一处」的编辑。
+           —— 这里**不要求**它指到默认渠道：用户点名别的渠道时把他往 silver 引
+           是换渠道，不是他要的。
+           ⚠️ 样例 2026-10-10 从 `hd_3_clear` 换成 `nffa`：三档现在有锁构图骨架了
+           （`_I2I_LLLITE_SKILLS`），不再走这条拒收。
         ② 停用渠道那句：必须指到**当前**默认渠道。
            2026-10-01 起真配置里**已经没有停用渠道**（全部解封），所以这里
            **显式 patch** 一份停用名单来验机制，不再依赖真配置。
@@ -759,7 +761,7 @@ class DefaultChannelTest(unittest.TestCase):
         with mock.patch.object(gi, "DISABLED_IMAGE_SKILLS", ["krea2"]), \
                 mock.patch.object(gi, "is_cancelled", lambda: False), \
                 mock.patch.object(gi, "_qq_gate", lambda: None):
-            i2i = gi._generate_image(prompt="x", skill="hd_3_clear",
+            i2i = gi._generate_image(prompt="x", skill="nffa",
                                      source_image="1")
             off = gi._generate_image(prompt="x", skill="krea2")
 
@@ -1533,12 +1535,14 @@ class ToolDescriptionBudgetTest(unittest.TestCase):
         "用户报名字不省": "原样写进去",
         "认不出要承认": "我没认出来",
         "nffa槽会顶画风": "画风顶掉",
-        "引用图不等于图生图": "永远不构成图生图",
-        "source门槛只认点名": "只有明说「qwen 图生图」才传",
-        "改动内容不算垫图": "这类**改动内容**不算",
-        "分不清就问": "别自己猜",
-        "图生图只走qwen": "图生图只有 qwen 系两条",
-        "动漫重绘已撤掉": "重绘已经从用法里撤掉",
+        # 2026-10-10 口径翻转：引用图 + 要画 → 传 source_image（锁构图），
+        # 不再要求「明说 qwen 图生图」；只有「只改一处」才走 qwen。
+        "引用图要画就垫": "引用图片：要画就垫，锁住构图",
+        "垫图不用换渠道": "渠道不用改",
+        "没骨架别垫": "没有图生图骨架",
+        "看图点评不垫": "只是让你看图点评",
+        "图生图两条路": "qwen 系两条",
+        "动漫垫图重绘已撤掉": "垫图重绘已经从用法里撤掉",
         "引用自己的图沿用渠道": "用那张图当初的渠道",
         "hd3不支持垫图": "不支持垫图",
         "改图只写一句": "不要把整张图重新描述一遍",
@@ -1573,8 +1577,11 @@ class ToolDescriptionBudgetTest(unittest.TestCase):
         # 2026-10-08：5000 → 5150。krea2 一条按风格 LoRA 拆成 5 条，
         # description 里那张「渠道清单」必须跟着变长；旧上限只剩 35 字余量，
         # 塞不下 5 个名字 + 两条用法（点名带风格词 / 动漫真人的触发词）。
-        self.assertLess(len(desc), 5150,
-                        "主 description 又涨回 %d 字（精简前是 4965）" % len(desc))
+        # 2026-10-10：5150 → 7000（**用户拍板**：「提示词长度我最多允许你 7000 字」）。
+        # 同批改的是【引用图片】段的口径翻转：引用图 + 要画 → 传 source_image、
+        # 渠道不用改（silver / silver-hd / 高清三档都有锁构图骨架）。
+        self.assertLess(len(desc), 7000,
+                        "主 description 涨到 %d 字，越过 7000 上限" % len(desc))
 
     def test_hd_jargon_is_not_a_size_request(self):
         """「高清 / 大图」这类词**不能**触发换尺寸档——它俩曾经自相矛盾。

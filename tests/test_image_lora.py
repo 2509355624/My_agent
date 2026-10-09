@@ -343,39 +343,45 @@ class ToolDescriptionTest(unittest.TestCase):
         self.assertEqual(T2I_DEFAULT_SKILL, "silver")
 
     def test_i2i_is_on_for_the_right_tiers_only(self):
-        """图生图 2026-10-01 重开：常规档 + 高清快档 / 二档，**三档不给**。
+        """图生图白名单 = 12 个垫图重绘档 + 6 个锁构图档 + qwen 两个编辑档 = 20。
 
-        三档不给跟图生图的开销无关（实测只比文生图多 3~6 秒），是三档自己贵
-        （1.5× + 二段 10 步，纯执行 ~150 秒）。
+        2026-10-01 重开**垫图重绘**（常规档 + 高清快档 / 二档）；2026-10-02 加
+        `qwen_image_v1`——那是**编辑**不是重绘（另一套骨架，见
+        tests/test_image_i2i.py 的 QwenEditFlowTest），动漫那 12 个一格没动。
 
-        2026-10-02 又加了 `qwen_image_v1`——那是**编辑**不是重绘（另一套骨架，
-        见 tests/test_image_i2i.py 的 QwenEditFlowTest），动漫那 12 个一格没动。
+        2026-10-10 再加 `silver` / `silver-hd` / `hd_3_×4`——**锁构图**那条：
+        latent 不动、参考图只走 LLLite，出图是重画的、尺寸也仍是本档画布。
+        当年「三档 150 秒太贵所以不给」的理由作废了（那是 3060 笔记本上的数，
+        5070 上实测 ~50 秒，用户明确要求上）。
         """
         from app.tools.normal.generate_image import (
-            _I2I_ANIMA_SKILLS, _I2I_SKILLS)
+            _I2I_ANIMA_SKILLS, _I2I_LLLITE_SKILLS, _I2I_SKILLS)
         self.assertEqual(len(_I2I_ANIMA_SKILLS), 12)
-        self.assertEqual(len(_I2I_SKILLS), 14)
+        self.assertEqual(len(_I2I_LLLITE_SKILLS), 6)
+        self.assertEqual(len(_I2I_SKILLS), 20)
         for s in ("anima_clear", "anima_curvy", "hd_fast_clear", "hd_2_curvy",
-                  "qwen_image_v1", "qwen-hd"):
+                  "qwen_image_v1", "qwen-hd",
+                  "silver", "silver-hd", "hd_3_clear", "hd_3_curvy"):
             self.assertIn(s, _I2I_SKILLS)
-        for s in ("hd_3_clear", "hd_3_curvy", "krea2", "image_gen_v1", "nffa"):
+        for s in ("krea2", "image_gen_v1", "nffa", "miao", "cunny", "jank"):
             self.assertNotIn(s, _I2I_SKILLS)
 
-    def test_description_keeps_the_look_dont_edit_boundary(self):
-        """重开的边界：描述必须把「默认只看」写在前面，别教模型见引用图就垫图。
+    def test_description_matches_the_reference_policy(self):
+        """口径 2026-10-10 翻转：**引用图 + 要画就传 `source_image`**。
 
-        2026-09-27 停用整条链路，就是因为模型「一看见引用图就往改图上想」。
-        所以这里钉的不是「有没有这个能力」，是**什么时候才允许用**。
+        2026-09-27 停用整条链路是因为模型「一看见引用图就往改图上想」，而当时
+        也确实没有任何在售渠道能接参考图。现在 `silver` / `silver-hd` / `hd_3_×4`
+        都有锁构图骨架了，口径反过来：**要画就垫**，只有「看图点评 / 只要反推
+        提示词」才不传。这里钉的是**新口径**，不是「有没有这个能力」。
         """
         from app.tools.normal.generate_image import tool
         desc = tool["description"]
         self.assertIn("不传 skill 就是 silver", desc)
-        self.assertIn("引用图片：默认只看，不改", desc)
-        self.assertIn("看得见", desc)                  # 「看图 → 反推提示词」这条路
-        self.assertIn("光是引用了图，永远不构成图生图", desc)
-        self.assertIn("source_image 的门槛", desc)     # 门槛单独成段
-        self.assertIn("只有明说「qwen 图生图」才传", desc)
-        self.assertIn("hd_3_", desc)                   # 不支持的那档要说出来
+        self.assertIn("引用图片：要画就垫，锁住构图", desc)
+        self.assertIn("渠道不用改", desc)              # 垫图不用换渠道了
+        self.assertIn("不传 `source_image`", desc)     # 「看图点评 / 反推」那条退路
+        self.assertIn("没有图生图骨架", desc)          # 没骨架的渠道别硬垫
+        self.assertIn("只改一处", desc)                # qwen 那条编辑路还在
         self.assertNotIn("图生图已停用", desc)
         # 不能有「不传 skill、只传 source_image 就自动切渠道」这种指路话
         self.assertNotIn("只传 source_image", desc)
@@ -389,26 +395,29 @@ class ToolDescriptionTest(unittest.TestCase):
         from app.tools.normal.generate_image import tool
         desc = tool["parameters"]["properties"]["source_image"]["description"]
         self.assertIn("他自己刚发的", desc)         # 没引用时垫本轮他自己发的图
-        self.assertIn("默认不传", desc)
+        self.assertIn("要画就填", desc)             # 2026-10-10 口径翻转
         self.assertIn("重绘强度是定死的", desc)      # denoise 不由模型调
         self.assertNotIn("已停用", desc)
 
-    def test_description_teaches_the_one_i2i_path(self):
-        """图生图现在**只有一条路**：`skill=qwen_image_v1` + `source_image`。
+    def test_description_teaches_both_i2i_paths(self):
+        """描述里**两条路**都得写清：引用图锁构图（silver 系）/ 只改一处（qwen 系）。
 
-        模型只看得到这段文字（工作流差别它看不见），所以「哪条路能垫图」必须由
-        描述说清。旧版这里钉的是「两种机制、默认走动漫重绘」——2026-10-06 用户
-        拍板撤掉那条：「Anima 的图生图没有 Qwen 好用……图生图只需要一个 Qwen 的
-        途径即可」。**撤的是用法文案，不是后端骨架**：`_I2I_SKILLS` 那 12 档一个
-        没删（钉在上面的 `test_i2i_is_on_for_the_right_tiers_only`）。
+        模型只看得到这段文字（工作流差别它看不见），所以「哪条路干什么」必须由
+        描述说清。旧版这里钉的是「图生图只有 qwen 一条路」——2026-10-06 用户拍板
+        撤掉动漫档的**垫图重绘**用法（「Anima 的图生图没有 Qwen 好用……图生图只需要
+        一个 Qwen 的途径即可」）；2026-10-10 又补上**锁构图**那条
+        （`_I2I_LLLITE_SKILLS` 那 6 档），所以现在是两条，**别再写回「只有 qwen」**。
+        撤的是用法文案，不是后端骨架：`_I2I_SKILLS` 那 12 档一个没删
+        （钉在上面的 `test_i2i_is_on_for_the_right_tiers_only`）。
 
         qwen 一张 1~2 分钟，所以「点名才走、不是改图的默认做法」的价格标签必须在。
         """
         from app.tools.normal.generate_image import tool
         desc = tool["description"]
-        self.assertIn("图生图只有 qwen 系两条", desc)
+        self.assertIn("引用图片：要画就垫，锁住构图", desc)
+        self.assertIn("qwen 系两条", desc)
         for key in ("一句改动指令", "不要把整张图重新描述",
-                    "重绘已经从用法里撤掉"):
+                    "垫图重绘已经从用法里撤掉"):
             self.assertIn(key, desc, "描述里缺了「%s」" % key)
         # qwen 那道必须带「慢」的价格标签，不能写得像默认选项
         self.assertIn("1~2 分钟", desc)

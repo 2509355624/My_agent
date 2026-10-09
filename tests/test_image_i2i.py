@@ -3,14 +3,18 @@
 零网络、零落盘：图片下载与 ComfyUI 上传全部 mock 掉。这里唯一碰磁盘的是
 「本地路径」那两条用例——它们故意拿本测试文件自己当那张图。
 
-本机图生图有**两套机制**，白名单都在 `_I2I_SKILLS` 里，形状却完全不同：
+本机图生图有**三套机制**，白名单都在 `_I2I_SKILLS` 里，形状却完全不同：
 
 - **重绘**（2026-10-01 重开）：动漫 12 档 `anima_*` / `hd_fast_*` / `hd_2_*`
-  （`hd_3_*` 不给）。`LoadImage → VAEEncode` 把源图编成 latent，一段按
-  `I2I_DENOISE` 重新采样——整张重画，构图大致在。
+  （2026-10-07 起全被屏蔽，骨架还留在磁盘上）。`LoadImage → VAEEncode` 把源图
+  编成 latent，一段按 `I2I_DENOISE` 重新采样——整张重画，构图大致在。
 - **编辑**（2026-10-02 开放）：`qwen_image_v1`。源图**不进 latent**，走
   `TextEncodeQwenImage21` 的参考图通道，KSampler 吃那个节点吐的空 latent、
   denoise 写死 1。见 `QwenEditFlowTest`。
+- **锁构图**（2026-10-10 新增）：`silver` / `silver-hd` / `hd_3_×4`，6 个在售渠道。
+  `EmptyLatentImage` **留着**、一段 denoise 仍是 1，参考图只走
+  `Canny → ImageInvert → AnimaLLLiteApply` 给模型注入构图条件——出图是重画的，
+  尺寸也仍是本档画布。见 `LLLiteI2IShapeTest`。
 
 **「什么时候才允许垫图」这条边界不在这里测**——它写在工具描述里
 （见 test_image_lora 的 description 用例）。这里只管
@@ -303,6 +307,9 @@ class I2IWorkflowShapeTest(unittest.TestCase):
     qwen 那份是**手写**的（机制不同，脚本刻意不生成它）。这里逐份验结构，
     不认任何具体节点编号（每个渠道的 id 都不一样）。
 
+    ⚠️ **锁构图那 6 份不在本类里**（`LLLiteI2IShapeTest` 管）：它们的形状跟这 12 份
+    正好相反（留 EmptyLatentImage、没有 VAEEncode），套这里的断言会全红。
+
     只读文件，不碰网络。
     """
 
@@ -311,15 +318,22 @@ class I2IWorkflowShapeTest(unittest.TestCase):
         self.assertIsNotNone(wf, "%s 缺 workflow_i2i.json" % skill)
         return wf
 
-    def test_the_whitelist_is_twelve_redraw_plus_qwen(self):
-        """白名单 = 12 个重绘档 + qwen 一个编辑档 + qwen-hd 超清编辑档。"""
+    def test_the_whitelist_is_redraw_plus_lllite_plus_qwen(self):
+        """白名单 = 12 个重绘档 + 6 个锁构图档 + qwen 两个编辑档，共 20。"""
         self.assertEqual(len(gi._I2I_ANIMA_SKILLS), 12)
-        self.assertEqual(gi._I2I_SKILLS,
-                         gi._I2I_ANIMA_SKILLS + ("qwen_image_v1", "qwen-hd"))
+        self.assertEqual(len(gi._I2I_LLLITE_SKILLS), 6)
+        self.assertEqual(
+            gi._I2I_SKILLS,
+            gi._I2I_ANIMA_SKILLS + gi._I2I_LLLITE_SKILLS
+            + ("qwen_image_v1", "qwen-hd"))
+        self.assertEqual(len(gi._I2I_SKILLS), 20)
+        # 两组机制不许重叠：同一份骨架不可能既删 EmptyLatentImage 又留着它
+        self.assertEqual(
+            set(gi._I2I_ANIMA_SKILLS) & set(gi._I2I_LLLITE_SKILLS), set())
         for skill in ("anima_clear", "anima_curvy", "hd_fast_clear",
                       "hd_2_curvy", "qwen_image_v1", "qwen-hd"):
             self.assertIn(skill, gi._I2I_SKILLS)
-        for skill in ("hd_3_clear", "hd_3_curvy", "krea2", "image_gen_v1", "nffa"):
+        for skill in ("krea2", "image_gen_v1", "nffa", "miao", "cunny"):
             self.assertNotIn(skill, gi._I2I_SKILLS)
 
     def test_all_twelve_have_the_i2i_shape(self):
@@ -393,15 +407,179 @@ class I2IWorkflowShapeTest(unittest.TestCase):
                 self.assertEqual(ks["negative"], [enc, 1])
                 self.assertEqual(ks["denoise"], 1)
 
-    def test_hd_3_has_no_i2i_workflow_at_all(self):
-        """三档不给图生图：白名单排除了它，连骨架都不该存在（免得两处各说各话）。"""
+    def test_hd_3_is_not_in_the_redraw_group(self):
+        """三档**不在重绘组里**——它 2026-10-10 起走的是锁构图那条（见下一个类）。
+
+        这条钉的是「别顺手把 hd_3_* 塞进 `_I2I_ANIMA_SKILLS`」：那一组的骨架是
+        `LoadImage → VAEEncode` 形状，hd_3 的骨架里根本没有 VAEEncode。
+        """
         for style in ("clear", "soft", "gloss", "curvy"):
             skill = "hd_3_" + style
             self.assertTrue(os.path.isdir(os.path.join(SKILLS, skill)),
                             "文生图渠道 %s 应该还在" % skill)
-            self.assertFalse(
-                os.path.exists(os.path.join(SKILLS, skill, "workflow_i2i.json")),
-                "%s 不该有图生图骨架" % skill)
+            self.assertNotIn(skill, gi._I2I_ANIMA_SKILLS)
+            self.assertIn(skill, gi._I2I_LLLITE_SKILLS)
+
+
+class LLLiteI2IShapeTest(unittest.TestCase):
+    """锁构图骨架（`silver` / `silver-hd` / `hd_3_×4`）——**形状和上面那 12 份相反**。
+
+    这 6 份由 `_make_i2i_workflows.py --only lllite` 生成：`EmptyLatentImage` 留着、
+    一段 denoise 仍是 1.0，参考图只走一条 LLLite 支路
+    （`ModelPatchLoader + LoadImage + Canny + ImageInvert + AnimaLLLiteApply`）。
+
+    设计口径（用户 2026-10-10 拍板）：
+    - **输出尺寸是渠道自己的画布**，参考图只当构图条件、不参与定尺寸；
+    - **不是垫图重绘**——「在这张图上改」那条路只给 qwen；
+    - 「锁不锁构图」不另加参数，模型传不传 `source_image` 就是那个开关。
+
+    实测（本机 5070，2026-10-09）：LLLite **耗时 +0 秒**、同 seed 像素差 0.0000、
+    提示词与参考图冲突时**提示词赢**。所以别把它当姿态复刻用。
+
+    只读文件，不碰网络。
+    """
+
+    # 生成脚本 `_make_i2i_workflows.py` 里的同名常量。**改了那边必须同步改这里**
+    # ——这几条断言就是拿来钉住「脚本跑过、而且参数没被人手改」的。
+    PATCH = "anima-lllite-any-test-like-v2.safetensors"
+    STRENGTH = 0.92
+    END = 0.92
+    CANNY = (0.12, 0.3)
+    CHAIN = ("ModelPatchLoader", "LoadImage", "Canny", "ImageInvert",
+             "AnimaLLLiteApply")
+
+    def _load(self, skill):
+        wf = load_workflow(os.path.join(SKILLS, skill, "workflow_i2i.json"))
+        self.assertIsNotNone(wf, "%s 缺 workflow_i2i.json" % skill)
+        return wf
+
+    def _one(self, wf, class_type):
+        ids = [nid for nid, n in wf.items() if n["class_type"] == class_type]
+        self.assertEqual(len(ids), 1,
+                         "预期恰好 1 个 %s，实际 %d 个" % (class_type, len(ids)))
+        return ids[0]
+
+    def _stage1(self, wf):
+        lat = self._one(wf, "EmptyLatentImage")
+        stage1 = [nid for nid, n in wf.items()
+                  if n["class_type"] == "KSampler"
+                  and n["inputs"].get("latent_image") == [lat, 0]]
+        self.assertEqual(len(stage1), 1, "没有唯一的一段 KSampler 吃空 latent")
+        return stage1[0], lat
+
+    def test_the_six_are_all_visible_and_have_a_skeleton(self):
+        """6 个都在售（`list_skills` 里看得到）——不然模型点不到这个名字。"""
+        from app.skills import list_skills
+        visible = set(list_skills())
+        self.assertEqual(len(gi._I2I_LLLITE_SKILLS), 6)
+        for skill in gi._I2I_LLLITE_SKILLS:
+            with self.subTest(skill=skill):
+                self.assertIn(skill, visible, "%s 对外不可见，模型点不到" % skill)
+                self.assertTrue(os.path.isdir(os.path.join(SKILLS, skill)))
+                self._load(skill)
+
+    def test_latent_is_still_empty_so_the_output_is_our_canvas(self):
+        """`EmptyLatentImage` 必须**留着**，尺寸就是本档画布 1024×1536。
+
+        这正是「参考图只是参考图」的实现：出图尺寸由本档画布定，参考图不参与。
+        跟那 12 份重绘骨架**正好相反**（它们删了 EmptyLatentImage 换 VAEEncode）。
+        """
+        for skill in gi._I2I_LLLITE_SKILLS:
+            with self.subTest(skill=skill):
+                wf = self._load(skill)
+                kinds = [n["class_type"] for n in wf.values()]
+                self.assertNotIn("VAEEncode", kinds)
+                lat = wf[self._one(wf, "EmptyLatentImage")]["inputs"]
+                self.assertEqual((lat["width"], lat["height"]), (1024, 1536))
+                self.assertEqual(lat["batch_size"], 1)
+                # 采样 / 放大那一整套照抄文生图，一样不少
+                self.assertEqual(kinds.count("KSampler"), 2)
+                self.assertEqual(kinds.count("LatentUpscaleBy"), 1)
+
+    def test_first_pass_denoise_is_still_one(self):
+        """一段 denoise 保持 1.0，且**不许**出现 `__DENOISE__`。
+
+        垫图重绘那 12 份这里留的是 `__DENOISE__`（运行时灌 `I2I_DENOISE` = 0.6）。
+        这一组要是漏了那个占位符进去，运行时会把 0.6 灌进来——等于把参考图当垫图
+        用，半重绘，出图就不是「重画」而是「描」了。
+        """
+        for skill in gi._I2I_LLLITE_SKILLS:
+            with self.subTest(skill=skill):
+                wf = self._load(skill)
+                stage1, _ = self._stage1(wf)
+                self.assertEqual(wf[stage1]["inputs"]["denoise"], 1)
+                self.assertNotIn("__DENOISE__", json.dumps(wf))
+
+    def test_the_lllite_chain_is_wired_end_to_end(self):
+        """五个节点各一个，链条必须是 `LoadImage → Canny → ImageInvert → LLLite`。"""
+        for skill in gi._I2I_LLLITE_SKILLS:
+            with self.subTest(skill=skill):
+                wf = self._load(skill)
+                for kind in self.CHAIN:
+                    self._one(wf, kind)
+                patch = self._one(wf, "ModelPatchLoader")
+                load = self._one(wf, "LoadImage")
+                canny = self._one(wf, "Canny")
+                inv = self._one(wf, "ImageInvert")
+                apply = self._one(wf, "AnimaLLLiteApply")
+
+                # 运行时只替换这一个占位符（`_apply_i2i_placeholders`）
+                self.assertEqual(wf[load]["inputs"]["image"], "__SOURCE_IMAGE__")
+                self.assertEqual(wf[canny]["inputs"]["image"], [load, 0])
+                self.assertEqual(wf[inv]["inputs"]["image"], [canny, 0])
+                self.assertEqual(wf[apply]["inputs"]["image"], [inv, 0])
+                self.assertEqual(wf[apply]["inputs"]["model_patch"], [patch, 0])
+                self.assertEqual(wf[patch]["inputs"]["name"], self.PATCH)
+                self.assertEqual(wf[apply]["inputs"]["strength"], self.STRENGTH)
+                self.assertEqual(wf[apply]["inputs"]["start_percent"], 0.0)
+                self.assertEqual(wf[apply]["inputs"]["end_percent"], self.END)
+                self.assertEqual((wf[canny]["inputs"]["low_threshold"],
+                                  wf[canny]["inputs"]["high_threshold"]),
+                                 self.CANNY)
+
+    def test_lllite_sits_between_the_model_chain_and_the_first_pass(self):
+        """一段的 `model` 必须指向 LLLite，LLLite 的 `model` 再接回原来的模型链尾。
+
+        接错方向等于没接：`AnimaLLLiteApply.model` 要是接到了自己或二段，ComfyUI
+        要么报环、要么整条支路白挂（模型没被 patch，参考图完全不生效）。
+        """
+        for skill in gi._I2I_LLLITE_SKILLS:
+            with self.subTest(skill=skill):
+                wf = self._load(skill)
+                apply = self._one(wf, "AnimaLLLiteApply")
+                stage1, _ = self._stage1(wf)
+                self.assertEqual(wf[stage1]["inputs"]["model"], [apply, 0])
+
+                src = wf[apply]["inputs"]["model"][0]
+                self.assertIn(src, wf, "LLLite 的 model 指向不存在的节点 %s" % src)
+                self.assertNotEqual(src, apply, "LLLite 的 model 接到了自己")
+                # 模型链尾只喂 LLLite 一个：还有别的消费者的话，插进去会顺带改到它
+                consumers = [nid for nid, n in wf.items()
+                             if nid != apply
+                             and (n.get("inputs") or {}).get("model") == [src, 0]]
+                self.assertEqual(consumers, [],
+                                 "模型链尾 %s 还被 %s 消费" % (src, consumers))
+                # 二段不吃 LLLite——它在 denoise 0.25 上只做细节精修，构图早定了
+                stage2 = [nid for nid, n in wf.items()
+                          if n["class_type"] == "KSampler" and nid != stage1][0]
+                self.assertNotEqual(wf[stage2]["inputs"]["model"], [apply, 0])
+
+    def test_the_t2i_skeleton_is_untouched(self):
+        """锁构图只加在 `workflow_i2i.json` 上——文生图骨架一个节点都不许多。
+
+        顺手钉住「生成脚本没把两种骨架写串」：A 路的产物里出现 LLLite 节点、
+        或者 B 路的产物污染了 `workflow.json`，都算串了。
+        """
+        for skill in gi._I2I_LLLITE_SKILLS:
+            with self.subTest(skill=skill):
+                t2i = load_workflow(os.path.join(SKILLS, skill, "workflow.json"))
+                self.assertIsNotNone(t2i)
+                kinds = {n["class_type"] for n in t2i.values()}
+                self.assertFalse(
+                    kinds & set(self.CHAIN),
+                    "%s 的文生图骨架混进了图生图节点：%s"
+                    % (skill, kinds & set(self.CHAIN)))
+                self.assertIn("EmptyLatentImage", kinds)
 
 
 class _I2IRunner(object):
@@ -572,11 +750,44 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
         up = self._one(wf, "LatentUpscaleBy")
         self.assertEqual(wf[up]["inputs"]["scale_by"], 1.3)
 
-    def test_hd_3_is_refused_and_touches_nothing(self):
-        """三档不给图生图：点名也一样拒，一步都不往 ComfyUI 送。"""
-        out, wf = self._run(prompt="x", skill="hd_3_clear", source_image="1")
+    def test_a_channel_without_a_skeleton_is_refused(self):
+        """没有 i2i 骨架的渠道（`nffa`）点名也一样拒，一步都不往 ComfyUI 送。
+
+        2026-10-10 之前这条用的是 `hd_3_clear`——它现在有骨架了（锁构图那条），
+        所以换成 nffa。**拒收话术本身没变**，这里钉的就是那句还在。
+        """
+        out, wf = self._run(prompt="x", skill="nffa", source_image="1")
         self.assertIn("不支持图生图", out)
         self.assertEqual(wf, {})
+
+    def test_lllite_channel_submits_the_lock_composition_chain(self):
+        """`silver` + 引用图 = 锁构图：空 latent 留着、denoise 仍是 1、LLLite 挂在模型链上。
+
+        和上面那 12 个重绘档的差别一眼可见：这里**没有 VAEEncode**、也**没有
+        `__DENOISE__`**（那段占位符一旦出现，运行时就会把 0.6 灌进来变成垫图）。
+        `__SOURCE_IMAGE__` 必须已经换成上传回来的文件名——没换的话 ComfyUI
+        会去找一个叫 `__SOURCE_IMAGE__` 的图，报「Invalid image file」。
+        """
+        p1, p2, p3 = self._feed(name="i2isrc_silver.png")
+        with p1, p2, p3:
+            out, wf = self._run(prompt="x", skill="silver", source_image="1")
+        self.assertIn("任务已提交", out)
+        kinds = self._kinds(wf)
+        self.assertIn("EmptyLatentImage", kinds)
+        self.assertNotIn("VAEEncode", kinds)
+        self.assertNotIn("__DENOISE__", json.dumps(wf))
+        for kind in ("ModelPatchLoader", "Canny", "ImageInvert",
+                     "AnimaLLLiteApply"):
+            self.assertIn(kind, kinds)
+        load = self._one(wf, "LoadImage")
+        self.assertEqual(wf[load]["inputs"]["image"], "i2isrc_silver.png")
+        stage1 = [nid for nid, n in wf.items()
+                  if n["class_type"] == "KSampler"
+                  and n["inputs"].get("latent_image")
+                  == [self._one(wf, "EmptyLatentImage"), 0]][0]
+        self.assertEqual(wf[stage1]["inputs"]["denoise"], 1)
+        self.assertEqual(wf[stage1]["inputs"]["model"],
+                         [self._one(wf, "AnimaLLLiteApply"), 0])
 
     def test_source_failure_reports_and_submits_nothing(self):
         """取不到源图就报错，**绝不悄悄退回文生图**。
@@ -696,9 +907,12 @@ class QwenEditFlowTest(_I2IRunner, unittest.TestCase):
         self.assertEqual(wf, {})
 
     def test_refusal_for_other_channels_points_here(self):
-        """不给垫图的档被拒时，话术里要指出「只改一处」走 qwen——
-        不然模型只会把它换成动漫档，出图画风和构图一起跑。"""
-        out, wf = self._run(prompt="x", skill="hd_3_clear", source_image="1")
+        """没有骨架的档被拒时，话术里要指出「只改一处」走 qwen——
+        不然模型只会把它换成别的渠道，出图画风和构图一起跑。
+
+        （样例 2026-10-10 从 `hd_3_clear` 换成 `nffa`：前者现在有锁构图骨架了。）
+        """
+        out, wf = self._run(prompt="x", skill="nffa", source_image="1")
         self.assertIn("不支持图生图", out)
         self.assertIn("qwen_image_v1", out)
         self.assertEqual(wf, {})

@@ -1243,7 +1243,9 @@ class MasterPromptTest(unittest.TestCase):
         self.assertIn("recall_image", t)
         self.assertIn("generate_comic", t)
         # 模板本身要短：一句话一个工具，不给每个渠道写专属规则。
-        self.assertLess(len(t), 2100, "模板超长了，工具列表应该一句话一个")
+        # 2026-10-10：2100 → 7000（**用户拍板**：「提示词长度我最多允许你 7000 字」）。
+        # 同批把【图生图】段从「默认不做、只认点名」翻成「引用图就填」。
+        self.assertLess(len(t), 7000, "模板超长了，工具列表应该一句话一个")
 
     def test_comic_tool_is_offered_to_the_ai(self):
         """第三个工具 `generate_comic` 必须在模板里——QQ 的 @ 轮**不跑主
@@ -1331,7 +1333,11 @@ class MasterPromptTest(unittest.TestCase):
         # 2026-10-08：3300 → 3320。同上：krea2 拆 5 条，渠道清单那行变长。
         # 2026-10-09：3320 → 3340。krea2 再加 3 条（宝可梦 / 柔光 / 奶油），
         # 清单那行 +31 字（实测渲染 3329）。同样是渠道名，不是散文。
-        self.assertLess(len(t), 3340, "整条提示词越过 3340 字预算了")
+        # 2026-10-10：3340 → 7000（**用户拍板**：「提示词长度我最多允许你 7000 字」）。
+        # 这次不是渠道名，是【图生图】段的**口径翻转**：从「默认不做、只认点名」
+        # 改成「引用图 + 要画 → 传 source_image、渠道不用改」（silver / silver-hd /
+        # 高清三档都接了锁构图骨架）。实测渲染 3619。
+        self.assertLess(len(t), 7000, "整条提示词越过 7000 字预算了")
 
     def test_ai_may_reply_instead_of_drawing(self):
         self.assertIn('{"reply"', self._rendered())
@@ -2435,12 +2441,17 @@ class ReviseChannelListTest(unittest.TestCase):
             self.assertIn(name, t, "改图模板里没提渠道 %s" % name)
 
     def test_template_warns_custom_channels_have_no_i2i(self):
-        """silver/jank 没有垫图骨架——模板得告诉模型垫图轮别填它们。
+        """jank 没有垫图骨架、silver 有——两条模板都得把这个差别说清楚。
 
-        不写这句的后果：用户说「silver 图生图」，模型填 silver，代码那头
-        `_redraw_capable` 判不过就**静默降回 hd_3_clear**，出图风味全变。
+        不写这句的后果：用户说「jank 图生图」，模型填 jank + source_image，
+        代码那头当场拒收（没有骨架），白跑一轮。反过来，silver 现在**能**接参考图
+        （锁构图那条），模板要是不提，模型会一直绕开它。
         """
-        self.assertIn("文生图专用", direct_gen._REVISE_TEMPLATE)
+        for name, t in (("_MASTER_TEMPLATE", direct_gen._MASTER_TEMPLATE),
+                        ("_REVISE_TEMPLATE", direct_gen._REVISE_TEMPLATE)):
+            with self.subTest(template=name):
+                self.assertIn("文生图专用", t, name + " 没说明 jank 是文生图专用")
+                self.assertIn("锁构图骨架", t, name + " 没说明 silver 有锁构图骨架")
 
     def test_template_still_formats(self):
         """加了清单别把 `.format` 的花括号写坏（模板里 JSON 示例是转义过的）。"""

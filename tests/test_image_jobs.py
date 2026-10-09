@@ -2346,19 +2346,33 @@ class DisabledChannelTest(unittest.TestCase):
         self.assertFalse(self.comfy.called)     # 一步都没碰 ComfyUI
         self.assertFalse(self.load.called)      # 连 skill 都没去读
 
-    def test_i2i_without_naming_a_channel_refuses_the_default(self):
-        """只给 source_image 不给 skill：落默认渠道 silver，然后**明确拒收**。
+    def test_i2i_without_naming_a_channel_lands_on_a_capable_default(self):
+        """只给 source_image 不给 skill：落默认渠道 silver，而它**能**垫图。
 
-        这条以前写的是「落到默认渠道，它支持垫图」。2026-10-06 用户把默认渠道
-        换成 silver（文生图专用、没有垫图骨架），同时拍板「没有兜底……不需要
-        代码去给它硬兜底」——所以这里**不许**静默换成某个动漫档：报错、把话讲
-        清楚（图生图只走 qwen_image_v1 + source_image），一张都不画。
+        口径 2026-10-10 翻转。在此之前这里断言的是「默认渠道拒收」——当时 silver
+        没有骨架。现在 silver 进了锁构图组（`_I2I_LLLITE_SKILLS`），所以
+        「引用图 + 不点名渠道」要一路走到 ComfyUI 探活，而不是当场报错。
         """
         self._disabled([])
-        out = self._call(prompt="把衣服换成红色", source_image="1")
-        self.assertIn("不支持图生图", out)
-        self.assertIn("qwen_image_v1", out)
-        self.assertFalse(self.comfy.called)     # 一步都没碰 ComfyUI
+        self.load.return_value = {
+            "workflow": {"9": {"class_type": "EmptyLatentImage",
+                               "inputs": {"width": 1024, "height": 1536}}},
+            "path": os.path.join("skills", "silver")}
+        with mock.patch.object(generate_image, "load_workflow",
+                               lambda p: {"43": {"class_type": "LoadImage",
+                                                 "inputs": {"image":
+                                                            "__SOURCE_IMAGE__"}}}), \
+                mock.patch.object(generate_image.comfy_src, "resolve",
+                                  lambda spec: (b"RAW", "引用的那张图")), \
+                mock.patch.object(generate_image.comfy_src, "fit",
+                                  lambda raw, max_side=None: (b"FIT",
+                                                              (1024, 1536))), \
+                mock.patch.object(generate_image.comfy_src, "upload",
+                                  lambda raw: "i2isrc_x.png"):
+            out = self._call(prompt="把衣服换成红色", source_image="1")
+        self.assertNotIn("不支持图生图", out)
+        self.assertIn("任务已提交", out)
+        self.assertTrue(self.comfy.called)      # 走到底了：探活过 ComfyUI
 
     def test_i2i_source_is_scaled_to_the_channel_canvas(self):
         """点名会垫图的渠道时，源图按**本档画布的长边**缩，不是 comfy_src 的 1216。
@@ -2395,13 +2409,13 @@ class DisabledChannelTest(unittest.TestCase):
         self.assertEqual(seen["max_side"], 1024)     # 728×1024 画布的长边
         self.assertTrue(self.comfy.called)           # 走到底了：探活过 ComfyUI
 
-    def test_i2i_is_refused_on_hd_3(self):
-        """三档不给图生图：点名也一样拒，而且一步都不碰 ComfyUI。
+    def test_i2i_is_refused_on_a_channel_without_a_skeleton(self):
+        """没有骨架的渠道（`nffa`）不给图生图：点名也一样拒，一步都不碰 ComfyUI。
 
-        「不给」跟图生图的开销无关（实测只比文生图多 3~6 秒），是三档自己贵。
+        样例 2026-10-10 从 `hd_3_clear` 换成 `nffa`——三档现在有锁构图骨架了。
         """
         self._disabled([])
-        out = self._call(prompt="把衣服换成红色", skill="hd_3_clear",
+        out = self._call(prompt="把衣服换成红色", skill="nffa",
                          source_image="1")
         self.assertIn("不支持图生图", out)
         self.assertFalse(self.comfy.called)
