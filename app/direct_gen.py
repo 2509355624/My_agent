@@ -1745,6 +1745,19 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         elif cands:
             return _LEAD_AMBIGUOUS_TEXT % " / ".join(cands)
 
+    # ── qwen-charsheet 专路：引用图 = 角色参考图，直接当 source 入队 ──
+    # 这个渠道**没有纯文生图模式**：TextEncodeQwenImage21 必须吃一张参考图
+    # （images.image_1）才能编码。用户「引用一张图 + 说 qwen 角色设定表」期望的是
+    # 「拿这张图出 7 分区角色表」，不是「把这张图识图反推再文生图重画」（那条路
+    # 会把图当「要复刻的提示词」、source_image 却空着，最后撞上「需要参考图」闸）。
+    # 所以在下面的「引用图轮」之前拦截：有图就强制 source_image=1，prompt 用用户
+    # 自己的描述（没有就留空，版式指令全在工作流内置静态提示词里）。
+    # 没引用图不在这里拦，落到通用路径 → generate_image 的「需要参考图」闸给报错。
+    if ch == "qwen-charsheet" and data_urls:
+        prompt = (desc or "").strip()
+        _remember_job(session_key, ch, prompt)
+        return _enqueue(ch, prompt, text, source_image=True)
+
     # ── 前置搜索：全部流程默认先走一遍搜索 Agent（用户 2026-10-06 拍板）──
     # 放在这里而不是 `_translate` 里面，是为了让下面**所有**会产出提示词的
     # 分支共用同一份资料——改图管道 `_revise` 原先根本不经过 `_translate`，
