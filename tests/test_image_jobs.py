@@ -2867,29 +2867,33 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
     2026-10-07 用户拍板「全部改成 180 秒，不要区分」→ 分档这套**取消**了，
     SKILL_TIMEOUTS 清空、所有渠道统一走 TASK_TIMEOUT。查表机制本身保留，
     所以这几条改成钉「**不再分档**」+「没配的渠道仍回落全局」。
+    2026-10-10 下午用户重新开口：qwen 系四条 300 秒（见下）——**仍是分档，
+    但只有这一组例外**，其余一律 180。
     """
 
     def test_every_channel_gets_the_same_limit(self):
         """2026-10-07 用户拍板「全部改成 180 秒，是全部，不要区分」→ 分档表清空，
         所有渠道一律回落 TASK_TIMEOUT（= .env 的 IMAGE_GEN_TIMEOUT，现 180）。
 
-        2026-10-10 **唯一的例外**：qwen 系两条（`qwen_image_v1` / `qwen-hd`）
-        放宽到 200 —— qwen 单张本来就长（char-sheet 15 步实测 150 s），180 只剩
-        25 s 余量、卡在边界上。**除这两条之外**，任何渠道都不许再拿一个跟别人
-        不一样的数（qwen-charsheet / qwen-restore 也**不在**表里，走 180）。
+        2026-10-10 下午用户重新开口：**qwen 系四条一律 300 秒**
+        （`qwen_image_v1` / `qwen-hd` / `qwen-charsheet` / `qwen-restore`）。
+        起因是角色表恢复成 7 分区 / 2304×1536 / 25 步（§11 实测 ≈217 s），
+        180 必超时。**除这四条之外**，任何渠道都不许再拿一个跟别人不一样的数。
         """
         for skill in ("image_gen_v1", "nffa", "hd_3_clear",
                       "hd_3_curvy", "hd_3_gloss", "hd_3_soft", "krea2",
                       "cunny", "miao", "silver", "silver-hd", "jank",
-                      "qwen-charsheet", "qwen-restore"):
+                      "krea2-real", "krea2-general"):
             self.assertEqual(image_jobs.task_timeout(skill),
                              image_jobs.TASK_TIMEOUT, skill)
         self.assertEqual(image_jobs.TASK_TIMEOUT, 180)
-        # 例外只有 qwen 那两条，且只多 20 秒
+        # 例外只有 qwen 那四条，且一律 300
         self.assertEqual(sorted(image_jobs.SKILL_TIMEOUTS),
-                         ["qwen-hd", "qwen_image_v1"])
-        for skill in ("qwen_image_v1", "qwen-hd"):
-            self.assertEqual(image_jobs.task_timeout(skill), 200, skill)
+                         ["qwen-charsheet", "qwen-hd", "qwen-restore",
+                          "qwen_image_v1"])
+        for skill in ("qwen_image_v1", "qwen-hd", "qwen-charsheet",
+                      "qwen-restore"):
+            self.assertEqual(image_jobs.task_timeout(skill), 300, skill)
 
     def test_unknown_skill_falls_back_to_global(self):
         """没配的渠道仍走 TASK_TIMEOUT——新渠道不能因为漏配就变慢。"""

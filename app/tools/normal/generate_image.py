@@ -428,7 +428,7 @@ _RECEIPT_NOTE_DEFAULT = (
     "想换渠道就发「渠道名 + 你的需求」（例：jank 银发初音未来）。\n"
     "渠道：silver（默认）/ anima（三档）/ qwen / nai / jank / sd / nffa / miao / cunny\n"
     "krea2 系（10 条，按风格拆）：krea2米山舞 / krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油 / krea2写实 / krea2通用\n"
-    "要角色设定表（参考姿势 + 三视图）：发「qwen 角色设定表 + 描述」（qwen 自己的角色表工作流，~155s）\n"
+    "要角色设定表（7 分区 character design sheet）：发「qwen 角色设定表 + 描述」（qwen 自己的角色表工作流，~220s）\n"
     "要修图（去糊/去噪/修清楚）：引用那张图 + 发「qwen修复」（qwen 的修复工作流，~130s）\n"
     "要 4x 超清：silver 发「silver-hd + 需求」，qwen 发「qwen 超清 + 需求」（也认 silver超清 / qwen超清）\n"
     "qwen 超清支持图生图：发「qwen 超清，图生图，描述」（附一张图）\n"
@@ -913,9 +913,9 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     if not skill_data or not skill_data["workflow"]:
         return "错误: 找不到 Skill '" + skill + "'"
 
-    # qwen-charsheet（参考姿势 + 三视图）骨架里 TextEncodeQwenImage21 必须吃一张
-    # 参考图（images.image_1）才能编码——它没有纯文生图模式，参考图就是角色 /
-    # 画风 / 配色的来源。用户没给参考图就直说，别拿到 ComfyUI 里报一个看不懂的
+    # qwen-charsheet（7 分区 character design sheet）骨架里 TextEncodeQwenImage21
+    # 必须吃一张参考图（images.image_1）才能编码——它没有纯文生图模式，参考图就是
+    # 角色 / 画风 / 配色的来源。用户没给参考图就直说，别拿到 ComfyUI 里报一个看不懂的
     # 缺输入错误（_t2i_guard 把 source_image 清掉时也会落到这里，同样该报）。
     if skill == "qwen-charsheet" and not is_i2i:
         return ("错误: qwen角色设定表 需要一张角色参考图——用来提取角色设计、"
@@ -1137,12 +1137,15 @@ tool = {
                   "比 qwen 更慢、单张更大，别主动推荐、别在群里连刷。"
                   "文生图/图生图**都支持**（它的图生图骨架同样只换了放大，出图一样是 4x）；"
                   "说「qwen 超清 图生图」= 它 + `source_image=1`\n"
-                  "- **qwen-charsheet**（qwen 上的角色设定表工作流，"
-                  "2304×1296，单段 **18 步 / res_multistep+beta** / cfg 1，~155s）："
-                  "只在用户明说「qwen 角色设定表」时传。出 **参考图姿势全身图 + 三视图**"
-                  "（Front / Side / Back 并排）。**prompt 走工作流内置静态提示词**，不要再写。"
-                  "引用一张图 = 图生图（走 `source_image=1`，参考图经 "
-                  "`TextEncodeQwenImage21.resolution=1536`）。纯人物、**不画任何文字/标题/色卡**。\n"
+                  "- **qwen-charsheet**（qwen 上的**7 分区角色设定表**工作流，"
+                  "2304×1536，单段 **25 步 / res_multistep+beta** / cfg 1，~220s）："
+                  "只在用户明说「qwen 角色设定表」时传。7 个分区 = 左栏资料+色卡 / "
+                  "中间全身主图 / 右上三视图 / 右中三个角度特写 / 左下三剪影 / "
+                  "中下三种表情 / 右下 2×3 细节格。**prompt 走工作流内置静态提示词**，"
+                  "不要再写。引用一张图 = 图生图（走 `source_image=1`，参考图经 "
+                  "`TextEncodeQwenImage21.resolution=1536`）。"
+                  "⚠️ 右下细节格**不画任何文字/标签**（模型画英文标签会糊成乱码，"
+                  "所以那一格刻意留白）；其余分区的标签是提示词写死的英文。\n"
                   "- **qwen-restore**（qwen 上的**修复**工作流，"
                   "1536 面积档，单段 **18 步 / res_multistep+beta** / cfg 1，~130s）："
                   "**只在用户明说「qwen修复」时传，且必须配 `source_image=1`**"
