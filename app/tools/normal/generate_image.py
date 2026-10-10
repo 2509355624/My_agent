@@ -98,7 +98,7 @@ _I2I_LLLITE_SKILLS = ("silver", "silver-hd") + tuple(
     "hd_3_" + s for s in _I2I_STYLES)
 
 _I2I_SKILLS = (_I2I_ANIMA_SKILLS + _I2I_LLLITE_SKILLS
-               + ("qwen_image_v1", "qwen-hd"))
+               + ("qwen_image_v1", "qwen-hd", "qwen-charsheet"))
 
 # ① 一段的重绘强度。**不给模型调**——它一调就会以为「调低 = 只微调」，
 # 而对方要的是「照这张重画一张」。0.6 是实测既保得住构图、又出得来细节的位置。
@@ -426,7 +426,8 @@ _RECEIPT_CHANNEL = "当前渠道：%s"
 _RECEIPT_NOTE_DEFAULT = (
     "想换渠道就发「渠道名 + 你的需求」（例：jank 银发初音未来）。\n"
     "渠道：silver（默认）/ anima（三档）/ qwen / nai / jank / sd / nffa / miao / cunny\n"
-    "krea2 系（8 条，按风格拆）：krea2米山舞 / krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油\n"
+    "krea2 系（10 条，按风格拆）：krea2米山舞 / krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油 / krea2写实 / krea2通用\n"
+    "要 7 分区 character design sheet：发「qwen 角色设定表 + 描述」（qwen 自己的角色表工作流，~150s）\n"
     "要 4x 超清：silver 发「silver-hd + 需求」，qwen 发「qwen 超清 + 需求」（也认 silver超清 / qwen超清）\n"
     "qwen 超清支持图生图：发「qwen 超清，图生图，描述」（附一张图）\n"
     "要横屏：加「横屏」（例：silver 横屏 一个女孩）\n"
@@ -910,6 +911,15 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     if not skill_data or not skill_data["workflow"]:
         return "错误: 找不到 Skill '" + skill + "'"
 
+    # qwen-charsheet（7 分区角色设定表）骨架里 TextEncodeQwenImage21 必须吃一张
+    # 参考图（images.image_1）才能编码——它没有纯文生图模式，参考图就是角色 /
+    # 画风 / 配色的来源。用户没给参考图就直说，别拿到 ComfyUI 里报一个看不懂的
+    # 缺输入错误（_t2i_guard 把 source_image 清掉时也会落到这里，同样该报）。
+    if skill == "qwen-charsheet" and not is_i2i:
+        return ("错误: qwen角色设定表 需要一张角色参考图——用来提取角色设计、"
+                "画风与配色。请**引用或附上**一张角色图，再发「qwen 角色设定表 "
+                "+ 你的描述」。")
+
     # 图生图：给了源图就换成图生图工作流，并先把源图送进 ComfyUI 的 input
     # 目录。取图 / 缩放 / 上传任何一步失败都当场返回，**不退回文生图**——
     # 对方以为改的是自己那张，收到的却是凭空画的，比直接报错糟得多。
@@ -1118,7 +1128,14 @@ tool = {
                   "比 qwen 更慢、单张更大，别主动推荐、别在群里连刷。"
                   "文生图/图生图**都支持**（它的图生图骨架同样只换了放大，出图一样是 4x）；"
                   "说「qwen 超清 图生图」= 它 + `source_image=1`\n"
-                  "- **krea2 系 8 条**（krea2米山舞 / krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油）："
+                  "- **qwen-charsheet**（qwen 上的 7 分区 character design sheet 工作流，"
+                  "2304×1536，**15 步 / res_multistep / euler+simple** / cfg 1，~150s）："
+                  "只在用户明说「qwen 角色设定表」时传。出 7 个分区（CHARACTER + 中央 + "
+                  "TURNAROUNDS / ACTION POSES / SILHOUETTES / EXPRESSIONS / DETAILS）。"
+                  "**prompt 走工作流内置静态提示词**，不要再写。引用一张图 = 图生图（走 "
+                  "`source_image=1`，参考图经 `TextEncodeQwenImage21.resolution=1536`）。"
+                  "⚠️ 右侧细节格已默认不画文字（消除乱码标签）。\n"
+                  "- **krea2 系 10 条**（krea2米山舞 / krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油 / krea2写实 / krea2通用）："
                   "832×1216 → 二段 1664×2432 → 2x → **3328×4864**，只有风格 LoRA 不同、**点名要带风格词**；"
                   "krea2米山舞 风格前缀自动拼、**不要自己再写**，其余标签式英文自己写；"
                   "krea2动漫真人 是转换器，**必须带触发词 `transform the image to realistic photograph`**。"

@@ -260,7 +260,11 @@ TASK_TIMEOUT = IMAGE_GEN_TIMEOUT
 #   cunny / miao）300。
 # 上面那组实测中位数别删（hd_3_clear 60.6s、hd_3_curvy 68.3s、qwen 50.3s，
 # 以及历史上出现过的 152.8s）——哪天 180 又开始误杀，先看那些数再决定调哪边。
-SKILL_TIMEOUTS = {}
+SKILL_TIMEOUTS = {
+    # 10-10：qwen 跑 character-sheet 15 步实测 150 s，180 太紧。其它渠道保持 180 不动。
+    "qwen_image_v1": 200,
+    "qwen-hd": 200,
+}
 
 
 def task_timeout(job_or_skill):

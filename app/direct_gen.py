@@ -223,7 +223,10 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    "krea2宝可梦": "krea2-pokemon",
                    "krea2柔光": "krea2-softlight",
                    "krea2奶油": "krea2-creamy",
+                   "krea2写实": "krea2-real",
+                   "krea2通用": "krea2-general",
                    "qwen": "qwen_image_v1", "qwen-hd": "qwen-hd",
+                   "qwen角色设定表": "qwen-charsheet",
                    "nffa": "nffa", "nai": "nai",
                    "cunny": "cunny", "miao": "miao"}
 _FIXED_CHAN_RE = re.compile(
@@ -231,6 +234,8 @@ _FIXED_CHAN_RE = re.compile(
     r"(krea2\s*米山舞|krea2\s*日系|krea2\s*亚洲真人"
     r"|krea2\s*动漫真人|krea2\s*真人\s*cos"
     r"|krea2\s*宝可梦|krea2\s*柔光|krea2\s*奶油"
+    r"|krea2\s*写实|krea2\s*通用"
+    r"|qwen\s*角色设定表"
     r"|sd|qwen-hd|qwen|nffa|nai|cunny|miao)"
     r"(?![0-9A-Za-z_])",
     re.I)
@@ -583,7 +588,7 @@ _FINAL_PROMPT_NO_CHAN_TEXT = (
     "（选错就是整张图换风味）。在前面补一个渠道词再发："
     "nai（画师串/权号这种写法就是它的）/ silver（默认渠道）/ silver-hd（4x超清）/ "
     "anima（三档）/ sd / qwen / nffa / jank / krea2米山舞"
-    "（krea2 系 8 条按风格拆，点名要带风格词）。")
+    "（krea2 系 10 条按风格拆，点名要带风格词）。")
 
 
 MENU_TEXT = (
@@ -624,10 +629,11 @@ GUIDE_TEXT = (
     "　jank　NoobAI 自定义（有权号词就用它）\n"
     "　qwen　慢·写实·能在图里写中文字\n"
     "　qwen-hd　qwen 的 4x 超清 · 4096×6144（更慢更大，别连刷）\n"
+    "　qwen角色设定表　7 分区 character design sheet（150s）\n"
     "　sd　　一次多张，多段用 --- 分隔\n"
-    "　krea2系　8 条按风格拆：krea2米山舞 / krea2日系 / krea2亚洲真人\n"
+    "　krea2系　10 条按风格拆：krea2米山舞 / krea2日系 / krea2亚洲真人\n"
     "　　　　　/ krea2动漫真人 / krea2真人cos / krea2宝可梦\n"
-    "　　　　　/ krea2柔光 / krea2奶油（点名要带风格词）\n"
+    "　　　　　/ krea2柔光 / krea2奶油 / krea2写实 / krea2通用（点名要带风格词）\n"
     "　nffa　　插画感\n"
     "　cunny　超分重渠道 · 单张 2~4 分钟\n"
     "　miao　　皮肤质感滑嫩 · 2x 出 3072×4608\n"
@@ -691,10 +697,11 @@ MORE_CHAN_TEXT = (
     "　jank　NoobAI 自定义（有权号词就用它）\n"
     "　qwen　慢·写实·能在图里写中文字\n"
     "　qwen-hd　qwen 的 4x 超清 · 4096×6144（更慢更大，别连刷）\n"
+    "　qwen角色设定表　7 分区 character design sheet（150s）\n"
     "　sd　　一次多张，多段用 --- 分隔\n"
-    "　krea2系　8 条按风格拆：krea2米山舞 / krea2日系 / krea2亚洲真人\n"
+    "　krea2系　10 条按风格拆：krea2米山舞 / krea2日系 / krea2亚洲真人\n"
     "　　　　　/ krea2动漫真人 / krea2真人cos / krea2宝可梦\n"
-    "　　　　　/ krea2柔光 / krea2奶油（点名要带风格词）\n"
+    "　　　　　/ krea2柔光 / krea2奶油 / krea2写实 / krea2通用（点名要带风格词）\n"
     "　nffa　　插画感\n"
     "　cunny　超分重渠道 · 单张约 2~4 分钟\n"
     "　miao　　皮肤质感滑嫩 · 2x 出 3072×4608\n"
@@ -899,7 +906,8 @@ _MASTER_TEMPLATE = (
     "- sd = image_gen_v1（SDXL 底模，单张出图）。\n"
     "- nffa / cunny / miao：点名才用（cunny / miao 一张好几分钟）。\n"
     "- krea2 系按风格 LoRA 分：krea2米山舞 / krea2日系 / krea2亚洲真人 / "
-    "krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油；"
+    "krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / "
+    "krea2奶油 / krea2写实 / krea2通用；"
     "点名带风格词，光说 krea2 不算。\n"
     "- silver = **默认渠道**（不填 skill 就是它）、jank = 自定义 NoobAI 渠道，"
     "明说才填。jank 是**文生图专用**、没有图生图骨架；silver 有锁构图骨架"
@@ -909,6 +917,9 @@ _MASTER_TEMPLATE = (
     "明说「silver-hd / silver 超清」才填，否则走 silver。\n"
     "- qwen-hd = qwen 的 4x 超清版（只换放大，4096×6144）；"
     "明说「qwen-hd / qwen 超清」才填，否则走 qwen。\n"
+    "- qwen-charsheet = qwen 上的 7 分区 character design sheet 工作流"
+    "（Character_Sheet_Production 改造版，右下细节格默认无文字，15 步 ≈ 150s）；"
+    "明说「qwen 角色设定表」才填。\n"
     "{chan_hint}"
     "\n"
     "【图生图：引用图就填，两条路分清楚】\n"
@@ -981,11 +992,15 @@ _REVISE_TEMPLATE = (
     "  nai / nai_wide = 说「nai」（画师串和权重语法认这两个）；\n"
     "  qwen_image_v1 = 说「qwen / 千问 / 通义」；image_gen_v1 = 说「sd」；\n"
     "  krea2-yoneyama / krea2-rella / krea2-asianmix / krea2-anime2real / "
-    "krea2-coscandid / krea2-pokemon / krea2-softlight / krea2-creamy"
-    " = krea2 系 8 条，用户原话点「krea2米山舞 / krea2日系 / krea2亚洲真人 / "
-    "krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油」时对应填；\n"
+    "krea2-coscandid / krea2-pokemon / krea2-softlight / krea2-creamy / "
+    "krea2-real / krea2-general"
+    " = krea2 系 10 条，用户原话点「krea2米山舞 / krea2日系 / krea2亚洲真人 / "
+    "krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油 / "
+    "krea2写实 / krea2通用」时对应填；\n"
+    "  qwen-charsheet = 说「qwen 角色设定表」（7 分区 character design sheet 工作流，\n"
+    "  qwen-image-2.1 上，15 步 ≈ 150s）。\n"
     "  ⚠️ 通用「krea2」已下架，原话只说了 krea2 没带风格词时**别填 krea2 系**"
-    "（那 8 个名字都不是他说的），照默认渠道走。\n"
+    "（那 10 个名字都不是他说的），照默认渠道走。\n"
     "  nffa / cunny / miao = 原话点名才填；\n"
     "  jank = 原话明说「jank」才填（用户自定义渠道）。\n"
     "  silver-hd = silver 的 4x 超清版，原话明说「silver-hd」或「silver 超清」才填。\n"
