@@ -105,8 +105,8 @@ class ChannelParseTest(unittest.TestCase):
                 self.assertEqual(_pc(text),
                                  (skill, desc))
 
-    def test_all_eight_krea2_channels_are_parseable(self):
-        """krea2 系 8 条（2026-10-08 拆 5 条 → 2026-10-09 加 3 条）：
+    def test_all_ten_krea2_channels_are_parseable(self):
+        """krea2 系 10 条（2026-10-08 拆 5 条 → 10-09 加 3 条 → 10-10 加 写实/通用）：
         全名和夹空格两种写法都要认。
 
         中文长名是渠道词，`_FIXED_CHAN_RE` 的边界是 `[0-9A-Za-z_]`——CJK 不算
@@ -120,7 +120,9 @@ class ChannelParseTest(unittest.TestCase):
                           ("krea2真人cos", "krea2-coscandid"),
                           ("krea2宝可梦", "krea2-pokemon"),
                           ("krea2柔光", "krea2-softlight"),
-                          ("krea2奶油", "krea2-creamy")):
+                          ("krea2奶油", "krea2-creamy"),
+                          ("krea2写实", "krea2-real"),
+                          ("krea2通用", "krea2-general")):
             with self.subTest(name=name):
                 self.assertEqual(_pc("%s 1girl" % name), (cid, "1girl"))
                 # 名字里夹空格也认（`krea2 米山舞` / `krea2 真人 cos`）

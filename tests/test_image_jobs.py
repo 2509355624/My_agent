@@ -2873,14 +2873,23 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
         """2026-10-07 用户拍板「全部改成 180 秒，是全部，不要区分」→ 分档表清空，
         所有渠道一律回落 TASK_TIMEOUT（= .env 的 IMAGE_GEN_TIMEOUT，现 180）。
 
-        钉的是**不再分档**这件事：任何渠道都不许再拿一个跟别人不一样的数。
+        2026-10-10 **唯一的例外**：qwen 系两条（`qwen_image_v1` / `qwen-hd`）
+        放宽到 200 —— qwen 单张本来就长（char-sheet 15 步实测 150 s），180 只剩
+        25 s 余量、卡在边界上。**除这两条之外**，任何渠道都不许再拿一个跟别人
+        不一样的数（qwen-charsheet / qwen-restore 也**不在**表里，走 180）。
         """
-        for skill in ("image_gen_v1", "qwen_image_v1", "nffa", "hd_3_clear",
+        for skill in ("image_gen_v1", "nffa", "hd_3_clear",
                       "hd_3_curvy", "hd_3_gloss", "hd_3_soft", "krea2",
-                      "cunny", "miao", "silver", "silver-hd", "jank"):
+                      "cunny", "miao", "silver", "silver-hd", "jank",
+                      "qwen-charsheet", "qwen-restore"):
             self.assertEqual(image_jobs.task_timeout(skill),
                              image_jobs.TASK_TIMEOUT, skill)
         self.assertEqual(image_jobs.TASK_TIMEOUT, 180)
+        # 例外只有 qwen 那两条，且只多 20 秒
+        self.assertEqual(sorted(image_jobs.SKILL_TIMEOUTS),
+                         ["qwen-hd", "qwen_image_v1"])
+        for skill in ("qwen_image_v1", "qwen-hd"):
+            self.assertEqual(image_jobs.task_timeout(skill), 200, skill)
 
     def test_unknown_skill_falls_back_to_global(self):
         """没配的渠道仍走 TASK_TIMEOUT——新渠道不能因为漏配就变慢。"""

@@ -227,6 +227,7 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    "krea2通用": "krea2-general",
                    "qwen": "qwen_image_v1", "qwen-hd": "qwen-hd",
                    "qwen角色设定表": "qwen-charsheet",
+                   "qwen修复": "qwen-restore",
                    "nffa": "nffa", "nai": "nai",
                    "cunny": "cunny", "miao": "miao"}
 _FIXED_CHAN_RE = re.compile(
@@ -236,6 +237,7 @@ _FIXED_CHAN_RE = re.compile(
     r"|krea2\s*宝可梦|krea2\s*柔光|krea2\s*奶油"
     r"|krea2\s*写实|krea2\s*通用"
     r"|qwen\s*角色设定表"
+    r"|qwen\s*修复"
     r"|sd|qwen-hd|qwen|nffa|nai|cunny|miao)"
     r"(?![0-9A-Za-z_])",
     re.I)
@@ -630,6 +632,7 @@ GUIDE_TEXT = (
     "　qwen　慢·写实·能在图里写中文字\n"
     "　qwen-hd　qwen 的 4x 超清 · 4096×6144（更慢更大，别连刷）\n"
     "　qwen角色设定表　参考姿势+三视图（2304×1296，~155s）\n"
+    "　qwen修复　引用图 → 去糊/去噪修清楚（~130s）\n"
     "　sd　　一次多张，多段用 --- 分隔\n"
     "　krea2系　10 条按风格拆：krea2米山舞 / krea2日系 / krea2亚洲真人\n"
     "　　　　　/ krea2动漫真人 / krea2真人cos / krea2宝可梦\n"
@@ -648,6 +651,7 @@ GUIDE_TEXT = (
     "　引用图 + 只@我 → 反推\n"
     "　引用图 + 档位 / 「生成这个」→ 反推后生成\n"
     "　引用图 +「qwen 图生图 + 怎么改」→ 只改那一处（1~2 分钟）\n"
+    "　引用图 +「qwen修复」→ 把这张图修清楚（~130s）\n"
     "　出图回执 +「再来一张」→ 换种子重跑\n"
     "\n"
     "【随机口令】今日老婆 ｜ 随机萝莉 / 兽耳 / 女仆\n"
@@ -698,6 +702,7 @@ MORE_CHAN_TEXT = (
     "　qwen　慢·写实·能在图里写中文字\n"
     "　qwen-hd　qwen 的 4x 超清 · 4096×6144（更慢更大，别连刷）\n"
     "　qwen角色设定表　参考姿势+三视图（2304×1296，~155s）\n"
+    "　qwen修复　引用图 → 去糊/去噪修清楚（~130s）\n"
     "　sd　　一次多张，多段用 --- 分隔\n"
     "　krea2系　10 条按风格拆：krea2米山舞 / krea2日系 / krea2亚洲真人\n"
     "　　　　　/ krea2动漫真人 / krea2真人cos / krea2宝可梦\n"
@@ -717,6 +722,7 @@ MORE_CHAN_TEXT = (
     "　引用图 + 只@我 → 反推\n"
     "　引用图 + 档位 → 反推后生成\n"
     "　引用图 +「qwen 图生图 + 怎么改」→ 只改那一处\n"
+    "　引用图 +「qwen修复」→ 把这张图修清楚（~130s）\n"
     "　出图回执 +「再来一张」→ 换种子重跑"
 )
 
@@ -920,6 +926,8 @@ _MASTER_TEMPLATE = (
     "- qwen-charsheet = qwen 上的角色设定表工作流"
     "（Character_Sheet_Production 改造版，左参考姿势全身图 + 右三视图，纯人物无文字，18 步 ≈ 155s）；"
     "明说「qwen 角色设定表」才填。\n"
+    "- qwen-restore = **图生图修复**（引用图 = 被修复的原图；qwen-image-2.1 + "
+    "修复 LoRA，1536 面积档 / 18 步 ≈ 130s）；原话说「qwen修复」就是它。\n"
     "{chan_hint}"
     "\n"
     "【图生图：引用图就填，两条路分清楚】\n"
@@ -931,6 +939,10 @@ _MASTER_TEMPLATE = (
     " ② **明说「qwen 图生图」+ 只改一处**（其余原样）→ `source_image` 填 1，"
     "配 skill=qwen_image_v1（明说「qwen 超清 / qwen超清」时换 qwen-hd），"
     "prompt 只写一句改动指令（一张 1~2 分钟）。\n"
+    " ③ **「qwen修复」**（引用图 + 说这三个字）= 把**这张图本身**修清楚 / 去噪 / "
+    "去糊，不是重画一张。**本轮有引用图时，代码专路已经自己入队了、根本轮不到你**；"
+    "你走到这里只可能是**没给图**——那就直说「qwen修复 得配一张图」，"
+    "**别改成别的渠道、也别凭空画一张**。\n"
     "  ⚠️ jank / nffa / cunny / miao / krea2 系 / sd **没有图生图骨架**，"
     "别给它们填 `source_image`——要垫图就换 silver 系或 qwen 系。\n"
     "  ⚠️ 只是评价这张图 / 只要反推提示词 → **不填** `source_image`，也别画。\n"
@@ -999,6 +1011,8 @@ _REVISE_TEMPLATE = (
     "krea2写实 / krea2通用」时对应填；\n"
     "  qwen-charsheet = 说「qwen 角色设定表」（参考姿势+三视图 character design sheet 工作流，\n"
     "  qwen-image-2.1 上，2304×1296 / 18 步 ≈ 155s）。\n"
+    "  qwen-restore = 说「qwen修复」（**引用图修复**工作流，qwen-image-2.1 + 修复 LoRA，\n"
+    "  1536 面积档 / 18 步 ≈ 130s；引用图轮由代码专路直接入队，不用你填 skill）。\n"
     "  ⚠️ 通用「krea2」已下架，原话只说了 krea2 没带风格词时**别填 krea2 系**"
     "（那 10 个名字都不是他说的），照默认渠道走。\n"
     "  nffa / cunny / miao = 原话点名才填；\n"
@@ -1018,6 +1032,9 @@ _REVISE_TEMPLATE = (
     "（明说「qwen 超清 / qwen超清」时填 qwen-hd）、"
     "prompt 只写**一句改动指令**（例 `change her coat to red, keep the pose, "
     "face and background exactly the same`），不要把整张图重新描述一遍。\n"
+    " ③ **「qwen修复」**（引用图 + 说这三个字）= 把**这张图本身**修清楚 / 去噪 / "
+    "去糊，不是重画。**本轮有引用图时代码专路已经自己入队了、轮不到你**；"
+    "你走到这里只可能是**没给图**——直说「qwen修复 得配一张图」就行。\n"
     "  ⚠️ jank / nffa / cunny / miao / krea2 系 / sd **没有图生图骨架**，"
     "别给它们填 `source_image`。只是评价这张图 → **不填**。\n"
     "- {lang}\n"
@@ -1754,6 +1771,19 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     # 自己的描述（没有就留空，版式指令全在工作流内置静态提示词里）。
     # 没引用图不在这里拦，落到通用路径 → generate_image 的「需要参考图」闸给报错。
     if ch == "qwen-charsheet" and data_urls:
+        prompt = (desc or "").strip()
+        _remember_job(session_key, ch, prompt)
+        return _enqueue(ch, prompt, text, source_image=True)
+
+    # ── qwen-restore 专路：引用图 = 要修复的原图，直接当 source 入队 ──
+    # 同 qwen-charsheet 的道理（2026-10-10 加，用户口径「引用图片 + qwen修复
+    # 就触发了」）：本渠道**没有文生图模式**，参考图就是被修复的那张原图。
+    # 而下面通用的「引用图 + 只打渠道词」分支（`if ch and not desc:` →
+    # `_enqueue(ch, tags, text, seed=seed)`）**不带 source_image**——它会去账本 /
+    # 识图反推提示词，把这张图当**文生图**重画一遍。用户要的是「把这张图本身
+    # 拿去修」，不是「照着这张图另画一张」，所以在「引用图轮」之前拦下来。
+    # 用户附带的要求（「qwen修复 脸修清楚点」）拼在固定的修复指令后面，见骨架。
+    if ch == "qwen-restore" and data_urls:
         prompt = (desc or "").strip()
         _remember_job(session_key, ch, prompt)
         return _enqueue(ch, prompt, text, source_image=True)

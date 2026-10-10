@@ -319,19 +319,20 @@ class I2IWorkflowShapeTest(unittest.TestCase):
         return wf
 
     def test_the_whitelist_is_redraw_plus_lllite_plus_qwen(self):
-        """白名单 = 12 个重绘档 + 6 个锁构图档 + qwen 两个编辑档，共 20。"""
+        """白名单 = 12 个重绘档 + 6 个锁构图档 + qwen 三个编辑/修复档，共 22。"""
         self.assertEqual(len(gi._I2I_ANIMA_SKILLS), 12)
         self.assertEqual(len(gi._I2I_LLLITE_SKILLS), 6)
         self.assertEqual(
             gi._I2I_SKILLS,
             gi._I2I_ANIMA_SKILLS + gi._I2I_LLLITE_SKILLS
-            + ("qwen_image_v1", "qwen-hd"))
-        self.assertEqual(len(gi._I2I_SKILLS), 20)
+            + ("qwen_image_v1", "qwen-hd", "qwen-charsheet", "qwen-restore"))
+        self.assertEqual(len(gi._I2I_SKILLS), 22)
         # 两组机制不许重叠：同一份骨架不可能既删 EmptyLatentImage 又留着它
         self.assertEqual(
             set(gi._I2I_ANIMA_SKILLS) & set(gi._I2I_LLLITE_SKILLS), set())
         for skill in ("anima_clear", "anima_curvy", "hd_fast_clear",
-                      "hd_2_curvy", "qwen_image_v1", "qwen-hd"):
+                      "hd_2_curvy", "qwen_image_v1", "qwen-hd",
+                      "qwen-charsheet", "qwen-restore"):
             self.assertIn(skill, gi._I2I_SKILLS)
         for skill in ("krea2", "image_gen_v1", "nffa", "miao", "cunny"):
             self.assertNotIn(skill, gi._I2I_SKILLS)

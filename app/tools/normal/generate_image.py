@@ -98,7 +98,8 @@ _I2I_LLLITE_SKILLS = ("silver", "silver-hd") + tuple(
     "hd_3_" + s for s in _I2I_STYLES)
 
 _I2I_SKILLS = (_I2I_ANIMA_SKILLS + _I2I_LLLITE_SKILLS
-               + ("qwen_image_v1", "qwen-hd", "qwen-charsheet"))
+               + ("qwen_image_v1", "qwen-hd", "qwen-charsheet",
+                  "qwen-restore"))
 
 # ① 一段的重绘强度。**不给模型调**——它一调就会以为「调低 = 只微调」，
 # 而对方要的是「照这张重画一张」。0.6 是实测既保得住构图、又出得来细节的位置。
@@ -428,6 +429,7 @@ _RECEIPT_NOTE_DEFAULT = (
     "渠道：silver（默认）/ anima（三档）/ qwen / nai / jank / sd / nffa / miao / cunny\n"
     "krea2 系（10 条，按风格拆）：krea2米山舞 / krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油 / krea2写实 / krea2通用\n"
     "要角色设定表（参考姿势 + 三视图）：发「qwen 角色设定表 + 描述」（qwen 自己的角色表工作流，~155s）\n"
+    "要修图（去糊/去噪/修清楚）：引用那张图 + 发「qwen修复」（qwen 的修复工作流，~130s）\n"
     "要 4x 超清：silver 发「silver-hd + 需求」，qwen 发「qwen 超清 + 需求」（也认 silver超清 / qwen超清）\n"
     "qwen 超清支持图生图：发「qwen 超清，图生图，描述」（附一张图）\n"
     "要横屏：加「横屏」（例：silver 横屏 一个女孩）\n"
@@ -920,6 +922,13 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
                 "画风与配色。请**引用或附上**一张角色图，再发「qwen 角色设定表 "
                 "+ 你的描述」。")
 
+    # qwen-restore（修复）同理：参考图就是**被修复的那张原图**，没有它这个
+    # 渠道根本没有输入。用户只说「qwen修复」却没给图时直说，别让他去猜。
+    if skill == "qwen-restore" and not is_i2i:
+        return ("错误: qwen修复 需要一张要修复的图——它就是被修复的原图。"
+                "请**引用或附上**那张图，再说「qwen修复」（想附带要求就写在后面，"
+                "如「qwen修复 去掉噪点」）。")
+
     # 图生图：给了源图就换成图生图工作流，并先把源图送进 ComfyUI 的 input
     # 目录。取图 / 缩放 / 上传任何一步失败都当场返回，**不退回文生图**——
     # 对方以为改的是自己那张，收到的却是凭空画的，比直接报错糟得多。
@@ -1134,6 +1143,14 @@ tool = {
                   "（Front / Side / Back 并排）。**prompt 走工作流内置静态提示词**，不要再写。"
                   "引用一张图 = 图生图（走 `source_image=1`，参考图经 "
                   "`TextEncodeQwenImage21.resolution=1536`）。纯人物、**不画任何文字/标题/色卡**。\n"
+                  "- **qwen-restore**（qwen 上的**修复**工作流，"
+                  "1536 面积档，单段 **18 步 / res_multistep+beta** / cfg 1，~130s）："
+                  "**只在用户明说「qwen修复」时传，且必须配 `source_image=1`**"
+                  "（参考图就是被修复的原图，本渠道**没有文生图模式**）。"
+                  "挂的是修复 LoRA（去糊 / 去噪 / 去压缩痕迹 / 找回锐利细节），"
+                  "prompt 走工作流内置修复指令，用户附带的要求会自动拼在后面。"
+                  "⚠️ 引用图 +「qwen修复」这一轮由 `direct_gen` 的专路直接入队，"
+                  "模型侧一般不用管；只在 agent 路径上才需要自己传。\n"
                   "- **krea2 系 10 条**（krea2米山舞 / krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油 / krea2写实 / krea2通用）："
                   "832×1216 → 二段 1664×2432 → 2x → **3328×4864**，只有风格 LoRA 不同、**点名要带风格词**；"
                   "krea2米山舞 风格前缀自动拼、**不要自己再写**，其余标签式英文自己写；"
@@ -1205,6 +1222,13 @@ tool = {
                   "那 12 个渠道 2026-10-07 已被屏蔽，模型连名字都看不到。\n"
                   "取不到源图会当场报错——"
                   "**绝不退回文生图凭空画一张**，对方以为改的是自己那张，收到别的构图比直接说改不了糟得多。\n\n"
+                  "【要「修图」→ qwen-restore（引用图 + 说「qwen修复」）】"
+                  "把**这张图本身**修清楚：去糊 / 去噪 / 去压缩痕迹 / 找回锐利细节，"
+                  "**不是重画一张**。传法：`skill=qwen-restore` + `source_image=1`；"
+                  "prompt 可留空（工作流内置了修复指令），用户有额外要求就照写、会自动拼在后面。"
+                  "⚠️ 群聊里「引用图 + 原话里有 qwen修复」这一轮由 `direct_gen` 的专路**直接入队**，"
+                  "轮不到模型填参数——你只要回一句话，**别再去调工具、别改成别的渠道**。"
+                  "没给图会当场报错（本渠道没有文生图模式）。**慢：一张 ~130 秒**，别在群里连刷。\n\n"
                   "【nai / nai_wide（NovelAI 云端）】**仅限管理员为特定群开通后**才能用，图由群主的 NovelAI 账号在云端出，"
                   "跟本机 ComfyUI 无关；本群没开通就传了会被直接拒绝——照实说这个渠道本群用不了、让对方去找群主开。\n"
                   "- 文生图：skill 传 nai（**竖版 832×1216**）或 nai_wide（**横版 1216×832**），"
@@ -1226,9 +1250,9 @@ tool = {
         "type": "object",
         "properties": {
             "prompt": {"type": "string", "description": "提示词。**开头先写角色名**（认得出就写：英文 tag 渠道 `rudeus greyrat, mushoku tensei`；qwen 的自然语言句子里写「鲁迪乌斯（无职转生）」）——没有任何渠道自带角色，**名字才是还原度最高的那一行**，外貌只补与原设定不同的部分。\n默认渠道写**逗号分隔的标签式英文短句，只写一段、不要用 --- 分隔**（只有 skill=image_gen_v1 认 ` --- ` 分隔、一次出多张；其它渠道会把 --- 当普通文字，要出多张就分多次调用、每次一个变体）。\n两个例外：skill=qwen_image_v1 写**自然语言句子**（不写标签堆）；**它当改图渠道用时（同时传 source_image）只写一句改动指令**，例如 `change her coat to red, keep the pose, face and background exactly the same`——**不要把整张图重新描述一遍**。"},
-            "skill": {"type": "string", "description": "渠道名。**不传就是默认渠道 " + T2I_DEFAULT_SKILL + "**（用户自定义的 Anima 渠道）。可选值见 Available Skills 的生图类（4 个动漫渠道 = 4 画风 × 1 尺寸档 `hd_3_<画风>`，另有 silver / silver-hd / jank / qwen_image_v1 / qwen-hd / image_gen_v1 / krea2系 / nffa / nai / nai_wide），各自画风/尺寸/场景/速度见那一行里。\n**只在用户点名画风 / 尺寸 / 渠道时才传，平时一律不传**。**说「anima」或「三档」= 点名尺寸，要传 `hd_3_<画风>`（只剩三档）**；但光说「高清 / 清晰 / 画质好」不算，那只是形容词，照默认不传。\n分不清就照 Available Skills 那行摘要选，选错用户会说；细节可 load_skill 读该渠道主规范。"},
+            "skill": {"type": "string", "description": "渠道名。**不传就是默认渠道 " + T2I_DEFAULT_SKILL + "**（用户自定义的 Anima 渠道）。可选值见 Available Skills 的生图类（4 个动漫档 `hd_3_<画风>`，另有 silver / silver-hd / jank / qwen_image_v1 / qwen-hd / qwen-charsheet / qwen-restore / image_gen_v1 / krea2系 / nffa / nai / nai_wide）。\n**只在用户点名画风 / 尺寸 / 渠道时才传，平时一律不传**。**说「anima」或「三档」= 点名尺寸，要传 `hd_3_<画风>`（只剩三档）**；但光说「高清 / 清晰 / 画质好」不算，那只是形容词，照默认不传。\n分不清就照 Available Skills 那行摘要选；细节可 load_skill 读该渠道主规范。"},
             "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传，每个渠道 2 个槽"},
-            "source_image": {"type": "string", "description": "参考图：填 1 = 用本轮出现的那张图（优先取对方引用的，其次他自己刚发的；两样都没有会报错）。\n**引用/附图 + 要画就填**（「复刻 / 参考这个 / 照着画一张 / 把衣服换成jk」都算）——那张图会被当成构图条件喂进去、**锁住构图**，出图仍是重画的、尺寸仍是本档画布，**渠道不用改**（silver / silver-hd / 高清三档都有锁构图骨架）。prompt 照常写完整画面描述，不是写改动指令。\n**只是让你看图点评 / 反推提示词 / 问这图什么来头 → 不传。**\n要「**只改一处、其余原样**」的编辑才配 `skill=qwen_image_v1`（参考图编辑，只改那一句交代的地方、其余原样；慢，一张 1~2 分钟），prompt 只写**一句改动指令**；明说「qwen 超清」时换 `qwen-hd`。\n`jank` / `nffa` / `cunny` / `miao` / `krea2-*` / `sd` 没有骨架，别给它们传。skill=nai 也支持垫图（云端）。动漫档（anima_* / hd_*）的**垫图重绘**骨架还在，但**用法上已撤掉**，别再拿它当图生图渠道。本机渠道的重绘强度是定死的，传 denoise 也没用。"},
+            "source_image": {"type": "string", "description": "参考图：填 1 = 用本轮出现的那张图（优先取对方引用的，其次他自己刚发的；两样都没有会报错）。\n**引用/附图 + 要画就填**（「复刻 / 参考这个 / 照着画一张 / 把衣服换成jk」都算）——那张图会被当成构图条件喂进去、**锁住构图**，出图仍是重画的、尺寸仍是本档画布，**渠道不用改**（silver / silver-hd / 高清三档都有锁构图骨架）。prompt 照常写完整画面描述，不是写改动指令。\n**只是让你看图点评 / 反推提示词 / 问这图什么来头 → 不传。**\n要「**只改一处、其余原样**」的编辑才配 `skill=qwen_image_v1`（参考图编辑，只改那一句交代的地方、其余原样；慢，一张 1~2 分钟），prompt 只写**一句改动指令**；明说「qwen 超清」时换 `qwen-hd`。\n要「**修图**」（去糊 / 去噪 / 修清楚，**把这张图本身修好、不是重画**）配 `skill=qwen-restore`（用户明说「qwen修复」才用；~130 秒），prompt 可留空。\n`jank` / `nffa` / `cunny` / `miao` / `krea2-*` / `sd` 没有骨架，别给它们传。skill=nai 也支持垫图（云端）。动漫档（anima_* / hd_*）的**垫图重绘**骨架还在，但**用法上已撤掉**，别再拿它当图生图渠道。本机渠道的重绘强度是定死的，传 denoise 也没用。"},
             "seed": {"type": "integer", "description": "生图种子，**只在对方点名要「用某个种子重画 / 换提示词再来一张」时才传**，平时一律不传（不传=随机）。范围 0 ~ 4294967295 的整数，填错格式/超界会直接报错，别猜。种子会跟着编号印在图那行 caption 上（`编号 · 分辨率 · 渠道 · seed 数字`），对方引用那条消息时能一起带回来。⚠️ 同一个种子只有配**同样的提示词 + 同样的渠道 + 同样的 lora**才画得出同一张图（改提示词重画=构图大体在、细节变）；动漫渠道是两段采样、两段共用这一个种子，所以只有这一个数。**只有本机渠道认**（hd_* / qwen_image_v1 / image_gen_v1 / krea2-* / nffa），skill=nai 传了会被拒；image_gen_v1 一次出多张时第 k 张 = 这个数 + k - 1"}
         },
         "required": ["prompt"]

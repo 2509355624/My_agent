@@ -1122,10 +1122,11 @@ class HdChannelTest(unittest.TestCase):
 KREA2_CHANNELS = [
     "krea2-yoneyama", "krea2-rella", "krea2-asianmix", "krea2-anime2real",
     "krea2-coscandid", "krea2-pokemon", "krea2-softlight", "krea2-creamy",
+    "krea2-real", "krea2-general",
 ]
 
 # 含骨架 `krea2` 自己：它已下架（不在 `list_skills()` 里、点名不到），但目录和
-# 文档都还在原地，改骨架时照样得跟着走。形状锁只圈那 8 条在卖的，文档锁得算它。
+# 文档都还在原地，改骨架时照样得跟着走。形状锁只圈那 10 条在卖的，文档锁得算它。
 KREA2_ALL_DIRS = ["krea2"] + KREA2_CHANNELS
 
 # 中文点名别名 → 目录名。顺序与 `direct_gen._FIXED_CHAN_RE` 里的分支一致
@@ -1139,11 +1140,13 @@ KREA2_ALIASES = (
     ("krea2宝可梦", "krea2-pokemon"),
     ("krea2柔光", "krea2-softlight"),
     ("krea2奶油", "krea2-creamy"),
+    ("krea2写实", "krea2-real"),
+    ("krea2通用", "krea2-general"),
 )
 
 
 class Krea2ChannelTest(unittest.TestCase):
-    """krea2 系 8 条（2026-10-08 拆 5 条 → 2026-10-09 加 3 条）的形状锁。
+    """krea2 系 10 条（2026-10-08 拆 5 条 → 10-09 加 3 条 → 10-10 加 写实/通用）的形状锁。
 
     2026-10-09 改动：原来 krea2 是 **832×1216 单段 → 4x → 3328×4864**，
     最终 16.19 MP 全场最大，但**真实细节只有 1.01 MP（全场最低）**——末尾那道
@@ -1152,8 +1155,8 @@ class Krea2ChannelTest(unittest.TestCase):
     1.01 → 4.05 MP，最终仍是 3328×4864。
     """
 
-    def test_all_eight_exist(self):
-        """恰好这 8 条。多一条 / 少一条都说明目录建歪了。"""
+    def test_all_ten_exist(self):
+        """恰好这 10 条。多一条 / 少一条都说明目录建歪了。"""
         found = sorted(s for s in list_skills() if s.startswith("krea2-"))
         self.assertEqual(found, sorted(KREA2_CHANNELS),
                          "krea2 渠道集合变了——目录建漏了还是名字写错了？")
@@ -1313,8 +1316,8 @@ class Krea2ChannelTest(unittest.TestCase):
             neg = wf[s1]["inputs"]["negative"][0]
             self.assertEqual(wf[neg]["inputs"]["text"], "", name)
 
-    def test_qq_and_draw_whitelists_include_all_eight(self):
-        """两个 agent 的白名单都要有这 8 条。
+    def test_qq_and_draw_whitelists_include_all_ten(self):
+        """两个 agent 的白名单都要有这 10 条。
 
         `allows_skill()` **只认** `agents/*/agent.json` 的 skills 白名单：
         目录建了、工具描述写了，白名单漏了照样点不到（会被静默降级成 silver）。
@@ -1326,7 +1329,7 @@ class Krea2ChannelTest(unittest.TestCase):
                                 "%s 白名单缺 %s" % (agent_id, name))
 
     def test_chinese_aliases_are_all_routed(self):
-        """8 个中文点名别名都要进 `_FIXED_CHAN_MAP` + 正则，夹空格也认。"""
+        """10 个中文点名别名都要进 `_FIXED_CHAN_MAP` + 正则，夹空格也认。"""
         from app.direct_gen import _FIXED_CHAN_MAP, _FIXED_CHAN_RE, _parse_channel
         for alias, cid in KREA2_ALIASES:
             with self.subTest(alias=alias):
@@ -1338,16 +1341,16 @@ class Krea2ChannelTest(unittest.TestCase):
         # 裸 krea2 已下架，一个都不许命中
         self.assertIsNone(_FIXED_CHAN_RE.search("krea2 一个女孩"))
 
-    def test_tool_description_lists_all_eight(self):
-        """工具描述那张渠道清单要写全 8 条**别名**，否则模型编不出新渠道名。"""
+    def test_tool_description_lists_all_ten(self):
+        """工具描述那张渠道清单要写全 10 条**别名**，否则模型编不出新渠道名。"""
         from app.tools.normal.generate_image import tool
         desc = tool["description"]
         for alias, _cid in KREA2_ALIASES:
             self.assertIn(alias, desc, "工具描述没写渠道 %s" % alias)
-        self.assertIn("8 条", desc)
+        self.assertIn("10 条", desc)
 
-    def test_revise_template_lists_all_eight_ids(self):
-        """改图管道（`_REVISE_TEMPLATE`）里要写全 8 条**目录名**。
+    def test_revise_template_lists_all_ten_ids(self):
+        """改图管道（`_REVISE_TEMPLATE`）里要写全 10 条**目录名**。
 
         它不走 `_MASTER_TEMPLATE`，渠道清单得自己写一份——两处漏一处，
         那条管道就认不出新渠道（用户引用一张图 + 点名 krea2奶油 → 静默走默认档）。
