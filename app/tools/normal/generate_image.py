@@ -427,7 +427,7 @@ _RECEIPT_NOTE_DEFAULT = (
     "想换渠道就发「渠道名 + 你的需求」（例：jank 银发初音未来）。\n"
     "渠道：silver（默认）/ anima（三档）/ qwen / nai / jank / sd / nffa / miao / cunny\n"
     "krea2 系（10 条，按风格拆）：krea2米山舞 / krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油 / krea2写实 / krea2通用\n"
-    "要角色设定表（主角色 + 三视图）：发「qwen 角色设定表 + 描述」（qwen 自己的角色表工作流，~110s）\n"
+    "要角色设定表（肖像 + 三视图）：发「qwen 角色设定表 + 描述」（qwen 自己的角色表工作流，~110s）\n"
     "要 4x 超清：silver 发「silver-hd + 需求」，qwen 发「qwen 超清 + 需求」（也认 silver超清 / qwen超清）\n"
     "qwen 超清支持图生图：发「qwen 超清，图生图，描述」（附一张图）\n"
     "要横屏：加「横屏」（例：silver 横屏 一个女孩）\n"
@@ -911,7 +911,7 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     if not skill_data or not skill_data["workflow"]:
         return "错误: 找不到 Skill '" + skill + "'"
 
-    # qwen-charsheet（主角色 + 三视图）骨架里 TextEncodeQwenImage21 必须吃一张
+    # qwen-charsheet（肖像 + 三视图）骨架里 TextEncodeQwenImage21 必须吃一张
     # 参考图（images.image_1）才能编码——它没有纯文生图模式，参考图就是角色 /
     # 画风 / 配色的来源。用户没给参考图就直说，别拿到 ComfyUI 里报一个看不懂的
     # 缺输入错误（_t2i_guard 把 source_image 清掉时也会落到这里，同样该报）。
@@ -1129,8 +1129,8 @@ tool = {
                   "文生图/图生图**都支持**（它的图生图骨架同样只换了放大，出图一样是 4x）；"
                   "说「qwen 超清 图生图」= 它 + `source_image=1`\n"
                   "- **qwen-charsheet**（qwen 上的角色设定表工作流，"
-                  "1536×1536，单段 **15 步 / res_multistep+beta** / cfg 1，~110s）："
-                  "只在用户明说「qwen 角色设定表」时传。出 **主角色全身大图 + 三视图**"
+                  "2048×1152，单段 **15 步 / res_multistep+beta** / cfg 1，~110s）："
+                  "只在用户明说「qwen 角色设定表」时传。出 **肖像特写 + 三视图**"
                   "（Front / Side / Back 并排）。**prompt 走工作流内置静态提示词**，不要再写。"
                   "引用一张图 = 图生图（走 `source_image=1`，参考图经 "
                   "`TextEncodeQwenImage21.resolution=1536`）。纯人物、**不画任何文字/标题/色卡**。\n"
