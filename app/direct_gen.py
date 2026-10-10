@@ -629,7 +629,7 @@ GUIDE_TEXT = (
     "　jank　NoobAI 自定义（有权号词就用它）\n"
     "　qwen　慢·写实·能在图里写中文字\n"
     "　qwen-hd　qwen 的 4x 超清 · 4096×6144（更慢更大，别连刷）\n"
-    "　qwen角色设定表　肖像+三视图（2048×1152，~110s）\n"
+    "　qwen角色设定表　参考姿势+三视图（2304×1296，~155s）\n"
     "　sd　　一次多张，多段用 --- 分隔\n"
     "　krea2系　10 条按风格拆：krea2米山舞 / krea2日系 / krea2亚洲真人\n"
     "　　　　　/ krea2动漫真人 / krea2真人cos / krea2宝可梦\n"
@@ -697,7 +697,7 @@ MORE_CHAN_TEXT = (
     "　jank　NoobAI 自定义（有权号词就用它）\n"
     "　qwen　慢·写实·能在图里写中文字\n"
     "　qwen-hd　qwen 的 4x 超清 · 4096×6144（更慢更大，别连刷）\n"
-    "　qwen角色设定表　肖像+三视图（2048×1152，~110s）\n"
+    "　qwen角色设定表　参考姿势+三视图（2304×1296，~155s）\n"
     "　sd　　一次多张，多段用 --- 分隔\n"
     "　krea2系　10 条按风格拆：krea2米山舞 / krea2日系 / krea2亚洲真人\n"
     "　　　　　/ krea2动漫真人 / krea2真人cos / krea2宝可梦\n"
@@ -917,8 +917,8 @@ _MASTER_TEMPLATE = (
     "明说「silver-hd / silver 超清」才填，否则走 silver。\n"
     "- qwen-hd = qwen 的 4x 超清版（只换放大，4096×6144）；"
     "明说「qwen-hd / qwen 超清」才填，否则走 qwen。\n"
-    "- qwen-charsheet = qwen 上的 7 分区 character design sheet 工作流"
-    "（Character_Sheet_Production 改造版，右下细节格默认无文字，15 步 ≈ 150s）；"
+    "- qwen-charsheet = qwen 上的角色设定表工作流"
+    "（Character_Sheet_Production 改造版，左参考姿势全身图 + 右三视图，纯人物无文字，18 步 ≈ 155s）；"
     "明说「qwen 角色设定表」才填。\n"
     "{chan_hint}"
     "\n"
@@ -997,8 +997,8 @@ _REVISE_TEMPLATE = (
     " = krea2 系 10 条，用户原话点「krea2米山舞 / krea2日系 / krea2亚洲真人 / "
     "krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油 / "
     "krea2写实 / krea2通用」时对应填；\n"
-    "  qwen-charsheet = 说「qwen 角色设定表」（肖像+三视图 character design sheet 工作流，\n"
-    "  qwen-image-2.1 上，2048×1152 / 15 步 ≈ 110s）。\n"
+    "  qwen-charsheet = 说「qwen 角色设定表」（参考姿势+三视图 character design sheet 工作流，\n"
+    "  qwen-image-2.1 上，2304×1296 / 18 步 ≈ 155s）。\n"
     "  ⚠️ 通用「krea2」已下架，原话只说了 krea2 没带风格词时**别填 krea2 系**"
     "（那 10 个名字都不是他说的），照默认渠道走。\n"
     "  nffa / cunny / miao = 原话点名才填；\n"
@@ -1748,7 +1748,7 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     # ── qwen-charsheet 专路：引用图 = 角色参考图，直接当 source 入队 ──
     # 这个渠道**没有纯文生图模式**：TextEncodeQwenImage21 必须吃一张参考图
     # （images.image_1）才能编码。用户「引用一张图 + 说 qwen 角色设定表」期望的是
-    # 「拿这张图出 7 分区角色表」，不是「把这张图识图反推再文生图重画」（那条路
+    # 「拿这张图出角色设定表」，不是「把这张图识图反推再文生图重画」（那条路
     # 会把图当「要复刻的提示词」、source_image 却空着，最后撞上「需要参考图」闸）。
     # 所以在下面的「引用图轮」之前拦截：有图就强制 source_image=1，prompt 用用户
     # 自己的描述（没有就留空，版式指令全在工作流内置静态提示词里）。
