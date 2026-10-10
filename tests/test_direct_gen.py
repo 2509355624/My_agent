@@ -1243,7 +1243,7 @@ class MasterPromptTest(unittest.TestCase):
         self.assertIn("recall_image", t)
         self.assertIn("generate_comic", t)
         # 模板本身要短：一句话一个工具，不给每个渠道写专属规则。
-        # 2026-10-10：2100 → 7000（**用户拍板**：「提示词长度我最多允许你 7000 字」）。
+        # 2026-10-09：2100 → 7000（**用户拍板**：「提示词长度我最多允许你 7000 字」）。
         # 同批把【图生图】段从「默认不做、只认点名」翻成「引用图就填」。
         self.assertLess(len(t), 7000, "模板超长了，工具列表应该一句话一个")
 
@@ -1257,6 +1257,36 @@ class MasterPromptTest(unittest.TestCase):
         self.assertIn("连续多格小漫画", t)
         self.assertIn("brief", t)
         self.assertIn("panels", t)
+
+    def test_template_no_longer_teaches_the_dash_batch(self):
+        """2026-10-09 用户拍板：sd 保留，但**提示词不再告诉 AI「--- 可以批量」**。
+
+        病根是渠道清单里那一行「sd = image_gen_v1，一次出多张（prompt 里用
+        --- 分段）」——模型据此把「生成 10 张 XX」写成 `---` 分段交给 sd。
+        而 sd 的骨架是 720×1280 / 30 步 + 高清 20 步 @1440×2560（每张 50 步），
+        10 张在 180 秒里**结构性跑不完**：10-09 当天 sd 出现 9 次、
+        **0 成功 / 3 次超时**（14:14 / 14:21 / 14:29，原话都是「生成10张…」）。
+
+        用户的判断：「提示词不告诉 AI 就不会 --- 跑这个了」。
+        """
+        t = self._rendered()
+        self.assertNotIn("---", t, "模板里不许再出现 ---（会诱导模型走 sd 批量）")
+        self.assertNotIn("一次出多张", t)
+        self.assertNotIn("一次多张", t)
+
+    def test_multi_image_requests_are_routed_to_comic(self):
+        """「要 N 张」必须有明确出口，否则模型只能继续用 sd 那套。
+
+        出口只有 `generate_comic`——它走 `_comic_batch`（silver 的模型栈，
+        816×1024 / 10 步、一次提交出全部 N 张）。10-08 实测：4 格 61 秒、
+        10 格 120~190 秒，是唯一跑得完的多张路径。
+        只说「漫画 / 连环画」不够——用户原话是「生成 10 张申鹤的图片」。
+        """
+        t = self._rendered()
+        seg = t[t.index("generate_comic"):]
+        seg = seg[:seg.index("不需要动手")] if "不需要动手" in seg else seg
+        self.assertRegex(seg, r"[NnＮ]\s*张",
+                         "generate_comic 的契约行里要写清「要 N 张也用它」")
 
     def test_custom_channels_are_listed_for_the_ai(self):
         """自定义渠道（silver / silver-hd / jank）是本地事实，模型猜不出来，
@@ -1333,7 +1363,7 @@ class MasterPromptTest(unittest.TestCase):
         # 2026-10-08：3300 → 3320。同上：krea2 拆 5 条，渠道清单那行变长。
         # 2026-10-09：3320 → 3340。krea2 再加 3 条（宝可梦 / 柔光 / 奶油），
         # 清单那行 +31 字（实测渲染 3329）。同样是渠道名，不是散文。
-        # 2026-10-10：3340 → 7000（**用户拍板**：「提示词长度我最多允许你 7000 字」）。
+        # 2026-10-09：3340 → 7000（**用户拍板**：「提示词长度我最多允许你 7000 字」）。
         # 这次不是渠道名，是【图生图】段的**口径翻转**：从「默认不做、只认点名」
         # 改成「引用图 + 要画 → 传 source_image、渠道不用改」（silver / silver-hd /
         # 高清三档都接了锁构图骨架）。实测渲染 3619。
