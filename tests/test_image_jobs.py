@@ -2873,17 +2873,18 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
     用户原话「我能接受 5 分钟一张图」，300 秒余量太薄。
     2026-10-10 16:05 用户又砍步数（角色表 25→16、修复 18→16，理由「耗时太长」），
     **400 秒上限没动**——用户只说了步数。
+    2026-10-10 17:07 用户把上限**收到 220 秒**（同一轮又把角色表画布改回
+    3072×2048，并给角色表与修复各挂一条 4x 超分链）。真机实测角色表那条
+    534.88 秒都没跑完 ⇒ 220 装不下它；但上限是用户当次指令，照办。
     """
 
     def test_every_channel_gets_the_same_limit(self):
         """2026-10-07 用户拍板「全部改成 180 秒，是全部，不要区分」→ 分档表清空，
         所有渠道一律回落 TASK_TIMEOUT（= .env 的 IMAGE_GEN_TIMEOUT，现 180）。
 
-        2026-10-10 晚用户重新开口：**qwen 系四条一律 400 秒**
-        （`qwen_image_v1` / `qwen-hd` / `qwen-charsheet` / `qwen-restore`）。
-        起因是角色表恢复 7 分区并把生成画布提到 3072×2048，180 必超时、300 余量也太薄；
-        修复同时提到 resolution 2048。
-        （步数后来由用户砍到 16，上限仍是 400——**这条只锁上限，不锁步数**。）
+        2026-10-10 晚用户重新开口：**qwen 系四条**（`qwen_image_v1` / `qwen-hd` /
+        `qwen-charsheet` / `qwen-restore`）先是 400 秒；**2026-10-10 17:07 收到 220 秒**。
+        这条只锁「例外只有这四条、且它们取同一个值」，**不锁步数、也不锁画布**。
         **除这四条之外**，任何渠道都不许再拿一个跟别人不一样的数。
         """
         for skill in ("image_gen_v1", "nffa", "hd_3_clear",
@@ -2893,13 +2894,13 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
             self.assertEqual(image_jobs.task_timeout(skill),
                              image_jobs.TASK_TIMEOUT, skill)
         self.assertEqual(image_jobs.TASK_TIMEOUT, 180)
-        # 例外只有 qwen 那四条，且一律 400
+        # 例外只有 qwen 那四条，且一律 220
         self.assertEqual(sorted(image_jobs.SKILL_TIMEOUTS),
                          ["qwen-charsheet", "qwen-hd", "qwen-restore",
                           "qwen_image_v1"])
         for skill in ("qwen_image_v1", "qwen-hd", "qwen-charsheet",
                       "qwen-restore"):
-            self.assertEqual(image_jobs.task_timeout(skill), 400, skill)
+            self.assertEqual(image_jobs.task_timeout(skill), 220, skill)
 
     def test_unknown_skill_falls_back_to_global(self):
         """没配的渠道仍走 TASK_TIMEOUT——新渠道不能因为漏配就变慢。"""
