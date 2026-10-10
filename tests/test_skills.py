@@ -6,6 +6,7 @@ Skill 是用户的"个人知识"载体，目录结构有两种风格（本地生
 VERSION + references/），还可能多一层同名嵌套。这些兼容规则值得钉住。
 """
 
+import json
 import os
 import re
 import tempfile
@@ -203,6 +204,51 @@ class RealSkillsDataTest(unittest.TestCase):
             checked.append(name)
 
         self.assertTrue(checked, "skills/ 下没找到任何 workflow.json，这个测试形同虚设")
+
+    def test_every_workflow_keeps_the_seed_placeholder(self):
+        """带 seed 输入的 workflow 必须保留裸 `__SEED__`，不能烘成字面量数字。
+
+        2026-10-10 踩过：给 qwen-charsheet / qwen-restore 改步数时，用
+        `json.loads(raw.replace("__SEED__", "1"))` 读进来、改完再 `json.dump`
+        写回——占位符就永久变成了 `"seed": 1`。症状是这两条渠道**每张图都跑
+        种子 1**：同提示词 + 同参考图永远出同一张，而回执里报的还是那个随机
+        种子（`_resolve_seed` 生成的），报的和跑的对不上。
+
+        判据看**磁盘原文**：`load_skill` 解析后 `__SEED__` 是字符串，字面量
+        1 是整数，在 dict 里能分辨；但真正会出事的是「写回时占位符已经没了」，
+        所以数原文里的占位符最直接。skills/ 是私有数据（gitignore），换机或
+        CI 上不存在则跳过。
+        """
+        skills_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "skills")
+        if not os.path.isdir(skills_dir):
+            self.skipTest("本机没有 skills/ 数据目录")
+
+        checked = []
+        for name in sorted(os.listdir(skills_dir)):
+            for fn in ("workflow.json", "workflow_i2i.json"):
+                path = os.path.join(skills_dir, name, fn)
+                if not os.path.isfile(path):
+                    continue
+                with open(path, encoding="utf-8") as f:
+                    raw = f.read()
+                try:
+                    wf = json.loads(raw.replace("__SEED__", "1"))
+                except json.JSONDecodeError:
+                    continue            # 解析失败归 test_every_workflow_parses 管
+                # 只有「确实有节点吃 seed」的工作流才要求占位符
+                if not any(isinstance(v, dict) and isinstance(v.get("inputs"), dict)
+                           and "seed" in v["inputs"] for v in wf.values()):
+                    continue
+                self.assertIn(
+                    "__SEED__", raw,
+                    "%s 的 seed 被写死成了字面量——这条渠道会永远用同一个种子，"
+                    "同提示词同参考图每张都一模一样。改这个文件时别用 "
+                    "replace('__SEED__', '1') 解析完再 dump 回去。"
+                    % os.path.join(name, fn))
+                checked.append(os.path.join(name, fn))
+
+        self.assertTrue(checked, "没有检查到任何带 seed 的工作流，这个测试形同虚设")
 
 
 class GithubStyleSkillRefsTest(unittest.TestCase):
