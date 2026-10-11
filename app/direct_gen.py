@@ -229,10 +229,32 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    "qwen角色设定表": "qwen-charsheet",
                    "qwen修复": "qwen-restore",
                    "nffa": "nffa", "nai": "nai",
-                   "cunny": "cunny", "miao": "miao"}
+                   "cunny": "cunny", "miao": "miao",
+                   # 2026-10-11 新增：anima 的 LoRA 堆叠版（6 条 LoRA + silvermoonmix
+                   # turbo 二段）。⚠️ **跟 `hd_3_*` 不是同一族**（那族是 er_sde 20 步
+                   # cfg5 / latent 1.5× / 输出 3072×4608；这两条是 euler 10+15 步 cfg1 /
+                   # latent 1.2× / 输出 2456×3686），所以不做成第 5、6 个画风。
+                   #
+                   # ⚠️ **「柔和」本来是画风词**（`_STYLE_ALIASES` 柔和→soft，即
+                   # `hd_3_soft`）。用户 2026-10-11 拍板让新渠道占用它，所以
+                   # 「anima 柔和」从此走 `anima-soft`；想点名 `hd_3_soft` 得打
+                   # 英文 `soft` 或「anima soft」。靠的是 `_FIXED_CHAN_RE.match()`
+                   # 在 `_lead_commands()`（档位/画风）**之前**跑 —— 别把这两个词
+                   # 挪出固定渠道表，否则「柔和」会被画风解析抢回去。
+                   "anima柔和": "anima-soft",
+                   "anima写实": "anima-real",
+                   # ⚠️ 渠道 **id 本身**（`anima-soft` / `anima-real`）也进固定表。
+                   # 不进的后果 2026-10-11 实测过：正则认不出带连字符的 id →
+                   # 落到 `_STYLE_RE`，「anima-soft」被 `soft` 抢成 `hd_3_soft`、
+                   # 「anima-real」更糟（`real` 被当画风吃掉，正文里留个 `-real`）。
+                   # 模型在 JSON 里填 id 那一路本来就有 `_fixed_chan` 兜底，坏的是
+                   # **原话里直接打 id** 这条（`_parse_channel` 拿的是原话）。
+                   "anima-soft": "anima-soft",
+                   "anima-real": "anima-real"}
 _FIXED_CHAN_RE = re.compile(
     r"(?<![0-9A-Za-z_])"
-    r"(krea2\s*米山舞|krea2\s*日系|krea2\s*亚洲真人"
+    r"(anima\s*柔和|anima\s*写实|anima-soft|anima-real"
+    r"|krea2\s*米山舞|krea2\s*日系|krea2\s*亚洲真人"
     r"|krea2\s*动漫真人|krea2\s*真人\s*cos"
     r"|krea2\s*宝可梦|krea2\s*柔光|krea2\s*奶油"
     r"|krea2\s*写实|krea2\s*通用"
@@ -625,10 +647,13 @@ GUIDE_TEXT = (
     "【画风】clear 清晰 ｜ curvy 肉感\n"
     "　　　gloss 油亮 ｜ soft 柔和\n"
     "　　　打错或没打 → 按该档默认\n"
+    "　　　⚠️「anima 柔和」已改指新渠道 anima-soft；要 hd_3_soft 请打 soft\n"
     "\n"
     "【点名渠道】把渠道名写最前面就行\n"
     "　silver-hd　4x超清 · 4928×7360（约28MB）\n"
     "　jank　NoobAI 自定义（有权号词就用它）\n"
+    "　anima柔和　anima 堆 6 条 LoRA 的版本 · 2456×3686\n"
+    "　anima写实　同上，一段底模换成 AnimeReality\n"
     "　qwen　慢·写实·能在图里写中文字\n"
     "　qwen-hd　qwen 的 4x 超清 · 4096×6144（更慢更大，别连刷）\n"
     "　qwen角色设定表　7 分区 character design sheet（2304×1536 / 16 步）\n"
@@ -695,10 +720,13 @@ MORE_CHAN_TEXT = (
     "【画风】clear 清晰 ｜ curvy 肉感\n"
     "　　　gloss 油亮 ｜ soft 柔和\n"
     "　　　不写就按该档默认\n"
+    "　　　⚠️「anima 柔和」已改指新渠道 anima-soft；要 hd_3_soft 请打 soft\n"
     "\n"
     "【点名渠道】把渠道名写在最前面就行\n"
     "　silver-hd　4x超清 · 4928×7360（约28MB）\n"
     "　jank　NoobAI 自定义（有权号词就用它）\n"
+    "　anima柔和　anima 堆 6 条 LoRA 的版本 · 2456×3686\n"
+    "　anima写实　同上，一段底模换成 AnimeReality\n"
     "　qwen　慢·写实·能在图里写中文字\n"
     "　qwen-hd　qwen 的 4x 超清 · 4096×6144（更慢更大，别连刷）\n"
     "　qwen角色设定表　7 分区 character design sheet（2304×1536 / 16 步）\n"

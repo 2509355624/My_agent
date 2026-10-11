@@ -99,6 +99,9 @@ _BRIEF_PARAM_EXTRA = {
     "skill": "渠道名，**只在对方点名画风/尺寸/渠道时才传**，平时不传=默认 "
              "silver。动漫族只剩一档：说「anima」「三档」或只点名画风"
              "（clear/soft/gloss/curvy）=hd_3_<画风>（没说画风就是 hd_3_clear）；"
+             "点名「anima柔和」/「anima写实」=anima-soft / anima-real"
+             "（另一套配方：6 条 LoRA + silvermoonmix 二段，2456×3686，"
+             "**别拆成 anima + 画风**）；"
              "点名 qwen/通义=qwen_image_v1、"
              "点名 nai=nai、点名 nffa=nffa。",
     # 开头的「垫图 / 图生图」由 `_brief_param_desc` 从真描述的第一句带过来，
@@ -238,6 +241,9 @@ _TOOL_HINTS = [
      "- 生图渠道里**动漫族只剩 4 个**（2026-10-07 用户拍板取消快档 / 普通 / 二档）："
      "名字 = `hd_3_<画风>`，画风 4 种 = clear（默认，清透素净）/ soft（柔光素肌）/ "
      "gloss（冷调油光）/ curvy（丰腴强光影），末尾带 2x 像素放大 → 3072×4608。"
+     "**另有两条独立的动漫渠道** `anima-soft`（对方说「anima柔和」）/ "
+     "`anima-real`（「anima写实」）—— 它们是另一套配方（6 条 LoRA + silvermoonmix 二段，"
+     "2456×3686），**不参与上面那套画风**，只在那两个词被点名时用。"
      "**不传 skill = 默认渠道 silver**。"
      "用户说「anima」或「三档」→ `hd_3_clear`（没说画风就是 clear）；"
      "只说画风 → `hd_3_<那个画风>`。**不要自己编渠道名**"
