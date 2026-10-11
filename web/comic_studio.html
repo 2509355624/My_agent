@@ -193,6 +193,8 @@ function renderSlot(p) {
     + '<div class="ops">' + (ops.join('') || '<span style="color:var(--text-mute);font-size:11px">排队中…</span>') + '</div></div>';
 }
 
+const _slots = {};   // {no: {sig, el}} —— 逐格 diff，状态没变就不碰 DOM（不闪图）
+
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
 
 async function refresh() {
@@ -201,8 +203,30 @@ async function refresh() {
   try { d = await api('/api/comic/status?task=' + TASK); }
   catch (e) { console.warn(e); return; }
   const grid = document.getElementById('grid');
-  if (!d.panels.length) { grid.innerHTML = '<div class="empty">剧本里没解析到格子</div>'; return; }
-  grid.innerHTML = d.panels.map(renderSlot).join('');
+  if (!d.panels.length) {
+    if (grid.dataset.empty !== '1') { grid.innerHTML = '<div class="empty">剧本里没解析到格子</div>'; grid.dataset.empty = '1'; }
+    return;
+  }
+  grid.dataset.empty = '';
+  // 格子集合变了（剧本编辑增删格）→ 缓存和 DOM 全部重建
+  const nos = d.panels.map(p => p.no).sort().join(',');
+  if (Object.keys(_slots).sort().join(',') !== nos) {
+    for (const k of Object.keys(_slots)) delete _slots[k];
+    grid.innerHTML = '';
+  }
+  for (const p of d.panels) {
+    // 签名=影响展示的全部字段；没变就跳过这一格——图片不会重新加载，页面不闪。
+    const sig = [p.state, p.error, p.seed, p.scene_url, p.final_url, p.label, p.bubble].join('|');
+    const cached = _slots[p.no];
+    if (cached && cached.sig === sig) continue;
+    const el = document.createElement('div');
+    el.innerHTML = renderSlot(p);
+    const node = el.firstElementChild;
+    node.dataset.no = p.no;
+    if (cached && cached.el.parentNode) cached.el.replaceWith(node);
+    else grid.appendChild(node);
+    _slots[p.no] = {sig, el: node};
+  }
   const bar = document.getElementById('jobbar');
   if (d.running) { setBusy(true, d.running); }
   else {
