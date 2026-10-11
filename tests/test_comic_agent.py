@@ -1037,5 +1037,236 @@ class PromptTest(unittest.TestCase):
         self.assertNotIn("是男性就写 `1boy`", p)
 
 
+def _script(body_01, body_02=None, body_03=None):
+    """拼一份最小可解析的剧本（默认三格，只给 01 也能跑）。"""
+    out = ["# 标题：测试"]
+    for no, body in (("01", body_01), ("02", body_02), ("03", body_03)):
+        if body is None:
+            continue
+        out.append("## %s\n%s\n气泡: （女）嗯。\n标签1: 她在做什么。" % (no, body))
+    return "\n".join(out)
+
+
+class BareHairColorTest(unittest.TestCase):
+    """发色判据：画了头发就必须写发色。
+
+    由来（2026-10-11 十轮）：用户那份「逃不掉的放学路」三格全写 `twintails,
+    blue eyes` 却**一个发色都没写**，而规范第二节明写「发色必须写死」。
+    编剧 AI 漏了，补正 AI 也没补上（flash 版），只有代码能兜住。
+    """
+
+    def test_reports_when_hairstyle_without_color(self):
+        text = _script(
+            "画面: safe, 1girl, solo, twintails, blue eyes, white sailor collar",
+            "画面: safe, 1girl, solo, twintails, blue eyes, white sailor collar")
+        got = comic_agent.bare_hair_color(text)
+        self.assertEqual([no for no, _ in got], ["01", "02"])
+
+    def test_eye_color_does_not_count_as_hair_color(self):
+        """`blue eyes` 是瞳色，不是发色——不能把这条判据糊过去。
+
+        这是最容易写错的一处：只要判据写成「整格出现色词就算」，`blue eyes`
+        会让三格全部通过，判据等于没用。
+        """
+        text = _script("画面: safe, 1girl, solo, twintails, blue eyes")
+        self.assertEqual(len(comic_agent.bare_hair_color(text)), 1)
+
+    def test_accepts_black_hair(self):
+        text = _script("画面: safe, 1girl, solo, black hair, twintails, blue eyes")
+        self.assertEqual(comic_agent.bare_hair_color(text), [])
+
+    def test_accepts_color_and_style_in_one_tag(self):
+        """`blonde twintails` 也是写了发色（色词和发型在同一个标签里）。"""
+        text = _script("画面: safe, 1girl, solo, blonde twintails, blue eyes")
+        self.assertEqual(comic_agent.bare_hair_color(text), [])
+
+    def test_accepts_multiword_hair_color(self):
+        for tag in ("silver-white long hair", "long silver hair", "black short hair"):
+            with self.subTest(tag=tag):
+                self.assertEqual(
+                    comic_agent.bare_hair_color(_script("画面: safe, 1girl, %s" % tag)),
+                    [])
+
+    def test_silent_when_no_hair_mentioned(self):
+        """一格完全没提头发就不报——背影、剪影、只画手的 POV 格都会误伤。"""
+        text = _script("画面: safe, 1girl, pov, pov hands, dark")
+        self.assertEqual(comic_agent.bare_hair_color(text), [])
+
+    def test_mentions_in_check_message(self):
+        text = _script("画面: safe, 1girl, solo, twintails, blue eyes")
+        ok, why = comic_agent.check(text, 1)
+        self.assertFalse(ok)
+        self.assertIn("发色", why)
+
+
+class InventedNamesTest(unittest.TestCase):
+    """凭空人名判据：画面里的角色名只能来自原始需求。
+
+    由来（2026-10-11 十轮）：补正 AI（deepseek-v4-pro）在补发色的同时塞进了
+    `Izumi Sagiri`——那是规范第 74 行示例里的角色名，被当素材抄了。后果是画面
+    里会画出一个完全不相干的角色，而且很难第一眼发现。
+    """
+
+    def test_reports_name_not_in_brief(self):
+        text = _script("画面: safe, 1girl, Izumi Sagiri, black hair, twintails")
+        got = comic_agent.invented_names(text, "妹妹离家出走，被哥哥抓包")
+        self.assertEqual(got, [("01", "Izumi Sagiri")])
+
+    def test_allows_name_from_brief(self):
+        text = _script("画面: safe, 1girl, Izumi Sagiri, black hair, twintails")
+        self.assertEqual(comic_agent.invented_names(text, "画一张 Izumi Sagiri"), [])
+
+    def test_allows_name_from_original_draft(self):
+        text = _script("画面: safe, 1girl, Izumi Sagiri, black hair")
+        allowed = "需求里没这个名字\n但原稿里有 Izumi Sagiri"
+        self.assertEqual(comic_agent.invented_names(text, allowed), [])
+
+    def test_ignores_normal_multiword_tags(self):
+        """普通多词标签（含下划线式）不能误报——所以判据只认 Title Case 人名。"""
+        text = _script("画面: safe, 1girl, white backpack on one shoulder, "
+                       "black hair, holding another's wrist, backlighting")
+        self.assertEqual(comic_agent.invented_names(text, "需求"), [])
+
+    def test_check_only_guards_when_brief_given(self):
+        """不传 brief 就跳过这条判据——老调用点（check(text, n)）行为不变。"""
+        text = _script("画面: safe, 1girl, Izumi Sagiri, black hair")
+        self.assertTrue(comic_agent.check(text, 1)[0])
+        self.assertFalse(comic_agent.check(text, 1, "需求里没这个名字")[0])
+
+
+class DiffScriptsTest(unittest.TestCase):
+
+    def test_only_reports_changed_panels_and_fields(self):
+        a = _script("画面: safe, 1girl, twintails", "画面: safe, 1girl, solo")
+        b = _script("画面: safe, 1girl, black hair, twintails",
+                    "画面: safe, 1girl, solo")
+        diff = comic_agent.diff_scripts(a, b)
+        self.assertEqual(len(diff), 1)
+        self.assertEqual(diff[0]["no"], "01")
+        self.assertEqual(diff[0]["changed"], ["scene"])
+        self.assertIn("black hair", diff[0]["after"]["scene"])
+        self.assertNotIn("black hair", diff[0]["before"]["scene"])
+
+    def test_identical_scripts_give_empty_diff(self):
+        a = _script("画面: safe, 1girl, black hair")
+        self.assertEqual(comic_agent.diff_scripts(a, a), [])
+
+
+class CollectIssuesTest(unittest.TestCase):
+
+    def test_structured_issue_list(self):
+        text = _script("画面: safe, 1girl, twintails, backpack, Izumi Sagiri")
+        issues = comic_agent.collect_issues(text, "需求里没有那个名字")
+        kinds = {it["kind"] for it in issues}
+        self.assertIn("missing_hair_color", kinds)
+        self.assertIn("bare_wearable", kinds)
+        self.assertIn("invented_name", kinds)
+        for it in issues:
+            self.assertTrue(it["no"] and it["detail"])
+
+    def test_clean_script_gives_no_issues(self):
+        text = _script("画面: safe, 1girl, solo, black hair, twintails, "
+                       "white backpack on one shoulder")
+        self.assertEqual(comic_agent.collect_issues(text, "需求"), [])
+
+
+class FixScriptTest(unittest.TestCase):
+    """补正一遍：代码出清单 → 模型照着补 → 过闸门才采纳。"""
+
+    BRIEF = "妹妹离家出走，被哥哥抓包，black hair, twintails"
+    DRAFT = _script("画面: safe, 1girl, solo, twintails, blue eyes")
+    FIXED = _script("画面: safe, 1girl, solo, black hair, twintails, blue eyes")
+
+    def test_skips_llm_when_no_issues(self):
+        """清单为空就一次都别调——没有要补的，烧调用是纯浪费。"""
+        clean = _script("画面: safe, 1girl, solo, black hair, twintails, "
+                        "white backpack on one shoulder")
+        with mock.patch.object(comic_agent.llm, "call_llm") as m:
+            r = comic_agent.fix_script(self.BRIEF, clean)
+        self.assertFalse(m.called)
+        self.assertTrue(r["skipped"])
+        self.assertEqual(r["text"], clean)
+
+    def test_adopts_verified_fix(self):
+        with mock.patch.object(comic_agent.llm, "call_llm",
+                               return_value=self.FIXED):
+            r = comic_agent.fix_script(self.BRIEF, self.DRAFT)
+        self.assertTrue(r["adopted"])
+        self.assertEqual(r["text"], self.FIXED)
+        self.assertEqual([d["no"] for d in r["diff"]], ["01"])
+        self.assertIn("black hair", r["text"])
+
+    def test_rejects_invented_name(self):
+        """补正稿凭空多出人名 → 整份退回原稿（这是实测事故，必须拦住）。"""
+        bad = _script("画面: safe, 1girl, solo, Izumi Sagiri, black hair, twintails")
+        with mock.patch.object(comic_agent.llm, "call_llm", return_value=bad):
+            r = comic_agent.fix_script(self.BRIEF, self.DRAFT)
+        self.assertFalse(r["adopted"])
+        self.assertEqual(r["text"], self.DRAFT)
+        self.assertTrue(any("人名" in x for x in r["rejects"]))
+
+    def test_rejects_change_to_unflagged_panel(self):
+        """只许改清单点名的格：格 02 没在清单里，动了就退回。
+
+        不拦的话它会顺手重写全稿，你看到的就是「补一处、改十处」。
+        """
+        draft = _script("画面: safe, 1girl, solo, twintails, blue eyes",
+                        "画面: safe, 1girl, solo, black hair, twintails, "
+                        "white backpack on one shoulder")
+        bad = _script("画面: safe, 1girl, solo, black hair, twintails, blue eyes",
+                      "画面: safe, 1girl, solo, black hair, twintails, "
+                      "white backpack on one shoulder, warm light")
+        with mock.patch.object(comic_agent.llm, "call_llm", return_value=bad):
+            r = comic_agent.fix_script(self.BRIEF, draft)
+        self.assertFalse(r["adopted"])
+        self.assertTrue(any("没点名" in x for x in r["rejects"]))
+
+    def test_rejects_panel_count_change(self):
+        bad = _script("画面: safe, 1girl, solo, black hair, twintails, blue eyes",
+                      "画面: safe, 1girl, solo, black hair, twintails")
+        with mock.patch.object(comic_agent.llm, "call_llm", return_value=bad):
+            r = comic_agent.fix_script(self.BRIEF, self.DRAFT)
+        self.assertFalse(r["adopted"])
+        self.assertTrue(any("格号对不上" in x for x in r["rejects"]))
+
+    def test_rejects_empty_output(self):
+        with mock.patch.object(comic_agent.llm, "call_llm", return_value="  "):
+            r = comic_agent.fix_script(self.BRIEF, self.DRAFT)
+        self.assertFalse(r["adopted"])
+        self.assertEqual(r["text"], self.DRAFT)
+
+    def test_call_failure_returns_draft(self):
+        with mock.patch.object(comic_agent.llm, "call_llm",
+                               side_effect=RuntimeError("boom")):
+            r = comic_agent.fix_script(self.BRIEF, self.DRAFT)
+        self.assertFalse(r["adopted"])
+        self.assertEqual(r["text"], self.DRAFT)
+
+    def test_no_change_is_not_adopted(self):
+        """模型把原稿原样交回：没改动就不算采纳（但也不算错）。"""
+        with mock.patch.object(comic_agent.llm, "call_llm", return_value=self.DRAFT):
+            r = comic_agent.fix_script(self.BRIEF, self.DRAFT)
+        self.assertFalse(r["adopted"])
+        self.assertEqual(r["diff"], [])
+
+    def test_issue_list_is_fed_to_model(self):
+        """清单必须真的喂进去——不给清单它就自由发挥（实测编出 `warm light`）。"""
+        with mock.patch.object(comic_agent.llm, "call_llm",
+                               return_value=self.FIXED) as m:
+            comic_agent.fix_script(self.BRIEF, self.DRAFT)
+        fed = " ".join(str(x.get("content") or "")
+                       for x in m.call_args.args[0])
+        self.assertIn("问题清单", fed)
+        self.assertIn("missing_hair_color", fed)
+        self.assertIn("发色", fed)
+
+    def test_fix_prompt_forbids_copying_spec_examples(self):
+        """系统提示必须点明「规范里的示例角色名不是素材」——`Izumi Sagiri` 就是这么进来的。"""
+        p = comic_agent._fix_system_prompt()
+        self.assertIn("示例角色名", p)
+        self.assertIn("不是素材", p)
+        self.assertIn("原始需求", p)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,8 +3,9 @@
 复用 app/comic.py 的全部调度能力（run / render_scene / render_bubble / Task），
 把 CLI 的手动动作变成 HTTP 端点 + 后台线程：
 
-  POST /api/comic/script    编剧写剧本 → 建任务目录（comics/C<日期>-<序号>/）
+  POST /api/comic/script    编剧写剧本 → 内容补正 → 建任务目录（comics/C<日期>-<序号>/）
   POST /api/comic/save      用户编辑剧本后保存（确认开跑前的修改都走这里）
+  POST /api/comic/fix       重跑内容补正（从 script_original.md 重来，直接落地）
   POST /api/comic/start     确认开跑：后台线程跑阶段一（场景图，不碰气泡）
   GET  /api/comic/status    槽位轮询：剧本 + state.json → 每格状态与图 URL
   POST /api/comic/rerender  换种子重跑某格（重置该格 → 后台只跑阶段一）
@@ -28,6 +29,7 @@ import io
 import json
 import os
 import threading
+import time
 import uuid
 import zipfile
 
@@ -112,6 +114,32 @@ def _save_upload(fs, dst):
         im.close()
 
 
+def _write_fix_report(path, fix):
+    """把补正结果落成 `fix.json`（不放全文，只放清单与逐格差异）。
+
+    落盘而不是只放内存：补正是编剧之后的**独立一步**，页面靠槽位轮询读它，
+    重启 Flask 后也要还在（和 state.json 一个道理）。
+    """
+    report = {k: v for k, v in fix.items() if k != "text"}
+    report["at"] = time.strftime("%H:%M:%S")
+    with open(os.path.join(path, "fix.json"), "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+    return report
+
+
+def _read_fix_report(path):
+    """读 `fix.json`；没有就返回 None（老任务目录没有这个文件）。"""
+    fp = os.path.join(path, "fix.json")
+    if not os.path.isfile(fp):
+        return None
+    try:
+        with open(fp, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        comic.log.warning("fix.json 读不动：%s", fp)
+        return None
+
+
 def _spawn(path, phase, fn):
     """起后台线程跑 fn()。同一任务已有线程在跑就拒绝（409 语义）。"""
     with _JOBS_LOCK:
@@ -184,12 +212,40 @@ def api_comic_script():
             # 目录在剧本写好后才建：失败的 job 不留空目录。
             path = comic._next_task_dir(_COMICS_ROOT)
             os.makedirs(path, exist_ok=True)
-            with open(os.path.join(path, "script.md"), "w", encoding="utf-8") as f:
+
+            # ── 独立第二步：内容补正（2026-10-11 十轮）──────────────────
+            # 编剧的上下文长（十几轮查库），实测三格全漏发色；补正拿干净稿 +
+            # 代码清单再补一遍。**直接落地**：采纳的补正稿就是 script.md，编剧
+            # 原稿另存 script_original.md，页面拿 fix.json 显示逐格差异、可回退。
+            # 补正失败/被代码闸门拒收时 text 原样返回，流程照常往下走——
+            # 补正是加分项，不能因为它把整个编剧任务搞失败。
+            _progress("编剧交稿，开始补正")
+            try:
+                fix = comic_agent.fix_script(brief, text, provider=provider,
+                                             model=model, progress=_progress)
+            except Exception as exc:            # 补正绝不许拖垮编剧
+                comic.log.exception("补正失败 job=%s", job)
+                fix = {"text": text, "issues": [], "diff": [], "adopted": False,
+                       "rejects": ["补正异常：%s" % exc], "warnings": [],
+                       "skipped": False, "model": ""}
+            final = fix.get("text") or text
+            with open(os.path.join(path, "script_original.md"), "w",
+                      encoding="utf-8") as f:
                 f.write(text + "\n")
+            with open(os.path.join(path, "script.md"), "w", encoding="utf-8") as f:
+                f.write(final + "\n")
+            # brief 落盘：手动重跑补正时要拿它当「原始需求」。
+            with open(os.path.join(path, "brief.txt"), "w", encoding="utf-8") as f:
+                f.write(brief + "\n")
+            report = _write_fix_report(path, fix)
+
             with _SCRIPT_LOCK:
-                _SCRIPT_JOBS[job].update(state="done", script=text,
-                                         task=os.path.basename(path))
-            comic.log.info("编剧完成 job=%s → %s", job, os.path.basename(path))
+                _SCRIPT_JOBS[job].update(state="done", script=final,
+                                         original=text, task=os.path.basename(path),
+                                         fix=report)
+            comic.log.info("编剧完成 job=%s → %s（补正 %s）", job,
+                           os.path.basename(path),
+                           "采纳" if fix.get("adopted") else "未采纳")
         except BaseException as exc:        # SystemExit 不是 Exception（见模块头）
             with _SCRIPT_LOCK:
                 _SCRIPT_JOBS[job].update(state="error", error=str(exc))
@@ -290,7 +346,86 @@ def api_comic_status():
                     "title": task.meta.get("title", ""),
                     "running": running.get("phase"),
                     "job_error": running.get("error"),
+                    # 补正报告（编剧之后那一步）落盘在 fix.json：页面拿它显示
+                    # 「改了哪几格、改了什么」，没有这个文件就是老任务，返回 null。
+                    "fix": _read_fix_report(path),
                     "panels": panels})
+
+
+@bp.route("/api/comic/fix", methods=["POST"])
+def api_comic_fix():
+    """重跑补正：**从编剧原稿（script_original.md）重来一遍**，直接落地。
+
+    为什么底稿用原稿而不是当前 script.md：补正是脚本化的一步，重跑要幂等。
+    拿补正过的稿再补一次，会把上一轮的改动当成"原稿"来比对，diff 越滚越乱，
+    而且第二次的「未点名格不许动」判据会把上一轮的成果当成越权改动。所以底稿
+    永远取 `script_original.md`（没有它就退回 script.md，兼容老任务目录）。
+
+    异步跑（补正实测 9~80 秒，同步会堵死槽位轮询），前端轮询 /status 看结果——
+    状态里带 fix.json。
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        path = _task_dir(data.get("task"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    provider = str(data.get("provider") or "").strip() or None
+    model = str(data.get("model") or "").strip() or None
+
+    orig_path = os.path.join(path, "script_original.md")
+    if not os.path.isfile(orig_path):
+        orig_path = os.path.join(path, "script.md")
+    with open(orig_path, encoding="utf-8") as f:
+        original = f.read()
+    brief = ""
+    bf = os.path.join(path, "brief.txt")
+    if os.path.isfile(bf):
+        with open(bf, encoding="utf-8") as f:
+            brief = f.read().strip()
+    brief = str(data.get("brief") or "").strip() or brief
+    if not brief:
+        return jsonify({"ok": False,
+                        "error": "这个任务没存原始需求（老目录缺 brief.txt），"
+                                 "请在请求里带上 brief"}), 400
+
+    def _work():
+        fix = comic_agent.fix_script(
+            brief, original, provider=provider, model=model,
+            progress=lambda m: comic.log.info("[comic-fix] %s", m))
+        final = fix.get("text") or original
+        with open(os.path.join(path, "script.md"), "w", encoding="utf-8") as f:
+            f.write(final + "\n")
+        _write_fix_report(path, fix)
+        comic.log.info("补正重跑完成 %s（%s）", os.path.basename(path),
+                       "采纳" if fix.get("adopted") else "未采纳")
+
+    # 用 _spawn 而不是自己开线程：状态里的 `running: "fix"` 和「同一任务只允许
+    # 一个后台线程」都是现成的，跟 rerender / bubble / manual 一个口径。
+    if not _spawn(path, "fix", _work):
+        return jsonify({"ok": False, "error": "这个任务已经有别的事在跑"}), 409
+    return jsonify({"ok": True, "task": os.path.basename(path)})
+
+
+@bp.route("/api/comic/script_text", methods=["GET"])
+def api_comic_script_text():
+    """读当前剧本正文（script.md）与编剧原稿（script_original.md）。
+
+    **存在的理由**：重跑补正会就地改写 script.md，而页面 textarea 里还是旧文本
+    ——用户随后点「确认开跑」会把旧文本存回去，**把补正结果整个覆盖掉**。
+    所以补正落地后必须重新拉一次正文。status 里不带全文（每 2 秒轮询一次，
+    没必要一直传几 KB），需要时才来取。
+    """
+    try:
+        path = _task_dir(request.args.get("task"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    out = {"ok": True}
+    for key, name in (("script", "script.md"), ("original", "script_original.md")):
+        fp = os.path.join(path, name)
+        if os.path.isfile(fp):
+            with open(fp, encoding="utf-8") as f:
+                out[key] = f.read()
+    return jsonify(out)
 
 
 @bp.route("/api/comic/rerender", methods=["POST"])

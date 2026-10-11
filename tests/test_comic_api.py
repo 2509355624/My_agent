@@ -128,6 +128,172 @@ class ComicScriptApiTest(unittest.TestCase):
         self.assertEqual(out["state"], "done")
         self.assertIn("search_tags(眼泪)", out["log"])
 
+    def test_job_carries_fix_report_and_keeps_original_draft(self):
+        """补正是编剧之后的**独立一步**：采纳的补正稿成为 script.md，
+        编剧原稿另存 script_original.md，job 里带补正报告给页面显示。
+
+        没有原稿就没法回退、也没法幂等重跑补正（重跑要从原稿重来）。
+        """
+        fixed = GOOD_SCRIPT.replace("画面: 1girl, solo",
+                                    "画面: 1girl, solo, black hair, twintails")
+        fake_fix = {"text": fixed, "issues": [], "adopted": True,
+                    "diff": [{"no": "01", "changed": ["scene"],
+                              "before": {"scene": "1girl, solo"},
+                              "after": {"scene": "1girl, solo, black hair"}}],
+                    "rejects": [], "warnings": [], "skipped": False, "model": ""}
+        with mock.patch.object(comic_agent, "write_script",
+                               return_value=GOOD_SCRIPT), \
+                mock.patch.object(comic_agent, "fix_script",
+                                  return_value=fake_fix) as fm:
+            d = self._post()
+            out = self._wait(d["job"])
+        self.assertEqual(out["state"], "done")
+        self.assertEqual(out["script"], fixed)
+        self.assertEqual(out["original"], GOOD_SCRIPT)
+        self.assertTrue(out["fix"]["adopted"])
+        self.assertEqual(out["fix"]["diff"][0]["no"], "01")
+        # 补正报告要落盘（页面靠 status 读 fix.json，重启 Flask 也得还在）
+        self.assertTrue(os.path.isfile(
+            os.path.join(self.tmp, "C20261011-01", "fix.json")))
+        # brief 也要落盘：手动重跑补正要拿它当「原始需求」
+        with open(os.path.join(self.tmp, "C20261011-01", "brief.txt"),
+                  encoding="utf-8") as f:
+            self.assertIn("公交站被抓包", f.read())
+        # 补正要拿到 brief（凭空人名判据靠它当白名单）
+        self.assertEqual(fm.call_args.args[0], "公交站被抓包")
+
+    def test_fix_failure_does_not_kill_the_script_job(self):
+        """补正炸了不能让编剧任务失败——补正是加分项，剧本还在就该交出来。"""
+        with mock.patch.object(comic_agent, "write_script",
+                               return_value=GOOD_SCRIPT), \
+                mock.patch.object(comic_agent, "fix_script",
+                                  side_effect=RuntimeError("补正模型全挂了")):
+            d = self._post()
+            out = self._wait(d["job"])
+        self.assertEqual(out["state"], "done")
+        self.assertEqual(out["script"], GOOD_SCRIPT)
+        self.assertFalse(out["fix"]["adopted"])
+        self.assertTrue(any("补正异常" in x for x in out["fix"]["rejects"]))
+
+
+class ComicFixApiTest(unittest.TestCase):
+    """内容补正的 HTTP 面：重跑（/fix）与取正文（/script_text）。
+
+    2026-10-11 十轮加。两条都是踩出来的：
+      - /fix 的底稿必须是 **script_original.md**，不是当前 script.md——拿补正过
+        的稿再补一次，「未点名格不许动」的闸门会把上一轮成果当越权改动，diff
+        也越滚越乱。
+      - /script_text 存在的唯一理由是堵一个数据事故：补正就地改 script.md，
+        而页面 textarea 里还是旧文本，用户接着点「确认开跑」会把旧文本存回去，
+        补正结果整个作废。
+    """
+
+    DRAFT = "# 标题：t\n\n## 01\n画面: 1girl, twintails\n气泡: 一\n标签1: 甲\n"
+    FIXED = "# 标题：t\n\n## 01\n画面: 1girl, black hair, twintails\n气泡: 一\n标签1: 甲\n"
+    NAME = "C20261011-01"
+
+    def setUp(self):
+        self.c = main.app.test_client()
+        self.tmp = tempfile.mkdtemp(prefix="comic_fix_api_")
+        self.patch_root = mock.patch.object(comic_api, "_COMICS_ROOT", self.tmp)
+        self.patch_root.start()
+        with comic_api._JOBS_LOCK:
+            comic_api._JOBS.clear()
+        self.dir = os.path.join(self.tmp, self.NAME)
+        os.makedirs(self.dir, exist_ok=True)
+        self._write("script.md", self.FIXED)          # 当前稿＝补正过的
+        self._write("script_original.md", self.DRAFT)  # 编剧原稿
+        self._write("brief.txt", "妹妹离家出走\n")
+
+    def tearDown(self):
+        self.patch_root.stop()
+        with comic_api._JOBS_LOCK:
+            comic_api._JOBS.clear()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write(self, name, text):
+        with open(os.path.join(self.dir, name), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def _read(self, name):
+        with open(os.path.join(self.dir, name), encoding="utf-8") as f:
+            return f.read()
+
+    def _idle(self, timeout=5.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with comic_api._JOBS_LOCK:
+                j = dict(comic_api._JOBS.get(self.dir) or {})
+            if not j.get("phase"):
+                return j
+            time.sleep(0.02)
+        self.fail("补正后台任务超时未结束")
+
+    def test_unknown_task_is_404(self):
+        r = self.c.post("/api/comic/fix", json={"task": "nope"})
+        self.assertEqual(r.status_code, 404)
+
+    def test_missing_brief_is_400(self):
+        """老目录没 brief.txt，也不带 brief → 明确报错，别拿空需求去问模型。"""
+        os.remove(os.path.join(self.dir, "brief.txt"))
+        r = self.c.post("/api/comic/fix", json={"task": self.NAME})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("brief", r.get_json()["error"])
+
+    def test_uses_original_draft_as_base(self):
+        fake = {"text": self.FIXED, "issues": [], "diff": [], "adopted": False,
+                "rejects": [], "warnings": [], "skipped": False, "model": ""}
+        with mock.patch.object(comic_agent, "fix_script",
+                               return_value=fake) as m:
+            r = self.c.post("/api/comic/fix", json={"task": self.NAME})
+            self.assertTrue(r.get_json()["ok"])
+            self._idle()
+        # 底稿必须是编剧原稿，不是已经补正过的当前稿
+        self.assertEqual(m.call_args.args[1], self.DRAFT)
+
+    def test_rewrites_script_and_writes_report(self):
+        fake = {"text": self.FIXED, "issues": [{"no": "01",
+                                                "kind": "missing_hair_color",
+                                                "detail": "缺发色"}],
+                "diff": [{"no": "01", "changed": ["scene"],
+                          "before": {"scene": "1girl, twintails"},
+                          "after": {"scene": "1girl, black hair, twintails"}}],
+                "adopted": True, "rejects": [], "warnings": [],
+                "skipped": False, "model": ""}
+        with mock.patch.object(comic_agent, "fix_script", return_value=fake):
+            self.c.post("/api/comic/fix", json={"task": self.NAME})
+            self._idle()
+        # 落盘时统一补一个结尾换行，比对前先 strip
+        self.assertEqual(self._read("script.md").strip(), self.FIXED.strip())
+        # fix.json 不能带全文（只放清单与 diff，页面每 2 秒读一次）
+        import json
+        report = json.loads(self._read("fix.json"))
+        self.assertTrue(report["adopted"])
+        self.assertNotIn("text", report)
+        self.assertTrue(report["at"])
+
+    def test_status_exposes_the_fix_report(self):
+        import json
+        self._write("fix.json", json.dumps({"adopted": True, "diff": []},
+                                           ensure_ascii=False))
+        d = self.c.get("/api/comic/status?task=" + self.NAME).get_json()
+        self.assertTrue(d["fix"]["adopted"])
+
+    def test_status_fix_is_null_for_old_tasks(self):
+        d = self.c.get("/api/comic/status?task=" + self.NAME).get_json()
+        self.assertIsNone(d["fix"])
+
+    def test_script_text_returns_current_and_original(self):
+        d = self.c.get("/api/comic/script_text?task=" + self.NAME).get_json()
+        self.assertEqual(d["script"], self.FIXED)
+        self.assertEqual(d["original"], self.DRAFT)
+
+    def test_conflicts_with_a_running_job(self):
+        with comic_api._JOBS_LOCK:
+            comic_api._JOBS[self.dir] = {"phase": "bubble", "error": None}
+        r = self.c.post("/api/comic/fix", json={"task": self.NAME})
+        self.assertEqual(r.status_code, 409)
+
 
 class ComicManualApiTest(unittest.TestCase):
     """手动修复入口：/manual（手输指令跑 qwen）、/upload（顶替底图）、

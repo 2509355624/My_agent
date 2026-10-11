@@ -479,6 +479,154 @@ def pov_conflicts(text):
     return [(no, "1boy") for no, ts in by_panel if "1boy" in ts]
 
 
+# ─── 发色 / 凭空人名（2026-10-11 十轮）───────────────────
+#
+# 这两条都是「补正 AI」暴露出来的：用干净上下文 + 规范全文真跑一轮补正，强模型
+# （deepseek-v4-pro）确实补上了发色，但**顺手塞进了 `Izumi Sagiri`**——那是规范
+# 第 74 行示例里的角色名，被它当素材抄了。三个补正稿跑 check() 全部 ok=True，
+# 说明原有五条判据一条都兜不住。于是补这两条。
+#
+# 发色这条的另一半故事：规范第二节（L55 / L63）明写「发色、发型、瞳色、发饰
+# **必须写死**」，编剧 AI 却三格全漏（只写 `twintails, blue eyes`）——**同一个
+# 要求在提示词里、在规范里都写了，两道 AI 都漏**。只有代码能兜住。
+
+# 画面里出现这些词，就说明这一格画了头发 → 必须有发色。
+_HAIR_MARKERS = (
+    "hair", "twintail", "twin_tail", "twin tail", "ponytail", "bangs", "braid",
+    "hime_cut", "hime cut", "bob_cut", "bob cut", "ahoge", "drill",
+)
+
+# 色词表。**故意不含 `dark`／`light` 这类不是颜色的修饰**——`dark eyes` 会被
+# 误判成「写了颜色」。
+_COLOR_WORDS = frozenset((
+    "black", "brown", "blonde", "blond", "silver", "silver-white", "white", "pink",
+    "red", "crimson", "blue", "purple", "violet", "green", "grey", "gray",
+    "orange", "gold", "golden", "ash", "auburn", "crimson", "navy", "turquoise",
+    "lilac", "platinum", "rose", "yellow", "aqua", "teal", "mint", "lavender",
+))
+
+# 专有人名：两个及以上首字母大写的词（`Izumi Sagiri`）。故意只认这种形态——
+# danbooru 下划线式（`izumi_sagiri`）没法和 `white_earphones` 这类正常写法区分，
+# 会造成误报，所以不认。见 invented_names 的说明。
+_NAME_RE = re.compile(r"\b([A-Z][a-z]{1,})(?:[ _]([A-Z][a-z]{1,}))+\b")
+
+
+def _has_color_word(tag):
+    """这个标签里有没有色词（按词判，不看子串——`silver` 不能被 `silverware` 骗过）。"""
+    for w in re.split(r"[^A-Za-z\-]+", tag):
+        if w.lower() in _COLOR_WORDS:
+            return True
+    return False
+
+
+def bare_hair_color(text):
+    """找「画了头发却没写发色」的格，返回 [(格号, 触发它的发型标签), ...]。
+
+    为什么能代码判：规范第二节把发色列为**必须写死**的项（模型每格独立生成、
+    没有记忆，不写死就会黑发绿发来回变），而发型标签一旦出现就说明这一格画了
+    头发。判据取**两者同现**：格里有发型标签、却没有任何「色词 + 头发/发型」的
+    标签 → 报。
+
+    两个刻意的边界：
+      - 一格**完全没提头发**时不报（可能是背影、剪影、只画手的 POV 格），
+        报它是误伤。
+      - `blue eyes` 不算「写了发色」——所以判据要求色词和头发/发型词出现在
+        **同一个标签**里（`black hair`、`silver-white long hair`、`blonde
+        twintails` 都算），否则 `blue eyes` 会永远把这条判据糊过去。
+    """
+    _, panels = comic.parse_script_text(text)
+    out = []
+    for p in panels:
+        tags = _scene_tags(p)
+        hairish = [t for t in tags
+                   if any(m in t.lower() for m in _HAIR_MARKERS)]
+        if not hairish:
+            continue                                  # 没画头发，不报
+        if any(_has_color_word(t) for t in hairish):
+            continue                                  # 有发色了
+        out.append((p["no"], hairish[0]))
+    return out
+
+
+def invented_names(text, allowed):
+    """找「`allowed` 里没有的专有人名」，返回 [(格号, 人名), ...]。
+
+    `allowed` 传**原始需求 + 编剧原稿**拼起来的文本。用途有两处：
+      - 补正稿：不许凭空多出角色（实测 `Izumi Sagiri`）；
+      - 编剧稿：编剧同样可能抄规范示例里的角色名，而且是同一批示例。
+
+    为什么读名字而不读「标签在不在库里」：角色名本来就千奇百怪、库里查不到是
+    常态（规范也说库只是参考），拿库当白名单会把合法角色名全部误杀。改成**相对
+    需求与原稿**判：需求里你写了这个名字，原稿里有的名字，都放行；凭空冒出来的
+    才报——那一定是抄示例或幻想。
+
+    局限（说清楚，别当它是万能的）：只认 `Izumi Sagiri` 这种 Title Case 形态。
+    danbooru 下划线式 `izumi_sagiri` 与 `white_earphones` 这类正常多词标签无法
+    区分，认了会大量误报，故不认。
+    ⚠️ 因此必须在**原始画面行**上匹配，不能走 `_scene_tags`——`_norm_tag` 会把
+    整段小写化（见它的说明），大写形态一归一就没了，判据会永远返回空。
+    """
+    low = (allowed or "").lower().replace("_", " ")
+    _, panels = comic.parse_script_text(text)
+    out = []
+    for p in panels:
+        for m in _NAME_RE.finditer(p["scene"] or ""):
+            name = m.group(0)
+            if name.lower().replace("_", " ") not in low:
+                out.append((p["no"], name))
+    return out
+
+
+def collect_issues(text, brief="", original=""):
+    """把代码判据能发现的问题整理成**结构化清单**，供补正 AI 与界面使用。
+
+    这是 2026-10-11 十轮定下的分工：代码负责「算得出来的事实」，补正 AI 只负责
+    「照着清单把字补上」。**不给它清单它会自由发挥**——实测 flash 版补正 AI
+    三格各追加一句自己编的 `warm interior bus light`，pro 版则塞进 `Izumi Sagiri`。
+    给了清单，它就没有编的空间。
+
+    返回 [{"no": 格号（跨格问题为空）, "kind": 类别, "detail": 一句话}]。
+    kind 取值：missing_hair_color / bare_wearable / duplicate_wearable /
+    solo_conflict / banned_tag / pov_conflict / invented_name。
+    """
+    issues = []
+
+    def _add(kind, pairs, detail, by_tag=True):
+        for no, tag in pairs:
+            issues.append({"no": no, "kind": kind, "tag": tag,
+                           "detail": detail % tag})
+
+    _add("missing_hair_color", bare_hair_color(text),
+         "「%s」这一格画了头发却没写发色，规范要求发色必须写死"
+         "（例：`black hair`、`silver-white long hair`）")
+    for no, tag in bare_wearables(text):
+        issues.append({"no": no, "kind": "bare_wearable", "tag": tag,
+                       "detail": "「%s」只有类别名、没写颜色，要写成"
+                                 "「颜色 + 款式/物件」（例：`white %s`）" % (tag, tag)})
+    for no, cat in duplicate_wearables(text):
+        issues.append({"no": no, "kind": "duplicate_wearable", "tag": cat,
+                       "detail": "这一格把「%s」写了两次（是同一件东西），"
+                                 "合并成一个标签、颜色写在里面" % cat})
+    for no, tag in solo_conflicts(text):
+        issues.append({"no": no, "kind": "solo_conflict", "tag": tag,
+                       "detail": "这一格写了 `solo` 又要求第二方入画，把 `solo` "
+                                 "换成 `solo focus` 并补 `1other`（**不许写 "
+                                 "`1boy`**）"})
+    for no, tag in banned_tags(text):
+        issues.append({"no": no, "kind": "banned_tag", "tag": tag,
+                       "detail": "`%s` 语义错（没说清是谁的手），换成 "
+                                 "`holding another's wrist`" % tag})
+    for no, tag in pov_conflicts(text):
+        issues.append({"no": no, "kind": "pov_conflict", "tag": tag,
+                       "detail": "第一人称视角的剧本里不许出现 `1boy`，删掉它"})
+    # 凭空人名：allowed 用「需求 + 原稿」，所以只有**补正稿新增**的人名会被报。
+    for no, name in invented_names(text, (brief or "") + "\n" + (original or "")):
+        issues.append({"no": no, "kind": "invented_name", "tag": name,
+                       "detail": "画面里出现了「%s」，但原始需求和编剧原稿里都"
+                                 "没有这个名字——**删掉它**" % name})
+    return issues
+
+
 # ─── 备选记录的抽取与归位 ───────────────────────────────
 
 _NOTE_RE = re.compile(r"^\s*(?:备选|备选记录|候选)\s*[:：]\s*(.+?)\s*$")
@@ -1092,7 +1240,7 @@ def run_rounds(messages, provider=None, model=None, max_rounds=MAX_ROUNDS,
 
 # ─── 校验 ───────────────────────────────────────────────
 
-def check(text, panels):
+def check(text, panels, brief=""):
     """按契约 + 标签库校验剧本，返回 (是否合格, 问题描述)。
 
     结构性问题（格数不对、字段缺）先短路——那种情况下列标签问题没有意义。
@@ -1103,9 +1251,13 @@ def check(text, panels):
 
     **只判语义，不判存在性**：`hand around wrist` 语义错、`solo` 配第二方身体
     部位互斥、衣物 / 随身物件没写颜色（`bare_wearables`）、同一件东西写两遍
-    （`duplicate_wearables`）、POV 剧本里冒出 `1boy`（`pov_conflicts`），这几类
-    判不合格；而「库里查不到」不算错（`white_earphones`、`black_backpack` 都不
-    在库，但写法是对的），只写日志。库是参考，不是白名单。
+    （`duplicate_wearables`）、POV 剧本里冒出 `1boy`（`pov_conflicts`）、画了
+    头发却没写发色（`bare_hair_color`），这几类判不合格；而「库里查不到」不算错
+    （`white_earphones`、`black_backpack` 都不在库，但写法是对的），只写日志。
+    库是参考，不是白名单。
+
+    `brief` 可选：传了才启用「凭空人名」判据（`invented_names`）——拿需求当
+    白名单，需求里没出现过的专有人名一律报。不传就跳过那条（老调用点行为不变）。
     """
     ok, why = comic_writer._validate(text, panels)
     if not ok:
@@ -1139,6 +1291,15 @@ def check(text, panels):
             "`backpack` → `white backpack on one shoulder`、`sailor collar` →"
             " `white sailor collar`、`pleated skirt` → `white pleated skirt`。"
             "款式和姿态（`on one shoulder`）**不等于**颜色。" % items)
+    hair = bare_hair_color(text)
+    if hair:
+        items = _fmt_by_panel(hair)
+        problems.append(
+            "这些格**画了头发却没写发色**（%s）：规范第二节把发色列为必须写死的项"
+            "——模型每一格都是独立生成、没有记忆，不写死就会这一格黑发、下一格"
+            "换成别的颜色。发色和发型要写成同一个标签：`black hair`、"
+            "`silver-white long hair`、`blonde twintails`。"
+            "⚠️ `blue eyes` 这类瞳色**不算**写了发色。" % items)
     dup = duplicate_wearables(text)
     if dup:
         items = _fmt_by_panel(dup)
@@ -1156,6 +1317,14 @@ def check(text, panels):
             "入画，第二方用 `1other` 表示，手部标签照旧（`pov hands` + "
             "`holding another's wrist`）；也**不要给「我」写服饰**"
             "（`black hoodie` / `grey pants` 都会把整个人画出来）。" % items)
+    if (brief or "").strip():
+        names = invented_names(text, brief)
+        if names:
+            items = _fmt_by_panel(names)
+            problems.append(
+                "这些格出现了**原始需求里没有的专有人名**（%s）。角色名只能来自"
+                "作者的需求——凭空冒出来的名字会把一个完全不相干的角色画进画面。"
+                "（提示：分镜规范里的示例角色名**不是素材**，不许抄。）" % items)
     # 库存在性**判不合格会反噬**（2026-10-11 由用户定调：tags 库只是参考，
     # AI 要有自我判断）。原来这里把「库里查不到」当硬回炉，后果是**惩罚写具体**：
     # 库里没有 `white_earphones`、`black_backpack`，模型老老实实写「白色耳机」
@@ -1231,7 +1400,7 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
                          "身），标签就用你已经查到的那些，不要新造词，也不要再输出"
                          "工具调用。"}]
             continue
-        ok, why = check(clean, panels)
+        ok, why = check(clean, panels, brief)
         if ok:
             log.info("[comic-agent] 剧本合格（第 %d 稿，%d 格，备选 %d 条）",
                      attempt, panels, len(notes))
@@ -1260,3 +1429,207 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
     if why:
         last_notes = list(last_notes) + ["[警告] 校验未通过：%s" % why]
     return _place_notes(last, last_notes)
+
+
+# ─── 内容补正（2026-10-11 十轮）──────────────────────────
+#
+# 为什么要第二道：编剧 AI 的上下文里塞着十几轮查库结果（实测 223 次查库、
+# 单轮 prompt 峰值 27k token），交稿时容易漏掉规范里的硬要求——**实测三格全漏
+# 发色**，而规范第二节明写「发色必须写死」。补正 AI 拿到的是干净成品稿 +
+# 代码清单，上下文只有一两千字，补齐这类遗漏的能力实测更强。
+#
+# ⚠️ 但**别指望它做语义判断**。实测（deepseek-flash / deepseek-v4-pro /
+# glm-5-2 三个模型）：需求里的「下车」要素一个都没碰。所以分工钉死——
+# **代码负责算事实、出清单；补正 AI 只负责照着清单把字补上**。
+# 不给清单它会自由发挥：flash 版三格各追加一句自己编的 `warm interior bus light`，
+# pro 版塞进 `Izumi Sagiri`（规范第 74 行示例里的角色名，被当素材抄了）。
+#
+# 补正稿**必须过代码闸门**才采纳（见 _verify_fix）：格号一致、check() 通过、
+# 没有凭空人名、没动清单之外的格。任何一条不过就整份退回原稿 —— 宁可漏补，
+# 不能让它把好稿改坏。
+
+FIX_TIMEOUT = 240
+
+_FIX_SYSTEM = """你是分镜剧本的**补正员**。编剧交出一份剧本，你把里面漏掉的具体
+描述补齐，然后原样交出完整剧本。
+
+你手上有一份**问题清单**，是上游程序核对出来的事实。你的工作范围就是这份清单：
+把清单点名的每一处补上。清单之外的画面标签、气泡、旁白、标题，全部逐字保留。
+
+补具体描述时，颜色只能取自「原始需求」原文。原始需求里没写这个角色或物件的颜色时，
+保持原样，把这一条留在清单里交给人工处理，**不许自己定一个颜色**。
+
+画面标签里的角色名，只能来自用户的原始需求。规范正文里出现的示例角色名只是格式
+示意，不是素材。
+
+输出：补正后的**完整剧本**，格式与原来完全一致（`# 标题：` / `## NN` / `画面:` /
+`气泡:` / `气泡2:` / `标签1:` `标签2:`）。只输出剧本本身，前后不要任何说明、
+清单、注释或代码块围栏。"""
+
+
+def _fix_system_prompt():
+    """补正员的系统提示 = 角色与工作范围 + 规范全文（与编剧同一份，不另立一份）。"""
+    spec = _story_spec_text() or ""
+    return _FIX_SYSTEM + "\n\n以下是必须遵守的分镜规范全文：\n\n" + spec
+
+
+def _fmt_issues(issues):
+    """代码清单 → 给补正 AI 看的编号列表。每格聚合，同格多条并在一起。"""
+    by = {}
+    for it in issues:
+        by.setdefault(it.get("no") or "全篇", []).append(it)
+    lines = []
+    for no, items in by.items():
+        uniq, seen = [], set()
+        for it in items:
+            key = (it.get("kind"), it.get("tag"))
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(it)
+        lines.append("格 %s：" % no if no != "全篇" else "全篇：")
+        for it in uniq:
+            lines.append("  - [%s] %s" % (it.get("kind"), it.get("detail")))
+    return "\n".join(lines)
+
+
+def diff_scripts(old, new):
+    """逐格比对两份剧本，返回只含**真正变了的格**的差异列表。
+
+    输出 [{"no", "changed": [字段名], "before": {字段: 值}, "after": {...}}]；
+    增删的整格用 `added` / `removed` 标记。前端拿它直接渲染「改了哪一句」。
+    """
+    def _by_no(text):
+        _, panels = comic.parse_script_text(text or "")
+        return {p["no"]: p for p in panels}
+
+    a, b = _by_no(old), _by_no(new)
+    out = []
+    for no in sorted(set(a) | set(b)):
+        pa, pb = a.get(no), b.get(no)
+        if pa is None:
+            out.append({"no": no, "changed": [], "added": True,
+                        "before": {}, "after": {k: pb.get(k) for k in _DIFF_FIELDS}})
+            continue
+        if pb is None:
+            out.append({"no": no, "changed": [], "removed": True,
+                        "before": {k: pa.get(k) for k in _DIFF_FIELDS}, "after": {}})
+            continue
+        changed = [k for k in _DIFF_FIELDS
+                   if (pa.get(k) or "") != (pb.get(k) or "")]
+        if changed:
+            out.append({"no": no, "changed": changed,
+                        "before": {k: pa.get(k) for k in changed},
+                        "after": {k: pb.get(k) for k in changed}})
+    return out
+
+
+_DIFF_FIELDS = ("scene", "bubble", "bubble2", "label", "speaker", "speaker2")
+
+
+def _verify_fix(original, fixed, brief, issues):
+    """补正稿的代码闸门。返回拒收原因列表，空列表＝可以采纳。
+
+    四条，每条都对应一次实测事故：
+      1. **格号集合必须一致**——补正顺手删格/加格是改剧本结构，不是补描述。
+      2. **不过 check() 就不采纳**——它可能补出新违规（`solo` 配第二方之类）。
+      3. **不许有凭空人名**——`Izumi Sagiri` 实测就是这么进来的。
+      4. **只许改清单点名的格**——没点名的格逐字保留，防它顺手重写全稿。
+    """
+    rejects = []
+    _, pa = comic.parse_script_text(original or "")
+    try:
+        _, pb = comic.parse_script_text(fixed or "")
+    except Exception as exc:
+        return ["补正稿解析失败：%s" % exc]
+    nos_a = [p["no"] for p in pa]
+    nos_b = [p["no"] for p in pb]
+    if nos_a != nos_b:
+        rejects.append("格号对不上：原稿 %s，补正稿 %s" % (nos_a, nos_b))
+        return rejects                      # 结构都变了，后面的判断没意义
+
+    ok, why = check(fixed, len(pb), brief)
+    if not ok:
+        rejects.append("补正稿没过代码判据：%s" % why.replace("\n", " / "))
+
+    names = invented_names(fixed, (brief or "") + "\n" + (original or ""))
+    if names:
+        rejects.append("凭空多出人名：%s"
+                       % "、".join("格 %s 的 `%s`" % (n, t) for n, t in names[:6]))
+
+    allowed = {it["no"] for it in issues if it.get("no")}
+    touched = {d["no"] for d in diff_scripts(original, fixed)}
+    extra = sorted(touched - allowed)
+    if extra:
+        rejects.append("改了清单没点名的格：%s" % "、".join(extra))
+    return rejects
+
+
+def fix_script(brief, text, provider=None, model=None, timeout=None,
+               progress=None, issues=None):
+    """补正一遍剧本：代码出清单 → 模型照着清单补 → 过闸门才采纳。
+
+    参数：
+      - text：编剧交出的剧本（**原稿**，不是补正过的——重跑要从原稿重来）。
+      - issues：不传就现算（`collect_issues`）；传了用传入的（界面重跑时复用）。
+      - provider / model：与编剧同一套下拉，不传走全局默认。
+
+    返回 dict：
+      {"text": 采纳后的剧本（没采纳＝原稿一字未动）,
+       "issues": 代码清单, "diff": 逐格差异, "adopted": 是否采纳,
+       "rejects": 拒收原因, "warnings": 提示, "skipped": 是否根本没跑}
+
+    清单为空时**一次 LLM 都不调**（skipped=True）——没有要补的就别烧调用。
+    模型输出任何一条校验不过，就整份退回原稿：宁可漏补一处，不能让它把好稿
+    改坏（补正稿会直接成为落盘的剧本）。
+    """
+    if not (text or "").strip():
+        raise ValueError("剧本不能为空")
+    provider = (provider or "").strip() or llm.CURRENT_PROVIDER or None
+    issues = collect_issues(text, brief or "") if issues is None else list(issues)
+    out = {"text": text, "issues": issues, "diff": [], "adopted": False,
+           "rejects": [], "warnings": [], "skipped": False, "model": ""}
+    if not issues:
+        out["skipped"] = True
+        out["warnings"].append("代码判据没发现任何问题，未调用补正模型")
+        log.info("[comic-fix] 清单为空，跳过补正")
+        return out
+
+    _emit(progress, "补正：%d 处待补" % len(issues))
+    messages = [
+        {"role": "system", "content": _fix_system_prompt()},
+        {"role": "user", "content":
+            "【原始需求】\n%s\n\n【问题清单】（只补这些）\n%s\n\n【编剧交的剧本】\n%s"
+            % (brief or "（作者没给需求）", _fmt_issues(issues), text)},
+    ]
+    try:
+        fixed = _strip_preamble(llm.call_llm(messages, provider=provider,
+                                             model=model,
+                                             timeout=timeout or FIX_TIMEOUT))
+    except Exception as exc:
+        out["rejects"].append("补正模型调用失败：%s" % exc)
+        log.warning("[comic-fix] 调用失败：%s", exc)
+        return out
+
+    fixed = (fixed or "").strip()
+    if not fixed:
+        out["rejects"].append("补正模型返回空内容")
+        return out
+
+    rejects = _verify_fix(text, fixed, brief or "", issues)
+    if rejects:
+        out["rejects"] = rejects
+        log.warning("[comic-fix] 补正稿未采纳：%s", " / ".join(rejects))
+        return out
+
+    diff = diff_scripts(text, fixed)
+    if not diff:
+        out["warnings"].append("补正模型没改动任何一处（清单里的问题仍在）")
+        log.info("[comic-fix] 补正稿与原稿一致，无改动")
+        return out
+
+    out.update(text=fixed, diff=diff, adopted=True)
+    log.info("[comic-fix] 采纳补正稿：改了 %d 格（%s）",
+             len(diff), "、".join(d["no"] for d in diff))
+    _emit(progress, "补正完成：改了 %d 格" % len(diff))
+    return out
