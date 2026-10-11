@@ -15,6 +15,7 @@ from flask import (Flask, request, jsonify, send_from_directory, Response,
 from app import agents as agent_store
 from app import cancel as cancel_mod
 from app import image_audit
+from app import image_migrate
 from app import logsetup
 from app import usage as usage_stats
 # 别名 `vision_mod` 是**必须**的：本文件里已有一个叫 `vision` 的路由函数
@@ -1350,6 +1351,90 @@ def reject_image_review_global(item_id):
     return jsonify({"ok": ok, "id": item_id, "msg": msg,
                     "pending": image_review.pending_count()}), \
         (200 if ok else 400)
+
+
+# ─── 图片迁移（/migrate，独立界面）────────────────────────────
+# 手工翻看一个文件夹里的图，挑中的**复制**一份到另一个文件夹。只复制不移动，
+# 源目录永远不动；目标里已有同名文件就跳过（见 image_migrate 模块头）。
+#
+# 闸门分两档：
+#   - 读（列目录 / 出图）：不挡，跟 /review 的取图接口一致。
+#   - 写（复制 / 存配置）：走 `_admin_allowed()`，跟其它后台写接口同一道闸。
+# 出图那一路**只认纯文件名**（`image_migrate.safe_name`），`send_from_directory`
+# 再兜一层 —— 名字来自查询串，不挡住就能读任意文件。
+
+
+@app.route("/migrate")
+def migrate_page():
+    """图片迁移界面：一次一批、横向三列，每张下面一个「迁移」按钮。"""
+    return send_from_directory(WEB_DIR, "migrate.html")
+
+
+def _migrate_int(raw, default):
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+@app.route("/api/migrate/config")
+def get_migrate_config():
+    """界面初始化用：上次填的输入/输出目录与批次大小。"""
+    return jsonify(image_migrate.load_config())
+
+
+@app.route("/api/migrate/config", methods=["PUT"])
+def put_migrate_config():
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    return jsonify(image_migrate.save_config(request.get_json(silent=True) or {}))
+
+
+@app.route("/api/migrate/list")
+def list_migrate_images():
+    """列一批。total / offset 都由后端算好，界面只管翻页。"""
+    a = request.args
+    return jsonify(image_migrate.scan(
+        a.get("src", ""), a.get("dst", ""),
+        _migrate_int(a.get("offset"), 0),
+        _migrate_int(a.get("limit"), image_migrate.DEFAULT_BATCH)))
+
+
+@app.route("/api/migrate/image")
+def serve_migrate_image():
+    """出图。只认输入目录下的**顶层文件名**。
+
+    带 `w` 参数就发缩略图（长边 w 的 JPEG）—— 源图常是 3072×4608 的 PNG，
+    一批三张原图几十 MB，翻页会卡。不带 `w` 就是原图（点开大图走这条）。
+    """
+    src = image_migrate.normalize_dir(request.args.get("src", ""))
+    name = image_migrate.safe_name(request.args.get("name", ""))
+    if not src or not name:
+        return jsonify({"error": "参数不合法"}), 400
+    p = os.path.join(src, name)
+    if not os.path.isfile(p):
+        return jsonify({"error": "没有这张图"}), 404
+    w = _migrate_int(request.args.get("w"), 0)
+    if w > 0:
+        data = image_migrate.thumbnail_bytes(p, max_side=w)
+        if data:
+            resp = Response(data, mimetype="image/jpeg")
+            resp.headers["Cache-Control"] = "no-store"
+            return resp
+    return send_from_directory(src, name)
+
+
+@app.route("/api/migrate/copy", methods=["POST"])
+def copy_migrate_image():
+    """复制一张。目标已有同名文件时**跳过**，返回 skipped=True。"""
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    body = request.get_json(silent=True) or {}
+    res = image_migrate.migrate(body.get("src", ""), body.get("name", ""),
+                                body.get("dst", ""))
+    return jsonify(res), (200 if res.get("ok") else 400)
 
 
 @app.route("/api/agent/<agent_id>/vision_prompt", methods=["PUT"])

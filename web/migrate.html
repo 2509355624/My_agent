@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>图片迁移</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%237c5cff'/></svg>">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0a0a0f;
+    --bg-elev: #12121a;
+    --bg-input: #1a1a24;
+    --border: #2a2a3a;
+    --border-soft: #1f1f2e;
+    --text: #e8e8f0;
+    --text-dim: #8888a0;
+    --text-mute: #555570;
+    --accent: #7c5cff;
+    --success: #4ade80;
+    --error: #f87171;
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
+
+  html, body {
+    min-height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "SF Mono", "JetBrains Mono", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
+    font-size: 14px;
+    line-height: 1.7;
+  }
+
+  body::before {
+    content: "";
+    position: fixed; inset: 0;
+    background: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(124, 92, 255, 0.15), transparent);
+    pointer-events: none; z-index: 0;
+  }
+
+  .wrap { position: relative; z-index: 1; max-width: 1400px; margin: 0 auto; padding: 24px 20px 48px; }
+
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+  h1 { font-size: 18px; font-weight: 500; }
+  .sub { color: var(--text-mute); font-size: 12px; }
+  .spacer { flex: 1; }
+  a.back { color: var(--text-dim); font-size: 13px; text-decoration: none; }
+  a.back:hover { color: var(--accent); }
+
+  /* ── 顶部：两个目录 + 批次 ───────────────────────────── */
+  .bar {
+    display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap;
+    background: var(--bg-elev); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: 12px 14px; margin-bottom: 12px;
+  }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field > span { font-size: 11px; color: var(--text-mute); }
+  .field.grow { flex: 1 1 300px; min-width: 220px; }
+  .field.narrow { flex: 0 0 84px; }
+  input {
+    background: var(--bg-input); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); color: var(--text);
+    padding: 7px 10px; font: inherit; font-size: 13px; width: 100%;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  input::placeholder { color: var(--text-mute); }
+
+  button {
+    font: inherit; font-size: 13px; cursor: pointer;
+    background: var(--bg-input); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 7px 14px; transition: border-color .15s, color .15s, background .15s;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); color: #fff; }
+  button:disabled { cursor: default; opacity: .55; }
+  button.primary { border-color: var(--accent); color: #cfc4ff; }
+  button.primary:hover:not(:disabled) { background: rgba(124, 92, 255, .16); }
+
+  .state { font-size: 12px; color: var(--text-dim); min-height: 22px; margin-bottom: 10px; word-break: break-all; }
+  .state.err { color: var(--error); }
+  .state.ok { color: var(--success); }
+
+  /* ── 网格：固定三列 ──────────────────────────────────── */
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--bg-elev); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: 10px;
+    display: flex; flex-direction: column; gap: 7px;
+    transition: border-color .15s;
+  }
+  .card:hover { border-color: var(--border); }
+  .card.done { border-color: rgba(74, 222, 128, .35); }
+
+  .thumb {
+    width: 100%; height: 340px; object-fit: contain;
+    background: #05050a; border-radius: var(--radius-sm); cursor: zoom-in;
+    display: block;
+  }
+  .thumb.loading { opacity: .25; }
+
+  .name { font-size: 12px; color: var(--text-dim); word-break: break-all; line-height: 1.4; }
+  .meta { font-size: 11px; color: var(--text-mute); }
+
+  button.go { width: 100%; padding: 9px 0; }
+  button.go.done { border-color: rgba(74, 222, 128, .45); color: var(--success); }
+
+  /* ── 底部翻页 ────────────────────────────────────────── */
+  .pager {
+    display: flex; align-items: center; gap: 14px; justify-content: center;
+    margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border-soft);
+  }
+  .pageinfo { font-size: 13px; color: var(--text-dim); min-width: 240px; text-align: center; }
+  .pageinfo b { color: var(--text); font-weight: 500; }
+  .hint { text-align: center; font-size: 11px; color: var(--text-mute); margin-top: 10px; }
+
+  .empty { grid-column: 1 / -1; text-align: center; color: var(--text-mute); padding: 56px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>图片迁移</h1>
+    <span class="sub">翻一批、挑好的点一下，就复制一份到你的文件夹（只复制，原图不动）</span>
+    <span class="spacer"></span>
+    <a class="back" href="/">← 返回个人 Agent</a>
+  </header>
+
+  <div class="bar">
+    <label class="field grow"><span>输入文件夹（要翻的图）</span>
+      <input id="src" spellcheck="false" autocomplete="off"
+             placeholder="例如 D:\AI\ComfyUI_v037\output">
+    </label>
+    <label class="field grow"><span>输出文件夹（复制到这儿）</span>
+      <input id="dst" spellcheck="false" autocomplete="off"
+             placeholder="例如 D:\AI\精选">
+    </label>
+    <label class="field narrow"><span>每批</span>
+      <input id="batch" type="number" min="1" max="60" value="3">
+    </label>
+    <button class="primary" id="reload">加载</button>
+  </div>
+
+  <div class="state" id="state"></div>
+
+  <div class="grid" id="grid"></div>
+
+  <div class="pager">
+    <button id="prev">← 上一批</button>
+    <span class="pageinfo" id="pageinfo"></span>
+    <button id="next">下一批 →</button>
+  </div>
+  <div class="hint">键盘 ← → 也能翻页；点图片开原图</div>
+</div>
+
+<script>
+const THUMB_W = 900;          // 缩略图长边。源图常是 3072×4608 的 PNG，不缩会卡
+const $ = (id) => document.getElementById(id);
+
+let S = { src: '', dst: '', limit: 3, total: 0, offset: 0 };
+
+async function api(path, opts) {
+  const resp = await fetch(path, opts);
+  let data = null;
+  try { data = await resp.json(); } catch (e) { data = null; }
+  if (!resp.ok) {
+    throw new Error((data && (data.error || data.message)) || ('请求失败 HTTP ' + resp.status));
+  }
+  return data;
+}
+
+function setState(msg, kind) {
+  const el = $('state');
+  el.textContent = msg || '';
+  el.className = 'state' + (kind ? ' ' + kind : '');
+}
+
+function clampBatch(v) {
+  const n = parseInt(v, 10);
+  if (!n || n < 1) return 3;
+  return Math.min(n, 60);
+}
+
+function fmtSize(b) {
+  if (!b) return '0 B';
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b / 1024).toFixed(0) + ' KB';
+  return (b / 1048576).toFixed(1) + ' MB';
+}
+
+function fmtTime(ts) {
+  const d = new Date((ts || 0) * 1000);
+  const p = (x) => String(x).padStart(2, '0');
+  return p(d.getMonth() + 1) + '-' + p(d.getDate())
+    + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+function imgUrl(name, w) {
+  const q = new URLSearchParams({ src: S.src, name: name });
+  if (w) q.set('w', String(w));
+  return '/api/migrate/image?' + q.toString();
+}
+
+/* ── 拉一批 ─────────────────────────────────────────────── */
+async function load(offset) {
+  const src = $('src').value.trim();
+  const dst = $('dst').value.trim();
+  const limit = clampBatch($('batch').value);
+  $('batch').value = limit;
+
+  if (!src) {
+    S = { src: '', dst: '', limit: limit, total: 0, offset: 0 };
+    renderEmpty('先填输入文件夹，再点「加载」。');
+    setState('');
+    return;
+  }
+
+  setState('读取中…');
+  const q = new URLSearchParams({
+    src: src, dst: dst, offset: String(offset || 0), limit: String(limit)
+  });
+  let d;
+  try {
+    d = await api('/api/migrate/list?' + q.toString());
+  } catch (e) {
+    renderEmpty('');
+    setState('读取失败：' + e.message, 'err');
+    return;
+  }
+
+  S.src = d.src || src;
+  S.dst = d.dst || dst;
+  S.limit = d.limit;
+  S.total = d.total;
+  S.offset = d.offset;
+
+  if (d.error) {
+    renderEmpty('');
+    setState(d.error, 'err');
+    return;
+  }
+  render(d);
+}
+
+function renderEmpty(msg) {
+  const g = $('grid');
+  g.textContent = '';
+  if (!msg) { $('pageinfo').textContent = ''; return; }
+  const e = document.createElement('div');
+  e.className = 'empty';
+  e.textContent = msg;
+  g.appendChild(e);
+  $('pageinfo').textContent = '';
+}
+
+function render(d) {
+  const g = $('grid');
+  g.textContent = '';
+
+  if (!d.items.length) {
+    renderEmpty('这个文件夹里没有图片（只扫顶层，认 png / jpg / webp / gif / bmp）。');
+    $('pageinfo').textContent = '';
+    setState('');
+    return;
+  }
+
+  const dstOk = d.dst_ok;
+  for (const it of d.items) g.appendChild(makeCard(it, dstOk));
+
+  const from = d.offset + 1;
+  const to = d.offset + d.items.length;
+  const pages = Math.max(1, Math.ceil(d.total / d.limit));
+  const page = Math.floor(d.offset / d.limit) + 1;
+  $('pageinfo').innerHTML = '第 <b>' + page + '/' + pages + '</b> 批'
+    + '（' + from + '–' + to + '，共 <b>' + d.total + '</b> 张）';
+
+  $('prev').disabled = d.offset <= 0;
+  $('next').disabled = d.offset + d.limit >= d.total;
+
+  if (!dstOk) {
+    setState('输出文件夹还没填，或它不存在 —— 填好再点「加载」，然后就能迁移了。', 'err');
+  } else {
+    setState('');
+  }
+}
+
+function makeCard(it, dstOk) {
+  const card = document.createElement('div');
+  card.className = 'card' + (it.migrated ? ' done' : '');
+
+  const img = document.createElement('img');
+  img.className = 'thumb loading';
+  img.loading = 'lazy';
+  img.src = imgUrl(it.name, THUMB_W);
+  img.title = '点开看原图';
+  img.onload = () => img.classList.remove('loading');
+  img.onerror = () => {
+    img.classList.remove('loading');
+    img.alt = '读不出来';
+  };
+  img.onclick = () => window.open(imgUrl(it.name, 0), '_blank');
+  card.appendChild(img);
+
+  const name = document.createElement('div');
+  name.className = 'name';
+  name.textContent = it.name;
+  name.title = it.name;
+  card.appendChild(name);
+
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.textContent = fmtSize(it.size) + ' · ' + fmtTime(it.mtime);
+  card.appendChild(meta);
+
+  const btn = document.createElement('button');
+  btn.className = 'go' + (it.migrated ? ' done' : '');
+  btn.textContent = it.migrated ? '✓ 已迁移' : '迁移';
+  btn.disabled = !!it.migrated || !dstOk;
+  btn.onclick = () => doCopy(it, btn, card);
+  card.appendChild(btn);
+
+  return card;
+}
+
+/* ── 迁移一张 ───────────────────────────────────────────── */
+async function doCopy(it, btn, card) {
+  btn.disabled = true;
+  btn.textContent = '复制中…';
+  let r;
+  try {
+    r = await api('/api/migrate/copy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ src: $('src').value.trim(), name: it.name,
+                             dst: $('dst').value.trim() })
+    });
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '迁移';
+    setState('迁移失败：' + e.message, 'err');
+    return;
+  }
+  btn.classList.add('done');
+  btn.textContent = '✓ 已迁移';
+  card.classList.add('done');
+  if (r.skipped) {
+    setState(it.name + '：' + (r.message || '目标里已有同名文件，跳过'), '');
+  } else {
+    setState(it.name + ' → ' + r.dst, 'ok');
+  }
+}
+
+/* ── 翻页 ───────────────────────────────────────────────── */
+function go(off) {
+  const max = Math.max(0, S.total - 1);
+  load(Math.max(0, Math.min(off, max)));
+}
+
+$('prev').onclick = () => go(S.offset - S.limit);
+$('next').onclick = () => go(S.offset + S.limit);
+
+/* 回车 = 加载；改批次 = 存下来并从头看 */
+for (const id of ['src', 'dst', 'batch']) {
+  $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') $('reload').click(); });
+}
+$('batch').addEventListener('change', () => { saveConfig(); load(0); });
+
+$('reload').onclick = () => { saveConfig(); load(0); };
+
+document.addEventListener('keydown', (e) => {
+  const t = e.target.tagName;
+  if (t === 'INPUT' || t === 'TEXTAREA') return;
+  if (e.key === 'ArrowLeft' && !$('prev').disabled) $('prev').click();
+  if (e.key === 'ArrowRight' && !$('next').disabled) $('next').click();
+});
+
+/* ── 配置：记住两个目录与批次大小 ───────────────────────── */
+async function saveConfig() {
+  try {
+    await api('/api/migrate/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ src: $('src').value.trim(),
+                             dst: $('dst').value.trim(),
+                             batch: clampBatch($('batch').value) })
+    });
+  } catch (e) {
+    /* 存不上不影响这次使用，静默 —— 别为一条配置报错打断翻图 */
+  }
+}
+
+async function init() {
+  try {
+    const c = await api('/api/migrate/config');
+    $('src').value = c.src || '';
+    $('dst').value = c.dst || '';
+    $('batch').value = c.batch || 3;
+  } catch (e) { /* 拿不到就用空表单 */ }
+  if ($('src').value) load(0);
+  else renderEmpty('先填输入文件夹，再点「加载」。');
+}
+
+init();
+</script>
+</body>
+</html>
