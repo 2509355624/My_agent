@@ -373,7 +373,12 @@ function renderSlot(p) {
       + '" onclick="zoomOpen(this.src, \'' + p.no + '\', \'' + which + '\')">'
     : alt;
   const ops = [];
-  if (p.state !== 'pending')
+  // 失败格必须也能重跑（2026-10-12）。场景渲染挂掉的格**停在 pending**，
+  // 原来这条条件 `!== 'pending'` 正好把它挡在门外 —— 它是整个界面上唯一
+  // 没有任何操作按钮的格子，底下还写着「排队中…」，看上去像在排队。
+  // 加上 `|| p.error` 后：带错的格一律给重跑按钮，真在排队的格（无 error）
+  // 才显示「排队中…」。
+  if (p.state !== 'pending' || p.error)
     ops.push('<button class="btn small" onclick="rerender(\'' + p.no + '\')">🔁 换种子重跑</button>');
   if (p.state === 'rendered')
     ops.push('<button class="btn small" onclick="bubble(\'' + p.no + '\')">🫧 加气泡</button>');

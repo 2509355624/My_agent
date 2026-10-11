@@ -87,12 +87,18 @@ I2I_DENOISE = "0.60"
 #   ① 正文里不出现任何否定句，条数与归属一律用**正面清点**（「画面里的文字一共
 #      这几处：…」）；
 #   ② 精确文本只用英文双引号包住，不加任何标记词；
-#   ③ 不写序号、【】、括号解释——那是给人看的，模型会当素材。
+#   ③ 不写序号、【】、括号解释——那是给人看的，模型会当素材；
+#   ④ 形状与位置本身就是归属的语义，**不再用文字解释「这是谁说的」**
+#      （2026-10-11 用户拍板，见 `_bubble_sec`）。
+#
+# ⚠️ 气泡那一段（{sec}）**不在模板里写死**，由 `_bubble_sec` 按**说话人**现拼：
+#   角色的台词 → 圆形气泡 + 写明指向谁；
+#   「我们」（镜头视角）的台词 → 白色圆角矩形框 + 固定右下角 + **一个字都不提
+#   指向**（2026-10-11 用户拿两张实测图拍板：形状和位置本身就是归属的语义，
+#   再补一句"这是我们说的话"不会帮到模型，只会多一个幻觉入口）。
 BUBBLE_TEMPLATE = (
-    "在这张漫画格里添加一个对话框（气泡），位置在画面左上方的空白处。"
-    "气泡是白色圆角框、黑色细边框，{tail}，字体为黑体。"
-    '气泡里写 "{text}"，文字排成 2 到 3 行居中显示，每行不超过 8 个字，字迹清晰。'
-    "画面里的文字一共这一处，就是左上角这个气泡。"
+    "{sec}"
+    "{count}"
     "气泡放在人物脸部以外，人物、服装、姿势、背景和画风保持不变。"
 )
 
@@ -104,8 +110,7 @@ BUBBLE_TEMPLATE = (
 # 第二个气泡必须让位到右下角，否则两个文字元素叠在同一角落（2026-10-11）。
 BUBBLE_TEMPLATE_2 = (
     "画面中已经有一个对话框，保持它的大小、位置、内容和样式不变。"
-    "在画面{pos}再添加一个对话框：白色圆角框、黑色细边框，{tail}，字体为黑体。"
-    '这个新对话框里写 "{text}"，文字排成 2 到 3 行居中显示，每行不超过 8 个字，字迹清晰。'
+    "{sec}"
     "画面里的文字一共这两处，就是原有的那个对话框和这个新对话框。"
     "气泡放在人物脸部以外，人物、服装、姿势、背景和画风保持不变。"
 )
@@ -121,9 +126,7 @@ BUBBLE_TEMPLATE_2 = (
 # 旁白可以有多条（剧本里 `标签1:` `标签2:`…，见 parse_script_text），这一段由
 # `_label_sec` 现拼进 {lab_sec}：单条和多条的措辞不同，多条的必须逐行点名。
 BUBBLE_TEMPLATE_LABEL = (
-    "在这张漫画格里添加一个对话框（气泡），位置在画面左上方的空白处。"
-    "气泡是白色圆角框、黑色细边框，{tail}，字体为黑体。"
-    '气泡里写 "{text}"，文字排成 2 到 3 行居中显示，每行不超过 8 个字，字迹清晰。'
+    "{sec}"
     "{lab_sec}"
     "气泡和旁白都放在人物脸部以外，人物、服装、姿势、背景和画风保持不变。"
 )
@@ -143,22 +146,56 @@ BUBBLE_TEMPLATE_ALL = (
     "在这张漫画格里添加两个对话框（气泡）。"
     "{sec1}"
     "{sec2}"
-    "两个气泡的文字各自排成 2 到 3 行居中显示，每行不超过 8 个字，字迹清晰，"
-    "各自只写自己那一段。"
+    "两处的文字各自只写自己那一段。"
     "{lab_sec}"
     "气泡和旁白都放在人物脸部以外，人物、服装、姿势、背景和画风保持不变。"
 )
 
 
-def _bubble_sec(pos, tail, text):
-    """一个气泡在提示词里的那一段描述（一次画两个气泡时按序拼进模板）。
+# 镜头视角的「我们」。它的台词固定右下角、白色圆角矩形框，**不写任何指向**
+# —— 2026-10-11 用户拍板：形状 + 位置就是约定，再用文字解释归属只会多一个
+# 幻觉入口（他手写的实测版里，我方那一段连"箭头""尾巴"两个字都没出现）。
+_SELF_SPEAKER = "我"
+_SELF_POS = "右下角"
 
-    官方写法：位置 + 尾巴指向 + 引号包裹的精确文本 + 样式。**不带序号、不带
-    标记词**——`【气泡1】` 和 `文字（EXACT）` 都是给人看的，模型会把它们当素材
+
+def _bubble_sec(pos, speaker, text, intro=True, again=False):
+    """一个气泡 / 对话框在提示词里的那一段。
+
+    官方写法：位置 + 形状 + 引号包裹的精确文本 + 排版。**不带序号、不带标记词**
+    —— `【气泡1】` 和 `文字（EXACT）` 都是给人看的，模型会把它们当素材
     （EXACT 真被画进过成品气泡里）。
+
+    两种形态（取决于它是单独出现，还是被拼进「一次画两个」的合并版）：
+      · `intro=True` —— 自带引导句（「在这张漫画格里添加一个对话框（气泡），
+        位置在画面…的空白处」）。单气泡、第二遍 i2i 走这条；
+      · `intro=False` —— 直接「{pos}的对话框里写 …」，合并版把它按序拼在
+        自己的开头句后面（不然会出现"添加两个对话框"接"添加一个对话框"）。
+
+    按**说话人**走两条完全不同的写法：
+      · **角色的台词**——白色圆角框、黑色细边框，落在 pos，写明指向谁；
+      · **「我们」（镜头视角）的台词**——白色圆角矩形框，固定右下角，
+        **箭头 / 尾巴这两个字一个都不出现**（两种形态下写法一致）。
+
+    `again=True` 是「第二遍 i2i 在成图上补第二个气泡」的措辞（split 退路）。
     """
-    return ('%s的对话框里写 "%s"，它是白色圆角框、黑色细边框，%s，字体为黑体。'
-            % (pos, _clean_dialogue(text), tail))
+    text = _clean_dialogue(text)
+    if speaker == _SELF_SPEAKER:
+        return ('仅在画面%s添加一个白色的圆角矩形框。'
+                '框里写 "%s"，文字排成 2 到 3 行居中显示，每行不超过 8 个字，'
+                '字迹清晰。' % (_SELF_POS, text))
+    tail = _tail_note(speaker)
+    if not intro:
+        return ('%s的对话框里写 "%s"，它是白色圆角框、黑色细边框，%s，字体为黑体。'
+                % (pos, text, tail))
+    if again:
+        return ('在画面%s再添加一个对话框：白色圆角框、黑色细边框，%s，字体为黑体。'
+                '这个新对话框里写 "%s"，文字排成 2 到 3 行居中显示，'
+                '每行不超过 8 个字，字迹清晰。' % (pos, tail, text))
+    return ('在这张漫画格里添加一个对话框（气泡），位置在画面%s的空白处。'
+            '气泡是白色圆角框、黑色细边框，%s，字体为黑体。'
+            '气泡里写 "%s"，文字排成 2 到 3 行居中显示，每行不超过 8 个字，字迹清晰。'
+            % (pos, tail, text))
 
 
 # 台词里的中日式引号（「」『』）会被 qwen 当成句子边界——实测 04 那格就是在「」处
@@ -172,28 +209,62 @@ def _clean_dialogue(text):
     return re.sub(r"\s+", " ", out).strip()
 
 
-# ─── 气泡尾巴指向 / 旁白段 ─────────────────────────────
+# ─── 气泡归属 / 落位 / 旁白段 ─────────────────────────
 #
-# 两处都是 2026-10-11 用户实测反馈后加的：
+# 都是 2026-10-11 用户实测反馈后定型的：
 #
-# ① **尾巴指向必须写死。** 模板原来只说「带一个指向人物的尾巴」，qwen 就一律把
-#    气泡判给画面里的女生——镜头外「我」说的话也变成她说的。所以剧本里每条气泡
-#    都要声明说话人（`气泡: （我）…`），这里按它写出**确定的**指向。
-#    ⚠️ 但只写**正向**的那一条线索。「这个气泡不是女生说的，不要指向女生」这类
-#    否定必须删掉——否定等于把「指向女生」这个词又喂了一遍（白熊效应），
-#    2026-10-11 用户点名。
-# ② **多条旁白要逐行列出来。** 只说「加一行旁白」，qwen 只会画一行；`标签1:`
+# ① **归属必须说死**，但只用**最短的正向说法**。模板原来只说「带一个指向人物的
+#    尾巴」，qwen 就一律把气泡判给画面里的女生——镜头外「我」说的话也变成她说的。
+#    所以剧本里每条气泡都要声明说话人（`气泡: （我）…`）。
+#    ⚠️ 两条禁区：
+#      · 否定句（「不是女生说的」「不要指向女生」）——等于把那个词又喂一遍，
+#        白熊效应；
+#      · **多余的解释**（「说话人是画面外的我」）——2026-10-11 用户原话：
+#        「我们参杂了大量的无效内容给 qwen，他不是思考模型，他是画图的模型，
+#        所以没有用的词，比如禁止什么、不要什么，都不要说，只说我们要什么即可」。
+# ② **「我们」不靠文字表身份。** 白色圆角矩形框 + 右下角就是约定，我方那一段
+#    连「指向」都不写（见 `_bubble_sec` 的第一个分支）。
+# ③ **多条旁白要逐行列出来。** 只说「加一行旁白」，qwen 只会画一行；`标签1:`
 #    `标签2:` 这样的多段旁白必须一条一条告诉它第几行写什么。
 
 def _tail_note(speaker):
-    """气泡尾巴该指向谁——必须说死，含糊就挂错人。
+    """角色气泡该指向谁——必须说死，含糊就挂错人。
 
-    只给正向线索：指向 + 说话人。「我」的台词还要点明说话人在画面外，因为那
-    正是尾巴朝下的语义依据（画面里只出现他的手）。
+    只给**最短的那条**正向线索：`指向画面中的女生`。
+    2026-10-11 用户实测后砍掉了两处冗余：
+      · 「尾巴」这个词本身（更早还写成「向下指向画面下缘」）——模型不需要知道
+        气泡的尾巴朝哪，只需要知道**这气泡是谁的**；
+      · 「我们」的台词**压根没有指向可写** → 返回空串，由 `_bubble_sec` 走
+        另一条分支（白色圆角矩形框 + 右下角）。
     """
-    if speaker == "我":
-        return "尾巴向下指向画面下缘，说话人是画面外的「我」"
-    return "尾巴指向画面中的女生"
+    return "" if speaker == _SELF_SPEAKER else "指向画面中的女生"
+
+
+# 角色气泡的落位顺序：先左上，被占依次让到右上 / 右下 / 左下。
+_ROLE_POS_ORDER = ("左上方", "右上角", "右下角", "左下角")
+
+
+def _layout(speakers, has_labels):
+    """给这一格的气泡分配落位，返回与 speakers 等长的位置列表。
+
+    规矩（2026-10-11 用户拍板）：
+      · 「我们」的台词**固定右下角**——位置 + 白色圆角矩形框就是它的身份；
+      · 角色的台词按 `_ROLE_POS_ORDER` 挑第一个空位；
+      · 带旁白时右上角让给旁白，不参与分配。
+
+    两边都落到右下角的情况（例如连续两句都是「我」）不做特殊处理：位置重了
+    也不会挂错人，用户原话「qwen 自己会理解的」。
+    """
+    taken = {"右上角"} if has_labels else set()
+    out = []
+    for sp in speakers:
+        if sp == _SELF_SPEAKER:
+            pos = _SELF_POS
+        else:
+            pos = next(p for p in _ROLE_POS_ORDER if p not in taken)
+        taken.add(pos)
+        out.append(pos)
+    return out
 
 
 def _count_note(bubbles, pos2, n_labels, pos1="左上方"):
@@ -221,11 +292,12 @@ def _count_note(bubbles, pos2, n_labels, pos1="左上方"):
     return "画面里的文字一共这%s：%s。" % (total, "、".join(names))
 
 
-def _label_sec(lines, bubbles=1, pos2="右下角"):
+def _label_sec(lines, bubbles=1, pos2="右下角", pos1="左上方"):
     """旁白段的提示词。单条 / 多条两种写法，多条的每行都要单独点名。
 
-    bubbles / pos2 只有**一次画两个气泡**时才会传非默认值：这一段收尾是一句
-    数量清点，必须知道这一格一共画几个气泡、第二个在哪（见 _count_note）。
+    bubbles / pos1 / pos2 只有**一次画两个气泡**时才会传非默认值：这一段收尾是
+    一句数量清点，必须知道这一格一共画几个气泡、各自落在哪（见 `_count_note`
+    和 `_layout`）。
     """
     n = len(lines)
     out = ["另外在画面右上角添加旁白文字：黑体，字号清晰可读、与气泡内文字大小相当，"
@@ -238,7 +310,7 @@ def _label_sec(lines, bubbles=1, pos2="右下角"):
                    "行与行之间留出空隙：" % n)
         out.append("".join('第 %d 行写 "%s"；' % (i + 1, _clean_dialogue(s))
                            for i, s in enumerate(lines)))
-    out.append(_count_note(bubbles, pos2, n))
+    out.append(_count_note(bubbles, pos2, n, pos1))
     return "".join(out)
 
 # 同 image_out / comfy_src：本机常驻代理会把 127.0.0.1 也劫持成 502，
@@ -285,11 +357,12 @@ _FIELD_MAP = {"画面": "scene", "场景": "scene", "scene": "scene", "prompt": 
 # 多条旁白：`标签2` / `label3` 这类带序号的都归到 label（裸名在 _FIELD_MAP 里）
 _LABEL_NUM_RE = re.compile(r"^(?:标签|状态|label|stat)\d+$", re.I)
 
-# 气泡的**说话人**。必须在剧本里写死：qwen 只认「这个气泡的尾巴指向谁」，模板里
-# 说不清它一律挂到画面里的女生头上——镜头外「我」说的话就变成她说的了
-# （2026-10-11 用户实测：本该朝下代表视角方发言的气泡，被判给了女生）。
+# 气泡的**说话人**。必须在剧本里写死：qwen 只认「这个气泡是谁说的」，模板里说不清
+# 它一律挂到画面里的女生头上——镜头外「我」说的话就变成她说的了
+# （2026-10-11 用户实测：本该是视角方发言的气泡，被判给了女生）。
 # 写法是气泡行里带前缀 `（女）` / `（我）`，渲染前由 `_split_speaker` 剥掉——
-# 它只决定尾巴指向，**不进画面文字**。
+# 它只决定**这一段文字怎么写**（角色的圆气泡在左上、我们的圆角矩形框在右下，
+# 见 `_bubble_sec` / `_layout`），**不进画面文字**。
 _DEFAULT_SPEAKER = "女"
 _SPEAKER_ALIAS = (("女生", "女"), ("妹妹", "女"), ("她", "女"), ("女", "女"),
                   ("哥哥", "我"), ("哥", "我"), ("他", "我"), ("男", "我"),
@@ -316,7 +389,7 @@ def _speaker_of(raw):
     """把模型写的说话人说法归一成「女」/「我」；认不出返回空串。
 
     归一成两个值就够：画面里出现的只有女生，说话人要么是她，要么是镜头外那个
-    「我」（画面里只有他的手）。尾巴指向这两者的写法完全不同，见 `_tail_note`。
+    「我」（画面里只有他的手）。这两者的写法完全不同，见 `_tail_note`。
     """
     v = (raw or "").strip().strip("（）()【】[]：: ")
     for k, out in _SPEAKER_ALIAS:
@@ -460,35 +533,38 @@ class Panel:
     def bubble_prompt(self, split=False):
         """阶段二的提示词。
 
-        有第二个气泡时**默认一次画完两个**（BUBBLE_TEMPLATE_ALL，2026-10-11
-        合并）；`split=True` 退回「第一遍只画气泡1+旁白」的老写法，配合
-        bubble2_prompt() 分两遍跑——界面上的「分开画」开关走这条路。
+        气泡的**落位由「谁说的」决定**（见 `_layout`）：我方固定右下角，角色的
+        台词占左上为首的空角。有第二个气泡时**默认一次画完两个**
+        （BUBBLE_TEMPLATE_ALL，2026-10-11 合并）；`split=True` 退回「第一遍只画
+        气泡1+旁白」的老写法，配合 bubble2_prompt() 分两遍跑——界面上的
+        「分开画」开关走这条路。
         """
         lines = self.labels()
         if self.two_bubbles() and not split:
-            pos2 = "右下角" if lines else "右上角"
-            lab_sec = (_label_sec(lines, bubbles=2, pos2=pos2) if lines
-                       else _count_note(2, pos2, 0))
+            pos1, pos2 = _layout([self.speaker, self.speaker2], bool(lines))
+            lab_sec = (_label_sec(lines, bubbles=2, pos2=pos2, pos1=pos1) if lines
+                       else _count_note(2, pos2, 0, pos1))
             return BUBBLE_TEMPLATE_ALL.format(
-                sec1=_bubble_sec("左上方", _tail_note(self.speaker), self.bubble),
-                sec2=_bubble_sec(pos2, _tail_note(self.speaker2), self.bubble2),
+                sec1=_bubble_sec(pos1, self.speaker, self.bubble, intro=False),
+                sec2=_bubble_sec(pos2, self.speaker2, self.bubble2, intro=False),
                 lab_sec=lab_sec)
-        text = _clean_dialogue(self.bubble)
-        tail = _tail_note(self.speaker)
+        pos, = _layout([self.speaker], bool(lines))
+        sec = _bubble_sec(pos, self.speaker, self.bubble)
         if lines:
             return BUBBLE_TEMPLATE_LABEL.format(
-                text=text, tail=tail, lab_sec=_label_sec(lines))
-        return BUBBLE_TEMPLATE.format(text=text, tail=tail)
+                sec=sec, lab_sec=_label_sec(lines, bubbles=1, pos1=pos))
+        return BUBBLE_TEMPLATE.format(
+            sec=sec, count=_count_note(1, None, 0, pos))
 
     def bubble2_prompt(self, pos="右上角"):
         """第二遍 i2i 的提示词。
 
         pos 由调用方给：这一格若带旁白条（它也画在右上角），第二个气泡必须
-        让位到右下角，否则两个文字元素叠在同一个角落。
+        让位到右下角，否则两个文字元素叠在同一个角落。落位同样受说话人约束
+        ——「我」的台词一律右下角（`_bubble_sec` 里再兜一次）。
         """
         return BUBBLE_TEMPLATE_2.format(
-            text=_clean_dialogue(self.bubble2), tail=_tail_note(self.speaker2),
-            pos=pos)
+            sec=_bubble_sec(pos, self.speaker2, self.bubble2, again=True))
 
 
 def _guess_task_id(dirpath):
@@ -540,17 +616,26 @@ class Task:
                 continue
             p.state = s.get("state", p.state)
             p.seed = s.get("seed", p.seed)
+            # 失败原因也必须贴回来（2026-10-12）。不贴的后果是一条完整的死路：
+            # `/status` 每次都从磁盘重读（`_load_task` → `load_state`），error
+            # 恒为 None → 前端既不显示「出错」badge、也不给重跑按钮；而失败的
+            # 格恰好**停在 pending**（失败时没改 state），于是界面显示的是
+            # 「排队中…」，用户以为它在排队，其实早就死了、还无从重跑。
+            # 实测 comics/C20261012-03 格01：state.json 里明明记着
+            # ConnectionResetError(10054)，load 完却是 0 格有 error。
+            p.error = s.get("error", p.error)
             # 剧本改了就把旧图作废：场景变了 → 整格重来；只改了气泡/标签 →
-            # 场景图还能用，退到「待加气泡」重跑阶段二。
+            # 场景图还能用，退到「待加气泡」重跑阶段二。两种情况都要清掉旧
+            # error——它描述的是上一版剧本的失败，留着会一直在界面上挂着「出错」。
             if s.get("scene") and s["scene"] != p.scene:
-                p.state, p.seed = "pending", None
+                p.state, p.seed, p.error = "pending", None, None
             elif (p.state == "done"
                   and (s.get("bubble", "") != p.bubble
                        or s.get("bubble2", "") != p.bubble2
                        or s.get("label", "") != p.label
                        or s.get("speaker", "") != p.speaker
                        or s.get("speaker2", "") != p.speaker2)):
-                p.state = "rendered"
+                p.state, p.error = "rendered", None
 
     def save_state(self):
         os.makedirs(self.raw_dir, exist_ok=True)

@@ -140,21 +140,25 @@ class TwoPassBubbleTest(unittest.TestCase):
         self.assertEqual(p.state, "done")
 
     def test_merged_prompt_declares_both_bubbles_explicitly(self):
-        """合并版必须把**每个**气泡的文字、位置、尾巴指向都写死。
+        """合并版必须把**每个**气泡的文字、位置、归属都写死。
 
         含糊就挂错人（用户原话「箭头指向谁必须是确定的」）——当初「一次只画一个」
         的取舍正是为了绕开这份含糊，现在两件事可以同时满足。
+
+        2026-10-11 用户拍板后两类写法分家：角色的气泡写明「指向画面中的女生」，
+        「我们」的话换成白色圆角矩形框 + 右下角、**一个字都不提指向**。
         """
         p = comic.Panel("01", "1girl, solo", "走吧", "车门合上了",
                         "回家再说", speaker="女", speaker2="我")
         prompt = p.bubble_prompt()
         self.assertIn('"走吧"', prompt)
         self.assertIn('"回家再说"', prompt)
-        self.assertIn("左上方的对话框", prompt)
-        self.assertIn("右下角的对话框", prompt)          # 旁白占了右上角，它让位
-        self.assertIn("尾巴指向画面中的女生", prompt)     # 气泡1 的尾巴
-        self.assertIn("尾巴向下指向画面下缘", prompt)      # 气泡2 的尾巴（镜头外的「我」）
-        self.assertIn("车门合上了", prompt)             # 旁白也在这一遍里
+        self.assertIn("左上方的对话框", prompt)                  # 女生的气泡
+        self.assertIn("指向画面中的女生", prompt)                # 归属写死
+        self.assertIn("仅在画面右下角添加一个白色的圆角矩形框", prompt)   # 我们的话
+        self.assertNotIn("尾巴", prompt)
+        self.assertNotIn("箭头", prompt)
+        self.assertIn("车门合上了", prompt)                     # 旁白也在这一遍里
 
     def test_merged_prompt_count_is_not_contradictory(self):
         """合并版里不能出现「只有一个气泡」这种自相矛盾的句子。
@@ -363,6 +367,53 @@ class StateRoundtripTest(unittest.TestCase):
         task3.load_state()
         self.assertEqual(task3.panels[0].state, "rendered")  # 上一步已退回
 
+    def test_failure_reason_survives_reload(self):
+        """失败原因必须能读回来，失败的格才能重跑（2026-10-12）。
+
+        不读回来的后果是一条完整的死路：失败的格**停在 pending**（失败时不改
+        state），error 又是 None → 界面既不显示「出错」，也不给重跑按钮，只剩
+        一句「排队中…」。实测 comics/C20261012-03 格01 的 ConnectionResetError
+        就是这么在界面上凭空消失的。
+        """
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = os.path.join(tmp.name, "script.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("## 01\n画面: 1girl, solo, test\n气泡: 一\n")
+        meta, panels = comic.parse_script(path)
+        task = comic.Task(path, meta, panels)
+        task.panels[0].state = "pending"
+        task.panels[0].error = "跑超时了：ComfyUI 没反应"
+        task.save_state()
+
+        again = comic.Task(path, *comic.parse_script(path))
+        again.load_state()
+        self.assertEqual(again.panels[0].state, "pending")
+        self.assertEqual(again.panels[0].error, "跑超时了：ComfyUI 没反应")
+
+    def test_changing_scene_clears_stale_failure_reason(self):
+        """画面改了 → 整格重来，上一版的失败原因必须一起清掉。
+
+        留着的话，重跑成功后界面上还挂着一条属于旧剧本的「出错」。
+        """
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = os.path.join(tmp.name, "script.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("## 01\n画面: 1girl, solo, test\n气泡: 一\n")
+        meta, panels = comic.parse_script(path)
+        task = comic.Task(path, meta, panels)
+        task.panels[0].state = "pending"
+        task.panels[0].error = "上一版的错"
+        task.save_state()
+
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("## 01\n画面: 1girl, solo, changed\n气泡: 一\n")
+        again = comic.Task(path, *comic.parse_script(path))
+        again.load_state()
+        self.assertEqual(again.panels[0].state, "pending")
+        self.assertIsNone(again.panels[0].error)
+
 
 class WriterSpecTest(unittest.TestCase):
     """编剧 system prompt 必须含规范全文；气泡2 超长被打回。"""
@@ -494,38 +545,66 @@ class SpeakerTest(unittest.TestCase):
 
 
 class TailDirectionTest(unittest.TestCase):
-    """气泡尾巴指向谁必须写死。
+    """气泡归属必须写死，但**只用最短的正向说法**。
 
     含糊的话 qwen 一律挂到画面里的女生头上——镜头外「我」说的话就变成她说的
-    （2026-10-11 用户实测反馈）。
+    （2026-10-11 用户实测反馈）。2026-10-11 晚用户拿两张实测图把写法定死：
+    角色的气泡写「指向画面中的女生」；「我们」的话不写指向，改由
+    **白色圆角矩形框 + 右下角**表身份（形状和位置本身就是语义）。
     """
 
     def test_girl_bubble_points_at_girl(self):
         prompt = comic.Panel("01", "1girl, solo", "别跟着我",
                              speaker="女").bubble_prompt()
-        self.assertIn("尾巴指向画面中的女生", prompt)
+        self.assertIn("指向画面中的女生", prompt)
+        self.assertNotIn("尾巴", prompt)       # 「尾巴」这个词也一并删了
+        self.assertNotIn("箭头", prompt)
 
-    def test_wo_bubble_points_down_without_negative_wording(self):
-        """「我」的台词：尾巴朝下 + 说明说话人在画面外，**不写否定句**。
+    def test_self_bubble_is_a_plain_rounded_box(self):
+        """「我」的台词：白色圆角矩形框 + 右下角，**整段不提任何指向**。
 
-        旧版末尾是「这个气泡不是女生说的，不要指向女生」——否定等于把「指向
-        女生」这个词又喂一遍，反而更容易挂错（白熊效应，2026-10-11 用户点名）。
+        用户拿实测图拍板：形状和位置就是约定。更早那版写的「尾巴向下指向画面
+        下缘，说话人是画面外的「我」」被整句删掉——用户原话「我们参杂了大量的
+        无效内容给 qwen，他不是思考模型，他是画图的模型，所以没有用的词，比如
+        禁止什么、不要什么，都不要说，只说我们要什么即可」。
+        否定句（旧版的「不是女生说的，不要指向女生」）同样禁——白熊效应。
         """
         prompt = comic.Panel("01", "1girl, solo", "为什么",
                              speaker="我").bubble_prompt()
-        self.assertIn("尾巴向下指向画面下缘", prompt)
-        self.assertIn("说话人是画面外的「我」", prompt)
+        self.assertIn("仅在画面右下角添加一个白色的圆角矩形框", prompt)
+        self.assertNotIn("尾巴", prompt)
+        self.assertNotIn("箭头", prompt)
+        self.assertNotIn("指向", prompt)       # 我方一个字都不提指向
+        self.assertNotIn("画面外", prompt)     # 解释性语句一律不要
         self.assertNotIn("不要指向女生", prompt)
         self.assertNotIn("不是女生说的", prompt)
 
     def test_speaker_defaults_to_girl(self):
         self.assertEqual(comic.Panel("01", "s", "b").speaker, "女")
 
+    def test_positions_come_from_the_speaker_not_the_order(self):
+        """落位由**谁说的**决定（`_layout`），不是「第几个气泡」。
+
+        2026-10-11 之前位置是写死的「第一个左上、第二个让位」，所以只有「我」
+        说话的那一格里，我们的话会被丢到左上角——用户实测图里它在右下角。
+        """
+        self.assertEqual(comic._layout(["我"], False), ["右下角"])
+        self.assertEqual(comic._layout(["我"], True), ["右下角"])
+        self.assertEqual(comic._layout(["女"], False), ["左上方"])
+        self.assertEqual(comic._layout(["女"], True), ["左上方"])
+        # 两个角色：第二个依次让位，右上被旁白占掉就跳过
+        self.assertEqual(comic._layout(["女", "女"], False), ["左上方", "右上角"])
+        self.assertEqual(comic._layout(["女", "女"], True), ["左上方", "右下角"])
+        # 角色 + 我们：各回各家，不撞
+        self.assertEqual(comic._layout(["女", "我"], True), ["左上方", "右下角"])
+        self.assertEqual(comic._layout(["我", "女"], True), ["右下角", "左上方"])
+
     def test_bubble2_uses_its_own_speaker(self):
         p = comic.Panel("01", "s", "一", speaker="我",
                         bubble2="二", speaker2="女")
-        self.assertIn("向下指向画面下缘", p.bubble_prompt())
-        self.assertIn("指向画面中的女生", p.bubble2_prompt())
+        self.assertIn("仅在画面右下角添加一个白色的圆角矩形框",
+                      p.bubble_prompt())                  # 镜头外的「我」
+        self.assertIn("指向画面中的女生", p.bubble2_prompt())  # 女生的气泡
 
 
 class MultiLabelPromptTest(unittest.TestCase):
