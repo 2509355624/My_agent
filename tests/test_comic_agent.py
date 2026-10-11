@@ -275,6 +275,34 @@ class BannedTagTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("holding another's wrist", why)
 
+    def test_check_reports_all_problems_at_once(self):
+        """一次把问题全报出来——一类一条、改完再报下一条，两稿预算下改不完。
+
+        2026-10-11 实跑逮到：同一稿里既有 `hand around wrist`（禁用标签）又有
+        `solo` 配第二方身体部位（人数冲突），原来的写法命中第一条就 return，
+        模型只被告知了后者，前者一路活到交稿。
+        """
+        text = ("## 01\n画面: safe, 1girl, solo, hand around wrist\n"
+                "气泡: 一\n标签: 甲\n"
+                "## 02\n画面: safe, 1girl, solo, holding another's wrist\n"
+                "气泡: 一\n标签: 乙\n")
+        ok, why = comic_agent.check(text, 2)
+        self.assertFalse(ok)
+        self.assertIn("holding another's wrist", why)    # 禁用标签那条
+        self.assertIn("solo focus", why)                 # 人数冲突那条
+
+    def test_check_catches_dialogue_written_as_a_label(self):
+        """台词写进 `标签:` 栏必须被 check 拦下（它先走 `_validate`）。
+
+        判据在 `_validate` 里，所以这里验证的是「agent 路径也确实吃到了」——
+        实跑里正是 `标签2: （女）…` 被静默解析成旁白、气泡2 丢失。
+        """
+        text = ("## 01\n画面: safe, 1girl, solo\n气泡: （女）一\n"
+                "标签1: 她一只脚踏上车门\n标签2: （女）我不要回去！\n")
+        ok, why = comic_agent.check(text, 1)
+        self.assertFalse(ok)
+        self.assertIn("气泡2", why)
+
 
 class RunRoundsTest(unittest.TestCase):
     """agent 循环：工具调用 → 结果回灌 → 收尾轮交出正文。"""
@@ -611,17 +639,57 @@ class PromptTest(unittest.TestCase):
         p = comic_agent._system_prompt(3)
         self.assertIn("在本库里**都不存在**", p)
 
-    def test_teaches_label_as_first_person_narration(self):
-        """`标签:` 从「可选的状态读数」改成「每格必写的剧情旁白」。
+    def test_teaches_multi_label_narration(self):
+        """旁白从「一条可选的状态读数」改成「每格必写的多条剧情旁白」。
 
         2026-10-11 用户报「剧情几乎没有」。旧定义是「只用于交代时间/前提跳转」，
         模型就只写「傍晚 · 末班车到站」这类读数，或者干脆整行删掉；一话下来
-        除了台词没有任何叙事推进。
+        除了台词没有任何叙事推进。同一天追加：一格要能讲好几段剧情
+        （`标签1:` `标签2:` `标签3:`）。
         """
         p = comic_agent._system_prompt(3)
-        self.assertIn("每一格都必须写", p)
+        self.assertIn("标签1:", p)
+        self.assertIn("标签2:", p)
+        self.assertIn("每一格至少要有一条", p)
         self.assertIn("第一人称", p)
         self.assertIn("不要写成时间地点", p)
+
+    def test_story_spec_is_injected(self):
+        """《连续剧情提示词生成规范》必须真的喂进去。
+
+        2026-10-11 用户报「感觉 AI 没遵守那份 skill 的规范」——查出来是根本
+        没喂：那份规范只有旧 CLI（comic_writer）在读，网页端的编剧换成
+        comic_agent 时漏了注入。实跑核对过 `'连续剧情' in prompt` 曾是 False。
+        """
+        p = comic_agent._system_prompt(3)
+        self.assertIn("连续剧情提示词生成规范", p)
+        self.assertIn("连续剧情规范全文开始", p)
+        self.assertIn("不取它的写法", p)         # 规范是自然语言示例，只取规则
+        self.assertNotIn("__STORY_SPEC__", p)
+        self.assertNotIn("__MAX_LABELS__", p)
+
+    def test_teaches_story_line_rule(self):
+        """整话必须是一条故事线，后一格不许推翻前一格已经建立的事实。
+
+        用户贴的一话：01「别跟着我……」说明她已经知道有人跟着，02 又「谁——！」
+        变成刚发现，自相矛盾；三格还都是同一个瞬间的三个切面。
+        """
+        p = comic_agent._system_prompt(3)
+        self.assertIn("整话必须是一条故事线", p)
+        self.assertIn("不是同一个瞬间的三个切面", p)
+        self.assertIn("别跟着我", p)
+        self.assertIn("谁——！", p)
+
+    def test_teaches_explicit_speaker(self):
+        """每条气泡都要带说话人——它决定气泡尾巴指向谁。
+
+        用户原话：「给 qwen 的指令必须明确，箭头指向谁必须是确定的」。写不清
+        qwen 就把镜头外「我」说的话挂到女生头上（见 comic._tail_note）。
+        """
+        p = comic_agent._system_prompt(3)
+        self.assertIn("每条气泡都必须带说话人", p)
+        self.assertIn("（女）", p)
+        self.assertIn("（我）", p)
 
     def test_teaches_panel_progression(self):
         """每格必须有新信息，不许两格只是换表情演同一个动作。

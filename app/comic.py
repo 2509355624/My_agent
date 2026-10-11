@@ -78,7 +78,7 @@ I2I_DENOISE = "0.60"
 #   - 保留约束反复重申（Always re-assert constraints）。
 BUBBLE_TEMPLATE = (
     "在这张漫画格的空白处添加一个对话框（气泡），位置在画面左上方。"
-    "气泡是白色圆角框、黑色细边框，带一个指向人物的尾巴，字体为黑体。"
+    "气泡是白色圆角框、黑色细边框，{tail}，字体为黑体。"
     '气泡内的文字（EXACT）："{text}"'
     "文字排成 2 到 3 行居中显示，每行不超过 8 个字，字迹清晰、不要重影。"
     "气泡内只写这一段文字；画面中不要出现第二个气泡，不要出现任何其他文字或符号。"
@@ -96,7 +96,7 @@ BUBBLE_TEMPLATE = (
 BUBBLE_TEMPLATE_2 = (
     "画面中已经有一个对话框（气泡），保持它的大小、位置、内容和样式完全不变。"
     "另外在画面{pos}新增一个对话框（气泡）：白色圆角框、黑色细边框，"
-    "带一个指向人物的尾巴，字体为黑体。"
+    "{tail}，字体为黑体。"
     '新增气泡内的文字（EXACT）："{text}"'
     "文字排成 2 到 3 行居中显示，每行不超过 8 个字，字迹清晰、不要重影。"
     "新增气泡内只写这一段文字；除了画面中原有的那个气泡外，"
@@ -112,20 +112,18 @@ BUBBLE_TEMPLATE_2 = (
 # ⚠️ 原文写的是「加一行**小**字」，实测 qwen 会照字面画成很小的字
 # （2026-10-11 用户反馈「作为标签的字体有点小」）。字号必须显式写清楚，
 # 「小字」这种词只能删掉——它对模型就是个字号指令。
+#
+# 旁白可以有多条（剧本里 `标签1:` `标签2:`…，见 parse_script_text），这一段由
+# `_label_sec` 现拼进 {lab_sec}：单条和多条的措辞不同，多条的必须逐行点名。
 BUBBLE_TEMPLATE_LABEL = (
     "在这张漫画格的空白处添加一个对话框（气泡），位置在画面左上方。"
-    "气泡是白色圆角框、黑色细边框，带一个指向人物的尾巴，字体为黑体。"
+    "气泡是白色圆角框、黑色细边框，{tail}，字体为黑体。"
     '气泡内的文字（EXACT）："{text}"'
     "文字排成 2 到 3 行居中显示，每行不超过 8 个字，字迹清晰、不要重影。"
     "气泡内只写这一段文字。"
-    "另外在画面右上角添加一行旁白文字：黑体，字号清晰可读、与气泡内文字大小相当，"
-    "带白色描边，不要边框、不要底色、不要图标。"
-    '这行旁白的文字（EXACT）："{label}"'
-    "这行旁白只写这一段文字。"
-    "画面中只出现这两个文字元素（左上角一个气泡、右上角一行旁白），"
-    "不要出现第三个气泡，不要出现任何其他文字或符号。"
+    "{lab_sec}"
     "气泡和旁白都不要遮挡人物脸部。"
-    "保持人物、服装、姿势、背景和画风完全不变，只新增这一个对话框和这一行旁白。"
+    "保持人物、服装、姿势、背景和画风完全不变，只新增这一个对话框和这几行旁白。"
 )
 
 # 台词里的中日式引号（「」『』）会被 qwen 当成句子边界——实测 04 那格就是在「」处
@@ -137,6 +135,46 @@ _QUOTE_CHARS = "「」『』“”‘’\"'"
 def _clean_dialogue(text):
     out = "".join(ch for ch in (text or "") if ch not in _QUOTE_CHARS)
     return re.sub(r"\s+", " ", out).strip()
+
+
+# ─── 气泡尾巴指向 / 旁白段 ─────────────────────────────
+#
+# 两处都是 2026-10-11 用户实测反馈后加的：
+#
+# ① **尾巴指向必须写死。** 模板原来只说「带一个指向人物的尾巴」，qwen 就一律把
+#    气泡判给画面里的女生——镜头外「我」说的话也变成她说的。所以剧本里每条气泡
+#    都要声明说话人（`气泡: （我）…`），这里按它写出**确定的**指向。
+# ② **多条旁白要逐行列出来。** 只说「加一行旁白」，qwen 只会画一行；`标签1:`
+#    `标签2:` 这样的多段旁白必须一条一条告诉它第几行写什么。
+
+def _tail_note(speaker):
+    """气泡尾巴该指向谁——必须说死，含糊就挂错人。"""
+    if speaker == "我":
+        return ("气泡的尾巴向下指向画面下缘（说话人是镜头外的「我」，"
+                "画面里只有他的手；这个气泡不是女生说的，不要指向女生）")
+    return "气泡的尾巴指向画面中的女生（这个气泡是女生说的）"
+
+
+def _label_sec(lines):
+    """旁白段的提示词。单条 / 多条两种写法，多条的每行都要单独点名。"""
+    n = len(lines)
+    out = ["另外在画面右上角添加旁白文字：黑体，字号清晰可读、与气泡内文字大小相当，"
+           "每条旁白最多排 3 行、每行不超过 8 个字（放不下就换到下一行），"
+           "带白色描边，不要边框、不要底色、不要图标。"]
+    if n == 1:
+        out.append('这行旁白的文字（EXACT）："%s"' % _clean_dialogue(lines[0]))
+        out.append("这行旁白只写这一段文字。")
+        out.append("画面中只出现这两个文字元素（左上角一个气泡、右上角一行旁白），"
+                   "不要出现第三个气泡，不要出现任何其他文字或符号。")
+    else:
+        out.append("旁白一共 %d 行，在右上角从上到下依次排开，每行独立成行、"
+                   "行与行之间留出空隙，不要连成一整段：" % n)
+        out.append("".join('第 %d 行（EXACT）："%s"；' % (i + 1, _clean_dialogue(s))
+                           for i, s in enumerate(lines)))
+        out.append("旁白只写上面这 %d 段文字，不要多写、不要少写。" % n)
+        out.append("画面中只出现这些文字元素（左上角一个气泡、右上角 %d 行旁白），"
+                   "不要出现第三个气泡，不要出现任何其他文字或符号。" % n)
+    return "".join(out)
 
 # 同 image_out / comfy_src：本机常驻代理会把 127.0.0.1 也劫持成 502，
 # 取图这条回环请求必须 trust_env=False。
@@ -162,19 +200,81 @@ _session.trust_env = False
 # 字段名中英都认；画面/气泡各自可以续行（缩进或直接换行都行，遇到空行结束）。
 
 _PANEL_RE = re.compile(r"^\s*##\s+(\d{1,3})\s*$")
-# ⚠️ 「气泡2」必须排在「气泡」前面：正则交替是从左到右吃的，先写「气泡」会把
-# 「气泡2: …」吃成 field=气泡、值剩下「2: …」，再被当续行拼进上一格台词。
+# ⚠️ 交替是从左到右吃的，**带序号的写法必须排在裸名前面**：
+#   「气泡2」排在「气泡」前，否则 `气泡2: …` 被吃成 field=气泡、值剩「2: …」；
+#   「说话人2」排在「说话人」前，同一个坑；
+#   「标签\d*」把多条旁白（标签1、标签2…）一并收进来。
 _FIELD_RE = re.compile(
-    r"^\s*(画面|场景|scene|prompt|气泡2|台词2|bubble2|气泡|台词|bubble|dialogue|标签|状态|label|stat)"
+    r"^\s*(画面|场景|scene|prompt"
+    r"|气泡2|台词2|bubble2|气泡|台词|bubble|dialogue"
+    r"|说话人2|speaker2|说话人|speaker"
+    r"|标签\d*|状态\d*|label\d*|stat\d*)"
     r"\s*[:：]\s*(.*)$", re.I)
 _FIELD_MAP = {"画面": "scene", "场景": "scene", "scene": "scene", "prompt": "scene",
               "气泡": "bubble", "台词": "bubble", "bubble": "bubble",
               "dialogue": "bubble",
               "气泡2": "bubble2", "台词2": "bubble2", "bubble2": "bubble2",
-              "标签": "label", "状态": "label", "label": "label", "stat": "label"}
+              "标签": "label", "状态": "label", "label": "label", "stat": "label",
+              "说话人": "speaker", "speaker": "speaker",
+              "说话人2": "speaker2", "speaker2": "speaker2"}
+# 多条旁白：`标签2` / `label3` 这类带序号的都归到 label（裸名在 _FIELD_MAP 里）
+_LABEL_NUM_RE = re.compile(r"^(?:标签|状态|label|stat)\d+$", re.I)
+
+# 气泡的**说话人**。必须在剧本里写死：qwen 只认「这个气泡的尾巴指向谁」，模板里
+# 说不清它一律挂到画面里的女生头上——镜头外「我」说的话就变成她说的了
+# （2026-10-11 用户实测：本该朝下代表视角方发言的气泡，被判给了女生）。
+# 写法是气泡行里带前缀 `（女）` / `（我）`，渲染前由 `_split_speaker` 剥掉——
+# 它只决定尾巴指向，**不进画面文字**。
+_DEFAULT_SPEAKER = "女"
+_SPEAKER_ALIAS = (("女生", "女"), ("妹妹", "女"), ("她", "女"), ("女", "女"),
+                  ("哥哥", "我"), ("哥", "我"), ("他", "我"), ("男", "我"),
+                  ("我", "我"))
+_SPEAKER_BRACKET_RE = re.compile(
+    r"^\s*[（(【\[]\s*([^）)】\]]{1,4})\s*[）)】\]]\s*[:：]?\s*")
+_SPEAKER_COLON_RE = re.compile(r"^\s*([女男我她他哥妹][生哥妹]?)\s*[:：]\s*")
 _TITLE_RE = re.compile(r"^\s*#\s*(?:标题\s*[:：]\s*)?(.+?)\s*$")
 _TASKID_RE = re.compile(r"^\s*任务号\s*[:：]\s*(.+?)\s*$")
 _TASKID_FORMAT = re.compile(r"^C\d{8}-\d+$")
+
+
+def _field_of(raw):
+    """字段名 → 内部键。`标签1` / `标签2` / `label3` 这类带序号的旁白都归到
+    `label`（多条旁白就是这么写的）；认不出来返回 None。"""
+    key = (raw or "").strip().lower()
+    got = _FIELD_MAP.get(key)
+    if got:
+        return got
+    return "label" if _LABEL_NUM_RE.match(key) else None
+
+
+def _speaker_of(raw):
+    """把模型写的说话人说法归一成「女」/「我」；认不出返回空串。
+
+    归一成两个值就够：画面里出现的只有女生，说话人要么是她，要么是镜头外那个
+    「我」（画面里只有他的手）。尾巴指向这两者的写法完全不同，见 `_tail_note`。
+    """
+    v = (raw or "").strip().strip("（）()【】[]：: ")
+    for k, out in _SPEAKER_ALIAS:
+        if k in v:
+            return out
+    return ""
+
+
+def _split_speaker(text):
+    """剥出气泡行里的说话人前缀，返回 (说话人, 干净台词)。
+
+    认两种写法：`（女）台词` 和 `女：台词`。说话人**不进画面文字**，必须在渲染
+    前剥干净；认不出就返回空串，由调用方回退默认值（画面里的女生）。
+    """
+    t = (text or "").strip()
+    for rex in (_SPEAKER_BRACKET_RE, _SPEAKER_COLON_RE):
+        m = rex.match(t)
+        if not m:
+            continue
+        sp = _speaker_of(m.group(1))
+        if sp:
+            return sp, t[m.end():].strip()
+    return "", t
 
 
 def parse_script(path):
@@ -187,22 +287,31 @@ def parse_script(path):
 def parse_script_text(text):
     """解析剧本正文，返回 (meta, panels)。
 
-    panels 是 dict 列表，含 no / scene / bubble / label。解析逻辑只此一份——
-    编剧层（app/comic_writer.py）写完剧本也调它做校验，所以拆出文本版。
+    panels 是 dict 列表，含 no / scene / bubble / bubble2 / label / speaker /
+    speaker2。解析逻辑只此一份——编剧层（app/comic_writer.py）写完剧本也调它做
+    校验，所以拆出文本版。
+
+    - **多条旁白**：`标签1:` `标签2:` `标签3:`（`标签:` 同义）按出现顺序各占一行，
+      用 `\\n` 拼在 `label` 上。用户 2026-10-11 拍板：一格要能讲好几段剧情。
+    - **说话人**：气泡行带前缀 `（女）` / `（我）` 时剥进 speaker / speaker2；
+      单独写一行 `说话人:` 也认（补到最靠近的那个气泡上）。
     """
     meta = {}
     panels = []
     cur = None
     field = None
+    pending_speaker = ""             # `说话人:` 写在气泡**前面**时先存着
     for raw in text.splitlines():
         line = raw.rstrip()
 
         m = _PANEL_RE.match(line)
         if m:
             cur = {"no": "%02d" % int(m.group(1)), "scene": "",
-                   "bubble": "", "bubble2": "", "label": ""}
+                   "bubble": "", "bubble2": "", "label": "",
+                   "speaker": "", "speaker2": ""}
             panels.append(cur)
             field = None
+            pending_speaker = ""
             continue
 
         if cur is None:                      # 面板之前的头部只认标题 / 任务号
@@ -218,8 +327,32 @@ def parse_script_text(text):
 
         m = _FIELD_RE.match(line)
         if m:
-            field = _FIELD_MAP[m.group(1).lower()]
-            cur[field] = m.group(2).strip()
+            key = _field_of(m.group(1))
+            val = m.group(2).strip()
+            if key == "label":
+                # 多条旁白：按出现顺序各占一行（`标签:` 与 `标签1:` 同义）
+                cur["label"] = (cur["label"] + "\n" + val) if cur["label"] else val
+            elif key == "speaker":
+                sp = _speaker_of(val)
+                if sp:
+                    # 独立成行也认：写在气泡后面补给最近那个气泡，写在前面留给下一个
+                    if cur["bubble2"]:
+                        cur["speaker2"] = sp
+                    elif cur["bubble"]:
+                        cur["speaker"] = sp
+                    else:
+                        pending_speaker = sp
+            elif key in ("bubble", "bubble2"):
+                sp, body = _split_speaker(val)
+                if not sp and key == "bubble" and pending_speaker:
+                    sp = pending_speaker
+                cur[key] = body
+                cur["speaker2" if key == "bubble2" else "speaker"] = sp
+                if key == "bubble":
+                    pending_speaker = ""
+            else:
+                cur[key] = val
+            field = key
             continue
 
         if not line.strip():
@@ -238,22 +371,31 @@ _STATE_LABEL = {"pending": "待渲染", "rendered": "待加气泡", "done": "已
 
 
 class Panel:
-    def __init__(self, no, scene, bubble, label="", bubble2=""):
+    def __init__(self, no, scene, bubble, label="", bubble2="",
+                 speaker="", speaker2=""):
         self.no = no
         self.scene = scene
         self.bubble = bubble
         self.bubble2 = bubble2      # 可空；有值时阶段二对成图再串一次 i2i 画第二个气泡
-        self.label = label          # 可空；有值时阶段二画「气泡 + 一行小字」两个元素
+        self.label = label          # 可空；多条旁白用 \n 分隔（`标签1:` `标签2:`…）
+        self.speaker = speaker or _DEFAULT_SPEAKER    # 气泡尾巴指向谁（见 _tail_note）
+        self.speaker2 = speaker2 or _DEFAULT_SPEAKER
         self.state = "pending"      # pending → rendered → done
         self.seed = None
         self.error = None
 
+    def labels(self):
+        """旁白行——多条旁白（`标签1:` `标签2:`…）在这里拆开。"""
+        return [x.strip() for x in (self.label or "").split("\n") if x.strip()]
+
     def bubble_prompt(self):
         text = _clean_dialogue(self.bubble)
-        if self.label:
+        tail = _tail_note(self.speaker)
+        lines = self.labels()
+        if lines:
             return BUBBLE_TEMPLATE_LABEL.format(
-                text=text, label=_clean_dialogue(self.label))
-        return BUBBLE_TEMPLATE.format(text=text)
+                text=text, tail=tail, lab_sec=_label_sec(lines))
+        return BUBBLE_TEMPLATE.format(text=text, tail=tail)
 
     def bubble2_prompt(self, pos="右上角"):
         """第二遍 i2i 的提示词。
@@ -261,8 +403,9 @@ class Panel:
         pos 由调用方给：这一格若带旁白条（它也画在右上角），第二个气泡必须
         让位到右下角，否则两个文字元素叠在同一个角落。
         """
-        return BUBBLE_TEMPLATE_2.format(text=_clean_dialogue(self.bubble2),
-                                        pos=pos)
+        return BUBBLE_TEMPLATE_2.format(
+            text=_clean_dialogue(self.bubble2), tail=_tail_note(self.speaker2),
+            pos=pos)
 
 
 def _guess_task_id(dirpath):
@@ -283,7 +426,8 @@ class Task:
         self.panels = [p if isinstance(p, Panel)
                        else Panel(p["no"], p.get("scene", ""),
                                   p.get("bubble", ""), p.get("label", ""),
-                                  p.get("bubble2", ""))
+                                  p.get("bubble2", ""), p.get("speaker", ""),
+                                  p.get("speaker2", ""))
                        for p in panels]
         self.task_id = meta.get("task_id") or _guess_task_id(self.dir)
         self.raw_dir = os.path.join(self.dir, "raw")
@@ -320,7 +464,9 @@ class Task:
             elif (p.state == "done"
                   and (s.get("bubble", "") != p.bubble
                        or s.get("bubble2", "") != p.bubble2
-                       or s.get("label", "") != p.label)):
+                       or s.get("label", "") != p.label
+                       or s.get("speaker", "") != p.speaker
+                       or s.get("speaker2", "") != p.speaker2)):
                 p.state = "rendered"
 
     def save_state(self):
@@ -337,6 +483,8 @@ class Task:
                     "bubble": p.bubble,
                     "bubble2": p.bubble2,
                     "label": p.label,
+                    "speaker": p.speaker,
+                    "speaker2": p.speaker2,
                     "state": p.state,
                     "seed": p.seed,
                     "error": p.error,
@@ -511,7 +659,7 @@ def render_bubble(task, p):
     _download(name, task.final_path(p))
     if p.bubble2.strip():
         # 有旁白条时它占了右上角，第二个气泡让位到右下角（见 BUBBLE_TEMPLATE_2）
-        pos = "右下角" if p.label.strip() else "右上角"
+        pos = "右下角" if p.labels() else "右上角"
         prompt2 = p.bubble2_prompt(pos)
         seed2 = _new_seed()
         uploaded2 = _upload_source(task.final_path(p))   # 源图=第一遍的成图
@@ -602,7 +750,8 @@ def _report(task):
         if p.seed is not None:
             line += "  seed=%s" % p.seed
         if p.label:
-            line += "  标签=%s" % p.label
+            # 旁白可以有多条，命令行里挤成一行看
+            line += "  标签=%s" % " / ".join(p.labels())
         if p.state == "done":
             line += "  → %s" % task._rel(task.final_path(p))
         elif p.state == "rendered":

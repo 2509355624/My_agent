@@ -268,9 +268,19 @@ function renderSlot(p) {
   return '<div class="slot"><div class="head"><span class="no">格 ' + p.no + '</span>'
     + badge + '<span class="seed">' + (p.seed != null ? 'seed ' + p.seed : '') + '</span></div>'
     + '<div class="imgs"><div>' + sceneImg + '</div><div>' + finalImg + '</div></div>'
-    + (p.label ? '<div class="lbl">标签: ' + esc(p.label) + '</div>' : '')
+    + labelHtml(p)
     + (p.error ? '<div class="err">' + esc(p.error) + '</div>' : '')
     + '<div class="ops">' + (ops.join('') || '<span style="color:var(--text-mute);font-size:11px">排队中…</span>') + '</div></div>';
+}
+
+// 旁白：一格可以有多条（剧本里 `标签1:` `标签2:`…，后端用 \n 拼在一行里）。
+// 块内换行会触发整格重建（下面逐格 diff 只比 p.label 这个字符串），图片不在
+// 旁白 DOM 里，所以重建不会闪图。
+function labelHtml(p) {
+  const lines = String(p.label || '').split('\n').filter(x => x.trim());
+  if (!lines.length) return '';
+  return '<div class="lbl">' + lines.map((x, i) =>
+    '标签' + (i + 1) + ': ' + esc(x)).join('<br>') + '</div>';
 }
 
 const _slots = {};   // {no: {sig, el}} —— 逐格 diff，状态没变就不碰 DOM（不闪图）

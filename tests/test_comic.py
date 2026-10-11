@@ -228,15 +228,208 @@ class WriterSpecTest(unittest.TestCase):
         self.assertIn("连续剧情提示词生成规范", system)
         self.assertIn("======== 规范全文开始 ========", system)
 
-    def test_label_template_does_not_say_small_font(self):
+    def test_label_prompt_does_not_say_small_font(self):
         """「小字」对 qwen 就是个字号指令——原文写了它，就真画成很小的字。
 
         2026-10-11 用户反馈「作为标签的字体有点小」：模板原话是「添加一行**小**
         字」。字号必须显式写清楚，不能留这种会被当指令执行的形容词。
+        旁白段后来改由 `_label_sec()` 现拼（单条 / 多条措辞不同），所以这里
+        查的是**真正发给 qwen 的那段提示词**，而不是模板字面量。
         """
-        tpl = comic.BUBBLE_TEMPLATE_LABEL
-        self.assertNotIn("小字", tpl)
-        self.assertIn("字号清晰可读", tpl)
+        prompt = comic.Panel("01", "1girl, solo", "台词", "旁白").bubble_prompt()
+        self.assertNotIn("小字", prompt)
+        self.assertIn("字号清晰可读", prompt)
+        self.assertIn('这行旁白的文字（EXACT）："旁白"', prompt)
+
+
+class MultiLabelTest(unittest.TestCase):
+    """多条旁白：`标签1:` `标签2:` `标签3:` 按出现顺序各占一行。
+
+    用户 2026-10-11 拍板：一格要能讲好几段剧情（「我带她回了家 / 安慰了她 /
+    她的手在袖子里攥紧了」），所以 label 从单值变成多行字符串。
+    """
+
+    def test_numbered_labels_become_lines(self):
+        text = ("## 01\n画面: 1girl, solo\n气泡: （女）一\n"
+                "标签1: 妹妹生闷气离家出走\n标签2: 一只脚已经踩上车门\n")
+        _, panels = comic.parse_script_text(text)
+        self.assertEqual(panels[0]["label"],
+                         "妹妹生闷气离家出走\n一只脚已经踩上车门")
+
+    def test_bare_label_and_numbered_mix(self):
+        _, panels = comic.parse_script_text(
+            "## 01\n画面: 1girl\n气泡: 一\n标签: 前情\n标签2: 当下\n")
+        self.assertEqual(panels[0]["label"], "前情\n当下")
+
+    def test_three_labels_kept_in_order(self):
+        text = ("## 01\n画面: 1girl\n气泡: 一\n"
+                "标签1: 我带她回了家\n标签2: 安慰了她\n标签3: 她的手攥紧了\n")
+        _, panels = comic.parse_script_text(text)
+        self.assertEqual(panels[0]["label"].split("\n"),
+                         ["我带她回了家", "安慰了她", "她的手攥紧了"])
+
+    def test_labels_do_not_leak_into_bubble(self):
+        _, panels = comic.parse_script_text(
+            "## 01\n画面: 1girl\n气泡: 一\n标签1: 甲\n标签2: 乙\n")
+        self.assertEqual(panels[0]["bubble"], "一")
+
+    def test_panel_defaults_speaker_keys(self):
+        _, panels = comic.parse_script_text("## 01\n画面: 1girl\n气泡: 一\n")
+        self.assertEqual(panels[0]["speaker"], "")
+        self.assertEqual(panels[0]["speaker2"], "")
+
+
+class SpeakerTest(unittest.TestCase):
+    """说话人：气泡行前缀 `（女）` / `（我）`，剥出来只决定尾巴指向谁。
+
+    前缀**绝不能留在台词里**（会被 qwen 当文字画上去），也**绝不能误剥**——
+    `（笑）你说什么` 这种括号开头不是说话人。
+    """
+
+    def test_bracket_prefix_stripped(self):
+        _, panels = comic.parse_script_text(
+            "## 01\n画面: 1girl\n气泡: （女）别跟着我……\n")
+        self.assertEqual(panels[0]["speaker"], "女")
+        self.assertEqual(panels[0]["bubble"], "别跟着我……")
+
+    def test_wo_means_camera_person(self):
+        _, panels = comic.parse_script_text(
+            "## 01\n画面: 1girl\n气泡: （我）为什么……\n")
+        self.assertEqual(panels[0]["speaker"], "我")
+        self.assertEqual(panels[0]["bubble"], "为什么……")
+
+    def test_colon_form(self):
+        _, panels = comic.parse_script_text(
+            "## 01\n画面: 1girl\n气泡: 我：为什么……\n")
+        self.assertEqual(panels[0]["speaker"], "我")
+        self.assertEqual(panels[0]["bubble"], "为什么……")
+
+    def test_speaker_line_applies_to_previous_bubble(self):
+        _, panels = comic.parse_script_text(
+            "## 01\n画面: 1girl\n气泡: 为什么……\n说话人: 我\n")
+        self.assertEqual(panels[0]["speaker"], "我")
+
+    def test_speaker2_line_applies_to_bubble2(self):
+        _, panels = comic.parse_script_text(
+            "## 01\n画面: 1girl\n气泡: 女：一\n气泡2: 二\n说话人2: 女\n")
+        self.assertEqual(panels[0]["speaker2"], "女")
+
+    def test_non_speaker_bracket_left_alone(self):
+        _, panels = comic.parse_script_text(
+            "## 01\n画面: 1girl\n气泡: （笑）你说什么\n")
+        self.assertEqual(panels[0]["bubble"], "（笑）你说什么")
+        self.assertEqual(panels[0]["speaker"], "")
+
+
+class TailDirectionTest(unittest.TestCase):
+    """气泡尾巴指向谁必须写死。
+
+    含糊的话 qwen 一律挂到画面里的女生头上——镜头外「我」说的话就变成她说的
+    （2026-10-11 用户实测反馈）。
+    """
+
+    def test_girl_bubble_points_at_girl(self):
+        prompt = comic.Panel("01", "1girl, solo", "别跟着我",
+                             speaker="女").bubble_prompt()
+        self.assertIn("指向画面中的女生", prompt)
+
+    def test_wo_bubble_points_down_and_says_not_hers(self):
+        prompt = comic.Panel("01", "1girl, solo", "为什么",
+                             speaker="我").bubble_prompt()
+        self.assertIn("向下指向画面下缘", prompt)
+        self.assertIn("不是女生说的", prompt)
+
+    def test_speaker_defaults_to_girl(self):
+        self.assertEqual(comic.Panel("01", "s", "b").speaker, "女")
+
+    def test_bubble2_uses_its_own_speaker(self):
+        p = comic.Panel("01", "s", "一", speaker="我",
+                        bubble2="二", speaker2="女")
+        self.assertIn("向下指向画面下缘", p.bubble_prompt())
+        self.assertIn("指向画面中的女生", p.bubble2_prompt())
+
+
+class MultiLabelPromptTest(unittest.TestCase):
+    """多条旁白必须在提示词里**逐行点名**，否则 qwen 只画一行。"""
+
+    def test_two_lines_listed_by_index(self):
+        prompt = comic.Panel("01", "s", "台词", "甲\n乙").bubble_prompt()
+        self.assertIn("旁白一共 2 行", prompt)
+        self.assertIn('第 1 行（EXACT）："甲"', prompt)
+        self.assertIn('第 2 行（EXACT）："乙"', prompt)
+
+    def test_single_line_uses_single_wording(self):
+        prompt = comic.Panel("01", "s", "台词", "甲").bubble_prompt()
+        self.assertIn("一行旁白", prompt)
+        self.assertNotIn("旁白一共", prompt)
+
+    def test_labels_helper_skips_blank(self):
+        self.assertEqual(comic.Panel("01", "s", "b", "甲\n\n乙 ").labels(),
+                         ["甲", "乙"])
+
+
+class WriterMultiLabelValidateTest(unittest.TestCase):
+    """校验：旁白至少一条、最多 MAX_LABELS 条、每条不超 MAX_LABEL 字。"""
+
+    def test_accepts_three_labels(self):
+        text = ("## 01\n画面: 1girl, solo\n气泡: （女）一\n"
+                "标签1: 甲\n标签2: 乙\n标签3: 丙\n")
+        ok, why = comic_writer._validate(text, 1)
+        self.assertTrue(ok, why)
+
+    def test_rejects_too_many_labels(self):
+        text = ("## 01\n画面: 1girl, solo\n气泡: （女）一\n"
+                "标签1: 甲\n标签2: 乙\n标签3: 丙\n标签4: 丁\n")
+        ok, why = comic_writer._validate(text, 1)
+        self.assertFalse(ok)
+        self.assertIn("最多", why)
+
+    def test_rejects_overlong_label_line(self):
+        text = ("## 01\n画面: 1girl, solo\n气泡: （女）一\n"
+                "标签1: %s\n" % ("长" * (comic_writer.MAX_LABEL + 1)))
+        ok, why = comic_writer._validate(text, 1)
+        self.assertFalse(ok)
+        self.assertIn("太长", why)
+
+    def test_rejects_missing_label(self):
+        ok, why = comic_writer._validate(
+            "## 01\n画面: 1girl, solo\n气泡: （女）一\n", 1)
+        self.assertFalse(ok)
+        self.assertIn("标签1", why)
+
+    def test_accepts_label_at_exactly_the_cap(self):
+        """上限是闭区间：正好 MAX_LABEL 字要过，多一字才挂。"""
+        text = ("## 01\n画面: 1girl, solo\n气泡: （女）一\n"
+                "标签1: %s\n" % ("长" * comic_writer.MAX_LABEL))
+        ok, why = comic_writer._validate(text, 1)
+        self.assertTrue(ok, why)
+
+    def test_rejects_dialogue_written_as_a_label(self):
+        """`标签2: （女）…` 是台词写错了栏——必须判不合格并点名 `气泡2`。"""
+        text = ("## 01\n画面: 1girl, solo\n气泡: （女）一\n"
+                "标签1: 她一只脚踏上车门\n标签2: （女）我不要回去！\n")
+        ok, why = comic_writer._validate(text, 1)
+        self.assertFalse(ok)
+        self.assertIn("（女）我不要回去！", why)
+        self.assertIn("气泡2", why)
+
+    def test_accepts_a_label_that_merely_opens_with_a_bracket(self):
+        """`（她把书包扔过来）` 是正常旁白，括号里不是纯说话人词，不能误判。"""
+        text = ("## 01\n画面: 1girl, solo\n气泡: （女）一\n"
+                "标签1: （她把书包扔过来）\n")
+        ok, why = comic_writer._validate(text, 1)
+        self.assertTrue(ok, why)
+
+    def test_reports_every_dialogue_leak_at_once(self):
+        """两格都写错时要在一条错因里同时点名——只报一格就只改得动一格。"""
+        text = ("## 01\n画面: 1girl, solo\n气泡: （女）一\n"
+                "标签1: （女）甲\n"
+                "## 02\n画面: 1girl, solo\n气泡: （女）二\n"
+                "标签1: 乙\n标签2: （我）丙\n")
+        ok, why = comic_writer._validate(text, 2)
+        self.assertFalse(ok)
+        self.assertIn("格 01", why)
+        self.assertIn("格 02", why)
 
 
 if __name__ == "__main__":

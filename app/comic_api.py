@@ -233,6 +233,7 @@ def api_comic_status():
     for p in task.panels:
         item = {"no": p.no, "state": p.state, "seed": p.seed,
                 "label": p.label, "bubble": p.bubble, "bubble2": p.bubble2,
+                "speaker": p.speaker, "speaker2": p.speaker2,
                 "scene": p.scene,
                 "error": p.error}
         if os.path.isfile(task.raw_path(p)):
