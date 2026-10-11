@@ -421,6 +421,16 @@ def _fmt_by_panel(pairs, limit=4):
         for no, names in list(by.items())[:limit])
 
 
+def _tag_tokens(tag):
+    """标签切词：**空格和连字符都切**（`black-framed glasses` → black / framed / glasses）。
+
+    2026-10-12 实跑误报：`black-framed glasses` 被 bare_wearables 判成「没写颜色」
+    ——颜色明明写了，只是写成了复合词。原来的 `tag.split()` 只按空格切，
+    `black-framed` 整个词匹配不上色词表，于是这份剧本被白打回一稿。
+    """
+    return set(re.split(r"[^a-z]+", tag.lower()))
+
+
 def bare_wearables(text):
     """找出「衣物 / 随身物件没写颜色」的格，返回 [(格号, 库里形态的 tag), ...]。
 
@@ -432,7 +442,7 @@ def bare_wearables(text):
     out = []
     for p in panels:
         for tag in _scene_tags(p):
-            toks = set(tag.split())
+            toks = _tag_tokens(tag)
             if not (toks & _WEARABLE_WORDS):
                 continue
             if toks & _COLOR_WORDS:
@@ -446,13 +456,22 @@ def duplicate_wearables(text):
 
     典型是 `backpack` + `backpack on one shoulder`：模型想表达「单肩背」，
     却把类别名又抄了一遍。两个标签会让模型画**两个包**，而且第一个还没颜色。
+
+    ⚠️ **两人及以上同框的格不判这条**（2026-10-12 实跑发现）。两个角色各穿
+    一套时，同名衣物是**合法**的（甲 `navy pleated skirt`、乙 `grey skirt`），
+    而规则 16 的英语点名句里还会带上 `white cardigan` / `white sailor uniform`
+    这些词 —— 平铺计数会把它们当成「同一件写了两次」，把一份好剧本（05 格）
+    误判成不合格、白烧一稿。所以多人格直接跳过。
     """
     _, panels = comic.parse_script_text(text)
     out = []
     for p in panels:
+        tags = _scene_tags(p)
+        if _MULTI_PEOPLE & set(tags):        # 两个人各穿一套，同名衣物合法
+            continue
         seen = {}
-        for tag in _scene_tags(p):
-            for cat in sorted(set(tag.split()) & _WEARABLE_WORDS):
+        for tag in tags:
+            for cat in sorted(_tag_tokens(tag) & _WEARABLE_WORDS):
                 if cat in seen:
                     out.append((p["no"], cat))
                 else:
@@ -477,6 +496,92 @@ def pov_conflicts(text):
     if not any({"pov", "pov_hands"} & set(ts) for _, ts in by_panel):
         return []
     return [(no, "1boy") for no, ts in by_panel if "1boy" in ts]
+
+
+# ─── 多人同框（2026-10-12）───────────────────────────────
+#
+# 用户那一话第 5 格：`2girls` + 两套外貌平铺交叉（`navy pleated skirt` 写了两遍、
+# 中间夹着 `brown hair`），动作又是分不出主宾的 `hug` —— 画出来谁抱谁、谁是学姐
+# 谁是学妹全乱。用户原话：「很明显的没有写清楚，girl1 是什么，girl2 是什么，
+# girl1 拥抱 girl2，然后才是场景」。
+#
+# 库里没有 `girl1` / `girl2`（实测：`2girls`、`multiple girls` 有），所以「点名」
+# 只能走规范第 3 / 5 节那条：**先点名角色、再描述外观**的英语短语。这一半是提示词
+# 的活（见规则 16）。代码只兜**算得出来的那一半**：写了 `2girls` 却只凑得出一套
+# 外貌 —— 那模型一定画不出两个人，必然有一个消失或变成同一张脸。
+
+# 写了这些就是「一格里有两个人及以上同框」。
+_MULTI_PEOPLE = frozenset(("2girls", "multiple girls", "multiple_girls", "2boys"))
+
+
+def _appearance_colors(tags):
+    """这一格数得出几个**不同的发色** —— 也就是能分出几套外貌。
+
+    只看含头发 / 发型词的标签，取里面的色词（`black hair` → black、
+    `silver-white long hair` → silver / white；`the black-haired girl …` 也算）。
+    **瞳色不算**：`blue eyes` 人人都有，拿它计数会把「其实只有一个角色」糊过去
+    （同 bare_hair_color 的边界）。
+    """
+    colors = set()
+    for tag in tags:
+        low = tag.lower()
+        if "hair" not in low and not any(m in low for m in _HAIR_MARKERS):
+            continue
+        colors.update(w for w in re.split(r"[^a-z]+", low) if w in _COLOR_WORDS)
+    return colors
+
+
+def merged_people(text):
+    """多人同框却只写得出**一套**外貌的格，返回 [(格号, 人数标签), ...]。
+
+    判据：这一格声明了 `2girls` / `multiple girls`，却数不出两个不同的发色 ——
+    说明编剧只写了一个角色的外貌，画面里那第二个人要么不出现、要么和第一个
+    长成同一张脸。用户实测的两种表现（2026-10-11）都在这一条线上：04 格
+    「青梅整个消失、哭的人变成了我」、05 格「两个人分不清谁是谁」。
+
+    局限：两个角色**同发色**时（双胞胎式）会误报。本项目每一话都用发色区分
+    角色（黑长直 / 棕短发 / 银发），所以这条足够用；真遇到同发色的剧本，
+    把这条判据当提示看，别当铁律。
+    """
+    _, panels = comic.parse_script_text(text)
+    out = []
+    for p in panels:
+        tags = _scene_tags(p)
+        multi = _MULTI_PEOPLE & set(tags)
+        if not multi:
+            continue
+        if len(_appearance_colors(tags)) >= 2:
+            continue
+        out.append((p["no"], sorted(multi)[0]))
+    return out
+
+
+# 需求里出现这些词就是**女女向 / 百合**：「我」是女性，第一人称视角必须写
+# `female_pov` 而不是 `pov`（`pov` 的先验是男性第一人称）。
+_FEMALE_POV_HINTS = re.compile(r"百合|女女|女同|性转|yuri|gl\b", re.I)
+
+
+def female_pov_missing(text, brief):
+    """女女向剧本用了 `pov` 却没写 `female_pov` 的格 → [(格号, "pov"), ...]。
+
+    2026-10-12 用户实报：「剧本明确了是百合向，但是第一人称却是男生的手」。
+    根因：`pov` 这个标签的先验就是**男性第一人称**，而规则 14 又不许「我」的
+    人和服饰入画 —— 视角方的性别**没有别的出口**，只能靠 `female_pov` 说出来。
+
+    判据必须读 `brief`：视角方的性别是剧情事实，代码算不出来（同一段
+    `pov, pov hands` 在「妹妹的哥哥」那话里是**对的**，在百合话里就是错的），
+    只能从需求里认。跟 `invented_names` 一样是可选判据，`brief` 不传就跳过。
+    已知局限：只认关键词，需求用别的方式表达女女向（「两个女孩的故事」）认不出。
+    """
+    if not _FEMALE_POV_HINTS.search(brief or ""):
+        return []
+    _, panels = comic.parse_script_text(text)
+    out = []
+    for p in panels:
+        tags = set(_scene_tags(p))
+        if "pov" in tags and "female_pov" not in tags:
+            out.append((p["no"], "pov"))
+    return out
 
 
 # ─── 发色 / 凭空人名（2026-10-11 十轮）───────────────────
@@ -587,7 +692,8 @@ def collect_issues(text, brief="", original=""):
 
     返回 [{"no": 格号（跨格问题为空）, "kind": 类别, "detail": 一句话}]。
     kind 取值：missing_hair_color / bare_wearable / duplicate_wearable /
-    solo_conflict / banned_tag / pov_conflict / invented_name。
+    solo_conflict / banned_tag / pov_conflict / merged_people / female_pov /
+    invented_name。
     """
     issues = []
 
@@ -619,6 +725,15 @@ def collect_issues(text, brief="", original=""):
     for no, tag in pov_conflicts(text):
         issues.append({"no": no, "kind": "pov_conflict", "tag": tag,
                        "detail": "第一人称视角的剧本里不许出现 `1boy`，删掉它"})
+    for no, tag in merged_people(text):
+        issues.append({"no": no, "kind": "merged_people", "tag": tag,
+                       "detail": "这一格写了 `%s`（两个人同框）却只写得出**一套**"
+                                 "外貌：两个人的发型 / 瞳色 / 服饰要分开各写一套，"
+                                 "并用一句英语短语点名谁是谁、谁对谁做" % tag})
+    for no, tag in female_pov_missing(text, brief):
+        issues.append({"no": no, "kind": "female_pov", "tag": tag,
+                       "detail": "这一话是女女向（百合），「我」是女性：把 `pov` "
+                                 "换成 `female_pov`（`pov` 默认画出一只男人的手）"})
     # 凭空人名：allowed 用「需求 + 原稿」，所以只有**补正稿新增**的人名会被报。
     for no, name in invented_names(text, (brief or "") + "\n" + (original or "")):
         issues.append({"no": no, "kind": "invented_name", "tag": name,
@@ -775,6 +890,8 @@ Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有�
 
 【画面字段的硬规则】（违反任何一条，这一格会被代码打回重写）
 1. **只能写逗号分隔的英文标签，绝不许出现句子。**
+   （**唯一的例外**：一格有两人及以上同框时，可以用**一句**简短英语短语把
+   「谁对谁做什么」点清楚——见规则 16。）
    错：girl with watery eyes about to cry
    对：tears, crying, looking down
    错：the girl is standing at the bus door
@@ -796,6 +913,10 @@ Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有�
      `wrist grab` 在本库里**都不存在**，实测查过，别用。）
    - 手只是搭在别人手腕上（没用力） → `hand on another's wrist`
    - 镜头就是「我」的眼睛、那只手是「我」的 → 再加 `pov` + `pov hands`
+   - **「我」是女性（百合 / 女女向）时必须写 `female_pov`，而不是 `pov`。**
+     `pov` 的默认先验是**男性第一人称**，光写它实测会画出一只男人的手
+     （2026-10-12 用户实报：剧本明明白白是百合向，第一人称却成了男生的手）。
+     女女向写法：`female_pov, pov hands, holding another's wrist`
    - 画面里只有手、看不到它的身体 → 再加 `disembodied hand` / `disembodied arm`
    错：male hand grabbing her wrist from behind ← `male` 会画出整个人 + 多只手
    错：hand around wrist ← 没写是谁的手，实测被画成「她自己抓自己手腕」
@@ -827,6 +948,10 @@ Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有�
    ⚠️ **「写了款式 / 姿态」不等于「写了颜色」**——`backpack on one shoulder`、
    `sailor collar`、`pleated skirt` 都还是没写颜色的裸写法，必须写成
    `white backpack on one shoulder`、`white sailor collar`、`white pleated skirt`。
+   **整套的 `school uniform` / `uniform` 也一样**：裸写会在每格换个色，要写成
+   `white school uniform`，而且颜色词要跟里面单品（`white sailor collar`、
+   `navy pleated skirt`）用同一套（2026-10-12 实跑：模型连着两稿都写了裸的
+   `school uniform` + `sailor collar`，光这一条就把两稿预算烧完了）。
    **每一件衣物、每一个随身物件都要带颜色**（衣领、裙子、背包、耳机、袜子……
    一个都不能漏），代码会逐个查，漏了就打回重写。
    ⚠️ **同一件东西只写一个标签**：`backpack` 和 `backpack on one shoulder` 是
@@ -907,10 +1032,53 @@ Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有�
      `holding another's wrist`；
    - **不许给「我」写服饰**（`black hoodie`、`grey pants` 这类词等于在说
      「画一个穿这些的人」）。
+   - **「我」是女性（百合 / 女女向）时，视角标签写 `female_pov`，不是 `pov`**
+     ——`pov` 默认画男人的手（2026-10-12 用户实报：百合向剧本却出了男生的手）。
+     整话的写法要统一：要么全 `female_pov`，要么全 `pov`，不许一半一半。
    2026-10-11 实测（用户原话「我图三看到个男的很难受」）：01/02 格用
    `pov hands` 把「我」写成一只手，03 格却写了 `1girl, 1boy` + `black hoodie,
    grey pants`，画面里凭空多出一个和前两格完全接不上的男生。
    **视角跳了，观众立刻出戏**——这一条代码会跨格查，跳了就打回重写。
+
+15. **先看这一格镜头对着谁，再决定写谁的外貌。** `画面:` 写的是**镜头里真正
+   可见的那个人**的样子，不是「我」的样子——「我」只在手部入画（见规则 14）。
+   - 剧情主体是「我」→ 写「我」那套外貌（`black hair, purple eyes, white
+     sailor uniform` …）；
+   - 主体是别人（妹妹 / 青梅 / 学姐 / 学妹）→ 写**她**的外貌，**别把「我」那套
+     习惯性抄上去**。
+   抄上去的后果很具体：模型把画面里唯一的那个人画成「我」，而这一格**该出现的
+   那个人整个消失**（2026-10-11 实测：一格要画「青梅红着眼眶」，画面词里却
+   只有「我」的黑长直 + 紫眼 + 白水手服，最后哭的人变成了「我」）。
+   自检：这一格 `标签:` / `气泡:` 讲的是谁，`画面:` 里的外貌就得是谁的。
+
+16. **一格有两人及以上同框，必须把他俩分开写、写清谁对谁做。** 顺序固定：
+   人数 → 甲（发型 / 瞳色 / 服饰）→ 乙（发型 / 瞳色 / 服饰）→ 动作 → 场景 → 构图。
+   - **两套外貌不许交叉。** 甲的一整套写完再写乙的；不许一人一句交替着写。
+     反例（实跑混掉的那一版）：`black hair, white sailor collar, white school
+     uniform, navy pleated skirt, brown hair, short hair, green eyes, white
+     coat, red bowtie, navy pleated skirt` —— `navy pleated skirt` 出现两次、
+     中间还夹着 `brown hair`，模型分不清谁是谁、更分不清谁在抱谁。
+   - **点名用一句简短英语短语**（规范原话：先点名角色再描述外观）。库里有
+     `2girls`，**没有** `girl1` / `girl2`，所以「谁是谁」只能这么点：
+     错：`2girls, girl1, girl2, hug, black hair, white sailor uniform, brown
+         hair, white coat`
+     对：`2girls, the brown-haired girl in a white coat is hugging the
+         black-haired girl in a white sailor uniform from behind, hug from
+         behind, arm around another's waist, classroom, window, evening,
+         backlighting, cowboy shot`
+   - **动作必须自带方向**：`hug from behind` / `hug from side` /
+     `arm around another's waist`。只写 `hug`，模型分不出谁抱谁。
+   - 只有一个人、第二方不入画的格，照旧**只写逗号标签**（规则 1），不要用这种
+     英语短语——短语只服务于「两人及以上同框」这一种情况。
+
+17. **「我」的性别必须写进视角标签。** 百合 / 女女向的一话，「我」是女性，
+   第一人称视角写 `female_pov`，**不许写 `pov`**——`pov` 的先验是**男性第一
+   人称**，实测会画出一只男人的手（2026-10-12 用户实报：「剧本明确了是百合向，
+   但是第一人称却是男生的手」）。
+   错：pov, pov hands, holding another's wrist
+   对：female_pov, pov hands, holding another's wrist
+   **只有「我」明确是男性**（例：哥哥视角、镜头后的男性作者）时才写 `pov`。
+   整话统一：全 `female_pov` 或全 `pov`，不许一半一半。
 
 【Anima 提示词规范（全文，必须遵守）】
 写法：**以标签为主，可以用简短的英语短语补充**——短词和英语短语都能写。
@@ -1317,6 +1485,27 @@ def check(text, panels, brief=""):
             "入画，第二方用 `1other` 表示，手部标签照旧（`pov hands` + "
             "`holding another's wrist`）；也**不要给「我」写服饰**"
             "（`black hoodie` / `grey pants` 都会把整个人画出来）。" % items)
+    merged = merged_people(text)
+    if merged:
+        items = _fmt_by_panel(merged)
+        problems.append(
+            "这些格写了多人同框（%s），却**只写得出一个角色的外貌**：模型会画不出"
+            "第二个人的样子，要么让那格该出现的人整个消失、要么把他画成和第一个"
+            "人同一张脸。两个人（及以上）同框必须**各写一整套外貌**（发型 + 瞳色 "
+            "+ 服饰），并用**一句简短英语短语**点名谁是谁、谁对谁做什么——库里"
+            "没有 `girl1` / `girl2`，只能这么点：`2girls, the brown-haired girl "
+            "in a white coat is hugging the black-haired girl in a white sailor "
+            "uniform from behind`；动作也用自带方向的 `hug from behind` / `hug "
+            "from side` / `arm around another's waist`，别只写 `hug`。" % items)
+    fpov = female_pov_missing(text, brief)
+    if fpov:
+        items = "、".join("格 %s" % no for no, _ in fpov[:6])
+        problems.append(
+            "这一话的需求是**女女向（百合）**，「我」是女性，但 %s 用的是 `pov`："
+            "`pov` 这个标签的先验是**男性第一人称**，实测会画出一只男人的手"
+            "（用户 2026-10-12 实报：「剧本明确了是百合向，但是第一人称却是男生的"
+            "手」）。把 `pov` 换成 `female_pov`，`pov hands` 照旧；整话统一，"
+            "不许一半 `pov` 一半 `female_pov`。" % items)
     if (brief or "").strip():
         names = invented_names(text, brief)
         if names:

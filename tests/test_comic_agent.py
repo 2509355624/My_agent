@@ -387,6 +387,21 @@ class WearableDetailTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("两个包", why)
 
+    def test_hyphenated_color_counts(self):
+        """`black-framed glasses` 的颜色写在复合词里，不能判成「没写颜色」。
+
+        2026-10-12 实跑误报：这一条把一份合格剧本白打回一稿（切词只按空格切，
+        `black-framed` 整个词匹配不上色词表）。
+        """
+        self.assertEqual([], comic_agent.bare_wearables(self._script(
+            "safe, 1girl, solo, white school uniform, black-framed glasses")))
+
+    def test_bare_glasses_still_reported(self):
+        """放宽连字符不能把判据废掉：真没写颜色的照旧报。"""
+        got = comic_agent.bare_wearables(self._script(
+            "safe, 1girl, solo, white school uniform, glasses"))
+        self.assertEqual([("01", "glasses")], got)
+
 
 class PovConflictTest(unittest.TestCase):
     """镜头人称定下就不许变：POV 剧本里绝不许出现 `1boy`。
@@ -429,6 +444,138 @@ class PovConflictTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("1boy", why)
         self.assertIn("pov", why)
+
+
+class MergedPeopleTest(unittest.TestCase):
+    """多人同框必须写得出**两套**外貌，且点名谁是谁。
+
+    2026-10-12 用户那一话：第 5 格 `2girls` 却把两套外貌平铺交叉（`navy pleated
+    skirt` 写了两遍、中间夹着 `brown hair`），动作是分不出主宾的 `hug` —— 画出来
+    谁抱谁、谁是学姐谁是学妹全乱。用户原话：「很明显的没有写清楚，girl1 是什么，
+    girl2 是什么，girl1 拥抱 girl2，然后才是场景」。
+    """
+
+    def _script(self, *scenes):
+        return "".join(
+            "## %02d\n画面: %s\n气泡: （女）嗯\n标签1: 她站在教室里\n"
+            % (i + 1, s) for i, s in enumerate(scenes))
+
+    def test_two_girls_with_one_appearance_is_flagged(self):
+        got = comic_agent.merged_people(self._script(
+            "safe, 2girls, black hair, long hair, white sailor uniform, "
+            "hug, classroom, cowboy shot"))
+        self.assertEqual([("01", "2girls")], got)
+
+    def test_two_girls_with_two_appearances_pass(self):
+        """两个不同发色 = 两套外貌，能分清谁是谁。"""
+        self.assertEqual([], comic_agent.merged_people(self._script(
+            "safe, 2girls, black hair, long hair, white sailor uniform, "
+            "brown hair, short hair, white coat, hug from behind, "
+            "arm around another's waist, classroom, cowboy shot")))
+
+    def test_english_phrase_counts_as_one_appearance_group(self):
+        """一句英语短语里点了两个人的发色，也算两套（规范第 3 / 5 节的点名叫法）。"""
+        self.assertEqual([], comic_agent.merged_people(self._script(
+            "safe, 2girls, the brown-haired girl in a white coat is hugging "
+            "the black-haired girl in a white sailor uniform from behind, "
+            "hug from behind, classroom, cowboy shot")))
+
+    def test_eye_color_does_not_count(self):
+        """瞳色不算外貌组——`blue eyes` 人人都有，拿它计数会把判据糊过去。"""
+        got = comic_agent.merged_people(self._script(
+            "safe, 2girls, blue eyes, green eyes, hug, classroom, cowboy shot"))
+        self.assertEqual([("01", "2girls")], got)
+
+    def test_single_person_panel_untouched(self):
+        self.assertEqual([], comic_agent.merged_people(self._script(
+            "safe, 1girl, solo, black hair, white sailor uniform, classroom")))
+
+    def test_check_rejects_merged_people(self):
+        ok, why = comic_agent.check(self._script(
+            "safe, 2girls, black hair, white sailor uniform, hug, classroom"), 1)
+        self.assertFalse(ok)
+        self.assertIn("girl1", why)          # 点名那段的写法示范
+        self.assertIn("hug from behind", why)
+
+    def test_prompt_teaches_female_pov_and_grouping(self):
+        p = comic_agent._system_prompt(3)
+        self.assertIn("female_pov", p)
+        self.assertIn("男性第一人称", p)       # 为什么必须换：pov 的默认先验
+        self.assertIn("谁对谁做什么", p)
+        self.assertIn("两套外貌不许交叉", p)
+        self.assertIn("hug from behind", p)
+        # 主体那条：画面写的是镜头里可见的人，不是「我」
+        self.assertIn("镜头对着谁", p)
+        self.assertIn("整个消失", p)
+        # 女女向视角那条：必须带「什么时候才写 pov」的边界，否则哥哥视角会被误伤
+        self.assertIn("只有「我」明确是男性", p)
+        self.assertIn("female_pov, pov hands", p)      # 对例
+        # `school uniform` 也是泛类，必须写颜色
+        self.assertIn("white school uniform", p)
+
+    def test_duplicate_wearable_skipped_for_two_girls(self):
+        """两人同框时同名衣物**合法**：甲 `navy pleated skirt`、乙 `grey skirt`
+        不该被判成「同一件写了两次」。
+
+        2026-10-12 实跑误报：规则 16 的英语点名句里带着 `white cardigan` /
+        `white sailor uniform`，加上两个女生的裙子/领子，`duplicate_wearables`
+        一次报了 3 条（`sailor`/`cardigan`/`skirt`），把一份好剧本判成不合格、
+        白烧一稿。
+        """
+        self.assertEqual([], comic_agent.duplicate_wearables(self._script(
+            "safe, 2girls, the brown-haired girl in a white cardigan is hugging "
+            "the black-haired girl in a white sailor uniform from behind, "
+            "navy pleated skirt, white sailor collar, brown hair, "
+            "white cardigan, grey skirt, hug from behind, classroom")))
+
+    def test_duplicate_wearable_still_checked_for_solo_panel(self):
+        """单人格照旧判——不能因为放宽多人格就把这条判据废掉。"""
+        got = comic_agent.duplicate_wearables(self._script(
+            "safe, 1girl, solo, white backpack, backpack on one shoulder"))
+        self.assertEqual([("01", "backpack")], got)
+
+
+class FemalePovTest(unittest.TestCase):
+    """女女向（百合）剧本的「我」是女性 → 第一人称视角必须写 `female_pov`。
+
+    2026-10-12 用户实报：「剧本明确了是百合向，但是第一人称却是男生的手，
+    这个是第一个问题」。根因是 `pov` 这个标签的先验就是**男性第一人称**，而
+    规则 14 又不许「我」的人和服饰入画 —— 性别没有别的出口。
+    """
+
+    def _script(self, *scenes):
+        return "".join(
+            "## %02d\n画面: %s\n气泡: （女）嗯\n标签1: 她站在窗边\n"
+            % (i + 1, s) for i, s in enumerate(scenes))
+
+    _POV = ("safe, 1girl, solo focus, 1other, pov, pov hands, "
+            "holding another's wrist")
+
+    def test_pov_without_female_pov_is_flagged(self):
+        got = comic_agent.female_pov_missing(
+            self._script(self._POV), "性转，骨科转百合，青梅转百合")
+        self.assertEqual([("01", "pov")], got)
+
+    def test_female_pov_passes(self):
+        self.assertEqual([], comic_agent.female_pov_missing(
+            self._script("safe, 1girl, solo focus, 1other, female_pov, "
+                         "pov hands, holding another's wrist"),
+            "百合向"))
+
+    def test_male_viewpoint_script_not_flagged(self):
+        """哥哥视角那一话：「我」是男性，`pov` 本来就是对的，绝不能拦。"""
+        self.assertEqual([], comic_agent.female_pov_missing(
+            self._script(self._POV), "妹妹跟我赌气，拎着包就跑出了门"))
+
+    def test_no_brief_skips_the_check(self):
+        """不传需求就跳过（跟 invented_names 一样，可选判据）。"""
+        self.assertEqual([], comic_agent.female_pov_missing(self._script(self._POV), ""))
+
+    def test_check_rejects_pov_in_yuri_script(self):
+        ok, why = comic_agent.check(
+            self._script(self._POV), 1, brief="性转之后全校都乱套了，百合向")
+        self.assertFalse(ok)
+        self.assertIn("female_pov", why)
 
 
 class RunRoundsTest(unittest.TestCase):
