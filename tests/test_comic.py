@@ -10,6 +10,7 @@
 """
 
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -17,7 +18,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import comic, comic_writer
+from app import comic, comic_writer, skills
 
 
 def _panel_dict(no, **kw):
@@ -539,6 +540,48 @@ class WriterMultiLabelValidateTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("格 01", why)
         self.assertIn("格 02", why)
+
+
+class QwenI2iParamsTest(unittest.TestCase):
+    """qwen 图生图工作流的固定参数。
+
+    这份工作流是**共用**的：漫画「加气泡」「手动修复」「手动改字」走的都是它，
+    QQ 生图的 qwen 渠道也是它——所以这里改的是全局效果，不只是漫画。
+    2026-10-11 用户拍板：「我需要 qwen 图生图的步长改成 18，12 的步长效果太差了，
+    必须 18 的步长」（手动改字时亲眼看出来的，12 步重画的字糊）。
+    """
+
+    def test_steps_is_18(self):
+        sd = skills.load_skill(comic.BUBBLE_SKILL)
+        self.assertTrue(sd, "找不到 skill %s" % comic.BUBBLE_SKILL)
+        wf = skills.load_workflow(os.path.join(sd["path"], "workflow_i2i.json"))
+        self.assertIsNotNone(wf, "qwen 图生图工作流读不出来")
+        steps = [n["inputs"]["steps"] for n in wf.values()
+                 if "steps" in (n.get("inputs") or {})]
+        self.assertEqual(steps, [18], "qwen 图生图的步数必须是 18（用户 2026-10-11 拍板）")
+
+
+class StudioPageTest(unittest.TestCase):
+    """漫画工作台页面的接线：签名缺字段 = 界面不刷新，后端再多字段也白搭。"""
+
+    def _page(self):
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "web", "comic_studio.html")
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+
+    def test_refresh_signature_includes_image_rev(self):
+        """逐格 diff 的签名必须带 `p.rev`（图片文件指纹）。
+
+        手动跑 Qwen 是**就地覆盖成品**：state 还是 done、seed 没变、final_url
+        一字不差 —— 签名里不带 rev 的话这一格永远不重建，新图刷不出来
+        （2026-10-11 用户报的「重跑的结果没有给到界面」）。
+        """
+        page = self._page()
+        # 签名数组是跨行的，`.join` 收尾正好把它夹住（re.S 让 `.` 吃到换行）
+        m = re.search(r"const sig = \[(.+?)\]\.join", page, re.S)
+        self.assertIsNotNone(m, "找不到逐格 diff 的签名")
+        self.assertIn("p.rev", m.group(1))
 
 
 if __name__ == "__main__":

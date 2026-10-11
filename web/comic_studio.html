@@ -274,9 +274,9 @@ const STATE_CN = {pending: '排队', rendered: '待加气泡', done: '完成'};
 function renderSlot(p) {
   const badge = p.error ? '<span class="badge b-error">出错</span>'
     : '<span class="badge b-' + p.state + '">' + (STATE_CN[p.state] || p.state) + '</span>';
-  const img = (url, alt) => url
+  const img = (url, alt, which) => url
     ? '<img class="zoomable" loading="lazy" src="' + url + '&t=' + Date.now()
-      + '" onclick="zoomOpen(this.src)">'
+      + '" onclick="zoomOpen(this.src, \'' + p.no + '\', \'' + which + '\')">'
     : alt;
   const ops = [];
   if (p.state !== 'pending')
@@ -287,8 +287,8 @@ function renderSlot(p) {
     ops.push('<button class="btn small" onclick="bubble(\'' + p.no + '\')">↩️ 从底图重画</button>');
   return '<div class="slot"><div class="head"><span class="no">格 ' + p.no + '</span>'
     + badge + '<span class="seed">' + (p.seed != null ? 'seed ' + p.seed : '') + '</span></div>'
-    + '<div class="imgs"><div>' + img(p.scene_url, '场景图未生成') + '</div>'
-    + '<div>' + img(p.final_url, '气泡未加') + '</div></div>'
+    + '<div class="imgs"><div>' + img(p.scene_url, '场景图未生成', 'scene') + '</div>'
+    + '<div>' + img(p.final_url, '气泡未加', 'final') + '</div></div>'
     + labelHtml(p)
     + (p.error ? '<div class="err">' + esc(p.error) + '</div>' : '')
     + '<div class="ops">' + (ops.join('') || '<span style="color:var(--text-mute);font-size:11px">排队中…</span>') + '</div>'
@@ -325,6 +325,8 @@ function labelHtml(p) {
 const _slots = {};   // {no: {sig, el}} —— 逐格 diff，状态没变就不碰 DOM（不闪图）
 const _manual = {};  // {no: 手输的指令} —— 状态一变这一格就会重建，输入框内容
                      // 若不另存就会没；跑完一次 Qwen 想接着调必须留住。
+let _zoom = null;    // {no, which} 当前放大的那张图 —— 手动跑 Qwen 是在原文件上
+                     // 覆盖，放大层不跟着换的话，人盯着放大图会以为根本没重跑。
 
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
 
@@ -347,7 +349,10 @@ async function refresh() {
   }
   for (const p of d.panels) {
     // 签名=影响展示的全部字段；没变就跳过这一格——图片不会重新加载，页面不闪。
-    const sig = [p.state, p.error, p.seed, p.scene_url, p.final_url, p.label, p.bubble, p.bubble2].join('|');
+    // `rev` 是图片文件本身的指纹（mtime+大小）：手动跑 Qwen 是**就地覆盖成品**，
+    // state/seed/url 全都不变，当初只比这些字段时新图永远刷不出来。
+    const sig = [p.state, p.error, p.seed, p.scene_url, p.final_url, p.rev,
+                 p.label, p.bubble, p.bubble2].join('|');
     const cached = _slots[p.no];
     if (cached && cached.sig === sig) continue;
     const el = document.createElement('div');
@@ -364,6 +369,12 @@ async function refresh() {
     if (cached && cached.el.parentNode) cached.el.replaceWith(node);
     else grid.appendChild(node);
     _slots[p.no] = {sig, el: node};
+    // 正放大的那张图被重写了（刚跑完 Qwen）→ 放大层也换成新的
+    if (_zoom && _zoom.no === p.no) {
+      const u = _zoom.which === 'scene' ? p.scene_url : p.final_url;
+      const zi = document.querySelector('#zoom img');
+      if (u && zi) zi.src = u + '&t=' + Date.now();
+    }
   }
   const bar = document.getElementById('jobbar');
   if (d.running) { setBusy(true, d.running); }
@@ -399,12 +410,13 @@ async function bubbleAll() {
 }
 
 // 点图放大看细节——「哪几个字糊了」得先看清才写得出指令。
-function zoomOpen(src) {
+function zoomOpen(src, no, which) {
+  _zoom = {no, which};
   const d = document.getElementById('zoom');
   d.querySelector('img').src = src;
   d.style.display = 'flex';
 }
-function zoomClose() { document.getElementById('zoom').style.display = 'none'; }
+function zoomClose() { _zoom = null; document.getElementById('zoom').style.display = 'none'; }
 
 // 手动跑 Qwen：源图＝这一格当前成品，所以可以一次次往上改。
 async function manualRun(no) {

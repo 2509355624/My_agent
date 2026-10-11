@@ -284,6 +284,45 @@ class ComicManualApiTest(unittest.TestCase):
                         content_type="multipart/form-data")
         self.assertEqual(r.status_code, 404)
 
+    # ── status 的 rev（图片指纹）────────────────────────
+
+    def test_status_exposes_a_rev_per_panel(self):
+        """每格要带 `rev`：前端逐格 diff 靠它发现「图被就地重写」。
+        手动跑 Qwen 覆盖成品时 state/seed/url 全都不变，没 rev 就永远刷不出来
+        （2026-10-11 用户报「重跑的结果没有给到界面」）。"""
+        task = self._load()
+        p = task.panels[0]
+        os.makedirs(task.raw_dir, exist_ok=True)
+        with open(task.raw_path(p), "wb") as f:
+            f.write(b"raw")
+        with open(task.final_path(p), "wb") as f:
+            f.write(b"a")
+        d = self.c.get("/api/comic/status?task=" + self.NAME).get_json()
+        item = d["panels"][0]
+        self.assertIn("rev", item)
+        self.assertNotEqual(item["rev"], "0/0")     # 两张图都在，不该是空指纹
+
+    def test_rev_changes_when_the_final_is_overwritten_in_place(self):
+        """就地覆盖成品（字节数还一样）后 rev 必须变。
+
+        同一秒内连跑两次是最常见的情形，所以指纹用毫秒 mtime——只比秒级时间
+        或只比大小都可能判成「没变」，界面就会一直显示旧图。
+        """
+        task = self._load()
+        p = task.panels[0]
+
+        def rev():
+            d = self.c.get("/api/comic/status?task=" + self.NAME).get_json()
+            return d["panels"][0]["rev"]
+
+        with open(task.final_path(p), "wb") as f:
+            f.write(b"a")
+        first = rev()
+        time.sleep(0.01)
+        with open(task.final_path(p), "wb") as f:
+            f.write(b"b")                            # 同长度，只有时间戳变了
+        self.assertNotEqual(first, rev())
+
 
 if __name__ == "__main__":
     unittest.main()

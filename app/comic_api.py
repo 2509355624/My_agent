@@ -75,6 +75,22 @@ def _load_task(path):
     return task
 
 
+def _rev(path):
+    """图片指纹（毫秒 mtime + 字节数），文件不存在给 "0"。
+
+    前端是**逐格 diff** 刷新的：签名没变就不重建 DOM，图也不会重新加载。
+    手动跑 Qwen 是「就地覆盖成品」——`state` 还是 done、`seed` 没变、`final_url`
+    字符串一模一样，光靠原来那几个字段签名不变，于是新图永远不显示（用户
+    2026-10-11 报的「重跑结果没给到界面」）。所以签名必须带上**文件本身变了没**。
+    用毫秒 mtime（NTFS 100ns 精度）而不是秒，避免同一秒内连跑两次判成没变。
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return "0"
+    return "%d.%d" % (int(st.st_mtime * 1000), st.st_size)
+
+
 def _save_upload(fs, dst):
     """上传的图统一转成 PNG 再落盘。
 
@@ -244,7 +260,8 @@ def api_comic_start():
 
 @bp.route("/api/comic/status", methods=["GET"])
 def api_comic_status():
-    """槽位轮询。图片 URL 由前端拼时间戳防缓存。"""
+    """槽位轮询。图片 URL 由前端拼时间戳防缓存；每格另带 `rev`（图片文件指纹），
+    前端拿它判断「图被重写过」，否则就地覆盖的场景（手动跑 Qwen）刷不出来。"""
     try:
         path = _task_dir(request.args.get("task"))
         task = _load_task(path)
@@ -258,6 +275,9 @@ def api_comic_status():
                 "label": p.label, "bubble": p.bubble, "bubble2": p.bubble2,
                 "speaker": p.speaker, "speaker2": p.speaker2,
                 "scene": p.scene,
+                # rev 给前端做失效判断：图被重写（手动跑 Qwen / 加气泡 / 传新底图）
+                # 后它必变，见 _rev() 的注释。
+                "rev": "%s/%s" % (_rev(task.raw_path(p)), _rev(task.final_path(p))),
                 "error": p.error}
         if os.path.isfile(task.raw_path(p)):
             item["scene_url"] = "/api/comic/img?task=%s&f=raw/%s_raw.png" % (
