@@ -7,8 +7,9 @@
 
 这份测试钉死四件事：
   1. 标签归一（权重语法 / 转义括号 / artist 的 @ / 大小写）;
-  2. **代码判据**：库里查不到的标签必须被点名，官方前缀标签必须被豁免
-     —— 这是提示词约束之外唯一能兜住「模型蒙一个假 tag」的防线；
+  2. **代码判据**：只判**语义**错（`hand around wrist` 语义错、`solo` 配第二方
+     身体部位互斥、台词串进旁白栏），**不判存在性**——「库里查不到」只记日志、
+     不判不合格（2026-10-11 用户定调：tags 库只是参考，AI 要有自我判断）；
   3. 备选行被抽走并挪到剧本头部，且解析后**不污染任何字段**
      （parse_script_text 会把未知行当续行拼进上一个字段，这是最易踩的坑）;
   4. agent 循环：工具结果回灌、不收敛时兜底交出最后一稿。
@@ -163,12 +164,25 @@ class CheckTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("中文", why)
 
-    def test_rejects_missing_tag_with_name(self):
+    def test_accepts_tag_missing_from_db(self):
+        """「库里查不到」**不再**判不合格（2026-10-11 由用户定调）。
+
+        tags 库只是参考，AI 要有自我判断。原来把它当硬回炉的后果是**惩罚写
+        具体**：库里没有 `white_earphones` / `black_backpack`，模型老老实实写
+        「白色耳机」就被打回去，只能退回泛化的 `earphones`——正好和规范
+        「物件也要写颜色」正面撞车。现在只记日志，不进回炉消息。
+        注意：`banned_tags` / `solo_conflicts` 仍是硬判据（那是**语义错**，
+        不是「库里没有」），见下面两个测试类。
+        """
         ok, why = comic_agent.check(
-            "## 01\n画面: 1girl, solo, fake tag\n气泡: 一\n"
+            "## 01\n画面: 1girl, solo, white in-ear earphones\n气泡: 一\n"
             "标签: 她回过头\n", 1)
-        self.assertFalse(ok)
-        self.assertIn("fake_tag", why)
+        self.assertTrue(ok, why)
+        # 但函数本身还留着（日志用），并且照样能认出库外的词
+        self.assertEqual(
+            comic_agent.missing_tags(
+                "## 01\n画面: 1girl, solo, white in-ear earphones\n气泡: 一\n"),
+            [("01", "white_in-ear_earphones")])
 
     def test_rejects_wrong_panel_count(self):
         ok, why = comic_agent.check(
@@ -709,6 +723,81 @@ class PromptTest(unittest.TestCase):
         """
         p = comic_agent._system_prompt(3)
         self.assertIn("不要每格都加一只手", p)
+
+
+    def test_teaches_spec_over_tag_db(self):
+        """**规范 > 标签库**：库里 `pleated_skirt` / `earphones` / `backpack`
+        这类"款式 / 物件名"本身不带颜色，照抄就违反规范的「颜色+款式必须写全」。
+
+        2026-10-11 用户截图实测：`pleated skirt` 没写颜色，三格画面里裙子一次
+        深藏青、一次浅蓝。用户定调：「anima-tags 只是一个参考，我的核心规范是
+        那份 skills，他才是一切的核心」。
+        """
+        p = comic_agent._system_prompt(3)
+        self.assertIn("高于 anima-tags 标签库", p)
+        self.assertIn("两者冲突时一律以规范", p)
+        self.assertIn("pleated skirt", p)
+        self.assertIn("navy pleated skirt", p)
+        self.assertIn("white in-ear earphones", p)
+        self.assertIn("每一格都要写同一个颜色", p)
+        # 规范文件本身也要有这条
+        self.assertIn("物件同样禁止泛化", p)
+        self.assertIn("本规范 > 标签库", p)
+
+    def test_panel_is_the_only_image_prompt(self):
+        """只有 `画面:` 进生图提示词；`标签:`/`气泡:` 是画到图上的文字。
+
+        用户原话：「标签的意思是让观众知道发生了什么，气泡是展示当下的场景是
+        什么」——三者有关联，但**不是**「标签直接变成生图提示词」。
+        """
+        p = comic_agent._system_prompt(3)
+        self.assertIn("只有 `画面:` 是生图提示词", p)
+        self.assertIn("都不进生图提示词", p)
+        self.assertIn("生图阶段**完全不知道**", p)
+        self.assertIn("静止可见的样子", p)
+
+    def test_no_longer_recommends_standing_on_one_leg(self):
+        """坏推荐必须彻底删掉。
+
+        2026-10-11 实跑翻车：规则 8 黑名单里原本写着
+        「`stepping off` / `getting off`（用 `standing on one leg` 之类）」
+        ——我在教模型拿单脚站立顶替"下车"。结果旁白「她一只脚刚踏下车门」被
+        逐字翻成 `standing on one leg`，画成芭蕾姿。
+        （`standing on one leg` 现在只作为**反例**出现，所以断言的是那句推荐语
+        本身不在了，不是这个词不出现。）
+        """
+        p = comic_agent._system_prompt(3)
+        # 旧推荐语是**括号里的替换建议**：`stepping off` / `getting off`（用 … 之类）
+        self.assertNotIn("（用 standing on one leg 之类）", p)
+        self.assertNotIn("（用 `standing on one leg` 之类）", p)
+        self.assertIn("单脚站立的芭蕾姿", p)      # 反例还在，且讲清了为什么
+        self.assertIn("瞬间动作", p)
+
+    def test_teaches_single_location_per_panel(self):
+        """一格只能有一个地点，同场景跨格保持一致。
+
+        2026-10-11 用户截图：三格都同时写了 `bus interior` 和
+        `bus stop / outdoors / city`，同一个公交场景三格各不相同。
+        """
+        p = comic_agent._system_prompt(3)
+        self.assertIn("一格只能有一个明确地点", p)
+        self.assertIn("同一个地点", p)
+        self.assertIn("这一场景内保持不动", p)
+
+    def test_no_longer_claims_pure_tag_writing(self):
+        """写法从「纯标签」放开成「标签为主 + 英语短语补充」。
+
+        用户原话：「我们的组合是短词和英语短语来着」——旧提示词却写着
+        「本工作流用**纯标签**写法，规范第 5 节的混合写法本流程不用」，
+        和用户要的正好相反。
+        """
+        p = comic_agent._system_prompt(3)
+        self.assertNotIn("本工作流用**纯标签**写法", p)
+        self.assertIn("以标签为主，可以用简短的英语短语补充", p)
+        self.assertIn("不是白名单", p)
+        # 开头那句最显眼的话也不再是「每个标签都必须真实存在于库里」
+        self.assertNotIn("每一个标签都必须", p)
+        self.assertIn("唯一的生图提示词", p)
 
 
 if __name__ == "__main__":

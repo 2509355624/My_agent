@@ -124,7 +124,10 @@ bedroom, girl wearing old pink frilled pajamas and pink frilled shorts, bare fee
 
 ---
 
-## 五、服饰颜色规则
+## 五、服饰与物件颜色规则
+
+**服饰，以及画面里一切看得见颜色的物件（耳机、包、伞、杯子、手机、发饰、围巾、
+眼镜、鞋……），都适用本节。** 只给衣服上色、物件裸写，是这份规范最容易漏的一条。
 
 | 规则 | 说明 |
 | :--- | :--- |
@@ -133,6 +136,19 @@ bedroom, girl wearing old pink frilled pajamas and pink frilled shorts, bare fee
 | **禁止泛化词** | `underwear`、`clothes`、`outfit`、`pajamas` 单独出现都不行 |
 | **同一件衣服，每格颜色必须一致** | 如果第1格是 `black lace bra`，第10格也必须是 `black lace bra` |
 | **换装剧情中，换掉的那件也要写颜色** | 比如 `old pink frilled pajamas` → `new light blue cotton pajamas`，颜色和款式都要写 |
+| **物件同样禁止泛化** | 耳机、包、伞、杯子、手机、发饰、围巾、眼镜、鞋……凡是有颜色的物件都要写颜色：`white in-ear earphones`（**不能**只写 `in-ear earphones`）、`black backpack`（不能只写 `backpack`）、`red umbrella`（不能只写 `umbrella`） |
+| **同一件物件，每格颜色必须一致** | 第1格写了 `white in-ear earphones`，后面每一格都得是 `white in-ear earphones` |
+| **物件的颜色由剧情定，定下来就不许改** | 剧本第一次出现它时就定颜色，全篇照抄；不许每格随机换色 |
+
+> ⚠️ 颜色+物件的组合**大多不在标签库里**（实测 `white_earphones`、`black_backpack`
+> 都查不到），但这**不是**不写的理由——颜色对不对，直接决定画面对不对。
+> **查库只是找更准说法的参考，不是白名单；库里没有不等于不能写。**
+> 反过来，库里**有**的标签也不一定对（见第九节 `hand around wrist`）。
+>
+> ⚠️ **更要紧的反方向**：标签库里 `pleated_skirt`、`earphones`、`backpack`
+> 这类「款式 / 物件名」**本身就不带颜色**，照抄它们就等于违反本节。实测
+> `pleated skirt` 没写颜色，三格画面里裙子一次深藏青、一次浅蓝——观众一眼就
+> 看出不是同一条裙子。**本规范 > 标签库**：两者冲突时以本节为准。
 
 ---
 
@@ -203,6 +219,22 @@ bedroom, girl wearing old pink frilled pajamas and pink frilled shorts, bare fee
 | 第1格 `warm lamp light`，第2格 `cool moonlight` | 灯光氛围不统一 | 统一写 `warm lamp light`，除非剧情需要变化 |
 | `girl lifting new pajamas out of the box` | 新衣服和角色本体衣服融合 | `girl lifting new pajamas out of the box ahead of her` |
 | `girl peeking into hallway, girl cautious expression` | 出现两个女孩 | `girl standing by the door peeking into the hallway`（删掉表情） |
+| `in-ear earphones` | 物件泛化，颜色全靠模型随机 | `white in-ear earphones` |
+| 旁白「一只脚刚踏下车门」→ 画面写 `standing on one leg` | 把旁白的字面词翻成标签，画成单脚站立的芭蕾姿 | 画面写 `standing, automatic_door, bus_interior`（她站在车门处的样子），这句话交给旁白讲 |
+| 旁白「她猛回头」→ 画面写 `turning head` | 画面是静态的一张图，却写了"正在转"的瞬间 | 画面写 `looking back`（已经转过来的样子） |
+| `bus_interior, bus_stop, outdoors` 写在同一格 | 一格内地点自相矛盾 | 一格只留一个明确地点 |
+
+---
+
+## 十、画面只写「静止可见的样子」
+
+| 规则 | 说明 |
+| :--- | :--- |
+| **画面是静态的一张图** | 只写镜头里这一刻**看得见**的东西：姿态、位置、服饰、表情、景别、背景 |
+| **「正在发生的那一瞬」不进画面** | 旁白「她一只脚刚踏下车门」→ 画面**不能**写 `standing on one leg`；画面写 `standing, automatic_door, bus_interior`，这件事交给旁白讲 |
+| **旁白、气泡、画面有关联，但不是逐词对译** | 旁白是**描述**（讲发生了什么）、气泡是**语言**（嘴里说出来的话）、画面是**画面**（看得见的样子）。不许把旁白的字面词逐个翻成标签 |
+| **一格只能有一个明确地点** | 不要同时写 `bus_interior`（车厢内）和 `bus_stop` / `outdoors`（站台外景），模型会画出两个空间混在一起的画面。实测三格都同时写了 `bus interior` 和 `bus stop / outdoors / city`，同一个公交场景三格各不相同 |
+| **同一场景内，地点标签跨格保持一致** | 这一幕在车厢里，每一格都写同一组地点标签（如 `bus interior, handrail, door`）；换场景时才整组一起换 |
 
 ---
 

@@ -414,9 +414,12 @@ def _story_spec_text():
 
 _SYSTEM_TMPL = """你是条漫分镜编剧，同时是 Anima 提示词工程师。
 
-你写的每一格 `画面:` 会**直接**喂给 Anima 生图工作流，所以每一个标签都必须
-真实存在于 Danbooru 标签库（32.8 万条）里。写错一个词，画面就会错位、多手、
-甚至凭空多出一个人。
+你写的每一格 `画面:` 会**直接**喂给 Anima 生图工作流——它是**唯一的生图提示词**
+（`标签:` / `气泡:` 只是最后画到图上的文字，生图那一步看不到它们）。所以
+`画面:` 必须写得**清楚、具体、看得见**，每个词都得是画面模型认得的英文。
+Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有真实标签就优先用它，
+库里查不到但你能确定模型看得懂的英文短语也**照写**。写错一个词，画面就会错位、
+多手、甚至凭空多出一个人。
 
 【整话必须是一条故事线——这是最容易不合格的一处】
 - 动笔前先在心里定一条线：这一话从哪开始、中间发生什么、最后一格落在哪。
@@ -470,10 +473,12 @@ _SYSTEM_TMPL = """你是条漫分镜编剧，同时是 Anima 提示词工程师�
 
 【画面字段的硬规则】（违反任何一条，这一格会被代码打回重写）
 1. **只能写逗号分隔的英文标签，绝不许出现句子。**
-   错：girl stepping off the bus with one foot on the ground
-   对：stepping off, bus, one foot on ground
    错：girl with watery eyes about to cry
    对：tears, crying, looking down
+   错：the girl is standing at the bus door
+   对：standing, bus interior, automatic door
+   （⚠️ 别把"正在发生的动作"拆成姿势词组——`stepping off` / `one foot on ground`
+   这类是黑名单，见规则 8 和规则 11。）
 2. **顺序**：安全级 → 人数 → 主体特征（发型/瞳色/配饰）→ 服装 → 动作姿势 →
    场景 → 构图镜头。同类标签聚在一起。
 3. **不要写质量词和画师 tag**（masterpiece / best quality / ultra-detailed /
@@ -508,14 +513,22 @@ _SYSTEM_TMPL = """你是条漫分镜编剧，同时是 Anima 提示词工程师�
    的手部标签；这一格若根本没有第二方入画，就别写 `1other`，退回 `1girl, solo`。
    实测坑：旁白写着「我攥住了她的手腕」，画面却只写 `solo focus, 1other` 而
    不带任何手部标签——模型会把 `1other` 理解成「补一整个人进来」。
-7. 服饰颜色款式、灯光氛围每格写全并保持一致（见规范）。
-8. **下面这些词看着都像对的，但库里没有，实测过了，不许写**：
+7. 服饰颜色款式、灯光氛围每格写全并保持一致（见规范）。**物件走同一条规则**：
+   画面上任何看得见颜色的东西都要写颜色——`white in-ear earphones`，不许只写
+   `in-ear earphones`；`black backpack`，不许只写 `backpack`。跟服饰一样，每格
+   重复写、跨格保持一致，颜色第一次定下来就别再改。
+8. **下面这些词一律不许写**（逐条实测过的黑名单——不只是"库里没有"这么简单，
+   写下去一定会出问题；反过来，别拿这张表去类推别的词，也别因为某个词"库里
+   没有"就不敢写，见规则 12）：
    `sfw`（用 safe）、
    `arm grab`、`male hand`（用 pov hands 或 disembodied hand / disembodied arm）、
    `medium shot`（用 upper body / cowboy shot / close-up）、
    `soft lighting`、`cinematic lighting`（用 backlighting / sidelighting / dim lighting）、
-   `stepping off` / `getting off`（用 standing on one leg 之类）、
-   `one foot on ground`。
+   `stepping off` / `getting off`、`one foot on ground`。
+   ⚠️ 「上车 / 下车」这类**瞬间动作**库里没有对应标签，但**不许**硬造一个姿势去顶替。
+   2026-10-11 实跑翻过车：这里原来写的是「用 `standing on one leg` 之类」，结果
+   旁白「她一只脚刚踏下车门」被逐字翻成了 `standing on one leg`，画出来是单脚
+   独立的芭蕾姿，跟下车毫无关系。正确做法见规则 11。
 
    还有一个**反例**要专门记住：`hand around wrist` 库里**有**，但没写明是谁的手，
    实测会被渲染成「她自己抓自己手腕」。要抓别人的手腕，只有
@@ -533,8 +546,50 @@ _SYSTEM_TMPL = """你是条漫分镜编剧，同时是 Anima 提示词工程师�
    「输出格式」。
    **这类"差不多的写法"是本次最容易踩的坑**——凡是不确定的，先查库再写。
 
+11. **只有 `画面:` 是生图提示词。** `标签:` 和 `气泡:` **都不进生图提示词**——
+   它们是最后画到图上的**文字**（右上角旁白条 / 气泡），生图那一步根本看不到
+   它们。所以三者是有关联的，但**不是**「标签直接变成生图标签」这种关系：
+   - `画面:` 是**画面**——这一刻镜头里静止可见的样子：姿态、位置、服饰、表情、
+     景别、背景。**只有它进生图提示词。**
+   - `气泡:` 是**语言**——展示当下这个场景里她或「我」说了什么
+   - `标签:` 是**描述**——让观众知道发生了什么、剧情推进到哪
+
+   推论：`标签:` 里写的事件，生图阶段**完全不知道**。你不能指望「旁白写了一只
+   脚刚踏下车门，画面就自动画出来」——要让画面里出现什么，就必须写进 `画面:`，
+   而且只能写**看得见的样子**。
+   反例（2026-10-11 实跑）：旁白「她一只脚刚踏下车门」被逐字翻成画面
+   `standing on one leg`——那是单脚站立的芭蕾姿，跟下车毫无关系。正确写法：
+   画面写她站在车门处的状态（`standing, automatic_door, bus_interior`），
+   「一只脚刚踏下车门」这句话留在 `标签:` 讲。
+   同理，画面是**静态的一张图**：旁白「她猛回头」→ 画面写已经转过来的样子
+   `looking back`，不是正在转的 `turning head`。**凡是"正在发生的那一瞬"，
+   都不要塞进 `画面:`。**
+
+12. **《连续剧情提示词生成规范》高于 anima-tags 标签库，两者冲突时一律以规范
+   为准。** 这不是空话——**标签库里绝大多数"衣物 / 物件"标签本身就不带颜色**
+   （`pleated skirt`、`earphones`、`backpack` 全都是），照抄它们就等于违反规范
+   的「颜色+款式必须同时出现」。所以：
+   - 衣物：写 `navy pleated skirt`，**不能**只写 `pleated skirt`
+   - 物件：写 `white in-ear earphones`，**不能**只写 `in-ear earphones`
+   - `white uniform` 这种"整套"词要顺带把裙子写清：
+     `white uniform, navy pleated skirt`
+   - **同一件东西，每一格都要写同一个颜色。** 2026-10-11 实测：`pleated skirt`
+     没写颜色，三格画面里裙子一次深藏青、一次浅蓝——观众一眼就看出不是同一条
+     裙子。颜色在第一格定下来，后面每格照抄。
+
+13. **一格只能有一个明确地点，同一个地点的格子写同一组地点标签。** 不许把
+   `bus interior`（车厢内）和 `bus stop` / `outdoors` / `city`（站台外景）写进
+   同一格——模型会把两个空间混着画。2026-10-11 实测：三格都同时写了
+   `bus interior` 和 `bus stop / outdoors / city`，结果同一个公交场景三格各不相同。
+   先想清楚这一格的镜头在哪：在车厢里就只写 `bus interior`（配 `handrail`、`door`），
+   在站台就只写 `bus stop`（配 `outdoors`、`city`），然后**这一场景内保持不动**。
+
 【Anima 提示词规范（全文，必须遵守）】
-本工作流用**纯标签**写法——规范第 5 节的「纯自然语言 / 混合写法」本流程不用。
+写法：**以标签为主，可以用简短的英语短语补充**——短词和英语短语都能写。
+查库（search_tags）是**找更准的说法**用的参考，**不是白名单**：库里查不到不等于
+不能写，只要你能确定画面模型看得懂就照写（例：`white in-ear earphones`、
+`black backpack` 库里都没有，但都是对的写法）。反过来，库里**有**的标签也不
+一定对（见规则 8 的反例 `hand around wrist`）。
 
 ======== 规范全文开始 ========
 __SPEC__
@@ -821,10 +876,14 @@ def check(text, panels):
     """按契约 + 标签库校验剧本，返回 (是否合格, 问题描述)。
 
     结构性问题（格数不对、字段缺）先短路——那种情况下列标签问题没有意义。
-    其余三类判据**一次全报**：原来的写法是命中一条就返回，模型一轮只看得到
+    其余判据**一次全报**：原来的写法是命中一条就返回，模型一轮只看得到
     一条错，改完下一轮又冒出另一条。2026-10-11 实跑逮到：一稿里 `hand around
     wrist`（禁用）和 `solo` 配第二方身体部位（冲突）同时存在，模型只被告知了
     后者——前者一路活到交稿。两稿预算下，一条一条报根本改不完。
+
+    **只判语义，不判存在性**：`hand around wrist` 语义错、`solo`+`1other` 互斥，
+    这两类判不合格；而「库里查不到」不算错（`white_earphones`、`black_backpack`
+    都不在库，但写法是对的），只写日志。库是参考，不是白名单。
     """
     ok, why = comic_writer._validate(text, panels)
     if not ok:
@@ -849,14 +908,18 @@ def check(text, panels):
             "手腕」。要抓别人的手腕只能写 `holding another's wrist`"
             "（视角方的手再加 `pov` + `pov hands`），不用抓的格就整段"
             "删掉、只写 `1girl, solo`。" % items)
+    # 库存在性**判不合格会反噬**（2026-10-11 由用户定调：tags 库只是参考，
+    # AI 要有自我判断）。原来这里把「库里查不到」当硬回炉，后果是**惩罚写具体**：
+    # 库里没有 `white_earphones`、`black_backpack`，模型老老实实写「白色耳机」
+    # 就被打回，只能退回泛化的 `earphones`——正好和规范「物件也要写颜色」对撞。
+    # 所以现在只在日志里留一条参考，不进回炉消息。
+    # ⚠️ 保留 `banned_tags` / `solo_conflicts` 做硬判据：那两条是**语义错**
+    # （库里存在但画出来是错的 / 两条指令互斥），不是「库里没有」。
     miss = missing_tags(text)
     if miss:
-        items = "、".join("格 %s 的 `%s`" % (no, tg) for no, tg in miss[:8])
-        more = "（仅列前 8 个）" if len(miss) > 8 else ""
-        problems.append(
-            "这些标签在库里查不到：%s%s。"
-            "用 search_tags 查一个真实存在的近似标签替换，别自己造词。"
-            % (items, more))
+        log.info("[标签参考] %d 个标签库里查不到（仅供参考，不拦）：%s",
+                 len(miss),
+                 "、".join("格 %s 的 `%s`" % (no, tg) for no, tg in miss[:8]))
     if problems:
         return False, "\n".join(problems)
     return True, ""
