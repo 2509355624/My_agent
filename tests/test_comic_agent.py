@@ -305,6 +305,92 @@ class RunRoundsTest(unittest.TestCase):
         self.assertIn("画面", out)
         self.assertEqual(m.call_count, 2)
 
+    # ─── 轮次预算：查库段用完必须强制动笔 ─────────────────
+    #
+    # 2026-10-11 用户实测：两稿 24 轮全烧在 search_tags 上，一次正文都没交，
+    # 下游报「只解析到 0 格」。
+
+    def test_forced_write_round_closes_tools(self):
+        """查库段用完要往对话里插「查库时间到」，逼它动笔。"""
+        script = "## 01\n画面: 1girl, solo\n气泡: 一\n"
+        replies = [
+            '[[TOOL:search_tags]]{"query": "一"}',   # 1 查库
+            '[[TOOL:search_tags]]{"query": "二"}',   # 2 查库（最后一个查库轮）
+            script,                                  # 3 强制轮：正文
+        ]
+        with mock.patch.object(comic_agent.llm, "call_llm",
+                               side_effect=replies) as m:
+            out = comic_agent.run_rounds([{"role": "user", "content": "x"}],
+                                         max_rounds=4)
+        self.assertIn("画面", out)
+        self.assertEqual(m.call_count, 3)
+        third = m.call_args_list[2].args[0]
+        self.assertTrue(any("查库时间到" in str(x.get("content") or "")
+                            for x in third))
+
+    def test_forced_round_does_not_execute_tools(self):
+        """强制轮里模型再输出工具调用也**不能执行**——一执行就把这一轮又变回
+
+        查库轮，永远收敛不了。
+        """
+        script = "## 01\n画面: 1girl, solo\n气泡: 一\n"
+        replies = [
+            '[[TOOL:search_tags]]{"query": "一"}',   # 1 查库
+            '[[TOOL:search_tags]]{"query": "二"}',   # 2 查库
+            '[[TOOL:search_tags]]{"query": "三"}',   # 3 强制轮仍查库 → 丢弃
+            script,                                  # 4 强制轮：正文
+        ]
+        with mock.patch.object(comic_agent.llm, "call_llm",
+                               side_effect=replies), \
+                mock.patch.object(comic_agent, "_run_tool",
+                                  return_value="（假结果）") as t:
+            out = comic_agent.run_rounds([{"role": "user", "content": "x"}],
+                                         max_rounds=4)
+        self.assertIn("画面", out)
+        self.assertEqual(t.call_count, 2)        # 只有前两轮真的执行了工具
+
+    def test_exhausted_rounds_returns_process_draft(self):
+        """到顶也没交出正文时，中间轮的半截稿要兜住，不能返回空串。
+
+        原版必然返回空串——唯一给兜底变量赋值的就是「无工具调用」那个分支，
+        而那个分支本身就是 return，所以模块文档承诺的兜底从没生效过。
+        """
+        half = ('## 01\n画面: 1girl, solo\n气泡: 一\n'
+                '[[TOOL:search_tags]]{"query": "眼泪"}')
+        only_tool = '[[TOOL:search_tags]]{"query": "眼泪"}'
+        with mock.patch.object(comic_agent.llm, "call_llm",
+                               side_effect=[half, only_tool, only_tool, only_tool]):
+            out = comic_agent.run_rounds([{"role": "user", "content": "x"}],
+                                         max_rounds=4)
+        self.assertIn("画面", out)
+
+    def test_nudged_body_is_kept_as_fallback(self):
+        """第 1 轮被打回的那份稿子要留作兜底。
+
+        模型可能被打了回之后就一直查库、再也不交稿——那时宁可交一份「标签没
+        验过」的稿子（下游还有出口校验和人工确认），也不要交空白。
+        """
+        first = "## 01\n画面: 1girl, solo\n气泡: 一\n"
+        only_tool = '[[TOOL:search_tags]]{"query": "眼泪"}'
+        with mock.patch.object(comic_agent.llm, "call_llm",
+                               side_effect=[first, only_tool, only_tool, only_tool]):
+            out = comic_agent.run_rounds([{"role": "user", "content": "x"}],
+                                         max_rounds=4)
+        self.assertIn("画面", out)
+
+    def test_tool_result_carries_round_budget(self):
+        """回灌工具结果时要报剩余轮数——预算得让模型自己能算。"""
+        script = "## 01\n画面: 1girl, solo\n气泡: 一\n"
+        replies = ['[[TOOL:search_tags]]{"query": "眼泪"}', script]
+        with mock.patch.object(comic_agent.llm, "call_llm",
+                               side_effect=replies) as m:
+            comic_agent.run_rounds([{"role": "user", "content": "x"}],
+                                   max_rounds=5)
+        second = m.call_args_list[1].args[0]
+        fed = " ".join(str(x.get("content") or "") for x in second)
+        self.assertIn("还剩", fed)
+        self.assertIn("强制", fed)
+
 
 class WriteScriptTest(unittest.TestCase):
     """对外入口：合格即返回（含头部备选），不合格回炉、最后一次容忍。"""
@@ -340,6 +426,41 @@ class WriteScriptTest(unittest.TestCase):
         self.assertIn("[警告]", out)
         # 警告必须在头部，不能落到格内污染台词
         _, panels = comic.parse_script_text(out)
+        self.assertEqual(panels[0]["bubble"], "一")
+
+    def test_empty_draft_retries_with_targeted_prompt(self):
+        """空正文不能和「有稿但标签不对」走同一条回炉路。
+
+        空正文回炉若带一条**空的** assistant 消息，模型看不出自己错在哪（它
+        眼里那就是"上一份稿子"），于是接着查库。这一路要用专门的话点明「你没
+        交剧本」。
+        """
+        good = "# 标题：x\n\n## 01\n画面: 1girl, solo\n气泡: 一\n"
+        with mock.patch.object(comic_agent, "run_rounds",
+                               side_effect=["", good]) as m:
+            out = comic_agent.write_script("x", panels=1, tries=2)
+        self.assertIn("画面", out)
+        second = m.call_args_list[1].args[0]
+        self.assertTrue(any("没有交剧本" in str(x.get("content") or "")
+                            for x in second))
+        self.assertFalse(any(x.get("role") == "assistant" and not x.get("content")
+                             for x in second))
+
+    def test_all_empty_raises(self):
+        """一稿都没写出正文就报错——返回空串会让调用方落一个空 script.md。"""
+        with mock.patch.object(comic_agent, "run_rounds", return_value=""):
+            with self.assertRaises(RuntimeError):
+                comic_agent.write_script("x", panels=1, tries=2)
+
+    def test_empty_then_keeps_earlier_draft(self):
+        """后一稿空、前一稿有内容：最后一稿不能被空正文覆盖掉。"""
+        bad = "# 标题：x\n\n## 01\n画面: 1girl, solo, arm grab\n气泡: 一\n"
+        with mock.patch.object(comic_agent, "run_rounds",
+                               side_effect=[bad, ""]):
+            out = comic_agent.write_script("x", panels=1, tries=2)
+        self.assertIn("[警告]", out)
+        _, panels = comic.parse_script_text(out)
+        self.assertEqual(len(panels), 1)
         self.assertEqual(panels[0]["bubble"], "一")
 
     def test_empty_brief_raises(self):
@@ -419,6 +540,28 @@ class PromptTest(unittest.TestCase):
         self.assertIn("[[TOOL:read_file]]", p)
         self.assertIn("[[TOOL:web_search]]", p)
         self.assertIn("查库只能写成上面的", p)
+
+    def test_teaches_round_budget(self):
+        """必须把轮次预算告诉它：查库段用完会强制动笔（工具关闭）。
+
+        2026-10-11 用户实测：两稿 24 轮全烧在 search_tags 上，一次正文都没交。
+        提示词只写「先查完再写」没用——它不知道自己在烧最后的机会。
+        """
+        p = comic_agent._system_prompt(3)
+        self.assertIn("轮次预算", p)
+        self.assertIn("不要查第二遍", p)
+        self.assertIn("15~25", p)             # 要教它一轮批量查，别一轮 5 个
+        # 强制动笔那条指令本身
+        self.assertIn("查库时间到", comic_agent._FORCE_WRITE)
+        self.assertIn("工具已经关闭", comic_agent._FORCE_WRITE)
+
+    def test_fake_alias_marked_missing(self):
+        """`grabbing another's wrist` / `wrist grab` 实测**不在**本地库里。
+
+        上一版提示词把它们当可用别名推荐（写错了），模型照着查会落空。
+        """
+        p = comic_agent._system_prompt(3)
+        self.assertIn("在本库里**都不存在**", p)
 
 
 if __name__ == "__main__":

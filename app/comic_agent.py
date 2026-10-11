@@ -50,6 +50,30 @@ parts are **counted**」——**一只手也算一个角色**。于是 `1girl, s
 ③ 是必须的——项目一贯的做法是「模型做不到的规则，由代码判」。①②是软约束，
 模型仍可能蒙一个库里没有的 tag 出来，只有③能兜住。
 
+## 2026-10-11 追加：查库会失控，**轮次预算必须由代码管**
+
+上线当天用户实测就撞上了：日志里第 12 轮的 6 行**全是** `search_tags`，上限一到
+返回空正文，下游报「只解析到 0 格」，界面上是一个空白剧本。两稿 24 轮，一次正文
+都没交。
+
+根因是**没人管预算**。提示词要求「每个要用的标签都先查一次」，而 3 格 ≈ 60 个
+标签，模型一轮只发 6 个左右的查询——光查库就要十轮，它却在专心查库，不知道自
+己快没机会动笔了。所以补两条：
+
+    ① 轮次分两段：查库段（工具可用）+ **强制动笔段**（工具关闭，只要正文，
+       见 WRITE_RESERVE）。到点由代码锁工具，不靠模型自觉。
+    ② 每轮回灌工具结果时**报剩余轮数**，让它自己会算「还剩几轮、该批量查了」。
+
+配套两个 bug 一起修了：
+
+- **兜底是死代码**。`last_text` 原来只在「无工具调用」分支里赋值，而那个分支必
+  然 `return`——于是「达到上限返回最后一稿」永远返回空串，模块文档承诺的兜底从
+  来没生效过。现在改成单独的 `fallback`，中间轮的半截稿也留一份。
+- **空剧本不能静默落地**。`write_script` 原来对空正文也走「最后一次容忍」，
+  返回空串后 `comic_api` 照样建任务目录、写一个空 `script.md`，前端一片空白。
+  现在空正文单独识别、单独回炉，最后仍空则**抛异常**（`comic_api` 转 502 报错）
+  ——「标签没验过但稿子在」能容忍，「什么都没有」容忍不了。
+
 ## 两条容易踩的实现约束
 
 - **备选记录必须抽走**。规范要求「歧义必问」，但自动流程没人可问（用户
@@ -84,6 +108,23 @@ log = logging.getLogger("comic.agent")
 # （发型/瞳色/服装/动作/手部/场景/构图，一格就七八个，十格要几十个），
 # 但也不能无界——12 轮 × 单轮几十秒正好落在「等得住」的范围里。
 MAX_ROUNDS = 12
+
+# 最后几轮留给「强制动笔」：这几轮**不执行工具**，只要正文。
+#
+# 留 2 轮而不是 1 轮，是因为第一轮锁工具时模型可能仍在输出 `[[TOOL:...]]`
+# （实测它在查库节奏里刹不住），那时只能再催一轮。查到 12 轮上限却一个字没
+# 写出来，比多烧一轮贵得多（用户拿到的是空白剧本）。
+WRITE_RESERVE = 2
+
+# 转入强制动笔段时插的这一条。措辞要「命令式 + 说明工具已关闭」：
+# 只说「请写剧本」模型会继续查库，必须明确告诉它那些行**不会被受理**。
+_FORCE_WRITE = (
+    "【查库时间到】从这一轮起**工具已经关闭**——你再输出 `[[TOOL:...]]` 我也只"
+    "会当废文本丢掉，不会执行、不会给你结果。现在**立刻**输出完整剧本：每一格"
+    "都要有 `画面:` 和 `气泡:`，只输出剧本本身，不要解释、不要围栏。\n"
+    "标签只用你已经查到的那些；没查过的词就用语义最近的已知标签，"
+    "**绝对不许新造库里可能没有的词**。"
+)
 # 单次 LLM 调用超时。比 search_agent 的 30s 长：编剧最后一轮要一口气吐出
 # 整份剧本（十格），输出量大。
 CALL_TIMEOUT = 90
@@ -331,8 +372,15 @@ _SYSTEM_TMPL = """你是条漫分镜编剧，同时是 Anima 提示词工程师�
 就是这么错的，29 个查询全成了废文本）。
 
 【第一步永远是查库——先把这一话要用的标签查完，再动笔写剧本】
+⚠️ **你有轮次预算，超了系统会强制你动笔（那时工具就关了）。**
+- 查库阶段大约 10 轮，之后系统会发一条「查库时间到」并**关闭工具**，逼你用
+  手上已经查到的标签动笔。所以：
+  - **一轮要批量查**：一次回复里可以写 15~25 行工具调用，别一轮只查 5 个。
+  - **同一个词不要查第二遍**：查过的结果就在对话里，回头看一眼就行。
+  - **把预算花在不确定的词上**：动作、手部、构图、光照、道具这些最容易踩坑；
+    只要有一点点不确定就先查。
 - 每个要用的标签都先调 search_tags 查一次。查中文（「抓手腕」「哭泣」）可以，
-  直接查英文 tag（arm_grab、tears）也可以；不确定英文叫什么就查中文。
+  直接查英文 tag（hand_grab、tears）也可以；不确定英文叫什么就查中文。
 - 库里命中 → 用返回的 tag 名（把下划线换成空格写进剧本）。
 - 一个中文名出来几十个候选 → 自己挑最贴合画面的那一个，把**其他候选**记进
   `备选:` 行（见下面「歧义怎么办」）。
@@ -356,7 +404,8 @@ _SYSTEM_TMPL = """你是条漫分镜编剧，同时是 Anima 提示词工程师�
 5. **抓别人的手腕只能写 `holding another's wrist`，不许写 `hand around wrist`，
    更不许把动作写成句子。**
    - 攥住/握住别人的手腕 → `holding another's wrist`
-     （Danbooru 标准名；库里另存别名 grabbing another's wrist / wrist grab）
+     （这是**唯一**可用的写法。网上流传的别名 `grabbing another's wrist`、
+     `wrist grab` 在本库里**都不存在**，实测查过，别用。）
    - 手只是搭在别人手腕上（没用力） → `hand on another's wrist`
    - 镜头就是「我」的眼睛、那只手是「我」的 → 再加 `pov` + `pov hands`
    - 画面里只有手、看不到它的身体 → 再加 `disembodied hand` / `disembodied arm`
@@ -513,26 +562,58 @@ def _emit(progress, msg):
 
 def run_rounds(messages, provider=None, model=None, max_rounds=MAX_ROUNDS,
                progress=None):
-    """跑 agent 循环，返回模型最终交出的正文（没收敛就返回最后一次的正文）。
+    """跑 agent 循环，返回模型最终交出的正文（可能为空串）。
 
-    与 search_agent.search 同一套骨架，两点不同：
-      - 中间轮（有工具调用的）正文**一律丢弃**——编剧边查边写时那半截稿子
-        是过程稿，收尾轮的完整剧本才算数。
-      - 保留最后一轮正文作为兜底：模型 12 轮都在查库没收敛时，至少把最后
-        一次输出交出去，别白烧这些 token。
+    轮次分两段：
+
+        1 .. max_rounds - WRITE_RESERVE   查库段：工具调用会被执行
+        之后 WRITE_RESERVE 轮              强制动笔段：**工具关闭**，只要正文
+
+    为什么必须有强制段（2026-10-11 用户实测）：第一版把「查够了就动笔」交给
+    模型自己判断，结果两稿 24 轮**全程在查库**——日志里第 12 轮的 6 行全是
+    search_tags，上限一到就返回空正文，下游报「只解析到 0 格」。提示词要求
+    「每个标签都先查一次」，3 格 ≈ 60 个标签，模型一轮只发 6 个查询，光查库
+    就得十轮，而它不知道自己在烧最后的机会。所以预算改由代码管。
+
+    返回空串由调用方 `write_script` 负责回炉/报错——本函数只管跑轮到有正文为止。
     """
-    last_text = ""
+    fallback = ""             # 过程稿兜底：只在最终也没交出正文时才用
     nudged = False            # 第一轮没查库时只打回一次，防死循环
+    search_rounds = max(1, max_rounds - WRITE_RESERVE)
+
     for round_no in range(1, max_rounds + 1):
+        forced = round_no > search_rounds
+        if round_no == search_rounds + 1:
+            log.info("[comic-agent] 查库段用完（%d 轮），转入强制动笔", search_rounds)
+            _emit(progress, "查库结束，开始写剧本")
+            messages.append({"role": "user", "content": _FORCE_WRITE})
+
         try:
             reply = llm.call_llm(messages, timeout=CALL_TIMEOUT,
                                  provider=provider, model=model)
         except Exception as e:
             log.warning("[comic-agent] 第 %d 轮调用失败：%s", round_no, e)
-            return last_text
+            return fallback
         if not reply or not reply.strip():
             log.warning("[comic-agent] 第 %d 轮空回复", round_no)
-            return last_text
+            return fallback
+
+        # 强制动笔段：工具已关闭，只认正文。模型在这里输出工具调用只能再催一轮，
+        # 那些行不执行——一执行就把这一轮又变回查库轮，永远收敛不了。
+        if forced:
+            doc = _strip(reply)
+            if doc:
+                log.info("[comic-agent] 第 %d 轮（强制）交出正文 %d 字",
+                         round_no, len(doc))
+                return doc
+            log.warning("[comic-agent] 第 %d 轮（强制）仍只输出工具调用", round_no)
+            _emit(progress, "模型还在查库，继续催稿")
+            messages.append({"role": "assistant", "content": reply})
+            messages.append({"role": "user", "content":
+                             "你又输出了工具调用——**工具已经关闭**，那几行等于"
+                             "什么都没写。现在只输出剧本本身（每一格都要有 "
+                             "`画面:` 和 `气泡:`），标签用你已经查到的，不要新造。"})
+            continue
 
         calls = parse_tool_calls(reply)
         if not calls:
@@ -546,6 +627,11 @@ def run_rounds(messages, provider=None, model=None, max_rounds=MAX_ROUNDS,
                 nudged = True
                 log.info("[comic-agent] 第 1 轮没查库，打回要求先查")
                 _emit(progress, "模型想直接写，已打回要求先查库")
+                fb = _strip(reply)
+                if fb:
+                    # 留作兜底：这份稿子标签没验过，但万一模型被打了回之后就
+                    # 再也不交稿（实测就是这样），有它总比空手强。
+                    fallback = fb
                 messages.append({"role": "assistant", "content": reply})
                 messages.append({"role": "user", "content":
                                  "停——你还没有查过库就直接写剧本了。剧本里每一个"
@@ -555,10 +641,17 @@ def run_rounds(messages, provider=None, model=None, max_rounds=MAX_ROUNDS,
                                  "等我把结果给你之后再写剧本。"})
                 continue
             doc = _strip(reply)
-            if doc:
-                last_text = doc
             log.info("[comic-agent] %d 轮结束，交出正文 %d 字", round_no, len(doc))
-            return last_text
+            return doc or fallback
+
+        # 过程稿兜底：模型边查边写时那半截不算成品（收尾轮的完整剧本才算），
+        # 但真到最后什么都没交出来时，有半截比空手强。
+        # ⚠️ 原版这里**不留**过程稿，而唯一给 last_text 赋值的地方就是上面那个
+        # 「无工具调用」分支——那个分支必然 return，于是「达到上限则返回最后一稿」
+        # 永远返回空串，模块承诺的兜底从来没生效过（2026-10-11 实测「0 格」）。
+        doc = _strip(reply)
+        if doc:
+            fallback = doc
 
         results = []
         for c in calls:
@@ -576,14 +669,23 @@ def run_rounds(messages, provider=None, model=None, max_rounds=MAX_ROUNDS,
         if len(joined) > MAX_TOOL_CHARS:
             joined = joined[:MAX_TOOL_CHARS] + "\n…（结果已截断）"
 
+        left = search_rounds - round_no
+        if left > 0:
+            tail = ("\n\n还剩 %d 轮查库机会，用完后系统会**强制**你动笔（届时工具"
+                    "关闭）。要查的词请一次性批量发出来（一轮写 15~25 行都行，"
+                    "比一轮只查 5 个快得多）；**已经查过的词不要重复查**。"
+                    % left)
+        else:
+            tail = "\n\n这是最后一轮查库机会，下一轮必须动笔输出完整剧本。"
+
         messages.append({"role": "assistant", "content": reply})
         messages.append({"role": "user", "content":
-                         "【工具结果】\n" + joined
-                         + "\n\n还没查够就继续输出工具调用；"
-                           "查够了一次性输出完整剧本（只输出剧本本身）。"})
+                         "【工具结果 %d/%d 轮】\n%s%s"
+                         % (round_no, search_rounds, joined, tail)})
 
-    log.warning("[comic-agent] 达到 %d 轮上限仍未收敛", max_rounds)
-    return last_text
+    log.warning("[comic-agent] 达到 %d 轮上限仍未交出正文（兜底稿 %d 字）",
+                max_rounds, len(fallback))
+    return fallback
 
 
 # ─── 校验 ───────────────────────────────────────────────
@@ -622,6 +724,8 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
       - tries：不合格时的回炉次数。**最后一次容忍**——把校验警告写进日志后
         原样返回，不抛异常。理由：硬卡死会让整个漫画流程停下来，而一份带
         「标签没验过」的剧本用户在确认环节还能自己改；抛异常则什么都拿不到。
+        例外是**一稿都没写出正文**（模型全程在查库）：那时空手返回等于把一个
+        空剧本落盘，抛 RuntimeError 更有用（调用方转成可见的报错）。
       - progress：可选回调，每执行一次工具调一次，用来在界面上显示
         「正在查库 arm_grab」这类实时进度。
     """
@@ -651,6 +755,22 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
                                               model=model, max_rounds=max_rounds,
                                               progress=progress))
         clean, notes = _extract_notes(_strip_preamble(text))
+        # 空正文单独处理：这跟「交了稿但标签不对」是两回事。
+        # 实测（2026-10-11）：模型整轮都在查库没动笔，正文是空串，而原来的代码
+        # 把它当普通不合格稿回炉——回炉消息里带一条**空的** assistant 消息，模型
+        # 看不出自己错在哪（看到的就是"上一份稿子"），于是接着查库；最后空串被
+        # 原样交给 comic_api，照样建任务目录、写一个空 script.md，用户看到一片
+        # 空白，还以为只是「解析 bug」。这里给它一句对症的指令，且**不覆盖**上一
+        # 稿——上一稿至少是有内容的，丢不得。
+        if not clean.strip():
+            why = "模型整轮都在查库，没有写出剧本"
+            log.warning("[comic-agent] 第 %d 稿没交出正文", attempt)
+            feedback = [{"role": "user", "content":
+                         "你上一轮只顾着查标签库，**没有交剧本**。这一轮请立刻输出"
+                         "完整剧本（每一格都要有 `画面:` 和 `气泡:`，只输出剧本本"
+                         "身），标签就用你已经查到的那些，不要新造词，也不要再输出"
+                         "工具调用。"}]
+            continue
         ok, why = check(clean, panels)
         if ok:
             log.info("[comic-agent] 剧本合格（第 %d 稿，%d 格，备选 %d 条）",
@@ -664,6 +784,14 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
              "这份剧本不合格：%s\n请重新输出**完整**剧本（所有格都要重写一遍），"
              "只输出剧本本身。" % why},
         ]
+
+    # 一稿都没写出来（全是空正文）。返回空串会让 comic_api 落一个空
+    # script.md、前端只见空白框——宁可报错让人看见。这是「容忍」的边界：
+    # 「标签没验过但稿子在」能容忍（用户在确认环节还能自己改），
+    # 「什么都没有」容忍不了。
+    if not last.strip():
+        log.error("[comic-agent] %d 稿都没写出正文，报错", tries)
+        raise RuntimeError("编剧 %d 稿都只顾查库、没有写出剧本" % tries)
 
     # 最后一次也没过：原样交出，把问题写在头部的注释行里让人看见。
     # ⚠️ 绝不能把警告拼到剧本**末尾**——parse_script_text 会把它当续行接进
