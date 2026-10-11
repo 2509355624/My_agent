@@ -216,7 +216,7 @@ async function refresh() {
   }
   for (const p of d.panels) {
     // 签名=影响展示的全部字段；没变就跳过这一格——图片不会重新加载，页面不闪。
-    const sig = [p.state, p.error, p.seed, p.scene_url, p.final_url, p.label, p.bubble].join('|');
+    const sig = [p.state, p.error, p.seed, p.scene_url, p.final_url, p.label, p.bubble, p.bubble2].join('|');
     const cached = _slots[p.no];
     if (cached && cached.sig === sig) continue;
     const el = document.createElement('div');

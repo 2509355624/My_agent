@@ -176,7 +176,8 @@ def api_comic_status():
     panels = []
     for p in task.panels:
         item = {"no": p.no, "state": p.state, "seed": p.seed,
-                "label": p.label, "bubble": p.bubble, "scene": p.scene,
+                "label": p.label, "bubble": p.bubble, "bubble2": p.bubble2,
+                "scene": p.scene,
                 "error": p.error}
         if os.path.isfile(task.raw_path(p)):
             item["scene_url"] = "/api/comic/img?task=%s&f=raw/%s_raw.png" % (

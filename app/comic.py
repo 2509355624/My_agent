@@ -86,6 +86,23 @@ BUBBLE_TEMPLATE = (
     "保持人物、服装、姿势、背景和画风完全不变，只新增这一个对话框。"
 )
 
+# 第二个气泡模板（第二遍 i2i 用）。和第一个的区别有两个，都是实测踩出来的：
+#   ① 位置在**右上角**——第一个气泡在左上，两个不重叠；
+#   ② 数量约束不能再说「不要出现第二个气泡」——此时画面里**已经有**第一个
+#     气泡了，必须改成「保住已有的、只新增这一个」，否则模型会把已有的气泡
+#     当成「多余的那个」给抹掉或重画。
+BUBBLE_TEMPLATE_2 = (
+    "画面中已经有一个对话框（气泡），保持它的大小、位置、内容和样式完全不变。"
+    "另外在画面右上角新增一个对话框（气泡）：白色圆角框、黑色细边框，"
+    "带一个指向人物的尾巴，字体为黑体。"
+    '新增气泡内的文字（EXACT）："{text}"'
+    "文字排成 2 到 3 行居中显示，每行不超过 8 个字，字迹清晰、不要重影。"
+    "新增气泡内只写这一段文字；除了画面中原有的那个气泡外，"
+    "不要出现任何第二个新增气泡，不要出现任何其他文字或符号。"
+    "气泡不要遮挡人物脸部。"
+    "保持人物、服装、姿势、背景和画风完全不变，只新增这一个对话框。"
+)
+
 # 双文字模板：气泡之外**再加一行小字标签**（如「好感度 0」这种状态读数）。
 # 拆成独立模板而不是给上面那个加可选段，是为了让「只写这一段」这条数量约束在
 # 两种情况下都保持明确——实测约束写得越死，模型越不会自己加戏。
@@ -138,12 +155,15 @@ _session.trust_env = False
 # 字段名中英都认；画面/气泡各自可以续行（缩进或直接换行都行，遇到空行结束）。
 
 _PANEL_RE = re.compile(r"^\s*##\s+(\d{1,3})\s*$")
+# ⚠️ 「气泡2」必须排在「气泡」前面：正则交替是从左到右吃的，先写「气泡」会把
+# 「气泡2: …」吃成 field=气泡、值剩下「2: …」，再被当续行拼进上一格台词。
 _FIELD_RE = re.compile(
-    r"^\s*(画面|场景|scene|prompt|气泡|台词|bubble|dialogue|标签|状态|label|stat)"
+    r"^\s*(画面|场景|scene|prompt|气泡2|台词2|bubble2|气泡|台词|bubble|dialogue|标签|状态|label|stat)"
     r"\s*[:：]\s*(.*)$", re.I)
 _FIELD_MAP = {"画面": "scene", "场景": "scene", "scene": "scene", "prompt": "scene",
               "气泡": "bubble", "台词": "bubble", "bubble": "bubble",
               "dialogue": "bubble",
+              "气泡2": "bubble2", "台词2": "bubble2", "bubble2": "bubble2",
               "标签": "label", "状态": "label", "label": "label", "stat": "label"}
 _TITLE_RE = re.compile(r"^\s*#\s*(?:标题\s*[:：]\s*)?(.+?)\s*$")
 _TASKID_RE = re.compile(r"^\s*任务号\s*[:：]\s*(.+?)\s*$")
@@ -173,7 +193,7 @@ def parse_script_text(text):
         m = _PANEL_RE.match(line)
         if m:
             cur = {"no": "%02d" % int(m.group(1)), "scene": "",
-                   "bubble": "", "label": ""}
+                   "bubble": "", "bubble2": "", "label": ""}
             panels.append(cur)
             field = None
             continue
@@ -211,10 +231,11 @@ _STATE_LABEL = {"pending": "待渲染", "rendered": "待加气泡", "done": "已
 
 
 class Panel:
-    def __init__(self, no, scene, bubble, label=""):
+    def __init__(self, no, scene, bubble, label="", bubble2=""):
         self.no = no
         self.scene = scene
         self.bubble = bubble
+        self.bubble2 = bubble2      # 可空；有值时阶段二对成图再串一次 i2i 画第二个气泡
         self.label = label          # 可空；有值时阶段二画「气泡 + 一行小字」两个元素
         self.state = "pending"      # pending → rendered → done
         self.seed = None
@@ -226,6 +247,9 @@ class Panel:
             return BUBBLE_TEMPLATE_LABEL.format(
                 text=text, label=_clean_dialogue(self.label))
         return BUBBLE_TEMPLATE.format(text=text)
+
+    def bubble2_prompt(self):
+        return BUBBLE_TEMPLATE_2.format(text=_clean_dialogue(self.bubble2))
 
 
 def _guess_task_id(dirpath):
@@ -245,7 +269,8 @@ class Task:
         self.meta = meta
         self.panels = [p if isinstance(p, Panel)
                        else Panel(p["no"], p.get("scene", ""),
-                                  p.get("bubble", ""), p.get("label", ""))
+                                  p.get("bubble", ""), p.get("label", ""),
+                                  p.get("bubble2", ""))
                        for p in panels]
         self.task_id = meta.get("task_id") or _guess_task_id(self.dir)
         self.raw_dir = os.path.join(self.dir, "raw")
@@ -281,6 +306,7 @@ class Task:
                 p.state, p.seed = "pending", None
             elif (p.state == "done"
                   and (s.get("bubble", "") != p.bubble
+                       or s.get("bubble2", "") != p.bubble2
                        or s.get("label", "") != p.label)):
                 p.state = "rendered"
 
@@ -296,6 +322,7 @@ class Task:
                 p.no: {
                     "scene": p.scene,
                     "bubble": p.bubble,
+                    "bubble2": p.bubble2,
                     "label": p.label,
                     "state": p.state,
                     "seed": p.seed,
@@ -450,7 +477,14 @@ def _build_i2i(skill, prompt, seed, uploaded):
 
 
 def render_bubble(task, p):
-    """阶段二：qwen 图生图，在场景图上加这一格的对话框。"""
+    """阶段二：qwen 图生图，在场景图上加这一格的对话框。
+
+    有 `气泡2:` 的格跑**两遍**：第一遍按 bubble_prompt 画左上角的气泡；
+    第二遍拿第一遍的成图当源图，按 bubble2_prompt 在右上角补第二个气泡
+    （BUBBLE_TEMPLATE_2 的数量约束是按「图里已有第一个气泡」写的）。
+    一次只画一个气泡是刻意的——一格画两个的失败率高（初版实测 5 格里 2 格
+    冒出第二个乱气泡），串行两遍每遍只管一个，稳。
+    """
     raw_path = task.raw_path(p)
     if not os.path.exists(raw_path):
         raise RuntimeError("没有场景原图，先跑阶段一")
@@ -462,6 +496,15 @@ def render_bubble(task, p):
     name = _submit_retry(lambda: _submit(wf, BUBBLE_SKILL, prompt, seed),
                          "[格 %s] 加气泡" % p.no)
     _download(name, task.final_path(p))
+    if p.bubble2.strip():
+        prompt2 = p.bubble2_prompt()
+        seed2 = _new_seed()
+        uploaded2 = _upload_source(task.final_path(p))   # 源图=第一遍的成图
+        wf2 = _build_i2i(BUBBLE_SKILL, prompt2, seed2, uploaded2)
+        log.info("[格 %s] 加第二个气泡（%s，seed %s）", p.no, BUBBLE_SKILL, seed2)
+        name2 = _submit_retry(lambda: _submit(wf2, BUBBLE_SKILL, prompt2, seed2),
+                              "[格 %s] 加第二个气泡" % p.no)
+        _download(name2, task.final_path(p))             # 覆盖成两气泡版
     p.state = "done"
     p.error = None
     log.info("[格 %s] 成品已落盘：%s", p.no, task._rel(task.final_path(p)))
