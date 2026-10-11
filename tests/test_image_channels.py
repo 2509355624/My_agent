@@ -2061,31 +2061,34 @@ class CustomChannelTest(unittest.TestCase):
 # ─── anima 的 LoRA 堆叠版（2026-10-11 新增两条）────────────────────
 
 class AnimaLoraChannelTest(unittest.TestCase):
-    """`anima-soft` / `anima-real` —— 2026-10-11 用户加的两条**独立**动漫渠道。
+    """`anima-line` / `anima-real` —— 2026-10-11 用户加的两条**独立**动漫渠道。
 
     ## 为什么是独立渠道，不是第 5、6 个画风
 
     跟 `hd_3_*` 那一族**不是同一套配方**：一段堆 **6 条 LoRA**、二段换
     `silvermoonmix` turbo 底模（**裸接**）、euler 10 + 15 步 cfg 1、latent 只
     放大 1.2×，输出 2456×3686（那一族是 er_sde 20 步 cfg 5 / latent 1.5× /
-    3072×4608）。所以名字用**连字符** `anima-soft` 而不是 `anima_soft`——后者会被
+    3072×4608）。所以名字用**连字符** `anima-line` 而不是 `anima_line`——后者会被
     `ChannelSetTest` 那条「动漫族只剩 4 个」的前缀扫描误当成旧档位。
 
-    ## 「柔和」这两个字被新渠道抢走了
+    ## ⚠️ 点名词**故意不叫「anima柔和」**（同名当天改的）
 
-    `_STYLE_ALIASES` 里 `柔和`→`soft`（即 `hd_3_soft`），用户拍板让新渠道占用它：
-      · 「anima柔和」/「anima 柔和」/ 字面 id `anima-soft` → `anima-soft`
-      · 光说「柔和」/「anima soft」/「三档 柔和」   → 仍是 `hd_3_soft`（没变）
-    靠的是 `_FIXED_CHAN_RE` 里那两条排在画风词前面、且 `_parse_channel` 让它跑在
-    `_lead_commands()`（档位 / 画风）**之前**。谁把这两条挪出固定渠道表，
-    `test_style_alias_still_wins_for_the_bare_words` 立刻红。
+    初版叫「anima柔和」/`anima-soft`，同日用户拍板改名成「anima线条」/`anima-line`：
+    **「柔和」是 `_STYLE_ALIASES` 里活的画风词**（柔和→soft = `hd_3_soft`），拿它
+    当点名词就和画风词**双关**了——粉丝群里「高光的地方再柔和一点」这种日常说法
+    满地都是，大大怪分不清是形容词还是点名。
+    副作用是这套「固定渠道词排在画风解析之前」的 hack 也不用再靠了：
+      · 「anima线条」/「anima 线条」/ 字面 id `anima-line` → `anima-line`
+      · 「anima柔和」/「anima 柔和」→ 落回 `hd_3_soft`（= 三档 + soft 画风，
+        就是它在改名前的本来含义；**没留旧别名**，见下面那条锁）
+    `线条` 不在画风表、也不在任何渠道名里，光说「线条」什么都不触发。
 
-    ⚠️ **字面 id 也要在正则里**：只写 `anima\\s*柔和` 时，「anima-soft」会被
-    `_STYLE_RE` 的 `soft` 抢成 `hd_3_soft`、「anima-real」更糟（`real` 被当画风
-    吃掉，正文里留个 `-real`）。2026-10-11 实测过，别改回去。
+    ⚠️ **字面 id 也要在正则里**：只写 `anima\\s*线条` 时，「anima-line」只是不认；
+    但同族的 `anima-real` 会落到 `_STYLE_RE`，`real` 被当画风吃掉、正文里留个
+    `-real`（2026-10-11 实测）。别把 id 从固定表挪出去。
     """
 
-    NAMES = ("anima-soft", "anima-real")
+    NAMES = ("anima-line", "anima-real")
 
     def test_both_load_as_image_skills(self):
         for name in self.NAMES:
@@ -2143,9 +2146,10 @@ class AnimaLoraChannelTest(unittest.TestCase):
 
     def test_named_forms_resolve_to_the_new_channels(self):
         from app.direct_gen import _parse_channel
-        for text, want in (("anima柔和", "anima-soft"),
-                           ("anima 柔和", "anima-soft"),
-                           ("anima-soft 少女", "anima-soft"),
+        for text, want in (("anima线条", "anima-line"),
+                           ("anima 线条", "anima-line"),
+                           ("anima-line 少女", "anima-line"),
+                           ("用 anima-line 画", "anima-line"),
                            ("anima写实", "anima-real"),
                            ("anima 写实 少女", "anima-real"),
                            ("用 anima-real 画", "anima-real")):
@@ -2153,15 +2157,30 @@ class AnimaLoraChannelTest(unittest.TestCase):
                 self.assertEqual(_parse_channel(text)[0], want)
 
     def test_style_alias_still_wins_for_the_bare_words(self):
-        """光说「柔和」/ `anima soft` 仍是 `hd_3_soft`——这条**不许**被抢走。
+        """裸画风词 / 旧点名词都落回 `hd_3_soft`——改名后**双关已消除**。
 
-        用户只把「anima + 柔和」这个组合给了新渠道，裸画风词照旧走 `hd_3_*`；
-        只有带连字符的字面 id 才归新渠道。
+        三条都是同一件事：「柔和」从头到尾只有一个意思（`_STYLE_ALIASES` 柔和→soft），
+        「anima」只是三档。旧点名词**没留别名**，所以「anima柔和」现在也是它。
+        谁哪天把「anima柔和」又加回 `_FIXED_CHAN_MAP`，这里立刻红。
         """
         from app.direct_gen import _parse_channel
-        for text in ("柔和 少女", "anima soft", "三档 柔和"):
+        for text in ("柔和 少女", "anima soft", "三档 柔和",
+                     "anima柔和", "anima 柔和"):
             with self.subTest(text=text):
                 self.assertEqual(_parse_channel(text)[0], "hd_3_soft")
+
+    def test_the_line_word_does_not_collide_with_anything(self):
+        """「线条」不是画风词、不是渠道词——光说它什么都不触发。
+
+        这正是选它当点名词的原因：换成它之后，群里「线条干净点」这种日常说法
+        不会误锁渠道（`_STYLE_ALIASES` / `_FIXED_CHAN_MAP` 里都没有它）。
+        """
+        from app.direct_gen import _parse_channel, _FIXED_CHAN_MAP, _STYLE_ALIASES
+        self.assertNotIn("线条", _FIXED_CHAN_MAP)
+        self.assertNotIn("线条", _STYLE_ALIASES)
+        for text in ("线条", "线条 少女", "线条干净点"):
+            with self.subTest(text=text):
+                self.assertEqual(_parse_channel(text)[0], None, text)
 
     def test_no_i2i_skeleton_yet(self):
         """用户拍板「先不做」——所以没有 `workflow_i2i.json`，也**不在** `_I2I_SKILLS`。
