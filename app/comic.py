@@ -126,6 +126,40 @@ BUBBLE_TEMPLATE_LABEL = (
     "保持人物、服装、姿势、背景和画风完全不变，只新增这一个对话框和这几行旁白。"
 )
 
+# 一次画完两个气泡（2026-10-11）。
+#
+# 此前是「第一遍画气泡1+旁白，第二遍拿第一遍的成图当源图补气泡2」——每个带第二句
+# 台词的格多花一次 50~70 秒。当初拆两遍是因为一次画两个会崩（初版 5 格里 2 格冒出
+# 第二个乱气泡），但那版模板只说了「加一个对话框」：**条数没声明、归属没声明**，
+# 模型只能自由发挥。后来每条气泡都必须声明「文字 + 尾巴指向 + 位置」，诱因没了——
+# 真跑 3/3 全对，热机 69 秒（与单气泡那遍一模一样，多画一个气泡不额外耗时）。
+#
+# 位置沿用两遍版最终的分布（旁白占右上角，气泡2 因此让到右下角），所以观感不变，
+# 只是少跑一遍。界面仍留「分开画」开关（render_bubble 的 split）：某格一遍画崩了
+# 可以用两遍单独重跑。
+BUBBLE_TEMPLATE_ALL = (
+    "在这张漫画格的空白处添加两个对话框（气泡），一共两个，不要多也不要少。"
+    "{sec1}"
+    "{sec2}"
+    "两个气泡内的文字各自排成 2 到 3 行居中显示，每行不超过 8 个字，"
+    "字迹清晰、不要重影。每个气泡内只写它自己那一段文字，"
+    "两个气泡的文字不要混在一起。"
+    "{lab_sec}"
+    "气泡和旁白都不要遮挡人物脸部。"
+    "保持人物、服装、姿势、背景和画风完全不变，只新增这两个对话框{extra}。"
+)
+
+
+def _bubble_sec(no, pos, tail, text):
+    """一个气泡在提示词里的那一段描述。
+
+    文字必须用引号包住，否则模型当成风格描述、不会原样渲染（见上面 BUBBLE_TEMPLATE
+    的注释）。
+    """
+    return ('【气泡%d】位置在画面%s。白色圆角框、黑色细边框，%s，字体为黑体。'
+            '气泡内的文字（EXACT）："%s"' % (no, pos, tail, _clean_dialogue(text)))
+
+
 # 台词里的中日式引号（「」『』）会被 qwen 当成句子边界——实测 04 那格就是在「」处
 # 把一句话断成了两个气泡。喂给模型前剥掉；精确文本由模板统一用英文双引号包住，
 # 这样既满足「文本要加引号」，又不会触发中文引号的断句语义。
@@ -155,8 +189,40 @@ def _tail_note(speaker):
     return "气泡的尾巴指向画面中的女生（这个气泡是女生说的）"
 
 
-def _label_sec(lines):
-    """旁白段的提示词。单条 / 多条两种写法，多条的每行都要单独点名。"""
+def _count_note(bubbles, pos2, n_labels):
+    """「画面里只准出现这几个文字元素」这句数量约束。
+
+    单独抽出来是因为它随三种情况变：画一个还是两个气泡、带不带旁白、旁白一行
+    还是多行。原来这句写死在 `_label_sec` 里、永远说「左上角一个气泡」——
+    合并版（一次画两个气泡，见 BUBBLE_TEMPLATE_ALL）复用它，就会在同一段
+    提示词里一边说「一个气泡」一边说「两个气泡」，模型只能二选一。
+    （2026-10-11 自查发现。与「`stepping off` 改用 `standing on one leg` 之类」
+    同类：提示词里的字面描述对模型就是硬指令。）
+    """
+    if not n_labels:
+        lab = ""
+    elif n_labels == 1:
+        lab = "右上角一行旁白"
+    else:
+        lab = "右上角 %d 行旁白" % n_labels
+    if bubbles == 1:
+        # 一个气泡的老路径：这句措辞已经过大量实跑验证，一字不改。
+        elems = "左上角一个气泡" + ("、" + lab if lab else "")
+        head = "这两个文字元素" if n_labels == 1 else "这些文字元素"
+        return ("画面中只出现%s（%s），不要出现第三个气泡，"
+                "不要出现任何其他文字或符号。" % (head, elems))
+    elems = "、".join(x for x in ("左上角的气泡1", "%s的气泡2" % pos2, lab) if x)
+    head = "这三个文字元素" if n_labels else "这两个文字元素"
+    return ("画面中只能出现%s（%s），不要出现第三个气泡，"
+            "不要出现任何其他文字或符号。" % (head, elems))
+
+
+def _label_sec(lines, bubbles=1, pos2="右下角"):
+    """旁白段的提示词。单条 / 多条两种写法，多条的每行都要单独点名。
+
+    bubbles / pos2 只有**一次画两个气泡**时才会传非默认值：这一段收尾是一句
+    数量约束，必须知道这一格一共画几个气泡、第二个在哪（见 _count_note）。
+    """
     n = len(lines)
     out = ["另外在画面右上角添加旁白文字：黑体，字号清晰可读、与气泡内文字大小相当，"
            "每条旁白最多排 3 行、每行不超过 8 个字（放不下就换到下一行），"
@@ -164,16 +230,13 @@ def _label_sec(lines):
     if n == 1:
         out.append('这行旁白的文字（EXACT）："%s"' % _clean_dialogue(lines[0]))
         out.append("这行旁白只写这一段文字。")
-        out.append("画面中只出现这两个文字元素（左上角一个气泡、右上角一行旁白），"
-                   "不要出现第三个气泡，不要出现任何其他文字或符号。")
     else:
         out.append("旁白一共 %d 行，在右上角从上到下依次排开，每行独立成行、"
                    "行与行之间留出空隙，不要连成一整段：" % n)
         out.append("".join('第 %d 行（EXACT）："%s"；' % (i + 1, _clean_dialogue(s))
                            for i, s in enumerate(lines)))
         out.append("旁白只写上面这 %d 段文字，不要多写、不要少写。" % n)
-        out.append("画面中只出现这些文字元素（左上角一个气泡、右上角 %d 行旁白），"
-                   "不要出现第三个气泡，不要出现任何其他文字或符号。" % n)
+    out.append(_count_note(bubbles, pos2, n))
     return "".join(out)
 
 # 同 image_out / comfy_src：本机常驻代理会把 127.0.0.1 也劫持成 502，
@@ -388,10 +451,29 @@ class Panel:
         """旁白行——多条旁白（`标签1:` `标签2:`…）在这里拆开。"""
         return [x.strip() for x in (self.label or "").split("\n") if x.strip()]
 
-    def bubble_prompt(self):
+    def two_bubbles(self):
+        """这一格要不要画第二个气泡（`气泡2:` 非空）。"""
+        return bool(self.bubble2.strip())
+
+    def bubble_prompt(self, split=False):
+        """阶段二的提示词。
+
+        有第二个气泡时**默认一次画完两个**（BUBBLE_TEMPLATE_ALL，2026-10-11
+        合并）；`split=True` 退回「第一遍只画气泡1+旁白」的老写法，配合
+        bubble2_prompt() 分两遍跑——界面上的「分开画」开关走这条路。
+        """
+        lines = self.labels()
+        if self.two_bubbles() and not split:
+            pos2 = "右下角" if lines else "右上角"
+            lab_sec = (_label_sec(lines, bubbles=2, pos2=pos2) if lines
+                       else _count_note(2, pos2, 0))
+            return BUBBLE_TEMPLATE_ALL.format(
+                sec1=_bubble_sec(1, "左上方", _tail_note(self.speaker), self.bubble),
+                sec2=_bubble_sec(2, pos2, _tail_note(self.speaker2), self.bubble2),
+                lab_sec=lab_sec,
+                extra="和这几行旁白" if lines else "")
         text = _clean_dialogue(self.bubble)
         tail = _tail_note(self.speaker)
-        lines = self.labels()
         if lines:
             return BUBBLE_TEMPLATE_LABEL.format(
                 text=text, tail=tail, lab_sec=_label_sec(lines))
@@ -640,27 +722,30 @@ def _build_i2i(skill, prompt, seed, uploaded, denoise=I2I_DENOISE):
     return generate_image._apply_i2i_placeholders(wf, uploaded, denoise)
 
 
-def render_bubble(task, p):
+def render_bubble(task, p, split=False):
     """阶段二：qwen 图生图，在场景图上加这一格的对话框。
 
-    有 `气泡2:` 的格跑**两遍**：第一遍按 bubble_prompt 画左上角的气泡；
-    第二遍拿第一遍的成图当源图，按 bubble2_prompt 在右上角补第二个气泡
-    （BUBBLE_TEMPLATE_2 的数量约束是按「图里已有第一个气泡」写的）。
-    一次只画一个气泡是刻意的——一格画两个的失败率高（初版实测 5 格里 2 格
-    冒出第二个乱气泡），串行两遍每遍只管一个，稳。
+    有 `气泡2:` 的格**默认一遍就把两个气泡和旁白全画完**（BUBBLE_TEMPLATE_ALL，
+    2026-10-11 合并；依据见那个模板的注释）。
+
+    split=True 走旧的分开画：第一遍按 bubble_prompt(split=True) 画左上角气泡
+    +旁白，第二遍拿第一遍的成图当源图、按 bubble2_prompt 补第二个气泡
+    （BUBBLE_TEMPLATE_2 的数量约束是按「图里已有第一个气泡」写的）。这条留作
+    退路——某格一遍画崩了，界面上把它单独切回「分开画」重跑。
     """
     raw_path = task.raw_path(p)
     if not os.path.exists(raw_path):
         raise RuntimeError("没有场景原图，先跑阶段一")
-    prompt = p.bubble_prompt()
+    prompt = p.bubble_prompt(split=split)
     seed = _new_seed()
     uploaded = _upload_source(raw_path)
     wf = _build_i2i(BUBBLE_SKILL, prompt, seed, uploaded)
-    log.info("[格 %s] 加气泡（%s，seed %s）", p.no, BUBBLE_SKILL, seed)
+    log.info("[格 %s] 加气泡（%s，seed %s%s）", p.no, BUBBLE_SKILL, seed,
+             "，分开画" if split else "")
     name = _submit_retry(lambda: _submit(wf, BUBBLE_SKILL, prompt, seed),
                          "[格 %s] 加气泡" % p.no)
     _download(name, task.final_path(p))
-    if p.bubble2.strip():
+    if split and p.two_bubbles():
         # 有旁白条时它占了右上角，第二个气泡让位到右下角（见 BUBBLE_TEMPLATE_2）
         pos = "右下角" if p.labels() else "右上角"
         prompt2 = p.bubble2_prompt(pos)
@@ -738,7 +823,7 @@ def _next_task_dir(root="comics"):
 
 
 def run(script_path, only=None, silver_only=False, redo=False,
-        scene_skill=SCENE_SKILL):
+        scene_skill=SCENE_SKILL, split_bubbles=False):
     meta, panels = parse_script(script_path)
     if not panels:
         raise SystemExit("剧本里没解析到任何格子（每格以 `## 01` 这样的标题开头）")
@@ -786,7 +871,7 @@ def run(script_path, only=None, silver_only=False, redo=False,
             log.warning("[格 %s] 场景没出图，跳过加气泡", p.no)
             continue
         try:
-            render_bubble(task, p)
+            render_bubble(task, p, split=split_bubbles)
         except Exception as e:
             p.error = str(e)
             log.error("[格 %s] 加气泡失败：%s", p.no, e)
@@ -829,6 +914,9 @@ def main(argv=None):
                         "验证气泡效果时用）" % SCENE_SKILL)
     r.add_argument("--redo", action="store_true",
                    help="强制重跑选定格的阶段二（加气泡），场景图复用")
+    r.add_argument("--split-bubbles", action="store_true",
+                   help="有第二句台词的格分两遍画（默认一遍画完两个气泡；"
+                        "某格一遍画崩了再用这个单独重跑）")
 
     s = sub.add_parser("status", help="看进度")
     s.add_argument("script", help="剧本 md 的路径")
@@ -888,7 +976,7 @@ def main(argv=None):
     if args.only:
         only = {x.strip().zfill(2) for x in args.only.split(",") if x.strip()}
     run(args.script, only=only, silver_only=args.silver_only, redo=args.redo,
-        scene_skill=args.scene_skill)
+        scene_skill=args.scene_skill, split_bubbles=args.split_bubbles)
     return 0
 
 

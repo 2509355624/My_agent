@@ -243,6 +243,26 @@ class ComicManualApiTest(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
         self.assertIn("还没有场景图", r.get_json()["error"])
 
+    def test_bubble_split_flag_is_passed_through(self):
+        """`split` 决定这一格走一遍还是两遍——画崩了才切两遍。
+
+        默认必须是一遍（2026-10-11 合并掉的第二次 i2i 就是靠这个默认值省下来的）。
+        """
+        with mock.patch.object(comic, "run") as m:
+            r = self.c.post("/api/comic/bubble",
+                            json={"task": self.NAME, "no": "01", "split": True})
+            self.assertTrue(r.get_json()["split"])
+            self._idle()
+        self.assertTrue(m.call_args.kwargs.get("split_bubbles"))
+
+    def test_bubble_split_defaults_to_one_pass(self):
+        with mock.patch.object(comic, "run") as m:
+            r = self.c.post("/api/comic/bubble",
+                            json={"task": self.NAME, "no": "01"})
+            self.assertFalse(r.get_json()["split"])
+            self._idle()
+        self.assertFalse(m.call_args.kwargs.get("split_bubbles"))
+
     # ── /upload ────────────────────────────────────────
 
     def test_upload_replaces_raw_and_drops_stale_final(self):

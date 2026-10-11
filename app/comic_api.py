@@ -324,13 +324,18 @@ def api_comic_bubble():
     单格允许 done：那等于「用剧本里的提示词，从**底图**重画这一格的气泡」——
     底图保留，所以它是手动改坏之后的**回退路**（用户 2026-10-11 拍板接出来）。
     不接出来的话「完成」就是死路：只剩「换种子重跑」，而那个会把底图一起丢掉。
-    pending 的格仍然拒绝——场景都没有，气泡无从加起。"""
+    pending 的格仍然拒绝——场景都没有，气泡无从加起。
+
+    `split`（可选）：true 时这一格分两遍画（第一遍气泡1+旁白、第二遍补气泡2）。
+    默认 false = 一遍把两个气泡和旁白全画完，省一次 50~70 秒；某格一遍画崩了，
+    前端把它单独切回「分开画」重跑。"""
     data = request.get_json(silent=True) or {}
     try:
         path = _task_dir(data.get("task"))
         task = _load_task(path)
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
+    split = bool(data.get("split"))
     no = str(data.get("no") or "").strip()
     redo = False
     if no == "all":
@@ -351,10 +356,12 @@ def api_comic_bubble():
         only = {no}
         redo = panel.state == "done"      # done 的格要靠 redo 才进得了阶段二
     started = _spawn(path, "bubble", lambda: comic.run(
-        os.path.join(path, "script.md"), only=only, redo=redo))
+        os.path.join(path, "script.md"), only=only, redo=redo,
+        split_bubbles=split))
     if not started:
         return jsonify({"ok": False, "error": "这个任务已经在跑了"}), 409
-    return jsonify({"ok": True, "panels": sorted(only), "redo": redo})
+    return jsonify({"ok": True, "panels": sorted(only), "redo": redo,
+                    "split": split})
 
 
 @bp.route("/api/comic/manual", methods=["POST"])

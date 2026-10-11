@@ -72,7 +72,7 @@
   .slot .manual textarea { min-height: 48px; font-size: 12px; line-height: 1.5;
     padding: 6px 8px; }
   .mrow { display: flex; gap: 6px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
-  .mrow select { padding: 4px 6px; font-size: 12px; }
+  .mrow select, .slot .ops select { padding: 4px 6px; font-size: 12px; }
   label.file { position: relative; overflow: hidden; }
   label.file input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
   #toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
@@ -160,7 +160,7 @@ function setBusy(b, phase) {
   const busy = b || !!SCRIPT_JOB;
   for (const id of ['btnScript', 'btnSave', 'btnStart', 'btnBubbleAll'])
     document.getElementById(id).disabled = busy;
-  document.querySelectorAll('.slot .ops button').forEach(x => x.disabled = busy);
+  document.querySelectorAll('.slot .ops button, .slot .ops select').forEach(x => x.disabled = busy);
   // 手动修复栏也要锁：跑一轮 Qwen 时再点一次就是两个后台任务抢同一格。
   document.querySelectorAll('.slot .mrow button, .slot .mrow select, .slot .mrow input[type=file]').forEach(
     x => x.disabled = busy);
@@ -285,6 +285,14 @@ function renderSlot(p) {
     ops.push('<button class="btn small" onclick="bubble(\'' + p.no + '\')">🫧 加气泡</button>');
   if (p.state === 'done')
     ops.push('<button class="btn small" onclick="bubble(\'' + p.no + '\')">↩️ 从底图重画</button>');
+  // 画法开关，只给「有第二句台词」的格——别的格没有第二个气泡可画。
+  // 默认「一遍画完」：2026-10-11 起两个气泡+旁白一次交付，省掉一次 50~70 秒。
+  // 「分开画」是退路：某格一遍画崩了就切回来单独重跑（走原来的两遍老路）。
+  if (p.bubble2 && p.state !== 'pending')
+    ops.push('<select class="meth" id="meth-' + p.no + '" title="有第二句台词的格：一遍画完更快，画崩了再切分开画">'
+      + '<option value="0">一遍画完</option>'
+      + '<option value="1">分开画</option>'
+      + '</select>');
   return '<div class="slot"><div class="head"><span class="no">格 ' + p.no + '</span>'
     + badge + '<span class="seed">' + (p.seed != null ? 'seed ' + p.seed : '') + '</span></div>'
     + '<div class="imgs"><div>' + img(p.scene_url, '场景图未生成', 'scene') + '</div>'
@@ -325,6 +333,8 @@ function labelHtml(p) {
 const _slots = {};   // {no: {sig, el}} —— 逐格 diff，状态没变就不碰 DOM（不闪图）
 const _manual = {};  // {no: 手输的指令} —— 状态一变这一格就会重建，输入框内容
                      // 若不另存就会没；跑完一次 Qwen 想接着调必须留住。
+const _method = {};  // {no: '0'|'1'} 这一格的画法（一遍画完 / 分开画）——同上，
+                     // 重建后不填回来就会悄悄弹回默认值。
 let _zoom = null;    // {no, which} 当前放大的那张图 —— 手动跑 Qwen 是在原文件上
                      // 覆盖，放大层不跟着换的话，人盯着放大图会以为根本没重跑。
 
@@ -366,6 +376,12 @@ async function refresh() {
       ta.value = _manual[p.no] || '';
       ta.addEventListener('input', () => { _manual[p.no] = ta.value; });
     }
+    // 画法开关同理要存回来：不存的话跑到第二遍时它已经悄悄弹回「一遍画完」。
+    const meth = node.querySelector('.meth');
+    if (meth) {
+      meth.value = _method[p.no] || '0';
+      meth.addEventListener('change', () => { _method[p.no] = meth.value; });
+    }
     if (cached && cached.el.parentNode) cached.el.replaceWith(node);
     else grid.appendChild(node);
     _slots[p.no] = {sig, el: node};
@@ -400,8 +416,14 @@ async function rerender(no) {
 }
 
 async function bubble(no) {
-  try { await api('/api/comic/bubble', {task: TASK, no}); setBusy(true, 'bubble'); toast('格 ' + no + ' 加气泡中（qwen 图生图）'); }
-  catch (e) { toast(e.message, true); }
+  // 这一格的画法开关：p.bubble2 为空的格没有这个下拉，按默认（一遍画完）走。
+  const sel = document.getElementById('meth-' + no);
+  const split = !!(sel && sel.value === '1');
+  try {
+    await api('/api/comic/bubble', {task: TASK, no, split});
+    setBusy(true, 'bubble');
+    toast('格 ' + no + ' 加气泡中（qwen 图生图，' + (split ? '分开画' : '一遍画完') + '）');
+  } catch (e) { toast(e.message, true); }
 }
 
 async function bubbleAll() {

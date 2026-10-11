@@ -2,10 +2,11 @@
 """漫画管道测试：气泡2 解析 / 两段渲染 / 编剧规范注入。
 
 2026-10-11 加。背景：用户给了一份《连续剧情提示词生成规范》要求**全文**
-喂给编剧 AI（单次请求，不做压缩合并），台词丰富化靠新增 `气泡2:` 字段
-（第二遍 i2i 在右上角补第二个气泡）。这份测试钉死三件事：
+喂给编剧 AI（单次请求，不做压缩合并），台词丰富化靠新增 `气泡2:` 字段。
+这份测试钉死三件事：
   1. `气泡2:` 被正确解析，且不会因正则交替顺序被「气泡」吃掉；
-  2. render_bubble 有 bubble2 时串两遍 i2i、没有时只一遍；
+  2. render_bubble **默认一遍画完两个气泡+旁白**（2026-10-11 合并，省一次
+     i2i）；`split=True` 才走老的分两遍——那是画崩后的退路；
   3. 编剧 system prompt 里含规范全文与契约映射，气泡2 超长会被打回。
 """
 
@@ -65,7 +66,7 @@ class ParseBubble2Test(unittest.TestCase):
 
 
 class TwoPassBubbleTest(unittest.TestCase):
-    """render_bubble：有 bubble2 串两遍 i2i，没有只一遍。"""
+    """render_bubble：默认一遍画完两个气泡+旁白；split=True 才分两遍。"""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -120,19 +121,80 @@ class TwoPassBubbleTest(unittest.TestCase):
         self.assertEqual(p.state, "done")
         self.assertTrue(os.path.exists(task.final_path(p)))
 
-    def test_bubble2_two_passes(self):
+    def test_bubble2_one_pass_by_default(self):
+        """有第二句台词也**一次画完**——这是 2026-10-11 合并掉第二次 i2i 的核心。
+
+        合并前是「第一遍气泡1+旁白，第二遍在成图上补气泡2」，每个这样的格多花
+        一次 50~70 秒。合并的依据：当初会崩是因为模板没声明条数和归属，现在每条
+        气泡都声明「文字 + 尾巴指向 + 位置」，真跑 3/3 全对、热机耗时不变。
+        """
         task = self._task(bubble2="第二句")
         p = task.panels[0]
         os.makedirs(task.raw_dir)
         with open(task.raw_path(p), "wb") as f:
             f.write(b"raw")
         comic.render_bubble(task, p)
+        self.assertEqual(len(self.submits), 1, "默认必须只提交一次")
+        self.assertIn("第一句", self.submits[0])
+        self.assertIn("第二句", self.submits[0])
+        self.assertEqual(p.state, "done")
+
+    def test_merged_prompt_declares_both_bubbles_explicitly(self):
+        """合并版必须把**每个**气泡的文字、位置、尾巴指向都写死。
+
+        含糊就挂错人（用户原话「箭头指向谁必须是确定的」）——当初「一次只画一个」
+        的取舍正是为了绕开这份含糊，现在两件事可以同时满足。
+        """
+        p = comic.Panel("01", "1girl, solo", "走吧", "车门合上了",
+                        "回家再说", speaker="女", speaker2="我")
+        prompt = p.bubble_prompt()
+        self.assertIn("【气泡1】", prompt)
+        self.assertIn("【气泡2】", prompt)
+        self.assertIn('"走吧"', prompt)
+        self.assertIn('"回家再说"', prompt)
+        self.assertIn("指向画面中的女生", prompt)       # 气泡1 的尾巴
+        self.assertIn("向下指向画面下缘", prompt)        # 气泡2 的尾巴（镜头外的「我」）
+        self.assertIn("车门合上了", prompt)             # 旁白也在这一遍里
+
+    def test_merged_prompt_count_is_not_contradictory(self):
+        """合并版里不能出现「只有一个气泡」这种自相矛盾的句子。
+
+        `_label_sec` 原来把数量约束写死成「左上角一个气泡」——合并版直接复用，
+        同一段提示词就会一边说一个、一边说两个，模型只能二选一。
+        （同类前科：提示词里写「`stepping off` 用 `standing on one leg` 之类」，
+        模型逐字执行、画成单脚站立的芭蕾姿。）
+        """
+        p = comic.Panel("01", "1girl, solo", "走吧", "旁白一\n旁白二",
+                        "回家再说", speaker="女", speaker2="我")
+        prompt = p.bubble_prompt()
+        self.assertNotIn("左上角一个气泡", prompt)
+        self.assertIn("左上角的气泡1", prompt)
+        self.assertIn("右下角的气泡2", prompt)           # 旁白占了右上角，它让位
+
+    def test_split_flag_keeps_the_old_two_passes(self):
+        """split=True 是退路：某一格一遍画崩了，单独切回两遍重跑。"""
+        task = self._task(bubble2="第二句")
+        p = task.panels[0]
+        os.makedirs(task.raw_dir)
+        with open(task.raw_path(p), "wb") as f:
+            f.write(b"raw")
+        comic.render_bubble(task, p, split=True)
         self.assertEqual(len(self.submits), 2)
         self.assertIn("第一句", self.submits[0])
+        self.assertNotIn("第二句", self.submits[0])      # 第一遍只管一个气泡
         self.assertIn("第二句", self.submits[1])
         # 第二遍模板必须按「图里已有第一个气泡」写约束
         self.assertIn("已经有一个对话框", self.submits[1])
-        self.assertEqual(p.state, "done")
+
+    def test_split_does_not_add_a_pass_without_bubble2(self):
+        """没有第二句台词时 split 不该凭空多跑一遍。"""
+        task = self._task()
+        p = task.panels[0]
+        os.makedirs(task.raw_dir)
+        with open(task.raw_path(p), "wb") as f:
+            f.write(b"raw")
+        comic.render_bubble(task, p, split=True)
+        self.assertEqual(len(self.submits), 1)
 
     def test_bubble2_moves_to_bottom_right_with_narration(self):
         """旁白条占着右上角，第二个气泡必须让位到右下角。
@@ -146,10 +208,9 @@ class TwoPassBubbleTest(unittest.TestCase):
         with open(task.raw_path(p), "wb") as f:
             f.write(b"raw")
         comic.render_bubble(task, p)
-        self.assertEqual(len(self.submits), 2)
-        self.assertIn("我攥住了她的手腕", self.submits[0])   # 第一遍画了旁白
-        self.assertIn("右下角", self.submits[1])
-        self.assertNotIn("右上角", self.submits[1])
+        self.assertEqual(len(self.submits), 1)
+        self.assertIn("右下角", self.submits[0])
+        self.assertIn("右上角一行旁白", self.submits[0])     # 右上角留给了旁白
 
     def test_bubble2_stays_top_right_without_narration(self):
         task = self._task(bubble2="第二句")
@@ -158,7 +219,7 @@ class TwoPassBubbleTest(unittest.TestCase):
         with open(task.raw_path(p), "wb") as f:
             f.write(b"raw")
         comic.render_bubble(task, p)
-        self.assertIn("右上角", self.submits[1])
+        self.assertIn("右上角", self.submits[0])
 
 
 class ManualRenderTest(unittest.TestCase):
@@ -582,6 +643,29 @@ class StudioPageTest(unittest.TestCase):
         m = re.search(r"const sig = \[(.+?)\]\.join", page, re.S)
         self.assertIsNotNone(m, "找不到逐格 diff 的签名")
         self.assertIn("p.rev", m.group(1))
+
+    def test_method_switch_is_wired_to_the_request(self):
+        """画法开关必须真的把 split 发出去——只画下拉、不发参数等于摆设。
+
+        2026-10-11 用户拍板：一遍画完做默认，但要留「分开画」当退路。前端这个
+        开关若没接到 /api/comic/bubble 的 split 上，切了也不生效，而且不会有
+        任何报错——典型的静默失效。
+        """
+        page = self._page()
+        self.assertIn("meth-", page)                       # 每格一个开关
+        m = re.search(r"api\('/api/comic/bubble',\s*\{[^}]*\}", page)
+        self.assertIsNotNone(m, "找不到页面里调 /api/comic/bubble 的地方")
+        self.assertIn("split", m.group(0))
+
+    def test_method_switch_survives_panel_rebuild(self):
+        """开关选中的值也要像手输指令一样存住。
+
+        这一格的状态一变就整块重建 DOM；不填回来的话跑到第二遍时它会悄悄弹回
+        「一遍画完」，用户以为自己在用分开画，其实不是。
+        """
+        page = self._page()
+        self.assertIn("const _method", page)
+        self.assertIn("_method[p.no]", page)
 
 
 if __name__ == "__main__":
