@@ -80,9 +80,15 @@
   <div class="card">
     <h2>① 需求 → 编剧出剧本</h2>
     <div class="row" style="margin-bottom:10px">
-      <input id="brief" style="flex:1;min-width:320px" placeholder="一句话设定，例：香风智乃和保登心爱在 Rabbit House 打烊后收拾店里的日常小剧场">
-      <input id="character" style="width:150px" placeholder="角色名（可选）">
-      <input id="panels" type="number" min="1" max="30" value="10" style="width:80px" title="格数">
+      <input id="brief" style="flex:1;min-width:220px" placeholder="一句话设定，例：香风智乃和保登心爱在 Rabbit House 打烊后收拾店里的日常小剧场">
+      <input id="character" style="width:130px" placeholder="角色名（可选）">
+      <input id="panels" type="number" min="1" max="30" value="10" style="width:70px" title="格数">
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <span style="color:var(--text-dim);font-size:12px">编剧模型</span>
+      <select id="prov" style="width:140px" onchange="loadModels()" title="用哪家模型写剧本"></select>
+      <select id="model" style="width:200px" title="写剧本用的具体模型（留空 = 该家默认）"></select>
+      <span class="spacer" style="flex:1"></span>
       <button class="btn primary" id="btnScript" onclick="genScript()">生成剧本</button>
     </div>
     <textarea id="script" style="display:none" spellcheck="false"></textarea>
@@ -110,6 +116,8 @@
 <script>
 let TASK = null;          // 任务 id（C<日期>-<序号>）
 let TIMER = null;
+let SCRIPT_JOB = null;    // 正在跑的编剧任务 id（编剧是后台 agent，轮询取结果）
+let PROVIDERS = [];       // /api/providers 拉回来的候选家（编剧模型下拉）
 
 function toast(msg, isErr) {
   const t = document.getElementById('toast');
@@ -129,31 +137,103 @@ async function api(path, body) {
 }
 
 function setBusy(b, phase) {
+  // 编剧任务独立于渲染任务，但它跑的时候同样要锁住按钮——否则每 2 秒一轮的
+  // 槽位刷新会调 setBusy(false)，把「生成剧本」重新启用（用户能重复点，
+  // 一重复就是两个 agent 在并发烧 token）。
+  const busy = b || !!SCRIPT_JOB;
   for (const id of ['btnScript', 'btnSave', 'btnStart', 'btnBubbleAll'])
-    document.getElementById(id).disabled = b;
-  document.querySelectorAll('.slot .ops button').forEach(x => x.disabled = b);
+    document.getElementById(id).disabled = busy;
+  document.querySelectorAll('.slot .ops button').forEach(x => x.disabled = busy);
   const bar = document.getElementById('jobbar');
   if (b) { bar.style.display = 'block'; bar.classList.remove('err');
            bar.textContent = '⏳ 正在' + (phase === 'bubble' ? '加气泡' : '渲染场景图') + '……页面每 2 秒自动刷新'; }
+}
+
+// ── 编剧模型下拉 ─────────────────────────────────────
+// 候选由后端去问 provider 自己拿（模型 ID 会下线也会改名，写死的清单会慢慢
+// 指向不存在的模型）。复用网页端同一套接口，不另造一份。
+
+async function loadProviders() {
+  try {
+    const d = await (await fetch('/api/providers')).json();
+    PROVIDERS = d.providers || [];
+    const sel = document.getElementById('prov');
+    sel.innerHTML = PROVIDERS.map(p =>
+      '<option value="' + esc(p.id) + '">' + esc(p.label) + '</option>').join('');
+    if (PROVIDERS.some(p => p.id === d.default)) sel.value = d.default;
+    await loadModels();
+  } catch (e) { /* 拉不到就留空，请求里不传 = 走后端默认 */ }
+}
+
+async function loadModels() {
+  const pid = document.getElementById('prov').value;
+  const meta = PROVIDERS.filter(p => p.id === pid)[0] || {};
+  const sel = document.getElementById('model');
+  sel.innerHTML = '<option value="">（' + esc(meta.label || pid) + ' 默认模型）</option>';
+  try {
+    const d = await (await fetch('/api/models?provider=' + encodeURIComponent(pid))).json();
+    const ids = ((d && d.models) || [])
+      .filter(m => !m.retiring)                 // 将退役的别占视野
+      .map(m => m.id);
+    if (ids.length) {
+      sel.innerHTML = '<option value="">（默认：' + esc(ids[0]) + '）</option>'
+        + ids.map(id => '<option value="' + esc(id) + '">' + esc(id) + '</option>').join('');
+    }
+  } catch (e) { /* 静默：留一个「默认模型」项，请求里不传 model 即可 */ }
 }
 
 async function genScript() {
   const brief = document.getElementById('brief').value.trim();
   if (!brief) { toast('先写一句话设定', true); return; }
   const btn = document.getElementById('btnScript');
-  btn.disabled = true; btn.textContent = '编剧写作中（约 1~2 分钟）…';
+  btn.disabled = true; btn.textContent = '编剧查库中…';
   try {
     const d = await api('/api/comic/script', {
       brief, panels: +document.getElementById('panels').value || 10,
-      character: document.getElementById('character').value.trim()
+      character: document.getElementById('character').value.trim(),
+      provider: document.getElementById('prov').value,
+      model: document.getElementById('model').value
     });
-    TASK = d.task;
-    const ta = document.getElementById('script');
-    ta.style.display = 'block'; ta.value = d.script;
-    document.getElementById('scriptOps').style.display = 'flex';
-    toast('剧本已生成：' + TASK);
-    refresh();
-  } catch (e) { toast(e.message, true); }
+    SCRIPT_JOB = d.job;
+    pollScript();
+  } catch (e) {
+    toast(e.message, true);
+    finishScript();
+  }
+}
+
+// 编剧是后台 agent（查库要跑十几轮 LLM，几分钟很正常），所以这里轮询而不是
+// 干等一个请求——Flask 是单线程跑的，同步等待会把槽位刷新一起堵死。
+async function pollScript() {
+  if (!SCRIPT_JOB) return;
+  let d;
+  try { d = await api('/api/comic/script_status?job=' + SCRIPT_JOB); }
+  catch (e) { toast(e.message, true); finishScript(); return; }
+
+  if (d.state === 'running') {
+    const log = d.log || [];
+    const last = log.length ? log[log.length - 1] : '正在读规范…';
+    document.getElementById('btnScript').textContent = '编剧查库中（' + last + '）';
+    setTimeout(pollScript, 1200);
+    return;
+  }
+  if (d.state === 'error') {
+    toast('编剧失败：' + d.error, true);
+    finishScript();
+    return;
+  }
+  TASK = d.task;
+  const ta = document.getElementById('script');
+  ta.style.display = 'block'; ta.value = d.script;
+  document.getElementById('scriptOps').style.display = 'flex';
+  toast('剧本已生成：' + TASK);
+  finishScript();
+  refresh();
+}
+
+function finishScript() {
+  SCRIPT_JOB = null;
+  const btn = document.getElementById('btnScript');
   btn.disabled = false; btn.textContent = '生成剧本';
 }
 
@@ -261,6 +341,7 @@ async function bubbleAll() {
 }
 
 poll();
+loadProviders();
 </script>
 </body>
 </html>

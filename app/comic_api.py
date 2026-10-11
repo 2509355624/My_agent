@@ -26,11 +26,12 @@ import io
 import json
 import os
 import threading
+import uuid
 import zipfile
 
 from flask import Blueprint, jsonify, request, send_file, send_from_directory
 
-from app import comic, comic_writer
+from app import comic, comic_agent
 from app.config import BASE_DIR
 
 bp = Blueprint("comic_api", __name__)
@@ -42,6 +43,12 @@ _COMICS_ROOT = os.path.join(BASE_DIR, "comics")
 # 运行中的后台任务：{任务目录绝对路径: {"phase": "scene"|"bubble", "error": str}}
 _JOBS = {}
 _JOBS_LOCK = threading.Lock()
+
+# 编剧任务：{job_id: {...}}。与 _JOBS 分开——_JOBS 以**任务目录**为键（要等
+# 剧本落盘才知道目录名），而编剧任务在剧本写出来之前就得有个句柄给前端轮询。
+_SCRIPT_JOBS = {}
+_SCRIPT_LOCK = threading.Lock()
+_SCRIPT_KEEP = 12          # 只留最近这么多条，防长期运行攒内存
 
 
 def _task_dir(task_id):
@@ -91,7 +98,16 @@ def _spawn(path, phase, fn):
 
 @bp.route("/api/comic/script", methods=["POST"])
 def api_comic_script():
-    """编剧写剧本。同步调用（一次 LLM，前端转圈等待），产出新任务目录。"""
+    """编剧写剧本：起后台任务，立刻返回 job；前端轮询 /script_status 取结果。
+
+    **为什么必须异步**：编剧现在是 Agent（app/comic_agent）——先把这一话要用
+    的标签逐个查库（search_tags）、再写剧本，十几轮 LLM 跑几分钟是常态。
+    而 Flask 是单线程跑的（app/main.py 的 app.run 没开 threaded），同步等待
+    会把同一个页面每 2 秒一次的槽位轮询一起堵死，界面看起来完全卡住
+    （2026-10-11 确认）。
+
+    provider / model 由前端下拉传入：不传就走全局默认，与别的环节同口径。
+    """
     data = request.get_json(silent=True) or {}
     brief = str(data.get("brief") or "").strip()
     if not brief:
@@ -102,20 +118,60 @@ def api_comic_script():
         panels_n = 10
     panels_n = max(1, min(30, panels_n))    # 与 comic_story.clamp_panels 同口径
     character = str(data.get("character") or "").strip()
+    provider = str(data.get("provider") or "").strip() or None
+    model = str(data.get("model") or "").strip() or None
 
-    try:
-        text = comic_writer.write_script(brief, panels=panels_n,
-                                         character=character)
-    except Exception as exc:
-        return jsonify({"ok": False, "error": "编剧失败：%s" % exc}), 502
+    job = uuid.uuid4().hex[:12]
+    with _SCRIPT_LOCK:
+        _SCRIPT_JOBS[job] = {"state": "running", "task": None, "script": None,
+                             "error": None, "log": []}
+        # 清掉已经结束的旧任务（运行中的绝不动）
+        for k in [k for k, v in _SCRIPT_JOBS.items()
+                  if v["state"] != "running"][:-_SCRIPT_KEEP]:
+            _SCRIPT_JOBS.pop(k, None)
 
-    path = comic._next_task_dir(_COMICS_ROOT)
-    os.makedirs(path, exist_ok=True)
-    script_path = os.path.join(path, "script.md")
-    with open(script_path, "w", encoding="utf-8") as f:
-        f.write(text + "\n")
-    return jsonify({"ok": True, "task": os.path.basename(path),
-                    "script": text})
+    def _progress(msg):
+        with _SCRIPT_LOCK:
+            j = _SCRIPT_JOBS.get(job)
+            if j is not None:
+                j["log"].append(msg)
+                del j["log"][:-8]           # 只留最近几条给界面滚动显示
+
+    def _work():
+        try:
+            text = comic_agent.write_script(
+                brief, panels=panels_n, character=character,
+                provider=provider, model=model, progress=_progress)
+            # 目录在剧本写好后才建：失败的 job 不留空目录。
+            path = comic._next_task_dir(_COMICS_ROOT)
+            os.makedirs(path, exist_ok=True)
+            with open(os.path.join(path, "script.md"), "w", encoding="utf-8") as f:
+                f.write(text + "\n")
+            with _SCRIPT_LOCK:
+                _SCRIPT_JOBS[job].update(state="done", script=text,
+                                         task=os.path.basename(path))
+            comic.log.info("编剧完成 job=%s → %s", job, os.path.basename(path))
+        except BaseException as exc:        # SystemExit 不是 Exception（见模块头）
+            with _SCRIPT_LOCK:
+                _SCRIPT_JOBS[job].update(state="error", error=str(exc))
+            comic.log.exception("编剧失败 job=%s", job)
+
+    threading.Thread(target=_work, daemon=True, name="comic-script").start()
+    return jsonify({"ok": True, "job": job})
+
+
+@bp.route("/api/comic/script_status", methods=["GET"])
+def api_comic_script_status():
+    """轮询编剧进度：state=running/done/error，log 是最近几条查库动作。"""
+    job = str(request.args.get("job") or "").strip()
+    with _SCRIPT_LOCK:
+        j = _SCRIPT_JOBS.get(job)
+        if j is None:
+            return jsonify({"ok": False,
+                            "error": "没有这个编剧任务（可能已过期）"}), 404
+        snap = dict(j, log=list(j["log"]))
+    snap["ok"] = True
+    return jsonify(snap)
 
 
 @bp.route("/api/comic/save", methods=["POST"])
