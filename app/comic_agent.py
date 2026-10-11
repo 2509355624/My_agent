@@ -12,8 +12,30 @@
    `male` + `hand` + `grabbing`：`male` 直接触发「一个男性角色」、`hand` 触发
    「手」、`grabbing` 触发「抓握」，却**没有任何一个词在约束「只出手、不出
    身体」**，模型于是补出一整个男人、甚至多只手。库里其实有正解
-   （`disembodied hand` / `arm grab` / `grabbing another's wrist`），但不查库
-   就永远不知道。
+   （`disembodied hand` / `holding another's wrist`），但不查库就永远不知道。
+
+## 2026-10-11 追加：换了标签还不够，**人数标签是另一半**
+
+用户拿三张实测图来问「手为什么总是画错」。查标签库 + danbooru 官方 wiki
+复核后，根因不止「标签选错」：
+
+`solo` 的含义是「画面里只有一个角色」，而 danbooru 官方角色计数规则
+（`tag_group:character_count`）明确写着「Disembodied hands and other body
+parts are **counted**」——**一只手也算一个角色**。于是 `1girl, solo` 配
+「抓手腕」是**自相矛盾的指令**，模型只能三选一妥协，三种都被实测到了：
+
+    01 格  把手画成她自己的（落进 holding own wrist / own hands clasped 的语义）
+    02 格  干脆放弃抓握动作，保住 solo
+    03 格  硬画第二只手，但没有词约束「只出手、不出身体」→ 一团畸形的手
+
+正解要三条一起改，缺一条都不成立：
+
+    ① 人数：出现第二方身体部位 → `1girl, solo focus, 1other`（**绝不再写 solo**）
+    ② 抓握：`holding another's wrist`（不是模糊的 `hand around wrist`）
+    ③ 来源：`pov` + `pov hands` —— 声明那只手属于镜头外的视角方
+
+用户按这套改后实测通过（`Anima_00083_.png`：视角方的手从画面左下伸入、
+解剖正确、攥住她的手臂）。所以下面提示词的规则 5 / 6 是**必须**的，别删。
 
 第一类靠提示词能治，第二类**只能靠查库**——32.8 万条标签库和检索工具
 （`search_tags`）都是现成的，缺的只是「让编剧真的去查」这一步。
@@ -160,6 +182,56 @@ def missing_tags(text):
     return out
 
 
+# ─── 代码判据：人数标签与「第二方身体部位」互斥 ──────────
+#
+# `solo` 的含义是「画面里只有一个角色」，而 danbooru 官方角色计数规则
+# （tag_group:character_count）明确「一只手也算一个角色」。所以画面里一旦要求
+# 出现第二方的身体部位，`1girl, solo` 就成了自相矛盾的指令——实测模型会三选一
+# 妥协：把手画成她自己的（落进 holding own wrist 的语义）、放弃抓握动作、或画
+# 出一团畸形的手（2026-10-11 用户三张实测图各中一种）。
+#
+# 必须用代码判：这些标签**库里全都存在**，missing_tags 的存在性校验拦不住，
+# 只能查语义冲突。而 `solo` 在模型的训练记忆里太常见，光靠提示词叮嘱没用。
+_SECOND_PARTY_EXACT = frozenset(("pov_hands",))
+
+
+def _has_second_party(tag):
+    """这一段标签是否声明了「第二方的身体部位入画」。
+
+    三种写法都算：视角方的手（`pov hands`）、没有身体的手（`disembodied *`）、
+    以及 `another` 家族（`holding another's wrist` / `grabbing another's arm` …）。
+    按词根 `another` 判而不是 `another's`——实测模型会漏撇号写成
+    `holding another wrist`，那样精确匹配就漏检了。
+    反过来 `holding own wrist`（抓自己手腕）不含 another，不算——那种格写
+    `solo` 是对的，不能误伤。
+    """
+    key = _db_key(tag)
+    if key in _SECOND_PARTY_EXACT:
+        return True
+    if key.startswith("disembodied_"):
+        return True
+    return "another" in key
+
+
+def solo_conflicts(text):
+    """找出「写了 `solo`、却又要求第二方身体部位入画」的格。
+
+    返回 [(格号, 库里形态的标签), ...]。纯文本判断，不依赖标签库索引。
+    """
+    _, panels = comic.parse_script_text(text)
+    out = []
+    for p in panels:
+        parts = [t for t in (_norm_tag(x) for x in (p["scene"] or "").split(",")) if t]
+        # 只认精确的 `solo`——`solo focus` 是允许的写法，不能误伤
+        if "solo" not in parts:
+            continue
+        for t in parts:
+            if _has_second_party(t):
+                out.append((p["no"], _db_key(t)))
+                break
+    return out
+
+
 # ─── 备选记录的抽取与归位 ───────────────────────────────
 
 _NOTE_RE = re.compile(r"^\s*(?:备选|备选记录|候选)\s*[:：]\s*(.+?)\s*$")
@@ -281,19 +353,39 @@ _SYSTEM_TMPL = """你是条漫分镜编剧，同时是 Anima 提示词工程师�
    absurdres / 画师名）——工作流模板已经钉好了，重复写只会稀释权重。
 4. **安全级必须有且只有一个**，只能从 safe / sensitive / nsfw / explicit 里选。
    注意 **不是 `sfw`** —— `sfw` 不在 Anima 规范里，写了会被打回。
-5. **只出手/手臂入画时，必须用「只有手」的那类标签，绝不许把动作写成句子。**
+5. **抓别人的手腕只能写 `holding another's wrist`，不许写 `hand around wrist`，
+   更不许把动作写成句子。**
+   - 攥住/握住别人的手腕 → `holding another's wrist`
+     （Danbooru 标准名；库里另存别名 grabbing another's wrist / wrist grab）
+   - 手只是搭在别人手腕上（没用力） → `hand on another's wrist`
+   - 镜头就是「我」的眼睛、那只手是「我」的 → 再加 `pov` + `pov hands`
+   - 画面里只有手、看不到它的身体 → 再加 `disembodied hand` / `disembodied arm`
    错：male hand grabbing her wrist from behind ← `male` 会画出整个人 + 多只手
-   对：disembodied arm, hand grab, hand around wrist ← 只有手臂入画
-   查「手」「抓」「手腕」「牵着」把这些标签找齐再用。
-6. 每格必须有人数标签（1girl、solo）。视角方（哥哥/「你」）只允许手或手臂
-   入画，**脸和身体一律不许出现**，画面仍以 1girl 开头。
+   错：hand around wrist ← 没写是谁的手，实测被画成「她自己抓自己手腕」
+   对：pov, pov hands, holding another's wrist ← 视角方的手攥住她的手腕
+   对：disembodied hand, holding another's wrist ← 只让一只手入画
+   查「手」「抓」「手腕」「牵着」把这些标签找齐再用，别查一个词就落笔。
+6. **人数标签是本流程最容易错的一条，按情形分别写，不许一律写 `solo`：**
+   - 画面里只有一个人、第二方**任何**身体部位都不入画 → `1girl, solo`
+   - 画面里出现了视角方（哥哥/「我」）的手或手臂 → `1girl, solo focus, 1other`
+     （**绝对不能再写 `solo`**；那只手明显是男性手臂时可写 `1boy` 代替 `1other`）
+   为什么：Danbooru 官方角色计数规则里「一只手也算一个角色」（原话
+   Disembodied hands and other body parts are counted）。写了 `solo` 又要画面
+   出现第二只手，两条指令自相矛盾——实测后果有三种：手变成她自己的、抓握
+   动作整个消失、或画出一团畸形的手。
+   视角方的**脸和身体一律不许出现**，只允许手或手臂入画，画面仍以 `1girl` 开头。
 7. 服饰颜色款式、灯光氛围每格写全并保持一致（见规范）。
 8. **下面这些词看着都像对的，但库里没有，实测过了，不许写**：
-   `sfw`（用 safe）、`arm grab`（用 hand grab）、`male hand`（用 disembodied arm）、
+   `sfw`（用 safe）、
+   `arm grab`、`male hand`（用 pov hands 或 disembodied hand / disembodied arm）、
    `medium shot`（用 upper body / cowboy shot / close-up）、
    `soft lighting`、`cinematic lighting`（用 backlighting / sidelighting / dim lighting）、
    `stepping off` / `getting off`（用 standing on one leg 之类）、
    `one foot on ground`。
+
+   还有一个**反例**要专门记住：`hand around wrist` 库里**有**，但没写明是谁的手，
+   实测会被渲染成「她自己抓自己手腕」。要抓别人的手腕，只有
+   `holding another's wrist` 一条路（见规则 5）。
    **这类"差不多的写法"是本次最容易踩的坑**——凡是不确定的，先查库再写。
 
 【Anima 提示词规范（全文，必须遵守）】
@@ -501,6 +593,14 @@ def check(text, panels):
     ok, why = comic_writer._validate(text, panels)
     if not ok:
         return False, why
+    conf = solo_conflicts(text)
+    if conf:
+        items = "、".join("格 %s 的 `%s`" % (no, tg) for no, tg in conf[:6])
+        return False, ("这些格既写了 `solo`，又要求第二方身体部位（%s）入画："
+                       "`solo` 表示画面里只有一个角色，而 Danbooru 官方计数规则里"
+                       "「一只手也算一个角色」，两条指令互斥。把 `solo` 换成 "
+                       "`solo focus`，并补上 `1other`（那只手明显是男性就写 `1boy`）。"
+                       % items)
     miss = missing_tags(text)
     if miss:
         items = "、".join("格 %s 的 `%s`" % (no, tg) for no, tg in miss[:8])

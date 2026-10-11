@@ -174,6 +174,60 @@ class CheckTest(unittest.TestCase):
         self.assertFalse(ok)
 
 
+class SoloConflictTest(unittest.TestCase):
+    """`solo` 与「第二方身体部位入画」互斥。
+
+    2026-10-11 用户三张实测图的根因：danbooru 官方角色计数规则里「一只手也算
+    一个角色」，所以 `1girl, solo` 配「抓手腕」是自相矛盾的指令，模型只能
+    三选一妥协（手变成她自己的 / 抓握整个消失 / 手畸形）。这些标签**库里都
+    存在**，missing_tags 拦不住，只能查语义冲突。
+    """
+
+    @staticmethod
+    def _script(scene, no="01"):
+        return "## %s\n画面: %s\n气泡: 一\n" % (no, scene)
+
+    def test_solo_plus_anothers_wrist(self):
+        got = comic_agent.solo_conflicts(
+            self._script("safe, 1girl, solo, holding another's wrist"))
+        self.assertEqual([("01", "holding_another's_wrist")], got)
+
+    def test_solo_plus_anothers_wrist_without_apostrophe(self):
+        """实测模型会漏撇号写成 `another wrist`，不能因此漏检。"""
+        got = comic_agent.solo_conflicts(
+            self._script("safe, 1girl, solo, holding another wrist"))
+        self.assertEqual([("01", "holding_another_wrist")], got)
+
+    def test_solo_plus_pov_hands_underscore(self):
+        got = comic_agent.solo_conflicts(
+            self._script("safe, 1girl, solo, pov_hands"))
+        self.assertEqual([("01", "pov_hands")], got)
+
+    def test_solo_plus_disembodied_hand_reports_panel_no(self):
+        got = comic_agent.solo_conflicts(
+            self._script("safe, 1girl, solo, disembodied hand", no="02"))
+        self.assertEqual([("02", "disembodied_hand")], got)
+
+    def test_holding_own_wrist_is_allowed(self):
+        """抓自己手腕的格子，`solo` 是对的——不能误伤。"""
+        self.assertEqual([], comic_agent.solo_conflicts(
+            self._script("safe, 1girl, solo, holding own wrist")))
+
+    def test_solo_focus_with_other_is_allowed(self):
+        self.assertEqual([], comic_agent.solo_conflicts(
+            self._script("safe, 1girl, solo focus, 1other, holding another's wrist")))
+
+    def test_plain_solo_is_allowed(self):
+        self.assertEqual([], comic_agent.solo_conflicts(
+            self._script("safe, 1girl, solo, standing, arm at side")))
+
+    def test_check_rejects_solo_conflict(self):
+        ok, why = comic_agent.check(
+            self._script("safe, 1girl, solo, holding another's wrist"), 1)
+        self.assertFalse(ok)
+        self.assertIn("solo focus", why)
+
+
 class RunRoundsTest(unittest.TestCase):
     """agent 循环：工具调用 → 结果回灌 → 收尾轮交出正文。"""
 
@@ -330,12 +384,25 @@ class PromptTest(unittest.TestCase):
 
     def test_lists_real_hand_tags_and_fake_ones(self):
         p = comic_agent._system_prompt(3)
-        # 真名（实测在库）：用作「对」的例子
-        for real in ("disembodied arm", "hand grab", "hand around wrist"):
+        # 真名（实测在库）：抓别人手腕的正解 + 第一人称手 + 无身体的手
+        for real in ("holding another's wrist", "pov hands", "disembodied hand"):
             self.assertIn(real, p)
         # 假名（实测不在库）：必须出现在黑名单里
-        for fake in ("sfw", "arm grab", "medium shot", "soft lighting"):
+        for fake in ("sfw", "arm grab", "male hand", "medium shot", "soft lighting"):
             self.assertIn(fake, p)
+
+    def test_teaches_solo_focus_rule(self):
+        """人数规则必须写进提示词：出现第二方身体部位时不许写 `solo`。
+
+        2026-10-11：`1girl, solo` 配「抓手腕」是自相矛盾的指令（danbooru
+        官方计数规则里一只手也算一个角色），模型只能三选一妥协。
+        """
+        p = comic_agent._system_prompt(3)
+        self.assertIn("solo focus", p)
+        self.assertIn("1other", p)
+        # `hand around wrist` 只能出现在「反例 · 别用」的语境里
+        self.assertIn("hand around wrist", p)
+        self.assertIn("她自己抓自己", p)
 
     def test_panel_count_injected(self):
         self.assertIn("正好 7 格", comic_agent._system_prompt(7))
