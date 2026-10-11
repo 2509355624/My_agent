@@ -24,7 +24,7 @@ anima，就跑三档加上 x2 像素」。所以：
          CLIPLoader(6, Qwen3-0.6B) ─ CLIPTextEncode(4 正向 / 8 负向) ──┤
          EmptyLatentImage(9) 1024×1536 ───────────────────────────────┤
                                                                       ▼
-                                                    KSampler(2) er_sde/simple 10步 denoise 1.0
+                                                    KSampler(2) er_sde/simple 20步 denoise 1.0
                                                                       │
                                                     LatentUpscaleBy(18) nearest-exact 1.5×
                                                                       │
@@ -134,8 +134,11 @@ RETIRED = ("anima", "anima_realskin", "anima_2")
 #
 # 档位 → (画布宽, 画布高, latent scale_by, 一段输出宽, 一段输出高,
 #          一段采样器, 一段步数, 二段步数)
+# 2026-10-11 09:1x 用户拍板：**一段 10 → 20 步**（A/B 实测同 seed 对照，逐像素
+# 可复现；只 +12.3 s 采样，4 对里至少 1 例消除了「多画一只猫」这类结构错误）。
+# 二段仍是 10 步，没动。
 HD_TIERS = {
-    "3": (1024, 1536, 1.5, 1536, 2304, "er_sde", 10, 10),
+    "3": (1024, 1536, 1.5, 1536, 2304, "er_sde", 20, 10),
 }
 # 画风 → (一段底模前缀, 二段底模前缀)——跟 CHANNELS 那四个是同一套组合。
 HD_STYLES = {
