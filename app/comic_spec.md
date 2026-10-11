@@ -137,6 +137,8 @@ bedroom, girl wearing old pink frilled pajamas and pink frilled shorts, bare fee
 | **同一件衣服，每格颜色必须一致** | 如果第1格是 `black lace bra`，第10格也必须是 `black lace bra` |
 | **换装剧情中，换掉的那件也要写颜色** | 比如 `old pink frilled pajamas` → `new light blue cotton pajamas`，颜色和款式都要写 |
 | **物件同样禁止泛化** | 耳机、包、伞、杯子、手机、发饰、围巾、眼镜、鞋……凡是有颜色的物件都要写颜色：`white in-ear earphones`（**不能**只写 `in-ear earphones`）、`black backpack`（不能只写 `backpack`）、`red umbrella`（不能只写 `umbrella`） |
+| **写了款式 / 姿态 ≠ 写了颜色** | `backpack on one shoulder`（这是**姿态**）、`sailor collar`（这是**款式**）、`pleated skirt`（这是**款式**）——三个都还是**没写颜色的裸写法**，必须写成 `white backpack on one shoulder`、`white sailor collar`、`white pleated skirt`。衣领、裙子、衣服、背包……**一件都不能漏**，代码会逐个查，漏一个就打回重写 |
+| **同一件东西只写一个标签** | `backpack` 和 `backpack on one shoulder` 是**同一件**——两个都写，模型会画**两个包**。合并成 `white backpack on one shoulder` |
 | **同一件物件，每格颜色必须一致** | 第1格写了 `white in-ear earphones`，后面每一格都得是 `white in-ear earphones` |
 | **物件的颜色由剧情定，定下来就不许改** | 剧本第一次出现它时就定颜色，全篇照抄；不许每格随机换色 |
 
@@ -223,6 +225,9 @@ bedroom, girl wearing old pink frilled pajamas and pink frilled shorts, bare fee
 | 旁白「一只脚刚踏下车门」→ 画面写 `standing on one leg` | 把旁白的字面词翻成标签，画成单脚站立的芭蕾姿 | 画面写 `standing, automatic_door, bus_interior`（她站在车门处的样子），这句话交给旁白讲 |
 | 旁白「她猛回头」→ 画面写 `turning head` | 画面是静态的一张图，却写了"正在转"的瞬间 | 画面写 `looking back`（已经转过来的样子） |
 | `bus_interior, bus_stop, outdoors` 写在同一格 | 一格内地点自相矛盾 | 一格只留一个明确地点 |
+| `backpack` / `sailor collar` / `pleated skirt` | 只有类别名，**没写颜色** | `white backpack on one shoulder` / `white sailor collar` / `white pleated skirt` |
+| `backpack, backpack on one shoulder` | 同一件东西写了两遍，模型会画**两个包** | 合并成 `white backpack on one shoulder` |
+| 01/02 格 `pov hands`，03 格 `1girl, 1boy` + 男装 | 镜头人称中途跳了，凭空多出一个男生 | 全篇保持第一人称：「我」只出手，03 格用 `1other` + `pov hands`，**别写 `1boy`** |
 
 ---
 
@@ -238,7 +243,26 @@ bedroom, girl wearing old pink frilled pajamas and pink frilled shorts, bare fee
 
 ---
 
-## 十一、本质总结
+## 十一、镜头人称与角色出场方式（新增）
+
+**整话的镜头人称在第一格就定下来，之后不许变。** 视角一跳，观众立刻出戏。
+
+| 规则 | 说明 |
+| :--- | :--- |
+| **第一人称视角怎么判定** | 只要有任何一格写了 `pov` / `pov hands`，这一话就是「我」的眼睛在拍——**全篇**都按这个视角走 |
+| **「我」只出手，不出人** | 第一人称视角下，视角方（「我」）**只以手或手臂入画**，脸和身体一律不出现 |
+| **绝对不写 `1boy`** | `1boy` 会让模型补出**一个完整的人**：脸、身体、衣服全都有 |
+| **不给「我」写服饰** | `black hoodie` / `grey pants` 这类词等于在说「画一个穿这些的人」，模型就会把整个人画出来 |
+| **需要第二方在场时** | 用 `1girl, solo focus, 1other` + `pov hands` + `holding another's wrist`，**不要**换成 `1boy` |
+| **整话没有 `pov` 时** | 那种剧本是第三人称（比如两个人同框的分镜），`1boy` 可以用——但**出场方式要全篇一致**，不能前两格是手、后一格变成完整的人 |
+
+**为什么**：2026-10-11 实测，01/02 格用 `pov hands` 把「我」写成一只手，03 格却写了
+`1girl, 1boy` + `black hoodie, grey pants`，画面里凭空多出一个和前两格完全接不上的
+男生。三格本来是同一条视线里的三个瞬间，第三格却突然换成了旁观者的机位。
+
+---
+
+## 十二、本质总结
 
 这套规则的本质是：**把"谁、在哪、穿什么、做什么、什么表情、什么镜头、什么光"七个问题，在每一格都回答清楚。**
 
@@ -251,6 +275,9 @@ bedroom, girl wearing old pink frilled pajamas and pink frilled shorts, bare fee
 3. **灯光氛围必须每一格都写，且整段剧情保持一致**。
 4. **物体移动时必须加位置副词**，避免和角色本体融合。
 5. **局部动作与完整表情互斥**，否则会出现两个角色。
+6. **衣物和随身物件的颜色必须写出来**——`backpack` / `sailor collar` /
+   `pleated skirt` 这类只有类别名的写法不合格，款式和姿态都替代不了颜色。
+7. **镜头人称一旦定下就不许变**：第一人称视角下「我」只出手，绝不写 `1boy`。
 
 AI 的唯一任务就是：**按格式输出，不加任何多余内容。**
 

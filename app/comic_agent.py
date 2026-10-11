@@ -111,6 +111,26 @@ parts are **counted**」——**一只手也算一个角色**。于是 `1girl, s
 - 每条气泡必须带说话人前缀 `（女）` / `（我）`，它决定气泡尾巴指向谁，
   写不清 qwen 会把镜头外「我」说的话挂到女生头上（见 comic._tail_note）。
 
+## 2026-10-11 追加：**泛类必须具体**与**镜头人称不许跳**
+
+用户拿第二组实测图又指出两条：
+
+1. **`backpack` / `sailor collar` 这类只有类别名、没有颜色的写法还在出现。**
+   规则 7 / 12 早就写了「不许只写 `backpack`」，模型却交出
+   `backpack, backpack on one shoulder`——它以为「带了姿态就算具体了」。
+   于是背包本身仍然没有颜色，三格画面三个色（用户原话：「所有泛类必须明确
+   的加上具体的描述，是什么颜色的呀，什么形状的呀」）。
+   现在加两条硬判据：`bare_wearables`（衣物 / 随身物件没写颜色）+
+   `duplicate_wearables`（同一件东西写两遍，模型会画两个包）。
+2. **03 格凭空补出一个男生。** 01/02 格明明只用 `pov hands` 把「我」写成
+   一只手，03 格却写了 `1girl, 1boy` + `black hoodie, grey pants`。用户原话：
+   「我图三看到个男的很难受……我这个角色的镜头视角抛出镜头，结果第三个场景
+   就直接出问题」。
+   根因是**规则 6 里我自己写的一句**：「那只手明显是男性手臂时可写 `1boy`
+   代替 `1other`」——正是它教模型把视角方实体化。现已删除，改由
+   `pov_conflicts` 判：**整话只要有 `pov` / `pov hands`，任何格都不许写
+   `1boy`**，并在规则 14 里把「人称定下就不许变」写死。
+
 ## 模型
 
 `provider` / `model` 由调用方传入（漫画页的下拉），不传就走全局默认——
@@ -285,7 +305,10 @@ def banned_tags(text):
 #
 # 必须用代码判：这些标签**库里全都存在**，missing_tags 的存在性校验拦不住，
 # 只能查语义冲突。而 `solo` 在模型的训练记忆里太常见，光靠提示词叮嘱没用。
-_SECOND_PARTY_EXACT = frozenset(("pov_hands",))
+# 除身体部位外，`1boy` / `1other` 本身也在**声明「画面上还有第二个人」**——
+# 一格写了 `solo`（画面只有一个人）又写 `1boy`，是同一个自相矛盾。
+# 2026-10-11 追加：用户拿 03 格 `1girl, 1boy` 来问「为什么凭空多出一个男的」。
+_SECOND_PARTY_EXACT = frozenset(("pov_hands", "1boy", "1other"))
 
 
 def _has_second_party(tag):
@@ -323,6 +346,129 @@ def solo_conflicts(text):
                 out.append((p["no"], _db_key(t)))
                 break
     return out
+
+
+# ─── 代码判据：衣物 / 随身物件必须写明具体描述 ──────────
+#
+# 用户 2026-10-11 定调：**所有泛类都必须加上具体的描述**——「是什么颜色的呀，
+# 什么形状的呀」。规则 7 / 12 早就写了「不许只写 `backpack`」，实测仍然失守：
+# 模型交出 `backpack, backpack on one shoulder`，它以为「带了姿态就算是具体
+# 了」，而背包本身仍然没有颜色，三格画面三个色。
+#
+# 判据只认**角色穿戴 / 随身**的类别词。`door` / `handrail` / `seat` 这类场景
+# 物件不需要指定颜色（要求了也没意义），把它们拉进来只会误伤。
+#
+# 「颜色」必须真的写出来：`backpack on one shoulder` 里的姿态、`sailor collar`
+# 里的款式、`pleated skirt` 里的款式，**都不算**。这正是用户反复抱怨的那条
+# （裙子一次深藏青、一次浅蓝）。
+_COLOR_WORDS = frozenset((
+    "white", "black", "grey", "gray", "silver", "gold", "golden", "blonde",
+    "brown", "red", "crimson", "scarlet", "pink", "blue", "navy", "indigo",
+    "green", "purple", "violet", "orange", "yellow", "beige", "cream",
+    "ivory", "khaki", "teal", "cyan", "turquoise", "magenta", "maroon",
+    "olive", "lavender", "mint", "wine", "amber", "dark", "light", "pale",
+    "bright", "deep", "colorful", "multicolored", "two-tone", "transparent",
+))
+
+_WEARABLE_WORDS = frozenset((
+    # 随身
+    "backpack", "bag", "satchel", "handbag", "purse", "briefcase",
+    "umbrella", "watch", "necklace", "earrings", "choker", "brooch",
+    "glasses", "sunglasses", "earphones", "headphones", "headset",
+    "scarf", "neckerchief", "tie", "bowtie", "belt", "ribbon", "hairband",
+    # 上装
+    "shirt", "blouse", "sweater", "cardigan", "vest", "jacket", "coat",
+    "hoodie", "uniform", "clothes", "outfit", "dress", "sailor",
+    # 下装
+    "skirt", "pants", "trousers", "jeans", "shorts", "leggings",
+    # 鞋袜 / 内衣 / 其他
+    "socks", "stockings", "shoes", "boots", "sneakers", "sandals",
+    "gloves", "mittens", "bra", "panties", "underwear", "pajamas",
+    "swimsuit", "apron", "collar",
+))
+
+
+def _scene_tags(p):
+    """一格 `画面:` 拆成规范形态的标签列表（去空、去重、保序）。"""
+    out, seen = [], set()
+    for part in (p["scene"] or "").split(","):
+        tag = _norm_tag(part)
+        if tag and tag not in seen:
+            seen.add(tag)
+            out.append(tag)
+    return out
+
+
+def _fmt_by_panel(pairs, limit=4):
+    """[(格号, 名字), ...] → 「格 01 的 `a`、`b`；格 02 的 `c`」，**按格聚合**。
+
+    一条一格是读不顺的：三格各错三处就是九条「格 0X 的 …」，模型只看到
+    重复噪音。按格聚合后一眼能看出「这一格错了哪几个」。
+    """
+    by = {}
+    for no, name in pairs:
+        by.setdefault(no, []).append(name)
+    return "；".join(
+        "格 %s 的 %s" % (no, "、".join("`%s`" % n for n in names))
+        for no, names in list(by.items())[:limit])
+
+
+def bare_wearables(text):
+    """找出「衣物 / 随身物件没写颜色」的格，返回 [(格号, 库里形态的 tag), ...]。
+
+    `pleated skirt`（有款式没颜色）、`sailor collar`、`backpack on one shoulder`
+    都算不合格，要写成 `white pleated skirt` / `white sailor collar` /
+    `white backpack on one shoulder`。
+    """
+    _, panels = comic.parse_script_text(text)
+    out = []
+    for p in panels:
+        for tag in _scene_tags(p):
+            toks = set(tag.split())
+            if not (toks & _WEARABLE_WORDS):
+                continue
+            if toks & _COLOR_WORDS:
+                continue
+            out.append((p["no"], _db_key(tag)))
+    return out
+
+
+def duplicate_wearables(text):
+    """同一格里同一件东西被写了两次，返回 [(格号, 类别词), ...]。
+
+    典型是 `backpack` + `backpack on one shoulder`：模型想表达「单肩背」，
+    却把类别名又抄了一遍。两个标签会让模型画**两个包**，而且第一个还没颜色。
+    """
+    _, panels = comic.parse_script_text(text)
+    out = []
+    for p in panels:
+        seen = {}
+        for tag in _scene_tags(p):
+            for cat in sorted(set(tag.split()) & _WEARABLE_WORDS):
+                if cat in seen:
+                    out.append((p["no"], cat))
+                else:
+                    seen[cat] = tag
+    return list(dict.fromkeys(out))
+
+
+def pov_conflicts(text):
+    """POV 剧本里出现完整男性角色（`1boy`）的格，返回 [(格号, "1boy"), ...]。
+
+    2026-10-11 用户实测：01/02 格用 `pov hands` 把「我」写成一只手，03 格却写了
+    `1girl, 1boy` + `black hoodie, grey pants`，画面里凭空多出一个男生。用户
+    原话：「我图三看到个男的很难受……我这个角色的镜头视角抛出镜头，结果第三个
+    场景就直接出问题」。
+
+    判据是**跨格**的：只要整话里有任何一格声明了 `pov` / `pov hands`，这一话
+    就是第一人称视角，「我」只能以手或手臂入画 → 任何格都不许写 `1boy`。
+    反过来，整话没有 pov 的双人剧本（第三人称）写 `1boy` 是合法的，不拦。
+    """
+    _, panels = comic.parse_script_text(text)
+    by_panel = [(p["no"], _scene_tags(p)) for p in panels]
+    if not any({"pov", "pov_hands"} & set(ts) for _, ts in by_panel):
+        return []
+    return [(no, "1boy") for no, ts in by_panel if "1boy" in ts]
 
 
 # ─── 备选记录的抽取与归位 ───────────────────────────────
@@ -503,12 +649,17 @@ Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有�
 6. **人数标签是本流程最容易错的一条，按情形分别写，不许一律写 `solo`：**
    - 画面里只有一个人、第二方**任何**身体部位都不入画 → `1girl, solo`
    - 画面里出现了视角方（哥哥/「我」）的手或手臂 → `1girl, solo focus, 1other`
-     （**绝对不能再写 `solo`**；那只手明显是男性手臂时可写 `1boy` 代替 `1other`）
+     （**绝对不能再写 `solo`**）
+   - **任何情况下都不许写 `1boy`**（见规则 14）——`1boy` 会让模型补出一个
+     **完整的人**：脸、身体、衣服全都有。视角方只出手，不出人。
    为什么：Danbooru 官方角色计数规则里「一只手也算一个角色」（原话
    Disembodied hands and other body parts are counted）。写了 `solo` 又要画面
    出现第二只手，两条指令自相矛盾——实测后果有三种：手变成她自己的、抓握
    动作整个消失、或画出一团畸形的手。
-   视角方的**脸和身体一律不许出现**，只允许手或手臂入画，画面仍以 `1girl` 开头。
+   视角方的**脸、身体、衣服一律不许出现**，只允许手或手臂入画，画面仍以
+   `1girl` 开头。给「我」写 `black hoodie` / `grey pants` 这类服饰，等于在说
+   「画一个穿这些的人」，模型就会把整个人画出来（2026-10-11 实测：03 格就是
+   这么凭空多出一个男生的）。
    ⚠️ 写了 `1other` 就必须**真的**让第二方身体部位入画（手/手臂），并配上对应
    的手部标签；这一格若根本没有第二方入画，就别写 `1other`，退回 `1girl, solo`。
    实测坑：旁白写着「我攥住了她的手腕」，画面却只写 `solo focus, 1other` 而
@@ -517,6 +668,13 @@ Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有�
    画面上任何看得见颜色的东西都要写颜色——`white in-ear earphones`，不许只写
    `in-ear earphones`；`black backpack`，不许只写 `backpack`。跟服饰一样，每格
    重复写、跨格保持一致，颜色第一次定下来就别再改。
+   ⚠️ **「写了款式 / 姿态」不等于「写了颜色」**——`backpack on one shoulder`、
+   `sailor collar`、`pleated skirt` 都还是没写颜色的裸写法，必须写成
+   `white backpack on one shoulder`、`white sailor collar`、`white pleated skirt`。
+   **每一件衣物、每一个随身物件都要带颜色**（衣领、裙子、背包、耳机、袜子……
+   一个都不能漏），代码会逐个查，漏了就打回重写。
+   ⚠️ **同一件东西只写一个标签**：`backpack` 和 `backpack on one shoulder` 是
+   同一件，两个都写模型会画**两个包**——合并成 `white backpack on one shoulder`。
 8. **下面这些词一律不许写**（逐条实测过的黑名单——不只是"库里没有"这么简单，
    写下去一定会出问题；反过来，别拿这张表去类推别的词，也别因为某个词"库里
    没有"就不敢写，见规则 12）：
@@ -583,6 +741,20 @@ Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有�
    `bus interior` 和 `bus stop / outdoors / city`，结果同一个公交场景三格各不相同。
    先想清楚这一格的镜头在哪：在车厢里就只写 `bus interior`（配 `handrail`、`door`），
    在站台就只写 `bus stop`（配 `outdoors`、`city`），然后**这一场景内保持不动**。
+
+14. **整话的镜头人称（视角）在第一格就定下来，之后不许变。** 这一话只要有任何
+   一格写了 `pov` / `pov hands`，它就是「我」的**第一人称视角**，那么：
+   - **全篇每一格都不许写 `1boy`**（写了模型就补出一个完整男人：脸、身体、
+     衣服全都有）；
+   - 「我」永远只以**手或手臂**入画，脸和身体一律不出现；
+   - 需要第二方在场：`1girl, solo focus, 1other` + `pov hands` +
+     `holding another's wrist`；
+   - **不许给「我」写服饰**（`black hoodie`、`grey pants` 这类词等于在说
+     「画一个穿这些的人」）。
+   2026-10-11 实测（用户原话「我图三看到个男的很难受」）：01/02 格用
+   `pov hands` 把「我」写成一只手，03 格却写了 `1girl, 1boy` + `black hoodie,
+   grey pants`，画面里凭空多出一个和前两格完全接不上的男生。
+   **视角跳了，观众立刻出戏**——这一条代码会跨格查，跳了就打回重写。
 
 【Anima 提示词规范（全文，必须遵守）】
 写法：**以标签为主，可以用简短的英语短语补充**——短词和英语短语都能写。
@@ -881,9 +1053,11 @@ def check(text, panels):
     wrist`（禁用）和 `solo` 配第二方身体部位（冲突）同时存在，模型只被告知了
     后者——前者一路活到交稿。两稿预算下，一条一条报根本改不完。
 
-    **只判语义，不判存在性**：`hand around wrist` 语义错、`solo`+`1other` 互斥，
-    这两类判不合格；而「库里查不到」不算错（`white_earphones`、`black_backpack`
-    都不在库，但写法是对的），只写日志。库是参考，不是白名单。
+    **只判语义，不判存在性**：`hand around wrist` 语义错、`solo` 配第二方身体
+    部位互斥、衣物 / 随身物件没写颜色（`bare_wearables`）、同一件东西写两遍
+    （`duplicate_wearables`）、POV 剧本里冒出 `1boy`（`pov_conflicts`），这几类
+    判不合格；而「库里查不到」不算错（`white_earphones`、`black_backpack` 都不
+    在库，但写法是对的），只写日志。库是参考，不是白名单。
     """
     ok, why = comic_writer._validate(text, panels)
     if not ok:
@@ -894,10 +1068,10 @@ def check(text, panels):
     if conf:
         items = "、".join("格 %s 的 `%s`" % (no, tg) for no, tg in conf[:6])
         problems.append(
-            "这些格既写了 `solo`，又要求第二方身体部位（%s）入画："
-            "`solo` 表示画面里只有一个角色，而 Danbooru 官方计数规则里"
-            "「一只手也算一个角色」，两条指令互斥。把 `solo` 换成 "
-            "`solo focus`，并补上 `1other`（那只手明显是男性就写 `1boy`）。"
+            "这些格既写了 `solo`（画面里只有一个人），又要求第二个人或第二方"
+            "身体部位（%s）入画：Danbooru 官方计数规则里「一只手也算一个角色」，"
+            "两条指令互斥。把 `solo` 换成 `solo focus`，并补上 `1other`。"
+            "⚠️ **不要写 `1boy`**——它会补出一个完整的人（见下一条）。"
             % items)
     banned = banned_tags(text)
     if banned:
@@ -908,6 +1082,32 @@ def check(text, panels):
             "手腕」。要抓别人的手腕只能写 `holding another's wrist`"
             "（视角方的手再加 `pov` + `pov hands`），不用抓的格就整段"
             "删掉、只写 `1girl, solo`。" % items)
+    bare = bare_wearables(text)
+    if bare:
+        items = _fmt_by_panel(bare)
+        problems.append(
+            "这些衣物 / 随身物件**只有类别名、没写颜色**：%s。画面模型没有记忆，"
+            "同一件东西不写颜色，每一格都会换个色。把颜色写进这个标签里："
+            "`backpack` → `white backpack on one shoulder`、`sailor collar` →"
+            " `white sailor collar`、`pleated skirt` → `white pleated skirt`。"
+            "款式和姿态（`on one shoulder`）**不等于**颜色。" % items)
+    dup = duplicate_wearables(text)
+    if dup:
+        items = _fmt_by_panel(dup)
+        problems.append(
+            "同一格里同一件东西写了两次（%s）：`backpack` 和 `backpack on one "
+            "shoulder` 是**同一件**，两个都写模型会画两个包。合并成一个标签，"
+            "颜色写在里面（`white backpack on one shoulder`）。" % items)
+    pov = pov_conflicts(text)
+    if pov:
+        items = "、".join("格 %s" % no for no, _ in pov[:6])
+        problems.append(
+            "这一话是第一人称视角（已经有 `pov` / `pov hands` 的格），%s 却写了 "
+            "`1boy`：`1boy` 会补出**一个完整的人**（脸、身体、衣服全都有），"
+            "和只出手的前几格完全接不上。把 `1boy` 删掉——「我」只以手或手臂"
+            "入画，第二方用 `1other` 表示，手部标签照旧（`pov hands` + "
+            "`holding another's wrist`）；也**不要给「我」写服饰**"
+            "（`black hoodie` / `grey pants` 都会把整个人画出来）。" % items)
     # 库存在性**判不合格会反噬**（2026-10-11 由用户定调：tags 库只是参考，
     # AI 要有自我判断）。原来这里把「库里查不到」当硬回炉，后果是**惩罚写具体**：
     # 库里没有 `white_earphones`、`black_backpack`，模型老老实实写「白色耳机」

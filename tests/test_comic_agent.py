@@ -318,6 +318,119 @@ class BannedTagTest(unittest.TestCase):
         self.assertIn("气泡2", why)
 
 
+class WearableDetailTest(unittest.TestCase):
+    """衣物 / 随身物件必须写明具体描述（颜色），泛类写法一律打回。
+
+    2026-10-11 用户定调：「所有泛类必须明确的加上具体的描述，比如背包，衣领，
+    裙子，衣服，之类的东西，都必须加明确的描述，是什么颜色的呀，什么形状的呀」。
+    实测模型交出 `backpack, backpack on one shoulder`——它以为「带了姿态就算
+    具体了」，而背包本身仍然没有颜色。
+    """
+
+    def _script(self, scene, no="01"):
+        return "## %s\n画面: %s\n气泡: 一\n标签1: 她站在车门边\n" % (no, scene)
+
+    def test_bare_backpack_is_flagged(self):
+        got = comic_agent.bare_wearables(
+            self._script("safe, 1girl, solo, backpack"))
+        self.assertEqual([("01", "backpack")], got)
+
+    def test_posture_is_not_a_color(self):
+        """`backpack on one shoulder` 带了姿态，仍然没写颜色。"""
+        got = comic_agent.bare_wearables(
+            self._script("safe, 1girl, solo, backpack on one shoulder"))
+        self.assertEqual([("01", "backpack_on_one_shoulder")], got)
+
+    def test_style_is_not_a_color(self):
+        got = comic_agent.bare_wearables(
+            self._script("safe, 1girl, solo, sailor collar, pleated skirt"))
+        self.assertEqual([("01", "sailor_collar"), ("01", "pleated_skirt")], got)
+
+    def test_colored_wearable_passes(self):
+        self.assertEqual([], comic_agent.bare_wearables(self._script(
+            "safe, 1girl, solo, white uniform, white sailor collar, "
+            "white pleated skirt, white socks, white in-ear earphones, "
+            "white backpack on one shoulder")))
+
+    def test_scene_props_are_not_policed(self):
+        """场景物件（车门 / 扶手 / 车厢）不要求颜色——要求了只会误伤。"""
+        self.assertEqual([], comic_agent.bare_wearables(self._script(
+            "safe, 1girl, solo, standing, bus interior, automatic door, handrail, "
+            "dim lighting, upper body")))
+
+    def test_hand_tags_are_not_wearables(self):
+        self.assertEqual([], comic_agent.bare_wearables(self._script(
+            "safe, 1girl, solo focus, 1other, pov, pov hands, "
+            "holding another's wrist, close-up")))
+
+    def test_duplicate_wearable_reported_once(self):
+        got = comic_agent.duplicate_wearables(self._script(
+            "safe, 1girl, solo, white backpack, backpack on one shoulder"))
+        self.assertEqual([("01", "backpack")], got)
+
+    def test_duplicate_not_reported_across_categories(self):
+        self.assertEqual([], comic_agent.duplicate_wearables(self._script(
+            "safe, 1girl, solo, white shirt, white pleated skirt")))
+
+    def test_check_rejects_bare_wearable(self):
+        ok, why = comic_agent.check(
+            self._script("safe, 1girl, solo, white uniform, white pleated skirt, "
+                         "backpack, sailor collar"), 1)
+        self.assertFalse(ok)
+        self.assertIn("没写颜色", why)
+        self.assertIn("backpack", why)
+
+    def test_check_rejects_duplicate_wearable(self):
+        ok, why = comic_agent.check(
+            self._script("safe, 1girl, solo, white backpack, "
+                         "backpack on one shoulder"), 1)
+        self.assertFalse(ok)
+        self.assertIn("两个包", why)
+
+
+class PovConflictTest(unittest.TestCase):
+    """镜头人称定下就不许变：POV 剧本里绝不许出现 `1boy`。
+
+    2026-10-11 用户原话：「如果是单人场景，不要写 1boy 这样的冲突的东西，我图三
+    看到个男的很难受……明明前面 2 个图都是以手出现的，我这个角色的镜头视角抛出
+    镜头，结果第三个场景就直接出问题」。
+    """
+
+    def _script(self, *scenes):
+        return "".join(
+            "## %02d\n画面: %s\n气泡: 一\n标签1: 她站在车门边\n" % (i + 1, s)
+            for i, s in enumerate(scenes))
+
+    def test_pov_plus_1boy_is_flagged(self):
+        got = comic_agent.pov_conflicts(self._script(
+            "safe, 1girl, solo, standing, bus interior",
+            "safe, 1girl, solo focus, 1other, pov, pov hands, "
+            "holding another's wrist",
+            "safe, 1girl, 1boy, white uniform, black hoodie, grey pants, "
+            "bus interior"))
+        self.assertEqual([("03", "1boy")], got)
+
+    def test_third_person_script_may_use_1boy(self):
+        """整话没有 pov 的双人剧本是第三人称，写 `1boy` 合法，不拦。"""
+        self.assertEqual([], comic_agent.pov_conflicts(self._script(
+            "safe, 1girl, 1boy, white uniform, black hoodie, bus interior",
+            "safe, 1girl, 1boy, white uniform, black hoodie, bus interior")))
+
+    def test_solo_plus_1boy_is_a_solo_conflict(self):
+        got = comic_agent.solo_conflicts(
+            self._script("safe, 1girl, solo, 1boy, standing"))
+        self.assertEqual([("01", "1boy")], got)
+
+    def test_check_points_at_1boy(self):
+        ok, why = comic_agent.check(self._script(
+            "safe, 1girl, solo focus, 1other, pov, pov hands, "
+            "holding another's wrist",
+            "safe, 1girl, 1boy, black hoodie, grey pants, bus interior"), 2)
+        self.assertFalse(ok)
+        self.assertIn("1boy", why)
+        self.assertIn("pov", why)
+
+
 class RunRoundsTest(unittest.TestCase):
     """agent 循环：工具调用 → 结果回灌 → 收尾轮交出正文。"""
 
@@ -798,6 +911,38 @@ class PromptTest(unittest.TestCase):
         # 开头那句最显眼的话也不再是「每个标签都必须真实存在于库里」
         self.assertNotIn("每一个标签都必须", p)
         self.assertIn("唯一的生图提示词", p)
+
+    def test_teaches_wearable_must_have_color(self):
+        """泛类必须加具体描述：**款式 / 姿态都替代不了颜色**。
+
+        2026-10-11 用户原话：「所有泛类必须明确的加上具体的描述，比如背包，衣领，
+        裙子，衣服，之类的东西，都必须加明确的描述，是什么颜色的呀，什么形状的
+        呀」。实测模型写 `backpack, backpack on one shoulder` 就算交差了。
+        """
+        p = comic_agent._system_prompt(3)
+        self.assertIn("写了款式 / 姿态", p)
+        self.assertIn("不等于", p)
+        self.assertIn("white sailor collar", p)
+        self.assertIn("white backpack on one shoulder", p)
+        self.assertIn("两个包", p)
+        # 规范文件也要有这两条
+        self.assertIn("同一件东西只写一个标签", p)
+
+    def test_teaches_pov_consistency(self):
+        """镜头人称定下就不许变：POV 剧本里不许出现 `1boy`。
+
+        2026-10-11 用户原话：「如果是单人场景，不要写 1boy 这样的冲突的东西，
+        我图三看到个男的很难受……我这个角色的镜头视角抛出镜头，结果第三个场景
+        就直接出问题」。
+        """
+        p = comic_agent._system_prompt(3)
+        self.assertIn("整话的镜头人称", p)
+        self.assertIn("任何情况下都不许写 `1boy`", p)
+        self.assertIn("视角跳了", p)
+        self.assertIn("不许给「我」写服饰", p)
+        # 旧提示词那句「那只手明显是男性手臂时可写 1boy 代替 1other」必须彻底删掉
+        self.assertNotIn("可写 `1boy` 代替", p)
+        self.assertNotIn("是男性就写 `1boy`", p)
 
 
 if __name__ == "__main__":
