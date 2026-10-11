@@ -23,6 +23,7 @@ from app import usage as usage_stats
 # 写成 `from app import vision` 会在调用处炸 AttributeError:
 # 'function' object has no attribute 'default_prompt'。
 from app import vision as vision_mod
+from app import comic_api
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         LLM_PROVIDER, LLM_FALLBACK_CHAIN, PROVIDERS,
                         OLLAMA_BASE_URL, DEFAULT_AGENT_ID,
@@ -102,6 +103,9 @@ def _truncate_at_user(history, user_index):
 
 
 # ─── 页面路由 ────────────────────────────────────────
+
+# 漫画工作台 API（独立 Blueprint，见 app/comic_api.py）
+app.register_blueprint(comic_api.bp)
 
 @app.route("/")
 def index():
@@ -614,6 +618,12 @@ def admin_page():
 def status_page():
     """状态后台：队列 / 轮次 / ComfyUI / NapCat 的实时看板。"""
     return send_from_directory(WEB_DIR, "status.html")
+
+
+@app.route("/comic")
+def comic_page():
+    """漫画工作台：编剧 → 逐格渲染 → 加气泡（见 app/comic_api.py）。"""
+    return send_from_directory(WEB_DIR, "comic_studio.html")
 
 
 @app.route("/api/status")

@@ -1,0 +1,636 @@
+"""漫画工作流调度器：剧本 → silver 出场景图 → qwen 加气泡台词。
+
+两个现成的生图工作流（`skills/silver` 文生图、`skills/qwen_image_v1` 图生图）
+本身一个字节都不改，这里只补它们之间缺的那层调度：
+
+- **自己给自己编号**：每格用剧本里的格号（01、02…）命名文件（`raw/01_raw.png`
+  → `final/01_final.png`）。ComfyUI 的自动编号（Anima_00087 那种）不连续、还会
+  随重启跳号，所以**从不拿它当匹配依据**——阶段二认的是我们自己写的文件名。
+- **两阶段批量跑**：先把所有格用 silver 渲染完，再统一换 qwen 加气泡。按模型
+  分批而不是逐格交替，避免显存来回切换。
+- **逐张落盘 + state.json**：每跑完一张就把状态写回磁盘，ComfyUI 中途重启、
+  或某张失败，重跑时自动跳过已完成的格，接着往下跑。
+
+用法：
+    python -m app.comic new "<一句话设定>" --panels 3   # 编剧层写剧本 + 直接开跑
+    python -m app.comic write "<设定>" --out comics/Cxxx/script.md  # 只写剧本
+    python -m app.comic run comics/C20261007-01/script.md
+    python -m app.comic run <script> --only 01,02      # 只跑指定格
+    python -m app.comic run <script> --silver-only     # 只跑阶段一（场景图）
+    python -m app.comic run <script> --scene-skill nai # 阶段一改走 NAI 云端（快）
+    python -m app.comic status <script>                # 看进度
+
+「写剧本」那一层在 app/comic_writer.py（LLM 写 + 按契约校验 + 不合格回炉），
+它产出的是本模块认的 script.md，两层只靠这份契约耦合——换角色 / 换题材
+只动编剧层，这里一个字不用改。
+"""
+
+import argparse
+import json
+import logging
+import os
+import random
+import re
+import shutil
+import sys
+from datetime import datetime
+
+import requests
+
+from app import comfy_src, image_jobs
+from app.config import BASE_DIR, COMFYUI_URL
+from app.skills import load_skill, load_workflow
+from app.tools.normal import generate_image
+
+log = logging.getLogger("comic")
+
+# 阶段一 / 阶段二的渠道（见 skills/ 下各自的 SKILL.md）
+# 2026-10-11 用户拍板：漫画场景渲染从 silver 换成 anima-line（anima 线条，
+# 6 LoRA 堆叠、两段链 2456×3686）——线条感更强，适合漫画格。它是逐格单张
+# 调 build_t2i_workflow，只要工作流有提示词占位符就通（已确认）。
+SCENE_SKILL = "anima-line"        # 文生图：出没有字的场景图
+BUBBLE_SKILL = "qwen_image_v1"    # 图生图：在场景图上加对话框
+
+# 阶段一也可以走 NAI 云端（`--scene-skill nai`）：它是 `image_jobs.NAI_SKILLS`
+# 里的渠道，走云端通道、不碰 ComfyUI。调它只为「快」——本地 silver 每张要
+# ~30 秒且会触发 ComfyUI 换渠道重启，NAI 云端两张并发、单张几秒。验证气泡
+# 效果时用它做场景图，能把等待时间压掉大半。
+# 注意 NAI 是**标签式英文**模型（同 anima_*），`画面:` 字段照旧写英文标签即可。
+
+# qwen 的图生图骨架里 denoise 写死 1、没有 `__DENOISE__` 占位符，这个数传进去
+# 是空操作——留着只是对齐 generate_image 的调用约定。
+I2I_DENOISE = "0.60"
+
+# 阶段二的提示词模板。qwen 这边的**中文约束是有效的**：node 20 是
+# TextEncodeQwenImage21，挂的文本编码器是 Qwen3-VL 8B（中文原生），正向提示词
+# 直接写中文即可，不用翻英文。
+#
+# ⚠️ 但**负向提示词在当前配置下不起作用**：KSampler 的 cfg=1.0，而 CFG 的公式
+# 是「负向 + cfg×(正向−负向)」，cfg=1 时负向项被完全抵消（12 步蒸馏模型的推荐
+# 采样参数就是 cfg=1）。所以「别画第二个气泡」这类约束**只能写进正向**。
+#
+# 模板按官方「文本渲染」写法组织（实测初版太随意，5 格里 04、05 冒出第二个气泡）：
+#   操作指令 + 位置 + 气泡样式 + 字体 + 引号包裹的精确文本 + 数量约束 + 保留约束
+# 要点来自 Qwen-Image-Edit 的提示词实践：
+#   - 精确文本**必须用引号**包起来，否则模型当成风格描述、不会原样渲染；
+#   - 位置/字体/样式都要写明（官方结构：添加文本"…"，位置在…，字体为…）；
+#   - 编辑模式要写「指令」不要写「场景描述」，否则会推着模型重画一切；
+#   - 保留约束反复重申（Always re-assert constraints）。
+BUBBLE_TEMPLATE = (
+    "在这张漫画格的空白处添加一个对话框（气泡），位置在画面左上方。"
+    "气泡是白色圆角框、黑色细边框，带一个指向人物的尾巴，字体为黑体。"
+    '气泡内的文字（EXACT）："{text}"'
+    "文字排成 2 到 3 行居中显示，每行不超过 8 个字，字迹清晰、不要重影。"
+    "气泡内只写这一段文字；画面中不要出现第二个气泡，不要出现任何其他文字或符号。"
+    "气泡不要遮挡人物脸部。"
+    "保持人物、服装、姿势、背景和画风完全不变，只新增这一个对话框。"
+)
+
+# 双文字模板：气泡之外**再加一行小字标签**（如「好感度 0」这种状态读数）。
+# 拆成独立模板而不是给上面那个加可选段，是为了让「只写这一段」这条数量约束在
+# 两种情况下都保持明确——实测约束写得越死，模型越不会自己加戏。
+BUBBLE_TEMPLATE_LABEL = (
+    "在这张漫画格的空白处添加一个对话框（气泡），位置在画面左上方。"
+    "气泡是白色圆角框、黑色细边框，带一个指向人物的尾巴，字体为黑体。"
+    '气泡内的文字（EXACT）："{text}"'
+    "文字排成 2 到 3 行居中显示，每行不超过 8 个字，字迹清晰、不要重影。"
+    "气泡内只写这一段文字。"
+    "另外在画面右上角添加一行小字，字体为黑体、带白色描边，不要边框、不要图标。"
+    '这行小字的文字（EXACT）："{label}"'
+    "这行小字只写这一段文字。"
+    "画面中只出现这两个文字元素（左上角一个气泡、右上角一行小字），"
+    "不要出现第三个气泡，不要出现任何其他文字或符号。"
+    "气泡和小字都不要遮挡人物脸部。"
+    "保持人物、服装、姿势、背景和画风完全不变，只新增这一个对话框和这一行小字。"
+)
+
+# 台词里的中日式引号（「」『』）会被 qwen 当成句子边界——实测 04 那格就是在「」处
+# 把一句话断成了两个气泡。喂给模型前剥掉；精确文本由模板统一用英文双引号包住，
+# 这样既满足「文本要加引号」，又不会触发中文引号的断句语义。
+_QUOTE_CHARS = "「」『』“”‘’\"'"
+
+
+def _clean_dialogue(text):
+    out = "".join(ch for ch in (text or "") if ch not in _QUOTE_CHARS)
+    return re.sub(r"\s+", " ", out).strip()
+
+# 同 image_out / comfy_src：本机常驻代理会把 127.0.0.1 也劫持成 502，
+# 取图这条回环请求必须 trust_env=False。
+_session = requests.Session()
+_session.trust_env = False
+
+
+# ─── 剧本解析 ─────────────────────────────────────────
+#
+# 格式（Markdown，人写得动、机器好读）：
+#
+#     # 标题：夜色便利店
+#     任务号: C20261007-01
+#
+#     ## 01
+#     画面: 1girl, solo, silver hair, ...
+#     气泡: 这么晚了，便利店还开着呢。
+#     标签: 好感度 0              # 可选；写了就在气泡之外多画一行小字
+#
+#     ## 02
+#     ...
+#
+# 字段名中英都认；画面/气泡各自可以续行（缩进或直接换行都行，遇到空行结束）。
+
+_PANEL_RE = re.compile(r"^\s*##\s+(\d{1,3})\s*$")
+_FIELD_RE = re.compile(
+    r"^\s*(画面|场景|scene|prompt|气泡|台词|bubble|dialogue|标签|状态|label|stat)"
+    r"\s*[:：]\s*(.*)$", re.I)
+_FIELD_MAP = {"画面": "scene", "场景": "scene", "scene": "scene", "prompt": "scene",
+              "气泡": "bubble", "台词": "bubble", "bubble": "bubble",
+              "dialogue": "bubble",
+              "标签": "label", "状态": "label", "label": "label", "stat": "label"}
+_TITLE_RE = re.compile(r"^\s*#\s*(?:标题\s*[:：]\s*)?(.+?)\s*$")
+_TASKID_RE = re.compile(r"^\s*任务号\s*[:：]\s*(.+?)\s*$")
+_TASKID_FORMAT = re.compile(r"^C\d{8}-\d+$")
+
+
+def parse_script(path):
+    """读剧本文件，返回 (meta, panels)。"""
+    with open(path, "r", encoding="utf-8") as f:
+        text = f.read()
+    return parse_script_text(text)
+
+
+def parse_script_text(text):
+    """解析剧本正文，返回 (meta, panels)。
+
+    panels 是 dict 列表，含 no / scene / bubble / label。解析逻辑只此一份——
+    编剧层（app/comic_writer.py）写完剧本也调它做校验，所以拆出文本版。
+    """
+    meta = {}
+    panels = []
+    cur = None
+    field = None
+    for raw in text.splitlines():
+        line = raw.rstrip()
+
+        m = _PANEL_RE.match(line)
+        if m:
+            cur = {"no": "%02d" % int(m.group(1)), "scene": "",
+                   "bubble": "", "label": ""}
+            panels.append(cur)
+            field = None
+            continue
+
+        if cur is None:                      # 面板之前的头部只认标题 / 任务号
+            m = _TASKID_RE.match(line)
+            if m:
+                meta["task_id"] = m.group(1).strip()
+                continue
+            m = _TITLE_RE.match(line)
+            if m:
+                meta["title"] = m.group(1).strip()
+                continue
+            continue
+
+        m = _FIELD_RE.match(line)
+        if m:
+            field = _FIELD_MAP[m.group(1).lower()]
+            cur[field] = m.group(2).strip()
+            continue
+
+        if not line.strip():
+            field = None
+            continue
+
+        if field:                            # 续行：接到上一个字段上
+            cur[field] = (cur[field] + " " + line.strip()).strip()
+
+    return meta, panels
+
+
+# ─── 任务目录 / 状态 ──────────────────────────────────
+
+_STATE_LABEL = {"pending": "待渲染", "rendered": "待加气泡", "done": "已完成"}
+
+
+class Panel:
+    def __init__(self, no, scene, bubble, label=""):
+        self.no = no
+        self.scene = scene
+        self.bubble = bubble
+        self.label = label          # 可空；有值时阶段二画「气泡 + 一行小字」两个元素
+        self.state = "pending"      # pending → rendered → done
+        self.seed = None
+        self.error = None
+
+    def bubble_prompt(self):
+        text = _clean_dialogue(self.bubble)
+        if self.label:
+            return BUBBLE_TEMPLATE_LABEL.format(
+                text=text, label=_clean_dialogue(self.label))
+        return BUBBLE_TEMPLATE.format(text=text)
+
+
+def _guess_task_id(dirpath):
+    name = os.path.basename(os.path.normpath(dirpath))
+    if _TASKID_FORMAT.match(name):
+        return name
+    now = datetime.now()
+    return "C%s-%s" % (now.strftime("%Y%m%d"), now.strftime("%H%M%S"))
+
+
+class Task:
+    """一个漫画任务 = 一个目录（script.md + raw/ + final/ + state.json）。"""
+
+    def __init__(self, script_path, meta, panels):
+        self.script_path = os.path.abspath(script_path)
+        self.dir = os.path.dirname(self.script_path)
+        self.meta = meta
+        self.panels = [p if isinstance(p, Panel)
+                       else Panel(p["no"], p.get("scene", ""),
+                                  p.get("bubble", ""), p.get("label", ""))
+                       for p in panels]
+        self.task_id = meta.get("task_id") or _guess_task_id(self.dir)
+        self.raw_dir = os.path.join(self.dir, "raw")
+        self.final_dir = os.path.join(self.dir, "final")
+        self.state_path = os.path.join(self.dir, "state.json")
+
+    def raw_path(self, p):
+        return os.path.join(self.raw_dir, "%s_raw.png" % p.no)
+
+    def final_path(self, p):
+        return os.path.join(self.final_dir, "%s_final.png" % p.no)
+
+    def load_state(self):
+        """把 state.json 里记着的进度贴回面板，实现断点续跑。"""
+        if not os.path.exists(self.state_path):
+            return
+        try:
+            with open(self.state_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError) as e:
+            log.warning("state.json 读不出来（%s），当作全新任务", e)
+            return
+        saved = data.get("panels") or {}
+        for p in self.panels:
+            s = saved.get(p.no)
+            if not isinstance(s, dict):
+                continue
+            p.state = s.get("state", p.state)
+            p.seed = s.get("seed", p.seed)
+            # 剧本改了就把旧图作废：场景变了 → 整格重来；只改了气泡/标签 →
+            # 场景图还能用，退到「待加气泡」重跑阶段二。
+            if s.get("scene") and s["scene"] != p.scene:
+                p.state, p.seed = "pending", None
+            elif (p.state == "done"
+                  and (s.get("bubble", "") != p.bubble
+                       or s.get("label", "") != p.label)):
+                p.state = "rendered"
+
+    def save_state(self):
+        os.makedirs(self.raw_dir, exist_ok=True)
+        os.makedirs(self.final_dir, exist_ok=True)
+        data = {
+            "task_id": self.task_id,
+            "title": self.meta.get("title", ""),
+            "script": os.path.basename(self.script_path),
+            "updated": datetime.now().isoformat(timespec="seconds"),
+            "panels": {
+                p.no: {
+                    "scene": p.scene,
+                    "bubble": p.bubble,
+                    "label": p.label,
+                    "state": p.state,
+                    "seed": p.seed,
+                    "error": p.error,
+                    "raw": self._rel(self.raw_path(p)),
+                    "final": self._rel(self.final_path(p)),
+                }
+                for p in self.panels
+            },
+        }
+        with open(self.state_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    def _rel(self, path):
+        return os.path.relpath(path, self.dir).replace("\\", "/")
+
+
+# ─── 生图（走 image_jobs 队列，target=None = 网页侧，不往 QQ 发）──
+
+def _new_seed():
+    return random.randint(0, 2 ** 31 - 1)
+
+
+def _require_comfy():
+    if not image_jobs.comfy_alive():
+        raise SystemExit("ComfyUI 没在线（%s 连不上），先把它开起来再跑。"
+                         % COMFYUI_URL)
+
+
+def _submit(workflow, skill, prompt, seed):
+    """排进全局串行队列并等出图，返回 ComfyUI 那边的输出文件名。
+
+    target=None 是「网页侧」路径：worker 出图后只把 history entry 挂到 job 上，
+    不发回任何会话、也不走审核（见 image_jobs.process）。所以这里拿到 entry
+    自己把图取下来落盘即可。
+    """
+    job, reason = image_jobs.enqueue(None, None, workflow, skill=skill,
+                                     prompt=prompt, seed=seed, landscape=False)
+    if reason:
+        raise RuntimeError(reason)
+    entry = job.wait()                       # 失败会抛 job.error
+    names = image_jobs.output_images(entry)
+    if not names:
+        raise RuntimeError("跑完了但没找到输出图片")
+    return names[0]
+
+
+# 重试**只针对超时**这一种失败。实测它的成因有两类，都不是提示词的问题：
+#   ① 冷启动——刚换渠道 / ComfyUI 刚重启，模型还在加载，第一张顶满 180 秒；
+#   ② 内存紧张——加载把可用内存压到 COMFY_MIN_FREE_RAM_GB(3.0) 以下，触发
+#      RAM 守卫重启 ComfyUI，正在跑的那张被打断（实测内存 4.4GB→2.1GB 那次）。
+# 两类都是「等它喘过来就好」：重试时模型已在显存里、或守卫刚清完场，基本一次
+# 就过（实测首张 180 秒超时 → 重试 46 秒成功）。其余错误（提示词非法、连不上
+# ComfyUI、找不到输出）重试没意义，直接抛。
+_TIMEOUT_HINT = "超时"
+
+
+def _submit_retry(make, what, tries=3):
+    for attempt in range(1, tries + 1):
+        try:
+            return make()
+        except Exception as e:
+            if _TIMEOUT_HINT not in str(e) or attempt == tries:
+                raise
+            log.warning("%s 超时（第 %d 次，共 %d 次），重试",
+                        what, attempt, tries)
+
+
+def _download(filename, dst):
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    resp = _session.get(COMFYUI_URL.rstrip("/") + "/view",
+                        params={"filename": str(filename)}, timeout=120)
+    resp.raise_for_status()
+    with open(dst, "wb") as f:
+        f.write(resp.content)
+    return dst
+
+
+def _submit_nai(prompt, skill):
+    """把一张 NAI 图排进云端通道并等出图，返回**已经落盘的本地路径**。
+
+    走 `image_jobs._process_nai`：target=None 时它把图存进 image_out 的目录，
+    并把那个**路径字符串**塞进 `entry["images"]`——不是 ComfyUI 那种
+    `{"filename": ...}` 字典，所以这里**不能**用 `output_images` 解析，也
+    没有 `/view` 可下（图本来就在本机）。
+
+    NAI 是云端出图，种子不可控（同 generate_image 里那条口径），所以不传 seed。
+    """
+    job, reason = image_jobs.enqueue(None, None, prompt, skill=skill,
+                                     prompt=prompt, landscape=False)
+    if reason:
+        raise RuntimeError(reason)
+    entry = job.wait()                       # 失败会抛 job.error
+    paths = (entry or {}).get("images") or []
+    if not paths:
+        raise RuntimeError("跑完了但没找到输出图片")
+    return paths[0]
+
+
+def render_scene(task, p, scene_skill=SCENE_SKILL):
+    """阶段一：文生图，出这一格的场景图。
+
+    渠道可以是本机（silver，ComfyUI）或云端（nai）——见模块顶部的说明。
+    """
+    if scene_skill in image_jobs.NAI_SKILLS:
+        log.info("[格 %s] 场景渲染（%s 云端，无种子）", p.no, scene_skill)
+        src = _submit_nai(p.scene, scene_skill)
+        os.makedirs(task.raw_dir, exist_ok=True)
+        shutil.copyfile(src, task.raw_path(p))
+        p.seed = None
+        p.state = "rendered"
+        p.error = None
+        log.info("[格 %s] 场景已落盘：%s", p.no, task._rel(task.raw_path(p)))
+        return
+
+    seed = _new_seed()
+    wf = generate_image.build_t2i_workflow(scene_skill, p.scene, seed)
+    if wf is None:
+        raise RuntimeError("skill %s 没有文生图工作流" % scene_skill)
+    log.info("[格 %s] 场景渲染（%s，seed %s）", p.no, scene_skill, seed)
+    name = _submit_retry(lambda: _submit(wf, scene_skill, p.scene, seed),
+                         "[格 %s] 场景" % p.no)
+    _download(name, task.raw_path(p))
+    p.seed = seed
+    p.state = "rendered"
+    p.error = None
+    log.info("[格 %s] 场景已落盘：%s", p.no, task._rel(task.raw_path(p)))
+
+
+def _upload_source(path):
+    """把本地场景图缩到画布长边后送进 ComfyUI 的 input 目录，返回它认得的名字。"""
+    with open(path, "rb") as f:
+        raw = f.read()
+    fitted, _size = comfy_src.fit(raw, max_side=comfy_src.MAX_SIDE)
+    return comfy_src.upload(fitted)
+
+
+def _build_i2i(skill, prompt, seed, uploaded):
+    """构建图生图工作流。
+
+    占位符替换**复用 generate_image 里那两个函数**，不另写一份——转义规则
+    只该有一处（apply_prompt_placeholders 的注释专门交代过别让它分叉）。
+    """
+    sd = load_skill(skill)
+    if not sd:
+        raise RuntimeError("找不到 skill %s" % skill)
+    wf = load_workflow(os.path.join(sd["path"], "workflow_i2i.json"))
+    if not wf:
+        raise RuntimeError("skill %s 没有图生图工作流" % skill)
+    wf = generate_image.apply_prompt_placeholders(json.dumps(wf), prompt, seed)
+    return generate_image._apply_i2i_placeholders(wf, uploaded, I2I_DENOISE)
+
+
+def render_bubble(task, p):
+    """阶段二：qwen 图生图，在场景图上加这一格的对话框。"""
+    raw_path = task.raw_path(p)
+    if not os.path.exists(raw_path):
+        raise RuntimeError("没有场景原图，先跑阶段一")
+    prompt = p.bubble_prompt()
+    seed = _new_seed()
+    uploaded = _upload_source(raw_path)
+    wf = _build_i2i(BUBBLE_SKILL, prompt, seed, uploaded)
+    log.info("[格 %s] 加气泡（%s，seed %s）", p.no, BUBBLE_SKILL, seed)
+    name = _submit_retry(lambda: _submit(wf, BUBBLE_SKILL, prompt, seed),
+                         "[格 %s] 加气泡" % p.no)
+    _download(name, task.final_path(p))
+    p.state = "done"
+    p.error = None
+    log.info("[格 %s] 成品已落盘：%s", p.no, task._rel(task.final_path(p)))
+
+
+# ─── 跑批 ─────────────────────────────────────────────
+
+def _next_task_dir(root="comics"):
+    """按 `C<日期>-<序号>` 找第一个还没被占用的任务目录名。"""
+    day = datetime.now().strftime("%Y%m%d")
+    n = 1
+    while os.path.exists(os.path.join(root, "C%s-%02d" % (day, n))):
+        n += 1
+    return os.path.join(root, "C%s-%02d" % (day, n))
+
+
+def run(script_path, only=None, silver_only=False, redo=False,
+        scene_skill=SCENE_SKILL):
+    meta, panels = parse_script(script_path)
+    if not panels:
+        raise SystemExit("剧本里没解析到任何格子（每格以 `## 01` 这样的标题开头）")
+
+    task = Task(script_path, meta, panels)
+    task.load_state()
+    task.save_state()
+    # 阶段一走 NAI 云端、又只要阶段一 → 完全不碰 ComfyUI，不用等它在线；
+    # 其余情况（本机 silver，或还要跑阶段二 qwen）都得先确认 ComfyUI 在线。
+    if not (silver_only and scene_skill in image_jobs.NAI_SKILLS):
+        _require_comfy()
+    log.info("任务 %s：%d 格，目录 %s（阶段一渠道 %s）",
+             task.task_id, len(panels), task.dir, scene_skill)
+
+    todo = [p for p in task.panels if not only or p.no in only]
+
+    if redo:            # 强制重跑选定格的阶段二（场景图留着复用，只重加气泡）
+        for p in todo:
+            if p.state == "done":
+                p.state = "rendered"
+                p.error = None
+
+    # 阶段一：所有格先用同一个渠道渲染完（按模型分批，别逐格换渠道）
+    for p in todo:
+        if p.state in ("rendered", "done"):
+            log.info("[格 %s] 场景已就绪，跳过", p.no)
+            continue
+        try:
+            render_scene(task, p, scene_skill)
+        except Exception as e:                       # 单格失败不拖垮整批
+            p.error = str(e)
+            log.error("[格 %s] 场景渲染失败：%s", p.no, e)
+        task.save_state()
+
+    if silver_only:
+        _report(task)
+        return task
+
+    # 阶段二：统一换 qwen 加气泡
+    for p in todo:
+        if p.state == "done":
+            log.info("[格 %s] 已完成，跳过", p.no)
+            continue
+        if p.state != "rendered":
+            log.warning("[格 %s] 场景没出图，跳过加气泡", p.no)
+            continue
+        try:
+            render_bubble(task, p)
+        except Exception as e:
+            p.error = str(e)
+            log.error("[格 %s] 加气泡失败：%s", p.no, e)
+        task.save_state()
+
+    _report(task)
+    return task
+
+
+def _report(task):
+    print("\n—— %s 进度 ——" % task.task_id)
+    for p in task.panels:
+        line = "  格 %s  %s" % (p.no, _STATE_LABEL.get(p.state, p.state))
+        if p.seed is not None:
+            line += "  seed=%s" % p.seed
+        if p.label:
+            line += "  标签=%s" % p.label
+        if p.state == "done":
+            line += "  → %s" % task._rel(task.final_path(p))
+        elif p.state == "rendered":
+            line += "  → %s" % task._rel(task.raw_path(p))
+        if p.error:
+            line += "  ✗ %s" % p.error
+        print(line)
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        prog="python -m app.comic", description="漫画工作流调度器")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    r = sub.add_parser("run", help="跑一个剧本")
+    r.add_argument("script", help="剧本 md 的路径")
+    r.add_argument("--only", help="只跑这些格，逗号分隔，如 01,02")
+    r.add_argument("--silver-only", action="store_true",
+                   help="只跑阶段一（场景图），不加气泡")
+    r.add_argument("--scene-skill", default=SCENE_SKILL,
+                   help="阶段一的生图渠道，默认 %s；传 nai 走云端（快，"
+                        "验证气泡效果时用）" % SCENE_SKILL)
+    r.add_argument("--redo", action="store_true",
+                   help="强制重跑选定格的阶段二（加气泡），场景图复用")
+
+    s = sub.add_parser("status", help="看进度")
+    s.add_argument("script", help="剧本 md 的路径")
+
+    # 编剧层（app/comic_writer.py）：把一句话设定变成上面那些命令要的剧本。
+    w = sub.add_parser("write", help="只写剧本，不跑图")
+    w.add_argument("brief", help="一句话设定（剧情要什么）")
+    w.add_argument("--panels", type=int, default=2, help="格数，默认 2（反转结构）")
+    w.add_argument("--character", default="",
+                   help="角色外观英文标签（可选，写了就固定用它）")
+    w.add_argument("--out", required=True,
+                   help="剧本写到哪，如 comics/Cxxx/script.md")
+
+    n = sub.add_parser("new", help="写剧本并直接开跑")
+    n.add_argument("brief", help="一句话设定（剧情要什么）")
+    n.add_argument("--panels", type=int, default=2, help="格数，默认 2（反转结构）")
+    n.add_argument("--character", default="",
+                   help="角色外观英文标签（可选，写了就固定用它）")
+    n.add_argument("--scene-skill", default=SCENE_SKILL,
+                   help="阶段一的生图渠道，默认 %s" % SCENE_SKILL)
+    n.add_argument("--silver-only", action="store_true",
+                   help="只跑阶段一（场景图），不加气泡")
+
+    args = ap.parse_args(argv)
+    logging.basicConfig(stream=sys.stdout, level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s",
+                        datefmt="%H:%M:%S")
+
+    if args.cmd == "status":
+        meta, panels = parse_script(args.script)
+        task = Task(args.script, meta, panels)
+        task.load_state()
+        _report(task)
+        return 0
+
+    if args.cmd in ("write", "new"):
+        # 函数内 import：comic_writer 反过来要 import comic（复用解析器），
+        # 模块级互相 import 会成环。
+        from app import comic_writer
+        text = comic_writer.write_script(args.brief, panels=args.panels,
+                                         character=args.character)
+        if args.cmd == "write":
+            path = os.path.abspath(args.out)
+        else:
+            path = os.path.join(_next_task_dir("comics"), "script.md")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text + "\n")
+        print(text)                       # 让用户先看到剧本长什么样
+        log.info("剧本已写入 %s", path)
+        if args.cmd == "write":
+            return 0
+        run(path, silver_only=args.silver_only, scene_skill=args.scene_skill)
+        return 0
+
+    only = None
+    if args.only:
+        only = {x.strip().zfill(2) for x in args.only.split(",") if x.strip()}
+    run(args.script, only=only, silver_only=args.silver_only, redo=args.redo,
+        scene_skill=args.scene_skill)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
