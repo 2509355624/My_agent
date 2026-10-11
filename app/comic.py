@@ -723,7 +723,7 @@ def _build_i2i(skill, prompt, seed, uploaded, denoise=I2I_DENOISE):
     return generate_image._apply_i2i_placeholders(wf, uploaded, denoise)
 
 
-def render_bubble(task, p, split=False):
+def render_bubble(task, p, split=False, prompt=None):
     """阶段二：qwen 图生图，在场景图上加这一格的对话框。
 
     有 `气泡2:` 的格**默认一遍就把两个气泡和旁白全画完**（BUBBLE_TEMPLATE_ALL，
@@ -733,16 +733,24 @@ def render_bubble(task, p, split=False):
     +旁白，第二遍拿第一遍的成图当源图、按 bubble2_prompt 补第二个气泡
     （BUBBLE_TEMPLATE_2 的数量约束是按「图里已有第一个气泡」写的）。这条留作
     退路——某格一遍画崩了，界面上把它单独切回「分开画」重跑。
+
+    prompt 给了就**整段替换**第一遍的提示词（界面上的「完整提示词」框：用户
+    要看见原样发给 qwen 的文字并改它）。此时 split 的第二遍照旧只由 split 决定
+    ——用户在框里写的就是那一段的全部，不想有第二遍就把画法切回「一遍画完」。
     """
     raw_path = task.raw_path(p)
     if not os.path.exists(raw_path):
         raise RuntimeError("没有场景原图，先跑阶段一")
-    prompt = p.bubble_prompt(split=split)
+    overridden = bool((prompt or "").strip())
+    if overridden:
+        prompt = prompt.strip()
+    else:
+        prompt = p.bubble_prompt(split=split)
     seed = _new_seed()
     uploaded = _upload_source(raw_path)
     wf = _build_i2i(BUBBLE_SKILL, prompt, seed, uploaded)
-    log.info("[格 %s] 加气泡（%s，seed %s%s）", p.no, BUBBLE_SKILL, seed,
-             "，分开画" if split else "")
+    log.info("[格 %s] 加气泡（%s，seed %s%s%s）", p.no, BUBBLE_SKILL, seed,
+             "，分开画" if split else "", "，提示词已手改" if overridden else "")
     name = _submit_retry(lambda: _submit(wf, BUBBLE_SKILL, prompt, seed),
                          "[格 %s] 加气泡" % p.no)
     _download(name, task.final_path(p))

@@ -616,18 +616,125 @@ class QwenI2iParamsTest(unittest.TestCase):
 
     这份工作流是**共用**的：漫画「加气泡」「手动修复」「手动改字」走的都是它，
     QQ 生图的 qwen 渠道也是它——所以这里改的是全局效果，不只是漫画。
-    2026-10-11 用户拍板：「我需要 qwen 图生图的步长改成 18，12 的步长效果太差了，
-    必须 18 的步长」（手动改字时亲眼看出来的，12 步重画的字糊）。
+
+    步数两轮：2026-10-11 先 12 → 18（用户手动改字时亲眼看出 12 步重画的字糊），
+    同一晚又拍板 → **25**。25 不是拍的，是查证出来的：Qwen-Image 2.1 的官方
+    day-0 联调参数就是「25 步 / cfg 1.0 / euler + simple」（ComfyUI v0.37.0
+    原生模板默认值；diffusers 官方默认更是 40 步）。用户原话「我跑重新生成都
+    耗费几分钟，还不如加长步长，一次搞定」。
+
+    底模同一晚从 **UC**（无内容过滤，2026-10-05 换上的）换回**官方**
+    `qwen-image-2.1-Q4_K_M.gguf`——用户 10-11 拍板撤回，且只换 qwen_image_v1
+    这一个渠道（qwen-hd / qwen-restore / qwen-charsheet 继续用 UC）。
     """
 
-    def test_steps_is_18(self):
+    def _wf(self):
         sd = skills.load_skill(comic.BUBBLE_SKILL)
         self.assertTrue(sd, "找不到 skill %s" % comic.BUBBLE_SKILL)
         wf = skills.load_workflow(os.path.join(sd["path"], "workflow_i2i.json"))
         self.assertIsNotNone(wf, "qwen 图生图工作流读不出来")
-        steps = [n["inputs"]["steps"] for n in wf.values()
+        return wf
+
+    def test_steps_is_25(self):
+        steps = [n["inputs"]["steps"] for n in self._wf().values()
                  if "steps" in (n.get("inputs") or {})]
-        self.assertEqual(steps, [18], "qwen 图生图的步数必须是 18（用户 2026-10-11 拍板）")
+        self.assertEqual(
+            steps, [25],
+            "qwen 图生图的步数必须是 25（官方 day-0 联调值，用户 2026-10-11 拍板）")
+
+    def test_base_model_is_the_official_one_not_uc(self):
+        """底模不能是 `-UC`（无内容过滤）那个。
+
+        UC 是 2026-10-05 换上的（动机：模型侧不拒答，拦截交给 image_audit），
+        用户 10-11 拍板撤回。这里钉住文件名，免得哪天顺手又被换回去。
+        """
+        unet = [n["inputs"]["unet_name"] for n in self._wf().values()
+                if n.get("class_type") == "UnetLoaderGGUF"]
+        self.assertEqual(unet, ["qwen-image-2.1-Q4_K_M.gguf"])
+        self.assertNotIn("UC", "".join(unet))
+
+
+class BubblePromptOverrideTest(unittest.TestCase):
+    """render_bubble 的 prompt 覆盖：「完整提示词」框手改的那段要原样发出去。
+
+    用户 2026-10-11 的要求是「我需要看到完整的发给 qwen 的文字的内容是什么，
+    我可以进行修改」。这条链的两个端点必须严丝合缝：**取出来的 = 模板拼的**，
+    **发出去的 = 你改的那段**，中间不许再有任何二次加工（比如又拼一句「保持
+    人物服装不变」——那就变成「你改的 + 系统塞的」，跟看到的不是一回事了）。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = self.tmp.name
+        self.seen = {}
+
+        def _upload(path):
+            self.seen["src"] = path
+            return "uploaded.png"
+
+        def _build(skill, prompt, seed, uploaded, denoise=comic.I2I_DENOISE):
+            self.seen["prompt"] = prompt
+            return {"prompt": prompt}
+
+        def _download(name, dst):
+            with open(dst, "wb") as f:
+                f.write(b"NEW")
+
+        for target, repl in (("_upload_source", _upload),
+                             ("_build_i2i", _build),
+                             ("_submit", lambda wf, skill, prompt, seed: "out.png"),
+                             ("_download", _download)):
+            p = mock.patch.object(comic, target, repl)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _task(self):
+        text = "## 01\n画面: 1girl, solo, test\n气泡: 第一句\n标签1: 甲\n"
+        path = os.path.join(self.dir, "script.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        meta, panels = comic.parse_script(path)
+        task = comic.Task(path, meta, panels)
+        os.makedirs(task.raw_dir, exist_ok=True)
+        os.makedirs(task.final_dir, exist_ok=True)
+        p = task.panels[0]
+        with open(task.raw_path(p), "wb") as f:
+            f.write(b"RAW")
+        return task, p
+
+    def test_default_uses_the_template(self):
+        task, p = self._task()
+        comic.render_bubble(task, p)
+        self.assertEqual(self.seen["prompt"], p.bubble_prompt(split=False))
+
+    def test_override_replaces_the_prompt_verbatim(self):
+        task, p = self._task()
+        mine = '在画面左上角添加一个对话框，里面写 "我改过的"。'
+        comic.render_bubble(task, p, prompt=mine)
+        self.assertEqual(self.seen["prompt"], mine)
+
+    def test_override_is_trimmed_but_not_otherwise_touched(self):
+        """首尾空白剥掉，中间的换行/引号一个字符都不许动。"""
+        task, p = self._task()
+        mine = '加一个对话框："甲"。\n加第二个对话框："乙"。'
+        comic.render_bubble(task, p, prompt="  \n" + mine + "  \n ")
+        self.assertEqual(self.seen["prompt"], mine)
+
+    def test_blank_override_falls_back_to_the_template(self):
+        """空白串（前端框里只有空格）当没给，否则会把空提示词发给 qwen。"""
+        task, p = self._task()
+        comic.render_bubble(task, p, prompt="   ")
+        self.assertEqual(self.seen["prompt"], p.bubble_prompt(split=False))
+
+    def test_override_keeps_the_source_image_the_clean_raw(self):
+        """源图仍是**干净底图**——那几行文字是「新增对话框」，在已有气泡的成图上
+        再跑一次会叠出第二个气泡。想累积着改字走 render_manual（源图＝成品）。"""
+        task, p = self._task()
+        with open(task.final_path(p), "wb") as f:
+            f.write(b"OLDFINAL")
+        comic.render_bubble(task, p, prompt="改")
+        self.assertEqual(self.seen["src"], task.raw_path(p))
 
 
 class StudioPageTest(unittest.TestCase):
@@ -674,6 +781,30 @@ class StudioPageTest(unittest.TestCase):
         page = self._page()
         self.assertIn("const _method", page)
         self.assertIn("_method[p.no]", page)
+
+    def test_prompt_peek_pulls_the_exact_text_from_the_backend(self):
+        """「完整提示词」框必须真的去 `/api/comic/prompt` 拉，而不是前端自己拼一份。
+
+        用户 2026-10-11 的要求：「我需要看到完整的发给 qwen 的文字的内容是什么，
+        我可以进行修改」。前端若自己拼，模型模板一改这里就悄悄跟不上了——看到的
+        和发出去的就成了两段话。
+        """
+        page = self._page()
+        self.assertIn("/api/comic/prompt", page)
+        self.assertIn("_peekOpen", page)              # 展开/收起的开关
+        self.assertIn("_promptText[p.no]", page)      # 重建后不丢（2 秒轮询会重建）
+
+    def test_prompt_peek_sends_the_edited_text_verbatim(self):
+        """框里的文字要当 `prompt` 发回 /api/comic/bubble，源图仍是干净底图。
+
+        只画一个输入框、不把它发出去，等于摆设——而且不会有任何报错。
+        """
+        page = self._page()
+        calls = re.findall(r"api\('/api/comic/bubble',\s*\{[^}]*\}", page)
+        self.assertTrue(calls, "找不到页面里调 /api/comic/bubble 的地方")
+        self.assertTrue(any("prompt" in c for c in calls),
+                        "手改的提示词必须真的发出去（只画框不发送等于摆设）")
+        self.assertIn("mpeek", page)                  # 提示词框的单独样式/选择器
 
 
 class OfficialTextRulesTest(unittest.TestCase):

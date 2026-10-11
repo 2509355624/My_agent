@@ -10,6 +10,7 @@
   GET  /api/comic/status    槽位轮询：剧本 + state.json → 每格状态与图 URL
   POST /api/comic/rerender  换种子重跑某格（重置该格 → 后台只跑阶段一）
   POST /api/comic/bubble    加气泡：单格（含已完成的格＝从底图重画），或全部
+  GET  /api/comic/prompt    取出「这一格原样发给 qwen 的那段文字」，供界面显示与手改
   POST /api/comic/manual    手动修复：拿当前成品当源图，按手输的指令跑一遍 qwen
   POST /api/comic/upload    手动放底图：外部跑好的底图顶替这一格的 raw
   GET  /api/comic/img       服务 raw/ final/ 下的图片文件
@@ -451,6 +452,31 @@ def api_comic_rerender():
     return jsonify({"ok": True, "no": no})
 
 
+@bp.route("/api/comic/prompt", methods=["GET"])
+def api_comic_prompt():
+    """把「这一格原样发给 qwen 的那段文字」交出来，供界面显示 + 手改。
+
+    返回的就是 `Panel.bubble_prompt()` 的输出，**不加任何预览用的包装**——用户
+    2026-10-11 明确要求「看到完整的发给 qwen 的文字，并进行修改」，所以界面上
+    看到的一字不差就是提交给 ComfyUI 的那段。
+
+    split 跟界面上的画法下拉一致（否则他看到的是 A 段、实际跑的是 B 段——一格
+    有没有第二句台词，拼出来的文字是两套模板）。
+    """
+    try:
+        path = _task_dir(request.args.get("task"))
+        task = _load_task(path)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    no = str(request.args.get("no") or "").strip().zfill(2)
+    panel = next((p for p in task.panels if p.no == no), None)
+    if panel is None:
+        return jsonify({"ok": False, "error": "没有 %s 这格" % no}), 404
+    split = str(request.args.get("split") or "") not in ("", "0", "false", "False")
+    return jsonify({"ok": True, "no": no, "split": split,
+                    "prompt": panel.bubble_prompt(split=split)})
+
+
 @bp.route("/api/comic/bubble", methods=["POST"])
 def api_comic_bubble():
     """加气泡（阶段二，qwen 图生图）。no=单格；no=all → 全部「待加气泡」
@@ -463,7 +489,12 @@ def api_comic_bubble():
 
     `split`（可选）：true 时这一格分两遍画（第一遍气泡1+旁白、第二遍补气泡2）。
     默认 false = 一遍把两个气泡和旁白全画完，省一次 50~70 秒；某格一遍画崩了，
-    前端把它单独切回「分开画」重跑。"""
+    前端把它单独切回「分开画」重跑。
+
+    `prompt`（可选）：**整段替换**这一格第一遍的提示词，源图仍是底图。界面上的
+    「完整提示词」框走这条路——取 /prompt 看到的文字、改完直接发回来。它只对
+    单格有意义（「全部」会把它套到每一格上），所以 no=all 时直接拒。
+    """
     data = request.get_json(silent=True) or {}
     try:
         path = _task_dir(data.get("task"))
@@ -472,6 +503,11 @@ def api_comic_bubble():
         return jsonify({"ok": False, "error": str(exc)}), 404
     split = bool(data.get("split"))
     no = str(data.get("no") or "").strip()
+    override = str(data.get("prompt") or "").strip()
+    if override and no == "all":
+        return jsonify({"ok": False,
+                        "error": "手改的提示词只能给单格用——"
+                                 "「全部」会把它原样套到每一格上"}), 400
     redo = False
     if no == "all":
         targets = [p.no for p in task.panels if p.state == "rendered"]
@@ -490,6 +526,17 @@ def api_comic_bubble():
                                 no, panel.state)}), 400
         only = {no}
         redo = panel.state == "done"      # done 的格要靠 redo 才进得了阶段二
+        if override:
+            # 手改的提示词走**单格直跑**：comic.run 是「按剧本逐格跑」的批处理，
+            # 提示词由它自己按模板拼，没有「这一格换一段文字」的入口，所以这里
+            # 直接调 render_bubble（自己补 save_state，run 里是它负责存的）。
+            def _work():
+                comic.render_bubble(task, panel, split=split, prompt=override)
+                task.save_state()
+            if not _spawn(path, "bubble", _work):
+                return jsonify({"ok": False, "error": "这个任务已经在跑了"}), 409
+            return jsonify({"ok": True, "panels": [no], "split": split,
+                            "override": True})
     started = _spawn(path, "bubble", lambda: comic.run(
         os.path.join(path, "script.md"), only=only, redo=redo,
         split_bubbles=split))

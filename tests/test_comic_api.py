@@ -303,8 +303,10 @@ class ComicManualApiTest(unittest.TestCase):
     调用来修复问题，不然现在结束了我也无法解决问题；以及手动添加原始的底图」。
     """
 
+    # 02 特意带 `气泡2`：/prompt 的 split 跟随要拿「有第二句台词」的格才看得出
+    # 差别（没有气泡2 的格，两套模板拼出来是同一段）。
     SCRIPT = ("# 标题：t\n\n## 01\n画面: 1girl, solo\n气泡: 一\n标签1: 甲\n"
-              "\n## 02\n画面: 1girl, solo\n气泡: 二\n标签1: 乙\n")
+              "\n## 02\n画面: 1girl, solo\n气泡: 二\n气泡2: 二之二\n标签1: 乙\n")
     NAME = "C20261011-01"
 
     def setUp(self):
@@ -428,6 +430,82 @@ class ComicManualApiTest(unittest.TestCase):
             self.assertFalse(r.get_json()["split"])
             self._idle()
         self.assertFalse(m.call_args.kwargs.get("split_bubbles"))
+
+    # ── /prompt（看清并手改发给 qwen 的文字）────────────
+
+    def test_prompt_endpoint_returns_the_exact_text_sent_to_qwen(self):
+        """取出来的必须**一字不差**就是 bubble_prompt() 的输出。
+
+        用户 2026-10-11：「我需要看到完整的发给 qwen 的文字的内容是什么，我可以
+        进行修改」。所以这条链上不许有任何二次包装——一旦这里加工过，界面上看到
+        的是 A、真正跑出去的是 B，用户改了半天改的是个影子。
+        """
+        d = self.c.get("/api/comic/prompt?task=%s&no=1" % self.NAME).get_json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["no"], "01")             # no 补零成两位
+        panel = next(p for p in self._load().panels if p.no == "01")
+        self.assertEqual(d["prompt"], panel.bubble_prompt(split=False))
+
+    def test_prompt_endpoint_follows_the_split_switch(self):
+        """split 跟着界面上的画法下拉走。
+
+        一格有没有第二句台词，拼出来的是**两套模板**；不跟随的话用户看着一遍画完
+        的文字、实际按分开画跑，改的字落不到该落的地方。
+        """
+        a = self.c.get("/api/comic/prompt?task=%s&no=02&split=0" % self.NAME).get_json()
+        b = self.c.get("/api/comic/prompt?task=%s&no=02&split=1" % self.NAME).get_json()
+        self.assertFalse(a["split"])
+        self.assertTrue(b["split"])
+        self.assertNotEqual(a["prompt"], b["prompt"])
+
+    def test_prompt_unknown_panel_is_404(self):
+        r = self.c.get("/api/comic/prompt?task=%s&no=09" % self.NAME)
+        self.assertEqual(r.status_code, 404)
+
+    def test_bubble_prompt_override_goes_straight_to_render_bubble(self):
+        """手改的提示词走**单格直跑**，且原样交给 render_bubble。
+
+        不能走 comic.run——那是「按剧本逐格跑」的批处理，提示词由它自己按模板拼，
+        没有「这一格换一段文字」的入口。
+        """
+        mine = '在画面左上角添加一个对话框，里面写 "我改过的"。'
+        with mock.patch.object(comic, "render_bubble") as m, \
+                mock.patch.object(comic, "run") as run:
+            d = self.c.post("/api/comic/bubble",
+                            json={"task": self.NAME, "no": "01",
+                                  "prompt": mine}).get_json()
+            self.assertTrue(d["ok"])
+            self.assertTrue(d.get("override"))
+            self._idle()
+        self.assertFalse(run.called, "手改提示词不该走 comic.run")
+        self.assertEqual(m.call_args.kwargs.get("prompt"), mine)
+
+    def test_bubble_prompt_override_keeps_the_split_flag(self):
+        # 用 01（setUp 里置成 done）——02 还是 pending，没有场景图，压根到不了
+        # render_bubble（那条 400 由 test_bubble_still_rejects_pending_panel 管）。
+        with mock.patch.object(comic, "render_bubble") as m:
+            self.c.post("/api/comic/bubble",
+                        json={"task": self.NAME, "no": "01", "prompt": "改",
+                              "split": True})
+            self._idle()
+        self.assertTrue(m.call_args.kwargs.get("split"))
+
+    def test_bubble_rejects_override_for_all_panels(self):
+        """no=all 时把同一段手改文字套到每一格上是灾难，直接拒。
+
+        「全部」是批处理，每一格的台词都不一样——用户改的那段只对某一格有意义。
+        """
+        r = self.c.post("/api/comic/bubble",
+                        json={"task": self.NAME, "no": "all", "prompt": "改"})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("单格", r.get_json()["error"])
+
+    def test_bubble_prompt_override_conflicts_with_a_running_job(self):
+        with comic_api._JOBS_LOCK:
+            comic_api._JOBS[self.dir] = {"phase": "bubble", "error": None}
+        r = self.c.post("/api/comic/bubble",
+                        json={"task": self.NAME, "no": "01", "prompt": "改"})
+        self.assertEqual(r.status_code, 409)
 
     # ── /upload ────────────────────────────────────────
 

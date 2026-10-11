@@ -73,6 +73,11 @@
     padding: 6px 8px; }
   .mrow { display: flex; gap: 6px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
   .mrow select, .slot .ops select { padding: 4px 6px; font-size: 12px; }
+  .slot .peek { margin-top: 6px; }
+  .slot .peek .ptip { color: var(--text-dim); font-size: 11px; line-height: 1.6;
+    margin-bottom: 4px; }
+  .slot .peek textarea { min-height: 104px; font-size: 12px; line-height: 1.5;
+    padding: 6px 8px; }
   label.file { position: relative; overflow: hidden; }
   label.file input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
   #toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
@@ -393,10 +398,12 @@ function renderSlot(p) {
 }
 
 // 手动修复栏：手输指令 → 跑一遍 Qwen（源图＝这一格**当前成品**，可累积着改）
-// ＋ 传底图顶替这一格的 raw。一格一个铺在卡片里（用户拍板要内联，不要弹面板）。
+// ＋ 传底图顶替这一格的 raw ＋ 「完整提示词」框（看清并手改原样发给 qwen 的文字）。
+// 一格一个铺在卡片里（用户拍板要内联，不要弹面板）。
 function manualHtml(p) {
+  const open = !!_peekOpen[p.no];
   return '<div class="manual">'
-    + '<textarea spellcheck="false" placeholder="手输一句要 Qwen 改什么，例：把「松手啦，疼。」这几个字重画清楚"></textarea>'
+    + '<textarea class="mins" spellcheck="false" placeholder="手输一句要 Qwen 改什么，例：把「松手啦，疼。」这几个字重画清楚"></textarea>'
     + '<div class="mrow">'
     + '<button class="btn small" onclick="manualRun(\'' + p.no + '\')">✍️ 跑 Qwen</button>'
     + '<select class="mden" title="改字用小强度（只重画那几处）；整格重来用大强度">'
@@ -404,8 +411,30 @@ function manualHtml(p) {
     + '<option value="0.60" selected>标准</option>'
     + '<option value="0.80">重画·强</option>'
     + '</select>'
+    + '<button class="btn small" onclick="peekToggle(\'' + p.no + '\')">'
+    + (open ? '🔽 收起提示词' : '🔍 完整提示词') + '</button>'
     + '<label class="btn small file" title="你在别处跑好的底图，传进来顶替这一格的底图">📎 传底图'
     + '<input type="file" accept="image/*" onchange="uploadScene(\'' + p.no + '\', this)"></label>'
+    + '</div>'
+    + (open ? peekHtml(p) : '')
+    + '</div>';
+}
+
+// 「完整提示词」框：把**原样发给 qwen 的那段文字**摊开给人看并改。
+// 预填的是后端 bubble_prompt() 的输出（一字不差，见 /api/comic/prompt）。
+//
+// ⚠️ 它重跑时源图是这一格的**干净底图**（raw），不是当前成品——预填那段文字
+// 是「请新增一个对话框」，在已经有气泡的成品上再跑一次会叠出第二个气泡。
+// 想累积着改字（源图＝成品）就用上面的手输指令那条路。
+function peekHtml(p) {
+  return '<div class="peek">'
+    + '<div class="ptip">下面这段就是原样发给 Qwen 的文字，可以直接改。'
+    + '「用这段重画」拿这一格的<b>干净底图</b>当源图（不含已画的字），'
+    + '所以不会叠出第二个气泡。</div>'
+    + '<textarea class="mpeek" spellcheck="false" placeholder="点下面的「取回系统拼装」拉取，或自己整段写"></textarea>'
+    + '<div class="mrow">'
+    + '<button class="btn small" onclick="peekReset(\'' + p.no + '\')">↺ 取回系统拼装</button>'
+    + '<button class="btn small" onclick="peekRun(\'' + p.no + '\')">🎬 用这段从底图重画</button>'
     + '</div></div>';
 }
 
@@ -424,6 +453,10 @@ const _manual = {};  // {no: 手输的指令} —— 状态一变这一格就会
                      // 若不另存就会没；跑完一次 Qwen 想接着调必须留住。
 const _method = {};  // {no: '0'|'1'} 这一格的画法（一遍画完 / 分开画）——同上，
                      // 重建后不填回来就会悄悄弹回默认值。
+const _promptText = {};  // {no: 完整提示词框里的文字}（也算用户手改后的版本）——
+                         // 同上，这一格的 DOM 会因图片 rev 变化而重建，不存就会被
+                         // 2 秒一次的状态轮询冲掉。
+const _peekOpen = {};    // {no: true} 这一格的提示词框展开着吗。
 let _zoom = null;    // {no, which} 当前放大的那张图 —— 手动跑 Qwen 是在原文件上
                      // 覆盖，放大层不跟着换的话，人盯着放大图会以为根本没重跑。
 
@@ -461,10 +494,18 @@ async function refresh() {
     node.dataset.no = p.no;
     // 手输的指令存在 _manual 里再填回来：状态一变这一格就整块重建，不填回去
     // 的话跑完一次 Qwen 输入框就空了，没法接着调第二个字。
-    const ta = node.querySelector('textarea');
+    const ta = node.querySelector('.mins');
     if (ta) {
       ta.value = _manual[p.no] || '';
       ta.addEventListener('input', () => { _manual[p.no] = ta.value; });
+    }
+    // 完整提示词框同理。第一次展开（还没有内容）才去后端拉一次系统拼装——
+    // 拉回来立刻存进 _promptText，之后重建就不会再打接口。
+    const pk = node.querySelector('.mpeek');
+    if (pk) {
+      pk.value = _promptText[p.no] || '';
+      pk.addEventListener('input', () => { _promptText[p.no] = pk.value; });
+      if (!_promptText[p.no]) peekFetch(p.no, pk);
     }
     // 画法开关同理要存回来：不存的话跑到第二遍时它已经悄悄弹回「一遍画完」。
     const meth = node.querySelector('.meth');
@@ -533,7 +574,7 @@ function zoomClose() { _zoom = null; document.getElementById('zoom').style.displ
 // 手动跑 Qwen：源图＝这一格当前成品，所以可以一次次往上改。
 async function manualRun(no) {
   const slot = document.querySelector('.slot[data-no="' + no + '"]');
-  const ta = slot && slot.querySelector('textarea');
+  const ta = slot && slot.querySelector('.mins');
   const sel = slot && slot.querySelector('select.mden');
   const prompt = ta ? ta.value.trim() : '';
   if (!prompt) { toast('先写一句要 Qwen 改什么', true); return; }
@@ -543,6 +584,56 @@ async function manualRun(no) {
                                     denoise: sel ? sel.value : ''});
     setBusy(true, 'bubble');
     toast('格 ' + no + ' 手动跑 Qwen 中（源图＝当前成品）');
+  } catch (e) { toast(e.message, true); }
+}
+
+// ── 「完整提示词」框：显示并手改原样发给 qwen 的文字 ──────────────
+// 展开/收起。改 _slots[no].sig 是**故意**的：刷新循环只在签名变了才重建这一格，
+// 而展开与否不在签名里（它在客户端状态里），所以直接把签名打脏逼它重建一次。
+function peekToggle(no) {
+  _peekOpen[no] = !_peekOpen[no];
+  const c = _slots[no];
+  if (c) c.sig = null;
+  refresh();
+}
+
+function _peekSplit(no) {
+  const sed = document.getElementById('meth-' + no);
+  return !!(sed && sed.value === '1');
+}
+
+// 拉取后端拼装好的那段文字。split 跟着界面上的画法下拉走——一格有没有第二句
+// 台词，拼出来的是两套模板，不跟就会「看到的是 A、跑的是 B」。
+async function peekFetch(no, el) {
+  const slot = document.querySelector('.slot[data-no="' + no + '"]');
+  const ta = el || (slot && slot.querySelector('.mpeek'));
+  if (!ta) return;
+  try {
+    const d = await api('/api/comic/prompt?task=' + TASK + '&no=' + no
+                        + '&split=' + (_peekSplit(no) ? 1 : 0));
+    _promptText[no] = d.prompt || '';
+    ta.value = _promptText[no];
+  } catch (e) { toast(e.message, true); }
+}
+
+async function peekReset(no) {
+  _promptText[no] = '';                    // 清掉才好重新拉（peekFetch 会填回去）
+  await peekFetch(no);
+  toast('已取回系统拼装的提示词');
+}
+
+// 用框里的文字重画这一格。源图＝干净底图（raw），所以是「从零加字」。
+async function peekRun(no) {
+  const slot = document.querySelector('.slot[data-no="' + no + '"]');
+  const ta = slot && slot.querySelector('.mpeek');
+  const prompt = ta ? ta.value.trim() : '';
+  if (!prompt) { toast('提示词是空的——先点「取回系统拼装」或自己写一段', true); return; }
+  _promptText[no] = ta.value;
+  try {
+    await api('/api/comic/bubble', {task: TASK, no, prompt,
+                                    split: _peekSplit(no)});
+    setBusy(true, 'bubble');
+    toast('格 ' + no + ' 用你改过的提示词重画中（源图＝干净底图）');
   } catch (e) { toast(e.message, true); }
 }
 
