@@ -12,6 +12,7 @@
   4. 编剧抛异常时状态是 error 而不是永远 running。
 """
 
+import io
 import os
 import shutil
 import sys
@@ -126,6 +127,162 @@ class ComicScriptApiTest(unittest.TestCase):
             out = self._wait(d["job"])
         self.assertEqual(out["state"], "done")
         self.assertIn("search_tags(眼泪)", out["log"])
+
+
+class ComicManualApiTest(unittest.TestCase):
+    """手动修复入口：/manual（手输指令跑 qwen）、/upload（顶替底图）、
+    以及 /bubble 对**已完成**格开放（从底图重画＝改坏后的回退路）。
+
+    2026-10-11 加。用户的原始诉求：「手动输入我的要求，然后手动进行 qwen 的
+    调用来修复问题，不然现在结束了我也无法解决问题；以及手动添加原始的底图」。
+    """
+
+    SCRIPT = ("# 标题：t\n\n## 01\n画面: 1girl, solo\n气泡: 一\n标签1: 甲\n"
+              "\n## 02\n画面: 1girl, solo\n气泡: 二\n标签1: 乙\n")
+    NAME = "C20261011-01"
+
+    def setUp(self):
+        self.c = main.app.test_client()
+        self.tmp = tempfile.mkdtemp(prefix="comic_manual_api_")
+        # _task_dir 是拿 _COMICS_ROOT 拼的，不钉到临时目录就会去动真实 comics/
+        self.patch_root = mock.patch.object(comic_api, "_COMICS_ROOT", self.tmp)
+        self.patch_root.start()
+        with comic_api._JOBS_LOCK:
+            comic_api._JOBS.clear()
+        self.dir = os.path.join(self.tmp, self.NAME)
+        os.makedirs(os.path.join(self.dir, "raw"), exist_ok=True)
+        os.makedirs(os.path.join(self.dir, "final"), exist_ok=True)
+        with open(os.path.join(self.dir, "script.md"), "w", encoding="utf-8") as f:
+            f.write(self.SCRIPT)
+        meta, panels = comic.parse_script(os.path.join(self.dir, "script.md"))
+        task = comic.Task(os.path.join(self.dir, "script.md"), meta, panels)
+        task.panels[0].state = "done"           # 已完成是这次要打通的场景
+        task.save_state()
+
+    def tearDown(self):
+        self.patch_root.stop()
+        with comic_api._JOBS_LOCK:
+            comic_api._JOBS.clear()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _idle(self, timeout=5.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with comic_api._JOBS_LOCK:
+                j = dict(comic_api._JOBS.get(self.dir) or {})
+            if not j.get("phase"):
+                return j
+            time.sleep(0.02)
+        self.fail("后台任务超时未结束")
+
+    def _load(self):
+        return comic_api._load_task(self.dir)
+
+    # ── /manual ────────────────────────────────────────
+
+    def test_manual_rejects_empty_prompt(self):
+        r = self.c.post("/api/comic/manual",
+                        json={"task": self.NAME, "no": "01", "prompt": "   "})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("改什么", r.get_json()["error"])
+
+    def test_manual_unknown_panel_is_404(self):
+        r = self.c.post("/api/comic/manual",
+                        json={"task": self.NAME, "no": "09", "prompt": "改"})
+        self.assertEqual(r.status_code, 404)
+
+    def test_manual_passes_prompt_and_denoise(self):
+        with mock.patch.object(comic, "render_manual") as m:
+            r = self.c.post("/api/comic/manual",
+                            json={"task": self.NAME, "no": "1", "prompt": "把字改清楚",
+                                  "denoise": "0.35"})
+            self.assertTrue(r.get_json()["ok"])
+            self._idle()
+        args = m.call_args.args
+        self.assertEqual(args[1].no, "01")          # no 补零成两位
+        self.assertEqual(args[2], "把字改清楚")
+        self.assertEqual(args[3], "0.35")
+
+    def test_manual_denoise_defaults_to_pipeline_value(self):
+        with mock.patch.object(comic, "render_manual") as m:
+            self.c.post("/api/comic/manual",
+                        json={"task": self.NAME, "no": "01", "prompt": "改"})
+            self._idle()
+        self.assertEqual(m.call_args.args[3], comic.I2I_DENOISE)
+
+    def test_manual_conflicts_with_a_running_job(self):
+        with comic_api._JOBS_LOCK:
+            comic_api._JOBS[self.dir] = {"phase": "bubble", "error": None}
+        r = self.c.post("/api/comic/manual",
+                        json={"task": self.NAME, "no": "01", "prompt": "改"})
+        self.assertEqual(r.status_code, 409)
+
+    def test_manual_error_lands_in_job_status(self):
+        with mock.patch.object(comic, "render_manual",
+                               side_effect=RuntimeError("ComfyUI 没在线")):
+            self.c.post("/api/comic/manual",
+                        json={"task": self.NAME, "no": "01", "prompt": "改"})
+            j = self._idle()
+        self.assertIn("ComfyUI", j.get("error") or "")
+
+    # ── /bubble 对完成格开放 ────────────────────────────
+
+    def test_bubble_accepts_done_panel_with_redo(self):
+        with mock.patch.object(comic, "run") as m:
+            r = self.c.post("/api/comic/bubble",
+                            json={"task": self.NAME, "no": "01"})
+            d = r.get_json()
+            self.assertTrue(d["ok"])
+            self.assertTrue(d["redo"])          # done 的格必须走 redo 才进得了阶段二
+            self._idle()
+        self.assertTrue(m.call_args.kwargs.get("redo"))
+
+    def test_bubble_still_rejects_pending_panel(self):
+        r = self.c.post("/api/comic/bubble",
+                        json={"task": self.NAME, "no": "02"})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("还没有场景图", r.get_json()["error"])
+
+    # ── /upload ────────────────────────────────────────
+
+    def test_upload_replaces_raw_and_drops_stale_final(self):
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGB", (8, 8), (10, 20, 30)).save(buf, "JPEG")   # 故意给 jpg
+        buf.seek(0)
+        task = self._load()
+        with open(task.final_path(task.panels[0]), "wb") as f:
+            f.write(b"OLDFINAL")
+        r = self.c.post("/api/comic/upload",
+                        data={"task": self.NAME, "no": "01",
+                              "file": (buf, "base.jpg")},
+                        content_type="multipart/form-data")
+        self.assertTrue(r.get_json()["ok"], r.get_json())
+        task = self._load()
+        p = task.panels[0]
+        # 统一转成真 PNG：.png 后缀配 jpg 字节会让 img 端点的 content-type 撒谎
+        with open(task.raw_path(p), "rb") as f:
+            self.assertEqual(f.read(8), b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(p.state, "rendered")       # 换底图 → 旧的成品作废
+        self.assertFalse(os.path.isfile(task.final_path(p)))
+
+    def test_upload_rejects_non_image(self):
+        r = self.c.post("/api/comic/upload",
+                        data={"task": self.NAME, "no": "01",
+                              "file": (io.BytesIO(b"not an image"), "x.png")},
+                        content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("读不出来", r.get_json()["error"])
+
+    def test_upload_unknown_panel_is_404(self):
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGB", (4, 4)).save(buf, "PNG")
+        buf.seek(0)
+        r = self.c.post("/api/comic/upload",
+                        data={"task": self.NAME, "no": "09", "file": (buf, "x.png")},
+                        content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 404)
 
 
 if __name__ == "__main__":

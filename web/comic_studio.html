@@ -64,6 +64,17 @@
   .slot .err { color: var(--error); font-size: 11px; padding: 0 10px 8px; word-break: break-all; }
   .slot .lbl { color: var(--text-dim); font-size: 11px; padding: 0 10px 8px; }
   .empty { color: var(--text-mute); font-size: 13px; padding: 24px; text-align: center; }
+  .slot img.zoomable { cursor: zoom-in; }
+  #zoom { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.9);
+    z-index: 30; align-items: center; justify-content: center; cursor: zoom-out; }
+  #zoom img { max-width: 94vw; max-height: 94vh; }
+  .slot .manual { padding: 0 10px 8px; }
+  .slot .manual textarea { min-height: 48px; font-size: 12px; line-height: 1.5;
+    padding: 6px 8px; }
+  .mrow { display: flex; gap: 6px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+  .mrow select { padding: 4px 6px; font-size: 12px; }
+  label.file { position: relative; overflow: hidden; }
+  label.file input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
   #toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
     background: var(--bg-input); border: 1px solid var(--accent); color: var(--text);
     padding: 10px 18px; border-radius: var(--radius-sm); display: none; z-index: 9; max-width: 80%; }
@@ -102,6 +113,11 @@
 
   <div class="card">
     <h2>② 槽位 · 逐格生成与修补</h2>
+    <div style="color:var(--text-dim);font-size:12px;margin-bottom:10px">
+      点图可放大看细节。每格能手输一句「要 Qwen 改什么」——源图是这一格**当前成品**，
+      所以可以一次次往上改（改坏了点「加气泡」从底图重画，底图不动）。
+      「📎 传底图」用来顶替你手跑好的底图。
+    </div>
     <div id="jobbar"></div>
     <div class="row" id="bubbleAllRow" style="display:none;margin-bottom:12px">
       <button class="btn primary" id="btnBubbleAll" onclick="bubbleAll()">🫧 一键加气泡（全部待加格）</button>
@@ -111,6 +127,7 @@
     <div id="grid" class="grid"><div class="empty">还没有任务——先在上面生成剧本</div></div>
   </div>
 </div>
+<div id="zoom" onclick="zoomClose()"><img alt=""></div>
 <div id="toast"></div>
 
 <script>
@@ -144,6 +161,9 @@ function setBusy(b, phase) {
   for (const id of ['btnScript', 'btnSave', 'btnStart', 'btnBubbleAll'])
     document.getElementById(id).disabled = busy;
   document.querySelectorAll('.slot .ops button').forEach(x => x.disabled = busy);
+  // 手动修复栏也要锁：跑一轮 Qwen 时再点一次就是两个后台任务抢同一格。
+  document.querySelectorAll('.slot .mrow button, .slot .mrow select, .slot .mrow input[type=file]').forEach(
+    x => x.disabled = busy);
   const bar = document.getElementById('jobbar');
   if (b) { bar.style.display = 'block'; bar.classList.remove('err');
            bar.textContent = '⏳ 正在' + (phase === 'bubble' ? '加气泡' : '渲染场景图') + '……页面每 2 秒自动刷新'; }
@@ -254,23 +274,42 @@ const STATE_CN = {pending: '排队', rendered: '待加气泡', done: '完成'};
 function renderSlot(p) {
   const badge = p.error ? '<span class="badge b-error">出错</span>'
     : '<span class="badge b-' + p.state + '">' + (STATE_CN[p.state] || p.state) + '</span>';
-  const sceneImg = p.scene_url
-    ? '<img loading="lazy" src="' + p.scene_url + '&t=' + Date.now() + '">'
-    : '场景图未生成';
-  const finalImg = p.final_url
-    ? '<img loading="lazy" src="' + p.final_url + '&t=' + Date.now() + '">'
-    : '气泡未加';
+  const img = (url, alt) => url
+    ? '<img class="zoomable" loading="lazy" src="' + url + '&t=' + Date.now()
+      + '" onclick="zoomOpen(this.src)">'
+    : alt;
   const ops = [];
   if (p.state !== 'pending')
     ops.push('<button class="btn small" onclick="rerender(\'' + p.no + '\')">🔁 换种子重跑</button>');
   if (p.state === 'rendered')
     ops.push('<button class="btn small" onclick="bubble(\'' + p.no + '\')">🫧 加气泡</button>');
+  if (p.state === 'done')
+    ops.push('<button class="btn small" onclick="bubble(\'' + p.no + '\')">↩️ 从底图重画</button>');
   return '<div class="slot"><div class="head"><span class="no">格 ' + p.no + '</span>'
     + badge + '<span class="seed">' + (p.seed != null ? 'seed ' + p.seed : '') + '</span></div>'
-    + '<div class="imgs"><div>' + sceneImg + '</div><div>' + finalImg + '</div></div>'
+    + '<div class="imgs"><div>' + img(p.scene_url, '场景图未生成') + '</div>'
+    + '<div>' + img(p.final_url, '气泡未加') + '</div></div>'
     + labelHtml(p)
     + (p.error ? '<div class="err">' + esc(p.error) + '</div>' : '')
-    + '<div class="ops">' + (ops.join('') || '<span style="color:var(--text-mute);font-size:11px">排队中…</span>') + '</div></div>';
+    + '<div class="ops">' + (ops.join('') || '<span style="color:var(--text-mute);font-size:11px">排队中…</span>') + '</div>'
+    + manualHtml(p) + '</div>';
+}
+
+// 手动修复栏：手输指令 → 跑一遍 Qwen（源图＝这一格**当前成品**，可累积着改）
+// ＋ 传底图顶替这一格的 raw。一格一个铺在卡片里（用户拍板要内联，不要弹面板）。
+function manualHtml(p) {
+  return '<div class="manual">'
+    + '<textarea spellcheck="false" placeholder="手输一句要 Qwen 改什么，例：把「松手啦，疼。」这几个字重画清楚"></textarea>'
+    + '<div class="mrow">'
+    + '<button class="btn small" onclick="manualRun(\'' + p.no + '\')">✍️ 跑 Qwen</button>'
+    + '<select class="mden" title="改字用小强度（只重画那几处）；整格重来用大强度">'
+    + '<option value="0.35">改字·轻</option>'
+    + '<option value="0.60" selected>标准</option>'
+    + '<option value="0.80">重画·强</option>'
+    + '</select>'
+    + '<label class="btn small file" title="你在别处跑好的底图，传进来顶替这一格的底图">📎 传底图'
+    + '<input type="file" accept="image/*" onchange="uploadScene(\'' + p.no + '\', this)"></label>'
+    + '</div></div>';
 }
 
 // 旁白：一格可以有多条（剧本里 `标签1:` `标签2:`…，后端用 \n 拼在一行里）。
@@ -284,6 +323,8 @@ function labelHtml(p) {
 }
 
 const _slots = {};   // {no: {sig, el}} —— 逐格 diff，状态没变就不碰 DOM（不闪图）
+const _manual = {};  // {no: 手输的指令} —— 状态一变这一格就会重建，输入框内容
+                     // 若不另存就会没；跑完一次 Qwen 想接着调必须留住。
 
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
 
@@ -313,6 +354,13 @@ async function refresh() {
     el.innerHTML = renderSlot(p);
     const node = el.firstElementChild;
     node.dataset.no = p.no;
+    // 手输的指令存在 _manual 里再填回来：状态一变这一格就整块重建，不填回去
+    // 的话跑完一次 Qwen 输入框就空了，没法接着调第二个字。
+    const ta = node.querySelector('textarea');
+    if (ta) {
+      ta.value = _manual[p.no] || '';
+      ta.addEventListener('input', () => { _manual[p.no] = ta.value; });
+    }
     if (cached && cached.el.parentNode) cached.el.replaceWith(node);
     else grid.appendChild(node);
     _slots[p.no] = {sig, el: node};
@@ -348,6 +396,45 @@ async function bubble(no) {
 async function bubbleAll() {
   try { await api('/api/comic/bubble', {task: TASK, no: 'all'}); setBusy(true, 'bubble'); toast('批量加气泡中'); }
   catch (e) { toast(e.message, true); }
+}
+
+// 点图放大看细节——「哪几个字糊了」得先看清才写得出指令。
+function zoomOpen(src) {
+  const d = document.getElementById('zoom');
+  d.querySelector('img').src = src;
+  d.style.display = 'flex';
+}
+function zoomClose() { document.getElementById('zoom').style.display = 'none'; }
+
+// 手动跑 Qwen：源图＝这一格当前成品，所以可以一次次往上改。
+async function manualRun(no) {
+  const slot = document.querySelector('.slot[data-no="' + no + '"]');
+  const ta = slot && slot.querySelector('textarea');
+  const sel = slot && slot.querySelector('select.mden');
+  const prompt = ta ? ta.value.trim() : '';
+  if (!prompt) { toast('先写一句要 Qwen 改什么', true); return; }
+  _manual[no] = ta.value;
+  try {
+    await api('/api/comic/manual', {task: TASK, no, prompt,
+                                    denoise: sel ? sel.value : ''});
+    setBusy(true, 'bubble');
+    toast('格 ' + no + ' 手动跑 Qwen 中（源图＝当前成品）');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function uploadScene(no, input) {
+  const f = input.files && input.files[0];
+  input.value = '';                      // 清掉才能连传同一个文件两次
+  if (!f) return;
+  const fd = new FormData();
+  fd.append('task', TASK); fd.append('no', no); fd.append('file', f);
+  try {
+    const r = await fetch('/api/comic/upload', {method: 'POST', body: fd});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
+    toast('格 ' + no + ' 底图已替换，接着点「加气泡」');
+  } catch (e) { toast(e.message, true); }
+  await refresh();
 }
 
 poll();

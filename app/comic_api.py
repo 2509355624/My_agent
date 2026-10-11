@@ -8,7 +8,9 @@
   POST /api/comic/start     确认开跑：后台线程跑阶段一（场景图，不碰气泡）
   GET  /api/comic/status    槽位轮询：剧本 + state.json → 每格状态与图 URL
   POST /api/comic/rerender  换种子重跑某格（重置该格 → 后台只跑阶段一）
-  POST /api/comic/bubble    加气泡：单格，或全部「待加气泡」的格（阶段二）
+  POST /api/comic/bubble    加气泡：单格（含已完成的格＝从底图重画），或全部
+  POST /api/comic/manual    手动修复：拿当前成品当源图，按手输的指令跑一遍 qwen
+  POST /api/comic/upload    手动放底图：外部跑好的底图顶替这一格的 raw
   GET  /api/comic/img       服务 raw/ final/ 下的图片文件
   GET  /api/comic/download  成品 final/ 打包 zip
 
@@ -71,6 +73,27 @@ def _load_task(path):
     task = comic.Task(script, meta, panels)
     task.load_state()
     return task
+
+
+def _save_upload(fs, dst):
+    """上传的图统一转成 PNG 再落盘。
+
+    不按原后缀直接存：存成 `.png` 却塞 JPEG 字节，会让 /api/comic/img 的
+    content-type 撒谎（它按扩展名给 image/png），浏览器有时就不认了。顺便这
+    一步也是「上传的到底是不是图」的校验。EXIF 方向要摆正——手机/截图工具出的
+    jpg 常带 Orientation，不正过来会躺倒。
+    """
+    from PIL import Image, ImageOps
+    im = Image.open(io.BytesIO(fs.read()))
+    try:
+        im.load()
+        im = ImageOps.exif_transpose(im) or im
+        if im.mode not in ("RGB", "RGBA"):
+            im = im.convert("RGBA" if "A" in im.getbands() else "RGB")
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        im.save(dst, "PNG")
+    finally:
+        im.close()
 
 
 def _spawn(path, phase, fn):
@@ -276,8 +299,12 @@ def api_comic_rerender():
 @bp.route("/api/comic/bubble", methods=["POST"])
 def api_comic_bubble():
     """加气泡（阶段二，qwen 图生图）。no=单格；no=all → 全部「待加气泡」
-    （rendered）的格。只挑 rendered：pending 的格场景都没有，气泡无从加起；
-    done 的格不动（重做某格先 rerender 或改台词让它自动退回 rendered）。"""
+    （rendered）的格。
+
+    单格允许 done：那等于「用剧本里的提示词，从**底图**重画这一格的气泡」——
+    底图保留，所以它是手动改坏之后的**回退路**（用户 2026-10-11 拍板接出来）。
+    不接出来的话「完成」就是死路：只剩「换种子重跑」，而那个会把底图一起丢掉。
+    pending 的格仍然拒绝——场景都没有，气泡无从加起。"""
     data = request.get_json(silent=True) or {}
     try:
         path = _task_dir(data.get("task"))
@@ -285,29 +312,92 @@ def api_comic_bubble():
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
     no = str(data.get("no") or "").strip()
+    redo = False
     if no == "all":
         targets = [p.no for p in task.panels if p.state == "rendered"]
         if not targets:
             return jsonify({"ok": False,
                             "error": "没有待加气泡的格（都还没出场景图？）"}), 400
         only = set(targets)
-        phase = "bubble"
     else:
         no = no.zfill(2)
         panel = next((p for p in task.panels if p.no == no), None)
         if panel is None:
             return jsonify({"ok": False, "error": "没有 %s 这格" % no}), 404
-        if panel.state != "rendered":
+        if panel.state not in ("rendered", "done"):
             return jsonify({"ok": False,
                             "error": "格 %s 还没有场景图（%s）" % (
                                 no, panel.state)}), 400
         only = {no}
-        phase = "bubble"
-    started = _spawn(path, phase, lambda: comic.run(
-        os.path.join(path, "script.md"), only=only))
+        redo = panel.state == "done"      # done 的格要靠 redo 才进得了阶段二
+    started = _spawn(path, "bubble", lambda: comic.run(
+        os.path.join(path, "script.md"), only=only, redo=redo))
     if not started:
         return jsonify({"ok": False, "error": "这个任务已经在跑了"}), 409
-    return jsonify({"ok": True, "panels": sorted(only)})
+    return jsonify({"ok": True, "panels": sorted(only), "redo": redo})
+
+
+@bp.route("/api/comic/manual", methods=["POST"])
+def api_comic_manual():
+    """手动修复：拿这一格的**当前成品**当源图，按用户手输的指令跑一遍 qwen。
+
+    用户的实际用法（2026-10-11）：点开大图看到某几个字糊了 → 写「把『松手啦』
+    重画成『放开了』」→ qwen 在图生图上就地改。所以源图是 final 不是 raw，
+    这一遍是**累积**的；想退回干净底图就用 /api/comic/bubble。
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        path = _task_dir(data.get("task"))
+        task = _load_task(path)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    no = str(data.get("no") or "").strip().zfill(2)
+    panel = next((p for p in task.panels if p.no == no), None)
+    if panel is None:
+        return jsonify({"ok": False, "error": "没有 %s 这格" % no}), 404
+    instruction = str(data.get("prompt") or "").strip()
+    if not instruction:
+        return jsonify({"ok": False, "error": "先写一句要 qwen 改什么"}), 400
+    # 强度：不传就用管线默认（0.60）。改字调低、整格重来调高，由前端下拉给。
+    denoise = str(data.get("denoise") or "").strip() or comic.I2I_DENOISE
+    started = _spawn(path, "bubble", lambda: comic.render_manual(
+        task, panel, instruction, denoise))
+    if not started:
+        return jsonify({"ok": False, "error": "这个任务已经在跑了"}), 409
+    return jsonify({"ok": True, "no": no})
+
+
+@bp.route("/api/comic/upload", methods=["POST"])
+def api_comic_upload():
+    """手动放底图：用户在别处跑好的底图，传进来顶替这一格的 raw。
+
+    换了底图，原来那张成品就作废（它是拿旧底图加的）→ 删掉并退回「待加气泡」，
+    接着点「加气泡」或直接手输指令跑 qwen。
+    """
+    try:
+        path = _task_dir(request.form.get("task"))
+        task = _load_task(path)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    no = str(request.form.get("no") or "").strip().zfill(2)
+    panel = next((p for p in task.panels if p.no == no), None)
+    if panel is None:
+        return jsonify({"ok": False, "error": "没有 %s 这格" % no}), 404
+    fs = request.files.get("file")
+    if fs is None or not fs.filename:
+        return jsonify({"ok": False, "error": "没收到图片"}), 400
+    try:
+        _save_upload(fs, task.raw_path(panel))
+    except Exception as exc:                    # 不是图 / 坏了 / 写不进去
+        return jsonify({"ok": False,
+                        "error": "这张图读不出来（%s）" % exc}), 400
+    final = task.final_path(panel)
+    if os.path.isfile(final):
+        os.remove(final)
+    panel.state, panel.seed, panel.error = "rendered", None, None
+    task.save_state()
+    comic.log.info("格 %s 底图已手动替换 → %s", no, task._rel(task.raw_path(panel)))
+    return jsonify({"ok": True, "no": no})
 
 
 @bp.route("/api/comic/img", methods=["GET"])

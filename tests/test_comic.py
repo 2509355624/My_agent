@@ -160,6 +160,115 @@ class TwoPassBubbleTest(unittest.TestCase):
         self.assertIn("右上角", self.submits[1])
 
 
+class ManualRenderTest(unittest.TestCase):
+    """render_manual：手动改字。
+
+    源图必须是**当前成品**（final）——用户的实际用法是「在最后那张加了字幕的
+    图上，告诉 qwen 某个字糊了、把它重画成 XX」，所以这一遍要能累积着改。
+    只有在还没有成品（只有底图）时才退到底图，这样手动入口对「待加气泡」的格
+    也能用。改坏了有回退路：拿剧本提示词从底图重画（/api/comic/bubble）。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = self.tmp.name
+        self.seen = {}
+
+        def _upload(path):
+            self.seen["src"] = path
+            return "uploaded.png"
+
+        def _build(skill, prompt, seed, uploaded, denoise=comic.I2I_DENOISE):
+            self.seen["prompt"] = prompt
+            self.seen["denoise"] = denoise
+            return {"prompt": prompt}
+
+        def _submit(wf, skill, prompt, seed):
+            return "out.png"
+
+        def _download(name, dst):
+            with open(dst, "wb") as f:
+                f.write(b"NEW")
+
+        for target, repl in (("_require_comfy", lambda: None),
+                             ("_upload_source", _upload),
+                             ("_build_i2i", _build),
+                             ("_submit", _submit),
+                             ("_download", _download)):
+            p = mock.patch.object(comic, target, repl)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _task(self):
+        text = "## 01\n画面: 1girl, solo, test\n气泡: 第一句\n标签1: 甲\n"
+        path = os.path.join(self.dir, "script.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        meta, panels = comic.parse_script(path)
+        task = comic.Task(path, meta, panels)
+        os.makedirs(task.raw_dir, exist_ok=True)
+        os.makedirs(task.final_dir, exist_ok=True)
+        p = task.panels[0]
+        with open(task.raw_path(p), "wb") as f:
+            f.write(b"RAW")
+        return task, p
+
+    def test_source_is_the_current_final(self):
+        task, p = self._task()
+        with open(task.final_path(p), "wb") as f:
+            f.write(b"OLDFINAL")
+        comic.render_manual(task, p, "把「松手啦」重画清楚")
+        self.assertEqual(self.seen["src"], task.final_path(p))
+        with open(task.final_path(p), "rb") as f:
+            self.assertEqual(f.read(), b"NEW")
+        self.assertEqual(p.state, "done")
+
+    def test_falls_back_to_raw_when_no_final_yet(self):
+        task, p = self._task()
+        comic.render_manual(task, p, "加个气泡")
+        self.assertEqual(self.seen["src"], task.raw_path(p))
+
+    def test_raises_when_there_is_no_image_at_all(self):
+        task, p = self._task()
+        os.remove(task.raw_path(p))
+        with self.assertRaises(RuntimeError) as cm:
+            comic.render_manual(task, p, "改")
+        self.assertIn("还没有任何图", str(cm.exception))
+
+    def test_no_tmp_file_left_behind(self):
+        """先落 .tmp 再原子替换——半张图写坏就等于把上一版好成品丢了。"""
+        task, p = self._task()
+        with open(task.final_path(p), "wb") as f:
+            f.write(b"OLD")
+        comic.render_manual(task, p, "改")
+        self.assertEqual(os.listdir(task.final_dir), ["01_final.png"])
+
+    def test_instruction_comes_first_then_the_keep_note(self):
+        task, p = self._task()
+        comic.render_manual(task, p, "  把「疼」改成「痛」  ")
+        prompt = self.seen["prompt"]
+        self.assertTrue(prompt.startswith("把「疼」改成「痛」"))
+        self.assertIn(comic.MANUAL_KEEP_NOTE, prompt)
+
+    def test_denoise_override_reaches_the_workflow(self):
+        task, p = self._task()
+        comic.render_manual(task, p, "改", denoise="0.35")
+        self.assertEqual(self.seen["denoise"], "0.35")
+
+    def test_denoise_defaults_to_pipeline_value(self):
+        task, p = self._task()
+        comic.render_manual(task, p, "改")
+        self.assertEqual(self.seen["denoise"], comic.I2I_DENOISE)
+
+    def test_state_is_persisted_so_the_panel_shows_done(self):
+        task, p = self._task()
+        comic.render_manual(task, p, "改")
+        again = comic.Task(task.script_path, *comic.parse_script(task.script_path))
+        again.load_state()
+        self.assertEqual(again.panels[0].state, "done")
+
+
 class StateRoundtripTest(unittest.TestCase):
     """bubble2 进出 state.json；改 bubble2 让 done 格退回重加气泡。"""
 

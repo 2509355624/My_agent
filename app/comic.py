@@ -621,11 +621,14 @@ def _upload_source(path):
     return comfy_src.upload(fitted)
 
 
-def _build_i2i(skill, prompt, seed, uploaded):
+def _build_i2i(skill, prompt, seed, uploaded, denoise=I2I_DENOISE):
     """构建图生图工作流。
 
     占位符替换**复用 generate_image 里那两个函数**，不另写一份——转义规则
     只该有一处（apply_prompt_placeholders 的注释专门交代过别让它分叉）。
+
+    denoise 可覆盖：管线自己的两遍 i2i 都用 I2I_DENOISE(0.60)，而**手动改字**
+    要的是「只重画那几个字、别动人物和已有气泡」，强度得能调低（见 render_manual）。
     """
     sd = load_skill(skill)
     if not sd:
@@ -634,7 +637,7 @@ def _build_i2i(skill, prompt, seed, uploaded):
     if not wf:
         raise RuntimeError("skill %s 没有图生图工作流" % skill)
     wf = generate_image.apply_prompt_placeholders(json.dumps(wf), prompt, seed)
-    return generate_image._apply_i2i_placeholders(wf, uploaded, I2I_DENOISE)
+    return generate_image._apply_i2i_placeholders(wf, uploaded, denoise)
 
 
 def render_bubble(task, p):
@@ -671,6 +674,56 @@ def render_bubble(task, p):
     p.state = "done"
     p.error = None
     log.info("[格 %s] 成品已落盘：%s", p.no, task._rel(task.final_path(p)))
+
+
+# 手动修复时自动追加的约束（用户 2026-10-11 拍板：指令原样在前、约束自动在后）。
+# qwen 图生图不写这句，常会顺手把整张画重画——只想改一个字却把人物也改了，
+# 比不改还糟。
+MANUAL_KEEP_NOTE = "保持人物、服装、姿势、背景和画风完全不变，只改我说的这部分。"
+
+
+def _manual_prompt(instruction):
+    """手输指令 → 喂给 qwen 的最终提示词。"""
+    return "%s %s" % ((instruction or "").strip(), MANUAL_KEEP_NOTE)
+
+
+def render_manual(task, p, instruction, denoise=I2I_DENOISE):
+    """手动修复：拿这一格的**当前成品**当源图，按用户手输的指令再跑一遍 qwen。
+
+    和 render_bubble 的关键差别只有一条：源图是 `final/`（已经画上字的成图），
+    不是 `raw/` 底图。所以这一遍是**累积**的——用户看到哪几个字糊了就说
+    「把 X 改成 Y」，qwen 在图生图上就地重画那几处。
+
+    按累积来设计是照用户的实际用法：2026-10-11 原话「就会基于最后的加了字幕的
+    完整底图，我会告诉 qwen 某某字很模糊，把这个字重新变成 XX 字」。改坏了有
+    回退路——`/api/comic/bubble` 拿剧本提示词从**底图**重画，底图全程不动。
+
+    还没有成品（只有底图）时自动退到底图当源图，这样手动入口对「待加气泡」的
+    格也能用。
+    """
+    _require_comfy()
+    src = task.final_path(p)
+    if not os.path.exists(src):
+        src = task.raw_path(p)
+    if not os.path.exists(src):
+        raise RuntimeError("这一格还没有任何图（底图都没出），先跑阶段一")
+    prompt = _manual_prompt(instruction)
+    seed = _new_seed()
+    uploaded = _upload_source(src)
+    wf = _build_i2i(BUBBLE_SKILL, prompt, seed, uploaded, denoise)
+    log.info("[格 %s] 手动修复（%s，seed %s，强度 %s）",
+             p.no, BUBBLE_SKILL, seed, denoise)
+    name = _submit_retry(lambda: _submit(wf, BUBBLE_SKILL, prompt, seed),
+                         "[格 %s] 手动修复" % p.no)
+    # 先落临时名再原子替换：这一遍是「在成品上改」，写到一半坏掉等于把上一版
+    # 好成品丢了，用户没得退。
+    tmp = task.final_path(p) + ".tmp"
+    _download(name, tmp)
+    os.replace(tmp, task.final_path(p))
+    p.state = "done"
+    p.error = None
+    task.save_state()
+    log.info("[格 %s] 手动修复已落盘：%s", p.no, task._rel(task.final_path(p)))
 
 
 # ─── 跑批 ─────────────────────────────────────────────
