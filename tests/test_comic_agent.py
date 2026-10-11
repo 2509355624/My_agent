@@ -154,7 +154,8 @@ class CheckTest(unittest.TestCase):
 
     def test_accepts_good_script(self):
         ok, why = comic_agent.check(
-            "## 01\n画面: 1girl, solo, hand grab\n气泡: 一\n", 1)
+            "## 01\n画面: 1girl, solo, hand grab\n气泡: 一\n"
+            "标签: 我攥住了她的书包带\n", 1)
         self.assertTrue(ok, why)
 
     def test_rejects_cjk_in_scene(self):
@@ -164,7 +165,8 @@ class CheckTest(unittest.TestCase):
 
     def test_rejects_missing_tag_with_name(self):
         ok, why = comic_agent.check(
-            "## 01\n画面: 1girl, solo, fake tag\n气泡: 一\n", 1)
+            "## 01\n画面: 1girl, solo, fake tag\n气泡: 一\n"
+            "标签: 她回过头\n", 1)
         self.assertFalse(ok)
         self.assertIn("fake_tag", why)
 
@@ -172,6 +174,18 @@ class CheckTest(unittest.TestCase):
         ok, why = comic_agent.check(
             "## 01\n画面: 1girl, solo\n气泡: 一\n", 2)
         self.assertFalse(ok)
+
+    def test_rejects_missing_label(self):
+        """`标签:` 从「可选」改成「每格必写」——用户报「剧情几乎没有」的修复。
+
+        旧契约把它定义成可选的旁白条，模型就整行删掉，一话下来几乎没有剧情
+        （只有气泡台词，没有旁白推进）。这条只能由代码兜：模型对「可选」的理解
+        就是「能不写就不写」。
+        """
+        ok, why = comic_agent.check(
+            "## 01\n画面: 1girl, solo, hand grab\n气泡: 一\n", 1)
+        self.assertFalse(ok)
+        self.assertIn("标签", why)
 
 
 class SoloConflictTest(unittest.TestCase):
@@ -185,7 +199,7 @@ class SoloConflictTest(unittest.TestCase):
 
     @staticmethod
     def _script(scene, no="01"):
-        return "## %s\n画面: %s\n气泡: 一\n" % (no, scene)
+        return "## %s\n画面: %s\n气泡: 一\n标签: 我攥住了她的手腕\n" % (no, scene)
 
     def test_solo_plus_anothers_wrist(self):
         got = comic_agent.solo_conflicts(
@@ -226,6 +240,40 @@ class SoloConflictTest(unittest.TestCase):
             self._script("safe, 1girl, solo, holding another's wrist"), 1)
         self.assertFalse(ok)
         self.assertIn("solo focus", why)
+
+
+class BannedTagTest(unittest.TestCase):
+    """「库里存在、语义却是错的」标签必须由代码专门拦。
+
+    2026-10-11 用户实测：提示词里已明令把 `hand around wrist` 换成
+    `holding another's wrist`，模型照样写它（库里另有 holding own wrist，
+    正好对上它的语义），三张图 + 一稿剧本连续踩。存在性校验（missing_tags）
+    对这类标签完全无效——只能专门盯。
+    """
+
+    def test_flags_hand_around_wrist(self):
+        got = comic_agent.banned_tags(
+            "## 01\n画面: safe, 1girl, solo, hand around wrist\n气泡: 一\n")
+        self.assertEqual([("01", "hand_around_wrist")], got)
+
+    def test_flags_underscore_form(self):
+        """模型有时直接写下划线形态，两种都要认。"""
+        got = comic_agent.banned_tags(
+            "## 01\n画面: safe, 1girl, solo, hand_around_wrist\n气泡: 一\n")
+        self.assertEqual([("01", "hand_around_wrist")], got)
+
+    def test_correct_form_passes(self):
+        got = comic_agent.banned_tags(
+            "## 01\n画面: safe, 1girl, solo focus, 1other, "
+            "holding another's wrist\n气泡: 一\n")
+        self.assertEqual([], got)
+
+    def test_check_points_at_the_replacement(self):
+        ok, why = comic_agent.check(
+            "## 01\n画面: safe, 1girl, solo, hand around wrist\n气泡: 一\n"
+            "标签: 我抓住了她\n", 1)
+        self.assertFalse(ok)
+        self.assertIn("holding another's wrist", why)
 
 
 class RunRoundsTest(unittest.TestCase):
@@ -562,6 +610,37 @@ class PromptTest(unittest.TestCase):
         """
         p = comic_agent._system_prompt(3)
         self.assertIn("在本库里**都不存在**", p)
+
+    def test_teaches_label_as_first_person_narration(self):
+        """`标签:` 从「可选的状态读数」改成「每格必写的剧情旁白」。
+
+        2026-10-11 用户报「剧情几乎没有」。旧定义是「只用于交代时间/前提跳转」，
+        模型就只写「傍晚 · 末班车到站」这类读数，或者干脆整行删掉；一话下来
+        除了台词没有任何叙事推进。
+        """
+        p = comic_agent._system_prompt(3)
+        self.assertIn("每一格都必须写", p)
+        self.assertIn("第一人称", p)
+        self.assertIn("不要写成时间地点", p)
+
+    def test_teaches_panel_progression(self):
+        """每格必须有新信息，不许两格只是换表情演同一个动作。
+
+        用户实测稿：02/03 都是「攥着手腕」，只是一个 surprised、一个 angry，
+        信息增量接近零——观众看到的是同一格。
+        """
+        p = comic_agent._system_prompt(3)
+        self.assertIn("每格必须带来新信息", p)
+        self.assertIn("交稿前自己回看一遍", p)
+
+    def test_hand_is_not_required_every_panel(self):
+        """视角方的手按剧情需要入画，不是每格都必须出现。
+
+        用户 2026-10-11 原话：「并不是每个图片都要出现我们的手」。硬塞手部
+        标签会把那一格推进「solo 配一只手」的矛盾里（见规则 6）。
+        """
+        p = comic_agent._system_prompt(3)
+        self.assertIn("不要每格都加一只手", p)
 
 
 if __name__ == "__main__":

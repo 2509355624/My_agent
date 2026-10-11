@@ -94,8 +94,10 @@ class TwoPassBubbleTest(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
-    def _task(self, bubble2=""):
+    def _task(self, bubble2="", label=""):
         text = "## 01\n画面: 1girl, solo, test\n气泡: 第一句\n"
+        if label:
+            text += "标签: %s\n" % label
         if bubble2:
             text += "气泡2: %s\n" % bubble2
         path = os.path.join(self.dir, "script.md")
@@ -130,6 +132,32 @@ class TwoPassBubbleTest(unittest.TestCase):
         # 第二遍模板必须按「图里已有第一个气泡」写约束
         self.assertIn("已经有一个对话框", self.submits[1])
         self.assertEqual(p.state, "done")
+
+    def test_bubble2_moves_to_bottom_right_with_narration(self):
+        """旁白条占着右上角，第二个气泡必须让位到右下角。
+
+        2026-10-11：`标签:` 改成每格必写的剧情旁白后，它和第二个气泡的默认
+        位置都是右上角——照原样会把两个文字元素挤在同一个角落。
+        """
+        task = self._task(bubble2="第二句", label="我攥住了她的手腕")
+        p = task.panels[0]
+        os.makedirs(task.raw_dir)
+        with open(task.raw_path(p), "wb") as f:
+            f.write(b"raw")
+        comic.render_bubble(task, p)
+        self.assertEqual(len(self.submits), 2)
+        self.assertIn("我攥住了她的手腕", self.submits[0])   # 第一遍画了旁白
+        self.assertIn("右下角", self.submits[1])
+        self.assertNotIn("右上角", self.submits[1])
+
+    def test_bubble2_stays_top_right_without_narration(self):
+        task = self._task(bubble2="第二句")
+        p = task.panels[0]
+        os.makedirs(task.raw_dir)
+        with open(task.raw_path(p), "wb") as f:
+            f.write(b"raw")
+        comic.render_bubble(task, p)
+        self.assertIn("右上角", self.submits[1])
 
 
 class StateRoundtripTest(unittest.TestCase):
@@ -185,18 +213,30 @@ class WriterSpecTest(unittest.TestCase):
         self.assertIn("气泡2", why)
 
     def test_validate_accepts_bubble2(self):
-        text = "## 01\n画面: 1girl, solo, test\n气泡: 一\n气泡2: 二\n"
+        text = ("## 01\n画面: 1girl, solo, test\n气泡: 一\n气泡2: 二\n"
+                "标签: 我没敢松手\n")
         ok, why = comic_writer._validate(text, 1)
         self.assertTrue(ok, why)
 
     def test_write_script_passes_spec_via_llm_messages(self):
-        good = "# 标题：测试\n\n## 01\n画面: 1girl, solo, test\n气泡: 一\n"
+        good = ("# 标题：测试\n\n## 01\n画面: 1girl, solo, test\n气泡: 一\n"
+                "标签: 她拆开了盒子\n")
         with mock.patch.object(comic_writer.llm, "call_llm",
                                return_value=good) as m_llm:
             comic_writer.write_script("妹妹收到礼物", panels=1)
         system = m_llm.call_args.args[0][0]["content"]
         self.assertIn("连续剧情提示词生成规范", system)
         self.assertIn("======== 规范全文开始 ========", system)
+
+    def test_label_template_does_not_say_small_font(self):
+        """「小字」对 qwen 就是个字号指令——原文写了它，就真画成很小的字。
+
+        2026-10-11 用户反馈「作为标签的字体有点小」：模板原话是「添加一行**小**
+        字」。字号必须显式写清楚，不能留这种会被当指令执行的形容词。
+        """
+        tpl = comic.BUBBLE_TEMPLATE_LABEL
+        self.assertNotIn("小字", tpl)
+        self.assertIn("字号清晰可读", tpl)
 
 
 if __name__ == "__main__":
