@@ -208,11 +208,17 @@ class ReceiptNoteTest(_SubmitHarness):
         （`krea2米山舞` 而不是 `krea2`），否则「通用 krea2 已下架」这件事
         在测试里看不出来。
 
+        2026-10-11：加两条 anima 的 LoRA 堆叠版 `anima柔和` / `anima写实`。
+        ⚠️ 钉的是**点名词**而不是渠道 id（`anima-soft` / `anima-real`）——
+        回执是给**用户**看「下次怎么点名」的，他打的是「anima柔和」。
+        两条并进「渠道：」那一行尾，**没加逻辑行**（下面那条行数锁不动）。
+
         `image_gen_v1_hires` / `nai_wide` 没有短名、点名不到，故意不列。
         """
         text = self._note(None)
         for name in ("silver", "anima", "qwen", "nai", "jank", "sd",
                      "nffa", "miao", "cunny", "silver-hd",
+                     "anima柔和", "anima写实",
                      "krea2米山舞", "krea2日系", "krea2亚洲真人",
                      "krea2动漫真人", "krea2真人cos"):
             self.assertIn(name, text, name)

@@ -424,9 +424,13 @@ _RECEIPT_CHANNEL = "当前渠道：%s"
 # `_I2I_SKILLS` + `skill=qwen-hd` + `source_image=1` 路由）。两件事不相关，分开两行。
 # ⚠️ 这两行的真身（线上回执）在 `agents/qq/settings.json` 的 `receipt_note`，那份覆盖
 #    优先——改了这里还要同步改 settings.json，否则线上一个字不变。
+# 2026-10-11 加两条 anima 的 LoRA 堆叠版：`anima柔和` / `anima写实`（用户拍板
+# 「追加到渠道那行尾」）。⚠️ 它们跟 `anima（三档）` **不是一族**（6 条 LoRA +
+# silvermoonmix turbo 二段 / 2456×3686），所以按点名词单列，别并进 `anima` 那一项。
 _RECEIPT_NOTE_DEFAULT = (
     "想换渠道就发「渠道名 + 你的需求」（例：jank 银发初音未来）。\n"
-    "渠道：silver（默认）/ anima（三档）/ qwen / nai / jank / sd / nffa / miao / cunny\n"
+    "渠道：silver（默认）/ anima（三档）/ qwen / nai / jank / sd / nffa / miao / cunny"
+    " / anima柔和 / anima写实\n"
     "krea2 系（10 条，按风格拆）：krea2米山舞 / krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油 / krea2写实 / krea2通用\n"
     "要角色设定表（7 分区 character design sheet）：发「qwen 角色设定表 + 描述」（qwen 自己的角色表工作流，2304×1536 / 16 步）\n"
     "要修图（去糊/去噪/修清楚）：引用那张图 + 发「qwen修复」（qwen 的修复工作流，1536 面积档 / 16 步）\n"
