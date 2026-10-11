@@ -148,12 +148,12 @@ class TwoPassBubbleTest(unittest.TestCase):
         p = comic.Panel("01", "1girl, solo", "走吧", "车门合上了",
                         "回家再说", speaker="女", speaker2="我")
         prompt = p.bubble_prompt()
-        self.assertIn("【气泡1】", prompt)
-        self.assertIn("【气泡2】", prompt)
         self.assertIn('"走吧"', prompt)
         self.assertIn('"回家再说"', prompt)
-        self.assertIn("指向画面中的女生", prompt)       # 气泡1 的尾巴
-        self.assertIn("向下指向画面下缘", prompt)        # 气泡2 的尾巴（镜头外的「我」）
+        self.assertIn("左上方的对话框", prompt)
+        self.assertIn("右下角的对话框", prompt)          # 旁白占了右上角，它让位
+        self.assertIn("尾巴指向画面中的女生", prompt)     # 气泡1 的尾巴
+        self.assertIn("尾巴向下指向画面下缘", prompt)      # 气泡2 的尾巴（镜头外的「我」）
         self.assertIn("车门合上了", prompt)             # 旁白也在这一遍里
 
     def test_merged_prompt_count_is_not_contradictory(self):
@@ -168,8 +168,9 @@ class TwoPassBubbleTest(unittest.TestCase):
                         "回家再说", speaker="女", speaker2="我")
         prompt = p.bubble_prompt()
         self.assertNotIn("左上角一个气泡", prompt)
-        self.assertIn("左上角的气泡1", prompt)
-        self.assertIn("右下角的气泡2", prompt)           # 旁白占了右上角，它让位
+        self.assertIn("左上方的那个气泡", prompt)
+        self.assertIn("右下角的那个气泡", prompt)         # 旁白占了右上角，它让位
+        self.assertIn("画面里的文字一共这三处", prompt)
 
     def test_split_flag_keeps_the_old_two_passes(self):
         """split=True 是退路：某一格一遍画崩了，单独切回两遍重跑。"""
@@ -210,7 +211,7 @@ class TwoPassBubbleTest(unittest.TestCase):
         comic.render_bubble(task, p)
         self.assertEqual(len(self.submits), 1)
         self.assertIn("右下角", self.submits[0])
-        self.assertIn("右上角一行旁白", self.submits[0])     # 右上角留给了旁白
+        self.assertIn("右上角的一行旁白", self.submits[0])     # 右上角留给了旁白
 
     def test_bubble2_stays_top_right_without_narration(self):
         task = self._task(bubble2="第二句")
@@ -410,7 +411,7 @@ class WriterSpecTest(unittest.TestCase):
         prompt = comic.Panel("01", "1girl, solo", "台词", "旁白").bubble_prompt()
         self.assertNotIn("小字", prompt)
         self.assertIn("字号清晰可读", prompt)
-        self.assertIn('这行旁白的文字（EXACT）："旁白"', prompt)
+        self.assertIn('这行旁白写 "旁白"', prompt)
 
 
 class MultiLabelTest(unittest.TestCase):
@@ -502,13 +503,20 @@ class TailDirectionTest(unittest.TestCase):
     def test_girl_bubble_points_at_girl(self):
         prompt = comic.Panel("01", "1girl, solo", "别跟着我",
                              speaker="女").bubble_prompt()
-        self.assertIn("指向画面中的女生", prompt)
+        self.assertIn("尾巴指向画面中的女生", prompt)
 
-    def test_wo_bubble_points_down_and_says_not_hers(self):
+    def test_wo_bubble_points_down_without_negative_wording(self):
+        """「我」的台词：尾巴朝下 + 说明说话人在画面外，**不写否定句**。
+
+        旧版末尾是「这个气泡不是女生说的，不要指向女生」——否定等于把「指向
+        女生」这个词又喂一遍，反而更容易挂错（白熊效应，2026-10-11 用户点名）。
+        """
         prompt = comic.Panel("01", "1girl, solo", "为什么",
                              speaker="我").bubble_prompt()
-        self.assertIn("向下指向画面下缘", prompt)
-        self.assertIn("不是女生说的", prompt)
+        self.assertIn("尾巴向下指向画面下缘", prompt)
+        self.assertIn("说话人是画面外的「我」", prompt)
+        self.assertNotIn("不要指向女生", prompt)
+        self.assertNotIn("不是女生说的", prompt)
 
     def test_speaker_defaults_to_girl(self):
         self.assertEqual(comic.Panel("01", "s", "b").speaker, "女")
@@ -526,8 +534,8 @@ class MultiLabelPromptTest(unittest.TestCase):
     def test_two_lines_listed_by_index(self):
         prompt = comic.Panel("01", "s", "台词", "甲\n乙").bubble_prompt()
         self.assertIn("旁白一共 2 行", prompt)
-        self.assertIn('第 1 行（EXACT）："甲"', prompt)
-        self.assertIn('第 2 行（EXACT）："乙"', prompt)
+        self.assertIn('第 1 行写 "甲"', prompt)
+        self.assertIn('第 2 行写 "乙"', prompt)
 
     def test_single_line_uses_single_wording(self):
         prompt = comic.Panel("01", "s", "台词", "甲").bubble_prompt()
@@ -666,6 +674,75 @@ class StudioPageTest(unittest.TestCase):
         page = self._page()
         self.assertIn("const _method", page)
         self.assertIn("_method[p.no]", page)
+
+
+class OfficialTextRulesTest(unittest.TestCase):
+    """按 Qwen 官方文本渲染规范守住的几条底线（2026-10-11 第 9 轮重整）。
+
+    官方（Qwen-Image-Edit 官方 Space 的 Edit Instruction Rewriter）原话：文字
+    内容必须用英文双引号包住；总则要求简洁、避免长句；否定内容走
+    `negative_prompt` 参数、正向只写要什么。用户实测反馈：`文字（EXACT）："…"`
+    里的 EXACT 被当正文，画进了成品气泡。
+
+    这个类的意义是**反向锁死**：以后谁再往模板里加标记词、序号或否定句，这里
+    直接红——因为抑制这类改动的成本，远低于再跑一轮 50 秒的图去发现它。
+    """
+
+    def _prompts(self):
+        """四种形状各来一份：单气泡 / 单气泡+旁白 / 一次画两个 / 第二遍补气泡。"""
+        single = comic.Panel("01", "s", "一", speaker="女")
+        with_label = comic.Panel("01", "s", "一", "甲\n乙", speaker="女")
+        merged = comic.Panel("01", "s", "一", "甲", "二",
+                             speaker="女", speaker2="我")
+        second = comic.Panel("01", "s", "一", "二",
+                             speaker="女", speaker2="我")
+        return {
+            "单气泡": single.bubble_prompt(),
+            "单气泡+旁白": with_label.bubble_prompt(),
+            "一次画两个": merged.bubble_prompt(),
+            "第二遍": second.bubble2_prompt(),
+        }
+
+    def test_no_marker_words(self):
+        """引号就是唯一标记，没有 EXACT 之类的前缀。"""
+        for name, prompt in self._prompts().items():
+            self.assertNotIn("EXACT", prompt, name)
+
+    def test_no_negative_sentences(self):
+        """正文里一句否定都不许有——否定会把那个词再喂一遍给模型（白熊效应）。"""
+        for name, prompt in self._prompts().items():
+            self.assertNotIn("不要", prompt, name)
+
+    def test_no_bracketed_numbering(self):
+        """`【气泡1】` 这类序号是给人看的，模型会当素材。"""
+        for name, prompt in self._prompts().items():
+            self.assertNotIn("【", prompt, name)
+            self.assertNotIn("】", prompt, name)
+
+    def test_dialogue_is_wrapped_in_english_double_quotes(self):
+        prompts = self._prompts()
+        for name, prompt in prompts.items():
+            self.assertIn('"', prompt, name)
+        self.assertIn('"一"', prompts["单气泡"])
+        self.assertIn('"甲"', prompts["单气泡+旁白"])
+        self.assertIn('"二"', prompts["一次画两个"])
+
+    def test_counts_are_positive(self):
+        """条数与归属一律正面清点，不再用「不要出现第三个气泡」。"""
+        p = self._prompts()
+        self.assertIn("画面里的文字一共这一处", p["单气泡"])
+        self.assertIn("画面里的文字一共这两处", p["单气泡+旁白"])
+        self.assertIn("画面里的文字一共这三处", p["一次画两个"])
+        self.assertIn("画面里的文字一共这两处", p["第二遍"])
+
+    def test_label_style_is_stated_positively(self):
+        prompt = self._prompts()["单气泡+旁白"]
+        self.assertIn("纯文字加白色描边", prompt)
+
+    def test_keep_unchanged_clause_present(self):
+        """官方/社区都要求显式声明「保持不变」的那部分。"""
+        for name, prompt in self._prompts().items():
+            self.assertIn("保持不变", prompt, name)
 
 
 if __name__ == "__main__":
