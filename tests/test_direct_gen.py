@@ -2117,11 +2117,10 @@ class RandomCommandTest(unittest.TestCase):
         self.assertIn("miao", direct_gen.MORE_CHAN_TEXT)
 
     def test_direct_prefix_documented_in_menus(self):
-        # 2026-10-07 用户拍板：/直通- 用法要两个菜单都写清楚。
+        # 2026-10-11 反转：直通没人用，从所有展示面撤下（功能保留、
+        # 只是不再写进菜单）。钉死「两个菜单都不许再出现直通介绍」。
         for menu in (direct_gen.MORE_CHAN_TEXT, direct_gen.GUIDE_TEXT):
-            self.assertIn("/直通-", menu)
-            self.assertIn("直通", menu)
-            self.assertIn("|", menu)
+            self.assertNotIn("/直通-", menu)
 
     # ── 被拦静默重抽（2026-10-05）：图是机器人推的服务，不回「未过审」──
 
