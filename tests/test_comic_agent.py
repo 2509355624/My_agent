@@ -594,6 +594,98 @@ class RunRoundsTest(unittest.TestCase):
         self.assertIn("还剩", fed)
         self.assertIn("强制", fed)
 
+    # ─── 跨轮去重 + 结果上限（2026-10-11 成本复盘）─────────────────
+    #
+    # 实测 22:05 那次运行：223 次 search_tags 里 **76 次是跨轮重复**（轮内 0 次），
+    # `pov hands` / `backlighting` 各查 5 遍；8 次运行每次都查满 10 轮才被动笔。
+    # 成因是 MAX_TOOL_CHARS=2000 把每轮索要的 2,232~4,346 字符砍掉 10%~53%。
+
+    def test_repeated_query_is_not_refetched(self):
+        """同一个词跨轮重查不再执行工具，只回一句「已查过」。"""
+        script = "## 01\n画面: 1girl, solo\n气泡: 一\n"
+        replies = [
+            '[[TOOL:search_tags]]{"query": "眼泪"}',   # 1 查
+            '[[TOOL:search_tags]]{"query": "眼泪"}',   # 2 重查 → 不执行
+            script,
+        ]
+        with mock.patch.object(comic_agent.llm, "call_llm",
+                               side_effect=replies), \
+                mock.patch.object(comic_agent, "_run_tool",
+                                  return_value="（假结果）") as t:
+            out = comic_agent.run_rounds([{"role": "user", "content": "x"}],
+                                         max_rounds=5)
+        self.assertIn("画面", out)
+        self.assertEqual(t.call_count, 1)
+
+    def test_repeat_notice_is_told_to_the_model(self):
+        """去重时要把「已查过」告诉模型，否则它以为没查到、下轮接着查。"""
+        script = "## 01\n画面: 1girl, solo\n气泡: 一\n"
+        replies = [
+            '[[TOOL:search_tags]]{"query": "眼泪"}',
+            '[[TOOL:search_tags]]{"query": "眼泪"}',
+            script,
+        ]
+        with mock.patch.object(comic_agent.llm, "call_llm",
+                               side_effect=replies) as m, \
+                mock.patch.object(comic_agent, "_run_tool",
+                                  return_value="（假结果）"):
+            comic_agent.run_rounds([{"role": "user", "content": "x"}],
+                                   max_rounds=5)
+        # 第 3 次调用时，那条「已查过」的说明必须已经回灌进 messages
+        third = m.call_args_list[2].args[0]
+        fed = " ".join(str(x.get("content") or "") for x in third)
+        self.assertIn("已经查过", fed)
+        self.assertEqual(fed.count("（假结果）"), 1)      # 只贴过一次原文
+
+    def test_query_dedup_ignores_case_and_space(self):
+        """`Tears` 和 ` tears ` 是同一个词，不该各查一遍。"""
+        script = "## 01\n画面: 1girl, solo\n气泡: 一\n"
+        replies = [
+            '[[TOOL:search_tags]]{"query": "Tears"}',
+            '[[TOOL:search_tags]]{"query": "  tears  "}',
+            script,
+        ]
+        with mock.patch.object(comic_agent.llm, "call_llm",
+                               side_effect=replies), \
+                mock.patch.object(comic_agent, "_run_tool",
+                                  return_value="（假结果）") as t:
+            comic_agent.run_rounds([{"role": "user", "content": "x"}],
+                                   max_rounds=5)
+        self.assertEqual(t.call_count, 1)
+
+    def test_random_search_is_never_deduped(self):
+        """`random` 抽标签刻意不去重——同样的参数本来就该给出不同结果。"""
+        script = "## 01\n画面: 1girl, solo\n气泡: 一\n"
+        one = '[[TOOL:search_tags]]{"random": true, "cat": "pose"}'
+        with mock.patch.object(comic_agent.llm, "call_llm",
+                               side_effect=[one, one, script]), \
+                mock.patch.object(comic_agent, "_run_tool",
+                                  return_value="（假结果）") as t:
+            comic_agent.run_rounds([{"role": "user", "content": "x"}],
+                                   max_rounds=5)
+        self.assertEqual(t.call_count, 2)
+
+    def test_tool_results_survive_the_old_2000_cap(self):
+        """一轮 9 个各 500 字符的结果（4,500 字符）要完整回灌。
+
+        旧上限 2000 会把后面 5 个查询的结果整个砍掉——模型看不到就重查。
+        这条同时守住「不许把上限调回 2000」。
+        """
+        script = "## 01\n画面: 1girl, solo\n气泡: 一\n"
+        nine = "\n".join('[[TOOL:search_tags]]{"query": "q%d"}' % i
+                         for i in range(9))
+        with mock.patch.object(comic_agent.llm, "call_llm",
+                               side_effect=[nine, script]) as m, \
+                mock.patch.object(comic_agent, "_run_tool",
+                                  return_value="x" * 500):
+            comic_agent.run_rounds([{"role": "user", "content": "x"}],
+                                   max_rounds=5)
+        second = m.call_args_list[1].args[0]
+        fed = " ".join(str(x.get("content") or "") for x in second)
+        self.assertNotIn("截断", fed)
+        self.assertGreater(len(fed), 4000)
+        self.assertEqual(fed.count("x" * 500), 9)
+
 
 class WriteScriptTest(unittest.TestCase):
     """对外入口：合格即返回（含头部备选），不合格回炉、最后一次容忍。"""

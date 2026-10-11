@@ -174,8 +174,16 @@ _FORCE_WRITE = (
 # 单次 LLM 调用超时。比 search_agent 的 30s 长：编剧最后一轮要一口气吐出
 # 整份剧本（十格），输出量大。
 CALL_TIMEOUT = 90
-# 单次工具结果上限。工具结果要一直留在 messages 里，不封顶会把上下文撑爆。
-MAX_TOOL_CHARS = 2000
+# 单轮工具结果上限。工具结果要一直留在 messages 里，不封顶会把上下文撑爆。
+#
+# ⚠️ 2026-10-11 之前是 2000，**这是我自己埋的浪费源**。实测（22:05 那次运行，
+# usage/ + logs/ 可查）：模型每轮被提示词催着「一轮写 15~25 行都行」，实际索要
+# 2,232~4,346 字符，而上限 2000 把其中 **10%~53% 砍掉**；截断只保留前 2000 字符，
+# 所以批次里排在**后面**的查询**必然白查**。模型看不到结果 → 下一轮重查：223 次
+# 查库里有 76 次是跨轮重复（`pov hands` / `backlighting` 各 5 遍，轮内重复 0 次），
+# 于是 8 次运行**每一次都查满 10 轮**才被动笔。
+# 6000 装得下一轮 25 个查询的典型返回（均 150~250 字符），两头就不用互相打架了。
+MAX_TOOL_CHARS = 6000
 
 # 规范文件（相对 skills/）。用户改它不用重启——每次现读。
 _SPEC_REL = "anima-tags/references/spec.md"
@@ -862,6 +870,32 @@ def _parse_args(raw):
     return {}
 
 
+def _dedup_key(name, args):
+    """算「这个调用是不是查过的东西」——返回去重键，None 表示不该去重。
+
+    同一稿里查过的词不再查第二次。实测（2026-10-11，22:05 那次运行）：
+    223 次 search_tags 里 **76 次是跨轮重复**（`pov hands` / `backlighting`
+    各查了 5 遍），**轮内重复 0 次**——所以缓存挂在整次 run 上，不是挂在一轮里。
+
+    模型为什么重查：它要的结果被 MAX_TOOL_CHARS 砍掉了（见那个常量的注释）。
+    两处一起治——上限放宽让它一次看全，确有重复时直接告知「已查过」，那条
+    就不占本轮的字符预算了。`random` 抽标签刻意不去重：那是有意多抽几次，
+    同样的参数本来也该给出不同结果。查询词先 lower + 去空格再比，
+    免得 `Tears` / ` tears ` 当成两个词各查一遍。
+    """
+    if name == "search_tags":
+        if args.get("random"):
+            return None
+        q = str(args.get("query") or "").strip().lower()
+        return ("search_tags", re.sub(r"\s+", " ", q)) if q else None
+    if name in ("read_file", "web_search"):
+        for k in ("path", "query"):
+            v = str(args.get(k) or "").strip()
+            if v:
+                return (name, re.sub(r"\s+", " ", v))
+    return None
+
+
 def _run_tool(call):
     """执行一次工具调用，返回给模型看的结果文本。"""
     name = (call.get("name") or "").strip()
@@ -933,6 +967,7 @@ def run_rounds(messages, provider=None, model=None, max_rounds=MAX_ROUNDS,
     """
     fallback = ""             # 过程稿兜底：只在最终也没交出正文时才用
     nudged = False            # 第一轮没查库时只打回一次，防死循环
+    seen = {}                 # 已查过的 (工具, 参数) → 首次查它的轮号（跨轮去重）
     search_rounds = max(1, max_rounds - WRITE_RESERVE)
 
     for round_no in range(1, max_rounds + 1):
@@ -1009,16 +1044,29 @@ def run_rounds(messages, provider=None, model=None, max_rounds=MAX_ROUNDS,
 
         results = []
         for c in calls:
-            r = _run_tool(c)
-            results.append("【%s】\n%s" % (c.get("name") or "?", r))
+            cname = (c.get("name") or "?").strip()
             a = _parse_args(c.get("args"))
             if a.get("random"):
                 what = "随机 cat=%s" % a.get("cat")
             else:
                 what = a.get("query") or a.get("path") or ""
-            log.info("[comic-agent] 第 %d 轮 %s(%s) → %d 字",
-                     round_no, c.get("name") or "?", what, len(r))
-            _emit(progress, "%s(%s)" % (c.get("name") or "?", what))
+            key = _dedup_key(cname, a)
+            if key and key in seen:
+                # 已经查过就**不再执行**，只回一句。内容就在上面的对话里，
+                # 重复贴一遍既挤占本轮预算、又鼓励它下轮接着重复。
+                r = ("（`%s` 第 %d 轮已经查过，结果就在上面的对话里，不再重复"
+                     "贴一遍——**同一个词不要反复查**）" % (what, seen[key]))
+                log.info("[comic-agent] 第 %d 轮 %s(%s) → 跳过（第 %d 轮已查）",
+                         round_no, cname, what, seen[key])
+                _emit(progress, "%s(%s) 已查过" % (cname, what))
+            else:
+                r = _run_tool(c)
+                if key:
+                    seen[key] = round_no
+                log.info("[comic-agent] 第 %d 轮 %s(%s) → %d 字",
+                         round_no, cname, what, len(r))
+                _emit(progress, "%s(%s)" % (cname, what))
+            results.append("【%s】\n%s" % (cname, r))
         joined = "\n\n".join(results)
         if len(joined) > MAX_TOOL_CHARS:
             joined = joined[:MAX_TOOL_CHARS] + "\n…（结果已截断）"
