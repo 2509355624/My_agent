@@ -461,13 +461,14 @@ def duplicate_wearables(text):
     一套时，同名衣物是**合法**的（甲 `navy pleated skirt`、乙 `grey skirt`），
     而规则 16 的英语点名句里还会带上 `white cardigan` / `white sailor uniform`
     这些词 —— 平铺计数会把它们当成「同一件写了两次」，把一份好剧本（05 格）
-    误判成不合格、白烧一稿。所以多人格直接跳过。
+    误判成不合格、白烧一稿。所以多人格直接跳过（`1girl, 1boy` 也算多人，
+    见 `_two_people`）。
     """
     _, panels = comic.parse_script_text(text)
     out = []
     for p in panels:
         tags = _scene_tags(p)
-        if _MULTI_PEOPLE & set(tags):        # 两个人各穿一套，同名衣物合法
+        if _two_people(tags):                # 两个人各穿一套，同名衣物合法
             continue
         seen = {}
         for tag in tags:
@@ -512,6 +513,22 @@ def pov_conflicts(text):
 
 # 写了这些就是「一格里有两个人及以上同框」。
 _MULTI_PEOPLE = frozenset(("2girls", "multiple girls", "multiple_girls", "2boys"))
+
+
+def _two_people(tags):
+    """这一格是不是**两个人同框**——只用来判断「同名衣物是否合法」。
+
+    2026-10-12 实跑误报：05 格是 `1girl, 1boy`，没被 `_MULTI_PEOPLE` 认成多人，
+    于是规范**强制要求**的英语点名句
+    `the blonde-haired boy in a black jacket is ... the black-haired girl in a white serafuku`
+    里那两件 `jacket`，被 `duplicate_wearables` 平铺计数当成「同一件写了两次」，
+    一口气误报 4 条（把一份好剧本判成不合格）。所以「一女一男」「一女+一other」
+    也算两人：两人各穿一套时，同名衣物是合法的。
+    """
+    s = set(tags)
+    if _MULTI_PEOPLE & s:
+        return True
+    return "1girl" in s and ("1boy" in s or "1other" in s)
 
 
 def _appearance_colors(tags):
@@ -1629,24 +1646,33 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
 #
 # ⚠️ 但**别指望它做语义判断**。实测（deepseek-flash / deepseek-v4-pro /
 # glm-5-2 三个模型）：需求里的「下车」要素一个都没碰。所以分工钉死——
-# **代码负责算事实、出清单；补正 AI 只负责照着清单把字补上**。
+# **代码负责算事实、出清单；补正 AI 负责补具体**（清单是起点不是边界）。
 # 不给清单它会自由发挥：flash 版三格各追加一句自己编的 `warm interior bus light`，
 # pro 版塞进 `Izumi Sagiri`（规范第 74 行示例里的角色名，被当素材抄了）。
 #
-# 补正稿**必须过代码闸门**才采纳（见 _verify_fix）：格号一致、check() 通过、
-# 没有凭空人名、没动清单之外的格。任何一条不过就整份退回原稿 —— 宁可漏补，
-# 不能让它把好稿改坏。
+# ⚠️ 2026-10-12 用户拍板：**代码判据在这一步只做检测，不许做准入闸门**。理由：
+# 服饰是开放集合，手写词表永远盖不全，拿盖不全的表「判死刑」只会把补正 AI 改对
+# 的部分一起丢掉（实测 `C20261012-05`：改对 6 条、剩 2 条误报 → 整份退回原稿，
+# 看上去就是「补正没生效」）。所以补正稿**一律采纳**，剩几条只当体检报告展示。
+# 唯一不从的是「它没交作业」——空 / 解析不出剧本 / 格号对不上（`_fix_is_usable`）。
 
 FIX_TIMEOUT = 240
 
-_FIX_SYSTEM = """你是分镜剧本的**补正员**。编剧交出一份剧本，你把里面漏掉的具体
-描述补齐，然后原样交出完整剧本。
+_FIX_SYSTEM = """你是分镜剧本的**补正员**，也是出剧本前的最后一道关。编剧交出一份
+剧本，你把里面**不具体的泛类**改成具体写法，然后原样交出完整剧本。
 
-你手上有一份**问题清单**，是上游程序核对出来的事实。你的工作范围就是这份清单：
-把清单点名的每一处补上。清单之外的画面标签、气泡、旁白、标题，全部逐字保留。
+**颜色由你自己拍板。** 泛类（`backpack`、`pleated skirt`、`school uniform`、`jacket`
+之类）必须写成「颜色 + 款式/物件」。原始需求里写了的就用需求里的颜色；没写，
+**你自己定一个合适的颜色**——但同一个人 / 同一件东西，全稿必须用同一个颜色
+（第 3 格是 `navy skirt`，第 7 格也得是 `navy`，不许换个颜色）。
 
-补具体描述时，颜色只能取自「原始需求」原文。原始需求里没写这个角色或物件的颜色时，
-保持原样，把这一条留在清单里交给人工处理，**不许自己定一个颜色**。
+上游给你一份**问题清单**，是程序核对出来的事实，**先把清单点名的每一处补上**。
+但清单只是起点、不是边界：你对照规范通读全稿，**任何**没写具体的地方（包括清单
+没列到的）都一并补具体。清单也是程序算的，可能有误报——某条你觉得实际没问题，
+就跳过它，不用硬改。
+
+需要补的地方改成具体写法，其余内容（气泡、旁白、标题、已经写具体的画面标签）
+**逐字保留**；`## NN` 的格号一个都不许增删。
 
 画面标签里的角色名，只能来自用户的原始需求。规范正文里出现的示例角色名只是格式
 示意，不是素材。
@@ -1716,47 +1742,52 @@ def diff_scripts(old, new):
 _DIFF_FIELDS = ("scene", "bubble", "bubble2", "label", "speaker", "speaker2")
 
 
-def _verify_fix(original, fixed, brief, issues):
-    """补正稿的代码闸门。返回拒收原因列表，空列表＝可以采纳。
+def _fix_is_usable(original, fixed):
+    """补正稿**能不能用**——只判格式/结构，**不判内容好坏**。
 
-    四条，每条都对应一次实测事故：
-      1. **格号集合必须一致**——补正顺手删格/加格是改剧本结构，不是补描述。
-      2. **不过 check() 就不采纳**——它可能补出新违规（`solo` 配第二方之类）。
-      3. **不许有凭空人名**——`Izumi Sagiri` 实测就是这么进来的。
-      4. **只许改清单点名的格**——没点名的格逐字保留，防它顺手重写全稿。
+    用户 2026-10-12 拍板：代码判据在这条链上**只做检测，不做准入闸门**。理由是
+    代码的服饰词表盖不全几万种服饰，拿盖不全的表去「判死刑」，只会把补正 AI
+    改对的部分一起丢掉。所以补正稿一律采纳，唯一不从的是**它根本没交作业**：
+
+      - `empty`：返回空；
+      - `unparseable`：解析不出任何一格（没有 `## NN` 骨架，或解析直接抛错）；
+      - `structure`：格号与原稿对不上（删格/加格——那是改结构，下游会崩）。
+
+    这三种不采纳、剧本保持原稿，并在 warnings 里写明「请重新补正」，由用户
+    在界面上自己点重跑；代码**不做任何猜测或兜底**。
+
+    返回 (ok, status, 一句话原因)。
     """
-    rejects = []
-    _, pa = comic.parse_script_text(original or "")
+    if not (fixed or "").strip():
+        return False, "empty", "补正模型返回空内容"
     try:
-        _, pb = comic.parse_script_text(fixed or "")
-    except Exception as exc:
-        return ["补正稿解析失败：%s" % exc]
-    nos_a = [p["no"] for p in pa]
-    nos_b = [p["no"] for p in pb]
+        _, pb = comic.parse_script_text(fixed)
+    except Exception as exc:                # 解析炸了＝格式根本没成形
+        return False, "unparseable", "补正稿解析失败：%s" % exc
+    if not pb:
+        return False, "unparseable", "补正稿里找不到任何一格（没有 `## NN` 骨架）"
+    _, pa = comic.parse_script_text(original or "")
+    nos_a, nos_b = [p["no"] for p in pa], [p["no"] for p in pb]
     if nos_a != nos_b:
-        rejects.append("格号对不上：原稿 %s，补正稿 %s" % (nos_a, nos_b))
-        return rejects                      # 结构都变了，后面的判断没意义
-
-    ok, why = check(fixed, len(pb), brief)
-    if not ok:
-        rejects.append("补正稿没过代码判据：%s" % why.replace("\n", " / "))
-
-    names = invented_names(fixed, (brief or "") + "\n" + (original or ""))
-    if names:
-        rejects.append("凭空多出人名：%s"
-                       % "、".join("格 %s 的 `%s`" % (n, t) for n, t in names[:6]))
-
-    allowed = {it["no"] for it in issues if it.get("no")}
-    touched = {d["no"] for d in diff_scripts(original, fixed)}
-    extra = sorted(touched - allowed)
-    if extra:
-        rejects.append("改了清单没点名的格：%s" % "、".join(extra))
-    return rejects
+        return False, "structure", ("格号与原稿对不上：原稿 %s，补正稿 %s"
+                                    % (nos_a, nos_b))
+    return True, "ok", ""
 
 
 def fix_script(brief, text, provider=None, model=None, timeout=None,
                progress=None, issues=None):
-    """补正一遍剧本：代码出清单 → 模型照着清单补 → 过闸门才采纳。
+    """补正一遍剧本：代码出清单（**只做检测**）→ 模型照清单补 → **直接采纳**。
+
+    ⚠️ 2026-10-12 用户拍板：**取消准入闸门**。代码的服饰词表盖不全几万种服饰，
+    拿盖不全的表去「判死刑」只会把补正 AI 改对的部分一起丢掉；补正员是强模型，
+    颜色与具体写法就该它自己定。所以补正稿**一律采纳，改对多少保住多少**。
+
+    代码判据在这里只剩两个作用：
+      1. 出**清单**喂给补正员（`collect_issues`）；
+      2. 采纳后出一份**体检报告**（`audit`＝补正稿上还剩哪些问题），只展示、不拦。
+
+    唯一不从的是「它没交作业」（空 / 解析不出剧本 / 格号对不上，见 `_fix_is_usable`）
+    ——那时剧本保持原稿，并在 warnings 里写「请重新补正」，由用户自己点重跑。
 
     参数：
       - text：编剧交出的剧本（**原稿**，不是补正过的——重跑要从原稿重来）。
@@ -1766,20 +1797,22 @@ def fix_script(brief, text, provider=None, model=None, timeout=None,
     返回 dict：
       {"text": 采纳后的剧本（没采纳＝原稿一字未动）,
        "issues": 代码清单, "diff": 逐格差异, "adopted": 是否采纳,
-       "rejects": 拒收原因, "warnings": 提示, "skipped": 是否根本没跑}
+       "status": ok / empty / unparseable / structure / nochange / error / skipped,
+       "warnings": 提示（含「请重新补正」）, "audit": 补正后的体检报告,
+       "skipped": 是否根本没跑, "model": 实际用的模型}
 
     清单为空时**一次 LLM 都不调**（skipped=True）——没有要补的就别烧调用。
-    模型输出任何一条校验不过，就整份退回原稿：宁可漏补一处，不能让它把好稿
-    改坏（补正稿会直接成为落盘的剧本）。
     """
     if not (text or "").strip():
         raise ValueError("剧本不能为空")
     provider = (provider or "").strip() or llm.CURRENT_PROVIDER or None
     issues = collect_issues(text, brief or "") if issues is None else list(issues)
     out = {"text": text, "issues": issues, "diff": [], "adopted": False,
-           "rejects": [], "warnings": [], "skipped": False, "model": ""}
+           "status": "ok", "warnings": [], "audit": [], "skipped": False,
+           "model": ""}
     if not issues:
         out["skipped"] = True
+        out["status"] = "skipped"
         out["warnings"].append("代码判据没发现任何问题，未调用补正模型")
         log.info("[comic-fix] 清单为空，跳过补正")
         return out
@@ -1788,7 +1821,8 @@ def fix_script(brief, text, provider=None, model=None, timeout=None,
     messages = [
         {"role": "system", "content": _fix_system_prompt()},
         {"role": "user", "content":
-            "【原始需求】\n%s\n\n【问题清单】（只补这些）\n%s\n\n【编剧交的剧本】\n%s"
+            "【原始需求】\n%s\n\n【问题清单】（先补这些，清单只是起点）\n%s\n\n"
+            "【编剧交的剧本】\n%s"
             % (brief or "（作者没给需求）", _fmt_issues(issues), text)},
     ]
     try:
@@ -1796,28 +1830,32 @@ def fix_script(brief, text, provider=None, model=None, timeout=None,
                                              model=model,
                                              timeout=timeout or FIX_TIMEOUT))
     except Exception as exc:
-        out["rejects"].append("补正模型调用失败：%s" % exc)
+        out["status"] = "error"
+        out["warnings"].append("补正模型调用失败：%s —— 请在界面上点「重新补正」重跑"
+                               % exc)
         log.warning("[comic-fix] 调用失败：%s", exc)
         return out
 
     fixed = (fixed or "").strip()
-    if not fixed:
-        out["rejects"].append("补正模型返回空内容")
-        return out
-
-    rejects = _verify_fix(text, fixed, brief or "", issues)
-    if rejects:
-        out["rejects"] = rejects
-        log.warning("[comic-fix] 补正稿未采纳：%s", " / ".join(rejects))
+    ok, status, why = _fix_is_usable(text, fixed)
+    if not ok:
+        out["status"] = status
+        out["warnings"].append("%s —— 本次补正未采纳，剧本保持原稿，"
+                               "请在界面上点「重新补正」重跑" % why)
+        log.warning("[comic-fix] 补正稿不可用（%s）：%s", status, why)
         return out
 
     diff = diff_scripts(text, fixed)
     if not diff:
+        out["status"] = "nochange"
         out["warnings"].append("补正模型没改动任何一处（清单里的问题仍在）")
         log.info("[comic-fix] 补正稿与原稿一致，无改动")
         return out
 
-    out.update(text=fixed, diff=diff, adopted=True)
+    # ⚠️ 到这里**直接采纳**——不再过任何准入闸门。剩下的代码判据只当**体检报告**
+    # 记进 audit 供界面展示，绝不因此把 text 退回原稿。
+    out.update(text=fixed, diff=diff, adopted=True, status="ok",
+               audit=collect_issues(fixed, brief or "", original=text))
     log.info("[comic-fix] 采纳补正稿：改了 %d 格（%s）",
              len(diff), "、".join(d["no"] for d in diff))
     _emit(progress, "补正完成：改了 %d 格" % len(diff))

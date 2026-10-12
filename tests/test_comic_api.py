@@ -140,7 +140,8 @@ class ComicScriptApiTest(unittest.TestCase):
                     "diff": [{"no": "01", "changed": ["scene"],
                               "before": {"scene": "1girl, solo"},
                               "after": {"scene": "1girl, solo, black hair"}}],
-                    "rejects": [], "warnings": [], "skipped": False, "model": ""}
+                    "status": "ok", "audit": [],
+                    "warnings": [], "skipped": False, "model": ""}
         with mock.patch.object(comic_agent, "write_script",
                                return_value=GOOD_SCRIPT), \
                 mock.patch.object(comic_agent, "fix_script",
@@ -173,19 +174,24 @@ class ComicScriptApiTest(unittest.TestCase):
         self.assertEqual(out["state"], "done")
         self.assertEqual(out["script"], GOOD_SCRIPT)
         self.assertFalse(out["fix"]["adopted"])
-        self.assertTrue(any("补正异常" in x for x in out["fix"]["rejects"]))
+        self.assertEqual(out["fix"]["status"], "error")
+        self.assertTrue(any("补正异常" in x for x in out["fix"]["warnings"]))
 
 
 class ComicFixApiTest(unittest.TestCase):
     """内容补正的 HTTP 面：重跑（/fix）与取正文（/script_text）。
 
     2026-10-11 十轮加。两条都是踩出来的：
-      - /fix 的底稿必须是 **script_original.md**，不是当前 script.md——拿补正过
-        的稿再补一次，「未点名格不许动」的闸门会把上一轮成果当越权改动，diff
-        也越滚越乱。
+      - /fix 的底稿必须是 **script_original.md**，不是当前 script.md——重跑要
+        幂等：拿补正过的稿再补一次，会把上一轮的改动当成「原稿」来比对，diff
+        越滚越乱。
       - /script_text 存在的唯一理由是堵一个数据事故：补正就地改 script.md，
         而页面 textarea 里还是旧文本，用户接着点「确认开跑」会把旧文本存回去，
         补正结果整个作废。
+
+    ⚠️ 2026-10-12 用户拍板取消补正的准入闸门（代码判据只做检测），所以补正稿
+    无论还剩几条问题都**照常落地**；fix.json 里也不再是 `rejects`，而是
+    `status`（ok / empty / unparseable / structure / nochange / error）+ `audit`。
     """
 
     DRAFT = "# 标题：t\n\n## 01\n画面: 1girl, twintails\n气泡: 一\n标签1: 甲\n"
@@ -242,7 +248,8 @@ class ComicFixApiTest(unittest.TestCase):
 
     def test_uses_original_draft_as_base(self):
         fake = {"text": self.FIXED, "issues": [], "diff": [], "adopted": False,
-                "rejects": [], "warnings": [], "skipped": False, "model": ""}
+                "status": "nochange", "audit": [], "warnings": [],
+                "skipped": False, "model": ""}
         with mock.patch.object(comic_agent, "fix_script",
                                return_value=fake) as m:
             r = self.c.post("/api/comic/fix", json={"task": self.NAME})
@@ -258,7 +265,7 @@ class ComicFixApiTest(unittest.TestCase):
                 "diff": [{"no": "01", "changed": ["scene"],
                           "before": {"scene": "1girl, twintails"},
                           "after": {"scene": "1girl, black hair, twintails"}}],
-                "adopted": True, "rejects": [], "warnings": [],
+                "adopted": True, "status": "ok", "audit": [], "warnings": [],
                 "skipped": False, "model": ""}
         with mock.patch.object(comic_agent, "fix_script", return_value=fake):
             self.c.post("/api/comic/fix", json={"task": self.NAME})

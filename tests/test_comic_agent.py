@@ -534,6 +534,17 @@ class MergedPeopleTest(unittest.TestCase):
             "safe, 1girl, solo, white backpack, backpack on one shoulder"))
         self.assertEqual([("01", "backpack")], got)
 
+    def test_duplicate_wearable_skipped_for_one_girl_one_boy(self):
+        """`1girl, 1boy` 也是两人同框，点名句里的 `jacket` 不算写两遍。
+
+        2026-10-12 实跑误报（`C20261012-05` 的 05/08 格）：一女一男没被认成多人，
+        规范强制的英语点名句里那两件 `jacket` 被平铺计数，一口气误报 4 条。
+        """
+        self.assertEqual([], comic_agent.duplicate_wearables(self._script(
+            "safe, 1girl, 1boy, the blonde-haired boy in a black jacket is "
+            "washing the black-haired girl in a white serafuku, "
+            "black jacket, white serafuku, blonde hair, black hair, bathroom")))
+
 
 class FemalePovTest(unittest.TestCase):
     """女女向（百合）剧本的「我」是女性 → 第一人称视角必须写 `female_pov`。
@@ -1318,7 +1329,11 @@ class CollectIssuesTest(unittest.TestCase):
 
 
 class FixScriptTest(unittest.TestCase):
-    """补正一遍：代码出清单 → 模型照着补 → 过闸门才采纳。"""
+    """补正一遍：代码出清单（**只做检测**）→ 模型照清单补 → **直接采纳**。
+
+    ⚠️ 2026-10-12 用户拍板取消准入闸门：补正稿一律采纳，代码判据只出清单 +
+    出体检报告。唯一不采纳的是「模型没交作业」（空 / 解析不出剧本 / 格号对不上）。
+    """
 
     BRIEF = "妹妹离家出走，被哥哥抓包，black hair, twintails"
     DRAFT = _script("画面: safe, 1girl, solo, twintails, blue eyes")
@@ -1343,20 +1358,22 @@ class FixScriptTest(unittest.TestCase):
         self.assertEqual([d["no"] for d in r["diff"]], ["01"])
         self.assertIn("black hair", r["text"])
 
-    def test_rejects_invented_name(self):
-        """补正稿凭空多出人名 → 整份退回原稿（这是实测事故，必须拦住）。"""
+    def test_adopts_invented_name_but_flags_it(self):
+        """补正稿凭空多出人名 → **照样采纳**，只在体检报告 audit 里标出来。
+
+        2026-10-12 用户拍板：代码判据只做检测、不做准入闸门。宁可留着一条可疑的
+        名字让用户自己看（界面会显示「补正后仍报 N 处」），也不许把整份补正丢掉。
+        """
         bad = _script("画面: safe, 1girl, solo, Izumi Sagiri, black hair, twintails")
         with mock.patch.object(comic_agent.llm, "call_llm", return_value=bad):
             r = comic_agent.fix_script(self.BRIEF, self.DRAFT)
-        self.assertFalse(r["adopted"])
-        self.assertEqual(r["text"], self.DRAFT)
-        self.assertTrue(any("人名" in x for x in r["rejects"]))
+        self.assertTrue(r["adopted"])
+        self.assertEqual(r["status"], "ok")
+        self.assertEqual(r["text"], bad)
+        self.assertTrue(any(it["kind"] == "invented_name" for it in r["audit"]))
 
-    def test_rejects_change_to_unflagged_panel(self):
-        """只许改清单点名的格：格 02 没在清单里，动了就退回。
-
-        不拦的话它会顺手重写全稿，你看到的就是「补一处、改十处」。
-        """
+    def test_adopts_change_to_unflagged_panel(self):
+        """动了清单没点名的格 → 也采纳（只是逐格差异会照实列出来）。"""
         draft = _script("画面: safe, 1girl, solo, twintails, blue eyes",
                         "画面: safe, 1girl, solo, black hair, twintails, "
                         "white backpack on one shoulder")
@@ -1365,35 +1382,60 @@ class FixScriptTest(unittest.TestCase):
                       "white backpack on one shoulder, warm light")
         with mock.patch.object(comic_agent.llm, "call_llm", return_value=bad):
             r = comic_agent.fix_script(self.BRIEF, draft)
-        self.assertFalse(r["adopted"])
-        self.assertTrue(any("没点名" in x for x in r["rejects"]))
+        self.assertTrue(r["adopted"])
+        self.assertEqual(sorted(d["no"] for d in r["diff"]), ["01", "02"])
 
-    def test_rejects_panel_count_change(self):
+    def test_adopts_even_if_issues_remain(self):
+        """补正员只补了一部分：剩下的那些**不拦**，改对多少保住多少。"""
+        half = _script("画面: safe, 1girl, solo, black hair, twintails, backpack")
+        with mock.patch.object(comic_agent.llm, "call_llm", return_value=half):
+            r = comic_agent.fix_script(self.BRIEF, self.DRAFT)
+        self.assertTrue(r["adopted"])
+        self.assertTrue(any(it["kind"] == "bare_wearable" for it in r["audit"]))
+
+    def test_unusable_when_panel_count_changes(self):
+        """格号对不上＝改结构，不是补描述 → 不采纳，提示用户重跑。"""
         bad = _script("画面: safe, 1girl, solo, black hair, twintails, blue eyes",
                       "画面: safe, 1girl, solo, black hair, twintails")
         with mock.patch.object(comic_agent.llm, "call_llm", return_value=bad):
             r = comic_agent.fix_script(self.BRIEF, self.DRAFT)
         self.assertFalse(r["adopted"])
-        self.assertTrue(any("格号对不上" in x for x in r["rejects"]))
+        self.assertEqual(r["status"], "structure")
+        self.assertEqual(r["text"], self.DRAFT)
+        self.assertTrue(any("重新补正" in x for x in r["warnings"]))
 
-    def test_rejects_empty_output(self):
+    def test_unusable_when_not_a_script(self):
+        """返回的东西没有 `## NN` 骨架 → 解析不出剧本 → 不采纳，提示重跑。"""
+        with mock.patch.object(comic_agent.llm, "call_llm",
+                               return_value="好的，我已经把颜色补上了。"):
+            r = comic_agent.fix_script(self.BRIEF, self.DRAFT)
+        self.assertFalse(r["adopted"])
+        self.assertEqual(r["status"], "unparseable")
+        self.assertEqual(r["text"], self.DRAFT)
+
+    def test_unusable_when_empty_output(self):
         with mock.patch.object(comic_agent.llm, "call_llm", return_value="  "):
             r = comic_agent.fix_script(self.BRIEF, self.DRAFT)
         self.assertFalse(r["adopted"])
+        self.assertEqual(r["status"], "empty")
         self.assertEqual(r["text"], self.DRAFT)
+        self.assertTrue(any("重新补正" in x for x in r["warnings"]))
 
     def test_call_failure_returns_draft(self):
         with mock.patch.object(comic_agent.llm, "call_llm",
                                side_effect=RuntimeError("boom")):
             r = comic_agent.fix_script(self.BRIEF, self.DRAFT)
         self.assertFalse(r["adopted"])
+        self.assertEqual(r["status"], "error")
         self.assertEqual(r["text"], self.DRAFT)
+        self.assertTrue(any("重新补正" in x for x in r["warnings"]))
 
     def test_no_change_is_not_adopted(self):
         """模型把原稿原样交回：没改动就不算采纳（但也不算错）。"""
         with mock.patch.object(comic_agent.llm, "call_llm", return_value=self.DRAFT):
             r = comic_agent.fix_script(self.BRIEF, self.DRAFT)
         self.assertFalse(r["adopted"])
+        self.assertEqual(r["status"], "nochange")
         self.assertEqual(r["diff"], [])
 
     def test_issue_list_is_fed_to_model(self):

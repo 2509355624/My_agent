@@ -218,8 +218,10 @@ def api_comic_script():
             # 编剧的上下文长（十几轮查库），实测三格全漏发色；补正拿干净稿 +
             # 代码清单再补一遍。**直接落地**：采纳的补正稿就是 script.md，编剧
             # 原稿另存 script_original.md，页面拿 fix.json 显示逐格差异、可回退。
-            # 补正失败/被代码闸门拒收时 text 原样返回，流程照常往下走——
-            # 补正是加分项，不能因为它把整个编剧任务搞失败。
+            # ⚠️ 2026-10-12 用户拍板：补正**不再过准入闸门**，一律采纳；代码判据
+            # 只做检测（清单 + 采纳后的体检报告）。补正不采纳只有一种情形——
+            # 模型返回空/解析不出剧本/格号对不上（`status` 非 ok），此时 text 原样
+            # 返回、界面提示「请重新补正」。补正异常也绝不拖垮编剧任务。
             _progress("编剧交稿，开始补正")
             try:
                 fix = comic_agent.fix_script(brief, text, provider=provider,
@@ -227,8 +229,8 @@ def api_comic_script():
             except Exception as exc:            # 补正绝不许拖垮编剧
                 comic.log.exception("补正失败 job=%s", job)
                 fix = {"text": text, "issues": [], "diff": [], "adopted": False,
-                       "rejects": ["补正异常：%s" % exc], "warnings": [],
-                       "skipped": False, "model": ""}
+                       "status": "error", "warnings": ["补正异常：%s" % exc],
+                       "audit": [], "skipped": False, "model": ""}
             final = fix.get("text") or text
             with open(os.path.join(path, "script_original.md"), "w",
                       encoding="utf-8") as f:

@@ -266,34 +266,46 @@ function finishScript() {
 }
 
 // ── 内容补正报告（编剧之后的独立一步）─────────────────────
-// 补正是「编剧交稿 + 代码出问题清单 → 模型照着清单补 → 过代码闸门才采纳」。
-// 这里只负责把 fix.json 显示出来：采纳了改了什么，没采纳是为什么。
+// 补正是「编剧交稿 + 代码出问题清单（只做检测）→ 模型照清单补 → 直接采纳」。
+// 这里负责把 fix.json 显示出来：采纳了改了什么；没采纳只有一种情形——补正模型
+// 返回空 / 解析不出剧本 / 格号对不上，此时提示用户点「重新补正」重跑。
 // 数据来自 status 里的 fix 字段（落盘在任务目录的 fix.json），刷新页面也还在。
+const FIX_FAIL = {error: '调用失败', empty: '模型返回空',
+                  unparseable: '返回的格式解析不出剧本', structure: '格号与原稿对不上'};
 function renderFix(fix) {
   const box = document.getElementById('fixPanel');
   if (!fix) { box.style.display = 'none'; return; }
-  const sig = JSON.stringify([fix.adopted, fix.skipped, fix.diff, fix.rejects, fix.at]);
+  const sig = JSON.stringify([fix.status, fix.adopted, fix.skipped, fix.diff,
+                              fix.warnings, fix.audit, fix.at]);
   if (box.dataset.sig === sig) return;          // 没变就别重建，避免闪烁
   box.dataset.sig = sig; box.dataset.at = fix.at || '';
   box.style.display = 'block';
 
+  const st = fix.status || '';
   const bits = [];
   if (fix.skipped)
     bits.push('<span class="badge b-done">无需补正</span> 代码判据没发现问题，没调用补正模型');
+  else if (FIX_FAIL[st])
+    bits.push('<span class="badge b-error">补正失败（' + FIX_FAIL[st] + '）</span> 剧本保持原稿');
+  else if (st === 'nochange')
+    bits.push('<span class="badge b-error">未改动</span> 补正模型把原稿原样交回');
   else if (fix.adopted)
     bits.push('<span class="badge b-done">已采纳</span> 补正后直接成为剧本（原稿存为 script_original.md）');
   else
-    bits.push('<span class="badge b-error">未采纳</span> 补正稿没通过代码闸门，剧本保持原样');
+    bits.push('<span class="badge b-error">未采纳</span> 剧本保持原样');
 
   let h = '<div style="border:1px solid var(--border);border-radius:8px;padding:10px">';
   h += '<div style="font-size:13px;margin-bottom:6px">🩹 内容补正（' + esc(fix.at || '')
      + '）：' + bits.join('') + '</div>';
+  if (FIX_FAIL[st])
+    h += '<div style="color:var(--error);font-size:13px;margin-top:6px;font-weight:500">'
+       + '👉 请点上方「🩹 重新补正」重跑一次</div>';
   if (fix.issues && fix.issues.length)
     h += '<div style="color:var(--text-dim);font-size:12px">代码清单：'
        + fix.issues.length + ' 处</div>';
-  if (fix.rejects && fix.rejects.length)
-    h += '<div style="color:var(--error);font-size:12px;margin-top:4px">拒收原因：'
-       + fix.rejects.map(esc).join('；') + '</div>';
+  if (fix.audit && fix.audit.length)
+    h += '<div style="color:var(--text-dim);font-size:12px;margin-top:4px">'
+       + '补正后代码判据仍报 ' + fix.audit.length + ' 处（仅供参考，不影响采纳）</div>';
   if (fix.warnings && fix.warnings.length)
     h += '<div style="color:var(--text-dim);font-size:12px;margin-top:4px">'
        + fix.warnings.map(esc).join('；') + '</div>';
@@ -338,7 +350,12 @@ async function refix() {
           const t = await api('/api/comic/script_text?task=' + TASK);
           if (t.script) document.getElementById('script').value = t.script;
         } catch (e) { console.warn(e); }
-        toast(s.fix.adopted ? '补正已采纳' : '补正未采纳，见下方说明');
+        const bad = !!FIX_FAIL[s.fix.status];
+        toast(bad ? ('补正失败：' + FIX_FAIL[s.fix.status] + '，请点「重新补正」重跑')
+                  : (s.fix.adopted ? '补正已采纳'
+                                   : (s.fix.status === 'nochange'
+                                      ? '补正模型没改动任何一处'
+                                      : '补正未改动，见下方说明')), bad);
         break;
       }
       if (!s.running) break;              // 跑完了却没有新报告 = 后台出错
