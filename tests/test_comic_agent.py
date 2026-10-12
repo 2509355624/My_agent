@@ -1175,6 +1175,19 @@ class PromptTest(unittest.TestCase):
     def test_panel_count_injected(self):
         self.assertIn("正好 7 格", comic_agent._system_prompt(7))
 
+    def test_fix_and_chat_prompts_carry_pov_rules(self):
+        """补正员 / 修订助手也必须带 POV 视角硬规则（2026-10-12 用户拍板：
+        「补写 ai 也得知道这些东西」）。规则从编剧提示词里切，单一出处。"""
+        for prompt in (comic_agent._fix_system_prompt(),
+                       comic_agent._chat_system_prompt()):
+            self.assertIn("互动动作的双手账", prompt)
+            self.assertIn("记录者", prompt)
+            self.assertIn("改构图，绝不删服饰", prompt)
+            self.assertIn("画面里没有我的身体，模型看不见落点", prompt)
+            # 标记本身要被切掉，不能残留在给模型的提示里
+            self.assertNotIn("开始】", prompt)
+            self.assertNotIn("结束】", prompt)
+
     def test_tool_call_format_is_taught(self):
         """必须写明 [[TOOL:...]]{...} 格式。
 
