@@ -1165,6 +1165,12 @@ class PromptTest(unittest.TestCase):
         self.assertIn("连沙发都不出现", p)
         self.assertIn("sitting, couch, living room, looking at viewer", p)
         self.assertIn("standing, genkan, removing_shoes, looking back", p)
+        # 规则 20：互动动作的双手账——她对我只写「朝镜头」，落点在我身上的不写
+        self.assertIn("互动动作的双手账", p)
+        self.assertIn("reaching_towards_viewer", p)
+        self.assertIn("双手独占", p)
+        self.assertIn("画面里没有我的身体，模型看不见落点", p)
+        self.assertIn("我的手抵住她胸口", p)
 
     def test_panel_count_injected(self):
         self.assertIn("正好 7 格", comic_agent._system_prompt(7))

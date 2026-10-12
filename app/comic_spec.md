@@ -274,6 +274,9 @@ bedroom, girl wearing old pink frilled pajamas and pink frilled shorts, bare fee
 | **旁白「我」↔ 画面视角必须对上** | 旁白是「我」的剧情，画面标签里就得有 `pov` / `pov hands`（或 `female_pov`）；只有旁白有「我」而画面没有视角标签，模型按第三人称机位渲染 |
 | **她在哪由旁白决定，她不自己挪窝** | 旁白只说「传来炒菜声」→ 画面就是从玄关望进厨房的她（`kitchen, stove, cooking, looking back`），❌ 画成 `open door, genkan` 迎在门口——那是把「我」的位置套到她身上、还替她走完了旁白没写的路。她的移动必须是旁白明写的节拍；开口打招呼 ≠ 已经站到面前，可以隔着房间喊 |
 | **旁白写「我」，画面写「她」** | 旁白补充「我」此刻在做什么（语境），**不是画面内容**：「我」坐哪 / 拿什么 / 在哪，一律不生成画面标签，连沙发都不出现。「我坐在沙发上看她换鞋」→ 画面只有她在玄关 `removing_shoes` + 回头。逐标签自查：这个标签是谁的状态？不是她 → 删 |
+| **我对她做的动作随便写** | 落点在画里看得见。`another's` 族齐全：`holding another's wrist` / `arm around another's waist` / `arm_on_another's_head` / `hand on another's cheek` / `hand_on_another's_chin` / `princess carry` + `carrying`……写前查库 |
+| **她对我做的动作只写「朝镜头」** | 安全：视线 `looking_at_viewer`；朝镜头 `reaching_towards_viewer` / `running_towards_viewer`。❌ 落点在我身上的（抵胸 / 搂腰 / 抱我 / 抓我 / 壁咚 / 靠肩）一律不写——画面里没有观众的身体，模型看不见落点会**画反方向**（写她的手抵我胸→画成我的手抵她胸）。落点写进旁白，画面只留 `reaching_towards_viewer` + 表情 |
+| **双手独占** | `pov hands` 正在做事（抱 / 攥 / 捧）的格子，她的手不许再指向我——两组手的动作会被模型搅成一锅粥。她只做不指手的事：表情 / 视线 / `struggling` / `panicking`。唯一例外：公主抱格她头在镜头边，`arm_around_neck` 这种贴着镜头的能过，落到画面纵深（腰背胸口）的照样翻车 |
 | **交稿前逐格三问** | ① 我的眼睛在哪（旁白里我的位置）？② 她在哪（旁白里她的位置）？③ 画面位置标签写的是 ② 那个地方吗？③ 和 ② 对不上 → 改位置标签，不是改旁白 |
 | **画面＝「我」的眼睛看到的（2026-10-12 补）** | 你是记录者：她站在哪由旁白决定。旁白说她在厨房 → 画面是**从玄关望进厨房**的她（`kitchen, stove, cooking`），**不是** `standing, doorway`（那是把「我」进门的位置套到她身上）；「我」的动作（推门/走近）只进旁白，绝不变成她的标签；她不在视野的瞬间不成格——让旁白推进到她入画，或镜头已经对着她 |
 
