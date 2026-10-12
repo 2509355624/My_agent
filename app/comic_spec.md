@@ -242,6 +242,7 @@ bedroom, girl wearing old pink frilled pajamas and pink frilled shorts, bare fee
 | `backpack` / `sailor collar` / `pleated skirt` | 只有类别名，**没写颜色** | `white backpack on one shoulder` / `white sailor collar` / `white pleated skirt` |
 | `backpack, backpack on one shoulder` | 同一件东西写了两遍，模型会画**两个包** | 合并成 `white backpack on one shoulder` |
 | 01/02 格 `pov hands`，03 格 `1girl, 1boy` + 男装 | 镜头人称中途跳了，凭空多出一个男生 | 全篇保持第一人称：「我」只出手，03 格用 `1other` + `pov hands`，**别写 `1boy`** |
+| 01 她已喊「啊——回来啦！」，04 又「咦，哥哥回来啦？」 | 台词倒退回演过的节拍：认过的面再认一次，前后穿帮 | 台词只往前走：04 接在 03 后面（催洗手 / 让摆碗筷）；交稿前把全话气泡连读一遍，后一句必须在前一句之后还成立 |
 
 ---
 
