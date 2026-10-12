@@ -155,7 +155,7 @@ class CheckTest(unittest.TestCase):
 
     def test_accepts_good_script(self):
         ok, why = comic_agent.check(
-            "## 01\n画面: 1girl, solo, hand grab\n气泡: 一\n"
+            "## 01\n画面: 1girl, solo, pov, hand grab\n气泡: 一\n"
             "标签: 我攥住了她的书包带\n", 1)
         self.assertTrue(ok, why)
 
@@ -175,7 +175,7 @@ class CheckTest(unittest.TestCase):
         不是「库里没有」），见下面两个测试类。
         """
         ok, why = comic_agent.check(
-            "## 01\n画面: 1girl, solo, white in-ear earphones\n气泡: 一\n"
+            "## 01\n画面: 1girl, solo, pov, white in-ear earphones\n气泡: 一\n"
             "标签: 她回过头\n", 1)
         self.assertTrue(ok, why)
         # 但函数本身还留着（日志用），并且照样能认出库外的词
@@ -426,10 +426,35 @@ class PovConflictTest(unittest.TestCase):
         self.assertEqual([("03", "1boy")], got)
 
     def test_third_person_script_may_use_1boy(self):
-        """整话没有 pov 的双人剧本是第三人称，写 `1boy` 合法，不拦。"""
-        self.assertEqual([], comic_agent.pov_conflicts(self._script(
+        """2026-10-12 拍板后第三人称口子封死：`1boy` / `2girls` 无条件拦。"""
+        got = comic_agent.pov_conflicts(self._script(
             "safe, 1girl, 1boy, white uniform, black hoodie, bus interior",
-            "safe, 1girl, 1boy, white uniform, black hoodie, bus interior")))
+            "safe, 2girls, hug, classroom"))
+        self.assertEqual([("01", "1boy"), ("02", "2girls")], got)
+
+    def test_pov_missing_is_reported(self):
+        """全篇默认 POV：没写视角标签的格要出清单（检测，不是闸门）。"""
+        got = comic_agent.pov_missing(self._script(
+            "safe, 1girl, solo, standing, bus interior",
+            "safe, 1girl, solo, pov, standing, bus interior",
+            "safe, 1girl, solo focus, 1other, pov, pov hands, "
+            "holding another's wrist"))
+        self.assertEqual([("01", "pov")], got)
+
+    def test_pov_mixed_reports_minority_side(self):
+        """`pov` 与 `female_pov` 不许一半一半：报少数派那侧（2026-10-12 实测）。"""
+        got = comic_agent.pov_mixed(self._script(
+            "safe, 1girl, solo, pov, standing",
+            "safe, 1girl, solo, pov, walking",
+            "safe, 1girl, solo focus, 1other, female_pov, pov hands, "
+            "holding another's wrist",
+            "safe, 1girl, solo focus, 1other, female_pov, pov hands, "
+            "holding another's wrist"))
+        self.assertEqual([("03", "female_pov"), ("04", "female_pov")], got)
+        # 全篇统一时不报
+        self.assertEqual([], comic_agent.pov_mixed(self._script(
+            "safe, 1girl, solo, pov, standing",
+            "safe, 1girl, solo, pov, walking")))
 
     def test_solo_plus_1boy_is_a_solo_conflict(self):
         got = comic_agent.solo_conflicts(
@@ -494,18 +519,17 @@ class MergedPeopleTest(unittest.TestCase):
         ok, why = comic_agent.check(self._script(
             "safe, 2girls, black hair, white sailor uniform, hug, classroom"), 1)
         self.assertFalse(ok)
-        self.assertIn("girl1", why)          # 点名那段的写法示范
-        self.assertIn("hug from behind", why)
+        self.assertIn("只允许女主一个人", why)   # 新默认：多人数同框不再教写法，直接改单人格
+        self.assertIn("pov hands", why)
 
     def test_prompt_teaches_female_pov_and_grouping(self):
         p = comic_agent._system_prompt(3)
         self.assertIn("female_pov", p)
         self.assertIn("男性第一人称", p)       # 为什么必须换：pov 的默认先验
-        self.assertIn("谁对谁做什么", p)
-        self.assertIn("两套外貌不许交叉", p)
-        self.assertIn("hug from behind", p)
-        # 主体那条：画面写的是镜头里可见的人，不是「我」
-        self.assertIn("镜头对着谁", p)
+        self.assertIn("画面里永远只有一个人物", p)   # 新规则 16：多人数同框退役
+        self.assertIn("画面里永远只有女主一个人", p)  # 规则 6：人数标签只有两种写法
+        # 主体那条：画面写的是女主的外貌，不是「我」
+        self.assertIn("外貌永远是女主的", p)
         self.assertIn("整个消失", p)
         # 女女向视角那条：必须带「什么时候才写 pov」的边界，否则哥哥视角会被误伤
         self.assertIn("只有「我」明确是男性", p)
@@ -1179,17 +1203,18 @@ class PromptTest(unittest.TestCase):
         self.assertIn("同一件东西只写一个标签", p)
 
     def test_teaches_pov_consistency(self):
-        """镜头人称定下就不许变：POV 剧本里不许出现 `1boy`。
+        """全篇默认第一人称 POV：画面里只有女主，`1boy` / `2girls` 任何格都不许写。
 
-        2026-10-11 用户原话：「如果是单人场景，不要写 1boy 这样的冲突的东西，
-        我图三看到个男的很难受……我这个角色的镜头视角抛出镜头，结果第三个场景
-        就直接出问题」。
+        2026-10-12 用户拍板原话：「我们默认就是以第一人称 POV 视角……画面里面
+        的主角就一个就行了，就一个女主……如果说什么逃跑中遇到黄毛，其实就
+        相当于我们就是黄毛，并不是说黄毛出现在画面里面」。
         """
         p = comic_agent._system_prompt(3)
-        self.assertIn("整话的镜头人称", p)
-        self.assertIn("任何情况下都不许写 `1boy`", p)
-        self.assertIn("视角跳了", p)
-        self.assertIn("不许给「我」写服饰", p)
+        self.assertIn("全篇默认第一人称 POV", p)
+        self.assertIn("任何情况下都不许写 `1boy` / `2girls`", p)
+        self.assertIn("观众本人扮演", p)
+        self.assertIn("不许给「我」写", p)
+        self.assertIn("looking at viewer", p)     # 她对镜头做动作的标签族
         # 旧提示词那句「那只手明显是男性手臂时可写 1boy 代替 1other」必须彻底删掉
         self.assertNotIn("可写 `1boy` 代替", p)
         self.assertNotIn("是男性就写 `1boy`", p)
@@ -1287,7 +1312,7 @@ class InventedNamesTest(unittest.TestCase):
 
     def test_check_only_guards_when_brief_given(self):
         """不传 brief 就跳过这条判据——老调用点（check(text, n)）行为不变。"""
-        text = _script("画面: safe, 1girl, Izumi Sagiri, black hair")
+        text = _script("画面: safe, 1girl, pov, Izumi Sagiri, black hair")
         self.assertTrue(comic_agent.check(text, 1)[0])
         self.assertFalse(comic_agent.check(text, 1, "需求里没这个名字")[0])
 
@@ -1323,7 +1348,7 @@ class CollectIssuesTest(unittest.TestCase):
             self.assertTrue(it["no"] and it["detail"])
 
     def test_clean_script_gives_no_issues(self):
-        text = _script("画面: safe, 1girl, solo, black hair, twintails, "
+        text = _script("画面: safe, 1girl, solo, pov, black hair, twintails, "
                        "white backpack on one shoulder")
         self.assertEqual(comic_agent.collect_issues(text, "需求"), [])
 
@@ -1341,7 +1366,7 @@ class FixScriptTest(unittest.TestCase):
 
     def test_skips_llm_when_no_issues(self):
         """清单为空就一次都别调——没有要补的，烧调用是纯浪费。"""
-        clean = _script("画面: safe, 1girl, solo, black hair, twintails, "
+        clean = _script("画面: safe, 1girl, solo, pov, black hair, twintails, "
                         "white backpack on one shoulder")
         with mock.patch.object(comic_agent.llm, "call_llm") as m:
             r = comic_agent.fix_script(self.BRIEF, clean)

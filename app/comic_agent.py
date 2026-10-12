@@ -480,23 +480,72 @@ def duplicate_wearables(text):
     return list(dict.fromkeys(out))
 
 
+# 每一格都必须声明第一人称视角（2026-10-12 用户拍板：全篇默认 POV，没有第三人称格）。
+_POV_FAMILY = frozenset(("pov", "pov_hands", "female_pov"))
+
+# 画面里合法的人物计数只有 `1girl`（观众的手入画时再加 `1other`）。写这些就是
+# 画里多出一个人——男性角色是**观众本人扮演的**，永远不该出现在画面里。
+_FORBIDDEN_PEOPLE = frozenset(("1boy", "2boys", "multiple boys",
+                               "2girls", "multiple girls", "multiple_girls"))
+
+
 def pov_conflicts(text):
-    """POV 剧本里出现完整男性角色（`1boy`）的格，返回 [(格号, "1boy"), ...]。
+    """画面里出现第二个人物（`1boy` / 多人计数）的格，返回 [(格号, tag), ...]。
 
-    2026-10-11 用户实测：01/02 格用 `pov hands` 把「我」写成一只手，03 格却写了
-    `1girl, 1boy` + `black hoodie, grey pants`，画面里凭空多出一个男生。用户
-    原话：「我图三看到个男的很难受……我这个角色的镜头视角抛出镜头，结果第三个
-    场景就直接出问题」。
+    2026-10-12 用户拍板：**全篇默认第一人称 POV，画面里永远只有一个女主**。
+    镜头＝观众的眼睛；剧情里的男性角色（黄毛 / 哥哥 / 上司……）是**观众本人
+    扮演的**，只能以手入画（`pov hands` + 动作标签），绝不完整入画——`1boy`
+    写上去模型就补出一个完整的男人（脸、身体、衣服全都有），观众就从镜头
+    后面被拽进画面里了（2026-10-11 实测：03 格凭空多出一个男生）。
 
-    判据是**跨格**的：只要整话里有任何一格声明了 `pov` / `pov hands`，这一话
-    就是第一人称视角，「我」只能以手或手臂入画 → 任何格都不许写 `1boy`。
-    反过来，整话没有 pov 的双人剧本（第三人称）写 `1boy` 是合法的，不拦。
+    2026-10-11 旧版只拦「已声明 pov 的话里的 `1boy`」，给第三人称双人剧本
+    留了口子；《夜路遇黄毛》实测：旁白全是「我」却一个 pov 都没写，旧判据
+    全放行，黄毛被画成金发女生、金发蹭上黑发女主。新默认下**无条件**拦。
     """
     _, panels = comic.parse_script_text(text)
-    by_panel = [(p["no"], _scene_tags(p)) for p in panels]
-    if not any({"pov", "pov_hands"} & set(ts) for _, ts in by_panel):
+    out = []
+    for p in panels:
+        ts = set(_scene_tags(p))
+        for tag in _FORBIDDEN_PEOPLE & ts:
+            out.append((p["no"], tag))
+    return out
+
+
+def pov_missing(text):
+    """没写任何视角标签的格 → [(格号, "pov"), ...]。
+
+    全篇第一人称是默认规范（2026-10-12 拍板）：每一格都是观众的眼睛在看
+    女主。旁白里的「我」只有落在画面标签上（`pov` / `pov hands` /
+    `female_pov`）才成立，否则模型按第三人称机位渲染——《夜路遇黄毛》
+    实测：旁白全是「我」，画面一个 pov 都没有，渲染成旁观机位拍两个人。
+
+    只做检测出清单（交给补正员补写），不是准入闸门。
+    """
+    _, panels = comic.parse_script_text(text)
+    return [(p["no"], "pov") for p in panels
+            if not (_POV_FAMILY & set(_scene_tags(p)))]
+
+
+def pov_mixed(text):
+    """`pov` 与 `female_pov` 混用的格 → [(格号, 少数派标签), ...]。
+
+    规则 14：整话统一，不许一半一半。视角标签代表「镜头后的人是谁」——
+    同一话里不可能一会儿男一会儿女。哪侧是错的代码判不了（得读需求：
+    同样两个标签在百合话里 female_pov 对、在黄毛话里 pov 对），但「混用」
+    本身是纯计数。检测出来连同格号给补正员，由它读需求定统一成哪个。
+    2026-10-12 真跑《夜路遇黄毛》实测：01/02/05 写 pov、03/04 写
+    female_pov——镜头后是黄毛（男），混用会把男生的手画成女生的。
+    """
+    _, panels = comic.parse_script_text(text)
+    pairs = [(p["no"], set(_scene_tags(p))) for p in panels]
+    with_pov = [no for no, ts in pairs if "pov" in ts]
+    with_fpov = [no for no, ts in pairs if "female_pov" in ts]
+    if not with_pov or not with_fpov:
         return []
-    return [(no, "1boy") for no, ts in by_panel if "1boy" in ts]
+    fpov_is_minority = len(with_fpov) <= len(with_pov)
+    minority = with_fpov if fpov_is_minority else with_pov
+    tag = "female_pov" if fpov_is_minority else "pov"
+    return [(no, tag) for no in minority]
 
 
 # ─── 多人同框（2026-10-12）───────────────────────────────
@@ -709,8 +758,8 @@ def collect_issues(text, brief="", original=""):
 
     返回 [{"no": 格号（跨格问题为空）, "kind": 类别, "detail": 一句话}]。
     kind 取值：missing_hair_color / bare_wearable / duplicate_wearable /
-    solo_conflict / banned_tag / pov_conflict / merged_people / female_pov /
-    invented_name。
+    solo_conflict / banned_tag / pov_conflict / pov_missing / merged_people /
+    female_pov / invented_name。
     """
     issues = []
 
@@ -741,7 +790,9 @@ def collect_issues(text, brief="", original=""):
                                  "`holding another's wrist`" % tag})
     for no, tag in pov_conflicts(text):
         issues.append({"no": no, "kind": "pov_conflict", "tag": tag,
-                       "detail": "第一人称视角的剧本里不许出现 `1boy`，删掉它"})
+                       "detail": "画面里只允许女主一个人：男性角色是观众本人扮演"
+                                 "的，只能以手入画（`pov hands` + 动作标签），"
+                                 "删掉「%s」" % tag})
     for no, tag in merged_people(text):
         issues.append({"no": no, "kind": "merged_people", "tag": tag,
                        "detail": "这一格写了 `%s`（两个人同框）却只写得出**一套**"
@@ -751,6 +802,15 @@ def collect_issues(text, brief="", original=""):
         issues.append({"no": no, "kind": "female_pov", "tag": tag,
                        "detail": "这一话是女女向（百合），「我」是女性：把 `pov` "
                                  "换成 `female_pov`（`pov` 默认画出一只男人的手）"})
+    for no, tag in pov_missing(text):
+        issues.append({"no": no, "kind": "pov_missing", "tag": tag,
+                       "detail": "这一格没写视角标签：全篇默认第一人称 POV，"
+                                 "补 `pov`（女女向补 `female_pov`）"})
+    for no, tag in pov_mixed(text):
+        issues.append({"no": no, "kind": "pov_mixed", "tag": tag,
+                       "detail": "这一格的视角标签和整话其他格混用了（`pov` 与 "
+                                 "`female_pov` 不许一半一半）：读需求确认镜头后"
+                                 "的「我」是男是女，把「%s」统一成另一种" % tag})
     # 凭空人名：allowed 用「需求 + 原稿」，所以只有**补正稿新增**的人名会被报。
     for no, name in invented_names(text, (brief or "") + "\n" + (original or "")):
         issues.append({"no": no, "kind": "invented_name", "tag": name,
@@ -940,22 +1000,23 @@ Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有�
    对：pov, pov hands, holding another's wrist ← 视角方的手攥住她的手腕
    对：disembodied hand, holding another's wrist ← 只让一只手入画
    查「手」「抓」「手腕」「牵着」把这些标签找齐再用，别查一个词就落笔。
-6. **人数标签是本流程最容易错的一条，按情形分别写，不许一律写 `solo`：**
-   - 画面里只有一个人、第二方**任何**身体部位都不入画 → `1girl, solo`
-   - 画面里出现了视角方（哥哥/「我」）的手或手臂 → `1girl, solo focus, 1other`
-     （**绝对不能再写 `solo`**）
-   - **任何情况下都不许写 `1boy`**（见规则 14）——`1boy` 会让模型补出一个
-     **完整的人**：脸、身体、衣服全都有。视角方只出手，不出人。
+6. **人数标签只有两种写法（全篇第一人称 POV，画面里永远只有女主一个人）**：
+   - 我们的手**不**入画 → `1girl, solo`
+   - 我们的手或手臂入画 → `1girl, solo focus, 1other` + `pov hands` + 对应的
+     手部动作标签（**绝对不能再写 `solo`**）
+   - **任何情况下都不许写 `1boy` / `2girls`**（见规则 14）——剧情里的男性角色
+     （黄毛 / 哥哥 / 上司……）是**观众本人扮演的**，`1boy` 会让模型补出一个
+     **完整的人**：脸、身体、衣服全都有，观众就被拽进画面里了。
    为什么：Danbooru 官方角色计数规则里「一只手也算一个角色」（原话
    Disembodied hands and other body parts are counted）。写了 `solo` 又要画面
    出现第二只手，两条指令自相矛盾——实测后果有三种：手变成她自己的、抓握
    动作整个消失、或画出一团畸形的手。
-   视角方的**脸、身体、衣服一律不许出现**，只允许手或手臂入画，画面仍以
-   `1girl` 开头。给「我」写 `black hoodie` / `grey pants` 这类服饰，等于在说
-   「画一个穿这些的人」，模型就会把整个人画出来（2026-10-11 实测：03 格就是
-   这么凭空多出一个男生的）。
-   ⚠️ 写了 `1other` 就必须**真的**让第二方身体部位入画（手/手臂），并配上对应
-   的手部标签；这一格若根本没有第二方入画，就别写 `1other`，退回 `1girl, solo`。
+   观众（「我」）的**脸、身体、衣服一律不许出现**，只允许手或手臂入画，画面
+   仍以 `1girl` 开头。给「我」写 `black hoodie` / `grey pants` 这类服饰，等于
+   在说「画一个穿这些的人」，模型就会把整个人画出来（2026-10-11 实测：03 格
+   就是这么凭空多出一个男生的）。
+   ⚠️ 写了 `1other` 就必须**真的**让我们的手入画（手/手臂），并配上对应的
+   手部标签；这一格若根本没有手入画，就别写 `1other`，退回 `1girl, solo`。
    实测坑：旁白写着「我攥住了她的手腕」，画面却只写 `solo focus, 1other` 而
    不带任何手部标签——模型会把 `1other` 理解成「补一整个人进来」。
 7. 服饰颜色款式、灯光氛围每格写全并保持一致（见规范）。**物件走同一条规则**：
@@ -1040,53 +1101,39 @@ Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有�
    先想清楚这一格的镜头在哪：在车厢里就只写 `bus interior`（配 `handrail`、`door`），
    在站台就只写 `bus stop`（配 `outdoors`、`city`），然后**这一场景内保持不动**。
 
-14. **整话的镜头人称（视角）在第一格就定下来，之后不许变。** 这一话只要有任何
-   一格写了 `pov` / `pov hands`，它就是「我」的**第一人称视角**，那么：
-   - **全篇每一格都不许写 `1boy`**（写了模型就补出一个完整男人：脸、身体、
-     衣服全都有）；
-   - 「我」永远只以**手或手臂**入画，脸和身体一律不出现；
-   - 需要第二方在场：`1girl, solo focus, 1other` + `pov hands` +
-     `holding another's wrist`；
-   - **不许给「我」写服饰**（`black hoodie`、`grey pants` 这类词等于在说
-     「画一个穿这些的人」）。
-   - **「我」是女性（百合 / 女女向）时，视角标签写 `female_pov`，不是 `pov`**
-     ——`pov` 默认画男人的手（2026-10-12 用户实报：百合向剧本却出了男生的手）。
-     整话的写法要统一：要么全 `female_pov`，要么全 `pov`，不许一半一半。
-   2026-10-11 实测（用户原话「我图三看到个男的很难受」）：01/02 格用
-   `pov hands` 把「我」写成一只手，03 格却写了 `1girl, 1boy` + `black hoodie,
-   grey pants`，画面里凭空多出一个和前两格完全接不上的男生。
-   **视角跳了，观众立刻出戏**——这一条代码会跨格查，跳了就打回重写。
+14. **全篇默认第一人称 POV：镜头＝观众的眼睛，画面里永远只有女主一个人。**
+   （2026-10-12 用户拍板，没有第三人称格——不要考虑双人同框、多人、旁观机位。）
+   - **每一格都必须写视角标签 `pov`**；「我」是女性（百合 / 女女向）时写
+     `female_pov`，不是 `pov`——`pov` 默认画男人的手（2026-10-12 用户实报）。
+     整话写法要统一：要么全 `female_pov`，要么全 `pov`，不许一半一半。
+   - 剧情里的男性角色（黄毛 / 哥哥 / 上司……）是**观众本人扮演的**：他不入画，
+     观众通过自己的手（`pov hands`）参与剧情——我们抓她 → `pov hands` +
+     `holding another's wrist` 这类；她对着镜头（对我们）做动作 → 用
+     `* viewer` 族标签：`looking at viewer`（看镜头）、`grabbing viewer`
+     （抓我们的手）、`hugging viewer`、`reaching towards viewer`……
+     这族标签库里齐全，写前先查库。
+   - 「我」永远只以**手或手臂**入画，脸和身体一律不出现；**不许给「我」写
+     服饰**（`black hoodie`、`grey pants` 这类词等于在说「画一个穿这些的人」）。
+   - 旁白里的「我」必须和画面视角对得上：旁白是「我」的剧情，画面标签里就
+     得有 `pov` / `pov hands`（或 `female_pov`）——只有旁白有「我」、画面没有
+     视角标签，模型会按第三人称机位渲染（2026-10-12《夜路遇黄毛》实测：
+     旁白全是「我」，画面一个 pov 都没写，渲染成旁观机位拍两个人，黄毛被
+     画成金发女生、金发蹭上黑发女主）。
 
-15. **先看这一格镜头对着谁，再决定写谁的外貌。** `画面:` 写的是**镜头里真正
-   可见的那个人**的样子，不是「我」的样子——「我」只在手部入画（见规则 14）。
-   - 剧情主体是「我」→ 写「我」那套外貌（`black hair, purple eyes, white
-     sailor uniform` …）；
-   - 主体是别人（妹妹 / 青梅 / 学姐 / 学妹）→ 写**她**的外貌，**别把「我」那套
-     习惯性抄上去**。
+15. **`画面:` 里写的外貌永远是女主的，不是「我」的。** 「我」（观众）没有
+   外貌、没有服饰——只有手（见规则 14）。
+   - 剧情主体是谁（妹妹 / 青梅 / 学姐 / 学妹）→ 写**她**的外貌，**别把「我」
+     那套习惯性抄上去**。
    抄上去的后果很具体：模型把画面里唯一的那个人画成「我」，而这一格**该出现的
    那个人整个消失**（2026-10-11 实测：一格要画「青梅红着眼眶」，画面词里却
    只有「我」的黑长直 + 紫眼 + 白水手服，最后哭的人变成了「我」）。
    自检：这一格 `标签:` / `气泡:` 讲的是谁，`画面:` 里的外貌就得是谁的。
 
-16. **一格有两人及以上同框，必须把他俩分开写、写清谁对谁做。** 顺序固定：
-   人数 → 甲（发型 / 瞳色 / 服饰）→ 乙（发型 / 瞳色 / 服饰）→ 动作 → 场景 → 构图。
-   - **两套外貌不许交叉。** 甲的一整套写完再写乙的；不许一人一句交替着写。
-     反例（实跑混掉的那一版）：`black hair, white sailor collar, white school
-     uniform, navy pleated skirt, brown hair, short hair, green eyes, white
-     coat, red bowtie, navy pleated skirt` —— `navy pleated skirt` 出现两次、
-     中间还夹着 `brown hair`，模型分不清谁是谁、更分不清谁在抱谁。
-   - **点名用一句简短英语短语**（规范原话：先点名角色再描述外观）。库里有
-     `2girls`，**没有** `girl1` / `girl2`，所以「谁是谁」只能这么点：
-     错：`2girls, girl1, girl2, hug, black hair, white sailor uniform, brown
-         hair, white coat`
-     对：`2girls, the brown-haired girl in a white coat is hugging the
-         black-haired girl in a white sailor uniform from behind, hug from
-         behind, arm around another's waist, classroom, window, evening,
-         backlighting, cowboy shot`
-   - **动作必须自带方向**：`hug from behind` / `hug from side` /
-     `arm around another's waist`。只写 `hug`，模型分不出谁抱谁。
-   - 只有一个人、第二方不入画的格，照旧**只写逗号标签**（规则 1），不要用这种
-     英语短语——短语只服务于「两人及以上同框」这一种情况。
+16. **画面里永远只有一个人物（女主）。** 如果剧情看起来需要第二个人入画，
+   那说明视角写错了——那个人应该是镜头后面的「我们」：把他的动作改写成
+   我们的手（`pov hands` + 动作标签，见规则 5），或她的反应（`* viewer` 族
+   标签，见规则 14）。（2026-10-12 拍板：双人同框、多人构图、第三人称机位
+   全部不再使用。）
 
 17. **「我」的性别必须写进视角标签。** 百合 / 女女向的一话，「我」是女性，
    第一人称视角写 `female_pov`，**不许写 `pov`**——`pov` 的先验是**男性第一
@@ -1494,26 +1541,30 @@ def check(text, panels, brief=""):
             "颜色写在里面（`white backpack on one shoulder`）。" % items)
     pov = pov_conflicts(text)
     if pov:
-        items = "、".join("格 %s" % no for no, _ in pov[:6])
+        items = "、".join("格 %s 的 `%s`" % (no, tg) for no, tg in pov[:6])
         problems.append(
-            "这一话是第一人称视角（已经有 `pov` / `pov hands` 的格），%s 却写了 "
-            "`1boy`：`1boy` 会补出**一个完整的人**（脸、身体、衣服全都有），"
-            "和只出手的前几格完全接不上。把 `1boy` 删掉——「我」只以手或手臂"
-            "入画，第二方用 `1other` 表示，手部标签照旧（`pov hands` + "
-            "`holding another's wrist`）；也**不要给「我」写服饰**"
+            "画面里只允许女主一个人（全篇第一人称 POV），%s 出现了别人：剧情里的"
+            "男性角色（黄毛 / 哥哥 / 上司……）是**观众本人扮演的**，`1boy` 会补出"
+            "**一个完整的人**（脸、身体、衣服全都有），把观众从镜头后面拽进画面。"
+            "把计数标签删掉——「我」只以手或手臂入画，手部标签照旧（`pov hands` "
+            "+ `holding another's wrist`）；也**不要给「我」写服饰**"
             "（`black hoodie` / `grey pants` 都会把整个人画出来）。" % items)
+    nopov = pov_missing(text)
+    if nopov:
+        items = "、".join("格 %s" % no for no, _ in nopov[:6])
+        problems.append(
+            "%s 没写视角标签：全篇默认第一人称 POV（镜头＝观众的眼睛），每一格"
+            "都必须带 `pov`（女女向整话统一用 `female_pov`）。只有旁白里有"
+            "「我」、画面没有视角标签，模型会按第三人称机位渲染——实测整格"
+            "画风全错。" % items)
     merged = merged_people(text)
     if merged:
         items = _fmt_by_panel(merged)
         problems.append(
-            "这些格写了多人同框（%s），却**只写得出一个角色的外貌**：模型会画不出"
-            "第二个人的样子，要么让那格该出现的人整个消失、要么把他画成和第一个"
-            "人同一张脸。两个人（及以上）同框必须**各写一整套外貌**（发型 + 瞳色 "
-            "+ 服饰），并用**一句简短英语短语**点名谁是谁、谁对谁做什么——库里"
-            "没有 `girl1` / `girl2`，只能这么点：`2girls, the brown-haired girl "
-            "in a white coat is hugging the black-haired girl in a white sailor "
-            "uniform from behind`；动作也用自带方向的 `hug from behind` / `hug "
-            "from side` / `arm around another's waist`，别只写 `hug`。" % items)
+            "这些格写了多人同框（%s），却**只写得出一个角色的外貌**。全篇第一人称"
+            " POV 下画面里永远只有女主一个人：把这一格改写成单人格——「另一个人」"
+            "是镜头后的观众，用 `pov hands`（我们的手）或 `* viewer` 族标签"
+            "（她对我们做动作）来表达，多人计数标签删掉。" % items)
     fpov = female_pov_missing(text, brief)
     if fpov:
         items = "、".join("格 %s" % no for no, _ in fpov[:6])
