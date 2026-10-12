@@ -325,6 +325,14 @@ ENABLE_IMAGE_GEN = os.getenv("ENABLE_IMAGE_GEN", "true").lower() not in ("0", "f
 
 COMFYUI_URL = os.getenv("COMFYUI_URL", "http://127.0.0.1:8188")
 
+# ComfyUI 的 output 目录，**只服务于「下载兜底」**：图其实早就写好在磁盘上了，
+# 被掐掉的只是 HTTP 那一跳（RAM 守卫重启 ComfyUI 时撞上下载，实测两次丢图都
+# 是这么来的）。这时直接从本目录把同名文件复制过来，比丢掉整格强。
+# 留空 = 关掉兜底，只靠 app/comic.py 里 `_download` 的重试。
+# 文件名取自 ComfyUI 的 history，是 SaveImage 写下的真实名字，所以**同名即同图**；
+# 兜底故意不做「找最新一张」的猜测——猜错会静默落一张别的图，比报错难查得多。
+COMFYUI_OUTPUT_DIR = os.getenv("COMFYUI_OUTPUT_DIR", "")
+
 # 单张图的出图上限（秒）。**注意这是「一张」的时限，不是「一次调用」的**：
 # 生图在 image_jobs 里是逐张串行排队的，计时从每张**真正开跑**算起（排队时
 # 间不算，否则排在第 5 位的人还没轮到就被判超时了）。

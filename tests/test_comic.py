@@ -12,6 +12,7 @@
 
 import os
 import re
+import requests
 import sys
 import tempfile
 import unittest
@@ -953,6 +954,118 @@ class OfficialTextRulesTest(unittest.TestCase):
         """官方/社区都要求显式声明「保持不变」的那部分。"""
         for name, prompt in self._prompts().items():
             self.assertIn("保持不变", prompt, name)
+
+
+class DownloadFallbackTest(unittest.TestCase):
+    """取图失败不再一次判死（2026-10-12 加）。
+
+    两次丢图的现场（logs/agent.log）一模一样——RAM 守卫重启 ComfyUI 的同一
+    秒，客户端正在 `/view` 取那张**已经画好**的图，`ConnectionResetError(10054)`
+    直接把整格判死：
+
+        00:36:34,105 系统可用内存只剩 2.6GB（低于 3.0GB 水位），重启 ComfyUI 释放
+        00:36:34,870 [格 01] 场景渲染失败：ConnectionResetError(10054 ...)
+
+    钉住三层行为：先重试；窗口用尽再从 ComfyUI output 目录复制同名文件；
+    两样都没有才抛原异常。另外钉住兜底**只认纯文件名**。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.dst = os.path.join(self.tmp, "raw", "01_raw.png")
+        for name, value in (("_DOWNLOAD_RETRY_GAP", 0),
+                            ("_DOWNLOAD_RETRY_SECS", 60)):
+            p = mock.patch.object(comic, name, value)   # 真等 3 秒没意义
+            p.start()
+            self.addCleanup(p.stop)
+
+    class _Resp(object):
+        content = b"PNG"
+
+        def raise_for_status(self):
+            pass
+
+    def test_retries_then_succeeds(self):
+        """第一次被掐、第二次拿到 → 不惊动兜底，图也不该少一个字节。"""
+        calls = []
+
+        def fake_get(url, **kw):
+            calls.append(url)
+            if len(calls) == 1:
+                raise requests.exceptions.ConnectionError(
+                    ("Connection aborted.", ConnectionResetError(10054)))
+            return self._Resp()
+
+        with mock.patch.object(comic._session, "get", fake_get):
+            got = comic._download("01_raw.png", self.dst)
+        self.assertEqual(2, len(calls))
+        self.assertEqual(self.dst, got)
+        with open(self.dst, "rb") as f:
+            self.assertEqual(b"PNG", f.read())
+
+    def test_falls_back_to_comfy_output_dir(self):
+        """窗口用尽 → 从 ComfyUI output 目录复制同名文件（图本来就在那儿）。"""
+        out_dir = os.path.join(self.tmp, "comfy_output")
+        os.makedirs(out_dir)
+        with open(os.path.join(out_dir, "01_raw.png"), "wb") as f:
+            f.write(b"FROM_DISK")
+
+        def boom(url, **kw):
+            raise requests.exceptions.ConnectionError("ComfyUI 挂了")
+
+        with mock.patch.object(comic._session, "get", boom), \
+                mock.patch.object(comic, "COMFYUI_OUTPUT_DIR", out_dir), \
+                mock.patch.object(comic, "_DOWNLOAD_RETRY_SECS", 0):
+            got = comic._download("01_raw.png", self.dst)
+        self.assertEqual(self.dst, got)
+        with open(self.dst, "rb") as f:
+            self.assertEqual(b"FROM_DISK", f.read())
+
+    def test_raises_when_no_fallback_configured(self):
+        """没配 COMFYUI_OUTPUT_DIR（默认空）→ 只重试，取不到照旧抛。"""
+        def boom(url, **kw):
+            raise requests.exceptions.ConnectionError("ComfyUI 挂了")
+
+        with mock.patch.object(comic._session, "get", boom), \
+                mock.patch.object(comic, "COMFYUI_OUTPUT_DIR", ""), \
+                mock.patch.object(comic, "_DOWNLOAD_RETRY_SECS", 0):
+            with self.assertRaises(requests.exceptions.ConnectionError):
+                comic._download("01_raw.png", self.dst)
+        self.assertFalse(os.path.exists(self.dst))
+
+    def test_rejects_name_with_path(self):
+        """兜底只认纯文件名——带路径成分的一律不复制（否则能读到任意文件）。"""
+        out_dir = os.path.join(self.tmp, "comfy_output")
+        os.makedirs(out_dir)
+        with open(os.path.join(self.tmp, "secret.png"), "wb") as f:
+            f.write(b"SECRET")
+
+        def boom(url, **kw):
+            raise requests.exceptions.ConnectionError("ComfyUI 挂了")
+
+        with mock.patch.object(comic._session, "get", boom), \
+                mock.patch.object(comic, "COMFYUI_OUTPUT_DIR", out_dir), \
+                mock.patch.object(comic, "_DOWNLOAD_RETRY_SECS", 0):
+            with self.assertRaises(requests.exceptions.ConnectionError):
+                comic._download("../secret.png", self.dst)
+        self.assertFalse(os.path.exists(self.dst))
+
+    def test_missing_file_is_not_faked(self):
+        """output 目录里没有同名文件时**不猜**（不取最新一张），照旧抛。"""
+        out_dir = os.path.join(self.tmp, "comfy_output")
+        os.makedirs(out_dir)
+        with open(os.path.join(out_dir, "999_other.png"), "wb") as f:
+            f.write(b"OTHER")
+
+        def boom(url, **kw):
+            raise requests.exceptions.ConnectionError("ComfyUI 挂了")
+
+        with mock.patch.object(comic._session, "get", boom), \
+                mock.patch.object(comic, "COMFYUI_OUTPUT_DIR", out_dir), \
+                mock.patch.object(comic, "_DOWNLOAD_RETRY_SECS", 0):
+            with self.assertRaises(requests.exceptions.ConnectionError):
+                comic._download("01_raw.png", self.dst)
+        self.assertFalse(os.path.exists(self.dst))
 
 
 if __name__ == "__main__":

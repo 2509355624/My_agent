@@ -33,12 +33,13 @@ import random
 import re
 import shutil
 import sys
+import time
 from datetime import datetime
 
 import requests
 
 from app import comfy_src, image_jobs
-from app.config import BASE_DIR, COMFYUI_URL
+from app.config import BASE_DIR, COMFYUI_OUTPUT_DIR, COMFYUI_URL
 from app.skills import load_skill, load_workflow
 from app.tools.normal import generate_image
 
@@ -708,6 +709,10 @@ def _submit(workflow, skill, prompt, seed):
 # ComfyUI、找不到输出）重试没意义，直接抛。
 _TIMEOUT_HINT = "超时"
 
+# 下载重试窗口（秒）与间隔。**只重取文件，不重跑生成**——见 `_download`。
+_DOWNLOAD_RETRY_SECS = 180
+_DOWNLOAD_RETRY_GAP = 3
+
 
 def _submit_retry(make, what, tries=3):
     for attempt in range(1, tries + 1):
@@ -721,12 +726,62 @@ def _submit_retry(make, what, tries=3):
 
 
 def _download(filename, dst):
+    """把 ComfyUI 那边的输出图取到本地。
+
+    **失败不再一次判死，重试到窗口用完**——这个错几乎总是「图已经画好、
+    正在取文件时 ComfyUI 被重启」：RAM 守卫（`_maybe_restart_for_ram`，水位
+    `COMFY_MIN_FREE_RAM_GB`=3.0）在跑完一张后把 ComfyUI 重启掉，而同一时刻
+    客户端正在 `/view` 取这张图。现场见 logs/agent.log：
+        00:36:34,105 系统可用内存只剩 2.6GB（低于 3.0GB 水位），重启 ComfyUI 释放
+        00:36:34,870 [格 01] 场景渲染失败：ConnectionResetError(10054 ...)
+    两次丢图（10-11 21:09 / 10-12 00:36）都是这个形状。**图其实已经在
+    ComfyUI 的 output 目录里了**，重取一次就拿到，不必重跑生成。
+
+    窗口取 180 秒：和 `_restart_comfy` 等它回来的上限同一量级（冷启动约 60 秒）。
+    窗口用尽还有最后一招 `_copy_from_comfy_output`（磁盘兜底，需配
+    `COMFYUI_OUTPUT_DIR`），都没有才抛最后一个异常。
+    """
     os.makedirs(os.path.dirname(dst), exist_ok=True)
-    resp = _session.get(COMFYUI_URL.rstrip("/") + "/view",
-                        params={"filename": str(filename)}, timeout=120)
-    resp.raise_for_status()
-    with open(dst, "wb") as f:
-        f.write(resp.content)
+    deadline = time.time() + _DOWNLOAD_RETRY_SECS
+    last = None
+    while True:
+        try:
+            resp = _session.get(COMFYUI_URL.rstrip("/") + "/view",
+                               params={"filename": str(filename)}, timeout=120)
+            resp.raise_for_status()
+            with open(dst, "wb") as f:
+                f.write(resp.content)
+            return dst
+        except Exception as e:
+            last = e
+            if time.time() >= deadline:
+                break
+            log.warning("取图 %s 失败（%s），ComfyUI 多半在重启，%d 秒后重试",
+                        filename, type(e).__name__, _DOWNLOAD_RETRY_GAP)
+            time.sleep(_DOWNLOAD_RETRY_GAP)
+    got = _copy_from_comfy_output(filename, dst)
+    if got:
+        return got
+    raise last
+
+
+def _copy_from_comfy_output(filename, dst):
+    """磁盘兜底：`/view` 一直取不到时，直接从 ComfyUI 的 output 目录复制同名文件。
+
+    只在 `COMFYUI_OUTPUT_DIR` 配了、且确实有同名文件时才动手。**不做「取最新
+    一张」那种猜测**——图名来自 ComfyUI 的 history，是 SaveImage 写下的真实
+    名字，同名即同图；猜错会静默落一张别的图，比报错更难查。返回落盘路径，
+    没得兜就返回 None（由调用方抛原异常）。
+    """
+    root = (COMFYUI_OUTPUT_DIR or "").strip()
+    name = os.path.basename(str(filename))
+    if not root or not name or name != str(filename):
+        return None                      # 没配，或名字带路径成分 —— 一律不认
+    src = os.path.join(root, name)
+    if not os.path.isfile(src):
+        return None
+    shutil.copyfile(src, dst)
+    log.warning("改从 ComfyUI output 目录直接取图：%s", src)
     return dst
 
 
