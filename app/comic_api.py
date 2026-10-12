@@ -6,6 +6,10 @@
   POST /api/comic/script    编剧写剧本 → 内容补正 → 建任务目录（comics/C<日期>-<序号>/）
   POST /api/comic/save      用户编辑剧本后保存（确认开跑前的修改都走这里）
   POST /api/comic/fix       重跑内容补正（从 script_original.md 重来，直接落地）
+  POST /api/comic/chat_revise  和修订助手聊一句：改剧本（落地+备份）或答疑
+  GET  /api/comic/chat_status  轮询那句话的结果
+  GET  /api/comic/chat_history 任务里的对话历史（刷新页面显示回来）
+  POST /api/comic/chat_undo 撤销最近一次对话改稿（script_chat_backup.md → script.md）
   POST /api/comic/start     确认开跑：后台线程跑阶段一（场景图，不碰气泡）
   GET  /api/comic/status    槽位轮询：剧本 + state.json → 每格状态与图 URL
   POST /api/comic/rerender  换种子重跑某格（重置该格 → 后台只跑阶段一）
@@ -54,6 +58,39 @@ _JOBS_LOCK = threading.Lock()
 _SCRIPT_JOBS = {}
 _SCRIPT_LOCK = threading.Lock()
 _SCRIPT_KEEP = 12          # 只留最近这么多条，防长期运行攒内存
+
+# 对话修订任务：{job_id: {...}}。同一次只许一句话在跑（前端发送按钮置灰 +
+# 后端 job 检查双保险）；同一任务也不许并发改稿（跑渲染时后端直接拒绝）。
+_CHAT_JOBS = {}
+_CHAT_LOCK = threading.Lock()
+_CHAT_KEEP = 12
+_CHAT_HIST_MAX = 40        # chat_history.json 里最多留多少条（20 轮对话）
+
+
+def _read_chat_history(path):
+    """读任务的对话历史 chat_history.json；没有/坏了返回空列表（老任务目录）。"""
+    fp = os.path.join(path, "chat_history.json")
+    if not os.path.isfile(fp):
+        return []
+    try:
+        with open(fp, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        comic.log.warning("chat_history.json 读不动：%s", fp)
+        return []
+
+
+def _append_chat_history(path, user_msg, assistant_msg):
+    """把一轮对话追加进历史。LLM 上下文里只带最近几条，文件里留全一点，
+    刷新页面后对话还能整段显示回来。"""
+    hist = _read_chat_history(path)
+    hist.append({"role": "user", "content": user_msg})
+    hist.append({"role": "assistant", "content": assistant_msg})
+    del hist[:-_CHAT_HIST_MAX]
+    with open(os.path.join(path, "chat_history.json"), "w", encoding="utf-8") as f:
+        json.dump(hist, f, ensure_ascii=False, indent=1)
+    return hist
 
 
 def _task_dir(task_id):
@@ -452,6 +489,146 @@ def api_comic_rerender():
     if not started:
         return jsonify({"ok": False, "error": "这个任务已经在跑了"}), 409
     return jsonify({"ok": True, "no": no})
+
+
+@bp.route("/api/comic/chat_revise", methods=["POST"])
+def api_comic_chat_revise():
+    """和修订助手聊一句，改剧本 / 答疑。
+
+    用户 2026-10-12：补正只治代码清单里的问题，作者自己的小修小改（加长发、
+    背景换暖色）没有入口。这里给一个聊天框：作者说一句话 → comic_agent.chat_revise
+    要么交回改好的剧本（**直接落地 script.md**，改前整份备份到 script_chat_backup.md，
+    「撤销对话改动」可回退一级），要么回一段答复（剧本一字不动）。
+
+    异步跑（一次 LLM 调用，几秒到一分多钟；Flask 单线程，同步会堵死槽位轮询），
+    前端拿返回的 job 轮询 /chat_status。复用 _spawn 的互斥：渲染 / 补正还在跑时
+    拒绝改稿——改稿落地会把正在渲染的格偷偷换掉，等跑完再说。
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        path = _task_dir(data.get("task"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    message = str(data.get("message") or "").strip()
+    if not message:
+        return jsonify({"ok": False, "error": "先写一句话再发送"}), 400
+    provider = str(data.get("provider") or "").strip() or None
+    model = str(data.get("model") or "").strip() or None
+
+    with _JOBS_LOCK:
+        running = (_JOBS.get(path) or {}).get("phase")
+    if running:
+        return jsonify({"ok": False,
+                        "error": "这个任务正在跑（%s），等它结束再聊" % running}), 409
+
+    script_path = os.path.join(path, "script.md")
+    if not os.path.isfile(script_path):
+        return jsonify({"ok": False, "error": "任务里没有 script.md"}), 404
+    with open(script_path, encoding="utf-8") as f:
+        script = f.read()
+    brief = ""
+    bf = os.path.join(path, "brief.txt")
+    if os.path.isfile(bf):
+        with open(bf, encoding="utf-8") as f:
+            brief = f.read().strip()
+    history = _read_chat_history(path)
+
+    job = uuid.uuid4().hex[:12]
+    with _CHAT_LOCK:
+        _CHAT_JOBS[job] = {"state": "running", "reply": "", "changed": False,
+                           "diff": [], "warnings": [], "error": None,
+                           "task": os.path.basename(path), "at": None}
+        for k in [k for k, v in _CHAT_JOBS.items()
+                  if v["state"] != "running"][:-_CHAT_KEEP]:
+            _CHAT_JOBS.pop(k, None)
+
+    def _work():
+        r = comic_agent.chat_revise(script, message, brief=brief,
+                                    history=history[-8:],        # 最近 4 轮够用了
+                                    provider=provider, model=model)
+        reply = r.get("reply") or ""
+        if r.get("changed") and r.get("script"):
+            # 单级回退：改前整份备份。改两次只有最近一次可撤销——再早的用
+            # 「只保存」+ 手改都能到，聊天框的定位是小修小改，不是版本管理。
+            with open(script_path, encoding="utf-8") as f:
+                prev = f.read()
+            with open(os.path.join(path, "script_chat_backup.md"), "w",
+                      encoding="utf-8") as f:
+                f.write(prev)
+            with open(script_path, "w", encoding="utf-8") as f:
+                f.write(r["script"] + "\n")
+            comic.log.info("对话改稿落地 %s（%s）", os.path.basename(path),
+                           "、".join(d["no"] for d in r.get("diff", [])))
+        _append_chat_history(path, message, reply)
+        with _CHAT_LOCK:
+            _CHAT_JOBS[job].update(
+                state="done", reply=reply, changed=bool(r.get("changed")),
+                diff=r.get("diff") or [], warnings=r.get("warnings") or [],
+                at=time.strftime("%H:%M:%S"))
+
+    def _runner():
+        try:
+            _work()
+        except BaseException as exc:        # SystemExit 不是 Exception
+            comic.log.exception("对话改稿失败 %s", path)
+            with _CHAT_LOCK:
+                _CHAT_JOBS[job].update(state="error", error=str(exc))
+
+    threading.Thread(target=_runner, daemon=True, name="comic-chat").start()
+    return jsonify({"ok": True, "job": job})
+
+
+@bp.route("/api/comic/chat_status", methods=["GET"])
+def api_comic_chat_status():
+    """轮询一句话的修订结果。changed=true 时前端要把剧本 textarea 刷新成落地的
+    新稿（和 refix 一个道理，不然接着「确认开跑」会把旧文本存回去）。"""
+    job = str(request.args.get("job") or "").strip()
+    with _CHAT_LOCK:
+        j = _CHAT_JOBS.get(job)
+        if j is None:
+            return jsonify({"ok": False,
+                            "error": "没有这个对话任务（可能已过期）"}), 404
+        snap = dict(j)
+    snap["ok"] = True
+    return jsonify(snap)
+
+
+@bp.route("/api/comic/chat_history", methods=["GET"])
+def api_comic_chat_history():
+    """整个任务的对话历史（刷新页面后把聊天框显示回来）+ 有没有可撤销的备份。"""
+    try:
+        path = _task_dir(request.args.get("task"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    return jsonify({"ok": True, "history": _read_chat_history(path),
+                    "backup": os.path.isfile(
+                        os.path.join(path, "script_chat_backup.md"))})
+
+
+@bp.route("/api/comic/chat_undo", methods=["POST"])
+def api_comic_chat_undo():
+    """撤销最近一次对话改稿：script_chat_backup.md → script.md，备份删掉
+    （单级回退，撤完就没有了，再点提示无可撤销）。"""
+    data = request.get_json(silent=True) or {}
+    try:
+        path = _task_dir(data.get("task"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    backup = os.path.join(path, "script_chat_backup.md")
+    if not os.path.isfile(backup):
+        return jsonify({"ok": False, "error": "没有可撤销的对话改动"}), 404
+    with _JOBS_LOCK:
+        running = (_JOBS.get(path) or {}).get("phase")
+    if running:
+        return jsonify({"ok": False,
+                        "error": "这个任务正在跑（%s），等它结束再撤" % running}), 409
+    with open(backup, encoding="utf-8") as f:
+        prev = f.read()
+    with open(os.path.join(path, "script.md"), "w", encoding="utf-8") as f:
+        f.write(prev)
+    os.remove(backup)
+    comic.log.info("对话改稿已撤销 %s", os.path.basename(path))
+    return jsonify({"ok": True, "script": prev})
 
 
 @bp.route("/api/comic/edit_scene", methods=["POST"])

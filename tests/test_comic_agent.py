@@ -1617,5 +1617,93 @@ class FixScriptTest(unittest.TestCase):
         self.assertIn("原始需求", p)
 
 
+class ChatReviseTest(unittest.TestCase):
+    """剧本对话修订（2026-10-12）：聊天框里一句话，要么交回改好的剧本，
+    要么回一段「答复：」。采纳判据与补正同一条哲学——**只判格式，不判内容**，
+    交回了能解析、格号对得上的剧本就采纳（撤销按钮负责兜底）。"""
+
+    SCRIPT = _script("画面: safe, 1girl, solo, pov, twintails, blue eyes")
+    CHANGED = _script("画面: safe, 1girl, solo, pov, long straight hair, blue eyes")
+
+    def _call(self, ret, **kw):
+        with mock.patch.object(comic_agent.llm, "call_llm", return_value=ret) as m:
+            r = comic_agent.chat_revise(kw.pop("script", self.SCRIPT),
+                                        kw.pop("message", "女主加长发"),
+                                        **kw)
+        return r, m
+
+    def test_reply_form_strips_marker(self):
+        r, _ = self._call("答复：02 格用 pov 是因为镜头就是你的眼睛。")
+        self.assertFalse(r["changed"])
+        self.assertIsNone(r["script"])
+        self.assertIn("pov", r["reply"])
+        self.assertNotIn("答复：", r["reply"])
+
+    def test_reply_form_accepts_bold_marker(self):
+        r, _ = self._call("**答复：**你想改哪一格？")
+        self.assertFalse(r["changed"])
+        self.assertIn("改哪一格", r["reply"])
+
+    def test_adopts_changed_script(self):
+        r, _ = self._call(self.CHANGED)
+        self.assertTrue(r["changed"])
+        self.assertEqual(r["script"], self.CHANGED)
+        self.assertEqual([d["no"] for d in r["diff"]], ["01"])
+        self.assertIn("格 01", r["reply"])
+
+    def test_identical_script_is_not_a_change(self):
+        r, _ = self._call(self.SCRIPT)
+        self.assertFalse(r["changed"])
+        self.assertIsNone(r["script"])
+        self.assertTrue(r["warnings"])
+
+    def test_unparseable_output_shown_not_landed(self):
+        r, _ = self._call("已把女主改成长发啦！")
+        self.assertFalse(r["changed"])
+        self.assertIn("已把女主改成长发啦！", r["reply"])
+        self.assertTrue(any("解析不成剧本" in x or "找不到任何一格" in x
+                            for x in r["warnings"]))
+
+    def test_structure_mismatch_not_landed(self):
+        bad = _script(self.CHANGED.split("## 01\n", 1)[1].split("\n气泡", 1)[0],
+                      "画面: safe, 1girl, solo, pov, black hair")
+        r, _ = self._call(bad)
+        self.assertFalse(r["changed"])
+        self.assertTrue(any("格号" in x for x in r["warnings"]))
+
+    def test_empty_output_asks_retry(self):
+        r, _ = self._call("  ")
+        self.assertFalse(r["changed"])
+        self.assertIn("空", r["reply"])
+
+    def test_call_failure_returns_message(self):
+        with mock.patch.object(comic_agent.llm, "call_llm",
+                               side_effect=RuntimeError("boom")):
+            r = comic_agent.chat_revise(self.SCRIPT, "女主加长发")
+        self.assertFalse(r["changed"])
+        self.assertIn("调用失败", r["reply"])
+
+    def test_history_and_brief_are_fed_in(self):
+        hist = [{"role": "user", "content": "上句话"},
+                {"role": "assistant", "content": "上句回答"},
+                {"role": "system", "content": "这种要被丢掉"}]
+        r, m = self._call("答复：好", history=hist, brief="哥哥视角的躲雨故事")
+        self.assertFalse(r["changed"])
+        fed = " ".join(str(x.get("content") or "") for x in m.call_args.args[0])
+        self.assertIn("上句话", fed)
+        self.assertIn("哥哥视角的躲雨故事", fed)
+        self.assertNotIn("这种要被丢掉", fed)
+
+    def test_empty_message_rejected(self):
+        with self.assertRaises(ValueError):
+            comic_agent.chat_revise(self.SCRIPT, "   ")
+
+    def test_chat_prompt_defines_two_forms(self):
+        p = comic_agent._chat_system_prompt()
+        self.assertIn("答复：", p)
+        self.assertIn("完整剧本", p)
+        self.assertIn("分镜规范全文", p)
+
+
 if __name__ == "__main__":
     unittest.main()

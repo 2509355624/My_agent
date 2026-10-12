@@ -2083,3 +2083,138 @@ def fix_script(brief, text, provider=None, model=None, timeout=None,
              len(diff), "、".join(d["no"] for d in diff))
     _emit(progress, "补正完成：改了 %d 格" % len(diff))
     return out
+
+
+## ── 剧本对话修订（2026-10-12）────────────────────────────────────────
+#
+# 补正是「代码出清单 → 模型照单补」的脚本化一步，作者插不进话。但实际用起来
+# 作者常有**清单之外的小修小改**：「女主加长发」「03 格背景改成暖色系」——
+# 这类改动没有问题清单、不该从原稿重来，只要在当前剧本上动点名的地方。
+# 所以加一个聊天入口：作者说一句，模型要么交回改好的剧本，要么回一段话。
+
+CHAT_TIMEOUT = 240
+
+_CHAT_SYSTEM = """你是分镜剧本的**修订助手**，在聊天框里陪作者打磨一份已经生成的剧本。
+作者可能让你改剧本（「女主加长发」「背景改成暖色系」），也可能只是问问题
+（「02 格为什么这么写」）。
+
+**你的回复只有两种形态，二选一：**
+
+1. **改剧本**——直接输出改好的**完整剧本**，格式与原来完全一致（`# 标题：` /
+   `## NN` / `画面:` / `气泡:` / `气泡2:` / `标签1:` `标签2:`）。铁律：
+   - **只改作者点名的部分**，其余每一行逐字保留；`## NN` 的格号一个不许增删。
+   - 画面标签只能用规范里认可的真实写法；新写的外貌/服饰必须是「颜色 + 具体款式」，
+     同一个人 / 同一件东西全稿用同一个颜色。
+   - 改动要守分镜规范（POV、构图与服饰的对应、旁白格式等）——规范全文附在下面。
+2. **讨论 / 回答**——第一行以 `答复：` 开头，后面用纯文字回答或反问。这种形态
+   **绝不许输出剧本格式**（全文不许出现 `## NN`），免得被当成改稿落地。
+
+**拿不准就反问**：作者说得含糊（没说改哪一格、没说改成什么样），用 `答复：` 把
+问题问清楚，不要猜着改。一次只做作者这一句要求的事，不顺手夹带别的改动。
+
+输出只含上述两种形态之一，前后不要任何说明、注释或代码块围栏。"""
+
+
+def _chat_system_prompt():
+    """修订助手的系统提示 = 角色与两种回复形态 + 规范全文（与补正员同一份）。"""
+    spec = _story_spec_text() or ""
+    return _CHAT_SYSTEM + "\n\n以下是必须遵守的分镜规范全文：\n\n" + spec
+
+
+# 「答复：」标记——讨论形态的第一行。允许被加粗（**答复：**）或换行。
+_CHAT_REPLY_RE = re.compile(r"^\s*\**\s*答复\s*\**\s*[：:]\s*", re.M)
+
+
+def chat_revise(script, message, brief="", history=None, provider=None,
+                model=None, timeout=None):
+    """和修订助手聊一句：要么拿回一份改好的剧本，要么拿回一段答复。
+
+    采纳判据与补正同一条哲学——**只判格式，不判内容**（用户 2026-10-12 拍板：
+    代码判据只做检测、不做准入闸门）。模型交回了能解析、格号对得上的剧本就采纳，
+    改得对不对由作者自己在对话里看（界面会显示逐格差异，撤销按钮可回退）。
+
+    两种返回的区分靠**形态**而不是靠猜：
+      - 第一行是 `答复：` → 讨论，`script=None`，正文给 `reply`；
+      - 否则解析成剧本 → 解析得出且格号对得上 → 采纳，`reply` 由代码按差异生成；
+      - 都不是（空 / 解析不出 / 格号对不上）→ 不落地，原文当 `reply` 展示 +
+        warnings 说明，作者自己重说一句或重发。
+
+    参数 history：此前几轮对话（[{role, content}]），只取文字、不判内容；
+    传进来之前由调用方裁好长度。
+
+    返回 dict：
+      {"reply": 给作者看的那段话,
+       "script": 采纳的新剧本（没改稿 = None）,
+       "changed": 是否落了新稿, "diff": 逐格差异,
+       "warnings": 提示, "model": 实际用的模型}
+    """
+    if not (script or "").strip():
+        raise ValueError("剧本不能为空")
+    if not (message or "").strip():
+        raise ValueError("这句话是空的，没什么可答的")
+    clean_hist = []
+    for h in (history or []):
+        role = str(h.get("role") or "").strip()
+        content = str(h.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            clean_hist.append({"role": role, "content": content})
+
+    messages = ([{"role": "system", "content": _chat_system_prompt()}]
+                + clean_hist
+                + [{"role": "user", "content":
+                    "【原始需求】\n%s\n\n【当前剧本】\n%s\n\n【作者这句话】\n%s"
+                    % (brief or "（作者没给需求）", script, message.strip())}])
+    out = {"reply": "", "script": None, "changed": False, "diff": [],
+           "warnings": [], "model": ""}
+    try:
+        text = _strip_preamble(llm.call_llm(messages, provider=provider,
+                                            model=model,
+                                            timeout=timeout or CHAT_TIMEOUT))
+    except Exception as exc:
+        out["reply"] = "修订助手调用失败：%s —— 请再发一次" % exc
+        out["warnings"].append("调用失败")
+        log.warning("[comic-chat] 调用失败：%s", exc)
+        return out
+    text = (text or "").strip()
+    if not text:
+        out["reply"] = "修订助手返回了空内容 —— 请再发一次。"
+        out["warnings"].append("返回为空")
+        return out
+
+    # 形态一：讨论。把「答复：」标记剥掉，剩下的给作者看。
+    if _CHAT_REPLY_RE.match(text):
+        out["reply"] = _CHAT_REPLY_RE.sub("", text, count=1).strip() or text
+        return out
+
+    # 形态二：改稿。能解析 + 格号对得上 = 采纳；否则整段当答复展示，不落地。
+    try:
+        _, panels = comic.parse_script_text(text)
+    except Exception as exc:
+        out["reply"] = text
+        out["warnings"].append("返回的内容既不是「答复：」也解析不成剧本（%s），"
+                               "没有改动" % exc)
+        return out
+    if not panels:
+        out["reply"] = text
+        out["warnings"].append("返回的内容里找不到任何一格，没有改动")
+        return out
+    _, orig_panels = comic.parse_script_text(script)
+    if [p["no"] for p in panels] != [p["no"] for p in orig_panels]:
+        out["reply"] = text
+        out["warnings"].append("返回的剧本格号与当前对不上（改结构要回编剧重跑），"
+                               "没有改动")
+        return out
+
+    diff = diff_scripts(script, text)
+    if not diff:
+        out["reply"] = "模型交回的剧本和当前完全一样，没有改动。"
+        out["warnings"].append("未改动")
+        return out
+
+    out.update(script=text, changed=True, diff=diff,
+               reply="已按你的要求改了剧本：改了 %s。确认没问题就点「确认开跑」，"
+                     "改坏的格可以单独重画；这步改动可用「撤销对话改动」回退。"
+                     % "、".join("格 " + d["no"] for d in diff))
+    log.info("[comic-chat] 采纳对话改稿：改了 %d 格（%s）",
+             len(diff), "、".join(d["no"] for d in diff))
+    return out

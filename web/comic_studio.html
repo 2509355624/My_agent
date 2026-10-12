@@ -113,6 +113,17 @@
     </div>
     <textarea id="script" style="display:none" spellcheck="false"></textarea>
     <div id="fixPanel" style="display:none;margin-top:10px"></div>
+    <div id="chatBox" style="display:none;margin-top:10px;border:1px solid var(--border);border-radius:8px;padding:10px">
+      <div style="font-size:13px;margin-bottom:6px">💬 和修订助手聊剧本
+        <span style="color:var(--text-dim);font-size:12px">——说「女主加长发」「03 格背景换成暖色」，它只动点名的地方；也可以直接问它问题</span>
+      </div>
+      <div id="chatLog" style="max-height:220px;overflow-y:auto;font-size:13px;line-height:1.55;margin-bottom:8px"></div>
+      <div class="row">
+        <input id="chatInput" style="flex:1" placeholder="例如：女主的头发改成长直发；02 格背景改成暖色系……" onkeydown="if(event.key==='Enter')chatSend()">
+        <button class="btn primary" id="btnChat" onclick="chatSend()">发送</button>
+        <button class="btn" id="btnChatUndo" onclick="chatUndo()" title="回退到最近一次对话改稿之前" style="display:none">↩️ 撤销对话改动</button>
+      </div>
+    </div>
     <div class="row" id="scriptOps" style="display:none;margin-top:10px">
       <span style="color:var(--text-dim);font-size:12px">剧本可直接改字（场景行/台词行都行），改完点确认开跑按改过的跑</span>
       <span class="spacer" style="flex:1"></span>
@@ -169,7 +180,7 @@ function setBusy(b, phase) {
   // 槽位刷新会调 setBusy(false)，把「生成剧本」重新启用（用户能重复点，
   // 一重复就是两个 agent 在并发烧 token）。
   const busy = b || !!SCRIPT_JOB;
-  for (const id of ['btnScript', 'btnSave', 'btnStart', 'btnBubbleAll', 'btnRefix'])
+  for (const id of ['btnScript', 'btnSave', 'btnStart', 'btnBubbleAll', 'btnRefix', 'btnChat', 'btnChatUndo'])
     document.getElementById(id).disabled = busy;
   document.querySelectorAll('.slot .ops button, .slot .ops select').forEach(x => x.disabled = busy);
   // 手动修复栏也要锁：跑一轮 Qwen 时再点一次就是两个后台任务抢同一格。
@@ -258,6 +269,8 @@ async function pollScript() {
   ta.style.display = 'block'; ta.value = d.script;
   renderFix(d.fix);                       // 补正报告（编剧之后那一步）
   document.getElementById('scriptOps').style.display = 'flex';
+  document.getElementById('chatBox').style.display = 'block';
+  loadChatHistory();
   toast('剧本已生成：' + TASK);
   finishScript();
   refresh();
@@ -370,6 +383,124 @@ async function refix() {
   } finally {
     btn.disabled = false; btn.textContent = '🩹 重新补正';
   }
+}
+
+// ── 剧本对话修订（2026-10-12）─────────────────────────────
+// 补正只治代码清单里的问题；作者自己的小修小改（加长发、背景换暖色）在这里说。
+// 后端要么交回改好的剧本（落地 script.md，改前备份 script_chat_backup.md，
+// 「撤销对话改动」回退一级），要么回一段答复（剧本不动）。
+let CHAT_JOB = null;      // 正在跑的一句（跑完置回 null）
+let CHAT_HIST = [];       // 本任务的对话历史 [{role, content}]
+
+async function loadChatHistory() {
+  if (!TASK) return;
+  try {
+    const d = await api('/api/comic/chat_history?task=' + TASK);
+    CHAT_HIST = d.history || [];
+    chatShowUndo(!!d.backup);
+    renderChat();
+  } catch (e) { console.warn(e); }
+}
+
+function renderChat() {
+  const log = document.getElementById('chatLog');
+  if (!CHAT_HIST.length) {
+    log.innerHTML = '<div style="color:var(--text-dim)">还没有对话——第一句想改什么直接说。</div>';
+    return;
+  }
+  // 签名没变就不重建，避免轮询重绘时把滚动位置顶回顶部。
+  const sig = JSON.stringify(CHAT_HIST);
+  if (log.dataset.sig === sig) return;
+  log.dataset.sig = sig;
+  log.innerHTML = CHAT_HIST.map(m => {
+    const mine = m.role === 'user';
+    return '<div style="margin-bottom:6px;text-align:' + (mine ? 'right' : 'left') + '">'
+      + '<span style="display:inline-block;max-width:88%;white-space:pre-wrap;'
+      + 'border:1px solid var(--border);border-radius:8px;padding:6px 10px;'
+      + (mine ? 'background:var(--accent-dim,rgba(0,0,0,.04))' : '') + '">'
+      + esc(m.content) + '</span></div>';
+  }).join('');
+  log.scrollTop = log.scrollHeight;
+}
+
+function chatShowUndo(has) {
+  document.getElementById('btnChatUndo').style.display = has ? '' : 'none';
+}
+
+async function chatSend() {
+  const input = document.getElementById('chatInput');
+  const msg = input.value.trim();
+  if (!msg) { toast('先写一句话再发送', true); return; }
+  if (!TASK) { toast('还没有任务', true); return; }
+  if (CHAT_JOB) { toast('上一句还在跑…', true); return; }
+  input.value = '';
+  CHAT_HIST.push({role: 'user', content: msg});
+  CHAT_HIST.push({role: 'assistant', content: '…修订助手在想'});
+  renderChat();
+  const btn = document.getElementById('btnChat');
+  btn.disabled = true; btn.textContent = '修订中…';
+  try {
+    const d = await api('/api/comic/chat_revise', {task: TASK, message: msg,
+      provider: document.getElementById('prov').value,
+      model: document.getElementById('model').value});
+    CHAT_JOB = d.job;
+    pollChat();
+  } catch (e) {
+    CHAT_HIST.splice(-2);               // 发送失败：两句占位都撤掉
+    renderChat();
+    toast(e.message, true);
+    btn.disabled = false; btn.textContent = '发送';
+  }
+}
+
+async function pollChat() {
+  if (!CHAT_JOB) return;
+  let d;
+  try { d = await api('/api/comic/chat_status?job=' + CHAT_JOB); }
+  catch (e) { d = {state: 'error', error: e.message}; }
+
+  if (d.state === 'running') { setTimeout(pollChat, 1500); return; }
+  CHAT_JOB = null;
+  document.getElementById('btnChat').disabled = false;
+  document.getElementById('btnChat').textContent = '发送';
+
+  // 把「…修订助手在想」占位换成真回答（失败也换，作者看得见原因）。
+  const reply = d.state === 'error' ? ('✗ 调用失败：' + d.error) : (d.reply || '（无回答）');
+  if (CHAT_HIST.length >= 2 && CHAT_HIST[CHAT_HIST.length - 1].content === '…修订助手在想')
+    CHAT_HIST[CHAT_HIST.length - 1].content = reply;
+  else CHAT_HIST.push({role: 'assistant', content: reply});
+  for (const w of (d.warnings || [])) CHAT_HIST.push({role: 'assistant', content: '⚠ ' + w});
+  renderChat();
+
+  if (d.changed) {
+    // 改稿落地了：textarea 必须刷新成新稿，不然接着「确认开跑」会把旧文本存回去
+    // （和 refix 之后刷新正文同一个坑）。改动的格会被 state 契约自动退回重画。
+    try {
+      const t = await api('/api/comic/chat_history?task=' + TASK);
+      chatShowUndo(!!t.backup);
+    } catch (e) { /* 无伤大雅：撤销按钮最多晚一拍出现 */ }
+    try {
+      const t = await api('/api/comic/script_text?task=' + TASK);
+      if (t.script) document.getElementById('script').value = t.script;
+    } catch (e) { console.warn(e); }
+    toast('剧本已按对话改动更新（' + (d.diff || []).map(x => '格' + x.no).join('、') + '）');
+    refresh();
+  } else if (d.state !== 'error') {
+    toast('修订助手答复了（剧本未改动）');
+  } else {
+    toast('修订失败：' + (d.error || '未知错误'), true);
+  }
+}
+
+async function chatUndo() {
+  if (!TASK) return;
+  try {
+    const d = await api('/api/comic/chat_undo', {task: TASK});
+    document.getElementById('script').value = d.script;
+    chatShowUndo(false);
+    toast('已撤销最近一次对话改动');
+    refresh();
+  } catch (e) { toast(e.message, true); }
 }
 
 async function saveScript(andRun) {
