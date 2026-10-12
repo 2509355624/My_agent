@@ -1068,5 +1068,104 @@ class DownloadFallbackTest(unittest.TestCase):
         self.assertFalse(os.path.exists(self.dst))
 
 
+class UpdatePanelSceneTest(unittest.TestCase):
+    """单格快改画面行（2026-10-12 加）。
+
+    起因：补正员照构图冲突清单把 03 格的 `navy pleated skirt` 删了，裙子从
+    画面上消失。用户要「只改一个词就重画这一格」，而不是整份剧本推倒重跑。
+    钉住：只动目标格的画面行、其他格一字不动、no 归一、找不到返回 False、
+    旧续行一并作废。
+    """
+
+    SCRIPT = (
+        "# 标题：测试\n"
+        "\n"
+        "## 01\n"
+        "画面: safe, 1girl, solo, black hair, full body\n"
+        "气泡: （女）你好。\n"
+        "标签1: 第一格旁白\n"
+        "## 02\n"
+        "画面: safe, 1girl, solo, blonde hair,\n"
+        "green eyes, upper body\n"
+        "气泡: （女）第二格。\n"
+        "## 03\n"
+        "画面: safe, 1girl, solo focus, 1other, close-up\n"
+        "气泡: （女）第三格。\n"
+    )
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.tmp.name, "script.md")
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write(self.SCRIPT)
+
+    def _read(self):
+        with open(self.path, encoding="utf-8") as f:
+            return f.read()
+
+    def test_replaces_only_target_scene_line(self):
+        ok = comic.update_panel_scene(
+            self.path, "03",
+            "safe, 1girl, solo focus, 1other, close-up, navy pleated skirt")
+        self.assertTrue(ok)
+        _, panels = comic.parse_script(self.path)
+        by_no = {p["no"]: p for p in panels}
+        # 目标格整体换成了新画面行
+        self.assertEqual(by_no["03"]["scene"],
+                         "safe, 1girl, solo focus, 1other, close-up, "
+                         "navy pleated skirt")
+        # 其他格一字不动（含气泡/旁白）
+        self.assertEqual(by_no["01"]["scene"],
+                         "safe, 1girl, solo, black hair, full body")
+        self.assertEqual(by_no["01"]["bubble"], "你好。")
+        self.assertEqual(by_no["01"]["speaker"], "女")
+        self.assertEqual(by_no["02"]["scene"],
+                         "safe, 1girl, solo, blonde hair, green eyes, upper body")
+
+    def test_panel_number_is_normalized(self):
+        """no 传 "2" 和 "02" 等效。"""
+        self.assertTrue(comic.update_panel_scene(
+            self.path, "2", "safe, 1girl, solo, red hair"))
+        _, panels = comic.parse_script(self.path)
+        by_no = {p["no"]: p for p in panels}
+        self.assertIn("red hair", by_no["02"]["scene"])
+
+    def test_missing_panel_returns_false(self):
+        self.assertFalse(comic.update_panel_scene(
+            self.path, "09", "safe, 1girl"))
+        self.assertEqual(self._read(), self.SCRIPT)   # 没找到就不许动文件
+
+    def test_continuation_lines_are_replaced_too(self):
+        """02 的画面行带折行续行：整行替换后续行必须一起消失。"""
+        ok = comic.update_panel_scene(
+            self.path, "02", "safe, 1girl, solo, red hair, green eyes")
+        self.assertTrue(ok)
+        _, panels = comic.parse_script(self.path)
+        by_no = {p["no"]: p for p in panels}
+        self.assertEqual(by_no["02"]["scene"],
+                         "safe, 1girl, solo, red hair, green eyes")
+        # 续行内容不能再漏进 scene 或气泡
+        self.assertNotIn("upper body", by_no["02"]["scene"])
+        self.assertEqual(by_no["02"]["bubble"], "第二格。")
+
+    def test_scene_change_resets_panel_via_state_contract(self):
+        """改画面行 + load_state 契约 = 该格自动退回 pending（重跑链的前提）。
+
+        顺序很重要：先用**旧** scene 存一份 done 状态，再改画面行——契约
+        （s["scene"] != p.scene → 退回 pending）正是在这个差值上触发的。
+        """
+        meta, panels = comic.parse_script(self.path)
+        task = comic.Task(self.path, meta, panels)
+        task.panels[0].state = "done"          # 假装 01 已经画完（旧 scene 入账）
+        task.save_state()
+        ok = comic.update_panel_scene(
+            self.path, "01", "safe, 1girl, solo, white dress, full body")
+        self.assertTrue(ok)
+        _, panels2 = comic.parse_script(self.path)   # 重新解析拿到新 scene
+        task2 = comic.Task(self.path, meta, panels2)
+        task2.load_state()
+        self.assertEqual(task2.panels[0].state, "pending")   # 契约自动作废旧图
+
+
 if __name__ == "__main__":
     unittest.main()

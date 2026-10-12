@@ -78,6 +78,8 @@
     margin-bottom: 4px; }
   .slot .peek textarea { min-height: 104px; font-size: 12px; line-height: 1.5;
     padding: 6px 8px; }
+  .slot .escene { display: block; width: 100%; box-sizing: border-box; margin-top: 6px;
+    min-height: 72px; font-size: 12px; line-height: 1.5; padding: 6px 8px; }
   label.file { position: relative; overflow: hidden; }
   label.file input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
   #toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
@@ -399,6 +401,8 @@ function renderSlot(p) {
   // 才显示「排队中…」。
   if (p.state !== 'pending' || p.error)
     ops.push('<button class="btn small" onclick="rerender(\'' + p.no + '\')">🔁 换种子重跑</button>');
+  if (p.state !== 'pending' || p.error)
+    ops.push('<button class="btn small" onclick="editToggle(\'' + p.no + '\')">✏️ 改画面词</button>');
   if (p.state === 'rendered')
     ops.push('<button class="btn small" onclick="bubble(\'' + p.no + '\')">🫧 加气泡</button>');
   if (p.state === 'done')
@@ -418,6 +422,7 @@ function renderSlot(p) {
     + labelHtml(p)
     + (p.error ? '<div class="err">' + esc(p.error) + '</div>' : '')
     + '<div class="ops">' + (ops.join('') || '<span style="color:var(--text-mute);font-size:11px">排队中…</span>') + '</div>'
+    + editHtml(p)
     + manualHtml(p) + '</div>';
 }
 
@@ -481,6 +486,44 @@ const _promptText = {};  // {no: 完整提示词框里的文字}（也算用户�
                          // 同上，这一格的 DOM 会因图片 rev 变化而重建，不存就会被
                          // 2 秒一次的状态轮询冲掉。
 const _peekOpen = {};    // {no: true} 这一格的提示词框展开着吗。
+const _editOpen = {};    // {no: true} 这一格的「改画面词」框展开着吗。
+
+// ── 「改画面词」：直接改这一格的生图提示词（剧本里的 画面: 行）并重画 ──
+// 补正/编剧把词改坏时（实测：close-up 格被删 navy pleated skirt，裙子从画面
+// 上消失），手改一个词就能重画这一格，不用整份剧本推倒重来。预填＝当前
+// 画面行原文（status 里每格都带 p.scene，不用再拉接口）。
+function editHtml(p) {
+  if (!_editOpen[p.no]) return '';
+  return '<div class="peek">'
+    + '<div class="ptip">下面是这一格的<b>画面提示词</b>（剧本里的「画面:」行），'
+    + '改完保存即重画这一格（气泡之后照常加）。同一人的服饰每格必须一致，慎删标签。</div>'
+    + '<textarea class="escene" spellcheck="false">' + esc(p.scene || '') + '</textarea>'
+    + '<div class="mrow">'
+    + '<button class="btn small" onclick="editSave(\'' + p.no + '\')">💾 保存并重画这一格</button>'
+    + '</div></div>';
+}
+
+function editToggle(no) {
+  _editOpen[no] = !_editOpen[no];
+  const c = _slots[no];
+  if (c) c.sig = null;                     // 打脏签名逼刷新循环重建这一格
+  refresh();
+}
+
+async function editSave(no) {
+  const slot = document.querySelector('.slot[data-no="' + no + '"]');
+  const ta = slot && slot.querySelector('.escene');
+  const scene = ta ? ta.value.trim() : '';
+  if (!scene) { toast('画面提示词不能为空', true); return; }
+  try {
+    const d = await api('/api/comic/edit_scene', {task: TASK, no, scene});
+    _editOpen[no] = false;
+    const c = _slots[no];
+    if (c) c.sig = null;
+    setBusy(true, 'scene');
+    toast(d.notice || ('格 ' + no + ' 用你改过的画面词重画中'));
+  } catch (e) { toast(e.message, true); }
+}
 let _zoom = null;    // {no, which} 当前放大的那张图 —— 手动跑 Qwen 是在原文件上
                      // 覆盖，放大层不跟着换的话，人盯着放大图会以为根本没重跑。
 

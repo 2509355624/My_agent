@@ -504,6 +504,56 @@ def parse_script_text(text):
     return meta, panels
 
 
+def update_panel_scene(script_path, no, new_scene):
+    """把第 no 格的 `画面:` 行整体替换成 new_scene，**其他格一字不动**。
+
+    用户 2026-10-12 的需求：补正/编剧把某个词改坏时（实测：close-up 格被删掉
+    `navy pleated skirt`，裙子从画面上消失），他只想手改一个词就重画这一格，
+    而不是推倒整份剧本重跑。整份 save 走 /api/comic/save，这里只服务「单格
+    快改」。
+
+    - no 用 "3" / "03" 都行，内部归一成两位。
+    - new_scene 压成单行（画面行本来就是逗号标签清单，换行没有意义）。
+    - 该格画面行后面如果挂着续行（旧解析器允许折行），一并丢弃——整行替换。
+    - 返回 True=改了；False=没找到这一格（或格子里没有画面行）。
+
+    改完不负责重跑：load_state 的契约（scene 变了 → 该格自动退回 pending、
+    旧图作废）会让下一次 run(only={no}) 只重画这一格。
+    """
+    no = str(no or "").strip()
+    no = no.zfill(2) if no.isdigit() else no
+    scene = " ".join(str(new_scene or "").split())
+    with open(script_path, "r", encoding="utf-8") as f:
+        lines = f.read().splitlines()
+
+    out, cur, replaced, dropping = [], None, False, False
+    for raw in lines:
+        line = raw.rstrip()
+        m = _PANEL_RE.match(line)
+        if m:
+            cur, dropping = "%02d" % int(m.group(1)), False
+            out.append(line)
+            continue
+        if cur == no and not replaced:
+            m = _FIELD_RE.match(line)
+            if m and _field_of(m.group(1)) == "scene":
+                out.append("画面: %s" % scene)
+                replaced, dropping = True, True   # 旧续行作废，直到下一个字段/格
+                continue
+        if dropping:
+            # 续行＝非空、不是字段、不是格标题。遇到三者之一就停止丢弃。
+            if line.strip() and not _FIELD_RE.match(line):
+                continue
+            dropping = False
+        out.append(line)
+
+    if not replaced:
+        return False
+    with open(script_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(out) + "\n")
+    return True
+
+
 # ─── 任务目录 / 状态 ──────────────────────────────────
 
 _STATE_LABEL = {"pending": "待渲染", "rendered": "待加气泡", "done": "已完成"}

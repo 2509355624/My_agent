@@ -454,6 +454,46 @@ def api_comic_rerender():
     return jsonify({"ok": True, "no": no})
 
 
+@bp.route("/api/comic/edit_scene", methods=["POST"])
+def api_comic_edit_scene():
+    """直接改某格的画面提示词（`画面:` 行）并重画这一格。
+
+    用户 2026-10-12：补正把词改坏时（删了 navy pleated skirt，裙子消失），
+    他要能「只改一个词就重画这一格」，而不是整份剧本重跑。流程：
+      1. `comic.update_panel_scene` 只替换那一格的画面行，别的格一字不动；
+      2. 后台只跑该格——load_state 的契约会因为 scene 变化自动把它退回
+         pending、旧图作废，气泡后续照常加。
+    任务正在跑时返回 409（剧本已改好，等当前跑完再点一次重跑即可）。
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        path = _task_dir(data.get("task"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    no = str(data.get("no") or "").strip().zfill(2)
+    scene = str(data.get("scene") or "").strip()
+    if not scene:
+        return jsonify({"ok": False, "error": "画面提示词不能为空"}), 400
+    script_path = os.path.join(path, "script.md")
+    try:
+        if not comic.update_panel_scene(script_path, no, scene):
+            return jsonify({"ok": False, "error": "没有 %s 这格（或它没有画面行）" % no}), 404
+        # 改完解析一遍：改坏契约（画面行丢了/格子解析不出）就不进管道
+        meta, panels = comic.parse_script(script_path)
+        panel = next((p for p in panels if p["no"] == no), None)
+        if panel is None or not panel["scene"].strip():
+            raise ValueError("改完解析不到该格的画面行")
+    except Exception as exc:
+        return jsonify({"ok": False,
+                        "error": "画面提示词改坏了（%s），请修正后再保存" % exc}), 400
+    started = _spawn(path, "scene", lambda: comic.run(
+        script_path, only={no}, silver_only=True))
+    if not started:
+        return jsonify({"ok": True, "no": no, "queued": False,
+                        "notice": "任务正在跑，改动已保存；跑完后点「换种子重跑」生效"})
+    return jsonify({"ok": True, "no": no, "queued": True})
+
+
 @bp.route("/api/comic/prompt", methods=["GET"])
 def api_comic_prompt():
     """把「这一格原样发给 qwen 的那段文字」交出来，供界面显示 + 手改。
