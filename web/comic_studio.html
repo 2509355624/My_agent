@@ -157,6 +157,8 @@ let TASK = null;          // 任务 id（C<日期>-<序号>）
 let TIMER = null;
 let SCRIPT_JOB = null;    // 正在跑的编剧任务 id（编剧是后台 agent，轮询取结果）
 let PROVIDERS = [];       // /api/providers 拉回来的候选家（编剧模型下拉）
+let RUNNING = null;       // 后台正在跑的阶段（scene/bubble/fix）——renderSlot
+                          // 拿它区分「真排队」和「没线程会来跑的假排队」
 
 function toast(msg, isErr) {
   const t = document.getElementById('toast');
@@ -528,12 +530,20 @@ function renderSlot(p) {
   // 失败格必须也能重跑（2026-10-12）。场景渲染挂掉的格**停在 pending**，
   // 原来这条条件 `!== 'pending'` 正好把它挡在门外 —— 它是整个界面上唯一
   // 没有任何操作按钮的格子，底下还写着「排队中…」，看上去像在排队。
-  // 加上 `|| p.error` 后：带错的格一律给重跑按钮，真在排队的格（无 error）
-  // 才显示「排队中…」。
-  if (p.state !== 'pending' || p.error)
+  // 加上 `|| p.error` 后：带错的格一律给重跑按钮。
+  // 真在排队的格分两种（2026-10-12 用户补报：改画面词/对话改稿把格退回
+  // pending 后，若没有后台任务在跑，没有任何线程会来跑它，它就永远「排队
+  // 中…」，用户只能整条「确认开跑」重跑——太麻烦）：
+  //   · 有任务在跑（RUNNING）→ 真排队，显示「排队中…」等轮询；
+  //   · 没任务在跑 → 给「▶ 跑这一格」出口（rerender 本就只跑这一格），
+  //     顺手给「✏️ 改画面词」——跑之前常还想再改一个词。
+  if (p.state !== 'pending' || p.error) {
     ops.push('<button class="btn small" onclick="rerender(\'' + p.no + '\')">🔁 换种子重跑</button>');
-  if (p.state !== 'pending' || p.error)
     ops.push('<button class="btn small" onclick="editToggle(\'' + p.no + '\')">✏️ 改画面词</button>');
+  } else if (!RUNNING) {
+    ops.push('<button class="btn small" onclick="rerender(\'' + p.no + '\')">▶ 跑这一格</button>');
+    ops.push('<button class="btn small" onclick="editToggle(\'' + p.no + '\')">✏️ 改画面词</button>');
+  }
   if (p.state === 'rendered')
     ops.push('<button class="btn small" onclick="bubble(\'' + p.no + '\')">🫧 加气泡</button>');
   if (p.state === 'done')
@@ -666,6 +676,7 @@ async function refresh() {
   try { d = await api('/api/comic/status?task=' + TASK); }
   catch (e) { console.warn(e); return; }
   renderFix(d.fix);          // 重新补正后靠这个 2 秒轮询把报告刷出来
+  RUNNING = d.running || null;   // renderSlot 靠它判断排队的格有没有线程在管
   const grid = document.getElementById('grid');
   if (!d.panels.length) {
     if (grid.dataset.empty !== '1') { grid.innerHTML = '<div class="empty">剧本里没解析到格子</div>'; grid.dataset.empty = '1'; }
@@ -683,7 +694,7 @@ async function refresh() {
     // `rev` 是图片文件本身的指纹（mtime+大小）：手动跑 Qwen 是**就地覆盖成品**，
     // state/seed/url 全都不变，当初只比这些字段时新图永远刷不出来。
     const sig = [p.state, p.error, p.seed, p.scene_url, p.final_url, p.rev,
-                 p.label, p.bubble, p.bubble2].join('|');
+                 p.label, p.bubble, p.bubble2, RUNNING].join('|');
     const cached = _slots[p.no];
     if (cached && cached.sig === sig) continue;
     const el = document.createElement('div');
