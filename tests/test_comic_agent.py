@@ -1137,6 +1137,19 @@ class PromptTest(unittest.TestCase):
         self.assertIn("hand around wrist", p)
         self.assertIn("她自己抓自己", p)
 
+    def test_teaches_recorder_camera_rule(self):
+        """规则 19：画面是「我」的眼睛看到的，她的位置由旁白决定。
+
+        2026-10-12《妈妈的味道》01 格实测：旁白「我推开门，厨房传来炒菜声」，
+        画面却写 `standing, doorway, genkan` 把她画在玄关——把「我」的位置套到
+        她身上。规则必须写成错/对示例，还得点明「她不在视野的瞬间不成格」。
+        """
+        p = comic_agent._system_prompt(3)
+        self.assertIn("记录者", p)
+        self.assertIn("她的位置跟着旁白走", p)
+        self.assertIn("她不会替「我」推门", p)
+        self.assertIn("不单独成格", p)
+
     def test_panel_count_injected(self):
         self.assertIn("正好 7 格", comic_agent._system_prompt(7))
 
