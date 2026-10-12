@@ -100,6 +100,15 @@ AI 只需输出以下两部分，不添加任何额外解释、标题、编号�
 
 **单人时**，由于画面只有一人，动态部分可以省略 `girl` / `boy` 前缀，但为了统一，建议保留 `girl` 或 `boy` 以明确性别。
 
+**构图必须和服饰自洽（2026-10-12 实测新增）**：景别决定拍得到哪些部位，服饰标签不许超出画面拍到的范围——
+- `close-up` / `portrait`（头肩）：不写鞋、袜 / 腿部穿戴、裙 / 裤；
+- `upper body`（胸以上）：不写鞋、袜 / 腿部穿戴；
+- `cowboy shot`（膝以上）：不写鞋；
+- 只有 `full body` 才写鞋和腿部穿戴。
+
+写了拍不到的部位，模型只能把这件服饰塞给镜头（观众）——实测 `upper body` 配
+`white sneakers`，画面下角长出一双不属于任何人的小白鞋，整格崩坏。
+
 **单人示例：**
 ```
 bedroom, girl wearing old pink frilled pajamas and pink frilled shorts, bare feet, girl sitting on bed holding a gift box with both hands, girl surprised expression, warm lamp light, front view, medium shot

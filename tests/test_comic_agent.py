@@ -470,6 +470,80 @@ class PovConflictTest(unittest.TestCase):
         self.assertIn("1boy", why)
         self.assertIn("pov", why)
 
+    def test_pov_family_matches_space_form(self):
+        """`_scene_tags` 归一是空格形态：写 `female pov`（空格）的格**不能**被
+        pov_missing 误报（2026-10-12《小树林里的姐姐》实测误报）。"""
+        script = self._script(
+            "safe, 1girl, solo, standing, female pov",
+            "safe, 1girl, solo focus, 1other, pov hands, female pov, "
+            "holding another's wrist",
+            "safe, 1girl, solo, standing")
+        self.assertEqual([("03", "pov")], comic_agent.pov_missing(script))
+        # pov_mixed 也一样：空格形态的 female pov 要被认出来
+        mixed = self._script(
+            "safe, 1girl, solo, standing, pov",
+            "safe, 1girl, solo, standing, female pov")
+        # 1:1 平票按少数派=female_pov 侧报
+        self.assertEqual([("02", "female_pov")], comic_agent.pov_mixed(mixed))
+
+
+class CompositionConflictTest(unittest.TestCase):
+    """构图拍不到的部位不许写服饰标签。
+
+    2026-10-12《小树林里的姐姐》02 格实测：构图 `upper body`（胸以上）却写了
+    鞋类——画里的人没有脚，模型只能把鞋塞给镜头（观众），画面下角多出一双
+    不属于任何人的小白鞋，整格崩坏。用户原话：「明明女生是上半身视角……
+    小白鞋是谁的？小白鞋只能是我们这个视角的」。
+    """
+
+    def _script(self, *scenes):
+        return "".join(
+            "## %02d\n画面: %s\n气泡: 一\n标签1: 她站在车门边\n" % (i + 1, s)
+            for i, s in enumerate(scenes))
+
+    def test_upper_body_with_sneakers_is_flagged(self):
+        got = comic_agent.composition_conflicts(self._script(
+            "safe, 1girl, solo, white dress, upper body, female pov, "
+            "white sneakers"))
+        self.assertEqual([("01", "upper body", "white sneakers")], got)
+
+    def test_close_up_flags_legwear_and_bottoms(self):
+        got = comic_agent.composition_conflicts(self._script(
+            "safe, 1girl, solo, black hair, close-up, navy pleated skirt, "
+            "white over-kneehighs"))
+        self.assertEqual(
+            sorted([("01", "close-up", "navy pleated skirt"),
+                    ("01", "close-up", "white over-kneehighs")]), sorted(got))
+
+    def test_cowboy_shot_flags_shoes_but_not_kneehighs(self):
+        """cowboy shot 拍到膝盖，over-kneehighs 部分可见，合法；鞋拍不到。"""
+        got = comic_agent.composition_conflicts(self._script(
+            "safe, 1girl, solo, cowboy shot, white over-kneehighs, "
+            "black loafers"))
+        self.assertEqual([("01", "cowboy shot", "black loafers")], got)
+
+    def test_full_body_allows_footwear(self):
+        self.assertEqual([], comic_agent.composition_conflicts(self._script(
+            "safe, 1girl, solo, full body, white sneakers")))
+
+    def test_no_composition_tag_no_check(self):
+        self.assertEqual([], comic_agent.composition_conflicts(self._script(
+            "safe, 1girl, solo, white sneakers")))
+
+    def test_collect_issues_reports_composition_conflict(self):
+        text = self._script(
+            "safe, 1girl, solo, white dress, upper body, female pov, "
+            "white sneakers")
+        kinds = [i["kind"] for i in comic_agent.collect_issues(text, "需求")]
+        self.assertIn("composition_conflict", kinds)
+
+    def test_prompt_teaches_composition_scope(self):
+        p = comic_agent._system_prompt(3)
+        self.assertIn("构图决定可见范围", p)
+        self.assertIn("构图拍到哪，服饰就写到哪", p)
+        # 剧本规范全文也要带上这条
+        self.assertIn("构图必须和服饰自洽", comic_agent._story_spec_text())
+
 
 class MergedPeopleTest(unittest.TestCase):
     """多人同框必须写得出**两套**外貌，且点名谁是谁。

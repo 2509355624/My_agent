@@ -481,7 +481,12 @@ def duplicate_wearables(text):
 
 
 # 每一格都必须声明第一人称视角（2026-10-12 用户拍板：全篇默认 POV，没有第三人称格）。
-_POV_FAMILY = frozenset(("pov", "pov_hands", "female_pov"))
+# 视角标签族。⚠️ `_scene_tags` 归一是**空格形态**（`pov hands` / `female pov`），
+# 所以下划线形态只作兼容编剧手写，比较时两种都得认——只写下划线会让
+# `female pov` 的格被误报「没写视角」（2026-10-12《小树林里的姐姐》实测）。
+_POV_FAMILY = frozenset(("pov", "pov_hands", "pov hands",
+                         "female_pov", "female pov"))
+_POV_FEMALE = frozenset(("female_pov", "female pov"))
 
 # 画面里合法的人物计数只有 `1girl`（观众的手入画时再加 `1other`）。写这些就是
 # 画里多出一个人——男性角色是**观众本人扮演的**，永远不该出现在画面里。
@@ -539,13 +544,75 @@ def pov_mixed(text):
     _, panels = comic.parse_script_text(text)
     pairs = [(p["no"], set(_scene_tags(p))) for p in panels]
     with_pov = [no for no, ts in pairs if "pov" in ts]
-    with_fpov = [no for no, ts in pairs if "female_pov" in ts]
+    with_fpov = [no for no, ts in pairs if _POV_FEMALE & ts]
     if not with_pov or not with_fpov:
         return []
     fpov_is_minority = len(with_fpov) <= len(with_pov)
     minority = with_fpov if fpov_is_minority else with_pov
     tag = "female_pov" if fpov_is_minority else "pov"
     return [(no, tag) for no in minority]
+
+
+# ─── 构图-服饰冲突（2026-10-12）───────────────────────────
+#
+# 《小树林里的姐姐》02 格实测：构图 `upper body`（只拍胸以上）却写了鞋类——
+# 画里的人没有脚，鞋没地方长，模型只能把鞋塞给镜头（观众），画面下角多出
+# 一双不属于任何人的小白鞋，整格崩坏。观众（「我」）默认只有一双手，更不该
+# 有鞋。**景别决定拍得到哪些部位，服饰标签不许超出画面拍到的范围。**
+
+# 构图标签 → 该构图下「拍不到」的部位组。`full body` 什么都拍得到，不在表里。
+# 部位组：footwear=鞋类，legwear=腿部穿戴，bottoms=下半身衣物。
+_COMPOSITION_SCOPE = (
+    ("close-up", ("footwear", "legwear", "bottoms")),
+    ("portrait", ("footwear", "legwear", "bottoms")),
+    ("upper body", ("footwear", "legwear")),
+    ("cowboy shot", ("footwear",)),
+)
+
+_FOOTWEAR_WORDS = frozenset(("shoe", "shoes", "sneakers", "loafers", "boots",
+                             "sandal", "sandals", "heels", "pumps", "uwabaki",
+                             "slippers", "footwear"))
+_LEGWEAR_WORDS = frozenset(("kneehighs", "thighhighs", "pantyhose", "socks",
+                            "tights", "legwarmers"))
+_BOTTOM_WORDS = frozenset(("skirt", "shorts", "pants", "trousers", "jeans"))
+
+
+def _tags_in_groups(tags, groups):
+    """返回 tags 里属于这些部位组的标签。切词用 _tag_tokens（空格连字符都切），
+    所以 `white sneakers`、`over-kneehighs` 都认得出来。"""
+    words = set()
+    for g in groups:
+        if g == "footwear":
+            words |= _FOOTWEAR_WORDS
+        elif g == "legwear":
+            words |= _LEGWEAR_WORDS
+        elif g == "bottoms":
+            words |= _BOTTOM_WORDS
+    out = []
+    for t in tags:
+        if _tag_tokens(t) & words:
+            out.append(t)
+    return out
+
+
+def composition_conflicts(text):
+    """构图拍不到的部位却写了服饰标签 → [(格号, 构图, 服饰标签), ...]。
+
+    只做检测出清单（交给补正员删标签或改构图），不是准入闸门。
+    """
+    _, panels = comic.parse_script_text(text)
+    out = []
+    for p in panels:
+        ts = set(_scene_tags(p))
+        if "full body" in ts:
+            continue                     # 拍得到一切，不可能冲突
+        for comp, groups in _COMPOSITION_SCOPE:
+            if comp not in ts:
+                continue
+            for tag in _tags_in_groups(ts, groups):
+                out.append((p["no"], comp, tag))
+            break                        # 一格认一个最严构图，别重复报
+    return out
 
 
 # ─── 多人同框（2026-10-12）───────────────────────────────
@@ -645,7 +712,7 @@ def female_pov_missing(text, brief):
     out = []
     for p in panels:
         tags = set(_scene_tags(p))
-        if "pov" in tags and "female_pov" not in tags:
+        if "pov" in tags and not (_POV_FEMALE & tags):
             out.append((p["no"], "pov"))
     return out
 
@@ -758,8 +825,8 @@ def collect_issues(text, brief="", original=""):
 
     返回 [{"no": 格号（跨格问题为空）, "kind": 类别, "detail": 一句话}]。
     kind 取值：missing_hair_color / bare_wearable / duplicate_wearable /
-    solo_conflict / banned_tag / pov_conflict / pov_missing / merged_people /
-    female_pov / invented_name。
+    solo_conflict / banned_tag / pov_conflict / pov_missing / pov_mixed /
+    merged_people / female_pov / composition_conflict / invented_name。
     """
     issues = []
 
@@ -811,6 +878,14 @@ def collect_issues(text, brief="", original=""):
                        "detail": "这一格的视角标签和整话其他格混用了（`pov` 与 "
                                  "`female_pov` 不许一半一半）：读需求确认镜头后"
                                  "的「我」是男是女，把「%s」统一成另一种" % tag})
+    for no, comp, tag in composition_conflicts(text):
+        issues.append({"no": no, "kind": "composition_conflict", "tag": tag,
+                       "detail": "这一格构图是 `%s`（拍不到那个部位），却写了 "
+                                 "`%s`：画里的人没有这个部位，模型只能把它塞"
+                                 "给镜头（观众），画面会崩坏（2026-10-12 实测："
+                                 "upper body 配 white sneakers，画面下角长出"
+                                 "一双不属于任何人的鞋）。删掉 `%s`，或把构图"
+                                 "改成 `full body`" % (comp, tag, tag)})
     # 凭空人名：allowed 用「需求 + 原稿」，所以只有**补正稿新增**的人名会被报。
     for no, name in invented_names(text, (brief or "") + "\n" + (original or "")):
         issues.append({"no": no, "kind": "invented_name", "tag": name,
@@ -1143,6 +1218,17 @@ Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有�
    对：female_pov, pov hands, holding another's wrist
    **只有「我」明确是男性**（例：哥哥视角、镜头后的男性作者）时才写 `pov`。
    整话统一：全 `female_pov` 或全 `pov`，不许一半一半。
+
+18. **构图决定可见范围，服饰标签不许超出画面拍到的部位。** 景别和服饰必须
+   自洽，一格写完自查一遍：**构图拍到哪，服饰就写到哪**。
+   - `close-up` / `portrait`（头肩）：不许写鞋、袜 / 腿部穿戴、裙 / 裤；
+   - `upper body`（胸以上）：不许写鞋、袜 / 腿部穿戴；
+   - `cowboy shot`（膝以上）：不许写鞋；
+   - 只有 `full body` 才写鞋和腿部穿戴。
+   为什么：画里的人没有那个部位，标签又写了，模型只能把这件服饰塞给**镜头
+   （观众）**——2026-10-12 实测：`upper body` 配 `white sneakers`，画面下角
+   长出一双不属于任何人的小白鞋，整格崩坏。观众（「我」）只有一双手，
+   永远没有鞋。
 
 【Anima 提示词规范（全文，必须遵守）】
 写法：**以标签为主，可以用简短的英语短语补充**——短词和英语短语都能写。
