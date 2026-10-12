@@ -272,6 +272,8 @@ bedroom, girl wearing old pink frilled pajamas and pink frilled shorts, bare fee
 | **她对我们做动作** | 用 `* viewer` 族标签：`looking at viewer` / `grabbing viewer` / `hugging viewer` / `reaching towards viewer` / `kabedon on viewer`……库里齐全，写前先查 |
 | **我们对她们做动作** | `pov hands` + `another` 族标签：`holding another's wrist` / `grabbing another's arm`（唯一可用写法，`hand around wrist` 语义不明会翻车） |
 | **旁白「我」↔ 画面视角必须对上** | 旁白是「我」的剧情，画面标签里就得有 `pov` / `pov hands`（或 `female_pov`）；只有旁白有「我」而画面没有视角标签，模型按第三人称机位渲染 |
+| **她在哪由旁白决定，她不自己挪窝** | 旁白只说「传来炒菜声」→ 画面就是从玄关望进厨房的她（`kitchen, stove, cooking, looking back`），❌ 画成 `open door, genkan` 迎在门口——那是把「我」的位置套到她身上、还替她走完了旁白没写的路。她的移动必须是旁白明写的节拍；开口打招呼 ≠ 已经站到面前，可以隔着房间喊 |
+| **交稿前逐格三问** | ① 我的眼睛在哪（旁白里我的位置）？② 她在哪（旁白里她的位置）？③ 画面位置标签写的是 ② 那个地方吗？③ 和 ② 对不上 → 改位置标签，不是改旁白 |
 | **画面＝「我」的眼睛看到的（2026-10-12 补）** | 你是记录者：她站在哪由旁白决定。旁白说她在厨房 → 画面是**从玄关望进厨房**的她（`kitchen, stove, cooking`），**不是** `standing, doorway`（那是把「我」进门的位置套到她身上）；「我」的动作（推门/走近）只进旁白，绝不变成她的标签；她不在视野的瞬间不成格——让旁白推进到她入画，或镜头已经对着她 |
 
 **为什么**：2026-10-12《夜路遇黄毛》实测——旁白全是「我」却一格 `pov` 都没写，

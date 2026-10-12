@@ -1143,12 +1143,23 @@ class PromptTest(unittest.TestCase):
         2026-10-12《妈妈的味道》01 格实测：旁白「我推开门，厨房传来炒菜声」，
         画面却写 `standing, doorway, genkan` 把她画在玄关——把「我」的位置套到
         她身上。规则必须写成错/对示例，还得点明「她不在视野的瞬间不成格」。
+        同日晚二犯：旁白只说「传来炒菜声」（没写她移动），画面又把她画回
+        `open door, genkan` 迎人 → 补「她不挪窝」默认律 + 逐格三问自查。
         """
         p = comic_agent._system_prompt(3)
         self.assertIn("记录者", p)
         self.assertIn("她的位置跟着旁白走", p)
         self.assertIn("她不会替「我」推门", p)
         self.assertIn("不单独成格", p)
+        # 她不挪窝：移动必须是旁白明写的节拍；打招呼 ≠ 站到面前
+        self.assertIn("她不挪窝", p)
+        self.assertIn("开口打招呼 ≠ 她已经站到我面前", p)
+        # 二犯的错/对标签对必须原文进规则
+        self.assertIn("open door, genkan, looking at viewer, surprised", p)
+        self.assertIn("kitchen, stove, cooking, looking back, surprised", p)
+        # 逐格三问自查
+        self.assertIn("逐格三问", p)
+        self.assertIn("改标签，不是改旁白", p)
 
     def test_panel_count_injected(self):
         self.assertIn("正好 7 格", comic_agent._system_prompt(7))
