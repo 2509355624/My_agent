@@ -96,7 +96,9 @@
   <div class="card">
     <h2>① 需求 → 编剧出剧本</h2>
     <div class="row" style="margin-bottom:10px">
-      <input id="brief" style="flex:1;min-width:220px" placeholder="一句话设定，例：香风智乃和保登心爱在 Rabbit House 打烊后收拾店里的日常小剧场">
+      <textarea id="brief" rows="3" style="flex:1;min-width:220px" placeholder="视角: 哥哥
+主角: 妹妹
+剧情: 下雨天兄妹俩在公交站躲雨……（前两行是硬约束：视角=镜头后的「我」，男性→pov、女性→female_pov；主角=画面里唯一入画的人）"></textarea>
       <input id="character" style="width:130px" placeholder="角色名（可选）">
       <input id="panels" type="number" min="1" max="30" value="10" style="width:70px" title="格数">
     </div>
@@ -211,7 +213,7 @@ async function loadModels() {
 
 async function genScript() {
   const brief = document.getElementById('brief').value.trim();
-  if (!brief) { toast('先写一句话设定', true); return; }
+  if (!brief) { toast('先写需求（视角/主角/剧情）', true); return; }
   const btn = document.getElementById('btnScript');
   btn.disabled = true; btn.textContent = '编剧查库中…';
   try {

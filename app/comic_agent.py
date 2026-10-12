@@ -717,6 +717,46 @@ def female_pov_missing(text, brief):
     return out
 
 
+# 「视角:」行里的性别词。命中男词=视角方是男性 → 全篇 `pov`；女词 → `female_pov`。
+# 两边都不中（视角行缺失 / 写的是「我」这类认不出性别的词）→ 跳过，不猜。
+_POV_MALE_WORDS = ("哥哥", "弟弟", "爸爸", "父亲", "叔叔", "舅舅", "爷爷",
+                   "外公", "男人", "少爷", "男孩", "老公", "男友", "帅哥")
+_POV_FEMALE_WORDS = ("姐姐", "妹妹", "妈妈", "母亲", "阿姨", "姑妈", "婶婶",
+                     "奶奶", "外婆", "姥姥", "女人", "小姐", "女孩", "女友")
+
+_VIEWER_LINE_RE = re.compile(r"^\s*视角\s*[:：]\s*(.+?)\s*$", re.M)
+
+
+def pov_direction(brief, text):
+    """需求「视角:」行声明的性别和画面视角标签侧对不上 → [(格号, 错标签), ...]。
+
+    2026-10-12《雨夜公交站》实测：需求明明是哥哥视角（哥哥和妹妹躲雨），
+    编剧全篇自作主张写 `female pov`。方向一错整话作废，而 `pov_mixed` 只能抓
+    「一半一半」，抓不住「全篇统一地错」——用户拍板需求里手写「视角:」行，
+    这里拿它当权威对账。
+
+    声明的性别认不出（没写视角行 / 写的是「我」这类词）→ 返回空，不猜。
+    只做检测出清单，不是准入闸门。
+    """
+    m = _VIEWER_LINE_RE.search(brief or "")
+    if not m:
+        return []
+    line = m.group(1)
+    if any(w in line for w in _POV_MALE_WORDS):
+        wrong = _POV_FEMALE                # 男视角却写 female pov
+    elif any(w in line for w in _POV_FEMALE_WORDS):
+        wrong = frozenset(("pov",))        # 女视角却写 pov
+    else:
+        return []
+    _, panels = comic.parse_script_text(text)
+    out = []
+    for p in panels:
+        ts = set(_scene_tags(p))
+        if wrong & ts:
+            out.append((p["no"], sorted(wrong & ts)[0]))
+    return out
+
+
 # ─── 发色 / 凭空人名（2026-10-11 十轮）───────────────────
 #
 # 这两条都是「补正 AI」暴露出来的：用干净上下文 + 规范全文真跑一轮补正，强模型
@@ -826,7 +866,8 @@ def collect_issues(text, brief="", original=""):
     返回 [{"no": 格号（跨格问题为空）, "kind": 类别, "detail": 一句话}]。
     kind 取值：missing_hair_color / bare_wearable / duplicate_wearable /
     solo_conflict / banned_tag / pov_conflict / pov_missing / pov_mixed /
-    merged_people / female_pov / composition_conflict / invented_name。
+    pov_direction / merged_people / female_pov / composition_conflict /
+    invented_name。
     """
     issues = []
 
@@ -878,6 +919,11 @@ def collect_issues(text, brief="", original=""):
                        "detail": "这一格的视角标签和整话其他格混用了（`pov` 与 "
                                  "`female_pov` 不许一半一半）：读需求确认镜头后"
                                  "的「我」是男是女，把「%s」统一成另一种" % tag})
+    for no, tag in pov_direction(brief, text):
+        issues.append({"no": no, "kind": "pov_direction", "tag": tag,
+                       "detail": "需求「视角:」行声明的性别和这一格的「%s」对不上："
+                                 "按视角行改——男性视角全篇 `pov`，女性视角全篇 "
+                                 "`female_pov`（`pov` 的先验是男性第一人称）" % tag})
     for no, comp, tag in composition_conflicts(text):
         issues.append({"no": no, "kind": "composition_conflict", "tag": tag,
                        "detail": "这一格构图是 `%s`（拍不到那个部位），却写了 "
@@ -990,6 +1036,20 @@ Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有�
 库里查不到但你能确定模型看得懂的英文短语也**照写**。写错一个词，画面就会错位、
 多手、甚至凭空多出一个人。
 
+【需求的固定格式（前两行是用户手写的硬约束，必须照办）】
+用户的需求按行组织，前两行是**声明**，后面的「剧情:」是正文：
+  视角: <镜头后的「我」是谁，例：哥哥>
+  主角: <画面里唯一入画的女主是谁，例：妹妹>
+  剧情: <这一话发生什么>
+- **「视角:」行是视角方性别的唯一权威**，绝对不许按自己的猜测推翻：
+  写男性（哥哥 / 爸爸 / 黄毛……）→ 全篇每一格 `pov`；写女性（姐姐 / 妹妹 /
+  学姐……）→ 全篇每一格 `female_pov`。2026-10-12《雨夜公交站》实测：需求
+  明明是哥哥视角，模型自作主张全篇写了 `female pov`——方向一错，整话作废。
+- **「主角:」行 = 画面里唯一入画的那个人**：所有外貌 / 服饰标签都是主角的；
+  视角方（「我」）永远不入画（见规则 14）。
+- 需求里没写这两行（旧格式一句话）：从剧情推断视角方和主角，推断结果在
+  第一格动笔前定死，整话不许再改。
+
 【整话必须是一条故事线——这是最容易不合格的一处】
 - 动笔前先在心里定一条线：这一话从哪开始、中间发生什么、最后一格落在哪。
   多格就是「起 → 承 → 转」逐格推进，**不是同一个瞬间的三个切面**。
@@ -1060,6 +1120,13 @@ Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有�
    不需要时，那格就写 `1girl, solo`，别硬塞手部标签（硬塞的后果见规则 6）。
    决定要入画时，抓别人的手腕只能写 `holding another's wrist`，不许写
    `hand around wrist`，更不许把动作写成句子。
+   ⚠️ **`pov` / `female_pov` 只标记机位，不代表画面里有人。** 不需要手入画的
+   格，视角标签**只写 `pov`（或 `female_pov`）一个词**就是纯机位，画面里除主角
+   外**任何**身体部位、衣物、肢体影子都不许出现——「我」入画的**唯一通道**是
+   `pov hands` + `1other` + 手部动作标签，没有这条通道就当自己不存在。
+   2026-10-12《雨夜公交站》01 格实测：视角标签里多带了身体暗示，画面下角就
+   长出我们的腿——提了什么，模型就画什么（白熊效应），没提的部位一个词都
+   别写。
    - 攥住/握住别人的手腕 → `holding another's wrist`
      （这是**唯一**可用的写法。网上流传的别名 `grabbing another's wrist`、
      `wrist grab` 在本库里**都不存在**，实测查过，别用。）
@@ -1210,14 +1277,15 @@ Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有�
    标签，见规则 14）。（2026-10-12 拍板：双人同框、多人构图、第三人称机位
    全部不再使用。）
 
-17. **「我」的性别必须写进视角标签。** 百合 / 女女向的一话，「我」是女性，
-   第一人称视角写 `female_pov`，**不许写 `pov`**——`pov` 的先验是**男性第一
-   人称**，实测会画出一只男人的手（2026-10-12 用户实报：「剧本明确了是百合向，
+17. **「我」的性别由需求的「视角:」行决定，不许自己猜。** 需求写男性
+   （哥哥 / 爸爸 / 黄毛……）→ 全篇 `pov`；写女性（姐姐 / 妹妹 / 学姐……）→
+   全篇 `female_pov`，**不许写 `pov`**——`pov` 的先验是**男性第一人称**，
+   实测会画出一只男人的手（2026-10-12 用户实报：「剧本明确了是百合向，
    但是第一人称却是男生的手」）。
-   错：pov, pov hands, holding another's wrist
+   错：pov, pov hands, holding another's wrist（女性视角话里）
    对：female_pov, pov hands, holding another's wrist
-   **只有「我」明确是男性**（例：哥哥视角、镜头后的男性作者）时才写 `pov`。
-   整话统一：全 `female_pov` 或全 `pov`，不许一半一半。
+   需求没有「视角:」行时才从剧情推断，推断结果整话统一：全 `female_pov`
+   或全 `pov`，不许一半一半。
 
 18. **构图决定可见范围，服饰标签不许超出画面拍到的部位。** 景别和服饰必须
    自洽，一格写完自查一遍：**构图拍到哪，服饰就写到哪**。
@@ -1660,6 +1728,16 @@ def check(text, panels, brief=""):
             "（用户 2026-10-12 实报：「剧本明确了是百合向，但是第一人称却是男生的"
             "手」）。把 `pov` 换成 `female_pov`，`pov hands` 照旧；整话统一，"
             "不许一半 `pov` 一半 `female_pov`。" % items)
+    direction = pov_direction(brief, text)
+    if direction:
+        items = "、".join("格 %s 的 `%s`" % (no, tg) for no, tg in direction[:6])
+        problems.append(
+            "需求「视角:」行声明了视角方的性别，%s 却对不上：**「视角:」行是"
+            "唯一权威，不许按自己的猜测写**。男性视角（哥哥 / 爸爸 / 黄毛……）"
+            "全篇 `pov`，女性视角（姐姐 / 妹妹 / 学姐……）全篇 `female_pov`。"
+            "把对不上的视角标签全部换成视角行声明的那一侧，整话统一。"
+            "2026-10-12《雨夜公交站》实测：哥哥视角被写成了 female pov，"
+            "方向一错整话作废。" % items)
     if (brief or "").strip():
         names = invented_names(text, brief)
         if names:

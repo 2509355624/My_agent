@@ -545,6 +545,67 @@ class CompositionConflictTest(unittest.TestCase):
         self.assertIn("构图必须和服饰自洽", comic_agent._story_spec_text())
 
 
+class PovDirectionTest(unittest.TestCase):
+    """需求「视角:」行是视角方性别的唯一权威，标签侧对不上就报。
+
+    2026-10-12《雨夜公交站》实测：需求明明是哥哥视角（哥哥和妹妹躲雨），
+    编剧全篇自作主张写 `female pov`。`pov_mixed` 只能抓「一半一半」，
+    抓不住「全篇统一地错」——用户拍板需求里手写「视角:」行当权威。
+    """
+
+    def _script(self, *scenes):
+        return "".join(
+            "## %02d\n画面: %s\n气泡: 一\n标签1: 她站在车门边\n" % (i + 1, s)
+            for i, s in enumerate(scenes))
+
+    def test_male_pov_line_flags_female_pov(self):
+        brief = "视角: 哥哥\n主角: 妹妹\n剧情: 下雨天兄妹俩躲雨"
+        got = comic_agent.pov_direction(brief, self._script(
+            "safe, 1girl, solo, female pov, standing",
+            "safe, 1girl, solo, pov, standing"))
+        self.assertEqual([("01", "female pov")], got)
+
+    def test_female_pov_line_flags_pov(self):
+        brief = "视角: 姐姐\n主角: 妹妹\n剧情: 姐姐接妹妹放学"
+        got = comic_agent.pov_direction(brief, self._script(
+            "safe, 1girl, solo, pov, standing",
+            "safe, 1girl, solo, female pov, standing"))
+        self.assertEqual([("01", "pov")], got)
+
+    def test_no_viewer_line_skips(self):
+        brief = "下雨天兄妹俩躲雨，公交站一个人都没有"
+        got = comic_agent.pov_direction(brief, self._script(
+            "safe, 1girl, solo, female pov, standing"))
+        self.assertEqual([], got)
+
+    def test_ambiguous_viewer_word_skips(self):
+        """「视角: 我」认不出性别 → 不猜，返回空。"""
+        brief = "视角: 我\n主角: 妹妹\n剧情: 躲雨"
+        got = comic_agent.pov_direction(brief, self._script(
+            "safe, 1girl, solo, female pov, standing"))
+        self.assertEqual([], got)
+
+    def test_check_sends_direction_conflict_back(self):
+        brief = "视角: 哥哥\n主角: 妹妹\n剧情: 躲雨"
+        ok, why = comic_agent.check(self._script(
+            "safe, 1girl, solo, female pov, standing, bus stop",
+            "safe, 1girl, solo, female pov, standing, bus stop"), 2,
+            brief)
+        self.assertFalse(ok)
+        self.assertIn("视角:", why)
+        self.assertIn("哥哥", why)
+
+    def test_prompt_teaches_pure_pov_and_bear_effect(self):
+        """规则 5 白熊效应：pov 只是机位，「我」入画的唯一通道是 pov hands。"""
+        p = comic_agent._system_prompt(3)
+        self.assertIn("只标记机位", p)
+        self.assertIn("唯一通道", p)
+        self.assertIn("白熊效应", p)
+        self.assertIn("需求的固定格式", p)
+        self.assertIn("视角:", p)
+        self.assertIn("主角:", p)
+
+
 class MergedPeopleTest(unittest.TestCase):
     """多人同框必须写得出**两套**外貌，且点名谁是谁。
 
@@ -606,7 +667,7 @@ class MergedPeopleTest(unittest.TestCase):
         self.assertIn("外貌永远是女主的", p)
         self.assertIn("整个消失", p)
         # 女女向视角那条：必须带「什么时候才写 pov」的边界，否则哥哥视角会被误伤
-        self.assertIn("只有「我」明确是男性", p)
+        self.assertIn("视角:」行是视角方性别的唯一权威", p)
         self.assertIn("female_pov, pov hands", p)      # 对例
         # `school uniform` 也是泛类，必须写颜色
         self.assertIn("white school uniform", p)
