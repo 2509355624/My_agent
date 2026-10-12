@@ -1160,6 +1160,11 @@ class PromptTest(unittest.TestCase):
         # 逐格三问自查
         self.assertIn("逐格三问", p)
         self.assertIn("改标签，不是改旁白", p)
+        # 旁白写「我」、画面写「她」：我的状态绝不生成画面标签（含沙发反例）
+        self.assertIn("旁白写「我」，画面写「她」", p)
+        self.assertIn("连沙发都不出现", p)
+        self.assertIn("sitting, couch, living room, looking at viewer", p)
+        self.assertIn("standing, genkan, removing_shoes, looking back", p)
 
     def test_panel_count_injected(self):
         self.assertIn("正好 7 格", comic_agent._system_prompt(7))
@@ -1523,15 +1528,21 @@ class FixScriptTest(unittest.TestCase):
     DRAFT = _script("画面: safe, 1girl, solo, twintails, blue eyes")
     FIXED = _script("画面: safe, 1girl, solo, black hair, twintails, blue eyes")
 
-    def test_skips_llm_when_no_issues(self):
-        """清单为空就一次都别调——没有要补的，烧调用是纯浪费。"""
+    def test_empty_checklist_still_runs_full_review(self):
+        """清单为空也照样调模型——代码只看标签层，语义问题（视角悖论、旁白
+        与画面矛盾、剧情倒退）它永远看不见。「清单空就跳过」＝代码替模型
+        决定「不用看」，2026-10-12 晚随准入闸门一起拆掉。"""
         clean = _script("画面: safe, 1girl, solo, pov, black hair, twintails, "
                         "white backpack on one shoulder")
-        with mock.patch.object(comic_agent.llm, "call_llm") as m:
+        with mock.patch.object(comic_agent.llm, "call_llm",
+                               return_value=clean) as m:
             r = comic_agent.fix_script(self.BRIEF, clean)
-        self.assertFalse(m.called)
-        self.assertTrue(r["skipped"])
-        self.assertEqual(r["text"], clean)
+        self.assertTrue(m.called)
+        self.assertFalse(r["skipped"])
+        # 清单为空时提示词必须改口成「全文自审」
+        sent = m.call_args[0][0][1]["content"]
+        self.assertIn("全文", sent)
+        self.assertIn("代码判据没拦到", sent)
 
     def test_adopts_verified_fix(self):
         with mock.patch.object(comic_agent.llm, "call_llm",

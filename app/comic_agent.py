@@ -1323,6 +1323,20 @@ Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有�
    - **「我」的动作只进旁白，绝不变成她的标签**：推开门 / 放下书包 / 走近
      这些是「我」做的，她不会替「我」推门。画面里出现 `standing, doorway`
      的只能是「她真的站在门口」而不是「我站在门口」。
+   - **镜头里只有她的动作——旁白写「我」，画面写「她」（2026-10-12 晚拍板）**。
+     旁白的作用是**补充「我」此刻在做什么**（给观众语境），不是画面内容：
+     「我」坐哪、拿着什么、站在哪，**一律不生成画面标签**——那是「我」的
+     状态，镜头里没有「我」。镜头的任务只有一个：**展示她正在做的事**。
+     「我坐在沙发上，看着她在换鞋」→ 画面只有她在玄关 `removing_shoes`
+     + 回头看我，**连沙发都不出现**。逐标签自查：这个标签是谁的状态？
+     答案不是她 → 删。
+     错 / 对（同一天《姐姐的旧账》02 格实犯）：
+     旁白＝「我坐在沙发上等她，她换鞋的动作停了一下」
+     ❌ `sitting, couch, living room, looking at viewer, expressionless`
+        —— 把「我坐沙发等她」画成了**她**坐在沙发上：画面成了我，她消失了，
+        旁白里「换鞋」反而没影。
+     ✅ `standing, genkan, removing_shoes, looking back, surprised`
+        —— 她在玄关换鞋换到一半回头。我在沙发上的事，旁白一个字不改。
    - **她不挪窝——她的移动必须是旁白白纸黑字写出的节拍**。旁白只说「传来
      炒菜声」→ 声源在哪她就在哪（灶台边），**绝不许让她自己走到我面前**。
      「跑过来迎我 / 探出头」是剧情节拍，只有旁白明写了这一拍才能画她移动。
@@ -2046,8 +2060,13 @@ def fix_script(brief, text, provider=None, model=None, timeout=None,
     颜色与具体写法就该它自己定。所以补正稿**一律采纳，改对多少保住多少**。
 
     代码判据在这里只剩两个作用：
-      1. 出**清单**喂给补正员（`collect_issues`）；
+      1. 出**清单**喂给补正员（`collect_issues`）；清单只是起点；
       2. 采纳后出一份**体检报告**（`audit`＝补正稿上还剩哪些问题），只展示、不拦。
+
+    ⚠️ 2026-10-12 晚拍板：**清单为空也照样调模型**。代码判据只能看标签层，
+    视角悖论、旁白与画面矛盾、剧情倒退这些语义问题它永远看不见——「清单空
+    就跳过」＝代码替模型决定了「不用看」，这正是被否掉的硬编码闸门思路。
+    清单为空时提示词改口：让补正员**自己把全文对照规范审一遍**。
 
     唯一不从的是「它没交作业」（空 / 解析不出剧本 / 格号对不上，见 `_fix_is_usable`）
     ——那时剧本保持原稿，并在 warnings 里写「请重新补正」，由用户自己点重跑。
@@ -2064,7 +2083,8 @@ def fix_script(brief, text, provider=None, model=None, timeout=None,
        "warnings": 提示（含「请重新补正」）, "audit": 补正后的体检报告,
        "skipped": 是否根本没跑, "model": 实际用的模型}
 
-    清单为空时**一次 LLM 都不调**（skipped=True）——没有要补的就别烧调用。
+    补正**永远调模型**（不再「清单为空就跳过」——那道省调用的闸门把语义层
+    的全文审也一起拦掉了）。
     """
     if not (text or "").strip():
         raise ValueError("剧本不能为空")
@@ -2073,20 +2093,21 @@ def fix_script(brief, text, provider=None, model=None, timeout=None,
     out = {"text": text, "issues": issues, "diff": [], "adopted": False,
            "status": "ok", "warnings": [], "audit": [], "skipped": False,
            "model": ""}
-    if not issues:
-        out["skipped"] = True
-        out["status"] = "skipped"
-        out["warnings"].append("代码判据没发现任何问题，未调用补正模型")
-        log.info("[comic-fix] 清单为空，跳过补正")
-        return out
-
-    _emit(progress, "补正：%d 处待补" % len(issues))
+    _emit(progress, "补正：%d 处待补" % len(issues)
+          if issues else "补正：代码没拦到问题，让补正员全文自审")
+    if issues:
+        task_sec = ("【问题清单】（先补这些，清单只是起点，盖不全的你自己补）\n%s"
+                    % _fmt_issues(issues))
+    else:
+        task_sec = ("【问题清单】\n（代码判据没拦到任何问题——但这只说明标签层干净。"
+                    "你要自己把全文对照规范审一遍：视角是否全程第一人称、她的位置"
+                    "是否跟旁白一致、「我」的动作有没有被画到她身上、旁白与气泡与"
+                    "画面是否同一个瞬间、剧情有没有倒退回演过的节拍。）")
     messages = [
         {"role": "system", "content": _fix_system_prompt()},
         {"role": "user", "content":
-            "【原始需求】\n%s\n\n【问题清单】（先补这些，清单只是起点）\n%s\n\n"
-            "【编剧交的剧本】\n%s"
-            % (brief or "（作者没给需求）", _fmt_issues(issues), text)},
+            "【原始需求】\n%s\n\n%s\n\n【编剧交的剧本】\n%s"
+            % (brief or "（作者没给需求）", task_sec, text)},
     ]
     try:
         fixed = _strip_preamble(llm.call_llm(messages, provider=provider,
@@ -2111,7 +2132,9 @@ def fix_script(brief, text, provider=None, model=None, timeout=None,
     diff = diff_scripts(text, fixed)
     if not diff:
         out["status"] = "nochange"
-        out["warnings"].append("补正模型没改动任何一处（清单里的问题仍在）")
+        out["warnings"].append("补正模型没改动任何一处"
+                               + ("（清单里的问题仍在）" if issues
+                                  else "（模型认为全文已合规）"))
         log.info("[comic-fix] 补正稿与原稿一致，无改动")
         return out
 
