@@ -1172,6 +1172,54 @@ class PromptTest(unittest.TestCase):
         self.assertIn("画面里没有我的身体，模型看不见落点", p)
         self.assertIn("我的手抵住她胸口", p)
 
+    def test_rule20_viewer_family_ban_and_landing_test(self):
+        """规则 20 收口（2026-10-12 晚拍板）：落点测试前置 + `*_viewer` 动作族
+        按族禁（含库外自造短语），安全区写清——没有落点的朝镜头写法 +
+        `viewer_holding_*`（我的手拿东西）。
+
+        《妈妈的小憩》03 格实测：写「她的手抵住我胸口」→ 方向画反成
+        「我的手抵住她胸口」，且 `arms around viewer's waist` 还是库外自造。
+        """
+        p = comic_agent._system_prompt(3)
+        # 落点测试前置：三分类问句
+        self.assertIn("先过落点测试", p)
+        self.assertIn("落点在她身上", p)
+        self.assertIn("朝镜头、没有落点", p)
+        self.assertIn("落点在我身上", p)
+        # 安全区：没有落点的朝镜头写法 + viewer_holding_*
+        for safe in ("looking_at_viewer", "reaching_towards_viewer",
+                     "running_towards_viewer", "walking_towards_viewer",
+                     "facing_viewer", "viewer_holding_leash",
+                     "viewer_holding_phone"):
+            self.assertIn(safe, p)
+        # 按族禁：整族 *_viewer 动作标签 + 库外自造短语
+        self.assertIn("整族 `*_viewer` 动作标签一律禁写", p)
+        for bad in ("grabbing_viewer", "hugging_viewer", "kabedon_on_viewer",
+                    "leading_viewer", "headpatting_viewer", "feeding_viewer",
+                    "kissing_viewer", "arms around viewer's waist"):
+            self.assertIn(bad, p)
+        # 规则 14 不许再推荐 grabbing / hugging viewer（与规则 20 自相矛盾）
+        self.assertNotIn("（抓我们的手）", p)
+        self.assertNotIn("这族标签库里齐全", p)
+        self.assertIn("边界与原因见规则 20", p)
+
+    def test_narrator_lock_viewer_is_camera_body(self):
+        """旁白锁 A（2026-10-12 晚拍板）：`标签:` 里的「我」＝观众＝镜头本体，
+        不是女主的自称；她的内心走气泡（（女）前缀）+ 表情标签。"""
+        p = comic_agent._system_prompt(3)
+        self.assertIn("旁白锁", p)
+        self.assertIn("永远指观众", p)
+        self.assertIn("不是女主的自称", p)
+        self.assertIn("（女）", p)
+        # 补正员的头号职责就是审这一堆（清单没列到的也管）
+        f = comic_agent._fix_system_prompt()
+        self.assertIn("头号职责是审计视角", f)
+        self.assertIn("落点测试", f)
+        self.assertIn("数量形态", f)
+        self.assertIn("旁白锁", f)
+        self.assertIn("1other", f)
+        self.assertIn("清单没列到的同样要管", f)
+
     def test_panel_count_injected(self):
         self.assertIn("正好 7 格", comic_agent._system_prompt(7))
 
@@ -1184,6 +1232,16 @@ class PromptTest(unittest.TestCase):
             self.assertIn("记录者", prompt)
             self.assertIn("改构图，绝不删服饰", prompt)
             self.assertIn("画面里没有我的身体，模型看不见落点", prompt)
+            # 规则 20 收口后的按族禁 + 落点测试，两个改稿 AI 都得带
+            self.assertIn("先过落点测试", prompt)
+            self.assertIn("整族 `*_viewer` 动作标签一律禁写", prompt)
+            self.assertIn("viewer_holding", prompt)
+            # 旁白锁 A 同步进改稿 AI
+            self.assertIn("旁白锁", prompt)
+            # 数量形态两种写法也要进改稿 AI（04 格悬空 1other 就是修订助手
+            # 只看到规则 14–20、没看到通用区规则 6 造成的）
+            self.assertIn("人数标签只有两种写法", prompt)
+            self.assertIn("补一整个人进来", prompt)
             # 标记本身要被切掉，不能残留在给模型的提示里
             self.assertNotIn("开始】", prompt)
             self.assertNotIn("结束】", prompt)
