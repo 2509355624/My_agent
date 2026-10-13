@@ -416,6 +416,18 @@ COMFY_MIN_FREE_VRAM_GB = float(os.getenv("COMFY_MIN_FREE_VRAM_GB", "2.0"))
 # 0 = 关掉（回到从前：同渠道连画永不释放，只靠上面那条水位兜底）。
 COMFY_RELEASE_AFTER_SAME = int(os.getenv("COMFY_RELEASE_AFTER_SAME", "2"))
 
+# 按渠道覆盖上面的默认阈值（2026-10-13 用户：anima 残留叠得慢，5 张才重启；
+# qwen 权重 10.5GB 保持 2）。格式：COMFY_RELEASE_AFTER_SAME_MAP="anima-line=5"，
+# 多条用逗号分隔。没列到的渠道用 COMFY_RELEASE_AFTER_SAME。
+COMFY_RELEASE_AFTER_SAME_MAP = {}
+for _kv in (os.getenv("COMFY_RELEASE_AFTER_SAME_MAP") or "").split(","):
+    if "=" in _kv:
+        _k, _v = _kv.split("=", 1)
+        try:
+            COMFY_RELEASE_AFTER_SAME_MAP[_k.strip()] = int(_v)
+        except ValueError:
+            pass
+
 # ─── 重渠道（qwen）优先度：2026-10-04 按用户要求关闭 ───────────────
 #
 # ⚠️ **2026-10-04 用户拍板关闭（原值 90）**。触发场景：他连着跑漫画加字

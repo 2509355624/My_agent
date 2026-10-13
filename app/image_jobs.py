@@ -165,7 +165,8 @@ import requests
 from app import image_log
 from app.cancel import Cancelled, is_cancelled
 from app.config import (COMFY_MIN_FREE_RAM_GB, COMFY_MIN_FREE_VRAM_GB,
-                        COMFY_RELEASE_AFTER_SAME, COMFY_RESTART_MIN_GAP,
+                        COMFY_RELEASE_AFTER_SAME, COMFY_RELEASE_AFTER_SAME_MAP,
+                        COMFY_RESTART_MIN_GAP,
                         COMFY_RESTART_WAIT, COMFYUI_URL, IMAGE_GEN_TIMEOUT,
                         QQ_AGENT_ID, QWEN_COOLDOWN)
 from app.skills import skill_priority
@@ -988,6 +989,18 @@ def _worker(chan):
         _maybe_restart_for_ram()
 
 
+def _release_limit(skill):
+    """这个渠道的同渠道连画重启阈值。
+
+    列进了 `COMFY_RELEASE_AFTER_SAME_MAP` 的渠道用覆盖值；没列进的走模块级
+    `COMFY_RELEASE_AFTER_SAME`——测试 patch 的是这个属性，行为不变（.env 里
+    配了 map 也不能让未列进的渠道绕过 patch）。
+    """
+    if skill in COMFY_RELEASE_AFTER_SAME_MAP:
+        return COMFY_RELEASE_AFTER_SAME_MAP[skill]
+    return COMFY_RELEASE_AFTER_SAME
+
+
 def _maybe_release_for_switch(job):
     """渠道变了就先让 ComfyUI 把上一个渠道的模型卸掉；同渠道连画满 N 张也放一次。
 
@@ -1006,7 +1019,9 @@ def _maybe_release_for_switch(job):
     第 3 张起超级慢→卡死）。**同一个渠道连续提交满 N 张后，下一张提交前
     直接重启 ComfyUI**（2026-10-05 用户拍板：不打 /free——残留叠进换页态
     后 /free 救不回来，重启是唯一能把显存+内存都真正还回去的手段；
-    约 60~90 秒不能出图，用户知情选定）。
+    约 60~90 秒不能出图，用户知情选定）。阈值可按渠道覆盖
+    （`COMFY_RELEASE_AFTER_SAME_MAP="anima-line=5"`，2026-10-13：anima
+    残留叠得慢，5 张才重启；qwen 权重大，保持 2）。
     """
     chan = _COMFY
     skill = job.skill
@@ -1019,9 +1034,10 @@ def _maybe_release_for_switch(job):
         return
     if prev == skill:
         # 同渠道连画：数满 N 张就整个重启 ComfyUI（显存+内存清零）。
-        if 0 < COMFY_RELEASE_AFTER_SAME <= chan.same_run:
-            log.info("同渠道 %s 已连画 %d 张，下一张提交前彻底重启 ComfyUI",
-                     skill, chan.same_run)
+        limit = _release_limit(skill)
+        if 0 < limit <= chan.same_run:
+            log.info("同渠道 %s 已连画 %d 张（阈值 %d），下一张提交前彻底重启 ComfyUI",
+                     skill, chan.same_run, limit)
             chan.same_run = 1       # 重启后一个模型都不在，这张算新一轮第 1 张
             if not _restart_comfy():
                 # 重启被拒/没回来：退回打一发 /free，至少把显存残留清了，

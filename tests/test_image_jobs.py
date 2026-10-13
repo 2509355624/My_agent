@@ -1950,6 +1950,23 @@ class SameChannelReleaseTest(_Base):
                 self._run("qwen_image_v1")
         self.assertEqual(self.events, ["submit"] * 4)
 
+    def test_per_skill_map_overrides_the_default(self):
+        """按渠道覆盖（2026-10-13）：anima-line=5 时第 6 张才重启，
+        同批 qwen 仍按默认 2——两渠道阈值互不影响。"""
+        with mock.patch.dict(image_jobs.COMFY_RELEASE_AFTER_SAME_MAP,
+                             {"anima-line": 5}, clear=True):
+            for _ in range(6):
+                self._run("anima-line")
+        # 前 5 张不重启，第 6 张提交前重启一次
+        self.assertEqual(self.events,
+                         ["submit"] * 5 + ["restart", "submit"])
+        # 切到没列进名单的 qwen：切换先 free，之后还是默认 2（第 3 张重启）
+        self.events.clear()
+        for _ in range(3):
+            self._run("qwen_image_v1")
+        self.assertEqual(self.events,
+                         ["free", "submit", "submit", "restart", "submit"])
+
 
 class _TickingClock:
     """每读一次往前走 step 秒——把轮询循环快速推到超时。"""
