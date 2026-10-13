@@ -613,7 +613,10 @@ class ComicRenderOptsApiTest(unittest.TestCase):
                  comic_render_opts.defaults("anima-line")["loras"]]
         self.res = {"loras": sorted(set(names + ["char_x.safetensors"])),
                     "samplers": ["er_sde", "euler", "dpmpp_2m"],
-                    "schedulers": ["simple", "karras"], "online": True}
+                    "schedulers": ["simple", "karras"],
+                    "upscales": ["2x_Ani4Kv2_G6i2_Compact_107500.pth",
+                                 "4x_NMKD-Siax_200k.pth"],
+                    "online": True}
         self.patch_res = mock.patch.object(comic_api, "_render_resources",
                                            return_value=self.res)
         self.patch_res.start()
@@ -698,6 +701,25 @@ class ComicRenderOptsApiTest(unittest.TestCase):
         d = self.c.get("/api/comic/render_opts?task=" + self.NAME).get_json()
         self.assertFalse(d["saved"])
         self.assertEqual(d["opts"]["base"]["steps"], 20)   # 回模板默认值
+
+    def test_upscale_save_roundtrip_and_unknown_model_400(self):
+        opts = self._opts()
+        opts["upscale"] = {"scale_by": 1.5,
+                           "final_model": "4x_NMKD-Siax_200k.pth",
+                           "final_skip": False}
+        r = self.c.post("/api/comic/render_opts",
+                        json={"task": self.NAME, "opts": opts})
+        self.assertEqual(r.status_code, 200)
+        d = self.c.get("/api/comic/render_opts?task=" + self.NAME).get_json()
+        self.assertEqual(d["opts"]["upscale"]["scale_by"], 1.5)
+        self.assertEqual(d["opts"]["upscale"]["final_model"],
+                         "4x_NMKD-Siax_200k.pth")
+        # 名单外的放大模型 → 400（事实问题，拒）
+        opts["upscale"]["final_model"] = "nope.pth"
+        r = self.c.post("/api/comic/render_opts",
+                        json={"task": self.NAME, "opts": opts})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("放大模型", r.get_json()["error"])
 
 
 if __name__ == "__main__":

@@ -471,20 +471,22 @@ def api_comic_script_text():
 
 
 def _render_resources():
-    """ComfyUI 可用清单（LoRA / 采样器 / 调度器），给渲染参数卡做下拉。
+    """ComfyUI 可用清单（LoRA / 采样器 / 调度器 / 放大模型），给渲染参数卡做下拉。
 
     拉不到（ComfyUI 没开 / 超时）就返回空清单 + online=False：界面退化成自由
     输入，后端也**不做名单校验**——没有证据源就不替调用方猜（用户 2026-10-12
     拍板的哲学：代码只做检测，缺证据时别当闸门）。名字写错的后果是那一格渲染
     失败、错误明文显示在格子里，看得见摸得着，比悄悄拒掉好。
     """
-    out = {"loras": [], "samplers": [], "schedulers": [], "online": False}
+    out = {"loras": [], "samplers": [], "schedulers": [], "upscales": [],
+           "online": False}
     try:
         from app.tools.normal import comfy_workflow as cw
         r = cw.resource_list()
         out.update(loras=r.get("loras") or [],
                    samplers=r.get("samplers") or [],
                    schedulers=r.get("schedulers") or [],
+                   upscales=r.get("upscales") or [],
                    online=True)
     except Exception as e:
         comic.log.info("拉取 ComfyUI 资源清单失败（%s），渲染参数按自由输入处理", e)

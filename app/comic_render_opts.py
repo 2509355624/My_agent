@@ -15,6 +15,14 @@ anima-line 是**两段采样**（摸清结构才敢写覆盖，节点号以 2026
 所以覆盖也按两段分开给：base / hires 各一套 steps / cfg / sampler_name /
 scheduler，hires 再多一个 denoise（放大精修的强度）；LoRA 链只重建第一段那条。
 
+两级放大也在链上，一起纳进覆盖（2026-10-13 用户要能看到能改）：
+  - **latent 放大**（节点 25 `LatentUpscaleBy`，scale_by=1.2）：第二段采样
+    **之前**把潜空间放大——它决定第二段实际跑的尺寸，改大第二段显存/耗时
+    跟着涨（最终成图 ≈ 底图 × scale_by × 最终放大倍率）。
+  - **最终像素放大**（节点 32 `UpscaleModelLoader` + 33 `ImageUpscaleWithModel`，
+    2x_Ani4Kv2）：出图前最后一道。模型可换（ComfyUI 的 upscale_models 清单），
+    也能整道跳过（SaveImage 直连 VAEDecode，出图回到 hires 尺寸）。
+
 ⚠️ 重建 LoRA 链时**绝不能动第二段的 model 连线**：
 `comfy_workflow._rebuild_lora` 按「dict 里第一个 KSampler」当 generator，而
 anima-line 的 dict 顺序是 27 在 2 前面——直接用它会把第二段的 model 从
@@ -51,6 +59,7 @@ CFG_RANGE = (0.0, 20.0)
 DENOISE_RANGE = (0.0, 1.0)
 STRENGTH_RANGE = (0.0, 2.0)
 SIZE_RANGE = (256, 4096)          # 宽高都限这个范围；且必须是 8 的倍数
+UPSCALE_RANGE = (0.25, 4.0)       # latent 放大倍率（第二段采样前那一级）
 MAX_SLOTS = 12                    # 槽位上限（界面给 6 个，留余量给粘贴/API）
 
 
@@ -94,6 +103,21 @@ def _latent_ids(wf):
             and "width" in _inputs(nd)]
 
 
+def _upscale_nodes(wf):
+    """两级放大节点：{'latent': [latent 放大...], 'loader': 模型加载器,
+    'final': 最终像素放大}。按 class_type 认，不按节点号。"""
+    out = {"latent": [], "loader": None, "final": None}
+    for nid, nd in (wf or {}).items():
+        ct = (nd or {}).get("class_type")
+        if ct in ("LatentUpscaleBy", "LatentUpscale"):
+            out["latent"].append(nid)
+        elif ct == "UpscaleModelLoader":
+            out["loader"] = nid
+        elif ct == "ImageUpscaleWithModel":
+            out["final"] = nid
+    return out
+
+
 def _lora_slots(wf, base_ids):
     """当前 LoRA 链，按**加载顺序**（靠近底模的在前）→ [{name, strength}]。
 
@@ -125,6 +149,18 @@ def _sampler_params(wf, nid, with_denoise=False):
 
 # ─── 默认值（从 skill 模板读现状）─────────────────────────
 
+def _upscale_params(wf):
+    """当前两级放大的配置 = 参数卡「放大」小节的默认值。"""
+    up = _upscale_nodes(wf)
+    latent_inp = _inputs(wf.get(up["latent"][0])) if up["latent"] else {}
+    loader_inp = _inputs(wf.get(up["loader"])) if up["loader"] else {}
+    return {
+        "scale_by": _f(latent_inp.get("scale_by"), 1.2),
+        "final_model": str(loader_inp.get("model_name") or ""),
+        "final_skip": False,     # 默认走完整链（模板里两级放大都在）
+    }
+
+
 def defaults(skill=DEFAULT_SKILL):
     """anima-line 模板的当前配置 = 参数卡的默认值（用户没存过就照它显示）。"""
     sd = load_skill(skill) or {}
@@ -137,6 +173,7 @@ def defaults(skill=DEFAULT_SKILL):
         "base": _sampler_params(wf, passes["base"][0] if passes["base"] else None),
         "hires": _sampler_params(wf, passes["hires"][0] if passes["hires"] else None,
                                  with_denoise=True),
+        "upscale": _upscale_params(wf),
         "width": lat.get("width", 1024),
         "height": lat.get("height", 1536),
     }
@@ -227,6 +264,7 @@ def normalize(raw, base=None, resources=None):
     lora_list = res.get("loras") or []
     samplers = res.get("samplers") or []
     schedulers = res.get("schedulers") or []
+    upscales = res.get("upscales") or []
     errors, warnings = [], []
 
     # ── LoRA 槽（顺序 = 加载顺序；name 空 = 这个槽不挂 LoRA）
@@ -286,10 +324,34 @@ def normalize(raw, base=None, resources=None):
             out["denoise"] = cd
         return out
 
+    # ── 两级放大（latent 倍率 / 最终像素放大模型 / 跳过最终放大）
+    ru = raw.get("upscale")
+    bu = base.get("upscale") if isinstance(base.get("upscale"), dict) else {}
+    ru = ru if isinstance(ru, dict) else {}
+    if not ru and not bu:
+        # 从没提供过放大信息（老 render.json / 部分更新）：不校验、给空，
+        # apply 时空 dict = 放大节点原样不动。
+        up = {}
+    else:
+        sy = _f(ru.get("scale_by", bu.get("scale_by", 1.2)), 1.2)
+        csy = _clamp(sy, *UPSCALE_RANGE)
+        if abs(csy - sy) > 1e-9:
+            warnings.append("latent 放大 %.2f 超出 %s~%s，已钳成 %.2f"
+                            % (sy, UPSCALE_RANGE[0], UPSCALE_RANGE[1], csy))
+        fm = str(ru.get("final_model", bu.get("final_model", "")) or "").strip()
+        skip = bool(ru.get("final_skip", bu.get("final_skip", False)))
+        if not skip:
+            if not fm:
+                errors.append("最终放大模型不能为空（或勾选「跳过最终放大」）")
+            elif upscales and fm not in upscales:
+                errors.append("ComfyUI 里没有放大模型「%s」" % fm)
+        up = {"scale_by": csy, "final_model": fm, "final_skip": skip}
+
     opts = {
         "loras": loras,
         "base": _pass("base", with_denoise=False),
         "hires": _pass("hires", with_denoise=True),
+        "upscale": up,
     }
 
     # ── 分辨率（EmptyLatentImage 的宽高，8 的倍数）
@@ -390,6 +452,47 @@ def _set_sampler(wf, nid, params):
             inp[k] = params[k]
 
 
+def _apply_upscale(wf, up):
+    """两级放大覆盖：latent 倍率 / 最终放大模型 / 跳过最终放大。
+
+    跳过时把最终放大节点的消费者（SaveImage 的 images 输入）改指它的 image
+    来源（VAEDecode）。节点**留着不删**——ComfyUI 只执行输出可达的节点，没人
+    引用的节点不会跑；删节点反而要扫全部引用，容易漏（load 顺序错一点整条
+    链就断）。返回动了几个地方。
+    """
+    up = up or {}
+    nodes = _upscale_nodes(wf)
+    n = 0
+    sy = up.get("scale_by")
+    if sy is not None:
+        for nid in nodes["latent"]:
+            inp = _inputs(wf.get(nid))
+            if "scale_by" in inp:
+                inp["scale_by"] = float(sy)
+                n += 1
+            else:
+                log.warning("渲染参数：节点 %s 不是 LatentUpscaleBy，"
+                            "latent 放大倍率跳过", nid)
+    fm = str(up.get("final_model") or "").strip()
+    if fm and nodes["loader"]:
+        inp = _inputs(wf.get(nodes["loader"]))
+        if "model_name" in inp:
+            inp["model_name"] = fm
+            n += 1
+    if up.get("final_skip") and nodes["final"]:
+        fid = nodes["final"]
+        src = _inputs(wf.get(fid)).get("image")
+        if isinstance(src, list) and src:
+            src = [str(src[0]), src[1] if len(src) > 1 else 0]
+            for nd in wf.values():
+                inp = _inputs(nd)
+                for k, v in list(inp.items()):
+                    if isinstance(v, list) and v and str(v[0]) == fid:
+                        inp[k] = src
+            n += 1
+    return n
+
+
 def apply(workflow, opts):
     """把渲染参数应用到工作流，返回**新 dict**（不改入参）。
 
@@ -413,19 +516,28 @@ def apply(workflow, opts):
         for nid in _latent_ids(wf):
             inp = _inputs(wf[nid])
             inp["width"], inp["height"] = w, h
-    log.info("渲染参数已应用：LoRA %d 槽，base %s步/%s，hires %s步/%s，%d×%d",
+    n_up = _apply_upscale(wf, (opts or {}).get("upscale") or {})
+    log.info("渲染参数已应用：LoRA %d 槽，base %s步/%s，hires %s步/%s，放大 %s，%d×%d",
              n_lora, base_p.get("steps"), base_p.get("sampler_name"),
-             hires_p.get("steps"), hires_p.get("sampler_name"), w, h)
+             hires_p.get("steps"), hires_p.get("sampler_name"),
+             _up_desc((opts or {}).get("upscale") or {}), w, h)
     return wf
+
+
+def _up_desc(up):
+    if up.get("final_skip"):
+        return "×%s（跳过最终放大）" % up.get("scale_by")
+    return "×%s + %s" % (up.get("scale_by"), up.get("final_model"))
 
 
 def describe(opts):
     """一句话摘要，进 comic 的渲染日志（出图慢时好回头查参数）。"""
     o = opts or {}
     b, hi = o.get("base") or {}, o.get("hires") or {}
-    return ("LoRA %d 槽 / base %s步 cfg%s %s+%s / hires %s步 cfg%s %s+%s d%s / %sx%s"
+    return ("LoRA %d 槽 / base %s步 cfg%s %s+%s / hires %s步 cfg%s %s+%s d%s / %sx%s / %s"
             % (len([s for s in (o.get("loras") or []) if s.get("name")]),
                b.get("steps"), b.get("cfg"), b.get("sampler_name"),
                b.get("scheduler"), hi.get("steps"), hi.get("cfg"),
                hi.get("sampler_name"), hi.get("scheduler"),
-               hi.get("denoise"), o.get("width"), o.get("height")))
+               hi.get("denoise"), o.get("width"), o.get("height"),
+               _up_desc(o.get("upscale") or {})))

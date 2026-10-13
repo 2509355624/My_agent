@@ -138,12 +138,12 @@
     <div style="color:var(--text-dim);font-size:12px;margin-bottom:10px">
       按这个任务存（render.json），只影响<b>之后</b>渲染的格——已出的图不动，对哪格点「🔁 换种子重跑 / ▶ 跑这一格」哪格用新参数。
       LoRA 只挂第一段采样（第二段走另一个底模、不接 LoRA）；阶段二加气泡不受这些参数影响。
-      分辨率是<b>底图</b>尺寸，成图还会再放大（×1.2 精修 + Ani4K），拉太大显存和时间都涨。
+      分辨率是<b>底图</b>尺寸，成图还会再经过下面「放大」小节的两级放大，拉太大显存和时间都涨。
     </div>
     <div id="loraRows"></div>
     <div style="color:var(--text-dim);font-size:12px;margin:10px 0 6px">第一段采样 · 出构图（denoise 固定 1）</div>
     <div class="row" id="baseRow" style="margin-bottom:10px"></div>
-    <div style="color:var(--text-dim);font-size:12px;margin:10px 0 6px">第二段采样 · 放大精修（底图 latent ×1.2 后跑，denoise 越小越保留第一段）</div>
+    <div style="color:var(--text-dim);font-size:12px;margin:10px 0 6px">第二段采样 · 放大精修（底图 latent 按「放大」小节的倍率放大后跑，denoise 越小越保留第一段）</div>
     <div class="row" id="hiresRow" style="margin-bottom:10px"></div>
     <div class="row" style="margin-bottom:10px">
       <span style="color:var(--text-dim);font-size:12px">底图分辨率</span>
@@ -155,6 +155,15 @@
       <button class="btn small" onclick="presetSize(960,1280)" title="960×1280">竖 3:4</button>
       <button class="btn small" onclick="presetSize(1024,1024)" title="1024×1024">方 1:1</button>
       <button class="btn small" onclick="presetSize(1536,1024)" title="1536×1024">横 3:2</button>
+    </div>
+    <div style="color:var(--text-dim);font-size:12px;margin:10px 0 6px">放大 · latent 倍率是第二段采样前的潜空间放大（决定第二段实际跑的尺寸，越大越吃显存）；最终像素放大是出图前最后一道</div>
+    <div class="row" id="upscaleRow" style="margin-bottom:10px">
+      <span style="color:var(--text-dim);font-size:12px">latent 放大</span>
+      <input id="rUpScale" type="number" min="0.25" max="4" step="0.05" style="width:80px" title="第二段采样前的潜空间放大倍率">
+      <span style="color:var(--text-dim)">×</span>
+      <span class="spacer" style="flex:1"></span>
+      <select id="rUpModel" style="width:250px" title="最终像素放大模型（ComfyUI upscale_models 清单）"></select>
+      <label style="font-size:12px;color:var(--text-dim);white-space:nowrap"><input type="checkbox" id="rUpSkip"> 跳过最终放大</label>
     </div>
     <div class="row">
       <button class="btn primary" id="btnSaveRender" onclick="saveRenderOpts()">保存参数</button>
@@ -551,7 +560,7 @@ async function saveScript(andRun) {
   } catch (e) { toast(e.message, true); }
 }
 
-// ── 渲染参数卡（anima-line：6 个 LoRA 槽 / 两段采样 / 分辨率）──────────
+// ── 渲染参数卡（anima-line：6 个 LoRA 槽 / 两段采样 / 分辨率 / 两级放大）──────────
 // 按任务存 render.json；只影响之后渲染的格。加载一次就够（轮询刷新不碰它，
 // 免得把用户正在编辑的表单冲掉）。ComfyUI 不在线时资源清单为空，下拉退化成
 // 带当前值的自由 select（值不在清单里也原样带上，保存时不丢）。
@@ -630,6 +639,17 @@ function fillRenderForm(opts, res) {
   }
   document.getElementById('rpW').value = opts.width;
   document.getElementById('rpH').value = opts.height;
+
+  // 放大：latent 倍率 + 最终像素放大模型 + 跳过开关
+  const up = opts.upscale || {};
+  document.getElementById('rUpScale').value = up.scale_by == null ? 1.2 : up.scale_by;
+  const um = document.getElementById('rUpModel');
+  const upNames = (res.upscales || []).slice();
+  if (up.final_model && !upNames.includes(up.final_model)) upNames.unshift(up.final_model);
+  um.innerHTML = upNames.map(x =>
+    '<option value="' + esc(x) + '"' + (x === up.final_model ? ' selected' : '') + '>'
+    + esc(x) + '</option>').join('');
+  document.getElementById('rUpSkip').checked = !!up.final_skip;
 }
 
 function presetSize(w, h) {
@@ -653,6 +673,8 @@ function collectRenderOpts() {
   if (document.getElementById('rstepsH'))
     out.hires = {steps: v('rstepsH'), cfg: v('rcfgH'), denoise: v('rdenH'),
                  sampler_name: v('rsampH'), scheduler: v('rschH')};
+  out.upscale = {scale_by: v('rUpScale'), final_model: v('rUpModel'),
+                 final_skip: document.getElementById('rUpSkip').checked};
   return out;
 }
 

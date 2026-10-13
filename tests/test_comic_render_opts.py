@@ -90,6 +90,10 @@ class DefaultsTest(unittest.TestCase):
                                       "scheduler": "simple",
                                       "denoise": 0.25})
         self.assertEqual((d["width"], d["height"]), (1024, 1536))
+        self.assertEqual(d["upscale"], {
+            "scale_by": 1.2,
+            "final_model": "2x_Ani4Kv2_G6i2_Compact_107500.pth",
+            "final_skip": False})
 
 
 class ApplyTest(unittest.TestCase):
@@ -177,6 +181,37 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(names, orig)
         self.assertEqual(out["2"]["inputs"]["steps"], 30)
 
+    def test_upscale_scale_and_model_land_on_right_nodes(self):
+        """latent 倍率写 LatentUpscaleBy，最终放大模型写 UpscaleModelLoader；
+        最终放大节点的 upscale_model 连线不动（它还指着 loader）。"""
+        wf = _fresh_workflow()
+        opts = ro.defaults("anima-line")
+        opts["upscale"] = {"scale_by": 1.5,
+                           "final_model": "4x_NMKD-Siax_200k.pth",
+                           "final_skip": False}
+        out = ro.apply(wf, opts)
+        up = ro._upscale_nodes(out)
+        self.assertEqual(out[up["latent"][0]]["inputs"]["scale_by"], 1.5)
+        self.assertEqual(out[up["loader"]]["inputs"]["model_name"],
+                         "4x_NMKD-Siax_200k.pth")
+        self.assertEqual(out[up["final"]]["inputs"]["upscale_model"],
+                         [up["loader"], 0])
+
+    def test_upscale_skip_rewires_save_image_to_decoder(self):
+        """跳过最终放大：SaveImage 直连 VAEDecode；最终放大节点留着但悬空，
+        ComfyUI 只跑输出可达的节点，悬空节点不会被执行。"""
+        wf = _fresh_workflow()
+        opts = ro.defaults("anima-line")
+        opts["upscale"]["final_skip"] = True
+        out = ro.apply(wf, opts)
+        up = ro._upscale_nodes(out)
+        save = [n for n in out if out[n]["class_type"] == "SaveImage"][0]
+        decode = out[up["final"]]["inputs"]["image"][0]
+        self.assertEqual(out[save]["inputs"]["images"], [decode, 0])
+        refs = [n for n in out for k, v in (out[n]["inputs"] or {}).items()
+                if isinstance(v, list) and v and str(v[0]) == up["final"]]
+        self.assertEqual(refs, [])
+
 
 class NormalizeTest(unittest.TestCase):
     """钳位（给人填的表，不拒）与事实校验（这填得不对，存不进去）。"""
@@ -193,6 +228,33 @@ class NormalizeTest(unittest.TestCase):
         self.assertEqual(opts["hires"]["denoise"], 1.0)
         self.assertEqual((opts["width"], opts["height"]), (4096, 256))
         self.assertTrue(warnings)
+
+    def test_upscale_scale_clamped_model_checked(self):
+        base = ro.defaults("anima-line")
+        # 倍率钳位（不拒）
+        opts, errors, warnings = ro.normalize(
+            {"upscale": {"scale_by": 99}}, base=base)
+        self.assertEqual(errors, [])
+        self.assertEqual(opts["upscale"]["scale_by"], 4.0)
+        self.assertTrue(warnings)
+        # 有清单 → 放大模型必须是事实
+        _o, errors, _w = ro.normalize(
+            {"upscale": {"final_model": "nope.pth"}},
+            resources={"upscales": ["2x_Ani4Kv2_G6i2_Compact_107500.pth"]})
+        self.assertTrue(any("放大模型" in e for e in errors))
+        # 没清单 → 不猜，照收
+        _o, errors, _w = ro.normalize(
+            {"upscale": {"final_model": "nope.pth"}})
+        self.assertEqual(errors, [])
+        # 跳过最终放大时模型可以为空
+        _o, errors, _w = ro.normalize(
+            {"upscale": {"final_skip": True, "final_model": ""}})
+        self.assertEqual(errors, [])
+        self.assertTrue(_o["upscale"]["final_skip"])
+        # 不跳过又不给模型 → 事实问题，拒
+        _o, errors, _w = ro.normalize(
+            {"upscale": {"final_skip": False, "final_model": ""}})
+        self.assertTrue(errors)
 
     def test_width_must_be_multiple_of_eight(self):
         _opts, errors, _w = ro.normalize({"width": 1001})
@@ -220,6 +282,7 @@ class NormalizeTest(unittest.TestCase):
         self.assertEqual(opts["base"]["sampler_name"], "er_sde")
         self.assertEqual(len(opts["loras"]), 6)
         self.assertEqual((opts["width"], opts["height"]), (1024, 1536))
+        self.assertEqual(opts["upscale"], base["upscale"])
 
 
 class StoreTest(unittest.TestCase):
