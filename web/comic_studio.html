@@ -80,6 +80,10 @@
     padding: 6px 8px; }
   .slot .escene { display: block; width: 100%; box-sizing: border-box; margin-top: 6px;
     min-height: 72px; font-size: 12px; line-height: 1.5; padding: 6px 8px; }
+  #portraitGrid .shot img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  #portraitGrid .shot .imgs { min-height: 200px; }
+  #portraitGrid .shot .ptxt { color: var(--text-dim); font-size: 11px; line-height: 1.5;
+    padding: 6px 10px 8px; word-break: break-all; max-height: 66px; overflow: hidden; }
   label.file { position: relative; overflow: hidden; }
   label.file input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
   #toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
@@ -96,13 +100,21 @@
   </div>
 
   <div class="card">
-    <h2>① 需求 → 编剧出剧本</h2>
+    <h2>① 需求 → 出内容</h2>
+    <div class="row" style="margin-bottom:10px">
+      <span style="color:var(--text-dim);font-size:12px">模式</span>
+      <label style="font-size:13px;white-space:nowrap"><input type="radio" name="mode" value="script" checked onchange="switchMode()"> 剧本</label>
+      <span style="color:var(--text-dim);font-size:12px">POV 视角的多格故事，观众不入画</span>
+      <label style="font-size:13px;white-space:nowrap;margin-left:14px"><input type="radio" name="mode" value="portrait" onchange="switchMode()"> 生图</label>
+      <span style="color:var(--text-dim);font-size:12px">单人写真集：只有女主，无视角无剧情，一次多张</span>
+    </div>
     <div class="row" style="margin-bottom:10px">
       <textarea id="brief" rows="3" style="flex:1;min-width:220px" placeholder="视角: 哥哥
 主角: 妹妹
 剧情: 下雨天兄妹俩在公交站躲雨……（前两行是硬约束：视角=镜头后的「我」，男性→pov、女性→female_pov；主角=画面里唯一入画的人）"></textarea>
+      <input id="heroine" style="display:none;width:220px" placeholder="女主设定：长直黑发、校服、气质文静……（填一次，这批写真每张都自动带上）">
       <input id="character" style="width:130px" placeholder="角色名（可选）">
-      <input id="panels" type="number" min="1" max="30" value="10" style="width:70px" title="格数">
+      <input id="panels" type="number" min="1" max="30" value="10" style="width:70px" title="剧本格数 / 写真相张数">
     </div>
     <div class="row" style="margin-bottom:10px">
       <span style="color:var(--text-dim);font-size:12px">编剧模型</span>
@@ -187,6 +199,18 @@
     </div>
     <div id="grid" class="grid"><div class="empty">还没有任务——先在上面生成剧本</div></div>
   </div>
+
+  <div class="card" id="portraitCard" style="display:none">
+    <h2>③ 写真 · 单人写真集</h2>
+    <div style="color:var(--text-dim);font-size:12px;margin-bottom:10px">
+      生图模式的产物：提示词员把「女主设定 + 需求」写成 N 条纯画面（无视角、无剧情、无观众、画面只有女主一人），
+      每条各出一张。走 anima-line 渠道——上面的渲染参数卡（LoRA / 采样 / 放大 / 分辨率）对它们同样生效。
+      对哪张点「🔁 换种子」就重跑哪张，其余不动。
+    </div>
+    <div id="portraitJob"></div>
+    <div id="portraitMeta" style="color:var(--text-dim);font-size:12px;margin-bottom:8px"></div>
+    <div id="portraitGrid" class="grid"><div class="empty">还没有写真——在上面切到「生图」模式写句需求，或对已有任务点下方刷新</div></div>
+  </div>
 </div>
 <div id="zoom" onclick="zoomClose()"><img alt=""></div>
 <div id="toast"></div>
@@ -269,6 +293,7 @@ async function loadModels() {
 }
 
 async function genScript() {
+  if (curMode() === 'portrait') return genPortrait();
   const brief = document.getElementById('brief').value.trim();
   if (!brief) { toast('先写需求（视角/主角/剧情）', true); return; }
   const btn = document.getElementById('btnScript');
@@ -855,10 +880,17 @@ async function refresh() {
   try { d = await api('/api/comic/status?task=' + TASK); }
   catch (e) { console.warn(e); return; }
   renderFix(d.fix);          // 重新补正后靠这个 2 秒轮询把报告刷出来
+  renderPortraits(d.portraits);   // 生图模式的写真（③ 卡），顺带刷新单张重跑的结果
   RUNNING = d.running || null;   // renderSlot 靠它判断排队的格有没有线程在管
   const grid = document.getElementById('grid');
   if (!d.panels.length) {
-    if (grid.dataset.empty !== '1') { grid.innerHTML = '<div class="empty">剧本里没解析到格子</div>'; grid.dataset.empty = '1'; }
+    // 纯写真任务（生图模式新建的目录没有剧本）：漫画卡显示一句指向 ③ 卡，
+    // 别甩一句「没解析到格子」让人以为出错了。
+    const tip = (d.portraits && d.portraits.length)
+      ? '这是生图模式的任务——写真的图在下方「③ 写真」卡' : '剧本里没解析到格子';
+    if (grid.dataset.empty !== '1') { grid.innerHTML = '<div class="empty">' + tip + '</div>'; grid.dataset.empty = '1'; }
+    document.getElementById('bubbleAllRow').style.display = 'none';
+    setBusy(false);
     return;
   }
   grid.dataset.empty = '';
@@ -905,7 +937,7 @@ async function refresh() {
     else grid.appendChild(node);
     _slots[p.no] = {sig, el: node};
     // 正放大的那张图被重写了（刚跑完 Qwen）→ 放大层也换成新的
-    if (_zoom && _zoom.no === p.no) {
+    if (_zoom && _zoom.kind === 'panel' && _zoom.no === p.no) {
       const u = _zoom.which === 'scene' ? p.scene_url : p.final_url;
       const zi = document.querySelector('#zoom img');
       if (u && zi) zi.src = u + '&t=' + Date.now();
@@ -950,9 +982,140 @@ async function bubbleAll() {
   catch (e) { toast(e.message, true); }
 }
 
+// ── 生图模式（单人写真集，2026-10-13）─────────────────────
+// 和剧本模式共用 ① 卡的输入框和模型选择，提示词规则另一套：无 POV、无剧情、
+// 无观众，画面只有女主一个人。后端 comic_portrait.run：提示词员写 N 条 →
+// 逐条 build_t2i_workflow + 渲染参数覆盖 + image_jobs 队列；账本 prompts.json
+// 逐条落盘，轮询即进度。单张换种子重跑是同步的（一张图几十秒，按钮转圈等）。
+let PORTRAIT_JOB = null;
+
+function curMode() {
+  return document.querySelector('input[name=mode]:checked').value;
+}
+
+function switchMode() {
+  const p = curMode() === 'portrait';
+  document.getElementById('heroine').style.display = p ? '' : 'none';
+  document.getElementById('character').style.display = p ? 'none' : '';
+  document.getElementById('panels').title = p ? '写真相张数（1~12）' : '格数';
+  document.getElementById('panels').max = p ? 12 : 30;
+  const btn = document.getElementById('btnScript');
+  btn.textContent = p ? '生成写真' : '生成剧本';
+  document.getElementById('brief').placeholder = p
+    ? '想拍什么：花田里回眸、天台看夕阳、教室靠窗午睡……（一次多张，每张换场景/服装/构图）'
+    : '视角: 哥哥\n主角: 妹妹\n剧情: 下雨天兄妹俩在公交站躲雨……（前两行是硬约束：视角=镜头后的「我」，男性→pov、女性→female_pov；主角=画面里唯一入画的人）';
+}
+
+async function genPortrait() {
+  const brief = document.getElementById('brief').value.trim();
+  if (!brief) { toast('想拍什么总得写一句', true); return; }
+  const btn = document.getElementById('btnScript');
+  btn.disabled = true; btn.textContent = '提示词员动笔…';
+  try {
+    const d = await api('/api/comic/portrait', {
+      task: TASK || '', brief,
+      heroine: document.getElementById('heroine').value.trim(),
+      n: +document.getElementById('panels').value || 4,
+      provider: document.getElementById('prov').value,
+      model: document.getElementById('model').value
+    });
+    PORTRAIT_JOB = d.job;
+    if (!TASK) TASK = d.task;        // 后端给新建任务起了目录名
+    document.getElementById('portraitCard').style.display = 'block';
+    loadRenderOpts();                // 渲染参数卡对写真同样生效（同渠道）
+    pollPortrait();
+  } catch (e) {
+    toast(e.message, true);
+    finishPortrait();
+  }
+}
+
+async function pollPortrait() {
+  if (!PORTRAIT_JOB) return;
+  let d;
+  try { d = await api('/api/comic/portrait_status?job=' + PORTRAIT_JOB); }
+  catch (e) { toast(e.message, true); finishPortrait(); return; }
+  const job = document.getElementById('portraitJob');
+  if (d.state === 'running') {
+    const log = d.log || [];
+    job.innerHTML = '<div class="badge b-rendered">跑图中</div> '
+      + '<span style="color:var(--text-dim);font-size:12px">'
+      + esc(log.length ? log[log.length - 1] : '提示词员动笔…') + '</span>';
+    renderPortraits(d.shots);
+    setTimeout(pollPortrait, 1500);
+    return;
+  }
+  PORTRAIT_JOB = null;
+  btnFinish();
+  if (d.state === 'error') {
+    job.innerHTML = '<div class="badge b-error">失败</div> '
+      + '<span style="color:var(--error);font-size:12px">' + esc(d.error || '') + '</span>';
+    toast('写真失败：' + (d.error || ''), true);
+  } else {
+    job.innerHTML = '<div class="badge b-done">完成</div>';
+    toast('写真完成：' + (d.shots || []).length + ' 张');
+  }
+  renderPortraits(d.shots);
+  refresh();               // 漫画卡/进度条跟着这个（可能新的）任务走
+}
+
+function btnFinish() {
+  const btn = document.getElementById('btnScript');
+  btn.disabled = false;
+  btn.textContent = curMode() === 'portrait' ? '生成写真' : '生成剧本';
+}
+
+function finishPortrait() { PORTRAIT_JOB = null; btnFinish(); }
+
+function renderPortraits(shots) {
+  const card = document.getElementById('portraitCard');
+  const grid = document.getElementById('portraitGrid');
+  if (!shots || !shots.length) { card.style.display = 'none'; return; }
+  card.style.display = 'block';
+  const sig = JSON.stringify(shots.map(s => [s.no, s.state, s.seed, s.rev, s.error]));
+  if (grid.dataset.sig === sig) return;      // 没变就别重建，避免闪烁
+  grid.dataset.sig = sig;
+  const done = shots.filter(s => s.state === 'rendered').length;
+  document.getElementById('portraitMeta').textContent =
+    '这批 ' + shots.length + ' 张：' + done + ' 张完成'
+    + (done < shots.length ? '，失败的可以点「🔁 换种子」重跑' : '');
+  grid.innerHTML = shots.map(s => {
+    const badge = s.state === 'rendered' ? '<span class="badge b-done">完成</span>'
+      : '<span class="badge b-error">失败</span>';
+    const img = s.state === 'rendered'
+      ? '<div><img class="zoomable" loading="lazy" src="' + s.url + '&t=' + Date.now()
+        + '" onclick="zoomOpen(\'' + s.url + '\',\'' + s.no + '\',\'shot\',\'shot\')"></div>'
+      : '<div style="color:var(--text-mute);font-size:12px;display:flex;align-items:center;justify-content:center;min-height:200px">没出来</div>';
+    return '<div class="slot shot" data-no="' + esc(s.no) + '">'
+      + '<div class="head"><span class="no">' + esc(s.no) + '</span>' + badge
+      + '<span class="seed">seed ' + esc(s.seed) + '</span></div>'
+      + '<div class="imgs">' + img + '</div>'
+      + '<div class="ops"><button class="btn small" onclick="reseedShot(\'' + s.no
+      + '\')">🔁 换种子</button></div>'
+      + (s.error ? '<div class="err">' + esc(s.error) + '</div>' : '')
+      + '<div class="ptxt" title="' + esc(s.prompt) + '">' + esc(s.prompt) + '</div>'
+      + '</div>';
+  }).join('');
+}
+
+async function reseedShot(no) {
+  if (!TASK) return;
+  const btn = document.querySelector('.shot[data-no="' + no + '"] .btn');
+  if (btn) { btn.disabled = true; btn.textContent = '重跑中…'; }
+  try {
+    const d = await api('/api/comic/portrait_shot', {task: TASK, no});
+    toast('第 ' + no + ' 张已重跑（新种子 ' + d.shot.seed + '）');
+    refresh();
+  } catch (e) { toast(e.message, true); }
+  finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔁 换种子'; }
+  }
+}
+
 // 点图放大看细节——「哪几个字糊了」得先看清才写得出指令。
-function zoomOpen(src, no, which) {
-  _zoom = {no, which};
+// kind：panel=漫画格 / shot=写真张（写真的图不在 raw/final 里，刷新逻辑两样）。
+function zoomOpen(src, no, which, kind) {
+  _zoom = {no, which, kind: kind || 'panel', url: src};
   const d = document.getElementById('zoom');
   d.querySelector('img').src = src;
   d.style.display = 'flex';

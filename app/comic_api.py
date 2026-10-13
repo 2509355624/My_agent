@@ -15,6 +15,9 @@
   GET  /api/comic/render_opts  读这个任务的渲染参数覆盖（render.json）+ ComfyUI 可用清单
   POST /api/comic/render_opts  保存 / 重置（reset=true）渲染参数覆盖
   POST /api/comic/rerender  换种子重跑某格（重置该格 → 后台只跑阶段一）
+  POST /api/comic/portrait  生图模式：提示词员写 N 条单人写真 → 逐条出图（后台）
+  GET  /api/comic/portrait_status  轮询这批写真的进度（shots 逐条落盘）
+  POST /api/comic/portrait_shot  换种子重跑某一张写真
   POST /api/comic/bubble    加气泡：单格（含已完成的格＝从底图重画），或全部
   GET  /api/comic/prompt    取出「这一格原样发给 qwen 的那段文字」，供界面显示与手改
   POST /api/comic/manual    手动修复：拿当前成品当源图，按手输的指令跑一遍 qwen
@@ -42,7 +45,7 @@ import zipfile
 
 from flask import Blueprint, jsonify, request, send_file, send_from_directory
 
-from app import comic, comic_agent, comic_render_opts
+from app import comic, comic_agent, comic_portrait, comic_render_opts
 from app.config import BASE_DIR
 
 bp = Blueprint("comic_api", __name__)
@@ -67,6 +70,12 @@ _CHAT_JOBS = {}
 _CHAT_LOCK = threading.Lock()
 _CHAT_KEEP = 12
 _CHAT_HIST_MAX = 40        # chat_history.json 里最多留多少条（20 轮对话）
+
+# 写真批次任务：{job_id: {...}}。与 _SCRIPT_JOBS 同型——写提示词要点时间，
+# 前端要个句柄轮询；同一任务同时只许一批在跑（prompts.json 会被互相踩）。
+_PORTRAIT_JOBS = {}
+_PORTRAIT_LOCK = threading.Lock()
+_PORTRAIT_KEEP = 12
 
 
 def _read_chat_history(path):
@@ -359,11 +368,25 @@ def api_comic_start():
 @bp.route("/api/comic/status", methods=["GET"])
 def api_comic_status():
     """槽位轮询。图片 URL 由前端拼时间戳防缓存；每格另带 `rev`（图片文件指纹），
-    前端拿它判断「图被重写过」，否则就地覆盖的场景（手动跑 Qwen）刷不出来。"""
+    前端拿它判断「图被重写过」，否则就地覆盖的场景（手动跑 Qwen）刷不出来。
+
+    纯写真任务（生图模式新建、没有 script.md）也认：panels 空 + portraits 照返，
+    前端靠它把刷新后的写真卡恢复出来。"""
     try:
         path = _task_dir(request.args.get("task"))
         task = _load_task(path)
     except ValueError as exc:
+        # 只有「目录存在但没有剧本」这一种情况放行（纯写真任务）；目录不存在
+        # 照样 404。
+        try:
+            path = _task_dir(request.args.get("task"))
+        except ValueError:
+            return jsonify({"ok": False, "error": str(exc)}), 404
+        if not os.path.isfile(os.path.join(path, "script.md")):
+            return jsonify({"ok": True, "task": os.path.basename(path),
+                            "title": "", "running": None, "job_error": None,
+                            "fix": None, "panels": [],
+                            "portraits": _portrait_shots(path)})
         return jsonify({"ok": False, "error": str(exc)}), 404
     with _JOBS_LOCK:
         running = dict(_JOBS.get(path) or {})
@@ -391,6 +414,9 @@ def api_comic_status():
                     # 补正报告（编剧之后那一步）落盘在 fix.json：页面拿它显示
                     # 「改了哪几格、改了什么」，没有这个文件就是老任务，返回 null。
                     "fix": _read_fix_report(path),
+                    # 生图模式的写真（portraits/ + prompts.json）：刷新页面后
+                    # 写真卡靠它恢复。没有就是空列表。
+                    "portraits": _portrait_shots(path),
                     "panels": panels})
 
 
@@ -558,6 +584,140 @@ def api_comic_rerender():
     if not started:
         return jsonify({"ok": False, "error": "这个任务已经在跑了"}), 409
     return jsonify({"ok": True, "no": no})
+
+
+# ─── 生图模式（单人写真集，2026-10-13）──────────────────
+
+def _portrait_task_dir(data):
+    """task 给了就校验存在；没给就新建一个（写真不依附剧本任务）。"""
+    task_id = str(data.get("task") or "").strip()
+    if task_id:
+        return _task_dir(task_id)
+    path = comic._next_task_dir(_COMICS_ROOT)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+@bp.route("/api/comic/portrait", methods=["POST"])
+def api_comic_portrait():
+    """生图模式：提示词员写 N 条单人写真提示词 → 逐条出图（后台线程）。
+
+    与剧本模式共用 ① 卡的输入框和模型选择，但提示词规则完全另一套（无 POV、
+    无剧情、无观众，见 app/comic_portrait 模块头）。task 不给就新建任务目录
+    ——没有漫画任务也能直接跑写真。异步：写提示词 + N 张图要几分钟，同步会
+    堵死轮询（和编剧同一个理由）。
+    """
+    data = request.get_json(silent=True) or {}
+    brief = str(data.get("brief") or "").strip()
+    if not brief:
+        return jsonify({"ok": False, "error": "想拍什么总得写一句"}), 400
+    try:
+        n = int(data.get("n") or 4)
+    except (TypeError, ValueError):
+        n = 4
+    n = max(1, min(comic_portrait.MAX_SHOTS, n))
+    heroine = str(data.get("heroine") or "").strip()
+    provider = str(data.get("provider") or "").strip() or None
+    model = str(data.get("model") or "").strip() or None
+
+    try:
+        path = _portrait_task_dir(data)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    with _PORTRAIT_LOCK:
+        busy = any(j.get("state") == "running" and j.get("task") == path
+                   for j in _PORTRAIT_JOBS.values())
+    if busy:
+        return jsonify({"ok": False, "error": "这个任务的写真还在跑，等它跑完"}), 409
+
+    job = uuid.uuid4().hex[:12]
+    with _PORTRAIT_LOCK:
+        _PORTRAIT_JOBS[job] = {"state": "running", "task": path, "log": [],
+                               "error": None}
+        for k in [k for k, v in _PORTRAIT_JOBS.items()
+                  if v["state"] != "running"][:-_PORTRAIT_KEEP]:
+            _PORTRAIT_JOBS.pop(k, None)
+
+    def _progress(msg):
+        with _PORTRAIT_LOCK:
+            j = _PORTRAIT_JOBS.get(job)
+            if j is not None:
+                j["log"].append(msg)
+                del j["log"][:-8]
+
+    def _work():
+        try:
+            comic_portrait.run(path, brief, heroine, n, provider=provider,
+                               model=model, progress=_progress)
+            with _PORTRAIT_LOCK:
+                _PORTRAIT_JOBS[job].update(state="done")
+        except BaseException as exc:        # SystemExit 不是 Exception（见模块头）
+            with _PORTRAIT_LOCK:
+                _PORTRAIT_JOBS[job].update(state="error", error=str(exc))
+            comic.log.exception("写真批次失败 job=%s", job)
+
+    threading.Thread(target=_work, daemon=True, name="comic-portrait").start()
+    return jsonify({"ok": True, "job": job, "task": os.path.basename(path)})
+
+
+@bp.route("/api/comic/portrait_status", methods=["GET"])
+def api_comic_portrait_status():
+    """轮询写真批次：state + log + shots（账本逐条落盘，进度实时）。"""
+    job = str(request.args.get("job") or "").strip()
+    with _PORTRAIT_LOCK:
+        j = _PORTRAIT_JOBS.get(job)
+        if j is None:
+            return jsonify({"ok": False,
+                            "error": "没有这个写真任务（可能已过期）"}), 404
+        snap = dict(j, log=list(j["log"]))
+    snap["shots"] = _portrait_shots(snap.get("task"))
+    snap["ok"] = True
+    return jsonify(snap)
+
+
+def _portrait_shots(path):
+    """账本 + 图 URL + 文件指纹（前端逐张 diff 刷新，签名不变不重建 DOM）。"""
+    if not path:
+        return []
+    out = []
+    for s in comic_portrait.load_prompts(path):
+        fp = comic_portrait.shot_path(path, s.get("no"))
+        item = dict(s)
+        item["url"] = ("/api/comic/img?task=%s&f=portraits/%s.png"
+                       % (os.path.basename(path), str(s.get("no")).zfill(2)))
+        item["rev"] = _rev(fp)
+        out.append(item)
+    return out
+
+
+@bp.route("/api/comic/portrait_shot", methods=["POST"])
+def api_comic_portrait_shot():
+    """换种子重跑某一张写真：提示词不变，种子重抽。
+
+    同步跑（一张图几十秒，前端按钮转圈等）——和 rerender 走后台不同：这里
+    没有「整批状态」要维护，prompts.json 落盘即完事。
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        path = _task_dir(data.get("task"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    with _PORTRAIT_LOCK:
+        busy = any(j.get("state") == "running" and j.get("task") == path
+                   for j in _PORTRAIT_JOBS.values())
+    if busy:
+        return jsonify({"ok": False, "error": "这批写真还在跑，等它跑完再单张重跑"}), 409
+    no = str(data.get("no") or "").strip().zfill(2)
+    try:
+        shot = comic_portrait.reseed_shot(path, no)
+    except comic_portrait.PortraitError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    fp = comic_portrait.shot_path(path, no)
+    return jsonify({"ok": True, "shot": dict(
+        shot, url=("/api/comic/img?task=%s&f=portraits/%s.png"
+                   % (os.path.basename(path), no)), rev=_rev(fp))})
 
 
 @bp.route("/api/comic/chat_revise", methods=["POST"])
@@ -899,11 +1059,12 @@ def api_comic_upload():
 
 @bp.route("/api/comic/img", methods=["GET"])
 def api_comic_img():
-    """服务 raw/ final/ 的图。f 只认 raw/NN_raw.png、final/NN_final.png 两种
-    形态（正则钉死），别的一律 404——不做成通用静态目录服务。"""
+    """服务 raw/ final/ portraits/ 的图。f 只认 raw/NN_raw.png、final/NN_final.png、
+    portraits/NN.png 三种形态（正则钉死），别的一律 404——不做成通用静态目录服务。"""
     import re as _re
     f = str(request.args.get("f") or "")
-    if not _re.fullmatch(r"(?:raw|final)/\d{2}_(?:raw|final)\.png", f):
+    if not _re.fullmatch(r"(?:(?:raw|final)/\d{2}_(?:raw|final)|portraits/\d{2})\.png",
+                         f):
         return jsonify({"ok": False, "error": "非法文件名"}), 404
     try:
         path = _task_dir(request.args.get("task"))

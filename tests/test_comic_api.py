@@ -17,13 +17,15 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import comic, comic_agent, comic_api, comic_render_opts, main
+from app import (comic, comic_agent, comic_api, comic_portrait,
+                 comic_render_opts, main)
 
 GOOD_SCRIPT = "# 标题：测试\n\n## 01\n画面: 1girl, solo, pov\n气泡: 一\n标签1: 她站在门口\n"
 
@@ -720,6 +722,140 @@ class ComicRenderOptsApiTest(unittest.TestCase):
                         json={"task": self.NAME, "opts": opts})
         self.assertEqual(r.status_code, 400)
         self.assertIn("放大模型", r.get_json()["error"])
+
+
+class ComicPortraitApiTest(unittest.TestCase):
+    """生图模式 API（2026-10-13）：建任务跑批次 / 轮询 / 单张换种子 / 图服务。
+
+    comic_portrait.run 被 mock 成同步假跑——这里测的是路由层的行为（任务目录
+    怎么建、409 互斥、账本怎么回给前端），不真连 ComfyUI。
+    """
+
+    NAME = "C20261013-02"
+
+    def setUp(self):
+        self.c = main.app.test_client()
+        self.tmp = tempfile.mkdtemp(prefix="comic_portrait_api_")
+        self.patch_root = mock.patch.object(comic_api, "_COMICS_ROOT", self.tmp)
+        self.patch_root.start()
+        self.addCleanup(self.patch_root.stop)
+        self.dir = os.path.join(self.tmp, self.NAME)
+        os.makedirs(self.dir, exist_ok=True)
+
+    def _fake_run(self, task_dir, brief, heroine, n, **kw):
+        """假跑一批：账本 + 图落盘，和真的 run 一个形状。"""
+        comic_portrait.save_meta(task_dir, brief, heroine, n)
+        shots = []
+        os.makedirs(comic_portrait.shots_dir(task_dir), exist_ok=True)
+        for i in range(1, n + 1):
+            no = "%02d" % i
+            with open(comic_portrait.shot_path(task_dir, no), "wb") as f:
+                f.write(b"png")
+            shots.append({"no": no, "prompt": "1girl, scene %s" % no,
+                          "seed": 1000 + i, "state": "rendered", "error": None})
+        comic_portrait.save_prompts(task_dir, shots)
+        return shots
+
+    def test_start_creates_task_when_none_given(self):
+        with mock.patch.object(comic_portrait, "run", side_effect=self._fake_run):
+            r = self.c.post("/api/comic/portrait",
+                            json={"brief": "花田写真", "n": 3})
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()
+        self.assertTrue(d["ok"])
+        self.assertTrue(d["task"].startswith("C"))
+        # 后台线程跑完再断言（轮询到 done）
+        s = self._wait_done(d["job"])
+        # 新目录真的建出来了，账本在里面
+        path = os.path.join(self.tmp, d["task"])
+        self.assertTrue(os.path.isfile(comic_portrait.prompts_path(path)))
+        self.assertEqual(len(comic_portrait.load_prompts(path)), 3)
+        # 轮询拿到 done + shots（带 URL 和指纹）
+        self.assertEqual(s["state"], "done")
+        self.assertEqual(len(s["shots"]), 3)
+        self.assertIn("f=portraits/01.png", s["shots"][0]["url"])
+
+    def _wait_done(self, job, tries=50):
+        """轮询到批次结束（后台线程是异步的，不能 POST 完就断言）。"""
+        for _ in range(tries):
+            s = self.c.get("/api/comic/portrait_status?job=" + job).get_json()
+            if s.get("state") != "running":
+                return s
+            time.sleep(0.1)
+        self.fail("写真批次迟迟不结束")
+
+    def test_existing_task_is_reused(self):
+        with mock.patch.object(comic_portrait, "run", side_effect=self._fake_run):
+            r = self.c.post("/api/comic/portrait",
+                            json={"task": self.NAME, "brief": "天台", "n": 2})
+        self.assertEqual(r.get_json()["task"], self.NAME)
+
+    def test_missing_brief_is_400(self):
+        r = self.c.post("/api/comic/portrait", json={"n": 3})
+        self.assertEqual(r.status_code, 400)
+
+    def test_second_batch_while_running_is_409(self):
+        gate = threading.Event()
+
+        def _slow_run(task_dir, brief, heroine, n, **kw):
+            gate.wait(5)
+            return self._fake_run(task_dir, brief, heroine, n, **kw)
+
+        with mock.patch.object(comic_portrait, "run", side_effect=_slow_run):
+            self.c.post("/api/comic/portrait",
+                        json={"task": self.NAME, "brief": "a", "n": 2})
+            r = self.c.post("/api/comic/portrait",
+                            json={"task": self.NAME, "brief": "b", "n": 2})
+            self.assertEqual(r.status_code, 409)
+            gate.set()
+
+    def test_shot_reseed_updates_ledger(self):
+        comic_portrait.save_prompts(self.dir, [
+            {"no": "01", "prompt": "1girl, wheat field", "seed": 111,
+             "state": "error", "error": "上次炸了"}])
+        with mock.patch.object(comic_portrait, "reseed_shot",
+                               return_value={"no": "01", "prompt": "1girl, wheat field",
+                                             "seed": 999, "state": "rendered",
+                                             "error": None}):
+            r = self.c.post("/api/comic/portrait_shot",
+                            json={"task": self.NAME, "no": "1"})
+        self.assertEqual(r.status_code, 200)
+        shot = r.get_json()["shot"]
+        self.assertEqual(shot["seed"], 999)
+        self.assertEqual(shot["no"], "01")
+
+    def test_shot_reseed_unknown_no_is_400(self):
+        comic_portrait.save_prompts(self.dir, [
+            {"no": "01", "prompt": "x", "seed": 1,
+             "state": "rendered", "error": None}])
+        r = self.c.post("/api/comic/portrait_shot",
+                        json={"task": self.NAME, "no": "07"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_img_serves_portraits_and_rejects_junk(self):
+        os.makedirs(comic_portrait.shots_dir(self.dir), exist_ok=True)
+        with open(comic_portrait.shot_path(self.dir, "01"), "wb") as f:
+            f.write(b"png")
+        ok = self.c.get("/api/comic/img?task=%s&f=portraits/01.png" % self.NAME)
+        self.assertEqual(ok.status_code, 200)
+        bad = self.c.get("/api/comic/img?task=%s&f=portraits/1.png" % self.NAME)
+        self.assertEqual(bad.status_code, 404)
+        evil = self.c.get("/api/comic/img?task=%s&f=../script.md" % self.NAME)
+        self.assertEqual(evil.status_code, 404)
+
+    def test_status_tolerates_pure_portrait_task(self):
+        """没有 script.md 的纯写真任务：status 不 404，panels 空 + portraits 照返。"""
+        comic_portrait.save_prompts(self.dir, [
+            {"no": "01", "prompt": "1girl, wheat field", "seed": 111,
+             "state": "rendered", "error": None}])
+        os.makedirs(comic_portrait.shots_dir(self.dir), exist_ok=True)
+        with open(comic_portrait.shot_path(self.dir, "01"), "wb") as f:
+            f.write(b"png")
+        r = self.c.get("/api/comic/status?task=" + self.NAME)
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()
+        self.assertEqual(d["panels"], [])
+        self.assertEqual(len(d["portraits"]), 1)
 
 
 if __name__ == "__main__":
