@@ -20,6 +20,9 @@
     python -m app.comic run <script> --scene-skill nai # 阶段一改走 NAI 云端（快）
     python -m app.comic status <script>                # 看进度
 
+渲染参数覆盖（LoRA 槽 / 两段采样 / 分辨率）按任务存在任务目录的 render.json，
+网页端的「⚙ 渲染参数」卡维护它；run / render_scene 开跑时自动读，CLI 同样享受。
+
 「写剧本」那一层在 app/comic_writer.py（LLM 写 + 按契约校验 + 不合格回炉），
 它产出的是本模块认的 script.md，两层只靠这份契约耦合——换角色 / 换题材
 只动编剧层，这里一个字不用改。
@@ -38,7 +41,7 @@ from datetime import datetime
 
 import requests
 
-from app import comfy_src, image_jobs
+from app import comfy_src, image_jobs, comic_render_opts
 from app.config import BASE_DIR, COMFYUI_OUTPUT_DIR, COMFYUI_URL
 from app.skills import load_skill, load_workflow
 from app.tools.normal import generate_image
@@ -856,10 +859,14 @@ def _submit_nai(prompt, skill):
     return paths[0]
 
 
-def render_scene(task, p, scene_skill=SCENE_SKILL):
+def render_scene(task, p, scene_skill=SCENE_SKILL, opts=None):
     """阶段一：文生图，出这一格的场景图。
 
-    渠道可以是本机（silver，ComfyUI）或云端（nai）——见模块顶部的说明。
+    渠道可以是本机（anima-line，ComfyUI）或云端（nai）——见模块顶部的说明。
+
+    `opts`（2026-10-13）：这个任务的渲染参数覆盖（render.json：LoRA 槽 / 两段
+    采样 / 分辨率）。None 时现场从任务目录读——CLI 直接调本函数也享受覆盖。
+    只对本机渠道有意义（NAI 的参数在别人机器上，上面那个分支提前返回了）。
     """
     if scene_skill in image_jobs.NAI_SKILLS:
         log.info("[格 %s] 场景渲染（%s 云端，无种子）", p.no, scene_skill)
@@ -872,11 +879,15 @@ def render_scene(task, p, scene_skill=SCENE_SKILL):
         log.info("[格 %s] 场景已落盘：%s", p.no, task._rel(task.raw_path(p)))
         return
 
+    if opts is None:
+        opts = comic_render_opts.load(task.dir, scene_skill)
     seed = _new_seed()
     wf = generate_image.build_t2i_workflow(scene_skill, p.scene, seed)
     if wf is None:
         raise RuntimeError("skill %s 没有文生图工作流" % scene_skill)
-    log.info("[格 %s] 场景渲染（%s，seed %s）", p.no, scene_skill, seed)
+    wf = comic_render_opts.apply(wf, opts)
+    log.info("[格 %s] 场景渲染（%s，seed %s，%s）", p.no, scene_skill, seed,
+             comic_render_opts.describe(opts))
     name = _submit_retry(lambda: _submit(wf, scene_skill, p.scene, seed),
                          "[格 %s] 场景" % p.no)
     _download(name, task.raw_path(p))
@@ -1022,7 +1033,7 @@ def _next_task_dir(root="comics"):
 
 
 def run(script_path, only=None, silver_only=False, redo=False,
-        scene_skill=SCENE_SKILL, split_bubbles=False):
+        scene_skill=SCENE_SKILL, split_bubbles=False, scene_opts=None):
     meta, panels = parse_script(script_path)
     if not panels:
         raise SystemExit("剧本里没解析到任何格子（每格以 `## 01` 这样的标题开头）")
@@ -1030,6 +1041,11 @@ def run(script_path, only=None, silver_only=False, redo=False,
     task = Task(script_path, meta, panels)
     task.load_state()
     task.save_state()
+    # 渲染参数覆盖（render.json）开跑时读一次，整批用同一套——跑到一半改参数
+    # 不会这批用新、下批用旧。None = 这个任务没存过，render_scene 那边按模板
+    # 默认值走。NAI 云端不读（参数在别人机器上，见 render_scene）。
+    if scene_opts is None and scene_skill not in image_jobs.NAI_SKILLS:
+        scene_opts = comic_render_opts.load(task.dir, scene_skill)
     # 阶段一走 NAI 云端、又只要阶段一 → 完全不碰 ComfyUI，不用等它在线；
     # 其余情况（本机 silver，或还要跑阶段二 qwen）都得先确认 ComfyUI 在线。
     if not (silver_only and scene_skill in image_jobs.NAI_SKILLS):
@@ -1051,7 +1067,7 @@ def run(script_path, only=None, silver_only=False, redo=False,
             log.info("[格 %s] 场景已就绪，跳过", p.no)
             continue
         try:
-            render_scene(task, p, scene_skill)
+            render_scene(task, p, scene_skill, opts=scene_opts)
         except Exception as e:                       # 单格失败不拖垮整批
             p.error = str(e)
             log.error("[格 %s] 场景渲染失败：%s", p.no, e)

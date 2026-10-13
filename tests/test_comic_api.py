@@ -23,7 +23,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import comic, comic_agent, comic_api, main
+from app import comic, comic_agent, comic_api, comic_render_opts, main
 
 GOOD_SCRIPT = "# 标题：测试\n\n## 01\n画面: 1girl, solo, pov\n气泡: 一\n标签1: 她站在门口\n"
 
@@ -593,6 +593,111 @@ class ComicManualApiTest(unittest.TestCase):
         with open(task.final_path(p), "wb") as f:
             f.write(b"b")                            # 同长度，只有时间戳变了
         self.assertNotEqual(first, rev())
+
+
+class ComicRenderOptsApiTest(unittest.TestCase):
+    """渲染参数覆盖 API（2026-10-13）：GET 回显模板默认值 / POST 存 render.json /
+    reset 删掉 / 越界 400。资源清单 mock 成固定值——不依赖 ComfyUI 在不在线
+    （在线时名单是真的，这里要测的是「名单里的收、名单外的拒」这条判据）。"""
+
+    NAME = "C20261013-01"
+
+    def setUp(self):
+        self.c = main.app.test_client()
+        self.tmp = tempfile.mkdtemp(prefix="comic_render_api_")
+        self.patch_root = mock.patch.object(comic_api, "_COMICS_ROOT", self.tmp)
+        self.patch_root.start()
+        # 清单必须盖住模板自带的 6 个 LoRA + 测试用的假角色名——不然默认值里
+        # 的 star cat / cowani / reina 会被「名单校验」挡下，测的就跑偏了。
+        names = [s["name"] for s in
+                 comic_render_opts.defaults("anima-line")["loras"]]
+        self.res = {"loras": sorted(set(names + ["char_x.safetensors"])),
+                    "samplers": ["er_sde", "euler", "dpmpp_2m"],
+                    "schedulers": ["simple", "karras"], "online": True}
+        self.patch_res = mock.patch.object(comic_api, "_render_resources",
+                                           return_value=self.res)
+        self.patch_res.start()
+        self.dir = os.path.join(self.tmp, self.NAME)
+        os.makedirs(self.dir, exist_ok=True)
+        with open(os.path.join(self.dir, "script.md"), "w", encoding="utf-8") as f:
+            f.write("# 标题：t\n\n## 01\n画面: 1girl, solo\n气泡: 一\n标签1: 甲\n")
+
+    def tearDown(self):
+        self.patch_res.stop()
+        self.patch_root.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _opts(self, **kw):
+        o = comic_render_opts.defaults("anima-line")
+        o.update(kw)
+        return o
+
+    def test_get_returns_template_defaults_when_never_saved(self):
+        r = self.c.get("/api/comic/render_opts?task=" + self.NAME)
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()
+        self.assertTrue(d["ok"])
+        self.assertFalse(d["saved"])
+        self.assertEqual(len(d["opts"]["loras"]), 6)
+        self.assertEqual(d["opts"]["base"]["sampler_name"], "er_sde")
+        self.assertEqual(d["resources"]["loras"], self.res["loras"])
+
+    def test_get_unknown_task_is_404(self):
+        r = self.c.get("/api/comic/render_opts?task=C99990101-99")
+        self.assertEqual(r.status_code, 404)
+
+    def test_save_then_get_reflects_it(self):
+        opts = self._opts()
+        opts["loras"][0] = {"name": "char_x.safetensors", "strength": 0.75}
+        opts["base"]["steps"] = 24
+        r = self.c.post("/api/comic/render_opts",
+                        json={"task": self.NAME, "opts": opts})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["ok"])
+        d = self.c.get("/api/comic/render_opts?task=" + self.NAME).get_json()
+        self.assertTrue(d["saved"])
+        self.assertEqual(d["opts"]["loras"][0]["name"], "char_x.safetensors")
+        self.assertEqual(d["opts"]["base"]["steps"], 24)
+
+    def test_lora_outside_the_list_is_400(self):
+        opts = self._opts()
+        opts["loras"][0] = {"name": "no_such.safetensors", "strength": 0.8}
+        r = self.c.post("/api/comic/render_opts",
+                        json={"task": self.NAME, "opts": opts})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("没有 LoRA", r.get_json()["error"])
+        self.assertFalse(os.path.isfile(
+            os.path.join(self.dir, "render.json")))
+
+    def test_bad_width_is_400_and_nothing_written(self):
+        opts = self._opts(width=1001)
+        r = self.c.post("/api/comic/render_opts",
+                        json={"task": self.NAME, "opts": opts})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("8 的倍数", r.get_json()["error"])
+        self.assertFalse(os.path.isfile(
+            os.path.join(self.dir, "render.json")))
+
+    def test_clamped_values_come_back_with_warnings(self):
+        opts = self._opts()
+        opts["base"]["steps"] = 999
+        r = self.c.post("/api/comic/render_opts",
+                        json={"task": self.NAME, "opts": opts})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["warnings"])
+        self.assertEqual(r.get_json()["opts"]["base"]["steps"], 150)
+
+    def test_reset_deletes_render_json(self):
+        self.c.post("/api/comic/render_opts",
+                    json={"task": self.NAME, "opts": self._opts(base={"steps": 24})})
+        r = self.c.post("/api/comic/render_opts",
+                        json={"task": self.NAME, "reset": True})
+        self.assertTrue(r.get_json()["reset"])
+        self.assertFalse(os.path.isfile(
+            os.path.join(self.dir, "render.json")))
+        d = self.c.get("/api/comic/render_opts?task=" + self.NAME).get_json()
+        self.assertFalse(d["saved"])
+        self.assertEqual(d["opts"]["base"]["steps"], 20)   # 回模板默认值
 
 
 if __name__ == "__main__":

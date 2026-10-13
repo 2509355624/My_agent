@@ -59,13 +59,30 @@ def _choices(node_class, field):
     return []
 
 
+def lora_choices():
+    """两种 LoRA 加载器的 lora_name 下拉合并去重。
+
+    `LoraLoader` 与 `LoraLoaderModelOnly` 的 lora_name 是**同一个文件夹**扫出来
+    的两份 combo，内容一样但按类分节点——只查一类的话，哪天 ComfyUI 把某一类
+    的下拉改了源，这边就少一半。漫画的 anima-line 用的是 ModelOnly，而
+    `resource_list` 历来只查 LoraLoader（2026-10-13 补：合并两类）。
+    """
+    seen, out = set(), []
+    for cls in LORA_CLASSES:
+        for n in _choices(cls, "lora_name"):
+            if n not in seen:
+                seen.add(n)
+                out.append(n)
+    return out
+
+
 def resource_list():
     """返回 {samplers, schedulers, ckpts, loras, upscales}，缺则空"""
     return {
         "samplers": _choices("KSampler", "sampler_name"),
         "schedulers": _choices("KSampler", "scheduler"),
         "ckpts": _choices(CHECKPT, "ckpt_name"),
-        "loras": _choices(LORA, "lora_name"),
+        "loras": lora_choices(),
         "upscales": _choices(UPSCALE, "model_name"),
     }
 

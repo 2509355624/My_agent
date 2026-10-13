@@ -12,6 +12,8 @@
   POST /api/comic/chat_undo 撤销最近一次对话改稿（script_chat_backup.md → script.md）
   POST /api/comic/start     确认开跑：后台线程跑阶段一（场景图，不碰气泡）
   GET  /api/comic/status    槽位轮询：剧本 + state.json → 每格状态与图 URL
+  GET  /api/comic/render_opts  读这个任务的渲染参数覆盖（render.json）+ ComfyUI 可用清单
+  POST /api/comic/render_opts  保存 / 重置（reset=true）渲染参数覆盖
   POST /api/comic/rerender  换种子重跑某格（重置该格 → 后台只跑阶段一）
   POST /api/comic/bubble    加气泡：单格（含已完成的格＝从底图重画），或全部
   GET  /api/comic/prompt    取出「这一格原样发给 qwen 的那段文字」，供界面显示与手改
@@ -40,7 +42,7 @@ import zipfile
 
 from flask import Blueprint, jsonify, request, send_file, send_from_directory
 
-from app import comic, comic_agent
+from app import comic, comic_agent, comic_render_opts
 from app.config import BASE_DIR
 
 bp = Blueprint("comic_api", __name__)
@@ -466,6 +468,71 @@ def api_comic_script_text():
             with open(fp, encoding="utf-8") as f:
                 out[key] = f.read()
     return jsonify(out)
+
+
+def _render_resources():
+    """ComfyUI 可用清单（LoRA / 采样器 / 调度器），给渲染参数卡做下拉。
+
+    拉不到（ComfyUI 没开 / 超时）就返回空清单 + online=False：界面退化成自由
+    输入，后端也**不做名单校验**——没有证据源就不替调用方猜（用户 2026-10-12
+    拍板的哲学：代码只做检测，缺证据时别当闸门）。名字写错的后果是那一格渲染
+    失败、错误明文显示在格子里，看得见摸得着，比悄悄拒掉好。
+    """
+    out = {"loras": [], "samplers": [], "schedulers": [], "online": False}
+    try:
+        from app.tools.normal import comfy_workflow as cw
+        r = cw.resource_list()
+        out.update(loras=r.get("loras") or [],
+                   samplers=r.get("samplers") or [],
+                   schedulers=r.get("schedulers") or [],
+                   online=True)
+    except Exception as e:
+        comic.log.info("拉取 ComfyUI 资源清单失败（%s），渲染参数按自由输入处理", e)
+    return out
+
+
+@bp.route("/api/comic/render_opts", methods=["GET"])
+def api_comic_render_opts_get():
+    """这个任务当前的渲染参数 + ComfyUI 可用清单。
+
+    没存过 render.json 时返回 anima-line 模板的当前值（defaults）——界面上
+    显示的永远是「现在拿去跑会用什么」，存没存过用 saved 标志区分。
+    """
+    try:
+        path = _task_dir(request.args.get("task"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    return jsonify({
+        "ok": True,
+        "opts": comic_render_opts.load(path, comic.SCENE_SKILL),
+        "resources": _render_resources(),
+        "saved": os.path.isfile(comic_render_opts.path_of(path)),
+    })
+
+
+@bp.route("/api/comic/render_opts", methods=["POST"])
+def api_comic_render_opts_save():
+    """保存渲染参数（写任务目录的 render.json）；reset=true 时删掉它。
+
+    校验在 normalize 里：宽高不是 8 的倍数、LoRA/采样器 ComfyUI 里没有，这些是
+    事实问题，直接 400 把话说清；越界的数字钳位 + 回 warnings（给人填的表，
+    钳位比拒掉友好）。保存只影响**之后**渲染的格——已出的图不动。
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        path = _task_dir(data.get("task"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    if data.get("reset"):
+        comic_render_opts.reset(path)
+        return jsonify({"ok": True, "reset": True,
+                        "opts": comic_render_opts.load(path, comic.SCENE_SKILL)})
+    opts, errors, warnings = comic_render_opts.normalize(
+        data.get("opts") or {}, resources=_render_resources())
+    if errors:
+        return jsonify({"ok": False, "error": "；".join(errors)}), 400
+    comic_render_opts.save(path, opts)
+    return jsonify({"ok": True, "opts": opts, "warnings": warnings})
 
 
 @bp.route("/api/comic/rerender", methods=["POST"])
