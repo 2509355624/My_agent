@@ -82,14 +82,23 @@ MIMO_MODEL = os.getenv("MIMO_MODEL", "mimo-v2.6-flash")
 # 格式 "provider:model,provider:model"，第一项是主模型；留空 = 关闭降级。
 # 调用方指定了 provider/model（管理页、agent 配置）时，那一项会排在链头，
 # 链里重复的项自动去掉——所以管理页手动切换依然优先。
+#
+# ⚠️ 2026-10-14：.env 里现在也显式写着同一条链（用户拍板「.env 是改链入口」，
+# 10-11 那次挪去代码结果紧急时找不到入口）。**两边必须同值**——.env 缺失时
+# 用的就是这里的默认值（新部署 / MIGRATION 场景），分叉过一次（10-11：.env 3 条
+# vs 代码 6 条）差点耽误事，改链请两边一起改。
+#
+# 2026-10-14 排序理由（火山/超算额度集体耗尽，用户：「火山不关、只降温」）：
+#   deepseek 官方活着 → 打头；mimo 活着 → 第二；火山只剩 glm-5.2 还有额度
+#   → 第三；欠费的火山三项留着垫底等充值（_DEAD 拉黑期内自动跳过）。
 LLM_FALLBACK_CHAIN = os.getenv(
     "LLM_FALLBACK_CHAIN",
+    "deepseek:deepseek-flash,"
+    "mimo:mimo-v2.6-flash,"
+    "volc:glm-5-2-260617,"
     "volc:deepseek-v4-flash-ga-260731,"
     "volc:deepseek-v4-pro-ga-260813,"
-    "volc:doubao-seed-2-1-turbo-260628,"
-    "volc:glm-5-2-260617,"
-    "mimo:mimo-v2.6-flash,"
-    "deepseek:deepseek-flash")
+    "volc:doubao-seed-2-1-turbo-260628")
 
 # 单次尝试的超时。流式下这是「两块数据之间的最大间隔」而不是总时长——
 # 60 秒一个字节都没回就认为卡死，换下一个候选。原先默认 600 秒等于不切。
