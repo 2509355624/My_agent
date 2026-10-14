@@ -24,6 +24,7 @@ from app import usage as usage_stats
 # 'function' object has no attribute 'default_prompt'。
 from app import vision as vision_mod
 from app import comic_api
+from app import gen_api
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         LLM_PROVIDER, LLM_FALLBACK_CHAIN, PROVIDERS,
                         OLLAMA_BASE_URL, DEFAULT_AGENT_ID,
@@ -106,6 +107,9 @@ def _truncate_at_user(history, user_index):
 
 # 漫画工作台 API（独立 Blueprint，见 app/comic_api.py）
 app.register_blueprint(comic_api.bp)
+
+# 手动跑图台 API（独立 Blueprint，见 app/gen_api.py）：无 AI 的文生图页面
+app.register_blueprint(gen_api.bp)
 
 @app.route("/")
 def index():

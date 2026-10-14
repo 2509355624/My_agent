@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>跑图台</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%237c5cff'/></svg>">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0a0a0f; --bg-elev: #12121a; --bg-input: #1a1a24;
+    --border: #2a2a3a; --border-soft: #1f1f2e;
+    --text: #e8e8f0; --text-dim: #8888a0; --text-mute: #555570;
+    --accent: #7c5cff; --success: #4ade80; --error: #f87171;
+    --warn: #fbbf24; --info: #4fc3f7; --radius: 12px; --radius-sm: 8px;
+  }
+  html, body { background: var(--bg); color: var(--text);
+    font-family: "SF Mono", "JetBrains Mono", "Consolas", "Microsoft YaHei", monospace;
+    font-size: 14px; height: 100%; overflow: hidden; }
+  .topbar { display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+    border-bottom: 1px solid var(--border-soft); }
+  .topbar h1 { font-size: 16px; font-weight: 500; }
+  .topbar .sub { color: var(--text-dim); font-size: 12px; }
+  .topbar .spacer { flex: 1; }
+  a.link { color: var(--text-dim); text-decoration: none; font-size: 13px; }
+  a.link:hover { color: var(--accent); }
+
+  .pad { display: flex; height: calc(100vh - 45px); }
+
+  /* ── 左：渠道列 ───────────────────────── */
+  .channels { width: 208px; flex: none; border-right: 1px solid var(--border-soft);
+    display: flex; flex-direction: column; background: var(--bg-elev); }
+  .ch-head { padding: 10px 12px 6px; font-size: 12px; color: var(--text-dim); }
+  .ch-list { overflow-y: auto; flex: 1; padding: 0 6px 10px; }
+  .ch-item { padding: 7px 10px; border-radius: var(--radius-sm); cursor: pointer;
+    margin-bottom: 2px; border: 1px solid transparent; }
+  .ch-item:hover { background: var(--bg-input); }
+  .ch-item.on { background: var(--bg-input); border-color: var(--accent); }
+  .ch-item .id { font-size: 13px; }
+  .ch-item .sum { font-size: 11px; color: var(--text-mute); margin-top: 2px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ── 中：展示区 + 输入栏 ───────────────── */
+  .stage { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .view { flex: 1; overflow-y: auto; padding: 16px; }
+  .view-empty { color: var(--text-mute); text-align: center; padding: 60px 0;
+    font-size: 13px; line-height: 2; }
+  .job { background: var(--bg-elev); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: 12px 14px; margin-bottom: 10px; }
+  .job .row1 { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .job .skill { color: var(--info); }
+  .job .state { font-size: 12px; }
+  .job .state.queued { color: var(--warn); }
+  .job .state.done { color: var(--success); }
+  .job .state.error { color: var(--error); }
+  .job .seed { color: var(--text-mute); font-size: 12px; }
+  .job .elapsed { color: var(--text-mute); font-size: 12px; margin-left: auto; }
+  .job .prompt { color: var(--text-dim); font-size: 12px; margin-top: 6px;
+    word-break: break-all; }
+  .job .err { color: var(--error); font-size: 12px; margin-top: 6px;
+    word-break: break-all; }
+  .job .again { margin-top: 8px; }
+  .shot { background: var(--bg-elev); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: 12px; margin-bottom: 12px; }
+  .shot img { max-width: 100%; border-radius: var(--radius-sm); cursor: zoom-in;
+    display: block; }
+  .shot .meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px;
+    font-size: 12px; color: var(--text-dim); }
+  .shot .meta .sk { color: var(--info); }
+  .shot .p { font-size: 12px; color: var(--text-mute); margin-top: 6px;
+    word-break: break-all; max-height: 60px; overflow-y: auto; }
+
+  .composer { border-top: 1px solid var(--border-soft); padding: 10px 16px 12px;
+    background: var(--bg-elev); }
+  .composer textarea { width: 100%; background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    color: var(--text); padding: 10px 12px; font: inherit; font-size: 13px;
+    resize: vertical; min-height: 44px; max-height: 45vh; outline: none; }
+  .composer textarea:focus { border-color: var(--accent); }
+  .composer .bar { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  .composer .cur { font-size: 12px; color: var(--text-dim); }
+  .composer .cur b { color: var(--info); font-weight: 400; }
+  .composer .qdepth { font-size: 12px; color: var(--warn); }
+  .composer .spacer { flex: 1; }
+  .btn { background: var(--bg-input); color: var(--text); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 6px 14px; font: inherit; font-size: 13px;
+    cursor: pointer; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:disabled { opacity: .5; cursor: not-allowed; }
+  .btn.small { padding: 3px 10px; font-size: 12px; }
+
+  /* ── 右：历史栏 ───────────────────────── */
+  .history { width: 264px; flex: none; border-left: 1px solid var(--border-soft);
+    display: flex; flex-direction: column; background: var(--bg-elev); }
+  .history.hidden { display: none; }
+  .h-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+    font-size: 12px; color: var(--text-dim); border-bottom: 1px solid var(--border-soft); }
+  .h-head .spacer { flex: 1; }
+  .h-list { overflow-y: auto; flex: 1; padding: 8px; }
+  .h-item { display: flex; gap: 8px; padding: 6px; border-radius: var(--radius-sm);
+    cursor: pointer; align-items: center; }
+  .h-item:hover { background: var(--bg-input); }
+  .h-item.on { background: var(--bg-input); outline: 1px solid var(--accent); }
+  .h-item img { width: 46px; height: 46px; object-fit: cover; border-radius: 6px;
+    flex: none; background: var(--bg-input); }
+  .h-item .noimg { width: 46px; height: 46px; border-radius: 6px; flex: none;
+    background: var(--bg-input); display: flex; align-items: center;
+    justify-content: center; color: var(--error); font-size: 16px; }
+  .h-item .info { min-width: 0; flex: 1; }
+  .h-item .sk { font-size: 12px; color: var(--info); }
+  .h-item .sd { font-size: 11px; color: var(--text-mute); }
+  .h-item .tm { font-size: 11px; color: var(--text-mute); }
+  .h-item .bad { font-size: 11px; color: var(--error); }
+  .h-empty { color: var(--text-mute); font-size: 12px; text-align: center;
+    padding: 30px 0; }
+  .show-history { position: fixed; right: 0; top: 60px; z-index: 5; }
+
+  .toast { position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%);
+    background: var(--bg-elev); border: 1px solid var(--error); color: var(--error);
+    padding: 8px 16px; border-radius: var(--radius-sm); font-size: 13px;
+    display: none; z-index: 10; max-width: 70vw; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <h1>🎨 跑图台</h1>
+    <span class="sub">无 AI · 选渠道 · 写提示词 · 直接出图</span>
+    <span class="spacer"></span>
+    <a class="link" href="/comic_studio.html">漫画工作台 →</a>
+  </div>
+
+  <div class="pad">
+    <!-- 左：渠道列 -->
+    <aside class="channels">
+      <div class="ch-head">生图渠道（和 QQ 机器人同一份清单）</div>
+      <div class="ch-list" id="chList"><div class="h-empty">加载中…</div></div>
+    </aside>
+
+    <!-- 中：展示区 + 输入栏 -->
+    <main class="stage">
+      <section class="view" id="view">
+        <div class="view-empty" id="viewEmpty">
+          左边选个渠道，下面写提示词，点「生成」<br>
+          Ctrl+Enter 也能提交 · 图存在 ComfyUI 的 output 目录，这里只做索引
+        </div>
+        <div id="jobs"></div>
+        <div id="shot"></div>
+      </section>
+
+      <section class="composer">
+        <textarea id="prompt" rows="2"
+          placeholder="提示词：英文 tag 或自然句子都行（按渠道习惯写，silver/krea2/anima 用 tag 串，qwen 用完整句子）"></textarea>
+        <div class="bar">
+          <span class="cur">渠道：<b id="curChan">未选</b></span>
+          <span class="qdepth" id="qdepth" style="display:none"></span>
+          <span class="spacer"></span>
+          <button class="btn primary" id="btnGen" onclick="gen()">生成</button>
+        </div>
+      </section>
+    </main>
+
+    <!-- 右：历史栏（可隐藏） -->
+    <aside class="history" id="history">
+      <div class="h-head">
+        <span>历史（本机生成）</span>
+        <span class="spacer"></span>
+        <button class="btn small" onclick="clearHistory()">清空</button>
+        <button class="btn small" onclick="toggleHistory()">隐藏 ▸</button>
+      </div>
+      <div class="h-list" id="hList"><div class="h-empty">还没有记录</div></div>
+    </aside>
+    <button class="btn small show-history" id="btnShow" style="display:none"
+            onclick="toggleHistory()">◂ 历史</button>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+let CHANNELS = [];
+let CUR = localStorage.getItem('gp_channel') || '';
+let JOBS = [];              // 最近一次 status 拿到的任务
+let HISTORY = [];           // 账本行（新的在前）
+let PINNED = null;          // 用户点中的历史行 tag（不自动切大图）
+let POLL = null;
+
+async function api(url, opt) {
+  const r = await fetch(url, opt ? {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(opt)
+  } : undefined);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
+  return d;
+}
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.style.display = 'block';
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', 4000);
+}
+
+function fmtTime(ts) {
+  const d = new Date(ts * 1000);
+  const p = n => String(n).padStart(2, '0');
+  return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+// ── 渠道列 ────────────────────────────────
+async function loadChannels() {
+  try {
+    const d = await api('/api/gen/channels');
+    CHANNELS = d.channels || [];
+  } catch (e) { toast('渠道列加载失败：' + e.message); return; }
+  const box = document.getElementById('chList');
+  if (!CHANNELS.length) { box.innerHTML = '<div class="h-empty">一个渠道都没有</div>'; return; }
+  box.innerHTML = '';
+  for (const c of CHANNELS) {
+    const el = document.createElement('div');
+    el.className = 'ch-item' + (c.id === CUR ? ' on' : '');
+    el.dataset.id = c.id;
+    el.innerHTML = '<div class="id"></div>' +
+      (c.summary ? '<div class="sum"></div>' : '');
+    el.querySelector('.id').textContent = c.id;
+    if (c.summary) el.querySelector('.sum').textContent = c.summary;
+    el.title = c.summary || c.id;
+    el.onclick = () => pick(c.id);
+    box.appendChild(el);
+  }
+  if (!CHANNELS.some(c => c.id === CUR)) CUR = CHANNELS[0].id;
+  showCur();
+}
+
+function pick(id) {
+  CUR = id;
+  localStorage.setItem('gp_channel', id);
+  document.querySelectorAll('.ch-item').forEach(el =>
+    el.classList.toggle('on', el.dataset.id === id));
+  showCur();
+}
+
+function showCur() {
+  document.getElementById('curChan').textContent = CUR || '未选';
+}
+
+// ── 输入栏：自动长高 + Ctrl+Enter ─────────────
+const TA = document.getElementById('prompt');
+TA.addEventListener('input', () => {
+  TA.style.height = 'auto';
+  TA.style.height = TA.scrollHeight + 'px';   // max-height 45vh 由 CSS 兜底
+});
+TA.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') gen();
+});
+
+// ── 生成 ────────────────────────────────
+async function gen(promptOverride) {
+  const prompt = (promptOverride !== undefined ? promptOverride : TA.value).trim();
+  if (!prompt) { toast('提示词是空的'); TA.focus(); return; }
+  if (!CUR) { toast('先在左边选个渠道'); return; }
+  document.getElementById('btnGen').disabled = true;
+  try {
+    const d = await api('/api/gen/submit', {skill: CUR, prompt: prompt});
+    JOBS.unshift(d.job);
+    renderJobs();
+    startPoll();
+    if (promptOverride === undefined) { PINNED = null; }
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    document.getElementById('btnGen').disabled = false;
+  }
+}
+
+// ── 轮询进行中的任务 ───────────────────────
+function startPoll() {
+  if (POLL) return;
+  POLL = setInterval(async () => {
+    try {
+      const d = await api('/api/gen/status');
+      JOBS = d.jobs || [];
+      const qd = document.getElementById('qdepth');
+      if (d.queue_depth) {
+        qd.style.display = '';
+        qd.textContent = 'ComfyUI 队列里还有 ' + d.queue_depth + ' 张（含 QQ 的）';
+      } else { qd.style.display = 'none'; }
+      renderJobs();
+      if (JOBS.some(j => j.state === 'done') && !PINNED) showLatestDone();
+      if (!JOBS.some(j => j.state === 'queued')) {
+        loadHistory();
+        stopPoll();
+      }
+    } catch (e) { /* 轮询失败不打扰，下一轮再来 */ }
+  }, 2000);
+}
+function stopPoll() { clearInterval(POLL); POLL = null; }
+
+function renderJobs() {
+  const box = document.getElementById('jobs');
+  const active = JOBS.filter(j => j.state === 'queued' || j.state === 'error');
+  document.getElementById('viewEmpty').style.display =
+    (active.length || document.getElementById('shot').children.length) ? 'none' : '';
+  if (!active.length) { box.innerHTML = ''; return; }
+  box.innerHTML = '';
+  for (const j of active) {
+    const el = document.createElement('div');
+    el.className = 'job';
+    const secs = Math.max(0, Math.round(Date.now() / 1000 - j.ts));
+    const st = j.state === 'queued'
+      ? '<span class="state queued">排队/生成中</span>'
+      : '<span class="state error">失败了</span>';
+    el.innerHTML =
+      '<div class="row1"><span class="skill"></span>' + st +
+      '<span class="seed"></span><span class="elapsed">' + secs + 's</span></div>' +
+      '<div class="prompt"></div>' +
+      (j.error ? '<div class="err"></div>' : '') +
+      (j.error ? '<button class="btn small again">把提示词放回输入栏，改改再发</button>' : '');
+    el.querySelector('.skill').textContent = j.skill;
+    el.querySelector('.seed').textContent = 'seed ' + j.seed;
+    el.querySelector('.prompt').textContent = j.prompt;
+    if (j.error) {
+      el.querySelector('.err').textContent = j.error;
+      el.querySelector('.again').onclick = () => {
+        TA.value = j.prompt; TA.dispatchEvent(new Event('input')); TA.focus();
+      };
+    }
+    box.appendChild(el);
+  }
+}
+
+// ── 展示区：最新成图 ───────────────────────
+function showLatestDone() {
+  const done = JOBS.filter(j => j.state === 'done');
+  if (!done.length) return;
+  showShot(done[0]);
+}
+
+function showShot(j) {
+  PINNED = j.id || j.tag;
+  document.getElementById('viewEmpty').style.display = 'none';
+  const box = document.getElementById('shot');
+  box.innerHTML = '';
+  const el = document.createElement('div');
+  el.className = 'shot';
+  const img = document.createElement('img');
+  img.src = '/api/gen/img?f=' + encodeURIComponent(j.file);
+  img.onclick = () => window.open(img.src);
+  img.onerror = () => { img.replaceWith(Object.assign(document.createElement('div'),
+    {className: 'err', style: 'color:var(--error);font-size:12px;padding:20px 0',
+     textContent: '图取不到：ComfyUI 不在线，或 output 目录里这张被清了'})); };
+  el.appendChild(img);
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.innerHTML = '<span class="sk"></span><span>seed ' + j.seed + '</span>' +
+    '<span>' + fmtTime(j.ts) + '</span>';
+  meta.querySelector('.sk').textContent = j.skill;
+  el.appendChild(meta);
+  if (j.prompt) {
+    const p = document.createElement('div');
+    p.className = 'p'; p.textContent = j.prompt;
+    el.appendChild(p);
+  }
+  box.innerHTML = ''; box.appendChild(el);
+  renderHistoryOn();
+}
+
+// ── 历史栏 ────────────────────────────────
+async function loadHistory() {
+  try {
+    const d = await api('/api/gen/history?limit=100');
+    HISTORY = d.rows || [];
+  } catch (e) { return; }
+  renderHistory();
+}
+
+function renderHistory() {
+  const box = document.getElementById('hList');
+  if (!HISTORY.length) { box.innerHTML = '<div class="h-empty">还没有记录</div>'; return; }
+  box.innerHTML = '';
+  for (const r of HISTORY) {
+    const el = document.createElement('div');
+    el.className = 'h-item' + (r.tag === PINNED ? ' on' : '');
+    if (r.ok && r.file) {
+      const img = document.createElement('img');
+      img.loading = 'lazy';
+      img.src = '/api/gen/img?f=' + encodeURIComponent(r.file);
+      img.onerror = () => { img.style.display = 'none'; };
+      el.appendChild(img);
+    } else {
+      const no = document.createElement('div');
+      no.className = 'noimg'; no.textContent = '⚠'; no.title = r.error || '失败了';
+      el.appendChild(no);
+    }
+    const info = document.createElement('div');
+    info.className = 'info';
+    info.innerHTML = '<div class="sk"></div><div class="sd"></div>' +
+      (r.ok ? '<div class="tm"></div>' : '<div class="bad"></div>');
+    info.querySelector('.sk').textContent = r.skill;
+    info.querySelector('.sd').textContent = 'seed ' + (r.seed ?? '—');
+    if (r.ok) info.querySelector('.tm').textContent = fmtTime(r.ts);
+    else info.querySelector('.bad').textContent = (r.error || '失败').slice(0, 40);
+    el.appendChild(info);
+    el.title = r.prompt || '';
+    el.onclick = () => { if (r.ok && r.file) showShot(r); renderHistoryOn(); };
+    box.appendChild(el);
+  }
+}
+
+function renderHistoryOn() {
+  document.querySelectorAll('.h-item').forEach((el, i) =>
+    el.classList.toggle('on', HISTORY[i] && HISTORY[i].tag === PINNED));
+}
+
+async function clearHistory() {
+  if (!confirm('清空历史显示？（图还在 ComfyUI 的 output 目录，账本行也不删，只是不再列出）')) return;
+  try {
+    await api('/api/gen/clear', {});
+    PINNED = null; HISTORY = [];
+    renderHistory();
+    document.getElementById('shot').innerHTML = '';
+    if (!JOBS.some(j => j.state === 'queued'))
+      document.getElementById('viewEmpty').style.display = '';
+  } catch (e) { toast(e.message); }
+}
+
+function toggleHistory() {
+  const h = document.getElementById('history');
+  h.classList.toggle('hidden');
+  document.getElementById('btnShow').style.display =
+    h.classList.contains('hidden') ? '' : 'none';
+}
+
+// ── 启动 ────────────────────────────────
+loadChannels();
+loadHistory();
+api('/api/gen/status').then(d => {
+  JOBS = d.jobs || [];
+  renderJobs();
+  if (JOBS.some(j => j.state === 'queued')) startPoll();
+  const done = JOBS.filter(j => j.state === 'done');
+  if (done.length && !PINNED) showLatestDone();
+}).catch(() => {});
+</script>
+</body>
+</html>
