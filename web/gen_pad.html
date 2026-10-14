@@ -120,6 +120,20 @@
     background: var(--bg-elev); border: 1px solid var(--error); color: var(--error);
     padding: 8px 16px; border-radius: var(--radius-sm); font-size: 13px;
     display: none; z-index: 10; max-width: 70vw; }
+
+  /* ── 灯箱：在本页放大看图（不跳新标签页） ────── */
+  .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.9);
+    z-index: 40; display: none; overflow: auto; }
+  .lightbox.on { display: block; }
+  .lb-inner { min-width: 100%; min-height: 100%; box-sizing: border-box;
+    padding: 24px; display: flex; }
+  /* margin:auto 而不是 justify-content:center —— 图比窗口大时前者的
+     左/上溢出仍然滚得到，后者会把溢出部分裁到滚不回去。 */
+  .lightbox img { margin: auto; display: block; border-radius: 6px;
+    max-width: 100%; max-height: calc(100vh - 48px); cursor: zoom-in; }
+  .lightbox.full img { max-width: none; max-height: none; cursor: zoom-out; }
+  .lb-hint { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+    color: #999; font-size: 12px; pointer-events: none; z-index: 41; }
 </style>
 </head>
 <body>
@@ -172,6 +186,11 @@
     </aside>
     <button class="btn small show-history" id="btnShow" style="display:none"
             onclick="toggleHistory()">◂ 历史</button>
+  </div>
+
+  <div class="lightbox" id="lightbox">
+    <div class="lb-inner"><img id="lbImg" alt=""></div>
+    <div class="lb-hint">点图切「适应窗口 / 原始像素」 · Esc 或点空白关掉</div>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -264,7 +283,10 @@ async function gen(promptOverride) {
     JOBS.unshift(d.job);
     renderJobs();
     startPoll();
-    if (promptOverride === undefined) { PINNED = null; }
+    if (promptOverride === undefined) {
+      PINNED = null;
+      TA.value = ''; TA.style.height = '';   // 发出去了就清空，接着写下一条
+    }
   } catch (e) {
     toast(e.message);
   } finally {
@@ -344,7 +366,8 @@ function showShot(j) {
   el.className = 'shot';
   const img = document.createElement('img');
   img.src = '/api/gen/img?f=' + encodeURIComponent(j.file);
-  img.onclick = () => window.open(img.src);
+  img.title = '点击在本页放大';
+  img.onclick = () => openLightbox(img.src);
   img.onerror = () => { img.replaceWith(Object.assign(document.createElement('div'),
     {className: 'err', style: 'color:var(--error);font-size:12px;padding:20px 0',
      textContent: '图取不到：ComfyUI 不在线，或 output 目录里这张被清了'})); };
@@ -429,6 +452,27 @@ function toggleHistory() {
   document.getElementById('btnShow').style.display =
     h.classList.contains('hidden') ? '' : 'none';
 }
+
+// ── 灯箱：本页放大看图 ─────────────────────
+function openLightbox(src) {
+  const lb = document.getElementById('lightbox');
+  document.getElementById('lbImg').src = src;
+  lb.classList.remove('full');
+  lb.classList.add('on');
+}
+
+function closeLightbox() {
+  document.getElementById('lightbox').classList.remove('on', 'full');
+}
+
+document.getElementById('lightbox').addEventListener('click', closeLightbox);
+document.getElementById('lbImg').addEventListener('click', e => {
+  e.stopPropagation();                                  // 点图 = 缩放，不关
+  document.getElementById('lightbox').classList.toggle('full');
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeLightbox();
+});
 
 // ── 启动 ────────────────────────────────
 loadChannels();
