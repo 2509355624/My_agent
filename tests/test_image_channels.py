@@ -2240,5 +2240,100 @@ class AnimaLoraChannelTest(unittest.TestCase):
                 self.assertNotIn(name, gi._I2I_SKILLS)
 
 
+class AnimaGuizhencaoTest(unittest.TestCase):
+    """`anima-guizhencao` —— 2026-10-15 用户加的第三条独立动漫渠道。
+
+    跟 `anima-line` / `anima-real`（两段 6 LoRA cfg 1）**不是一套配方**：
+    单段 er_sde 30 步 **cfg 4**（负向生效）、7 条 LoRA（鬼针草三代 +
+    4 条画风/画师）、无 latent 中间放大、末尾 2x Ani4K，输出 2048×3072。
+    所以它**不进** `AnimaLoraChannelTest.NAMES`，链路在这里单独钉。
+
+    前缀 `@4x0style, @gu1ugu1u, @khsty1e, @gpt-image-2, ...` 是**固定的**
+    （2026-10-15 用户拍板），用户的提示词拼在它后面。
+    """
+
+    NAME = "anima-guizhencao"
+
+    def test_loads_as_image_skill(self):
+        data = load_skill(self.NAME)
+        self.assertIsNotNone(data, self.NAME)
+        self.assertEqual(data["kind"], "生图", self.NAME)
+
+    def test_qq_can_see_and_use_it(self):
+        from app import agents
+        from app.direct_gen import _allowed_skills
+        self.assertTrue(agents.allows_skill("qq", self.NAME), self.NAME)
+        self.assertIn(self.NAME, _allowed_skills())
+
+    def test_shape_is_the_single_pass_seven_lora_recipe(self):
+        wf = _load(self.NAME)
+        samplers = _all(wf, "KSampler")
+        self.assertEqual(len(samplers), 1, self.NAME)
+        self.assertEqual(wf[samplers[0]]["inputs"]["cfg"], 4, self.NAME)
+        self.assertEqual(wf[samplers[0]]["inputs"]["steps"], 30, self.NAME)
+        # 无 latent 中间放大：KSampler 直出 → VAEDecode → 2x Ani4K
+        self.assertEqual(_all(wf, "LatentUpscaleBy"), [], self.NAME)
+        up_model = _all(wf, "UpscaleModelLoader")
+        self.assertEqual(len(up_model), 1, self.NAME)
+        self.assertTrue(_all(wf, "ImageUpscaleWithModel"), self.NAME)
+        base_id, chain = _lora_chain(wf)
+        self.assertEqual(wf[base_id]["class_type"], "UNETLoader", self.NAME)
+        self.assertEqual(_base_file(wf, [base_id, 0]),
+                         "anima_aestheticV11.safetensors", self.NAME)
+        # 链序 + 强度（_lora_chain 从采样器往回走，chain[0] = 链尾）
+        self.assertEqual([(n, f, st) for n, f, st in chain], [
+            ("34", "Artist-Style-gulugulu.safetensors", 0.5),
+            ("31", "Artist-Style-khstyle.safetensors", 0.5),
+            ("30", "anima_鬼针草_v4.0.safetensors", 0.5),
+            ("29", "snima_鬼针草_V3.9.safetensors", 0.5),
+            ("28", "Style-Onineko.safetensors", 0.3),
+            ("15", "Style-gpt-image-2.safetensors", 0.35),
+            ("16", "anima_鬼针草_2.2.safetensors", 0.35),
+        ], self.NAME)
+        # 采样器必须吃链尾，不许有人还挂在中间某条上
+        tail = chain[0][0]
+        self.assertEqual(wf[samplers[0]]["inputs"]["model"], [tail, 0], self.NAME)
+
+    def test_prefix_is_fixed_and_prompt_appends_after_it(self):
+        """前缀一字不动：4 个 @ 记号 + 质量词，`__MULTI_PROMPTS__` 永远在最后。"""
+        text = _load(self.NAME)["4"]["inputs"]["text"]
+        self.assertTrue(text.startswith(
+            "@4x0style, @gu1ugu1u, @khsty1e, @gpt-image-2, "
+            "masterpiece, absurdres, very aesthetic, best quality, "
+            "highres, newest, score_9, score_8, "), text)
+        self.assertTrue(text.endswith("__MULTI_PROMPTS__"), text)
+        # cfg 4 → 负向真实生效，也得在
+        self.assertIn("bad anatomy", _load(self.NAME)["8"]["inputs"]["text"],
+                      self.NAME)
+
+    def test_seed_is_a_single_placeholder(self):
+        self.assertEqual(_raw(self.NAME).count("__SEED__"), 1, self.NAME)
+
+    def test_named_forms_resolve_to_it(self):
+        from app.direct_gen import _parse_channel
+        for text, want in (("anima鬼针草", self.NAME),
+                           ("anima 鬼针草", self.NAME),
+                           ("anima-guizhencao 少女", self.NAME),
+                           ("用 anima-guizhencao 画", self.NAME)):
+            with self.subTest(text=text):
+                self.assertEqual(_parse_channel(text)[0], want)
+
+    def test_bare_word_does_not_hijack_anything(self):
+        """裸「鬼针草」不是渠道词也不是画风词——光说它不触发（走默认）。
+
+        krea2鬼针草 / anima鬼针草 各自要带族名前缀，谁也别抢谁的。"""
+        from app.direct_gen import _parse_channel
+        self.assertEqual(_parse_channel("krea2鬼针草 少女")[0], "krea2-guizhencao")
+        for text in ("鬼针草", "鬼针草 少女"):
+            with self.subTest(text=text):
+                self.assertEqual(_parse_channel(text)[0], None, text)
+
+    def test_no_i2i_skeleton(self):
+        from app.tools.normal import generate_image as gi
+        self.assertNotIn("workflow_i2i.json",
+                         os.listdir(os.path.join(SKILLS, self.NAME)), self.NAME)
+        self.assertNotIn(self.NAME, gi._I2I_SKILLS)
+
+
 if __name__ == "__main__":
     unittest.main()

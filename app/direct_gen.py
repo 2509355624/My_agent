@@ -254,6 +254,12 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    # 「线条」不在画风表、也不在任何渠道名里，光说「线条」什么都不触发。
                    "anima线条": "anima-line",
                    "anima写实": "anima-real",
+                   # 2026-10-15 新增：anima 的 7 条 LoRA 混搭版（用户在 ComfyUI 里
+                   # 搭的单段配方：鬼针草 2.2/V3.9/v4.0 三代 + 画师风格 4 条，
+                   # er_sde 30 步 cfg 4 → 2x Ani4K，输出 2048×3072）。同样**不做成
+                   # 画风**——「鬼针草」不在画风表里，但为防以后手滑加进去双关，
+                   # 点名词走固定表，跟线条/写实同款待遇。
+                   "anima鬼针草": "anima-guizhencao",
                    # ⚠️ 渠道 **id 本身**（`anima-line` / `anima-real`）也进固定表。
                    # 不进的后果 2026-10-11 实测过：正则认不出带连字符的 id →
                    # 落到 `_STYLE_RE`，「anima-soft」被 `soft` 抢成 `hd_3_soft`、
@@ -261,10 +267,12 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    # 模型在 JSON 里填 id 那一路本来就有 `_fixed_chan` 兜底，坏的是
                    # **原话里直接打 id** 这条（`_parse_channel` 拿的是原话）。
                    "anima-line": "anima-line",
-                   "anima-real": "anima-real"}
+                   "anima-real": "anima-real",
+                   "anima-guizhencao": "anima-guizhencao"}
 _FIXED_CHAN_RE = re.compile(
     r"(?<![0-9A-Za-z_])"
-    r"(anima\s*线条|anima\s*写实|anima-line|anima-real"
+    r"(anima\s*线条|anima\s*写实|anima\s*鬼针草"
+    r"|anima-line|anima-real|anima-guizhencao"
     r"|krea2\s*米山舞|krea2\s*日系|krea2\s*亚洲真人"
     r"|krea2\s*动漫真人|krea2\s*真人\s*cos"
     r"|krea2\s*宝可梦|krea2\s*柔光|krea2\s*奶油"
@@ -665,6 +673,7 @@ GUIDE_TEXT = (
     "　jank　NoobAI 自定义（有权号词就用它）\n"
     "　anima线条　anima 堆 6 条 LoRA 的版本 · 2456×3686\n"
     "　anima写实　同上，一段底模换成 AnimeReality\n"
+    "　anima鬼针草　anima 堆 7 条 LoRA 的混搭 · 2048×3072\n"
     "　qwen　慢·写实·能在图里写中文字\n"
     "　qwen-hd　qwen 的 4x 超清 · 4096×6144（更慢更大，别连刷）\n"
     "　qwen角色设定表　7 分区 character design sheet（2304×1536 / 16 步）\n"
@@ -714,6 +723,7 @@ MORE_CHAN_TEXT = (
     "　silver-hd　4x超清 4928×7360\n"
     "　jank　NoobAI 自定义（有权号词就用它）\n"
     "　anima线条 / anima写实　堆 6 条 LoRA 的版本\n"
+    "　anima鬼针草　堆 7 条 LoRA 的混搭版 · 2048×3072\n"
     "　qwen　慢·写实·图里能写中文\n"
     "　qwen-hd　qwen 的 4x 超清（更慢，别连刷）\n"
     "　qwen角色设定表 ｜ qwen修复（引用图去糊修清楚）\n"
@@ -1022,6 +1032,8 @@ _REVISE_TEMPLATE = (
     "  anima（= 三档）= hd_3_<画风>（末尾带 2x 像素放大 → 3072×4608；"
     "画风只有 clear/soft/gloss/curvy 四种，例「anima gloss」= hd_3_gloss，"
     "没说画风 = hd_3_clear）；\n"
+    "  anima-line / anima-real / anima-guizhencao = "
+    "说「anima线条 / anima写实 / anima鬼针草」（三条独立配方，不在画风体系里）；\n"
     "  nai / nai_wide = 说「nai」（画师串和权重语法认这两个）；\n"
     "  qwen_image_v1 = 说「qwen / 千问 / 通义」；image_gen_v1 = 说「sd」；\n"
     "  krea2-yoneyama / krea2-rella / krea2-asianmix / krea2-anime2real / "
