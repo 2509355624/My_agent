@@ -166,6 +166,7 @@ from app import image_log
 from app.cancel import Cancelled, is_cancelled
 from app.config import (COMFY_MIN_FREE_RAM_GB, COMFY_MIN_FREE_VRAM_GB,
                         COMFY_RELEASE_AFTER_SAME, COMFY_RELEASE_AFTER_SAME_MAP,
+                        COMFY_RELEASE_AFTER_TOTAL,
                         COMFY_RESTART_MIN_GAP,
                         COMFY_RESTART_WAIT, COMFYUI_URL, IMAGE_GEN_TIMEOUT,
                         QQ_AGENT_ID, QWEN_COOLDOWN)
@@ -408,6 +409,7 @@ class _Channel:
         self.heavy_done_at = 0.0           # 上一张重渠道**跑完**的时刻
         self.last_skill = None             # 上次提交给 ComfyUI 的渠道（判要不要 /free）
         self.same_run = 0                  # 同渠道已连续提交的张数（连画 N 张后 /free）
+        self.total_run = 0                 # 自上次重启以来**总共**提交的张数（不分渠道，见 COMFY_RELEASE_AFTER_TOTAL）
         self.last_restart_try = 0.0        # 上次**尝试**重启 ComfyUI 的时刻（防抖）
 
     def depth(self):
@@ -1027,6 +1029,25 @@ def _maybe_release_for_switch(job):
     skill = job.skill
     if skill is None:
         return
+    # 全局累计（2026-10-15 加，`COMFY_RELEASE_AFTER_TOTAL`，0=关）：同渠道那条
+    # 的计数**换渠道就归零**——用户实录 qwen → krea2 → qwen 轮着点，每条渠道
+    # 都攒不满阈值，重启一直不触发，残留照样叠到底（10-15 12:37 卡死现场：
+    # 换渠道 hd_3_curvy 提交时内存只剩 0.9GB，/free 已救不回换页态）。这条
+    # 不看渠道：自上次重启以来**总共**提交满 N 张，下一张提交前照样整个重启。
+    # 它先于下面的同渠道/换渠道判定——重启本身就把两边都清零了，不用再 /free。
+    if 0 < COMFY_RELEASE_AFTER_TOTAL <= chan.total_run:
+        log.info("ComfyUI 累计已连画 %d 张（全局阈值 %d，不分渠道），"
+                 "下一张提交前彻底重启", chan.total_run, COMFY_RELEASE_AFTER_TOTAL)
+        chan.total_run = 1          # 重启后这张算新一轮第 1 张
+        chan.same_run = 1
+        chan.last_skill = skill     # 重启覆盖换渠道 /free，别再打一次没用的
+        if not _restart_comfy():
+            # 重启被拒/没回来：退回打一发 /free，至少把显存残留清了，
+            # 不能让队列原地卡死。
+            log.warning("ComfyUI 重启失败，退回 /free 清显存")
+            _report_and_free()
+        return
+    chan.total_run += 1
     prev = chan.last_skill
     chan.last_skill = skill         # 无论打不打 /free 都要记，否则会反复触发
     if prev is None:                # 刚重启完/冷启动，这张算新一轮第 1 张
@@ -1164,6 +1185,7 @@ def _restart_comfy(timeout=COMFY_RESTART_WAIT):
                 with _lock:
                     _COMFY.last_skill = None
                     _COMFY.same_run = 0
+                    _COMFY.total_run = 0
                 return True
         except Exception:
             pass
@@ -1525,6 +1547,7 @@ def _reset():
             chan.heavy_done_at = 0.0
             chan.last_skill = None
             chan.same_run = 0
+            chan.total_run = 0
             chan.last_restart_try = 0.0
         _recent.clear()
 

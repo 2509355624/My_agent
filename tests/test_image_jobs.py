@@ -114,6 +114,11 @@ class _Base(unittest.TestCase):
 
     def setUp(self):
         image_jobs._reset()
+        # 全局累计重启的阈值也钉死为 0（.env 里配了 2）——和上面 _reset 一样
+        # 是防 .env 漂进断言；要测它自己去 GlobalTotalReleaseTest 打开。
+        p = mock.patch.object(image_jobs, "COMFY_RELEASE_AFTER_TOTAL", 0)
+        p.start()
+        self.addCleanup(p.stop)
         self.sent_images = []
         self.sent_texts = []
         # 编号是贴在图上的 caption，单独记一份：sent_images 保持 (target, tid,
@@ -1966,6 +1971,104 @@ class SameChannelReleaseTest(_Base):
             self._run("qwen_image_v1")
         self.assertEqual(self.events,
                          ["free", "submit", "submit", "restart", "submit"])
+
+
+class GlobalTotalReleaseTest(_Base):
+    """全局累计重启（2026-10-15）：计数**不分渠道**，堵「换渠道清零」的盲区。
+
+    用户实录：qwen → krea2 → qwen 轮着点，每条渠道的连画计数都被换渠道清零，
+    SameChannelReleaseTest 那条规则永远攒不满；第 3 张（qwen 回来那张）提交时
+    残留已经叠到内存 0.9GB，跑到一半假死（10-15 12:37 卡死现场）。全局阈值 2
+    → 第 3 张提交前先整个重启。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.events = []
+
+        def _restart():
+            self.events.append("restart")
+            return True
+
+        def _free():
+            self.events.append("free")
+
+        def _submit(wf):
+            self.events.append("submit")
+            return "pid"
+
+        for target, repl in (("_restart_comfy", _restart),
+                             ("_report_and_free", _free),
+                             ("_queue_prompt", _submit)):
+            p = mock.patch.object(image_jobs, target, repl)
+            p.start()
+            self.addCleanup(p.stop)
+        p = mock.patch.object(image_jobs, "COMFY_RELEASE_AFTER_TOTAL", 2)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _run(self, skill):
+        entry = {"outputs": {"9": {"images": [{"filename": "a.png"}]}}}
+        with mock.patch.object(image_jobs, "wait_done", return_value=entry):
+            image_jobs.enqueue("group", "9", {"1": {}}, skill)
+            image_jobs._drain()
+
+    def test_user_scenario_qwen_krea2_qwen(self):
+        """用户报的卡死场景：第 3 张（qwen 回来那张）提交前必须先重启。"""
+        self._run("qwen_image_v1")
+        self._run("krea2-real")
+        self.events.clear()
+        self._run("qwen_image_v1")
+        self.assertEqual(self.events, ["restart", "submit"])
+
+    def test_switching_still_frees_when_total_not_due(self):
+        """没攒满全局阈值时，换渠道照样 /free——两条规则各管各的。"""
+        self._run("qwen_image_v1")          # total 0→1，冷启动无动作
+        self._run("krea2-real")             # total 1→2，换渠道 free
+        self.assertEqual(self.events, ["submit", "free", "submit"])
+
+    def test_restart_covers_the_switch_free(self):
+        """攒满时走重启就不再打换渠道的 /free——重启后一个模型都不在。"""
+        self._run("qwen_image_v1")
+        self._run("krea2-real")             # total 到 2
+        self.events.clear()
+        self._run("hd_3_soft")              # 换渠道，但全局先到点 → 只有 restart
+        self.assertEqual(self.events, ["restart", "submit"])
+
+    def test_cycle_every_third_across_channels(self):
+        """节奏：第 3、6、9…张（不分渠道怎么换）提交前冷启动。"""
+        for s in ("qwen_image_v1", "krea2-real", "hd_3_soft",
+                  "qwen_image_v1", "krea2-real", "hd_3_soft"):
+            self._run(s)
+        # 6 张 = 6 次 submit + 第 3、6 张提交前各 1 次重启；没攒满时的换渠道
+        # free 照打（第 2、4 张），重启路径里的换渠道 free 不打（第 5 张紧随
+        # 第 3 张的重启、算新一轮，第 5→6 张之间 krea2→hd_3_soft 是真切换）
+        self.assertEqual(
+            self.events,
+            ["submit",                       # 1 qwen   冷启动
+             "free", "submit",               # 2 krea2  换渠道 free（total→2）
+             "restart", "submit",            # 3 hd_3   全局到点，重启覆盖 free
+             "free", "submit",               # 4 qwen   新一轮 total 1→2，换渠道 free
+             "restart", "submit",            # 5 krea2  全局又到点
+             "free", "submit"])              # 6 hd_3   新一轮 total 1→2，换渠道 free
+
+    def test_restart_failure_falls_back_to_free(self):
+        """重启被拒/没回来：退回打一发 /free，队列不能原地卡死。"""
+        with mock.patch.object(image_jobs, "_restart_comfy",
+                               return_value=False):
+            self._run("qwen_image_v1")
+            self._run("krea2-real")
+            self.events.clear()
+            self._run("qwen_image_v1")
+        self.assertEqual(self.events, ["free", "submit"])
+
+    def test_zero_disables_global(self):
+        """0 = 关：行为完全回到「同渠道规则 + 换渠道 free」。"""
+        with mock.patch.object(image_jobs, "COMFY_RELEASE_AFTER_TOTAL", 0):
+            for s in ("qwen_image_v1", "krea2-real", "qwen_image_v1"):
+                self._run(s)
+        self.assertEqual(self.events,
+                         ["submit", "free", "submit", "free", "submit"])
 
 
 class _TickingClock:

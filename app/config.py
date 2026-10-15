@@ -437,6 +437,14 @@ for _kv in (os.getenv("COMFY_RELEASE_AFTER_SAME_MAP") or "").split(","):
         except ValueError:
             pass
 
+# 全局累计重启（2026-10-15 用户拍板）：上面的计数**换渠道就归零**——用户实录
+# qwen → krea2 → qwen 轮着点，每条渠道都攒不满阈值，重启一直不触发，残留
+# 照样叠到底（10-15 12:37 卡死现场：换渠道提交时内存只剩 0.9GB）。这条不看
+# 渠道：自上次重启以来**总共**提交满 N 张，下一张提交前彻底重启。
+# 注意它会盖住 map 里的例外（全局 2 < anima-line 的 5 时后者永远轮不到）；
+# 0 = 关。
+COMFY_RELEASE_AFTER_TOTAL = int(os.getenv("COMFY_RELEASE_AFTER_TOTAL", "0"))
+
 # ─── 重渠道（qwen）优先度：2026-10-04 按用户要求关闭 ───────────────
 #
 # ⚠️ **2026-10-04 用户拍板关闭（原值 90）**。触发场景：他连着跑漫画加字
