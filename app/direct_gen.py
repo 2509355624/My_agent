@@ -231,6 +231,9 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    # style；鬼针草是 LoKr+DoRA，元数据里没有触发词）。
                    "krea2铭音": "krea2-mingyin",
                    "krea2鬼针草": "krea2-guizhencao",
+                   # 2026-10-15 用户拍板的混搭：铭音 0.6 打底 + 鬼针草 1.0，
+                   # 族里唯一的双 LoRA 工作流（骨架多一个节点 16）。
+                   "krea2铭鬼": "krea2-minggui",
                    "qwen": "qwen_image_v1", "qwen-hd": "qwen-hd",
                    "qwen角色设定表": "qwen-charsheet",
                    "qwen修复": "qwen-restore",
@@ -266,7 +269,7 @@ _FIXED_CHAN_RE = re.compile(
     r"|krea2\s*动漫真人|krea2\s*真人\s*cos"
     r"|krea2\s*宝可梦|krea2\s*柔光|krea2\s*奶油"
     r"|krea2\s*写实|krea2\s*通用"
-    r"|krea2\s*铭音|krea2\s*鬼针草"
+    r"|krea2\s*铭音|krea2\s*鬼针草|krea2\s*铭鬼"
     r"|qwen\s*角色设定表"
     r"|qwen\s*修复"
     r"|sd|qwen-hd|qwen|nffa|nai|cunny|miao)"
@@ -621,7 +624,7 @@ _FINAL_PROMPT_NO_CHAN_TEXT = (
     "（选错就是整张图换风味）。在前面补一个渠道词再发："
     "nai（画师串/权号这种写法就是它的）/ silver（默认渠道）/ silver-hd（4x超清）/ "
     "anima（三档）/ sd / qwen / nffa / jank / krea2米山舞"
-    "（krea2 系 12 条按风格拆，点名要带风格词）。")
+    "（krea2 系 13 条按风格拆，点名要带风格词）。")
 
 
 MENU_TEXT = (
@@ -667,10 +670,10 @@ GUIDE_TEXT = (
     "　qwen角色设定表　7 分区 character design sheet（2304×1536 / 16 步）\n"
     "　qwen修复　引用图 → 去糊/去噪修清楚（1536 面积档 / 16 步）\n"
     "　sd　　一次多张，多段用 --- 分隔\n"
-    "　krea2系　12 条按风格拆：krea2米山舞 / krea2日系 / krea2亚洲真人\n"
+    "　krea2系　13 条按风格拆：krea2米山舞 / krea2日系 / krea2亚洲真人\n"
     "　　　　　/ krea2动漫真人 / krea2真人cos / krea2宝可梦\n"
     "　　　　　/ krea2柔光 / krea2奶油 / krea2写实 / krea2通用\n"
-    "　　　　　/ krea2铭音 / krea2鬼针草（点名要带风格词）\n"
+    "　　　　　/ krea2铭音 / krea2鬼针草 / krea2铭鬼（点名要带风格词）\n"
     "　nffa　　插画感\n"
     "　cunny　超分重渠道 · 单张 2~4 分钟\n"
     "　miao　　皮肤质感滑嫩 · 2x 出 3072×4608\n"
@@ -716,7 +719,7 @@ MORE_CHAN_TEXT = (
     "　qwen角色设定表 ｜ qwen修复（引用图去糊修清楚）\n"
     "　sd　　一次多张，多段用 --- 分隔\n"
     "　krea2 + 风格词：米山舞/日系/亚洲真人/动漫真人/\n"
-    "　　　真人cos/宝可梦/柔光/奶油/写实/通用/铭音/鬼针草\n"
+    "　　　真人cos/宝可梦/柔光/奶油/写实/通用/铭音/鬼针草/铭鬼\n"
     "　nffa 插画感 ｜ cunny 超分重渠道·单张 2~4 分钟\n"
     "　miao 皮肤质感·2x 放大 ｜ nai 云端·认画师串/权号\n"
     "\n"
@@ -923,7 +926,7 @@ _MASTER_TEMPLATE = (
     "- nffa / cunny / miao：点名才用（cunny / miao 一张好几分钟）。\n"
     "- krea2 系按风格 LoRA 分：krea2米山舞 / krea2日系 / krea2亚洲真人 / "
     "krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / "
-    "krea2奶油 / krea2写实 / krea2通用 / krea2铭音 / krea2鬼针草；"
+    "krea2奶油 / krea2写实 / krea2通用 / krea2铭音 / krea2鬼针草 / krea2铭鬼；"
     "点名带风格词，光说 krea2 不算。\n"
     "- silver = **默认渠道**（不填 skill 就是它）、jank = 自定义 NoobAI 渠道，"
     "明说才填。jank 是**文生图专用**、没有图生图骨架；silver 有锁构图骨架"
@@ -1023,16 +1026,17 @@ _REVISE_TEMPLATE = (
     "  qwen_image_v1 = 说「qwen / 千问 / 通义」；image_gen_v1 = 说「sd」；\n"
     "  krea2-yoneyama / krea2-rella / krea2-asianmix / krea2-anime2real / "
     "krea2-coscandid / krea2-pokemon / krea2-softlight / krea2-creamy / "
-    "krea2-real / krea2-general / krea2-mingyin / krea2-guizhencao"
-    " = krea2 系 12 条，用户原话点「krea2米山舞 / krea2日系 / krea2亚洲真人 / "
+    "krea2-real / krea2-general / krea2-mingyin / krea2-guizhencao / "
+    "krea2-minggui"
+    " = krea2 系 13 条，用户原话点「krea2米山舞 / krea2日系 / krea2亚洲真人 / "
     "krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油 / "
-    "krea2写实 / krea2通用 / krea2铭音 / krea2鬼针草」时对应填；\n"
+    "krea2写实 / krea2通用 / krea2铭音 / krea2鬼针草 / krea2铭鬼」时对应填；\n"
     "  qwen-charsheet = 说「qwen 角色设定表」（**7 分区** character design sheet 工作流，\n"
     "  qwen-image-2.1 上，2304×1536 / 16 步，不放大；右下细节格不画文字）。\n"
     "  qwen-restore = 说「qwen修复」（**引用图修复**工作流，qwen-image-2.1 + 修复 LoRA，\n"
     "  1536 面积档 / 16 步，不放大；引用图轮由代码专路直接入队，不用你填 skill）。\n"
     "  ⚠️ 通用「krea2」已下架，原话只说了 krea2 没带风格词时**别填 krea2 系**"
-    "（那 12 个名字都不是他说的），照默认渠道走。\n"
+    "（那 13 个名字都不是他说的），照默认渠道走。\n"
     "  nffa / cunny / miao = 原话点名才填；\n"
     "  jank = 原话明说「jank」才填（用户自定义渠道）。\n"
     "  silver-hd = silver 的 4x 超清版，原话明说「silver-hd」或「silver 超清」才填。\n"
