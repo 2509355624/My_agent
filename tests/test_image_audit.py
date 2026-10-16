@@ -20,6 +20,7 @@
 import os
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -116,6 +117,74 @@ class CheckFailClosedTest(unittest.TestCase):
             with mock.patch("app.vision.describe",
                             return_value="我觉得这张图还行吧"):
                 v = image_audit.check(path)
+            self.assertFalse(v.allow)
+            self.assertTrue(v.failed)
+        finally:
+            os.remove(path)
+
+
+class AuditDeadlineTest(unittest.TestCase):
+    """审核必须**真的**在 `IMAGE_AUDIT_TIMEOUT` 内收场（2026-10-16 用户拍板）。
+
+    背景两件事，都钉在这里：
+
+    1. `IMAGE_AUDIT_TIMEOUT` 从前只被 import、**没人用**，审核实际跑的是
+       `VISION_TIMEOUT`（120 秒）——代码里四处注释写着「审核只有 30 秒」，实际不是。
+    2. `urllib3.Timeout(total=...)` 对**持续吐数据**的对端不生效（read 配额只在
+       建连后算一次，是每次 recv 的上限）——当晚一次识图挂了 362.7 秒，把串行的
+       出图队列堵了 7.5 分钟、队尾 6 个任务干等。
+
+    所以：默认值必须来自那个常量，而且识图再慢，check 也得按时返回。
+    """
+
+    _PASS = '{"allow": true, "reason": "泳装展示", "category": "ok"}'
+
+    def _hang(self, *args, **kwargs):
+        """假装识图挂住了（远超过测的 timeout）。"""
+        time.sleep(5)
+        return self._PASS
+
+    def _check_while_hanging(self, **kwargs):
+        path = _write_png()
+        try:
+            with mock.patch("app.vision.describe", side_effect=self._hang):
+                started = time.monotonic()
+                v = image_audit.check(path, **kwargs)
+                return v, time.monotonic() - started
+        finally:
+            os.remove(path)
+
+    def test_default_timeout_comes_from_the_constant(self):
+        """不传 timeout 时用的是 IMAGE_AUDIT_TIMEOUT，不是 VISION_TIMEOUT。"""
+        with mock.patch.object(image_audit, "IMAGE_AUDIT_TIMEOUT", 0.2):
+            v, elapsed = self._check_while_hanging()
+        self.assertFalse(v.allow)
+        self.assertTrue(v.failed)      # 超时 = 审核没生效，走 FAILED_NOTICE
+        self.assertLess(elapsed, 2)
+
+    def test_explicit_timeout_is_honoured(self):
+        v, elapsed = self._check_while_hanging(timeout=0.2)
+        self.assertFalse(v.allow)
+        self.assertTrue(v.failed)
+        self.assertLess(elapsed, 2)
+
+    def test_timeout_is_also_handed_down_to_vision(self):
+        """还得往下传：只在上层掐表的话，挂死的线程会赖到 120 秒才收场。"""
+        path = _write_png()
+        try:
+            with mock.patch("app.vision.describe", return_value=self._PASS) as m:
+                image_audit.check(path, timeout=7)
+            self.assertEqual(m.call_args.kwargs["timeout"], 7)
+        finally:
+            os.remove(path)
+
+    def test_vision_error_still_propagates_as_fail_closed(self):
+        """加了线程壳之后，识图抛的异常仍要原样落到 fail-closed。"""
+        path = _write_png()
+        try:
+            with mock.patch("app.vision.describe",
+                            side_effect=RuntimeError("识图请求失败（耗时 12.0s）")):
+                v = image_audit.check(path, timeout=5)
             self.assertFalse(v.allow)
             self.assertTrue(v.failed)
         finally:

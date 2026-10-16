@@ -65,6 +65,7 @@ app/image_review.py）。所以「宁可错拦」这套口径的代价是**可�
 import json
 import logging
 import re
+import threading
 
 from app.config import IMAGE_AUDIT_TIMEOUT
 
@@ -237,8 +238,45 @@ def resolve_prompt(agent_id):
         return _PROMPT
 
 
+def _call_with_deadline(fn, timeout):
+    """跑 `fn()`，**最多等 timeout 秒**，超了就放弃等待。
+
+    为什么非要补这一层：`vision.describe` 里的 `urllib3.Timeout(total=...)`
+    **不是**「整次请求的墙上时钟」。翻 urllib3 2.6.3 源码，`read_timeout` 只在
+    建连后算一次（`min(total - 建连耗时, read)`）就 `settimeout` 到 socket 上，
+    那是**每次 recv** 的上限，之后不再重算——对端只要持续吐数据（哪怕很慢），
+    整次就能远超 total。2026-10-16 实录：一次审核识图挂了 **362.7 秒**
+    （total 只有 120），而审核串在出图 worker 上，一次挂死把整条队列堵住，
+    队尾 6 个任务干等 7.5 分钟。
+
+    ⚠️ 超时后**不等**那个线程：它是 daemon，自己会在 socket 读超时（跟着同一个
+    timeout 走）之后收场，异常由 `_run` 吞掉，不会再冒出来打断别人。宁可留一个
+    正在收尾的线程，也不能让整条出图队列陪它等。
+    """
+    box = {}
+
+    def _run():
+        try:
+            box["text"] = fn()
+        except Exception as exc:                    # noqa: BLE001
+            box["exc"] = exc
+
+    t = threading.Thread(target=_run, name="audit-vision", daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise RuntimeError("超过 %g 秒还没返回，已放弃等待" % timeout)
+    if "exc" in box:
+        raise box["exc"]
+    return box.get("text") or ""
+
+
 def check(path, timeout=None, prompt=None):
     """审一张本地图（`image_out.prepare_for_send` 的产物）。
+
+    timeout 不传 = `IMAGE_AUDIT_TIMEOUT`（默认 30 秒）。**必须短**：审核串在出图
+    worker 上，一次挂死会堵住整条队列（见 `_call_with_deadline`）。超时按
+    fail-closed 处理——进人工二审，图不丢、队列不堵。
 
     prompt 不传 = 用内置默认；`allow_send` 会把自定义的那份传进来。
 
@@ -246,6 +284,9 @@ def check(path, timeout=None, prompt=None):
     （allow=False，failed=True）。调用方不需要 try/except。
     """
     from app import vision
+
+    if timeout is None:
+        timeout = IMAGE_AUDIT_TIMEOUT
 
     try:
         with open(path, "rb") as f:
@@ -264,12 +305,16 @@ def check(path, timeout=None, prompt=None):
         # 显式传 provider/model = **绕过管理页上的识图选择**，永远用 .env 配的
         # 那个（vision.audit_choice）。用户 2026-10-04 拍板：审核不跟着界面切。
         # 判据是失败方向 —— 审核是 fail-closed 且超时只有 30 秒
-        # （IMAGE_AUDIT_TIMEOUT），本地小模型实测几十秒到几分钟 ⇒ 跟着切会把
-        # 每张图都判成「识图失败」直接拦下来，图片根本发不出去。
+        # （IMAGE_AUDIT_TIMEOUT，2026-10-16 起**真的生效了**：以前这个常量只被
+        # import 进来、没人用，实际跑的是 VISION_TIMEOUT=120），本地小模型实测
+        # 几十秒到几分钟 ⇒ 跟着切会把每张图都判成「识图失败」直接拦下来，
+        # 图片根本发不出去。
         a_pid, a_model = vision.audit_choice()
-        text = vision.describe(data_url, timeout=timeout,
-                               prompt=prompt or _PROMPT,
-                               provider=a_pid, model=a_model)
+        text = _call_with_deadline(
+            lambda: vision.describe(data_url, timeout=timeout,
+                                    prompt=prompt or _PROMPT,
+                                    provider=a_pid, model=a_model),
+            timeout)
     except Exception as exc:
         return _fail_closed("识图失败：%s" % exc)
 
