@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 
 try:
@@ -857,8 +858,12 @@ class SessionRunner:
     def _run_persona_turn(self, batch):
         """扮演态的一轮。**跟生图那条路完全没有交集**，所以单列一个函数。
 
-        只做两件事：把这几条连发拼成一句 → `persona` 那边一次调用 → 发回正文。
-        **不出图**：图要十几秒，聊天是几秒一句，赶不上（用户 2026-10-16 拍板）。
+        两件事：把这几条连发拼成一句 → `persona` 那边一次调用 → 发回正文，
+        再拿它顺手写的那行「画面：」去出一张 ≈2~3 秒的快图（`persona.draw`，
+        走内部渠道 `_persona_fast`）。
+
+        图**在后台线程里出**：正文先发出去，图晚两三秒跟上来。等在这儿的话，
+        这张图会把适配层的并发槽多占几秒，聊天节奏就被它拖住了。
         """
         texts = [(it.get("text") or "").strip() for it in batch]
         texts = [t for t in texts if t]
@@ -867,15 +872,41 @@ class SessionRunner:
         # 引用**触发这条会话的那句**（合并批的第一条），不是最后一条：
         # 连发三条时，对方看到「机器人引用了我最先说的那句」，指向最清楚。
         reply_to = str(batch[0].get("reply_to") or "")
-        reply = ""
+        turn = None
         try:
-            reply = persona.run_turn(self.session_key, "\n".join(texts),
-                                     self.target,
-                                     batch[0].get("sender") or "")
+            turn = persona.run_turn(self.session_key, "\n".join(texts),
+                                    self.target,
+                                    batch[0].get("sender") or "")
         except Exception:
             log.exception("扮演轮异常 %s", self.session_key)
-        if reply.strip():
-            self._deliver(False, reply, [], "", reply_to=reply_to)
+        if turn is None:
+            return
+        if turn.reply.strip():
+            self._deliver(False, turn.reply, [], "", reply_to=reply_to)
+        if turn.scene.strip():
+            threading.Thread(target=self._draw_persona, args=(turn.scene,),
+                             name="persona-draw", daemon=True).start()
+
+    def _draw_persona(self, scene):
+        """扮演态配图（跑在后台线程里）：出一张快图，画好就发回这条会话。
+
+        **没有画面就不画、画不出来也不吭声**——图是附赠，聊天才是正事（判据都
+        在 `persona.draw` 里）。出场前再取一次卡：出图要两三秒，这中间对方完全
+        可能已经发了 `#出戏`。
+        """
+        card = persona.active_card(self.session_key)
+        if card is None:
+            return
+        try:
+            name = persona.draw(scene, card, self.session_key)
+        except Exception:
+            log.exception("扮演配图异常 %s", self.session_key)
+            return
+        if name:
+            # 走 _deliver 而不是 qq_api.send_image：发送格式、审核闸门、
+            # 「开过口要重新计时」这三件事都在那里，别绕过去。
+            # quiet_images：被审核拦下时也不吭声（见 _deliver 的说明）。
+            self._deliver(False, "", [name], "", quiet_images=True)
 
     def _run_turn(self, batch):
         """在 worker 线程里跑一轮（run_agent_stream 是同步生成器）。"""
@@ -1175,7 +1206,7 @@ class SessionRunner:
         self._deliver(sent_by_tool, reply, images, receipt_spoke)
 
     def _deliver(self, sent_by_tool, reply, images, receipt_spoke="",
-                 reply_to=""):
+                 reply_to="", quiet_images=False):
         """把结果发回 QQ。图片过一遍 image_out（甩掉工作流元数据），格式看管理页开关。
 
         `receipt_spoke` 是**后台已经直发**的那句生图回执（见
@@ -1184,6 +1215,10 @@ class SessionRunner:
 
         `reply_to` 是本条消息的 message_id：给了就带引用发（扮演态要「谁 @ 就
         引用谁那句」）。图片那条不带——`send_image` 走的是另一条拼段的路。
+
+        `quiet_images=True`（2026-10-16，扮演态配图）：图被审核拦下时**不吭声**
+        ——那一张没来就没来，聊天照常往下走；在角色扮演里插一句「这张没过审」
+        比少一张图更出戏。也不把它算成「开过口」（它确实一个字都没说）。
         """
         from app.agents import image_send_format
         send_text = (qq_api.send_group if self.target == "group"
@@ -1209,7 +1244,8 @@ class SessionRunner:
                 # 审核闸门：跟 image_jobs 那两个出口共用同一个函数。
                 # 审的是 prepare_for_send 的产物，也就是真正要发出去的那份字节。
                 if not image_audit.allow_send(path, QQ_AGENT_ID,
-                                              self.target, self.target_id):
+                                              self.target, self.target_id,
+                                              notify=not quiet_images):
                     blocked += 1
                     continue
                 qq_api.send_image(self.target, self.target_id, path)
@@ -1219,7 +1255,8 @@ class SessionRunner:
                     log.exception("回发图片失败 %s", self.session_key)
         # 被拦的图也算「开过口」：审核模块已经回了一句提示到群里，
         # 冷却得重新计时，不然刚拦完就接着接话。
-        if blocked:
+        # 静默投递不算——那边一个字都没发出去（见 quiet_images）。
+        if blocked and not quiet_images:
             spoke = True
 
         # 后台直发的回执也算「开过口」：温度/冷却要重新计时。

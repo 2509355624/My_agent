@@ -5,14 +5,15 @@
 - 卡库读写（`agents/<agent>/characters.json`）
 - 会话级扮演态（`state/persona_sessions.json`）
 - 三条 `#` 命令
-- 扮演一轮：**只调 1 次** LLM、回话原样发回、最近 20 条 + 单条 200 字截断、
-  **不出图**
+- 扮演一轮：**只调 1 次** LLM、正文原样发回、最近 20 条 + 单条 200 字截断
+- 输出契约里的「画面：」那一行：解析、剥出正文、拼角色卡固定块、静默出图
 
 用户 2026-10-16 定的语义：
 - 命令是 `#角色扮演`（`#人设列表` 同义）/ `#角色名` / `#出戏`，私聊同样要喊一声；
 - 扮演态的作用域是**会话线**，A 群在演、B 群照旧是生图机器人；
 - 系统头里**只有角色人设 + 输出契约 + 环境**，不拼工具目录、不拼审核话术；
-- 扮演态**不配图**（图要十几秒，赶不上聊天的节奏）。
+- 扮演态**每轮回话配一张快图**（`skills/_persona_fast`，480×720 / 5 步，
+  实测 ≈2~3 秒），画面由角色自己顺手写、长相由卡上的外观字段钉死。
 
 隔离铁律：碰 agents/ 数据必须换整根 AGENTS_DIR 到临时目录（同 test_session_prompt）。
 """
@@ -156,11 +157,10 @@ class HeadTest(PersonaBase):
         head = persona.build_head(_card("纱雾"), "group_1", "张三")
         self.assertIn("说话很轻", head)        # 角色人设
         self.assertIn("以这个角色的口吻", head)  # 输出契约
+        self.assertIn("画面：", head)           # 每轮一行画面标签（配图用）
         self.assertIn("QQ 群", head)           # 群聊环境
         self.assertIn("张三", head)
-        # 契约里**不再要求写画面标签**（2026-10-16 起扮演态不出图）
         self.assertNotIn("###", head)
-        self.assertNotIn("标签", head)
         # 刻意不带的东西：工具协议、Skill 目录、审核话术（用户点名不要）
         self.assertNotIn("[[TOOL:", head)
         self.assertNotIn("Skill", head)
@@ -193,18 +193,22 @@ class TurnTest(PersonaBase):
     def test_one_call_returns_the_reply(self):
         out, m = self._run("你好呀")
         self.assertEqual(m.call_count, 1)              # 就一次调用
-        self.assertEqual(out, "你好呀")                 # 回话原样发回去
+        self.assertEqual(out.reply, "你好呀")           # 回话原样发回去
+        self.assertEqual(out.scene, "")                # 没写画面行 = 这轮不出图
 
-    def test_no_image_is_drawn(self):
-        """扮演态不配图——用户 2026-10-16 拍板「配图根本没有用」。
+    def test_scene_line_is_split_out_of_the_reply(self):
+        """模型顺手写的那行「画面：」要剥出来：正文发回去，标签拿去出图。
 
-        图要十几秒，聊天是几秒一句，永远赶不上；所以整条配图路径（comic_story）
-        一次都不该被碰到。
+        2026-10-16 用户拍板「角色回话时顺手写」——不额外调一次 LLM 出画面描述。
         """
-        with mock.patch.object(persona.llm, "call_llm", return_value="你好呀"), \
-             mock.patch("app.comic_story.start") as draw:
-            persona.run_turn("group_1", "在吗", "group", "张三")
-        draw.assert_not_called()
+        out, _ = self._run("你好呀\n画面：1girl, sitting, smile")
+        self.assertEqual(out.reply, "你好呀")
+        self.assertEqual(out.scene, "1girl, sitting, smile")
+
+    def test_scene_line_does_not_enter_history(self):
+        """历史里只留角色说过的话——「画面：」是给代码的元数据，不是台词。"""
+        self._run("你好呀\n画面：1girl, sitting")
+        self.assertEqual(persona._load_hist("group_1")[1]["content"], "你好呀")
 
     def test_history_keeps_dialogue_only(self):
         self._run("你好呀")
@@ -227,12 +231,12 @@ class TurnTest(PersonaBase):
         不重跑——重跑一次未必更好，还白烧一轮。
         """
         out, m = self._run("")
-        self.assertIn("卡", out)
+        self.assertIn("卡", out.reply)
 
     def test_not_in_roleplay_is_a_noop(self):
         persona.leave("group_1")
         with mock.patch.object(persona.llm, "call_llm") as m:
-            self.assertEqual(persona.run_turn("group_1", "在吗", "group"), "")
+            self.assertEqual(persona.run_turn("group_1", "在吗", "group").reply, "")
         m.assert_not_called()
 
     def test_history_is_separate_from_the_image_bot(self):
@@ -241,6 +245,140 @@ class TurnTest(PersonaBase):
         self.assertFalse(os.path.exists(
             os.path.join(agents.AGENTS_DIR, "qq", "sessions", "group_1.jsonl")))
         self.assertTrue(os.path.exists(persona._hist_path("group_1")))
+
+
+class SceneSplitTest(unittest.TestCase):
+    """契约行「画面：<英文标签>」的解析。"""
+
+    def test_splits_reply_and_scene(self):
+        reply, scene = persona.split_scene("你好呀\n画面：1girl, sitting, smile")
+        self.assertEqual(reply, "你好呀")
+        self.assertEqual(scene, "1girl, sitting, smile")
+
+    def test_full_width_colon_is_accepted(self):
+        _, scene = persona.split_scene("嗯。\n画面：night, window")
+        self.assertEqual(scene, "night, window")
+
+    def test_no_scene_line_is_empty(self):
+        reply, scene = persona.split_scene("你好呀")
+        self.assertEqual((reply, scene), ("你好呀", ""))
+
+    def test_takes_the_last_and_drops_every_one(self):
+        """模型偶尔会写两行「画面：」——两行都从正文里去掉，取最后一行当画面。"""
+        reply, scene = persona.split_scene("画面：first\n你好\n画面：second")
+        self.assertEqual(scene, "second")
+        self.assertEqual(reply, "你好")
+
+    def test_strips_markdown_noise(self):
+        _, scene = persona.split_scene("好\n画面：**`1girl, smile`**")
+        self.assertEqual(scene, "1girl, smile")
+
+    def test_scene_inside_the_text_is_not_taken(self):
+        """正文里出现「画面」两个字不算契约行——行首才是。"""
+        reply, scene = persona.split_scene("这个画面我记着呢。")
+        self.assertEqual(scene, "")
+        self.assertEqual(reply, "这个画面我记着呢。")
+
+
+class PromptTest(unittest.TestCase):
+    """出图提示词 = 角色卡固定块 + 这一轮的画面。"""
+
+    def test_fixed_block_prepended(self):
+        card = {"appearancePrompt": "1girl, white hair",
+                "outfitPrompt": "black dress"}
+        self.assertEqual(persona.build_prompt(card, "sitting, smile"),
+                         "1girl, white hair, black dress, sitting, smile")
+
+    def test_no_appearance_still_draws_the_scene(self):
+        self.assertEqual(persona.build_prompt({}, "sitting"), "sitting")
+
+    def test_empty_scene_leaves_the_fixed_block(self):
+        self.assertEqual(persona.build_prompt({"appearancePrompt": "1girl"}, ""),
+                         "1girl")
+
+
+class SessionTargetTest(unittest.TestCase):
+    def test_group_and_private(self):
+        self.assertEqual(persona._session_target("group_123"), ("group", "123"))
+        self.assertEqual(persona._session_target("private_9"), ("private", "9"))
+
+    def test_unknown_key_is_dropped(self):
+        self.assertEqual(persona._session_target("weird"), ("", ""))
+        self.assertEqual(persona._session_target(""), ("", ""))
+
+
+class DrawTest(unittest.TestCase):
+    """扮演态配图：走 `_persona_fast`，入队带 quiet，失败一律静默。"""
+
+    def _patch(self, **kw):
+        job = mock.Mock()
+        job.wait.return_value = {"outputs": {}}
+        patches = [
+            mock.patch("app.image_jobs.comfy_alive",
+                       return_value=kw.get("alive", True)),
+            mock.patch("app.image_jobs.output_images",
+                       return_value=kw.get("names", ["a.png"])),
+            mock.patch("app.image_jobs.enqueue",
+                       return_value=(job, kw.get("reason"))),
+            mock.patch("app.tools.normal.generate_image.build_t2i_workflow",
+                       return_value=kw.get("wf", {"x": 1})),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        return job
+
+    def test_enqueues_quiet_on_the_fast_skill(self):
+        job = self._patch()
+        name = persona.draw("sitting, smile", {"appearancePrompt": "1girl"},
+                            "group_1")
+        self.assertEqual(name, "a.png")
+        import app.image_jobs as ij
+        args, kw = ij.enqueue.call_args
+        self.assertEqual(args[:2], ("group", "1"))       # 会话线拆出来的投递目标
+        self.assertEqual(kw["skill"], persona.FAST_SKILL)
+        self.assertTrue(kw["quiet"])                     # 不带编号 caption
+        self.assertFalse(kw["landscape"])                # 后台线程判不了，写死竖版
+
+    def test_prompt_goes_into_the_workflow(self):
+        self._patch()
+        import app.tools.normal.generate_image as gi
+        persona.draw("sitting, smile", {"appearancePrompt": "1girl"}, "group_1")
+        self.assertEqual(gi.build_t2i_workflow.call_args[0][0],
+                         persona.FAST_SKILL)
+        self.assertEqual(gi.build_t2i_workflow.call_args[0][1],
+                         "1girl, sitting, smile")
+
+    def test_comfy_down_is_silent(self):
+        self._patch(alive=False)
+        import app.image_jobs as ij
+        self.assertEqual(persona.draw("x", {}, "group_1"), "")
+        ij.enqueue.assert_not_called()
+
+    def test_empty_scene_does_not_enqueue(self):
+        self._patch()
+        import app.image_jobs as ij
+        self.assertEqual(persona.draw("   ", {"appearancePrompt": "1girl"},
+                                      "group_1"), "")
+        ij.enqueue.assert_not_called()
+
+    def test_queue_rejection_is_silent(self):
+        self._patch(reason="现在排队的人太多了（前面还有 9 张），这一张先不画。")
+        self.assertEqual(persona.draw("x", {"appearancePrompt": "1girl"},
+                                      "group_1"), "")
+
+    def test_draw_failure_is_silent(self):
+        job = self._patch()
+        job.wait.side_effect = RuntimeError("ComfyUI 掉线")
+        self.assertEqual(persona.draw("x", {"appearancePrompt": "1girl"},
+                                      "group_1"), "")
+
+    def test_no_workflow_is_silent(self):
+        self._patch(wf=None)
+        import app.image_jobs as ij
+        self.assertEqual(persona.draw("x", {"appearancePrompt": "1girl"},
+                                      "group_1"), "")
+        ij.enqueue.assert_not_called()
 
 
 if __name__ == "__main__":

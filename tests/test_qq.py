@@ -1557,5 +1557,84 @@ class LoopTurnTimeoutTest(unittest.TestCase):
         self.assertEqual(seen[0][0]["text"], "在吗")
 
 
+class PersonaTurnTest(unittest.TestCase):
+    """扮演态一轮的接线：正文先发出去，图在后台线程里出、画好再发回。
+
+    出图那条路本身（`persona.draw`、契约行解析、提示词拼装）在
+    tests/test_persona.py 里测；这里只管三件事：正文发没发、要不要起线程、
+    画好的图有没有交给 `_deliver`。
+    """
+
+    def _runner(self):
+        return qq_bot.SessionRunner(None, "group_9", "group", "9")
+
+    def _batch(self, text="在吗"):
+        return [{"text": text, "sender": "张三", "reply_to": "m1"}]
+
+    def test_reply_goes_out_and_draw_starts(self):
+        runner = self._runner()
+        turn = qq_bot.persona.Turn("你好呀", "1girl, sitting, smile")
+        with mock.patch.object(qq_bot.persona, "run_turn", return_value=turn), \
+             mock.patch.object(runner, "_deliver") as dv, \
+             mock.patch.object(qq_bot.threading, "Thread") as th:
+            runner._run_persona_turn(self._batch())
+        self.assertEqual(dv.call_args[0][1], "你好呀")           # 正文
+        self.assertEqual(dv.call_args[1]["reply_to"], "m1")     # 引用触发那句
+        th.assert_called_once()
+        self.assertEqual(th.call_args[1]["args"], ("1girl, sitting, smile",))
+
+    def test_no_scene_line_means_no_draw(self):
+        """模型没写「画面：」那一行 → 这一轮不出图（代码不兜底凑一张）。"""
+        runner = self._runner()
+        turn = qq_bot.persona.Turn("你好呀", "")
+        with mock.patch.object(qq_bot.persona, "run_turn", return_value=turn), \
+             mock.patch.object(runner, "_deliver") as dv, \
+             mock.patch.object(qq_bot.threading, "Thread") as th:
+            runner._run_persona_turn(self._batch())
+        dv.assert_called_once()
+        th.assert_not_called()
+
+    def test_empty_reply_sends_nothing(self):
+        runner = self._runner()
+        with mock.patch.object(qq_bot.persona, "run_turn",
+                               return_value=qq_bot.persona.Turn("", "")), \
+             mock.patch.object(runner, "_deliver") as dv:
+            runner._run_persona_turn(self._batch())
+        dv.assert_not_called()
+
+    def test_draw_delivers_the_image(self):
+        runner = self._runner()
+        with mock.patch.object(qq_bot.persona, "active_card",
+                               return_value={"name": "纱雾"}), \
+             mock.patch.object(qq_bot.persona, "draw",
+                               return_value="a.png") as dr, \
+             mock.patch.object(runner, "_deliver") as dv:
+            runner._draw_persona("1girl")
+        dr.assert_called_once()
+        # 只发图、不带文字；被审核拦下时也不吭声（quiet_images）
+        dv.assert_called_once_with(False, "", ["a.png"], "", quiet_images=True)
+
+    def test_draw_failure_changes_nothing_in_the_chat(self):
+        """画不出来就画不出来——聊天那边一个字都不该多。"""
+        runner = self._runner()
+        with mock.patch.object(qq_bot.persona, "active_card",
+                               return_value={"name": "纱雾"}), \
+             mock.patch.object(qq_bot.persona, "draw", return_value=""), \
+             mock.patch.object(runner, "_deliver") as dv:
+            runner._draw_persona("1girl")
+        dv.assert_not_called()
+
+    def test_leaving_before_the_image_lands_drops_it(self):
+        """出图要两三秒，这中间对方完全可能已经发了 `#出戏` → 这张不发了。"""
+        runner = self._runner()
+        with mock.patch.object(qq_bot.persona, "active_card",
+                               return_value=None), \
+             mock.patch.object(qq_bot.persona, "draw") as dr, \
+             mock.patch.object(runner, "_deliver") as dv:
+            runner._draw_persona("1girl")
+        dr.assert_not_called()
+        dv.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

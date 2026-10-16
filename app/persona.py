@@ -6,7 +6,7 @@
     扮演态 → 本模块：**不给模型任何工具**，一轮只做两件事
 
         拼极简头（角色人设 + 输出契约 + 环境）
-          → 调 1 次 LLM，回话原样发回 QQ
+          → 调 1 次 LLM → 正文发回 QQ，顺手写的那行画面拿去出一张快图（见下）
 
 ## 为什么是 1 次调用
 
@@ -14,14 +14,28 @@
 「人物此刻的情绪」本来就是模型写对白时脑子里已经有的东西，拆成三次只是当年的
 写法；同时省掉两次完整输入的 token（那两次的输入跟第一次一样大）。
 
-## 为什么没有配图
+## 配图（2026-10-16 二次拍板）
 
-用户 2026-10-16 拍板：**扮演态不出图**。配一张图要十几秒，而聊天是几秒一句话的
-节奏，图永远赶不上对话——「根本没有用」。所以这里不留配图入口：模型写的每个字
-都直接发给他，不切分、不等待、不占 ComfyUI 队列。
+同一天早些时候拍的是「扮演态不出图」——理由是配一张图要十几秒，而聊天是几秒
+一句话的节奏，图赶不上对话。**当天下午换成了每轮配一张快图**：用户原话
+「角色扮演模式的话，就用这个来快速生图，这个只要 2 到 3 秒钟而已，非常的快」，
+指 `skills/_persona_fast`（480×720 / 5 步的 silver 漫画变体）。
 
-卡上的外观字段（`appearancePrompt` / `outfitPrompt`）**留着**：那是卡池页在编辑的
-数据，删了就得重录；以后想切回配图，改动只落在本模块。
+于是这里的分工是：
+
+    一次 LLM 调用 → 正文（立刻发）+ 「画面：」那一行（拿去出图）
+                  ↓ 后台线程，不占这一轮
+                出一张 ≈2 秒的图 → 发回同一个会话
+
+三条边界：
+
+1. **正文先走，图后到**。出图在后台线程里等，这一轮不阻塞——聊天节奏一点不变，
+   图只是慢两三秒跟上来。
+2. **画面由角色自己写**（用户拍板「角色回话时顺手写」）。这一行是输出契约的一部分
+   （见 `_CONTRACT`），代码只负责把它从正文里剥出来，**不猜、不兜底**：没这一行就
+   这一轮不出图，绝不拿上一轮或角色卡去凑一张对不上剧情的图。
+3. **角色长相由卡上的外观字段钉死**（`appearancePrompt` / `outfitPrompt`）。模型
+   只写「在做什么」，不写「长什么样」——不然每轮的脸都不一样。
 
 ## 作用域
 
@@ -31,9 +45,11 @@ settings.json**：那是用户在管理页手配的长期配置，扮演态是�
 混在一起会让管理页显示出一堆看不懂的键。
 """
 
+import collections
 import json
 import logging
 import os
+import random
 import re
 import threading
 import time
@@ -42,6 +58,11 @@ from app import llm
 from app.config import BASE_DIR, QQ_AGENT_ID, QQ_BOT_NAME
 
 log = logging.getLogger("persona")
+
+# 一轮的结果：`reply` 是要发回去的正文，`scene` 是这一轮要画的画面（可能为空）。
+# 用命名元组而不是 `(reply, scene)`：调用方写 `turn.reply` 比 `[0]` 看得懂，
+# 也不会在改动时把两个字段的顺序弄反。
+Turn = collections.namedtuple("Turn", "reply scene")
 
 # 历史：最近 20 条（AI 和用户合计），单条超 200 字截断。
 #
@@ -64,7 +85,14 @@ DEBOUNCE_SECONDS = 10.0
 _CONTRACT = (
     "【怎么回话】\n"
     "以这个角色的口吻说想说的话，就像真的在跟他聊天。\n"
-    "想写心里想的事，就写在括号里。"
+    "想写心里想的事，就写在括号里。\n"
+    "\n"
+    "【画面】\n"
+    "回完话，最后另起一行写「画面：」，后面跟这一轮该画出来的那一幕，\n"
+    "用英文标签写（小写、多词用下划线、逗号分隔）：在哪、在做什么、什么表情、\n"
+    "什么镜头、什么光。\n"
+    "她长什么样不用你写，我照角色卡上的样子画。\n"
+    "每一轮都要写这一行。"
 )
 
 _NOTE_PROMPT = (
@@ -82,6 +110,18 @@ LIST_WORDS = ("角色扮演", "人设列表")
 EXIT_WORDS = ("出戏",)
 
 _SAFE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+# 扮演态专用的配图渠道（`skills/_persona_fast/`，480×720 / 5 步，实测 ≈2~3 秒/张）。
+# 它是个**内部渠道**（目录名 `_` 开头，AI 点不到、管理页也看不到），只由本模块
+# 的 `draw()` 引用——扮演态的配图永远走这条路，不受「用户点名了什么渠道」影响。
+FAST_SKILL = "_persona_fast"
+
+# 「画面：」那一行。半角/全角冒号都认（模型两种都写过）。取**最后一处**匹配：
+# 契约要求它写在正文末尾，而正文里偶尔也会出现「画面」这个词。
+_SCENE_RE = re.compile(r"^[ \t]*画面[：:][ \t]*(.*)$", re.M)
+
+# 这行里的修饰符：模型偶尔会把标签套进反引号或加粗星号里。
+_SCENE_NOISE_RE = re.compile(r"[`*]+")
 
 
 # ─── 卡库 ────────────────────────────────────────────
@@ -419,13 +459,13 @@ def _env_note(session_key, sender):
 
 
 def run_turn(session_key, text, target, sender=""):
-    """扮演态的一轮：**1 次** LLM 调用，返回要发回去的正文。
+    """扮演态的一轮：**1 次** LLM 调用，返回 `Turn(正文, 画面)`。
 
-    返回空串 = 这轮什么都不发（调用方别开口）。
+    正文空 = 这轮什么都不发（调用方别开口）；画面空 = 这轮不出图（见 `split_scene`）。
     """
     card = active_card(session_key)
     if card is None:
-        return ""
+        return Turn("", "")
 
     note = str((_entry(session_key) or {}).get("note") or "")
     head = build_head(card, session_key, sender, note)
@@ -443,15 +483,16 @@ def run_turn(session_key, text, target, sender=""):
         raw = llm.call_llm(msgs)
     except Exception:
         log.exception("扮演轮调用失败 %s", session_key)
-        return ""
-    reply = str(raw or "").strip()
+        return Turn("", "")
+    reply, scene = split_scene(raw)
     if not reply:
         # 整轮空 = 模型没交作业。这属于可用性问题，值得说一句，
         # 但**不重跑**：重跑一次未必更好，还白烧一轮。
         log.warning("扮演轮空回复 %s", session_key)
-        return "（我这会儿有点卡，你再说一句？）"
+        return Turn("（我这会儿有点卡，你再说一句？）", "")
 
-    # 落历史：只放对话本身。system 头和小记是每轮重新拼的，不进历史。
+    # 落历史：只放对话本身，**不留「画面：」那一行**——它是给代码的元数据，
+    # 不是角色说过的话。system 头和小记也是每轮重新拼的，同样不进历史。
     hist.append({"role": "user", "content": said})
     hist.append({"role": "assistant", "content": reply})
     try:
@@ -460,7 +501,113 @@ def run_turn(session_key, text, target, sender=""):
         log.exception("扮演轮落史失败 %s", session_key)
 
     _bump_turn(session_key)
-    return reply
+    return Turn(reply, scene)
+
+
+# ─── 画面与出图 ──────────────────────────────────────
+
+def split_scene(text):
+    """把模型这一轮的输出切成 `(正文, 画面标签)`。
+
+    契约见 `_CONTRACT`：正文之后另起一行写「画面：<英文标签>」。这里只做**解析**：
+
+      - 所有「画面：」行都从正文里去掉（模型偶尔会写两行），取**最后一行**当画面；
+      - 没有这一行 → 画面为空串，调用方**不许兜底**。这一轮少一张图，好过拿
+        上一轮或角色卡去凑一张对不上剧情的图（用户 2026-10-16：代码只做检测，
+        判断留给 AI）。
+    """
+    raw = str(text or "")
+    hits = list(_SCENE_RE.finditer(raw))
+    if not hits:
+        return raw.strip(), ""
+    scene = _clean_scene(hits[-1].group(1))
+    body = _SCENE_RE.sub("", raw)
+    body = re.sub(r"\n{3,}", "\n\n", body).strip()
+    return body, scene
+
+
+def _clean_scene(raw):
+    """画面标签的最小清理：去反引号/星号、去首尾逗号和空白。"""
+    s = _SCENE_NOISE_RE.sub("", str(raw or "")).strip()
+    return s.strip(",").strip()
+
+
+def _fixed_block(card):
+    """角色卡上的**外观固定块**：每轮都拼在画面标签前面，保证同一个角色不换脸。
+
+    两个字段都收（`appearancePrompt` 是外观、`outfitPrompt` 是服饰），都没有就
+    留空——空固定块也出得了图，只是角色长相交给模型自由发挥。
+    """
+    parts = [str(card.get("appearancePrompt") or "").strip(),
+             str(card.get("outfitPrompt") or "").strip()]
+    return ", ".join(p for p in parts if p).strip(", ").strip()
+
+
+def build_prompt(card, scene):
+    """出图提示词 = 角色卡固定块 + 这一轮的动态画面。"""
+    fixed, scene = _fixed_block(card), _clean_scene(scene)
+    if fixed and scene:
+        return fixed + ", " + scene
+    return fixed or scene
+
+
+def _session_target(session_key):
+    """会话线 → `(target, target_id)`（`group_123` → `("group", "123")`）。"""
+    target, _, tid = str(session_key or "").partition("_")
+    if target not in ("group", "private") or not tid:
+        return "", ""
+    return target, tid
+
+
+def draw(scene, card, session_key):
+    """出一张配图，返回文件名（没画出来返回 ""）。**阻塞**——调用方放后台线程。
+
+    走 `skills/_persona_fast`（480×720 / 5 步的 silver 漫画变体，实测 ≈2~3 秒）。
+    入队带 `quiet=True`：图直接发回会话、**不带编号 caption、失败也不刷话术**
+    ——聊天里突然冒一句「图没画出来」比不画还糟。
+
+    也不扣私聊每日额度：扮演态配图是聊天的一部分，不是「点单生图」。队列满 /
+    ComfyUI 没在线 / 被审核拦下，一律静默跳过这一轮，聊天照常。
+    """
+    from app import image_jobs
+    from app.tools.normal import generate_image as gi
+
+    prompt = build_prompt(card, scene)
+    target, target_id = _session_target(session_key)
+    if not _clean_scene(scene) or not prompt or not target:
+        return ""       # 没写画面行 = 这一轮不出图，调用方不用替它守
+    seed = random.randint(0, 2 ** 32 - 1)
+    wf = gi.build_t2i_workflow(FAST_SKILL, prompt, seed)
+    if wf is None:
+        log.warning("扮演配图渠道 %s 没有文生图工作流", FAST_SKILL)
+        return ""
+    if not image_jobs.comfy_alive():
+        log.info("扮演配图：ComfyUI 没在线，%s 这一轮不出图", session_key)
+        return ""
+    try:
+        # landscape=False 写死：这里跑在后台线程，读不到本轮原话（qq_api 的
+        # 上下文是 threading.local），不能让 enqueue 自己去判——判不出会退回
+        # 「本轮原话里有没有横屏」，而这里恒为 None。
+        job, reason = image_jobs.enqueue(
+            target, target_id, wf, skill=FAST_SKILL, prompt=prompt,
+            seed=seed, landscape=False, quiet=True)
+    except Exception:
+        log.exception("扮演配图入队失败 %s", session_key)
+        return ""
+    if reason:
+        log.info("扮演配图没排上（%s）：%s", session_key, reason)
+        return ""
+    try:
+        entry = job.wait()
+    except Exception as e:
+        log.info("扮演配图没画出来（%s）：%s", session_key, e)
+        return ""
+    names = image_jobs.output_images(entry)
+    if not names:
+        log.warning("扮演配图跑完却没有图片（%s）", session_key)
+        return ""
+    log.info("扮演配图完成 %s：%s（%s）", session_key, names[0], prompt[:60])
+    return names[0]
 
 
 def _bump_turn(session_key):

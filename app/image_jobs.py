@@ -472,7 +472,7 @@ class Job:
 
     def __init__(self, target, target_id, workflow, skill=None, weight=1, seq=0,
                  nai_i2i=None, tag=None, prompt=None, intent=None, seed=None,
-                 chan=None, landscape=False):
+                 chan=None, landscape=False, quiet=False):
         self.target = target
         self.target_id = target_id
         self.workflow = workflow
@@ -517,6 +517,12 @@ class Job:
         # （2026-10-07 实测：主线程绑 'silver 横屏 一个女孩'，子线程读出 None。
         #   教训：判据一律在入队线程算，别在 worker 里现读。）
         self.landscape = bool(landscape)
+        # 静默出图（2026-10-16，扮演态配图专用）：图照样发回会话，但
+        # **不带编号 caption、失败不刷话术、不记账本**。聊天里每轮一张图，
+        # 图后面跟一行「HT-xxxx · 480x720 · _persona_fast · seed …」，或者
+        # 冷不丁来一句「这张没画出来」，都比不画还糟。
+        # 只有 app/persona.py 的 draw() 会传它；别的调用方一律走默认的完整回执。
+        self.quiet = bool(quiet)
         self.waits = 0              # 被冷却 / 被插队推回过几次（只为日志）
         self.skill_done = False     # 已经成功跑完一张？决定跑完要不要开冷却
         self.prompt_id = None
@@ -783,7 +789,8 @@ def snapshot():
 
 
 def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
-            intent=None, seed=None, resample_fn=None, landscape=None):
+            intent=None, seed=None, resample_fn=None, landscape=None,
+            quiet=False):
     """把一张图排进**它该去的那条通道**的队列，返回 (job, reason)。
 
     prompt 是模型写的那段原始提示词，只用来**出图后记进账本**（编号 → 提示词，
@@ -801,6 +808,8 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
     find_pending_duplicate），不传就是「不参与查重」。seed 是这张的种子，
     只在**发图那行 caption 和出图后的账本**里用（生图本身用的是 workflow 里
     那个已经填好的数），不传就是没种子、caption 上不多那段。
+    quiet=True 是**静默出图**（2026-10-16，扮演态配图专用）：图照样发回会话，
+    不带 caption、失败不刷话术、不记账本（见 `Job.quiet`）。
     """
     key = _key(target, target_id)
     chan = _channel_of(skill)
@@ -831,7 +840,7 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
         chan.seq += 1
         job = Job(target, target_id, workflow, skill, weight, chan.seq,
                   nai_i2i=nai_i2i, prompt=prompt, intent=intent, seed=seed,
-                  chan=chan, landscape=landscape)
+                  chan=chan, landscape=landscape, quiet=quiet)
         # 随机口令的「被拦静默重抽」钩子（2026-10-05）：resample_fn 是无参
         # 可调用体，被审核拦下时由 worker 调它换一条新提示词，同 job 重跑。
         # 最多重抽 2 次（3 尝试）；普通生图不传，拦截行为与从前完全一致。
@@ -1334,6 +1343,10 @@ def process(job):
     独立成函数是为了能同步调用（测试直接调它，不依赖真线程）。
     """
     job.started = time.time()       # 排队到此为止，后面都算「画这张用了多久」
+    # 静默出图（2026-10-16，扮演态配图）：失败一律**不吭声**。聊天里每隔几秒
+    # 就冒一句「图没画出来 / 排队的人太多」，比干脆不画还扫兴——用户要的是
+    # 图片当附赠，不是每轮一条报错。手搓的 Job（老测试）没有这个属性。
+    quiet = bool(getattr(job, "quiet", False))
     # NAI 云端生图：完全不碰 ComfyUI（token 是群主独立的，图由 NovelAI 出）。
     if job.skill in NAI_SKILLS:
         return _process_nai(job)
@@ -1352,7 +1365,8 @@ def process(job):
         job.prompt_id = _queue_prompt(wf)
     except Exception as exc:
         job.error = exc
-        _notice(job)
+        if not quiet:
+            _notice(job)
         return
 
     try:
@@ -1391,13 +1405,15 @@ def process(job):
             _restart_comfy()
             alive = _comfy_up()      # 重启成没成，以重启后再探一次为准
         job.error = exc if alive else ComfyGone()
-        _notice(job)
+        if not quiet:
+            _notice(job)
         return
 
     names = output_images(entry)
     if not names:
         job.error = RuntimeError("跑完了但没找到图片")
-        _notice(job)
+        if not quiet:
+            _notice(job)
         return
 
     job.entry = entry
@@ -1409,11 +1425,17 @@ def process(job):
         # audit_silent（随机口令）→ _send_image 里审核拦下时**不回话**，
         # 话术由这里统一管：重抽期间完全静默，重抽尽才回一句软话术。
         silent = getattr(job, "audit_silent", False)
+        # 静默出图（扮演态配图）：编号 / 渠道 / 种子都不带——图后面跟一行
+        # 「HT-20261016-… · 480x720 · _persona_fast · seed 123」，聊天就串味了。
+        # tag 传空串时 `_caption` 直接返回 ""，于是这一张只发图、不发字。
+        tag_done = "" if quiet else job.tag
+        skill_done = "" if quiet else (job.skill or "")
+        seed_done = None if quiet else job.seed
         # notify 只在静默 job 上降级——普通 job 的调用形态与从前完全一致
         # （worker 层有别的 _send_image 替身按老签名接，别无条件加参）。
         sent = sum(1 for name in names
-                   if _send_image(job.target, job.target_id, name, job.tag,
-                                  skill=job.skill or "", seed=job.seed,
+                   if _send_image(job.target, job.target_id, name, tag_done,
+                                  skill=skill_done, seed=seed_done,
                                   prompt=job.prompt or "",
                                   **({"notify": False} if silent else {})))
         if sent:
@@ -1426,10 +1448,12 @@ def process(job):
             # 落盘失败也不该影响发图（image_log.save 自己吞掉异常）。
             # seed 存的是**这一个数**：动漫渠道两段采样共用它（见
             # generate_image 里 __SEED__ 的全局替换），查回来就够复现。
-            image_log.save(job.tag, prompt=job.prompt, file=names[0],
-                           skill=job.skill or "", target=job.target,
-                           target_id=job.target_id,
-                           seed="" if job.seed is None else job.seed)
+            # 静默 job 没有编号可引用，账本也就无从查起 → 不记（见 Job.quiet）。
+            if not quiet:
+                image_log.save(job.tag, prompt=job.prompt, file=names[0],
+                               skill=job.skill or "", target=job.target,
+                               target_id=job.target_id,
+                               seed="" if job.seed is None else job.seed)
         elif silent and getattr(job, "resample_fn", None) and job.retry_left > 0:
             # 随机口令被拦 → **静默重抽**（2026-10-05 用户拍板）：图是机器人
             # 自己推的服务，不是用户点的单，回「未过审」没道理。换一条新
