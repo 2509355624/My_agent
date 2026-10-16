@@ -3407,5 +3407,46 @@ class LandscapeTest(_Base):
         self.assertTrue(self._run_nai("随便", skill="nai_wide"))
 
 
+class QuietJobTest(_Base):
+    """静默出图（2026-10-16，扮演态配图）：worker 只把图跑出来，投递交给调用方。
+
+    ⚠️ 这条是**实测 bug 的回归测试**：最初实现成「照样发，只是不带 caption」，
+    而调用方 `persona.draw` 拿到文件名后还会自己发一张（走 `_deliver`，那边要过
+    发送格式与审核闸门）→ 群里一次冒出两张一模一样的图。所以这里钉死的是
+    「quiet 的 job **一张都不发**」，不是「发但不带字」。
+    """
+
+    def _entry(self):
+        return {"outputs": {"9": {"images": [{"filename": "a.png"}]}}}
+
+    def _run(self, skill="_persona_fast", quiet=True, **wait):
+        with mock.patch.object(image_jobs, "wait_done",
+                               return_value=wait.pop("entry", self._entry()),
+                               **wait):
+            job, reason = image_jobs.enqueue("group", "9", {"1": {}}, skill,
+                                             quiet=quiet)
+            self.assertIsNone(reason)
+            image_jobs._drain()
+        return job
+
+    def test_quiet_job_is_not_sent_by_the_worker(self):
+        job = self._run()
+        self.assertEqual(self.sent_images, [])      # 一张都不发
+        self.assertEqual(self.sent_texts, [])       # 也不刷任何话术
+        self.assertIsNotNone(job.entry)             # 图在这儿，调用方自己取
+
+    def test_normal_job_still_sends_one(self):
+        """默认路径一点没变：跑完就发回会话（带编号 caption）。"""
+        self._run(skill="silver", quiet=False)
+        self.assertEqual(len(self.sent_images), 1)
+        self.assertTrue(self.sent_captions[0])
+
+    def test_quiet_failure_is_silent(self):
+        """画不出来（超时/掉线）也不吭声——聊天里那一声「没画出来」比不画还糟。"""
+        job = self._run(side_effect=TimeoutError("画超时了"))
+        self.assertEqual(self.sent_texts, [])
+        self.assertIsNotNone(job.error)
+
+
 if __name__ == "__main__":
     unittest.main()
