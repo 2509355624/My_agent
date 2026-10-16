@@ -630,6 +630,39 @@ def comic_page():
     return send_from_directory(WEB_DIR, "comic_studio.html")
 
 
+@app.route("/characters")
+def characters_page():
+    """人设卡池：QQ 角色扮演用的人设卡（见 app/persona.py）。"""
+    return send_from_directory(WEB_DIR, "characters.html")
+
+
+@app.route("/api/characters")
+def api_get_characters():
+    """读卡库。卡库是**整表**读写的：卡的数量是几张、几十张的量级，
+    整表替换比逐张 diff 简单得多，也不会出现半张卡存进去的状态。
+    """
+    from app import persona
+    return jsonify({"cards": persona.load_cards()})
+
+
+@app.route("/api/characters", methods=["PUT"])
+def api_put_characters():
+    """整表覆盖卡库。规范化（补字段 / 丢空名 / 去重 id）在 persona 里做。
+
+    **只影响卡库，不动任何正在进行的会话**：某条会话线正在演的角色要是被
+    删了，下一次说话时 `persona.active_card` 会取不到卡，自动退回生图机器人
+    （不需要额外清理）。
+    """
+    from app import persona
+    data = request.get_json(silent=True) or {}
+    cards = data.get("cards")
+    if not isinstance(cards, list):
+        return jsonify({"ok": False, "error": "cards 必须是列表"}), 400
+    if not persona.save_cards(cards):
+        return jsonify({"ok": False, "error": "卡库路径不可用"}), 500
+    return jsonify({"ok": True, "cards": persona.load_cards()})
+
+
 @app.route("/api/status")
 def get_status():
     """状态后台的数据源。

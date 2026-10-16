@@ -927,7 +927,8 @@ class DispatchQuoteTest(unittest.TestCase):
 
         class FakeRunner:
             def submit(self, text, sender, images, quotes=None,
-                       tentative=False, user_id="", at_me=False):
+                       tentative=False, user_id="", at_me=False,
+                       reply_to=""):
                 captured.update(text=text, sender=sender,
                                 images=images, quotes=quotes,
                                 user_id=user_id)
@@ -992,7 +993,7 @@ class DeliverTest(unittest.TestCase):
         sent = []
         with mock.patch.object(
                 qq_api, "send_group",
-                lambda gid, text, limit=None: (sent.append(text), 1)[1]):
+                lambda gid, text, limit=None, reply_to=None: (sent.append(text), 1)[1]):
             self._runner()._deliver(True, "工具已经发过了", [])
         self.assertEqual(sent, [])
 
@@ -1000,7 +1001,7 @@ class DeliverTest(unittest.TestCase):
         sent = []
         with mock.patch.object(
                 qq_api, "send_group",
-                lambda gid, text, limit=None: (sent.append(text), 1)[1]):
+                lambda gid, text, limit=None, reply_to=None: (sent.append(text), 1)[1]):
             self._runner()._deliver(False, "正常回复", [])
         self.assertEqual(sent, ["正常回复"])
 
@@ -1011,7 +1012,7 @@ class DeliverTest(unittest.TestCase):
         sent = []
         with mock.patch.object(
                 qq_api, "send_group",
-                lambda gid, msg, limit=None: (sent.append(msg), 1)[1]):
+                lambda gid, msg, limit=None, reply_to=None: (sent.append(msg), 1)[1]):
             self._runner()._deliver(False, "正常回复", [])
         self.assertEqual(sent, ["正常回复"])
         self.assertNotIsInstance(sent[0], list)
@@ -1020,7 +1021,7 @@ class DeliverTest(unittest.TestCase):
         sent = []
         with mock.patch.object(
                 qq_api, "send_group",
-                lambda gid, text, limit=None: (sent.append(text), 1)[1]):
+                lambda gid, text, limit=None, reply_to=None: (sent.append(text), 1)[1]):
             self._runner()._deliver(False, "   ", [])
         self.assertEqual(sent, [])
 
@@ -1105,7 +1106,7 @@ class DeliverTest(unittest.TestCase):
         runner = qq_bot.SessionRunner(None, "private_1", "private", "1")
         with mock.patch.object(
                 qq_api, "send_private",
-                lambda uid, text, limit=None: (sent.append(uid), 1)[1]):
+                lambda uid, text, limit=None, reply_to=None: (sent.append(uid), 1)[1]):
             runner._deliver(False, "回你", [])
         self.assertEqual(sent, ["1"])
 
@@ -1130,7 +1131,7 @@ class DeliverTest(unittest.TestCase):
         rec = self._remember_recorder()
         with mock.patch.object(
                 qq_api, "send_group",
-                lambda gid, text, limit=None: 1):
+                lambda gid, text, limit=None, reply_to=None: 1):
             self._runner()._deliver(False, "刚回的一句话", [])
         qq_bot.interject.mark_spoke.assert_called_once_with(
             qq_bot.QQ_AGENT_ID, "9")
@@ -1143,7 +1144,7 @@ class DeliverTest(unittest.TestCase):
         runner = qq_bot.SessionRunner(None, "private_1", "private", "1")
         with mock.patch.object(
                 qq_api, "send_private",
-                lambda uid, text, limit=None: 1):
+                lambda uid, text, limit=None, reply_to=None: 1):
             runner._deliver(False, "回你", [])
         qq_bot.interject.mark_spoke.assert_not_called()
         rec.assert_not_called()
@@ -1152,7 +1153,7 @@ class DeliverTest(unittest.TestCase):
         self._spoke_recorder()
         rec = self._remember_recorder()
 
-        def boom(gid, text, limit=None):
+        def boom(gid, text, limit=None, reply_to=None):
             raise RuntimeError("发不出去")
 
         with mock.patch.object(qq_api, "send_group", boom):
@@ -1165,7 +1166,7 @@ class DeliverTest(unittest.TestCase):
         self._spoke_recorder()
         rec = self._remember_recorder()
         with mock.patch.object(qq_api, "send_group",
-                               lambda gid, text, limit=None: 1):
+                               lambda gid, text, limit=None, reply_to=None: 1):
             self._runner()._deliver(True, "工具已经发过了", [])
         qq_bot.interject.mark_spoke.assert_not_called()
         rec.assert_not_called()
@@ -1183,7 +1184,7 @@ class SendQqMessageToolTest(unittest.TestCase):
         calls = []
         with mock.patch.object(
                 qq_api, "send_group",
-                lambda gid, text, limit=None: (calls.append((gid, text)), 1)[1]):
+                lambda gid, text, limit=None, reply_to=None: (calls.append((gid, text)), 1)[1]):
             out = send_qq_message._send_qq_message("你好")
         self.assertEqual(calls, [("9", "你好")])
         self.assertIn("已发送", out)
@@ -1193,7 +1194,7 @@ class SendQqMessageToolTest(unittest.TestCase):
         calls = []
         with mock.patch.object(
                 qq_api, "send_private",
-                lambda uid, text, limit=None: (calls.append((uid, text)), 1)[1]):
+                lambda uid, text, limit=None, reply_to=None: (calls.append((uid, text)), 1)[1]):
             send_qq_message._send_qq_message("悄悄话", target="private",
                                              target_id="123")
         self.assertEqual(calls, [(123, "悄悄话")])
@@ -1204,7 +1205,7 @@ class SendQqMessageToolTest(unittest.TestCase):
         calls = []
         with mock.patch.object(
                 qq_api, "send_group",
-                lambda gid, text, limit=None: (calls.append(gid), 1)[1]):
+                lambda gid, text, limit=None, reply_to=None: (calls.append(gid), 1)[1]):
             send_qq_message._send_qq_message("转发", target_id="77")
         self.assertEqual(calls, [77])
 
@@ -1231,7 +1232,7 @@ class SendQqMessageToolTest(unittest.TestCase):
         # 工具里抛异常会被 execute_tool 包成"工具执行失败"，这里自己先说清楚
         qq_api.bind_context("group_9", "group", "9")
 
-        def boom(gid, text, limit=None):
+        def boom(gid, text, limit=None, reply_to=None):
             raise RuntimeError("连不上协议端")
 
         with mock.patch.object(qq_api, "send_group", boom):

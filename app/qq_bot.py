@@ -42,7 +42,7 @@ except ImportError:                    # 非 Windows 平台退化为不做检查
 
 from app import (confirm_gate, direct_gen, image_jobs, image_out, interject,
                  logsetup,
-                 longterm, notify, qq_api, qq_status, recent,
+                 longterm, notify, persona, qq_api, qq_status, recent,
                  stickers, usage)
 from app.agent import run_agent_stream, tail_tokens
 from app.agent_prompt import build_stable_prompt
@@ -734,6 +734,11 @@ class SessionRunner:
         self.target_id = target_id
         self._pending = []
         self._task = None
+        # 静默窗口：默认 1.5 秒（群里连发三句算一条）。扮演态会把它换成
+        # `persona.DEBOUNCE_SECONDS`（10 秒）——角色扮演是按句子聊的，
+        # 1.5 秒会把「他说完一句、停两秒又补一句」切成两轮各回一遍，
+        # 而两轮各出一张图。见 _dispatch 里设它的那一行。
+        self.debounce = QQ_DEBOUNCE_SECONDS
         # 状态后台的可观测字段：本轮处在哪个阶段、从什么时候开始。
         # 阶段 = debouncing（攒连发）→ waiting_slot（抢并发槽）→ running
         # （抢到了，在跑模型）→ idle（空闲）。
@@ -746,15 +751,17 @@ class SessionRunner:
         self.batch_senders = []     # 本轮合并了哪些人的消息
 
     def submit(self, text, sender_name="", images=None, quotes=None,
-               tentative=False, at_me=False):
+               tentative=False, at_me=False, reply_to=""):
         """tentative=True 表示「这条没 @ 机器人、也没命中触发词」——它不是
         非回不可的消息，要不要开口得先问一次判断模型（见 _run_turn 开头）。
         at_me=True 表示这条是**真 @**（区别于关键词命中/全量模式）：直达管道
         的兜底行为看它（@ 轮兜底回菜单，关键词轮兜底静默）。
+        reply_to 是本条消息的 message_id —— 扮演态回话时要引用它。
         """
         item = {"text": text, "sender": sender_name,
                 "images": images or [], "quotes": quotes or [],
-                "tentative": bool(tentative), "at_me": bool(at_me)}
+                "tentative": bool(tentative), "at_me": bool(at_me),
+                "reply_to": str(reply_to or "")}
         self._pending.append(item)
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._loop())
@@ -764,7 +771,7 @@ class SessionRunner:
             # 静默窗口：等连发的后续消息到齐再一起处理
             self.state = "debouncing"
             self.state_since = time.monotonic()
-            await asyncio.sleep(QQ_DEBOUNCE_SECONDS)
+            await asyncio.sleep(self.debounce)
             batch, self._pending = self._pending[:], []
             if not batch:
                 continue
@@ -847,8 +854,38 @@ class SessionRunner:
         with usage.scope(self.session_key):
             self._run_turn(batch)
 
+    def _run_persona_turn(self, batch):
+        """扮演态的一轮。**跟生图那条路完全没有交集**，所以单列一个函数。
+
+        只做三件事：把这几条连发拼成一句 → `persona` 那边一次调用 → 发回正文。
+        图不在这里等：`persona.run_turn` 内部就把画面交给 anima 开工了，
+        十几秒后由图自己的后台任务发进会话（跟漫画一个思路），本轮不阻塞。
+        """
+        texts = [(it.get("text") or "").strip() for it in batch]
+        texts = [t for t in texts if t]
+        if not texts:
+            return
+        # 引用**触发这条会话的那句**（合并批的第一条），不是最后一条：
+        # 连发三条时，对方看到「机器人引用了我最先说的那句」，指向最清楚。
+        reply_to = str(batch[0].get("reply_to") or "")
+        reply = ""
+        try:
+            reply = persona.run_turn(self.session_key, "\n".join(texts),
+                                     self.target, self.target_id,
+                                     batch[0].get("sender") or "")
+        except Exception:
+            log.exception("扮演轮异常 %s", self.session_key)
+        if reply.strip():
+            self._deliver(False, reply, [], "", reply_to=reply_to)
+
     def _run_turn(self, batch):
         """在 worker 线程里跑一轮（run_agent_stream 是同步生成器）。"""
+        # 扮演态走自己那条路：不给工具、只一次调用、每轮配一张图。判定放在
+        # 最前面，因为下面整段都是「生图机器人」的逻辑（confirm_gate /
+        # direct_gen / agent 循环），扮演态一个都不该碰上。
+        if persona.active_card(self.session_key) is not None:
+            self._run_persona_turn(batch)
+            return
         # 表情包收藏：群图趁链接活着赶紧落盘，跟「这轮回不回」无关——
         # 接话被拒的轮次里出现的图也照收。下载是阻塞 IO，好在已经在
         # worker 线程上。失败只记日志，别让它碰倒整轮对话。
@@ -1138,12 +1175,16 @@ class SessionRunner:
         reply = "\n".join(p for p in reply_parts if p.strip())
         self._deliver(sent_by_tool, reply, images, receipt_spoke)
 
-    def _deliver(self, sent_by_tool, reply, images, receipt_spoke=""):
+    def _deliver(self, sent_by_tool, reply, images, receipt_spoke="",
+                 reply_to=""):
         """把结果发回 QQ。图片过一遍 image_out（甩掉工作流元数据），格式看管理页开关。
 
         `receipt_spoke` 是**后台已经直发**的那句生图回执（见
         `generate_image._qq_receipt`）：这种情况下正文已被丢弃，但机器人确实
         开过口，冷却计时与群聊背景照记——不然刚回完就接着接话。
+
+        `reply_to` 是本条消息的 message_id：给了就带引用发（扮演态要「谁 @ 就
+        引用谁那句」）。图片那条不带——`send_image` 走的是另一条拼段的路。
         """
         from app.agents import image_send_format
         send_text = (qq_api.send_group if self.target == "group"
@@ -1152,7 +1193,7 @@ class SessionRunner:
 
         if not sent_by_tool and reply.strip():
             try:
-                send_text(self.target_id, reply)
+                send_text(self.target_id, reply, reply_to=reply_to or None)
                 spoke = True
             except Exception as exc:
                 # 非好友拒收是可预期的策略限制，给一句人话；别的失败照旧留堆栈。
@@ -1300,6 +1341,29 @@ class QQBot:
 
         session_key = _session_key(target, target_id)
 
+        # ── 角色扮演：三条 `#` 命令 + 扮演态的静默窗口 ──────────────
+        # 拦在加说话人前缀之前（命令要认整条原文），也拦在下面所有生图逻辑
+        # 之前。群里照旧要 @ 才走得到这儿 —— 这里已经在 _should_reply 放行
+        # 之后，所以没开「不 @ 也能使唤它」这个口子。
+        cmd = persona.handle_command(session_key, text)
+        if cmd is not None:
+            try:
+                send = (qq_api.send_group if target == "group"
+                        else qq_api.send_private)
+                send(target_id, cmd,
+                     reply_to=str(ev.get("message_id") or "") or None)
+            except Exception:
+                log.exception("回角色扮演命令失败 %s", session_key)
+            return
+
+        runner = self._runner_for(session_key, target, target_id)
+        # 扮演态换成 10 秒窗口（见 SessionRunner.debounce）：按句子聊天时，
+        # 1.5 秒会把「他说完一句、停两秒又补一句」切成两轮，回两遍、出两张图。
+        # 放在 submit 之前设——_loop 是在 submit 之后才开始 sleep 的。
+        runner.debounce = (persona.DEBOUNCE_SECONDS
+                           if persona.active_card(session_key) is not None
+                           else QQ_DEBOUNCE_SECONDS)
+
         # 群里要带上说话人，否则模型不知道是谁在问；私聊不用。
         # 没有文字时不加——「引用一条 + 不写字」的正文本来就是空的，硬拼
         # 出一个「张三：」只会让模型看到一行没有内容的归属标记。
@@ -1313,9 +1377,10 @@ class QQBot:
             extra += " +%d 条引用" % len(quotes)
         log.info("← %s %s（%s）: %s%s", target, target_id, reason,
                  text[:60].replace("\n", " "), extra)
-        self._runner_for(session_key, target, target_id).submit(
+        runner.submit(
             text, sender, image_urls, quotes,
-            at_me=(reason.startswith("被 @") or reason == "私聊"))
+            at_me=(reason.startswith("被 @") or reason == "私聊"),
+            reply_to=str(ev.get("message_id") or ""))
 
     async def _probe(self):
         """启动时探一下协议端在不在，不在就只警告、照常去连 WS。"""

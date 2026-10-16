@@ -198,10 +198,14 @@ class ReceiptNoteTest(_SubmitHarness):
         2026-10-16：**12 → 13**。「anima多图」（anima 配方一次出多张，默认 5 张）
         单独起一行——它和「连续小漫画」不是同一件事（一个是剧情连贯多格，一个是
         同一需求快速出多张），挤进漫画那行会把两种玩法说糊。
+
+        2026-10-16 当天第二轮：**13 → 14**。加「想聊天：发『#角色扮演』…」——
+        角色扮演的入口只在命令回话里出现的话，群里没人知道有这东西（用户点名
+        要在任务回执里带上）。
         ⚠️ 这里钉的只是**内置默认**；线上真身是 `agents/qq/settings.json` 的
         `receipt_note`（那份覆盖优先，已同步改）。
         """
-        self.assertEqual(len(self._note(None).splitlines()), 13)
+        self.assertEqual(len(self._note(None).splitlines()), 14)
 
     def test_default_note_lists_every_nameable_channel(self):
         """2026-10-07 用户拍板「把我全部的可用渠道都加上去」——能点名的
@@ -294,7 +298,7 @@ class BotKeepsQuietTest(unittest.TestCase):
         runner = qq_bot.SessionRunner(None, "group_9", "group", "9")
         sent = []
         batch = [{"text": "画个猫", "sender": "233", "images": [], "quotes": []}]
-        send = lambda gid, text, limit=None: (sent.append(text), 1)[1]
+        send = lambda gid, text, limit=None, reply_to=None: (sent.append(text), 1)[1]
         with mock.patch.object(qq_bot, "run_agent_stream",
                                lambda *a, **k: iter(events)), \
                 mock.patch.object(qq_bot.direct_gen, "ENABLED", False), \
@@ -336,7 +340,7 @@ class BotKeepsQuietTest(unittest.TestCase):
         # 用假群号 group_9 往真实数据目录里写一条（测试污染）。
         with mock.patch.object(
                 qq_api, "send_group",
-                lambda gid, text, limit=None: (sent.append(text), 1)[1]), \
+                lambda gid, text, limit=None, reply_to=None: (sent.append(text), 1)[1]), \
                 mock.patch.object(qq_bot.interject, "mark_spoke") as spoke, \
                 mock.patch.object(qq_bot.recent, "remember"):
             runner._deliver(False, "", [], "任务已提交，正在画了。")

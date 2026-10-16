@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>人设卡池</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23d4537e'/></svg>">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0a0a0f;
+    --bg-elev: #12121a;
+    --bg-input: #1a1a24;
+    --border: #2a2a3a;
+    --border-soft: #1f1f2e;
+    --text: #e8e8f0;
+    --text-dim: #8888a0;
+    --text-mute: #555570;
+    --accent: #d4537e;
+    --ok: #4ade80;
+    --err: #f87171;
+    --radius: 10px;
+  }
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.7;
+  }
+  .wrap { height: 100vh; display: flex; flex-direction: column; }
+  header {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 14px 22px; border-bottom: 1px solid var(--border);
+    background: var(--bg-elev);
+  }
+  header h1 { font-size: 15px; font-weight: 500; }
+  header .hint { color: var(--text-dim); font-size: 13px; flex: 1; min-width: 240px; }
+  button {
+    background: var(--bg-input); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 14px; font-size: 13px; cursor: pointer;
+    font-family: inherit;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger:hover { border-color: var(--err); color: var(--err); }
+  #status { font-size: 13px; color: var(--text-dim); min-width: 60px; }
+  #status.ok { color: var(--ok); }
+  #status.err { color: var(--err); }
+
+  .body { flex: 1; display: flex; min-height: 0; }
+  aside {
+    width: 260px; flex-shrink: 0; border-right: 1px solid var(--border);
+    overflow-y: auto; padding: 12px;
+  }
+  .card-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; border-radius: var(--radius); cursor: pointer;
+    border: 1px solid transparent; margin-bottom: 6px;
+  }
+  .card-item:hover { background: var(--bg-elev); }
+  .card-item.on { background: var(--bg-elev); border-color: var(--accent); }
+  .card-item .av {
+    width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+    background: var(--bg-input); display: flex; align-items: center;
+    justify-content: center; font-size: 16px; overflow: hidden;
+  }
+  .card-item .av img { width: 100%; height: 100%; object-fit: cover; }
+  .card-item .nm { font-size: 14px; }
+  .card-item .ds { font-size: 12px; color: var(--text-mute); }
+  .card-item .txt { min-width: 0; }
+  .card-item .nm, .card-item .ds {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  main { flex: 1; overflow-y: auto; padding: 22px 26px; min-width: 0; }
+  .empty { color: var(--text-mute); padding: 40px 0; text-align: center; }
+  .field { margin-bottom: 16px; }
+  .field label { display: block; font-size: 13px; color: var(--text-dim); margin-bottom: 6px; }
+  .field .tip { font-size: 12px; color: var(--text-mute); margin-top: 5px; }
+  input[type=text], textarea {
+    width: 100%; background: var(--bg-input); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px;
+    font-family: inherit; font-size: 13px; line-height: 1.7; resize: vertical;
+  }
+  input[type=text]:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  textarea.big { min-height: 180px; }
+  textarea.mid { min-height: 96px; }
+  .row { display: flex; gap: 16px; }
+  .row > .field { flex: 1; }
+  .foot {
+    display: flex; gap: 10px; align-items: center;
+    padding-top: 8px; border-top: 1px solid var(--border-soft); margin-top: 8px;
+  }
+  .foot .spacer { flex: 1; }
+  .badge {
+    display: inline-block; font-size: 12px; color: var(--text-mute);
+    background: var(--bg-input); border-radius: 6px; padding: 2px 8px; margin-right: 6px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>人设卡池</h1>
+    <div class="hint">
+      群里发「<b>#角色扮演</b>」看清单，发「<b>#角色名</b>」让它演那个角色（每句话配一张图），发「<b>#出戏</b>」变回生图机器人。私聊同样要发一次命令才进。
+    </div>
+    <button id="btnNew">＋ 新建</button>
+    <button id="btnSave" class="primary">保存</button>
+    <span id="status"></span>
+  </header>
+
+  <div class="body">
+    <aside id="list"></aside>
+    <main id="pane"></main>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let cards = [];
+let cur = -1;
+
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function say(msg, cls) {
+  const el = $("status");
+  el.textContent = msg || "";
+  el.className = cls || "";
+  if (msg) setTimeout(() => { if (el.textContent === msg) say(""); }, 3000);
+}
+
+async function load() {
+  try {
+    const r = await fetch("/api/characters");
+    const d = await r.json();
+    cards = d.cards || [];
+    if (cur >= cards.length) cur = cards.length - 1;
+    render();
+  } catch (e) {
+    say("读卡库失败：" + e, "err");
+  }
+}
+
+function render() {
+  const list = $("list");
+  if (!cards.length) {
+    list.innerHTML = '<div class="empty">还没有卡</div>';
+  } else {
+    list.innerHTML = cards.map((c, i) => {
+      const av = (c.avatar || "").startsWith("/") || (c.avatar || "").startsWith("http")
+        ? '<img src="' + esc(c.avatar) + '" alt="">'
+        : esc(c.avatar || (c.name || "?").slice(0, 1));
+      const sub = c.description || c.personality || "";
+      return '<div class="card-item' + (i === cur ? " on" : "") + '" onclick="pick(' + i + ')">'
+        + '<div class="av">' + av + '</div>'
+        + '<div class="txt"><div class="nm">' + esc(c.name || "(无名)") + '</div>'
+        + '<div class="ds">' + esc(sub) + '</div></div></div>';
+    }).join("");
+  }
+  renderPane();
+}
+
+function renderPane() {
+  const pane = $("pane");
+  if (cur < 0 || !cards[cur]) {
+    pane.innerHTML = '<div class="empty">左边选一张卡，或者新建一张</div>';
+    return;
+  }
+  const c = cards[cur];
+  pane.innerHTML = `
+    <div class="row">
+      <div class="field">
+        <label>名字（群里就发 #这个名字）</label>
+        <input type="text" id="f_name" value="${esc(c.name)}">
+      </div>
+      <div class="field" style="max-width:170px">
+        <label>头像（emoji 或图片地址）</label>
+        <input type="text" id="f_avatar" value="${esc(c.avatar)}">
+      </div>
+    </div>
+    <div class="field">
+      <label>一句话说明（列清单时给它配这行）</label>
+      <input type="text" id="f_desc" value="${esc(c.description)}">
+    </div>
+    <div class="field">
+      <label>性格标签（只是给卡池页看的，不参与对话）</label>
+      <input type="text" id="f_personality" value="${esc(c.personality)}">
+    </div>
+    <div class="field">
+      <label>人设正文</label>
+      <textarea class="big" id="f_system">${esc(c.systemPrompt)}</textarea>
+      <div class="tip">这一段就是它的身份、性格和说话方式——扮演态的系统提示词里只有这个，没有别的规矩。</div>
+    </div>
+    <div class="field">
+      <label>外观固定块（英文 booru 标签）</label>
+      <textarea class="mid" id="f_appearance">${esc(c.appearancePrompt)}</textarea>
+      <div class="tip">发色 / 发型 / 瞳色 / 体型这类不变的特征。这段由代码原样拼在每张画面最前面，所以第 100 张也还是同一个人——不要写会变的东西（动作、场景、表情）。</div>
+    </div>
+    <div class="field">
+      <label>服饰（英文 booru 标签，可留空）</label>
+      <textarea class="mid" id="f_outfit">${esc(c.outfitPrompt)}</textarea>
+      <div class="tip">常服装扮。留空就每轮由它按剧情自己写。</div>
+    </div>
+    <div class="field">
+      <label>参考图（可留空）</label>
+      <input type="text" id="f_ref" value="${esc(c.referenceImage)}">
+    </div>
+    <div class="foot">
+      <span class="badge">id: ${esc(c.id || "待生成")}</span>
+      <span class="spacer"></span>
+      <button class="danger" onclick="del()">删除这张卡</button>
+    </div>`;
+}
+
+function collect() {
+  if (cur < 0 || !cards[cur]) return;
+  const c = cards[cur];
+  c.name = $("f_name").value.trim();
+  c.avatar = $("f_avatar").value.trim();
+  c.description = $("f_desc").value.trim();
+  c.personality = $("f_personality").value.trim();
+  c.systemPrompt = $("f_system").value.trim();
+  c.appearancePrompt = $("f_appearance").value.trim();
+  c.outfitPrompt = $("f_outfit").value.trim();
+  c.referenceImage = $("f_ref").value.trim();
+}
+
+function pick(i) {
+  collect();
+  cur = i;
+  render();
+}
+
+function add() {
+  collect();
+  cards.push({
+    id: "", name: "新角色", description: "", avatar: "",
+    personality: "", systemPrompt: "", appearancePrompt: "",
+    outfitPrompt: "", referenceImage: "",
+  });
+  cur = cards.length - 1;
+  render();
+  $("f_name").focus();
+  $("f_name").select();
+}
+
+function del() {
+  const c = cards[cur];
+  if (!c) return;
+  if (c.name && !confirm("删掉「" + c.name + "」？正在演它的会话会自动变回生图机器人。")) return;
+  cards.splice(cur, 1);
+  if (cur >= cards.length) cur = cards.length - 1;
+  render();
+}
+
+async function save() {
+  collect();
+  const bad = cards.findIndex((c) => !c.name);
+  if (bad >= 0) {
+    cur = bad;
+    render();
+    say("第 " + (bad + 1) + " 张卡还没写名字", "err");
+    return;
+  }
+  try {
+    const r = await fetch("/api/characters", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cards }),
+    });
+    const d = await r.json();
+    if (!d.ok) { say(d.error || "保存失败", "err"); return; }
+    cards = d.cards || [];
+    render();
+    say("已保存", "ok");
+  } catch (e) {
+    say("保存失败：" + e, "err");
+  }
+}
+
+$("btnNew").onclick = add;
+$("btnSave").onclick = save;
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); save(); }
+});
+window.addEventListener("beforeunload", collect);
+load();
+</script>
+</body>
+</html>

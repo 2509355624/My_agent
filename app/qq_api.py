@@ -413,6 +413,19 @@ def image_segment(path_or_url):
     return {"type": "image", "data": {"file": "file://" + abs_path}}
 
 
+def reply_segment(message_id):
+    """引用回复段（OneBot 11：`{"type":"reply","data":{"id":...}}`）。
+
+    挂在消息段数组**最前面**，QQ 里那条消息就成了「引用着对方那一句」的
+    样子。角色扮演要的就是这个：谁 @ 就回谁，回的时候把他那句带上
+    （2026-10-16 用户点名：「他就可以引用谁的那个回复，然后再去回复他」）。
+
+    id 原样转字符串：协议端报上来的是数字串，但 OneBot 两种写法都能收，
+    这里不做猜测、也不做校验。
+    """
+    return {"type": "reply", "data": {"id": str(message_id)}}
+
+
 # ─── 发送 ────────────────────────────────────────────
 
 # 协议端拒绝给「非好友」发私聊时的固定话术。QQ 的反骚扰策略：机器人账号不能给
@@ -591,32 +604,47 @@ def _call_private(user_id, message, timeout=30):
         raise
 
 
-def send_private(user_id, message, limit=None):
+def _with_reply(chunk, i, reply_to):
+    """给**第一段**挂引用段，后面几段原样发。
+
+    只挂第一段：多段是同一句话被长度切开的续，段段都挂会变成连着引用好几条，
+    群里刷屏。返回仍是「一条消息」，段数组或纯文本都吃。
+    """
+    if not reply_to or i:
+        return chunk
+    rest = chunk if isinstance(chunk, list) else [text_segment(chunk)]
+    return [reply_segment(reply_to)] + rest
+
+
+def send_private(user_id, message, limit=None, reply_to=None):
     """给某个好友发消息（自动分段）。返回发出的条数。
 
     非好友直接私聊会被 QQ 拒；能救的情况由 `_call_private` 兜底（群临时会话）。
     **逐条兜底**而不是整段重发：这样已经发出去的段不会重复发一遍。
+    reply_to 见 `_with_reply`。
     """
     chunks = message if isinstance(message, list) else split_message(
         to_qq_text(message), limit)
     for i, chunk in enumerate(chunks):
         if i:
             time.sleep(_SEND_INTERVAL)
-        _call_private(user_id, chunk)
-        _send_log("private", user_id, chunk)
+        seg = _with_reply(chunk, i, reply_to)
+        _call_private(user_id, seg)
+        _send_log("private", user_id, seg)
     return len(chunks)
 
 
-def send_group(group_id, message, limit=None):
-    """往某个群发消息（自动分段）。返回发出的条数。"""
+def send_group(group_id, message, limit=None, reply_to=None):
+    """往某个群发消息（自动分段）。返回发出的条数。reply_to 见 `_with_reply`。"""
     chunks = message if isinstance(message, list) else split_message(
         to_qq_text(message), limit)
     for i, chunk in enumerate(chunks):
         if i:
             time.sleep(_SEND_INTERVAL)
+        seg = _with_reply(chunk, i, reply_to)
         _call("send_group_msg",
-              {"group_id": int(group_id), "message": chunk}, timeout=30)
-        _send_log("group", group_id, chunk)
+              {"group_id": int(group_id), "message": seg}, timeout=30)
+        _send_log("group", group_id, seg)
     return len(chunks)
 
 
