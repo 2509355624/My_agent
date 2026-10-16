@@ -137,16 +137,22 @@ class ChannelParseTest(unittest.TestCase):
                 spaced = name.replace("krea2", "krea2 ", 1).replace("真人cos", "真人 cos")
                 self.assertEqual(_pc("%s 1girl" % spaced), (cid, "1girl"))
 
-    def test_retired_bare_krea2_is_not_a_channel(self):
-        """通用 `krea2` 已下架：光说「krea2」不算点名。
+    def test_bare_krea2_now_falls_back_to_general(self):
+        """光说「krea2」→ krea2 系最中性的那条（**2026-10-16 用户拍板改口径**）。
 
-        下架前它会把整句锁成 krea2 档、把剩下的字当正文；现在必须**整句原样**
-        交出去（`(None, text)`），由模型照默认渠道走——不然用户说「krea2」
-        会被静默当成某个风格渠道。
+        旧口径（已推翻）：通用 `krea2` 渠道 2026-10-08 下架后，光说「krea2」
+        不算点名，整句原样交给模型。用户原话：「也放开吧，让 ai 自己选个
+        krea2 的，不然老是跑偏」——现在落 `krea2-general`，**不是**把下架的
+        那条渠道请回来（`skills/krea2` 仍是 `ARCHIVED_SKILLS`），只是给「没
+        指定具体变体」一个落点。
         """
-        for text in ("krea2 一个女孩", "krea2 1girl, masterpiece"):
+        for text, want in (("krea2 一个女孩", ("krea2-general", "一个女孩")),
+                           ("krea2 1girl, masterpiece",
+                            ("krea2-general", "1girl, masterpiece"))):
             with self.subTest(text=text):
-                self.assertEqual(_pc(text), (None, text))
+                self.assertEqual(_pc(text), want)
+        # ⚠️ 尾巴挡住 `-`：带连字符的 id 不许被裸词吃成 krea2-general
+        self.assertEqual(_pc("krea2-coscandid 1girl")[0], "krea2-coscandid")
 
     def test_fixed_word_inside_english_prompt_is_ignored(self):
         # 档位在场时固定渠道词不参与（英文提示词里撞词不误判）
@@ -343,6 +349,88 @@ class SkillIdChannelTest(unittest.TestCase):
         self.assertEqual(direct_gen._parse_channel(text), (None, text))
 
 
+class BareKrea2WordTest(unittest.TestCase):
+    """krea2 系的中文点名词**不带 `krea2` 前缀也认**（2026-10-16 用户拍板）。
+
+    原话：「也放开吧，让 ai 自己选个 krea2 的，不然老是跑偏」。实录：私聊
+    `亚洲真人 不穿衣服 高抬腿 腿部特写` 认不出渠道 → 落默认 anima多图
+    （10 格漫画）。**这不是 bug 修，是用户主动扩了识别的口子。**
+
+    分两档，判据不同：
+
+    - **独特词**（亚洲真人 / 动漫真人 / 宝可梦 / 米山舞 / 铭音 / 鬼针草）：
+      当正文形容词用几乎不可能，**全句可认**（跟既有中文点名词同待遇）。
+    - **通用词**（写实 / 通用 / 奶油 / 柔光 / 日系）：日常就是形容词，**只认
+      开头**那一次、且后跟分隔符——`写实点的猫` 必须留在正文里给 AI。
+    """
+
+    def test_the_incident_line(self):
+        """事故原话：句首一个风格词，后面全是画面内容。"""
+        self.assertEqual(
+            direct_gen._parse_channel("亚洲真人 不穿衣服 高抬腿 腿部特写"),
+            ("krea2-asianmix", "不穿衣服 高抬腿 腿部特写"))
+
+    def test_unique_words_are_recognized_anywhere(self):
+        for text, skill in (("动漫真人 一只猫", "krea2-anime2real"),
+                            ("宝可梦 皮卡丘", "krea2-pokemon"),
+                            ("米山舞 初音未来", "krea2-yoneyama"),
+                            ("铭音 初音未来", "krea2-mingyin"),
+                            ("画个亚洲真人", "krea2-asianmix")):
+            with self.subTest(text=text):
+                self.assertEqual(direct_gen._parse_channel(text)[0], skill)
+
+    def test_guizhencao_without_prefix_lands_on_krea2(self):
+        """两边同名的词，无前缀时按用户拍板落 krea2 那条；带前缀各走各的。"""
+        self.assertEqual(direct_gen._parse_channel("鬼针草 初音未来"),
+                         ("krea2-guizhencao", "初音未来"))
+        self.assertEqual(direct_gen._parse_channel("anima鬼针草 初音")[0],
+                         "anima-guizhencao")
+        self.assertEqual(direct_gen._parse_channel("krea2鬼针草 初音")[0],
+                         "krea2-guizhencao")
+
+    def test_bare_krea2_falls_back_to_general(self):
+        """光打「krea2」两个字 → 族里最中性的那条。"""
+        self.assertEqual(direct_gen._parse_channel("krea2 一只猫"),
+                         ("krea2-general", "一只猫"))
+
+    def test_bare_krea2_does_not_eat_compound_ids(self):
+        """⚠️ 裸 `krea2` 的尾巴必须挡住 `-`：机器人回执里那句
+        `krea2-coscandid：…` 不许被吃成 `krea2`（渠道锁成 general）。"""
+        text = "krea2-coscandid：realistic cosplay photo, 1girl"
+        self.assertEqual(direct_gen._parse_channel(text)[0], "krea2-coscandid")
+
+    def test_plain_words_only_at_the_head(self):
+        for text, skill in (("写实 一只猫", "krea2-real"),
+                            ("通用 一只猫", "krea2-general"),
+                            ("奶油 一只猫", "krea2-creamy"),
+                            ("柔光 一只猫", "krea2-softlight"),
+                            ("日系 一只猫", "krea2-rella"),
+                            ("写实", "krea2-real")):
+            with self.subTest(text=text):
+                self.assertEqual(direct_gen._parse_channel(text)[0], skill)
+
+    def test_plain_words_need_a_separator(self):
+        """后不跟分隔符的（`写实点的猫`）是描述，留在正文里给 AI。"""
+        for text in ("写实点的猫", "日系风格的少女", "奶油色调的房间",
+                     "光线柔和一点"):
+            with self.subTest(text=text):
+                self.assertEqual(direct_gen._parse_channel(text), (None, text))
+
+    def test_named_channel_still_wins_over_plain_words(self):
+        """位置优先：前面点了名 / 打了档位的一律按那个来。"""
+        self.assertEqual(direct_gen._parse_channel("nai 写实 一只猫"),
+                         ("nai", "写实 一只猫"))
+        self.assertEqual(direct_gen._parse_channel("三档 写实 一只猫"),
+                         ("hd_3_clear", "写实 一只猫"))
+
+    def test_prefixed_long_names_still_win(self):
+        """带前缀的长名不许被裸词抢（同起点左优先，短名不许排前面）。"""
+        self.assertEqual(direct_gen._parse_channel("krea2米山舞 1girl"),
+                         ("krea2-yoneyama", "1girl"))
+        self.assertEqual(direct_gen._parse_channel("krea2亚洲真人 一只猫"),
+                         ("krea2-asianmix", "一只猫"))
+
+
 class AttributionStripTest(unittest.TestCase):
     """署名剥离不许吃掉渠道名（2026-10-16 用户报）。
 
@@ -358,7 +446,9 @@ class AttributionStripTest(unittest.TestCase):
         for text in ("krea2-coscandid：realistic cosplay photo, 1girl",
                      "silver-hd：1girl", "hd_3_gloss：1girl",
                      "anima-real：1girl", "三档：女骑士",
-                     "nai：1girl, blue hair"):
+                     "nai：1girl, blue hair",
+                     # 2026-10-16 放开的裸后缀词同样不许当署名剥
+                     "亚洲真人：一只猫", "宝可梦：皮卡丘"):
             with self.subTest(text=text):
                 self.assertEqual(direct_gen._strip_attribution(text), text)
 

@@ -1342,8 +1342,13 @@ class Krea2ChannelTest(unittest.TestCase):
                 # 名字里夹空格也认（`krea2 宝可梦` / `krea2 真人 cos`）
                 spaced = alias.replace("krea2", "krea2 ", 1)
                 self.assertEqual(_parse_channel("%s 1girl" % spaced), (cid, "1girl"))
-        # 裸 krea2 已下架，一个都不许命中
-        self.assertIsNone(_FIXED_CHAN_RE.search("krea2 一个女孩"))
+        # 2026-10-16 用户拍板改口径：光说「krea2」现在落 krea2-general
+        # （旧口径「已下架、不算点名、整句交出去」被推翻，见
+        # `test_direct_gen.ChannelParseTest.test_bare_krea2_now_falls_back...`）；
+        # **带前缀的长名照旧**，不许被裸词抢。
+        self.assertEqual(_parse_channel("krea2 一个女孩"),
+                         ("krea2-general", "一个女孩"))
+        self.assertEqual(_parse_channel("krea2米山舞 1girl")[0], "krea2-yoneyama")
 
     def test_tool_description_lists_all_ten(self):
         """工具描述那张渠道清单要写全 13 条**别名**，否则模型编不出新渠道名。"""
@@ -2311,15 +2316,18 @@ class AnimaGuizhencaoTest(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(_parse_channel(text)[0], want)
 
-    def test_bare_word_does_not_hijack_anything(self):
-        """裸「鬼针草」不是渠道词也不是画风词——光说它不触发（走默认）。
+    def test_bare_word_now_lands_on_krea2(self):
+        """裸「鬼针草」→ **krea2** 那条（2026-10-16 用户拍板改口径）。
 
-        krea2鬼针草 / anima鬼针草 各自要带族名前缀，谁也别抢谁的。"""
+        旧口径（已推翻）：两边同名，光说「鬼针草」谁也别抢、不触发。
+        用户拍板：无前缀时落 krea2；要 anima 那条的打全名「anima鬼针草」。
+        """
         from app.direct_gen import _parse_channel
         self.assertEqual(_parse_channel("krea2鬼针草 少女")[0], "krea2-guizhencao")
+        self.assertEqual(_parse_channel("anima鬼针草 少女")[0], "anima-guizhencao")
         for text in ("鬼针草", "鬼针草 少女"):
             with self.subTest(text=text):
-                self.assertEqual(_parse_channel(text)[0], None, text)
+                self.assertEqual(_parse_channel(text)[0], "krea2-guizhencao", text)
 
     def test_no_i2i_skeleton(self):
         from app.tools.normal import generate_image as gi

@@ -293,7 +293,30 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    # **原话里直接打 id** 这条（`_parse_channel` 拿的是原话）。
                    "anima-line": "anima-line",
                    "anima-real": "anima-real",
-                   "anima-guizhencao": "anima-guizhencao"}
+                   "anima-guizhencao": "anima-guizhencao",
+                   # ── 2026-10-16 用户拍板：krea2 系的中文点名词**不带 `krea2`
+                   # 前缀也认**（原话「也放开吧，让 ai 自己选个 krea2 的，不然
+                   # 老是跑偏」）。私聊实录：`亚洲真人 不穿衣服 高抬腿 腿部特写`
+                   # 认不出渠道 → 落默认 anima多图（10 格漫画）。分两档收录，
+                   # 理由见下面 `_KREA2_PLAIN_RE`。
+                   "亚洲真人": "krea2-asianmix",
+                   "动漫真人": "krea2-anime2real",
+                   "宝可梦": "krea2-pokemon",
+                   "米山舞": "krea2-yoneyama",
+                   "铭音": "krea2-mingyin",
+                   # ⚠️「鬼针草」两边同名（anima / krea2 各挂一条）。无前缀时
+                   # 按用户拍板落 **krea2** 那条；要 anima 的打全名「anima鬼针草」。
+                   "鬼针草": "krea2-guizhencao",
+                   # 光打「krea2」两个字 → krea2 系最中性的那条（用户拍板）。
+                   # ⚠️ 通用 `krea2` 渠道 2026-10-08 已下架（ARCHIVED_SKILLS），
+                   # 这里不是把它请回来，是给「没指定具体变体」一个落点。
+                   "krea2": "krea2-general",
+                   # ↓ 通用词那一档，**只认开头**（见 `_KREA2_PLAIN_RE`）
+                   "写实": "krea2-real",
+                   "通用": "krea2-general",
+                   "奶油": "krea2-creamy",
+                   "柔光": "krea2-softlight",
+                   "日系": "krea2-rella"}
 _FIXED_CHAN_RE = re.compile(
     r"(?<![0-9A-Za-z_])"
     r"(anima\s*线条|anima\s*写实|anima\s*鬼针草"
@@ -309,9 +332,29 @@ _FIXED_CHAN_RE = re.compile(
     # `(?![0-9A-Za-z_])` 挡住（后面紧跟数字 3），认不出来就会整句交给模型；
     # 显式认了才稳。`步?` 让「qwen30」也命中。
     r"|qwen\s*30\s*步?"
+    # 2026-10-16 用户拍板放开的 krea2 系中文点名词（不带 `krea2` 前缀也认，
+    # 这批是**独特词**——当正文形容词用几乎不可能，所以全句可认）。
+    r"|亚洲真人|动漫真人|宝可梦|米山舞|铭音|鬼针草"
+    # 光打「krea2」两个字 → 落 krea2-general 兜底（用户拍板）。
+    # ⚠️ 两条约束都不能省：
+    #   ① 必须排在上面所有 `krea2\s*xxx` 长名**之后**——正则同起点左优先，
+    #      短名在前会把长名吃掉（2026-10-08 实测 `krea2米山舞` 被吃成 `krea2`）；
+    #   ② 尾部要**额外挡住 `-`**：公共尾巴 `(?![0-9A-Za-z_])` 对连字符放行，
+    #      不挡的话机器人回执里那句 `krea2-coscandid：…` 会被吃成 `krea2`
+    #      （渠道锁成 general），刚修好的「id 直接点名」那条路又坏掉。
+    r"|krea2(?![0-9A-Za-z_-])"
     r"|sd|qwen-hd|qwen|nffa|nai|cunny|miao)"
     r"(?![0-9A-Za-z_])",
     re.I)
+
+# krea2 系里**通用词**那几条的中文点名词（2026-10-16 用户拍板放开）。
+# ⚠️ 跟上面那批「独特词」分开收录，因为独特性差得远：这几个在日常语境里本来
+# 就是形容词（「写实点的」「奶油色调」「日系写真」），塞进 `_FIXED_CHAN_RE`
+# 会在**全句**乱抢（那里句中是 `search`）、还把词从正文里抠掉。
+# 所以这里只认**开头**那一次，而且**后面得跟分隔符或行尾**——用户在句首点名
+# 才算渠道（`写实 不穿衣服 高抬腿`）；`写实点的猫` / `日系风格的少女` 留在
+# 正文里，AI 自己看得懂那是描述。
+_KREA2_PLAIN_RE = re.compile(r"(写实|通用|奶油|柔光|日系)(?=[\s,，、。:：]|$)")
 
 # 开头/句中点名的**渠道 id 原名**（带 `-` / `_` 的复合名，如 `krea2-coscandid`）。
 # 2026-10-16 私聊实录：用户把机器人回执里那句
@@ -516,6 +559,11 @@ def _parse_channel(text):
     - 「1girl, soft lighting」→ (None, 原文)  ← soft 是画面内容，不是画风词
     - 「silver 三档」        → hd_3_clear / silver（silver 认不出，落档位；silver
                                 留在正文里，由 AI 判是不是渠道）
+    - 「亚洲真人 高抬腿」     → krea2-asianmix / 高抬腿（krea2 裸后缀，全句可认）
+    - 「krea2 一只猫」        → krea2-general / 一只猫（裸 krea2 兜底）
+    - 「写实 一只猫」         → krea2-real / 一只猫（通用词**只认开头**）
+    - 「写实点的猫」          → (None, 原文)  ← 通用词后不跟分隔符时是描述
+    - 「krea2-coscandid：…」  → krea2-coscandid / …（id 原名，见 `_SKILL_ID_RE`）
     - 没有任何渠道词         → (None, 原文)
     """
     text = text.strip()
@@ -536,6 +584,18 @@ def _parse_channel(text):
         skill = _fixed_chan(hm.group(0), text)
         desc = _DESC_TAIL_RE.sub("", lead[hm.end():].strip())
         desc = re.sub(r"^[\s,，、:：]+|[\s，、]+$", "", desc)
+        return skill, desc
+
+    # ①-2 krea2 系的**通用词**后缀（写实 / 通用 / 奶油 / 柔光 / 日系）：
+    # 同样只认**开头**这一次，且后跟分隔符（2026-10-16 用户拍板放开，理由
+    # 见 `_KREA2_PLAIN_RE`）。放在固定渠道词之后，所以「nai 写实 …」这种
+    # 前面点了名的一律按那个渠道走；档位词同理（`三档 写实 …` 开头是档位，
+    # 这里不匹配，照旧落 `hd_3_clear`）。
+    pm = _KREA2_PLAIN_RE.match(lead)
+    if pm:
+        skill = _fixed_chan(pm.group(1), text)
+        desc = _DESC_TAIL_RE.sub("", lead[pm.end():].strip())
+        desc = re.sub(r"^[\s,，、。:：]+|[\s，、]+$", "", desc)
         return skill, desc
 
     tier, style, rest = _lead_commands(text)
