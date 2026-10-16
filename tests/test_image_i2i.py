@@ -319,14 +319,19 @@ class I2IWorkflowShapeTest(unittest.TestCase):
         return wf
 
     def test_the_whitelist_is_redraw_plus_lllite_plus_qwen(self):
-        """白名单 = 12 个重绘档 + 6 个锁构图档 + qwen 三个编辑/修复档，共 22。"""
+        """白名单 = 12 个重绘档 + 6 个锁构图档 + qwen 四个编辑/修复档，共 23。
+
+        `qwen30`（2026-10-16 用户新增的 30 步副本）骨架与 `qwen_image_v1`
+        同款（手写件、denoise 写死 1），所以归在 qwen 那一组。
+        """
         self.assertEqual(len(gi._I2I_ANIMA_SKILLS), 12)
         self.assertEqual(len(gi._I2I_LLLITE_SKILLS), 6)
         self.assertEqual(
             gi._I2I_SKILLS,
             gi._I2I_ANIMA_SKILLS + gi._I2I_LLLITE_SKILLS
-            + ("qwen_image_v1", "qwen-hd", "qwen-charsheet", "qwen-restore"))
-        self.assertEqual(len(gi._I2I_SKILLS), 22)
+            + ("qwen_image_v1", "qwen-hd", "qwen-charsheet", "qwen-restore",
+               "qwen30"))
+        self.assertEqual(len(gi._I2I_SKILLS), 23)
         # 两组机制不许重叠：同一份骨架不可能既删 EmptyLatentImage 又留着它
         self.assertEqual(
             set(gi._I2I_ANIMA_SKILLS) & set(gi._I2I_LLLITE_SKILLS), set())

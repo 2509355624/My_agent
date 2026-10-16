@@ -358,9 +358,11 @@ class ToolDescriptionTest(unittest.TestCase):
             _I2I_ANIMA_SKILLS, _I2I_LLLITE_SKILLS, _I2I_SKILLS)
         self.assertEqual(len(_I2I_ANIMA_SKILLS), 12)
         self.assertEqual(len(_I2I_LLLITE_SKILLS), 6)
-        self.assertEqual(len(_I2I_SKILLS), 22)
+        # 2026-10-16：+1 = `qwen30`（qwen 的 30 步副本，骨架与 qwen_image_v1 同款）
+        self.assertEqual(len(_I2I_SKILLS), 23)
         for s in ("anima_clear", "anima_curvy", "hd_fast_clear", "hd_2_curvy",
                   "qwen_image_v1", "qwen-hd", "qwen-charsheet", "qwen-restore",
+                  "qwen30",
                   "silver", "silver-hd", "hd_3_clear", "hd_3_curvy"):
             self.assertIn(s, _I2I_SKILLS)
         for s in ("krea2", "image_gen_v1", "nffa", "miao", "cunny", "jank"):

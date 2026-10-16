@@ -95,6 +95,14 @@ class ChannelParseTest(unittest.TestCase):
                 ("krea2米山舞 一个女孩", "krea2-yoneyama", "一个女孩"),
                 ("krea2 亚洲真人 一个女孩", "krea2-asianmix", "一个女孩"),
                 ("qwen 写实街拍", "qwen_image_v1", "写实街拍"),
+                # 2026-10-16 用户新增：qwen 的 30 步副本。用户给的指令形态就是
+                # 「qwen30步，图生图，需求」——渠道词剥掉，剩下的一字不改交给 AI
+                # 去理解（「孔雀东南飞」要由 AI 译成「把这首诗写进画面」，
+                # 绝不能被当成提示词原样丢给下游）。
+                ("qwen30步，图生图，白衣上写孔雀东南飞",
+                 "qwen30", "图生图，白衣上写孔雀东南飞"),
+                ("qwen 30 步 一只猫", "qwen30", "一只猫"),   # 中间夹空格也认
+                ("qwen30 一只猫", "qwen30", "一只猫"),       # 不带「步」也认
                 ("nffa 插画少女", "nffa", "插画少女"),
                 ("cunny 一个女孩", "cunny", "一个女孩"),   # 2026-10-05 新渠道
                 ("miao 一个女孩", "miao", "一个女孩"),     # 2026-10-05 新渠道
@@ -2809,6 +2817,76 @@ class ReviseChannelListTest(unittest.TestCase):
             escape="", search="", anchor_note="n", last_skill="jank",
             last_prompt="p", lang="l", text="silver 生成")
         self.assertIn("silver", out)
+
+
+class Qwen30ChannelTest(unittest.TestCase):
+    """2026-10-16 用户新增渠道 `qwen30`（指令形态「qwen30步，图生图，需求」）。
+
+    它是 `qwen_image_v1` 的**高步数副本**：两条骨架都有（文生图 + 图生图），
+    除 `steps` 外参数照抄。用户明确拍板「qwen30步，没有说图生图，就是 qwen30步
+    的文生图」——所以文生图那条也得真能用（30 步），不是占位文件。
+
+    ⚠️ 只读文件，不出图。
+    """
+
+    def _load(self, name):
+        with open("skills/qwen30/" + name, encoding="utf-8") as f:
+            return json.loads(f.read().replace("__SEED__", "1"))
+
+    def _steps(self, wf):
+        return [n["inputs"]["steps"] for n in wf.values()
+                if "steps" in (n.get("inputs") or {})]
+
+    def test_both_workflows_are_30_steps(self):
+        for name in ("workflow.json", "workflow_i2i.json"):
+            with self.subTest(workflow=name):
+                self.assertEqual(self._steps(self._load(name)), [30])
+
+    def test_i2i_keeps_the_qwen_edit_shape(self):
+        """图生图骨架是 qwen 那条**手写**编辑路：denoise 写死 1、resolution 1024。
+
+        `denoise` 一旦可调就不是「只改一处、其余原样」了，别顺手改成 0.6
+        （那是动漫档那 12 份垫图重绘的参数）。
+        """
+        wf = self._load("workflow_i2i.json")
+        ks = [n["inputs"] for n in wf.values() if n["class_type"] == "KSampler"]
+        self.assertEqual([(k["denoise"], k["cfg"], k["sampler_name"],
+                           k["scheduler"]) for k in ks],
+                         [(1, 1.0, "euler", "simple")])
+        enc = [n["inputs"] for n in wf.values()
+               if n["class_type"] == "TextEncodeQwenImage21"]
+        self.assertEqual([e["resolution"] for e in enc], [1024])
+        self.assertTrue(enc[0]["images.image_1"], "缺源图输入，不是图生图骨架")
+
+    def test_base_model_is_the_official_gguf(self):
+        # 跟 qwen_image_v1 同款官方量化档（不是 UC）。
+        for name in ("workflow.json", "workflow_i2i.json"):
+            wf = self._load(name)
+            unet = [n["inputs"]["unet_name"] for n in wf.values()
+                    if n["class_type"] == "UnetLoaderGGUF"]
+            self.assertEqual(unet, ["qwen-image-2.1-Q4_K_M.gguf"])
+
+    def test_i2i_is_whitelisted(self):
+        """不在 `_I2I_SKILLS` 里的话，垫图会被静默降级成文生图、丢掉源图。"""
+        self.assertIn("qwen30", gi._I2I_SKILLS)
+
+    def test_timeout_is_the_qwen_tier(self):
+        self.assertEqual(image_jobs.task_timeout("qwen30"), 220)
+
+    def test_channel_is_allowed_and_seed_capable(self):
+        self.assertIn("qwen30", direct_gen._allowed_skills())
+        self.assertTrue(direct_gen._LOCAL_SEED_SKILL_RE.match("qwen30"))
+
+    def test_both_templates_list_the_channel(self):
+        """两份模板都要登记——漏一份模型就不认识这个词（规范两份是历史坑）。
+
+        同理，`qwen30` 也必须出现在 `_FIXED_CHAN_MAP`：模型那一路只是兜底，
+        **代码点名才是确定性的那条**。
+        """
+        for name in ("_MASTER_TEMPLATE", "_REVISE_TEMPLATE"):
+            with self.subTest(template=name):
+                self.assertIn("qwen30", getattr(direct_gen, name))
+        self.assertEqual(direct_gen._FIXED_CHAN_MAP.get("qwen30步"), "qwen30")
 
 
 class WorkflowParamsTest(unittest.TestCase):

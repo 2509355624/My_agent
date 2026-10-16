@@ -3006,8 +3006,9 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
 
         2026-10-10 晚用户重新开口：**qwen 系四条**（`qwen_image_v1` / `qwen-hd` /
         `qwen-charsheet` / `qwen-restore`）先是 400 秒；**2026-10-10 17:07 收到 220 秒**。
-        这条只锁「例外只有这四条、且它们取同一个值」，**不锁步数、也不锁画布**。
-        **除这四条之外**，任何渠道都不许再拿一个跟别人不一样的数。
+        这条只锁「例外只有这几条、且它们取同一个值」，**不锁步数、也不锁画布**。
+        **除这几条之外**，任何渠道都不许再拿一个跟别人不一样的数。
+        2026-10-16 用户加了 `qwen30`（qwen 的 30 步副本），同属这一组。
         """
         for skill in ("image_gen_v1", "nffa", "hd_3_clear",
                       "hd_3_curvy", "hd_3_gloss", "hd_3_soft", "krea2",
@@ -3016,12 +3017,12 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
             self.assertEqual(image_jobs.task_timeout(skill),
                              image_jobs.TASK_TIMEOUT, skill)
         self.assertEqual(image_jobs.TASK_TIMEOUT, 180)
-        # 例外只有 qwen 那四条，且一律 220
+        # 例外只有 qwen 那几条，且一律 220（2026-10-16 加 `qwen30`）
         self.assertEqual(sorted(image_jobs.SKILL_TIMEOUTS),
                          ["qwen-charsheet", "qwen-hd", "qwen-restore",
-                          "qwen_image_v1"])
+                          "qwen30", "qwen_image_v1"])
         for skill in ("qwen_image_v1", "qwen-hd", "qwen-charsheet",
-                      "qwen-restore"):
+                      "qwen-restore", "qwen30"):
             self.assertEqual(image_jobs.task_timeout(skill), 220, skill)
 
     def test_unknown_skill_falls_back_to_global(self):

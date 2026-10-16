@@ -243,6 +243,12 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    "qwen": "qwen_image_v1", "qwen-hd": "qwen-hd",
                    "qwen角色设定表": "qwen-charsheet",
                    "qwen修复": "qwen-restore",
+                   # 2026-10-16 用户新增：qwen 的高步数副本（只把 steps 提到 30，
+                   # 文生图 / 图生图各一支，其余参数照抄 qwen_image_v1）。
+                   # 用户原话：「给我上一个 qwen30 步的图生图，到时候我的指令就是，
+                   # qwen30步，图生图，需求」。`qwen30` 不带「步」也认——归一化后
+                   # （`_fixed_chan` 去空格 + 小写）两种写法都落到这两个 key 上。
+                   "qwen30步": "qwen30", "qwen30": "qwen30",
                    "nffa": "nffa", "nai": "nai",
                    "cunny": "cunny", "miao": "miao",
                    # 2026-10-11 新增：anima 的 LoRA 堆叠版（6 条 LoRA + silvermoonmix
@@ -286,6 +292,10 @@ _FIXED_CHAN_RE = re.compile(
     r"|krea2\s*铭音|krea2\s*鬼针草|krea2\s*铭鬼"
     r"|qwen\s*角色设定表"
     r"|qwen\s*修复"
+    # ⚠️ 必须排在下面裸词 `qwen` 前面：`qwen30步` 里的 `qwen` 本来被尾部
+    # `(?![0-9A-Za-z_])` 挡住（后面紧跟数字 3），认不出来就会整句交给模型；
+    # 显式认了才稳。`步?` 让「qwen30」也命中。
+    r"|qwen\s*30\s*步?"
     r"|sd|qwen-hd|qwen|nffa|nai|cunny|miao)"
     r"(?![0-9A-Za-z_])",
     re.I)
@@ -946,6 +956,8 @@ _MASTER_TEMPLATE = (
     "固定渠道（说左边这些词就填右边的 id）：\n"
     "- nai / nai_wide = NovelAI 云端，竖 832×1216 / 横 1216×832，认画师串和权重语法。\n"
     "- qwen / 千问 / 通义 = qwen_image_v1，云端、慢，prompt 写完整英文句子。\n"
+    "- qwen30步 = qwen30（qwen 的 **30 步**版，其余参数一模一样，更慢；"
+    "只有原话明说「qwen30步」时才填，光说 qwen 走上面那条）。\n"
     # ⚠️ 2026-10-09 用户拍板：**别再往这行里写「一次出多张（prompt 里用 --- 分段）」**。
     # 模型据此把「生成 10 张 XX」写成 `---` 分段交给 sd，而 sd 的骨架是
     # 720×1280 / 30 步 + 高清 20 步 @1440×2560（每张 50 步）——10 张在 180 秒里
@@ -978,6 +990,16 @@ _MASTER_TEMPLATE = (
     "{chan_hint}"
     "\n"
     "【图生图：明说才垫，引用图 + 只提需求 = 改词重画】\n"
+    # ⚠️ 这条模板只在**没带图**的轮次用（带图轮走 `_REVISE_TEMPLATE`），所以
+    # 「嘴上说了图生图、却一张源图都没给」这一态必须在这儿说死：否则模型照常
+    # 输出 prompt，凭空画一张交差，用户白等 50 秒（2026-10-16 用户拍板：
+    # 「直接回一句让你补引用」）。
+    "⚠️ **本轮用户没给任何图**（没引用、没附图）——他要是明说「图生图 / 垫图 / "
+    "照着这张画 / 复刻」，**不要凭空画一张**：图生图必须有源图，回一句"
+    "「把你要改的那张图引用一下（或直接发上来），我再动手」，本轮**不输出 "
+    "prompt / skill**——这句回话照样要走 `{{\"reply\": \"…\"}}` 那一态，"
+    "**别直接写中文散文**（散文解析不出来，整轮会掉回 agent）。\n"
+    "（他**没说**图生图、只是让你照需求画一张新图 → 照常出图，别多嘴回问。）\n"
     "**引用 / 附图本身不等于要垫图**——看原话里有没有「照着这张画」的意思。\n"
     " ① **明说要照着那张画**（「图生图 / 垫图 / 照着画 / 照这张画 / 复刻 / "
     "参考这张的构图」）→ `source_image` 填 1，**渠道不用改**"
@@ -990,7 +1012,8 @@ _MASTER_TEMPLATE = (
     "**自家图沿用账本里那个渠道**、别换；**引用的不是自家图（账本查不到）就没有"
     "原渠道，这时 skill 别填**，系统会走默认。\n"
     " ③ **明说「qwen 图生图」+ 只改一处**（其余原样）→ `source_image` 填 1，"
-    "配 skill=qwen_image_v1（明说「qwen 超清 / qwen超清」时换 qwen-hd），"
+    "配 skill=qwen_image_v1（明说「qwen 超清 / qwen超清」时换 qwen-hd；"
+    "原话是「qwen30步 图生图」时配 qwen30），"
     "prompt 只写一句改动指令（一张 1~2 分钟）。\n"
     " ④ **「qwen修复」**（引用图 + 说这三个字）= 把**这张图本身**修清楚 / 去噪 / "
     "去糊，不是重画一张。**本轮有引用图时，代码专路已经自己入队了、根本轮不到你**；"
@@ -1078,6 +1101,7 @@ _REVISE_TEMPLATE = (
     "说「anima线条 / anima写实 / anima鬼针草」（三条独立配方，不在画风体系里）；\n"
     "  nai / nai_wide = 说「nai」（画师串和权重语法认这两个）；\n"
     "  qwen_image_v1 = 说「qwen / 千问 / 通义」；image_gen_v1 = 说「sd」；\n"
+    "  qwen30 = 说「qwen30步」（qwen 的 **30 步**版，其余参数一模一样，更慢）；\n"
     "  krea2-yoneyama / krea2-rella / krea2-asianmix / krea2-anime2real / "
     "krea2-coscandid / krea2-pokemon / krea2-softlight / krea2-creamy / "
     "krea2-real / krea2-general / krea2-mingyin / krea2-guizhencao / "
@@ -1112,7 +1136,8 @@ _REVISE_TEMPLATE = (
     "原渠道，这时 skill 别填**，系统会走默认。\n"
     " ③ **明说「qwen 图生图」+ 只改一处**（其余原样）→ `source_image` 填 1，"
     "同时 skill 填 qwen_image_v1"
-    "（明说「qwen 超清 / qwen超清」时填 qwen-hd）、"
+    "（明说「qwen 超清 / qwen超清」时填 qwen-hd；"
+    "原话说「qwen30步 图生图」时填 qwen30）、"
     "prompt 只写**一句改动指令**（例 `change her coat to red, keep the pose, "
     "face and background exactly the same`），不要把整张图重新描述一遍。\n"
     " ④ **「qwen修复」**（引用图 + 说这三个字）= 把**这张图本身**修清楚 / 去噪 / "
@@ -1731,7 +1756,7 @@ def _ledger_hit(source):
 # NAI 不认 seed（传了直接报错），所以换档复刻只往这些渠道带种子。
 # ⚠️ `krea2` 这条是**前缀**匹配，`krea2-yoneyama` 等 5 条靠它覆盖
 # （2026-10-08 krea2 系拆 5 条后没改这里，改的是注释）。
-_LOCAL_SEED_SKILL_RE = re.compile(r"^(anima_|hd_|qwen_image_v1|image_gen_v1|krea2|nffa|cunny|miao)")
+_LOCAL_SEED_SKILL_RE = re.compile(r"^(anima_|hd_|qwen_image_v1|qwen30|image_gen_v1|krea2|nffa|cunny|miao)")
 
 
 def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):

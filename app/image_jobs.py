@@ -287,6 +287,9 @@ SKILL_TIMEOUTS = {
     "qwen-hd": 220,
     "qwen-charsheet": 220,
     "qwen-restore": 220,
+    # 2026-10-16 用户新增：qwen 的 30 步副本（`skills/qwen30/`）。25 步那档实测
+    # 约 41 秒，30 步多两成、再叠 2x 放大，给同档 220 秒余量足够。
+    "qwen30": 220,
 }
 
 
