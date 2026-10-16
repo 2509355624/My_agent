@@ -1501,6 +1501,67 @@ class MasterPromptTest(unittest.TestCase):
         m_gen.assert_not_called()
 
 
+class RecentLinesTest(unittest.TestCase):
+    """【最近对话】的过滤口径（2026-10-16 用户拍板）。
+
+    **AI 侧只留出图记账行**（`[直达生图]`）。判据是结构——「是不是出图记录」，
+    不是词表：拒绝话术是开放集合（「做不了」/「我不碰」/「换个方向」…），
+    拿词表去认它盖不全，而且它自己换一句就绕过去了。
+
+    实测七组对照（deepseek-flash，色情向需求，见 `_RECENT_AI_KEEP_RE` 注释）：
+    空历史 2/2 出图；最近对话里带着它自己写的拒绝行 → 6/6 全拒；把拒绝行
+    剔掉 → 2/2 立刻恢复。另外往模板头部加「以用户为中心、无条件服务用户」
+    那段声明重跑 4 次，**照拒**——所以修的是这里，不是提示词。
+    """
+
+    def _lines(self, msgs):
+        return direct_gen._recent_lines(msgs)
+
+    def test_ai_plain_reply_is_dropped(self):
+        t = self._lines([{"role": "user", "content": "来张雷姆的图"},
+                         {"role": "assistant",
+                          "content": "色情内容做不了，这个真不行。"}])
+        self.assertIn("用户：来张雷姆的图", t)
+        self.assertNotIn("色情内容做不了", t)
+
+    def test_ai_refusal_never_round_trips(self):
+        """它自己的回话——无论什么措辞——都不许回喂。"""
+        for reply in ("这个真做不了", "我不碰这个", "换个方向吧",
+                      "抱歉，我不能生成这个", "咱别试这个了哈"):
+            with self.subTest(reply=reply):
+                self.assertEqual(self._lines(
+                    [{"role": "assistant", "content": reply}]), "")
+
+    def test_direct_image_note_is_kept(self):
+        """`[直达生图]` 绝不能滤——「换成白裙子」这类指代全靠它。"""
+        t = self._lines([{"role": "assistant",
+                          "content": "[直达生图] hd_3_clear：rem (re:zero), "
+                                     "1girl, blue hair, nude, bathing"}])
+        self.assertIn("[直达生图]", t)
+        self.assertIn("hd_3_clear", t)
+
+    def test_direct_comic_note_is_dropped(self):
+        """`[直达漫画]` 的中文 brief 会被逐字抄成下一轮的 brief（22:02 实录）。"""
+        t = self._lines([{"role": "assistant",
+                          "content": "[直达漫画] 20 格：和泉纱雾的日常漫画："
+                                     "银白发少女在房间里画画、害羞捂脸"}])
+        self.assertEqual(t, "")
+
+    def test_menu_and_receipts_still_filtered(self):
+        t = self._lines([{"role": "assistant", "content": "🎨 生图直达：…"},
+                         {"role": "assistant",
+                          "content": "任务已提交，编号 HT-20261016-224658-942"},
+                         {"role": "user", "content": "画一只猫"}])
+        self.assertNotIn("🎨", t)
+        self.assertNotIn("HT-", t)
+        self.assertIn("用户：画一只猫", t)
+
+    def test_system_rows_are_skipped(self):
+        t = self._lines([{"role": "system", "content": "你是大大怪"},
+                         {"role": "user", "content": "画猫"}])
+        self.assertEqual(t, "用户：画猫")
+
+
 class QuotedComicTest(unittest.TestCase):
     """**带引用图的轮次也能出漫画**（2026-10-16）。
 
