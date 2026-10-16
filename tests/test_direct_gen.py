@@ -1555,6 +1555,49 @@ class QuotedComicTest(unittest.TestCase):
         m_comic.assert_not_called()
         m_gen.assert_not_called()
 
+    # ── 识图 tag 绝不许被当成「剧情」（2026-10-16）──────────────────────
+    # 实录：引用一张小猪图 +「anima 多图」，原话里的「anima 多图」被专路剥掉后
+    # `body` 为空，代码拿 `_recall_tags` 的识图反推 tag 当了 brief。编剧拿到一段
+    # 没有剧情、没有中文的 tag，无从下笔就去**照抄规范示例里的角色名**
+    # → 出图是「和泉纱雾 + 和泉正宗（1boy）+ 猪」。用户拍板：引用图 + 多图 =
+    # 把引用图里的内容当主角画成多格。
+    def test_anima_multi_quote_tags_are_wrapped_not_used_as_brief(self):
+        # 走 `_ANIMA_MULTI_RE` 专路：原话只剩「anima 多图」，body 空 → 反推兜底。
+        _out, m_gen, m_comic = self._decide(
+            "anima 多图",
+            '{"tool": "generate_comic", "prompt": "no humans, animal focus, pink pig"}')
+        m_gen.assert_not_called()
+        m_comic.assert_called_once()
+        brief = m_comic.call_args[0][0]
+        self.assertIn("引用图", brief)          # 包成一句中文说明
+        self.assertIn("pink pig", brief)        # 图里是什么照实带上
+        self.assertTrue(brief.startswith("主角就是引用图里的这个东西："))
+
+    def test_revise_english_tag_brief_is_wrapped_too(self):
+        # 走改图管道 `_revise`：模型把 tag 填进了 brief（而不是 prompt），一样拦。
+        _out, _m_gen, m_comic = self._decide(
+            self.TEXT,
+            '{"tool": "generate_comic", "brief": "no humans, animal focus, pink pig"}')
+        m_comic.assert_called_once()
+        brief = m_comic.call_args[0][0]
+        self.assertIn("引用图", brief)
+        self.assertNotEqual(brief, "no humans, animal focus, pink pig")
+
+    def test_revise_quote_prompt_is_wrapped_too(self):
+        # 走改图管道：模型没给 brief、只给了识图反推的 `prompt`。
+        _out, _m_gen, m_comic = self._decide(
+            self.TEXT,
+            '{"tool": "generate_comic", "prompt": "no humans, animal focus, pink pig"}')
+        m_comic.assert_called_once()
+        self.assertIn("引用图", m_comic.call_args[0][0])
+
+    def test_chinese_brief_passes_through_untouched(self):
+        # 正常轮：模型按契约给了中文剧情 → 原样交给编剧，一个字都不许改写。
+        _out, _m_gen, m_comic = self._decide(
+            self.TEXT,
+            '{"tool": "generate_comic", "brief": "银发少女在草地上打滚", "panels": 10}')
+        m_comic.assert_called_once_with("银发少女在草地上打滚", panels=10, style="")
+
 
 class ComicRoutingTest(unittest.TestCase):
     """连续漫画（2026-10-08）：走 `direct_gen` 的 JSON 契约，不走主 Agent 循环。

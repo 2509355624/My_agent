@@ -1048,11 +1048,19 @@ _REVISE_TEMPLATE = (
     # 带引用图 +「silver 10张 漫画」→ 落成 silver-hd **单图**（19:44 私聊
     # 455242826 实录，用户报「ai 无法理解需求」）。补上这条路，让模型有机会表达
     # 「画一批」。渠道仍不进 JSON——`_enqueue_comic` 会 `_comic_style` 从原话判。
-    "- **用户要「漫画 / 连环画 / 多格 / 条漫」，或要「N 张」同一个角色的连贯图时，"
-    "改输出 {{\"tool\": \"generate_comic\", \"brief\": \"中文剧情和角色\", "
-    "\"panels\": 10}}**——这是**另一条路**，画一批、不是改这一张："
-    "brief 用中文写剧情和角色（**把引用图里那个人长什么样写进去**，名字照抄），"
-    "panels 填用户报的张数、没报就不填；**只要 1 张就别用它**，照上面改图的路走。\n"
+    # ⚠️ 2026-10-16 二修：`brief` **必须是中文剧情**，且**只许输出 tool / brief /
+    # panels 三个字段**。原措辞没把「别再给 prompt」说死，模型就把识图反推的英文
+    # tag 填成 brief，编剧拿到一段没剧情的 tag 就去照抄规范示例里的角色名
+    # （实录：引用小猪图 +「anima 多图」→ 和泉纱雾 + 和泉正宗 + 猪）。
+    "- **用户要「漫画 / 连环画 / 多格 / 条漫 / 多图」，或要「N 张」同一个角色的连贯图时，"
+    "只输出 {{\"tool\": \"generate_comic\", \"brief\": \"<中文剧情>\", "
+    "\"panels\": <张数>}} 这三个字段**——这是**另一条路**，画一批、不是改这一张；"
+    "**走上这条路就不要再输出 prompt / source_image / reverse / skill**。"
+    "`brief` **必须是中文**（绝不许把画面英文标签填进来）：写清「主角是谁、"
+    "长什么样、要做什么」，**引用图里的主体就直接当主角写进去**——图里是什么就"
+    "写什么（猪就写猪、人就写人），把它的外观照实写出来；用户另外提了角色名／"
+    "剧情／要求就一并并进去（角色名照抄用户的写法）。"
+    "panels 填用户报的张数、没报就不填；**只要 1 张就别用这条路**，照上面改图的路走。\n"
     "- 先看清楚画面（人物、发色发型、瞳色、表情、服装、姿势、场景），"
     "prompt 必须覆盖画面全部要点，用户没提到的细节原样保留\n"
     "- 原提示词{anchor_note}：与画面冲突时，一律以画面为准\n"
@@ -1331,6 +1339,23 @@ def _comic_style(text):
     「要 10 张漫画、模型填 skill=sd 被回落 silver」那次事故的性质。
     """
     return "anima" if _ANIMA_MULTI_RE.search(text or "") else ""
+
+
+def _quote_as_brief(tags):
+    """把「引用图的识图反推结果」包成一句**中文** brief 交编剧。
+
+    ⚠️ **绝不许把英文 tag 直接当剧情**（2026-10-16 用户报的现场）。识图反推的
+    tag 只是**画面描述**，编剧（`comic_story.write_story`）拿到一段没有剧情、
+    没有中文的 tag，无从下笔就会去**照抄规范里的示例角色名**——实录：「，anima
+    多图」+ 引用一张小猪图 → 出图是「和泉纱雾 + 和泉正宗（1boy）+ 猪」，固定块
+    一字不差是 `skills/storyboard-prompt/skill.md` 的男女双人示例。
+
+    用户拍板：**引用图 + 多图 = 把引用图里的内容当主角画成多格**。所以这里如实
+    把图里的东西写成主角描述交出去，不回问用户、也不替它编剧情。
+    返回 "" = 连画面都没认出来（调用方照常走「说清要画什么」那条提示）。
+    """
+    tags = (tags or "").strip()
+    return ("主角就是引用图里的这个东西：%s" % tags) if tags else ""
 
 
 def _enqueue_comic(comic, text):
@@ -1734,9 +1759,21 @@ def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):
     # （19:44 私聊 455242826 实录）。模板已补这条路，这里接住它。
     # 渠道不进 JSON：`_enqueue_comic` → `_comic_style` 从原话判（silver / anima）。
     if (data.get("tool") or "").strip() == "generate_comic":
-        brief = (data.get("brief") or data.get("prompt") or "").strip()
-        if not brief:
-            return "漫画这条我没看清要画什么故事，把剧情再说一次。"
+        brief = (data.get("brief") or "").strip()
+        if not _CJK_RE.search(brief):
+            # ⚠️ **识图反推的英文 tag 绝不许原样当「剧情」喂编剧**（2026-10-16 修）。
+            # 带图轮次的 `prompt`（以及抄错栏时的 `brief`）都只是识图反推的
+            # 画面 tag（`no humans, animal focus, pig, pink pig...`）——原样递过去，
+            # 编剧无从下笔就去**照抄规范示例里的角色名**：实录引用一张小猪图 +
+            # 「anima 多图」→ 出图是「和泉纱雾 + 和泉正宗（1boy）+ 小猪」，固定块
+            # 一字不差是规范里的男女双人示例。
+            # 用户拍板：**引用图 + 多图 = 把引用图里的内容当主角画成多格**。
+            # 所以这里把画面描述包成一句中文说明交出去——不回问用户，也不拿
+            # 英文 tag 硬当剧情（那样编剧同样无从下笔）。
+            quote = (data.get("prompt") or "").strip() or brief
+            brief = _quote_as_brief(quote)
+            if not brief:
+                return "漫画这条我没看清要画什么故事，把剧情再说一次。"
         return _enqueue_comic({"brief": brief, "panels": data.get("panels")}, text)
     rev = (data.get("reverse") or "").strip()
     if rev:
@@ -1914,7 +1951,10 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         if quoted_txt and not _PLACEHOLDER_QUOTE_RE.search(quoted_txt):
             body = (quoted_txt + " " + body).strip() if body else quoted_txt
         if not body and data_urls:
-            body = _recall_tags(data_urls[:3], numbered=False)
+            # ⚠️ 反推的是**画面 tag**，不是剧情。直接当 brief 递编剧，编剧无从
+            # 下笔就会照抄规范示例里的角色名（2026-10-16 实录：「，anima 多图」
+            # + 引用小猪图 → 和泉纱雾 + 和泉正宗 + 猪）。包一句中文再交出去。
+            body = _quote_as_brief(_recall_tags(data_urls[:3], numbered=False))
         if not body:
             return ("「anima多图」后面跟上你想要的需求（画什么、谁、什么场景），"
                     "我一次给你出几张。")

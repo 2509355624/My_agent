@@ -49,9 +49,12 @@ AI 只需输出以下两部分，不添加任何额外解释、标题、编号�
 
 ## 二、固定部分（角色标识 + 脸部特征）
 
+> ⚠️ **本文档里所有 `<...>` 尖括号内容都是占位符**，只是让你看清「这个位置该填什么」。
+> 真正的角色名**只能来自用户的原始需求**——文档里出现的任何示例写法都不是素材，不许照抄。
+
 | 规则 | 说明 |
 | :--- | :--- |
-| **必须写角色名** | 如 `Izumi Sagiri`、`Rem`、`Raiden Shogun` |
+| **必须写角色名** | 用户需求里点名的那个角色（写角色名，如 `<character name>` 那个位置） |
 | **必须写脸部标志性特征** | 发色、发型、瞳色、发饰、面部特殊标记（泪痣、伤疤、第三只眼等） |
 | **单人场景标注性别** | `1girl` 或 `1boy` |
 | **男女双人场景标注人数与性别** | `1girl, 1boy` |
@@ -60,7 +63,7 @@ AI 只需输出以下两部分，不添加任何额外解释、标题、编号�
 | **可省略画师串** | 若加画师串反而干扰角色，可去掉 |
 
 **为什么必须写脸部特征？**  
-模型每一格都是独立生成，没有记忆。如果你只写 `Izumi Masamune`，模型可能这次画黑发，下次画绿发。发色、瞳色、发型、发饰必须写死，才能保证十格一致。
+模型每一格都是独立生成，没有记忆。如果你只写 `<character name>`，模型可能这次画黑发，下次画绿发。发色、瞳色、发型、发饰必须写死，才能保证十格一致。
 
 **脸部特征范围：**
 - 发色：`black hair`、`silver-white hair`、`brown hair`
@@ -69,14 +72,14 @@ AI 只需输出以下两部分，不添加任何额外解释、标题、编号�
 - 发饰：`pink ribbon hair ornaments`、`black hairband`
 - 面部标记：`mole under eye`、`third eye`、`facial scar`
 
-**单人示例：**
+**单人示例**（`<girl name>` 换成用户需求里点名那个角色）：
 ```
-1girl, Izumi Sagiri, silver-white long hair, blue eyes, pink ribbon hair ornaments, twin tails
+1girl, <girl name>, silver-white long hair, blue eyes, pink ribbon hair ornaments, twin tails
 ```
 
-**男女双人示例：**
+**男女双人示例**（同理，名字都来自用户需求）：
 ```
-1girl, 1boy, Izumi Sagiri, Izumi Masamune, silver-white long hair, blue eyes, pink ribbon hair ornaments, twin tails, black short hair, dark eyes
+1girl, 1boy, <girl name>, <boy name>, silver-white long hair, blue eyes, pink ribbon hair ornaments, twin tails, black short hair, dark eyes
 ```
 
 ---
@@ -227,11 +230,11 @@ bedroom, girl wearing old pink frilled pajamas and pink frilled shorts, bare fee
 | :--- | :--- | :--- |
 | `wearing pink pajamas, wearing grey t-shirt` | 没写谁穿什么 | `girl wearing pink pajamas, boy wearing grey t-shirt` |
 | `girl peeking from behind door, girl shy expression` | 动作和神态互斥 | `girl standing at doorway, shy expression` |
-| `1girl, loli, petite, flat chest, long silver hair, blue eyes, Sagiri` | 堆砌非脸部特征 | `1girl, Izumi Sagiri, silver-white long hair, blue eyes, twin tails` |
+| `1girl, loli, petite, flat chest, long silver hair, blue eyes, <girl name>` | 堆砌非脸部特征 | `1girl, <girl name>, silver-white long hair, blue eyes, twin tails` |
 | 第2格起只写 `bra` | 颜色会变 | 每格都写 `black lace bra` |
 | `girl wearing underwear` | 泛化词，AI随机发挥 | `girl wearing black lace bra and black cotton panties` |
 | 换装后只写 `new pajamas` | 款式和颜色都没了 | `new light blue cotton pajamas with white lace trim` |
-| 固定部分只写 `Izumi Masamune` | 发色在黑色和绿色之间变化 | 固定部分写 `Izumi Masamune, black short hair, dark eyes` |
+| 固定部分只写 `<boy name>` | 发色在黑色和绿色之间变化 | 固定部分写 `<boy name>, black short hair, dark eyes` |
 | 第1格 `warm lamp light`，第2格 `cool moonlight` | 灯光氛围不统一 | 统一写 `warm lamp light`，除非剧情需要变化 |
 | `girl lifting new pajamas out of the box` | 新衣服和角色本体衣服融合 | `girl lifting new pajamas out of the box ahead of her` |
 | `girl peeking into hallway, girl cautious expression` | 出现两个女孩 | `girl standing by the door peeking into the hallway`（删掉表情） |
