@@ -430,7 +430,7 @@ COMFY_RELEASE_AFTER_SAME = int(os.getenv("COMFY_RELEASE_AFTER_SAME", "2"))
 # 多条用逗号分隔。没列到的渠道用 COMFY_RELEASE_AFTER_SAME。
 #
 # 这里带了内置默认（`.env` 配了同名键就覆盖它）：`_persona_fast` 是**扮演态**
-# 的配图渠道（480×720 / 5 步，见 skills/_persona_fast），每轮聊天都出一张。
+# 的配图渠道（480×720 / 3 步，见 skills/_persona_fast），每轮聊天都出一张。
 # 按全局的 2 张就会每两轮撞一次「提交前彻底重启」（60~90 秒不能出图）——那等于
 # 不能聊。它跟 anima 系是同一套权重、残留叠得一样慢，就按 anima 的口径给 8。
 COMFY_RELEASE_AFTER_SAME_MAP = {"_persona_fast": 8}
