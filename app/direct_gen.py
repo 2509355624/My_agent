@@ -1043,6 +1043,16 @@ _REVISE_TEMPLATE = (
     "你是生图提示词修正器。用户引用一张图并提出要求（也可能只是让你看看、"
     "或问你点别的）。只输出 JSON 本体，格式：{{\"skill\": \"渠道id\", \"prompt\": "
     "\"修正后的完整英文提示词\", \"source_image\": 1}}（用不上的参数一律省略）\n"
+    # ── 漫画（2026-10-16）──────────────────────────────────────────
+    # 改图管道原先**根本没有** `generate_comic` 这条路，模型物理上吐不出漫画：
+    # 带引用图 +「silver 10张 漫画」→ 落成 silver-hd **单图**（19:44 私聊
+    # 455242826 实录，用户报「ai 无法理解需求」）。补上这条路，让模型有机会表达
+    # 「画一批」。渠道仍不进 JSON——`_enqueue_comic` 会 `_comic_style` 从原话判。
+    "- **用户要「漫画 / 连环画 / 多格 / 条漫」，或要「N 张」同一个角色的连贯图时，"
+    "改输出 {{\"tool\": \"generate_comic\", \"brief\": \"中文剧情和角色\", "
+    "\"panels\": 10}}**——这是**另一条路**，画一批、不是改这一张："
+    "brief 用中文写剧情和角色（**把引用图里那个人长什么样写进去**，名字照抄），"
+    "panels 填用户报的张数、没报就不填；**只要 1 张就别用它**，照上面改图的路走。\n"
     "- 先看清楚画面（人物、发色发型、瞳色、表情、服装、姿势、场景），"
     "prompt 必须覆盖画面全部要点，用户没提到的细节原样保留\n"
     "- 原提示词{anchor_note}：与画面冲突时，一律以画面为准\n"
@@ -1717,6 +1727,17 @@ def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):
         if fallback:
             return _reverse_text(fallback)
         return "改图请求没解析出来，换个说法再试（如「手改成插兜」）。"
+    # ── 漫画 / N张（2026-10-16）：带引用图的轮次也能画一批 ──────────────
+    # 原先只有 `_translate` 认 `generate_comic`，`_revise` 不认；又因为**带引用图
+    # 一律走 `_revise`**（见 `decide` 的「引用图轮」），所以凡带图就再也吐不出
+    # 漫画——用户「silver 10张 漫画」+ 引用一张图 → 落成 silver-hd 单图
+    # （19:44 私聊 455242826 实录）。模板已补这条路，这里接住它。
+    # 渠道不进 JSON：`_enqueue_comic` → `_comic_style` 从原话判（silver / anima）。
+    if (data.get("tool") or "").strip() == "generate_comic":
+        brief = (data.get("brief") or data.get("prompt") or "").strip()
+        if not brief:
+            return "漫画这条我没看清要画什么故事，把剧情再说一次。"
+        return _enqueue_comic({"brief": brief, "panels": data.get("panels")}, text)
     rev = (data.get("reverse") or "").strip()
     if rev:
         # 模型判定「这轮不是修改请求」→ 把它识别出的 prompt 发回去。

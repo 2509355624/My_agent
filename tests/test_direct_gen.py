@@ -1493,6 +1493,69 @@ class MasterPromptTest(unittest.TestCase):
         m_gen.assert_not_called()
 
 
+class QuotedComicTest(unittest.TestCase):
+    """**带引用图的轮次也能出漫画**（2026-10-16）。
+
+    原先 `_REVISE_TEMPLATE` 里**没有** `generate_comic` 这条路，而「带引用图
+    一律走 `_revise`」（见 `decide` 的「引用图轮」）——两件事叠起来，凡是带图
+    就再也吐不出漫画。实录：2026-10-16 19:44 私聊 455242826「silver 10张 漫画」
+    + 引用一张图 → `[direct] 直达入队：silver-hd`（4928×7360 单图，106 秒），
+    用户报「ai 无法理解需求」。同一个坑 19:41 也踩过（「anima 10张 不同姿态」
+    + 引用 → hd_3_clear 单图）。
+
+    渠道仍不进 JSON：`_enqueue_comic` → `_comic_style` 从原话判。
+    """
+
+    TEXT = "silver 10张 漫画"
+
+    def setUp(self):
+        direct_gen._LAST_JOB.clear()
+        direct_gen._LAST_DESC.clear()
+
+    def _decide(self, text=None, seen=None, quoted=""):
+        seen = seen if seen is not None else (
+            '{"tool": "generate_comic", "brief": "银发少女的日常", "panels": 10}')
+        with mock.patch.object(direct_gen, "llm"), \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="private_455242826"), \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=quoted), \
+             mock.patch("app.vision.describe", return_value=seen), \
+             mock.patch.object(direct_gen.image_log, "lookup",
+                               return_value=None), \
+             mock.patch("app.llm.call_llm", return_value=seen), \
+             mock.patch.object(gi, "_generate_image",
+                               return_value=RECEIPT) as m_gen, \
+             mock.patch.object(gc, "_generate_comic",
+                               return_value=RECEIPT) as m_comic:
+            out = direct_gen.decide(text or self.TEXT, [], False,
+                                    data_urls=["data:image/jpeg;base64,A"],
+                                    at_me=True)
+        return out, m_gen, m_comic
+
+    def test_quoted_image_plus_n_panels_goes_to_the_comic_pipeline(self):
+        out, m_gen, m_comic = self._decide()
+        self.assertEqual(out, "")                 # 回执已直发 → 本轮闭嘴
+        m_gen.assert_not_called()                 # **不再**落成单图
+        m_comic.assert_called_once_with("银发少女的日常", panels=10, style="")
+
+    def test_quoted_image_plain_edit_is_still_one_image(self):
+        # 回归护栏：模板补了漫画不能把「改一下发色」也带跑偏。
+        out, m_gen, m_comic = self._decide(
+            "改一下发色",
+            '{"skill": "silver", "prompt": "1girl, silver hair"}')
+        m_comic.assert_not_called()
+        m_gen.assert_called_once_with("1girl, silver hair", skill="silver",
+                                      _skip_confirm=True)
+
+    def test_comic_with_empty_brief_is_asked_back(self):
+        out, m_gen, m_comic = self._decide(
+            self.TEXT, '{"tool": "generate_comic", "brief": "  "}')
+        self.assertIn("没看清", out)
+        m_comic.assert_not_called()
+        m_gen.assert_not_called()
+
+
 class ComicRoutingTest(unittest.TestCase):
     """连续漫画（2026-10-08）：走 `direct_gen` 的 JSON 契约，不走主 Agent 循环。
 
