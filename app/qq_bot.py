@@ -857,9 +857,8 @@ class SessionRunner:
     def _run_persona_turn(self, batch):
         """扮演态的一轮。**跟生图那条路完全没有交集**，所以单列一个函数。
 
-        只做三件事：把这几条连发拼成一句 → `persona` 那边一次调用 → 发回正文。
-        图不在这里等：`persona.run_turn` 内部就把画面交给 anima 开工了，
-        十几秒后由图自己的后台任务发进会话（跟漫画一个思路），本轮不阻塞。
+        只做两件事：把这几条连发拼成一句 → `persona` 那边一次调用 → 发回正文。
+        **不出图**：图要十几秒，聊天是几秒一句，赶不上（用户 2026-10-16 拍板）。
         """
         texts = [(it.get("text") or "").strip() for it in batch]
         texts = [t for t in texts if t]
@@ -871,7 +870,7 @@ class SessionRunner:
         reply = ""
         try:
             reply = persona.run_turn(self.session_key, "\n".join(texts),
-                                     self.target, self.target_id,
+                                     self.target,
                                      batch[0].get("sender") or "")
         except Exception:
             log.exception("扮演轮异常 %s", self.session_key)
@@ -880,9 +879,9 @@ class SessionRunner:
 
     def _run_turn(self, batch):
         """在 worker 线程里跑一轮（run_agent_stream 是同步生成器）。"""
-        # 扮演态走自己那条路：不给工具、只一次调用、每轮配一张图。判定放在
-        # 最前面，因为下面整段都是「生图机器人」的逻辑（confirm_gate /
-        # direct_gen / agent 循环），扮演态一个都不该碰上。
+        # 扮演态走自己那条路：不给工具、只一次调用、纯文字。判定放在最前面，
+        # 因为下面整段都是「生图机器人」的逻辑（confirm_gate / direct_gen /
+        # agent 循环），扮演态一个都不该碰上。
         if persona.active_card(self.session_key) is not None:
             self._run_persona_turn(batch)
             return

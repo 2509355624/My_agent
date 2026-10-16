@@ -201,12 +201,12 @@ function renderPane() {
     <div class="field">
       <label>外观固定块（英文 booru 标签）</label>
       <textarea class="mid" id="f_appearance">${esc(c.appearancePrompt)}</textarea>
-      <div class="tip">发色 / 发型 / 瞳色 / 体型这类不变的特征。这段由代码原样拼在每张画面最前面，所以第 100 张也还是同一个人——不要写会变的东西（动作、场景、表情）。</div>
+      <div class="tip">发色 / 发型 / 瞳色 / 体型这类不变的特征。**扮演态现在不出图**，这段只留在卡上备用；要写就只写不变的特征，别写动作 / 场景 / 表情。</div>
     </div>
     <div class="field">
       <label>服饰（英文 booru 标签，可留空）</label>
       <textarea class="mid" id="f_outfit">${esc(c.outfitPrompt)}</textarea>
-      <div class="tip">常服装扮。留空就每轮由它按剧情自己写。</div>
+      <div class="tip">常服装扮。同样只是存着备用。</div>
     </div>
     <div class="field">
       <label>参考图（可留空）</label>

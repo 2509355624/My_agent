@@ -5,13 +5,14 @@
 - 卡库读写（`agents/<agent>/characters.json`）
 - 会话级扮演态（`state/persona_sessions.json`）
 - 三条 `#` 命令
-- 扮演一轮：**只调 1 次** LLM、按 `###` 切两路、最近 20 条 + 单条 200 字截断、
-  每轮都开一张图
+- 扮演一轮：**只调 1 次** LLM、回话原样发回、最近 20 条 + 单条 200 字截断、
+  **不出图**
 
 用户 2026-10-16 定的语义：
 - 命令是 `#角色扮演`（`#人设列表` 同义）/ `#角色名` / `#出戏`，私聊同样要喊一声；
 - 扮演态的作用域是**会话线**，A 群在演、B 群照旧是生图机器人；
-- 系统头里**只有角色人设 + 输出契约 + 环境**，不拼工具目录、不拼审核话术。
+- 系统头里**只有角色人设 + 输出契约 + 环境**，不拼工具目录、不拼审核话术；
+- 扮演态**不配图**（图要十几秒，赶不上聊天的节奏）。
 
 隔离铁律：碰 agents/ 数据必须换整根 AGENTS_DIR 到临时目录（同 test_session_prompt）。
 """
@@ -131,18 +132,6 @@ class CommandTest(PersonaBase):
         self.assertIsNone(persona.active_card("group_1"))
 
 
-class SplitTest(unittest.TestCase):
-    def test_splits_on_separator(self):
-        self.assertEqual(persona.split_reply("你好\n###\n1girl, smile"),
-                         ("你好", "1girl, smile"))
-
-    def test_missing_separator_keeps_everything_as_reply(self):
-        self.assertEqual(persona.split_reply("只有正文"), ("只有正文", ""))
-
-    def test_empty(self):
-        self.assertEqual(persona.split_reply(""), ("", ""))
-
-
 class TrimTest(unittest.TestCase):
     def test_keeps_last_twenty(self):
         hist = [{"role": "user", "content": "m%d" % i} for i in range(30)]
@@ -166,9 +155,12 @@ class HeadTest(PersonaBase):
     def test_head_has_persona_contract_env_and_nothing_else(self):
         head = persona.build_head(_card("纱雾"), "group_1", "张三")
         self.assertIn("说话很轻", head)        # 角色人设
-        self.assertIn(persona.SEP, head)       # 输出契约
+        self.assertIn("以这个角色的口吻", head)  # 输出契约
         self.assertIn("QQ 群", head)           # 群聊环境
         self.assertIn("张三", head)
+        # 契约里**不再要求写画面标签**（2026-10-16 起扮演态不出图）
+        self.assertNotIn("###", head)
+        self.assertNotIn("标签", head)
         # 刻意不带的东西：工具协议、Skill 目录、审核话术（用户点名不要）
         self.assertNotIn("[[TOOL:", head)
         self.assertNotIn("Skill", head)
@@ -194,61 +186,53 @@ class TurnTest(PersonaBase):
 
     def _run(self, reply_text, text="在吗", sender="张三"):
         with mock.patch.object(persona.llm, "call_llm",
-                               return_value=reply_text) as m, \
-             mock.patch("app.comic_story.start") as draw:
-            out = persona.run_turn("group_1", text, "group", "1", sender)
-        return out, m, draw
+                               return_value=reply_text) as m:
+            out = persona.run_turn("group_1", text, "group", sender)
+        return out, m
 
-    def test_one_call_splits_reply_and_starts_one_image(self):
-        out, m, draw = self._run("你好呀\n###\n1girl, smiling")
+    def test_one_call_returns_the_reply(self):
+        out, m = self._run("你好呀")
         self.assertEqual(m.call_count, 1)              # 就一次调用
-        self.assertEqual(out, "你好呀")                 # `###` 之后的不发给人看
-        draw.assert_called_once()
-        args, kw = draw.call_args
-        self.assertEqual(args[0], "group")
-        self.assertEqual(args[1], "1")
-        self.assertEqual(args[2], "1girl, white hair, red eyes")   # 固定块＝卡里的外观
-        self.assertEqual(args[3], ["1girl, smiling"])              # 动态块＝这轮画面
-        self.assertEqual(kw.get("style"), "anima")
+        self.assertEqual(out, "你好呀")                 # 回话原样发回去
 
-    def test_missing_separator_still_draws_one(self):
-        out, m, draw = self._run("只有正文")
-        self.assertEqual(out, "只有正文")
-        draw.assert_called_once()
-        # 忘写 `###` 也照出一张（用户定的是「每轮必出一张」）
-        self.assertEqual(draw.call_args[0][3], [persona._FALLBACK_SCENE])
+    def test_no_image_is_drawn(self):
+        """扮演态不配图——用户 2026-10-16 拍板「配图根本没有用」。
+
+        图要十几秒，聊天是几秒一句，永远赶不上；所以整条配图路径（comic_story）
+        一次都不该被碰到。
+        """
+        with mock.patch.object(persona.llm, "call_llm", return_value="你好呀"), \
+             mock.patch("app.comic_story.start") as draw:
+            persona.run_turn("group_1", "在吗", "group", "张三")
+        draw.assert_not_called()
 
     def test_history_keeps_dialogue_only(self):
-        self._run("你好呀\n###\n1girl, smiling")
+        self._run("你好呀")
         hist = persona._load_hist("group_1")
         self.assertEqual([m["role"] for m in hist], ["user", "assistant"])
         self.assertEqual(hist[0]["content"], "张三：在吗")
-        self.assertEqual(hist[1]["content"], "你好呀")   # 画面标签不进历史
-        self.assertNotIn("1girl, smiling", hist[1]["content"])
+        self.assertEqual(hist[1]["content"], "你好呀")
 
     def test_group_prefixes_sender_private_does_not(self):
         self._run("嗯", text="在吗", sender="张三")
         self.assertEqual(persona._load_hist("group_1")[0]["content"], "张三：在吗")
         persona.switch("private_9", self.card)
-        with mock.patch.object(persona.llm, "call_llm", return_value="嗯"), \
-             mock.patch("app.comic_story.start"):
-            persona.run_turn("private_9", "在吗", "private", "9", "张三")
+        with mock.patch.object(persona.llm, "call_llm", return_value="嗯"):
+            persona.run_turn("private_9", "在吗", "private", "张三")
         self.assertEqual(persona._load_hist("private_9")[0]["content"], "在吗")
 
-    def test_empty_reply_says_so_and_draws_nothing(self):
-        """模型整轮没交作业：说一句「卡了一下」，**不配图**。
+    def test_empty_reply_says_so(self):
+        """模型整轮没交作业：说一句「卡了一下」。
 
-        连话都没说出来，再配一张「她的样子」发过去更莫名其妙。所以这条上
-        「每轮必出一张」让位——它不算一轮正常的对话。
+        不重跑——重跑一次未必更好，还白烧一轮。
         """
-        out, m, draw = self._run("")
+        out, m = self._run("")
         self.assertIn("卡", out)
-        draw.assert_not_called()
 
     def test_not_in_roleplay_is_a_noop(self):
         persona.leave("group_1")
         with mock.patch.object(persona.llm, "call_llm") as m:
-            self.assertEqual(persona.run_turn("group_1", "在吗", "group", "1"), "")
+            self.assertEqual(persona.run_turn("group_1", "在吗", "group"), "")
         m.assert_not_called()
 
     def test_history_is_separate_from_the_image_bot(self):

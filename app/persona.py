@@ -1,30 +1,27 @@
-"""QQ 角色扮演：人设卡 + 会话级扮演态 + 一轮对话（正文 + 一张配图）。
+"""QQ 角色扮演：人设卡 + 会话级扮演态 + 一轮纯文字对话。
 
 跟生图机器人是**两条互不干扰的路**：
 
-    默认态 → direct_gen / agent 循环，不带人设、不配图、能用工具
-    扮演态 → 本模块：**不给模型任何工具**，一轮只做三件事
+    默认态 → direct_gen / agent 循环，不带人设、能用工具
+    扮演态 → 本模块：**不给模型任何工具**，一轮只做两件事
 
         拼极简头（角色人设 + 输出契约 + 环境）
-          → 调 1 次 LLM（正文 + `###` + 画面标签，一次吐完）
-          → 按 `###` 切两路：正文发 QQ、画面交给 anima 出 1 张
+          → 调 1 次 LLM，回话原样发回 QQ
 
-## 为什么压成 1 次调用
+## 为什么是 1 次调用
 
 参考的那套角色扮演系统一轮要 3 次（情感分析 → 对白 → 生图 tag）。但那三样里，
-「人物此刻的情绪」和「画面长什么样」本来就是模型写对白时脑子里已经有的东西，
-拆成三次只是当年的写法。让它「先写对白、再写画面」，画面是从刚写完的对白推
-出来的，前后反而更一致；同时省掉两次完整输入的 token（那两次的输入跟第一次
-一样大）。
+「人物此刻的情绪」本来就是模型写对白时脑子里已经有的东西，拆成三次只是当年的
+写法；同时省掉两次完整输入的 token（那两次的输入跟第一次一样大）。
 
-## 为什么生图不走工具调用
+## 为什么没有配图
 
-扮演态的模型**看不到任何工具**，画面是用 `###` 之后的文本带出来的，代码接过来
-直接喂 anima 工作流。这样一次解决三件事：
+用户 2026-10-16 拍板：**扮演态不出图**。配一张图要十几秒，而聊天是几秒一句话的
+节奏，图永远赶不上对话——「根本没有用」。所以这里不留配图入口：模型写的每个字
+都直接发给他，不切分、不等待、不占 ComfyUI 队列。
 
-1. 不会出现「模型判定这轮不用配图」——而用户要的是每轮必有一张；
-2. 没有工具回执要清理（回执**一律不进历史**，见 `run_turn`）；
-3. 模型不会在聊着天的时候突然惦记生图机器人的玩法。
+卡上的外观字段（`appearancePrompt` / `outfitPrompt`）**留着**：那是卡池页在编辑的
+数据，删了就得重录；以后想切回配图，改动只落在本模块。
 
 ## 作用域
 
@@ -46,9 +43,6 @@ from app.config import BASE_DIR, QQ_AGENT_ID, QQ_BOT_NAME
 
 log = logging.getLogger("persona")
 
-# 正文与画面标签的分隔符。选 `###`：短，且正文里几乎不可能自然写出来。
-SEP = "###"
-
 # 历史：最近 20 条（AI 和用户合计），单条超 200 字截断。
 #
 # 200 字那条是防「对面一口气甩几千字」——真塞进来会把这一轮的输入撑爆，而
@@ -64,26 +58,13 @@ NOTE_EVERY_TURNS = 10
 
 # 扮演态的静默窗口（秒）：这之内的连发算同一条。用户 2026-10-16 定的 10 秒。
 # 群聊默认那 1.5 秒是给「连发三句问同一件事」用的；聊天不一样——人打字是
-# 断续的，1.5 秒会把一句话切成两轮，回两遍、还各出一张图。
+# 断续的，1.5 秒会把一句话切成两轮，回两遍。
 DEBOUNCE_SECONDS = 10.0
-
-# 模型偶尔会忘写 `###`。这时正文照发，画面退回这一句——固定块（她的外观）
-# 仍然由代码拼在前面，所以出的还是同一个人。
-#
-# 不重跑、不报错：忘写格式不是可用性故障（那是「返回空 / 解析不了」才管的
-# 事），为它多花一次调用不划算。用户 2026-10-16 定的规矩是「每轮必出一张」，
-# 所以这里必须兜一张，而不是干脆不发。
-_FALLBACK_SCENE = "portrait, looking forward, soft lighting, simple background"
 
 _CONTRACT = (
     "【怎么回话】\n"
     "以这个角色的口吻说想说的话，就像真的在跟他聊天。\n"
-    "想写心里想的事，就写在括号里。\n"
-    "说完之后，另起一行，写一行 `###`，再用英文 booru 标签写**这一刻的画面**："
-    "在哪、在做什么、什么表情、什么姿势、什么镜头、什么光。\n"
-    "画面只写会变的那些（场景 / 动作 / 神态 / 镜头 / 灯光）——"
-    "长相和身体特征由系统拼在前后，不要重复写。\n"
-    "一行写完，全小写，逗号分隔，不要写成句子。"
+    "想写心里想的事，就写在括号里。"
 )
 
 _NOTE_PROMPT = (
@@ -254,7 +235,7 @@ def active_card(session_key):
     """这条会话线正在演谁（返回卡 dict）；没在演、或卡已经被删了 → None。
 
     卡被删掉时自动当作没在演：不然会一直卡在一个取不到的卡 id 上，
-    每轮都拼不出人设、也出不了图，还只能靠 `#出戏` 自救。
+    每轮都拼不出人设，还只能靠 `#出戏` 自救。
     """
     st = _entry(session_key)
     if not st:
@@ -289,8 +270,7 @@ def roster_text():
     cards = load_cards()
     if not cards:
         return "我这儿还没有人设卡。"
-    lines = ["想让我演谁，就发「#角色名」，我会用那个角色的口气跟你聊，"
-             "每句话都配一张图。",
+    lines = ["想让我演谁，就发「#角色名」，我会用那个角色的口气跟你聊。",
              "发「#出戏」我就变回生图机器人。",
              ""]
     for c in cards:
@@ -403,30 +383,6 @@ def trim(hist):
     return out
 
 
-def split_reply(raw):
-    """切「正文」与「画面标签」。返回 (reply, scene)。
-
-    模型忘写 `###` 时整段都算正文、scene 空着——由 `draw` 兜一张。
-    """
-    t = str(raw or "").strip()
-    i = t.find(SEP)
-    if i < 0:
-        return t, ""
-    return t[:i].strip(), t[i + len(SEP):].strip()
-
-
-def fixed_block(card):
-    """卡的固定块：外观 + 服饰，**由代码拼，不让模型自己发挥**。
-
-    这是整套东西里唯一必须由代码兜住的地方。模型每次写的外观都不一样，
-    让它在正文里自由描述长相，第 5 张就不是同一个人了；所以外观写一次
-    存在卡上，每一轮都原样拼在画面标签前面（同 comic_story 的固定块范式）。
-    """
-    parts = [str(card.get("appearancePrompt") or "").strip().strip(","),
-             str(card.get("outfitPrompt") or "").strip().strip(",")]
-    return ", ".join(p for p in parts if p)
-
-
 def build_head(card, session_key, sender, note=""):
     """扮演态的系统头：角色人设 + 输出契约 + 环境（+ 小记）。
 
@@ -462,10 +418,10 @@ def _env_note(session_key, sender):
     return "【当前环境】你在跟一个人私聊（QQ %s）。" % tid
 
 
-def run_turn(session_key, text, target, target_id, sender=""):
-    """扮演态的一轮：**1 次** LLM 调用，正文返回，画面直接开工出图。
+def run_turn(session_key, text, target, sender=""):
+    """扮演态的一轮：**1 次** LLM 调用，返回要发回去的正文。
 
-    返回要发回去的正文。返回空串 = 这轮什么都不发（调用方别开口）。
+    返回空串 = 这轮什么都不发（调用方别开口）。
     """
     card = active_card(session_key)
     if card is None:
@@ -488,15 +444,14 @@ def run_turn(session_key, text, target, target_id, sender=""):
     except Exception:
         log.exception("扮演轮调用失败 %s", session_key)
         return ""
-    reply, scene = split_reply(raw)
+    reply = str(raw or "").strip()
     if not reply:
         # 整轮空 = 模型没交作业。这属于可用性问题，值得说一句，
         # 但**不重跑**：重跑一次未必更好，还白烧一轮。
         log.warning("扮演轮空回复 %s", session_key)
         return "（我这会儿有点卡，你再说一句？）"
 
-    # 落历史：**只存正文**。`###` 那半是画面标签不是对话内容，存下来每轮会
-    # 多占一两百字的上下文，而它对该怎么接话没有帮助；生图回执同理不进历史。
+    # 落历史：只放对话本身。system 头和小记是每轮重新拼的，不进历史。
     hist.append({"role": "user", "content": said})
     hist.append({"role": "assistant", "content": reply})
     try:
@@ -504,25 +459,8 @@ def run_turn(session_key, text, target, target_id, sender=""):
     except Exception:
         log.exception("扮演轮落史失败 %s", session_key)
 
-    draw(target, target_id, card, scene)
     _bump_turn(session_key)
     return reply
-
-
-def draw(target, target_id, card, scene):
-    """把这一轮的画面交给 anima 出 1 张（后台线程，不占本轮的时间）。
-
-    直接走 `comic_story.start` —— 那条路是**纯渲染**（拼固定块 + 动态块、
-    一次提交、画完由 image_jobs 发回会话），不带「已开工」那种回执。
-    走 `generate_comic` 会多发一句系统回执，在角色扮演里很出戏。
-    """
-    from app import comic_story
-    fixed = fixed_block(card)
-    dyn = (scene or "").strip() or _FALLBACK_SCENE
-    try:
-        comic_story.start(target, target_id, fixed, [dyn], style="anima")
-    except Exception:
-        log.exception("扮演配图开工失败 %s %s", target, target_id)
 
 
 def _bump_turn(session_key):
