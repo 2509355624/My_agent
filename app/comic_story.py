@@ -205,7 +205,7 @@ def _new_seed():
     return random.randint(0, 2 ** 32 - 1)
 
 
-def render(target, target_id, fixed, dynamics, style="silver"):
+def render(target, target_id, fixed, dynamics, style="silver", landscape=False):
     """整批渲染并发回会话。**阻塞**——调用方负责把它放进后台线程。
 
     一次提交：把每格提示词（`assemble()` 拼好的「固定块 + 动态」）用 `---`
@@ -216,6 +216,10 @@ def render(target, target_id, fixed, dynamics, style="silver"):
     落盘，但 ComfyUI 的 history 要等整批跑完才出现 `outputs`，发图由
     `image_jobs.process` 在任务结束时统一做（它本来就支持一个任务多张图）。
     所以回执文案不能说「画好一张发一张」。
+
+    `landscape` 必须是**会话线程先拍板的值**（`image_jobs.turn_is_landscape()`）：
+    本函数跑在后台线程，`qq_api` 的上下文是 threading.local，在这儿现读恒为
+    None（见 `image_jobs.Job.landscape` 那段）。默认 False = 竖版，跟从前一致。
     """
     from app import image_jobs
     from app.tools.normal import generate_image as gi
@@ -235,11 +239,14 @@ def render(target, target_id, fixed, dynamics, style="silver"):
     log.info("漫画开跑：%d 格，渠道 %s（style=%s），会话 %s %s", total, skill,
              style, target, target_id)
     try:
-        # landscape=False 写死：漫画是竖版，且后台线程读不到本轮原话
-        # （qq_api 的上下文是 threading.local），不能让 enqueue 自己去判。
+        # landscape 由调用方在**会话线程**快照后传进来（不能在这儿现读：
+        # 本函数跑在后台线程，qq_api 的上下文是 threading.local，读出来恒为
+        # None）。2026-10-16 前这里写死 False，用户「krea2 鬼针草，横屏」那次
+        # 横屏就只能被吃掉——`_comic_batch` 的尺寸节点是
+        # `BatchPromptImageGenerator`，本来就在 `_SIZE_NODE_TYPES` 白名单里。
         job, reason = image_jobs.enqueue(target, target_id, wf,
                                          skill=skill, prompt=multi,
-                                         seed=seed, landscape=False)
+                                         seed=seed, landscape=landscape)
         if reason:
             log.warning("漫画被拒：%s", reason)
             return 0
@@ -252,10 +259,15 @@ def render(target, target_id, fixed, dynamics, style="silver"):
     return total
 
 
-def start(target, target_id, fixed, dynamics, style="silver"):
-    """起一个后台线程跑 `render`，立刻返回（工具侧不能阻塞适配层的并发槽）。"""
+def start(target, target_id, fixed, dynamics, style="silver", landscape=False):
+    """起一个后台线程跑 `render`，立刻返回（工具侧不能阻塞适配层的并发槽）。
+
+    `landscape` 原样透传给 `render`——它必须在**调用方（会话线程）**算好，
+    后台线程读不到本轮原话。
+    """
     t = threading.Thread(target=render,
-                         args=(target, target_id, fixed, dynamics, style),
+                         args=(target, target_id, fixed, dynamics, style,
+                               landscape),
                          name="comic-render", daemon=True)
     t.start()
     return t

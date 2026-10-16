@@ -1452,6 +1452,29 @@ def _prefetch_search(text):
     return out
 
 
+# 「点名渠道最高优先级」的兜底话术（2026-10-16 用户拍板）。仅用于「模型已经
+# 吐了漫画契约、但用户原话里点了渠道」这一种冲突，追加在**同一条内容**末尾
+# 重问一次——同一份前缀，prompt cache 基本全命中，实测 0.1~0.3 秒。
+# `%s` 出现两次：渠道 id（说给模型听的那一个）。
+_COMIC_VETO_NOTE = (
+    "\n\n【更正，以本条为准】不要用 generate_comic：用户已经点名了渠道 **%s**，"
+    "点名渠道优先级最高，本轮就按这个渠道画**一张**（就算他嘴上说要好几张）。"
+    "只输出 {{\"tool\": \"generate_image\", \"prompt\": \"英文提示词\", "
+    "\"skill\": \"%s\"}}。\n")
+
+
+def _retry_without_comic(content, named):
+    """点名渠道时重问一次，只要单图 prompt。仍要漫画 / 拿不到 JSON → None。"""
+    try:
+        data = _ask(content + _COMIC_VETO_NOTE % (named, named))
+    except Exception:
+        log.exception("[direct] 重问（去漫画）失败")
+        return None
+    if not data or (data.get("tool") or "").strip() == "generate_comic":
+        return None
+    return data
+
+
 def _translate(text, history, skill=None, weighted=False, no_default=False,
                doc=None):
     """一次 LLM 调用 → 生图任务，或一句聊天回复。**所有提示词都由它产出**。
@@ -1466,6 +1489,9 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
       - {"comic":…}              → 要画**一批**（漫画 / 多图），调用方走
                                    `_enqueue_comic`。**没点名渠道时就是这一态**
                                    （2026-10-16 起默认 = anima多图 3 张）
+                                   ⚠️ **点名了渠道（`skill` 入参非空）就没有这一态**
+                                   ——点名渠道最高优先级，模型吐 comic 也会被
+                                   按点名的渠道拉回单图（见下面 comic 契约那段）
       - {"reply": "…"}           → 模型判断这轮不用动手，直接把这句发出去
       - None                     → 调用没成功 / 没拿到有效内容，调用方兜底
 
@@ -1486,7 +1512,14 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
     # 所有分支共用。没传就是空串，模板里那一格为空，照老路走。
     doc = doc or ""
     if named:
-        hint = "\n用户开头点名了渠道：**%s**，就用它。\n" % named
+        # 点名渠道 = **最高优先级**（2026-10-16 用户拍板，原话：「用户明确点名
+        # 渠道，必须使用该渠道去跑，出现冲突的时候，比如点名 nffa，然后又点
+        # 多图，nffa 没有多图，我们默认以最开始的渠道来进行生图，点名渠道必须
+        # 是最高优先级的」）。所以这里把话说死，别让它吐漫画契约；代码侧另有
+        # 一道兜底（见下面 comic 契约那段）。
+        hint = ("\n用户开头点名了渠道：**%s**，就用它。**点名渠道优先级最高**——"
+                "本轮就按它画**一张**，别用 generate_comic（就算他嘴上说要"
+                "好几张也一样）。\n" % named)
     else:
         hint = ""
     content = _MASTER_TEMPLATE.format(
@@ -1505,11 +1538,32 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
     # `comic_story.clamp_panels` 按渠道取默认，都不需要在这儿再判一遍。
     # 模型若多吐一个 `skill`（模板里已经没有它了，但习惯难改）**直接丢掉**。
     if (data.get("tool") or "").strip() == "generate_comic":
-        brief = (data.get("brief") or data.get("prompt") or "").strip()
-        if not brief:
-            return None
-        return {"comic": {"brief": brief,
-                          "panels": data.get("panels")}}
+        if named:
+            # ── 点名渠道最高优先级（2026-10-16 用户拍板）──────────────────
+            # comic 契约原先排在「渠道优先级」那行**之前**，而且是无条件接受，
+            # 所以模型改判成漫画时点名的渠道会被整个丢掉。实录（私聊
+            # 2509355624 22:02，原话「krea2 鬼针草，横屏，和泉纱雾」）：
+            # 代码明明认出了 krea2-guizhencao 并写进 chan_hint，模型照抄上一轮
+            # 「[直达漫画] 20 格：和泉纱雾…」的格式吐了 comic → 出 silver 漫画
+            # 10 格。用户拍板：点名渠道必须最高优先级。
+            # 补一次调用把话说死（带 cache，约 0.2 秒）；仍要漫画就退回用它给的
+            # brief 出一张——宁可提示词差点，也不能把点名的渠道丢掉。
+            again = _retry_without_comic(content, named)
+            if again:
+                log.info("[direct] 模型原判漫画，点名渠道 %s 优先 → 改出一张",
+                         named)
+                data = again
+            else:
+                brief = (data.get("brief") or data.get("prompt") or "").strip()
+                log.warning("[direct] 重问后仍要漫画，按点名渠道 %s 出一张"
+                            "（brief 当提示词）", named)
+                return {"skill": named, "prompt": brief} if brief else None
+        else:
+            brief = (data.get("brief") or data.get("prompt") or "").strip()
+            if not brief:
+                return None
+            return {"comic": {"brief": brief,
+                              "panels": data.get("panels")}}
     user_prompt = (data.get("prompt") or "").strip()
     if not user_prompt:
         # 模型选择不动手（聊天 / 问答 / 只要提示词）→ 把话原样带出去。
@@ -1723,18 +1777,22 @@ def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):
         text=text)
     from app.llm import call_llm
     from app.vision import describe
-    try:
+
+    def _ask_image(question):
+        """改图管道的那一次调用（重问时按同一形态重放）。"""
         if own:
             # ── 自家图：账本优先，**不预先识图**（2026-10-07 用户拍板）──────
             # 账本里躺着当时真跑的那段提示词，和画面同源，改「发色红→银」这类
             # 需求直接在那段文字上改就行，没必要每次都看一眼图。用户原话：
             # 「没有必要每一次用户引用我的生成结果的图片的时候，就一直在识图」。
             # 走**纯文本**调用（`call_llm`，不是 `describe`），零识图开销。
-            reply = call_llm([{"role": "user", "content": ask}])
-        else:
-            # 别人的图：没有账本可依，一律真识图（1 次）。
-            # 不指定 provider = 跟识图配置走（.env，现在是 doubao-seed-2.1-turbo）。
-            reply = describe(data_urls[0], prompt=ask)
+            return call_llm([{"role": "user", "content": question}])
+        # 别人的图：没有账本可依，一律真识图（1 次）。
+        # 不指定 provider = 跟识图配置走（.env，现在是 doubao-seed-2.1-turbo）。
+        return describe(data_urls[0], prompt=question)
+
+    try:
+        reply = _ask_image(ask)
     except Exception:
         log.exception("[direct] 改图调用失败")
         return "改图请求没发出去，稍后再试。"
@@ -1758,6 +1816,28 @@ def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):
     # 漫画——用户「silver 10张 漫画」+ 引用一张图 → 落成 silver-hd 单图
     # （19:44 私聊 455242826 实录）。模板已补这条路，这里接住它。
     # 渠道不进 JSON：`_enqueue_comic` → `_comic_style` 从原话判（silver / anima）。
+    if (data.get("tool") or "").strip() == "generate_comic" and channel:
+        # 点名渠道最高优先级（2026-10-16 用户拍板，口径与 `_translate` 完全一致，
+        # 只是这里的调用可能带图、得按同一形态重放一次识图）。重问后它就落到
+        # 下面**通用改图分支**（prompt / reverse / source_image 那套），渠道由
+        # `channel or 模型填的` 定格——点名的那个赢。
+        try:
+            again = _extract_json(_ask_image(
+                ask + _COMIC_VETO_NOTE % (channel, channel)))
+        except Exception:
+            log.exception("[direct] 改图重问（去漫画）失败")
+            again = None
+        if again and (again.get("tool") or "").strip() != "generate_comic":
+            log.info("[direct] 模型原判漫画，点名渠道 %s 优先 → 改出一张",
+                     channel)
+            data = again
+        else:
+            brief = (data.get("brief") or data.get("prompt") or "").strip()
+            if not brief:
+                return "改图请求没解析出来，换个说法再试（如「手改成插兜」）。"
+            log.warning("[direct] 重问后仍要漫画，按点名渠道 %s 出一张"
+                        "（brief 当提示词）", channel)
+            data = {"prompt": brief}
     if (data.get("tool") or "").strip() == "generate_comic":
         brief = (data.get("brief") or "").strip()
         if not _CJK_RE.search(brief):

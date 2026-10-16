@@ -22,12 +22,21 @@ from app.tools.normal import generate_image as gi
 log = logging.getLogger("tool.comic")
 
 
-def _generate_comic(brief, panels=None, style="silver"):
-    """brief = 剧情/角色描述；panels = 格数（按 style 取默认）；style = 渠道。"""
+def _generate_comic(brief, panels=None, style="silver", landscape=None):
+    """brief = 剧情/角色描述；panels = 格数（按 style 取默认）；style = 渠道。
+
+    landscape 不传（None）= 按本轮原话自动判「横屏 / 横版 / 横图」。**必须在这
+    一层拍板**：真正的渲染在 `comic_story.render` 里、跑在后台线程，那时
+    `qq_api` 的 threading.local 已经不在本轮了（`turn_is_landscape` 恒 False）。
+    """
     # 生图总闸 + 单群闸 + 私聊额度闸（网页端不受限）。漫画复用同一套闸。
     gate = gi._qq_gate()
     if gate is not None:
         return gate
+    # ⚠️ 快照要放在**写剧本之前**：`write_story` 要跑好几秒的 LLM 调用，虽然
+    # 同在会话线程、上下文还绑着，但把判据尽早钉死更稳（万一日后挪进线程）。
+    if landscape is None:
+        landscape = image_jobs.turn_is_landscape()
 
     from app import qq_api
     target, target_id = qq_api.current_context()
@@ -45,7 +54,8 @@ def _generate_comic(brief, panels=None, style="silver"):
         return ("错误：漫画剧本没写出来（%s），这一单一张都没画。"
                 "直接告诉对方这次没成、别重试。" % e)
 
-    comic_story.start(target, target_id, fixed, dyns, style=style)
+    comic_story.start(target, target_id, fixed, dyns, style=style,
+                      landscape=landscape)
 
     # 批量模式是**一次全给**，拿不到中间产物（见 comic_story.render 的注释），
     # 所以不能说「画好一张发一张」。
@@ -77,6 +87,12 @@ tool = {
         "它会自己完成三件事：① 按 skills/storyboard-prompt 的规范把剧情写成"
         "「固定块（角色外观）+ 动态块（每格动作/场景/服饰/灯光）」；② 整批渲染；"
         "③ 画完一起发回来。**格数越多越慢**（10 格约 1 分钟）。\n\n"
+        # 2026-10-16 用户拍板：「点名渠道必须是最高优先级的」。批量渠道只有
+        # silver / anima 两条，用户点名的 nffa / krea2 系 / 三档 全都没有批量
+        # 骨架——用这个工具等于替他丢掉点名的渠道（实录：私聊「krea2 鬼针草，
+        # 横屏，和泉纱雾」→ 出 silver 漫画 10 格）。
+        "**用户点名了具体渠道（nffa / krea2 鬼针草 / 三档 / qwen…）时别用这个"
+        "工具**——点名渠道优先级最高，那种情况用 generate_image 出一张。\n\n"
         "参数：\n"
         "- brief（必填）：剧情 + 角色。把用户想要的故事、角色、场景写清楚，"
         "不用自己写分镜——分镜交给编剧。用户提到的角色名、作品名照抄进去。\n"

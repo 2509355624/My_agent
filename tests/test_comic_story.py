@@ -134,13 +134,33 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(ok, 3)
         self.assertEqual(len(seen), 1)              # 整批 = 一个任务
         self.assertEqual(seen[0]["skill"], comic_story.COMIC_SKILL)
-        self.assertFalse(seen[0]["landscape"])      # 漫画是竖版
+        # 默认竖版：横屏由**调用方（会话线程）**快照后传进来，见下面那条用例。
+        self.assertFalse(seen[0]["landscape"])
         # 多格拼成一份 `---` 分隔的文本，每格都带固定块。
         prompt = seen[0]["prompt"]
         self.assertEqual(prompt.split("\n---\n"),
                          ["fixed_tag, d1", "fixed_tag, d2", "fixed_tag, d3"])
         # 工作流拿到的是拼好的**多**提示词，不是某一格的单格提示词。
         self.assertEqual(bw.call_args[0][1], prompt)
+
+    def test_render_forwards_the_landscape_snapshot(self):
+        """2026-10-16：横屏不再被写死。
+
+        用户原话「krea2 鬼针草，横屏，和泉纱雾」那次横屏被吃掉，根因是
+        `render` 里硬编码 `landscape=False`。判据读的是 threading.local 的原话，
+        而 `render` 跑在后台线程、读不到——所以必须由会话线程先快照、原样透传。
+        `_comic_batch` 的尺寸节点是 `BatchPromptImageGenerator`，早就在
+        `image_jobs._SIZE_NODE_TYPES` 里，对调开关本来就能生效。
+        """
+        from app import image_jobs
+        from app.tools.normal import generate_image as gi
+        seen = []
+        with mock.patch.object(gi, "build_t2i_workflow", return_value={"x": 1}), \
+             mock.patch.object(image_jobs, "enqueue", side_effect=self._fake_enqueue(seen)), \
+             mock.patch.object(gi, "_charge_quota", return_value=""):
+            comic_story.render("group", "123", "fixed_tag", ["d1", "d2"],
+                               landscape=True)
+        self.assertTrue(seen[0]["landscape"])
 
     def test_render_returns_zero_when_rejected(self):
         """整批被拒（队列满 / ComfyUI 没在线）——一张都没画，返回 0。"""
@@ -314,6 +334,57 @@ class AnimaChannelTest(unittest.TestCase):
         self.assertEqual(ok, 2)
         self.assertEqual(seen[0], "_anima_multi_batch")
         self.assertEqual(bw.call_args[0][0], "_anima_multi_batch")
+
+
+class LandscapeSnapshotTest(unittest.TestCase):
+    """横屏判据必须在**会话线程**快照后一路透传（2026-10-16）。
+
+    用户原话（私聊 2509355624 22:02）「krea2 鬼针草，横屏，和泉纱雾」→ 出
+    816×1024 竖版，用户报「我要横屏不给横屏」。根因：`comic_story.render`
+    里写死 `landscape=False`，注释理由是「漫画是竖版 + 后台线程读不到原话」。
+    前者是偏好，后者是事实——但事实可以靠**在会话线程先拍板**绕过：
+    `_generate_comic`（会话线程）→ `comic_story.start` → `render` → `enqueue`。
+    `_comic_batch` 的尺寸节点是 `BatchPromptImageGenerator`，本来就在
+    `image_jobs._SIZE_NODE_TYPES` 里，对调开关天生支持漫画。
+    """
+
+    def test_generate_comic_snapshots_the_landscape_word(self):
+        from app import image_jobs
+        from app.tools.normal import generate_comic as gc
+
+        with mock.patch.object(image_jobs, "turn_is_landscape",
+                               return_value=True) as m_ls, \
+             mock.patch.object(gc.gi, "_qq_gate", return_value=None), \
+             mock.patch("app.qq_api.current_context",
+                        return_value=("group", "123")), \
+             mock.patch.object(comic_story, "write_story",
+                               return_value=("fixed_tag", ["d1", "d2"])), \
+             mock.patch.object(comic_story, "start") as m_start, \
+             mock.patch.object(gc.gi, "_send_receipt", return_value=True):
+            gc._generate_comic("少女在河边散步", panels=2)
+
+        m_ls.assert_called_once()                       # 判据只在会话线程读一次
+        self.assertTrue(m_start.call_args.kwargs["landscape"])
+
+    def test_explicit_false_is_not_re_read(self):
+        """调用方已经拍过板（含 False）就别再读原话——确认闸重入队时原话已经
+        不是那一轮了（同 `image_jobs.enqueue` 的 `landscape` 语义）。"""
+        from app import image_jobs
+        from app.tools.normal import generate_comic as gc
+
+        with mock.patch.object(image_jobs, "turn_is_landscape",
+                               return_value=True) as m_ls, \
+             mock.patch.object(gc.gi, "_qq_gate", return_value=None), \
+             mock.patch("app.qq_api.current_context",
+                        return_value=("group", "123")), \
+             mock.patch.object(comic_story, "write_story",
+                               return_value=("fixed_tag", ["d1"])), \
+             mock.patch.object(comic_story, "start") as m_start, \
+             mock.patch.object(gc.gi, "_send_receipt", return_value=True):
+            gc._generate_comic("少女在河边散步", panels=1, landscape=False)
+
+        m_ls.assert_not_called()
+        self.assertFalse(m_start.call_args.kwargs["landscape"])
 
 
 if __name__ == "__main__":

@@ -1599,6 +1599,98 @@ class QuotedComicTest(unittest.TestCase):
         m_comic.assert_called_once_with("银发少女在草地上打滚", panels=10, style="")
 
 
+class NamedChannelBeatsComicTest(unittest.TestCase):
+    """**点名渠道最高优先级**（2026-10-16 用户拍板）。
+
+    用户原话：「ai 必须以用户当前的点名的渠道为主，用户明确点名渠道，必须使用
+    该渠道去跑，出现冲突的时候，比如点名 nffa，然后又点多图，nffa 没有多图，
+    我们默认以最开始的渠道来进行生图，点名渠道必须是最高优先级的」。
+
+    现场（私聊 2509355624 22:02，原话「krea2 鬼针草，横屏，和泉纱雾」）：代码
+    明明从原话认出了 krea2-guizhencao 并写进 `chan_hint`，模型却照抄上一轮
+    「[直达漫画] 20 格：和泉纱雾…」的格式吐了 `generate_comic`；而 comic 契约
+    原先排在「渠道优先级」那行**之前**、且无条件接受 → 出 silver 漫画 10 格，
+    点名的 krea2 被整个丢掉。
+
+    口径：代码从原话认出渠道时，comic 契约一律不认——补一次「别用
+    generate_comic」的重问；重问仍是漫画，就拿它给的 brief 按点名渠道出一张
+    （宁可提示词差点，也不能把点名的渠道丢掉）。**没点名渠道时行为一个字不变**
+    （默认 anima多图 那条路照旧）。
+    """
+
+    TEXT = "krea2 鬼针草，和泉纱雾"
+    COMIC = {"tool": "generate_comic", "brief": "和泉纱雾的日常小剧情",
+             "panels": 10}
+    SINGLE = {"tool": "generate_image", "skill": "krea2-guizhencao",
+              "prompt": "izumi_sagiri, 1girl, silver hair"}
+
+    def setUp(self):
+        direct_gen._LAST_JOB.clear()
+        direct_gen._LAST_DESC.clear()
+
+    def _translate(self, replies, text=None, skill="krea2-guizhencao"):
+        with mock.patch.object(direct_gen, "_ask",
+                               side_effect=replies) as m_ask:
+            out = direct_gen._translate(text or self.TEXT, [], skill=skill)
+        return out, m_ask
+
+    def test_code_really_parses_that_channel(self):
+        # 前置事实：这条原话代码认得出渠道（认不出就没有今天这场讨论）。
+        self.assertEqual(direct_gen._parse_channel(self.TEXT),
+                         ("krea2-guizhencao", "和泉纱雾"))
+
+    def test_named_channel_drops_the_comic_contract(self):
+        out, m_ask = self._translate([self.COMIC, self.SINGLE])
+        self.assertEqual(out, {"skill": "krea2-guizhencao",
+                               "prompt": "izumi_sagiri, 1girl, silver hair"})
+        self.assertEqual(m_ask.call_count, 2)            # 补了一次重问
+        self.assertIn("不要用 generate_comic", m_ask.call_args[0][0])
+
+    def test_second_miss_still_uses_the_named_channel(self):
+        # 重问还是漫画 → 兜底：按点名渠道出一张（brief 当提示词），渠道不丢。
+        out, m_ask = self._translate([self.COMIC, self.COMIC])
+        self.assertEqual(m_ask.call_count, 2)
+        self.assertEqual(out["skill"], "krea2-guizhencao")
+        self.assertEqual(out["prompt"], "和泉纱雾的日常小剧情")
+
+    def test_hint_says_the_named_channel_wins(self):
+        """提示层先行：绝大多数轮次模型看一眼就不吐漫画了（重问是兜底）。"""
+        _out, m_ask = self._translate([self.SINGLE])
+        content = m_ask.call_args[0][0]
+        self.assertIn("点名渠道优先级最高", content)
+        self.assertIn("别用 generate_comic", content)
+
+    def test_no_named_channel_leaves_comic_untouched(self):
+        """回归护栏：没点名渠道（「silver 漫画 10 格」这类）行为不变。"""
+        out, m_ask = self._translate([self.COMIC], text="silver 漫画 10 格",
+                                     skill=None)
+        self.assertEqual(m_ask.call_count, 1)            # 不重问
+        self.assertEqual(out, {"comic": {"brief": "和泉纱雾的日常小剧情",
+                                         "panels": 10}})
+
+    def test_revise_with_a_named_channel_also_yields_one_image(self):
+        """带引用图的改图路（`_revise`）同样绕过了渠道优先级，一起收口。"""
+        with mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="private_1"), \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=""), \
+             mock.patch.object(direct_gen.image_log, "lookup",
+                               return_value=None), \
+             mock.patch("app.vision.describe",
+                        side_effect=[json.dumps(self.COMIC),
+                                     json.dumps(self.SINGLE)]) as m_desc, \
+             mock.patch.object(gi, "_generate_image",
+                               return_value=RECEIPT) as m_gen, \
+             mock.patch.object(gc, "_generate_comic",
+                               return_value=RECEIPT) as m_comic:
+            out = direct_gen._revise(self.TEXT, ["data:image/jpeg;base64,A"],
+                                     [], channel="krea2-guizhencao")
+        self.assertEqual(out, "")                        # 回执已直发 → 闭嘴
+        m_comic.assert_not_called()
+        self.assertEqual(m_desc.call_count, 2)
+        self.assertEqual(m_gen.call_args.kwargs["skill"], "krea2-guizhencao")
+
+
 class ComicRoutingTest(unittest.TestCase):
     """连续漫画（2026-10-08）：走 `direct_gen` 的 JSON 契约，不走主 Agent 循环。
 
