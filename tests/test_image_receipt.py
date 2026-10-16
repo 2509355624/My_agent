@@ -194,10 +194,14 @@ class ReceiptNoteTest(_SubmitHarness):
         2026-10-10：**10 → 12**。两条新渠道各自起了一行（没法合进已有的行）：
         ①「要角色设定表…」（qwen-charsheet，10-10 加渠道时漏了回执位，补上）；
         ②「要修图…」（qwen-restore，本次新增）。
+
+        2026-10-16：**12 → 13**。「anima多图」（anima 配方一次出多张，默认 5 张）
+        单独起一行——它和「连续小漫画」不是同一件事（一个是剧情连贯多格，一个是
+        同一需求快速出多张），挤进漫画那行会把两种玩法说糊。
         ⚠️ 这里钉的只是**内置默认**；线上真身是 `agents/qq/settings.json` 的
         `receipt_note`（那份覆盖优先，已同步改）。
         """
-        self.assertEqual(len(self._note(None).splitlines()), 12)
+        self.assertEqual(len(self._note(None).splitlines()), 13)
 
     def test_default_note_lists_every_nameable_channel(self):
         """2026-10-07 用户拍板「把我全部的可用渠道都加上去」——能点名的

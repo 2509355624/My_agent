@@ -751,15 +751,23 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
         up = self._one(wf, "LatentUpscaleBy")
         self.assertEqual(wf[up]["inputs"]["scale_by"], 1.3)
 
-    def test_a_channel_without_a_skeleton_is_refused(self):
-        """没有 i2i 骨架的渠道（`nffa`）点名也一样拒，一步都不往 ComfyUI 送。
+    def test_a_channel_without_a_skeleton_degrades_to_t2i(self):
+        """没有 i2i 骨架的渠道（`nffa`）**不再硬拒**：丢掉垫图、按文生图重画。
 
-        2026-10-10 之前这条用的是 `hd_3_clear`——它现在有骨架了（锁构图那条），
-        所以换成 nffa。**拒收话术本身没变**，这里钉的就是那句还在。
+        2026-10-11 改的，原先这里钉的是「nffa 不支持图生图」那句拒收。起因是
+        233 群实录：引用图 +「anima 写实，要全身照，脚趾露出」被模型垫了图 →
+        `anima-real` 没有骨架 → 对方拿到一句「不支持」，还得自己补一句「文生图」
+        重发一遍，而「照这张改词重画」本来就是默认动作。
+
+        ⚠️ 这里**故意不 patch** `comfy_src.resolve`：本轮没有任何图，真去取图会
+        报「这儿没有图」。所以它没被调到，本身就是「降级发生在读源图之前」的
+        凭据——顺序反了这条会红。
         """
         out, wf = self._run(prompt="x", skill="nffa", source_image="1")
-        self.assertIn("不支持图生图", out)
-        self.assertEqual(wf, {})
+        self.assertIn("任务已提交", out)
+        self.assertIn("nffa 没有图生图骨架", out)     # 说明里点名是哪个渠道
+        self.assertTrue(wf)                         # 图照出：走本档文生图骨架
+        self.assertNotIn("VAEEncode", self._kinds(wf))
 
     def test_lllite_channel_submits_the_lock_composition_chain(self):
         """`silver` + 引用图 = 锁构图：空 latent 留着、denoise 仍是 1、LLLite 挂在模型链上。
@@ -907,16 +915,17 @@ class QwenEditFlowTest(_I2IRunner, unittest.TestCase):
         self.assertEqual(out, "这儿没有图")
         self.assertEqual(wf, {})
 
-    def test_refusal_for_other_channels_points_here(self):
-        """没有骨架的档被拒时，话术里要指出「只改一处」走 qwen——
+    def test_other_channels_degrade_but_still_point_at_qwen(self):
+        """没有骨架的档降级成文生图，但回执里仍要指出「只改一处」走 qwen——
         不然模型只会把它换成别的渠道，出图画风和构图一起跑。
 
-        （样例 2026-10-10 从 `hd_3_clear` 换成 `nffa`：前者现在有锁构图骨架了。）
+        （样例 2026-10-10 从 `hd_3_clear` 换成 `nffa`：前者现在有锁构图骨架了。
+        2026-10-11 拒收改降级，这里钉的「给出路」那半句不变。）
         """
         out, wf = self._run(prompt="x", skill="nffa", source_image="1")
-        self.assertIn("不支持图生图", out)
+        self.assertIn("任务已提交", out)
         self.assertIn("qwen_image_v1", out)
-        self.assertEqual(wf, {})
+        self.assertNotIn("不支持图生图", out)
 
     def test_text2img_on_qwen_is_untouched(self):
         """不传 source_image 时走原来的文生图骨架，一格图生图逻辑都不掺。"""

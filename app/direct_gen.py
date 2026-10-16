@@ -477,6 +477,12 @@ def _parse_channel(text):
     - 没有任何渠道词         → (None, 原文)
     """
     text = text.strip()
+    # 「anima多图」**不是档位词**：`anima` 在 `_TIER_RE` 里 ≡ 三档，不加这道闸
+    # 就会被吃成 `hd_3_clear`、把「多图」整条渠道顶掉（2026-10-16 群 1104825153
+    # 实录：原话「anima 多图」→ 直达入队 hd_3_clear）。点名它时**不锁渠道**，
+    # 交给 `_decide` 的 anima多图 专路（见下面「前置搜索」之前那段）。
+    if _ANIMA_MULTI_RE.search(text):
+        return None, text
     # ① 写在**开头**的固定渠道词最高优先，档位/画风词一律不许顶掉它
     # （2026-10-05 私聊 2509355624 实录：「nai，真人 Cos 阿米娅…柔和…」里的
     # 「柔和」被当画风，一条点名 NAI 的单落到了 anima_soft。用户原话：「我
@@ -886,17 +892,22 @@ _MASTER_TEMPLATE = (
     # 在 QQ 里永远调不到——漫画只能从这条 JSON 契约进来。**别把这条删了。**
     # brief 是**中文**（剧情 + 角色），不适用下面「prompt 必须是英文」那条规则；
     # 格数由 `comic_story.clamp_panels` 收口。
-    # **没有 skill 字段**：漫画只有一条渲染路（`comic_story.COMIC_SKILL`），
-    # 2026-10-08 用户拍板「漫画就只有 silver 渠道呀，其他渠道没有漫画的」。
-    # 模型仍可能习惯性多吐一个 skill，`_enqueue_comic` 直接忽略，无害。
+    # **没有 skill/style 字段**：走哪条渠道由**代码**从原话判定（见 `_comic_style`），
+    # 2026-10-16 起有两条路：默认 silver（`_comic_batch`，默认 10 格）、
+    # 「anima多图」→ anima（`_anima_multi_batch`，默认 5 格）。
+    # 2026-10-08 用户拍板过「漫画只有 silver 一条路」，2026-10-16 加第二条。
+    # 模型仍可能习惯性多吐一个 skill / style，`_enqueue_comic` 直接忽略，无害。
     # ⚠️ 2026-10-09 起它还兼**「要 N 张」的唯一出口**：sd 那套 `---` 批量已从
     # 模板撤掉（见渠道清单里 sd 那行的注释），多张只剩这一条路。所以触发条件
     # 不能只写「漫画 / 连环画」——用户原话是「生成 10 张申鹤的图片」。
     "- {{\"tool\": \"generate_comic\", \"brief\": \"中文剧情\", \"panels\": 10}}\n"
-    "  画**连续多格小漫画**（同一角色、剧情连贯的一串图）：用户要「漫画 / 连环画 / "
-    "多格 / 条漫」，**或者要「N 张」（生成10张 / 来5张 / 出4张…）时一律用它**"
-    "——要好几张只有这一条路。brief 写中文剧情和角色（名字照抄），panels 填用户"
-    "报的张数、没报就不填（默认 10，上限 30）。**只要 1 张就别用它**。\n"
+    "  画**连续多格小漫画**（同一角色、剧情连贯的一串图），或**一次快速出多张**"
+    "符合某个需求的图：用户要「漫画 / 连环画 / 多格 / 条漫 / 多图」，**或者要"
+    "「N 张」（生成10张 / 来5张 / 出4张…）时一律用它**——要好几张只有这一条路。"
+    "用户点名「anima多图」时也用它（走 silver 还是 anima 由**代码**从原话判定，"
+    "你**不用管、也别在 JSON 里写渠道**）。brief 写中文剧情和角色（名字照抄），"
+    "panels 填用户报的张数、没报就不填（默认：silver 10 / anima 5，上限 30）。"
+    "**只要 1 张就别用它**。\n"
     "不需要动手时，输出 {{\"reply\": \"你要说的话\"}}。\n"
     # ── 「别反问」（2026-10-07 用户拍板）──────────────────────────
     # 用户原话：「我都明确是要求 ai 直接生成的，结果他又反问我…我希望就是我
@@ -1281,6 +1292,23 @@ def _enqueue(skill, prompt, text, source_image=False, seed=None,
     return result
 
 
+# 「anima多图」的触发词（2026-10-16 用户拍板的新渠道名）。**只认这一个写法**，
+# 不给单字「anima」放行——「anima线条 / anima写实 / anima鬼针草」是**单张生图
+# 渠道**的点名词（见 `_FIXED_CHAN_MAP` / `_FIXED_CHAN_RE`），单看「anima」会把
+# 两者搅在一起。
+_ANIMA_MULTI_RE = re.compile(r"anima\s*多图", re.I)
+
+
+def _comic_style(text):
+    """原话里点没点名「anima多图」→ "anima"；没点名 → ""（render 侧落回 silver）。
+
+    代码判定，**不让模型复议**：模型习惯把「要好几张」一律当 silver 漫画（模板里
+    写的就是那一条），交给它判容易把「anima多图」静默降级成 silver——同 2026-10-08
+    「要 10 张漫画、模型填 skill=sd 被回落 silver」那次事故的性质。
+    """
+    return "anima" if _ANIMA_MULTI_RE.search(text or "") else ""
+
+
 def _enqueue_comic(comic, text):
     """漫画轮落队。语义与 `_enqueue` 完全一致：回执已直发返回 ""，否则返回要发的话。
 
@@ -1292,13 +1320,16 @@ def _enqueue_comic(comic, text):
     brief = (comic.get("brief") or "").strip()
     if not brief:
         return "漫画这条我没看清要画什么故事，把剧情再说一次。"
+    style = _comic_style(text)
     try:
-        result = gc._generate_comic(brief, panels=comic.get("panels"))
+        result = gc._generate_comic(brief, panels=comic.get("panels"), style=style)
     except Exception:
         log.exception("[direct] 漫画入队失败")
         return "漫画请求没发出去，稍后再试。"
-    panels = comic_story.clamp_panels(comic.get("panels"))
-    log.info("[direct] 漫画入队：%d 格 %r（原话 %r）", panels, brief[:50], text[:50])
+    panels = comic_story.clamp_panels(
+        comic.get("panels"), default=comic_story.default_panels(style))
+    log.info("[direct] 漫画入队：%d 格 %r（style=%s，原话 %r）", panels, brief[:50],
+             style, text[:50])
     _note_desc("[直达漫画] %d 格：%s" % (panels, brief[:200]))
     if result.startswith(image_jobs.RECEIPT_SENT_MARK):
         return ""          # 回执已由工具直发，本轮闭嘴
@@ -1413,8 +1444,8 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
     # QQ 的 @ 轮不跑主 Agent 循环（见 `qq_bot` 的调度注释），`generate_comic`
     # 那个工具在 QQ 里调不到，漫画只能从这条 JSON 契约进来。
     # brief 是**中文剧情**，不套下面「prompt 必须英文 + 渠道白名单」那套校验：
-    # 渠道固定（漫画只有一条渲染路），格数由 `comic_story.clamp_panels` 收口，
-    # 都不需要在这儿再判一遍。
+    # 渠道由 `_comic_style` 从原话判定（silver / anima），格数由
+    # `comic_story.clamp_panels` 按渠道取默认，都不需要在这儿再判一遍。
     # 模型若多吐一个 `skill`（模板里已经没有它了，但习惯难改）**直接丢掉**。
     if (data.get("tool") or "").strip() == "generate_comic":
         brief = (data.get("brief") or data.get("prompt") or "").strip()
@@ -1793,6 +1824,33 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
                 extra += "种子：" + seed + "\n"
             return ("这张图当初用的提示词：\n" + prompt
                     + ("\n" + extra if extra else ""))
+
+    # ── anima多图 专路（2026-10-16 用户拍板）──────────────────────────
+    # 用户**原话里点名**「anima多图」→ 一律走多图批量（`_anima_multi_batch`：
+    # 双模型两段、默认 5 张）。必须放在 `_parse_channel` 和「引用图轮 / 渠道词轮」
+    # **之前**拦下来，否则：
+    #   ① `anima` 会被 `_TIER_RE` 当档位词吃掉（≡三档 → hd_3_clear），代码还会
+    #      把 hd_3_clear 当 chan_hint 明写给 AI，AI 就永远不出 comic 契约
+    #      （2026-10-16 群 1104825153 实录：原话「anima 多图」→ 直达入队
+    #      hd_3_clear，用户原话「我都明确是多图了，还是走的 clear」）；
+    #   ② 带引用图时会被改图管道 `_revise` 截走，出的仍是**单张**。
+    # 为什么敢在这儿用代码定渠道：它是**点名词**（跟 nai/sd/anima线条 同一类），
+    # 「代码判渠道」本来就是既有设计；提示词创作仍在 `write_story` 那层由 LLM
+    # 把这份中文需求扩写成 tag，AI 没有被绕开。
+    if _ANIMA_MULTI_RE.search(text):
+        body = _ANIMA_MULTI_RE.sub(" ", text)
+        body = re.sub(r"^[\s，,、:：]+|[\s，,、:：]+$", "", body)
+        quoted_txt = quoted.strip()
+        if quoted_txt and not _PLACEHOLDER_QUOTE_RE.search(quoted_txt):
+            body = (quoted_txt + " " + body).strip() if body else quoted_txt
+        if not body and data_urls:
+            body = _recall_tags(data_urls[:3], numbered=False)
+        if not body:
+            return ("「anima多图」后面跟上你想要的需求（画什么、谁、什么场景），"
+                    "我一次给你出几张。")
+        m = re.search(r"(\d+)\s*[张格]", body)
+        panels = int(m.group(1)) if m else None
+        return _enqueue_comic({"brief": body, "panels": panels}, text)
 
     ch, desc = _parse_channel(text)
     if ch is None and at_me:

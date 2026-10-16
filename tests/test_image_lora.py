@@ -367,22 +367,26 @@ class ToolDescriptionTest(unittest.TestCase):
             self.assertNotIn(s, _I2I_SKILLS)
 
     def test_description_matches_the_reference_policy(self):
-        """口径 2026-10-10 翻转：**引用图 + 要画就传 `source_image`**。
+        """口径 2026-10-11 再翻转：**明说「图生图 / 照着画」才传 `source_image`**。
 
-        2026-09-27 停用整条链路是因为模型「一看见引用图就往改图上想」，而当时
-        也确实没有任何在售渠道能接参考图。现在 `silver` / `silver-hd` / `hd_3_×4`
-        都有锁构图骨架了，口径反过来：**要画就垫**，只有「看图点评 / 只要反推
-        提示词」才不传。这里钉的是**新口径**，不是「有没有这个能力」。
+        2026-10-10 那版是「引用图 + 要画就垫」，起因是 233 群实录被它坑了：
+        「anima 写实，要全身照」+ 引用图 → 模型垫了图 → `anima-real` 没有骨架 →
+        弹「不支持图生图」。所以翻回来：**引用 / 附图 + 只是提需求 = 照这张改词
+        重画（不垫）**，只有明说「图生图」才垫。这里钉的是**新口径**。
         """
         from app.tools.normal.generate_image import tool
         desc = tool["description"]
         self.assertIn("不传 skill 就是 silver", desc)
-        self.assertIn("引用图片：要画就垫，锁住构图", desc)
+        self.assertIn("引用图片：明说「图生图」才垫", desc)
         self.assertIn("渠道不用改", desc)              # 垫图不用换渠道了
         self.assertIn("不传 `source_image`", desc)     # 「看图点评 / 反推」那条退路
         self.assertIn("没有图生图骨架", desc)          # 没骨架的渠道别硬垫
         self.assertIn("只改一处", desc)                # qwen 那条编辑路还在
+        self.assertIn("照这张改词重画", desc)          # 新口径那条：引用 + 提需求
         self.assertNotIn("图生图已停用", desc)
+        # 旧口径不许回来（引用图就垫）
+        self.assertNotIn("要画就垫，锁住构图", desc)
+        self.assertNotIn("要画就填", desc)
         # 不能有「不传 skill、只传 source_image 就自动切渠道」这种指路话
         self.assertNotIn("只传 source_image", desc)
 
@@ -395,9 +399,11 @@ class ToolDescriptionTest(unittest.TestCase):
         from app.tools.normal.generate_image import tool
         desc = tool["parameters"]["properties"]["source_image"]["description"]
         self.assertIn("他自己刚发的", desc)         # 没引用时垫本轮他自己发的图
-        self.assertIn("要画就填", desc)             # 2026-10-10 口径翻转
+        self.assertIn("明说「图生图」才填", desc)    # 2026-10-11 口径再翻转
+        self.assertIn("照这张改词重画", desc)        # 引用 + 提需求 = 改词重画
         self.assertIn("重绘强度是定死的", desc)      # denoise 不由模型调
         self.assertNotIn("已停用", desc)
+        self.assertNotIn("要画就填", desc)          # 旧口径不许回来
 
     def test_description_teaches_both_i2i_paths(self):
         """描述里**两条路**都得写清：引用图锁构图（silver 系）/ 只改一处（qwen 系）。
@@ -414,8 +420,9 @@ class ToolDescriptionTest(unittest.TestCase):
         """
         from app.tools.normal.generate_image import tool
         desc = tool["description"]
-        self.assertIn("引用图片：要画就垫，锁住构图", desc)
+        self.assertIn("引用图片：明说「图生图」才垫", desc)
         self.assertIn("qwen 系两条", desc)
+        self.assertIn("照这张改词重画", desc)        # 新口径那条（引用 + 提需求）
         for key in ("一句改动指令", "不要把整张图重新描述",
                     "垫图重绘已经从用法里撤掉"):
             self.assertIn(key, desc, "描述里缺了「%s」" % key)

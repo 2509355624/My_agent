@@ -15,14 +15,15 @@ AI 它自己去判断」「没有兜底没有问题。因为大模型它自己�
 于是这里钉四件事：
   1. 那些符号**不许回来**——回来了就是又拿关键词替模型判了一次；
   2. 模型传了 `source_image` 就走图生图，**本轮原话里有没有「图生图」三个字一样**；
-  3. 唯一还留着的判据是**能力**：没有 i2i 骨架的渠道（如 `nffa`）被误拿去垫图要
-     当场报错并指向 qwen，不许静默换个渠道硬垫。
+  3. 没有 i2i 骨架的渠道（如 `nffa`）被误拿去垫图 → **降级文生图**（2026-10-11
+     起；原先是当场报错并指向 qwen）。不许静默换个渠道硬垫。
      ⚠️ 2026-10-10 起**默认渠道 `silver` 不再落在这条上**——它进了锁构图组
      （`_I2I_LLLITE_SKILLS`），所以「引用图 + 不点名渠道」现在能直接跑通；
   4. 「什么时候该传」只写在文案里（工具描述 / `_TOOL_HINTS` / direct_gen 两个
-     模板）。2026-10-10 口径翻转：**引用图 + 要生成 → 填 `source_image`**（渠道不变，
-     LLLite 锁住构图）；只有「在这张图上改」那条路依旧只给 qwen。动漫档的**垫图
-     重绘**已经从文案里撤掉，但后端 `_I2I_SKILLS` 照旧放行。
+     模板）。2026-10-11 口径再翻转：**明说「图生图 / 照着画 / 复刻」才填
+     `source_image`**（渠道不变，LLLite 锁住构图）；**引用 / 附图 + 只是提需求
+     = 照这张改词重画、不垫图**。只有「在这张图上改」那条路依旧只给 qwen。
+     动漫档的**垫图重绘**已经从文案里撤掉，但后端 `_I2I_SKILLS` 照旧放行。
 
 （文件名还叫 `test_image_i2i_gate.py`：里面已经没有任何 gate 了。改名要删旧
 文件，按规矩得先经用户点头，所以先把名字留着、内容换成新契约。）
@@ -128,12 +129,21 @@ class CapabilityRefusalTest(unittest.TestCase):
             qq_api.bind_context("group_9", "group", "9", user_text="这张真好看")
             return gi._generate_image(prompt="change her coat to red", **kw)
 
-    def test_a_channel_without_a_skeleton_refuses_and_names_qwen(self):
-        """没有骨架的渠道照样当场拒，且给出路（换 qwen），不许硬垫。"""
+    def test_a_channel_without_a_skeleton_degrades_and_names_qwen(self):
+        """没有骨架的渠道**不再拒**：丢掉垫图、按文生图重画。
+
+        2026-10-11 改的（原先钉的是「nffa 不支持图生图」那句拒收）。垫不垫图
+        是模型判的，判错一次就让对方白等一轮、还得自己补一句「文生图」重发——
+        233 群实录：`anima-real` + 引用图被垫了图，弹「不支持图生图」。
+        （降级说明里仍指向 qwen，那条断言在 `test_image_i2i.py`。）
+
+        `boom=True`（默认）：源图一读就炸。降级必须发生在读源图**之前**，
+        所以能走到下游的「ComfyUI 没在线」就证明一步都没碰源图。
+        """
         out = self._call(skill="nffa", source_image="1")
-        self.assertIn("nffa 不支持图生图", out)
-        self.assertIn("qwen_image_v1", out)             # 给出去路
-        self.assertIn("不要换个渠道硬垫", out)
+        self.assertNotIn("不支持图生图", out)
+        # 走到下游了（降级没拦下这单）；`boom=True` 同时保证源图一步都没读
+        self.assertIn("ComfyUI 现在没在线", out)
 
     def test_the_default_channel_no_longer_refuses(self):
         """正控制：`silver` 有锁构图骨架了，垫图请求要一路走到下游。
@@ -188,10 +198,11 @@ class CapabilityRefusalTest(unittest.TestCase):
 class PromptSurfaceTest(unittest.TestCase):
     """闸拆了，口径就得在文案里说死——四处文案跟「交 AI 判」这条边界一起改。
 
-    钉的是**新口径**（2026-10-10 翻转：引用/附图 + 要画就填 `source_image`、
-    渠道不用改；只有「只改一处、其余原样」才走 qwen 系），以及**旧口径不许回来**：
-    「两条入口」「默认走动漫重绘」那套是代码闸时代的产物，留着就是教模型去走
-    一条已经撤掉的渠道。
+    钉的是**新口径**（2026-10-11 再翻转：明说「图生图 / 照着画 / 复刻」才填
+    `source_image`、渠道不用改；**引用 / 附图 + 只是提需求 = 照这张改词重画、
+    不垫图**；只有「只改一处、其余原样」才走 qwen 系），以及**旧口径不许回来**：
+    「两条入口」「默认走动漫重绘」「引用图要画就填」那套是旧口径的产物，
+    留着就是教模型去垫一张人家没让垫的图。
     """
 
     @staticmethod
@@ -211,8 +222,10 @@ class PromptSurfaceTest(unittest.TestCase):
     def test_hints_teach_both_paths(self):
         h = self._hints()
         self.assertTrue(h, "generate_image 的使用提示不见了")
-        for key in ("`source_image` 引用/附图 + 要画就填",
+        for key in ("`source_image` 明说「图生图」才传",
                     "渠道不用改",
+                    # 2026-10-11：引用 / 附图 + 只是提需求 = 改词重画，不垫图
+                    "照这张改词重画",
                     "只是让你看图点评",
                     "没有骨架",
                     # 2026-10-10：口径翻转后 qwen 那条降级成「只改一处」的编辑路
@@ -221,18 +234,25 @@ class PromptSurfaceTest(unittest.TestCase):
                     "动漫档（anima_* / hd_*）的垫图重绘已从用法里撤掉",
                     "1~2 分钟"):
             self.assertIn(key, h)
+        # 旧口径不许回来
+        self.assertNotIn("要画就填", h)
 
     def test_source_image_param_teaches_the_same(self):
         p = self._param("source_image")
-        for key in ("引用/附图 + 要画就填", "渠道不用改",
+        for key in ("明说「图生图」才填", "渠道不用改",
+                    "只是提需求", "沿用原渠道文生图重画",
                     "只改一处", "才配 `skill=qwen_image_v1`",
                     "只是让你看图点评", "没有骨架", "用法上已撤掉"):
             self.assertIn(key, p)
+        self.assertNotIn("要画就填", p)
 
     def test_direct_gen_templates_teach_the_same(self):
         for name in ("_MASTER_TEMPLATE", "_REVISE_TEMPLATE"):
             text = self._flat(getattr(direct_gen, name))
-            self.assertIn("【图生图：引用图就填", text, name)
+            self.assertIn("【图生图：明说才垫", text, name)
+            # 新口径那半句：引用 / 附图 + 只提需求 = 改词重画，不垫图
+            self.assertIn("照这张改词重画", text, name)
+            self.assertNotIn("引用/附图 + 要画", text, name)
             self.assertIn("渠道不用改", text, name)
             self.assertIn("qwen 图生图", text, name)
 

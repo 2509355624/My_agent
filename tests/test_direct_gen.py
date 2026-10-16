@@ -1475,17 +1475,58 @@ class ComicRoutingTest(unittest.TestCase):
             '{"tool": "generate_comic", "brief": "胡桃去挑衣服", '
             '"panels": 10}')
         self.assertEqual(out, "")          # 回执已直发 → 本轮闭嘴
-        m_comic.assert_called_once_with("胡桃去挑衣服", panels=10)
+        m_comic.assert_called_once_with("胡桃去挑衣服", panels=10, style="")
+
+    def test_anima_duotu_routes_to_the_anima_channel(self):
+        """「anima多图」→ style=anima（**代码**判定，模型复议不了）。
+
+        2026-10-16 用户拍板的新渠道名。单字「anima」**不放行**——那是单张生图
+        渠道（anima线条 / anima写实 / anima鬼针草）的点名词，单看「anima」会把
+        两者搅在一起（见 `_comic_style`）。
+
+        这是**代码专路**（不是一个 JSON 契约分支）：原话点名就直接走，brief 取
+        用户原话（`write_story` 那层再扩写），连 `llm.call_llm` 都不经过——
+        所以下面那条 mock 出来的契约回复在用例里根本用不上。
+        """
+        out, m_comic = self._decide(
+            '{"tool": "generate_comic", "brief": "银发精灵在森林", "panels": 5}',
+            text="anima多图，银发精灵在森林射箭")
+        self.assertEqual(out, "")
+        m_comic.assert_called_once_with("银发精灵在森林射箭", panels=None,
+                                        style="anima")
+
+    def test_anima_duotu_beats_the_anima_tier_word(self):
+        """`anima` 在 `_TIER_RE` 里 ≡ 三档，不加专路会被吃成 `hd_3_clear`。
+
+        2026-10-16 群 1104825153 实录：原话「anima 多图」→ 直达入队
+        hd_3_clear，用户原话「我都明确是多图了，还是走的 clear」。
+        """
+        self.assertEqual(direct_gen._parse_channel("anima 多图"),
+                         (None, "anima 多图"))
+        self.assertEqual(direct_gen._parse_channel("anima多图"), (None, "anima多图"))
+        out, m_comic = self._decide(
+            '{"tool": "generate_comic", "brief": "x"}',
+            text="anima多图，银发精灵在森林射箭，3张")
+        self.assertEqual(out, "")
+        m_comic.assert_called_once_with("银发精灵在森林射箭，3张", panels=3,
+                                        style="anima")
+
+    def test_anima_duotu_without_a_brief_asks_back(self):
+        """只发「anima多图」、没给需求 → 回一句要需求，**不入队**（不烧默认图）。"""
+        out, m_comic = self._decide('{"tool": "generate_comic", "brief": "x"}',
+                                    text="anima多图")
+        m_comic.assert_not_called()
+        self.assertIn("anima多图", out)
 
     def test_comic_ignores_a_stray_skill_field(self):
-        """模板里已经没有 `skill` 了（漫画只有一条渲染路），但模型习惯难改，
-        多吐一个字段不许影响路由——`_generate_comic` 收不到它。
+        """模板里已经没有 `skill` / `style` 了（渠道由代码从原话判定），但模型
+        习惯难改，多吐一个字段不许影响路由——`_generate_comic` 收不到它。
         """
         out, m_comic = self._decide(
             '{"tool": "generate_comic", "brief": "胡桃去挑衣服", '
             '"panels": 6, "skill": "qwen"}')
         self.assertEqual(out, "")
-        m_comic.assert_called_once_with("胡桃去挑衣服", panels=6)
+        m_comic.assert_called_once_with("胡桃去挑衣服", panels=6, style="")
 
     def test_comic_receipt_silences_the_round(self):
         # 回执是工具直发的，`decide` 必须返回 ""（不是那句话本身），

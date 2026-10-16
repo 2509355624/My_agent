@@ -26,7 +26,8 @@ LORA = "LoraLoader"
 # 没有 clip 输出槽，提交必被 ComfyUI 拒。所以两种都要认。
 LORA_CLASSES = (LORA, "LoraLoaderModelOnly")
 UPSCALE = "UpscaleModelLoader"
-GEN_HINTS = ("BatchPromptImageGenerator",)  # 优先识别为“采样生成节点”
+GEN_HINTS = ("BatchPromptImageGenerator",
+             "DualModelBatchPromptImageGenerator")  # 优先识别为“采样生成节点”
 
 _NODE_INFO = None
 

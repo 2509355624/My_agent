@@ -744,40 +744,29 @@ class DefaultChannelTest(unittest.TestCase):
             self.assertIn("默认生图渠道是 silver", prop, name)
 
     def test_refusal_messages_are_actionable_and_leak_no_retired_channel(self):
-        """两句**拒收话术**都得给出路，且不许出现已归档的渠道名。
+        """**停用渠道**那句拒收话术必须给出路，且不许出现已归档的渠道名。
 
-        ① 垫图被拒的那句（点到了没有 i2i 骨架的档，如 `nffa`）：要让模型知道
-           「去掉 source_image 按文生图重来」，或改用 qwen 做「只改一处」的编辑。
-           —— 这里**不要求**它指到默认渠道：用户点名别的渠道时把他往 silver 引
-           是换渠道，不是他要的。
-           ⚠️ 样例 2026-10-10 从 `hd_3_clear` 换成 `nffa`：三档现在有锁构图骨架了
-           （`_I2I_LLLITE_SKILLS`），不再走这条拒收。
+        ① 垫图那句：**2026-10-11 起不再是拒收**——没有 i2i 骨架的档（如 `nffa`）
+           直接**降级文生图**（丢掉 source_image 按文生图重画），不再弹「不支持
+           图生图」。那句断言搬去了 `test_image_i2i.py`，这里不再验。
         ② 停用渠道那句：必须指到**当前**默认渠道。
-           2026-10-01 起真配置里**已经没有停用渠道**（全部解封），所以这里
+           2026-01 起真配置里**已经没有停用渠道**（全部解封），所以这里
            **显式 patch** 一份停用名单来验机制，不再依赖真配置。
-
-        两句都拦在**任何网络调用之前**（垫图那句只读一次本地 skill 文件），
-        所以这里能直接调，不需要 mock ComfyUI。
         """
         from app.tools.normal import generate_image as gi
 
         with mock.patch.object(gi, "DISABLED_IMAGE_SKILLS", ["krea2"]), \
                 mock.patch.object(gi, "is_cancelled", lambda: False), \
                 mock.patch.object(gi, "_qq_gate", lambda: None):
-            i2i = gi._generate_image(prompt="x", skill="nffa",
-                                     source_image="1")
             off = gi._generate_image(prompt="x", skill="krea2")
 
-        self.assertIn("不支持图生图", i2i)            # 确实是那句拒收
-        self.assertIn("source_image", i2i)          # 且给出了路：去掉它
         self.assertIn("停用", off)                   # 确实是那句拒收
         self.assertIn(DEFAULT_CHANNEL, off, "停用渠道拒收话术没指到当前默认渠道")
 
         # 历史渠道名一个都不许出现在话术里（它们已经不在 skills/ 了）
-        for msg in (i2i, off):
-            for retired in RETIRED:
-                self.assertNotIn(retired + " ", msg,
-                                 "拒收话术里还留着已归档的渠道名 %s" % retired)
+        for retired in RETIRED:
+            self.assertNotIn(retired + " ", off,
+                             "拒收话术里还留着已归档的渠道名 %s" % retired)
 
     def test_docs_agree_on_which_channel_is_default(self):
         """默认渠道的 skill.md 标题标「默认」，其余（含动漫那四个）都不许标。
@@ -1586,9 +1575,9 @@ class ToolDescriptionBudgetTest(unittest.TestCase):
         "用户报名字不省": "原样写进去",
         "认不出要承认": "我没认出来",
         "nffa槽会顶画风": "画风顶掉",
-        # 2026-10-10 口径翻转：引用图 + 要画 → 传 source_image（锁构图），
-        # 不再要求「明说 qwen 图生图」；只有「只改一处」才走 qwen。
-        "引用图要画就垫": "引用图片：要画就垫，锁住构图",
+        # 2026-10-11 口径再翻转：明说「图生图 / 照着画 / 复刻」才填 source_image；
+        # 引用 / 附图 + 只是提需求 = 照这张改词重画，不垫图。
+        "引用图明说图生图才垫": "引用图片：明说「图生图」才垫",
         "垫图不用换渠道": "渠道不用改",
         "没骨架别垫": "没有图生图骨架",
         "看图点评不垫": "只是让你看图点评",

@@ -1625,7 +1625,8 @@ def comfy_alive(timeout=3):
 _LANDSCAPE_RE = re.compile(r"(横屏|横版|横图)")
 # 带画布的节点类型（实测这三种）。**按 class_type 认、不按节点 id**——id 各渠道不同。
 _SIZE_NODE_TYPES = ("EmptyLatentImage", "EmptySD3LatentImage",
-                    "BatchPromptImageGenerator")
+                    "BatchPromptImageGenerator",
+                    "DualModelBatchPromptImageGenerator")
 
 
 def turn_is_landscape():

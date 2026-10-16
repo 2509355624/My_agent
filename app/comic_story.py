@@ -43,6 +43,20 @@ MAX_PANELS = 30
 # 「你用我原生 silver 渠道去跑？10 个图片要 300 多秒钟，排队排死人」。
 COMIC_SKILL = "_comic_batch"
 
+# 渠道映射（2026-10-16 加「anima多图」）：
+#   silver = 原来的连续小漫画（silver 配方，默认 10 格）
+#   anima  = 「anima多图」（anima 配方，默认 5 格，一次快速出多张符合需求的图）
+# style 由 `direct_gen` 从原话里判定（「anima多图」→ anima；否则 silver），
+# 再透传到 render；render 只认这张表，不自己猜。
+COMIC_SKILLS = {"silver": "_comic_batch", "anima": "_anima_multi_batch"}
+DEFAULT_PANELS_BY_STYLE = {"silver": 10, "anima": 5}
+
+
+def default_panels(style):
+    """按渠道给默认格数；不认识的 style 退回 silver 默认。"""
+    return DEFAULT_PANELS_BY_STYLE.get(style or "silver", DEFAULT_PANELS)
+
+
 # 编剧提示词：优先读 skill 原文（用户改 skill 就跟着变，单一真相源）；
 # 读不到（skill 被删/改名）时退回这段内置的等价骨架。
 _FALLBACK_SYSTEM = """你是条漫分镜编剧。把用户给的设定写成一份程序可直接解析的连续分镜。
@@ -79,14 +93,14 @@ _SEP_RE = re.compile(r"^[ \t]*-{3,}[ \t]*$", re.M)
 _FRONTMATTER_RE = re.compile(r"^\s*---\s*\n.*?\n\s*---\s*\n", re.S)
 
 
-def clamp_panels(n):
-    """格数收敛：非数字/非正 → 默认 10；超过硬上限 30 → 截到 30。"""
+def clamp_panels(n, default=DEFAULT_PANELS):
+    """格数收敛：非数字/非正 → default；超过硬上限 30 → 截到 30。"""
     try:
         n = int(n)
     except (TypeError, ValueError):
-        n = DEFAULT_PANELS
+        n = default
     if n <= 0:
-        n = DEFAULT_PANELS
+        n = default
     return min(n, MAX_PANELS)
 
 
@@ -191,7 +205,7 @@ def _new_seed():
     return random.randint(0, 2 ** 32 - 1)
 
 
-def render(target, target_id, fixed, dynamics):
+def render(target, target_id, fixed, dynamics, style="silver"):
     """整批渲染并发回会话。**阻塞**——调用方负责把它放进后台线程。
 
     一次提交：把每格提示词（`assemble()` 拼好的「固定块 + 动态」）用 `---`
@@ -206,6 +220,7 @@ def render(target, target_id, fixed, dynamics):
     from app import image_jobs
     from app.tools.normal import generate_image as gi
 
+    skill = COMIC_SKILLS.get(style or "silver", COMIC_SKILL)
     prompts = assemble(fixed, dynamics)
     total = len(prompts)
     if not total:
@@ -213,17 +228,17 @@ def render(target, target_id, fixed, dynamics):
     # `---` 分隔：和批量工作流的 `delimiter` 默认值、以及本模块的契约同一个符号。
     multi = "\n---\n".join(prompts)
     seed = _new_seed()
-    wf = gi.build_t2i_workflow(COMIC_SKILL, multi, seed)
+    wf = gi.build_t2i_workflow(skill, multi, seed)
     if wf is None:
-        log.error("漫画渠道 %s 没有文生图工作流", COMIC_SKILL)
+        log.error("漫画渠道 %s 没有文生图工作流", skill)
         return 0
-    log.info("漫画开跑：%d 格，渠道 %s，会话 %s %s", total, COMIC_SKILL,
-             target, target_id)
+    log.info("漫画开跑：%d 格，渠道 %s（style=%s），会话 %s %s", total, skill,
+             style, target, target_id)
     try:
         # landscape=False 写死：漫画是竖版，且后台线程读不到本轮原话
         # （qq_api 的上下文是 threading.local），不能让 enqueue 自己去判。
         job, reason = image_jobs.enqueue(target, target_id, wf,
-                                         skill=COMIC_SKILL, prompt=multi,
+                                         skill=skill, prompt=multi,
                                          seed=seed, landscape=False)
         if reason:
             log.warning("漫画被拒：%s", reason)
@@ -237,10 +252,10 @@ def render(target, target_id, fixed, dynamics):
     return total
 
 
-def start(target, target_id, fixed, dynamics):
+def start(target, target_id, fixed, dynamics, style="silver"):
     """起一个后台线程跑 `render`，立刻返回（工具侧不能阻塞适配层的并发槽）。"""
     t = threading.Thread(target=render,
-                         args=(target, target_id, fixed, dynamics),
+                         args=(target, target_id, fixed, dynamics, style),
                          name="comic-render", daemon=True)
     t.start()
     return t

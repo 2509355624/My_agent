@@ -219,16 +219,101 @@ class ToolTest(unittest.TestCase):
         self.assertIn("panels", props)
         self.assertEqual(tool["parameters"]["required"], ["brief"])
 
-    def test_tool_has_no_style_knob(self):
-        """漫画只有一条渲染路——别再给模型一个「画风」旋钮。
+    def test_tool_style_knob_is_a_closed_enum(self):
+        """2026-10-16 起漫画有两条渲染路（silver / anima），模型只能在这两个里选。
 
-        2026-10-08 用户拍板：「漫画就只有 silver 渠道呀，其他渠道没有漫画的」。
+        用户拍板加「anima多图」渠道（anima 配方、默认 5 张）；除此之外的画风名
+        （qwen / jank 等）仍然一律忽略——`enum` 把它焊死，模型编不出第三个值。
         """
         from app.tools.normal.generate_comic import tool
-        self.assertNotIn("skill", tool["parameters"]["properties"])
-        # 描述里要**明说**没有画风参数，否则模型会自己编一个出来
-        # （不能只断言 "skill" 不在描述里——描述里本来就有 `skills/storyboard-prompt`）。
-        self.assertIn("没有画风参数", tool["description"])
+        props = tool["parameters"]["properties"]
+        self.assertEqual(props["style"]["enum"], ["silver", "anima"])
+        self.assertIn("anima多图", tool["description"])
+
+
+class AnimaChannelTest(unittest.TestCase):
+    """2026-10-16 加的「anima多图」渠道（`skills/_anima_multi_batch`）。
+
+    silver / anima 两条路都得是**内部批量渠道**；anima 必须走 anima 配方
+    （底模 + 6 条 LoRA + 画师串前缀 + 快跑参数），不能不小心退化成 silver。
+    """
+
+    def test_style_map(self):
+        self.assertEqual(comic_story.COMIC_SKILLS,
+                         {"silver": "_comic_batch",
+                          "anima": "_anima_multi_batch"})
+
+    def test_default_panels_per_style(self):
+        self.assertEqual(comic_story.default_panels("silver"), 10)
+        self.assertEqual(comic_story.default_panels("anima"), 5)
+
+    def test_anima_channel_is_internal_and_loadable(self):
+        from app.skills import list_skills, load_skill
+        skill = comic_story.COMIC_SKILLS["anima"]
+        self.assertTrue(skill.startswith("_"))
+        self.assertNotIn(skill, list_skills())
+        sd = load_skill(skill)
+        self.assertTrue(sd and sd.get("workflow"))
+
+    def test_anima_workflow_is_anima_recipe(self):
+        from app.skills import load_skill
+        wf = load_skill(comic_story.COMIC_SKILLS["anima"])["workflow"]
+        self.assertEqual(wf["5"]["inputs"]["unet_name"],
+                         "miaomiaoRealskin_anima13.safetensors")
+        # 6 条 LoRA（detailer 挂两次），链尾是 reina。
+        loras = [n for n in wf.values()
+                 if n["class_type"] == "LoraLoaderModelOnly"]
+        self.assertEqual(len(loras), 6)
+        self.assertEqual(wf["30"]["inputs"]["lora_name"],
+                         "anima_context_detailer_base10.safetensors")
+        self.assertEqual(wf["30"]["inputs"]["strength_model"], 0.8)
+        # 双模型两段采样：用自建节点 DualModelBatchPromptImageGenerator，
+        # 一段 anima13+6LoRA（er_sde），二段 silvermoonmix 裸接（euler/0.25）。
+        batch = [n for n in wf.values()
+                 if n["class_type"] == "DualModelBatchPromptImageGenerator"][0]["inputs"]
+        self.assertEqual((batch["width"], batch["height"]), (1024, 1536))
+        self.assertEqual(batch["steps"], 4)
+        self.assertEqual(batch["sampler_name"], "er_sde")
+        self.assertEqual(batch["stage2_steps"], 4)
+        self.assertEqual(batch["stage2_cfg"], 1)
+        self.assertEqual(batch["stage2_sampler_name"], "euler")     # 二段换采样器
+        self.assertEqual(batch["stage2_denoise"], 0.25)
+        self.assertEqual(batch["stage2_latent_scale"], 1.2)         # 两段间 latent 放大
+        self.assertEqual(batch["delimiter"], "---")
+        self.assertTrue(batch["base_prompt"].strip())   # 画师串逐格拼
+        # 一段 model 接在 LoRA 链尾（31），二段 model_2 接 silvermoonmix 裸载（36）。
+        self.assertEqual(batch["model"], ["31", 0])
+        self.assertEqual(batch["model_2"], ["36", 0])
+        self.assertEqual(wf["36"]["inputs"]["unet_name"],
+                         "silvermoonmixAnimaEvolved_v2329BTurbo.safetensors")
+        # 末尾 2x 像素放大。
+        ups = [n for n in wf.values()
+               if n["class_type"] == "UpscaleModelLoader"]
+        self.assertEqual(len(ups), 1)
+
+    def test_render_uses_anima_skill(self):
+        from app import image_jobs
+        from app.tools.normal import generate_image as gi
+
+        class FakeJob:
+            def wait(self):
+                return None
+
+        seen = []
+
+        def fake_enqueue(target, target_id, wf, skill=None, prompt=None, **kw):
+            seen.append(skill)
+            return FakeJob(), None
+
+        with mock.patch.object(gi, "build_t2i_workflow",
+                               return_value={"x": 1}) as bw, \
+             mock.patch.object(image_jobs, "enqueue", side_effect=fake_enqueue), \
+             mock.patch.object(gi, "_charge_quota", return_value=""):
+            ok = comic_story.render("group", "123", "fixed_tag",
+                                    ["d1", "d2"], style="anima")
+        self.assertEqual(ok, 2)
+        self.assertEqual(seen[0], "_anima_multi_batch")
+        self.assertEqual(bw.call_args[0][0], "_anima_multi_batch")
 
 
 if __name__ == "__main__":

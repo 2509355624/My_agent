@@ -48,10 +48,16 @@ log = logging.getLogger("generate_image")
 #   1. 本文件末尾的工具描述与 `source_image` / `prompt` 参数说明；
 #   2. `agent_prompt._TOOL_HINTS` 的 generate_image 条目；
 #   3. `direct_gen._MASTER_TEMPLATE` / `_REVISE_TEMPLATE` 的【图生图】段。
-# 文案口径（2026-10-10 翻转）：**引用 / 附图 + 要画就填 `source_image`**——那张图
-# 会被当构图条件喂进去、锁住构图重画（silver / silver-hd / 高清三档有骨架）。
-# 旧口径「引用一张图本身不是垫图要求」**已作废**：那是 2026-10-06 写的，当时
-# 没有任何在售渠道能接参考图，只能「看图 → 反推提示词 → 文生图重画」。
+# 文案口径（2026-10-11 再翻转）：**明说「图生图」才填 `source_image`**——
+# 「图生图 / 垫图 / 照着画 / 照这张画 / 复刻 / 参考这张的构图 / 只改一处、
+# 其余原样」这些才算垫图信号；那张图会被当构图条件喂进去、锁住构图重画
+# （silver / silver-hd / 高清三档有骨架）。
+# **引用 / 附图 + 只提需求（换装 / 换发色 / 改动作 /「要全身照」这类补充）
+# → 不垫**：那是「照这张改词重画」——拿那张图当初的提示词把新需求并进去、
+# **沿用原渠道文生图重画**。
+# 上一版（2026-10-10）「引用 / 附图 + 要画就填」**已作废**，起因是 233 群实录：
+# 「anima 写实，要全身照，脚趾露出」+1 条引用 → 模型垫了图 → `anima-real`
+# 没有 i2i 骨架 → 弹「不支持图生图」，而对方要的就是重画一张。
 # 只有「只改一处、其余原样」那条路依旧只给 qwen 系。
 #
 # ⚠️ 动漫档（`anima_*` / `hd_*`）的**垫图重绘**仍然**已经从文案里撤掉**：不是后端
@@ -198,6 +204,24 @@ _T2I_ONLY_RE = re.compile(
 _T2I_FORCED_NOTE = (
     "系统已自动调整：对方本轮明说了「文生图」，所以没垫图、没参照他发的那张，"
     "按他自己描述 / 反推的提示词重新画了一张"
+)
+
+# 渠道没有 i2i 骨架时的**降级**说明（2026-10-11）。
+#
+# 这里原先是**硬报错**（「nffa 不支持图生图…」）。留着它的代价在 233 群实录里
+# 才看出来：垫不垫图是模型判的，而它只要判错一次（引用图 + 普通需求也垫），
+# 对方拿到的就不是一张图、而是一句「不支持」，还得自己补一句「文生图」重发
+# 一遍——明明「照这张改词重画」本来就是默认动作（见 `caption_note` 第 2 条）。
+# 所以改成降级：**丢掉 source_image、按提示词走文生图**，把这句说明塞进回执，
+# 图照出。跟下面「取不到源图 → 报错、**绝不退回文生图凭空画一张**」不冲突：
+# 那条是对方明说要改这张图、却拿不到图（退回文生图 = 骗他）；这条是渠道根本
+# 接不了参考图（不出图 = 白跑一轮）。
+# 自带外层括号（跟 `_hd_tier_guard` 那句一个写法）：回执拼装认这个前缀，
+# 不再套一层「垫的是」。
+_I2I_DEGRADE_NOTE = (
+    "（系统已自动调整：%s 没有图生图骨架、改不了那张图，所以没垫它、"
+    "按提示词重新画了一张。对方要「只改一处、其余原样」，"
+    "就用 qwen_image_v1 + source_image。）"
 )
 
 
@@ -440,6 +464,7 @@ _RECEIPT_NOTE_DEFAULT = (
     "qwen 超清支持图生图：发「qwen 超清，图生图，描述」（附一张图）\n"
     "要横屏：加「横屏」（例：silver 横屏 一个女孩）\n"
     "要连续小漫画：发「<画风>漫画，<数量>，<剧情>」（例：silver漫画，10个，原神的雷电将军在樱花树下）\n"
+    "要 anima 快速出多张：发「anima多图，<需求>」（默认 5 张，双模型精修）\n"
     "更多玩法：@%s /更多渠道"
 )
 
@@ -482,6 +507,25 @@ def _send_receipt(target, target_id, receipt):
     return True
 
 
+def _note_tail(source_note):
+    """回执尾巴：垫图说明套「垫的是…」，系统自动调整的说明**不套**。
+
+    两类说明走的是同一个 `source_note` 通道：
+      - 垫图说明（「引用的那张图」这类）→ 「（垫的是…。）」；
+      - 系统自动调整（`_hd_tier_guard` / `_t2i_guard` / 没骨架降级）→ 自带
+        括号或以「系统已自动调整」起头，再套一层「垫的是」就成了病句
+        （2026-10-11 加降级时顺手修的：原先 `hd_note` 出来是
+        「（垫的是（系统已自动调整：…））」）。
+    """
+    if not source_note:
+        return ""
+    if source_note.startswith("（"):
+        return source_note
+    if source_note.startswith("系统已自动调整"):
+        return "（%s。）" % source_note
+    return "（垫的是%s。）" % source_note
+
+
 def _qq_receipt(job, target, target_id, source_note="", quota_tail=""):
     """QQ 侧提交成功后的回执（本机 / NAI 两条提交路径共用）。
 
@@ -494,7 +538,7 @@ def _qq_receipt(job, target, target_id, source_note="", quota_tail=""):
     """
     ahead = image_jobs.ahead_of(job)
     receipt = _receipt_text(ahead, getattr(job, "skill", None))
-    tail = (("（垫的是%s。）" % source_note) if source_note else "") + quota_tail
+    tail = _note_tail(source_note) + quota_tail
     if _send_receipt(target, target_id, receipt):
         return (image_jobs.RECEIPT_SENT_MARK + receipt + "\n"
                 + "（上面那句系统已经直接发到会话里了：**不要再复述排队 / 张数**，"
@@ -879,9 +923,11 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 拆掉了这里的 `_i2i_gate`，见文件开头的留档）。什么时候该传写在下面两处文案：
     # 本文件末尾的工具描述与 `source_image` 参数说明、`agent_prompt._TOOL_HINTS`。
     #
-    # 口径（2026-10-10 用户拍板翻转）：**引用/附图 + 要画就填**——那张图会当构图
-    # 条件喂进去、锁住构图重画（silver / silver-hd / 高清三档都有骨架）。
+    # 口径（2026-10-11 再翻转）：**明说「图生图」才填**——那张图会当构图条件
+    # 喂进去、锁住构图重画（silver / silver-hd / 高清三档都有骨架）。
+    # 引用 / 附图 + 只是提需求 → **不填**，走「照这张改词重画」（文生图）。
     # 只有「只改一处、其余原样」那条编辑路才配 qwen 系。
+    # ⚠️ 这条边界只写在文案里（三处，见文件开头），代码不扫原话判。
 
     # 没点名 skill 时的默认渠道：文生图照旧 T2I_DEFAULT_SKILL。execute_tool 是 fn(**args)，
     # 模型不传 skill 就落到这里的默认值 None——所以「没点名」和「点名了默认渠道」
@@ -942,12 +988,17 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 降级 / 改判说明都走 source_note 这一个通道进回执。t2i_note 在
     # is_i2i 被清成 False 后走到这里，所以也要带上。
     source_note, denoise_txt, uploaded = hd_note + t2i_note, "", ""
+    # 没有 i2i 骨架 → **降级文生图**，不再硬报错（2026-10-11，理由见
+    # `_I2I_DEGRADE_NOTE` 上面那段）。垫不垫图是模型判的，判错一次就让对方
+    # 白等一轮、还得自己补一句「文生图」重发，不值当。
+    # ⚠️ 必须赶在 `comfy_src.resolve` 之前把 is_i2i 清掉，否则源图已经读出
+    # 来、传上去了，却根本没进工作流。
+    if is_i2i and skill not in _I2I_SKILLS:
+        log.info("取消垫图：%s 没有 i2i 骨架，按文生图重画", skill)
+        source_note = source_note + _I2I_DEGRADE_NOTE % skill
+        source_image = ""
+        is_i2i = False
     if is_i2i:
-        if skill not in _I2I_SKILLS:
-            return ("错误: " + skill + " 不支持图生图（垫图 / 改图）。"
-                    "去掉 source_image 按文生图重来；对方确实要在这张图上改，"
-                    "就改用 qwen_image_v1 + source_image（只改那一处、其余原样），"
-                    "**不要换个渠道硬垫**。")
         # 重绘档吃这个数；qwen 的骨架里 denoise 写死 1、没有 `__DENOISE__`
         # 可替（见模块开头②），所以这里对它是个空操作。
         denoise_txt = "%.2f" % I2I_DENOISE
@@ -1211,16 +1262,21 @@ tool = {
                   "（如 \"x.safetensors:0.8,y.safetensors:0.5\"），文件名要完整（.safetensors 结尾），"
                   "写错会返回可用清单。传了就完全接管本次 lora，每个渠道 2 个槽，没填满的自动关闭——"
                   "**nffa 也一样是 2 个槽**（画风 + 描边），对它传 lora 会把画风顶掉、画的就不是那个味了。\n\n"
-                  "【引用图片：要画就垫，锁住构图】用户**引用 / 附图 + 要画**（「复刻 / 参考这个 / "
-                  "照着画一张 / 把衣服换成jk」都算）→ **传 `source_image=1`**，"
-                  "**渠道不用改**（silver / silver-hd / 高清三档都有锁构图骨架）："
-                  "那张图会被当成构图条件喂进去，出图是**重画的**、尺寸仍是本档画布。"
+                  "【引用图片：明说「图生图」才垫】**引用 / 附图本身不等于要垫图**——"
+                  "看他说的话里有没有「照着这张画」的意思：\n"
+                  " ① **明说要照着那张画**（「图生图 / 垫图 / 照着画 / 照这张画 / 复刻 / "
+                  "参考这张的构图 / 只改一处、其余原样」）→ **才传 `source_image=1`**，"
+                  "silver / silver-hd / 高清三档有锁构图骨架、**渠道不用改**："
+                  "那张图会被当成构图条件喂进去，出图是**重画的**、尺寸仍是本档画布，"
                   "prompt 照常写完整画面描述，不是写改动指令。\n"
-                  " 引用的是**机器人自己画的图**（尾巴带 HT 编号 / 渠道 / 种子那一行）→ 先走账本拿它当初的"
-                  "提示词、把新需求并进去，**再用那张图当初的渠道**生成（他没点名换渠道就别换）。\n"
+                  " ② **只是提需求 / 补充要求**（换装 / 换发色 / 改动作 /"
+                  "「要全身照」「脚趾露出」这类）→ **不传 `source_image`**：这是「照这张改词重画」，"
+                  "不是图生图。先拿那张图当初的提示词（自家图走账本、别人发的图就看画面反推）、"
+                  "把新需求并进去，**再用那张图当初的渠道**文生图重画（他没点名换渠道就别换）。\n"
                   " **只是让你看图点评 / 反推提示词 / 问这图什么来头 → 不传 `source_image`**，直接回话。\n"
                   " ⚠️ `jank` / `nffa` / `cunny` / `miao` / `krea2-*` / `sd` **没有图生图骨架**，"
-                  "别给它们传 `source_image`；要垫图就换 silver 系或 qwen 系。\n\n"
+                  "别给它们传 `source_image`（传了会自动退回文生图、白等一轮）；"
+                  "要垫图就换 silver 系或 qwen 系。\n\n"
                   "【要「只改一处、其余原样」→ qwen 系两条：qwen_image_v1（2x）/ qwen-hd（4x 超清）】"
                   "对方**明说「qwen 图生图」+ 要改什么**时走这条。"
                   "`source_image` 填 1 = 垫**本轮出现的那张图**"
