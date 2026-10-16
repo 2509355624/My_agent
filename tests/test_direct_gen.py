@@ -896,6 +896,39 @@ class RevisionPipelineTest(unittest.TestCase):
         self.assertNotIn("provider",
                          m_describe.call_args.kwargs)  # 跟识图配置走
 
+    def test_quoted_image_without_i2i_defaults_to_the_anima_multi(self):
+        """引用图 + 没说图生图 = 「反推提示词再跑一张」→ 跟默认走 anima多图。
+
+        2026-10-16 用户拍板：「我引用图片，没有说图生图，就是默认反推提示词
+        然后跑图的呀」。这条以前**无条件落银**（改图管道的兜底写死成
+        `_FALLBACK_SKILL`），带图的轮次因此整个绕开了「默认 = anima多图」——
+        群里实录就是「发图 + 大大怪，跑这个」→ 回执写「当前渠道：silver」。
+        """
+        with mock.patch.object(gc, "_generate_comic",
+                               return_value=RECEIPT) as m_comic:
+            out, _, _, m_gen, _ = self._decide(
+                "大大怪，跑这个", '{"prompt": "chibi, sticker style, 1girl"}')
+        self.assertEqual(out, "")
+        m_gen.assert_not_called()                # 不走单图
+        m_comic.assert_called_once_with("chibi, sticker style, 1girl",
+                                        panels=None, style="anima")
+
+    def test_i2i_keeps_the_single_image_channel(self):
+        """明说图生图（模型填了 `source_image`）→ 仍旧单图银，不跟默认多图。
+
+        anima多图 那条批量工作流**没有图生图骨架**：垫图进去不会报错，会被
+        静静地丢掉——用户引用的那张原图等于白发，画出来是另一个人。
+        """
+        with mock.patch.object(gc, "_generate_comic") as m_comic:
+            out, _, _, m_gen, _ = self._decide(
+                "图生图，手改成插兜",
+                '{"prompt": "1girl, hands in pockets", "source_image": 1}')
+        self.assertEqual(out, "")
+        m_comic.assert_not_called()
+        self.assertEqual(m_gen.call_args.kwargs["skill"],
+                         direct_gen._FALLBACK_SKILL)
+        self.assertEqual(m_gen.call_args.kwargs["source_image"], "1")
+
     def test_own_image_uses_ledger_without_vision(self):
         # 2026-10-07 用户拍板：引用**自家 HT 图**改图**不预先识图**——账本里
         # 就是当时真跑的提示词，画面同源；改「发色」这类直接在那段文字上改。

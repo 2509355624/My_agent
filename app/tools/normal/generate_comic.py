@@ -100,7 +100,7 @@ tool = {
             "panels": {
                 "type": "integer",
                 "description": "格数。用户报了数字（「10个」「20格」）就用用户的；"
-                               "没报就**不传**（silver 默认 10 / anima 默认 5）。上限 30。",
+                               "没报就**不传**（silver 默认 10 / anima 默认 3）。上限 30。",
             },
             "style": {
                 "type": "string",

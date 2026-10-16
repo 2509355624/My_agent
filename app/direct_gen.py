@@ -987,7 +987,8 @@ _MASTER_TEMPLATE = (
     " ② **引用 / 附图 + 只是提需求**（换装 / 换发色 / 改动作 /「要全身照」这类）→ "
     "**不填** `source_image`：这是「照这张改词重画」，不是图生图。"
     "先拿那张图当初的提示词（自家图走账本、别人发的图就看画面反推）、把新需求并进去，"
-    "**再用那张图当初的渠道**文生图重画（他没点名换渠道就别换）。\n"
+    "**自家图沿用账本里那个渠道**、别换；**引用的不是自家图（账本查不到）就没有"
+    "原渠道，这时 skill 别填**，系统会走默认。\n"
     " ③ **明说「qwen 图生图」+ 只改一处**（其余原样）→ `source_image` 填 1，"
     "配 skill=qwen_image_v1（明说「qwen 超清 / qwen超清」时换 qwen-hd），"
     "prompt 只写一句改动指令（一张 1~2 分钟）。\n"
@@ -1045,12 +1046,13 @@ _REVISE_TEMPLATE = (
     "- 先看清楚画面（人物、发色发型、瞳色、表情、服装、姿势、场景），"
     "prompt 必须覆盖画面全部要点，用户没提到的细节原样保留\n"
     "- 原提示词{anchor_note}：与画面冲突时，一律以画面为准\n"
-    "- skill 沿用「原渠道」，除非用户点名要换\n"
+    "- skill 沿用「原渠道」，除非用户点名要换；**引用的不是自家图、又没有原渠道，\n"
+    "  这时 skill 就别填**（留空系统会走默认）\n"
     # 渠道清单必须写在这里：改图管道不走 `_MASTER_TEMPLATE`，模板里没有 id
     # 表时模型听不懂「换 silver」，只会沿用原渠道（2026-10-06 19:22 群
     # 580929233 实录：引用图 +「silver 生成」→ 又跑了一次 jank）。
     "- 渠道 id 只有这些（用户点名换渠道时照左边说的话填右边那个）：\n"
-    "  **默认渠道 = silver**（用户没点名渠道、引用的又不是自家图时就用它）；\n"
+    "  **用户没点名渠道时就别填 skill**（留空就行，系统自己挑默认的，别替它选）；\n"
     "  anima（= 三档）= hd_3_<画风>（末尾带 2x 像素放大 → 3072×4608；"
     "画风只有 clear/soft/gloss/curvy 四种，例「anima gloss」= hd_3_gloss，"
     "没说画风 = hd_3_clear）；\n"
@@ -1070,7 +1072,7 @@ _REVISE_TEMPLATE = (
     "  qwen-restore = 说「qwen修复」（**引用图修复**工作流，qwen-image-2.1 + 修复 LoRA，\n"
     "  1536 面积档 / 16 步，不放大；引用图轮由代码专路直接入队，不用你填 skill）。\n"
     "  ⚠️ 通用「krea2」已下架，原话只说了 krea2 没带风格词时**别填 krea2 系**"
-    "（那 13 个名字都不是他说的），照默认渠道走。\n"
+    "（那 13 个名字都不是他说的），skill 别填。\n"
     "  nffa / cunny / miao = 原话点名才填；\n"
     "  jank = 原话明说「jank」才填（用户自定义渠道）。\n"
     "  silver-hd = silver 的 4x 超清版，原话明说「silver-hd」或「silver 超清」才填。\n"
@@ -1088,7 +1090,8 @@ _REVISE_TEMPLATE = (
     " ② **引用 / 附图 + 只是提需求**（换装 / 换发色 / 改动作 /「要全身照」这类）→ "
     "**不填** `source_image`：这是「照这张改词重画」，不是图生图。"
     "先拿那张图当初的提示词（自家图走账本、别人发的图就看画面反推）、把新需求并进去，"
-    "**再用那张图当初的渠道**文生图重画（他没点名换渠道就别换）。\n"
+    "**自家图沿用账本里那个渠道**、别换；**引用的不是自家图（账本查不到）就没有"
+    "原渠道，这时 skill 别填**，系统会走默认。\n"
     " ③ **明说「qwen 图生图」+ 只改一处**（其余原样）→ `source_image` 填 1，"
     "同时 skill 填 qwen_image_v1"
     "（明说「qwen 超清 / qwen超清」时填 qwen-hd）、"
@@ -1736,11 +1739,17 @@ def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):
     source_image = si is True or str(si or "").strip() == "1"
     skill = channel or (data.get("skill") or "").strip()
     if skill not in _allowed_skills():
-        # 改图**不走**默认的 anima多图：那条批量工作流没有图生图骨架，垫图进去
-        # 会静默降级成文生图——用户引用的那张原图直接丢掉、画出来是另一个人。
-        # 所以这里的兜底仍旧是银（有锁构图骨架）。
-        skill = anchor_skill if anchor_skill in _allowed_skills() \
-            else _FALLBACK_SKILL
+        skill = anchor_skill if anchor_skill in _allowed_skills() else ""
+    if not skill:
+        if not source_image:
+            # 带图 + 没说图生图 = 「反推提示词再跑一张」，本质是**文生图**（模型
+            # 自己没填 `source_image`），跟默认路一样走 anima多图。2026-10-16
+            # 用户拍板：「我引用图片，没有说图生图，就是默认反推提示词然后跑图的呀」
+            # —— 之前的兜底无条件落银，带图轮因此绕开了「默认 = anima多图」。
+            return _enqueue_comic({"brief": prompt, "style": "anima"}, text)
+        # 垫图（真 i2i）必须有锁构图骨架，anima多图 那条批量工作流没有 → 只能落银。
+        # 硬走它不会报错：垫图会被丢掉、静默降级成文生图，画出来是另一个人。
+        skill = _FALLBACK_SKILL
     _remember_job(session_key, skill, prompt)
     return _enqueue(skill, prompt, text, source_image=source_image)
 
