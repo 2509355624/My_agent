@@ -313,6 +313,19 @@ _FIXED_CHAN_RE = re.compile(
     r"(?![0-9A-Za-z_])",
     re.I)
 
+# 开头/句中点名的**渠道 id 原名**（带 `-` / `_` 的复合名，如 `krea2-coscandid`）。
+# 2026-10-16 私聊实录：用户把机器人回执里那句
+# `[直达生图] krea2-coscandid：realistic cosplay photo, 1girl, …` 整行复制回来
+# 当指令发（同一句试了三次），三次都判「没点名渠道」→ 走默认 anima多图。
+# 病根：`_FIXED_CHAN_RE` 里登记的**全是中文名**（`krea2真人cos` 等），
+# 38 个渠道里 **29 个用 id 喊它都认不出**（silver / silver-hd / hd_3_* /
+# jank / qwen_image_v1 / krea2-* 全系…）。
+# ⚠️ **只收含 `-` / `_` 的复合 id，不收 `silver` / `jank` 这类单词 id**：
+#   - 「silver 三档」→ hd_3_clear 是**既有行为**（`LeftmostChannelTest` 钉着）；
+#   - `silver hair, 1girl, blue eyes` 这种英文 tag 开头会把 `silver` 认成渠道。
+# 复合名在英文 tag 里几乎不出现，再叠「必须命中白名单」这道闸，误判率≈0。
+_SKILL_ID_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*[-_][A-Za-z0-9_-]*")
+
 
 def _fixed_chan(token, text):
     """固定渠道词 → 渠道 id（与「qwen」→ qwen_image_v1 同一类「认渠道名」逻辑）。
@@ -536,6 +549,14 @@ def _parse_channel(text):
         fm = _FIXED_CHAN_RE.search(text)
         if fm:
             hits.append((fm.start(), "fixed", fm))
+        # 渠道 id 原名（复合名 + 命中白名单），跟「fixed」同一档：
+        # 它同样是「用户点名的渠道」，只是写的是机器人自己印的那个 id。
+        # finditer 按位置升序，第一个命中的就是最靠前的那个。
+        allowed = set(_allowed_skills())
+        for im in _SKILL_ID_RE.finditer(text):
+            if im.group(0).lower() in allowed:
+                hits.append((im.start(), "fixed", im))
+                break
         tm = _TIER_RE.search(text)
         if tm:
             hits.append((tm.start(), "tier", tm))
@@ -1220,11 +1241,45 @@ def _last_job(session_key):
         return dict(job) if job else None
 
 
+def _is_channel_word(tok):
+    """`tok` 是不是**用户点名的渠道 / 档位 / 画风词**（整词，不含正文）。
+
+    只给「署名例外」用：命中就说明这个冒号前缀是**指令**，不是群聊署名。
+    """
+    t = (tok or "").strip()
+    if not t:
+        return False
+    low = t.lower()
+    return (low in _allowed_skills() or t in _FIXED_CHAN_MAP
+            or bool(_FIXED_CHAN_RE.fullmatch(t))
+            or t in _TIER_MAP or low in _TIER_MAP
+            or t in _STYLE_ALIASES or low in _STYLE_ALIASES)
+
+
 def _strip_attribution(text):
-    """剥掉群聊署名前缀（「胡桃桃：好」这种），每行各剥一次。"""
-    return "\n".join(
-        _ATTRIBUTION_RE.sub("", line or "", count=1)
-        for line in (text or "").split("\n"))
+    """剥掉群聊署名前缀（「胡桃桃：好」这种），每行各剥一次。
+
+    ⚠️ **渠道名不许当署名剥掉**（2026-10-16 用户报）。`_ATTRIBUTION_RE` 的形状
+    是「行首 1~20 字 + 全角冒号」，而用户点渠道最顺手的写法正好长这样——他
+    直接抄机器人回执里那句 `krea2-coscandid：realistic cosplay photo, 1girl…`。
+    实测这层会把前缀整个吃掉、渠道跟着丢、静默落默认渠道：23:01 / 23:05 /
+    23:06 三次「krea2-coscandid：…」全中（`_parse_channel` 拿到的是剥完的纯
+    英文，自然认不出）。所以先看一眼前缀是不是认得出的渠道词，是就**不剥**。
+    （同一个正则以前也踩过类似的坑，见 `confirm_gate` 里关于 NAI 权号 `::`
+    那段——那次是半角冒号，这次是全角。）
+    """
+    out = []
+    for line in (text or "").split("\n"):
+        m = _ATTRIBUTION_RE.match(line or "")
+        if m:
+            head = m.group(0).strip()
+            if head.endswith("："):
+                head = head[:-1].strip()
+            if _is_channel_word(head):
+                out.append(line)
+                continue
+        out.append(_ATTRIBUTION_RE.sub("", line or "", count=1))
+    return "\n".join(out)
 
 
 def _strip_own_names(text):

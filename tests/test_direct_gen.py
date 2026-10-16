@@ -291,6 +291,98 @@ class LeftmostChannelTest(unittest.TestCase):
         self.assertIn("就用它", captured["content"])
 
 
+class SkillIdChannelTest(unittest.TestCase):
+    """用户直接给**渠道 id 原名**时也要认（2026-10-16 用户报）。
+
+    实录：用户把机器人回执里那句
+    `[直达生图] krea2-coscandid：realistic cosplay photo, 1girl, …`
+    整行复制回来当指令发（同一句试了三次，23:01 / 23:05 / 23:06），三次都判
+    「没点名渠道」→ 走默认 anima多图。病根：`_FIXED_CHAN_RE` 里登记的**全是
+    中文名**（`krea2真人cos` 等）——38 个渠道里 **29 个用 id 喊它都认不出**
+    （silver / silver-hd / hd_3_* / jank / qwen_image_v1 / krea2-* 全系…）。
+
+    **只收含 `-` / `_` 的复合 id**：`silver` / `jank` 这类单词 id 不收——
+    「silver 三档」→ hd_3_clear 是既有行为（见 `LeftmostChannelTest`），而且
+    `silver hair, 1girl` 这种英文 tag 开头会被误判成渠道。
+    """
+
+    def test_the_incident_line(self):
+        """事故原话：整行复制回来的「id：英文提示词」。"""
+        text = ("krea2-coscandid：realistic cosplay photo, 1girl, "
+                "yae_miko_(genshin impact), pink hair")
+        self.assertEqual(
+            direct_gen._parse_channel(text),
+            ("krea2-coscandid", "realistic cosplay photo, 1girl, "
+                                "yae_miko_(genshin impact), pink hair"))
+
+    def test_compound_ids_are_recognized(self):
+        for text, skill in (("krea2-coscandid 一只猫", "krea2-coscandid"),
+                            ("krea2-coscandid", "krea2-coscandid"),
+                            ("silver-hd 一只猫", "silver-hd"),
+                            ("hd_3_gloss 一只猫", "hd_3_gloss"),
+                            ("image_gen_v1 一只猫", "image_gen_v1"),
+                            ("用 krea2-anime2real 跑一版", "krea2-anime2real"),
+                            ("qwen_image_v1 一只猫", "qwen_image_v1")):
+            with self.subTest(text=text):
+                self.assertEqual(direct_gen._parse_channel(text)[0], skill)
+
+    def test_unknown_compound_word_is_not_a_channel(self):
+        """带下划线的英文 tag 一大堆（yae_miko_ / pink_hair），没命中白名单
+        就不是渠道——这道闸保证它只是正文。"""
+        text = "1girl, yae_miko_(genshin impact), pink_hair, blue eyes"
+        self.assertEqual(direct_gen._parse_channel(text), (None, text))
+
+    def test_single_word_ids_still_fall_through(self):
+        """单词 id 维持老口径（有测试钉着，别顺手放开）。"""
+        # 「silver 三档」→ 档位词接手，silver 留在正文里由 AI 判
+        self.assertEqual(direct_gen._parse_channel("silver 三档"),
+                         ("hd_3_clear", "silver"))
+        self.assertEqual(direct_gen._parse_channel("jank 二档")[0], "hd_3_clear")
+        # 英文 tag 开头的 silver 是画面内容（银发），不是渠道
+        text = "silver hair, 1girl, blue eyes"
+        self.assertEqual(direct_gen._parse_channel(text), (None, text))
+
+
+class AttributionStripTest(unittest.TestCase):
+    """署名剥离不许吃掉渠道名（2026-10-16 用户报）。
+
+    事故链：`_ATTRIBUTION_RE`（行首 1~20 字 + 全角冒号，本来是用剥群聊署名
+    「胡桃桃：好」的）把 `krea2-coscandid：realistic cosplay photo…` 的前缀
+    当**署名**整段剥掉 → `_parse_channel` 拿到的是剥完的纯英文（认不出渠道）
+    → 静默走默认 anima多图。23:01 / 23:05 / 23:06 三次原话全中。
+
+    ⚠️ **群聊署名照剥**（这是它存在的理由），只对「前缀本身是渠道词」放行。
+    """
+
+    def test_channel_prefix_is_not_an_attribution(self):
+        for text in ("krea2-coscandid：realistic cosplay photo, 1girl",
+                     "silver-hd：1girl", "hd_3_gloss：1girl",
+                     "anima-real：1girl", "三档：女骑士",
+                     "nai：1girl, blue hair"):
+            with self.subTest(text=text):
+                self.assertEqual(direct_gen._strip_attribution(text), text)
+
+    def test_real_attribution_is_still_stripped(self):
+        for text, want in (("胡桃桃：好", "好"),
+                           ("月笙如歌：画一只猫", "画一只猫"),
+                           ("大大怪：你好", "你好")):
+            with self.subTest(text=text):
+                self.assertEqual(direct_gen._strip_attribution(text), want)
+
+    def test_strip_is_per_line(self):
+        self.assertEqual(
+            direct_gen._strip_attribution("胡桃桃：好\nkrea2-coscandid：一只猫"),
+            "好\nkrea2-coscandid：一只猫")
+
+    def test_the_incident_line_survives_into_channel_parsing(self):
+        """端到端：剥完署名还能认出渠道（修之前这里拿到纯英文 → None）。"""
+        text = ("krea2-coscandid：realistic cosplay photo, 1girl, "
+                "yae_miko_(genshin impact)")
+        self.assertEqual(
+            direct_gen._parse_channel(direct_gen._strip_attribution(text))[0],
+            "krea2-coscandid")
+
+
 class MenuAndGateTest(unittest.TestCase):
     def test_menu_keywords_return_constant(self):
         # 2026-10-05 23:xx 用户拍板：**只有用户明确要菜单**才回常量。
