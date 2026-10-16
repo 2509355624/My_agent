@@ -111,11 +111,17 @@ _HD_TIERS = ("3",)
 _HD_STYLES = ("clear", "curvy", "gloss", "soft")
 _FIXED_SKILLS = ("image_gen_v1", "image_gen_v1_hires", "nffa",
                  "cunny", "miao", "qwen_image_v1", *image_jobs.NAI_SKILLS)
-# 默认渠道（2026-10-06 用户拍板：「我们默认渠道就是 sILVR，把它做成默认渠道
-# 就行了」——**不做管理页的默认渠道下拉**，写死）。与
-# `generate_image.T2I_DEFAULT_SKILL` 保持同一个值；silver / jank 不进
-# `_FIXED_SKILLS`，由 `_allowed_skills()` 现场扫 skills/ 目录放行。
-_DEFAULT_SKILL = "silver"
+# 兜底单图渠道（与 generate_image.py 里那个 T2I 默认常量同一个值）：**只**服务
+# 单张那几条路——改图（`_revise`，anima多图没有图生图骨架）、随机口令、`/直通`、
+# 还有「默认」这个老档位词。
+#
+# ⚠️ 它**不是**「用户没点名渠道」时的默认出图方式了：2026-10-16 用户拍板把默认
+# 换成了 **anima多图（一次 3 张）**（原话：「1 分钟 3 个图片，感觉挺值的，直接
+# anima多图就是默认渠道即可」）。那条判据在 `_translate` 的末尾，跟这里无关。
+# 2026-10-06 的「默认渠道 = silver」是旧口径，如今只剩上面那几条单图路还在用。
+#
+# silver / jank 不进 `_FIXED_SKILLS`，由 `_allowed_skills()` 现场扫 skills/ 目录放行。
+_FALLBACK_SKILL = "silver"
 
 
 def _allowed_skills():
@@ -418,7 +424,7 @@ def _tier_skill(tier, style):
     的意思，照旧回 `silver`。
     """
     if tier == "base" and not style:
-        return _DEFAULT_SKILL
+        return _FALLBACK_SKILL
     return "hd_3_%s" % (style or "clear")
 
 
@@ -636,7 +642,7 @@ def _lead_typo_channel(text):
 _FINAL_PROMPT_NO_CHAN_TEXT = (
     "这段带权号的提示词我照原样收下了，但这轮没说渠道，我不敢替你选"
     "（选错就是整张图换风味）。在前面补一个渠道词再发："
-    "nai（画师串/权号这种写法就是它的）/ silver（默认渠道）/ silver-hd（4x超清）/ "
+    "nai（画师串/权号这种写法就是它的）/ silver（单张·最快）/ silver-hd（4x超清）/ "
     "anima（三档）/ sd / qwen / nffa / jank / krea2米山舞"
     "（krea2 系 13 条按风格拆，点名要带风格词）。")
 
@@ -660,7 +666,8 @@ GUIDE_TEXT = (
     "@我（或喊「大大怪」）+ 渠道 + 描述就能出图。\n"
     "\n"
     "【怎么写】渠道名写在最前面，后面接需求\n"
-    "　silver 水晶城堡 ｜ 不写渠道就走它（默认·最快）\n"
+    "　不写渠道 → anima多图，一次给你 3 张（约 1 分钟）\n"
+    "　silver 水晶城堡 ｜ 单张快出 · 明说 silver 才走它\n"
     "　anima 女骑士 ｜ 三档 + 2x 像素放大（3072×4608）\n"
     "　anima gloss 女骑士 ｜ gloss 油亮\n"
     "　三档 clear 水晶城堡 ｜ 跟 anima 等价\n"
@@ -668,13 +675,14 @@ GUIDE_TEXT = (
     "　只说画风词（clear/soft/gloss/curvy）→ 也是三档\n"
     "\n"
     "【档位】只剩三档（快档 / 最小档 / 二档 2026-10-07 取消）\n"
-    "　　　说 anima 或三档都行 · 不写渠道词 = silver\n"
+    "　　　说 anima 或三档都行 · 不写渠道词 = anima多图（3 张）\n"
     "\n"
     "【画风】clear 清晰 ｜ curvy 肉感\n"
     "　　　gloss 油亮 ｜ soft 柔和\n"
     "　　　打错或没打 → 按该档默认\n"
     "\n"
     "【点名渠道】把渠道名写最前面就行\n"
+    "　anima多图　双模型两段 · 一次 3 张（不写渠道词也是它）\n"
     "　silver-hd　4x超清 · 4928×7360（约28MB）\n"
     "　jank　NoobAI 自定义（有权号词就用它）\n"
     "　anima线条　anima 堆 6 条 LoRA 的版本 · 2456×3686\n"
@@ -719,13 +727,14 @@ MORE_CHAN_TEXT = (
     "写法：渠道名 + 你的需求\n"
     "例：三档 女骑士 ｜ jank 银发初音未来 ｜ qwen 水晶城堡\n"
     "\n"
-    "【默认】不写渠道词 → silver（最快）\n"
+    "【默认】不写渠道词 → anima多图（一次 3 张 · 约 1 分钟）\n"
     "\n"
     "【档位】anima 或三档都行 · 末尾 2x 放大 → 3072×4608\n"
     "【画风】clear 清晰 ｜ curvy 肉感 ｜ gloss 油亮 ｜ soft 柔和\n"
     "　　　　不写按该档默认\n"
     "\n"
     "【点名渠道】写在最前面就行\n"
+    "　anima多图　双模型两段 · 一次 3 张（不写渠道词也是它）\n"
     "　silver-hd　4x超清 4928×7360\n"
     "　jank　NoobAI 自定义（有权号词就用它）\n"
     "　anima线条 / anima写实　堆 6 条 LoRA 的版本\n"
@@ -813,10 +822,11 @@ def _parse_direct(text):
     if not prompt:
         return None, None, ("`|` 后面没写提示词。补上英文提示词再发，"
                             "例：/直通-silver|1girl, blue hair")
-    # 渠道段 → 渠道 id。silver 是**默认档**，`_parse_channel` 平时不把它当点名
-    # （不写渠道=走它）；直通里显式写了就按默认档处理（用户给的例子里有它）。
-    if chan_seg.strip().lower() == _DEFAULT_SKILL:
-        return _DEFAULT_SKILL, prompt, ""
+    # 渠道段 → 渠道 id。silver 是**兜底单图档**，`_parse_channel` 平时不把它当
+    # 点名（2026-10-16 起「不写渠道」走的是 anima多图，更不是它）；直通里显式
+    # 写了就按单图档处理（用户给的例子里有它）。
+    if chan_seg.strip().lower() == _FALLBACK_SKILL:
+        return _FALLBACK_SKILL, prompt, ""
     skill, _desc = _parse_channel(chan_seg)
     if not skill:
         # 渠道段认不出 → 不直通，交回原管道（严格匹配）。用哨兵区分于 err。
@@ -906,7 +916,7 @@ _MASTER_TEMPLATE = (
     "「N 张」（生成10张 / 来5张 / 出4张…）时一律用它**——要好几张只有这一条路。"
     "用户点名「anima多图」时也用它（走 silver 还是 anima 由**代码**从原话判定，"
     "你**不用管、也别在 JSON 里写渠道**）。brief 写中文剧情和角色（名字照抄），"
-    "panels 填用户报的张数、没报就不填（默认：silver 10 / anima 5，上限 30）。"
+    "panels 填用户报的张数、没报就不填（anima 默认 3、silver 10，上限 30）。"
     "**只要 1 张就别用它**。\n"
     "不需要动手时，输出 {{\"reply\": \"你要说的话\"}}。\n"
     # ── 「别反问」（2026-10-07 用户拍板）──────────────────────────
@@ -925,9 +935,10 @@ _MASTER_TEMPLATE = (
     "\n"
     "【别反问】用户给了画面、或说「生成 / 跑 / 画一张」就是下单——"
     "**直接出图**，不许问「要不要画」「哪个档位」「这样可以吗」。"
-    "渠道档位没点名用默认，细节自己补。\n"
+    "没点名渠道就留空（看上面【渠道 skill】），细节自己补。\n"
     "\n"
-    "【渠道 skill】不填 = " + _DEFAULT_SKILL + "（默认渠道）。用户点名渠道就照他说的填。\n"
+    "【渠道 skill】**用户点名渠道才填**（silver / silver-hd / nai / sd / 三档…）；"
+    "他没点名就**留空**——代码会走默认的 anima多图（一次 3 张），你不用管。\n"
     "画风四种：clear 清晰 / soft 柔和 / gloss 油亮 / curvy 肉感\n"
     "尺寸只剩一档（2026-10-07 起快档 / 最小档 / 二档全取消），id = hd_3_<画风>：\n"
     "- 「anima」「三档」「高清」都是它，末尾带 2x 像素放大 → 3072×4608，最慢\n"
@@ -949,12 +960,12 @@ _MASTER_TEMPLATE = (
     "krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / "
     "krea2奶油 / krea2写实 / krea2通用 / krea2铭音 / krea2鬼针草 / krea2铭鬼；"
     "点名带风格词，光说 krea2 不算。\n"
-    "- silver = **默认渠道**（不填 skill 就是它）、jank = 自定义 NoobAI 渠道，"
-    "明说才填。jank 是**文生图专用**、没有图生图骨架；silver 有锁构图骨架"
-    "（见下面【图生图】）。"
+    "- silver = **单张快出**渠道（他明说 silver 才填；不填走默认多图）、"
+    "jank = 自定义 NoobAI 渠道，明说才填。jank 是**文生图专用**、没有图生图骨架；"
+    "silver 有锁构图骨架（见下面【图生图】）。"
     "⚠️「银发 / silver hair」是发色、不是渠道。\n"
     "- silver-hd = silver 的 4x 超清版（只换放大，4928×7360）；"
-    "明说「silver-hd / silver 超清」才填，否则走 silver。\n"
+    "明说「silver-hd / silver 超清」才填，只说 silver 别升档。\n"
     "- qwen-hd = qwen 的 4x 超清版（只换放大，4096×6144）；"
     "明说「qwen-hd / qwen 超清」才填，否则走 qwen。\n"
     "- qwen-charsheet = qwen 上的角色设定表工作流"
@@ -1320,7 +1331,10 @@ def _enqueue_comic(comic, text):
     brief = (comic.get("brief") or "").strip()
     if not brief:
         return "漫画这条我没看清要画什么故事，把剧情再说一次。"
-    style = _comic_style(text)
+    # 渠道：契约里钉了就用钉的——**默认路**（没点名渠道）用户什么都没说，
+    # 是 `_translate` 代码钉的 anima；没钉才看原话里有没有「anima多图」字样
+    # （那是点名路）。`style` 空 = 落回 silver 漫画（默认 10 格）。
+    style = (comic.get("style") or "").strip() or _comic_style(text)
     try:
         result = gc._generate_comic(brief, panels=comic.get("panels"), style=style)
     except Exception:
@@ -1409,8 +1423,11 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
     用户原话：「AI 本身就能胜任整个工作，我一直想通过硬编码指令去操控 AI，
     这本身就是错的。」
 
-    返回值三态：
-      - {"skill":…, "prompt":…}  → 要画图，调用方入队
+    返回值四态：
+      - {"skill":…, "prompt":…}  → 要画**一张**，调用方入队
+      - {"comic":…}              → 要画**一批**（漫画 / 多图），调用方走
+                                   `_enqueue_comic`。**没点名渠道时就是这一态**
+                                   （2026-10-16 起默认 = anima多图 3 张）
       - {"reply": "…"}           → 模型判断这轮不用动手，直接把这句发出去
       - None                     → 调用没成功 / 没拿到有效内容，调用方兜底
 
@@ -1423,6 +1440,8 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
                    权号规则写在模板的「提示词怎么写」段里。**不再影响模板选择。**
       no_default   True → 模型既没判出渠道、代码也没认出来时返回 None
                    （调用方回问），**不静默落默认档**烧一张错风味的图。
+                   ⚠️ 只有成品串那条路传 True；普通轮次两边都判不出 = 走默认
+                   的 anima多图（见末尾那段）。
     """
     named = (skill or "").strip()
     # 搜索资料由调用方（`decide`）统一算好传进来——**一次请求只搜一次**，
@@ -1476,17 +1495,33 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
     if judged:
         judged = _fixed_chan(judged, text)
     out_skill = named or judged
-    if out_skill not in _allowed_skills():
-        allowed = _allowed_skills()
-        fallback = (named if named in allowed else
-                    judged if judged in allowed else "")
-        if not fallback and no_default:
-            # 成品串：判不出就回问，绝不静默换默认档烧一张错风味的图。
-            return None
-        out_skill = fallback or _DEFAULT_SKILL
+    if out_skill in _allowed_skills():
+        return {"skill": out_skill, "prompt": user_prompt}
+    allowed = _allowed_skills()
+    fallback = (named if named in allowed else
+                judged if judged in allowed else "")
+    if fallback:
         log.warning("[direct] 未知渠道（点名 %r / 模型 %r），改用 %s",
-                    named, judged, out_skill)
-    return {"skill": out_skill, "prompt": user_prompt}
+                    named, judged, fallback)
+        return {"skill": fallback, "prompt": user_prompt}
+    if no_default:
+        # 成品串：判不出就回问，绝不静默换默认档烧一张错风味的图。
+        return None
+    # ── 谁也没点名渠道 → 默认出图方式 = anima多图（2026-10-16 用户拍板）──
+    # 用户原话：「1 分钟 3 个图片，感觉挺值的，直接 anima多图就是默认渠道即可」。
+    # 走 comic 契约而不是把 skill 顶成某个单图渠道：anima多图本身就是**批量**
+    # 工作流（`_anima_multi_batch`，要 `multi_prompts`），从单图管道进不去。
+    #
+    # `style` 由代码**钉死**给 anima：`_enqueue_comic` 平时看原话里有没有
+    # 「anima多图」字样，而这条路上用户什么都没说，不钉就会掉回 silver 漫画
+    # （默认 10 格）——那不是「默认出 3 张」的意思。`panels` 留空即取该渠道
+    # 默认（`comic_story.default_panels("anima")` = 3）。
+    #
+    # brief 用**用户自己的原话**（可能是「引用正文 + 这句话」的合并）：编剧
+    # 那层（`write_story`）要的就是中文需求，模型刚判出来的英文 prompt 反而不
+    # 是它要的输入——同 `_ANIMA_MULTI_RE` 专路的做法。
+    log.info("[direct] 没点名渠道，走默认 anima多图：%r", text[:50])
+    return {"comic": {"brief": text, "panels": None, "style": "anima"}}
 
 
 def _recall_tags(data_urls, numbered=True):
@@ -1701,8 +1736,11 @@ def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):
     source_image = si is True or str(si or "").strip() == "1"
     skill = channel or (data.get("skill") or "").strip()
     if skill not in _allowed_skills():
+        # 改图**不走**默认的 anima多图：那条批量工作流没有图生图骨架，垫图进去
+        # 会静默降级成文生图——用户引用的那张原图直接丢掉、画出来是另一个人。
+        # 所以这里的兜底仍旧是银（有锁构图骨架）。
         skill = anchor_skill if anchor_skill in _allowed_skills() \
-            else _DEFAULT_SKILL
+            else _FALLBACK_SKILL
     _remember_job(session_key, skill, prompt)
     return _enqueue(skill, prompt, text, source_image=source_image)
 
@@ -1789,20 +1827,22 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
             return _reverse_text(own_prompt)
 
     # ── 随机口令（2026-10-05）：/随机萝莉 /随机兽耳 /随机女仆 /今日老婆 ──
-    # 策展词池直拼提示词，零 LLM；走默认档入队，额度闸门照常拦。
-    # resample_fn：图是**机器人自己推的服务**，被审核拦下时 worker 静默换一条
-    # 重抽（最多 2 次），绝不回「未过审」——用户点的单被拦才走那套话术。
+    # 策展词池直拼提示词，零 LLM；走兜底单图渠道入队，额度闸门照常拦。
+    # ⚠️ **故意不跟默认的多图**（2026-10-16 换默认时没动这里）：`resample_fn`
+    # 只在单图那条 worker 上生效——被审核拦下静默换一条重抽是这个玩法的命根
+    # 子，comic 批量路没有这个钩子，改过去等于把「重抽」丢掉。要一起改成 3 张
+    # 就得先在批量路上把重抽做出来。
     m = _RANDOM_CMD_RE.match(text)
     if m:
         theme = m.group(1)
         prompt = random_tags.sample_prompt(theme)
-        _remember_job(session_key, _DEFAULT_SKILL, prompt)
-        return _enqueue(_DEFAULT_SKILL, prompt, text,
+        _remember_job(session_key, _FALLBACK_SKILL, prompt)
+        return _enqueue(_FALLBACK_SKILL, prompt, text,
                         resample_fn=_random_resample(theme))
     if _WAIFU_CMD_RE.match(text):
         _cn, prompt = random_tags.draw_waifu()
-        _remember_job(session_key, _DEFAULT_SKILL, prompt)
-        return _enqueue(_DEFAULT_SKILL, prompt, text,
+        _remember_job(session_key, _FALLBACK_SKILL, prompt)
+        return _enqueue(_FALLBACK_SKILL, prompt, text,
                         resample_fn=_random_resample("waifu"))
     # 「/更多渠道」：全部跑法罗列（零 API）。关键词命中即可（见 _MORE_CHAN_RE）。
     if _MORE_CHAN_RE.search(text):
@@ -2020,6 +2060,9 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     #（可能带引用）。一律交给 AI 判意图：要画图就出图，是聊天/提问就回话。
     # 2026-10-05 用户拍板：删掉 `_INTENT_RE`/`at_me` 闸与菜单兜底——
     # 「AI 识别用户的意图，是画图就画，是聊天就回话」，一次请求一次回复。
+    # ⚠️ 2026-10-16 起这里是**默认出图方式**的落点：`_translate` 拿不到任何
+    # 渠道（代码没认出、模型也没点名）时回的是 `{"comic": …}`，也就是用户没
+    # 点名渠道 = anima多图 3 张。这个分支原本就在，不用另加判断。
     src = _quote_merge(quoted, text) if quoted.strip() else text
     data = _translate(src, [] if quoted.strip() else history, doc=doc)
     if data and data.get("reply"):

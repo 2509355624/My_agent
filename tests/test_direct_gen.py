@@ -358,8 +358,12 @@ class DirectEnqueueTest(unittest.TestCase):
              mock.patch.object(direct_gen.qq_api, "current_session_key",
                                return_value="group_1"), \
              mock.patch.object(gi, "_generate_image",
-                               return_value=RECEIPT) as m_gen:
+                               return_value=RECEIPT) as m_gen, \
+             mock.patch.object(gc, "_generate_comic",
+                               return_value=RECEIPT) as m_comic:
             out = direct_gen.decide(text, history or [], False, at_me=at_me)
+        # 没点名渠道的那几个用例会落默认的 anima多图，走的是 m_comic 这条
+        self.m_comic = m_comic
         return out, m_llm, m_gen
 
     def test_translated_json_enqueues_directly(self):
@@ -404,12 +408,31 @@ class DirectEnqueueTest(unittest.TestCase):
         self.assertNotIn("🎨", sent)
         self.assertNotIn("任务已提交", sent)
 
-    def test_unknown_skill_falls_back_to_default(self):
+    def test_unknown_skill_falls_back_to_the_default_multi_image(self):
+        """模型填了个不存在的渠道、用户又没点名 → 走**默认的 anima多图**。
+
+        2026-10-16 用户拍板换默认（原话：「1 分钟 3 个图片，感觉挺值的，直接
+        anima多图就是默认渠道即可」）：以前这种回落是 silver 单图，现在是多图
+        3 张（panels 留空 = 该渠道默认）。silver 仍在，只是明说才走。
+        """
         out, _, m_gen = self._decide(
             '{"skill": "gpt4o-image", "prompt": "cat"}')
         self.assertEqual(out, "")
-        self.assertEqual(m_gen.call_args.kwargs["skill"],
-                         direct_gen._DEFAULT_SKILL)
+        m_gen.assert_not_called()               # 不许把用户的话交给瞎填的渠道
+        self.m_comic.assert_called_once_with("画一只戴帽子的橘猫", panels=None,
+                                             style="anima")
+
+    def test_named_silver_is_still_a_single_image(self):
+        """silver 是**保留**的单张渠道：明说它就走单图，不被默认的多图顶掉。
+
+        用户 2026-10-16 原话：「silver 本身就是一个生图渠道，这个得保留的」。
+        """
+        out, _, m_gen = self._decide('{"skill": "silver", "prompt": "1girl"}',
+                                     text="silver 女骑士")
+        self.assertEqual(out, "")
+        m_gen.assert_called_once_with("1girl", skill="silver",
+                                      _skip_confirm=True)
+        self.m_comic.assert_not_called()
 
     def test_command_word_skill_is_mapped_to_its_id(self):
         """模型有时填**命令词**而不是渠道 id（模板里写着「sd = image_gen_v1」，
@@ -1495,6 +1518,23 @@ class ComicRoutingTest(unittest.TestCase):
         m_comic.assert_called_once_with("银发精灵在森林射箭", panels=None,
                                         style="anima")
 
+    def test_no_channel_falls_back_to_the_anima_multi_image(self):
+        """**没点名渠道 = 默认 anima多图 3 张**（2026-10-16 用户拍板）。
+
+        原话：「anima多图是默认直接出3张的，干脆 anima多图直接作为默认渠道
+        得了，1 分钟 3 个图片，感觉挺值的，直接 anima多图就是默认渠道即可」。
+
+        `style` 由**代码钉死** anima：`_enqueue_comic` 平时只看原话里有没有
+        「anima多图」字样，而这条路上用户什么都没说——不钉就会落回 silver
+        漫画（默认 10 格），那就不是「默认出 3 张」了。`panels` 留空即取该渠道
+        默认（`comic_story.default_panels("anima")` = 3）。brief 取用户原话，
+        编剧那层（`write_story`）再扩写。
+        """
+        out, m_comic = self._decide('{"prompt": "1girl, knight"}',
+                                    text="画个女骑士")
+        self.assertEqual(out, "")
+        m_comic.assert_called_once_with("画个女骑士", panels=None, style="anima")
+
     def test_anima_duotu_beats_the_anima_tier_word(self):
         """`anima` 在 `_TIER_RE` 里 ≡ 三档，不加专路会被吃成 `hd_3_clear`。
 
@@ -1716,12 +1756,14 @@ class VerbatimWeightedPromptTest(unittest.TestCase):
                                             '"prompt": "cat"}'):
             got = direct_gen._translate("画猫", [], skill="nai")
         self.assertEqual(got["skill"], "nai")
-        # 代码没点名时才用模型的判据；模型乱填且没点名词 → 才落默认档
+        # 代码没点名、模型又乱填 → 不给那个瞎填的渠道，落**默认多图**
+        # （2026-10-16 用户拍板：没点名渠道 = anima多图 3 张）。
         with mock.patch.object(direct_gen.llm, "call_llm",
                                return_value='{"skill": "gpt-image", '
                                             '"prompt": "cat"}'):
             got = direct_gen._translate("画猫", [])
-        self.assertEqual(got["skill"], direct_gen._DEFAULT_SKILL)
+        self.assertEqual(got["comic"]["style"], "anima")
+        self.assertIsNone(got["comic"]["panels"])   # 留空 = 该渠道默认（3）
 
 
 class SkipConfirmTest(unittest.TestCase):
@@ -2089,13 +2131,18 @@ class RandomCommandTest(unittest.TestCase):
         return out, m_gen, m_llm_mod
 
     def test_random_loli_enqueues_zero_llm(self):
+        """随机口令走**单图兜底渠道**，不跟默认的多图。
+
+        2026-10-16 换默认时**故意没动这条**：静默重抽（`resample_fn`）只挂在
+        单图那条 worker 上，批量路没有这个钩子，改过去等于把重抽丢掉。
+        """
         out, m_gen, m_llm = self._decide("/随机萝莉")
         self.assertEqual(out, "")
         m_llm.call_llm.assert_not_called()
         m_gen.assert_called_once()
         self.assertIn("loli", m_gen.call_args.args[0])
         self.assertEqual(m_gen.call_args.kwargs["skill"],
-                         direct_gen._DEFAULT_SKILL)
+                         direct_gen._FALLBACK_SKILL)
 
     def test_random_kemono_without_slash_in_keyword_round(self):
         # 关键词轮（不 @）也认纯口令

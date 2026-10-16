@@ -691,12 +691,16 @@ class DefaultChannelTest(unittest.TestCase):
     ## 换默认渠道时要改的清单（改完跑本类 + 全量）
 
     `app/tools/normal/generate_image.py`（常量 + 工具描述 + `skill` 参数说明）、
-    `app/direct_gen.py`（`_DEFAULT_SKILL` + 菜单 / 指南 / 两个模板里的渠道段）、
+    `app/direct_gen.py`（`_FALLBACK_SKILL` + 菜单 / 指南 / 两个模板里的渠道段）、
     `app/agent_prompt.py`（`_TOOL_HINTS` 的渠道那行 + `_BRIEF_PARAM_EXTRA`）、
     当前默认渠道自己的 `skills/<它>/skill.md` 标题、
     4 个 `skills/anima_*/skill.md` 的渠道表（别再自称默认）。
     **例外**：`comfy_workflow.py` 那两个工具的默认 skill 是「两段采样骨架的样本
     渠道」，跟生图默认渠道无关，见 `WORKFLOW_TOOL_CHANNEL`。
+
+    ⚠️ 2026-10-16 起 `direct_gen` 里「用户没点名渠道」的默认**不再是这个常量**：
+    换成默认走 anima多图 3 张（`_translate` 末尾），silver 退成兜底单图渠道。
+    本类锁的始终是 `generate_image` 那条**单图**工具路的默认，那边仍是 silver。
     """
 
     def test_tool_description_names_exactly_the_current_default(self):
