@@ -222,7 +222,7 @@ class ToolTest(unittest.TestCase):
     def test_tool_style_knob_is_a_closed_enum(self):
         """2026-10-16 起漫画有两条渲染路（silver / anima），模型只能在这两个里选。
 
-        用户拍板加「anima多图」渠道（anima 配方、默认 5 张）；除此之外的画风名
+        用户拍板加「anima多图」渠道（anima 配方、默认 3 张）；除此之外的画风名
         （qwen / jank 等）仍然一律忽略——`enum` 把它焊死，模型编不出第三个值。
         """
         from app.tools.normal.generate_comic import tool
@@ -245,7 +245,7 @@ class AnimaChannelTest(unittest.TestCase):
 
     def test_default_panels_per_style(self):
         self.assertEqual(comic_story.default_panels("silver"), 10)
-        self.assertEqual(comic_story.default_panels("anima"), 5)
+        self.assertEqual(comic_story.default_panels("anima"), 3)
 
     def test_anima_channel_is_internal_and_loadable(self):
         from app.skills import list_skills, load_skill
@@ -271,10 +271,10 @@ class AnimaChannelTest(unittest.TestCase):
         # 一段 anima13+6LoRA（er_sde），二段 silvermoonmix 裸接（euler/0.25）。
         batch = [n for n in wf.values()
                  if n["class_type"] == "DualModelBatchPromptImageGenerator"][0]["inputs"]
-        self.assertEqual((batch["width"], batch["height"]), (1024, 1536))
-        self.assertEqual(batch["steps"], 4)
+        self.assertEqual((batch["width"], batch["height"]), (480, 720))
+        self.assertEqual(batch["steps"], 18)
         self.assertEqual(batch["sampler_name"], "er_sde")
-        self.assertEqual(batch["stage2_steps"], 4)
+        self.assertEqual(batch["stage2_steps"], 18)
         self.assertEqual(batch["stage2_cfg"], 1)
         self.assertEqual(batch["stage2_sampler_name"], "euler")     # 二段换采样器
         self.assertEqual(batch["stage2_denoise"], 0.25)

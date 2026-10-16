@@ -45,11 +45,11 @@ COMIC_SKILL = "_comic_batch"
 
 # 渠道映射（2026-10-16 加「anima多图」）：
 #   silver = 原来的连续小漫画（silver 配方，默认 10 格）
-#   anima  = 「anima多图」（anima 配方，默认 5 格，一次快速出多张符合需求的图）
+#   anima  = 「anima多图」（anima 配方，默认 3 格，一次快速出多张符合需求的图）
 # style 由 `direct_gen` 从原话里判定（「anima多图」→ anima；否则 silver），
 # 再透传到 render；render 只认这张表，不自己猜。
 COMIC_SKILLS = {"silver": "_comic_batch", "anima": "_anima_multi_batch"}
-DEFAULT_PANELS_BY_STYLE = {"silver": 10, "anima": 5}
+DEFAULT_PANELS_BY_STYLE = {"silver": 10, "anima": 3}
 
 
 def default_panels(style):

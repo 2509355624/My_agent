@@ -894,7 +894,7 @@ _MASTER_TEMPLATE = (
     # 格数由 `comic_story.clamp_panels` 收口。
     # **没有 skill/style 字段**：走哪条渠道由**代码**从原话判定（见 `_comic_style`），
     # 2026-10-16 起有两条路：默认 silver（`_comic_batch`，默认 10 格）、
-    # 「anima多图」→ anima（`_anima_multi_batch`，默认 5 格）。
+    # 「anima多图」→ anima（`_anima_multi_batch`，默认 3 格）。
     # 2026-10-08 用户拍板过「漫画只有 silver 一条路」，2026-10-16 加第二条。
     # 模型仍可能习惯性多吐一个 skill / style，`_enqueue_comic` 直接忽略，无害。
     # ⚠️ 2026-10-09 起它还兼**「要 N 张」的唯一出口**：sd 那套 `---` 批量已从
@@ -1827,7 +1827,7 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
 
     # ── anima多图 专路（2026-10-16 用户拍板）──────────────────────────
     # 用户**原话里点名**「anima多图」→ 一律走多图批量（`_anima_multi_batch`：
-    # 双模型两段、默认 5 张）。必须放在 `_parse_channel` 和「引用图轮 / 渠道词轮」
+    # 双模型两段、默认 3 张）。必须放在 `_parse_channel` 和「引用图轮 / 渠道词轮」
     # **之前**拦下来，否则：
     #   ① `anima` 会被 `_TIER_RE` 当档位词吃掉（≡三档 → hd_3_clear），代码还会
     #      把 hd_3_clear 当 chan_hint 明写给 AI，AI 就永远不出 comic 契约
