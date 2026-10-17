@@ -3314,18 +3314,19 @@ class LandscapeTest(_Base):
         `LoraLoaderModelOnly` 也不行：适配器差分是 fp32，通用 loader 的 bf16 舍入
         会把差分吃掉，画面直接崩。
 
-        画布 1024×1536：实测比 1024×1024 多 50% 面积只多 10 秒（26.7 / 28.1 秒），
-        刻字仍一字不差。方向沿用全渠道约定（写死竖屏，说「横屏」才对调）。
+        画布 1088×1920：2026-10-18 00:36 用户拍板「改成 1080x1920」——1080 不是 16 的
+        倍数（latent /16 会截成 1072），落 1088；面积 2.09M，比 1024×1536 大 33%，
+        4 步仍只要 31.2 秒。方向沿用全渠道约定（写死竖屏，说「横屏」才对调）。
         """
         wf = skills.load_skill("moss")["workflow"]
         nid = image_jobs._find_size_node(wf)
         self.assertIsNotNone(nid)
         ins = wf[nid]["inputs"]
-        self.assertEqual((ins["width"], ins["height"]), (1024, 1536))
+        self.assertEqual((ins["width"], ins["height"]), (1088, 1920))
         self.assertEqual(ins["width"] % 16, 0)
         self.assertEqual(ins["height"] % 16, 0)
         wide = image_jobs.landscape_workflow(wf)[nid]["inputs"]
-        self.assertEqual((wide["width"], wide["height"]), (1536, 1024))
+        self.assertEqual((wide["width"], wide["height"]), (1920, 1088))
 
         types = {n["class_type"] for n in wf.values()}
         for banned in ("KSampler", "SkipLayerGuidanceDiTSimple",

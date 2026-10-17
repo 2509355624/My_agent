@@ -335,7 +335,7 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    # **「moss」默认走 4 步那条**（原话「我喊 moss，你给我默认跑 moss4，
                    # 除非有人喊 moss45 才跑 45 步长的，不然太耗时了」）。
                    #   `moss` / `moss4` / `moss4步` / `moss 4步` → `skills/moss/`
-                   #        （DMD 4 步 / 1024×1536 / 实测 ~27 秒）
+                   #        （DMD 4 步 / 1088×1920 / 实测 31 秒）
                    #   `moss45` / `moss45步` / `moss 45步`   → `skills/moss45/`
                    #        （45 步 / 1024×1024 / ~2.5 分钟）
                    # ⚠️ 目录是**按这个语义摆的**（`skills/moss/` 装 4 步），所以
@@ -839,7 +839,7 @@ GUIDE_TEXT = (
     "　nffa　　插画感\n"
     "　cunny　超分重渠道 · 单张 2~4 分钟\n"
     "　miao　　皮肤质感滑嫩 · 2x 出 3072×4608\n"
-    "　moss　　MOSS-Image · 图里写中英文最准 · 默认这条（4 步 1024×1536 约 30 秒）\n"
+    "　moss　　MOSS-Image · 图里写中英文最准 · 默认这条（4 步 1088×1920 约 31 秒）\n"
     "　moss45　同一模型的 45 步慢速档 · 1024×1024 · 2.5 分钟（要点名才走）\n"
     "　nai　　 NovelAI 云端 · 认画师串/权号\n"
     "\n"
@@ -888,7 +888,7 @@ MORE_CHAN_TEXT = (
     "　　　真人cos/宝可梦/柔光/奶油/写实/通用/铭音/鬼针草/铭鬼\n"
     "　nffa 插画感 ｜ cunny 超分重渠道·单张 2~4 分钟\n"
     "　miao 皮肤质感·2x 放大 ｜ nai 云端·认画师串/权号\n"
-    "　moss MOSS-Image·图里写中英文最准（默认 4 步·1024×1536·约 30 秒）\n"
+    "　moss MOSS-Image·图里写中英文最准（默认 4 步·1088×1920·约 31 秒）\n"
     "　moss45 同模型 45 步慢速档·1024×1024·2.5 分钟（要点名）\n"
     "\n"
     "【随机口令】今日老婆 ｜ 随机萝莉 / 兽耳 / 女仆\n"
@@ -1915,7 +1915,18 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
     #
     # 这里只把 skill 顶成 `_FALLBACK_SKILL`（silver），提示词用模型刚写好的
     # 那份英文 tag——不走 comic 契约，就是**一张**普通单图。
-    log.info("[direct] 没点名渠道，走默认渠道 %s：%r", _FALLBACK_SKILL, text[:50])
+    if named:
+        # 点名了、但那个 skill 目录不存在（改名 / 忘了带走 skills / 进程没重启
+        # 而目录已经被换掉）。**绝不能跟「没点名」共用一条日志**：2026-10-18
+        # 00:36 用户写「moss4 渠道」拿到的正是「没点名渠道，走默认 silver」，
+        # 害得排查方向跑偏到分辨率上——真相是进程还是 00:20 启动的旧代码，
+        # 而 00:28 目录已把 `moss4` 改成 `moss`，旧 id 自然查不到。
+        log.warning("[direct] 点名的渠道 %r 不存在（skills 里没有；查目录名 /"
+                    " 是否重启过），退回默认 %s：%r",
+                    named, _FALLBACK_SKILL, text[:50])
+    else:
+        log.info("[direct] 没点名渠道，走默认渠道 %s：%r",
+                 _FALLBACK_SKILL, text[:50])
     return {"skill": _FALLBACK_SKILL, "prompt": user_prompt}
 
 
