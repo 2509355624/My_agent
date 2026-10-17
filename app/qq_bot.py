@@ -1452,6 +1452,11 @@ class QQBot:
                 async for ws in ws_connect(QQ_WS_URL, **kwargs):
                     log.info("已连接 %s", QQ_WS_URL)
                     delay = _RECONNECT_MIN    # 连上了就把退避重置回去
+                    # 重启补发（2026-10-17）：上一个进程死掉时「已提交、没投递
+                    # 完」的图还躺在 ComfyUI 的 history/output 里，趁刚连上
+                    # （能发消息了）把它们捞回来。内部有闩，只会启动一次；
+                    # 后台线程跑，补发要等 ComfyUI 出图也不会挡住收消息。
+                    image_jobs.resume_pending()
                     try:
                         async for raw in ws:
                             self._dispatch(raw)

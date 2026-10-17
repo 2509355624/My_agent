@@ -1340,6 +1340,46 @@ def _process_nai(job):
         _notice(job, stage="send")
 
 
+def _ledger_add(job):
+    """把「已提交、还没投递完」的任务记进账本（重启后靠它捞图补发）。
+
+    只记本地 ComfyUI 渠道、且不记 quiet——理由见 app/job_ledger.py 的模块注释。
+    落盘失败只记日志：账本是保险，不能反过来把出图搞挂。
+    """
+    if job.skill in NAI_SKILLS or getattr(job, "quiet", False):
+        return
+    pid = getattr(job, "prompt_id", None)
+    if not pid:
+        return
+    try:
+        from app import job_ledger
+        job_ledger.add({
+            "tag": job.tag,
+            "prompt_id": pid,
+            "target": job.target,
+            "target_id": job.target_id,
+            "skill": job.skill or "",
+            "prompt": job.prompt or "",
+            "seed": job.seed,
+            "created": job.created,
+            "submitted": time.time(),
+        })
+    except Exception:
+        log.warning("任务账本写入失败（不影响本次出图）", exc_info=True)
+
+
+def _ledger_done(job):
+    """任务终结（投递完 / 失败 / 超时都算）→ 从账本划掉。幂等。"""
+    tag = getattr(job, "tag", "")
+    if not tag:
+        return
+    try:
+        from app import job_ledger
+        job_ledger.remove(tag)
+    except Exception:
+        log.warning("任务账本清理失败（重启后可能重投一张）", exc_info=True)
+
+
 def process(job):
     """跑一个任务：提交 → 限时等出图 → 发回原会话 / 存给网页侧。
 
@@ -1371,6 +1411,9 @@ def process(job):
         if not quiet:
             _notice(job)
         return
+    # 提交成功、拿到 prompt_id 之后才记账：账本要的就是这个 id，没它既认不出
+    # ComfyUI 里是哪张图，也没法在重启后把结果捞回来。
+    _ledger_add(job)
 
     try:
         entry = wait_done(job.prompt_id, task_timeout(job))
@@ -1497,6 +1540,11 @@ def _finish(job):
     两条通道共用这一份：通道从任务自己身上取（见 _channel_of_job），所以
     `_take` 那边不用把 chan 一层层传下来。
     """
+    # 任务到此终结（出图投递完 / 失败 / 超时都走这里）→ 从任务账本划掉。
+    # 放在最前面：下面任何一条 return 之前都得先走到，否则重启后的恢复流程
+    # 会去追一张已经处理完的图。唯一的窗口是「图发出去 → 走到这里」这几毫秒，
+    # 崩在这儿的结果是重启后重投一张（多给一张），比丢了强。
+    _ledger_done(job)
     chan = _channel_of_job(job)
     refund = False
     with _lock:
@@ -2082,3 +2130,178 @@ def _send_image(target, target_id, filename, tag="", skill="", seed=None,
         return False
     qq_api.send_image(target, target_id, path, caption=caption)
     return True
+
+
+# ─── 重启恢复：把上一次没投递完的图捞回来补发（2026-10-17 用户提出）─────
+#
+# 场景：ComfyUI 正在跑一张，这时重启机器人。ComfyUI 是**独立进程**，那张图
+# 会照常画完、落在 COMFYUI_OUTPUT_DIR 里；但新进程里没有任何人知道它存在——
+# 结果躺在 /history 里没人取，用户永远收不到，而且**不会有任何报错**。
+#
+# 所以提交成功就把 (tag, prompt_id, 会话) 写进 state/pending_jobs.json（见
+# app/job_ledger.py），投递完由 `_finish` 划掉。进程起来、WS 连上之后调
+# `resume_pending()`：
+#
+#   /history 里有结果 → 直接取图投递（**不重画**，这是最值钱的一段）
+#   还在 /queue 里    → 等它跑完再取图投递
+#   两边都没有        → ComfyUI 也重启过（整机重启 / 死机），任务已经不存在，
+#                       只能老实告诉用户重画
+#
+# ⚠️ 只对**本地 ComfyUI** 成立。NAI 是云端同步请求，重启后没有东西可等，
+# 这类任务压根没记账（见 job_ledger 的模块注释）。
+
+# 同一条记录最多补发几次。给的是「目标群把机器人踢了」这种永远发不出去的
+# 情况兜底——不然账本里会一直躺着一条发不掉的记录，每次启动都白试一遍。
+_RESUME_MAX_ATTEMPTS = 3
+
+_resume_lock = threading.Lock()
+_resumed = False
+
+
+def _comfy_queue_has(prompt_id):
+    """这个 prompt_id 还在 ComfyUI 的队列里吗？
+
+    三态：True = 在（跑着或排着）/ False = 不在 / None = 问不到。
+    **「问不到」必须和「不在」分开**：ComfyUI 重启后要几十秒才响应，这时候
+    要是当成「任务没了」，就会把一张其实正在画的图判死、给用户回一句
+    「没画成」，然后真去重画——白烧一次显卡，还多发一张。
+    """
+    try:
+        resp = requests.get(COMFYUI_URL + "/queue", timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    for part in ("queue_running", "queue_pending"):
+        for item in (data.get(part) or []):
+            # 每项形如 [number, prompt_id, prompt, extra_data, to_execute]
+            if isinstance(item, (list, tuple)) and len(item) > 1 \
+                    and item[1] == prompt_id:
+                return True
+    return False
+
+
+def _resume_tell_dead(target, target_id):
+    """任务确实没了 → 老实说一句，别让人一直等一张永远不会来的图。"""
+    try:
+        _send_text(target, target_id,
+                   "刚才那张图因为机器人重启中断了，没画成。"
+                   "要的话把需求再发我一次。")
+    except Exception:
+        log.warning("恢复：连「没画成」这句都没发出去", exc_info=True)
+
+
+def _resume_one(tag, rec):
+    """补发一条残留任务。返回 True = 这条到此为止（可以从账本删掉）。
+
+    返回 False 只有两种可能：ComfyUI 此刻问不到（留到下次启动），或者图
+    一次都没发出去（网络/协议端问题，也留着下次再试）。
+    """
+    pid = rec.get("prompt_id")
+    target = rec.get("target")
+    target_id = rec.get("target_id")
+    if not pid or not target or not target_id:
+        return True
+    skill = rec.get("skill") or ""
+
+    entry = poll_once(pid)
+    if entry is None:
+        has = _comfy_queue_has(pid)
+        if has is None:
+            log.warning("恢复：问不到 ComfyUI 队列，%s 留到下次启动", tag)
+            return False
+        if not has:
+            # history 没有、队列里也没有 → ComfyUI 也重启过，这单已经不存在
+            log.warning("恢复：%s 在 ComfyUI 里已经没了（多半是整机重启过）", tag)
+            _resume_tell_dead(target, target_id)
+            return True
+        log.info("恢复：%s 还在 ComfyUI 队列里，等它跑完", tag)
+        try:
+            entry = wait_done(pid, task_timeout(skill))
+        except TimeoutError:
+            entry = None
+        if entry is None:
+            log.warning("恢复：%s 等到超时还没出图", tag)
+            _resume_tell_dead(target, target_id)
+            return True
+
+    names = output_images(entry)
+    if not names:
+        log.warning("恢复：%s 跑完了但 history 里没有图片", tag)
+        _resume_tell_dead(target, target_id)
+        return True
+
+    seed = rec.get("seed")
+    prompt = rec.get("prompt") or ""
+    sent = 0
+    for name in names:
+        try:
+            if _send_image(target, target_id, name, tag, skill=skill,
+                           seed=seed, prompt=prompt):
+                sent += 1
+        except Exception:
+            log.warning("恢复：%s 补发抛异常", tag, exc_info=True)
+    if not sent:
+        # 一张都没发出去（协议端没连上之类）。审核拦下的**不算**失败——那种
+        # 情况 image_audit 已经回过话了、也进了人工二审队列，这里当处理完。
+        attempts = int(rec.get("attempts") or 0) + 1
+        if attempts >= _RESUME_MAX_ATTEMPTS:
+            log.warning("恢复：%s 试了 %d 次都发不出去，放弃", tag, attempts)
+            return True
+        rec["attempts"] = attempts
+        try:
+            from app import job_ledger
+            job_ledger.add(rec)
+        except Exception:
+            log.warning("恢复：%s 记尝试次数失败", tag, exc_info=True)
+        return False
+    # 编号 → 提示词 + 种子：跟正常投递那条路一样，发成功才记账。
+    image_log.save(tag, prompt=prompt, file=names[0], skill=skill,
+                   target=target, target_id=target_id,
+                   seed="" if seed is None else seed)
+    log.info("恢复：%s 补发成功（%d/%d 张）", tag, sent, len(names))
+    return True
+
+
+def resume_pending():
+    """进程起来、WS 连上之后调一次：把上次没投递完的图补发回去。
+
+    只跑一次（模块级闩）；**后台线程**执行——补发可能要在 ComfyUI 队列里等
+    好几分钟，绝不能挡住收消息。没东西可补时直接返回 None。
+    """
+    global _resumed
+    with _resume_lock:
+        if _resumed:
+            return None
+        _resumed = True
+    try:
+        from app import job_ledger
+        pending = job_ledger.load()
+    except Exception:
+        log.warning("恢复：读账本失败，本次跳过", exc_info=True)
+        return None
+    if not pending:
+        return None
+    log.info("恢复：账本里有 %d 张没投递完的图，开始补发", len(pending))
+
+    def run():
+        from app import job_ledger
+        for tag, rec in pending.items():
+            try:
+                done = _resume_one(tag, rec)
+            except Exception:
+                log.warning("恢复：%s 处理失败，留到下次启动", tag, exc_info=True)
+                continue
+            if not done:
+                continue
+            try:
+                job_ledger.remove(tag)
+            except Exception:
+                log.warning("恢复：%s 划账失败", tag, exc_info=True)
+        log.info("恢复：补发流程结束")
+
+    t = threading.Thread(target=run, name="resume-pending", daemon=True)
+    t.start()
+    return t
