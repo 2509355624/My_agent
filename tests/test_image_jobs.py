@@ -3253,27 +3253,26 @@ class LandscapeTest(_Base):
             self.assertEqual((got["width"], got["height"]),
                              (before[1], before[0]), skill)
 
-    def test_moss_canvas_is_the_official_1m_square(self):
-        """moss 画布 1024×1024 / 45 步（2026-10-17 21:39 用户拍板）。
+    def test_moss_canvas_is_the_official_1_5m_portrait(self):
+        """moss 画布 1024×1536 / 25 步（2026-10-17 22:24 用户拍板）。
 
-        官方推荐按**总像素**分档：1M / 1.5M / 2M，1024×1024 = 1,048,576 px
-        正好是 1M 档，也是官方 ComfyUI 示例工作流的尺寸。早先为把单张压到 1 分钟
-        砍成 816×1024（0.84M，**低于官方 1M 下限**），现在为质量换回来。
-        步数官方建议 ≥50，但用户要控在 120~180 秒 → 45 步，比 50 慢不了多少、
-        又比之前的 25 步翻近一倍。**宽高都必须是 16 的倍数**（latent 是 /16）。
+        官方推荐按**总像素**分档：1M / 1.5M / 2M，1024×1536 = 1,572,864 px
+        正好是 1.5M 档。中间走过两段弯路：砍成 816×1024（0.84M，低于官方下限）
+        压时间、1024×1024 方形配 45 步（142 秒，加实际开销破 3 分钟）。
+        最终口径 = **画布给面积、步数控速度**：1024×1536 / 25 步 ≈ 130 秒。
+        **宽高都必须是 16 的倍数**（latent 是 /16）。
         """
         wf = skills.load_skill("moss")["workflow"]
         nid = image_jobs._find_size_node(wf)
         ins = wf[nid]["inputs"]
-        self.assertEqual((ins["width"], ins["height"]), (1024, 1024))
+        self.assertEqual((ins["width"], ins["height"]), (1024, 1536))
         self.assertEqual(ins["width"] % 16, 0)
         self.assertEqual(ins["height"] % 16, 0)
-        # 方形画布：横屏对调后还是同一尺寸——不是 bug，是「方」的副产品，
-        # 用户说「横屏」也不会变。哪天真要横竖有别，得先改成非方形画布。
+        # 横屏 = 同一块画布转 90 度，不另存工作流
         wide = image_jobs.landscape_workflow(wf)[nid]["inputs"]
-        self.assertEqual((wide["width"], wide["height"]), (1024, 1024))
+        self.assertEqual((wide["width"], wide["height"]), (1536, 1024))
         ks = [n for n in wf.values() if n["class_type"] == "KSampler"][0]
-        self.assertEqual(ks["inputs"]["steps"], 45)
+        self.assertEqual(ks["inputs"]["steps"], 25)
 
     def test_moss_upscales_2x_after_decode(self):
         """moss 末尾 2x **像素**放大：1024×1024 → 出图 2048×2048（2026-10-17）。
