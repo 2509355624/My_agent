@@ -111,14 +111,17 @@ _HD_TIERS = ("3",)
 _HD_STYLES = ("clear", "curvy", "gloss", "soft")
 _FIXED_SKILLS = ("image_gen_v1", "image_gen_v1_hires", "nffa",
                  "cunny", "miao", "qwen_image_v1", *image_jobs.NAI_SKILLS)
-# 兜底单图渠道（与 generate_image.py 里那个 T2I 默认常量同一个值）：**只**服务
-# 单张那几条路——改图（`_revise`，anima多图没有图生图骨架）、随机口令、`/直通`、
-# 还有「默认」这个老档位词。
+# 默认单图渠道（与 generate_image.py 里那个 T2I 默认常量同一个值）：**既是**
+# 「用户没点名渠道」时的默认出图方式（判据在 `_translate` 末尾），**也是**单张
+# 那几条路的落点——改图（`_revise` 判不出渠道）、随机口令、`/直通`、还有
+# 「默认」这个老档位词。
 #
-# ⚠️ 它**不是**「用户没点名渠道」时的默认出图方式了：2026-10-16 用户拍板把默认
-# 换成了 **anima多图（一次 3 张）**（原话：「1 分钟 3 个图片，感觉挺值的，直接
-# anima多图就是默认渠道即可」）。那条判据在 `_translate` 的末尾，跟这里无关。
-# 2026-10-06 的「默认渠道 = silver」是旧口径，如今只剩上面那几条单图路还在用。
+# 2026-10-17 用户拍板翻回来：「帮我把 silver 作为默认渠道吧，现在这个 anima多图
+# 效果太差了」——2026-10-16 那天曾把默认换成 anima多图 3 张，实测画质不行。
+# ⚠️ anima多图 没下架，原话点名仍走它的专路（`_ANIMA_MULTI_RE`）。
+# ⚠️ 改默认渠道**必须同时改模板**：`_MASTER_TEMPLATE` / `_REVISE_TEMPLATE` 里
+# 只要还写着「默认渠道 = 某某」，模型就会**主动填 skill**，`if not skill` 那条
+# 默认分支永远走不到，代码改了等于没改。
 #
 # silver / jank 不进 `_FIXED_SKILLS`，由 `_allowed_skills()` 现场扫 skills/ 目录放行。
 _FALLBACK_SKILL = "silver"
@@ -770,8 +773,8 @@ GUIDE_TEXT = (
     "@我（或喊「大大怪」）+ 渠道 + 描述就能出图。\n"
     "\n"
     "【怎么写】渠道名写在最前面，后面接需求\n"
-    "　不写渠道 → anima多图，一次给你 3 张（约 1 分钟）\n"
-    "　silver 水晶城堡 ｜ 单张快出 · 明说 silver 才走它\n"
+    "　不写渠道 → silver 单张快出（默认渠道）\n"
+    "　silver 水晶城堡 ｜ 单张快出 · 不写渠道也是它\n"
     "　anima 女骑士 ｜ 三档 + 2x 像素放大（3072×4608）\n"
     "　anima gloss 女骑士 ｜ gloss 油亮\n"
     "　三档 clear 水晶城堡 ｜ 跟 anima 等价\n"
@@ -779,14 +782,14 @@ GUIDE_TEXT = (
     "　只说画风词（clear/soft/gloss/curvy）→ 也是三档\n"
     "\n"
     "【档位】只剩三档（快档 / 最小档 / 二档 2026-10-07 取消）\n"
-    "　　　说 anima 或三档都行 · 不写渠道词 = anima多图（3 张）\n"
+    "　　　说 anima 或三档都行 · 不写渠道词 = silver 单张\n"
     "\n"
     "【画风】clear 清晰 ｜ curvy 肉感\n"
     "　　　gloss 油亮 ｜ soft 柔和\n"
     "　　　打错或没打 → 按该档默认\n"
     "\n"
     "【点名渠道】把渠道名写最前面就行\n"
-    "　anima多图　双模型两段 · 一次 3 张（不写渠道词也是它）\n"
+    "　anima多图　双模型两段 · 一次 3 张（要明说）\n"
     "　silver-hd　4x超清 · 4928×7360（约28MB）\n"
     "　jank　NoobAI 自定义（有权号词就用它）\n"
     "　anima线条　anima 堆 6 条 LoRA 的版本 · 2456×3686\n"
@@ -831,14 +834,14 @@ MORE_CHAN_TEXT = (
     "写法：渠道名 + 你的需求\n"
     "例：三档 女骑士 ｜ jank 银发初音未来 ｜ qwen 水晶城堡\n"
     "\n"
-    "【默认】不写渠道词 → anima多图（一次 3 张 · 约 1 分钟）\n"
+    "【默认】不写渠道词 → silver 单张快出\n"
     "\n"
     "【档位】anima 或三档都行 · 末尾 2x 放大 → 3072×4608\n"
     "【画风】clear 清晰 ｜ curvy 肉感 ｜ gloss 油亮 ｜ soft 柔和\n"
     "　　　　不写按该档默认\n"
     "\n"
     "【点名渠道】写在最前面就行\n"
-    "　anima多图　双模型两段 · 一次 3 张（不写渠道词也是它）\n"
+    "　anima多图　双模型两段 · 一次 3 张（要明说）\n"
     "　silver-hd　4x超清 4928×7360\n"
     "　jank　NoobAI 自定义（有权号词就用它）\n"
     "　anima线条 / anima写实　堆 6 条 LoRA 的版本\n"
@@ -926,9 +929,9 @@ def _parse_direct(text):
     if not prompt:
         return None, None, ("`|` 后面没写提示词。补上英文提示词再发，"
                             "例：/直通-silver|1girl, blue hair")
-    # 渠道段 → 渠道 id。silver 是**兜底单图档**，`_parse_channel` 平时不把它当
-    # 点名（2026-10-16 起「不写渠道」走的是 anima多图，更不是它）；直通里显式
-    # 写了就按单图档处理（用户给的例子里有它）。
+    # 渠道段 → 渠道 id。silver 是**默认单图档**，`_parse_channel` 平时不认这个
+    # 单字（`silver hair, 1girl` 这种英文 tag 开场会被误判）；直通里显式写了就
+    # 按单图档处理（用户给的例子里有它）。
     if chan_seg.strip().lower() == _FALLBACK_SKILL:
         return _FALLBACK_SKILL, prompt, ""
     skill, _desc = _parse_channel(chan_seg)
@@ -1042,7 +1045,7 @@ _MASTER_TEMPLATE = (
     "没点名渠道就留空（看上面【渠道 skill】），细节自己补。\n"
     "\n"
     "【渠道 skill】**用户点名渠道才填**（silver / silver-hd / nai / sd / 三档…）；"
-    "他没点名就**留空**——代码会走默认的 anima多图（一次 3 张），你不用管。\n"
+    "他没点名就**留空**——代码会走默认渠道 silver（单张快出），你不用管。\n"
     "画风四种：clear 清晰 / soft 柔和 / gloss 油亮 / curvy 肉感\n"
     "尺寸只剩一档（2026-10-07 起快档 / 最小档 / 二档全取消），id = hd_3_<画风>：\n"
     "- 「anima」「三档」「高清」都是它，末尾带 2x 像素放大 → 3072×4608，最慢\n"
@@ -1066,7 +1069,7 @@ _MASTER_TEMPLATE = (
     "krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / "
     "krea2奶油 / krea2写实 / krea2通用 / krea2铭音 / krea2鬼针草 / krea2铭鬼；"
     "点名带风格词，光说 krea2 不算。\n"
-    "- silver = **单张快出**渠道（他明说 silver 才填；不填走默认多图）、"
+    "- silver = **单张快出**渠道，也是**默认渠道**（没点名就它；点名别的照点名来）、"
     "jank = 自定义 NoobAI 渠道，明说才填。jank 是**文生图专用**、没有图生图骨架；"
     "silver 有锁构图骨架（见下面【图生图】）。"
     "⚠️「银发 / silver hair」是发色、不是渠道。\n"
@@ -1644,10 +1647,11 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
     这本身就是错的。」
 
     返回值四态：
-      - {"skill":…, "prompt":…}  → 要画**一张**，调用方入队
+      - {"skill":…, "prompt":…}  → 要画**一张**，调用方入队。**没点名渠道时
+                                   也是这一态**（2026-10-17 起默认 = silver）
       - {"comic":…}              → 要画**一批**（漫画 / 多图），调用方走
-                                   `_enqueue_comic`。**没点名渠道时就是这一态**
-                                   （2026-10-16 起默认 = anima多图 3 张）
+                                   `_enqueue_comic`。只有模型自己判出「用户要
+                                   漫画 / 多图 / N 张」才会出现
                                    ⚠️ **点名了渠道（`skill` 入参非空）就没有这一态**
                                    ——点名渠道最高优先级，模型吐 comic 也会被
                                    按点名的渠道拉回单图（见下面 comic 契约那段）
@@ -1664,7 +1668,7 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
       no_default   True → 模型既没判出渠道、代码也没认出来时返回 None
                    （调用方回问），**不静默落默认档**烧一张错风味的图。
                    ⚠️ 只有成品串那条路传 True；普通轮次两边都判不出 = 走默认
-                   的 anima多图（见末尾那段）。
+                   渠道 silver 单图（见末尾那段）。
     """
     named = (skill or "").strip()
     # 搜索资料由调用方（`decide`）统一算好传进来——**一次请求只搜一次**，
@@ -1758,21 +1762,18 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
     if no_default:
         # 成品串：判不出就回问，绝不静默换默认档烧一张错风味的图。
         return None
-    # ── 谁也没点名渠道 → 默认出图方式 = anima多图（2026-10-16 用户拍板）──
-    # 用户原话：「1 分钟 3 个图片，感觉挺值的，直接 anima多图就是默认渠道即可」。
-    # 走 comic 契约而不是把 skill 顶成某个单图渠道：anima多图本身就是**批量**
-    # 工作流（`_anima_multi_batch`，要 `multi_prompts`），从单图管道进不去。
+    # ── 谁也没点名渠道 → 默认出图方式 = silver 单图（2026-10-17 用户拍板）──
+    # 用户原话：「帮我把 silver 作为默认渠道吧，现在这个 anima多图效果太差了」。
+    # 这是把 2026-10-16「默认 = anima多图 3 张」的口径**翻回来**：anima 那条
+    # 批量工作流要多喂一段剧本、画质也不稳，用户实测后否掉了。
     #
-    # `style` 由代码**钉死**给 anima：`_enqueue_comic` 平时看原话里有没有
-    # 「anima多图」字样，而这条路上用户什么都没说，不钉就会掉回 silver 漫画
-    # （默认 10 格）——那不是「默认出 3 张」的意思。`panels` 留空即取该渠道
-    # 默认（`comic_story.default_panels("anima")` = 3）。
+    # anima多图 **没下架**：原话点名「anima多图」仍走 `_ANIMA_MULTI_RE` 专路，
+    # 只是不再是「什么都没说」时的落点。
     #
-    # brief 用**用户自己的原话**（可能是「引用正文 + 这句话」的合并）：编剧
-    # 那层（`write_story`）要的就是中文需求，模型刚判出来的英文 prompt 反而不
-    # 是它要的输入——同 `_ANIMA_MULTI_RE` 专路的做法。
-    log.info("[direct] 没点名渠道，走默认 anima多图：%r", text[:50])
-    return {"comic": {"brief": text, "panels": None, "style": "anima"}}
+    # 这里只把 skill 顶成 `_FALLBACK_SKILL`（silver），提示词用模型刚写好的
+    # 那份英文 tag——不走 comic 契约，就是**一张**普通单图。
+    log.info("[direct] 没点名渠道，走默认渠道 %s：%r", _FALLBACK_SKILL, text[:50])
+    return {"skill": _FALLBACK_SKILL, "prompt": user_prompt}
 
 
 def _recall_tags(data_urls, numbered=True):
@@ -2038,14 +2039,13 @@ def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):
     if skill not in _allowed_skills():
         skill = anchor_skill if anchor_skill in _allowed_skills() else ""
     if not skill:
-        if not source_image:
-            # 带图 + 没说图生图 = 「反推提示词再跑一张」，本质是**文生图**（模型
-            # 自己没填 `source_image`），跟默认路一样走 anima多图。2026-10-16
-            # 用户拍板：「我引用图片，没有说图生图，就是默认反推提示词然后跑图的呀」
-            # —— 之前的兜底无条件落银，带图轮因此绕开了「默认 = anima多图」。
-            return _enqueue_comic({"brief": prompt, "style": "anima"}, text)
-        # 垫图（真 i2i）必须有锁构图骨架，anima多图 那条批量工作流没有 → 只能落银。
-        # 硬走它不会报错：垫图会被丢掉、静默降级成文生图，画出来是另一个人。
+        # 判不出渠道 → 落默认渠道 silver 单图（2026-10-17 用户拍板把默认从
+        # anima多图 换回 silver，原话：「现在这个 anima多图效果太差了」）。
+        #
+        # 2026-10-16 那版在这里分了两支：不垫图 → 走 anima多图批量；垫图 →
+        # 落银（anima 那条批量工作流**没有图生图骨架**，垫图进去不报错，会被
+        # 静静丢掉，画出来是另一个人）。默认统一成银之后两支合一，垫图与否
+        # 仍由模型填的 `source_image` 决定。
         skill = _FALLBACK_SKILL
     _remember_job(session_key, skill, prompt)
     return _enqueue(skill, prompt, text, source_image=source_image)
@@ -2369,9 +2369,10 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     #（可能带引用）。一律交给 AI 判意图：要画图就出图，是聊天/提问就回话。
     # 2026-10-05 用户拍板：删掉 `_INTENT_RE`/`at_me` 闸与菜单兜底——
     # 「AI 识别用户的意图，是画图就画，是聊天就回话」，一次请求一次回复。
-    # ⚠️ 2026-10-16 起这里是**默认出图方式**的落点：`_translate` 拿不到任何
-    # 渠道（代码没认出、模型也没点名）时回的是 `{"comic": …}`，也就是用户没
-    # 点名渠道 = anima多图 3 张。这个分支原本就在，不用另加判断。
+    # ⚠️ 这里是**默认出图方式**的落点：`_translate` 拿不到任何渠道（代码没
+    # 认出、模型也没点名）时回的是 `{"skill": "silver", …}`——2026-10-17 起
+    # 默认 = silver 单图（此前是 anima多图 3 张，用户实测画质不行否掉了）。
+    # 这个分支原本就在，不用另加判断。
     src = _quote_merge(quoted, text) if quoted.strip() else text
     data = _translate(src, [] if quoted.strip() else history, doc=doc)
     if data and data.get("reply"):
