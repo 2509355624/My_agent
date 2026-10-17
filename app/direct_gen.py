@@ -346,7 +346,9 @@ _FIXED_CHAN_RE = re.compile(
     #      不挡的话机器人回执里那句 `krea2-coscandid：…` 会被吃成 `krea2`
     #      （渠道锁成 general），刚修好的「id 直接点名」那条路又坏掉。
     r"|krea2(?![0-9A-Za-z_-])"
-    r"|sd|qwen-hd|qwen|nffa|nai|cunny|miao)"
+    # moss（MOSS-Image SFT，2026-10-17 装的本地渠道）：英文单词 id，但中文用户
+    # 的「moss」不会拿去当画面内容（苔藓一般写「青苔」），整词可认。
+    r"|sd|qwen-hd|qwen|nffa|nai|cunny|miao|moss)"
     r"(?![0-9A-Za-z_])",
     re.I)
 
@@ -807,6 +809,7 @@ GUIDE_TEXT = (
     "　nffa　　插画感\n"
     "　cunny　超分重渠道 · 单张 2~4 分钟\n"
     "　miao　　皮肤质感滑嫩 · 2x 出 3072×4608\n"
+    "　moss　　MOSS-Image · 图里写中英文最准 · 5B 本地 · 慢\n"
     "　nai　　 NovelAI 云端 · 认画师串/权号\n"
     "\n"
     "【引用玩法】\n"
@@ -854,6 +857,7 @@ MORE_CHAN_TEXT = (
     "　　　真人cos/宝可梦/柔光/奶油/写实/通用/铭音/鬼针草/铭鬼\n"
     "　nffa 插画感 ｜ cunny 超分重渠道·单张 2~4 分钟\n"
     "　miao 皮肤质感·2x 放大 ｜ nai 云端·认画师串/权号\n"
+    "　moss MOSS-Image·图里写中英文最准（5B 本地，慢）\n"
     "\n"
     "【随机口令】今日老婆 ｜ 随机萝莉 / 兽耳 / 女仆\n"
     "\n"
@@ -1065,6 +1069,7 @@ _MASTER_TEMPLATE = (
     # 用户自己打「sd」照样认，只是不再宣传它有多张能力。
     "- sd = image_gen_v1（SDXL 底模，单张出图）。\n"
     "- nffa / cunny / miao：点名才用（cunny / miao 一张好几分钟）。\n"
+    "- moss = MOSS-Image（5B 本地，画面里出字最准，25 步慢），点名才填。\n"
     "- krea2 系按风格 LoRA 分：krea2米山舞 / krea2日系 / krea2亚洲真人 / "
     "krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / "
     "krea2奶油 / krea2写实 / krea2通用 / krea2铭音 / krea2鬼针草 / krea2铭鬼；"
@@ -1116,7 +1121,7 @@ _MASTER_TEMPLATE = (
     "去糊，不是重画一张。**本轮有引用图时，代码专路已经自己入队了、根本轮不到你**；"
     "你走到这里只可能是**没给图**——那就直说「qwen修复 得配一张图」，"
     "**别改成别的渠道、也别凭空画一张**。\n"
-    "  ⚠️ jank / nffa / cunny / miao / krea2 系 / sd **没有图生图骨架**，"
+    "  ⚠️ jank / nffa / cunny / miao / krea2 系 / sd / moss **没有图生图骨架**，"
     "别给它们填 `source_image`（填了会自动退回文生图、白等一轮）——"
     "要垫图就换 silver 系或 qwen 系。\n"
     "  ⚠️ 只是评价这张图 / 只要反推提示词 → **不填** `source_image`，也别画。\n"
@@ -1213,6 +1218,7 @@ _REVISE_TEMPLATE = (
     "  ⚠️ 通用「krea2」已下架，原话只说了 krea2 没带风格词时**别填 krea2 系**"
     "（那 13 个名字都不是他说的），skill 别填。\n"
     "  nffa / cunny / miao = 原话点名才填；\n"
+    "  moss = 原话点名「moss」才填（MOSS-Image，画面出字最准，纯文生图）；\n"
     "  jank = 原话明说「jank」才填（用户自定义渠道）。\n"
     "  silver-hd = silver 的 4x 超清版，原话明说「silver-hd」或「silver 超清」才填。\n"
     "  qwen-hd = qwen 的 4x 超清版，原话明说「qwen-hd」或「qwen 超清」才填。\n"
@@ -1240,7 +1246,7 @@ _REVISE_TEMPLATE = (
     " ④ **「qwen修复」**（引用图 + 说这三个字）= 把**这张图本身**修清楚 / 去噪 / "
     "去糊，不是重画。**本轮有引用图时代码专路已经自己入队了、轮不到你**；"
     "你走到这里只可能是**没给图**——直说「qwen修复 得配一张图」就行。\n"
-    "  ⚠️ jank / nffa / cunny / miao / krea2 系 / sd **没有图生图骨架**，"
+    "  ⚠️ jank / nffa / cunny / miao / krea2 系 / sd / moss **没有图生图骨架**，"
     "别给它们填 `source_image`（填了会自动退回文生图、白等一轮）。"
     "只是评价这张图 → **不填**。\n"
     "- {lang}\n"
@@ -1891,7 +1897,7 @@ def _ledger_hit(source):
 # NAI 不认 seed（传了直接报错），所以换档复刻只往这些渠道带种子。
 # ⚠️ `krea2` 这条是**前缀**匹配，`krea2-yoneyama` 等 5 条靠它覆盖
 # （2026-10-08 krea2 系拆 5 条后没改这里，改的是注释）。
-_LOCAL_SEED_SKILL_RE = re.compile(r"^(anima_|hd_|qwen_image_v1|qwen30|image_gen_v1|krea2|nffa|cunny|miao)")
+_LOCAL_SEED_SKILL_RE = re.compile(r"^(anima_|hd_|qwen_image_v1|qwen30|image_gen_v1|krea2|nffa|cunny|miao|moss)")
 
 
 def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):

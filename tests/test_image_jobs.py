@@ -3017,13 +3017,16 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
             self.assertEqual(image_jobs.task_timeout(skill),
                              image_jobs.TASK_TIMEOUT, skill)
         self.assertEqual(image_jobs.TASK_TIMEOUT, 180)
-        # 例外只有 qwen 那几条，且一律 220（2026-10-16 加 `qwen30`）
+        # 例外：qwen 系那几条一律 220（2026-10-16 加 `qwen30`）；
+        # 2026-10-17 加 `moss`（MOSS-Image 5B + 9 GB 文本编码器，首张实测 132 秒，
+        # 冷启动读盘慢的机器上 220 秒余量太薄）→ 单独 300，**没有别的渠道**。
         self.assertEqual(sorted(image_jobs.SKILL_TIMEOUTS),
-                         ["qwen-charsheet", "qwen-hd", "qwen-restore",
-                          "qwen30", "qwen_image_v1"])
+                         ["moss", "qwen-charsheet", "qwen-hd",
+                          "qwen-restore", "qwen30", "qwen_image_v1"])
         for skill in ("qwen_image_v1", "qwen-hd", "qwen-charsheet",
                       "qwen-restore", "qwen30"):
             self.assertEqual(image_jobs.task_timeout(skill), 220, skill)
+        self.assertEqual(image_jobs.task_timeout("moss"), 300)
 
     def test_unknown_skill_falls_back_to_global(self):
         """没配的渠道仍走 TASK_TIMEOUT——新渠道不能因为漏配就变慢。"""
@@ -3238,7 +3241,7 @@ class LandscapeTest(_Base):
     def test_every_local_channel_canvas_is_swapped(self):
         for skill in ("hd_3_clear", "hd_3_soft", "silver", "silver-hd",
                       "image_gen_v1", "jank", "qwen_image_v1", "krea2",
-                      "nffa", "cunny", "miao"):
+                      "nffa", "cunny", "miao", "moss", "qwen30"):
             wf = skills.load_skill(skill)["workflow"]
             nid = image_jobs._find_size_node(wf)
             self.assertIsNotNone(nid, skill)

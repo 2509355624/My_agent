@@ -290,6 +290,10 @@ SKILL_TIMEOUTS = {
     # 2026-10-16 用户新增：qwen 的 30 步副本（`skills/qwen30/`）。25 步那档实测
     # 约 41 秒，30 步多两成、再叠 2x 放大，给同档 220 秒余量足够。
     "qwen30": 220,
+    # 2026-10-17 新增：MOSS-Image SFT（`skills/moss/`）。5B DiT + **9 GB 文本
+    # 编码器**（Qwen3.5-9B int8），首张要先把编码器读进显存、编码完再卸载，才
+    # 轮到 DiT 采样。12 GB 卡上首张最坏按 4 分钟算，给 300 秒。
+    "moss": 300,
 }
 
 
@@ -1698,7 +1702,10 @@ _LANDSCAPE_RE = re.compile(r"(横屏|横版|横图)")
 # 带画布的节点类型（实测这三种）。**按 class_type 认、不按节点 id**——id 各渠道不同。
 _SIZE_NODE_TYPES = ("EmptyLatentImage", "EmptySD3LatentImage",
                     "BatchPromptImageGenerator",
-                    "DualModelBatchPromptImageGenerator")
+                    "DualModelBatchPromptImageGenerator",
+                    # MOSS-Image（moss 渠道）用的是 Flux2 那套空 latent 节点，
+                    # 不登记它的话「moss 横屏 xxx」会被静默无视（还是 1024×1536）。
+                    "EmptyFlux2LatentImage")
 
 
 def turn_is_landscape():
