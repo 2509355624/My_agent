@@ -3018,8 +3018,9 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
                              image_jobs.TASK_TIMEOUT, skill)
         self.assertEqual(image_jobs.TASK_TIMEOUT, 180)
         # 例外：qwen 系那几条一律 220（2026-10-16 加 `qwen30`）；
-        # 2026-10-17 加 `moss`（MOSS-Image 5B + 9 GB 文本编码器，首张实测 132 秒，
-        # 冷启动读盘慢的机器上 220 秒余量太薄）→ 单独 300。
+        # 2026-10-17 加 `moss`（MOSS-Image 5B + 9 GB 文本编码器）：22:41 用户把
+        # 画布抬到 1088×1920 / 40 步，稳定态约 277 秒 + 冷启动 75 秒 → 300 会
+        # 在快出图那一刻被砍，单抬到 480。
         # 2026-10-17 20:57 用户又单点 `qwen-restore` 抬到 300（16 步 → 25 步，1536 档
         # 折算 ≈175 秒）→ 它也单独一档，**qwen 其余三条仍是 220**，别跟着一起改。
         self.assertEqual(sorted(image_jobs.SKILL_TIMEOUTS),
@@ -3027,7 +3028,7 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
                           "qwen-restore", "qwen30", "qwen_image_v1"])
         for skill in ("qwen_image_v1", "qwen-hd", "qwen-charsheet", "qwen30"):
             self.assertEqual(image_jobs.task_timeout(skill), 220, skill)
-        self.assertEqual(image_jobs.task_timeout("moss"), 300)
+        self.assertEqual(image_jobs.task_timeout("moss"), 480)
         self.assertEqual(image_jobs.task_timeout("qwen-restore"), 300)
 
     def test_unknown_skill_falls_back_to_global(self):
@@ -3253,46 +3254,45 @@ class LandscapeTest(_Base):
             self.assertEqual((got["width"], got["height"]),
                              (before[1], before[0]), skill)
 
-    def test_moss_canvas_is_the_official_1_5m_portrait(self):
-        """moss 画布 1024×1536 / 25 步（2026-10-17 22:24 用户拍板）。
+    def test_moss_canvas_is_the_2m_tier_both_orientations(self):
+        """moss 画布 1088×1920 / 40 步（2026-10-17 22:41 用户拍板）。
 
-        官方推荐按**总像素**分档：1M / 1.5M / 2M，1024×1536 = 1,572,864 px
-        正好是 1.5M 档。中间走过两段弯路：砍成 816×1024（0.84M，低于官方下限）
-        压时间、1024×1024 方形配 45 步（142 秒，加实际开销破 3 分钟）。
-        最终口径 = **画布给面积、步数控速度**：1024×1536 / 25 步 ≈ 130 秒。
-        **宽高都必须是 16 的倍数**（latent 是 /16）。
+        用户原话「1920x1080 和 1080x1920 这样的搭配，步长给到 40」：
+        **1080 不是 16 的倍数**（`//16` 会截成 1072），落 1088 → 面积
+        2,088,960 px，刚过官方 2M 档，在 0.25M~4M 的外推范围内。
+        方向沿用全渠道约定：**工作流写死竖屏**，说「横屏」才由
+        `landscape_workflow()` 对调成 1920×1088。
         """
         wf = skills.load_skill("moss")["workflow"]
         nid = image_jobs._find_size_node(wf)
         ins = wf[nid]["inputs"]
-        self.assertEqual((ins["width"], ins["height"]), (1024, 1536))
+        self.assertEqual((ins["width"], ins["height"]), (1088, 1920))
         self.assertEqual(ins["width"] % 16, 0)
         self.assertEqual(ins["height"] % 16, 0)
         # 横屏 = 同一块画布转 90 度，不另存工作流
         wide = image_jobs.landscape_workflow(wf)[nid]["inputs"]
-        self.assertEqual((wide["width"], wide["height"]), (1536, 1024))
+        self.assertEqual((wide["width"], wide["height"]), (1920, 1088))
         ks = [n for n in wf.values() if n["class_type"] == "KSampler"][0]
-        self.assertEqual(ks["inputs"]["steps"], 25)
+        self.assertEqual(ks["inputs"]["steps"], 40)
 
-    def test_moss_upscales_2x_after_decode(self):
-        """moss 末尾 2x **像素**放大：1024×1024 → 出图 2048×2048（2026-10-17）。
+    def test_moss_saves_the_decoded_pixels_without_upscaling(self):
+        """moss 不做像素放大：SaveImage 直接吃 VAEDecode（2026-10-17 22:41）。
 
-        用 `ImageScaleBy`（lanczos）而不是 `ImageUpscaleWithModel`：
-        本机唯一的 2x 超分模型是动漫向的 ESRGAN，会**重绘笔画**，而 moss 的
-        全部价值就是字准——插值放大不改字形。也顺带钉住「放大节点没被误认成
-        尺寸节点」（`scale_by` 不是 width/height）。"""
+        用户原话「2x 放大取消」——插值放大不增细节，只把 1 MB 的图撑到
+        6~8 MB（QQ 发图更慢）。清晰度靠画布面积 + 步数，不靠事后摊像素。
+        本机唯一的 2x 超分模型是动漫向 ESRGAN，会重绘笔画，而 moss 的全部
+        价值就是字准，更不能挂在它后面。
+        """
         wf = skills.load_skill("moss")["workflow"]
         self.assertEqual(image_jobs._find_size_node(wf), "30")
 
         save = [n for n in wf.values() if n["class_type"] == "SaveImage"][0]
-        up_nid = save["inputs"]["images"][0]
-        up = wf[up_nid]
-        self.assertEqual(up["class_type"], "ImageScaleBy")
-        self.assertEqual(up["inputs"]["upscale_method"], "lanczos")
-        self.assertEqual(up["inputs"]["scale_by"], 2.0)
-        # 放大吃的是 VAEDecode 的产物（别把采样 latent 直接送去放大）
-        src = wf[up["inputs"]["image"][0]]
-        self.assertEqual(src["class_type"], "VAEDecode")
+        src_nid = save["inputs"]["images"][0]
+        self.assertEqual(wf[src_nid]["class_type"], "VAEDecode")
+        # 整条链上一个放大节点都不许剩
+        self.assertFalse([n for n in wf.values()
+                          if n["class_type"] in ("ImageScaleBy", "ImageScale",
+                                                 "ImageUpscaleWithModel")])
 
     def test_the_original_workflow_is_never_mutated(self):
         """返回新对象而不是原地改：静默重抽会重建 `job.workflow` 再递归调

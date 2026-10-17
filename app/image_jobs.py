@@ -297,8 +297,13 @@ SKILL_TIMEOUTS = {
     "qwen30": 220,
     # 2026-10-17 新增：MOSS-Image SFT（`skills/moss/`）。5B DiT + **9 GB 文本
     # 编码器**（Qwen3.5-9B int8），首张要先把编码器读进显存、编码完再卸载，才
-    # 轮到 DiT 采样。12 GB 卡上首张最坏按 4 分钟算，给 300 秒。
-    "moss": 300,
+    # 轮到 DiT 采样。
+    # ⚠️ 22:41 用户拍板换画布 **1920×1088 / 40 步**（原话「1920x1080 和
+    #    1080x1920，步长给到 40，耗时长一点没事，主要是我要看质量」）：
+    #    面积 2.09M（原 1.57M 的 1.33 倍）× 步数 1.6 倍 → 稳定态约 277 秒，
+    #    叠冷启动读 9 GB 编码器最坏 ~350 秒。300 秒会**在快出图那一刻被砍**，
+    #    所以单独抬到 480。这台是表里唯一到分钟级的渠道，别按它推别的。
+    "moss": 480,
 }
 
 
@@ -1709,7 +1714,7 @@ _SIZE_NODE_TYPES = ("EmptyLatentImage", "EmptySD3LatentImage",
                     "BatchPromptImageGenerator",
                     "DualModelBatchPromptImageGenerator",
                     # MOSS-Image（moss 渠道）用的是 Flux2 那套空 latent 节点，
-                    # 不登记它的话「moss 横屏 xxx」会被静默无视（还是 1024×1536）。
+                    # 不登记它的话「moss 横屏 xxx」会被静默无视（还是 1088×1920）。
                     "EmptyFlux2LatentImage")
 
 
