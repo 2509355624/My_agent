@@ -331,6 +331,16 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    "通用": "krea2-general",
                    "奶油": "krea2-creamy",
                    "柔光": "krea2-softlight",
+                   # 2026-10-18 用户拍板把 moss 拆成两条渠道（原话「原来的 45 步的
+                   # 不变，然后我们就直接把加多一个 moss 4 步，和一个 moss 45 步
+                   # 这样进行区分即可」）：
+                   #   `moss` / `moss45` → `skills/moss/`（45 步 / 1024×1024 / 2.5 分钟）
+                   #   `moss4`          → `skills/moss4/`（DMD 4 步 / 1024×1536 / 30 秒）
+                   # ⚠️ 45 步那条的**目录名不改**（叫 moss），老喊法「moss」照旧命中，
+                   #    `moss45` 只是它的显式别名；只有 4 步是新目录。
+                   #    带「步」的写法也认（正则把「步」吃进去了，这里得能落回 id）。
+                   "moss": "moss", "moss45": "moss", "moss45步": "moss",
+                   "moss4": "moss4", "moss4步": "moss4",
                    "日系": "krea2-rella"}
 _FIXED_CHAN_RE = re.compile(
     r"(?<![0-9A-Za-z_])"
@@ -360,7 +370,12 @@ _FIXED_CHAN_RE = re.compile(
     r"|krea2(?![0-9A-Za-z_-])"
     # moss（MOSS-Image SFT，2026-10-17 装的本地渠道）：英文单词 id，但中文用户
     # 的「moss」不会拿去当画面内容（苔藓一般写「青苔」），整词可认。
-    r"|sd|qwen-hd|qwen|nffa|nai|cunny|miao|moss)"
+    # ⚠️ 2026-10-18 拆出 `moss45` / `moss4` 两个喊法，**长名必须排在裸 `moss` 前**：
+    #    `moss4` 里的 `4` 本来就被尾部 `(?![0-9A-Za-z_])` 挡住（裸 `moss` 的前瞻
+    #    看见 `4` 直接失败），不显式登记就认不出这是 4 步那条。
+    #    `\s*步?` 末尾那个「步」必须一起吃掉（跟上面 `qwen\s*30\s*步?` 同理）：
+    #    用户会写「moss4步 招牌」，不吞掉的话正文里会剩一个孤零零的「步」。
+    r"|sd|qwen-hd|qwen|nffa|nai|cunny|miao|moss\s*45\s*步?|moss\s*4\s*步?|moss)"
     r"(?![0-9A-Za-z_])",
     re.I)
 
@@ -821,7 +836,8 @@ GUIDE_TEXT = (
     "　nffa　　插画感\n"
     "　cunny　超分重渠道 · 单张 2~4 分钟\n"
     "　miao　　皮肤质感滑嫩 · 2x 出 3072×4608\n"
-    "　moss　　MOSS-Image · 图里写中英文最准 · 5B 本地 · 1088×1920 · 25 步 2.5 分钟\n"
+    "　moss　　MOSS-Image · 图里写中英文最准 · 45 步 2.5 分钟（= moss45）\n"
+    "　moss4　 同一模型的 4 步加速版 · 1024×1536 · 约 30 秒\n"
     "　nai　　 NovelAI 云端 · 认画师串/权号\n"
     "\n"
     "【引用玩法】\n"
@@ -869,7 +885,8 @@ MORE_CHAN_TEXT = (
     "　　　真人cos/宝可梦/柔光/奶油/写实/通用/铭音/鬼针草/铭鬼\n"
     "　nffa 插画感 ｜ cunny 超分重渠道·单张 2~4 分钟\n"
     "　miao 皮肤质感·2x 放大 ｜ nai 云端·认画师串/权号\n"
-    "　moss MOSS-Image·图里写中英文最准（5B 本地，25 步 2.5 分钟）\n"
+    "　moss MOSS-Image·图里写中英文最准（45 步 2.5 分钟；moss45 同义）\n"
+    "　moss4 同模型 4 步加速版·1024×1536·约 30 秒\n"
     "\n"
     "【随机口令】今日老婆 ｜ 随机萝莉 / 兽耳 / 女仆\n"
     "\n"
@@ -1108,7 +1125,8 @@ _MASTER_TEMPLATE = (
     # 用户自己打「sd」照样认，只是不再宣传它有多张能力。
     "- sd = image_gen_v1（SDXL 底模，单张出图）。\n"
     "- nffa / cunny / miao：点名才用（cunny / miao 一张好几分钟）。\n"
-    "- moss = MOSS-Image（5B 本地，画面里出字最准，25 步约 2.5 分钟），点名才填。"
+    "- moss / moss45 = MOSS-Image（5B 本地，出字最准，45 步约 2.5 分钟）；"
+    "moss4 = 同模型的 **4 步加速版**（约 30 秒，1024×1536）。两条都点名才填；"
     "画面里要出成段中文时，按下面那份【moss 刻字规范】写 prompt。\n"
     "- krea2 系按风格 LoRA 分：krea2米山舞 / krea2日系 / krea2亚洲真人 / "
     "krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / "

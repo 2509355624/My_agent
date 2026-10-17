@@ -3023,12 +3023,16 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
         # 在快出图那一刻被砍，单抬到 480。
         # 2026-10-17 20:57 用户又单点 `qwen-restore` 抬到 300（16 步 → 25 步，1536 档
         # 折算 ≈175 秒）→ 它也单独一档，**qwen 其余三条仍是 220**，别跟着一起改。
+        # 2026-10-18 用户把 moss 拆成两条（「原来的 45 步的不变，加多一个 moss 4 步
+        # 和一个 moss 45 步这样区分」）：`moss`(480) 之外新增 `moss4`(180) ——
+        # 4 步实测 26.7~28.1 秒，180 秒留够冷启动读 9 GB 编码器的余量。
         self.assertEqual(sorted(image_jobs.SKILL_TIMEOUTS),
-                         ["moss", "qwen-charsheet", "qwen-hd",
+                         ["moss", "moss4", "qwen-charsheet", "qwen-hd",
                           "qwen-restore", "qwen30", "qwen_image_v1"])
         for skill in ("qwen_image_v1", "qwen-hd", "qwen-charsheet", "qwen30"):
             self.assertEqual(image_jobs.task_timeout(skill), 220, skill)
         self.assertEqual(image_jobs.task_timeout("moss"), 480)
+        self.assertEqual(image_jobs.task_timeout("moss4"), 180)
         self.assertEqual(image_jobs.task_timeout("qwen-restore"), 300)
 
     def test_unknown_skill_falls_back_to_global(self):
@@ -3244,7 +3248,7 @@ class LandscapeTest(_Base):
     def test_every_local_channel_canvas_is_swapped(self):
         for skill in ("hd_3_clear", "hd_3_soft", "silver", "silver-hd",
                       "image_gen_v1", "jank", "qwen_image_v1", "krea2",
-                      "nffa", "cunny", "miao", "moss", "qwen30"):
+                      "nffa", "cunny", "miao", "moss", "moss4", "qwen30"):
             wf = skills.load_skill(skill)["workflow"]
             nid = image_jobs._find_size_node(wf)
             self.assertIsNotNone(nid, skill)
@@ -3254,28 +3258,25 @@ class LandscapeTest(_Base):
             self.assertEqual((got["width"], got["height"]),
                              (before[1], before[0]), skill)
 
-    def test_moss_canvas_is_the_2m_tier_both_orientations(self):
-        """moss 画布 1088×1920 / 25 步（一晚退四档退出来的值）。
+    def test_moss_canvas_is_the_1m_square_at_45_steps(self):
+        """moss 画布 1024×1024（官方 1M 档）/ 45 步（2026-10-17 23:34 定稿）。
 
-        用户原话「1920x1080 和 1080x1920 这样的搭配，步长给到 40」：
-        **1080 不是 16 的倍数**（`//16` 会截成 1072），落 1088 → 面积
-        2,088,960 px，刚过官方 2M 档，在 0.25M~4M 的外推范围内。
-        步数阶梯：40 超时 → 30 用户认可 → 20 **画质崩坏** → 定 25。
-        **25 就是 2M 画布上的实测下限**，测试钉住它，别让人顺手往下压。
-        方向沿用全渠道约定：**工作流写死竖屏**，说「横屏」才由
-        `landscape_workflow()` 对调成 1920×1088。
+        这一档跑过实拍对比：35 步 120 秒 / 40 步 130 秒 / 45 步 142 秒，
+        用户看片后选 45（字和纹理最实，只比 35 贵 22 秒）。
+        中途试过 1024×1536(1.57M) 与 1088×1920(2.09M)：面积上去以后每步成本
+        从 2.5 秒涨到 4.1 秒、再到断崖，2M 上 40 步直接超时 → 回到方图。
+        **方图没有横竖之分**：`landscape_workflow()` 照样对调宽高，对调前后相同。
         """
         wf = skills.load_skill("moss")["workflow"]
         nid = image_jobs._find_size_node(wf)
         ins = wf[nid]["inputs"]
-        self.assertEqual((ins["width"], ins["height"]), (1088, 1920))
+        self.assertEqual((ins["width"], ins["height"]), (1024, 1024))
         self.assertEqual(ins["width"] % 16, 0)
         self.assertEqual(ins["height"] % 16, 0)
-        # 横屏 = 同一块画布转 90 度，不另存工作流
         wide = image_jobs.landscape_workflow(wf)[nid]["inputs"]
-        self.assertEqual((wide["width"], wide["height"]), (1920, 1088))
+        self.assertEqual((wide["width"], wide["height"]), (1024, 1024))
         ks = [n for n in wf.values() if n["class_type"] == "KSampler"][0]
-        self.assertEqual(ks["inputs"]["steps"], 25)
+        self.assertEqual(ks["inputs"]["steps"], 45)
 
     def test_moss_saves_the_decoded_pixels_without_upscaling(self):
         """moss 不做像素放大：SaveImage 直接吃 VAEDecode（2026-10-17 22:41）。
@@ -3295,6 +3296,54 @@ class LandscapeTest(_Base):
         self.assertFalse([n for n in wf.values()
                           if n["class_type"] in ("ImageScaleBy", "ImageScale",
                                                  "ImageUpscaleWithModel")])
+
+    def test_moss4_is_the_dmd_four_step_chain(self):
+        """moss4 = moss 的 4 步加速版（2026-10-18 用户拍板：与 45 步并存）。
+
+        用户原话「原来的 45 步的不变，加多一个 moss 4 步，和一个 moss 45 步这样
+        进行区分」。底模 / VAE / 编码器跟 `moss` 完全一样，只多挂一个 DMD 蒸馏
+        适配器（`RapidMOSSAdapter`，文件在 `models/rapid_moss/rapid-moss-4step/`）。
+
+        这条链**没有 cfg**：适配器自己吐 `sampler` + `sigmas`，`BasicGuider` 单条件
+        单前向。所以图里出现 `KSampler` / `SkipLayerGuidanceDiTSimple` /
+        `ModelSamplingSD3` 任何一个都是错的——它们会多算一次前向，既慢又糊。
+        `LoraLoaderModelOnly` 也不行：适配器差分是 fp32，通用 loader 的 bf16 舍入
+        会把差分吃掉，画面直接崩。
+
+        画布 1024×1536：实测比 1024×1024 多 50% 面积只多 10 秒（26.7 / 28.1 秒），
+        刻字仍一字不差。方向沿用全渠道约定（写死竖屏，说「横屏」才对调）。
+        """
+        wf = skills.load_skill("moss4")["workflow"]
+        nid = image_jobs._find_size_node(wf)
+        self.assertIsNotNone(nid)
+        ins = wf[nid]["inputs"]
+        self.assertEqual((ins["width"], ins["height"]), (1024, 1536))
+        self.assertEqual(ins["width"] % 16, 0)
+        self.assertEqual(ins["height"] % 16, 0)
+        wide = image_jobs.landscape_workflow(wf)[nid]["inputs"]
+        self.assertEqual((wide["width"], wide["height"]), (1536, 1024))
+
+        types = {n["class_type"] for n in wf.values()}
+        for banned in ("KSampler", "SkipLayerGuidanceDiTSimple",
+                       "ModelSamplingSD3", "LoraLoaderModelOnly"):
+            self.assertNotIn(banned, types, banned)
+
+        aid = [k for k, n in wf.items() if n["class_type"] == "RapidMOSSAdapter"][0]
+        adapter = wf[aid]["inputs"]
+        self.assertEqual(adapter["adapter"], "rapid-moss-4step")
+        self.assertEqual(adapter["steps"], 4)
+        self.assertEqual(adapter["lora_strength"], 1.0)
+
+        # sampler / sigmas 必须吃适配器的 1、2 号出口（就是那 4 个蒸馏 sigma），
+        # 别自己填 scheduler——KSampler 那套在这儿根本没有位置。
+        smp = [n for n in wf.values()
+               if n["class_type"] == "SamplerCustomAdvanced"][0]["inputs"]
+        self.assertEqual(smp["sampler"], [aid, 1])
+        self.assertEqual(smp["sigmas"], [aid, 2])
+
+        # 出图就是画布像素：不做任何放大（同 moss 那条的理由）
+        save = [n for n in wf.values() if n["class_type"] == "SaveImage"][0]
+        self.assertEqual(wf[save["inputs"]["images"][0]]["class_type"], "VAEDecode")
 
     def test_the_original_workflow_is_never_mutated(self):
         """返回新对象而不是原地改：静默重抽会重建 `job.workflow` 再递归调

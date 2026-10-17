@@ -399,6 +399,28 @@ class BareKrea2WordTest(unittest.TestCase):
         text = "krea2-coscandid：realistic cosplay photo, 1girl"
         self.assertEqual(direct_gen._parse_channel(text)[0], "krea2-coscandid")
 
+    def test_moss_is_split_into_45_and_4_step_channels(self):
+        """2026-10-18 用户拍板：45 步那条不变，另开一条 4 步的。
+
+        原话「原来的 45 步的不变，然后我们就直接把加多一个 moss 4 步，和一个
+        moss 45 步这样进行区分即可」——三个喊法落两个目录：
+        `moss` / `moss45` → `skills/moss/`（老目录**不改名**，老喊法不能废），
+        `moss4` → `skills/moss4/`。
+
+        ⚠️ 关键在尾巴：裸 `moss` 的 `(?![0-9A-Za-z_])` 会把 `moss4` 里的 `4` 挡掉，
+        所以长名必须显式登记、且排在裸词前面。`mossy` 这种真单词仍留在正文里。
+        """
+        self.assertEqual(direct_gen._parse_channel("moss 一只猫"),
+                         ("moss", "一只猫"))
+        self.assertEqual(direct_gen._parse_channel("moss45 一只猫"),
+                         ("moss", "一只猫"))
+        self.assertEqual(direct_gen._parse_channel("moss4 一只猫"),
+                         ("moss4", "一只猫"))
+        # 「moss 4步」中间有空格也要认
+        self.assertEqual(direct_gen._parse_channel("moss 4步 招牌"),
+                         ("moss4", "招牌"))
+        self.assertIsNone(direct_gen._parse_channel("mossy stone wall")[0])
+
     def test_plain_words_only_at_the_head(self):
         for text, skill in (("写实 一只猫", "krea2-real"),
                             ("通用 一只猫", "krea2-general"),
@@ -3284,6 +3306,9 @@ class MossTextGuideTest(unittest.TestCase):
 
     def test_guide_only_goes_to_the_moss_turn(self):
         self.assertIn(self.MARK, self._content("moss", "moss 画个女孩"))
+        # 2026-10-18 拆出 4 步那条：同一套刻字规范它也得吃（判据是
+        # `named.startswith("moss")`，所以 moss4 天然命中，这里钉住它别被改坏）
+        self.assertIn(self.MARK, self._content("moss4", "moss4 画个招牌"))
         for skill in ("silver", "krea2-guizhencao", "qwen30", None):
             with self.subTest(skill=skill):
                 self.assertNotIn(self.MARK, self._content(skill))
