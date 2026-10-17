@@ -3268,6 +3268,26 @@ class LandscapeTest(_Base):
         wide = image_jobs.landscape_workflow(wf)[nid]["inputs"]
         self.assertEqual((wide["width"], wide["height"]), (1024, 816))
 
+    def test_moss_upscales_2x_after_decode(self):
+        """moss 末尾 2x **像素**放大：816×1024 → 出图 1632×2048（2026-10-17）。
+
+        用 `ImageScaleBy`（lanczos）而不是 `ImageUpscaleWithModel`：
+        本机唯一的 2x 超分模型是动漫向的 ESRGAN，会**重绘笔画**，而 moss 的
+        全部价值就是字准——插值放大不改字形。也顺带钉住「放大节点没被误认成
+        尺寸节点」（`scale_by` 不是 width/height）。"""
+        wf = skills.load_skill("moss")["workflow"]
+        self.assertEqual(image_jobs._find_size_node(wf), "30")
+
+        save = [n for n in wf.values() if n["class_type"] == "SaveImage"][0]
+        up_nid = save["inputs"]["images"][0]
+        up = wf[up_nid]
+        self.assertEqual(up["class_type"], "ImageScaleBy")
+        self.assertEqual(up["inputs"]["upscale_method"], "lanczos")
+        self.assertEqual(up["inputs"]["scale_by"], 2.0)
+        # 放大吃的是 VAEDecode 的产物（别把采样 latent 直接送去放大）
+        src = wf[up["inputs"]["image"][0]]
+        self.assertEqual(src["class_type"], "VAEDecode")
+
     def test_the_original_workflow_is_never_mutated(self):
         """返回新对象而不是原地改：静默重抽会重建 `job.workflow` 再递归调
         `process`，原地改会被对调两次（等于没改）。"""
