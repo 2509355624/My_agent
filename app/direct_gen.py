@@ -30,7 +30,9 @@
   正文当描述，走锁定渠道扩写（引用正文原样交给 AI，不再抽英文段）。
 - 带 `::` 权号的**成品串** → 也过一次 AI，权号/画师串规则写在唯一模板里；
   渠道点名词优先，两边都判不出 → 回问，绝不静默落默认档。
-- 引用生图回执 +「再来一张」→ 同提示词换种子重跑（_LAST_JOB 现成有），零转译。
+- 引用生图回执 +「再来一张 / 重跑一版」→ **交给 AI 判**（2026-10-17 删掉
+  关键词早退）：账本里那张图的真提示词 + 会话最近一次生图当**事实**写进模板，
+  由模型决定原样重跑还是顺手改一处。
 - 引用图 + @（没别的说）→ **反推提示词**发回去，不生成；引用图 + 档位
   （「三档」，或「快档 基于图片帮我生成」这类空话）→ 反推后直接生成；
   引用图 +「帮我生成这个 / 跑一下这张图」（没渠道）→ 默认档反推后重画。
@@ -126,6 +128,13 @@ _FIXED_SKILLS = ("image_gen_v1", "image_gen_v1_hires", "nffa",
 # silver / jank 不进 `_FIXED_SKILLS`，由 `_allowed_skills()` 现场扫 skills/ 目录放行。
 _FALLBACK_SKILL = "silver"
 
+# 图生图（模型填了 `source_image: 1`）却判不出渠道时的落点（2026-10-17）。
+# 用户 10-06 的口径：「Anima 的图生图没有 Qwen 好用，图生图只需要一个 Qwen
+# 的途径」。只给**垫图**用；不垫图（改词重画）仍落 `_FALLBACK_SKILL`。
+# ⚠️ 同样受上面那条约束：模板 ① 里写着「没有原渠道就填 qwen_image_v1」，
+# 模型通常自己会填，这条兜底只管它漏填。
+_I2I_FALLBACK_SKILL = "qwen_image_v1"
+
 
 def _allowed_skills():
     allowed = set(_FIXED_SKILLS)
@@ -163,8 +172,11 @@ _GUIDE_RE = re.compile(
 # 生图意图粗判（画图动词）。「生成」后面 0~4 字内接「图」才算，避免
 # 「生成一下总结」误中。
 _INTENT_RE = re.compile(r"画|绘|来张|来一张|来幅|生成.{0,4}图|图.{0,2}一[张幅]")
-# 「再来一张」：引用回执（或不引用）时同提示词换种子重跑。
-_AGAIN_RE = re.compile(r"再来一张|重画|再画|重跑|换种子|再跑一张")
+# ⚠️ 「再来一张 / 重跑 / 换种子」这条**关键词早退已删**（2026-10-17 用户
+# 拍板「让 AI 自己去判断如何做」）。原来这里有个 `_AGAIN_RE`，命中就零调用
+# 直出上次的提示词，两处（`_revise` 开头、`decide` 的渠道词之前）都在用。
+# 别再加回来：它替用户决定「这是重跑、不是改」，而且判据依赖进程内
+# `_LAST_JOB`（bot 重启即空）。现在由 AI 判，事实由账本 + `{recent}` 提供。
 # 引用正文里的噪音：菜单和生图回执不能当提示词用。
 _NOISE_QUOTE_RE = re.compile(r"HT-\d{8}|任务已提交|生图完成")
 _RECENT_NOISE_RE = re.compile(r"^🎨|任务已提交|生图完成|HT-\d{8}")
@@ -1145,9 +1157,9 @@ _MASTER_TEMPLATE = (
     "配 skill=qwen_image_v1（明说「qwen 超清 / qwen超清」时换 qwen-hd；"
     "原话是「qwen30步 图生图」时配 qwen30），"
     "prompt 只写一句改动指令（一张 1~2 分钟）。\n"
-    " ④ **「qwen修复」**（引用图 + 说这三个字）= 把**这张图本身**修清楚 / 去噪 / "
-    "去糊，不是重画一张。**本轮有引用图时，代码专路已经自己入队了、根本轮不到你**；"
-    "你走到这里只可能是**没给图**——那就直说「qwen修复 得配一张图」，"
+    " ④ **修复**（说「qwen修复 / 修复 / 修清楚 / 去糊」）= 把**这张图本身**修清楚 / "
+    "去噪 / 去糊，不是重画一张。**本轮有引用图时，代码专路已经自己入队了、根本"
+    "轮不到你**；你走到这里只可能是**没给图**——那就直说「修复 得配一张图」，"
     "**别改成别的渠道、也别凭空画一张**。\n"
     "  ⚠️ jank / nffa / cunny / miao / krea2 系 / sd / moss **没有图生图骨架**，"
     "别给它们填 `source_image`（填了会自动退回文生图、白等一轮）——"
@@ -1256,8 +1268,9 @@ _REVISE_TEMPLATE = (
     "【图生图：明说才垫，引用图 + 只提需求 = 改词重画】\n"
     "**引用 / 附图本身不等于要垫图**——看原话里有没有「照着这张画」的意思。\n"
     " ① **明说要照着那张画**（「图生图 / 垫图 / 照着画 / 照这张画 / 复刻 / "
-    "参考这张的构图」）→ `source_image` 填 1，**渠道不用改**"
-    "（silver / silver-hd / 高清三档都有锁构图骨架），"
+    "参考这张的构图」）→ `source_image` 填 1；skill **沿用原渠道或用户点名的"
+    "渠道**，**这两样都没有、或者原渠道没有图生图骨架（见本段末那行）时就填 "
+    "qwen_image_v1**（2026-10-17 用户拍板：图生图就走 qwen 这一条路）；"
     "prompt 照常写完整画面描述。系统会把那张图当构图条件喂进去，"
     "出图是**重画的**、尺寸仍是本档画布。\n"
     " ② **引用 / 附图 + 只是提需求**（换装 / 换发色 / 改动作 /「要全身照」这类）→ "
@@ -1271,9 +1284,19 @@ _REVISE_TEMPLATE = (
     "原话说「qwen30步 图生图」时填 qwen30）、"
     "prompt 只写**一句改动指令**（例 `change her coat to red, keep the pose, "
     "face and background exactly the same`），不要把整张图重新描述一遍。\n"
-    " ④ **「qwen修复」**（引用图 + 说这三个字）= 把**这张图本身**修清楚 / 去噪 / "
-    "去糊，不是重画。**本轮有引用图时代码专路已经自己入队了、轮不到你**；"
-    "你走到这里只可能是**没给图**——直说「qwen修复 得配一张图」就行。\n"
+    " ④ **修复**（引用图 + 「qwen修复 / 修复 / 修清楚 / 去糊 / 脸修清楚点」）= "
+    "把**这张图本身**修清楚 / 去噪 / 去糊，不是重画 → skill 填 qwen-restore、"
+    "`source_image` 填 1，prompt 只写用户额外提的要求（没提就空着）。"
+    "⚠️ 原话里带「qwen」的修复，代码专路已经自己入队了、轮不到你；"
+    "**只打「修复」两个字时得你自己填**。没给图就直说「修复 得配一张图」。\n"
+    # ⑤ 是 2026-10-17 补的：原先四条分支**全都假设用户说了「改哪里」**，
+    # 「带图但啥也没说要改」没有落点 → 模型只能吐空 prompt，代码报「改图请求
+    # 没解析出来」。当天 5 次报错全是这个形状（「anima跑一版，<需求>」「qwen，
+    # 图生图」「图生图 不用做其它改变」）。这不是加限制，是**把缺的那条路补上**。
+    " ⑤ **带图但什么都没说要改哪**（「图生图」「照着这个再跑一版」「不用做其它"
+    "改变」「换个种子重画」）→ **不许留空、不许反问**：prompt 直接填**这张图"
+    "完整的画面描述**（自家图用上面「原提示词」那段原词，别人的图按画面写全），"
+    "要垫图就照 ① 填 `source_image`。\n"
     "  ⚠️ jank / nffa / cunny / miao / krea2 系 / sd / moss **没有图生图骨架**，"
     "别给它们填 `source_image`（填了会自动退回文生图、白等一轮）。"
     "只是评价这张图 → **不填**。\n"
@@ -1286,11 +1309,17 @@ _REVISE_TEMPLATE = (
     "- **别反问**（2026-10-07 用户拍板）：用户明确要改 / 要重画（「换XX」"
     "「改XX」「跑一张」「再来一版」）就直接给 prompt，不许问「要不要改」"
     "「这样可以吗」「确认一下」。\n"
+    # 2026-10-17 用户拍板：删掉 `_AGAIN_RE` 关键词早退，把「最近一次生图」当
+    # **事实**喂给模型，让它自己判断是重跑还是改。所以这里得告诉它这份事实怎么用。
+    "- 用户说「再来一张 / 重跑一版 / 换个种子 / 再画一次」而**没说要改什么** → "
+    "prompt 直接用上面「原提示词」（它是空的就用「本会话最近一次生图」那行），"
+    "skill 沿用当时的渠道（用户点名换才换），**不反问、不留空**。\n"
     "- **用户的话不是修改/生图请求**（夸奖、闲聊、问别的事）→ 只输出一个 "
     "reverse 字段，值 = 这张图真实的英文 danbooru tag 反推"
     "（reverse 的值要填真实 tag，别照抄这句话）\n"
     "{search}"
     "原提示词（渠道 {last_skill}）：\n{last_prompt}\n"
+    "{recent}"
     "用户的话：{text}"
 )
 
@@ -1308,9 +1337,9 @@ def _remember_job(session_key, skill, prompt):
 # 会话最近一次「直达动作」的一句话，给 `qq_bot` 落史用——下一轮的【最近对话】
 # 里得有 AI 上一轮到底干了什么。单张生图和连续漫画都走这儿，格式统一。
 #
-# 为什么不复用 `_LAST_JOB`：那份的语义是「单张任务」，`_AGAIN_RE`（再来一张）
-# 和 `_revise`（引用图改图）都拿它当**单张提示词**用；漫画的 brief 是中文剧情，
-# 塞进去会被当成提示词重跑一张垃圾图。所以两件事分开记。
+# 为什么不复用 `_LAST_JOB`：那份的语义是「单张任务」，`_revise`（引用图改图）
+# 和 `_revise` 的 `{recent}` 事实都拿它当**单张提示词**用；漫画的 brief 是
+# 中文剧情，塞进去会被当成提示词重跑一张垃圾图。所以两件事分开记。
 _LAST_DESC = {}
 
 
@@ -1941,36 +1970,55 @@ def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):
 
     垫不垫图（`source_image`）**由模型在这一次调用里判**：它输出 JSON 里带
     `source_image: 1` 才入队垫图，判据是模板里的【图生图】段（**明说「图生图 /
-    照着画 / 复刻」才垫**；只提需求 = 改词重画）。代码不再扫原话认机制词，
-    也不再因为「要垫图」就换渠道——那是 2026-10-06 拆掉的静默降档。
+    照着画 / 复刻」才垫**；只提需求 = 改词重画）。代码不扫原话认机制词。
     ⚠️ 判错了也不会报错：渠道没有 i2i 骨架时 `generate_image` 会**丢掉
     source_image、按文生图重画**（2026-10-11），别在模板里教模型去等一句拒收。
+
+    **渠道**：点名渠道 > 模型填的 > 账本原渠道 > 按垫不垫图走默认
+    （垫图 → `qwen_image_v1`，不垫图 → silver，2026-10-17 用户拍板）。
+    2026-10-06 曾禁止「因为要垫图就换渠道」，现在只放开**判不出渠道时**这一个
+    落点——点名/模型填的渠道一律不动，那不是静默降档，是补默认值。
+
+    **「再来一张 / 重跑一版」不再零调用直出**（2026-10-17 用户拍板「让 AI 自己
+    去判断如何做」）：账本真词 + 会话最近一次生图（`{recent}`）当事实给模型，
+    由它决定原样重跑还是改一处。代价是 +1 次 LLM。
 
     返回 None = 模型判定这轮不是修改请求（夸奖、闲聊、问别的）：@ 轮回反推
     文本、关键词轮静默，由本函数内部处理。
     """
     session_key = qq_api.current_session_key()
     quoted = (qq_api.current_quoted_text() or "").strip()
-    # 「再来一张」：引用回执（或干说）→ 同提示词换种子重跑，零调用。
+    # 2026-10-17 用户拍板：**删掉「再来一张」的关键词早退**（原先这里
+    # `_AGAIN_RE` 命中 + 内存 `_LAST_JOB` 有值就零调用直出）。它有两个毛病：
+    #   ① 抢在 AI 前面替用户决定「这是重跑、不是改」（用户原话：「让 AI 自己去
+    #      判断如何做」，代码只该给事实、不该做决定）；
+    #   ② `_LAST_JOB` 是进程内字典，bot 一重启就空 → 20:18:30 私聊「重跑一版」
+    #      + 引用带 HT 编号的回执，明明账本查得到真词，却回了「没找到最近一次
+    #      生图的记录」。现在这条路改由下面两件事承担：账本（`_ledger_hit`，
+    #      重启不丢）+ 会话最近一次生图（当**事实**写进模板 `{recent}`），
+    #      判「重跑还是改」的活交回模型。代价 = 多 1 次 LLM（+1~2 秒）。
     last = _last_job(session_key)
-    if _AGAIN_RE.search(text) and (last or _NOISE_QUOTE_RE.search(quoted)):
-        if last:
-            skill = channel or last["skill"]
-            _remember_job(session_key, skill, last["prompt"])
-            return _enqueue(skill, last["prompt"], text)
-        return "没找到最近一次生图的记录，重新描述想要什么吧：@我 渠道 描述。"
     anchor_prompt, anchor_skill, _anchor_seed = _ledger_hit(quoted + " " + text)
     own = bool(anchor_prompt)        # 引用的**是不是自家图**（账本命中）
     if own:
         anchor_note = "是这张图当时的真实提示词（账本可查），最可信"
+        recent = ""
     else:
         anchor_skill, anchor_prompt = "（无）", "（无）"
         anchor_note = "没有（引用的不是本机器人画的图），忽略此项，以画面为准"
+        # 账本查不到、但本会话刚画过一张 → 那串词**可能**就是用户指的东西
+        # （比如他把图重新发出来而不是引用回执）。给模型当旁证，用不用它自己判：
+        # 说得像「接着上一轮」就照它重跑，说得像在改这张图就无视它。
+        recent = (
+            "本会话最近一次生图（**可能**就是引用的这张，也可能无关，自己判）：\n"
+            "渠道 %s\n提示词：%s\n" % (last["skill"], last["prompt"])
+            if last else "")
     ask = _REVISE_TEMPLATE.format(
         search=(_SEARCH_HEADER.format(doc=doc) if doc else ""),
         anchor_note=anchor_note,
         last_skill=anchor_skill,
         last_prompt=anchor_prompt,
+        recent=recent,
         lang=_prompt_lang(channel or anchor_skill),
         text=text)
     from app.llm import call_llm
@@ -2066,25 +2114,35 @@ def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):
         # 关键词轮本来就是"用户在叫我"（冷却闸只管主动接话，见 qq_bot），
         # 丢回复不是止刷屏、是故障。
         return _reverse_text(rev)
-    prompt = (data.get("prompt") or "").strip()
-    if not prompt:
-        return "改图请求没解析出来，换个说法再试（如「手改成插兜」）。"
     # 垫不垫图 = **模型在 JSON 里说的算**（2026-10-06 拆掉代码扫原话认机制词，
     # 判据改写在 `_REVISE_TEMPLATE` 的【图生图】段）。模型没填 / 填 0 = 文生图。
     si = data.get("source_image")
     source_image = si is True or str(si or "").strip() == "1"
+    prompt = (data.get("prompt") or "").strip()
+    if not prompt:
+        # ⚠️ 空 prompt **不一定是失败**：`qwen-restore` 的修复指令内置在工作流
+        # 里，模板明说「没提就空着」，模型交空串是对的。以前一律回「改图请求
+        # 没解析出来」——用户「引用图 + 修复」就永远走不通（2026-10-17 日志：
+        # 裸「修复」+ 引用图 3 次全落这句）。判据是**模型自己填的渠道能不能
+        # 空 prompt**，不是代码拿词表猜他想干什么。
+        own_skill = (channel or (data.get("skill") or "").strip())
+        if source_image and own_skill == "qwen-restore":
+            pass
+        else:
+            return "改图请求没解析出来，换个说法再试（如「手改成插兜」）。"
     skill = channel or (data.get("skill") or "").strip()
     if skill not in _allowed_skills():
         skill = anchor_skill if anchor_skill in _allowed_skills() else ""
     if not skill:
-        # 判不出渠道 → 落默认渠道 silver 单图（2026-10-17 用户拍板把默认从
-        # anima多图 换回 silver，原话：「现在这个 anima多图效果太差了」）。
-        #
-        # 2026-10-16 那版在这里分了两支：不垫图 → 走 anima多图批量；垫图 →
-        # 落银（anima 那条批量工作流**没有图生图骨架**，垫图进去不报错，会被
-        # 静静丢掉，画出来是另一个人）。默认统一成银之后两支合一，垫图与否
-        # 仍由模型填的 `source_image` 决定。
-        skill = _FALLBACK_SKILL
+        # 判不出渠道 → 按「垫不垫图」分两支（2026-10-17 用户拍板，把 10-06 的
+        # 决定改回来：「Anima 的图生图没有 Qwen 好用，图生图只需要一个 Qwen
+        # 的途径」）：
+        #   垫图   → `qwen_image_v1`（本机唯一真 i2i 骨架里最合用的那条）
+        #   不垫图 → `_FALLBACK_SKILL`（silver 单图）
+        # 2026-10-16 那版把两支合成了一条（一律 silver），是当时「默认渠道
+        # 从 anima多图 换回 silver」顺手带下去的副作用——silver 的骨架锁的是
+        # 构图，改词重画够用，但用户明说图生图时他要的是 qwen。
+        skill = _I2I_FALLBACK_SKILL if source_image else _FALLBACK_SKILL
     _remember_job(session_key, skill, prompt)
     return _enqueue(skill, prompt, text, source_image=source_image)
 
@@ -2343,11 +2401,14 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         _remember_job(session_key, data["skill"], data["prompt"])
         return _enqueue(data["skill"], data["prompt"], text)
 
-    # 「再来一张」（不引用、不带渠道词）：同提示词换种子重跑，零转译。
+    # 2026-10-17 用户拍板：**删掉「再来一张」的关键词早退**（原来是
+    # `_AGAIN_RE` 命中 + 内存 `_LAST_JOB` 有值就零调用直出）。理由同 `_revise`：
+    # 代码不该替用户决定「这是重跑、不是改」；而且 `_LAST_JOB` 是进程内字典，
+    # bot 一重启就空，同一句话重启前能跑、重启后就不认。现在这句话落到下面的
+    # AI 分支——它要的事实就在最近对话里：`[直达生图] <渠道>：<提示词>` 那行
+    # （`_RECENT_AI_KEEP_RE` 专门保留，见本文件顶部说明）。
+    # 带图轮的「再来一张」事实更全：`_revise` 里有账本 + `{recent}`。
     last = _last_job(session_key)
-    if not ch and _AGAIN_RE.search(text) and last:
-        _remember_job(session_key, last["skill"], last["prompt"])
-        return _enqueue(last["skill"], last["prompt"], text)
 
     # 只打了渠道词（「大大怪 三档」+ 引用 / 干发「三档」）。
     if ch and not desc:
@@ -2374,9 +2435,12 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
                 return _enqueue(data["skill"], data["prompt"], text)
             return ("引用的内容没转成生图指令，引用一条带画面描述的消息"
                     "再试，或直接 @我 渠道 描述。")
-        # 引用回执（HT- 编号）或干说「再来一张」→ 重跑上次任务，渠道可换。
-        if last and (_AGAIN_RE.search(text)
-                     or _NOISE_QUOTE_RE.search(quoted)):
+        # 引用回执（HT- 编号）→ 重跑上次任务，渠道可换。
+        # ⚠️ 2026-10-17：原来这里还带 `or _AGAIN_RE.search(text)`（干说「再来
+        # 一张」也走这条），已删——那句话交回 AI 判（见本节开头那段注释）。
+        # 留下的是「引用回执」这个**结构判据**：用户引用的就是我发的那条带
+        # HT 编号的回执，指向明确，不需要猜。
+        if last and _NOISE_QUOTE_RE.search(quoted):
             skill = ch if ch in _allowed_skills() else last["skill"]
             _remember_job(session_key, skill, last["prompt"])
             return _enqueue(skill, last["prompt"], text)

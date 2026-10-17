@@ -223,7 +223,9 @@ class PromptSurfaceTest(unittest.TestCase):
         h = self._hints()
         self.assertTrue(h, "generate_image 的使用提示不见了")
         for key in ("`source_image` 明说「图生图」才传",
-                    "渠道不用改",
+                    # 2026-10-17 用户拍板「图生图就走 qwen 这一条路」：
+                    # 原渠道 / 点名渠道都没有时配 qwen，不再是「渠道不用改」
+                    "两样都没有就配",
                     # 2026-10-11：引用 / 附图 + 只是提需求 = 改词重画，不垫图
                     "照这张改词重画",
                     "只是让你看图点评",
@@ -239,9 +241,9 @@ class PromptSurfaceTest(unittest.TestCase):
 
     def test_source_image_param_teaches_the_same(self):
         p = self._param("source_image")
-        for key in ("明说「图生图」才填", "渠道不用改",
+        for key in ("明说「图生图」才填", "两样都没有就配",
                     "只是提需求", "沿用原渠道文生图重画",
-                    "只改一处", "才配 `skill=qwen_image_v1`",
+                    "只改一处", "`skill=qwen_image_v1`",
                     "只是让你看图点评", "没有骨架", "用法上已撤掉"):
             self.assertIn(key, p)
         self.assertNotIn("要画就填", p)
@@ -253,8 +255,17 @@ class PromptSurfaceTest(unittest.TestCase):
             # 新口径那半句：引用 / 附图 + 只提需求 = 改词重画，不垫图
             self.assertIn("照这张改词重画", text, name)
             self.assertNotIn("引用/附图 + 要画", text, name)
-            self.assertIn("渠道不用改", text, name)
             self.assertIn("qwen 图生图", text, name)
+        # 明说垫图时渠道怎么走，两份模板的落点不同：
+        #   _MASTER_TEMPLATE 是**没图轮**，① 那句只是兜住「用户嘴上说图生图
+        #   但没给图」，照旧「渠道不用改」；
+        #   _REVISE_TEMPLATE 是**带图轮**，2026-10-17 起改成「沿用原渠道 /
+        #   用户点名渠道，两样都没有（或原渠道没骨架）才落 qwen_image_v1」——
+        #   用户拍板把 10-06 的「图生图只走 qwen 这一条路」改回来。
+        self.assertIn("渠道不用改", self._flat(direct_gen._MASTER_TEMPLATE))
+        revise = self._flat(direct_gen._REVISE_TEMPLATE)
+        self.assertIn("沿用原渠道或用户点名的渠道", revise)
+        self.assertIn("qwen_image_v1", revise)
 
     def test_retired_wording_stays_out(self):
         surfaces = (self._hints(), self._param("source_image"),

@@ -996,8 +996,20 @@ class QuoteImageIntentTest(unittest.TestCase):
 
 
 class AgainTest(unittest.TestCase):
-    def test_again_redoes_last_job_without_llm(self):
-        with mock.patch.object(direct_gen.llm, "call_llm") as m_llm, \
+    """「再来一张」：2026-10-17 起**代码不再零调用直出**，交回 AI 判。
+
+    原先有个 `_AGAIN_RE` 关键词早退：命中 + 内存 `_LAST_JOB` 有值就把上次的
+    提示词原样再跑一遍。用户拍板删掉（原话「让 AI 自己去判断如何做」）——它
+    替用户决定「这是重跑、不是改」，而且判据依赖进程内字典，bot 一重启就空。
+    现在 AI 要的**事实**来自最近对话里的 `[直达生图] <渠道>：<提示词>` 记账行。
+    """
+
+    def test_again_goes_through_the_ai_with_the_last_receipt_in_context(self):
+        history = [{"role": "assistant",
+                    "content": "[直达生图] hd_3_clear：miku, old"}]
+        with mock.patch.object(direct_gen.llm, "call_llm",
+                               return_value='{"skill": "hd_3_clear", '
+                                            '"prompt": "miku, old"}') as m_llm, \
              mock.patch.object(direct_gen.qq_api, "current_quoted_text",
                                return_value=""), \
              mock.patch.object(direct_gen.qq_api, "current_session_key",
@@ -1006,11 +1018,45 @@ class AgainTest(unittest.TestCase):
                                return_value=RECEIPT) as m_gen:
             self.addCleanup(direct_gen._LAST_JOB.pop, "group_1", None)
             direct_gen._remember_job("group_1", "hd_3_clear", "miku, old")
-            out = direct_gen.decide("再来一张", [], False, at_me=True)
+            out = direct_gen.decide("再来一张", history, False, at_me=True)
         self.assertEqual(out, "")
-        m_llm.assert_not_called()
+        m_llm.assert_called_once()      # 走 AI（+1~2 秒，用户接受这个代价）
+        sent = m_llm.call_args[0][0][0]["content"]
+        self.assertIn("[直达生图] hd_3_clear：miku, old", sent)
         m_gen.assert_called_once_with("miku, old", skill="hd_3_clear",
                                       _skip_confirm=True)
+
+
+class ReviseWildPhrasesTest(unittest.TestCase):
+    """带图轮里「用户不按格式说」的三条缺口（2026-10-17 补）。
+
+    当天日志：5 次「改图请求没解析出来」全是**带图但没说要改哪里**（「anima
+    跑一版，<需求>」「qwen，图生图」「图生图 不用做其它改变」），另有裸「修复」
+    不认、重启后「重跑一版」查不到记录。修法只有一处：**把模板缺的路补上**，
+    判断权仍在模型手里——代码不加词表、不替它兜底。
+    """
+
+    @staticmethod
+    def _flat(t):
+        return t.replace("**", "")
+
+    def test_no_instruction_branch_exists(self):
+        t = self._flat(direct_gen._REVISE_TEMPLATE)
+        self.assertIn("带图但什么都没说要改哪", t)
+        self.assertIn("不许留空、不许反问", t)
+
+    def test_bare_repair_maps_to_qwen_restore(self):
+        t = self._flat(direct_gen._REVISE_TEMPLATE)
+        self.assertIn("qwen-restore", t)
+        # 带 qwen 的走代码专路，裸「修复」得模型自己填
+        self.assertIn("只打「修复」两个字时得你自己填", t)
+
+    def test_again_reads_the_facts_not_a_keyword(self):
+        t = self._flat(direct_gen._REVISE_TEMPLATE)
+        self.assertIn("再来一张", t)
+        self.assertIn("不反问、不留空", t)
+        # 关键词早退删干净了，别再加回来（用户拍板「让 AI 自己去判断」）
+        self.assertFalse(hasattr(direct_gen, "_AGAIN_RE"))
 
 
 class RevisionPipelineTest(unittest.TestCase):
@@ -1104,11 +1150,13 @@ class RevisionPipelineTest(unittest.TestCase):
                          direct_gen._FALLBACK_SKILL)
         self.assertNotIn("source_image", m_gen.call_args.kwargs)   # 不垫图
 
-    def test_i2i_keeps_the_single_image_channel(self):
-        """明说图生图（模型填了 `source_image`）→ 仍旧单图银，不跟默认多图。
+    def test_i2i_falls_back_to_qwen(self):
+        """明说图生图 + 判不出渠道 → 落 `qwen_image_v1`（2026-10-17 用户拍板）。
 
-        anima多图 那条批量工作流**没有图生图骨架**：垫图进去不会报错，会被
-        静静地丢掉——用户引用的那张原图等于白发，画出来是另一个人。
+        用户 10-06 的口径：「Anima 的图生图没有 Qwen 好用，图生图只需要一个
+        Qwen 的途径」。2026-10-16 把默认渠道换成 silver 时顺手把这条 i2i 兜底
+        也带成了 silver，现在改回来：**只有垫图落 qwen**，改词重画（不垫图）
+        仍落 `_FALLBACK_SKILL`，见上一个用例。
         """
         with mock.patch.object(gc, "_generate_comic") as m_comic:
             out, _, _, m_gen, _ = self._decide(
@@ -1117,8 +1165,29 @@ class RevisionPipelineTest(unittest.TestCase):
         self.assertEqual(out, "")
         m_comic.assert_not_called()
         self.assertEqual(m_gen.call_args.kwargs["skill"],
-                         direct_gen._FALLBACK_SKILL)
+                         direct_gen._I2I_FALLBACK_SKILL)
         self.assertEqual(m_gen.call_args.kwargs["source_image"], "1")
+
+    def test_restore_allows_an_empty_prompt(self):
+        """qwen-restore 的 prompt 天生可空（修复指令内置在工作流里）。
+
+        2026-10-17 之前的坑：模板写着「没提就空着」，模型照做交了空串，代码
+        那句 `if not prompt: return "改图请求没解析出来"` 把它当格式错 → 用户
+        「引用图 + 修复」永远走不通（当天 3 次）。判据 = 模型自己填的渠道能不能
+        空 prompt，不是代码拿词表猜。
+        """
+        out, _, _, m_gen, _ = self._decide(
+            "修复", '{"skill": "qwen-restore", "source_image": 1, "prompt": ""}')
+        self.assertEqual(out, "")
+        self.assertEqual(m_gen.call_args.kwargs["skill"], "qwen-restore")
+        self.assertEqual(m_gen.call_args.kwargs["source_image"], "1")
+        self.assertEqual(m_gen.call_args[0][0], "")
+
+    def test_empty_prompt_still_fails_without_a_repair_channel(self):
+        # 没有 qwen-restore 兜着时，空 prompt 仍旧是真失败——别把这条放行放宽。
+        out, _, _, m_gen, _ = self._decide("手改成插兜", '{"prompt": ""}')
+        self.assertIn("没解析出来", out)
+        m_gen.assert_not_called()
 
     def test_own_image_uses_ledger_without_vision(self):
         # 2026-10-07 用户拍板：引用**自家 HT 图**改图**不预先识图**——账本里
@@ -1286,15 +1355,22 @@ class RevisionPipelineTest(unittest.TestCase):
         self.assertNotIn("seed", m_gen.call_args.kwargs)
 
     def test_foreign_image_ignores_last_job(self):
-        # 引用别人的图：上一轮任务的原提示词绝不进场（锚死事故的根因）
+        # 引用别人的图：上一轮任务的原提示词**绝不冒充这张图的提示词**
+        # （锚死事故的根因）。2026-10-17 起它会以「本会话最近一次生图」的
+        # 形态当**旁证**出现，并明确标注「可能无关、自己判」——事实给足，
+        # 判断权归模型。
         out, m_describe, _, m_gen, _ = self._decide(
             "手改成插兜",
             '{"skill": "hd_3_clear", "prompt": "1girl, fixed"}',
             last_job={"skill": "hd_3_clear", "prompt": "1girl, old"})
         self.assertEqual(out, "")
         sent = m_describe.call_args.kwargs["prompt"]
-        self.assertNotIn("1girl, old", sent)
         self.assertIn("忽略此项", sent)
+        # 「原提示词」那一格必须还是空的，没被 `_LAST_JOB` 顶上
+        self.assertIn("原提示词（渠道 （无））：\n（无）", sent)
+        # 但旁证在，且标明来源可疑
+        self.assertIn("本会话最近一次生图", sent)
+        self.assertIn("1girl, old", sent)
         m_gen.assert_called_once()
 
     def test_bare_at_with_image_returns_reverse_text(self):
@@ -3061,7 +3137,7 @@ class ReviseChannelListTest(unittest.TestCase):
         """加了清单别把 `.format` 的花括号写坏（模板里 JSON 示例是转义过的）。"""
         out = direct_gen._REVISE_TEMPLATE.format(
             escape="", search="", anchor_note="n", last_skill="jank",
-            last_prompt="p", lang="l", text="silver 生成")
+            last_prompt="p", recent="", lang="l", text="silver 生成")
         self.assertIn("silver", out)
 
 

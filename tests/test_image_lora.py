@@ -380,7 +380,10 @@ class ToolDescriptionTest(unittest.TestCase):
         desc = tool["description"]
         self.assertIn("不传 skill 就是 silver", desc)
         self.assertIn("引用图片：明说「图生图」才垫", desc)
-        self.assertIn("渠道不用改", desc)              # 垫图不用换渠道了
+        # 2026-10-17 用户拍板「图生图就走 qwen 这一条路」：垫图不再泛指
+        # 「渠道不用改」——原渠道 / 点名渠道都没有时配 qwen_image_v1。
+        self.assertIn("两样都没有就配", desc)
+        self.assertIn("`skill=qwen_image_v1`", desc)
         self.assertIn("不传 `source_image`", desc)     # 「看图点评 / 反推」那条退路
         self.assertIn("没有图生图骨架", desc)          # 没骨架的渠道别硬垫
         self.assertIn("只改一处", desc)                # qwen 那条编辑路还在
