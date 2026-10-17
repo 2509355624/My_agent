@@ -977,6 +977,33 @@ def _prompt_lang(skill):
     return _PROMPT_LANG_QWEN if skill.startswith("qwen") else _PROMPT_LANG_TAGS
 
 
+# ─── moss 刻字规范（2026-10-17 用户拍板：用 moss 时额外喂这一份）──────
+# 来路：同一条 56 字长诗提示词，只把八句连着写 → 逐字错漏；改成「逐列编号 +
+# 每列内容逐条列出 + 字号层级 + 字要贴纸面透视」→ 两个 seed 都一字不差
+# （1216×832 / 15 步 / 68~72 秒）。差别全在提示结构，不在模型能力，所以这份
+# 只在 moss 那一轮拼进 `chan_hint`，别的渠道一个字都不多。
+#
+# ⚠️ 别把它塞进 `_MASTER_TEMPLATE` 正文：那条模板是所有渠道共用的，塞进去
+# 每个渠道（包括十几秒的 silver）都要多读 400 字。
+_MOSS_TEXT_GUIDE = (
+    "\n【moss 刻字规范】这轮用 moss，画面里往往要出成段文字。"
+    "**prompt 必须按下面这个结构写**，不这样写会错字、漏字、串行：\n"
+    "① 开头先声明一句：画面里文字的排布与内容必须精确，**文字布局是最高优先级**。\n"
+    "② **逐条列出每一列（或每一行）写的是什么，绝对不要把整段诗连成一句写完**。"
+    "先说清一共几列、每列从上往下读、列的推进方向用**角色自己的视角**描述"
+    "（例：columns run from her own right-hand side to her own left-hand side）；"
+    "再一条一条写：Column 1 = 她最右那一列：顶部标题「无题」用大字，正下方作者"
+    "「李商隐」用小字，这一列不放正文；Column 2 = 紧挨它左边：「相见时难别亦难」；"
+    "依此类推，一列一句话。\n"
+    "③ 写清字号层级（标题最大 / 正文中等 / 作者最小）和字体（楷书、行楷，"
+    "**不要草书**）。\n"
+    "④ 明说字要平躺在纸面（或衣服、招牌）上、跟着它的透视走，"
+    "**不要像贴在屏幕上的一层浮字**。\n"
+    "⑤ 只有主纸 / 主物体上有可读文字，其它草稿、卷轴、背景**留白或只有模糊痕迹**。\n"
+    "⑥ prompt 用完整自然语言句子（不是 tag 堆），要出的字直接把汉字写进去。\n"
+)
+
+
 # ─── 唯一的一条转译模板（2026-10-05 晚用户拍板重做）─────────
 # 用户原话：「提示词的构成就是：人设 / 工具列表 500~600 字 / 用户的历史对话 /
 # 最近的用户需求，就这么简单。」「我一直想通过硬编码指令的方式来调用生图工具，
@@ -1069,7 +1096,8 @@ _MASTER_TEMPLATE = (
     # 用户自己打「sd」照样认，只是不再宣传它有多张能力。
     "- sd = image_gen_v1（SDXL 底模，单张出图）。\n"
     "- nffa / cunny / miao：点名才用（cunny / miao 一张好几分钟）。\n"
-    "- moss = MOSS-Image（5B 本地，画面里出字最准，25 步慢），点名才填。\n"
+    "- moss = MOSS-Image（5B 本地，画面里出字最准，25 步慢），点名才填。"
+    "画面里要出成段中文时，按下面那份【moss 刻字规范】写 prompt。\n"
     "- krea2 系按风格 LoRA 分：krea2米山舞 / krea2日系 / krea2亚洲真人 / "
     "krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / "
     "krea2奶油 / krea2写实 / krea2通用 / krea2铭音 / krea2鬼针草 / krea2铭鬼；"
@@ -1689,6 +1717,10 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
         hint = ("\n用户开头点名了渠道：**%s**，就用它。**点名渠道优先级最高**——"
                 "本轮就按它画**一张**，别用 generate_comic（就算他嘴上说要"
                 "好几张也一样）。\n" % named)
+        # 刻字规范只喂给 moss（2026-10-17 用户拍板：「使用 moss 的时候，
+        # 额外给 AI 这个提示词模板，让 AI 按照这个标准来」）。
+        if named.startswith("moss"):
+            hint += _MOSS_TEXT_GUIDE
     else:
         hint = ""
     content = _MASTER_TEMPLATE.format(

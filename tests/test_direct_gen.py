@@ -3135,6 +3135,67 @@ class Qwen30ChannelTest(unittest.TestCase):
         self.assertEqual(direct_gen._FIXED_CHAN_MAP.get("qwen30步"), "qwen30")
 
 
+class MossTextGuideTest(unittest.TestCase):
+    """moss 的「逐列编号」刻字规范（2026-10-17 用户拍板）。
+
+    来路：同一条 56 字长诗提示词，只把八句连着写 → 逐字错漏；改成「逐列编号 +
+    每列内容逐条列出 + 字号层级 + 字贴纸面透视」→ 两个 seed 都一字不差
+    （1216×832 / 15 步 / 68~72 秒）。差别全在提示结构，不在模型能力。
+
+    所以规范**只在点名 moss 的那一轮**拼进 `chan_hint`，别的渠道一个字都不多
+    ——silver 十几秒一张，多喂 500 字纯属浪费。
+    """
+
+    MARK = "① 开头先声明一句"      # 只出现在 `_MOSS_TEXT_GUIDE` 正文里
+
+    def _content(self, skill, text="画个女孩"):
+        seen = {}
+
+        def fake_ask(content):
+            seen["c"] = content
+            return {"tool": "generate_image", "prompt": "x", "skill": "silver"}
+
+        with mock.patch.object(direct_gen, "_ask", side_effect=fake_ask):
+            direct_gen._translate(text, [], skill=skill)
+        return seen["c"]
+
+    def test_guide_only_goes_to_the_moss_turn(self):
+        self.assertIn(self.MARK, self._content("moss", "moss 画个女孩"))
+        for skill in ("silver", "krea2-guizhencao", "qwen30", None):
+            with self.subTest(skill=skill):
+                self.assertNotIn(self.MARK, self._content(skill))
+
+    def test_guide_carries_the_structure_that_made_it_work(self):
+        """这七条是实测出来的，删一条都可能退回「错字漏字」。"""
+        g = direct_gen._MOSS_TEXT_GUIDE
+        for word in ("文字布局是最高优先级", "逐条列出每一列", "Column 1",
+                     "角色自己的视角", "字号层级", "楷书", "透视", "留白"):
+            with self.subTest(word=word):
+                self.assertIn(word, g)
+        # 反面判据：这正是上一版崩字的原因，必须留着这句禁令。
+        self.assertIn("不要把整段诗连成一句写完", g)
+
+    def test_moss_turn_is_heavier_but_others_are_untouched(self):
+        self.assertGreater(len(direct_gen._MOSS_TEXT_GUIDE), 400)
+        self.assertLess(len(self._content("silver")),
+                        len(self._content("moss", "moss 画个女孩")))
+
+    def test_skill_md_documents_the_same_template(self):
+        """规范是两份（skill.md 给人/load_skill 看，代码里那份给模型看）。"""
+        with open("skills/moss/skill.md", encoding="utf-8") as f:
+            md = f.read()
+        for word in ("逐列编号", "Column 1", "楷书", "透视", "默认竖屏"):
+            with self.subTest(word=word):
+                self.assertIn(word, md)
+
+    def test_tool_prompt_param_teaches_the_column_layout(self):
+        """主 agent 走 `generate_image` 那条路看不到 `chan_hint`，得写在参数说明里。"""
+        desc = gi.tool["parameters"]["properties"]["prompt"]["description"]
+        for word in ("每一列", "Column 1", "楷书", "透视"):
+            with self.subTest(word=word):
+                self.assertIn(word, desc)
+
+
 class WorkflowParamsTest(unittest.TestCase):
     """钉死 sd 新参数与 cunny 工作流结构（2026-10-05 用户拍板）。"""
 
