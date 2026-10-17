@@ -460,7 +460,7 @@ _RECEIPT_CHANNEL = "当前渠道：%s"
 _RECEIPT_NOTE_DEFAULT = (
     "想换渠道就发「渠道名 + 你的需求」（例：jank 银发初音未来）。\n"
     "渠道：silver（默认）/ anima（三档）/ qwen / nai / jank / sd / nffa / miao / cunny"
-    " / moss / moss4 / anima线条 / anima写实\n"
+    " / moss / moss45 / anima线条 / anima写实\n"
     "krea2 系（13 条，按风格拆）：krea2米山舞 / krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油 / krea2写实 / krea2通用 / krea2铭音 / krea2鬼针草 / krea2铭鬼\n"
     "要角色设定表（7 分区 character design sheet）：发「qwen 角色设定表 + 描述」（qwen 自己的角色表工作流，2304×1536 / 16 步）\n"
     "要修图（去糊/去噪/修清楚）：引用那张图 + 发「qwen修复」（qwen 的修复工作流，1536 面积档 / 25 步）\n"
@@ -1208,9 +1208,9 @@ tool = {
                   "- **qwen30**（qwen 的30步副本，其余一致）：**只说「qwen30步」才传**"
                   "（要刻长文字或更细精修，比 qwen 更慢）；文生图与图生图都支持"
                   "（「qwen30步 图生图」= 它 + `source_image=1`），prompt 写法同 qwen_image_v1。\n"
-                  "- **moss / moss45**（MOSS 5B，**出字最准**，45 步约 2.5 分钟）；"
-                  "**moss4** = 同模型 4 步加速版（约 30 秒，1024×1536）。"
-                  "**明说 moss / moss45 / moss4 才传**；纯文生图，要出的字原样写进 prompt。\n"
+                  "- **moss**（MOSS 5B，**出字最准**，4 步约 30 秒 / 1024×1536）；"
+                  "**moss45** = 同模型的 45 步慢速档（约 2.5 分钟，**原话点名才传**）。"
+                  "两条都点名才用；纯文生图，要出的字原样写进 prompt。\n"
                   "- **qwen-charsheet**（qwen 上的**7 分区角色设定表**工作流，"
                   "2304×1536，单段 **16 步 / res_multistep+beta** / cfg 1，末尾**不放大**）："
                   "只在用户明说「qwen 角色设定表」时传。7 个分区 = 左栏资料+色卡 / "
@@ -1332,7 +1332,7 @@ tool = {
         "type": "object",
         "properties": {
             "prompt": {"type": "string", "description": "提示词。**开头先写角色名**（认得出就写：英文 tag 渠道 `rudeus greyrat, mushoku tensei`；qwen 的自然语言句子里写「鲁迪乌斯（无职转生）」）——没有任何渠道自带角色，**名字才是还原度最高的那一行**，外貌只补与原设定不同的部分。\n默认渠道写**逗号分隔的标签式英文短句，只写一段、不要用 --- 分隔**（只有 skill=image_gen_v1 认 ` --- ` 分隔、一次出多张；其它渠道会把 --- 当普通文字，要出多张就分多次调用、每次一个变体）。\n两个例外：skill=qwen_image_v1 写**自然语言句子**（不写标签堆）；**它当改图渠道用时（同时传 source_image）只写一句改动指令**，例如 `change her coat to red, keep the pose, face and background exactly the same`——**不要把整张图重新描述一遍**。\n第三个例外：**skill 是 moss / moss4 且画面里要出成段中文时，必须把每一列/每一行的内容逐条列出**（`Column 1 = …；Column 2 = …`），先说清列数和推进方向（用角色自身视角），**别把整段诗连成一句写完**；再说明字号层级（标题最大/正文中/作者最小）、字体（楷书/行楷，不要草书）、以及「字平躺在纸面上、跟着它的透视，不要像贴在屏幕上的浮字」。这样写 56 字长诗能一字不差，不这样写会错字漏字。"},
-            "skill": {"type": "string", "description": "渠道名。**不传就是默认渠道 " + T2I_DEFAULT_SKILL + "**。可选值见 Available Skills 生图类（4 个动漫档 `hd_3_<画风>`；silver / silver-hd / jank / qwen_image_v1 / qwen-hd / qwen30 / qwen-charsheet / qwen-restore / image_gen_v1 / krea2系 / nffa / nai / nai_wide / moss / moss4；anima-line / anima-real / anima-guizhencao）。\n**只在用户点名画风 / 尺寸 / 渠道时才传**。说「anima」「三档」→ `hd_3_<画风>`。\n⚠️ 「anima线条/写实/鬼针草」= 上列三个独立渠道，**别拆成 anima + 画风**。\n分不清照 Available Skills 摘要选。"},
+            "skill": {"type": "string", "description": "渠道名。**不传就是默认渠道 " + T2I_DEFAULT_SKILL + "**。可选值见 Available Skills（4 个动漫档 `hd_3_<画风>`；silver / silver-hd / jank / qwen_image_v1 / qwen-hd / qwen30 / qwen-charsheet / qwen-restore / image_gen_v1 / krea2系 / nffa / nai / nai_wide / moss / moss45；anima-line / anima-real / anima-guizhencao）。\n**只在用户点名画风 / 尺寸 / 渠道时才传**。说「anima」「三档」→ `hd_3_<画风>`。\n⚠️ 「anima线条/写实/鬼针草」= 上列三个独立渠道，**别拆成 anima + 画风**。\n分不清照 Available Skills 摘要选。"},
             "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传，每个渠道 2 个槽"},
             "source_image": {"type": "string", "description": "参考图：填 1 = 用本轮出现的那张图（优先取对方引用的，其次他自己刚发的；两样都没有会报错）。\n**明说「图生图」才填**（「图生图 / 垫图 / 照着画 / 照这张画 / 复刻 / 参考这张的构图 / 只改一处、其余原样」）——那张图会被当成构图条件喂进去、**锁住构图**，出图仍是重画的、尺寸仍是本档画布，**渠道沿用它点名的或原渠道，两样都没有就配 `skill=qwen_image_v1`**（图生图只走 qwen 系，silver / silver-hd / 高清三档只是能垫）。prompt 照常写完整画面描述，不是写改动指令。\n**引用 / 附图 + 只是提需求（换装 / 换发色 /「要全身照」这类）→ 不传**：那是「照这张改词重画」——拿那张图当初的提示词把新需求并进去、**沿用原渠道文生图重画**。\n**只是让你看图点评 / 反推提示词 / 问这图什么来头 → 不传。**\n要「**只改一处、其余原样**」的编辑才配 `skill=qwen_image_v1`（参考图编辑，只改那一句交代的地方、其余原样；慢，一张 1~2 分钟），prompt 只写**一句改动指令**；明说「qwen 超清」时换 `qwen-hd`，说「qwen30步」时换 `qwen30`。\n要「**修图**」（去糊 / 去噪 / 修清楚，**把这张图本身修好、不是重画**）配 `skill=qwen-restore`（用户明说「qwen修复」才用；~175 秒），prompt 可留空。\n`jank` / `nffa` / `cunny` / `miao` / `krea2-*` / `sd` 没有骨架，别给它们传（传了会自动退回文生图、白等一轮）。skill=nai 也支持垫图（云端）。动漫档（anima_* / hd_*）的**垫图重绘**骨架还在，但**用法上已撤掉**，别再拿它当图生图渠道。本机渠道的重绘强度是定死的，传 denoise 也没用。"},
             "seed": {"type": "integer", "description": "生图种子，**只在对方点名要「用某个种子重画 / 换提示词再来一张」时才传**，平时一律不传（不传=随机）。范围 0 ~ 4294967295 的整数，填错格式/超界会直接报错，别猜。种子会跟着编号印在图那行 caption 上（`编号 · 分辨率 · 渠道 · seed 数字`），对方引用那条消息时能一起带回来。⚠️ 同一个种子只有配**同样的提示词 + 同样的渠道 + 同样的 lora**才画得出同一张图（改提示词重画=构图大体在、细节变）；动漫渠道是两段采样、两段共用这一个种子，所以只有这一个数。**只有本机渠道认**（hd_* / qwen_image_v1 / qwen30 / image_gen_v1 / krea2-* / nffa / moss），skill=nai 传了会被拒；image_gen_v1 一次出多张时第 k 张 = 这个数 + k - 1"}

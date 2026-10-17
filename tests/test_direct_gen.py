@@ -399,26 +399,31 @@ class BareKrea2WordTest(unittest.TestCase):
         text = "krea2-coscandid：realistic cosplay photo, 1girl"
         self.assertEqual(direct_gen._parse_channel(text)[0], "krea2-coscandid")
 
-    def test_moss_is_split_into_45_and_4_step_channels(self):
-        """2026-10-18 用户拍板：45 步那条不变，另开一条 4 步的。
+    def test_moss_defaults_to_the_four_step_channel(self):
+        """2026-10-18 00:25 用户拍板：**喊「moss」就走 4 步那条**。
 
-        原话「原来的 45 步的不变，然后我们就直接把加多一个 moss 4 步，和一个
-        moss 45 步这样进行区分即可」——三个喊法落两个目录：
-        `moss` / `moss45` → `skills/moss/`（老目录**不改名**，老喊法不能废），
-        `moss4` → `skills/moss4/`。
+        原话「我喊 moss，你给我默认跑 moss4，除非有人喊 moss45 才跑 45 步长的，
+        不然太耗时了」——两个喊法落两个目录：
+        `moss` / `moss4` / 「moss 4步」→ `skills/moss/`（DMD 4 步，默认）；
+        `moss45` / 「moss 45步」       → `skills/moss45/`（45 步，点名才走）。
+        目录就是照这个语义摆的（`skills/moss/` 装 4 步），所以 skill id
+        等于用户嘴里的词，工具那条路模型自己填也不会填反。
 
-        ⚠️ 关键在尾巴：裸 `moss` 的 `(?![0-9A-Za-z_])` 会把 `moss4` 里的 `4` 挡掉，
+        ⚠️ 关键在尾巴：裸 `moss` 的 `(?![0-9A-Za-z_])` 会把 `moss45` 里的数字挡住，
         所以长名必须显式登记、且排在裸词前面。`mossy` 这种真单词仍留在正文里。
         """
         self.assertEqual(direct_gen._parse_channel("moss 一只猫"),
                          ("moss", "一只猫"))
         self.assertEqual(direct_gen._parse_channel("moss45 一只猫"),
-                         ("moss", "一只猫"))
+                         ("moss45", "一只猫"))
+        # 「moss4」「moss 4步」都是默认那条的同义词，不该再分出一条渠道
         self.assertEqual(direct_gen._parse_channel("moss4 一只猫"),
-                         ("moss4", "一只猫"))
-        # 「moss 4步」中间有空格也要认
+                         ("moss", "一只猫"))
         self.assertEqual(direct_gen._parse_channel("moss 4步 招牌"),
-                         ("moss4", "招牌"))
+                         ("moss", "招牌"))
+        # 「步」要被一起吃掉，正文里不能剩孤零零一个字
+        self.assertEqual(direct_gen._parse_channel("moss45步 招牌"),
+                         ("moss45", "招牌"))
         self.assertIsNone(direct_gen._parse_channel("mossy stone wall")[0])
 
     def test_plain_words_only_at_the_head(self):
@@ -3306,9 +3311,9 @@ class MossTextGuideTest(unittest.TestCase):
 
     def test_guide_only_goes_to_the_moss_turn(self):
         self.assertIn(self.MARK, self._content("moss", "moss 画个女孩"))
-        # 2026-10-18 拆出 4 步那条：同一套刻字规范它也得吃（判据是
-        # `named.startswith("moss")`，所以 moss4 天然命中，这里钉住它别被改坏）
-        self.assertIn(self.MARK, self._content("moss4", "moss4 画个招牌"))
+        # 2026-10-18 起 moss 分两条（4 步 = moss，45 步 = moss45），
+        # 判据是 `named.startswith("moss")`，两条都得吃这套刻字规范。
+        self.assertIn(self.MARK, self._content("moss45", "moss45 画个招牌"))
         for skill in ("silver", "krea2-guizhencao", "qwen30", None):
             with self.subTest(skill=skill):
                 self.assertNotIn(self.MARK, self._content(skill))
@@ -3329,8 +3334,12 @@ class MossTextGuideTest(unittest.TestCase):
                         len(self._content("moss", "moss 画个女孩")))
 
     def test_skill_md_documents_the_same_template(self):
-        """规范是两份（skill.md 给人/load_skill 看，代码里那份给模型看）。"""
-        with open("skills/moss/skill.md", encoding="utf-8") as f:
+        """规范是两份（skill.md 给人/load_skill 看，代码里那份给模型看）。
+
+        2026-10-18 起 moss 分两条，刻字规范的正本在 45 步那条 `skills/moss45/`
+        （4 步那条只写了「同这套」并指过去）。
+        """
+        with open("skills/moss45/skill.md", encoding="utf-8") as f:
             md = f.read()
         for word in ("逐列编号", "Column 1", "楷书", "透视", "1024×1024"):
             with self.subTest(word=word):

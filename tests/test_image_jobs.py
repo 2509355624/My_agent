@@ -3023,16 +3023,17 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
         # 在快出图那一刻被砍，单抬到 480。
         # 2026-10-17 20:57 用户又单点 `qwen-restore` 抬到 300（16 步 → 25 步，1536 档
         # 折算 ≈175 秒）→ 它也单独一档，**qwen 其余三条仍是 220**，别跟着一起改。
-        # 2026-10-18 用户把 moss 拆成两条（「原来的 45 步的不变，加多一个 moss 4 步
-        # 和一个 moss 45 步这样区分」）：`moss`(480) 之外新增 `moss4`(180) ——
-        # 4 步实测 26.7~28.1 秒，180 秒留够冷启动读 9 GB 编码器的余量。
+        # 2026-10-18 用户把 moss 拆成两条，并**把默认让给 4 步那条**（00:25 原话
+        # 「我喊 moss，你给我默认跑 moss4，除非有人喊 moss45 才跑 45 步长的」）：
+        # `moss`(180) = DMD 4 步（实测 26.7~28.1 秒，180 秒留够读 9 GB 编码器）；
+        # `moss45`(480) = 45 步慢速档（实测 142 秒 / 首张 205 秒）。
         self.assertEqual(sorted(image_jobs.SKILL_TIMEOUTS),
-                         ["moss", "moss4", "qwen-charsheet", "qwen-hd",
+                         ["moss", "moss45", "qwen-charsheet", "qwen-hd",
                           "qwen-restore", "qwen30", "qwen_image_v1"])
         for skill in ("qwen_image_v1", "qwen-hd", "qwen-charsheet", "qwen30"):
             self.assertEqual(image_jobs.task_timeout(skill), 220, skill)
-        self.assertEqual(image_jobs.task_timeout("moss"), 480)
-        self.assertEqual(image_jobs.task_timeout("moss4"), 180)
+        self.assertEqual(image_jobs.task_timeout("moss"), 180)
+        self.assertEqual(image_jobs.task_timeout("moss45"), 480)
         self.assertEqual(image_jobs.task_timeout("qwen-restore"), 300)
 
     def test_unknown_skill_falls_back_to_global(self):
@@ -3248,7 +3249,7 @@ class LandscapeTest(_Base):
     def test_every_local_channel_canvas_is_swapped(self):
         for skill in ("hd_3_clear", "hd_3_soft", "silver", "silver-hd",
                       "image_gen_v1", "jank", "qwen_image_v1", "krea2",
-                      "nffa", "cunny", "miao", "moss", "moss4", "qwen30"):
+                      "nffa", "cunny", "miao", "moss", "moss45", "qwen30"):
             wf = skills.load_skill(skill)["workflow"]
             nid = image_jobs._find_size_node(wf)
             self.assertIsNotNone(nid, skill)
@@ -3258,16 +3259,18 @@ class LandscapeTest(_Base):
             self.assertEqual((got["width"], got["height"]),
                              (before[1], before[0]), skill)
 
-    def test_moss_canvas_is_the_1m_square_at_45_steps(self):
-        """moss 画布 1024×1024（官方 1M 档）/ 45 步（2026-10-17 23:34 定稿）。
+    def test_moss45_canvas_is_the_1m_square_at_45_steps(self):
+        """`moss45` 画布 1024×1024（官方 1M 档）/ 45 步（2026-10-17 23:34 定稿）。
 
+        2026-10-18 00:25 用户把**默认让给 4 步那条**（喊「moss」= 4 步），
+        45 步这条改名 `moss45`、**必须原话点名**才走，参数一个字没动。
         这一档跑过实拍对比：35 步 120 秒 / 40 步 130 秒 / 45 步 142 秒，
         用户看片后选 45（字和纹理最实，只比 35 贵 22 秒）。
         中途试过 1024×1536(1.57M) 与 1088×1920(2.09M)：面积上去以后每步成本
         从 2.5 秒涨到 4.1 秒、再到断崖，2M 上 40 步直接超时 → 回到方图。
         **方图没有横竖之分**：`landscape_workflow()` 照样对调宽高，对调前后相同。
         """
-        wf = skills.load_skill("moss")["workflow"]
+        wf = skills.load_skill("moss45")["workflow"]
         nid = image_jobs._find_size_node(wf)
         ins = wf[nid]["inputs"]
         self.assertEqual((ins["width"], ins["height"]), (1024, 1024))
@@ -3278,15 +3281,15 @@ class LandscapeTest(_Base):
         ks = [n for n in wf.values() if n["class_type"] == "KSampler"][0]
         self.assertEqual(ks["inputs"]["steps"], 45)
 
-    def test_moss_saves_the_decoded_pixels_without_upscaling(self):
-        """moss 不做像素放大：SaveImage 直接吃 VAEDecode（2026-10-17 22:41）。
+    def test_moss45_saves_the_decoded_pixels_without_upscaling(self):
+        """`moss45` 不做像素放大：SaveImage 直接吃 VAEDecode（2026-10-17 22:41）。
 
         用户原话「2x 放大取消」——插值放大不增细节，只把 1 MB 的图撑到
         6~8 MB（QQ 发图更慢）。清晰度靠画布面积 + 步数，不靠事后摊像素。
         本机唯一的 2x 超分模型是动漫向 ESRGAN，会重绘笔画，而 moss 的全部
         价值就是字准，更不能挂在它后面。
         """
-        wf = skills.load_skill("moss")["workflow"]
+        wf = skills.load_skill("moss45")["workflow"]
         self.assertEqual(image_jobs._find_size_node(wf), "30")
 
         save = [n for n in wf.values() if n["class_type"] == "SaveImage"][0]
@@ -3297,12 +3300,13 @@ class LandscapeTest(_Base):
                           if n["class_type"] in ("ImageScaleBy", "ImageScale",
                                                  "ImageUpscaleWithModel")])
 
-    def test_moss4_is_the_dmd_four_step_chain(self):
-        """moss4 = moss 的 4 步加速版（2026-10-18 用户拍板：与 45 步并存）。
+    def test_moss_is_the_dmd_four_step_chain(self):
+        """`moss` = DMD 4 步版，也是**默认档**（2026-10-18 00:25 用户拍板）。
 
-        用户原话「原来的 45 步的不变，加多一个 moss 4 步，和一个 moss 45 步这样
-        进行区分」。底模 / VAE / 编码器跟 `moss` 完全一样，只多挂一个 DMD 蒸馏
-        适配器（`RapidMOSSAdapter`，文件在 `models/rapid_moss/rapid-moss-4step/`）。
+        用户原话「我喊 moss，你给我默认跑 moss4，除非有人喊 moss45 才跑 45 步长的，
+        不然太耗时了」——所以 `skills/moss/` 装的就是 4 步这条，45 步那条搬去了
+        `skills/moss45/`。底模 / VAE / 编码器跟 45 步版完全一样，只多挂一个 DMD
+        蒸馏适配器（`RapidMOSSAdapter`，文件在 `models/rapid_moss/rapid-moss-4step/`）。
 
         这条链**没有 cfg**：适配器自己吐 `sampler` + `sigmas`，`BasicGuider` 单条件
         单前向。所以图里出现 `KSampler` / `SkipLayerGuidanceDiTSimple` /
@@ -3313,7 +3317,7 @@ class LandscapeTest(_Base):
         画布 1024×1536：实测比 1024×1024 多 50% 面积只多 10 秒（26.7 / 28.1 秒），
         刻字仍一字不差。方向沿用全渠道约定（写死竖屏，说「横屏」才对调）。
         """
-        wf = skills.load_skill("moss4")["workflow"]
+        wf = skills.load_skill("moss")["workflow"]
         nid = image_jobs._find_size_node(wf)
         self.assertIsNotNone(nid)
         ins = wf[nid]["inputs"]
