@@ -1,0 +1,12 @@
+--- E_nopose_hugging_knees（控制图 nuomi_ctrl_hugging_knees_pose.png）
+      提示词槽 6/18 已清空；832x1216；pose-1 1.20 / end 0.75
+      [  0.0s] 已提交 2c8dc851
+      [ 42.1s] success
+      输出 nuomitianshi/lllite3_E_nopose_hugging_knees_00001_.png
+--- F_nopose_hands_on_hips（控制图 nuomi_ctrl_hands_on_hips_pose.png）
+      提示词槽 6/18 已清空；832x1216；pose-1 1.20 / end 0.75
+      [  0.0s] 已提交 73cb5230
+      [ 42.1s] success
+      输出 nuomitianshi/lllite3_F_nopose_hands_on_hips_00001_.png
+
+完成：全部成功

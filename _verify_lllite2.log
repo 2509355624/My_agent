@@ -1,0 +1,10 @@
+--- C_pose_hugging_knees
+      补丁 anima-lllite-pose-1.safetensors / 控制图 nuomi_ctrl_hugging_knees_pose.png / Canny 否 / strength 1.20 / end 0.75
+      [  0.0s] 已提交 814c808b
+      [ 69.1s] success
+      输出 nuomitianshi/lllite2_C_pose_hugging_knees_00001_.png
+--- D_any_extreme_3.0
+      补丁 anima-lllite-any-test-like-v2.safetensors / 控制图 nuomi_ctrl_hugging_knees_lineart.png / Canny 是 / strength 3.00 / end 1.00
+      提交失败: {"_err": "HTTP Error 400: Bad Request"}
+
+完成：有失败，见上面日志

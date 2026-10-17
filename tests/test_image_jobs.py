@@ -3251,6 +3251,23 @@ class LandscapeTest(_Base):
             self.assertEqual((got["width"], got["height"]),
                              (before[1], before[0]), skill)
 
+    def test_moss_defaults_to_a_one_minute_portrait_canvas(self):
+        """moss 竖屏 816×1024（2026-10-17 用户拍板：控在 1 分钟左右）。
+
+        原来是 1024×1536 / 25 步 ≈ 132 秒，等不起。面积砍到 0.53 倍后
+        25 步约 60 秒。**宽高都必须是 16 的倍数**（latent 是 /16 的），
+        所以用户口头说的 812 落成 816——`//16` 会把它截成 800 宽。
+        """
+        wf = skills.load_skill("moss")["workflow"]
+        nid = image_jobs._find_size_node(wf)
+        ins = wf[nid]["inputs"]
+        self.assertEqual((ins["width"], ins["height"]), (816, 1024))
+        self.assertEqual(ins["width"] % 16, 0)
+        self.assertEqual(ins["height"] % 16, 0)
+        # 横屏就是同一块画布转 90 度，不另存工作流
+        wide = image_jobs.landscape_workflow(wf)[nid]["inputs"]
+        self.assertEqual((wide["width"], wide["height"]), (1024, 816))
+
     def test_the_original_workflow_is_never_mutated(self):
         """返回新对象而不是原地改：静默重抽会重建 `job.workflow` 再递归调
         `process`，原地改会被对调两次（等于没改）。"""

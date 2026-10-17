@@ -1,0 +1,10 @@
+--- A_seiza_sentence（seed=248613）
+      槽位 6 → She sits in seiza on the floor, kneeling with her legs folded under her, both hands restin
+      槽位 18 → Portrait, full body, eye level, centered composition.
+      [ 72.2s] success
+      输出 nuomitianshi/pose_test_A_seiza_sentence_00001_.png
+--- B_seiza_tags（seed=248613）
+      槽位 6 → sitting, seiza, kneeling, hands on thighs, solo
+      槽位 18 → full body, eye level, front view
+      [ 64.2s] success
+      输出 nuomitianshi/pose_test_B_seiza_tags_00001_.png

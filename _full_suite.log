@@ -1,0 +1,521 @@
+......[dedup] 拦下本 run 的第二次生图调用（一次请求只出一张）
+.[dedup] 拦下本 run 的第二次生图调用（一次请求只出一张）
+.[dedup] 拦下本 run 的第二次生图调用（一次请求只出一张）
+.[dedup] 拦下本 run 的第二次生图调用（一次请求只出一张）
+...............识图返回不可用（第 1/1 张），剥离后剩 0 字：'我无法直接看到图片，但根据你提供的引用信息和需求，我可以帮你梳理关键点：原图是粉色小熊连体泳衣。'
+..[llm-empty] 空回复（reasoning=4字 finish=None）→ 原地重试 volc/m1（不换模型，前缀缓存照旧命中）
+.[llm-empty] 空回复（reasoning=4字 finish=None）→ 原地重试 volc/m1（不换模型，前缀缓存照旧命中）
+.[llm-empty] 空回复（reasoning=1字 finish=None）→ 原地重试 volc/m1（不换模型，前缀缓存照旧命中）
+[llm-empty] 空回复（reasoning=1字 finish=None）→ 原地重试仍空，换 mimo/m2（本次整段前缀作废）
+.[llm-empty] 空回复（reasoning=1字 finish=None）→ 原地重试 volc/m1（不换模型，前缀缓存照旧命中）
+[llm-empty] 空回复（reasoning=1字 finish=None）→ 原地重试仍空，换 mimo/m2（本次整段前缀作废）
+[llm-empty] 原地重试 + 换模型重试后仍空（reasoning=1字 finish=None），本轮放弃
+..................[llm-empty] 空回复（reasoning=1字 finish=None）→ 原地重试 volc/m1（不换模型，前缀缓存照旧命中）
+...[llm-empty] 空回复（reasoning=1字 finish=None）→ 原地重试 volc/m1（不换模型，前缀缓存照旧命中）
+[llm-empty] 空回复（reasoning=1字 finish=None）→ 原地重试 volc/m1（不换模型，前缀缓存照旧命中）
+[llm-empty] 原地重试 + 换模型重试后仍空（reasoning=1字 finish=None），本轮放弃
+....识图失败（第 1/1 张）：识图请求失败：超时
+................................................................................................................图片无法解码，原样返回：Truncated File Read
+........图片无法解码，原样返回：Truncated File Read
+..图片无法解码，原样返回：Truncated File Read
+图片无法解码，原样返回：Truncated File Read
+..图片无法解码，原样返回：Truncated File Read
+..........................................................漫画被拒：这个会话已经排着 5 张了，画完这些再说。
+.漫画渠道 _comic_batch 没有文生图工作流
+..漫画失败：画超时了
+...漫画剧本不合格（第 1 次尝试）：固定块里混进了中文（必须全是英文 booru 标签）
+漫画剧本不合格（第 2 次尝试）：固定块里混进了中文（必须全是英文 booru 标签）
+漫画剧本不合格（第 3 次尝试）：固定块里混进了中文（必须全是英文 booru 标签）
+...漫画剧本不合格（第 1 次尝试）：只解析到 1 段动态，要求 2 段
+.................生图回执直发失败 group 1
+Traceback (most recent call last):
+  File "D:\AI\agent_my_test\app\tools\normal\generate_image.py", line 472, in _send_receipt
+    image_jobs._send_text(target, target_id, receipt)
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\AI\agent_my_test\app\image_jobs.py", line 1841, in _send_text
+    qq_api.send_group(target_id, text)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "D:\AI\agent_my_test\app\qq_api.py", line 617, in send_group
+    _call("send_group_msg",
+    ~~~~~^^^^^^^^^^^^^^^^^^
+          {"group_id": int(group_id), "message": chunk}, timeout=30)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\AI\agent_my_test\app\qq_api.py", line 254, in _call
+    raise RuntimeError("OneBot 调用失败 %s: %s" % (action, str(data)[:300]))
+RuntimeError: OneBot 调用失败 send_group_msg: {'status': 'failed', 'retcode': 100, 'data': None, 'wording': 'send group message rejected: result=110 err=发送失败，你已被移出该群，请重新加群。'}
+生图回执直发失败 private 2
+Traceback (most recent call last):
+  File "D:\AI\agent_my_test\app\tools\normal\generate_image.py", line 472, in _send_receipt
+    image_jobs._send_text(target, target_id, receipt)
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\AI\agent_my_test\app\image_jobs.py", line 1843, in _send_text
+    qq_api.send_private(target_id, text)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "D:\AI\agent_my_test\app\qq_api.py", line 605, in send_private
+    _call_private(user_id, chunk)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "D:\AI\agent_my_test\app\qq_api.py", line 563, in _call_private
+    return _call("send_private_msg",
+                 {"user_id": int(user_id), "message": message}, timeout=timeout)
+  File "D:\AI\agent_my_test\app\qq_api.py", line 254, in _call
+    raise RuntimeError("OneBot 调用失败 %s: %s" % (action, str(data)[:300]))
+RuntimeError: OneBot 调用失败 send_private_msg: {'status': 'failed', 'retcode': 100, 'data': None, 'wording': 'send private message rejected: result=15 err='}
+..........................................[direct] 输出不是 JSON（'我不是 JSON'）
+[direct] 输出不是 JSON（'{"skill": "hd_3_clear"'）
+[direct] 输出不是 JSON（'前置废话 {"skill": ok}'）
+.....[direct] LLM 调用失败：429
+[direct] LLM 调用失败：429
+......[direct] 未知渠道（点名 '' / 模型 'gpt4o-image'），改用 silver
+...................[direct] 定点抽取失败，只走搜索 Agent
+Traceback (most recent call last):
+  File "D:\AI\agent_my_test\app\direct_gen.py", line 1306, in _prefetch_search
+    got = extract(text)
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1175, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1179, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1234, in _execute_mock_call
+    raise effect
+RuntimeError: 库炸了
+..........................................................................[direct] 输出不是 JSON（'{}'）
+.............................[direct] 改图调用失败
+Traceback (most recent call last):
+  File "D:\AI\agent_my_test\app\direct_gen.py", line 1586, in _revise
+    reply = describe(data_urls[0], prompt=ask)
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1175, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1179, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1234, in _execute_mock_call
+    raise effect
+RuntimeError: 429
+...[direct] 引用图反推失败（第 1 张）
+Traceback (most recent call last):
+  File "D:\AI\agent_my_test\app\direct_gen.py", line 1432, in _recall_tags
+    text = (describe(data_url, prompt=_TAGS_PROMPT) or "").strip()
+            ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1175, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1179, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1238, in _execute_mock_call
+    raise result
+RuntimeError: 429
+........[direct] 前置搜索失败，按无资料继续
+Traceback (most recent call last):
+  File "D:\AI\agent_my_test\app\direct_gen.py", line 1315, in _prefetch_search
+    doc = search_agent.search(text, hint=hint) or ""
+          ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1175, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1179, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1240, in _execute_mock_call
+    result = effect(*args, **kwargs)
+  File "D:\AI\agent_my_test\tests\test_direct_gen.py", line 2653, in fake
+    raise RuntimeError("搜索炸了")
+RuntimeError: 搜索炸了
+..生图回执直发失败 group 123
+Traceback (most recent call last):
+  File "D:\AI\agent_my_test\app\tools\normal\generate_image.py", line 472, in _send_receipt
+    image_jobs._send_text(target, target_id, receipt)
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\AI\agent_my_test\app\image_jobs.py", line 1841, in _send_text
+    qq_api.send_group(target_id, text)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "D:\AI\agent_my_test\app\qq_api.py", line 617, in send_group
+    _call("send_group_msg",
+    ~~~~~^^^^^^^^^^^^^^^^^^
+          {"group_id": int(group_id), "message": chunk}, timeout=30)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\AI\agent_my_test\app\qq_api.py", line 254, in _call
+    raise RuntimeError("OneBot 调用失败 %s: %s" % (action, str(data)[:300]))
+RuntimeError: OneBot 调用失败 send_group_msg: {'status': 'failed', 'retcode': 100, 'data': None, 'wording': 'send group message rejected: result=110 err=发送失败，你已被移出该群，请重新加群。'}
+......[direct] LLM 调用失败：down
+........[direct] LLM 调用失败：429
+....[direct] 未知渠道（点名 '' / 模型 'gpt-image'），改用 silver
+................................................................................图片无法解码，原样返回：Truncated File Read
+.图片无法解码，原样返回：Truncated File Read
+.图片无法解码，原样返回：Truncated File Read
+.读审核开关失败，按放行处理：settings 读挂了
+.图片无法解码，原样返回：Truncated File Read
+审核未生效，按拦截处理（fail-closed）：识图失败：boom
+..审核未生效，按拦截处理（fail-closed）：图是空的
+.审核未生效，按拦截处理（fail-closed）：读图失败：[Errno 2] No such file or directory: 'D:/definitely/not/here.jpg'
+.图片无法解码，原样返回：Truncated File Read
+审核未生效，按拦截处理（fail-closed）：识图回复解析不出来：'我觉得这张图还行吧'
+.图片无法解码，原样返回：Truncated File Read
+审核未生效，按拦截处理（fail-closed）：识图失败：识图请求失败（耗时 30.0s）
+.图片无法解码，原样返回：Truncated File Read
+.图片无法解码，原样返回：Truncated File Read
+.图片无法解码，原样返回：Truncated File Read
+...审核拦截后通知失败 group 123：发不出去
+................图片无法解码，原样返回：Truncated File Read
+..图片无法解码，原样返回：Truncated File Read
+....读自定义审核提示词失败，用内置默认：settings 读挂了
+..................................................................................................................................................[image-claim] 没调工具却声称在画图，退回重来：'上一张三档跑着呢 出图时间本来就比二档长不少'
+..[image-claim] 没调工具却声称在画图，退回重来：'上一张三档跑着呢 出图时间本来就比二档长不少'
+.[image-claim] 没调工具却声称在画图，退回重来：'上一张三档跑着呢 出图时间本来就比二档长不少'
+.....[image-claim] 没调工具却声称在画图，退回重来：'好嘞 那就闷头跑 不回头了'
+.[image-claim] 没调工具却声称在画图，退回重来：'跑完了 两张都在群里躺着呢'
+.[image-claim] 没调工具却声称在画图，退回重来：'画着呢'
+.[image-claim] 没调工具却声称在画图，退回重来：'画着呢 等着收图'
+.[image-claim] 没调工具却声称在画图，退回重来：'画着呢'
+........生图任务失败 group 999001：跑完了但没找到图片
+.生图任务失败 group 999001：跑完了但没找到图片
+.生图任务失败 group 999001：跑完了但没找到图片
+.生图任务失败 group 999001：跑完了但没找到图片
+生图任务失败 group 999001：跑完了但没找到图片
+生图任务失败 group 999001：跑完了但没找到图片
+生图任务失败 group 999001：跑完了但没找到图片
+生图任务失败 group 999001：跑完了但没找到图片
+.生图任务失败 group 999001：跑完了但没找到图片
+.生图任务失败 group 999001：跑完了但没找到图片
+..生图任务失败 group 999001：跑完了但没找到图片
+.生图任务失败 group 999001：跑完了但没找到图片
+生图任务失败 group 999001：跑完了但没找到图片
+生图任务失败 group 999001：跑完了但没找到图片
+.生图任务失败 group 999001：跑完了但没找到图片
+...............工作流解析失败 C:\Users\gjl\AppData\Local\Temp\tmpfln8sj2w\bad.json: Expecting property name enclosed in double quotes: line 1 column 3 (char 2)
+..................生图任务失败 group 999001：跑完了但没找到图片
+生图任务失败 group 999001：跑完了但没找到图片
+生图任务失败 group 999001：跑完了但没找到图片
+.生图任务失败 group 999001：跑完了但没找到图片
+.生图任务失败 group 999001：跑完了但没找到图片
+..生图任务失败 group 999001：跑完了但没找到图片
+..生图任务失败 group 999001：跑完了但没找到图片
+.生图任务失败 group 999001：跑完了但没找到图片
+.生图任务失败 group 999001：跑完了但没找到图片
+.生图任务失败 group 999001：跑完了但没找到图片
+........................................................ComfyUI 探活失败（http://127.0.0.1:8188）：OSError，本次不入队
+.ComfyUI 探活失败（http://127.0.0.1:8188）：OSError，本次不入队
+..生图任务失败 group 9：ComfyUI 掉线
+.ComfyUI 退场了，但这张烧满了 180 秒（状态已不对），重启它
+生图任务失败 group 9：生成超时 (180s)
+......................生图任务失败 group 9：跑完了但没找到图片
+生图任务失败 group 9：跑完了但没找到图片
+生图任务失败 group 9：跑完了但没找到图片
+生图任务失败 group 9：跑完了但没找到图片
+生图任务失败 group 9：跑完了但没找到图片
+....ComfyUI 退场了，但这张烧满了 180 秒（状态已不对），重启它
+生图任务失败 None None：生成超时 (180s)
+..等 ComfyUI 退场超过 0s，放弃等待直接继续
+.等 ComfyUI 退场超过 0s，放弃等待直接继续
+........................生图任务失败 None 9：ComfyUI 掉线
+.生图任务失败 None 9：ComfyUI 掉线
+.生图任务失败 None 9：ComfyUI 掉线
+.生图任务失败 None 9：ComfyUI 掉线
+..生图任务失败 None 9：ComfyUI 掉线
+.....NAI 生图失败 group 9：NAI 挂了
+生图任务失败 group 9：NAI 挂了
+..........................生图任务失败 group 9：跑完了但没找到图片
+...ComfyUI 退场了，但这张烧满了 180 秒（状态已不对），重启它
+生图任务失败 group 9：超时
+.生图任务失败 group 9：down
+....ComfyUI 退场了，但这张烧满了 180 秒（状态已不对），重启它
+生图任务失败 group 9：超时
+.ComfyUI 退场了，但这张烧满了 180 秒（状态已不对），重启它
+生图任务失败 group 9：超时
+...........................ComfyUI 退场了，但这张烧满了 180 秒（状态已不对），重启它
+生图任务失败 group 9：超时
+................系统可用内存只剩 1.5GB（低于 3.0GB 水位），重启 ComfyUI 释放
+...等 ComfyUI 重启超过 30 秒还没回来
+..系统可用内存只剩 1.5GB（低于 3.0GB 水位），重启 ComfyUI 释放
+.系统可用内存只剩 1.5GB（低于 3.0GB 水位），重启 ComfyUI 释放
+重启 ComfyUI 被拒（HTTP 403）——多半是 ComfyUI-Manager 的 security_level 高于 normal，见 user/__manager/config.ini
+.重启 ComfyUI 被拒（HTTP 403）——多半是 ComfyUI-Manager 的 security_level 高于 normal，见 user/__manager/config.ini
+..等 ComfyUI 重启超过 30 秒还没回来
+.......ComfyUI 重启失败，退回 /free 清显存
+..........................转 jpg 失败，按原图发出 b c.png：comfy 不可达
+.........skill whatever 的 priority 不是数字：'高'，按默认权重处理
+.........生图任务失败 None 9：ComfyUI 掉线
+生图任务失败 None 9：ComfyUI 掉线
+...生图任务失败 group 9：ComfyUI 掉线
+.ComfyUI 退场了，但这张烧满了 180 秒（状态已不对），重启它
+生图任务失败 group 9：生成超时 (180s)
+.ComfyUI 被中断后 90 秒仍未退场（活着但卡住），重启它
+生图任务失败 group 9：生成超时 (180s)
+............生图账本写不进去 C:\Users\gjl\AppData\Local\Temp\tmpa_i53qsu\iam_a_file\sub\image_log.jsonl：[WinError 3] 系统找不到指定的路径。: 'C:\\Users\\gjl\\AppData\\Local\\Temp\\tmpa_i53qsu\\iam_a_file\\sub'
+....................................生图任务失败 group 9：跑完了但没找到图片
+................转 jpg 失败，按原图发出 Anima_00001_.png：connection refused
+.转 jpg 失败，按原图发出 Anima_00001_.png：cannot identify image file <_io.BytesIO object at 0x000001E7953D1D50>
+.转 jpg 失败，按原图发出 a b&c.png：boom
+...转 png 失败，按原图发出 Anima_00001_.png：connection refused
+.................................................................................................过审重发失败 RV-20261010-142621-692：onebot down
+....进人工二审队列失败（图照旧按拦截处理）：disk full
+............二审留图失败，记录照记（图可能已过期）：disk full
+.........C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\case.py:615: ResourceWarning: unclosed file <_io.BufferedReader name='C:\\Users\\gjl\\AppData\\Local\\Temp\\review_test_igtftyn6\\reviews/RV-20261010-142643-334.jpg'>
+  result = method()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+..................................................................................................................................[ollama-empty] 正文为空（thinking=9字 finish=stop）
+.......................2026-10-10 14:26:58,214 INFO llm: [llm] x / y sync [1/1]
+.2026-10-10 14:26:58,693 INFO llm: [llm] volc / m1 stream [1/2]
+.2026-10-10 14:26:59,176 INFO llm: [llm] once
+.2026-10-10 14:26:59,675 WARNING root: 日志文件打不开（[WinError 3] 系统找不到指定的路径。: 'C:\\Users\\gjl\\AppData\\Local\\Temp\\tmplypt8q2x\\blocker\\logs'），本次只输出到控制台
+.....长期记忆摘要调用失败（群9，1 条）
+Traceback (most recent call last):
+  File "D:\AI\agent_my_test\app\longterm.py", line 209, in _digest
+    summary = call_llm(
+        [{"role": "system", "content": _SYSTEM},
+         {"role": "user", "content": "聊天记录：\n" + body}],
+        provider=provider, model=model, timeout=QQ_MEMORY_DIGEST_TIMEOUT)
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1175, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1179, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1234, in _execute_mock_call
+    raise effect
+RuntimeError: boom
+....................[compact] 摘要失败，本轮跳过压缩：RuntimeError: LLM 请求失败 HTTP 429
+..................[compact] 摘要失败，本轮跳过压缩：ConnectionError: 网络断了
+.[compact] 摘要失败，本轮跳过压缩：RuntimeError: LLM 请求失败 HTTP 429 | 额度已用尽
+................[compact] 摘要失败，本轮跳过压缩：RuntimeError: 429
+..[compact] 摘要失败，本轮跳过压缩：RuntimeError: LLM 请求失败 HTTP 429
+.....................................................................协议端掉线：tag=BotOfflineEvent msg=你已下线
+.......掉线通知推送异常：boom
+...........已静默 5.0 小时但探活正常，推疑似冻结告警
+已静默 5.0 小时但探活正常，推疑似冻结告警
+...已静默 5.0 小时但探活正常，推疑似冻结告警
+....................................................................................协议端探活失败：probe failed
+连接失败：connection refused，0 秒后重试
+连接失败：connection refused，0 秒后重试
+连接失败：connection refused，0 秒后重试
+连接失败：connection refused，0 秒后重试
+连接失败：connection refused，0 秒后重试
+连接失败：connection refused，0 秒后重试
+连接失败：connection refused，0 秒后重试
+连接失败：connection refused，0 秒后重试
+连接失败：connection refused，0 秒后重试
+连接失败：connection refused，0 秒后重试
+.....回发文字失败 group_9
+Traceback (most recent call last):
+  File "D:\AI\agent_my_test\app\qq_bot.py", line 1155, in _deliver
+    send_text(self.target_id, reply)
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\AI\agent_my_test\tests\test_qq.py", line 1156, in boom
+    raise RuntimeError("发不出去")
+RuntimeError: 发不出去
+....转 jpg 失败，按原图发出 a.png：comfy 不可达
+........................................................拉取转发的聊天记录失败 1：找不到相关的聊天记录
+....拉取引用的消息失败 999：消息不存在
+....拉取引用的消息失败 999：消息不存在
+......................................取图失败（第 1 张）：图片下载失败：HTTPConnectionPool(host='x', port=80): Max retries exceeded with url: /1.jpg (Caused by NameResolutionError("HTTPConnection(host='x', port=80): Failed to resolve 'x' ([Errno 11001] getaddrinfo failed)"))
+......................................OneBot send_group_msg 返回非对象响应，按成功处理：奇怪的字符串
+............................get_group_list 失败（保留原缓存）：napcat down
+..........写状态快照失败：[Errno 5] 拒绝访问
+............................................................................[search] 第 1 轮空回复 [-]
+.[search] 第 1 轮调用失败：boom [-]
+.[search] search_tags 执行失败
+Traceback (most recent call last):
+  File "D:\AI\agent_my_test\app\search_agent.py", line 185, in _run_tool
+    out = fn(query)
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1175, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1179, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1234, in _execute_mock_call
+    raise effect
+RuntimeError: 库炸了
+..........[search] 达到 3 轮上限，用最后一轮的工具结果 [-]
+........................................................................................................................................................................................................................................................工作流解析失败 C:\Users\gjl\AppData\Local\Temp\tmpb94q1vgf\bad\workflow.json: Expecting property name enclosed in double quotes: line 1 column 3 (char 2)
+................................图片无法解码，原样返回：cannot identify image file <_io.BytesIO object at 0x000001E795CE69D0>
+........................................................[tool-truncated] generate_image 的参数 JSON 未闭合（回复被截断，已吞掉尾部 86 字，不发给用户）
+...[tool-truncated] generate_image 的参数 JSON 未闭合（回复被截断，已吞掉尾部 86 字，不发给用户）
+..........................D:\AI\agent_my_test\tests\test_usage.py:144: ResourceWarning: unclosed file <_io.TextIOWrapper name='C:\\Users\\gjl\\AppData\\Local\\Temp\\tmpkrs8a5m3\\usage\\2026-10-10.json' mode='r' encoding='utf-8'>
+  before = open(path, encoding="utf-8").read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+D:\AI\agent_my_test\tests\test_usage.py:147: ResourceWarning: unclosed file <_io.TextIOWrapper name='C:\\Users\\gjl\\AppData\\Local\\Temp\\tmpkrs8a5m3\\usage\\2026-10-10.json' mode='r' encoding='utf-8'>
+  self.assertEqual(open(path, encoding="utf-8").read(), before)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.D:\AI\agent_my_test\tests\test_usage.py:134: ResourceWarning: unclosed file <_io.TextIOWrapper name='C:\\Users\\gjl\\AppData\\Local\\Temp\\tmpkf9ck_r0\\usage\\2026-10-10.json' mode='r' encoding='utf-8'>
+  data = json.load(open(os.path.join(path, files[0]), encoding="utf-8"))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+...........识图 mimo 失败，降级到下一家（doubao）：识图失败 HTTP 429：QuotaExceeded
+识图 doubao 失败，降级到下一家（deepseek）：识图失败 HTTP 429：QuotaExceeded
+....识图 mimo 失败，降级到下一家（doubao）：识图响应无法解析：not json
+识图 doubao 失败，降级到下一家（deepseek）：识图响应无法解析：not json
+.....................................图片无法解码，原样返回：cannot identify image file <_io.BytesIO object at 0x000001E795D133D0>
+.............识图 mimo 失败，降级到下一家（doubao）：识图请求失败（耗时 0.0s）：Read timed out
+识图 doubao 失败，降级到下一家（deepseek）：识图请求失败（耗时 0.0s）：Read timed out
+.识图 doubao 失败，降级到下一家（mimo）：识图失败 HTTP 500：a
+识图 mimo 失败，降级到下一家（deepseek）：识图失败 HTTP 500：b
+...识图 doubao 失败，降级到下一家（mimo）：识图失败 HTTP 429：QuotaExceeded
+...............识图返回不可用（第 1/1 张），剥离后剩 31 字：'这张图片包含露骨的色情内容，我无法按你的要求进行完整描述。角色后脑勺到马尾区域的发丝存在明显的结构混乱，发束走向不自然。'
+..识图返回不可用（第 1/1 张），剥离后剩 0 字：'我无法按要求描述这张图片。图片包含露骨的色情内容，不符合我的安全准则，因此我不能提供详细描述或提取其中的文字。如果你有其'
+.....................................ComfyUI 探活失败 (1/3)：refused
+ComfyUI 探活失败 (2/3)：refused
+ComfyUI 探活失败 (3/3)：refused
+ComfyUI 心跳丢失（refused），触发重启
+ComfyUI 探活失败 (1/3)：refused
+ComfyUI 探活失败 (2/3)：refused
+ComfyUI 探活失败 (3/3)：refused
+ComfyUI 心跳丢失（refused），触发重启
+ComfyUI 探活失败 (1/3)：refused
+ComfyUI 探活失败 (2/3)：refused
+ComfyUI 探活失败 (3/3)：refused
+ComfyUI 心跳丢失（refused），触发重启
+连续 3 次都拉不起 ComfyUI，暂停自动重启，退避 1800 秒
+.ComfyUI 探活失败 (1/3)：refused
+ComfyUI 探活失败 (2/3)：refused
+...ComfyUI 探活失败 (1/3)：refused
+ComfyUI 探活失败 (2/3)：refused
+ComfyUI 探活失败 (3/3)：refused
+ComfyUI 心跳丢失（refused），触发重启
+.ComfyUI 探活失败 (1/3)：refused
+ComfyUI 探活失败 (2/3)：refused
+ComfyUI 探活失败 (3/3)：refused
+ComfyUI 心跳丢失（refused），触发重启
+..ComfyUI 探活失败 (1/3)：refused
+.ComfyUI 探活失败 (1/3)：refused
+ComfyUI 探活失败 (2/3)：refused
+ComfyUI 探活失败 (3/3)：refused
+ComfyUI 心跳丢失（refused），触发重启
+ComfyUI 探活失败 (1/3)：refused
+ComfyUI 探活失败 (2/3)：refused
+ComfyUI 探活失败 (3/3)：refused
+ComfyUI 心跳丢失（refused），触发重启
+ComfyUI 探活失败 (1/3)：refused
+ComfyUI 探活失败 (2/3)：refused
+ComfyUI 探活失败 (3/3)：refused
+ComfyUI 心跳丢失（refused），触发重启
+连续 3 次重启后 ComfyUI 仍未恢复，暂停自动重启，退避 1800 秒
+.ComfyUI 探活失败 (1/3)：refused
+ComfyUI 探活失败 (2/3)：refused
+ComfyUI 探活失败 (3/3)：refused
+ComfyUI 心跳丢失（refused），触发重启
+.ComfyUI 探活失败 (1/3)：refused
+ComfyUI 探活失败 (2/3)：refused
+ComfyUI 探活失败 (3/3)：refused
+ComfyUI 心跳丢失（refused），触发重启
+.C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py:1639: ResourceWarning: unclosed file <_io.TextIOWrapper name='C:\\Users\\gjl\\AppData\\Local\\Temp\\tmpqha8s7yb/watchdog.lock' mode='w' encoding='utf-8'>
+  setattr(self.target, self.attribute, self.temp_original)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.看门狗已在运行（锁被占用），退出
+C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\traceback.py:271: ResourceWarning: unclosed file <_io.TextIOWrapper name='C:\\Users\\gjl\\AppData\\Local\\Temp\\tmpr0_rd7re/watchdog.lock' mode='w' encoding='utf-8'>
+  tb.tb_frame.clear()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py:1639: ResourceWarning: unclosed file <_io.TextIOWrapper name='C:\\Users\\gjl\\AppData\\Local\\Temp\\tmpr0_rd7re/watchdog.lock' mode='w' encoding='utf-8'>
+  setattr(self.target, self.attribute, self.temp_original)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+...........已静默 20 分钟（阈值 20 分钟）但探活正常，疑似假在线；重启一次当探针（下次最早 60 分钟后再判）
+长时间收不到任何消息（疑似假在线），触发重启
+..已静默 20 分钟（阈值 20 分钟）但探活正常——疑似假在线，**只记录不重启**（WATCHDOG_SILENCE_RESTART=0）；下次最早 60 分钟后再看
+已静默 20 分钟（阈值 20 分钟）但探活正常——疑似假在线，**只记录不重启**（WATCHDOG_SILENCE_RESTART=0）；下次最早 120 分钟后再看
+已静默 20 分钟（阈值 20 分钟）但探活正常——疑似假在线，**只记录不重启**（WATCHDOG_SILENCE_RESTART=0）；下次最早 240 分钟后再看
+已静默 20 分钟（阈值 20 分钟）但探活正常——疑似假在线，**只记录不重启**（WATCHDOG_SILENCE_RESTART=0）；下次最早 240 分钟后再看
+已静默 20 分钟（阈值 20 分钟）但探活正常——疑似假在线，**只记录不重启**（WATCHDOG_SILENCE_RESTART=0）；下次最早 240 分钟后再看
+已静默 20 分钟（阈值 20 分钟）但探活正常——疑似假在线，**只记录不重启**（WATCHDOG_SILENCE_RESTART=0）；下次最早 240 分钟后再看
+已静默 20 分钟（阈值 20 分钟）但探活正常——疑似假在线，**只记录不重启**（WATCHDOG_SILENCE_RESTART=0）；下次最早 240 分钟后再看
+已静默 20 分钟（阈值 20 分钟）但探活正常——疑似假在线，**只记录不重启**（WATCHDOG_SILENCE_RESTART=0）；下次最早 240 分钟后再看
+.已静默 20 分钟（阈值 20 分钟）但探活正常——疑似假在线，**只记录不重启**（WATCHDOG_SILENCE_RESTART=0）；下次最早 60 分钟后再看
+..已静默 20 分钟（阈值 20 分钟）但探活正常——疑似假在线，**只记录不重启**（WATCHDOG_SILENCE_RESTART=0）；下次最早 60 分钟后再看
+.已静默 20 分钟（阈值 20 分钟）但探活正常，疑似假在线；重启一次当探针（下次最早 60 分钟后再判）
+长时间收不到任何消息（疑似假在线），触发重启
+.已静默 20 分钟（阈值 20 分钟）但探活正常，疑似假在线；重启一次当探针（下次最早 60 分钟后再判）
+长时间收不到任何消息（疑似假在线），触发重启
+........NapCat 探活失败 (1/3)：x
+NapCat 探活失败 (2/3)：x
+.NapCat 活着但未登录，先等 180 秒看会不会自己扫码/快速登录
+NapCat 探活失败 (1/3)：x
+.NapCat 探活失败 (1/3)：x
+NapCat 探活失败 (2/3)：x
+NapCat 探活失败 (3/3)：x
+NapCat 心跳丢失，触发重启
+重启后 NapCat 仍未恢复（1/3）
+NapCat 探活失败 (1/3)：x
+NapCat 探活失败 (2/3)：x
+NapCat 探活失败 (3/3)：x
+NapCat 心跳丢失，触发重启
+重启后 NapCat 仍未恢复（2/3）
+NapCat 探活失败 (1/3)：x
+NapCat 探活失败 (2/3)：x
+NapCat 探活失败 (3/3)：x
+NapCat 心跳丢失，触发重启
+重启后 NapCat 仍未恢复（3/3）
+连续 3 次重启均失败，停止自动重启，退避 1800 秒
+.NapCat 探活失败 (1/3)：x
+NapCat 探活失败 (2/3)：x
+NapCat 探活失败 (3/3)：x
+NapCat 心跳丢失，触发重启
+.NapCat 活着但未登录，先等 180 秒看会不会自己扫码/快速登录
+NapCat 活着但未登录，先等 180 秒看会不会自己扫码/快速登录
+.NapCat 活着但未登录，先等 180 秒看会不会自己扫码/快速登录
+登录态失效、二维码过期仍没人扫，触发重启
+.NapCat 活着但未登录，先等 180 秒看会不会自己扫码/快速登录
+..NapCat 探活失败 (1/3)：x
+NapCat 探活失败 (2/3)：x
+NapCat 探活失败 (3/3)：x
+NapCat 心跳丢失，触发重启
+.NapCat 探活失败 (1/3)：x
+.NapCat 活着但未登录，先等 180 秒看会不会自己扫码/快速登录
+登录态失效、二维码过期仍没人扫，触发重启
+NapCat 活着但未登录，先等 180 秒看会不会自己扫码/快速登录
+登录态失效、二维码过期仍没人扫，触发重启
+NapCat 活着但未登录，先等 180 秒看会不会自己扫码/快速登录
+登录态失效、二维码过期仍没人扫，触发重启
+连续 3 次重启后都还停在扫码界面，暂停自动重启，退避 1800 秒
+.NapCat 探活失败 (1/3)：x
+NapCat 探活失败 (2/3)：x
+NapCat 探活失败 (3/3)：x
+NapCat 心跳丢失，触发重启
+.NapCat 探活失败 (1/3)：x
+NapCat 探活失败 (2/3)：x
+NapCat 探活失败 (3/3)：x
+NapCat 心跳丢失，触发重启
+.NapCat 探活失败 (1/3)：x
+NapCat 探活失败 (2/3)：x
+NapCat 探活失败 (3/3)：x
+NapCat 心跳丢失，触发重启
+.D:\AI\agent_my_test\tests\test_web_api.py:714: ResourceWarning: unclosed file <_io.BufferedReader name='D:\\AI\\agent_my_test\\web/admin.html'>
+  html = self.client.get("/admin").data.decode("utf-8")
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.D:\AI\agent_my_test\tests\test_web_api.py:699: ResourceWarning: unclosed file <_io.BufferedReader name='D:\\AI\\agent_my_test\\web/admin.html'>
+  html = self.client.get("/admin").data.decode("utf-8")
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.D:\AI\agent_my_test\tests\test_web_api.py:729: ResourceWarning: unclosed file <_io.BufferedReader name='D:\\AI\\agent_my_test\\web/admin.html'>
+  html = self.client.get("/admin").data.decode("utf-8")
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.D:\AI\agent_my_test\tests\test_web_api.py:746: ResourceWarning: unclosed file <_io.BufferedReader name='D:\\AI\\agent_my_test\\web/admin.html'>
+  html = self.client.get("/admin").data.decode("utf-8")
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\case.py:615: ResourceWarning: unclosed file <_io.BufferedReader name='D:\\AI\\agent_my_test\\web/admin.html'>
+  result = method()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+...........................................................窗口记忆摘要调用失败（群9，1 条）
+Traceback (most recent call last):
+  File "D:\AI\agent_my_test\app\longterm.py", line 141, in _digest_turns
+    summary = call_llm(
+        [{"role": "system", "content": _TURN_SYSTEM},
+         {"role": "user", "content": "对话记录：\n" + body}],
+        provider=provider, model=model,
+        timeout=QQ_MEMORY_DIGEST_TIMEOUT)
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1175, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1179, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\gjl\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py", line 1234, in _execute_mock_call
+    raise effect
+RuntimeError: 挂了
+..D:\AI\agent_my_test\tests\test_window.py:492: ResourceWarning: unclosed file <_io.TextIOWrapper name='C:\\Users\\gjl\\AppData\\Local\\Temp\\tmp7n3yqmk1\\agents\\qq\\memory\\group_9.jsonl' mode='r' encoding='utf-8'>
+  rec = json.loads(open(path, encoding="utf-8").readlines()[-1])
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.............[window] 转交长期记忆失败：OSError: boom
+................
+----------------------------------------------------------------------
+Ran 2561 tests in 897.428s
+
+OK

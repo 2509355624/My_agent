@@ -1,0 +1,324 @@
+{
+ "1": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "miaomiaoRealskin_anima13.safetensors",
+   "weight_dtype": "default"
+  },
+  "_meta": {
+   "title": "Anima Base v1.0"
+  }
+ },
+ "2": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "lora_name": "nuomitianshi-v2.0-lora.safetensors",
+   "strength_model": 0.85,
+   "model": [
+    "1",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "角色 LoRA / 0.85"
+  }
+ },
+ "3": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen_3_06b_base.safetensors",
+   "type": "stable_diffusion",
+   "device": "default"
+  },
+  "_meta": {
+   "title": "Anima Qwen3 0.6B"
+  }
+ },
+ "4": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "qwen_image_vae.safetensors"
+  },
+  "_meta": {
+   "title": "Qwen Image VAE"
+  }
+ },
+ "5": {
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "masterpiece, best quality, safe, 1girl, solo, nuomi tianshi, adult woman, long light green hair, golden eyes."
+  },
+  "_meta": {
+   "title": "01 角色 / 触发词与少量外观"
+  }
+ },
+ "6": {
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "standing, hands on hips. She stands with both hands resting on her hips and elbows pointing outwards."
+  },
+  "_meta": {
+   "title": "04 动作 / 肢体与手势"
+  }
+ },
+ "7": {
+  "class_type": "StringConcatenate",
+  "inputs": {
+   "string_a": [
+    "5",
+    0
+   ],
+   "string_b": [
+    "14",
+    0
+   ],
+   "delimiter": "\n"
+  },
+  "_meta": {
+   "title": "拼接 / 7"
+  }
+ },
+ "8": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "clip": [
+    "3",
+    0
+   ],
+   "text": [
+    "24",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "正向编码 / 模块合并后"
+  }
+ },
+ "9": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": "worst quality, low quality, score_1, score_2, score_3, artist name, blurry, jpeg artifacts, chromatic aberration, text, watermark, nude, explicit, extra limbs, extra fingers, malformed hands",
+   "clip": [
+    "3",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "负向 / 质量与错误排除"
+  }
+ },
+ "10": {
+  "class_type": "EmptyLatentImage",
+  "inputs": {
+   "width": 1040,
+   "height": 1520,
+   "batch_size": 1
+  },
+  "_meta": {
+   "title": "原生尺寸 / 可调"
+  }
+ },
+ "11": {
+  "class_type": "KSampler",
+  "inputs": {
+   "seed": 248613,
+   "steps": 50,
+   "cfg": 5.0,
+   "sampler_name": "dpmpp_2m_sde_gpu",
+   "scheduler": "simple",
+   "denoise": 1.0,
+   "model": [
+    "16",
+    0
+   ],
+   "positive": [
+    "8",
+    0
+   ],
+   "negative": [
+    "9",
+    0
+   ],
+   "latent_image": [
+    "10",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "DPM++ 2M SDE / 50 步 / CFG 5"
+  }
+ },
+ "12": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "11",
+    0
+   ],
+   "vae": [
+    "4",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "解码"
+  }
+ },
+ "13": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "nuomitianshi/modular_v4/hands_on_hips",
+   "images": [
+    "12",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "保存 / 内嵌工作流"
+  }
+ },
+ "14": {
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": ""
+  },
+  "_meta": {
+   "title": "02 风格补充 / 留空继承 LoRA"
+  }
+ },
+ "15": {
+  "class_type": "StringConcatenate",
+  "inputs": {
+   "string_a": [
+    "7",
+    0
+   ],
+   "string_b": [
+    "20",
+    0
+   ],
+   "delimiter": "\n"
+  },
+  "_meta": {
+   "title": "拼接 / 15"
+  }
+ },
+ "20": {
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "Her usual Taoist outfit, black Taoist hat with a yin-yang emblem. Fully clothed."
+  },
+  "_meta": {
+   "title": "03 服装 / 单独可改"
+  }
+ },
+ "17": {
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "looking at viewer, head tilt, parted lips, calm attentive expression."
+  },
+  "_meta": {
+   "title": "05 表情 / 视线 / 嘴形"
+  }
+ },
+ "18": {
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "cowboy shot, slightly low angle, the character fills most of the frame."
+  },
+  "_meta": {
+   "title": "06 镜头 / 景别 / 角度"
+  }
+ },
+ "19": {
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "Inside an old wooden temple, candlelight and cool window light illuminate her face. Wooden rafters and worn walls behind her, no lettering."
+  },
+  "_meta": {
+   "title": "07 场景 / 光照"
+  }
+ },
+ "21": {
+  "class_type": "StringConcatenate",
+  "inputs": {
+   "string_a": [
+    "15",
+    0
+   ],
+   "string_b": [
+    "6",
+    0
+   ],
+   "delimiter": "\n"
+  },
+  "_meta": {
+   "title": "拼接 / 21"
+  }
+ },
+ "22": {
+  "class_type": "StringConcatenate",
+  "inputs": {
+   "string_a": [
+    "21",
+    0
+   ],
+   "string_b": [
+    "17",
+    0
+   ],
+   "delimiter": "\n"
+  },
+  "_meta": {
+   "title": "拼接 / 22"
+  }
+ },
+ "23": {
+  "class_type": "StringConcatenate",
+  "inputs": {
+   "string_a": [
+    "22",
+    0
+   ],
+   "string_b": [
+    "18",
+    0
+   ],
+   "delimiter": "\n"
+  },
+  "_meta": {
+   "title": "拼接 / 23"
+  }
+ },
+ "24": {
+  "class_type": "StringConcatenate",
+  "inputs": {
+   "string_a": [
+    "23",
+    0
+   ],
+   "string_b": [
+    "19",
+    0
+   ],
+   "delimiter": "\n"
+  },
+  "_meta": {
+   "title": "拼接 / 24"
+  }
+ },
+ "16": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "model": [
+    "2",
+    0
+   ],
+   "lora_name": "rendering_detailer_base10-000400.safetensors",
+   "strength_model": 0.25
+  },
+  "_meta": {
+   "title": "细节 LoRA / 0.25 / 可设为 0"
+  }
+ }
+}

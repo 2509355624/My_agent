@@ -1,0 +1,19 @@
+--- G_pure_t2i
+      LLLite=否 strength=0.00 end=0.00
+      [ 39.1s] D:\AI\ComfyUI_v037\output\nuomitianshi\agree_G_pure_t2i_00001_.png
+--- H_lllite_0.92
+      LLLite=是 strength=0.92 end=0.92
+      [ 42.1s] D:\AI\ComfyUI_v037\output\nuomitianshi\agree_H_lllite_0.92_00001_.png
+--- I_lllite_1.00
+      LLLite=是 strength=1.00 end=1.00
+      [ 42.1s] D:\AI\ComfyUI_v037\output\nuomitianshi\agree_I_lllite_1.00_00001_.png
+
+与参考图 reference02.png 的**边缘图相关性**（越高越像它的构图）:
+   G_pure_t2i       0.1344
+   H_lllite_0.92    0.3943
+   I_lllite_1.00    0.3942
+
+输出文件：
+   G_pure_t2i       D:\AI\ComfyUI_v037\output\nuomitianshi\agree_G_pure_t2i_00001_.png
+   H_lllite_0.92    D:\AI\ComfyUI_v037\output\nuomitianshi\agree_H_lllite_0.92_00001_.png
+   I_lllite_1.00    D:\AI\ComfyUI_v037\output\nuomitianshi\agree_I_lllite_1.00_00001_.png
