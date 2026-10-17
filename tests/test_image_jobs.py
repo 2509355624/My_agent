@@ -3255,12 +3255,12 @@ class LandscapeTest(_Base):
                              (before[1], before[0]), skill)
 
     def test_moss_canvas_is_the_2m_tier_both_orientations(self):
-        """moss 画布 1088×1920 / 30 步（2026-10-17 22:41 抬画布，22:55 退步数）。
+        """moss 画布 1088×1920 / 20 步（画布 22:41 定，步数 22:41→30→20 三步退）。
 
         用户原话「1920x1080 和 1080x1920 这样的搭配，步长给到 40」：
         **1080 不是 16 的倍数**（`//16` 会截成 1072），落 1088 → 面积
         2,088,960 px，刚过官方 2M 档，在 0.25M~4M 的外推范围内。
-        40 步实测在 480 秒超时里没出来 → 用户拍板退到 **30**（稳定态约 3.5 分钟）。
+        40 步实测超时 → 30 步效果被认可 → 23:05 用户「分辨率不动、步长改 20」。
         方向沿用全渠道约定：**工作流写死竖屏**，说「横屏」才由
         `landscape_workflow()` 对调成 1920×1088。
         """
@@ -3274,7 +3274,7 @@ class LandscapeTest(_Base):
         wide = image_jobs.landscape_workflow(wf)[nid]["inputs"]
         self.assertEqual((wide["width"], wide["height"]), (1920, 1088))
         ks = [n for n in wf.values() if n["class_type"] == "KSampler"][0]
-        self.assertEqual(ks["inputs"]["steps"], 30)
+        self.assertEqual(ks["inputs"]["steps"], 20)
 
     def test_moss_saves_the_decoded_pixels_without_upscaling(self):
         """moss 不做像素放大：SaveImage 直接吃 VAEDecode（2026-10-17 22:41）。
