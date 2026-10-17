@@ -2154,6 +2154,10 @@ def _send_image(target, target_id, filename, tag="", skill="", seed=None,
 # 情况兜底——不然账本里会一直躺着一条发不掉的记录，每次启动都白试一遍。
 _RESUME_MAX_ATTEMPTS = 3
 
+# 等一张「重启前就已经在跑」的图时，比正常时限多给几秒。它的计时起点在我们
+# 重新接上之前，剩下的只是收尾；卡着正常时限判死会把一张马上就好的图丢掉。
+_RESUME_EXTRA_WAIT = 60
+
 _resume_lock = threading.Lock()
 _resumed = False
 
@@ -2219,7 +2223,7 @@ def _resume_one(tag, rec):
             return True
         log.info("恢复：%s 还在 ComfyUI 队列里，等它跑完", tag)
         try:
-            entry = wait_done(pid, task_timeout(skill))
+            entry = wait_done(pid, task_timeout(skill) + _RESUME_EXTRA_WAIT)
         except TimeoutError:
             entry = None
         if entry is None:
