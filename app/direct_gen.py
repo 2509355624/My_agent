@@ -1108,7 +1108,7 @@ _MASTER_TEMPLATE = (
     # 用户自己打「sd」照样认，只是不再宣传它有多张能力。
     "- sd = image_gen_v1（SDXL 底模，单张出图）。\n"
     "- nffa / cunny / miao：点名才用（cunny / miao 一张好几分钟）。\n"
-    "- moss = MOSS-Image（5B 本地，画面里出字最准，25 步慢），点名才填。"
+    "- moss = MOSS-Image（5B 本地，画面里出字最准，45 步约 160 秒），点名才填。"
     "画面里要出成段中文时，按下面那份【moss 刻字规范】写 prompt。\n"
     "- krea2 系按风格 LoRA 分：krea2米山舞 / krea2日系 / krea2亚洲真人 / "
     "krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / "

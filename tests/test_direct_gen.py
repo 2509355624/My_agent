@@ -3307,7 +3307,7 @@ class MossTextGuideTest(unittest.TestCase):
         """规范是两份（skill.md 给人/load_skill 看，代码里那份给模型看）。"""
         with open("skills/moss/skill.md", encoding="utf-8") as f:
             md = f.read()
-        for word in ("逐列编号", "Column 1", "楷书", "透视", "默认竖屏"):
+        for word in ("逐列编号", "Column 1", "楷书", "透视", "1024×1024"):
             with self.subTest(word=word):
                 self.assertIn(word, md)
 
