@@ -1411,8 +1411,10 @@ class QQBot:
             extra += " +%d 张图" % len(image_urls)
         if quotes:
             extra += " +%d 条引用" % len(quotes)
-        log.info("← %s %s（%s）: %s%s", target, target_id, reason,
-                 text[:60].replace("\n", " "), extra)
+        # 带字数：2026-10-17 排查「moss渠道 + 一大段 JSON 没出图」时，日志只截
+        # 60 字、看不出原文多长，没法判断是「超长被截断」还是「模型判成聊天」。
+        log.info("← %s %s（%s，%d 字）: %s%s", target, target_id, reason,
+                 len(text), text[:60].replace("\n", " "), extra)
         runner.submit(
             text, sender, image_urls, quotes,
             at_me=(reason.startswith("被 @") or reason == "私聊"),

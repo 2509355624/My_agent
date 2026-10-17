@@ -1027,6 +1027,53 @@ class AgainTest(unittest.TestCase):
                                       _skip_confirm=True)
 
 
+class NamedChannelReplyRetryTest(unittest.TestCase):
+    """点名渠道 + 给了正文，模型却只回了话 → 重问一次要它出图（2026-10-17）。
+
+    现场：私聊「moss渠道 + 一大段 JSON 提示词」→ 模型回「收到，按你给的分镜
+    描述直接出图…」，图一张没出。同一句话在群里 21:05 / 21:11 都正常，说明
+    渠道识别没问题，是模型这一轮的意图判断摇摆了。用户原话：「都说了 moss
+    渠道和提示词了，直接生图即可了呀」。
+
+    修法守住一条线：**只重问一次**。真在问问题的那种（「moss 能画中文吗」）
+    重问后还是会回话，不许被硬掰成出图。
+    """
+
+    def _decide(self, replies):
+        with mock.patch.object(direct_gen.llm, "call_llm",
+                               side_effect=replies) as m_llm, \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=""), \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="p1"), \
+             mock.patch.object(direct_gen, "_prefetch_search",
+                               return_value=""), \
+             mock.patch.object(gi, "_generate_image",
+                               return_value=RECEIPT) as m_gen:
+            self.addCleanup(direct_gen._LAST_JOB.pop, "p1", None)
+            out = direct_gen.decide('moss渠道 {"summary": {}}', [], False,
+                                    at_me=True)
+        return out, m_llm, m_gen
+
+    def test_a_chat_reply_is_retried_into_an_image(self):
+        out, m_llm, m_gen = self._decide([
+            '{"reply": "收到，按你给的分镜描述直接出图。"}',
+            '{"tool": "generate_image", "prompt": "1girl, writing a poem", '
+            '"skill": "moss"}'])
+        self.assertEqual(out, "")
+        self.assertEqual(m_llm.call_count, 2)
+        self.assertEqual(m_gen.call_args.kwargs["skill"], "moss")
+        # 重问那一次必须把「点名渠道 = 下单」说明白，否则问了也白问
+        self.assertIn("点名了渠道", m_llm.call_args[0][0][0]["content"])
+
+    def test_a_real_question_still_gets_an_answer(self):
+        says = '{"reply": "moss 是本地那个 5B 模型，画面出字最准。"}'
+        out, m_llm, m_gen = self._decide([says, says])
+        self.assertIn("5B", out)
+        self.assertEqual(m_llm.call_count, 2)   # 只多问一次，不反复纠缠
+        m_gen.assert_not_called()
+
+
 class ReviseWildPhrasesTest(unittest.TestCase):
     """带图轮里「用户不按格式说」的三条缺口（2026-10-17 补）。
 

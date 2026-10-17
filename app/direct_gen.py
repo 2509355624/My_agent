@@ -1700,6 +1700,35 @@ def _retry_without_comic(content, named):
     return data
 
 
+# 点名渠道却只回了话 → 重问一次用。2026-10-17 现场：私聊「moss渠道 + 一大段
+# JSON 提示词」，模型判成「贴资料给我看」，回了一句「收到，按你给的分镜描述
+# 直接出图——不过画面裁切到喉部…」，**图一张没出**。同一句话在群里 21:05 /
+# 21:11 都正常出图，说明不是渠道识别问题、是模型这一轮的意图判断摇摆。
+# 用户口径：「都说了 moss 渠道和提示词了，直接生图即可了呀」。
+_REPLY_VETO_NOTE = (
+    "\n\n【更正，以本条为准】用户**点名了渠道 %s**，并且给了正文——这是下单，"
+    "不是聊天。正文哪怕是一段 JSON / 元数据 / 英文串，也只是你写提示词的素材："
+    "照它把画面转译成英文 prompt，直接输出 "
+    "{{\"tool\": \"generate_image\", \"prompt\": \"英文提示词\", \"skill\": \"%s\"}}。"
+    "**不许只回 reply、不许反问「要不要画」**。"
+    "只有原话确实是在提问（「这个渠道怎么样」「能画什么」）才允许 reply。\n")
+
+
+def _retry_force_prompt(content, named):
+    """点名渠道却只回了话 → 重问一次，逼它出 prompt。
+
+    仍坚持 reply（真在闲聊 / 真缺素材）返回 None，调用方按原话回。
+    """
+    try:
+        data = _ask(content + _REPLY_VETO_NOTE % (named, named))
+    except Exception:
+        log.exception("[direct] 重问（要点名渠道出图）失败")
+        return None
+    if not data or not (data.get("prompt") or "").strip():
+        return None
+    return data
+
+
 def _translate(text, history, skill=None, weighted=False, no_default=False,
                doc=None):
     """一次 LLM 调用 → 生图任务，或一句聊天回复。**所有提示词都由它产出**。
@@ -1745,7 +1774,11 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
         # 一道兜底（见下面 comic 契约那段）。
         hint = ("\n用户开头点名了渠道：**%s**，就用它。**点名渠道优先级最高**——"
                 "本轮就按它画**一张**，别用 generate_comic（就算他嘴上说要"
-                "好几张也一样）。\n" % named)
+                "好几张也一样）。\n"
+                "**打了渠道名就等于下单**：正文哪怕只是一段 JSON / 元数据 / "
+                "英文串 / 分镜表，那也是他给的提示词素材——照它转译成 prompt "
+                "直接出图，**不许只回 reply、不许反问「要不要画」**。"
+                "（除非他确实在问这个渠道本身的事。）\n" % named)
         # 刻字规范只喂给 moss（2026-10-17 用户拍板：「使用 moss 的时候，
         # 额外给 AI 这个提示词模板，让 AI 按照这个标准来」）。
         if named.startswith("moss"):
@@ -1795,11 +1828,31 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
             return {"comic": {"brief": brief,
                               "panels": data.get("panels")}}
     user_prompt = (data.get("prompt") or "").strip()
+    reply = (data.get("reply") or "").strip()
+    if not user_prompt and named and reply:
+        # ── 点名渠道却只回了话 = 大概率是模型判错了（2026-10-17 现场）──────
+        # 私聊「moss渠道 + 一大段 JSON 提示词」→ 模型回「收到，按你给的分镜
+        # 描述直接出图…」，图一张没出。同一句话在群里 21:05 / 21:11 都正常，
+        # 所以不是渠道识别问题。用户口径：「都说了 moss 渠道和提示词了，
+        # 直接生图即可了呀」。重问一次把话说明白，**仍然回话就照它回话**
+        # （真在问问题的那种不硬掰成出图）。
+        again = _retry_force_prompt(content, named)
+        if again:
+            log.info("[direct] 模型原判回话，点名渠道 %s → 重问后出图：%.60s",
+                     named, (again.get("prompt") or "")[:60])
+            data = again
+            user_prompt = (data.get("prompt") or "").strip()
+            reply = (data.get("reply") or "").strip()
+        else:
+            log.warning("[direct] 点名渠道 %s 仍只回话、没出图：%.80s",
+                        named, reply)
     if not user_prompt:
         # 模型选择不动手（聊天 / 问答 / 只要提示词）→ 把话原样带出去。
-        reply = (data.get("reply") or "").strip()
         if not reply:
             return None
+        # 回话轮以前一点日志都不留，出问题时没法查「它为什么没画」
+        # （2026-10-17 就是靠猜）。这里留一行，带点名渠道和回复开头。
+        log.info("[direct] 模型判回话（点名 %s）：%.60s", named or "无", reply)
         # 聊天回复也落史暂存：qq_bot 送出后 pop 出来写进 history，下一轮的
         # 最近对话里才有 AI 说过的话（生图轮走 [直达生图] 那条路，不经这里）。
         try:
