@@ -1263,9 +1263,12 @@ Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有�
      观众通过自己的手（`pov hands`）参与剧情——我们抓她 → `pov hands` +
      `holding another's wrist` 这类；她对着镜头（对我们）做动作 → 用
      `* viewer` 族标签，但**只有「没有落点」的写法安全**：
-     `looking_at_viewer`（看镜头）、`reaching_towards_viewer`（伸手）之类；
-     `grabbing viewer` / `hugging viewer` 这种**落点在我身上的动作标签整族
-     禁写**（写前先过落点测试，边界与原因见规则 20）。
+     `looking_at_viewer`（看镜头）、`reaching_towards_viewer`（伸手）、
+     `pointing_at_viewer`（指向我）之类；
+     `grabbing viewer` / `hugging viewer` 这种**要碰到我身体的接触类**动作标签
+     整族禁写。**指向 / 招手 / 递东西不算接触类**——它们不需要我的身体在场就
+     成立，照写 `pointing_at_viewer`，别换成 `pointing_at_another`（那是反方向，
+     边界与原因见规则 20）。
    - 「我」永远只以**手或手臂**入画，脸和身体一律不出现；**不许给「我」写
      服饰**（`black hoodie`、`grey pants` 这类词等于在说「画一个穿这些的人」）。
    - 旁白里的「我」必须和画面视角对得上：旁白是「我」的剧情，画面标签里就
@@ -1375,8 +1378,8 @@ Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有�
    必须说得通**同一个瞬间**：镜头在我眼里，我在旁白里的位置，她在镜头里。
 20. **互动动作的双手账：我对她随便写，她对我只写「朝镜头」。**
    画面里只有一双手（`pov hands`）——那是「我」唯一的身体延伸，账要算清。
-   **写任何互动标签前，先过落点测试：这个动作的落点在谁身上？**
-   - **落点在她身上 → 随便写。** 库里 `another's` 族齐全：
+   **写任何互动标签前，先过落点测试：这个动作的落点在谁身上？再过主语测试：这个动作是谁主动做的？**
+   - **落点在她身上 → 随便写（前提：这动作是「我」做的）。** 库里 `another's` 族齐全：
      `holding another's wrist`（攥手腕）、`arm around another's waist`
      （搂腰）、`arm_on_another's_head`（摸头）、`hand on another's cheek`
      （捧脸）、`hand_on_another's_chin`（抬下巴）、`princess carry` +
@@ -1384,11 +1387,19 @@ Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有�
    - **朝镜头、没有落点 → 安全。** `looking_at_viewer`（看我）、
      `reaching_towards_viewer`（朝我伸手）、`running_towards_viewer`
      （朝我跑来）、`walking_towards_viewer`（朝我走来）、`facing_viewer`
-     （面朝我）——画的是「伸过来 / 看过来」的态势，不落到我身体任何部位，
-     模型没有瞎猜的空间。`viewer_holding_*` 族（`viewer_holding_leash`
+     （面朝我）、**`pointing_at_viewer`（指向我）**——画的是「伸过来 /
+     看过来 / 指过来」的态势，不落到我身体任何部位，模型没有瞎猜的空间。
+     招手用 `beckoning`（库里**没有** `beckoning_viewer`，别自造），
+     再配 `looking_at_viewer`。`viewer_holding_*` 族（`viewer_holding_leash`
      牵绳、`viewer_holding_phone` 举手机……）也是**我的手**在拿东西，
      同样安全。
-   - **落点在我身上 → 整族 `*_viewer` 动作标签一律禁写。** 库里这一族有
+     ⚠️ **指向先分清目的地，三种别混**：指我（观众）→ `pointing_at_viewer`；
+     指画面里的物/景（走廊尽头、黑板、货架）→ **只写 `pointing`**
+     （或 `pointing_at_object`），**不许**写 `pointing_at_viewer`——那等于把
+     镜头当成她指的地方；指她自己 → `pointing_at_self`。三种都**不需要**
+     `pov hands`。2026-10-18 排练实测：旁白「手指朝走廊尽头一指」被写成
+     `pointing_at_viewer`，生出来是她在指我。
+   - **落点在我身上 → 只有「接触类」整族禁写。** 库里这一族有
      一整排（`grabbing_viewer`、`hugging_viewer`、`kabedon_on_viewer`、
      `leading_viewer`、`headpatting_viewer`、`feeding_viewer`、
      `kissing_viewer`……），落点全在我身上，**一个都不许写**；库外自造的
@@ -1398,6 +1409,38 @@ Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有�
      《妈妈的小憩》03 格实测，且 `arms around viewer's waist` 还是库外自造
      短语）。这类动作**落点交给旁白**写（「双手抵住我胸口，就是不让我放下」），
      画面只写 `reaching_towards_viewer` + 表情。
+     ⚠️ **这条只管「要碰到我身体」的接触类**（抓 / 抱 / 抵 / 搂 / 壁咚 /
+     喂 / 亲 / 摸头）——它们的共同点是必须有我的身体在场才能成立。
+     **指向 / 招手 / 递东西不是这类**：它们不需要我身体在场就成立，
+     所以 `pointing_at_viewer` 是安全的，**不许**因为「落点在我身上」就把
+     它换成别的说法（2026-10-18《学姐带我逛校园》03 格实测：旁白「手指朝
+     我一指」被写成 `pointing at another`，生出来是**我的手指着她**）。
+   - **`another` 族只能由「我」当主语。** `another` = 「画面里除她以外的
+     另一方」，在本项目里只有一种人：镜头后面的我。所以：
+     旁白主语是**她**、动作朝我 → 写 `*_viewer` 族，**不许写 `another` 族**；
+     旁白主语是**我**、动作落到她身上 → 写 `another` 族 + `pov hands`。
+     反过来写就是主客颠倒：`pointing_at_another` + `pov hands` 同格出现时，
+     模型会把「指」这个动作派给唯一被承诺会动的那只手（我的手）——
+     她那根手指没有落点，直接消失。**写 `another` 之前先问：这动作是我做的吗？
+     不是，就别用 `another`。**
+     ❌ 反例（2026-10-18 排练实测）：旁白「她的手搭上我肩膀」，画面写
+     `hand on another's shoulder` —— 把「我」当成了 `another`（另一个人的落点），
+     画面里我根本没有肩膀，模型只能让她的手搭到她自己肩上，或者补一只我的
+     手出来。这种情况**一个 `another` 族标签都不许写**，写 `reaching_towards_viewer`
+     （朝我伸手）或 `leaning forward` + 表情，落点交给旁白。
+   - **她动手的格子，我的手不许在场。** 这一格是她在指 / 招手 / 递东西 /
+     躲 / 挣 / 缩手——我什么都不做 → 不写 `pov hands`、不写 `1other`、
+     退回 `1girl, solo`。写了 `pov hands` 等于给模型派了一只**必须干活**的
+     手，它会去抢她的动作（2026-10-18 实测：`pov hands` + `pointing at another`
+     生出的就是「我戳她」）。自检一句：**这一格的动作是「我」主动做的吗？**
+     不是 → 画面里没有我的手。
+   - **背身格不许再写「朝镜头」的动作。** `looking back` / `back view` 的格子
+     里写 `pointing_at_viewer` / `reaching_towards_viewer`，等于要求她背对
+     镜头扭身 180° 同时抬手朝镜头——训练数据里几乎没有这种姿态，模型会
+     **保住背身、把动作整个丢掉**（2026-10-18 实测：03 格 `looking back` +
+     想让她的手朝我指，结果她的手垂在裙侧，那只「指着的手」被补到了镜头侧）。
+     二者只能留一个：要么让她正对/侧对镜头（`looking at viewer`）再写指向，
+     要么保持背身、动作交给旁白。同理，背身格别写完整表情（见规范第八条）。
    - **双手独占**：`pov hands` 正在做事（抱着/攥着/捧着）的格子里，她的手绝不
      许再指向我——画面里只有一双手，两组手的动作搅在一起，模型直接把我的
      手画到她身上。她那格只做不指手的事：表情、视线、`struggling`、`panicking`。
@@ -1764,7 +1807,12 @@ def check(text, panels, brief=""):
         problems.append(
             "这些格既写了 `solo`（画面里只有一个人），又要求第二个人或第二方"
             "身体部位（%s）入画：Danbooru 官方计数规则里「一只手也算一个角色」，"
-            "两条指令互斥。把 `solo` 换成 `solo focus`，并补上 `1other`。"
+            "两条指令互斥。**先判这个动作是谁做的**："
+            "① 是「我」主动做的（攥她手腕 / 搂她腰）→ 把 `solo` 换成 `solo focus`，"
+            "补 `1other` + `pov hands` + 那个 `another` 族标签；"
+            "② 是「她」做的、落点在我身上（她的手搭我肩 / 抱我 / 抵我胸）→ "
+            "**删掉那个 `another` 族标签**，退回 `1girl, solo`，落点交给旁白"
+            "（它本该是 `*_viewer` 的「朝镜头」版本，见规则 20）。"
             "⚠️ **不要写 `1boy`**——它会补出一个完整的人（见下一条）。"
             % items)
     banned = banned_tags(text)

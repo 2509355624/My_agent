@@ -278,7 +278,13 @@ bedroom, girl wearing old pink frilled pajamas and pink frilled shorts, bare fee
 | **她在哪由旁白决定，她不自己挪窝** | 旁白只说「传来炒菜声」→ 画面就是从玄关望进厨房的她（`kitchen, stove, cooking, looking back`），❌ 画成 `open door, genkan` 迎在门口——那是把「我」的位置套到她身上、还替她走完了旁白没写的路。她的移动必须是旁白明写的节拍；开口打招呼 ≠ 已经站到面前，可以隔着房间喊 |
 | **旁白写「我」，画面写「她」** | 旁白补充「我」此刻在做什么（语境），**不是画面内容**：「我」坐哪 / 拿什么 / 在哪，一律不生成画面标签，连沙发都不出现。「我坐在沙发上看她换鞋」→ 画面只有她在玄关 `removing_shoes` + 回头。逐标签自查：这个标签是谁的状态？不是她 → 删 |
 | **我对她做的动作随便写** | 落点在画里看得见。`another's` 族齐全：`holding another's wrist` / `arm around another's waist` / `arm_on_another's_head` / `hand on another's cheek` / `hand_on_another's_chin` / `princess carry` + `carrying`……写前查库 |
-| **她对我做的动作只写「朝镜头」** | 安全：视线 `looking_at_viewer`；朝镜头 `reaching_towards_viewer` / `running_towards_viewer`。❌ 落点在我身上的（抵胸 / 搂腰 / 抱我 / 抓我 / 壁咚 / 靠肩）一律不写——画面里没有观众的身体，模型看不见落点会**画反方向**（写她的手抵我胸→画成我的手抵她胸）。落点写进旁白，画面只留 `reaching_towards_viewer` + 表情 |
+| **她对我做的动作只写「朝镜头」** | 安全：视线 `looking_at_viewer`；朝镜头 `reaching_towards_viewer` / `running_towards_viewer` / **`pointing_at_viewer`（指向我）** / `beckoning`（招手，库里没有 `beckoning_viewer`）。❌ **接触类**落点在我身上的一律不写（抵胸 / 搂腰 / 抱我 / 抓我 / 壁咚 / 靠肩）——画面里没有观众的身体，模型看不见落点会**画反方向**（写她的手抵我胸→画成我的手抵她胸）。落点写进旁白，画面只留 `reaching_towards_viewer` + 表情 |
+| **指向 / 招手不属于接触类（2026-10-18 补）** | 它们不需要观众的身体在场就成立，所以 `pointing_at_viewer` 是安全的。**不许**因为「落点在我身上」就把指向换成 `pointing_at_another`——那是相反的一端。《学姐带我逛校园》03 格实测：旁白「手指朝我一指」写成 `pointing at another`，生出来是**我的手指着她** |
+| **指向先分清目的地（2026-10-18 补）** | 指我 → `pointing_at_viewer`；指画面里的物/景（走廊尽头 / 黑板 / 货架）→ 只写 `pointing`（或 `pointing_at_object`），**不许**写 `pointing_at_viewer`；指她自己 → `pointing_at_self`。三种都不需要 `pov hands`。排练实测：旁白「手指朝走廊尽头一指」写成 `pointing_at_viewer`，画出来是她在指我 |
+| **她接触我时不用 `another` 族** | 旁白「她的手搭上我肩膀」→ ❌ `hand on another's shoulder`（`another` 是「我」，画面里我没有肩膀，模型只能让她的手搭到自己肩上，或者补一只我的手）。**一个 `another` 族都不写**，写 `reaching_towards_viewer` / `leaning forward` + 表情，落点交给旁白 |
+| **`another` 族只能由「我」当主语** | `another` = 画面里除她以外的另一方，本规范里只有镜头后的「我」。旁白主语是**她**、动作朝我 → 写 `*_viewer`，**不写 `another` 族**；旁白主语是**我** → `another` 族 + `pov hands`。`pointing_at_another` + `pov hands` 同格 = 我指她。动笔前问一句：**这动作是我做的吗？** 不是就别用 `another` |
+| **她动手的格子我的手不入画** | 她在指 / 招手 / 递 / 躲 / 挣，我什么都不做 → `1girl, solo`，**不写 `pov hands`、不写 `1other`**。写了 `pov hands` 就派给模型一只必须干活的手，它会抢她的动作（03 格实测：`pov hands` + `pointing at another` 生出的就是「我戳她」） |
+| **背身格不写「朝镜头」动作** | `looking back` / `back view` 配 `pointing_at_viewer` / `reaching_towards_viewer`，要求她扭身 180° 抬手朝镜头，训练数据里几乎没有——模型会保住背身、丢掉动作（03 格实测：她的手垂在裙侧，「指」被补到镜头侧的手上）。二者留一个：正对/侧对镜头写指向，或保持背身、动作交给旁白。背身格也别写完整表情 |
 | **双手独占** | `pov hands` 正在做事（抱 / 攥 / 捧）的格子，她的手不许再指向我——两组手的动作会被模型搅成一锅粥。她只做不指手的事：表情 / 视线 / `struggling` / `panicking`。唯一例外：公主抱格她头在镜头边，`arm_around_neck` 这种贴着镜头的能过，落到画面纵深（腰背胸口）的照样翻车 |
 | **交稿前逐格三问** | ① 我的眼睛在哪（旁白里我的位置）？② 她在哪（旁白里她的位置）？③ 画面位置标签写的是 ② 那个地方吗？③ 和 ② 对不上 → 改位置标签，不是改旁白 |
 | **画面＝「我」的眼睛看到的（2026-10-12 补）** | 你是记录者：她站在哪由旁白决定。旁白说她在厨房 → 画面是**从玄关望进厨房**的她（`kitchen, stove, cooking`），**不是** `standing, doorway`（那是把「我」进门的位置套到她身上）；「我」的动作（推门/走近）只进旁白，绝不变成她的标签；她不在视野的瞬间不成格——让旁白推进到她入画，或镜头已经对着她 |
@@ -288,6 +294,10 @@ bedroom, girl wearing old pink frilled pajamas and pink frilled shorts, bare fee
 2026-10-11 同类事故：03 格写 `1girl, 1boy` + 男装，凭空多出一个和前两格接不上
 的男生。旧版「人称第一格定死、无 pov 算第三人称」的规则给了双人剧本留口子，
 现全篇统一第一人称，口子封死。
+2026-10-18 同类事故：《学姐带我逛校园》03 格旁白是「她手指朝我一指」，画面写成
+`pov hands` + `pointing at another` + `looking back`，生出来是**我的手戳她**——
+`another` 与 `pov hands` 争同一只手，`looking back` 又让她的指向不可能成立。
+结论：方向不是靠词义猜的，是靠**主语 + 手在不在场**定的。
 
 ---
 

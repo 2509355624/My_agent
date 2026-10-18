@@ -1192,8 +1192,10 @@ class PromptTest(unittest.TestCase):
                      "facing_viewer", "viewer_holding_leash",
                      "viewer_holding_phone"):
             self.assertIn(safe, p)
-        # 按族禁：整族 *_viewer 动作标签 + 库外自造短语
-        self.assertIn("整族 `*_viewer` 动作标签一律禁写", p)
+        # 按族禁：接触类整族 *_viewer 动作标签 + 库外自造短语
+        self.assertIn("只有「接触类」整族禁写", p)
+        self.assertIn("`pointing_at_viewer`（指向我）", p)
+        self.assertIn("指向 / 招手 / 递东西不是这类", p)
         for bad in ("grabbing_viewer", "hugging_viewer", "kabedon_on_viewer",
                     "leading_viewer", "headpatting_viewer", "feeding_viewer",
                     "kissing_viewer", "arms around viewer's waist"):
@@ -1202,6 +1204,32 @@ class PromptTest(unittest.TestCase):
         self.assertNotIn("（抓我们的手）", p)
         self.assertNotIn("这族标签库里齐全", p)
         self.assertIn("边界与原因见规则 20", p)
+
+    def test_rule20_direction_by_subject_not_landing(self):
+        """规则 20 补丁（2026-10-18）：方向靠「主语 + 手在不在场」定，不靠词义猜。
+
+        《学姐带我逛校园》03 格实测：旁白「她手指朝我一指」被写成
+        `pov hands` + `pointing_at_another` + `looking back`，生出来是
+        「我的手戳她」——`another` 与 `pov hands` 争同一只手，`looking back`
+        又让她的指向不可能成立。三条对应的收口必须写进提示词。
+        """
+        p = comic_agent._system_prompt(3)
+        # ① pointing_at_viewer 进安全区，且明确不属于接触类
+        self.assertIn("pointing_at_viewer", p)
+        self.assertIn("招手用 `beckoning`", p)
+        self.assertIn("别自造", p)
+        # ② another 族只能由「我」当主语
+        self.assertIn("`another` 族只能由「我」当主语", p)
+        self.assertIn("这动作是我做的吗", p)
+        # ③ 她动手的格子我的手不入场
+        self.assertIn("她动手的格子，我的手不许在场", p)
+        self.assertIn("这一格的动作是「我」主动做的吗", p)
+        # ④ 背身格不写朝镜头动作
+        self.assertIn("背身格不许再写「朝镜头」的动作", p)
+        self.assertIn("保住背身、把动作整个丢掉", p)
+        # 补正 / 讨论两路自动同步（切块取自同一出处）
+        self.assertIn("背身格不许再写", comic_agent._fix_system_prompt())
+        self.assertIn("背身格不许再写", comic_agent._chat_system_prompt())
 
     def test_narrator_lock_viewer_is_camera_body(self):
         """旁白锁 A（2026-10-12 晚拍板）：`标签:` 里的「我」＝观众＝镜头本体，
@@ -1234,7 +1262,8 @@ class PromptTest(unittest.TestCase):
             self.assertIn("画面里没有我的身体，模型看不见落点", prompt)
             # 规则 20 收口后的按族禁 + 落点测试，两个改稿 AI 都得带
             self.assertIn("先过落点测试", prompt)
-            self.assertIn("整族 `*_viewer` 动作标签一律禁写", prompt)
+            self.assertIn("只有「接触类」整族禁写", prompt)
+            self.assertIn("pointing_at_viewer", prompt)
             self.assertIn("viewer_holding", prompt)
             # 旁白锁 A 同步进改稿 AI
             self.assertIn("旁白锁", prompt)
