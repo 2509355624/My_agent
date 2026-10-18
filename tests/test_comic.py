@@ -1168,6 +1168,66 @@ class UpdatePanelSceneTest(unittest.TestCase):
         self.assertEqual(task2.panels[0].state, "pending")   # 契约自动作废旧图
 
 
+class PortraitModeLayoutTest(unittest.TestCase):
+    """切到生图模式要整页换布局（2026-10-18）。
+
+    用户原话：「我希望切换到写真模式的时候，界面换一下，不然我之前跑剧本，
+    然后我换到写真台，要往下拖好久才能看到写真」。
+
+    原来 `switchMode()` 只换了女主输入框和按钮文案，剧本正文 / 补正报告 /
+    修订助手 / 渲染参数 / 槽位五块全留着，写真卡被压到整页最底。
+    """
+
+    def _page(self):
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "web", "comic_studio.html")
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+
+    def _fn(self, page, head):
+        m = re.search(head + r"\(.*?\) \{(.+?)\n\}", page, re.S)
+        self.assertIsNotNone(m, "找不到 %s 的函数体" % head)
+        return m.group(1)
+
+    def test_portrait_card_sits_above_render_card(self):
+        """写真卡必须在渲染参数卡**之前**，否则生图模式还得往下拖一屏。"""
+        page = self._page()
+        self.assertLess(page.index('id="portraitCard"'),
+                        page.index('id="renderCard"'))
+
+    def test_script_only_blocks_hidden_in_portrait_mode(self):
+        body = self._fn(self._page(), "function applyMode")
+        for eid in ("script", "scriptOps", "chatBox", "fixPanel",
+                    "slotCard", "prevTask"):
+            self.assertIn("getElementById('%s')" % eid, body,
+                          "applyMode 没管 %s，生图模式下它还会占着版面" % eid)
+        self.assertIn("'none'", body)
+
+    def test_portrait_card_shown_even_without_shots(self):
+        """生图模式下列表为空也要露卡片——空态要看得见，否则像是坏了。"""
+        body = self._fn(self._page(), "function applyMode")
+        self.assertIn("PORTRAIT_SHOTS", body)
+        self.assertIn("(p || PORTRAIT_SHOTS > 0)", body)
+
+    def test_switch_mode_calls_apply_mode(self):
+        body = self._fn(self._page(), "function switchMode")
+        self.assertIn("applyMode()", body)
+
+    def test_mode_survives_reload(self):
+        """切到生图后刷新又跳回剧本布局，等于白切一次。"""
+        page = self._page()
+        self.assertIn("localStorage.setItem(LS_MODE", page)
+        self.assertIn("savedMode()", page)
+
+    def test_load_task_refills_portrait_grid(self):
+        """切到跑过写真的任务要真把写真画出来。
+
+        原来 loadTaskUI 只切卡片显隐、不填内容，切过去是一张空网格。
+        """
+        body = self._fn(self._page(), "async function loadTaskUI")
+        self.assertIn("renderPortraits(d.portraits", body)
+
+
 class TaskDirTitleTest(unittest.TestCase):
     """任务目录名带标题（2026-10-18）。
 

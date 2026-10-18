@@ -130,7 +130,7 @@
       <span style="color:var(--text-dim);font-size:12px">编剧模型</span>
       <select id="prov" style="width:140px" onchange="loadModels()" title="用哪家模型写剧本"></select>
       <select id="model" style="width:200px" title="写剧本用的具体模型（留空 = 该家默认）"></select>
-      <span style="color:var(--text-dim);font-size:12px;margin-left:6px">接上一集</span>
+      <span id="prevLabel" style="color:var(--text-dim);font-size:12px;margin-left:6px">接上一集</span>
       <select id="prevTask" style="width:230px;max-width:40vw"
               title="选了就把那一集的气泡和旁白当前情，本集接着往下写（不重演、关系延续）">
         <option value="">不接——全新一集</option>
@@ -158,6 +158,22 @@
       <button class="btn" id="btnSave" onclick="saveScript(false)">只保存</button>
       <button class="btn primary" id="btnStart" onclick="saveScript(true)">确认开跑（渲染全部场景图）</button>
     </div>
+  </div>
+
+  <!-- 写真卡放在①卡正下方（2026-10-18）：原来它在整页最底下，切到生图模式后
+       上面还压着剧本正文 / 补正报告 / 修订助手 / 渲染参数 / 槽位五块，用户要
+       「往下拖好久才能看到写真」。剧本模式下它是 display:none，位置在这里不
+       影响剧本模式的观感。 -->
+  <div class="card" id="portraitCard" style="display:none">
+    <h2>写真 · 单人写真集</h2>
+    <div style="color:var(--text-dim);font-size:12px;margin-bottom:10px">
+      生图模式的产物：提示词员把「女主设定 + 需求」写成 N 条纯画面（无视角、无剧情、无观众、画面只有女主一人），
+      每条各出一张。走 anima-line 渠道——下面的渲染参数卡（LoRA / 采样 / 放大 / 分辨率）对它们同样生效。
+      对哪张点「🔁 换种子」就重跑哪张，其余不动。
+    </div>
+    <div id="portraitJob"></div>
+    <div id="portraitMeta" style="color:var(--text-dim);font-size:12px;margin-bottom:8px"></div>
+    <div id="portraitGrid" class="grid"><div class="empty">还没有写真——在上面切到「生图」模式写句需求，或对已有任务点下方刷新</div></div>
   </div>
 
   <div class="card" id="renderCard">
@@ -205,7 +221,7 @@
     </div>
   </div>
 
-  <div class="card">
+  <div class="card" id="slotCard">
     <h2>② 槽位 · 逐格生成与修补</h2>
     <div style="color:var(--text-dim);font-size:12px;margin-bottom:10px">
       点图可放大看细节。每格能手输一句「要 Qwen 改什么」——源图是这一格**当前成品**，
@@ -219,18 +235,6 @@
       <span id="progress" style="color:var(--text-dim);font-size:12px"></span>
     </div>
     <div id="grid" class="grid"><div class="empty">还没有任务——先在上面生成剧本</div></div>
-  </div>
-
-  <div class="card" id="portraitCard" style="display:none">
-    <h2>③ 写真 · 单人写真集</h2>
-    <div style="color:var(--text-dim);font-size:12px;margin-bottom:10px">
-      生图模式的产物：提示词员把「女主设定 + 需求」写成 N 条纯画面（无视角、无剧情、无观众、画面只有女主一人），
-      每条各出一张。走 anima-line 渠道——上面的渲染参数卡（LoRA / 采样 / 放大 / 分辨率）对它们同样生效。
-      对哪张点「🔁 换种子」就重跑哪张，其余不动。
-    </div>
-    <div id="portraitJob"></div>
-    <div id="portraitMeta" style="color:var(--text-dim);font-size:12px;margin-bottom:8px"></div>
-    <div id="portraitGrid" class="grid"><div class="empty">还没有写真——在上面切到「生图」模式写句需求，或对已有任务点下方刷新</div></div>
   </div>
 </div>
 <div id="zoom" onclick="zoomClose()"><img alt=""></div>
@@ -377,6 +381,7 @@ async function pollScript() {
   document.getElementById('chatBox').style.display = 'block';
   loadChatHistory();
   loadRenderOpts();                       // 渲染参数卡（这个任务的 render.json）
+  applyMode();                            // 编剧期间可能被切到生图模式，这里再收一次
   toast('剧本已生成：' + TASK);
   finishScript();
   refresh();
@@ -1109,9 +1114,11 @@ async function loadTaskUI(name, prefix) {
       renderFix(d.fix);
     }
   } catch (e) { /* 纯写真任务：没有剧本，正常 */ }
-  document.getElementById('portraitCard').style.display =
-    (d.portraits && d.portraits.length) ? 'block' : 'none';
+  // 写真有就画出来（2026-10-18 补）：原来这里只切卡片显隐、不填内容，切到
+  // 一个跑过写真的任务会看到一张空网格。之后 applyMode 统一按模式决定谁露谁藏。
+  renderPortraits(d.portraits || []);
   await loadRenderOpts(true);
+  applyMode();
   syncTaskPick();
   if (prefix) toast(prefix + '：' + name);
   refresh();
@@ -1144,22 +1151,67 @@ async function bubbleAll() {
 // 逐条 build_t2i_workflow + 渲染参数覆盖 + image_jobs 队列；账本 prompts.json
 // 逐条落盘，轮询即进度。单张换种子重跑是同步的（一张图几十秒，按钮转圈等）。
 let PORTRAIT_JOB = null;
+// 这批任务已经出了几张写真。卡片显隐要用它，而不是去数 DOM 子节点。
+let PORTRAIT_SHOTS = 0;
+
+// 上次用的模式（2026-10-18）：切到生图、刷新页面又跳回剧本布局，等于白切一次。
+const LS_MODE = 'comic_mode';
 
 function curMode() {
   return document.querySelector('input[name=mode]:checked').value;
 }
 
-function switchMode() {
+function savedMode() {
+  try { return localStorage.getItem(LS_MODE) === 'portrait' ? 'portrait' : 'script'; }
+  catch (e) { return 'script'; }
+}
+
+// 只换输入框和按钮文案（这部分两种模式共用同一套控件）
+function syncModeInputs() {
   const p = curMode() === 'portrait';
   document.getElementById('heroine').style.display = p ? '' : 'none';
   document.getElementById('character').style.display = p ? 'none' : '';
   document.getElementById('panels').title = p ? '写真相张数（1~12）' : '格数';
   document.getElementById('panels').max = p ? 12 : 30;
-  const btn = document.getElementById('btnScript');
-  btn.textContent = p ? '生成写真' : '生成剧本';
+  document.getElementById('btnScript').textContent = p ? '生成写真' : '生成剧本';
   document.getElementById('brief').placeholder = p
     ? '想拍什么：花田里回眸、天台看夕阳、教室靠窗午睡……（一次多张，每张换场景/服装/构图）'
     : '视角: 哥哥\n主角: 妹妹\n剧情: 下雨天兄妹俩在公交站躲雨……（前两行是硬约束：视角=镜头后的「我」，男性→pov、女性→female_pov；主角=画面里唯一入画的人）';
+}
+
+function switchMode() {
+  try { localStorage.setItem(LS_MODE, curMode()); } catch (e) { }
+  syncModeInputs();
+  applyMode();
+}
+
+/**
+ * 按当前模式重排整页（2026-10-18 用户提出）。
+ *
+ * 原来切模式只换了女主输入框和按钮文案，剧本正文 / 补正报告 / 修订助手 /
+ * 渲染参数 / 槽位五块全留着，写真卡被压到整页最底——用户的原话是「要往下
+ * 拖好久才能看到写真」。现在生图模式只留：需求卡 → 写真卡 → 渲染参数卡。
+ *
+ * **显隐一律重算，不存快照**：切模式下后台刚好把剧本拉回来，快照就是过期
+ * 状态；而「有没有剧本 / 有没有修图报告」各自都有现成的判据，重算比还原稳。
+ */
+function applyMode() {
+  const p = curMode() === 'portrait';
+  const hasScript = !!document.getElementById('script').value.trim();
+  const showScript = !p && hasScript;
+  document.getElementById('script').style.display = showScript ? 'block' : 'none';
+  document.getElementById('scriptOps').style.display = showScript ? 'flex' : 'none';
+  document.getElementById('chatBox').style.display = showScript ? 'block' : 'none';
+  document.getElementById('fixPanel').style.display =
+    (!p && document.getElementById('fixPanel').innerHTML.trim()) ? 'block' : 'none';
+  // 槽位卡装的是漫画格；「接上一集」只对剧本有意义。生图模式下一并收起。
+  document.getElementById('slotCard').style.display = p ? 'none' : '';
+  document.getElementById('prevLabel').style.display = p ? 'none' : '';
+  document.getElementById('prevTask').style.display = p ? 'none' : '';
+  // 写真卡：生图模式一律露出（没跑过也要看得见空态）；剧本模式下只在确实有
+  // 写真时才挂出来——否则剧本页最上面会多一块空卡。
+  document.getElementById('portraitCard').style.display =
+    (p || PORTRAIT_SHOTS > 0) ? 'block' : 'none';
 }
 
 async function genPortrait() {
@@ -1225,10 +1277,15 @@ function btnFinish() {
 function finishPortrait() { PORTRAIT_JOB = null; btnFinish(); }
 
 function renderPortraits(shots) {
-  const card = document.getElementById('portraitCard');
   const grid = document.getElementById('portraitGrid');
-  if (!shots || !shots.length) { card.style.display = 'none'; return; }
-  card.style.display = 'block';
+  PORTRAIT_SHOTS = (shots || []).length;
+  if (!PORTRAIT_SHOTS) {
+    grid.dataset.sig = '';
+    grid.innerHTML = '<div class="empty">还没有写真——在上面写句需求点「生成写真」</div>';
+    applyMode();               // 空态：生图模式留着卡片，剧本模式收起
+    return;
+  }
+  applyMode();
   const sig = JSON.stringify(shots.map(s => [s.no, s.state, s.seed, s.rev, s.error]));
   if (grid.dataset.sig === sig) return;      // 没变就别重建，避免闪烁
   grid.dataset.sig = sig;
@@ -1359,6 +1416,11 @@ async function uploadScene(no, input) {
   } catch (e) { toast(e.message, true); }
   await refresh();
 }
+
+// 上次用的模式要接回来：切到生图、一刷新又跳回剧本布局，等于白切一次。
+document.querySelector('input[name=mode][value="' + savedMode() + '"]').checked = true;
+syncModeInputs();
+applyMode();
 
 poll();
 loadProviders();
