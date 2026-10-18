@@ -1168,5 +1168,82 @@ class UpdatePanelSceneTest(unittest.TestCase):
         self.assertEqual(task2.panels[0].state, "pending")   # 契约自动作废旧图
 
 
+class TaskDirTitleTest(unittest.TestCase):
+    """任务目录名带标题（2026-10-18）。
+
+    用户原话：「这个编号我看不懂欸，比较好的其实是后面再加一个标题，我们的剧本
+    是有标题的」。目录名 = `C<日期>-<序号>_<标题>`，任务号整段跟着变。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_title_becomes_suffix(self):
+        path = comic._next_task_dir(self.root, title="加了料的饮料")
+        self.assertEqual(os.path.basename(path),
+                         "C%s-01_加了料的饮料"
+                         % comic.datetime.now().strftime("%Y%m%d"))
+
+    def test_no_title_stays_bare(self):
+        name = os.path.basename(comic._next_task_dir(self.root))
+        self.assertRegex(name, r"^C\d{8}-01$")
+
+    def test_illegal_chars_are_stripped(self):
+        """标题里的半角 `? : / * " < > |` 会让 makedirs 失败，必须先清掉。
+
+        只清**半角**——全角 `：` 在 Windows 里是合法字符（中文标题里很常见，
+        清掉反而难看）。所以这里断言只用半角字符。
+        """
+        part = comic._safe_name_part('那杯饮料:续/上?' + '"x"|y*z')
+        for bad in '?:/"|*<>\\':
+            self.assertNotIn(bad, part)
+        self.assertTrue(part.startswith("那杯饮料"))
+
+    def test_fullwidth_colon_kept(self):
+        self.assertIn("：", comic._safe_name_part("那杯饮料：续"))
+
+    def test_trailing_dot_and_space_removed(self):
+        """Windows 不许目录名以点或空格结尾。"""
+        self.assertEqual(comic._safe_name_part("  那杯饮料. . "), "那杯饮料")
+
+    def test_title_is_length_capped(self):
+        part = comic._safe_name_part("很长" * 40)
+        self.assertLessEqual(len(part), 24)
+
+    def test_numbering_skips_both_old_and_new_names(self):
+        """占位判断必须同时认 `-01` 和 `-01_标题`。
+
+        只比完全相等的话，改命名规则的当天就会在已有 `-01_某标题` 旁边
+        再建一个 `-01` 撞车（反过来也一样）。
+        """
+        day = comic.datetime.now().strftime("%Y%m%d")
+        os.makedirs(os.path.join(self.root, "C%s-01_老的一集" % day))
+        name = os.path.basename(comic._next_task_dir(self.root, title="新的一集"))
+        self.assertTrue(name.startswith("C%s-02" % day), name)
+
+    def test_guess_task_id_keeps_full_name(self):
+        """任务号 = 目录名整段，**不截前半段的纯编号**。
+
+        截了的话出图目录名（`web/漫画_<任务号>`）会和目录名对不上，一本漫画的
+        图被拆到两个文件夹。
+        """
+        name = "C20261018-06_加了料的饮料"
+        self.assertEqual(comic._guess_task_id(os.path.join("/x", name)), name)
+
+    def test_plain_id_still_recognised(self):
+        self.assertEqual(comic._guess_task_id("comics/C20261018-01"),
+                         "C20261018-01")
+
+    def test_out_dir_follows_task_id(self):
+        """出图目录跟着任务号走 → `web/漫画_C20261018-06_加了料的饮料`。"""
+        meta, panels = comic.parse_script_text(
+            "# 标题：加了料的饮料\n\n## 01\n画面: 1girl\n气泡: 嗯\n")
+        task = comic.Task("/x/C20261018-06_加了料的饮料/script.md", meta, panels)
+        self.assertEqual(comic._out_dir_for(task),
+                         "web/漫画_C20261018-06_加了料的饮料")
+
+
 if __name__ == "__main__":
     unittest.main()

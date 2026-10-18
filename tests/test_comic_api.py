@@ -36,6 +36,7 @@ class ComicScriptApiTest(unittest.TestCase):
     def setUp(self):
         self.c = main.app.test_client()
         self.tmp = tempfile.mkdtemp(prefix="comic_api_")
+        self.last_title = None
         with comic_api._SCRIPT_LOCK:
             comic_api._SCRIPT_JOBS.clear()
         # 任务目录钉到临时目录：绝不能让测试往真实 comics/ 里写东西
@@ -49,7 +50,10 @@ class ComicScriptApiTest(unittest.TestCase):
             comic_api._SCRIPT_JOBS.clear()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def _mk_dir(self, root=None):
+    def _mk_dir(self, root=None, title=""):
+        # 2026-10-18 起 `_next_task_dir` 多收一个 title（目录名带标题），
+        # mock 的签名必须跟着长，否则 kwarg 对不上直接 TypeError。
+        self.last_title = title
         return os.path.join(self.tmp, "C20261011-01")
 
     def _wait(self, job, timeout=5.0):
@@ -140,6 +144,33 @@ class ComicScriptApiTest(unittest.TestCase):
         kw = m.call_args.kwargs
         self.assertIsNone(kw.get("provider"))
         self.assertIsNone(kw.get("model"))
+
+    def test_task_dir_named_with_script_title(self):
+        """建目录时把剧本标题传下去（2026-10-18 用户要的「编号后面加标题」）。
+
+        用户是在资源管理器里翻 `漫画_C20261018-0X` 认不出是哪一集才提的这个需求，
+        所以标题必须真的传进 `_next_task_dir`，不是只在界面上显示。
+        """
+        with mock.patch.object(comic_agent, "write_script",
+                               return_value=GOOD_SCRIPT):
+            d = self._post(panels=1)
+            self._wait(d["job"])
+        self.assertEqual("测试", self.last_title)
+
+    def test_title_taken_from_fixed_script_not_original(self):
+        """标题取**补正后**的稿子：补正员有权改标题，目录该跟着最终稿走。"""
+        fixed = "# 标题：改过的标题\n\n## 01\n画面: 1girl, solo, pov\n气泡: 一\n标签1: x\n"
+        with mock.patch.object(comic_agent, "write_script",
+                               return_value=GOOD_SCRIPT), \
+             mock.patch.object(comic_agent, "fix_script",
+                               return_value={"text": fixed, "issues": [],
+                                             "diff": [], "adopted": True,
+                                             "status": "ok", "warnings": [],
+                                             "audit": [], "skipped": False,
+                                             "model": ""}):
+            d = self._post(panels=1)
+            self._wait(d["job"])
+        self.assertEqual("改过的标题", self.last_title)
 
     def test_failure_reported_as_error(self):
         with mock.patch.object(comic_agent, "write_script",
@@ -954,6 +985,19 @@ class TasksApiTest(unittest.TestCase):
     def test_dir_without_script_skipped(self):
         names = [t["task"] for t in self.c.get("/api/comic/tasks").get_json()["tasks"]]
         self.assertNotIn("C20261018-11", names)
+
+    def test_suffixed_title_dir_sorts_by_number(self):
+        """带标题的目录（`C20261018-12_加了料的饮料`）也要按 12 参与排序。
+
+        排序正则锚了 `$` 的话，它们全解析不出来、一律掉到最后，而且是**静默**
+        的——下拉看着只是"顺序怪怪的"，没人会想到是正则问题。
+        """
+        self._mk("C20261018-12_加了料的饮料",
+                 "# 标题：加了料的饮料\n\n## 01\n画面: 1girl, solo, pov\n"
+                 "气泡: （女）一\n标签1: a\n")
+        names = [t["task"] for t in self.c.get("/api/comic/tasks").get_json()["tasks"]]
+        self.assertEqual("C20261018-12_加了料的饮料", names[0])
+        self.assertEqual("C20261018-10", names[1])
 
 
 class MarkPendingFailedTest(unittest.TestCase):

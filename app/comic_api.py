@@ -312,9 +312,10 @@ def api_comic_tasks():
         out.append(item)
 
     def _key(it):
-        # 任务号 CYYYYMMDD-NN：按「日期 + 序号数值」排，不能直接比字符串
-        # （"C20261018-10" 会排到 "C20261018-9" 前面）。
-        m = re.match(r"^C(\d{8})-(\d+)$", it["task"])
+        # 任务号 CYYYYMMDD-NN[_标题]：按「日期 + 序号数值」排，不能直接比字符串
+        # （"C20261018-10" 会排到 "C20261018-9" 前面）。**不锚 `$`**：带标题的
+        # 目录 `C20261018-06_那杯饮料` 也得按 6 参与排序，否则它们全掉到最后。
+        m = re.match(r"^C(\d{8})-(\d+)", it["task"])
         return (m.group(1), int(m.group(2))) if m else ("0", 0)
 
     out.sort(key=_key, reverse=True)
@@ -381,9 +382,8 @@ def api_comic_script():
                 brief, panels=panels_n, character=character,
                 provider=provider, model=model, progress=_progress,
                 prev=prev_text)
-            # 目录在剧本写好后才建：失败的 job 不留空目录。
-            path = comic._next_task_dir(_COMICS_ROOT)
-            os.makedirs(path, exist_ok=True)
+            # 目录**不再在这里建**：名字要带剧本标题，得等拿到稿子（见下面
+            # `final` 那一段）。失败的 job 仍然不留空目录。
 
             # ── 独立第二步：内容补正（2026-10-11 十轮）──────────────────
             # 编剧的上下文长（十几轮查库），实测三格全漏发色；补正拿干净稿 +
@@ -403,6 +403,17 @@ def api_comic_script():
                        "status": "error", "warnings": ["补正异常：%s" % exc],
                        "audit": [], "skipped": False, "model": ""}
             final = fix.get("text") or text
+            # 目录带标题（2026-10-18）：`C20261018-06_加了料的饮料`。标题只有
+            # 拿到剧本才知道，所以**建目录这一步要等在这里**——原来那句更靠前
+            # 的 makedirs 已挪下来。解析不出标题就退回纯编号，不影响落盘。
+            title = ""
+            try:
+                meta, _ = comic.parse_script_text(final)
+                title = (meta or {}).get("title", "")
+            except Exception:               # 解析失败不该挡住落盘
+                comic.log.warning("取标题失败 job=%s，目录退回纯编号", job)
+            path = comic._next_task_dir(_COMICS_ROOT, title=title)
+            os.makedirs(path, exist_ok=True)
             with open(os.path.join(path, "script_original.md"), "w",
                       encoding="utf-8") as f:
                 f.write(text + "\n")

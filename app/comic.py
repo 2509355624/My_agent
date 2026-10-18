@@ -376,7 +376,27 @@ _SPEAKER_BRACKET_RE = re.compile(
 _SPEAKER_COLON_RE = re.compile(r"^\s*([女男我她他哥妹][生哥妹]?)\s*[:：]\s*")
 _TITLE_RE = re.compile(r"^\s*#\s*(?:标题\s*[:：]\s*)?(.+?)\s*$")
 _TASKID_RE = re.compile(r"^\s*任务号\s*[:：]\s*(.+?)\s*$")
-_TASKID_FORMAT = re.compile(r"^C\d{8}-\d+$")
+# 任务目录名：`C<日期>-<序号>`，**后面可以再挂一段标题**（2026-10-18 用户提出
+# 「这个编号我看不懂欸，比较好的其实是后面再加一个标题」）。后缀是可选的，
+# 老目录（纯编号）照样认，不用迁移。
+_TASKID_FORMAT = re.compile(r"^C\d{8}-\d+(?:_.+)?$")
+# Windows 目录名禁用字符 + 控制字符。标题是模型写的，可能带 `?` `：` 这些，
+# 直接拿来当目录名会创建失败（或建出一个打不开的目录）。
+_BAD_NAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+
+def _safe_name_part(text, limit=24):
+    """把标题压成能当目录名的一段：去掉禁用字符、合并空白、限长。
+
+    限长是为了别把整条路径顶爆（Windows 260 的上限，`output/web/漫画_…/<渠道>/
+    Anima_00042_.png` 已经吃掉一大半）。截断后要去掉结尾的点和空格——Windows
+    不允许目录名以它们收尾，`os.makedirs` 会报错。
+    """
+    s = _BAD_NAME_CHARS.sub(" ", str(text or ""))
+    s = re.sub(r"\s+", " ", s).strip().strip(". ")
+    if limit and len(s) > limit:
+        s = s[:limit].rstrip(". ")
+    return s
 
 
 def _field_of(raw):
@@ -622,6 +642,13 @@ class Panel:
 
 
 def _guess_task_id(dirpath):
+    """目录名 → 任务号。**目录名整段原样返回**（含 `_标题` 后缀）。
+
+    为什么不截出前半段的纯编号：任务号同时是出图目录名
+    （`_out_dir_for` 拼成 `web/漫画_<任务号>`），两边必须字字相同，否则一本漫画
+    的图会被拆到"编号"和"编号_标题"两个目录里，旧图取不到。所以带标题的目录，
+    任务号本身就是带标题的那个名字。
+    """
     name = os.path.basename(os.path.normpath(dirpath))
     if _TASKID_FORMAT.match(name):
         return name
@@ -750,6 +777,9 @@ def _out_dir_for(task):
     任务号只有渲染这一层知道（`_submit` 是从各个 render_* 里调下来的），所以
     显式传给 `enqueue(out_dir=...)`。不传就落到 `web/生图页`，一本漫画的格子
     会跟生图页的图混在一起，正是用户抱怨「找图贼麻烦」的那种局面。
+
+    任务号带标题时目录也跟着带（`漫画_C20261018-06_加了料的饮料`）——用户在
+    资源管理器里翻图，光看编号认不出是哪一集。
     """
     tid = str(getattr(task, "task_id", "") or "").strip() if task else ""
     # 没有 task 的调用者是跑图台（`gen_api._run` 复用 `_submit`）：返回空串让
@@ -1065,13 +1095,30 @@ def render_manual(task, p, instruction, denoise=I2I_DENOISE):
 
 # ─── 跑批 ─────────────────────────────────────────────
 
-def _next_task_dir(root="comics"):
-    """按 `C<日期>-<序号>` 找第一个还没被占用的任务目录名。"""
+def _next_task_dir(root="comics", title=""):
+    """按 `C<日期>-<序号>[_标题]` 找第一个还没被占用的任务目录名。
+
+    `title` 是剧本的 `# 标题：…`（2026-10-18 用户提出：光看编号认不出是哪一集，
+    "比较好的其实是后面再加一个标题"）。给了就拼成 `C20261018-06_加了料的饮料`，
+    空白/非法字符会被清掉；没给就还是纯编号（写真任务没有标题）。
+
+    ⚠️ 占位判断必须认**两种**形态：老目录是 `C20261018-01`，新目录是
+    `C20261018-01_xxx`。只比完全相等的话，改完命名规则后第一天就会在 `-01`
+    旁边再建一个 `-01_标题` 撞车。
+    """
     day = datetime.now().strftime("%Y%m%d")
+    try:
+        names = set(os.listdir(root)) if os.path.isdir(root) else set()
+    except OSError:
+        names = set()
     n = 1
-    while os.path.exists(os.path.join(root, "C%s-%02d" % (day, n))):
+    while True:
+        base = "C%s-%02d" % (day, n)
+        if not any(x == base or x.startswith(base + "_") for x in names):
+            break
         n += 1
-    return os.path.join(root, "C%s-%02d" % (day, n))
+    suffix = _safe_name_part(title)
+    return os.path.join(root, base + ("_" + suffix if suffix else ""))
 
 
 def run(script_path, only=None, silver_only=False, redo=False,

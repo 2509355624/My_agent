@@ -1071,7 +1071,10 @@ async function loadTasks() {
 
 function taskLabel(t) {
   const st = t.panels ? (t.done + '/' + t.panels + ' 完成') : '空';
-  return t.task + (t.title ? '｜' + t.title : '') + '（' + st + '）';
+  // 2026-10-18 起目录名自带标题（`C20261018-06_那杯饮料`），标题就别再拼一遍
+  // ——`C20261018-06_那杯饮料｜那杯饮料（3/10 完成）` 又长又吵。
+  const dup = t.title && t.task.indexOf(t.title) >= 0;
+  return t.task + (t.title && !dup ? '｜' + t.title : '') + '（' + st + '）';
 }
 
 function syncTaskPick() {
