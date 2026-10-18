@@ -10,8 +10,8 @@ import ipaddress
 import socket
 import time
 import requests
-from flask import (Flask, request, jsonify, send_from_directory, Response,
-                   stream_with_context)
+from flask import (Flask, request, jsonify, send_from_directory, send_file,
+                   Response, stream_with_context)
 from app import agents as agent_store
 from app import cancel as cancel_mod
 from app import comfy_out
@@ -33,7 +33,8 @@ from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         CONTEXT_BUDGET, IMAGE_AUDIT_PROMPT_MAX,
                         QQ_PRIVATE_ENABLE, QQ_WHITELIST_USERS,
                         VISION_PROMPT_MAX, VISION_PROVIDER, VISION_MODEL,
-                        QQ_AGENT_ID, provider_vision)
+                        QQ_AGENT_ID, provider_vision,
+                        COMFYUI_OUTPUT_DIR)
 from app.skills import list_skills, load_skill
 from app import model_catalog
 from app.agent_prompt import build_stable_prompt, sync_session_system
@@ -393,14 +394,50 @@ def clear():
     return jsonify({"ok": True, "agent": agent_id})
 
 
+def _local_output_file(rel):
+    """相对路径 → ComfyUI output 目录里的真实文件；没有就返回 None。
+
+    2026-10-18 加。`/api/image` 原来是**每一次都绕 ComfyUI 的 `/view`** 取图，
+    图明明就在本机磁盘上。代价是 ComfyUI 一不可用，页面上所有图立刻变破图——
+    实测 21:05 那次：图 21:05:00 已经写盘，21:05:01 RAM 守卫重启 ComfyUI，
+    浏览器 21:05:04 / 21:05:15 两次请求全 404，21:05:31 重启完成后同样的地址
+    就 200 了。而 `<img>` 拿到 404 不会自己重试，用户看到的就是「生成成功、
+    前端显示失败」。根子在于**取图不该依赖一个随时会重启的服务**。
+
+    返回 None 的两种情形都退回 `/view` 代理：`COMFYUI_OUTPUT_DIR` 没配（远端
+    ComfyUI 的部署，本机压根没有 output 目录），或者文件不在那儿。
+    `..` 一律不认——那不是我们写出去的路径。
+    """
+    root = (COMFYUI_OUTPUT_DIR or "").strip()
+    if not root:
+        return None
+    parts = [x for x in str(rel or "").replace("\\", "/").split("/") if x]
+    if not parts or ".." in parts:
+        return None
+    root_abs = os.path.abspath(root)
+    path = os.path.abspath(os.path.join(root_abs, *parts))
+    try:
+        if os.path.commonpath([path, root_abs]) != root_abs:   # 越界
+            return None
+    except ValueError:              # 不同盘符时 commonpath 会抛
+        return None
+    return path if os.path.isfile(path) else None
+
+
 @app.route("/api/image/<path:filename>")
 def serve_image(filename):
-    """从 ComfyUI 输出目录代理图片。
+    """从 ComfyUI 输出目录取图。
 
     `path:` 是 2026-10-18 加的：输出图按会话分目录后，地址变成
     `/api/image/web/生图页/silver/Anima_1_.png`，普通 `<filename>` 匹配不到斜杠。
-    取图时拆成 filename + subfolder 交给 ComfyUI 的 `/view`。
+
+    取图顺序：**先读本地磁盘**（`COMFYUI_OUTPUT_DIR`，`send_file` 带条件请求，
+    大图还能断点续传），磁盘上没有才代理到 ComfyUI 的 `/view`。反过来做的代价
+    见 `_local_output_file` 的注释——ComfyUI 重启窗口里整页图全变破图。
     """
+    local = _local_output_file(filename)
+    if local:
+        return send_file(local, conditional=True)
     try:
         name, sub = comfy_out.split_rel(filename)
         params = {"filename": name}

@@ -490,6 +490,103 @@ class SafeBaseFilenameTest(unittest.TestCase):
         self.assertEqual(_safe_base_filename("...hidden.txt"), "hidden.txt")
 
 
+class ServeImageTest(unittest.TestCase):
+    """`/api/image/<path>` 取图（2026-10-18）。
+
+    真实事故：21:05:00 图已写盘，21:05:01 RAM 守卫重启 ComfyUI，浏览器 21:05:04
+    和 21:05:15 两次请求全 404（当时这条路由**只会**代理 ComfyUI 的 `/view`），
+    21:05:31 重启完成后同样的地址就 200 了。`<img>` 拿到 404 不会自己重试，
+    用户看到的是「生成成功、前端显示失败」。
+
+    所以这里的核心断言是第三条：**ComfyUI 连不上时，磁盘上有图就必须照样 200**。
+    """
+
+    # 1x1 透明 PNG
+    PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00"
+           b"\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc"
+           b"\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        self.addCleanup(self.tmp.cleanup)
+        self.c = main.app.test_client()
+
+    def _put(self, rel):
+        path = os.path.join(self.root, *rel.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(self.PNG)
+        return path
+
+    def _get(self, url):
+        """test_client 的响应要显式 close：`send_file` 会一直握着文件句柄，
+        不关的话每个用例都刷一条 ResourceWarning。"""
+        r = self.c.get(url)
+        self.addCleanup(r.close)
+        return r
+
+    def test_served_from_disk(self):
+        self._put("web/生图页/hd_3_gloss/Anima_00001_.png")
+        with mock.patch.object(main, "COMFYUI_OUTPUT_DIR", self.root), \
+             mock.patch("app.main.requests") as rq:
+            r = self._get("/api/image/web/生图页/hd_3_gloss/Anima_00001_.png")
+        self.assertEqual(200, r.status_code)
+        self.assertEqual(self.PNG, r.data)
+        rq.get.assert_not_called()          # 有本地副本就绝不绕 ComfyUI
+
+    def test_still_served_when_comfyui_is_down(self):
+        """ComfyUI 在重启窗口里连不上 —— 图仍然要能看。"""
+        self._put("web/生图页/silver/Anima_00009_.png")
+        with mock.patch.object(main, "COMFYUI_OUTPUT_DIR", self.root), \
+             mock.patch("app.main.requests") as rq:
+            rq.get.side_effect = ConnectionError("ComfyUI 正在重启")
+            r = self._get("/api/image/web/生图页/silver/Anima_00009_.png")
+        self.assertEqual(200, r.status_code)
+        self.assertEqual(self.PNG, r.data)
+
+    def test_falls_back_to_proxy_when_missing_locally(self):
+        """本地没有（远端 ComfyUI 部署）才走 `/view` 代理，subfolder 要带上。"""
+        self.assertFalse(main._local_output_file("web/生图页/silver/nope.png"))
+        fake = mock.Mock()
+        fake.headers = {"content-type": "image/png"}
+        fake.iter_content.return_value = [self.PNG]
+        with mock.patch.object(main, "COMFYUI_OUTPUT_DIR", self.root), \
+             mock.patch("app.main.requests") as rq:
+            rq.get.return_value = fake
+            r = self._get("/api/image/web/生图页/silver/nope.png")
+        self.assertEqual(200, r.status_code)
+        params = rq.get.call_args.kwargs["params"]
+        self.assertEqual("nope.png", params["filename"])
+        self.assertEqual("web/生图页/silver", params["subfolder"])
+
+    def test_proxy_when_output_dir_unset(self):
+        with mock.patch.object(main, "COMFYUI_OUTPUT_DIR", ""), \
+             mock.patch("app.main.requests") as rq:
+            rq.get.side_effect = ConnectionError("no comfy")
+            r = self._get("/api/image/web/生图页/silver/x.png")
+        self.assertEqual(404, r.status_code)
+        rq.get.assert_called_once()
+
+    def test_path_traversal_never_reads_outside(self):
+        """`..` 一律不认：既不能读到 output 外面，也不能靠它绕过代理。"""
+        secret = os.path.join(os.path.dirname(self.root), "secret.png")
+        self.assertIsNone(main._local_output_file("../secret.png"))
+        self.assertIsNone(main._local_output_file("web/../../secret.png"))
+        self.assertFalse(os.path.exists(secret))
+
+    def test_absolute_escape_rejected(self):
+        with mock.patch.object(main, "COMFYUI_OUTPUT_DIR", self.root):
+            self.assertIsNone(main._local_output_file("C:/Windows/win.ini"))
+
+    def test_bare_filename_still_works(self):
+        """老图还在 output 根目录，地址是 `/api/image/Anima_1_.png`（无子目录）。"""
+        self._put("Anima_00001_.png")
+        with mock.patch.object(main, "COMFYUI_OUTPUT_DIR", self.root):
+            self.assertEqual(200,
+                             self._get("/api/image/Anima_00001_.png").status_code)
+
+
 class AgentAdminApiTest(unittest.TestCase):
     """后台管理接口：读 agent 配置、保存人设与模型。
 
