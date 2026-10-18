@@ -72,6 +72,12 @@
   button.ok:hover { background: rgba(74, 222, 128, 0.12); }
   button.no { border-color: var(--error); color: var(--error); }
   button.no:hover { background: rgba(248, 113, 113, 0.12); }
+  /* 处理中：立刻变暗 + 禁止再点（过审要等真正发完图，一两秒） */
+  button:disabled { opacity: 0.45; cursor: default; }
+  button:disabled:hover { border-color: var(--border); }
+  button.ok:disabled:hover { background: transparent; }
+  button.no:disabled:hover { background: transparent; }
+  .card.busy { opacity: 0.7; }
   label.toggle { font-size: 12px; color: var(--text-dim); display: flex; gap: 5px; align-items: center; cursor: pointer; }
   .hint { font-size: 12px; color: var(--text-mute); }
   .err { color: var(--error); }
@@ -103,7 +109,21 @@
   .reason .cat { color: var(--accent); }
   .reason .warn { color: #f0c060; }
   .kv { font-size: 12px; color: var(--text-mute); word-break: break-all; }
-  .prompt { font-size: 12px; color: var(--text-dim); word-break: break-all; margin-top: 4px; white-space: pre-wrap; }
+  /* 提示词默认折叠：两行封顶，想看全的点「展开全文」。生图提示词动辄上千
+     字符，铺开以后两个按钮被推到屏幕外，得往下滑半天才点得到。 */
+  .prompt { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+  .prompt-label { color: var(--text-mute); }
+  .prompt-text {
+    word-break: break-all; white-space: pre-wrap;
+    display: -webkit-box; -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2; overflow: hidden;
+  }
+  .prompt.open .prompt-text { display: block; -webkit-line-clamp: unset; }
+  .prompt-toggle {
+    display: inline-block; margin-top: 2px; font-size: 11px;
+    color: var(--accent); cursor: pointer; user-select: none;
+  }
+  .prompt-toggle:hover { text-decoration: underline; }
   .actions { margin-top: 10px; display: flex; gap: 8px; }
   .decided { font-size: 12px; margin-top: 8px; }
   .decided.approved { color: var(--success); }
@@ -196,6 +216,40 @@ function render(items) {
   for (const it of items) renderItem(box, it);
 }
 
+// 提示词：两行封顶 + 「展开全文」。
+// 只有真被截断时才给按钮（短提示词多一行按钮是噪音）；量不到就按长度兜底。
+function renderPrompt(body, text) {
+  const wrap = document.createElement('div');
+  wrap.className = 'prompt';
+
+  const label = document.createElement('div');
+  label.className = 'prompt-label';
+  label.textContent = '提示词：';
+  wrap.appendChild(label);
+
+  const val = document.createElement('div');
+  val.className = 'prompt-text';
+  val.textContent = text;
+  wrap.appendChild(val);
+
+  const toggle = document.createElement('span');
+  toggle.className = 'prompt-toggle';
+  toggle.textContent = '展开全文';
+  toggle.onclick = () => {
+    const open = wrap.classList.toggle('open');
+    toggle.textContent = open ? '收起' : '展开全文';
+  };
+  wrap.appendChild(toggle);
+
+  body.appendChild(wrap);
+
+  // 布局完成后再量：两行装得下就不用这个按钮。
+  requestAnimationFrame(() => {
+    const clipped = val.scrollHeight > val.clientHeight + 2;
+    if (!clipped && String(text).length < 160) toggle.remove();
+  });
+}
+
 function renderItem(box, it) {
   const card = document.createElement('div');
   card.className = 'card' + (it.state !== 'pending' ? ' done' : '');
@@ -234,12 +288,7 @@ function renderItem(box, it) {
       + (it.skill ? ' · ' + it.skill : '');
     body.appendChild(kv);
   }
-  if (it.prompt) {
-    const p = document.createElement('div');
-    p.className = 'prompt';
-    p.textContent = '提示词：' + it.prompt;
-    body.appendChild(p);
-  }
+  if (it.prompt) renderPrompt(body, it.prompt);
 
   if (it.state === 'pending') {
     const acts = document.createElement('div');
@@ -247,11 +296,11 @@ function renderItem(box, it) {
     const ok = document.createElement('button');
     ok.className = 'ok';
     ok.textContent = '过审并重新发送';
-    ok.onclick = () => decide(it.id, 'approve');
     const no = document.createElement('button');
     no.className = 'no';
     no.textContent = '驳回（确认违规）';
-    no.onclick = () => decide(it.id, 'reject');
+    ok.onclick = () => decide(it.id, 'approve', card, ok, no);
+    no.onclick = () => decide(it.id, 'reject', card, ok, no);
     acts.appendChild(ok);
     acts.appendChild(no);
     body.appendChild(acts);
@@ -273,16 +322,48 @@ function escapeHtml(s) {
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-async function decide(id, act) {
+// 处理中的 id：连点 / 多标签页都只发一次（后端还有一层 `_inflight`）。
+const DECIDING = new Set();
+
+async function decide(id, act, card, btn, other) {
+  if (DECIDING.has(id) || btn.disabled) return;
+  DECIDING.add(id);
+
+  // 先把反馈做出来，不等后端——过审要真的发一遍图，一两秒才回。
+  const label = btn.textContent;
+  btn.disabled = true;
+  other.disabled = true;
+  btn.textContent = act === 'approve' ? '发送中…' : '处理中…';
+  card.classList.add('busy');
+  $('state').textContent = act === 'approve' ? '过审中，正在重新发送…' : '处理中…';
+  $('state').className = 'state';
+
   try {
     const d = await api('/api/image_review/' + encodeURIComponent(id) + '/' + act,
                         { method: 'POST' });
+    // 局部替换，不重载整张列表：刷新一下 200 条反而慢，还会把滚动位置顶回去。
+    card.classList.remove('busy');
+    card.classList.add('done');
+    const acts = card.querySelector('.actions');
+    if (acts) {
+      const dec = document.createElement('div');
+      dec.className = 'decided ' + (act === 'approve' ? 'approved' : 'rejected');
+      dec.textContent = (act === 'approve' ? '已通过审并重新发送' : '已确认违规（不发送）')
+        + ' · 刚刚';
+      acts.replaceWith(dec);
+    }
     $('state').textContent = d.msg || '已处理';
-    $('state').className = 'state';
-    await loadReview();
+    if (typeof d.pending === 'number') $('badge').textContent = d.pending;
   } catch (e) {
+    // 失败要能再点一次：按钮原样还回去。
+    card.classList.remove('busy');
+    btn.disabled = false;
+    other.disabled = false;
+    btn.textContent = label;
     $('state').textContent = e.message;
     $('state').className = 'state err';
+  } finally {
+    DECIDING.delete(id);
   }
 }
 

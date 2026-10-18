@@ -246,6 +246,22 @@
 
   .hidden { display: none !important; }
 
+  /* 二审卡片里的提示词：默认两行封顶，点「展开全文」才铺开。
+     生图提示词动辄上千字符，铺开以后「过审 / 驳回」两个按钮被推到很下面。 */
+  .rv-prompt { font-size: 12px; color: var(--text-mute); margin-top: 2px;
+               word-break: break-all; }
+  .rv-prompt-text { white-space: pre-wrap; display: -webkit-box;
+                    -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+                    overflow: hidden; }
+  .rv-prompt.open .rv-prompt-text { display: block; -webkit-line-clamp: unset; }
+  .rv-prompt-toggle { display: inline-block; margin-top: 2px; font-size: 11px;
+                      color: var(--accent, #7c5cff); cursor: pointer;
+                      user-select: none; }
+  .rv-prompt-toggle:hover { text-decoration: underline; }
+
+  /* 处理中：按钮立刻变暗，防止再点一次（过审要真的发一遍图） */
+  .rv-btn:disabled { opacity: 0.45; cursor: default; }
+
   @media (max-width: 1100px) {
     /* 中右都靠下叠，左右不能同排（中间塞不下 1060 - 200 - 320 - 40 gap） */
     .layout { flex-wrap: wrap; }
@@ -2072,24 +2088,18 @@ function renderReviewItem(box, it) {
   }
   // 提示词可能很长，用 textContent 塞进 <div> 而不是 innerHTML：这里是用户
   // 自己写的串，按文本走绝不会被当成标签解析。
-  if (it.prompt) {
-    const p = document.createElement('div');
-    p.className = 'hint';
-    p.textContent = '提示词：' + it.prompt;
-    p.style.cssText = 'word-break:break-all;';
-    body.appendChild(p);
-  }
+  if (it.prompt) renderReviewPrompt(body, it.prompt);
 
   const btns = document.createElement('div');
   btns.style.cssText = 'margin-top:6px; display:flex; gap:8px;';
   const ok = document.createElement('button');
-  ok.className = 'ghost';
+  ok.className = 'ghost rv-btn';
   ok.textContent = '过审并重新发送';
-  ok.onclick = () => reviewDecide(it.id, 'approve');
   const no = document.createElement('button');
-  no.className = 'ghost';
+  no.className = 'ghost rv-btn';
   no.textContent = '驳回（确认违规）';
-  no.onclick = () => reviewDecide(it.id, 'reject');
+  ok.onclick = () => reviewDecide(it.id, 'approve', card, ok, no);
+  no.onclick = () => reviewDecide(it.id, 'reject', card, ok, no);
   btns.appendChild(ok);
   btns.appendChild(no);
   body.appendChild(btns);
@@ -2098,16 +2108,87 @@ function renderReviewItem(box, it) {
   box.appendChild(card);
 }
 
-async function reviewDecide(id, act) {
+// 提示词折叠：两行封顶 + 「展开全文」，两行装得下就不给按钮。
+function renderReviewPrompt(body, text) {
+  const wrap = document.createElement('div');
+  wrap.className = 'rv-prompt';
+
+  const label = document.createElement('div');
+  label.textContent = '提示词：';
+  wrap.appendChild(label);
+
+  const val = document.createElement('div');
+  val.className = 'rv-prompt-text';
+  val.textContent = text;
+  wrap.appendChild(val);
+
+  const toggle = document.createElement('span');
+  toggle.className = 'rv-prompt-toggle';
+  toggle.textContent = '展开全文';
+  toggle.onclick = () => {
+    const open = wrap.classList.toggle('open');
+    toggle.textContent = open ? '收起' : '展开全文';
+  };
+  wrap.appendChild(toggle);
+
+  body.appendChild(wrap);
+
+  requestAnimationFrame(() => {
+    if (val.scrollHeight <= val.clientHeight + 2 && String(text).length < 160) {
+      toggle.remove();
+    }
+  });
+}
+
+// 处理中的 id：连点 / 多标签页都只发一次（后端 image_review._inflight 还有一层）。
+const REVIEW_DECIDING = new Set();
+
+async function reviewDecide(id, act, card, btn, other) {
+  if (REVIEW_DECIDING.has(id) || !btn || btn.disabled) return;
+  REVIEW_DECIDING.add(id);
+
+  // 先把反馈做出来：过审要真发一遍图（NapCat 往返 0.5~2 秒），干等着就会再点。
+  const label = btn.textContent;
+  btn.disabled = true;
+  other.disabled = true;
+  btn.textContent = act === 'approve' ? '发送中…' : '处理中…';
+  card.style.opacity = '0.7';
+  sessStatus(act === 'approve' ? '过审中，正在重新发送…' : '处理中…', 'ok');
+
   try {
     const d = await api('/api/agent/' + encodeURIComponent(cur)
                         + '/image_review/' + encodeURIComponent(id) + '/' + act,
                         { method: 'POST' });
+    // 这一张就地收尾，不重载整张列表：重载 50 条比改一行慢得多，还会把
+    // 滚动位置顶回去，连点的人更容易点错。
+    card.style.opacity = '0.55';
+    const btns = btn.parentElement;
+    if (btns) {
+      const done = document.createElement('div');
+      done.className = 'hint';
+      done.textContent = d.msg || (act === 'approve' ? '已过审并重新发送' : '已确认违规');
+      btns.replaceWith(done);
+    }
+    setReviewBadge(d.pending);
     sessStatus(d.msg || '已处理', d.ok ? 'ok' : 'err');
-    await loadReview();
   } catch (e) {
+    // 失败要能再点一次：按钮原样还回去。
+    card.style.opacity = '';
+    btn.disabled = false;
+    other.disabled = false;
+    btn.textContent = label;
     sessStatus(e.message, 'err');
+  } finally {
+    REVIEW_DECIDING.delete(id);
   }
+}
+
+function setReviewBadge(n) {
+  const txt = (typeof n === 'number' && n > 0) ? ('· 待审 ' + n) : '';
+  const a = $('reviewBadge');
+  if (a) a.textContent = txt;
+  const b = $('reviewBadgeTop');
+  if (b) b.textContent = txt;
 }
 
 $('reviewBtn').onclick = async () => {

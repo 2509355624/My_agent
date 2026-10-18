@@ -18,6 +18,7 @@
 import os
 import shutil
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -179,6 +180,44 @@ class ApproveTest(_TmpCase):
         self.assertEqual("group", kw["target"])
         self.assertEqual("233", kw["target_id"])
         self.assertEqual(999, kw["seed"])
+
+    def test_concurrent_approve_sends_once(self):
+        """连点两下也只发一张。
+
+        `approve` 要等 `send_image` 真的发完才写 approved，这中间状态仍是
+        pending——2026-10-18 用户就是在这段空窗里又点了一次，同一张图发了两遍。
+        """
+        rid = self._blocked()
+        calls = []
+        entered = threading.Event()
+        release = threading.Event()
+
+        def slow_send(*_a, **_kw):
+            calls.append(1)
+            entered.set()
+            release.wait(10)
+
+        with mock.patch("app.qq_api.send_image", side_effect=slow_send):
+            t = threading.Thread(target=image_review.approve, args=(rid,))
+            t.start()
+            self.assertTrue(entered.wait(10), "第一个请求没进到发图那一步")
+            ok, msg = image_review.approve(rid)   # 发图还没回来时的第二次点击
+            release.set()
+            t.join(10)
+        self.assertFalse(ok)
+        self.assertIn("正在处理", msg)
+        self.assertEqual(1, len(calls), "同一张图只能发一次")
+
+    def test_inflight_is_released_after_failure(self):
+        """发失败要能把 id 放出来，管理员还点得动第二次。"""
+        rid = self._blocked()
+        with mock.patch("app.qq_api.send_image",
+                        side_effect=RuntimeError("onebot down")):
+            self.assertFalse(image_review.approve(rid)[0])
+        with mock.patch("app.qq_api.send_image") as send:
+            ok, msg = image_review.approve(rid)
+        self.assertTrue(ok, msg)
+        send.assert_called_once()
 
     def test_approve_twice_is_refused(self):
         rid = self._blocked()

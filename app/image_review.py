@@ -52,6 +52,30 @@ REVIEW_DIR = state_path("review")
 
 _lock = threading.Lock()
 
+# 正在处理中的 id（2026-10-18）。
+#
+# `approve` 的流程是「读 → 判 pending → 真的发图 → 才写 approved」，而发图要
+# 走一遍 NapCat（实测 0.5~2 秒）。这中间状态还是 pending，管理员等得不耐烦
+# 再点一次，第二个请求照样通过 pending 检查 → **同一张图发两遍**。
+# 前端把按钮 disable 只能挡住同一个页面；这里再兜一层，进程内同一个 id
+# 同时只允许一个处理中（Flask 默认 threaded，同进程多线程够用）。
+_inflight = set()
+_inflight_lock = threading.Lock()
+
+
+def _claim(rid):
+    """占住这个 id；已经在处理就返回 False。"""
+    with _inflight_lock:
+        if rid in _inflight:
+            return False
+        _inflight.add(rid)
+        return True
+
+
+def _release(rid):
+    with _inflight_lock:
+        _inflight.discard(rid)
+
 # 队列里最多留多少条。超了先丢已处理的、再动最老的待审。
 MAX_ITEMS = 200
 
@@ -260,55 +284,68 @@ def approve(rid):
 
     走的就是 `qq_api.send_image` 那条路，caption 用拦下时存的那份原文——
     对方收到的跟一张没被拦过的图**一模一样**，看不出中间进过二审。
+
+    同一个 id 同时只处理一次（`_inflight`）：发图那 0.5~2 秒里状态仍是
+    pending，不挡住的话连点几下就发几张。
     """
-    row = get(rid)
-    if row is None:
-        return False, "这条记录不在了（可能已被清理）"
-    if row.get("state") != PENDING:
-        return False, "这条已经处理过了"
-    target = row.get("target") or ""
-    tid = row.get("target_id") or ""
-    path = row.get("path") or ""
-    if not target or not tid:
-        return False, "记录里没有接收方，发不回去"
-    if not os.path.exists(path):
-        return False, "图文件已经不在了（可能被清理）"
-    from app import qq_api
+    if not _claim(rid):
+        return False, "这条正在处理，别重复点"
     try:
-        qq_api.send_image(target, tid, path, caption=row.get("caption") or "")
-    except Exception as exc:
-        log.warning("过审重发失败 %s：%s", rid, exc)
-        return False, "发送失败：%s" % exc
-    _set_state(row, APPROVED)
-    # 补记账本：账本只在真发出去之后记，被拦的图当时没记上。现在它真的发出
-    # 去了，不补的话「引用这张图问提示词」会查不到。
-    if row.get("tag"):
+        row = get(rid)
+        if row is None:
+            return False, "这条记录不在了（可能已被清理）"
+        if row.get("state") != PENDING:
+            return False, "这条已经处理过了"
+        target = row.get("target") or ""
+        tid = row.get("target_id") or ""
+        path = row.get("path") or ""
+        if not target or not tid:
+            return False, "记录里没有接收方，发不回去"
+        if not os.path.exists(path):
+            return False, "图文件已经不在了（可能被清理）"
+        from app import qq_api
         try:
-            from app import image_log
-            image_log.save(row["tag"], prompt=row.get("prompt") or "",
-                           file=row.get("src_file") or "",
-                           skill=row.get("skill") or "", target=target,
-                           target_id=tid,
-                           seed="" if row.get("seed") is None
-                           else row["seed"])
-        except Exception:
-            log.exception("过审后补记账本失败 %s", rid)
-    log.info("人工过审，已重发 %s → %s %s（编号 %s）",
-             rid, target, tid, row.get("tag") or "-")
-    return True, "已过审并重新发送"
+            qq_api.send_image(target, tid, path, caption=row.get("caption") or "")
+        except Exception as exc:
+            log.warning("过审重发失败 %s：%s", rid, exc)
+            return False, "发送失败：%s" % exc
+        _set_state(row, APPROVED)
+        # 补记账本：账本只在真发出去之后记，被拦的图当时没记上。现在它真的发出
+        # 去了，不补的话「引用这张图问提示词」会查不到。
+        if row.get("tag"):
+            try:
+                from app import image_log
+                image_log.save(row["tag"], prompt=row.get("prompt") or "",
+                               file=row.get("src_file") or "",
+                               skill=row.get("skill") or "", target=target,
+                               target_id=tid,
+                               seed="" if row.get("seed") is None
+                               else row["seed"])
+            except Exception:
+                log.exception("过审后补记账本失败 %s", rid)
+        log.info("人工过审，已重发 %s → %s %s（编号 %s）",
+                 rid, target, tid, row.get("tag") or "-")
+        return True, "已过审并重新发送"
+    finally:
+        _release(rid)
 
 
 def reject(rid):
     """确认违规 → 标记拒发，图留着不删（备查）。返回 (ok, 说明)。"""
-    row = get(rid)
-    if row is None:
-        return False, "这条记录不在了（可能已被清理）"
-    if row.get("state") != PENDING:
-        return False, "这条已经处理过了"
-    _set_state(row, REJECTED)
-    log.info("人工二审判违规 %s（%s %s）", rid,
-             row.get("target"), row.get("target_id"))
-    return True, "已确认违规，不发送"
+    if not _claim(rid):
+        return False, "这条正在处理，别重复点"
+    try:
+        row = get(rid)
+        if row is None:
+            return False, "这条记录不在了（可能已被清理）"
+        if row.get("state") != PENDING:
+            return False, "这条已经处理过了"
+        _set_state(row, REJECTED)
+        log.info("人工二审判违规 %s（%s %s）", rid,
+                 row.get("target"), row.get("target_id"))
+        return True, "已确认违规，不发送"
+    finally:
+        _release(rid)
 
 
 def pending_count():
