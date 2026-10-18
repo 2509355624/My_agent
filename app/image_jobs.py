@@ -162,7 +162,7 @@ import uuid
 
 import requests
 
-from app import comfy_gate, image_log
+from app import comfy_gate, comfy_out, image_log
 from app.cancel import Cancelled, is_cancelled
 from app.config import (COMFY_MIN_FREE_RAM_GB, COMFY_MIN_FREE_VRAM_GB,
                         COMFY_RELEASE_AFTER_COMIC,
@@ -493,7 +493,8 @@ class Job:
 
     def __init__(self, target, target_id, workflow, skill=None, weight=1, seq=0,
                  nai_i2i=None, tag=None, prompt=None, intent=None, seed=None,
-                 chan=None, landscape=False, quiet=False, batch=None):
+                 chan=None, landscape=False, quiet=False, batch=None,
+                 out_dir=None):
         self.target = target
         self.target_id = target_id
         self.workflow = workflow
@@ -548,6 +549,10 @@ class Job:
         # 走 `COMFY_RELEASE_AFTER_COMIC`（一本 10 格按全局 2 张一重启，等于白等
         # 3~5 分钟冷启动）。None = 普通单张，行为与从前完全一致。
         self.batch = batch or None
+        # 输出目录（2026-10-18）：`output/<它>/<渠道>/xxx.png`。空串 = 按 target
+        # 自动推断（群/私聊/生图页，见 app/comfy_out.py）。只有漫画工作台会显式
+        # 传——任务号只有它在入队那一刻知道。
+        self.out_dir = out_dir or ""
         self.waits = 0              # 被冷却 / 被插队推回过几次（只为日志）
         self.skill_done = False     # 已经成功跑完一张？决定跑完要不要开冷却
         self.prompt_id = None
@@ -815,7 +820,7 @@ def snapshot():
 
 def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
             intent=None, seed=None, resample_fn=None, landscape=None,
-            quiet=False, batch=None):
+            quiet=False, batch=None, out_dir=None):
     """把一张图排进**它该去的那条通道**的队列，返回 (job, reason)。
 
     prompt 是模型写的那段原始提示词，只用来**出图后记进账本**（编号 → 提示词，
@@ -838,6 +843,10 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
 
     batch="comic" 是漫画工作台的批量标记（2026-10-18）：只用来放宽「累计满 N 张
     就整机重启」的阈值（见 `COMFY_RELEASE_AFTER_COMIC`），其余行为不变。
+
+    out_dir 是**输出目录**（2026-10-18）：不传就按 target 推（群 / 私聊 / 生图页，
+    见 app/comfy_out.py）；漫画工作台传 `web/漫画_<任务号>`，因为它入队时才知道
+    任务号。图会落在 `output/<out_dir>/<渠道>/`，与手动在 ComfyUI 终端跑的图分开。
     """
     key = _key(target, target_id)
     chan = _channel_of(skill)
@@ -868,7 +877,8 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
         chan.seq += 1
         job = Job(target, target_id, workflow, skill, weight, chan.seq,
                   nai_i2i=nai_i2i, prompt=prompt, intent=intent, seed=seed,
-                  chan=chan, landscape=landscape, quiet=quiet, batch=batch)
+                  chan=chan, landscape=landscape, quiet=quiet, batch=batch,
+                  out_dir=out_dir)
         # 随机口令的「被拦静默重抽」钩子（2026-10-05）：resample_fn 是无参
         # 可调用体，被审核拦下时由 worker 调它换一条新提示词，同 job 重跑。
         # 最多重抽 2 次（3 尝试）；普通生图不传，拦截行为与从前完全一致。
@@ -1469,6 +1479,13 @@ def process(job):
         # 快照存在 job 上，重抽几次都对调得一样。
         wf = (landscape_workflow(job.workflow) if job.landscape
               else job.workflow)
+        # 输出目录（2026-10-18）：把 SaveImage 的前缀改成 `<会话>/<渠道>/<原名>`，
+        # 让 ComfyUI 自己往子目录里写（它建目录）。**每张图只改这一处**——
+        # 所有渠道、所有入口（QQ / 网页 / 漫画）最后都从这儿提交。
+        # 静默重抽会重建 job.workflow 再递归进来，stamp 幂等，不会叠目录。
+        body = comfy_out.body_for(job)
+        if body:
+            wf = comfy_out.stamp(wf, body)
         job.prompt_id = _queue_prompt(wf)
     except Exception as exc:
         job.error = exc
@@ -1519,7 +1536,7 @@ def process(job):
             _notice(job)
         return
 
-    names = output_images(entry)
+    names = output_images(entry, body=body)
     if not names:
         job.error = RuntimeError("跑完了但没找到图片")
         if not quiet:
@@ -1929,15 +1946,32 @@ def wait_done(prompt_id, timeout=None):
     raise TimeoutError("生成超时 (" + str(limit) + "s)")
 
 
-def output_images(entry):
-    """从 history entry 里掏出文件名列表；没有返回空列表。"""
+def output_images(entry, job=None, body=""):
+    """从 history entry 里掏出图片的**相对路径**列表；没有返回空列表。
+
+    2026-10-18 起输出图按会话分目录，history 里的 `filename` 只是文件名，
+    真正的目录在同级 `subfolder` 里。这里直接拼成 `qq/群_1/anima/Anima_1_.png`：
+    下游（发图、记账、网页地址）拿到的仍然是一个字符串，签名一个都不用改；
+    真拆开只在打 `/view` 那几处（`comfy_out.split_rel`）。
+
+    ⚠️ **不能只信 `subfolder`**：`BatchPromptImageGenerator`（扮演态配图、漫画
+    批量用的就是它）确实把图写进了子目录，但 history 里 `subfolder` 恒为空串
+    （2026-10-18 真机实测）。只信它的话，那些渠道会把**根目录里同名的老图**
+    当成刚画的那张发出去。所以传 `job`（或直接传 `body`）时，空 subfolder
+    一律补成「这次提交时算出来的目录」。
+    """
+    if not body and job is not None:
+        body = comfy_out.body_for(job)
     out = []
     for node in (entry.get("outputs") or {}).values():
         if not isinstance(node, dict):
             continue
         for img in (node.get("images") or []):
-            if isinstance(img, dict) and img.get("filename"):
-                out.append(img["filename"])
+            if not (isinstance(img, dict) and img.get("filename")):
+                continue
+            sub = str(img.get("subfolder") or "").strip("/\\") or body
+            name = str(img["filename"])
+            out.append("%s/%s" % (sub, name) if sub else name)
     return out
 
 
@@ -2299,7 +2333,11 @@ def _resume_one(tag, rec):
             _resume_tell_dead(target, target_id)
             return True
 
-    names = output_images(entry)
+    # ⚠️ 补发的是「上一次进程提交的单」：老版本提交的图平铺在 output 根目录，
+    # 新版按 body 算出来的目录对它是错的。所以这里只补 body 当参考，
+    # `image_out.prepare_for_send` 那条 404 自愈会退回裸文件名再取一次。
+    names = output_images(entry, body=comfy_out.body_for_target(
+        target, target_id, skill))
     if not names:
         log.warning("恢复：%s 跑完了但 history 里没有图片", tag)
         _resume_tell_dead(target, target_id)

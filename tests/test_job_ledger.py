@@ -144,7 +144,10 @@ class ResumeTest(_TempLedger):
         done, m_send, m_text, m_wait, m_save = self._run(entry=entry)
         self.assertTrue(done)
         m_send.assert_called_once()
-        self.assertEqual(m_send.call_args[0][2], "a.png")
+        # 2026-10-18 起图按会话分目录，补发时按账本里的会话+渠道补出目录；
+        # 万一是老版本提交的单（图还平铺在根目录），`prepare_for_send` 会
+        # 在 404 时退回裸文件名再取一次。
+        self.assertEqual(m_send.call_args[0][2], "qq/私聊_42/silver/a.png")
         self.assertEqual(m_send.call_args[0][3], self.TAG)
         m_wait.assert_not_called()          # 已经有结果了，不用等
         m_text.assert_not_called()          # 更不许说「没画成」

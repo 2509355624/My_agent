@@ -295,14 +295,22 @@ def api_clear():
 
 @bp.route("/api/gen/img")
 def api_img():
-    """代理 ComfyUI 的 /view 取图。文件名纯文件名（正则钉死）——不敞静态目录，
-    也不接受任何带路径的形态（output 目录是平的，没有子目录图）。"""
-    f = str(request.args.get("f") or "")
-    if not f or f in (".", "..") or not _IMG_NAME_RE.fullmatch(f):
+    """代理 ComfyUI 的 /view 取图。只认 output 目录下的**相对路径**（2026-10-18
+    起输出图按会话分子目录，`f` 会是 `web/生图页/silver/Anima_1_.png`）。
+
+    逐段校验：不许空段、不许 `..`、文件名必须过 `_IMG_NAME_RE` —— 等于只允许
+    在 output 目录里按名字取图，不敞静态目录。
+    """
+    f = str(request.args.get("f") or "").replace("\\", "/").strip("/")
+    parts = [x for x in f.split("/") if x]
+    if not parts or ".." in parts or not _IMG_NAME_RE.fullmatch(parts[-1]):
         return jsonify({"ok": False, "error": "非法文件名"}), 400
+    params = {"filename": parts[-1]}
+    if len(parts) > 1:
+        params["subfolder"] = "/".join(parts[:-1])
     try:
         resp = _session.get(COMFYUI_URL.rstrip("/") + "/view",
-                            params={"filename": f}, timeout=120)
+                            params=params, timeout=120)
     except requests.RequestException as e:
         # ComfyUI 不在线时旧图取不到——明说，别让前端对着破图猜
         return jsonify({"ok": False,

@@ -192,10 +192,25 @@ class ImgTest(unittest.TestCase):
         self.c = main.app.test_client()
 
     def test_path_traversal_and_junk_are_rejected(self):
-        for bad in ("", "..", "../x.png", "a/b.png", "x.png;.js", "..\\x.png",
-                    "sub/dir/x.png"):
+        """相对路径是**允许**的（输出图按会话分目录），但 `..` 和怪名字一律不放。
+
+        2026-10-18 之前这里连 `a/b.png` 都拒——那时 output 是平的。现在
+        `f=web/生图页/silver/Anima_1_.png` 是正常形态，所以只有真越界才 400。
+        """
+        for bad in ("", "..", "../x.png", "a/../../x.png", "x.png;.js",
+                    "..\\x.png", "a/..", "空名字?.png"):
             r = self.c.get("/api/gen/img?f=" + bad)
             self.assertEqual(r.status_code, 400, bad)
+
+    def test_relative_path_passes_the_subfolder_through(self):
+        resp = mock.Mock(status_code=200, content=b"\x89PNG-fake")
+        with mock.patch.object(gen_api._session, "get",
+                               return_value=resp) as g:
+            r = self.c.get("/api/gen/img?f=web/生图页/silver/Anima_1_.png")
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(g.call_args.kwargs["params"],
+                             {"filename": "Anima_1_.png",
+                              "subfolder": "web/生图页/silver"})
 
     def test_good_name_proxies_comfy_view(self):
         resp = mock.Mock(status_code=200, content=b"\x89PNG-fake")

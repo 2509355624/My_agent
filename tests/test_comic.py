@@ -81,7 +81,7 @@ class TwoPassBubbleTest(unittest.TestCase):
         def _build(skill, prompt, seed, uploaded):
             return {"prompt": prompt}
 
-        def _submit(wf, skill, prompt, seed):
+        def _submit(wf, skill, prompt, seed, task=None):
             self.submits.append(prompt)
             return "out_%d.png" % len(self.submits)
 
@@ -252,7 +252,7 @@ class ManualRenderTest(unittest.TestCase):
             self.seen["denoise"] = denoise
             return {"prompt": prompt}
 
-        def _submit(wf, skill, prompt, seed):
+        def _submit(wf, skill, prompt, seed, task=None):
             return "out.png"
 
         def _download(name, dst):
@@ -763,7 +763,8 @@ class BubblePromptOverrideTest(unittest.TestCase):
 
         for target, repl in (("_upload_source", _upload),
                              ("_build_i2i", _build),
-                             ("_submit", lambda wf, skill, prompt, seed: "out.png"),
+                             ("_submit", lambda wf, skill, prompt, seed,
+                              task=None: "out.png"),
                              ("_download", _download)):
             p = mock.patch.object(comic, target, repl)
             p.start()

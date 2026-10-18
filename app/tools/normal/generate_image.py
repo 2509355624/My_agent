@@ -1113,7 +1113,7 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
         # 其余失败（提交不上去、跑完了没图、ComfyUI 崩了）照样只回一句错话：
         # 直接冒到 execute_tool 会被描述成「工具坏了」，模型就该开始编了。
         return "错误: " + str(e)
-    images = image_jobs.output_images(history_entry)
+    images = image_jobs.output_images(history_entry, job=job)
 
     if not images:
         return "错误: 生成完成但未找到输出图片"

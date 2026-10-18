@@ -38,6 +38,7 @@ from urllib.parse import quote
 
 import requests
 
+from app import comfy_out
 from app.config import COMFYUI_URL
 
 log = logging.getLogger("image_out")
@@ -67,7 +68,13 @@ _session.trust_env = False
 
 def _fallback(filename):
     """原来的行为：把 ComfyUI 的原图 URL 交给协议端，由它自己去拉。"""
-    return COMFYUI_URL.rstrip("/") + "/view?filename=" + quote(str(filename))
+    name, sub = comfy_out.split_rel(filename)
+    url = COMFYUI_URL.rstrip("/") + "/view?filename=" + quote(name)
+    if sub:
+        # 输出图按会话分目录后（2026-10-18），单给 filename 会在 output 根下找，
+        # 必然 404。subfolder 保留斜杠：ComfyUI 就是按路径拼的。
+        url += "&subfolder=" + quote(sub, safe="/")
+    return url
 
 
 def _out_dir():
@@ -115,16 +122,33 @@ def prepare_for_send(filename, fmt=DEFAULT_FORMAT):
 
     发的都是 temp 里的副本，ComfyUI output 里的原图一个字节都不动。
 
+    `filename` 可以是相对路径（`qq/群_1/anima/Anima_0001_.png`，2026-10-18 起
+    `image_jobs.output_images` 返回的就是这个形态）：这里拆成 filename + subfolder
+    再打 `/view`，调用方传什么都是同一个字符串，签名不变。
+
     成功返回本地文件路径（协议端用 file:// 读它，见 qq_api.image_segment）；
     任何一步失败都返回 ComfyUI 的原图 URL，保证图照样发得出去。
     """
     if fmt not in FORMATS:
         fmt = DEFAULT_FORMAT
+    name, sub = comfy_out.split_rel(filename)
     try:
         from PIL import Image
 
+        params = {"filename": name}
+        if sub:
+            params["subfolder"] = sub
         resp = _session.get(COMFYUI_URL.rstrip("/") + "/view",
-                            params={"filename": str(filename)}, timeout=30)
+                            params=params, timeout=30)
+        if sub and getattr(resp, "status_code", 200) == 404:
+            # 自愈（2026-10-18）：两种图会被报成 404 ——
+            # ① 分目录之前生成的老图，实际躺在 output 根目录；
+            # ② `BatchPromptImageGenerator` 明知图在子目录里，history 却把
+            #    subfolder 报成空串（真机实测）。退回裸文件名再取一次，
+            #    取不到就照旧走下面的回落，反正不能把图卡死在这一步。
+            log.info("带 subfolder 取 %s 是 404，退回 output 根目录再试", name)
+            resp = _session.get(COMFYUI_URL.rstrip("/") + "/view",
+                                params={"filename": name}, timeout=30)
         resp.raise_for_status()
         im = Image.open(io.BytesIO(resp.content))
         im.load()

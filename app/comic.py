@@ -41,7 +41,7 @@ from datetime import datetime
 
 import requests
 
-from app import comfy_src, image_jobs, comic_render_opts
+from app import comfy_out, comfy_src, image_jobs, comic_render_opts
 from app.config import BASE_DIR, COMFYUI_OUTPUT_DIR, COMFYUI_URL
 from app.skills import load_skill, load_workflow
 from app.tools.normal import generate_image
@@ -735,12 +735,26 @@ def _require_comfy():
                          % COMFYUI_URL)
 
 
-def _submit(workflow, skill, prompt, seed):
-    """排进全局串行队列并等出图，返回 ComfyUI 那边的输出文件名。
+def _out_dir_for(task):
+    """这本漫画的格子存哪：`output/web/漫画_<任务号>/<渠道>/`（2026-10-18）。
+
+    任务号只有渲染这一层知道（`_submit` 是从各个 render_* 里调下来的），所以
+    显式传给 `enqueue(out_dir=...)`。不传就落到 `web/生图页`，一本漫画的格子
+    会跟生图页的图混在一起，正是用户抱怨「找图贼麻烦」的那种局面。
+    """
+    tid = str(getattr(task, "task_id", "") or "").strip() if task else ""
+    # 没有 task 的调用者是跑图台（`gen_api._run` 复用 `_submit`）：返回空串让
+    # image_jobs 按 target=None 落到 `web/生图页`，别把跑图台的图也塞进漫画目录。
+    return "web/漫画_%s" % tid if tid else ""
+
+
+def _submit(workflow, skill, prompt, seed, task=None):
+    """排进全局串行队列并等出图，返回 ComfyUI 那边的输出图（相对路径）。
 
     target=None 是「网页侧」路径：worker 出图后只把 history entry 挂到 job 上，
     不发回任何会话、也不走审核（见 image_jobs.process）。所以这里拿到 entry
-    自己把图取下来落盘即可。
+    自己把图取下来落盘即可。返回值自带 `subfolder`（`web/漫画_<任务号>/<渠道>/x.png`），
+    `_submit` 的调用方只管把它整个交给 `_download`。
 
     `batch="comic"`（2026-10-18）只做一件事：把「累计满 N 张就整机重启
     ComfyUI」的阈值换成 `COMFY_RELEASE_AFTER_COMIC`（默认 6）。一本十几格按
@@ -749,11 +763,12 @@ def _submit(workflow, skill, prompt, seed):
     """
     job, reason = image_jobs.enqueue(None, None, workflow, skill=skill,
                                      prompt=prompt, seed=seed, landscape=False,
-                                     batch="comic")
+                                     batch="comic",
+                                     out_dir=_out_dir_for(task))
     if reason:
         raise RuntimeError(reason)
     entry = job.wait()                       # 失败会抛 job.error
-    names = image_jobs.output_images(entry)
+    names = image_jobs.output_images(entry, job=job)
     if not names:
         raise RuntimeError("跑完了但没找到输出图片")
     return names[0]
@@ -801,12 +816,16 @@ def _download(filename, dst):
     `COMFYUI_OUTPUT_DIR`），都没有才抛最后一个异常。
     """
     os.makedirs(os.path.dirname(dst), exist_ok=True)
+    name, sub = comfy_out.split_rel(filename)
+    params = {"filename": name}
+    if sub:
+        params["subfolder"] = sub
     deadline = time.time() + _DOWNLOAD_RETRY_SECS
     last = None
     while True:
         try:
             resp = _session.get(COMFYUI_URL.rstrip("/") + "/view",
-                               params={"filename": str(filename)}, timeout=120)
+                               params=params, timeout=120)
             resp.raise_for_status()
             with open(dst, "wb") as f:
                 f.write(resp.content)
@@ -831,12 +850,19 @@ def _copy_from_comfy_output(filename, dst):
     一张」那种猜测**——图名来自 ComfyUI 的 history，是 SaveImage 写下的真实
     名字，同名即同图；猜错会静默落一张别的图，比报错更难查。返回落盘路径，
     没得兜就返回 None（由调用方抛原异常）。
+
+    2026-10-18 起输出图按会话分子目录，`filename` 是形如
+    `web/漫画_C20261018-01/anima-line/Anima_00042_.png` 的相对路径，这里按段
+    拼回绝对路径；仍然不接受 `..`（那不是我们写出去的路径）。
     """
     root = (COMFYUI_OUTPUT_DIR or "").strip()
-    name = os.path.basename(str(filename))
-    if not root or not name or name != str(filename):
-        return None                      # 没配，或名字带路径成分 —— 一律不认
-    src = os.path.join(root, name)
+    rel = str(filename or "").replace("\\", "/").strip("/")
+    parts = [x for x in rel.split("/") if x]
+    # `..` 一律不认：这条兜底是「按 history 报的名字直接抄文件」，名字里出现
+    # 上跳就说明不是我们写出去的路径，宁可不抄。
+    if not root or not parts or ".." in parts:
+        return None
+    src = os.path.join(root, *parts)
     if not os.path.isfile(src):
         return None
     shutil.copyfile(src, dst)
@@ -894,7 +920,7 @@ def render_scene(task, p, scene_skill=SCENE_SKILL, opts=None):
     wf = comic_render_opts.apply(wf, opts)
     log.info("[格 %s] 场景渲染（%s，seed %s，%s）", p.no, scene_skill, seed,
              comic_render_opts.describe(opts))
-    name = _submit_retry(lambda: _submit(wf, scene_skill, p.scene, seed),
+    name = _submit_retry(lambda: _submit(wf, scene_skill, p.scene, seed, task=task),
                          "[格 %s] 场景" % p.no)
     _download(name, task.raw_path(p))
     p.seed = seed
@@ -958,7 +984,7 @@ def render_bubble(task, p, split=False, prompt=None):
     wf = _build_i2i(BUBBLE_SKILL, prompt, seed, uploaded)
     log.info("[格 %s] 加气泡（%s，seed %s%s%s）", p.no, BUBBLE_SKILL, seed,
              "，分开画" if split else "", "，提示词已手改" if overridden else "")
-    name = _submit_retry(lambda: _submit(wf, BUBBLE_SKILL, prompt, seed),
+    name = _submit_retry(lambda: _submit(wf, BUBBLE_SKILL, prompt, seed, task=task),
                          "[格 %s] 加气泡" % p.no)
     _download(name, task.final_path(p))
     if split and p.two_bubbles():
@@ -969,8 +995,9 @@ def render_bubble(task, p, split=False, prompt=None):
         uploaded2 = _upload_source(task.final_path(p))   # 源图=第一遍的成图
         wf2 = _build_i2i(BUBBLE_SKILL, prompt2, seed2, uploaded2)
         log.info("[格 %s] 加第二个气泡（%s，seed %s）", p.no, BUBBLE_SKILL, seed2)
-        name2 = _submit_retry(lambda: _submit(wf2, BUBBLE_SKILL, prompt2, seed2),
-                              "[格 %s] 加第二个气泡" % p.no)
+        name2 = _submit_retry(
+            lambda: _submit(wf2, BUBBLE_SKILL, prompt2, seed2, task=task),
+            "[格 %s] 加第二个气泡" % p.no)
         _download(name2, task.final_path(p))             # 覆盖成两气泡版
     p.state = "done"
     p.error = None
@@ -1014,7 +1041,7 @@ def render_manual(task, p, instruction, denoise=I2I_DENOISE):
     wf = _build_i2i(BUBBLE_SKILL, prompt, seed, uploaded, denoise)
     log.info("[格 %s] 手动修复（%s，seed %s，强度 %s）",
              p.no, BUBBLE_SKILL, seed, denoise)
-    name = _submit_retry(lambda: _submit(wf, BUBBLE_SKILL, prompt, seed),
+    name = _submit_retry(lambda: _submit(wf, BUBBLE_SKILL, prompt, seed, task=task),
                          "[格 %s] 手动修复" % p.no)
     # 先落临时名再原子替换：这一遍是「在成品上改」，写到一半坏掉等于把上一版
     # 好成品丢了，用户没得退。

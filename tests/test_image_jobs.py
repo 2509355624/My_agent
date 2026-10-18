@@ -181,6 +181,52 @@ class PollTest(_Base):
     def test_output_images_empty_when_no_image(self):
         self.assertEqual(image_jobs.output_images({"outputs": {}}), [])
 
+    def test_output_images_keeps_the_subfolder(self):
+        """2026-10-18 起 output 按会话分目录：只留文件名就再也取不到图了。"""
+        entry = {"outputs": {"1": {"images": [
+            {"filename": "Anima_1_.png", "subfolder": "qq/群_885/anima-line"},
+            {"filename": "Anima_2_.png", "subfolder": ""},
+        ]}}}
+        self.assertEqual(image_jobs.output_images(entry),
+                         ["qq/群_885/anima-line/Anima_1_.png", "Anima_2_.png"])
+
+    def test_output_images_fills_a_missing_subfolder_from_the_job(self):
+        """批量保存节点把 subfolder 报成空串，得用这次提交算出来的目录补上。
+
+        不补的话，根目录里同名的老图会被当成刚画的那张发出去（2026-10-18 真机
+        实测：`BatchPromptImageGenerator` 明明写进了子目录，history 仍是 ""）。
+        """
+        entry = {"outputs": {"33": {"images": [
+            {"filename": "Anima_Fast_1_.png", "subfolder": ""}]}}}
+        job = image_jobs.Job("group", "9", {}, skill="_persona_fast")
+        self.assertEqual(image_jobs.output_images(entry, job=job),
+                         ["qq/群_9/_persona_fast/Anima_Fast_1_.png"])
+
+    def test_output_images_trusts_the_reported_subfolder(self):
+        """节点报了 subfolder 就以它为准（SaveImage 是准的），别再套一层。"""
+        entry = {"outputs": {"9": {"images": [
+            {"filename": "Anima_1_.png", "subfolder": "qq/群_1/anima-line"}]}}}
+        job = image_jobs.Job("group", "1", {}, skill="anima-line")
+        self.assertEqual(image_jobs.output_images(entry, job=job),
+                         ["qq/群_1/anima-line/Anima_1_.png"])
+
+    def test_process_puts_the_map_of_chat_and_channel_in_the_prefix(self):
+        """提交前把「会话/渠道」塞进 SaveImage 前缀——所有入口只有这一处。"""
+        wf = {"9": {"class_type": "SaveImage",
+                    "inputs": {"filename_prefix": "Anima"}}}
+        job = image_jobs.Job("group", "885", wf, skill="anima-line")
+        seen = {}
+        with mock.patch.object(image_jobs, "_maybe_restart_for_clean_start"), \
+                mock.patch.object(image_jobs, "_maybe_release_for_switch"), \
+                mock.patch.object(image_jobs, "_maybe_release_for_low_vram"), \
+                mock.patch.object(image_jobs, "_notice"), \
+                mock.patch.object(image_jobs.comfy_out, "stamp",
+                                  side_effect=lambda w, b: seen.setdefault("body", b) or w), \
+                mock.patch.object(image_jobs, "_queue_prompt",
+                                  side_effect=RuntimeError("stop here")):
+            image_jobs.process(job)
+        self.assertEqual(seen["body"], "qq/群_885/anima-line")
+
 
 class WaitTest(_Base):
     """wait_done：出图就返回，一直不出就超时抛错。"""
@@ -1132,7 +1178,9 @@ class ImageLedgerTest(unittest.TestCase):
         job = self._run(True)
         row = image_log.lookup(job.tag)
         self.assertEqual(row["prompt"], "1girl, silver hair")
-        self.assertEqual(row["file"], "a.png")
+        # 2026-10-18 起账本存的是**相对路径**（按会话分目录了），
+        # 这样以后拿着记录就能直接找到文件，不用再猜它在哪个子目录。
+        self.assertEqual(row["file"], "qq/群_9/hd_fast/a.png")
         self.assertEqual(row["skill"], "hd_fast")
 
     def test_the_seed_is_recorded_too(self):
@@ -1261,8 +1309,10 @@ class GenerateImageSplitTest(unittest.TestCase):
         self.assertEqual(image_jobs.inflight_count("group", "8"), 1)
 
     def test_web_still_waits_and_returns_url(self):
+        """网页侧拿到的是 /api/image/ 地址；2026-10-18 起后面还带目录。"""
         out = self._call((None, None))
-        self.assertIn("/api/image/a.png", out)
+        self.assertIn("/api/image/web/生图页/", out)
+        self.assertTrue(out.rstrip().endswith("/a.png"), out)
 
     def test_web_reports_timeout(self):
         out = self._call((None, None), error=TimeoutError(

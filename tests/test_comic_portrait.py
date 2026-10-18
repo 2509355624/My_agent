@@ -90,7 +90,7 @@ class RunTest(unittest.TestCase):
         self.subs = []          # 记录每次提交的 (workflow, prompt, seed)
         self.seeds = iter(range(1000, 1000 + 100))
 
-        def _fake_submit(wf, skill, prompt, seed):
+        def _fake_submit(wf, skill, prompt, seed, task=None):
             self.subs.append((copy.deepcopy(wf), prompt, seed, skill))
             return "fake_%d.png" % len(self.subs)
 

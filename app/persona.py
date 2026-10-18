@@ -602,7 +602,7 @@ def draw(scene, card, session_key):
     except Exception as e:
         log.info("扮演配图没画出来（%s）：%s", session_key, e)
         return ""
-    names = image_jobs.output_images(entry)
+    names = image_jobs.output_images(entry, job=job)
     if not names:
         log.warning("扮演配图跑完却没有图片（%s）", session_key)
         return ""

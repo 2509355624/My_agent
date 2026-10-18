@@ -40,8 +40,9 @@ def _png_bytes(with_meta=True, mode="RGB", size=(32, 32), color=None):
 class _Resp:
     """requests 响应的最小替身。"""
 
-    def __init__(self, content):
+    def __init__(self, content, status_code=200):
         self.content = content
+        self.status_code = status_code
 
     def raise_for_status(self):
         pass
@@ -106,6 +107,21 @@ class PrepareTest(unittest.TestCase):
         rgb = Image.open(got).convert("RGB")
         self.assertTrue(all(c > 240 for c in rgb.getpixel((8, 8))),
                         rgb.getpixel((8, 8)))
+
+    def test_missing_subfolder_falls_back_to_the_output_root(self):
+        """带 subfolder 取不到就退回裸文件名——老图在根目录、批量节点的
+        history 又把 subfolder 报成空串，这两种都得能取到。"""
+        first = _Resp(b"", status_code=404)
+        second = _Resp(_png_bytes())
+        get = mock.Mock(side_effect=[first, second])
+        with mock.patch.object(image_out._session, "get", get):
+            got = image_out.prepare_for_send("qq/群_1/anima-line/A_1_.png")
+        self.assertTrue(os.path.isfile(got), got)
+        self.assertEqual(get.call_args_list[0].kwargs["params"],
+                         {"filename": "A_1_.png",
+                          "subfolder": "qq/群_1/anima-line"})
+        self.assertEqual(get.call_args_list[1].kwargs["params"],
+                         {"filename": "A_1_.png"})
 
     def test_png_format_keeps_workflow_metadata(self):
         """png = 带工作流的原图：tEXt 里的 prompt / workflow 要一起发出去。

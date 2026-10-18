@@ -14,6 +14,7 @@ from flask import (Flask, request, jsonify, send_from_directory, Response,
                    stream_with_context)
 from app import agents as agent_store
 from app import cancel as cancel_mod
+from app import comfy_out
 from app import image_audit
 from app import image_migrate
 from app import logsetup
@@ -392,11 +393,21 @@ def clear():
     return jsonify({"ok": True, "agent": agent_id})
 
 
-@app.route("/api/image/<filename>")
+@app.route("/api/image/<path:filename>")
 def serve_image(filename):
-    """从 ComfyUI 输出目录代理图片"""
+    """从 ComfyUI 输出目录代理图片。
+
+    `path:` 是 2026-10-18 加的：输出图按会话分目录后，地址变成
+    `/api/image/web/生图页/silver/Anima_1_.png`，普通 `<filename>` 匹配不到斜杠。
+    取图时拆成 filename + subfolder 交给 ComfyUI 的 `/view`。
+    """
     try:
-        resp = requests.get(COMFYUI_URL + "/view", params={"filename": filename}, stream=True, timeout=30)
+        name, sub = comfy_out.split_rel(filename)
+        params = {"filename": name}
+        if sub:
+            params["subfolder"] = sub
+        resp = requests.get(COMFYUI_URL + "/view", params=params,
+                            stream=True, timeout=30)
         resp.raise_for_status()
         return Response(resp.iter_content(chunk_size=8192),
                        content_type=resp.headers.get('content-type', 'image/png'))
