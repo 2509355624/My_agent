@@ -168,6 +168,37 @@ class ResumeTest(_TempLedger):
         m_text.assert_called_once()
         self.assertIn("重启", m_text.call_args[0][2])
 
+    def test_multi_image_all_blocked_does_not_retry(self):
+        """一批漫画全被审核拦下：**当处理完**，不再每次启动重试刷屏。
+
+        2026-10-18 用户报的现场：重启后补发 10 张全被拦，每张回一句「这张图
+        没过审」，而且 sent=0 会累加 attempts——下次启动再来一遍。
+        """
+        entry = {"outputs": {"9": {"images": [
+            {"filename": "c%d.png" % i} for i in range(10)]}}}
+        done, m_send, m_text, _, m_save = self._run(
+            entry=entry, send=lambda *a, **k: False)
+        self.assertTrue(done, "全被审核拦下不该留在账本里等重试")
+        self.assertEqual(10, m_send.call_count)
+        self.assertTrue(all(c.kwargs.get("notify") is False
+                            for c in m_send.call_args_list),
+                        "逐张都要静默，不然就是 10 句刷屏")
+        m_text.assert_called_once()                # 10 句 → 1 句
+        self.assertIn("10 张都没过审", m_text.call_args[0][2])
+        m_save.assert_not_called()
+
+    def test_multi_image_partial_blocked_gives_counts(self):
+        entry = {"outputs": {"9": {"images": [
+            {"filename": "d%d.png" % i} for i in range(4)]}}}
+        seq = [True, False, True, False]
+        done, _m_send, m_text, _, _ = self._run(
+            entry=entry, send=lambda *a, **k: seq.pop(0))
+        self.assertTrue(done)
+        m_text.assert_called_once()
+        text = m_text.call_args[0][2]
+        self.assertIn("2 张没过审", text)
+        self.assertIn("2 张已发", text)
+
     def test_unreachable_comfy_keeps_the_record(self):
         done, m_send, m_text, _, _ = self._run(entry=None, in_queue=None)
         self.assertFalse(done)              # 留着下次启动再试

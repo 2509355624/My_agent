@@ -3232,6 +3232,56 @@ class SilentRetryTest(_Base):
         sg.assert_not_called()
 
 
+class BatchBlockedNoticeTest(_Base):
+    """一次出多张（漫画 10 格 / anima 多图）：审核提示**按批汇总一句**（2026-10-18）。
+
+    用户报的现场：一批 10 格全被拦，群里连出 10 句一模一样的「这张图没过审，
+    没发出去。换个描述再试试？」——而漫画的画面是模型自己写的分镜，用户根本
+    没有「换个描述」这个动作可做。图仍然逐张过审、逐张进人工二审队列，变的
+    只是**说几遍**。
+    """
+
+    def _run(self, n, ok_count):
+        """n 张图，前 ok_count 张放行；返回 `_send_image` 收到的 notify 列表。"""
+        names = ["a%d.png" % i for i in range(n)]
+        entry = {"outputs": {"9": {"images": [{"filename": x} for x in names]}}}
+        notices = []
+        order = list(range(n))
+
+        def fake_send(target, tid, name, tag="", skill="", seed=None,
+                      notify=True, prompt=""):
+            notices.append(notify)
+            return order.pop(0) < ok_count
+
+        with mock.patch.object(image_jobs, "_send_image", fake_send), \
+                mock.patch.object(image_jobs, "wait_done", return_value=entry), \
+                mock.patch.object(image_jobs.image_log, "save"):
+            self._enqueue()
+            image_jobs._drain()
+        return notices
+
+    def test_all_blocked_says_it_once(self):
+        notices = self._run(10, 0)
+        self.assertEqual(10, len(notices))
+        self.assertTrue(all(n is False for n in notices), "逐张都要静默")
+        self.assertEqual(1, len(self.sent_texts), "10 句刷屏 → 只留 1 句")
+        text = self.sent_texts[0][2]
+        self.assertIn("10 张都没过审", text)
+
+    def test_partial_blocked_gives_the_counts(self):
+        self._run(10, 8)
+        self.assertEqual(1, len(self.sent_texts))
+        text = self.sent_texts[0][2]
+        self.assertIn("2 张没过审", text)
+        self.assertIn("8 张已发", text)
+
+    def test_single_image_keeps_the_old_notice(self):
+        """单张不归这儿管：allow_send 自己回一句，worker 再补就是重复。"""
+        notices = self._run(1, 0)
+        self.assertTrue(notices[0], "单张的 notify 不能被关掉")
+        self.assertEqual([], self.sent_texts)
+
+
 class BuildWorkflowTest(unittest.TestCase):
     """build_t2i_workflow：重抽重建工作流的规则与 _generate_image 共用一份。
 

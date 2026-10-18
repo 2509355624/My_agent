@@ -1557,13 +1557,21 @@ def process(job):
         # audit_silent（随机口令）→ _send_image 里审核拦下时**不回话**，
         # 话术由这里统一管：重抽期间完全静默，重抽尽才回一句软话术。
         silent = getattr(job, "audit_silent", False)
-        # notify 只在静默 job 上降级——普通 job 的调用形态与从前完全一致
-        # （worker 层有别的 _send_image 替身按老签名接，别无条件加参）。
+        # 多图任务（漫画 10 格 / anima 多图 3 张）：审核提示**按批汇总**，不逐张回。
+        # 2026-10-18 用户报刷屏：一批 10 格全被拦时，群里连出 10 句一模一样的
+        # 「这张图没过审，没发出去。换个描述再试试？」——而且漫画的画面是模型
+        # 自己写的分镜，用户根本没有「换个描述」这个动作可做。
+        # 图仍然逐张过审、逐张进人工二审队列，只是不再逐张说话。
+        batch = len(names) > 1
+        quiet_audit = silent or batch
+        # notify 只在需要静默的 job 上降级——单张普通 job 的调用形态与从前完全
+        # 一致（worker 层有别的 _send_image 替身按老签名接，别无条件加参）。
         sent = sum(1 for name in names
                    if _send_image(job.target, job.target_id, name, job.tag,
                                   skill=job.skill or "", seed=job.seed,
                                   prompt=job.prompt or "",
-                                  **({"notify": False} if silent else {})))
+                                  **({"notify": False} if quiet_audit else {})))
+        blocked = len(names) - sent
         if sent:
             log.info("生图完成已发回 %s %s：%d/%d 张（编号 %s，渠道 %s，"
                      "seed %s，耗时 %.1f 秒）",
@@ -1578,6 +1586,10 @@ def process(job):
                            skill=job.skill or "", target=job.target,
                            target_id=job.target_id,
                            seed="" if job.seed is None else job.seed)
+            if blocked and batch:
+                # 部分被拦：这批里发出去了几张、几张没过，一句话说完。
+                _notify_batch_blocked(job.target, job.target_id,
+                                     sent, blocked, len(names))
         elif silent and getattr(job, "resample_fn", None) and job.retry_left > 0:
             # 随机口令被拦 → **静默重抽**（2026-10-05 用户拍板）：图是机器人
             # 自己推的服务，不是用户点的单，回「未过审」没道理。换一条新
@@ -1610,6 +1622,11 @@ def process(job):
             # 而且会让额度退回去——等于给了一条「靠生成违规图刷额度」的路。
             log.info("生图全部被审核拦下，未发回 %s %s（%d 张）",
                      job.target, job.target_id, len(names))
+            # 多图：逐张那句被 quiet_audit 关掉了，这里补**一句**汇总。
+            # 单图不说话（allow_send 已经回过一句，重复了）。
+            if blocked and batch:
+                _notify_batch_blocked(job.target, job.target_id,
+                                     0, blocked, len(names))
     except Exception as exc:
         job.error = exc
         _notice(job, stage="send")
@@ -2197,6 +2214,32 @@ def _notify_random_blocked(job):
                     job.target, job.target_id, exc)
 
 
+def _notify_batch_blocked(target, target_id, sent, blocked, total):
+    """一批图里有没过的 → **只回一句**汇总（2026-10-18 用户报刷屏）。
+
+    从前每张图各自过一次 `allow_send`、各自回一句「这张图没过审，没发出去。
+    换个描述再试试？」，而漫画一批就是 10 格：全被拦时群里连出 10 句一模一
+    一样的话，用户连着重发几次就是一整屏。
+
+    这里不新增判断，只改「说几遍」：图还是逐张过审、逐张进人工二审队列
+    （管理员在 /review 看着图能点过审补发），只是把结果按批汇总成一句。
+
+    话术不劝「换个描述」——漫画的画面是模型自己按剧本写的分镜，用户改不了
+    描述。发不出去就算了，不抛异常（跟 `_notify_blocked` 同一纪律）。
+    """
+    if sent:
+        text = ("这批 %d 张里有 %d 张没过审，另外 %d 张已发；"
+                "没过的在人工二审里，管理员可以看着放行。"
+                % (total, blocked, sent))
+    else:
+        text = ("这批 %d 张都没过审，一张也没发出去；"
+                "已经放进人工二审，管理员看着图可以放行。" % total)
+    try:
+        _send_text(target, target_id, text)
+    except Exception as exc:
+        log.warning("批次审核提示发送失败 %s %s：%s", target, target_id, exc)
+
+
 def _send_image(target, target_id, filename, tag="", skill="", seed=None,
                 notify=True, prompt=""):
     """发回原会话。先过 image_out 出副本（jpg 压扁丢元数据 / png 原样带工作流），
@@ -2345,15 +2388,31 @@ def _resume_one(tag, rec):
 
     seed = rec.get("seed")
     prompt = rec.get("prompt") or ""
-    sent = 0
+    # 多图批次（漫画 10 格）同样**按批汇总**，不逐张回「这张图没过审」——
+    # 2026-10-18 用户报的刷屏现场就是重启后补发这批：10 句一样的话。
+    batch = len(names) > 1
+    sent = blocked = 0
     for name in names:
         try:
             if _send_image(target, target_id, name, tag, skill=skill,
-                           seed=seed, prompt=prompt):
+                           seed=seed, prompt=prompt,
+                           **({"notify": False} if batch else {})):
                 sent += 1
+            else:
+                # 返回 False 只有一种原因：审核拦下（发送失败是抛异常）。
+                blocked += 1
         except Exception:
             log.warning("恢复：%s 补发抛异常", tag, exc_info=True)
     if not sent:
+        if blocked and blocked == len(names):
+            # **全是审核拦的**：图本身过不了，重试还是同一批图、同一个审核，
+            # 唯一的效果是每次启动再刷一遍提示。当成处理完——图已经在人工
+            # 二审队列里，管理员能看着放行。
+            log.info("恢复：%s 的 %d 张全被审核拦下（已进人工二审），不再重试",
+                     tag, len(names))
+            if batch:
+                _notify_batch_blocked(target, target_id, 0, blocked, len(names))
+            return True
         # 一张都没发出去（协议端没连上之类）。审核拦下的**不算**失败——那种
         # 情况 image_audit 已经回过话了、也进了人工二审队列，这里当处理完。
         attempts = int(rec.get("attempts") or 0) + 1
@@ -2367,6 +2426,8 @@ def _resume_one(tag, rec):
         except Exception:
             log.warning("恢复：%s 记尝试次数失败", tag, exc_info=True)
         return False
+    if blocked and batch:
+        _notify_batch_blocked(target, target_id, sent, blocked, len(names))
     # 编号 → 提示词 + 种子：跟正常投递那条路一样，发成功才记账。
     image_log.save(tag, prompt=prompt, file=names[0], skill=skill,
                    target=target, target_id=target_id,
