@@ -17,6 +17,7 @@
 
 import os
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -1231,6 +1232,23 @@ class PromptTest(unittest.TestCase):
         self.assertIn("背身格不许再写", comic_agent._fix_system_prompt())
         self.assertIn("背身格不许再写", comic_agent._chat_system_prompt())
 
+    def test_fix_prompt_audits_appearance(self):
+        """补正员要审外观（2026-10-18 用户强调）。
+
+        现场：`hairclip` 被补成 `orange hairclip` —— 只补了颜色，形状和位置
+        仍缺，模型每格会把发饰换个地方戴。脸和身上的东西是观众认人的锚，
+        补正必须按「颜色 + 形状 + 位置」补全，不能补一半。
+        """
+        f = comic_agent._fix_system_prompt()
+        self.assertIn("外观审计和视角审计同等重要", f)
+        self.assertIn("颜色 + 形状 + 位置", f)
+        self.assertIn("orange bow hairclip on left side of head", f)
+        self.assertIn("不写位置，模型每格会把它换个地方戴", f)
+        self.assertIn("这种「补了一半」也算漏", f)
+        # 服饰那一类也在（颜色 + 款式，blue skirt → blue pleated skirt）
+        self.assertIn("blue skirt", f)
+        self.assertIn("blue pleated skirt", f)
+
     def test_narrator_lock_viewer_is_camera_body(self):
         """旁白锁 A（2026-10-12 晚拍板）：`标签:` 里的「我」＝观众＝镜头本体，
         不是女主的自称；她的内心走气泡（（女）前缀）+ 表情标签。"""
@@ -1844,6 +1862,57 @@ class ChatReviseTest(unittest.TestCase):
         self.assertIn("答复：", p)
         self.assertIn("完整剧本", p)
         self.assertIn("分镜规范全文", p)
+
+
+class PrevStoryTest(unittest.TestCase):
+    """前情提要（2026-10-18 连续剧需求）。
+
+    新一集编剧时得知道前面演到哪了，否则每集从零开始、认过的面反复认。
+    抽取只留「气泡 + 旁白」：画面行是发色/服饰/景别/灯光，给生图用的，
+    带进前情既费字数，还会误导编剧把上一集的衣服照抄过来。
+    """
+
+    def _write(self, text):
+        fd, path = tempfile.mkstemp(suffix=".md")
+        os.close(fd)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        self.addCleanup(os.unlink, path)
+        return path
+
+    def test_keeps_bubbles_and_narration_drops_scene(self):
+        p = self._write(
+            "# 标题：t\n\n## 01\n画面: 1girl, solo, navy skirt, close-up\n"
+            "气泡: （女）你好\n标签1: 她抬起头。\n标签2: 窗外在下雨。\n\n"
+            "## 02\n画面: 1girl, solo\n气泡2: （我）嗯\n标签1: 我应了一声。\n")
+        out = comic_agent.prev_story_text(p)
+        self.assertIn("## 01", out)
+        self.assertIn("（女）你好", out)
+        self.assertIn("她抬起头。", out)       # 多条旁白都在
+        self.assertIn("窗外在下雨。", out)
+        self.assertIn("（我）嗯", out)          # 气泡2 的说话人
+        self.assertNotIn("navy skirt", out)    # 画面行整段丢掉
+        self.assertNotIn("画面:", out)
+
+    def test_truncates_to_limit(self):
+        body = "\n\n".join("## %02d\n（女）第%d句\n旁白%d" % (i, i, i)
+                           for i in range(1, 60))
+        out = comic_agent.prev_story_text(self._write(body), limit=100)
+        self.assertLessEqual(len(out), 101)
+        self.assertTrue(out.endswith("…"))
+
+    def test_missing_file_is_empty(self):
+        self.assertEqual("", comic_agent.prev_story_text("这个文件不存在.md"))
+
+    def test_user_prompt_carries_continuity_rules(self):
+        from app import comic_writer
+        p = comic_writer._user_prompt("设定", 3, "", "## 01\n（女）上集台词")
+        self.assertIn("前情：", p)
+        self.assertIn("上集台词", p)
+        self.assertIn("不许重演前情里的情节", p)
+        self.assertIn("人物关系、情绪和已经发生的事必须延续", p)
+        # 没有前情时一个字都不许出现（全新一集不该被这段话干扰）
+        self.assertNotIn("前情：", comic_writer._user_prompt("设定", 3, "", ""))
 
 
 if __name__ == "__main__":

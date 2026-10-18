@@ -110,6 +110,15 @@
       <span style="color:var(--text-dim);font-size:12px">单人写真集：只有女主，无视角无剧情，一次多张</span>
     </div>
     <div class="row" style="margin-bottom:10px">
+      <span style="color:var(--text-dim);font-size:12px">历史任务</span>
+      <select id="taskPick" style="width:300px;max-width:46vw" onchange="switchTask(this.value)"
+              title="剧本都存着：选一个就切过去，看它当时的剧本和格子（不会删任何东西）">
+        <option value="">（当前没有任务）</option>
+      </select>
+      <button class="btn small" onclick="loadTasks()" title="重新扫一遍 comics/ 目录">↻</button>
+      <span style="color:var(--text-dim);font-size:12px">切过去只是打开它，不改内容</span>
+    </div>
+    <div class="row" style="margin-bottom:10px">
       <textarea id="brief" rows="3" style="flex:1;min-width:220px" placeholder="视角: 哥哥
 主角: 妹妹
 剧情: 下雨天兄妹俩在公交站躲雨……（前两行是硬约束：视角=镜头后的「我」，男性→pov、女性→female_pov；主角=画面里唯一入画的人）"></textarea>
@@ -121,6 +130,11 @@
       <span style="color:var(--text-dim);font-size:12px">编剧模型</span>
       <select id="prov" style="width:140px" onchange="loadModels()" title="用哪家模型写剧本"></select>
       <select id="model" style="width:200px" title="写剧本用的具体模型（留空 = 该家默认）"></select>
+      <span style="color:var(--text-dim);font-size:12px;margin-left:6px">接上一集</span>
+      <select id="prevTask" style="width:230px;max-width:40vw"
+              title="选了就把那一集的气泡和旁白当前情，本集接着往下写（不重演、关系延续）">
+        <option value="">不接——全新一集</option>
+      </select>
       <span class="spacer" style="flex:1"></span>
       <button class="btn primary" id="btnScript" onclick="genScript()">生成剧本</button>
     </div>
@@ -320,6 +334,8 @@ async function genScript() {
     const d = await api('/api/comic/script', {
       brief, panels: +document.getElementById('panels').value || 10,
       character: document.getElementById('character').value.trim(),
+      // 接上一集：给任务号，后端抽它的气泡+旁白当前情（2026-10-18）。
+      prev: document.getElementById('prevTask').value || '',
       provider: document.getElementById('prov').value,
       model: document.getElementById('model').value
     });
@@ -353,6 +369,7 @@ async function pollScript() {
   }
   TASK = d.task;
   rememberTask(TASK);
+  loadTasks();                            // 新任务要出现在「历史任务」下拉里
   const ta = document.getElementById('script');
   ta.style.display = 'block'; ta.value = d.script;
   renderFix(d.fix);                       // 补正报告（编剧之后那一步）
@@ -1015,34 +1032,86 @@ function poll() { clearTimeout(TIMER); TIMER = setTimeout(async () => { await re
 // 走 /api/comic/script_text 取回（纯写真任务没有 script.md，抛错就当没有）。
 // 参数卡无论如何先显示——它可能是全局默认/模板值，跟有没有任务无关。
 async function restoreSession() {
+  await loadTasks();                  // 下拉先填好（一个任务都没有也要给个空选项）
   let saved = null;
   try { saved = localStorage.getItem(LS_TASK); } catch (e) { }
   if (!saved) { loadRenderOpts(true); return; }
   try {
-    const d = await api('/api/comic/status?task=' + encodeURIComponent(saved));
-    TASK = saved;
-    try {
-      const s = await api('/api/comic/script_text?task=' + encodeURIComponent(saved));
-      if (s.script) {
-        const ta = document.getElementById('script');
-        ta.style.display = 'block'; ta.value = s.script;
-        document.getElementById('scriptOps').style.display = 'flex';
-        document.getElementById('chatBox').style.display = 'block';
-        loadChatHistory();
-        renderFix(d.fix);
-      }
-    } catch (e) { /* 纯写真任务：没有剧本，正常 */ }
-    document.getElementById('portraitCard').style.display =
-      (d.portraits && d.portraits.length) ? 'block' : 'none';
-    await loadRenderOpts(true);
-    toast('已恢复上次的任务：' + saved);
-    refresh();
+    await loadTaskUI(saved, '已恢复上次的任务');
   } catch (e) {
     // 任务目录被删了 / 名字不对：别每次刷新都弹错，忘掉它重新开始。
     rememberTask(null);
     console.warn('恢复上次任务失败', e);
     loadRenderOpts(true);
   }
+}
+
+// ── 历史任务 / 连载（2026-10-18）──────────────────────────
+// 剧本其实一直在存（每个任务目录的 script.md），但页面以前只记得 localStorage
+// 里那一个任务名——新建一集之后就再也翻不回去了。两个下拉各管一件事：
+//   「历史任务」= 打开旧的一集，看它当时的剧本和格子；
+//   「接上一集」= 把某一集的气泡+旁白当成前情喂给编剧（后端抽，不带画面行）。
+let TASK_LIST = [];
+
+async function loadTasks() {
+  let d;
+  try { d = await api('/api/comic/tasks'); }
+  catch (e) { console.warn('列任务失败', e); return; }
+  TASK_LIST = d.tasks || [];
+  const pick = document.getElementById('taskPick');
+  pick.innerHTML = TASK_LIST.length
+    ? TASK_LIST.map(t => '<option value="' + esc(t.task) + '">' + esc(taskLabel(t)) + '</option>').join('')
+    : '<option value="">（还没有剧本任务）</option>';
+  const prev = document.getElementById('prevTask');
+  prev.innerHTML = '<option value="">不接——全新一集</option>'
+    + TASK_LIST.filter(t => t.task !== TASK)
+        .map(t => '<option value="' + esc(t.task) + '">' + esc(taskLabel(t)) + '</option>').join('');
+  syncTaskPick();
+}
+
+function taskLabel(t) {
+  const st = t.panels ? (t.done + '/' + t.panels + ' 完成') : '空';
+  return t.task + (t.title ? '｜' + t.title : '') + '（' + st + '）';
+}
+
+function syncTaskPick() {
+  const pick = document.getElementById('taskPick');
+  if (TASK) pick.value = TASK;
+}
+
+async function switchTask(name) {
+  if (!name || name === TASK) return;
+  try {
+    await loadTaskUI(name, '已切到');
+    loadTasks();          // 那一集的完成数可能变了，标签顺手刷新
+  } catch (e) { toast(e.message, true); }
+}
+
+// 打开一个任务：状态 + 剧本正文 + 补正报告 + 渲染参数。恢复会话和切任务共用。
+async function loadTaskUI(name, prefix) {
+  const d = await api('/api/comic/status?task=' + encodeURIComponent(name));
+  TASK = name; rememberTask(name);
+  const ta = document.getElementById('script');
+  ta.style.display = 'none'; ta.value = '';
+  document.getElementById('scriptOps').style.display = 'none';
+  document.getElementById('chatBox').style.display = 'none';
+  document.getElementById('fixPanel').style.display = 'none';
+  try {
+    const s = await api('/api/comic/script_text?task=' + encodeURIComponent(name));
+    if (s.script) {
+      ta.style.display = 'block'; ta.value = s.script;
+      document.getElementById('scriptOps').style.display = 'flex';
+      document.getElementById('chatBox').style.display = 'block';
+      loadChatHistory();
+      renderFix(d.fix);
+    }
+  } catch (e) { /* 纯写真任务：没有剧本，正常 */ }
+  document.getElementById('portraitCard').style.display =
+    (d.portraits && d.portraits.length) ? 'block' : 'none';
+  await loadRenderOpts(true);
+  syncTaskPick();
+  if (prefix) toast(prefix + '：' + name);
+  refresh();
 }
 
 async function rerender(no) {

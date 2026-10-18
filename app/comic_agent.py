@@ -1921,8 +1921,50 @@ def check(text, panels, brief=""):
 
 # ─── 对外入口 ───────────────────────────────────────────
 
+# 前情提要的字数上限（2026-10-18 连续剧需求）。
+# 一集 10 格的「气泡 + 旁白」约 600~900 字，4000 字够接四五集。**不做摘要**：
+# 摘要有损（它会把伏笔和语气一起抹平），而上下文远没到上限——用户自己算过
+# 这笔账，不需要再造一层压缩。
+PREV_STORY_LIMIT = 4000
+
+
+def prev_story_text(script_path, limit=PREV_STORY_LIMIT):
+    """把一个剧本压成「前情提要」：每格只留气泡 + 旁白，画面行整段丢掉。
+
+    **为什么丢画面行**：它写的是发色 / 服饰 / 景别 / 灯光，是给生图模型的；
+    前情只需要「发生了什么、说了什么」。留着它既费字数，还会误导编剧把上一集
+    的服饰照抄到这一集（换了场景就该换衣服）。
+
+    2026-10-18 用户提的连载需求：新一集编剧时得知道前面演到哪了，否则每集都
+    从零开始，人物关系原地打转、认过的面反复认。写成独立函数是因为它只依赖
+    `script.md` 的契约，不碰任何状态。
+    """
+    try:
+        with open(script_path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return ""
+    _, panels = comic.parse_script_text(text)
+    blocks = []
+    for p in panels:
+        lines = ["## %s" % p["no"]]
+        for key, skey in (("bubble", "speaker"), ("bubble2", "speaker2")):
+            said = (p.get(key) or "").strip()
+            if said:
+                who = (p.get(skey) or "").strip() or "女"
+                lines.append("（%s）%s" % (who, said))
+        for one in (p.get("label") or "").split("\n"):
+            if one.strip():
+                lines.append(one.strip())
+        blocks.append("\n".join(lines))
+    body = "\n\n".join(blocks).strip()
+    if limit and len(body) > limit:
+        body = body[:limit].rstrip() + "…"
+    return body
+
+
 def write_script(brief, panels=3, character="", provider=None, model=None,
-                 max_rounds=MAX_ROUNDS, tries=2, progress=None):
+                 max_rounds=MAX_ROUNDS, tries=2, progress=None, prev=""):
     """查库写剧本。返回剧本文本（markdown，已含头部备选记录）。
 
     参数：
@@ -1934,6 +1976,8 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
         空剧本落盘，抛 RuntimeError 更有用（调用方转成可见的报错）。
       - progress：可选回调，每执行一次工具调一次，用来在界面上显示
         「正在查库 arm_grab」这类实时进度。
+      - prev：上一集的「前情提要」正文（`prev_story_text` 的产物）。空串 =
+        全新一集；给了就要求接着前情往下写、不许重演（见 `_user_prompt`）。
     """
     if not (brief or "").strip():
         raise ValueError("设定不能为空")
@@ -1947,7 +1991,8 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
 
     base = [
         {"role": "system", "content": _system_prompt(panels)},
-        {"role": "user", "content": comic_writer._user_prompt(brief, panels, character)},
+        {"role": "user", "content": comic_writer._user_prompt(brief, panels,
+                                                              character, prev)},
     ]
     # 回炉时只带「上次交出的剧本 + 错因」，不带工具中间结果——那些加起来几万字，
     # 带进下一轮会把上下文顶爆，而它们对改稿没有帮助（错因已经说清了）。
@@ -2048,6 +2093,25 @@ _FIX_SYSTEM = """你是分镜剧本的**补正员**，也是出剧本前的最�
 之类）必须写成「颜色 + 款式/物件」。原始需求里写了的就用需求里的颜色；没写，
 **你自己定一个合适的颜色**——但同一个人 / 同一件东西，全稿必须用同一个颜色
 （第 3 格是 `navy skirt`，第 7 格也得是 `navy`，不许换个颜色）。
+
+**外观审计和视角审计同等重要（2026-10-18 用户强调）。** 脸和身上的东西是观众
+认人的锚，漏一个细节就是每格都错。逐格核对下面三类，缺哪类补哪类：
+① **脸**——发色、发型（长度 + 束法，`ponytail` / `twin tails` / `long hair`）、
+   瞳色、以及需求里点明的脸部细节（呆毛 / 泪痣 / 虎牙 / 刘海样式）。
+   这些是**每一格**都得重写一遍的，不是写在标题里就完事；
+② **发饰 / 头饰**——最容易被写成泛名的一类，只写 `hairclip` / `hair ribbon` /
+   `hairband` 不合格。必须写清**颜色 + 形状 + 位置**，例如
+   `orange bow hairclip on left side of head`。
+   **位置尤其不能省**：不写位置，模型每格会把它换个地方戴，十格看下来像换了
+   十种发饰。本次实例：`hairclip` 补成 `orange hairclip` 只补了颜色，形状和
+   位置仍缺——这种「补了一半」也算漏；
+③ **服饰**——每一件单独写「颜色 + 款式」：领子、上衣、裙/裤、袜、鞋，加上
+   随身物件（包 / 眼镜 / 耳机 / 饮料瓶）。`blue skirt` 这种只有颜色的，
+   款式词也要补回来（`blue pleated skirt`）。
+
+需求里写了的照抄；没写的**你自己拍板一个**，但全稿必须同一套——第 1 格的
+发夹戴在左边，第 10 格也得在左边。判据仍然是「这一格画面里看不看得见」：
+景别拍不到的部件不写（见规范第十八条），但拍得到就必须写全。
 
 上游给你一份**问题清单**，是程序核对出来的事实，**先把清单点名的每一处补上**。
 但清单只是起点、不是边界：你对照规范通读全稿，**任何**没写具体的地方（包括清单

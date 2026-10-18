@@ -100,6 +100,38 @@ class ComicScriptApiTest(unittest.TestCase):
         self.assertEqual(kw.get("provider"), "deepseek")
         self.assertEqual(kw.get("model"), "deepseek-v4-flash")
 
+    def test_prev_story_forwarded(self):
+        """接上一集：后端抽它的气泡+旁白当前情，画面行不许带进去。
+
+        画面行是发色/服饰/景别/灯光，给生图用的；带进前情既费字数，还会让
+        编剧把上一集的衣服照抄到这一集（换了场景就该换装）。
+        """
+        prev_dir = os.path.join(self.tmp, "C20261011-00")
+        os.makedirs(prev_dir)
+        with open(os.path.join(prev_dir, "script.md"), "w", encoding="utf-8") as f:
+            f.write("# 标题：上集\n\n## 01\n画面: 1girl, solo, navy skirt, close-up\n"
+                    "气泡: （女）前情台词\n标签1: 前情旁白\n")
+        with mock.patch.object(comic_api, "_COMICS_ROOT", self.tmp), \
+             mock.patch.object(comic_agent, "write_script",
+                               return_value=GOOD_SCRIPT) as m:
+            d = self._post(prev="C20261011-00")
+            self._wait(d["job"])
+        prev = m.call_args.kwargs.get("prev")
+        self.assertIn("前情台词", prev)
+        self.assertIn("前情旁白", prev)
+        self.assertNotIn("navy skirt", prev)
+        # 链条也记一笔，下一集的下拉里看得出来
+        self.assertTrue(os.path.isfile(os.path.join(self.tmp, "C20261011-01",
+                                                    "prev.txt")))
+
+    def test_unknown_prev_falls_back_to_plain_episode(self):
+        with mock.patch.object(comic_api, "_COMICS_ROOT", self.tmp), \
+             mock.patch.object(comic_agent, "write_script",
+                               return_value=GOOD_SCRIPT) as m:
+            d = self._post(prev="C20990101-99")
+            self._wait(d["job"])
+        self.assertEqual("", m.call_args.kwargs.get("prev"))
+
     def test_empty_provider_stays_none(self):
         with mock.patch.object(comic_agent, "write_script",
                                return_value=GOOD_SCRIPT) as m:
@@ -864,6 +896,64 @@ class ComicPortraitApiTest(unittest.TestCase):
         d = r.get_json()
         self.assertEqual(d["panels"], [])
         self.assertEqual(len(d["portraits"]), 1)
+
+
+class TasksApiTest(unittest.TestCase):
+    """历史任务列表（2026-10-18 连续剧需求）。
+
+    剧本一直在存（每个任务目录的 script.md），但页面以前只记得 localStorage
+    里那一个任务名——新建一集之后就翻不回去了。这个接口是那个下拉的数据源。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="comic_tasks_")
+        self._p = mock.patch.object(comic_api, "_COMICS_ROOT", self.tmp)
+        self._p.start()
+        self.addCleanup(self._p.stop)
+        self.c = main.app.test_client()
+        self._mk("C20261018-9", "# 标题：第九集\n\n## 01\n画面: 1girl, solo, pov\n"
+                                "气泡: （女）一\n标签1: a\n", done=1)
+        self._mk("C20261018-10", "# 标题：第十集\n\n## 01\n画面: 1girl, solo, pov\n"
+                                 "气泡: （女）一\n标签1: a\n\n## 02\n画面: 1girl, solo, pov\n"
+                                 "气泡: （女）二\n标签1: b\n", prev="C20261018-9")
+        os.makedirs(os.path.join(self.tmp, "C20261018-11"))   # 纯写真：没剧本
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _mk(self, name, script, done=0, prev=""):
+        path = os.path.join(self.tmp, name)
+        os.makedirs(path)
+        with open(os.path.join(path, "script.md"), "w", encoding="utf-8") as f:
+            f.write(script)
+        _, panels = comic.parse_script_text(script)
+        st = {"task_id": name, "title": "", "script": "script.md",
+              "updated": "2026-10-18T19:00:00",
+              "panels": {p["no"]: {"state": "done" if i < done else "pending"}
+                         for i, p in enumerate(panels)}}
+        with open(os.path.join(path, "state.json"), "w", encoding="utf-8") as f:
+            json.dump(st, f, ensure_ascii=False)
+        if prev:
+            with open(os.path.join(path, "prev.txt"), "w", encoding="utf-8") as f:
+                f.write(prev + "\n")
+
+    def test_lists_newest_first_numerically(self):
+        d = self.c.get("/api/comic/tasks").get_json()
+        self.assertTrue(d["ok"])
+        names = [t["task"] for t in d["tasks"]]
+        # -10 必须在 -9 前面：直接比字符串会反过来
+        self.assertEqual(["C20261018-10", "C20261018-9"], names)
+
+    def test_carries_title_panels_done_prev(self):
+        t = self.c.get("/api/comic/tasks").get_json()["tasks"][0]
+        self.assertEqual("第十集", t["title"])
+        self.assertEqual(2, t["panels"])
+        self.assertEqual(0, t["done"])
+        self.assertEqual("C20261018-9", t["prev"])
+
+    def test_dir_without_script_skipped(self):
+        names = [t["task"] for t in self.c.get("/api/comic/tasks").get_json()["tasks"]]
+        self.assertNotIn("C20261018-11", names)
 
 
 class MarkPendingFailedTest(unittest.TestCase):

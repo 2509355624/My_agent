@@ -155,10 +155,23 @@ def _clean(text):
     return "\n".join(lines).strip()
 
 
-def _user_prompt(brief, panels, character):
+def _user_prompt(brief, panels, character, prev=""):
     parts = ["设定：%s" % brief.strip(), "格数：%d" % panels]
     if character.strip():
         parts.append("角色外观标签（每一格原样重复这套）：%s" % character.strip())
+    # 连载（2026-10-18）：把上一集的「气泡 + 旁白」原样给它，不做摘要。
+    # 三条接续要求都是实测过的坑——重演已经演过的节拍、人物关系归零、
+    # 把上一集的服饰照抄到新场景（见 comic_spec 第九节最后两行）。
+    if (prev or "").strip():
+        parts.append(
+            "前情：以下是上一集已经演过的内容，本集从它结束的地方接着往下写。\n"
+            + prev.strip() + "\n"
+            "接续要求：\n"
+            "① 不许重演前情里的情节，也不许把已经揭晓的事再演一遍"
+            "（认过的面别再认一次、说过的话别再问一遍）；\n"
+            "② 人物关系、情绪和已经发生的事必须延续——上一集她刚被拒绝，"
+            "这一集就不能当没发生过；\n"
+            "③ 前情里的服饰和场景不要求照抄，换场就换景。")
     return "\n".join(parts)
 
 

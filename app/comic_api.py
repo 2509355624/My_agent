@@ -38,6 +38,7 @@
 import io
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -264,6 +265,62 @@ def _mark_pending_failed(path, no=None):
     return _apply
 
 
+@bp.route("/api/comic/tasks")
+def api_comic_tasks():
+    """列出 comics/ 下的剧本任务，给页面顶部的「历史任务」下拉用（2026-10-18）。
+
+    为什么需要这个接口：剧本一直都在存（每个任务目录的 `script.md`），但页面
+    只记得 localStorage 里那一个任务名——新建一集之后就再也翻不回去了，用户
+    真要找前情只能去磁盘上翻目录。
+
+    只收**有 script.md** 的目录：纯写真任务（生图模式新建、没剧本）不进这个
+    列表，它们由 `portraits` 那条链路自己管。
+    """
+    out = []
+    try:
+        names = os.listdir(_COMICS_ROOT)
+    except OSError:
+        names = []
+    for name in names:
+        path = os.path.join(_COMICS_ROOT, name)
+        if not os.path.isdir(path):
+            continue
+        script = os.path.join(path, "script.md")
+        if not os.path.isfile(script):
+            continue
+        item = {"task": name, "title": "", "panels": 0, "done": 0,
+                "updated": "", "prev": ""}
+        try:
+            meta, panels = comic.parse_script(script)
+            item["title"] = (meta or {}).get("title", "")
+            item["panels"] = len(panels)
+        except Exception:
+            item["title"] = "（剧本解析失败）"
+        try:
+            with open(os.path.join(path, "state.json"), encoding="utf-8") as f:
+                st = json.load(f)
+            item["updated"] = st.get("updated", "") or ""
+            item["done"] = sum(1 for p in (st.get("panels") or {}).values()
+                               if isinstance(p, dict) and p.get("state") == "done")
+        except (OSError, ValueError):
+            pass
+        try:
+            with open(os.path.join(path, "prev.txt"), encoding="utf-8") as f:
+                item["prev"] = f.read().strip()
+        except OSError:
+            pass
+        out.append(item)
+
+    def _key(it):
+        # 任务号 CYYYYMMDD-NN：按「日期 + 序号数值」排，不能直接比字符串
+        # （"C20261018-10" 会排到 "C20261018-9" 前面）。
+        m = re.match(r"^C(\d{8})-(\d+)$", it["task"])
+        return (m.group(1), int(m.group(2))) if m else ("0", 0)
+
+    out.sort(key=_key, reverse=True)
+    return jsonify({"ok": True, "tasks": out})
+
+
 @bp.route("/api/comic/script", methods=["POST"])
 def api_comic_script():
     """编剧写剧本：起后台任务，立刻返回 job；前端轮询 /script_status 取结果。
@@ -288,6 +345,19 @@ def api_comic_script():
     character = str(data.get("character") or "").strip()
     provider = str(data.get("provider") or "").strip() or None
     model = str(data.get("model") or "").strip() or None
+    # 连载（2026-10-18）：prev = 上一集的任务号，给了就把它的气泡+旁白当前情。
+    # 目录名过一遍 `_task_dir` 校验（它挡住 `..` 和绝对路径），指不到就当没给。
+    prev = str(data.get("prev") or "").strip()
+    prev_text = ""
+    if prev:
+        try:
+            prev_path = os.path.join(_task_dir(prev), "script.md")
+        except ValueError:
+            prev_path = ""
+        if prev_path and os.path.isfile(prev_path):
+            prev_text = comic_agent.prev_story_text(prev_path)
+        if not prev_text:
+            prev = ""             # 目录不在 / 没有剧本：静默按全新一集处理
 
     job = uuid.uuid4().hex[:12]
     with _SCRIPT_LOCK:
@@ -309,7 +379,8 @@ def api_comic_script():
         try:
             text = comic_agent.write_script(
                 brief, panels=panels_n, character=character,
-                provider=provider, model=model, progress=_progress)
+                provider=provider, model=model, progress=_progress,
+                prev=prev_text)
             # 目录在剧本写好后才建：失败的 job 不留空目录。
             path = comic._next_task_dir(_COMICS_ROOT)
             os.makedirs(path, exist_ok=True)
@@ -340,6 +411,11 @@ def api_comic_script():
             # brief 落盘：手动重跑补正时要拿它当「原始需求」。
             with open(os.path.join(path, "brief.txt"), "w", encoding="utf-8") as f:
                 f.write(brief + "\n")
+            # 上一集是谁也记一笔：下一集接着接的时候，下拉里能看出这条链。
+            if prev:
+                with open(os.path.join(path, "prev.txt"), "w",
+                          encoding="utf-8") as f:
+                    f.write(prev + "\n")
             report = _write_fix_report(path, fix)
 
             with _SCRIPT_LOCK:
