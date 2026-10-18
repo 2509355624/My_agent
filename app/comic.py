@@ -741,9 +741,15 @@ def _submit(workflow, skill, prompt, seed):
     target=None 是「网页侧」路径：worker 出图后只把 history entry 挂到 job 上，
     不发回任何会话、也不走审核（见 image_jobs.process）。所以这里拿到 entry
     自己把图取下来落盘即可。
+
+    `batch="comic"`（2026-10-18）只做一件事：把「累计满 N 张就整机重启
+    ComfyUI」的阈值换成 `COMFY_RELEASE_AFTER_COMIC`（默认 6）。一本十几格按
+    全局的 2 张一重启，等于每 3 格等一次 60~90 秒冷启动。
+    跨进程排队（和 QQ 机器人共用一把锁）在 worker 里做，这里不用管。
     """
     job, reason = image_jobs.enqueue(None, None, workflow, skill=skill,
-                                     prompt=prompt, seed=seed, landscape=False)
+                                     prompt=prompt, seed=seed, landscape=False,
+                                     batch="comic")
     if reason:
         raise RuntimeError(reason)
     entry = job.wait()                       # 失败会抛 job.error

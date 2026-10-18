@@ -13,6 +13,7 @@
 """
 
 import io
+import json
 import os
 import shutil
 import sys
@@ -674,14 +675,21 @@ class ComicRenderOptsApiTest(unittest.TestCase):
         self.assertFalse(os.path.isfile(
             os.path.join(self.dir, "render.json")))
 
-    def test_bad_width_is_400_and_nothing_written(self):
+    def test_odd_width_is_aligned_with_a_warning(self):
+        """不是 8 的倍数按 //8 对齐存下来（2026-10-18 起，ComfyUI 本来就这么截）。
+
+        改前这里是 400 + 不落盘；用户要填 812（实际渲染就是 808），拒掉只会
+        让人觉得表坏了，所以改成「对齐 + warning」，存进去的是真会跑的尺寸。
+        """
         opts = self._opts(width=1001)
         r = self.c.post("/api/comic/render_opts",
                         json={"task": self.NAME, "opts": opts})
-        self.assertEqual(r.status_code, 400)
-        self.assertIn("8 的倍数", r.get_json()["error"])
-        self.assertFalse(os.path.isfile(
-            os.path.join(self.dir, "render.json")))
+        self.assertEqual(r.status_code, 200)
+        body = r.get_json()
+        self.assertEqual(body["opts"]["width"], 1000)
+        self.assertTrue(any("8 的倍数" in w for w in body["warnings"]))
+        with open(os.path.join(self.dir, "render.json"), encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["width"], 1000)
 
     def test_clamped_values_come_back_with_warnings(self):
         opts = self._opts()

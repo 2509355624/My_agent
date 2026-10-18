@@ -1,9 +1,13 @@
-"""漫画场景渲染参数：按任务覆盖 anima-line 工作流（2026-10-13 用户拍板）。
+"""漫画场景渲染参数：按任务或全局默认覆盖 anima-line 工作流（2026-10-13 用户拍板）。
 
-用户要的是「这一本漫画换个角色 LoRA / 步数调小试试 / 分辨率拉大」——所以参数
-**按任务**存（任务目录下的 `render.json`），开跑时读一次，只改**这一次提交的
-工作流副本**，skill 模板一个字节不动。模板是全局的（所有任务、AI 的
-`update_workflow` 也在写它），不能拿来存单人单次的心血来潮。
+两级持久化（2026-10-18 用户提出「能不能长期保存某个参数作为默认」）：
+
+1. **任务级** `任务目录/render.json`——这一本专用，只影响本任务之后渲染的格；
+2. **全局默认** `state/comic_render_defaults.json`——跨任务的那一份，新任务
+   没存过就照它。取值优先级：**任务 > 全局默认 > 模板当前值**。
+
+开跑时读一次，只改**这一次提交的工作流副本**，skill 模板一个字节不动。模板是
+全局的（所有任务、AI 的 `update_workflow` 也在写它），不能拿来存单人单次的心血来潮。
 
 anima-line 是**两段采样**（摸清结构才敢写覆盖，节点号以 2026-10-13 模板为准）：
   - 第一段 KSampler（节点 2）：latent 来自 EmptyLatentImage，denoise=1，
@@ -39,12 +43,16 @@ import json
 import logging
 import os
 
+from app.config import state_path
 from app.skills import load_skill
 
 log = logging.getLogger("comic")
 
 # 任务目录里的参数文件名
 RENDER_FILE = "render.json"
+
+# 全局默认参数（state/ 下）。跨任务生效，新任务 / 没存过 render.json 的任务照它。
+DEFAULTS_FILE = "comic_render_defaults.json"
 
 # 默认从哪个渠道的模板读当前值（漫画场景图渠道；调用方传 comic.SCENE_SKILL）
 DEFAULT_SKILL = "anima-line"
@@ -185,25 +193,77 @@ def path_of(task_dir):
     return os.path.join(task_dir, RENDER_FILE)
 
 
-def load(task_dir, skill=DEFAULT_SKILL):
-    """读任务目录的 render.json；没有 / 读坏了 → 模板默认值。
+def defaults_path():
+    """全局默认参数文件的路径（state/ 下，测试进程会被导向临时目录）。"""
+    return state_path(DEFAULTS_FILE)
 
-    读坏不炸：那是用户手改坏的文件，退回默认值照常出图，比整本漫画卡死强。
-    """
-    d = defaults(skill)
-    fp = path_of(task_dir)
+
+def load_defaults(skill=DEFAULT_SKILL):
+    """读全局默认参数；没存过 / 读坏了返回 None（None = 不参与叠加）。"""
+    fp = defaults_path()
     if not os.path.isfile(fp):
-        return d
+        return None
     try:
         with open(fp, "r", encoding="utf-8") as f:
             saved = json.load(f)
     except (OSError, ValueError) as e:
-        log.warning("render.json 读不出来（%s），按模板默认值渲染", e)
-        return d
+        log.warning("全局渲染参数读不出来（%s），按模板默认值", e)
+        return None
     if not isinstance(saved, dict):
-        log.warning("render.json 不是对象，按模板默认值渲染")
-        return d
-    opts, errors, _w = normalize(saved, base=d)
+        log.warning("全局渲染参数不是对象，按模板默认值")
+        return None
+    opts, errors, _w = normalize(saved, base=defaults(skill))
+    if errors:
+        # 存的时候校验过，这里还报错只可能是文件被手改坏——能用的部分照用，
+        # 把话说在日志里，别让整本漫画卡在「参数读不出来」上。
+        log.warning("全局渲染参数有不对的地方（%s），已按能用的部分生效",
+                    "；".join(errors))
+    return opts
+
+
+def save_defaults(opts):
+    """存全局默认参数（所有没存过 render.json 的任务都照它跑）。"""
+    opts, errors, _w = normalize(opts)
+    if errors:
+        raise ValueError("；".join(errors))
+    fp = defaults_path()
+    os.makedirs(os.path.dirname(fp), exist_ok=True)
+    with open(fp, "w", encoding="utf-8") as f:
+        json.dump(opts, f, ensure_ascii=False, indent=1)
+    return opts
+
+
+def reset_defaults():
+    """删掉全局默认参数 → 回到模板值。"""
+    fp = defaults_path()
+    if os.path.isfile(fp):
+        os.remove(fp)
+        return True
+    return False
+
+
+def load(task_dir, skill=DEFAULT_SKILL):
+    """读参数：**任务 render.json > 全局默认 > 模板当前值**。
+
+    两级文件都是「覆盖」语义：全局默认先叠在模板上，任务级再叠在它上面。
+    读坏不炸：那是用户手改坏的文件，退回下一级照常出图，比整本漫画卡死强。
+    """
+    base = load_defaults(skill) or defaults(skill)
+    if not task_dir:
+        return base
+    fp = path_of(task_dir)
+    if not os.path.isfile(fp):
+        return base
+    try:
+        with open(fp, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+    except (OSError, ValueError) as e:
+        log.warning("render.json 读不出来（%s），按全局默认 / 模板值渲染", e)
+        return base
+    if not isinstance(saved, dict):
+        log.warning("render.json 不是对象，按全局默认 / 模板值渲染")
+        return base
+    opts, errors, _w = normalize(saved, base=base)
     if errors:
         # 存的时候就校验过，这里还报错只可能是文件被手改坏——不阻塞出图，
         # 但要把话说在日志里，免得用户以为存进去了。
@@ -254,9 +314,10 @@ def normalize(raw, base=None, resources=None):
     """把前端/文件来的原始 dict 收敛成合法参数。
 
     返回 (opts, errors, warnings)。errors 是「这填得不对，存不进去」的事实
-    问题（宽高不是 8 的倍数、LoRA 名 ComfyUI 里没有……）；warnings 是被钳位
-    的字段（步数 999 → 150）。base 给了就按它补缺失的键（部分更新不丢字段）。
-    resources 给了（ComfyUI 在线时的清单）才校验名字——没有证据源就不猜。
+    问题（LoRA 名 ComfyUI 里没有……）；warnings 是被钳位 / 对齐的字段
+    （步数 999 → 150、宽 812 → 808）。base 给了就按它补缺失的键（部分更新
+    不丢字段）。resources 给了（ComfyUI 在线时的清单）才校验名字——没有
+    证据源就不猜。
     """
     base = base or {}
     raw = raw if isinstance(raw, dict) else {}
@@ -355,16 +416,21 @@ def normalize(raw, base=None, resources=None):
     }
 
     # ── 分辨率（EmptyLatentImage 的宽高，8 的倍数）
+    #
+    # 不是 8 的倍数**对齐**而不是拒（2026-10-18 用户填 812×1024 起的改动）：
+    # ComfyUI 的 latent 本来就是 //8 截断，812 实际渲染就是 808——与其让表
+    # 存不进去，不如按它真正会跑的尺寸存下来，并把这事写进 warnings。
     w = _i(raw.get("width", base.get("width", 1024)), 1024)
     h = _i(raw.get("height", base.get("height", 1536)), 1536)
     for label, v in (("宽", w), ("高", h)):
         if v % 8:
-            errors.append("%s %d 不是 8 的倍数（ComfyUI 的要求）" % (label, v))
-    cw = int(_clamp(w, *SIZE_RANGE))
-    ch = int(_clamp(h, *SIZE_RANGE))
-    if cw != w or ch != h:
+            warnings.append("%s %d 不是 8 的倍数，按 %d 渲染（ComfyUI 的 latent "
+                            "是 /8 截断的）" % (label, v, v // 8 * 8))
+    cw, ch = int(_clamp(w, *SIZE_RANGE)), int(_clamp(h, *SIZE_RANGE))
+    if (cw, ch) != (w, h):
         warnings.append("分辨率 %d×%d 超出 %d~%d，已钳成 %d×%d"
                         % (w, h, SIZE_RANGE[0], SIZE_RANGE[1], cw, ch))
+    cw, ch = cw // 8 * 8, ch // 8 * 8
     opts["width"], opts["height"] = cw, ch
     return opts, errors, warnings
 

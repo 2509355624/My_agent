@@ -162,9 +162,10 @@ import uuid
 
 import requests
 
-from app import image_log
+from app import comfy_gate, image_log
 from app.cancel import Cancelled, is_cancelled
 from app.config import (COMFY_MIN_FREE_RAM_GB, COMFY_MIN_FREE_VRAM_GB,
+                        COMFY_RELEASE_AFTER_COMIC,
                         COMFY_RELEASE_AFTER_SAME, COMFY_RELEASE_AFTER_SAME_MAP,
                         COMFY_RELEASE_AFTER_TOTAL,
                         COMFY_RESTART_MIN_GAP,
@@ -492,7 +493,7 @@ class Job:
 
     def __init__(self, target, target_id, workflow, skill=None, weight=1, seq=0,
                  nai_i2i=None, tag=None, prompt=None, intent=None, seed=None,
-                 chan=None, landscape=False, quiet=False):
+                 chan=None, landscape=False, quiet=False, batch=None):
         self.target = target
         self.target_id = target_id
         self.workflow = workflow
@@ -543,6 +544,10 @@ class Job:
         # seed …」，或者冷不丁来一句「这张没画出来」，都比不画还糟。
         # 只有 app/persona.py 的 draw() 会传它；别的调用方一律走默认的完整回执。
         self.quiet = bool(quiet)
+        # 批量来源（2026-10-18，漫画工作台）：只影响一件事——全局累计重启的阈值
+        # 走 `COMFY_RELEASE_AFTER_COMIC`（一本 10 格按全局 2 张一重启，等于白等
+        # 3~5 分钟冷启动）。None = 普通单张，行为与从前完全一致。
+        self.batch = batch or None
         self.waits = 0              # 被冷却 / 被插队推回过几次（只为日志）
         self.skill_done = False     # 已经成功跑完一张？决定跑完要不要开冷却
         self.prompt_id = None
@@ -810,7 +815,7 @@ def snapshot():
 
 def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
             intent=None, seed=None, resample_fn=None, landscape=None,
-            quiet=False):
+            quiet=False, batch=None):
     """把一张图排进**它该去的那条通道**的队列，返回 (job, reason)。
 
     prompt 是模型写的那段原始提示词，只用来**出图后记进账本**（编号 → 提示词，
@@ -830,6 +835,9 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
     那个已经填好的数），不传就是没种子、caption 上不多那段。
     quiet=True 是**静默出图**（2026-10-16，扮演态配图专用）：worker 只把图跑出来
     **不发回会话**，失败也不说话——投递由调用方拿到文件名后自己走（见 `Job.quiet`）。
+
+    batch="comic" 是漫画工作台的批量标记（2026-10-18）：只用来放宽「累计满 N 张
+    就整机重启」的阈值（见 `COMFY_RELEASE_AFTER_COMIC`），其余行为不变。
     """
     key = _key(target, target_id)
     chan = _channel_of(skill)
@@ -860,7 +868,7 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
         chan.seq += 1
         job = Job(target, target_id, workflow, skill, weight, chan.seq,
                   nai_i2i=nai_i2i, prompt=prompt, intent=intent, seed=seed,
-                  chan=chan, landscape=landscape, quiet=quiet)
+                  chan=chan, landscape=landscape, quiet=quiet, batch=batch)
         # 随机口令的「被拦静默重抽」钩子（2026-10-05）：resample_fn 是无参
         # 可调用体，被审核拦下时由 worker 调它换一条新提示词，同 job 重跑。
         # 最多重抽 2 次（3 尝试）；普通生图不传，拦截行为与从前完全一致。
@@ -1002,22 +1010,43 @@ def _take(chan):
 
 
 def _worker(chan):
-    """这条通道的工作线程：本地一张接一张串行；云端 N 个线程并行。"""
+    """这条通道的工作线程：本地一张接一张串行；云端 N 个线程并行。
+
+    本地通道从「取到任务」到「跑完 + 内存检查」整段持有跨进程闸门
+    （2026-10-18，见 app/comfy_gate.py）：漫画工作台跑在另一个进程里，
+    不持锁的话两边的「重启 ComfyUI」会互相掐断正在跑的那张。
+    **等队列时一律不持锁**——持着等，对方就永远轮不到。
+    """
     while True:
         job = _take(chan)
+        gate = None
+        if chan.local:
+            try:
+                gate = comfy_gate.hold("%s %s" % (job.skill or "?", job.tag or ""))
+            except TimeoutError as exc:
+                # 等不到锁 = 对方那条队卡了很久。这一张不跑，老实说一声，
+                # 名额照旧还回去（_finish），别把队列堵死。
+                log.warning("等 ComfyUI 空出来超时（%s），这一张不跑", exc)
+                job.error = exc
+                _notice(job)
+                _finish(job)
+                continue
         try:
-            process(job)
-        except Exception:
-            log.exception("生图任务处理时抛异常 %s %s", job.target, job.target_id)
+            try:
+                process(job)
+            except Exception:
+                log.exception("生图任务处理时抛异常 %s %s", job.target, job.target_id)
+            finally:
+                _finish(job)
+            if chan.local:
+                # 每跑完一张看一眼内存——ComfyUI 的常驻内存是按张涨的（见
+                # _maybe_restart_for_ram）。放在这里而不是 _take 之前：_take 会阻塞
+                # 等新任务，在那儿检查就变成每秒一次了。**只有本地通道要做**：
+                # 云端那张图跟 ComfyUI 的内存一个字节的关系都没有。
+                _maybe_restart_for_ram()
         finally:
-            _finish(job)
-        if not chan.local:
-            continue
-        # 每跑完一张看一眼内存——ComfyUI 的常驻内存是按张涨的（见
-        # _maybe_restart_for_ram）。放在这里而不是 _take 之前：_take 会阻塞
-        # 等新任务，在那儿检查就变成每秒一次了。**只有本地通道要做**：
-        # 云端那张图跟 ComfyUI 的内存一个字节的关系都没有。
-        _maybe_restart_for_ram()
+            if gate is not None:
+                gate.release()
 
 
 def _release_limit(skill):
@@ -1064,9 +1093,16 @@ def _maybe_release_for_switch(job):
     # 换渠道 hd_3_curvy 提交时内存只剩 0.9GB，/free 已救不回换页态）。这条
     # 不看渠道：自上次重启以来**总共**提交满 N 张，下一张提交前照样整个重启。
     # 它先于下面的同渠道/换渠道判定——重启本身就把两边都清零了，不用再 /free。
-    if 0 < COMFY_RELEASE_AFTER_TOTAL <= chan.total_run:
-        log.info("ComfyUI 累计已连画 %d 张（全局阈值 %d，不分渠道），"
-                 "下一张提交前彻底重启", chan.total_run, COMFY_RELEASE_AFTER_TOTAL)
+    # 漫画批量换一条阈值（2026-10-18 用户拍板）：一本十几格按全局 2 张一重启，
+    # 等于每 3 格等一次 60~90 秒冷启动。`COMFY_RELEASE_AFTER_COMIC=0` = 不分家。
+    total_limit = COMFY_RELEASE_AFTER_TOTAL
+    if getattr(job, "batch", None) == "comic" and COMFY_RELEASE_AFTER_COMIC > 0:
+        total_limit = COMFY_RELEASE_AFTER_COMIC
+    if 0 < total_limit <= chan.total_run:
+        log.info("ComfyUI 累计已连画 %d 张（%s阈值 %d，不分渠道），"
+                 "下一张提交前彻底重启", chan.total_run,
+                 "漫画批量" if getattr(job, "batch", None) == "comic" else "全局",
+                 total_limit)
         chan.total_run = 1          # 重启后这张算新一轮第 1 张
         chan.same_run = 1
         chan.last_skill = skill     # 重启覆盖换渠道 /free，别再打一次没用的
@@ -1186,6 +1222,13 @@ def _restart_comfy(timeout=COMFY_RESTART_WAIT):
     重启期间 8188 会拒连，所以轮询到它回来为止。等不到就放弃并记一条错误
     ——下一张图会撞上 `_notice` 那句「ComfyUI 没在线」，总好过在这里无限等。
     """
+    # 跨进程避让（2026-10-18）：漫画工作台跑在 Flask 进程，它持锁跑图时这里
+    # 一旦重启 ComfyUI，对方那一格当场断掉（用户实录「漫画任务突然结束」）。
+    # 所以有人在用就不动手——宁可这一轮不重启（残留下一轮再说），也不打断别人。
+    if comfy_gate.busy_others():
+        log.info("ComfyUI 正被 %s 占用，这次不重启（等它跑完再说）",
+                 comfy_gate.describe(comfy_gate.holder()))
+        return False
     # 任何一次重启都重置防抖（2026-10-03）：超时那条路现在也会重启，不记的
     # 话 worker 紧接着的 _maybe_restart_for_ram 会再重启一次，白等一轮。
     _COMFY.last_restart_try = time.time()
@@ -1242,6 +1285,10 @@ def _maybe_restart_for_ram():
     """
     if COMFY_MIN_FREE_RAM_GB <= 0:
         return                       # 功能关掉了
+    # 别的进程正在用 ComfyUI（漫画工作台）→ 这一轮别诊断也别动手：重启会把
+    # 对方那一格掐断，而内存水位是「全场空闲时」才有意义的账（2026-10-18）。
+    if comfy_gate.busy_others():
+        return
     now = time.time()
     if now - _COMFY.last_restart_try < COMFY_RESTART_MIN_GAP:
         return                       # 刚试过，别反复折腾（也防失败后每张刷日志）

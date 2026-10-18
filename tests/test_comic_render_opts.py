@@ -256,9 +256,13 @@ class NormalizeTest(unittest.TestCase):
             {"upscale": {"final_skip": False, "final_model": ""}})
         self.assertTrue(errors)
 
-    def test_width_must_be_multiple_of_eight(self):
-        _opts, errors, _w = ro.normalize({"width": 1001})
-        self.assertTrue(any("8 的倍数" in e for e in errors))
+    def test_width_is_aligned_to_multiple_of_eight(self):
+        """不是 8 的倍数按 //8 对齐（2026-10-18 用户填 812 起改的：ComfyUI 的
+        latent 本来就这么截，拒掉只是让人存不进去）。"""
+        opts, errors, warnings = ro.normalize({"width": 1001, "height": 812})
+        self.assertEqual(errors, [])
+        self.assertEqual((opts["width"], opts["height"]), (1000, 808))
+        self.assertTrue(any("8 的倍数" in w for w in warnings))
 
     def test_unknown_names_rejected_only_with_a_list(self):
         # 有清单（ComfyUI 在线）→ 名字必须是事实
@@ -317,6 +321,92 @@ class StoreTest(unittest.TestCase):
             json.dump({"base": {"steps": 9999}, "width": 7}, f)
         opts = ro.load(self.tmp, "anima-line")   # 不抛，钳位后照常出图
         self.assertEqual(opts["base"]["steps"], 150)
+
+
+class GlobalDefaultsTest(unittest.TestCase):
+    """全局默认（2026-10-18 用户要求「长期保存某个参数作为默认」）。
+
+    优先级钉死：任务 render.json > 全局默认 > anima-line 模板值。
+    全局文件在 state/ 下、进程内共享，所以每条用例先存后清（有旧的先备份）。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="render_opts_g_")
+        self._backup = None
+        fp = ro.defaults_path()
+        if os.path.isfile(fp):
+            with open(fp, "rb") as f:
+                self._backup = f.read()
+        ro.reset_defaults()
+
+    def tearDown(self):
+        ro.reset_defaults()
+        if self._backup is not None:
+            os.makedirs(os.path.dirname(ro.defaults_path()), exist_ok=True)
+            with open(ro.defaults_path(), "wb") as f:
+                f.write(self._backup)
+
+    def _global_with(self, **kw):
+        g = ro.defaults("anima-line")
+        for k, v in kw.items():
+            g[k] = v
+        ro.save_defaults(g)
+        return g
+
+    def test_no_global_file_means_template(self):
+        self.assertFalse(os.path.isfile(ro.defaults_path()))
+        self.assertEqual(ro.load(self.tmp, "anima-line"),
+                         ro.defaults("anima-line"))
+
+    def test_global_applies_to_task_without_render_json(self):
+        g = ro.defaults("anima-line")
+        g["width"], g["height"] = 816, 1024
+        g["base"]["steps"] = 10
+        ro.save_defaults(g)
+        got = ro.load(self.tmp, "anima-line")
+        self.assertEqual((got["width"], got["height"]), (816, 1024))
+        self.assertEqual(got["base"]["steps"], 10)
+
+    def test_task_level_overrides_global(self):
+        g = ro.defaults("anima-line")
+        g["base"]["steps"] = 10
+        ro.save_defaults(g)
+        t = ro.load(self.tmp, "anima-line")
+        t["base"]["steps"] = 30
+        ro.save(self.tmp, t)
+        self.assertEqual(ro.load(self.tmp, "anima-line")["base"]["steps"], 30)
+        ro.reset(self.tmp)                     # 删掉任务级 → 回落到全局默认
+        self.assertEqual(ro.load(self.tmp, "anima-line")["base"]["steps"], 10)
+
+    def test_reset_global_returns_to_template(self):
+        self._global_with(width=816)
+        self.assertTrue(ro.reset_defaults())
+        self.assertFalse(ro.reset_defaults())   # 再删一次是空操作
+        self.assertEqual(ro.load(self.tmp, "anima-line"),
+                         ro.defaults("anima-line"))
+
+    def test_broken_global_file_falls_back(self):
+        os.makedirs(os.path.dirname(ro.defaults_path()), exist_ok=True)
+        with open(ro.defaults_path(), "w", encoding="utf-8") as f:
+            f.write("{oops")
+        self.assertEqual(ro.load(self.tmp, "anima-line"),
+                         ro.defaults("anima-line"))
+
+    def test_load_without_task_dir_uses_global(self):
+        """参数卡在没有任务时也要能显示（页面刚打开 / 还没生成剧本）。"""
+        g = ro.defaults("anima-line")
+        g["base"]["steps"] = 12
+        ro.save_defaults(g)
+        self.assertEqual(ro.load("", "anima-line")["base"]["steps"], 12)
+
+    def test_global_aligns_odd_size_instead_of_rejecting(self):
+        """812×1024 存得进去：按 808×1024 渲染，warning 说清楚（用户 2026-10-18
+        就是按 812 报的参数）。"""
+        g = ro.defaults("anima-line")
+        g["width"], g["height"] = 812, 1024
+        saved = ro.save_defaults(g)
+        self.assertEqual((saved["width"], saved["height"]), (808, 1024))
+        self.assertEqual(ro.load("", "anima-line")["width"], 808)
 
 
 class RunIntegrationTest(unittest.TestCase):

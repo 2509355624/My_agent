@@ -450,6 +450,15 @@ for _kv in (os.getenv("COMFY_RELEASE_AFTER_SAME_MAP") or "").split(","):
 # 0 = 关。
 COMFY_RELEASE_AFTER_TOTAL = int(os.getenv("COMFY_RELEASE_AFTER_TOTAL", "0"))
 
+# 漫画批量（`Job.batch == "comic"`）专用的全局累计阈值（2026-10-18 用户拍板）。
+#
+# 漫画一次跑一整本（默认 10 格），按全局的 2 张一重启，10 格就要停 3 次、
+# 每次 60~90 秒等冷启动，整本白扔 3~5 分钟。用户实测单格 812×1024 / 10 步
+# 只要 20 秒，所以他要求「给漫画工作台设置 6 个图片」——6 格重启一次：
+# 既不会让 anima 的残留（1.6~2.1GB/张，叠得慢）叠爆 12G 卡，整本也只停一次。
+# 0 = 跟随 COMFY_RELEASE_AFTER_TOTAL（不单独放宽）。
+COMFY_RELEASE_AFTER_COMIC = int(os.getenv("COMFY_RELEASE_AFTER_COMIC", "6"))
+
 # ─── 重渠道（qwen）优先度：2026-10-04 按用户要求关闭 ───────────────
 #
 # ⚠️ **2026-10-04 用户拍板关闭（原值 90）**。触发场景：他连着跑漫画加字

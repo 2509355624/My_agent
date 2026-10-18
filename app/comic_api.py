@@ -521,46 +521,78 @@ def _render_resources():
 
 @bp.route("/api/comic/render_opts", methods=["GET"])
 def api_comic_render_opts_get():
-    """这个任务当前的渲染参数 + ComfyUI 可用清单。
+    """这个任务当前的渲染参数 + ComfyUI 可用清单。**不带 task = 只看全局默认**。
 
-    没存过 render.json 时返回 anima-line 模板的当前值（defaults）——界面上
-    显示的永远是「现在拿去跑会用什么」，存没存过用 saved 标志区分。
+    返回值永远是「现在拿去跑会用什么」（任务 render.json > 全局默认 >
+    anima-line 模板当前值，见 comic_render_opts.load）。存没存过用两个标志
+    区分：`saved` = 本任务存过，`defaults_saved` = 全局默认存过。
     """
-    try:
-        path = _task_dir(request.args.get("task"))
-    except ValueError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 404
+    task_id = (request.args.get("task") or "").strip()
+    path = ""
+    if task_id:
+        try:
+            path = _task_dir(task_id)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 404
     return jsonify({
         "ok": True,
         "opts": comic_render_opts.load(path, comic.SCENE_SKILL),
         "resources": _render_resources(),
-        "saved": os.path.isfile(comic_render_opts.path_of(path)),
+        "saved": bool(path) and os.path.isfile(comic_render_opts.path_of(path)),
+        "defaults_saved": os.path.isfile(comic_render_opts.defaults_path()),
     })
 
 
 @bp.route("/api/comic/render_opts", methods=["POST"])
 def api_comic_render_opts_save():
-    """保存渲染参数（写任务目录的 render.json）；reset=true 时删掉它。
+    """保存渲染参数：`scope="task"`（默认，写任务目录 render.json）或
+    `scope="global"`（写 state/comic_render_defaults.json，**所有任务通用**）；
+    `reset=true` 按同一个 scope 删掉对应那份。
 
     校验在 normalize 里：宽高不是 8 的倍数、LoRA/采样器 ComfyUI 里没有，这些是
     事实问题，直接 400 把话说清；越界的数字钳位 + 回 warnings（给人填的表，
     钳位比拒掉友好）。保存只影响**之后**渲染的格——已出的图不动。
     """
     data = request.get_json(silent=True) or {}
-    try:
-        path = _task_dir(data.get("task"))
-    except ValueError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 404
+    task_id = (data.get("task") or "").strip()
+    scope = str(data.get("scope") or "task").strip().lower()
+    if scope not in ("task", "global"):
+        scope = "task"
+    path = ""
+    if task_id:
+        try:
+            path = _task_dir(task_id)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 404
+    elif scope == "task" and not data.get("reset"):
+        return jsonify({"ok": False, "error": "缺 task"}), 400
+
     if data.get("reset"):
-        comic_render_opts.reset(path)
-        return jsonify({"ok": True, "reset": True,
-                        "opts": comic_render_opts.load(path, comic.SCENE_SKILL)})
+        if scope == "global":
+            comic_render_opts.reset_defaults()
+        else:
+            comic_render_opts.reset(path)
+        return jsonify({"ok": True, "reset": True, "scope": scope,
+                        "opts": comic_render_opts.load(path, comic.SCENE_SKILL),
+                        "saved": bool(path) and
+                                 os.path.isfile(comic_render_opts.path_of(path)),
+                        "defaults_saved":
+                            os.path.isfile(comic_render_opts.defaults_path())})
+
     opts, errors, warnings = comic_render_opts.normalize(
         data.get("opts") or {}, resources=_render_resources())
     if errors:
         return jsonify({"ok": False, "error": "；".join(errors)}), 400
-    comic_render_opts.save(path, opts)
-    return jsonify({"ok": True, "opts": opts, "warnings": warnings})
+    if scope == "global":
+        comic_render_opts.save_defaults(opts)
+    else:
+        comic_render_opts.save(path, opts)
+    return jsonify({"ok": True, "opts": opts, "warnings": warnings,
+                    "scope": scope,
+                    "saved": bool(path) and
+                             os.path.isfile(comic_render_opts.path_of(path)),
+                    "defaults_saved":
+                        os.path.isfile(comic_render_opts.defaults_path())})
 
 
 @bp.route("/api/comic/rerender", methods=["POST"])
