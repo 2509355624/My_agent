@@ -1060,7 +1060,10 @@ class DeliverTest(unittest.TestCase):
         os.remove(seen[0])
 
     def test_group_can_be_switched_to_png(self):
-        """单群设成 png：发出去的是本地 PNG（无损），且不带工作流元数据。
+        """单群设成 png：发出去的是 ComfyUI 原图，字节原样、带着工作流。
+
+        2026-10-18 用户拍板：工作流里没有密钥，对方存下来拖进 ComfyUI 能复现
+        才是要的效果（改前这条断言的是「不带元数据」）。
 
         这里要**再套一层** AGENTS_DIR：本文件的模块级临时目录是所有用例共享的，
         而按字母序这条跑在 test_images_are_sent_as_local_jpeg（钉死 .jpg）之前，
@@ -1098,7 +1101,9 @@ class DeliverTest(unittest.TestCase):
         self.assertEqual(len(seen), 1)
         self.assertTrue(seen[0].lower().endswith(".png"), seen[0])
         with Image.open(seen[0]) as im:
-            self.assertNotIn("prompt", im.info)
+            self.assertIn("prompt", im.info)
+        with open(seen[0], "rb") as f:
+            self.assertEqual(f.read(), buf.getvalue())
         os.remove(seen[0])
 
     def test_private_runner_uses_private_send(self):

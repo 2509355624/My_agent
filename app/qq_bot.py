@@ -1207,7 +1207,8 @@ class SessionRunner:
 
     def _deliver(self, sent_by_tool, reply, images, receipt_spoke="",
                  reply_to="", quiet_images=False):
-        """把结果发回 QQ。图片过一遍 image_out（甩掉工作流元数据），格式看管理页开关。
+        """把结果发回 QQ。图片过一遍 image_out（jpg 压扁丢元数据 / png 原样带
+        工作流），格式看管理页开关。
 
         `receipt_spoke` 是**后台已经直发**的那句生图回执（见
         `generate_image._qq_receipt`）：这种情况下正文已被丢弃，但机器人确实

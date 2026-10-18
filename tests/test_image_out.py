@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""app/image_out.py：对外发图前的重编码（jpg / png）与回落。
+"""app/image_out.py：对外发图前的两种副本（jpg / png）与回落。
 
-这个模块是「图不把工作流带出去」的唯一落点，两条底线都得钉住：
-转成功必须是目标格式、且不带 PNG 里的 tEXt 工作流元数据；转失败必须
-回落成 ComfyUI 原图 URL（图还得发得出去，不能卡在这一步）。
+两条底线都得钉住：jpg 那条转成功必须是目标格式、且不带 PNG 里的 tEXt 工作流
+元数据；转失败必须回落成 ComfyUI 原图 URL（图还得发得出去，不能卡在这一步）。
 
-png 那条路还多一条：必须是**无损**的——选 png 的全部意义就在这。
+png 那条（2026-10-18 用户拍板）反过来：**字节原样，工作流一并带出去**——
+这些工作流没有密钥，对方拖进 ComfyUI 能复现才是要的效果。
 
 零网络：下载那一层整个 mock 掉，只用内存里的假 PNG 当素材。
 """
@@ -107,15 +107,36 @@ class PrepareTest(unittest.TestCase):
         self.assertTrue(all(c > 240 for c in rgb.getpixel((8, 8))),
                         rgb.getpixel((8, 8)))
 
-    def test_png_format_drops_metadata(self):
-        """切成 png 也不能把工作流带出去——这才是这个模块存在的理由。"""
+    def test_png_format_keeps_workflow_metadata(self):
+        """png = 带工作流的原图：tEXt 里的 prompt / workflow 要一起发出去。
+
+        2026-10-18 用户拍板：这些工作流没有密钥，对方拖进 ComfyUI 能复现
+        才是要的效果（改前这里是反过来的：显式清空 PngInfo）。
+        """
         got = self._run(_Resp(_png_bytes()), fmt="png")
         self.assertTrue(os.path.isfile(got), got)
         self.assertTrue(got.lower().endswith(".png"))
         with Image.open(got) as im:
             self.assertEqual(im.format, "PNG")
-            self.assertNotIn("prompt", im.info)
-            self.assertNotIn("workflow", im.info)
+            self.assertIn("prompt", im.info)
+            self.assertIn("workflow", im.info)
+
+    def test_png_format_is_byte_identical(self):
+        """原图原样：连字节都相等，不重新编码、不重排 chunk。"""
+        src = _png_bytes(size=(48, 40))
+        got = self._run(_Resp(src), fmt="png")
+        with open(got, "rb") as f:
+            self.assertEqual(f.read(), src)
+
+    def test_png_format_reencodes_when_source_is_not_png(self):
+        """ComfyUI 哪天回的不是 PNG：老老实实转一份，别让扩展名骗人。"""
+        im = Image.new("RGB", (20, 20), (1, 2, 3))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG")
+        got = self._run(_Resp(buf.getvalue()), fmt="png")
+        with Image.open(got) as out:
+            self.assertEqual(out.format, "PNG")
+            self.assertEqual(out.size, (20, 20))
 
     def test_png_format_is_lossless(self):
         """无损 = 像素逐点一致；不然凭什么比 jpg 大十倍。"""

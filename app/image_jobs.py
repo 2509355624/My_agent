@@ -2118,7 +2118,8 @@ def _notify_random_blocked(job):
 
 def _send_image(target, target_id, filename, tag="", skill="", seed=None,
                 notify=True, prompt=""):
-    """发回原会话。先过 image_out 甩掉 PNG 里的工作流元数据，编码格式看管理页开关。
+    """发回原会话。先过 image_out 出副本（jpg 压扁丢元数据 / png 原样带工作流），
+    格式看管理页开关。
 
     返回 True = 真发出去了。审核拦下时返回 False（**不抛异常**）——
     调用方靠它区分「发了」和「被拦了」，别把拦截记成发送失败。

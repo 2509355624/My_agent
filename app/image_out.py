@@ -1,26 +1,29 @@
-"""对外发图前的一道处理：ComfyUI 原图带着完整工作流，发出去等于公开配方。
+"""对外发图前的一道处理：按管理页开关决定「发压缩图」还是「发带工作流的原图」。
 
 ## 它解决什么
 
 ComfyUI 会往 PNG 的 tEXt 块里塞一份工作流 JSON（`prompt` 键，实测约 2.5 KB）。
 对方把图存下来拖进 ComfyUI，整条工作流（底模、lora、采样参数、提示词）就
-还原出来了。QQ 群里发图是给外人看的，这份配方不该跟着走。
+还原出来了。手上这些工作流里没有密钥，配方本身不算秘密——但群聊里随手发图
+默认没必要把配方一起给出去。
 
 ## 做法
 
-发送前把图重新编码：默认 JPEG（元数据自然留不住，顺带把体积压到原图的
-1/7 左右，实测 1.19 MB → 0.18 MB）；管理页可以把某个会话切成 PNG——PNG
-用无损重编码 + 显式传一个空 `PngInfo`，像素与原图逐点一致，只有那块 tEXt
-没了。**ComfyUI output 目录里的原图一个字节都不动**，自己复现、调试照旧。
+- **jpg（默认）**：重编码成 JPEG，元数据自然留不住，顺带把体积压到原图的
+  1/7 左右（实测 1.19 MB → 0.18 MB）。
+- **png**（2026-10-18 用户拍板）：**原样发 ComfyUI 的原图**，字节一个不改，
+  tEXt 里的 `prompt` / `workflow` 一并带出去——对方存下来拖进 ComfyUI 就能
+  逐项复现，这是要的效果，不是事故。像素无损，体积等于原图。
+- 两条路都是「另存一份」，**ComfyUI output 目录里的原图一个字节都不动**。
 
 ## 关键取舍
 
-- **两种格式都必须是「另存一份」**：png 也不是把原图直接发出去，宁可多一次
-  编码也不能让原图带上外发路径（原图要留着自己用）。
+- **两种格式都必须是「另存一份」**：png 也不是把 output 里的原图直接交给协议端
+  ——那份要留着自己复现调试，发出去的是 temp 里的一份副本（png 字节完全相同）。
 - **转不出来就回落**：任何一步失败都退化成 ComfyUI 的原图 URL。宁可
   带着元数据发出去，也不能让图卡在这一步发不出来。
-- **产物放系统 temp**：一次性文件不往项目目录里堆。每次写入顺手清掉
-  一小时前的旧产物——NapCat 读文件是异步的，删早了会发不出去。
+- **产物放系统 temp**：一次性文件不往项目目录里堆。每次写入顺手清掉过期
+  的旧产物——NapCat 读文件是异步的，删早了会发不出去。
 - **带 alpha 的先铺白底**：PNG 有透明通道时直接 convert("RGB") 会把透明
   区压成黑色，看着像坏图。这条只对 JPEG 那条路成立——png 是无损保留 alpha 的。
 """
@@ -102,11 +105,15 @@ def _flatten(im):
 
 
 def prepare_for_send(filename, fmt=DEFAULT_FORMAT):
-    """把一张 ComfyUI 输出图转成可对外发送的图（fmt = "jpg" 或 "png"）。
+    """把一张 ComfyUI 输出图变成可对外发送的副本（fmt = "jpg" 或 "png"）。
 
-    两种格式都会甩掉 ComfyUI 塞进 PNG tEXt 块里的工作流 JSON：jpg 靠重编码，
-    png 靠显式传一个空 PngInfo（像素无损）。发的都是 temp 里的副本，ComfyUI
-    output 里的原图一个字节都不动。
+    - "jpg"（默认）：重编码成 JPEG，PNG tEXt 里的工作流 JSON 自然留不住。
+    - "png"（2026-10-18 用户拍板）：**原样搬 ComfyUI 的原图字节**，tEXt 里的
+      `prompt` / `workflow` 一起发出去——这些工作流没有密钥，对方存下来拖进
+      ComfyUI 就能复现，这是要的效果。只借 PIL 确认它真是 PNG（ComfyUI 回一页
+      错误 JSON 时不能当图发出去），不做任何重新编码。
+
+    发的都是 temp 里的副本，ComfyUI output 里的原图一个字节都不动。
 
     成功返回本地文件路径（协议端用 file:// 读它，见 qq_api.image_segment）；
     任何一步失败都返回 ComfyUI 的原图 URL，保证图照样发得出去。
@@ -127,9 +134,14 @@ def prepare_for_send(filename, fmt=DEFAULT_FORMAT):
         stem = os.path.splitext(os.path.basename(str(filename)))[0] or "img"
         dst = os.path.join(d, "%s_%s.%s" % (stem, uuid.uuid4().hex[:8], fmt))
         if fmt == "png":
+            if im.format == "PNG":
+                # 带工作流的原图：字节原样落盘，一个 tEXt 都不动。
+                with open(dst, "wb") as f:
+                    f.write(resp.content)
+                return dst
+            # 不是 PNG（某渠道 SaveImage 出了别的格式）→ 老老实实转一份，
+            # 免得扩展名和内容对不上。
             from PIL import PngImagePlugin
-            # 空 PngInfo = 一个 tEXt 都不写。不传它的话 Pillow 会沿用
-            # 打开时读到的那些块，工作流就跟着出去了。
             im.save(dst, "PNG", pnginfo=PngImagePlugin.PngInfo(),
                     optimize=True)
         else:

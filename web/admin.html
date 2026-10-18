@@ -1915,6 +1915,7 @@ async function toggleNai(s, btn) {
 // ─── 发图格式开关 ────────────────────────────────────
 // 总开关定 jpg / png；行里的按钮做单会话覆盖（群、私聊都认，缺省跟全局）。
 // 只管发出去那一张，ComfyUI output 里的原图永远不动。
+// png = 带工作流的原图（字节原样，对方拖进 ComfyUI 能复现）；jpg = 重编码压缩。
 
 function renderImageFmtAll(fmt) {
   const btn = $('imgFmtAll');
@@ -1928,8 +1929,8 @@ async function toggleImageFmtAll() {
   const btn = $('imgFmtAll');
   const target = btn.className.includes(' on') ? 'jpg' : 'png';
   if (target === 'png' && !confirm('全局改成发 PNG？\n\n'
-      + 'PNG 无损，但单张约 1.4~2.2 MB（JPG 约 0.18 MB），'
-      + '群里发得慢，也更占对方相册。\n'
+      + 'PNG 是 ComfyUI 的原图，字节原样、带着完整工作流（没有密钥），'
+      + '单张约 1.4~2.2 MB（JPG 约 0.18 MB），群里发得慢，也更占对方相册。\n'
       + 'ComfyUI output 里的原图不受影响，照旧是 PNG 原样。')) return;
   btn.disabled = true;
   try {
