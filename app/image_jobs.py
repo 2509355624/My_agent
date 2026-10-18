@@ -169,7 +169,8 @@ from app.config import (COMFY_MIN_FREE_RAM_GB, COMFY_MIN_FREE_VRAM_GB,
                         COMFY_RELEASE_AFTER_SAME, COMFY_RELEASE_AFTER_SAME_MAP,
                         COMFY_RELEASE_AFTER_TOTAL,
                         COMFY_RESTART_MIN_GAP,
-                        COMFY_RESTART_WAIT, COMFYUI_URL, IMAGE_GEN_TIMEOUT,
+                        COMFY_RESTART_WAIT, COMFY_WAIT_UP, COMFYUI_URL,
+                        IMAGE_GEN_TIMEOUT,
                         QQ_AGENT_ID, QWEN_COOLDOWN)
 from app.skills import skill_priority
 
@@ -1771,6 +1772,50 @@ def comfy_alive(timeout=3):
         log.warning("ComfyUI 探活失败（%s）：%s，本次不入队",
                     COMFYUI_URL, type(exc).__name__)
         return False
+
+
+def comfy_up(timeout=3):
+    """只探不喊——`_comfy_up` 的公开名，给「页面顶部显示 ComfyUI 在线状态」用。
+
+    和 `comfy_alive` 的区别只有日志：那个失败会 warning「本次不入队」，可状态
+    轮询每 5 秒问一次，ComfyUI 挂着的整段时间会刷屏。判断逻辑完全一样。
+    """
+    return _comfy_up(timeout=timeout)
+
+
+# 等 ComfyUI 回来的上限与探测间隔（2026-10-18）。
+# 实测重启要 14~22 秒（logs/agent.log 里四次：14/16/18/20/22），而原来的
+# `comic._require_comfy` 只探一次、3 秒判死——用户在重启窗口里点「换种子重跑」
+# 必然当场失败；失败还不落盘（state.json 里那格仍是 pending），界面上看着就是
+# 「永远排队」。这里给一个等待窗口：它一活就继续提交，不用用户盯着手动再点。
+# 上限走 config（.env 可覆盖），间隔是本模块的轮询粒度。
+COMFY_PROBE_GAP = 2
+
+
+def wait_comfy_up(limit=None, gap=COMFY_PROBE_GAP):
+    """等 ComfyUI 起来再返回 True；窗口用完仍不通返回 False。
+
+    **不写每轮日志**：120 秒 / 2 秒一探会刷 60 行。只在「开始等」和「等到」
+    各说一句——`comfy_alive` 里那句「本次不入队」是给「压根没开」的场景说的，
+    放进轮询就是噪音。
+
+    与 `_restart_comfy` 的分工：那个是**我们主动重启**它再等；这个是「别的
+    进程（QQ 侧 / RAM 守卫）刚重启完、或用户手动重启」而我们还没提交，先等它
+    活过来。等不到就返回 False，由调用方决定怎么报错。
+    """
+    limit = COMFY_WAIT_UP if limit is None else float(limit)
+    if _comfy_up():
+        return True
+    start = time.time()
+    log.warning("ComfyUI 没在线（%s），等它回来（最多 %.0f 秒）",
+                COMFYUI_URL, limit)
+    while time.time() - start < limit:
+        time.sleep(gap)
+        if _comfy_up():
+            log.info("ComfyUI 已回来，继续（等了 %.0f 秒）", time.time() - start)
+            return True
+    log.warning("等了 %.0f 秒 ComfyUI 仍没在线（%s）", limit, COMFYUI_URL)
+    return False
 
 
 # ── 横屏（2026-10-07）────────────────────────────────────────

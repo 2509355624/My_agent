@@ -866,5 +866,112 @@ class ComicPortraitApiTest(unittest.TestCase):
         self.assertEqual(len(d["portraits"]), 1)
 
 
+class MarkPendingFailedTest(unittest.TestCase):
+    """后台线程挂掉时把「还在 pending 的格」标成出错并落盘（2026-10-18）。
+
+    不落盘的后果是现场实测的那种：rerender 进门先写 pending，线程在
+    `_require_comfy`（ComfyUI 正在重启）处 SystemExit，没人回写 →
+    state.json 里永远 pending → 前端 badge 显示「排队」、格子下面没有错误，
+    用户以为在等前面那张，其实根本没人会来跑它。
+    """
+
+    NAME = "C20261018-99"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="comic_mark_")
+        self.path = os.path.join(self.tmp, self.NAME)
+        os.makedirs(self.path)
+        with open(os.path.join(self.path, "script.md"), "w", encoding="utf-8") as f:
+            f.write("# 标题：测试\n\n"
+                    "## 01\n画面: 1girl, solo, pov\n气泡: 一\n标签1: a\n\n"
+                    "## 02\n画面: 1girl, solo, pov\n气泡: 二\n标签1: b\n\n"
+                    "## 03\n画面: 1girl, solo, pov\n气泡: 三\n标签1: c\n")
+        self._save({"01": "pending", "02": "rendered", "03": "pending"})
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _save(self, states):
+        panels = {}
+        for no, st in states.items():
+            panels[no] = {"scene": "1girl, solo, pov", "bubble": "", "bubble2": "",
+                          "label": "", "speaker": "女", "speaker2": "",
+                          "state": st, "seed": 1, "error": None,
+                          "raw": "", "final": ""}
+        with open(os.path.join(self.path, "state.json"), "w", encoding="utf-8") as f:
+            json.dump({"task_id": self.NAME, "title": "测试", "script": "script.md",
+                       "updated": "", "panels": panels}, f, ensure_ascii=False)
+
+    def _panels(self):
+        with open(os.path.join(self.path, "state.json"), encoding="utf-8") as f:
+            return json.load(f)["panels"]
+
+    def test_only_target_panel_marked(self):
+        """重跑单格：只标那一格，同批别的 pending 是排在它后面的，别误伤。"""
+        comic_api._mark_pending_failed(self.path, "03")(SystemExit("ComfyUI 没在线"))
+        ps = self._panels()
+        self.assertIn("没在线", ps["03"]["error"])
+        self.assertIsNone(ps["01"]["error"])
+        self.assertEqual("pending", ps["01"]["state"])
+
+    def test_all_pending_marked_for_batch(self):
+        """整批开跑：所有没跑完的格都不会有人再来跑，全部标出错。"""
+        comic_api._mark_pending_failed(self.path)(SystemExit("炸了"))
+        ps = self._panels()
+        self.assertIn("炸了", ps["01"]["error"])
+        self.assertIn("炸了", ps["03"]["error"])
+
+    def test_rendered_panel_untouched(self):
+        """已经渲染好的格不该被这次失败牵连。"""
+        comic_api._mark_pending_failed(self.path)(SystemExit("炸了"))
+        ps = self._panels()
+        self.assertIsNone(ps["02"]["error"])
+        self.assertEqual("rendered", ps["02"]["state"])
+
+
+class SpawnOnErrorTest(unittest.TestCase):
+    """`_spawn` 要在 SystemExit 上先记错误、再调收尾回调。"""
+
+    def test_callback_runs_on_system_exit(self):
+        seen = []
+
+        def _boom():
+            raise SystemExit("ComfyUI 没在线")
+
+        path = os.path.join(tempfile.gettempdir(), "comic_spawn_probe")
+        comic_api._JOBS.pop(path, None)
+        ok = comic_api._spawn(path, "scene", _boom, on_error=seen.append)
+        self.assertTrue(ok)
+        deadline = time.time() + 2
+        while time.time() < deadline and not seen:
+            time.sleep(0.01)
+        self.assertEqual(1, len(seen))
+        self.assertIn("没在线", str(seen[0]))
+        self.assertEqual("ComfyUI 没在线", comic_api._JOBS[path]["error"])
+        self.assertIsNone(comic_api._JOBS[path]["phase"])
+
+
+class ComfyStateCacheTest(unittest.TestCase):
+    """ComfyUI 状态缓存：前端 2 秒一轮询，不能每次都真探活。"""
+
+    def test_probe_cached_for_ttl(self):
+        calls = []
+        with mock.patch.object(comic_api.image_jobs, "comfy_up",
+                               side_effect=lambda timeout=1: (calls.append(1), False)[1]):
+            comic_api._COMFY_CACHE.update({"at": 0.0, "up": True})
+            self.assertFalse(comic_api._comfy_state())
+            self.assertFalse(comic_api._comfy_state())
+        self.assertEqual(1, len(calls))
+
+    def test_cache_expires(self):
+        calls = []
+        with mock.patch.object(comic_api.image_jobs, "comfy_up",
+                               side_effect=lambda timeout=1: (calls.append(1), True)[1]):
+            comic_api._COMFY_CACHE.update(
+                {"at": time.time() - comic_api._COMFY_TTL - 1, "up": False})
+            self.assertTrue(comic_api._comfy_state())
+        self.assertEqual(1, len(calls))
+
+
 if __name__ == "__main__":
     unittest.main()

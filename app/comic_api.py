@@ -45,7 +45,7 @@ import zipfile
 
 from flask import Blueprint, jsonify, request, send_file, send_from_directory
 
-from app import comic, comic_agent, comic_portrait, comic_render_opts
+from app import comic, comic_agent, comic_portrait, comic_render_opts, image_jobs
 from app.config import BASE_DIR
 
 bp = Blueprint("comic_api", __name__)
@@ -57,6 +57,20 @@ _COMICS_ROOT = os.path.join(BASE_DIR, "comics")
 # 运行中的后台任务：{任务目录绝对路径: {"phase": "scene"|"bubble", "error": str}}
 _JOBS = {}
 _JOBS_LOCK = threading.Lock()
+
+# ComfyUI 在线状态（给页面顶部显示，2026-10-18）。
+# **不能每次轮询都真探活**：前端 2 秒问一次，而探活失败时要等满 timeout，
+# 一挂就整页跟着卡。缓存 5 秒，够用且不会漏掉「正在重启」这件事。
+_COMFY_CACHE = {"at": 0.0, "up": True}
+_COMFY_TTL = 5.0
+
+
+def _comfy_state():
+    now = time.time()
+    if now - _COMFY_CACHE["at"] >= _COMFY_TTL:
+        _COMFY_CACHE["up"] = bool(image_jobs.comfy_up(timeout=1))
+        _COMFY_CACHE["at"] = now
+    return _COMFY_CACHE["up"]
 
 # 编剧任务：{job_id: {...}}。与 _JOBS 分开——_JOBS 以**任务目录**为键（要等
 # 剧本落盘才知道目录名），而编剧任务在剧本写出来之前就得有个句柄给前端轮询。
@@ -189,8 +203,15 @@ def _read_fix_report(path):
         return None
 
 
-def _spawn(path, phase, fn):
-    """起后台线程跑 fn()。同一任务已有线程在跑就拒绝（409 语义）。"""
+def _spawn(path, phase, fn, on_error=None):
+    """起后台线程跑 fn()。同一任务已有线程在跑就拒绝（409 语义）。
+
+    `on_error(exc)`：线程整体挂掉时的收尾（2026-10-18 加）。原来失败只记进
+    内存 `_JOBS`，state.json 一个字都不动——而 `rerender` / `edit_scene` 进门
+    第一件事就是把该格写成 `pending`，于是线程死后那格永远停在 pending，前端
+    badge 显示「排队」，看着像卡死（用户 18:46 实报：ComfyUI 重启时点重跑，
+    探活失败，"重启完还在排队"）。收尾由调用方给，因为只有它知道是哪几格。
+    """
     with _JOBS_LOCK:
         running = _JOBS.get(path)
         if running and running.get("phase"):
@@ -204,12 +225,43 @@ def _spawn(path, phase, fn):
             with _JOBS_LOCK:
                 _JOBS[path] = {"phase": None, "error": str(exc)}
             comic.log.exception("后台任务失败 %s", path)
+            if on_error is not None:
+                try:
+                    on_error(exc)
+                except Exception:
+                    comic.log.exception("失败状态落盘时又出错 %s", path)
             return
         with _JOBS_LOCK:
             _JOBS[path] = {"phase": None, "error": None}
 
     threading.Thread(target=_worker, daemon=True, name="comic-studio").start()
     return True
+
+
+def _mark_pending_failed(path, no=None):
+    """后台线程挂了以后的收尾：把还停在 `pending` 的格标成出错并落盘。
+
+    只动 pending —— 已经 `rendered` / `done` 的格是跑之前就完成的，不该被这
+    次失败牵连。`no` 给了就只标那一格（重跑单格的入口），没给就是整批
+    （`/start`，此时所有没跑完的格都不会有人再来跑）。
+
+    error 写的是异常原文（如「ComfyUI 等了 120 秒还没在线…」），前端会把它
+    显示在格子里，badge 从「排队」变「出错」——两处都是现成渲染，不用改前端。
+    """
+    def _apply(exc):
+        task = _load_task(path)
+        hit = 0
+        for p in task.panels:
+            if p.state != "pending":
+                continue
+            if no and p.no != no:
+                continue
+            p.error = str(exc) or "后台任务失败"
+            hit += 1
+        if hit:
+            task.save_state()
+            comic.log.info("已把 %d 个未跑完的格标成出错（%s）", hit, path)
+    return _apply
 
 
 @bp.route("/api/comic/script", methods=["POST"])
@@ -359,7 +411,7 @@ def api_comic_start():
     scene_skill = str(data.get("scene_skill") or "").strip() or comic.SCENE_SKILL
     started = _spawn(path, "scene", lambda: comic.run(
         os.path.join(path, "script.md"), silver_only=True,
-        scene_skill=scene_skill))
+        scene_skill=scene_skill), on_error=_mark_pending_failed(path))
     if not started:
         return jsonify({"ok": False, "error": "这个任务已经在跑了"}), 409
     return jsonify({"ok": True, "scene_skill": scene_skill})
@@ -385,6 +437,7 @@ def api_comic_status():
         if not os.path.isfile(os.path.join(path, "script.md")):
             return jsonify({"ok": True, "task": os.path.basename(path),
                             "title": "", "running": None, "job_error": None,
+                            "comfy": _comfy_state(),
                             "fix": None, "panels": [],
                             "portraits": _portrait_shots(path)})
         return jsonify({"ok": False, "error": str(exc)}), 404
@@ -411,6 +464,9 @@ def api_comic_status():
                     "title": task.meta.get("title", ""),
                     "running": running.get("phase"),
                     "job_error": running.get("error"),
+                    # ComfyUI 在不在（页面顶部那行小字）。在等它重启的时候，
+                    # 用户得知道「是在等 ComfyUI」还是「界面卡死了」。
+                    "comfy": _comfy_state(),
                     # 补正报告（编剧之后那一步）落盘在 fix.json：页面拿它显示
                     # 「改了哪几格、改了什么」，没有这个文件就是老任务，返回 null。
                     "fix": _read_fix_report(path),
@@ -612,7 +668,8 @@ def api_comic_rerender():
     panel.state, panel.seed, panel.error = "pending", None, None
     task.save_state()
     started = _spawn(path, "scene", lambda: comic.run(
-        os.path.join(path, "script.md"), only={no}, silver_only=True))
+        os.path.join(path, "script.md"), only={no}, silver_only=True),
+        on_error=_mark_pending_failed(path, no))
     if not started:
         return jsonify({"ok": False, "error": "这个任务已经在跑了"}), 409
     return jsonify({"ok": True, "no": no})
@@ -925,7 +982,8 @@ def api_comic_edit_scene():
         return jsonify({"ok": False,
                         "error": "画面提示词改坏了（%s），请修正后再保存" % exc}), 400
     started = _spawn(path, "scene", lambda: comic.run(
-        script_path, only={no}, silver_only=True))
+        script_path, only={no}, silver_only=True),
+        on_error=_mark_pending_failed(path, no))
     if not started:
         return jsonify({"ok": True, "no": no, "queued": False,
                         "notice": "任务正在跑，改动已保存；跑完后点「换种子重跑」生效"})

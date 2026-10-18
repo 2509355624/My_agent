@@ -730,9 +730,18 @@ def _new_seed():
 
 
 def _require_comfy():
-    if not image_jobs.comfy_alive():
-        raise SystemExit("ComfyUI 没在线（%s 连不上），先把它开起来再跑。"
-                         % COMFYUI_URL)
+    """确认 ComfyUI 在线——**不在就等它回来**（2026-10-18 改）。
+
+    原来只有一句「探一次，失败就 SystemExit」。实测重启 14~22 秒，用户正好在
+    这个窗口里点「换种子重跑」就 100% 失败；而且失败不落盘，state.json 那格
+    仍是 pending，界面上看起来是「永远排队」（见 comic_api._spawn 的补丁）。
+    改成轮询等它回来（默认 120 秒，`.env` 的 COMFY_WAIT_UP 可调），等到就
+    继续提交——用户不用盯着重启完再手动点一次。
+    """
+    if not image_jobs.wait_comfy_up():
+        raise SystemExit(
+            "ComfyUI 等了 %.0f 秒还没在线（%s 连不上），先把它开起来再跑。"
+            % (image_jobs.COMFY_WAIT_UP, COMFYUI_URL))
 
 
 def _out_dir_for(task):

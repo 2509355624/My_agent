@@ -1671,6 +1671,66 @@ class ComfyAliveTest(unittest.TestCase):
         self.assertFalse(image_jobs.comfy_alive())
 
 
+class WaitComfyUpTest(unittest.TestCase):
+    """提交前等 ComfyUI 回来（2026-10-18）。
+
+    现场：18:46:22 点「换种子重跑」→ 18:46:24 探活失败 → SystemExit → 那格
+    永远是 pending，界面显示「排队」。重启实测 14~22 秒，所以必须是**等**，
+    不是再探一次就判死。
+    """
+
+    def _patch(self, results):
+        seq = iter(results)
+        p = mock.patch.object(image_jobs, "_comfy_up",
+                              side_effect=lambda timeout=3: next(seq, False))
+        p.start()
+        self.addCleanup(p.stop)
+        self.slept = []
+        self.now = 1000.0
+
+        def _tick():
+            self.now += image_jobs.COMFY_PROBE_GAP
+            return self.now
+
+        # 只替换 image_jobs 模块里那个 `time` 名字，**绝不 patch 全局 time
+        # 模块的属性**——测试进程里还有别的线程在用 time.time()，全局改掉会
+        # 让它们拿到假时间（第一版就是这么把整个文件跑超时的）。
+        fake = mock.Mock()
+        fake.time = _tick
+        fake.sleep = self.slept.append
+        p2 = mock.patch.object(image_jobs, "time", fake)
+        p2.start()
+        self.addCleanup(p2.stop)
+
+    def test_returns_at_once_when_alive(self):
+        self._patch([True])
+        self.assertTrue(image_jobs.wait_comfy_up())
+        self.assertEqual([], self.slept)      # 在线就别睡
+
+    def test_waits_until_it_comes_back(self):
+        """第四次探测才活（≈ 重启 8 秒）——正是用户遇到的那种窗口。"""
+        self._patch([False, False, False, False, True])
+        self.assertTrue(image_jobs.wait_comfy_up())
+        self.assertEqual(4, len(self.slept))
+
+    def test_gives_up_after_window(self):
+        self._patch([False] * 500)
+        self.assertFalse(image_jobs.wait_comfy_up(limit=6))
+        # 6 秒窗口、2 秒一探：t=2、t=4 各探一次，t=6 已到期 → 睡两次
+        self.assertEqual(2, len(self.slept))
+
+    def test_limit_comes_from_env(self):
+        """上限走 config（.env 的 COMFY_WAIT_UP），不在代码里写死。"""
+        self.assertEqual(120.0, image_jobs.COMFY_WAIT_UP)
+
+    def test_probe_never_logs_warning(self):
+        """轮询里不能每 2 秒刷一条「本次不入队」（120 秒会刷 60 行）。"""
+        self._patch([False, False, True])
+        with mock.patch.object(image_jobs.log, "warning") as w:
+            image_jobs.wait_comfy_up()
+        self.assertLessEqual(w.call_count, 1)
+
+
 class FailTextTest(unittest.TestCase):
     """失败话术：连接类错误说人话，别把 HTTPConnectionPool 半截乱码丢进群。"""
 

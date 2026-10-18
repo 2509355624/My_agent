@@ -983,11 +983,22 @@ async function refresh() {
     }
   }
   const bar = document.getElementById('jobbar');
-  if (d.running) { setBusy(true, d.running); }
-  else {
-    setBusy(false);
-    bar.style.display = d.job_error ? 'block' : 'none';
-    if (d.job_error) { bar.classList.add('err'); bar.textContent = '✗ 后台任务失败：' + d.job_error; }
+  if (d.running) { setBusy(true, d.running); } else { setBusy(false); }
+  // 提示条优先级：后台失败 > ComfyUI 不在线 > 不显示（2026-10-18）。
+  // 加 comfy 这一档是因为「排队」有两种含义：真的在等前面的图，和在等
+  // ComfyUI 重启回来（comic._require_comfy 现在最多等 120 秒）。不写出来的话
+  // 两种情况在界面上长得一模一样，用户只会以为卡死了。
+  if (d.job_error) {
+    bar.style.display = 'block';
+    bar.classList.add('err');
+    bar.textContent = '✗ 后台任务失败：' + d.job_error;
+  } else if (d.comfy === false) {
+    bar.style.display = 'block';
+    bar.classList.add('err');
+    bar.textContent = '⚠ ComfyUI 没在线（可能正在重启）——现在点重跑会等它回来再提交，最多等 120 秒';
+  } else {
+    bar.style.display = 'none';
+    bar.classList.remove('err');
   }
   const done = d.panels.filter(p => p.state === 'done').length;
   const rendered = d.panels.filter(p => p.state === 'rendered').length;
