@@ -188,13 +188,16 @@ def consume_if_confirmed(target, target_id, text):
                               source_note=(pend["nai_i2i"]["note"]
                                            if pend["nai_i2i"] else pend["note"]),
                               quota_tail=quota_tail)
-    # ComfyUI 路：确认时重探活——卡发出到确认之间机器可能关了 ComfyUI。
-    if not image_jobs.comfy_alive():
-        return ("错误：ComfyUI 现在没在线，刚那张画不了。等它开了再让 AI 重新出。")
+    # ComfyUI 路：确认时重探活，但**探不到不再拒单**（2026-10-19）。卡发出到
+    # 对方回「好」之间，机器很可能正在重启，从前这里回一句「刚那张画不了」，
+    # 正是用户要修的那个毛病。现在照常入队，由 worker 提交前等它回来
+    # （见 image_jobs._worker），回执换成「正在重启，回来就画」。
+    comfy_down = not image_jobs.comfy_alive()
     job, reason = image_jobs.enqueue(target, target_id, pend["workflow"],
                                      pend["skill"], prompt=pend["prompt"],
                                      intent=pend["intent"], seed=pend["seed"],
-                                     landscape=pend.get("landscape"))
+                                     landscape=pend.get("landscape"),
+                                     comfy_down=comfy_down)
     if reason is not None:
         return reason
     quota_tail = gi._charge_quota(job, target, target_id)

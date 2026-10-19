@@ -93,6 +93,20 @@ class DirectReceiptTest(_SubmitHarness):
         # 给模型那段里，第一行就是发出去的那句（qq_bot 靠 receipt_line 取它）
         self.assertEqual(image_jobs.receipt_line(out), "任务已提交，正在画了。")
 
+    def test_offline_receipt_says_restarting_not_drawing(self):
+        """ComfyUI 不在线（正在重启）时照常收单，但回执**不能说「正在画了」**。
+
+        2026-10-19：这一刻它确实还没开工。说成「正在画了」，模型会照着这句去
+        跟人保证「马上就好」，十几秒后图还没出来——群里先看到承诺、再看到打脸。
+        """
+        with mock.patch.object(image_jobs, "comfy_alive", return_value=False):
+            out = self._submit(("group", "9"))
+        self.assertEqual(len(self.sent), 1)
+        text = self.sent[0][2]
+        self.assertIn("正在重启", text)
+        self.assertNotIn("正在画了", text)
+        self.assertEqual(image_jobs.receipt_line(out), gi._RECEIPT_WAITING)
+
     def test_queued_receipt_carries_the_backend_count(self):
         """张数是后台 `ahead_of` 现算的，不是模型猜的。"""
         with mock.patch.object(qq_api, "current_context",

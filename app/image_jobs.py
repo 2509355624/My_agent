@@ -333,6 +333,13 @@ POLL_INTERVAL = 2
 # `queue_running` 永远不清空。这种状态不会自己好，必须重启（见 process）。
 COMFY_IDLE_WAIT = 90
 
+# 提交前等 ComfyUI 上线时的探活间隔（秒，2026-10-19 用户拍板）。
+# 与 `POLL_INTERVAL`（2 秒）刻意不同：那只在本进程内部轮询，这个是朝一个
+# 可能正在重启的 HTTP 服务发请求，5 秒一次足够，也不必把重启中的机器踩爆。
+# 上限用的是 `COMFY_WAIT_UP`（默认 120 秒，`.env` 可调）——实测重启 14~22 秒，
+# 这个上限平时碰不到，只在「ComfyUI 真被关了」时兜底。
+SUBMIT_PROBE_GAP = 5
+
 # 冷却闸只认这一个渠道（见模块开头「重渠道优先度」）。写成常量而不是判断
 # 「权重 > 1」，是因为冷却的必要性来自 qwen 那套权重的具体尺寸，别的重渠道
 # 不一定共用同一个死因。
@@ -495,7 +502,7 @@ class Job:
     def __init__(self, target, target_id, workflow, skill=None, weight=1, seq=0,
                  nai_i2i=None, tag=None, prompt=None, intent=None, seed=None,
                  chan=None, landscape=False, quiet=False, batch=None,
-                 out_dir=None):
+                 out_dir=None, comfy_down=False):
         self.target = target
         self.target_id = target_id
         self.workflow = workflow
@@ -554,6 +561,11 @@ class Job:
         # 自动推断（群/私聊/生图页，见 app/comfy_out.py）。只有漫画工作台会显式
         # 传——任务号只有它在入队那一刻知道。
         self.out_dir = out_dir or ""
+        # 入队那一刻 ComfyUI 不在线（2026-10-19）：多半是它正在重启。**这单照样
+        # 收**——worker 在提交前会等它回来（见 `SUBMIT_PROBE_GAP`）。这个标记只
+        # 影响一件事：回执不能再说「正在画了」，得说「正在重启，回来就画」。
+        # 默认 False：网页端和漫画台不吃这条（漫画台自己会先 wait_comfy_up）。
+        self.comfy_down = bool(comfy_down)
         self.waits = 0              # 被冷却 / 被插队推回过几次（只为日志）
         self.skill_done = False     # 已经成功跑完一张？决定跑完要不要开冷却
         self.prompt_id = None
@@ -821,7 +833,7 @@ def snapshot():
 
 def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
             intent=None, seed=None, resample_fn=None, landscape=None,
-            quiet=False, batch=None, out_dir=None):
+            quiet=False, batch=None, out_dir=None, comfy_down=False):
     """把一张图排进**它该去的那条通道**的队列，返回 (job, reason)。
 
     prompt 是模型写的那段原始提示词，只用来**出图后记进账本**（编号 → 提示词，
@@ -879,7 +891,7 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
         job = Job(target, target_id, workflow, skill, weight, chan.seq,
                   nai_i2i=nai_i2i, prompt=prompt, intent=intent, seed=seed,
                   chan=chan, landscape=landscape, quiet=quiet, batch=batch,
-                  out_dir=out_dir)
+                  out_dir=out_dir, comfy_down=comfy_down)
         # 随机口令的「被拦静默重抽」钩子（2026-10-05）：resample_fn 是无参
         # 可调用体，被审核拦下时由 worker 调它换一条新提示词，同 job 重跑。
         # 最多重抽 2 次（3 尝试）；普通生图不传，拦截行为与从前完全一致。
@@ -1030,6 +1042,28 @@ def _worker(chan):
     """
     while True:
         job = _take(chan)
+        # 提交前等 ComfyUI 上线（2026-10-19 用户拍板）：入口探活失败不再拒单，
+        # 任务照常排进来，真正的等待放在这里。
+        #
+        # 为什么必须在**这个位置**：
+        #   1. 在 `_take` 之后 —— 放在入口等的话，卡的是 qq_bot 的会话线程，
+        #      一个群等两分钟，其他所有群的消息全堵住；
+        #   2. 在 `comfy_gate.hold()` 之前 —— 持着跨进程锁干等，漫画台（另一个
+        #      进程）会等锁超时，直接放弃那一格；
+        #   3. 不在 `process()` 里面 —— 它一进来就调 `_maybe_restart_for_clean_start`
+        #      和 `_maybe_release_for_switch`，那两个自己会 `_restart_comfy`（内部
+        #      再等 180 秒），ComfyUI 离线时进去等于白等一轮。
+        #
+        # 每张都探（活着就秒过，多花几十毫秒），不只是 `job.comfy_down` 那种：
+        # 「探活通过 → RAM 守卫刚好重启 → 提交撞 ComfyGone」这个窗口一起盖住。
+        if chan.local and not wait_comfy_up(gap=SUBMIT_PROBE_GAP):
+            log.warning("等了 %.0f 秒 ComfyUI 仍没在线，这张不跑（%s %s）",
+                        COMFY_WAIT_UP, job.target, job.target_id)
+            job.error = ComfyGone(COMFY_WAIT_UP)
+            if not getattr(job, "quiet", False):
+                _notice(job)
+            _finish(job)
+            continue
         gate = None
         if chan.local:
             try:
@@ -1735,6 +1769,12 @@ class ComfyGone(RuntimeError):
     不该让用户去猜。
     """
 
+    def __init__(self, waited=None):
+        super().__init__()
+        # 非 None = 「提交前一共等了这么多秒它都没起来」（见 `_worker`）。
+        # 与「等图等到一半它没了」区分开：后者不知道该说等了多久，只能说掉线。
+        self.waited = waited
+
     def __str__(self):
         return "ComfyUI 掉线"
 
@@ -1754,23 +1794,24 @@ def _comfy_up(timeout=3):
 
 
 def comfy_alive(timeout=3):
-    """ComfyUI 现在活着吗——入队前先问一句。
+    """ComfyUI 现在活着吗——**只用来决定回执口径和要不要等，不再拿它拒单**。
 
-    队列在 agent 侧，enqueue 成功**不代表** ComfyUI 在：它挂了照样收单，
-    模型被告知「已经排上队了」，几十秒后 worker 才在 /prompt 上撞到连接
-    失败。群里于是先看到一句凭空承诺、再看到一句「图没画出来」，前后打架。
+    从前这里是「探不到就当场拒掉」，结果 ComfyUI 每次重启的那十几秒里，用户
+    点单 100% 收到「ComfyUI 没在线」；可实测十几天，重启全部成功，根本没有
+    「起不来」这回事——拒的是自己正在重启的窗口。
 
-    探活只挡得住最常见的「ComfyUI 根本没开」；探活过了之后再挂，仍由
-    _notice 兜底——那是「提交完即返回」这个设计自带的，除非把 /prompt
-    挪回调用线程去同步等。
+    2026-10-19 起语义变了：探不到只说明「这单要先等」，调用方照常 `enqueue`，
+    真正的等待由 worker 在提交前做（见 `_worker` / `SUBMIT_PROBE_GAP`）。
+    探活本身仍然有用：它决定回执说「正在画了」还是「正在重启，回来就画」，
+    不然模型会替后台承诺一件暂时还开不了工的事。
     """
     try:
         requests.get(COMFYUI_URL + "/system_stats",
                      timeout=timeout).raise_for_status()
         return True
     except Exception as exc:
-        log.warning("ComfyUI 探活失败（%s）：%s，本次不入队",
-                    COMFYUI_URL, type(exc).__name__)
+        log.info("ComfyUI 探活失败（%s）：%s，这单先排进队列等它回来",
+                 COMFYUI_URL, type(exc).__name__)
         return False
 
 
@@ -2098,7 +2139,13 @@ def _fail_text(exc, stage="submit", skill=None):
         return "图没画出来（NAI：%s）" % _reason(exc)
     if isinstance(exc, ComfyGone):
         # 「掉线」和「超时」是两回事：前者重画也没用，得先把服务拉起来。
-        return ("图没画出来——ComfyUI 中途掉线了（不是画得慢）。"
+        # 两种来源分开说（2026-10-19）：`waited` 非空 = 提交前等满 `COMFY_WAIT_UP`
+        # 都没起来；为 None = 等图等到一半它没了（见 process 的超时分支）。
+        waited = getattr(exc, "waited", None)
+        if waited:
+            return ("图没画出来——ComfyUI 一直没上线（等了 %.0f 秒），不是画得慢。"
+                    "等它重新起来再让对方重画。" % waited)
+        return ("图没画出来——ComfyUI 掉线了（不是画得慢）。"
                 "等它重新起来再让对方重画。")
     if isinstance(exc, TimeoutError):
         return ("画超时了（超过 %d 秒没出图），已经中断这张。"

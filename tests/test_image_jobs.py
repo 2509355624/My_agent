@@ -1341,12 +1341,15 @@ class GenerateImageSplitTest(unittest.TestCase):
         # 只有真正入了队的那几张被送进 ComfyUI
         self.assertEqual(qp.call_count, image_jobs.MAX_INFLIGHT)
 
-    def test_offline_comfyui_refused_before_queueing(self):
-        """ComfyUI 挂了就当场拒掉——接了单模型就会说「排上了」，几十秒后再打脸。
+    def test_offline_comfyui_still_queues_and_says_it_is_restarting(self):
+        """ComfyUI 不在线（正在重启）也**照样收单**（2026-10-19 用户拍板）。
 
-        队列在 agent 侧，enqueue 从来不碰 ComfyUI，所以没有这道探活时它一定
-        会「成功」：模型拿到「已经排上队了」去跟对方承诺，worker 才在 /prompt
-        上撞到连接失败。群里先看到承诺、再看到「图没画出来」。
+        从前这里当场拒掉，于是每一次重启的那十几秒里，用户点单 100% 收到
+        「ComfyUI 没在线」——而实测十几天重启全部成功，拒的其实是它自己正在
+        重启的窗口。现在照常入队，由 worker 在提交前等它回来（见 _worker）。
+
+        回执必须换成「正在重启」：这一刻确实还没开工，说「正在画了」就是假承诺，
+        模型会照着它去跟人保证「马上就好」。
         """
         with mock.patch.object(qq_api, "current_context",
                                return_value=("group", "9")), \
@@ -1354,10 +1357,10 @@ class GenerateImageSplitTest(unittest.TestCase):
                                   return_value=False), \
                 mock.patch.object(image_jobs, "_queue_prompt") as qp:
             out = generate_image.tool["function"]("a cat")
-        self.assertIn("没在线", out)
-        self.assertNotIn("排上", out)
-        self.assertEqual(image_jobs.queue_depth(), 0)   # 一张都没进队
-        self.assertFalse(qp.called)                     # 更没碰 ComfyUI
+        self.assertIn("正在重启", out)
+        self.assertNotIn("正在画了", out)
+        self.assertEqual(image_jobs.queue_depth(), 1)   # 收下了
+        self.assertFalse(qp.called)                     # 但还没提交，worker 会先等
 
 
 class SeedSubmissionTest(unittest.TestCase):
@@ -3709,6 +3712,59 @@ class QuietJobTest(_Base):
         job = self._run(side_effect=TimeoutError("画超时了"))
         self.assertEqual(self.sent_texts, [])
         self.assertIsNotNone(job.error)
+
+
+class SubmitWaitTest(unittest.TestCase):
+    """提交前等 ComfyUI 上线（2026-10-19 用户拍板）。
+
+    入口不再拒单（见 `GenerateImageSplitTest.test_offline_comfyui_still_queues…`），
+    等待整体挪到了 worker：`_take` 之后、`comfy_gate.hold()` 之前。位置是这次
+    改动的全部要害——放在入口会堵住 qq_bot 的会话线程，放在 hold 之后会锁死
+    漫画台那个进程，放在 process 里面会先去跑一遍重启判断。
+    """
+
+    def _run_one(self, wait_ok, local=True):
+        job = image_jobs.Job("group", "9", {"1": {}}, skill="silver")
+        pending = [job]
+
+        def _take(chan):
+            if pending:
+                return pending.pop()
+            raise SystemExit          # 第二圈把 worker 的 while True 打断
+
+        chan = image_jobs._COMFY if local else image_jobs._NAI
+        with mock.patch.object(image_jobs, "_take", _take), \
+             mock.patch.object(image_jobs, "wait_comfy_up",
+                               return_value=wait_ok) as w, \
+             mock.patch.object(image_jobs, "process") as pr, \
+             mock.patch.object(image_jobs, "_notice") as nt, \
+             mock.patch.object(image_jobs, "_finish") as _fin, \
+             mock.patch.object(image_jobs, "_maybe_restart_for_ram"), \
+             mock.patch.object(image_jobs.comfy_gate, "hold") as hold:
+            hold.return_value = mock.Mock()
+            with self.assertRaises(SystemExit):
+                image_jobs._worker(chan)
+        return job, w, pr, nt, hold
+
+    def test_waits_before_submitting(self):
+        job, w, pr, nt, _hold = self._run_one(wait_ok=True)
+        w.assert_called_once_with(gap=image_jobs.SUBMIT_PROBE_GAP)
+        pr.assert_called_once_with(job)
+        nt.assert_not_called()
+
+    def test_gives_up_as_comfy_gone_when_it_never_comes_back(self):
+        job, _w, pr, nt, hold = self._run_one(wait_ok=False)
+        self.assertIsInstance(job.error, image_jobs.ComfyGone)
+        self.assertEqual(job.error.waited, image_jobs.COMFY_WAIT_UP)
+        pr.assert_not_called()            # 没提交
+        nt.assert_called_once_with(job)   # 但要说一声，别让人干等
+        hold.assert_not_called()          # 更没白占跨进程锁
+
+    def test_cloud_channel_never_waits(self):
+        """NAI 走云端，本机 ComfyUI 在不在跟它一个字节的关系都没有。"""
+        _job, w, pr, _nt, _hold = self._run_one(wait_ok=True, local=False)
+        w.assert_not_called()
+        pr.assert_called_once()
 
 
 if __name__ == "__main__":

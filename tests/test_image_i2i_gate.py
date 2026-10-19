@@ -107,9 +107,18 @@ class CapabilityRefusalTest(unittest.TestCase):
     def setUp(self):
         qq_api.clear_context()
         self.addCleanup(qq_api.clear_context)
+        # 2026-10-19：ComfyUI 不在线**不再当场拒单**，这单会真的进队列。
+        # 所以收尾必须清队列，并且全程不许起 worker 线程（下面 `_call` 里挡掉）。
+        gi.image_jobs._reset()
+        self.addCleanup(gi.image_jobs._reset)
 
     def _call(self, boom=True, **kw):
-        """`boom=True` 时源图一读就炸：拒绝必须发生在任何下游动作之前。"""
+        """`boom=True` 时源图一读就炸：拒绝必须发生在任何下游动作之前。
+
+        探针也从「ComfyUI 没在线」换成了「这单进了队列」——从前探活失败就
+        return，那句错话正好能当「走到下游」的证据；现在探不到照样收单，
+        证据就得换成队列里有东西。`_send_receipt` 挡成 False，别真往 QQ 发。
+        """
         fail = mock.Mock(side_effect=AssertionError("不该读源图 / 往 ComfyUI 传图"))
         with mock.patch.object(gi, "is_cancelled", lambda: False), \
                 mock.patch.object(gi, "_qq_gate", lambda: None), \
@@ -125,6 +134,9 @@ class CapabilityRefusalTest(unittest.TestCase):
                                   lambda raw, max_side=None: (b"FIT", (1024, 1536))), \
                 mock.patch.object(gi.comfy_src, "upload",
                                   fail if boom else (lambda raw: "i2isrc_x.png")), \
+                mock.patch.object(gi.image_jobs, "_ensure_worker", lambda: None), \
+                mock.patch.object(gi, "_send_receipt", lambda *a, **k: False), \
+                mock.patch("app.confirm_gate.intercept", lambda *a, **k: None), \
                 mock.patch.object(gi.image_jobs, "comfy_alive", lambda: False):
             qq_api.bind_context("group_9", "group", "9", user_text="这张真好看")
             return gi._generate_image(prompt="change her coat to red", **kw)
@@ -138,22 +150,24 @@ class CapabilityRefusalTest(unittest.TestCase):
         （降级说明里仍指向 qwen，那条断言在 `test_image_i2i.py`。）
 
         `boom=True`（默认）：源图一读就炸。降级必须发生在读源图**之前**，
-        所以能走到下游的「ComfyUI 没在线」就证明一步都没碰源图。
+        所以能走到下游的「这单进了队列」就证明一步都没碰源图。
         """
         out = self._call(skill="nffa", source_image="1")
         self.assertNotIn("不支持图生图", out)
         # 走到下游了（降级没拦下这单）；`boom=True` 同时保证源图一步都没读
-        self.assertIn("ComfyUI 现在没在线", out)
+        self.assertGreaterEqual(gi.image_jobs.queue_depth(), 1)
+        self.assertIn("正在重启", out)
 
     def test_the_default_channel_no_longer_refuses(self):
         """正控制：`silver` 有锁构图骨架了，垫图请求要一路走到下游。
 
-        这里让 ComfyUI 探活返回「没在线」——那是**下游**的错误。源图读取 / 缩放 /
-        上传都真的发生了（不再 boom），中间没有一句「不支持图生图」。
+        这里让 ComfyUI 探活返回「没在线」——现在那只影响回执口径，照样收单。
+        源图读取 / 缩放 / 上传都真的发生了（不再 boom），中间没有一句「不支持图生图」。
         """
         out = self._call(boom=False, skill="silver", source_image="1")
         self.assertNotIn("不支持图生图", out)
-        self.assertIn("ComfyUI 现在没在线", out)
+        self.assertGreaterEqual(gi.image_jobs.queue_depth(), 1)
+        self.assertIn("正在重启", out)
 
     def test_not_naming_a_channel_now_lands_on_a_capable_default(self):
         """不点名 → 落默认渠道 `silver`，而它现在**能**垫图。
@@ -163,12 +177,13 @@ class CapabilityRefusalTest(unittest.TestCase):
         """
         out = self._call(boom=False, source_image="1")
         self.assertNotIn("不支持图生图", out)
-        self.assertIn("ComfyUI 现在没在线", out)
+        self.assertGreaterEqual(gi.image_jobs.queue_depth(), 1)
+        self.assertIn("正在重启", out)
 
     def test_a_capable_channel_reaches_the_i2i_branch(self):
         """正控制：会垫图的渠道在「没说要图生图」的轮里照样垫得成。
 
-        一路走到 ComfyUI 探活那一步（这里让它报「没在线」），中间没有一句
+        一路走到下游（这单进队列；ComfyUI 的探活只影响回执口径），中间没有一句
         「不支持图生图」——拒绝话术只跟**能力**挂钩，不再跟关键词挂钩。
         """
         with mock.patch.object(gi, "is_cancelled", lambda: False), \
@@ -187,12 +202,16 @@ class CapabilityRefusalTest(unittest.TestCase):
                                   lambda raw, max_side=None: (b"FIT", (728, 1024))), \
                 mock.patch.object(gi.comfy_src, "upload",
                                   lambda raw: "i2isrc_x.png"), \
+                mock.patch.object(gi.image_jobs, "_ensure_worker", lambda: None), \
+                mock.patch.object(gi, "_send_receipt", lambda *a, **k: False), \
+                mock.patch("app.confirm_gate.intercept", lambda *a, **k: None), \
                 mock.patch.object(gi.image_jobs, "comfy_alive", lambda: False):
             qq_api.bind_context("group_9", "group", "9", user_text="这张真好看")
             out = gi._generate_image(prompt="change her coat to red",
                                      skill="anima_clear", source_image="1")
         self.assertNotIn("不支持图生图", out)
-        self.assertIn("ComfyUI 现在没在线", out)
+        self.assertGreaterEqual(gi.image_jobs.queue_depth(), 1)
+        self.assertIn("正在重启", out)
 
 
 class PromptSurfaceTest(unittest.TestCase):

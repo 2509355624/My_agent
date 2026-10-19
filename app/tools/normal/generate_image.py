@@ -425,6 +425,11 @@ def _quota_balance(target_id, used):
 # qq_bot 的「本轮别再采纳模型正文」都认它（格式只有一个真相源，别在这儿重写）。
 _RECEIPT_QUEUED = "任务已提交，前面还有 %d 张在排队。"
 _RECEIPT_RUNNING = "任务已提交，正在画了。"
+# ComfyUI 不在线（多半正在重启，实测 14~22 秒）时的回执（2026-10-19）。
+# **绝不能沿用「正在画了」**：这一刻它确实还没开工，说了就是假承诺，模型会
+# 照着这句去跟人保证「马上就好」，十几秒后图还没出来，前后打架。
+_RECEIPT_WAITING = ("任务已收到，ComfyUI 正在重启（一般十几秒），"
+                    "它一上线就自动开始画。")
 # 第二行报**这一张走的哪条渠道**（2026-10-06 用户拍板：「提交任务的时候，可以
 # 说明生图的渠道是什么」）。渠道 id 是我们自己起的名字，原样报——它同时是
 # 「渠道名 + 你的需求」那条用法的示范，用户看着这行就知道下次怎么点名。
@@ -480,14 +485,21 @@ def receipt_note_default():
     return _RECEIPT_NOTE_DEFAULT % QQ_BOT_NAME
 
 
-def _receipt_text(ahead, skill=None):
+def _receipt_text(ahead, skill=None, waiting=False):
     """后台直发的回执正文：短、纯状态、像系统回执（不给模型留编的余地）。
 
     三段拼起来：状态句 → 当前渠道 → 附言（管理页可编辑，没设就用内置默认）。
     `skill` 为空（老调用方 / 手工构造的 Job）就少报一行，不硬编一个渠道名上去。
+
+    `waiting` = 入队时 ComfyUI 不在线（正在重启，见 `image_jobs.comfy_alive`）。
+    这时状态句换成「正在重启，上线就画」，且**不报排在第几**——前面那几张也在
+    等同一台机器，报个「前面还有 3 张」只会让人以为它在慢慢挪。
     """
     from app import agents as agent_store
-    lines = [_RECEIPT_QUEUED % ahead if ahead > 0 else _RECEIPT_RUNNING]
+    if waiting:
+        lines = [_RECEIPT_WAITING]
+    else:
+        lines = [_RECEIPT_QUEUED % ahead if ahead > 0 else _RECEIPT_RUNNING]
     if skill:
         lines.append(_RECEIPT_CHANNEL % skill)
     note = agent_store.receipt_note(QQ_AGENT_ID)
@@ -542,13 +554,23 @@ def _qq_receipt(job, target, target_id, source_note="", quota_tail=""):
     不带它——回执要短、要像系统回执，别把额度说明也念给群里听。
     """
     ahead = image_jobs.ahead_of(job)
-    receipt = _receipt_text(ahead, getattr(job, "skill", None))
+    # `is True` 而不是 truthy：测试和别处会传 `mock.Mock()` 当 job，任何
+    # getattr 都吐一个子 Mock（恒真），否则 NAI 那两个用例会被误判成「在等
+    # ComfyUI」。真 Job 这里是 `bool(...)` 赋的值，恒为 True/False。
+    waiting = getattr(job, "comfy_down", False) is True
+    receipt = _receipt_text(ahead, getattr(job, "skill", None), waiting=waiting)
     tail = _note_tail(source_note) + quota_tail
     if _send_receipt(target, target_id, receipt):
         return (image_jobs.RECEIPT_SENT_MARK + receipt + "\n"
                 + "（上面那句系统已经直接发到会话里了：**不要再复述排队 / 张数**，"
                   "也不用说「稍等 / 马上好」，本轮别再为这件事说什么。）"
                 + tail)
+    if waiting:
+        # 发不出去时退回让模型转述的口径：跟直发那句一致，别让它说成「正在画」。
+        return ("任务收到了，ComfyUI 正在重启（一般十几秒），它一上线就会自动开始画，"
+                "画好会自动发到群里。"
+                "不要输出图片地址，也不要说「图在下面 / 稍等」，"
+                "直接把想说的话说完就行。" + tail)
     if ahead > 0:
         return ("已经排上队了（前面还有 %d 张），排到就画，"
                 "画好会自动发到群里。"
@@ -1044,14 +1066,11 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
         if err:
             return err
 
-    # 入队前先确认 ComfyUI 真的在。队列在 agent 侧，enqueue 从来不碰
-    # ComfyUI，所以它挂了也照样「成功」，模型就会拿到一句「已经排上队了」
-    # 去跟对方承诺，几十秒后 worker 才撞上连接失败——群里先看到承诺、再看
-    # 到「图没画出来」，前后打架。探不到就当场拒掉，让模型老老实实说画不了。
-    if not image_jobs.comfy_alive():
-        return ("错误：ComfyUI 现在没在线（" + COMFYUI_URL + " 连不上），"
-                "这张画不了。直接告诉对方现在画不了、让他稍后再试，"
-                "不要说图已经在画了或者马上就好。")
+    # ComfyUI 在不在只影响**回执口径**，不再影响收不收单（2026-10-19 用户拍板）。
+    # 探不到多半是它正在重启（实测 14~22 秒），从前这里直接拒掉，等于把每一个
+    # 重启窗口都变成一次失败。现在照常入队，worker 在提交前等它回来（见
+    # image_jobs._worker 与 SUBMIT_PROBE_GAP）；回执则不能说「正在画了」。
+    comfy_down = not image_jobs.comfy_alive()
 
     # 排进**全局串行队列**：同一时刻 ComfyUI 里最多只有一张图在跑，其余老老
     # 实实排队（见 image_jobs）。从前是这里直接 _queue_prompt 提交、排队发生
@@ -1084,7 +1103,8 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 账本要存它（见 image_jobs._caption / image_log.save）。
     job, reason = image_jobs.enqueue(target, target_id, workflow, skill,
                                      prompt=prompt, intent=intent, seed=seed,
-                                     resample_fn=resample_fn)
+                                     resample_fn=resample_fn,
+                                     comfy_down=comfy_down)
     if reason is not None:
         # 拒收时工作流还在手上，ComfyUI 一点算力都没浪费，也不会留下「画了
         # 却没人发」的孤儿图。

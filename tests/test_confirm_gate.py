@@ -136,7 +136,7 @@ class ConsumeTest(unittest.TestCase):
         self.assertEqual(reply, "回执")
         en.assert_called_once_with("group", "123", {"w": 1}, "anima_clear",
                                    prompt="1girl", intent="k", seed=42,
-                                   landscape=None)
+                                   landscape=None, comfy_down=False)
         rc.assert_called_once()
         self.assertNotIn(("group", "123"), confirm_gate._PENDING)
 
@@ -179,11 +179,24 @@ class ConsumeTest(unittest.TestCase):
                                    workflow={"w": 1})
         self.assertFalse(confirm_gate._PENDING[("group", "123")]["landscape"])
 
-    def test_comfy_dead_on_confirm_returns_error(self):
+    def test_comfy_dead_on_confirm_still_enqueues(self):
+        """确认那一刻 ComfyUI 不在线（正在重启）：**照常入队**，不再拒单
+        （2026-10-19 用户拍板）。卡发出到对方回「好」之间机器重启，是最容易
+        撞上的窗口，从前这里回一句「刚那张画不了」，正是要修的毛病。"""
         self._pending_comfy()
-        with mock.patch("app.image_jobs.comfy_alive", return_value=False):
+        job = mock.Mock()
+        with mock.patch("app.image_jobs.comfy_alive", return_value=False), \
+             mock.patch("app.image_jobs.enqueue",
+                        return_value=(job, None)) as en, \
+             mock.patch("app.tools.normal.generate_image._charge_quota",
+                        return_value=""), \
+             mock.patch("app.tools.normal.generate_image._qq_receipt",
+                        return_value="回执") as rc:
             reply = confirm_gate.consume_if_confirmed("group", "123", "好")
-        self.assertIn("没在线", reply)
+        self.assertEqual(reply, "回执")
+        self.assertTrue(en.call_args.kwargs["comfy_down"])
+        rc.assert_called_once()
+        self.assertNotIn(("group", "123"), confirm_gate._PENDING)
 
     def test_gen_disallowed_between_card_and_confirm(self):
         self._pending_comfy()
