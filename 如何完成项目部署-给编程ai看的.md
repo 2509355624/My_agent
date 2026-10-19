@@ -14,6 +14,7 @@
 |---|---|
 | 网页端 | Flask 单进程，默认监听 `0.0.0.0:5174`，浏览器打开 `http://localhost:5174` |
 | 主 agent | `agents/main/`：一个「通用助手」人设，工具全开（生图、查标签、读写文件、搜网页…） |
+| 写作 agent | `agents/writing/`：一个「写作助手」，只挂 `writing` 一个 skill、上下文 100 万，专写长文 |
 | 模型 | 主用 DeepSeek API，失败自动降级到本机 llama.cpp（都走 OpenAI 兼容接口） |
 | 生图 | 通过 HTTP 调本机 ComfyUI（`127.0.0.1:8188`），跑 `skills/anima-line/workflow.json` |
 | 数据 | 会话在 `agents/main/session.jsonl`，出图在 ComfyUI 的 `output/`，日志在 `logs/agent.log` |
@@ -103,6 +104,9 @@ cd /d D:\agent_my_test
 | `LLM_FALLBACK_CHAIN` | `deepseek:deepseek-chat,llama:local` | 降级顺序，逗号分隔，`provider:模型名` |
 | `LLAMA_BASE_URL` | `http://127.0.0.1:8081/v1` | llama.cpp 的 llama-server，**必须带 `/v1`** |
 | `LLAMA_MODEL` | `local` | 仅用于日志展示，llama-server 不校验 |
+| `LLAMA_NUM_CTX` | `32768` | **必须等于 llama-server 启动参数 `-c` 的值**，代码用它给上下文预算封顶 |
+| `CONTEXT_BUDGET` | `100000` | 上下文预算（token）。写长文的关键，见第 6 节 |
+| `PROMPT_BRIEF` | `1` | 工具描述只留首句，系统提示从约 1.6 万字符压到 5 千 |
 | `COMFYUI_URL` | `http://127.0.0.1:8188` | ComfyUI 地址 |
 | `COMFYUI_OUTPUT_DIR` | 空 | 填 ComfyUI 的 `output` 目录可多一层「HTTP 失败从磁盘兜底」 |
 | `IMAGE_GEN_TIMEOUT` | `3600` | 单张图上限（秒）。冷启动第一次要留余量 |
@@ -146,12 +150,15 @@ cd /d D:\agent_my_test
 ## 5. 本地 llama.cpp 接入（可选但推荐）
 
 ```bat
-llama-server -m D:\models\你的模型.gguf --port 8081 -c 16384 -ngl 99
+llama-server -m D:\models\你的模型.gguf --port 8081 -c 32768 -ngl 99
 ```
 
 - 端口要和 `.env` 的 `LLAMA_BASE_URL` 对上（默认 8081）
-- 想让它能读图，加 `--mmproj D:\models\mmproj.gguf`（见第 6 节）
-- `-c` 是上下文长度，`.env` 里还有 `LLAMA_NUM_CTX`（默认 16384），两边别差太多
+- **`-c` 必须和 `.env` 的 `LLAMA_NUM_CTX` 填同一个数**（这里都是 32768）。
+  填小了，`CONTEXT_BUDGET` 设多高都会被按这个窗口打折：
+  16384 的窗口只能用到约 1.1 万 token，写长文会一直触发压缩
+- 想让它能读图，加 `--mmproj D:\models\mmproj.gguf`（见第 7 节）
+- `-c` 越大越吃显存/内存，12 GB 显卡先试 32768；不够就降回 16384 并接受写短篇
 
 验证：
 ```bat
@@ -168,7 +175,44 @@ LLM_FALLBACK_CHAIN=llama:local,deepseek:deepseek-chat
 
 ---
 
-## 6. 识图（可选）
+## 6. 上下文与写作助手（写长文必看）
+
+### 为什么要把预算调大
+
+系统提示 + 工具说明**每一轮都要重新发一遍**，先占掉一部分预算，剩下的才轮到聊天史和
+读进来的文件。默认 `CONTEXT_BUDGET=32000` 时，固定开销能占掉一半以上；而
+`skills/writing/01-structure/write-structure.md` 一份就 22 KB（约 1.3 万 token），
+读两份规范预算就满了，于是触发压缩：旧内容被摘成一小段，细节丢失，长文越写越飘。
+
+包里已经预设成：
+
+```ini
+CONTEXT_BUDGET=100000   # DeepSeek 窗口 100 万，装得下
+PROMPT_BRIEF=1          # 工具描述只留首句，固定开销减半
+```
+
+**不要去调小**。这一项直接决定长文质量。
+
+### 两个 agent 怎么选
+
+| agent | 目录 | 上下文 | 看得见的 skill | 用途 |
+|---|---|---|---|---|
+| 通用助手 | `agents/main/` | 继承 `.env`（10 万） | 全部 | 聊天、生图、查标签、日常问答 |
+| 写作助手 | `agents/writing/` | 自己带 **100 万** | 只有 `writing` | 写小说 / 短文 / 改稿，不碰生图 |
+
+写作助手单独的预算写在 `agents/writing/agent.json` 的 `context_budget`（0 表示继承全局）。
+它的工具里没有 `generate_image`——那一段描述本身就有 9 千多字符，去掉之后留给正文的空间更多。
+
+**在网页上切换**：界面顶部的 agent 下拉框（`GET /api/agents` 的列表）里选「写作助手」即可。
+切换后是**另一条会话线**，历史不互通，这是设计如此。
+
+### 没装 RAG 也能写
+
+写作助手的说明书里原本有一步「`search_kb` 取 3~5 条范文」。没装知识库时这个工具
+**不会注册**，模型看不见它，那一步会被自动跳过——已经在该 agent 的人设里写明了
+「看不到就跳过，别报错、别编造范文」。所以**不装 RAG 不影响写作流程**，只是少了范文参考。
+
+## 7. 识图（可选）
 
 「引用一张图 → 反推提示词」需要**多模态**模型。DeepSeek 官方接口没有视觉能力，所以：
 
@@ -187,7 +231,7 @@ LLM_FALLBACK_CHAIN=llama:local,deepseek:deepseek-chat
 
 ---
 
-## 7. RAG 向量知识库（可选，默认不装）
+## 8. RAG 向量知识库（可选，默认不装）
 
 **默认不装，也不影响任何功能。** 没装时 `search_kb` / `ingest_kb` 等工具根本不会注册，
 模型也看不见它们 —— 所以不用去「关掉」什么。
@@ -218,7 +262,7 @@ RAG_RETRIEVE_K=4
 
 ---
 
-## 8. 验收清单（逐条打勾）
+## 9. 验收清单（逐条打勾）
 
 | # | 检查 | 操作 | 期望 |
 |---|---|---|---|
@@ -230,13 +274,14 @@ RAG_RETRIEVE_K=4
 | 6 | 能出图 | 发「画一只猫」 | 返回图片；`logs/agent.log` 里有 `[直达生图] anima-line` |
 | 7 | 生图台 | 打开 `http://localhost:5174/gen` | 页面可选到 `anima-line`，提交后出图 |
 | 8 | 标签库可用 | 聊天里问「初音未来 有哪些 tag」 | 返回一串标签候选（说明 `anima-tags` 索引读到了） |
-| 9 | 日志 | 看 `logs/agent.log` | 有启动、模型调用、生图记录，无反复重试 |
+| 9 | 写作助手可用 | 界面 agent 下拉框里能看到「写作助手」，切过去发「写一段 300 字的小说开头」 | 有正文返回；回复里**不应**出现「search_kb 失败」之类报错 |
+| 10 | 日志 | 看 `logs/agent.log` | 有启动、模型调用、生图记录，无反复重试 |
 
-任何一条不过，看第 10 节。
+任何一条不过，看第 11 节。
 
 ---
 
-## 9. 项目结构（哪些能动、哪些别动）
+## 10. 项目结构（哪些能动、哪些别动）
 
 ```
 agent_my_test\
@@ -244,6 +289,7 @@ agent_my_test\
 ├─ app\                      # 后端：Flask 路由、agent 循环、工具、生图管道
 ├─ web\                      # 前端页面（纯静态 html，改完刷新即可）
 ├─ agents\main\              # 「通用助手」的人设 prompt.md + agent.json
+├─ agents\writing\           # 「写作助手」：只挂 writing skill，上下文 100 万
 ├─ skills\                   # 技能：每个目录 = 一个生图渠道或一套提示词
 │   ├─ anima-line\           #   ← 唯一的生图渠道（workflow.json + skill.md）
 │   ├─ anima-tags\           #   ← 标签库（13 MB，search_tags 依赖）
@@ -265,7 +311,7 @@ agent_my_test\
 
 ---
 
-## 10. 常见故障
+## 11. 常见故障
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
@@ -278,12 +324,12 @@ agent_my_test\
 | 聊天报 401 | DeepSeek key 错或没余额 | 换 key，看 `logs/agent.log` 的 HTTP 状态 |
 | 聊天很慢 | 主模型挂了在降级 | 日志里会写拉黑哪家、切到哪家；`LLM_FALLBACK_CHAIN` 调顺序 |
 | pip 安装 SSL/超时 | 网络或系统代理 | 加 `-i https://pypi.tuna.tsinghua.edu.cn/simple`；HTTP 请求代码里已 `trust_env=False` 忽略系统代理 |
-| 引用图反推失败 | 没配识图模型 | 见第 6 节，或接受这个功能不可用 |
+| 引用图反推失败 | 没配识图模型 | 见第 7 节，或接受这个功能不可用 |
 | 中文乱码 | 在非中文 Windows 上跑 bat | bat 是 GBK 编码；用 cmd 手动跑 `python agent.py` 即可绕过 |
 
 ---
 
-## 11. 不要做的事
+## 12. 不要做的事
 
 1. **不要把 `.env` 提交到公开仓库**——里面有 API Key。
 2. **不要为了「支持更多渠道」去改 `app/`**：本包只带 anima-line 一个工作流，

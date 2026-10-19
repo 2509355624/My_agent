@@ -43,11 +43,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST = os.path.join(ROOT, "dist")
 NAME = "agent_my_test-friend"
 
-# 目录：原样整棵复制（仍会跳过 __pycache__）
+# 目录：原样整棵复制（仍会跳过 __pycache__ 与会话）
 DIRS = [
     "app",
     "web",
     "agents/main",
+    "agents/writing",     # 写作助手：100 万上下文 + 只挂 writing skill
 ]
 
 # 单个文件
@@ -75,6 +76,14 @@ SKIP_DIRS = {"__pycache__", "sessions", "memory", "recent", "interject",
              "stickers", "sessions.zip"}
 SKIP_EXT = {".pyc", ".pyo", ".log"}
 
+# 按**文件名**跳过（不看扩展名）。这三类即使不在 sessions/ 里也必须拦住：
+#   session.jsonl  我们的真实对话记录（之前漏过一次，27 KB 群聊原文进了包）
+#   settings.json  群号、审核词、静音名单；包里会按 agent 重写一份干净版
+#   *.bak*         改人设留下的备份，纯属噪音
+SKIP_NAMES = {"session.jsonl", "settings.json"}
+SKIP_NAME_PREFIX = ("session.",)
+SKIP_NAME_MARKS = (".bak",)
+
 ENV_TEMPLATE = """\
 # ── 必填：一个 DeepSeek API Key ──────────────────────
 # 申请：https://platform.deepseek.com/api_keys
@@ -89,10 +98,13 @@ LLM_PROVIDER=deepseek
 LLM_FALLBACK_CHAIN=deepseek:deepseek-chat,llama:local
 
 # ── 本地 llama.cpp（llama-server）───────────────────
-# 启动示例：llama-server -m 你的模型.gguf --port 8081 -c 16384
+# 启动示例：llama-server -m 你的模型.gguf --port 8081 -c 32768
 # 注意 base_url 要带 /v1；model 名 llama-server 不校验，随便写一个能认出来的
 LLAMA_BASE_URL=http://127.0.0.1:8081/v1
 LLAMA_MODEL=local
+# 必须和启动参数 -c 填同一个数：代码用它给上下文预算封顶。
+# 填小了，预算再高也会被按这个窗口打折（16384×0.7≈1.1 万 token）。
+LLAMA_NUM_CTX=32768
 
 # 想反过来「本地为主、DeepSeek 兜底」就改成：
 #   LLM_PROVIDER=llama
@@ -120,6 +132,17 @@ IMAGE_GEN_TIMEOUT=3600
 # 你手上只有「anima线条」这一个工作流，所以填 anima-line。
 IMAGE_DEFAULT_SKILL=anima-line
 
+# ── 上下文（写长文的关键）─────────────────────────────
+# 单位是 token。系统提示 + 工具说明每轮都要随请求发出去，先占掉一部分，
+# 剩下的才是聊天史与读进来的文件。默认 32000 只够中短篇：
+# 写作规范里一份 write-structure.md 就 22 KB（约 1.3 万 token），读两份就满。
+# DeepSeek 的窗口是 100 万，装得下 10 万，所以这里直接给 100000。
+# 代价：写长篇时每轮重新发送的长史按 token 计费，一篇下来几块钱量级。
+CONTEXT_BUDGET=100000
+# 工具描述只留首句、砍掉用法提示。系统提示从约 1.6 万字符压到 5 千，
+# 给写作用腾出空间。本地小模型（16K 窗口）也建议保持 1。
+PROMPT_BRIEF=1
+
 # ── RAG 知识库（可选）────────────────────────────────
 # 没装 requirements-rag.txt 就保持 0，那几个工具不会注册
 ENABLE_RAG=0
@@ -145,6 +168,16 @@ SETTINGS_JSON = """{
 """
 
 
+def _skip_file(name):
+    """这个文件该不该带进包。"""
+    low = name.lower()
+    if low in SKIP_NAMES:
+        return True
+    if low.startswith(SKIP_NAME_PREFIX) or low.endswith((".bak", ".orig")):
+        return True
+    return any(m in low for m in SKIP_NAME_MARKS)
+
+
 def _copy_tree(src, dst):
     """复制目录，跳过缓存 / 会话 / 日志。返回复制的文件数。"""
     n = 0
@@ -154,7 +187,7 @@ def _copy_tree(src, dst):
         target = dst if rel == "." else os.path.join(dst, rel)
         os.makedirs(target, exist_ok=True)
         for f in files:
-            if os.path.splitext(f)[1].lower() in SKIP_EXT:
+            if os.path.splitext(f)[1].lower() in SKIP_EXT or _skip_file(f):
                 continue
             shutil.copy2(os.path.join(base, f), os.path.join(target, f))
             n += 1
@@ -208,10 +241,15 @@ def build(out_dir=DIST):
                  newline="\r\n") as f:
         f.write(ENV_TEMPLATE)
 
-    # 干净的 settings.json（我们的那份带着群号、审核词、静音名单）
-    with io.open(os.path.join(stage, "agents", "main", "settings.json"), "w",
-                 encoding="utf-8", newline="\r\n") as f:
-        f.write(SETTINGS_JSON)
+    # 干净的 settings.json（我们的那份带着群号、审核词、静音名单）。
+    # 每个 agent 都要有一份：没有这个文件，网页上的设置页会读本机默认值。
+    for aid in ("main", "writing"):
+        d = os.path.join(stage, "agents", aid)
+        if not os.path.isdir(d):
+            continue
+        with io.open(os.path.join(d, "settings.json"), "w",
+                     encoding="utf-8", newline="\r\n") as f:
+            f.write(SETTINGS_JSON)
 
     # 两份文档：一份是给对面编程 AI 的说明书，一份是让人类用户复制粘贴的
     # 开场白（不给他这段，他的 AI 不知道该去读说明书）。
