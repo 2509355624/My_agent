@@ -213,11 +213,16 @@ def build(out_dir=DIST):
                  encoding="utf-8", newline="\r\n") as f:
         f.write(SETTINGS_JSON)
 
-    # 部署说明放两份：根目录给人看，docs/ 给对面 AI 找
-    doc = os.path.join(ROOT, "如何完成项目部署-给编程ai看的.md")
-    if os.path.isfile(doc):
-        shutil.copy2(doc, stage)
-        total += 1
+    # 两份文档：一份是给对面编程 AI 的说明书，一份是让人类用户复制粘贴的
+    # 开场白（不给他这段，他的 AI 不知道该去读说明书）。
+    for name in ("如何完成项目部署-给编程ai看的.md",
+                 "第一步-发给编程AI的话.md"):
+        doc = os.path.join(ROOT, name)
+        if os.path.isfile(doc):
+            shutil.copy2(doc, stage)
+            total += 1
+        else:
+            print("!! 缺文档，打包不完整：", name)
 
     # 打包（zip 同样带时间戳，上一次的包一律留着）
     zip_path = os.path.join(out_dir, "%s-%s.zip" % (NAME, stamp))
@@ -279,6 +284,10 @@ def _plan():
     for sk in SKILLS:
         ok = os.path.isdir(os.path.join(ROOT, "skills", sk))
         print("   %s skills/%s" % ("✓" if ok else "✗", sk))
+    print("会复制这些文档：")
+    for rel in ("如何完成项目部署-给编程ai看的.md", "第一步-发给编程AI的话.md"):
+        ok = os.path.isfile(os.path.join(ROOT, rel))
+        print("   %s %s" % ("✓" if ok else "✗", rel))
     print("会新写：.env（全占位）、agents/main/settings.json、state/、usage/")
     print("不会删除、不会覆盖任何已有文件。")
 
