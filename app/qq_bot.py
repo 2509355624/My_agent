@@ -41,7 +41,7 @@ try:
 except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
-from app import (confirm_gate, direct_gen, image_jobs, image_out, interject,
+from app import (card_bot, confirm_gate, direct_gen, image_jobs, image_out, interject,
                  logsetup,
                  longterm, notify, persona, qq_api, qq_status, recent,
                  stickers, usage)
@@ -1104,6 +1104,39 @@ class SessionRunner:
             finally:
                 qq_api.clear_context()
             return
+        # 造卡（2026-10-19）：`<渠道> 造卡 <需求>` 整轮接管，回一张**合并转发**
+        # 的角色卡卡片（封面 + 五段设定）。必须排在直达管道**前面**——direct_gen
+        # 拿到「造卡」会当画面内容，最后画成一张「女孩举着写有造卡的牌子」。
+        # 借用线让路：这套是生图机器人的语义，被借的 agent 不该被它接管。
+        msg_id = str(batch[0].get("reply_to") or "")
+        if not borrowed:
+            card_hit, card_skill, card_body = card_bot.parse(own_text)
+            if card_hit:
+                try:
+                    if not card_skill:
+                        self._deliver(False, card_body, [], "", reply_to=msg_id)
+                    else:
+                        card_bot.start(self.target, self.target_id, card_skill,
+                                       card_body, reply_to=msg_id)
+                finally:
+                    qq_api.clear_context()
+                return
+            # 引用一张角色卡卡片说「重新生成」 → 只重画封面，文案一个字不动
+            # （人设是用户已经认可的那一版，重写只会把它冲掉）。账本对不上
+            # 就不接管，交给下面的管道——那可能只是句普通聊天。
+            if card_bot.wants_redo(own_text):
+                for q in (batch[0].get("quotes") or []):
+                    if q.get("kind") != "reply":
+                        continue
+                    took, tip = card_bot.start_redo(
+                        self.target, self.target_id, q.get("id"), reply_to=msg_id)
+                    if took:
+                        try:
+                            if tip:
+                                self._deliver(False, tip, [], "", reply_to=msg_id)
+                        finally:
+                            qq_api.clear_context()
+                        return
         # 直达生图管道（2026-10-04，10-05 两次扩版）：@ 轮和关键词轮都过一次
         # 轻量 LLM（direct_gen.decide）——AI 判意图：生图 → 直接入队；聊天/
         # 提问 → 把 reply 发出去；引用图+意见 → 改图管道（识图→修正→重生成）。

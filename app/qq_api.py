@@ -648,6 +648,44 @@ def send_group(group_id, message, limit=None, reply_to=None):
     return len(chunks)
 
 
+def node_segment(content, name="", uin=0):
+    """合并转发卡片里的一个节点 = 聊天记录里的一条「消息」。
+
+    content 是消息段数组（`[text_segment(...)]` / `[image_segment(...)]`），
+    也接受纯字符串，省得每个调用点都包一层。
+    """
+    body = content if isinstance(content, list) else [text_segment(str(content))]
+    return {"type": "node",
+            "data": {"name": str(name or ""),
+                     "uin": str(uin or 0),
+                     "content": body}}
+
+
+def send_forward(target, target_id, nodes, timeout=60):
+    """把若干节点以「聊天记录卡片」合并转发出去（**一条**消息）。
+
+    比一张张发强的地方很具体：一套漫画十来张图、一张角色卡配五段设定，逐条
+    发会把群刷掉；合并成卡片，点开才展开（2026-10-19 用户要的）。
+
+    返回协议端响应——里面的 `message_id` 是**这张卡片自己的 id**，角色卡要拿
+    它做「引用这张卡片说重新生成」时的索引（见 app/card_bot.py 的消息账本）。
+
+    ⚠️ 私聊这一路没有 `_call_private` 那套「非好友 → 群临时会话」兜底：
+    合并转发在临时会话里的支持情况取决于协议端，失败就如实抛出去，别吞。
+    """
+    if not nodes:
+        raise ValueError("合并转发至少要有一个节点")
+    if target == "group":
+        action, key = "send_group_forward_msg", "group_id"
+    elif target == "private":
+        action, key = "send_private_forward_msg", "user_id"
+    else:
+        raise ValueError("target 只能是 group / private：%r" % (target,))
+    data = _call(action, {key: int(target_id), "messages": nodes}, timeout=timeout)
+    _send_log(target, target_id, "[合并转发 %d 条]" % len(nodes))
+    return data
+
+
 def send_image(target, target_id, image_path, caption=""):
     """发一张图（可选带一句文字）。target 取 "private" 或 "group"。
 
