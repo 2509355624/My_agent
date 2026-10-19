@@ -333,12 +333,38 @@ class DraftTest(unittest.TestCase):
         self.assertEqual(m.call_count, 0)
 
     def test_system_prompt_keeps_the_field_boundaries(self):
-        """字段分工是星陨AI 表单自己定的，提示词里必须留着「关系交给背景记忆」。"""
-        self.assertIn("交给背景记忆", cm._SYSTEM)
-        for name in ("greeting", "intro", "speech", "memory", "rules", "cover", "note"):
+        """六个模块的分工照星陨AI 官方教程，提示词里必须留着边界：
+
+        简介只写「基础设定 + 初始关系」，往事归背景记忆；说话风格只写
+        「怎么说」；补充规则才是防 OOC 的那一栏。
+        """
+        self.assertIn("初始关系", cm._SYSTEM)
+        self.assertIn("全部放到背景记忆", cm._SYSTEM)
+        self.assertIn("只写「怎么说」", cm._SYSTEM)
+        self.assertIn("OOC", cm._SYSTEM)
+        # 名字是独立一栏，教程给了「称号·名字」这种写法
+        self.assertIn("白猫妖灵·阿白", cm._SYSTEM)
+        # 脏草稿里的昵称前缀不能被当成角色名（2026-10-19 实测踩到）
+        self.assertIn("聊天昵称前缀", cm._SYSTEM)
+        for name in ("name", "greeting", "intro", "speech", "memory", "rules",
+                     "cover", "note"):
             self.assertIn('"%s"' % name, cm._SYSTEM)
         for cat in cm.CATEGORIES:
             self.assertIn(cat, cm._SYSTEM)
+
+    def test_prompt_names_every_section_like_the_tutorial(self):
+        """界面上的栏目名得和教程一字不差，不然用户对不上号。"""
+        labels = [label for _k, label, _h, _r in cm.FIELDS]
+        self.assertEqual(labels, ["开场白", "人物简介", "说话风格", "背景记忆", "补充规则"])
+        for label in labels:
+            self.assertIn("/ " + label, cm._SYSTEM)
+
+    def test_chat_prefix_looking_name_is_reported(self):
+        """「大大怪：」这种是被当成名字的聊天前缀——只提醒，不改写。"""
+        for bad in ("233：", "大大怪:", "@大大怪", "233"):
+            with self.subTest(name=bad):
+                warns = cm.check(_good(name=bad))
+                self.assertTrue(any("不像是名字" in w for w in warns), bad)
 
 
 if __name__ == "__main__":

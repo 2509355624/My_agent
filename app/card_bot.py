@@ -2,7 +2,7 @@
 
 ## 为什么用合并转发
 
-一套卡是「一张封面 + 五段设定 + 脚注」，逐条发就是七八条消息，群里直接刷屏。
+一套卡是「一张封面 + 六项设定 + 脚注」，逐条发就是七八条消息，群里直接刷屏。
 合并成聊天记录卡片，点开才展开（2026-10-19 用户定）。漫画之后也走同一条路。
 
 ## 重新生成只重画图，不重写文本
@@ -17,7 +17,8 @@
 ## 渠道识别不另写一套
 
 `direct_gen._parse_channel()` 已经处理了「位置优先」「复合 id」「中文名省前缀」
-这些坑，这里直接复用。只额外做两件事：抠掉「造卡」两个字、把云端渠道挡掉。
+这些坑，这里直接复用。只额外做两件事：只取「造卡」**后面**那段当需求、
+把云端渠道挡掉。
 """
 
 import json
@@ -42,7 +43,6 @@ LEDGER_KEEP = 500
 # 账本里"，否则「重新生成一张猫的图」这种普通生图会被误吞。
 REDO_WORDS = ("重新生成", "重生成", "重画", "换一张", "再来一张", "重做")
 
-_CARD_RE = re.compile(r"[#＃]?\s*造卡\s*[：:]?\s*")
 # 「造卡怎么用」「造卡是什么」——问句不是需求。不挡的话「怎么用」会被当成
 # 一句人物描述，最后画出一张主题是「怎么用」的卡。
 _ASK_RE = re.compile(r"^(怎么|如何|咋|怎样|什么|啥|能不能|可不可以|可以|支持|是啥|是什)")
@@ -57,19 +57,31 @@ USAGE = ("造卡这样用：`<渠道> 造卡 <需求>`\n"
 def parse(text):
     """这条消息是不是造卡指令。返回 `(是不是, skill, 需求或提示语)`。
 
-    抠掉「造卡」两个字之后剩下的整句交给 `_parse_channel`：渠道词在不在开头、
-    写的是中文名还是 id、后面跟了多少需求，都由它按既有规则判。
+    需求 = 「造卡」**后面**那一段，前面的东西一律丢掉。原因很具体：群消息
+    进来时 `qq_bot` 会在前面拼「昵称：」，而对方也常常先喊一句机器人的名字
+    （「大大怪，造卡 …」）——早期版本是「抠掉造卡两个字、剩下整句当需求」，
+    结果机器人昵称被模型当成了角色名，卡就叫「大大怪」（2026-10-19 实测）。
+
+    渠道词从前半段（「造卡」之前）认；对方把渠道写在后面
+    （「造卡 anima线条 …」）也认，两条都认不出来就走默认渠道。
     """
     t = (text or "").strip()
-    if WORD not in t:
+    idx = t.find(WORD)
+    if idx < 0:
         return False, "", ""
-    body = _CARD_RE.sub(" ", t).strip()
-    skill, rest = direct_gen._parse_channel(body)
+    # 前半段只用来认渠道：昵称前缀、@ 名字、渠道词都在这里，一律不进需求
+    head = t[:idx].strip(" #＃，,。.:：、\n")
+    tail = t[idx + len(WORD):].lstrip(" #＃，,。.:：、\n")
+    skill, _rest = direct_gen._parse_channel(head or "")
+    if not skill:
+        skill2, rest2 = direct_gen._parse_channel(tail)
+        if skill2:
+            skill, tail = skill2, (rest2 or "").strip()
     skill = skill or DEFAULT_SKILL
     if skill in image_jobs.NAI_SKILLS:
         return True, "", ("云端渠道（%s）还不支持造卡——它不走本机的 workflow，"
                           "换 `anima线条` / `krea2` 这类吧" % skill)
-    rest = (rest or "").strip(" ，,。.:：、\n")
+    rest = tail.strip(" ，,。.:：、\n")
     # 光喊「造卡」、或者问它怎么用 → 回用法。需求至少得有两个字。
     if not rest or len(rest) < 2 or _ASK_RE.match(rest):
         return True, "", USAGE
@@ -148,7 +160,7 @@ def _draw_and_send(target, target_id, cid, card, skill, seed, reply_to, full=Tru
     """出封面 → 过审核 → 发一张合并转发卡片 → 记账。
 
     `full=False` 是「引用卡片重画」那一轮：人设他已经看过一遍了，再刷一遍
-    五段明细纯属噪音（用户 2026-10-19 原话「不需要再重复发送这个角色卡的
+    六项明细纯属噪音（用户 2026-10-19 原话「不需要再重复发送这个角色卡的
     明细」）。所以卡片里只留标题、图、一行脚注。
     """
     image_path = None
@@ -194,8 +206,23 @@ def _audit(path, target, target_id, cid, skill, seed):
         return False
 
 
+def _meta_text(card):
+    """性别 / 分类 / 标签——表单上勾的那几项，卡片里也得看得见。"""
+    parts = []
+    g = str(card.get("gender") or "").strip()
+    if g:
+        parts.append("性别：%s" % g)
+    cats = card.get("categories") or []
+    if cats:
+        parts.append("分类：%s" % "、".join(str(c) for c in cats))
+    tags = card.get("tags") or []
+    if tags:
+        parts.append("标签：%s" % "、".join(str(t) for t in tags))
+    return "\n".join(parts)
+
+
 def build_nodes(card, image_path, seed, skill, cid, full=True):
-    """组装聊天记录卡片的节点：标题 / 封面 / 五段 / 补了什么 / 脚注。
+    """组装聊天记录卡片的节点：标题 / 封面 / 基本信息 / 六个模块 / 补了什么 / 脚注。
 
     `full=False`（重画那一轮）只出 标题 + 封面 + 脚注 —— 明细不重发。
     """
@@ -207,6 +234,9 @@ def build_nodes(card, image_path, seed, skill, cid, full=True):
     else:
         out.append(qq_api.node_segment("（这张封面没过审核，只有文字）", name, uin))
     if full:
+        meta = _meta_text(card)
+        if meta:
+            out.append(qq_api.node_segment("【基本信息】\n%s" % meta, name, uin))
         for key, label, _hint, _rng in card_maker.FIELDS:
             body = str(card.get(key) or "").strip()
             if body:

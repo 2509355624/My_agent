@@ -1,4 +1,4 @@
-"""星陨AI 角色卡工作台：一句话 → 五段文案 + 竖版封面（2026-10-19）。
+"""星陨AI 角色卡工作台：一句话 → 六项文案 + 竖版封面（2026-10-19）。
 
     GET  /card                页面（web/card_studio.html）
     POST /api/card/draft      一句话描述 → 一张卡（同步，5 秒左右）
@@ -42,7 +42,7 @@ def _brief_limit():
 
 @bp.route("/api/card/draft", methods=["POST"])
 def api_card_draft():
-    """一句话 → 五个框的文案。慢在这里（一次 LLM 调用），所以同步等着。"""
+    """一句话 → 六个模块的文案。慢在这里（一次 LLM 调用），所以同步等着。"""
     data = request.get_json(silent=True) or {}
     brief = str(data.get("brief") or "").strip()
     if not brief:

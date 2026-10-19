@@ -85,6 +85,37 @@ class ParseTest(unittest.TestCase):
     def test_plain_draw_request_is_not_a_card(self):
         self.assertEqual(cb.parse("给我画一个女孩"), (False, "", ""))
 
+    def test_channel_before_the_word_still_counts(self):
+        """渠道写在「造卡」前面也认，需求只取后面那段。"""
+        self.assertEqual(cb.parse("krea2 造卡 一个女帝"),
+                         (True, "krea2-general", "一个女帝"))
+
+    def test_channel_after_the_word_also_counts(self):
+        self.assertEqual(cb.parse("造卡 anima线条 一个女高中生"),
+                         (True, "anima-line", "一个女高中生"))
+
+    def test_group_nickname_prefix_is_dropped(self):
+        """群消息进来时 qq_bot 会拼「昵称：」——那不是人设的一部分。
+
+        2026-10-19 实测：拼进去的「233：」加上对方喊的机器人昵称一起被模型
+        当成角色名，卡就叫「大大怪」。
+        """
+        got = cb.parse("233：大大怪，造卡，👩\u200d🦱 妹妹闺蜜 设定：金发双马尾")
+        self.assertEqual(got[0], True)
+        self.assertEqual(got[1], cb.DEFAULT_SKILL)
+        self.assertEqual(got[2], "👩\u200d🦱 妹妹闺蜜 设定：金发双马尾")
+        self.assertNotIn("大大怪", got[2])
+        self.assertNotIn("233", got[2])
+
+    def test_wake_word_before_the_command_is_dropped(self):
+        self.assertEqual(cb.parse("大大怪 造卡 一个傲娇的女高中生"),
+                         (True, cb.DEFAULT_SKILL, "一个傲娇的女高中生"))
+
+    def test_word_inside_the_brief_is_kept(self):
+        """需求里自己提到「造卡」时，只按**第一个**切，后面的原样留着。"""
+        self.assertEqual(cb.parse("anima线条 造卡 一个会造卡的魔法师"),
+                         (True, "anima-line", "一个会造卡的魔法师"))
+
 
 class MenuTest(unittest.TestCase):
     """三份回执文案里都得有造卡。
@@ -119,13 +150,21 @@ class RedoWordTest(unittest.TestCase):
 class NodesTest(unittest.TestCase):
     def test_image_and_every_field_land_in_one_card(self):
         nodes = cb.build_nodes(_card(), "C:/x/cover.png", 123, "anima-line", "K1")
-        # 标题 + 封面 + 五段 + 补了什么 + 脚注
-        self.assertEqual(len(nodes), 1 + 1 + 5 + 1 + 1)
+        # 标题 + 封面 + 基本信息 + 五段 + 补了什么 + 脚注
+        self.assertEqual(len(nodes), 1 + 1 + 1 + 5 + 1 + 1)
         for node in nodes:
             self.assertEqual(node["type"], "node")
             self.assertIn("content", node["data"])
         types = [seg["type"] for seg in nodes[1]["data"]["content"]]
         self.assertEqual(types, ["image"])
+
+    def test_sex_and_categories_are_visible(self):
+        """性别/分类/标签是表单上勾的，卡片里也得看得见，否则还得开网页对。"""
+        nodes = cb.build_nodes(_card(), None, 1, "anima-line", "K1")
+        texts = " ".join(s["data"]["text"] for n in nodes
+                         for s in n["data"]["content"] if s["type"] == "text")
+        for bit in ("基本信息", "性别：女", "女性向", "傲娇"):
+            self.assertIn(bit, texts)
 
     def test_blocked_cover_leaves_a_note_instead_of_the_image(self):
         nodes = cb.build_nodes(_card(), None, 1, "anima-line", "K1")

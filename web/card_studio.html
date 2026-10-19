@@ -94,7 +94,7 @@
 <div class="wrap">
   <div class="topbar">
     <h1>角色卡工作台</h1>
-    <span class="hint">一句话 → 星陨AI 的五个框</span>
+    <span class="hint">一句话 → 星陨AI 的六个模块</span>
     <span class="spacer"></span>
     <a class="back" href="/">返回主页</a>
   </div>
@@ -124,7 +124,7 @@
         <div>
           <div class="field">
             <label>角色名称（必填）</label>
-            <input id="fName" style="width:220px" placeholder="角色名">
+            <input id="fName" style="width:260px" placeholder="2~6 字，可用「称号·名字」">
           </div>
 
           <div class="field">
@@ -172,11 +172,11 @@ const CATS = ["女卡","男卡","女同","世界","非人","综合","男同","�
   "人外","玄幻","模拟器","BG","BL","GL","GB","系统","原创","年上","年下","ABO","纯爱",
   "剧情","DADDY","crush","社团","暧昧拉扯"];
 const FIELDS = [
-  ["greeting", "开场白", "第一句怎么和 TA 打招呼", "60~200"],
-  ["intro", "人物简介", "TA 是谁、什么身份、什么性格（关系不写这里）", "140~340"],
-  ["speech", "说话风格", "语气、句子长短、口头禅、怎么称呼你", "70~180"],
-  ["memory", "背景记忆", "你们什么关系、怎么认识的、共同经历", "90~240"],
-  ["rules", "补充规则", "永久系统提示里的硬要求", "50~150"]
+  ["greeting", "开场白", "角色自动发来的第一条消息：环境 + 动作神态 + 一句台词", "60~200"],
+  ["intro", "人物简介", "基本资料 + 身份背景 + 初始关系（往事放背景记忆）", "150~380"],
+  ["speech", "说话风格", "语气、句子长短、口头禅、怎么称呼你", "60~180"],
+  ["memory", "背景记忆", "你们之间已经发生过的往事、共同经历、情感羁绊", "100~260"],
+  ["rules", "补充规则", "核心性格、喜好厌恶、行为边界、剧情约束、叙事视角", "120~340"]
 ];
 const MAX_CAT = 5;
 
@@ -222,7 +222,7 @@ $("fCats").addEventListener("click", e => {
   drawCats();
 });
 
-// ── 五段 ──────────────────────────────────
+// ── 六个模块里的五段文本 ──────────────────
 function drawFields() {
   $("fields").innerHTML = FIELDS.map(([k, label, tip, hint], i) =>
     '<div class="sec"' + (i ? "" : ' style="border-top:0;padding-top:0"') + ">"
