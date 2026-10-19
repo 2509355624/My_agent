@@ -342,8 +342,10 @@ class DraftTest(unittest.TestCase):
         self.assertIn("全部放到背景记忆", cm._SYSTEM)
         self.assertIn("只写「怎么说」", cm._SYSTEM)
         self.assertIn("OOC", cm._SYSTEM)
-        # 名字是独立一栏，教程给了「称号·名字」这种写法
-        self.assertIn("白猫妖灵·阿白", cm._SYSTEM)
+        # 名字：正式姓名，不是小名（2026-10-19 用户点名，参考酒馆社区卡）
+        self.assertIn("正式姓名，不是小名", cm._SYSTEM)
+        self.assertIn("沈书言", cm._SYSTEM)
+        self.assertIn("称号·姓名", cm._SYSTEM)
         # 脏草稿里的昵称前缀不能被当成角色名（2026-10-19 实测踩到）
         self.assertIn("聊天昵称前缀", cm._SYSTEM)
         for name in ("name", "greeting", "intro", "speech", "memory", "rules",
@@ -365,6 +367,19 @@ class DraftTest(unittest.TestCase):
             with self.subTest(name=bad):
                 warns = cm.check(_good(name=bad))
                 self.assertTrue(any("不像是名字" in w for w in warns), bad)
+
+    def test_pet_name_is_reported(self):
+        """「小满」「阿白」是小名；社区卡清一色是完整姓名（江叙白 / 林知夏）。"""
+        for bad in ("小满", "阿白", "老张"):
+            with self.subTest(name=bad):
+                warns = cm.check(_good(name=bad))
+                self.assertTrue(any("小名" in w for w in warns), bad)
+
+    def test_full_name_passes(self):
+        for good in ("沈书言", "林知夏", "江叙白", "林幺", "欧阳明月"):
+            with self.subTest(name=good):
+                self.assertEqual([w for w in cm.check(_good(name=good))
+                                  if "角色名称" in w], [])
 
 
 if __name__ == "__main__":
