@@ -95,20 +95,24 @@ DEEPSEEK_MODEL=deepseek-chat
 # ── 主模型 ───────────────────────────────────────────
 # 先用 DeepSeek，挂了再退到本地 llama.cpp（两者都是 OpenAI 兼容接口）
 LLM_PROVIDER=deepseek
-LLM_FALLBACK_CHAIN=deepseek:deepseek-chat,llama:local
+# 链里只写 llama 不写模型名 = 直接用下面 LLAMA_MODEL 的值（改名只改一处）
+LLM_FALLBACK_CHAIN=deepseek:deepseek-chat,llama
 
 # ── 本地 llama.cpp（llama-server）───────────────────
 # 启动示例：llama-server -m 你的模型.gguf --port 8081 -c 32768
-# 注意 base_url 要带 /v1；model 名 llama-server 不校验，随便写一个能认出来的
+# 注意 base_url 要带 /v1。
+# 单模型方式启动（-m xxx.gguf）时这个名字不校验，填 gguf 文件名即可；
+# 用 router 方式启动（--models-dir，一个进程挂多个 gguf）时必须**一字不差**
+# 写模型 id，否则服务端找不到模型，直接 404。
 LLAMA_BASE_URL=http://127.0.0.1:8081/v1
-LLAMA_MODEL=local
+LLAMA_MODEL=Qwen3.5-9B-The-Defiant-Fable-Uncnr-Heretic-NEO-MAX-MTP-Q5_K_M
 # 必须和启动参数 -c 填同一个数：代码用它给上下文预算封顶。
 # 填小了，预算再高也会被按这个窗口打折（16384×0.7≈1.1 万 token）。
 LLAMA_NUM_CTX=32768
 
 # 想反过来「本地为主、DeepSeek 兜底」就改成：
 #   LLM_PROVIDER=llama
-#   LLM_FALLBACK_CHAIN=llama:local,deepseek:deepseek-chat
+#   LLM_FALLBACK_CHAIN=llama,deepseek:deepseek-chat
 
 # ── 识图（引用图反推提示词用）────────────────────────
 # DeepSeek 官方没有视觉能力，这里必须指向一个多模态模型：

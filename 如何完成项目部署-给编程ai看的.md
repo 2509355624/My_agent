@@ -101,9 +101,9 @@ cd /d D:\agent_my_test
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `LLM_PROVIDER` | `deepseek` | 主模型。想「本地为主」改成 `llama` |
-| `LLM_FALLBACK_CHAIN` | `deepseek:deepseek-chat,llama:local` | 降级顺序，逗号分隔，`provider:模型名` |
+| `LLM_FALLBACK_CHAIN` | `deepseek:deepseek-chat,llama` | 降级顺序，逗号分隔，`provider:模型名`；只写 `llama` 就用下一行 `LLAMA_MODEL` 的值 |
 | `LLAMA_BASE_URL` | `http://127.0.0.1:8081/v1` | llama.cpp 的 llama-server，**必须带 `/v1`** |
-| `LLAMA_MODEL` | `local` | 仅用于日志展示，llama-server 不校验 |
+| `LLAMA_MODEL` | `Qwen3.5-9B-The-Defiant-Fable-…-Q5_K_M` | 单模型启动（`-m xxx.gguf`）不校验名字，填文件名即可；**router 方式启动（`--models-dir`）必须一字不差写模型 id** |
 | `LLAMA_NUM_CTX` | `32768` | **必须等于 llama-server 启动参数 `-c` 的值**，代码用它给上下文预算封顶 |
 | `CONTEXT_BUDGET` | `100000` | 上下文预算（token）。写长文的关键，见第 6 节 |
 | `PROMPT_BRIEF` | `1` | 工具描述只留首句，系统提示从约 1.6 万字符压到 5 千 |
@@ -158,6 +158,8 @@ llama-server -m D:\models\你的模型.gguf --port 8081 -c 32768 -ngl 99
   填小了，`CONTEXT_BUDGET` 设多高都会被按这个窗口打折：
   16384 的窗口只能用到约 1.1 万 token，写长文会一直触发压缩
 - 想让它能读图，加 `--mmproj D:\models\mmproj.gguf`（见第 7 节）
+- 用 **router 方式**启动（`--models-dir`，一个进程挂多个 gguf）时，`.env` 的
+  `LLAMA_MODEL` 必须**一字不差**写 `/v1/models` 里返回的那个 id，写错直接 404
 - `-c` 越大越吃显存/内存，12 GB 显卡先试 32768；不够就降回 16384 并接受写短篇
 
 验证：
