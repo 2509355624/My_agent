@@ -106,6 +106,30 @@ class NodesTest(unittest.TestCase):
         self.assertIn("K2026", footer)
         self.assertIn("krea2-general", footer)
 
+    def test_redo_card_does_not_repeat_the_settings(self):
+        """重画只发图：人设已经看过一遍，再刷五段等于让用户重读一遍。
+
+        用户原话「引用这个图片…正常去生图即可，不需要再重复发送这个角色卡
+        的明细」。
+        """
+        full = cb.build_nodes(_card(), "C:/x.png", 1, "anima-line", "K1")
+        redo = cb.build_nodes(_card(), "C:/x.png", 1, "anima-line", "K1", full=False)
+        self.assertLess(len(redo), len(full))
+        self.assertEqual(len(redo), 3, "标题 + 图 + 脚注")
+        texts = " ".join(s["data"]["text"] for n in redo
+                         for s in n["data"]["content"] if s["type"] == "text")
+        for label in ("开场白", "人物简介", "说话风格", "背景记忆", "补充规则"):
+            self.assertNotIn(label, texts)
+        # 图还在，脚注还在（看 seed 是新生成的那一个）
+        self.assertTrue(any(s["type"] == "image"
+                            for n in redo for s in n["data"]["content"]))
+        self.assertIn("K1", texts)
+
+    def test_redo_card_is_labelled(self):
+        """重画版要有标记，否则群里两张卡片长得一样，分不清哪张是新的。"""
+        redo = cb.build_nodes(_card(), "C:/x.png", 1, "anima-line", "K1", full=False)
+        self.assertIn("重画", redo[0]["data"]["content"][0]["data"]["text"])
+
 
 class LedgerTest(unittest.TestCase):
     def test_remember_then_recall(self):

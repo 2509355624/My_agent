@@ -137,11 +137,16 @@ def _redo_work(target, target_id, cid, card, skill, old_seed, reply_to):
         seed = (seed + 1) % (2 ** 31)
     log.info("角色卡重画 %s：%s seed %s → %s", cid, skill, old_seed, seed)
     _say(target, target_id, "重画中（%s，新 seed %d）" % (skill, seed), reply_to)
-    _draw_and_send(target, target_id, cid, card, skill, seed, reply_to)
+    _draw_and_send(target, target_id, cid, card, skill, seed, reply_to, full=False)
 
 
-def _draw_and_send(target, target_id, cid, card, skill, seed, reply_to):
-    """出封面 → 过审核 → 发一张合并转发卡片 → 记账。"""
+def _draw_and_send(target, target_id, cid, card, skill, seed, reply_to, full=True):
+    """出封面 → 过审核 → 发一张合并转发卡片 → 记账。
+
+    `full=False` 是「引用卡片重画」那一轮：人设他已经看过一遍了，再刷一遍
+    五段明细纯属噪音（用户 2026-10-19 原话「不需要再重复发送这个角色卡的
+    明细」）。所以卡片里只留标题、图、一行脚注。
+    """
     image_path = None
     try:
         image_path = card_maker.render_cover(cid, card, skill, seed)
@@ -156,7 +161,7 @@ def _draw_and_send(target, target_id, cid, card, skill, seed, reply_to):
     if image_path and not _audit(image_path, target, target_id, cid, skill, seed):
         image_path = None        # 拦下了就只发文字；审核自己会回一句提示
 
-    nodes = build_nodes(card, image_path, seed, skill, cid)
+    nodes = build_nodes(card, image_path, seed, skill, cid, full=full)
     try:
         data = qq_api.send_forward(target, target_id, nodes)
     except Exception as exc:
@@ -185,25 +190,30 @@ def _audit(path, target, target_id, cid, skill, seed):
         return False
 
 
-def build_nodes(card, image_path, seed, skill, cid):
-    """组装聊天记录卡片的节点：标题 / 封面 / 五段 / 补了什么 / 脚注。"""
+def build_nodes(card, image_path, seed, skill, cid, full=True):
+    """组装聊天记录卡片的节点：标题 / 封面 / 五段 / 补了什么 / 脚注。
+
+    `full=False`（重画那一轮）只出 标题 + 封面 + 脚注 —— 明细不重发。
+    """
     name, uin = _bot_identity()
-    out = [qq_api.node_segment("📇 角色卡 · %s" % (card.get("name") or "未命名"),
-                               name, uin)]
+    title = "📇 角色卡 · %s" % (card.get("name") or "未命名")
+    out = [qq_api.node_segment(title if full else title + "（重画）", name, uin)]
     if image_path:
         out.append(qq_api.node_segment([qq_api.image_segment(image_path)], name, uin))
     else:
         out.append(qq_api.node_segment("（这张封面没过审核，只有文字）", name, uin))
-    for key, label, _hint, _rng in card_maker.FIELDS:
-        body = str(card.get(key) or "").strip()
-        if body:
-            out.append(qq_api.node_segment("【%s】\n%s" % (label, body), name, uin))
-    note = str(card.get("note") or "").strip()
-    if note:
-        out.append(qq_api.node_segment("补了什么：%s" % note, name, uin))
+    if full:
+        for key, label, _hint, _rng in card_maker.FIELDS:
+            body = str(card.get(key) or "").strip()
+            if body:
+                out.append(qq_api.node_segment("【%s】\n%s" % (label, body), name, uin))
+        note = str(card.get("note") or "").strip()
+        if note:
+            out.append(qq_api.node_segment("补了什么：%s" % note, name, uin))
     out.append(qq_api.node_segment(
-        "渠道 %s · seed %d · %s\n不满意就引用这张卡片说「重新生成」"
-        % (skill, seed, cid), name, uin))
+        "渠道 %s · seed %d · %s%s"
+        % (skill, seed, cid,
+           "\n不满意就引用这张卡片说「重新生成」" if full else ""), name, uin))
     return out
 
 
