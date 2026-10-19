@@ -291,10 +291,11 @@ class AnimaChannelTest(unittest.TestCase):
         # 一段 anima13+6LoRA（er_sde），二段 silvermoonmix 裸接（euler/0.25）。
         batch = [n for n in wf.values()
                  if n["class_type"] == "DualModelBatchPromptImageGenerator"][0]["inputs"]
-        self.assertEqual((batch["width"], batch["height"]), (480, 720))
-        self.assertEqual(batch["steps"], 18)
+        # 画布与步数 2026-10-19 按 anima-line 渲染参数卡对齐（808×1024 / 两段各 10 步）。
+        self.assertEqual((batch["width"], batch["height"]), (808, 1024))
+        self.assertEqual(batch["steps"], 10)
         self.assertEqual(batch["sampler_name"], "er_sde")
-        self.assertEqual(batch["stage2_steps"], 18)
+        self.assertEqual(batch["stage2_steps"], 10)
         self.assertEqual(batch["stage2_cfg"], 1)
         self.assertEqual(batch["stage2_sampler_name"], "euler")     # 二段换采样器
         self.assertEqual(batch["stage2_denoise"], 0.25)
