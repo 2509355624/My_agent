@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>角色卡工作台</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='9' y='5' width='14' height='22' rx='3' fill='%237c5cff'/></svg>">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0a0a0f; --bg-elev: #12121a; --bg-input: #1a1a24;
+    --border: #2a2a3a; --border-soft: #1f1f2e;
+    --text: #e8e8f0; --text-dim: #8888a0; --text-mute: #555570;
+    --accent: #7c5cff; --success: #4ade80; --error: #f87171;
+    --warn: #fbbf24; --info: #4fc3f7; --radius: 12px; --radius-sm: 8px;
+  }
+  html, body { background: var(--bg); color: var(--text);
+    font-family: "SF Mono", "JetBrains Mono", "Consolas", "Microsoft YaHei", monospace;
+    font-size: 14px; min-height: 100%; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 20px; }
+  .topbar { display: flex; align-items: center; gap: 12px; padding: 12px 0 20px; }
+  .topbar h1 { font-size: 17px; font-weight: 500; }
+  .topbar .spacer { flex: 1; }
+  a.back { color: var(--text-dim); text-decoration: none; font-size: 13px; }
+  a.back:hover { color: var(--accent); }
+  .card { background: var(--bg-elev); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
+  .card h2 { font-size: 14px; font-weight: 500; color: var(--text-dim); margin-bottom: 12px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  input, textarea, select {
+    background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
+    border-radius: var(--radius-sm); padding: 8px 10px; font: inherit; outline: none;
+  }
+  input:focus, textarea:focus { border-color: var(--accent); }
+  textarea { width: 100%; line-height: 1.7; resize: vertical; }
+  .btn { background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
+    border-radius: var(--radius-sm); padding: 8px 14px; cursor: pointer; font: inherit; }
+  .btn:hover:not(:disabled) { border-color: var(--accent); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.small { padding: 4px 10px; font-size: 12px; }
+  .btn.danger { color: var(--error); }
+  #brief { min-height: 76px; }
+  .hint { color: var(--text-mute); font-size: 12px; line-height: 1.6; }
+  .layout { display: grid; grid-template-columns: 300px 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+  .coverbox { width: 100%; aspect-ratio: 864 / 1536; background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-mute); font-size: 12px; text-align: center; padding: 12px; }
+  .coverbox img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .field { margin-bottom: 14px; }
+  .field > label { display: block; color: var(--text-dim); font-size: 12px;
+    margin-bottom: 6px; }
+  .field .cnt { color: var(--text-mute); font-size: 11px; float: right; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { background: var(--bg-input); border: 1px solid var(--border);
+    color: var(--text-dim); border-radius: 999px; padding: 3px 10px;
+    font-size: 12px; cursor: pointer; user-select: none; }
+  .chip:hover { border-color: var(--accent); }
+  .chip.on { background: rgba(124,92,255,.18); border-color: var(--accent); color: var(--text); }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm);
+    overflow: hidden; }
+  .seg button { background: var(--bg-input); border: 0; color: var(--text-dim);
+    padding: 7px 18px; font: inherit; cursor: pointer; }
+  .seg button.on { background: var(--accent); color: #fff; }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .sec { border-top: 1px solid var(--border-soft); padding-top: 14px; margin-top: 4px; }
+  .sec:first-of-type { border-top: 0; padding-top: 0; margin-top: 0; }
+  .sechead { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+  .sechead b { font-size: 13px; font-weight: 500; }
+  .sechead .tip { color: var(--text-mute); font-size: 11px; }
+  .sechead .cnt { margin-left: auto; color: var(--text-mute); font-size: 11px; }
+  .sec textarea { min-height: 96px; }
+  #warns { list-style: none; margin-top: 4px; }
+  #warns li { color: var(--warn); font-size: 12px; line-height: 1.7; padding-left: 12px;
+    position: relative; }
+  #warns li:before { content: "·"; position: absolute; left: 2px; }
+  #msg { color: var(--text-dim); font-size: 12px; }
+  #msg.err { color: var(--error); }
+  #msg.ok { color: var(--success); }
+  .hist { display: flex; flex-direction: column; gap: 6px; }
+  .hist .item { display: flex; align-items: center; gap: 8px; background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 7px 10px; }
+  .hist .item .nm { font-size: 13px; }
+  .hist .item .tm { color: var(--text-mute); font-size: 11px; margin-left: auto; }
+  .empty { color: var(--text-mute); font-size: 13px; padding: 16px; text-align: center; }
+  .coverops { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .coverstate { font-size: 12px; color: var(--text-dim); }
+  .coverstate.err { color: var(--error); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <h1>角色卡工作台</h1>
+    <span class="hint">一句话 → 星陨AI 的五个框</span>
+    <span class="spacer"></span>
+    <a class="back" href="/">返回主页</a>
+  </div>
+
+  <div class="card">
+    <h2>一句话描述</h2>
+    <textarea id="brief" placeholder="例：傲娇的女高中生 / 古代宫廷里的女帝，强势但对我一个人例外 / 末日幸存者，沉默寡言但护短"></textarea>
+    <div class="row" style="margin-top:10px">
+      <button class="btn primary" id="btnDraft">生成角色卡</button>
+      <button class="btn" id="btnAgain" disabled>换一版</button>
+      <span id="msg"></span>
+    </div>
+    <div class="hint" style="margin-top:8px">缺失的设定模型会自己补，补了什么会写在该卡最下面的「补了什么」里——不满意直接换一版。</div>
+  </div>
+
+  <div id="result" style="display:none">
+    <div class="card">
+      <div class="layout">
+        <div>
+          <div class="coverbox" id="coverbox"><span id="coverEmpty">还没有封面<br>点下面生成</span></div>
+          <div class="coverops">
+            <button class="btn" id="btnCover">生成封面（864×1536）</button>
+            <span class="coverstate" id="coverState"></span>
+          </div>
+        </div>
+
+        <div>
+          <div class="field">
+            <label>角色名称（必填）</label>
+            <input id="fName" style="width:220px" placeholder="角色名">
+          </div>
+
+          <div class="field">
+            <label>性别</label>
+            <div class="seg" id="fGender">
+              <button data-v="女" class="on">女</button><button data-v="男">男</button>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>角色分类（最多 5 个，App 里只能勾这些）<span class="cnt" id="catCnt">0/5</span></label>
+            <div class="chips" id="fCats"></div>
+          </div>
+
+          <div class="field">
+            <label>角色标签（自由写，逗号分隔）</label>
+            <input id="fTags" style="width:100%" placeholder="甜宠、占有欲">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="fields"></div>
+
+    <div class="card">
+      <h2>检测</h2>
+      <ul id="warns"><li style="color:var(--text-mute)">没有问题</li></ul>
+      <div class="row" style="margin-top:12px">
+        <button class="btn primary" id="btnSave">保存这张卡</button>
+        <button class="btn" id="btnCopyAll">复制全部</button>
+        <button class="btn" id="btnExport" disabled>导出 txt</button>
+        <span id="msg2" class="hint"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>卡库</h2>
+    <div class="hist" id="hist"><div class="empty">还没有存过卡</div></div>
+  </div>
+</div>
+
+<script>
+const CATS = ["女卡","男卡","女同","世界","非人","综合","男同","女性向","男性向","全性向",
+  "人外","玄幻","模拟器","BG","BL","GL","GB","系统","原创","年上","年下","ABO","纯爱",
+  "剧情","DADDY","crush","社团","暧昧拉扯"];
+const FIELDS = [
+  ["greeting", "开场白", "第一句怎么和 TA 打招呼", "60~200"],
+  ["intro", "人物简介", "TA 是谁、什么身份、什么性格（关系不写这里）", "140~340"],
+  ["speech", "说话风格", "语气、句子长短、口头禅、怎么称呼你", "70~180"],
+  ["memory", "背景记忆", "你们什么关系、怎么认识的、共同经历", "90~240"],
+  ["rules", "补充规则", "永久系统提示里的硬要求", "50~150"]
+];
+const MAX_CAT = 5;
+
+let S = { card: null, id: "", poll: null };
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g,
+  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function msg(t, cls) {
+  const el = $("msg"); el.textContent = t || ""; el.className = cls || "";
+}
+
+async function api(url, body) {
+  const opt = body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  };
+  const r = await fetch(url, opt);
+  let d = {};
+  try { d = await r.json(); } catch (e) { }
+  if (!r.ok || d.ok === false) throw new Error(d.error || ("HTTP " + r.status));
+  return d;
+}
+
+// ── 分类 chips ─────────────────────────────
+function drawCats() {
+  const on = (S.card && S.card.categories) || [];
+  $("fCats").innerHTML = CATS.map(c =>
+    '<span class="chip' + (on.indexOf(c) >= 0 ? " on" : "") + '" data-c="' + esc(c) + '">'
+    + esc(c) + "</span>").join("");
+  $("catCnt").textContent = on.length + "/" + MAX_CAT;
+}
+
+$("fCats").addEventListener("click", e => {
+  const el = e.target.closest(".chip");
+  if (!el || !S.card) return;
+  const c = el.dataset.c;
+  const on = S.card.categories || (S.card.categories = []);
+  const i = on.indexOf(c);
+  if (i >= 0) on.splice(i, 1);
+  else if (on.length >= MAX_CAT) { msg("最多只能选 " + MAX_CAT + " 个分类", "err"); return; }
+  else on.push(c);
+  drawCats();
+});
+
+// ── 五段 ──────────────────────────────────
+function drawFields() {
+  $("fields").innerHTML = FIELDS.map(([k, label, tip, hint], i) =>
+    '<div class="sec"' + (i ? "" : ' style="border-top:0;padding-top:0"') + ">"
+    + '<div class="sechead"><b>' + esc(label) + "</b>"
+    + '<span class="tip">' + esc(tip) + "</span>"
+    + '<span class="cnt" id="cnt_' + k + '"></span>'
+    + '<button class="btn small" data-copy="' + k + '" style="margin-left:8px">复制</button></div>'
+    + '<textarea id="t_' + k + '" data-k="' + k + '"></textarea></div>').join("");
+  FIELDS.forEach(([k]) => { $("t_" + k).addEventListener("input", e => setField(k, e.target.value)); });
+}
+
+function setField(k, v) {
+  if (!S.card) return;
+  S.card[k] = v;
+  const f = FIELDS.filter(x => x[0] === k)[0];
+  const el = $("cnt_" + k);
+  if (el) el.textContent = v.length + " 字" + (f ? "（建议 " + f[3] + "）" : "");
+}
+
+function drawWarns(list) {
+  const note = (S.card && S.card.note) ? '<li>补了什么：' + esc(S.card.note) + "</li>" : "";
+  const rest = (list || []).map(w => "<li>" + esc(w) + "</li>").join("");
+  $("warns").innerHTML = (note + rest) || '<li style="color:var(--text-mute)">没有问题</li>';
+}
+
+function fill(card) {
+  S.card = card;
+  $("fName").value = card.name || "";
+  $("fTags").value = (card.tags || []).join("、");
+  document.querySelectorAll("#fGender button").forEach(b =>
+    b.classList.toggle("on", b.dataset.v === (card.gender || "女")));
+  drawCats(); drawFields();
+  FIELDS.forEach(([k]) => {
+    $("t_" + k).value = card[k] || "";
+    setField(k, card[k] || "");
+  });
+  drawWarns(window.__warns || []);
+  $("result").style.display = "";
+  $("btnAgain").disabled = false;
+  $("btnExport").disabled = !S.id;
+  if (S.id) loadCoverStatus();
+}
+
+// ── 生成 ──────────────────────────────────
+async function doDraft() {
+  const brief = $("brief").value.trim();
+  if (!brief) { msg("先写一句角色描述", "err"); return; }
+  $("btnDraft").disabled = true; $("btnAgain").disabled = true;
+  msg("生成中（一次模型调用，约 5 秒）…");
+  try {
+    const d = await api("/api/card/draft", { brief });
+    window.__warns = d.warnings || [];
+    S.id = ""; $("btnExport").disabled = true;
+    fill(d.card);
+    msg("已生成，检查一遍再保存", "ok");
+  } catch (e) {
+    msg(e.message, "err");
+  } finally {
+    $("btnDraft").disabled = false; $("btnAgain").disabled = false;
+  }
+}
+
+$("btnDraft").onclick = doDraft;
+$("btnAgain").onclick = doDraft;
+
+$("fName").addEventListener("input", e => { if (S.card) S.card.name = e.target.value; });
+$("fTags").addEventListener("input", e => {
+  if (S.card) S.card.tags = e.target.value.split(/[,，、\s]+/).filter(Boolean);
+});
+$("fGender").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b || !S.card) return;
+  S.card.gender = b.dataset.v;
+  document.querySelectorAll("#fGender button").forEach(x => x.classList.toggle("on", x === b));
+});
+
+// ── 复制 ──────────────────────────────────
+async function copy(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (e) {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e2) { }
+    document.body.removeChild(ta);
+    return ok;
+  }
+}
+
+document.addEventListener("click", async e => {
+  const b = e.target.closest("[data-copy]");
+  if (!b || !S.card) return;
+  const k = b.dataset.copy;
+  const ok = await copy(S.card[k] || "");
+  const old = b.textContent;
+  b.textContent = ok ? "已复制" : "复制失败";
+  setTimeout(() => { b.textContent = old; }, 1200);
+});
+
+$("btnCopyAll").onclick = async () => {
+  if (!S.card) return;
+  const lines = ["# " + (S.card.name || "未命名"),
+    "性别：" + (S.card.gender || "-"),
+    "分类：" + (S.card.categories || []).join("、"),
+    "标签：" + (S.card.tags || []).join("、"), ""];
+  FIELDS.forEach(([k, label]) => { lines.push("## " + label, S.card[k] || "", ""); });
+  const ok = await copy(lines.join("\n"));
+  $("msg2").textContent = ok ? "已复制全部（按标题分段）" : "复制失败，手动选吧";
+};
+
+// ── 保存 ──────────────────────────────────
+async function saveNow() {
+  const d = await api("/api/card/save", { card: S.card, id: S.id || "" });
+  S.id = d.card.id;
+  S.card = d.card;
+  window.__warns = d.warnings || [];
+  drawWarns(window.__warns);
+  $("btnExport").disabled = false;
+  return S.id;
+}
+
+$("btnSave").onclick = async () => {
+  try {
+    await saveNow();
+    $("msg2").textContent = "已保存 " + S.id;
+    loadHist();
+  } catch (e) { $("msg2").textContent = "保存失败：" + e.message; }
+};
+
+$("btnExport").onclick = () => {
+  if (S.id) window.open("/api/card/plain?id=" + encodeURIComponent(S.id), "_blank");
+};
+
+// ── 封面 ──────────────────────────────────
+function setCover(url) {
+  const box = $("coverbox");
+  if (url) box.innerHTML = '<img src="' + url + '" alt="封面">';
+  else box.innerHTML = '<span id="coverEmpty">还没有封面<br>点下面生成</span>';
+}
+
+function stopPoll() {
+  if (S.poll) { clearInterval(S.poll); S.poll = null; }
+}
+
+async function loadCoverStatus() {
+  if (!S.id) return;
+  try {
+    const d = await api("/api/card/status?id=" + encodeURIComponent(S.id));
+    if (d.has_cover) setCover(d.cover_url);
+    if (d.state === "rendering") {
+      $("coverState").className = "coverstate";
+      $("coverState").textContent = "出图中（30~60 秒）…";
+      $("btnCover").disabled = true;
+      if (!S.poll) S.poll = setInterval(loadCoverStatus, 2500);
+    } else if (d.state === "error") {
+      $("coverState").className = "coverstate err";
+      $("coverState").textContent = "出图失败：" + (d.error || "未知");
+      $("btnCover").disabled = false;
+      stopPoll();
+    } else {
+      $("coverState").className = "coverstate";
+      $("coverState").textContent = d.has_cover ? "已有封面，可以再换一张" : "";
+      $("btnCover").disabled = false;
+      stopPoll();
+    }
+  } catch (e) {
+    stopPoll();
+  }
+}
+
+$("btnCover").onclick = async () => {
+  if (!S.card) return;
+  $("coverState").className = "coverstate";
+  $("coverState").textContent = "排队…";
+  $("btnCover").disabled = true;
+  try {
+    const id = await saveNow();
+    await api("/api/card/cover", { id });
+    loadCoverStatus();
+    if (!S.poll) S.poll = setInterval(loadCoverStatus, 2500);
+  } catch (e) {
+    $("coverState").className = "coverstate err";
+    $("coverState").textContent = e.message;
+    $("btnCover").disabled = false;
+  }
+};
+
+// ── 卡库 ──────────────────────────────────
+async function loadHist() {
+  try {
+    const d = await api("/api/card/list");
+    const items = d.cards || [];
+    if (!items.length) { $("hist").innerHTML = '<div class="empty">还没有存过卡</div>'; return; }
+    $("hist").innerHTML = items.map(c =>
+      '<div class="item" data-id="' + esc(c.id) + '">'
+      + '<span class="nm">' + esc(c.name || "未命名") + "</span>"
+      + '<span class="hint">' + esc((c.categories || []).slice(0, 3).join("·")) + "</span>"
+      + '<span class="tm">' + esc(c.updated || c.created || "") + "</span>"
+      + '<button class="btn small" data-open="' + esc(c.id) + '">打开</button>'
+      + '<button class="btn small danger" data-del="' + esc(c.id) + '">删</button>'
+      + "</div>").join("");
+  } catch (e) { }
+}
+
+$("hist").addEventListener("click", async e => {
+  const del = e.target.closest("[data-del]");
+  if (del) {
+    const id = del.dataset.del;
+    if (!confirm("删掉这张卡和它的封面？")) return;
+    try {
+      await api("/api/card/delete", { id });
+      if (S.id === id) { S.id = ""; stopPoll(); $("btnExport").disabled = true; }
+      loadHist();
+    } catch (err) { alert(err.message); }
+    return;
+  }
+  const open = e.target.closest("[data-open]");
+  if (!open) return;
+  try {
+    const d = await api("/api/card/list");
+    const c = (d.cards || []).filter(x => x.id === open.dataset.open)[0];
+    if (!c) return;
+    stopPoll();
+    S.id = c.id; window.__warns = [];
+    $("brief").value = c.brief || "";
+    fill(c);
+    $("btnExport").disabled = false;
+    $("coverState").textContent = "";
+    setCover("");
+    loadCoverStatus();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  } catch (err) { }
+});
+
+drawCats();
+loadHist();
+</script>
+</body>
+</html>

@@ -796,7 +796,7 @@ def _out_dir_for(task):
     return "web/漫画_%s" % tid if tid else ""
 
 
-def _submit(workflow, skill, prompt, seed, task=None):
+def _submit(workflow, skill, prompt, seed, task=None, out_dir=None):
     """排进全局串行队列并等出图，返回 ComfyUI 那边的输出图（相对路径）。
 
     target=None 是「网页侧」路径：worker 出图后只把 history entry 挂到 job 上，
@@ -808,11 +808,15 @@ def _submit(workflow, skill, prompt, seed, task=None):
     ComfyUI」的阈值换成 `COMFY_RELEASE_AFTER_COMIC`（默认 6）。一本十几格按
     全局的 2 张一重启，等于每 3 格等一次 60~90 秒冷启动。
     跨进程排队（和 QQ 机器人共用一把锁）在 worker 里做，这里不用管。
+
+    `out_dir` 给了就按它落目录（角色卡封面走 `web/角色卡_<卡号>`）；不给还是
+    按任务走。
     """
     job, reason = image_jobs.enqueue(None, None, workflow, skill=skill,
                                      prompt=prompt, seed=seed, landscape=False,
                                      batch="comic",
-                                     out_dir=_out_dir_for(task))
+                                     out_dir=_out_dir_for(task) if out_dir is None
+                                     else out_dir)
     if reason:
         raise RuntimeError(reason)
     entry = job.wait()                       # 失败会抛 job.error

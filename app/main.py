@@ -26,6 +26,7 @@ from app import usage as usage_stats
 from app import vision as vision_mod
 from app import comic_api
 from app import gen_api
+from app import card_api
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         LLM_PROVIDER, LLM_FALLBACK_CHAIN, PROVIDERS,
                         OLLAMA_BASE_URL, DEFAULT_AGENT_ID,
@@ -112,6 +113,10 @@ app.register_blueprint(comic_api.bp)
 
 # 手动跑图台 API（独立 Blueprint，见 app/gen_api.py）：无 AI 的文生图页面
 app.register_blueprint(gen_api.bp)
+
+# 角色卡工作台 API（独立 Blueprint，见 app/card_api.py）：一句话 → 星陨AI 的
+# 五个文本框 + 竖版封面
+app.register_blueprint(card_api.bp)
 
 @app.route("/")
 def index():
