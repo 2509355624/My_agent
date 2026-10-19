@@ -43,6 +43,9 @@ LEDGER_KEEP = 500
 REDO_WORDS = ("重新生成", "重生成", "重画", "换一张", "再来一张", "重做")
 
 _CARD_RE = re.compile(r"[#＃]?\s*造卡\s*[：:]?\s*")
+# 「造卡怎么用」「造卡是什么」——问句不是需求。不挡的话「怎么用」会被当成
+# 一句人物描述，最后画出一张主题是「怎么用」的卡。
+_ASK_RE = re.compile(r"^(怎么|如何|咋|怎样|什么|啥|能不能|可不可以|可以|支持|是啥|是什)")
 
 USAGE = ("造卡这样用：`<渠道> 造卡 <需求>`\n"
          "例：`anima线条 造卡 一个傲娇的女高中生`\n"
@@ -67,7 +70,8 @@ def parse(text):
         return True, "", ("云端渠道（%s）还不支持造卡——它不走本机的 workflow，"
                           "换 `anima线条` / `krea2` 这类吧" % skill)
     rest = (rest or "").strip(" ，,。.:：、\n")
-    if not rest:
+    # 光喊「造卡」、或者问它怎么用 → 回用法。需求至少得有两个字。
+    if not rest or len(rest) < 2 or _ASK_RE.match(rest):
         return True, "", USAGE
     return True, skill, rest
 

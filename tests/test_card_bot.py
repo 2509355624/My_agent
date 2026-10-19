@@ -12,6 +12,7 @@ from unittest import mock
 sys.path.insert(0, ".")
 
 from app import card_bot as cb
+from app import direct_gen
 
 
 def _card(**kw):
@@ -58,6 +59,22 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(skill, "")
         self.assertIn("造卡这样用", msg)
 
+    def test_asking_how_it_works_returns_usage_not_a_card(self):
+        """「造卡怎么用」里的「怎么用」不是人物描述。
+
+        不挡的话它会当成 brief 去画一张主题是「怎么用」的卡。
+        """
+        for text in ("造卡怎么用", "造卡怎么弄", "造卡是什么玩意", "造卡 猫"):
+            with self.subTest(text=text):
+                hit, skill, msg = cb.parse(text)
+                self.assertTrue(hit)
+                self.assertEqual(skill, "", "被当成需求了：%s" % text)
+                self.assertIn("造卡这样用", msg)
+
+    def test_two_character_brief_still_works(self):
+        """别把门槛抬太高：「造卡 女帝」这种极简需求是合法的。"""
+        self.assertEqual(cb.parse("造卡 女帝"), (True, cb.DEFAULT_SKILL, "女帝"))
+
     def test_cloud_channel_is_refused_with_a_reason(self):
         """NAI 不读 workflow，尺寸/步数全在云端请求里——造卡这条路走不通。"""
         hit, skill, msg = cb.parse("nai 造卡 一个女孩")
@@ -67,6 +84,26 @@ class ParseTest(unittest.TestCase):
 
     def test_plain_draw_request_is_not_a_card(self):
         self.assertEqual(cb.parse("给我画一个女孩"), (False, "", ""))
+
+
+class MenuTest(unittest.TestCase):
+    """三份回执文案里都得有造卡。
+
+    功能做完了但菜单里不提，等于没做——用户根本不会想到去喊这两个字。
+    「重新生成」也一起钉住：那是重画那条路的唯一入口。
+    """
+
+    def test_every_menu_tells_you_how(self):
+        for name in ("MENU_TEXT", "GUIDE_TEXT", "MORE_CHAN_TEXT"):
+            text = getattr(direct_gen, name)
+            with self.subTest(menu=name):
+                self.assertIn("造卡", text)
+                self.assertIn("重新生成", text)
+
+    def test_menu_shows_the_default_channel(self):
+        """不写渠道走哪条得写出来，否则用户会以为必须点名。"""
+        self.assertIn(cb.DEFAULT_SKILL, direct_gen.MENU_TEXT)
+        self.assertIn(cb.DEFAULT_SKILL, direct_gen.GUIDE_TEXT)
 
 
 class RedoWordTest(unittest.TestCase):
