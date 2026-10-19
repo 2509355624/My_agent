@@ -141,6 +141,39 @@ class CheckTest(unittest.TestCase):
     def test_empty_cover_reported(self):
         self.assertTrue(any("封面" in w for w in cm.check(_good(cover=""))))
 
+    # ── AI 味配额（借酒馆卡的七病灶，只报不改）──────────
+
+    def test_good_card_has_no_flavor_complaint(self):
+        """合格的卡不能被 AI 味检测误伤，否则每张都挂着几条噪声。"""
+        warns = cm.check(_good())
+        for bad in ("半 X", "AI 腔", "对仗翻转", "具体数字", "解说腔"):
+            self.assertFalse(any(bad in w for w in warns), bad)
+
+    def test_too_many_half_words_reported_but_text_untouched(self):
+        body = "她退了半步，停了半秒，声音慢了半拍，笑得半寸。" * 3
+        card = _good(intro=body)
+        warns = [w for w in cm.check(card) if "半 X" in w]
+        self.assertTrue(warns)
+        self.assertEqual(card["intro"], body)     # 只报，不改文案
+
+    def test_many_figures_reported(self):
+        body = "10秒98，0.05秒，18:40，第9天，还有一个多月。" * 3
+        self.assertTrue(any("具体数字" in w for w in cm.check(_good(intro=body))))
+
+    def test_repeated_antithesis_reported(self):
+        body = "不是怕疼，是怕你看见。不带脏字，全是实话。" * 3
+        self.assertTrue(any("对仗翻转" in w for w in cm.check(_good(intro=body))))
+
+    def test_flavor_words_reported(self):
+        body = "她眼中闪过一点东西，嘴角勾起，指节泛白。" * 3
+        self.assertTrue(any("AI 腔" in w for w in cm.check(_good(intro=body))))
+
+    def test_missing_orientation_reported(self):
+        """酒馆那边性向缺失 = 不合格卡；这边只是搜不到，提醒补一个。"""
+        card = _good(categories=["原创", "剧情"],
+                     _raw_categories=["原创", "剧情"])
+        self.assertTrue(any("性向" in w for w in cm.check(card)))
+
 
 class CoverOptsTest(unittest.TestCase):
     def test_cover_is_864_by_1536_without_upscaling(self):
@@ -360,6 +393,28 @@ class DraftTest(unittest.TestCase):
         self.assertEqual(labels, ["开场白", "人物简介", "说话风格", "背景记忆", "补充规则"])
         for label in labels:
             self.assertIn("/ " + label, cm._SYSTEM)
+
+    def test_prompt_takes_the_tavern_four_tuple(self):
+        """酒馆卡的「四元组选型」：性向落分类，赛道/洁度/钩子落标签。"""
+        for word in ("性向", "赛道", "洁度", "情绪钩子"):
+            self.assertIn(word, cm._SYSTEM)
+        # 洁度是用户偏好，不许替他拍板
+        self.assertIn("用户提了才写", cm._SYSTEM)
+        self.assertIn("一律写进 tags", cm._SYSTEM)
+
+    def test_prompt_forbids_ai_flavor(self):
+        """七病灶的配额得写进提示词，不然模型还是段段金句。"""
+        self.assertIn("均匀的机灵 = AI", cm._SYSTEM)
+        self.assertIn("闲笔", cm._SYSTEM)
+        self.assertIn("伪精确数字", cm._SYSTEM)
+        self.assertIn("生造概念词", cm._SYSTEM)
+        # 补充规则本身就是给模型的规格，是这七条的唯一例外
+        self.assertIn("不受上面七条约束", cm._SYSTEM)
+
+    def test_prompt_asks_for_a_causal_chain(self):
+        """性格不能是形容词表：trait → why → 看得见的行为。"""
+        self.assertIn("是什么 → 为什么 → 看得见的行为", cm._SYSTEM)
+        self.assertIn("没解决的张力", cm._SYSTEM)
 
     def test_chat_prefix_looking_name_is_reported(self):
         """「大大怪：」这种是被当成名字的聊天前缀——只提醒，不改写。"""
