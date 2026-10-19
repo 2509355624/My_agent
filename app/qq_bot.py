@@ -910,10 +910,21 @@ class SessionRunner:
 
     def _run_turn(self, batch):
         """在 worker 线程里跑一轮（run_agent_stream 是同步生成器）。"""
+        # 这条会话线有没有被别的 agent 接管（settings 的 session_prompt_agents）。
+        # 接管 = **整轮换人**：人设、工具白名单、上下文预算、历史目录全换。
+        #
+        # 下面有三段「生图机器人」自己的前置逻辑——扮演态、生图确认闸、直达
+        # 生图管道——它们都在模型上场**之前**就把整轮代答掉了。借用时它们必须
+        # 让路，否则被借的 agent 永远接不到消息：群里明明借给了通用助手，
+        # 回复还是 direct_gen 用 QQ 人设 + 渠道表吐出来的那套（2026-10-19
+        # 用户报的就是这个，12:28 那轮 system 头已是 main 的，回复仍是
+        # `[direct] 模型判回话`）。
+        run_agent = _effective_agent(self.session_key)
+        borrowed = run_agent != QQ_AGENT_ID
         # 扮演态走自己那条路：不给工具、只一次调用、纯文字。判定放在最前面，
         # 因为下面整段都是「生图机器人」的逻辑（confirm_gate / direct_gen /
         # agent 循环），扮演态一个都不该碰上。
-        if persona.active_card(self.session_key) is not None:
+        if not borrowed and persona.active_card(self.session_key) is not None:
             self._run_persona_turn(batch)
             return
         # 表情包收藏：群图趁链接活着赶紧落盘，跟「这轮回不回」无关——
@@ -1020,8 +1031,8 @@ class SessionRunner:
 
         # 借用的会话线由被借的 agent **整轮接管**：跑它的身份、它的工具
         # 白名单、它的上下文预算；历史也落它自己的 sessions 目录（切回
-        # 默认人设时，小小怪原来的历史原样还在）。
-        run_agent = _effective_agent(self.session_key)
+        # 默认人设时，小小怪原来的历史原样还在）。run_agent 在函数开头就算
+        # 好了——上面那三段前置逻辑要不要让路，全靠它决定。
         history = load_history(run_agent, self.session_key)
         if not history or history[0].get("role") != "system":
             _ensure_system_prompt(self.session_key)
@@ -1082,8 +1093,11 @@ class SessionRunner:
         # 这条消息若是确认话（好/确认/跑吧…）就原样入队发回执、接管整轮；
         # 不是确认话就作废 pending 放行。主动接话轮不消费（群聊路人的「好」
         # 不该引爆一张没确认过的图）。见 app/confirm_gate.py。
-        confirm_reply = (None if voluntary else confirm_gate.consume_if_confirmed(
-            self.target, self.target_id, own_text))
+        # 借用线整轮不消费：确认闸是生图机器人的语义，被借的 agent 没有
+        # pending 这一说；留着 pending 不动，切回默认人设时它还在。
+        confirm_reply = (None if (voluntary or borrowed)
+                         else confirm_gate.consume_if_confirmed(
+                             self.target, self.target_id, own_text))
         if confirm_reply is not None:
             try:
                 self._deliver(False, confirm_reply, [], "")
@@ -1096,9 +1110,14 @@ class SessionRunner:
         # **不再有「命中触发词就回菜单」这条兜底**（2026-10-05 23:xx 用户拍板）。
         # agent 循环只留给总开关关闭（DIRECT_GEN=0）和主动接话轮。
         # 见 app/direct_gen.py。
-        direct_reply = direct_gen.decide(own_text, history, voluntary,
-                                         data_urls=data_urls or None,
-                                         at_me=at_me)
+        #
+        # 借用线不走这里：直达管道吃的是 QQ 的人设 + 渠道表 + 图片回执，只做
+        # 「判意图 → 入队 / 回一句」，一次轻量调用就把整轮吃掉。借给通用助手
+        # 要的是让它自己调工具干活，接进来等于没换人（2026-10-19 用户报）。
+        direct_reply = (None if borrowed
+                        else direct_gen.decide(own_text, history, voluntary,
+                                               data_urls=data_urls or None,
+                                               at_me=at_me))
         if direct_reply is not None:
             try:
                 if direct_reply:

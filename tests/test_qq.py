@@ -859,6 +859,72 @@ class StrictModeTest(unittest.TestCase):
         self.assertIs(seen.get("strict"), True)
 
 
+class BorrowedTurnTest(unittest.TestCase):
+    """借用别的 agent 时，生图机器人那三段前置逻辑必须全部让路。
+
+    2026-10-19 用户报：群里明明借给了通用助手，回复还是生图机器人那套
+    （日志里 `[direct] 模型判回话`，system 头却已经是 main 的）。根因是
+    `direct_gen.decide` 在模型上场之前就把整轮吃了——它拿 QQ 的人设和渠道表
+    回一句话，被借的 agent 一个工具都没跑过。confirm_gate 与扮演态同理。
+    """
+
+    def _turn(self, borrowed, batch=None, active_card=None):
+        runner = qq_bot.SessionRunner(None, "group_9", "group", "9")
+        seen = {"called": False, "agent_id": None}
+
+        def fake_stream(text, history, agent_id=None, **kw):
+            seen["called"] = True
+            seen["agent_id"] = agent_id
+            return iter(())
+
+        eff = (lambda k: "main") if borrowed else (lambda k: qq_bot.QQ_AGENT_ID)
+        batch = batch or [{"text": "看下你的 skills", "sender": "233",
+                           "images": [], "quotes": []}]
+        with mock.patch.object(qq_bot, "_effective_agent", eff), \
+             mock.patch.object(qq_bot, "run_agent_stream", fake_stream), \
+             mock.patch.object(qq_bot, "load_history", lambda *a, **k: []), \
+             mock.patch.object(qq_bot, "_ensure_system_prompt",
+                               lambda *a: None), \
+             mock.patch.object(qq_bot, "_sync_session_head",
+                               lambda *a: False), \
+             mock.patch.object(qq_bot, "save_history", lambda *a, **k: None), \
+             mock.patch.object(qq_bot.stickers, "collect", return_value=0), \
+             mock.patch.object(qq_bot.stickers, "catalog", return_value=""), \
+             mock.patch.object(qq_bot.recent, "format_recent",
+                               return_value=""), \
+             mock.patch.object(qq_bot.image_jobs, "recent_line",
+                               return_value=""), \
+             mock.patch.object(qq_bot.direct_gen, "decide",
+                               return_value="QUICK REPLY") as decide, \
+             mock.patch.object(qq_bot.confirm_gate, "consume_if_confirmed",
+                               return_value=None) as confirm, \
+             mock.patch.object(qq_bot.persona, "active_card",
+                               return_value=active_card) as card, \
+             mock.patch.object(runner, "_run_persona_turn") as persona_turn, \
+             mock.patch.object(runner, "_deliver"):
+            runner._run_turn(batch)
+        return seen, decide, confirm, card, persona_turn
+
+    def test_borrowed_turn_goes_to_the_agent_loop(self):
+        seen, decide, confirm, _card, _pt = self._turn(True)
+        self.assertTrue(seen["called"], "借用线必须进 agent 循环")
+        self.assertEqual(seen["agent_id"], "main")
+        decide.assert_not_called()
+        confirm.assert_not_called()
+
+    def test_borrowed_turn_skips_persona(self):
+        seen, _d, _c, card, persona_turn = self._turn(
+            True, active_card={"name": "纱雾"})
+        card.assert_not_called()
+        persona_turn.assert_not_called()
+        self.assertTrue(seen["called"])
+
+    def test_default_turn_still_uses_direct_gen(self):
+        seen, decide, _c, _card, _pt = self._turn(False)
+        decide.assert_called_once()
+        self.assertFalse(seen["called"], "默认线不该多跑一次 agent 循环")
+
+
 class StickerCollectTest(unittest.TestCase):
     """群聊每轮开头要收藏图片（跟回不回无关）；私聊不收。"""
 

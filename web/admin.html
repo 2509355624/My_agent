@@ -1700,12 +1700,28 @@ function buildPromptEditor(s) {
   return wrap;
 }
 
-function togglePromptEditor(s) {
+// 只刷这三项会话级配置，不动列表/搜索词/勾选（loadSessions 会全清）。
+// 打开编辑面板前必须调一次：页面可能已经开了很久，期间别处（脚本 / 另一个
+// 标签页 / 直接改 settings.json）改过这条会话的配置。内存里的旧快照一保存
+// 就会把新值冲掉——2026-10-19 就这样把刚配好的「借用助手」冲回空，
+// 群里看着还是生图机器人。
+async function refreshSessionCfg() {
+  if (!cur) return;
+  try {
+    const d = await api('/api/agent/' + encodeURIComponent(cur) + '/sessions');
+    sessPrompts = d.session_prompts || {};
+    sessAgents = d.session_prompt_agents || {};
+    sessSystems = d.session_system_prompts || {};
+  } catch (e) { /* 拉不到就用内存里的旧值，别拦住编辑 */ }
+}
+
+async function togglePromptEditor(s) {
   if (promptEditor && promptEditor.key === s.key) {
     closePromptEditor();
     renderSessions();
     return;
   }
+  await refreshSessionCfg();
   closePromptEditor();
   promptEditor = { key: s.key, wrap: null };
   renderSessions();          // 编辑器在 renderSessions 里按 key 挂到那一行下面
