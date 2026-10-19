@@ -8,8 +8,14 @@ echo   安装依赖（只需跑一次）
 echo ==================================================
 echo.
 
+rem ---- 找 Python：项目自带 venv > 本机已有 venv > PATH ----
 set "PY="
-where python >nul 2>nul && set "PY=python"
+if exist "%~dp0.venv\Scripts\python.exe" set "PY=%~dp0.venv\Scripts\python.exe"
+if not defined PY if exist "%~dp0venv\Scripts\python.exe" set "PY=%~dp0venv\Scripts\python.exe"
+if not defined PY if exist "D:\AI\my_env\Scripts\python.exe" set "PY=D:\AI\my_env\Scripts\python.exe"
+if not defined PY if exist "D:\AI\confyui_env\Scripts\python.exe" set "PY=D:\AI\confyui_env\Scripts\python.exe"
+if not defined PY if exist "D:\AI\comfy_env\Scripts\python.exe" set "PY=D:\AI\comfy_env\Scripts\python.exe"
+if not defined PY where python >nul 2>nul && set "PY=python"
 if not defined PY (
   echo [X] 没找到 Python。
   echo     装一个 Python 3.10 以上，安装时勾选 "Add python.exe to PATH"，再双击这个。

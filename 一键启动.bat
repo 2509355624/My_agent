@@ -9,10 +9,16 @@ echo   My Agent - Personal AI Assistant
 echo ==================================================
 echo.
 
-rem ---- 找 Python：项目自带虚拟环境优先，其次系统 PATH ----
+rem ---- 找 Python：外层传入 > 项目自带 venv > 本机已有 venv > PATH ----
+rem   AGENT_PY 由 一键启动全部.bat 传下来，它已经找过一次，别再重复猜
+rem   D:\AI\* 是本机已有的 venv，别人机器上 if exist 不成立就自动跳过
 set "PY="
-if exist "%~dp0.venv\Scripts\python.exe" set "PY=%~dp0.venv\Scripts\python.exe"
+if defined AGENT_PY if exist "%AGENT_PY%" set "PY=%AGENT_PY%"
+if not defined PY if exist "%~dp0.venv\Scripts\python.exe" set "PY=%~dp0.venv\Scripts\python.exe"
 if not defined PY if exist "%~dp0venv\Scripts\python.exe" set "PY=%~dp0venv\Scripts\python.exe"
+if not defined PY if exist "D:\AI\my_env\Scripts\python.exe" set "PY=D:\AI\my_env\Scripts\python.exe"
+if not defined PY if exist "D:\AI\confyui_env\Scripts\python.exe" set "PY=D:\AI\confyui_env\Scripts\python.exe"
+if not defined PY if exist "D:\AI\comfy_env\Scripts\python.exe" set "PY=D:\AI\comfy_env\Scripts\python.exe"
 if not defined PY (
   where python >nul 2>nul && set "PY=python"
 )

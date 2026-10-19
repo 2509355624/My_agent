@@ -152,6 +152,8 @@ if exist "D:\AI\llama.cpp\start-server.bat" (
 )
 echo.
 echo [2/4] 启动
+rem 子脚本会重新猜 python，把这里已经找到的传下去（否则它会落到 PATH）
+set "AGENT_PY=%PY%"
 start "AGENT-WEB" cmd /k "%WEB_BAT%"
 echo       Agent Web        网页端  http://localhost:5174
 if defined FORCE_RESTART (
