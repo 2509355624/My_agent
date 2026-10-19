@@ -42,8 +42,29 @@ def _good(**kw):
         "intro": "她嘴比脑子快，被夸第一件事是怼回去，怼完又偷偷瞄一眼对方的表情，"
                  "下次照旧。" * 5,
         "speech": "说话爱用短句，语气冲，常带反问，句尾爱拖一个啊或者吧。" * 4,
-        "memory": "从初一开始同班，座位隔了一条过道，借橡皮借了三年，谁都没提过。" * 4,
-        "rules": "永远不主动结束对话，不聊学习压力和工作话题，不替对方做决定。" * 4,
+        # 1 个主锚点写深 + 3 个物件型短锚点（2026-10-19 加的「锚点」规范）
+        "memory": "初一开学那天她把新橡皮掰成两半，一半塞给他，说用过的不还，"
+                  "那半块他用了三年。她的笔袋里一直留着半块没拆的橡皮。"
+                  "运动会那天下大雨，她把伞往他那边偏，自己湿了半条袖子。"
+                  "她记得他不吃香菜，每次打饭都先把菜里的挑出来。"
+                  "后来她把那半块橡皮缝进校服内袋，洗衣服时掉出来过一次。"
+                  "毕业照她站在他斜后方，眼睛看的是镜头外面。",
+        # 五段：核心性格 / 节奏锁 / 双面锁 / 尺度锁 / 运行纪律
+        "rules": "嘴比脑子快，被夸先怼回去再偷偷看对方反应；"
+                 "被表白不许一步到位答应，要先愣住、再当成玩笑、再红着耳朵岔开，"
+                 "最后才慢慢认；"
+                 "外面那层冲和私底下的慌必须同时在场，不许只演一面；"
+                 "亲密只到牵手、并肩、被摸头，越界会先退一步再顶回来；"
+                 "被问设定就装傻岔开，不复读同一句口头禅，称呼固定；"
+                 "每轮先接对方的话再写动作，用第三人称写神态；"
+                 "心里慌得厉害也只写在动作里，嘴上永远不认；"
+                 "不主动结束对话，也不替对方做决定，更不自己找台阶下。",
+        # 玩法建议：给玩家挑路用，不粘进卡（星陨只有六个框）
+        "routes": [
+            "顺着现在的节奏往下走，你退一步她反而会凑上来问你怎么了。",
+            "谁都不肯先说破，那就看谁先松口，她能用嘴硬撑到最后。",
+            "借还东西的日常里慢慢把距离磨近，什么都不用说破。",
+        ],
         "cover": "1girl, black hair, school uniform",
         "note": "补了名字和年级",
     }
@@ -99,6 +120,16 @@ class NormalizeTest(unittest.TestCase):
         card = cm._normalize({"name": "x"})
         for key, _l, _h, _r in cm.FIELDS:
             self.assertEqual(card[key], "")
+        # 玩法建议不在六个框里，但缺了也得给个空列表，别让下游拿到 None
+        self.assertEqual(card["routes"], [])
+
+    def test_routes_capped(self):
+        card = cm._normalize({"routes": ["建议%d" % i for i in range(9)]})
+        self.assertEqual(len(card["routes"]), cm.ROUTES_MAX)
+
+    def test_routes_string_is_split_by_line(self):
+        card = cm._normalize({"routes": "第一条\n第二条\n"})
+        self.assertEqual(card["routes"], ["第一条", "第二条"])
 
     def test_name_truncated(self):
         self.assertEqual(len(cm._normalize({"name": "长" * 50})["name"]), 20)
@@ -140,6 +171,25 @@ class CheckTest(unittest.TestCase):
 
     def test_empty_cover_reported(self):
         self.assertTrue(any("封面" in w for w in cm.check(_good(cover=""))))
+
+    # ── 锚点 / 玩法建议（2026-10-19 加的规范）────────────
+
+    def test_single_scene_memory_reported(self):
+        """只写一个场景就报：规范是 1 个主锚点 + 3~5 个短锚点。"""
+        card = _good(memory="她第一次见你时把简历递反了，脸涨得通红" * 3)
+        self.assertTrue(any("短锚点" in w for w in cm.check(card)))
+
+    def test_anchored_memory_not_reported(self):
+        self.assertFalse(any("短锚点" in w for w in cm.check(_good())))
+
+    def test_few_routes_reported(self):
+        card = _good(routes=["一条怎么够，至少给两条路。"])
+        self.assertTrue(any("玩法建议" in w for w in cm.check(card)))
+
+    def test_route_length_reported(self):
+        long_one = "这条建议写得实在太长了" * 10
+        card = _good(routes=[long_one, _good()["routes"][0]])
+        self.assertTrue(any("玩法建议" in w for w in cm.check(card)))
 
     # ── AI 味配额（借酒馆卡的七病灶，只报不改）──────────
 

@@ -175,8 +175,9 @@ const FIELDS = [
   ["greeting", "开场白", "角色自动发来的第一条消息：环境 + 动作神态 + 一句台词", "60~200"],
   ["intro", "人物简介", "基本资料 + 身份背景 + 初始关系（往事放背景记忆）", "150~380"],
   ["speech", "说话风格", "语气、句子长短、口头禅、怎么称呼你", "60~180"],
-  ["memory", "背景记忆", "你们之间已经发生过的往事、共同经历、情感羁绊", "100~260"],
-  ["rules", "补充规则", "核心性格、喜好厌恶、行为边界、剧情约束、叙事视角", "120~340"]
+  ["memory", "背景记忆", "一个主锚点写深 + 3~5 个短锚点（挂在具体物件/事件上）", "150~380"],
+  ["rules", "补充规则",
+   "核心性格、关系节奏锁、双面锁、尺度锁、运行纪律（守口 + 称呼 + 不复读）", "200~540"]
 ];
 const MAX_CAT = 5;
 
@@ -223,6 +224,7 @@ $("fCats").addEventListener("click", e => {
 });
 
 // ── 六个模块里的五段文本 ──────────────────
+// 「玩法建议」不占六个框（星陨就六栏），单独一块，一行一条，不粘进卡。
 function drawFields() {
   $("fields").innerHTML = FIELDS.map(([k, label, tip, hint], i) =>
     '<div class="sec"' + (i ? "" : ' style="border-top:0;padding-top:0"') + ">"
@@ -230,8 +232,21 @@ function drawFields() {
     + '<span class="tip">' + esc(tip) + "</span>"
     + '<span class="cnt" id="cnt_' + k + '"></span>'
     + '<button class="btn small" data-copy="' + k + '" style="margin-left:8px">复制</button></div>'
-    + '<textarea id="t_' + k + '" data-k="' + k + '"></textarea></div>').join("");
+    + '<textarea id="t_' + k + '" data-k="' + k + '"></textarea></div>').join("")
+    + '<div class="sec"><div class="sechead"><b>玩法建议</b>'
+    + '<span class="tip">给玩家挑路用，不粘进卡——一行一条，每条 20~50 字</span>'
+    + '<span class="cnt" id="cnt_routes"></span>'
+    + '<button class="btn small" data-copy="routes" style="margin-left:8px">复制</button></div>'
+    + '<textarea id="t_routes" data-k="routes"></textarea></div>';
   FIELDS.forEach(([k]) => { $("t_" + k).addEventListener("input", e => setField(k, e.target.value)); });
+  $("t_routes").addEventListener("input", e => setRoutes(e.target.value));
+}
+
+function setRoutes(text) {
+  if (!S.card) return;
+  S.card.routes = text.split("\n").map(s => s.trim()).filter(Boolean);
+  const el = $("cnt_routes");
+  if (el) el.textContent = S.card.routes.length + " 条";
 }
 
 function setField(k, v) {
@@ -259,6 +274,8 @@ function fill(card) {
     $("t_" + k).value = card[k] || "";
     setField(k, card[k] || "");
   });
+  $("t_routes").value = (card.routes || []).join("\n");
+  setRoutes($("t_routes").value);
   drawWarns(window.__warns || []);
   $("result").style.display = "";
   $("btnAgain").disabled = false;
@@ -318,7 +335,8 @@ document.addEventListener("click", async e => {
   const b = e.target.closest("[data-copy]");
   if (!b || !S.card) return;
   const k = b.dataset.copy;
-  const ok = await copy(S.card[k] || "");
+  const v = k === "routes" ? (S.card.routes || []).join("\n") : (S.card[k] || "");
+  const ok = await copy(v);
   const old = b.textContent;
   b.textContent = ok ? "已复制" : "复制失败";
   setTimeout(() => { b.textContent = old; }, 1200);
@@ -331,6 +349,11 @@ $("btnCopyAll").onclick = async () => {
     "分类：" + (S.card.categories || []).join("、"),
     "标签：" + (S.card.tags || []).join("、"), ""];
   FIELDS.forEach(([k, label]) => { lines.push("## " + label, S.card[k] || "", ""); });
+  if ((S.card.routes || []).length) {
+    lines.push("## 玩法建议（不用粘进卡）");
+    S.card.routes.forEach((r, i) => lines.push((i + 1) + ". " + r));
+    lines.push("");
+  }
   const ok = await copy(lines.join("\n"));
   $("msg2").textContent = ok ? "已复制全部（按标题分段）" : "复制失败，手动选吧";
 };

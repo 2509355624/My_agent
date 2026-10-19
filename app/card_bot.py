@@ -241,6 +241,12 @@ def build_nodes(card, image_path, seed, skill, cid, full=True):
             body = str(card.get(key) or "").strip()
             if body:
                 out.append(qq_api.node_segment("【%s】\n%s" % (label, body), name, uin))
+        routes = card.get("routes") or []
+        if routes:
+            out.append(qq_api.node_segment(
+                "【玩法建议】\n%s\n（这几条不用粘进卡，是给你自己挑路用的）"
+                % "\n".join("%d. %s" % (i, r) for i, r in enumerate(routes, 1)),
+                name, uin))
         note = str(card.get("note") or "").strip()
         if note:
             out.append(qq_api.node_segment("补了什么：%s" % note, name, uin))
