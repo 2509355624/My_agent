@@ -175,6 +175,77 @@ class CoverOptsTest(unittest.TestCase):
         self.assertEqual(cm.cover_prompt({"cover": " 1girl "}), "1girl")
 
 
+class CoverSizeTest(unittest.TestCase):
+    """封面要的是「就是 864×1536」，不是「按模板比例放大到多大」。
+
+    2026-10-19 实测：batch 族（sd / miao / nsfw_pose_gen）的第二段尺寸是节点里
+    写死的数值，`apply()` 会按底图比例**等比缩放**它——864×1536 的底图会出
+    1296×2304；`image_gen_v1` 的最终 2x 还在节点内部（`upscale_model`），
+    `final_skip` 够不着。两种都得靠 `pin_output_size()` 再钉一次。
+    """
+
+    @staticmethod
+    def _wf(skill):
+        from app import comic_render_opts as ro
+        if not ro.caps_of(skill).get("family"):
+            raise unittest.SkipTest("没有 %s 的 workflow 模板" % skill)
+        return cm.cover_workflow(skill, "1girl, solo", 42)
+
+    @staticmethod
+    def _out_size(wf):
+        from app import comic_render_opts as ro
+        hosts = ro._size_hosts(wf)
+        lat = ro._inputs(wf[hosts[0]])
+        w0, h0 = lat["width"], lat["height"]
+        bh = ro._batch_hires(wf)
+        if bh:
+            bi = ro._inputs(wf[bh])
+            # enable_hires 关掉的渠道（jank）走底图尺寸
+            return (bi["hires_width"], bi["hires_height"]) if bi.get("enable_hires") else (w0, h0)
+        ups = ro._upscale_nodes(wf)
+        sy = ro._inputs(wf[ups["latent"][0]])["scale_by"] if ups["latent"] else 1.0
+        return int(round(w0 * sy)), int(round(h0 * sy))
+
+    def test_every_node_family_comes_out_at_cover_size(self):
+        """四种形状各挑一个代表：两段 ks / 单段 ks / batch / custom。"""
+        from app import comic_render_opts as ro
+        from app import image_jobs
+        if not hasattr(image_jobs, "NAI_SKILLS"):
+            self.skipTest("image_jobs 不可用")
+        for skill in ("anima-line", "qwen_image_v1", "miao", "moss",
+                      "image_gen_v1", "nsfw_pose_gen", "jank"):
+            with self.subTest(skill=skill):
+                self.assertEqual(self._out_size(self._wf(skill)), (cm.COVER_W, cm.COVER_H))
+
+    def test_batch_hires_is_pinned_not_scaled(self):
+        """miao 模板是 1024×1536→1536×2304（×1.5）。等比跟随会算出
+        1296×2304，尺寸对了但宽高比还是被拉——必须是同尺寸精修。"""
+        from app import comic_render_opts as ro
+        wf = self._wf("miao")
+        bi = ro._inputs(wf[ro._batch_hires(wf)])
+        self.assertEqual((bi["hires_width"], bi["hires_height"]), (cm.COVER_W, cm.COVER_H))
+
+    def test_node_internal_upscaler_is_disconnected(self):
+        """image_gen_v1 的 2x 在节点输入里，不删就是 1728×3072。"""
+        from app import comic_render_opts as ro
+        wf = self._wf("image_gen_v1")
+        self.assertNotIn("upscale_model", ro._inputs(wf[ro._batch_hires(wf)]))
+
+    def test_save_image_does_not_go_through_the_upscaler(self):
+        from app import comic_render_opts as ro
+        wf = self._wf("anima-line")
+        final = str(ro._upscale_nodes(wf)["final"])
+        for nd in wf.values():
+            if nd.get("class_type") == "SaveImage":
+                self.assertNotEqual(str(ro._inputs(nd)["images"][0]), final)
+
+    def test_hires_stays_off_when_the_channel_disabled_it(self):
+        """jank 的 enable_hires=False——别替它开第二段，白烧一倍时间。"""
+        from app import comic_render_opts as ro
+        wf = self._wf("jank")
+        self.assertFalse(ro._inputs(wf[ro._batch_hires(wf)]).get("enable_hires"))
+
+
 class StoreTest(unittest.TestCase):
     def setUp(self):
         self._backup = None

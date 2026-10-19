@@ -321,20 +321,34 @@ def cover_prompt(card):
     return t
 
 
+def cover_workflow(skill, prompt, seed):
+    """封面工作流：出图**正好** COVER_W×COVER_H，不走任何放大。
+
+    `cover_opts()` 只是把倍率/步数写进参数对象，落到工作流上还差一步：batch 族
+    （sd / miao / nsfw_pose_gen）的第二段尺寸是节点里写死的数值，`apply()` 会按
+    底图比例**等比缩放**它（864×1536 底图 → 1296×2304 出图），得再钉一次。
+    """
+    from app import comic_render_opts
+    from app.tools.normal import generate_image
+
+    wf = comic_render_opts.apply(
+        generate_image.build_t2i_workflow(skill, prompt, seed), cover_opts(skill))
+    comic_render_opts.pin_output_size(wf, COVER_W, COVER_H)
+    return wf
+
+
 def render_cover(cid, card, skill=COVER_SKILL, seed=None):
     """出一张封面，返回落盘路径。**阻塞**（30~60 秒），调用方自己放后台线程。
 
     这里不更新卡片记录——出图是慢操作，状态由接口层管（先写 rendering、
     成功后写 cover），免得线程和请求两边抢着写同一个 json。
     """
-    from app import comic, comic_render_opts      # 延迟导入：纯文案路径不该拖上生图依赖
-    from app.tools.normal import generate_image
+    from app import comic      # 延迟导入：纯文案路径不该拖上生图依赖
 
     comic._require_comfy()
     prompt = cover_prompt(card)
     seed = seed or comic._new_seed()
-    wf = comic_render_opts.apply(
-        generate_image.build_t2i_workflow(skill, prompt, seed), cover_opts(skill))
+    wf = cover_workflow(skill, prompt, seed)
     name = comic._submit_retry(
         lambda: comic._submit(wf, skill, prompt, seed,
                               out_dir="web/角色卡_%s" % cid),

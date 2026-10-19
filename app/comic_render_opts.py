@@ -804,6 +804,35 @@ def _apply_upscale(wf, up):
     return n
 
 
+def pin_output_size(workflow, width, height):
+    """把出图尺寸钉死成 width×height：底图、batch 的第二段、两级放大全按住。
+
+    和 `apply()` 的语义不同：apply 是「按模板的规矩改参数」——batch 族的第二段
+    尺寸会跟着底图**等比缩放**（miao 1024×1536→1536×2304，底图改成 864×1536
+    就成了 1296×2304，画面还是被拉长）；这里要的是「就是这么大」，所以第二段
+    直接同尺寸精修，节点内的 `upscale_model` 也断开。
+
+    角色卡封面要正好 864×1536（星陨AI 的上传规格），就是靠这一个函数。返回动了
+    几个地方，方便调用方判断模板是不是意料之外的形状。
+    """
+    wf = workflow or {}
+    n = _apply_upscale(wf, {"scale_by": 1.0, "final_skip": True})
+    for nid in _size_hosts(wf):
+        inp = _inputs(wf[nid])
+        inp["width"], inp["height"] = width, height
+        n += 1
+        if inp.get("enable_hires") and "hires_width" in inp:
+            # enable_hires 关掉的渠道（jank）别替它开，只改它本来会用的值。
+            inp["hires_width"], inp["hires_height"] = width, height
+            n += 1
+        if "upscale_model" in inp:
+            # optional 输入：不传就不放大。它在节点**内部**跑，SaveImage 那条路
+            # 管不到（`final_skip` 只重接独立节点），image_gen_v1 的 2x 就是它。
+            inp.pop("upscale_model", None)
+            n += 1
+    return n
+
+
 def apply(workflow, opts):
     """把渲染参数应用到工作流，返回**新 dict**（不改入参）。
 
