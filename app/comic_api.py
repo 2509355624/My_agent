@@ -141,6 +141,105 @@ def _load_task(path):
     return task
 
 
+# ─── 阶段一渠道（2026-10-19 多渠道）─────────────────────
+#
+# 渠道跟着**任务**走：state.json 里一个 `scene_skill` 字段。纯写真任务没有
+# script.md、也就没有 state.json，那条线写在 portrait.json 的同名字段里。
+# 三条读取路径（status / render_opts / start）都走 _resolve_skill，避免出现
+# 「界面显示 A、实际跑 B」。
+
+_SKILL_FILES = ("state.json", "portrait.json")
+
+
+def _state_skill(path):
+    """任务目录里记着的阶段一渠道：state.json > portrait.json > 空串。"""
+    if not path:
+        return ""
+    for name in _SKILL_FILES:
+        fp = os.path.join(path, name)
+        if not os.path.isfile(fp):
+            continue
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                v = (json.load(f) or {}).get("scene_skill")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
+
+def _resolve_skill(path, wanted=""):
+    """这次用哪个渠道：请求显式给的 > 任务存过的 > 全局默认。"""
+    return (str(wanted or "").strip() or _state_skill(path)
+            or comic.SCENE_SKILL)
+
+
+def _save_task_skill(path, skill):
+    """把渠道记回任务目录。
+
+    优先写已存在的账本文件；两个都没有（刚建的写真任务）就建 portrait.json——
+    随后 `comic_portrait.save_meta` 会合并写，不会把这个字段冲掉。
+    """
+    skill = str(skill or "").strip()
+    if not (path and skill):
+        return
+    for name in _SKILL_FILES:
+        fp = os.path.join(path, name)
+        if not os.path.isfile(fp):
+            continue
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        data["scene_skill"] = skill
+        with open(fp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return
+    try:
+        os.makedirs(path, exist_ok=True)
+        with open(os.path.join(path, "portrait.json"), "w", encoding="utf-8") as f:
+            json.dump({"scene_skill": skill}, f, ensure_ascii=False, indent=1)
+    except OSError as exc:
+        comic.log.warning("记不下阶段一渠道（%s）：%s", path, exc)
+
+
+# 下拉框分组（只是显示用，不影响任何调度）
+_GROUPS = (
+    ("anima-line", "anima"), ("anima", "anima"), ("silver", "silver"),
+    ("hd_", "高清"), ("krea2", "krea2"), ("qwen", "qwen"), ("moss", "moss"),
+    ("miao", "miao"), ("image_gen", "sd"), ("nffa", "nffa"),
+    ("cunny", "cunny"), ("jank", "jank"), ("nai", "云端"),
+)
+
+
+def _group_of(name):
+    for pre, label in _GROUPS:
+        if name.startswith(pre):
+            return label
+    return "其他"
+
+
+def _channels():
+    """参数卡能选的阶段一渠道：**有 workflow.json 的 skill** + NAI 云端。
+
+    有 workflow 就是能文生图（i2i-only 的 skill 没有这个文件）。写作用 skill
+    也因此天然被挡掉，不用去解析 frontmatter。
+    """
+    from app.skills import SKILLS_DIR, list_skills
+    out = []
+    for name in sorted(list_skills()):
+        if os.path.isfile(os.path.join(SKILLS_DIR, name, "workflow.json")):
+            out.append({"name": name, "group": _group_of(name)})
+    for name in image_jobs.NAI_SKILLS:
+        out.append({"name": name, "group": "云端", "cloud": True})
+    out.sort(key=lambda c: (c["group"], c["name"]))
+    return out
+
+
 def _rev(path):
     """图片指纹（毫秒 mtime + 字节数），文件不存在给 "0"。
 
@@ -495,7 +594,8 @@ def api_comic_start():
         _load_task(path)                    # 开跑前先验一遍剧本可解析
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
-    scene_skill = str(data.get("scene_skill") or "").strip() or comic.SCENE_SKILL
+    scene_skill = _resolve_skill(path, data.get("scene_skill"))
+    _save_task_skill(path, scene_skill)
     started = _spawn(path, "scene", lambda: comic.run(
         os.path.join(path, "script.md"), silver_only=True,
         scene_skill=scene_skill), on_error=_mark_pending_failed(path))
@@ -526,6 +626,7 @@ def api_comic_status():
                             "title": "", "running": None, "job_error": None,
                             "comfy": _comfy_state(),
                             "fix": None, "panels": [],
+                            "scene_skill": _resolve_skill(path),
                             "portraits": _portrait_shots(path)})
         return jsonify({"ok": False, "error": str(exc)}), 404
     with _JOBS_LOCK:
@@ -560,6 +661,9 @@ def api_comic_status():
                     # 生图模式的写真（portraits/ + prompts.json）：刷新页面后
                     # 写真卡靠它恢复。没有就是空列表。
                     "portraits": _portrait_shots(path),
+                    # 阶段一渠道（2026-10-19）：前端靠它把下拉框同步成任务真实用的
+                    # 那个——刷新页面、切换任务都不会再显示成默认 anima-line。
+                    "scene_skill": _resolve_skill(path),
                     "panels": panels})
 
 
@@ -677,12 +781,16 @@ def api_comic_render_opts_get():
             path = _task_dir(task_id)
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 404
+    skill = _resolve_skill(path, request.args.get("skill"))
     return jsonify({
         "ok": True,
-        "opts": comic_render_opts.load(path, comic.SCENE_SKILL),
+        "skill": skill,
+        # caps = 这个渠道让参数卡显示什么（几段采样 / 有没有 LoRA / 预计出图多大）
+        "caps": comic_render_opts.caps_of(skill),
+        "opts": comic_render_opts.load(path, skill),
         "resources": _render_resources(),
-        "saved": bool(path) and os.path.isfile(comic_render_opts.path_of(path)),
-        "defaults_saved": os.path.isfile(comic_render_opts.defaults_path()),
+        "saved": bool(path) and os.path.isfile(comic_render_opts.path_of(path, skill)),
+        "defaults_saved": comic_render_opts.has_defaults(skill),
     })
 
 
@@ -710,32 +818,78 @@ def api_comic_render_opts_save():
     elif scope == "task" and not data.get("reset"):
         return jsonify({"ok": False, "error": "缺 task"}), 400
 
+    skill = _resolve_skill(path, data.get("skill"))
     if data.get("reset"):
         if scope == "global":
-            comic_render_opts.reset_defaults()
+            comic_render_opts.reset_defaults(skill)
         else:
-            comic_render_opts.reset(path)
-        return jsonify({"ok": True, "reset": True, "scope": scope,
-                        "opts": comic_render_opts.load(path, comic.SCENE_SKILL),
+            comic_render_opts.reset(path, skill)
+        return jsonify({"ok": True, "reset": True, "scope": scope, "skill": skill,
+                        "caps": comic_render_opts.caps_of(skill),
+                        "opts": comic_render_opts.load(path, skill),
                         "saved": bool(path) and
-                                 os.path.isfile(comic_render_opts.path_of(path)),
+                                 os.path.isfile(comic_render_opts.path_of(path, skill)),
                         "defaults_saved":
-                            os.path.isfile(comic_render_opts.defaults_path())})
+                            comic_render_opts.has_defaults(skill)})
 
+    # base 传当前生效值：前端只提交**看得见**的字段（非 LoRA 渠道不提交 loras、
+    # 单段渠道不提交 hires），缺的部分要沿用，不能变成空。
     opts, errors, warnings = comic_render_opts.normalize(
-        data.get("opts") or {}, resources=_render_resources())
+        data.get("opts") or {}, base=comic_render_opts.load(path, skill),
+        resources=_render_resources())
     if errors:
         return jsonify({"ok": False, "error": "；".join(errors)}), 400
     if scope == "global":
-        comic_render_opts.save_defaults(opts)
+        comic_render_opts.save_defaults(opts, skill)
     else:
-        comic_render_opts.save(path, opts)
+        comic_render_opts.save(path, opts, skill)
     return jsonify({"ok": True, "opts": opts, "warnings": warnings,
-                    "scope": scope,
+                    "scope": scope, "skill": skill,
+                    "caps": comic_render_opts.caps_of(skill),
                     "saved": bool(path) and
-                             os.path.isfile(comic_render_opts.path_of(path)),
+                             os.path.isfile(comic_render_opts.path_of(path, skill)),
                     "defaults_saved":
-                        os.path.isfile(comic_render_opts.defaults_path())})
+                        comic_render_opts.has_defaults(skill)})
+
+
+@bp.route("/api/comic/channels", methods=["GET"])
+def api_comic_channels():
+    """参数卡的渠道下拉：哪些渠道能当阶段一 + 这个任务现在用的是哪个。"""
+    task_id = (request.args.get("task") or "").strip()
+    path = ""
+    if task_id:
+        try:
+            path = _task_dir(task_id)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 404
+    return jsonify({"ok": True, "channels": _channels(),
+                    "current": _resolve_skill(path)})
+
+
+@bp.route("/api/comic/channel", methods=["POST"])
+def api_comic_channel():
+    """换这个任务的阶段一渠道（只影响**之后**渲染的格，已出的图不动）。"""
+    data = request.get_json(silent=True) or {}
+    task_id = str(data.get("task") or "").strip()
+    skill = str(data.get("skill") or "").strip()
+    if not skill:
+        return jsonify({"ok": False, "error": "缺 skill"}), 400
+    path = ""
+    if task_id:
+        try:
+            path = _task_dir(task_id)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 404
+    names = {c["name"] for c in _channels()}
+    if skill not in names:
+        return jsonify({"ok": False,
+                        "error": "没有这个生图渠道：%s" % skill}), 400
+    _save_task_skill(path, skill)
+    return jsonify({"ok": True, "skill": skill,
+                    "caps": comic_render_opts.caps_of(skill),
+                    "opts": comic_render_opts.load(path, skill),
+                    "saved": bool(path) and
+                             os.path.isfile(comic_render_opts.path_of(path, skill))})
 
 
 @bp.route("/api/comic/rerender", methods=["POST"])
@@ -806,6 +960,10 @@ def api_comic_portrait():
     if busy:
         return jsonify({"ok": False, "error": "这个任务的写真还在跑，等它跑完"}), 409
 
+    # 阶段一渠道（2026-10-19）：跟剧本模式同一套解析，写真也用参数卡选的那个。
+    skill = _resolve_skill(path, data.get("scene_skill"))
+    _save_task_skill(path, skill)
+
     job = uuid.uuid4().hex[:12]
     with _PORTRAIT_LOCK:
         _PORTRAIT_JOBS[job] = {"state": "running", "task": path, "log": [],
@@ -824,7 +982,7 @@ def api_comic_portrait():
     def _work():
         try:
             comic_portrait.run(path, brief, heroine, n, provider=provider,
-                               model=model, progress=_progress)
+                               model=model, progress=_progress, skill=skill)
             with _PORTRAIT_LOCK:
                 _PORTRAIT_JOBS[job].update(state="done")
         except BaseException as exc:        # SystemExit 不是 Exception（见模块头）
@@ -885,7 +1043,8 @@ def api_comic_portrait_shot():
         return jsonify({"ok": False, "error": "这批写真还在跑，等它跑完再单张重跑"}), 409
     no = str(data.get("no") or "").strip().zfill(2)
     try:
-        shot = comic_portrait.reseed_shot(path, no)
+        shot = comic_portrait.reseed_shot(
+            path, no, skill=_resolve_skill(path, data.get("scene_skill")))
     except comic_portrait.PortraitError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     except Exception as exc:

@@ -673,6 +673,9 @@ class Task:
         self.raw_dir = os.path.join(self.dir, "raw")
         self.final_dir = os.path.join(self.dir, "final")
         self.state_path = os.path.join(self.dir, "state.json")
+        # 阶段一渠道（2026-10-19 多渠道）：跟着任务走，存在 state.json 里。
+        # 空串 = 这个任务还没定过，调用方回落到 SCENE_SKILL。
+        self.scene_skill = ""
 
     def raw_path(self, p):
         return os.path.join(self.raw_dir, "%s_raw.png" % p.no)
@@ -691,6 +694,11 @@ class Task:
             log.warning("state.json 读不出来（%s），当作全新任务", e)
             return
         saved = data.get("panels") or {}
+        # 阶段一渠道跟着任务走（2026-10-19）：重开任务、单格重跑都要用同一个，
+        # 否则「换了渠道重跑」会变成一半旧渠道一半新渠道。
+        sk = str(data.get("scene_skill") or "").strip()
+        if sk:
+            self.scene_skill = sk
         for p in self.panels:
             s = saved.get(p.no)
             if not isinstance(s, dict):
@@ -725,6 +733,7 @@ class Task:
             "task_id": self.task_id,
             "title": self.meta.get("title", ""),
             "script": os.path.basename(self.script_path),
+            "scene_skill": self.scene_skill,
             "updated": datetime.now().isoformat(timespec="seconds"),
             "panels": {
                 p.no: {
@@ -1122,13 +1131,17 @@ def _next_task_dir(root="comics", title=""):
 
 
 def run(script_path, only=None, silver_only=False, redo=False,
-        scene_skill=SCENE_SKILL, split_bubbles=False, scene_opts=None):
+        scene_skill=None, split_bubbles=False, scene_opts=None):
     meta, panels = parse_script(script_path)
     if not panels:
         raise SystemExit("剧本里没解析到任何格子（每格以 `## 01` 这样的标题开头）")
 
     task = Task(script_path, meta, panels)
     task.load_state()
+    # 阶段一渠道（2026-10-19）：显式传 > 任务 state.json 里存的 > 全局默认。
+    # 优先级这么排是为了「点某一格重跑」——那条路不传渠道，得接住任务自己的。
+    scene_skill = (scene_skill or task.scene_skill or SCENE_SKILL).strip()
+    task.scene_skill = scene_skill
     task.save_state()
     # 渲染参数覆盖（render.json）开跑时读一次，整批用同一套——跑到一半改参数
     # 不会这批用新、下批用旧。None = 这个任务没存过，render_scene 那边按模板
@@ -1213,9 +1226,10 @@ def main(argv=None):
     r.add_argument("--only", help="只跑这些格，逗号分隔，如 01,02")
     r.add_argument("--silver-only", action="store_true",
                    help="只跑阶段一（场景图），不加气泡")
-    r.add_argument("--scene-skill", default=SCENE_SKILL,
-                   help="阶段一的生图渠道，默认 %s；传 nai 走云端（快，"
-                        "验证气泡效果时用）" % SCENE_SKILL)
+    r.add_argument("--scene-skill", default=None,
+                   help="阶段一的生图渠道；不传就用任务自己存的（state.json），"
+                        "新任务默认 %s。传 nai 走云端（快，验证气泡效果时用）"
+                        % SCENE_SKILL)
     r.add_argument("--redo", action="store_true",
                    help="强制重跑选定格的阶段二（加气泡），场景图复用")
     r.add_argument("--split-bubbles", action="store_true",

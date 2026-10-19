@@ -496,5 +496,265 @@ class RenderSceneWiringTest(unittest.TestCase):
         self.assertEqual(self.panel.seed, 42)
 
 
+class CapsTest(unittest.TestCase):
+    """渠道能力表（2026-10-19 多渠道）：参数卡按 caps 渲染。
+
+    这里画错一个字段，界面就会露出改不动的旋钮（用户点了没反应）或者藏起
+    本该能改的（切了渠道发现分辨率改不了）。三种采样节点族各钉一条。
+    """
+
+    def test_ks_two_pass_channel(self):
+        c = ro.caps_of("anima-line")
+        self.assertEqual((c["family"], c["passes"]), ("ks", 2))
+        self.assertTrue(c["editable"])
+        self.assertTrue(c["lora"])
+        self.assertEqual((c["upscale_latent"], c["upscale_final"],
+                          c["upscale_skip"]), (True, True, True))
+        self.assertEqual((c["width"], c["height"]), (1024, 1536))
+        # 1024×1536 → latent ×1.2 → 1229×1843 → 最终放大 2x → 2458×3686
+        self.assertEqual((c["out_width"], c["out_height"]), (2458, 3686))
+
+    def test_batch_channel_has_hires_but_no_lora(self):
+        """sd / miao 的采样全在 BatchPromptImageGenerator 里，第二段是节点上的
+        hires_* 字段；LoRA 链是渠道配方（降对比 / 提饱和 / 表情风格），露出来
+        会被全局默认里 anima 那 6 槽一键拆掉 —— 所以不给调。"""
+        c = ro.caps_of("miao")
+        self.assertEqual((c["family"], c["passes"]), ("batch", 2))
+        self.assertTrue(c["editable"])
+        self.assertFalse(c["lora"])
+        self.assertFalse(c["upscale_latent"])   # 没有 LatentUpscaleBy 这一级
+        self.assertEqual(ro.defaults("miao")["hires"], {"steps": 20, "denoise": 0.4})
+
+    def test_batch_final_upscale_counted_from_composite_node(self):
+        """sd 的最终放大写在节点的 upscale_model 输入里，没有
+        ImageUpscaleWithModel 可绕：不认它就少算一倍（720×1280 会算成 1440×2560）。"""
+        c = ro.caps_of("image_gen_v1")
+        self.assertTrue(c["upscale_final"])
+        self.assertFalse(c["upscale_skip"])     # 没有那个节点 → 不给「跳过」开关
+        self.assertEqual((c["out_width"], c["out_height"]), (2880, 5120))
+
+    def test_custom_channel_is_read_only_for_sampling(self):
+        """moss 4 步的 DMD 链步数由适配器 step_codes 定死，节点上没有 steps
+        可改 —— editable=False，面板只留分辨率。"""
+        c = ro.caps_of("moss")
+        self.assertEqual((c["family"], c["passes"]), ("custom", 1))
+        self.assertFalse(c["editable"])
+        self.assertFalse(c["lora"])
+        self.assertEqual(ro.defaults("moss")["base"], {})
+        self.assertEqual((c["out_width"], c["out_height"]),
+                         (c["width"], c["height"]))
+
+    def test_single_pass_channel_has_no_hires(self):
+        c = ro.caps_of("qwen_image_v1")
+        self.assertEqual((c["family"], c["passes"]), ("ks", 1))
+        self.assertFalse(c["lora"])
+        self.assertEqual(ro.defaults("qwen_image_v1")["hires"], {})
+
+    def test_unknown_skill_is_empty_caps(self):
+        c = ro.caps_of("no-such-skill-xyz")
+        self.assertEqual((c["family"], c["passes"]), ("none", 0))
+        self.assertFalse(c["editable"])
+        self.assertFalse(c["lora"])
+
+
+class MultiChannelApplyTest(unittest.TestCase):
+    """同一份参数卡套到不同渠道上：该改的改、该不动的一个字节不动。"""
+
+    def test_batch_hires_size_follows_base_ratio(self):
+        """batch 族的第二段尺寸是**写死的数值**（miao 1024×1536→1536×2304）。
+        底图改成一半还得等比跟改，否则画幅被拉伸。"""
+        wf = gi.build_t2i_workflow("miao", "1girl, solo", 42)
+        nid = ro._batch_hires(wf)
+        opts = ro.defaults("miao")
+        opts["width"], opts["height"] = 512, 768
+        out = ro.apply(wf, opts)
+        inp = out[nid]["inputs"]
+        self.assertEqual((inp["width"], inp["height"]), (512, 768))
+        self.assertEqual((inp["hires_width"], inp["hires_height"]), (768, 1152))
+
+    def test_batch_hires_params_land_on_the_composite_node(self):
+        wf = gi.build_t2i_workflow("miao", "1girl, solo", 42)
+        nid = ro._batch_hires(wf)
+        opts = ro.defaults("miao")
+        opts["base"]["steps"] = 30
+        opts["hires"] = {"steps": 10, "denoise": 0.3}
+        inp = ro.apply(wf, opts)[nid]["inputs"]
+        self.assertEqual((inp["steps"], inp["hires_steps"]), (30, 10))
+        self.assertEqual(inp["hires_denoise"], 0.3)
+        # 这个节点没有第二段的 cfg / 采样器可调，别硬塞
+        self.assertNotIn("hires_cfg", inp)
+        self.assertNotIn("hires_sampler_name", inp)
+
+    def test_size_lands_on_empty_sd3_latent(self):
+        """qwen 的底图节点是 EmptySD3LatentImage，不是 EmptyLatentImage。"""
+        wf = gi.build_t2i_workflow("qwen_image_v1", "1girl", 42)
+        opts = ro.defaults("qwen_image_v1")
+        opts["width"], opts["height"] = 896, 1152
+        out = ro.apply(wf, opts)
+        lat = ro._latent_ids(out)[0]
+        self.assertEqual(out[lat]["class_type"], "EmptySD3LatentImage")
+        self.assertEqual((out[lat]["inputs"]["width"], out[lat]["inputs"]["height"]),
+                         (896, 1152))
+
+    def test_no_lora_is_injected_where_channel_has_no_chain(self):
+        """qwen 模板没 LoRA 链，参数里却带着 anima 那 6 槽（全局默认）。照旧
+        重建就是往 CLIPLoader/UNETLoader 链上硬塞 LoraLoaderModelOnly，提交必被
+        ComfyUI 拒 —— 这种渠道一律不动 LoRA。"""
+        wf = gi.build_t2i_workflow("qwen_image_v1", "1girl", 42)
+        before = copy.deepcopy(wf)
+        opts = ro.defaults("qwen_image_v1")
+        opts["loras"] = [{"name": "reina_v1_epoch14.safetensors", "strength": 0.8}]
+        out = ro.apply(wf, opts)
+        self.assertEqual([n for n in out
+                          if out[n]["class_type"] in ro.LORA_CLASSES], [])
+        self.assertEqual(out, before)
+
+    def test_custom_channel_sampler_untouched(self):
+        wf = gi.build_t2i_workflow("moss", "1girl", 42)
+        nid = [n for n in wf if ro._family(wf[n]) == "custom"][0]
+        opts = ro.defaults("moss")
+        opts["base"] = {"steps": 9, "cfg": 2.0}      # 面板不会给，防御性传入
+        opts["width"], opts["height"] = 1024, 1088
+        out = ro.apply(wf, opts)
+        self.assertEqual(out[nid], wf[nid])
+        lat = ro._latent_ids(out)[0]
+        self.assertEqual((out[lat]["inputs"]["width"], out[lat]["inputs"]["height"]),
+                         (1024, 1088))
+
+
+class _GlobalFileCase(unittest.TestCase):
+    """碰全局默认文件的用例都从这继承：每条先清空，跑完还原用户原来那份。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="render_opts_mc_")
+        self._backup = None
+        fp = ro.defaults_path()
+        if os.path.isfile(fp):
+            with open(fp, "rb") as f:
+                self._backup = f.read()
+        ro.reset_defaults()
+
+    def tearDown(self):
+        ro.reset_defaults()
+        if self._backup is not None:
+            os.makedirs(os.path.dirname(ro.defaults_path()), exist_ok=True)
+            with open(ro.defaults_path(), "wb") as f:
+                f.write(self._backup)
+
+
+class TaskParamsPerChannelTest(_GlobalFileCase):
+    """任务级参数按渠道各存一份（2026-10-19）。
+
+    共用一个 render.json 的后果很具体：anima 那套（20 步 / hires 20 步 / latent
+    ×1.2）整份套到 miao 的 45 步模型上，切一次渠道图就废一批。
+    """
+
+    def test_each_channel_has_its_own_file(self):
+        a = ro.defaults("anima-line")
+        a["base"]["steps"] = 24
+        ro.save(self.tmp, a, "anima-line")
+        m = ro.defaults("miao")
+        m["base"]["steps"] = 50
+        ro.save(self.tmp, m, "miao")
+        self.assertEqual(ro.load(self.tmp, "anima-line")["base"]["steps"], 24)
+        self.assertEqual(ro.load(self.tmp, "miao")["base"]["steps"], 50)
+        # 默认渠道仍是 render.json（老任务的文件不用迁）
+        self.assertEqual(os.path.basename(ro.path_of(self.tmp)), ro.RENDER_FILE)
+        self.assertTrue(os.path.isfile(ro.path_of(self.tmp, "miao")))
+        self.assertNotEqual(ro.path_of(self.tmp, "miao"), ro.path_of(self.tmp))
+
+    def test_switching_channel_does_not_see_the_other_ones_params(self):
+        a = ro.defaults("anima-line")
+        a["base"]["steps"] = 24
+        a["hires"]["steps"] = 6
+        ro.save(self.tmp, a, "anima-line")
+        miao = ro.load(self.tmp, "miao")     # 这个任务没在 miao 下存过
+        self.assertEqual(miao["base"]["steps"], 45)     # miao 模板值
+        self.assertEqual(miao["hires"]["steps"], 20)
+
+    def test_reset_only_drops_that_channel(self):
+        ro.save(self.tmp, ro.defaults("anima-line"), "anima-line")
+        ro.save(self.tmp, ro.defaults("miao"), "miao")
+        self.assertTrue(ro.reset(self.tmp, "miao"))
+        self.assertFalse(os.path.isfile(ro.path_of(self.tmp, "miao")))
+        self.assertTrue(os.path.isfile(ro.path_of(self.tmp)))
+        self.assertFalse(ro.reset(self.tmp, "miao"))    # 再删一次是空操作
+
+
+class CustomLoraSurvivesTest(_GlobalFileCase):
+    """用户自己挂的角色 LoRA 必须留得住（2026-10-19）。
+
+    试过一版「名字不在这个渠道模板里的槽一律丢掉」来防跨渠道串参数，结果把
+    **最常用的功能**一起丢了：模板里当然不会出现他自己训的角色 LoRA。跨渠道
+    串参数改由存取层解决（任务级 `render_<渠道>.json`、全局默认按渠道分键），
+    读这条链路时不许再按名字猜。
+    """
+
+    def test_user_lora_name_survives_a_roundtrip(self):
+        opts = ro.defaults("anima-line")
+        opts["loras"][0] = {"name": "my_char_v1.safetensors", "strength": 0.9}
+        ro.save(self.tmp, opts, "anima-line")
+        self.assertEqual(ro.load(self.tmp, "anima-line")["loras"][0],
+                         {"name": "my_char_v1.safetensors", "strength": 0.9})
+
+    def test_global_default_keeps_a_user_lora_too(self):
+        g = ro.defaults("anima-line")
+        g["loras"][2] = {"name": "my_char_v1.safetensors", "strength": 0.7}
+        ro.save_defaults(g, "anima-line")
+        self.assertEqual(ro.load("", "anima-line")["loras"][2]["name"],
+                         "my_char_v1.safetensors")
+
+    def test_that_lora_actually_reaches_the_workflow(self):
+        wf = gi.build_t2i_workflow("anima-line", "1girl", 42)
+        opts = ro.defaults("anima-line")
+        opts["loras"][0] = {"name": "my_char_v1.safetensors", "strength": 0.9}
+        out = ro.apply(wf, opts)
+        chain, _head = _lora_chain(out, _samplers(out)["base"][0])
+        self.assertEqual(chain[0], ("my_char_v1.safetensors", 0.9))
+
+
+class GlobalDefaultsPerChannelTest(_GlobalFileCase):
+    """全局默认按渠道分键存：anima 的步数 / 放大倍率不许盖到别的渠道头上。"""
+
+    def test_saving_one_channel_does_not_touch_another(self):
+        g = ro.defaults("anima-line")
+        g["width"], g["height"] = 816, 1024
+        g["base"]["steps"] = 10
+        ro.save_defaults(g, "anima-line")
+        self.assertEqual(ro.load("", "anima-line")["base"]["steps"], 10)
+        self.assertEqual(ro.load("", "krea2-general")["base"]["steps"], 8)
+
+    def test_legacy_flat_file_only_applies_to_default_channel(self):
+        """多渠道之前整个文件就是一份 opts（那时只有 anima-line）。升上来以后
+        它只算默认渠道的，不许串到 krea2 / miao 上。"""
+        os.makedirs(os.path.dirname(ro.defaults_path()), exist_ok=True)
+        flat = ro.defaults("anima-line")
+        flat["base"]["steps"] = 11
+        with open(ro.defaults_path(), "w", encoding="utf-8") as f:
+            json.dump(flat, f)
+        self.assertEqual(ro.load("", "anima-line")["base"]["steps"], 11)
+        self.assertEqual(ro.load("", "krea2-general")["base"]["steps"], 8)
+        self.assertTrue(ro.has_defaults("anima-line"))
+        self.assertFalse(ro.has_defaults("krea2-general"))
+
+    def test_upgrading_a_flat_file_keeps_the_old_values(self):
+        os.makedirs(os.path.dirname(ro.defaults_path()), exist_ok=True)
+        flat = ro.defaults("anima-line")
+        flat["base"]["steps"] = 11
+        with open(ro.defaults_path(), "w", encoding="utf-8") as f:
+            json.dump(flat, f)
+        ro.save_defaults(ro.defaults("krea2-general"), "krea2-general")
+        self.assertEqual(ro.load("", "anima-line")["base"]["steps"], 11)
+        self.assertTrue(ro.has_defaults("krea2-general"))
+
+    def test_reset_one_channel_keeps_the_other(self):
+        ro.save_defaults(ro.defaults("anima-line"), "anima-line")
+        ro.save_defaults(ro.defaults("miao"), "miao")
+        self.assertTrue(ro.reset_defaults("miao"))
+        self.assertFalse(ro.has_defaults("miao"))
+        self.assertTrue(ro.has_defaults("anima-line"))
+        self.assertFalse(ro.reset_defaults("miao"))     # 再删一次是空操作
+
+
 if __name__ == "__main__":
     unittest.main()

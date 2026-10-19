@@ -148,11 +148,25 @@ def save_prompts(task_dir, shots):
         json.dump(shots, f, ensure_ascii=False, indent=1)
 
 
-def save_meta(task_dir, brief, heroine, n):
-    with open(portrait_path(task_dir), "w", encoding="utf-8") as f:
-        json.dump({"brief": brief, "heroine": heroine, "n": n,
-                   "created": time.strftime("%Y-%m-%d %H:%M:%S")},
-                  f, ensure_ascii=False, indent=1)
+def save_meta(task_dir, brief, heroine, n, skill=""):
+    """需求快照。**合并写**：`_save_task_skill` 可能先往里放了 scene_skill，
+    整份覆盖会把渠道冲掉（2026-10-19 多渠道）。"""
+    fp = portrait_path(task_dir)
+    data = {}
+    if os.path.isfile(fp):
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data.update({"brief": brief, "heroine": heroine, "n": n,
+                 "created": time.strftime("%Y-%m-%d %H:%M:%S")})
+    if skill:
+        data["scene_skill"] = skill
+    with open(fp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=1)
 
 
 # ─── 跑图 ───────────────────────────────────────────────
@@ -184,7 +198,7 @@ def run(task_dir, brief, heroine, n, provider=None, model=None,
                             progress=progress)
     comic._require_comfy()
     opts = comic_render_opts.load(task_dir, skill)
-    save_meta(task_dir, brief, heroine, len(prompts))
+    save_meta(task_dir, brief, heroine, len(prompts), skill=skill)
     shots = []
     for i, prompt in enumerate(prompts, 1):
         no = "%02d" % i

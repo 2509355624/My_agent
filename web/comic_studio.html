@@ -119,6 +119,15 @@
       <span style="color:var(--text-dim);font-size:12px">切过去只是打开它，不改内容</span>
     </div>
     <div class="row" style="margin-bottom:10px">
+      <span style="color:var(--text-dim);font-size:12px">生图渠道</span>
+      <select id="sceneSkill" style="width:250px" onchange="changeChannel(this.value)"
+              title="阶段一出场景图用哪个渠道。整本共用一个；换渠道只影响之后渲染的格，已出的图不动。">
+      </select>
+      <span id="chanHint" style="color:var(--text-dim);font-size:12px"></span>
+      <span class="spacer" style="flex:1"></span>
+      <span id="sizeHint" style="color:var(--text-dim);font-size:12px"></span>
+    </div>
+    <div class="row" style="margin-bottom:10px">
       <textarea id="brief" rows="3" style="flex:1;min-width:220px" placeholder="视角: 哥哥
 主角: 妹妹
 剧情: 下雨天兄妹俩在公交站躲雨……（前两行是硬约束：视角=镜头后的「我」，男性→pov、女性→female_pov；主角=画面里唯一入画的人）"></textarea>
@@ -168,7 +177,7 @@
     <h2>写真 · 单人写真集</h2>
     <div style="color:var(--text-dim);font-size:12px;margin-bottom:10px">
       生图模式的产物：提示词员把「女主设定 + 需求」写成 N 条纯画面（无视角、无剧情、无观众、画面只有女主一人），
-      每条各出一张。走 anima-line 渠道——下面的渲染参数卡（LoRA / 采样 / 放大 / 分辨率）对它们同样生效。
+      每条各出一张。走上面选的阶段一渠道——下面的渲染参数卡（LoRA / 采样 / 放大 / 分辨率）对它们同样生效。
       对哪张点「🔁 换种子」就重跑哪张，其余不动。
     </div>
     <div id="portraitJob"></div>
@@ -177,19 +186,23 @@
   </div>
 
   <div class="card" id="renderCard">
-    <h2>⚙ 渲染参数 · anima-line 场景图</h2>
+    <h2 id="renderTitle">⚙ 渲染参数</h2>
     <div style="color:var(--text-dim);font-size:12px;margin-bottom:10px">
-      三档保存：<b>本任务</b>（写这个任务的 render.json）、<b>全局默认</b>（写
-      state/comic_render_defaults.json，新任务自动照它）、都没有就用 anima-line
-      模板当前值。取值优先级：本任务 &gt; 全局默认 &gt; 模板。
+      三档保存：<b>本任务</b>（这个渠道记一份，换渠道互不覆盖）、<b>全局默认</b>（写
+      state/comic_render_defaults.json，按渠道分开存，新任务自动照它）、都没有就用上面选的
+      <b id="renderSkillName">anima-line</b> 模板当前值。取值优先级：本任务 &gt; 全局默认 &gt; 模板。
       改了只影响<b>之后</b>渲染的格——已出的图不动，对哪格点「🔁 换种子重跑 / ▶ 跑这一格」哪格用新参数。
-      LoRA 只挂第一段采样（第二段走另一个底模、不接 LoRA）；阶段二加气泡不受这些参数影响。
-      分辨率是<b>底图</b>尺寸，成图还会再经过下面「放大」小节的两级放大，拉太大显存和时间都涨。
+      阶段二加气泡固定走 qwen，不受这些参数影响。
+      分辨率是<b>底图</b>尺寸，成图还要过渠道自带的放大链（有的话）。
+      这个渠道没有的东西（比如没有 LoRA 链、只有一段采样）不会显示。
     </div>
     <div id="loraRows"></div>
-    <div style="color:var(--text-dim);font-size:12px;margin:10px 0 6px">第一段采样 · 出构图（denoise 固定 1）</div>
+    <div id="baseCap" style="color:var(--text-dim);font-size:12px;margin:10px 0 6px">第一段采样 · 出构图</div>
     <div class="row" id="baseRow" style="margin-bottom:10px"></div>
-    <div style="color:var(--text-dim);font-size:12px;margin:10px 0 6px">第二段采样 · 放大精修（底图 latent 按「放大」小节的倍率放大后跑，denoise 越小越保留第一段）</div>
+    <div id="baseNote" style="display:none;color:var(--text-dim);font-size:12px;margin-bottom:10px">
+      这个渠道的采样步数由模型适配器（DMD 步码）定死，改不了；能调的只有下面的分辨率。
+    </div>
+    <div id="hiresCap" style="color:var(--text-dim);font-size:12px;margin:10px 0 6px">第二段采样 · 放大精修（denoise 越小越保留第一段）</div>
     <div class="row" id="hiresRow" style="margin-bottom:10px"></div>
     <div class="row" style="margin-bottom:10px">
       <span style="color:var(--text-dim);font-size:12px">底图分辨率</span>
@@ -202,20 +215,20 @@
       <button class="btn small" onclick="presetSize(1024,1024)" title="1024×1024">方 1:1</button>
       <button class="btn small" onclick="presetSize(1536,1024)" title="1536×1024">横 3:2</button>
     </div>
-    <div style="color:var(--text-dim);font-size:12px;margin:10px 0 6px">放大 · latent 倍率是第二段采样前的潜空间放大（决定第二段实际跑的尺寸，越大越吃显存）；最终像素放大是出图前最后一道</div>
+    <div id="upCap" style="color:var(--text-dim);font-size:12px;margin:10px 0 6px">放大 · latent 倍率决定第二段实际跑的尺寸；最终像素放大是出图前最后一道</div>
     <div class="row" id="upscaleRow" style="margin-bottom:10px">
-      <span style="color:var(--text-dim);font-size:12px">latent 放大</span>
+      <span id="upLatentLabel" style="color:var(--text-dim);font-size:12px">latent 放大</span>
       <input id="rUpScale" type="number" min="0.25" max="4" step="0.05" style="width:80px" title="第二段采样前的潜空间放大倍率">
-      <span style="color:var(--text-dim)">×</span>
+      <span id="upTimes" style="color:var(--text-dim)">×</span>
       <span class="spacer" style="flex:1"></span>
       <select id="rUpModel" style="width:250px" title="最终像素放大模型（ComfyUI upscale_models 清单）"></select>
-      <label style="font-size:12px;color:var(--text-dim);white-space:nowrap"><input type="checkbox" id="rUpSkip"> 跳过最终放大</label>
+      <label id="upSkipLabel" style="font-size:12px;color:var(--text-dim);white-space:nowrap"><input type="checkbox" id="rUpSkip"> 跳过最终放大</label>
     </div>
     <div class="row">
       <button class="btn primary" id="btnSaveRender" onclick="saveRenderOpts('task')">保存（本任务）</button>
       <button class="btn" id="btnSaveRenderAll" onclick="saveRenderOpts('global')" title="之后所有没单独存过参数的任务都用这套">存为全局默认</button>
       <span class="spacer" style="flex:1"></span>
-      <button class="btn small" onclick="resetRenderOpts('task')" title="删掉本任务的 render.json，回落到全局默认 / 模板">↺ 本任务恢复</button>
+      <button class="btn small" onclick="resetRenderOpts('task')" title="删掉本任务在这个渠道下存的参数，回落到全局默认 / 模板">↺ 本任务恢复</button>
       <button class="btn small" onclick="resetRenderOpts('global')" title="删掉 state/comic_render_defaults.json">✕ 清全局默认</button>
       <span id="renderMsg" style="color:var(--text-dim);font-size:12px"></span>
     </div>
@@ -619,32 +632,86 @@ async function saveScript(andRun) {
   try {
     await api('/api/comic/save', {task: TASK, script: document.getElementById('script').value});
     if (!andRun) { toast('剧本已保存'); return; }
-    await api('/api/comic/start', {task: TASK});
+    await api('/api/comic/start', {task: TASK, scene_skill: channel()});
     setBusy(true, 'scene');
-    toast('已开跑：逐格渲染场景图（anima线条）');
+    toast('已开跑：逐格渲染场景图（' + (channel() || '默认渠道') + '）');
     poll();
   } catch (e) { toast(e.message, true); }
 }
 
-// ── 渲染参数卡（anima-line：6 个 LoRA 槽 / 两段采样 / 分辨率 / 两级放大）──────────
-// 三档取值：任务 render.json > 全局默认 > anima-line 模板（后端 comic_render_opts.load
+// ── 渲染参数卡（按渠道能力渲染：1/2 段采样 · LoRA 链 · 分辨率 · 放大）──────
+// 三档取值：任务 render.json > 全局默认 > 该渠道模板（后端 comic_render_opts.load
 // 里叠好）。卡片**常显**——没有任务时显示的是全局默认/模板值，新任务开工前就能调。
 // 加载一次就够（轮询刷新不碰它，免得把用户正在编辑的表单冲掉）。
 let _renderLoaded = null;
+let _caps = null;      // 当前渠道能调什么（后端 render_opts 的 caps）
+let _res = null;       // ComfyUI 资源清单（采样器/调度器/LoRA/放大模型）
 
 function _renderStateMsg(d) {
   if (d.saved) return d.defaults_saved ? '本任务已存（另有全局默认）' : '本任务已存';
   return d.defaults_saved ? '本任务没存 → 用全局默认' : '本任务没存 → 用模板值';
 }
 
+// ── 阶段一渠道（2026-10-19 多渠道）────────────────────────
+// 渠道跟着任务走（后端存进 state.json / portrait.json）。换渠道只影响**之后**
+// 渲染的格；参数卡按这个渠道的能力重画（几段采样、有没有 LoRA、出多大）。
+async function loadChannels() {
+  try {
+    const d = await api('/api/comic/channels'
+      + (TASK ? '?task=' + encodeURIComponent(TASK) : ''));
+    const sel = document.getElementById('sceneSkill');
+    const groups = {};
+    (d.channels || []).forEach(c => {
+      (groups[c.group] = groups[c.group] || []).push(c.name);
+    });
+    let h = '';
+    Object.keys(groups).forEach(g => {
+      h += '<optgroup label="' + esc(g) + '">'
+        + groups[g].map(n => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('')
+        + '</optgroup>';
+    });
+    sel.innerHTML = h;
+    const cur = d.current || '';
+    if (cur && !(d.channels || []).some(c => c.name === cur)) {
+      // 老任务用的渠道可能已经下架：留一项，别让它显示成别的渠道
+      sel.insertAdjacentHTML('afterbegin',
+        '<option value="' + esc(cur) + '">' + esc(cur) + '（不在清单里）</option>');
+    }
+    if (cur) sel.value = cur;
+  } catch (e) { /* 清单拉不到：下拉留空，参数卡照默认渠道走 */ }
+}
+
+async function changeChannel(skill) {
+  if (!skill) return;
+  try {
+    await api('/api/comic/channel', {task: TASK || '', skill});
+    _renderLoaded = null;
+    await loadRenderOpts(true);
+    toast('阶段一渠道：' + skill + '（只影响之后渲染的格）');
+  } catch (e) { toast(e.message, true); }
+}
+
+function channel() {
+  const el = document.getElementById('sceneSkill');
+  return el ? (el.value || '') : '';
+}
+
 async function loadRenderOpts(force) {
-  const key = TASK || '';
+  const sel = document.getElementById('sceneSkill');
+  const skill = sel ? (sel.value || '') : '';
+  const key = (TASK || '') + '|' + skill;
   if (!force && _renderLoaded === key) return;
   _renderLoaded = key;
   try {
-    const d = await api('/api/comic/render_opts'
-      + (TASK ? '?task=' + encodeURIComponent(TASK) : ''));
-    fillRenderForm(d.opts, d.resources);
+    const q = [];
+    if (TASK) q.push('task=' + encodeURIComponent(TASK));
+    if (skill) q.push('skill=' + encodeURIComponent(skill));
+    const d = await api('/api/comic/render_opts' + (q.length ? '?' + q.join('&') : ''));
+    if (d.skill) {
+      if (sel && sel.value !== d.skill) sel.value = d.skill;
+      document.getElementById('renderSkillName').textContent = d.skill;
+    }
+    fillRenderForm(d.opts, d.resources, d.caps);
     document.getElementById('renderMsg').textContent = _renderStateMsg(d);
   } catch (e) {
     document.getElementById('renderMsg').textContent = '参数加载失败：' + e.message;
@@ -668,83 +735,160 @@ function _num(id, label, val, min, max, step, w) {
     + '" value="' + (val == null ? '' : val) + '" style="width:' + (w || 80) + 'px">';
 }
 
-function fillRenderForm(opts, res) {
-  res = res || {};
-  const loras = opts.loras || [];
-  const n = Math.max(6, loras.length);
-  let h = '';
-  for (let i = 0; i < n; i++) {
-    const l = loras[i] || {name: '', strength: 0.8};
-    h += '<div class="row" style="margin-bottom:6px">'
-      + '<span style="color:var(--text-dim);font-size:12px;width:36px">槽 ' + (i + 1) + '</span>'
-      + '<select class="rlora" style="flex:1;min-width:220px">'
-      + '<option value="">（不使用）</option>'
-      + (res.loras || []).map(x =>
-          '<option value="' + esc(x) + '"' + (x === l.name ? ' selected' : '') + '>' + esc(x) + '</option>').join('')
-      + (l.name && !(res.loras || []).includes(l.name)
-          ? '<option value="' + esc(l.name) + '" selected>' + esc(l.name) + '（不在 ComfyUI 清单里）</option>' : '')
-      + '</select>'
-      + '<input class="rstr" type="number" min="0" max="2" step="0.05" value="' + l.strength
-      + '" style="width:76px" title="强度 0~2">'
-      + '</div>';
-  }
-  document.getElementById('loraRows').innerHTML = h;
+function _show(id, on) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = on ? '' : 'none';
+}
 
-  const b = opts.base || {}, hi = opts.hires || {};
-  document.getElementById('baseRow').innerHTML =
-    _num('rstepsB', '步数', b.steps, 1, 150, 1)
-    + _num('rcfgB', 'cfg', b.cfg, 0, 20, 0.1)
-    + _pick('rsampB', '采样器', res.samplers, b.sampler_name)
-    + _pick('rschB', '调度器', res.schedulers, b.scheduler, 110);
-  if (hi && Object.keys(hi).length) {
-    document.getElementById('hiresRow').style.display = 'flex';
-    document.getElementById('hiresRow').innerHTML =
-      _num('rstepsH', '步数', hi.steps, 1, 150, 1)
-      + _num('rcfgH', 'cfg', hi.cfg, 0, 20, 0.1)
-      + _num('rdenH', 'denoise', hi.denoise, 0, 1, 0.05)
-      + _pick('rsampH', '采样器', res.samplers, hi.sampler_name)
-      + _pick('rschH', '调度器', res.schedulers, hi.scheduler, 110);
-  } else {
-    document.getElementById('hiresRow').style.display = 'none';
+// 底图 → 预计出图。渠道自带的 hires / 2x 放大都按模板比例折算，改底图时同步变。
+function updateSizeHint() {
+  const el = document.getElementById('sizeHint');
+  const w = +document.getElementById('rpW').value || 0;
+  const h = +document.getElementById('rpH').value || 0;
+  if (!_caps || !_caps.width || !_caps.out_width || !w || !h) {
+    el.textContent = '';
+    return;
   }
+  const ow = Math.round(w * _caps.out_width / _caps.width / 8) * 8;
+  const oh = Math.round(h * _caps.out_height / _caps.height / 8) * 8;
+  el.textContent = '底图 ' + w + '×' + h + ' → 预计出图约 ' + ow + '×' + oh;
+}
+
+function fillRenderForm(opts, res, caps) {
+  res = res || {}; opts = opts || {}; caps = caps || {};
+  _caps = caps; _res = res;
+  const fam = caps.family || '';
+  const editable = caps.editable !== false;
+  const numPasses = caps.passes || 0;
+
+  // ── LoRA：只对模板里本来就有 LoRA 链的渠道显示
+  const loraBox = document.getElementById('loraRows');
+  if (caps.lora) {
+    const loras = opts.loras || [];
+    const n = Math.max(6, loras.length);
+    let h = '';
+    for (let i = 0; i < n; i++) {
+      const l = loras[i] || {name: '', strength: 0.8};
+      h += '<div class="row" style="margin-bottom:6px">'
+        + '<span style="color:var(--text-dim);font-size:12px;width:36px">槽 ' + (i + 1) + '</span>'
+        + '<select class="rlora" style="flex:1;min-width:220px">'
+        + '<option value="">（不使用）</option>'
+        + (res.loras || []).map(x =>
+            '<option value="' + esc(x) + '"' + (x === l.name ? ' selected' : '') + '>' + esc(x) + '</option>').join('')
+        + (l.name && !(res.loras || []).includes(l.name)
+            ? '<option value="' + esc(l.name) + '" selected>' + esc(l.name) + '（不在 ComfyUI 清单里）</option>' : '')
+        + '</select>'
+        + '<input class="rstr" type="number" min="0" max="2" step="0.05" value="' + l.strength
+        + '" style="width:76px" title="强度 0~2">'
+        + '</div>';
+    }
+    loraBox.style.display = 'block';
+    loraBox.innerHTML = h;
+  } else {
+    loraBox.style.display = 'none';
+    loraBox.innerHTML = '';
+  }
+
+  // ── 采样：editable=false（moss 4 步的 DMD 链）时只留分辨率
+  const b = opts.base || {}, hi = opts.hires || {};
+  document.getElementById('baseCap').style.display = editable ? '' : 'none';
+  document.getElementById('baseRow').style.display = editable ? 'flex' : 'none';
+  document.getElementById('baseNote').style.display = editable ? 'none' : 'block';
+  if (editable) {
+    document.getElementById('baseCap').textContent =
+      numPasses > 1 ? '第一段采样 · 出构图（denoise 固定 1）' : '采样 · 出构图';
+    document.getElementById('baseRow').innerHTML =
+      _num('rstepsB', '步数', b.steps, 1, 150, 1)
+      + _num('rcfgB', 'cfg', b.cfg, 0, 20, 0.1)
+      + _pick('rsampB', '采样器', res.samplers, b.sampler_name)
+      + _pick('rschB', '调度器', res.schedulers, b.scheduler, 110);
+  }
+
+  const showHires = editable && numPasses > 1;
+  document.getElementById('hiresCap').style.display = showHires ? '' : 'none';
+  document.getElementById('hiresRow').style.display = showHires ? 'flex' : 'none';
+  if (showHires) {
+    // batch 族（sd / miao）第二段只有步数和 denoise——节点上没有第二段的
+    // cfg / 采样器，给输入框反而是骗人。
+    document.getElementById('hiresRow').innerHTML = (fam === 'batch')
+      ? _num('rstepsH', '步数', hi.steps, 1, 150, 1)
+        + _num('rdenH', 'denoise', hi.denoise, 0, 1, 0.05)
+      : _num('rstepsH', '步数', hi.steps, 1, 150, 1)
+        + _num('rcfgH', 'cfg', hi.cfg, 0, 20, 0.1)
+        + _num('rdenH', 'denoise', hi.denoise, 0, 1, 0.05)
+        + _pick('rsampH', '采样器', res.samplers, hi.sampler_name)
+        + _pick('rschH', '调度器', res.schedulers, hi.scheduler, 110);
+  }
+
+  // ── 分辨率
   document.getElementById('rpW').value = opts.width;
   document.getElementById('rpH').value = opts.height;
+  updateSizeHint();
 
-  // 放大：latent 倍率 + 最终像素放大模型 + 跳过开关
+  // ── 放大：latent 倍率（有 LatentUpscale* 才显示）+ 最终像素放大（有才显示）
   const up = opts.upscale || {};
-  document.getElementById('rUpScale').value = up.scale_by == null ? 1.2 : up.scale_by;
-  const um = document.getElementById('rUpModel');
-  const upNames = (res.upscales || []).slice();
-  if (up.final_model && !upNames.includes(up.final_model)) upNames.unshift(up.final_model);
-  um.innerHTML = upNames.map(x =>
-    '<option value="' + esc(x) + '"' + (x === up.final_model ? ' selected' : '') + '>'
-    + esc(x) + '</option>').join('');
-  document.getElementById('rUpSkip').checked = !!up.final_skip;
+  const showLat = !!caps.upscale_latent, showFin = !!caps.upscale_final;
+  const showUp = showLat || showFin;
+  _show('upCap', showUp);
+  _show('upscaleRow', showUp);
+  ['upLatentLabel', 'rUpScale', 'upTimes'].forEach(id => _show(id, showLat));
+  ['rUpModel'].forEach(id => _show(id, showFin));
+  // sd 把最终放大写在 BatchPromptImageGenerator 节点里，没有独立节点可绕，
+  // 所以「跳过最终放大」只有真的存在那个节点时才给。
+  _show('upSkipLabel', showFin && !!caps.upscale_skip);
+  if (showLat) {
+    document.getElementById('rUpScale').value = up.scale_by == null ? 1.2 : up.scale_by;
+  }
+  if (showFin) {
+    const um = document.getElementById('rUpModel');
+    const upNames = (res.upscales || []).slice();
+    if (up.final_model && !upNames.includes(up.final_model)) upNames.unshift(up.final_model);
+    um.innerHTML = upNames.map(x =>
+      '<option value="' + esc(x) + '"' + (x === up.final_model ? ' selected' : '') + '>'
+      + esc(x) + '</option>').join('');
+    document.getElementById('rUpSkip').checked = !!up.final_skip;
+  }
 }
 
 function presetSize(w, h) {
   document.getElementById('rpW').value = w;
   document.getElementById('rpH').value = h;
+  updateSizeHint();
 }
 
 function collectRenderOpts() {
-  const loras = [];
-  document.querySelectorAll('#loraRows .row').forEach(r => {
-    loras.push({name: r.querySelector('select.rlora').value,
-                strength: parseFloat(r.querySelector('input.rstr').value)});
-  });
   const v = id => { const el = document.getElementById(id); return el ? el.value : ''; };
-  const out = {
-    loras,
-    base: {steps: v('rstepsB'), cfg: v('rcfgB'),
-           sampler_name: v('rsampB'), scheduler: v('rschB')},
-    width: v('rpW'), height: v('rpH')
-  };
-  if (document.getElementById('rstepsH'))
-    out.hires = {steps: v('rstepsH'), cfg: v('rcfgH'), denoise: v('rdenH'),
-                 sampler_name: v('rsampH'), scheduler: v('rschH')};
-  out.upscale = {scale_by: v('rUpScale'), final_model: v('rUpModel'),
-                 final_skip: document.getElementById('rUpSkip').checked};
+  const caps = _caps || {};
+  const out = {width: v('rpW'), height: v('rpH')};
+  // 没显示的字段**不提交**：normalize 会沿用 base 里的值。把看不见的那套一起
+  // 提交，等于把该渠道模板自带的配方（sd / miao 的 LoRA 链、moss 的步码）写成空。
+  if (caps.lora) {
+    const loras = [];
+    document.querySelectorAll('#loraRows .row').forEach(r => {
+      loras.push({name: r.querySelector('select.rlora').value,
+                  strength: parseFloat(r.querySelector('input.rstr').value)});
+    });
+    out.loras = loras;
+  }
+  if (caps.editable !== false) {
+    out.base = {steps: v('rstepsB'), cfg: v('rcfgB'),
+                sampler_name: v('rsampB'), scheduler: v('rschB')};
+    if ((caps.passes || 0) > 1) {
+      out.hires = (caps.family === 'batch')
+        ? {steps: v('rstepsH'), denoise: v('rdenH')}
+        : {steps: v('rstepsH'), cfg: v('rcfgH'), denoise: v('rdenH'),
+           sampler_name: v('rsampH'), scheduler: v('rschH')};
+    }
+  }
+  if (caps.upscale_latent || caps.upscale_final) {
+    const up = {};
+    if (caps.upscale_latent) up.scale_by = v('rUpScale');
+    if (caps.upscale_final) {
+      up.final_model = v('rUpModel');
+      if (caps.upscale_skip) up.final_skip = document.getElementById('rUpSkip').checked;
+    }
+    out.upscale = up;
+  }
   return out;
 }
 
@@ -758,7 +902,7 @@ async function saveRenderOpts(scope) {
       + '之后所有没单独存过参数的任务都照这套跑（本任务若清掉自己的参数也回落到它）。')) return;
   try {
     const d = await api('/api/comic/render_opts',
-                        {task: TASK, scope, opts: collectRenderOpts()});
+                        {task: TASK, scope, skill: channel(), opts: collectRenderOpts()});
     document.getElementById('renderMsg').textContent =
       (d.warnings && d.warnings.length ? '注意：' + d.warnings.join('；') + '。' : '')
       + (scope === 'global' ? '已存为全局默认，新任务照它跑'
@@ -770,13 +914,14 @@ async function saveRenderOpts(scope) {
 async function resetRenderOpts(scope) {
   scope = scope || 'task';
   if (scope === 'global') {
-    if (!confirm('清掉全局默认参数？\n\n之后没单独存过参数的任务会退回 anima-line 模板值。')) return;
+    if (!confirm('清掉全局默认参数？\n\n之后没单独存过参数的任务会退回该渠道的模板值。')) return;
   } else if (!TASK) {
     toast('当前没有任务', true);
     return;
   }
   try {
-    await api('/api/comic/render_opts', {task: TASK, scope, reset: true});
+    await api('/api/comic/render_opts',
+              {task: TASK, scope, skill: channel(), reset: true});
     await loadRenderOpts(true);
     toast(scope === 'global' ? '全局默认已清掉' : '本任务参数已恢复（回落到全局默认/模板）');
   } catch (e) { toast(e.message, true); }
@@ -1038,6 +1183,7 @@ function poll() { clearTimeout(TIMER); TIMER = setTimeout(async () => { await re
 // 参数卡无论如何先显示——它可能是全局默认/模板值，跟有没有任务无关。
 async function restoreSession() {
   await loadTasks();                  // 下拉先填好（一个任务都没有也要给个空选项）
+  await loadChannels();               // 渠道下拉同样先填好（没任务也能先挑渠道）
   let saved = null;
   try { saved = localStorage.getItem(LS_TASK); } catch (e) { }
   if (!saved) { loadRenderOpts(true); return; }
@@ -1117,6 +1263,7 @@ async function loadTaskUI(name, prefix) {
   // 写真有就画出来（2026-10-18 补）：原来这里只切卡片显隐、不填内容，切到
   // 一个跑过写真的任务会看到一张空网格。之后 applyMode 统一按模式决定谁露谁藏。
   renderPortraits(d.portraits || []);
+  await loadChannels();          // 渠道下拉 + 当前值（任务自己的 scene_skill）
   await loadRenderOpts(true);
   applyMode();
   syncTaskPick();
@@ -1222,6 +1369,7 @@ async function genPortrait() {
   try {
     const d = await api('/api/comic/portrait', {
       task: TASK || '', brief,
+      scene_skill: channel(),
       heroine: document.getElementById('heroine').value.trim(),
       n: +document.getElementById('panels').value || 4,
       provider: document.getElementById('prov').value,

@@ -2,7 +2,8 @@
 
 两级持久化（2026-10-18 用户提出「能不能长期保存某个参数作为默认」）：
 
-1. **任务级** `任务目录/render.json`——这一本专用，只影响本任务之后渲染的格；
+1. **任务级** `任务目录/render.json`（默认渠道）/ `render_<渠道>.json`——这一本
+   专用，只影响本任务之后渲染的格；
 2. **全局默认** `state/comic_render_defaults.json`——跨任务的那一份，新任务
    没存过就照它。取值优先级：**任务 > 全局默认 > 模板当前值**。
 
@@ -61,6 +62,12 @@ DEFAULT_SKILL = "anima-line"
 # 那个模块的常量，免得它哪天为 AI 工具改语义时把这条链路带歪）
 LORA_CLASSES = ("LoraLoader", "LoraLoaderModelOnly")
 
+# 底图 latent 节点（多渠道，2026-10-19）：anima/sd 是 EmptyLatentImage，
+# qwen 用 EmptySD3LatentImage，moss 用 EmptyFlux2LatentImage。
+# 只用于「老模板兜底」的识别；实际取节点走 `_latent_ids()`（按 Empty* 前缀）。
+LATENT_CLASSES = ("EmptyLatentImage", "EmptySD3LatentImage",
+                  "EmptyFlux2LatentImage")
+
 # 采样参数合法范围（超出钳位 + 回一句警告，不拒——这是给人填的表，不是 AI 闸门）
 STEPS_RANGE = (1, 150)
 CFG_RANGE = (0.0, 20.0)
@@ -86,29 +93,93 @@ def _sampler_pass(wf, nid):
     lat = _inputs(wf.get(nid)).get("latent_image")
     src = lat[0] if isinstance(lat, list) and lat else None
     ct = ((wf.get(src) or {}).get("class_type")) if src else None
-    if ct == "EmptyLatentImage":
+    if ct in LATENT_CLASSES or (ct or "").startswith("Empty"):
         return "base"
     if ct in ("LatentUpscaleBy", "LatentUpscale"):
         return "hires"
     return None
 
 
+def _family(nd):
+    """采样节点属于哪一族（多渠道路由用，2026-10-19）。
+
+    同一个「一段采样」在三种工作流里长得不一样：
+      - `KSampler` / `KSamplerAdvanced`：标准采样器，参数在节点上，两段就是两个节点；
+      - `BatchPromptImageGenerator`：**采样全在这个复合节点里**，它自己带
+        `hires_steps` / `hires_denoise` / `hires_width` / `hires_height`（sd、miao）；
+      - `SamplerCustomAdvanced`：moss 的 4 步 DMD 链，步数由适配器 step_codes
+        定死，节点上根本没有 steps 可改。
+    """
+    ct = (nd or {}).get("class_type")
+    if ct in ("KSampler", "KSamplerAdvanced"):
+        return "ks"
+    if ct in ("BatchPromptImageGenerator", "DualModelBatchPromptImageGenerator"):
+        return "batch"
+    if ct in ("SamplerCustomAdvanced",):
+        return "custom"
+    return None
+
+
 def _passes(wf):
-    """{'base': [节点 id...], 'hires': [...]}"""
+    """{'base': [节点 id...], 'hires': [...]}
+
+    batch 族的 hires 是节点内部字段，不算独立段；判断「有没有第二段」用
+    `_has_hires()`。
+    """
     out = {"base": [], "hires": []}
     for nid, nd in (wf or {}).items():
-        if (nd or {}).get("class_type") != "KSampler":
-            continue
-        p = _sampler_pass(wf, nid)
-        if p:
-            out[p].append(nid)
+        fam = _family(nd)
+        if fam == "ks":
+            p = _sampler_pass(wf, nid)
+            if p:
+                out[p].append(nid)
+        elif fam in ("batch", "custom"):
+            # custom（moss 的 DMD 链）也认成 base 段：步数改不了，但**尺寸**要能改，
+            # 而且不认它就等于「这个渠道没有采样节点」，面板会错显成可调。
+            out["base"].append(nid)
     return out
 
 
+def _batch_hires(wf):
+    """batch 族的第二段（节点自带 hires_*）→ 节点 id；没有返回 None。"""
+    for nid, nd in (wf or {}).items():
+        if _family(nd) == "batch":
+            inp = _inputs(nd)
+            if "hires_steps" in inp or "hires_denoise" in inp:
+                return nid
+    return None
+
+
+def _has_hires(wf):
+    """这份工作流有没有「第二段」可调。
+
+    ks 族看第二个 KSampler；batch 族看节点有没有 hires_*；custom 族没有。
+    """
+    if _passes(wf)["hires"]:
+        return True
+    return _batch_hires(wf) is not None
+
+
 def _latent_ids(wf):
+    """底图 latent 节点：EmptyLatentImage / EmptySD3LatentImage /
+    EmptyFlux2LatentImage 等（qwen 用 SD3 版、moss 用 Flux2 版）。
+
+    统一按「class_type 以 Empty 开头且带 width」认，免得每加一个渠道补一次名单。
+    batch 族没有独立 latent 节点，宽高在节点自己身上，由 `_size_hosts()` 一起返回。
+    """
     return [nid for nid, nd in (wf or {}).items()
-            if (nd or {}).get("class_type") == "EmptyLatentImage"
+            if str((nd or {}).get("class_type") or "").startswith("Empty")
             and "width" in _inputs(nd)]
+
+
+def _size_hosts(wf):
+    """宽高写在哪：独立 latent 节点 + batch 复合节点（sd/miao 的 width/height
+    就在它身上）。返回节点 id 列表。"""
+    ids = _latent_ids(wf)
+    for nid in _passes(wf)["base"]:
+        if _family(wf.get(nid)) == "batch" and "width" in _inputs(wf.get(nid)):
+            ids.append(nid)
+    return ids
 
 
 def _upscale_nodes(wf):
@@ -169,28 +240,137 @@ def _upscale_params(wf):
     }
 
 
+def _batch_hires_params(wf):
+    """batch 族（sd / miao）的第二段参数：节点上的 hires_steps / hires_denoise。"""
+    nid = _batch_hires(wf)
+    if not nid:
+        return {}
+    inp = _inputs(wf.get(nid))
+    out = {}
+    if "hires_steps" in inp:
+        out["steps"] = inp["hires_steps"]
+    if "hires_denoise" in inp:
+        out["denoise"] = inp["hires_denoise"]
+    return out
+
+
 def defaults(skill=DEFAULT_SKILL):
-    """anima-line 模板的当前配置 = 参数卡的默认值（用户没存过就照它显示）。"""
+    """这个渠道模板的当前配置 = 参数卡的默认值（用户没存过就照它显示）。
+
+    三种节点族都认（2026-10-19）：标准 KSampler 两段 / BatchPromptImageGenerator
+    自带 hires / moss 的 SamplerCustomAdvanced。
+    """
     sd = load_skill(skill) or {}
     wf = sd.get("workflow") or {}
     passes = _passes(wf)
-    lat_ids = _latent_ids(wf)
-    lat = _inputs(wf.get(lat_ids[0])) if lat_ids else {}
+    hosts = _size_hosts(wf)
+    lat = _inputs(wf.get(hosts[0])) if hosts else {}
+    base_nid = passes["base"][0] if passes["base"] else None
+    if passes["hires"]:
+        hires = _sampler_params(wf, passes["hires"][0], with_denoise=True)
+    else:
+        hires = _batch_hires_params(wf)
     return {
         "loras": _lora_slots(wf, passes["base"]),
-        "base": _sampler_params(wf, passes["base"][0] if passes["base"] else None),
-        "hires": _sampler_params(wf, passes["hires"][0] if passes["hires"] else None,
-                                 with_denoise=True),
+        "base": _sampler_params(wf, base_nid),
+        "hires": hires,
         "upscale": _upscale_params(wf),
-        "width": lat.get("width", 1024),
-        "height": lat.get("height", 1536),
+        "width": _i(lat.get("width"), 1024),
+        "height": _i(lat.get("height"), 1536),
     }
+
+
+def _batch_upscale(wf):
+    """batch 族把最终放大写在节点里（`upscale_model` 输入指向 UpscaleModelLoader），
+    没有独立的 ImageUpscaleWithModel 节点可绕。有就返回节点 id。"""
+    for nid in _passes(wf)["base"]:
+        if _family(wf.get(nid)) == "batch":
+            u = _inputs(wf.get(nid)).get("upscale_model")
+            if isinstance(u, list) and u:
+                return nid
+    return None
+
+
+def caps(workflow):
+    """这个渠道能调什么、会出多大 —— 参数卡按它渲染（2026-10-19 多渠道）。
+
+    返回：
+      family       'ks' / 'batch' / 'custom' / 'none'
+      passes       1 或 2（第二段能不能调）
+      editable     采样参数能不能改（moss 4 步的 custom 链是 False）
+      lora         有没有 LoRA 链可调
+      upscale_latent / upscale_final  两级放大的存在性
+      width/height       底图尺寸
+      out_width/out_height  按模板算出来的预计出图尺寸（最终像素放大按 2x 估）
+    """
+    wf = workflow or {}
+    passes = _passes(wf)
+    fam = _family(wf.get(passes["base"][0])) if passes["base"] else None
+    up = _upscale_nodes(wf)
+    hosts = _size_hosts(wf)
+    lat = _inputs(wf.get(hosts[0])) if hosts else {}
+    w0, h0 = _i(lat.get("width"), 0), _i(lat.get("height"), 0)
+
+    if fam == "batch" and _batch_hires(wf):
+        bi = _inputs(wf.get(_batch_hires(wf)))
+        ow = _i(bi.get("hires_width"), w0)
+        oh = _i(bi.get("hires_height"), h0)
+    else:
+        sy = 1.0
+        if up["latent"]:
+            sy = _f(_inputs(wf.get(up["latent"][0])).get("scale_by"), 1.0)
+        ow, oh = int(round(w0 * sy)), int(round(h0 * sy))
+    if up["final"] or _batch_upscale(wf):
+        # 本机挂的放大模型都是 2x（2x_Ani4Kv2 / 4x 的会在名字里写 4x，仍按 2x 保守估）
+        ow, oh = ow * 2, oh * 2
+
+    return {
+        "family": fam or "none",
+        "passes": 2 if _has_hires(wf) else (1 if passes["base"] else 0),
+        "editable": fam not in ("custom", None),
+        # LoRA **只让 ks 族可调**（2026-10-19）。sd / miao 的链是渠道配方的一部分
+        # （降对比、提饱和、表情风格），面板一露出来就会被全局默认里 anima 那 6 槽
+        # 覆盖掉；moss 没有链。宁可少一个旋钮，也不让人一键把渠道配方拆了。
+        "lora": fam == "ks" and any(
+            (nd or {}).get("class_type") in LORA_CLASSES for nd in wf.values()),
+        "upscale_latent": bool(up["latent"]),
+        # batch 族把最终放大写在节点里（sd 的 `upscale_model` 输入），没有独立的
+        # ImageUpscaleWithModel 节点可绕，所以「跳过最终放大」只在有那个节点时给。
+        "upscale_final": bool(up["final"]) or (
+            fam == "batch" and _batch_upscale(wf) is not None),
+        "upscale_skip": bool(up["final"]),
+        "width": w0,
+        "height": h0,
+        "out_width": ow,
+        "out_height": oh,
+    }
+
+
+def caps_of(skill):
+    """按 skill 名取 caps（读不到模板 = 空 caps，前端当「这个渠道没参数」）。"""
+    sd = load_skill(skill) or {}
+    return caps(sd.get("workflow") or {})
 
 
 # ─── 存取 ───────────────────────────────────────────────
 
-def path_of(task_dir):
-    return os.path.join(task_dir, RENDER_FILE)
+def _safe_name(skill):
+    """渠道名能当文件名用（skill id 就带 - 和 _，别的一律剔掉）。"""
+    return "".join(c for c in str(skill or "")
+                   if c.isalnum() or c in "-_.").strip(".")
+
+
+def path_of(task_dir, skill=DEFAULT_SKILL):
+    """**这个渠道**的参数文件。
+
+    默认渠道沿用 `render.json`（老任务的文件不用迁）；别的渠道各存各的
+    （2026-10-19）。共用一个文件的后果很具体：anima 的 20 步 / hires 20 步 /
+    latent ×1.2 会整份套到 miao 的 45 步模型上，切一次渠道图就废一批。
+    """
+    sk = _safe_name(skill)
+    if not sk or sk == DEFAULT_SKILL:
+        return os.path.join(task_dir, RENDER_FILE)
+    return os.path.join(task_dir, "render_%s.json" % sk)
 
 
 def defaults_path():
@@ -198,19 +378,55 @@ def defaults_path():
     return state_path(DEFAULTS_FILE)
 
 
-def load_defaults(skill=DEFAULT_SKILL):
-    """读全局默认参数；没存过 / 读坏了返回 None（None = 不参与叠加）。"""
+def _read_defaults_raw():
+    """全局默认文件原样读出来；没有 / 读坏 → {}。"""
     fp = defaults_path()
     if not os.path.isfile(fp):
-        return None
+        return {}
     try:
         with open(fp, "r", encoding="utf-8") as f:
-            saved = json.load(f)
+            data = json.load(f)
     except (OSError, ValueError) as e:
         log.warning("全局渲染参数读不出来（%s），按模板默认值", e)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _is_flat(data):
+    """老格式：整个文件就是一份 opts（2026-10-13 ~ 10-19 只有 anima-line 时）。
+
+    多渠道之后按渠道分键存（`{"anima-line": {...}, "miao": {...}}`），否则
+    anima 的步数/放大倍率会盖到 krea2、miao 头上去（2026-10-19 实测：krea2
+    模板 latent 放大是 2.0，被全局默认的 1.2 盖掉，出图尺寸少一半）。
+    """
+    return any(k in (data or {}) for k in ("width", "height", "base", "loras",
+                                           "hires", "upscale"))
+
+
+def has_defaults(skill=DEFAULT_SKILL):
+    """这个渠道有没有存过全局默认。"""
+    data = _read_defaults_raw()
+    if not data:
+        return False
+    if _is_flat(data):
+        return skill == DEFAULT_SKILL
+    return isinstance(data.get(skill), dict)
+
+
+def load_defaults(skill=DEFAULT_SKILL):
+    """读**这个渠道**的全局默认参数；没存过 / 读坏了返回 None（None = 不参与叠加）。
+
+    老格式文件只认默认渠道（anima-line）：那时候全局默认就是给它存的，套到别的
+    渠道上会串参数。
+    """
+    data = _read_defaults_raw()
+    if not data:
         return None
+    if _is_flat(data):
+        saved = data if skill == DEFAULT_SKILL else None
+    else:
+        saved = data.get(skill)
     if not isinstance(saved, dict):
-        log.warning("全局渲染参数不是对象，按模板默认值")
         return None
     opts, errors, _w = normalize(saved, base=defaults(skill))
     if errors:
@@ -221,25 +437,38 @@ def load_defaults(skill=DEFAULT_SKILL):
     return opts
 
 
-def save_defaults(opts):
-    """存全局默认参数（所有没存过 render.json 的任务都照它跑）。"""
-    opts, errors, _w = normalize(opts)
+def save_defaults(opts, skill=DEFAULT_SKILL):
+    """存这个渠道的全局默认参数（该渠道没存过 render.json 的任务都照它跑）。"""
+    opts, errors, _w = normalize(opts, base=defaults(skill))
     if errors:
         raise ValueError("；".join(errors))
     fp = defaults_path()
+    data = _read_defaults_raw()
+    if _is_flat(data):          # 老格式：把这份归到默认渠道名下再升级
+        data = {DEFAULT_SKILL: data}
+    data[skill] = opts
     os.makedirs(os.path.dirname(fp), exist_ok=True)
     with open(fp, "w", encoding="utf-8") as f:
-        json.dump(opts, f, ensure_ascii=False, indent=1)
+        json.dump(data, f, ensure_ascii=False, indent=1)
     return opts
 
 
-def reset_defaults():
-    """删掉全局默认参数 → 回到模板值。"""
+def reset_defaults(skill=None):
+    """删掉全局默认参数 → 回到模板值。给了 skill 只删那一个渠道的。"""
     fp = defaults_path()
-    if os.path.isfile(fp):
-        os.remove(fp)
-        return True
-    return False
+    if not os.path.isfile(fp):
+        return False
+    data = _read_defaults_raw()
+    if skill and data and not _is_flat(data):
+        if skill not in data:
+            return False
+        data.pop(skill, None)
+        if data:
+            with open(fp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=1)
+            return True
+    os.remove(fp)
+    return True
 
 
 def load(task_dir, skill=DEFAULT_SKILL):
@@ -247,11 +476,16 @@ def load(task_dir, skill=DEFAULT_SKILL):
 
     两级文件都是「覆盖」语义：全局默认先叠在模板上，任务级再叠在它上面。
     读坏不炸：那是用户手改坏的文件，退回下一级照常出图，比整本漫画卡死强。
+
+    ⚠️ 不要在这里做「LoRA 名字不在模板里就丢掉」这种收敛（2026-10-19 试过又
+    撤了）：模板里当然不会有用户自己训的角色 LoRA，一过滤就把最常用的功能丢
+    了。跨渠道串参数靠**存取层**解决——任务级 `render_<渠道>.json`、全局默认
+    按渠道分键，两处都不共用文件，就没有「anima 的槽跑到 krea2 上」这回事。
     """
     base = load_defaults(skill) or defaults(skill)
     if not task_dir:
         return base
-    fp = path_of(task_dir)
+    fp = path_of(task_dir, skill)
     if not os.path.isfile(fp):
         return base
     try:
@@ -271,19 +505,20 @@ def load(task_dir, skill=DEFAULT_SKILL):
     return opts
 
 
-def save(task_dir, opts):
+def save(task_dir, opts, skill=DEFAULT_SKILL):
+    """存**这个渠道**的任务级参数（别的渠道那份不动）。"""
     opts, errors, _w = normalize(opts)
     if errors:
         raise ValueError("；".join(errors))
     os.makedirs(task_dir, exist_ok=True)
-    with open(path_of(task_dir), "w", encoding="utf-8") as f:
+    with open(path_of(task_dir, skill), "w", encoding="utf-8") as f:
         json.dump(opts, f, ensure_ascii=False, indent=1)
     return opts
 
 
-def reset(task_dir):
-    """删掉 render.json → 回到模板默认值。"""
-    fp = path_of(task_dir)
+def reset(task_dir, skill=DEFAULT_SKILL):
+    """删掉这个渠道的任务级参数 → 回到全局默认 / 模板默认值。"""
+    fp = path_of(task_dir, skill)
     if os.path.isfile(fp):
         os.remove(fp)
         return True
@@ -518,6 +753,16 @@ def _set_sampler(wf, nid, params):
             inp[k] = params[k]
 
 
+def _set_batch_hires(wf, nid, params):
+    """BatchPromptImageGenerator 的第二段：字段名带 hires_ 前缀，只认步数和
+    denoise（这个节点没有第二段的 cfg / 采样器可调）。"""
+    inp = _inputs(wf.get(nid))
+    if "steps" in params and "hires_steps" in inp:
+        inp["hires_steps"] = params["steps"]
+    if "denoise" in params and "hires_denoise" in inp:
+        inp["hires_denoise"] = params["denoise"]
+
+
 def _apply_upscale(wf, up):
     """两级放大覆盖：latent 倍率 / 最终放大模型 / 跳过最终放大。
 
@@ -568,7 +813,12 @@ def apply(workflow, opts):
     wf = copy.deepcopy(workflow or {})
     if not wf:
         return wf
-    n_lora = _rebuild_loras(wf, (opts or {}).get("loras") or [])
+    # LoRA 只对**模板里本来就有 LoRA 链**的渠道生效（2026-10-19 多渠道）。
+    # 全局默认里存的是 anima 那 6 槽；切到 sd / miao / qwen 这些没有链的渠道时
+    # 若照旧重建，会往 SDXL checkpoint 链上硬塞 LoraLoaderModelOnly（要 clip
+    # 输出、加载器没这个槽），提交直接被 ComfyUI 拒。
+    n_lora = _rebuild_loras(wf, (opts or {}).get("loras") or []) \
+        if caps(wf)["lora"] else 0
     passes = _passes(wf)
     base_p = (opts or {}).get("base") or {}
     hires_p = (opts or {}).get("hires") or {}
@@ -576,11 +826,25 @@ def apply(workflow, opts):
         _set_sampler(wf, nid, base_p)
     for nid in passes["hires"]:
         _set_sampler(wf, nid, hires_p)
+    if hires_p:
+        bh = _batch_hires(wf)
+        if bh:
+            _set_batch_hires(wf, bh, hires_p)
     w = _i((opts or {}).get("width"), 0)
     h = _i((opts or {}).get("height"), 0)
     if w and h:
-        for nid in _latent_ids(wf):
+        for nid in _size_hosts(wf):
             inp = _inputs(wf[nid])
+            ow, oh = _i(inp.get("width"), w), _i(inp.get("height"), h)
+            # batch 族的第二段尺寸是**写死的数值**（sd 720×1280→1440×2560、
+            # miao 1024×1536→1536×2304），底图一改必须等比跟改，否则画幅被拉伸。
+            if ow and oh and (ow, oh) != (w, h) and "hires_width" in inp:
+                rx, ry = w / float(ow), h / float(oh)
+                hw = _i(inp.get("hires_width"), 0)
+                hh = _i(inp.get("hires_height"), 0)
+                if hw and hh:
+                    inp["hires_width"] = max(8, int(round(hw * rx)) // 8 * 8)
+                    inp["hires_height"] = max(8, int(round(hh * ry)) // 8 * 8)
             inp["width"], inp["height"] = w, h
     n_up = _apply_upscale(wf, (opts or {}).get("upscale") or {})
     log.info("渲染参数已应用：LoRA %d 槽，base %s步/%s，hires %s步/%s，放大 %s，%d×%d",
