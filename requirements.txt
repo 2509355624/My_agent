@@ -1,19 +1,20 @@
+# 核心依赖：装完就能跑「通用助手 + 生图台 + 漫画台 + 造卡台」。
+# 安装：双击 安装依赖.bat，或
+#   .venv\Scripts\python.exe -m pip install -r requirements.txt
 flask>=2.0
 requests>=2.28
 python-dotenv>=1.0
-duckduckgo-search>=5.0
+duckduckgo-search>=5.0,<9
 
 # 图片处理：读群里的图 / 表情包打标 / 生图发出去前转 JPEG 或校验原图
 Pillow>=10.0
-
-# RAG 向量知识库（search_kb / ingest_kb / list_kb / delete_kb / chunk_document）
-# 首次调用会下载 BGE-M3 模型（约 2GB），不想用知识库可以不装
-chromadb>=0.5.0
-sentence-transformers>=3.0
-torch>=2.0
-modelscope>=1.9
 
 # 测试（tests/）用标准库 unittest 编写，无需额外依赖：
 #   python -m unittest discover -s tests -v
 # 若想用 pytest 运行，再单独安装：
 # pytest>=7.0
+
+# ⚠️ RAG 向量知识库（search_kb / ingest_kb 那几个工具）**不在这里**。
+#    chromadb + sentence-transformers + torch 装完约 2~3 GB，多数人用不上；
+#    没装的时候这些工具根本不注册（见 app/config.py 的 rag_enabled）。
+#    想用就另外装 requirements-rag.txt。

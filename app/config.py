@@ -332,7 +332,42 @@ DOUBAO_SEARCH_ENDPOINT = os.getenv("DOUBAO_SEARCH_ENDPOINT",
 # 避免 LLM 白白尝试调用一个必然失败的工具
 ENABLE_IMAGE_GEN = os.getenv("ENABLE_IMAGE_GEN", "true").lower() not in ("0", "false", "no")
 
+
+def rag_enabled():
+    """RAG 向量知识库能不能用（2026-10-19）。三态：
+
+        ENABLE_RAG 未配置 → 按「chromadb 能不能 import」自判（装了就有）
+        ENABLE_RAG=1/0    → 强制开 / 强制关
+
+    为什么要这一层：chromadb + sentence-transformers + torch 装完 2~3 GB，
+    很多人只要生图和助手、根本不想要知识库。`tools/registry.py` 原来无条件注册
+    kb / preset / memory 三套工具，没装的机器一调就拉起 rag_daemon → ImportError。
+    现在没装就整套不注册，模型也看不见这些工具。
+    """
+    raw = os.getenv("ENABLE_RAG", "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    try:
+        import chromadb  # noqa: F401
+    except Exception:
+        return False
+    return True
+
 COMFYUI_URL = os.getenv("COMFYUI_URL", "http://127.0.0.1:8188")
+
+# 默认生图渠道（2026-10-19）：用户没点名渠道、模型也没填 skill 时落这里。
+#
+# 为什么要做成配置：`skills/` 里没装的渠道等于不存在，写死一个名字就会让
+# 「没点名渠道」的每一张图都去找一个不存在的 workflow 报错。默认值是 silver
+# （本机一直这么用），把项目打包给别人时，对方只要在 .env 里改成他实际有的
+# 那个渠道（比如 anima-line）即可，代码不用动。
+#
+# ⚠️ 消费方有三处，都读这个常量：`direct_gen._FALLBACK_SKILL`、
+# `generate_image.T2I_DEFAULT_SKILL`、`card_maker.COVER_SKILL`。改默认渠道的
+# 时候记得同步检查模板里对「默认渠道」的描述（见 direct_gen 里那条老注释）。
+IMAGE_DEFAULT_SKILL = os.getenv("IMAGE_DEFAULT_SKILL", "silver").strip() or "silver"
 
 # ComfyUI 的 output 目录，**只服务于「下载兜底」**：图其实早就写好在磁盘上了，
 # 被掐掉的只是 HTTP 那一跳（RAM 守卫重启 ComfyUI 时撞上下载，实测两次丢图都

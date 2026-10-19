@@ -1,0 +1,18 @@
+# ── RAG 向量知识库（可选）──────────────────────────────
+#
+# 不装完全不影响：通用助手、生图台、漫画台、造卡台都能正常跑。
+# 只有 search_kb / ingest_kb / list_kb / delete_kb / chunk_document 这几个
+# 工具需要它，没装的时候它们不会被注册（模型也看不见）。
+#
+# 安装（约 2~3 GB，首次启动会下载 BGE-M3 嵌入模型约 2 GB）：
+#   .venv\Scripts\python.exe -m pip install -r requirements-rag.txt
+#
+# 装完在 .env 里把 ENABLE_RAG 设成 1（留空表示自动检测，装了就是开）。
+# 没有独立显卡就把 RAG_EMBED_DEVICE 改成 cpu —— 慢一点，但不用装 CUDA 版 torch。
+
+-r requirements.txt
+
+chromadb>=0.5.0
+sentence-transformers>=3.0
+torch>=2.0
+modelscope>=1.9

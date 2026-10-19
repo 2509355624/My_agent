@@ -71,8 +71,13 @@ if ENABLE_IMAGE_GEN:
 
 # QQ 主动推送工具：只有开了 QQ 接入才注册。没配 QQ 的机器不该让模型看见
 # 一个必然失败的工具（与 ENABLE_IMAGE_GEN 同一取舍）
-from app.config import QQ_ENABLE
-if QQ_ENABLE:
+from app.config import QQ_ENABLE, rag_enabled
+
+# RAG 是否可用（2026-10-19）：默认识别本机装没装 chromadb，ENABLE_RAG 可强制开关。
+# 没装就整套 RAG 工具都不注册——注册一个必然失败的工具，模型会反复去试。
+_HAS_RAG = rag_enabled()
+
+if QQ_ENABLE and _HAS_RAG:
     from app.tools.normal.send_qq_message import tool as _send_qq_tool
     register_tool(**_send_qq_tool)
     from app.tools.normal.send_sticker import tool as _send_sticker_tool
@@ -161,61 +166,67 @@ register_tool(**_doc_info_tool)
 register_tool(**_doc_read_tool)
 register_tool(**_doc_search_tool)
 
-# ─── RAG 知识库工具 ───────────────────────────────────
-from app.tools.rag.kb_tools import (
-    TOOL_SCHEMA as _KB_SCHEMA,
-    search_kb as _search_kb_fn,
-    ingest_kb as _ingest_kb_fn,
-    list_kb as _list_kb_fn,
-    delete_kb as _delete_kb_fn,
-    delete_entries as _delete_entries_fn,
-    chunk_document as _chunk_doc_fn,
-)
+# ─── RAG 知识库工具（可选件）─────────────────────────
+#
+# chromadb + sentence-transformers + torch 装完 2~3 GB，很多人不想要知识库。
+# 没装就让这些工具整个不出现（见 `config.rag_enabled()`），
+# 否则模型会对着一个必然失败的工具反复调用。
+if _HAS_RAG:
+    # ─── RAG 知识库工具 ───────────────────────────────────
+    from app.tools.rag.kb_tools import (
+        TOOL_SCHEMA as _KB_SCHEMA,
+        search_kb as _search_kb_fn,
+        ingest_kb as _ingest_kb_fn,
+        list_kb as _list_kb_fn,
+        delete_kb as _delete_kb_fn,
+        delete_entries as _delete_entries_fn,
+        chunk_document as _chunk_doc_fn,
+    )
 
-# search_kb
-register_tool(
-    name="search_kb",
-    description=_KB_SCHEMA["search_kb"]["function"]["description"],
-    function=_search_kb_fn,
-    parameters=_KB_SCHEMA["search_kb"]["function"]["parameters"],
-)
+    # search_kb
+    register_tool(
+        name="search_kb",
+        description=_KB_SCHEMA["search_kb"]["function"]["description"],
+        function=_search_kb_fn,
+        parameters=_KB_SCHEMA["search_kb"]["function"]["parameters"],
+    )
 
-# ingest_kb
-register_tool(
-    name="ingest_kb",
-    description=_KB_SCHEMA["ingest_kb"]["function"]["description"],
-    function=_ingest_kb_fn,
-    parameters=_KB_SCHEMA["ingest_kb"]["function"]["parameters"],
-)
+    # ingest_kb
+    register_tool(
+        name="ingest_kb",
+        description=_KB_SCHEMA["ingest_kb"]["function"]["description"],
+        function=_ingest_kb_fn,
+        parameters=_KB_SCHEMA["ingest_kb"]["function"]["parameters"],
+    )
 
-# list_kb
-register_tool(
-    name="list_kb",
-    description=_KB_SCHEMA["list_kb"]["function"]["description"],
-    function=_list_kb_fn,
-    parameters=_KB_SCHEMA["list_kb"]["function"].get("parameters", {"type": "object", "properties": {}}),
-)
+    # list_kb
+    register_tool(
+        name="list_kb",
+        description=_KB_SCHEMA["list_kb"]["function"]["description"],
+        function=_list_kb_fn,
+        parameters=_KB_SCHEMA["list_kb"]["function"].get("parameters", {"type": "object", "properties": {}}),
+    )
 
-# delete_kb
-register_tool(
-    name="delete_kb",
-    description=_KB_SCHEMA["delete_kb"]["function"]["description"],
-    function=_delete_kb_fn,
-    parameters=_KB_SCHEMA["delete_kb"]["function"]["parameters"],
-)
+    # delete_kb
+    register_tool(
+        name="delete_kb",
+        description=_KB_SCHEMA["delete_kb"]["function"]["description"],
+        function=_delete_kb_fn,
+        parameters=_KB_SCHEMA["delete_kb"]["function"]["parameters"],
+    )
 
-# delete_entries
-register_tool(
-    name="delete_entries",
-    description=_KB_SCHEMA["delete_entries"]["function"]["description"],
-    function=_delete_entries_fn,
-    parameters=_KB_SCHEMA["delete_entries"]["function"]["parameters"],
-)
+    # delete_entries
+    register_tool(
+        name="delete_entries",
+        description=_KB_SCHEMA["delete_entries"]["function"]["description"],
+        function=_delete_entries_fn,
+        parameters=_KB_SCHEMA["delete_entries"]["function"]["parameters"],
+    )
 
-# chunk_document
-register_tool(
-    name="chunk_document",
-    description=_KB_SCHEMA["chunk_document"]["function"]["description"],
-    function=_chunk_doc_fn,
-    parameters=_KB_SCHEMA["chunk_document"]["function"]["parameters"],
-)
+    # chunk_document
+    register_tool(
+        name="chunk_document",
+        description=_KB_SCHEMA["chunk_document"]["function"]["description"],
+        function=_chunk_doc_fn,
+        parameters=_KB_SCHEMA["chunk_document"]["function"]["parameters"],
+    )

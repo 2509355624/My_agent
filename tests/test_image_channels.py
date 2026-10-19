@@ -1668,15 +1668,22 @@ class ToolDescriptionBudgetTest(unittest.TestCase):
         self.assertNotIn("仍然默认 anima_clear**，别自作主张上 hd_", desc)
 
     def test_skill_param_does_not_relist_channels(self):
-        """`skill` 参数不再重复列 16 个渠道。
+        """`skill` 参数不逐个列 4 个 hd_3_ 画风。
 
         `Available Skills` 里已经逐行给出一行摘要（渠道名 + 画风 + 何时用），
-        参数描述里再抄一遍是纯浪费。留一句「见 Available Skills」+ 上限。
+        参数描述里再把 `hd_3_soft / hd_3_gloss / hd_3_curvy` 抄一遍是纯浪费，
+        这一族压成 `hd_3_<画风>（4 个）`。
+
+        **2026-10-19：上限 400 → 520。** 可选值原来是一份手写枚举，现在改成
+        `skills/` 里实际装了什么就生成什么（见 `generate_image._installed_channels`），
+        为的是「导出给别人的包只带一个渠道时，模型不会去点没装的名字」。
+        机器生成的清单比手写的长几十字，但不再需要人来同步——上限留着的目的是
+        防止又写回长散文，不是防止列举渠道本身。
         """
         param = self._tool()["parameters"]["properties"]["skill"]["description"]
         self.assertIn("Available Skills", param,
                       "应该把渠道清单指到 Available Skills 那份一行摘要")
-        self.assertLess(len(param), 400,
+        self.assertLess(len(param), 520,
                         "skill 参数又涨回 %d 字（精简前是 947）" % len(param))
         # 至少别把四个画风全名逐一抄一遍
         for ch in ("hd_3_soft", "hd_3_gloss", "hd_3_curvy"):

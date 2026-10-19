@@ -69,7 +69,7 @@ import re
 import time
 
 from app import llm
-from app.config import state_path
+from app.config import IMAGE_DEFAULT_SKILL, state_path
 
 log = logging.getLogger("card")
 
@@ -499,7 +499,7 @@ def plain(card):
 # latent 放大调成 1.0、跳过最终像素放大，出图就是**原尺寸**——silver / anima
 # 默认是 1024×1536 → ×1.2 → 2x = 2458×3686，直接拿来当封面会被裁掉大半。
 COVER_W, COVER_H = 864, 1536
-COVER_SKILL = "silver"
+COVER_SKILL = IMAGE_DEFAULT_SKILL
 
 # 封面刻意降步数（2026-10-19 实测）：silver 模板是 20+20 步，同一条提示词同
 # 一个 seed 跑 864×1536 要 261 秒，改 10+8 步只要 24 秒，肉眼看画质几乎一样

@@ -98,3 +98,6 @@ _corpus_dump.txt
 # 漫画工作流的运行产物（comics/<任务号>/ 里的剧本、原图、成品、state.json）。
 # 属本机私有数据：单张 silver 原图约 7MB，一跑就是几十上百 MB，不入库。
 comics/
+
+# 导出给别人的包（含 zip，别进仓库）
+dist/

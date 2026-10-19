@@ -76,7 +76,7 @@ import os
 import re
 
 from app import image_jobs, image_log, llm, qq_api, random_tags
-from app.config import QQ_GROUP_KEYWORDS
+from app.config import IMAGE_DEFAULT_SKILL, QQ_GROUP_KEYWORDS
 from app.confirm_gate import _ATTRIBUTION_RE
 from app.skills import list_skills, load_skill
 
@@ -126,7 +126,7 @@ _FIXED_SKILLS = ("image_gen_v1", "image_gen_v1_hires", "nffa",
 # 默认分支永远走不到，代码改了等于没改。
 #
 # silver / jank 不进 `_FIXED_SKILLS`，由 `_allowed_skills()` 现场扫 skills/ 目录放行。
-_FALLBACK_SKILL = "silver"
+_FALLBACK_SKILL = IMAGE_DEFAULT_SKILL
 
 # 图生图（模型填了 `source_image: 1`）却判不出渠道时的落点（2026-10-17）。
 # 用户 10-06 的口径：「Anima 的图生图没有 Qwen 好用，图生图只需要一个 Qwen
@@ -1128,7 +1128,7 @@ _MASTER_TEMPLATE = (
     "没点名渠道就留空（看上面【渠道 skill】），细节自己补。\n"
     "\n"
     "【渠道 skill】**用户点名渠道才填**（silver / silver-hd / nai / sd / 三档…）；"
-    "他没点名就**留空**——代码会走默认渠道 silver（单张快出），你不用管。\n"
+    "他没点名就**留空**——代码会走默认渠道 " + _FALLBACK_SKILL + "，你不用管。\n"
     "画风四种：clear 清晰 / soft 柔和 / gloss 油亮 / curvy 肉感\n"
     "尺寸只剩一档（2026-10-07 起快档 / 最小档 / 二档全取消），id = hd_3_<画风>：\n"
     "- 「anima」「三档」「高清」都是它，末尾带 2x 像素放大 → 3072×4608，最慢\n"

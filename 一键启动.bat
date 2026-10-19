@@ -1,13 +1,6 @@
 @echo off
+setlocal
 cd /d "%~dp0"
-rem --- venv python auto-detect: desktop my_env / laptop confyui_env ---
-set "PY="
-if not defined PY if exist "D:\AI\my_env\Scripts\python.exe" set "PY=D:\AI\my_env\Scripts\python.exe"
-if not defined PY if exist "D:\AI\confyui_env\Scripts\python.exe" set "PY=D:\AI\confyui_env\Scripts\python.exe"
-if not defined PY if exist "D:\AI\comfy_env\Scripts\python.exe" set "PY=D:\AI\comfy_env\Scripts\python.exe"
-if not defined PY set "PY=python"
-
-rem stable window title: the all-in-one launcher kills the old web window by it
 title AGENT-WEB
 
 echo.
@@ -16,23 +9,49 @@ echo   My Agent - Personal AI Assistant
 echo ==================================================
 echo.
 
-echo [1/2] Kill old process on port 5174...
+rem ---- 找 Python：项目自带虚拟环境优先，其次系统 PATH ----
+set "PY="
+if exist "%~dp0.venv\Scripts\python.exe" set "PY=%~dp0.venv\Scripts\python.exe"
+if not defined PY if exist "%~dp0venv\Scripts\python.exe" set "PY=%~dp0venv\Scripts\python.exe"
+if not defined PY (
+  where python >nul 2>nul && set "PY=python"
+)
+if not defined PY (
+  echo [X] 没找到 Python。
+  echo     装一个 Python 3.10 以上，安装时勾选 "Add python.exe to PATH"，
+  echo     然后双击 安装依赖.bat，再回来双击这个。
+  echo.
+  pause
+  exit /b 1
+)
+
+rem ---- 依赖自检：flask 不在就别往下跑 ----
+"%PY%" -c "import flask" >nul 2>nul
+if errorlevel 1 (
+  echo [X] 依赖还没装 ^(缺 flask^)。
+  echo     先双击 安装依赖.bat，装完再运行这个。
+  echo.
+  pause
+  exit /b 1
+)
+
+echo [1/2] 清理占用 5174 端口的旧进程...
 for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":5174" ^| findstr "LISTENING"') do (
-  echo       Killing PID %%a
+  echo       结束 PID %%a
   taskkill /PID %%a /F >nul 2>&1
   ping -n 2 127.0.0.1 >nul
   goto start_server
 )
-echo       No old process
+echo       没有旧进程
 
 :start_server
 echo.
-echo [2/2] Starting agent...
-start "" "http://localhost:5174"
-%PY% agent.py
-if errorlevel 1 (
-  echo.
-  echo ERROR: Failed to start agent.
-)
+echo [2/2] 启动中，浏览器会自动打开 http://localhost:5174
+echo       关掉这个窗口 = 停止服务。
 echo.
+start "" "http://localhost:5174"
+"%PY%" agent.py
+
+echo.
+echo 服务已退出。日志见 logs\agent.log
 pause

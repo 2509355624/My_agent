@@ -12,7 +12,8 @@ from app import comfy_src, image_jobs
 from app import char_guard
 from app import nai as nai_mod
 from app.cancel import Cancelled, is_cancelled
-from app.config import COMFYUI_URL, DISABLED_IMAGE_SKILLS, QQ_AGENT_ID
+from app.config import (COMFYUI_URL, DISABLED_IMAGE_SKILLS,
+                        IMAGE_DEFAULT_SKILL, QQ_AGENT_ID)
 from app.skills import load_skill, load_workflow
 
 log = logging.getLogger("generate_image")
@@ -331,7 +332,7 @@ def _t2i_guard(is_i2i):
 # 步数/CFG/采样器/放大倍率**都是他随手调的旋钮，别把这里的数字当契约**。
 # 历史：更早有过「单底模 anima」「双底模 anima_2」「anima_realskin / anima 两个渠道」
 # 等阶段，都已随本次切换归档到 `skills/_archive_20260930/`。
-T2I_DEFAULT_SKILL = "silver"
+T2I_DEFAULT_SKILL = IMAGE_DEFAULT_SKILL
 
 
 # ─── QQ 侧生图开关 ───────────────────────────────────
@@ -1185,11 +1186,98 @@ def _enqueue_nai(prompt, target, target_id, nai_i2i=None, intent=None,
                        quota_tail=quota_tail)
 
 
+# ── 渠道清单：按 skills/ 里**实际装的目录**生成（2026-10-19）────────────
+#
+# 原来这里写死一份枚举。导出给别人的包只带一个渠道时，模型会照那份清单点名
+# `silver` / `moss` / `hd_3_clear` 这些没装的名字——实测三个都直接返回
+# 「错误: 找不到 Skill」，白烧一轮；它还会照 description 自我介绍「也有
+# NovelAI / 高画质档」。改成按目录生成：装了什么就说什么，删掉的渠道自动
+# 从描述里消失（顺带治了「描述和实际漂移」这个老毛病）。
+#
+# 两族仍按「族」压缩，不逐个列：
+#   - `hd_3_` 的 4 个画风在 Available Skills 里有逐条摘要，参数里再抄一遍是浪费
+#     （见 test_skill_param_does_not_relist_channels）；
+#   - `krea2-` 有 13 条，逐个列会把参数说明撑爆。
+# 族里一个都没装时，这一族整条不出现。
+_FAMILY_TEXT = (("hd_3_", "`hd_3_<画风>`"), ("krea2-", "krea2系"))
+
+
+def _installed_channels():
+    """本机能点名的生图渠道 = `skills/` 下有 workflow.json 的目录 + 配了 key 的云端渠道。
+
+    `list_skills()` 已经挡掉了 `_` 开头的内部渠道和 ARCHIVED 里已下架的那批，
+    这里再要求「有 workflow.json」，把 prompt 类 skill（anima-tags / writing）
+    排除在外——它们不是渠道。
+    """
+    from app.skills import SKILLS_DIR, list_skills
+
+    names = []
+    try:
+        for name in list_skills():
+            if os.path.isfile(os.path.join(SKILLS_DIR, name, "workflow.json")):
+                names.append(name)
+    except Exception:
+        log.warning("列举生图渠道失败，描述里只留默认渠道", exc_info=True)
+
+    # NAI 是云端渠道，没有 skills 目录（走 nai.py 的 API），配了 key 才算可用
+    try:
+        from app.config import NAI_API_KEY
+        if NAI_API_KEY:
+            names.extend(image_jobs.NAI_SKILLS)
+    except Exception:
+        pass
+
+    if T2I_DEFAULT_SKILL and T2I_DEFAULT_SKILL not in names:
+        names.insert(0, T2I_DEFAULT_SKILL)
+    return sorted(set(names))
+
+
+def _channel_values_text():
+    """把已装渠道压成一句「可选值」，族里一个都没有就不出现。"""
+    seen, out = set(), []
+    for prefix, label in _FAMILY_TEXT:
+        hit = [c for c in _CHANNELS if c.startswith(prefix)]
+        if hit:
+            out.append("%s（%d 个）" % (label, len(hit)))
+            seen.update(hit)
+    out.extend(c for c in _CHANNELS if c not in seen)
+    return " / ".join(out)
+
+
+def _skill_param_desc():
+    """`skill` 参数说明：默认渠道 + 本机实际装的渠道 + 按需出现的档位提示。"""
+    parts = [
+        "渠道名。**不传就是默认渠道 %s**。" % T2I_DEFAULT_SKILL,
+        "本机装了：%s（**只有这些名字能出图**，写别的会报「找不到」）。"
+        % _CHANNEL_VALUES,
+    ]
+    if any(c.startswith("hd_3_") for c in _CHANNELS):
+        parts.append("说「anima」「三档」→ `hd_3_<画风>`。")
+    if {"anima-line", "anima-real", "anima-guizhencao"} <= set(_CHANNELS):
+        parts.append("⚠️「anima线条/写实/鬼针草」= 三个独立渠道，"
+                     "**别拆成 anima + 画风**。")
+    parts.append("**只在用户点名画风 / 尺寸 / 渠道时才传**；"
+                 "分不清照 Available Skills 摘要选。")
+    return "".join(parts)
+
+
+_CHANNELS = _installed_channels()
+_CHANNEL_VALUES = _channel_values_text()
+
+# 「不传 skill 用哪个」那句里的括号是 **anima-line 自己的事实**（底模 + 6 个
+# LoRA 烘焙在工作流里）。以前写死了，默认渠道一换成 silver，描述就变成了
+# 「silver 是 Anima 渠道」——所以只在默认渠道真是它时才这么说。
+if T2I_DEFAULT_SKILL == "anima-line":
+    _DEFAULT_NOTE = ("（用户自定义的Anima 渠道，底模和 6 个 LoRA 已烘焙在工作流里），"
+                     "一次一张，1024×1536。")
+else:
+    _DEFAULT_NOTE = "，一次一张，1024×1536。"
+
+
 tool = {
     "name": "generate_image",
     "description": "调用 ComfyUI 生成图片。\n\n"
-                  "【默认】不传 skill 就是 " + T2I_DEFAULT_SKILL + "（用户自定义的"
-                  "Anima 渠道，底模和 6 个 LoRA 已烘焙在工作流里），一次一张，1024×1536。"
+                  "【默认】不传 skill 就是 " + T2I_DEFAULT_SKILL + _DEFAULT_NOTE +
                   "prompt 写逗号分隔的标签式英文、只写一段，**不要用 --- 分隔**。\n\n"
                   "【动漫档 `hd_3_*` 只有这 4 个（4 画风 × 1 尺寸档），别编别的 skill 名出来】\n"
                   "**2026-10-07 起只剩三档**：快档 / 最小档 / 二档已取消，那些 skill 名已经不存在，别再用。\n"
@@ -1352,7 +1440,7 @@ tool = {
         "type": "object",
         "properties": {
             "prompt": {"type": "string", "description": "提示词。**开头先写角色名**（认得出就写：英文 tag 渠道 `rudeus greyrat, mushoku tensei`；qwen 的自然语言句子里写「鲁迪乌斯（无职转生）」）——没有任何渠道自带角色，**名字才是还原度最高的那一行**，外貌只补与原设定不同的部分。\n默认渠道写**逗号分隔的标签式英文短句，只写一段、不要用 --- 分隔**（只有 skill=image_gen_v1 认 ` --- ` 分隔、一次出多张；其它渠道会把 --- 当普通文字，要出多张就分多次调用、每次一个变体）。\n两个例外：skill=qwen_image_v1 写**自然语言句子**（不写标签堆）；**它当改图渠道用时（同时传 source_image）只写一句改动指令**，例如 `change her coat to red, keep the pose, face and background exactly the same`——**不要把整张图重新描述一遍**。\n第三个例外：**skill 是 moss / moss4 且画面里要出成段中文时，必须把每一列/每一行的内容逐条列出**（`Column 1 = …；Column 2 = …`），先说清列数和推进方向（用角色自身视角），**别把整段诗连成一句写完**；再说明字号层级（标题最大/正文中/作者最小）、字体（楷书/行楷，不要草书）、以及「字平躺在纸面上、跟着它的透视，不要像贴在屏幕上的浮字」。这样写 56 字长诗能一字不差，不这样写会错字漏字。"},
-            "skill": {"type": "string", "description": "渠道名。**不传就是默认渠道 " + T2I_DEFAULT_SKILL + "**。可选值见 Available Skills（4 个动漫档 `hd_3_<画风>`；silver / silver-hd / jank / qwen_image_v1 / qwen-hd / qwen30 / qwen-charsheet / qwen-restore / image_gen_v1 / krea2系 / nffa / nai / nai_wide / moss / moss45；anima-line / anima-real / anima-guizhencao）。\n**只在用户点名画风 / 尺寸 / 渠道时才传**。说「anima」「三档」→ `hd_3_<画风>`。\n⚠️ 「anima线条/写实/鬼针草」= 上列三个独立渠道，**别拆成 anima + 画风**。\n分不清照 Available Skills 摘要选。"},
+            "skill": {"type": "string", "description": _skill_param_desc()},
             "lora": {"type": "string", "description": "可选。「文件名:强度」逗号分隔，如 x.safetensors:0.8,y.safetensors:0.5。仅在用户点名要换 lora 时传，每个渠道 2 个槽"},
             "source_image": {"type": "string", "description": "参考图：填 1 = 用本轮出现的那张图（优先取对方引用的，其次他自己刚发的；两样都没有会报错）。\n**明说「图生图」才填**（「图生图 / 垫图 / 照着画 / 照这张画 / 复刻 / 参考这张的构图 / 只改一处、其余原样」）——那张图会被当成构图条件喂进去、**锁住构图**，出图仍是重画的、尺寸仍是本档画布，**渠道沿用它点名的或原渠道，两样都没有就配 `skill=qwen_image_v1`**（图生图只走 qwen 系，silver / silver-hd / 高清三档只是能垫）。prompt 照常写完整画面描述，不是写改动指令。\n**引用 / 附图 + 只是提需求（换装 / 换发色 /「要全身照」这类）→ 不传**：那是「照这张改词重画」——拿那张图当初的提示词把新需求并进去、**沿用原渠道文生图重画**。\n**只是让你看图点评 / 反推提示词 / 问这图什么来头 → 不传。**\n要「**只改一处、其余原样**」的编辑才配 `skill=qwen_image_v1`（参考图编辑，只改那一句交代的地方、其余原样；慢，一张 1~2 分钟），prompt 只写**一句改动指令**；明说「qwen 超清」时换 `qwen-hd`，说「qwen30步」时换 `qwen30`。\n要「**修图**」（去糊 / 去噪 / 修清楚，**把这张图本身修好、不是重画**）配 `skill=qwen-restore`（用户明说「qwen修复」才用；~175 秒），prompt 可留空。\n`jank` / `nffa` / `cunny` / `miao` / `krea2-*` / `sd` 没有骨架，别给它们传（传了会自动退回文生图、白等一轮）。skill=nai 也支持垫图（云端）。动漫档（anima_* / hd_*）的**垫图重绘**骨架还在，但**用法上已撤掉**，别再拿它当图生图渠道。本机渠道的重绘强度是定死的，传 denoise 也没用。"},
             "seed": {"type": "integer", "description": "生图种子，**只在对方点名要「用某个种子重画 / 换提示词再来一张」时才传**，平时一律不传（不传=随机）。范围 0 ~ 4294967295 的整数，填错格式/超界会直接报错，别猜。种子会跟着编号印在图那行 caption 上（`编号 · 分辨率 · 渠道 · seed 数字`），对方引用那条消息时能一起带回来。⚠️ 同一个种子只有配**同样的提示词 + 同样的渠道 + 同样的 lora**才画得出同一张图（改提示词重画=构图大体在、细节变）；动漫渠道是两段采样、两段共用这一个种子，所以只有这一个数。**只有本机渠道认**（hd_* / qwen_image_v1 / qwen30 / image_gen_v1 / krea2-* / nffa / moss），skill=nai 传了会被拒；image_gen_v1 一次出多张时第 k 张 = 这个数 + k - 1"}
