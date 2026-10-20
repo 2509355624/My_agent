@@ -161,11 +161,16 @@ def _effective_agent(session_key):
     return _session_prompt_agent(session_key) or QQ_AGENT_ID
 
 
-def _session_env_note(session_key):
+def _session_env_note(session_key, borrowed=False):
     """生成当前会话环境的系统级说明，让模型一开始就知道自己处在私聊还是群聊、对面是谁。
 
     之前 agents/qq/prompt.md 写死「在 QQ 群里」，导致私聊也被当成群聊、bot 一直按
     群友人设在演。这里按 session_key 解析出 target/target_id 动态生成，不靠模型自猜。
+
+    borrowed=True（这条会话线被别的 agent 接管）时只报**事实**，不加人格指令。
+    原先那段「你是其中一个群友——不是客服、不是公众号、别当主持」是写给 QQ 生图
+    机器人的行为约束；套到被借的通用助手头上，等于强行把它从「私人助理」掰成
+    「群友」，是群内借用和网页端表现不一致的原因之一（2026-10-20）。
 
     ⚠️ **这里绝不能出现群名/昵称**（2026-10-03 撤掉）。这段文字被钉进 system 头，
     也就是**前缀缓存的最前面**；而昵称来自 `qq_names` 这个**会变的**缓存
@@ -179,17 +184,23 @@ def _session_env_note(session_key):
     """
     target, _, target_id = session_key.partition("_")
     if target == "group":
+        if borrowed:
+            return ("【当前环境】你正处在 QQ 群聊（群号 %s）里，回复会直接发到群里，"
+                    "群里有多个真人、所有人都看得到你说的话。" % target_id)
         return ("【当前环境】你正处在**群聊**里（群号 %s）。群里有多个真人，你是其中一个"
                 "群友——不是客服、不是公众号、别点名所有人、别当主持，按群友的方式接话。"
                 % target_id)
     # private（以及其它未知情况按私聊处理，最保守）
+    if borrowed:
+        return ("【当前环境】你正和 QQ %s 进行私聊（一对一），回复会直接发给对方。"
+                % target_id)
     return ("【当前环境】你正和对方 QQ %s 进行**私聊**（一对一，没有群友在旁边）。"
             "私聊里你可以给这个人单独存记忆、存生图预设（memory_*/preset_* 工具），"
             "这些只属于他一个人——别当成群聊，也绝不要把 A 的东西用在 B 身上。"
             % target_id)
 
 
-def _stable_blocks(session_key):
+def _stable_blocks(session_key, aid=QQ_AGENT_ID):
     """会钉进系统头的「稳定参考块」：表情包清单 + 长期记忆（群聊才有）。
 
     这两块的内容在会话内基本不变（表情包库存已满、不再收藏；长期记忆一天
@@ -203,13 +214,21 @@ def _stable_blocks(session_key):
     parts = []
     # 表情包清单只在 send_sticker 还在白名单时注入：纯生图 agent 用不到它，
     # 882 字钉在头里纯属死重（2026-10-04 白名单砍到 4 个生图工具后补的判据）。
+    # 只在 QQ 自己的头像限内注入：表情包库是 QQ 机器人的库存，被借的 agent
+    # 没有这一套，塞清单等于给它一份并不存在的素材目录。
     from app.agents import allows_tool
-    menu = (stickers.catalog(QQ_AGENT_ID)
-            if allows_tool(QQ_AGENT_ID, "send_sticker") else "")
+    menu = (stickers.catalog(aid)
+            if (aid == QQ_AGENT_ID
+                and allows_tool(aid, "send_sticker")) else "")
     if menu:
         parts.append(menu)
     if session_key.startswith("group_"):
-        mem = longterm.format_memories(QQ_AGENT_ID,
+        # 记忆按**当前生效的 agent** 读（2026-10-20）。压缩历史时
+        # `_digest_turns_async(run_agent, ...)` 写的是被借 agent 自己的
+        # `memory/group_<号>.jsonl`，读取端原先却写死 QQ_AGENT_ID——借用线
+        # 的记忆只写不读，是死数据。改成同源读写后，被借的助手在群里
+        # 能接上自己上次压缩出来的记忆。
+        mem = longterm.format_memories(aid,
                                        session_key.split("_", 1)[1],
                                        QQ_MEMORY_INJECT_LIMIT,
                                        QQ_MEMORY_INJECT_MAX_CHARS)
@@ -242,14 +261,17 @@ def _session_head(session_key, aid):
                   + extra)
     # 环境说明是会话级稳定事实，直接钉在系统头里，模型从第一条消息就知道
     # 自己在私聊还是群聊、对面是谁——而不是永远按群聊人设演。
-    stable = stable + "\n\n" + _session_env_note(session_key)
+    # 借用线只要事实（在群里 / 在私聊、回复发到哪），不要 QQ 机器人那段
+    # 「你是群友不是客服」的人格指令——那会把被借的助手掰回群友腔。
+    borrowed = aid != QQ_AGENT_ID
+    stable = stable + "\n\n" + _session_env_note(session_key, borrowed=borrowed)
     # 稳定参考块同样钉在系统头里：内容与原先一字不差，只是从「每轮必 miss
-    # 的尾巴」挪到了「历史之前的前缀缓存」。借用别的 agent 的会话线不注入
-    # ——接管者没有这套表情包和记忆。
-    if aid == QQ_AGENT_ID:
-        blocks = _stable_blocks(session_key)
-        if blocks:
-            stable = stable + "\n\n" + blocks
+    # 的尾巴」挪到了「历史之前的前缀缓存」。
+    # 2026-10-20：借用线也注入，但按**被借 agent** 读自己的记忆（表情包仍只给
+    # QQ 自己的库存）。原先整块跳过 → 压缩时写进 main 目录的记忆永远读不回来。
+    blocks = _stable_blocks(session_key, aid)
+    if blocks:
+        stable = stable + "\n\n" + blocks
     return stable, aid
 
 
@@ -1046,8 +1068,14 @@ class SessionRunner:
         # 只答那一句。走 extra_context 而不是拼进 text：拼进 text 会写进会话
         # 历史，每轮重复堆一份，十几轮就把预算占满；这条通道每轮现取现用、
         # 出流即弃（与状态栏同一处理，见 app/agent.py 的 _status_message）。
+        #
+        # ⚠️ 借用线**不喂**（2026-10-20）：这是 QQ 机器人的眼睛，不是被借
+        # 助手的。实测群 1041079621 这条注入 1941 字，内容混着群友贴的小说
+        # 片段和一堆 `[图片]` 占位——网页端的通用助手永远看不到这些，硬塞
+        # 进来就等于告诉它「你正参与这个群的闲聊」，是两边表现不一样的
+        # 最大来源。被借的 agent 只需要 history 里的正式对话。
         extra_context = ""
-        if self.target == "group":
+        if self.target == "group" and not borrowed:
             extra_context = recent.format_recent(
                 QQ_AGENT_ID, self.target_id,
                 QQ_CONTEXT_MESSAGES, QQ_CONTEXT_MAX_CHARS)
@@ -1059,28 +1087,33 @@ class SessionRunner:
         # 任何回音**——不给它这行，它就会以为图还没跑、反复说「我再帮你画一张」
         # （2026-09-29 用户提）。会话级事实，走同一条 extra_context 通道
         # （每轮现取现用、出流即弃，不写回 history）。
-        try:
-            jobs_line = image_jobs.recent_line(self.target, self.target_id,
-                                               IMAGE_RECALL_COUNT)
-            if jobs_line:
-                extra_context = (extra_context + "\n\n" + jobs_line
-                                 if extra_context else jobs_line)
-        except Exception:
-            log.exception("生图回执注入失败 %s", self.session_key)
+        # 借用线跳过：那是 QQ 生图机器人的回执口径，被借的 agent 的工具结果
+        # 自己就在 history 里，不需要也没法理解这套说法。
+        if not borrowed:
+            try:
+                jobs_line = image_jobs.recent_line(self.target, self.target_id,
+                                                   IMAGE_RECALL_COUNT)
+                if jobs_line:
+                    extra_context = (extra_context + "\n\n" + jobs_line
+                                     if extra_context else jobs_line)
+            except Exception:
+                log.exception("生图回执注入失败 %s", self.session_key)
 
         # 私聊生图额度状态：额度拒过一次之后，那句拒绝会作为 tool_result 留在
         # history 里，模型会一直照着它回话——哪怕管理员已经把人加进免额名单
         # （2026-10-01 用户报「加了白名单，AI 还说我限额了」）。这行给它当下
         # 的锚点，与上面那条回执同通道：每轮现取现用、出流即弃，不写回 history。
-        try:
-            from app.agents import image_quota_line
-            quota_line = image_quota_line(QQ_AGENT_ID, self.target,
-                                          self.target_id)
-            if quota_line:
-                extra_context = (extra_context + "\n\n" + quota_line
-                                 if extra_context else quota_line)
-        except Exception:
-            log.exception("额度状态注入失败 %s", self.session_key)
+        # 借用线同样跳过：被借的 agent 不受这份私聊额度约束。
+        if not borrowed:
+            try:
+                from app.agents import image_quota_line
+                quota_line = image_quota_line(QQ_AGENT_ID, self.target,
+                                              self.target_id)
+                if quota_line:
+                    extra_context = (extra_context + "\n\n" + quota_line
+                                     if extra_context else quota_line)
+            except Exception:
+                log.exception("额度状态注入失败 %s", self.session_key)
 
         # 工具层靠线程本地变量知道「此刻在为哪个会话服务」，
         # send_qq_message 不带参数时就发回这里。两批图一并带上：引用图 + 对方
