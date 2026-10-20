@@ -1093,6 +1093,45 @@ _QWEN_REAL_GUIDE = (
 )
 
 
+# 用户口头怎么说 qwen（代码侧只用来判「这轮要不要附规范」，不参与渠道识别）。
+_QWEN_WORD_RE = re.compile(r"qwen|千问|通义", re.I)
+
+
+def _qwen_real_guide(text, channel="", anchor_skill=""):
+    """本轮是否该带 qwen 写实规范 → 带就返回 `_QWEN_REAL_GUIDE`，否则 ""。
+
+    2026-10-20 用户拍板：「不管我是直接文生图，还是图生图，只要我说到 qwen，
+    就默认加这个规则给他。」所以判据只有一条——**用户原话点到 qwen**。
+
+    两个入口都要过这里，别各写一份：
+      - 文生图 `_translate()`：`channel` 传代码认出的点名渠道
+      - 图生图 / 改图 `_revise()`：`channel` 是点名渠道，`anchor_skill` 是
+        引用那张图的**原渠道**（用户没说渠道时沿用原渠道，那张本来就是 qwen
+        出的，改它还是 qwen 跑，同一套写实规范照样该给）
+
+    ⚠️ 排除两个非生成渠道：`qwen-restore` 只做放大修复（prompt 是固定修改
+    指令）、`qwen-charsheet` 是 7 分区版式——插这套写实描述会挤掉它们自己的
+    版式/修复要求。
+    """
+    target = (channel or "").strip()
+    if not target:
+        try:
+            target = (_named_channel(text) or (None, ""))[0] or ""
+        except Exception:
+            target = ""
+    if not target and _QWEN_WORD_RE.search(text or ""):
+        # 中文说法（「千问 / 通义」）不在 `_FIXED_CHAN_RE` 的白名单里，代码认
+        # 不出渠道，但用户确实说了 qwen——这时渠道交给模型判，规范照给。
+        target = "qwen_image_v1"
+    if not target:
+        target = (anchor_skill or "").strip()
+    if not target.startswith("qwen"):
+        return ""
+    if target.startswith(("qwen-restore", "qwen-charsheet")):
+        return ""
+    return _QWEN_REAL_GUIDE
+
+
 # ─── 唯一的一条转译模板（2026-10-05 晚用户拍板重做）─────────
 # 用户原话：「提示词的构成就是：人设 / 工具列表 500~600 字 / 用户的历史对话 /
 # 最近的用户需求，就这么简单。」「我一直想通过硬编码指令的方式来调用生图工具，
@@ -1434,6 +1473,11 @@ _REVISE_TEMPLATE = (
     "别给它们填 `source_image`（填了会自动退回文生图、白等一轮）。"
     "只是评价这张图 → **不填**。\n"
     "- {lang}\n"
+    # qwen 写实规范：改图管道**不走** `_MASTER_TEMPLATE`，这条占位是它唯一的
+    # 入口。2026-10-20 22:57 前这里没有注入点，群里三条「qwen + 引用图」
+    # （22:52 / 22:56 / 22:57）产出的 prompt 里连 `A realistic photograph...
+    # photorealistic style` 都出来了——正是规范第一条禁止的写法。
+    "{qwen_guide}"
     "- 禁止权重语法 (tag:1.2)、{{tag}}、::\n"
     "- 具体角色没把握就写外貌特征+作品名，不要编造不存在的角色名\n"
     # 逃逸口**一直开着**：以前代码扫原话认机制词，认到就换成「必须出 prompt」
@@ -1917,14 +1961,18 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
         if named.startswith("moss"):
             hint += _MOSS_TEXT_GUIDE
         # 写实人像规范只喂 qwen 的**生成**渠道（2026-10-20 用户拍板：
-        # 「qwen 专门附加提示词给 ai，调用 qwen 渠道的时候」）。
-        # 排除 restore（它只做放大修复，prompt 是固定指令）和 charsheet
-        # （7 分区版式，加这套写实描述会挤掉版式要求）。
-        if named.startswith("qwen") and not named.startswith(
-                ("qwen-restore", "qwen-charsheet")):
-            hint += _QWEN_REAL_GUIDE
+        # 「qwen 专门附加提示词给 ai，调用 qwen 渠道的时候」；
+        # 同日晚再拍板「不管文生图还是图生图，只要说到 qwen 就给」）。
+        # 判据收在 `_qwen_real_guide()` 一处——改图管道 `_revise()` 也走它，
+        # 别在这儿再手写一遍条件（22:52~22:57 就是这里写了、那边没写，
+        # 带引用图的三条全漏）。
+        hint += _qwen_real_guide(text, named)
     else:
-        hint = ""
+        # 没认出渠道词也别丢掉 qwen 规范：中文「千问 / 通义」不在固定渠道表里，
+        # 渠道要交给模型自己判——只要原话说到 qwen，规范照给（2026-10-20 用户
+        # 要求「只要我说到 qwen 就加」）。说到别的渠道/没提渠道时这串是空，
+        # 一个字都不多读。
+        hint = _qwen_real_guide(text)
     content = _MASTER_TEMPLATE.format(
         recent=_recent_lines(history) or "（无）",
         text=text,
@@ -2224,6 +2272,9 @@ def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):
         last_prompt=anchor_prompt,
         recent=recent,
         lang=_prompt_lang(channel or anchor_skill),
+        # 点名 qwen（channel）或引用的是自家 qwen 图（anchor_skill）都给规范，
+        # 与文生图 `_translate()` 共用同一个判据函数。
+        qwen_guide=_qwen_real_guide(text, channel, anchor_skill),
         text=text)
     from app.llm import call_llm
     from app.vision import describe

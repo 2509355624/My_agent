@@ -3211,8 +3211,39 @@ class ReviseChannelListTest(unittest.TestCase):
         """加了清单别把 `.format` 的花括号写坏（模板里 JSON 示例是转义过的）。"""
         out = direct_gen._REVISE_TEMPLATE.format(
             escape="", search="", anchor_note="n", last_skill="jank",
-            last_prompt="p", recent="", lang="l", text="silver 生成")
+            last_prompt="p", recent="", lang="l", qwen_guide="",
+            text="silver 生成")
         self.assertIn("silver", out)
+
+    def test_qwen_guide_reaches_revise_template(self):
+        """改图管道也要吃 qwen 写实规范（2026-10-20 用户要求：文生图 / 图生图
+        只要说到 qwen 都给）。曾经只拼在 `_translate` 的 chan_hint，带引用图的
+        三条真实请求（22:52 / 22:56 / 22:57）全漏，产出里出现 `A realistic
+        photograph ... photorealistic style`——正是规范第一条禁止的写法。"""
+        out = direct_gen._REVISE_TEMPLATE.format(
+            escape="", search="", anchor_note="n", last_skill="qwen_image_v1",
+            last_prompt="p", recent="", lang="l",
+            qwen_guide=direct_gen._QWEN_REAL_GUIDE, text="qwen 真人")
+        self.assertIn("【qwen 写实人像】", out)
+
+    def test_qwen_real_guide_switch(self):
+        """判据：说到 qwen 就给；点名别家 / 非生成渠道 / 没提就不给。"""
+        cases = [
+            (("qwen，真人", "", ""), True),
+            (("千问 画个真人", "", ""), True),
+            (("通义 真人", "", ""), True),
+            (("，真人", "", "qwen_image_v1"), True),   # 沿用自家 qwen 图
+            (("，qwen30步 真人", "qwen30", ""), True),
+            (("，换成 silver", "silver", "qwen_image_v1"), False),
+            (("，qwen 修复", "qwen-restore", ""), False),
+            (("，qwen 角色设定表", "qwen-charsheet", ""), False),
+            (("，真人", "", "miao"), False),
+            (("画一个银发女孩在雨里回头", "", ""), False),
+        ]
+        for args, want in cases:
+            with self.subTest(args=args):
+                got = bool(direct_gen._qwen_real_guide(*args))
+                self.assertEqual(got, want)
 
 
 class Qwen30ChannelTest(unittest.TestCase):
