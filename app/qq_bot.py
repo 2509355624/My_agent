@@ -189,6 +189,9 @@ def _session_env_note(session_key, borrowed=False):
                     "群里有多个真人、所有人都看得到你说的话。" % target_id)
         return ("【当前环境】你正处在**群聊**里（群号 %s）。群里有多个真人，你是其中一个"
                 "群友——不是客服、不是公众号、别点名所有人、别当主持，按群友的方式接话。"
+                "⚠️ 这个群**不画连续漫画**（silver 漫画一次十张会把群刷屏）："
+                "有人要漫画就说明群里只能画单张、多格剧情请私聊，别去调"
+                " generate_comic。"
                 % target_id)
     # private（以及其它未知情况按私聊处理，最保守）
     if borrowed:

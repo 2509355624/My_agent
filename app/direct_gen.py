@@ -1788,11 +1788,14 @@ def _enqueue_comic(comic, text):
         comic.get("panels"), default=comic_story.default_panels(style))
     log.info("[direct] 漫画入队：%d 格 %r（style=%s，原话 %r）", panels, brief[:50],
              style, text[:50])
+    if result.startswith("错误："):
+        # 被闸拦掉（群聊禁 silver 漫画 / 生图关了 / 额度用完）= **一张都没画**，
+        # 绝不能写进「本轮做了什么」的账本：那一行会被 `_recent_lines` 当事实
+        # 回喂给下一轮，模型会照着「[直达漫画] 10 格」继续往下说。
+        return _humanize_error(result)
     _note_desc("[直达漫画] %d 格：%s" % (panels, brief[:200]))
     if result.startswith(image_jobs.RECEIPT_SENT_MARK):
         return ""          # 回执已由工具直发，本轮闭嘴
-    if result.startswith("错误："):
-        return _humanize_error(result)
     return result
 
 

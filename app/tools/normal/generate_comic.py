@@ -44,6 +44,22 @@ def _generate_comic(brief, panels=None, style="silver", landscape=None):
         return "错误：连续漫画目前只在 QQ 里画，网页端用不了。"
 
     style = (style or "silver").strip() or "silver"
+
+    # 群聊不画连续漫画（2026-10-20 用户要求：「帮我群聊禁止使用 silver 漫画，
+    # 不然容易刷屏」）。silver 批量一次默认 **10 格**，群里连着发就是一屏图。
+    # 范围只到「群聊 + silver」：
+    #   · 私聊照旧（一对一，发 10 张不算刷屏，也是用户要的完整剧情）；
+    #   · 网页端漫画台不受影响（target is None 时上面已经返回了）；
+    #   · 「anima多图」默认 3 格，量小，这次没禁（用户只说 silver 漫画）。
+    # 位置钉在 `write_story` **之前**：那一步要跑好几秒 LLM，先拒能省掉整轮开销。
+    # 文案按 `_qq_gate` 的惯例返回一句模型能直接转述的话，不抛错。
+    if style == "silver" and target == "group":
+        return ("错误：群里不画连续漫画，一次十张会把群刷屏，这个群只能画单张。"
+                "这一轮别再重试、也别自己改画十张单图；"
+                "直接告诉对方：想要图就点名单张渠道一张一张来"
+                "（「silver <需求>」「qwen <需求>」都行）；"
+                "真要画整段剧情，让他私聊发。")
+
     n = comic_story.clamp_panels(panels,
                                  default=comic_story.default_panels(style))
 

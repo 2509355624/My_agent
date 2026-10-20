@@ -347,6 +347,9 @@ class LandscapeSnapshotTest(unittest.TestCase):
     `_generate_comic`（会话线程）→ `comic_story.start` → `render` → `enqueue`。
     `_comic_batch` 的尺寸节点是 `BatchPromptImageGenerator`，本来就在
     `image_jobs._SIZE_NODE_TYPES` 里，对调开关天生支持漫画。
+
+    2026-10-20：群聊禁了 silver 漫画（见 `GroupComicBlockTest`），所以这两条
+    改用**私聊**身份跑——否则会先被群聊闸拦掉，横屏快照根本测不到。
     """
 
     def test_generate_comic_snapshots_the_landscape_word(self):
@@ -357,7 +360,7 @@ class LandscapeSnapshotTest(unittest.TestCase):
                                return_value=True) as m_ls, \
              mock.patch.object(gc.gi, "_qq_gate", return_value=None), \
              mock.patch("app.qq_api.current_context",
-                        return_value=("group", "123")), \
+                        return_value=("private", "123")), \
              mock.patch.object(comic_story, "write_story",
                                return_value=("fixed_tag", ["d1", "d2"])), \
              mock.patch.object(comic_story, "start") as m_start, \
@@ -377,7 +380,7 @@ class LandscapeSnapshotTest(unittest.TestCase):
                                return_value=True) as m_ls, \
              mock.patch.object(gc.gi, "_qq_gate", return_value=None), \
              mock.patch("app.qq_api.current_context",
-                        return_value=("group", "123")), \
+                        return_value=("private", "123")), \
              mock.patch.object(comic_story, "write_story",
                                return_value=("fixed_tag", ["d1"])), \
              mock.patch.object(comic_story, "start") as m_start, \
@@ -386,6 +389,51 @@ class LandscapeSnapshotTest(unittest.TestCase):
 
         m_ls.assert_not_called()
         self.assertFalse(m_start.call_args.kwargs["landscape"])
+
+
+class GroupComicBlockTest(unittest.TestCase):
+    """群聊禁连续漫画（2026-10-20 用户要求：「帮我群聊禁止使用 silver 漫画，
+    不然容易刷屏」）。
+
+    拦在 `generate_comic._generate_comic()` 里——工具路径（模型调
+    `generate_comic`）和直判路径（`direct_gen._enqueue_comic`）最终都汇到它，
+    所以一处收口就够。判据只有两条：**群聊 + `style == "silver"`**。
+    私聊照旧、「anima多图」（默认 3 格）没禁。
+
+    ⚠️ 拒绝必须发生在 `write_story` **之前**：那一步要跑好几秒 LLM 才吐出
+    分镜，先拒才省得掉这整轮的开销（下面用 `assert_not_called` 钉住）。
+    """
+
+    def _run(self, target, style):
+        from app.tools.normal import generate_comic as gc
+
+        with mock.patch.object(gc.gi, "_qq_gate", return_value=None), \
+             mock.patch("app.qq_api.current_context",
+                        return_value=(target, "123")), \
+             mock.patch.object(comic_story, "write_story",
+                               return_value=("fixed_tag", ["d1", "d2"])) as m_write, \
+             mock.patch.object(comic_story, "start") as m_start, \
+             mock.patch.object(gc.gi, "_send_receipt", return_value=True):
+            out = gc._generate_comic("少女在河边散步", panels=3, style=style)
+        return out, m_write, m_start
+
+    def test_group_refuses_the_silver_comic(self):
+        out, m_write, m_start = self._run("group", "silver")
+        self.assertIn("群里不画连续漫画", out)
+        # 剧本一个字都没写：省掉写分镜那几秒 LLM，也别起渲染线程
+        m_write.assert_not_called()
+        m_start.assert_not_called()
+
+    def test_private_still_draws_the_silver_comic(self):
+        out, m_write, m_start = self._run("private", "silver")
+        m_write.assert_called_once()
+        m_start.assert_called_once()
+
+    def test_group_still_allows_the_three_panel_anima_batch(self):
+        """用户只说「silver 漫画」。anima多图默认 3 格、量小，这次不动它。"""
+        out, m_write, m_start = self._run("group", "anima")
+        m_write.assert_called_once()
+        m_start.assert_called_once()
 
 
 if __name__ == "__main__":
