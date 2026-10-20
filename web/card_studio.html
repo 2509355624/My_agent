@@ -399,7 +399,7 @@ async function loadCoverStatus() {
     if (d.has_cover) setCover(d.cover_url);
     if (d.state === "rendering") {
       $("coverState").className = "coverstate";
-      $("coverState").textContent = "出图中（30~60 秒）…";
+      $("coverState").textContent = "出图中（两三分钟，按渠道默认分辨率）…";
       $("btnCover").disabled = true;
       if (!S.poll) S.poll = setInterval(loadCoverStatus, 2500);
     } else if (d.state === "error") {

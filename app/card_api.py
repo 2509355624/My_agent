@@ -1,10 +1,10 @@
-"""星陨AI 角色卡工作台：一句话 → 六项文案 + 竖版封面（2026-10-19）。
+"""星陨AI 角色卡工作台：一句话 → 六项文案 + 封面（2026-10-19）。
 
     GET  /card                页面（web/card_studio.html）
     POST /api/card/draft      一句话描述 → 一张卡（同步，5 秒左右）
     POST /api/card/save       存卡（id 空 = 新建）
     POST /api/card/delete     删卡
-    POST /api/card/cover      出一张封面（后台线程，30~60 秒）
+    POST /api/card/cover      出一张封面（后台线程，2~4 分钟）
     GET  /api/card/status     轮询封面进度
     GET  /api/card/img        取封面图
     GET  /api/card/plain      导出纯文本

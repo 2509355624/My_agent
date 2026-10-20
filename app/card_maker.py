@@ -567,49 +567,23 @@ def plain(card):
     return "\n".join(lines).strip() + "\n"
 
 
-# ─── 封面图（2026-10-19）──────────────────────────────
+# ─── 封面图（2026-10-19，2026-10-20 改回默认分辨率）──────
 #
-# 864×1536 是星陨AI 推荐尺寸（9:16）。不去改工作流模板，走现成的覆盖机制：
-# latent 放大调成 1.0、跳过最终像素放大，出图就是**原尺寸**——silver / anima
-# 默认是 1024×1536 → ×1.2 → 2x = 2458×3686，直接拿来当封面会被裁掉大半。
-COVER_W, COVER_H = 864, 1536
+# 10-19 曾按星陨AI 推荐把封面钉成 864×1536（9:16）+ latent 放大 1.0 + 跳过 2x，
+# 顺带把步数压到 10+8。10-20 用户实测后否掉：864×1536 只有 1.3 MP，底模在
+# 9:16 这个非原生画幅上构图发糊，**还不如渠道默认的 1024×1536 → ×1.2 → 2x
+# = 2458×3686（9 MP）**。
+# 现在封面**完全走渠道默认参数**：不钉尺寸、不跳放大、不压步数。
 COVER_SKILL = IMAGE_DEFAULT_SKILL
-
-# 封面刻意降步数（2026-10-19 实测）：silver 模板是 20+20 步，同一条提示词同
-# 一个 seed 跑 864×1536 要 261 秒，改 10+8 步只要 24 秒，肉眼看画质几乎一样
-# （silver 底模是 silvermoonmixAnimaEvolved_v2329BTurbo，Turbo 本来就不吃满
-# 20 步）。用户等 4 分钟一定会以为页面卡死了。
-COVER_BASE_STEPS = 10
-COVER_HIRES_STEPS = 8
-COVER_HIRES_DENOISE = 0.3
 
 
 def cover_opts(skill=COVER_SKILL):
-    """封面用的渲染参数：正好 COVER_W×COVER_H，不走任何放大，步数压到够用。
+    """封面用的渲染参数 = 渠道默认（尺寸 / 放大 / 步数一个都不覆盖）。
 
-    步数只**下调**：切到本来就少于 10 步的渠道（moss 4 步那种）时不会反被拉高。
+    钉死尺寸那套（864×1536）已废弃：画幅压到默认的 1/7，字和脸一起糊。
     """
     from app import comic_render_opts
-    opts = comic_render_opts.defaults(skill)
-    opts["width"], opts["height"] = COVER_W, COVER_H
-    up = dict(opts.get("upscale") or {})
-    up["scale_by"] = 1.0        # LatentUpscaleBy ×1.0 = 尺寸不变
-    up["final_skip"] = True     # SaveImage 直连解码，跳过 2x 放大
-    opts["upscale"] = up
-    for key, cap in (("base", COVER_BASE_STEPS), ("hires", COVER_HIRES_STEPS)):
-        p = dict(opts.get(key) or {})
-        if not p:
-            continue
-        cur = p.get("steps")
-        if not isinstance(cur, int) or cur > cap:
-            p["steps"] = cap
-        opts[key] = p
-    hi = opts.get("hires") or {}
-    if hi:
-        d = hi.get("denoise")
-        if not isinstance(d, (int, float)) or d > COVER_HIRES_DENOISE:
-            hi["denoise"] = COVER_HIRES_DENOISE
-    return opts
+    return comic_render_opts.defaults(skill)
 
 
 def cover_prompt(card):
@@ -621,23 +595,17 @@ def cover_prompt(card):
 
 
 def cover_workflow(skill, prompt, seed):
-    """封面工作流：出图**正好** COVER_W×COVER_H，不走任何放大。
+    """封面工作流 = 这个渠道**原封不动**的单图工作流。
 
-    `cover_opts()` 只是把倍率/步数写进参数对象，落到工作流上还差一步：batch 族
-    （sd / miao / nsfw_pose_gen）的第二段尺寸是节点里写死的数值，`apply()` 会按
-    底图比例**等比缩放**它（864×1536 底图 → 1296×2304 出图），得再钉一次。
+    batch 族（sd / miao / nsfw_pose_gen）的第二段尺寸、`image_gen_v1` 节点内的
+    2x，都随渠道自己的比例走——不再钉回某个固定尺寸（那是 864×1536 时代的补丁）。
     """
-    from app import comic_render_opts
     from app.tools.normal import generate_image
-
-    wf = comic_render_opts.apply(
-        generate_image.build_t2i_workflow(skill, prompt, seed), cover_opts(skill))
-    comic_render_opts.pin_output_size(wf, COVER_W, COVER_H)
-    return wf
+    return generate_image.build_t2i_workflow(skill, prompt, seed)
 
 
 def render_cover(cid, card, skill=COVER_SKILL, seed=None):
-    """出一张封面，返回落盘路径。**阻塞**（30~60 秒），调用方自己放后台线程。
+    """出一张封面，返回落盘路径。**阻塞**（2~4 分钟，看渠道），调用方自己放后台线程。
 
     这里不更新卡片记录——出图是慢操作，状态由接口层管（先写 rendering、
     成功后写 cover），免得线程和请求两边抢着写同一个 json。

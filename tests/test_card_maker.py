@@ -9,13 +9,13 @@
      `_raw_categories` 里好报警；其余字段原样收。
   3. `check` **只报不拦**，而且不能误报——`{{user}}` 里含 `{user}`，早期版本就是
      这么把合法的变量写法报成错的（2026-10-19 实测踩到）。
-  4. 封面参数：864×1536 原尺寸（latent 放大 1.0 + 跳过最终 2x），不是 2458×3686。
+  4. 封面参数 = 渠道默认（尺寸 / 放大 / 步数一个都不覆盖）。10-19 曾钉成
+     864×1536 省时间，10-20 用户实测糊，改回来了。
   5. 卡库往返：存 / 取 / 改 / 删 / 读坏不炸。
 
 只跑本文件：python -m unittest discover -s tests -p "test_card_maker.py"
 """
 
-import copy
 import json
 import os
 import sys
@@ -226,31 +226,29 @@ class CheckTest(unittest.TestCase):
 
 
 class CoverOptsTest(unittest.TestCase):
-    def test_cover_is_864_by_1536_without_upscaling(self):
-        """星陨AI 要 9:16。silver 默认 1024×1536 → ×1.2 → 2x = 2458×3686，
-        直接拿会裁掉大半，所以 latent 放大调 1.0、最终放大跳过。"""
-        opts = cm.cover_opts("silver")
-        self.assertEqual((opts["width"], opts["height"]), (864, 1536))
-        self.assertEqual(opts["upscale"]["scale_by"], 1.0)
-        self.assertTrue(opts["upscale"]["final_skip"])
-
-    def test_cover_steps_are_capped_down(self):
-        """20+20 步要 261 秒、10+8 步 24 秒，画质看不出差别（2026-10-19 实测）。"""
-        opts = cm.cover_opts("silver")
-        self.assertEqual(opts["base"]["steps"], cm.COVER_BASE_STEPS)
-        self.assertEqual(opts["hires"]["steps"], cm.COVER_HIRES_STEPS)
-        self.assertLessEqual(opts["hires"]["denoise"], cm.COVER_HIRES_DENOISE)
-
-    def test_cover_steps_only_cap_down(self):
-        """已经比 10 步少的渠道（moss 那种 4 步）不该被封面逻辑拉高。"""
+    def test_cover_keeps_the_channel_size_and_upscale(self):
+        """10-20 用户实测：864×1536 只有 1.3 MP，构图发糊，不如渠道默认
+        1024×1536 → ×1.2 → 2x = 2458×3686。所以尺寸与放大一律不覆盖。"""
         from app import comic_render_opts as ro
-        fake = {"base": {"steps": 4}, "hires": {"steps": 3, "denoise": 0.2},
-                "upscale": {}, "loras": []}
-        with mock.patch.object(ro, "defaults", side_effect=lambda *a: copy.deepcopy(fake)):
-            opts = cm.cover_opts("moss")
-        self.assertEqual(opts["base"]["steps"], 4)
-        self.assertEqual(opts["hires"]["steps"], 3)
-        self.assertEqual(opts["hires"]["denoise"], 0.2)
+        opts = cm.cover_opts("silver")
+        d = ro.defaults("silver")
+        self.assertEqual((opts["width"], opts["height"]), (d["width"], d["height"]))
+        self.assertEqual(opts["upscale"]["scale_by"], d["upscale"]["scale_by"])
+        self.assertEqual(opts["upscale"]["final_skip"], d["upscale"]["final_skip"])
+
+    def test_cover_does_not_touch_sampler_steps(self):
+        """压步数是 864×1536 时代的省时间手段，现在不压了：参数逐字等于模板。"""
+        from app import comic_render_opts as ro
+        opts = cm.cover_opts("silver")
+        d = ro.defaults("silver")
+        self.assertEqual(opts["base"], d["base"])
+        self.assertEqual(opts["hires"], d["hires"])
+
+    def test_cover_opts_never_mutates_the_shared_defaults(self):
+        """两次调用必须一致——早前那版是在 defaults() 的返回值上原地改。"""
+        from app import comic_render_opts as ro
+        cm.cover_opts("silver")
+        self.assertEqual(cm.cover_opts("silver")["width"], ro.defaults("silver")["width"])
 
     def test_cover_prompt_needs_a_tag(self):
         with self.assertRaises(ValueError):
@@ -258,75 +256,32 @@ class CoverOptsTest(unittest.TestCase):
         self.assertEqual(cm.cover_prompt({"cover": " 1girl "}), "1girl")
 
 
-class CoverSizeTest(unittest.TestCase):
-    """封面要的是「就是 864×1536」，不是「按模板比例放大到多大」。
+class CoverWorkflowTest(unittest.TestCase):
+    """封面工作流 = 渠道自己的单图工作流，一个参数都不改。
 
-    2026-10-19 实测：batch 族（sd / miao / nsfw_pose_gen）的第二段尺寸是节点里
-    写死的数值，`apply()` 会按底图比例**等比缩放**它——864×1536 的底图会出
-    1296×2304；`image_gen_v1` 的最终 2x 还在节点内部（`upscale_model`），
-    `final_skip` 够不着。两种都得靠 `pin_output_size()` 再钉一次。
+    10-19 那套「钉死 864×1536 底图 + 拔掉节点内 2x」的补丁已经撤了：它以画质
+    换时间，10-20 用户实测后否掉。这里钉住的是「封面不再对模板动手脚」。
     """
 
-    @staticmethod
-    def _wf(skill):
-        from app import comic_render_opts as ro
-        if not ro.caps_of(skill).get("family"):
-            raise unittest.SkipTest("没有 %s 的 workflow 模板" % skill)
-        return cm.cover_workflow(skill, "1girl, solo", 42)
+    SKILLS = ("anima-line", "qwen_image_v1", "miao", "moss",
+              "image_gen_v1", "nsfw_pose_gen", "jank")
 
-    @staticmethod
-    def _out_size(wf):
+    def test_cover_workflow_is_the_channel_workflow(self):
         from app import comic_render_opts as ro
-        hosts = ro._size_hosts(wf)
-        lat = ro._inputs(wf[hosts[0]])
-        w0, h0 = lat["width"], lat["height"]
-        bh = ro._batch_hires(wf)
-        if bh:
-            bi = ro._inputs(wf[bh])
-            # enable_hires 关掉的渠道（jank）走底图尺寸
-            return (bi["hires_width"], bi["hires_height"]) if bi.get("enable_hires") else (w0, h0)
-        ups = ro._upscale_nodes(wf)
-        sy = ro._inputs(wf[ups["latent"][0]])["scale_by"] if ups["latent"] else 1.0
-        return int(round(w0 * sy)), int(round(h0 * sy))
-
-    def test_every_node_family_comes_out_at_cover_size(self):
-        """四种形状各挑一个代表：两段 ks / 单段 ks / batch / custom。"""
-        from app import comic_render_opts as ro
-        from app import image_jobs
-        if not hasattr(image_jobs, "NAI_SKILLS"):
-            self.skipTest("image_jobs 不可用")
-        for skill in ("anima-line", "qwen_image_v1", "miao", "moss",
-                      "image_gen_v1", "nsfw_pose_gen", "jank"):
+        from app.tools.normal import generate_image
+        for skill in self.SKILLS:
             with self.subTest(skill=skill):
-                self.assertEqual(self._out_size(self._wf(skill)), (cm.COVER_W, cm.COVER_H))
+                if not ro.caps_of(skill).get("family"):
+                    continue                     # 这台机器没装这个渠道
+                cover = cm.cover_workflow(skill, "1girl, solo", 42)
+                plain = generate_image.build_t2i_workflow(skill, "1girl, solo", 42)
+                self.assertEqual(cover, plain)
 
-    def test_batch_hires_is_pinned_not_scaled(self):
-        """miao 模板是 1024×1536→1536×2304（×1.5）。等比跟随会算出
-        1296×2304，尺寸对了但宽高比还是被拉——必须是同尺寸精修。"""
-        from app import comic_render_opts as ro
-        wf = self._wf("miao")
-        bi = ro._inputs(wf[ro._batch_hires(wf)])
-        self.assertEqual((bi["hires_width"], bi["hires_height"]), (cm.COVER_W, cm.COVER_H))
-
-    def test_node_internal_upscaler_is_disconnected(self):
-        """image_gen_v1 的 2x 在节点输入里，不删就是 1728×3072。"""
-        from app import comic_render_opts as ro
-        wf = self._wf("image_gen_v1")
-        self.assertNotIn("upscale_model", ro._inputs(wf[ro._batch_hires(wf)]))
-
-    def test_save_image_does_not_go_through_the_upscaler(self):
-        from app import comic_render_opts as ro
-        wf = self._wf("anima-line")
-        final = str(ro._upscale_nodes(wf)["final"])
-        for nd in wf.values():
-            if nd.get("class_type") == "SaveImage":
-                self.assertNotEqual(str(ro._inputs(nd)["images"][0]), final)
-
-    def test_hires_stays_off_when_the_channel_disabled_it(self):
-        """jank 的 enable_hires=False——别替它开第二段，白烧一倍时间。"""
-        from app import comic_render_opts as ro
-        wf = self._wf("jank")
-        self.assertFalse(ro._inputs(wf[ro._batch_hires(wf)]).get("enable_hires"))
+    def test_cover_workflow_carries_the_seed(self):
+        """换种子必须真变——封面重画靠的就是这一个入参。"""
+        a = cm.cover_workflow("silver", "1girl", 1)
+        b = cm.cover_workflow("silver", "1girl", 2)
+        self.assertNotEqual(a, b)
 
 
 class StoreTest(unittest.TestCase):

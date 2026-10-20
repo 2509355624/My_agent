@@ -99,8 +99,9 @@ def wants_redo(text):
 def start(target, target_id, skill, brief, reply_to=""):
     """起后台线程造卡，**立刻返回**。
 
-    文案 5 秒 + 出图 20~80 秒，堵在消息线程上等于这半分钟整个群都听不见
-    机器人说话（同 `image_jobs` 那条口径）。
+    文案 5~20 秒 + 封面 2~4 分钟（2026-10-20 起封面走渠道默认分辨率，不再压
+    到 864×1536），堵在消息线程上等于这几分钟整个群都听不见机器人说话
+    （同 `image_jobs` 那条口径）。
     """
     th = threading.Thread(target=_work, name="card-bot", daemon=True,
                           args=(target, target_id, skill, brief, str(reply_to or "")))
@@ -132,7 +133,7 @@ def start_redo(target, target_id, quoted_id, reply_to=""):
 
 def _work(target, target_id, skill, brief, reply_to):
     say = _say
-    say(target, target_id, "造卡中（%s），大概半分钟" % skill, reply_to)
+    say(target, target_id, "造卡中（%s），封面要画两三分钟" % skill, reply_to)
     try:
         card = card_maker.draft(brief)
     except Exception as exc:
