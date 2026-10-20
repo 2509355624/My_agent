@@ -1056,6 +1056,43 @@ _MOSS_TEXT_GUIDE = (
 )
 
 
+# ─── qwen 写实人像规范（2026-10-20，只在 qwen 生成轮拼进 `chan_hint`）──
+# 来路：8 张同 seed 对照实测（产物在 `web/实测_qwen写实/`）。
+# 同一条需求写 `photo-realistic ... natural skin texture`，出来是磨皮网红脸
+# （面部高频能量 186，全场最低）；换成「皮肤分区 + 侧后轮廓光 + 一半脸进阴影」
+# 立刻像照片。变量拆开验过：**光的方向是主因**（只留光、皮肤词全删也成立），
+# 皮肤词是次因。
+# ⚠️ 别塞进 `_MASTER_TEMPLATE` 正文：那条是所有渠道共用的，qwen 一张要两分钟、
+# 别的渠道十几秒，不该让它们多读这 600 字。和 `_MOSS_TEXT_GUIDE` 同一处理。
+_QWEN_REAL_GUIDE = (
+    "\n【qwen 写实人像】这轮用 qwen，**只要画面里是真人、并且他要的是照片感**"
+    "（不是插画 / 动漫），prompt 必须按下面这几条写——按普通写法会出磨皮网红脸：\n"
+    "① **别写 `photo-realistic` / `realistic` / `masterpiece` / `8k` 这类词**。"
+    "它们只会把画面拉回「精修写真」的默认值，越写越假。要写的是"
+    "**这张照片是在什么条件下拍的**。\n"
+    "② **光必须有方向，这条最要紧**：写清主光从哪来、另一侧有没有轮廓光、"
+    "**另一半脸是不是落进阴影**。"
+    "（例：`soft key light from the window plus a warm rim light from behind, "
+    "the other side of the face falls into shadow`）"
+    "只写 soft / natural lighting 会得到平光，平光就是塑料感的来源。\n"
+    "③ **皮肤写物理状态和高光落点，不写「真实」**：半哑光的底；"
+    "**只有 T 区（额头、鼻梁、鼻尖）有淡淡皮脂高光，脸颊 / 下颌 / 眼周保持哑光**；"
+    "鼻翼有细微毛孔；肤色轻微不均。\n"
+    "④ 皮肤缺陷词**一次最多 2~3 个**（pores / freckles / slight redness 挑着写）——"
+    "写多了 qwen 会把它们放大成一张脏脸。\n"
+    "⑤ **织物同理，写它的物理状态**：织法、拉伸后的变形、拉伸处的透光、"
+    "光在纤维上那层软反射。白丝：`sheer white stockings, fine knit weave, "
+    "soft sheen along the thigh, slight gathering at the knee`；"
+    "渔网：`black fishnet stockings, the mesh distorts over the skin, "
+    "diamonds stretch wider at the knee`。"
+    "**别只写 `white stockings` / `fabric texture` 这种空词**。\n"
+    "⑥ 收尾补一句拍摄条件（焦段 / 光圈 / 胶片颗粒）和「像朋友随手拍的抓拍，"
+    "不是杂志拍摄」。\n"
+    "⑦ 这个渠道 **cfg=1.0，负向提示词完全不生效**——别写 negative、"
+    "也别指望 `no plastic skin`，全靠正向描述。\n"
+)
+
+
 # ─── 唯一的一条转译模板（2026-10-05 晚用户拍板重做）─────────
 # 用户原话：「提示词的构成就是：人设 / 工具列表 500~600 字 / 用户的历史对话 /
 # 最近的用户需求，就这么简单。」「我一直想通过硬编码指令的方式来调用生图工具，
@@ -1879,6 +1916,13 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
         # 额外给 AI 这个提示词模板，让 AI 按照这个标准来」）。
         if named.startswith("moss"):
             hint += _MOSS_TEXT_GUIDE
+        # 写实人像规范只喂 qwen 的**生成**渠道（2026-10-20 用户拍板：
+        # 「qwen 专门附加提示词给 ai，调用 qwen 渠道的时候」）。
+        # 排除 restore（它只做放大修复，prompt 是固定指令）和 charsheet
+        # （7 分区版式，加这套写实描述会挤掉版式要求）。
+        if named.startswith("qwen") and not named.startswith(
+                ("qwen-restore", "qwen-charsheet")):
+            hint += _QWEN_REAL_GUIDE
     else:
         hint = ""
     content = _MASTER_TEMPLATE.format(
