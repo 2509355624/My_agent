@@ -228,7 +228,7 @@ class CheckTest(unittest.TestCase):
 class CoverOptsTest(unittest.TestCase):
     def test_cover_keeps_the_channel_size_and_upscale(self):
         """10-20 用户实测：864×1536 只有 1.3 MP，构图发糊，不如渠道默认
-        1024×1536 → ×1.2 → 2x = 2458×3686。所以尺寸与放大一律不覆盖。"""
+        1024×1536 → ×1.2 → 2x（实际 2464×3680）。所以尺寸与放大一律不覆盖。"""
         from app import comic_render_opts as ro
         opts = cm.cover_opts("silver")
         d = ro.defaults("silver")
