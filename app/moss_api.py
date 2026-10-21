@@ -50,7 +50,8 @@ STATE_ROOT = os.path.join(BASE_DIR, "state", "moss_comic")
 # 出图参数（30 步是 10-21 拍板的漫画档：出片级才用 50 步）
 SKILL = "moss50"
 STEPS = 30
-WIDTH, HEIGHT = 1024, 1536
+# 9:16 竖条（抖音原生画幅）。实测 30 步 81.2 秒。
+WIDTH, HEIGHT = 720, 1280
 SEED_BASE = 20261501
 OUT_ROOT = "web/moss漫画"
 
