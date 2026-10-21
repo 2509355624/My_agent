@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>moss 漫画台</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%2334d399'/></svg>">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0a0a0f; --bg-elev: #12121a; --bg-input: #1a1a24;
+    --border: #2a2a3a; --border-soft: #1f1f2e;
+    --text: #e8e8f0; --text-dim: #8888a0; --text-mute: #555570;
+    --accent: #34d399; --accent-dim: #1f6b4e;
+    --success: #4ade80; --error: #f87171; --warn: #fbbf24; --info: #4fc3f7;
+    --radius: 12px; --radius-sm: 8px;
+  }
+  html, body { background: var(--bg); color: var(--text);
+    font-family: "SF Mono", "JetBrains Mono", "Consolas", "Microsoft YaHei", monospace;
+    font-size: 14px; min-height: 100%; }
+  .wrap { max-width: 1320px; margin: 0 auto; padding: 20px 20px 60px; }
+  .topbar { display: flex; align-items: center; gap: 12px; padding: 12px 0 18px; flex-wrap: wrap; }
+  .topbar h1 { font-size: 17px; font-weight: 500; }
+  .topbar .pill { font-size: 11px; color: var(--accent); border: 1px solid var(--accent-dim);
+    border-radius: 10px; padding: 2px 8px; }
+  .spacer { flex: 1; }
+  a.back { color: var(--text-dim); text-decoration: none; font-size: 13px; }
+  a.back:hover { color: var(--accent); }
+  .card { background: var(--bg-elev); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
+  .card h2 { font-size: 13px; font-weight: 500; color: var(--text-dim); margin-bottom: 12px;
+    display: flex; align-items: center; gap: 8px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  label.fl { display: block; font-size: 11px; color: var(--text-mute); margin: 8px 0 4px; }
+  input, textarea, select {
+    background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
+    border-radius: var(--radius-sm); padding: 8px 10px; font: inherit; outline: none;
+    min-width: 0;
+  }
+  input:focus, textarea:focus, select:focus { border-color: var(--accent); }
+  textarea { width: 100%; line-height: 1.6; resize: vertical; }
+  #brief { min-height: 92px; }
+  .btn { background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
+    border-radius: var(--radius-sm); padding: 8px 14px; cursor: pointer; font: inherit;
+    white-space: nowrap; }
+  .btn:hover:not(:disabled) { border-color: var(--accent); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #06231a;
+    font-weight: 600; }
+  .btn.small { padding: 5px 10px; font-size: 12px; }
+  .hint { font-size: 11px; color: var(--text-mute); line-height: 1.7; margin-top: 8px; }
+
+  #jobbar { display: none; padding: 8px 12px; border-radius: var(--radius-sm);
+    background: var(--bg-input); border: 1px solid var(--border); font-size: 13px;
+    color: var(--info); margin-bottom: 12px; }
+  #jobbar.on { display: block; }
+  #jobbar.err { color: var(--error); border-color: var(--error); }
+
+  /* ── 剧本头 ── */
+  .headgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .cast { margin-top: 10px; }
+  .cast .crow { display: grid; grid-template-columns: 130px 1fr auto; gap: 8px; margin-bottom: 6px; }
+  .cast .crow input { width: 100%; }
+
+  /* ── 每页 ── */
+  .page-block { border: 1px solid var(--border); border-radius: var(--radius);
+    margin-bottom: 14px; overflow: hidden; }
+  .pb-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px;
+    background: var(--bg-input); border-bottom: 1px solid var(--border-soft); flex-wrap: wrap; }
+  .pb-head .pn { font-size: 13px; color: var(--text-dim); }
+  .pb-head select { padding: 4px 8px; font-size: 12px; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid; }
+  .b-pending  { color: var(--text-mute); border-color: var(--text-mute); }
+  .b-running  { color: var(--info);     border-color: var(--info); }
+  .b-done     { color: var(--success);  border-color: var(--success); }
+  .b-error    { color: var(--error);    border-color: var(--error); }
+  .pb-head .seed { font-size: 11px; color: var(--text-mute); }
+  .pb-body { display: grid; grid-template-columns: 1fr 470px; gap: 0; }
+  @media (max-width: 1080px) { .pb-body { grid-template-columns: 1fr; } }
+  .editor { padding: 12px; }
+  .canvas { border-left: 1px solid var(--border-soft); padding: 12px;
+    display: flex; align-items: flex-start; justify-content: center;
+    background: #0d0d14; min-height: 240px; }
+  .canvas .ph { color: var(--text-mute); font-size: 12px; text-align: center;
+    padding: 60px 20px; line-height: 1.8; }
+  .canvas img { width: 100%; border-radius: var(--radius-sm); display: block; cursor: zoom-in; }
+  .panels { display: grid; gap: 8px; }
+  .panel { border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+    padding: 8px; background: #0f0f17; }
+  .panel .ph { font-size: 11px; color: var(--text-mute); margin-bottom: 5px; }
+  .panel textarea { min-height: 58px; font-size: 12px; line-height: 1.55; padding: 6px 8px; }
+  .panel .trow { display: grid; grid-template-columns: 1fr 90px 1fr; gap: 6px; margin-top: 6px; }
+  .panel .trow input { padding: 5px 8px; font-size: 12px; }
+  details.peek { margin-top: 10px; }
+  details.peek summary { font-size: 11px; color: var(--text-mute); cursor: pointer;
+    user-select: none; }
+  details.peek summary:hover { color: var(--accent); }
+  details.peek textarea { margin-top: 6px; min-height: 90px; font-size: 11px;
+    line-height: 1.5; color: var(--text-dim); }
+  .errline { color: var(--error); font-size: 11px; margin-top: 6px; word-break: break-all; }
+
+  /* ── 体检 ── */
+  #issues { margin-top: 8px; }
+  #issues .it { font-size: 12px; color: var(--warn); line-height: 1.8; }
+  #issues .ok { font-size: 12px; color: var(--success); }
+
+  /* ── 历史 ── */
+  #hist { display: flex; gap: 8px; align-items: center; }
+  #hist select { max-width: 320px; }
+
+  #zoom { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.92);
+    z-index: 30; align-items: center; justify-content: center; cursor: zoom-out; }
+  #zoom.on { display: flex; }
+  #zoom img { max-width: 94vw; max-height: 94vh; }
+  #toast { position: fixed; left: 50%; bottom: 32px; transform: translateX(-50%);
+    background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
+    padding: 9px 16px; border-radius: 20px; font-size: 13px; display: none; z-index: 40;
+    max-width: 80vw; }
+  #toast.err { color: var(--error); border-color: var(--error); }
+  .spin { display: inline-block; width: 10px; height: 10px; border: 2px solid currentColor;
+    border-right-color: transparent; border-radius: 50%; animation: sp .7s linear infinite;
+    vertical-align: -1px; margin-right: 6px; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <h1>moss 漫画台</h1>
+    <span class="pill">MOSS-Image · 30 步 · 一页一次生成</span>
+    <div class="spacer"></div>
+    <div id="hist"><select id="histsel"><option value="">— 最近任务 —</option></select></div>
+    <a class="back" href="/" >← 回首页</a>
+  </div>
+
+  <div id="jobbar"></div>
+
+  <!-- ── 1. 剧情 ── -->
+  <div class="card">
+    <h2>一句话剧情</h2>
+    <textarea id="brief" placeholder="例：清晨，一只胖橘猫跳上还在睡觉的男主人胸口坐下。男人没醒。猫慢慢抬起爪子，一巴掌拍在他脸上。男人惊坐起来，猫已经蹲在床脚舔爪子，装作什么都不知道。"></textarea>
+    <div class="row" style="margin-top:10px">
+      <select id="layout">
+        <option value="2x2" selected>四格 2×2</option>
+        <option value="3t">三格 · 上大下二小</option>
+        <option value="3h">三格 · 上中下</option>
+        <option value="2h">两格 · 上下</option>
+        <option value="single">整页一格</option>
+      </select>
+      <select id="style">
+        <option value="daily" selected>日常明亮</option>
+        <option value="wuxia">武侠</option>
+        <option value="suspense">悬疑冷色</option>
+        <option value="soft">柔和电影感</option>
+        <option value="custom">自定义…</option>
+      </select>
+      <input id="styleCustom" placeholder="自定义画风串（英文，写画法+光照+色调+气质）"
+             style="display:none;flex:1;min-width:260px">
+      <label style="font-size:12px;color:var(--text-dim)">页数
+        <input id="pages" type="number" value="1" min="1" max="12" style="width:62px">
+      </label>
+      <div class="spacer"></div>
+      <button class="btn primary" id="btn-write">让编剧写剧本</button>
+    </div>
+    <div class="hint">编剧只写「这一格画什么」，画风串、人物外形由脚本注入 → 格与格不会串味。
+      气泡 / 拟声 / 旁白直接画进图里（中文 ≤10 字，实测 12 字起会漏字乱序）。</div>
+  </div>
+
+  <!-- ── 2. 剧本 ── -->
+  <div class="card" id="spec-card" style="display:none">
+    <h2>剧本 <span id="spec-task" style="color:var(--text-mute);font-size:11px"></span></h2>
+    <div class="headgrid">
+      <div>
+        <label class="fl">标题</label>
+        <input id="spec-title" style="width:100%">
+      </div>
+      <div>
+        <label class="fl">画风串（英文）</label>
+        <input id="spec-style" style="width:100%">
+      </div>
+    </div>
+    <div class="cast">
+      <label class="fl">角色外形（只写不随场景变的属性：发型 / 脸 / 常穿的衣服 / 固定配饰）</label>
+      <div id="cast-list"></div>
+    </div>
+    <div id="issues"></div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn" id="btn-save">保存修改</button>
+      <button class="btn primary" id="btn-draw-all">全部出图</button>
+      <span class="hint" id="save-hint" style="margin:0"></span>
+    </div>
+  </div>
+
+  <!-- ── 3. 每页 ── -->
+  <div id="pages-wrap"></div>
+
+</div>
+
+<div id="zoom"><img id="zoomimg" alt=""></div>
+<div id="toast"></div>
+
+<script>
+var S = { task: null, spec: null, pages: [], timer: null, saving: false,
+          pending: false, poll: null };
+
+var LAYOUT_LABEL = { single: "单格", "2h": "两格·上下", "3h": "三格·上中下",
+                     "3t": "三格·上大下二小", "2x2": "四格 2×2" };
+var LAYOUT_N = { single: 1, "2h": 2, "3h": 3, "3t": 3, "2x2": 4 };
+
+function $(id) { return document.getElementById(id); }
+function esc(s) {
+  return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function toast(msg, isErr) {
+  var t = $("toast");
+  t.textContent = msg;
+  t.className = isErr ? "err" : "";
+  t.style.display = "block";
+  clearTimeout(toast._t);
+  toast._t = setTimeout(function () { t.style.display = "none"; }, isErr ? 6000 : 2600);
+}
+
+function bar(msg, isErr) {
+  var b = $("jobbar");
+  if (!msg) { b.className = ""; b.textContent = ""; return; }
+  b.className = "on" + (isErr ? " err" : "");
+  b.innerHTML = msg;
+}
+
+async function api(path, body) {
+  var opt = body
+    ? { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body) }
+    : {};
+  var r = await fetch(path, opt);
+  var j = null;
+  try { j = await r.json(); } catch (e) { j = { ok: false, error: "服务端返回不是 JSON" }; }
+  if (!r.ok && j && j.ok === undefined) { j = { ok: false, error: "HTTP " + r.status }; }
+  return j;
+}
+
+/* ══ 编剧 ══════════════════════════════════════════════════ */
+async function doWrite() {
+  var brief = $("brief").value.trim();
+  if (!brief) { toast("先写一句剧情", true); return; }
+  var style = $("style").value;
+  if (style === "custom") style = $("styleCustom").value.trim();
+  var btn = $("btn-write");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>编剧中…';
+  bar("编剧正在写剧本（几秒）…");
+  try {
+    var r = await api("/api/moss/write", {
+      brief: brief, layout: $("layout").value, style: style,
+      pages: parseInt($("pages").value, 10) || 1
+    });
+    if (!r.ok) {
+      bar("编剧失败：" + (r.error || "未知原因"), true);
+      if (r.raw) console.warn("模型原始回复：\n" + r.raw);
+      return;
+    }
+    bar("");
+    loadPayload(r);
+    loadList();
+    if (r.issues && r.issues.length) toast("剧本有 " + r.issues.length + " 条体检提示，看剧本区");
+    else toast("剧本写好了，看看没问题就出图");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "让编剧写剧本";
+  }
+}
+
+/* ══ 把后端 payload 灌进页面 ══════════════════════════════ */
+function loadPayload(p) {
+  S.task = p.task;
+  S.spec = {
+    title: p.title || "",
+    style: p.style || "",
+    cast: p.cast || {},
+    pages: (p.pages || []).map(function (x) {
+      return {
+        n: x.n, layout: x.layout, scene: x.scene,
+        panels: (x.panels || []).map(function (pan) {
+          return { desc: pan.desc, bubble: pan.bubble, sfx: pan.sfx, caption: pan.caption };
+        })
+      };
+    })
+  };
+  S.pages = p.pages || [];
+  renderSpec();
+  patch(p);
+}
+
+function renderSpec() {
+  $("spec-card").style.display = "";
+  $("spec-task").textContent = S.task || "";
+  $("spec-title").value = S.spec.title;
+  $("spec-style").value = S.spec.style;
+
+  var cl = $("cast-list");
+  cl.innerHTML = "";
+  Object.keys(S.spec.cast).forEach(function (k) {
+    var row = document.createElement("div");
+    row.className = "crow";
+    row.innerHTML = '<input value="' + esc(k) + '" readonly ' +
+      'style="color:var(--accent);background:#0f0f17">' +
+      '<input data-cast="' + esc(k) + '" value="' + esc(S.spec.cast[k]) + '">' +
+      '<button class="btn small" data-cast-del="' + esc(k) + '">删</button>';
+    cl.appendChild(row);
+  });
+
+  var wrap = $("pages-wrap");
+  wrap.innerHTML = "";
+  S.spec.pages.forEach(function (page) {
+    wrap.appendChild(renderPage(page));
+  });
+}
+
+function renderPage(page) {
+  var box = document.createElement("div");
+  box.className = "page-block";
+  box.setAttribute("data-page", page.n);
+
+  var opts = Object.keys(LAYOUT_LABEL).map(function (v) {
+    return '<option value="' + v + '"' + (v === page.layout ? " selected" : "") + ">" +
+      LAYOUT_LABEL[v] + "</option>";
+  }).join("");
+
+  var head = document.createElement("div");
+  head.className = "pb-head";
+  head.innerHTML =
+    '<span class="pn">第 ' + page.n + " 页</span>" +
+    '<select data-field="layout" data-page="' + page.n + '">' + opts + "</select>" +
+    '<span class="badge b-pending" data-role="badge">未出图</span>' +
+    '<span class="seed" data-role="seed"></span>' +
+    '<div class="spacer"></div>' +
+    '<button class="btn small primary" data-act="draw" data-page="' + page.n + '">出图</button>' +
+    '<button class="btn small" data-act="reroll" data-page="' + page.n + '">换 seed</button>';
+  box.appendChild(head);
+
+  var body = document.createElement("div");
+  body.className = "pb-body";
+
+  var ed = document.createElement("div");
+  ed.className = "editor";
+  var sceneHtml = '<label class="fl">场景（英文：地点 / 时间 / 光源 / 两三个物件）</label>' +
+    '<textarea data-field="scene" data-page="' + page.n + '" style="min-height:52px">' +
+    esc(page.scene) + "</textarea>";
+  ed.innerHTML = sceneHtml;
+
+  var panels = document.createElement("div");
+  panels.className = "panels";
+  page.panels.forEach(function (pan, i) {
+    var d = document.createElement("div");
+    d.className = "panel";
+    d.innerHTML =
+      '<div class="ph">格 ' + (i + 1) + "</div>" +
+      '<textarea data-field="desc" data-page="' + page.n + '" data-panel="' + i + '">' +
+      esc(pan.desc) + "</textarea>" +
+      '<div class="trow">' +
+      '<input data-field="bubble" data-page="' + page.n + '" data-panel="' + i + '" ' +
+      'placeholder="气泡 ≤10 字" value="' + esc(pan.bubble) + '">' +
+      '<input data-field="sfx" data-page="' + page.n + '" data-panel="' + i + '" ' +
+      'placeholder="拟声" value="' + esc(pan.sfx) + '">' +
+      '<input data-field="caption" data-page="' + page.n + '" data-panel="' + i + '" ' +
+      'placeholder="旁白 ≤10 字" value="' + esc(pan.caption) + '">' +
+      "</div>";
+    panels.appendChild(d);
+  });
+  ed.appendChild(panels);
+
+  var peek = document.createElement("details");
+  peek.className = "peek";
+  peek.innerHTML = "<summary>最终提示词（原样发给 moss）</summary>" +
+    '<textarea readonly data-role="prompt" data-page="' + page.n + '"></textarea>';
+  ed.appendChild(peek);
+  body.appendChild(ed);
+
+  var cv = document.createElement("div");
+  cv.className = "canvas";
+  cv.innerHTML = '<div class="ph" data-role="ph">还没出图<br>点右上角「出图」</div>' +
+    '<img data-role="img" style="display:none" alt="">';
+  body.appendChild(cv);
+  box.appendChild(body);
+
+  var err = document.createElement("div");
+  err.className = "errline";
+  err.setAttribute("data-role", "err");
+  box.appendChild(err);
+  return box;
+}
+
+/* ══ 轮询结果 ══════════════════════════════════════════════ */
+function patch(p) {
+  if (!p.ok) return;
+  S.pages = p.pages || [];
+  (p.pages || []).forEach(function (it) {
+    var box = document.querySelector('.page-block[data-page="' + it.n + '"]');
+    if (!box) return;
+    var badge = box.querySelector('[data-role="badge"]');
+    badge.className = "badge b-" + (it.status || "pending");
+    badge.textContent = { pending: "未出图", running: "画图中…", done: "已完成",
+                          error: "失败" }[it.status] || it.status;
+    var seed = box.querySelector('[data-role="seed"]');
+    seed.textContent = it.seed ? ("seed " + it.seed + (it.secs ? " · " + it.secs + "s" : "")) : "";
+    var errEl = box.querySelector('[data-role="err"]');
+    errEl.textContent = it.error || "";
+    var img = box.querySelector('[data-role="img"]');
+    var ph = box.querySelector('[data-role="ph"]');
+    if (it.url) {
+      if (img.getAttribute("src") !== it.url) img.src = it.url;
+      img.style.display = "";
+      ph.style.display = "none";
+    } else {
+      img.style.display = "none";
+      ph.style.display = "";
+    }
+    var pt = box.querySelector('[data-role="prompt"]');
+    if (pt && document.activeElement !== pt) pt.value = it.prompt || "";
+  });
+  renderIssues(p.issues || []);
+  if (p.running) {
+    bar('<span class="spin"></span>正在画第 ' + p.running.page + " 页 · 已等 " +
+        Math.round(p.running.waited) + " 秒（一页约 150~200 秒）");
+  } else {
+    var errs = (p.pages || []).filter(function (x) { return x.status === "error"; });
+    if (errs.length) bar(errs.length + " 页没画出来，看每页下面的红字", true);
+    else bar("");
+  }
+}
+
+function renderIssues(list) {
+  var box = $("issues");
+  if (!list.length) {
+    box.innerHTML = '<div class="ok">体检通过：格数、方位、字数都对得上</div>';
+    return;
+  }
+  box.innerHTML = '<div style="font-size:11px;color:var(--text-mute);margin-top:10px">' +
+    "体检（只提示，不拦着出图）：</div>" +
+    list.map(function (x) { return '<div class="it">· ' + esc(x) + "</div>"; }).join("");
+}
+
+function startPoll() {
+  if (S.poll) return;
+  S.poll = setInterval(async function () {
+    if (!S.task) return;
+    var r = await api("/api/moss/status?task=" + encodeURIComponent(S.task));
+    if (r.ok) patch(r);
+    if (!r.running) { clearInterval(S.poll); S.poll = null; loadList(); }
+  }, 2500);
+}
+
+/* ══ 编辑同步 + 自动保存 ═══════════════════════════════════ */
+document.addEventListener("input", function (e) {
+  var t = e.target;
+  if (t.id === "spec-title" && S.spec) { S.spec.title = t.value; scheduleSave(); return; }
+  if (t.id === "spec-style" && S.spec) { S.spec.style = t.value; scheduleSave(); return; }
+  if (t.dataset && t.dataset.cast) {
+    S.spec.cast[t.dataset.cast] = t.value; scheduleSave(); return;
+  }
+  var n = parseInt(t.dataset.page, 10);
+  var field = t.dataset.field;
+  if (!n || !field || !S.spec) return;
+  var page = S.spec.pages.filter(function (p) { return p.n === n; })[0];
+  if (!page) return;
+  if (field === "layout") {
+    // 换版式＝换格数。这里按新版式补齐 / 截断格子，否则会拼出
+    // 「exactly four panels」却只描述两格的提示词，模型一定画糊。
+    page.layout = t.value;
+    var want = LAYOUT_N[t.value] || 1;
+    while (page.panels.length < want) {
+      page.panels.push({ desc: "", bubble: "", sfx: "", caption: "" });
+    }
+    if (page.panels.length > want) page.panels.length = want;
+    var old = document.querySelector('.page-block[data-page="' + n + '"]');
+    var fresh = renderPage(page);
+    old.parentNode.replaceChild(fresh, old);
+    refreshStatus();
+    scheduleSave();
+    return;
+  }
+  if (field === "scene") {
+    page.scene = t.value;
+  } else if (t.dataset.panel !== undefined) {
+    page.panels[parseInt(t.dataset.panel, 10)][field] = t.value;
+  } else return;
+  scheduleSave();
+});
+
+async function refreshStatus() {
+  if (!S.task) return;
+  var r = await api("/api/moss/status?task=" + encodeURIComponent(S.task));
+  if (r.ok) patch(r);
+}
+
+$("cast-list").addEventListener("click", function (e) {
+  var k = e.target.dataset && e.target.dataset.castDel;
+  if (!k) return;
+  delete S.spec.cast[k];
+  renderSpec();
+  scheduleSave();
+});
+
+function scheduleSave() {
+  clearTimeout(S.timer);
+  $("save-hint").textContent = "有改动…";
+  S.timer = setTimeout(saveNow, 1200);
+}
+
+async function saveNow() {
+  clearTimeout(S.timer);
+  if (!S.task || !S.spec) return;
+  if (S.saving) { S.pending = true; return; }
+  S.saving = true;
+  try {
+    var r = await api("/api/moss/save", { task: S.task, spec: S.spec });
+    if (r.ok) {
+      renderIssues(r.issues || []);
+      (r.pages || []).forEach(function (it) {
+        var pt = document.querySelector('[data-role="prompt"][data-page="' + it.n + '"]');
+        if (pt) pt.value = it.prompt || "";
+      });
+      $("save-hint").textContent = "已保存";
+      setTimeout(function () {
+        if ($("save-hint").textContent === "已保存") $("save-hint").textContent = "";
+      }, 1500);
+    } else {
+      toast(r.error || "保存失败", true);
+    }
+  } finally {
+    S.saving = false;
+    if (S.pending) { S.pending = false; saveNow(); }
+  }
+}
+
+/* ══ 出图 ══════════════════════════════════════════════════ */
+async function draw(pageNo, reroll) {
+  if (!S.task) return;
+  await saveNow();
+  while (S.saving) { await new Promise(function (r) { setTimeout(r, 100); }); }
+  var body = { task: S.task };
+  if (pageNo) body.pages = [pageNo];
+  if (reroll) body.reroll = true;
+  var btns = document.querySelectorAll("button[data-act]");
+  btns.forEach(function (b) { b.disabled = true; });
+  var r = await api("/api/moss/render", body);
+  btns.forEach(function (b) { b.disabled = false; });
+  if (!r.ok) { toast(r.error || "没排上队", true); return; }
+  if (reroll) toast("换种子重抽，" + (r.seed ? "seed " + r.seed : "") + "，约 3 分钟");
+  bar('<span class="spin"></span>已入队，等出图…');
+  startPoll();
+  setTimeout(startPoll, 3000);
+}
+
+document.addEventListener("click", function (e) {
+  var b = e.target.closest && e.target.closest("button[data-act]");
+  if (b) {
+    var n = parseInt(b.dataset.page, 10) || 0;
+    draw(n || null, b.dataset.act === "reroll");
+    return;
+  }
+  var img = e.target;
+  if (img.tagName === "IMG" && img.closest(".canvas")) {
+    $("zoomimg").src = img.src;
+    $("zoom").className = "on";
+  }
+});
+$("zoom").addEventListener("click", function () { $("zoom").className = ""; });
+
+$("btn-write").addEventListener("click", doWrite);
+$("btn-save").addEventListener("click", function () { saveNow().then(function () { toast("已保存"); }); });
+$("btn-draw-all").addEventListener("click", function () { draw(null, false); });
+
+$("style").addEventListener("change", function () {
+  $("styleCustom").style.display = this.value === "custom" ? "" : "none";
+  if (this.value === "custom") $("styleCustom").focus();
+});
+
+/* ══ 历史任务 ══════════════════════════════════════════════ */
+async function loadList() {
+  var r = await api("/api/moss/list");
+  if (!r.ok) return;
+  var sel = $("histsel");
+  var keep = sel.value;
+  sel.innerHTML = '<option value="">— 最近任务 —</option>' +
+    (r.items || []).map(function (it) {
+      return '<option value="' + esc(it.task) + '">' + esc(it.mtime + " · " + it.title) +
+        (it.done ? "（" + it.done + "/" + it.pages + "）" : "") + "</option>";
+    }).join("");
+  var has = Array.prototype.some.call(sel.options, function (o) { return o.value === keep; });
+  sel.value = has ? keep : (S.task && Array.prototype.some.call(sel.options, function (o) {
+    return o.value === S.task; }) ? S.task : "");
+}
+
+$("histsel").addEventListener("change", async function () {
+  if (!this.value) return;
+  var r = await api("/api/moss/status?task=" + encodeURIComponent(this.value));
+  if (!r.ok) { toast(r.error || "读不出来", true); return; }
+  loadPayload(r);
+  if (r.running) startPoll();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+});
+
+/* 打开页面：有最近任务就自动切到最新那个，省一步 */
+(async function boot() {
+  await loadList();
+  var first = $("histsel").options[1];
+  if (!first) return;
+  var r = await api("/api/moss/status?task=" + encodeURIComponent(first.value));
+  if (r.ok) { loadPayload(r); $("histsel").value = first.value; }
+  if (r.running) startPoll();
+})();
+</script>
+</body>
+</html>

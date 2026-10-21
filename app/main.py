@@ -25,6 +25,7 @@ from app import usage as usage_stats
 # 'function' object has no attribute 'default_prompt'。
 from app import vision as vision_mod
 from app import comic_api
+from app import moss_api
 from app import gen_api
 from app import card_api
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
@@ -110,6 +111,9 @@ def _truncate_at_user(history, user_index):
 
 # 漫画工作台 API（独立 Blueprint，见 app/comic_api.py）
 app.register_blueprint(comic_api.bp)
+
+# moss 漫画台 API（独立 Blueprint，见 app/moss_api.py）：一句话 → 编剧写整页 → 一次出图
+app.register_blueprint(moss_api.bp)
 
 # 手动跑图台 API（独立 Blueprint，见 app/gen_api.py）：无 AI 的文生图页面
 app.register_blueprint(gen_api.bp)
@@ -681,6 +685,12 @@ def status_page():
 def comic_page():
     """漫画工作台：编剧 → 逐格渲染 → 加气泡（见 app/comic_api.py）。"""
     return send_from_directory(WEB_DIR, "comic_studio.html")
+
+
+@app.route("/moss")
+def moss_comic_page():
+    """moss 漫画台：一句话 → 编剧写整页 → 一次出图（见 app/moss_api.py）。"""
+    return send_from_directory(WEB_DIR, "moss_studio.html")
 
 
 @app.route("/characters")
