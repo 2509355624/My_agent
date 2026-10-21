@@ -43,7 +43,7 @@ except ImportError:                    # 非 Windows 平台退化为不做检查
 
 from app import (card_bot, confirm_gate, direct_gen, image_jobs, image_out, interject,
                  logsetup,
-                 longterm, notify, persona, qq_api, qq_status, recent,
+                 longterm, moss_bot, notify, persona, qq_api, qq_status, recent,
                  stickers, usage)
 from app.agent import run_agent_stream, tail_tokens
 from app.agent_prompt import build_stable_prompt
@@ -1173,6 +1173,21 @@ class SessionRunner:
                         finally:
                             qq_api.clear_context()
                         return
+            # moss 漫画（2026-10-22）：`moss漫画 <一句话剧情>` 整轮接管，出一页
+            # 四格。必须同样排在直达管道**前面**——这个词里含渠道词 `moss`，
+            # 交给 direct_gen 会画出一张写着「moss漫画」四个字的图。
+            # 编剧/出图都在后台线程里跑（约 90 秒），这条消息线程立刻放行。
+            moss_hit, moss_brief, moss_tip = moss_bot.parse(own_text)
+            if moss_hit:
+                try:
+                    if not moss_brief:
+                        self._deliver(False, moss_tip, [], "", reply_to=msg_id)
+                    else:
+                        moss_bot.start(self.target, self.target_id, moss_brief,
+                                       reply_to=msg_id)
+                finally:
+                    qq_api.clear_context()
+                return
         # 直达生图管道（2026-10-04，10-05 两次扩版）：@ 轮和关键词轮都过一次
         # 轻量 LLM（direct_gen.decide）——AI 判意图：生图 → 直接入队；聊天/
         # 提问 → 把 reply 发出去；引用图+意见 → 改图管道（识图→修正→重生成）。
@@ -1316,7 +1331,11 @@ class SessionRunner:
 
         if not sent_by_tool and reply.strip():
             try:
-                send_text(self.target_id, reply, reply_to=reply_to or None)
+                # 群聊走短句分条（见 qq_api.split_chat）：一条 300 字的回复在群里
+                # 就是「小作文」，拆成两三句发才像有人在说话。私聊不分——一对一
+                # 没有刷屏这回事，拆开反而像连发轰炸。
+                send_text(self.target_id, self._chat_chunks(reply),
+                          reply_to=reply_to or None)
                 spoke = True
             except Exception as exc:
                 # 非好友拒收是可预期的策略限制，给一句人话；别的失败照旧留堆栈。
@@ -1360,6 +1379,26 @@ class SessionRunner:
             interject.mark_spoke(QQ_AGENT_ID, self.target_id)
             recent.remember(QQ_AGENT_ID, self.target_id, QQ_BOT_NAME,
                             reply or receipt_spoke)
+
+    def _chat_chunks(self, reply):
+        """群聊正文出口的短句分条。返回 str（不拆）或 list（拆成几条）。
+
+        `send_group` / `send_private` 两个都吃 list，且 list 分支会跳过
+        `to_qq_text`（那段是给整段字符串用的），所以这里必须先转纯文本——否则
+        Markdown 的 `**` 会原样发进群里。转完变空的那种（整条只有符号）直接丢，
+        全被丢光就退回原样发，不能因为拆句把回复弄没。
+        """
+        if self.target != "group":
+            return reply
+        parts = qq_api.split_chat(reply)
+        if len(parts) <= 1:
+            return reply
+        out = []
+        for part in parts:
+            plain = qq_api.to_qq_text(part)
+            if plain.strip():
+                out.append(plain)
+        return out or reply
 
 
 # ─── 适配层主体 ──────────────────────────────────────
