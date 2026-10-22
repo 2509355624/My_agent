@@ -356,8 +356,8 @@ function setBusy(b, phase) {
 // 候选由后端去问 provider 自己拿（模型 ID 会下线也会改名，写死的清单会慢慢
 // 指向不存在的模型）。复用网页端同一套接口，不另造一份。
 //
-// 选了哪个要记住：加了自定义中转站（grok）之后每次刷新都跳回 deepseek 的话，
-// 等于每次都得手动再选一遍。和任务名一样存 localStorage。
+// 只记住「具体模型名」，渠道本身每次回到后端默认（deepseek 官方）：
+// grok-4.5 思考要 30~40 秒，刷新后自动跳回它反而拖慢编剧（2026-10-22 用户口径）。
 
 const LS_LLM = 'comic_llm_choice';
 
@@ -458,11 +458,14 @@ async function loadProviders() {
     sel.innerHTML = PROVIDERS.map(p =>
       '<option value="' + esc(p.id) + '">' + esc(p.label)
       + (p.custom ? ' · 自定义' : '') + '</option>').join('');
+    // 默认渠道：每次都用后端默认（deepseek 官方）。自定义中转站（grok）只是
+    // 手动切换用，不跨刷新记住——grok-4.5 光思考就要 30~40 秒，漫画编剧每次
+    // 都跳回它太慢（2026-10-22 用户口径）。具体模型名仍然记，只认当前渠道。
     const want = savedLlm();
-    if (want.provider && PROVIDERS.some(p => p.id === want.provider)) {
-      sel.value = want.provider;
-    } else if (PROVIDERS.some(p => p.id === d.default)) {
+    if (PROVIDERS.some(p => p.id === d.default)) {
       sel.value = d.default;
+    } else if (want.provider && PROVIDERS.some(p => p.id === want.provider)) {
+      sel.value = want.provider;
     }
     await loadModels();
     syncProvBtn();

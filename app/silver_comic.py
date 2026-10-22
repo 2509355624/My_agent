@@ -56,6 +56,21 @@ _CONTRACT = """【本项目输出契约 —— 排版以下面为准，内容规
   每个角色都必须把自己的脸部特征写全，不许只写其中一个，也不许把两个人挤成一行。
   单人只写一行。不写服饰、鞋袜、配件、体型、动作、场景、灯光。
 - 固定部分写完之后空一行，再写动态部分。
+
+【固定部分必须长这样 —— 照下面抄，别自己改结构】
+
+双人（两行，每行一个人，全英文）：
+1girl, Illyasviel von Einzbern, silver-white long hair, blunt bangs, red eyes, purple hairband with white frills
+1boy, faceless man, short black hair, pale skin, grey eyes
+
+单人（一行）：
+1girl, Illyasviel von Einzbern, silver-white long hair, blunt bangs, red eyes
+
+下面是错误写法，一条都不要出现：
+固定部分（一行，角色标识 + 脸部特征）           ← 这是文档里的模板字，不是内容
+1girl, 1boy, Illyasviel, silver-white long hair   ← 只写了女生的特征，男生没了
+女主：伊莉雅，银白长发，红瞳                      ← 不许中文，必须英文
+1girl, Illyasviel, wearing white sweater          ← 固定部分不许写服饰
 - 每一行动态部分按上面的规范写：场景 + 女生服饰 + 男生服饰 + 动作 + 神态 + 视角 + 灯光。
   服饰的颜色 + 款式必须写全，每格重复，同一件衣服全篇一致，换装时写清新的颜色和款式。
 - 动态部分不要再重复固定部分已有的角色名、发色、瞳色、发饰。
@@ -217,7 +232,9 @@ def split(text):
     blocks = [b for b in blocks if b["scene"] or b["bubble"] or b["bubble2"]]
     if not fixed:
         log.warning("silver 原文没有可用固定部分，前 300 字：%r", text[:300])
-        raise ValueError("silver 编剧缺固定部分")
+        raise ValueError(
+            "silver 编剧缺固定部分：模型没按格式输出，"
+            "固定部分应是 1girl/1boy 各一行英文脸部特征；请重新生成")
     if _CJK_RE.search(fixed):
         raise ValueError("silver 固定部分必须是英文")
     for i, b in enumerate(blocks, 1):
