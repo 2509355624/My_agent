@@ -162,11 +162,18 @@ def _lora_kind(workflow):
     （只挂 model），image_gen_v1 是 LoraLoader（model+clip）。重建时把
     ModelOnly 换成 LoraLoader 会平白多出 clip 连线，而这类工作流的 CLIP 是
     CLIPLoader 单独喂的，压根不该经过 LoRA。
+
+    **一个 LoRA 节点都没有时默认 ModelOnly**（2026-10-22）：原来默认 LoraLoader，
+    CLIP 槽位按 `[底模, 1]` 硬接，底模若是 UNETLoader（0 号口只有 MODEL）就
+    指向了不存在的输出。只挂 model 在 checkpoint / UNET 两种底模上都成立。
     """
     for nd in workflow.values():
-        if nd.get("class_type") == "LoraLoaderModelOnly":
+        cls = (nd or {}).get("class_type")
+        if cls == "LoraLoaderModelOnly":
             return "LoraLoaderModelOnly"
-    return LORA
+        if cls == "LoraLoader":
+            return LORA
+    return "LoraLoaderModelOnly"
 
 
 def _lora_chain(workflow, gen_id):

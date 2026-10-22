@@ -717,16 +717,32 @@ def _rebuild_loras(wf, slots):
         return 0                    # 本来就没链、也没要挂——一个字都不动
 
     # 节点类跟着现有节点走（删之前看）：ModelOnly 工作流不能换成 LoraLoader
-    # （会向 UNETLoader 要 clip 输出，它没这个槽，提交必被拒）。没有现存 LoRA
-    # 节点时按底模加载器的形态推：anima 系全是 UNETLoader + CLIPLoader 分开的
-    # 组合，用 ModelOnly 才对。
+    # （会向 UNETLoader 要 clip 输出，它没这个槽，提交必被拒）。
+    #
+    # ⚠️ 2026-10-22 实报：这里原来在**没有旧 LoRA 节点**、又认不出 UNETLoader 的
+    # 工作流上退回 `LoraLoader`，而下面建节点时只写了 model / lora_name /
+    # strength_model —— 缺 `clip` 和 `strength_clip` 两个必填输入，ComfyUI 直接
+    # `400 prompt_outputs_failed_validation`，漫画台每一格都在提交这一步挂掉
+    # （界面上看起来就是「重启完就装死」）。没有旧链时一律只挂 model 最安全：
+    # `LoraLoaderModelOnly` 对 checkpoint / UNET 两种底模都成立。
+    clip_src = None
+    clip_strength = 1.0
     if old_ids:
         kind = next(nd["class_type"] for nd in wf.values()
                     if (nd or {}).get("class_type") in LORA_CLASSES)
+        if kind == "LoraLoader":
+            # 旧链是带 clip 的：把它的 clip 来源抄下来，新链才接得上。
+            for nid in sorted(old_ids):
+                inp = _inputs(wf.get(nid))
+                src = inp.get("clip")
+                if isinstance(src, list) and src:
+                    clip_src = list(src)
+                    clip_strength = _f(inp.get("strength_clip"), 1.0)
+                    break
+            if clip_src is None:        # 旧节点自己就没接 clip，别照抄一个坏的
+                kind = "LoraLoaderModelOnly"
     else:
-        kind = "LoraLoaderModelOnly" if any(
-            "unetloader" in str((nd or {}).get("class_type") or "").lower()
-            for nd in wf.values()) else "LoraLoader"
+        kind = "LoraLoaderModelOnly"
 
     # 链头：有旧链就沿旧链回溯（_chain_head 干的）；没有旧链但要挂新 LoRA 时，
     # 用第一段采样器**当前**的 model 来源——那才是它正在用的底模，别按 dict
@@ -745,14 +761,22 @@ def _rebuild_loras(wf, slots):
     used = sorted(int(x) for x in wf if str(x).lstrip("-").isdigit())
     nxt = (used[-1] + 1) if used else 1
     target = head
+    clip_link = clip_src
     n = 0
     for s in slots:
         nid = str(nxt)
         nxt += 1
-        wf[nid] = {"class_type": kind,
-                   "inputs": {"model": [target, 0],
-                              "lora_name": str(s.get("name") or "").strip(),
-                              "strength_model": _f(s.get("strength"), 1.0)}}
+        inputs = {"model": [target, 0],
+                  "lora_name": str(s.get("name") or "").strip(),
+                  "strength_model": _f(s.get("strength"), 1.0)}
+        if kind == "LoraLoader":
+            # 带 clip 的链：第一个接旧链原来的来源，之后每个接上一个 LoRA 的
+            # CLIP 输出（LoraLoader 的 1 号口）。
+            inputs["clip"] = list(clip_link) if clip_link else [target, 1]
+            inputs["strength_clip"] = clip_strength
+        wf[nid] = {"class_type": kind, "inputs": inputs}
+        if kind == "LoraLoader":
+            clip_link = [nid, 1]
         target = nid
         n += 1
 

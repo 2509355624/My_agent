@@ -150,6 +150,31 @@ class ApplyTest(unittest.TestCase):
         self.assertFalse([n for n in out
                           if out[n]["class_type"] in ro.LORA_CLASSES])
 
+    def test_lora_on_workflow_without_chain_never_builds_clipless_loader(self):
+        """没有旧 LoRA 节点时只能建 ModelOnly。
+
+        2026-10-22 实报：这里退回 LoraLoader，但建节点只写了 model/lora_name/
+        strength_model，缺 clip 与 strength_clip → ComfyUI 直接 400
+        `prompt_outputs_failed_validation`，漫画台每格都卡在提交这一步。
+        """
+        wf = _fresh_workflow()
+        for nid in [n for n, nd in wf.items()
+                    if nd.get("class_type") in ro.LORA_CLASSES]:
+            wf.pop(nid)
+        base = [n for n, nd in wf.items()
+                if "UNETLoader" in str(nd.get("class_type"))][0]
+        for nd in wf.values():
+            inp = nd.get("inputs") or {}
+            if isinstance(inp.get("model"), list):
+                inp["model"] = [base, 0]
+        n = ro._rebuild_loras(wf, [{"name": "a.safetensors", "strength": 0.8}])
+        self.assertEqual(n, 1)
+        added = [nd for nd in wf.values() if nd.get("class_type") in ro.LORA_CLASSES]
+        self.assertEqual(len(added), 1)
+        self.assertEqual(added[0]["class_type"], "LoraLoaderModelOnly")
+        self.assertEqual(set(added[0]["inputs"]),
+                         {"model", "lora_name", "strength_model"})
+
     def test_params_and_size_land_on_the_right_nodes(self):
         wf = _fresh_workflow()
         opts = ro.defaults("anima-line")
