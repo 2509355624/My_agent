@@ -36,17 +36,58 @@ import random
 import re
 import shutil
 import sys
+import threading
 import time
 from datetime import datetime
 
 import requests
 
 from app import comfy_out, comfy_src, image_jobs, comic_render_opts
+from app.cancel import Cancelled
 from app.config import BASE_DIR, COMFYUI_OUTPUT_DIR, COMFYUI_URL
 from app.skills import load_skill, load_workflow
 from app.tools.normal import generate_image
 
 log = logging.getLogger("comic")
+
+# ─── 「中断全部」（2026-10-22 用户要的）────────────────────────
+# 一个任务一个 Event，置位后三处同时收效：
+#   ① `run()` 的逐格循环在下一格开始前跳出（已出的格保留，一张不删）；
+#   ② 还排在 `image_jobs` 队列里的那几张，由 `/api/comic/abort` 调
+#      `image_jobs.cancel_batch()` 直接摘掉（不摘的话队列名额还占着，
+#      改完参数重跑会被"前面还有 N 张"劝退）；
+#   ③ 正在画的那一张，Event 同时挂在 job 上（见 `_submit` 的 abort），
+#      worker 的 `wait_done` 每秒看到一次就定向 /interrupt。
+#
+# 只活在进程内存里：中断是「这一次」的意志，重启服务后不该还记着。
+_ABORT = {}
+_ABORT_LOCK = threading.Lock()
+
+
+def new_abort_event(task_dir):
+    """开跑前换一个新的（干净）Event —— 上一次中断的信号不能带到这一次。"""
+    with _ABORT_LOCK:
+        ev = threading.Event()
+        _ABORT[task_dir] = ev
+        return ev
+
+
+def abort_event(task_dir):
+    """这个任务当前的中断信号；没有（没跑过 / 已经收尾）返回 None。"""
+    with _ABORT_LOCK:
+        return _ABORT.get(task_dir)
+
+
+def is_aborting(task_dir):
+    ev = abort_event(task_dir)
+    return bool(ev is not None and ev.is_set())
+
+
+def clear_abort(task_dir):
+    """这一次跑完了（正常跑完或被打断）→ 摘掉，别让注册表随任务数长大。"""
+    with _ABORT_LOCK:
+        _ABORT.pop(task_dir, None)
+
 
 # 阶段一 / 阶段二的渠道（见 skills/ 下各自的 SKILL.md）
 # 2026-10-11 用户拍板：漫画场景渲染从 silver 换成 anima-line（anima 线条，
@@ -796,7 +837,7 @@ def _out_dir_for(task):
     return "web/漫画_%s" % tid if tid else ""
 
 
-def _submit(workflow, skill, prompt, seed, task=None, out_dir=None):
+def _submit(workflow, skill, prompt, seed, task=None, out_dir=None, abort=None):
     """排进全局串行队列并等出图，返回 ComfyUI 那边的输出图（相对路径）。
 
     target=None 是「网页侧」路径：worker 出图后只把 history entry 挂到 job 上，
@@ -811,7 +852,14 @@ def _submit(workflow, skill, prompt, seed, task=None, out_dir=None):
 
     `out_dir` 给了就按它落目录（角色卡封面走 `web/角色卡_<卡号>`）；不给还是
     按任务走。
+
+    `abort` 是任务级中断信号（2026-10-22）。传了就**共用**给这个 job：正在画
+    的那一张靠它被 `wait_done` 中途停下（定向 /interrupt），排队中的靠
+    `image_jobs.cancel_batch()` 整批摘掉。入队前先看一眼——已经中断了就别再
+    往队列里塞，省得 worker 取到又立刻扔掉。
     """
+    if abort is not None and abort.is_set():
+        raise Cancelled("用户中断了整批渲染")
     job, reason = image_jobs.enqueue(None, None, workflow, skill=skill,
                                      prompt=prompt, seed=seed, landscape=False,
                                      batch="comic",
@@ -819,6 +867,10 @@ def _submit(workflow, skill, prompt, seed, task=None, out_dir=None):
                                      else out_dir)
     if reason:
         raise RuntimeError(reason)
+    if abort is not None:
+        # 直接挂同一个 Event（不是 copy）：任务一中断，这一张立刻能看见。
+        # 挂在 enqueue 之后是没法避免的：job 对象要等入队才有。
+        job.cancel = abort
     entry = job.wait()                       # 失败会抛 job.error
     names = image_jobs.output_images(entry, job=job)
     if not names:
@@ -943,7 +995,7 @@ def _submit_nai(prompt, skill):
     return paths[0]
 
 
-def render_scene(task, p, scene_skill=SCENE_SKILL, opts=None):
+def render_scene(task, p, scene_skill=SCENE_SKILL, opts=None, abort=None):
     """阶段一：文生图，出这一格的场景图。
 
     渠道可以是本机（anima-line，ComfyUI）或云端（nai）——见模块顶部的说明。
@@ -972,7 +1024,13 @@ def render_scene(task, p, scene_skill=SCENE_SKILL, opts=None):
     wf = comic_render_opts.apply(wf, opts)
     log.info("[格 %s] 场景渲染（%s，seed %s，%s）", p.no, scene_skill, seed,
              comic_render_opts.describe(opts))
-    name = _submit_retry(lambda: _submit(wf, scene_skill, p.scene, seed, task=task),
+    # `abort` 只在真给了才往下传：老测试 / 老调用方给 `_submit` 塞的替身是固定
+    # 签名（`(wf, skill, prompt, seed, task=None)`），无条件带一个 abort 关键字
+    # 会把它们一次性弄红，而这些路径本来就与中断无关。
+    _kw = {"task": task}
+    if abort is not None:
+        _kw["abort"] = abort
+    name = _submit_retry(lambda: _submit(wf, scene_skill, p.scene, seed, **_kw),
                          "[格 %s] 场景" % p.no)
     _download(name, task.raw_path(p))
     p.seed = seed
@@ -1008,7 +1066,7 @@ def _build_i2i(skill, prompt, seed, uploaded, denoise=I2I_DENOISE):
     return generate_image._apply_i2i_placeholders(wf, uploaded, denoise)
 
 
-def render_bubble(task, p, split=False, prompt=None):
+def render_bubble(task, p, split=False, prompt=None, abort=None):
     """阶段二：qwen 图生图，在场景图上加这一格的对话框。
 
     有 `气泡2:` 的格**默认一遍就把两个气泡和旁白全画完**（BUBBLE_TEMPLATE_ALL，
@@ -1036,7 +1094,11 @@ def render_bubble(task, p, split=False, prompt=None):
     wf = _build_i2i(BUBBLE_SKILL, prompt, seed, uploaded)
     log.info("[格 %s] 加气泡（%s，seed %s%s%s）", p.no, BUBBLE_SKILL, seed,
              "，分开画" if split else "", "，提示词已手改" if overridden else "")
-    name = _submit_retry(lambda: _submit(wf, BUBBLE_SKILL, prompt, seed, task=task),
+    # 同 render_scene：abort 只在真给了才传，别动那些固定签名的替身
+    _kw = {"task": task}
+    if abort is not None:
+        _kw["abort"] = abort
+    name = _submit_retry(lambda: _submit(wf, BUBBLE_SKILL, prompt, seed, **_kw),
                          "[格 %s] 加气泡" % p.no)
     _download(name, task.final_path(p))
     if split and p.two_bubbles():
@@ -1048,7 +1110,7 @@ def render_bubble(task, p, split=False, prompt=None):
         wf2 = _build_i2i(BUBBLE_SKILL, prompt2, seed2, uploaded2)
         log.info("[格 %s] 加第二个气泡（%s，seed %s）", p.no, BUBBLE_SKILL, seed2)
         name2 = _submit_retry(
-            lambda: _submit(wf2, BUBBLE_SKILL, prompt2, seed2, task=task),
+            lambda: _submit(wf2, BUBBLE_SKILL, prompt2, seed2, **_kw),
             "[格 %s] 加第二个气泡" % p.no)
         _download(name2, task.final_path(p))             # 覆盖成两气泡版
     p.state = "done"
@@ -1167,39 +1229,67 @@ def run(script_path, only=None, silver_only=False, redo=False,
                 p.state = "rendered"
                 p.error = None
 
-    # 阶段一：所有格先用同一个渠道渲染完（按模型分批，别逐格换渠道）
-    for p in todo:
-        if p.state in ("rendered", "done"):
-            log.info("[格 %s] 场景已就绪，跳过", p.no)
-            continue
-        try:
-            render_scene(task, p, scene_skill, opts=scene_opts)
-        except Exception as e:                       # 单格失败不拖垮整批
-            p.error = str(e)
-            log.error("[格 %s] 场景渲染失败：%s", p.no, e)
-        task.save_state()
+    # 中断信号（2026-10-22）：每次开跑换一个新的，上一次点「中断全部」留下的
+    # 信号不能带到这一次（否则一开跑立刻又停）。
+    ev = new_abort_event(task.dir)
+    try:
+        # 阶段一：所有格先用同一个渠道渲染完（按模型分批，别逐格换渠道）
+        for p in todo:
+            if ev.is_set():
+                log.info("已中断：停在格 %s，剩下 %d 格没画（已出的图都留着）",
+                         p.no, len([x for x in todo if x.state == "pending"]))
+                break
+            if p.state in ("rendered", "done"):
+                log.info("[格 %s] 场景已就绪，跳过", p.no)
+                continue
+            try:
+                render_scene(task, p, scene_skill, opts=scene_opts, abort=ev)
+            except Cancelled:
+                # 用户按了「中断全部」：这一格没画完，**不算它的错**——清掉
+                # 半截状态、回到待渲染，改完参数点开跑它还在这批里。
+                p.error = None
+                task.save_state()
+                log.info("已中断：格 %s 停在半路，状态回到待渲染", p.no)
+                break
+            except Exception as e:                   # 单格失败不拖垮整批
+                p.error = str(e)
+                log.error("[格 %s] 场景渲染失败：%s", p.no, e)
+            task.save_state()
 
-    if silver_only:
+        if silver_only:
+            _report(task)
+            return task
+
+        # 阶段二：统一换 qwen 加气泡
+        for p in todo:
+            if ev.is_set():
+                log.info("已中断：停在格 %s，剩下 %d 格没加气泡", p.no,
+                         len([x for x in todo if x.state == "rendered"]))
+                break
+            if p.state == "done":
+                log.info("[格 %s] 已完成，跳过", p.no)
+                continue
+            if p.state != "rendered":
+                log.warning("[格 %s] 场景没出图，跳过加气泡", p.no)
+                continue
+            try:
+                render_bubble(task, p, split=split_bubbles, abort=ev)
+            except Cancelled:
+                p.error = None
+                task.save_state()
+                log.info("已中断：格 %s 的气泡没画完，底图还在", p.no)
+                break
+            except Exception as e:
+                p.error = str(e)
+                log.error("[格 %s] 加气泡失败：%s", p.no, e)
+            task.save_state()
+
         _report(task)
         return task
-
-    # 阶段二：统一换 qwen 加气泡
-    for p in todo:
-        if p.state == "done":
-            log.info("[格 %s] 已完成，跳过", p.no)
-            continue
-        if p.state != "rendered":
-            log.warning("[格 %s] 场景没出图，跳过加气泡", p.no)
-            continue
-        try:
-            render_bubble(task, p, split=split_bubbles)
-        except Exception as e:
-            p.error = str(e)
-            log.error("[格 %s] 加气泡失败：%s", p.no, e)
-        task.save_state()
-
-    _report(task)
-    return task
+    finally:
+        # 线程退出就把信号摘掉：留着的话，这个任务的「中断」按钮永远命中
+        # 一个已经没人等的 Event，下一次开跑又会被它立刻停掉。
+        clear_abort(task.dir)
 
 
 def _report(task):

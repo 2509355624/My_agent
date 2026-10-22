@@ -30,6 +30,72 @@ def _panel_dict(no, **kw):
     return d
 
 
+class AbortRunTest(unittest.TestCase):
+    """「中断全部」（2026-10-22，用户：点了就停，改完参数再跑）。
+
+    钉三件事，缺一件这个按钮就不好用：
+      1. 注册表语义（新的干净 / 置位可见 / 清得掉）——清不掉的话下一次开跑
+         会被上一次的信号立刻停掉，看起来像「点了开跑没反应」；
+      2. 中断后**后面的格一张都不跑**，正在跑的那格交给 `_submit` 的 abort；
+      3. 被中断那格不留红字（状态回 pending、error 清空）——中断不是失败。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = self.tmp.name
+        self.script = os.path.join(self.dir, "script.md")
+        with open(self.script, "w", encoding="utf-8") as f:
+            f.write("# 标题：三格\n\n## 01\n画面: a\n气泡: 一\n\n"
+                    "## 02\n画面: b\n气泡: 二\n\n## 03\n画面: c\n气泡: 三\n")
+
+    def test_abort_event_lifecycle(self):
+        ev = comic.new_abort_event(self.dir)
+        self.assertFalse(ev.is_set())
+        self.assertIs(comic.abort_event(self.dir), ev)
+        self.assertFalse(comic.is_aborting(self.dir))
+        ev.set()
+        self.assertTrue(comic.is_aborting(self.dir))
+        comic.clear_abort(self.dir)
+        self.assertIsNone(comic.abort_event(self.dir))
+        self.assertFalse(comic.is_aborting(self.dir))
+
+    def test_run_stops_at_the_cancelled_panel(self):
+        ran = []
+
+        def _scene(task, p, scene_skill=None, opts=None, abort=None):
+            ran.append(p.no)
+            self.assertIsNotNone(abort, "run() 必须把中断信号传给 render_scene")
+            raise comic.Cancelled("用户中断了整批渲染")
+
+        with mock.patch.object(comic, "_require_comfy"), \
+                mock.patch.object(comic, "render_scene", _scene):
+            comic.run(self.script, silver_only=True, scene_skill="krea2")
+
+        self.assertEqual(ran, ["01"])                    # 剩下的格一张都没动
+        self.assertIsNone(comic.abort_event(self.dir))   # 信号已摘干净
+
+        meta, panels = comic.parse_script(self.script)
+        task = comic.Task(self.script, meta, panels)
+        task.load_state()
+        self.assertEqual([p.state for p in task.panels], ["pending"] * 3)
+        self.assertEqual([p.error for p in task.panels], [None] * 3)
+
+    def test_second_run_is_not_killed_by_the_old_signal(self):
+        """上一次中断留下的信号不能带到下一次开跑（否则一开跑立刻又停）。"""
+        comic.new_abort_event(self.dir).set()
+        ran = []
+
+        def _scene(task, p, scene_skill=None, opts=None, abort=None):
+            ran.append(p.no)
+
+        with mock.patch.object(comic, "_require_comfy"), \
+                mock.patch.object(comic, "render_scene", _scene):
+            comic.run(self.script, silver_only=True, scene_skill="krea2")
+
+        self.assertEqual(ran, ["01", "02", "03"])
+
+
 class ParseBubble2Test(unittest.TestCase):
     """`气泡2:` 字段解析——正则交替顺序的坑就在这里。"""
 

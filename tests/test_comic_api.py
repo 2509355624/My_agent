@@ -26,7 +26,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import (comic, comic_agent, comic_api, comic_portrait,
-                 comic_render_opts, main)
+                 comic_render_opts, image_jobs, main)
 
 GOOD_SCRIPT = "# 标题：测试\n\n## 01\n画面: 1girl, solo, pov\n气泡: 一\n标签1: 她站在门口\n"
 
@@ -1105,6 +1105,65 @@ class ComfyStateCacheTest(unittest.TestCase):
                 {"at": time.time() - comic_api._COMFY_TTL - 1, "up": False})
             self.assertTrue(comic_api._comfy_state())
         self.assertEqual(1, len(calls))
+
+
+class AbortApiTest(unittest.TestCase):
+    """POST /api/comic/abort（2026-10-22）：中断整批渲染。
+
+    这条接口本身很薄，但它串起三处状态，任何一处理解错了都是「点了没反应」：
+    置位任务级 Event（逐格循环停）、摘掉队列里的漫画 job（不然重跑被名额劝退）、
+    给正在跑的那张打中断标记（worker 才会定向 /interrupt）。
+    """
+
+    def setUp(self):
+        self.c = main.app.test_client()
+        self.tmp = tempfile.mkdtemp(prefix="comic_abort_")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.path = os.path.join(self.tmp, "C20261022-01")
+        os.makedirs(self.path)
+        with open(os.path.join(self.path, "script.md"), "w",
+                  encoding="utf-8") as f:
+            f.write("## 01\n画面: 1girl, solo\n气泡: 一\n")
+        for target, repl in (("_COMICS_ROOT", self.tmp),
+                             # 队列里绝不能真起 worker 去碰 ComfyUI
+                             ("_ensure_worker", lambda: None)):
+            p = mock.patch.object(comic_api if target == "_COMICS_ROOT"
+                                  else image_jobs, target, repl)
+            p.start()
+            self.addCleanup(p.stop)
+        image_jobs._reset()
+        self.addCleanup(image_jobs._reset)
+
+    def test_abort_flags_the_run_and_clears_the_queue(self):
+        ev = comic.new_abort_event(self.path)
+        self.addCleanup(comic.clear_abort, self.path)
+        job, _ = image_jobs.enqueue(None, None, {"1": {}}, skill="krea2",
+                                    batch="comic")
+        other, _ = image_jobs.enqueue("group", "9", {"1": {}}, skill="krea2")
+
+        d = self.c.post("/api/comic/abort",
+                        json={"task": "C20261022-01"}).get_json()
+        self.assertTrue(d["ok"])
+        self.assertTrue(d["task_running"])
+        self.assertEqual(d["dropped"], 1)
+        self.assertTrue(ev.is_set())              # 逐格循环会停
+        self.assertTrue(job.done.is_set())        # 等结果的那一头立刻醒
+        self.assertFalse(other.done.is_set())     # 群里的图不受牵连
+
+    def test_abort_without_a_running_thread_still_clears_leftovers(self):
+        """线程早退了、队列里还躺着上次的残兵 —— 照清，不算失败。"""
+        self.assertIsNone(comic.abort_event(self.path))
+        image_jobs.enqueue(None, None, {"1": {}}, skill="krea2", batch="comic")
+        d = self.c.post("/api/comic/abort",
+                        json={"task": "C20261022-01"}).get_json()
+        self.assertTrue(d["ok"])
+        self.assertFalse(d["task_running"])
+        self.assertEqual(d["dropped"], 1)
+        self.assertEqual(image_jobs.queue_depth(), 0)
+
+    def test_unknown_task_is_404(self):
+        r = self.c.post("/api/comic/abort", json={"task": "nope"})
+        self.assertEqual(r.status_code, 404)
 
 
 if __name__ == "__main__":

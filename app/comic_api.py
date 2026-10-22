@@ -604,6 +604,61 @@ def api_comic_start():
     return jsonify({"ok": True, "scene_skill": scene_skill})
 
 
+@bp.route("/api/comic/abort", methods=["POST"])
+def api_comic_abort():
+    """中断漫画台的渲染：正在画的那张停掉、排队中的全部摘掉、逐格循环停下。
+
+    2026-10-22 用户要的：「点击中断直接打断漫画台的排队全部任务，我可以重新
+    修改参数再重新跑」。三处必须一起收，少一处就"停不干净"：
+
+      1. **逐格循环**——`comic.run` 的每格开头看这个 Event，置位就 break。
+         不置位的话当前这张画完它还会接着画下一格；
+      2. **排队中的 job**——`image_jobs.cancel_batch("comic")` 摘掉。不摘的
+         话队列名额和「前面还有 N 张」还挂着，改完参数重跑会被自己劝退；
+      3. **正在画的那一张**——它在 `chan.running` 里，队列里已经没有它了，
+         只能通过 `job.cancel` 让 worker 的 `wait_done` 看到，走定向
+         `/interrupt`（不带 prompt_id 的全局中断会劈掉 QQ 机器人正在画的图）。
+
+    **已经出好的图一张都不动**：`rendered` / `done` 的格子照旧，重跑时会被
+    跳过。被中断那一格的状态清回 `pending`（run 里做的），不留「出错」——
+    中断不是失败，不该在格子上挂一个红字。
+
+    不重启 ComfyUI、不动 QQ 机器人排的图：只是「这一批我不画了」。
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        path = _task_dir(data.get("task"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+
+    ev = comic.abort_event(path)
+    task_running = ev is not None
+    if ev is not None:
+        ev.set()
+
+    # 排队中：整批摘掉（含这个任务之前点「跑这一格」留下的残兵）
+    dropped = image_jobs.cancel_batch("comic", "用户中断了整批渲染")
+
+    # 正在跑：cancel_batch 摘不到（它已经被 worker 取走了），单独置位
+    running = image_jobs.running_batch("comic")
+    for job in running:
+        job.cancel.set()
+
+    with _JOBS_LOCK:
+        phase = (_JOBS.get(path) or {}).get("phase")
+    log_line = "中断漫画任务 %s：%s，摘掉队列 %d 张，正在画 %d 张" % (
+        os.path.basename(path), "有后台线程" if task_running else "没有后台线程",
+        dropped, len(running))
+    comic.log.info(log_line)
+    return jsonify({"ok": True,
+                    # 线程要等 /interrupt 生效（秒级）才真正退出，前端拿这两个
+                    # 标志决定提示语：还在收尾 vs 已经停了。
+                    "task_running": task_running,
+                    "phase": phase,
+                    "dropped": dropped,
+                    "running": len(running)})
+
+
 @bp.route("/api/comic/status", methods=["GET"])
 def api_comic_status():
     """槽位轮询。图片 URL 由前端拼时间戳防缓存；每格另带 `rev`（图片文件指纹），

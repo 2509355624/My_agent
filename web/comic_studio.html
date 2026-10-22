@@ -44,6 +44,8 @@
     background: var(--bg-input); border: 1px solid var(--border); font-size: 13px;
     color: var(--info); margin-bottom: 12px; }
   #jobbar.err { color: var(--error); border-color: var(--error); }
+  #jobbar .bar-row { display: flex; align-items: center; gap: 10px; }
+  #jobbar .bar-row #jobbarText { flex: 1; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
   .slot { background: var(--bg-input); border: 1px solid var(--border);
     border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; }
@@ -244,7 +246,13 @@
       所以可以一次次往上改（改坏了点「加气泡」从底图重画，底图不动）。
       「📎 传底图」用来顶替你手跑好的底图。
     </div>
-    <div id="jobbar"></div>
+    <div id="jobbar">
+      <div class="bar-row">
+        <span id="jobbarText"></span>
+        <button class="btn small danger" id="btnAbort" onclick="abortAll()"
+                title="停掉这一批：正在画的那张立刻停、排队中的不再画；已经出好的图全部保留">⏹ 中断全部</button>
+      </div>
+    </div>
     <div class="row" id="bubbleAllRow" style="display:none;margin-bottom:12px">
       <button class="btn primary" id="btnBubbleAll" onclick="bubbleAll()">🫧 一键加气泡（全部待加格）</button>
       <a class="btn" id="btnZip" style="text-decoration:none" href="#">📦 下载成品 zip</a>
@@ -304,8 +312,14 @@ function setBusy(b, phase) {
   document.querySelectorAll('.slot .mrow button, .slot .mrow select, .slot .mrow input[type=file]').forEach(
     x => x.disabled = busy);
   const bar = document.getElementById('jobbar');
+  // 「中断全部」跟着这条提示条一起出现：只有真有任务在跑时才需要它。
+  // 它是这条提示条里**唯一不被锁**的按钮——busy 时其它按钮全禁用了，
+  // 唯独中断必须是能点的（否则跑起来就停不下来了）。
+  const abortBtn = document.getElementById('btnAbort');
+  if (abortBtn) abortBtn.style.display = b ? '' : 'none';
   if (b) { bar.style.display = 'block'; bar.classList.remove('err');
-           bar.textContent = '⏳ 正在' + (phase === 'bubble' ? '加气泡' : '渲染场景图') + '……页面每 2 秒自动刷新'; }
+           document.getElementById('jobbarText').textContent =
+             '⏳ 正在' + (phase === 'bubble' ? '加气泡' : '渲染场景图') + '……页面每 2 秒自动刷新'; }
   // 渲染参数卡也锁：跑图时改参数，这批用不用新值全看 timing，不如锁掉
   document.querySelectorAll('#renderCard button, #renderCard input, #renderCard select').forEach(
     x => x.disabled = busy);
@@ -640,6 +654,35 @@ async function saveScript(andRun) {
     toast('已开跑：逐格渲染场景图（' + (channel() || '默认渠道') + '）');
     poll();
   } catch (e) { toast(e.message, true); }
+}
+
+// 中断这一批（2026-10-22 用户要的）：正在画的那张立刻停、排队中的不再画，
+// 已经出好的图全部保留。停下来之后渲染参数卡会自动解锁（后台线程退出 →
+// 下一轮轮询 running 变空 → setBusy(false)），改完参数点「确认开跑」重跑。
+async function abortAll() {
+  if (!TASK) return;
+  if (!confirm('中断这一批渲染？\n\n'
+      + '· 正在画的那一张会立刻停下（这张作废）\n'
+      + '· 排队中的格不再画\n'
+      + '· 已经出好的图全部保留，重跑时跳过\n\n'
+      + '停稳大约要几秒（等 ComfyUI 真的退出那张），之后就能改参数重跑。')) return;
+  const btn = document.getElementById('btnAbort');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ 中断中…';
+  try {
+    const d = await api('/api/comic/abort', {task: TASK});
+    const bits = [];
+    if (d.dropped) bits.push('摘掉排队 ' + d.dropped + ' 张');
+    if (d.running) bits.push('正在画的 ' + d.running + ' 张已通知停下');
+    toast('已中断' + (bits.length ? '：' + bits.join('，') : '') + '——等几秒就能改参数重跑');
+    refresh();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
 }
 
 // ── 渲染参数卡（按渠道能力渲染：1/2 段采样 · LoRA 链 · 分辨率 · 放大）──────
@@ -1205,15 +1248,16 @@ async function refresh() {
   // 加 comfy 这一档是因为「排队」有两种含义：真的在等前面的图，和在等
   // ComfyUI 重启回来（comic._require_comfy 现在最多等 120 秒）。不写出来的话
   // 两种情况在界面上长得一模一样，用户只会以为卡死了。
+  const barText = document.getElementById('jobbarText');
   if (d.job_error) {
     bar.style.display = 'block';
     bar.classList.add('err');
-    bar.textContent = '✗ 后台任务失败：' + d.job_error;
+    barText.textContent = '✗ 后台任务失败：' + d.job_error;
   } else if (d.comfy === false) {
     bar.style.display = 'block';
     bar.classList.add('err');
-    bar.textContent = '⚠ ComfyUI 没在线（可能正在重启）——现在点重跑会等它回来再提交，最多等 120 秒';
-  } else {
+    barText.textContent = '⚠ ComfyUI 没在线（可能正在重启）——现在点重跑会等它回来再提交，最多等 120 秒';
+  } else if (!d.running) {
     bar.style.display = 'none';
     bar.classList.remove('err');
   }

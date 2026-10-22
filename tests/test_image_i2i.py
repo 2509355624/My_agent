@@ -615,7 +615,10 @@ class _I2IRunner(object):
             mock.patch.object(gi.image_jobs, "_queue_prompt", fake_queue),
             mock.patch.object(gi.image_jobs, "_ensure_worker", lambda: None),
             mock.patch.object(gi.image_jobs, "wait_done",
-                              lambda pid, timeout=None: {"outputs": {}}),
+                              # abort 是 2026-10-22 加的任务级中断信号（漫画台
+                              # 「中断全部」）；这条链路不测中断，收下不用。
+                              lambda pid, timeout=None, abort=None:
+                                  {"outputs": {}}),
             mock.patch.object(gi.image_jobs, "_send_text", lambda *a: None),
             mock.patch.object(gi, "is_cancelled", lambda: False),
             mock.patch.object(qq_api, "current_context", lambda: self.KEY),

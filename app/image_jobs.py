@@ -311,6 +311,11 @@ SKILL_TIMEOUTS = {
     #    ⚠️ 2026-10-20 用户把 45 步档改成 50 步并改名 `moss50`，旧键 `moss45`
     #    已删（`task_timeout` 查不到会落默认，别留着僵尸键）。
     "moss50": 520,
+    # 整页漫画档（`skills/moss_page/`，2026-10-20 新建，只给「一张图里排好几格
+    #    + 密集中英文气泡」的整页用）：1024×1536 比 moss50 多 50% 像素，SLG 又
+    #    从 0~0.5 拉到官方全段 0~1（skip 分支每步都要算），所以不是 520 加一点
+    #    的事——按 250 s + SLG 全段翻倍的最坏情况估，给 700 留足余量。
+    "moss_page": 700,
 }
 
 
@@ -577,6 +582,12 @@ class Job:
         # 只有它为真、且最后**没出图**，_finish 才退还一个名额。默认 False：
         # 网页端和群聊都不扣，测试里手搓的 Job 也不扣。
         self.quota_charged = False
+        # 任务级中断信号（2026-10-22，漫画台「中断全部」）：由发起方（漫画台的
+        # 整本渲染）持有并置位，**不是**请求级那个线程本地事件——漫画台的渲染
+        # 跑在自己的后台线程里，从来没有 bind 过 `cancel.local`，靠那个永远
+        # 收不到信号。置位后：排队中的由 `cancel_batch()` 直接摘掉；正在跑的
+        # 由 `wait_done(abort=...)` 每轮询一次看到，走定向 /interrupt。
+        self.cancel = threading.Event()
         self.done = threading.Event()
 
     def wait(self, poll=POLL_INTERVAL):
@@ -586,7 +597,7 @@ class Job:
         了停止要等到出图才有反应。
         """
         while not self.done.wait(poll):
-            if is_cancelled():
+            if self.cancel.is_set() or is_cancelled():
                 raise Cancelled("用户中断了等待")
         if self.error is not None:
             raise self.error
@@ -613,6 +624,57 @@ def queue_depth():
     """两条通道加起来还有几个在等 / 在跑（总量，供测试与状态页用）。"""
     with _lock:
         return _COMFY.depth() + _NAI.depth()
+
+
+def cancel_batch(batch="comic", reason="用户中断了整批渲染"):
+    """把这个批次**排队中**的任务全部摘掉并置成中断，返回摘掉的数量。
+
+    只给漫画台的「中断全部」用（2026-10-22 用户要的：点了就停，改完参数再跑）。
+    两件事必须一起做，少一件都会留下后患：
+
+      1. **从队列里摘掉**——只置标志位的话 worker 取到还会跳过，但队列名额和
+         「前面还有 N 张」还挂着，用户改完参数重跑会被自己刚才那批劝退
+         （enqueue 的 max_queue / max_inflight 检查）；
+      2. **per_session 减回去**——那个计数就是「这个人还有几张在途」，摘了不
+         退等于永久少一张额度。
+
+    ⚠️ **正在跑的那一张不在队列里**（worker 已经 take 进 `chan.running`），
+    这里摘不到，得由调用方用 `running_batch()` 找出来单独打断。
+    """
+    hit = []
+    with _lock:
+        for chan in (_COMFY, _NAI):
+            keep = collections.deque()
+            for job in chan.queue:
+                if (job.batch or None) == batch:
+                    hit.append((chan, job))
+                else:
+                    keep.append(job)
+            if len(keep) != len(chan.queue):
+                chan.queue = keep
+        for chan, job in hit:
+            key = _key(job.target, job.target_id)
+            n = chan.per_session.get(key, 0) - 1
+            if n > 0:
+                chan.per_session[key] = n
+            else:
+                chan.per_session.pop(key, None)
+    for _chan, job in hit:
+        job.error = Cancelled(reason)
+        job.done.set()
+        log.info("中断：从队列摘掉一张（%s %s）", job.skill or "?", job.tag or "")
+    return len(hit)
+
+
+def running_batch(batch="comic"):
+    """这个批次**正在跑**的任务（worker 已取走、正在等 ComfyUI 出图）。
+
+    中断接口靠它找出现在画到哪一张。本地通道是串行的，最多一张；NAI 那条是
+    两个 worker，所以返回列表而不是单个。
+    """
+    with _lock:
+        return [job for chan in (_COMFY, _NAI) for job in chan.running
+                if (job.batch or None) == batch]
 
 
 def nai_depth():
@@ -1044,6 +1106,17 @@ def _worker(chan):
     """
     while True:
         job = _take(chan)
+        # 中断竞态（2026-10-22）：`cancel_batch` 摘队列与 worker 取任务之间有
+        # 几毫秒窗口，这一张可能刚被取走就赶上中断。别白画一张——直接收工，
+        # 名额照常还回去（_finish）。
+        # `isinstance` 是必要的：测试里 `_take` 的替身会返回 Mock，Mock 上取
+        # 任何属性都拿得到东西、`is_set()` 还是真值 —— 不加这层，worker 会把
+        # 每一张都当"已中断"跳过。
+        _cancel = getattr(job, "cancel", None)
+        if isinstance(_cancel, threading.Event) and _cancel.is_set():
+            job.error = Cancelled("用户中断了整批渲染")
+            _finish(job)
+            continue
         # 提交前等 ComfyUI 上线（2026-10-19 用户拍板）：入口探活失败不再拒单，
         # 任务照常排进来，真正的等待放在这里。
         #
@@ -1534,7 +1607,23 @@ def process(job):
     _ledger_add(job)
 
     try:
-        entry = wait_done(job.prompt_id, task_timeout(job))
+        # 中断信号只在 job 真带着它时才往下传：老调用方（和测试里手搓的 Job /
+        # 替身）没有这个属性；Mock 上取属性什么都拿得到、`is_set()` 还是真值，
+        # 不认类型的话每一张都会立刻被判成"已中断"。
+        _abort_ev = getattr(job, "cancel", None)
+        if isinstance(_abort_ev, threading.Event):
+            entry = wait_done(job.prompt_id, task_timeout(job), abort=_abort_ev)
+        else:
+            entry = wait_done(job.prompt_id, task_timeout(job))
+    except Cancelled as exc:
+        # 用户点「中断全部」（2026-10-22）：定向中断掉 ComfyUI 里这一张，等它
+        # 退场，直接收工。**不走下面超时那条路**——那条会判「状态不对」然后
+        # 重启 ComfyUI，可我们只是自己不想画了，重启纯属连累别人。
+        _abort(job.prompt_id)
+        _wait_comfy_idle()
+        job.error = exc
+        log.info("已中断正在画的那张（%s %s）", job.skill or "?", job.tag or "")
+        return
     except TimeoutError as exc:
         # 关键：中断 + 从队列摘掉 + 释放显存。串行队列下「当前正在执行」的
         # 就是我们这一张，所以 /interrupt 是准的——这也是改成全局串行之后
@@ -2039,11 +2128,19 @@ def poll_once(prompt_id):
     return None
 
 
-def wait_done(prompt_id, timeout=None):
-    """轮询等到出图，返回 history entry；超时抛 TimeoutError。"""
+def wait_done(prompt_id, timeout=None, abort=None):
+    """轮询等到出图，返回 history entry；超时抛 TimeoutError。
+
+    `abort` 是一个 `threading.Event`（Job.cancel）：每轮询一次看一眼，置位就
+    抛 `Cancelled`，**不**当成超时——两者后续处理完全不同：超时要先判断
+    ComfyUI 死没死、再决定要不要重启；中断是我们自己停的，定向 /interrupt
+    收工就行（2026-10-22，漫画台「中断全部」）。
+    """
     limit = timeout if timeout and timeout > 0 else TASK_TIMEOUT
     start = time.time()
     while time.time() - start < limit:
+        if abort is not None and abort.is_set():
+            raise Cancelled("用户中断了整批渲染")
         entry = poll_once(prompt_id)
         if entry is not None:
             return entry

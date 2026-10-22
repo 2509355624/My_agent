@@ -18,6 +18,7 @@ from app import nai
 from app import qq_api
 from app import skills
 from app import image_out
+from app.cancel import Cancelled
 from app.config import QQ_AGENT_ID
 from app.tools.normal import generate_image
 
@@ -3188,7 +3189,9 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
         """
         seen = []
 
-        def fake_wait_done(prompt_id, timeout=None):
+        def fake_wait_done(prompt_id, timeout=None, abort=None):
+            # abort 是 2026-10-22 加的任务级中断信号（漫画台「中断全部」）；
+            # 这条用例只管超时那条路，收下不用。
             seen.append(timeout)
             raise TimeoutError("生成超时 (%ds)" % timeout)
 
@@ -3768,6 +3771,69 @@ class SubmitWaitTest(unittest.TestCase):
         _job, w, pr, _nt, _hold = self._run_one(wait_ok=True, local=False)
         w.assert_not_called()
         pr.assert_called_once()
+
+
+class AbortBatchTest(_Base):
+    """「中断全部」（2026-10-22，漫画台）：摘排队、还名额、不碰别的批次。
+
+    这套东西的意义就在「停干净」——少做任何一件，用户改完参数重跑都会撞上
+    自己刚才那批的残留：队列名额被占着会拒收，in-flight 计数不还会让 enqueue
+    以为「这个会话已经排着 N 张」。
+    """
+
+    def test_cancel_batch_drops_only_that_batch(self):
+        a, _ = image_jobs.enqueue(None, None, {"1": {}}, skill="krea2",
+                                  batch="comic")
+        b, _ = image_jobs.enqueue(None, None, {"1": {}}, skill="krea2",
+                                  batch="comic")
+        c, _ = image_jobs.enqueue("group", "9", {"1": {}}, skill="krea2")
+        self.assertEqual(image_jobs.cancel_batch("comic"), 2)
+        # 漫画那两张没了；群里那张一根汗毛都没动
+        self.assertEqual(image_jobs.queue_depth(), 1)
+        for job in (a, b):
+            self.assertTrue(job.done.is_set())
+            self.assertIsInstance(job.error, Cancelled)
+        self.assertIsNone(c.error)
+        self.assertFalse(c.done.is_set())
+
+    def test_cancel_batch_returns_the_inflight_slot(self):
+        image_jobs.enqueue(None, None, {"1": {}}, skill="krea2", batch="comic")
+        self.assertEqual(image_jobs.inflight_count(None, None), 1)
+        image_jobs.cancel_batch("comic")
+        self.assertEqual(image_jobs.inflight_count(None, None), 0)
+
+    def test_running_batch_finds_the_taken_job(self):
+        """正在跑的那张已经不在队列里（worker 取进了 running），摘不到——
+        中断接口靠 running_batch() 把它找出来单独打断。"""
+        job, _ = image_jobs.enqueue(None, None, {"1": {}}, skill="krea2",
+                                    batch="comic")
+        self.assertIs(image_jobs._take_nowait(), job)
+        self.assertEqual(image_jobs.running_batch("comic"), [job])
+        self.assertEqual(image_jobs.running_batch("other"), [])
+        self.assertEqual(image_jobs.cancel_batch("comic"), 0)   # 队列里没有了
+        image_jobs._finish(job)
+
+    def test_job_wait_raises_when_cancel_set(self):
+        """任务级 Event 置位 → 等结果的那一头立刻醒（不用等出图）。"""
+        job, _ = image_jobs.enqueue(None, None, {"1": {}}, skill="krea2",
+                                    batch="comic")
+        job.cancel.set()
+        with self.assertRaises(Cancelled):
+            job.wait(poll=0.01)
+
+    def test_wait_done_aborts_without_touching_comfy(self):
+        """中断不是超时：立刻抛 Cancelled，让 process 走定向 /interrupt，
+        而不是判「状态不对」把 ComfyUI 重启掉。"""
+        ev = threading.Event()
+        ev.set()
+        with mock.patch.object(image_jobs, "poll_once") as poll:
+            with self.assertRaises(Cancelled):
+                image_jobs.wait_done("pid", 5, abort=ev)
+            poll.assert_not_called()
+        # 没置位就照常等出图（老路径一个字没变）
+        with mock.patch.object(image_jobs, "poll_once", lambda pid: {"outputs": {}}):
+            self.assertEqual(image_jobs.wait_done("pid", 5, abort=threading.Event()),
+                             {"outputs": {}})
 
 
 if __name__ == "__main__":
