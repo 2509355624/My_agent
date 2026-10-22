@@ -139,8 +139,10 @@
     </div>
     <div class="row" style="margin-bottom:10px">
       <span style="color:var(--text-dim);font-size:12px">编剧模型</span>
-      <select id="prov" style="width:140px" onchange="loadModels()" title="用哪家模型写剧本"></select>
-      <select id="model" style="width:200px" title="写剧本用的具体模型（留空 = 该家默认）"></select>
+      <select id="prov" style="width:140px" onchange="loadModels();syncProvBtn()" title="用哪家模型写剧本"></select>
+      <select id="model" style="width:200px" onchange="rememberLlm()" title="写剧本用的具体模型（留空 = 该家默认）"></select>
+      <button class="btn small" id="btnAddProv" onclick="onAddProvClick()"
+              title="添加自定义中转站（比如 relaycore 的 grok），存下来下次还在">＋ 中转站</button>
       <span id="prevLabel" style="color:var(--text-dim);font-size:12px;margin-left:6px">接上一集</span>
       <select id="prevTask" style="width:230px;max-width:40vw"
               title="选了就把那一集的气泡和旁白当前情，本集接着往下写（不重演、关系延续）">
@@ -328,17 +330,163 @@ function setBusy(b, phase) {
 // ── 编剧模型下拉 ─────────────────────────────────────
 // 候选由后端去问 provider 自己拿（模型 ID 会下线也会改名，写死的清单会慢慢
 // 指向不存在的模型）。复用网页端同一套接口，不另造一份。
+//
+// 选了哪个要记住：加了自定义中转站（grok）之后每次刷新都跳回 deepseek 的话，
+// 等于每次都得手动再选一遍。和任务名一样存 localStorage。
+
+const LS_LLM = 'comic_llm_choice';
+
+function rememberLlm() {
+  try {
+    localStorage.setItem(LS_LLM, JSON.stringify({
+      provider: document.getElementById('prov').value,
+      model: document.getElementById('model').value,
+    }));
+  } catch (e) { }
+}
+
+function savedLlm() {
+  try { return JSON.parse(localStorage.getItem(LS_LLM) || 'null') || {}; }
+  catch (e) { return {}; }
+}
 
 async function loadProviders() {
   try {
-    const d = await (await fetch('/api/providers')).json();
+    // scope=comic：把「只在漫画台可见」的自定义中转站一起要回来。别的页面
+    // 不带这个参数，所以那些渠道不会出现在它们下拉里（用户 2026-10-22 选的）。
+    const d = await (await fetch('/api/providers?scope=comic')).json();
     PROVIDERS = d.providers || [];
     const sel = document.getElementById('prov');
     sel.innerHTML = PROVIDERS.map(p =>
-      '<option value="' + esc(p.id) + '">' + esc(p.label) + '</option>').join('');
-    if (PROVIDERS.some(p => p.id === d.default)) sel.value = d.default;
+      '<option value="' + esc(p.id) + '">' + esc(p.label)
+      + (p.custom ? ' · 自定义' : '') + '</option>').join('');
+    const want = savedLlm();
+    if (want.provider && PROVIDERS.some(p => p.id === want.provider)) {
+      sel.value = want.provider;
+    } else if (PROVIDERS.some(p => p.id === d.default)) {
+      sel.value = d.default;
+    }
     await loadModels();
+    syncProvBtn();
   } catch (e) { /* 拉不到就留空，请求里不传 = 走后端默认 */ }
+}
+
+// 「＋ 中转站」按钮随选中项变形：选中的是自定义渠道时，同一个按钮进编辑态。
+function syncProvBtn() {
+  const pid = document.getElementById('prov').value;
+  const meta = PROVIDERS.filter(p => p.id === pid)[0];
+  const btn = document.getElementById('btnAddProv');
+  if (!btn) return;
+  const own = !!(meta && meta.custom);
+  btn.textContent = own ? '✎ 编辑中转站' : '＋ 中转站';
+  btn.title = own ? ('编辑「' + meta.label + '」的地址 / 密钥 / 模型')
+                  : '添加自定义中转站（比如 relaycore 的 grok），存下来下次还在';
+}
+
+function onAddProvClick() {
+  const pid = document.getElementById('prov').value;
+  const meta = PROVIDERS.filter(p => p.id === pid)[0];
+  openProvDlg(meta && meta.custom ? pid : '');
+}
+
+// ── 自定义中转站表单 ─────────────────────────────────
+// 密钥是**单向**的：后端只回尾 4 位，前端也拿不到原文。所以编辑时密钥框留空
+// 表示「沿用原来的」——不能因为没重填就把它清成空串。
+
+let _pvEditId = '';
+
+function openProvDlg(pid) {
+  _pvEditId = pid || '';
+  const meta = PROVIDERS.filter(p => p.id === pid)[0] || {};
+  document.getElementById('pvTitle').textContent =
+    _pvEditId ? '编辑自定义中转站' : '添加自定义中转站';
+  document.getElementById('pvLabel').value = meta.label || '';
+  document.getElementById('pvBase').value = meta.base_url || '';
+  document.getElementById('pvModel').value = meta.model || '';
+  // 空串是合法值（「不下发」），不能用 || 兜底，否则永远选不到那一项。
+  document.getElementById('pvEffort').value =
+    _pvEditId ? (meta.reasoning_effort === undefined ? 'high' : meta.reasoning_effort)
+              : 'high';
+  const keyEl = document.getElementById('pvKey');
+  keyEl.value = '';
+  keyEl.placeholder = _pvEditId
+    ? ('留空 = 沿用原来的（' + (meta.key_tail || '已存') + '）')
+    : 'sk-...';
+  document.getElementById('pvDel').style.display = _pvEditId ? '' : 'none';
+  setPvMsg('');
+  document.getElementById('provDlg').showModal();
+}
+
+function closeProvDlg() { document.getElementById('provDlg').close(); }
+
+function setPvMsg(t, err) {
+  const el = document.getElementById('pvMsg');
+  el.textContent = t || '';
+  el.style.color = err ? 'var(--error)' : (t ? 'var(--success)' : 'var(--text-dim)');
+}
+
+function pvPayload() {
+  return {
+    id: _pvEditId,
+    label: document.getElementById('pvLabel').value.trim(),
+    base_url: document.getElementById('pvBase').value.trim(),
+    api_key: document.getElementById('pvKey').value.trim(),
+    model: document.getElementById('pvModel').value.trim(),
+    reasoning_effort: document.getElementById('pvEffort').value,
+    scope: 'comic',                  // 只在漫画台可见（用户选的口径）
+  };
+}
+
+async function testProvider() {
+  const btn = document.getElementById('pvTest');
+  btn.disabled = true;
+  setPvMsg('测试中……grok 会先思考，可能要 20 秒');
+  try {
+    const r = await fetch('/api/providers/custom/test', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(pvPayload())});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    setPvMsg('✓ 通了：' + (d.models || []).length + ' 个模型，它回了「'
+             + (d.reply || '') + '」，本次 ' + d.elapsed + ' 秒');
+  } catch (e) { setPvMsg('✗ ' + e.message, true); }
+  btn.disabled = false;
+}
+
+async function saveProvider() {
+  const btn = document.getElementById('pvSave');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/providers/custom', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(pvPayload())});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    closeProvDlg();
+    await loadProviders();
+    document.getElementById('prov').value = d.provider.id;
+    await loadModels();
+    syncProvBtn();
+    toast('已保存：' + d.provider.label + '，现在就能选它写剧本');
+  } catch (e) { setPvMsg('✗ ' + e.message, true); }
+  btn.disabled = false;
+}
+
+async function delProvider() {
+  if (!_pvEditId) return;
+  if (!confirm('删除这个中转站？存着的密钥也会一起删掉。')) return;
+  const btn = document.getElementById('pvDel');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/providers/custom/' + encodeURIComponent(_pvEditId),
+                          {method: 'DELETE'});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    closeProvDlg();
+    await loadProviders();
+    toast('已删除');
+  } catch (e) { setPvMsg('✗ ' + e.message, true); }
+  btn.disabled = false;
 }
 
 async function loadModels() {
@@ -354,6 +502,12 @@ async function loadModels() {
     if (ids.length) {
       sel.innerHTML = '<option value="">（默认：' + esc(ids[0]) + '）</option>'
         + ids.map(id => '<option value="' + esc(id) + '">' + esc(id) + '</option>').join('');
+    }
+    // 恢复上次这个渠道选的具体模型（换了渠道就按新渠道的默认走）。
+    const want = savedLlm();
+    if (want.provider === pid && want.model
+        && [].some.call(sel.options, o => o.value === want.model)) {
+      sel.value = want.model;
     }
   } catch (e) { /* 静默：留一个「默认模型」项，请求里不传 model 即可 */ }
 }
@@ -1668,5 +1822,42 @@ poll();
 loadProviders();
 restoreSession();
 </script>
+
+<!-- 自定义中转站（2026-10-22）：只有漫画台有入口，也只在这里的下拉里出现 -->
+<dialog id="provDlg"
+        style="background:var(--bg-elev);color:var(--text);border:1px solid var(--border);
+               border-radius:var(--radius);padding:20px;width:470px;max-width:92vw;">
+  <h3 id="pvTitle" style="font-size:15px;font-weight:500;margin-bottom:4px">添加自定义中转站</h3>
+  <div style="color:var(--text-dim);font-size:12px;line-height:1.6;margin-bottom:14px">
+    地址填到 <code style="color:var(--info)">/v1</code> 这一层（如 <code style="color:var(--info)">https://api.relaycore.cn/v1</code>）。<br>
+    密钥存在本机 <code style="color:var(--info)">data/custom_providers.json</code>，不进仓库。
+  </div>
+  <div style="display:grid;grid-template-columns:78px 1fr;gap:10px;align-items:center">
+    <span style="color:var(--text-dim);font-size:12px">名称</span>
+    <input id="pvLabel" placeholder="RelayCore（自己认得出就行）">
+    <span style="color:var(--text-dim);font-size:12px">API 地址</span>
+    <input id="pvBase" placeholder="https://api.relaycore.cn/v1">
+    <span style="color:var(--text-dim);font-size:12px">API 密钥</span>
+    <input id="pvKey" type="password" autocomplete="off" placeholder="sk-...">
+    <span style="color:var(--text-dim);font-size:12px">模型名</span>
+    <input id="pvModel" placeholder="grok-4.5">
+    <span style="color:var(--text-dim);font-size:12px">思考档位</span>
+    <select id="pvEffort" title="grok 系默认就会思考；实测 high 约 42 秒、low 约 34 秒（3 格脚本）">
+      <option value="high">high — 稳（3 格约 42 秒）</option>
+      <option value="medium">medium</option>
+      <option value="low">low — 快（约 34 秒，偶尔多代码围栏）</option>
+      <option value="">不下发（用服务端默认）</option>
+    </select>
+  </div>
+  <div id="pvMsg" style="font-size:12px;min-height:18px;margin:12px 0 4px;color:var(--text-dim)"></div>
+  <div class="row" style="justify-content:flex-end">
+    <button class="btn small" id="pvDel" onclick="delProvider()"
+            style="display:none;color:var(--error)">删除</button>
+    <span style="flex:1"></span>
+    <button class="btn small" onclick="closeProvDlg()">取消</button>
+    <button class="btn small" id="pvTest" onclick="testProvider()">测试连通</button>
+    <button class="btn primary small" id="pvSave" onclick="saveProvider()">保存</button>
+  </div>
+</dialog>
 </body>
 </html>

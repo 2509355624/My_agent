@@ -891,3 +891,48 @@ WATCHDOG_SILENCE_RESTART = os.getenv("WATCHDOG_SILENCE_RESTART", "0") not in ("0
 # 后来给分支加了 `comfy_seen` 闩（只在「本来在跑」时才管），但那一版还没在
 # 真机验过就撞上了这次事故，所以先整体关掉；等真机验证过 comfy_seen 再开。
 WATCHDOG_COMFY_ENABLED = os.getenv("WATCHDOG_COMFY_ENABLED", "0") not in ("0", "false", "False", "")
+
+
+# ─── 自定义 LLM 中转站（2026-10-22）─────────────────────────
+# 用户在漫画台自己加的中转站（第一家是 relaycore 的 grok-4.5），存在
+# `data/custom_providers.json`，启动时合并进 PROVIDERS。
+#
+# **为什么合并进 PROVIDERS 而不是另开一张表**：`llm.get_effective_config`、
+# `model_catalog._fetch`、`/api/providers`、漫画台的两级下拉全都在读这张
+# dict。合并进去，这些地方一行都不用改；另开一张表就得在每一处加分支。
+#
+# 合并是**幂等**的：先摘掉上一次合并进去的那几个（靠 cfg["custom"] 认），
+# 再按文件重新加。否则改完一个渠道调一次 reload，PROVIDERS 里就会堆同名旧值，
+# 删掉的渠道也永远留在下拉里。
+CUSTOM_PROVIDERS_FILE = os.path.join(DATA_DIR, "custom_providers.json")
+
+
+def load_custom_providers():
+    """把自定义渠道合并进 PROVIDERS，返回合并了几个。
+
+    这个函数在模块末尾调用一次；网页上增删改之后由 `app/main.py` 再调，
+    所以不重启进程也能让新渠道立刻可用。
+    """
+    from app import provider_store
+
+    for pid in [k for k, v in PROVIDERS.items() if (v or {}).get("custom")]:
+        PROVIDERS.pop(pid, None)
+
+    items = provider_store.load(CUSTOM_PROVIDERS_FILE)
+    n = 0
+    for pid, cfg in items.items():
+        if pid in PROVIDERS:      # 内置 id 优先，绝不覆盖
+            continue
+        PROVIDERS[pid] = cfg
+        n += 1
+    return n
+
+
+# 启动即合并一次。出错只吞掉——自定义渠道是加分项，配置坏了不该让整个进程
+# 起不来（它是被 QQ 机器人、网页端、漫画台共同 import 的）。
+try:
+    CUSTOM_PROVIDER_COUNT = load_custom_providers()
+except Exception:                                    # pragma: no cover
+    import logging as _logging
+    _logging.getLogger("config").warning("自定义渠道加载失败（忽略）", exc_info=True)
+    CUSTOM_PROVIDER_COUNT = 0

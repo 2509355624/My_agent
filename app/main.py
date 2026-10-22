@@ -36,7 +36,9 @@ from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         QQ_PRIVATE_ENABLE, QQ_WHITELIST_USERS,
                         VISION_PROMPT_MAX, VISION_PROVIDER, VISION_MODEL,
                         QQ_AGENT_ID, provider_vision,
+                        CUSTOM_PROVIDERS_FILE, load_custom_providers,
                         COMFYUI_OUTPUT_DIR)
+from app import provider_store
 from app.skills import list_skills, load_skill
 from app import model_catalog
 from app.agent_prompt import build_stable_prompt, sync_session_system
@@ -150,16 +152,145 @@ def get_usage():
 
 @app.route("/api/providers")
 def get_providers():
-    """返回支持的模型提供商列表（供前端下拉）"""
+    """返回支持的模型提供商列表（供前端下拉）
+
+    `scope=comic` 时额外带上「只在漫画台可见」的自定义渠道（用户 2026-10-22
+    加的中转站）。别的入口不带这个参数，所以那些渠道不会出现在主对话、
+    管理页、moss 台的下拉里——私人额度，误选一次就是真金白银。
+    """
+    scope = (request.args.get("scope") or "").strip().lower()
     items = []
     for key, cfg in PROVIDERS.items():
-        items.append({
+        is_custom = bool(cfg.get("custom"))
+        if is_custom and (cfg.get("scope") or "comic") == "comic" and scope != "comic":
+            continue
+        item = {
             "id": key,
             "label": cfg["label"],
             "model": cfg["model"],
             "base_url": cfg["base_url"],
-        })
-    return jsonify({"providers": items, "default": LLM_PROVIDER, "model": MODEL})
+            "custom": is_custom,
+        }
+        if is_custom:
+            # 公开展示的形态：密钥只给尾 4 位（见 provider_store.public_view）。
+            item.update(provider_store.public_view(key, cfg))
+        items.append(item)
+    return jsonify({"providers": items, "default": LLM_PROVIDER, "model": MODEL,
+                    "custom_file": os.path.basename(CUSTOM_PROVIDERS_FILE)})
+
+
+def _custom_items():
+    """读出磁盘上的自定义渠道原文（**含密钥**，只在本模块内部用）。"""
+    return provider_store.load(CUSTOM_PROVIDERS_FILE)
+
+
+@app.route("/api/providers/custom", methods=["POST"])
+def save_custom_provider():
+    """新增 / 修改一个自定义中转站。
+
+    带 `id` 是修改：`api_key` 留空表示沿用原来那把（前端拿不到密钥原文，
+    不回填就只能留空，不能因为「没重填」就把配好的渠道清掉密钥）。
+    """
+    data = request.get_json(silent=True) or {}
+    pid = str(data.get("id") or "").strip()
+    items = _custom_items()
+
+    if pid and pid not in items:
+        return jsonify({"ok": False, "error": "找不到这个自定义渠道（可能已被删除）"}), 404
+
+    payload = dict(data)
+    if pid and not str(payload.get("api_key") or "").strip():
+        payload["api_key"] = items[pid].get("api_key") or ""
+    if pid:
+        payload["created"] = items[pid].get("created")
+
+    cfg, err = provider_store.validate(payload, pid=pid)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+
+    new_id = pid or provider_store.new_id(items)
+    try:
+        items[new_id] = cfg
+        provider_store.save(CUSTOM_PROVIDERS_FILE, items)
+    except OSError as exc:
+        return jsonify({"ok": False, "error": "保存失败：%s" % exc}), 500
+    load_custom_providers()          # 立刻生效，不用重启进程
+    return jsonify({"ok": True, "provider": provider_store.public_view(new_id, cfg)})
+
+
+@app.route("/api/providers/custom/<pid>", methods=["DELETE"])
+def delete_custom_provider(pid):
+    items = _custom_items()
+    pid = str(pid or "").strip()
+    if pid not in items:
+        return jsonify({"ok": False, "error": "找不到这个自定义渠道"}), 404
+    try:
+        items.pop(pid)
+        provider_store.save(CUSTOM_PROVIDERS_FILE, items)
+    except OSError as exc:
+        return jsonify({"ok": False, "error": "删除失败：%s" % exc}), 500
+    load_custom_providers()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/providers/custom/test", methods=["POST"])
+def test_custom_provider():
+    """真发一次请求验证这个中转站能不能用（不落盘）。
+
+    分两步，因为失败点不一样：
+      1. GET /models —— 验地址对不对、密钥通不通。401/403 一眼就看出来。
+      2. POST /chat/completions —— 验模型名对不对、真能出字。
+    只做第 1 步不够：有些中转站的 /models 不校验密钥，密钥错了照样 200。
+    """
+    data = request.get_json(silent=True) or {}
+    pid = str(data.get("id") or "").strip()
+    payload = dict(data)
+    if pid:
+        # 修改已有渠道：密钥留空就沿用存着的那把（与保存同一口径）。
+        old = _custom_items().get(pid) or {}
+        if not str(payload.get("api_key") or "").strip():
+            payload["api_key"] = old.get("api_key") or ""
+    cfg, err = provider_store.validate(payload, pid=pid)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+
+    base = cfg["base_url"]
+    headers = {"Authorization": "Bearer " + cfg["api_key"]}
+    session = requests.Session()
+    session.trust_env = False        # 不吃系统代理（与 model_catalog 同口径）
+
+    models = []
+    try:
+        resp = session.get(base + "/models", headers=headers, timeout=15)
+        if resp.status_code >= 400:
+            detail = resp.text[:200].replace("\n", " ")
+            return jsonify({"ok": False, "stage": "models",
+                            "error": "列模型失败 HTTP %d：%s" % (resp.status_code, detail)})
+        rows = (resp.json() or {}).get("data") or []
+        models = [str(m.get("id")) for m in rows if isinstance(m, dict) and m.get("id")]
+    except Exception as exc:
+        return jsonify({"ok": False, "stage": "models",
+                        "error": "连不上：%s" % exc})
+
+    body = {"model": cfg["model"], "stream": False,
+            "messages": [{"role": "user", "content": "只回复两个字：可用"}]}
+    body.update(provider_store.reasoning_field(cfg))
+    t0 = time.time()
+    try:
+        resp = session.post(base + "/chat/completions", headers=headers,
+                            json=body, timeout=90)
+        if resp.status_code >= 400:
+            detail = resp.text[:300].replace("\n", " ")
+            return jsonify({"ok": False, "stage": "chat", "models": models,
+                            "error": "模型 %s 调用失败 HTTP %d：%s"
+                                     % (cfg["model"], resp.status_code, detail)})
+        d = resp.json() or {}
+        msg = ((d.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+    except Exception as exc:
+        return jsonify({"ok": False, "stage": "chat", "models": models,
+                        "error": "请求超时或中断：%s" % exc})
+    return jsonify({"ok": True, "models": models, "reply": msg.strip()[:40],
+                    "elapsed": round(time.time() - t0, 1)})
 
 
 @app.route("/api/agents")

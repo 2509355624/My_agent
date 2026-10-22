@@ -95,7 +95,23 @@ def get_effective_config(provider=None, model=None):
         "base_url": cfg["base_url"],
         "model": model or cfg["model"],
         "api_key": cfg["api_key"],
+        # 自定义中转站（2026-10-22）：只有它们会写这一项。内置几家一律空串，
+        # 请求体里就一个字都不多带——不能因为加了这么个功能，让火山/DeepSeek
+        # 的请求体多出个它们不认识的字段（400 降级重试要跑很多冤枉路）。
+        "reasoning_effort": str(cfg.get("reasoning_effort") or "").strip(),
     }
+
+
+def _reasoning_field(eff, extras=True):
+    """思考档位字段（grok 系）。空 = 不下发，走服务端默认。
+
+    `extras=False` 是 400 降级重试那条路：服务端若不认这个字段，去掉它再试
+    一次才可能成功，所以这里也要跟着闭嘴。
+    """
+    if not extras:
+        return {}
+    v = str((eff or {}).get("reasoning_effort") or "").strip()
+    return {"reasoning_effort": v} if v else {}
 
 
 def call_llm(messages, timeout=None, provider=None, model=None, strict=False):
@@ -114,6 +130,7 @@ def call_llm(messages, timeout=None, provider=None, model=None, strict=False):
         eff = get_effective_config(pid, mname)
         _log_effective(eff, stream=False, attempt=(i + 1, len(targets)))
         body = {"messages": messages, "stream": False, "model": eff["model"]}
+        body.update(_reasoning_field(eff))
         try:
             return _call_provider(eff, body, timeout)
         except Exception as e:
@@ -487,6 +504,8 @@ def _thinking_type(provider, model):
 def _build_stream_body(eff, messages, extras=True):
     """构造流式请求体。extras=False 时只带最保守的字段（400 降级重试用）。"""
     body = {"messages": messages, "stream": True, "model": eff["model"]}
+    # 自定义中转站的思考档位：跟别的 extras 一样，降级重试那次不带。
+    body.update(_reasoning_field(eff, extras))
     if extras and eff["provider"] in _EXTRA_FIELDS_PROVIDERS:
         # 各家默认值相反（火山托管版默认关、豆包/DeepSeek 官方默认带），统一按
         # _thinking_type 的结论下发，不赌默认值。
