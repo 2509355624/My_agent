@@ -59,36 +59,37 @@ class SilverParseTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "画面含中文"):
             silver_comic.parse(self._raw().replace("inside a bus stop", "公交站"), 2)
 
-    def test_fixed_block_and_each_panel_keep_complete_two_person_clothes(self):
-        fixed = (
-            "1girl, Illyasviel, silver-white long hair, red eyes, purple ribbon, "
-            "girl wearing purple wool coat, black tights, brown ankle boots, "
-            "1boy, faceless man, short black hair, gray eyes, "
-            "boy wearing dark navy jacket, gray trousers, black sneakers"
-        )
+    def test_fixed_block_is_identity_only_and_each_panel_writes_clothes_once(self):
+        fixed = ("1girl, 1boy, Illyasviel, faceless man, silver-white long hair, "
+                 "red eyes, purple hair ribbon, twin tails, black short hair, grey eyes")
+        panel = ("convenience store at night, girl wearing lavender sailor collar blouse "
+                 "and dark purple pleated skirt, boy wearing dark navy zip-up hoodie "
+                 "and grey cargo pants, girl reaching for the door, boy standing beside her, "
+                 "girl neutral expression, boy slight smile, front view, medium shot, "
+                 "cool fluorescent light")
         raw = ["# 标题：便利店", "固定部分: " + fixed]
         for i in range(1, 3):
-            raw += [
-                "", "## %02d" % i,
-                "画面: convenience store at night, girl wearing purple wool coat, "
-                "black tights and brown ankle boots, boy wearing dark navy jacket, "
-                "gray trousers and black sneakers, both standing by the shelves, "
-                "medium shot, cool fluorescent light",
-            ]
+            raw += ["", "## %02d" % i, "画面: " + panel]
         text = silver_comic.parse("\n".join(raw), 2)
-        self.assertEqual(text.count("girl wearing purple wool coat"), 4)
-        self.assertEqual(text.count("boy wearing dark navy jacket"), 4)
-        self.assertEqual(text.count("brown ankle boots"), 4)
-        self.assertEqual(text.count("black sneakers"), 4)
+        self.assertNotIn("wearing", fixed)
+        # 固定部分拼到每格开头，服饰只在每格动态画面里出现一次，不重复两遍
+        self.assertEqual(text.count("girl wearing lavender sailor collar blouse"), 2)
+        self.assertEqual(text.count("boy wearing dark navy zip-up hoodie"), 2)
+        self.assertEqual(text.count("silver-white long hair"), 2)
+        for line in text.splitlines():
+            if line.startswith("画面:"):
+                self.assertTrue(line.startswith("画面: " + fixed))
 
-    def test_write_script_prompt_requires_stable_clothes_and_calls_llm_once(self):
+    def test_write_script_prompt_keeps_clothes_out_of_fixed_block_and_calls_llm_once(self):
         with mock.patch.object(silver_comic.llm, "call_llm",
                                return_value=self._raw(panels=1)) as call:
             text = silver_comic.write_script("两个人在车站等雨停", panels=1)
+        system = call.call_args.args[0][0]["content"]
         self.assertEqual(call.call_count, 1)
-        self.assertIn("完整服饰", call.call_args.args[0][0]["content"])
-        self.assertIn("再次按角色写出完整服饰", call.call_args.args[0][0]["content"])
-        self.assertIn("除非剧情明确发生换装", call.call_args.args[0][0]["content"])
+        self.assertIn("固定部分不写服饰", system)
+        self.assertIn("每格必须把每个入画角色的服饰完整写一遍", system)
+        self.assertIn("每格只写一遍服饰", system)
+        self.assertIn("除非剧情明确换装", system)
         self.assertIn("## 01", text)
 
 
