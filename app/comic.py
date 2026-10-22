@@ -202,7 +202,7 @@ BUBBLE_TEMPLATE_ALL = (
 # 幻觉入口（他手写的实测版里，我方那一段连"箭头""尾巴"两个字都没出现）。
 _SELF_SPEAKER = "我"
 # 角色气泡的尾巴指向（第三人称档会出现「男」，2026-10-22）
-_TAIL_BY_SPEAKER = {"女": "指向画面中的女生", "男": "指向画面中的男生"}
+_TAIL_BY_SPEAKER = {"女": "指向画面中女生", "男": "指向画面中男生"}
 _SELF_POS = "右下角"
 
 
@@ -232,17 +232,23 @@ def _bubble_sec(pos, speaker, text, intro=True, again=False):
                 '框里写 "%s"，文字排成 2 到 3 行居中显示，每行不超过 8 个字，'
                 '字迹清晰。' % (_SELF_POS, text))
     tail = _tail_note(speaker)
+    # ⚠️ 2026-10-22 改：角色气泡**不再写位置**（左上方 / 右上角），只写「尾巴
+    # 指向画面中的谁」。位置是几何描述，双人图里谁在左是模型自己排的，我们
+    # 报一个"左上方"它只能理解成"连最近的那个人"——实测两个尾巴全部连错人。
+    # 人认得出、位置认不准，那就只给它认得出的那个（用户原话：qwen 自己可以
+    # 识别谁是男生谁是女生）。
     if not intro:
-        return ('%s的对话框里写 "%s"，它是白色圆角框、黑色细边框，%s，字体为黑体。'
-                % (pos, text, tail))
+        return ('尾巴%s的那个气泡里写 "%s"，它是白色圆角框、黑色细边框，字体为黑体。'
+                % (tail, text))
     if again:
-        return ('在画面%s再添加一个对话框：白色圆角框、黑色细边框，%s，字体为黑体。'
+        return ('在画面空白处再添加一个对话框：白色圆角框、黑色细边框，尾巴%s，'
+                '字体为黑体。'
                 '这个新对话框里写 "%s"，文字排成 2 到 3 行居中显示，'
-                '每行不超过 8 个字，字迹清晰。' % (pos, tail, text))
-    return ('在这张漫画格里添加一个对话框（气泡），位置在画面%s的空白处。'
-            '气泡是白色圆角框、黑色细边框，%s，字体为黑体。'
+                '每行不超过 8 个字，字迹清晰。' % (tail, text))
+    return ('在这张漫画格里添加一个对话框（气泡），放人物脸部以外的空白处。'
+            '气泡是白色圆角框、黑色细边框，尾巴%s，字体为黑体。'
             '气泡里写 "%s"，文字排成 2 到 3 行居中显示，每行不超过 8 个字，字迹清晰。'
-            % (pos, tail, text))
+            % (tail, text))
 
 
 # 台词里的中日式引号（「」『』）会被 qwen 当成句子边界——实测 04 那格就是在「」处
@@ -317,7 +323,22 @@ def _layout(speakers, has_labels):
     return out
 
 
-def _count_note(bubbles, pos2, n_labels, pos1="左上方"):
+_ROLE_NAME = {"女": "女生", "男": "男生"}
+
+
+def _bubble_name(speaker):
+    """清点句里怎么称呼一个气泡：角色气泡按**人**叫，不按位置叫。
+
+    和 `_bubble_sec` 同一个理由（2026-10-22）：位置在双人图里是模型自己排的，
+    清点句里说「左上方的那个气泡」，模型照样只能理解成"左上那个"，跟台词归属
+    对不上时它不会觉得矛盾，只会照着位置连。
+    """
+    if speaker == _SELF_SPEAKER:
+        return "右下角的那个气泡"
+    return "尾巴指向画面中%s的那个气泡" % _ROLE_NAME.get(speaker, "角色")
+
+
+def _count_note(bubbles, pos2, n_labels, pos1="左上方", speakers=()):
     """「画面里一共这几处文字」——用**正面清点**说数量与归属。
 
     这条约束必须存在（初版完全不说，5 格里 2 格冒出乱气泡），但说法要从
@@ -330,10 +351,16 @@ def _count_note(bubbles, pos2, n_labels, pos1="左上方"):
     提示词里一边说「一个气泡」一边说「两个气泡」，模型只能二选一。
     （2026-10-11 自查发现。与「`stepping off` 改用 `standing on one leg` 之类」
     同类：提示词里的字面描述对模型就是硬指令。）
+
+    `speakers` 给了就按**人**清点（「尾巴指向画面中女生的那个气泡」），不给
+    才回退到按位置清点——按位置那种在双人图里会和归属打架，见 `_bubble_name`。
     """
-    names = ["%s的那个气泡" % pos1]
-    if bubbles == 2:
-        names.append("%s的那个气泡" % pos2)
+    if speakers:
+        names = [_bubble_name(sp) for sp in list(speakers)[:bubbles]]
+    else:
+        names = ["%s的那个气泡" % pos1]
+        if bubbles == 2:
+            names.append("%s的那个气泡" % pos2)
     if n_labels == 1:
         names.append("右上角的一行旁白")
     elif n_labels:
@@ -342,12 +369,12 @@ def _count_note(bubbles, pos2, n_labels, pos1="左上方"):
     return "画面里的文字一共这%s：%s。" % (total, "、".join(names))
 
 
-def _label_sec(lines, bubbles=1, pos2="右下角", pos1="左上方"):
+def _label_sec(lines, bubbles=1, pos2="右下角", pos1="左上方", speakers=()):
     """旁白段的提示词。单条 / 多条两种写法，多条的每行都要单独点名。
 
     bubbles / pos1 / pos2 只有**一次画两个气泡**时才会传非默认值：这一段收尾是
     一句数量清点，必须知道这一格一共画几个气泡、各自落在哪（见 `_count_note`
-    和 `_layout`）。
+    和 `_layout`）。`speakers` 传了就按人清点（2026-10-22）。
     """
     n = len(lines)
     out = ["另外在画面右上角添加旁白文字：黑体，字号清晰可读、与气泡内文字大小相当，"
@@ -360,7 +387,7 @@ def _label_sec(lines, bubbles=1, pos2="右下角", pos1="左上方"):
                    "行与行之间留出空隙：" % n)
         out.append("".join('第 %d 行写 "%s"；' % (i + 1, _clean_dialogue(s))
                            for i, s in enumerate(lines)))
-    out.append(_count_note(bubbles, pos2, n, pos1))
+    out.append(_count_note(bubbles, pos2, n, pos1, speakers=speakers))
     return "".join(out)
 
 # 同 image_out / comfy_src：本机常驻代理会把 127.0.0.1 也劫持成 502，
@@ -671,9 +698,11 @@ class Panel:
         """
         lines = self.labels()
         if self.two_bubbles() and not split:
-            pos1, pos2 = _layout([self.speaker, self.speaker2], bool(lines))
-            lab_sec = (_label_sec(lines, bubbles=2, pos2=pos2, pos1=pos1) if lines
-                       else _count_note(2, pos2, 0, pos1))
+            speakers = [self.speaker, self.speaker2]
+            pos1, pos2 = _layout(speakers, bool(lines))
+            lab_sec = (_label_sec(lines, bubbles=2, pos2=pos2, pos1=pos1,
+                                  speakers=speakers) if lines
+                       else _count_note(2, pos2, 0, pos1, speakers=speakers))
             return BUBBLE_TEMPLATE_ALL.format(
                 sec1=_bubble_sec(pos1, self.speaker, self.bubble, intro=False),
                 sec2=_bubble_sec(pos2, self.speaker2, self.bubble2, intro=False),
@@ -682,9 +711,11 @@ class Panel:
         sec = _bubble_sec(pos, self.speaker, self.bubble)
         if lines:
             return BUBBLE_TEMPLATE_LABEL.format(
-                sec=sec, lab_sec=_label_sec(lines, bubbles=1, pos1=pos))
+                sec=sec, lab_sec=_label_sec(lines, bubbles=1, pos1=pos,
+                                            speakers=[self.speaker]))
         return BUBBLE_TEMPLATE.format(
-            sec=sec, count=_count_note(1, None, 0, pos))
+            sec=sec, count=_count_note(1, None, 0, pos,
+                                       speakers=[self.speaker]))
 
     def bubble2_prompt(self, pos="右上角"):
         """第二遍 i2i 的提示词。

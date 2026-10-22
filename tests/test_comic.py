@@ -207,23 +207,27 @@ class TwoPassBubbleTest(unittest.TestCase):
         self.assertEqual(p.state, "done")
 
     def test_merged_prompt_declares_both_bubbles_explicitly(self):
-        """合并版必须把**每个**气泡的文字、位置、归属都写死。
+        """合并版必须把**每个**气泡的文字和归属都写死，但**不写位置**。
 
         含糊就挂错人（用户原话「箭头指向谁必须是确定的」）——当初「一次只画一个」
         的取舍正是为了绕开这份含糊，现在两件事可以同时满足。
 
         2026-10-11 用户拍板后两类写法分家：角色的气泡写明「指向画面中的女生」，
         「我们」的话换成白色圆角矩形框 + 右下角、**一个字都不提指向**。
+
+        ⚠️ 2026-10-22 修正：角色气泡**不再说位置**（「左上方」），只说「尾巴
+        指向画面中女生」。位置是几何描述，双人图里谁在左是模型自己排的，我们
+        报一个"左上方"，它只能理解成"连离这个角最近的人"——实测两个尾巴全部
+        连给了错的人。人它认得出，位置认不准，就只给它认得出的那个。
         """
         p = comic.Panel("01", "1girl, solo", "走吧", "车门合上了",
                         "回家再说", speaker="女", speaker2="我")
         prompt = p.bubble_prompt()
         self.assertIn('"走吧"', prompt)
         self.assertIn('"回家再说"', prompt)
-        self.assertIn("左上方的对话框", prompt)                  # 女生的气泡
-        self.assertIn("指向画面中的女生", prompt)                # 归属写死
+        self.assertIn("尾巴指向画面中女生", prompt)              # 归属写死
+        self.assertNotIn("左上方", prompt)                      # 位置一个字不提
         self.assertIn("仅在画面右下角添加一个白色的圆角矩形框", prompt)   # 我们的话
-        self.assertNotIn("尾巴", prompt)
         self.assertNotIn("箭头", prompt)
         self.assertIn("车门合上了", prompt)                     # 旁白也在这一遍里
 
@@ -239,8 +243,8 @@ class TwoPassBubbleTest(unittest.TestCase):
                         "回家再说", speaker="女", speaker2="我")
         prompt = p.bubble_prompt()
         self.assertNotIn("左上角一个气泡", prompt)
-        self.assertIn("左上方的那个气泡", prompt)
-        self.assertIn("右下角的那个气泡", prompt)         # 旁白占了右上角，它让位
+        self.assertIn("尾巴指向画面中女生的那个气泡", prompt)   # 角色气泡按人认
+        self.assertIn("右下角的那个气泡", prompt)               # 我们的话按位置认
         self.assertIn("画面里的文字一共这三处", prompt)
 
     def test_split_flag_keeps_the_old_two_passes(self):
@@ -268,11 +272,13 @@ class TwoPassBubbleTest(unittest.TestCase):
         comic.render_bubble(task, p, split=True)
         self.assertEqual(len(self.submits), 1)
 
-    def test_bubble2_moves_to_bottom_right_with_narration(self):
-        """旁白条占着右上角，第二个气泡必须让位到右下角。
+    def test_bubble2_does_not_get_a_position_to_contend_with_narration(self):
+        """有旁白时第二个气泡不再被派到某个角——位置交给模型自己避让。
 
-        2026-10-11：`标签:` 改成每格必写的剧情旁白后，它和第二个气泡的默认
-        位置都是右上角——照原样会把两个文字元素挤在同一个角落。
+        2026-10-11 的做法是「旁白占右上角，第二个气泡让位到右下角」。2026-10-22
+        实测：位置这种几何描述在双人图里会直接变成"连离那个角最近的人"，属性和
+        归属打架。现在只保留唯一硬的位置约束——**旁白固定右上角**（它是旁白，
+        不指向任何人），气泡自己找空位。
         """
         task = self._task(bubble2="第二句", label="我攥住了她的手腕")
         p = task.panels[0]
@@ -281,17 +287,21 @@ class TwoPassBubbleTest(unittest.TestCase):
             f.write(b"raw")
         comic.render_bubble(task, p)
         self.assertEqual(len(self.submits), 1)
-        self.assertIn("右下角", self.submits[0])
-        self.assertIn("右上角的一行旁白", self.submits[0])     # 右上角留给了旁白
+        self.assertIn("右上角的一行旁白", self.submits[0])     # 右上角留给旁白
+        self.assertIn("尾巴指向画面中女生", self.submits[0])   # 气泡按人认
+        self.assertNotIn("左上方", self.submits[0])
 
-    def test_bubble2_stays_top_right_without_narration(self):
+    def test_bubble_position_is_left_to_the_model(self):
+        """没有旁白时也一样：两个气泡都不指定位置，只写归属。"""
         task = self._task(bubble2="第二句")
         p = task.panels[0]
         os.makedirs(task.raw_dir)
         with open(task.raw_path(p), "wb") as f:
             f.write(b"raw")
         comic.render_bubble(task, p)
-        self.assertIn("右上角", self.submits[0])
+        self.assertNotIn("右上角", self.submits[0])
+        self.assertNotIn("左上方", self.submits[0])
+        self.assertIn("尾巴指向画面中女生", self.submits[0])
 
 
 class ManualRenderTest(unittest.TestCase):
@@ -599,7 +609,7 @@ class SpeakerTest(unittest.TestCase):
             "## 01\n画面: 1girl, 1boy\n气泡: （男）别动。\n")
         self.assertEqual(panels[0]["speaker"], "男")
         self.assertEqual(panels[0]["bubble"], "别动。")
-        self.assertEqual(comic._tail_note("男"), "指向画面中的男生")
+        self.assertEqual(comic._tail_note("男"), "指向画面中男生")
         # 「他」仍然是 POV 语义（镜头外的「我」）
         self.assertEqual(comic._tail_note("我"), "")
 
@@ -633,13 +643,18 @@ class TailDirectionTest(unittest.TestCase):
     （2026-10-11 用户实测反馈）。2026-10-11 晚用户拿两张实测图把写法定死：
     角色的气泡写「指向画面中的女生」；「我们」的话不写指向，改由
     **白色圆角矩形框 + 右下角**表身份（形状和位置本身就是语义）。
+
+    ⚠️ 2026-10-22 二次修正：10-11 那版把「尾巴」这个词砍掉了，理由是"模型
+    不需要知道尾巴朝哪"。双人图里这句话只对了一半——没有「尾巴」这个词，模型
+    就只剩位置可用，于是它按几何就近连。现在角色气泡写「尾巴指向画面中女生」，
+    并**完全不提位置**；「我」那边一个字没动。
     """
 
     def test_girl_bubble_points_at_girl(self):
         prompt = comic.Panel("01", "1girl, solo", "别跟着我",
                              speaker="女").bubble_prompt()
-        self.assertIn("指向画面中的女生", prompt)
-        self.assertNotIn("尾巴", prompt)       # 「尾巴」这个词也一并删了
+        self.assertIn("尾巴指向画面中女生", prompt)
+        self.assertNotIn("左上方", prompt)     # 位置会把归属带偏，一个字不提
         self.assertNotIn("箭头", prompt)
 
     def test_self_bubble_is_a_plain_rounded_box(self):
@@ -686,7 +701,7 @@ class TailDirectionTest(unittest.TestCase):
                         bubble2="二", speaker2="女")
         self.assertIn("仅在画面右下角添加一个白色的圆角矩形框",
                       p.bubble_prompt())                  # 镜头外的「我」
-        self.assertIn("指向画面中的女生", p.bubble2_prompt())  # 女生的气泡
+        self.assertIn("尾巴指向画面中女生", p.bubble2_prompt())  # 女生的气泡
 
 
 class MultiLabelPromptTest(unittest.TestCase):
