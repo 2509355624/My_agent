@@ -161,9 +161,19 @@
              title="勾上就不查标签库，直接把规则给编剧模型、一次写完整剧本（快到十几倍）；取消勾选则先查库再写">
         <input type="checkbox" id="skipSearch" checked onchange="rememberSkipSearch()"> 跳过查库
       </label>
+      <label id="silverModeWrap" style="display:none;font-size:12px;white-space:nowrap;color:var(--text-dim)"
+             title="自由视角使用 silver 连续漫画路线，只请求一次模型，不经过补正 AI">
+        <select id="silverMode" style="width:auto" onchange="rememberSilverMode()">
+          <option value="no_bubble">连续漫画，无气泡</option>
+          <option value="bubble">连续漫画，有气泡</option>
+        </select>
+      </label>
       <button class="btn primary" id="btnScript" onclick="genScript()">生成剧本</button>
     </div>
     <textarea id="script" style="display:none" spellcheck="false"></textarea>
+    <!-- 自由视角（silver）：固定部分 / 逐格动态部分分开显示。跑图时每格 =
+         固定部分 + 该格动态部分，跟 skill 示例的结构一致。 -->
+    <div id="silverParts" style="display:none;margin-top:10px"></div>
     <div id="fixPanel" style="display:none;margin-top:10px"></div>
     <div id="chatBox" style="display:none;margin-top:10px;border:1px solid var(--border);border-radius:8px;padding:10px">
       <div style="font-size:13px;margin-bottom:6px">💬 和修订助手聊剧本
@@ -388,6 +398,7 @@ function restoreSkipSearch() {
 const LS_POV_MODE = 'comic_pov_mode';
 
 const POV_MODES = ['pov', 'free', 'third'];
+const LS_SILVER_MODE = 'comic_silver_mode';
 
 function povMode() {
   const v = document.getElementById('povMode').value;
@@ -410,12 +421,29 @@ function rememberPovMode() {
     third: '第三人称：镜头站在旁边看，双人同框是常态、不写 POV 标签'
   };
   toast(HINT[povMode()]);
+  syncModeInputs();
+  applyMode();
 }
 
 function restorePovMode() {
   let v = null;
   try { v = localStorage.getItem(LS_POV_MODE); } catch (e) { }
-  setPovMode(v === 'free' ? 'free' : 'pov');
+  setPovMode(POV_MODES.indexOf(v) >= 0 ? v : 'pov');
+}
+
+function silverMode() {
+  const v = document.getElementById('silverMode').value;
+  return v === 'bubble' ? 'bubble' : 'no_bubble';
+}
+
+function rememberSilverMode() {
+  try { localStorage.setItem(LS_SILVER_MODE, silverMode()); } catch (e) { }
+}
+
+function restoreSilverMode() {
+  let v = null;
+  try { v = localStorage.getItem(LS_SILVER_MODE); } catch (e) { }
+  document.getElementById('silverMode').value = v === 'bubble' ? 'bubble' : 'no_bubble';
 }
 
 async function loadProviders() {
@@ -586,8 +614,16 @@ async function genScript() {
   if (!brief) { toast('先写需求（视角/主角/剧情）', true); return; }
   const btn = document.getElementById('btnScript');
   SCRIPT_NO_SEARCH = skipSearch();       // 开跑那一刻定死，中途改勾选不影响本轮
+  // 新一轮失败时不应继续展示上一集的剧本，避免用户误以为失败稿已经生成。
+  document.getElementById('script').value = '';
+  document.getElementById('script').style.display = 'none';
+  document.getElementById('fixPanel').innerHTML = '';
+  document.getElementById('fixPanel').style.display = 'none';
+  renderSilverParts(null);
   btn.disabled = true;
-  btn.textContent = SCRIPT_NO_SEARCH ? '编剧写剧本中…' : '编剧查库中…';
+  const silverRun = ['free', 'third'].indexOf(povMode()) >= 0;
+  btn.textContent = silverRun ? 'silver 编剧中…'
+                              : (SCRIPT_NO_SEARCH ? '编剧写剧本中…' : '编剧查库中…');
   try {
     const d = await api('/api/comic/script', {
       brief, panels: +document.getElementById('panels').value || 10,
@@ -599,8 +635,9 @@ async function genScript() {
       // 跳过查库（2026-10-22）：后端默认就是 true，这里显式传，取消勾选时
       // 传 false 才走原来那十几轮查库。
       no_search: SCRIPT_NO_SEARCH,
-      // 视角模式（2026-10-22）：pov 走原来的 POV 硬规则，free 让编剧自己挑机位
-      pov_mode: povMode()
+      // 视角模式：pov 走原来的硬规则；free / third 走 silver 一次 API。
+      pov_mode: povMode(),
+      silver_mode: silverMode()
     });
     SCRIPT_JOB = d.job;
     pollScript();
@@ -644,6 +681,7 @@ async function pollScript() {
   loadTasks();                            // 新任务要出现在「历史任务」下拉里
   const ta = document.getElementById('script');
   ta.style.display = 'block'; ta.value = d.script;
+  renderSilverParts(d.silver);            // 固定部分 / 逐格动态部分分栏
   renderFix(d.fix);                       // 补正报告（编剧之后那一步）
   document.getElementById('scriptOps').style.display = 'flex';
   document.getElementById('chatBox').style.display = 'block';
@@ -661,6 +699,36 @@ function finishScript() {
   btn.disabled = false; btn.textContent = '生成剧本';
 }
 
+// ── 自由视角：固定部分 / 动态部分分栏 ─────────────────────
+// skill 的结构就是「固定部分（谁+脸部特征） + 动态部分（场景/服饰/动作/神态/镜头/灯光）」，
+// 跑图时每格 = 固定部分 + 该格动态部分。这里只做展示：编辑仍然在下面的 textarea，
+// 避免两边各存一份内容、保存时互相覆盖。
+function renderSilverParts(s) {
+  const box = document.getElementById('silverParts');
+  if (!s || !s.fixed) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const dyn = s.dynamics || [];
+  const lab = 'font-size:12px;color:var(--text-dim);margin:0 0 6px';
+  let h = '<div style="' + lab + '">固定部分 —— 只写角色与脸部特征，跑图时拼到每格开头</div>' +
+          '<div style="font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:1.6;' +
+          'padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:rgba(127,127,127,.06)">' +
+          esc(s.fixed) + '</div>' +
+          '<div style="' + lab + 'margin-top:10px">动态部分 —— ' + dyn.length + ' 格（场景 + 服饰 + 动作 + 神态 + 镜头 + 灯光）</div>';
+  dyn.forEach(function (t, i) {
+    const b = (s.bubbles && s.bubbles[i]) || {};
+    let line = t;
+    if (b.bubble) line += '\n气泡: ' + b.bubble;
+    if (b.bubble2) line += '\n气泡2: ' + b.bubble2;
+    h += '<div style="display:flex;gap:8px;margin-bottom:6px;font-size:12px;line-height:1.6">' +
+         '<span style="color:var(--text-dim);font-family:ui-monospace,Consolas,monospace;flex:none">' +
+         String(i + 1).padStart(2, '0') + '</span>' +
+         '<span style="font-family:ui-monospace,Consolas,monospace;white-space:pre-wrap">' +
+         esc(line) + '</span></div>';
+  });
+  box.innerHTML = h;
+  box.style.display = 'block';
+  document.getElementById('script').style.display = 'none';   // 分栏已经表达同一份内容
+}
+
 // ── 内容补正报告（编剧之后的独立一步）─────────────────────
 // 补正是「编剧交稿 + 代码出问题清单（只做检测）→ 模型照清单补 → 直接采纳」。
 // 这里负责把 fix.json 显示出来：采纳了改了什么；没采纳只有一种情形——补正模型
@@ -670,7 +738,8 @@ const FIX_FAIL = {error: '调用失败', empty: '模型返回空',
                   unparseable: '返回的格式解析不出剧本', structure: '格号与原稿对不上'};
 function renderFix(fix) {
   const box = document.getElementById('fixPanel');
-  if (!fix) { box.style.display = 'none'; return; }
+  const silver = ['free', 'third'].indexOf(povMode()) >= 0;
+  if (silver || !fix) { box.style.display = 'none'; return; }
   const sig = JSON.stringify([fix.status, fix.adopted, fix.skipped, fix.diff,
                               fix.warnings, fix.audit, fix.at]);
   if (box.dataset.sig === sig) return;          // 没变就别重建，避免闪烁
@@ -746,6 +815,7 @@ async function refix() {
           const t = await api('/api/comic/script_text?task=' + TASK);
           if (t.script) document.getElementById('script').value = t.script;
         } catch (e) { console.warn(e); }
+        renderSilverParts(null);   // 补正改写了正文，分栏作废
         const bad = !!FIX_FAIL[s.fix.status];
         toast(bad ? ('补正失败：' + FIX_FAIL[s.fix.status] + '，请点「重新补正」重跑')
                   : (s.fix.adopted ? '补正已采纳'
@@ -862,6 +932,7 @@ async function pollChat() {
       const t = await api('/api/comic/script_text?task=' + TASK);
       if (t.script) document.getElementById('script').value = t.script;
     } catch (e) { console.warn(e); }
+    renderSilverParts(null);       // 正文被改写，固定/动态分栏已过期
     toast('剧本已按对话改动更新（' + (d.diff || []).map(x => '格' + x.no).join('、') + '）');
     refresh();
   } else if (d.state !== 'error') {
@@ -876,6 +947,7 @@ async function chatUndo() {
   try {
     const d = await api('/api/comic/chat_undo', {task: TASK});
     document.getElementById('script').value = d.script;
+    renderSilverParts(null);       // 撤销后正文变了，分栏作废
     chatShowUndo(false);
     toast('已撤销最近一次对话改动');
     refresh();
@@ -1516,7 +1588,12 @@ function poll() { clearTimeout(TIMER); TIMER = setTimeout(async () => { await re
 // 参数卡无论如何先显示——它可能是全局默认/模板值，跟有没有任务无关。
 async function restoreSession() {
   restoreSkipSearch();
-  restorePovMode();                // 跳过查库的勾选状态（默认勾上，2026-10-22）
+  restorePovMode();
+  restoreSilverMode();
+  // 视角是从 localStorage 恢复的，恢复后必须再算一次控件显隐；否则页面
+  // 会显示 free，但仍保留 POV 的「跳过查库」，并隐藏 silver 模式选择。
+  syncModeInputs();
+  applyMode();
   await loadTasks();                  // 下拉先填好（一个任务都没有也要给个空选项）
   await loadChannels();               // 渠道下拉同样先填好（没任务也能先挑渠道）
   let saved = null;
@@ -1596,6 +1673,8 @@ async function loadTaskUI(name, prefix) {
       document.getElementById('chatBox').style.display = 'block';
       loadChatHistory();
       renderFix(d.fix);
+      // 自由视角任务重开时，固定/动态分栏从 fix.json 的 silver 段还原
+      renderSilverParts(d.fix && d.fix.silver);
     }
   } catch (e) { /* 纯写真任务：没有剧本，正常 */ }
   // 写真有就画出来（2026-10-18 补）：原来这里只切卡片显隐、不填内容，切到
@@ -1662,9 +1741,14 @@ function syncModeInputs() {
   document.getElementById('panels').title = p ? '写真相张数（1~12）' : '格数';
   document.getElementById('panels').max = p ? 12 : 30;
   document.getElementById('btnScript').textContent = p ? '生成写真' : '生成剧本';
-  // 「跳过查库」只对剧本模式有意义（写真那条路根本不经过编剧）。
-  document.getElementById('skipSearchWrap').style.display = p ? 'none' : '';
+  // 「跳过查库」只对 POV 编剧路线有意义；silver 自由路线固定一次 API。
+  const silver = !p && ['free', 'third'].indexOf(povMode()) >= 0;
+  document.getElementById('skipSearchWrap').style.display = (p || silver) ? 'none' : '';
+  document.getElementById('silverModeWrap').style.display = silver ? '' : 'none';
   document.getElementById('povModeWrap').style.display = p ? 'none' : '';
+  document.getElementById('btnRefix').style.display = silver ? 'none' : '';
+  document.getElementById('fixPanel').style.display =
+    (!p && !silver && document.getElementById('fixPanel').innerHTML.trim()) ? 'block' : 'none';
   document.getElementById('brief').placeholder = p
     ? '想拍什么：花田里回眸、天台看夕阳、教室靠窗午睡……（一次多张，每张换场景/服装/构图）'
     : '视角: 哥哥\n主角: 妹妹\n剧情: 下雨天兄妹俩在公交站躲雨……（前两行是硬约束：视角=镜头后的「我」，男性→pov、女性→female_pov；主角=画面里唯一入画的人）';
@@ -1690,11 +1774,17 @@ function applyMode() {
   const p = curMode() === 'portrait';
   const hasScript = !!document.getElementById('script').value.trim();
   const showScript = !p && hasScript;
-  document.getElementById('script').style.display = showScript ? 'block' : 'none';
+  // 自由视角已经有「固定部分 / 动态部分」分栏时，textarea 收起：它只是内部拼接
+  // 格式，同一份内容显示两遍反而看不出结构（2026-10-22 用户口径）。
+  const partsShown = document.getElementById('silverParts').style.display !== 'none';
+  document.getElementById('script').style.display =
+    (showScript && !partsShown) ? 'block' : 'none';
   document.getElementById('scriptOps').style.display = showScript ? 'flex' : 'none';
   document.getElementById('chatBox').style.display = showScript ? 'block' : 'none';
+  const silver = !p && ['free', 'third'].indexOf(povMode()) >= 0;
   document.getElementById('fixPanel').style.display =
-    (!p && document.getElementById('fixPanel').innerHTML.trim()) ? 'block' : 'none';
+    (!p && !silver && document.getElementById('fixPanel').innerHTML.trim()) ? 'block' : 'none';
+  document.getElementById('btnRefix').style.display = silver ? 'none' : '';
   // 槽位卡装的是漫画格；「接上一集」只对剧本有意义。生图模式下一并收起。
   document.getElementById('slotCard').style.display = p ? 'none' : '';
   document.getElementById('prevLabel').style.display = p ? 'none' : '';

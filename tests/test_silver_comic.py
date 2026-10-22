@@ -80,17 +80,44 @@ class SilverParseTest(unittest.TestCase):
             if line.startswith("画面:"):
                 self.assertTrue(line.startswith("画面: " + fixed))
 
-    def test_write_script_prompt_keeps_clothes_out_of_fixed_block_and_calls_llm_once(self):
+    def test_skill_native_format_is_split_into_fixed_and_dynamics(self):
+        raw = "\n".join([
+            "# 标题：便利店",
+            "1girl, 1boy, Illyasviel, faceless man, silver-white long hair, "
+            "red eyes, black short hair, grey eyes",
+            "",
+            "inside convenience store, girl wearing lavender blouse, "
+            "boy wearing navy hoodie, girl standing, boy standing, "
+            "front view, medium shot, fluorescent light",
+            "---",
+            "city street at night, girl wearing lavender blouse, "
+            "boy wearing navy hoodie, girl walking, boy following, "
+            "side view, medium shot, street light",
+        ])
+        title, fixed, blocks = silver_comic.split(raw)
+        self.assertEqual(title, "便利店")
+        self.assertTrue(fixed.startswith("1girl, 1boy"))
+        self.assertNotIn("wearing", fixed)
+        self.assertEqual(len(blocks), 2)
+        self.assertIn("girl wearing lavender blouse", blocks[0]["scene"])
+        self.assertTrue(blocks[1]["scene"].startswith("city street"))
+
+    def test_system_prompt_is_the_skill_itself(self):
         with mock.patch.object(silver_comic.llm, "call_llm",
                                return_value=self._raw(panels=1)) as call:
-            text = silver_comic.write_script("两个人在车站等雨停", panels=1)
+            silver_comic.write_script("两个人在车站等雨停", panels=1)
         system = call.call_args.args[0][0]["content"]
-        self.assertEqual(call.call_count, 1)
-        self.assertIn("固定部分不写服饰", system)
-        self.assertIn("每格必须把每个入画角色的服饰完整写一遍", system)
-        self.assertIn("每格只写一遍服饰", system)
-        self.assertIn("除非剧情明确换装", system)
-        self.assertIn("## 01", text)
+        self.assertIn("连续剧情提示词生成规范", system)   # skill 原文整份给模型
+        self.assertIn("固定部分一行英文", system)          # 再补输出契约
+        self.assertIn("共 1 格", system)
+
+    def test_write_script_detail_exposes_fixed_and_dynamics(self):
+        with mock.patch.object(silver_comic.llm, "call_llm",
+                               return_value=self._raw(panels=1)):
+            d = silver_comic.write_script_detail("两个人在车站等雨停", panels=1)
+        self.assertIn("girl with black bob hair", d["fixed"])
+        self.assertEqual(len(d["panels"]), 1)
+        self.assertIn("# 标题", d["script"])
 
 
 if __name__ == "__main__":

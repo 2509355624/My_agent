@@ -30,6 +30,15 @@ from app import (comic, comic_agent, comic_api, comic_portrait,
 
 GOOD_SCRIPT = "# 标题：测试\n\n## 01\n画面: 1girl, solo, pov\n气泡: 一\n标签1: 她站在门口\n"
 
+# silver 自由路线的返回：固定部分 + 逐格动态部分 + 转好的 script.md。
+SILVER_DETAIL = {
+    "title": "测试",
+    "fixed": "1girl, girl with black hair, brown eyes",
+    "panels": [{"scene": "a room, girl standing, medium shot",
+                "bubble": "", "bubble2": ""}],
+    "script": GOOD_SCRIPT,
+}
+
 
 class ComicScriptApiTest(unittest.TestCase):
 
@@ -81,8 +90,12 @@ class ComicScriptApiTest(unittest.TestCase):
         self.assertEqual(r.status_code, 404)
 
     def test_returns_job_and_finishes_with_script(self):
+        fake = {"text": GOOD_SCRIPT, "issues": [], "diff": [], "adopted": False,
+                "status": "nochange", "warnings": [], "audit": [],
+                "skipped": False, "model": ""}
         with mock.patch.object(comic_agent, "write_script",
-                               return_value=GOOD_SCRIPT):
+                               return_value=GOOD_SCRIPT), \
+                mock.patch.object(comic_agent, "fix_script", return_value=fake):
             d = self._post(panels=1)
             self.assertTrue(d["ok"])
             self.assertTrue(d["job"])
@@ -136,59 +149,70 @@ class ComicScriptApiTest(unittest.TestCase):
             self._wait(d["job"])
         self.assertEqual(m.call_args.kwargs.get("pov_mode"), "pov")
 
-    def test_pov_mode_forwarded_to_writer_and_fixer(self):
-        """前端选「自由视角」→ 编剧与补正两边都得收到，缺一边就白改。"""
-        with mock.patch.object(comic_agent, "write_script",
-                               return_value=GOOD_SCRIPT) as w, \
-                mock.patch.object(comic_agent, "fix_script",
-                                  return_value={"text": GOOD_SCRIPT,
-                                                "issues": [], "diff": [],
-                                                "adopted": False,
-                                                "status": "nochange",
-                                                "warnings": [], "audit": [],
-                                                "skipped": False, "model": ""}) as f:
-            d = self._post(panels=1, pov_mode="free")
+    def test_free_uses_silver_once_without_fix(self):
+        """free 走 silver 一次 API，不能再调用旧编剧或补正。"""
+        with mock.patch("app.silver_comic.write_script_detail",
+                        return_value=SILVER_DETAIL) as s, \
+                mock.patch.object(comic_agent, "write_script") as w, \
+                mock.patch.object(comic_agent, "fix_script") as f:
+            d = self._post(panels=1, pov_mode="free", silver_mode="bubble")
             out = self._wait(d["job"])
-        self.assertEqual(w.call_args.kwargs.get("pov_mode"), "free")
-        self.assertEqual(f.call_args.kwargs.get("pov_mode"), "free")
+        self.assertEqual(s.call_args.kwargs.get("mode"), "bubble")
+        self.assertEqual(s.call_args.kwargs.get("panels"), 1)
+        w.assert_not_called()
+        f.assert_not_called()
         self.assertEqual(out.get("pov_mode"), "free")
+        self.assertEqual(out.get("fix", {}).get("status"), "silver")
+        # 固定部分 / 逐格动态部分要单独带出来给界面分栏
+        self.assertEqual(out.get("silver", {}).get("fixed"),
+                         SILVER_DETAIL["fixed"])
 
-    def test_pov_mode_persisted_to_task_dir(self):
-        """模式必须落盘：之后单独触发的「重新补正」「修订助手」要读它。"""
-        with mock.patch.object(comic_agent, "write_script",
-                               return_value=GOOD_SCRIPT), \
-                mock.patch.object(comic_agent, "fix_script",
-                                  return_value={"text": GOOD_SCRIPT,
-                                                "issues": [], "diff": [],
-                                                "adopted": False,
-                                                "status": "nochange",
-                                                "warnings": [], "audit": [],
-                                                "skipped": False, "model": ""}):
-            d = self._post(panels=1, pov_mode="free")
-            self._wait(d["job"])
-        fp = os.path.join(self.tmp, "C20261011-01", "mode.json")
-        self.assertTrue(os.path.isfile(fp))
-        import json as _json
-        with open(fp, encoding="utf-8") as fh:
-            self.assertEqual(_json.load(fh)["pov_mode"], "free")
+    def test_third_is_same_silver_route(self):
+        """third 只是旧名称，实际与 free 共用 silver 路线。"""
+        with mock.patch("app.silver_comic.write_script_detail",
+                        return_value=SILVER_DETAIL) as s, \
+                mock.patch.object(comic_agent, "fix_script") as f:
+            d = self._post(panels=1, pov_mode="third")
+            out = self._wait(d["job"])
+        self.assertEqual(s.call_args.kwargs.get("mode"), "no_bubble")
+        f.assert_not_called()
+        self.assertEqual(out.get("pov_mode"), "third")
 
-    def test_pov_mode_third_forwarded_and_persisted(self):
-        """第三人称档：编剧、补正、返回值、mode.json 四处都得是 third。
-
-        少一处就白切——尤其 mode.json 与补正：作者写好双人剧本后点「重新补正」，
-        补正员读不到 third 就会拿着 POV 规则把第二个角色删掉。
-        """
+    def test_pov_still_uses_writer_and_fixer(self):
+        """POV 保持原有编剧 + 补正链路。"""
         fake = {"text": GOOD_SCRIPT, "issues": [], "diff": [], "adopted": False,
                 "status": "nochange", "warnings": [], "audit": [],
                 "skipped": False, "model": ""}
         with mock.patch.object(comic_agent, "write_script",
                                return_value=GOOD_SCRIPT) as w, \
                 mock.patch.object(comic_agent, "fix_script", return_value=fake) as f:
+            d = self._post(panels=1, pov_mode="pov")
+            self._wait(d["job"])
+        self.assertEqual(w.call_args.kwargs.get("pov_mode"), "pov")
+        self.assertEqual(f.call_args.kwargs.get("pov_mode"), "pov")
+
+    def test_pov_mode_persisted_to_task_dir(self):
+        """模式必须落盘：之后单独触发的「重新补正」「修订助手」要读它。"""
+        fake = {"text": GOOD_SCRIPT, "issues": [], "diff": [], "adopted": False,
+                "status": "nochange", "warnings": [], "audit": [],
+                "skipped": False, "model": ""}
+        with mock.patch.object(comic_agent, "write_script",
+                               return_value=GOOD_SCRIPT), \
+                mock.patch.object(comic_agent, "fix_script", return_value=fake):
+            d = self._post(panels=1, pov_mode="pov")
+            self._wait(d["job"])
+        fp = os.path.join(self.tmp, "C20261011-01", "mode.json")
+        self.assertTrue(os.path.isfile(fp))
+        import json as _json
+        with open(fp, encoding="utf-8") as fh:
+            self.assertEqual(_json.load(fh)["pov_mode"], "pov")
+
+    def test_third_mode_is_persisted(self):
+        """third 使用 silver 后仍要把模式落盘，供后续任务 UI 识别。"""
+        with mock.patch("app.silver_comic.write_script_detail",
+                        return_value=SILVER_DETAIL):
             d = self._post(panels=1, pov_mode="third")
-            out = self._wait(d["job"])
-        self.assertEqual(w.call_args.kwargs.get("pov_mode"), "third")
-        self.assertEqual(f.call_args.kwargs.get("pov_mode"), "third")
-        self.assertEqual(out.get("pov_mode"), "third")
+            self._wait(d["job"])
         import json as _json
         with open(os.path.join(self.tmp, "C20261011-01", "mode.json"),
                   encoding="utf-8") as fh:
