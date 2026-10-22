@@ -708,8 +708,9 @@ function renderSilverParts(s) {
   if (!s || !s.fixed) { box.style.display = 'none'; box.innerHTML = ''; return; }
   const dyn = s.dynamics || [];
   const lab = 'font-size:12px;color:var(--text-dim);margin:0 0 6px';
-  let h = '<div style="' + lab + '">固定部分 —— 只写角色与脸部特征，跑图时拼到每格开头</div>' +
+  let h = '<div style="' + lab + '">固定部分 —— 一个角色一行（人数 + 角色名 + 脸部特征），跑图时拼到每格开头</div>' +
           '<div style="font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:1.6;' +
+          'white-space:pre-wrap;' +
           'padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:rgba(127,127,127,.06)">' +
           esc(s.fixed) + '</div>' +
           '<div style="' + lab + 'margin-top:10px">动态部分 —— ' + dyn.length + ' 格（场景 + 服饰 + 动作 + 神态 + 镜头 + 灯光）</div>';

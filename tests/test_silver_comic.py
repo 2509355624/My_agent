@@ -102,13 +102,49 @@ class SilverParseTest(unittest.TestCase):
         self.assertIn("girl wearing lavender blouse", blocks[0]["scene"])
         self.assertTrue(blocks[1]["scene"].startswith("city street"))
 
+    def test_multi_role_fixed_lists_every_character(self):
+        raw = "\n".join([
+            "# 标题：便利店",
+            "1girl, Illyasviel, silver-white long hair, blunt bangs, red eyes, purple hairband",
+            "1boy, faceless man, short black hair, grey eyes",
+            "",
+            "convenience store aisle, girl wearing white sweater, boy wearing grey hoodie, "
+            "girl looking up, boy reaching, front view, medium shot, cool fluorescent light",
+            "---",
+            "narrow alley at night, girl wearing white sweater, boy wearing grey hoodie, "
+            "girl nervous expression, boy standing close, front view, medium shot, "
+            "cool streetlight",
+        ])
+        title, fixed, blocks = silver_comic.split(raw)
+        self.assertEqual(len(blocks), 2)
+        self.assertIn("1girl, Illyasviel", fixed)
+        self.assertIn("1boy, faceless man", fixed)      # 男生的特征不能漏
+        self.assertIn("grey eyes", fixed)
+        script = silver_comic.parse(raw, 2)
+        first = [l for l in script.splitlines() if l.startswith("画面:")][0]
+        self.assertTrue(first.startswith("画面: 1girl, 1boy, Illyasviel"))
+        self.assertIn("faceless man", first)
+        self.assertIn("grey eyes", first)
+
+    def test_first_dynamic_line_is_not_swallowed_without_blank_line(self):
+        raw = "\n".join([
+            "1girl, A, black hair",
+            "1boy, B, brown eyes",
+            "convenience store, girl wearing white shirt, boy wearing black shirt, "
+            "girl standing, boy standing, front view, medium shot, cool light",
+        ])
+        _, fixed, blocks = silver_comic.split(raw)
+        self.assertEqual(len(blocks), 1)
+        self.assertNotIn("convenience store", fixed)
+
     def test_system_prompt_is_the_skill_itself(self):
         with mock.patch.object(silver_comic.llm, "call_llm",
                                return_value=self._raw(panels=1)) as call:
             silver_comic.write_script("两个人在车站等雨停", panels=1)
         system = call.call_args.args[0][0]["content"]
         self.assertIn("连续剧情提示词生成规范", system)   # skill 原文整份给模型
-        self.assertIn("固定部分一行英文", system)          # 再补输出契约
+        self.assertIn("1girl, 角色名, 发色", system)        # 再补输出契约
+        self.assertIn("按角色分行写", system)              # 多人固定部分必须分开
         self.assertIn("共 1 格", system)
 
     def test_write_script_detail_exposes_fixed_and_dynamics(self):

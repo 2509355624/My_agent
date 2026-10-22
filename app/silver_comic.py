@@ -43,14 +43,19 @@ _FALLBACK_SKILL = """# 连续剧情提示词生成规范
 _CONTRACT = """【本项目输出契约 —— 排版以下面为准，内容规则仍按上面的规范】
 
 # 标题：中文标题
-固定部分一行英文
+1girl, 角色名, 发色, 发型, 瞳色, 发饰
+1boy, 角色名, 发色, 发型, 瞳色
 
 动态第 1 格一行英文
 ---
 动态第 2 格一行英文
 
-- 固定部分只写一行：角色数量与性别、角色名、发色、发型、瞳色、发饰或面部标志。
-  不写服饰、鞋袜、配件、体型、动作、场景、灯光。它会被原样拼到每一格开头。
+- 固定部分按角色分行写，一个角色一行，行首写人数与性别：
+  1girl, 角色名, 发色, 发型, 瞳色, 发饰
+  1boy, 角色名, 发色, 发型, 瞳色
+  每个角色都必须把自己的脸部特征写全，不许只写其中一个，也不许把两个人挤成一行。
+  单人只写一行。不写服饰、鞋袜、配件、体型、动作、场景、灯光。
+- 固定部分写完之后空一行，再写动态部分。
 - 每一行动态部分按上面的规范写：场景 + 女生服饰 + 男生服饰 + 动作 + 神态 + 视角 + 灯光。
   服饰的颜色 + 款式必须写全，每格重复，同一件衣服全篇一致，换装时写清新的颜色和款式。
 - 动态部分不要再重复固定部分已有的角色名、发色、瞳色、发饰。
@@ -66,6 +71,10 @@ _FIXED_LINE_RE = re.compile(r"^(?:固定部分|固定块|固定角色|角色固�
 _FIXED_ONLY_RE = re.compile(r"^(?:固定部分|固定块|固定角色|角色固定)\s*[:：]?\s*$")
 _SEP_RE = re.compile(r"^-{3,}\s*$")
 _PANEL_NO_RE = re.compile(r"^##\s*\d+\s*$")
+# 固定部分「一个角色一行」：行首是 1girl / 1boy / 2girls ...
+_COUNT_START_RE = re.compile(r"^\d+\s*(?:girls?|boys?|others?)\b", re.I)
+_COUNT_HEAD_RE = re.compile(r"^(\d+\s*(?:girls?|boys?|others?))\s*[,，]\s*(.+)$",
+                            re.I)
 
 
 def _skill_text():
@@ -108,51 +117,85 @@ def _system(panels, mode):
     return "\n".join(parts)
 
 
+def _merge_fixed(fixed):
+    """多行固定部分合并成一行（每格画面是单行）。
+
+    每行都以 `1girl, ...` / `1boy, ...` 开头时，把人数据前置、各自特征依次排开：
+    `1girl, X, 特征..., 1boy, Y, 特征...` → `1girl, 1boy, X, 特征..., Y, 特征...`
+    这样既保留了每个角色各自的特征，也符合 skill 里「人数在前」的写法。
+    """
+    lines = [x.strip() for x in (fixed or "").splitlines() if x.strip()]
+    if len(lines) <= 1:
+        return lines[0] if lines else ""
+    hits = [_COUNT_HEAD_RE.match(x) for x in lines]
+    if all(hits):
+        counts = [m.group(1) for m in hits]
+        rest = [m.group(2).strip() for m in hits]
+        return ", ".join(counts + rest)
+    return ", ".join(lines)
+
+
 def split(text):
     """把 silver 输出拆成 (title, fixed, panels)。
 
     兼容两种写法：
-    - skill 原生：固定部分一行（无字段名）+ 空行 + 动态行 + `---` 分隔；
+    - skill 原生：固定部分一行或多行（每个角色一行，无字段名）+ 空行 + 动态行 + `---`；
     - 带字段名：`固定部分:` / `固定块:`，以及旧的 `## 01` + `画面:`。
+
+    固定部分的结束信号：空行、`---`、`## NN`，或出现不像身份行的内容。
+    多角色分行时，只有行首是 `1girl` / `1boy` 这类身份行才会被并入固定部分，
+    避免模型漏写空行时把第一格动态画面吞掉。
     """
     text = _clean(text)
     if not text:
         raise ValueError("silver 编剧返回为空")
 
     title = "连续漫画"
-    fixed = ""
+    fixed_lines = []
+    collecting = False        # `固定部分:` 单独一行后，后续行都算固定部分
+    closed = False            # 固定部分已结束（遇到空行 / 分隔 / 已经开始写格）
     blocks = []
     cur = None
-    waiting_fixed = False
 
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
+            if fixed_lines and not closed:
+                collecting = False
+                closed = True
             continue
         if line.startswith("# 标题:") or line.startswith("# 标题："):
             title = re.split(r"[:：]", line, maxsplit=1)[1].strip() or title
             continue
         if _FIXED_ONLY_RE.match(line):
-            waiting_fixed = True
+            collecting = True
             continue
         m = _FIXED_LINE_RE.match(line)
         if m:
-            fixed = m.group(1).strip()
-            waiting_fixed = not fixed
+            val = m.group(1).strip()
+            if val:
+                fixed_lines.append(val)
+                collecting = False
+                closed = True
+            else:
+                collecting = True
             continue
         if _PANEL_NO_RE.match(line) or _SEP_RE.match(line):
+            collecting = False
+            closed = True
             if cur is not None:
                 blocks.append(cur)
             cur = {"scene": "", "bubble": "", "bubble2": ""}
             continue
-        if waiting_fixed and not fixed:
-            fixed = line
-            waiting_fixed = False
-            continue
         if cur is None:
-            if not fixed:
-                fixed = line          # skill 原生格式：第一行就是固定部分
+            if not fixed_lines:
+                fixed_lines.append(line)      # skill 原生格式：第一行就是固定部分
                 continue
+            if not closed and (collecting or _COUNT_START_RE.match(line)):
+                fixed_lines.append(line)      # 多角色分行
+                continue
+            collecting = False
+            closed = True
             cur = {"scene": "", "bubble": "", "bubble2": ""}
         if line.startswith("气泡2:"):
             cur["bubble2"] = _line_value(line, "气泡2:")
@@ -161,10 +204,11 @@ def split(text):
         elif line.startswith("画面:"):
             cur["scene"] = _line_value(line, "画面:")
         elif not cur["scene"]:
-            cur["scene"] = line       # 动态行没有「画面:」前缀
+            cur["scene"] = line               # 动态行没有「画面:」前缀
     if cur is not None:
         blocks.append(cur)
 
+    fixed = "\n".join(fixed_lines).strip()
     blocks = [b for b in blocks if b["scene"] or b["bubble"] or b["bubble2"]]
     if not fixed:
         raise ValueError("silver 编剧缺固定部分")
@@ -183,9 +227,10 @@ def parse(text, panels, mode="no_bubble"):
     title, fixed, blocks = split(text)
     if len(blocks) != panels:
         raise ValueError("silver 编剧输出 %d 格，要求 %d 格" % (len(blocks), panels))
+    flat = _merge_fixed(fixed)
     out = ["# 标题：%s" % title]
     for i, p in enumerate(blocks, 1):
-        out.extend(["", "## %02d" % i, "画面: %s, %s" % (fixed, p["scene"])])
+        out.extend(["", "## %02d" % i, "画面: %s, %s" % (flat, p["scene"])])
         if mode == "bubble":
             if p["bubble"]:
                 out.append("气泡: %s" % p["bubble"])

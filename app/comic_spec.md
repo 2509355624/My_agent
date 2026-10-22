@@ -57,10 +57,14 @@ AI 只需输出以下两部分，不添加任何额外解释、标题、编号�
 | **必须写角色名** | 用户需求里点名的那个角色（写角色名，如 `<character name>` 那个位置） |
 | **必须写脸部标志性特征** | 发色、发型、瞳色、发饰、面部特殊标记（泪痣、伤疤、第三只眼等） |
 | **单人场景标注性别** | `1girl` 或 `1boy` |
-| **男女双人场景标注人数与性别** | `1girl, 1boy` |
+| **多人必须按角色分行写** | 一个角色一行，行首写人数与性别：`1girl, ...` / `1boy, ...`。**不许把两个人的特征挤成一行**，也不许只写其中一个人 |
+| **每一行都要把这个角色的脸部特征写全** | 只写女生、漏掉男生 = 男生每格随机换脸 |
 | **不写服饰** | 服饰属于动态部分 |
 | **不写身体特征** | 体型、胸部、腿型等不属于脸部，不写 |
 | **可省略画师串** | 若加画师串反而干扰角色，可去掉 |
+
+**为什么多人必须分行写？**
+一条串里只写了一个人的特征，模型不会自己去补另一个人——实测双人固定部分只写了女生的发色发型，男生的脸每一格都在变。分行写、一行一个角色，才不会漏人，也方便逐个人核对。
 
 **为什么必须写脸部特征？**  
 模型每一格都是独立生成，没有记忆。如果你只写 `<character name>`，模型可能这次画黑发，下次画绿发。发色、瞳色、发型、发饰必须写死，才能保证十格一致。
@@ -77,9 +81,10 @@ AI 只需输出以下两部分，不添加任何额外解释、标题、编号�
 1girl, <girl name>, silver-white long hair, blue eyes, pink ribbon hair ornaments, twin tails
 ```
 
-**男女双人示例**（同理，名字都来自用户需求）：
+**男女双人示例**（同理，名字都来自用户需求；一个角色一行）：
 ```
-1girl, 1boy, <girl name>, <boy name>, silver-white long hair, blue eyes, pink ribbon hair ornaments, twin tails, black short hair, dark eyes
+1girl, <girl name>, silver-white long hair, blue eyes, pink ribbon hair ornaments, twin tails
+1boy, <boy name>, black short hair, dark eyes
 ```
 
 ---
