@@ -588,6 +588,21 @@ class SpeakerTest(unittest.TestCase):
         self.assertEqual(panels[0]["speaker"], "我")
         self.assertEqual(panels[0]["bubble"], "为什么……")
 
+    def test_male_speaker_points_to_boy(self):
+        """第三人称档的 `（男）`：画面里那个男角色，不是镜头外的「我」。
+
+        2026-10-22 之前「男」归一到「我」（POV 里画面没有男生，男声只能是镜头
+        外那个人）。第三人称档里男生就在画面里，气泡必须指向他，否则他的台词
+        会被画成「镜头外叙述者」的右下角白框。
+        """
+        _, panels = comic.parse_script_text(
+            "## 01\n画面: 1girl, 1boy\n气泡: （男）别动。\n")
+        self.assertEqual(panels[0]["speaker"], "男")
+        self.assertEqual(panels[0]["bubble"], "别动。")
+        self.assertEqual(comic._tail_note("男"), "指向画面中的男生")
+        # 「他」仍然是 POV 语义（镜头外的「我」）
+        self.assertEqual(comic._tail_note("我"), "")
+
     def test_colon_form(self):
         _, panels = comic.parse_script_text(
             "## 01\n画面: 1girl\n气泡: 我：为什么……\n")

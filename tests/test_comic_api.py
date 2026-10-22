@@ -172,6 +172,28 @@ class ComicScriptApiTest(unittest.TestCase):
         with open(fp, encoding="utf-8") as fh:
             self.assertEqual(_json.load(fh)["pov_mode"], "free")
 
+    def test_pov_mode_third_forwarded_and_persisted(self):
+        """第三人称档：编剧、补正、返回值、mode.json 四处都得是 third。
+
+        少一处就白切——尤其 mode.json 与补正：作者写好双人剧本后点「重新补正」，
+        补正员读不到 third 就会拿着 POV 规则把第二个角色删掉。
+        """
+        fake = {"text": GOOD_SCRIPT, "issues": [], "diff": [], "adopted": False,
+                "status": "nochange", "warnings": [], "audit": [],
+                "skipped": False, "model": ""}
+        with mock.patch.object(comic_agent, "write_script",
+                               return_value=GOOD_SCRIPT) as w, \
+                mock.patch.object(comic_agent, "fix_script", return_value=fake) as f:
+            d = self._post(panels=1, pov_mode="third")
+            out = self._wait(d["job"])
+        self.assertEqual(w.call_args.kwargs.get("pov_mode"), "third")
+        self.assertEqual(f.call_args.kwargs.get("pov_mode"), "third")
+        self.assertEqual(out.get("pov_mode"), "third")
+        import json as _json
+        with open(os.path.join(self.tmp, "C20261011-01", "mode.json"),
+                  encoding="utf-8") as fh:
+            self.assertEqual(_json.load(fh)["pov_mode"], "third")
+
     def test_unknown_pov_mode_falls_back_to_pov(self):
         """认不出来的值一律退回 pov——默认永远走保守那一侧。"""
         with mock.patch.object(comic_agent, "write_script",

@@ -208,7 +208,7 @@ def _validate(text, panels):
         return False, ("这些 `标签:` 写成台词了：%s。`标签` 是画面右上角的**旁白**，"
                        "里面不能出现 `（女）`/`（我）` 这类说话人前缀——那是台词。"
                        "第二句台词请写成 `气泡2:`（同样带前缀），`标签:` 只写"
-                       "第一人称剧情旁白。" % "；".join(leaked[:4]))
+                       "剧情旁白（人称按这一话的视角来）。" % "；".join(leaked[:4]))
     for p in got:
         no = p["no"]
         if not p["scene"].strip():
@@ -229,7 +229,9 @@ def _validate(text, panels):
         # 就把它定义成「可选」，所以必须由代码兜。
         labels = [x.strip() for x in (p.get("label") or "").split("\n") if x.strip()]
         if not labels:
-            return False, ("格 %s 缺 `标签1:`——它是第一人称剧情旁白条，每一格"
+            # 文案不写「第一人称」：2026-10-22 漫画台加了第三人称档，这句
+            # 会直接顶撞那一档的规则（校验是全档共用的）。
+            return False, ("格 %s 缺 `标签1:`——它是剧情旁白条，每一格"
                            "都必须写（写这一格推进了什么，十几字）" % no)
         if len(labels) > MAX_LABELS:
             return False, ("格 %s 写了 %d 条旁白，最多 %d 条"

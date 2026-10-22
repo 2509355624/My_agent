@@ -150,10 +150,11 @@
       </select>
       <span class="spacer" style="flex:1"></span>
       <label id="povModeWrap" style="font-size:12px;white-space:nowrap;color:var(--text-dim)"
-             title="POV 第一人称：镜头＝观众的眼睛，画面里只有女主（硬规则 14–20）。自由视角：不加 POV 限制，机位由编剧按规范自己挑，可以双人同框——想画「两个人在一个画面里」就选这个">
+             title="POV 第一人称：镜头＝观众的眼睛，画面里只有女主。自由视角：机位由编剧按剧情自己挑，可以双人同框。第三人称：镜头站在旁边看两个人，双人同框是常态、禁止一切 POV 标签——想稳定画出「男生女生都在画面里」选这个">
         <select id="povMode" style="width:auto" onchange="rememberPovMode()">
           <option value="pov">POV 第一人称</option>
-          <option value="free">自由视角（可双人）</option>
+          <option value="free">自由视角（自选机位）</option>
+          <option value="third">第三人称（双人同框）</option>
         </select>
       </label>
       <label id="skipSearchWrap" style="font-size:12px;white-space:nowrap;color:var(--text-dim)"
@@ -386,22 +387,29 @@ function restoreSkipSearch() {
 // 记住上次选择：连着画同一部就是同一个模式，别每集重选。
 const LS_POV_MODE = 'comic_pov_mode';
 
+const POV_MODES = ['pov', 'free', 'third'];
+
 function povMode() {
-  return document.getElementById('povMode').value === 'free' ? 'free' : 'pov';
+  const v = document.getElementById('povMode').value;
+  return POV_MODES.indexOf(v) >= 0 ? v : 'pov';
 }
 
 function setPovMode(v) {
   // 只在合法值上动，避免把下拉搞成空值（后端认不出会退回 pov，但界面对不上）
-  document.getElementById('povMode').value = (v === 'free') ? 'free' : 'pov';
+  document.getElementById('povMode').value =
+    POV_MODES.indexOf(v) >= 0 ? v : 'pov';
 }
 
 function rememberPovMode() {
   try { localStorage.setItem(LS_POV_MODE, povMode()); } catch (e) { }
   // 模式变了要给一句人话提示——这不是个无感的开关，POV 与自由视角出来的剧本
   // 结构完全不同，用户得知道自己在切什么。
-  toast(povMode() === 'free'
-    ? '自由视角：编剧自己挑机位，可以画双人同框'
-    : 'POV 第一人称：镜头＝观众的眼睛，画面里只有女主');
+  const HINT = {
+    pov: 'POV 第一人称：镜头＝观众的眼睛，画面里只有女主',
+    free: '自由视角：编剧自己挑机位，可以画双人同框',
+    third: '第三人称：镜头站在旁边看，双人同框是常态、不写 POV 标签'
+  };
+  toast(HINT[povMode()]);
 }
 
 function restorePovMode() {

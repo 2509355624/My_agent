@@ -295,6 +295,28 @@ def missing_tags(text):
 _BANNED_TAGS = frozenset(("hand_around_wrist",))
 
 
+# 第三人称档：禁止出现的机位标签（归一后按下划线形态存，比较时走 _db_key）。
+# `1other` 也在里面——它是「只入画一只手」的写法，语义上属于 POV。
+_POV_TAGS = {"pov", "female_pov", "male_pov", "pov_hands", "1other"}
+
+
+def pov_tags_in(text):
+    """找出仍写着 POV 系标签的格，返回 [(格号, 标签), ...]。
+
+    只给 `pov_mode="third"` 用。它检测的不是「画得好不好」，而是一个事实：
+    **这一话明确要求第三人称，剧本里却还在用第一人称机位**。按用户 2026-10-22
+    的定调，这种跑偏不在这里判不合格回炉，而是算进清单交给补正 AI 去改。
+    """
+    _, panels = comic.parse_script_text(text)
+    out = []
+    for p in panels:
+        for part in (p["scene"] or "").split(","):
+            key = _db_key(_norm_tag(part))
+            if key in _POV_TAGS:
+                out.append((p["no"], key))
+    return out
+
+
 def banned_tags(text):
     """找出用了禁用标签（库里存在但语义错）的格，返回 [(格号, 库里形态), ...]。"""
     _, panels = comic.parse_script_text(text)
@@ -871,12 +893,12 @@ def collect_issues(text, brief="", original="", pov_mode="pov"):
     kind 取值：missing_hair_color / bare_wearable / duplicate_wearable /
     solo_conflict / banned_tag / pov_conflict / pov_missing / pov_mixed /
     pov_direction / merged_people / female_pov / composition_conflict /
-    invented_name。
+    invented_name / pov_in_third（只在 pov_mode="third" 下产生）。
     """
     issues = []
-    # 自由视角模式：下面 7 条 POV 判据整组停用（2026-10-22 用户拍板）。
+    # 非 POV 模式（free / third）：下面 7 条 POV 判据整组停用（2026-10-22 用户拍板）。
     # 它们都以「全篇第一人称」为前提，模式换了前提就没了。其余判据照旧。
-    free = pov_mode == "free"
+    no_pov = pov_mode != "pov"
 
     def _add(kind, pairs, detail, by_tag=True):
         for no, tag in pairs:
@@ -886,6 +908,15 @@ def collect_issues(text, brief="", original="", pov_mode="pov"):
     _add("missing_hair_color", bare_hair_color(text),
          "「%s」这一格画了头发却没写发色，规范要求发色必须写死"
          "（例：`black hair`、`silver-white long hair`）")
+    if pov_mode == "third":
+        # 这一档的跑偏（还留着 pov / pov hands / 1other）交给补正 AI 改：
+        # **不判不合格、不回炉**——回炉会白烧一稿，而补正本来就要跑一遍。
+        for no, tag in pov_tags_in(text):
+            issues.append({"no": no, "kind": "pov_in_third", "tag": tag,
+                           "detail": "这一话要求第三人称，这一格却还写着 `%s` —— "
+                                     "把机位改成旁观：删掉 pov 系标签，人数写 "
+                                     "`1girl, 1boy`（单人特写写 `1girl, solo`），"
+                                     "手写清归属（`his hand`）" % tag})
     for no, tag in bare_wearables(text):
         issues.append({"no": no, "kind": "bare_wearable", "tag": tag,
                        "detail": "「%s」只有类别名、没写颜色，要写成"
@@ -894,7 +925,7 @@ def collect_issues(text, brief="", original="", pov_mode="pov"):
         issues.append({"no": no, "kind": "duplicate_wearable", "tag": cat,
                        "detail": "这一格把「%s」写了两次（是同一件东西），"
                                  "合并成一个标签、颜色写在里面" % cat})
-    for no, tag in (() if free else solo_conflicts(text)):
+    for no, tag in (() if no_pov else solo_conflicts(text)):
         issues.append({"no": no, "kind": "solo_conflict", "tag": tag,
                        "detail": "这一格写了 `solo` 又要求第二方入画，把 `solo` "
                                  "换成 `solo focus` 并补 `1other`（**不许写 "
@@ -903,30 +934,30 @@ def collect_issues(text, brief="", original="", pov_mode="pov"):
         issues.append({"no": no, "kind": "banned_tag", "tag": tag,
                        "detail": "`%s` 语义错（没说清是谁的手），换成 "
                                  "`holding another's wrist`" % tag})
-    for no, tag in (() if free else pov_conflicts(text)):
+    for no, tag in (() if no_pov else pov_conflicts(text)):
         issues.append({"no": no, "kind": "pov_conflict", "tag": tag,
                        "detail": "画面里只允许女主一个人：男性角色是观众本人扮演"
                                  "的，只能以手入画（`pov hands` + 动作标签），"
                                  "删掉「%s」" % tag})
-    for no, tag in (() if free else merged_people(text)):
+    for no, tag in (() if no_pov else merged_people(text)):
         issues.append({"no": no, "kind": "merged_people", "tag": tag,
                        "detail": "这一格写了 `%s`（两个人同框）却只写得出**一套**"
                                  "外貌：两个人的发型 / 瞳色 / 服饰要分开各写一套，"
                                  "并用一句英语短语点名谁是谁、谁对谁做" % tag})
-    for no, tag in (() if free else female_pov_missing(text, brief)):
+    for no, tag in (() if no_pov else female_pov_missing(text, brief)):
         issues.append({"no": no, "kind": "female_pov", "tag": tag,
                        "detail": "这一话是女女向（百合），「我」是女性：把 `pov` "
                                  "换成 `female_pov`（`pov` 默认画出一只男人的手）"})
-    for no, tag in (() if free else pov_missing(text)):
+    for no, tag in (() if no_pov else pov_missing(text)):
         issues.append({"no": no, "kind": "pov_missing", "tag": tag,
                        "detail": "这一格没写视角标签：全篇默认第一人称 POV，"
                                  "补 `pov`（女女向补 `female_pov`）"})
-    for no, tag in (() if free else pov_mixed(text)):
+    for no, tag in (() if no_pov else pov_mixed(text)):
         issues.append({"no": no, "kind": "pov_mixed", "tag": tag,
                        "detail": "这一格的视角标签和整话其他格混用了（`pov` 与 "
                                  "`female_pov` 不许一半一半）：读需求确认镜头后"
                                  "的「我」是男是女，把「%s」统一成另一种" % tag})
-    for no, tag in (() if free else pov_direction(brief, text)):
+    for no, tag in (() if no_pov else pov_direction(brief, text)):
         issues.append({"no": no, "kind": "pov_direction", "tag": tag,
                        "detail": "需求「视角:」行声明的性别和这一格的「%s」对不上："
                                  "按视角行改——男性视角全篇 `pov`，女性视角全篇 "
@@ -1052,7 +1083,7 @@ def _strip_pov_sections(text):
         text, n = rex.subn("", text)
         cut += n
     if cut < len(_POV_CUTS):
-        log.warning("[自由视角] 规范里只切到 %d 处 POV 章节（应为 %d）——"
+        log.warning("[非 POV 模式] 规范里只切到 %d 处 POV 章节（应为 %d）——"
                     "comic_spec.md 的标题可能改过了，检查 _POV_*_RE",
                     cut, len(_POV_CUTS))
     return text, cut
@@ -1065,15 +1096,15 @@ def _story_spec_text(pov_mode="pov"):
     comic_writer 那边改了路径/编码，这里跟着走。读不到不能让编剧挂掉——规范
     是增强，硬规则段还在。
 
-    pov_mode="free" 时把「全篇第一人称 POV」的两处章节裁掉（见上方说明）——
-    自由模式要回到规范原本的能力：单人与**男女双人**都写，机位自己挑。
+    只要不是 pov（free / third）就把「全篇第一人称 POV」的三处章节裁掉（见上方
+    说明）——两种非 POV 模式都要回到规范原本的能力：单人与**男女双人**都写。
     """
     try:
         text = comic_writer._spec_text()
     except OSError:
         log.warning("连续剧情规范读不到（%s）", comic_writer._SPEC_PATH)
         return ""
-    if pov_mode == "free":
+    if pov_mode != "pov":
         text, _ = _strip_pov_sections(text)
     return text
 
@@ -1378,6 +1409,40 @@ _FREE_RULES_SECTION = """【自由视角规则（规则 14–17）开始】
 【自由视角规则（规则 14–17）结束】
 """
 
+# 第三人称（2026-10-22 用户要的第三档）。
+#
+# 用户原话：「如果我要的是第三人称的视角出现男生女生呢？因为就算我选择自由
+# 视角，ai其实是倾向于pov视角的。」——free 档给了选择权，但模型仍然偏爱 POV
+# （素材配比 + 训练先验），所以再给一档**明确禁止 POV 机位**的。
+#
+# 与 free 的区别只有一句：free 可以随时切回 POV，third 一次都不许。其余（一格
+# 一个机位、双人各写一套外貌、单人特写允许）完全继承。
+_THIRD_RULES_SECTION = """【第三人称规则（规则 14–17）开始】
+14. **这一话是第三人称旁观机位——镜头不属于任何角色。** 读者站在旁边看这两个
+   人，不是透过谁的眼睛看。所以：
+   - `pov` / `female_pov` / `pov hands` / `1other` **一个都不许出现**（写了就是
+     机位跳了，实测画面上会突然多出第三个身影）；
+   - 视角方在这一档**就是画面里那个男角色**，他必须被画出来：发色、发型、瞳色、
+     服饰全套写（规则 16）；
+   - 旁白用第三人称（「她」「他」），**不许出现「我」当叙述者**（见输出格式）。
+15. **双人是常态，但不必每一格都两个人。** 一格一个机位，格与格之间可以切：
+   - 两个人的关系、动作落点、谁在对谁做什么 → `1girl, 1boy`（默认就是这个）；
+   - 她的情绪、眼睛、手里攥着的东西 → 单人特写 `1girl, solo`。**单人特写也是
+     旁观机位**——另一个人在画外而已，绝不因此改写成 POV。
+16. **双人格里两个人都要写全。** 人数标签写清楚（`1girl, 1boy` / `2girls`），
+   然后**每个角色各写一套完整外貌**：发色、发型、瞳色、服饰分开写，不许把两个
+   人的特征混成一套，也不许只写一个人的外貌就宣布有两个人。男角色的服饰同样
+   要写颜色（`black hoodie`、`dark grey trousers`）。**分不清谁是谁的那一格就是
+   废图**——读者盯着看的是两个人。
+17. **动作落点靠标签，不靠「我」。** 「他攥住她的手腕」写成
+   `1girl, 1boy, his hand, holding another's wrist`；「他把她按在墙上」用
+   `against wall` + 对应动作标签。**不许**用 `pov hands` 代替——第三人称里那只
+   手是有主人的，写清归属比写机位重要得多。
+【第三人称规则（规则 14–17）结束】
+"""
+
+
+
 
 # 上面 195 行的 POV 硬规则段之外，模板正文里还有两处以「全篇第一人称」为前提的
 # 声明，free 模式必须一起换掉——只换规则段是不够的（第一版就漏了这两处，
@@ -1406,6 +1471,83 @@ _VIEW_DECL_FREE = """- **「视角:」行是视角方性别与身份的唯一权
 - 需求里没写这两行（旧格式一句话）：从剧情推断视角方和主角，推断结果在
   第一格动笔前定死，整话不许再改。"""
 
+# 规则 5「手怎么入画」的整段（2026-10-22 三档化）。
+#
+# 这是 POV 味道最重的三段之一：原文整段都在教 `pov` / `pov hands` 怎么用，
+# 还带完整范例。free / third 模式下原样留着，模型读到的「主视角」就是 POV——
+# 用户实测「选了自由视角，AI 还是倾向 POV」的第一个来源。
+_HANDS_POV = """5. **视角方（「我」）的手只在剧情真的需要时才入画——不要每格都加一只手。**
+   不需要时，那格就写 `1girl, solo`，别硬塞手部标签（硬塞的后果见规则 6）。
+   决定要入画时，抓别人的手腕只能写 `holding another's wrist`，不许写
+   `hand around wrist`，更不许把动作写成句子。
+   ⚠️ **`pov` / `female_pov` 只标记机位，不代表画面里有人。** 不需要手入画的
+   格，视角标签**只写 `pov`（或 `female_pov`）一个词**就是纯机位，画面里除主角
+   外**任何**身体部位、衣物、肢体影子都不许出现——**POV 格里**「我」入画的
+   **唯一通道**是 `pov hands` + `1other` + 手部动作标签，没有这条通道就当自己
+   不存在（双人格里正常写人即可，见规则 6）。
+   2026-10-12《雨夜公交站》01 格实测：视角标签里多带了身体暗示，画面下角就
+   长出我们的腿——提了什么，模型就画什么（白熊效应），没提的部位一个词都
+   别写。
+   - 攥住/握住别人的手腕 → `holding another's wrist`
+     （这是**唯一**可用的写法。网上流传的别名 `grabbing another's wrist`、
+     `wrist grab` 在本库里**都不存在**，实测查过，别用。）
+   - 手只是搭在别人手腕上（没用力） → `hand on another's wrist`
+   - 镜头就是「我」的眼睛、那只手是「我」的 → 再加 `pov` + `pov hands`
+   - **「我」是女性（百合 / 女女向）时必须写 `female_pov`，而不是 `pov`。**
+     `pov` 的默认先验是**男性第一人称**，光写它实测会画出一只男人的手
+     （2026-10-12 用户实报：剧本明明白白是百合向，第一人称却成了男生的手）。
+     女女向写法：`female_pov, pov hands, holding another's wrist`
+   - 画面里只有手、看不到它的身体 → 再加 `disembodied hand` / `disembodied arm`
+   错：male hand grabbing her wrist from behind ← `male` 会画出整个人 + 多只手
+   错：hand around wrist ← 没写是谁的手，实测被画成「她自己抓自己手腕」
+   对：pov, pov hands, holding another's wrist ← 视角方的手攥住她的手腕
+   对：disembodied hand, holding another's wrist ← 只让一只手入画
+   查「手」「抓」「手腕」「牵着」把这些标签找齐再用，别查一个词就落笔。"""
+
+_HANDS_FREE = """5. **手的归属要写清；用 POV 机位时才写 POV 系标签。**
+   - 用 POV 机位（镜头就是「我」的眼睛）时：「我」的手只在剧情需要时入画，
+     写 `pov` + `pov hands` + 动作标签，**别每格都硬塞一只手**；「我」是女性
+     （百合 / 女女向）时必须写 `female_pov` 而不是 `pov`——`pov` 的默认先验是
+     **男性第一人称**，光写它实测会画出一只男人的手（2026-10-12 用户实报）。
+   - 用双人 / 第三人称机位时**不写任何 POV 系标签**：画面里有几个人，手就长在
+     他们身上（`his hand` / `her hand` 这类归属词照常写）。
+   抓 / 握别人的手腕只能写 `holding another's wrist`，手只是搭着写
+   `hand on another's wrist`；「手 / 抓 / 手腕 / 牵着」这些词先把标签找齐再用。
+   （网上流传的别名 `grabbing another's wrist`、`wrist grab` 在本库里**都不
+   存在**，实测查过，别用。）"""
+
+_HANDS_THIRD = """5. **第三人称：画面里有几个人，手就长在他们身上——不写任何 POV 系标签。**
+   这一话是旁观机位，`pov` / `female_pov` / `pov hands` / `1other` **一个都不许
+   出现**。男角色的手就是他的手，归属写清楚（`his hand`、`her hand`）。
+   - 两个人的手都在画面里 → `1girl, 1boy, his hand, holding another's wrist`
+   - 只想让一只手入画（她低头看着攥住她的那只手）→ 这是**单人特写**：
+     `1girl, solo, disembodied hand, holding another's wrist`，照样不写 pov
+   抓 / 握别人的手腕只能写 `holding another's wrist`，手只是搭着写
+   `hand on another's wrist`。
+   错：`hand around wrist` ← 没写是谁的手，实测被画成「她自己抓自己手腕」
+   错：`pov hands, holding another's wrist` ← 第三人称里突然长出一只「叙述者
+   的手」，机位当场崩，同时冒出第三个身影
+   （别名 `grabbing another's wrist`、`wrist grab` 在本库里**都不存在**，别用。）
+   「手 / 抓 / 手腕 / 牵着」这些词先把标签找齐再用，别查一个词就落笔。"""
+
+_VIEW_DECL_THIRD = """- **「视角:」行里的那个人，在这一话里是画面中的男角色（或女角色）。** 第三人称
+  下他不是「镜头」，他要被画出来——按它定他的身份（哥哥 / 爸爸 / 上司……），
+  并把他的外貌 / 服饰写全（规则 16）。2026-10-12《雨夜公交站》的反面教训：把
+  视角行当成「谁的眼睛」、让那个人隐身，整话就只剩女主一个人。
+- **「主角:」行 = 这一话的女主**：她的外貌 / 服饰写在最前面。两个人的特征分
+  开写，不许混成一套。
+- 需求里没写这两行（旧格式一句话）：从剧情推断「谁在做事、谁是被看的那个人」，
+  推断结果在第一格动笔前定死，整话不许再改。"""
+
+_COUNT_RULES_THIRD = """6. **人数标签按画面里真实出现的人写。**
+   - 两个人在画面里 → `1girl, 1boy`（男女）/ `2girls`（女女），**各写一套外貌**
+   - 单人特写 → `1girl, solo`（另一个人在画外，**不要**写 `1other`）
+   - **不许写 `1other`**：那是「只入画一只手」的写法，属于 POV 机位（规则 5）
+   为什么必须写准：Danbooru 的角色计数是硬事实——写 `solo` 却画两个人，模型会
+   随机丢一个或者把人画成双胞胎；写 `1boy` 却只写一套外貌，两个人会长成同一
+   个人。这一话的卖点就是「两个人同时在场」，人数写错整格就废了。"""
+
+
 _COUNT_RULES_POV = """6. **人数标签只有两种写法（全篇第一人称 POV，画面里永远只有女主一个人）**：
    - 我们的手**不**入画 → `1girl, solo`
    - 我们的手或手臂入画 → `1girl, solo focus, 1other` + `pov hands` + 对应的
@@ -1427,9 +1569,9 @@ _COUNT_RULES_POV = """6. **人数标签只有两种写法（全篇第一人称 P
    不带任何手部标签——模型会把 `1other` 理解成「补一整个人进来」。"""
 
 _COUNT_RULES_FREE = """6. **人数标签按画面里真实出现的人写，不许多写也不许少写。**
-   - 只有女主一个人 → `1girl, solo`（或 `1girl, solo focus`）
-   - 女主 + 只入画一只手（观众的手）→ `1girl, solo focus, 1other` + `pov hands`
    - 女主 + 一个男角色 → `1girl, 1boy`，**两个人各写一套外貌**（见规则 16）
+   - 只有女主一个人 → `1girl, solo`（或 `1girl, solo focus`）
+   - 女主 + 只入画一只手（POV 格里观众的手）→ `1girl, solo focus, 1other` + `pov hands`
    - 两个女生 → `2girls`，同样各写一套外貌
    为什么：Danbooru 官方角色计数规则里「一只手也算一个角色」（原话
    Disembodied hands and other body parts are counted）。写了 `solo` 又要画面
@@ -1439,6 +1581,47 @@ _COUNT_RULES_FREE = """6. **人数标签按画面里真实出现的人写，不�
    标签；这一格若根本没有手入画，就别写 `1other`，退回 `1girl, solo`。
    实测坑：旁白写着「我攥住了她的手腕」，画面却只写 `solo focus, 1other` 而
    不带任何手部标签——模型会把 `1other` 理解成「补一整个人进来」。"""
+
+# 输出格式段里另外四处「第一人称」硬编码（2026-10-22 三档化）。
+#
+# 这是用户报「选了自由视角，AI 还是倾向 POV」的第三个来源，也是最硬的一处：
+# 原文直接写「标签1: <第一人称剧情旁白>」「用第一人称「我」写——镜头就是
+# 「我」的眼睛」。规则段怎么放宽都没用——**连旁白都被命令用「我」写**，模型
+# 自然整话按第一人称编。
+_SPEAKER_BRIEF_POV = "（`（女）` 或 `（我）`）"
+_SPEAKER_BRIEF_FREE = "（`（女）` / `（男）` / `（我）`，按这一格的机位挑）"
+_SPEAKER_BRIEF_THIRD = "（`（女）` 或 `（男）`）"
+
+_NARR_LABEL_POV = "标签1: <第一人称剧情旁白，必写，十几到 __MAX_LABEL__ 字>"
+_NARR_LABEL_FREE = (
+    "标签1: <剧情旁白，人称随这一格机位（POV 格用「我」，双人格用「她」「他」），"
+    "必写，十几到 __MAX_LABEL__ 字>")
+_NARR_LABEL_THIRD = (
+    "标签1: <第三人称剧情旁白（用「她」「他」，不用「我」），必写，"
+    "十几到 __MAX_LABEL__ 字>")
+
+_NARR_PERSON_POV = "用第一人称「我」写——镜头就是「我」的眼睛。"
+_NARR_PERSON_FREE = ("人称跟着这一格的机位走：POV 格用「我」，双人 / 旁观格用"
+                     "「她」「他」。")
+_NARR_PERSON_THIRD = ("一律第三人称，用「她」「他」——**这一话没有镜头外的「我」，"
+                      "旁白里不许出现「我」当叙述者**。")
+
+_SPEAKER_RULES_POV = """3. **每条气泡都必须带说话人**，写成 `气泡: （女）台词`：
+   `（女）` = 画面里的女生说的；`（我）` = 镜头外的「我」说的（这一格画面里
+   只有他的手）。这个前缀**不会**画到图上，它只决定气泡尾巴指向谁——
+   写错了气泡就挂到错的人头上，所以每条都要写。`气泡2:` 同样要带。"""
+
+_SPEAKER_RULES_FREE = """3. **每条气泡都必须带说话人**，写成 `气泡: （女）台词`：
+   `（女）` = 画面里的女生说的；`（男）` = 画面里的男角色说的（双人格里）；
+   `（我）` = 镜头外的「我」说的（**只在 POV 格里用**——那一格画面里只有他的手，
+   没有男生可指）。这个前缀**不会**画到图上，它只决定气泡尾巴指向谁——
+   写错了气泡就挂到错的人头上，所以每条都要写。`气泡2:` 同样要带。"""
+
+_SPEAKER_RULES_THIRD = """3. **每条气泡都必须带说话人**，写成 `气泡: （女）台词`：
+   `（女）` = 画面里的女生说的；`（男）` = 画面里的男角色说的。这一话是第三人称，
+   **没有镜头外的叙述者**，所以**不用 `（我）`**——他说的话就是 `（男）`。
+   这个前缀**不会**画到图上，它只决定气泡尾巴指向谁——写错了气泡就挂到错的人
+   头上，所以每条都要带。`气泡2:` 同样要带。"""
 
 _SYSTEM_TMPL = """你是条漫分镜编剧，同时是 Anima 提示词工程师。
 
@@ -1487,33 +1670,7 @@ __TOOLS__
    absurdres / 画师名）——工作流模板已经钉好了，重复写只会稀释权重。
 4. **安全级必须有且只有一个**，只能从 safe / sensitive / nsfw / explicit 里选。
    注意 **不是 `sfw`** —— `sfw` 不在 Anima 规范里，写了会被打回。
-5. **视角方（「我」）的手只在剧情真的需要时才入画——不要每格都加一只手。**
-   不需要时，那格就写 `1girl, solo`，别硬塞手部标签（硬塞的后果见规则 6）。
-   决定要入画时，抓别人的手腕只能写 `holding another's wrist`，不许写
-   `hand around wrist`，更不许把动作写成句子。
-   ⚠️ **`pov` / `female_pov` 只标记机位，不代表画面里有人。** 不需要手入画的
-   格，视角标签**只写 `pov`（或 `female_pov`）一个词**就是纯机位，画面里除主角
-   外**任何**身体部位、衣物、肢体影子都不许出现——**POV 格里**「我」入画的
-   **唯一通道**是 `pov hands` + `1other` + 手部动作标签，没有这条通道就当自己
-   不存在（双人格里正常写人即可，见规则 6）。
-   2026-10-12《雨夜公交站》01 格实测：视角标签里多带了身体暗示，画面下角就
-   长出我们的腿——提了什么，模型就画什么（白熊效应），没提的部位一个词都
-   别写。
-   - 攥住/握住别人的手腕 → `holding another's wrist`
-     （这是**唯一**可用的写法。网上流传的别名 `grabbing another's wrist`、
-     `wrist grab` 在本库里**都不存在**，实测查过，别用。）
-   - 手只是搭在别人手腕上（没用力） → `hand on another's wrist`
-   - 镜头就是「我」的眼睛、那只手是「我」的 → 再加 `pov` + `pov hands`
-   - **「我」是女性（百合 / 女女向）时必须写 `female_pov`，而不是 `pov`。**
-     `pov` 的默认先验是**男性第一人称**，光写它实测会画出一只男人的手
-     （2026-10-12 用户实报：剧本明明白白是百合向，第一人称却成了男生的手）。
-     女女向写法：`female_pov, pov hands, holding another's wrist`
-   - 画面里只有手、看不到它的身体 → 再加 `disembodied hand` / `disembodied arm`
-   错：male hand grabbing her wrist from behind ← `male` 会画出整个人 + 多只手
-   错：hand around wrist ← 没写是谁的手，实测被画成「她自己抓自己手腕」
-   对：pov, pov hands, holding another's wrist ← 视角方的手攥住她的手腕
-   对：disembodied hand, holding another's wrist ← 只让一只手入画
-   查「手」「抓」「手腕」「牵着」把这些标签找齐再用，别查一个词就落笔。
+__HANDS_RULES__
 __COUNT_RULES__
 7. 服饰颜色款式、灯光氛围每格写全并保持一致（见规范）。**物件走同一条规则**：
    画面上任何看得见颜色的东西都要写颜色——`white in-ear earphones`，不许只写
@@ -1534,7 +1691,7 @@ __COUNT_RULES__
    写下去一定会出问题；反过来，别拿这张表去类推别的词，也别因为某个词"库里
    没有"就不敢写，见规则 12）：
    `sfw`（用 safe）、
-   `arm grab`、`male hand`（用 pov hands 或 disembodied hand / disembodied arm）、
+   `arm grab`、`male hand`（用 `holding another's wrist` / `disembodied hand` / `disembodied arm`；只有 POV 机位才用 `pov hands`）、
    `medium shot`（用 upper body / cowboy shot / close-up）、
    `soft lighting`、`cinematic lighting`（用 backlighting / sidelighting / dim lighting）、
    `stepping off` / `getting off`、`one foot on ground`。
@@ -1561,7 +1718,7 @@ __COUNT_RULES__
    **交稿前自己回看一遍**：把每格的 `画面:` + `气泡:` 摆在一起过一遍，凡是有
    两格在讲同一件事，就重写其中一格（换动作、换空间、换关系状态），再交稿。
 10. **`标签1:`（可续到 `标签2:` `标签3:`）每一格都要写**（这是剧情的骨架，不是
-   可选项）；**每条气泡都要带说话人**（`（女）` 或 `（我）`）。两者格式见下面
+   可选项）；**每条气泡都要带说话人** __SPEAKER_BRIEF__。两者格式见下面
    「输出格式」。
    **这类"差不多的写法"是本次最容易踩的坑**——凡是不确定的，先查库再写。
 
@@ -1648,7 +1805,7 @@ __STORY_SPEC__
 画面: <英文标签串>
 气泡: （女）<中文台词>
 气泡2: （女）<可选，第二句台词；没有就整行删掉>
-标签1: <第一人称剧情旁白，必写，十几到 __MAX_LABEL__ 字>
+__NARR_LABEL_EX__
 标签2: <可选，接着上一条继续讲；最多写到 标签3>
 
 ## 02
@@ -1657,16 +1814,13 @@ __STORY_SPEC__
 硬性要求：
 1. 每格以 `## NN` 开头，NN 为两位数字、从 01 起连续；**格数必须正好 __PANELS__ 格**。
 2. `画面:` 全是英文标签，**绝对不许出现中文**。
-3. **每条气泡都必须带说话人**，写成 `气泡: （女）台词`：
-   `（女）` = 画面里的女生说的；`（我）` = 镜头外的「我」说的（这一格画面里
-   只有他的手）。这个前缀**不会**画到图上，它只决定气泡尾巴指向谁——
-   写错了气泡就挂到错的人头上，所以每条都要写。`气泡2:` 同样要带。
+__SPEAKER_RULES__
    台词口语化、有活人感（可用省略号、语气词、话说一半），禁止书面腔；
    表达此刻的情绪，不复述画面。`气泡:` 不超过 __MAX_BUBBLE__ 字；
    话多就再写一行 `气泡2:`（同样不超过 __MAX_BUBBLE__ 字），不是把一条写长。
 4. `标签1:` `标签2:` `标签3:` 是画面右上角的**剧情旁白条**，
    **每一格至少要有一条**（别整行删掉），每条十几到 __MAX_LABEL__ 字，
-   最多 __MAX_LABELS__ 条。用第一人称「我」写——镜头就是「我」的眼睛。
+   最多 __MAX_LABELS__ 条。__NARR_PERSON__
    **这一栏负责讲剧情**：第一条可以交代前情（例：`妹妹生闷气离家出走`），
    后面几条写这一格推进了什么（例：`一只脚已经踩上车门`）。
    **不要写成时间地点**（「傍晚」「公交车站」这种没有剧情信息的不要写），
@@ -1680,26 +1834,52 @@ __STORY_SPEC__
 """
 
 
+# 视角三档的文案表（2026-10-22 加第三档）。
+#
+# 一档 = 一整套「跟机位有关」的文案，共 8 组。**为什么要成表而不是各处 if**：
+# 用户实测「选了自由视角，AI 还是倾向 POV」，根因是 POV 措辞散在模板正文的 5 处
+# （规则 5 手部、规则 6 人数、规则 14–20、旁白示例、旁白人称）。只换规则段，
+# 剩下 4 处继续下第一人称指令，模型当然照旧写 POV。成表之后新增一档只加一行，
+# 不会再漏。
+#
+# 顺序：规则段 / 需求格式段视角行 / 人数规则 / 手部规则 /
+#       旁白示例 / 气泡说话人段 / 旁白人称作答 / 说话人简短括注
+_MODE_BUNDLE = {
+    "pov": (_POV_RULES_SECTION, _VIEW_DECL_POV, _COUNT_RULES_POV, _HANDS_POV,
+            _NARR_LABEL_POV, _SPEAKER_RULES_POV, _NARR_PERSON_POV,
+            _SPEAKER_BRIEF_POV),
+    "free": (_FREE_RULES_SECTION, _VIEW_DECL_FREE, _COUNT_RULES_FREE, _HANDS_FREE,
+             _NARR_LABEL_FREE, _SPEAKER_RULES_FREE, _NARR_PERSON_FREE,
+             _SPEAKER_BRIEF_FREE),
+    "third": (_THIRD_RULES_SECTION, _VIEW_DECL_THIRD, _COUNT_RULES_THIRD,
+              _HANDS_THIRD, _NARR_LABEL_THIRD, _SPEAKER_RULES_THIRD,
+              _NARR_PERSON_THIRD, _SPEAKER_BRIEF_THIRD),
+}
+
+_MODE_KEYS = ("__POV_RULES__", "__VIEW_DECL__", "__COUNT_RULES__",
+              "__HANDS_RULES__", "__NARR_LABEL_EX__", "__SPEAKER_RULES__",
+              "__NARR_PERSON__", "__SPEAKER_BRIEF__")
+
+
 def _system_prompt(panels, no_search=False, pov_mode="pov"):
     """拼整份 system。
 
-    两个正交开关：
+    三个正交开关：
       - no_search=True  装「没有工具」那版工具段（见 `_TOOLS_SECTION`）；
-      - pov_mode="free" 用「自由视角」规则段替换 POV 硬规则（规则 14–20），
-        并把规范里限定「全篇第一人称、不许双人」的两处章节裁掉。规范正文、
-        格数与长度限制完全共用——**自由视角不等于放宽质量要求**，只是不再
-        强制一种机位。
+      - pov_mode 三档（见 `_MODE_BUNDLE`）：
+        `pov`   全篇第一人称硬规则（默认，2026-10-22 之前的行为）
+        `free`  机位自己挑，可以双人同框
+        `third` 第三人称旁观机位，双人为常态，禁用一切 POV 系标签
+
+    三档共用的部分（规范正文、格数、长度、禁用词、颜色规则）一个字不动——
+    换模式只是换机位口径，**不是放宽画面质量要求**。
     """
     text = _SYSTEM_TMPL
     text = text.replace("__TOOLS__",
                         _NO_SEARCH_SECTION if no_search else _TOOLS_SECTION)
-    free = pov_mode == "free"
-    text = text.replace("__POV_RULES__",
-                        _FREE_RULES_SECTION if free else _POV_RULES_SECTION)
-    text = text.replace("__VIEW_DECL__",
-                        _VIEW_DECL_FREE if free else _VIEW_DECL_POV)
-    text = text.replace("__COUNT_RULES__",
-                        _COUNT_RULES_FREE if free else _COUNT_RULES_POV)
+    bundle = _MODE_BUNDLE.get(pov_mode) or _MODE_BUNDLE["pov"]
+    for key, val in zip(_MODE_KEYS, bundle):
+        text = text.replace(key, val)
     text = text.replace("__SPEC__", _spec_text() or "（规范文件读取失败，按上面的硬规则执行）")
     text = text.replace("__STORY_SPEC__",
                         _story_spec_text(pov_mode)
@@ -2001,8 +2181,8 @@ def check(text, panels, brief="", pov_mode="pov"):
     # pov_missing / merged_people / female_pov_missing / pov_direction。
     # 禁用标签、没写颜色、漏发色、重复写、凭空人名**一条都不动**——那些跟
     # 机位无关，漏了画面直接崩。
-    free = pov_mode == "free"
-    conf = [] if free else solo_conflicts(text)
+    no_pov = pov_mode != "pov"
+    conf = [] if no_pov else solo_conflicts(text)
     if conf:
         items = "、".join("格 %s 的 `%s`" % (no, tg) for no, tg in conf[:6])
         problems.append(
@@ -2023,8 +2203,8 @@ def check(text, panels, brief="", pov_mode="pov"):
             "这些格用了语义错误的标签：%s。`hand around wrist` 库里"
             "确实存在，但它没写明是谁的手，实测会被画成「她自己抓自己"
             "手腕」。要抓别人的手腕只能写 `holding another's wrist`"
-            "（视角方的手再加 `pov` + `pov hands`），不用抓的格就整段"
-            "删掉、只写 `1girl, solo`。" % items)
+            "（POV 机位下视角方的手再加 `pov` + `pov hands`），不用抓的格就整段"
+            "删掉、只留人数标签。" % items)
     bare = bare_wearables(text)
     if bare:
         items = _fmt_by_panel(bare)
@@ -2050,7 +2230,7 @@ def check(text, panels, brief="", pov_mode="pov"):
             "同一格里同一件东西写了两次（%s）：`backpack` 和 `backpack on one "
             "shoulder` 是**同一件**，两个都写模型会画两个包。合并成一个标签，"
             "颜色写在里面（`white backpack on one shoulder`）。" % items)
-    pov = [] if free else pov_conflicts(text)
+    pov = [] if no_pov else pov_conflicts(text)
     if pov:
         items = "、".join("格 %s 的 `%s`" % (no, tg) for no, tg in pov[:6])
         problems.append(
@@ -2060,7 +2240,7 @@ def check(text, panels, brief="", pov_mode="pov"):
             "把计数标签删掉——「我」只以手或手臂入画，手部标签照旧（`pov hands` "
             "+ `holding another's wrist`）；也**不要给「我」写服饰**"
             "（`black hoodie` / `grey pants` 都会把整个人画出来）。" % items)
-    nopov = [] if free else pov_missing(text)
+    nopov = [] if no_pov else pov_missing(text)
     if nopov:
         items = "、".join("格 %s" % no for no, _ in nopov[:6])
         problems.append(
@@ -2068,7 +2248,7 @@ def check(text, panels, brief="", pov_mode="pov"):
             "都必须带 `pov`（女女向整话统一用 `female_pov`）。只有旁白里有"
             "「我」、画面没有视角标签，模型会按第三人称机位渲染——实测整格"
             "画风全错。" % items)
-    merged = [] if free else merged_people(text)
+    merged = [] if no_pov else merged_people(text)
     if merged:
         items = _fmt_by_panel(merged)
         problems.append(
@@ -2076,7 +2256,7 @@ def check(text, panels, brief="", pov_mode="pov"):
             " POV 下画面里永远只有女主一个人：把这一格改写成单人格——「另一个人」"
             "是镜头后的观众，用 `pov hands`（我们的手）或 `* viewer` 族标签"
             "（她对我们做动作）来表达，多人计数标签删掉。" % items)
-    fpov = [] if free else female_pov_missing(text, brief)
+    fpov = [] if no_pov else female_pov_missing(text, brief)
     if fpov:
         items = "、".join("格 %s" % no for no, _ in fpov[:6])
         problems.append(
@@ -2085,7 +2265,7 @@ def check(text, panels, brief="", pov_mode="pov"):
             "（用户 2026-10-12 实报：「剧本明确了是百合向，但是第一人称却是男生的"
             "手」）。把 `pov` 换成 `female_pov`，`pov hands` 照旧；整话统一，"
             "不许一半 `pov` 一半 `female_pov`。" % items)
-    direction = [] if free else pov_direction(brief, text)
+    direction = [] if no_pov else pov_direction(brief, text)
     if direction:
         items = "、".join("格 %s 的 `%s`" % (no, tg) for no, tg in direction[:6])
         problems.append(
@@ -2381,6 +2561,20 @@ _FIX_FREE_AUDIT = """**你的头号职责是审计画面能不能画出来。** 
    主语反了会画成我抓她）。
 问题清单没列到的同样要管——它核的是格式事实，画面归你审。"""
 
+_FIX_THIRD_AUDIT = """**你的头号职责是把每一格改回第三人称。** 这一话作者明确选了**第三人称旁观
+机位**：镜头不属于任何角色，读者站在旁边看这两个人。**不要按「画面里只能有一个
+人」去改稿，也不要按 POV 去改稿**，按附在下面的第三人称规则逐格过一遍：
+① 画面里还留着 `pov` / `female_pov` / `pov hands` / `1other` 的——全删，改成旁观
+   写法：两人同框写 `1girl, 1boy`，单人在画外写 `1girl, solo`，手写归属
+   （`his hand` / `her hand`）；
+② 双人格里两个人的外貌要各写一套（发色 / 发型 / 瞳色 / 服饰），只写了一套的补齐；
+③ 人数标签要和画面里实际出现的人对得上（`1girl, 1boy` 就是两个人，不能只写
+   一个人的衣服）；
+④ 旁白（`标签1/2/3`）是第三人称，出现「我」当叙述者的改成「她」「他」；
+⑤ 气泡说话人把 `（我）` 改成 `（男）`——这一话没有镜头外的叙述者。
+⚠️ **不要把双人改成单人**：这一话的卖点就是「两个人在同一个画面里」。
+问题清单没列到的同样要管——它核的是格式事实，画面归你审。"""
+
 
 
 def _pov_rules_text():
@@ -2407,7 +2601,13 @@ def _fix_system_prompt(pov_mode="pov"):
     单人（这是模式切换最容易踩的坑）。
     """
     spec = _story_spec_text(pov_mode) or ""
-    if pov_mode == "free":
+    if pov_mode == "third":
+        rules = _THIRD_RULES_SECTION
+        base = _FIX_SYSTEM.replace(_FIX_POV_AUDIT, _FIX_THIRD_AUDIT)
+        head = ("\n\n以下是第三人称规则（与编剧同一份，补正时同样必须遵守；"
+                "这一话**不是第一人称**——把 `pov` / `pov hands` 改掉，"
+                "但**不要把双人改成单人**）：\n\n")
+    elif pov_mode == "free":
         rules = _FREE_RULES_SECTION
         base = _FIX_SYSTEM.replace(_FIX_POV_AUDIT, _FIX_FREE_AUDIT)
         head = ("\n\n以下是自由视角规则（与编剧同一份，补正时同样必须遵守；"
@@ -2639,11 +2839,15 @@ def _chat_system_prompt(pov_mode="pov"):
     """修订助手的系统提示 = 角色与两种回复形态 + 规范全文 + 视角规则（按模式）。
 
     后两份与补正员同一来源（用户 2026-10-12 拍板：改稿 AI 也得知道视角规则）。
-    pov_mode="free" 时换自由视角规则——否则作者说「这格改成双人」，修订助手会
-    按 POV 硬规则拒绝或者又改回单人。
+    非 pov 档（free / third）都要换视角规则——否则作者说「这格改成双人」，
+    修订助手会按 POV 硬规则拒绝，或者又改回单人。
     """
     spec = _story_spec_text(pov_mode) or ""
-    if pov_mode == "free":
+    if pov_mode == "third":
+        rules = _THIRD_RULES_SECTION
+        head = ("\n\n以下是第三人称规则（与编剧同一份，改剧本时同样必须遵守；"
+                "这一话是旁观机位，作者要的是两个人在画面里——不要改成 POV）：\n\n")
+    elif pov_mode == "free":
         rules = _FREE_RULES_SECTION
         head = ("\n\n以下是自由视角规则（与编剧同一份，改剧本时同样必须遵守；"
                 "这一话**不强制第一人称**，作者要双人同框就照写）：\n\n")

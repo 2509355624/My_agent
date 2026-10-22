@@ -2094,5 +2094,98 @@ class FreeViewModeTest(unittest.TestCase):
         self.assertEqual(chk.call_args.kwargs.get("pov_mode"), "free")
 
 
+class ThirdViewModeTest(unittest.TestCase):
+    """第三人称档（2026-10-22 用户要的第三档）。
+
+    用户原话：「就算我选择自由视角，ai其实是倾向于pov视角的。」——free 给了
+    选择权，但 POV 措辞散在模板正文 5 处（规则 5 手部、规则 6 人数、规则 14–20、
+    旁白示例、旁白人称作答），模型读到的仍然是一部 POV 剧本。third 档把这 5 处
+    全部换掉，并明令禁止 POV 系标签。
+
+    钉死五件事：
+      1. system 里没有 POV 硬规则、没有「第一人称剧情旁白」，旁白人称作答是
+         第三人称；
+      2. 规则 5 换成第三人称版（不写 pov / pov hands / 1other）；
+      3. check：双人稿合格，**POV 泄漏也不拦**（按用户定调交补正 AI 改）；
+      4. collect_issues：POV 泄漏报 pov_in_third，双人稿不报；
+      5. 补正员 / 修订助手同样换版，且不把双人改回单人。
+    """
+
+    SINGLE = ("# 标题：x\n\n## 01\n画面: 1girl, solo, pov, black hair, "
+              "white shirt\n气泡: 一\n标签1: 她站在门口\n")
+    DOUBLE = ("# 标题：x\n\n## 01\n画面: 1girl, 1boy, black hair, white shirt, "
+              "short black hair, black hoodie, bedroom\n"
+              "气泡: 一\n标签1: 他站在门口\n")
+    LEAK = ("# 标题：x\n\n## 01\n画面: 1girl, solo, pov, pov hands, black hair, "
+            "white shirt\n气泡: 一\n标签1: 我把手伸过去\n")
+
+    def test_system_prompt_replaces_every_pov_rule(self):
+        t = comic_agent._system_prompt(3, pov_mode="third")
+        self.assertIn("【第三人称规则（规则 14–17）开始】", t)
+        self.assertNotIn("【POV 视角硬规则", t)
+        self.assertNotIn("【自由视角规则", t)
+        # 旁白那两处硬编码也必须换掉——不换等于「画面写双人、旁白还是我」
+        self.assertNotIn("第一人称剧情旁白", t)
+        self.assertIn("第三人称剧情旁白", t)
+        self.assertIn("这一话没有镜头外的「我」", t)
+        # 手部规则换成第三人称版
+        self.assertNotIn("视角方（「我」）的手只在剧情真的需要时才入画", t)
+        self.assertIn("画面里有几个人，手就长在他们身上", t)
+        # 通用规则一条都不许少
+        for kw in ("只能写逗号分隔的英文标签", "navy pleated skirt",
+                   "一格只能有一个明确地点"):
+            self.assertIn(kw, t)
+
+    def test_spec_pov_chapters_cut_in_third(self):
+        cut = comic_agent._story_spec_text("third")
+        self.assertNotIn("十一、镜头人称", cut)
+        self.assertNotIn("全篇第一人称 POV**", cut)
+        self.assertIn("四、男女双人场景额外规则", cut)
+
+    def test_check_allows_double_and_pov_leak(self):
+        self.assertTrue(comic_agent.check(self.DOUBLE, 1, pov_mode="third")[0])
+        # POV 泄漏不判不合格：用户定调交给补正 AI 改，不回炉白烧一稿
+        self.assertTrue(comic_agent.check(self.LEAK, 1, pov_mode="third")[0])
+        # 同一份双人稿在 POV 档下仍然不合格（老行为没被改动）
+        self.assertFalse(comic_agent.check(self.DOUBLE, 1, pov_mode="pov")[0])
+
+    def test_collect_issues_flags_pov_in_third(self):
+        kinds = {i["kind"] for i in comic_agent.collect_issues(self.LEAK, pov_mode="third")}
+        self.assertIn("pov_in_third", kinds)
+        tags = {i["tag"] for i in comic_agent.collect_issues(self.LEAK, pov_mode="third")
+                if i["kind"] == "pov_in_third"}
+        self.assertEqual(tags, {"pov", "pov_hands"})
+        # 双人稿没有这条
+        kinds2 = {i["kind"] for i in comic_agent.collect_issues(self.DOUBLE, pov_mode="third")}
+        self.assertNotIn("pov_in_third", kinds2)
+        # 其它档不产生这条（POV 档本来就该有 pov）
+        self.assertNotIn("pov_in_third",
+                         {i["kind"] for i in comic_agent.collect_issues(self.SINGLE)})
+
+    def test_pov_tags_in_detects_all_variants(self):
+        text = ("# 标题：x\n\n## 01\n画面: 1girl, female_pov, 1other, black hair\n"
+                "气泡: 一\n标签1: 甲\n")
+        got = comic_agent.pov_tags_in(text)
+        self.assertEqual(sorted(t for _, t in got), ["1other", "female_pov"])
+
+    def test_fix_and_chat_prompt_use_third_rules(self):
+        for fn in (comic_agent._fix_system_prompt, comic_agent._chat_system_prompt):
+            t = fn("third")
+            self.assertIn("【第三人称规则", t)
+            self.assertNotIn("POV 视角硬规则", t)
+            self.assertNotIn("十一、镜头人称", t)
+        # 补正员的头号职责也换了——不换它会拿着 POV 规则把双人删成单人
+        fix = comic_agent._fix_system_prompt("third")
+        self.assertIn("把每一格改回第三人称", fix)
+        self.assertIn("不要把双人改成单人", fix)
+
+    def test_write_script_forwards_third(self):
+        with mock.patch.object(comic_agent, "run_rounds",
+                               return_value=self.DOUBLE) as m:
+            comic_agent.write_script("x", panels=1, pov_mode="third")
+        system = m.call_args.args[0][0]["content"]
+        self.assertIn("【第三人称规则", system)
+
+
 if __name__ == "__main__":
     unittest.main()
