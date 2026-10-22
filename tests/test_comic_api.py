@@ -20,6 +20,7 @@ import sys
 import tempfile
 import threading
 import time
+import zipfile
 import unittest
 from unittest import mock
 
@@ -576,6 +577,36 @@ class ComicManualApiTest(unittest.TestCase):
                 return j
             time.sleep(0.02)
         self.fail("后台任务超时未结束")
+
+    def test_download_falls_back_to_the_scene_image(self):
+        """无气泡模式没有 final/：成品就是 raw/ 的场景图，不能给个空 zip。
+
+        2026-10-22 用户跑完 50 格点「下载成品 zip」，拿到 0 字节文件——后端原来
+        只打 final/，而无气泡压根不生成 final/。
+        """
+        with open(os.path.join(self.dir, "raw", "01_raw.png"), "wb") as f:
+            f.write(b"\x89PNG fake body")
+        r = self.c.get("/api/comic/download?task=" + self.NAME)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers.get("Content-Type"), "application/zip")
+        z = zipfile.ZipFile(io.BytesIO(r.data))
+        self.assertEqual(z.namelist(), ["01_final.png"])
+
+    def test_final_wins_over_the_scene_image(self):
+        """已经加过气泡的格，打包必须用 final/，不能用回底图。"""
+        with open(os.path.join(self.dir, "raw", "01_raw.png"), "wb") as f:
+            f.write(b"raw")
+        with open(os.path.join(self.dir, "final", "01_final.png"), "wb") as f:
+            f.write(b"final")
+        r = self.c.get("/api/comic/download?task=" + self.NAME)
+        z = zipfile.ZipFile(io.BytesIO(r.data))
+        self.assertEqual(z.read("01_final.png"), b"final")
+
+    def test_download_without_any_image_is_404_not_an_empty_zip(self):
+        """空 zip 也有 22 字节，拿 nbytes 判空是失效的——必须数文件。"""
+        r = self.c.get("/api/comic/download?task=" + self.NAME)
+        self.assertEqual(r.status_code, 404)
+        self.assertIn("还没有任何图", r.get_json()["error"])
 
     def test_save_persists_silver_parts_so_edits_survive_a_refresh(self):
         """手改的固定/动态部分要跟着 script.md 一起存进 fix.json。

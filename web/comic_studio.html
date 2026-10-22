@@ -281,7 +281,7 @@
     </div>
     <div class="row" id="bubbleAllRow" style="display:none;margin-bottom:12px">
       <button class="btn primary" id="btnBubbleAll" onclick="bubbleAll()">🫧 一键加气泡（全部待加格）</button>
-      <a class="btn" id="btnZip" style="text-decoration:none" href="#">📦 下载成品 zip</a>
+      <a class="btn" id="btnZip" style="text-decoration:none" href="#" onclick="return zipGuard()">📦 下载成品 zip</a>
       <span id="progress" style="color:var(--text-dim);font-size:12px"></span>
     </div>
     <div id="grid" class="grid"><div class="empty">还没有任务——先在上面生成剧本</div></div>
@@ -1687,7 +1687,24 @@ async function refresh() {
     TASK ? ('进度：' + done + '/' + d.panels.length + ' 完成 · ' + rendered + ' 待加气泡') : '';
   document.getElementById('bubbleAllRow').style.display = 'flex';
   document.getElementById('btnBubbleAll').disabled = rendered === 0 || !!d.running;
-  document.getElementById('btnZip').href = '/api/comic/download?task=' + TASK;
+  const zip = document.getElementById('btnZip');
+  zip.href = '/api/comic/download?task=' + encodeURIComponent(TASK || '');
+  // 一张图都没有时别让人点出一个空 zip（2026-10-22 用户报「zip 是 0 字节」）。
+  // 判据用「有成的图」：无气泡模式下场景图就是成品，所以 done 也算。
+  const anyImg = d.panels.some(p => p.state === 'done' || p.state === 'rendered');
+  zip.dataset.empty = anyImg ? '' : '1';
+  zip.style.opacity = anyImg ? '' : '.5';
+}
+
+// 下载前的守卫：没图就说清楚，而不是让浏览器停在 JSON 报错页 / 空文件上。
+function zipGuard() {
+  const a = document.getElementById('btnZip');
+  if (!TASK) { toast('先选一个任务', true); return false; }
+  if (a.dataset.empty === '1') {
+    toast('这一集还没有任何图——先点「确认开跑」生成场景图', true);
+    return false;
+  }
+  return true;
 }
 
 function poll() { clearTimeout(TIMER); TIMER = setTimeout(async () => { await refresh(); poll(); }, 2000); }

@@ -1616,20 +1616,32 @@ def api_comic_img():
 
 @bp.route("/api/comic/download", methods=["GET"])
 def api_comic_download():
-    """成品 final/ 打包 zip（内存打包，任务就十几张图，不值得落临时文件）。"""
+    """打包这一集的成品图（内存打包，任务就几十张图，不值得落临时文件）。
+
+    **成品 = final/ 优先，没有就用 raw/**（2026-10-22 修）。原来只打 final/，
+    而无气泡模式压根不会生成 final/——用户跑完 50 格点下载，拿到一个空 zip。
+    对无气泡来说 raw/ 的场景图就是成品，没有理由不给他。
+    """
     try:
         path = _task_dir(request.args.get("task"))
         task = _load_task(path)
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
     buf = io.BytesIO()
+    n = 0
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
         for p in task.panels:
             fp = task.final_path(p)
+            if not os.path.isfile(fp):
+                fp = task.raw_path(p)          # 还没加气泡：场景图就是成品
             if os.path.isfile(fp):
                 z.write(fp, "%s_final.png" % p.no)
+                n += 1
     buf.seek(0)
-    if not buf.getbuffer().nbytes:
-        return jsonify({"ok": False, "error": "还没有任何成品图"}), 404
+    # ⚠️ 不能拿 `buf.nbytes` 判空：空 zip 也有 22 字节（EOCD），永远非零。
+    # 必须数真正收进去的文件数。
+    if not n:
+        return jsonify({"ok": False,
+                        "error": "这一集还没有任何图（先跑阶段一生成场景图）"}), 404
     return send_file(buf, mimetype="application/zip", as_attachment=True,
                      download_name="%s_final.zip" % task.task_id)
