@@ -1166,5 +1166,93 @@ class AbortApiTest(unittest.TestCase):
         self.assertEqual(r.status_code, 404)
 
 
+class RerenderChannelTest(unittest.TestCase):
+    """单格重跑必须用**界面上选中的渠道**（2026-10-22 修）。
+
+    用户实报：下拉显示「宝可梦」（krea2-pokemon），点一格「换种子重跑」，画出来
+    是 anima-line 的线条。原因是那条路不传渠道，只认 state.json 里记的——任务刚
+    生成剧本、还没存过 state 时会静默回落到全局默认 anima-line。生成剧本那一步
+    换了 TASK 却没重拉下拉，于是「显示 A、实际跑 B」。
+    """
+
+    NAME = "C20261022-07"
+
+    def setUp(self):
+        self.c = main.app.test_client()
+        self.tmp = tempfile.mkdtemp(prefix="comic_ch_")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.path = os.path.join(self.tmp, self.NAME)
+        os.makedirs(self.path)
+        with open(os.path.join(self.path, "script.md"), "w",
+                  encoding="utf-8") as f:
+            f.write("## 01\n画面: 1girl, solo\n气泡: 一\n\n"
+                    "## 02\n画面: 1girl, solo\n气泡: 二\n")
+        self.calls = []
+
+        def _run(*a, **kw):
+            self.calls.append(kw)
+
+        def _spawn(path, phase, fn, on_error=None):
+            fn()                       # 同步跑，测试里不真起线程
+            return True
+
+        for obj, name, repl in (
+                (comic_api, "_COMICS_ROOT", self.tmp),
+                (comic_api, "_spawn", _spawn),
+                (comic, "run", _run)):
+            p = mock.patch.object(obj, name, repl)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _state(self):
+        fp = os.path.join(self.path, "state.json")
+        if not os.path.isfile(fp):
+            return None
+        with open(fp, encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_rerender_uses_the_channel_from_the_request(self):
+        """新任务还没有 state.json —— 请求里带的渠道就是准的。"""
+        d = self.c.post("/api/comic/rerender",
+                        json={"task": self.NAME, "no": "01",
+                              "scene_skill": "krea2-pokemon"}).get_json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["scene_skill"], "krea2-pokemon")
+        self.assertEqual(self.calls[-1]["scene_skill"], "krea2-pokemon")
+        self.assertEqual(self._state()["scene_skill"], "krea2-pokemon")
+
+    def test_rerender_keeps_the_task_channel_when_request_omits_it(self):
+        """老前端 / 脚本调用不传渠道时，还是接住任务自己的（不能退成默认）。"""
+        with open(os.path.join(self.path, "state.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"task_id": self.NAME, "scene_skill": "krea2-pokemon",
+                       "panels": {}}, f)
+        d = self.c.post("/api/comic/rerender",
+                        json={"task": self.NAME, "no": "01"}).get_json()
+        self.assertEqual(d["scene_skill"], "krea2-pokemon")
+        self.assertEqual(self.calls[-1]["scene_skill"], "krea2-pokemon")
+        self.assertEqual(self._state()["scene_skill"], "krea2-pokemon")
+
+    def test_rerender_switches_the_task_channel(self):
+        """界面上换过渠道：重跑要把它写回任务，后续整批也跟着走。"""
+        with open(os.path.join(self.path, "state.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"task_id": self.NAME, "scene_skill": "anima-line",
+                       "panels": {}}, f)
+        self.c.post("/api/comic/rerender",
+                    json={"task": self.NAME, "no": "01",
+                          "scene_skill": "krea2-pokemon"})
+        self.assertEqual(self._state()["scene_skill"], "krea2-pokemon")
+
+    def test_edit_scene_carries_the_channel_too(self):
+        """「改画面词重画」是同一条链，漏了它一样会画错渠道。"""
+        d = self.c.post("/api/comic/edit_scene",
+                        json={"task": self.NAME, "no": "02",
+                              "scene": "1girl, solo, running",
+                              "scene_skill": "krea2-pokemon"}).get_json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(self.calls[-1]["scene_skill"], "krea2-pokemon")
+
+
 if __name__ == "__main__":
     unittest.main()

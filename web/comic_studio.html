@@ -557,6 +557,11 @@ async function pollScript() {
   }
   TASK = d.task;
   rememberTask(TASK);
+  // 新任务目录里还没有 scene_skill，而渠道下拉还留着上一集的选项。这里把当前
+  // 选中值直接记进新任务，别让「刷新一下页面就悄悄跳回 anima-line」重演
+  // （2026-10-22 用户报的「显示宝可梦、画出来是 anima」就是这条链断在这）。
+  try { if (channel()) await api('/api/comic/channel', {task: TASK, skill: channel()}); }
+  catch (e) { /* 记不下就当没存过，开跑时 /start 还会再存一次 */ }
   loadTasks();                            // 新任务要出现在「历史任务」下拉里
   const ta = document.getElementById('script');
   ta.style.display = 'block'; ta.value = d.script;
@@ -1314,7 +1319,8 @@ async function editSave(no) {
   const scene = ta ? ta.value.trim() : '';
   if (!scene) { toast('画面提示词不能为空', true); return; }
   try {
-    const d = await api('/api/comic/edit_scene', {task: TASK, no, scene});
+    const d = await api('/api/comic/edit_scene',
+                        {task: TASK, no, scene, scene_skill: channel()});
     _editOpen[no] = false;
     const c = _slots[no];
     if (c) c.sig = null;
@@ -1520,7 +1526,10 @@ async function loadTaskUI(name, prefix) {
 }
 
 async function rerender(no) {
-  try { await api('/api/comic/rerender', {task: TASK, no}); setBusy(true, 'scene'); toast('格 ' + no + ' 换种子重跑中'); }
+  // 带上下拉选中的渠道：不带的话后端只能认 state.json 里记的，新任务（还没
+  // 存过 state）会静默用 anima-line 画——2026-10-22 用户实报「点了宝可梦、
+  // 画出来是 anima 线条」就是这个。
+  try { await api('/api/comic/rerender', {task: TASK, no, scene_skill: channel()}); setBusy(true, 'scene'); toast('格 ' + no + ' 换种子重跑中'); }
   catch (e) { toast(e.message, true); }
 }
 

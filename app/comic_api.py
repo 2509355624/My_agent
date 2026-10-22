@@ -950,7 +950,14 @@ def api_comic_channel():
 @bp.route("/api/comic/rerender", methods=["POST"])
 def api_comic_rerender():
     """换种子重跑某格：把该格重置回 pending（种子作废），后台只跑阶段一。
-    seed 不传新的——render_scene 里 _new_seed() 每次现抽。"""
+    seed 不传新的——render_scene 里 _new_seed() 每次现抽。
+
+    **渠道以请求里带的为准**（2026-10-22 修）：前端把下拉选中的渠道传上来，
+    和 `/start` 同一个口径。原来这里不传、只靠 state.json 里记的，于是出现
+    过「界面显示宝可梦、实际用 anima-line 画」——任务目录还没有 state.json
+    （新任务刚出剧本）或者那份记录是旧的，`comic.run` 就静默回落到全局默认
+    anima-line，用户看到的是一格风格完全不对的图。
+    """
     data = request.get_json(silent=True) or {}
     try:
         path = _task_dir(data.get("task"))
@@ -961,14 +968,17 @@ def api_comic_rerender():
     panel = next((p for p in task.panels if p.no == no), None)
     if panel is None:
         return jsonify({"ok": False, "error": "没有 %s 这格" % no}), 404
+    skill = _resolve_skill(path, data.get("scene_skill"))
     panel.state, panel.seed, panel.error = "pending", None, None
+    task.scene_skill = skill          # save_state 会把它写回 state.json
     task.save_state()
     started = _spawn(path, "scene", lambda: comic.run(
-        os.path.join(path, "script.md"), only={no}, silver_only=True),
+        os.path.join(path, "script.md"), only={no}, silver_only=True,
+        scene_skill=skill),
         on_error=_mark_pending_failed(path, no))
     if not started:
         return jsonify({"ok": False, "error": "这个任务已经在跑了"}), 409
-    return jsonify({"ok": True, "no": no})
+    return jsonify({"ok": True, "no": no, "scene_skill": skill})
 
 
 # ─── 生图模式（单人写真集，2026-10-13）──────────────────
@@ -1282,8 +1292,10 @@ def api_comic_edit_scene():
     except Exception as exc:
         return jsonify({"ok": False,
                         "error": "画面提示词改坏了（%s），请修正后再保存" % exc}), 400
+    # 渠道跟 rerender 同一个口径：前端传什么就用什么（见那边注释）。
+    skill = _resolve_skill(path, data.get("scene_skill"))
     started = _spawn(path, "scene", lambda: comic.run(
-        script_path, only={no}, silver_only=True),
+        script_path, only={no}, silver_only=True, scene_skill=skill),
         on_error=_mark_pending_failed(path, no))
     if not started:
         return jsonify({"ok": True, "no": no, "queued": False,

@@ -347,6 +347,19 @@ COMFY_IDLE_WAIT = 90
 # 这个上限平时碰不到，只在「ComfyUI 真被关了」时兜底。
 SUBMIT_PROBE_GAP = 5
 
+# 提交（`/prompt`）本身的超时与撞上重启时的重试（秒，2026-10-22）。
+#
+# 30 秒是健康 ComfyUI 的提交耗时的几十倍（它是把工作流塞进队列，正常 <1 秒）；
+# 能超时只说明那个进程已经不正常了——最常见的是**正在关停的旧进程**，TCP 连得
+# 上但永远不回包。这种时候换一个进程再提交就成，不该把整格判死。
+#
+# 重试窗口取 `COMFY_WAIT_UP` 量级：ComfyUI 从 execv 到能收活实测十几秒到两分钟
+# （内存被挤干时要读盘），而漫画批量一次只重启一两回，慢一点好过整格重画。
+SUBMIT_TIMEOUT = 30
+SUBMIT_RETRY_TRIES = 4
+SUBMIT_RETRY_GAP = 15
+SUBMIT_RETRY_WAIT = 180
+
 # 冷却闸只认这一个渠道（见模块开头「重渠道优先度」）。写成常量而不是判断
 # 「权重 > 1」，是因为冷却的必要性来自 qwen 那套权重的具体尺寸，别的重渠道
 # 不一定共用同一个死因。
@@ -1241,6 +1254,13 @@ def _maybe_release_for_switch(job):
     if prev == skill:
         # 同渠道连画：数满 N 张就整个重启 ComfyUI（显存+内存清零）。
         limit = _release_limit(skill)
+        # 漫画批量放宽（2026-10-22 修）：10-18 只给 `total_run` 换了阈值
+        # （`COMFY_RELEASE_AFTER_COMIC`），同渠道这条**漏了**——一本十格的
+        # 漫画全是同一个渠道，于是照样每 2 格重启一次，正好和「分批画的图
+        # 最怕中途重启」撞上：重启那一格的 `/prompt` 提交给正在关停的旧进程，
+        # 30 秒读超时，整格标红（用户 C20261022-06 实报 05~08 四格连挂）。
+        if getattr(job, "batch", None) == "comic" and COMFY_RELEASE_AFTER_COMIC > 0:
+            limit = max(limit, COMFY_RELEASE_AFTER_COMIC)
         if 0 < limit <= chan.same_run:
             log.info("同渠道 %s 已连画 %d 张（阈值 %d），下一张提交前彻底重启 ComfyUI",
                      skill, chan.same_run, limit)
@@ -1596,7 +1616,7 @@ def process(job):
         body = comfy_out.body_for(job)
         if body:
             wf = comfy_out.stamp(wf, body)
-        job.prompt_id = _queue_prompt(wf)
+        job.prompt_id = _queue_prompt_retry(wf, quiet=quiet)
     except Exception as exc:
         job.error = exc
         if not quiet:
@@ -2035,13 +2055,54 @@ def landscape_workflow(workflow):
     return out
 
 
-def _queue_prompt(workflow):
+def _queue_prompt(workflow, timeout=SUBMIT_TIMEOUT):
     resp = requests.post(COMFYUI_URL + "/prompt", json={
         "prompt": workflow,
         "client_id": "agent_" + str(uuid.uuid4())[:8],
-    }, timeout=30)
+    }, timeout=timeout)
     resp.raise_for_status()
     return resp.json()["prompt_id"]
+
+
+def _queue_prompt_retry(workflow, deadline=None, quiet=False):
+    """提交撞上 ComfyUI 重启窗口时重试，而不是把这一格判死。
+
+    **为什么需要**（2026-10-22 用户实报）：漫画台一次跑 10 格，中途触发
+    「同渠道连画满 N 张 → 重启 ComfyUI」，紧接着那张的 `/prompt` 正好提交给
+    一个**正在关停的旧进程**——TCP 连得上、却永远不回包，30 秒后
+    `ReadTimeout: HTTPConnectionPool(host='127.0.0.1', port=8188): Read timed
+    out. (read timeout=30)`，格子直接标红。实测 C20261022-06：05/06/07/08
+    四格连挂，全是这一条，图本身一点问题没有。
+
+    探活救不了这件事：`/system_stats` 在旧进程退出前一直回 200（`_restart_comfy`
+    就是被这个骗到「已重启完成，耗时 0 秒」），所以**唯一可信的信号是提交
+    本身成不成功**。这里就按它重试。
+
+    代价：真撞上重启时这一格要多等十来秒；如果第一次其实已经排上队了，重试
+    会多排一张同 seed 的图——ComfyUI 对同 seed 同参数直接命中缓存，代价可忽略。
+
+    `quiet=True`（扮演态配图）时不打日志：那一路失败本来就不吭声。
+    """
+    limit = SUBMIT_RETRY_WAIT if deadline is None else float(deadline)
+    end = time.time() + limit
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return _queue_prompt(workflow)
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as exc:
+            # 只重试「连不上 / 等不到回包」——参数错、工作流坏这类 4xx/5xx
+            # 重试多少次都一样，直接抛给上层。
+            if time.time() >= end or attempt >= SUBMIT_RETRY_TRIES:
+                raise
+            if not quiet:
+                log.warning("提交没成功（%s），%.0f 秒后重试（第 %d 次，共 %d 次）",
+                            type(exc).__name__, SUBMIT_RETRY_GAP, attempt,
+                            SUBMIT_RETRY_TRIES)
+            # 先等它回来再试：重启期间 8188 是拒连的，硬提交只是白等。
+            wait_comfy_up(limit=SUBMIT_RETRY_GAP)
+            time.sleep(SUBMIT_RETRY_GAP)
 
 
 def _abort(prompt_id):

@@ -11,6 +11,8 @@ import threading
 import unittest
 from unittest import mock
 
+import requests
+
 import app.agents as agents
 from app import image_jobs
 from app import image_log
@@ -3834,6 +3836,118 @@ class AbortBatchTest(_Base):
         with mock.patch.object(image_jobs, "poll_once", lambda pid: {"outputs": {}}):
             self.assertEqual(image_jobs.wait_done("pid", 5, abort=threading.Event()),
                              {"outputs": {}})
+
+
+class ComicBatchRestartLimitTest(unittest.TestCase):
+    """漫画批量不该被「同渠道连画 2 张」管着（2026-10-22 修）。
+
+    10-18 给漫画换过阈值（`COMFY_RELEASE_AFTER_COMIC`），但只换了 `total_run`
+    那条，同渠道那条漏了——一本十格全是同一个渠道，于是照样每 2 格重启一次。
+    重启那一格的 `/prompt` 提交给正在关停的旧进程 → 30 秒读超时 → 整格标红
+    （用户 C20261022-06：05~08 四格连挂）。
+    """
+
+    def setUp(self):
+        image_jobs._reset()
+        self.addCleanup(image_jobs._reset)
+        self.restarts = []
+        for name, repl in (("COMFY_RELEASE_AFTER_SAME", 2),
+                           ("COMFY_RELEASE_AFTER_COMIC", 6),
+                           ("COMFY_RELEASE_AFTER_TOTAL", 0),
+                           ("_report_and_free", lambda *a, **k: None),
+                           ("_restart_comfy", lambda *a, **k: self.restarts.append(1) or True)):
+            p = mock.patch.object(image_jobs, name, repl)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _job(self, batch="comic", skill="krea2-pokemon"):
+        job = mock.Mock()
+        job.skill = skill
+        job.batch = batch
+        return job
+
+    def _warm(self, skill, same_run):
+        """假装这个渠道已经连画了 same_run 张。"""
+        image_jobs._COMFY.last_skill = skill
+        image_jobs._COMFY.same_run = same_run
+        image_jobs._COMFY.total_run = 0
+
+    def test_comic_batch_does_not_restart_at_two(self):
+        self._warm("krea2-pokemon", 2)
+        image_jobs._maybe_release_for_switch(self._job())
+        self.assertEqual(self.restarts, [])
+
+    def test_comic_batch_still_restarts_at_the_batch_threshold(self):
+        """放宽不等于取消：攒到 6 张还是要清一次显存/内存。"""
+        self._warm("krea2-pokemon", 6)
+        image_jobs._maybe_release_for_switch(self._job())
+        self.assertEqual(len(self.restarts), 1)
+
+    def test_other_batches_keep_the_old_threshold(self):
+        """群聊单张没变：还是 2 张一重启，别把这条顺手改掉了。"""
+        self._warm("krea2-pokemon", 2)
+        image_jobs._maybe_release_for_switch(self._job(batch=None))
+        self.assertEqual(len(self.restarts), 1)
+
+    def test_zero_batch_limit_falls_back_to_the_same_skill_limit(self):
+        """`COMFY_RELEASE_AFTER_COMIC=0` = 不分家，仍按同渠道 2 张走。"""
+        with mock.patch.object(image_jobs, "COMFY_RELEASE_AFTER_COMIC", 0):
+            self._warm("krea2-pokemon", 2)
+            image_jobs._maybe_release_for_switch(self._job())
+        self.assertEqual(len(self.restarts), 1)
+
+
+class SubmitRetryTest(unittest.TestCase):
+    """提交撞上 ComfyUI 重启窗口要重试，不能把那一格判死（2026-10-22）。
+
+    探活救不了：`/system_stats` 在旧进程退出前一直回 200（`_restart_comfy`
+    就是被它骗到「已重启完成，耗时 0 秒」），唯一可信的信号是提交成不成。
+    """
+
+    def setUp(self):
+        for name, repl in (("SUBMIT_RETRY_GAP", 0),
+                           ("SUBMIT_RETRY_TRIES", 4),
+                           ("wait_comfy_up", lambda **k: True)):
+            p = mock.patch.object(image_jobs, name, repl)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _run(self, errors):
+        """按给定异常序列假提交；用完好返回 prompt_id。"""
+        calls = []
+
+        def _post(workflow, timeout=None):
+            calls.append(1)
+            if len(calls) <= len(errors):
+                raise errors[len(calls) - 1]
+            return "pid-%d" % len(calls)
+
+        with mock.patch.object(image_jobs, "_queue_prompt", _post):
+            got = image_jobs._queue_prompt_retry({"1": {}})
+        return got, len(calls)
+
+    def test_retries_after_a_read_timeout(self):
+        """用户现场那条：Read timed out (read timeout=30)。"""
+        got, n = self._run([requests.exceptions.ReadTimeout("read timed out")])
+        self.assertEqual(got, "pid-2")
+        self.assertEqual(n, 2)
+
+    def test_retries_when_comfyui_is_refusing_connections(self):
+        got, n = self._run([requests.exceptions.ConnectionError("refused"),
+                            requests.exceptions.ConnectionError("refused")])
+        self.assertEqual(got, "pid-3")
+        self.assertEqual(n, 3)
+
+    def test_gives_up_after_the_attempt_budget(self):
+        err = requests.exceptions.ReadTimeout("read timed out")
+        with self.assertRaises(requests.exceptions.ReadTimeout):
+            self._run([err] * 10)
+
+    def test_does_not_retry_a_bad_workflow(self):
+        """参数错 / 工作流坏不是「等一等就好」，重试只是白等。"""
+        bad = requests.exceptions.HTTPError("400 Client Error")
+        with self.assertRaises(requests.exceptions.HTTPError):
+            self._run([bad, bad, bad])
 
 
 if __name__ == "__main__":
