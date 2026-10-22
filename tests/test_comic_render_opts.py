@@ -85,10 +85,11 @@ class DefaultsTest(unittest.TestCase):
         self.assertEqual(d["base"], {"steps": 20, "cfg": 1,
                                      "sampler_name": "er_sde",
                                      "scheduler": "simple"})
+        # skip = 「关闭二次采样」开关，模板里第二段是开着的 → False
         self.assertEqual(d["hires"], {"steps": 20, "cfg": 1,
                                       "sampler_name": "euler",
                                       "scheduler": "simple",
-                                      "denoise": 0.25})
+                                      "denoise": 0.25, "skip": False})
         self.assertEqual((d["width"], d["height"]), (1024, 1536))
         self.assertEqual(d["upscale"], {
             "scale_by": 1.2,
@@ -212,6 +213,41 @@ class ApplyTest(unittest.TestCase):
                 if isinstance(v, list) and v and str(v[0]) == up["final"]]
         self.assertEqual(refs, [])
 
+    def test_skip_hires_rewires_second_pass_consumers(self):
+        """关闭二次采样（2026-10-22）：消费第二段输出的地方全部改指第一段，
+        第二段和它的 latent 放大都变成悬空节点。节点留着不删——ComfyUI 只执行
+        从输出可达的节点（和 final_skip 同一招）。"""
+        wf = _fresh_workflow()
+        sp = _samplers(wf)
+        self.assertTrue(sp["hires"], "anima-line 模板本该有两段采样")
+        opts = ro.defaults("anima-line")
+        opts["hires"]["skip"] = True
+        out = ro.apply(wf, opts)
+        base_id = sp["base"][0]
+        dead = set(sp["hires"])
+        # 没有一处还指着第二段
+        refs = [(n, k) for n in out for k, v in (out[n]["inputs"] or {}).items()
+                if isinstance(v, list) and v and str(v[0]) in dead]
+        self.assertEqual(refs, [])
+        # 解码器（或它的下游）吃到的是第一段的 latent
+        lat_consumers = [n for n in out for k, v in (out[n]["inputs"] or {}).items()
+                         if isinstance(v, list) and v and str(v[0]) == base_id]
+        self.assertTrue(lat_consumers)
+        # 节点还在（断引用不是删节点），第二段的参数也照写
+        for nid in dead:
+            self.assertIn(nid, out)
+
+    def test_hires_still_runs_when_skip_is_false(self):
+        """不勾就是原来的行为：第二段还接在链上，别把默认路径带歪。"""
+        wf = _fresh_workflow()
+        sp = _samplers(wf)
+        opts = ro.defaults("anima-line")
+        self.assertFalse(opts["hires"]["skip"])
+        out = ro.apply(wf, opts)
+        refs = [v for n in out for v in (out[n]["inputs"] or {}).values()
+                if isinstance(v, list) and v and str(v[0]) == sp["hires"][0]]
+        self.assertTrue(refs)
+
 
 class NormalizeTest(unittest.TestCase):
     """钳位（给人填的表，不拒）与事实校验（这填得不对，存不进去）。"""
@@ -288,6 +324,19 @@ class NormalizeTest(unittest.TestCase):
         self.assertEqual((opts["width"], opts["height"]), (1024, 1536))
         self.assertEqual(opts["upscale"], base["upscale"])
 
+    def test_hires_skip_survives_partial_update(self):
+        """勾了「关闭二次采样」再改别的字段，开关不能被 normalize 抹掉。"""
+        base = ro.defaults("anima-line")
+        opts, _e, _w = ro.normalize({"hires": {"skip": True}}, base=base)
+        self.assertTrue(opts["hires"]["skip"])
+        self.assertEqual(opts["hires"]["steps"], base["hires"]["steps"])
+        # 后面只改分辨率，开关还在
+        opts2, _e, _w = ro.normalize({"width": 896}, base=opts)
+        self.assertTrue(opts2["hires"]["skip"])
+        # 没勾回来就是开（默认路径不受影响）
+        opts3, _e, _w = ro.normalize({"hires": {"skip": False}}, base=opts)
+        self.assertFalse(opts3["hires"]["skip"])
+
 
 class StoreTest(unittest.TestCase):
     """render.json 存取：往返一致、读坏不炸、reset 回到默认。"""
@@ -309,6 +358,13 @@ class StoreTest(unittest.TestCase):
         self.assertFalse(os.path.isfile(ro.path_of(self.tmp)))
         self.assertEqual(ro.load(self.tmp, "anima-line"),
                          ro.defaults("anima-line"))
+
+    def test_hires_skip_roundtrip(self):
+        """「关闭二次采样」要能存进 render.json 再读回来。"""
+        opts = ro.defaults("anima-line")
+        opts["hires"]["skip"] = True
+        ro.save(self.tmp, opts)
+        self.assertTrue(ro.load(self.tmp, "anima-line")["hires"]["skip"])
 
     def test_broken_file_falls_back_to_defaults(self):
         with open(ro.path_of(self.tmp), "w", encoding="utf-8") as f:
@@ -555,6 +611,22 @@ class CapsTest(unittest.TestCase):
         self.assertEqual((c["family"], c["passes"]), ("none", 0))
         self.assertFalse(c["editable"])
         self.assertFalse(c["lora"])
+
+    def test_ks_channel_exposes_hires_skip_and_scale_factors(self):
+        """「关闭二次采样」只给有独立 hires KSampler 的渠道，并且面板要能算出
+        关掉之后出多大：hires_factor = latent 倍率、final_factor = 像素放大。"""
+        c = ro.caps_of("krea2-general")
+        self.assertTrue(c["skip_hires"])
+        self.assertEqual(c["hires_factor"], 2.0)     # LatentUpscaleBy ×2
+        self.assertEqual(c["final_factor"], 2)       # 2x_Ani4Kv2
+        self.assertEqual((c["out_width"], c["out_height"]), (3328, 4864))
+
+    def test_batch_and_single_pass_channels_cannot_skip_hires(self):
+        """sd / miao 的高清写在 BatchPromptImageGenerator 内部，没有可断的引用；
+        qwen 本来就只有一段。这两类给了开关也勾不出效果，所以不给。"""
+        for skill in ("miao", "image_gen_v1", "qwen_image_v1"):
+            c = ro.caps_of(skill)
+            self.assertFalse(c["skip_hires"], skill)
 
 
 class MultiChannelApplyTest(unittest.TestCase):

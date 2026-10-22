@@ -193,7 +193,7 @@
       <b id="renderSkillName">anima-line</b> 模板当前值。取值优先级：本任务 &gt; 全局默认 &gt; 模板。
       改了只影响<b>之后</b>渲染的格——已出的图不动，对哪格点「🔁 换种子重跑 / ▶ 跑这一格」哪格用新参数。
       阶段二加气泡固定走 qwen，不受这些参数影响。
-      分辨率是<b>底图</b>尺寸，成图还要过渠道自带的放大链（有的话）。
+      分辨率是<b>底图</b>尺寸；第二段采样和放大链都能关（关了出图就按剩下的那级算，右边「预计出图」会跟着变）。
       这个渠道没有的东西（比如没有 LoRA 链、只有一段采样）不会显示。
     </div>
     <div id="loraRows"></div>
@@ -202,13 +202,16 @@
     <div id="baseNote" style="display:none;color:var(--text-dim);font-size:12px;margin-bottom:10px">
       这个渠道的采样步数由模型适配器（DMD 步码）定死，改不了；能调的只有下面的分辨率。
     </div>
-    <div id="hiresCap" style="color:var(--text-dim);font-size:12px;margin:10px 0 6px">第二段采样 · 放大精修（denoise 越小越保留第一段）</div>
+    <div id="hiresCap" style="color:var(--text-dim);font-size:12px;margin:10px 0 6px">第二段采样 · 放大精修（denoise 越小越保留第一段）
+      <label id="hiresSkipLabel" style="margin-left:14px;white-space:nowrap;cursor:pointer"
+             title="只跑第一段采样直接出图。省时间很实在（krea2 832×1216：两段约 49 秒 → 单段 8 步约 16 秒），代价是 latent 放大这一级跟着失效"><input type="checkbox" id="rHiresSkip" onchange="onHiresSkip()" style="vertical-align:-2px"> 关闭二次采样（单段直出，快很多）</label>
+    </div>
     <div class="row" id="hiresRow" style="margin-bottom:10px"></div>
     <div class="row" style="margin-bottom:10px">
       <span style="color:var(--text-dim);font-size:12px">底图分辨率</span>
-      <input id="rpW" type="number" min="256" max="4096" step="8" style="width:92px" title="宽，8 的倍数">
+      <input id="rpW" type="number" min="256" max="4096" step="8" style="width:92px" title="宽，8 的倍数" oninput="updateSizeHint()">
       <span style="color:var(--text-dim)">×</span>
-      <input id="rpH" type="number" min="256" max="4096" step="8" style="width:92px" title="高，8 的倍数">
+      <input id="rpH" type="number" min="256" max="4096" step="8" style="width:92px" title="高，8 的倍数" oninput="updateSizeHint()">
       <span class="spacer" style="flex:1"></span>
       <button class="btn small" onclick="presetSize(1024,1536)" title="1024×1536">竖 2:3</button>
       <button class="btn small" onclick="presetSize(960,1280)" title="960×1280">竖 3:4</button>
@@ -222,7 +225,7 @@
       <span id="upTimes" style="color:var(--text-dim)">×</span>
       <span class="spacer" style="flex:1"></span>
       <select id="rUpModel" style="width:250px" title="最终像素放大模型（ComfyUI upscale_models 清单）"></select>
-      <label id="upSkipLabel" style="font-size:12px;color:var(--text-dim);white-space:nowrap"><input type="checkbox" id="rUpSkip"> 跳过最终放大</label>
+      <label id="upSkipLabel" style="font-size:12px;color:var(--text-dim);white-space:nowrap"><input type="checkbox" id="rUpSkip" onchange="updateSizeHint()"> 跳过最终放大</label>
     </div>
     <div class="row">
       <button class="btn primary" id="btnSaveRender" onclick="saveRenderOpts('task')">保存（本任务）</button>
@@ -740,18 +743,52 @@ function _show(id, on) {
   if (el) el.style.display = on ? '' : 'none';
 }
 
-// 底图 → 预计出图。渠道自带的 hires / 2x 放大都按模板比例折算，改底图时同步变。
+// 底图 → 预计出图。两段放大分开算：第二段（latent 倍率 / 渠道自带 hires 尺寸）
+// 和最终像素放大，各自可能被「关闭二次采样」「跳过最终放大」摘掉。
 function updateSizeHint() {
   const el = document.getElementById('sizeHint');
   const w = +document.getElementById('rpW').value || 0;
   const h = +document.getElementById('rpH').value || 0;
-  if (!_caps || !_caps.width || !_caps.out_width || !w || !h) {
+  const caps = _caps;
+  if (!caps || !caps.width || !w || !h) {
     el.textContent = '';
     return;
   }
-  const ow = Math.round(w * _caps.out_width / _caps.width / 8) * 8;
-  const oh = Math.round(h * _caps.out_height / _caps.height / 8) * 8;
-  el.textContent = '底图 ' + w + '×' + h + ' → 预计出图约 ' + ow + '×' + oh;
+  const skipH = !!caps.skip_hires && !!(document.getElementById('rHiresSkip') || {}).checked;
+  const skipF = !!(document.getElementById('rUpSkip') || {}).checked;
+  let f = 1;
+  if ((caps.passes || 0) > 1 && !skipH) f *= caps.hires_factor || 1;
+  if (caps.upscale_final && !skipF) f *= caps.final_factor || 2;
+  const ow = Math.round(w * f / 8) * 8;
+  const oh = Math.round(h * f / 8) * 8;
+  el.textContent = '底图 ' + w + '×' + h + ' → 预计出图约 ' + ow + '×' + oh
+    + (f === 1 ? '（原尺寸直出）' : '');
+}
+
+// 关了二次采样：第二段的输入全部禁用（禁掉而不是藏起来——位置不跳，用户
+// 还能看见自己原来填的是什么），latent 倍率跟着禁（它只喂第二段）。
+function _syncHiresDisabled() {
+  const caps = _caps || {};
+  const box = document.getElementById('rHiresSkip');
+  const on = !!(caps.skip_hires && box && box.checked);
+  const row = document.getElementById('hiresRow');
+  if (row) {
+    row.style.opacity = on ? '0.4' : '';
+    row.querySelectorAll('input,select').forEach(x => { x.disabled = on; });
+  }
+  const lat = document.getElementById('rUpScale');
+  if (lat) lat.disabled = on;
+  const cap = document.getElementById('upCap');
+  if (cap) {
+    cap.textContent = on
+      ? '放大 · latent 那一级不生效（二次采样关了，没人用它的输出）；最终像素放大照常是出图前最后一道'
+      : '放大 · latent 倍率决定第二段实际跑的尺寸；最终像素放大是出图前最后一道';
+  }
+}
+
+function onHiresSkip() {
+  _syncHiresDisabled();
+  updateSizeHint();
 }
 
 function fillRenderForm(opts, res, caps) {
@@ -807,6 +844,11 @@ function fillRenderForm(opts, res, caps) {
   const showHires = editable && numPasses > 1;
   document.getElementById('hiresCap').style.display = showHires ? '' : 'none';
   document.getElementById('hiresRow').style.display = showHires ? 'flex' : 'none';
+  // 「关闭二次采样」只给有独立第二段 KSampler 的渠道（ks 族）；sd / miao 把
+  // 高清写在自己的复合节点里，没有可断的引用，给了开关也勾不出效果。
+  _show('hiresSkipLabel', showHires && !!caps.skip_hires);
+  const hiresSkipBox = document.getElementById('rHiresSkip');
+  if (hiresSkipBox) hiresSkipBox.checked = !!hi.skip;
   if (showHires) {
     // batch 族（sd / miao）第二段只有步数和 denoise——节点上没有第二段的
     // cfg / 采样器，给输入框反而是骗人。
@@ -848,6 +890,10 @@ function fillRenderForm(opts, res, caps) {
       + esc(x) + '</option>').join('');
     document.getElementById('rUpSkip').checked = !!up.final_skip;
   }
+  // 放大区的勾选和禁用态都排完之后再算一次——上面那次 updateSizeHint 读到的
+  // 还是表单上一轮的值（比如模板默认开着最终放大、这个任务存的是跳过）。
+  _syncHiresDisabled();
+  updateSizeHint();
 }
 
 function presetSize(w, h) {
@@ -874,10 +920,14 @@ function collectRenderOpts() {
     out.base = {steps: v('rstepsB'), cfg: v('rcfgB'),
                 sampler_name: v('rsampB'), scheduler: v('rschB')};
     if ((caps.passes || 0) > 1) {
-      out.hires = (caps.family === 'batch')
+      const hr = (caps.family === 'batch')
         ? {steps: v('rstepsH'), denoise: v('rdenH')}
         : {steps: v('rstepsH'), cfg: v('rcfgH'), denoise: v('rdenH'),
            sampler_name: v('rsampH'), scheduler: v('rschH')};
+      // 关了二次采样也照提交（输入被 disable，但 value 仍读得到），
+      // 这样取消勾选时原来填的步数 / denoise 还在，不用重填。
+      if (caps.skip_hires) hr.skip = !!(document.getElementById('rHiresSkip') || {}).checked;
+      out.hires = hr;
     }
   }
   if (caps.upscale_latent || caps.upscale_final) {

@@ -20,6 +20,13 @@ anima-line 是**两段采样**（摸清结构才敢写覆盖，节点号以 2026
 所以覆盖也按两段分开给：base / hires 各一套 steps / cfg / sampler_name /
 scheduler，hires 再多一个 denoise（放大精修的强度）；LoRA 链只重建第一段那条。
 
+**第二段可以整个关掉**（2026-10-22 用户要的「关闭二次采样」）：`hires.skip=true`
+时把消费第二段输出的地方改指第一段输出，只跑一次采样直出。省的时间很实在
+（krea2 832×1216：两段 49 秒 → 单段 8 步 15.7 秒 / 6 步 10.5 秒），代价是
+**latent 放大这一级跟着失效**（它只喂第二段），出图回到「底图 × 最终放大」。
+batch 族（sd / miao）把高清写在自己节点内部，没有独立第二段可断，`skip_hires`
+为 False —— 面板不给这个开关，免得勾了没反应。
+
 两级放大也在链上，一起纳进覆盖（2026-10-13 用户要能看到能改）：
   - **latent 放大**（节点 25 `LatentUpscaleBy`，scale_by=1.2）：第二段采样
     **之前**把潜空间放大——它决定第二段实际跑的尺寸，改大第二段显存/耗时
@@ -268,6 +275,10 @@ def defaults(skill=DEFAULT_SKILL):
     base_nid = passes["base"][0] if passes["base"] else None
     if passes["hires"]:
         hires = _sampler_params(wf, passes["hires"][0], with_denoise=True)
+        # 第二段默认开着（模板里它就是开着的），这里把开关这个键补出来。
+        # 只给有独立 hires 节点的渠道补：batch 族（sd / miao）的高清写在复合
+        # 节点内部，没有可断的引用，多一个 skip 只会让人以为能关。
+        hires.setdefault("skip", False)
     else:
         hires = _batch_hires_params(wf)
     return {
@@ -320,9 +331,14 @@ def caps(workflow):
         if up["latent"]:
             sy = _f(_inputs(wf.get(up["latent"][0])).get("scale_by"), 1.0)
         ow, oh = int(round(w0 * sy)), int(round(h0 * sy))
+    # 第二段把画面放大多少倍（ks 族 = latent 倍率、batch 族 = 高清尺寸比）：
+    # 关掉二次采样时这一级就不存在了，前端按它算「预计出图」。
+    hf = round(ow / float(w0), 4) if w0 else 1.0
+    ff = 1
     if up["final"] or _batch_upscale(wf):
         # 本机挂的放大模型都是 2x（2x_Ani4Kv2 / 4x 的会在名字里写 4x，仍按 2x 保守估）
         ow, oh = ow * 2, oh * 2
+        ff = 2
 
     return {
         "family": fam or "none",
@@ -339,6 +355,10 @@ def caps(workflow):
         "upscale_final": bool(up["final"]) or (
             fam == "batch" and _batch_upscale(wf) is not None),
         "upscale_skip": bool(up["final"]),
+        # 第二段能不能整个关掉：只有 ks 族有独立的 hires KSampler 可断引用。
+        "skip_hires": bool(passes["hires"]),
+        "hires_factor": hf,
+        "final_factor": ff,
         "width": w0,
         "height": h0,
         "out_width": ow,
@@ -618,6 +638,11 @@ def normalize(raw, base=None, resources=None):
                 warnings.append("%s denoise %.2f 超出 0~1，已钳成 %.2f"
                                 % (key, dn, cd))
             out["denoise"] = cd
+        if with_denoise and ("skip" in rp or "skip" in out):
+            # 第二段采样开关（"skip"）——关掉就只跑一次采样直出。
+            # 只在本来就认识这个键的渠道里保留：batch 族（sd / miao）关不掉，
+            # 别往它们的 render.json 里塞一个永远不起作用的字段。
+            out["skip"] = bool(rp.get("skip", out.get("skip", False)))
         return out
 
     # ── 两级放大（latent 倍率 / 最终像素放大模型 / 跳过最终放大）
@@ -835,6 +860,34 @@ def pin_output_size(workflow, width, height):
     return n
 
 
+def _cut_hires(wf):
+    """关掉第二段采样：把消费 hires 采样器输出的输入改指 base 采样器。
+
+    和 `_apply_upscale` 的 final_skip 是同一招——**断引用、不删节点**：ComfyUI
+    只执行从输出可达的节点，没人引用的第二段不会跑。删节点要扫全部引用，漏
+    一处整条链就断（这一点 `tools/bench_render.py` 已经实测过）。
+
+    latent 放大节点会跟着变不可达（它只喂第二段），所以出图尺寸回到「底图 ×
+    最终像素放大」——面板上那句提示和这里的实际行为必须一致。
+
+    返回改了几处引用；没有独立的 hires 节点（单段 / batch 族）返回 0。
+    """
+    passes = _passes(wf)
+    if not passes["hires"] or not passes["base"]:
+        return 0
+    base = passes["base"][0]
+    dead = {str(n) for n in passes["hires"]}
+    n = 0
+    for nd in wf.values():
+        inp = _inputs(nd)
+        for k, v in list(inp.items()):
+            if isinstance(v, list) and v and str(v[0]) in dead:
+                # 两段输出的槽位都是 LATENT[0]，索引照搬
+                inp[k] = [base, v[1] if len(v) > 1 else 0]
+                n += 1
+    return n
+
+
 def apply(workflow, opts):
     """把渲染参数应用到工作流，返回**新 dict**（不改入参）。
 
@@ -878,16 +931,25 @@ def apply(workflow, opts):
                     inp["hires_height"] = max(8, int(round(hh * ry)) // 8 * 8)
             inp["width"], inp["height"] = w, h
     n_up = _apply_upscale(wf, (opts or {}).get("upscale") or {})
-    log.info("渲染参数已应用：LoRA %d 槽，base %s步/%s，hires %s步/%s，放大 %s，%d×%d",
+    # 关掉二次采样：放在参数写完之后（第二段的 steps / denoise 写不写都无所谓，
+    # 它已经不可达了），也不影响上面按节点 id 找放大节点。
+    n_cut = _cut_hires(wf) if hires_p.get("skip") else 0
+    log.info("渲染参数已应用：LoRA %d 槽，base %s步/%s，hires %s%s，放大 %s，%d×%d",
              n_lora, base_p.get("steps"), base_p.get("sampler_name"),
-             hires_p.get("steps"), hires_p.get("sampler_name"),
-             _up_desc((opts or {}).get("upscale") or {}), w, h)
+             "已关闭（单段直出）" if n_cut else "%s步/%s"
+             % (hires_p.get("steps"), hires_p.get("sampler_name")),
+             _up_desc((opts or {}).get("upscale") or {}, bool(n_cut)), w, h)
     return wf
 
 
-def _up_desc(up):
+def _up_desc(up, no_latent=False):
     if up.get("final_skip"):
+        # final_skip 时 latent 那级是否生效就看二次采样开没开
+        if no_latent:
+            return "原尺寸（二次采样已关 + 跳过最终放大）"
         return "×%s（跳过最终放大）" % up.get("scale_by")
+    if no_latent:
+        return "跳过 latent（二次采样已关）+ %s" % up.get("final_model")
     return "×%s + %s" % (up.get("scale_by"), up.get("final_model"))
 
 
@@ -895,10 +957,12 @@ def describe(opts):
     """一句话摘要，进 comic 的渲染日志（出图慢时好回头查参数）。"""
     o = opts or {}
     b, hi = o.get("base") or {}, o.get("hires") or {}
-    return ("LoRA %d 槽 / base %s步 cfg%s %s+%s / hires %s步 cfg%s %s+%s d%s / %sx%s / %s"
+    second = ("hires 关闭（单段直出）" if hi.get("skip")
+              else "hires %s步 cfg%s %s+%s d%s"
+              % (hi.get("steps"), hi.get("cfg"), hi.get("sampler_name"),
+                 hi.get("scheduler"), hi.get("denoise")))
+    return ("LoRA %d 槽 / base %s步 cfg%s %s+%s / %s / %sx%s / %s"
             % (len([s for s in (o.get("loras") or []) if s.get("name")]),
                b.get("steps"), b.get("cfg"), b.get("sampler_name"),
-               b.get("scheduler"), hi.get("steps"), hi.get("cfg"),
-               hi.get("sampler_name"), hi.get("scheduler"),
-               hi.get("denoise"), o.get("width"), o.get("height"),
-               _up_desc(o.get("upscale") or {})))
+               b.get("scheduler"), second, o.get("width"), o.get("height"),
+               _up_desc(o.get("upscale") or {}, bool(hi.get("skip")))))
