@@ -169,9 +169,40 @@ class SilverParseTest(unittest.TestCase):
             silver_comic.write_script("两个人在车站等雨停", panels=1)
         system = call.call_args.args[0][0]["content"]
         self.assertIn("连续剧情提示词生成规范", system)   # skill 原文整份给模型
-        self.assertIn("1girl, 角色名, 发色", system)        # 再补输出契约
-        self.assertIn("按角色分行写", system)              # 多人固定部分必须分开
+        self.assertIn("一个角色一行", system)              # 固定部分必须分角色写
+        self.assertIn("两行都必须写", system)              # 不许漏人
         self.assertIn("共 1 格", system)
+
+    def test_user_message_repeats_the_fixed_prompt_shape(self):
+        """system 里塞着整份 skill，长上下文里硬约束会被冲淡——user 里再钉一遍。"""
+        with mock.patch.object(silver_comic.llm, "call_llm",
+                               return_value=self._raw(panels=1)) as call:
+            silver_comic.write_script("两个人在车站等雨停", panels=1)
+        user = call.call_args.args[0][1]["content"]
+        self.assertIn("1girl, 角色名, 发色", user)
+        self.assertIn("1boy, 角色名, 发色", user)
+        self.assertIn("两个角色就必须写两行", user)
+
+    def test_long_script_gets_a_bigger_output_budget_and_timeout(self):
+        """50 格一次出完：不给 max_tokens 会被服务端默认上限截断，60 秒必超时。
+
+        2026-10-22 用户实报「要 50 页根本没法生成」，两个原因就在这里：
+        全局 LLM_REQUEST_TIMEOUT 是 60 秒（对话抢答口径），输出上限压根没传。
+        """
+        raw = self._raw(panels=50)
+        with mock.patch.object(silver_comic.llm, "call_llm",
+                               return_value=raw) as call:
+            silver_comic.write_script("两个人在车站等雨停", panels=50)
+        kw = call.call_args.kwargs
+        self.assertGreaterEqual(kw.get("max_tokens") or 0, 50 * 160)
+        self.assertGreater(kw.get("timeout") or 0, 120)
+
+    def test_short_script_still_asks_for_enough_room(self):
+        """少格也要给到 4096：低于这个数连固定部分都可能被截掉。"""
+        with mock.patch.object(silver_comic.llm, "call_llm",
+                               return_value=self._raw(panels=3)) as call:
+            silver_comic.write_script("两个人在车站等雨停", panels=3)
+        self.assertGreaterEqual(call.call_args.kwargs.get("max_tokens") or 0, 4096)
 
     def test_write_script_detail_exposes_fixed_and_dynamics(self):
         with mock.patch.object(silver_comic.llm, "call_llm",

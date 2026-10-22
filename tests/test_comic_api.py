@@ -178,6 +178,18 @@ class ComicScriptApiTest(unittest.TestCase):
         f.assert_not_called()
         self.assertEqual(out.get("pov_mode"), "third")
 
+    def test_fifty_panels_reach_silver_without_being_clamped_to_30(self):
+        """50 格要能真的传下去（2026-10-22 用户实报「要 50 页根本没法生成」）。
+
+        这里原来写死 `min(30, panels)`，界面填 50 也会被悄悄截成 30 格剧本——
+        格数对不上，后面每一格都会跟剧本错位。
+        """
+        with mock.patch("app.silver_comic.write_script_detail",
+                        return_value=SILVER_DETAIL) as s:
+            d = self._post(panels=50, pov_mode="free")
+            self._wait(d["job"])
+        self.assertEqual(s.call_args.kwargs.get("panels"), 50)
+
     def test_pov_still_uses_writer_and_fixer(self):
         """POV 保持原有编剧 + 补正链路。"""
         fake = {"text": GOOD_SCRIPT, "issues": [], "diff": [], "adopted": False,
@@ -564,6 +576,41 @@ class ComicManualApiTest(unittest.TestCase):
                 return j
             time.sleep(0.02)
         self.fail("后台任务超时未结束")
+
+    def test_save_persists_silver_parts_so_edits_survive_a_refresh(self):
+        """手改的固定/动态部分要跟着 script.md 一起存进 fix.json。
+
+        界面分栏是从 fix.json 的 silver 段还原的：只写 script.md 的话，改完保存、
+        一刷新分栏就退回**生成时**的原稿，再点保存直接把改动覆盖掉（2026-10-22）。
+        """
+        r = self.c.post("/api/comic/save", json={
+            "task": self.NAME, "script": self.SCRIPT,
+            "silver": {"title": "改过的标题",
+                       "fixed": "1girl, 1boy, edited girl, edited boy",
+                       "dynamics": ["a room", "a street"],
+                       "bubbles": [{"bubble": "", "bubble2": ""},
+                                   {"bubble": "二", "bubble2": ""}]}})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["ok"])
+        with open(os.path.join(self.dir, "fix.json"), encoding="utf-8") as f:
+            fix = json.load(f)
+        self.assertEqual(fix["silver"]["fixed"],
+                         "1girl, 1boy, edited girl, edited boy")
+        self.assertEqual(fix["silver"]["dynamics"], ["a room", "a street"])
+        self.assertEqual(fix["silver"]["title"], "改过的标题")
+
+    def test_save_without_silver_keeps_fix_json_untouched(self):
+        """pov 路线（或老界面）不传 silver 时，别把已有 fix.json 搅坏。"""
+        fp = os.path.join(self.dir, "fix.json")
+        with open(fp, "w", encoding="utf-8") as f:
+            json.dump({"status": "nochange", "adopted": False}, f)
+        r = self.c.post("/api/comic/save",
+                        json={"task": self.NAME, "script": self.SCRIPT})
+        self.assertEqual(r.status_code, 200)
+        with open(fp, encoding="utf-8") as f:
+            fix = json.load(f)
+        self.assertNotIn("silver", fix)
+        self.assertEqual(fix["status"], "nochange")
 
     def _load(self):
         return comic_api._load_task(self.dir)

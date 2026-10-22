@@ -135,7 +135,7 @@
 剧情: 下雨天兄妹俩在公交站躲雨……（前两行是硬约束：视角=镜头后的「我」，男性→pov、女性→female_pov；主角=画面里唯一入画的人）"></textarea>
       <input id="heroine" style="display:none;width:220px" placeholder="女主设定：长直黑发、校服、气质文静……（填一次，这批写真每张都自动带上）">
       <input id="character" style="width:130px" placeholder="角色名（可选）">
-      <input id="panels" type="number" min="1" max="30" value="10" style="width:70px" title="剧本格数 / 写真相张数">
+      <input id="panels" type="number" min="1" max="60" value="10" style="width:70px" title="剧本格数 / 写真相张数">
     </div>
     <div class="row" style="margin-bottom:10px">
       <span style="color:var(--text-dim);font-size:12px">编剧模型</span>
@@ -704,35 +704,99 @@ function finishScript() {
   btn.disabled = false; btn.textContent = '生成剧本';
 }
 
-// ── 自由视角：固定部分 / 动态部分分栏 ─────────────────────
+// ── 自由视角：固定部分 / 动态部分分栏（可编辑）─────────────
 // skill 的结构就是「固定部分（谁+脸部特征） + 动态部分（场景/服饰/动作/神态/镜头/灯光）」，
-// 跑图时每格 = 固定部分 + 该格动态部分。这里只做展示：编辑仍然在下面的 textarea，
-// 避免两边各存一份内容、保存时互相覆盖。
+// 跑图时每格 = 固定部分 + 该格动态部分。
+//
+// 这两块**必须能直接改**（2026-10-22 用户要求）：有时他想自己填固定部分、自己改某一格，
+// 所以这里是真输入框，不是在 textarea 里改。保存 / 开跑前由 `silverPartsToScript()`
+// 把它们拼回 script.md（隐藏的 #script 才是提交源，两边不会各存一份）。
+let SP_TITLE = '连续漫画';
+
 function renderSilverParts(s) {
   const box = document.getElementById('silverParts');
   if (!s || !s.fixed) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  SP_TITLE = s.title || '连续漫画';
   const dyn = s.dynamics || [];
   const lab = 'font-size:12px;color:var(--text-dim);margin:0 0 6px';
-  let h = '<div style="' + lab + '">固定部分 —— 一个角色一行（人数 + 角色名 + 脸部特征），跑图时拼到每格开头</div>' +
-          '<div style="font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:1.6;' +
-          'white-space:pre-wrap;' +
-          'padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:rgba(127,127,127,.06)">' +
-          esc(s.fixed) + '</div>' +
-          '<div style="' + lab + 'margin-top:10px">动态部分 —— ' + dyn.length + ' 格（场景 + 服饰 + 动作 + 神态 + 镜头 + 灯光）</div>';
+  const ta = 'width:100%;box-sizing:border-box;font-family:ui-monospace,Consolas,monospace;' +
+             'font-size:12px;line-height:1.6;padding:8px 10px;border:1px solid var(--border);' +
+             'border-radius:6px;background:rgba(127,127,127,.06);color:inherit;resize:vertical';
+  let h = '<div style="' + lab + '">固定部分 —— 一个角色一行（人数 + 角色名 + 脸部特征），跑图时拼到每格开头，可直接改</div>' +
+          '<textarea id="spFixed" rows="' + Math.max(2, String(s.fixed).split('\n').length) +
+          '" spellcheck="false" style="' + ta + '">' + esc(s.fixed) + '</textarea>' +
+          '<div style="' + lab + 'margin-top:10px">动态部分 —— ' + dyn.length +
+          ' 格（场景 + 服饰 + 动作 + 神态 + 镜头 + 灯光），每格一行，可直接改</div>';
+  const bub = 'margin-top:4px;width:100%;box-sizing:border-box;font-size:12px;padding:5px 8px;' +
+              'border:1px solid var(--border);border-radius:6px;background:rgba(127,127,127,.06);color:inherit';
   dyn.forEach(function (t, i) {
     const b = (s.bubbles && s.bubbles[i]) || {};
-    let line = t;
-    if (b.bubble) line += '\n气泡: ' + b.bubble;
-    if (b.bubble2) line += '\n气泡2: ' + b.bubble2;
-    h += '<div style="display:flex;gap:8px;margin-bottom:6px;font-size:12px;line-height:1.6">' +
-         '<span style="color:var(--text-dim);font-family:ui-monospace,Consolas,monospace;flex:none">' +
+    h += '<div style="display:flex;gap:8px;margin-bottom:8px;align-items:flex-start">' +
+         '<span style="color:var(--text-dim);font-family:ui-monospace,Consolas,monospace;flex:none;padding-top:8px">' +
          String(i + 1).padStart(2, '0') + '</span>' +
-         '<span style="font-family:ui-monospace,Consolas,monospace;white-space:pre-wrap">' +
-         esc(line) + '</span></div>';
+         '<div style="flex:1">' +
+         '<textarea id="spDyn' + i + '" rows="3" spellcheck="false" style="' + ta + '">' +
+         esc(t) + '</textarea>' +
+         (b.bubble ? '<input id="spBub' + i + '" value="' + esc(b.bubble) + '" style="' + bub + '">' : '') +
+         (b.bubble2 ? '<input id="spBub2_' + i + '" value="' + esc(b.bubble2) + '" style="' + bub + '">' : '') +
+         '</div></div>';
   });
   box.innerHTML = h;
   box.style.display = 'block';
   document.getElementById('script').style.display = 'none';   // 分栏已经表达同一份内容
+}
+
+// 把分栏里的固定 / 动态（+ 气泡）拼回 script.md 契约。
+// 固定部分多行时按后端同一条规则合并：人数前置。
+function spFixedFlat() {
+  const lines = (document.getElementById('spFixed').value || '')
+    .split('\n').map(x => x.trim()).filter(Boolean);
+  if (lines.length <= 1) return lines[0] || '';
+  const m = lines.map(x => x.match(/^(\d+\s*(?:girls?|boys?|others?))\s*[,，]\s*(.+)$/i));
+  if (m.every(Boolean)) {
+    return m.map(x => x[1]).join(', ') + ', ' + m.map(x => x[2].trim()).join(', ');
+  }
+  return lines.join(', ');
+}
+
+function silverPartsToScript() {
+  const box = document.getElementById('silverParts');
+  if (box.style.display === 'none') return false;
+  const fixed = spFixedFlat();
+  if (!fixed) return false;
+  const out = ['# 标题：' + (SP_TITLE || '连续漫画')];
+  for (let i = 0; ; i++) {
+    const el = document.getElementById('spDyn' + i);
+    if (!el) break;
+    const scene = (el.value || '').trim();
+    out.push('', '## ' + String(i + 1).padStart(2, '0'),
+             '画面: ' + fixed + (scene ? ', ' + scene : ''));
+    const b1 = document.getElementById('spBub' + i);
+    const b2 = document.getElementById('spBub2_' + i);
+    if (b1 && b1.value.trim()) out.push('气泡: ' + b1.value.trim());
+    if (b2 && b2.value.trim()) out.push('气泡2: ' + b2.value.trim());
+  }
+  document.getElementById('script').value = out.join('\n');
+  return true;
+}
+
+// 分栏的原始数据（不拼 script）：保存时要一并回传后端，否则刷新后分栏会退回
+// 生成时的原稿（2026-10-22 踩过）。
+function silverPartsData() {
+  const box = document.getElementById('silverParts');
+  if (box.style.display === 'none') return null;
+  const dyn = [], bubs = [];
+  for (let i = 0; ; i++) {
+    const el = document.getElementById('spDyn' + i);
+    if (!el) break;
+    dyn.push((el.value || '').trim());
+    const b1 = document.getElementById('spBub' + i);
+    const b2 = document.getElementById('spBub2_' + i);
+    bubs.push({ bubble: b1 ? b1.value.trim() : '',
+                bubble2: b2 ? b2.value.trim() : '' });
+  }
+  return { title: SP_TITLE || '连续漫画', fixed: spFixedFlat(),
+           dynamics: dyn, bubbles: bubs };
 }
 
 // ── 内容补正报告（编剧之后的独立一步）─────────────────────
@@ -963,7 +1027,20 @@ async function chatUndo() {
 async function saveScript(andRun) {
   const btn = document.getElementById('btnStart');
   try {
-    await api('/api/comic/save', {task: TASK, script: document.getElementById('script').value});
+    // 自由视角是在「固定部分 / 动态部分」分栏里改的，先拼回 script.md 再提交。
+    // 固定部分被清空时**必须拦住**：拼不回去就只能提交旧正文，用户会以为自己
+    // 的修改存上了（2026-10-22 用户要的就是「能自己填」）。
+    const silver = silverPartsData();
+    if (silver && !silver.fixed) {
+      toast('固定部分不能空着（至少要有 1girl, 角色名, 发色 这类内容）', true);
+      return;
+    }
+    if (!silverPartsToScript() && !document.getElementById('script').value.trim()) {
+      toast('剧本是空的', true);
+      return;
+    }
+    await api('/api/comic/save', {task: TASK,
+      script: document.getElementById('script').value, silver: silver});
     if (!andRun) { toast('剧本已保存'); return; }
     await api('/api/comic/start', {task: TASK, scene_skill: channel()});
     setBusy(true, 'scene');

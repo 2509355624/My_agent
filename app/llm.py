@@ -114,13 +114,16 @@ def _reasoning_field(eff, extras=True):
     return {"reasoning_effort": v} if v else {}
 
 
-def call_llm(messages, timeout=None, provider=None, model=None, strict=False):
+def call_llm(messages, timeout=None, provider=None, model=None, strict=False,
+             max_tokens=None):
     """调用 LLM，返回回复文本（失败时按降级链依次往下试）。
 
     - provider: 'volc' / 'doubao' / 'deepseek' / 'scnet' / 'scnet2' / 'mimo' / 'ollama'
     - model: 覆盖该 provider 的默认模型
     - timeout: 单次尝试的超时；不传用 LLM_REQUEST_TIMEOUT
     - strict: True 只打指定的那一个，失败不再顺链换家（见 candidates）
+    - max_tokens: 输出上限。不传就不带这个字段（服务端默认）。长输出（比如 50 格
+      漫画一次出完）必须显式给，否则会被服务端默认上限截在半句话上（2026-10-22）。
     兼容旧调用 call_llm(messages)：用当前生效配置。
     """
     timeout = timeout or LLM_REQUEST_TIMEOUT
@@ -130,6 +133,8 @@ def call_llm(messages, timeout=None, provider=None, model=None, strict=False):
         eff = get_effective_config(pid, mname)
         _log_effective(eff, stream=False, attempt=(i + 1, len(targets)))
         body = {"messages": messages, "stream": False, "model": eff["model"]}
+        if max_tokens:
+            body["max_tokens"] = int(max_tokens)
         body.update(_reasoning_field(eff))
         try:
             return _call_provider(eff, body, timeout)

@@ -46,7 +46,8 @@ import zipfile
 
 from flask import Blueprint, jsonify, request, send_file, send_from_directory
 
-from app import comic, comic_agent, comic_portrait, comic_render_opts, image_jobs
+from app import (comic, comic_agent, comic_portrait, comic_render_opts,
+                 image_jobs, silver_comic)
 from app.config import BASE_DIR
 
 bp = Blueprint("comic_api", __name__)
@@ -481,7 +482,9 @@ def api_comic_script():
         panels_n = int(data.get("panels") or 10)
     except (TypeError, ValueError):
         panels_n = 10
-    panels_n = max(1, min(30, panels_n))    # 与 comic_story.clamp_panels 同口径
+    # 格数上限以 silver 编剧为准（2026-10-22 用户要 50 页，原来这里写死 30）。
+    # pov 路线自己还有 comic_story.clamp_panels 收口，不用在这拦。
+    panels_n = max(1, min(silver_comic.MAX_PANELS, panels_n))
     character = str(data.get("character") or "").strip()
     provider = str(data.get("provider") or "").strip() or None
     model = str(data.get("model") or "").strip() or None
@@ -662,6 +665,22 @@ def api_comic_save():
     except Exception as exc:
         return jsonify({"ok": False,
                         "error": "剧本格式不对（%s），请修正后再保存" % exc}), 400
+    # 自由视角的「固定部分 / 动态部分」分栏要跟着一起存（2026-10-22）：
+    # 分栏是从 fix.json 还原的，只更新 script.md 的话——用户改完保存、一刷新，
+    # 分栏退回**生成时**的原稿，再点一次保存就把改动覆盖掉了。这条链必须闭合。
+    silver = data.get("silver")
+    if isinstance(silver, dict) and silver.get("fixed"):
+        report = _read_fix_report(path) or {}
+        report["silver"] = {
+            "title": str(silver.get("title") or "连续漫画"),
+            "fixed": str(silver.get("fixed") or ""),
+            "dynamics": [str(x) for x in (silver.get("dynamics") or [])],
+            "bubbles": silver.get("bubbles") or [],
+        }
+        try:
+            _write_fix_report(path, dict(report))
+        except Exception:
+            comic.log.warning("分栏内容没写回 fix.json：%s", path)
     return jsonify({"ok": True, "panels": len(panels)})
 
 
