@@ -272,11 +272,42 @@ def native_opts(skill, size=None):
     return opts
 
 
-def prompt_for(sc, skill):
-    """moss 吃自然语言；silver / anima-line 都是 tag 渠道，用同一串。"""
+# krea2 系的 SKILL.md 要求「以质量词开头」，这是渠道硬性写法，不算对照变量。
+# 其余（人物 + 动作串）与 anima 逐字相同，这样才能回答「同一个 tag 串换个编码器行不行」。
+KREA2_PREFIX = "masterpiece, best quality, ultra-detailed, absurdres, "
+
+# NL 版默认没有任何画风词 → krea2 会出写实真人。要二次元就在句子前面补一句
+# `anime style, 2d illustration, cel shading`，验证「关系对 + 画风对」能不能同时成立。
+ANIME_PREFIX = "anime style, 2d illustration, cel shading, "
+
+
+def _drop_other(tags):
+    """把 `1other` 去掉。krea2 这条编码器会把 1other 实体化成第二个真人
+    （03 出双胞胎、06 直接变两个女生互抱），而 POV 里观众不该有身体。"""
+    out = [t.strip() for t in tags.split(",") if t.strip()]
+    return ", ".join(t for t in out if t not in ("1other", "2others", "other"))
+
+
+def prompt_for(sc, skill, style="tag", no_other=False, anime=False):
+    """moss 吃自然语言；silver / anima-line 都是 tag 渠道，用同一串。
+
+    krea2 系两种都吃（编码器是 qwen3vl-4b，本质是个小 VLM）：
+      style="tag" → 质量前缀 + 与 anima 逐字相同的 tag 串（单变量：只换模型）
+      style="nl"  → 与 moss 同一份自然语言句（问「换个会读句子的编码器，4B 够不够」）
+    默认 tag，保证和上一轮 silver 的对照口径一致。
+    """
     if skill == "moss":
         return sc.get("nl") or NL[sc["id"]]
-    return full_prompt(sc)
+    if style == "nl":
+        nl = sc.get("nl") or NL[sc["id"]]
+        return (ANIME_PREFIX + nl) if anime else nl
+    p = full_prompt(sc)
+    if no_other:
+        # 只剥 1other，pov / pov_hands 全留着 —— 单变量：验证「实体化观众」是它造成的
+        p = p.replace("1girl, solo_focus, 1other, ", "1girl, solo_focus, ")
+    if skill.startswith("krea2"):
+        return KREA2_PREFIX + p
+    return p
 
 
 def check_tags(pool=None, verbose=True):
@@ -310,9 +341,10 @@ def full_prompt(sc):
 
 # ── 出图 ─────────────────────────────────────────────────
 
-def render_one(sc, out_dir, opts, seed=None, skill=None, timeout_hint=None):
+def render_one(sc, out_dir, opts, seed=None, skill=None, timeout_hint=None,
+               style="tag", no_other=False, anime=False):
     skill = skill or SKILL
-    prompt = prompt_for(sc, skill)
+    prompt = prompt_for(sc, skill, style, no_other, anime)
     seed = seed if seed is not None else comic._new_seed()
     wf = generate_image.build_t2i_workflow(skill, prompt, seed)
     if wf is None:
@@ -345,6 +377,14 @@ def main():
                     help="出图渠道：anima-line（默认）/ silver / moss。"
                          "换渠道时只改尺寸，采样参数用模板自己的（见 native_opts）")
     ap.add_argument("--size", default="", help="如 808x1024")
+    ap.add_argument("--style", default="tag", choices=["tag", "nl"],
+                    help="提示词形态：tag（默认，与 anima 逐字相同）/ nl（自然语言句）。"
+                         "moss 恒用 nl；krea2 两种都试得通，用来分清是「模型不行」还是"
+                         "「tag 这种写法不行」")
+    ap.add_argument("--no-other", action="store_true",
+                    help="从 tag 串里去掉 1other（krea2 会把它实体化成第二个真人）")
+    ap.add_argument("--anime", action="store_true",
+                    help="nl 版前面补画风词（anime style, 2d illustration, cel shading）")
     ap.add_argument("--scale", type=float, default=1.1, help="latent 放大倍率")
     ap.add_argument("--restart-after", type=int, default=5,
                     help="每出几张重启一次 ComfyUI（0 = 不主动重启）")
@@ -384,7 +424,9 @@ def main():
     if args.dry:
         for sc in todo:
             print("[%02d%s] %s\n%s\n" % (sc["id"], sc.get("arm", ""),
-                                         sc["name"], prompt_for(sc, args.skill)))
+                                         sc["name"],
+                                         prompt_for(sc, args.skill, args.style,
+                                                    args.no_other, args.anime)))
         return
 
     mine = args.skill == SKILL                     # 还是不是原来那个 tag 渠道
@@ -404,12 +446,26 @@ def main():
             print("尺寸覆盖为 %dx%d" % (opts["width"], opts["height"]))
         if args.skill == "moss":
             print("⚠️ moss 用自然语言提示词（NL 表），不吃 tag")
+        elif args.style == "nl":
+            print("提示词形态：自然语言句（与 moss 同一份 NL 表）")
+        elif args.skill.startswith("krea2"):
+            print("提示词形态：tag（质量前缀 + 与 anima 逐字相同的串）")
 
     stamp = time.strftime("%Y%m%d_%H%M")
     if args.ab:
         tag = "ab"
     else:
         tag = "b%s" % (args.batch if not args.only else "sel")
+    if args.style == "nl" and args.skill != "moss":
+        # 同一题在 tag / nl 两种写法下都要跑时，文件名必须自明，否则后一张覆盖前一张
+        tag += "_nl"
+        todo = [dict(s, key="%s_NL" % s["key"]) for s in todo]
+    if args.no_other:
+        tag += "_noother"
+        todo = [dict(s, key="%s_NOOTHER" % s["key"]) for s in todo]
+    if args.anime:
+        tag += "_anime"
+        todo = [dict(s, key="%s_ANIME" % s["key"]) for s in todo]
     if not mine:
         tag = "%s_%s" % (args.skill, tag)
     out_dir = "web/pov手势_%s_%s" % (stamp, tag)
@@ -425,14 +481,17 @@ def main():
                                             sc["point"]))
         try:
             rec = render_one(sc, out_dir, opts, seed=args.seed,
-                             skill=args.skill)
+                             skill=args.skill, style=args.style,
+                             no_other=args.no_other, anime=args.anime)
             ok += 1
             print("    ✓ %.1f 秒  seed %s  → %s" % (rec["seconds"], rec["seed"],
                                                    os.path.basename(rec["file"])))
         except Exception as exc:                       # 单张失败不拖垮整批
             rec = {"no": sc["id"], "key": sc["key"], "arm": sc.get("arm"),
                    "skill": args.skill, "name": sc["name"],
-                   "prompt": prompt_for(sc, args.skill), "error": str(exc)}
+                   "prompt": prompt_for(sc, args.skill, args.style,
+                                        args.no_other, args.anime),
+                   "error": str(exc)}
             print("    ✗ 失败：%s" % exc)
         manifest.append(rec)
         if args.restart_after and i % args.restart_after == 0 and i < len(todo):
