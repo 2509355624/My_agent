@@ -58,6 +58,33 @@ OUT_ROOT = os.path.join(ROOT, "dist", "pov_hands")
 # 统一的人物锚：手部测试不需要换装，同一套外观才能横向比
 GIRL = "black_hair, long_hair, brown_eyes, white_shirt, pleated_skirt"
 
+# 同一批场景的**自然语言版**（moss 用）。moss 的编码器吃句子不吃 tag，
+# 所以不能拿 tag 串硬塞；只有这几个要在多渠道上比，一条条写比机器翻译准。
+# ⚠️ 固定串里只放「不随场景变的属性」，手持物/动作一律写进这一格的句子。
+NL = {
+    1: "First-person point of view, the camera is the viewer's eyes. A young woman "
+       "with long black hair, a white shirt and a pleated skirt walks ahead down a "
+       "sunset street, looking back over her shoulder at the viewer. One of the "
+       "viewer's hands enters from the bottom of the frame and holds hers; her "
+       "other hand hangs at her side. Only one of the viewer's hands is visible.",
+    2: "First-person point of view, the camera is the viewer's eyes. A young woman "
+       "sits on a wooden floor and leans forward, watching her own shoes. The "
+       "viewer's two hands come into the lower part of the frame and tie her "
+       "shoelaces; her hands rest on her knees and do not touch the shoes.",
+    3: "First-person point of view, the camera is the viewer's eyes. The viewer's "
+       "hand cups the cheek of a young woman who looks straight into the camera and "
+       "blushes. Her own hands stay down and out of frame; only one hand of the "
+       "viewer is visible.",
+    6: "First-person point of view from behind. The viewer's two hands reach around "
+       "the waist of a young woman seen from the back and meet in front of her "
+       "belly; her own hands rest on top of them. The viewer's arms are only "
+       "half-visible at the left and right edges of the frame.",
+    10: "First-person point of view, the camera is the viewer's eyes. The viewer's "
+        "two hands adjust the red scarf at the throat of a young woman who looks at "
+        "the camera; the fingers touch the scarf, not the air. Her own hands stay "
+        "at her sides.",
+}
+
 # ── 场景表 ────────────────────────────────────────────────
 # point = 这张要验什么；期望 = 数手时的参考答案（观众 2 只 + 她 2 只）
 SCENARIOS = [
@@ -230,6 +257,28 @@ def _tag_set():
     return s
 
 
+def native_opts(skill, size=None):
+    """**换成别的渠道时只改尺寸**，采样参数一律用模板自己的。
+
+    为什么：这一轮要回答的是「同一个场景，换个模型能不能指挥对」，不是
+    「同一套 LoRA/步数在不同模型上效果如何」。把 anima 的 6 槽 LoRA 和
+    10+10 步塞给 silver / moss，等于换了模型又换了参数，出了图也说不清是
+    谁的功劳。silver 的 12+8 步、moss 的 4 步 DMD 就是它们各自的日常设置。
+    """
+    opts = {}
+    if size:
+        w, h = size.lower().split("x")
+        opts["width"], opts["height"] = int(w), int(h)
+    return opts
+
+
+def prompt_for(sc, skill):
+    """moss 吃自然语言；silver / anima-line 都是 tag 渠道，用同一串。"""
+    if skill == "moss":
+        return sc.get("nl") or NL[sc["id"]]
+    return full_prompt(sc)
+
+
 def check_tags(pool=None, verbose=True):
     """只检测、不拦截：缺哪个标签报出来，照样能跑（模型可能认得近义词）。"""
     pool = pool or SCENARIOS
@@ -261,22 +310,25 @@ def full_prompt(sc):
 
 # ── 出图 ─────────────────────────────────────────────────
 
-def render_one(sc, out_dir, opts, seed=None, timeout_hint=None):
-    prompt = full_prompt(sc)
+def render_one(sc, out_dir, opts, seed=None, skill=None, timeout_hint=None):
+    skill = skill or SKILL
+    prompt = prompt_for(sc, skill)
     seed = seed if seed is not None else comic._new_seed()
-    wf = generate_image.build_t2i_workflow(SKILL, prompt, seed)
+    wf = generate_image.build_t2i_workflow(skill, prompt, seed)
     if wf is None:
-        raise RuntimeError("渠道 %s 没有文生图工作流" % SKILL)
-    wf = comic_render_opts.apply(wf, opts)
+        raise RuntimeError("渠道 %s 没有文生图工作流" % skill)
+    if opts:
+        wf = comic_render_opts.apply(wf, opts)
     t0 = time.time()
     name = comic._submit_retry(
-        lambda: comic._submit(wf, SKILL, prompt, seed, out_dir=out_dir),
+        lambda: comic._submit(wf, skill, prompt, seed, out_dir=out_dir),
         "[%02d %s]" % (sc["id"], sc["key"]))
     dst = os.path.join(OUT_ROOT, os.path.basename(out_dir),
                        "%02d_%s.png" % (sc["id"], sc["key"]))
     comic._download(name, dst)
     secs = time.time() - t0
     return {"no": sc["id"], "key": sc["key"], "arm": sc.get("arm"),
+            "skill": skill,
             "name": sc["name"], "point": sc["point"], "expect": sc["expect"],
             "prompt": prompt, "seed": seed,
             "seconds": round(secs, 1), "file": dst}
@@ -289,6 +341,9 @@ def main():
                     help="三路对照：上一轮失败的 5 题 × A/B/C = 15 张")
     ap.add_argument("--only", default="", help="编号，逗号分隔，如 3,7（--ab 下可写 1A,2C）")
     ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--skill", default=SKILL,
+                    help="出图渠道：anima-line（默认）/ silver / moss。"
+                         "换渠道时只改尺寸，采样参数用模板自己的（见 native_opts）")
     ap.add_argument("--size", default="", help="如 808x1024")
     ap.add_argument("--scale", type=float, default=1.1, help="latent 放大倍率")
     ap.add_argument("--restart-after", type=int, default=5,
@@ -329,20 +384,34 @@ def main():
     if args.dry:
         for sc in todo:
             print("[%02d%s] %s\n%s\n" % (sc["id"], sc.get("arm", ""),
-                                         sc["name"], full_prompt(sc)))
+                                         sc["name"], prompt_for(sc, args.skill)))
         return
 
-    check_tags(todo)
-    opts = build_opts(scale_by=args.scale, size=args.size or None)
-    print("参数：%dx%d / latent ×%.2f / %s" % (
-        opts["width"], opts["height"], opts["upscale"]["scale_by"],
-        comic_render_opts.describe(opts)))
+    mine = args.skill == SKILL                     # 还是不是原来那个 tag 渠道
+    if mine:
+        check_tags(todo)
+        opts = build_opts(scale_by=args.scale, size=args.size or None)
+        print("参数：%dx%d / latent ×%.2f / %s" % (
+            opts["width"], opts["height"], opts["upscale"]["scale_by"],
+            comic_render_opts.describe(opts)))
+    else:
+        opts = native_opts(args.skill, args.size or None)
+        cap = comic_render_opts.caps_of(args.skill)
+        print("渠道 %s：模板 %dx%d，采样参数用模板自己的（%s）" % (
+            args.skill, cap.get("width") or 0, cap.get("height") or 0,
+            "可改" if cap.get("editable") else "不可改"))
+        if opts:
+            print("尺寸覆盖为 %dx%d" % (opts["width"], opts["height"]))
+        if args.skill == "moss":
+            print("⚠️ moss 用自然语言提示词（NL 表），不吃 tag")
 
     stamp = time.strftime("%Y%m%d_%H%M")
     if args.ab:
         tag = "ab"
     else:
         tag = "b%s" % (args.batch if not args.only else "sel")
+    if not mine:
+        tag = "%s_%s" % (args.skill, tag)
     out_dir = "web/pov手势_%s_%s" % (stamp, tag)
     os.makedirs(os.path.join(OUT_ROOT, os.path.basename(out_dir)), exist_ok=True)
     print("出图目录：dist/pov_hands/%s/" % os.path.basename(out_dir))
@@ -355,14 +424,15 @@ def main():
                                             sc.get("arm", ""), sc["name"],
                                             sc["point"]))
         try:
-            rec = render_one(sc, out_dir, opts, seed=args.seed)
+            rec = render_one(sc, out_dir, opts, seed=args.seed,
+                             skill=args.skill)
             ok += 1
             print("    ✓ %.1f 秒  seed %s  → %s" % (rec["seconds"], rec["seed"],
                                                    os.path.basename(rec["file"])))
         except Exception as exc:                       # 单张失败不拖垮整批
             rec = {"no": sc["id"], "key": sc["key"], "arm": sc.get("arm"),
-                   "name": sc["name"],
-                   "prompt": full_prompt(sc), "error": str(exc)}
+                   "skill": args.skill, "name": sc["name"],
+                   "prompt": prompt_for(sc, args.skill), "error": str(exc)}
             print("    ✗ 失败：%s" % exc)
         manifest.append(rec)
         if args.restart_after and i % args.restart_after == 0 and i < len(todo):
