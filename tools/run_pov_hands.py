@@ -23,6 +23,12 @@
     # 第二批 8 个进阶场景
     python tools/run_pov_hands.py --batch 2
 
+    # 三路对照：上一轮失败的 5 题 × A/B/C = 15 张（每张只改一个变量）
+    python tools/run_pov_hands.py --ab
+
+    # 三路对照只要其中几条
+    python tools/run_pov_hands.py --ab --only 1A,2C,10B
+
     # 单跑某几个（编号见 --list）
     python tools/run_pov_hands.py --only 3,7
 
@@ -124,6 +130,74 @@ SCENARIOS = [
 ]
 
 
+# ── 三路对照（A/B/C）─────────────────────────────────────
+# 上一轮 13 张里 7 张跑偏。这一轮不换题，只拿失败的 5 个题各做三种**单变量**改法，
+# 每张只动一个东西，这样成了知道为什么成、败了知道是谁的锅：
+#
+#   A：pov_hands → artist's_hand_in_frame
+#      两种标签语义不同：pov_hands = 观众的两只手都在画面里（所以单动作会长出第二只），
+#      artist's_hand_in_frame = 画师的手入境（Booru 原生标签，允许只出一只）。
+#   B：改成接触点特写（去掉 upper_body，加 close-up）
+#      上一轮唯一手部最清楚的是 12 号戒指特写 → 假设「特写能救落点」。
+#   C：把手的目标从**离散物件**换成**身体部位**
+#      手对鞋/头/围巾会丢失落点（模型不知道手该放哪，因为物件太小、位置自由）；
+#      换成 hand_on_another's_foot / _waist / _neck 这类「挂在身上」的标签。
+#      这条是从 08 擦泪（手↔脸）成功反推的。
+AB_ARMS = {
+    "A": dict(name="artist's_hand_in_frame（换手部标签）",
+              note="只换一个标签，验证 pov_hands 是不是「多出一只手」的元凶"),
+    "B": dict(name="接触点特写（去 upper_body + close-up）",
+              note="验证「拉近到接触点」能否救回落点"),
+    "C": dict(name="落点改到身体部位",
+              note="验证手对身体比手对物件稳"),
+}
+
+
+def _arm_tags(base_tags, arm):
+    """按 arm 改写 base_tags。必须是纯函数，方便单测。"""
+    tags = [t.strip() for t in base_tags.split(",") if t.strip()]
+
+    if arm == "B":
+        tags = [t for t in tags if t != "upper_body"]
+        if "close-up" not in tags:
+            tags.insert(0, "close-up")
+    return ", ".join(tags)
+
+
+# 每个失败场景的 C 路：把「手→物件」换成「手→身体」
+C_SWAP = {
+    1: ("holding_hands, interlocked_fingers",
+        "hand_on_another's_hand"),
+    2: ("shoes, shoelaces",
+        "hand_on_another's_foot, shoes"),
+    3: ("upper_body", "from_side, upper_body"),      # 单手捧一侧脸，侧脸更自然
+    6: ("arm_around_another's_waist", "hand_on_another's_waist"),
+    10: ("adjusting_clothes, scarf", "hand_on_another's_neck, scarf"),
+}
+
+AB_BASE = [1, 2, 3, 6, 10]          # 上一轮跑偏的五个
+
+
+def ab_variants():
+    """生成 5 题 × 3 路 = 15 条，顺序按 arm 聚在一起（同一版式连着看更好比）。"""
+    by_id = {s["id"]: s for s in SCENARIOS}
+    out = []
+    for arm in ("A", "B", "C"):
+        for sid in AB_BASE:
+            sc = by_id[sid]
+            tags = _arm_tags(sc["tags"], arm)
+            if arm == "C":
+                old, new = C_SWAP[sid]
+                tags = tags.replace(old, new)
+            out.append(dict(sc, id=sid, arm=arm,
+                            tags=tags,
+                            key="%s_%s" % (sc["key"], arm),
+                            name="%s · %s" % (sc["name"], arm),
+                            point="%s ｜ %s" % (AB_ARMS[arm]["name"],
+                                               AB_ARMS[arm]["note"])))
+    return out
+
+
 # ── 参数 ─────────────────────────────────────────────────
 
 def build_opts(scale_by=1.1, size=None):
@@ -156,14 +230,15 @@ def _tag_set():
     return s
 
 
-def check_tags(verbose=True):
+def check_tags(pool=None, verbose=True):
     """只检测、不拦截：缺哪个标签报出来，照样能跑（模型可能认得近义词）。"""
+    pool = pool or SCENARIOS
     known = _tag_set()
     if known is None:
         print("⚠️ 找不到标签库：%s" % TAGS_TSV)
         return []
     bad = []
-    for sc in SCENARIOS:
+    for sc in pool:
         tags = [t.strip() for t in full_prompt(sc).split(",") if t.strip()]
         miss = [t for t in tags if t not in known and t != "safe"]
         if miss:
@@ -172,13 +247,16 @@ def check_tags(verbose=True):
                 print("[%02d %-18s] 库中没有：%s" % (sc["id"], sc["key"],
                                                   "、".join(miss)))
     if verbose and not bad:
-        print("✓ 13 个场景的标签全部在库里")
+        print("✓ %d 条提示词的标签全部在库里" % len(pool))
     return bad
 
 
 def full_prompt(sc):
-    return "safe, 1girl, solo_focus, 1other, pov, pov_hands, %s, %s" % (
-        GIRL, sc["tags"])
+    # A 路只换这一个标签：pov_hands 强制「观众两只手都在画」，artist's_hand_in_frame
+    # 允许只出一只（Booru 原生语义）。其余逐字相同，保证是单变量对照。
+    hand = ("artist's_hand_in_frame" if sc.get("arm") == "A" else "pov_hands")
+    return "safe, 1girl, solo_focus, 1other, pov, %s, %s, %s" % (
+        hand, GIRL, sc["tags"])
 
 
 # ── 出图 ─────────────────────────────────────────────────
@@ -198,8 +276,8 @@ def render_one(sc, out_dir, opts, seed=None, timeout_hint=None):
                        "%02d_%s.png" % (sc["id"], sc["key"]))
     comic._download(name, dst)
     secs = time.time() - t0
-    return {"no": sc["id"], "key": sc["key"], "name": sc["name"],
-            "point": sc["point"], "expect": sc["expect"],
+    return {"no": sc["id"], "key": sc["key"], "arm": sc.get("arm"),
+            "name": sc["name"], "point": sc["point"], "expect": sc["expect"],
             "prompt": prompt, "seed": seed,
             "seconds": round(secs, 1), "file": dst}
 
@@ -207,7 +285,9 @@ def render_one(sc, out_dir, opts, seed=None, timeout_hint=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--batch", default="1", choices=["1", "2", "all"])
-    ap.add_argument("--only", default="", help="编号，逗号分隔，如 3,7")
+    ap.add_argument("--ab", action="store_true",
+                    help="三路对照：上一轮失败的 5 题 × A/B/C = 15 张")
+    ap.add_argument("--only", default="", help="编号，逗号分隔，如 3,7（--ab 下可写 1A,2C）")
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--size", default="", help="如 808x1024")
     ap.add_argument("--scale", type=float, default=1.1, help="latent 放大倍率")
@@ -219,37 +299,50 @@ def main():
     args = ap.parse_args()
 
     if args.list or args.check_tags:
-        for sc in SCENARIOS:
-            print("[%02d] batch%d %-18s %s" % (sc["id"], sc["batch"],
+        pool = ab_variants() if args.ab else SCENARIOS
+        for sc in pool:
+            print("[%02d] batch%d %-22s %s" % (sc["id"], sc["batch"],
                                               sc["key"], sc["name"]))
             if args.check_tags:
                 print("     %s" % full_prompt(sc))
-        check_tags()
+        check_tags(pool)
         return
 
-    todo = SCENARIOS
-    if args.only:
-        want = {int(x) for x in args.only.replace("，", ",").split(",") if x.strip()}
-        todo = [s for s in SCENARIOS if s["id"] in want]
-    elif args.batch != "all":
-        todo = [s for s in SCENARIOS if s["batch"] == int(args.batch)]
+    if args.ab:
+        todo = ab_variants()
+        if args.only:
+            want = {x.strip().upper()
+                    for x in args.only.replace("，", ",").split(",") if x.strip()}
+            todo = [s for s in todo if "%d%s" % (s["id"], s["arm"]) in want]
+    else:
+        todo = SCENARIOS
+        if args.only:
+            want = {int(x) for x in
+                    args.only.replace("，", ",").split(",") if x.strip()}
+            todo = [s for s in SCENARIOS if s["id"] in want]
+        elif args.batch != "all":
+            todo = [s for s in SCENARIOS if s["batch"] == int(args.batch)]
     if not todo:
         print("没有要跑的场景")
         return
 
     if args.dry:
         for sc in todo:
-            print("[%02d] %s\n%s\n" % (sc["id"], sc["name"], full_prompt(sc)))
+            print("[%02d%s] %s\n%s\n" % (sc["id"], sc.get("arm", ""),
+                                         sc["name"], full_prompt(sc)))
         return
 
-    check_tags(verbose=True)
+    check_tags(todo)
     opts = build_opts(scale_by=args.scale, size=args.size or None)
     print("参数：%dx%d / latent ×%.2f / %s" % (
         opts["width"], opts["height"], opts["upscale"]["scale_by"],
         comic_render_opts.describe(opts)))
 
     stamp = time.strftime("%Y%m%d_%H%M")
-    tag = "b%s" % (args.batch if not args.only else "sel")
+    if args.ab:
+        tag = "ab"
+    else:
+        tag = "b%s" % (args.batch if not args.only else "sel")
     out_dir = "web/pov手势_%s_%s" % (stamp, tag)
     os.makedirs(os.path.join(OUT_ROOT, os.path.basename(out_dir)), exist_ok=True)
     print("出图目录：dist/pov_hands/%s/" % os.path.basename(out_dir))
@@ -258,15 +351,17 @@ def main():
     manifest = []
     ok = 0
     for i, sc in enumerate(todo, 1):
-        print("\n[%d/%d] %02d %s —— %s" % (i, len(todo), sc["id"],
-                                          sc["name"], sc["point"]))
+        print("\n[%d/%d] %02d%s %s —— %s" % (i, len(todo), sc["id"],
+                                            sc.get("arm", ""), sc["name"],
+                                            sc["point"]))
         try:
             rec = render_one(sc, out_dir, opts, seed=args.seed)
             ok += 1
             print("    ✓ %.1f 秒  seed %s  → %s" % (rec["seconds"], rec["seed"],
                                                    os.path.basename(rec["file"])))
         except Exception as exc:                       # 单张失败不拖垮整批
-            rec = {"no": sc["id"], "key": sc["key"], "name": sc["name"],
+            rec = {"no": sc["id"], "key": sc["key"], "arm": sc.get("arm"),
+                   "name": sc["name"],
                    "prompt": full_prompt(sc), "error": str(exc)}
             print("    ✗ 失败：%s" % exc)
         manifest.append(rec)
