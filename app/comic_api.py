@@ -73,6 +73,43 @@ def _comfy_state():
         _COMFY_CACHE["at"] = now
     return _COMFY_CACHE["up"]
 
+# ─── 视角模式（pov / free，2026-10-22）────────────────────────
+#
+# 存在任务目录的 `mode.json`（`{"pov_mode": "free"}`），不用 state.json：
+# state.json 由 `comic.Task` 管、字段有它自己的口径（渲染进度），而视角模式是
+# **创作口径**，在剧本还没写完时就定了，塞进去得先建 Task 对象，反而绕。
+#
+# ⚠️ 为什么要落盘而不是只从前端带：「重新补正」和「修订助手」都是之后单独触发
+# 的请求，那时前端不一定会把模式带上。不读这个文件，补正员会拿着 POV 硬规则把
+# 作者刚写好的双人剧本又改回单人——这是模式切换最容易踩的坑。
+_POV_MODES = ("pov", "free")
+
+
+def _norm_pov_mode(v):
+    """归一成一个合法模式，认不出来就当 pov（默认永远是保守那一侧）。"""
+    v = str(v or "").strip().lower()
+    return v if v in _POV_MODES else "pov"
+
+
+def _write_pov_mode(path, mode):
+    """把这一话的视角模式记进任务目录。写不进去只记日志——不影响出稿。"""
+    try:
+        with open(os.path.join(path, "mode.json"), "w", encoding="utf-8") as f:
+            json.dump({"pov_mode": mode}, f, ensure_ascii=False)
+    except OSError as exc:
+        comic.log.warning("写 mode.json 失败 %s：%s", path, exc)
+
+
+def _read_pov_mode(path):
+    """读任务的视角模式；没有 / 坏了 / 值不认识都退回 pov（老任务全是 POV）。"""
+    try:
+        with open(os.path.join(path, "mode.json"), encoding="utf-8") as f:
+            m = json.load(f).get("pov_mode")
+    except (OSError, ValueError):
+        return "pov"
+    return _norm_pov_mode(m)
+
+
 # 编剧任务：{job_id: {...}}。与 _JOBS 分开——_JOBS 以**任务目录**为键（要等
 # 剧本落盘才知道目录名），而编剧任务在剧本写出来之前就得有个句柄给前端轮询。
 _SCRIPT_JOBS = {}
@@ -408,6 +445,8 @@ def api_comic_tasks():
                 item["prev"] = f.read().strip()
         except OSError:
             pass
+        # 这一集编剧时用的视角模式（老任务没有 mode.json → pov）
+        item["pov_mode"] = _read_pov_mode(path)
         out.append(item)
 
     def _key(it):
@@ -454,6 +493,9 @@ def api_comic_script():
         no_search = no_search.strip().lower() not in ("", "0", "false", "no", "off")
     else:
         no_search = bool(no_search)
+    # 视角模式（2026-10-22）：pov = 全篇第一人称硬规则（默认，与之前完全一样）；
+    # free = 不加 POV 硬性规则，机位由编剧按规范自己挑（可以双人同框）。
+    pov_mode = _norm_pov_mode(data.get("pov_mode"))
     # 连载（2026-10-18）：prev = 上一集的任务号，给了就把它的气泡+旁白当前情。
     # 目录名过一遍 `_task_dir` 校验（它挡住 `..` 和绝对路径），指不到就当没给。
     prev = str(data.get("prev") or "").strip()
@@ -489,7 +531,7 @@ def api_comic_script():
             text = comic_agent.write_script(
                 brief, panels=panels_n, character=character,
                 provider=provider, model=model, progress=_progress,
-                prev=prev_text, no_search=no_search)
+                prev=prev_text, no_search=no_search, pov_mode=pov_mode)
             # 目录**不再在这里建**：名字要带剧本标题，得等拿到稿子（见下面
             # `final` 那一段）。失败的 job 仍然不留空目录。
 
@@ -504,7 +546,8 @@ def api_comic_script():
             _progress("编剧交稿，开始补正")
             try:
                 fix = comic_agent.fix_script(brief, text, provider=provider,
-                                             model=model, progress=_progress)
+                                             model=model, progress=_progress,
+                                             pov_mode=pov_mode)
             except Exception as exc:            # 补正绝不许拖垮编剧
                 comic.log.exception("补正失败 job=%s", job)
                 fix = {"text": text, "issues": [], "diff": [], "adopted": False,
@@ -530,6 +573,9 @@ def api_comic_script():
             # brief 落盘：手动重跑补正时要拿它当「原始需求」。
             with open(os.path.join(path, "brief.txt"), "w", encoding="utf-8") as f:
                 f.write(brief + "\n")
+            # 视角模式落盘：之后单独触发的「重新补正」「修订助手」靠它判断该用哪套
+            # 视角规则（不落盘它们就只能退回 pov，把双人剧本改回单人）。
+            _write_pov_mode(path, pov_mode)
             # 上一集是谁也记一笔：下一集接着接的时候，下拉里能看出这条链。
             if prev:
                 with open(os.path.join(path, "prev.txt"), "w",
@@ -540,7 +586,7 @@ def api_comic_script():
             with _SCRIPT_LOCK:
                 _SCRIPT_JOBS[job].update(state="done", script=final,
                                          original=text, task=os.path.basename(path),
-                                         fix=report)
+                                         fix=report, pov_mode=pov_mode)
             comic.log.info("编剧完成 job=%s → %s（补正 %s）", job,
                            os.path.basename(path),
                            "采纳" if fix.get("adopted") else "未采纳")
@@ -770,7 +816,8 @@ def api_comic_fix():
     def _work():
         fix = comic_agent.fix_script(
             brief, original, provider=provider, model=model,
-            progress=lambda m: comic.log.info("[comic-fix] %s", m))
+            progress=lambda m: comic.log.info("[comic-fix] %s", m),
+            pov_mode=_read_pov_mode(path))
         final = fix.get("text") or original
         with open(os.path.join(path, "script.md"), "w", encoding="utf-8") as f:
             f.write(final + "\n")
@@ -798,7 +845,7 @@ def api_comic_script_text():
         path = _task_dir(request.args.get("task"))
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
-    out = {"ok": True}
+    out = {"ok": True, "pov_mode": _read_pov_mode(path)}
     for key, name in (("script", "script.md"), ("original", "script_original.md")):
         fp = os.path.join(path, name)
         if os.path.isfile(fp):
@@ -1183,7 +1230,8 @@ def api_comic_chat_revise():
     def _work():
         r = comic_agent.chat_revise(script, message, brief=brief,
                                     history=history[-8:],        # 最近 4 轮够用了
-                                    provider=provider, model=model)
+                                    provider=provider, model=model,
+                                    pov_mode=_read_pov_mode(path))
         reply = r.get("reply") or ""
         if r.get("changed") and r.get("script"):
             # 单级回退：改前整份备份。改两次只有最近一次可撤销——再早的用

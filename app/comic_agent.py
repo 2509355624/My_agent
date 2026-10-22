@@ -859,7 +859,7 @@ def invented_names(text, allowed):
     return out
 
 
-def collect_issues(text, brief="", original=""):
+def collect_issues(text, brief="", original="", pov_mode="pov"):
     """把代码判据能发现的问题整理成**结构化清单**，供补正 AI 与界面使用。
 
     这是 2026-10-11 十轮定下的分工：代码负责「算得出来的事实」，补正 AI 只负责
@@ -874,6 +874,9 @@ def collect_issues(text, brief="", original=""):
     invented_name。
     """
     issues = []
+    # 自由视角模式：下面 7 条 POV 判据整组停用（2026-10-22 用户拍板）。
+    # 它们都以「全篇第一人称」为前提，模式换了前提就没了。其余判据照旧。
+    free = pov_mode == "free"
 
     def _add(kind, pairs, detail, by_tag=True):
         for no, tag in pairs:
@@ -891,7 +894,7 @@ def collect_issues(text, brief="", original=""):
         issues.append({"no": no, "kind": "duplicate_wearable", "tag": cat,
                        "detail": "这一格把「%s」写了两次（是同一件东西），"
                                  "合并成一个标签、颜色写在里面" % cat})
-    for no, tag in solo_conflicts(text):
+    for no, tag in (() if free else solo_conflicts(text)):
         issues.append({"no": no, "kind": "solo_conflict", "tag": tag,
                        "detail": "这一格写了 `solo` 又要求第二方入画，把 `solo` "
                                  "换成 `solo focus` 并补 `1other`（**不许写 "
@@ -900,30 +903,30 @@ def collect_issues(text, brief="", original=""):
         issues.append({"no": no, "kind": "banned_tag", "tag": tag,
                        "detail": "`%s` 语义错（没说清是谁的手），换成 "
                                  "`holding another's wrist`" % tag})
-    for no, tag in pov_conflicts(text):
+    for no, tag in (() if free else pov_conflicts(text)):
         issues.append({"no": no, "kind": "pov_conflict", "tag": tag,
                        "detail": "画面里只允许女主一个人：男性角色是观众本人扮演"
                                  "的，只能以手入画（`pov hands` + 动作标签），"
                                  "删掉「%s」" % tag})
-    for no, tag in merged_people(text):
+    for no, tag in (() if free else merged_people(text)):
         issues.append({"no": no, "kind": "merged_people", "tag": tag,
                        "detail": "这一格写了 `%s`（两个人同框）却只写得出**一套**"
                                  "外貌：两个人的发型 / 瞳色 / 服饰要分开各写一套，"
                                  "并用一句英语短语点名谁是谁、谁对谁做" % tag})
-    for no, tag in female_pov_missing(text, brief):
+    for no, tag in (() if free else female_pov_missing(text, brief)):
         issues.append({"no": no, "kind": "female_pov", "tag": tag,
                        "detail": "这一话是女女向（百合），「我」是女性：把 `pov` "
                                  "换成 `female_pov`（`pov` 默认画出一只男人的手）"})
-    for no, tag in pov_missing(text):
+    for no, tag in (() if free else pov_missing(text)):
         issues.append({"no": no, "kind": "pov_missing", "tag": tag,
                        "detail": "这一格没写视角标签：全篇默认第一人称 POV，"
                                  "补 `pov`（女女向补 `female_pov`）"})
-    for no, tag in pov_mixed(text):
+    for no, tag in (() if free else pov_mixed(text)):
         issues.append({"no": no, "kind": "pov_mixed", "tag": tag,
                        "detail": "这一格的视角标签和整话其他格混用了（`pov` 与 "
                                  "`female_pov` 不许一半一半）：读需求确认镜头后"
                                  "的「我」是男是女，把「%s」统一成另一种" % tag})
-    for no, tag in pov_direction(brief, text):
+    for no, tag in (() if free else pov_direction(brief, text)):
         issues.append({"no": no, "kind": "pov_direction", "tag": tag,
                        "detail": "需求「视角:」行声明的性别和这一格的「%s」对不上："
                                  "按视角行改——男性视角全篇 `pov`，女性视角全篇 "
@@ -1021,18 +1024,58 @@ def _spec_text():
         return f.read()
 
 
-def _story_spec_text():
+# ─── 自由视角模式：把规范里的「唯一 POV」章节裁掉（2026-10-22）──
+#
+# ⚠️ 只靠 system 里加一句「第十一节本次不作数」压不住——9B 类模型处理不了自相
+# 矛盾的规则，大模型也常在两段里各听一半（实测常态）。所以按**代码切片**：注入
+# 前把规范里限定「全篇第一人称、不许双人」的部分整段删掉，模型根本看不到它。
+#
+# 裁两处，因为规范里说了两遍：
+#   ① 第十一节「镜头人称：全篇第一人称 POV」（含表 + 为什么），从标题到第十二节前；
+#   ② 第十二节「特别强调」第 7 条（三行总结）。
+# ⚠️ 用正则切标题，用户改规范时如果标题变了会切不中——**只记日志、不抛错**，
+# 让提示词带着原文跑（宁可多一条限制，也不能把编剧挂掉）。这是检测式，不是闸门。
+_POV_SECTION_RE = re.compile(r"\n## 十一、镜头人称.*?(?=\n## 十二、)", re.S)
+_POV_SUMMARY_RE = re.compile(r"\n7\. \*\*全篇第一人称 POV\*\*.*?(?=\n\nAI 的唯一任务)", re.S)
+# 第九节「常见错误对照」里那一行：拿「03 格写了 1girl, 1boy」当反例。自由模式下
+# 双人同框正是要写的东西，留着这一行等于在规范里埋一条反向指令。
+_POV_ERROR_ROW_RE = re.compile(r"\n\| 01/02 格 `pov hands`[^\n]*")
+_POV_CUTS = (_POV_SECTION_RE, _POV_SUMMARY_RE, _POV_ERROR_ROW_RE)
+
+
+def _strip_pov_sections(text):
+    """从规范全文里删掉「唯一 POV」那三处，返回 (新文本, 删了几处)。"""
+    if not text:
+        return text, 0
+    cut = 0
+    for rex in _POV_CUTS:
+        text, n = rex.subn("", text)
+        cut += n
+    if cut < len(_POV_CUTS):
+        log.warning("[自由视角] 规范里只切到 %d 处 POV 章节（应为 %d）——"
+                    "comic_spec.md 的标题可能改过了，检查 _POV_*_RE",
+                    cut, len(_POV_CUTS))
+    return text, cut
+
+
+def _story_spec_text(pov_mode="pov"):
     """《连续剧情提示词生成规范》全文（`app/comic_spec.md`，每次现读）。
 
     复用 `comic_writer._spec_text()`：同一份文件只该有一处读取逻辑，用户在
     comic_writer 那边改了路径/编码，这里跟着走。读不到不能让编剧挂掉——规范
     是增强，硬规则段还在。
+
+    pov_mode="free" 时把「全篇第一人称 POV」的两处章节裁掉（见上方说明）——
+    自由模式要回到规范原本的能力：单人与**男女双人**都写，机位自己挑。
     """
     try:
-        return comic_writer._spec_text()
+        text = comic_writer._spec_text()
     except OSError:
         log.warning("连续剧情规范读不到（%s）", comic_writer._SPEC_PATH)
         return ""
+    if pov_mode == "free":
+        text, _ = _strip_pov_sections(text)
+    return text
 
 
 # ─── 工具段：查库 / 不查库两版（2026-10-22）──────────────────
@@ -1104,194 +1147,12 @@ _NO_SEARCH_SECTION = """【这一次**没有工具**，不需要查任何东西�
   理解为「凭你已经知道的知识直接写」。
 """
 
-_SYSTEM_TMPL = """你是条漫分镜编剧，同时是 Anima 提示词工程师。
-
-你写的每一格 `画面:` 会**直接**喂给 Anima 生图工作流——它是**唯一的生图提示词**
-（`标签:` / `气泡:` 只是最后画到图上的文字，生图那一步看不到它们）。所以
-`画面:` 必须写得**清楚、具体、看得见**，每个词都得是画面模型认得的英文。
-Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有真实标签就优先用它，
-库里查不到但你能确定模型看得懂的英文短语也**照写**。写错一个词，画面就会错位、
-多手、甚至凭空多出一个人。
-
-【需求的固定格式（前两行是用户手写的硬约束，必须照办）】
-用户的需求按行组织，前两行是**声明**，后面的「剧情:」是正文：
-  视角: <镜头后的「我」是谁，例：哥哥>
-  主角: <画面里唯一入画的女主是谁，例：妹妹>
-  剧情: <这一话发生什么>
-- **「视角:」行是视角方性别的唯一权威**，绝对不许按自己的猜测推翻：
-  写男性（哥哥 / 爸爸 / 黄毛……）→ 全篇每一格 `pov`；写女性（姐姐 / 妹妹 /
-  学姐……）→ 全篇每一格 `female_pov`。2026-10-12《雨夜公交站》实测：需求
-  明明是哥哥视角，模型自作主张全篇写了 `female pov`——方向一错，整话作废。
-- **「主角:」行 = 画面里唯一入画的那个人**：所有外貌 / 服饰标签都是主角的；
-  视角方（「我」）永远不入画（见规则 14）。
-- 需求里没写这两行（旧格式一句话）：从剧情推断视角方和主角，推断结果在
-  第一格动笔前定死，整话不许再改。
-
-【整话必须是一条故事线——这是最容易不合格的一处】
-- 动笔前先在心里定一条线：这一话从哪开始、中间发生什么、最后一格落在哪。
-  多格就是「起 → 承 → 转」逐格推进，**不是同一个瞬间的三个切面**。
-- **旁白负责讲剧情，台词负责演情绪。** 别让每一格都只写「当下的表情」——
-  剧情要靠 `标签1:` `标签2:` 往前推。
-- **后一格不许推翻前一格已经建立的事实。** 反例（真实被打回过，别重犯）：
-    01 `气泡: （女）别跟着我……`   ← 她**已经知道**有人跟着
-    02 `气泡: （女）谁——！`      ← 又变成刚发现，前后矛盾
-  写台词前先问自己：她**此刻已经知道什么**？上一格已经告诉她的信息，
-  这一格不能装不知道。
-- 交稿前把每格的 `标签` + `气泡` 按顺序连起来读一遍，像读一条真的漫画：
-  **读得通才交稿**；读不通就重写那几格，不许硬交。
-
-__TOOLS__
-
-【画面字段的硬规则】（违反任何一条，这一格会被代码打回重写）
-1. **只能写逗号分隔的英文标签，绝不许出现句子。**
-   （**唯一的例外**：一格有两人及以上同框时，可以用**一句**简短英语短语把
-   「谁对谁做什么」点清楚——见规则 16。）
-   错：girl with watery eyes about to cry
-   对：tears, crying, looking down
-   错：the girl is standing at the bus door
-   对：standing, bus interior, automatic door
-   （⚠️ 别把"正在发生的动作"拆成姿势词组——`stepping off` / `one foot on ground`
-   这类是黑名单，见规则 8 和规则 11。）
-2. **顺序**：安全级 → 人数 → 主体特征（发型/瞳色/配饰）→ 服装 → 动作姿势 →
-   场景 → 构图镜头。同类标签聚在一起。
-3. **不要写质量词和画师 tag**（masterpiece / best quality / ultra-detailed /
-   absurdres / 画师名）——工作流模板已经钉好了，重复写只会稀释权重。
-4. **安全级必须有且只有一个**，只能从 safe / sensitive / nsfw / explicit 里选。
-   注意 **不是 `sfw`** —— `sfw` 不在 Anima 规范里，写了会被打回。
-5. **视角方（「我」）的手只在剧情真的需要时才入画——不要每格都加一只手。**
-   不需要时，那格就写 `1girl, solo`，别硬塞手部标签（硬塞的后果见规则 6）。
-   决定要入画时，抓别人的手腕只能写 `holding another's wrist`，不许写
-   `hand around wrist`，更不许把动作写成句子。
-   ⚠️ **`pov` / `female_pov` 只标记机位，不代表画面里有人。** 不需要手入画的
-   格，视角标签**只写 `pov`（或 `female_pov`）一个词**就是纯机位，画面里除主角
-   外**任何**身体部位、衣物、肢体影子都不许出现——「我」入画的**唯一通道**是
-   `pov hands` + `1other` + 手部动作标签，没有这条通道就当自己不存在。
-   2026-10-12《雨夜公交站》01 格实测：视角标签里多带了身体暗示，画面下角就
-   长出我们的腿——提了什么，模型就画什么（白熊效应），没提的部位一个词都
-   别写。
-   - 攥住/握住别人的手腕 → `holding another's wrist`
-     （这是**唯一**可用的写法。网上流传的别名 `grabbing another's wrist`、
-     `wrist grab` 在本库里**都不存在**，实测查过，别用。）
-   - 手只是搭在别人手腕上（没用力） → `hand on another's wrist`
-   - 镜头就是「我」的眼睛、那只手是「我」的 → 再加 `pov` + `pov hands`
-   - **「我」是女性（百合 / 女女向）时必须写 `female_pov`，而不是 `pov`。**
-     `pov` 的默认先验是**男性第一人称**，光写它实测会画出一只男人的手
-     （2026-10-12 用户实报：剧本明明白白是百合向，第一人称却成了男生的手）。
-     女女向写法：`female_pov, pov hands, holding another's wrist`
-   - 画面里只有手、看不到它的身体 → 再加 `disembodied hand` / `disembodied arm`
-   错：male hand grabbing her wrist from behind ← `male` 会画出整个人 + 多只手
-   错：hand around wrist ← 没写是谁的手，实测被画成「她自己抓自己手腕」
-   对：pov, pov hands, holding another's wrist ← 视角方的手攥住她的手腕
-   对：disembodied hand, holding another's wrist ← 只让一只手入画
-   查「手」「抓」「手腕」「牵着」把这些标签找齐再用，别查一个词就落笔。
-6. **人数标签只有两种写法（全篇第一人称 POV，画面里永远只有女主一个人）**：
-   - 我们的手**不**入画 → `1girl, solo`
-   - 我们的手或手臂入画 → `1girl, solo focus, 1other` + `pov hands` + 对应的
-     手部动作标签（**绝对不能再写 `solo`**）
-   - **任何情况下都不许写 `1boy` / `2girls`**（见规则 14）——剧情里的男性角色
-     （黄毛 / 哥哥 / 上司……）是**观众本人扮演的**，`1boy` 会让模型补出一个
-     **完整的人**：脸、身体、衣服全都有，观众就被拽进画面里了。
-   为什么：Danbooru 官方角色计数规则里「一只手也算一个角色」（原话
-   Disembodied hands and other body parts are counted）。写了 `solo` 又要画面
-   出现第二只手，两条指令自相矛盾——实测后果有三种：手变成她自己的、抓握
-   动作整个消失、或画出一团畸形的手。
-   观众（「我」）的**脸、身体、衣服一律不许出现**，只允许手或手臂入画，画面
-   仍以 `1girl` 开头。给「我」写 `black hoodie` / `grey pants` 这类服饰，等于
-   在说「画一个穿这些的人」，模型就会把整个人画出来（2026-10-11 实测：03 格
-   就是这么凭空多出一个男生的）。
-   ⚠️ 写了 `1other` 就必须**真的**让我们的手入画（手/手臂），并配上对应的
-   手部标签；这一格若根本没有手入画，就别写 `1other`，退回 `1girl, solo`。
-   实测坑：旁白写着「我攥住了她的手腕」，画面却只写 `solo focus, 1other` 而
-   不带任何手部标签——模型会把 `1other` 理解成「补一整个人进来」。
-7. 服饰颜色款式、灯光氛围每格写全并保持一致（见规范）。**物件走同一条规则**：
-   画面上任何看得见颜色的东西都要写颜色——`white in-ear earphones`，不许只写
-   `in-ear earphones`；`black backpack`，不许只写 `backpack`。跟服饰一样，每格
-   重复写、跨格保持一致，颜色第一次定下来就别再改。
-   ⚠️ **「写了款式 / 姿态」不等于「写了颜色」**——`backpack on one shoulder`、
-   `sailor collar`、`pleated skirt` 都还是没写颜色的裸写法，必须写成
-   `white backpack on one shoulder`、`white sailor collar`、`white pleated skirt`。
-   **整套的 `school uniform` / `uniform` 也一样**：裸写会在每格换个色，要写成
-   `white school uniform`，而且颜色词要跟里面单品（`white sailor collar`、
-   `navy pleated skirt`）用同一套（2026-10-12 实跑：模型连着两稿都写了裸的
-   `school uniform` + `sailor collar`，光这一条就把两稿预算烧完了）。
-   **每一件衣物、每一个随身物件都要带颜色**（衣领、裙子、背包、耳机、袜子……
-   一个都不能漏），代码会逐个查，漏了就打回重写。
-   ⚠️ **同一件东西只写一个标签**：`backpack` 和 `backpack on one shoulder` 是
-   同一件，两个都写模型会画**两个包**——合并成 `white backpack on one shoulder`。
-8. **下面这些词一律不许写**（逐条实测过的黑名单——不只是"库里没有"这么简单，
-   写下去一定会出问题；反过来，别拿这张表去类推别的词，也别因为某个词"库里
-   没有"就不敢写，见规则 12）：
-   `sfw`（用 safe）、
-   `arm grab`、`male hand`（用 pov hands 或 disembodied hand / disembodied arm）、
-   `medium shot`（用 upper body / cowboy shot / close-up）、
-   `soft lighting`、`cinematic lighting`（用 backlighting / sidelighting / dim lighting）、
-   `stepping off` / `getting off`、`one foot on ground`。
-   ⚠️ 「上车 / 下车」这类**瞬间动作**库里没有对应标签，但**不许**硬造一个姿势去顶替。
-   2026-10-11 实跑翻过车：这里原来写的是「用 `standing on one leg` 之类」，结果
-   旁白「她一只脚刚踏下车门」被逐字翻成了 `standing on one leg`，画出来是单脚
-   独立的芭蕾姿，跟下车毫无关系。正确做法见规则 11。
-
-   还有一个**反例**要专门记住：`hand around wrist` 库里**有**，但没写明是谁的手，
-   实测会被渲染成「她自己抓自己手腕」。要抓别人的手腕，只有
-   `holding another's wrist` 一条路（见规则 5）。
-9. **每格必须带来新信息，不许两格只是换表情演同一个动作。**
-   错：02 格和 03 格都是「攥着手腕、皱眉」，只是一个写着 surprised、一个写着
-   angry —— 观众看到的是同一格，剧情零推进。
-   对：每格都在往前推——她先挣，再回头看，然后说出一句让两人关系变化的话。
-   `气泡:` 同样要成线：三句话连起来应该是一个小故事（拒绝 → 动摇 → 让步），
-   而不是三句同义的情绪宣泄。
-   **台词不许倒退回已经演过的节拍——她知道了就是知道了，认过的面不许再认一次。**
-   错（2026-10-12《妈妈的味道》实测）：01 她已经隔着厨房喊「啊——回来啦！」，
-   04 却又「咦，哥哥回来啦？」——同一句「发现我回来」演了两遍，前后穿帮。
-   对：04 的台词必须接在 03 后面往前走（比如催洗手、让摆碗筷）。
-   **交稿前把全话气泡连起来读一遍**：后一句必须在前一句之后还成立；凡是把
-   前面某格删掉后读起来更通顺的「重复发现 / 重复问候 / 重复惊讶」，重写它。
-   **交稿前自己回看一遍**：把每格的 `画面:` + `气泡:` 摆在一起过一遍，凡是有
-   两格在讲同一件事，就重写其中一格（换动作、换空间、换关系状态），再交稿。
-10. **`标签1:`（可续到 `标签2:` `标签3:`）每一格都要写**（这是剧情的骨架，不是
-   可选项）；**每条气泡都要带说话人**（`（女）` 或 `（我）`）。两者格式见下面
-   「输出格式」。
-   **这类"差不多的写法"是本次最容易踩的坑**——凡是不确定的，先查库再写。
-
-11. **只有 `画面:` 是生图提示词。** `标签:` 和 `气泡:` **都不进生图提示词**——
-   它们是最后画到图上的**文字**（右上角旁白条 / 气泡），生图那一步根本看不到
-   它们。所以三者是有关联的，但**不是**「标签直接变成生图标签」这种关系：
-   - `画面:` 是**画面**——这一刻镜头里静止可见的样子：姿态、位置、服饰、表情、
-     景别、背景。**只有它进生图提示词。**
-   - `气泡:` 是**语言**——展示当下这个场景里她或「我」说了什么
-   - `标签:` 是**描述**——让观众知道发生了什么、剧情推进到哪
-
-   推论：`标签:` 里写的事件，生图阶段**完全不知道**。你不能指望「旁白写了一只
-   脚刚踏下车门，画面就自动画出来」——要让画面里出现什么，就必须写进 `画面:`，
-   而且只能写**看得见的样子**。
-   反例（2026-10-11 实跑）：旁白「她一只脚刚踏下车门」被逐字翻成画面
-   `standing on one leg`——那是单脚站立的芭蕾姿，跟下车毫无关系。正确写法：
-   画面写她站在车门处的状态（`standing, automatic_door, bus_interior`），
-   「一只脚刚踏下车门」这句话留在 `标签:` 讲。
-   同理，画面是**静态的一张图**：旁白「她猛回头」→ 画面写已经转过来的样子
-   `looking back`，不是正在转的 `turning head`。**凡是"正在发生的那一瞬"，
-   都不要塞进 `画面:`。**
-
-12. **《连续剧情提示词生成规范》高于 anima-tags 标签库，两者冲突时一律以规范
-   为准。** 这不是空话——**标签库里绝大多数"衣物 / 物件"标签本身就不带颜色**
-   （`pleated skirt`、`earphones`、`backpack` 全都是），照抄它们就等于违反规范
-   的「颜色+款式必须同时出现」。所以：
-   - 衣物：写 `navy pleated skirt`，**不能**只写 `pleated skirt`
-   - 物件：写 `white in-ear earphones`，**不能**只写 `in-ear earphones`
-   - `white uniform` 这种"整套"词要顺带把裙子写清：
-     `white uniform, navy pleated skirt`
-   - **同一件东西，每一格都要写同一个颜色。** 2026-10-11 实测：`pleated skirt`
-     没写颜色，三格画面里裙子一次深藏青、一次浅蓝——观众一眼就看出不是同一条
-     裙子。颜色在第一格定下来，后面每格照抄。
-
-13. **一格只能有一个明确地点，同一个地点的格子写同一组地点标签。** 不许把
-   `bus interior`（车厢内）和 `bus stop` / `outdoors` / `city`（站台外景）写进
-   同一格——模型会把两个空间混着画。2026-10-11 实测：三格都同时写了
-   `bus interior` 和 `bus stop / outdoors / city`，结果同一个公交场景三格各不相同。
-   先想清楚这一格的镜头在哪：在车厢里就只写 `bus interior`（配 `handrail`、`door`），
-   在站台就只写 `bus stop`（配 `outdoors`、`city`），然后**这一场景内保持不动**。
-
-【POV 视角硬规则（规则 14–20）开始】
+# POV 硬规则段（规则 14–20）原文，从 `_SYSTEM_TMPL` 里抽出来单放（2026-10-22）。
+#
+# 为什么抽出来：用户要一个「不加 POV 硬性规则」的自由模式——POV 只是**展示形式**
+# 的一种，双人同框的机位同样是漫画。抽成常量后 `_system_prompt` 按模式二选一，
+# `_pov_rules_text()`（补正员 / 修订助手复用）也还从这一份切，改一处三处同步。
+_POV_RULES_SECTION = """【POV 视角硬规则（规则 14–20）开始】
 14. **全篇默认第一人称 POV：镜头＝观众的眼睛，画面里永远只有女主一个人。**
    （2026-10-12 用户拍板，没有第三人称格——不要考虑双人同框、多人、旁观机位。）
    - **每一格都必须写视角标签 `pov`**；「我」是女性（百合 / 女女向）时写
@@ -1485,7 +1346,265 @@ __TOOLS__
    - **唯一例外（公主抱/搂抱格）**：抱着时她的头就在镜头边——`arm_around_neck`
      （搂脖子）+ 头靠我肩这种**贴着镜头**的动作实测能过；但同样是她手落我身上，
      落到画面纵深里（腰、背、胸口）的照样翻车。
-【POV 视角硬规则（规则 14–20）结束】
+【POV 视角硬规则（规则 14–20）结束】"""
+
+
+# 自由视角版（2026-10-22 用户要的）——**不加 POV 硬性规则**，让编剧按规范自己挑机位。
+#
+# 用户的判断：POV 只是漫画的一种展示形式，双人同框同样是漫画；规范本来就能写
+# 双人（`comic_spec.md` 标题就是「单人与男女双人特化版」，第一~四节有完整示例），
+# 2026-10-12 加的第十一节把双人同框整个封死了。所以要一条「回到规范」的路。
+#
+# 编号接在规则 13 后面，与 POV 版占同一位置——两版只能出现一版。
+_FREE_RULES_SECTION = """【自由视角规则（规则 14–17）开始】
+14. **视角由你按剧情挑，一格一个机位。** 这一集可以是第一人称 POV，也可以是
+   双人同框、第三人称旁观——作者没有限定，你按哪种机位更能讲清这一格来选。
+   **但同一格里只许有一种机位**：不许一半按「我」的手写（`pov hands`）、一半
+   又写两个人同框。生图模型读不懂「同时」，会画出多余的人、双胞胎、三只手。
+   要换机位就在**下一格**换，读者完全跟得上。
+15. **用第一人称 POV 时，规则照旧**：这一格写 `pov`（「我」是女性写
+   `female_pov`）；「我」只以手 / 手臂入画，`pov hands` + `another` 族标签表示
+   「我」的动作；画面里只有她一个人，男性角色是观众本人、不入画；她对我们做
+   动作只用 `* viewer` 族。**不必全篇 POV**——哪一格需要观众在场，哪一格才用。
+16. **画双人时，两个人都要写全。** 人数标签写清楚（`1girl, 1boy` / `2girls` /
+   `1girl, 1other`），然后**每个角色各写一套完整外貌**：发色、发型、瞳色、
+   服饰分开写，不许把两个人的特征混成一套，也不许只写一个人的外貌就宣布有
+   两个人。**分不清谁是谁的那一格就是废图**——读者盯着看的是两个人。
+   男角色的服饰同样要写颜色（`black hoodie`、`dark grey trousers`）。
+17. **挑机位的两条常识**：① 决定性瞬间、要让读者代入「我就是他」→ 用 POV；
+   ② 两个人的关系、动作落点、谁在对谁做什么 → 用双人旁观机位（POV 下两个人的
+   手最容易糊成一团，这是实测最容易翻的车）。同一话里 POV 格与双人格交替出现
+   不算错，反而正是漫画的常规节奏——**别为了统一而牺牲这一格的表现力**。
+【自由视角规则（规则 14–17）结束】
+"""
+
+
+# 上面 195 行的 POV 硬规则段之外，模板正文里还有两处以「全篇第一人称」为前提的
+# 声明，free 模式必须一起换掉——只换规则段是不够的（第一版就漏了这两处，
+# free 版 system 里仍然写着「视角行 → 全篇每一格 pov」「人数标签只有两种写法」，
+# 等于换个地方继续下 POV 指令）：
+#   ① 需求格式段的「视角行 / 主角行」解释（`__VIEW_DECL__`）——它规定视角行
+#      决定全篇每一格的视角标签；
+#   ② 规则 6「人数标签只有两种写法」（`__COUNT_RULES__`）——它把 `1boy` /
+#      `2girls` 直接判死，双人同框根本写不出来。
+_VIEW_DECL_POV = """- **「视角:」行是视角方性别的唯一权威**，绝对不许按自己的猜测推翻：
+  写男性（哥哥 / 爸爸 / 黄毛……）→ 全篇每一格 `pov`；写女性（姐姐 / 妹妹 /
+  学姐……）→ 全篇每一格 `female_pov`。2026-10-12《雨夜公交站》实测：需求
+  明明是哥哥视角，模型自作主张全篇写了 `female pov`——方向一错，整话作废。
+- **「主角:」行 = 画面里唯一入画的那个人**：所有外貌 / 服饰标签都是主角的；
+  视角方（「我」）永远不入画（见规则 14）。
+- 需求里没写这两行（旧格式一句话）：从剧情推断视角方和主角，推断结果在
+  第一格动笔前定死，整话不许再改。"""
+
+_VIEW_DECL_FREE = """- **「视角:」行是视角方性别与身份的唯一权威**，绝对不许按自己的猜测推翻：
+  按它定「我」是谁（男性：哥哥 / 爸爸 / 黄毛……；女性：姐姐 / 妹妹 / 学姐……）。
+  用 POV 机位时男性写 `pov`、女性写 `female_pov`（规则 15）；**但这一话不强制
+  POV**——需要双人同框时，视角方照样画进画面里（规则 16）。2026-10-12《雨夜
+  公交站》实测：需求是哥哥视角，模型自作主张全篇写 `female pov`——整话作废。
+- **「主角:」行 = 这一话的主角**：她的外貌 / 服饰写在最前面。视角方入不入画
+  由**这一格的机位**决定——POV 格里不入画，双人格里他也要写全（规则 16）。
+- 需求里没写这两行（旧格式一句话）：从剧情推断视角方和主角，推断结果在
+  第一格动笔前定死，整话不许再改。"""
+
+_COUNT_RULES_POV = """6. **人数标签只有两种写法（全篇第一人称 POV，画面里永远只有女主一个人）**：
+   - 我们的手**不**入画 → `1girl, solo`
+   - 我们的手或手臂入画 → `1girl, solo focus, 1other` + `pov hands` + 对应的
+     手部动作标签（**绝对不能再写 `solo`**）
+   - **任何情况下都不许写 `1boy` / `2girls`**（见规则 14）——剧情里的男性角色
+     （黄毛 / 哥哥 / 上司……）是**观众本人扮演的**，`1boy` 会让模型补出一个
+     **完整的人**：脸、身体、衣服全都有，观众就被拽进画面里了。
+   为什么：Danbooru 官方角色计数规则里「一只手也算一个角色」（原话
+   Disembodied hands and other body parts are counted）。写了 `solo` 又要画面
+   出现第二只手，两条指令自相矛盾——实测后果有三种：手变成她自己的、抓握
+   动作整个消失、或画出一团畸形的手。
+   观众（「我」）的**脸、身体、衣服一律不许出现**，只允许手或手臂入画，画面
+   仍以 `1girl` 开头。给「我」写 `black hoodie` / `grey pants` 这类服饰，等于
+   在说「画一个穿这些的人」，模型就会把整个人画出来（2026-10-11 实测：03 格
+   就是这么凭空多出一个男生的）。
+   ⚠️ 写了 `1other` 就必须**真的**让我们的手入画（手/手臂），并配上对应的
+   手部标签；这一格若根本没有手入画，就别写 `1other`，退回 `1girl, solo`。
+   实测坑：旁白写着「我攥住了她的手腕」，画面却只写 `solo focus, 1other` 而
+   不带任何手部标签——模型会把 `1other` 理解成「补一整个人进来」。"""
+
+_COUNT_RULES_FREE = """6. **人数标签按画面里真实出现的人写，不许多写也不许少写。**
+   - 只有女主一个人 → `1girl, solo`（或 `1girl, solo focus`）
+   - 女主 + 只入画一只手（观众的手）→ `1girl, solo focus, 1other` + `pov hands`
+   - 女主 + 一个男角色 → `1girl, 1boy`，**两个人各写一套外貌**（见规则 16）
+   - 两个女生 → `2girls`，同样各写一套外貌
+   为什么：Danbooru 官方角色计数规则里「一只手也算一个角色」（原话
+   Disembodied hands and other body parts are counted）。写了 `solo` 又要画面
+   出现第二只手，两条指令自相矛盾——实测后果有三种：手变成她自己的、抓握
+   动作整个消失、或画出一团畸形的手。
+   ⚠️ 写了 `1other` 就必须**真的**让那只手入画（手/手臂），并配上对应的手部
+   标签；这一格若根本没有手入画，就别写 `1other`，退回 `1girl, solo`。
+   实测坑：旁白写着「我攥住了她的手腕」，画面却只写 `solo focus, 1other` 而
+   不带任何手部标签——模型会把 `1other` 理解成「补一整个人进来」。"""
+
+_SYSTEM_TMPL = """你是条漫分镜编剧，同时是 Anima 提示词工程师。
+
+你写的每一格 `画面:` 会**直接**喂给 Anima 生图工作流——它是**唯一的生图提示词**
+（`标签:` / `气泡:` 只是最后画到图上的文字，生图那一步看不到它们）。所以
+`画面:` 必须写得**清楚、具体、看得见**，每个词都得是画面模型认得的英文。
+Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有真实标签就优先用它，
+库里查不到但你能确定模型看得懂的英文短语也**照写**。写错一个词，画面就会错位、
+多手、甚至凭空多出一个人。
+
+【需求的固定格式（前两行是用户手写的硬约束，必须照办）】
+用户的需求按行组织，前两行是**声明**，后面的「剧情:」是正文：
+  视角: <镜头后的「我」是谁，例：哥哥>
+  主角: <画面里唯一入画的女主是谁，例：妹妹>
+  剧情: <这一话发生什么>
+__VIEW_DECL__
+
+【整话必须是一条故事线——这是最容易不合格的一处】
+- 动笔前先在心里定一条线：这一话从哪开始、中间发生什么、最后一格落在哪。
+  多格就是「起 → 承 → 转」逐格推进，**不是同一个瞬间的三个切面**。
+- **旁白负责讲剧情，台词负责演情绪。** 别让每一格都只写「当下的表情」——
+  剧情要靠 `标签1:` `标签2:` 往前推。
+- **后一格不许推翻前一格已经建立的事实。** 反例（真实被打回过，别重犯）：
+    01 `气泡: （女）别跟着我……`   ← 她**已经知道**有人跟着
+    02 `气泡: （女）谁——！`      ← 又变成刚发现，前后矛盾
+  写台词前先问自己：她**此刻已经知道什么**？上一格已经告诉她的信息，
+  这一格不能装不知道。
+- 交稿前把每格的 `标签` + `气泡` 按顺序连起来读一遍，像读一条真的漫画：
+  **读得通才交稿**；读不通就重写那几格，不许硬交。
+
+__TOOLS__
+
+【画面字段的硬规则】（违反任何一条，这一格会被代码打回重写）
+1. **只能写逗号分隔的英文标签，绝不许出现句子。**
+   （**唯一的例外**：一格有两人及以上同框时，可以用**一句**简短英语短语把
+   「谁对谁做什么」点清楚——见规则 16。）
+   错：girl with watery eyes about to cry
+   对：tears, crying, looking down
+   错：the girl is standing at the bus door
+   对：standing, bus interior, automatic door
+   （⚠️ 别把"正在发生的动作"拆成姿势词组——`stepping off` / `one foot on ground`
+   这类是黑名单，见规则 8 和规则 11。）
+2. **顺序**：安全级 → 人数 → 主体特征（发型/瞳色/配饰）→ 服装 → 动作姿势 →
+   场景 → 构图镜头。同类标签聚在一起。
+3. **不要写质量词和画师 tag**（masterpiece / best quality / ultra-detailed /
+   absurdres / 画师名）——工作流模板已经钉好了，重复写只会稀释权重。
+4. **安全级必须有且只有一个**，只能从 safe / sensitive / nsfw / explicit 里选。
+   注意 **不是 `sfw`** —— `sfw` 不在 Anima 规范里，写了会被打回。
+5. **视角方（「我」）的手只在剧情真的需要时才入画——不要每格都加一只手。**
+   不需要时，那格就写 `1girl, solo`，别硬塞手部标签（硬塞的后果见规则 6）。
+   决定要入画时，抓别人的手腕只能写 `holding another's wrist`，不许写
+   `hand around wrist`，更不许把动作写成句子。
+   ⚠️ **`pov` / `female_pov` 只标记机位，不代表画面里有人。** 不需要手入画的
+   格，视角标签**只写 `pov`（或 `female_pov`）一个词**就是纯机位，画面里除主角
+   外**任何**身体部位、衣物、肢体影子都不许出现——**POV 格里**「我」入画的
+   **唯一通道**是 `pov hands` + `1other` + 手部动作标签，没有这条通道就当自己
+   不存在（双人格里正常写人即可，见规则 6）。
+   2026-10-12《雨夜公交站》01 格实测：视角标签里多带了身体暗示，画面下角就
+   长出我们的腿——提了什么，模型就画什么（白熊效应），没提的部位一个词都
+   别写。
+   - 攥住/握住别人的手腕 → `holding another's wrist`
+     （这是**唯一**可用的写法。网上流传的别名 `grabbing another's wrist`、
+     `wrist grab` 在本库里**都不存在**，实测查过，别用。）
+   - 手只是搭在别人手腕上（没用力） → `hand on another's wrist`
+   - 镜头就是「我」的眼睛、那只手是「我」的 → 再加 `pov` + `pov hands`
+   - **「我」是女性（百合 / 女女向）时必须写 `female_pov`，而不是 `pov`。**
+     `pov` 的默认先验是**男性第一人称**，光写它实测会画出一只男人的手
+     （2026-10-12 用户实报：剧本明明白白是百合向，第一人称却成了男生的手）。
+     女女向写法：`female_pov, pov hands, holding another's wrist`
+   - 画面里只有手、看不到它的身体 → 再加 `disembodied hand` / `disembodied arm`
+   错：male hand grabbing her wrist from behind ← `male` 会画出整个人 + 多只手
+   错：hand around wrist ← 没写是谁的手，实测被画成「她自己抓自己手腕」
+   对：pov, pov hands, holding another's wrist ← 视角方的手攥住她的手腕
+   对：disembodied hand, holding another's wrist ← 只让一只手入画
+   查「手」「抓」「手腕」「牵着」把这些标签找齐再用，别查一个词就落笔。
+__COUNT_RULES__
+7. 服饰颜色款式、灯光氛围每格写全并保持一致（见规范）。**物件走同一条规则**：
+   画面上任何看得见颜色的东西都要写颜色——`white in-ear earphones`，不许只写
+   `in-ear earphones`；`black backpack`，不许只写 `backpack`。跟服饰一样，每格
+   重复写、跨格保持一致，颜色第一次定下来就别再改。
+   ⚠️ **「写了款式 / 姿态」不等于「写了颜色」**——`backpack on one shoulder`、
+   `sailor collar`、`pleated skirt` 都还是没写颜色的裸写法，必须写成
+   `white backpack on one shoulder`、`white sailor collar`、`white pleated skirt`。
+   **整套的 `school uniform` / `uniform` 也一样**：裸写会在每格换个色，要写成
+   `white school uniform`，而且颜色词要跟里面单品（`white sailor collar`、
+   `navy pleated skirt`）用同一套（2026-10-12 实跑：模型连着两稿都写了裸的
+   `school uniform` + `sailor collar`，光这一条就把两稿预算烧完了）。
+   **每一件衣物、每一个随身物件都要带颜色**（衣领、裙子、背包、耳机、袜子……
+   一个都不能漏），代码会逐个查，漏了就打回重写。
+   ⚠️ **同一件东西只写一个标签**：`backpack` 和 `backpack on one shoulder` 是
+   同一件，两个都写模型会画**两个包**——合并成 `white backpack on one shoulder`。
+8. **下面这些词一律不许写**（逐条实测过的黑名单——不只是"库里没有"这么简单，
+   写下去一定会出问题；反过来，别拿这张表去类推别的词，也别因为某个词"库里
+   没有"就不敢写，见规则 12）：
+   `sfw`（用 safe）、
+   `arm grab`、`male hand`（用 pov hands 或 disembodied hand / disembodied arm）、
+   `medium shot`（用 upper body / cowboy shot / close-up）、
+   `soft lighting`、`cinematic lighting`（用 backlighting / sidelighting / dim lighting）、
+   `stepping off` / `getting off`、`one foot on ground`。
+   ⚠️ 「上车 / 下车」这类**瞬间动作**库里没有对应标签，但**不许**硬造一个姿势去顶替。
+   2026-10-11 实跑翻过车：这里原来写的是「用 `standing on one leg` 之类」，结果
+   旁白「她一只脚刚踏下车门」被逐字翻成了 `standing on one leg`，画出来是单脚
+   独立的芭蕾姿，跟下车毫无关系。正确做法见规则 11。
+
+   还有一个**反例**要专门记住：`hand around wrist` 库里**有**，但没写明是谁的手，
+   实测会被渲染成「她自己抓自己手腕」。要抓别人的手腕，只有
+   `holding another's wrist` 一条路（见规则 5）。
+9. **每格必须带来新信息，不许两格只是换表情演同一个动作。**
+   错：02 格和 03 格都是「攥着手腕、皱眉」，只是一个写着 surprised、一个写着
+   angry —— 观众看到的是同一格，剧情零推进。
+   对：每格都在往前推——她先挣，再回头看，然后说出一句让两人关系变化的话。
+   `气泡:` 同样要成线：三句话连起来应该是一个小故事（拒绝 → 动摇 → 让步），
+   而不是三句同义的情绪宣泄。
+   **台词不许倒退回已经演过的节拍——她知道了就是知道了，认过的面不许再认一次。**
+   错（2026-10-12《妈妈的味道》实测）：01 她已经隔着厨房喊「啊——回来啦！」，
+   04 却又「咦，哥哥回来啦？」——同一句「发现我回来」演了两遍，前后穿帮。
+   对：04 的台词必须接在 03 后面往前走（比如催洗手、让摆碗筷）。
+   **交稿前把全话气泡连起来读一遍**：后一句必须在前一句之后还成立；凡是把
+   前面某格删掉后读起来更通顺的「重复发现 / 重复问候 / 重复惊讶」，重写它。
+   **交稿前自己回看一遍**：把每格的 `画面:` + `气泡:` 摆在一起过一遍，凡是有
+   两格在讲同一件事，就重写其中一格（换动作、换空间、换关系状态），再交稿。
+10. **`标签1:`（可续到 `标签2:` `标签3:`）每一格都要写**（这是剧情的骨架，不是
+   可选项）；**每条气泡都要带说话人**（`（女）` 或 `（我）`）。两者格式见下面
+   「输出格式」。
+   **这类"差不多的写法"是本次最容易踩的坑**——凡是不确定的，先查库再写。
+
+11. **只有 `画面:` 是生图提示词。** `标签:` 和 `气泡:` **都不进生图提示词**——
+   它们是最后画到图上的**文字**（右上角旁白条 / 气泡），生图那一步根本看不到
+   它们。所以三者是有关联的，但**不是**「标签直接变成生图标签」这种关系：
+   - `画面:` 是**画面**——这一刻镜头里静止可见的样子：姿态、位置、服饰、表情、
+     景别、背景。**只有它进生图提示词。**
+   - `气泡:` 是**语言**——展示当下这个场景里她或「我」说了什么
+   - `标签:` 是**描述**——让观众知道发生了什么、剧情推进到哪
+
+   推论：`标签:` 里写的事件，生图阶段**完全不知道**。你不能指望「旁白写了一只
+   脚刚踏下车门，画面就自动画出来」——要让画面里出现什么，就必须写进 `画面:`，
+   而且只能写**看得见的样子**。
+   反例（2026-10-11 实跑）：旁白「她一只脚刚踏下车门」被逐字翻成画面
+   `standing on one leg`——那是单脚站立的芭蕾姿，跟下车毫无关系。正确写法：
+   画面写她站在车门处的状态（`standing, automatic_door, bus_interior`），
+   「一只脚刚踏下车门」这句话留在 `标签:` 讲。
+   同理，画面是**静态的一张图**：旁白「她猛回头」→ 画面写已经转过来的样子
+   `looking back`，不是正在转的 `turning head`。**凡是"正在发生的那一瞬"，
+   都不要塞进 `画面:`。**
+
+12. **《连续剧情提示词生成规范》高于 anima-tags 标签库，两者冲突时一律以规范
+   为准。** 这不是空话——**标签库里绝大多数"衣物 / 物件"标签本身就不带颜色**
+   （`pleated skirt`、`earphones`、`backpack` 全都是），照抄它们就等于违反规范
+   的「颜色+款式必须同时出现」。所以：
+   - 衣物：写 `navy pleated skirt`，**不能**只写 `pleated skirt`
+   - 物件：写 `white in-ear earphones`，**不能**只写 `in-ear earphones`
+   - `white uniform` 这种"整套"词要顺带把裙子写清：
+     `white uniform, navy pleated skirt`
+   - **同一件东西，每一格都要写同一个颜色。** 2026-10-11 实测：`pleated skirt`
+     没写颜色，三格画面里裙子一次深藏青、一次浅蓝——观众一眼就看出不是同一条
+     裙子。颜色在第一格定下来，后面每格照抄。
+
+13. **一格只能有一个明确地点，同一个地点的格子写同一组地点标签。** 不许把
+   `bus interior`（车厢内）和 `bus stop` / `outdoors` / `city`（站台外景）写进
+   同一格——模型会把两个空间混着画。2026-10-11 实测：三格都同时写了
+   `bus interior` 和 `bus stop / outdoors / city`，结果同一个公交场景三格各不相同。
+   先想清楚这一格的镜头在哪：在车厢里就只写 `bus interior`（配 `handrail`、`door`），
+   在站台就只写 `bus stop`（配 `outdoors`、`city`），然后**这一场景内保持不动**。
+
+__POV_RULES__
+
 
 【Anima 提示词规范（全文，必须遵守）】
 写法：**以标签为主，可以用简短的英语短语补充**——短词和英语短语都能写。
@@ -1561,18 +1680,30 @@ __STORY_SPEC__
 """
 
 
-def _system_prompt(panels, no_search=False):
-    """拼整份 system。no_search=True 时装「没有工具」那版工具段。
+def _system_prompt(panels, no_search=False, pov_mode="pov"):
+    """拼整份 system。
 
-    两版只有工具段不同（`_TOOLS_SECTION` / `_NO_SEARCH_SECTION`），规范正文、
-    POV 硬规则、格数与长度限制完全共用——跳过查库不等于放宽规则。
+    两个正交开关：
+      - no_search=True  装「没有工具」那版工具段（见 `_TOOLS_SECTION`）；
+      - pov_mode="free" 用「自由视角」规则段替换 POV 硬规则（规则 14–20），
+        并把规范里限定「全篇第一人称、不许双人」的两处章节裁掉。规范正文、
+        格数与长度限制完全共用——**自由视角不等于放宽质量要求**，只是不再
+        强制一种机位。
     """
     text = _SYSTEM_TMPL
     text = text.replace("__TOOLS__",
                         _NO_SEARCH_SECTION if no_search else _TOOLS_SECTION)
+    free = pov_mode == "free"
+    text = text.replace("__POV_RULES__",
+                        _FREE_RULES_SECTION if free else _POV_RULES_SECTION)
+    text = text.replace("__VIEW_DECL__",
+                        _VIEW_DECL_FREE if free else _VIEW_DECL_POV)
+    text = text.replace("__COUNT_RULES__",
+                        _COUNT_RULES_FREE if free else _COUNT_RULES_POV)
     text = text.replace("__SPEC__", _spec_text() or "（规范文件读取失败，按上面的硬规则执行）")
     text = text.replace("__STORY_SPEC__",
-                        _story_spec_text() or "（规范文件读取失败，按上面的硬规则执行）")
+                        _story_spec_text(pov_mode)
+                        or "（规范文件读取失败，按上面的硬规则执行）")
     text = text.replace("__MAX_BUBBLE__", str(comic_writer.MAX_BUBBLE))
     text = text.replace("__MAX_LABEL__", str(comic_writer.MAX_LABEL))
     text = text.replace("__MAX_LABELS__", str(comic_writer.MAX_LABELS))
@@ -1835,7 +1966,7 @@ def run_rounds(messages, provider=None, model=None, max_rounds=MAX_ROUNDS,
 
 # ─── 校验 ───────────────────────────────────────────────
 
-def check(text, panels, brief=""):
+def check(text, panels, brief="", pov_mode="pov"):
     """按契约 + 标签库校验剧本，返回 (是否合格, 问题描述)。
 
     结构性问题（格数不对、字段缺）先短路——那种情况下列标签问题没有意义。
@@ -1853,13 +1984,25 @@ def check(text, panels, brief=""):
 
     `brief` 可选：传了才启用「凭空人名」判据（`invented_names`）——拿需求当
     白名单，需求里没出现过的专有人名一律报。不传就跳过那条（老调用点行为不变）。
+
+    `pov_mode="free"`：自由视角模式，**POV 那 6 条判据全部停用**（不许双人 /
+    每格要视角标签 / 多人只写一套外貌 / solo 冲突 / 女女向用错 pov / 视角行
+    对不上）。其余判据照旧——自由视角是放宽机位，不是放宽画面质量。
     """
     ok, why = comic_writer._validate(text, panels)
     if not ok:
         return False, why
 
     problems = []
-    conf = solo_conflicts(text)
+    # ── POV 六条判据：自由视角模式下整组停用（2026-10-22 用户拍板）──
+    # 这几条拦的都是「默认全篇第一人称」这个前提：不许双人、每格要视角标签、
+    # 多人只能写一套外貌……前提没了，判据也就无从谈起。空列表 = 不报。
+    # 下面是「只关 POV 那 6 条」的范围：solo_conflicts / pov_conflicts /
+    # pov_missing / merged_people / female_pov_missing / pov_direction。
+    # 禁用标签、没写颜色、漏发色、重复写、凭空人名**一条都不动**——那些跟
+    # 机位无关，漏了画面直接崩。
+    free = pov_mode == "free"
+    conf = [] if free else solo_conflicts(text)
     if conf:
         items = "、".join("格 %s 的 `%s`" % (no, tg) for no, tg in conf[:6])
         problems.append(
@@ -1907,7 +2050,7 @@ def check(text, panels, brief=""):
             "同一格里同一件东西写了两次（%s）：`backpack` 和 `backpack on one "
             "shoulder` 是**同一件**，两个都写模型会画两个包。合并成一个标签，"
             "颜色写在里面（`white backpack on one shoulder`）。" % items)
-    pov = pov_conflicts(text)
+    pov = [] if free else pov_conflicts(text)
     if pov:
         items = "、".join("格 %s 的 `%s`" % (no, tg) for no, tg in pov[:6])
         problems.append(
@@ -1917,7 +2060,7 @@ def check(text, panels, brief=""):
             "把计数标签删掉——「我」只以手或手臂入画，手部标签照旧（`pov hands` "
             "+ `holding another's wrist`）；也**不要给「我」写服饰**"
             "（`black hoodie` / `grey pants` 都会把整个人画出来）。" % items)
-    nopov = pov_missing(text)
+    nopov = [] if free else pov_missing(text)
     if nopov:
         items = "、".join("格 %s" % no for no, _ in nopov[:6])
         problems.append(
@@ -1925,7 +2068,7 @@ def check(text, panels, brief=""):
             "都必须带 `pov`（女女向整话统一用 `female_pov`）。只有旁白里有"
             "「我」、画面没有视角标签，模型会按第三人称机位渲染——实测整格"
             "画风全错。" % items)
-    merged = merged_people(text)
+    merged = [] if free else merged_people(text)
     if merged:
         items = _fmt_by_panel(merged)
         problems.append(
@@ -1933,7 +2076,7 @@ def check(text, panels, brief=""):
             " POV 下画面里永远只有女主一个人：把这一格改写成单人格——「另一个人」"
             "是镜头后的观众，用 `pov hands`（我们的手）或 `* viewer` 族标签"
             "（她对我们做动作）来表达，多人计数标签删掉。" % items)
-    fpov = female_pov_missing(text, brief)
+    fpov = [] if free else female_pov_missing(text, brief)
     if fpov:
         items = "、".join("格 %s" % no for no, _ in fpov[:6])
         problems.append(
@@ -1942,7 +2085,7 @@ def check(text, panels, brief=""):
             "（用户 2026-10-12 实报：「剧本明确了是百合向，但是第一人称却是男生的"
             "手」）。把 `pov` 换成 `female_pov`，`pov hands` 照旧；整话统一，"
             "不许一半 `pov` 一半 `female_pov`。" % items)
-    direction = pov_direction(brief, text)
+    direction = [] if free else pov_direction(brief, text)
     if direction:
         items = "、".join("格 %s 的 `%s`" % (no, tg) for no, tg in direction[:6])
         problems.append(
@@ -2023,7 +2166,7 @@ def prev_story_text(script_path, limit=PREV_STORY_LIMIT):
 
 def write_script(brief, panels=3, character="", provider=None, model=None,
                  max_rounds=MAX_ROUNDS, tries=2, progress=None, prev="",
-                 no_search=False):
+                 no_search=False, pov_mode="pov"):
     """写剧本。返回剧本文本（markdown，已含头部备选记录）。
 
     参数：
@@ -2059,7 +2202,8 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
         max_rounds = min(max_rounds, NO_SEARCH_ROUNDS)
 
     base = [
-        {"role": "system", "content": _system_prompt(panels, no_search=no_search)},
+        {"role": "system", "content": _system_prompt(panels, no_search=no_search,
+                                                     pov_mode=pov_mode)},
         {"role": "user", "content": comic_writer._user_prompt(brief, panels,
                                                               character, prev)},
     ]
@@ -2100,7 +2244,7 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
                              "身），标签就用你已经查到的那些，不要新造词，也不要再输出"
                              "工具调用。"}]
             continue
-        ok, why = check(clean, panels, brief)
+        ok, why = check(clean, panels, brief, pov_mode=pov_mode)
         if ok:
             log.info("[comic-agent] 剧本合格（第 %d 稿，%d 格，备选 %d 条）",
                      attempt, panels, len(notes))
@@ -2207,6 +2351,36 @@ _FIX_SYSTEM = """你是分镜剧本的**补正员**，也是出剧本前的最�
 输出：补正后的**完整剧本**，格式与原来完全一致（`# 标题：` / `## NN` / `画面:` /
 `气泡:` / `气泡2:` / `标签1:` `标签2:`）。只输出剧本本身，前后不要任何说明、
 清单、注释或代码块围栏。"""
+# 补正员角色段里的「头号职责＝审计视角」那一块（2026-10-22 与自由视角模式配套）。
+#
+# `_FIX_SYSTEM` 是一个整常量，free 模式不能只用 replace 拼 —— 它开头就把「审计
+# 视角、按 POV 硬规则逐条过」写成头号职责，喂给自由模式等于给补正员下反向指令：
+# 作者刚写好的双人剧本会被它按「画面里只能有一个人」改回单人。所以把这一块抽成
+# 常量，free 时整块换成 `_FIX_FREE_AUDIT`。
+_FIX_POV_AUDIT = """**你的头号职责是审计视角。** 附在下面的第一人称 POV 视角硬规则（规则 14–20）
+是编剧那边上下文太长、最容易漏的一类错误——你手里是现成剧本，交稿前逐格
+对照着过一遍：
+① 互动标签落点测试——动作落在谁身上，落在我身上的整族禁写（规则 20）；
+② 双手独占——`pov hands` 正在做事的格子里，她的手不许再指向我；
+③ 她的位置跟着旁白走，旁白没写移动她就不挪窝（规则 19）；
+④ 数量形态——`1other` 只跟 `pov hands` 成对出现，没手入画就退回
+   `1girl, solo`；
+⑤ 旁白锁——`标签:` 里的「我」是观众，女主的内心走气泡 + 表情标签；
+⑥ 视角标签每格必带，`pov` / `female_pov` 整话统一（规则 14、17）。
+问题清单没列到的同样要管——它核的是格式事实，视角归你审。"""
+
+_FIX_FREE_AUDIT = """**你的头号职责是审计画面能不能画出来。** 这一话**不强制第一人称**——作者选了
+自由视角：POV 格、双人同框、第三人称旁观都可能出现。**不要按「画面里只能有一个
+人」去改稿**，按附在下面的自由视角规则逐格过一遍：
+① 一格只能一个机位——同一格里既写 `pov hands` 又写两个人同框，删掉其中一种；
+② 双人格里两个人的外貌要各写一套（发色 / 发型 / 瞳色 / 服饰），只写了一套的补齐；
+③ 人数标签要和画面里实际出现的人对得上（`1girl, 1boy` 就是两个人，不能只写
+   一个人的衣服）；
+④ 用 POV 的格子里，「我」只出手不出人，男性角色不入画（规则 15）；
+⑤ 她对我们做动作只用 `* viewer` 族，别用 `another` 族（`another` 的主语是「我」，
+   主语反了会画成我抓她）。
+问题清单没列到的同样要管——它核的是格式事实，画面归你审。"""
+
 
 
 def _pov_rules_text():
@@ -2222,16 +2396,28 @@ def _pov_rules_text():
     return m.group(1).strip() if m else ""
 
 
-def _fix_system_prompt():
-    """补正员的系统提示 = 角色与工作范围 + 规范全文 + POV 视角硬规则。
+def _fix_system_prompt(pov_mode="pov"):
+    """补正员的系统提示 = 角色与工作范围 + 规范全文 + 视角规则（按模式）。
 
-    后两份与编剧 / 修订助手同一来源：规范全文走 `_story_spec_text`，POV 硬规则
-    从编剧提示词里切（`_pov_rules_text`）——不另立一份，改一处三处同步。
+    三份与编剧 / 修订助手同一来源：规范全文走 `_story_spec_text`，视角规则从
+    编剧提示词里切（`_pov_rules_text`）——不另立一份，改一处三处同步。
+
+    pov_mode="free" 时换成自由视角规则段、规范裁掉「唯一 POV」章节。**这一步
+    不能漏**：补正员的职责就是照规则改稿，喂它 POV 规则，它会把双人剧本改回
+    单人（这是模式切换最容易踩的坑）。
     """
-    spec = _story_spec_text() or ""
-    return (_FIX_SYSTEM + "\n\n以下是必须遵守的分镜规范全文：\n\n" + spec
-            + "\n\n以下是第一人称 POV 视角硬规则（与编剧同一份，补正时同样"
-            "必须遵守；改画面词时逐条对照）：\n\n" + _pov_rules_text())
+    spec = _story_spec_text(pov_mode) or ""
+    if pov_mode == "free":
+        rules = _FREE_RULES_SECTION
+        base = _FIX_SYSTEM.replace(_FIX_POV_AUDIT, _FIX_FREE_AUDIT)
+        head = ("\n\n以下是自由视角规则（与编剧同一份，补正时同样必须遵守；"
+                "这一话**不强制第一人称**，双人同框是允许的——不要把它改回单人）：\n\n")
+    else:
+        rules = _pov_rules_text()
+        base = _FIX_SYSTEM
+        head = ("\n\n以下是第一人称 POV 视角硬规则（与编剧同一份，补正时同样"
+                "必须遵守；改画面词时逐条对照）：\n\n")
+    return base + "\n\n以下是必须遵守的分镜规范全文：\n\n" + spec + head + rules
 
 
 def _fmt_issues(issues):
@@ -2321,7 +2507,7 @@ def _fix_is_usable(original, fixed):
 
 
 def fix_script(brief, text, provider=None, model=None, timeout=None,
-               progress=None, issues=None):
+               progress=None, issues=None, pov_mode="pov"):
     """补正一遍剧本：代码出清单（**只做检测**）→ 模型照清单补 → **直接采纳**。
 
     ⚠️ 2026-10-12 用户拍板：**取消准入闸门**。代码的服饰词表盖不全几万种服饰，
@@ -2358,7 +2544,8 @@ def fix_script(brief, text, provider=None, model=None, timeout=None,
     if not (text or "").strip():
         raise ValueError("剧本不能为空")
     provider = (provider or "").strip() or llm.CURRENT_PROVIDER or None
-    issues = collect_issues(text, brief or "") if issues is None else list(issues)
+    issues = (collect_issues(text, brief or "", pov_mode=pov_mode)
+              if issues is None else list(issues))
     out = {"text": text, "issues": issues, "diff": [], "adopted": False,
            "status": "ok", "warnings": [], "audit": [], "skipped": False,
            "model": ""}
@@ -2373,7 +2560,7 @@ def fix_script(brief, text, provider=None, model=None, timeout=None,
                     "是否跟旁白一致、「我」的动作有没有被画到她身上、旁白与气泡与"
                     "画面是否同一个瞬间、剧情有没有倒退回演过的节拍。）")
     messages = [
-        {"role": "system", "content": _fix_system_prompt()},
+        {"role": "system", "content": _fix_system_prompt(pov_mode)},
         {"role": "user", "content":
             "【原始需求】\n%s\n\n%s\n\n【编剧交的剧本】\n%s"
             % (brief or "（作者没给需求）", task_sec, text)},
@@ -2410,7 +2597,8 @@ def fix_script(brief, text, provider=None, model=None, timeout=None,
     # ⚠️ 到这里**直接采纳**——不再过任何准入闸门。剩下的代码判据只当**体检报告**
     # 记进 audit 供界面展示，绝不因此把 text 退回原稿。
     out.update(text=fixed, diff=diff, adopted=True, status="ok",
-               audit=collect_issues(fixed, brief or "", original=text))
+               audit=collect_issues(fixed, brief or "", original=text,
+                                    pov_mode=pov_mode))
     log.info("[comic-fix] 采纳补正稿：改了 %d 格（%s）",
              len(diff), "、".join(d["no"] for d in diff))
     _emit(progress, "补正完成：改了 %d 格" % len(diff))
@@ -2437,7 +2625,7 @@ _CHAT_SYSTEM = """你是分镜剧本的**修订助手**，在聊天框里陪作�
    - **只改作者点名的部分**，其余每一行逐字保留；`## NN` 的格号一个不许增删。
    - 画面标签只能用规范里认可的真实写法；新写的外貌/服饰必须是「颜色 + 具体款式」，
      同一个人 / 同一件东西全稿用同一个颜色。
-   - 改动要守分镜规范（POV、构图与服饰的对应、旁白格式等）——规范全文附在下面。
+   - 改动要守分镜规范（视角、构图与服饰的对应、旁白格式等）——规范全文附在下面。
 2. **讨论 / 回答**——第一行以 `答复：` 开头，后面用纯文字回答或反问。这种形态
    **绝不许输出剧本格式**（全文不许出现 `## NN`），免得被当成改稿落地。
 
@@ -2447,15 +2635,23 @@ _CHAT_SYSTEM = """你是分镜剧本的**修订助手**，在聊天框里陪作�
 输出只含上述两种形态之一，前后不要任何说明、注释或代码块围栏。"""
 
 
-def _chat_system_prompt():
-    """修订助手的系统提示 = 角色与两种回复形态 + 规范全文 + POV 视角硬规则。
+def _chat_system_prompt(pov_mode="pov"):
+    """修订助手的系统提示 = 角色与两种回复形态 + 规范全文 + 视角规则（按模式）。
 
     后两份与补正员同一来源（用户 2026-10-12 拍板：改稿 AI 也得知道视角规则）。
+    pov_mode="free" 时换自由视角规则——否则作者说「这格改成双人」，修订助手会
+    按 POV 硬规则拒绝或者又改回单人。
     """
-    spec = _story_spec_text() or ""
-    return (_CHAT_SYSTEM + "\n\n以下是必须遵守的分镜规范全文：\n\n" + spec
-            + "\n\n以下是第一人称 POV 视角硬规则（与编剧同一份，改剧本时同样"
-            "必须遵守）：\n\n" + _pov_rules_text())
+    spec = _story_spec_text(pov_mode) or ""
+    if pov_mode == "free":
+        rules = _FREE_RULES_SECTION
+        head = ("\n\n以下是自由视角规则（与编剧同一份，改剧本时同样必须遵守；"
+                "这一话**不强制第一人称**，作者要双人同框就照写）：\n\n")
+    else:
+        rules = _pov_rules_text()
+        head = ("\n\n以下是第一人称 POV 视角硬规则（与编剧同一份，改剧本时同样"
+                "必须遵守）：\n\n")
+    return _CHAT_SYSTEM + "\n\n以下是必须遵守的分镜规范全文：\n\n" + spec + head + rules
 
 
 # 「答复：」标记——讨论形态的第一行。允许被加粗（**答复：**）或换行。
@@ -2463,7 +2659,7 @@ _CHAT_REPLY_RE = re.compile(r"^\s*\**\s*答复\s*\**\s*[：:]\s*", re.M)
 
 
 def chat_revise(script, message, brief="", history=None, provider=None,
-                model=None, timeout=None):
+                model=None, timeout=None, pov_mode="pov"):
     """和修订助手聊一句：要么拿回一份改好的剧本，要么拿回一段答复。
 
     采纳判据与补正同一条哲学——**只判格式，不判内容**（用户 2026-10-12 拍板：
@@ -2496,7 +2692,7 @@ def chat_revise(script, message, brief="", history=None, provider=None,
         if role in ("user", "assistant") and content:
             clean_hist.append({"role": role, "content": content})
 
-    messages = ([{"role": "system", "content": _chat_system_prompt()}]
+    messages = ([{"role": "system", "content": _chat_system_prompt(pov_mode)}]
                 + clean_hist
                 + [{"role": "user", "content":
                     "【原始需求】\n%s\n\n【当前剧本】\n%s\n\n【作者这句话】\n%s"

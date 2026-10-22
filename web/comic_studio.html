@@ -149,6 +149,13 @@
         <option value="">不接——全新一集</option>
       </select>
       <span class="spacer" style="flex:1"></span>
+      <label id="povModeWrap" style="font-size:12px;white-space:nowrap;color:var(--text-dim)"
+             title="POV 第一人称：镜头＝观众的眼睛，画面里只有女主（硬规则 14–20）。自由视角：不加 POV 限制，机位由编剧按规范自己挑，可以双人同框——想画「两个人在一个画面里」就选这个">
+        <select id="povMode" style="width:auto" onchange="rememberPovMode()">
+          <option value="pov">POV 第一人称</option>
+          <option value="free">自由视角（可双人）</option>
+        </select>
+      </label>
       <label id="skipSearchWrap" style="font-size:12px;white-space:nowrap;color:var(--text-dim)"
              title="勾上就不查标签库，直接把规则给编剧模型、一次写完整剧本（快到十几倍）；取消勾选则先查库再写">
         <input type="checkbox" id="skipSearch" checked onchange="rememberSkipSearch()"> 跳过查库
@@ -374,6 +381,35 @@ function restoreSkipSearch() {
   document.getElementById('skipSearch').checked = (v !== '0');
 }
 
+// 「视角模式」（2026-10-22）：pov = 全篇第一人称硬规则（默认，与之前完全一样）；
+// free = 不加 POV 限制，机位由编剧按规范自己挑，可以双人同框。
+// 记住上次选择：连着画同一部就是同一个模式，别每集重选。
+const LS_POV_MODE = 'comic_pov_mode';
+
+function povMode() {
+  return document.getElementById('povMode').value === 'free' ? 'free' : 'pov';
+}
+
+function setPovMode(v) {
+  // 只在合法值上动，避免把下拉搞成空值（后端认不出会退回 pov，但界面对不上）
+  document.getElementById('povMode').value = (v === 'free') ? 'free' : 'pov';
+}
+
+function rememberPovMode() {
+  try { localStorage.setItem(LS_POV_MODE, povMode()); } catch (e) { }
+  // 模式变了要给一句人话提示——这不是个无感的开关，POV 与自由视角出来的剧本
+  // 结构完全不同，用户得知道自己在切什么。
+  toast(povMode() === 'free'
+    ? '自由视角：编剧自己挑机位，可以画双人同框'
+    : 'POV 第一人称：镜头＝观众的眼睛，画面里只有女主');
+}
+
+function restorePovMode() {
+  let v = null;
+  try { v = localStorage.getItem(LS_POV_MODE); } catch (e) { }
+  setPovMode(v === 'free' ? 'free' : 'pov');
+}
+
 async function loadProviders() {
   try {
     // scope=comic：把「只在漫画台可见」的自定义中转站一起要回来。别的页面
@@ -554,7 +590,9 @@ async function genScript() {
       model: document.getElementById('model').value,
       // 跳过查库（2026-10-22）：后端默认就是 true，这里显式传，取消勾选时
       // 传 false 才走原来那十几轮查库。
-      no_search: SCRIPT_NO_SEARCH
+      no_search: SCRIPT_NO_SEARCH,
+      // 视角模式（2026-10-22）：pov 走原来的 POV 硬规则，free 让编剧自己挑机位
+      pov_mode: povMode()
     });
     SCRIPT_JOB = d.job;
     pollScript();
@@ -1469,7 +1507,8 @@ function poll() { clearTimeout(TIMER); TIMER = setTimeout(async () => { await re
 // 走 /api/comic/script_text 取回（纯写真任务没有 script.md，抛错就当没有）。
 // 参数卡无论如何先显示——它可能是全局默认/模板值，跟有没有任务无关。
 async function restoreSession() {
-  restoreSkipSearch();                // 跳过查库的勾选状态（默认勾上，2026-10-22）
+  restoreSkipSearch();
+  restorePovMode();                // 跳过查库的勾选状态（默认勾上，2026-10-22）
   await loadTasks();                  // 下拉先填好（一个任务都没有也要给个空选项）
   await loadChannels();               // 渠道下拉同样先填好（没任务也能先挑渠道）
   let saved = null;
@@ -1540,6 +1579,9 @@ async function loadTaskUI(name, prefix) {
   document.getElementById('fixPanel').style.display = 'none';
   try {
     const s = await api('/api/comic/script_text?task=' + encodeURIComponent(name));
+    // 打开旧任务时把视角下拉同步成**这一集当时用的模式**（2026-10-22）：下拉只
+    // 影响「下一次生成剧本」，但显示和任务对不上会让人以为能改已出的剧本。
+    if (s.pov_mode) setPovMode(s.pov_mode);
     if (s.script) {
       ta.style.display = 'block'; ta.value = s.script;
       document.getElementById('scriptOps').style.display = 'flex';
@@ -1614,6 +1656,7 @@ function syncModeInputs() {
   document.getElementById('btnScript').textContent = p ? '生成写真' : '生成剧本';
   // 「跳过查库」只对剧本模式有意义（写真那条路根本不经过编剧）。
   document.getElementById('skipSearchWrap').style.display = p ? 'none' : '';
+  document.getElementById('povModeWrap').style.display = p ? 'none' : '';
   document.getElementById('brief').placeholder = p
     ? '想拍什么：花田里回眸、天台看夕阳、教室靠窗午睡……（一次多张，每张换场景/服装/构图）'
     : '视角: 哥哥\n主角: 妹妹\n剧情: 下雨天兄妹俩在公交站躲雨……（前两行是硬约束：视角=镜头后的「我」，男性→pov、女性→female_pov；主角=画面里唯一入画的人）';

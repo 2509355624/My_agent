@@ -1984,5 +1984,115 @@ class SkipSearchTest(unittest.TestCase):
         self.assertIn("没有工具", system)
 
 
+class FreeViewModeTest(unittest.TestCase):
+    """自由视角模式（2026-10-22 用户要的第二个版本）。
+
+    背景：POV 只是漫画的一种展示形式，双人同框同样是漫画；规范本身（
+    `comic_spec.md`）就是「单人与男女双人特化版」，是 2026-10-12 加的第十一节
+    把双人封死的。所以要一条「回到规范、机位自己挑」的路。
+
+    钉死四件事：
+      1. system 真的换版：没有 POV 硬规则（规则 14–20），有自由视角规则，
+         规范里第十一节与总结第 7 条**被裁掉**（口头声明压不住矛盾规则）；
+      2. `check`：`1boy` / 双人同框 / 没写视角标签在 free 下全放过，pov 下照拦；
+      3. 通用判据一条都不许跟着松（禁用标签、没写颜色、凭空人名）；
+      4. 补正员与修订助手也换版——否则它们会拿着 POV 规则把双人改回单人。
+    """
+
+    SINGLE = ("# 标题：x\n\n## 01\n画面: 1girl, solo, pov, black hair, "
+              "white shirt\n气泡: 一\n标签1: 她站在门口\n")
+    DOUBLE = ("# 标题：x\n\n## 01\n画面: 1girl, 1boy, black hair, white shirt, "
+              "short black hair, black hoodie, standing, bedroom\n"
+              "气泡: 一\n标签1: 他站在门口\n")
+
+    def test_system_prompt_swaps_pov_rules(self):
+        pov = comic_agent._system_prompt(3)
+        free = comic_agent._system_prompt(3, pov_mode="free")
+        self.assertIn("POV 视角硬规则（规则 14–20）开始", pov)
+        self.assertNotIn("POV 视角硬规则", free)
+        self.assertIn("自由视角规则（规则 14–17）开始", free)
+        # 规则 1–13（标签写法、颜色、地点、构图）两版共用，一条都不许少
+        for kw in ("只能写逗号分隔的英文标签", "navy pleated skirt",
+                   "一格只能有一个明确地点"):
+            self.assertIn(kw, free)
+        # 模板正文里那两处以「全篇第一人称」为前提的声明也必须换掉
+        self.assertIn("但这一话不强制", free)
+        self.assertIn("人数标签按画面里真实出现的人写", free)
+        self.assertNotIn("人数标签只有两种写法", free)
+
+    def test_story_spec_drops_pov_chapters(self):
+        """规范里的「唯一 POV」两处必须被代码切掉，不能靠一句「本次不作数」。"""
+        full = comic_agent._story_spec_text()
+        cut = comic_agent._story_spec_text("free")
+        self.assertIn("十一、镜头人称", full)
+        self.assertIn("全篇第一人称 POV**", full)
+        self.assertNotIn("十一、镜头人称", cut)
+        self.assertNotIn("全篇第一人称 POV**", cut)
+        # 第十节、第十二节的其它内容还在（只切 POV 那两处）
+        self.assertIn("十、画面只写", cut)
+        self.assertIn("十二、本质总结", cut)
+        self.assertLess(len(cut), len(full))
+
+    def test_check_allows_two_people_only_in_free(self):
+        ok_pov, why = comic_agent.check(self.DOUBLE, 1, pov_mode="pov")
+        self.assertFalse(ok_pov)
+        self.assertIn("1boy", why)
+        ok_free, why_free = comic_agent.check(self.DOUBLE, 1, pov_mode="free")
+        self.assertTrue(ok_free, why_free)
+        # 单人 POV 稿两种模式都合格（自由模式不禁止 POV，只是不强制）
+        self.assertTrue(comic_agent.check(self.SINGLE, 1)[0])
+        self.assertTrue(comic_agent.check(self.SINGLE, 1, pov_mode="free")[0])
+
+    def test_free_still_blocks_generic_issues(self):
+        """自由视角是放宽机位，不是放宽画面质量——这几条通用判据一条都不能松。"""
+        banned = ("# 标题：x\n\n## 01\n画面: 1girl, solo, hand around wrist, "
+                  "black hair\n气泡: 一\n标签1: 甲\n")
+        self.assertFalse(comic_agent.check(banned, 1, pov_mode="free")[0])
+        bare = ("# 标题：x\n\n## 01\n画面: 1girl, 1boy, black hair, pleated skirt, "
+                "short black hair, black hoodie, room\n气泡: 一\n标签1: 甲\n")
+        ok, why = comic_agent.check(bare, 1, pov_mode="free")
+        self.assertFalse(ok)
+        self.assertIn("pleated skirt", why)
+        # 凭空人名照拦（需求里没有的名字）
+        named = ("# 标题：x\n\n## 01\n画面: 1girl, 1boy, Izumi Sagiri, black hair, "
+                 "white shirt, black hair, black hoodie, room\n气泡: 一\n标签1: 甲\n")
+        self.assertIn("专有人名", comic_agent.check(named, 1, "哥哥和妹妹",
+                                                  pov_mode="free")[1])
+
+    def test_collect_issues_free_drops_pov_kinds(self):
+        pov_issues = {i["kind"] for i in comic_agent.collect_issues(self.DOUBLE)}
+        free_issues = {i["kind"] for i in
+                       comic_agent.collect_issues(self.DOUBLE, pov_mode="free")}
+        self.assertTrue({"pov_conflict", "pov_missing"} & pov_issues)
+        self.assertFalse({"pov_conflict", "pov_missing", "merged_people",
+                          "solo_conflict", "female_pov", "pov_mixed",
+                          "pov_direction"} & free_issues)
+
+    def test_fix_and_chat_prompt_follow_mode(self):
+        for fn in (comic_agent._fix_system_prompt, comic_agent._chat_system_prompt):
+            self.assertIn("POV 视角硬规则", fn("pov"))
+            free = fn("free")
+            self.assertNotIn("POV 视角硬规则", free)
+            self.assertIn("自由视角规则", free)
+            # 规范里那两处也得跟着裁，否则补正员照样读到「唯一 POV」
+            self.assertNotIn("十一、镜头人称", free)
+
+    def test_write_script_forwards_mode(self):
+        with mock.patch.object(comic_agent, "run_rounds",
+                               return_value=self.SINGLE) as m:
+            comic_agent.write_script("x", panels=1, pov_mode="free")
+        system = m.call_args.args[0][0]["content"]
+        self.assertIn("自由视角规则", system)
+
+    def test_write_script_checks_with_mode(self):
+        """回炉判据也要带上模式：不带的话双人稿在 free 下永远不合格、反复回炉。"""
+        with mock.patch.object(comic_agent, "run_rounds",
+                               return_value=self.DOUBLE), \
+                mock.patch.object(comic_agent, "check",
+                                  return_value=(True, "")) as chk:
+            comic_agent.write_script("x", panels=1, pov_mode="free")
+        self.assertEqual(chk.call_args.kwargs.get("pov_mode"), "free")
+
+
 if __name__ == "__main__":
     unittest.main()

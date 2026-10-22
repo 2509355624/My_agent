@@ -128,6 +128,58 @@ class ComicScriptApiTest(unittest.TestCase):
             self._wait(d["job"])
         self.assertIs(m.call_args.kwargs.get("no_search"), False)
 
+    def test_pov_mode_defaults_to_pov(self):
+        """不传视角模式 = POV（与 2026-10-22 之前的行为完全一致）。"""
+        with mock.patch.object(comic_agent, "write_script",
+                               return_value=GOOD_SCRIPT) as m:
+            d = self._post(panels=1)
+            self._wait(d["job"])
+        self.assertEqual(m.call_args.kwargs.get("pov_mode"), "pov")
+
+    def test_pov_mode_forwarded_to_writer_and_fixer(self):
+        """前端选「自由视角」→ 编剧与补正两边都得收到，缺一边就白改。"""
+        with mock.patch.object(comic_agent, "write_script",
+                               return_value=GOOD_SCRIPT) as w, \
+                mock.patch.object(comic_agent, "fix_script",
+                                  return_value={"text": GOOD_SCRIPT,
+                                                "issues": [], "diff": [],
+                                                "adopted": False,
+                                                "status": "nochange",
+                                                "warnings": [], "audit": [],
+                                                "skipped": False, "model": ""}) as f:
+            d = self._post(panels=1, pov_mode="free")
+            out = self._wait(d["job"])
+        self.assertEqual(w.call_args.kwargs.get("pov_mode"), "free")
+        self.assertEqual(f.call_args.kwargs.get("pov_mode"), "free")
+        self.assertEqual(out.get("pov_mode"), "free")
+
+    def test_pov_mode_persisted_to_task_dir(self):
+        """模式必须落盘：之后单独触发的「重新补正」「修订助手」要读它。"""
+        with mock.patch.object(comic_agent, "write_script",
+                               return_value=GOOD_SCRIPT), \
+                mock.patch.object(comic_agent, "fix_script",
+                                  return_value={"text": GOOD_SCRIPT,
+                                                "issues": [], "diff": [],
+                                                "adopted": False,
+                                                "status": "nochange",
+                                                "warnings": [], "audit": [],
+                                                "skipped": False, "model": ""}):
+            d = self._post(panels=1, pov_mode="free")
+            self._wait(d["job"])
+        fp = os.path.join(self.tmp, "C20261011-01", "mode.json")
+        self.assertTrue(os.path.isfile(fp))
+        import json as _json
+        with open(fp, encoding="utf-8") as fh:
+            self.assertEqual(_json.load(fh)["pov_mode"], "free")
+
+    def test_unknown_pov_mode_falls_back_to_pov(self):
+        """认不出来的值一律退回 pov——默认永远走保守那一侧。"""
+        with mock.patch.object(comic_agent, "write_script",
+                               return_value=GOOD_SCRIPT) as m:
+            d = self._post(panels=1, pov_mode="乱写")
+            self._wait(d["job"])
+        self.assertEqual(m.call_args.kwargs.get("pov_mode"), "pov")
+
     def test_prev_story_forwarded(self):
         """接上一集：后端抽它的气泡+旁白当前情，画面行不许带进去。
 
@@ -335,6 +387,33 @@ class ComicFixApiTest(unittest.TestCase):
         r = self.c.post("/api/comic/fix", json={"task": self.NAME})
         self.assertEqual(r.status_code, 400)
         self.assertIn("brief", r.get_json()["error"])
+
+    def test_refix_reads_mode_from_task_dir(self):
+        """「重新补正」是之后单独触发的：模式只能从任务目录读，读不到就退回 pov。
+
+        不读 mode.json 的后果很具体：作者用自由视角写好的双人剧本，点一下
+        「重新补正」就被 POV 规则改回单人（画面里那第二个人整个消失）。
+        """
+        import json as _json
+        self._write("mode.json", _json.dumps({"pov_mode": "free"}))
+        fake = {"text": self.FIXED, "issues": [], "diff": [], "adopted": False,
+                "status": "nochange", "audit": [], "warnings": [],
+                "skipped": False, "model": ""}
+        with mock.patch.object(comic_agent, "fix_script",
+                               return_value=fake) as m:
+            self.c.post("/api/comic/fix", json={"task": self.NAME})
+            self._idle()
+        self.assertEqual(m.call_args.kwargs.get("pov_mode"), "free")
+
+    def test_refix_without_mode_file_uses_pov(self):
+        fake = {"text": self.FIXED, "issues": [], "diff": [], "adopted": False,
+                "status": "nochange", "audit": [], "warnings": [],
+                "skipped": False, "model": ""}
+        with mock.patch.object(comic_agent, "fix_script",
+                               return_value=fake) as m:
+            self.c.post("/api/comic/fix", json={"task": self.NAME})
+            self._idle()
+        self.assertEqual(m.call_args.kwargs.get("pov_mode"), "pov")
 
     def test_uses_original_draft_as_base(self):
         fake = {"text": self.FIXED, "issues": [], "diff": [], "adopted": False,
