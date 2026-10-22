@@ -1915,5 +1915,74 @@ class PrevStoryTest(unittest.TestCase):
         self.assertNotIn("前情：", comic_writer._user_prompt("设定", 3, "", ""))
 
 
+class SkipSearchTest(unittest.TestCase):
+    """跳过查库（2026-10-22 用户要的「默认跳过检索 AI」）。
+
+    钉死三件事：
+      1. 提示词真的换了——跳过版里不许再有「第一步永远是查库」和工具调用示例，
+         否则模型会先吐一轮 `[[TOOL:...]]` 白烧一轮（那时工具是关的）；
+      2. 循环真的不执行工具——`_run_tool` 一次都不许被调；
+      3. 轮数收敛到 NO_SEARCH_ROUNDS，不会用满 12 轮在原地打转。
+    """
+
+    SCRIPT = "# 标题：公交站\n\n## 01\n画面: 1girl, solo, black hair\n气泡: 一\n"
+
+    def test_prompt_swaps_tools_section(self):
+        normal = comic_agent._system_prompt(3)
+        skip = comic_agent._system_prompt(3, no_search=True)
+        self.assertIn("第一步永远是查库", normal)
+        self.assertIn("[[TOOL:search_tags]]", normal)
+        self.assertNotIn("第一步永远是查库", skip)
+        self.assertNotIn("[[TOOL:search_tags]]", skip)
+        self.assertIn("没有工具", skip)
+        # 规则一条都不许少：规范正文和 POV 硬规则两版共用
+        for kw in ("Danbooru", "POV", "画面:", "气泡:"):
+            self.assertIn(kw, skip)
+        self.assertGreater(len(skip), len(normal) * 0.9)
+
+    def test_first_round_writes_without_any_tool(self):
+        with mock.patch.object(comic_agent.llm, "call_llm",
+                               return_value=self.SCRIPT) as m, \
+                mock.patch.object(comic_agent, "_run_tool") as t:
+            out = comic_agent.run_rounds([{"role": "user", "content": "x"}],
+                                         no_search=True)
+        self.assertIn("1girl", out)
+        self.assertEqual(m.call_count, 1)      # 一轮就交稿
+        t.assert_not_called()                  # 一个工具都没执行
+
+    def test_tool_calls_are_not_executed_and_nudged_once(self):
+        """模型刹不住还吐工具调用时：不执行、只催稿，催完照收正文。"""
+        calls = '\n'.join('[[TOOL:search_tags]]{"query": "q%d"}' % i
+                          for i in range(3))
+        with mock.patch.object(comic_agent.llm, "call_llm",
+                               side_effect=[calls, self.SCRIPT]) as m, \
+                mock.patch.object(comic_agent, "_run_tool") as t:
+            out = comic_agent.run_rounds([{"role": "user", "content": "x"}],
+                                         no_search=True)
+        self.assertIn("1girl", out)
+        self.assertEqual(m.call_count, 2)
+        t.assert_not_called()
+        fed = " ".join(str(x.get("content") or "")
+                       for x in m.call_args_list[1].args[0])
+        self.assertIn("工具已经关闭", fed)
+        # 跳过查库时不能说「用你已经查到的」
+        self.assertNotIn("用你已经查到的", fed)
+
+    def test_write_script_caps_rounds(self):
+        with mock.patch.object(comic_agent, "run_rounds",
+                               return_value=self.SCRIPT) as m:
+            comic_agent.write_script("x", panels=1, no_search=True)
+        self.assertTrue(m.call_args.kwargs.get("no_search"))
+        self.assertLessEqual(m.call_args.kwargs.get("max_rounds"),
+                             comic_agent.NO_SEARCH_ROUNDS)
+
+    def test_write_script_passes_flag_to_prompt(self):
+        with mock.patch.object(comic_agent, "run_rounds",
+                               return_value=self.SCRIPT) as m:
+            comic_agent.write_script("x", panels=1, no_search=True)
+        system = m.call_args.args[0][0]["content"]
+        self.assertIn("没有工具", system)
+
+
 if __name__ == "__main__":
     unittest.main()

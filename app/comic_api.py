@@ -445,6 +445,15 @@ def api_comic_script():
     character = str(data.get("character") or "").strip()
     provider = str(data.get("provider") or "").strip() or None
     model = str(data.get("model") or "").strip() or None
+    # 跳过查库（2026-10-22）：前端默认勾上。只跳过「先查标签库」那十几轮，
+    # 规范 / POV 硬规则 / 长度限制照旧，补正那一步也照旧（它不查库、只改稿）。
+    # 不传 = True（用户要的默认）；显式传 false 才走查库流程。字符串形态也认，
+    # 避免 `bool("false") is True` 这种老坑。
+    no_search = data.get("no_search", True)
+    if isinstance(no_search, str):
+        no_search = no_search.strip().lower() not in ("", "0", "false", "no", "off")
+    else:
+        no_search = bool(no_search)
     # 连载（2026-10-18）：prev = 上一集的任务号，给了就把它的气泡+旁白当前情。
     # 目录名过一遍 `_task_dir` 校验（它挡住 `..` 和绝对路径），指不到就当没给。
     prev = str(data.get("prev") or "").strip()
@@ -480,7 +489,7 @@ def api_comic_script():
             text = comic_agent.write_script(
                 brief, panels=panels_n, character=character,
                 provider=provider, model=model, progress=_progress,
-                prev=prev_text)
+                prev=prev_text, no_search=no_search)
             # 目录**不再在这里建**：名字要带剧本标题，得等拿到稿子（见下面
             # `final` 那一段）。失败的 job 仍然不留空目录。
 

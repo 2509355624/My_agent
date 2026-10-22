@@ -162,6 +162,10 @@ MAX_ROUNDS = 12
 # 写出来，比多烧一轮贵得多（用户拿到的是空白剧本）。
 WRITE_RESERVE = 2
 
+# 跳过查库（`no_search=True`）时的轮数上限。没有查库段，走向只有两种：一轮就
+# 交稿 / 模型还在吐工具调用被催。3 轮够用（1 + 2 次催稿），比 12 轮省时间。
+NO_SEARCH_ROUNDS = 3
+
 # 转入强制动笔段时插的这一条。措辞要「命令式 + 说明工具已关闭」：
 # 只说「请写剧本」模型会继续查库，必须明确告诉它那些行**不会被受理**。
 _FORCE_WRITE = (
@@ -1031,6 +1035,75 @@ def _story_spec_text():
         return ""
 
 
+# ─── 工具段：查库 / 不查库两版（2026-10-22）──────────────────
+#
+# 用户要一个「跳过检索」的选项：大模型现在够强，把规则给全，它凭训练里已有的
+# Danbooru 标签知识就能写，不必先花十几轮查库。两版工具段二选一填进
+# `_SYSTEM_TMPL` 的 `__TOOLS__`：
+#
+#   _TOOLS_SECTION       默认。教它用 search_tags / read_file / web_search。
+#   _NO_SEARCH_SECTION   跳过查库。**必须整段换掉**，不能只把轮次预算改小——
+#                        只要提示词里还写着「第一步永远是查库」，模型就会在第一
+#                        轮吐一堆 `[[TOOL:...]]`；而跳过模式下工具是关的（轮次
+#                        预算 0，第一轮就进强制动笔段），白烧一轮才收敛。
+#
+# 规范正文、POV 硬规则、格数/气泡长度那些**两版完全一样**：用户要的「把规则
+# 给她、她自己就能写」靠的是那些，不是查库流程。
+_TOOLS_SECTION = """【你能用的三个工具，以及**怎么调用**】
+调用必须写成下面这样一行（可以一次写多行，我会一次性全执行完再回给你）：
+
+[[TOOL:search_tags]]{"query": "抓手腕"}
+
+- **search_tags** —— 查 Danbooru 标签库（32.8 万条，带中文对照）。query 给
+  中文名（抓手腕 / 眼泪 / 百褶裙）或英文 tag 名（hand_grab / tears），也可以
+  直接给一句话。返回候选列表，每行是「tag 中文名 cat=类别」（4=角色 3=作品
+  0=通用 1=画师）。随机抽用
+  [[TOOL:search_tags]]{"random": true, "cat": "1", "count": 3}
+- **read_file** —— 读 skills/ 里的文件：
+  [[TOOL:read_file]]{"path": "anima-tags/references/examples.md"}
+- **web_search** —— 联网查角色出处，只在标签库查不到时用：
+  [[TOOL:web_search]]{"query": "银狼 出自哪部作品"}
+
+⚠️ **查库只能写成上面的 `[[TOOL:...]]{...}` 格式**。写成「search_tags: 抓手腕」
+这样的普通文字，系统看不见、也不会执行——你会白等一整轮（2026-10-11 实测
+就是这么错的，29 个查询全成了废文本）。
+
+【第一步永远是查库——先把这一话要用的标签查完，再动笔写剧本】
+⚠️ **你有轮次预算，超了系统会强制你动笔（那时工具就关了）。**
+- 查库阶段大约 10 轮，之后系统会发一条「查库时间到」并**关闭工具**，逼你用
+  手上已经查到的标签动笔。所以：
+  - **一轮要批量查**：一次回复里可以写 15~25 行工具调用，别一轮只查 5 个。
+  - **同一个词不要查第二遍**：查过的结果就在对话里，回头看一眼就行。
+  - **把预算花在不确定的词上**：动作、手部、构图、光照、道具这些最容易踩坑；
+    只要有一点点不确定就先查。
+- 每个要用的标签都先调 search_tags 查一次。查中文（「抓手腕」「哭泣」）可以，
+  直接查英文 tag（hand_grab、tears）也可以；不确定英文叫什么就查中文。
+- 库里命中 → 用返回的 tag 名（把下划线换成空格写进剧本）。
+- 一个中文名出来几十个候选 → 自己挑最贴合画面的那一个，把**其他候选**记进
+  `备选:` 行（见下面「歧义怎么办」）。
+- 查不到 → 换个说法再查；换两三次仍查不到，就用语义最近的库里标签，
+  **绝不要自己造一个库里没有的 tag**。
+- 需要时用 read_file 读完整规范（anima-tags/references/spec.md）与示例
+  （anima-tags/references/examples.md）；用 web_search 查某个角色的作品出处。
+"""
+
+# 跳过查库版。三件事必须说死：没有工具 / 立刻出稿 / 标签怎么写。
+# 最后一段是补丁：下面硬规则里还散着几句「先查库再写」「写前查库」，那几句在
+# 查库模式是对的，这里统一改口，不然模型会以为自己还有工具。
+_NO_SEARCH_SECTION = """【这一次**没有工具**，不需要查任何东西，直接写剧本】
+- 你**没有**可调用的工具：查不了标签库、读不了 skills/ 里的文件、也上不了网。
+  `[[TOOL:...]]{...}` 这类写法一律当废文本丢掉，**一个字都不会执行**——写了
+  只会浪费你唯一的一轮机会。
+- 规范和示例都已经在下面的规则里给你了。**从第一轮就输出完整剧本**：每一格
+  都要有 `画面:` 和 `气泡:`，只输出剧本本身，不要解释、不要围栏。
+- 标签靠你自己的知识写：优先用你熟悉的 Danbooru 通用标签（`black hair`、
+  `white shirt`、`standing`、`looking at viewer` 这种），写不准时用最直白的
+  英文描述词，**不要为了"看起来像标签"生造怪词**。下划线换成空格写。
+- 需要给某个标签写备选时，直接凭记忆写 `备选:` 行，不用去核对。
+- ⚠️ 下面规则里凡出现「先查库再写」「写前查库」「查库确认」的地方，本次一律
+  理解为「凭你已经知道的知识直接写」。
+"""
+
 _SYSTEM_TMPL = """你是条漫分镜编剧，同时是 Anima 提示词工程师。
 
 你写的每一格 `画面:` 会**直接**喂给 Anima 生图工作流——它是**唯一的生图提示词**
@@ -1067,42 +1140,7 @@ Danbooru 标签库（32.8 万条）是**参考**，不是白名单：库里有�
 - 交稿前把每格的 `标签` + `气泡` 按顺序连起来读一遍，像读一条真的漫画：
   **读得通才交稿**；读不通就重写那几格，不许硬交。
 
-【你能用的三个工具，以及**怎么调用**】
-调用必须写成下面这样一行（可以一次写多行，我会一次性全执行完再回给你）：
-
-[[TOOL:search_tags]]{"query": "抓手腕"}
-
-- **search_tags** —— 查 Danbooru 标签库（32.8 万条，带中文对照）。query 给
-  中文名（抓手腕 / 眼泪 / 百褶裙）或英文 tag 名（hand_grab / tears），也可以
-  直接给一句话。返回候选列表，每行是「tag 中文名 cat=类别」（4=角色 3=作品
-  0=通用 1=画师）。随机抽用
-  [[TOOL:search_tags]]{"random": true, "cat": "1", "count": 3}
-- **read_file** —— 读 skills/ 里的文件：
-  [[TOOL:read_file]]{"path": "anima-tags/references/examples.md"}
-- **web_search** —— 联网查角色出处，只在标签库查不到时用：
-  [[TOOL:web_search]]{"query": "银狼 出自哪部作品"}
-
-⚠️ **查库只能写成上面的 `[[TOOL:...]]{...}` 格式**。写成「search_tags: 抓手腕」
-这样的普通文字，系统看不见、也不会执行——你会白等一整轮（2026-10-11 实测
-就是这么错的，29 个查询全成了废文本）。
-
-【第一步永远是查库——先把这一话要用的标签查完，再动笔写剧本】
-⚠️ **你有轮次预算，超了系统会强制你动笔（那时工具就关了）。**
-- 查库阶段大约 10 轮，之后系统会发一条「查库时间到」并**关闭工具**，逼你用
-  手上已经查到的标签动笔。所以：
-  - **一轮要批量查**：一次回复里可以写 15~25 行工具调用，别一轮只查 5 个。
-  - **同一个词不要查第二遍**：查过的结果就在对话里，回头看一眼就行。
-  - **把预算花在不确定的词上**：动作、手部、构图、光照、道具这些最容易踩坑；
-    只要有一点点不确定就先查。
-- 每个要用的标签都先调 search_tags 查一次。查中文（「抓手腕」「哭泣」）可以，
-  直接查英文 tag（hand_grab、tears）也可以；不确定英文叫什么就查中文。
-- 库里命中 → 用返回的 tag 名（把下划线换成空格写进剧本）。
-- 一个中文名出来几十个候选 → 自己挑最贴合画面的那一个，把**其他候选**记进
-  `备选:` 行（见下面「歧义怎么办」）。
-- 查不到 → 换个说法再查；换两三次仍查不到，就用语义最近的库里标签，
-  **绝不要自己造一个库里没有的 tag**。
-- 需要时用 read_file 读完整规范（anima-tags/references/spec.md）与示例
-  （anima-tags/references/examples.md）；用 web_search 查某个角色的作品出处。
+__TOOLS__
 
 【画面字段的硬规则】（违反任何一条，这一格会被代码打回重写）
 1. **只能写逗号分隔的英文标签，绝不许出现句子。**
@@ -1523,8 +1561,15 @@ __STORY_SPEC__
 """
 
 
-def _system_prompt(panels):
+def _system_prompt(panels, no_search=False):
+    """拼整份 system。no_search=True 时装「没有工具」那版工具段。
+
+    两版只有工具段不同（`_TOOLS_SECTION` / `_NO_SEARCH_SECTION`），规范正文、
+    POV 硬规则、格数与长度限制完全共用——跳过查库不等于放宽规则。
+    """
     text = _SYSTEM_TMPL
+    text = text.replace("__TOOLS__",
+                        _NO_SEARCH_SECTION if no_search else _TOOLS_SECTION)
     text = text.replace("__SPEC__", _spec_text() or "（规范文件读取失败，按上面的硬规则执行）")
     text = text.replace("__STORY_SPEC__",
                         _story_spec_text() or "（规范文件读取失败，按上面的硬规则执行）")
@@ -1634,13 +1679,17 @@ def _emit(progress, msg):
 # ─── agent 循环 ─────────────────────────────────────────
 
 def run_rounds(messages, provider=None, model=None, max_rounds=MAX_ROUNDS,
-               progress=None):
+               progress=None, no_search=False):
     """跑 agent 循环，返回模型最终交出的正文（可能为空串）。
 
     轮次分两段：
 
         1 .. max_rounds - WRITE_RESERVE   查库段：工具调用会被执行
         之后 WRITE_RESERVE 轮              强制动笔段：**工具关闭**，只要正文
+
+    `no_search=True`（2026-10-22 用户要的「跳过检索」）：查库段直接置 0，第 1 轮
+    就是强制动笔轮，工具一次都不执行。**提示词那侧必须同步换成
+    `_NO_SEARCH_SECTION`**（`write_script` 负责），否则模型会白吐一轮工具调用。
 
     为什么必须有强制段（2026-10-11 用户实测）：第一版把「查够了就动笔」交给
     模型自己判断，结果两稿 24 轮**全程在查库**——日志里第 12 轮的 6 行全是
@@ -1653,11 +1702,16 @@ def run_rounds(messages, provider=None, model=None, max_rounds=MAX_ROUNDS,
     fallback = ""             # 过程稿兜底：只在最终也没交出正文时才用
     nudged = False            # 第一轮没查库时只打回一次，防死循环
     seen = {}                 # 已查过的 (工具, 参数) → 首次查它的轮号（跨轮去重）
-    search_rounds = max(1, max_rounds - WRITE_RESERVE)
+    # 跳过查库 = 预算 0：`forced` 从第 1 轮起就为 True，工具永远不执行。
+    search_rounds = 0 if no_search else max(1, max_rounds - WRITE_RESERVE)
+    if no_search:
+        log.info("[comic-agent] 跳过查库模式：直接从第 1 轮动笔")
 
     for round_no in range(1, max_rounds + 1):
         forced = round_no > search_rounds
-        if round_no == search_rounds + 1:
+        # 「查库时间到」那条只在真有过查库段时才插；跳过模式下模型压根没查过，
+        # 塞一句「时间到」反而会让它以为自己漏了什么。
+        if round_no == search_rounds + 1 and not no_search:
             log.info("[comic-agent] 查库段用完（%d 轮），转入强制动笔", search_rounds)
             _emit(progress, "查库结束，开始写剧本")
             messages.append({"role": "user", "content": _FORCE_WRITE})
@@ -1681,12 +1735,16 @@ def run_rounds(messages, provider=None, model=None, max_rounds=MAX_ROUNDS,
                          round_no, len(doc))
                 return doc
             log.warning("[comic-agent] 第 %d 轮（强制）仍只输出工具调用", round_no)
-            _emit(progress, "模型还在查库，继续催稿")
+            _emit(progress, "模型还在往工具上调，继续催稿")
             messages.append({"role": "assistant", "content": reply})
+            # 跳过查库时不能说「用你已经查到的」（它一个都没查），改口说凭知识写。
+            tail = ("标签凭你的知识直接写，写法要具体、颜色写进去。"
+                    if no_search else
+                    "标签用你已经查到的，不要新造。")
             messages.append({"role": "user", "content":
                              "你又输出了工具调用——**工具已经关闭**，那几行等于"
                              "什么都没写。现在只输出剧本本身（每一格都要有 "
-                             "`画面:` 和 `气泡:`），标签用你已经查到的，不要新造。"})
+                             "`画面:` 和 `气泡:`），" + tail})
             continue
 
         calls = parse_tool_calls(reply)
@@ -1964,18 +2022,24 @@ def prev_story_text(script_path, limit=PREV_STORY_LIMIT):
 
 
 def write_script(brief, panels=3, character="", provider=None, model=None,
-                 max_rounds=MAX_ROUNDS, tries=2, progress=None, prev=""):
-    """查库写剧本。返回剧本文本（markdown，已含头部备选记录）。
+                 max_rounds=MAX_ROUNDS, tries=2, progress=None, prev="",
+                 no_search=False):
+    """写剧本。返回剧本文本（markdown，已含头部备选记录）。
 
     参数：
       - provider / model：这一轮用哪家模型（漫画页下拉），不传走全局默认。
+      - no_search：跳过查库（2026-10-22 用户要的开关，漫画页默认勾上）。True 时
+        system 提示词换成「没有工具」那版、查库段预算 0，第一轮就交稿。规范、
+        POV 硬规则、长度限制一条不少——跳过的只是「先去 32.8 万条标签库里核对
+        每个词」这一步。标签存在性本来就不判不合格（见 `check`），所以写出来的
+        标签不在库里也不会被反复打回，只会在日志留一条参考。
       - tries：不合格时的回炉次数。**最后一次容忍**——把校验警告写进日志后
         原样返回，不抛异常。理由：硬卡死会让整个漫画流程停下来，而一份带
         「标签没验过」的剧本用户在确认环节还能自己改；抛异常则什么都拿不到。
         例外是**一稿都没写出正文**（模型全程在查库）：那时空手返回等于把一个
         空剧本落盘，抛 RuntimeError 更有用（调用方转成可见的报错）。
       - progress：可选回调，每执行一次工具调一次，用来在界面上显示
-        「正在查库 arm_grab」这类实时进度。
+        「正在查库 arm_grab」这类实时进度；跳过查库时只有阶段提示。
       - prev：上一集的「前情提要」正文（`prev_story_text` 的产物）。空串 =
         全新一集；给了就要求接着前情往下写、不许重演（见 `_user_prompt`）。
     """
@@ -1989,8 +2053,13 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
     # 2026-10-11 实跑逮到：日志是 `volc / deepseek-v4-flash-ga` 而不是 deepseek。
     provider = (provider or "").strip() or llm.CURRENT_PROVIDER or None
 
+    # 跳过查库时轮数不需要 12 轮：只有「交稿 / 被催稿」两种走向，3 轮足够
+    # （1 轮正常 + 2 轮兜底催稿）。用满 12 轮只会让模型在原地反复道歉。
+    if no_search:
+        max_rounds = min(max_rounds, NO_SEARCH_ROUNDS)
+
     base = [
-        {"role": "system", "content": _system_prompt(panels)},
+        {"role": "system", "content": _system_prompt(panels, no_search=no_search)},
         {"role": "user", "content": comic_writer._user_prompt(brief, panels,
                                                               character, prev)},
     ]
@@ -2001,10 +2070,12 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
     last_notes = []
     why = ""
     for attempt in range(1, tries + 1):
-        _emit(progress, "第 %d/%d 稿：开始查库" % (attempt, tries))
+        _emit(progress, "第 %d/%d 稿：直接写剧本（不查库）" % (attempt, tries)
+              if no_search else "第 %d/%d 稿：开始查库" % (attempt, tries))
         text = comic_writer._clean(run_rounds(base + feedback, provider=provider,
                                               model=model, max_rounds=max_rounds,
-                                              progress=progress))
+                                              progress=progress,
+                                              no_search=no_search))
         clean, notes = _extract_notes(_strip_preamble(text))
         # 空正文单独处理：这跟「交了稿但标签不对」是两回事。
         # 实测（2026-10-11）：模型整轮都在查库没动笔，正文是空串，而原来的代码
@@ -2014,13 +2085,20 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
         # 空白，还以为只是「解析 bug」。这里给它一句对症的指令，且**不覆盖**上一
         # 稿——上一稿至少是有内容的，丢不得。
         if not clean.strip():
-            why = "模型整轮都在查库，没有写出剧本"
+            why = ("模型没写出剧本" if no_search
+                   else "模型整轮都在查库，没有写出剧本")
             log.warning("[comic-agent] 第 %d 稿没交出正文", attempt)
-            feedback = [{"role": "user", "content":
-                         "你上一轮只顾着查标签库，**没有交剧本**。这一轮请立刻输出"
-                         "完整剧本（每一格都要有 `画面:` 和 `气泡:`，只输出剧本本"
-                         "身），标签就用你已经查到的那些，不要新造词，也不要再输出"
-                         "工具调用。"}]
+            if no_search:
+                feedback = [{"role": "user", "content":
+                             "你上一轮**没有交剧本**。这一轮请立刻输出完整剧本"
+                             "（每一格都要有 `画面:` 和 `气泡:`，只输出剧本本"
+                             "身），不要再输出工具调用——这次没有工具可调。"}]
+            else:
+                feedback = [{"role": "user", "content":
+                             "你上一轮只顾着查标签库，**没有交剧本**。这一轮请立刻输出"
+                             "完整剧本（每一格都要有 `画面:` 和 `气泡:`，只输出剧本本"
+                             "身），标签就用你已经查到的那些，不要新造词，也不要再输出"
+                             "工具调用。"}]
             continue
         ok, why = check(clean, panels, brief)
         if ok:
@@ -2042,7 +2120,9 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
     # 「什么都没有」容忍不了。
     if not last.strip():
         log.error("[comic-agent] %d 稿都没写出正文，报错", tries)
-        raise RuntimeError("编剧 %d 稿都只顾查库、没有写出剧本" % tries)
+        raise RuntimeError(
+            "编剧 %d 稿都没有写出剧本" % tries if no_search
+            else "编剧 %d 稿都只顾查库、没有写出剧本" % tries)
 
     # 最后一次也没过：原样交出，把问题写在头部的注释行里让人看见。
     # ⚠️ 绝不能把警告拼到剧本**末尾**——parse_script_text 会把它当续行接进

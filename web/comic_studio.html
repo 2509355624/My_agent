@@ -149,6 +149,10 @@
         <option value="">不接——全新一集</option>
       </select>
       <span class="spacer" style="flex:1"></span>
+      <label id="skipSearchWrap" style="font-size:12px;white-space:nowrap;color:var(--text-dim)"
+             title="勾上就不查标签库，直接把规则给编剧模型、一次写完整剧本（快到十几倍）；取消勾选则先查库再写">
+        <input type="checkbox" id="skipSearch" checked onchange="rememberSkipSearch()"> 跳过查库
+      </label>
       <button class="btn primary" id="btnScript" onclick="genScript()">生成剧本</button>
     </div>
     <textarea id="script" style="display:none" spellcheck="false"></textarea>
@@ -281,6 +285,7 @@ function rememberTask(t) {
 }
 let TIMER = null;
 let SCRIPT_JOB = null;    // 正在跑的编剧任务 id（编剧是后台 agent，轮询取结果）
+let SCRIPT_NO_SEARCH = true;  // 这一轮编剧是否跳过了查库（只影响提示文案）
 let PROVIDERS = [];       // /api/providers 拉回来的候选家（编剧模型下拉）
 let RUNNING = null;       // 后台正在跑的阶段（scene/bubble/fix）——renderSlot
                           // 拿它区分「真排队」和「没线程会来跑的假排队」
@@ -348,6 +353,25 @@ function rememberLlm() {
 function savedLlm() {
   try { return JSON.parse(localStorage.getItem(LS_LLM) || 'null') || {}; }
   catch (e) { return {}; }
+}
+
+// 「跳过查库」（2026-10-22）：默认勾上——用户现在的判断是模型够强，把规则给它
+// 直接写更快。选了不勾也要记住，否则每次刷新都得手动点回来。
+const LS_NO_SEARCH = 'comic_no_search';
+
+function skipSearch() {
+  return document.getElementById('skipSearch').checked;
+}
+
+function rememberSkipSearch() {
+  try { localStorage.setItem(LS_NO_SEARCH, skipSearch() ? '1' : '0'); } catch (e) { }
+}
+
+function restoreSkipSearch() {
+  let v = null;
+  try { v = localStorage.getItem(LS_NO_SEARCH); } catch (e) { }
+  // 没存过就是默认勾上；存过 '0' 才取消。
+  document.getElementById('skipSearch').checked = (v !== '0');
 }
 
 async function loadProviders() {
@@ -517,7 +541,9 @@ async function genScript() {
   const brief = document.getElementById('brief').value.trim();
   if (!brief) { toast('先写需求（视角/主角/剧情）', true); return; }
   const btn = document.getElementById('btnScript');
-  btn.disabled = true; btn.textContent = '编剧查库中…';
+  SCRIPT_NO_SEARCH = skipSearch();       // 开跑那一刻定死，中途改勾选不影响本轮
+  btn.disabled = true;
+  btn.textContent = SCRIPT_NO_SEARCH ? '编剧写剧本中…' : '编剧查库中…';
   try {
     const d = await api('/api/comic/script', {
       brief, panels: +document.getElementById('panels').value || 10,
@@ -525,7 +551,10 @@ async function genScript() {
       // 接上一集：给任务号，后端抽它的气泡+旁白当前情（2026-10-18）。
       prev: document.getElementById('prevTask').value || '',
       provider: document.getElementById('prov').value,
-      model: document.getElementById('model').value
+      model: document.getElementById('model').value,
+      // 跳过查库（2026-10-22）：后端默认就是 true，这里显式传，取消勾选时
+      // 传 false 才走原来那十几轮查库。
+      no_search: SCRIPT_NO_SEARCH
     });
     SCRIPT_JOB = d.job;
     pollScript();
@@ -546,7 +575,11 @@ async function pollScript() {
   if (d.state === 'running') {
     const log = d.log || [];
     const last = log.length ? log[log.length - 1] : '正在读规范…';
-    document.getElementById('btnScript').textContent = '编剧查库中（' + last + '）';
+    // 跳过查库时不叫「查库中」——它一个库都没查，写错话会让人以为卡住了。
+    // 用 SCRIPT_NO_SEARCH（开跑那一刻的快照）而不是现场读复选框：跑到一半改
+    // 勾选不该让文案跳来跳去。
+    const head = SCRIPT_NO_SEARCH ? '编剧写剧本中（' : '编剧查库中（';
+    document.getElementById('btnScript').textContent = head + last + '）';
     setTimeout(pollScript, 1200);
     return;
   }
@@ -1436,6 +1469,7 @@ function poll() { clearTimeout(TIMER); TIMER = setTimeout(async () => { await re
 // 走 /api/comic/script_text 取回（纯写真任务没有 script.md，抛错就当没有）。
 // 参数卡无论如何先显示——它可能是全局默认/模板值，跟有没有任务无关。
 async function restoreSession() {
+  restoreSkipSearch();                // 跳过查库的勾选状态（默认勾上，2026-10-22）
   await loadTasks();                  // 下拉先填好（一个任务都没有也要给个空选项）
   await loadChannels();               // 渠道下拉同样先填好（没任务也能先挑渠道）
   let saved = null;
@@ -1578,6 +1612,8 @@ function syncModeInputs() {
   document.getElementById('panels').title = p ? '写真相张数（1~12）' : '格数';
   document.getElementById('panels').max = p ? 12 : 30;
   document.getElementById('btnScript').textContent = p ? '生成写真' : '生成剧本';
+  // 「跳过查库」只对剧本模式有意义（写真那条路根本不经过编剧）。
+  document.getElementById('skipSearchWrap').style.display = p ? 'none' : '';
   document.getElementById('brief').placeholder = p
     ? '想拍什么：花田里回眸、天台看夕阳、教室靠窗午睡……（一次多张，每张换场景/服装/构图）'
     : '视角: 哥哥\n主角: 妹妹\n剧情: 下雨天兄妹俩在公交站躲雨……（前两行是硬约束：视角=镜头后的「我」，男性→pov、女性→female_pov；主角=画面里唯一入画的人）';

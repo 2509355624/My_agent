@@ -104,6 +104,30 @@ class ComicScriptApiTest(unittest.TestCase):
         self.assertEqual(kw.get("provider"), "deepseek")
         self.assertEqual(kw.get("model"), "deepseek-v4-flash")
 
+    def test_skip_search_defaults_on(self):
+        """不传 no_search 就是跳过查库（2026-10-22 用户要的默认）。"""
+        with mock.patch.object(comic_agent, "write_script",
+                               return_value=GOOD_SCRIPT) as m:
+            d = self._post(panels=1)
+            self._wait(d["job"])
+        self.assertIs(m.call_args.kwargs.get("no_search"), True)
+
+    def test_skip_search_can_be_turned_off(self):
+        """显式传 false 才走原来的查库流程（前端取消勾选）。"""
+        with mock.patch.object(comic_agent, "write_script",
+                               return_value=GOOD_SCRIPT) as m:
+            d = self._post(panels=1, no_search=False)
+            self._wait(d["job"])
+        self.assertIs(m.call_args.kwargs.get("no_search"), False)
+
+    def test_skip_search_string_false(self):
+        """字符串 "false" 不能被 bool() 当成真（老坑，这里钉一下）。"""
+        with mock.patch.object(comic_agent, "write_script",
+                               return_value=GOOD_SCRIPT) as m:
+            d = self._post(panels=1, no_search="false")
+            self._wait(d["job"])
+        self.assertIs(m.call_args.kwargs.get("no_search"), False)
+
     def test_prev_story_forwarded(self):
         """接上一集：后端抽它的气泡+旁白当前情，画面行不许带进去。
 
