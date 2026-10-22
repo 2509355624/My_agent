@@ -190,6 +190,8 @@
       <span style="color:var(--text-dim);font-size:12px">剧本可直接改字（场景行/台词行都行），改完点确认开跑按改过的跑</span>
       <span class="spacer" style="flex:1"></span>
       <button class="btn" id="btnRefix" onclick="refix()" title="以编剧原稿为底，重跑一遍内容补正">🩹 重新补正</button>
+      <button class="btn" id="btnRerun" onclick="rerunAll()"
+              title="剧本不动，按当前「生图渠道」把每一格重新画一遍——换渠道对比效果用">🔁 换渠道重跑</button>
       <button class="btn" id="btnSave" onclick="saveScript(false)">只保存</button>
       <button class="btn primary" id="btnStart" onclick="saveScript(true)">确认开跑（渲染全部场景图）</button>
     </div>
@@ -330,7 +332,7 @@ function setBusy(b, phase) {
   // 槽位刷新会调 setBusy(false)，把「生成剧本」重新启用（用户能重复点，
   // 一重复就是两个 agent 在并发烧 token）。
   const busy = b || !!SCRIPT_JOB;
-  for (const id of ['btnScript', 'btnSave', 'btnStart', 'btnBubbleAll', 'btnRefix', 'btnChat', 'btnChatUndo'])
+  for (const id of ['btnScript', 'btnSave', 'btnStart', 'btnRerun', 'btnBubbleAll', 'btnRefix', 'btnChat', 'btnChatUndo'])
     document.getElementById(id).disabled = busy;
   document.querySelectorAll('.slot .ops button, .slot .ops select').forEach(x => x.disabled = busy);
   // 手动修复栏也要锁：跑一轮 Qwen 时再点一次就是两个后台任务抢同一格。
@@ -965,6 +967,32 @@ async function saveScript(andRun) {
     toast('已开跑：逐格渲染场景图（' + (channel() || '默认渠道') + '）');
     poll();
   } catch (e) { toast(e.message, true); }
+}
+
+// 换渠道重跑（2026-10-22 用户要的）：剧本一个字不动，按「生图渠道」下拉当前的
+// 值，把每一格都重画一遍。和「确认开跑」的区别就在这里——开跑会跳过已经出过图
+// 的格子，而换渠道测试时那些旧图正是要替换掉的，所以后端会先把状态清回待渲染。
+async function rerunAll() {
+  if (!TASK) { toast('先选一个任务', true); return; }
+  const ch = channel() || '默认渠道';
+  if (!confirm('按「' + ch + '」把这一集的场景图全部重画？\n\n'
+      + '· 剧本不动\n'
+      + '· 已出好的场景图会被新的覆盖\n'
+      + '· 气泡图（阶段二）不重画\n\n'
+      + '换渠道对比效果就靠这个，画的过程中可以点「中断全部」停下。')) return;
+  const btn = document.getElementById('btnRerun');
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ 提交中…';
+  try {
+    const d = await api('/api/comic/rerun', {task: TASK, scene_skill: channel()});
+    setBusy(true, 'scene');
+    toast('已重跑 ' + d.panels + ' 格（' + d.scene_skill + '）');
+    refresh(); poll();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
 }
 
 // 中断这一批（2026-10-22 用户要的）：正在画的那张立刻停、排队中的不再画，

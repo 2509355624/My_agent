@@ -67,14 +67,19 @@ _BUBBLE_CONTRACT = """- 这一版有台词：每格动态行下面紧跟一行 `
   或 `气泡2: （男）中文台词`，不要空行，不要另起一格。每句不超过 16 个中文字。
 """
 
-_FIXED_LINE_RE = re.compile(r"^(?:固定部分|固定块|固定角色|角色固定)\s*[:：]\s*(.*)$")
-_FIXED_ONLY_RE = re.compile(r"^(?:固定部分|固定块|固定角色|角色固定)\s*[:：]?\s*$")
 _SEP_RE = re.compile(r"^-{3,}\s*$")
 _PANEL_NO_RE = re.compile(r"^##\s*\d+\s*$")
 # 固定部分「一个角色一行」：行首是 1girl / 1boy / 2girls ...
 _COUNT_START_RE = re.compile(r"^\d+\s*(?:girls?|boys?|others?)\b", re.I)
 _COUNT_HEAD_RE = re.compile(r"^(\d+\s*(?:girls?|boys?|others?))\s*[,，]\s*(.+)$",
                             re.I)
+_ASCII_RE = re.compile(r"[A-Za-z]")
+# 中文标签行：`# 标题：X`、`固定部分（一行，角色标识 + 脸部特征）`、`**固定部分**：X` 都算。
+# 模型会把 skill 里那行模板原样抄出来，这行是标题不是内容，必须识别掉，
+# 否则它会被当成固定部分 → 「固定部分必须是英文」/「缺固定部分」两种报错。
+_LABEL_RE = re.compile(
+    r"^\**\s*#*\s*(标题|固定部分|固定块|固定角色|角色固定)\s*\**\s*"
+    r"(?:[（(][^）)]*[）)])?\s*[:：]?\s*(.*)$")
 
 
 def _skill_text():
@@ -164,28 +169,26 @@ def split(text):
                 collecting = False
                 closed = True
             continue
-        if line.startswith("# 标题:") or line.startswith("# 标题："):
-            title = re.split(r"[:：]", line, maxsplit=1)[1].strip() or title
-            continue
-        if _FIXED_ONLY_RE.match(line):
-            collecting = True
-            continue
-        m = _FIXED_LINE_RE.match(line)
-        if m:
-            val = m.group(1).strip()
-            if val:
-                fixed_lines.append(val)
-                collecting = False
-                closed = True
-            else:
-                collecting = True
-            continue
         if _PANEL_NO_RE.match(line) or _SEP_RE.match(line):
             collecting = False
             closed = True
             if cur is not None:
                 blocks.append(cur)
             cur = {"scene": "", "bubble": "", "bubble2": ""}
+            continue
+        m = _LABEL_RE.match(line)
+        if m:
+            key = m.group(1)
+            rest = m.group(2).strip().strip("*").strip()
+            if key == "标题":
+                title = rest or title
+                continue
+            if _ASCII_RE.search(rest):        # `固定部分: 1girl, ...`
+                fixed_lines.append(rest)
+                collecting = False
+                closed = True
+            else:                             # 只有标签，正文在下一行
+                collecting = True
             continue
         if cur is None:
             if not fixed_lines:
@@ -208,9 +211,12 @@ def split(text):
     if cur is not None:
         blocks.append(cur)
 
+    # 纯中文的行（漏网的标签 / 模板占位）不是角色信息，直接丢掉，不要拿它当固定部分。
+    fixed_lines = [x for x in fixed_lines if _ASCII_RE.search(x)]
     fixed = "\n".join(fixed_lines).strip()
     blocks = [b for b in blocks if b["scene"] or b["bubble"] or b["bubble2"]]
     if not fixed:
+        log.warning("silver 原文没有可用固定部分，前 300 字：%r", text[:300])
         raise ValueError("silver 编剧缺固定部分")
     if _CJK_RE.search(fixed):
         raise ValueError("silver 固定部分必须是英文")

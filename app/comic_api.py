@@ -685,6 +685,39 @@ def api_comic_start():
     return jsonify({"ok": True, "scene_skill": scene_skill})
 
 
+@bp.route("/api/comic/rerun", methods=["POST"])
+def api_comic_rerun():
+    """换渠道重跑全部：把每一格清回待渲染，按请求里的渠道整批重画阶段一。
+
+    和 `/start` 只差一步：`/start` 会跳过已经出过图的格子（那是给「续跑」用的），
+    而换渠道测效果时，那些旧图恰恰是要被替换掉的——所以这里先把 state 清回
+    pending，`comic.run` 才会每格都重画。
+
+    剧本一个字不动，阶段二（气泡）也不重画：这条链只回答「换个渠道长什么样」。
+    正在跑的任务直接 409，不叠第二个线程。
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        path = _task_dir(data.get("task"))
+        task = _load_task(path)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    skill = _resolve_skill(path, data.get("scene_skill"))
+    _save_task_skill(path, skill)
+    for p in task.panels:
+        p.state, p.seed, p.error = "pending", None, None
+    task.scene_skill = skill
+    task.save_state()
+    started = _spawn(path, "scene", lambda: comic.run(
+        os.path.join(path, "script.md"), silver_only=True,
+        scene_skill=skill), on_error=_mark_pending_failed(path))
+    if not started:
+        return jsonify({"ok": False, "error": "这个任务已经在跑了，先中断再重跑"}), 409
+    comic.log.info("换渠道重跑 %s：%d 格，渠道 %s", os.path.basename(path),
+                   len(task.panels), skill)
+    return jsonify({"ok": True, "panels": len(task.panels), "scene_skill": skill})
+
+
 @bp.route("/api/comic/abort", methods=["POST"])
 def api_comic_abort():
     """中断漫画台的渲染：正在画的那张停掉、排队中的全部摘掉、逐格循环停下。

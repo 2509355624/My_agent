@@ -1370,6 +1370,27 @@ class RerenderChannelTest(unittest.TestCase):
         self.assertEqual(self.calls[-1]["scene_skill"], "krea2-pokemon")
         self.assertEqual(self._state()["scene_skill"], "krea2-pokemon")
 
+    def test_rerun_all_resets_every_panel_and_uses_the_channel(self):
+        """换渠道重跑：已出图的格子也要重画（开跑会跳过它们，这里不能跳）。"""
+        with open(os.path.join(self.path, "state.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"task_id": self.NAME, "scene_skill": "anima-line",
+                       "panels": {"01": {"state": "done", "seed": 11},
+                                  "02": {"state": "rendered", "seed": 22}}}, f)
+        d = self.c.post("/api/comic/rerun",
+                        json={"task": self.NAME,
+                              "scene_skill": "krea2-pokemon"}).get_json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["panels"], 2)
+        self.assertEqual(d["scene_skill"], "krea2-pokemon")
+        self.assertEqual(self.calls[-1]["scene_skill"], "krea2-pokemon")
+        self.assertTrue(self.calls[-1]["silver_only"])
+        st = self._state()
+        self.assertEqual(st["scene_skill"], "krea2-pokemon")
+        self.assertEqual({p["state"] for p in st["panels"].values()},
+                         {"pending"})
+        self.assertEqual({p["seed"] for p in st["panels"].values()}, {None})
+
     def test_rerender_keeps_the_task_channel_when_request_omits_it(self):
         """老前端 / 脚本调用不传渠道时，还是接住任务自己的（不能退成默认）。"""
         with open(os.path.join(self.path, "state.json"), "w",

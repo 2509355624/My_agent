@@ -126,6 +126,32 @@ class SilverParseTest(unittest.TestCase):
         self.assertIn("faceless man", first)
         self.assertIn("grey eyes", first)
 
+    def test_chinese_label_line_is_not_taken_as_fixed(self):
+        """模型会把 skill 里的模板行抄出来：它只是标签，正文在下一行。"""
+        raw = "\n".join([
+            "# 标题：便利店",
+            "固定部分（一行，角色标识 + 脸部特征）",
+            "1girl, Illyasviel, silver-white long hair, red eyes",
+            "1boy, faceless man, short black hair, grey eyes",
+            "",
+            "convenience store, girl wearing white shirt, boy wearing black shirt, "
+            "girl standing, boy standing, front view, medium shot, cool light",
+        ])
+        title, fixed, blocks = silver_comic.split(raw)
+        self.assertEqual(title, "便利店")
+        self.assertNotIn("固定部分", fixed)
+        self.assertEqual(len(fixed.splitlines()), 2)
+        self.assertEqual(len(blocks), 1)
+
+    def test_bold_label_with_inline_value(self):
+        raw = "\n".join([
+            "**固定部分**：1girl, A, black hair, blue eyes",
+            "bedroom, girl wearing white shirt, girl sitting, front view, medium shot, warm light",
+        ])
+        _, fixed, blocks = silver_comic.split(raw)
+        self.assertIn("1girl, A", fixed)
+        self.assertEqual(len(blocks), 1)
+
     def test_first_dynamic_line_is_not_swallowed_without_blank_line(self):
         raw = "\n".join([
             "1girl, A, black hair",
