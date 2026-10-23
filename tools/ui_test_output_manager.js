@@ -81,6 +81,18 @@ function check(name, cond, extra) {
   check("miao 有 2 张图", cells.length === 2, cells.length);
   check("缩略图 src 中文路径", cells[0].querySelector("img").src.includes("miao"), cells[0].querySelector("img").src.slice(0, 80));
   check("meta 有大小", /MB|KB/.test(cells[0].querySelector(".meta").textContent), cells[0].querySelector(".meta").textContent);
+  check("按文件名升序",
+    Array.from(cells).map((c) => c.dataset.rel.split("/").pop()).join() ===
+      "Batch_1024_2x_00001_.png,Batch_1024_2x_00002_.png",
+    Array.from(cells).map((c) => c.dataset.rel.split("/").pop()));
+
+  console.log("== 并发切目录不重复渲染（请求令牌）==");
+  // 旧版清空是同步的、填卡片在 fetch 回调里，连点两次会 append 两遍
+  w.selectDir("web/生图页/miao");
+  w.selectDir("web/生图页/miao");
+  await sleep(900);
+  check("连点两次仍是 2 张", $("grid").querySelectorAll(".cell").length === 2,
+    $("grid").querySelectorAll(".cell").length);
 
   console.log("== 勾选 + 删除选中 ==");
   cells[0].querySelector(".pick").checked = true;

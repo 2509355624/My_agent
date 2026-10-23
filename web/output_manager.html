@@ -213,6 +213,7 @@ var expanded = {};             // rel -> true 已展开
 var curRel = "";               // 当前目录（"" = output 根）
 var picked = new Set();        // 勾选的图片 rel
 var lbList = [], lbIdx = 0;    // 灯箱当前目录的图片列表 + 下标
+var _mainSeq = 0;              // renderMain 的请求令牌，防并发重复渲染
 
 var $ = function (id) { return document.getElementById(id); };
 var imgUrl = function (rel) {
@@ -469,12 +470,17 @@ function renderCrumb() {
 }
 
 function renderMain() {
+  // 令牌：清空是同步的、填卡片在 fetch 回调里。连点两个目录时
+  // A 清空→B 清空→A 回调 append→B 回调 append，同一批图会渲染两遍
+  // （网格里出现重复卡片）。回调里发现令牌过期就整批丢弃。
+  var seq = ++_mainSeq;
   renderCrumb();
   var grid = $("grid"), empty = $("empty");
   grid.innerHTML = "";
   $("dirInfo").textContent = curRel ? curRel : "output 根目录";
   $("btnDelDir").style.display = curRel ? "" : "none";
   loadTree(curRel).then(function (d) {
+    if (seq !== _mainSeq) return;
     lbList = d.files;
     if (!d.files.length) {
       empty.style.display = "";

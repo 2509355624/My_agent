@@ -31,6 +31,7 @@ main.py 的 `/api/image/<path:filename>`（先读本地磁盘，没有才代理 
 
 import hashlib
 import os
+import re
 import threading
 import time
 
@@ -91,6 +92,25 @@ def _fmt_bytes(n):
             return "%.1f %s" % (n, unit) if unit != "B" else "%d B" % n
         n /= 1024.0
     return "%d B" % n
+
+
+def _natural_key(name):
+    """文件名自然序。ComfyUI 出图名是 `QwenImage_00005_.png`，纯字典序会把
+    00010 排到 0009 前面（'0' < '9'），所以按「文本段 / 数字段」拆开比较。
+
+    每段返回 `(类型, 数字, 文本)` 三元组而不是裸 `int`/`str`：同一位置可能
+    一边是数字一边是文本（`abc_1` vs `abc_x`），Python 3 直接比会 TypeError。
+    数字段用 `(0, n, "")` 排在前，文本段 `(1, 0, s)` 比较时忽略大小写。
+    """
+    out = []
+    for tok in re.split(r"(\d+)", str(name or "")):
+        if not tok:
+            continue
+        if tok.isdigit():
+            out.append((0, int(tok), ""))
+        else:
+            out.append((1, 0, tok.lower()))
+    return out
 
 
 def _tree_bytes(path):
@@ -202,8 +222,10 @@ def api_tree():
             files.append({"name": ent.name, "rel": _rel_of(ent.path),
                           "bytes": st.st_size, "mtime": mtime})
 
-    dirs.sort(key=lambda d: d["name"])
-    files.sort(key=lambda f: f["mtime"], reverse=True)
+    # 按编号升序（自然序）。原来是 mtime 倒序，网格里 00005 排在最左，用户
+    # 找图得倒着看；编号顺序才是出图顺序。
+    dirs.sort(key=lambda d: _natural_key(d["name"]))
+    files.sort(key=lambda f: _natural_key(f["name"]))
     parent = _rel_of(os.path.dirname(base)) if rel else ""
     if parent.startswith(".."):
         parent = ""
