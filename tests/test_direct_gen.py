@@ -26,6 +26,7 @@
   绝不掉回 agent 接话（233 粉丝群 02:06 实录教训）
 """
 import json
+import re
 import unittest
 from unittest import mock
 
@@ -711,7 +712,7 @@ class DirectEnqueueTest(unittest.TestCase):
         m_gen.assert_called_once_with("hatsune miku", skill="hd_3_clear",
                                       _skip_confirm=True)
         sent = m_llm.call_args[0][0][0]["content"]
-        self.assertIn("用户开头点名了渠道：**hd_3_clear**", sent)
+        self.assertIn("本轮开头点名了渠道：hd_3_clear", sent)
         self.assertIn("初音未来", sent)
 
     def test_typo_style_resolves_in_full_pipeline(self):
@@ -795,7 +796,7 @@ class QuotedPromptTest(unittest.TestCase):
         self.assertEqual(out, "")
         self.assertEqual(m_llm.call_count, 1)
         sent = m_llm.call_args[0][0][0]["content"]
-        self.assertIn("用户开头点名了渠道：**hd_3_gloss**", sent)
+        self.assertIn("本轮开头点名了渠道：hd_3_gloss", sent)
         self.assertIn("1girl, solo, white dress, standing in a garden", sent)
         m_gen.assert_called_once_with("1girl, solo, white dress",
                                       skill="hd_3_gloss",
@@ -812,7 +813,7 @@ class QuotedPromptTest(unittest.TestCase):
                                       _skip_confirm=True)
         sent = m_llm.call_args[0][0][0]["content"]
         self.assertIn("花园", sent)
-        self.assertIn("用户开头点名了渠道：**hd_3_clear**", sent)
+        self.assertIn("本轮开头点名了渠道：hd_3_clear", sent)
 
     def test_quoted_reverse_reply_goes_through_ai(self):
         # 引用机器人的反推回复 + 渠道词 → 正文照样交给 AI（不再剥头直用 tag）
@@ -1579,7 +1580,7 @@ class EnglishDirectTest(unittest.TestCase):
         self.assertEqual(out, "")
         self.assertEqual(m_llm.call_count, 1)
         sent = m_llm.call_args[0][0][0]["content"]
-        self.assertIn("用户开头点名了渠道：**hd_3_gloss**", sent)
+        self.assertIn("本轮开头点名了渠道：hd_3_gloss", sent)
         self.assertIn("1girl, solo, blue hair, classroom", sent)
         m_gen.assert_called_once_with("1girl, solo, blue hair, classroom",
                                       skill="hd_3_gloss",
@@ -1651,9 +1652,11 @@ class MasterPromptTest(unittest.TestCase):
             recent=recent, text=text, chan_hint=chan_hint, search=search)
 
     def test_template_has_the_four_sections(self):
+        """2026-10-23 起模板改成 markdown 三节（原【工具】【渠道 skill】
+        【图生图】【提示词怎么写】四个方括号标题已并进三节）。"""
         t = self._rendered()
-        for part in ("生图 AI", "【工具】", "【渠道 skill】",
-                     "【提示词怎么写】", "【最近对话】", "【用户】"):
+        for part in ("生图 AI", "## 一、怎么用工具", "## 二、怎么设计提示词",
+                     "## 三、渠道对照表", "【最近对话】", "【用户】"):
             with self.subTest(part=part):
                 self.assertIn(part, t)
 
@@ -1665,7 +1668,7 @@ class MasterPromptTest(unittest.TestCase):
         # 模板本身要短：一句话一个工具，不给每个渠道写专属规则。
         # 2026-10-09：2100 → 7000（**用户拍板**：「提示词长度我最多允许你 7000 字」）。
         # 同批把【图生图】段从「默认不做、只认点名」翻成「引用图就填」。
-        self.assertLess(len(t), 7000, "模板超长了，工具列表应该一句话一个")
+        self.assertLess(len(t), 8700, "模板超长了，工具列表应该一句话一个")
 
     def test_comic_tool_is_offered_to_the_ai(self):
         """第三个工具 `generate_comic` 必须在模板里——QQ 的 @ 轮**不跑主
@@ -1674,7 +1677,7 @@ class MasterPromptTest(unittest.TestCase):
         """
         t = self._rendered()
         self.assertIn("generate_comic", t)
-        self.assertIn("连续多格小漫画", t)
+        self.assertIn("连续漫画", t)
         self.assertIn("brief", t)
         self.assertIn("panels", t)
 
@@ -1690,7 +1693,11 @@ class MasterPromptTest(unittest.TestCase):
         用户的判断：「提示词不告诉 AI 就不会 --- 跑这个了」。
         """
         t = self._rendered()
-        self.assertNotIn("---", t, "模板里不许再出现 ---（会诱导模型走 sd 批量）")
+        # 2026-10-23：模板改用 markdown 表格，「|---|---|---|」里必然含 `---`，
+        # 所以判据从「出现 ---」收窄成「单独成行的 ---」——那才是会被读成
+        # 批量分段的那种写法，表格分隔行不会。
+        self.assertIsNone(re.search(r"^\s*---\s*$", t, re.M),
+                          "模板里不许有单独成行的 ---（会诱导模型走 sd 批量）")
         self.assertNotIn("一次出多张", t)
         self.assertNotIn("一次多张", t)
 
@@ -1730,12 +1737,14 @@ class MasterPromptTest(unittest.TestCase):
         别让它被删。
         """
         t = self._rendered()
-        self.assertIn("【别反问】", t)
+        self.assertIn("### 直接出图", t)
+        self.assertIn("就是下单", t)
         self.assertIn("直接出图", t)
-        # 三个最常被反问的句子要明写在禁令里，模型才知道那是「不许问的」
+        # 2026-10-23：从「禁止反问」改成正向陈述（粉色大象：说「不许问 A/B/C」
+        # 等于把 A/B/C 反复喂进注意力）。所以三个问句本身也不该再出现。
         for bad in ("要不要画", "哪个档位", "这样可以吗"):
             with self.subTest(bad=bad):
-                self.assertIn(bad, t)
+                self.assertNotIn(bad, t, "反向写法回流了：%s" % bad)
 
     def test_channel_ids_are_spelled_out_in_words_the_ai_can_map(self):
         """渠道 id 是我们自己起的，用户说的是中文口语，模板必须把两边对上。
@@ -1787,8 +1796,38 @@ class MasterPromptTest(unittest.TestCase):
         # 这次不是渠道名，是【图生图】段的**口径翻转**：从「默认不做、只认点名」
         # 改成「引用图 + 要画 → 传 source_image、渠道不用改」（silver / silver-hd /
         # 高清三档都接了锁构图骨架）。实测渲染 3619。
-        self.assertLess(len(t), 7000, "整条提示词越过 7000 字预算了")
+        # 2026-10-23：7000 → 8000。写实人像规范从「点名 qwen 才附加」提升成
+        # 正文通用一节（`_REAL_PORTRAIT_RULES`，805 字），同名删掉了 qwen 专用
+        # 的 1014 字和 moss 的 541 字。实测最坏渲染 7168。
+        # 口径依据（用户 2026-10-23）：「我期望单次请求在 1 万 token 以内」——
+        # 7000 字符 ≈ 4000 token，抬到 8000 仍只占四成；且模板是单条 user
+        # message、前缀固定，加长的钱可以忽略（见记忆里的缓存结构实测）。
+        # 2026-10-23：8000 → 8700。模板按 booru 社群规范重排（用户拍板 B 方案）：
+        # 八位顺序 + 3 个完整对照示例，实测静态 7103 / 最坏渲染 8300、
+        # 带 chan_hint 时 8463。
+        # 口径：用户说「单次请求在 1 万 token 以内」——8700 字符 ≈ 5200 token，
+        # 占一半。模板是单条 user message、前缀固定 99%，加长的钱可忽略
+        # （见记忆里的缓存结构实测），真正的约束是注意力而不是成本。
+        self.assertLess(len(t), 8700, "整条提示词越过 8700 字预算了")
 
+    def test_prompt_budget_with_a_named_channel(self):
+        """点名渠道会额外拼一段「本轮用这个渠道」的话，这一支以前从没测过。
+
+        2026-10-23 查出来的漏洞：原用例只测 `chan_hint` 为空的情况，
+        `_MOSS_TEXT_GUIDE` 那 541 字附加曾在最坏历史下把整条推到约 7900，
+        而测试一直是绿的。附加已删，但这条分支本身该钉住。
+        """
+        hist = [{"role": "user", "content": "描" * 300},
+                {"role": "assistant", "content": "[直达生图] nai：" + "x" * 300}] * 5
+        seen = {}
+
+        def fake_ask(content):
+            seen["c"] = content
+            return {"tool": "generate_image", "prompt": "x", "skill": "silver"}
+
+        with mock.patch.object(direct_gen, "_ask", side_effect=fake_ask):
+            direct_gen._translate("moss 画个招牌", hist, skill="moss")
+        self.assertLess(len(seen["c"]), 8700, "点名渠道后越过预算")
     def test_ai_may_reply_instead_of_drawing(self):
         self.assertIn('{"reply"', self._rendered())
 
@@ -1796,7 +1835,7 @@ class MasterPromptTest(unittest.TestCase):
         t = self._rendered()
         self.assertIn("翻成英文", t)                     # 中文需求要翻译
         self.assertIn("画师串", t)                       # 画师串要原样用上
-        self.assertIn("别把上一轮画过的东西抄过来", t)     # 新请求=全新提示词
+        self.assertIn("每一轮都是新请求", t)               # 新请求=全新提示词
 
     def test_channel_list_is_given(self):
         # 渠道名是本地事实，模型猜不出来，必须给。
@@ -1806,9 +1845,9 @@ class MasterPromptTest(unittest.TestCase):
                 self.assertIn(s, t)
 
     def test_chan_hint_only_renders_when_code_parsed_a_channel(self):
-        self.assertNotIn("用户开头点名了渠道", self._rendered())
-        self.assertIn("用户开头点名了渠道：**nai**",
-                      self._rendered(chan_hint="\n用户开头点名了渠道：**nai**，"
+        self.assertNotIn("本轮开头点名了渠道", self._rendered())
+        self.assertIn("本轮开头点名了渠道：nai",
+                      self._rendered(chan_hint="\n本轮开头点名了渠道：nai，"
                                                "就用它。\n"))
 
     def test_prompt_lang_still_splits_by_channel_for_revise(self):
@@ -1835,7 +1874,7 @@ class MasterPromptTest(unittest.TestCase):
                 [], False, at_me=True)
         sent = m_llm.call_args[0][0][0]["content"]
         self.assertIn("画师串", sent)
-        self.assertIn("用户开头点名了渠道：**nai**", sent)
+        self.assertIn("本轮开头点名了渠道：nai", sent)
         self.assertIn("tianliang_duohe_fangdongye", sent)
         self.assertIn("ciloranko", sent)
 
@@ -2080,8 +2119,8 @@ class NamedChannelBeatsComicTest(unittest.TestCase):
         """提示层先行：绝大多数轮次模型看一眼就不吐漫画了（重问是兜底）。"""
         _out, m_ask = self._translate([self.SINGLE])
         content = m_ask.call_args[0][0]
-        self.assertIn("点名渠道优先级最高", content)
-        self.assertIn("别用 generate_comic", content)
+        self.assertIn("优先级最高", content)
+        self.assertIn("不用 generate_comic", content)
 
     def test_no_named_channel_leaves_comic_untouched(self):
         """回归护栏：没点名渠道（「silver 漫画 10 格」这类）行为不变。"""
@@ -2299,7 +2338,7 @@ class VerbatimWeightedPromptTest(unittest.TestCase):
         self.assertEqual(out, "")
         self.assertEqual(m_llm.call_count, 1)
         sent = m_llm.call_args[0][0][0]["content"]
-        self.assertIn("用户开头点名了渠道：**nai**", sent)
+        self.assertIn("本轮开头点名了渠道：nai", sent)
         self.assertIn("原样保留", sent)
         self.assertIn("::", sent)
         m_gen.assert_called_once_with(self.BODY, skill="nai",
@@ -2362,7 +2401,7 @@ class VerbatimWeightedPromptTest(unittest.TestCase):
             llm_reply=self._echo("hd_3_clear", "1.1::x::, -1::y::"))
         self.assertEqual(out, "")
         sent = m_llm.call_args[0][0][0]["content"]
-        self.assertIn("用户开头点名了渠道：**hd_3_clear**", sent)
+        self.assertIn("本轮开头点名了渠道：hd_3_clear", sent)
         self.assertIn("1.1::x::, -1::y::", sent)
         m_gen.assert_called_once_with("1.1::x::, -1::y::",
                                       skill="hd_3_clear",
@@ -3232,39 +3271,33 @@ class ReviseChannelListTest(unittest.TestCase):
         """加了清单别把 `.format` 的花括号写坏（模板里 JSON 示例是转义过的）。"""
         out = direct_gen._REVISE_TEMPLATE.format(
             escape="", search="", anchor_note="n", last_skill="jank",
-            last_prompt="p", recent="", lang="l", qwen_guide="",
+            last_prompt="p", recent="", lang="l",
             text="silver 生成")
         self.assertIn("silver", out)
 
-    def test_qwen_guide_reaches_revise_template(self):
-        """改图管道也要吃 qwen 写实规范（2026-10-20 用户要求：文生图 / 图生图
-        只要说到 qwen 都给）。曾经只拼在 `_translate` 的 chan_hint，带引用图的
-        三条真实请求（22:52 / 22:56 / 22:57）全漏，产出里出现 `A realistic
-        photograph ... photorealistic style`——正是规范第一条禁止的写法。"""
-        out = direct_gen._REVISE_TEMPLATE.format(
-            escape="", search="", anchor_note="n", last_skill="qwen_image_v1",
-            last_prompt="p", recent="", lang="l",
-            qwen_guide=direct_gen._QWEN_REAL_GUIDE, text="qwen 真人")
-        self.assertIn("【qwen 写实人像】", out)
+    def test_real_portrait_rules_live_in_both_templates(self):
+        """写实人像写法 2026-10-23 起是**通用方法**，不再按渠道附加。
 
-    def test_qwen_real_guide_switch(self):
-        """判据：说到 qwen 就给；点名别家 / 非生成渠道 / 没提就不给。"""
-        cases = [
-            (("qwen，真人", "", ""), True),
-            (("千问 画个真人", "", ""), True),
-            (("通义 真人", "", ""), True),
-            (("，真人", "", "qwen_image_v1"), True),   # 沿用自家 qwen 图
-            (("，qwen30步 真人", "qwen30", ""), True),
-            (("，换成 silver", "silver", "qwen_image_v1"), False),
-            (("，qwen 修复", "qwen-restore", ""), False),
-            (("，qwen 角色设定表", "qwen-charsheet", ""), False),
-            (("，真人", "", "miao"), False),
-            (("画一个银发女孩在雨里回头", "", ""), False),
-        ]
-        for args, want in cases:
-            with self.subTest(args=args):
-                got = bool(direct_gen._qwen_real_guide(*args))
-                self.assertEqual(got, want)
+        用户判定：「qwen的人像规范其实完全可以直接加到我们的怎么写提示词
+        里面，这个本身就是一个通用的方法」。所以它从 `_QWEN_REAL_GUIDE`
+        （点名 qwen 才拼进 `chan_hint`）改成正文的一节，主模板与改图模板
+        共用同一份 `_REAL_PORTRAIT_RULES`。
+
+        写实本来就与渠道无关：silver / nai / hd_3 系同样出真人，那套渠道原先
+        一个字都读不到，只有点名 qwen 才给——这才是要提升成通用规则的原因。
+        """
+        for name in ("_MASTER_TEMPLATE", "_REVISE_TEMPLATE"):
+            with self.subTest(template=name):
+                t = getattr(direct_gen, name)
+                for word in ("照片感从哪来", "soft key light from the window",
+                             "sheer white stockings", "fabric texture"):
+                    self.assertIn(word, t)
+
+    def test_qwen_only_guide_is_cleaned_out(self):
+        """旧三件套必须清干净，留着就是双份维护 + 点名 qwen 多读 1000 字。"""
+        for name in ("_QWEN_REAL_GUIDE", "_QWEN_WORD_RE", "_qwen_real_guide"):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(direct_gen, name))
 
 
 class Qwen30ChannelTest(unittest.TestCase):
@@ -3337,18 +3370,18 @@ class Qwen30ChannelTest(unittest.TestCase):
         self.assertEqual(direct_gen._FIXED_CHAN_MAP.get("qwen30步"), "qwen30")
 
 
-class MossTextGuideTest(unittest.TestCase):
-    """moss 的「逐列编号」刻字规范（2026-10-17 用户拍板）。
+class MossPlainChannelTest(unittest.TestCase):
+    """2026-10-23 用户拍板：moss 不再附刻字规范，走**普通生图路线**。
 
-    来路：同一条 56 字长诗提示词，只把八句连着写 → 逐字错漏；改成「逐列编号 +
-    每列内容逐条列出 + 字号层级 + 字贴纸面透视」→ 两个 seed 都一字不差
-    （1216×832 / 15 步 / 68~72 秒）。差别全在提示结构，不在模型能力。
+    原话：「moss的刻字规范去掉吧，moss走普通的生图路线即可，我要跑moss的漫画，
+    我会自己单独走漫画台的。」——跑 moss 漫画走 `/moss` 页面（`moss_bot` 那条
+    独立流程），跟 QQ 这条直达管道不是一回事，不该为它在这份共享模板里养 541 字。
 
-    所以规范**只在点名 moss 的那一轮**拼进 `chan_hint`，别的渠道一个字都不多
-    ——silver 十几秒一张，多喂 500 字纯属浪费。
+    原来那份规范（逐列编号 / Column N / 字号层级 / 贴纸面透视）的正本留在
+    `skills/moss50/skill.md` 里，走 skill 的路径照样读得到。
     """
 
-    MARK = "① 开头先声明一句"      # 只出现在 `_MOSS_TEXT_GUIDE` 正文里
+    GONE = ("文字布局是最高优先级", "Column 1", "逐条列出每一列", "楷书")
 
     def _content(self, skill, text="画个女孩"):
         seen = {}
@@ -3361,34 +3394,22 @@ class MossTextGuideTest(unittest.TestCase):
             direct_gen._translate(text, [], skill=skill)
         return seen["c"]
 
-    def test_guide_only_goes_to_the_moss_turn(self):
-        self.assertIn(self.MARK, self._content("moss", "moss 画个女孩"))
-        # 2026-10-18 起 moss 分两条（4 步 = moss，慢速档 = moss50），
-        # 判据是 `named.startswith("moss")`，两条都得吃这套刻字规范。
-        self.assertIn(self.MARK, self._content("moss50", "moss50 画个招牌"))
-        for skill in ("silver", "krea2-guizhencao", "qwen30", None):
-            with self.subTest(skill=skill):
-                self.assertNotIn(self.MARK, self._content(skill))
+    def test_moss_turns_get_the_plain_prompt(self):
+        """两条 moss 都走普通模板：点名只加「本轮用这个渠道」那一句。"""
+        for skill in ("moss", "moss50"):
+            content = self._content(skill, "moss 画个招牌")
+            for word in self.GONE:
+                with self.subTest(skill=skill, word=word):
+                    self.assertNotIn(word, content)
 
-    def test_guide_carries_the_structure_that_made_it_work(self):
-        """这七条是实测出来的，删一条都可能退回「错字漏字」。"""
-        g = direct_gen._MOSS_TEXT_GUIDE
-        for word in ("文字布局是最高优先级", "逐条列出每一列", "Column 1",
-                     "角色自己的视角", "字号层级", "楷书", "透视", "留白"):
-            with self.subTest(word=word):
-                self.assertIn(word, g)
-        # 反面判据：这正是上一版崩字的原因，必须留着这句禁令。
-        self.assertIn("不要把整段诗连成一句写完", g)
+    def test_old_guide_constant_is_gone(self):
+        """留着常量就是双份维护，而且哪天又会被谁接回 hint 里。"""
+        self.assertFalse(hasattr(direct_gen, "_MOSS_TEXT_GUIDE"))
 
-    def test_moss_turn_is_heavier_but_others_are_untouched(self):
-        self.assertGreater(len(direct_gen._MOSS_TEXT_GUIDE), 400)
-        self.assertLess(len(self._content("silver")),
-                        len(self._content("moss", "moss 画个女孩")))
+    def test_skill_md_keeps_the_column_layout(self):
+        """代码里那份 2026-10-23 已删，skill.md 成了这套写法的**唯一正本**。
 
-    def test_skill_md_documents_the_same_template(self):
-        """规范是两份（skill.md 给人/load_skill 看，代码里那份给模型看）。
-
-        2026-10-18 起 moss 分两条，刻字规范的正本在慢速档 `skills/moss50/`
+        2026-10-18 起 moss 分两条，正本在慢速档 `skills/moss50/`
         （4 步那条只写了「同这套」并指过去）。2026-10-20 慢速档由 45 步提到
         50 步并改名 `moss50`。
         """
@@ -3803,3 +3824,98 @@ class ReviseSearchTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+class BooruOrderTest(unittest.TestCase):
+    """2026-10-23 按 booru 社群规范重排（用户拍板：「我们按照社区的来吧」）。
+
+    旧版「画面六层」是画风 → 角色 → 服饰 → 动作 → 光线 → 场景，和 booru 系
+    模型的通行读取顺序冲突：画师串占了第 1 位（最贵的位置），而且**完全没有
+    质量词位和人数位**。人数尤其致命——两张图只差一个 `2girls`，漏写就画成
+    一个人。这份用例钉住重排后的四件东西，别再退回去。
+    """
+
+    @staticmethod
+    def _t():
+        return direct_gen._MASTER_TEMPLATE
+
+    def test_eight_slots_are_all_present(self):
+        t = self._t()
+        for slot in ("质量词", "人数", "角色与作品", "画师串", "外观", "服饰",
+                     "姿势与动作", "场景、光线、构图"):
+            with self.subTest(slot=slot):
+                self.assertIn(slot, t)
+
+    def test_quality_tags_come_first_and_are_a_single_set(self):
+        """只给一套 `masterpiece, best quality, score_7`。
+
+        Anima / NoobAI / Illustrious / Pony 四套体系的质量串各不相同，都列出来
+        迟早写混（把 Pony 的 `score_9` 写到 Anima 渠道上）。这三段是交集。
+        """
+        t = self._t()
+        self.assertIn("masterpiece, best quality, score_7", t)
+        self.assertNotIn("score_9", t)
+        # 顺序表里质量词在第 1 位：表格首行必须是它
+        head = t[t.index("| 位 | 放什么 |"):]
+        self.assertIn("| 1 | 质量词 |", head[:80])
+
+    def test_population_slot_is_mandatory(self):
+        t = self._t()
+        self.assertIn("每轮必写", t)
+        self.assertIn("1girl, solo", t)
+        self.assertIn("2girls", t)
+
+    def test_three_worked_examples_exist(self):
+        """规则再多也不如一个「原话 → 成品」；示例天然带顺序。"""
+        t = self._t()
+        self.assertIn("### 三个完整例子", t)
+        ex = t[t.index("### 三个完整例子"):t.index("### 五条基本写法")]
+        self.assertEqual(ex.count("用户："), 3)
+        # 三条示例都以质量词开头（表格里那份不算，所以只在示例段内数）
+        self.assertEqual(ex.count("masterpiece, best quality, score_7"), 3)
+        for frag in ("silver hair", "2girls", "mature female"):
+            with self.subTest(frag=frag):
+                self.assertIn(frag, ex)
+
+    def test_chan_hint_moved_to_the_tail(self):
+        """`{chan_hint}` 原来在正文正中（2574 字处）。
+
+        它是模板里唯一一个「点名渠道才非空」的变量，一插进去后面 2500 字全部
+        掉出缓存前缀。挪到末尾后前缀到渠道表结束都能命中。
+        """
+        t = self._t()
+        pos = t.index("{chan_hint}")
+        self.assertGreater(pos, len(t) * 0.9,
+                           "chan_hint 又跑到正文中间去了，缓存前缀会被它截断")
+
+    def test_old_six_layer_and_symbols_are_gone(self):
+        """旧写法与符号噪声都不许回流。"""
+        t = self._t()
+        self.assertNotIn("【画面六层】", t)
+        self.assertNotIn("【动作别打架】", t)
+        self.assertNotIn("【别反问】", t)
+        self.assertEqual(t.count("**"), 0, "模板里不该再有 markdown 加粗")
+        self.assertEqual(t.count("⚠"), 0, "模板里不该再有 ⚠ 标记")
+        # 反向指令：只允许「别写」这类极少数（现在是 0）
+        import re
+        neg = re.findall(r"(不许|不要|别把|别用|别给|别写|别改|别编|不能|禁止|切勿)",
+                         t)
+        self.assertEqual(neg, [], "反向指令回流了：%s" % neg)
+
+    def test_moss_text_guide_is_not_in_the_template(self):
+        """moss 刻字规范 2026-10-23 用户拍板删除（刻字走漫画台）。"""
+        t = self._t()
+        self.assertNotIn("刻字规范", t)
+        self.assertNotIn("Column 1", t)
+        self.assertFalse(hasattr(direct_gen, "_MOSS_TEXT_GUIDE"))
+
+    def test_real_portrait_rules_are_shared_not_channel_bound(self):
+        """照片感规则是通用的：silver / nai 出真人也该读到，不是 qwen 专用。"""
+        rules = direct_gen._REAL_PORTRAIT_RULES
+        self.assertIn("照片感从哪来", rules)
+        # 主模板内嵌一份（走 `+ _REAL_PORTRAIT_RULES +`），只出现一次
+        self.assertEqual(direct_gen._MASTER_TEMPLATE.count("【照片感从哪来】"), 1)
+        # qwen 专有的 cfg=1.0 那条不混进通用规则，收在渠道表 qwen 行
+        self.assertNotIn("cfg=1.0", rules)
+        self.assertIn("cfg=1.0", direct_gen._MASTER_TEMPLATE)

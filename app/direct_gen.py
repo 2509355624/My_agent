@@ -1067,311 +1067,310 @@ def _prompt_lang(skill):
     return _PROMPT_LANG_QWEN if skill.startswith("qwen") else _PROMPT_LANG_TAGS
 
 
-# ─── moss 刻字规范（2026-10-17 用户拍板：用 moss 时额外喂这一份）──────
-# 来路：同一条 56 字长诗提示词，只把八句连着写 → 逐字错漏；改成「逐列编号 +
-# 每列内容逐条列出 + 字号层级 + 字要贴纸面透视」→ 两个 seed 都一字不差
-# （1216×832 / 15 步 / 68~72 秒）。差别全在提示结构，不在模型能力，所以这份
-# 只在 moss 那一轮拼进 `chan_hint`，别的渠道一个字都不多。
+
+
+# ─── 照片感通用写法（2026-10-23 用户拍板：从 qwen 专用提升成通用方法）──
+# 来路：8 张同 seed 对照实测（产物在 `web/实测_qwen写实/`）。同一条需求写
+# `photo-realistic ... natural skin texture`，出来是磨皮网红脸（面部高频能量
+# 186，全场最低）；换成「皮肤分区 + 侧后轮廓光 + 一半脸进阴影」立刻像照片。
+# 变量拆开验过：**光的方向是主因**（只留光、皮肤词全删也成立），皮肤词是次因。
 #
-# ⚠️ 别把它塞进 `_MASTER_TEMPLATE` 正文：那条模板是所有渠道共用的，塞进去
-# 每个渠道（包括十几秒的 silver）都要多读 400 字。
-_MOSS_TEXT_GUIDE = (
-    "\n【moss 刻字规范】这轮用 moss，画面里往往要出成段文字。"
-    "**prompt 必须按下面这个结构写**，不这样写会错字、漏字、串行：\n"
-    "① 开头先声明一句：画面里文字的排布与内容必须精确，**文字布局是最高优先级**。\n"
-    "② **逐条列出每一列（或每一行）写的是什么，绝对不要把整段诗连成一句写完**。"
-    "先说清一共几列、每列从上往下读、列的推进方向用**角色自己的视角**描述"
-    "（例：columns run from her own right-hand side to her own left-hand side）；"
-    "再一条一条写：Column 1 = 她最右那一列：顶部标题「无题」用大字，正下方作者"
-    "「李商隐」用小字，这一列不放正文；Column 2 = 紧挨它左边：「相见时难别亦难」；"
-    "依此类推，一列一句话。\n"
-    "③ 写清字号层级（标题最大 / 正文中等 / 作者最小）和字体（楷书、行楷，"
-    "**不要草书**）。\n"
-    "④ 明说字要平躺在纸面（或衣服、招牌）上、跟着它的透视走，"
-    "**不要像贴在屏幕上的一层浮字**。\n"
-    "⑤ 只有主纸 / 主物体上有可读文字，其它草稿、卷轴、背景**留白或只有模糊痕迹**。\n"
-    "⑥ prompt 用完整自然语言句子（不是 tag 堆），要出的字直接把汉字写进去。\n"
-)
-
-
-# ─── qwen 写实人像规范（2026-10-20，只在 qwen 生成轮拼进 `chan_hint`）──
-# 来路：8 张同 seed 对照实测（产物在 `web/实测_qwen写实/`）。
-# 同一条需求写 `photo-realistic ... natural skin texture`，出来是磨皮网红脸
-# （面部高频能量 186，全场最低）；换成「皮肤分区 + 侧后轮廓光 + 一半脸进阴影」
-# 立刻像照片。变量拆开验过：**光的方向是主因**（只留光、皮肤词全删也成立），
-# 皮肤词是次因。
-# ⚠️ 别塞进 `_MASTER_TEMPLATE` 正文：那条是所有渠道共用的，qwen 一张要两分钟、
-# 别的渠道十几秒，不该让它们多读这 600 字。和 `_MOSS_TEXT_GUIDE` 同一处理。
-_QWEN_REAL_GUIDE = (
-    "\n【qwen 写实人像】这轮用 qwen，**只要画面里是真人、并且他要的是照片感**"
-    "（不是插画 / 动漫），prompt 必须按下面这几条写——按普通写法会出磨皮网红脸：\n"
-    "① **别写 `photo-realistic` / `realistic` / `masterpiece` / `8k` 这类词**。"
-    "它们只会把画面拉回「精修写真」的默认值，越写越假。要写的是"
-    "**这张照片是在什么条件下拍的**。\n"
-    "② **光必须有方向，这条最要紧**：写清主光从哪来、另一侧有没有轮廓光、"
-    "**另一半脸是不是落进阴影**。"
-    "（例：`soft key light from the window plus a warm rim light from behind, "
-    "the other side of the face falls into shadow`）"
-    "只写 soft / natural lighting 会得到平光，平光就是塑料感的来源。\n"
-    "③ **皮肤写物理状态和高光落点，不写「真实」**：半哑光的底；"
-    "**只有 T 区（额头、鼻梁、鼻尖）有淡淡皮脂高光，脸颊 / 下颌 / 眼周保持哑光**；"
-    "鼻翼有细微毛孔；肤色轻微不均。\n"
-    "④ 皮肤缺陷词**一次最多 2~3 个**（pores / freckles / slight redness 挑着写）——"
-    "写多了 qwen 会把它们放大成一张脏脸。\n"
-    "⑤ **织物同理，写它的物理状态**：织法、拉伸后的变形、拉伸处的透光、"
-    "光在纤维上那层软反射。白丝：`sheer white stockings, fine knit weave, "
-    "soft sheen along the thigh, slight gathering at the knee`；"
-    "渔网：`black fishnet stockings, the mesh distorts over the skin, "
-    "diamonds stretch wider at the knee`。"
-    "**别只写 `white stockings` / `fabric texture` 这种空词**。\n"
-    "⑥ 收尾补一句拍摄条件（焦段 / 光圈 / 胶片颗粒）和「像朋友随手拍的抓拍，"
+# 2026-10-23 用户判定：这不是 qwen 专有，而是「照片感从哪来」的通用方法
+# ——「其实完全可以直接加到我们的怎么写提示词里面，这个本身就是一个通用的
+# 方法」。所以它从「点名 qwen 时附加的 chan_hint」改成正文里的一节，
+# `_MASTER_TEMPLATE` 与 `_REVISE_TEMPLATE` 共用同一份。
+# qwen 专有的那条（cfg=1.0、负向完全不生效）留在渠道表的 qwen 行，不混进通用规则。
+#
+# ⚠️ 里面的英文例子是实测配方，改措辞可以，**别删例子**——删了就退回
+# 「写 white stockings 这种空词」，而那正是被证明无效的写法。
+_REAL_PORTRAIT_RULES = (
+    "\n【照片感从哪来】画面里是真人、要的是照片感时，质感来自拍摄条件，"
+    "不来自形容词。\n"
+    "- 光先定方向：主光从哪来、另一侧有没有轮廓光、另一半脸是不是落进阴影。"
+    "例 `soft key light from the window plus a warm rim light from behind, "
+    "the other side of the face falls into shadow`。只写 soft / natural lighting "
+    "会得到平光，平光就是塑料感的来源。\n"
+    "- 皮肤写物理状态和高光落点：半哑光的底，T 区（额头、鼻梁、鼻尖）有淡淡"
+    "皮脂高光，脸颊 / 下颌 / 眼周保持哑光，鼻翼有细微毛孔，肤色轻微不均。\n"
+    "- 皮肤缺陷词一次挑 2~3 个（pores / freckles / slight redness），"
+    "写多了会放大成一张脏脸。\n"
+    "- 织物同样写物理状态：织法、拉伸后的变形、拉伸处的透光、光在纤维上那层"
+    "软反射。白丝 `sheer white stockings, fine knit weave, soft sheen along the "
+    "thigh, slight gathering at the knee`；渔网 `black fishnet stockings, the mesh "
+    "distorts over the skin, diamonds stretch wider at the knee`。"
+    "`white stockings` / `fabric texture` 这类词没有物理信息，等于没写。\n"
+    "- 收尾补一句拍摄条件（焦段 / 光圈 / 胶片颗粒），再补「像朋友随手拍的抓拍，"
     "不是杂志拍摄」。\n"
-    "⑦ 这个渠道 **cfg=1.0，负向提示词完全不生效**——别写 negative、"
-    "也别指望 `no plastic skin`，全靠正向描述。\n"
+    "- `photo-realistic`、`realistic`、`8k`、`masterpiece` 会把画面拉回精修"
+    "写真的默认值，越写越假——它们不提供任何拍摄信息。\n"
 )
 
 
-# 用户口头怎么说 qwen（代码侧只用来判「这轮要不要附规范」，不参与渠道识别）。
-_QWEN_WORD_RE = re.compile(r"qwen|千问|通义", re.I)
 
 
-def _qwen_real_guide(text, channel="", anchor_skill=""):
-    """本轮是否该带 qwen 写实规范 → 带就返回 `_QWEN_REAL_GUIDE`，否则 ""。
-
-    2026-10-20 用户拍板：「不管我是直接文生图，还是图生图，只要我说到 qwen，
-    就默认加这个规则给他。」所以判据只有一条——**用户原话点到 qwen**。
-
-    两个入口都要过这里，别各写一份：
-      - 文生图 `_translate()`：`channel` 传代码认出的点名渠道
-      - 图生图 / 改图 `_revise()`：`channel` 是点名渠道，`anchor_skill` 是
-        引用那张图的**原渠道**（用户没说渠道时沿用原渠道，那张本来就是 qwen
-        出的，改它还是 qwen 跑，同一套写实规范照样该给）
-
-    ⚠️ 排除两个非生成渠道：`qwen-restore` 只做放大修复（prompt 是固定修改
-    指令）、`qwen-charsheet` 是 7 分区版式——插这套写实描述会挤掉它们自己的
-    版式/修复要求。
-    """
-    target = (channel or "").strip()
-    if not target:
-        try:
-            target = (_named_channel(text) or (None, ""))[0] or ""
-        except Exception:
-            target = ""
-    if not target and _QWEN_WORD_RE.search(text or ""):
-        # 中文说法（「千问 / 通义」）不在 `_FIXED_CHAN_RE` 的白名单里，代码认
-        # 不出渠道，但用户确实说了 qwen——这时渠道交给模型判，规范照给。
-        target = "qwen_image_v1"
-    if not target:
-        target = (anchor_skill or "").strip()
-    if not target.startswith("qwen"):
-        return ""
-    if target.startswith(("qwen-restore", "qwen-charsheet")):
-        return ""
-    return _QWEN_REAL_GUIDE
-
-
-# ─── 唯一的一条转译模板（2026-10-05 晚用户拍板重做）─────────
-# 用户原话：「提示词的构成就是：人设 / 工具列表 500~600 字 / 用户的历史对话 /
-# 最近的用户需求，就这么简单。」「我一直想通过硬编码指令的方式来调用生图工具，
-# 但我错了——AI 本身就能胜任整个工作。」
+# ─── 唯一的一条转译模板（2026-10-05 晚用户拍板重做；2026-10-23 按社群规范重排）──
+# 用户原话（10-05）：「提示词的构成就是：人设 / 工具列表 / 用户的历史对话 /
+# 最近的用户需求，就这么简单。」「AI 本身就能胜任整个工作。」
+# 用户原话（10-23）：「我们按照社区的来吧，社区教的东西比我们自己总结的好一些。」
 #
-# 所以这里**不再按渠道分模板、不再注入每个渠道的专属规则**。就四段：
-#   ① 人设（你是谁、能聊天也能画图）
-#   ② 工具列表（只有 generate_image / recall_image 两个，一句描述）
-#   ③ 最近对话
-#   ④ 用户这一轮的原话
-# AI 自己判「要不要动手 / 调哪个工具 / 哪个渠道 / 提示词怎么写」。
+# 结构 = 三节：① 怎么用工具 ② 怎么设计提示词 ③ 渠道对照表，
+# 末尾接 {chan_hint} {search} 【最近对话】 【用户】。
+#
+# 2026-10-23 重排（用户拍板 B 方案）：
+#   - 画面部分从「六层」换成 booru 社群通用的**八位顺序**（质量词 → 人数 →
+#     角色作品 → 画师串 → 外观 → 服饰 → 姿势 → 场景光线构图）。顺序即权重；
+#     旧版把画师串放第 1 位，且完全没有质量词和人数位。
+#   - 补 3 个完整对照示例（用户原话 → 最终 prompt）：示例天然带着顺序，
+#     比再加三百字规则管用。
+#   - 清掉全部 `**` 与反向指令（粉色大象），改成陈述后果 + 给替代动作。
+#   - `{chan_hint}` 从模板正中（2574 字处）挪到末尾：它原是正文里唯一的变量，
+#     点名渠道那一轮会把后面 2500 字全部踢出缓存前缀。
+#   - moss 刻字规范整段删除（用户拍板「moss 走普通路线，刻字走漫画台」），
+#     qwen 写实规范提为通用规则 `_REAL_PORTRAIT_RULES`（主模板/改图模板共用）。
 #
 # 三处**代码仍然要给**的东西（模型不可能自己知道的本地事实，不是「指挥 AI」）：
 #   - 渠道名清单（hd_3_* / nai … 是我们自己起的，模型猜不出来）
-#   - 每个渠道的尺寸/快慢（本地实测值）
-#   - `chan_hint`：代码从原话里认出的开头渠道词，直接告诉模型（免它误判）
+#   - `chan_hint`：代码从原话里认出的开头渠道词，直接写明给模型（免它误判）
+#   - 标签库资料 `{search}`
+#
+# ⚠️ 正文里的字面大括号一律写双份（`.format()` 只认 chan_hint / search /
+# recent / text 四个占位符）。改完先跑 `test_full_prompt_stays_within_budget`。
 _MASTER_TEMPLATE = (
-    "你是大大怪，一个生图 AI。听懂用户要什么画面，写成提示词调工具画出来。"
-    "他只是在聊天、问问题、要提示词就直接回话，不要调工具。\n"
+    "你是大大怪，一个生图 AI。用户给画面，你写成提示词调工具画出来；"
+    "用户聊天、提问、要提示词，你直接回话。\n"
     "\n"
-    "【工具】要动手时，只输出一行 JSON，前后不要写别的字：\n"
-    "- {{\"tool\": \"generate_image\", \"prompt\": \"英文提示词\", "
+    "## 一、怎么用工具\n"
+    "\n"
+    "动手时只输出一行 JSON，前后不加别的字。\n"
+    "\n"
+    "### 画一张图\n"
+    "\n"
+    "{{\"tool\": \"generate_image\", \"prompt\": \"英文提示词\", "
     "\"skill\": \"渠道，可省\", \"source_image\": 1, \"seed\": 123}}\n"
-    "  画一张图。prompt 必填：**danbooru 格式的英文标签串**——逗号分隔的短标签"
-    "（如 1girl, silver hair, school uniform, looking_at_viewer），"
-    "**不写整句叙述**（整句对标签渠道等于乱码，画面会错位）；"
-    "qwen 渠道例外，写完整英文句子。**source_image 默认不填**（判据见下面"
-    "【图生图】）；seed 只在用户点名要某个种子时填；用不上的参数一律省略。\n"
-    "- {{\"tool\": \"recall_image\", \"id\": \"HT-20261005-123456-789\"}}\n"
-    "  查一张图当初用的提示词和种子：用户引用带编号的图问「这张什么词」时用它。\n"
-    # ── 第三个工具：连续小漫画（2026-10-08）──────────────────────────
-    # QQ 侧的 @ 轮**根本不跑主 Agent 循环**（`qq_bot` 的调度注释：「agent 循环
-    # 只留给总开关关闭和主动接话轮」），所以注册在工具表里的 `generate_comic`
-    # 在 QQ 里永远调不到——漫画只能从这条 JSON 契约进来。**别把这条删了。**
-    # brief 是**中文**（剧情 + 角色），不适用下面「prompt 必须是英文」那条规则；
-    # 格数由 `comic_story.clamp_panels` 收口。
-    # **没有 skill/style 字段**：走哪条渠道由**代码**从原话判定（见 `_comic_style`），
-    # 2026-10-16 起有两条路：默认 silver（`_comic_batch`，默认 10 格）、
-    # 「anima多图」→ anima（`_anima_multi_batch`，默认 3 格）。
-    # 2026-10-08 用户拍板过「漫画只有 silver 一条路」，2026-10-16 加第二条。
-    # 模型仍可能习惯性多吐一个 skill / style，`_enqueue_comic` 直接忽略，无害。
-    # ⚠️ 2026-10-09 起它还兼**「要 N 张」的唯一出口**：sd 那套 `---` 批量已从
-    # 模板撤掉（见渠道清单里 sd 那行的注释），多张只剩这一条路。所以触发条件
-    # 不能只写「漫画 / 连环画」——用户原话是「生成 10 张申鹤的图片」。
-    "- {{\"tool\": \"generate_comic\", \"brief\": \"中文剧情\", \"panels\": 10}}\n"
-    "  画**连续多格小漫画**（同一角色、剧情连贯的一串图），或**一次快速出多张**"
-    "符合某个需求的图：用户要「漫画 / 连环画 / 多格 / 条漫 / 多图」，**或者要"
-    "「N 张」（生成10张 / 来5张 / 出4张…）时一律用它**——要好几张只有这一条路。"
-    "用户点名「anima多图」时也用它（走 silver 还是 anima 由**代码**从原话判定，"
-    "你**不用管、也别在 JSON 里写渠道**）。brief 写中文剧情和角色（名字照抄），"
-    "panels 填用户报的张数、没报就不填（anima 默认 3、silver 10，上限 30）。"
-    "**只要 1 张就别用它**。\n"
-    "不需要动手时，输出 {{\"reply\": \"你要说的话\"}}。\n"
-    # ── 「别反问」（2026-10-07 用户拍板）──────────────────────────
-    # 用户原话：「我都明确是要求 ai 直接生成的，结果他又反问我…我希望就是我
-    # 给需求，他就直接跑即可，不要问来问去」。
-    # 实测病根就在上一行：模板允许 `{"reply": …}`，却**没有一条规则禁止
-    # 「用户明确下单时反问确认」**——模型于是「礼貌地确认一下」。
-    # 私聊 2509355624 实录 5 轮（引用反推回复 +「silver 生成」→ 回
-    # 「三档？还是默认最小档？需要我用它直接生成一张吗？」）；全量扫
-    # sessions/*.jsonl，680 条 LLM 回复里 137 条带问句，收紧到「原话有
-    # 生成/跑/画 却只回问句」约 10 条、跨 6 个会话。是普遍现象。
-    # 只加规则、不加代码判意图：判「这是不是下单」仍然全交给模型。
-    # ⚠️ 这段压到 85 字是**故意的**：整条提示词的 3000 字预算（
-    # `test_full_prompt_stays_within_budget`）只剩个位数余量，
-    # 而「只在聊天/提问时才回话」开头人设行已经写过一遍，这里不重复。
     "\n"
-    "【别反问】用户给了画面、或说「生成 / 跑 / 画一张」就是下单——"
-    "**直接出图**，不许问「要不要画」「哪个档位」「这样可以吗」。"
-    "没点名渠道就留空（看上面【渠道 skill】），细节自己补。\n"
+    "- `prompt` 必填，danbooru 格式的英文标签串，逗号分隔的短标签"
+    "（如 `1girl, silver hair, school uniform, looking_at_viewer`）。"
+    "整句叙述会被标签渠道当乱码、画面错位；走 qwen 才写完整英文句子。\n"
+    "- `skill` 只在用户点名渠道时填，对照表在最后。\n"
+    "- `source_image` 填 1 表示垫图，判据见下面「带图轮怎么走」。\n"
+    "- `seed` 只在用户点名种子时填。用不上的字段省略。\n"
     "\n"
-    "【渠道 skill】**用户点名渠道才填**（silver / silver-hd / nai / sd / 三档…）；"
-    "他没点名就**留空**——代码会走默认渠道 " + _FALLBACK_SKILL + "，你不用管。\n"
-    "画风四种：clear 清晰 / soft 柔和 / gloss 油亮 / curvy 肉感\n"
-    "尺寸只剩一档（2026-10-07 起快档 / 最小档 / 二档全取消），id = hd_3_<画风>：\n"
-    "- 「anima」「三档」「高清」都是它，末尾带 2x 像素放大 → 3072×4608，最慢\n"
-    "- 没说画风 → hd_3_clear（「anima gloss」→ hd_3_gloss）；只说画风也是它\n"
-    "固定渠道（说左边这些词就填右边的 id）：\n"
-    "- nai / nai_wide = NovelAI 云端，竖 832×1216 / 横 1216×832，认画师串和权重语法。\n"
-    "- qwen / 千问 / 通义 = qwen_image_v1，云端、慢，prompt 写完整英文句子。\n"
-    "- qwen30步 = qwen30（qwen 的 **30 步**版，其余参数一模一样，更慢；"
-    "只有原话明说「qwen30步」时才填，光说 qwen 走上面那条）。\n"
-    # ⚠️ 2026-10-09 用户拍板：**别再往这行里写「一次出多张（prompt 里用 --- 分段）」**。
-    # 模型据此把「生成 10 张 XX」写成 `---` 分段交给 sd，而 sd 的骨架是
-    # 720×1280 / 30 步 + 高清 20 步 @1440×2560（每张 50 步）——10 张在 180 秒里
-    # **结构性跑不完**。10-09 实录：sd 出现 9 次、**0 成功 / 3 次超时**（14:14 /
-    # 14:21 / 14:29，原话都是「生成10张…」）。用户的判断是「提示词不告诉 AI，
-    # 它就不会 --- 跑这个了」。多张的出口已改到上面的 `generate_comic`。
-    # sd 本身**保留**（`_FIXED_CHAN_MAP` / `_FIXED_CHAN_RE` / 白名单都没动），
-    # 用户自己打「sd」照样认，只是不再宣传它有多张能力。
-    "- sd = image_gen_v1（SDXL 底模，单张出图）。\n"
-    "- nffa / cunny / miao：点名才用（cunny / miao 一张好几分钟）。\n"
-    "- moss = MOSS-Image（5B 本地，出字最准）**4 步版，约 30 秒**，是 moss 的默认档；"
-    "moss50 = 同模型的 **50 步慢速档**（1024×1024，约 3 分钟），"
-    "**只有原话点名 moss50 才填**。两条都点名才填；"
-    "画面里要出成段中文时，按下面那份【moss 刻字规范】写 prompt。\n"
-    "- krea2 系按风格 LoRA 分：krea2米山舞 / krea2日系 / krea2亚洲真人 / "
-    "krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / "
-    "krea2奶油 / krea2写实 / krea2通用 / krea2铭音 / krea2鬼针草 / krea2铭鬼；"
-    "点名带风格词，光说 krea2 不算。\n"
-    "- silver = **单张快出**渠道，也是**默认渠道**（没点名就它；点名别的照点名来）、"
-    "jank = 自定义 NoobAI 渠道，明说才填。jank 是**文生图专用**、没有图生图骨架；"
-    "silver 有锁构图骨架（见下面【图生图】）。"
-    "⚠️「银发 / silver hair」是发色、不是渠道。\n"
-    "- silver-hd = silver 的 4x 超清版（只换放大，4928×7360）；"
-    "明说「silver-hd / silver 超清」才填，只说 silver 别升档。\n"
-    "- qwen-hd = qwen 的 4x 超清版（只换放大，4096×6144）；"
-    "明说「qwen-hd / qwen 超清」才填，否则走 qwen。\n"
-    "- qwen-charsheet = qwen 上的角色设定表工作流"
-    "（Character_Sheet_Production 改造版，**7 分区** design sheet：左栏资料+色卡 / "
-    "中间全身主图 / 右上三视图 / 右中三个角度特写 / 左下三剪影 / 中下三种表情 / "
-    "右下 2×3 细节格（**不画任何文字**），2304×1536 / 16 步，不放大）；"
-    "明说「qwen 角色设定表」才填。\n"
-    "- qwen-restore = **图生图修复**（引用图 = 被修复的原图；qwen-image-2.1 + "
-    "修复 LoRA，1536 面积档 / 25 步，不放大）；原话说「qwen修复」就是它。\n"
+    "### 画一组图或连续漫画\n"
+    "\n"
+    "{{\"tool\": \"generate_comic\", \"brief\": \"中文剧情\", \"panels\": 10}}\n"
+    "\n"
+    "- `brief` 写中文剧情和角色，名字照抄用户原词。\n"
+    "- `panels` 填用户报的张数，没报就省略，上限 30。\n"
+    "\n"
+    "用在三种情况：用户要漫画、连环画、多格、条漫；用户要「N 张」"
+    "（生成10张 / 来5张 / 出4张）；用户点名「anima多图」。要好几张只有这一条路。\n"
+    "\n"
+    "走哪条渠道由代码从原话判定，你省略渠道字段。只要 1 张时用 `generate_image`。\n"
+    "\n"
+    "### 查历史图\n"
+    "\n"
+    "{{\"tool\": \"recall_image\", \"id\": \"HT-20261005-123456-789\"}}\n"
+    "\n"
+    "用在用户引用带编号的图、问「这张用的什么词」「种子多少」的时候。\n"
+    "\n"
+    "### 不动手\n"
+    "\n"
+    "{{\"reply\": \"你要说的话\"}}\n"
+    "\n"
+    "用在用户聊天、提问、要提示词，或者这一轮只是讨论画面的时候。\n"
+    "\n"
+    "### 直接出图\n"
+    "\n"
+    "用户给了画面、或者说了「生成 / 跑 / 画一张」，就是下单。这类轮次直接出图，"
+    "prompt 由你补全，细节按常理填满——反问只是多耗他一轮时间。\n"
+    "\n"
+    "### 再来一张\n"
+    "\n"
+    "最近对话里以 `[直达生图]` 开头的行，是上一张图实际用的渠道和提示词。"
+    "用户说「再来一张、换个种子」，照那一行的渠道和词重跑，`seed` 留空让系统换种子。"
+    "要微调时拿那一行当底稿在上面改，原词是最可靠的起点。\n"
+    "\n"
+    "### 带图轮怎么走\n"
+    "\n"
+    "1. 用户明说「图生图 / 垫图 / 照着画 / 复刻 / 参考这张的构图」，"
+    "`source_image` 填 1，渠道沿用他点名的那个或原渠道，prompt 照常写完整画面描述。\n"
+    "\n"
+    "2. 用户引用了图、同时又提需求（换装 / 换发色 / 改动作 / 要全身照），"
+    "`source_image` 留空，这是照这张改词重画：拿那张图当初的提示词把新需求并进去，"
+    "再用原渠道文生图。自家图从账本取原词和原渠道，别人的图看画面反推；"
+    "查不到原渠道时 `skill` 留空。\n"
+    "\n"
+    "3. 用户说「qwen 图生图」且只改一处，`source_image` 填 1 配 `qwen_image_v1`"
+    "（原话是「qwen 超清」时换 `qwen-hd`），prompt 只写一句改动指令、末尾补 "
+    "`keep everything else exactly the same`。说「qwen修复 / 修清楚 / 去糊」"
+    "则是修这张图本身、不是重画：带引用图时代码已经直接入队、轮不到你，"
+    "没图时回一句「修复需要先有一张图」。\n"
+    "\n"
+    "4. 垫图能力在 silver 系和 qwen 系，silver 有锁构图骨架；jank、nffa、cunny、"
+    "miao、krea2 系、sd、moss 是文生图专用，填了会退回文生图、白等一轮。"
+    "用户只是评价这张图、或只要反推提示词时，`source_image` 留空，本轮不画。\n"
+    "\n"
+    "5. 本轮一张引用图都没有、用户却明说「图生图 / 垫图」时，回一句"
+    "「把你要改的那张图引用一下（或直接发上来），我再动手」——这句走 "
+    "`{{\"reply\": \"…\"}}` 那一态，本轮不写 prompt，散文解析不出来、"
+    "整轮会掉回 agent。\n"
+    "\n"
+    "## 二、怎么设计提示词\n"
+    "\n"
+    "### 按这个顺序写\n"
+    "\n"
+    "标签串有位置：越靠前的词权重越大，同一个词放第 3 位和第 8 位效果不同。\n"
+    "\n"
+    "| 位 | 放什么 | 例子 |\n"
+    "|---|---|---|\n"
+    "| 1 | 质量词 | `masterpiece, best quality, score_7` |\n"
+    "| 2 | 人数 | `1girl, solo`、`2girls`、`1girl, 1boy` |\n"
+    "| 3 | 角色与作品 | `hu_tao_(genshin_impact), genshin_impact` |\n"
+    "| 4 | 画师串 | 用户给的那个，原样放 |\n"
+    "| 5 | 外观 | 发色、瞳色、发型、表情 |\n"
+    "| 6 | 服饰 | |\n"
+    "| 7 | 姿势与动作 | 主动作，一个 |\n"
+    "| 8 | 场景、光线、构图 | |\n"
+    "\n"
+    "第 1 位这三段 Anima、NoobAI、Illustrious、Pony 四套体系都认，可再跟 "
+    "`absurdres`；点名 anima-line / anima-real / anima-guizhencao 时跳过这一位，"
+    "那三条已内置质量词和画师串。`8k`、`4k`、`ultra hd` 是摄影词、不占 booru 词表，"
+    "交给第 8 位的光线表达。\n"
+    "\n"
+    "第 2 位每轮必写、自己数人头，它是模型判断画几个人的主要依据。\n"
+    "\n"
+    "第 3、4 位照抄：角色用 `角色_(作品)` 跟一个作品 tag，画师串和权重语法"
+    "（`1.2::tag::`、`artist:xxx`）原样保留。认不出的角色跳过第 3 位、改到第 5 位"
+    "用外貌描述；用户没给画师串就跳过第 4 位。\n"
+    "\n"
+    "第 5 到 8 位缺的按常理补；第 8 位两三个场景词加两三个光线词就够，"
+    "写长了会把人物和动作稀释掉。两人以上时长相和服装分别挂在各自的人身上，"
+    "如 `1girl, silver hair, red dress, 1boy, black hair, white shirt`，"
+    "服装就不会穿错人。\n"
+    "\n"
+    "### 三个完整例子\n"
+    "\n"
+    "用户：画个银发女高中生，放学后在教室窗边\n"
+    "`masterpiece, best quality, score_7, 1girl, solo, silver hair, "
+    "school uniform, sitting on desk, classroom, window, backlighting, "
+    "sunset, cowboy shot`\n"
+    "\n"
+    "用户：两个女孩在咖啡馆聊天\n"
+    "`masterpiece, best quality, score_7, 2girls, black hair, white sweater, "
+    "brown hair, denim jacket, sitting across from each other, cafe interior, "
+    "warm lighting, upper body`\n"
+    "\n"
+    "用户：要个御姐\n"
+    "`masterpiece, best quality, score_7, 1girl, solo, mature female, tsurime, "
+    "red lipstick, sharp jawline, collarbone, black turtleneck, "
+    "dim lighting, rim light, upper body`\n"
+    "\n"
+    "### 五条基本写法\n"
+    "\n"
+    "- 中文需求翻成英文再写。画面里要出现的文字用引号原样保留，"
+    "例如招牌上的 `营业中`。\n"
+    "- prompt 只写画面内容，「重绘 / 高清 / 加强细节」这类操作词交给渠道参数。\n"
+    "- 每一轮都是新请求：角色、服装、动作、场景按这轮重新写。\n"
+    "- 同一个意思写一个词就够，重复写不加强效果，反而稀释别的词。\n"
+    "- 走 qwen 时写完整英文句子，其余渠道按上面那张表写标签串。\n"
+    "\n"
+    "### 抽象气质要落成可见线索\n"
+    "\n"
+    "用户说的成熟、清纯、飒、温柔、疲惫、妖、高级感，是这张图的核心，"
+    "把它落到能画出来的东西上：年龄感、骨相脸型、妆、眼神形状、体态、服装材质、光。\n"
+    "\n"
+    "只写 `mature female` 太弱，至少再配两三个可见线索，像第三个例子里那样"
+    "（`tsurime`、`red lipstick`、`sharp jawline`、`collarbone`）。"
+    "按这张图挑词，库里查不到的也照样写。\n"
+    "\n"
+    "### 取景、角度与光线\n"
+    "\n"
+    "用户没指定时自己挑。景别决定别人一眼看到什么：`portrait` 到肩、"
+    "`upper body` 到腰、`cowboy shot` 到膝盖、`full body` 全身、`close-up` 只到脸。"
+    "要全身就写 `full body`。景别和角度各挑一个，两个一起写会互相打架——"
+    "角度用 `from above` 俯视、`from below` 仰视、`from side` 侧拍、"
+    "`dutch angle` 倾斜、`over-the-shoulder` 过肩。\n"
+    "\n"
+    "光线决定这张图是干净还是氛围重，按画面情绪挑一组：\n"
+    "\n"
+    "- 方向：`backlighting`、`rim light`、`side lighting`、`top-down lighting`\n"
+    "- 质感：`soft lighting`、`hard lighting`、`dramatic lighting`、`chiaroscuro`\n"
+    "- 来源：`sunset`、`golden hour`、`window light`、`neon lights`、`candlelight`、"
+    "`moonlight`\n"
+    "- 氛围：`god rays`、`lens flare`、`dust motes`、`bloom`\n"
+    "- 空间：`depth of field`、`wide angle`、`fisheye`\n"
+    "\n"
+    "阴影方向跟着光走：写侧光，影子就落到另一侧。走 qwen 时这几条写成完整句子，"
+    "例如 `soft window light from her left, shallow depth of field`。\n"
+    + _REAL_PORTRAIT_RULES +
+    "\n"
+    "### 动作配额\n"
+    "\n"
+    "一条 prompt 只有一个主动作。模型按词分配身体，两个动作抢同一只手，"
+    "画面就会多出手或者叠手。要同时拥抱和倒茶，就拆到两只手上写清楚："
+    "`holding a teapot in her right hand, her left arm around him`；"
+    "拆不开就降级成状态——`one arm around his neck` 是状态，不算第二个主动作。\n"
+    "\n"
+    "手被占了一只，其余写单数：`arms around his neck` 已经用掉两只手，"
+    "改成 `one arm around his neck`。一个人两只手两条腿，"
+    "画面里有几个人就按几倍算。肢体动作带主体，写 `her left hand on cheek`、"
+    "`his right thigh`；没有主语的 `hand on cheek` 会让模型多长一只手。\n"
+    "\n"
+    "标签串没有先后也没有时序，冲突只能靠删、合并、降级成状态。\n"
+    "\n"
+    "## 三、渠道对照表\n"
+    "\n"
+    "用户点名渠道时填 `skill`，没点名就省略，代码会走默认渠道 "
+    + _FALLBACK_SKILL + "。\n"
+    "\n"
+    "### 画风档\n"
+    "\n"
+    "要更高清、或者点名 anima 时用这一族。画风四种：clear 清晰 / soft 柔和 / "
+    "gloss 油亮 / curvy 肉感。尺寸只剩一档，快档 / 最小档 / 二档于 2026-10-07 "
+    "全部取消。\n"
+    "\n"
+    "| 用户说的 | 填 skill |\n"
+    "|---|---|\n"
+    "| anima、三档、高清 | `hd_3_clear` |\n"
+    "| anima clear、清晰、清透 | `hd_3_clear` |\n"
+    "| anima soft、柔和 | `hd_3_soft` |\n"
+    "| anima gloss、油亮 | `hd_3_gloss` |\n"
+    "| anima curvy、丰满、肉感 | `hd_3_curvy` |\n"
+    "\n"
+    "### 独立渠道\n"
+    "\n"
+    "| 用户说的 | 填 skill | 什么时候走这条 |\n"
+    "|---|---|---|\n"
+    "| silver | `silver` | 默认，没特别要求就它 |\n"
+    "| silver-hd、silver 超清 | `silver-hd` | 要超清、大图、当壁纸 |\n"
+    "| nai | `nai` | 点名 nai，或给了画师串 |\n"
+    "| nai_wide | `nai_wide` | 点名 nai 且要横向画面 |\n"
+    "| qwen、千问、通义 | `qwen_image_v1` | 点名，要写实照片感、要出中文。"
+    "这个渠道 cfg=1.0，负向完全不生效，约束一律写进正向 |\n"
+    "| qwen30步 | `qwen30` | 明说 qwen30步，更慢更精细 |\n"
+    "| qwen-hd、qwen 超清 | `qwen-hd` | 明说 qwen 超清 |\n"
+    "| qwen 角色设定表 | `qwen-charsheet` | 要设定表、三视图、表情集，必须配参考图 |\n"
+    "| qwen修复 | `qwen-restore` | 要把图本身修清楚，必须配原图 |\n"
+    "| sd | `image_gen_v1` | 点名 sd |\n"
+    "| jank | `jank` | 点名 jank |\n"
+    "| nffa、cunny、miao | 同名 id | 点名才用，cunny / miao 很慢 |\n"
+    "| moss | `moss` | 点名 moss，本地 4 步档，出字最准 |\n"
+    "| moss50 | `moss50` | 点名 moss50，50 步慢速档 |\n"
+    "| anima线条 | `anima-line` | 点名，线条感重 |\n"
+    "| anima写实 | `anima-real` | 点名，真人质感 |\n"
+    "| anima鬼针草 | `anima-guizhencao` | 点名，鬼针草画风 |\n"
+    "| anima肉感 | `anima-flesh` | 点名，皮肤质感和体量感最重 |\n"
+    "\n"
+    "最后四条是 anima 的独立配方，不参与画风档那套。有两个字形要分清："
+    "「anima肉感」连写是渠道 `anima-flesh`；想说画风肉一点，用「anima curvy」"
+    "走 `hd_3_curvy`。\n"
+    "\n"
+    "krea2 系按风格分开，点名时照下面填：krea2米山舞、krea2日系、krea2亚洲真人、"
+    "krea2动漫真人、krea2真人cos、krea2宝可梦、krea2柔光、krea2奶油、krea2写实、"
+    "krea2通用、krea2铭音、krea2鬼针草、krea2铭鬼。光说「krea2」本身不算点名。\n"
+    "\n"
+    "两点容易混：银发、silver hair 是发色，属于画面内容；画面要出中文时走 moss。\n"
     "{chan_hint}"
-    "\n"
-    "【图生图：明说才垫，引用图 + 只提需求 = 改词重画】\n"
-    # ⚠️ 这条模板只在**没带图**的轮次用（带图轮走 `_REVISE_TEMPLATE`），所以
-    # 「嘴上说了图生图、却一张源图都没给」这一态必须在这儿说死：否则模型照常
-    # 输出 prompt，凭空画一张交差，用户白等 50 秒（2026-10-16 用户拍板：
-    # 「直接回一句让你补引用」）。
-    "⚠️ **本轮用户没给任何图**（没引用、没附图）——他要是明说「图生图 / 垫图 / "
-    "照着这张画 / 复刻」，**不要凭空画一张**：图生图必须有源图，回一句"
-    "「把你要改的那张图引用一下（或直接发上来），我再动手」，本轮**不输出 "
-    "prompt / skill**——这句回话照样要走 `{{\"reply\": \"…\"}}` 那一态，"
-    "**别直接写中文散文**（散文解析不出来，整轮会掉回 agent）。\n"
-    "（他**没说**图生图、只是让你照需求画一张新图 → 照常出图，别多嘴回问。）\n"
-    "**引用 / 附图本身不等于要垫图**——看原话里有没有「照着这张画」的意思。\n"
-    " ① **明说要照着那张画**（「图生图 / 垫图 / 照着画 / 照这张画 / 复刻 / "
-    "参考这张的构图」）→ `source_image` 填 1，**渠道不用改**"
-    "（silver / silver-hd / 高清三档都有锁构图骨架）。"
-    "prompt 照常写完整画面描述——系统会把那张图当构图条件喂进去，"
-    "出图是**重画的**、尺寸仍是本档画布。\n"
-    " ② **引用 / 附图 + 只是提需求**（换装 / 换发色 / 改动作 /「要全身照」这类）→ "
-    "**不填** `source_image`：这是「照这张改词重画」，不是图生图。"
-    "先拿那张图当初的提示词（自家图走账本、别人发的图就看画面反推）、把新需求并进去，"
-    "**自家图沿用账本里那个渠道**、别换；**引用的不是自家图（账本查不到）就没有"
-    "原渠道，这时 skill 别填**，系统会走默认。\n"
-    " ③ **明说「qwen 图生图」+ 只改一处**（其余原样）→ `source_image` 填 1，"
-    "配 skill=qwen_image_v1（明说「qwen 超清 / qwen超清」时换 qwen-hd；"
-    "原话是「qwen30步 图生图」时配 qwen30），"
-    "prompt 只写一句改动指令（一张 1~2 分钟）。\n"
-    " ④ **修复**（说「qwen修复 / 修复 / 修清楚 / 去糊」）= 把**这张图本身**修清楚 / "
-    "去噪 / 去糊，不是重画一张。**本轮有引用图时，代码专路已经自己入队了、根本"
-    "轮不到你**；你走到这里只可能是**没给图**——那就直说「修复 得配一张图」，"
-    "**别改成别的渠道、也别凭空画一张**。\n"
-    "  ⚠️ jank / nffa / cunny / miao / krea2 系 / sd / moss / moss50 **没有图生图骨架**，"
-    "别给它们填 `source_image`（填了会自动退回文生图、白等一轮）——"
-    "要垫图就换 silver 系或 qwen 系。\n"
-    "  ⚠️ 只是评价这张图 / 只要反推提示词 → **不填** `source_image`，也别画。\n"
-    "【提示词怎么写】\n"
-    "- 中文需求翻成英文再写，prompt 里不许出现中文"
-    "（要出现在画面里的文字除外，用引号原样写）。\n"
-    "- 用户给的**画师串**和权重语法（`1.2::tag::`、`artist:xxx`）原样保留，"
-    "别翻译、别删、别改成平铺 tag；渠道是 nai 时它就是画风来源，必须用上。\n"
-    "- prompt 只写画面内容，「重绘 / 高清 / 加强细节」这类操作词别写进去。\n"
-    "- **每一轮都是新请求**：角色、服装、动作、场景全按这轮重新写，"
-    "别把上一轮画过的东西抄过来。\n"
-    # 2026-10-20 加：实测「画一个成熟一点的女孩子」出来的串是
-    # `1girl, mature female, white_shirt, ..., elegant, soft lighting` ——
-    # 气质**只有两个形容词**，画面全靠模型自由发挥。用户要的是「理解成熟」，
-    # 而 danbooru 的气质词本身约束力极弱（mature female 只管年龄感）。
-    # 所以这里不写词表（会漏），只写**往哪个方向落**，选词交给模型。
-    "- 用户说的**抽象气质**（成熟 / 清纯 / 飒 / 温柔 / 疲惫 / 妖 / 高级感）"
-    "是这张图的核心，不是修饰：**必须落到能画出来的东西上**——年龄感、"
-    "骨相脸型、妆、眼神形状、体态、服装材质、光。\n"
-    "  只写一个 `mature female` 太弱，**至少再配 2~3 个可见线索**"
-    "（如 tsurime、lipstick、collarbone、turtleneck、dim lighting —— 按这张图挑，"
-    "不是照抄这几个）。库里查不到这些词也照样写，**别把它缩成一句形容词**。\n"
-    "- 认不出的角色照外貌特征写，别编不存在的角色名。\n"
-    # 2026-10-20 加【画面六层】【动作别打架】：用户原话「优化提示词即可，大模型
-    # 知道怎么处理的，不需要加硬编码的检测」。所以这里只写**往哪想**，不写词表、
-    # 不做判据。起因是「多手多脚 / 拥抱又拿水壶」这类冲突——扫 6595 条历史
-    # prompt 发现多人只占 2.3%，真正高发的是**单人图里手臂被重复分配**
-    # （6.5% 的条目写了 2 类以上占用手臂的动作）。
-    # ⚠️ 别把下面写成分段 schema 输出（`[动作][服饰]…`）：标签渠道的顺序
-    # 直接影响权重，硬分段会把动作挤到后段被稀释。**只要求它在脑子里过一遍。**
-    "\n"
-    "【画面六层】写之前先在脑子里过一遍这六层，缺的自己补，别只写人物和场景：\n"
-    "画风（画师串 / 风格）→ 角色特征 → 服饰 → 动作 → 色彩光线 → 场景氛围。\n"
-    "- **色彩光线和场景氛围各给 2~3 个词就够**——这两层写长了会把人物和动作"
-    "稀释掉，画面反而更差。\n"
-    "- 两人以上时，长相和服装要**挂在各自的人身上**，别用一句 `two girls, "
-    "silver hair, red dress` 混着写（会把服装穿错人）。\n"
-    "\n"
-    "【动作别打架】画崩最多的就是「一条 prompt 里塞了两个动作」：\n"
-    "- **一条 prompt 只有一个主动作**。想同时拥抱和倒茶，就拆到两只手上写清楚"
-    "（`holding a teapot in her right hand, her left arm around him`）；"
-    "拆不开就删一个，或者把它降级成状态——`one arm around his neck` 是状态，"
-    "不是第二个主动作。\n"
-    "- **手被占了一只，剩下的一律写单数**：`arms around his neck` 是两只手都用上了，"
-    "再让右手拿东西就变成三只手；这种时候写 `one arm around his neck`。"
-    "同理，`hands` / `both arms` 也是两只，掂量一下画面里还有没有手可用。\n"
-    "- **手脚是有配额的**：一个人两只手两条腿，一只手只做一个动作，"
-    "画面里有几个人就按几倍算。没写的手别去描述，也别写 `hand on cheek` "
-    "这种没有主语的肢体——它会让模型多长一只右手。双人画面每个动作都要带主体"
-    "（`her left hand`、`his right thigh`）。\n"
-    "- 写完自己念一遍：这两个动作是不是抢同一只手、是不是要贴在同一个位置？"
-    "抢就改成「一个动作 + 一个状态」。\n"
-    "- 怎么落笔看渠道：**标签串没有先后也没有时序**，只能删 / 合并 / 降级成状态；"
-    "写整句的渠道才可以用从句把左右手分开写。\n"
     "{search}"
     "\n"
     "【最近对话】\n{recent}\n"
@@ -1525,11 +1524,12 @@ _REVISE_TEMPLATE = (
     "别给它们填 `source_image`（填了会自动退回文生图、白等一轮）。"
     "只是评价这张图 → **不填**。\n"
     "- {lang}\n"
-    # qwen 写实规范：改图管道**不走** `_MASTER_TEMPLATE`，这条占位是它唯一的
-    # 入口。2026-10-20 22:57 前这里没有注入点，群里三条「qwen + 引用图」
-    # （22:52 / 22:56 / 22:57）产出的 prompt 里连 `A realistic photograph...
-    # photorealistic style` 都出来了——正是规范第一条禁止的写法。
-    "{qwen_guide}"
+    # 写实人像通用写法：改图管道**不走** `_MASTER_TEMPLATE`，所以这里也要有
+    # 一份，与主模板共用 `_REAL_PORTRAIT_RULES`（2026-10-23 起不再按渠道附加）。
+    # 来路：2026-10-20 22:57 前这里没有任何注入点，群里三条「qwen + 引用图」
+    # 产出的 prompt 里连 `A realistic photograph ... photorealistic style`
+    # 都出来了——正是这套规则要压掉的写法。
+    + _REAL_PORTRAIT_RULES +
     "- 禁止权重语法 (tag:1.2)、{{tag}}、::\n"
     "- 具体角色没把握就写外貌特征+作品名，不要编造不存在的角色名\n"
     # 逃逸口**一直开着**：以前代码扫原话认机制词，认到就换成「必须出 prompt」
@@ -2012,30 +2012,13 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
         # 多图，nffa 没有多图，我们默认以最开始的渠道来进行生图，点名渠道必须
         # 是最高优先级的」）。所以这里把话说死，别让它吐漫画契约；代码侧另有
         # 一道兜底（见下面 comic 契约那段）。
-        hint = ("\n用户开头点名了渠道：**%s**，就用它。**点名渠道优先级最高**——"
-                "本轮就按它画**一张**，别用 generate_comic（就算他嘴上说要"
-                "好几张也一样）。\n"
-                "**打了渠道名就等于下单**：正文哪怕只是一段 JSON / 元数据 / "
-                "英文串 / 分镜表，那也是他给的提示词素材——照它转译成 prompt "
-                "直接出图，**不许只回 reply、不许反问「要不要画」**。"
+        hint = ("\n本轮开头点名了渠道：%s，就用它，优先级最高——按它画一张，"
+                "不用 generate_comic（嘴上说要好几张也一样）。\n"
+                "打了渠道名就等于下单：正文哪怕只是一段 JSON / 元数据 / 英文串 / "
+                "分镜表，那也是他给的提示词素材，照它转译成 prompt 直接出图。"
                 "（除非他确实在问这个渠道本身的事。）\n" % named)
-        # 刻字规范只喂给 moss（2026-10-17 用户拍板：「使用 moss 的时候，
-        # 额外给 AI 这个提示词模板，让 AI 按照这个标准来」）。
-        if named.startswith("moss"):
-            hint += _MOSS_TEXT_GUIDE
-        # 写实人像规范只喂 qwen 的**生成**渠道（2026-10-20 用户拍板：
-        # 「qwen 专门附加提示词给 ai，调用 qwen 渠道的时候」；
-        # 同日晚再拍板「不管文生图还是图生图，只要说到 qwen 就给」）。
-        # 判据收在 `_qwen_real_guide()` 一处——改图管道 `_revise()` 也走它，
-        # 别在这儿再手写一遍条件（22:52~22:57 就是这里写了、那边没写，
-        # 带引用图的三条全漏）。
-        hint += _qwen_real_guide(text, named)
     else:
-        # 没认出渠道词也别丢掉 qwen 规范：中文「千问 / 通义」不在固定渠道表里，
-        # 渠道要交给模型自己判——只要原话说到 qwen，规范照给（2026-10-20 用户
-        # 要求「只要我说到 qwen 就加」）。说到别的渠道/没提渠道时这串是空，
-        # 一个字都不多读。
-        hint = _qwen_real_guide(text)
+        hint = ""
     content = _MASTER_TEMPLATE.format(
         recent=_recent_lines(history) or "（无）",
         text=text,
@@ -2335,9 +2318,6 @@ def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):
         last_prompt=anchor_prompt,
         recent=recent,
         lang=_prompt_lang(channel or anchor_skill),
-        # 点名 qwen（channel）或引用的是自家 qwen 图（anchor_skill）都给规范，
-        # 与文生图 `_translate()` 共用同一个判据函数。
-        qwen_guide=_qwen_real_guide(text, channel, anchor_skill),
         text=text)
     from app.llm import call_llm
     from app.vision import describe
