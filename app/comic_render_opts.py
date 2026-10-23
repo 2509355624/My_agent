@@ -758,14 +758,24 @@ def _rebuild_loras(wf, slots):
     for nid in old_ids:
         wf.pop(nid, None)
 
-    used = sorted(int(x) for x in wf if str(x).lstrip("-").isdigit())
+    # ⚠️ 新节点号必须避开**刚删掉的**旧 LoRA 号（2026-10-23 实报，写真模式
+    # 三张全 400）。原来只按「剩下的节点」算 max：anima-guizhencao 旧链是
+    # 15/16/28…31/34，删完剩下最大 33 → 第一个新节点又叫 **34**，正好撞上
+    # 旧链尾的号。下面「改指新链尾」那一轮于是把**新节点 35 的 model**
+    # （写的 [34, 0]）当成"指着已删节点"的陈旧引用，改指链尾 40，
+    # LoRA 链绕成一个环 → ComfyUI `400 dependency_cycle`，一张都出不来。
+    ids = {int(x) for x in wf if str(x).lstrip("-").isdigit()}
+    ids |= {int(x) for x in old_ids if str(x).lstrip("-").isdigit()}
+    used = sorted(ids)
     nxt = (used[-1] + 1) if used else 1
     target = head
     clip_link = clip_src
+    new_ids = set()
     n = 0
     for s in slots:
         nid = str(nxt)
         nxt += 1
+        new_ids.add(nid)
         inputs = {"model": [target, 0],
                   "lora_name": str(s.get("name") or "").strip(),
                   "strength_model": _f(s.get("strength"), 1.0)}
@@ -782,8 +792,11 @@ def _rebuild_loras(wf, slots):
 
     # 指着已删 LoRA 节点的引用（第一段采样器就在里面）改指新链尾；全摘掉时
     # target 还是 head，等于直接挂回底模——正是想要的。
+    # **跳过新链自己的节点**：它们的 model/clip 是新接的，不是陈旧引用。
     if old_ids:
-        for nd in wf.values():
+        for nid, nd in wf.items():
+            if nid in new_ids:
+                continue
             inp = _inputs(nd)
             for k, v in list(inp.items()):
                 if isinstance(v, list) and v and str(v[0]) in old_ids:

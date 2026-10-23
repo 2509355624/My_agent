@@ -273,6 +273,29 @@ class ApplyTest(unittest.TestCase):
                 if isinstance(v, list) and v and str(v[0]) == sp["hires"][0]]
         self.assertTrue(refs)
 
+    def test_rebuilt_lora_chain_never_becomes_a_loop(self):
+        """重建后的 LoRA 链必须是线性的，能一路回溯到底模加载器。
+
+        2026-10-23 实报：写真模式三张全 `400 Bad Request`，ComfyUI 的正文是
+        `dependency_cycle`。`_rebuild_loras()` 按「剩下节点的最大号 + 1」发新
+        号，而 anima-guizhencao 的旧链尾正好叫 34、删完剩下最大 33 → 第一个新
+        节点又叫回 34；紧接着「陈旧引用改指新链尾」那一轮把**新节点 35** 的
+        model（[34,0]）也当成指向已删节点，改指链尾 40 —— 链绕成环，一张都
+        出不来。
+        """
+        wf = gi.build_t2i_workflow("anima-guizhencao", "1girl, solo, test", 12345)
+        sampler = _samplers(wf)["base"][0]
+        opts = ro.defaults("anima-guizhencao")
+        out = ro.apply(wf, opts)
+
+        want = len([s for s in (opts.get("loras") or [])
+                    if str((s or {}).get("name") or "").strip()])
+        base_id = [n for n, nd in out.items()
+                   if nd.get("class_type") == "UNETLoader"][0]
+        chain, tail = _lora_chain(out, sampler)
+        self.assertEqual(len(chain), want)      # 链路没断也没绕
+        self.assertEqual(tail, base_id)         # 一路回溯到底模，不是回到链中间
+
 
 class NormalizeTest(unittest.TestCase):
     """钳位（给人填的表，不拒）与事实校验（这填得不对，存不进去）。"""
