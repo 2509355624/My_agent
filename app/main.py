@@ -28,6 +28,7 @@ from app import comic_api
 from app import moss_api
 from app import gen_api
 from app import card_api
+from app import output_api
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         LLM_PROVIDER, LLM_FALLBACK_CHAIN, PROVIDERS,
                         OLLAMA_BASE_URL, DEFAULT_AGENT_ID,
@@ -123,6 +124,10 @@ app.register_blueprint(gen_api.bp)
 # 角色卡工作台 API（独立 Blueprint，见 app/card_api.py）：一句话 → 星陨AI 的
 # 五个文本框 + 竖版封面
 app.register_blueprint(card_api.bp)
+
+# output 图片管理台 API（独立 Blueprint，见 app/output_api.py）：ComfyUI output
+# 目录的网页版资源管理器——目录树点开就看，缩略图网格，勾选即删
+app.register_blueprint(output_api.bp)
 
 @app.route("/")
 def index():
@@ -822,6 +827,12 @@ def comic_page():
 def moss_comic_page():
     """moss 漫画台：一句话 → 编剧写整页 → 一次出图（见 app/moss_api.py）。"""
     return send_from_directory(WEB_DIR, "moss_studio.html")
+
+
+@app.route("/output")
+def output_page():
+    """图片管理台：ComfyUI output 目录的网页资源管理器（见 app/output_api.py）。"""
+    return send_from_directory(WEB_DIR, "output_manager.html")
 
 
 @app.route("/characters")
