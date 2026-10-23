@@ -589,12 +589,25 @@ def _post_openai(cfg, model, data_url, prompt, timeout, started):
             ],
         }],
     }
-    # 火山系（volc/doubao）显式关思维链：Seed 2.1 系列是深度思考模型，
-    # 不关的话识图也会先烧一大段 reasoning——推理 token 按 output 计费，
-    # 识图又是请求量最大的一类调用（与 llm._thinking_type 同一笔账，
-    # 2026-10-05 实测 disabled 后 completion 22036→1）。deepseek 不带字段
-    # 维持现状（那条识图链路已验证过，不赌改动）。
-    if cfg is PROVIDERS.get("volc") or cfg is PROVIDERS.get("doubao"):
+    # volc / doubao / deepseek 显式关思维链：这三家都默认开思考，不关的话识图
+    # 也会先烧一大段 reasoning——推理 token 同样按 output 计费，而识图是全项目
+    # 输出 token 最多的一类调用。
+    #
+    # 2026-10-05 实测火山 disabled 后 completion 22036→1。
+    # 2026-10-24 补 deepseek：原先这里只放火山，注释写「deepseek 不赌改动」，
+    # 结果识图落到 deepseek 上时每次输出 1016 token（其中七成是推理）。
+    # 当日账单实锤：vision(deepseek) 171 次 / 173,696 输出 token，占全天输出
+    # 的 72%，折钱约 ¥1.2~1.4，比生图链路贵得多——因为生图那条早在
+    # llm._thinking_type 里就关了，只有识图这一路从没关过。
+    #
+    # A/B 实测（同图同 prompt，仅切这个字段）：
+    #   漫画页(带台词) out 1157→254、9.06s→2.69s
+    #   写实(纯画面)   out  770→123、5.33s→1.72s
+    # 正文对比：文字提取、“咚”、雨夜、蓝夹克白衬衫、两杯饮品与窗边光线全部
+    # 保留，丢掉的是「深色微卷」→「深色」、「慵懒或忧郁」这类修饰。识图输出
+    # 是喂给生图的画面事实，修饰损失可接受，故关之。
+    if cfg is PROVIDERS.get("volc") or cfg is PROVIDERS.get("doubao") \
+            or cfg is PROVIDERS.get("deepseek"):
         payload["thinking"] = {"type": "disabled"}
     headers = {
         "Authorization": "Bearer " + cfg["api_key"],
