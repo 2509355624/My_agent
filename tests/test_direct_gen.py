@@ -388,6 +388,22 @@ class BareKrea2WordTest(unittest.TestCase):
         self.assertEqual(direct_gen._parse_channel("krea2鬼针草 初音")[0],
                          "krea2-guizhencao")
 
+    def test_flesh_needs_anima_prefix(self):
+        """2026-10-23 新增 `anima-flesh`：带 `anima` 前缀才点名。
+
+        裸「肉感」在 `_STYLE_ALIASES` 里是活的画风词（curvy = `hd_3_curvy`），
+        所以固定表**只登记带前缀的写法**——不然后缀成天挂在嘴边的「再肉感一点」
+        会被抢成渠道。这就是 2026-10-11「anima柔和」改名那次踩过的双关，
+        现在用测试钉住两边各走各的。
+        """
+        self.assertEqual(direct_gen._parse_channel("anima肉感 女仆"),
+                         ("anima-flesh", "女仆"))
+        self.assertEqual(direct_gen._parse_channel("anima-flesh 女仆")[0],
+                         "anima-flesh")
+        # 裸「肉感」照旧是画风词，不能被新渠道抢走
+        self.assertEqual(direct_gen._parse_channel("肉感 女仆")[0],
+                         "hd_3_curvy")
+
     def test_bare_krea2_falls_back_to_general(self):
         """光打「krea2」两个字 → 族里最中性的那条。"""
         self.assertEqual(direct_gen._parse_channel("krea2 一只猫"),
@@ -3533,6 +3549,12 @@ class SearchHookTest(unittest.TestCase):
         p = mock.patch.object(direct_gen, "SEARCH_ENABLED", True)
         p.start()
         self.addCleanup(p.stop)
+        # 线上 .env 是 DIRECT_SEARCH_AGENT=0（2026-10-23 关掉 LLM 补漏层），
+        # 而 config 启动时会 load_dotenv，测试进程也会读到。这一类用例测的是
+        # 「开启搜索时链路对不对」，与线上开关无关，显式打开。
+        q = mock.patch.object(direct_gen, "SEARCH_AGENT_ON", True)
+        q.start()
+        self.addCleanup(q.stop)
 
     def _prefetch(self, doc="", boom=False, text="画个胡桃", det=""):
         """跑一次 `_prefetch_search`，返回 (返回的资料包, 搜索 mock)。
@@ -3599,6 +3621,29 @@ class SearchHookTest(unittest.TestCase):
         m_search.assert_not_called()
         self.assertEqual(out, "")
 
+    def test_agent_off_keeps_free_extract(self):
+        """DIRECT_SEARCH_AGENT=0：不调 LLM，但定点抽取的资料照样交出去。
+
+        两层必须分开：extract 是代码扫库（0 token、微秒级），关它省不到钱，
+        只是白丢准确性；花钱和变慢的是 search_agent 那 1~3 次 LLM 调用。
+        """
+        from app import search_agent
+        from app.tools.normal import search_tags
+
+        det = "角色：胡桃 → hu_tao_(genshin_impact)"
+        with mock.patch.object(
+                search_tags, "extract",
+                return_value={"doc": det, "hint": "", "confirmed": [],
+                              "ambiguous": []}):
+            with mock.patch.object(
+                    search_agent, "search",
+                    return_value="补漏资料（应当被丢弃）") as m_search:
+                with mock.patch.object(direct_gen, "SEARCH_AGENT_ON", False):
+                    out = direct_gen._prefetch_search("画个胡桃")
+        m_search.assert_not_called()
+        self.assertIn("hu_tao", out)
+        self.assertNotIn("补漏资料", out)
+
     def test_empty_text_skips_search(self):
         _, m_search = self._prefetch("资料", text="   ")
         m_search.assert_not_called()
@@ -3624,6 +3669,12 @@ class DocPackTest(unittest.TestCase):
         p = mock.patch.object(direct_gen, "SEARCH_ENABLED", True)
         p.start()
         self.addCleanup(p.stop)
+        # 线上 .env 是 DIRECT_SEARCH_AGENT=0（2026-10-23 关掉 LLM 补漏层），
+        # 而 config 启动时会 load_dotenv，测试进程也会读到。这一类用例测的是
+        # 「开启搜索时链路对不对」，与线上开关无关，显式打开。
+        q = mock.patch.object(direct_gen, "SEARCH_AGENT_ON", True)
+        q.start()
+        self.addCleanup(q.stop)
         from app.tools.normal import search_tags
         from app import search_agent
         self.st = search_tags

@@ -99,6 +99,25 @@ ENABLED = os.getenv("DIRECT_GEN", "1") == "1"
 # 进转译调用。500 张/天合计约 80 万，占 600 万文本额度的 13%。
 SEARCH_ENABLED = os.getenv("DIRECT_SEARCH", "1") == "1"
 
+# 搜索 agent 的 **LLM 补漏层**（2026-10-23 用户关掉）。
+#
+# ⚠️ 这个和上面的 SEARCH_ENABLED 是**两件事**，别混：
+#   - `search_tags.extract()`：代码扫 32.8 万条标签库，**0 token、微秒级、
+#     不可能编造**。字面出现的词直接定成 tag（连衣裙→dress）。这一层留着的
+#     好处是白拿的，关它省不到一分钱。
+#   - `search_agent.search()`：1~3 次 LLM 调用，只补 extract 补不到的
+#     （同义词、歧义角色、库外名词）。**花钱和变慢的都是这一层。**
+#
+# 用户口径：「效果提升一般，而且还费钱，我们直接一次 api 请求即可」。
+# 关掉后生图链路 = extract（免费）→ 生图 API（1 次），不再多跑 LLM。
+# 2026-10-23 实账：搜索 20 天 ¥5.91（占总盘 12%），其中 **64% 的调用结局是
+# 「判定无需查库」**——extract 已经查完，模型没东西可补，白花一次调用。
+# ⚠️ 默认值就是 **"0"（关）**，不是 "1"：`.env` 是本地文件、不进仓库，写成默认 1
+#    的话换台机器/重装一次 `.env` 丢了，这笔钱会**静默长回来**。要补漏再显式写
+#    `DIRECT_SEARCH_AGENT=1`。
+SEARCH_AGENT_ON = os.getenv("DIRECT_SEARCH_AGENT", "0") == "1"
+_SEARCH_OFF_LOGGED = False          # 关闭态只提醒一次，别每张图刷一行
+
 # ─── 渠道清单 ────────────────────────────────────────────
 # hd 渠道是「档位_画风」的组合命名（skills/ 下真实存在）；其余是固定渠道名。
 # 别让这个集合和 skills/ 目录漂移：_allowed_skills() 每次现场核对目录，
@@ -300,6 +319,14 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    # 画风**——「鬼针草」不在画风表里，但为防以后手滑加进去双关，
                    # 点名词走固定表，跟线条/写实同款待遇。
                    "anima鬼针草": "anima-guizhencao",
+                   # 2026-10-23 用户新增：anima 的「肉感」配方（miaomiaoHarem
+                   # anima16 底模 + Anima_Turbo LoRA v0.2 + qaq 1.4，euler 8 步
+                   # cfg1 → 2x Ani4K，默认 1024×1536 出 2048×3072）。
+                   # ⚠️ **点名词必须带 `anima` 前缀**，和线条/写实/鬼针草同款待遇。
+                   # 裸「肉感」坚决不登记——它已经是 `_STYLE_ALIASES` 里活的画风词
+                   # （肉感 → curvy = `hd_3_curvy`），拿它当点名词会和画风词双关，
+                   # 正是 2026-10-11「anima柔和」改名那次踩过的坑。
+                   "anima肉感": "anima-flesh",
                    # ⚠️ 渠道 **id 本身**（`anima-line` / `anima-real`）也进固定表。
                    # 不进的后果 2026-10-11 实测过：正则认不出带连字符的 id →
                    # 落到 `_STYLE_RE`，「anima-soft」被 `soft` 抢成 `hd_3_soft`、
@@ -309,6 +336,7 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    "anima-line": "anima-line",
                    "anima-real": "anima-real",
                    "anima-guizhencao": "anima-guizhencao",
+                   "anima-flesh": "anima-flesh",
                    # ── 2026-10-16 用户拍板：krea2 系的中文点名词**不带 `krea2`
                    # 前缀也认**（原话「也放开吧，让 ai 自己选个 krea2 的，不然
                    # 老是跑偏」）。私聊实录：`亚洲真人 不穿衣服 高抬腿 腿部特写`
@@ -350,8 +378,8 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    "日系": "krea2-rella"}
 _FIXED_CHAN_RE = re.compile(
     r"(?<![0-9A-Za-z_])"
-    r"(anima\s*线条|anima\s*写实|anima\s*鬼针草"
-    r"|anima-line|anima-real|anima-guizhencao"
+    r"(anima\s*线条|anima\s*写实|anima\s*鬼针草|anima\s*肉感"
+    r"|anima-line|anima-real|anima-guizhencao|anima-flesh"
     r"|krea2\s*米山舞|krea2\s*日系|krea2\s*亚洲真人"
     r"|krea2\s*动漫真人|krea2\s*真人\s*cos"
     r"|krea2\s*宝可梦|krea2\s*柔光|krea2\s*奶油"
@@ -918,7 +946,7 @@ MORE_CHAN_TEXT = (
     "【★miao】miao\n"
     "\n"
     "【其他】moss ｜ moss50 ｜ silver-hd ｜ qwen-hd ｜ qwen角色设定表 ｜ qwen修复\n"
-    "　　　　anima多图 ｜ anima线条 ｜ anima写实 ｜ anima鬼针草\n"
+    "　　　　anima多图 ｜ anima线条 ｜ anima写实 ｜ anima鬼针草 ｜ anima肉感\n"
     "　　　　jank ｜ sd ｜ nffa ｜ cunny ｜ nai\n"
     "\n"
     "【玩法】\n"
@@ -1420,8 +1448,9 @@ _REVISE_TEMPLATE = (
     "  anima（= 三档）= hd_3_<画风>（末尾带 2x 像素放大 → 3072×4608；"
     "画风只有 clear/soft/gloss/curvy 四种，例「anima gloss」= hd_3_gloss，"
     "没说画风 = hd_3_clear）；\n"
-    "  anima-line / anima-real / anima-guizhencao = "
-    "说「anima线条 / anima写实 / anima鬼针草」（三条独立配方，不在画风体系里）；\n"
+    "  anima-line / anima-real / anima-guizhencao / anima-flesh = "
+    "说「anima线条 / anima写实 / anima鬼针草 / anima肉感」"
+    "（四条独立配方，不在画风体系里）；\n"
     "  nai / nai_wide = 说「nai」（画师串和权重语法认这两个）；\n"
     "  qwen_image_v1 = 说「qwen / 千问 / 通义」；image_gen_v1 = 说「sd」；\n"
     "  qwen30 = 说「qwen30步」（qwen 的 **30 步**版，其余参数一模一样，更慢）；\n"
@@ -1864,15 +1893,23 @@ def _prefetch_search(text):
             parts.append(got["doc"])
             hint = got.get("hint") or ""
     except Exception:
-        log.exception("[direct] 定点抽取失败，只走搜索 Agent")
+        log.exception("[direct] 定点抽取失败，按无资料继续")
 
-    try:
-        from app import search_agent
-        doc = search_agent.search(text, hint=hint) or ""
-        if doc:
-            parts.append(doc)
-    except Exception:
-        log.exception("[direct] 前置搜索失败，按无资料继续")
+    if SEARCH_AGENT_ON:
+        try:
+            from app import search_agent
+            doc = search_agent.search(text, hint=hint) or ""
+            if doc:
+                parts.append(doc)
+        except Exception:
+            log.exception("[direct] 前置搜索失败，按无资料继续")
+    else:
+        # 只提醒一次：确认线上真的按「extract → 生图 API」单请求在跑
+        global _SEARCH_OFF_LOGGED
+        if not _SEARCH_OFF_LOGGED:
+            _SEARCH_OFF_LOGGED = True
+            log.info("[direct] 搜索 agent 已关闭（DIRECT_SEARCH_AGENT=0），"
+                     "只走 0 成本的定点抽取")
 
     out = "\n\n".join(parts)
     if len(out) > DOC_MAX_CHARS:

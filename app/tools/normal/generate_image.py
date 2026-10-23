@@ -436,47 +436,30 @@ _RECEIPT_WAITING = ("任务已收到，ComfyUI 正在重启（一般十几秒）
 # 「渠道名 + 你的需求」那条用法的示范，用户看着这行就知道下次怎么点名。
 _RECEIPT_CHANNEL = "当前渠道：%s"
 # 附言的内置默认（管理页 `receipt_note` 一整段可改掉，见 agents.receipt_note）。
-# 2026-10-07 用户拍板「把我全部的可用渠道都加上去」：原「常用」那行只列 5 个，
-# `sd` / `krea2` / `nffa` / `miao` / `cunny` 一直没有曝光位。
-# 现在列出**全部能点名的渠道**：silver / silver-hd / anima / qwen / nai /
-# jank / sd / nffa / miao / cunny，外加按风格拆出来的 krea2 系 —— 2026-10-08 拆 5 条、
-# 2026-10-09 加 3 条（宝可梦 / 柔光 / 奶油）= 8 条，合计 18 个。
-#   - `silver` / `silver-hd` / `jank` 是磁盘渠道，不在 `_FIXED_CHAN_MAP` 里（红线），
-#     由 AI 认——所以它们**能点名**，只是代码不直判。
-#   - `image_gen_v1_hires` / `nai_wide` 没有短名（`_FIXED_CHAN_RE` 里没有对应词），
-#     点名不到，**不列**。
-# ⚠️ 改这段要**同时改 `agents/qq/settings.json` 的 `receipt_note`**——那份覆盖优先，
-#    只改这里不生效（2026-10-07 实录：改了这里，线上回执一个字没变）。
-# 2026-10-07 加「要横屏」那行：横屏是**本轮原话**里的词（`image_jobs.turn_is_landscape`
-# 认「横屏 / 横版 / 横图」），不点名就没有曝光位，用户不会知道有这功能。
-# 只写「横屏」一个词（用户 10-07 拍板）：另外两个是同义词，不必都列，回执每张图
-# 都跟着发、能短就短。**单独占一行**而不是并进「4x 超清」那行——两件事不相关，
-# 并进去那行会长到看不清。
-# 2026-10-07（晚）加 qwen-hd / qwen 超清 曝光：它是 qwen 的 4x 超清版（4096×6144），
-# 「要 4x 超清」那行本来只讲 silver-hd，现在补上 qwen 那一支；再单独开一行讲它的
-# 图生图触发指令「qwen 超清，图生图，描述」（见 generate_image 提示词里的
-# `_I2I_SKILLS` + `skill=qwen-hd` + `source_image=1` 路由）。两件事不相关，分开两行。
-# ⚠️ 这两行的真身（线上回执）在 `agents/qq/settings.json` 的 `receipt_note`，那份覆盖
-#    优先——改了这里还要同步改 settings.json，否则线上一个字不变。
-# 2026-10-11 加两条 anima 的 LoRA 堆叠版：`anima线条` / `anima写实`（用户拍板
-# 「追加到渠道那行尾」）。⚠️ 它们跟 `anima（三档）` **不是一族**（6 条 LoRA +
-# silvermoonmix turbo 二段 / 2456×3686），所以按点名词单列，别并进 `anima` 那一项。
-# ⚠️ 原来这条叫「anima柔和」，同日改名成「anima线条」：「柔和」是活的画风词
-# （`_STYLE_ALIASES` 柔和→soft），当点名词会和画风词双关（用户拍板）。
+#
+# 2026-10-07 用户拍板「把我全部的可用渠道都加上去」，于是这里列过 35 个渠道、
+# 5 行、340 字——每张图的回执都跟着发一遍，实测刷屏（2026-10-21 用户：
+# 「35 个渠道太多，每次都刷屏，/更多渠道 也是写不清楚，一大堆字」）。
+#
+# 2026-10-21 改回「回执只放常用的 5 个，全量交给 /更多渠道」。这 5 个不是拍脑袋，
+# 是 `state/image_log.jsonl` 6799 张账本的实际频次（2026-09-30 ~ 10-21）：
+#   anima（hd_3_* 合计）1538 张 22.6% ｜ krea2 系 800 张 11.8%
+#   silver 777 张 11.4% ｜ qwen 系 744 张 10.9% ｜ miao 186 张 2.7%
+# 第 5 位选 miao（186）而不是 silver-hd（104）：前四个回答「画什么风格」，
+# 后者是「怎么处理这张图」（放大/修复那类），前者更常被群友直接点名。
+#
+# ⚠️ 改这段要**同时改 `agents/qq/settings.json` 的 `receipt_note`**——那份覆盖
+#    优先，只改这里不生效（2026-10-07 实录：改了这里，线上回执一个字没变）。
+#    反过来亦然：只改 settings 不动这里，管理页把框清空就又退回旧的长版。
+# ⚠️ 全量清单在 `direct_gen.MORE_CHAN_TEXT`（`/更多渠道` 直发的文本）。两边必须
+#    同步：回执里出现的这 5 个名字，/更多渠道 里必须有；回执里不再提的玩法
+#    （横屏 / 漫画 / 聊角色 / 超清 / 修复 / 造卡 / 引用）也必须在那份里找得到,
+#    否则就是从群友眼前彻底消失了。
 _RECEIPT_NOTE_DEFAULT = (
-    "想换渠道就发「渠道名 + 你的需求」（例：jank 银发初音未来）。\n"
-    "渠道：silver（默认）/ anima（三档）/ qwen / nai / jank / sd / nffa / miao / cunny"
-    " / moss / moss50 / anima线条 / anima写实\n"
-    "krea2 系（13 条，按风格拆）：krea2米山舞 / krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油 / krea2写实 / krea2通用 / krea2铭音 / krea2鬼针草 / krea2铭鬼\n"
-    "要角色设定表（7 分区 character design sheet）：发「qwen 角色设定表 + 描述」（qwen 自己的角色表工作流，2304×1536 / 16 步）\n"
-    "要修图（去糊/去噪/修清楚）：引用那张图 + 发「qwen修复」（qwen 的修复工作流，1536 面积档 / 25 步）\n"
-    "要 4x 超清：silver 发「silver-hd + 需求」，qwen 发「qwen 超清 + 需求」（也认 silver超清 / qwen超清）\n"
-    "qwen 超清支持图生图：发「qwen 超清，图生图，描述」（附一张图）\n"
-    "要横屏：加「横屏」（例：silver 横屏 一个女孩）\n"
-    "要连续小漫画：发「<画风>漫画，<数量>，<剧情>」（例：silver漫画，10个，原神的雷电将军在樱花树下）\n"
-    "要 anima 快速出多张：发「anima多图，<需求>」（一次 3 张，双模型精修）\n"
-    "想聊天：发「#角色扮演」看有哪些角色，发「#角色名」我就用那个角色的口气陪你聊\n"
-    "更多玩法：@%s /更多渠道"
+    "想换渠道就发「渠道名 + 你的需求」（例：anima 女骑士 ｜ krea2 日系 银发少女）\n"
+    "常用：silver（默认·快）/ anima（三档·最高清）/ krea2 系 13 风格"
+    " / qwen（写实·能写中文）/ miao（皮肤质感）\n"
+    "全部渠道 / 引用玩法 / 造卡 / 聊角色：@%s /更多渠道"
 )
 
 
@@ -1253,8 +1236,9 @@ def _skill_param_desc():
     ]
     if any(c.startswith("hd_3_") for c in _CHANNELS):
         parts.append("说「anima」「三档」→ `hd_3_<画风>`。")
-    if {"anima-line", "anima-real", "anima-guizhencao"} <= set(_CHANNELS):
-        parts.append("⚠️「anima线条/写实/鬼针草」= 三个独立渠道，"
+    if {"anima-line", "anima-real", "anima-guizhencao",
+            "anima-flesh"} <= set(_CHANNELS):
+        parts.append("⚠️「anima线条/写实/鬼针草/肉感」= 四个独立渠道，"
                      "**别拆成 anima + 画风**。")
     parts.append("**只在用户点名画风 / 尺寸 / 渠道时才传**；"
                  "分不清照 Available Skills 摘要选。")
@@ -1285,12 +1269,14 @@ tool = {
                   "- 画风四种（**渠道名就是画风**，按想要什么画风挑，不是按模型挑）："
                   "`hd_3_clear`（清透素净）/ `hd_3_soft`（柔光）/ "
                   "`hd_3_gloss`（冷调油光，用户直接叫它「anime2 / 原版」）/ `hd_3_curvy`（丰腴强光影）\n"
-                  "- **另有三条独立的动漫渠道**：`anima-line`（用户说「anima线条」）/ "
-                  "`anima-real`（「anima写实」）/ `anima-guizhencao`（「anima鬼针草」）。"
-                  "前两条是**同一套配方**（一段堆 6 条 LoRA、二段换 silvermoonmix turbo，"
-                  "输出 2456×3686）；anima-guizhencao 是单段配方（7 条 LoRA、"
-                  "er_sde 30 步 cfg 4，输出 2048×3072）。三条都**不参与上面这套画风体系**，"
-                  "只在被点名时用\n"
+                  "- **另有四条独立动漫渠道**：`anima-line`（「anima线条」）/ "
+                  "`anima-real`（「anima写实」）/ `anima-guizhencao`（「anima鬼针草」）/ "
+                  "`anima-flesh`（「anima肉感」，皮肤质感最重）。"
+                  "前两条 = 6 条 LoRA + silvermoonmix 二段（2456×3686）；"
+                  "后两条单段（鬼针草 7 LoRA/30 步，肉感 Turbo+qaq/8 步/"
+                  "1024×1536 再 2x），输出都是 2048×3072。"
+                  "四条都**不参与上面这套画风体系**，只在被点名时用；"
+                  "⚠️ 裸「肉感」是画风词（→ `hd_3_curvy`），不算点名\n"
                   "**换渠道的门槛：只有用户点名画风、或点名「anima / 三档」、或明确要「更柔 / 更亮 / 更丰满 / 更大」时才传，平时一律不传。**"
                   "clear 和 soft 像，分不清也走默认\n"
                   "**⚠️ 换不换渠道，只看一件事：他话里有没有「档位名或具体像素」。**\n"
