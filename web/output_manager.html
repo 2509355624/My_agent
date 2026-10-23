@@ -55,6 +55,8 @@
     white-space: nowrap; }
   .trow .tm { font-size: 11px; color: var(--text-mute); flex: 0 0 auto; }
   .trow.on .tm { color: var(--accent-dim); }
+  .trow.ghost { color: var(--text-mute); cursor: default; font-size: 12px; padding-left: 22px; }
+  .trow.ghost.err { color: var(--error); }
   .tkids { margin-left: 15px; border-left: 1px solid var(--border-soft); padding-left: 4px; }
 
   /* ── 右：内容 ── */
@@ -71,7 +73,9 @@
   #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
     gap: 12px; }
   .cell { background: var(--bg-elev); border: 1px solid var(--border-soft);
-    border-radius: var(--radius-sm); overflow: hidden; position: relative; }
+    border-radius: var(--radius-sm); overflow: hidden; position: relative;
+    /* 视口外的格子先不渲染（qq 私聊目录有 180 张图，全渲染会卡滚动） */
+    content-visibility: auto; contain-intrinsic-size: 180px 220px; }
   .cell.picked { border-color: var(--error); }
   .cell .thumb { width: 100%; aspect-ratio: 1/1; object-fit: cover; display: block;
     background: #000; cursor: zoom-in; }
@@ -97,12 +101,24 @@
     color: var(--text-dim); font-size: 12px; border-bottom: 1px solid var(--border-soft); }
   #lb .bar .nm { color: var(--text); flex: 1; min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #lb .bar .cnt { color: var(--accent); font-size: 13px; flex: 0 0 auto;
+    border: 1px solid var(--accent-dim); border-radius: 10px; padding: 1px 9px; }
   #lb .stage { flex: 1; display: flex; align-items: center; justify-content: center;
-    min-height: 0; padding: 10px; }
+    min-height: 0; padding: 10px; position: relative; }
   #lb img { max-width: 100%; max-height: 100%; object-fit: contain; }
   #lb .nav { border: 1px solid var(--border); background: var(--bg-input);
     color: var(--text); border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; }
   #lb .nav:hover { border-color: var(--accent); }
+  /* 图两侧的大箭头：之前只有顶栏小按钮，用户没看到 */
+  #lb .bigarrow { position: absolute; top: 50%; transform: translateY(-50%);
+    width: 58px; height: 104px; font-size: 44px; line-height: 1;
+    background: rgba(22,22,34,.82); border: 1px solid var(--border); color: var(--text);
+    border-radius: 12px; cursor: pointer; opacity: .5; transition: opacity .15s, border-color .15s;
+    display: flex; align-items: center; justify-content: center; padding: 0; }
+  #lb .bigarrow:hover { opacity: 1; border-color: var(--accent); color: var(--accent); }
+  #lb .bigarrow.left { left: 16px; }
+  #lb .bigarrow.right { right: 16px; }
+  #lb .bigarrow:disabled { opacity: .18; cursor: default; }
 
   /* ── 确认弹窗 ── */
   #mask { display: none; position: fixed; inset: 0; background: rgba(5,5,8,.7);
@@ -161,12 +177,15 @@
 <!-- 灯箱 -->
 <div id="lb">
   <div class="bar">
-    <button class="nav" id="lbPrev">&#8592; 上一张</button>
-    <button class="nav" id="lbNext">下一张 &#8594;</button>
     <span class="nm" id="lbName"></span>
+    <span class="cnt" id="lbCnt">1 / 1</span>
     <button class="nav" id="lbClose">关闭 (Esc)</button>
   </div>
-  <div class="stage"><img id="lbImg" alt=""></div>
+  <div class="stage">
+    <button class="bigarrow left" id="lbPrev" title="上一张（←）">&#8249;</button>
+    <img id="lbImg" alt="">
+    <button class="bigarrow right" id="lbNext" title="下一张（→）">&#8250;</button>
+  </div>
 </div>
 
 <!-- 删除确认 -->
@@ -199,6 +218,10 @@ var $ = function (id) { return document.getElementById(id); };
 var imgUrl = function (rel) {
   return "/api/image/" + rel.split("/").map(encodeURIComponent).join("/");
 };
+var thumbUrl = function (rel, w) {
+  return "/api/output/thumb?w=" + (w || 320) + "&path=" +
+    rel.split("/").map(encodeURIComponent).join("%2F");
+};
 function human(n) {
   var u = ["B", "KB", "MB", "GB", "TB"], i = 0;
   n = Number(n) || 0;
@@ -206,6 +229,13 @@ function human(n) {
   return (i === 0 ? n.toFixed(0) : n.toFixed(1)) + " " + u[i];
 }
 function shortTime(s) { return (s || "").slice(5, 16); }
+// 子目录右侧摘要。中间层（web / 生图页）本层没有图片，只报 "0P · 0 B"
+// 会被当成空目录，所以没图但有子目录时改报子目录数。
+function dirMeta(e) {
+  if (e.n_img > 0) return e.n_img + "P · " + human(e.bytes);
+  if (e.n_dirs > 0) return e.n_dirs + " 个目录";
+  return "空";
+}
 function toast(msg, ok) {
   var t = $("toast");
   t.textContent = msg;
@@ -233,88 +263,194 @@ function loadStat() {
       $("stat").textContent = d.ok
         ? ("共 " + d.files + " 张图 / " + d.dirs + " 个目录 · 占用 " + d.human)
         : ("统计失败：" + (d.error || ""));
+      var rm = $("rootMeta");
+      if (rm) rm.textContent = d.ok ? d.human : "";
     });
 }
 
 // ══════════════════════════════════════════════════════
 //  左：目录树
+//
+//  增量挂载：点箭头只挂/卸该目录的 .tkids 子树，**不再整棵重建**。
+//  旧版每次点击 renderTree() 全量重建，展开七八层后每点一下都要重排上百个
+//  行 + 重新发起所有层级的渲染 —— 这就是用户说的「加载的时候会卡卡的」。
+//  现在的原则：renderTree 只在初始化/刷新/删除后调一次，之后都是局部操作。
 // ══════════════════════════════════════════════════════
+var nodeMap = {};      // rel -> 该目录的行元素，折叠/高亮都靠它定位
+var rootRow = null;
+
+function arrowOf(rel) {
+  var row = rel === "" ? rootRow : nodeMap[rel];
+  return row ? row.querySelector(".tw") : null;
+}
+
+function setArrow(rel, isOpen) {
+  var a = arrowOf(rel);
+  if (a) a.innerHTML = isOpen ? "&#9662;" : "&#9656;";       // ▾ / ▸
+}
+
+function kidsOf(rel) {
+  var row = rel === "" ? rootRow : nodeMap[rel];
+  var nx = row && row.nextElementSibling;
+  return nx && nx.classList.contains("tkids") ? nx : null;
+}
+
+function clearExpandedBelow(rel) {
+  var prefix = rel ? rel + "/" : "";
+  Object.keys(expanded).forEach(function (k) {
+    if (k !== "" && k.indexOf(prefix) === 0) delete expanded[k];
+  });
+}
+
+// 建一行（只建这一行，不含子树）
+function buildRow(ent, isRoot) {
+  var rel = isRoot ? "" : ent.rel;
+  var row = document.createElement("div");
+  row.className = "trow" + (curRel === rel ? " on" : "");
+  row.dataset.rel = rel;
+
+  var tw = document.createElement("span");
+  tw.className = "tw";
+  tw.innerHTML = expanded[rel] ? "&#9662;" : "&#9656;";
+  // 箭头只负责展开/折叠；点名字才进入目录（旧版点整行两件事一起做，收不回来）
+  tw.onclick = function (ev) { ev.stopPropagation(); toggleExpand(rel); };
+
+  var tn = document.createElement("span");
+  tn.className = "tn";
+  tn.textContent = isRoot ? "output" : ent.name;
+  tn.title = isRoot ? "output 根目录" : ent.name;
+
+  var tm = document.createElement("span");
+  tm.className = "tm";
+  if (isRoot) tm.id = "rootMeta";
+  else tm.textContent = dirMeta(ent);
+
+  row.appendChild(tw); row.appendChild(tn); row.appendChild(tm);
+  row.onclick = function () { enterDir(rel); };
+  if (isRoot) rootRow = row; else nodeMap[rel] = row;
+  return row;
+}
+
 function renderTree() {
   var box = $("tree");
   box.innerHTML = "";
-  var root = document.createElement("div");
-  root.className = "trow" + (curRel === "" ? " on" : "");
-  root.innerHTML = '<span class="tw">&#128193;</span>' +
-    '<span class="tn">output</span><span class="tm" id="rootMeta"></span>';
-  root.onclick = function () { selectDir(""); };
-  box.appendChild(root);
+  nodeMap = {};
+  rootRow = null;
+  expanded[""] = true;
+  var row = buildRow({ name: "output" }, true);
+  box.appendChild(row);
+  loadStat();
+  return mountKids("");
+}
+
+// 挂上 rel 的子树；已挂则直接返回。返回 Promise（子行渲染完）便于逐级展开。
+function mountKids(rel) {
+  var box = kidsOf(rel);
+  if (box) return Promise.resolve();
+  var row = rel === "" ? rootRow : nodeMap[rel];
+  if (!row) return Promise.resolve();
   var kids = document.createElement("div");
   kids.className = "tkids";
-  kids.id = "rootKids";
-  box.appendChild(kids);
-  renderKids("", kids);          // 根目录默认展开：进来就看到三个大类
-  loadStat();
+  kids.dataset.for = rel;
+  row.parentNode.insertBefore(kids, row.nextSibling);
+  return renderKids(rel, kids);
+}
+
+function unmountKids(rel) {
+  var box = kidsOf(rel);
+  if (!box) return;
+  // 卸之前把子孙的行登记删掉，避免 nodeMap 里留下已脱离文档的幽灵节点
+  var prefix = rel ? rel + "/" : "";
+  Object.keys(nodeMap).forEach(function (k) {
+    if (k.indexOf(prefix) === 0) delete nodeMap[k];
+  });
+  clearExpandedBelow(rel);
+  box.remove();
+}
+
+function toggleExpand(rel) {
+  if (expanded[rel]) {
+    delete expanded[rel];
+    unmountKids(rel);
+    setArrow(rel, false);
+  } else {
+    expanded[rel] = true;
+    setArrow(rel, true);
+    mountKids(rel);
+  }
+}
+
+// 逐级展开到 rel（含自身），每级等上一级渲染完再挂下一级
+function revealPath(rel) {
+  var parts = rel ? rel.split("/") : [];
+  var acc = "";
+  var chain = Promise.resolve();
+  parts.forEach(function (seg) {
+    chain = chain.then(function () {
+      acc = acc ? acc + "/" + seg : seg;
+      if (!expanded[acc]) {
+        expanded[acc] = true;
+        setArrow(acc, true);
+        return mountKids(acc);
+      }
+    });
+  });
+  return chain;
 }
 
 function renderKids(rel, box) {
-  box.innerHTML = '<div class="trow" style="color:var(--text-mute)">读取中…</div>';
-  loadTree(rel).then(function (d) {
+  box.innerHTML = '<div class="trow ghost">读取中…</div>';
+  return loadTree(rel).then(function (d) {
     box.innerHTML = "";
     d.dirs.forEach(function (sub) {
-      var row = document.createElement("div");
-      row.className = "trow" + (curRel === sub.rel ? " on" : "");
-      var hasKids = sub.n_img > 0;   // 本层有图就不一定有子目录；一律给展开箭头
-      row.innerHTML = '<span class="tw">' + (expanded[sub.rel] ? "&#9662;" : "&#9656;") + "</span>" +
-        '<span class="tn" title="' + sub.name + '">' + sub.name + "</span>" +
-        '<span class="tm">' + sub.n_img + "P · " + human(sub.bytes) + "</span>";
-      row.onclick = function (ev) {
-        ev.stopPropagation();
-        if (expanded[sub.rel]) {          // 再点箭头区才收起；点名字是进入
-          delete expanded[sub.rel];
-          renderTree();
-        } else {
-          expanded[sub.rel] = true;
-          renderTree();
-        }
-        selectDir(sub.rel);
-      };
+      var row = buildRow(sub, false);
       box.appendChild(row);
-      if (expanded[sub.rel]) {
-        var sub2 = document.createElement("div");
-        sub2.className = "tkids";
-        box.appendChild(sub2);
-        renderKids(sub.rel, sub2);
-      }
+      if (expanded[sub.rel]) mountKids(sub.rel);   // 恢复上次的展开状态
     });
     if (!d.dirs.length) {
-      box.innerHTML = '<div class="trow" style="color:var(--text-mute)">（无子目录）</div>';
+      var g = document.createElement("div");
+      g.className = "trow ghost";
+      g.textContent = "（无子目录）";
+      box.appendChild(g);
     }
   }).catch(function (e) {
-    box.innerHTML = '<div class="trow" style="color:var(--error)">' + e.message + "</div>";
+    box.innerHTML = "";
+    var g = document.createElement("div");
+    g.className = "trow ghost err";
+    g.textContent = e.message;
+    box.appendChild(g);
   });
 }
 
-// 展开当前目录的所有祖先（从别处跳回来时用）
-function expandAncestors(rel) {
-  if (!rel) return;
-  var parts = rel.split("/"), acc = "";
-  parts.forEach(function (p) {
-    acc = acc ? acc + "/" + p : p;
-    expanded[acc] = true;
-  });
+// 点目录名 = 进入：展开该目录 + 高亮 + 右侧列出图片
+function enterDir(rel) {
+  if (!expanded[rel]) {
+    expanded[rel] = true;
+    setArrow(rel, true);
+    mountKids(rel);
+  }
+  selectDir(rel);
 }
+
+// 高亮 + 右侧内容。**不重建树**（旧版这里 renderTree()，导致折叠后又被展开）
+function selectDir(rel) {
+  curRel = rel || "";
+  picked.clear();
+  if (nodeMap[curRel]) nodeMap[curRel].classList.add("on");
+  Object.keys(nodeMap).forEach(function (k) {
+    if (k !== curRel) nodeMap[k].classList.remove("on");
+  });
+  if (rootRow) rootRow.classList.toggle("on", curRel === "");
+  revealPath(curRel);
+  renderMain();
+}
+
+// 兼容旧调用名
+function expandAncestors(rel) { revealPath(rel); }
 
 // ══════════════════════════════════════════════════════
 //  右：当前目录
 // ══════════════════════════════════════════════════════
-function selectDir(rel) {
-  curRel = rel || "";
-  picked.clear();
-  expandAncestors(curRel);
-  expanded[curRel] = true;
-  renderTree();
-  renderMain();
-}
 
 function renderCrumb() {
   var box = $("crumb");
@@ -361,8 +497,15 @@ function renderMain() {
         syncToolbar();
       };
       var img = document.createElement("img");
-      img.className = "thumb"; img.loading = "lazy";
-      img.src = imgUrl(f.rel); img.alt = f.name;
+      img.className = "thumb"; img.loading = "lazy"; img.decoding = "async";
+      // 网格只拉 320px 缩略图（原图 6~12 MB，一屏 18 张 = 150 MB，必然卡）
+      img.src = thumbUrl(f.rel);
+      img.alt = f.name;
+      img.onerror = function () {                 // 缩略图失败回退原图，不留白格
+        if (img.dataset.fb) return;
+        img.dataset.fb = "1";
+        img.src = imgUrl(f.rel);
+      };
       img.onclick = function () { openLb(i); };
       var d1 = document.createElement("button");
       d1.className = "del1"; d1.textContent = "删除";
@@ -423,7 +566,7 @@ function doDelete() {
         }).join("；");
         toast("已删 " + d.deleted.length + " 项；" + msg, false);
       }
-      // 当前目录被整删了就退回上一级
+      // 当前目录被整删了就退回上一级。**树要重建**（nodeMap 里那条已失效）
       var curGone = paths.indexOf(curRel) >= 0;
       treeCache = {}; picked.clear();
       var parent = "";
@@ -432,8 +575,7 @@ function doDelete() {
         parent = parts.join("/");
       }
       expanded = {};
-      selectDir(curGone ? parent : curRel);
-      loadStat();
+      renderTree().then(function () { selectDir(curGone ? parent : curRel); });
     })
     .catch(function (e) {
       $("dlgYes").disabled = false;
@@ -448,8 +590,9 @@ function openLb(i) {
   if (!lbList.length) return;
   lbIdx = (i + lbList.length) % lbList.length;
   var f = lbList[lbIdx];
-  $("lbImg").src = imgUrl(f.rel);
+  $("lbImg").src = imgUrl(f.rel);              // 大图走原图，不用缩略图
   $("lbName").textContent = f.name + "  (" + human(f.bytes) + " · " + f.mtime + ")";
+  $("lbCnt").textContent = (lbIdx + 1) + " / " + lbList.length;
   $("lb").classList.add("on");
 }
 function closeLb() { $("lb").classList.remove("on"); $("lbImg").src = ""; }
@@ -458,7 +601,9 @@ function closeLb() { $("lb").classList.remove("on"); $("lbImg").src = ""; }
 //  绑定
 // ══════════════════════════════════════════════════════
 $("btnRefresh").onclick = function () {
-  treeCache = {}; selectDir(curRel); loadStat();
+  treeCache = {};
+  expanded = {};
+  renderTree().then(function () { selectDir(curRel); });
 };
 $("btnDelPicked").onclick = function () {
   askDelete(Array.from(picked), picked.size + " 张图片");
@@ -483,9 +628,8 @@ document.addEventListener("keydown", function (ev) {
   if (ev.key === "ArrowRight") openLb(lbIdx + 1);
 });
 
-// 起步
-renderTree();
-renderMain();
+// 起步：先把根目录那层挂好，再进根目录（selectDir 会再刷右侧）
+renderTree().then(function () { selectDir(""); });
 </script>
 </body>
 </html>

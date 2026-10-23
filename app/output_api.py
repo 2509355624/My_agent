@@ -12,11 +12,14 @@
   GET  /api/output/tree?path=<rel>   列一层目录：子目录（带本层图片数/占用）
                                      + 本层图片文件。path 空 = output 根
   GET  /api/output/stat              output 总占用（缓存 60s，全盘 walk 一次）
+  GET  /api/output/thumb?path=&w=    网格用缩略图（JPEG，落盘缓存在
+                                     state/output_thumbs/，键含 mtime+size）
   POST /api/output/delete           {"paths": ["web/生图页/miao", ...]}
                                      文件就删文件，目录就整棵删；返回释放字节
 
-取图不另做端点——复用 main.py 的 `/api/image/<path:filename>`（先读本地磁盘，
-没有才代理 ComfyUI `/view`）。
+取图：网格走 `/api/output/thumb`（一屏 18 张原图 150 MB，必卡）；灯箱走
+main.py 的 `/api/image/<path:filename>`（先读本地磁盘，没有才代理 ComfyUI
+`/view`），这样看大图不丢质量。
 
 安全（删东西的接口，宁可多挡）：
   · 每条 path 都过 `_safe_abs()`：拆 `/` 与 `\\`、挡 `..`、join 后 realpath
@@ -26,17 +29,26 @@
   · 前端另有二次确认弹窗（列出条目数），但确认只是体验，后端校验才是真闸门。
 """
 
+import hashlib
 import os
 import threading
 import time
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_file
 
-from app.config import COMFYUI_OUTPUT_DIR
+from app.config import BASE_DIR, COMFYUI_OUTPUT_DIR
 
 bp = Blueprint("output_api", __name__)
 
 IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+
+# 缩略图缓存。**这是页面不卡的关键**：一张 1088x1920 的 PNG 是 6~12 MB，
+# 一屏 18 张就是 150 MB，浏览器要解码 18 次全尺寸位图——网格滚动必然卡。
+# 走这里出 320px 的 JPEG 只有 15~25 KB，秒开；原图只在灯箱里加载。
+# 缓存键含 mtime+size，图被覆盖/删掉后自然失效（不做过期清理，缓存量级很小）。
+THUMB_DIR = os.path.join(BASE_DIR, "state", "output_thumbs")
+THUMB_SIZES = {160, 240, 320, 480}          # 只认这几档，别当万能转码器
+_THUMB_LOCK = threading.Lock()
 
 # ── output 根 ────────────────────────────────────────────
 def _root():
@@ -161,12 +173,16 @@ def api_tree():
             continue
         mtime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime))
         if ent.is_dir(follow_symlinks=False):
-            # 本层直接图片：套娃目录（qq/私聊_xxx/...）会显示 0，点进去再看
-            n_img, n_bytes = 0, 0
+            # 本层直接图片：套娃目录（qq/私聊_xxx/...）会显示 0，点进去再看。
+            # 顺手数本层直接子目录数：没有直接图片的中间层（web、生图页）光看
+            # 「0P · 0 B」会被当成空目录，前端拿这个数改成显示「N 个目录」。
+            n_img, n_bytes, n_sub = 0, 0, 0
             try:
                 with os.scandir(ent.path) as sub:
                     for s in sub:
-                        if s.is_file(follow_symlinks=False):
+                        if s.is_dir(follow_symlinks=False):
+                            n_sub += 1
+                        elif s.is_file(follow_symlinks=False):
                             ext = os.path.splitext(s.name)[1].lower()
                             if ext in IMG_EXT:
                                 n_img += 1
@@ -177,7 +193,8 @@ def api_tree():
             except OSError:
                 pass
             dirs.append({"name": ent.name, "rel": _rel_of(ent.path),
-                         "n_img": n_img, "bytes": n_bytes, "mtime": mtime})
+                         "n_img": n_img, "n_dirs": n_sub,
+                         "bytes": n_bytes, "mtime": mtime})
         elif ent.is_file(follow_symlinks=False):
             ext = os.path.splitext(ent.name)[1].lower()
             if ext not in IMG_EXT:
@@ -192,6 +209,53 @@ def api_tree():
         parent = ""
     return jsonify({"ok": True, "path": rel, "parent": parent,
                     "dirs": dirs, "files": files})
+
+
+# ── 缩略图 ───────────────────────────────────────────────
+@bp.route("/api/output/thumb")
+def api_thumb():
+    """出网格用的小图（JPEG），首次生成后落盘缓存。
+
+    `w` 只认 THUMB_SIZES 里那几档；不传按 320。原图走 /api/image（灯箱用）。
+    损坏图/不支持格式 → 404，前端 onerror 回退到原图地址，不至于整格空白。
+    """
+    from PIL import Image
+
+    target = _safe_abs(request.args.get("path"))
+    if not target or not os.path.isfile(target):
+        return jsonify({"ok": False, "error": "图不存在"}), 404
+    if os.path.splitext(target)[1].lower() not in IMG_EXT:
+        return jsonify({"ok": False, "error": "不是图片"}), 404
+    try:
+        w = int(request.args.get("w") or 320)
+    except (TypeError, ValueError):
+        w = 320
+    if w not in THUMB_SIZES:
+        w = 320
+
+    try:
+        st = os.stat(target)
+    except OSError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    key = "%s_%d_%d_%d" % (hashlib.md5(target.encode("utf-8")).hexdigest()[:16],
+                           int(st.st_mtime), st.st_size, w)
+    cache = os.path.join(THUMB_DIR, key + ".jpg")
+    if os.path.isfile(cache):
+        return send_file(cache, mimetype="image/jpeg", max_age=86400, conditional=True)
+
+    try:
+        os.makedirs(THUMB_DIR, exist_ok=True)
+        with Image.open(target) as im:
+            im = im.convert("RGB")            # PNG 带 alpha → JPEG 不支持
+            # 长边封顶，等比缩放；竖图按 2 倍高算，够网格 1:1 裁剪用
+            im.thumbnail((w, w * 3), Image.LANCZOS)
+            tmp = cache + ".%d.tmp" % os.getpid()
+            with _THUMB_LOCK:                 # 同一张图并发首访只写一次
+                im.save(tmp, "JPEG", quality=82, optimize=True)
+                os.replace(tmp, cache)
+    except Exception as exc:                  # noqa: BLE001
+        return jsonify({"ok": False, "error": "缩略图失败：%s" % exc}), 500
+    return send_file(cache, mimetype="image/jpeg", max_age=86400, conditional=True)
 
 
 # ── 删除 ─────────────────────────────────────────────────

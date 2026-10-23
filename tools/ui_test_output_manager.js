@@ -6,17 +6,18 @@
  * output/__jdtest__ 临时目录，不碰任何真实图。
  *
  * 用法：
- *   1. 先起一个只挂 output_api 的临时服务器（端口 5801）——用 app.main 全量
+ *   1. 先起一个只挂 output_api 的临时服务器——用 app.main 全量
  *      起服务会带上 QQ/comfy 线程，UI 测试没必要；最小服务器约 30 行，参考
  *      git log 里 2026-10-23 那次提交的说明（或临时写一个 register 了
  *      output_api.bp + /api/image 本地取图路由的 Flask app）。
  *   2. node tools/ui_test_output_manager.js
+ *      端口默认 5801，用 TEST_BASE 覆盖：TEST_BASE=http://127.0.0.1:5802 node ...
  *   依赖：jsdom（装在 managed node workspace 里）。
  */
 const fs = require("fs");
 const { JSDOM } = require("jsdom");
 
-const BASE = "http://127.0.0.1:5801";
+const BASE = process.env.TEST_BASE || "http://127.0.0.1:5801";
 const html = fs.readFileSync("D:/AI/agent_my_test/web/output_manager.html", "utf8");
 
 const vc = new (require("jsdom").VirtualConsole)();
@@ -61,16 +62,15 @@ function check(name, cond, extra) {
   await sleep(800);
   check("crumb 显示 web", $("crumb").textContent.includes("web"));
   check("dirInfo 是 web", $("dirInfo").textContent.includes("web"));
-  const kids = $("tree").querySelectorAll("#rootKids > .tkids > .trow");
+  const kids = $("tree").querySelectorAll('.tkids[data-for="web"] > .trow');
   check("web 展开出 2 个子目录(生图页+漫画)", kids.length === 2, kids.length);
   check("删整目录按钮显示", $("btnDelDir").style.display !== "none");
 
   console.log("== 点击 生图页 ==");
   w.selectDir("web/生图页");
   await sleep(800);
-  const allRows = $("tree").querySelectorAll(".trow");
-  // 一级 3 + web 下 2 + 生图页下 17 = 22（外加 root 行）
-  check("生图页展开出 17 个渠道", allRows.length === 23, allRows.length);
+  const chRows = $("tree").querySelectorAll('.tkids[data-for="web/生图页"] > .trow');
+  check("生图页展开出 17 个渠道", chRows.length === 17, chRows.length);
   check("树里有 silver/miao/moss", /silver/.test($("tree").textContent) && /moss/.test($("tree").textContent));
 
   console.log("== 点击 生图页/miao ==");
