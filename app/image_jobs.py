@@ -176,6 +176,17 @@ from app.skills import skill_priority
 
 log = logging.getLogger("image_jobs")
 
+# 漫画批量的 10 张放宽只给这两个实际渠道：漫画台的 anima-line，
+# 以及下拉里显示为 sd 的 image_gen_v1。不要用模糊前缀匹配，避免把
+# krea2 / qwen / moss 等高负载渠道误算进低负载档。
+_COMIC_RELAXED_SKILLS = frozenset(("anima-line", "image_gen_v1"))
+
+
+def _comic_release_enabled(job):
+    return (getattr(job, "batch", None) == "comic"
+            and getattr(job, "skill", None) in _COMIC_RELAXED_SKILLS
+            and COMFY_RELEASE_AFTER_COMIC > 0)
+
 # 同一会话同时在途（含排队中）的张数上限：防一个人连环点单把队列占满。
 #
 # ⚠️ 它**不是显存闸**（2026-10-03 从 2 改成 5 时确认过）：队列早已改成 agent
@@ -316,6 +327,18 @@ SKILL_TIMEOUTS = {
     #    从 0~0.5 拉到官方全段 0~1（skip 分支每步都要算），所以不是 520 加一点
     #    的事——按 250 s + SLG 全段翻倍的最坏情况估，给 700 留足余量。
     "moss_page": 700,
+    # 8 步 DMD2 档（`skills/moss8/`，2026-10-23 新建）：miaomiaoHaremMOSS
+    #    baseV10_int8（5.1 GB）+ lodestones-8-steps-dmd2-lora，cfg 1.0。
+    #    ⚠️ 2026-10-23 实测**这条链路跑不动**，300 秒也接不住：
+    #      · int8 底模挂 LoRA → ComfyUI 每步 requant（`want_requant`），
+    #        2 步就 >216 秒；按 bf16 反量化加载则 8 步 >350 秒；
+    #      · 不挂 LoRA 8 步 85 秒，但出的是纯噪声（base 模型必须有少步适配器）；
+    #      · Civitai 那份只有 lora，缺 `time_embedding` + `dataspace`。
+    #    详见 `skills/moss8/skill.md`。这里的 300 是给「换成 rapid_moss 三件套
+    #    之后」预留的档位——换完再按实测校正，别拿它当当前配置能跑通的证据。
+    #    ⚠️ 这张表是模块级常量，改完**必须重启常驻 flask（5174）**才生效；
+    #    没重启时它仍走 .env 的 IMAGE_GEN_TIMEOUT。
+    "moss8": 300,
 }
 
 
@@ -1229,7 +1252,7 @@ def _maybe_release_for_switch(job):
     # 漫画批量换一条阈值（2026-10-18 用户拍板）：一本十几格按全局 2 张一重启，
     # 等于每 3 格等一次 60~90 秒冷启动。`COMFY_RELEASE_AFTER_COMIC=0` = 不分家。
     total_limit = COMFY_RELEASE_AFTER_TOTAL
-    if getattr(job, "batch", None) == "comic" and COMFY_RELEASE_AFTER_COMIC > 0:
+    if _comic_release_enabled(job):
         total_limit = COMFY_RELEASE_AFTER_COMIC
     if 0 < total_limit <= chan.total_run:
         log.info("ComfyUI 累计已连画 %d 张（%s阈值 %d，不分渠道），"
@@ -1259,7 +1282,7 @@ def _maybe_release_for_switch(job):
         # 漫画全是同一个渠道，于是照样每 2 格重启一次，正好和「分批画的图
         # 最怕中途重启」撞上：重启那一格的 `/prompt` 提交给正在关停的旧进程，
         # 30 秒读超时，整格标红（用户 C20261022-06 实报 05~08 四格连挂）。
-        if getattr(job, "batch", None) == "comic" and COMFY_RELEASE_AFTER_COMIC > 0:
+        if _comic_release_enabled(job):
             limit = max(limit, COMFY_RELEASE_AFTER_COMIC)
         if 0 < limit <= chan.same_run:
             log.info("同渠道 %s 已连画 %d 张（阈值 %d），下一张提交前彻底重启 ComfyUI",
