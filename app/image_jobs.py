@@ -154,8 +154,11 @@ unet 4487MB ≈ 10.5GB 权重，而空闲可用只有 10.78GB。当天实测的�
 
 import collections
 import logging
+import os
 import random
 import re
+import signal
+import subprocess
 import threading
 import time
 import uuid
@@ -164,7 +167,7 @@ import requests
 
 from app import comfy_gate, comfy_out, image_log
 from app.cancel import Cancelled, is_cancelled
-from app.config import (COMFY_MIN_FREE_RAM_GB, COMFY_MIN_FREE_VRAM_GB,
+from app.config import (BASE_DIR, COMFY_MIN_FREE_RAM_GB, COMFY_MIN_FREE_VRAM_GB,
                         COMFY_RELEASE_AFTER_COMIC,
                         COMFY_RELEASE_AFTER_SAME, COMFY_RELEASE_AFTER_SAME_MAP,
                         COMFY_RELEASE_AFTER_TOTAL,
@@ -175,6 +178,16 @@ from app.config import (COMFY_MIN_FREE_RAM_GB, COMFY_MIN_FREE_VRAM_GB,
 from app.skills import skill_priority
 
 log = logging.getLogger("image_jobs")
+
+# 预先取出这两个异常类，**不要**在热路径上写 `requests.exceptions.ReadTimeout`。
+# 原因：测试里会把 `image_jobs.requests` 整个换成 `mock.Mock()`（见
+# test_image_jobs 里那批 `mock.patch.object(image_jobs, "requests", …)`），
+# 那时 `requests.exceptions.ReadTimeout` 求值成 Mock 对象、不是类型，
+# `isinstance(exc, <Mock>)` 会抛 `TypeError: arg 2 must be a type`——失败提示
+# 的发文逻辑被 except 吞掉，群里就一声不吭了（2026-10-24 踩过一次）。
+_REQ_TIMEOUT = requests.exceptions.Timeout
+_REQ_READ_TIMEOUT = requests.exceptions.ReadTimeout
+_REQ_CONN_ERROR = requests.exceptions.ConnectionError
 
 # 漫画批量的 10 张放宽只给这两个实际渠道：漫画台的 anima-line，
 # 以及下拉里显示为 sd 的 image_gen_v1。不要用模糊前缀匹配，避免把
@@ -393,6 +406,29 @@ SUBMIT_TIMEOUT = 30
 SUBMIT_RETRY_TRIES = 4
 SUBMIT_RETRY_GAP = 15
 SUBMIT_RETRY_WAIT = 180
+
+# 提交连续这么多次「连得上却不回包」→ 判定进程假死，进程级强制重启
+# （2026-10-24 用户要求：「出现这样的报错时直接强制重启 ComfyUI」）。
+#
+# 为什么不能只靠 `/manager/reboot`：那个接口本身也走 aiohttp，event loop 一旦
+# 堵死它同样不回包。`_restart_comfy` 拿到 ReadTimeout 后 3 秒去探
+# `/system_stats`——而那个 handler 恰好还能答（它是纯读内存、不碰执行队列），
+# 于是记一句「已重启完成，耗时 0 秒」，**进程其实一步都没动**。
+# 2026-10-24 20:00 实测：ComfyUI 日志停在 19:51:12 再无输出，之后 20:00 /
+# 20:05 / 20:10 三单提交全部 ReadTimeout 30 秒，机器人每次只回一句
+# 「ComfyUI 没在线（连不上）」——而 `/system_stats` 3 毫秒就回 200。
+#
+# 判据刻意**只认 Timeout（连得上、不回包）**，不认 ConnectionError：后者是
+# 真的在重启（8188 还没监听），等它回来就行，杀了反而打断正常重启。
+SUBMIT_FORCE_RESTART_AFTER = 2
+
+# `_restart_comfy` 里「探到在线」到底要多久才算真的重启过（秒，2026-10-24）。
+#
+# 依据是全部历史日志：正常重启 13~24 秒（14 秒 132 次、16 秒 71 次……最慢 24 秒），
+# 而 `qq_bot.log` 里出现过 **4 次「耗时 0 秒」**——那 4 次进程一步都没动，只是
+# 旧进程的 `/system_stats`（纯读内存、不碰执行队列）还答得上话。取 5 秒留余量：
+# 比任何一次真重启都快得多，又不会被两次探测之间的抖动误伤。
+COMFY_REBOOT_MIN_SECONDS = 5
 
 # 冷却闸只认这一个渠道（见模块开头「重渠道优先度」）。写成常量而不是判断
 # 「权重 > 1」，是因为冷却的必要性来自 qwen 那套权重的具体尺寸，别的重渠道
@@ -1426,7 +1462,17 @@ def _restart_comfy(timeout=COMFY_RESTART_WAIT):
         try:
             if requests.get(COMFYUI_URL + "/system_stats",
                             timeout=5).status_code == 200:
-                log.info("ComfyUI 已重启完成，耗时 %.0f 秒", time.time() - start)
+                elapsed = time.time() - start
+                # 「快得不正常」= 旧进程根本没退。`/system_stats` 是纯读内存的
+                # handler，event loop 被堵死时它照样回 200，于是这里 3 秒就能
+                # 「重启成功」——2026-10-24 20:00 就是这么骗过自己和用户的
+                # （之后所有 `/prompt` 全部 ReadTimeout，群里收到「没在线」）。
+                # 这种时候只有从进程外面杀才治得了，交给 `_force_restart_comfy`。
+                if elapsed < COMFY_REBOOT_MIN_SECONDS:
+                    log.warning("只用了 %.1f 秒就探到在线，判定是假重启"
+                                "（旧进程没退），改走进程级强制重启", elapsed)
+                    return _force_restart_comfy(timeout)
+                log.info("ComfyUI 已重启完成，耗时 %.0f 秒", elapsed)
                 # 新进程里一个模型都没加载，别让「换渠道先 /free」以为还是热的。
                 with _lock:
                     _COMFY.last_skill = None
@@ -1437,6 +1483,153 @@ def _restart_comfy(timeout=COMFY_RESTART_WAIT):
             pass
         time.sleep(POLL_INTERVAL)
     log.error("等 ComfyUI 重启超过 %.0f 秒还没回来", timeout)
+    return False
+
+
+def _comfy_port():
+    """从 `COMFYUI_URL` 里取端口（默认 8188）。"""
+    m = re.search(r":(\d+)", COMFYUI_URL or "")
+    try:
+        return int(m.group(1)) if m else 8188
+    except ValueError:
+        return 8188
+
+
+def _comfy_pid_by_port():
+    """按 8188 上那条 LISTENING 连接找 ComfyUI 的 PID；找不到返回 None。
+
+    刻意**不按进程名找**：机器人自己也是 python.exe，按名字杀会把它一起带走。
+    端口是唯一能证明「这个进程就是 ComfyUI」的凭据。
+
+    找不到有两种情况，调用方要分开看：进程压根没起（不用杀，直接拉一个），
+    或者 netstat 本身调不动（那就别动手，硬杀风险太大）。
+    """
+    try:
+        out = subprocess.run(["netstat", "-ano"], capture_output=True,
+                             timeout=15,
+                             creationflags=subprocess.CREATE_NO_WINDOW)
+    except Exception:
+        log.warning("查 %d 端口归属失败", _comfy_port(), exc_info=True)
+        return None
+    # ⚠️ 别用 text=True：中文 Windows 的 netstat 按 GBK 输出，用默认 UTF-8 解码
+    # 会在读线程里抛 UnicodeDecodeError（实测 0xbb 解不出来），结果**永远返回
+    # None** —— 看起来像「没找到进程」，其实是解码炸了。这里自己解、坏字节丢掉。
+    raw = out.stdout or b""
+    try:
+        text = raw.decode("gbk", "replace")
+    except Exception:
+        text = raw.decode("utf-8", "replace")
+    port = _comfy_port()
+    for line in text.splitlines():
+        parts = line.split()
+        # 形如：TCP  127.0.0.1:8188  0.0.0.0:0  LISTENING  29004
+        if len(parts) < 5 or parts[0].upper() != "TCP":
+            continue
+        if parts[-2].upper() != "LISTENING":
+            continue
+        if not parts[1].endswith(":%d" % port):
+            continue
+        if not parts[-1].isdigit():
+            continue
+        return int(parts[-1])
+    return None
+
+
+def _kill_comfy(pid):
+    """强杀一个 PID。返回是否已发出终止信号。
+
+    Windows 上 `os.kill(pid, SIGTERM)` 直接走 `TerminateProcess`——**不给它跑
+    atexit / KeyboardInterrupt**。对假死进程正合适：它连信号循环都进不去，
+    别指望它自己优雅退出。taskkill 是第二手，以防 os.kill 被策略拦。
+    """
+    try:
+        os.kill(pid, signal.SIGTERM)
+        return True
+    except Exception as exc:
+        log.warning("os.kill(%d) 没成（%s），改用 taskkill", pid, exc)
+    try:
+        subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                       capture_output=True, timeout=15,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+        return True
+    except Exception:
+        log.error("taskkill %d 也失败，放弃强杀", pid, exc_info=True)
+        return False
+
+
+def _force_restart_comfy(timeout=COMFY_RESTART_WAIT):
+    """进程级强制重启：按端口杀掉旧进程 → 用启动脚本拉一个新的。
+
+    与 `_restart_comfy` 的分工：那个走 `/manager/reboot`（优雅、保留命令行、
+    不碰进程本身），**只在 ComfyUI 还答得上话时有效**；这个不依赖它答话，
+    专治「端口还在、event loop 已经堵死」——那种状态下 `/manager/reboot`
+    自己也回不了包，只能从进程外面动手。
+
+    成功返回 True（新进程已经换了 PID 且能回 `/system_stats`）。
+    """
+    # 漫画台在跑时不动手：杀掉会把它那一格当场掐断（跟 `_restart_comfy` 同理）。
+    if comfy_gate.busy_others():
+        log.info("ComfyUI 正被 %s 占用，这次不强制重启",
+                 comfy_gate.describe(comfy_gate.holder()))
+        return False
+    bat = os.path.join(BASE_DIR, "启动ComfyUI.bat")
+    if not os.path.exists(bat):
+        log.error("找不到 %s，无法强制重启 ComfyUI", bat)
+        return False
+    # 任何一次重启都重置防抖，别再让水位检查紧跟着重启一次。
+    with _lock:
+        _COMFY.last_restart_try = time.time()
+
+    old = _comfy_pid_by_port()
+    if old is None:
+        log.warning("8188 上没有 LISTENING 进程，跳过强杀，直接拉一个新的")
+    else:
+        log.warning("强制重启 ComfyUI：杀掉假死进程 PID %d", old)
+        if not _kill_comfy(old):
+            return False
+        # 等端口真的交出去。不等就拉新进程的话，它会 bind 失败自己退掉，
+        # 白杀一次还把旧状态一起丢了。
+        gone = time.time()
+        while time.time() - gone < 20:
+            if _comfy_pid_by_port() is None:
+                break
+            time.sleep(0.5)
+        else:
+            log.error("杀了 %d 但 20 秒后 8188 仍被占着，放弃", old)
+            return False
+
+    try:
+        subprocess.Popen(
+            ["cmd", "/c", bat, "auto"],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, cwd=BASE_DIR)
+    except Exception:
+        log.error("拉起 ComfyUI 启动脚本失败", exc_info=True)
+        return False
+
+    # 只探 `/system_stats` 不够——假死时它也回 200。所以要求 **PID 变成一个新的**：
+    # 新 PID = 真的是新进程，这才是「重启成功」的凭据。
+    log.info("已拉起 ComfyUI，等新进程接活（最多 %.0f 秒）", timeout)
+    start = time.time()
+    while time.time() - start < timeout:
+        pid = _comfy_pid_by_port()
+        if pid is not None and pid != old:
+            try:
+                if requests.get(COMFYUI_URL + "/system_stats",
+                                timeout=5).status_code == 200:
+                    log.info("ComfyUI 强制重启完成，耗时 %.0f 秒（新 PID %d）",
+                             time.time() - start, pid)
+                    # 新进程里一个模型都没加载，别让「换渠道先 /free」以为还是热的。
+                    with _lock:
+                        _COMFY.last_skill = None
+                        _COMFY.same_run = 0
+                        _COMFY.total_run = 0
+                    return True
+            except Exception:
+                pass
+        time.sleep(POLL_INTERVAL)
+    log.error("强制重启后 %.0f 秒新进程还没接活", timeout)
     return False
 
 
@@ -2120,16 +2313,41 @@ def _queue_prompt_retry(workflow, deadline=None, quiet=False):
     limit = SUBMIT_RETRY_WAIT if deadline is None else float(deadline)
     end = time.time() + limit
     attempt = 0
+    forced = False
     while True:
         attempt += 1
         try:
             return _queue_prompt(workflow)
-        except (requests.exceptions.ConnectionError,
-                requests.exceptions.Timeout) as exc:
+        except (_REQ_CONN_ERROR, _REQ_TIMEOUT) as exc:
             # 只重试「连不上 / 等不到回包」——参数错、工作流坏这类 4xx/5xx
             # 重试多少次都一样，直接抛给上层。
             if time.time() >= end or attempt >= SUBMIT_RETRY_TRIES:
+                # 记下「已经强杀过一轮」，让 _fail_text 别提「稍后再试」那种
+                # 没用的话（进程都被杀过重启过了，还不好就不是等一下的事）。
+                if forced:
+                    try:
+                        exc.force_restart_tried = True
+                    except Exception:
+                        pass
                 raise
+            # 连续「连得上却不回包」= 进程假死。这种状态下 `wait_comfy_up`
+            # 完全帮倒忙：它探的 `/system_stats` 恰恰还能回 200，于是立刻返回，
+            # 我们就在同一个死进程上白试到 4 次用完。必须从进程外面杀掉重来。
+            # （只认 Timeout，不认 ConnectionError —— 后者是真在重启窗口里。）
+            hung = isinstance(exc, _REQ_TIMEOUT)
+            if hung and not forced and attempt >= SUBMIT_FORCE_RESTART_AFTER:
+                forced = True
+                if not quiet:
+                    log.warning("提交连续 %d 次连得上却不回包，判定 ComfyUI "
+                                "进程假死，强制重启", attempt)
+                if _force_restart_comfy():
+                    # 重启耗时不该吃掉原有重试窗口，重给一轮（只给一次，
+                    # `forced` 已经置位，再挂就直接抛）。
+                    end = time.time() + limit
+                    attempt = 0
+                    continue
+                if not quiet:
+                    log.warning("强制重启没成功，退回普通等待重试")
             if not quiet:
                 log.warning("提交没成功（%s），%.0f 秒后重试（第 %d 次，共 %d 次）",
                             type(exc).__name__, SUBMIT_RETRY_GAP, attempt,
@@ -2285,7 +2503,17 @@ def _is_unreachable(exc):
     response 的异常说明 ComfyUI 活着、是它把工作流拒了（requests 的
     RequestException 一律有 response 属性，只有拿到回应才非 None——所以
     这里认 response 而不认异常类型，也省得依赖 requests 模块对象）。
+
+    ⚠️ 第三个例外（2026-10-24 修）：**`requests.ReadTimeout` 也不算**。
+    它是 `requests.Timeout → RequestException → IOError = OSError` 的子孙，
+    所以 `isinstance(exc, OSError)` 为真、而内置 `TimeoutError` 判不出来，
+    结果「连上了但进程卡死不回包」被说成「ComfyUI 没在线（连不上）」——一句
+    纯谎话，还把对方引向「等一等再试」这个完全没用的方向（8188 明明 3 毫秒
+    就回 200）。`ConnectTimeout` 不在此列：它同时继承 ConnectionError，
+    那才是真的连不上。
     """
+    if isinstance(exc, _REQ_READ_TIMEOUT):
+        return False
     if isinstance(exc, TimeoutError):
         return False
     if getattr(exc, "response", None) is not None:
@@ -2344,6 +2572,15 @@ def _fail_text(exc, stage="submit", skill=None):
     if isinstance(exc, TimeoutError):
         return ("画超时了（超过 %d 秒没出图），已经中断这张。"
                 "麻烦重新生成一次。" % task_timeout(skill))
+    if stage != "send" and isinstance(exc, _REQ_READ_TIMEOUT):
+        # 连得上、但不回包：进程卡死了，跟「没开机」是两回事。旧文案把它说成
+        # 「没在线（连不上）」，群友照做「等一等再来」永远是白等（2026-10-24）。
+        if getattr(exc, "force_restart_tried", False):
+            return ("图没画出来——ComfyUI 卡住了（能连上，提交不进去），"
+                    "已经强制重启过一轮也没恢复。这一单先别重试，"
+                    "让群主看一眼 ComfyUI 的窗口。")
+        return ("图没画出来——ComfyUI 卡住了（能连上，但提交不进去，"
+                "不是画得慢也不是没开机）。对方稍后再试一次。")
     if stage != "send" and _is_unreachable(exc):
         return ("图没画出来——ComfyUI 没在线（%s 连不上）。"
                 "让对方稍后再试。" % COMFYUI_URL)

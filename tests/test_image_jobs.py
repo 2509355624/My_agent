@@ -2218,6 +2218,12 @@ class RestartOnLowRamTest(unittest.TestCase):
         self._threshold(3.0)
         self.stat_calls = []
         self.reboot_calls = []
+        # `_restart_comfy` 探到「太快回来」时会转去进程级强杀。测试里绝不能
+        # 让它真跑——那会 os.kill 掉本机 8188 上正在出图的 ComfyUI。
+        p = mock.patch.object(image_jobs, "_force_restart_comfy",
+                              mock.Mock(return_value=False))
+        p.start()
+        self.addCleanup(p.stop)
 
     def _patch(self, stats, reboot_status=200, clock=None, reboot_error=None):
         """装一个假的 requests + 假的 time。
@@ -2320,6 +2326,19 @@ class RestartOnLowRamTest(unittest.TestCase):
         self._patch([OSError("down"), OSError("down"), 6.0],
                     clock=_TickingClock())
         self.assertTrue(image_jobs._restart_comfy(timeout=120))
+
+    def test_instant_come_back_is_treated_as_a_fake_restart(self):
+        """「0 秒就重启好了」= 旧进程一步都没动（2026-10-24 现场）。
+
+        `/manager/reboot` 和 `/system_stats` 都是 aiohttp 的 handler，event loop
+        一被堵死，reboot 也回不了包；而 `/system_stats` 恰好还能答，于是这里 3 秒
+        就判「重启完成」。真实重启 13~24 秒，所以只给 5 秒口子，低于它就转进程级强杀。
+        """
+        self._patch([6.0])          # clock 定值 → elapsed 恒为 0
+        fake = mock.Mock(return_value=True)
+        with mock.patch.object(image_jobs, "_force_restart_comfy", fake):
+            self.assertTrue(image_jobs._restart_comfy(timeout=120))
+        fake.assert_called_once()
 
     def test_restart_returns_false_when_it_never_comes_back(self):
         """一直连不上就放弃返回 False，不能在这儿无限等。"""
@@ -3926,12 +3945,23 @@ class SubmitRetryTest(unittest.TestCase):
 
     探活救不了：`/system_stats` 在旧进程退出前一直回 200（`_restart_comfy`
     就是被它骗到「已重启完成，耗时 0 秒」），唯一可信的信号是提交成不成。
+
+    ⚠️ `_force_restart_comfy` 在这里**一律被替掉**（默认返回 False = 没强杀）：
+    它真的会 `os.kill` 本机 8188 上的进程，测试里要是让它跑，跑一次单测就把
+    正在给群友出图的 ComfyUI 杀了。要验证强杀逻辑的用例自己覆盖这个替身。
     """
 
     def setUp(self):
+        self.force_calls = []
+
+        def _no_force(**kwargs):
+            self.force_calls.append(kwargs)
+            return False
+
         for name, repl in (("SUBMIT_RETRY_GAP", 0),
                            ("SUBMIT_RETRY_TRIES", 4),
-                           ("wait_comfy_up", lambda **k: True)):
+                           ("wait_comfy_up", lambda **k: True),
+                           ("_force_restart_comfy", _no_force)):
             p = mock.patch.object(image_jobs, name, repl)
             p.start()
             self.addCleanup(p.stop)
@@ -3972,6 +4002,93 @@ class SubmitRetryTest(unittest.TestCase):
         bad = requests.exceptions.HTTPError("400 Client Error")
         with self.assertRaises(requests.exceptions.HTTPError):
             self._run([bad, bad, bad])
+
+
+class ForceRestartOnHungSubmitTest(unittest.TestCase):
+    """连续「连得上却不回包」→ 强杀 ComfyUI 进程再拉起来（2026-10-24）。
+
+    真实故障现场：8188 端口在、`/system_stats` 3 毫秒回 200，`/prompt` 却
+    永远不回包；`/manager/reboot` 自己也超时，`_restart_comfy` 探到
+    `/system_stats` 还在就记「已重启完成，耗时 0 秒」——进程一步都没动。
+    所以判据只能是「提交本身反复失败」，动作只能是从进程外面杀。
+    """
+
+    def setUp(self):
+        self.force_calls = []
+
+        def _no_force(**kwargs):
+            self.force_calls.append(kwargs)
+            return False
+
+        for name, repl in (("SUBMIT_RETRY_GAP", 0),
+                           ("SUBMIT_RETRY_TRIES", 4),
+                           ("wait_comfy_up", lambda **k: True),
+                           ("_force_restart_comfy", _no_force)):
+            p = mock.patch.object(image_jobs, name, repl)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _run(self, errors, force_ok=False):
+        calls = []
+
+        def _post(workflow, timeout=None):
+            calls.append(1)
+            if len(calls) <= len(errors):
+                raise errors[len(calls) - 1]
+            return "pid-%d" % len(calls)
+
+        def _force(**kwargs):
+            self.force_calls.append(kwargs)
+            return force_ok
+
+        with mock.patch.object(image_jobs, "_queue_prompt", _post), \
+                mock.patch.object(image_jobs, "_force_restart_comfy", _force):
+            return image_jobs._queue_prompt_retry({"1": {}}), len(calls)
+
+    def test_force_restart_after_repeated_read_timeouts(self):
+        """第一次超时只是等着重试，第二次才判假死——别一见超时就杀进程。"""
+        err = requests.exceptions.ReadTimeout("read timed out")
+        got, n = self._run([err, err], force_ok=True)
+        self.assertEqual(got, "pid-3")
+        self.assertEqual(n, 3)
+        self.assertEqual(len(self.force_calls), 1)
+
+    def test_one_timeout_is_not_enough_to_kill_it(self):
+        """单次超时可能只是撞上正常重启窗口，这时候杀进程反而打断它。"""
+        err = requests.exceptions.ReadTimeout("read timed out")
+        with mock.patch.object(image_jobs, "SUBMIT_FORCE_RESTART_AFTER", 5):
+            got, n = self._run([err, err], force_ok=True)
+        self.assertEqual(got, "pid-3")
+        self.assertEqual(self.force_calls, [])
+
+    def test_refused_connection_never_triggers_a_kill(self):
+        """连不上 = 8188 还没监听，是真的在重启，等它回来就行。"""
+        err = requests.exceptions.ConnectionError("refused")
+        with self.assertRaises(requests.exceptions.ConnectionError):
+            self._run([err] * 10)
+        self.assertEqual(self.force_calls, [])
+
+    def test_kills_the_process_only_once(self):
+        """强杀过一次还救不回来，就别反复杀——那是别的问题，只会抖动。"""
+        err = requests.exceptions.ReadTimeout("read timed out")
+        with self.assertRaises(requests.exceptions.ReadTimeout):
+            self._run([err] * 10, force_ok=True)
+        self.assertEqual(len(self.force_calls), 1)
+
+    def test_failed_force_restart_falls_back_to_plain_retry(self):
+        err = requests.exceptions.ReadTimeout("read timed out")
+        got, n = self._run([err, err, err], force_ok=False)
+        self.assertEqual(got, "pid-4")
+        self.assertEqual(len(self.force_calls), 1)
+
+    def test_marks_the_exception_when_kill_did_not_help(self):
+        """文案要能区分「还没强杀过」和「强杀过也没救回来」。"""
+        err = requests.exceptions.ReadTimeout("read timed out")
+        with self.assertRaises(requests.exceptions.ReadTimeout) as ctx:
+            self._run([err] * 10, force_ok=True)
+        self.assertTrue(getattr(ctx.exception, "force_restart_tried", False))
+        self.assertIn("已经强制重启过一轮",
+                      image_jobs._fail_text(ctx.exception, "submit", "silver"))
 
 
 if __name__ == "__main__":
