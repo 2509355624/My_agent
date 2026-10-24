@@ -363,13 +363,17 @@ SKILL_TIMEOUTS = {
     #       180 秒掐死；只改这里不抬上限，50 永远进不来。
     #    ⚠️ 模块级常量 —— 改完必须**重启常驻 flask（5174）**才生效。
     "_comic_batch": 240,
-    # 2026-10-24 新建的完整版底模测试渠道（`skills/silver-full/`）：
-    # SilvermoonMix-Anima-Evolved v2.3 **INT8 完整版**（非 Turbo），28 + 8 步、
-    # cfg 3.5。Turbo 同画布 12+8 步实测 27~60 s；完整版步数 ×2.3 且非蒸馏，
-    # 按 100~200 s 估，360 留一倍余量，首张实测后校正。
+    # 2026-10-24 新建的完整版底模渠道（`skills/sf/`，sf = silver-full 缩写）：
+    # SilvermoonMix-Anima-Evolved v2.3 **INT8 完整版**（非 Turbo）。现参数
+    # 12+8 步 / cfg 1 / euler / 零 LoRA。
+    # 提速实测（同一 Sunna 提示词）：28 步 cfg3.5 = 72 前向 / 175 s → 12 步
+    # cfg3.5 = 40 / ~80 s → 12 步 cfg1 = 20 / **42~46 s**。墙钟之外还要算
+    # **每画一张 ComfyUI 自动重启一次的等待**（大图显存吃紧触发自动释放，
+    # 轮询虚高 40~95 s，真实执行以日志 `Prompt executed in` 为准）。
+    # 360 对 46 s 有七倍余量，是留给重启窗口 + 排队的最坏情况，别当日常耗时。
     # ⚠️ 这条渠道**零 LoRA**：int8 底模挂 LoRA 会每步 requant（见上面 moss8
     #    那条的实测），超时预算里不含 LoRA 减速。
-    "silver-full": 360,
+    "sf": 360,
 }
 
 

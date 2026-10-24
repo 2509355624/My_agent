@@ -1687,8 +1687,9 @@ class ToolDescriptionBudgetTest(unittest.TestCase):
         防止又写回长散文，不是防止列举渠道本身。
         **2026-10-24 晚：上限 520 → 560。** 一天里多了两个渠道：
         `silverqaq`（silver+qaq 隔离变量实验的临时渠道，测完待删）和
-        `silver-full`（完整版底模测试渠道），每个给清单添 14 字（`" / 名字"`），
-        当前 534。渠道继续加就继续抬——每次抬都要在注释里记清是谁加的。
+        `sf`（完整版底模渠道，silver-full 缩写，用户起名），每个给清单添
+        14 字（`" / 名字"`），当前 534。渠道继续加就继续抬——每次抬都要在
+        注释里记清是谁加的。
         """
         param = self._tool()["parameters"]["properties"]["skill"]["description"]
         self.assertIn("Available Skills", param,

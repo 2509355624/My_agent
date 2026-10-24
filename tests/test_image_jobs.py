@@ -3169,14 +3169,15 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
         #   ——目录以 `_` 开头、`list_skills()` 跳过，由 `comic_story.COMIC_SKILL`
         #   指定。之前它一直**不在本表**，吃的是 180 兜底；格数上限从 30 抬到 50
         #   之后 180 不够用，用户拍板 240。
-        # 2026-10-24 晚加 `silver-full`(360)：完整版底模（INT8 非 Turbo）测试渠道，
-        #   28 + 8 步 / cfg 3.5。Turbo 同画布 12+8 步实测 27~60 s，完整版步数
-        #   ×2.3 且非蒸馏，按 100~200 s 估，360 留一倍余量——**首张实测后校正**，
-        #   别拿这个数当当前配置一定跑得完的证据（moss8 那条同款教训）。
+        # 2026-10-24 晚加 `sf`(360)：完整版底模（INT8 非 Turbo）渠道，sf 是
+        #  silver-full 缩写（用户起名，原话「直接sf吧」）。现参数 12+8 步 /
+        #  cfg 1，真实执行 42~46 s；360 是留给「每画一张 ComfyUI 自动重启一次」
+        #  的等待窗口（轮询虚高 40~95 s，判耗时才认日志 Prompt executed in）。
+        #  ⚠️ 别拿这个数当当前配置一定跑得完的证据（moss8 那条同款教训）。
         self.assertEqual(sorted(image_jobs.SKILL_TIMEOUTS),
                          ["_comic_batch", "moss", "moss50", "moss8", "moss_page",
                           "qwen-charsheet", "qwen-hd", "qwen-restore", "qwen30",
-                          "qwen_image_v1", "silver-full"])
+                          "qwen_image_v1", "sf"])
         for skill in ("qwen_image_v1", "qwen-hd", "qwen-charsheet", "qwen30"):
             self.assertEqual(image_jobs.task_timeout(skill), 220, skill)
         self.assertEqual(image_jobs.task_timeout("moss"), 180)
@@ -3185,7 +3186,7 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
         self.assertEqual(image_jobs.task_timeout("moss_page"), 700)
         self.assertEqual(image_jobs.task_timeout("_comic_batch"), 240)
         self.assertEqual(image_jobs.task_timeout("qwen-restore"), 300)
-        self.assertEqual(image_jobs.task_timeout("silver-full"), 360)
+        self.assertEqual(image_jobs.task_timeout("sf"), 360)
 
     def test_unknown_skill_falls_back_to_global(self):
         """没配的渠道仍走 TASK_TIMEOUT——新渠道不能因为漏配就变慢。"""
