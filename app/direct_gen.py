@@ -337,6 +337,18 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    "anima-real": "anima-real",
                    "anima-guizhencao": "anima-guizhencao",
                    "anima-flesh": "anima-flesh",
+                   # 2026-10-24 用户新建的**半厚涂测试渠道**：配方逐行照抄 silver，
+                   # 只把 `Anima_in_real_update_v2_epoch_20`（元数据标题 `@Ani3rel`，
+                   # Anima→写实/3D）从 **1.0 降到 0.55**、`_cowani_epoch_10` 0.8→0.5，
+                   # 再往正向插半厚涂风格前缀。起因是用户反馈 silver 厚涂感重、
+                   # 对比度和饱和度偏高，要一条对照渠道。
+                   # ⚠️ 0.55 是实测平衡点：降到 0.4 连远景结构一起糊掉（发雾），
+                   #    这只 LoRA 同时负责锐度，不是只负责「厚」。
+                   # ⚠️「半厚涂」**全句可认**（跟宝可梦 / 米山舞同款待遇）：
+                   # 它是渠道专名，`_STYLE_ALIASES` 里没有这一条，不会被画风词抢。
+                   # ⚠️ 默认渠道仍然是 `silver`，本渠道不点名绝不自动跑。
+                   "半厚涂": "semi-thick",
+                   "semi-thick": "semi-thick",
                    # ── 2026-10-16 用户拍板：krea2 系的中文点名词**不带 `krea2`
                    # 前缀也认**（原话「也放开吧，让 ai 自己选个 krea2 的，不然
                    # 老是跑偏」）。私聊实录：`亚洲真人 不穿衣服 高抬腿 腿部特写`
@@ -380,6 +392,10 @@ _FIXED_CHAN_RE = re.compile(
     r"(?<![0-9A-Za-z_])"
     r"(anima\s*线条|anima\s*写实|anima\s*鬼针草|anima\s*肉感"
     r"|anima-line|anima-real|anima-guizhencao|anima-flesh"
+    # 2026-10-24 半厚涂测试渠道（配方照抄 silver，降写实化 LoRA + 加半厚涂前缀）。
+    # 中文名全句可认：它是渠道专名，画风表里没有「半厚涂」这一条。
+    # `semi-thick` 整串必须写全 —— 只写 `semi` 会把 `-thick` 落在正文里。
+    r"|半厚涂|semi-thick"
     r"|krea2\s*米山舞|krea2\s*日系|krea2\s*亚洲真人"
     r"|krea2\s*动漫真人|krea2\s*真人\s*cos"
     r"|krea2\s*宝可梦|krea2\s*柔光|krea2\s*奶油"
@@ -946,7 +962,7 @@ MORE_CHAN_TEXT = (
     "【★miao】miao\n"
     "\n"
     "【其他】moss ｜ moss50 ｜ silver-hd ｜ qwen-hd ｜ qwen角色设定表 ｜ qwen修复\n"
-    "　　　　anima多图 ｜ anima线条 ｜ anima写实 ｜ anima鬼针草 ｜ anima肉感\n"
+    "　　　　半厚涂 ｜ anima多图 ｜ anima线条 ｜ anima写实 ｜ anima鬼针草 ｜ anima肉感\n"
     "　　　　jank ｜ sd ｜ nffa ｜ cunny ｜ nai\n"
     "\n"
     "【玩法】\n"
@@ -1343,6 +1359,7 @@ _MASTER_TEMPLATE = (
     "|---|---|---|\n"
     "| silver | `silver` | 默认，没特别要求就它 |\n"
     "| silver-hd、silver 超清 | `silver-hd` | 要超清、大图、当壁纸 |\n"
+    "| 半厚涂 | `semi-thick` | 点名，silver 的配方但笔触更薄、对比和饱和度更低 |\n"
     "| nai | `nai` | 点名 nai，或给了画师串 |\n"
     "| nai_wide | `nai_wide` | 点名 nai 且要横向画面 |\n"
     "| qwen、千问、通义 | `qwen_image_v1` | 点名，要写实照片感、要出中文。"
