@@ -3144,13 +3144,23 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
         # `moss`(180) = DMD 4 步（实测 26.7~28.1 秒，180 秒留够读 9 GB 编码器）；
         # `moss50`(520) = 50 步慢速档（45 步实测 142 秒 / 首张 205 秒，每步 ≈2.5 秒
         # 外推 50 步 ≈155 秒 → 2026-10-20 用户拍板提到 50 步并改名）。
+        # 2026-10-20 同时加 `moss_page`(700)：整页漫画，SLG 全段翻倍。
+        # 2026-10-23 加 `moss8`(300)：8 步 DMD2 档（实测跑不通，值先留着）。
+        # 2026-10-24 加 `_comic_batch`(240)：连续漫画批量。注意它**不是可点名渠道**
+        #   ——目录以 `_` 开头、`list_skills()` 跳过，由 `comic_story.COMIC_SKILL`
+        #   指定。之前它一直**不在本表**，吃的是 180 兜底；格数上限从 30 抬到 50
+        #   之后 180 不够用，用户拍板 240。
         self.assertEqual(sorted(image_jobs.SKILL_TIMEOUTS),
-                         ["moss", "moss50", "qwen-charsheet", "qwen-hd",
+                         ["_comic_batch", "moss", "moss50", "moss8", "moss_page",
+                          "qwen-charsheet", "qwen-hd",
                           "qwen-restore", "qwen30", "qwen_image_v1"])
         for skill in ("qwen_image_v1", "qwen-hd", "qwen-charsheet", "qwen30"):
             self.assertEqual(image_jobs.task_timeout(skill), 220, skill)
         self.assertEqual(image_jobs.task_timeout("moss"), 180)
         self.assertEqual(image_jobs.task_timeout("moss50"), 520)
+        self.assertEqual(image_jobs.task_timeout("moss8"), 300)
+        self.assertEqual(image_jobs.task_timeout("moss_page"), 700)
+        self.assertEqual(image_jobs.task_timeout("_comic_batch"), 240)
         self.assertEqual(image_jobs.task_timeout("qwen-restore"), 300)
 
     def test_unknown_skill_falls_back_to_global(self):
@@ -3872,16 +3882,30 @@ class ComicBatchRestartLimitTest(unittest.TestCase):
         image_jobs._COMFY.same_run = same_run
         image_jobs._COMFY.total_run = 0
 
-    def test_comic_batch_does_not_restart_at_two(self):
-        self._warm("krea2-pokemon", 2)
-        image_jobs._maybe_release_for_switch(self._job())
+    def test_low_load_comic_does_not_restart_at_two(self):
+        self._warm("anima-line", 2)
+        image_jobs._maybe_release_for_switch(self._job(skill="anima-line"))
         self.assertEqual(self.restarts, [])
 
-    def test_comic_batch_still_restarts_at_the_batch_threshold(self):
-        """放宽不等于取消：攒到 6 张还是要清一次显存/内存。"""
-        self._warm("krea2-pokemon", 6)
-        image_jobs._maybe_release_for_switch(self._job())
+    def test_low_load_anima_restarts_at_ten(self):
+        """anima 漫画允许连续 10 张后再清理。"""
+        self._warm("anima-line", 10)
+        image_jobs._maybe_release_for_switch(self._job(skill="anima-line"))
         self.assertEqual(len(self.restarts), 1)
+
+    def test_sd_alias_restarts_at_ten(self):
+        """漫画台的 sd 实际 skill id 是 image_gen_v1。"""
+        self._warm("image_gen_v1", 10)
+        image_jobs._maybe_release_for_switch(self._job(skill="image_gen_v1"))
+        self.assertEqual(len(self.restarts), 1)
+
+    def test_heavy_comic_channels_do_not_use_ten(self):
+        """krea2/qwen/moss 不读取漫画放宽值，仍按原同渠道阈值。"""
+        for skill in ("krea2-pokemon", "qwen_image_v1", "moss"):
+            with self.subTest(skill=skill):
+                self._warm(skill, 2)
+                image_jobs._maybe_release_for_switch(self._job(skill=skill))
+        self.assertEqual(len(self.restarts), 3)
 
     def test_other_batches_keep_the_old_threshold(self):
         """群聊单张没变：还是 2 张一重启，别把这条顺手改掉了。"""
@@ -3890,10 +3914,10 @@ class ComicBatchRestartLimitTest(unittest.TestCase):
         self.assertEqual(len(self.restarts), 1)
 
     def test_zero_batch_limit_falls_back_to_the_same_skill_limit(self):
-        """`COMFY_RELEASE_AFTER_COMIC=0` = 不分家，仍按同渠道 2 张走。"""
+        """关闭漫画放宽值后，低负载渠道也回到原同渠道阈值。"""
         with mock.patch.object(image_jobs, "COMFY_RELEASE_AFTER_COMIC", 0):
-            self._warm("krea2-pokemon", 2)
-            image_jobs._maybe_release_for_switch(self._job())
+            self._warm("anima-line", 5)
+            image_jobs._maybe_release_for_switch(self._job(skill="anima-line"))
         self.assertEqual(len(self.restarts), 1)
 
 

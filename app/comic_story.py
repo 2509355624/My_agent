@@ -31,7 +31,14 @@ from app import llm
 log = logging.getLogger("comic.story")
 
 DEFAULT_PANELS = 10
-MAX_PANELS = 30
+# 硬上限。2026-10-24 用户从 30 抬到 50（原话「silver漫画现在的上限是30张，
+# 帮我改成上限最大50张，50张大概也就120到150秒钟的样子，也有可能是180秒钟，
+# 超时上限可能得240秒钟」）。**超时必须跟着改**：`image_jobs.SKILL_TIMEOUTS`
+# 里 `_comic_batch` 已配 240，改这里不动那里等于白抬——50 格会被 180 秒的
+# 兜底默认掐死。
+# ⚠️ 这个常量是 `clamp_panels()` 的唯一闸门，**anima多图共用同一个**（它的
+# 默认格数另在 `DEFAULT_PANELS_BY_STYLE` 里），所以抬上限对两个 style 同时生效。
+MAX_PANELS = 50
 
 # 漫画的渲染渠道：`skills/_comic_batch/`，用 `BatchPromptImageGenerator` 把整批
 # 提示词在**一个** ComfyUI 任务里跑完（模型只加载一次）。**不是可点名的渠道**
@@ -94,7 +101,7 @@ _FRONTMATTER_RE = re.compile(r"^\s*---\s*\n.*?\n\s*---\s*\n", re.S)
 
 
 def clamp_panels(n, default=DEFAULT_PANELS):
-    """格数收敛：非数字/非正 → default；超过硬上限 30 → 截到 30。"""
+    """格数收敛：非数字/非正 → default；超过硬上限（现 50）→ 截到上限。"""
     try:
         n = int(n)
     except (TypeError, ValueError):
@@ -187,9 +194,17 @@ def write_story(brief, panels=DEFAULT_PANELS, tries=3):
     panels = clamp_panels(panels)
     prompt = (_system_prompt(panels)
               + "\n\n格数：%d\n设定：%s" % (panels, brief.strip()))
+    # 输出预算随格数走：一块动态约 60~90 token（英文 booru，含场景/服饰/动作/
+    # 视角/灯光），30 格就已经顶到 4096 边上，50 格必须显式开口子，否则会被
+    # 服务端默认上限截在半句话上（后果是段数不够 → `_validate` 判不合格 →
+    # 白烧三轮重写）。耗时同理：30 格实测能在默认 60 s 内写完，50 格跑不完，
+    # 超时会被降级链换家、换家后从头再写一遍。两个值都按格数线性给。
+    budget = max(4096, panels * 160)
+    wait = max(70.0, min(300.0, panels * 5.0))
     why = ""
     for attempt in range(1, tries + 1):
-        text = _clean(llm.call_llm([{"role": "user", "content": prompt}]))
+        text = _clean(llm.call_llm([{"role": "user", "content": prompt}],
+                                   timeout=wait, max_tokens=budget))
         fixed, dyns = parse_story(text)
         ok, why = _validate(fixed, dyns, panels)
         if ok:

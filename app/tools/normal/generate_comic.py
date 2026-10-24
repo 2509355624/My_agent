@@ -11,7 +11,8 @@
 渲染渠道有两条（`comic_story.COMIC_SKILLS`，一次提交出全部 N 张）：
   - `silver`（默认）：连续小漫画，默认 10 格
   - `anima`：「anima多图」，anima 配方，默认 3 格
-style 由 `direct_gen` 从原话判定后透传（QQ 侧），工具路径默认 silver。硬上限 30。
+style 由 `direct_gen` 从原话判定后透传（QQ 侧），工具路径默认 silver。
+硬上限取 `comic_story.MAX_PANELS`（现 50，2026-10-24 由 30 抬上来的）。
 """
 
 import logging
@@ -113,7 +114,7 @@ tool = {
         "- brief（必填）：剧情 + 角色。把用户想要的故事、角色、场景写清楚，"
         "不用自己写分镜——分镜交给编剧。用户提到的角色名、作品名照抄进去。\n"
         "- panels：格数。用户报了数字就用用户的（「10个」「20格」）；"
-        "没报就**不传**（silver 默认 10 / anima 默认 3）。硬上限 30。\n"
+        "没报就**不传**（silver 默认 10 / anima 默认 3）。硬上限 50。\n"
         "- style：渲染渠道。默认 silver；用户点名「anima多图 / anima 多图」时"
         "传 anima（anima 配方、默认 3 张）。**除此之外的画风名（qwen / jank 等）"
         "一律忽略**，别传、也别在回话里提。\n\n"
@@ -132,7 +133,7 @@ tool = {
             "panels": {
                 "type": "integer",
                 "description": "格数。用户报了数字（「10个」「20格」）就用用户的；"
-                               "没报就**不传**（silver 默认 10 / anima 默认 3）。上限 30。",
+                               "没报就**不传**（silver 默认 10 / anima 默认 3）。上限 50。",
             },
             "style": {
                 "type": "string",
