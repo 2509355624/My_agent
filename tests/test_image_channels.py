@@ -20,7 +20,7 @@ anima，就跑三档加上 x2 像素」。所以：
 
 四个渠道**共用同一套两段采样骨架**，差别只在底模组合（表现为画风）：
 
-    一段：UNETLoader(5) ─ LoRA(16 kibro 1.0) ─ LoRA(15 baka skin 0.5) ─┐
+    一段：UNETLoader(5) ─ LoRA(16 kibro 0.6) ─ LoRA(15 baka skin 0.5) ─┐
          CLIPLoader(6, Qwen3-0.6B) ─ CLIPTextEncode(4 正向 / 8 负向) ──┤
          EmptyLatentImage(9) 1024×1536 ───────────────────────────────┤
                                                                       ▼
@@ -369,7 +369,7 @@ class SharedSkeletonTest(unittest.TestCase):
             self.assertEqual(s2["scheduler"], "simple", name)
 
     def test_loras_only_on_the_first_pass(self):
-        """LoRA 链只挂第一段：底模 → kibro(1.0) → baka skin(0.5) → 一段采样器。
+        """LoRA 链只挂第一段：底模 → kibro(0.6) → baka skin(0.5) → 一段采样器。
 
         两个硬约束：
         ① 链必须**终止在 UNETLoader**（不是凭空接一个 LoRA）；
@@ -383,9 +383,12 @@ class SharedSkeletonTest(unittest.TestCase):
             self.assertEqual(len(chain), 2, name)
             by_name = {fn: st for _, fn, st in chain}
             self.assertEqual(len(by_name), 2, "%s 的 LoRA 重名了" % name)
+            # 2026-10-24：kibro 由 1.0 降到 0.6——满强度改写 UNET 注意力、压过底模
+            # 自身的解剖先验，手脚结构跟着画师的坏习惯走。触发词 `@kibro` 仍在
+            # 节点 4，强度不影响触发词是否生效。
             kibro = [st for fn, st in by_name.items() if "kibro" in fn]
             baka = [st for fn, st in by_name.items() if "baka" in fn]
-            self.assertEqual(kibro, [1], name)
+            self.assertEqual(kibro, [0.6], name)
             self.assertEqual(baka, [0.5], name)
             # 二段不接 LoRA：它的 model 源节点必须是底模装载器
             s2_model = wf[_stage2(wf)]["inputs"]["model"][0]
@@ -976,9 +979,12 @@ class HdChannelTest(unittest.TestCase):
             self.assertEqual(len(chain), 2, name)
             by_name = {fn: st for _, fn, st in chain}
             self.assertEqual(len(by_name), 2, name)
+            # 2026-10-24：kibro 由 1.0 降到 0.6——满强度改写 UNET 注意力、压过底模
+            # 自身的解剖先验，手脚结构跟着画师的坏习惯走。触发词 `@kibro` 仍在
+            # 节点 4，强度不影响触发词是否生效。
             kibro = [st for fn, st in by_name.items() if "kibro" in fn]
             baka = [st for fn, st in by_name.items() if "baka" in fn]
-            self.assertEqual(kibro, [1], name)
+            self.assertEqual(kibro, [0.6], name)
             self.assertEqual(baka, [0.5], name)
             # 二段不接 LoRA：它的 model 源节点必须是底模装载器
             s2_model = wf[_stage2(wf)]["inputs"]["model"][0]
