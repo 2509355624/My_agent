@@ -799,9 +799,9 @@ class QwenI2iParamsTest(unittest.TestCase):
     原生模板默认值；diffusers 官方默认更是 40 步）。用户原话「我跑重新生成都
     耗费几分钟，还不如加长步长，一次搞定」。
 
-    底模同一晚从 **UC**（无内容过滤，2026-10-05 换上的）换回**官方**
-    `qwen-image-2.1-Q4_K_M.gguf`——用户 10-11 拍板撤回，且只换 qwen_image_v1
-    这一个渠道（qwen-hd / qwen-restore / qwen-charsheet 继续用 UC）。
+    底模 2026-10-05 从官方换成 **UC**（无内容过滤，拦截交给 image_audit），
+    10-11 撤回换回官方 `qwen-image-2.1-Q4_K_M.gguf`，**2026-10-24 用户又拍板
+    全部回到 UC**（本渠道随之换回 `qwen-image-2.1-UC-Q4_K_M.gguf`）。
     """
 
     def _wf(self):
@@ -818,16 +818,17 @@ class QwenI2iParamsTest(unittest.TestCase):
             steps, [25],
             "qwen 图生图的步数必须是 25（官方 day-0 联调值，用户 2026-10-11 拍板）")
 
-    def test_base_model_is_the_official_one_not_uc(self):
-        """底模不能是 `-UC`（无内容过滤）那个。
+    def test_base_model_is_uc(self):
+        """底模必须是 `-UC`（无内容过滤）那个。
 
-        UC 是 2026-10-05 换上的（动机：模型侧不拒答，拦截交给 image_audit），
-        用户 10-11 拍板撤回。这里钉住文件名，免得哪天顺手又被换回去。
+        历史：10-05 换 UC（动机：模型侧不拒答，拦截交给 image_audit）→
+        10-11 撤回换回官方 → **2026-10-24 用户拍板「全部换成 UC」**。
+        这里钉住文件名，免得哪天顺手又被换回官方版。
         """
         unet = [n["inputs"]["unet_name"] for n in self._wf().values()
                 if n.get("class_type") == "UnetLoaderGGUF"]
-        self.assertEqual(unet, ["qwen-image-2.1-Q4_K_M.gguf"])
-        self.assertNotIn("UC", "".join(unet))
+        self.assertEqual(unet, ["qwen-image-2.1-UC-Q4_K_M.gguf"])
+        self.assertIn("UC", "".join(unet))
 
 
 class BubblePromptOverrideTest(unittest.TestCase):

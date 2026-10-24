@@ -3339,13 +3339,13 @@ class Qwen30ChannelTest(unittest.TestCase):
         self.assertEqual([e["resolution"] for e in enc], [1024])
         self.assertTrue(enc[0]["images.image_1"], "缺源图输入，不是图生图骨架")
 
-    def test_base_model_is_the_official_gguf(self):
-        # 跟 qwen_image_v1 同款官方量化档（不是 UC）。
+    def test_base_model_is_uc(self):
+        # 2026-10-24 用户拍板「全部换成 UC」→ 跟其余 qwen 系统一（不是官方版）。
         for name in ("workflow.json", "workflow_i2i.json"):
             wf = self._load(name)
             unet = [n["inputs"]["unet_name"] for n in wf.values()
                     if n["class_type"] == "UnetLoaderGGUF"]
-            self.assertEqual(unet, ["qwen-image-2.1-Q4_K_M.gguf"])
+            self.assertEqual(unet, ["qwen-image-2.1-UC-Q4_K_M.gguf"])
 
     def test_i2i_is_whitelisted(self):
         """不在 `_I2I_SKILLS` 里的话，垫图会被静默降级成文生图、丢掉源图。"""
