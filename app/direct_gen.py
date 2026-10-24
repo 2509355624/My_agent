@@ -349,6 +349,22 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    # ⚠️ 默认渠道仍然是 `silver`，本渠道不点名绝不自动跑。
                    "半厚涂": "semi-thick",
                    "semi-thick": "semi-thick",
+                   # 2026-10-24 新建的**完整版底模测试渠道**：Civitai 的
+                   # SilvermoonMix-Anima-Evolved v2.3 **INT8 完整版**（非 Turbo），
+                   # 配方见 `skills/silver-full/`。与 silver 的差别：28 步 /
+                   # cfg 3.5 / euler / **负向词第一次生效** / **零 LoRA**
+                   # （int8 挂 LoRA 会每步 requant，见 image_jobs.py 的 moss8 注释）。
+                   # ⚠️ **只收中文点名词，ASCII 的 `silver-full` 故意不进本表**：
+                   #    `_lead_typo_channel` 的候选池就是本表的 ASCII 键，而
+                   #    difflib 对 ("silver", "silver-full") 的打分是 0.71 > 0.6
+                   #    阈值 → 任何以 `silver` 开头跟中文的话（「silver 女骑士」、
+                   #    「silver 10张 漫画」）都会被当成打错渠道词劫到 silver-full，
+                   #    连 JSON 里明写的 skill="silver" 都被顶掉（2026-10-24 实测
+                   #    11 条 direct_gen 用例当场红）。裸 id 走 `_SKILL_ID_RE`
+                   #    那条路（跟 krea2-coscandid 同款），不经过本表。
+                   # ⚠️ 默认渠道仍是 silver，本渠道不点名绝不自动跑。
+                   "完整版": "silver-full",
+                   "silver完整版": "silver-full",
                    # ── 2026-10-16 用户拍板：krea2 系的中文点名词**不带 `krea2`
                    # 前缀也认**（原话「也放开吧，让 ai 自己选个 krea2 的，不然
                    # 老是跑偏」）。私聊实录：`亚洲真人 不穿衣服 高抬腿 腿部特写`
@@ -396,6 +412,14 @@ _FIXED_CHAN_RE = re.compile(
     # 中文名全句可认：它是渠道专名，画风表里没有「半厚涂」这一条。
     # `semi-thick` 整串必须写全 —— 只写 `semi` 会把 `-thick` 落在正文里。
     r"|半厚涂|semi-thick"
+    # 2026-10-24 完整版底模测试渠道（INT8 非 Turbo，28 步 / cfg 3.5 / 零 LoRA）。
+    # 「完整版」是独特词，全句可认。`silver\s*完整版` 整串登记的理由：`完整版`
+    # 前面是字母，公共 lookbehind `(?<![0-9A-Za-z_])` 会把它挡住，不整串写就落空。
+    # `silver-full` 写在本正则里**安全**——difflib 的 typo 候选池只取
+    # `_FIXED_CHAN_MAP` 的 ASCII 键（本正则不是池子），而 `silver-full` 故意
+    # 不进那个表（原因见上面 map 里的长注释）。命中后 `_fixed_chan` 查不到键
+    # 会原样返回 token，它本身就是合法渠道 id。
+    r"|完整版|silver\s*完整版|silver-full"
     r"|krea2\s*米山舞|krea2\s*日系|krea2\s*亚洲真人"
     r"|krea2\s*动漫真人|krea2\s*真人\s*cos"
     r"|krea2\s*宝可梦|krea2\s*柔光|krea2\s*奶油"
@@ -962,7 +986,7 @@ MORE_CHAN_TEXT = (
     "【★miao】miao\n"
     "\n"
     "【其他】moss ｜ moss50 ｜ silver-hd ｜ qwen-hd ｜ qwen角色设定表 ｜ qwen修复\n"
-    "　　　　半厚涂 ｜ anima多图 ｜ anima线条 ｜ anima写实 ｜ anima鬼针草 ｜ anima肉感\n"
+    "　　　　半厚涂 ｜ 完整版 ｜ anima多图 ｜ anima线条 ｜ anima写实 ｜ anima鬼针草 ｜ anima肉感\n"
     "　　　　jank ｜ sd ｜ nffa ｜ cunny ｜ nai\n"
     "\n"
     "【玩法】\n"
@@ -1360,6 +1384,7 @@ _MASTER_TEMPLATE = (
     "| silver | `silver` | 默认，没特别要求就它 |\n"
     "| silver-hd、silver 超清 | `silver-hd` | 要超清、大图、当壁纸 |\n"
     "| 半厚涂 | `semi-thick` | 点名，silver 的配方但笔触更薄、对比和饱和度更低 |\n"
+    "| 完整版、silver完整版 | `silver-full` | 点名，完整版底模（28 步 / cfg 3.5 / 负向词生效 / 零 LoRA） |\n"
     "| nai | `nai` | 点名 nai，或给了画师串 |\n"
     "| nai_wide | `nai_wide` | 点名 nai 且要横向画面 |\n"
     "| qwen、千问、通义 | `qwen_image_v1` | 点名，要写实照片感、要出中文。"

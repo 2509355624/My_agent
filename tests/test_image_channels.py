@@ -1685,11 +1685,15 @@ class ToolDescriptionBudgetTest(unittest.TestCase):
         为的是「导出给别人的包只带一个渠道时，模型不会去点没装的名字」。
         机器生成的清单比手写的长几十字，但不再需要人来同步——上限留着的目的是
         防止又写回长散文，不是防止列举渠道本身。
+        **2026-10-24 晚：上限 520 → 560。** 一天里多了两个渠道：
+        `silverqaq`（silver+qaq 隔离变量实验的临时渠道，测完待删）和
+        `silver-full`（完整版底模测试渠道），每个给清单添 14 字（`" / 名字"`），
+        当前 534。渠道继续加就继续抬——每次抬都要在注释里记清是谁加的。
         """
         param = self._tool()["parameters"]["properties"]["skill"]["description"]
         self.assertIn("Available Skills", param,
                       "应该把渠道清单指到 Available Skills 那份一行摘要")
-        self.assertLess(len(param), 520,
+        self.assertLess(len(param), 560,
                         "skill 参数又涨回 %d 字（精简前是 947）" % len(param))
         # 至少别把四个画风全名逐一抄一遍
         for ch in ("hd_3_soft", "hd_3_gloss", "hd_3_curvy"):
