@@ -61,13 +61,13 @@ rem      当前工作目录找的 —— 在 D:\AI\My_agent 下启动会开出一个「空」ComfyUI：
 rem      没有模型、没有 anime2 工作流，而且它会占着 8188 让人以为一切正常。
 cd /d "%CFY_DIR%"
 
-rem 参数 = run_comfyui.bat 那一套（2026-10-01 起两边一致）：
-rem   --vram-headroom 1  给系统留 1GB 显存（DynamicVRAM 用）
-rem   --force-fp16       张量内存减半
-rem   [!!] 2026-10-01 去掉 --cache-none。理由见 run_comfyui.bat：那条是按
-rem        「16GB 内存」调的，本机 32GB（run_comfyui.bat 的标题就是
-rem        「6GB VRAM + 32GB RAM」），省 RAM 不值，而它让每次跑图每个节点都
-rem        重算。**两份文件要一起改**，别只改一边。
+rem 参数：只用纯启动命令，**不要再加 --vram-headroom / --force-fp16**。
+rem   [!!] 2026-10-25 实测：本机 total RAM 15991MB（16GB）。旧注释写的
+rem        「本机 32GB」是错的，--vram-headroom 1 依据的就是那个错前提。
+rem        加上它之后 main.py:278 会让 aimdo 为每张卡保留 1GB 显存不给用，
+rem        qwen_image21 跑图直接炸：RuntimeError: aimdo memory compile error
+rem        （comfyui_8188.log 22:30:13 / 22:30:55 / 22:31:36 连续三次）。
+rem        去掉这两个参数即恢复正常，所以这里只保留用户给定的标准命令。
 rem 额外显式钉死 --listen 127.0.0.1 --port 8188，跟 .env 的 COMFYUI_URL 对齐。
 rem   其实这也是 ComfyUI 的默认值，写出来只是防止哪天默认值变了没人发现。
 rem --enable-cors-header "*" 沿用本文件原来的写法：agent 网页端(5174)如果要直接
@@ -77,7 +77,7 @@ rem [!] 别被 app/image_jobs.py 开头那句「--vram-headroom 反而拖垮了整机」骗了：
 rem    那条结论是 2026-09-27 针对 qwen_image_v1（一套权重 10.5GB）的，那个渠道
 rem    已经在 app/config.py 的 DISABLED_IMAGE_SKILLS 里停用。anima/SD/anime2
 rem    用这套参数是实测跑得动的（run_comfyui.bat 天天在用）。**别顺手把参数删了。**
-"%PY%" main.py --listen 127.0.0.1 --port 8188 --enable-cors-header "*" --vram-headroom 1 --force-fp16
+"%PY%" main.py --listen 127.0.0.1 --port 8188 --enable-cors-header "*"
 
 echo.
 echo [ComfyUI 已退出] 退出码 %ERRORLEVEL%
