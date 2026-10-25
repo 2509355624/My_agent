@@ -52,7 +52,13 @@ log = logging.getLogger("vision")
 # 只在**走管理页/.env 那条路**（describe 没显式传 provider）时生效；显式传
 # provider 的调用（生图审核 image_audit、管理页试读）**不参与**——审核是
 # fail-closed 且要固定用 .env 那份，不能被降级链悄悄换成别家。
-VISION_FALLBACK_CHAIN = ("doubao", "mimo", "deepseek")
+#
+# 2026-10-25 用户拍板「撤掉中转站，识图先 mimo、再 deepseek」：
+#   主选家由 agents/<id>/settings.json 的 vision_model 给（mimo:mimo-v2.6-flash），
+#   这里只留 deepseek 官方当第一跳。原链里的 doubao 撤掉——它在 PROVIDERS 里是
+#   vision=False（纯文本家），排第一等于每次识图先白撞一次挂死；mimo 已经是主选
+#   家，留在链里会和自己重复（_chain_candidates 会去重，但不如直接写清楚）。
+VISION_FALLBACK_CHAIN = ("deepseek",)
 
 
 # ─── 「上游拒答 / 报错被当成识图结果」的判据（2026-10-07）──────────────
