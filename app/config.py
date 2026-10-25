@@ -91,6 +91,14 @@ MIMO_MODEL = os.getenv("MIMO_MODEL", "mimo-v2.6-flash")
 # 2026-10-14 排序理由（火山/超算额度集体耗尽，用户：「火山不关、只降温」）：
 #   deepseek 官方活着 → 打头；mimo 活着 → 第二；火山只剩 glm-5.2 还有额度
 #   → 第三；欠费的火山三项留着垫底等充值（_DEAD 拉黑期内自动跳过）。
+#
+# 2026-10-25 用户接入 hfapi 中转（自己的 key，cx_a1b2c3d4）给**大大怪**（QQ 那条线，
+# agents/qq）用：文本和识图都走它，挂了降级到 deepseek 官方。
+# ⚠️ 故意**不放进这条全局链**：链是无 agent 指定 provider 时的默认顺序，写进来等于
+# 让网页端 main / draw / writing 也一起改用中转站。QQ 的优先级由 agents/qq/agent.json
+# 的 provider 字段决定（调用方指定的那个自动排链头，见 llm.candidates），链里保持
+# deepseek 官方打头正好就是它失败后的下一跳——所以「中转站优先 + 官方兜底」
+# 只靠 agent 配置就成立，全局链不用动。
 LLM_FALLBACK_CHAIN = os.getenv(
     "LLM_FALLBACK_CHAIN",
     "deepseek:deepseek-flash,"

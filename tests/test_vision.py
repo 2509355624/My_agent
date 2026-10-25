@@ -317,7 +317,11 @@ class DescribeTest(unittest.TestCase):
 
 
 class VisionFallbackChainTest(unittest.TestCase):
-    """识图**专用**降级链（豆包→mimo→deepseek，2026-10-07 用户拍板）。
+    """识图**专用**降级链（顺序由 vision.VISION_FALLBACK_CHAIN 决定）。
+
+    2026-10-25：链从「豆包→mimo→deepseek」换成「hfapi 中转→deepseek 官方」，
+    原来把 provider 名单焊死的 4 条断言全红。现在改成**按实际配置推导**——
+    换链只改 vision.py + .env，不用回来改测试。
 
     关键不变式：
     1. 走管理页/.env 那条路（不显式传 provider）时，首选失败要**依次降级**，
@@ -328,14 +332,24 @@ class VisionFallbackChainTest(unittest.TestCase):
     4. 全链都挂才抛出异常。
     """
 
-    def test_chain_order_is_doubao_mimo_deepseek(self):
-        cands = vision._chain_candidates("doubao", "")
-        self.assertEqual([p for p, _ in cands],
-                         ["doubao", "mimo", "deepseek"])
+    # 一定在内置 PROVIDERS、且不在降级链里的家，用来测「主选优先」。
+    _OFF_CHAIN = "doubao"
+
+    def _chain_for(self, primary):
+        """期望顺序 = 首选 + 链里其余（跳过首选自己、跳过没配置的家）。"""
+        return [primary] + [p for p in vision.VISION_FALLBACK_CHAIN
+                            if p != primary and p in config.PROVIDERS]
+
+    def test_chain_order_follows_config(self):
+        cands = vision._chain_candidates(self._OFF_CHAIN, "")
+        self.assertEqual([p for p, _ in cands], self._chain_for(self._OFF_CHAIN))
 
     def test_primary_is_tried_first_and_not_duplicated(self):
-        cands = vision._chain_candidates("mimo", "")
-        self.assertEqual([p for p, _ in cands], ["mimo", "doubao", "deepseek"])
+        # 主选家正好也在链里时，它只能出现在第一位，不能被重复试一次。
+        primary = vision.VISION_FALLBACK_CHAIN[0]
+        cands = vision._chain_candidates(primary, "")
+        self.assertEqual([p for p, _ in cands], self._chain_for(primary))
+        self.assertEqual([p for p, _ in cands].count(primary), 1)
 
     def test_primary_model_is_preserved(self):
         cands = vision._chain_candidates("deepseek", "deepseek-flash")
@@ -357,21 +371,26 @@ class VisionFallbackChainTest(unittest.TestCase):
         return fake_post, seen
 
     def test_falls_back_to_next_provider_on_failure(self):
-        fake, seen = self._mock_post([(429, "QuotaExceeded"), (200, "一只猫")])
-        with mock.patch.object(vision, "active_choice", return_value=("doubao", "")), \
+        order = self._chain_for(self._OFF_CHAIN)
+        self.assertGreaterEqual(len(order), 2, "降级链至少得有一家可以降")
+        fake, seen = self._mock_post([(429, "QuotaExceeded")] + [(200, "一只猫")] * len(order))
+        with mock.patch.object(vision, "active_choice", return_value=(self._OFF_CHAIN, "")), \
                 mock.patch("app.vision._session.post", side_effect=fake):
             self.assertEqual(vision.describe("data:image/jpeg;base64,AAA"), "一只猫")
-        # 两次调用：第一次doubao 挂、第二次 mimo 成功
+        # 两次调用：首选挂、链里第二家成功
         self.assertEqual(len(seen), 2)
-        self.assertIn("xiaomimimo", seen[1])
+        second = config.PROVIDERS[order[1]]["base_url"].rstrip("/")
+        self.assertTrue(seen[1].startswith(second),
+                        "第二次该打 %s，实际打了 %s" % (second, seen[1]))
 
     def test_all_fail_raises_last_error(self):
-        fake, seen = self._mock_post([(500, "a"), (500, "b"), (429, "c")])
-        with mock.patch.object(vision, "active_choice", return_value=("doubao", "")), \
+        order = self._chain_for(self._OFF_CHAIN)
+        fake, seen = self._mock_post([(500, "a")] * (len(order) - 1) + [(429, "c")])
+        with mock.patch.object(vision, "active_choice", return_value=(self._OFF_CHAIN, "")), \
                 mock.patch("app.vision._session.post", side_effect=fake):
             with self.assertRaises(RuntimeError) as ctx:
                 vision.describe("data:image/jpeg;base64,AAA")
-        self.assertEqual(len(seen), 3)          # 三家都试过
+        self.assertEqual(len(seen), len(order))   # 整条链都试过
         self.assertIn("429", str(ctx.exception))  # 抛的是最后那条
 
     def test_explicit_provider_does_not_fall_back(self):

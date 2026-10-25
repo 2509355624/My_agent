@@ -52,7 +52,15 @@ log = logging.getLogger("vision")
 # 只在**走管理页/.env 那条路**（describe 没显式传 provider）时生效；显式传
 # provider 的调用（生图审核 image_audit、管理页试读）**不参与**——审核是
 # fail-closed 且要固定用 .env 那份，不能被降级链悄悄换成别家。
-VISION_FALLBACK_CHAIN = ("doubao", "mimo", "deepseek")
+#
+# 2026-10-25 用户拍板「识图主用 hfapi 中转（自己的 key），降级到 deepseek 官方」：
+#   主选家在 agents/<id>/settings.json 的 vision_model（cx_a1b2c3d4），这里只留
+#   deepseek 官方当第一跳。原来的 doubao / mimo 从链里撤掉——它们是「主选家挂掉
+#   时先试谁」的顺序，而用户要的下一跳就是官方 deepseek，留着豆包/mimo 等于中间
+#   多两次白等。
+#   ⚠️ cx_* 来自 data/custom_providers.json；文件缺了会被 _chain_candidates 的
+#   `pid not in PROVIDERS` 跳过，不会把请求发到不存在的地址。
+VISION_FALLBACK_CHAIN = ("deepseek",)
 
 
 # ─── 「上游拒答 / 报错被当成识图结果」的判据（2026-10-07）──────────────
@@ -466,7 +474,7 @@ def describe(data_url, timeout=None, prompt=None, provider=None, model=None):
     退回 .env 的 VISION_PROVIDER/VISION_MODEL，见 active_choice）。这跟
     2026-10-03 之前不一样：以前是直接读 .env 常量，现在每次调用重读配置，
     所以在界面上切换**热生效、不用重启**。这条路上若首选那家失败，会**依次
-    降级**到 VISION_FALLBACK_CHAIN（豆包→mimo→deepseek，2026-10-07 加），
+    降级**到 VISION_FALLBACK_CHAIN（deepseek 官方兜底，2026-10-25 定），
     所以单家额度耗尽/超时不会让整轮图直接看不到。
 
     显式传 provider = 这一次临时换一家，**完全绕过界面选择、也不走降级链**。
@@ -480,7 +488,7 @@ def describe(data_url, timeout=None, prompt=None, provider=None, model=None):
         primary_pid, primary_model = active_choice()
         # active_choice 真跑时 pid 为空会自动退回 .env 那两个常量；但测试/异常
         # 路径可能直接喂回 (None, "")，这里再兜一道——否则主选家会整个丢掉，
-        # 降级链变成「只剩豆包打头」，与「没配就走 .env」的语义不符。
+        # 降级链变成「只剩链尾那家打头」，与「没配就走 .env」的语义不符。
         if not primary_pid:
             primary_pid, primary_model = VISION_PROVIDER, (primary_model or VISION_MODEL)
         # 主选家写错了（配置里没有这个 provider）属于**配置错误**，要立刻报错。

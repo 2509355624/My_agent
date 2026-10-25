@@ -199,6 +199,15 @@ class ApiTest(unittest.TestCase):
         self._main_path = main.CUSTOM_PROVIDERS_FILE
         self._cfg_path = config.CUSTOM_PROVIDERS_FILE
         self._providers = dict(config.PROVIDERS)
+        # 摘掉本机 data/custom_providers.json 里**真实存在**的渠道再开测：
+        # 这个类验的是「接口怎么处理我刚造的那一条」，可开发机上挂着的渠道
+        # （relaycore、大大怪用的 hfapi……）在模块导入时已经并进 PROVIDERS，
+        # 会一起出现在接口返回里，让断言变成看运气——2026-10-25 给 qq 接了一条
+        # scope=all 的中转站，就把 test_builtin_providers_have_no_custom_flag
+        # 直接照红了（那条断言的本意是「内置的不许带 custom」，不是「列表里
+        # 一个 custom 都不能有」）。
+        for pid in [k for k, v in config.PROVIDERS.items() if (v or {}).get("custom")]:
+            config.PROVIDERS.pop(pid, None)
         main.CUSTOM_PROVIDERS_FILE = ps.store_path(self.tmp)
         config.CUSTOM_PROVIDERS_FILE = main.CUSTOM_PROVIDERS_FILE
         self.c = main.app.test_client()
