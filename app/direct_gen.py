@@ -352,8 +352,9 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    # 2026-10-24 新建的**完整版底模渠道**（用户起名 `sf`，
                    # 即 silver-full 的缩写）：Civitai 的 SilvermoonMix-Anima-Evolved
                    # v2.3 **INT8 完整版**（非 Turbo），配方见 `skills/sf/`。
-                   # 现参数 12+8 步 / cfg 1 / euler / **零 LoRA**
-                   # （int8 挂 LoRA 会每步 requant，见 image_jobs.py 的 moss8 注释）。
+                   # 现参数 12+8 步 / cfg 2 / euler / **零 LoRA**
+                   # （cfg 3.5+零LoRA 实测会出六趾，2026-10-25 定 cfg 2；
+                   # int8 挂 LoRA 慢的旧结论已证伪，见 skills/sf/skill.md）。
                    # ⚠️ **只收中文点名词，ASCII 的 `sf` 故意不进本表**：
                    #    `_lead_typo_channel` 的候选池就是本表的 ASCII 键，而
                    #    短 id 进池子最危险——任何以 s 开头的输入（「s 一张图」）
@@ -1381,7 +1382,7 @@ _MASTER_TEMPLATE = (
     "| silver | `silver` | 默认，没特别要求就它 |\n"
     "| silver-hd、silver 超清 | `silver-hd` | 要超清、大图、当壁纸 |\n"
     "| 半厚涂 | `semi-thick` | 点名，silver 的配方但笔触更薄、对比和饱和度更低 |\n"
-    "| sf、完整版、silver完整版 | `sf` | 点名，完整版底模（12+8 步 / cfg 1 / 零 LoRA；配场景和光源出图，平色背景会放大伪影） |\n"
+    "| sf、完整版、silver完整版 | `sf` | 点名，完整版底模（12+8 步 / cfg 2 / 零 LoRA；配场景和光源出图，平色背景会放大伪影） |\n"
     "| nai | `nai` | 点名 nai，或给了画师串 |\n"
     "| nai_wide | `nai_wide` | 点名 nai 且要横向画面 |\n"
     "| qwen、千问、通义 | `qwen_image_v1` | 点名，要写实照片感、要出中文。"

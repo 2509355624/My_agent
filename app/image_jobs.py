@@ -365,14 +365,17 @@ SKILL_TIMEOUTS = {
     "_comic_batch": 240,
     # 2026-10-24 新建的完整版底模渠道（`skills/sf/`，sf = silver-full 缩写）：
     # SilvermoonMix-Anima-Evolved v2.3 **INT8 完整版**（非 Turbo）。现参数
-    # 12+8 步 / cfg 1 / euler / 零 LoRA。
+    # 12+8 步 / cfg 2 / euler / 零 LoRA。
     # 提速实测（同一 Sunna 提示词）：28 步 cfg3.5 = 72 前向 / 175 s → 12 步
     # cfg3.5 = 40 / ~80 s → 12 步 cfg1 = 20 / **42~46 s**。墙钟之外还要算
     # **每画一张 ComfyUI 自动重启一次的等待**（大图显存吃紧触发自动释放，
     # 轮询虚高 40~95 s，真实执行以日志 `Prompt executed in` 为准）。
-    # 360 对 46 s 有七倍余量，是留给重启窗口 + 排队的最坏情况，别当日常耗时。
-    # ⚠️ 这条渠道**零 LoRA**：int8 底模挂 LoRA 会每步 requant（见上面 moss8
-    #    那条的实测），超时预算里不含 LoRA 减速。
+    # ⚠️ 2026-10-25 cfg 1 实测发灰（饱和度 0.31 vs 0.85）弃用，回调 3.5 后又
+    #    发现 cfg 3.5+零 LoRA 出六趾 → 定 **cfg 2**（约 78 s，饱和度 0.57）。
+    # 360 对 78 s 有四倍余量，是留给重启窗口 + 排队的最坏情况，别当日常耗时。
+    # ⚠️ 本渠道默认**零 LoRA**：不是速度问题——2026-10-25 实测 ComfyUI 原生
+    #    LoraLoaderModelOnly 挂 silver 6 LoRA 与零 LoRA 同速（78.1 vs 77.3 s），
+    #    moss8 的 requant 灾难仅限 rapid_moss 插件自家挂载；是配方选择。
     "sf": 360,
 }
 
