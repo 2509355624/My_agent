@@ -352,7 +352,7 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    # 2026-10-24 新建的**完整版底模渠道**（用户起名 `sf`，
                    # 即 silver-full 的缩写）：Civitai 的 SilvermoonMix-Anima-Evolved
                    # v2.3 **INT8 完整版**（非 Turbo），配方见 `skills/sf/`。
-                   # 现参数 12+8 步 / cfg 2 / euler / **零 LoRA**
+                   # 现参数 15+10 步 / cfg 2 / euler / **零 LoRA**
                    # （cfg 3.5+零LoRA 实测会出六趾，2026-10-25 定 cfg 2；
                    # int8 挂 LoRA 慢的旧结论已证伪，见 skills/sf/skill.md）。
                    # ⚠️ **只收中文点名词，ASCII 的 `sf` 故意不进本表**：
@@ -971,27 +971,60 @@ GUIDE_TEXT = (
 #   ② 补齐回执里删掉的玩法：横屏 / 漫画 / 聊角色 / 造卡，集中进【一句话玩法】；
 #   ③ 顺序按「群友实际会问什么」排：默认 → 常用 → 其他渠道 → 一句话玩法 →
 #      引用玩法。原来引用玩法夹在渠道中间，查到一半要往上翻。
+#
+# 2026-10-25 再改版（用户贴出大大怪自己回复的三段式渠道清单，原话：「这个展示
+# 方式是很适配qq的展示的，帮我把更多渠道换成这个哈」）。原来「★默认/★常用/
+# 其他」的方括号分段全废，换成 **一、二、三分组 + 一渠道一行短描述**。
+# ⚠️ 渠道名用**中文点名词**（用户打的那个），不是内部 id——测试
+# test_every_nameable_channel_lives_in_more_channels 钉的就是这件事；
+# `nai_wide` 没有短名、故意不出现（横向画面说「nai 横屏」自动出宽幅）。
+# ⚠️ 首行「🧭」还是 `qq_api.split_chat` 的不分条暗号：群聊里这条回复按行拆
+#    会碎成 28 条，见到 🧭 开头才整段发（2026-10-25 加，两者是同一天的事）。
+# ⚠️ AI 被问「有哪些渠道」时**不在这份文案里抄原文**（模板只给了 58 字格式
+#    指令，预算理由见模板里那段注释）——两条路的分工：命令回执走精确文案，
+#    LLM 即兴答走格式指令。
 MORE_CHAN_TEXT = (
-    "🧭 全部渠道\n"
+    "🧭 全部生图渠道\n"
     "用法：渠道名 + 需求　例：anima 女骑士 ｜ krea2 日系 银发少女\n"
     "★ 是群里最常用的\n"
     "\n"
-    "【★默认】silver\n"
-    "【★anima】anima ｜ 画风加 clear / curvy / gloss / soft\n"
-    "【★krea2】krea2 ｜ 风格加 米山舞 / 日系 / 亚洲真人 / 动漫真人 / 真人cos / 宝可梦\n"
-    "　　　　　柔光 / 奶油 / 写实 / 通用 / 铭音 / 鬼针草 / 铭鬼\n"
-    "【★qwen】qwen\n"
-    "【★miao】miao\n"
+    "一、anima 高清三档（尺寸只剩这一档，快档/最小档已取消）\n"
+    "· hd_3_clear 清晰 / 清透\n"
+    "· hd_3_soft 柔和\n"
+    "· hd_3_gloss 油亮\n"
+    "· hd_3_curvy 肉感\n"
     "\n"
-    "【其他】moss ｜ moss50 ｜ silver-hd ｜ qwen-hd ｜ qwen角色设定表 ｜ qwen修复\n"
-    "　　　　半厚涂 ｜ sf ｜ anima多图 ｜ anima线条 ｜ anima写实 ｜ anima鬼针草 ｜ anima肉感\n"
-    "　　　　jank ｜ sd ｜ nffa ｜ cunny ｜ nai\n"
+    "二、独立渠道\n"
+    "· silver 默认，不点名就走它\n"
+    "· silver-hd 超清大图\n"
+    "· semi-thick 半厚涂\n"
+    "· sf 完整版底模，15+10 步，默认竖屏、说「横屏」才横屏\n"
+    "· nai 有画师串或点名时用，说「横屏」自动出宽幅\n"
+    "· qwen_image_v1 千问，写实照片感和出中文最稳\n"
+    "· qwen30 30 步更细\n"
+    "· qwen-hd qwen 超清\n"
+    "· qwen-charsheet 角色设定表 / 三视图，必须配参考图\n"
+    "· qwen-restore 修复糊图，必须配原图\n"
+    "· image_gen_v1 sd\n"
+    "· jank / nffa / cunny / miao 点名才走\n"
+    "· moss / moss50 出字最准，本地 4 步档 / 50 步慢速档\n"
+    "· moss8 8 步加速档，刻字和漫画排版\n"
+    "\n"
+    "三、anima 独立配方\n"
+    "· anima线条 线条感重\n"
+    "· anima写实 真人质感\n"
+    "· anima鬼针草 同款画风\n"
+    "· anima肉感 皮肤质感和体量感最重\n"
+    "\n"
+    "krea2 系按风格分十几条，得点名具体那条：krea2米山舞 / krea2日系 / krea2亚洲真人 / krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油 / krea2写实 / krea2通用 / krea2铭音 / krea2鬼针草 / krea2铭鬼。光说「krea2」不认。\n"
+    "\n"
+    "垫图：silver 系和 qwen 系能垫（silver 锁构图骨架）；jank / nffa / cunny / miao / krea2 系 / sd / moss 纯文生图，垫了会退回文生图白等一轮。\n"
     "\n"
     "【玩法】\n"
     "横屏：silver 横屏 一个女孩\n"
     "漫画：silver漫画 10个 雷电将军在樱花树下\n"
     "moss漫画：moss漫画 雨夜便利店，两个陌生人共用一把伞（一页四格）\n"
-    "造卡：anima-line 造卡 需求 ｜ 引用卡片说「重新生成」换种子\n"
+    "造卡：anima线条 造卡 需求 ｜ 引用卡片说「重新生成」换种子\n"
     "随机：今日老婆 ｜ 随机萝莉 ｜ 随机兽耳 ｜ 随机女仆\n"
     "聊天：#角色扮演 ｜ #角色名\n"
     "\n"
@@ -1005,7 +1038,12 @@ _RANDOM_CMD_RE = re.compile(r"^\s*/?\s*随机(萝莉|兽耳|女仆)\s*$")
 _WAIFU_CMD_RE = re.compile(r"^\s*/?\s*今日老婆\s*$")
 # 「/更多渠道」按**关键词**识别（2026-10-05 用户口径）：消息里含「更多渠道」即回
 # 全部跑法，不再要求整条精确匹配——用户实际发过「：更多渠道」（全角冒号）掉进兜底。
-_MORE_CHAN_RE = re.compile(r"更多渠道")
+# 2026-10-25 扩问法（「帮我把更多渠道换成这个哈」的顺手事）：群友实际打的是
+# 「你都有什么渠道啊」，四个字的关键词盖不全、就掉进 LLM 随口答（散文或表格，
+# QQ 里都难读）。补的五个 Pattern 全是**明确要全量清单**的问法；「moss 能画
+# 什么」这种针对单渠道的不算，留给 LLM 针对性回答——代码只接清单意图。
+_MORE_CHAN_RE = re.compile(
+    r"更多渠道|全部渠道|所有渠道|渠道列表|有哪些渠道|有什么渠道")
 
 # ─── 「/直通-」零 token 直出（2026-10-07 用户拍板）──────────
 #
@@ -1382,7 +1420,7 @@ _MASTER_TEMPLATE = (
     "| silver | `silver` | 默认，没特别要求就它 |\n"
     "| silver-hd、silver 超清 | `silver-hd` | 要超清、大图、当壁纸 |\n"
     "| 半厚涂 | `semi-thick` | 点名，silver 的配方但笔触更薄、对比和饱和度更低 |\n"
-    "| sf、完整版、silver完整版 | `sf` | 点名，完整版底模（12+8 步 / cfg 2 / 零 LoRA，默认竖屏、说「横屏」才出横屏；配场景和光源出图，平色背景会放大伪影） |\n"
+    "| sf、完整版、silver完整版 | `sf` | 点名，完整版底模（15+10 步 / cfg 2 / 零 LoRA，默认竖屏、说「横屏」才出横屏；配场景和光源出图，平色背景会放大伪影） |\n"
     "| nai | `nai` | 点名 nai，或给了画师串 |\n"
     "| nai_wide | `nai_wide` | 点名 nai 且要横向画面 |\n"
     "| qwen、千问、通义 | `qwen_image_v1` | 点名，要写实照片感、要出中文。"
@@ -1396,6 +1434,7 @@ _MASTER_TEMPLATE = (
     "| nffa、cunny、miao | 同名 id | 点名才用，cunny / miao 很慢 |\n"
     "| moss | `moss` | 点名 moss，本地 4 步档，出字最准 |\n"
     "| moss50 | `moss50` | 点名 moss50，50 步慢速档 |\n"
+    "| moss8 | `moss8` | 点名 moss8，8 步加速档 |\n"
     "| anima线条 | `anima-line` | 点名，线条感重 |\n"
     "| anima写实 | `anima-real` | 点名，真人质感 |\n"
     "| anima鬼针草 | `anima-guizhencao` | 点名，鬼针草画风 |\n"
@@ -1410,6 +1449,14 @@ _MASTER_TEMPLATE = (
     "krea2通用、krea2铭音、krea2鬼针草、krea2铭鬼。光说「krea2」本身不算点名。\n"
     "\n"
     "两点容易混：银发、silver hair 是发色，属于画面内容；画面要出中文时走 moss。\n"
+    # 2026-10-25：被问全量清单时的答题格式（QQ 适配排版）。**只给格式、不抄
+    # 原文**——整段 `_CHAN_GROUPS_TEXT` 抄进来 734 字，点名渠道的最坏渲染会顶
+    # 破 8700 预算（用户口径「单次请求 1 万 token 以内」，见
+    # test_full_prompt_stays_within_budget 的沿革）。58 字的格式指令就够：
+    # LLM 手里就有上面的渠道表，缺的只是「怎么排」。要精确原文的问法已由
+    # `_MORE_CHAN_RE` 零 token 接住（更多渠道 / 全部渠道 / 有哪些渠道…）。
+    "被问「有哪些渠道」时不画图：用 {{\"reply\": \"…\"}} 答，首行「🧭 全部生图渠道」，"
+    "再照上面渠道表分组、一渠道一行带短描述、别列表格。\n"
     "{chan_hint}"
     "{search}"
     "\n"
@@ -1509,6 +1556,7 @@ _REVISE_TEMPLATE = (
     "  nffa / cunny / miao = 原话点名才填；\n"
     "  moss = 原话点名「moss」才填（MOSS-Image 4 步版，画面出字最准，纯文生图）；\n"
     "  moss50 = 原话点名「moss50」才填（同模型 50 步，慢，纯文生图）；\n"
+    "  moss8 = 原话点名「moss8」才填（8 步加速档，刻字和漫画排版，纯文生图）；\n"
     "  jank = 原话明说「jank」才填（用户自定义渠道）。\n"
     "  silver-hd = silver 的 4x 超清版，原话明说「silver-hd」或「silver 超清」才填。\n"
     "  qwen-hd = qwen 的 4x 超清版，原话明说「qwen-hd」或「qwen 超清」才填。\n"

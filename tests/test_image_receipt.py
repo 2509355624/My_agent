@@ -149,44 +149,53 @@ class ReceiptNoteTest(_SubmitHarness):
         self.assertIn("渠道名 + 你的需求", text)
         self.assertIn("更多渠道", text)
 
-    def test_default_note_mentions_the_4x_channel(self):
-        """回执附言给 silver-hd 一行曝光（2026-10-07 用户拍板）——它是点名渠道，
-        单独占一行讲用法，不混进渠道清单里。"""
-        text = self._note(None)
-        self.assertIn("silver-hd", text)
+    def test_the_4x_channel_moved_to_more_channels(self):
+        """silver-hd 的曝光位从回执搬进 `/更多渠道`（2026-10-21 用户拍板）。
 
-    def test_default_note_mentions_landscape(self):
-        """回执给横屏一行曝光（2026-10-07 用户拍板）。
+        10-07 的决策是「回执里给每个玩法各起一行」（so silver-hd 单独一行讲
+        用法）；到 10-21 变成刷屏——35 个渠道 / 340 字，每张图都跟着发一遍。
+        现在回执只留 5 个常用渠道，**这些玩法一律搬进 `/更多渠道`**。
+        所以这里钉的不再是「回执里有」，而是「没消失」：
+        从回执里删掉一个功能，`/更多渠道` 里必须接得住，否则群友就再也看不到了。
+        """
+        from app import direct_gen
+        self.assertIn("silver-hd", direct_gen.MORE_CHAN_TEXT)
+        self.assertNotIn("silver-hd", self._note(None))
+
+    def test_landscape_moved_to_more_channels(self):
+        """横屏的曝光位同理搬进 `/更多渠道`（2026-10-21）。
 
         横屏的判据是**本轮原话**里的词（`image_jobs.turn_is_landscape` 认
-        「横屏 / 横版 / 横图」），不写出来用户根本不知道有这功能。
-        只写「横屏」一个词——另外两个是代码顺手认的同义词，回执每张图都跟着
-        发、能短就短（用户 10-07 选的「只写横屏」）。
+        「横屏 / 横版 / 横图」），没人写出来用户根本不知道有这功能——所以它
+        可以离开回执，但不能离开文档。
         """
-        text = self._note(None)
-        self.assertIn("要横屏", text)
-        self.assertIn("silver 横屏", text)
+        from app import direct_gen
+        self.assertIn("横屏", direct_gen.MORE_CHAN_TEXT)
+        self.assertIn("silver 横屏", direct_gen.MORE_CHAN_TEXT)
+        self.assertNotIn("横屏", self._note(None))
 
     def test_default_note_mentions_qwen_hd(self):
-        """回执给 qwen 超清（qwen-hd，4096×6144）曝光，并讲清它的图生图触发指令。
+        """qwen 超清（qwen-hd，4096×6144）的曝光位搬进 `/更多渠道`。
 
-        2026-10-07（晚）补：qwen-hd 是 qwen 的 4x 超清版，路由走
-        `skill=qwen-hd` + `source_image=1`（见 generate_image 提示词与
-        `_I2I_SKILLS`）。用户得知道「qwen 超清，图生图，描述」这个入口。
+        2026-10-07（晚）补的理由仍然成立：qwen-hd 是 qwen 的 4x 超清版，路由走
+        `skill=qwen-hd` + `source_image=1`，用户得知道这个入口。
+        2026-10-21 只是**换地方**（回执只留 5 个常用渠道，见行数锁那段），
+        这条断言从回执挪到 `direct_gen.MORE_CHAN_TEXT`。
         """
-        text = self._note(None)
-        self.assertIn("qwen 超清", text)
-        self.assertIn("图生图", text)
-        self.assertIn("qwen 超清，图生图，描述", text)
+        from app import direct_gen
+        text = direct_gen.MORE_CHAN_TEXT
+        self.assertIn("qwen-hd", text)
+        self.assertIn("超清", text)
 
     def test_default_note_mentions_comic(self):
-        """回执给「连续小漫画」一行曝光（2026-10-08 用户拍板）。
+        """「连续小漫画」的曝光位搬进 `/更多渠道`（2026-10-08 用户拍板 → 10-21 搬家）。
 
         漫画走 `generate_comic` 工具（AI 自己补剧情、默认 10 格逐格画发回），
         入口是「<画风>漫画，<数量>，<剧情>」。不写出来用户不知道有这玩法。
         """
-        text = self._note(None)
-        self.assertIn("连续小漫画", text)
+        from app import direct_gen
+        text = direct_gen.MORE_CHAN_TEXT
+        self.assertIn("漫画", text)
         self.assertIn("silver漫画", text)
 
     def test_default_note_stays_five_lines(self):
@@ -218,37 +227,62 @@ class ReceiptNoteTest(_SubmitHarness):
         要在任务回执里带上）。
         ⚠️ 这里钉的只是**内置默认**；线上真身是 `agents/qq/settings.json` 的
         `receipt_note`（那份覆盖优先，已同步改）。
+
+        2026-10-21：**14 → 5**。用户推翻的正是上面那条一路加行的决策：
+        「35 个渠道太多，每次都刷屏，/更多渠道 也是写不清楚，一大堆字」。
+        行数从 14 掉到 5 不是「砍功能」，是**换了承重墙**——回执只留常用的
+        5 个渠道 + 一句指向 `/更多渠道`，其余玩法整段搬进
+        `direct_gen.MORE_CHAN_TEXT`（那条搬家由另外几条测试盯着）。
+        5 行 = 状态行 + 渠道行 + 附言 3 行。这个数从此**不该再涨**：
+        想往回执里加曝光位，先问「能不能塞进 5 个常用里」，塞不进去就写进
+        `/更多渠道`。判据是 `state/image_log.jsonl` 6799 张账本的实际频次。
         """
-        self.assertEqual(len(self._note(None).splitlines()), 14)
+        self.assertEqual(len(self._note(None).splitlines()), 5)
 
-    def test_default_note_lists_every_nameable_channel(self):
-        """2026-10-07 用户拍板「把我全部的可用渠道都加上去」——能点名的
-        都要在回执里出现（原「常用」那行只列 5 个，sd / nffa / miao /
-        cunny 一直没有曝光位）。
+    def test_every_nameable_channel_lives_in_more_channels(self):
+        """能点名的渠道必须有个曝光位——但位置从回执换成了 `/更多渠道`
+        （2026-10-21 用户拍板，见上面行数锁那段）。
 
-        2026-10-08：krea2 拆 5 条后，这里从 11 个变 15 个——**必须钉全名**
-        （`krea2米山舞` 而不是 `krea2`），否则「通用 krea2 已下架」这件事
-        在测试里看不出来。
+        10-07 的原始要求是「把我全部的可用渠道都加上去」，理由是 sd / nffa /
+        miao / cunny 一直没有曝光位。10-21 用户改口「35 个渠道太多，每次都
+        刷屏」——**要求没变（别让渠道消失在群里），载体变了**：回执只留 5 个
+        常用，全量清单归 `/更多渠道`。所以这条断言从 `self._note(None)` 挪到
+        `direct_gen.MORE_CHAN_TEXT`，钉的东西一个字没松。
 
-        2026-10-11：加两条 anima 的 LoRA 堆叠版 `anima线条` / `anima写实`。
-        ⚠️ 钉的是**点名词**而不是渠道 id（`anima-line` / `anima-real`）——
-        回执是给**用户**看「下次怎么点名」的，他打的是「anima线条」。
-        两条并进「渠道：」那一行尾，**没加逻辑行**（下面那条行数锁不动）。
+        钉的是**点名词**而不是渠道 id（`anima-line` / `anima-real`）——
+        文档是给**用户**看「下次怎么点名」的，他打的是「anima线条」。
         ⚠️ 初版写的是「anima柔和」，同日改名成「anima线条」——「柔和」是活的
-        画风词（柔和→soft），当点名词会和画风词双关（粉丝群里「再柔和一点」
-        这种日常说法满地都是）。**不许再写回「anima柔和」。**
+        画风词（柔和→soft），当点名词会和画风词双关。**不许再写回「anima柔和」。**
 
         `image_gen_v1_hires` / `nai_wide` 没有短名、点名不到，故意不列。
         """
-        text = self._note(None)
+        from app import direct_gen
+        text = direct_gen.MORE_CHAN_TEXT
         for name in ("silver", "anima", "qwen", "nai", "jank", "sd",
                      "nffa", "miao", "cunny", "silver-hd",
                      "anima线条", "anima写实",
-                     "krea2米山舞", "krea2日系", "krea2亚洲真人",
-                     "krea2动漫真人", "krea2真人cos"):
+                     "米山舞", "日系", "亚洲真人",
+                     "动漫真人", "真人cos"):
             self.assertIn(name, text, name)
         for name in ("image_gen_v1_hires", "nai_wide"):
             self.assertNotIn(name, text, name)
+
+    def test_the_receipt_keeps_only_the_five_most_used(self):
+        """回执里的渠道从 35 个压到 5 个（2026-10-21 用户：「每次都刷屏」）。
+
+        这 5 个是 `state/image_log.jsonl` 6799 张账本的实际频次，不是拍脑袋：
+        anima 22.6% / krea2 11.8% / silver 11.4% / qwen 10.9% / miao 2.7%
+        （第 5 位选 miao 而不是 silver-hd，是因为前四个回答「画什么风格」，
+        后者是「怎么处理这张图」）。
+        少一个就少一个曝光位，多一个就有回涨的苗头——两个方向都钉住。
+        """
+        text = self._note(None)
+        for name in ("silver", "anima", "krea2", "qwen", "miao"):
+            self.assertIn(name, text, name)
+        for name in ("nai", "jank", "sd", "nffa", "cunny", "moss",
+                     "anima线条", "anima鬼针草", "qwen修复"):
+            self.assertNotIn(name, text, name)
+        self.assertIn("更多渠道", text)
 
     def test_empty_string_switches_the_note_off(self):
         """清空 = 「这段不要了」，只留状态行和渠道行。"""
