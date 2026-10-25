@@ -2,7 +2,7 @@
 
 目的：NapCat 偶尔直接崩 / 卡死，崩了之后没人知道、扫码通知也不会发（死进程不写
 qrcode.png）。这个进程独立于 qq_bot / NapCat，定时探 NapCat 是否还活着，死了就拉起
-「一键启动全部 force」把三个窗口（Agent Web / NapCat / QQBOT-ADAPTER）全重启。
+「一键启动 force」把三个窗口（Agent Web / NapCat / QQBOT-ADAPTER）全重启。
 
 **另外还盯 ComfyUI（2026-09-30 加，见「ComfyUI 分支」一节）**：它原先**没有任何守护**
 ——NapCat 有自愈（杀了 QQ.exe 约 40 秒自己拉起来）、qq_bot 有本看门狗，只有 ComfyUI
@@ -26,7 +26,7 @@ trust_env=False，不受本机 Clash 注册表代理影响）。
   用户手上**（用户 09-29 要求「掉线就重启，别只丢个二维码让我自己扫 —— 我扫完还没反应」）。
   OFFLINE_GRACE 留够时间给「人正在扫」，免得白重启一次、还要人多扫一次码。
 
-重启：subprocess 拉起「一键启动全部.bat force auto」（**隐藏窗口**，不阻塞 watchdog）。
+重启：subprocess 拉起「一键启动.bat force auto」（**隐藏窗口**，不阻塞 watchdog）。
   - force = 忽略「6099 还在监听就跳过 NapCat」的保护，强制杀掉再起，处理「进程活着
     但卡死」的情形。
   - auto  = 启动器跑完直接退出，不留窗口、不等回车。看门狗每重启一次就多一个窗口的话
@@ -48,7 +48,7 @@ trust_env=False，不受本机 Clash 注册表代理影响）。
 超过 `SILENCE_SECONDS` 一条消息都没有 → 记一条日志。
 
   ⚠️ **09-30 起默认只记日志、不重启**（`WATCHDOG_SILENCE_RESTART=0`）。原设计是
-  「重启一次**当探针**」，但一天 32 次实测推翻了它：重启走 `一键启动全部 force`，
+  「重启一次**当探针**」，但一天 32 次实测推翻了它：重启走 `一键启动 force`，
   里面 `taskkill /IM QQ.exe /F` 再 `-q` 快速登录，**腾讯把「刚登过又登」当异常登录、
   转身作废会话** → 真掉线。硬证据：08:57:50 探针重启后 **3 分钟**（09:00:57）就掉线。
   也就是说「假在线」很可能是这个循环**制造**的。想恢复老行为设
@@ -153,11 +153,11 @@ _STATUS_PATH = os.path.join(BASE_DIR, "state", "qq_status.json")
 # 状态快照每 1 秒写一次，120 秒留了很宽的余量。
 STATUS_STALE = 120.0
 
-_ALL_BAT = os.path.join(BASE_DIR, "一键启动全部.bat")
+_ALL_BAT = os.path.join(BASE_DIR, "一键启动.bat")
 _LOCK_PATH = os.path.join(BASE_DIR, "state", "watchdog.lock")
 
 # ── 协议端（2026-09-30 起可换 NapCat / SnowLuma）──────
-# `一键启动全部.bat` 认第 3 个参数（snowluma）；不传就是 NapCat。
+# `一键启动.bat` 认第 3 个参数（snowluma）；不传就是 NapCat。
 # 看门狗重启时必须把它透传下去，否则会把协议端拉错 —— 详见 `_trigger_restart`。
 #   判断依据是 WebUI 端口：6099 = NapCat，其他（5099）= SnowLuma。
 # 用端口反推而不是再加一个 env：只会有一个真相源，不会两边配不一致。
@@ -421,9 +421,9 @@ def _silent_seconds(now):
 
 
 def _trigger_restart():
-    """拉起「一键启动全部 force auto」，隐藏窗口、不阻塞。返回是否成功发起。
+    """拉起「一键启动 force auto」，隐藏窗口、不阻塞。返回是否成功发起。
 
-    ⚠️ 第三个参数（协议端）必须跟着 `_PROTOCOL` 走：`一键启动全部.bat` 默认起
+    ⚠️ 第三个参数（协议端）必须跟着 `_PROTOCOL` 走：`一键启动.bat` 默认起
     NapCat，如果这里不传，那么在跑 SnowLuma 的时候看门狗一重启就会把 NapCat
     拉起来 —— 两个协议端抢 3000/3001 端口，比不重启更糟。
     """
@@ -479,7 +479,7 @@ def _check_silence(state, now):
     ⚠️ **09-30 起默认只记日志、不重启**（`SILENCE_RESTART=False`）。原设计的逻辑
     是「重启一次**当探针**」：重启后**自动登录**说明会话本来是好的（就是群里安静），
     **需要扫码**说明会话早被腾讯作废了。但一天 32 次实测推翻了它 —— 重启走的是
-    `一键启动全部 force`，里面 `taskkill /IM QQ.exe /F` 再 `-q` 快速登录，
+    `一键启动 force`，里面 `taskkill /IM QQ.exe /F` 再 `-q` 快速登录，
     **腾讯把「刚登过又登」当异常登录，转身就作废会话**。于是：
 
         没人说话 → 静默 → 重启 → 被腾讯作废 → 真掉线 → 又没人说话 → 又重启 …
@@ -574,7 +574,7 @@ def _restart(state, now, reason):
         if not _trigger_restart():
             state["restart_fails"] += 1
             push_text("QQ 机器人自动重启失败",
-                      "找不到或无法拉起「一键启动全部.bat」，请手动处理。")
+                      "找不到或无法拉起「一键启动.bat」，请手动处理。")
             if state["restart_fails"] >= MAX_RESTART_FAILS:
                 state["backoff_until"] = now + BACKOFF
                 state["restart_fails"] = 0

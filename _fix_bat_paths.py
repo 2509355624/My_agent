@@ -44,11 +44,11 @@ ANCHOR = b'cd /d "%~dp0"\r\n'
 # 每个文件：把裸 python 路径换成带引号的 %PY%
 TARGETS = [
     "启动SnowLuma.bat",
-    "一键启动.bat",
+    "启动网页端.bat",
     "启动QQ机器人.bat",
     "启动看门狗.bat",
-    "一键启动全部.bat",
-    "一键启动QQ机器人.bat",
+    "一键启动.bat",
+    "启动QQ套装.bat",
 ]
 
 

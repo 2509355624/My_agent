@@ -253,7 +253,7 @@ class SilenceProbeTest(TestCase):
     原设计是「重启当探针」——自动登录 = 群里本来就安静（静默放过、不通知），
     要扫码 = 会话真被腾讯作废（推二维码）。
 
-    但一天 32 次实测发现重启本身会**制造**掉线：重启走 `一键启动全部 force`，
+    但一天 32 次实测发现重启本身会**制造**掉线：重启走 `一键启动 force`，
     里面 `taskkill /IM QQ.exe /F` 再 `-q` 快速登录，腾讯把「刚登过又登」当异常登录、
     转身作废会话。硬证据：08:57:50 探针重启后 3 分钟（09:00:57）就掉线。
 
@@ -424,7 +424,7 @@ class SilentSecondsTest(TestCase):
 class RestartProtocolTest(TestCase):
     """看门狗重启必须把「协议端」透传下去。
 
-    一键启动全部.bat 的第 3 个参数决定起 NapCat 还是 SnowLuma，不传就是 NapCat。
+    一键启动.bat 的第 3 个参数决定起 NapCat 还是 SnowLuma，不传就是 NapCat。
     如果 `_trigger_restart` 忘了透传，那么在跑 SnowLuma 时一旦看门狗触发重启，
     就会把 NapCat 也拉起来 —— 两个协议端抢 3000/3001，比不重启更糟。
     """

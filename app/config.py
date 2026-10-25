@@ -888,7 +888,7 @@ WATCHDOG_SILENCE_MAX_GAP = float(os.getenv("WATCHDOG_SILENCE_MAX_GAP", "14400"))
 #
 # 原来是 1（重启当探针），09-30 用户拍板改成默认关。原因是一天 32 次实测：
 #
-#   静默重启 → 一键启动全部 force → taskkill /IM QQ.exe /F → -q 快速登录
+#   静默重启 → 一键启动 force → taskkill /IM QQ.exe /F → -q 快速登录
 #     → 腾讯判定「刚登过又登」= 异常登录 → 作废会话
 #     → 真掉线（tag=下线通知 / 你的账号当前登录已失效）
 #     → 又没人说话 → 又静默 → 又重启 …… 死循环

@@ -322,7 +322,7 @@ class RestartHandoffTest(unittest.TestCase):
     def test_orphan_flag_yields_to_watcher(self):
         """发起重启的看门狗已经死了 → 标记作废，watcher 必须接手把码推出去。
 
-        2026-09-29 20:30 实测：看门狗拉起「一键启动全部」时自己也被换掉，
+        2026-09-29 20:30 实测：看门狗拉起「一键启动」时自己也被换掉，
         finally 里的 clear_restarting() 没执行，孤儿标记把通知压了 15 分钟。
         """
         self._flag_on(pid=999999)          # 不存在的 pid

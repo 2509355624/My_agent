@@ -8,7 +8,7 @@
 设计要点：
 - **判据全部沿用现有实现，不发明新探针**：ComfyUI 用 `comfy_status.snapshot()`
   （网页状态后台同款，带 20 秒 TTL 缓存）；看门狗用 `tasklist` 窗口标题——跟
-  `一键启动全部.bat` [4/4] 段判「WATCHDOG 窗口在不在」完全一致；其余 TCP 探
+  `一键启动.bat` [4/4] 段判「WATCHDOG 窗口在不在」完全一致；其余 TCP 探
   127.0.0.1 端口，思路同 `watchdog._port_open`。
 - **日志归集不搬家**：各进程的日志文件已在 `logs/` 下（logsetup 按进程名分文件，
   两个进程同写一个文件在 Windows 上会写烂行——所以这里只读、不让谁改目录），
@@ -91,7 +91,7 @@ def _tcp_alive(port):
 
 
 def _watchdog_alive():
-    """看门狗在不在——判据同 `一键启动全部.bat` [4/4]：WATCHDOG 窗口的 cmd 还在。
+    """看门狗在不在——判据同 `一键启动.bat` [4/4]：WATCHDOG 窗口的 cmd 还在。
 
     不按 PID/锁文件：锁文件在进程被杀后不会自己消失（Windows 文件锁随进程
     释放，但文件本体还在），按它判会把「上次意外死掉的看门狗」算成活的。

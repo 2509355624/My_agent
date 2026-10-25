@@ -56,7 +56,7 @@ FILES = [
     "agent.py",
     "requirements.txt",
     "requirements-rag.txt",
-    "一键启动.bat",
+    "启动网页端.bat",
     "安装依赖.bat",
 ]
 

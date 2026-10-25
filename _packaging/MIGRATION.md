@@ -8,7 +8,7 @@
 | 路径 | 说明 |
 |---|---|
 | `app/` `web/` `tests/` `agent.py` | 引擎代码（Flask 主服务 + QQ 适配层） |
-| `一键启动QQ机器人.bat` `启动QQ机器人.bat` 等 | 启动脚本（GBK 编码，**别用普通文本编辑器改**） |
+| `启动QQ套装.bat` `启动QQ机器人.bat` 等 | 启动脚本（GBK 编码，**别用普通文本编辑器改**） |
 | `.env` | 全部配置：模型密钥、降级链、QQ 触发词、白名单（**含密钥，勿外传**） |
 | `agents/qq/` | 机器人人设（prompt.md / agent.json / settings.json）+ 表情包库 stickers/ |
 | `skills/` | 技能包（表情包、写作等） |
@@ -82,7 +82,7 @@ D:\AI\confyui_env\Scripts\python -c "from modelscope import snapshot_download; s
 
 ## 第 5 步：启动
 
-方式 A（推荐）：`一键启动QQ机器人.bat` 会依次拉起 NapCat 和机器人适配层。
+方式 A（推荐）：`启动QQ套装.bat` 会依次拉起 NapCat 和机器人适配层。
 **仓库内的路径已改成 `%~dp0` 自定位**（脚本自己所在的目录），所以整个目录解压到哪儿都不用改。
 只剩两条**仓库外**的路径要按笔记本实际情况改：
 
@@ -93,7 +93,7 @@ D:\AI\confyui_env\Scripts\python.exe   → 笔记本的 venv python（第 2 步�
 
 方式 B（手动）：先启动 NapCat 并登录，再双击解压目录里的 `启动QQ机器人.bat`。
 
-**⚠️ bat 的编码与行尾不能动**：`一键启动全部.bat`、`一键启动QQ机器人.bat`、`启动QQ机器人.bat`、`启动看门狗.bat` 是 **GBK + CRLF**；`一键启动.bat`、`扫码登录.bat`、`检查登录.bat` 是 **ASCII + LF**。记事本"另存为"会把 LF 变成 CRLF，要改就直接编辑原文件、别另存。
+**⚠️ bat 的编码与行尾不能动**：`一键启动.bat`、`启动QQ套装.bat`、`启动QQ机器人.bat`、`启动看门狗.bat`、`启动网页端.bat` 都是 **GBK + CRLF**（2026-10-25 实测，原文档说「一键启动.bat 是 ASCII」已过时）；`扫码登录.bat`、`检查登录.bat` 是 **ASCII + LF**。记事本"另存为"会把 LF 变成 CRLF，要改就直接编辑原文件、别另存。
 
 ## 第 6 步：验证
 

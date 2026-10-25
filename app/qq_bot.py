@@ -1667,7 +1667,7 @@ def main():
         return
     if not _acquire_single_instance():
         log.error("已有 QQ 适配层在运行，本次退出。"
-                  "要重启请先结束旧进程，或改用 一键启动QQ机器人.bat")
+                  "要重启请先结束旧进程，或改用 启动QQ套装.bat")
         return
     try:
         asyncio.run(QQBot().run())

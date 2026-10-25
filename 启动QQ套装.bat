@@ -6,7 +6,9 @@ if not defined PY if exist "D:\AI\my_env\Scripts\python.exe" set "PY=D:\AI\my_en
 if not defined PY if exist "D:\AI\confyui_env\Scripts\python.exe" set "PY=D:\AI\confyui_env\Scripts\python.exe"
 if not defined PY if exist "D:\AI\comfy_env\Scripts\python.exe" set "PY=D:\AI\comfy_env\Scripts\python.exe"
 if not defined PY set "PY=python"
-title QQ 机器人 - 一键启动
+rem 只开 NapCat + QQ 适配层（QQ 小套装，不碰网页端/ComfyUI）。
+rem 要开全家桶请双击「一键启动.bat」。
+title QQ 套装
 
 set "NAPCAT_BAT=D:\AI\NapCat\启动NapCat.bat"
 set "BOT_BAT=%~dp0启动QQ机器人.bat"
