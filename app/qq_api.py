@@ -18,7 +18,10 @@ import time
 
 import requests
 
-from app.config import QQ_HTTP_URL, QQ_TOKEN, QQ_REPLY_MAX_CHARS
+from app.config import (
+    QQ_CHAT_SPLIT_CHARS, QQ_CHAT_SPLIT_MAX_PARTS, QQ_CHAT_SPLIT_TRIGGER,
+    QQ_HTTP_URL, QQ_TOKEN, QQ_REPLY_MAX_CHARS,
+)
 
 log = logging.getLogger("qq_api")
 
@@ -390,6 +393,93 @@ def split_message(text, limit=None):
     if buf:
         chunks.append(buf)
     return chunks
+
+
+# ─── 群聊短句分条 ────────────────────────────────────
+
+# 句末切点：中文/英文句号问号叹号、省略号、换行。**故意不用逗号**——逗号切开
+# 会把一句话掰成两条半句，读起来像结巴，比小作文还怪。
+_SENT_END = re.compile(r"(?<=[。！？!?…\n])")
+
+
+def _pack_sentences(block, limit):
+    """把一段没有换行的文字，按句末标点攒成每条约 limit 字的几条。"""
+    parts, buf = [], ""
+    for sent in _SENT_END.split(block):
+        sent = sent.strip()
+        if not sent:
+            continue
+        if not buf:
+            buf = sent
+        elif len(buf) + len(sent) <= limit:
+            buf += sent
+        else:
+            parts.append(buf)
+            buf = sent
+    if buf:
+        parts.append(buf)
+    return parts
+
+
+def split_chat(text, limit=None, max_parts=None):
+    """把一段回复切成「像群友发的那样」的几条短消息。
+
+    跟 `split_message` 的分工：那个管「一条消息发不出去」（700 字按段落切），
+    这个管「发得出去，但不像人在群里说话」（实测均长 138 字、最长 369，而群里
+    真人一条 5~15 字）。
+
+    **切分以换行为主，句读为辅**：提示词已经教它「一句一条、回车换行 = 分条」，
+    所以换行就是它自己想分几次说——尊重这个意图，一行发一条；某一行自己还长，
+    才对那一行按句末标点再攒。没换行的长文是兜底路径（模型没按提示词来）。
+
+    下面三种情况一个字都不拆：
+      - 短于 TRIGGER 且只有一行：本来就一句话，拆了反而碎
+      - 含 http/https 的单行：URL 里的 `?` `&` 会被当句读切，宁可整段发
+      - 以「错误」「（这边」开头：系统提示不是聊天，拆开就没法看了
+
+    不改字、不重排、不加语气——内容一个字都不动，只决定分几次发出去。
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    limit = limit or QQ_CHAT_SPLIT_CHARS
+    max_parts = max_parts or QQ_CHAT_SPLIT_MAX_PARTS
+    head = text[:6]
+    if head.startswith("错误") or head.startswith("（这边"):
+        return [text]
+    # 🧭 开头 = 渠道清单这类**结构化回复**：一行一项是排版，不是「想分几次说」。
+    # 28 行的清单按 max_parts=3 会切成「两行 + 一大坨」，比原样发更难读。
+    # 两个来源都靠这个前缀：`/更多渠道` 命令回执（MORE_CHAN_TEXT）和 AI 被问
+    # 「有哪些渠道」时的回答（_MASTER_TEMPLATE「被问渠道清单」段教它带前缀）。
+    if head.startswith("🧭"):
+        return [text]
+    # 工具调用漏成正文（模型吐 <tool_use> / DSML 那种）时不能拆：拆完会变成
+    # 三条 XML 垃圾刷屏，而且上层还指望拿到完整串去解析。原样交出去。
+    if "<tool_use>" in text or "DSML" in text:
+        return [text]
+
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(lines) == 1:
+        if len(text) <= QQ_CHAT_SPLIT_TRIGGER:
+            return [text]
+        if "http://" in text or "https://" in text:
+            return [text]
+        parts = _pack_sentences(text, limit)
+    else:
+        parts = []
+        for ln in lines:
+            if len(ln) <= limit or "http://" in ln or "https://" in ln:
+                parts.append(ln)
+            else:
+                parts.extend(_pack_sentences(ln, limit))
+
+    if len(parts) <= 1:
+        return [text]
+    # 超出条数上限的一股脑并进最后一条：宁可最后一条偏长，也不许把群刷屏。
+    # 用换行拼而不是直接接——按行切出来的几句直接接会黏成一句没标点的话。
+    if len(parts) > max_parts:
+        parts = parts[:max_parts - 1] + ["\n".join(parts[max_parts - 1:])]
+    return [p for p in parts if p.strip()]
 
 
 # ─── 消息段 ──────────────────────────────────────────

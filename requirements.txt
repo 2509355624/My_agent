@@ -6,6 +6,10 @@ requests>=2.28
 python-dotenv>=1.0
 duckduckgo-search>=5.0,<9
 
+# QQ 适配层：app/qq_bot.py 靠它连 OneBot 的 WebSocket（3001）。
+# 不装的话 `python -m app.qq_bot` 直接 ModuleNotFoundError，网页端不受影响。
+websockets>=12
+
 # 图片处理：读群里的图 / 表情包打标 / 生图发出去前转 JPEG 或校验原图
 Pillow>=10.0
 
