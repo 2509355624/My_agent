@@ -783,6 +783,15 @@ QQ_DEBOUNCE_SECONDS = float(os.getenv("QQ_DEBOUNCE_SECONDS", "1.5"))
 QQ_PENDING_MAX_ITEMS = int(os.getenv("QQ_PENDING_MAX_ITEMS", "20"))
 QQ_PENDING_MAX_CHARS = int(os.getenv("QQ_PENDING_MAX_CHARS", "2000"))
 
+# 群聊短句分条（qq_api.split_chat）：群里真人一条 5~15 字，一条 300 字的
+# 回复在群里就是「小作文」，拆成两三句发才像有人在说话。私聊不分。
+#   TRIGGER = 短于这个字数且只有一行 → 原样发，拆了反而碎
+#   CHARS   = 攒句时每条约多少字（不是硬上限，是攒到超了才断）
+#   MAX_PARTS = 一条回复最多拆几条，超出的并进最后一条，绝不刷屏
+QQ_CHAT_SPLIT_TRIGGER = int(os.getenv("QQ_CHAT_SPLIT_TRIGGER", "25"))
+QQ_CHAT_SPLIT_CHARS = int(os.getenv("QQ_CHAT_SPLIT_CHARS", "18"))
+QQ_CHAT_SPLIT_MAX_PARTS = int(os.getenv("QQ_CHAT_SPLIT_MAX_PARTS", "3"))
+
 # 群聊背景：被 @ 时顺带把群里最近这几条消息送去，让它知道刚才在聊什么。
 # 原先收到群消息、不 @ 就整个丢掉，模型每轮只看得到「有人问了它一句」，
 # 所以只能一问一答、像个问答助手。0 表示不带（退回旧行为）。
