@@ -817,6 +817,19 @@ def status_page():
     return send_from_directory(WEB_DIR, "status.html")
 
 
+@app.route("/services")
+def services_page():
+    """服务总控：一页看全部常驻服务的死活 + 日志尾部（替代一堆 cmd 窗口）。"""
+    return send_from_directory(WEB_DIR, "services.html")
+
+
+@app.route("/api/services")
+def api_services():
+    """服务总控面板的数据源。探测判据见 app/service_panel 模块头。"""
+    from app import service_panel
+    return jsonify(service_panel.snapshot())
+
+
 @app.route("/comic")
 def comic_page():
     """漫画工作台：编剧 → 逐格渲染 → 加气泡（见 app/comic_api.py）。"""

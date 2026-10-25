@@ -357,6 +357,12 @@ def rag_enabled():
 
 COMFYUI_URL = os.getenv("COMFYUI_URL", "http://127.0.0.1:8188")
 
+# ComfyUI 自己的日志文件位置（服务总控面板 /services 要 tail 它）。
+# 它在 ComfyUI 自己的 user/ 目录下、不在项目 logs/ 里——项目日志按进程名分文件
+# 是 logsetup 的规矩，管不到 ComfyUI 这个独立进程。换机器/换目录时 .env 改这一条。
+COMFYUI_LOG = os.getenv("COMFYUI_LOG",
+                        r"D:\AI\ComfyUI_v037\user\comfyui_8188.log")
+
 # 默认生图渠道（2026-10-19）：用户没点名渠道、模型也没填 skill 时落这里。
 #
 # 为什么要做成配置：`skills/` 里没装的渠道等于不存在，写死一个名字就会让
@@ -492,12 +498,10 @@ COMFY_RELEASE_AFTER_TOTAL = int(os.getenv("COMFY_RELEASE_AFTER_TOTAL", "0"))
 
 # 漫画批量（`Job.batch == "comic"`）专用的全局累计阈值（2026-10-18 用户拍板）。
 #
-# 漫画一次跑一整本（默认 10 格），按全局的 2 张一重启，10 格就要停 3 次、
-# 每次 60~90 秒等冷启动，整本白扔 3~5 分钟。用户实测单格 812×1024 / 10 步
-# 只要 20 秒，所以他要求「给漫画工作台设置 6 个图片」——6 格重启一次：
-# 既不会让 anima 的残留（1.6~2.1GB/张，叠得慢）叠爆 12G 卡，整本也只停一次。
-# 0 = 跟随 COMFY_RELEASE_AFTER_TOTAL（不单独放宽）。
-COMFY_RELEASE_AFTER_COMIC = int(os.getenv("COMFY_RELEASE_AFTER_COMIC", "6"))
+# 漫画批量的累计重启阈值。仅由 image_jobs 对低负载漫画渠道
+#（anima-line / image_gen_v1）读取；krea2、qwen、moss 等高负载渠道仍走
+# 各自原有的同渠道阈值，不使用这个放宽值。0 = 不单独放宽。
+COMFY_RELEASE_AFTER_COMIC = int(os.getenv("COMFY_RELEASE_AFTER_COMIC", "10"))
 
 # ─── 重渠道（qwen）优先度：2026-10-04 按用户要求关闭 ───────────────
 #
@@ -758,6 +762,20 @@ QQ_TURN_TIMEOUT = float(os.getenv("QQ_TURN_TIMEOUT", "600"))
 
 # 单条 QQ 消息的字数上限，超出按段落切分成多条发送
 QQ_REPLY_MAX_CHARS = int(os.getenv("QQ_REPLY_MAX_CHARS", "700"))
+
+# 群聊「短句分条」（2026-10-21）。700 那条闸只防「发不出去」，防不了「像小作文」：
+# 实测群里 20 条回复均长 138 字、最长 369，一条整段发出去；同群的真人/别的机器人
+# 是 5~15 字一条（中位 7 字）、连发两三条。这里按行/句读切一层，让回复变成几条短消息。
+#
+# 第一版把上限写成 45 字（≈ 三行小作文），用户当场否掉：「正常人说话怎么可能一次
+# 输出几十个字」。数字据此重定——真人一条 5~15 字，18 是**上限**不是目标，目标由
+# 提示词管（一条 15 字以内、回车换行 = 分条）。
+#
+# TRIGGER 以下不拆（一句话的事，拆了反而碎）；CHARS 是每条软上限；MAX_PARTS 是
+# 条数上限——超出的一股脑并进最后一条，宁可最后一条长，也不许把群刷屏。
+QQ_CHAT_SPLIT_TRIGGER = int(os.getenv("QQ_CHAT_SPLIT_TRIGGER", "25"))
+QQ_CHAT_SPLIT_CHARS = int(os.getenv("QQ_CHAT_SPLIT_CHARS", "18"))
+QQ_CHAT_SPLIT_MAX_PARTS = int(os.getenv("QQ_CHAT_SPLIT_MAX_PARTS", "3"))
 
 # 一条消息里最多处理几张图（超出的只记一句"还有 N 张没看"，不下载）。
 # 群里刷图时，每张都要先下载再送一次识图，没有上限就是开口子的花销
