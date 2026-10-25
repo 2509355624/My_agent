@@ -15,6 +15,10 @@
   --steps-first 10 --steps-second 5
   --lora-chain            按 silver 同款链序插 6 条 LoraLoaderModelOnly（只挂第一段）
   --single                删二采样（节点 25/27），VAEDecode 直连第一段
+
+⚠️ 占位符替换规则与 app/tools/normal/generate_image.py 对齐：裸 token
+__MULTI_PROMPTS__ 按字符串内部转义替换（兼容独占式和嵌入式两种写法），
+__SEED__ 连引号版落数字、裸版兜底。改规则前先读那边的注释。
 """
 import argparse
 import json
@@ -61,9 +65,18 @@ def wait_ready(deadline=180):
 
 
 def build_workflow(args):
+    # ⚠️ 占位符替换规则必须与 app/tools/normal/generate_image.py 的
+    # _apply_prompt_placeholders 保持一致（2026-10-25 踩坑：本工具原先只替
+    # 带引号的 '"__MULTI_PROMPTS__"'，而 moss8 的文本是嵌入式
+    # "...quality, __MULTI_PROMPTS__"（逗号+空格开头），引号版永远匹配不上，
+    # 导致提示词原样提交、前三张 moss 图全是废提示词跑的，且同 seed 同文本
+    # 命中 ComfyUI 执行缓存 0.07s 出图）。正确做法：裸 token + 内部转义。
     raw = open(args.workflow, "r", encoding="utf-8").read()
-    raw = raw.replace("__SEED__", str(args.seed))
-    raw = raw.replace('"__MULTI_PROMPTS__"', json.dumps(args.prompt, ensure_ascii=False))
+    prompt_escaped = (args.prompt.replace('\\', '\\\\').replace('"', '\\"')
+                      .replace('\n', '\\n').replace('\r', ''))
+    raw = raw.replace("__MULTI_PROMPTS__", prompt_escaped)
+    raw = raw.replace('"__SEED__"', str(args.seed))
+    raw = raw.replace("__SEED__", str(args.seed))  # 兜底：裸占位符
     w = json.loads(raw)
 
     for node in w.values():
