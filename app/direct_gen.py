@@ -1382,7 +1382,7 @@ _MASTER_TEMPLATE = (
     "| silver | `silver` | 默认，没特别要求就它 |\n"
     "| silver-hd、silver 超清 | `silver-hd` | 要超清、大图、当壁纸 |\n"
     "| 半厚涂 | `semi-thick` | 点名，silver 的配方但笔触更薄、对比和饱和度更低 |\n"
-    "| sf、完整版、silver完整版 | `sf` | 点名，完整版底模（12+8 步 / cfg 2 / 零 LoRA；配场景和光源出图，平色背景会放大伪影） |\n"
+    "| sf、完整版、silver完整版 | `sf` | 点名，完整版底模（12+8 步 / cfg 2 / 零 LoRA，默认竖屏、说「横屏」才出横屏；配场景和光源出图，平色背景会放大伪影） |\n"
     "| nai | `nai` | 点名 nai，或给了画师串 |\n"
     "| nai_wide | `nai_wide` | 点名 nai 且要横向画面 |\n"
     "| qwen、千问、通义 | `qwen_image_v1` | 点名，要写实照片感、要出中文。"
