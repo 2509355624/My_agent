@@ -3556,6 +3556,47 @@ class LandscapeTest(_Base):
         save = [n for n in wf.values() if n["class_type"] == "SaveImage"][0]
         self.assertEqual(wf[save["inputs"]["images"][0]]["class_type"], "VAEDecode")
 
+    def test_moss8_is_the_eight_step_portrait_chain(self):
+        """`moss8` = 用户 ComfyUI 界面那份工作流（2026-10-26 拍板 moss 默认走它）。
+
+        三处配方差异，全钉住：**1024×1536 竖屏**、适配器 8 步、**SLG22**
+        （`single_layers="22"` + `double_layers` 空 + start 0 → end 1）。
+        提示词节点是**裸占位符**——上一版埋在 `@realskin,best quality,…` 后面，
+        直提工具匹配不上，废提示词连跑三张；独占整串就不会有这个问题。
+        LoRA 一律不挂（界面里挂了三个但强度全 0，且本机没有文件）。
+        """
+        wf = skills.load_skill("moss8")["workflow"]
+        nid = image_jobs._find_size_node(wf)
+        self.assertIsNotNone(nid)
+        ins = wf[nid]["inputs"]
+        self.assertEqual((ins["width"], ins["height"]), (1024, 1536))
+        # 说「横屏」时是把宽高对调，不是另写一个画布
+        wide = image_jobs.landscape_workflow(wf)[nid]["inputs"]
+        self.assertEqual((wide["width"], wide["height"]), (1536, 1024))
+
+        aid = [k for k, n in wf.items() if n["class_type"] == "RapidMOSSAdapter"][0]
+        self.assertEqual(wf[aid]["inputs"]["adapter"], "lodestones-8step")
+        self.assertEqual(wf[aid]["inputs"]["steps"], 8)
+
+        slg = [n for n in wf.values()
+               if n["class_type"] == "SkipLayerGuidanceDiTSimple"]
+        self.assertEqual(len(slg), 1)
+        self.assertEqual(slg[0]["inputs"]["single_layers"], "22")
+        self.assertEqual(slg[0]["inputs"]["double_layers"], "")
+        self.assertEqual(slg[0]["inputs"]["start_percent"], 0)
+        self.assertEqual(slg[0]["inputs"]["end_percent"], 1)
+        # SLG 必须插在适配器和 guider 之间——挂错地方等于没挂
+        guider = [n for n in wf.values() if n["class_type"] == "BasicGuider"][0]
+        self.assertEqual(wf[guider["inputs"]["model"][0]]["class_type"],
+                         "SkipLayerGuidanceDiTSimple")
+
+        types = {n["class_type"] for n in wf.values()}
+        for banned in ("KSampler", "ModelSamplingSD3", "LoraLoaderModelOnly"):
+            self.assertNotIn(banned, types, banned)
+
+        text = [n for n in wf.values() if n["class_type"] == "CLIPTextEncode"][0]
+        self.assertEqual(text["inputs"]["text"], "__MULTI_PROMPTS__")
+
     def test_the_original_workflow_is_never_mutated(self):
         """返回新对象而不是原地改：静默重抽会重建 `job.workflow` 再递归调
         `process`，原地改会被对调两次（等于没改）。"""

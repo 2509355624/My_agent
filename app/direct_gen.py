@@ -390,9 +390,10 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    # 我们说 moss 的时候，默认使用 8 步长的这个 moss，4 步长的 moss
                    # 就不用了」）——4 步档（`skills/moss/`）**保留但不再被点名**，
                    # 只是给老的 workflow 测试当样本渠道。
-                   #   `moss` / `moss4` / `moss8` / `moss8步` → `skills/moss8/`
-                   #        （lodestones 8 步适配器 / 1024×1024 / 实测 25~35 秒，
-                   #         **中文刻字四字不差**，这就是选它的理由）
+                   #   `moss` / `moss4` / `moss8` / `moss8步` / `moss8v` → `skills/moss8/`
+                   #        （lodestones 8 步适配器 + SLG22 / **1024×1536 竖屏** /
+                   #         实测 40 秒；2 格 10 段竖排中文一字不差，
+                   #         **中文刻字准**就是选它的理由）
                    #   `moss50` / `moss50步`                 → `skills/moss50/`
                    #        （50 步 / 1024×1024 / ~3 分钟；moss 漫画台 `/moss` 也用它）
                    # ⚠️ 2026-10-20 用户把 45 步那档提到 50 步，**旧名 `moss45` 停用**
@@ -401,7 +402,7 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    # ⚠️ `moss4` 现在也指向 8 步：老用法不该报错，但也不该再把用户
                    #    带回 4 步档（用户明确说 4 步不用了）。
                    "moss": "moss8", "moss4": "moss8", "moss4步": "moss8",
-                   "moss8": "moss8", "moss8步": "moss8",
+                   "moss8": "moss8", "moss8步": "moss8", "moss8v": "moss8",
                    "moss50": "moss50", "moss50步": "moss50",
                    "日系": "krea2-rella"}
 _FIXED_CHAN_RE = re.compile(
@@ -452,8 +453,11 @@ _FIXED_CHAN_RE = re.compile(
     #    用户会写「moss50步 招牌」，不吞掉的话正文里会剩一个孤零零的「步」。
     #    ⚠️ 2026-10-20 起 **`moss45` 已停用**（50 步那档改名），这里别再加回来。
     #    ⚠️ 2026-10-26 起 **裸 `moss` 和 `moss4` 都落 8 步档**（见别名表注释）。
+    #    `moss8v` 是 10-26 那份竖屏实验目录的旧名，目录已合并进 `skills/moss8/`
+    #    并删除，这里留着别名只是让老说法（「moss8v 跑一张」）不报错，
+    #    而且必须排在 `moss\s*8\s*步?` 前面把尾巴那个 v 一起吃掉，别留在正文里。
     r"|sd|qwen-hd|qwen|nffa|nai|cunny|miao"
-    r"|moss\s*50\s*步?|moss\s*4\s*步?|moss\s*8\s*步?|moss)"
+    r"|moss\s*50\s*步?|moss\s*4\s*步?|moss\s*8\s*v|moss\s*8\s*步?|moss)"
     r"(?![0-9A-Za-z_])",
     re.I)
 
@@ -923,7 +927,7 @@ GUIDE_TEXT = (
     "　nffa　　插画感\n"
     "　cunny　超分重渠道 · 单张 2~4 分钟\n"
     "　miao　　皮肤质感滑嫩 · 2x 出 3072×4608\n"
-    "　moss　　MOSS-Image · 图里写中英文最准 · 默认这条（8 步 1024×1024 约 30 秒）\n"
+    "　moss　　MOSS-Image · 图里写中英文最准 · 默认这条（8 步 1024×1536 约 40 秒）\n"
     "　moss50　同一模型的 50 步慢速档 · 1024×1024 · 约 3 分钟（要点名才走）\n"
     "　nai　　 NovelAI 云端 · 认画师串/权号\n"
     "\n"
@@ -1399,7 +1403,7 @@ _MASTER_TEMPLATE = (
     "| sd | `image_gen_v1` | 点名 sd |\n"
     "| jank | `jank` | 点名 jank |\n"
     "| nffa、cunny、miao | 同名 id | 点名才用，cunny / miao 很慢 |\n"
-    "| moss | `moss8` | 点名 moss，本地 8 步档，出字最准 |\n"
+    "| moss | `moss8` | 点名 moss，本地 8 步竖屏档（1024×1536），出字最准 |\n"
     "| moss50 | `moss50` | 点名 moss50，50 步慢速档 |\n"
     "| anima线条 | `anima-line` | 点名，线条感重 |\n"
     "| anima写实 | `anima-real` | 点名，真人质感 |\n"
