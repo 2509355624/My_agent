@@ -377,11 +377,15 @@ def hold(label="", timeout=DEFAULT_WAIT):
     start = time.time()
     warned = False
     ticket = ""
+    ticket_tried = False
     swept_at = 0.0
     try:
         while True:
-            if not ticket:
-                ticket = make_ticket()      # 失败给空串 → 退化为纯抢占
+            if not ticket_tried:
+                # 只试一次：登记失败（权限/磁盘）就老老实实退回纯抢占，
+                # 别每轮 POLL 都重试一遍把日志刷满。
+                ticket_tried = True
+                ticket = make_ticket()
             if ticket:
                 _touch(ticket)              # 排队中也要刷，别被当僵尸
                 now = time.time()
