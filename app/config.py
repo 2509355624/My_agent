@@ -113,6 +113,14 @@ LLM_FALLBACK_TTL = float(os.getenv("LLM_FALLBACK_TTL", "600"))
 # 600 秒后重试纯属白撞。拉黑一整天，让降级链直接把请求交给还能用的模型。
 LLM_RATE_LIMIT_TTL = float(os.getenv("LLM_RATE_LIMIT_TTL", "86400"))
 
+# 429 里还得分一层：**并发冲突**不是额度到顶，几十秒就自愈，给短 TTL。
+# 2026-10-26 实测 hfapi 中转站的并发上限只有 2，报
+#   {"code":"concurrency","message":"too many concurrent requests for this
+#    api key (2 in flight, limit 2)"}
+# 若按上面那条拉黑 24 小时，等于「一次并发碰撞，整天走付费的 deepseek 官方」
+# ——接中转站的意义全废。这里的 60 秒是「等同时在飞的那一两个请求返回」的量级。
+LLM_CONCURRENCY_TTL = float(os.getenv("LLM_CONCURRENCY_TTL", "60"))
+
 # 动态 API 地址和模型名（根据 provider 切换）
 if LLM_PROVIDER == "deepseek":
     API_URL = DEEPSEEK_BASE_URL.rstrip("/") + "/chat/completions"

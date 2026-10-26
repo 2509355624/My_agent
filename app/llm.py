@@ -13,7 +13,7 @@ from app.config import (API_URL, API_KEY, MODEL, LLM_PROVIDER,
                         PROVIDERS, OLLAMA_BASE_URL, CONTEXT_BUDGET,
                         LLM_FALLBACK_CHAIN, LLM_REQUEST_TIMEOUT,
                         LLM_FALLBACK_TTL, LLM_RATE_LIMIT_TTL,
-                        provider_vision)
+                        LLM_CONCURRENCY_TTL, provider_vision)
 
 # 诊断行一律走 logging，不走 print——原因见 app/logsetup.py 的模块说明：
 # print 落 stdout，被重定向/管道接管后是块缓冲，日志会「看起来丢了」。
@@ -302,14 +302,36 @@ def _brief(err, limit=60):
     return text[:limit] + ("…" if len(text) > limit else "")
 
 
-def _ttl_for(err):
-    """这个失败该拉黑多久：429（频率/额度到顶）→ 24 小时，其余用默认 TTL。
+# 429 里有**两种完全不同**的东西，必须分开：
+#   - 额度/频率到顶   → 这一家今天不给了，等也没用 → 拉黑一整天；
+#   - 并发冲突       → 「同时在飞的请求数」超了上限，几十秒就过去 → 短 TTL。
+# 2026-10-26 实战：hfapi 中转站的并发上限只有 2，群里两条消息 + 一次识图同时
+# 发就撞：
+#   HTTP 429 {"code": "concurrency",
+#             "message": "too many concurrent requests for this api key
+#                         (2 in flight, limit 2)"}
+# 当时它被当成额度到顶 → 拉黑 86400 秒 → 之后十几轮全部降级走**付费的**
+# deepseek 官方，而同一时刻 vision 那条路还在正常用中转站（说明站一直好的）。
+# 一次并发碰撞废掉一整天，比碰撞本身贵得多。
+_CONCURRENCY_HINTS = ("concurrency", "too many concurrent")
 
-    429 不是「这条请求失败」，是「这家这一阵都不给了」——免费额度按天重置，
-    600 秒后重试纯属白撞。拉黑一整天，让降级链直接把请求交给还能用的模型。
-    其余失败（网络抖动、模型退役）保持短 TTL，到期自愈，不用重启。
+
+def _ttl_for(err):
+    """这个失败该拉黑多久。
+
+    分三档：
+      - **并发冲突** → `LLM_CONCURRENCY_TTL`（默认 60 秒）。等那时在飞的请求
+        返回就能再试。判据是错误体里的 `concurrency` / `too many concurrent`。
+      - **429（额度/频率到顶）** → 24 小时。免费额度按天重置，600 秒后重试纯
+        属白撞，让降级链把请求直接交给还能用的模型。
+      - **其余**（网络抖动、超时、模型退役）→ 默认短 TTL，到期自愈，不用重启。
+
+    ⚠️ 顺序不能反：并发冲突的响应**也是 429**，先按 429 判就全被算成额度到顶。
     """
-    if "429" in str(err):
+    text = str(err).lower()
+    if any(h in text for h in _CONCURRENCY_HINTS):
+        return LLM_CONCURRENCY_TTL
+    if "429" in text:
         return LLM_RATE_LIMIT_TTL
     return LLM_FALLBACK_TTL
 

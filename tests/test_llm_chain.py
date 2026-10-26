@@ -181,6 +181,20 @@ class RateLimitBanTest(_ChainBase):
         err = RuntimeError("LLM 请求失败 HTTP 429 Too Many Requests @https://x")
         self.assertEqual(llm._ttl_for(err), llm.LLM_RATE_LIMIT_TTL)
 
+    def test_concurrency_429_gets_the_short_ttl(self):
+        """并发冲突也是 429，但它几十秒自愈，不能按额度到顶藏一整天。
+
+        2026-10-26 实录（hfapi 中转站并发上限 2）：
+        {"code": "concurrency", "message": "too many concurrent requests
+         for this api key (2 in flight, limit 2)"}
+        """
+        err = RuntimeError(
+            'LLM 请求失败 HTTP 429 {"code": "concurrency", "message": '
+            '"too many concurrent requests for this api key '
+            '(2 in flight, limit 2)"}')
+        self.assertEqual(llm._ttl_for(err), llm.LLM_CONCURRENCY_TTL)
+        self.assertLess(llm.LLM_CONCURRENCY_TTL, llm.LLM_RATE_LIMIT_TTL)
+
     def test_other_error_gets_the_short_ttl(self):
         self.assertEqual(llm._ttl_for(RuntimeError("HTTP 500 Server Error")),
                          llm.LLM_FALLBACK_TTL)
