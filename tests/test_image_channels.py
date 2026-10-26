@@ -1672,8 +1672,11 @@ class ToolDescriptionBudgetTest(unittest.TestCase):
         # 2026-10-10：5150 → 7000（**用户拍板**：「提示词长度我最多允许你 7000 字」）。
         # 同批改的是【引用图片】段的口径翻转：引用图 + 要画 → 传 source_image、
         # 渠道不用改（silver / silver-hd / 高清三档都有锁构图骨架）。
-        self.assertLess(len(desc), 7000,
-                        "主 description 涨到 %d 字，越过 7000 上限" % len(desc))
+        # 2026-10-26：7000 → 10000（**用户拍板**：「单次文本长度最大 1 万字，
+        # 一万字差不多 5000 token，中转站额度扛得住」）。目的不是灌水，是
+        # 允许把「同一参数在不同渠道下的差别」写全，减少模型自己猜的空间。
+        self.assertLess(len(desc), 10000,
+                        "主 description 涨到 %d 字，越过 1 万字上限" % len(desc))
 
     def test_hd_jargon_is_not_a_size_request(self):
         """「高清 / 大图」这类词**不能**触发换尺寸档——它俩曾经自相矛盾。

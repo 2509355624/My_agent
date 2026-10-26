@@ -483,10 +483,19 @@ def build_stable_prompt(agent_id=None, persona_override=None):
     # 系统头 39%，叠加人设后输入超预算近 3 倍 → 模型写工具参数写到一半被
     # 物理窗口切断（[tool-truncated]），表现成「话说得漂亮但没调工具」。
     brief = _brief_mode()
-    if brief:
-        hints = ""
-    else:
-        hints = _build_tool_hints(agent_id)
+    # 2026-10-26：brief 也带 hints 了。
+    #
+    # 起因是用户问「brief 的截断是不是把说明砍掉了、能不能放到 1 万字」。
+    # 实测发现 brief 真正砍掉的东西和当初以为的不一样：
+    #   · `_brief_desc(limit=60)` / `_brief_param_desc(limit=110)` **根本没
+    #     触发**——把两个阈值放到 600 / 300，工具段还是 1014 字，一个字没变。
+    #     被压掉的首句本来就短，长的是 generate_image 那 6900 字细则，而它走
+    #     `_BRIEF_PARAM_EXTRA` + `image_guide.md` 两条路，不在这份 description 里。
+    #   · 真正被砍掉的是这 2123 字 hints（生图、表情包那几段「一句话说清该不该
+    #     调」的提示），而它们恰好最影响「模型会不会用错工具」。
+    # 用户给的预算是单次 1 万字（≈5000 token）：qq 系统头 6782 → 8905，仍在
+    # 预算内。所以把 hints 放回来，brief 只继续承担「压缩工具清单」这一件事。
+    hints = _build_tool_hints(agent_id)
     sections.append((P_TOOLS, "Available Tools",
         "参数名后带 * 表示必填，必须严格使用下列参数名：\n"
         + _build_tool_list(agent_id, brief=brief)

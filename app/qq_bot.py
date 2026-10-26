@@ -41,7 +41,8 @@ try:
 except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
-from app import (card_bot, confirm_gate, direct_gen, image_jobs, image_out, interject,
+from app import (card_bot, confirm_gate, direct_gen, image_jobs, image_log,
+                 image_out, interject,
                  logsetup,
                  longterm, moss_bot, notify, persona, qq_api, qq_status, recent,
                  stickers, usage)
@@ -495,6 +496,71 @@ def _resolve_quote(q, limit):
     body, who, images = _quote_body(msg, limit)
     head = "[引用 %s 的消息] " % who if who else "[引用的消息] "
     return head + body, images
+
+
+# ─── 账本事实注入（2026-10-26 用户拍板）─────────────────────────
+#
+# 引用一条带编号的回执时，被引正文里只有 `HT-xxx · 分辨率 · 渠道 · seed`
+# 这一行，**没有提示词本体**。切 API 直读之后模型只能看到画面，于是它想
+# 复刻就照着画面重新编一串词——看着像，但细节全变、seed 也对不上。
+#
+# 事实本来就在 `state/image_log.jsonl`（编号 → 当初真实用过的词），以前只能
+# 靠模型自己想起来调 `recall_image`。现在直接附在本轮请求里：**给事实，
+# 不替它决策**（铁律：代码只做检测，判断权归 AI）——这里只陈述「那张图当初
+# 是什么」，说不说、怎么用全由模型判。
+#
+# 走 `extra_context` 通道（和生图回执同一条）：每轮现取现用、出流即弃、
+# **不写回 history**。写回去的话，一段 800 字的原词会跟着会话活到被压缩，
+# 旧账本和新需求混在一起，比不给更乱。
+_LEDGER_PROMPT_LIMIT = 800   # 单条原词最多展示多少字（超了给指路）
+_LEDGER_MAX_ITEMS = 3        # 一轮最多附几张（引用多张时按出现顺序取前几张）
+
+
+def _ledger_note(blocks, limit=None, max_items=None):
+    """把引用正文里出现的 HT 编号换成「账本事实」段；没编号/查不到返回空串。
+
+    引用别人的图、或账本被清过时自然返回空——那种情况看图才是唯一依据，
+    不该编一段假的原词出来。
+    """
+    limit = _LEDGER_PROMPT_LIMIT if limit is None else limit
+    max_items = _LEDGER_MAX_ITEMS if max_items is None else max_items
+    tags = []
+    for block in (blocks or []):
+        try:
+            found = image_log.find_tags(block)
+        except Exception:
+            log.exception("[账本] 编号解析失败")
+            continue
+        for tag in found:
+            if tag not in tags:
+                tags.append(tag)
+    if not tags:
+        return ""
+    lines = []
+    for tag in tags[:max_items]:
+        try:
+            row = image_log.lookup(tag) or {}
+        except Exception:
+            log.exception("[账本] 查询失败 %s", tag)
+            continue
+        prompt = (row.get("prompt") or "").strip()
+        if not prompt:
+            continue
+        head = "- %s" % tag
+        skill = (row.get("skill") or "").strip()
+        if skill:
+            head += " ｜ 渠道 %s" % skill
+        seed = str(row.get("seed") or "").strip()
+        if seed:
+            head += " ｜ seed %s" % seed
+        if len(prompt) > limit:
+            prompt = (prompt[:limit]
+                      + "……（原词过长已截断，要全文调 recall_image）")
+        lines.append(head + "\n  原词：" + prompt)
+    if not lines:
+        return ""
+    return ("[账本] 被引这张图当初真实用过的提示词（编号查到的，比看图重编准；"
+            "要复刻或改这张就以它为准）：\n" + "\n".join(lines))
 
 
 def _session_key(target, target_id):
@@ -1101,6 +1167,18 @@ class SessionRunner:
                                      if extra_context else jobs_line)
             except Exception:
                 log.exception("生图回执注入失败 %s", self.session_key)
+
+        # 引用到自家图（回执正文里有 HT 编号）→ 把这几种「面上看不到的事实」
+        # 摆到模型眼前：当初真实用过的提示词、渠道、种子。同一条 extra_context
+        # 通道（每轮现取现用、出流即弃、不写回 history），见 _ledger_note。
+        if not borrowed and quote_blocks:
+            try:
+                ledger = _ledger_note(quote_blocks)
+                if ledger:
+                    extra_context = (extra_context + "\n\n" + ledger
+                                     if extra_context else ledger)
+            except Exception:
+                log.exception("账本事实注入失败 %s", self.session_key)
 
         # 私聊生图额度状态：额度拒过一次之后，那句拒绝会作为 tool_result 留在
         # history 里，模型会一直照着它回话——哪怕管理员已经把人加进免额名单

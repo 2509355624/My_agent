@@ -287,7 +287,10 @@ class BriefModeTest(unittest.TestCase):
 
     def test_brief_shrinks_system_head_hard(self):
         full, brief = self._sp(False), self._sp(True)
-        self.assertLess(len(brief), len(full) * 0.5,
+        # 2026-10-26：比例从 0.5 放宽到 0.55。用户把单次预算抬到 1 万字后
+        # brief 把 hints 放回来了（理由见 test_brief_keeps_hints_*），
+        # 9043 / 18131 ≈ 0.50 只是恰好擦边，别留一条靠四舍五入才过的断言。
+        self.assertLess(len(brief), len(full) * 0.55,
                         "简短模式没砍下来（%d -> %d）" % (len(full), len(brief)))
         # 关键判据：必须能装进 ollama 的压缩预算 11468，否则压缩照样触发
         self.assertLessEqual(
@@ -313,13 +316,24 @@ class BriefModeTest(unittest.TestCase):
             self.assertNotIn("**%s**" % gone, brief,
                              "工具 %s 已出白名单，不该再列出" % gone)
 
-    def test_brief_drops_hints_entirely(self):
-        """_TOOL_HINTS 那 2170 字细则要整段消失——它是「怎么用」不是「有什么」。"""
+    def test_brief_keeps_hints_now(self):
+        """brief 现在也带 hints（2026-10-26 用户拍板，口径翻转）。
+
+        原判据是「`_TOOL_HINTS` 整段消失——它是『怎么用』不是『有什么』」。
+        改的原因是实测发现 brief 砍错了地方：把 `_brief_desc` 的 60 字 /
+        `_brief_param_desc` 的 110 字放到 600 / 300，工具段**一个字都没变**
+        （1014 → 1014），说明这两档阈值压根没触发；真正消失的是这 2123 字
+        hints，而它管的正是「什么时候该传 source_image / 什么时候别传」
+        这类最容易被模型猜错的事。
+
+        预算依据：用户给的 1 万字（≈5000 token）里，qq 系统头 6782 → 9043，
+        仍低于 ollama 的 11468 物理预算，所以两头都没破。
+        """
         from app.agent_prompt import _build_tool_hints
         hints = _build_tool_hints("qq")
-        self.assertIn("提示：", self._sp(False))
-        self.assertNotIn(hints[:40], self._sp(True),
-                         "简短模式仍塞着 hints 全文")
+        self.assertIn("提示：", self._sp(True))
+        self.assertIn(hints[:40], self._sp(True),
+                      "简短模式丢了 hints —— 2026-10-26 起 brief 不再砍它")
 
     def test_brief_skill_list_is_names_only(self):
         """Skill 目录在简短模式下只列名字（渠道名本身就是 skill 参数值）。
