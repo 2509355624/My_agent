@@ -1818,7 +1818,11 @@ class MasterPromptTest(unittest.TestCase):
         # 口径：用户说「单次请求在 1 万 token 以内」——8700 字符 ≈ 5200 token，
         # 占一半。模板是单条 user message、前缀固定 99%，加长的钱可忽略
         # （见记忆里的缓存结构实测），真正的约束是注意力而不是成本。
-        self.assertLess(len(t), 8700, "整条提示词越过 8700 字预算了")
+        # 2026-10-26：8700 → 8900。渠道表长到 36 条（rs29 等），实测最坏渲染
+        # 8708；同时把 rs29 那段冗长说明压短了（-44 字）。8900 字符 ≈ 5300
+        # token，仍远低于用户给的 1 万 token 预算。**下次再加渠道若逼近 8900，
+        # 该动结构**（渠道表拆出去按需 load）**而不是继续抬数字**。
+        self.assertLess(len(t), 8900, "整条提示词越过 8900 字预算了")
 
     def test_prompt_budget_with_a_named_channel(self):
         """点名渠道会额外拼一段「本轮用这个渠道」的话，这一支以前从没测过。
@@ -1837,7 +1841,7 @@ class MasterPromptTest(unittest.TestCase):
 
         with mock.patch.object(direct_gen, "_ask", side_effect=fake_ask):
             direct_gen._translate("moss 画个招牌", hist, skill="moss")
-        self.assertLess(len(seen["c"]), 8700, "点名渠道后越过预算")
+        self.assertLess(len(seen["c"]), 8900, "点名渠道后越过预算")
     def test_ai_may_reply_instead_of_drawing(self):
         self.assertIn('{"reply"', self._rendered())
 
@@ -2544,7 +2548,8 @@ class ReverseTriggerTest(unittest.TestCase):
     背景（群 1103174141 实测两条 bug）：带图 +「反推提示词」以前被塞进改图
     管道 `_revise` 的 JSON 模板（主人设），结果 ① 模型回散文 → 报「改图请求
     没解析出来」；② 关键词轮 JSON 解析成功也被 `at_me=False` 静默丢掉。
-    现在明确命中就直走识图模型自己的提示词，出**纯英文 tag**、原样发。
+    现在明确命中就直走识图模型自己的提示词，出**英文混合式**（标签打底 +
+    短语补空间关系，2026-10-26 从纯 tag 放开）、原样发。
     """
 
     def _decide(self, text, urls=("img1",), at_me=False, quoted="",
