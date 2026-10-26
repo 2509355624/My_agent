@@ -232,49 +232,58 @@ class CheckVerdictTest(unittest.TestCase):
 class PromptPolicyTest(unittest.TestCase):
     """口径本身就是需求，得钉在提示词上。
 
-    这条边界反转过三轮：适中（10-01）→ 从严 → 适中 → **最严白名单**
-    （2026-10-05，agent 退场后审核是群里唯一闸门）。现在钉的是白名单口径的
-    三个锚：只有 level 0 放行 / 泳装内衣温泉进拦侧 / confidence=low 拦。
+    这条边界反转过四轮：适中（10-01）→ 从严 → 适中 → **最严白名单**
+    （2026-10-05）→ **只认裸露**（2026-10-26，用户原话「只要不是内裤或者
+    性器官，我感觉都可以过，不然 AI 老是拿不准拿不准，明明是合规的」）。
+    现在钉三个锚：默认放行 / 只有裸露内裤幼态性化拦 / 拿不准必须放行。
     只测 `parse_verdict` 是钉不住的：把 `_PROMPT` 换成另一套口径，那些用例
     照样全绿。
     """
 
-    def test_prompt_normal_clothing_stays_in_whitelist(self):
-        """白名单里必须保留正常穿着的放行项（露肩露腿短裙等）——最严不等于
-        连校服短裙都拦，否则日常立绘一张都发不出去。"""
+    def test_prompt_normal_clothing_is_allowed(self):
+        """日常穿着必须在**放行侧**——最严那版把它们塞进白名单，模型只要
+        遇到清单外的组合就卡住，最后全落进「拿不准 → 拦」。"""
         p = image_audit._PROMPT
+        self.assertIn("放行", p)
         self.assertIn("短裙", p)
         self.assertIn("露肩", p)
-        self.assertIn("正常穿着不算问题", p)
+        self.assertIn("泳装", p)
+        self.assertIn("卧室", p)
 
-    def test_prompt_pass_line_is_zero_only(self):
-        """放行线钉死在 level 0：1-3 一律拦——旧口径的「0-1 放行」必须消失。"""
+    def test_prompt_only_three_red_lines(self):
+        """唯一红线是裸露/内裤/幼态性化；「宁可错拦」「全部 level 0 才放行」
+        这种一刀切口径必须消失。"""
         p = image_audit._PROMPT
-        self.assertIn("只有 level 0 放行", p)
-        self.assertNotIn("0-1 放行", p)
-        # 旧口径的擦边放行清单现在必须出现在拦侧
-        self.assertIn("泳装、比基尼", p)
-        self.assertIn("温泉", p)
+        self.assertIn("只拦这三类", p)
+        self.assertNotIn("宁可错拦", p)
+        self.assertNotIn("只有 level 0 放行", p)
+        self.assertNotIn("清单外一律从 level 1", p)
 
-    def test_prompt_blocks_nudity_and_suggestive_acts(self):
-        """真正要拦的档位仍在：2 的动作/视角/表情清单 + 3 的裸露。"""
+    def test_prompt_blocks_nudity_and_underwear(self):
+        """真要拦的仍在拦侧。"""
         p = image_audit._PROMPT
         self.assertIn("性器官", p)
-        self.assertIn("一字马", p)
-        self.assertIn("高潮脸", p)
+        self.assertIn("乳头", p)
+        self.assertIn("内裤", p)
 
-    def test_prompt_low_confidence_blocks(self):
-        """拿不准 = 拦：confidence=low 直接拦写进提示词。"""
+    def test_prompt_uncertain_must_pass(self):
+        """拿不准 = 放行：这是 10-26 换口径的**唯一目的**，反了就等于没改。"""
         p = image_audit._PROMPT
-        self.assertIn("confidence=low 一律拦", p)
+        self.assertIn("拿不准就放行", p)
+        self.assertNotIn("confidence=low 一律拦", p)
+        self.assertNotIn("拿不准 → 按 2", p)
 
-    def test_low_confidence_is_forced_to_block(self):
-        """代码层兜底：模型自报 low 却 allow=true → 强制按拦算。"""
+    def test_low_confidence_no_longer_overrides_allow(self):
+        """代码层不再拿 confidence 当闸门。
+
+        10-26 实录：模型写「无走光；拿不准」「服装完整日常自拍，无性化动作；
+        拿不准」，allow=true，被代码改成拦，一天 6 次。
+        """
         v = image_audit.parse_verdict(
-            '{"allow": true, "level": 1, "confidence": "low", '
-            '"category": "skin", "reason": "轻微透视"}')
-        self.assertFalse(v.allow)
-        self.assertIn("拿不准", v.reason)
+            '{"allow": true, "level": 0, "confidence": "low", '
+            '"category": "ok", "reason": "裙摆短露腿，无走光"}')
+        self.assertTrue(v.allow)
+        self.assertNotIn("拿不准", v.reason)
 
     def test_high_confidence_pass_is_untouched(self):
         v = image_audit.parse_verdict(
