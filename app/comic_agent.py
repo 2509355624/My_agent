@@ -2849,7 +2849,8 @@ _CHAT_SYSTEM = """你是分镜剧本的**修订助手**，在聊天框里陪作�
 
 1. **改剧本**——直接输出改好的**完整剧本**，格式与原来完全一致（`# 标题：` /
    `## NN` / `画面:` / `气泡:` / `气泡2:` / `标签1:` `标签2:`）。铁律：
-   - **只改作者点名的部分**，其余每一行逐字保留；`## NN` 的格号一个不许增删。
+   - **只改作者点名的部分**，其余每一行逐字保留；`## NN` 的格号一个不许增删
+     （**不加格、不删格**——要改结构是作者回编剧重跑的事，不是你的活）。
    - 画面标签只能用规范里认可的真实写法；新写的外貌/服饰必须是「颜色 + 具体款式」，
      同一个人 / 同一件东西全稿用同一个颜色。
    - 改动要守分镜规范（视角、构图与服饰的对应、旁白格式等）——规范全文附在下面。
@@ -2888,6 +2889,56 @@ def _chat_system_prompt(pov_mode="pov"):
 # 「答复：」标记——讨论形态的第一行。允许被加粗（**答复：**）或换行。
 _CHAT_REPLY_RE = re.compile(r"^\s*\**\s*答复\s*\**\s*[：:]\s*", re.M)
 
+# 正文里有没有剧本格号。用来区分「交回来的坏稿」和「忘写标记的讨论」。
+_PANEL_LINE_RE = re.compile(r"^\s*##\s*\d", re.M)
+
+
+def _script_count_note(script):
+    """【当前剧本】后面那句事实：这份剧本共几格、格号是什么。
+
+    2026-10-26 用户反馈「多次都是 AI 返回完整的剧本到聊天框」：实证是模型
+    自己在稿子末尾多加了一格（原稿 17 格 → 交回 18 格 `## 18`），格号一比
+    就整份被拒。系统提示里那句「`## NN` 的格号一个不许增删」太抽象，把
+    **这份稿具体有几格**当事实摆在眼前，比抽象规则管用。
+    """
+    try:
+        _, panels = comic.parse_script_text(script)
+    except Exception:
+        return ""
+    nos = [str(p.get("no") or "").strip() for p in panels]
+    nos = [n for n in nos if n]
+    if not nos:
+        return ""
+    if len(nos) == 1:
+        return "（当前剧本共 1 格：## %s；你交回改稿时必须正好 1 个 ## 格号）" % nos[0]
+    return ("（当前剧本共 %d 格：## %s … ## %s；你交回改稿时必须正好 %d 个 "
+            "## 格号，一个不许增删）" % (len(nos), nos[0], nos[-1], len(nos)))
+
+
+def _panel_mismatch_note(panels, orig_panels):
+    """格号对不上时，给作者的一句人话（只报事实，不猜原因）。"""
+    got = [str(p.get("no") or "").strip() for p in panels]
+    want = [str(p.get("no") or "").strip() for p in orig_panels]
+    if len(got) != len(want):
+        head = "交回 %d 格，当前剧本是 %d 格" % (len(got), len(want))
+    else:
+        head = "交回 %d 格，格号却和当前剧本对不上" % len(got)
+
+    def _fmt(nos):
+        s = "、".join("## " + n for n in nos[:4])
+        return s + ("…" if len(nos) > 4 else "")
+
+    extra = [n for n in got if n not in want]
+    missing = [n for n in want if n not in got]
+    bits = []
+    if extra:
+        bits.append("多出 " + _fmt(extra))
+    if missing:
+        bits.append("少了 " + _fmt(missing))
+    if not bits:  # 数量相同、只是顺序乱
+        bits.append("当前是 " + _fmt(want))
+    return "%s（%s）" % (head, "；".join(bits))
+
 
 def chat_revise(script, message, brief="", history=None, provider=None,
                 model=None, timeout=None, pov_mode="pov"):
@@ -2911,6 +2962,10 @@ def chat_revise(script, message, brief="", history=None, provider=None,
        "script": 采纳的新剧本（没改稿 = None）,
        "changed": 是否落了新稿, "diff": 逐格差异,
        "warnings": 提示, "model": 实际用的模型}
+
+    注：「不落地时 `reply` 给什么」2026-10-26 改过一次 —— 原来把模型交回的
+    整份原文（8000+ 字）当答复贴进聊天框，作者看到的就是「AI 返回完整剧本」。
+    现在只回一句人话（差几格、多出哪一格）；原文进日志，不糊到聊天框。
     """
     if not (script or "").strip():
         raise ValueError("剧本不能为空")
@@ -2926,8 +2981,9 @@ def chat_revise(script, message, brief="", history=None, provider=None,
     messages = ([{"role": "system", "content": _chat_system_prompt(pov_mode)}]
                 + clean_hist
                 + [{"role": "user", "content":
-                    "【原始需求】\n%s\n\n【当前剧本】\n%s\n\n【作者这句话】\n%s"
-                    % (brief or "（作者没给需求）", script, message.strip())}])
+                    "【原始需求】\n%s\n\n【当前剧本】%s\n%s\n\n【作者这句话】\n%s"
+                    % (brief or "（作者没给需求）", _script_count_note(script),
+                       script, message.strip())}])
     out = {"reply": "", "script": None, "changed": False, "diff": [],
            "warnings": [], "model": ""}
     try:
@@ -2950,23 +3006,36 @@ def chat_revise(script, message, brief="", history=None, provider=None,
         out["reply"] = _CHAT_REPLY_RE.sub("", text, count=1).strip() or text
         return out
 
-    # 形态二：改稿。能解析 + 格号对得上 = 采纳；否则整段当答复展示，不落地。
+    # 形态二：改稿。能解析 + 格号对得上 = 采纳；否则不落地。
+    # 进这之前先分流：正文里**没有一格 `## NN`** 的，不可能是改稿，那就是模型
+    # 忘写 `答复：` 的一段人话（讨论），原样给作者看即可。
+    orig_panels = []
+    try:
+        _, orig_panels = comic.parse_script_text(script)
+    except Exception:
+        pass
+    if not _PANEL_LINE_RE.search(text):
+        out["reply"] = text
+        out["warnings"].append("返回的内容既不是「答复：」也解析不成剧本"
+                               "（没有 ## 格号），已按讨论展示")
+        return out
     try:
         _, panels = comic.parse_script_text(text)
     except Exception as exc:
-        out["reply"] = text
-        out["warnings"].append("返回的内容既不是「答复：」也解析不成剧本（%s），"
-                               "没有改动" % exc)
+        log.warning("[comic-chat] 改稿解析失败（%s），原文 %d 字：%s",
+                    exc, len(text), text[:400])
+        out["reply"] = ("这次没有改动：你交回的稿子解析不了（%s）。"
+                        "把要求再说一遍，我重来一次。" % exc)
+        out["warnings"].append("返回的内容有剧本格式但解析不成剧本（%s），没有改动" % exc)
         return out
-    if not panels:
-        out["reply"] = text
-        out["warnings"].append("返回的内容里找不到任何一格，没有改动")
-        return out
-    _, orig_panels = comic.parse_script_text(script)
     if [p["no"] for p in panels] != [p["no"] for p in orig_panels]:
-        out["reply"] = text
-        out["warnings"].append("返回的剧本格号与当前对不上（改结构要回编剧重跑），"
-                               "没有改动")
+        note = _panel_mismatch_note(panels, orig_panels)
+        log.warning("[comic-chat] 格号对不上：%s（原文 %d 字，头 200 字：%s）",
+                    note, len(text), text[:200])
+        out["reply"] = ("这次没有改动：你交回的剧本 %s。\n"
+                        "加格 / 删格要回编剧重跑；只想改内容的话，"
+                        "把那句话再说一遍就行。" % note)
+        out["warnings"].append("返回的剧本格号与当前对不上（%s），没有改动" % note)
         return out
 
     diff = diff_scripts(script, text)

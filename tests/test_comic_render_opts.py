@@ -72,10 +72,12 @@ class DefaultsTest(unittest.TestCase):
         names = [s["name"] for s in d["loras"]]
         self.assertEqual(len(names), 6)
         # 加载顺序（靠近底模的在前）：detailer0.35 → star cat → MODARE →
-        # cowani → detailer0.8 → reina。detailer 出现两次是模板本身的设计。
+        # cowani → Anima_in_real → reina。
+        # 2026-10-26：第 5 槽原来是第二个 detailer@0.8，按被流量验证过的爆款版
+        # （`anima线条-受欢迎.json`）换回 `Anima_in_real`——detailer 现在只出现一次。
         self.assertEqual(names[0], "anima_context_detailer_base10.safetensors")
         self.assertEqual(names[1], "star cat-000022.safetensors")
-        self.assertEqual(names[4], "anima_context_detailer_base10.safetensors")
+        self.assertEqual(names[4], "Anima_in_real_update_v2_epoch_20.safetensors")
         self.assertEqual(names[5], "reina_v1_epoch14.safetensors")
         self.assertEqual([s["strength"] for s in d["loras"]],
                          [0.35, 0.35, 0.3, 0.8, 0.8, 0.8])
@@ -582,14 +584,14 @@ class RenderSceneWiringTest(unittest.TestCase):
         chain = [(n["inputs"]["lora_name"], n["inputs"]["strength_model"])
                  for n in wf.values()
                  if n.get("class_type") in ro.LORA_CLASSES]
-        # 第 1 槽 detailer@0.35 被换成 char_x@0.9，其余原样（含第 5 槽那个
-        # detailer@0.8——模板里它出现两次，别误判成没换干净）
+        # 第 1 槽 detailer@0.35 被换成 char_x@0.9，其余原样（第 5 槽是
+        # Anima_in_real@0.8，2026-10-26 按爆款版换掉原来的第二个 detailer）
         self.assertEqual(chain, [
             ("char_x.safetensors", 0.9),
             ("star cat-000022.safetensors", 0.35),
             ("ANIMA_MODARE_V2.safetensors", 0.3),
             ("_cowani_epoch_10.safetensors", 0.8),
-            ("anima_context_detailer_base10.safetensors", 0.8),
+            ("Anima_in_real_update_v2_epoch_20.safetensors", 0.8),
             ("reina_v1_epoch14.safetensors", 0.8)])
         self.assertEqual(wf["2"]["inputs"]["steps"], 26)
         lat = [n for n in wf if wf[n]["class_type"] == "EmptyLatentImage"][0]

@@ -12,8 +12,9 @@
 
 anima-line 是**两段采样**（摸清结构才敢写覆盖，节点号以 2026-10-13 模板为准）：
   - 第一段 KSampler（节点 2）：latent 来自 EmptyLatentImage，denoise=1，
-    下面挂 6 个 `LoraLoaderModelOnly`（16/15/28/29/30/31，其中
-    `anima_context_detailer_base10` 出现两次、强度 0.35 和 0.8）。
+    下面挂 6 个 `LoraLoaderModelOnly`（16/15/28/29/30/31，第 5 槽原先是第二个
+    `anima_context_detailer_base10`@0.8，2026-10-26 按爆款版换成
+    `Anima_in_real_update_v2_epoch_20`@0.8，所以 detailer 只剩一次）。
     **LoRA 只在这一段生效。**
   - 第二段 KSampler（节点 27）：latent 来自 LatentUpscaleBy（×1.2），
     denoise=0.25，model 挂在**另一个底模**（silvermoonmix）上、**不接 LoRA**。

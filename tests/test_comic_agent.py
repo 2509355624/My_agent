@@ -1862,6 +1862,42 @@ class ChatReviseTest(unittest.TestCase):
         self.assertIn("答复：", p)
         self.assertIn("完整剧本", p)
         self.assertIn("分镜规范全文", p)
+        self.assertIn("不加格", p)   # 2026-10-26：明确「加格删格不是你的活」
+
+    def test_panel_count_fact_is_fed_in(self):
+        """2026-10-26：把「当前剧本共几格」当事实塞进 user 消息。
+
+        由来：作者 17 格的稿子，模型自己多加一格 `## 18` 交回来，格号一比就
+        整份被拒，作者只看到「AI 返回完整剧本」。抽象规则（格号不许增删）
+        不如把具体数字摆在眼前。
+        """
+        three = _script("画面: safe, 1girl, solo",
+                        "画面: safe, 1girl, solo",
+                        "画面: safe, 1girl, solo")
+        r, m = self._call("答复：好", script=three)
+        fed = " ".join(str(x.get("content") or "") for x in m.call_args.args[0])
+        self.assertIn("当前剧本共 3 格", fed)
+        self.assertIn("## 01 … ## 03", fed)
+        self.assertIn("正好 3 个", fed)
+
+    def test_extra_panel_gets_human_reply_not_full_script(self):
+        """多交一格时不把 8000 字原稿糊进聊天框，只报事实。"""
+        two = _script("画面: safe, 1girl, solo",
+                      "画面: safe, 1girl, solo")
+        extra = two + "\n## 03\n画面: safe, 1girl, solo, sad\n气泡: （女）嗯。\n"
+        r, _ = self._call(extra, script=two)
+        self.assertFalse(r["changed"])
+        self.assertIsNone(r["script"])
+        self.assertIn("多出 ## 03", r["reply"])
+        self.assertIn("交回 3 格，当前剧本是 2 格", r["reply"])
+        self.assertNotIn("画面:", r["reply"])        # 不再整份贴出来
+        self.assertTrue(any("格号" in x for x in r["warnings"]))
+
+    def test_prose_reply_without_marker_is_shown_as_is(self):
+        """模型忘写 `答复：` 直接说人话 —— 正文里没有 `## NN`，按讨论展示。"""
+        r, _ = self._call("你想改哪一格？先说清楚我再动。")
+        self.assertEqual(r["reply"], "你想改哪一格？先说清楚我再动。")
+        self.assertFalse(r["changed"])
 
 
 class PrevStoryTest(unittest.TestCase):
