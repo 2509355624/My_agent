@@ -416,15 +416,16 @@ class BareKrea2WordTest(unittest.TestCase):
         text = "krea2-coscandid：realistic cosplay photo, 1girl"
         self.assertEqual(direct_gen._parse_channel(text)[0], "krea2-coscandid")
 
-    def test_moss_defaults_to_the_four_step_channel(self):
-        """2026-10-18 00:25 用户拍板：**喊「moss」就走 4 步那条**。
+    def test_moss_defaults_to_the_eight_step_channel(self):
+        """2026-10-26 用户拍板：**喊「moss」就走 8 步那条**。
 
-        原话「我喊 moss，你给我默认跑 moss4，除非有人喊 moss45 才跑 45 步长的，
-        不然太耗时了」——两个喊法落两个目录：
-        `moss` / `moss4` / 「moss 4步」→ `skills/moss/`（DMD 4 步，默认）；
-        `moss50` / 「moss 50步」       → `skills/moss50/`（50 步，点名才走）。
-        目录就是照这个语义摆的（`skills/moss/` 装 4 步），所以 skill id
-        等于用户嘴里的词，工具那条路模型自己填也不会填反。
+        原话「moss渠道，我们说 moss 的时候，默认使用 8 步长的这个 moss，4 步长的
+        moss 就不用了」——理由就是 8 步档能一字不差地印中文（实测「云深茶室」四字
+        全中）。所以：
+        `moss` / `moss4` / `moss8` / 「moss 8步」→ `skills/moss8/`；
+        `moss50` / 「moss 50步」                 → `skills/moss50/`（点名才走）。
+        ⚠️ 4 步档（`skills/moss/`）**目录保留但不再被点名**——渲染参数的测试还拿
+        它当样本渠道，删目录会连累那边。
 
         2026-10-20：慢速档 45 步 → 50 步、改名 `moss50`，**旧名 `moss45` 停用**
         （用户选「只认 moss50」）。
@@ -433,17 +434,24 @@ class BareKrea2WordTest(unittest.TestCase):
         所以长名必须显式登记、且排在裸词前面。`mossy` 这种真单词仍留在正文里。
         """
         self.assertEqual(direct_gen._parse_channel("moss 一只猫"),
-                         ("moss", "一只猫"))
+                         ("moss8", "一只猫"))
         self.assertEqual(direct_gen._parse_channel("moss50 一只猫"),
                          ("moss50", "一只猫"))
-        # 「moss4」「moss 4步」都是默认那条的同义词，不该再分出一条渠道
+        # 「moss4」是老喊法：不报错，但**也不许**再把人带回 4 步档
         self.assertEqual(direct_gen._parse_channel("moss4 一只猫"),
-                         ("moss", "一只猫"))
+                         ("moss8", "一只猫"))
         self.assertEqual(direct_gen._parse_channel("moss 4步 招牌"),
-                         ("moss", "招牌"))
+                         ("moss8", "招牌"))
+        # 显式喊 8 步也认（模型/用户都可能这么写）
+        self.assertEqual(direct_gen._parse_channel("moss8 一只猫"),
+                         ("moss8", "一只猫"))
+        self.assertEqual(direct_gen._parse_channel("moss 8步 招牌"),
+                         ("moss8", "招牌"))
         # 「步」要被一起吃掉，正文里不能剩孤零零一个字
         self.assertEqual(direct_gen._parse_channel("moss50步 招牌"),
                          ("moss50", "招牌"))
+        self.assertEqual(direct_gen._parse_channel("moss8步 招牌"),
+                         ("moss8", "招牌"))
         self.assertIsNone(direct_gen._parse_channel("mossy stone wall")[0])
         # 旧名已停用：不能再被认成渠道（会落默认 / 回问，而不是静默跑 50 步）
         self.assertIsNone(direct_gen._parse_channel("moss45 一只猫")[0])
@@ -1111,7 +1119,9 @@ class NamedChannelReplyRetryTest(unittest.TestCase):
             '"skill": "moss"}'])
         self.assertEqual(out, "")
         self.assertEqual(m_llm.call_count, 2)
-        self.assertEqual(m_gen.call_args.kwargs["skill"], "moss")
+        # 模型填的是老喊法 `moss`，`_fixed_chan` 会归一成 8 步档 —— 这正是
+        # 2026-10-26 之后要的行为（4 步档不再被点名）。
+        self.assertEqual(m_gen.call_args.kwargs["skill"], "moss8")
         # 重问那一次必须把「点名渠道 = 下单」说明白，否则问了也白问
         self.assertIn("点名了渠道", m_llm.call_args[0][0][0]["content"])
 
@@ -3419,10 +3429,15 @@ class MossPlainChannelTest(unittest.TestCase):
             with self.subTest(word=word):
                 self.assertIn(word, md)
 
-    def test_tool_prompt_param_teaches_the_column_layout(self):
-        """主 agent 走 `generate_image` 那条路看不到 `chan_hint`，得写在参数说明里。"""
+    def test_tool_prompt_param_teaches_the_moss_text_rules(self):
+        """主 agent 走 `generate_image` 那条路看不到 `chan_hint`，得写在参数说明里。
+
+        2026-10-26 换成本地 8 步档那套规范（双引号锁字 + Layout JSON），
+        源头是 `skills/moss-image-prompt/SKILL.md` §9 / §15；旧的「逐列编号 /
+        Column 1」写法已废弃（那是 4 步档时期的土办法）。
+        """
         desc = gi.tool["parameters"]["properties"]["prompt"]["description"]
-        for word in ("每一列", "Column 1", "楷书", "透视"):
+        for word in ("双引号", "Layout JSON", "bbox", "字号"):
             with self.subTest(word=word):
                 self.assertIn(word, desc)
 

@@ -385,21 +385,23 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    "通用": "krea2-general",
                    "奶油": "krea2-creamy",
                    "柔光": "krea2-softlight",
-                   # moss（MOSS-Image，本地 5B）：2026-10-18 00:25 用户拍板
-                   # **「moss」默认走 4 步那条**（原话「我喊 moss，你给我默认跑 moss4，
-                   # 除非有人喊 moss45 才跑 45 步长的，不然太耗时了」）。
-                   #   `moss` / `moss4` / `moss4步` / `moss 4步` → `skills/moss/`
-                   #        （DMD 4 步 / 1088×1920 / 实测 31 秒）
-                   #   `moss50` / `moss50步` / `moss 50步`  → `skills/moss50/`
-                   #        （50 步 / 1024×1024 / ~3 分钟）
+                   # moss（MOSS-Image，本地 5B）：
+                   # 2026-10-26 用户拍板**「moss」默认走 8 步那条**（原话「moss渠道，
+                   # 我们说 moss 的时候，默认使用 8 步长的这个 moss，4 步长的 moss
+                   # 就不用了」）——4 步档（`skills/moss/`）**保留但不再被点名**，
+                   # 只是给老的 workflow 测试当样本渠道。
+                   #   `moss` / `moss4` / `moss8` / `moss8步` → `skills/moss8/`
+                   #        （lodestones 8 步适配器 / 1024×1024 / 实测 25~35 秒，
+                   #         **中文刻字四字不差**，这就是选它的理由）
+                   #   `moss50` / `moss50步`                 → `skills/moss50/`
+                   #        （50 步 / 1024×1024 / ~3 分钟；moss 漫画台 `/moss` 也用它）
                    # ⚠️ 2026-10-20 用户把 45 步那档提到 50 步，**旧名 `moss45` 停用**
                    #    （原话「moss45步改成moss50步」+ 选「只认 moss50」）——别再
                    #    把 moss45 加回别名表，那会变成两条同名不同步数的渠道。
-                   # ⚠️ 目录是**按这个语义摆的**（`skills/moss/` 装 4 步），所以
-                   #    skill id 就等于用户嘴里的词，工具那条路（模型自己填 skill）
-                   #    也不会填错——别再引入一层「显示名 → 内部名」的别名表。
-                   #    带「步」的写法也认（正则把「步」吃进去了，这里得能落回 id）。
-                   "moss": "moss", "moss4": "moss", "moss4步": "moss",
+                   # ⚠️ `moss4` 现在也指向 8 步：老用法不该报错，但也不该再把用户
+                   #    带回 4 步档（用户明确说 4 步不用了）。
+                   "moss": "moss8", "moss4": "moss8", "moss4步": "moss8",
+                   "moss8": "moss8", "moss8步": "moss8",
                    "moss50": "moss50", "moss50步": "moss50",
                    "日系": "krea2-rella"}
 _FIXED_CHAN_RE = re.compile(
@@ -442,13 +444,16 @@ _FIXED_CHAN_RE = re.compile(
     r"|krea2(?![0-9A-Za-z_-])"
     # moss（MOSS-Image，本地 5B）：英文单词 id，但中文用户的「moss」不会拿去当
     # 画面内容（苔藓一般写「青苔」），整词可认。
-    # ⚠️ 裸 `moss` = **4 步那条（默认）**；`moss50` 才是 50 步。**长名必须排在
-    #    裸 `moss` 前**：`moss4` / `moss50` 里的数字本来就被尾部 `(?![0-9A-Za-z_])`
-    #    挡住（裸 `moss` 的前瞻看见数字直接失败），不显式登记就整句交给模型了。
+    # ⚠️ 裸 `moss` = **8 步那条（默认）**；`moss50` 才是 50 步。**长名必须排在
+    #    裸 `moss` 前**：`moss4` / `moss8` / `moss50` 里的数字本来就被尾部
+    #    `(?![0-9A-Za-z_])` 挡住（裸 `moss` 的前瞻看见数字直接失败），不显式登记
+    #    就整句交给模型了。
     #    `\s*步?` 末尾那个「步」必须一起吃掉（跟上面 `qwen\s*30\s*步?` 同理）：
     #    用户会写「moss50步 招牌」，不吞掉的话正文里会剩一个孤零零的「步」。
     #    ⚠️ 2026-10-20 起 **`moss45` 已停用**（50 步那档改名），这里别再加回来。
-    r"|sd|qwen-hd|qwen|nffa|nai|cunny|miao|moss\s*50\s*步?|moss\s*4\s*步?|moss)"
+    #    ⚠️ 2026-10-26 起 **裸 `moss` 和 `moss4` 都落 8 步档**（见别名表注释）。
+    r"|sd|qwen-hd|qwen|nffa|nai|cunny|miao"
+    r"|moss\s*50\s*步?|moss\s*4\s*步?|moss\s*8\s*步?|moss)"
     r"(?![0-9A-Za-z_])",
     re.I)
 
@@ -918,7 +923,7 @@ GUIDE_TEXT = (
     "　nffa　　插画感\n"
     "　cunny　超分重渠道 · 单张 2~4 分钟\n"
     "　miao　　皮肤质感滑嫩 · 2x 出 3072×4608\n"
-    "　moss　　MOSS-Image · 图里写中英文最准 · 默认这条（4 步 1088×1920 约 31 秒）\n"
+    "　moss　　MOSS-Image · 图里写中英文最准 · 默认这条（8 步 1024×1024 约 30 秒）\n"
     "　moss50　同一模型的 50 步慢速档 · 1024×1024 · 约 3 分钟（要点名才走）\n"
     "　nai　　 NovelAI 云端 · 认画师串/权号\n"
     "\n"
@@ -1245,7 +1250,7 @@ _MASTER_TEMPLATE = (
     "没图时回一句「修复需要先有一张图」。\n"
     "\n"
     "4. 垫图能力在 silver 系和 qwen 系，silver 有锁构图骨架；jank、nffa、cunny、"
-    "miao、krea2 系、sd、moss 是文生图专用，填了会退回文生图、白等一轮。"
+    "miao、krea2 系、sd、moss8 是文生图专用，填了会退回文生图、白等一轮。"
     "用户只是评价这张图、或只要反推提示词时，`source_image` 留空，本轮不画。\n"
     "\n"
     "5. 本轮一张引用图都没有、用户却明说「图生图 / 垫图」时，回一句"
@@ -1394,7 +1399,7 @@ _MASTER_TEMPLATE = (
     "| sd | `image_gen_v1` | 点名 sd |\n"
     "| jank | `jank` | 点名 jank |\n"
     "| nffa、cunny、miao | 同名 id | 点名才用，cunny / miao 很慢 |\n"
-    "| moss | `moss` | 点名 moss，本地 4 步档，出字最准 |\n"
+    "| moss | `moss8` | 点名 moss，本地 8 步档，出字最准 |\n"
     "| moss50 | `moss50` | 点名 moss50，50 步慢速档 |\n"
     "| anima线条 | `anima-line` | 点名，线条感重 |\n"
     "| anima写实 | `anima-real` | 点名，真人质感 |\n"
@@ -1507,7 +1512,7 @@ _REVISE_TEMPLATE = (
     "  ⚠️ 通用「krea2」已下架，原话只说了 krea2 没带风格词时**别填 krea2 系**"
     "（那 13 个名字都不是他说的），skill 别填。\n"
     "  nffa / cunny / miao = 原话点名才填；\n"
-    "  moss = 原话点名「moss」才填（MOSS-Image 4 步版，画面出字最准，纯文生图）；\n"
+    "  moss = 原话点名「moss」才填（MOSS-Image **8 步版**，画面出字最准，纯文生图）；\n"
     "  moss50 = 原话点名「moss50」才填（同模型 50 步，慢，纯文生图）；\n"
     "  jank = 原话明说「jank」才填（用户自定义渠道）。\n"
     "  silver-hd = silver 的 4x 超清版，原话明说「silver-hd」或「silver 超清」才填。\n"
@@ -1560,7 +1565,8 @@ _REVISE_TEMPLATE = (
     "改变」「换个种子重画」）→ **不许留空、不许反问**：prompt 直接填**这张图"
     "完整的画面描述**（自家图用上面「原提示词」那段原词，别人的图按画面写全），"
     "要垫图就照 ① 填 `source_image`。\n"
-    "  ⚠️ jank / nffa / cunny / miao / krea2 系 / sd / moss / moss50 **没有图生图骨架**，"
+    "  ⚠️ jank / nffa / cunny / miao / krea2 系 / sd / moss / moss8 / moss50 "
+    "**没有图生图骨架**，"
     "别给它们填 `source_image`（填了会自动退回文生图、白等一轮）。"
     "只是评价这张图 → **不填**。\n"
     "- {lang}\n"
