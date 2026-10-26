@@ -1028,6 +1028,50 @@ def _place_notes(text, notes):
 _PREAMBLE_HEAD_RE = re.compile(r"^\s*#")
 
 
+# 「状态账本」三行（2026-10-26）。编剧动笔前先写这三行再写分镜，用来防跨格穿帮：
+# 脱了外套下一格又穿回去、扫帚凭空消失、被抱着下一格已经瘫在墙角。
+#
+# 模型偶尔写成 `账本：服饰：…` / `【账本】-服饰: …`，所以只认「账本」+ 分隔符 +
+# 三类关键词，其余行一概不动（宁可漏抽，也不要把正文吃掉）。
+_LEDGER_LINE_RE = re.compile(
+    r"^\s*[【\[]?\s*(?:状态)?账本\s*[】\]]?\s*[-－—–:：]\s*"
+    r"(服饰|道具|位置)\s*[:：]\s*(.*)$")
+
+
+def _extract_ledger(text):
+    """抽走「状态账本」三行，返回 (剩下的正文, ["服饰：…", "道具：…", …])。
+
+    必须在 `_strip_preamble` **之前**调：账本按要求写在 `# 标题：` 前面，而
+    `_strip_preamble` 会把第一个 `#` 之前的内容整段砍掉，晚一步就丢了。
+
+    账本不参与校验（`check` 只看格子），也不进生图提示词；抽出来的行由
+    `_place_notes` 放回剧本头部当备注——作者确认剧本时能一眼看到服饰 / 道具 /
+    位置的轨迹，补正和修订也会把它当头部忽略（`parse_script_text` 只认第一个
+    `## NN` 之后的格子）。
+    """
+    if not text:
+        return text, []
+    kept, ledger = [], []
+    for ln in text.splitlines():
+        m = _LEDGER_LINE_RE.match(ln)
+        if m:
+            item = (m.group(1) + "：" + m.group(2)).strip()
+            if item not in ledger:
+                ledger.append(item)
+            continue
+        kept.append(ln)
+    if not ledger:
+        return text, []
+    return "\n".join(kept), ledger
+
+
+def _with_ledger(notes, ledger):
+    """把账本行挂到备选记录前面（同进剧本头部注释区）。"""
+    if not ledger:
+        return notes
+    return ["[账本] " + x for x in ledger] + list(notes)
+
+
 def _strip_preamble(text):
     """砍掉剧本开头的碎碎念，从第一行 `#`/`##` 起算。
 
@@ -1155,10 +1199,18 @@ _TOOLS_SECTION = """【你能用的三个工具，以及**怎么调用**】
 - 库里命中 → 用返回的 tag 名（把下划线换成空格写进剧本）。
 - 一个中文名出来几十个候选 → 自己挑最贴合画面的那一个，把**其他候选**记进
   `备选:` 行（见下面「歧义怎么办」）。
-- 查不到 → 换个说法再查；换两三次仍查不到，就用语义最近的库里标签，
-  **绝不要自己造一个库里没有的 tag**。
+- 查不到 → 换个说法再查；换两三次仍查不到，**分两类处理**：
+  - **动作 / 属性 / 服饰**：用语义最近的库里标签，**绝不自己造新 tag**。
+  - **物件与空间关系**（`on the left side of the red wooden desk`、`beside her right
+    knee`、`within her reach`）：这类**本来就不在库里**，直接按英文介词短语写，
+    别拿最近的标签去凑——凑出来的标签表达不了方位，模型只会把道具画飘。
 - 需要时用 read_file 读完整规范（anima-tags/references/spec.md）与示例
   （anima-tags/references/examples.md）；用 web_search 查某个角色的作品出处。
+- **拿不准「标签怎么和句子混着写」→ 读 `ai-prompts/references/hybrid-flow.md`**
+  （分工原则：标签管稳定属性，句子管空间关系 / 互动 / 因果，口诀「骨架用 tag，
+  血肉用句子」）。**拿不准 Anima 的写法与权重 → 读 `ai-prompts/references/models.md`
+  的「## Anima」一节**（三写法都合法、权重 1.5 起步、标签 dropout 不必穷举）。
+  这两个文件按需读，别一上来就全读。
 """
 
 # 跳过查库版。三件事必须说死：没有工具 / 立刻出稿 / 标签怎么写。
@@ -1652,16 +1704,46 @@ __VIEW_DECL__
 - 交稿前把每格的 `标签` + `气泡` 按顺序连起来读一遍，像读一条真的漫画：
   **读得通才交稿**；读不通就重写那几格，不许硬交。
 
+【动笔前先写「状态账本」——防跨格穿帮的唯一办法】
+你一次要写 __PANELS__ 格。写到第 15 格时，你已经记不清第 3 格发生过什么——
+所以动笔前先把状态列成三行账本，写分镜时照着它走。
+
+格式（固定三行，放在 `# 标题：` **之前**，一条一行，别写长）：
+账本-服饰: <哪几格穿什么、第几格脱/换、脱掉的那件现在在哪>
+账本-道具: <每个进画面的道具：谁拿着 / 放在哪、第几格移动过>
+账本-位置: <每段她在哪、什么姿态、第几格被移动过>
+
+示例（照这个粒度）：
+账本-服饰: 01-05 白针织衫+藏青百褶裙+黑丝；06 脱掉针织衫露白蕾丝胸罩；07-12 白吊带+白蕾丝胸罩+百褶裙
+账本-道具: 棕色木扫帚 01-02 她手里，03 掉地上；白茶杯红茶半杯，红木桌左侧她手边
+账本-位置: 01-05 站着靠门；06 被按在墙边；10 被抱起；12 瘫坐墙角
+
+规矩：
+- 账本写完就不要再改（除非剧情真的变了，那也要在账本里体现出来）。
+- **每一格 `画面:` 的状态必须能在账本里找到依据。** 超出账本的新状态，要么先
+  补进账本（写清是哪一格、什么动作造成的），要么不许写。
+- **服饰状态改变的那一格必须是「动作格」**（正在脱 / 正在穿），下一格才是新状态。
+  这条最容易漏：脱了外套，下一格就得是内搭 / 内衣，**不许又穿回去**。
+- 账本三行不会进生图提示词（`# 标题：` 之前的行，代码会挪到剧本头部当备注）。
+
 __TOOLS__
 
 【画面字段的硬规则】（违反任何一条，这一格会被代码打回重写）
-1. **只能写逗号分隔的英文标签，绝不许出现句子。**
-   （**唯一的例外**：一格有两人及以上同框时，可以用**一句**简短英语短语把
+1. **标签为主 + 允许介词短语补位置，但不许写完整句子。** 三种成分各管一段：
+   - **标签**（默认）：发色 / 瞳色 / 服饰 / 姿势 / 场景 / 景别——可枚举的属性全用标签。
+   - **介词短语**（该用就用）：方位、距离、相对位置。标签库**没有**这类词（实测
+     `on table` / `to the left` 都查不到），只能用英文短语写。短语 = 名词 + 介词 +
+     名词，**不含主谓**，一般不超过 8 个词。**一格里最多两处**，多了模型顾此失彼。
+       对：`white ceramic mug on the left side of the red wooden desk`
+       对：`broom lying beside her right knee` / `within her reach` / `behind her back`
+   - **完整句子**（不许）：带主谓的整句一律禁止。
+       错：`the girl is standing at the bus door` → 对：`standing, bus interior, automatic door`
+       错：`girl with watery eyes about to cry` → 对：`tears, crying, looking down`
+   （**例外**：一格有两人及以上同框时，可以用**一句**简短英语短语把
    「谁对谁做什么」点清楚——见规则 16。）
-   错：girl with watery eyes about to cry
-   对：tears, crying, looking down
-   错：the girl is standing at the bus door
-   对：standing, bus interior, automatic door
+   ⚠️ **别把这条读成「只许堆标签」**：Anima 官方原话是「提示词越详细越好，短的
+   只会出平淡背景」，它的编码器是 Qwen3 语言模型。**空间关系、状态变化不许省**
+   （见规范「三·补 A 状态阶梯」「三·补 B 空间锚点」）。
    （⚠️ 别把"正在发生的动作"拆成姿势词组——`stepping off` / `one foot on ground`
    这类是黑名单，见规则 8 和规则 11。）
 2. **顺序**：安全级 → 人数 → 主体特征（发型/瞳色/配饰）→ 服装 → 动作姿势 →
@@ -1764,7 +1846,11 @@ __POV_RULES__
 
 
 【Anima 提示词规范（全文，必须遵守）】
-写法：**以标签为主，可以用简短的英语短语补充**——短词和英语短语都能写。
+写法：**以标签为主，用介词短语补空间关系**——短词、短语都能写，整句不许。
+Anima 官方原话：**「提示词越详细越好，短的只会出平淡背景」**；它的文本编码器是
+Qwen3-0.6B 语言模型（不是 CLIP-L/T5），自然语言和介词短语都认得。所以
+「桌子什么样、杯子在她哪一侧、这一格少了几层衣服」这类信息**必须写出来**，
+不要为了「像标签」而省掉。
 查库（search_tags）是**找更准的说法**用的参考，**不是白名单**：库里查不到不等于
 不能写，只要你能确定画面模型看得懂就照写（例：`white in-ear earphones`、
 `black backpack` 库里都没有，但都是对的写法）。反过来，库里**有**的标签也不
@@ -1781,8 +1867,10 @@ __SPEC__
 剧本契约（下游是程序按契约解析）。
 
 它的示例是**自然语言**写法（`girl wearing black lace bra`），本流程**只取它的
-规则、不取它的写法**：`画面:` 仍然写逗号分隔的英文标签，服饰写成
-`black lace bra, pink frilled shorts` 这样的标签，不要写 `girl wearing …` 整句。
+规则和空间短语、不取整句写法**：`画面:` 仍然以逗号分隔的英文标签为主，服饰写成
+`black lace bra, pink frilled shorts` 这样的标签，**不要**写 `girl wearing …` 整句；
+但方位 / 距离这类**必须用短语**（`on the left side of the red wooden desk`），
+见它新增的「三·补 A」「三·补 B」两节。
 
 ======== 连续剧情规范全文开始 ========
 __STORY_SPEC__
@@ -2396,6 +2484,7 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
     feedback = []
     last = ""
     last_notes = []
+    ledger = []
     why = ""
     for attempt in range(1, tries + 1):
         _emit(progress, "第 %d/%d 稿：直接写剧本（不查库）" % (attempt, tries)
@@ -2404,6 +2493,8 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
                                               model=model, max_rounds=max_rounds,
                                               progress=progress,
                                               no_search=no_search))
+        # 账本要在 `_strip_preamble` 之前抽（它写在 `# 标题：` 前面，晚了就被砍掉）
+        text, ledger = _extract_ledger(text)
         clean, notes = _extract_notes(_strip_preamble(text))
         # 空正文单独处理：这跟「交了稿但标签不对」是两回事。
         # 实测（2026-10-11）：模型整轮都在查库没动笔，正文是空串，而原来的代码
@@ -2430,9 +2521,9 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
             continue
         ok, why = check(clean, panels, brief, pov_mode=pov_mode)
         if ok:
-            log.info("[comic-agent] 剧本合格（第 %d 稿，%d 格，备选 %d 条）",
-                     attempt, panels, len(notes))
-            return _place_notes(clean, notes)
+            log.info("[comic-agent] 剧本合格（第 %d 稿，%d 格，备选 %d 条，账本 %d 行）",
+                     attempt, panels, len(notes), len(ledger))
+            return _place_notes(clean, _with_ledger(notes, ledger))
         log.warning("[comic-agent] 剧本不合格（第 %d 稿）：%s", attempt, why)
         last, last_notes = clean, notes
         feedback = [
@@ -2458,7 +2549,7 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
     log.error("[comic-agent] %d 稿都不合格，返回最后一稿（问题：%s）", tries, why)
     if why:
         last_notes = list(last_notes) + ["[警告] 校验未通过：%s" % why]
-    return _place_notes(last, last_notes)
+    return _place_notes(last, _with_ledger(last_notes, ledger))
 
 
 # ─── 内容补正（2026-10-11 十轮）──────────────────────────

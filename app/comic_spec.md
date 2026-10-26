@@ -134,6 +134,102 @@ bedroom, girl wearing old pink frilled pajamas and pink frilled shorts, bare fee
 
 ---
 
+## 三·补 A、状态阶梯（跨格连续性）
+
+**每一格的状态，必须能从上一格推出来。** 观众是顺着看的，中间漏一步就是穿帮。
+写第 15 格时你已经记不清第 3 格发生过什么——所以状态要在**每格画面里重新写全**，
+不能靠「前面写过了」。
+
+### 三类状态，每格都要写
+
+| 状态 | 写什么 | 例子 |
+| :--- | :--- | :--- |
+| **服饰** | 此刻**穿在身上**的每一件，含「敞开的 / 褪到哪」 | `white sailor uniform, open white sailor collar, white lace bra, navy pleated skirt` |
+| **道具** | 此刻在**谁手里 / 放在哪个位置** | `holding brown wooden broom` / `broom leaning against the metal shelf` |
+| **位置** | 此刻**姿态 + 所在点** | `standing by the door` / `sitting in corner, back against wall` |
+
+### 铁律：状态变了，必须有一格「动作格」
+
+脱、穿、放下、拿起、被抱起、被放下、走到别处——**每一次状态改变都要有一格明写这件事**，
+下一格才允许出现新状态。没有动作格直接跳状态 = 穿帮。
+
+| 错的（跳状态） | 对的（中间补一拍） |
+| :--- | :--- |
+| 16 格 `princess carry`（被抱着）→ 17 格 `sitting in corner`（已经瘫在墙角） | 16 被抱着 → **17 `being put down, sitting on floor, back against wall`** → 18 `sitting in corner` |
+| 01 格 `holding broom` → 03 格手里没了 | 01 拿着 → **02 `dropping broom, broom falling to floor`** → 03 `broom lying on the floor beside her` |
+| 04 格 `white knit sweater` → 05 格 `white camisole` | 04 穿着毛衣 → **05 `pulling sweater over her head, sweater lifted up`** → 06 `white camisole, white knit sweater on the bed beside her` |
+
+### 脱衣 / 换衣：写「分层剥落」，不写「脱了」
+
+衣服是一件件的。只写「脱了外套」，模型要么画成换了一整套、要么根本没变。
+必须写清三件事：**哪一件离开了身体、它现在在哪、身上还剩哪几层**。
+
+| 错的 | 为什么错 | 对的 |
+| :--- | :--- | :--- |
+| `took off her jacket` | 只有动作词，没说身上剩什么 | `off-shoulder white knit sweater lowered to her elbows, white camisole, navy pleated skirt` |
+| 05 格脱了外套，06 格又写回 `white knit sweater` | 脱掉的衣服自己穿回去了 | 05 起一律换成 `white camisole`，直到剧情让她再穿 |
+| `topless` | 泛化词，模型随机发挥 | `white lace bra, bare shoulders, white sailor shirt around her waist` |
+
+**分层顺序（从外到内）**：外衣（外套 / 衬衫 / 校服上衣）→ 内搭（吊带 / T 恤）
+→ 内衣（`black lace bra` / `black cotton panties`）→ 袜鞋（`black thighhighs` / `white socks` / `brown loafers`）。
+**脱一层就少写一层，不许跳层**（不能上一格还有校服上衣，下一格只剩内衣而没有脱上衣那一拍）。
+
+### 换装阶梯示例（外套 → 内衣）
+
+```
+01  white knit sweater, navy pleated skirt, black thighhighs, standing by the window
+02  white knit sweater lifted up, navy pleated skirt, black thighhighs, pulling sweater over her head
+03  white camisole, navy pleated skirt, black thighhighs, white knit sweater on the bed beside her
+04  white camisole, navy pleated skirt sliding down her legs, black thighhighs
+05  white camisole, black lace panties, black thighhighs, navy pleated skirt around her ankles
+06  white camisole, black lace panties, black thighhighs, sitting on the bed
+```
+
+02 是**动作格**（正在脱），03 起才是新状态；每一行都写全当时穿的所有层。
+（示例只演示服饰这一维，实际每格还要带场景 / 光照 / 景别 / 视角。）
+
+---
+
+## 三·补 B、空间锚点（道具与环境）
+
+只写「她前面有一杯水」，模型画出来的就是一个**飘在空中的杯子**。任何一个进画面的
+道具，都要回答四个问题，答不全等于没写。
+
+| 四问 | 必须写清的 | 例子 |
+| :--- | :--- | :--- |
+| **① 在什么家具上** | 材质 + 颜色 + 样式，**不能只写类别** | `red wooden desk`（不是 `desk`）/ `grey metal shelf` / `white bedside table` |
+| **② 在家具的哪一侧** | 左 / 右 / 中间 / 靠边 / 靠里 | `on the left side of the desk` / `at the front edge of the desk` |
+| **③ 离谁多近** | 她手边 / 一臂内 / 身后 / 两腿之间 | `within her reach` / `behind her back` / `beside her right knee` |
+| **④ 道具本身什么样** | 材质 + 颜色 + **内容物与状态** | `white ceramic mug half filled with black tea, steam rising`（不是 `a cup`） |
+
+### 方位用英文介词短语写，不用标签
+
+标签库里**没有**方位关系标签（实测 `on table` / `to the left` 都查不到），
+只有物件名（`cup` / `table`）。而 Anima 的文本编码器是 Qwen3 语言模型，
+**介词短语它读得懂**；`LEFT` / `RIGHT` / `FOREGROUND` / `BACKGROUND` 这几个词也实测有效。
+所以方位不要省、也不要硬凑标签，直接写短语。
+
+**分工**：物件名、属性、姿势用标签；方位、距离、接触、因果用介词短语。
+一格里的短语别超过两处——写多了模型会顾此失彼。
+
+### 错对对照
+
+| 错的 | 问题 | 对的 |
+| :--- | :--- | :--- |
+| `a cup of water in front of her` | 什么桌子、哪一边、杯子什么样，全没有 | `white ceramic mug half filled with water on the left side of the red wooden desk, within her reach` |
+| `a desk` | 只有类别，模型随机给一张桌子 | `red wooden desk, a stack of textbooks on its right side` |
+| `broom on the floor` | 没有相对位置，可能压在她腿上 | `brown wooden broom lying on the concrete floor beside her right knee` |
+| `phone on the bed` | 没写远近，容易画到手够不到的地方 | `black smartphone face up on the white bedsheet near her left hand` |
+| `holding a tray` | 不知道举在哪，容易和衣服糊在一起 | `holding a white plastic tray at her waist` |
+
+### 场景里的固定物件要跨格一致
+
+这一幕里那张桌子、那排货架，从第一格到最后一格用**同一组词**——`red wooden desk`
+不许这格写 `wooden table`、下格写 `desk`（模型会当成两张不同的桌子）。
+物件被移动或被放下时，按 A 节补一格动作格，并在之后每格写清新位置。
+
+---
+
 ## 四、男女双人场景额外规则
 
 | 规则 | 说明 |
@@ -325,6 +421,10 @@ bedroom, girl wearing old pink frilled pajamas and pink frilled shorts, bare fee
    （`pov hands`），绝不写 `1boy` / `2girls`，每格必带视角标签。
 
 AI 的唯一任务就是：**按格式输出，不加任何多余内容。**
+
+⚠️ 这句里的「多余内容」指的是**解释、前言、总结、代码块围栏**，**不是**指画面细节——
+空间锚点（桌子什么样、道具在她哪一侧）和状态阶梯（这一格穿了什么、少了几层）
+必须写足，见「三·补 A」「三·补 B」。两件事别搞反：格式要从简，内容要写满。
 
 ---
 

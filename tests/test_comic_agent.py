@@ -1353,7 +1353,7 @@ class PromptTest(unittest.TestCase):
         p = comic_agent._system_prompt(3)
         self.assertIn("连续剧情提示词生成规范", p)
         self.assertIn("连续剧情规范全文开始", p)
-        self.assertIn("不取它的写法", p)         # 规范是自然语言示例，只取规则
+        self.assertIn("不取整句写法", p)         # 规范是自然语言示例，只取规则 + 空间短语
         self.assertNotIn("__STORY_SPEC__", p)
         self.assertNotIn("__MAX_LABELS__", p)
 
@@ -1460,16 +1460,23 @@ class PromptTest(unittest.TestCase):
         self.assertIn("这一场景内保持不动", p)
 
     def test_no_longer_claims_pure_tag_writing(self):
-        """写法从「纯标签」放开成「标签为主 + 英语短语补充」。
+        """写法从「纯标签」放开成「标签为主 + 介词短语补空间关系」。
 
         用户原话：「我们的组合是短词和英语短语来着」——旧提示词却写着
         「本工作流用**纯标签**写法，规范第 5 节的混合写法本流程不用」，
         和用户要的正好相反。
+        2026-10-26 再放开一档：方位 / 距离这类标签库里根本没有的词
+        （实测 `on table` / `to the left` 查不到），必须允许英文介词短语。
         """
         p = comic_agent._system_prompt(3)
         self.assertNotIn("本工作流用**纯标签**写法", p)
-        self.assertIn("以标签为主，可以用简短的英语短语补充", p)
+        self.assertIn("标签为主 + 允许介词短语补位置", p)
+        self.assertIn("介词短语", p)
+        self.assertIn("不含主谓", p)              # 「什么算短语」的边界写清楚了
+        self.assertIn("on the left side of the red wooden desk", p)
         self.assertIn("不是白名单", p)
+        self.assertIn("三·补 A", p)               # 状态阶梯
+        self.assertIn("三·补 B", p)               # 空间锚点
         # 开头那句最显眼的话也不再是「每个标签都必须真实存在于库里」
         self.assertNotIn("每一个标签都必须", p)
         self.assertIn("唯一的生图提示词", p)
@@ -2048,7 +2055,7 @@ class FreeViewModeTest(unittest.TestCase):
         self.assertNotIn("POV 视角硬规则", free)
         self.assertIn("自由视角规则（规则 14–17）开始", free)
         # 规则 1–13（标签写法、颜色、地点、构图）两版共用，一条都不许少
-        for kw in ("只能写逗号分隔的英文标签", "navy pleated skirt",
+        for kw in ("标签为主 + 允许介词短语补位置", "navy pleated skirt",
                    "一格只能有一个明确地点"):
             self.assertIn(kw, free)
         # 模板正文里那两处以「全篇第一人称」为前提的声明也必须换掉
@@ -2168,7 +2175,7 @@ class ThirdViewModeTest(unittest.TestCase):
         self.assertNotIn("视角方（「我」）的手只在剧情真的需要时才入画", t)
         self.assertIn("画面里有几个人，手就长在他们身上", t)
         # 通用规则一条都不许少
-        for kw in ("只能写逗号分隔的英文标签", "navy pleated skirt",
+        for kw in ("标签为主 + 允许介词短语补位置", "navy pleated skirt",
                    "一格只能有一个明确地点"):
             self.assertIn(kw, t)
 
@@ -2221,6 +2228,78 @@ class ThirdViewModeTest(unittest.TestCase):
             comic_agent.write_script("x", panels=1, pov_mode="third")
         system = m.call_args.args[0][0]["content"]
         self.assertIn("【第三人称规则", system)
+
+
+class LedgerTest(unittest.TestCase):
+    """状态账本（2026-10-26）：编剧动笔前先写三行状态，代码抽出来放剧本头部。
+
+    由来：用户 17 格《放学后的器材室》16 格是 `princess carry`（被抱着）→ 17 格
+    已经 `sitting in corner`（瘫在墙角），中间缺「被放下」那一拍；01/02 手里的
+    扫帚到 03 格凭空消失。前期没交接，后期补正 + 作者一起返工了一个多小时。
+    账本的作用是让模型写第 15 格时还有表可查（自回归里先写的 token 会留在上下文）。
+    """
+
+    DRAFT = (
+        "账本-服饰: 01-05 白针织衫；06 脱掉露白蕾丝胸罩\n"
+        "账本-道具: 棕色木扫帚 01-02 她手里，03 掉地上\n"
+        "账本-位置: 01 靠门站着\n"
+        "\n"
+        "# 标题：器材室\n\n## 01\n"
+        "画面: safe, 1girl, solo, pov, white knit sweater\n"
+        "气泡: （女）嗯\n标签1: 她站在门口\n"
+    )
+
+    def test_extracts_three_lines(self):
+        rest, ledger = comic_agent._extract_ledger(self.DRAFT)
+        self.assertEqual(len(ledger), 3)
+        self.assertTrue(ledger[0].startswith("服饰："))
+        self.assertNotIn("账本", rest)
+        self.assertIn("# 标题：器材室", rest)
+
+    def test_tolerates_format_variants(self):
+        """模型会写成 `【账本】-道具：…` / `账本：位置：…`，都得认。"""
+        t = ("【账本】-服饰：01 白衬衫\n"
+             "账本：道具：白茶杯\n"
+             "账本 - 位置: 01 站着\n")
+        _, ledger = comic_agent._extract_ledger(t)
+        self.assertEqual([x.split("：")[0] for x in ledger], ["服饰", "道具", "位置"])
+
+    def test_no_ledger_keeps_text_untouched(self):
+        t = "# 标题：x\n## 01\n画面: a\n"
+        rest, ledger = comic_agent._extract_ledger(t)
+        self.assertEqual(rest, t)
+        self.assertEqual(ledger, [])
+
+    def test_dedupes(self):
+        t = "账本-服饰: 甲\n账本-服饰: 甲\n"
+        _, ledger = comic_agent._extract_ledger(t)
+        self.assertEqual(ledger, ["服饰：甲"])
+
+    def test_plain_line_starting_with_ledger_kept_as_body(self):
+        """不是「账本 + 三类关键词」的行不许吃进账本——宁可漏抽，别吃正文。"""
+        t = "账本说明：这一话共 8 格\n## 01\n"
+        rest, ledger = comic_agent._extract_ledger(t)
+        self.assertEqual(ledger, [])
+        self.assertIn("账本说明", rest)
+
+    def test_lands_in_head_not_in_panel(self):
+        """账本落在第一个 `## NN` 之前（解析器忽略头部），一个字都不进格子。"""
+        rest, ledger = comic_agent._extract_ledger(self.DRAFT)
+        clean, notes = comic_agent._extract_notes(comic_agent._strip_preamble(rest))
+        out = comic_agent._place_notes(clean, comic_agent._with_ledger(notes, ledger))
+        head, _, panels = out.partition("## 01")
+        self.assertIn("[账本] 服饰：", head)
+        self.assertNotIn("账本", panels)
+        _, got = comic.parse_script_text(out)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["scene"].strip(),
+                         "safe, 1girl, solo, pov, white knit sweater")
+
+    def test_write_script_puts_ledger_in_head(self):
+        with mock.patch.object(comic_agent, "run_rounds", return_value=self.DRAFT):
+            out = comic_agent.write_script("x", panels=1)
+        self.assertIn("[账本] 位置：", out)
+        self.assertLess(out.index("[账本]"), out.index("## 01"))
 
 
 if __name__ == "__main__":
