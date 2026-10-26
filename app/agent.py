@@ -507,12 +507,40 @@ def _history_for_llm(history):
     return result
 
 
-def _attach_images(llm_history, images):
+def _image_owner_note(images, owners):
+    """图张数与发送者的对照说明；没有可标的信息时返回空串。
+
+    为什么要写进 text：多模态只按数组顺序挂图，模型看不到「哪张是谁发的」。
+    群里一轮最多来 3 张（QQ_IMAGE_MAX_COUNT），可能来自不同人，不写就必然
+    串人——把 A 发的图安到 B 头上，是「关系网乱」的头号来源（_vision_head
+    当初就是为这个加的，直读这条路同样需要）。
+
+    单张且发送者不明时返回空串：那种情况写一句「发送者不明」只是噪音，
+    模型自己也知道这是刚进来的图。
+    """
+    total = len(images)
+    own = list(owners or [])
+    named = [o for o in own if o]
+    if not named and total <= 1:
+        return ""
+    if total == 1:
+        return "\n\n[本轮图片：%s 发的]" % own[0]
+    items = []
+    for i in range(total):
+        who = own[i] if i < len(own) else ""
+        items.append("%d. %s" % (i + 1, who or "发送者不明"))
+    return "\n\n[本轮 %d 张图，按顺序：%s]" % (total, "、".join(items))
+
+
+def _attach_images(llm_history, images, owners=None):
     """把本轮的用户消息升级为多模态（text + 若干 image_url），供带图对话使用。
 
     只在第 1 轮调用。一张压缩后的图 base64 有几十万字符：每轮重复下发既白烧
     输入 token，又让前缀缓存每轮都 miss；而模型看图只需一次——后续轮次能从
     它自己写下的分析、以及工具返回结果里获得信息。
+
+    owners 与 images 一一对应（可短可缺），用来在 text 末尾补一行归属说明，
+    见 _image_owner_note。不传 = 不标，行为与从前一致。
 
     实现上有两条不能碰的红线：
     1. **只替换列表元素，绝不修改元素内部的 dict**。_history_for_llm 返回的
@@ -522,6 +550,7 @@ def _attach_images(llm_history, images):
        的 pre_tool_results（手打 [[TOOL:]] 的结果）之前，倒序找别把工具结果
        当成用户消息升级了。
     """
+    note = _image_owner_note(images, owners)
     for i in range(len(llm_history) - 1, -1, -1):
         msg = llm_history[i]
         if msg.get("role") != "user":
@@ -529,7 +558,7 @@ def _attach_images(llm_history, images):
         content = msg.get("content")
         if not isinstance(content, str) or content.startswith("[工具结果] "):
             continue
-        parts = [{"type": "text", "text": content}]
+        parts = [{"type": "text", "text": content + note}]
         for data_url in images:
             parts.append({"type": "image_url", "image_url": {"url": data_url}})
         llm_history[i] = {"role": "user", "content": parts}
@@ -989,7 +1018,7 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
             # 带图对话（仅当本轮模型有视觉）：第 1 轮把用户消息升级成多模态，
             # 之后轮次不再带图（图片本体始终不在 history 里，历史中只有文本）
             if attach_mode and turn_count == 1:
-                _attach_images(llm_history, images)
+                _attach_images(llm_history, images, image_owners)
             # 状态栏追加在尾部，动态变化不毒化前缀缓存
             llm_history.append(_status_message(history, extra_context))
             # 把这条尾巴的大小记到当前线程，供 llm._record_usage 在 [cache]

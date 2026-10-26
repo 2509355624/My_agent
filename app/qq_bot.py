@@ -1249,14 +1249,24 @@ class SessionRunner:
             # strict=True：管理界面指定了模型就只打它，失败原地重试、不查拉黑表、
             # 不顺链换家（本地模型一次 400/500 被 3600s 拉黑后整晚静默降级到
             # deepseek，测试全白测）。没指定模型的 agent 照旧走兜底链。
-            # force_vision=True：带图消息一律先走本地识图（vision_model，
-            # 零成本）转文字，不让云模型多模态直读烧图片 token。
+            # force_vision=False（2026-10-26 用户拍板，原为 True）：带图消息
+            # 由主模型直接读图，看图与调工具在同一次请求里完成。
+            # 翻过来的两条依据（都是实测）：
+            #   1. **请求次数**：识图分离 = 每条带图消息 2 次请求（识图 + 主对话）。
+            #      中转站限额 1000 次/天，我们近 16 天日均 1017 次已经贴线，
+            #      而 vision 类占 18~44%——省这一次是最直接的减负。
+            #   2. **token 反而更省**：识图那一次固定 2742 token（其中约 1920 是
+            #      中转站自己注入的系统提示），而把图直接挂进主请求只多 452。
+            # 原来写 True 的理由是「本地 llama MiMo 识图零成本」，但 vision_model
+            # 早已指向云端中转站，那个前提已经不存在了。
+            # 能力兜底不在这里判：agent.py 会按本轮实际生效模型的 provider_vision
+            # 决定走直读还是退回识图转文字，配了纯文本家（volc / scnet）照样安全。
             for ev in run_agent_stream(text, history, agent_id=run_agent,
                                        image=data_urls or None,
                                        image_owners=image_owners or None,
                                        extra_context=extra_context or None,
                                        session_key=self.session_key,
-                                       strict=True, force_vision=True):
+                                       strict=True, force_vision=False):
                 etype = ev.get("type")
                 # 先落盘再处理（与 main.py 的契约一致）
                 if etype in SESSION_EVENTS:
