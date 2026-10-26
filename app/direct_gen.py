@@ -421,6 +421,14 @@ _FIXED_CHAN_RE = re.compile(
     # 不进那个表（原因见上面 map 里的长注释）。命中后 `_fixed_chan` 查不到键
     # 会原样返回 token，它本身就是合法渠道 id。
     r"|完整版|silver\s*完整版|sf"
+    # 2026-10-26 新增 `rs29`（Realskin 2.9B 底模版 clear，见 `skills/rs29/`）。
+    # ⚠️ 必须写进本正则：`_SKILL_ID_RE` 要求 id 里至少有一个 `-` / `_`，
+    #    而 `rs29` 是纯字母数字，走不了那条路（`sf` 同理，所以它也在这里）。
+    # ⚠️ **不往 `_FIXED_CHAN_MAP` 里加**：那是 difflib typo 候选池的 ASCII 键来源，
+    #    短 id 进池子容易被「s 一张图」这类输入劫持（`sf` 的既有教训）。
+    #    命中后 `_fixed_chan` 查不到键会原样返回 token，token 本身就是合法渠道 id。
+    # ⚠️ 尾巴 `29` 不写 `\s*`：用户会说「rs29」，不会说「rs 29」。
+    r"|rs29"
     r"|krea2\s*米山舞|krea2\s*日系|krea2\s*亚洲真人"
     r"|krea2\s*动漫真人|krea2\s*真人\s*cos"
     r"|krea2\s*宝可梦|krea2\s*柔光|krea2\s*奶油"
@@ -1383,6 +1391,11 @@ _MASTER_TEMPLATE = (
     "| anima soft、柔和 | `hd_3_soft` |\n"
     "| anima gloss、油亮 | `hd_3_gloss` |\n"
     "| anima curvy、丰满、肉感 | `hd_3_curvy` |\n"
+    "| rs29 | `rs29` |\n"
+    "\n"
+    "`rs29` **不是第五种画风**：它画风和 clear 一模一样（同样两段都用 Realskin、"
+    "同样 15+15 步 cfg 3、同样 3072×4608），只有底模从 1.3B 换成 2.9B —— "
+    "细节和光影更细，出图慢一点。用户点名 rs29 才走，别自己挑它。\n"
     "\n"
     "### 独立渠道\n"
     "\n"

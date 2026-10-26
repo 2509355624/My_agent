@@ -140,7 +140,9 @@ RETIRED = ("anima", "anima_realskin", "anima_2")
 HD_TIERS = {
     # 二段步数 2026-10-19 由 10 调到 20（用户要求「一段二段都是 20 步」）。
     # 注意 denoise 仍是 0.25——20 步的日程只取最后 1/4，实际有效约 5 步。
-    "3": (1024, 1536, 1.5, 1536, 2304, "er_sde", 20, 20),
+    # 2026-10-26 用户拍板四档统一 20+20 → **15+15**（原话：「之前改到 20x20 其实
+    # 和 15x15 没有区别」），四份 workflow.json 与 `_make_hd_channels.py` 同步改了。
+    "3": (1024, 1536, 1.5, 1536, 2304, "er_sde", 15, 15),
 }
 # 画风 → (一段底模前缀, 二段底模前缀)——跟 CHANNELS 那四个是同一套组合。
 HD_STYLES = {
@@ -248,7 +250,13 @@ def _lora_chain(wf):
 # ─── 渠道集合 ──────────────────────────────────────────────────────
 
 class ChannelSetTest(unittest.TestCase):
-    """动漫族**只剩 4 个**（`hd_3_<画风>`），旧档位一个都不许回来。"""
+    """动漫族**只剩 4 个**（`hd_3_<画风>`），旧档位一个都不许回来。
+
+    2026-10-26 加的 `rs29` **故意不算进这一族**：它是 clear 的「同画风、换 2.9B
+    底模」版，不属于尺寸档 × 画风的展开组合。它也没挂 `anima_` / `hd_` 前缀，
+    所以下面这条 startswith 断言天然不会把它算进来——校验单独放在
+    `TwoStageTest.test_rs29_is_clear_with_the_29b_base`。
+    """
 
     def test_the_anima_family_is_exactly_the_four_hd_3_channels(self):
         found = sorted(s for s in list_skills()
@@ -521,6 +529,31 @@ class BaseModelTest(unittest.TestCase):
         """四个渠道的骨架都是**两个** UNETLoader（`5` 一段 / `20` 二段）。"""
         for name in CHANNELS:
             self.assertEqual(len(_all(_load(name), "UNETLoader")), 2, name)
+
+    def test_rs29_is_clear_with_the_29b_base(self):
+        """2026-10-26 新增 `rs29`：**画风/参数照抄 clear，只把底模换成 2.9B**。
+
+        用户原话：「在 anima-clear 的基础上，增加新的渠道……符合特定的」，
+        名字定为 `rs29`（realskin 2.9 的缩写）。
+
+        它不是第 5 个画风：`_STYLE_RE` 里没有 `rs29`，画风词照旧只有
+        clear / soft / gloss / curvy，所以它只能靠点名走。
+
+        ⚠️ 两段必须是**同一块 2.9B**（同 clear 的两段同底模结构）：
+        混一块 1.3B 会同时驻留两份底模，还会混出没定义过的画风。
+        """
+        wf = _load("rs29")
+        loaders = _all(wf, "UNETLoader")
+        self.assertEqual(len(loaders), 2, "rs29 也是两段骨架")
+        files = {wf[n]["inputs"]["unet_name"] for n in loaders}
+        self.assertEqual(files, {"miaomiaoRealskin_anima29B10.safetensors"},
+                         "rs29 两段都该是 2.9B，不该混 1.3B")
+        steps = {wf[n]["inputs"]["steps"] for n in _all(wf, "KSampler")}
+        self.assertEqual(steps, {15}, "rs29 两段都该是 15 步（与 hd_3_* 同步）")
+        # 跟 clear 的骨架同构：采样器 / latent 放大 / 末尾像素放大都对得上
+        wf_clear = _load("hd_3_clear")
+        for ct in ("LatentUpscaleBy", "ImageUpscaleWithModel", "UpscaleModelLoader"):
+            self.assertEqual(len(_all(wf, ct)), len(_all(wf_clear, ct)), ct)
 
 
 # ─── 分辨率 / 输出尺寸 ─────────────────────────────────────────────
