@@ -9,16 +9,23 @@
      释放后目录消失；
   2. 别的进程持锁 → busy_others() 为真，等锁超时抛 TimeoutError（不无限等）；
   3. 心跳停超过 STALE 秒 = 僵尸锁，可以被抢（进程被强杀不会锁死全场）；
-  4. 释放前比 token：锁已经被别人抢走时绝不去删别人的。
+  4. 释放前比 token：锁已经被别人抢走时绝不去删别人的；
+  5. 排队号（2026-10-26）：只有队首能 mkdir、先登记的先进、票的僵尸也会清、
+     释放（含「锁已易主」这条路）一定会摘票——不摘就把整条队卡死。
 
 顺带钉住漫画批量的重启阈值：`batch="comic"` 走 COMFY_RELEASE_AFTER_COMIC（6），
 普通单张仍走全局 total（2）。
+
+⚠️ 这些用例会清 `comfy_gate.lock_dir()`，**只敢在临时目录里跑**——
+`config.state_path` 在 unittest 进程里恒走 `tempfile.mkdtemp()`，所以线上
+`state/comfy.lock`（正被 QQ 机器人持有）不会被碰。别把 state_path 换回真目录。
 
 只跑本文件：python -m unittest discover -s tests -p "test_comfy_gate.py"
 """
 
 import json
 import os
+import threading
 import time
 import unittest
 from unittest import mock
@@ -26,13 +33,25 @@ from unittest import mock
 from app import comfy_gate, image_jobs
 
 
+def _clear_dir(path):
+    """删掉 state 下的锁/票目录（含里面的文件）。"""
+    try:
+        for name in os.listdir(path):
+            os.remove(os.path.join(path, name))
+        os.rmdir(path)
+    except OSError:
+        pass
+
+
 class GateTest(unittest.TestCase):
     def setUp(self):
         self.lock = comfy_gate.lock_dir()
         self._clear()
+        _clear_dir(comfy_gate.queue_dir())
 
     def tearDown(self):
         self._clear()
+        _clear_dir(comfy_gate.queue_dir())
 
     def _clear(self):
         try:
@@ -59,6 +78,8 @@ class GateTest(unittest.TestCase):
             # 自己拿着不算「别人在跑」——提交前的重启决策要放行
             self.assertFalse(comfy_gate.busy_others())
         self.assertFalse(os.path.isdir(self.lock))
+        # 票也要跟着走：留着就成了队首，别人永远排不上
+        self.assertEqual(comfy_gate._tickets(), [])
 
     def test_other_process_holder_is_seen(self):
         self._fake_other()
@@ -85,10 +106,121 @@ class GateTest(unittest.TestCase):
         g.release()
         self.assertTrue(os.path.isdir(self.lock))
         self.assertTrue(comfy_gate.busy_others())
+        # 但票必须摘掉——不然自己永远排在队首，谁也别想拿锁
+        self.assertEqual(comfy_gate._tickets(), [])
 
     def test_no_lock_means_not_busy(self):
         self.assertFalse(comfy_gate.busy_others())
         self.assertIsNone(comfy_gate.holder())
+
+
+class QueueFairnessTest(unittest.TestCase):
+    """排队号（2026-10-26）：修的是「网页侧等了 12 分钟一次没抢到」。
+
+    纯抢占下 QQ 的 worker 是「释放 → 立刻取下张 → mkdir」，毫秒级；网页侧
+    每秒才试一次，只要对方队列不断粮就永远轮不到。这里钉三件事：非队首抢不到
+    / 僵尸票会被清 / 先登记的先进。
+    """
+
+    def setUp(self):
+        _clear_dir(comfy_gate.lock_dir())
+        _clear_dir(comfy_gate.queue_dir())
+
+    def tearDown(self):
+        _clear_dir(comfy_gate.lock_dir())
+        _clear_dir(comfy_gate.queue_dir())
+
+    def _fake_other(self, pid=999999, label="漫画工作台 格01"):
+        """伪造「另一个进程正持锁」（心跳是新的，不算僵尸）。"""
+        os.makedirs(comfy_gate.lock_dir(), exist_ok=True)
+        with open(os.path.join(comfy_gate.lock_dir(), "owner.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"pid": pid, "token": "someone-else", "label": label,
+                       "since": time.time() - 60, "beat": time.time()}, f)
+
+    def _fake_ticket(self, age_ns=-1_000_000_000):
+        """造一张票。age_ns 为负 = 比我更早登记（排我前面）。"""
+        os.makedirs(comfy_gate.queue_dir(), exist_ok=True)
+        fp = os.path.join(comfy_gate.queue_dir(),
+                          "%020d-00009999-fakefake.ticket"
+                          % int(time.time_ns() + age_ns))
+        with open(fp, "w", encoding="utf-8"):
+            pass
+        return fp
+
+    def test_not_head_does_not_take_lock(self):
+        """不是队首就一个 mkdir 都不许发——这正是老代码饿死的根。"""
+        self._fake_ticket(age_ns=-5_000_000_000)        # 别人比我早 5 秒
+        t0 = time.time()
+        with self.assertRaises(TimeoutError):
+            comfy_gate.hold("单元测试", timeout=1.2)
+        self.assertFalse(os.path.isdir(comfy_gate.lock_dir()))
+        self.assertLess(time.time() - t0, 10)
+        # 超时退出也得摘自己的票：不然这张死票继续当队首，后面全卡死
+        self.assertEqual(len(comfy_gate._tickets()), 1)
+
+    def test_stale_ticket_is_swept(self):
+        """等的人被强杀留下的票，不能把锁挡到天荒地老。"""
+        fp = self._fake_ticket(age_ns=-5_000_000_000)
+        old = time.time() - (comfy_gate.TICKET_STALE + 30)
+        os.utime(fp, (old, old))
+        with comfy_gate.hold("单元测试", timeout=5):
+            self.assertTrue(os.path.isdir(comfy_gate.lock_dir()))
+
+    def test_earlier_ticket_wins_when_lock_frees(self):
+        """锁一空，先登记的那个先跑——这就是「不被饿死」的行为保证。"""
+        self._fake_other()
+        got = []
+
+        def worker(tag):
+            with comfy_gate.hold(tag, timeout=20):
+                got.append(tag)
+                time.sleep(0.3)
+
+        first = threading.Thread(target=worker, args=("先",))
+        first.start()
+        time.sleep(0.4)                     # 「先」登记好票、进入等待
+        second = threading.Thread(target=worker, args=("后",))
+        second.start()
+        time.sleep(0.6)                     # 「后」也登记好、进入等待
+        _clear_dir(comfy_gate.lock_dir())   # 放开那把假锁
+        first.join(25)
+        second.join(25)
+        self.assertEqual(got, ["先", "后"])
+
+    def test_holder_ticket_is_kept_alive_by_heartbeat(self):
+        """持锁跑长图（两三分钟）时票不能变僵尸，否则别人会当它是死票。
+
+        把 STALE 压到 1 秒、心跳压到 0.2 秒来在测试时长内验证：心跳在刷，
+        `_sweep_tickets()` 就不许动它。
+        """
+        with mock.patch.object(comfy_gate, "HEARTBEAT", 0.2), \
+                mock.patch.object(comfy_gate, "TICKET_STALE", 1.0):
+            with comfy_gate.hold("单元测试", timeout=5):
+                mine = comfy_gate._tickets()
+                self.assertEqual(len(mine), 1)
+                time.sleep(1.5)             # 超过 STALE，靠心跳续命
+                comfy_gate._sweep_tickets()
+                survived = comfy_gate._tickets()
+                self.assertEqual(survived, mine)
+
+    def test_waiter_ticket_is_kept_alive_while_waiting(self):
+        """排队等两分钟也不能被自己人的 sweep 清掉——清了就永远轮不到。"""
+        self._fake_other()
+        with mock.patch.object(comfy_gate, "TICKET_STALE", 1.0):
+            def waiter():
+                with self.assertRaises(TimeoutError):
+                    comfy_gate.hold("排队的", timeout=2.0)
+
+            t = threading.Thread(target=waiter)
+            t.start()
+            time.sleep(0.5)
+            mine = [n for n in comfy_gate._tickets()]
+            self.assertEqual(len(mine), 1, "排队中应该正好一张票")
+            time.sleep(1.0)                 # 超过 STALE
+            comfy_gate._sweep_tickets()
+            self.assertEqual(len(comfy_gate._tickets()), 1, "排队方的票被误清了")
+            t.join(15)
 
 
 class ComicBatchLimitTest(unittest.TestCase):
