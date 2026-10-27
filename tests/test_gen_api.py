@@ -1,8 +1,8 @@
 """跑图台（app/gen_api.py）测试。
 
-覆盖：渠道清单（排除 NAI / 都要有文生图骨架）、提交校验、worker 落账本
-（成功与失败都记）、状态轮询、历史（倒序 / 清空截止）、供图代理（路径穿越
-防护 / ComfyUI 不在线）。
+覆盖：渠道清单（本地渠道要求 workflow、NAI 云端渠道不要求 workflow）、提交
+校验、worker 落账本（ComfyUI 与 NAI 成功/失败）、状态轮询、历史（倒序 / 清空
+截止）、供图代理（路径穿越防护 / ComfyUI 不在线 / NAI 临时图片）。
 
 账本经 state_path 在测试进程自动落临时目录，不碰生产 state/。
 """
@@ -18,7 +18,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from unittest import mock
 
-from app import comic, gen_api, main
+from flask import Response
+
+from app import comic, gen_api, image_jobs, main
 from app.skills import load_skill
 
 
@@ -35,15 +37,20 @@ class ChannelsTest(unittest.TestCase):
     def setUp(self):
         self.c = main.app.test_client()
 
-    def test_list_excludes_nai_and_requires_workflow(self):
+    def test_list_includes_nai_and_local_channels_require_workflow(self):
         d = self.c.get("/api/gen/channels").get_json()
         self.assertTrue(d["ok"])
-        ids = [c["id"] for c in d["channels"]]
-        self.assertTrue(ids)
-        self.assertIn("silver", ids)                 # 默认渠道必须在
-        self.assertNotIn("nai", ids)                 # 云端：网页侧被挡死，不给入口
-        self.assertNotIn("nai_wide", ids)
-        for cid in ids:                              # 列出来的每个都能真跑
+        by_id = {c["id"]: c for c in d["channels"]}
+        self.assertIn("silver", by_id)
+        self.assertIn("nai", by_id)
+        self.assertIn("nai_wide", by_id)
+        self.assertTrue(by_id["nai"]["cloud"])
+        self.assertTrue(by_id["nai_wide"]["cloud"])
+        self.assertIn("竖版", by_id["nai"]["summary"])
+        self.assertIn("横版", by_id["nai_wide"]["summary"])
+        for cid, meta in by_id.items():
+            if meta.get("cloud"):
+                continue
             sd = load_skill(cid)
             self.assertIsNotNone(sd, cid)
             self.assertTrue(sd.get("workflow"), cid)
@@ -99,6 +106,10 @@ class RunTest(unittest.TestCase):
 
     def setUp(self):
         self.c = main.app.test_client()
+        try:
+            os.remove(gen_api._CLEARED_AT)
+        except OSError:
+            pass
 
     def _wait_job(self, jid, state):
         return _wait(lambda: any(
@@ -132,6 +143,30 @@ class RunTest(unittest.TestCase):
             row = next(r for r in gen_api._ledger_rows() if r["tag"] == jid)
             self.assertFalse(row["ok"])
             self.assertIn("连不上", row["error"])
+
+    def test_nai_success_uses_cloud_queue_and_records_controlled_ref(self):
+        class FakeJob:
+            def wait(self):
+                return {"images": [r"C:\\Temp\\nai_ab12.png"]}
+
+        with mock.patch.object(image_jobs, "enqueue",
+                               return_value=(FakeJob(), None)) as enqueue:
+            jid = self.c.post("/api/gen/submit",
+                              json={"skill": "nai", "prompt": "1girl, solo"}
+                              ).get_json()["job"]["id"]
+            self.assertTrue(self._wait_job(jid, "done"))
+            job = next(j for j in self.c.get("/api/gen/status").get_json()["jobs"]
+                       if j["id"] == jid)
+            self.assertEqual(job["file"], "nai:nai_ab12.png")
+            self.assertIsNone(job["seed"])
+            args, kw = enqueue.call_args
+            self.assertIsNone(args[0])
+            self.assertEqual(args[2], "1girl, solo")
+            self.assertEqual(kw["skill"], "nai")
+            row = next(r for r in gen_api._ledger_rows() if r["tag"] == jid)
+            self.assertTrue(row["ok"])
+            self.assertEqual(row["file"], "nai:nai_ab12.png")
+            self.assertIsNone(row["seed"])
 
     def test_skill_without_workflow_errors_clearly(self):
         with mock.patch.object(gen_api, "generate_image_build",
@@ -222,6 +257,22 @@ class ImgTest(unittest.TestCase):
             self.assertEqual(r.mimetype, "image/png")
             self.assertEqual(g.call_args.kwargs["params"],
                              {"filename": "Ani4K_00001_.png"})
+
+    def test_nai_image_uses_controlled_temp_directory(self):
+        sent = Response(b"png", mimetype="image/png")
+        with mock.patch.object(gen_api.image_out, "_out_dir",
+                               return_value="C:/safe/nai"), \
+             mock.patch.object(gen_api, "send_from_directory",
+                               return_value=sent) as send:
+            r = self.c.get("/api/gen/img?f=nai:nai_ab12.png")
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.data, b"png")
+            send.assert_called_once_with("C:/safe/nai", "nai_ab12.png",
+                                         mimetype="image/png", conditional=False)
+
+    def test_nai_absolute_path_is_rejected(self):
+        r = self.c.get("/api/gen/img?f=nai:C:/Windows/win.ini")
+        self.assertEqual(r.status_code, 400)
 
     def test_comfy_offline_is_502_with_reason(self):
         import requests

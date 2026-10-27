@@ -156,7 +156,7 @@
       <section class="view" id="view">
         <div class="view-empty" id="viewEmpty">
           左边选个渠道，下面写提示词，点「生成」<br>
-          Ctrl+Enter 也能提交 · 图存在 ComfyUI 的 output 目录，这里只做索引
+          Ctrl+Enter 也能提交 · ComfyUI 图在 output，NAI 图在云端临时目录
         </div>
         <div id="jobs"></div>
         <div id="shot"></div>
@@ -304,7 +304,7 @@ function startPoll() {
       const qd = document.getElementById('qdepth');
       if (d.queue_depth) {
         qd.style.display = '';
-        qd.textContent = 'ComfyUI 队列里还有 ' + d.queue_depth + ' 张（含 QQ 的）';
+        qd.textContent = '队列里还有 ' + d.queue_depth + ' 张（含 QQ 的）';
       } else { qd.style.display = 'none'; }
       renderJobs();
       if (JOBS.some(j => j.state === 'done') && !PINNED) showLatestDone();
@@ -338,7 +338,7 @@ function renderJobs() {
       (j.error ? '<div class="err"></div>' : '') +
       (j.error ? '<button class="btn small again">把提示词放回输入栏，改改再发</button>' : '');
     el.querySelector('.skill').textContent = j.skill;
-    el.querySelector('.seed').textContent = 'seed ' + j.seed;
+    el.querySelector('.seed').textContent = 'seed ' + (j.seed ?? '云端随机');
     el.querySelector('.prompt').textContent = j.prompt;
     if (j.error) {
       el.querySelector('.err').textContent = j.error;
@@ -370,11 +370,11 @@ function showShot(j) {
   img.onclick = () => openLightbox(img.src);
   img.onerror = () => { img.replaceWith(Object.assign(document.createElement('div'),
     {className: 'err', style: 'color:var(--error);font-size:12px;padding:20px 0',
-     textContent: '图取不到：ComfyUI 不在线，或 output 目录里这张被清了'})); };
+     textContent: '图取不到：服务暂时不可用，或图片已过期'})); };
   el.appendChild(img);
   const meta = document.createElement('div');
   meta.className = 'meta';
-  meta.innerHTML = '<span class="sk"></span><span>seed ' + j.seed + '</span>' +
+  meta.innerHTML = '<span class="sk"></span><span>seed ' + (j.seed ?? '云端随机') + '</span>' +
     '<span>' + fmtTime(j.ts) + '</span>';
   meta.querySelector('.sk').textContent = j.skill;
   el.appendChild(meta);
@@ -435,7 +435,7 @@ function renderHistoryOn() {
 }
 
 async function clearHistory() {
-  if (!confirm('清空历史显示？（图还在 ComfyUI 的 output 目录，账本行也不删，只是不再列出）')) return;
+  if (!confirm('清空历史显示？（图片文件和账本行都不删，只是不再列出）')) return;
   try {
     await api('/api/gen/clear', {});
     PINNED = null; HISTORY = [];

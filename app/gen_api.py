@@ -10,19 +10,20 @@
   那），`/api/gen/img` 走 `/view` 代理直接serve。本机不留第二份字节——单张
   好几 MB，复制一本历史就是几百 MB 的重复。
 - **账本只记元数据**：`state/gen_pad.jsonl`，一行一张图（tag / 渠道 / 提示词 /
-  种子 / ComfyUI 文件名 / 时间 / 成败）。图会随 output 目录清理而消失，账本
-  不会——取不到图时历史项显示为破图，不假装有图。
+  种子 / 图片引用 / 时间 / 成败）。ComfyUI 图会随 output 目录清理而消失；NAI
+  图保存在 `image_out` 的临时目录，按同一套过期清理规则处理。账本不会删除——
+  取不到图时历史项显示为破图，不假装有图。
 - ⚠️ 为什么不复用 `image_log`：那个账本**只在图真发到 QQ 会话之后才写**
   （`image_jobs.process` 里 `job.target is None` 直接 return），网页侧提交的图
   （漫画格 / 写真 / 本台）它一行都不记。想让那边记就得改 QQ 关键路径，不干。
 - 「清空历史」= 记一个截止时间戳（`state/gen_pad_cleared_at`），早于它的不显示。
   文件和账本行都不删——它是 output 文件夹的索引，不是垃圾篓。
 
-## 渠道为什么排除 NAI
+## NAI 云端渠道
 
-`nai` / `nai_wide` 是云端渠道，`generate_image.build_t2i_workflow` 对它们返回
-None（skills/ 下没有目录），`image_jobs._process_nai` 的网页侧分支也只是「保险
-起见落个盘」（原注释：NAI 仅限 QQ 群）。放进列表只会次次失败，所以入口就挡掉。
+`nai` / `nai_wide` 没有 ComfyUI workflow，而是复用 `image_jobs` 的独立 NAI
+云端队列。网页侧任务使用 `target=None`，worker 会把返回的 PNG 落到
+`image_out` 临时目录；跑图台只保存带 `nai:` 前缀的受控文件名，不保存绝对路径。
 """
 
 import json
@@ -36,8 +37,8 @@ import time
 import requests
 from flask import Blueprint, Response, jsonify, request, send_from_directory
 
-from app import comic, image_jobs
-from app.config import COMFYUI_URL, WEB_DIR, state_path
+from app import comic, image_jobs, image_out
+from app.config import COMFYUI_URL, NAI_API_KEY, WEB_DIR, state_path
 from app.direct_gen import _allowed_skills
 from app.skills import load_skill, skill_summary
 
@@ -66,6 +67,7 @@ _ledger_lock = threading.Lock()
 
 # ComfyUI 输出文件名：纯文件名（output 目录是平的），挡死一切路径形态。
 _IMG_NAME_RE = re.compile(r"[A-Za-z0-9._\- ]{1,120}")
+_NAI_REF_RE = re.compile(r"nai:([A-Za-z0-9._\- ]{1,120})")
 
 
 # ─── 渠道清单 ────────────────────────────────────────────
@@ -74,12 +76,14 @@ _IMG_NAME_RE = re.compile(r"[A-Za-z0-9._\- ]{1,120}")
 # 头部的几个——其余字母序也够找。
 _HEAD = ("silver", "silver-hd", "hd_3_clear", "hd_3_curvy", "hd_3_gloss",
          "hd_3_soft", "anima-line", "anima-real", "qwen_image_v1", "qwen-hd",
-         "cunny", "miao", "jank", "nffa")
+         "nai", "nai_wide", "cunny", "miao", "jank", "nffa")
 
 
 def channels():
-    """跑图台可见渠道 = QQ 可点名渠道 − NAI（云端，网页侧被挡死）− 没有文生图
-    工作流的目录。和机器人共用 `_allowed_skills()` 这一个事实源，不会两边分裂。
+    """跑图台可见渠道 = QQ 可点名渠道中的 ComfyUI 文生图渠道 + NAI 云端渠道。
+
+    NAI 没有 `skills/<id>/workflow.json`，因此必须单独补元数据，不能让它走
+    `load_skill()` 的本地工作流校验。
     """
     out = []
     try:
@@ -87,7 +91,15 @@ def channels():
     except Exception:
         log.exception("渠道清单拉取失败（_allowed_skills）")
         return out
-    for sk in allowed - set(image_jobs.NAI_SKILLS):
+    for sk in allowed:
+        if sk in image_jobs.NAI_SKILLS:
+            if not NAI_API_KEY:
+                continue
+            out.append({"id": sk,
+                        "summary": ("NovelAI 云端 · 竖版" if sk == "nai"
+                                    else "NovelAI 云端 · 横版"),
+                        "cloud": True})
+            continue
         try:
             sd = load_skill(sk)
         except Exception:
@@ -96,7 +108,8 @@ def channels():
         if not sd or not sd.get("workflow"):
             continue                      # 没有文生图骨架的目录不是渠道
         out.append({"id": sk,
-                    "summary": skill_summary(sd.get("skill_md") or "")})
+                    "summary": skill_summary(sd.get("skill_md") or ""),
+                    "cloud": False})
     out.sort(key=lambda c: (0 if c["id"] in _HEAD else 1,
                             _HEAD.index(c["id"]) if c["id"] in _HEAD else 0,
                             c["id"]))
@@ -161,35 +174,48 @@ def _public(job):
 
 
 def _run(job):
-    """worker 线程体：建工作流 → 排进队列等出图 → 记账。
-
-    同步等（`comic._submit` 内部 `job.wait()` 阻塞到出图/失败），所以一个任务
-    一条线程，互不阻塞；提交侧的拒收话术（队列满/在途满）会从 `_submit` 抛出来，
-    原样落进 job.error 给用户看。
-    """
+    """worker 线程体：按渠道走 ComfyUI 或 NAI 队列，出图后记账。"""
     try:
-        wf = generate_image_build(job["skill"], job["prompt"], job["seed"])
-        if wf is None:
-            raise RuntimeError("渠道 %s 没有文生图工作流" % job["skill"])
-        # _submit_retry 只对超时重试（冷启动/内存守卫重启那两类，见它的注释），
-        # 其余错误一次抛清。
-        name = comic._submit_retry(
-            lambda: comic._submit(wf, job["skill"], job["prompt"], job["seed"]),
-            "[跑图台 %s]" % job["id"])
+        if job["skill"] in image_jobs.NAI_SKILLS:
+            queued, reason = image_jobs.enqueue(
+                None, None, job["prompt"], skill=job["skill"],
+                prompt=job["prompt"], seed=None,
+                landscape=(job["skill"] == "nai_wide"))
+            if queued is None:
+                raise RuntimeError(reason or "NAI 队列拒绝了这张图")
+            entry = queued.wait()
+            paths = (entry or {}).get("images") or []
+            if not paths:
+                raise RuntimeError("NAI 已完成但没有返回图片")
+            path = paths[0]
+            name = os.path.basename(path)
+            if not _IMG_NAME_RE.fullmatch(name):
+                raise RuntimeError("NAI 返回了非法图片名")
+            file_ref = "nai:" + name
+            seed = None
+        else:
+            wf = generate_image_build(job["skill"], job["prompt"], job["seed"])
+            if wf is None:
+                raise RuntimeError("渠道 %s 没有文生图工作流" % job["skill"])
+            # _submit_retry 只对超时重试；其余错误一次抛清。
+            name = comic._submit_retry(
+                lambda: comic._submit(wf, job["skill"], job["prompt"], job["seed"]),
+                "[跑图台 %s]" % job["id"])
+            file_ref = name
+            seed = job["seed"]
+        _ledger_append({"tag": job["id"], "skill": job["skill"],
+                        "prompt": job["prompt"], "seed": seed,
+                        "file": file_ref, "ts": job["ts"], "ok": True})
         with _JOBS_LOCK:
             job["state"] = "done"
-            job["file"] = name
-        _ledger_append({"tag": job["id"], "skill": job["skill"],
-                        "prompt": job["prompt"], "seed": job["seed"],
-                        "file": name, "ts": job["ts"], "ok": True})
-        log.info("跑图台 %s 完成：%s seed %s", job["id"], job["skill"],
-                 job["seed"])
+            job["file"] = file_ref
+            job["seed"] = seed
+        log.info("跑图台 %s 完成：%s seed %s", job["id"], job["skill"], seed)
     except Exception as e:
         msg = str(e) or e.__class__.__name__
         with _JOBS_LOCK:
             job["state"] = "error"
             job["error"] = msg
-        # 失败的也记账：历史里看得见「跑了但没出来」，比凭空少一张好。
         _ledger_append({"tag": job["id"], "skill": job["skill"],
                         "prompt": job["prompt"], "seed": job["seed"],
                         "file": "", "ts": job["ts"], "ok": False,
@@ -238,7 +264,8 @@ def api_submit():
                             "error": "已经在跑/排队的还有 %d 张，等一张再发"
                                      % active}), 400
         job = {"id": _new_job_id(), "skill": skill, "prompt": prompt,
-               "seed": random.randint(0, 2 ** 31 - 1),
+               "seed": (None if skill in image_jobs.NAI_SKILLS
+                        else random.randint(0, 2 ** 31 - 1)),
                "state": "queued", "error": "", "file": "",
                "ts": time.time()}
         _JOBS[job["id"]] = job
@@ -295,13 +322,25 @@ def api_clear():
 
 @bp.route("/api/gen/img")
 def api_img():
-    """代理 ComfyUI 的 /view 取图。只认 output 目录下的**相对路径**（2026-10-18
-    起输出图按会话分子目录，`f` 会是 `web/生图页/silver/Anima_1_.png`）。
+    """按图片引用取图：`nai:<filename>` 走 NAI 临时目录，其余走 ComfyUI。
 
-    逐段校验：不许空段、不许 `..`、文件名必须过 `_IMG_NAME_RE` —— 等于只允许
-    在 output 目录里按名字取图，不敞静态目录。
+    两条路径都只接受文件名/受控相对路径，不接受绝对路径；NAI 的绝对落盘路径
+    永远不会下发给浏览器。
     """
     f = str(request.args.get("f") or "").replace("\\", "/").strip("/")
+    if f.startswith("nai:"):
+        name = f[4:]
+        if not _NAI_REF_RE.fullmatch(f) or not _IMG_NAME_RE.fullmatch(name):
+            return jsonify({"ok": False, "error": "非法文件名"}), 400
+        try:
+            # send_from_directory 自带目录约束；这里只传 basename，避免路径穿越。
+            resp = send_from_directory(image_out._out_dir(), name,
+                                       mimetype="image/png", conditional=False)
+            resp.headers["Cache-Control"] = "no-store"
+            return resp
+        except Exception:
+            return jsonify({"ok": False,
+                            "error": "NAI 没有这张图（临时文件已过期？）"}), 404
     parts = [x for x in f.split("/") if x]
     if not parts or ".." in parts or not _IMG_NAME_RE.fullmatch(parts[-1]):
         return jsonify({"ok": False, "error": "非法文件名"}), 400
@@ -312,13 +351,11 @@ def api_img():
         resp = _session.get(COMFYUI_URL.rstrip("/") + "/view",
                             params=params, timeout=120)
     except requests.RequestException as e:
-        # ComfyUI 不在线时旧图取不到——明说，别让前端对着破图猜
         return jsonify({"ok": False,
                         "error": "ComfyUI 不在线，图取不到：%s" % e}), 502
     if resp.status_code != 200 or not resp.content:
         return jsonify({"ok": False,
                         "error": "ComfyUI 没有这张图（output 被清过？）"}), 404
     out = Response(resp.content, mimetype="image/png")
-    # output 清空后文件名会重来，不缓存，免看到上一代的同名图
     out.headers["Cache-Control"] = "no-store"
     return out
