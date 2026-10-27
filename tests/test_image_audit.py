@@ -310,6 +310,43 @@ class PromptPolicyTest(unittest.TestCase):
         self.assertEqual(v.category, "skin")
 
 
+class AuditFallbackTest(unittest.TestCase):
+    """审核首选中转站失败时切官方备用，全部失败仍 fail-closed。"""
+
+    def setUp(self):
+        self.path = _write_png()
+        self.addCleanup(lambda: os.path.exists(self.path) and os.remove(self.path))
+
+    def test_primary_failure_falls_back_to_deepseek(self):
+        calls = []
+
+        def describe(*args, **kwargs):
+            calls.append((kwargs["provider"], kwargs["model"]))
+            if kwargs["provider"] == "relay":
+                raise RuntimeError("中转站 502")
+            return '{"allow": true, "category": "ok"}'
+
+        with mock.patch("app.vision.audit_candidates",
+                        return_value=[("relay", "relay-model"), ("deepseek", "")]), \
+             mock.patch("app.vision.describe", side_effect=describe):
+            verdict = image_audit.check(self.path, timeout=1)
+
+        self.assertTrue(verdict.allow)
+        self.assertFalse(verdict.failed)
+        self.assertEqual(calls, [("relay", "relay-model"), ("deepseek", "")])
+
+    def test_all_audit_providers_fail_closed(self):
+        with mock.patch("app.vision.audit_candidates",
+                        return_value=[("relay", "relay-model"), ("deepseek", "")]), \
+             mock.patch("app.vision.describe",
+                        side_effect=RuntimeError("服务不可用")):
+            verdict = image_audit.check(self.path, timeout=1)
+
+        self.assertFalse(verdict.allow)
+        self.assertTrue(verdict.failed)
+        self.assertIn("deepseek", verdict.reason)
+
+
 class AllowSendTest(unittest.TestCase):
     """总闸 allow_send()：开关 + 判定 + 通知，三件事的正确顺序。"""
 

@@ -287,27 +287,34 @@ def check(path, timeout=None, prompt=None):
     except Exception as exc:
         return _fail_closed("压缩失败：%s" % exc)
 
-    try:
-        # 显式传 provider/model = **绕过管理页上的识图选择**，永远用 .env 配的
-        # 那个（vision.audit_choice）。用户 2026-10-04 拍板：审核不跟着界面切。
-        # 判据是失败方向 —— 审核是 fail-closed 且超时只有 30 秒
-        # （IMAGE_AUDIT_TIMEOUT，2026-10-16 起**真的生效了**：以前这个常量只被
-        # import 进来、没人用，实际跑的是 VISION_TIMEOUT=120），本地小模型实测
-        # 几十秒到几分钟 ⇒ 跟着切会把每张图都判成「识图失败」直接拦下来，
-        # 图片根本发不出去。
-        a_pid, a_model = vision.audit_choice()
-        text = _call_with_deadline(
-            lambda: vision.describe(data_url, timeout=timeout,
-                                    prompt=prompt or _PROMPT,
-                                    provider=a_pid, model=a_model),
-            timeout)
-    except Exception as exc:
-        return _fail_closed("识图失败：%s" % exc)
+    last_error = None
+    candidates = vision.audit_candidates()
+    for index, (a_pid, a_model) in enumerate(candidates):
+        try:
+            # 审核不跟着管理页切，首选仍是 .env 的 provider；但首选中转站
+            # 故障时切到下一家，避免一次临时故障让所有图片都无法发送。
+            text = _call_with_deadline(
+                lambda: vision.describe(data_url, timeout=timeout,
+                                        prompt=prompt or _PROMPT,
+                                        provider=a_pid, model=a_model),
+                timeout)
+        except Exception as exc:
+            last_error = "识图 %s 失败：%s" % (a_pid, exc)
+            if index + 1 < len(vision.audit_candidates()):
+                log.warning("审核识图 %s 失败，降级到下一家：%s", a_pid, exc)
+                continue
+            return _fail_closed(last_error)
 
-    v = parse_verdict(text)
-    if v is None:
-        return _fail_closed("识图回复解析不出来：%r" % text[:120])
-    return v
+        v = parse_verdict(text)
+        if v is not None:
+            return v
+        last_error = "识图 %s 回复解析不出来：%r" % (a_pid, text[:120])
+        if index + 1 < len(vision.audit_candidates()):
+            log.warning("审核识图 %s 返回无效结果，降级到下一家", a_pid)
+            continue
+        return _fail_closed(last_error)
+
+    return _fail_closed(last_error or "没有可用的审核识图 provider")
 
 
 def _notify_blocked(target, target_id, verdict):

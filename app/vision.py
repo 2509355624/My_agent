@@ -43,21 +43,13 @@ log = logging.getLogger("vision")
 
 # 识图**专用**降级链（2026-10-07 用户拍板「写死在识图专用链」）。
 #
-# 和主对话的 LLM_FALLBACK_CHAIN 是**两份独立配置**，不能合并：
-# 主对话链是按「文本能力 + 成本」排的（volc → mimo → deepseek），而识图要的是
-# 「能不能读图」——纯文本的 volc 排第一会让每次识图都先撞一次挂死（见文件顶部
-# 那条 base64 挂死说明）。所以这里只放确认能读图的云端家：豆包多模态 Seed →
-# 小米 MiMo（全模态）→ DeepSeek 官方（deepseek-flash 可读图）。
+# 和主对话的 LLM_FALLBACK_CHAIN 是**两份独立配置**，不能合并：识图只保留
+# 明确支持视觉输入的备用 provider。当前普通识图与审核识图都可以在首选失败后
+# 走这里；审核仍然单独固定首选 .env，不跟着管理页切换。
 #
-# 只在**走管理页/.env 那条路**（describe 没显式传 provider）时生效；显式传
-# provider 的调用（生图审核 image_audit、管理页试读）**不参与**——审核是
-# fail-closed 且要固定用 .env 那份，不能被降级链悄悄换成别家。
-#
-# 2026-10-25 用户拍板「撤掉中转站，识图先 mimo、再 deepseek」：
-#   主选家由 agents/<id>/settings.json 的 vision_model 给（mimo:mimo-v2.6-flash），
-#   这里只留 deepseek 官方当第一跳。原链里的 doubao 撤掉——它在 PROVIDERS 里是
-#   vision=False（纯文本家），排第一等于每次识图先白撞一次挂死；mimo 已经是主选
-#   家，留在链里会和自己重复（_chain_candidates 会去重，但不如直接写清楚）。
+# 2026-10-25 用户拍板：普通识图主选由 agents/<id>/settings.json 的 vision_model
+# 给，备用只留 DeepSeek 官方；原链里的 doubao / mimo 撤掉，避免把纯文本或已是
+# 首选的 provider 重复试一遍。
 VISION_FALLBACK_CHAIN = ("deepseek",)
 
 
@@ -172,14 +164,24 @@ def active_choice(agent_id=None):
 
 
 def audit_choice():
-    """生图审核用的 (provider, model) —— **永远走 .env，不跟着界面切**。
-
-    用户 2026-10-04 拍板。判据是审核的失败方向：它是 fail-closed 且超时只有
-    30 秒（IMAGE_AUDIT_TIMEOUT），本地小模型实测要几十秒到几分钟 ⇒ 跟着切
-    会把每张图都判成"识图失败"直接拦下来，图片根本发不出去。
-    对话那条链路（active_choice）慢一点只是这一轮慢，失败还能退化成纯文本。
-    """
+    """生图审核首选的 (provider, model) —— 永远走 .env，不跟着界面切。"""
     return (VISION_PROVIDER, VISION_MODEL)
+
+
+def audit_candidates():
+    """返回审核专用候选链：.env 首选，随后走已配置的官方备用家。
+
+    审核不使用管理页里的普通识图选择，但不能因为首选中转站临时故障就
+    直接让所有图片进入 fail-closed。候选链只包含明确配置过的 provider，
+    且不重复首选；所有候选都失败时仍由 image_audit 统一 fail-closed。
+    """
+    primary_pid, primary_model = audit_choice()
+    candidates = [(primary_pid, primary_model)]
+    for pid in VISION_FALLBACK_CHAIN:
+        if pid == primary_pid or pid not in PROVIDERS:
+            continue
+        candidates.append((pid, ""))
+    return candidates
 
 # 下载图片与调识图接口都不走本机系统代理：本机常驻 Clash 类工具会把代理写进
 # 注册表，代理进程一换端口或被杀，这两个出网口就全挂——图生图取图失败、识图
