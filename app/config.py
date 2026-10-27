@@ -770,6 +770,10 @@ QQ_TURN_TIMEOUT = float(os.getenv("QQ_TURN_TIMEOUT", "600"))
 # 单条 QQ 消息的字数上限，超出按段落切分成多条发送
 QQ_REPLY_MAX_CHARS = int(os.getenv("QQ_REPLY_MAX_CHARS", "700"))
 
+# QQ 机器人长回复从这里起改发为一张聊天记录卡片，避免群聊/私聊刷屏。
+# 200 字以内仍作为一条普通消息发送；这里按字符数计算纯文本正文。
+QQ_LONG_REPLY_CARD_CHARS = int(os.getenv("QQ_LONG_REPLY_CARD_CHARS", "200"))
+
 # 一条消息里最多处理几张图（超出的只记一句"还有 N 张没看"，不下载）。
 # 群里刷图时，每张都要先下载再送一次识图，没有上限就是开口子的花销
 QQ_IMAGE_MAX_COUNT = int(os.getenv("QQ_IMAGE_MAX_COUNT", "3"))

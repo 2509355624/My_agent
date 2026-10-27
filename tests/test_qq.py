@@ -1083,6 +1083,55 @@ class DeliverTest(unittest.TestCase):
         self.assertEqual(sent, ["正常回复"])
         self.assertNotIsInstance(sent[0], list)
 
+    def test_long_reply_is_one_forward_card(self):
+        card = []
+        plain = "长" * 200
+        with mock.patch.object(
+                qq_api, "send_forward",
+                lambda target, target_id, nodes: card.append(
+                    (target, target_id, nodes))):
+            with mock.patch.object(qq_api, "send_group") as send_group:
+                self._runner()._deliver(False, plain, [])
+        self.assertEqual(len(card), 1)
+        self.assertEqual(card[0][0:2], ("group", "9"))
+        self.assertEqual(len(card[0][2]), 1)
+        self.assertEqual(card[0][2][0]["data"]["name"], qq_bot.QQ_BOT_NAME)
+        content = card[0][2][0]["data"]["content"]
+        self.assertEqual(content, [qq_api.text_segment(plain)])
+        send_group.assert_not_called()
+
+    def test_long_reply_markdown_is_converted_before_card(self):
+        card = []
+        with mock.patch.object(
+                qq_api, "send_forward",
+                lambda target, target_id, nodes: card.append(nodes)):
+            self._runner()._deliver(False, "**标题**\n" + "内容" * 100, [])
+        text = card[0][0]["data"]["content"][0]["data"]["text"]
+        self.assertTrue(text.startswith("标题\n"))
+        self.assertNotIn("**", text)
+
+    def test_long_reply_card_failure_falls_back_to_plain_send(self):
+        plain = "长" * 200
+        sent = []
+        with mock.patch.object(qq_api, "send_forward",
+                               side_effect=RuntimeError("协议端不支持")), \
+             mock.patch.object(
+                 qq_api, "send_group",
+                 lambda gid, msg, limit=None, reply_to=None: (
+                     sent.append(msg), 1)[1]):
+            self._runner()._deliver(False, plain, [])
+        self.assertEqual(sent, [plain])
+
+    def test_reply_below_card_threshold_stays_one_plain_message(self):
+        sent = []
+        with mock.patch.object(
+                qq_api, "send_group",
+                lambda gid, msg, limit=None, reply_to=None: (sent.append(msg), 1)[1]), \
+             mock.patch.object(qq_api, "send_forward") as send_forward:
+            self._runner()._deliver(False, "短" * 199, [])
+        self.assertEqual(sent, ["短" * 199])
+        send_forward.assert_not_called()
+
     def test_empty_reply_is_not_sent(self):
         sent = []
         with mock.patch.object(

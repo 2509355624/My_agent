@@ -52,7 +52,8 @@ from app.config import (
     BASE_DIR, QQ_AGENT_ID, QQ_BOT_NAME, QQ_BLACKLIST_USERS,
     QQ_CONTEXT_MAX_CHARS, QQ_CONTEXT_MESSAGES,
     QQ_DEBOUNCE_SECONDS, QQ_GROUP_AT_ONLY, QQ_GROUP_KEYWORDS,
-    QQ_MAX_CONCURRENCY, QQ_MEMORY_INJECT_LIMIT, QQ_MEMORY_INJECT_MAX_CHARS,
+    QQ_LONG_REPLY_CARD_CHARS, QQ_MAX_CONCURRENCY,
+    QQ_MEMORY_INJECT_LIMIT, QQ_MEMORY_INJECT_MAX_CHARS,
     QQ_PENDING_MAX_CHARS, QQ_PENDING_MAX_ITEMS,
     QQ_PRIVATE_ENABLE, QQ_QUOTE_MAX_CHARS, QQ_TOKEN, QQ_TURN_TIMEOUT,
     QQ_WHITELIST_GROUPS, QQ_WHITELIST_USERS, QQ_WS_URL,
@@ -1418,12 +1419,27 @@ class SessionRunner:
         spoke = False
 
         if not sent_by_tool and reply.strip():
+            plain = qq_api.to_qq_text(reply).strip() or reply.strip()
             try:
-                # 群聊走短句分条（见 qq_api.split_chat）：一条 300 字的回复在群里
-                # 就是「小作文」，拆成两三句发才像有人在说话。私聊不分——一对一
-                # 没有刷屏这回事，拆开反而像连发轰炸。
-                send_text(self.target_id, self._chat_chunks(reply),
-                          reply_to=reply_to or None)
+                if len(plain) >= QQ_LONG_REPLY_CARD_CHARS:
+                    # 长回复整段放进一张聊天记录卡片，不再按句子切分或连发多条。
+                    # 只放一个节点，点开后看到的就是完整正文；reply_to 不能挂在
+                    # 卡片内部，卡片本身的引用能力由协议端决定。
+                    try:
+                        qq_api.send_forward(
+                            self.target, self.target_id,
+                            [qq_api.node_segment(plain, name=QQ_BOT_NAME)],
+                        )
+                    except Exception as exc:
+                        # 合并转发失败时回退普通发送；底层 send_* 仍会按 QQ 单条限制
+                        # 兜底分段，保证卡片能力偶发不可用时正文不丢。
+                        send_text(self.target_id, plain,
+                                  reply_to=reply_to or None)
+                        log.warning("长回复聊天记录卡片发送失败，已回退普通消息 %s：%s",
+                                    self.session_key, exc)
+                else:
+                    send_text(self.target_id, plain,
+                              reply_to=reply_to or None)
                 spoke = True
             except Exception as exc:
                 # 非好友拒收是可预期的策略限制，给一句人话；别的失败照旧留堆栈。
@@ -1467,26 +1483,6 @@ class SessionRunner:
             interject.mark_spoke(QQ_AGENT_ID, self.target_id)
             recent.remember(QQ_AGENT_ID, self.target_id, QQ_BOT_NAME,
                             reply or receipt_spoke)
-
-    def _chat_chunks(self, reply):
-        """群聊正文出口的短句分条。返回 str（不拆）或 list（拆成几条）。
-
-        `send_group` / `send_private` 两个都吃 list，且 list 分支会跳过
-        `to_qq_text`（那段是给整段字符串用的），所以这里必须先转纯文本——否则
-        Markdown 的 `**` 会原样发进群里。转完变空的那种（整条只有符号）直接丢，
-        全被丢光就退回原样发，不能因为拆句把回复弄没。
-        """
-        if self.target != "group":
-            return reply
-        parts = qq_api.split_chat(reply)
-        if len(parts) <= 1:
-            return reply
-        out = []
-        for part in parts:
-            plain = qq_api.to_qq_text(part)
-            if plain.strip():
-                out.append(plain)
-        return out or reply
 
 
 # ─── 适配层主体 ──────────────────────────────────────
