@@ -327,7 +327,7 @@ class PrepareImageTest(unittest.TestCase):
 
 
 class AllowedTest(unittest.TestCase):
-    """agents.nai_allowed 的三层闸（.env 总闸 → settings 全局 → 单群白名单）。"""
+    """agents.nai_allowed 的权限链与全开放开关。"""
 
     def _settings(self, **kw):
         return kw
@@ -368,12 +368,43 @@ class AllowedTest(unittest.TestCase):
             ok, _ = agents.nai_allowed("qq", "private", "9")
         self.assertTrue(ok)
 
-    def test_web_refuses(self):
+    def test_open_access_allows_group_without_whitelist(self):
         with mock.patch.object(agents, "NAI_ENABLED", True), \
+                mock.patch.object(agents, "NAI_OPEN_ACCESS", True), \
                 mock.patch.object(agents, "load_settings", return_value=self._settings(
-                    nai_enabled=True, nai_groups=["9"], nai_private=["9"])):
+                    nai_enabled=True)):
+            ok, _ = agents.nai_allowed("qq", "group", "unlisted")
+        self.assertTrue(ok)
+
+    def test_open_access_allows_private_without_whitelist(self):
+        with mock.patch.object(agents, "NAI_ENABLED", True), \
+                mock.patch.object(agents, "NAI_OPEN_ACCESS", True), \
+                mock.patch.object(agents, "load_settings", return_value=self._settings(
+                    nai_enabled=True)):
+            ok, _ = agents.nai_allowed("qq", "private", "unlisted")
+        self.assertTrue(ok)
+
+    def test_open_access_still_requires_master_switch(self):
+        with mock.patch.object(agents, "NAI_ENABLED", False), \
+                mock.patch.object(agents, "NAI_OPEN_ACCESS", True):
+            ok, _ = agents.nai_allowed("qq", "private", "unlisted")
+        self.assertFalse(ok)
+
+    def test_open_access_still_requires_agent_switch(self):
+        with mock.patch.object(agents, "NAI_ENABLED", True), \
+                mock.patch.object(agents, "NAI_OPEN_ACCESS", True), \
+                mock.patch.object(agents, "load_settings", return_value=self._settings()):
+            ok, _ = agents.nai_allowed("qq", "private", "unlisted")
+        self.assertFalse(ok)
+
+    def test_open_access_does_not_allow_web(self):
+        with mock.patch.object(agents, "NAI_ENABLED", True), \
+                mock.patch.object(agents, "NAI_OPEN_ACCESS", True), \
+                mock.patch.object(agents, "load_settings", return_value=self._settings(
+                    nai_enabled=True)):
             ok, why = agents.nai_allowed("qq", None, None)
         self.assertFalse(ok)
+        self.assertIn("QQ", why)
 
     def test_full_allow(self):
         with mock.patch.object(agents, "NAI_ENABLED", True), \

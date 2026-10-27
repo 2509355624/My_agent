@@ -595,9 +595,12 @@ DISABLED_IMAGE_SKILLS = [s.strip() for s in
 # NAI_PROXY：显式代理地址；留空 = 自动读本机注册表系统代理（用户开 VPN 后写在这）。
 # NAI_ENABLED：.env 级的硬总闸（默认开），纯紧急熔断用——真正控制「开不开」的
 #   是管理页 settings.json 的 nai_enabled（默认关）+ 单群白名单 nai_groups。
+# NAI_OPEN_ACCESS：.env 级的使用范围开关。开启后跳过群/私聊白名单，仍受
+#   NAI_ENABLED、agent 的 nai_enabled、API Key、额度和队列限制约束。
 NAI_API_KEY = os.getenv("NAI_API_KEY", "")
 NAI_PROXY = os.getenv("NAI_PROXY", "")
 NAI_ENABLED = os.getenv("NAI_ENABLED", "true").lower() not in ("0", "false", "no", "")
+NAI_OPEN_ACCESS = os.getenv("NAI_OPEN_ACCESS", "false").lower() not in ("0", "false", "no", "")
 
 # ─── Agent ──────────────────────────────────────────
 

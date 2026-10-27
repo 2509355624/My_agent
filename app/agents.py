@@ -20,8 +20,9 @@ import json
 import os
 import re
 
-from app.config import (AGENTS_DIR, DEFAULT_AGENT_ID, NAI_ENABLED, PROVIDERS,
-                        QQ_INTERJECT_COOLDOWN, QQ_INTERJECT_MIN_GAP)
+from app.config import (AGENTS_DIR, DEFAULT_AGENT_ID, NAI_ENABLED,
+                        NAI_OPEN_ACCESS, PROVIDERS, QQ_INTERJECT_COOLDOWN,
+                        QQ_INTERJECT_MIN_GAP)
 
 
 # 字母数字开头，后跟字母数字 / 下划线 / 连字符；限长防超长文件名。
@@ -341,14 +342,18 @@ def nai_allowed(agent_id, target, target_id):
     - config.NAI_ENABLED：.env 硬总闸（默认开，纯紧急熔断用）；
     - nai_enabled：settings 全局总闸（默认关，管理页开）；
     - 白名单（各自独立、默认空）：群聊看 nai_groups、私聊看 nai_private。
-    只支持 QQ 会话（target 为 "group" / "private"）；网页端一律不可用——token 只给
-    名单里的群 / 人，别的会话连碰的机会都没有。
+      若 config.NAI_OPEN_ACCESS 开启，则跳过这层白名单。
+    只支持 QQ 会话（target 为 "group" / "private"）；网页端一律不可用。
     """
     if not NAI_ENABLED:
         return False, "NAI 已被全局紧急关闭（.env NAI_ENABLED=false）"
     s = load_settings(agent_id)
     if not s.get("nai_enabled"):
         return False, "NAI 未在本 agent 启用（管理页全局开关未开）"
+    if target not in ("group", "private"):
+        return False, "NAI 仅支持 QQ 使用"
+    if NAI_OPEN_ACCESS:
+        return True, ""
     if target == "group":
         if str(target_id) not in (s.get("nai_groups") or []):
             return False, "本群未开通 NAI（管理页未把本群加入白名单）"
