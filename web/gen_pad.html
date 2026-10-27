@@ -77,6 +77,16 @@
     color: var(--text); padding: 10px 12px; font: inherit; font-size: 13px;
     resize: vertical; min-height: 44px; max-height: 45vh; outline: none; }
   .composer textarea:focus { border-color: var(--accent); }
+  .nai-options { display: none; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .nai-options.on { display: flex; }
+  .nai-options label { flex: none; color: var(--text-dim); font-size: 12px; }
+  .nai-options select, .nai-options input { min-width: 0; background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);
+    padding: 7px 9px; font: inherit; font-size: 12px; outline: none; }
+  .nai-options select { width: 150px; flex: none; }
+  .nai-options input { flex: 1; }
+  .nai-options select:focus, .nai-options input:focus { border-color: var(--accent); }
+  .nai-options .btn { flex: none; }
   .composer .bar { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
   .composer .cur { font-size: 12px; color: var(--text-dim); }
   .composer .cur b { color: var(--info); font-weight: 400; }
@@ -163,6 +173,15 @@
       </section>
 
       <section class="composer">
+        <div class="nai-options" id="naiOptions">
+          <label for="naiArtist">画师串前缀</label>
+          <select id="naiArtist" aria-label="选择已保存的画师串">
+            <option value="">不加前缀</option>
+          </select>
+          <input id="naiArtistInput" type="text" maxlength="2000"
+            placeholder="输入 NovelAI 画师串；填写后优先于下拉选择">
+          <button class="btn small" id="naiArtistSave" type="button">保存</button>
+        </div>
         <textarea id="prompt" rows="2"
           placeholder="提示词：英文 tag 或自然句子都行（按渠道习惯写，silver/krea2/anima 用 tag 串，qwen 用完整句子）"></textarea>
         <div class="bar">
@@ -202,6 +221,30 @@ let JOBS = [];              // 最近一次 status 拿到的任务
 let HISTORY = [];           // 账本行（新的在前）
 let PINNED = null;          // 用户点中的历史行 tag（不自动切大图）
 let POLL = null;
+let NAI_ARTISTS = JSON.parse(localStorage.getItem('gp_nai_artists') || '[]');
+
+function isNai() { return CUR === 'nai' || CUR === 'nai_wide'; }
+
+function renderNaiArtists() {
+  const sel = document.getElementById('naiArtist');
+  sel.innerHTML = '<option value="">不加前缀</option>';
+  NAI_ARTISTS.forEach((value, i) => {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = '画师串 ' + (i + 1) + ' · ' + value.slice(0, 24);
+    opt.title = value;
+    sel.appendChild(opt);
+  });
+}
+
+function updateNaiOptions() {
+  document.getElementById('naiOptions').classList.toggle('on', isNai());
+}
+
+function selectedNaiPrefix() {
+  const typed = document.getElementById('naiArtistInput').value.trim();
+  return typed || document.getElementById('naiArtist').value.trim();
+}
 
 async function api(url, opt) {
   const r = await fetch(url, opt ? {
@@ -247,6 +290,7 @@ async function loadChannels() {
     box.appendChild(el);
   }
   if (!CHANNELS.some(c => c.id === CUR)) CUR = CHANNELS[0].id;
+  renderNaiArtists();
   showCur();
 }
 
@@ -260,10 +304,25 @@ function pick(id) {
 
 function showCur() {
   document.getElementById('curChan').textContent = CUR || '未选';
+  updateNaiOptions();
 }
 
 // ── 输入栏：自动长高 + Ctrl+Enter ─────────────
 const TA = document.getElementById('prompt');
+const NAI_ARTIST_INPUT = document.getElementById('naiArtistInput');
+const NAI_ARTIST_SELECT = document.getElementById('naiArtist');
+document.getElementById('naiArtistSave').addEventListener('click', () => {
+  const value = NAI_ARTIST_INPUT.value.trim();
+  if (!value) { toast('先输入要保存的画师串'); NAI_ARTIST_INPUT.focus(); return; }
+  if (!NAI_ARTISTS.includes(value)) NAI_ARTISTS.push(value);
+  localStorage.setItem('gp_nai_artists', JSON.stringify(NAI_ARTISTS));
+  renderNaiArtists();
+  NAI_ARTIST_SELECT.value = value;
+  toast('画师串已保存');
+});
+NAI_ARTIST_SELECT.addEventListener('change', () => {
+  NAI_ARTIST_INPUT.value = '';
+});
 TA.addEventListener('input', () => {
   TA.style.height = 'auto';
   TA.style.height = TA.scrollHeight + 'px';   // max-height 45vh 由 CSS 兜底
@@ -277,9 +336,12 @@ async function gen(promptOverride) {
   const prompt = (promptOverride !== undefined ? promptOverride : TA.value).trim();
   if (!prompt) { toast('提示词是空的'); TA.focus(); return; }
   if (!CUR) { toast('先在左边选个渠道'); return; }
+  const artistPrefix = promptOverride === undefined ? selectedNaiPrefix() : '';
   document.getElementById('btnGen').disabled = true;
   try {
-    const d = await api('/api/gen/submit', {skill: CUR, prompt: prompt});
+    const d = await api('/api/gen/submit', {
+      skill: CUR, prompt: prompt, artist_prefix: artistPrefix
+    });
     JOBS.unshift(d.job);
     renderJobs();
     startPoll();

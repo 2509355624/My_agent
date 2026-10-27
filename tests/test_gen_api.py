@@ -70,6 +70,14 @@ class SubmitTest(unittest.TestCase):
         body.update(kw)
         return self.c.post("/api/gen/submit", json=body)
 
+    def tearDown(self):
+        # active-cap 用例用占位线程模拟排队；结束后清掉 queued 状态，
+        # 避免污染后续提交校验用例。
+        with gen_api._JOBS_LOCK:
+            for job in gen_api._JOBS.values():
+                if job["state"] == "queued":
+                    job["state"] = "done"
+
     def test_empty_prompt_is_400(self):
         r = self._submit(prompt="   ")
         self.assertEqual(r.status_code, 400)
@@ -84,6 +92,30 @@ class SubmitTest(unittest.TestCase):
         r = self._submit(prompt="x" * (gen_api._MAX_PROMPT + 1))
         self.assertEqual(r.status_code, 400)
         self.assertIn("太长", r.get_json()["error"])
+
+    def test_artist_prefix_is_accepted_only_for_nai(self):
+        def finish(job):
+            job["state"] = "done"
+
+        with mock.patch.object(gen_api, "_run", side_effect=finish):
+            r = self._submit(skill="nai", prompt="1girl, solo",
+                             artist_prefix="@artist_a, @artist_b")
+        self.assertEqual(r.status_code, 200)
+        jid = r.get_json()["job"]["id"]
+        self.assertTrue(_wait(lambda: gen_api._JOBS[jid]["state"] == "done"))
+        self.assertEqual(r.get_json()["job"]["prompt"],
+                         "@artist_a, @artist_b, 1girl, solo")
+
+        with mock.patch.object(gen_api, "_run", side_effect=finish):
+            r = self._submit(skill="silver", prompt="1girl, solo",
+                             artist_prefix="@must_not_leak")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["job"]["prompt"], "1girl, solo")
+
+    def test_artist_prefix_too_long_is_400(self):
+        r = self._submit(skill="nai", artist_prefix="x" * (gen_api._NAI_PREFIX_MAX + 1))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("画师串太长", r.get_json()["error"])
 
     def test_active_cap_rejects_sixth(self):
         """在途满 5 张时第 6 张被拒（image_jobs 每会话在途也是 5，话术要先说清）。"""
@@ -143,6 +175,24 @@ class RunTest(unittest.TestCase):
             row = next(r for r in gen_api._ledger_rows() if r["tag"] == jid)
             self.assertFalse(row["ok"])
             self.assertIn("连不上", row["error"])
+
+    def test_nai_success_uses_artist_prefixed_prompt(self):
+        class FakeJob:
+            def wait(self):
+                return {"images": [r"C:\\Temp\\nai_prefixed.png"]}
+
+        with mock.patch.object(image_jobs, "enqueue",
+                               return_value=(FakeJob(), None)) as enqueue:
+            jid = self.c.post("/api/gen/submit", json={
+                "skill": "nai", "prompt": "1girl, solo",
+                "artist_prefix": "@artist_a"
+            }).get_json()["job"]["id"]
+            self.assertTrue(self._wait_job(jid, "done"))
+            args, kw = enqueue.call_args
+            self.assertEqual(args[2], "@artist_a, 1girl, solo")
+            self.assertEqual(kw["prompt"], "@artist_a, 1girl, solo")
+            row = next(r for r in gen_api._ledger_rows() if r["tag"] == jid)
+            self.assertEqual(row["prompt"], "@artist_a, 1girl, solo")
 
     def test_nai_success_uses_cloud_queue_and_records_controlled_ref(self):
         class FakeJob:

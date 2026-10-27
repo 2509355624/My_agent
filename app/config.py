@@ -600,7 +600,7 @@ DISABLED_IMAGE_SKILLS = [s.strip() for s in
 NAI_API_KEY = os.getenv("NAI_API_KEY", "")
 NAI_PROXY = os.getenv("NAI_PROXY", "")
 NAI_ENABLED = os.getenv("NAI_ENABLED", "true").lower() not in ("0", "false", "no", "")
-NAI_OPEN_ACCESS = os.getenv("NAI_OPEN_ACCESS", "false").lower() not in ("0", "false", "no", "")
+NAI_OPEN_ACCESS = os.getenv("NAI_OPEN_ACCESS", "true").lower() not in ("0", "false", "no", "")
 
 # ─── Agent ──────────────────────────────────────────
 

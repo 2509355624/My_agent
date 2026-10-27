@@ -347,6 +347,7 @@ class AllowedTest(unittest.TestCase):
 
     def test_group_not_in_whitelist_refuses(self):
         with mock.patch.object(agents, "NAI_ENABLED", True), \
+                mock.patch.object(agents, "NAI_OPEN_ACCESS", False), \
                 mock.patch.object(agents, "load_settings", return_value=self._settings(
                     nai_enabled=True, nai_groups=["1", "2"])):
             ok, _ = agents.nai_allowed("qq", "group", "9")
@@ -355,6 +356,7 @@ class AllowedTest(unittest.TestCase):
     def test_private_not_in_whitelist_refuses(self):
         # 私聊看的是 nai_private：名单里没有就拒（nai_groups 里有也不算数）。
         with mock.patch.object(agents, "NAI_ENABLED", True), \
+                mock.patch.object(agents, "NAI_OPEN_ACCESS", False), \
                 mock.patch.object(agents, "load_settings", return_value=self._settings(
                     nai_enabled=True, nai_groups=["9"])):
             ok, why = agents.nai_allowed("qq", "private", "9")

@@ -68,6 +68,16 @@ _ledger_lock = threading.Lock()
 # ComfyUI 输出文件名：纯文件名（output 目录是平的），挡死一切路径形态。
 _IMG_NAME_RE = re.compile(r"[A-Za-z0-9._\- ]{1,120}")
 _NAI_REF_RE = re.compile(r"nai:([A-Za-z0-9._\- ]{1,120})")
+_NAI_PREFIX_MAX = 2000
+
+
+def _nai_prompt(prompt, prefix):
+    """把跑图台的 NAI 画师串放在主体提示词前；其它渠道不经过这里。"""
+    prompt = str(prompt or "").strip()
+    prefix = str(prefix or "").strip()
+    if not prefix:
+        return prompt
+    return prefix.rstrip(",，;； \\n") + ", " + prompt
 
 
 # ─── 渠道清单 ────────────────────────────────────────────
@@ -248,9 +258,17 @@ def api_submit():
     data = request.get_json(silent=True) or {}
     skill = str(data.get("skill") or "").strip()
     prompt = str(data.get("prompt") or "").strip()
+    artist_prefix = str(data.get("artist_prefix") or "").strip()
     if skill not in _channel_ids():
         return jsonify({"ok": False, "error": "未知渠道 %r（刷新页面重载渠道列）"
                         % skill}), 400
+    if skill not in image_jobs.NAI_SKILLS:
+        artist_prefix = ""
+    if len(artist_prefix) > _NAI_PREFIX_MAX:
+        return jsonify({"ok": False,
+                        "error": "画师串太长了（%d 字，上限 %d）"
+                                 % (len(artist_prefix), _NAI_PREFIX_MAX)}), 400
+    prompt = _nai_prompt(prompt, artist_prefix)
     if not prompt:
         return jsonify({"ok": False, "error": "提示词是空的"}), 400
     if len(prompt) > _MAX_PROMPT:
