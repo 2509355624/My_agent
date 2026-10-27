@@ -627,6 +627,22 @@ class PromptTemplateTest(unittest.TestCase):
             self.assertIn("worst quality", neg, name)
             self.assertNotIn("__MULTI_PROMPTS__", neg, name)
 
+    def test_anima_line_default_prefix_is_shared_by_qq_and_gen_pad(self):
+        """QQ 与跑图台共用的工作流构建结果必须带完整 anima-line 前缀。"""
+        from app.tools.normal import generate_image as gi
+        from app import gen_api
+
+        prefix = ("tianliang_duohe_fangdongye, (ask $askzy$:0.6), ciloranko, "
+                  "(sho_(sho_lwlw):0.8), masterpiece, best quality, ultra-detailed, "
+                  "absurdres, sensitive, ")
+        prompt = "1girl, solo, white shirt"
+        for builder in (gi.build_t2i_workflow, gen_api.generate_image_build):
+            wf = builder("anima-line", prompt, 12345)
+            text = wf["4"]["inputs"]["text"]
+            self.assertEqual(text, prefix + prompt)
+            self.assertEqual(text.count("tianliang_duohe_fangdongye"), 1)
+            self.assertEqual(text.count("sensitive"), 1)
+
     def test_seeds_stay_placeholders(self):
         """两个 KSampler 的 seed 都必须是裸 `__SEED__` 占位符。
 
