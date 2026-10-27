@@ -64,14 +64,12 @@ MAX_RESTART_FAILS 次仍停在扫码界面 → 暂停自动重启并退避 BACKO
 
 ## ComfyUI 分支（2026-09-30 加）
 
-⚠️ **整条分支默认停用**（`WATCHDOG_COMFY_ENABLED=0`）：上线当天凌晨就过度重启
-（05:20 / 05:51 / 06:26 各一轮 + 1800 秒退避），因为 ComfyUI 是**按需启动、常常
-故意不开**，看门狗却当成崩了。`comfy_seen` 闩是事后补的、还没真机验过，所以先整体
-关掉。真要开：`.env` 设 `WATCHDOG_COMFY_ENABLED=1` 并重启看门狗。
+默认开启，但仍受 `comfy_seen` 闩保护：看门狗启动后从未见过 ComfyUI 在线时，
+不会因为用户主动关闭 ComfyUI 而自行拉起。只有在线后连续约 120 秒失联才重启。
 
 跟 NapCat 那套**平行**、互不干扰：两边各有自己的失败计数和退避，一个挂了不影响另一个。
-探的是 ComfyUI 的 `/system_stats`（:8188），连续 `MAX_FAILS` 次拿不到就拉
-`启动ComfyUI.bat auto`（隐藏窗口）。
+探的是 ComfyUI 的 `/system_stats`（:8188），连续 4 次失败后，按 8188 找到 PID，
+用 `taskkill /F /T` 结束进程树，再执行固定 Python 启动命令。
 
 四条跟 NapCat 不一样的地方：
 
@@ -86,9 +84,9 @@ MAX_RESTART_FAILS 次仍停在扫码界面 → 暂停自动重启并退避 BACKO
 3. **没有「登录态」这种中间态**：NapCat 要分 online/offline/dead 三态（因为「进程活着
    但没登录」需要扫码）。ComfyUI 只有「8188 通」和「不通」两态，判定简单。
 
-4. **不 taskkill**：探活连续 3 次失败时进程多半已经没了，杀不杀一样；反过来万一误判
-   （ComfyUI 正在自己重启、或只是卡了一下），一杀就是把正在跑的图连进程一起干掉。所以
-   bat 只负责起，端口被占时 ComfyUI 自己会报 bind 失败退出。
+4. **进程级恢复**：连续 4 次失败后按 8188 找到监听 PID，使用 `taskkill /F /T`
+   结束 ComfyUI 进程树，再按固定命令启动。这个动作会中断当时正在运行的图片任务，
+   但它只在约 120 秒持续失联后发生，不会因为一次短暂探测失败就杀进程。
 
 ⚠️ **自己没人守**这个老问题依旧：本进程崩了没人拉它（bat 只看「有没有 WATCHDOG 窗口」）。
 """
@@ -108,7 +106,8 @@ except ImportError:  # 非 Windows 上退化成无锁（本项目不会走到这
     msvcrt = None
 
 from app import notify
-from app.config import (BASE_DIR, NOTIFY_QRCODE_PATH, WEBUI_PORT,
+from app.config import (BASE_DIR, COMFYUI_PYTHON, COMFYUI_ROOT,
+                        NOTIFY_QRCODE_PATH, WEBUI_PORT,
                         WATCHDOG_COMFY_ENABLED,
                         WATCHDOG_SILENCE_COOLDOWN, WATCHDOG_SILENCE_MAX_GAP,
                         WATCHDOG_SILENCE_RESTART, WATCHDOG_SILENCE_SECONDS)
@@ -163,16 +162,14 @@ _LOCK_PATH = os.path.join(BASE_DIR, "state", "watchdog.lock")
 # 用端口反推而不是再加一个 env：只会有一个真相源，不会两边配不一致。
 _PROTOCOL_ARG = "" if WEBUI_PORT == 6099 else "snowluma"
 
-# ── ComfyUI 分支参数（2026-09-30 加）──────────────────
-# 跟 NapCat 同一套时序：30 秒探一次、连续 3 次算死（≈90 秒）。用户 09-30 拍板沿用。
+# ── ComfyUI 分支参数 ──────────────────────────────────
+# ComfyUI 单独采用约 120 秒失联阈值：30 秒探一次，连续 4 次失败才重启。
 COMFYUI_URL = "http://127.0.0.1:8188"
-COMFYUI_BAT = os.path.join(BASE_DIR, "启动ComfyUI.bat")
 COMFYUI_TIMEOUT = 5.0      # 探 /system_stats 的超时（秒）——本机口，给足 5 秒够了
+COMFY_FAILS_BEFORE_RESTART = 4
+COMFYUI_RESTART_WAIT = 180.0
 
-# ComfyUI 崩了没人管这件事，只有本进程在兜。自己崩了就没人拉它——这是已知缺口，
-# 不在这里解决（bat 只看窗口标题）。
-#
-# ⚠️ 总闸默认关（09-30）：见 `_comfy_cycle` docstring。
+# ComfyUI 由本进程负责恢复；看门狗自身若退出，仍需要外部启动器负责拉起。
 COMFY_ENABLED = WATCHDOG_COMFY_ENABLED
 _COMFY_SESSION = None
 
@@ -217,22 +214,77 @@ def _probe_comfyui(timeout=None):
         return False, "%s: %s" % (type(e).__name__, e)
 
 
+def _comfy_pid_by_port():
+    """按 8188 的 LISTENING 记录找到 ComfyUI PID。"""
+    try:
+        result = subprocess.run(
+            ["netstat", "-ano"], capture_output=True, timeout=15,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception:
+        log.warning("查 ComfyUI 端口归属失败", exc_info=True)
+        return None
+    raw = result.stdout or b""
+    if isinstance(raw, bytes):
+        text = raw.decode("gbk", "replace")
+    else:
+        text = str(raw)
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 5 or parts[0].upper() != "TCP":
+            continue
+        if parts[-2].upper() != "LISTENING":
+            continue
+        if not parts[1].endswith(":8188") or not parts[-1].isdigit():
+            continue
+        return int(parts[-1])
+    return None
+
+
+def _kill_comfy_process(pid):
+    """强制结束 ComfyUI 进程树，避免 python 子进程残留占住 8188。"""
+    try:
+        result = subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            capture_output=True, timeout=30,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        if result.returncode == 0:
+            log.warning("已强制结束 ComfyUI 进程树 PID %d", pid)
+            return True
+        log.error("强制结束 ComfyUI 失败 PID %d，返回码 %s", pid,
+                  result.returncode)
+    except Exception:
+        log.error("强制结束 ComfyUI 失败 PID %d", pid, exc_info=True)
+    return False
+
+
 def _trigger_comfy_restart():
-    """拉起「启动ComfyUI.bat auto」，隐藏窗口、不阻塞。返回是否成功发起。"""
-    if not os.path.exists(COMFYUI_BAT):
-        log.error("找不到 %s，无法重启 ComfyUI", COMFYUI_BAT)
+    """按固定 Python 命令启动 ComfyUI，隐藏窗口、不阻塞。"""
+    main_py = os.path.join(COMFYUI_ROOT, "main.py")
+    if not os.path.isfile(COMFYUI_PYTHON):
+        log.error("找不到 ComfyUI Python：%s", COMFYUI_PYTHON)
+        return False
+    if not os.path.isfile(main_py):
+        log.error("找不到 ComfyUI 主程序：%s", main_py)
+        return False
+    old = _comfy_pid_by_port()
+    if old is not None and not _kill_comfy_process(old):
         return False
     try:
         subprocess.Popen(
-            ["cmd", "/c", COMFYUI_BAT, "auto"],
+            [COMFYUI_PYTHON, main_py, "--listen", "127.0.0.1",
+             "--port", "8188", "--enable-cors-header", "*"],
             creationflags=subprocess.CREATE_NO_WINDOW,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            cwd=COMFYUI_ROOT,
         )
+        log.info("已按固定命令启动 ComfyUI：%s", COMFYUI_ROOT)
         return True
     except Exception as e:
-        log.error("拉起 ComfyUI 启动脚本失败：%s", e)
+        log.error("启动 ComfyUI 失败：%s", e)
         return False
 
 
@@ -280,8 +332,8 @@ def _comfy_cycle(state, now=None):
 
     state["comfy_fails"] += 1
     log.warning("ComfyUI 探活失败 (%d/%d)：%s",
-                state["comfy_fails"], MAX_FAILS, detail)
-    if state["comfy_fails"] < MAX_FAILS:
+                state["comfy_fails"], COMFY_FAILS_BEFORE_RESTART, detail)
+    if state["comfy_fails"] < COMFY_FAILS_BEFORE_RESTART:
         return True
     return _comfy_restart(state, now, detail)
 

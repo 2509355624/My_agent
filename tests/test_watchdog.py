@@ -3,7 +3,7 @@
 覆盖：三态探测（online / offline / dead）、未到阈值不重启、到阈值触发重启并恢复、
 登录态失效满宽限期才重启、重启后要扫码只推一条合并通知、一直没人扫码会退避、
 重启连续失败放弃并退避、退避期内不动作、静默判据（假在线）、启动互斥（文件锁）、
-ComfyUI 分支（独立计数 / 静默重启 / 失败才求助）。
+    ComfyUI 分支（独立计数 / 进程树强杀 / 固定命令重启 / 失败才求助）。
 不涉及真实 NapCat / ComfyUI / subprocess。
 """
 
@@ -525,11 +525,10 @@ class ComfyuiWatchTest(TestCase):
         return {"comfy_fails": 0, "comfy_restart_fails": 0,
                 "comfy_backoff_until": 0.0, "comfy_seen": seen}
 
-    def test_disabled_by_default(self):
-        """⚠️ 默认必须先断言总闸是关的 —— 整条分支停用是 09-30 的决定。"""
+    def test_enabled_by_default(self):
+        """ComfyUI 看门狗默认开启，但仍受 comfy_seen 闩保护。"""
         from app import config as cfg
-        self.assertFalse(cfg.WATCHDOG_COMFY_ENABLED,
-                         "ComfyUI 分支默认必须是关的：它会把没在跑的 ComfyUI 反复拉起来")
+        self.assertTrue(cfg.WATCHDOG_COMFY_ENABLED)
 
     def test_disabled_switch_never_restarts(self):
         """总闸关掉时：即使连续失败、闩也开着，也**一次都不能重启**。"""
@@ -568,12 +567,12 @@ class ComfyuiWatchTest(TestCase):
         wd._comfy_cycle(state)
         self.assertTrue(state["comfy_seen"])
         wd._probe_comfyui.return_value = (False, "refused")
-        for _ in range(wd.MAX_FAILS):
+        for _ in range(wd.COMFY_FAILS_BEFORE_RESTART):
             wd._comfy_cycle(state)
         wd._trigger_comfy_restart.assert_called_once()
 
     def test_below_threshold_no_restart(self):
-        """连续失败但没到 3 次：不动作。"""
+        """连续失败但没到 4 次：不动作。"""
         wd._probe_comfyui.return_value = (False, "refused")
         state = self.new_state()
         wd._comfy_cycle(state)
@@ -581,10 +580,10 @@ class ComfyuiWatchTest(TestCase):
         wd._trigger_comfy_restart.assert_not_called()
         self.assertEqual(state["comfy_fails"], 2)
 
-    def test_third_failure_triggers_restart(self):
+    def test_fourth_failure_triggers_restart(self):
         wd._probe_comfyui.return_value = (False, "refused")
         state = self.new_state()
-        for _ in range(3):
+        for _ in range(wd.COMFY_FAILS_BEFORE_RESTART):
             wd._comfy_cycle(state)
         wd._trigger_comfy_restart.assert_called_once()
         self.assertEqual(state["comfy_fails"], 0)   # 计数归零，重新数
@@ -596,7 +595,7 @@ class ComfyuiWatchTest(TestCase):
         """
         wd._probe_comfyui.return_value = (False, "refused")
         state = self.new_state()
-        for _ in range(3):
+        for _ in range(wd.COMFY_FAILS_BEFORE_RESTART):
             wd._comfy_cycle(state)
         wd.push_text.assert_not_called()
 
@@ -614,7 +613,7 @@ class ComfyuiWatchTest(TestCase):
         """连续 MAX_RESTART_FAILS 次都救不活才推「需人工处理」。"""
         wd._probe_comfyui.return_value = (False, "refused")
         state = self.new_state()
-        for _ in range(wd.MAX_RESTART_FAILS * 3):
+        for _ in range(wd.MAX_RESTART_FAILS * wd.COMFY_FAILS_BEFORE_RESTART):
             wd._comfy_cycle(state)
         self.assertTrue(wd.push_text.called)
         title, body = wd.push_text.call_args[0][:2]
@@ -633,7 +632,7 @@ class ComfyuiWatchTest(TestCase):
         wd._trigger_comfy_restart.return_value = False
         wd._probe_comfyui.return_value = (False, "refused")
         state = self.new_state()
-        for _ in range(wd.MAX_RESTART_FAILS * 3):
+        for _ in range(wd.MAX_RESTART_FAILS * wd.COMFY_FAILS_BEFORE_RESTART):
             wd._comfy_cycle(state)
         self.assertGreater(state["comfy_backoff_until"], 0.0)
 
@@ -643,7 +642,7 @@ class ComfyuiWatchTest(TestCase):
         nap = {"fails": 0, "restart_fails": 0, "offline_since": None,
                "backoff_until": 0.0, "silence_until": 0.0, "silence_gap": 0.0}
         comfy = self.new_state()
-        for _ in range(3):
+        for _ in range(wd.COMFY_FAILS_BEFORE_RESTART):
             wd._comfy_cycle(comfy)
         self.assertEqual(nap["fails"], 0)
         self.assertEqual(nap["restart_fails"], 0)
@@ -678,6 +677,34 @@ class ComfyuiProbeTest(TestCase):
     def test_dead_on_connection_error(self):
         self._patch(error=OSError("refused"))
         self.assertFalse(wd._probe_comfyui()[0])
+
+
+class ComfyuiRestartCommandTest(TestCase):
+    """固定启动命令和进程树强杀参数。"""
+
+    def test_restart_kills_port_pid_and_starts_requested_command(self):
+        fake = mock.Mock()
+        fake.run.return_value = mock.Mock(returncode=0, stdout=b"")
+        fake.Popen.return_value = mock.Mock()
+        with mock.patch.object(wd, "subprocess", fake), \
+             mock.patch("app.watchdog.os.path.isfile", return_value=True), \
+             mock.patch.object(wd, "_comfy_pid_by_port", return_value=1234), \
+             mock.patch.object(wd, "COMFYUI_PYTHON", "D:/AI/confyui_env/Scripts/python.exe"), \
+             mock.patch.object(wd, "COMFYUI_ROOT", "D:/AI/ComfyUI_v037"):
+            self.assertTrue(wd._trigger_comfy_restart())
+        fake.run.assert_called_once_with(
+            ["taskkill", "/F", "/T", "/PID", "1234"],
+            capture_output=True, timeout=30,
+            creationflags=fake.CREATE_NO_WINDOW,
+        )
+        args = fake.Popen.call_args
+        self.assertEqual(args.args[0], [
+            "D:/AI/confyui_env/Scripts/python.exe",
+            __import__("os").path.join("D:/AI/ComfyUI_v037", "main.py"),
+            "--listen", "127.0.0.1", "--port", "8188",
+            "--enable-cors-header", "*",
+        ])
+        self.assertEqual(args.kwargs["cwd"], "D:/AI/ComfyUI_v037")
 
 
 class _FakeClock:

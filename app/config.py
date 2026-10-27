@@ -364,6 +364,12 @@ def rag_enabled():
     return True
 
 COMFYUI_URL = os.getenv("COMFYUI_URL", "http://127.0.0.1:8188")
+# 看门狗重启 ComfyUI 时使用的固定解释器和项目目录。
+# 默认值对应本机实际启动命令，也允许以后迁移环境时只改 .env。
+COMFYUI_PYTHON = os.getenv(
+    "COMFYUI_PYTHON", "D:\\AI\\confyui_env\\Scripts\\python.exe"
+)
+COMFYUI_ROOT = os.getenv("COMFYUI_ROOT", "D:\\AI\\ComfyUI_v037")
 
 # 默认生图渠道（2026-10-19）：用户没点名渠道、模型也没填 skill 时落这里。
 #
@@ -912,9 +918,8 @@ WATCHDOG_SILENCE_RESTART = os.getenv("WATCHDOG_SILENCE_RESTART", "0") not in ("0
 # ⚠️ 默认 0 = 整个 ComfyUI 分支不动作（只探活不重启）。
 # 09-30 凌晨它过度重启：05:20/05:51/06:26 各触发一轮（含 1800 秒退避），
 # 因为 ComfyUI 是**按需启动、常常故意不开**，看门狗却当成「崩了」。
-# 后来给分支加了 `comfy_seen` 闩（只在「本来在跑」时才管），但那一版还没在
-# 真机验过就撞上了这次事故，所以先整体关掉；等真机验证过 comfy_seen 再开。
-WATCHDOG_COMFY_ENABLED = os.getenv("WATCHDOG_COMFY_ENABLED", "0") not in ("0", "false", "False", "")
+# 现在默认开启；`comfy_seen` 闩仍保留，只在 ComfyUI 曾经在线后持续失联时执行恢复。
+WATCHDOG_COMFY_ENABLED = os.getenv("WATCHDOG_COMFY_ENABLED", "1") not in ("0", "false", "False", "")
 
 
 # ─── 自定义 LLM 中转站（2026-10-22）─────────────────────────
