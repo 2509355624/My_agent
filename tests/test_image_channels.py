@@ -2432,11 +2432,12 @@ class MossFourStepRetiredTest(unittest.TestCase):
         self.assertIsNotNone(data["workflow"])
 
     def test_gen_pad_offers_only_one_moss_channel(self):
-        """2026-10-28 晚起 MOSS **只有 `moss-qunyou` 一条**（25 步）。
+        """2026-10-28 晚起 MOSS 步数档**只有 `moss-qunyou` 一条**（25 步）。
 
         用户原话「我们 moss 以后就一个 25 步长的渠道即可，8 步长效果很差」——
         `moss8` / `moss50` / `moss_page` 已经跟 4 步 `moss` 一样进
         `ARCHIVED_SKILLS`，跑图台的渠道清单里这四个名字都应该消失。
+        （横屏另开 `moss-wide` 孪生渠道，见下面那个测试；步数档没有第二条。）
         """
         from app.gen_api import channels
         ids = {c["id"] for c in channels()}
@@ -2446,7 +2447,7 @@ class MossFourStepRetiredTest(unittest.TestCase):
         self.assertIn("moss-qunyou", ids)
 
     def test_the_only_moss_channel_runs_twenty_five_steps(self):
-        """渠道只剩一条，步数就被钉死在 25——别再退回 8 或 50。
+        """步数档只剩一条，步数就被钉死在 25——别再退回 8 或 50。
 
         两处都要对：工作流文件（跑图台直接吃它）和 `moss_api.STEPS`
         （漫画台 `_draw()` 提交前会再覆写一次，两边漂移就会出现
@@ -2461,6 +2462,53 @@ class MossFourStepRetiredTest(unittest.TestCase):
         self.assertEqual(samplers[0]["inputs"]["steps"], 25)
         self.assertEqual(moss_api.STEPS, 25)
         self.assertEqual(moss_api.SKILL, "moss-qunyou")
+
+
+class MossWideLandscapeTwinTest(unittest.TestCase):
+    """`moss-wide`：moss 的横屏孪生（2026-10-28）。
+
+    群友原版工作流本来就带着 1536×1024 的悬空 latent（横/方/竖三个只接了
+    竖的），横版是配方作者预留的分辨率，不是我们拍脑袋开的。
+    """
+
+    def test_landscape_latent_and_same_recipe(self):
+        wf = load_skill("moss-wide")["workflow"]
+        latents = [n for n in wf.values()
+                   if n.get("class_type") == "EmptyFlux2LatentImage"]
+        self.assertEqual(len(latents), 1)
+        self.assertEqual(latents[0]["inputs"]["width"], 1536)
+        self.assertEqual(latents[0]["inputs"]["height"], 1024)
+        # 其余参数必须和竖版一字不差：同 25 步、同 cfg、同 LoRA 槽
+        wide = load_skill("moss-wide")["workflow"]
+        tall = load_skill("moss-qunyou")["workflow"]
+        self.assertEqual(len(wide), len(tall))
+        ks = [n for n in wide.values()
+              if n.get("class_type") in ("KSampler", "KSamplerAdvanced")]
+        self.assertEqual(ks[0]["inputs"]["steps"], 25)
+        self.assertEqual(ks[0]["inputs"]["cfg"], 3)
+        for nid, node in tall.items():
+            if node.get("class_type") == "MOSSLoRAToggle":
+                self.assertEqual(wide[nid]["inputs"], node["inputs"])
+
+    def test_alias_and_timeout_and_whitelist(self):
+        # 原话点名才走；裸「moss」必须仍然落竖版
+        from app import direct_gen
+        from app import image_jobs
+        text = "moss横屏 一张风景"
+        tokens = direct_gen._FIXED_CHAN_RE.findall(text)
+        self.assertTrue(any(direct_gen._fixed_chan(t, text) == "moss-wide"
+                            for t in tokens),
+                        "「moss横屏」要能归一到 moss-wide，tokens=%r" % (tokens,))
+        text2 = "moss 一张少女"
+        tokens2 = direct_gen._FIXED_CHAN_RE.findall(text2)
+        self.assertTrue(any(direct_gen._fixed_chan(t, text2) == "moss-qunyou"
+                            for t in tokens2))
+        # 超时同档（模块级常量）
+        self.assertEqual(image_jobs.SKILL_TIMEOUTS.get("moss-wide"), 420)
+        # QQ 白名单里要有，否则 QQ 侧点名会被 agent 拒掉
+        import json as _json
+        agent = _json.load(open("agents/qq/agent.json", encoding="utf-8"))
+        self.assertIn("moss-wide", agent.get("skills", []))
 
 
 if __name__ == "__main__":

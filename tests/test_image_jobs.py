@@ -3283,13 +3283,15 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
         #  cfg 1，真实执行 42~46 s；360 是留给「每画一张 ComfyUI 自动重启一次」
         #  的等待窗口（轮询虚高 40~95 s，判耗时才认日志 Prompt executed in）。
         #  ⚠️ 别拿这个数当当前配置一定跑得完的证据（moss8 那条同款教训）。
-        # 2026-10-28 加 `moss-qunyou`，当天晚些从 900 收到 **420**：它是**唯一活着
-        #   的 moss 渠道**（8/50/整页三档全部下架），步数 50 → 25，1024×1536。
+        # 2026-10-28 加 `moss-qunyou`，当天晚些从 900 收到 **420**：它是唯一活着的
+        #   moss 竖版渠道（8/50/整页三档全部下架），步数 50 → 25，1024×1536。
         #   实测重启后第一张 74.1 秒（含冷加载），420 ≈ 冷启 130 秒的 3 倍余量。
         #   QQ 侧现在也能点它（`moss` 及其所有老喊法都归一到这里）。
+        # 2026-10-28 晚加 `moss-wide`(420)：moss 的横屏孪生（1536×1024），像素数
+        #   与竖版相同 → 耗时与超时同档，见 `skills/moss-wide/skill.md`。
         self.assertEqual(sorted(image_jobs.SKILL_TIMEOUTS),
-                         ["_comic_batch", "moss", "moss-qunyou", "moss50",
-                          "moss8", "moss_page",
+                         ["_comic_batch", "moss", "moss-qunyou", "moss-wide",
+                          "moss50", "moss8", "moss_page",
                           "qwen-charsheet", "qwen-hd", "qwen-restore", "qwen30",
                           "qwen_image_v1", "sf"])
         for skill in ("qwen_image_v1", "qwen-hd", "qwen-charsheet", "qwen30"):
@@ -3299,6 +3301,7 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
         self.assertEqual(image_jobs.task_timeout("moss8"), 300)
         self.assertEqual(image_jobs.task_timeout("moss_page"), 700)
         self.assertEqual(image_jobs.task_timeout("moss-qunyou"), 420)
+        self.assertEqual(image_jobs.task_timeout("moss-wide"), 420)
         self.assertEqual(image_jobs.task_timeout("_comic_batch"), 240)
         self.assertEqual(image_jobs.task_timeout("qwen-restore"), 300)
         self.assertEqual(image_jobs.task_timeout("sf"), 360)

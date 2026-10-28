@@ -410,6 +410,14 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    "moss8v": "moss-qunyou",
                    "moss25": "moss-qunyou", "moss25步": "moss-qunyou",
                    "moss50": "moss-qunyou", "moss50步": "moss-qunyou",
+                   # moss 横屏孪生（2026-10-28，`skills/moss-wide/` 1536×1024）：
+                   # 照 `nai` / `nai_wide` 的套路，点名才走，裸「moss」仍是竖版。
+                   # ⚠️ 中文别名必须整词登记进 map——`_fixed_chan` 是把正则剥下来
+                   #    的 token 去空格后查这张表，正则里认了而 map 里没有就会
+                   #    把「moss横屏」原样当渠道 id 报未知。
+                   "mosswide": "moss-wide",
+                   "moss横屏": "moss-wide", "moss横版": "moss-wide",
+                   "moss横图": "moss-wide",
                    "日系": "krea2-rella"}
 _FIXED_CHAN_RE = re.compile(
     r"(?<![0-9A-Za-z_])"
@@ -472,7 +480,11 @@ _FIXED_CHAN_RE = re.compile(
     #    不报错，而且必须排在 `moss\s*8\s*步?` 前面把尾巴那个 v 一起吃掉。
     r"|sd|qwen-hd|qwen|nffa|nai|cunny|miao"
     r"|moss\s*50\s*步?|moss\s*25\s*步?|moss\s*4\s*步?"
-    r"|moss\s*8\s*v|moss\s*8\s*步?|moss)"
+    r"|moss\s*8\s*v|moss\s*8\s*步?"
+    # moss 横屏孪生（2026-10-28）：必须排在裸 `moss` 前，否则「moss横屏」
+    # 只吃掉「moss」、正文剩「横屏」两个字。
+    r"|moss\s*(?:wide|横屏|横版|横图)"
+    r"|moss)"
     r"(?![0-9A-Za-z_])",
     re.I)
 
@@ -965,6 +977,8 @@ GUIDE_TEXT = (
     "　miao　　皮肤质感滑嫩 · 2x 出 3072×4608\n"
     "　moss　　MOSS-Image · 图里写中英文最准 · **25 步 1024×1536 约 74 秒**\n"
     "　　　　　（就这一条，没有 8/50 步档了；文字与 50 步同档，省约 1/4 时间）\n"
+    "　moss横屏 同上 · **1536×1024 横版**（说「moss横屏/横版/横图」才走，\n"
+    "　　　　　裸「moss」永远竖屏；像素数一样，耗时不变）\n"
     "　nai　　 NovelAI 云端 · 认画师串/权号\n"
     "\n"
     "【引用玩法】\n"
@@ -1444,7 +1458,8 @@ _MASTER_TEMPLATE = (
     "| sd | `image_gen_v1` | 点名 sd |\n"
     "| jank | `jank` | 点名 jank |\n"
     "| nffa、cunny、miao | 同名 id | 点名才用，cunny / miao 很慢 |\n"
-    "| moss | `moss-qunyou` | 点名 moss，唯一的 MOSS 渠道（25 步 1024×1536 约 74 秒），出字最准 |\n"
+    "| moss | `moss-qunyou` | 点名 moss，竖版 MOSS 渠道（25 步 1024×1536 约 74 秒），出字最准 |\n"
+    "| moss横向、moss-wide | `moss-wide` | 点名 moss 且要横向画面（1536×1024，其余同 moss；裸「moss」永远竖版；中文点名词由代码直接归一到这条，轮不到你填） |\n"
     "| anima线条 | `anima-line` | 点名，线条感重 |\n"
     "| anima写实 | `anima-real` | 点名，真人质感 |\n"
     "| anima鬼针草 | `anima-guizhencao` | 点名，鬼针草画风 |\n"
@@ -1559,6 +1574,8 @@ _REVISE_TEMPLATE = (
     "  moss = 原话点名「moss」才填（MOSS-Image 5B，**25 步** / 1024×1536 / "
     "约 74 秒，画面出字最准，纯文生图；8 步 / 50 步两档已下架，"
     "说「moss8 / moss50」也一律落这一条）；\n"
+    "  moss-wide = 同模型横版 1536×1024（其余同 moss；原话点名横向才填，"
+    "裸「moss」永远是竖版，别替用户横过来）；\n"
     "  jank = 原话明说「jank」才填（用户自定义渠道）。\n"
     "  silver-hd = silver 的 4x 超清版，原话明说「silver-hd」或「silver 超清」才填。\n"
     "  qwen-hd = qwen 的 4x 超清版，原话明说「qwen-hd」或「qwen 超清」才填。\n"
