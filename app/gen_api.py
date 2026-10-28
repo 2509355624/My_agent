@@ -184,6 +184,13 @@ def _public(job):
                                 "state", "error", "file", "ts")}
 
 
+def _enabled_loras(job):
+    """这张任务实际启用的 LoRA 槽（只留开的，账本行别堆一堆关着的）。"""
+    return [{"slot": s["slot"], "name": s.get("name") or "",
+             "strength": s.get("strength")}
+            for s in (job.get("loras") or []) if s.get("on")]
+
+
 def _run(job):
     """worker 线程体：按渠道走 ComfyUI 或 NAI 队列，出图后记账。"""
     try:
@@ -220,7 +227,8 @@ def _run(job):
             seed = job["seed"]
         _ledger_append({"tag": job["id"], "skill": job["skill"],
                         "prompt": job["prompt"], "seed": seed,
-                        "file": file_ref, "ts": job["ts"], "ok": True})
+                        "file": file_ref, "ts": job["ts"], "ok": True,
+                        "loras": _enabled_loras(job)})
         with _JOBS_LOCK:
             job["state"] = "done"
             job["file"] = file_ref
@@ -324,6 +332,14 @@ def api_submit():
     slots, errs, _warn = lora_slots.normalize(data.get("loras"))
     if errs:
         return jsonify({"ok": False, "error": "；".join(errs)}), 400
+    # 槽位补文件名：前端只传槽号，账本行要靠名字显示「这张图挂了哪个 LoRA」
+    if slots:
+        wf = (load_skill(skill) or {}).get("workflow") or {}
+        if lora_slots.has_toggle(wf):
+            names = {s["slot"]: s.get("name") or ""
+                     for s in lora_slots.read_slots(wf)}
+            for s in slots:
+                s["name"] = names.get(s["slot"], "")
     with _JOBS_LOCK:
         active = sum(1 for j in _JOBS.values() if j["state"] == "queued")
         if active >= _MAX_ACTIVE:

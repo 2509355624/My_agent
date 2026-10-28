@@ -152,6 +152,8 @@
   .h-item .sd { font-size: 11px; color: var(--text-mute); }
   .h-item .tm { font-size: 11px; color: var(--text-mute); }
   .h-item .bad { font-size: 11px; color: var(--error); }
+  .h-item .lor { font-size: 10px; color: var(--warn); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
   /* 「复制」按鼠标悬停才浮出来：面板只有 264px，常驻按钮会把缩略图挤窄 */
   .h-item { position: relative; }
   .h-copy { position: absolute; top: 6px; right: 6px; padding: 0 6px;
@@ -266,7 +268,10 @@ let CHANNELS = [];
 let CUR = localStorage.getItem('gp_channel') || '';
 let JOBS = [];              // 最近一次 status 拿到的任务
 let HISTORY = [];           // 账本行（新的在前）
-let PINNED = null;          // 用户点中的历史行 tag（不自动切大图）
+let PINNED = null;          // 当前大图对应的任务/历史 tag
+let PINNED_AUTO = false;    // PINNED 是轮询自动展示的（true）还是用户手点的（false）。
+                            // 区分这两者：自动展示的可以被更新完成的图顶掉；
+                            // 用户手点的历史行不能被抢（2026-10-28 修「出图不自动刷」）。
 let POLL = null;
 let NAI_ARTISTS = JSON.parse(localStorage.getItem('gp_nai_artists') || '[]');
 
@@ -548,7 +553,11 @@ function startPoll() {
         qd.textContent = '队列里还有 ' + d.queue_depth + ' 张（含 QQ 的）';
       } else { qd.style.display = 'none'; }
       renderJobs();
-      if (JOBS.some(j => j.state === 'done') && !PINNED) showLatestDone();
+      // 自动切大图：没钉过图就切；钉的是「自动展示」的也切（新图顶旧图）——
+      // 之前只判 !PINNED，连发两张时第二张永远不自动出来。
+      const done = JOBS.filter(j => j.state === 'done');
+      if (done.length && (!PINNED || (PINNED_AUTO && done[0].id !== PINNED)))
+        showLatestDone();
       if (!JOBS.some(j => j.state === 'queued')) {
         loadHistory();
         stopPoll();
@@ -595,11 +604,12 @@ function renderJobs() {
 function showLatestDone() {
   const done = JOBS.filter(j => j.state === 'done');
   if (!done.length) return;
-  showShot(done[0]);
+  showShot(done[0], true);
 }
 
-function showShot(j) {
+function showShot(j, auto) {
   PINNED = j.id || j.tag;
+  PINNED_AUTO = !!auto;
   document.getElementById('viewEmpty').style.display = 'none';
   const box = document.getElementById('shot');
   box.innerHTML = '';
@@ -637,6 +647,20 @@ async function loadHistory() {
   renderHistory();
 }
 
+// ── 历史行上的 LoRA 短标（2026-10-28：方便同 seed 对比）──
+// moss-maliker_moss_base_style_v3_e40.safetensors → maliker 0.4。先去扩展名
+// 和 moss- 前缀，取第一段（到 _ 或 - 为止），没有分隔符就截 7 字；
+// 完整名悬停在 title 里。
+function loraShort(name) {
+  const s = (name || '').replace(/\.safetensors$/i, '').replace(/^moss-/, '');
+  return (s.split(/[_\-]/)[0] || s).slice(0, 7);
+}
+function loraTag(loras) {
+  return (loras || []).filter(l => l.name).map(l =>
+    loraShort(l.name) + ' ' + (Math.round((l.strength || 0) * 100) / 100)
+  ).join(' · ');
+}
+
 function renderHistory() {
   const box = document.getElementById('hList');
   if (!HISTORY.length) { box.innerHTML = '<div class="h-empty">还没有记录</div>'; return; }
@@ -657,9 +681,17 @@ function renderHistory() {
     }
     const info = document.createElement('div');
     info.className = 'info';
-    info.innerHTML = '<div class="sk"></div><div class="sd"></div>' +
+    const lt = loraTag(r.loras);
+    info.innerHTML = '<div class="sk"></div>' +
+      (lt ? '<div class="lor"></div>' : '') +
+      '<div class="sd"></div>' +
       (r.ok ? '<div class="tm"></div>' : '<div class="bad"></div>');
     info.querySelector('.sk').textContent = r.skill;
+    if (lt) {
+      info.querySelector('.lor').textContent = lt;
+      info.querySelector('.lor').title =
+        (r.loras || []).map(l => l.name + ' ' + l.strength).join('\n');
+    }
     info.querySelector('.sd').textContent = 'seed ' + (r.seed ?? '—');
     if (r.ok) info.querySelector('.tm').textContent = fmtTime(r.ts);
     else info.querySelector('.bad').textContent = (r.error || '失败').slice(0, 40);
