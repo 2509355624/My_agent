@@ -164,7 +164,7 @@ import time
 
 import requests
 
-from app import comfy_gate, comfy_out, comfy_progress, image_log
+from app import comfy_gate, comfy_launch, comfy_out, comfy_progress, image_log
 from app.cancel import Cancelled, is_cancelled
 from app.config import (BASE_DIR, COMFY_MIN_FREE_RAM_GB, COMFY_MIN_FREE_VRAM_GB,
                         COMFY_RELEASE_AFTER_COMIC,
@@ -415,6 +415,11 @@ POLL_INTERVAL = 2
 # 连续两次读数越线才动手（约 2 步 ≈ 10 秒），单次抖动不砍图。
 SLOW_STEP_SIT = 5.0
 SLOW_STEP_STRIKES = 2
+
+# 采样降级后「自动重启 + 重画同一张」的次数（2026-10-28 用户拍板）。
+# 重启是唯一有效的止血，所以不能把这张判死让人自己重启；但只重来一次——
+# 重启后还慢说明不是换页（真不够内存 / 卡被别人占着），再重启只是白等。
+SLOW_RESTART_RETRIES = 1
 
 # 超时中断后，等 ComfyUI 真正退场的上限（秒）。等不到就是「活着但卡住」——
 # 卡在一次不返回的调用里，`/interrupt` 设的协作标志它永远读不到，于是
@@ -1484,10 +1489,11 @@ def _restart_comfy(timeout=COMFY_RESTART_WAIT):
                  type(exc).__name__)
         status = None                # 不是拒绝，继续往下等它回来
     if status is not None and status != 200:
-        log.warning("重启 ComfyUI 被拒（HTTP %d）——多半是 ComfyUI-Manager 的 "
-                    "security_level 高于 normal，见 user/__manager/config.ini",
-                    status)
-        return False
+        # 404 = 这个实例没装 Manager（nightly 精简部署）、403 = security_level
+        # 太高、5xx = Manager 自己炸了。三种情况都还有一条路：按端口强杀再拉起
+        # ——命令行从 comfy_launch 取，和看门狗完全一致。
+        log.warning("重启请求被拒（HTTP %d），改走进程级强制重启", status)
+        return _force_restart_comfy(timeout)
 
     log.info("ComfyUI 正在重启，等它回来（最多 %.0f 秒）", timeout)
     time.sleep(3)                    # 先等旧进程真的交出去，别刚发完就探到它
@@ -1606,9 +1612,12 @@ def _force_restart_comfy(timeout=COMFY_RESTART_WAIT):
         log.info("ComfyUI 正被 %s 占用，这次不强制重启",
                  comfy_gate.describe(comfy_gate.holder()))
         return False
-    bat = os.path.join(BASE_DIR, "启动ComfyUI.bat")
-    if not os.path.exists(bat):
-        log.error("找不到 %s，无法强制重启 ComfyUI", bat)
+    # 命令从 `comfy_launch` 取，不走 `启动ComfyUI.bat`：那个 bat 里写死
+    # `ComfyUI_v037` + `--vram-headroom 1 --force-fp16`，换到 nightly 之后用它
+    # 强杀重启会拉起一个起不来的旧实例（缺 --disable-comfy-compiler），还会抢 8188。
+    cmd = comfy_launch.command()
+    if not cmd:
+        log.error("取不到 ComfyUI 启动命令（COMFYUI_PYTHON / COMFYUI_ROOT 不对）")
         return False
     # 任何一次重启都重置防抖，别再让水位检查紧跟着重启一次。
     with _lock:
@@ -1632,15 +1641,24 @@ def _force_restart_comfy(timeout=COMFY_RESTART_WAIT):
             log.error("杀了 %d 但 20 秒后 8188 仍被占着，放弃", old)
             return False
 
+    stream = comfy_launch.log_stream()
     try:
         subprocess.Popen(
-            ["cmd", "/c", bat, "auto"],
+            cmd,
             creationflags=subprocess.CREATE_NO_WINDOW,
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, cwd=BASE_DIR)
+            stdin=subprocess.DEVNULL, stdout=stream,
+            stderr=stream, cwd=comfy_launch.cwd(),
+            env=comfy_launch.env())
     except Exception:
-        log.error("拉起 ComfyUI 启动脚本失败", exc_info=True)
+        log.error("拉起 ComfyUI 失败：%s", " ".join(cmd), exc_info=True)
         return False
+    finally:
+        # 子进程已经拿到自己的句柄副本，父进程这份关掉（不关的话每次重启漏一个）。
+        if hasattr(stream, "close"):
+            try:
+                stream.close()
+            except Exception:
+                pass
 
     # 只探 `/system_stats` 不够——假死时它也回 200。所以要求 **PID 变成一个新的**：
     # 新 PID = 真的是新进程，这才是「重启成功」的凭据。
@@ -1906,16 +1924,28 @@ def process(job):
         log.info("已中断正在画的那张（%s %s）", job.skill or "?", job.tag or "")
         return
     except TooSlow as exc:
-        # 每步都在换页，不是「画得慢」而是「状态坏了」。中断 + 清干净就收工：
-        # 不去重启 ComfyUI（那是别人的进程，可能还有人在用），也不重试同参数
-        # ——内存没腾出来，重试只会再慢一遍。
+        # 每步都在换页：不是「画得慢」，是 ComfyUI 的内存被吃干了（`/free` 只把
+        # 权重搬回 CPU、进程 RSS 一字节不降，所以只有重启真的有效）。
+        #
+        # 2026-10-28 用户拍板：**自己重启再重画同一张**，别把这单判死、更别写
+        # 「等群主清理一下」让用户去手动处理。重画用同一个 seed / 同一份工作流，
+        # 出来后就是这张图本来该有的样子。
         _abort(job.prompt_id)
         _wait_comfy_idle()
-        job.error = exc
-        log.warning("采样降级已中断（%s）：%s", job.skill or "?", exc)
-        if not quiet:
-            _notice(job)
-        return
+        comfy_progress.forget(job.prompt_id)
+        tries = getattr(job, "slow_restarts", 0)
+        if tries >= SLOW_RESTART_RETRIES or not _restart_comfy():
+            job.error = exc
+            log.warning("采样降到 %.1f s/步，重启后仍没恢复，放弃这张（%s）",
+                        getattr(exc, "sit", 0) or 0, job.skill or "?")
+            if not quiet:
+                _notice(job)
+            return
+        job.slow_restarts = tries + 1
+        log.warning("采样降到 %.1f s/步（阈值 %.1f），ComfyUI 已重启，"
+                    "重画这张（%s %s）", getattr(exc, "sit", 0) or 0,
+                    SLOW_STEP_SIT, job.skill or "?", job.tag or "")
+        return process(job)
     except TimeoutError as exc:
         # 关键：中断 + 从队列摘掉 + 释放显存。串行队列下「当前正在执行」的
         # 就是我们这一张，所以 /interrupt 是准的——这也是改成全局串行之后
@@ -2147,9 +2177,10 @@ class TooSlow(RuntimeError):
 
     为什么和 `TimeoutError` 分开：成因和处置完全不同。
     - 超时 = 可能真在画，也可能 ComfyUI 卡死；要走「探活 → 决定是否重启」那条。
-    - 太慢 = 进程好好的、任务也正常在推进，只是**每步都在换页**。重启 ComfyUI
-      确实能修（清掉膨胀的私有提交 + staged 缓存），但那是用户的动作；这里只
-      中断这一张、清干净显存、把原因说清楚，不要自作主张去重启别人的服务。
+    - 太慢 = 进程好好的、任务也正常在推进，只是**每步都在换页**。处置是
+      「重启 ComfyUI → 重画同一张」（见 `process` 的 `except TooSlow`），因为
+      `/free` 只搬不删、进程 RSS 一字节不降，重启才是唯一有效的止血
+      （2026-10-28 用户拍板：自己处理掉，别再让人手动重启）。
 
     `sit` 是实测的单步秒数，写进日志和文案里，方便下次一眼认出是不是同一回事。
     """
@@ -2658,10 +2689,11 @@ def _fail_text(exc, stage="submit", skill=None):
         return ("画超时了（超过 %d 秒没出图），已经中断这张。"
                 "麻烦重新生成一次。" % task_timeout(skill))
     if isinstance(exc, TooSlow):
-        # 说清「不是画得慢，是机器状态坏了」：让它重画没有意义，重画只会
-        # 再慢一遍。真正的解法在运维侧（清内存 / 重启 ComfyUI）。
-        return ("图没画出来——机器太忙了（每步要 %.1f 秒，正常 2 秒左右），"
-                "已经中断这张，等群主清理一下再重画。"
+        # 走到这句话只剩一种情况：已经自动重启 + 重画过一次，还是慢。
+        # 不再给「等群主清理一下」这种要用户动手的话——能自动做的已经做完了，
+        # 这里只如实说结论：这张先别急着重试。
+        return ("图没画出来——ComfyUI 自动重启后还是画不动（每步 %.1f 秒），"
+                "这张先放一放，稍后再喊我。"
                 % (getattr(exc, "sit", None) or SLOW_STEP_SIT))
     if stage != "send" and isinstance(exc, _REQ_READ_TIMEOUT):
         # 连得上、但不回包：进程卡死了，跟「没开机」是两回事。旧文案把它说成

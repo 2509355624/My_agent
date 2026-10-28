@@ -370,6 +370,17 @@ COMFYUI_PYTHON = os.getenv(
     "COMFYUI_PYTHON", "D:\\AI\\confyui_env\\Scripts\\python.exe"
 )
 COMFYUI_ROOT = os.getenv("COMFYUI_ROOT", "D:\\AI\\ComfyUI_v037")
+# 重启 ComfyUI 时用的启动参数（看门狗与强杀重启共用，见 app/comfy_launch.py）。
+# 2026-10-28 主实例是 nightly 0.43.0，三个参数缺一不可：
+#   --disable-comfy-compiler  不加会 aimdo memory compile error 直接起不来
+#   --enable-triton-backend   nightly 的 int8_convrot 走这条路径
+#   --enable-cors-header "*"  网页端（5174）要能直接拉 8188 的图
+# 端口不写在这份字符串里也行——`comfy_launch` 会按 COMFYUI_URL 对齐。
+COMFYUI_LAUNCH_ARGS = os.getenv(
+    "COMFYUI_LAUNCH_ARGS",
+    "--listen 127.0.0.1 --port 8188 --disable-comfy-compiler "
+    "--enable-triton-backend --enable-cors-header *",
+)
 
 # 默认生图渠道（2026-10-19）：用户没点名渠道、模型也没填 skill 时落这里。
 #

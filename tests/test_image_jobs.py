@@ -231,6 +231,71 @@ class PollTest(_Base):
         self.assertEqual(seen["body"], "qq/群_885/anima-line")
 
 
+class SlowRestartTest(_Base):
+    """采样降级 → **自动重启 ComfyUI 并重画同一张**（2026-10-28 用户拍板）。
+
+    用户原话：「不要搞『机器太忙了』这个，你直接重启 comfyui 即可，然后重新跑
+    这个图，而不是我手动的去处理」。所以这里钉三件事：
+
+    1. 第一次太慢 → 重启一次 + 再提交一次（同一个 seed / 同一份工作流）；
+    2. 只重来一次 —— 重启后还慢说明不是换页，别无限重启；
+    3. 真失败时文案不许再让用户去「清理一下」，也别把 TooSlow 当成重画的建议。
+    """
+
+    def _job(self):
+        wf = {"9": {"class_type": "SaveImage",
+                    "inputs": {"filename_prefix": "moss"}}}
+        return image_jobs.Job("group", "1", wf, skill="moss8")
+
+    def _run(self, waits, restarts=True, pids=("p1", "p2")):
+        job = self._job()
+        with mock.patch.object(image_jobs, "_maybe_restart_for_clean_start"), \
+                mock.patch.object(image_jobs, "_maybe_release_for_switch"), \
+                mock.patch.object(image_jobs, "_maybe_release_for_low_vram"), \
+                mock.patch.object(image_jobs, "_notice") as notice, \
+                mock.patch.object(image_jobs, "_ledger_add"), \
+                mock.patch.object(image_jobs, "_abort"), \
+                mock.patch.object(image_jobs, "output_images", return_value=[]), \
+                mock.patch.object(image_jobs, "_queue_prompt_retry",
+                                  side_effect=list(pids)) as submit, \
+                mock.patch.object(image_jobs, "wait_done", side_effect=waits), \
+                mock.patch.object(image_jobs, "_restart_comfy",
+                                  return_value=restarts) as restart:
+            image_jobs.process(job)
+        return job, submit, restart, notice
+
+    def test_restarts_and_draws_it_again(self):
+        job, submit, restart, _ = self._run(
+            [image_jobs.TooSlow(48.0), {"outputs": {}}])
+        self.assertEqual(restart.call_count, 1)
+        self.assertEqual(submit.call_count, 2, "重启后必须重新提交同一张")
+        self.assertEqual(job.slow_restarts, 1)
+        self.assertNotIsInstance(job.error, image_jobs.TooSlow)
+
+    def test_only_one_retry(self):
+        """重启后还慢 → 收工，不再重启第二次。"""
+        job, submit, restart, notice = self._run(
+            [image_jobs.TooSlow(48.0), image_jobs.TooSlow(48.0)])
+        self.assertEqual(restart.call_count, 1)
+        self.assertEqual(submit.call_count, 2)
+        self.assertIsInstance(job.error, image_jobs.TooSlow)
+        notice.assert_called_once()
+
+    def test_restart_failure_gives_up_without_redrawing(self):
+        job, submit, restart, notice = self._run(
+            [image_jobs.TooSlow(48.0)], restarts=False, pids=("p1",))
+        self.assertEqual(restart.call_count, 1)
+        self.assertEqual(submit.call_count, 1)
+        self.assertIsInstance(job.error, image_jobs.TooSlow)
+        notice.assert_called_once()
+
+    def test_fail_text_does_not_ask_the_user_to_fix_it(self):
+        text = image_jobs._fail_text(image_jobs.TooSlow(48.0), skill="moss8")
+        self.assertNotIn("群主", text)
+        self.assertNotIn("清理", text)
+        self.assertIn("自动重启", text)
+
+
 class WaitTest(_Base):
     """wait_done：出图就返回，一直不出就超时抛错。"""
 

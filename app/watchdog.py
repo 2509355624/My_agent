@@ -105,7 +105,7 @@ try:
 except ImportError:  # 非 Windows 上退化成无锁（本项目不会走到这）
     msvcrt = None
 
-from app import notify
+from app import comfy_launch, notify
 from app.config import (BASE_DIR, COMFYUI_PYTHON, COMFYUI_ROOT,
                         NOTIFY_QRCODE_PATH, WEBUI_PORT,
                         WATCHDOG_COMFY_ENABLED,
@@ -261,31 +261,35 @@ def _kill_comfy_process(pid):
 
 def _trigger_comfy_restart():
     """按固定 Python 命令启动 ComfyUI，隐藏窗口、不阻塞。"""
-    main_py = os.path.join(COMFYUI_ROOT, "main.py")
-    if not os.path.isfile(COMFYUI_PYTHON):
-        log.error("找不到 ComfyUI Python：%s", COMFYUI_PYTHON)
-        return False
-    if not os.path.isfile(main_py):
-        log.error("找不到 ComfyUI 主程序：%s", main_py)
+    cmd = comfy_launch.command()
+    if not cmd:
+        log.error("取不到 ComfyUI 启动命令（COMFYUI_PYTHON / COMFYUI_ROOT 不对）")
         return False
     old = _comfy_pid_by_port()
     if old is not None and not _kill_comfy_process(old):
         return False
+    stream = comfy_launch.log_stream()
     try:
         subprocess.Popen(
-            [COMFYUI_PYTHON, main_py, "--listen", "127.0.0.1",
-             "--port", "8188", "--enable-cors-header", "*"],
+            cmd,
             creationflags=subprocess.CREATE_NO_WINDOW,
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            cwd=COMFYUI_ROOT,
+            stdout=stream,
+            stderr=stream,
+            cwd=comfy_launch.cwd(),
+            env=comfy_launch.env(),
         )
         log.info("已按固定命令启动 ComfyUI：%s", COMFYUI_ROOT)
         return True
     except Exception as e:
         log.error("启动 ComfyUI 失败：%s", e)
         return False
+    finally:
+        if hasattr(stream, "close"):
+            try:
+                stream.close()
+            except Exception:
+                pass
 
 
 def _comfy_cycle(state, now=None):
