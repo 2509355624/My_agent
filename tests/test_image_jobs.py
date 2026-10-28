@@ -248,6 +248,50 @@ class WaitTest(_Base):
                     # 给一个正的极小值：0 会被 wait_done 当成「没传」回退默认
                     image_jobs.wait_done("pid", timeout=0.001)
 
+    def _slow(self, sit, times=10):
+        """让进度读数恒为 sit 秒/步；不出图、不超时。"""
+        return mock.patch.object(image_jobs.comfy_progress, "sit",
+                                 return_value=sit)
+
+    def test_slow_step_aborts_early(self):
+        """连续两步都超过阈值 → 抛 TooSlow，而不是等到总超时。
+
+        2026-10-28 实测：内存吃干后 50 步从 1.5 s/it 掉到 48 s/it（25 分钟）。
+        总超时（几百秒）兜不住这种，只会白等。这里断言它在前几步就收工。
+        """
+        with mock.patch.object(image_jobs, "POLL_INTERVAL", 0):
+            with mock.patch.object(image_jobs, "poll_once", return_value=None):
+                with self._slow(48.0):
+                    with self.assertRaises(image_jobs.TooSlow) as ctx:
+                        image_jobs.wait_done("pid", timeout=60)
+        self.assertAlmostEqual(ctx.exception.sit, 48.0)
+
+    def test_single_slow_reading_does_not_abort(self):
+        """一次越线不砍图——连击要够 SLOW_STEP_STRIKES 次。
+
+        读数在 48 和正常值之间来回跳：只要没连续越线，就该继续等到出图。
+        """
+        entry = {"outputs": {}}
+        seq = [48.0, 1.8, 48.0, 1.8, 1.9, 2.0, None]
+        with mock.patch.object(image_jobs, "POLL_INTERVAL", 0):
+            with mock.patch.object(image_jobs, "poll_once",
+                                   side_effect=[None] * len(seq) + [entry]):
+                with mock.patch.object(image_jobs.comfy_progress, "sit",
+                                       side_effect=seq):
+                    self.assertEqual(image_jobs.wait_done("pid", timeout=60),
+                                     entry)
+
+    def test_no_progress_data_never_aborts(self):
+        """拿不到进度（WS 没连上 / 换成别的客户端）就当没这功能，照常等图。"""
+        entry = {"outputs": {}}
+        with mock.patch.object(image_jobs, "POLL_INTERVAL", 0):
+            with mock.patch.object(image_jobs, "poll_once",
+                                   side_effect=[None] * 30 + [entry]):
+                with mock.patch.object(image_jobs.comfy_progress, "sit",
+                                       return_value=None):
+                    self.assertEqual(image_jobs.wait_done("pid", timeout=60),
+                                     entry)
+
 
 class IdleWaitTest(unittest.TestCase):
     """超时中断后的事件驱动等待：running 清空才放行，ComfyUI 挂了也不卡队。
@@ -3174,8 +3218,14 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
         #  cfg 1，真实执行 42~46 s；360 是留给「每画一张 ComfyUI 自动重启一次」
         #  的等待窗口（轮询虚高 40~95 s，判耗时才认日志 Prompt executed in）。
         #  ⚠️ 别拿这个数当当前配置一定跑得完的证据（moss8 那条同款教训）。
+        # 2026-10-28 加 `moss-qunyou`(900)：漫画台（`/moss`）的群友复刻配方，
+        #   1024×1536 / 50 步 / cfg 3（uncond+cond 双前向）叠 7 个 LoRA，冷启动
+        #   还要 staged 12GB，900 秒留足换页余量。**它只服务漫画台**，QQ 侧
+        #   点不到；别把它和 `moss8` / `moss50` 混成一条。实测 50 步 + maliker
+        #   单 LoRA 热跑 128 秒，冷跑 249 秒。
         self.assertEqual(sorted(image_jobs.SKILL_TIMEOUTS),
-                         ["_comic_batch", "moss", "moss50", "moss8", "moss_page",
+                         ["_comic_batch", "moss", "moss-qunyou", "moss50",
+                          "moss8", "moss_page",
                           "qwen-charsheet", "qwen-hd", "qwen-restore", "qwen30",
                           "qwen_image_v1", "sf"])
         for skill in ("qwen_image_v1", "qwen-hd", "qwen-charsheet", "qwen30"):
@@ -3184,6 +3234,7 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
         self.assertEqual(image_jobs.task_timeout("moss50"), 520)
         self.assertEqual(image_jobs.task_timeout("moss8"), 300)
         self.assertEqual(image_jobs.task_timeout("moss_page"), 700)
+        self.assertEqual(image_jobs.task_timeout("moss-qunyou"), 900)
         self.assertEqual(image_jobs.task_timeout("_comic_batch"), 240)
         self.assertEqual(image_jobs.task_timeout("qwen-restore"), 300)
         self.assertEqual(image_jobs.task_timeout("sf"), 360)
@@ -3557,13 +3608,22 @@ class LandscapeTest(_Base):
         self.assertEqual(wf[save["inputs"]["images"][0]]["class_type"], "VAEDecode")
 
     def test_moss8_is_the_eight_step_portrait_chain(self):
-        """`moss8` = 用户 ComfyUI 界面那份工作流（2026-10-26 拍板 moss 默认走它）。
+        """`moss8` = QQ 侧 8 步渠道（2026-10-28 改成 nightly 原生结构）。
 
-        三处配方差异，全钉住：**1024×1536 竖屏**、适配器 8 步、**SLG22**
-        （`single_layers="22"` + `double_layers` 空 + start 0 → end 1）。
-        提示词节点是**裸占位符**——上一版埋在 `@realskin,best quality,…` 后面，
-        直提工具匹配不上，废提示词连跑三张；独占整串就不会有这个问题。
-        LoRA 一律不挂（界面里挂了三个但强度全 0，且本机没有文件）。
+        这次换的不只是节点名，是**整条链路**：v037 那套 `MOSSImageUNETLoader` /
+        `MOSSImageCLIPLoader` / `RapidMOSSAdapter` 是 rapid_moss 插件提供的，
+        nightly（0.43.0）一个都没有——`CLIPLoader` 自己就认 `moss_image` 类型、
+        `moss_image_sft_int8_convrot` 走原生 int8 路径。所以用标准
+        `UNETLoader` + `CLIPLoader` + `ModelSamplingAuraFlow` + `KSampler`。
+
+        钉住的配方（与界面那份工作流、今天实测 8 步 40 秒那版一致）：
+        **1024×1536 竖屏**、8 步、cfg 3、euler/sgm_uniform、**SLG22**、
+        AuraFlow shift 5。LoRA 走自建的 `MOSSLoRAToggle`（前向 patch，不合并
+        权重——int8 一合并就是 20GB 必 OOM），默认只开 **maliker @0.4**。
+
+        模型文件也必须对得上：`qwen3.5_9b_w4a8_gptq` + `flux2-vae_small`，
+        跟漫画台（`moss-qunyou`）同一套。两个渠道用不同编码器，来回切一次
+        就要重读 7GB。
         """
         wf = skills.load_skill("moss8")["workflow"]
         nid = image_jobs._find_size_node(wf)
@@ -3574,9 +3634,37 @@ class LandscapeTest(_Base):
         wide = image_jobs.landscape_workflow(wf)[nid]["inputs"]
         self.assertEqual((wide["width"], wide["height"]), (1536, 1024))
 
-        aid = [k for k, n in wf.items() if n["class_type"] == "RapidMOSSAdapter"][0]
-        self.assertEqual(wf[aid]["inputs"]["adapter"], "lodestones-8step")
-        self.assertEqual(wf[aid]["inputs"]["steps"], 8)
+        types = {n["class_type"] for n in wf.values()}
+        # v037 专属节点一个都不许留：nightly 上它们直接报「节点不存在」
+        for gone in ("MOSSImageUNETLoader", "MOSSImageCLIPLoader",
+                     "RapidMOSSAdapter", "MOSSModelSampling",
+                     "MOSSLoRAForwardPatch", "ModelSamplingSD3"):
+            self.assertNotIn(gone, types, gone)
+
+        unet = [n for n in wf.values() if n["class_type"] == "UNETLoader"][0]
+        self.assertEqual(unet["inputs"]["unet_name"],
+                         "moss_image_sft_int8_convrot.safetensors")
+        clip = [n for n in wf.values() if n["class_type"] == "CLIPLoader"][0]
+        self.assertEqual(clip["inputs"]["clip_name"],
+                         "qwen3.5_9b_w4a8_gptq.safetensors")
+        # type 必须是 moss_image：缺了它编码器按普通 qwen 走，出图全黑
+        self.assertEqual(clip["inputs"]["type"], "moss_image")
+        vae = [n for n in wf.values() if n["class_type"] == "VAELoader"][0]
+        self.assertEqual(vae["inputs"]["vae_name"], "flux2-vae_small.safetensors")
+
+        ks = [n for n in wf.values() if n["class_type"] == "KSampler"][0]["inputs"]
+        self.assertEqual(ks["steps"], 8)
+        self.assertEqual(ks["cfg"], 3.0)
+        self.assertEqual((ks["sampler_name"], ks["scheduler"]),
+                         ("euler", "sgm_uniform"))
+
+        # LoRA 只能走自建的前向 patch 节点，且默认只开 maliker 一个
+        on = [n for n in wf.values() if n["class_type"] == "MOSSLoRAToggle"]
+        self.assertEqual(len(on), 1)
+        ins = on[0]["inputs"]
+        opened = [(ins[k.replace("on_", "lora_")], ins[k.replace("on_", "strength_")])
+                  for k in ins if k.startswith("on_") and ins[k]]
+        self.assertEqual(opened, [("moss-maliker_moss_base_style_v3_e40.safetensors", 0.4)])
 
         slg = [n for n in wf.values()
                if n["class_type"] == "SkipLayerGuidanceDiTSimple"]
@@ -3585,17 +3673,18 @@ class LandscapeTest(_Base):
         self.assertEqual(slg[0]["inputs"]["double_layers"], "")
         self.assertEqual(slg[0]["inputs"]["start_percent"], 0)
         self.assertEqual(slg[0]["inputs"]["end_percent"], 1)
-        # SLG 必须插在适配器和 guider 之间——挂错地方等于没挂
-        guider = [n for n in wf.values() if n["class_type"] == "BasicGuider"][0]
-        self.assertEqual(wf[guider["inputs"]["model"][0]]["class_type"],
-                         "SkipLayerGuidanceDiTSimple")
+        # 链路必须是 LoRA → SLG → AuraFlow → KSampler，缺一环或换序都出不了图
+        self.assertEqual(wf[slg[0]["inputs"]["model"][0]]["class_type"],
+                         "MOSSLoRAToggle")
+        aura = [n for n in wf.values()
+                if n["class_type"] == "ModelSamplingAuraFlow"]
+        self.assertEqual(len(aura), 1)
+        self.assertEqual(aura[0]["inputs"]["shift"], 5.0)
+        self.assertEqual(wf[ks["model"][0]]["class_type"], "ModelSamplingAuraFlow")
 
-        types = {n["class_type"] for n in wf.values()}
-        for banned in ("KSampler", "ModelSamplingSD3", "LoraLoaderModelOnly"):
-            self.assertNotIn(banned, types, banned)
-
+        # 正向必须带触发词：LoRA 开了但触发词没拼进去，等于白挂
         text = [n for n in wf.values() if n["class_type"] == "CLIPTextEncode"][0]
-        self.assertEqual(text["inputs"]["text"], "__MULTI_PROMPTS__")
+        self.assertEqual(text["inputs"]["text"], "maliker, __MULTI_PROMPTS__")
 
     def test_the_original_workflow_is_never_mutated(self):
         """返回新对象而不是原地改：静默重抽会重建 `job.workflow` 再递归调

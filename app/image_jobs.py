@@ -161,11 +161,10 @@ import signal
 import subprocess
 import threading
 import time
-import uuid
 
 import requests
 
-from app import comfy_gate, comfy_out, image_log
+from app import comfy_gate, comfy_out, comfy_progress, image_log
 from app.cancel import Cancelled, is_cancelled
 from app.config import (BASE_DIR, COMFY_MIN_FREE_RAM_GB, COMFY_MIN_FREE_VRAM_GB,
                         COMFY_RELEASE_AFTER_COMIC,
@@ -352,6 +351,13 @@ SKILL_TIMEOUTS = {
     #    ⚠️ 这张表是模块级常量，改完**必须重启常驻 flask（5174）**才生效；
     #    没重启时它仍走 .env 的 IMAGE_GEN_TIMEOUT。
     "moss8": 300,
+    # 群友配方复刻（`skills/moss-qunyou/`，2026-10-28）：1024×1536、**50 步 /
+    #    cfg 3**（群友 UI 里 KSampler 的 steps/cfg 被 PrimitiveInt/Float 覆盖，
+    #    widget 上显示的 8/1 是旧值）、SLG single 22 全段、7 个画风 LoRA。
+    #    同链 1024×1536 / 8 步 / cfg1 实测 32~41 s；50 步又是 cfg3（uncond+cond
+    #    两次前向），折算 ≈400 s，再叠 LoRA 与内存换页，900 秒留足余量。
+    #    ⚠️ 模块级常量 —— 改完必须**重启常驻 flask（5174）**才生效。
+    "moss-qunyou": 900,
     # 连续漫画批量（`skills/_comic_batch/`，**不是可点名渠道**，由
     #    `comic_story.COMIC_SKILL` 指定）。这条一直在表外：之前没有键，吃的是
     #    `TASK_TIMEOUT` 兜底 180（=.env `IMAGE_GEN_TIMEOUT`），10 格够用。
@@ -395,6 +401,20 @@ def task_timeout(job_or_skill):
 
 # 轮询间隔（秒）
 POLL_INTERVAL = 2
+
+# ---- 采样降级保护（2026-10-28）------------------------------------------
+# 内存被吃干后 ComfyUI 不会报错，只会**变慢**：MOSS 50 步正常 1.5~2.1 s/it，
+# 降级后实测 10.8 s/it，最坏 48 s/it（50 步 = 25 分钟）。这不是懒加载，是权重
+# 在内存/显存之间反复换页，等下去也不会自己好——重启 ComfyUI 才能恢复。
+#
+# 判据用**单步耗时**而不是总超时：总超时（SKILL_TIMEOUTS）是几百秒的粗兜底，
+# 分不清「加载慢」和「每步都慢」；`task_timeout` 也救不了 48 s/it——它只会
+# 在 25 分钟后判超时，白等一场。
+#
+# 阈值 5.0：正常档最高约 2.1，降级档最低 10.8，中间空档很大，不会误伤。
+# 连续两次读数越线才动手（约 2 步 ≈ 10 秒），单次抖动不砍图。
+SLOW_STEP_SIT = 5.0
+SLOW_STEP_STRIKES = 2
 
 # 超时中断后，等 ComfyUI 真正退场的上限（秒）。等不到就是「活着但卡住」——
 # 卡在一次不返回的调用里，`/interrupt` 设的协作标志它永远读不到，于是
@@ -1885,6 +1905,17 @@ def process(job):
         job.error = exc
         log.info("已中断正在画的那张（%s %s）", job.skill or "?", job.tag or "")
         return
+    except TooSlow as exc:
+        # 每步都在换页，不是「画得慢」而是「状态坏了」。中断 + 清干净就收工：
+        # 不去重启 ComfyUI（那是别人的进程，可能还有人在用），也不重试同参数
+        # ——内存没腾出来，重试只会再慢一遍。
+        _abort(job.prompt_id)
+        _wait_comfy_idle()
+        job.error = exc
+        log.warning("采样降级已中断（%s）：%s", job.skill or "?", exc)
+        if not quiet:
+            _notice(job)
+        return
     except TimeoutError as exc:
         # 关键：中断 + 从队列摘掉 + 释放显存。串行队列下「当前正在执行」的
         # 就是我们这一张，所以 /interrupt 是准的——这也是改成全局串行之后
@@ -2111,6 +2142,29 @@ def _reset():
 
 # ─── ComfyUI 交互 ────────────────────────────────────
 
+class TooSlow(RuntimeError):
+    """采样降级到每步几秒——提前收工，别让人干等 20 分钟。
+
+    为什么和 `TimeoutError` 分开：成因和处置完全不同。
+    - 超时 = 可能真在画，也可能 ComfyUI 卡死；要走「探活 → 决定是否重启」那条。
+    - 太慢 = 进程好好的、任务也正常在推进，只是**每步都在换页**。重启 ComfyUI
+      确实能修（清掉膨胀的私有提交 + staged 缓存），但那是用户的动作；这里只
+      中断这一张、清干净显存、把原因说清楚，不要自作主张去重启别人的服务。
+
+    `sit` 是实测的单步秒数，写进日志和文案里，方便下次一眼认出是不是同一回事。
+    """
+
+    def __init__(self, sit=None, steps=None):
+        super().__init__()
+        self.sit = sit
+        self.steps = steps
+
+    def __str__(self):
+        if self.sit is None:
+            return "采样太慢，已中断"
+        return "采样太慢（%.1f 秒/步），已中断" % self.sit
+
+
 class ComfyGone(RuntimeError):
     """等图期间 ComfyUI 掉线了——**不是**「画得慢」。
 
@@ -2297,9 +2351,13 @@ def landscape_workflow(workflow):
 
 
 def _queue_prompt(workflow, timeout=SUBMIT_TIMEOUT):
+    # client_id 必须是**进程级固定值**（comfy_progress.client_id），不是每次随机：
+    # nightly 的 progress 消息定向推给发起客户端，随机 id 会让监听 WS 一条都收
+    # 不到（2026-10-28 实测：同 id 收得到 8 条 progress，不同 id 收不到）。
+    comfy_progress.ensure_started(COMFYUI_URL)
     resp = requests.post(COMFYUI_URL + "/prompt", json={
         "prompt": workflow,
-        "client_id": "agent_" + str(uuid.uuid4())[:8],
+        "client_id": comfy_progress.client_id(),
     }, timeout=timeout)
     resp.raise_for_status()
     return resp.json()["prompt_id"]
@@ -2465,12 +2523,25 @@ def wait_done(prompt_id, timeout=None, abort=None):
     """
     limit = timeout if timeout and timeout > 0 else TASK_TIMEOUT
     start = time.time()
+    strikes = 0                 # 连续几次读到「太慢」
     while time.time() - start < limit:
         if abort is not None and abort.is_set():
             raise Cancelled("用户中断了整批渲染")
         entry = poll_once(prompt_id)
         if entry is not None:
+            comfy_progress.forget(prompt_id)
             return entry
+        # 采样降级检测：拿不到读数就一直是 None，那就当成没有这个功能。
+        sit = comfy_progress.sit(prompt_id)
+        if sit is not None:
+            if sit > SLOW_STEP_SIT:
+                strikes += 1
+                if strikes >= SLOW_STEP_STRIKES:
+                    log.warning("采样降级：%.1f s/步（阈值 %.1f），中断这张",
+                                sit, SLOW_STEP_SIT)
+                    raise TooSlow(sit)
+            else:
+                strikes = 0
         time.sleep(POLL_INTERVAL)
     raise TimeoutError("生成超时 (" + str(limit) + "s)")
 
@@ -2586,6 +2657,12 @@ def _fail_text(exc, stage="submit", skill=None):
     if isinstance(exc, TimeoutError):
         return ("画超时了（超过 %d 秒没出图），已经中断这张。"
                 "麻烦重新生成一次。" % task_timeout(skill))
+    if isinstance(exc, TooSlow):
+        # 说清「不是画得慢，是机器状态坏了」：让它重画没有意义，重画只会
+        # 再慢一遍。真正的解法在运维侧（清内存 / 重启 ComfyUI）。
+        return ("图没画出来——机器太忙了（每步要 %.1f 秒，正常 2 秒左右），"
+                "已经中断这张，等群主清理一下再重画。"
+                % (getattr(exc, "sit", None) or SLOW_STEP_SIT))
     if stage != "send" and isinstance(exc, _REQ_READ_TIMEOUT):
         # 连得上、但不回包：进程卡死了，跟「没开机」是两回事。旧文案把它说成
         # 「没在线（连不上）」，群友照做「等一等再来」永远是白等（2026-10-24）。

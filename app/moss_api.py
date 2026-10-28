@@ -47,13 +47,35 @@ bp = Blueprint("moss_api", __name__)
 # 任务根目录钉死绝对路径：Flask 的启动 cwd 可能不是项目根。
 STATE_ROOT = os.path.join(BASE_DIR, "state", "moss_comic")
 
-# 出图参数（30 步是 10-21 拍板的漫画档：出片级才用 50 步）
-SKILL = "moss50"
-STEPS = 30
-# 9:16 竖条（抖音原生画幅）。实测 30 步 81.2 秒。
-WIDTH, HEIGHT = 720, 1280
+# 出图渠道与参数（2026-10-28 用户拍板：**完全照群友原版，不自创参数**）。
+# 依据 `skills/_moss_comic/CHARTER.md` §5：参数**只认这里**——workflow.json 里
+# 的 steps / 宽高会被下面三行覆盖，改参数改这里，别去改 workflow（改了也白改）。
+#
+# 群友原版实测值（`工作流MOSS-Image-SFT .json`）：KSampler 的 widgets 显示 8/1，
+# 但 inputs 实际接的是 PrimitiveInt(23)=50 和 PrimitiveFloat(25)=3 —— 界面上
+# 看到的是被覆盖前的旧值。所以群友正式档是 **50 步 / cfg 3**，
+# 8 步是 turbo 档（他那份文件里 SaveImage 的 prefix 就叫 SFT_8step_toggle，
+# 同时 MOSS-turbo-lora 节点是 bypass 状态）。
+#
+# 2026-10-28 二次定档：**50 步**（当天早些时候定过 8 步，被下面这组实测推翻）。
+# 当初定 8 步的理由是「50 步单格 300 秒以上，等不起」，但那个 300 秒是
+# **内存压力下的数字**（ram_free 只剩 2GB，每步都在把权重换页），不是步数成本。
+# 干净环境实测（1024×1536 / 无 LoRA / seed 20261028 / 同一份 Layout JSON）：
+#
+#     8 步   35.4 s（采样 1.54 s/it）—— 两支中文框全崩，读不通
+#     50 步 102.1 s（采样 1.61 s/it）—— 台词 14 字全对，旁白 21 字错 3~4 个
+#
+# 多花 67 秒换来「文字可用」，值。8 步留给「只验画风、不要字」的场合。
+SKILL = "moss-qunyou"
+STEPS = 50
+# 分辨率：群友原版 1024×1536。实测这个尺寸在 12GB 卡上能出图（8 步 72 秒），
+# 降到 896×1344 反而在采样阶段出纯噪声，所以保持原版尺寸不动。
+# 改这里必须同步 `moss_comic._CANVAS_W/_CANVAS_H`，否则 bbox 会整体偏。
+WIDTH, HEIGHT = 1024, 1536
 SEED_BASE = 20261501
 OUT_ROOT = "web/moss漫画"
+# 老任务出图所在的历史渠道目录（换渠道后旧图还得能显示；新的排前面）
+LEGACY_SKILLS = ("moss-qunyou", "moss8", "moss50")
 
 # 运行中的任务：{任务目录绝对路径: {"t0": 起跑时间, "n": 当前页}}
 _RUNNING = {}
@@ -116,22 +138,33 @@ def _state_path(d):
 
 
 def _legacy_files(d):
-    """没有 state.json 的老任务（10-21 之前 CLI 跑的那几篇）的出图。
+    """老任务的出图（没有 state.json 的那些）。
 
-    CLI 的出图落在 `output/web/moss漫画/<同名目录>/moss50/`，文件名里带
-    `_P01_`。页面得能把它们显示出来，否则用户之前跑的五篇打开全是空白。
+    CLI 时代的图落在 `output/web/moss漫画/<任务名>/<渠道>/`，文件名带 `_P01_`。
+    页面得能把它们显示出来，否则老任务打开全是空白。
+
+    **渠道会换**（moss50 → moss-qunyou），所以按 `LEGACY_SKILLS` 逐个目录找，
+    新渠道排在前面优先命中——同一个任务不可能同时有两个渠道的图，但按顺序
+    找能保证换渠道后旧任务依然打得开。
     """
     if not COMFYUI_OUTPUT_DIR:
         return {}
-    folder = os.path.join(COMFYUI_OUTPUT_DIR, OUT_ROOT.replace("/", os.sep),
-                          os.path.basename(d), SKILL)
-    if not os.path.isdir(folder):
-        return {}
+    base = os.path.join(COMFYUI_OUTPUT_DIR, OUT_ROOT.replace("/", os.sep),
+                        os.path.basename(d))
     out = {}
-    for f in sorted(os.listdir(folder)):
-        m = re.search(r"_P0*(\d+)_", f)
-        if m and os.path.splitext(f)[1].lower() in (".png", ".jpg", ".jpeg", ".webp"):
-            out[int(m.group(1))] = "/".join([OUT_ROOT, os.path.basename(d), SKILL, f])
+    for skill in LEGACY_SKILLS:
+        folder = os.path.join(base, skill)
+        if not os.path.isdir(folder):
+            continue
+        for f in sorted(os.listdir(folder)):
+            m = re.search(r"_P0*(\d+)_", f)
+            if not m:
+                continue
+            if os.path.splitext(f)[1].lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+                continue
+            n = int(m.group(1))
+            if n not in out:                    # 先找到的优先，不覆盖
+                out[n] = "/".join([OUT_ROOT, os.path.basename(d), skill, f])
     return out
 
 
@@ -187,11 +220,26 @@ def _normalize(spec):
 
 
 def _prompts(spec):
-    """{页号字符串: 最终提示词}。"""
+    """{页号字符串: 最终提示词}。
+
+    2026-10-28 起是 §15 官方 Layout JSON 字符串（不是散文），见
+    `skills/_moss_comic/CHARTER.md` §4。
+    """
     out = {}
     for page in spec.get("pages") or []:
         out[str(page.get("n"))] = moss_comic.build_page_prompt(spec, page)
     return out
+
+
+def _pretty(p):
+    """提示词落盘用：是 JSON 就缩进展开，不是就原样返回。
+
+    prompts.txt 是给人排查用的，一行几 KB 的 JSON 挤在一起没人看得下去。
+    """
+    try:
+        return json.dumps(json.loads(p), ensure_ascii=False, indent=1)
+    except Exception:                           # noqa: BLE001
+        return p
 
 
 def _save(d, spec, raw=None):
@@ -208,7 +256,7 @@ def _save(d, spec, raw=None):
             n = page.get("n")
             fh.write("── 第 %s 页 [%s] %d 格\n%s\n\n"
                      % (n, page.get("layout"), len(page.get("panels") or []),
-                        ps.get(str(n), "")))
+                        _pretty(ps.get(str(n), ""))))
     return spec, ps
 
 
@@ -325,17 +373,43 @@ def _seed_for(d, n, given):
     return int(st.get("seed") or (SEED_BASE + n - 1))
 
 
+def _node_id(wf, cls, field):
+    """按 `class_type` 找节点 id。找不到直接抛，**不许退回写死编号**。
+
+    上一版把节点号写死成 `wf["30"]` / `wf["40"]` / `wf["60"]`，那是 `moss50`
+    的结构。换渠道（`moss-qunyou` 是 60/70/90）之后同一串数字指向完全不同的
+    节点：宽度写进 latent 碰巧还对，步数写进编码器、文件名写进 KSampler 就
+    会静默产出坏图。宁可抛错让人看见，也不要画一张看不出问题的错图。
+    """
+    for nid, node in wf.items():
+        if node.get("class_type") == cls and field in (node.get("inputs") or {}):
+            return nid
+    raise RuntimeError("工作流里找不到 %s.%s（渠道结构变了？）" % (cls, field))
+
+
 def _draw(page, prompt, base_wf, seed, out_dir, title):
     """一页 → 一张图。返回 (相对 ComfyUI output 的路径 or None, 错误串)。"""
     wf = json.loads(json.dumps(base_wf))
-    wf["30"]["inputs"]["width"] = WIDTH
-    wf["30"]["inputs"]["height"] = HEIGHT
-    wf["40"]["inputs"]["steps"] = STEPS
+    lat = _node_id(wf, "EmptyFlux2LatentImage", "width")
+    wf[lat]["inputs"]["width"] = WIDTH
+    wf[lat]["inputs"]["height"] = HEIGHT
+    wf[_node_id(wf, "KSampler", "steps")]["inputs"]["steps"] = STEPS
     n = page.get("n")
-    wf["60"]["inputs"]["filename_prefix"] = "MossComic_%s_P%02d" % (_slug(title), n)
+    wf[_node_id(wf, "SaveImage", "filename_prefix")]["inputs"]["filename_prefix"] = (
+        "MossComic_%s_P%02d" % (_slug(title), n))
     wf = apply_prompt_placeholders(json.dumps(wf, ensure_ascii=False), prompt, seed)
 
-    job, why = image_jobs.enqueue(None, None, wf, skill=SKILL, prompt=prompt[:200],
+    # 账本记的提示词：JSON 前 200 字符全是结构骨架（`{"summary": {"canvas"...`），
+    # 记进 image_log 等于没记。能解析就记 summary.caption——那句是人看得懂的
+    # 画风+场景，以后查「这张图当时怎么描述的」才有用。
+    ledger = prompt[:200]
+    try:
+        ledger = (json.loads(prompt).get("summary") or {}).get("caption") or ledger
+        ledger = ledger[:200]
+    except Exception:                           # noqa: BLE001  散文/坏 JSON 都走这里
+        pass
+
+    job, why = image_jobs.enqueue(None, None, wf, skill=SKILL, prompt=ledger,
                                   seed=seed, out_dir=out_dir)
     if job is None:
         return None, why or "队列没接"

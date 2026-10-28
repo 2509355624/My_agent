@@ -117,20 +117,44 @@ class SaveTest(_Base):
         self.assertTrue(os.path.isfile(os.path.join(d, "prompts.txt")))
 
     def test_prompt_shape(self):
+        """落盘的提示词是 §15 官方 **Layout JSON**（2026-10-28 改，不是散文）。
+
+        散文时代只有一句整页描述，格怎么分、气泡放哪全交给模型，实测气泡位置
+        随机、旁白贴边生乱码；改成 JSON 才能逐个元素钉 bbox。所以这里按结构
+        断言，不再找 "Top left panel:" 这种散文前缀。
+        """
         name, _ = self._mk_task()
         out = self.c.post("/api/moss/save",
                           json={"task": name, "spec": _spec()}).get_json()
         p = out["pages"][0]["prompt"]
         self.assertIn("exactly four panels", p)
-        self.assertIn("Top left panel:", p)
-        self.assertIn("Bottom right panel:", p)
-        self.assertIn("「晚安」", p)          # 气泡进了提示词
-        self.assertIn("「哗」", p)            # 拟声也进了
-        # 外形串同一页只展开一次，第二次用指代
-        self.assertEqual(p.count("a girl with long black hair"), 1)
+
+        layout = json.loads(p)
+        self.assertEqual(layout["bbox_coord_space"], "abs_centralized")
+        self.assertEqual(layout["bbox_format"], "yxyx")
+        self.assertEqual(layout["summary"]["canvas"], "multi_panel")
+        self.assertIn("meta", layout["summary"])
+
+        items = layout["items"]
+        chars = [x for x in items if x["label"] == "character"]
+        texts = [x for x in items if x["label"] == "text"]
+        self.assertEqual(len(chars), 4)          # 四格各一个画面元素
+        # 第一格在上左、最后一格在下右——分格位置靠 bbox 钉，不靠散文顺序
+        self.assertEqual(chars[0]["bbox"], [-768, -512, 0, 0])
+        self.assertEqual(chars[-1]["bbox"], [0, 0, 768, 512])
+        # 气泡 / 拟声都进了 items，且原文照录（不做「」包裹）
+        self.assertEqual([x["text"] for x in texts], ["晚安", "哗"])
+        self.assertTrue(all(x["bbox"] for x in texts))
+
+        # 外形串**恰好展开两次**：一次在 summary.caption、一次在首个 item。
+        # 这不是重复而是必须的——summary 那份独立展开（见 build_page_prompt
+        # 里那个单独的 `seen`），否则 summary 会只剩"the girl"，整页失去人物
+        # 定性；items 那份也要展开，否则第一格画出来认不出是谁。
+        # 第 2 格起才用指代。
+        self.assertEqual(p.count("a girl with long black hair"), 2)
         self.assertIn("the girl", p)
-        # 场景串在
-        self.assertIn("a quiet room at night", p)
+        # 场景串在 summary 里
+        self.assertIn("a quiet room at night", layout["summary"]["caption"])
 
     def test_save_normalizes_whitespace(self):
         name, _ = self._mk_task()
@@ -141,7 +165,9 @@ class SaveTest(_Base):
         out = self.c.post("/api/moss/save", json={"task": name, "spec": spec}).get_json()
         self.assertEqual(out["title"], "有空格")
         self.assertEqual(out["cast"]["girl"], "a girl with long black hair")
-        self.assertIn("「晚安」", out["pages"][0]["prompt"])
+        texts = [x["text"] for x in json.loads(out["pages"][0]["prompt"])["items"]
+                 if x["label"] == "text"]
+        self.assertEqual(texts, ["晚安", "哗"])
 
     def test_layout_mismatch_reported_not_blocked(self):
         """格数不够 → 体检里报，但保存照样成功（判据只报不拦）。"""

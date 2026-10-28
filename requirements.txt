@@ -6,6 +6,11 @@ requests>=2.28
 python-dotenv>=1.0
 duckduckgo-search>=5.0,<9
 
+# ComfyUI 采样进度监听（app/comfy_progress.py）：拉 /ws 收 progress 消息，
+# 用来发现「每步几秒」的降级——内存吃干后 50 步能从 1.5 s/it 掉到 48 s/it。
+# 没装也能跑，只是这段保护自动失效（那个模块整体 try/except 掉了）。
+websocket-client>=1.6
+
 # 图片处理：读群里的图 / 表情包打标 / 生图发出去前转 JPEG 或校验原图
 Pillow>=10.0
 
