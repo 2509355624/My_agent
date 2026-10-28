@@ -320,6 +320,11 @@ SKILL_TIMEOUTS = {
     # 2026-10-16 用户新增：qwen 的 30 步副本（`skills/qwen30/`）。25 步那档实测
     # 约 41 秒，30 步多两成、再叠 2x 放大，给同档 220 秒余量足够。
     "qwen30": 220,
+    # ⚠️ 2026-10-28 晚起 `moss` / `moss8` / `moss50` / `moss_page` 这四条**全部下架**
+    #    （进 `app/skills.ARCHIVED_SKILLS`）。下面四个键留着只为「老任务重画 /
+    #    `tools/run_moss_*.py` 一次性脚本 / 4 步 DMD 链的测试样本」不炸，
+    #    **不是可用渠道**，别再拿它们当实测依据。唯一活着的 moss 渠道是
+    #    下面的 `moss-qunyou`（25 步）。
     # 2026-10-18 用户拍板把**默认让给 4 步那条**（原话「我喊 moss，你给我默认跑
     #    moss4，除非有人喊 moss45 才跑 45 步长的，不然太耗时了」）：
     #    `skills/moss/` = DMD **4 步**（1088×1920，实测 31.2 秒；1024×1536 时是
@@ -351,13 +356,14 @@ SKILL_TIMEOUTS = {
     #    ⚠️ 这张表是模块级常量，改完**必须重启常驻 flask（5174）**才生效；
     #    没重启时它仍走 .env 的 IMAGE_GEN_TIMEOUT。
     "moss8": 300,
-    # 群友配方复刻（`skills/moss-qunyou/`，2026-10-28）：1024×1536、**50 步 /
-    #    cfg 3**（群友 UI 里 KSampler 的 steps/cfg 被 PrimitiveInt/Float 覆盖，
-    #    widget 上显示的 8/1 是旧值）、SLG single 22 全段、7 个画风 LoRA。
-    #    同链 1024×1536 / 8 步 / cfg1 实测 32~41 s；50 步又是 cfg3（uncond+cond
-    #    两次前向），折算 ≈400 s，再叠 LoRA 与内存换页，900 秒留足余量。
+    # 群友配方（`skills/moss-qunyou/`，2026-10-28）：1024×1536、**25 步 / cfg 3**、
+    #    SLG single 22 全段、7 个画风 LoRA（只开 maliker @0.4）、VAEDecodeTiled。
+    #    ⚠️ 2026-10-28 晚它是**唯一还活着的 moss 渠道**（8/50/整页三档全下架，
+    #       原话「moss 以后就一个 25 步长的渠道即可」），步数 50 → 25。
+    #    实测（重启后第一张、含冷加载）：25 步 74.1 s、30 步 86.1 s、50 步约 102 s
+    #    （热态）。420 秒 ≈ 冷启 130 s 的 3 倍余量，够接住首次读盘 + 编码器重载。
     #    ⚠️ 模块级常量 —— 改完必须**重启常驻 flask（5174）**才生效。
-    "moss-qunyou": 900,
+    "moss-qunyou": 420,
     # 连续漫画批量（`skills/_comic_batch/`，**不是可点名渠道**，由
     #    `comic_story.COMIC_SKILL` 指定）。这条一直在表外：之前没有键，吃的是
     #    `TASK_TIMEOUT` 兜底 180（=.env `IMAGE_GEN_TIMEOUT`），10 格够用。

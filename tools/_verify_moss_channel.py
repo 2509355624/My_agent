@@ -37,14 +37,6 @@ def _load_workflow(skill):
     return json.loads(json.dumps(wf))       # 深拷贝，别污染缓存
 
 
-def _set_steps(wf, steps):
-    for node in wf.values():
-        if node.get("class_type") == "KSampler":
-            node["inputs"]["steps"] = steps
-            return True
-    return False
-
-
 def main():
     skill = sys.argv[1] if len(sys.argv) > 1 else "moss-qunyou"
     prompt_arg = sys.argv[2] if len(sys.argv) > 2 else "-"
@@ -57,12 +49,10 @@ def main():
         json.loads(prompt)                  # Layout JSON：坏了现在就报
 
     wf = _load_workflow(skill)
-    steps = None
-    for node in wf.values():
-        if node.get("class_type") == "KSampler":
-            steps = node["inputs"]["steps"]
-    if prompt_arg == "-":
-        _set_steps(wf, 8)
+    # ⚠️ 2026-10-28 晚起**不再把步数改写成 8**：MOSS 只剩 `moss-qunyou` 一条，
+    #    步数就在 workflow.json 里钉着（25）。以前这里有 `_set_steps(wf, 8)`，
+    #    跑 `moss-qunyou -`（默认提示词）会被静默改成 8 步，验证结果等于骗自己。
+    #    要试别的步数请显式传 —— 用 `tools/_run_moss_layout_once.py <prompt> <steps>`。
 
     wf = apply_prompt_placeholders(json.dumps(wf, ensure_ascii=False),
                                    prompt, 20261028)

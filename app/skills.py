@@ -209,12 +209,21 @@ def load_skill(skill_name):
 # 拿它当 **4 步 DMD 链（SamplerCustomAdvanced + step_codes）** 的唯一样本，
 # 那套「custom 链步数不可改、尺寸可改」的渲染参数逻辑要靠它钉住；
 # `load_skill("moss")` 走文件系统路径，照样能读。
+#
+# 2026-10-28 晚再收一批：`moss8`（8 步）/ `moss50`（50 步）/ `moss_page`（整页
+# 50 步）一起下架。用户拍板「改成 25 步长吧…我们 moss 以后就一个 25 步长的渠道
+# 即可…8 步长效果很差」——MOSS 只留 `moss-qunyou` 一条（已改 25 步），
+# 名字保留是因为漫画台 `/moss`、历史任务的 `spec.json`、`moss_api.LEGACY_SKILLS`
+# 全都按这个名字找图，改名要连带改历史数据，没好处。
+# 三个目录原地保留：`tools/run_moss_comic_page.py --skill`、`tools/run_moss_pages.py`
+# 这些一次性跑图脚本还按老名字取工作流，删了脚本就跑不了；而且它们只是
+# 「不同步数的同一份工作流」，留着当对照样本。
 ARCHIVED_SKILLS = tuple(
     ["anima_" + s for s in ("clear", "curvy", "gloss", "soft")]
     + ["hd_fast_" + s for s in ("clear", "curvy", "gloss", "soft")]
     + ["hd_2_" + s for s in ("clear", "curvy", "gloss", "soft")]
     + ["krea2"]
-    + ["moss"]
+    + ["moss", "moss8", "moss50", "moss_page"]
 )
 
 

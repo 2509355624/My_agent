@@ -2431,12 +2431,36 @@ class MossFourStepRetiredTest(unittest.TestCase):
         self.assertEqual(data["kind"], "生图")
         self.assertIsNotNone(data["workflow"])
 
-    def test_gen_pad_no_longer_offers_it(self):
-        """跑图台的渠道清单里既没有 `moss`，也仍然有替代它的 `moss8`。"""
+    def test_gen_pad_offers_only_one_moss_channel(self):
+        """2026-10-28 晚起 MOSS **只有 `moss-qunyou` 一条**（25 步）。
+
+        用户原话「我们 moss 以后就一个 25 步长的渠道即可，8 步长效果很差」——
+        `moss8` / `moss50` / `moss_page` 已经跟 4 步 `moss` 一样进
+        `ARCHIVED_SKILLS`，跑图台的渠道清单里这四个名字都应该消失。
+        """
         from app.gen_api import channels
         ids = {c["id"] for c in channels()}
-        self.assertNotIn("moss", ids)
-        self.assertIn("moss8", ids)
+        for gone in ("moss", "moss8", "moss50", "moss_page"):
+            with self.subTest(gone=gone):
+                self.assertNotIn(gone, ids)
+        self.assertIn("moss-qunyou", ids)
+
+    def test_the_only_moss_channel_runs_twenty_five_steps(self):
+        """渠道只剩一条，步数就被钉死在 25——别再退回 8 或 50。
+
+        两处都要对：工作流文件（跑图台直接吃它）和 `moss_api.STEPS`
+        （漫画台 `_draw()` 提交前会再覆写一次，两边漂移就会出现
+        「跑图台 25 步、漫画台 50 步」这种诡异差异）。
+        """
+        from app import moss_api
+
+        wf = load_skill("moss-qunyou")["workflow"]
+        samplers = [n for n in wf.values()
+                    if n.get("class_type") in ("KSampler", "KSamplerAdvanced")]
+        self.assertEqual(len(samplers), 1)
+        self.assertEqual(samplers[0]["inputs"]["steps"], 25)
+        self.assertEqual(moss_api.STEPS, 25)
+        self.assertEqual(moss_api.SKILL, "moss-qunyou")
 
 
 if __name__ == "__main__":

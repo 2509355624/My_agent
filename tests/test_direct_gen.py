@@ -416,47 +416,41 @@ class BareKrea2WordTest(unittest.TestCase):
         text = "krea2-coscandid：realistic cosplay photo, 1girl"
         self.assertEqual(direct_gen._parse_channel(text)[0], "krea2-coscandid")
 
-    def test_moss_defaults_to_the_eight_step_channel(self):
-        """2026-10-26 用户拍板：**喊「moss」就走 8 步那条**。
+    def test_moss_has_a_single_twenty_five_step_channel(self):
+        """2026-10-28 晚用户拍板：**MOSS 只留一条 25 步渠道**。
 
-        原话「moss渠道，我们说 moss 的时候，默认使用 8 步长的这个 moss，4 步长的
-        moss 就不用了」——理由就是 8 步档能一字不差地印中文（实测「云深茶室」四字
-        全中）。所以：
-        `moss` / `moss4` / `moss8` / 「moss 8步」→ `skills/moss8/`；
-        `moss50` / 「moss 50步」                 → `skills/moss50/`（点名才走）。
-        2026-10-28 补一刀：4 步档**彻底下架**（用户原话「moss 4步长删除掉吧，
-        这个渠道已经被 moss 8步长替代了」）——`skills/moss/` 进了
-        `app/skills.ARCHIVED_SKILLS`，跑图台 / 漫画工作台都不再吐它。
-        目录仍原地保留（渲染参数测试拿它当 4 步 DMD 链样本），所以
-        `load_skill("moss")` 照样能读，只是**对外点不到**。
+        原话「改成 25 步长吧，25 步长的效果可以了，不需要 50 步长了，然后我们 moss
+        默认跑 25 步长即可…比 8 步长的快速版本好用，8 步长效果很差，我们 moss 以后
+        就一个 25 步长的渠道即可」。
 
-        2026-10-20：慢速档 45 步 → 50 步、改名 `moss50`，**旧名 `moss45` 停用**
-        （用户选「只认 moss50」）。
+        所以 `moss8` / `moss50` / `moss_page` / 4 步 `moss` 全部进
+        `app/skills.ARCHIVED_SKILLS`，唯一活着的是 `skills/moss-qunyou/`（25 步）。
+        这里钉住两件事：
+        ① 所有老喊法都落到 `moss-qunyou`，**不许报错、不许降级到默认渠道**；
+        ② 新词「moss25 / moss 25步」也认，而且「步」要被一起吃掉。
 
         ⚠️ 关键在尾巴：裸 `moss` 的 `(?![0-9A-Za-z_])` 会把 `moss50` 里的数字挡住，
         所以长名必须显式登记、且排在裸词前面。`mossy` 这种真单词仍留在正文里。
         """
-        self.assertEqual(direct_gen._parse_channel("moss 一只猫"),
-                         ("moss8", "一只猫"))
-        self.assertEqual(direct_gen._parse_channel("moss50 一只猫"),
-                         ("moss50", "一只猫"))
-        # 「moss4」是老喊法：不报错，但**也不许**再把人带回 4 步档
-        self.assertEqual(direct_gen._parse_channel("moss4 一只猫"),
-                         ("moss8", "一只猫"))
-        self.assertEqual(direct_gen._parse_channel("moss 4步 招牌"),
-                         ("moss8", "招牌"))
-        # 显式喊 8 步也认（模型/用户都可能这么写）
-        self.assertEqual(direct_gen._parse_channel("moss8 一只猫"),
-                         ("moss8", "一只猫"))
-        self.assertEqual(direct_gen._parse_channel("moss 8步 招牌"),
-                         ("moss8", "招牌"))
-        # 「步」要被一起吃掉，正文里不能剩孤零零一个字
-        self.assertEqual(direct_gen._parse_channel("moss50步 招牌"),
-                         ("moss50", "招牌"))
-        self.assertEqual(direct_gen._parse_channel("moss8步 招牌"),
-                         ("moss8", "招牌"))
+        CH = "moss-qunyou"
+        for text, want in (("moss 一只猫", ("moss-qunyou", "一只猫")),
+                           ("moss25 一只猫", ("moss-qunyou", "一只猫")),
+                           ("moss 25步 招牌", ("moss-qunyou", "招牌")),
+                           # 已下架的三个步数档：老说法不报错，但一律回 25 步这条
+                           ("moss8 一只猫", ("moss-qunyou", "一只猫")),
+                           ("moss 8步 招牌", ("moss-qunyou", "招牌")),
+                           ("moss8步 招牌", ("moss-qunyou", "招牌")),
+                           ("moss8v 一只猫", ("moss-qunyou", "一只猫")),
+                           ("moss50 一只猫", ("moss-qunyou", "一只猫")),
+                           ("moss50步 招牌", ("moss-qunyou", "招牌")),
+                           ("moss4 一只猫", ("moss-qunyou", "一只猫")),
+                           ("moss 4步 招牌", ("moss-qunyou", "招牌"))):
+            with self.subTest(text=text):
+                self.assertEqual(direct_gen._parse_channel(text), want)
+        # 渠道 id 本身也要能直接点名（AI 填 skill 字段走的就是这条路）
+        self.assertEqual(direct_gen._parse_channel("moss-qunyou 一只猫")[0], CH)
         self.assertIsNone(direct_gen._parse_channel("mossy stone wall")[0])
-        # 旧名已停用：不能再被认成渠道（会落默认 / 回问，而不是静默跑 50 步）
+        # 旧名 `moss45` 早在 10-20 就停用了：不能被认成渠道
         self.assertIsNone(direct_gen._parse_channel("moss45 一只猫")[0])
 
     def test_plain_words_only_at_the_head(self):
@@ -1122,9 +1116,9 @@ class NamedChannelReplyRetryTest(unittest.TestCase):
             '"skill": "moss"}'])
         self.assertEqual(out, "")
         self.assertEqual(m_llm.call_count, 2)
-        # 模型填的是老喊法 `moss`，`_fixed_chan` 会归一成 8 步档 —— 这正是
-        # 2026-10-26 之后要的行为（4 步档不再被点名）。
-        self.assertEqual(m_gen.call_args.kwargs["skill"], "moss8")
+        # 模型填的是老喊法 `moss`，`_fixed_chan` 会归一成那唯一一条 25 步渠道
+        # （2026-10-28 晚起 8 步 / 50 步档全下架，喊 moss 只可能是它）。
+        self.assertEqual(m_gen.call_args.kwargs["skill"], "moss-qunyou")
         # 重问那一次必须把「点名渠道 = 下单」说明白，否则问了也白问
         self.assertIn("点名了渠道", m_llm.call_args[0][0][0]["content"])
 
@@ -3419,7 +3413,11 @@ class MossPlainChannelTest(unittest.TestCase):
         return seen["c"]
 
     def test_moss_turns_get_the_plain_prompt(self):
-        """两条 moss 都走普通模板：点名只加「本轮用这个渠道」那一句。"""
+        """moss 走普通模板：点名只加「本轮用这个渠道」那一句。
+
+        2026-10-28 晚起只剩 `moss-qunyou` 一条（25 步）；`moss` 是老喊法（归一后
+        也是它），一起钉住，避免哪天有人又把排版规范塞回模板。
+        """
         for skill in ("moss", "moss50"):
             content = self._content(skill, "moss 画个招牌")
             for word in self.GONE:
@@ -3443,15 +3441,16 @@ class MossPlainChannelTest(unittest.TestCase):
             with self.subTest(word=word):
                 self.assertIn(word, md)
 
-    def test_tool_prompt_param_teaches_the_moss_text_rules(self):
+    def test_tool_prompt_param_says_no_layout_json_on_qq(self):
         """主 agent 走 `generate_image` 那条路看不到 `chan_hint`，得写在参数说明里。
 
-        2026-10-26 换成本地 8 步档那套规范（双引号锁字 + Layout JSON），
-        源头是 `skills/moss-image-prompt/SKILL.md` §9 / §15；旧的「逐列编号 /
-        Column 1」写法已废弃（那是 4 步档时期的土办法）。
+        **2026-10-28 晚口径反转**：QQ 侧**不排字**。用户原话「qq侧是不需要 moss
+        叠加很长的规则的，qq侧就是正常跑单个图而已」，`agents/qq/image_guide.md`
+        第七章已经删掉整套 Layout JSON 规则；工具描述原来还在教 AI 排版，两处
+        互相矛盾（同一天查出来的坑）。这里钉住新口径，别再退回去。
         """
         desc = gi.tool["parameters"]["properties"]["prompt"]["description"]
-        for word in ("双引号", "Layout JSON", "bbox", "字号"):
+        for word in ("moss-qunyou", "双引号", "不要写 Layout JSON", "漫画台"):
             with self.subTest(word=word):
                 self.assertIn(word, desc)
 

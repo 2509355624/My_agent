@@ -386,28 +386,30 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    "通用": "krea2-general",
                    "奶油": "krea2-creamy",
                    "柔光": "krea2-softlight",
-                   # moss（MOSS-Image，本地 5B）：
-                   # 2026-10-26 用户拍板**「moss」默认走 8 步那条**（原话「moss渠道，
-                   # 我们说 moss 的时候，默认使用 8 步长的这个 moss，4 步长的 moss
-                   # 就不用了」）；2026-10-28 再拍板把 4 步档**彻底下架**
-                   # （原话「moss 4步长删除掉吧，这个渠道已经被 moss 8步长替代了」）
-                   # ——`skills/moss/` 进了 `app/skills.ARCHIVED_SKILLS`，跑图台 /
-                   # 漫画工作台都不再吐它，目录只留作 4 步 DMD 链的测试样本。
-                   #   `moss` / `moss4` / `moss8` / `moss8步` / `moss8v` → `skills/moss8/`
-                   #        （lodestones 8 步适配器 + SLG22 / **1024×1536 竖屏** /
-                   #         实测 40 秒；2 格 10 段竖排中文一字不差，
-                   #         **中文刻字准**就是选它的理由）
-                   #   `moss50` / `moss50步`                 → `skills/moss50/`
-                   #        （50 步 / 1024×1024 / ~3 分钟；moss 漫画台 `/moss` 也用它）
-                   # ⚠️ 2026-10-20 用户把 45 步那档提到 50 步，**旧名 `moss45` 停用**
-                   #    （原话「moss45步改成moss50步」+ 选「只认 moss50」）——别再
-                   #    把 moss45 加回别名表，那会变成两条同名不同步数的渠道。
-                   # ⚠️ `moss4` 也指向 8 步：老用法不该报错，但也不该再把用户
-                   #    带回 4 步档（4 步档 2026-10-28 已下架，见
-                   #    `app/skills.ARCHIVED_SKILLS`——用户明确说 4 步不用了）。
-                   "moss": "moss8", "moss4": "moss8", "moss4步": "moss8",
-                   "moss8": "moss8", "moss8步": "moss8", "moss8v": "moss8",
-                   "moss50": "moss50", "moss50步": "moss50",
+                   # moss（MOSS-Image，本地 5B）：2026-10-28 晚**收敛成一条 25 步**。
+                   # 用户原话「改成 25 步长吧，25 步长的效果可以了，不需要 50 步长了…
+                   # 我们 moss 以后就一个 25 步长的渠道即可，这个时间消耗是值得的，
+                   # 比 8 步长的快速版本好用，8 步长效果很差」。
+                   # ⇒ `moss8` / `moss50` / `moss_page` / 4 步 `moss` 全部进
+                   #   `app/skills.ARCHIVED_SKILLS`（目录原地保留：`tools/run_moss_*.py`
+                   #   那些一次性脚本还按老名字取工作流，历史图也要按老目录显示）。
+                   #
+                   #   `moss` / `moss4` / `moss8` / `moss50` / `moss25`
+                   #   （含「步」「v」后缀）→ 全部落 `skills/moss-qunyou/`
+                   #        1024×1536 竖屏 / maliker @0.4 / **25 步** / VAEDecodeTiled，
+                   #        热态约 74 秒。步数账见 `app/moss_api.py` 顶部注释。
+                   #
+                   # ⚠️ 渠道**名字**保留 `moss-qunyou` 不改：漫画台 `/moss`、
+                   #    历史任务 `spec.json`、`moss_api.LEGACY_SKILLS` 全按它找图，
+                   #    改名要连带迁历史数据，没收益。
+                   # ⚠️ 老说法一律**不报错**、全部落到这 25 步渠道——用户不想再看到
+                   #    同一模型分出好几个步数档。`moss45` 仍然停用（10-20 就改名了），
+                   #    别再往表里加，它只会让老用户以为还有 45 步那一档。
+                   "moss": "moss-qunyou", "moss4": "moss-qunyou", "moss4步": "moss-qunyou",
+                   "moss8": "moss-qunyou", "moss8步": "moss-qunyou",
+                   "moss8v": "moss-qunyou",
+                   "moss25": "moss-qunyou", "moss25步": "moss-qunyou",
+                   "moss50": "moss-qunyou", "moss50步": "moss-qunyou",
                    "日系": "krea2-rella"}
 _FIXED_CHAN_RE = re.compile(
     r"(?<![0-9A-Za-z_])"
@@ -457,19 +459,20 @@ _FIXED_CHAN_RE = re.compile(
     r"|krea2(?![0-9A-Za-z_-])"
     # moss（MOSS-Image，本地 5B）：英文单词 id，但中文用户的「moss」不会拿去当
     # 画面内容（苔藓一般写「青苔」），整词可认。
-    # ⚠️ 裸 `moss` = **8 步那条（默认）**；`moss50` 才是 50 步。**长名必须排在
-    #    裸 `moss` 前**：`moss4` / `moss8` / `moss50` 里的数字本来就被尾部
-    #    `(?![0-9A-Za-z_])` 挡住（裸 `moss` 的前瞻看见数字直接失败），不显式登记
-    #    就整句交给模型了。
+    # ⚠️ 2026-10-28 晚起 **所有 moss 说法都落同一条 25 步渠道**，原语「moss 以后就
+    #    一个 25 步长的渠道即可」。这里的多档写法纯粹是**为了别让老说法漏进正文**，
+    #    不是真的还有 8/50 步两档（它们已进 `ARCHIVED_SKILLS`）。
+    # ⚠️ 长名必须排在裸 `moss` 前：`moss4` / `moss8` / `moss25` / `moss50` 里的数字
+    #    本来就被尾部 `(?![0-9A-Za-z_])` 挡住（裸 `moss` 的前瞻看见数字直接失败），
+    #    不显式登记就整句交给模型了。
     #    `\s*步?` 末尾那个「步」必须一起吃掉（跟上面 `qwen\s*30\s*步?` 同理）：
-    #    用户会写「moss50步 招牌」，不吞掉的话正文里会剩一个孤零零的「步」。
-    #    ⚠️ 2026-10-20 起 **`moss45` 已停用**（50 步那档改名），这里别再加回来。
-    #    ⚠️ 2026-10-26 起 **裸 `moss` 和 `moss4` 都落 8 步档**（见别名表注释）。
-    #    `moss8v` 是 10-26 那份竖屏实验目录的旧名，目录已合并进 `skills/moss8/`
-    #    并删除，这里留着别名只是让老说法（「moss8v 跑一张」）不报错，
-    #    而且必须排在 `moss\s*8\s*步?` 前面把尾巴那个 v 一起吃掉，别留在正文里。
+    #    用户会写「moss25步 招牌」，不吞掉的话正文里会剩一个孤零零的「步」。
+    #    ⚠️ `moss45` 停用（10-20 就改名成 50 步了），这里别加回来。
+    #    `moss8v` 是 10-26 那份竖屏实验目录的旧名，留别名只是让「moss8v 跑一张」
+    #    不报错，而且必须排在 `moss\s*8\s*步?` 前面把尾巴那个 v 一起吃掉。
     r"|sd|qwen-hd|qwen|nffa|nai|cunny|miao"
-    r"|moss\s*50\s*步?|moss\s*4\s*步?|moss\s*8\s*v|moss\s*8\s*步?|moss)"
+    r"|moss\s*50\s*步?|moss\s*25\s*步?|moss\s*4\s*步?"
+    r"|moss\s*8\s*v|moss\s*8\s*步?|moss)"
     r"(?![0-9A-Za-z_])",
     re.I)
 
@@ -960,8 +963,8 @@ GUIDE_TEXT = (
     "　nffa　　插画感\n"
     "　cunny　超分重渠道 · 单张 2~4 分钟\n"
     "　miao　　皮肤质感滑嫩 · 2x 出 3072×4608\n"
-    "　moss　　MOSS-Image · 图里写中英文最准 · 默认这条（8 步 1024×1536 约 40 秒）\n"
-    "　moss50　同一模型的 50 步慢速档 · 1024×1024 · 约 3 分钟（要点名才走）\n"
+    "　moss　　MOSS-Image · 图里写中英文最准 · **25 步 1024×1536 约 74 秒**\n"
+    "　　　　　（就这一条，没有 8/50 步档了；文字与 50 步同档，省约 1/4 时间）\n"
     "　nai　　 NovelAI 云端 · 认画师串/权号\n"
     "\n"
     "【引用玩法】\n"
@@ -1026,7 +1029,7 @@ MORE_CHAN_TEXT = (
     "【★qwen】qwen\n"
     "【★miao】miao\n"
     "\n"
-    "【其他】moss ｜ moss50 ｜ silver-hd ｜ qwen-hd ｜ qwen角色设定表 ｜ qwen修复\n"
+    "【其他】moss ｜ silver-hd ｜ qwen-hd ｜ qwen角色设定表 ｜ qwen修复\n"
     "　　　　半厚涂 ｜ sf ｜ anima多图 ｜ anima线条 ｜ anima写实 ｜ anima鬼针草 ｜ anima肉感\n"
     "　　　　jank ｜ sd ｜ nffa ｜ cunny ｜ nai\n"
     "\n"
@@ -1288,7 +1291,7 @@ _MASTER_TEMPLATE = (
     "没图时回一句「修复需要先有一张图」。\n"
     "\n"
     "4. 垫图能力在 silver 系和 qwen 系，silver 有锁构图骨架；jank、nffa、cunny、"
-    "miao、krea2 系、sd、moss8 是文生图专用，填了会退回文生图、白等一轮。"
+    "miao、krea2 系、sd、moss 是文生图专用，填了会退回文生图、白等一轮。"
     "用户只是评价这张图、或只要反推提示词时，`source_image` 留空，本轮不画。\n"
     "\n"
     "5. 本轮一张引用图都没有、用户却明说「图生图 / 垫图」时，回一句"
@@ -1441,8 +1444,7 @@ _MASTER_TEMPLATE = (
     "| sd | `image_gen_v1` | 点名 sd |\n"
     "| jank | `jank` | 点名 jank |\n"
     "| nffa、cunny、miao | 同名 id | 点名才用，cunny / miao 很慢 |\n"
-    "| moss | `moss8` | 点名 moss，本地 8 步竖屏档（1024×1536），出字最准 |\n"
-    "| moss50 | `moss50` | 点名 moss50，50 步慢速档 |\n"
+    "| moss | `moss-qunyou` | 点名 moss，唯一的 MOSS 渠道（25 步 1024×1536 约 74 秒），出字最准 |\n"
     "| anima线条 | `anima-line` | 点名，线条感重 |\n"
     "| anima写实 | `anima-real` | 点名，真人质感 |\n"
     "| anima鬼针草 | `anima-guizhencao` | 点名，鬼针草画风 |\n"

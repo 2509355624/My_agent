@@ -3283,11 +3283,10 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
         #  cfg 1，真实执行 42~46 s；360 是留给「每画一张 ComfyUI 自动重启一次」
         #  的等待窗口（轮询虚高 40~95 s，判耗时才认日志 Prompt executed in）。
         #  ⚠️ 别拿这个数当当前配置一定跑得完的证据（moss8 那条同款教训）。
-        # 2026-10-28 加 `moss-qunyou`(900)：漫画台（`/moss`）的群友复刻配方，
-        #   1024×1536 / 50 步 / cfg 3（uncond+cond 双前向）叠 7 个 LoRA，冷启动
-        #   还要 staged 12GB，900 秒留足换页余量。**它只服务漫画台**，QQ 侧
-        #   点不到；别把它和 `moss8` / `moss50` 混成一条。实测 50 步 + maliker
-        #   单 LoRA 热跑 128 秒，冷跑 249 秒。
+        # 2026-10-28 加 `moss-qunyou`，当天晚些从 900 收到 **420**：它是**唯一活着
+        #   的 moss 渠道**（8/50/整页三档全部下架），步数 50 → 25，1024×1536。
+        #   实测重启后第一张 74.1 秒（含冷加载），420 ≈ 冷启 130 秒的 3 倍余量。
+        #   QQ 侧现在也能点它（`moss` 及其所有老喊法都归一到这里）。
         self.assertEqual(sorted(image_jobs.SKILL_TIMEOUTS),
                          ["_comic_batch", "moss", "moss-qunyou", "moss50",
                           "moss8", "moss_page",
@@ -3299,7 +3298,7 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
         self.assertEqual(image_jobs.task_timeout("moss50"), 520)
         self.assertEqual(image_jobs.task_timeout("moss8"), 300)
         self.assertEqual(image_jobs.task_timeout("moss_page"), 700)
-        self.assertEqual(image_jobs.task_timeout("moss-qunyou"), 900)
+        self.assertEqual(image_jobs.task_timeout("moss-qunyou"), 420)
         self.assertEqual(image_jobs.task_timeout("_comic_batch"), 240)
         self.assertEqual(image_jobs.task_timeout("qwen-restore"), 300)
         self.assertEqual(image_jobs.task_timeout("sf"), 360)
@@ -3747,9 +3746,14 @@ class LandscapeTest(_Base):
         self.assertEqual(aura[0]["inputs"]["shift"], 5.0)
         self.assertEqual(wf[ks["model"][0]]["class_type"], "ModelSamplingAuraFlow")
 
-        # 正向必须带触发词：LoRA 开了但触发词没拼进去，等于白挂
+        # 正向必须带触发词：LoRA 开了但触发词没拼进去，等于白挂。
+        # 2026-10-28 前缀补齐成群友 UI 里 `title=「lora触发词」` 的原串（五个词），
+        # 与 `moss-qunyou` 一致；这条渠道当天晚些已下架（进 ARCHIVED_SKILLS），
+        # 目录仍可 load，所以这里继续钉「链 + 前缀」防止哪天被静默改回去。
         text = [n for n in wf.values() if n["class_type"] == "CLIPTextEncode"][0]
-        self.assertEqual(text["inputs"]["text"], "maliker, __MULTI_PROMPTS__")
+        self.assertEqual(text["inputs"]["text"],
+                         "@realskin,@z1999,maliker,748cm,ningen_mame, "
+                         "__MULTI_PROMPTS__")
 
     def test_the_original_workflow_is_never_mutated(self):
         """返回新对象而不是原地改：静默重抽会重建 `job.workflow` 再递归调
