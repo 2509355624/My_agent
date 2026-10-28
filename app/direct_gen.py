@@ -389,8 +389,10 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    # moss（MOSS-Image，本地 5B）：
                    # 2026-10-26 用户拍板**「moss」默认走 8 步那条**（原话「moss渠道，
                    # 我们说 moss 的时候，默认使用 8 步长的这个 moss，4 步长的 moss
-                   # 就不用了」）——4 步档（`skills/moss/`）**保留但不再被点名**，
-                   # 只是给老的 workflow 测试当样本渠道。
+                   # 就不用了」）；2026-10-28 再拍板把 4 步档**彻底下架**
+                   # （原话「moss 4步长删除掉吧，这个渠道已经被 moss 8步长替代了」）
+                   # ——`skills/moss/` 进了 `app/skills.ARCHIVED_SKILLS`，跑图台 /
+                   # 漫画工作台都不再吐它，目录只留作 4 步 DMD 链的测试样本。
                    #   `moss` / `moss4` / `moss8` / `moss8步` / `moss8v` → `skills/moss8/`
                    #        （lodestones 8 步适配器 + SLG22 / **1024×1536 竖屏** /
                    #         实测 40 秒；2 格 10 段竖排中文一字不差，
@@ -400,8 +402,9 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    # ⚠️ 2026-10-20 用户把 45 步那档提到 50 步，**旧名 `moss45` 停用**
                    #    （原话「moss45步改成moss50步」+ 选「只认 moss50」）——别再
                    #    把 moss45 加回别名表，那会变成两条同名不同步数的渠道。
-                   # ⚠️ `moss4` 现在也指向 8 步：老用法不该报错，但也不该再把用户
-                   #    带回 4 步档（用户明确说 4 步不用了）。
+                   # ⚠️ `moss4` 也指向 8 步：老用法不该报错，但也不该再把用户
+                   #    带回 4 步档（4 步档 2026-10-28 已下架，见
+                   #    `app/skills.ARCHIVED_SKILLS`——用户明确说 4 步不用了）。
                    "moss": "moss8", "moss4": "moss8", "moss4步": "moss8",
                    "moss8": "moss8", "moss8步": "moss8", "moss8v": "moss8",
                    "moss50": "moss50", "moss50步": "moss50",

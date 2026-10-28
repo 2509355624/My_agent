@@ -198,11 +198,23 @@ def load_skill(skill_name):
 # 把 `kind: 生图` 的目录都放行，所以光加进这里不够——`direct_gen._FIXED_CHAN_MAP`
 # / `_FIXED_CHAN_RE` 和 `agents/*/agent.json` 的 `skills` 白名单也要同步清掉，
 # 否则点名 `krea2` 仍会被锁住并跑到（实测过）。
+#
+# 2026-10-28 再加一条：`moss`（MOSS-Image 的 **4 步**加速档）。用户拍板
+# 「moss 4步长删除掉吧，这个渠道已经被 moss 8步长替代了」。
+# ⚠️ 它其实早就不再被点名了——2026-10-26 起 `direct_gen._FIXED_CHAN_MAP` 里
+# 裸 `moss` / `moss4` / `moss4步` 全落 `moss8`，`skills/moss/` 只剩「测试样本」
+# 这一个用途。这次是把它从**对外渠道**里彻底摘掉：跑图台 `channels()`、
+# 漫画工作台、管理页、技能计数、AI 能看到的名字，全都不再出现。
+# 目录仍原地保留：`tests/test_comic_render_opts.py` / `test_image_jobs.py`
+# 拿它当 **4 步 DMD 链（SamplerCustomAdvanced + step_codes）** 的唯一样本，
+# 那套「custom 链步数不可改、尺寸可改」的渲染参数逻辑要靠它钉住；
+# `load_skill("moss")` 走文件系统路径，照样能读。
 ARCHIVED_SKILLS = tuple(
     ["anima_" + s for s in ("clear", "curvy", "gloss", "soft")]
     + ["hd_fast_" + s for s in ("clear", "curvy", "gloss", "soft")]
     + ["hd_2_" + s for s in ("clear", "curvy", "gloss", "soft")]
     + ["krea2"]
+    + ["moss"]
 )
 
 

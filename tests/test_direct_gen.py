@@ -424,8 +424,11 @@ class BareKrea2WordTest(unittest.TestCase):
         全中）。所以：
         `moss` / `moss4` / `moss8` / 「moss 8步」→ `skills/moss8/`；
         `moss50` / 「moss 50步」                 → `skills/moss50/`（点名才走）。
-        ⚠️ 4 步档（`skills/moss/`）**目录保留但不再被点名**——渲染参数的测试还拿
-        它当样本渠道，删目录会连累那边。
+        2026-10-28 补一刀：4 步档**彻底下架**（用户原话「moss 4步长删除掉吧，
+        这个渠道已经被 moss 8步长替代了」）——`skills/moss/` 进了
+        `app/skills.ARCHIVED_SKILLS`，跑图台 / 漫画工作台都不再吐它。
+        目录仍原地保留（渲染参数测试拿它当 4 步 DMD 链样本），所以
+        `load_skill("moss")` 照样能读，只是**对外点不到**。
 
         2026-10-20：慢速档 45 步 → 50 步、改名 `moss50`，**旧名 `moss45` 停用**
         （用户选「只认 moss50」）。

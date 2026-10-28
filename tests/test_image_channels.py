@@ -2410,5 +2410,34 @@ class AnimaGuizhencaoTest(unittest.TestCase):
         self.assertNotIn(self.NAME, gi._I2I_SKILLS)
 
 
+class MossFourStepRetiredTest(unittest.TestCase):
+    """moss 4 步档（`skills/moss/`）2026-10-28 下架。
+
+    用户原话「moss 4步长删除掉吧，这个渠道已经被 moss 8步长替代了」。
+    处理方式跟 `krea2` / `anima_*` 一样，走 `app/skills.ARCHIVED_SKILLS`：
+    **对外不吐、点名不到**，但目录原地保留——它现在是 4 步 DMD 链
+    （`SamplerCustomAdvanced` + `step_codes`）唯一的测试样本，
+    `test_comic_render_opts` 靠它钉「custom 链步数不可改、尺寸可改」。
+    """
+
+    def test_hidden_from_channel_lists(self):
+        """`list_skills()` 不吐它 → 跑图台 / 漫画工作台 / 管理页都看不到。"""
+        self.assertNotIn("moss", list_skills())
+
+    def test_still_loadable_from_disk(self):
+        """屏蔽只挡「对外可见」这一层，文件还在，`load_skill()` 照样能读。"""
+        data = load_skill("moss")
+        self.assertIsNotNone(data)
+        self.assertEqual(data["kind"], "生图")
+        self.assertIsNotNone(data["workflow"])
+
+    def test_gen_pad_no_longer_offers_it(self):
+        """跑图台的渠道清单里既没有 `moss`，也仍然有替代它的 `moss8`。"""
+        from app.gen_api import channels
+        ids = {c["id"] for c in channels()}
+        self.assertNotIn("moss", ids)
+        self.assertIn("moss8", ids)
+
+
 if __name__ == "__main__":
     unittest.main()
