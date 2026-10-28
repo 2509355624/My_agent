@@ -1288,7 +1288,7 @@ function fillRenderForm(opts, res, caps) {
     loraBox.innerHTML = '';
   }
 
-  // ── 采样：editable=false（moss 4 步的 DMD 链）时只留分辨率
+  // ── 采样：editable=false（固定步数的渠道，如 moss 25 步）时只留分辨率
   const b = opts.base || {}, hi = opts.hires || {};
   document.getElementById('baseCap').style.display = editable ? '' : 'none';
   document.getElementById('baseRow').style.display = editable ? 'flex' : 'none';
