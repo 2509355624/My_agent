@@ -32,6 +32,10 @@ if not defined PY set "PY=python"
 
 rem ── ComfyUI 目录 ──
 set "CFY_DIR="
+rem [!!] 2026-10-28 主实例已换到 nightly（moss 系工作流只在 nightly 的节点集里能跑）。
+rem      nightly 必须排第一位：v037 认不出 UNETLoader + moss_image 那套节点，
+rem      而且缺 --disable-comfy-compiler 直接 aimdo memory compile error 起不来。
+if not defined CFY_DIR if exist "D:\AI\ComfyUI-nightly\main.py" set "CFY_DIR=D:\AI\ComfyUI-nightly"
 if not defined CFY_DIR if exist "D:\AI\ComfyUI\main.py" set "CFY_DIR=D:\AI\ComfyUI"
 if not defined CFY_DIR if exist "D:\AI\ComfyUI_v037\main.py" set "CFY_DIR=D:\AI\ComfyUI_v037"
 
@@ -77,7 +81,23 @@ rem [!] 别被 app/image_jobs.py 开头那句「--vram-headroom 反而拖垮了整机」骗了：
 rem    那条结论是 2026-09-27 针对 qwen_image_v1（一套权重 10.5GB）的，那个渠道
 rem    已经在 app/config.py 的 DISABLED_IMAGE_SKILLS 里停用。anima/SD/anime2
 rem    用这套参数是实测跑得动的（run_comfyui.bat 天天在用）。**别顺手把参数删了。**
-"%PY%" main.py --listen 127.0.0.1 --port 8188 --enable-cors-header "*" --vram-headroom 1 --force-fp16
+rem [!] 参数**不在这里写死**：看门狗（watchdog._trigger_comfy_restart）和
+rem     采样降级强杀（image_jobs._force_restart_comfy）都从 app/comfy_launch.py
+rem     取命令。手动双击这份 bat 如果自己另写一套，就会出现「自动拉起能跑、
+rem     手动拉起跑不动」的诡异差异。所以这里也去问它，问不到才用兜底。
+set "CFY_ARGS="
+for /f "delims=" %%a in ('"%PY%" -c "import sys;from app import comfy_launch;sys.stdout.write(' '.join(comfy_launch.launch_args()))" 2^>nul') do set "CFY_ARGS=%%a"
+if not defined CFY_ARGS (
+    echo   [WARN] 读不到 comfy_launch 的参数，用内置兜底（nightly 三件套）
+    set "CFY_ARGS=--listen 127.0.0.1 --port 8188 --disable-comfy-compiler --enable-triton-backend --enable-cors-header *"
+) else (
+    echo   启动参数 : %CFY_ARGS%
+)
+
+rem 12GB 卡缺了 expandable_segments 很容易碎片化 OOM（app/comfy_launch.env() 同样补这一项）
+if not defined PYTORCH_CUDA_ALLOC_CONF set "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
+
+"%PY%" main.py %CFY_ARGS%
 
 echo.
 echo [ComfyUI 已退出] 退出码 %ERRORLEVEL%
