@@ -89,22 +89,32 @@
   .nai-options .btn { flex: none; }
 
   /* ── LoRA 槽（只有 moss 这种 Toggle 渠道出现）──
-     勾选 = 这个槽参不参与；强度 0~2。名字短的显示短名，完整名在 title 里。 */
-  .lora-options { display: none; margin-bottom: 8px; padding: 8px 10px;
+     默认**收起**，只留一行摘要（开了几个 + 名字/强度），点「展开」才露出槽位——
+     7 个槽铺开要占掉输入区一大截，收起来是常态（2026-10-28）。
+     展开后两列排布（窄屏 auto-fit 自动退回一列）。名字短的显示短名，全名在 title。 */
+  .lora-options { display: none; margin-bottom: 8px; padding: 4px 10px;
     background: var(--bg-input); border: 1px solid var(--border);
     border-radius: var(--radius-sm); }
   .lora-options.on { display: block; }
   .lora-head { display: flex; align-items: center; gap: 8px; font-size: 12px;
-    color: var(--text-dim); margin-bottom: 4px; }
-  .lora-head .spacer { flex: 1; }
-  .lora-row { display: flex; align-items: center; gap: 10px; padding: 2px 0; }
+    color: var(--text-dim); min-height: 26px; }
+  .lora-head .title { flex: none; }
+  .lora-sum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; color: var(--text-mute); }
+  .lora-sum b { color: var(--info); font-weight: 400; }
+  #loraRows { display: none; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1px 16px; margin: 0 -10px; padding: 5px 10px 4px;
+    border-top: 1px solid var(--border-soft); }
+  .lora-options.open #loraRows { display: grid; }
+  .lora-row { display: flex; align-items: center; gap: 8px; padding: 1px 0;
+    min-width: 0; }
   .lora-row .lchk { display: flex; align-items: center; gap: 6px; flex: 1;
     min-width: 0; font-size: 12px; color: var(--text-dim); cursor: pointer; }
   .lora-row .lname { overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; }
-  .lora-row input[type=number] { width: 66px; flex: none; background: var(--bg-elev);
+  .lora-row input[type=number] { width: 62px; flex: none; background: var(--bg-elev);
     border: 1px solid var(--border); border-radius: var(--radius-sm);
-    color: var(--text); padding: 3px 6px; font: inherit; font-size: 12px;
+    color: var(--text); padding: 2px 6px; font: inherit; font-size: 12px;
     outline: none; }
   .lora-row input[type=number]:focus { border-color: var(--accent); }
   .composer .bar { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
@@ -142,6 +152,14 @@
   .h-item .sd { font-size: 11px; color: var(--text-mute); }
   .h-item .tm { font-size: 11px; color: var(--text-mute); }
   .h-item .bad { font-size: 11px; color: var(--error); }
+  /* 「复制」按鼠标悬停才浮出来：面板只有 264px，常驻按钮会把缩略图挤窄 */
+  .h-item { position: relative; }
+  .h-copy { position: absolute; top: 6px; right: 6px; padding: 0 6px;
+    font: inherit; font-size: 11px; line-height: 16px; color: var(--text-dim);
+    background: var(--bg-elev); border: 1px solid var(--border);
+    border-radius: 4px; cursor: pointer; opacity: 0; transition: opacity .12s; }
+  .h-item:hover .h-copy, .h-copy:focus-visible { opacity: 1; }
+  .h-copy:hover { border-color: var(--accent); color: var(--accent); }
   .h-empty { color: var(--text-mute); font-size: 12px; text-align: center;
     padding: 30px 0; }
   .show-history { position: fixed; right: 0; top: 60px; z-index: 5; }
@@ -204,8 +222,9 @@
         </div>
         <div class="lora-options" id="loraBox">
           <div class="lora-head">
-            <span>LoRA（只影响这次提交）</span>
-            <span class="spacer"></span>
+            <span class="title" title="勾选只影响这次提交；「存为默认」写入模板，QQ 侧和三个台都跟着变">LoRA</span>
+            <span class="lora-sum" id="loraSum"></span>
+            <button class="btn small" id="loraToggle" type="button">展开</button>
             <button class="btn small" id="loraSave" type="button">存为默认</button>
           </div>
           <div id="loraRows"></div>
@@ -296,6 +315,24 @@ function fmtTime(ts) {
   return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
 
+// 复制到剪贴板。localhost 算安全上下文走 clipboard API；兜底 execCommand
+// 是给 http 局域网访问用的（那不是安全上下文，navigator.clipboard 是 undefined）。
+async function copyText(text) {
+  if (!text) { toast('这条没有记录提示词'); return false; }
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); ta.remove();
+    }
+    toast('提示词已复制（' + text.length + ' 字）');
+    return true;
+  } catch (e) { toast('复制失败：' + e.message); return false; }
+}
+
 // ── 渠道列 ────────────────────────────────
 async function loadChannels() {
   try {
@@ -342,8 +379,37 @@ function showCur() {
 // 不显示。勾选状态记在本机（gp_loras_<渠道>），换渠道互不干扰。
 let LORA = [];
 let LORA_KIND = '';
+// 面板默认收起（7 个槽铺开会把输入区顶出大半屏）；展开与否记在本机。
+let LORA_OPEN = false;
+try { LORA_OPEN = localStorage.getItem('gp_lora_open') === '1'; } catch (e) {}
 
 function loraKey(skill) { return 'gp_loras_' + (skill || ''); }
+
+function shortName(name) {
+  return (name || '').replace(/^moss-/, '').replace(/\.safetensors$/, '');
+}
+
+function setLoraOpen(open) {
+  LORA_OPEN = !!open;
+  document.getElementById('loraBox').classList.toggle('open', LORA_OPEN);
+  document.getElementById('loraToggle').textContent = LORA_OPEN ? '收起' : '展开';
+  try { localStorage.setItem('gp_lora_open', LORA_OPEN ? '1' : '0'); } catch (e) {}
+}
+
+function updateLoraSum() {
+  const el = document.getElementById('loraSum');
+  if (!LORA.length) { el.textContent = ''; return; }
+  const on = readLoraRows().filter(r => r.on);
+  el.innerHTML = '';
+  const b = document.createElement('b');
+  b.textContent = on.length;
+  el.appendChild(b);
+  el.appendChild(document.createTextNode('/' + LORA.length + '　'
+    + (on.length ? on.map(r => {
+        const s = LORA.find(x => x.slot === r.slot);
+        return shortName(s && s.name) + ' ' + r.strength;
+      }).join(' · ') : '全部关闭')));
+}
 
 function readLoraRows() {
   const out = [];
@@ -383,6 +449,7 @@ async function loadLoras(skill) {
             strength: (typeof m.strength === 'number' ? m.strength : s.strength)};
   });
   renderLoras();
+  setLoraOpen(LORA_OPEN);
   box.classList.add('on');
 }
 
@@ -396,17 +463,17 @@ function renderLoras() {
     row.innerHTML = '<label class="lchk"><input type="checkbox">'
       + '<span class="lname"></span></label>'
       + '<input class="lora-str" type="number" step="0.05" min="0" max="2">';
-    row.querySelector('.lname').textContent =
-      s.name.replace(/^moss-/, '').replace(/\.safetensors$/, '');
+    row.querySelector('.lname').textContent = shortName(s.name);
     row.title = s.name;
     const cb = row.querySelector('input[type=checkbox]');
     cb.checked = !!s.on;
-    cb.addEventListener('change', cacheLoras);
+    cb.addEventListener('change', () => { cacheLoras(); updateLoraSum(); });
     const num = row.querySelector('.lora-str');
     num.value = s.strength;
-    num.addEventListener('input', cacheLoras);
+    num.addEventListener('input', () => { cacheLoras(); updateLoraSum(); });
     rows.appendChild(row);
   });
+  updateLoraSum();
 }
 
 async function saveLoraDefault() {
@@ -434,6 +501,7 @@ NAI_ARTIST_SELECT.addEventListener('change', () => {
   NAI_ARTIST_INPUT.value = '';
 });
 document.getElementById('loraSave').addEventListener('click', saveLoraDefault);
+document.getElementById('loraToggle').addEventListener('click', () => setLoraOpen(!LORA_OPEN));
 TA.addEventListener('input', () => {
   TA.style.height = 'auto';
   TA.style.height = TA.scrollHeight + 'px';   // max-height 45vh 由 CSS 兜底
@@ -596,6 +664,13 @@ function renderHistory() {
     if (r.ok) info.querySelector('.tm').textContent = fmtTime(r.ts);
     else info.querySelector('.bad').textContent = (r.error || '失败').slice(0, 40);
     el.appendChild(info);
+    if (r.prompt) {
+      const cp = document.createElement('button');
+      cp.className = 'h-copy'; cp.type = 'button'; cp.textContent = '复制';
+      cp.title = '复制这条的提示词';
+      cp.onclick = ev => { ev.stopPropagation(); copyText(r.prompt); };
+      el.appendChild(cp);
+    }
     el.title = r.prompt || '';
     el.onclick = () => { if (r.ok && r.file) showShot(r); renderHistoryOn(); };
     box.appendChild(el);
