@@ -79,8 +79,12 @@ STATE_ROOT = os.path.join(BASE_DIR, "state", "moss_comic")
 # 2026-10-28 晚用户拍板「以后 moss 就一个 25 步长的渠道」——8 步（`moss8`）、
 # 50 步（`moss50`）、整页档（`moss_page`）全部进 `skills.ARCHIVED_SKILLS`，
 # 目录保留只为让历史任务重画 / 旧图显示，不再是可点名的渠道。
+#
+# 2026-10-28 深夜再改 25 → **30**：渠道挂上群友的 moss-nai5（二次元，NAI5
+# 训练集）后作者实测「30-40 步才稳」，且二次元细节（发丝/眼睛高光）比写实
+# 更吃步数。用户确认「耗时就增加 10 秒钟的样子」，30 步一页约 86 秒。
 SKILL = "moss-qunyou"
-STEPS = 25
+STEPS = 30
 # 分辨率：群友原版 1024×1536。实测这个尺寸在 12GB 卡上能出图（8 步 72 秒），
 # 降到 896×1344 反而在采样阶段出纯噪声，所以保持原版尺寸不动。
 # 改这里必须同步 `moss_comic._CANVAS_W/_CANVAS_H`，否则 bbox 会整体偏。
@@ -410,6 +414,9 @@ def _draw(page, prompt, base_wf, seed, out_dir, title):
     n = page.get("n")
     wf[_node_id(wf, "SaveImage", "filename_prefix")]["inputs"]["filename_prefix"] = (
         "MossComic_%s_P%02d" % (_slug(title), n))
+    # nai5 触发词跟着模板的 8 号槽走（2026-10-28）：模板开着就拼，用户「存为
+    # 默认」关掉后这里自动就不拼了，两处永不脱节。
+    prompt = lora_slots.nai5_prefix(SKILL) + prompt
     wf = apply_prompt_placeholders(json.dumps(wf, ensure_ascii=False), prompt, seed)
 
     # 账本记的提示词：JSON 前 200 字符全是结构骨架（`{"summary": {"canvas"...`），

@@ -46,18 +46,22 @@ def _tpl():
 
 
 class ReadSlotsTest(unittest.TestCase):
-    def test_reads_the_seven_named_slots(self):
-        """模板里 1~7 填了名字、8~10 是 "None" → 界面只该看到 7 槽。"""
+    def test_reads_the_eight_named_slots(self):
+        """模板里 1~8 填了名字（8 = moss-nai5，2026-10-28 深夜挂上）、
+        9~10 是 "None" → 界面只该看到 8 槽。"""
         slots = L.read_slots(_tpl())
-        self.assertEqual([s["slot"] for s in slots], [1, 2, 3, 4, 5, 6, 7])
+        self.assertEqual([s["slot"] for s in slots],
+                         [1, 2, 3, 4, 5, 6, 7, 8])
+        self.assertEqual(slots[7]["name"], "moss-nai5.safetensors")
 
-    def test_only_slot_two_is_on(self):
-        """2026-10-28 的现状：10 槽只开 maliker@0.4（其余都是 on=false）。"""
+    def test_default_on_slots(self):
+        """2026-10-28 深夜现状：用户把其余槽全存成了关，模板只开
+        moss-nai5@0.8（8 号槽，配触发词前缀）。这里钉「有且只有 8 号槽开」，
+        不钉别的槽的状态。"""
         on = [s for s in L.read_slots(_tpl()) if s["on"]]
-        self.assertEqual(len(on), 1)
-        self.assertEqual(on[0]["slot"], 2)
-        self.assertEqual(on[0]["name"], MALIKER)
-        self.assertAlmostEqual(on[0]["strength"], 0.4)
+        self.assertEqual([s["slot"] for s in on], [8])
+        self.assertEqual(on[0]["name"], "moss-nai5.safetensors")
+        self.assertAlmostEqual(on[0]["strength"], 0.8)
 
     def test_no_toggle_node_means_no_slots(self):
         """别的渠道（anima-line 是 LoraLoader 链）不该被当成 toggle。"""
@@ -167,7 +171,7 @@ class SaveDefaultTest(unittest.TestCase):
         self.assertIn("__SEED__", text)          # 模板占位符一个都不能丢
         self.assertIn("__MULTI_PROMPTS__", text)
         wf = load_workflow(self.path)
-        self.assertEqual(wf["70"]["inputs"]["steps"], 25)   # 步数没被顺手改掉
+        self.assertEqual(wf["70"]["inputs"]["steps"], 30)   # 步数没被顺手改掉
         got = {s["slot"]: s for s in L.read_slots(wf)}
         self.assertTrue(got[1]["on"])
         self.assertAlmostEqual(got[1]["strength"], 0.7)
@@ -175,13 +179,21 @@ class SaveDefaultTest(unittest.TestCase):
         self.assertTrue(os.path.isfile(self.path + ".bak-lora"))
 
     def test_other_bytes_untouched(self):
-        """只该改被点名的字段，别的行一个字都不动（含缩进/键序）。"""
+        """只该改被点名的字段，别的行一个字都不动（含缩进/键序）。
+
+        请求值取「当前值的反面」——不钉模板现状（用户随时会存默认，
+        模板上哪个槽开着是会变的），只钉「改动必须精确到一行」。
+        """
+        wf = load_workflow(self.path)
+        cur = {s["slot"]: s for s in L.read_slots(wf)}
+        want = not cur[2]["on"]
         before = self._text().splitlines()
-        L.save_default(SKILL, [{"slot": 2, "on": False}])
+        ok, msg = L.save_default(SKILL, [{"slot": 2, "on": want}])
+        self.assertTrue(ok, msg)
         after = self._text().splitlines()
         diff = [ln for ln in after if ln not in before]
         self.assertEqual(len(diff), 1, diff)
-        self.assertIn('"on_2": false', diff[0])
+        self.assertIn('"on_2": %s' % ("true" if want else "false"), diff[0])
         self.assertEqual(len(before), len(after))   # 没多行也没少行
 
     def test_missing_placeholder_is_refused(self):
@@ -217,12 +229,12 @@ class ComicCapsTest(unittest.TestCase):
         caps = ro.caps(_tpl())
         self.assertTrue(caps["lora"])
         self.assertEqual(caps["lora_kind"], "toggle")
-        self.assertTrue(caps["editable"])       # 采样步数仍不可改（25 步定死）
+        self.assertTrue(caps["editable"])       # 采样步数仍不可改（30 步定死）
 
     def test_defaults_reads_toggle_slots(self):
         d = ro.defaults(SKILL)
-        self.assertEqual(len(d["loras"]), 7)
-        self.assertEqual([x["slot"] for x in d["loras"]], list(range(1, 8)))
+        self.assertEqual(len(d["loras"]), 8)
+        self.assertEqual([x["slot"] for x in d["loras"]], list(range(1, 9)))
 
     def test_apply_does_not_rebuild_chain(self):
         """toggle 渠道走 apply_slots：节点数不变（重建链的话这里会多出节点）。"""
@@ -233,13 +245,60 @@ class ComicCapsTest(unittest.TestCase):
         got = {s["slot"]: s for s in L.read_slots(out)}
         self.assertTrue(got[1]["on"])
         self.assertFalse(got[2]["on"])
-        self.assertEqual(out["70"]["inputs"]["steps"], 25)
+        self.assertEqual(out["70"]["inputs"]["steps"], 30)
 
     def test_anima_line_is_still_chain(self):
         """回归护栏：这条改动不能把 anima 那 6 槽的链式面板改没。"""
         caps = ro.caps_of("anima-line")
         self.assertTrue(caps["lora"])
         self.assertEqual(caps["lora_kind"], "chain")
+
+
+class Nai5PrefixTest(unittest.TestCase):
+    """nai5 触发词前缀（2026-10-28 深夜）：跟 8 号槽同进同退。
+
+    作者要求：开着 LoRA 没触发词风格出不来，关着 LoRA 留触发词是空喊。
+    所以前缀不烘焙进模板，出图时按槽位状态动态拼。
+    """
+
+    def test_template_default_on(self):
+        """loras=None（QQ / 漫画台）照模板——现在模板开着，必须给前缀。"""
+        self.assertTrue(L.nai5_prefix("moss-qunyou").startswith("@//neoanime/"))
+
+    def test_explicit_loras_win(self):
+        """跑图台面板显式传了槽位 → 按传入状态，不看模板。"""
+        on = L.nai5_prefix("moss-qunyou", [{"slot": 8, "on": False}])
+        self.assertEqual(on, "")
+        on = L.nai5_prefix("moss-qunyou", [{"slot": 2, "on": True}])
+        self.assertTrue(on.startswith("@//neoanime/"))  # 没提 8 号槽 → 回退模板
+
+    def test_other_skills_never_get_it(self):
+        self.assertEqual(L.nai5_prefix("silver"), "")
+        self.assertEqual(L.nai5_prefix("moss-wide"), "")
+        self.assertEqual(L.nai5_prefix(""), "")
+
+    def test_strip_removes_prefix_from_workflow(self):
+        """显式关槽时，build 阶段按模板拼进去的前缀要能剥干净。"""
+        from app.tools.normal.generate_image import build_t2i_workflow
+        built = build_t2i_workflow(SKILL, "1girl, tea", 42)
+        self.assertGreaterEqual(L.strip_nai5_prefix(built), 1)
+        leftovers = [v for node in built.values()
+                     for v in (node.get("inputs") or {}).values()
+                     if isinstance(v, str) and "@//neoanime/" in v]
+        self.assertEqual(leftovers, [])
+
+    def test_build_bakes_prefix_when_template_on(self):
+        """build_t2i_workflow 按模板状态拼前缀（QQ / 重抽路径都走它）。"""
+        from app.tools.normal.generate_image import build_t2i_workflow
+        built = build_t2i_workflow(SKILL, "1girl, tea", 42)
+        baked = [v for node in built.values()
+                 for v in (node.get("inputs") or {}).values()
+                 if isinstance(v, str) and "@//neoanime/" in v]
+        # 前缀拼在渠道固定前缀之后、用户提示词之前，整体是一串长文本，
+        # 不判 startswith（固定前缀 @realskin... 在它前面）。
+        self.assertEqual(len(baked), 1)
+        self.assertIn("1girl, tea", baked[0])
+        self.assertIn("realistic material rendering", baked[0])
 
 
 if __name__ == "__main__":

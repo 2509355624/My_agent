@@ -168,6 +168,69 @@ def apply_slots(wf, slots):
     return n
 
 
+# ─── nai5 触发词前缀（2026-10-28 晚）────────────────────────
+#
+# 群友的 moss-nai5（二次元，NAI5 训练集）挂在 8 号槽。作者要求：触发词
+# `@//neoanime/` + 三句辅助词要跟 LoRA 同进同退——开着 LoRA 没触发词风格
+# 出不来，关着 LoRA 留触发词是一段「空喊」的噪音 token。所以前缀**不烘焙
+# 进模板固定前缀**，而是出图时按槽位实际状态动态拼：
+#
+# - QQ 侧 / 漫画台：没有槽位概念 → 照模板 `on_8` 决定（当前模板默认开）；
+# - 跑图台：面板显式传了槽位 → 按传入状态，没传 8 号槽回退模板；
+# - 跑图台显式关掉时，`build_t2i_workflow` 里按模板状态拼进去的前缀由
+#   `strip_nai5_prefix` 抠掉（build 在 _run 里 apply_slots 之前发生）。
+
+NAI5_SLOT = 8
+NAI5_SKILL = DEFAULT_SKILL          # 目前只有 moss-qunyou 挂了这个槽
+NAI5_PREFIX = ("@//neoanime/ detailed eyes with glossy highlights, "
+               "realistic PBR skin texture, realistic material rendering, ")
+
+
+def _nai5_on_from_template(skill):
+    """读模板里 8 号槽的开关。读不到文件/节点一律按 False（宁可没风格，别空喊）。"""
+    try:
+        wf = load_workflow(workflow_path(skill))
+    except OSError:
+        return False
+    _nid, nd = toggle_node(wf)
+    if nd is None:
+        return False
+    return bool((nd.get("inputs") or {}).get("on_%d" % NAI5_SLOT))
+
+
+def nai5_prefix(skill, loras=None):
+    """nai5 槽启用 → 返回触发词前缀串；否则空串。
+
+    `loras` 是跑图台面板显式传来的槽位列表；None（QQ / 漫画台）照模板。
+    列表里没有 8 号槽的条目也回退模板——前端只在用户动过槽位时才全量传。
+    """
+    if skill != NAI5_SKILL:
+        return ""
+    on = None
+    for s in loras or []:
+        if isinstance(s, dict) and s.get("slot") == NAI5_SLOT:
+            on = bool(s.get("on"))
+            break
+    if on is None:
+        on = _nai5_on_from_template(skill)
+    return NAI5_PREFIX if on else ""
+
+
+def strip_nai5_prefix(wf):
+    """把 `NAI5_PREFIX` 从工作流的提示词字段里抠掉（就地改，返回改了几处）。
+
+    跑图台显式关 8 号槽时用：`build_t2i_workflow` 不知道槽位状态，是按
+    模板默认拼的前缀，`_run` 里 apply_slots 之后发现关了就得剥掉。
+    """
+    n = 0
+    for nd in (wf or {}).values():
+        for k, v in (nd.get("inputs") or {}).items():
+            if isinstance(v, str) and NAI5_PREFIX in v:
+                nd["inputs"][k] = v.replace(NAI5_PREFIX, "")
+                n += 1
+    return n
+
+
 # ─── 存为默认（写回模板）───────────────────────────────────
 
 def workflow_path(skill=DEFAULT_SKILL):
@@ -231,12 +294,15 @@ def save_default(skill, slots):
         return False, "读不到模板：%s" % e
     if '"%s"' % TOGGLE_CLASS not in text:
         return False, "模板里没有 %s 节点" % TOGGLE_CLASS
+    # 占位符检查对**原文**做，放在「没变化」早退之前——早退路径也绝不能
+    # 给一个占位符残缺的模板放行（2026-10-28：模板被用户存成全关后，
+    # 再存一次全关会踩中这条路径，测试 test_missing_placeholder_is_refused 抓的）。
+    if "__SEED__" not in text or "__MULTI_PROMPTS__" not in text:
+        return False, "模板占位符已缺失（__SEED__ / __MULTI_PROMPTS__），拒绝改写"
 
     new, hits = _patch(text, slots)
     if new == text or not hits:
         return True, "配置没变化"
-    if "__SEED__" not in new or "__MULTI_PROMPTS__" not in new:
-        return False, "占位符会被改坏，已放弃保存"
 
     bak = path + ".bak-lora"
     try:

@@ -219,6 +219,11 @@ def _run(job):
             # 别的渠道 apply 返回 0（找不到那个节点），无副作用。
             if job.get("loras"):
                 lora_slots.apply_slots(wf, job["loras"])
+                # build_t2i_workflow 是按模板默认拼的 nai5 触发词；面板显式
+                # 关了 8 号槽就把前缀剥掉，别留一段没有 LoRA 支撑的空喊。
+                if any(isinstance(s, dict) and s.get("slot") == 8
+                       and not s.get("on") for s in job["loras"]):
+                    lora_slots.strip_nai5_prefix(wf)
             # _submit_retry 只对超时重试；其余错误一次抛清。
             name = comic._submit_retry(
                 lambda: comic._submit(wf, job["skill"], job["prompt"], job["seed"]),

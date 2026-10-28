@@ -2446,12 +2446,13 @@ class MossFourStepRetiredTest(unittest.TestCase):
                 self.assertNotIn(gone, ids)
         self.assertIn("moss-qunyou", ids)
 
-    def test_the_only_moss_channel_runs_twenty_five_steps(self):
-        """步数档只剩一条，步数就被钉死在 25——别再退回 8 或 50。
+    def test_the_only_moss_channel_runs_thirty_steps(self):
+        """步数钉死在 30（2026-10-28 深夜 25 → 30，配 nai5 二次元风格）——
+        别退回 8 / 25 / 50。
 
         两处都要对：工作流文件（跑图台直接吃它）和 `moss_api.STEPS`
         （漫画台 `_draw()` 提交前会再覆写一次，两边漂移就会出现
-        「跑图台 25 步、漫画台 50 步」这种诡异差异）。
+        「跑图台 30 步、漫画台 25 步」这种诡异差异）。
         """
         from app import moss_api
 
@@ -2459,9 +2460,23 @@ class MossFourStepRetiredTest(unittest.TestCase):
         samplers = [n for n in wf.values()
                     if n.get("class_type") in ("KSampler", "KSamplerAdvanced")]
         self.assertEqual(len(samplers), 1)
-        self.assertEqual(samplers[0]["inputs"]["steps"], 25)
-        self.assertEqual(moss_api.STEPS, 25)
+        self.assertEqual(samplers[0]["inputs"]["steps"], 30)
+        self.assertEqual(moss_api.STEPS, 30)
         self.assertEqual(moss_api.SKILL, "moss-qunyou")
+
+    def test_nai5_slot_is_on_by_default(self):
+        """nai5（8 号槽）模板默认开——QQ 侧没有面板，全靠模板兜底。
+
+        前缀由 `lora_slots.nai5_prefix` 按这个状态动态拼（见
+        test_lora_slots.py），这里只钉模板事实。
+        """
+        wf = load_skill("moss-qunyou")["workflow"]
+        toggles = [n for n in wf.values()
+                   if n.get("class_type") == "MOSSLoRAToggle"]
+        self.assertEqual(len(toggles), 1)
+        inp = toggles[0]["inputs"]
+        self.assertEqual(inp.get("lora_8"), "moss-nai5.safetensors")
+        self.assertTrue(inp.get("on_8"))
 
 
 class MossWideLandscapeTwinTest(unittest.TestCase):
@@ -2478,7 +2493,9 @@ class MossWideLandscapeTwinTest(unittest.TestCase):
         self.assertEqual(len(latents), 1)
         self.assertEqual(latents[0]["inputs"]["width"], 1536)
         self.assertEqual(latents[0]["inputs"]["height"], 1024)
-        # 其余参数必须和竖版一字不差：同 25 步、同 cfg、同 LoRA 槽
+        # 2026-10-28 深夜起两边**有意分叉**：竖版升 30 步 + nai5（8 号槽），
+        # 横版还停在 25 步的旧写实配方（nai5 是竖屏测试期，横版等用户点头
+        # 再同步）。这里钉住横版的旧配方，防止哪天手滑把它一起改了。
         wide = load_skill("moss-wide")["workflow"]
         tall = load_skill("moss-qunyou")["workflow"]
         self.assertEqual(len(wide), len(tall))
@@ -2488,7 +2505,9 @@ class MossWideLandscapeTwinTest(unittest.TestCase):
         self.assertEqual(ks[0]["inputs"]["cfg"], 3)
         for nid, node in tall.items():
             if node.get("class_type") == "MOSSLoRAToggle":
-                self.assertEqual(wide[nid]["inputs"], node["inputs"])
+                self.assertEqual(wide[nid]["inputs"].get("lora_8"), "None",
+                                 "横版还没接 nai5，8 号槽应是空的")
+                self.assertFalse(wide[nid]["inputs"].get("on_8"))
 
     def test_alias_and_timeout_and_whitelist(self):
         # 原话点名才走；裸「moss」必须仍然落竖版
