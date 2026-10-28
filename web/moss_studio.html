@@ -50,6 +50,14 @@
   .btn.small { padding: 5px 10px; font-size: 12px; }
   .hint { font-size: 11px; color: var(--text-mute); line-height: 1.7; margin-top: 8px; }
 
+  /* ── LoRA 槽位（2026-10-28）：勾选 = 参与本次出图，强度 0~2 ── */
+  .lora-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
+  .lora-row label { display: flex; align-items: center; gap: 6px; flex: 1;
+    min-width: 0; font-size: 12px; color: var(--text-dim); cursor: pointer; }
+  .lora-row .lname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lora-row input[type=number] { width: 70px; flex: none; padding: 4px 8px;
+    font-size: 12px; }
+
   #jobbar { display: none; padding: 8px 12px; border-radius: var(--radius-sm);
     background: var(--bg-input); border: 1px solid var(--border); font-size: 13px;
     color: var(--info); margin-bottom: 12px; }
@@ -189,6 +197,16 @@
       <button class="btn" id="btn-save">保存修改</button>
       <button class="btn primary" id="btn-draw-all">全部出图</button>
       <span class="hint" id="save-hint" style="margin:0"></span>
+    </div>
+  </div>
+
+  <!-- ── 2.5 LoRA 槽位 ── -->
+  <div class="card" id="lora-card">
+    <h2>LoRA 槽位 <span style="color:var(--text-mute);font-size:11px;font-weight:400">勾选才会挂上 · 只影响这次出图</span></h2>
+    <div id="lora-rows"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn" id="btn-lora-save">存为默认</button>
+      <span class="hint" style="margin:0">存为默认会写回模板，之后 QQ 侧和另外两个台都按它跑</span>
     </div>
   </div>
 
@@ -536,6 +554,57 @@ async function saveNow() {
   }
 }
 
+/* ══ LoRA 槽位 ══════════════════════════════════════════════
+   `MOSSLoRAToggle` 是一个节点里并联 7 个槽，勾谁挂谁。选择记在本机，
+   换任务不丢；模板默认只由「存为默认」改。 */
+var LORA = [];
+
+async function loadLoras() {
+  var r = await api("/api/moss/loras");
+  if (!r.ok) { $("lora-card").style.display = "none"; return; }
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem("moss_loras") || "null"); }
+  catch (e) { saved = null; }
+  var bySlot = {};
+  (saved || []).forEach(function (s) { bySlot[s.slot] = s; });
+  LORA = (r.slots || []).map(function (s) {
+    var m = bySlot[s.slot];
+    if (!m) return s;
+    return { slot: s.slot, name: s.name, on: !!m.on,
+             strength: typeof m.strength === "number" ? m.strength : s.strength };
+  });
+  renderLoras();
+}
+
+function renderLoras() {
+  var box = $("lora-rows");
+  box.innerHTML = "";
+  LORA.forEach(function (s) {
+    var row = document.createElement("div");
+    row.className = "lora-row";
+    row.dataset.slot = s.slot;
+    row.innerHTML = '<label><input type="checkbox"><span class="lname"></span></label>'
+      + '<input class="lora-str" type="number" step="0.05" min="0" max="2">';
+    row.querySelector(".lname").textContent =
+      s.name.replace(/^moss-/, "").replace(/\.safetensors$/, "");
+    row.title = s.name;
+    row.querySelector("input[type=checkbox]").checked = !!s.on;
+    row.querySelector(".lora-str").value = s.strength;
+    box.appendChild(row);
+  });
+}
+
+function loraPayload() {
+  var out = [];
+  document.querySelectorAll("#lora-rows .lora-row").forEach(function (r) {
+    out.push({ slot: Number(r.dataset.slot),
+               on: r.querySelector("input[type=checkbox]").checked,
+               strength: Number(r.querySelector(".lora-str").value) });
+  });
+  try { localStorage.setItem("moss_loras", JSON.stringify(out)); } catch (e) {}
+  return out;
+}
+
 /* ══ 出图 ══════════════════════════════════════════════════ */
 async function draw(pageNo, reroll) {
   if (!S.task) return;
@@ -544,6 +613,7 @@ async function draw(pageNo, reroll) {
   var body = { task: S.task };
   if (pageNo) body.pages = [pageNo];
   if (reroll) body.reroll = true;
+  if (LORA.length) body.loras = loraPayload();
   var btns = document.querySelectorAll("button[data-act]");
   btns.forEach(function (b) { b.disabled = true; });
   var r = await api("/api/moss/render", body);
@@ -573,6 +643,11 @@ $("zoom").addEventListener("click", function () { $("zoom").className = ""; });
 $("btn-write").addEventListener("click", doWrite);
 $("btn-save").addEventListener("click", function () { saveNow().then(function () { toast("已保存"); }); });
 $("btn-draw-all").addEventListener("click", function () { draw(null, false); });
+$("btn-lora-save").addEventListener("click", async function () {
+  if (!LORA.length) return;
+  var r = await api("/api/lora/save", { skill: "moss-qunyou", slots: loraPayload() });
+  toast(r.message || (r.ok ? "已存为默认" : "保存失败"), !r.ok);
+});
 
 $("style").addEventListener("change", function () {
   $("styleCustom").style.display = this.value === "custom" ? "" : "none";
@@ -606,6 +681,7 @@ $("histsel").addEventListener("change", async function () {
 
 /* 打开页面：有最近任务就自动切到最新那个，省一步 */
 (async function boot() {
+  loadLoras();
   await loadList();
   var first = $("histsel").options[1];
   if (!first) return;

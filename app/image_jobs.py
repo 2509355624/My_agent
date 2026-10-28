@@ -357,7 +357,8 @@ SKILL_TIMEOUTS = {
     #    没重启时它仍走 .env 的 IMAGE_GEN_TIMEOUT。
     "moss8": 300,
     # 群友配方（`skills/moss-qunyou/`，2026-10-28）：1024×1536、**25 步 / cfg 3**、
-    #    SLG single 22 全段、7 个画风 LoRA（只开 maliker @0.4）、VAEDecodeTiled。
+    #    SLG single 22 全段、7 个画风 LoRA（模板默认只开 maliker @0.4；三个台的
+    #    LoRA 面板可勾选别的槽，见 `app/lora_slots.py`）、VAEDecodeTiled。
     #    ⚠️ 2026-10-28 晚它是**唯一还活着的 moss 渠道**（8/50/整页三档全下架，
     #       原话「moss 以后就一个 25 步长的渠道即可」），步数 50 → 25。
     #    实测（重启后第一张、含冷加载）：25 步 74.1 s、30 步 86.1 s、50 步约 102 s

@@ -52,6 +52,7 @@ import json
 import logging
 import os
 
+from app import lora_slots
 from app.config import state_path
 from app.skills import load_skill
 
@@ -283,7 +284,9 @@ def defaults(skill=DEFAULT_SKILL):
     else:
         hires = _batch_hires_params(wf)
     return {
-        "loras": _lora_slots(wf, passes["base"]),
+        # Toggle 渠道（moss）读它自己的槽；链式渠道照旧回溯 LoraLoader 链。
+        "loras": (lora_slots.read_slots(wf) if lora_slots.has_toggle(wf)
+                  else _lora_slots(wf, passes["base"])),
         "base": _sampler_params(wf, base_nid),
         "hires": hires,
         "upscale": _upscale_params(wf),
@@ -341,15 +344,22 @@ def caps(workflow):
         ow, oh = ow * 2, oh * 2
         ff = 2
 
+    chain_lora = fam == "ks" and any(
+        (nd or {}).get("class_type") in LORA_CLASSES for nd in wf.values())
+    toggle_lora = lora_slots.has_toggle(wf)
+
     return {
         "family": fam or "none",
         "passes": 2 if _has_hires(wf) else (1 if passes["base"] else 0),
         "editable": fam not in ("custom", None),
-        # LoRA **只让 ks 族可调**（2026-10-19）。sd / miao 的链是渠道配方的一部分
-        # （降对比、提饱和、表情风格），面板一露出来就会被全局默认里 anima 那 6 槽
-        # 覆盖掉；moss 没有链。宁可少一个旋钮，也不让人一键把渠道配方拆了。
-        "lora": fam == "ks" and any(
-            (nd or {}).get("class_type") in LORA_CLASSES for nd in wf.values()),
+        # LoRA 分两种载体（2026-10-19 定「只让 ks 族可调」，10-28 加 moss）：
+        #   · chain = `LoraLoader` 链。sd / miao 的链是渠道配方的一部分（降对比、
+        #     提饱和、表情风格），面板一露出来就会被全局默认里 anima 那 6 槽
+        #     覆盖掉，所以仍然只给 ks 族；
+        #   · toggle = `MOSSLoRAToggle` 多槽开关。不重建链、只改字段，安全，
+        #     给 moss 开（用户要求「三个台都能自己选开哪个」）。
+        "lora": chain_lora or toggle_lora,
+        "lora_kind": "toggle" if toggle_lora else ("chain" if chain_lora else ""),
         "upscale_latent": bool(up["latent"]),
         # batch 族把最终放大写在节点里（sd 的 `upscale_model` 输入），没有独立的
         # ImageUpscaleWithModel 节点可绕，所以「跳过最终放大」只在有那个节点时给。
@@ -604,7 +614,17 @@ def normalize(raw, base=None, resources=None):
         cs = _clamp(s, *STRENGTH_RANGE)
         if abs(cs - s) > 1e-9:
             warnings.append("槽 %d 强度 %.2f 超出 0~2，已钳成 %.2f" % (i + 1, s, cs))
-        loras.append({"name": name, "strength": cs})
+        row = {"name": name, "strength": cs}
+        # Toggle 渠道（moss）要槽号和开关；链式渠道不认这两个键，留着不碍事。
+        if item.get("slot") is not None:
+            try:
+                row["slot"] = int(item["slot"])
+            except (TypeError, ValueError):
+                errors.append("第 %d 个 LoRA 槽的序号不是数字" % (i + 1))
+                continue
+        if "on" in item:
+            row["on"] = bool(item.get("on"))
+        loras.append(row)
 
     # ── 两段采样参数
     def _pass(key, with_denoise):
@@ -939,8 +959,17 @@ def apply(workflow, opts):
     # 全局默认里存的是 anima 那 6 槽；切到 sd / miao / qwen 这些没有链的渠道时
     # 若照旧重建，会往 SDXL checkpoint 链上硬塞 LoraLoaderModelOnly（要 clip
     # 输出、加载器没这个槽），提交直接被 ComfyUI 拒。
-    n_lora = _rebuild_loras(wf, (opts or {}).get("loras") or []) \
-        if caps(wf)["lora"] else 0
+    #
+    # 2026-10-28：moss 的 `MOSSLoRAToggle` 走另一条路——它连在底模和采样器之间，
+    # 一旦进 `_rebuild_loras` 就会被当旧链删掉重建，整条链断掉。所以先判 Toggle，
+    # 命中就只改字段。
+    raw_loras = (opts or {}).get("loras") or []
+    if lora_slots.has_toggle(wf):
+        n_lora = lora_slots.apply_slots(wf, raw_loras)
+    elif caps(wf)["lora"]:
+        n_lora = _rebuild_loras(wf, raw_loras)
+    else:
+        n_lora = 0
     passes = _passes(wf)
     base_p = (opts or {}).get("base") or {}
     hires_p = (opts or {}).get("hires") or {}

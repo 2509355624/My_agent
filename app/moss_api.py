@@ -17,6 +17,7 @@
   POST /api/moss/write    一句话剧情 → 编剧写 spec.json（同步，几秒）
   POST /api/moss/save     手改后的 spec 落盘（重算每页提示词）
   POST /api/moss/render   后台出图（整页；可指定页号、可换 seed）
+  GET  /api/moss/loras    当前 LoRA 槽位（`MOSSLoRAToggle` 的 1~7 槽）
   GET  /api/moss/status   轮询：spec + 体检 + 提示词 + 每页出图状态
   GET  /api/moss/img      出图（state.json 里记的相对 ComfyUI output 的路径）
   GET  /api/moss/list     历史任务
@@ -37,7 +38,7 @@ import time
 
 from flask import Blueprint, jsonify, request, send_file
 
-from app import image_jobs, moss_comic
+from app import image_jobs, lora_slots, moss_comic
 from app.config import BASE_DIR, COMFYUI_OUTPUT_DIR
 from app.skills import load_workflow
 from app.tools.normal.generate_image import apply_prompt_placeholders
@@ -437,13 +438,19 @@ def _draw(page, prompt, base_wf, seed, out_dir, title):
     return files[0].replace("\\", "/"), ""
 
 
-def _run(d, spec, nums, seed_base):
-    """后台线程：逐页出图，每页状态落 state.json（页面靠它轮询）。"""
+def _run(d, spec, nums, seed_base, loras=None):
+    """后台线程：逐页出图，每页状态落 state.json（页面靠它轮询）。
+
+    `loras` 是这一批的 LoRA 槽位（见 `lora_slots`）：只改**这批的**工作流副本，
+    模板不动。空 = 照模板现有配置。
+    """
     title = spec.get("title") or "未命名"
     try:
         base_wf = load_workflow(os.path.join(BASE_DIR, "skills", SKILL, "workflow.json"))
         if not base_wf:
             raise RuntimeError("skills/%s/workflow.json 读不出来" % SKILL)
+        if loras:
+            lora_slots.apply_slots(base_wf, loras)
         prompts = _prompts(spec)
         by_n = {p.get("n"): p for p in spec.get("pages") or []}
         out_dir = "%s/%s" % (OUT_ROOT, os.path.basename(d))
@@ -517,15 +524,45 @@ def api_moss_render():
     if data.get("reroll") and not seed_base:
         seed_base = int(time.time() * 1000) % 900000000 + 100000000
 
+    # LoRA 槽位：不传 = 照模板现有配置；传了就先校验再进线程（400 早退，
+    # 别让半套参数跑到出图线程里才炸）。
+    slots, errs, _warn = lora_slots.normalize(data.get("loras"))
+    if errs:
+        return jsonify({"ok": False, "error": "；".join(errs)}), 400
+
     with _RUN_LOCK:
         if _RUNNING.get(d):
             return jsonify({"ok": False, "error": "这个任务正在画，等它画完"}), 409
         _RUNNING[d] = {"t0": time.time(), "n": nums[0]}
 
-    threading.Thread(target=_run, args=(d, spec, nums, seed_base), daemon=True,
+    threading.Thread(target=_run, args=(d, spec, nums, seed_base, slots),
+                     daemon=True,
                      name="moss-comic-%s" % os.path.basename(d)).start()
     return jsonify({"ok": True, "task": os.path.basename(d), "pages": nums,
                     "seed": seed_base or None})
+
+
+# ══════════════════════════════════════════════════════════
+#  LoRA 槽位（2026-10-28 用户要求「自己选开哪个」）
+# ══════════════════════════════════════════════════════════
+#
+# `MOSSLoRAToggle` 是「一个节点里并联 10 个槽」，改它只改字段、不重建链。
+# 读写逻辑在 `app/lora_slots.py`，跑图台 / 漫画台 / 这里共用同一份。
+
+
+@bp.route("/api/moss/loras", methods=["GET"])
+def api_moss_loras():
+    wf = load_workflow(os.path.join(BASE_DIR, "skills", SKILL, "workflow.json"))
+    if not wf:
+        return jsonify({"ok": False,
+                        "error": "读不到 skills/%s/workflow.json" % SKILL}), 500
+    return jsonify({"ok": True, "skill": SKILL, "kind": "toggle",
+                    "slots": lora_slots.read_slots(wf)})
+
+
+# 「存为默认」不在这里开第二个口子：三个台统一走 `POST /api/lora/save`
+# （gen_api），落到同一个 `lora_slots.save_default`。两条路径做同一件事，
+# 迟早分叉成「在 A 台存了、B 台不认」。
 
 
 # ══════════════════════════════════════════════════════════

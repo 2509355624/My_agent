@@ -225,6 +225,10 @@
       这个渠道没有的东西（比如没有 LoRA 链、只有一段采样）不会显示。
     </div>
     <div id="loraRows"></div>
+    <div id="loraDefaultRow" style="display:none;margin-bottom:8px">
+      <button class="btn small" onclick="saveLoraToTemplate()">存为模板默认</button>
+      <span class="hint" style="margin-left:8px">写回 moss 模板，QQ 侧和另外两个台一起变</span>
+    </div>
     <div id="baseCap" style="color:var(--text-dim);font-size:12px;margin:10px 0 6px">第一段采样 · 出构图</div>
     <div class="row" id="baseRow" style="margin-bottom:10px"></div>
     <div id="baseNote" style="display:none;color:var(--text-dim);font-size:12px;margin-bottom:10px">
@@ -1260,9 +1264,29 @@ function fillRenderForm(opts, res, caps) {
   const editable = caps.editable !== false;
   const numPasses = caps.passes || 0;
 
-  // ── LoRA：只对模板里本来就有 LoRA 链的渠道显示
+  // ── LoRA：两种载体渲染成两套控件（2026-10-28）
+  //   chain  = `LoraLoader` 链，可以任意换文件（anima 那 6 槽）
+  //   toggle = `MOSSLoRAToggle` 多槽开关，槽位和文件名由模板定死，只能勾选+调强度
   const loraBox = document.getElementById('loraRows');
-  if (caps.lora) {
+  const loraDefRow = document.getElementById('loraDefaultRow');
+  if (caps.lora && caps.lora_kind === 'toggle') {
+    const loras = opts.loras || [];
+    let h = '';
+    loras.forEach(l => {
+      const short = String(l.name || '').replace(/^moss-/, '').replace(/\.safetensors$/, '');
+      h += '<div class="row rlora-toggle" data-slot="' + l.slot + '" style="margin-bottom:6px">'
+        + '<label style="display:flex;align-items:center;gap:6px;flex:1;min-width:0;font-size:12px;color:var(--text-dim);cursor:pointer">'
+        + '<input type="checkbox" class="ron"' + (l.on ? ' checked' : '') + '>'
+        + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(l.name) + '">'
+        + esc(short) + '</span></label>'
+        + '<input class="rstr" type="number" min="0" max="2" step="0.05" value="' + l.strength
+        + '" style="width:76px" title="强度 0~2">'
+        + '</div>';
+    });
+    loraBox.style.display = 'block';
+    loraBox.innerHTML = h;
+    loraDefRow.style.display = 'block';
+  } else if (caps.lora) {
     const loras = opts.loras || [];
     const n = Math.max(6, loras.length);
     let h = '';
@@ -1283,9 +1307,11 @@ function fillRenderForm(opts, res, caps) {
     }
     loraBox.style.display = 'block';
     loraBox.innerHTML = h;
+    loraDefRow.style.display = 'none';
   } else {
     loraBox.style.display = 'none';
     loraBox.innerHTML = '';
+    loraDefRow.style.display = 'none';
   }
 
   // ── 采样：editable=false（固定步数的渠道，如 moss 25 步）时只留分辨率
@@ -1372,10 +1398,19 @@ function collectRenderOpts() {
   // 提交，等于把该渠道模板自带的配方（sd / miao 的 LoRA 链、moss 的步码）写成空。
   if (caps.lora) {
     const loras = [];
-    document.querySelectorAll('#loraRows .row').forEach(r => {
-      loras.push({name: r.querySelector('select.rlora').value,
-                  strength: parseFloat(r.querySelector('input.rstr').value)});
-    });
+    if (caps.lora_kind === 'toggle') {
+      // moss：带槽号和开关，后端按槽写 on_/strength_ 字段
+      document.querySelectorAll('#loraRows .rlora-toggle').forEach(r => {
+        loras.push({slot: parseInt(r.dataset.slot, 10),
+                    on: r.querySelector('input.ron').checked,
+                    strength: parseFloat(r.querySelector('input.rstr').value)});
+      });
+    } else {
+      document.querySelectorAll('#loraRows .row').forEach(r => {
+        loras.push({name: r.querySelector('select.rlora').value,
+                    strength: parseFloat(r.querySelector('input.rstr').value)});
+      });
+    }
     out.loras = loras;
   }
   if (caps.editable !== false) {
@@ -1420,6 +1455,27 @@ async function saveRenderOpts(scope) {
       + (scope === 'global' ? '已存为全局默认，新任务照它跑'
                             : '已保存，之后渲染的格生效');
     toast(scope === 'global' ? '已存为全局默认' : '渲染参数已保存');
+  } catch (e) { toast(e.message, true); }
+}
+
+// moss 渠道的 LoRA 槽可以直接改模板（另外两个台的「存为默认」走同一个口）。
+// ⚠️ 和上面的「存为全局默认」不是一回事：那个只写漫画台的
+// `state/comic_render_defaults.json`，这个写回 skills/moss-qunyou/workflow.json，
+// QQ 侧和跑图台也跟着变。
+async function saveLoraToTemplate() {
+  const sk = channel();
+  if (!sk) { toast('先选渠道', true); return; }
+  const slots = [];
+  document.querySelectorAll('#loraRows .rlora-toggle').forEach(r => {
+    slots.push({slot: parseInt(r.dataset.slot, 10),
+                on: r.querySelector('input.ron').checked,
+                strength: parseFloat(r.querySelector('input.rstr').value)});
+  });
+  if (!slots.length) { toast('这个渠道没有可保存的槽', true); return; }
+  if (!confirm('写回 moss 模板？\n\n之后 QQ 侧、跑图台、MOSS 台都按这套 LoRA 跑。')) return;
+  try {
+    const d = await api('/api/lora/save', {skill: sk, slots});
+    toast(d.message || '已存为模板默认');
   } catch (e) { toast(e.message, true); }
 }
 

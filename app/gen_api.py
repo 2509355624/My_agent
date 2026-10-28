@@ -37,7 +37,7 @@ import time
 import requests
 from flask import Blueprint, Response, jsonify, request, send_from_directory
 
-from app import comic, image_jobs, image_out
+from app import comic, image_jobs, image_out, lora_slots
 from app.config import COMFYUI_URL, NAI_API_KEY, WEB_DIR, state_path
 from app.direct_gen import _allowed_skills
 from app.skills import load_skill, skill_summary
@@ -58,6 +58,7 @@ _JOBS = {}
 _JOBS_LOCK = threading.Lock()
 _MAX_ACTIVE = 5          # 本台同时在跑/排队的上限（image_jobs 每会话在途也是 5）
 _JOB_KEEP = 40           # 内存里最多留几个任务记录
+_LORA_SAVE_LOCK = threading.Lock()   # 「存为默认」是改模板文件，串行化
 _MAX_PROMPT = 4000       # 提示词长度上限（防手滑贴进一整篇小说）
 
 # 账本与「清空截止」（测试进程经 state_path 自动落临时目录，互不污染）。
@@ -207,6 +208,10 @@ def _run(job):
             wf = generate_image_build(job["skill"], job["prompt"], job["seed"])
             if wf is None:
                 raise RuntimeError("渠道 %s 没有文生图工作流" % job["skill"])
+            # LoRA 槽位（2026-10-28）：只对 `MOSSLoRAToggle` 渠道有内容，
+            # 别的渠道 apply 返回 0（找不到那个节点），无副作用。
+            if job.get("loras"):
+                lora_slots.apply_slots(wf, job["loras"])
             # _submit_retry 只对超时重试；其余错误一次抛清。
             name = comic._submit_retry(
                 lambda: comic._submit(wf, job["skill"], job["prompt"], job["seed"]),
@@ -252,6 +257,46 @@ def api_channels():
     return jsonify({"ok": True, "channels": channels()})
 
 
+@bp.route("/api/gen/loras")
+def api_loras():
+    """这条渠道的 LoRA 槽位。
+
+    目前只有 moss（`MOSSLoRAToggle` 多槽开关）有内容；别的渠道返回空列表，
+    前端据此决定显不显示面板——和 `comic_render_opts.caps()['lora_kind']`
+    同一套判定，别在这里另立标准。
+    """
+    skill = str(request.args.get("skill") or "").strip()
+    if skill not in _channel_ids():
+        return jsonify({"ok": False, "error": "未知渠道 %r" % skill}), 400
+    wf = (load_skill(skill) or {}).get("workflow") or {}
+    if not lora_slots.has_toggle(wf):
+        return jsonify({"ok": True, "skill": skill, "kind": "", "slots": []})
+    return jsonify({"ok": True, "skill": skill, "kind": "toggle",
+                    "slots": lora_slots.read_slots(wf)})
+
+
+@bp.route("/api/lora/save", methods=["POST"])
+def api_lora_save():
+    """把一套 LoRA 槽位写回渠道模板（之后所有台 + QQ 侧都按它跑）。
+
+    三个台的「存为默认」都走这一个口：跑图台、漫画台、MOSS 台只是提交入口不同，
+    落点必须同一个，否则「在 A 台存了默认、B 台不认」只是时间问题。
+    """
+    data = request.get_json(silent=True) or {}
+    skill = str(data.get("skill") or "").strip()
+    if not skill or skill not in _channel_ids():
+        return jsonify({"ok": False, "error": "未知渠道 %r" % skill}), 400
+    slots, errs, warns = lora_slots.normalize(data.get("slots") or data.get("loras"))
+    if errs:
+        return jsonify({"ok": False, "error": "；".join(errs)}), 400
+    if not slots:
+        return jsonify({"ok": False, "error": "没有要保存的槽位"}), 400
+    with _LORA_SAVE_LOCK:
+        ok, msg = lora_slots.save_default(skill, slots)
+    return jsonify({"ok": ok, "message": msg, "warnings": warns}), \
+        (200 if ok else 500)
+
+
 @bp.route("/api/gen/submit", methods=["POST"])
 def api_submit():
     """提交一张图：校验 → 起 worker 线程 → 返回任务 id（前端轮询 status）。"""
@@ -275,6 +320,10 @@ def api_submit():
         return jsonify({"ok": False,
                         "error": "提示词太长了（%d 字，上限 %d）"
                                  % (len(prompt), _MAX_PROMPT)}), 400
+    # LoRA 槽位：不传 = 照模板；传了先校验（错误在提交阶段就退，别等出图线程炸）
+    slots, errs, _warn = lora_slots.normalize(data.get("loras"))
+    if errs:
+        return jsonify({"ok": False, "error": "；".join(errs)}), 400
     with _JOBS_LOCK:
         active = sum(1 for j in _JOBS.values() if j["state"] == "queued")
         if active >= _MAX_ACTIVE:
@@ -284,6 +333,7 @@ def api_submit():
         job = {"id": _new_job_id(), "skill": skill, "prompt": prompt,
                "seed": (None if skill in image_jobs.NAI_SKILLS
                         else random.randint(0, 2 ** 31 - 1)),
+               "loras": slots,
                "state": "queued", "error": "", "file": "",
                "ts": time.time()}
         _JOBS[job["id"]] = job
