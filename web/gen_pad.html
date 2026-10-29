@@ -437,8 +437,8 @@ async function loadChannels() {
     el.dataset.id = c.id;
     el.innerHTML = '<div class="id"></div>' +
       (c.summary ? '<div class="sum"></div>' : '');
-    // 展示名（2026-10-29）：`label` 是 skill.md 里写的中文名（如 moss-light1
-    // → "moss光影1"），id 仍是提交参数。没有 label 就照旧显示 id。
+    // 展示名（2026-10-29）：`label` 是 skill.md 里写的中文名（如 moss-light
+    // → "moss光影"），id 仍是提交参数。没有 label 就照旧显示 id。
     el.querySelector('.id').textContent = c.label || c.id;
     if (c.summary) el.querySelector('.sum').textContent = c.summary;
     bindHoverCard(el, () => ({

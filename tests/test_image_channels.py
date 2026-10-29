@@ -2437,7 +2437,7 @@ class MossFourStepRetiredTest(unittest.TestCase):
         用户原话「我们 moss 以后就一个 25 步长的渠道即可，8 步长效果很差」——
         `moss8` / `moss50` / `moss_page` 已经跟 4 步 `moss` 一样进
         `ARCHIVED_SKILLS`，跑图台的渠道清单里这四个名字都应该消失。
-        （横屏另开 `moss-wide` 孪生渠道，见下面那个测试；步数档没有第二条。）
+        （横版 `moss-wide` 与光影 1/2 已于 10-29 下架，见 MossTwoChannelTest。）
         """
         from app.gen_api import channels
         ids = {c["id"] for c in channels()}
@@ -2479,135 +2479,108 @@ class MossFourStepRetiredTest(unittest.TestCase):
         self.assertTrue(inp.get("on_8"))
 
 
-class MossWideLandscapeTwinTest(unittest.TestCase):
-    """`moss-wide`：moss 的横屏孪生（2026-10-28）。
+class MossTwoChannelTest(unittest.TestCase):
+    """2026-10-29 用户拍板：moss 只留 2 条渠道。
 
-    群友原版工作流本来就带着 1536×1024 的悬空 latent（横/方/竖三个只接了
-    竖的），横版是配方作者预留的分辨率，不是我们拍脑袋开的。
+    - `moss-qunyou`（裸「moss」）= **只挂 8 号 nai5 一个 LoRA**
+    - `moss-light`（显示名 moss光影）= 原来那套四件套（5/8/10/12）
+    横版 `moss-wide` 与光影 1/2 同日下架，目录移到 `skills/_off/`。
     """
 
-    def test_landscape_latent_and_same_recipe(self):
-        wf = load_skill("moss-wide")["workflow"]
-        latents = [n for n in wf.values()
-                   if n.get("class_type") == "EmptyFlux2LatentImage"]
-        self.assertEqual(len(latents), 1)
-        self.assertEqual(latents[0]["inputs"]["width"], 1536)
-        self.assertEqual(latents[0]["inputs"]["height"], 1024)
-        # 2026-10-28 深夜起两边**有意分叉**：竖版升 30 步 + nai5（8 号槽），
-        # 横版还停在 25 步的旧写实配方（nai5 是竖屏测试期，横版等用户点头
-        # 再同步）。这里钉住横版的旧配方，防止哪天手滑把它一起改了。
-        wide = load_skill("moss-wide")["workflow"]
-        tall = load_skill("moss-qunyou")["workflow"]
-        self.assertEqual(len(wide), len(tall))
-        ks = [n for n in wide.values()
-              if n.get("class_type") in ("KSampler", "KSamplerAdvanced")]
-        self.assertEqual(ks[0]["inputs"]["steps"], 25)
-        self.assertEqual(ks[0]["inputs"]["cfg"], 3)
-        for nid, node in tall.items():
-            if node.get("class_type") == "MOSSLoRAToggle":
-                self.assertEqual(wide[nid]["inputs"].get("lora_8"), "None",
-                                 "横版还没接 nai5，8 号槽应是空的")
-                self.assertFalse(wide[nid]["inputs"].get("on_8"))
+    LIGHT_SLOTS = {5: 1.5, 8: 0.8, 10: 0.8, 12: 0.8}
 
-    def test_alias_and_timeout_and_whitelist(self):
-        # 原话点名才走；裸「moss」必须仍然落竖版
-        from app import direct_gen
-        from app import image_jobs
-        text = "moss横屏 一张风景"
-        tokens = direct_gen._FIXED_CHAN_RE.findall(text)
-        self.assertTrue(any(direct_gen._fixed_chan(t, text) == "moss-wide"
-                            for t in tokens),
-                        "「moss横屏」要能归一到 moss-wide，tokens=%r" % (tokens,))
-        text2 = "moss 一张少女"
-        tokens2 = direct_gen._FIXED_CHAN_RE.findall(text2)
-        self.assertTrue(any(direct_gen._fixed_chan(t, text2) == "moss-qunyou"
-                            for t in tokens2))
-        # 超时同档（模块级常量）
-        self.assertEqual(image_jobs.SKILL_TIMEOUTS.get("moss-wide"), 420)
-        # QQ 白名单里要有，否则 QQ 侧点名会被 agent 拒掉
-        import json as _json
-        agent = _json.load(open("agents/qq/agent.json", encoding="utf-8"))
-        self.assertIn("moss-wide", agent.get("skills", []))
+    def test_only_two_moss_channels_are_listed(self):
+        from app.gen_api import channels
+        ids = {c["id"] for c in channels()}
+        self.assertIn("moss-qunyou", ids)
+        self.assertIn("moss-light", ids)
+        for gone in ("moss", "moss8", "moss50", "moss_page",
+                     "moss-wide", "moss-light1", "moss-light2"):
+            with self.subTest(gone=gone):
+                self.assertNotIn(gone, ids)
 
+    def test_default_channel_only_has_nai5(self):
+        wf = load_skill("moss-qunyou")["workflow"]
+        toggles = [n for n in wf.values()
+                   if n.get("class_type") == "MOSSLoRAToggle"]
+        self.assertEqual(len(toggles), 1)
+        inp = toggles[0]["inputs"]
+        on = {i: round(float(inp.get("strength_%d" % i)), 4)
+              for i in range(1, 15) if inp.get("on_%d" % i)}
+        self.assertEqual(on, {8: 0.8})
+        self.assertEqual(inp.get("lora_8"), "moss-nai5.safetensors")
+        # 默认档前缀整段清空：nai5 触发词由 lora_slots 动态拼，写死会重复
+        text = [n for n in wf.values()
+                if n.get("class_type") == "CLIPTextEncode"][0]["inputs"]["text"]
+        self.assertEqual(text.split("__MULTI_PROMPTS__")[0], "")
 
-class MossLightChannelsTest(unittest.TestCase):
-    """`moss-light1` / `moss-light2`：光影双档（2026-10-29 用户截图定档）。
+    def test_light_keeps_the_four_slot_combo(self):
+        wf = load_skill("moss-light")["workflow"]
+        inp = [n for n in wf.values()
+               if n.get("class_type") == "MOSSLoRAToggle"][0]["inputs"]
+        got = {i: round(float(inp.get("strength_%d" % i)), 4)
+               for i in range(1, 15) if inp.get("on_%d" % i)}
+        self.assertEqual(got, self.LIGHT_SLOTS)
 
-    用户在跑图台挑出两套 LoRA 组合，要求「这个作为 moss 的渠道，叫做
-    moss光影1 / moss光影2」。骨架照抄 `moss-qunyou`（1024×1536 / 25 步 /
-    cfg 3），差别只在槽位组合和固定前缀。
-    """
-
-    COMBOS = {
-        "moss-light1": {2: 0.4, 5: 1.5, 10: 0.8, 12: 0.8},
-        "moss-light2": {5: 1.5, 10: 0.8, 11: 0.8},
-    }
-
-    def test_slots_match_the_screenshots(self):
-        for name, want in self.COMBOS.items():
-            with self.subTest(name=name):
-                wf = load_skill(name)["workflow"]
-                toggles = [n for n in wf.values()
-                           if n.get("class_type") == "MOSSLoRAToggle"]
-                self.assertEqual(len(toggles), 1)
-                inp = toggles[0]["inputs"]
-                got = {i: round(float(inp.get("strength_%d" % i)), 4)
-                       for i in range(1, 15) if inp.get("on_%d" % i)}
-                self.assertEqual(got, want)
-
-    def test_same_skeleton_as_the_tall_moss(self):
+    def test_light_same_skeleton_as_the_default(self):
         """同骨架：1024×1536 / 25 步 / cfg 3 —— 别偷偷改尺寸或步数。"""
-        for name in self.COMBOS:
-            with self.subTest(name=name):
-                wf = load_skill(name)["workflow"]
-                lat = [n for n in wf.values()
-                       if n.get("class_type") == "EmptyFlux2LatentImage"][0]
-                self.assertEqual((lat["inputs"]["width"],
-                                  lat["inputs"]["height"]), (1024, 1536))
-                ks = [n for n in wf.values()
-                      if n.get("class_type") in ("KSampler", "KSamplerAdvanced")][0]
-                self.assertEqual(ks["inputs"]["steps"], 25)
-                self.assertEqual(ks["inputs"]["cfg"], 3)
+        wf = load_skill("moss-light")["workflow"]
+        lat = [n for n in wf.values()
+               if n.get("class_type") == "EmptyFlux2LatentImage"][0]
+        self.assertEqual((lat["inputs"]["width"],
+                          lat["inputs"]["height"]), (1024, 1536))
+        ks = [n for n in wf.values()
+              if n.get("class_type") in ("KSampler", "KSamplerAdvanced")][0]
+        self.assertEqual(ks["inputs"]["steps"], 25)
+        self.assertEqual(ks["inputs"]["cfg"], 3)
 
-    def test_nai5_stays_off_so_no_neoanime_prefix(self):
-        """两档都没挂 nai5（写实/光影向，不是二次元档）→ 不能拼 @//neoanime/。
-
-        前缀由 `lora_slots.nai5_prefix` 按 **skill 名** 闸，只有 `moss-qunyou`
-        会拼；这条钉住「新渠道别被顺手加进去」。
-        """
+    def test_light_bakes_the_nai5_prefix(self):
+        """光影档挂着 nai5，但 `NAI5_SKILL` 只认 moss-qunyou，
+        动态前缀不会给它拼——所以触发词必须烘焙在模板固定前缀里。"""
         from app import lora_slots
-        for name in self.COMBOS:
-            with self.subTest(name=name):
-                wf = load_skill(name)["workflow"]
-                inp = [n for n in wf.values()
-                       if n.get("class_type") == "MOSSLoRAToggle"][0]["inputs"]
-                self.assertFalse(inp.get("on_8"))
-                self.assertEqual(lora_slots.nai5_prefix(name), "")
+        wf = load_skill("moss-light")["workflow"]
+        text = [n for n in wf.values()
+                if n.get("class_type") == "CLIPTextEncode"][0]["inputs"]["text"]
+        self.assertIn(lora_slots.NAI5_PREFIX, text)
+        self.assertEqual(lora_slots.nai5_prefix("moss-light"), "")
 
-    def test_aliases_and_whitelist_and_timeout(self):
+    def test_aliases(self):
         from app import direct_gen
-        from app import image_jobs
-        for text, want in (("moss光影1 一只猫", "moss-light1"),
-                           ("moss 光影 2 少女", "moss-light2"),
-                           ("moss-light1 猫", "moss-light1"),
-                           ("moss-light2 猫", "moss-light2")):
+        for text, want in (("moss 一只猫", "moss-qunyou"),
+                           ("moss光影 一只猫", "moss-light"),
+                           ("moss 光影 少女", "moss-light"),
+                           ("moss-light 猫", "moss-light"),
+                           ("moss光影1 猫", "moss-light"),
+                           ("moss光影2 猫", "moss-light"),
+                           ("moss光影3 猫", "moss-light"),
+                           ("moss-light1 猫", "moss-light"),
+                           # 横版渠道下架后，老说法落回竖版默认，不报未知
+                           ("moss横屏 风景", "moss-qunyou"),
+                           ("moss-wide 风景", "moss-qunyou")):
             with self.subTest(text=text):
                 self.assertEqual(direct_gen._parse_channel(text)[0], want)
-        # 裸 moss 仍然落竖版，不能被新渠道抢走
-        self.assertEqual(direct_gen._parse_channel("moss 一只猫")[0], "moss-qunyou")
-        self.assertEqual(image_jobs.SKILL_TIMEOUTS.get("moss-light1"), 420)
-        self.assertEqual(image_jobs.SKILL_TIMEOUTS.get("moss-light2"), 420)
+
+    def test_timeouts_and_whitelist(self):
+        from app import image_jobs
+        self.assertEqual(image_jobs.SKILL_TIMEOUTS.get("moss-qunyou"), 420)
+        self.assertEqual(image_jobs.SKILL_TIMEOUTS.get("moss-light"), 420)
+        for gone in ("moss-wide", "moss-light1", "moss-light2"):
+            self.assertNotIn(gone, image_jobs.SKILL_TIMEOUTS)
         import json as _json
-        agent = _json.load(open("agents/qq/agent.json", encoding="utf-8"))
-        for name in self.COMBOS:
-            self.assertIn(name, agent.get("skills", []))
+        with open("agents/qq/agent.json", encoding="utf-8") as f:
+            agent = _json.load(f)
+        skills = agent.get("skills", [])
+        self.assertIn("moss-qunyou", skills)
+        self.assertIn("moss-light", skills)
+        for gone in ("moss-wide", "moss-light1", "moss-light2"):
+            self.assertNotIn(gone, skills)
 
     def test_gen_pad_shows_the_chinese_label(self):
         """跑图台渠道列表显示中文名（skill.md 的 `label`），id 仍是 ASCII。"""
         from app.gen_api import channels
         by_id = {c["id"]: c for c in channels()}
-        self.assertEqual(by_id["moss-light1"]["label"], "moss光影1")
-        self.assertEqual(by_id["moss-light2"]["label"], "moss光影2")
+        self.assertEqual(by_id["moss-light"]["label"], "moss光影")
+        self.assertEqual(by_id["moss-light"]["steps"], "25")
 
 
 if __name__ == "__main__":

@@ -1046,18 +1046,6 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 那边显式关槽时由 strip_nai5_prefix 剥）。moss 没有 i2i 骨架，走到
     # 这里的必然是文生图，不用分叉。
     from app import lora_slots
-    # moss 单挂（2026-10-29）：prompt 开头写了 LoRA 名（「米山舞 一只猫」）就
-    # 抽出来当单挂参数。QQ 侧模型常把名字顺手留在描述里，代码抓比让它记得
-    # 传 lora 参数更可靠；已经显式传了 lora 就不抢。
-    if (skill or "") in lora_slots.SOLO_SKILLS:
-        picked, rest = lora_slots.take_leading(prompt, workflow)
-        if picked:
-            # 名字已经显式传进 lora 时只把它从正文里剥掉：同一串留在 prompt
-            # 里会被当画师名再吃一遍权重，画面会比单挂本身更偏。
-            if lora:
-                prompt = rest
-            else:
-                lora, prompt = "+".join(picked), rest
     prompt = lora_slots.nai5_prefix(skill) + prompt
     workflow_str = json.dumps(workflow)
     workflow = apply_prompt_placeholders(workflow_str, prompt, seed)
@@ -1069,25 +1057,9 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 用户点名换 lora 才走这段；不传 lora 时一行替换逻辑都不执行，
     # 工作流原样提交，跟从前完全一样。
     if lora:
-        if lora_slots.has_toggle(workflow):
-            # moss 的槽位型节点（2026-10-29 用户拍板）：按名字单挂，强度统一
-            # 0.8，前缀换成这些 LoRA 自己的触发词——别拖着默认组合那一串，
-            # 否则测出来的是组合的效果，不是这一个 LoRA 的。
-            # 名字可以写成 `米山舞`、`米山舞:0.8`、`米山舞+748` 三种，都认：
-            # 强度那一截统一丢掉（单挂固定 0.8，见 lora_slots.SOLO_STRENGTH）。
-            words = [w.split(":")[0].strip()
-                     for w in re.split(r"[+,，]", lora) if w.strip()]
-            hits = lora_slots.apply_solo(workflow, words)
-            if not hits:
-                return ("错误: moss 里没有叫「%s」的 LoRA。可选：%s"
-                        % (lora, "、".join(lora_slots.names_hint(workflow))))
-            lora_slots.set_prompt_prefix(
-                workflow, lora_slots.solo_prompt_prefix(hits), skill)
-            lora = "+".join(h["name"] for h in hits)
-        else:
-            err = _apply_loras(workflow, lora)
-            if err:
-                return err
+        err = _apply_loras(workflow, lora)
+        if err:
+            return err
 
     # ComfyUI 在不在只影响**回执口径**，不再影响收不收单（2026-10-19 用户拍板）。
     # 探不到多半是它正在重启（实测 14~22 秒），从前这里直接拒掉，等于把每一个
@@ -1347,18 +1319,14 @@ tool = {
                   "- **moss-qunyou**（MOSS 5B，**出字最准**，**25 步约 74 秒** / "
                   "1024×1536）：说「moss」"
                   "就传它（8 步 / 50 步两档 2026-10-28 已下架，老说法一律落到这里），"
-                  "纯文生图。**默认风格组合已内置**（光影风格 1.5 + moss-nai5 0.8 + "
-                  "米山舞 0.8 + 光润皮肤 0.8，四个 LoRA 模板里默认开），其中 nai5 的触发词与"
-                  "辅助词由代码自动拼，提示词里**不要**写 @//neoanime/。"
+                  "纯文生图。**默认风格只有一个 LoRA**：moss-nai5 @0.8（二次元），"
+                  "触发词与辅助词由代码自动拼，提示词里**不要**写 @//neoanime/。"
                   "**画面要印字**按 prompt 参数里那套写。\n"
-                  "- **moss-wide**（同模型的**横版**，1536×1024，其余参数一致）："
-                  "**只说「moss横屏 / moss横版 / moss横图」才传**——裸「moss」永远"
-                  "竖版，用户没明说横向就别替他横；纯文生图，prompt 写法同 moss-qunyou。\n"
-                  "- **moss-light1**（显示名 **moss光影1**）/ **moss-light2**"
-                  "（**moss光影2**）：同 moss 骨架的**两套固定 LoRA 光影组合**"
-                  "（1024×1536 / 25 步 / 约 74 秒）；**只在用户原话点名"
-                  "「moss光影1」「moss光影2」时传**，裸「moss」仍落 moss-qunyou。"
-                  "两档都没挂 nai5，提示词里同样不要写 @//neoanime/。\n"
+                  "- **moss-light**（显示名 **moss光影**）：同 moss 骨架的**多 LoRA "
+                  "光影组合**（1024×1536 / 25 步 / 约 74 秒）——光影风格 1.5 + nai5 0.8 + "
+                  "米山舞 0.8 + 光润皮肤 0.8，写实向。**只在用户原话点名"
+                  "「moss光影」时传**（老说法 moss光影1/2/3 也归到这条），裸「moss」落 "
+                  "moss-qunyou；提示词里同样不要写 @//neoanime/。\n"
                   "- **qwen-charsheet**（qwen 上的**7 分区角色设定表**工作流，"
                   "2304×1536，单段 **16 步 / res_multistep+beta** / cfg 1，末尾**不放大**）："
                   "只在用户明说「qwen 角色设定表」时传。7 个分区 = 左栏资料+色卡 / "
@@ -1420,13 +1388,7 @@ tool = {
                   "【lora】用户点名要换 lora 时才传，平时不要传。格式「文件名:强度」逗号分隔"
                   "（如 \"x.safetensors:0.8,y.safetensors:0.5\"），文件名要完整（.safetensors 结尾），"
                   "写错会返回可用清单。传了就完全接管本次 lora，每个渠道 2 个槽，没填满的自动关闭——"
-                  "**nffa 也一样是 2 个槽**（画风 + 描边），对它传 lora 会把画风顶掉、画的就不是那个味了。\n"
-                  "  ⚠️ **moss 渠道不一样**（2026-10-29）：只填名字，不带 .safetensors、不带强度——"
-                  "`lora` 传「米山舞」就是只挂米山舞、强度 0.8，别的槽全关；两个用 `+` 连"
-                  "（`米山舞+748`）。可选名字：fkey / maliker / anireal / ningen / 光影 / 748 / "
-                  "1999 / nai5 / takamichi / 米山舞 / wangzhe / 光润（写全名也行）。"
-                  "用户说「moss 米山舞 一只猫」时，名字也可以**留在 prompt 开头**，代码会自动抽走，"
-                  "两种都认。\n\n"
+                  "**nffa 也一样是 2 个槽**（画风 + 描边），对它传 lora 会把画风顶掉、画的就不是那个味了。\n\n"
                   "【引用图片：明说「图生图」才垫】**引用 / 附图本身不等于要垫图**——"
                   "看他说的话里有没有「照着这张画」的意思：\n"
                   " ① **明说要照着那张画**（「图生图 / 垫图 / 照着画 / 照这张画 / 复刻 / "
@@ -1487,7 +1449,7 @@ tool = {
         "properties": {
             "prompt": {"type": "string", "description": "提示词。**开头先写角色名**（认得出就写：英文 tag 渠道 `rudeus greyrat, mushoku tensei`；qwen 的自然语言句子里写「鲁迪乌斯（无职转生）」）——没有任何渠道自带角色，**名字才是还原度最高的那一行**，外貌只补与原设定不同的部分。\n默认写**标签打底 + 英文短语补关系**的一行英文、只写一段、不要用 --- 分隔（属性用 danbooru 标签；方位 / 互动 / 材质用英文短语，如 `on the left side of the desk`、`holding a mug in her right hand`。本机 43 个渠道是 Qwen 系编码器、读得懂短语，6 个 SD 渠道会忽略短语只认标签，**同一串两边都不出错**。**写细一点**，短提示会让模型自己脑补；权重语法别写；质量词已内置）。只有 skill=image_gen_v1 认 ` --- ` 分隔、一次出多张；其它渠道会把 --- 当普通文字，要出多张就分多次调用、每次一个变体。\n两个例外：skill=qwen_image_v1 可以写**完整自然语言句子**（它是写实照片 / 改图渠道，官方形态就是一整段描述，不写标签堆）；**它当改图渠道用时（同时传 source_image）只写一句改动指令**，例如 `change her coat to red, keep the pose, face and background exactly the same`——**不要把整张图重新描述一遍**。\n第三个例外（2026-10-28 起**反过来**了）：**moss 渠道在 QQ 侧不排字**。用户拍板「QQ 侧就是正常跑单个图而已」，`agents/qq/image_guide.md` 第七章也已经删掉整套 Layout JSON 规则。所以 skill 是 `moss-qunyou` 时照样按普通标签写，最多允许**三五个字的招牌**（用英文双引号括住，如 `\"云深茶室\"`）；**不要写 Layout JSON、不要排版**——气泡 / 旁白 / 多块文字是漫画台（`/moss`）的活，硬套那套只会把画面挤坏。**用户明确要图里带字**（招牌、标语、衣服印字等）：优先选 moss（全渠道出字最准）——把要印的字**原文**用英文双引号写进 prompt，紧跟一小句位置 / 样式说明（如 `wooden signboard reading \"云深茶室\", hanging above the door`），总字数控制在十来个字以内；字太多 moss 也会写崩，别硬塞，宁可建议用户缩短或分张。"},
             "skill": {"type": "string", "description": _skill_param_desc()},
-            "lora": {"type": "string", "description": "可选，用户点名换 lora 时才传。**两种写法**：\n① 一般渠道：「文件名:强度」逗号分隔，如 `x.safetensors:0.8,y.safetensors:0.5`，每个渠道 2 个槽；\n② **moss 渠道只写名字**：`米山舞` ＝ 只挂它、强度 0.8、其余槽全关；两个用 `+` 连（`米山舞+748`）。可选：fkey / maliker / anireal / ningen / 光影 / 748 / 1999 / nai5 / takamichi / 米山舞 / wangzhe / 光润"},
+            "lora": {"type": "string", "description": "可选，用户点名换 lora 时才传。「文件名:强度」逗号分隔，如 `x.safetensors:0.8,y.safetensors:0.5`，文件名要完整（.safetensors 结尾），每个渠道 2 个槽"},
             "source_image": {"type": "string", "description": "参考图：填 1 = 用本轮出现的那张图（优先取对方引用的，其次他自己刚发的；两样都没有会报错）。\n**明说「图生图」才填**（「图生图 / 垫图 / 照着画 / 照这张画 / 复刻 / 参考这张的构图 / 只改一处、其余原样」）——那张图会被当成构图条件喂进去、**锁住构图**，出图仍是重画的、尺寸仍是本档画布，**渠道沿用它点名的或原渠道，两样都没有就配 `skill=qwen_image_v1`**（图生图只走 qwen 系，silver / silver-hd / 高清三档只是能垫）。prompt 照常写完整画面描述，不是写改动指令。\n**引用 / 附图 + 只是提需求（换装 / 换发色 /「要全身照」这类）→ 不传**：那是「照这张改词重画」——拿那张图当初的提示词把新需求并进去、**沿用原渠道文生图重画**。\n**只是让你看图点评 / 反推提示词 / 问这图什么来头 → 不传。**\n要「**只改一处、其余原样**」的编辑才配 `skill=qwen_image_v1`（参考图编辑，只改那一句交代的地方、其余原样；慢，一张 1~2 分钟），prompt 只写**一句改动指令**；明说「qwen 超清」时换 `qwen-hd`，说「qwen30步」时换 `qwen30`。\n要「**修图**」（去糊 / 去噪 / 修清楚，**把这张图本身修好、不是重画**）配 `skill=qwen-restore`（用户明说「qwen修复」才用；~175 秒），prompt 可留空。\n`jank` / `nffa` / `cunny` / `miao` / `krea2-*` / `sd` 没有骨架，别给它们传（传了会自动退回文生图、白等一轮）。skill=nai 也支持垫图（云端）。动漫档（anima_* / hd_*）的**垫图重绘**骨架还在，但**用法上已撤掉**，别再拿它当图生图渠道。本机渠道的重绘强度是定死的，传 denoise 也没用。"},
             "seed": {"type": "integer", "description": "生图种子，**只在对方点名要「用某个种子重画 / 换提示词再来一张」时才传**，平时一律不传（不传=随机）。范围 0 ~ 4294967295 的整数，填错格式/超界会直接报错，别猜。种子会跟着编号印在图那行 caption 上（`编号 · 分辨率 · 渠道 · seed 数字`），对方引用那条消息时能一起带回来。⚠️ 同一个种子只有配**同样的提示词 + 同样的渠道 + 同样的 lora**才画得出同一张图（改提示词重画=构图大体在、细节变）；动漫渠道是两段采样、两段共用这一个种子，所以只有这一个数。**只有本机渠道认**（hd_* / qwen_image_v1 / qwen30 / image_gen_v1 / krea2-* / nffa / moss），skill=nai 传了会被拒；image_gen_v1 一次出多张时第 k 张 = 这个数 + k - 1"}
         },

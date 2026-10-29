@@ -81,9 +81,10 @@ STATE_ROOT = os.path.join(BASE_DIR, "state", "moss_comic")
 # 目录保留只为让历史任务重画 / 旧图显示，不再是可点名的渠道。
 #
 # 2026-10-28 深夜改 25 → 30（挂上群友 moss-nai5 后作者建议 30-40 步）。
-# 2026-10-29 用户改回 **25**：把「光影风格 + nai5 + 米山舞 + 光润皮肤」四 LoRA
-# 组合定为 moss 默认风格，25 步一页约 74 秒，跟跑图台渠道模板保持一致
-# （skills/moss-qunyou/workflow.json 的 KSampler.steps 也是 25）。
+# 2026-10-29 用户改回 **25**（25 步一页约 74 秒，跟跑图台渠道模板一致）。
+# 同日晚再改：漫画台仍走 `moss-qunyou`，而那套四 LoRA 组合已经搬到
+# `moss-light`（moss光影），现在 `moss-qunyou` 只挂 nai5 一个——漫画台跟着
+# 变成 nai5 单挂，要四件套得另指 `moss-light`。
 SKILL = "moss-qunyou"
 STEPS = 25
 # 分辨率：群友原版 1024×1536。实测这个尺寸在 12GB 卡上能出图（8 步 72 秒），

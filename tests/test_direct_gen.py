@@ -1819,12 +1819,11 @@ class MasterPromptTest(unittest.TestCase):
         # 8708；同时把 rs29 那段冗长说明压短了（-44 字）。8900 字符 ≈ 5300
         # token，仍远低于用户给的 1 万 token 预算。**下次再加渠道若逼近 8900，
         # 该动结构**（渠道表拆出去按需 load）**而不是继续抬数字**。
-        # 2026-10-29：8900 → 10000（**用户拍板**：「上限给你搞到 1 万字吧」）。
-        # 触发原因是 moss 单挂：渠道表多一行 + 点名段多两句 + 工具描述里
-        # moss 的 lora 写法，最坏渲染正好越过 8900。用户同时确认单次请求的
-        # 预算就是 1 万字（此前一直是「1 万 token 以内」，这次按字符对齐）。
+        # 2026-10-29 晚：10000 → **9000**（用户拍板「字数上限回到 9000 字」）。
+        # 同日 moss 只留 2 条渠道（默认 + 光影），单挂那套文案全删，最坏渲染
+        # 从 9.1k 掉回 7.6k 量级，8900 的余量重新够用。
         # 注意：这里钉的是**最坏渲染**（含 5 轮历史 + 点名渠道附加）。
-        self.assertLess(len(t), 10000, "整条提示词越过 10000 字预算了")
+        self.assertLess(len(t), 8900, "整条提示词越过 8900 字预算了")
 
     def test_prompt_budget_with_a_named_channel(self):
         """点名渠道会额外拼一段「本轮用这个渠道」的话，这一支以前从没测过。
@@ -2922,22 +2921,18 @@ class RandomCommandTest(unittest.TestCase):
         self.assertIn("rs29", direct_gen.GUIDE_TEXT)
         self.assertIn("rs29", direct_gen.MORE_CHAN_TEXT)
 
-    def test_moss_light_listed_in_both_menus(self):
-        # 2026-10-29：moss光影1/2 是新渠道（两套固定 LoRA 组合）。两条菜单
-        # 都必须能查到，否则群友只会看到一条裸 `moss`，不知道还能点名光影档。
-        for menu in (direct_gen.GUIDE_TEXT, direct_gen.MORE_CHAN_TEXT):
-            for word in ("moss光影1", "moss光影2"):
-                self.assertIn(word, menu)
+    def test_moss_two_channels_listed_in_both_menus(self):
+        """2026-10-29 用户拍板：moss 只留 2 条渠道，两张菜单都要查得到。
 
-    def test_moss_solo_lora_listed_in_both_menus(self):
-        """2026-10-29：moss 单挂（「moss 米山舞 需求」）要在两个菜单都能查到。
-
-        不做成 12 条渠道，所以群友唯一的发现入口就是这两张菜单——漏了就等于
-        这功能不存在。名字按**群友会打的那几个词**钉，不是文件名。
+        - 裸 `moss`（默认，只挂 nai5）
+        - `moss光影`（多 LoRA 组合）
+        下架的横版 / 光影 1、2 不许再出现在菜单里——留着就是骗群友去打。
         """
         for menu in (direct_gen.GUIDE_TEXT, direct_gen.MORE_CHAN_TEXT):
-            for word in ("moss 米山舞", "fkey", "光润", "takamichi"):
-                self.assertIn(word, menu)
+            self.assertIn("moss", menu)
+            self.assertIn("moss光影", menu)
+            for gone in ("moss光影1", "moss光影2", "moss单挂", "moss-wide"):
+                self.assertNotIn(gone, menu)
 
     def test_direct_prefix_documented_in_menus(self):
         # 2026-10-11 反转：直通没人用，从所有展示面撤下（功能保留、

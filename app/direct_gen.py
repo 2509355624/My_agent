@@ -410,22 +410,23 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    "moss8v": "moss-qunyou",
                    "moss25": "moss-qunyou", "moss25步": "moss-qunyou",
                    "moss50": "moss-qunyou", "moss50步": "moss-qunyou",
-                   # moss 横屏孪生（2026-10-28，`skills/moss-wide/` 1536×1024）：
-                   # 照 `nai` / `nai_wide` 的套路，点名才走，裸「moss」仍是竖版。
-                   # ⚠️ 中文别名必须整词登记进 map——`_fixed_chan` 是把正则剥下来
-                   #    的 token 去空格后查这张表，正则里认了而 map 里没有就会
-                   #    把「moss横屏」原样当渠道 id 报未知。
-                   "mosswide": "moss-wide",
-                   "moss横屏": "moss-wide", "moss横版": "moss-wide",
-                   "moss横图": "moss-wide",
-                   # 光影双档（2026-10-29，`skills/moss-light1/` / `moss-light2/`）：
-                   # 用户在跑图台挑出的两套 LoRA 组合，定成两条独立渠道。
-                   # 骨架与竖版逐字节相同（1024×1536 / 25 步 / cfg 3），只有槽位
-                   # 组合和固定前缀不同，所以耗时同档。裸「moss」仍是 `moss-qunyou`。
-                   # ⚠️ 同 moss-wide：中文别名整词登记，正则认了 map 里没有就会把
-                   #    「moss光影1」原样当 id 报未知。
-                   "moss光影1": "moss-light1", "moss光影2": "moss-light2",
-                   "mosslight1": "moss-light1", "mosslight2": "moss-light2",
+                   # 横版渠道 2026-10-29 已下架（用户：「只保留 moss 的默认 + 一个光影」），
+                   # 老说法一律落回默认竖版，别报未知渠道。
+                   "mosswide": "moss-qunyou", "moss-wide": "moss-qunyou",
+                   "moss横屏": "moss-qunyou", "moss横版": "moss-qunyou",
+                   "moss横图": "moss-qunyou",
+                   # 光影档（`skills/moss-light/`）：原来 moss 默认那套多 LoRA 组合
+                   # （光影 + nai5 + 米山舞 + 光润皮肤）搬到独立渠道，默认档则只剩 nai5。
+                   # 老说法 moss光影1/2/3 一并归到这里——不再分档。
+                   # ⚠️ 中文别名必须整词登记：正则剥下来的 token 查不到这张表就会
+                   #    把「moss光影」原样当渠道 id 报未知。
+                   "moss光影": "moss-light", "mosslight": "moss-light",
+                   "moss光影1": "moss-light", "moss光影2": "moss-light",
+                   "moss光影3": "moss-light",
+                   "mosslight1": "moss-light", "mosslight2": "moss-light",
+                   "mosslight3": "moss-light",
+                   "moss-light1": "moss-light", "moss-light2": "moss-light",
+                   "moss-light3": "moss-light",
                    "日系": "krea2-rella"}
 _FIXED_CHAN_RE = re.compile(
     r"(?<![0-9A-Za-z_])"
@@ -489,13 +490,13 @@ _FIXED_CHAN_RE = re.compile(
     r"|sd|qwen-hd|qwen|nffa|nai|cunny|miao"
     r"|moss\s*50\s*步?|moss\s*25\s*步?|moss\s*4\s*步?"
     r"|moss\s*8\s*v|moss\s*8\s*步?"
-    # moss 横屏孪生（2026-10-28）：必须排在裸 `moss` 前，否则「moss横屏」
-    # 只吃掉「moss」、正文剩「横屏」两个字。
-    r"|moss\s*(?:wide|横屏|横版|横图)"
-    # 光影双档（2026-10-29）：同样排在裸 `moss` 前，「moss光影1」才能整词吃掉；
-    # 只写 `moss` 会把「光影1」当正文喂进提示词。`[-\s]*` 同时认 `moss-light1`
-    # 与「moss 光影 1」——不给连字符的话 id 原名会被裸 `moss` 先吃掉。
-    r"|moss[-\s]*(?:light|光影)\s*[12]"
+    # moss 横屏（2026-10-29 渠道下架）：仍整词吃掉，避免「横屏」两个字漏进正文；
+    # 归一到 moss-qunyou（竖版），不再有独立横版渠道。
+    r"|moss[-\s]*(?:wide|横屏|横版|横图)"
+    # 光影档（2026-10-29）：排在裸 `moss` 前，「moss光影」才能整词吃掉；
+    # 只写 `moss` 会把「光影」当正文喂进提示词。`[-\s]*` 同时认 `moss-light`
+    # 与「moss 光影」；尾巴的 1/2/3 是老分档说法，一并吃掉归到同一条。
+    r"|moss[-\s]*(?:light|光影)\s*[123]?"
     r"|moss)"
     r"(?![0-9A-Za-z_])",
     re.I)
@@ -988,16 +989,10 @@ GUIDE_TEXT = (
     "　cunny　超分重渠道 · 单张 2~4 分钟\n"
     "　miao　　皮肤质感滑嫩 · 2x 出 3072×4608\n"
     "　moss　　MOSS-Image · 图里写中英文最准 · **25 步 1024×1536 约 74 秒**\n"
-    "　　　　　（就这一条，没有 8/50 步档了；已内置 nai5 二次元风格，\n"
-    "　　　　　触发词自动加，提示词里别再写 @//neoanime/）\n"
-    "　moss横屏 同上 · **1536×1024 横版**（说「moss横屏/横版/横图」才走，\n"
-    "　　　　　裸「moss」永远竖屏；像素数一样，耗时不变）\n"
-    "　moss光影1 同骨架的固定 LoRA 光影组合（maliker + 光影 + 米山舞 +\n"
-    "　　　　　光润皮肤）· 写实向 · 点名「moss光影1」才走\n"
-    "　moss光影2 同上换配方（光影 + 米山舞 + wangzhe）· 光影氛围更重\n"
-    "　moss+名字 只挂那一个 LoRA（强度一律 0.8，其余槽全关）· 写法「moss 米山舞 需求」\n"
-    "　　　　　可选 fkey / maliker / anireal / ningen / 光影 / 748 / 1999 /\n"
-    "　　　　　nai5 / takamichi / 米山舞 / wangzhe / 光润 · 两个用 + 连\n"
+    "　　　　　（只挂 nai5 一个 LoRA，触发词自动加，不用写 @//neoanime/；\n"
+    "　　　　　8/50 步档与横版都已下架，说「moss横屏」也落这一条）\n"
+    "　moss光影 同骨架的多 LoRA 光影组合（光影 + nai5 + 米山舞 + 光润皮肤）\n"
+    "　　　　　· 写实向 · 点名「moss光影」才走\n"
     "　nai　　 NovelAI 云端 · 认画师串/权号\n"
     "\n"
     "【引用玩法】\n"
@@ -1062,7 +1057,7 @@ MORE_CHAN_TEXT = (
     "【★qwen】qwen\n"
     "【★miao】miao\n"
     "\n"
-    "【其他】moss ｜ moss光影1 ｜ moss光影2 ｜ silver-hd ｜ qwen-hd\n"
+    "【其他】moss ｜ moss光影 ｜ silver-hd ｜ qwen-hd\n"
     "　　　　qwen角色设定表 ｜ qwen修复 ｜ 半厚涂 ｜ sf ｜ anima多图\n"
     "　　　　anima线条 ｜ anima写实 ｜ anima鬼针草 ｜ anima肉感 ｜ jank\n"
     "　　　　sd ｜ nffa ｜ cunny ｜ nai\n"
@@ -1071,9 +1066,6 @@ MORE_CHAN_TEXT = (
     "横屏：silver 横屏 一个女孩\n"
     "漫画：silver漫画 10个 雷电将军在樱花树下\n"
     "moss漫画：moss漫画 雨夜便利店，两个陌生人共用一把伞（一页四格）\n"
-    "moss单挂：moss 米山舞 一个女孩（只挂这一个，0.8；两个用 + 连，如 moss 米山舞+748）\n"
-    "　可选：fkey / maliker / anireal / ningen / 光影 / 748 / 1999 / nai5 /\n"
-    "　　　　takamichi / 米山舞 / wangzhe / 光润\n"
     "造卡：anima-line 造卡 需求 ｜ 引用卡片说「重新生成」换种子\n"
     "随机：今日老婆 ｜ 随机萝莉 ｜ 随机兽耳 ｜ 随机女仆\n"
     "聊天：#角色扮演 ｜ #角色名\n"
@@ -1267,16 +1259,13 @@ _MASTER_TEMPLATE = (
     "### 画一张图\n"
     "\n"
     "{{\"tool\": \"generate_image\", \"prompt\": \"英文提示词\", "
-    "\"skill\": \"渠道，可省\", \"lora\": \"LoRA名，可省\", "
+    "\"skill\": \"渠道，可省\", "
     "\"source_image\": 1, \"seed\": 123}}\n"
     "\n"
     "- `prompt` 必填，danbooru 格式的英文标签串，逗号分隔的短标签"
     "（如 `1girl, silver hair, school uniform, looking_at_viewer`）。"
     "整句叙述会被标签渠道当乱码、画面错位；走 qwen 才写完整英文句子。\n"
     "- `skill` 只在用户点名渠道时填，对照表在最后。\n"
-    "- `lora` 只在用户点了 moss 的某个 LoRA（「moss 米山舞」）时填，写那个名字"
-    "本身、别翻译、别加 .safetensors；两个用 `+` 连（`米山舞+748`）。"
-    "名字原样留在 prompt 开头也认，中文名照原词写。\n"
     "- `source_image` 填 1 表示垫图，判据见下面「带图轮怎么走」。\n"
     "- `seed` 只在用户点名种子时填。用不上的字段省略。\n"
     "\n"
@@ -1486,10 +1475,8 @@ _MASTER_TEMPLATE = (
     "| sd | `image_gen_v1` | 点名 sd |\n"
     "| jank | `jank` | 点名 jank |\n"
     "| nffa、cunny、miao | 同名 id | 点名才用，cunny / miao 很慢 |\n"
-    "| moss | `moss-qunyou` | 点名 moss：竖版 25 步约 74 秒，出字最准；nai5 触发词自动加，提示词不用写 @//neoanime/ |\n"
-    "| moss横向 | `moss-wide` | 点名横向才走（1536×1024，其余同 moss；裸「moss」永远竖版） |\n"
-    "| moss光影1/2 | `moss-light1`/`moss-light2` | 只点名才走，两套固定 LoRA 组合 |\n"
-    "| moss+名字 | `moss-qunyou` + `lora` 参数 | 只挂那一个（0.8）：fkey/maliker/anireal/ningen/光影/748/1999/nai5/takamichi/米山舞/wangzhe/光润；两个用 `+` 连 |\n"
+    "| moss | `moss-qunyou` | 点名 moss：竖版 25 步约 74 秒，出字最准；只挂 nai5，触发词自动加，提示词不用写 @//neoanime/ |\n"
+    "| moss光影 | `moss-light` | 点名 moss光影才填：同骨架多 LoRA 组合（光影+nai5+米山舞+光润皮肤），写实向 |\n"
     "| anima线条 | `anima-line` | 点名，线条感重 |\n"
     "| anima写实 | `anima-real` | 点名，真人质感 |\n"
     "| anima鬼针草 | `anima-guizhencao` | 点名，鬼针草画风 |\n"
@@ -1604,14 +1591,8 @@ _REVISE_TEMPLATE = (
     "  moss = 原话点名「moss」才填（MOSS-Image 5B，**25 步** / 1024×1536 / "
     "约 74 秒，画面出字最准，纯文生图；8 步 / 50 步两档已下架，"
     "说「moss8 / moss50」也一律落这一条）；\n"
-    "  moss-wide = 同模型横版 1536×1024（其余同 moss；原话点名横向才填，"
-    "裸「moss」永远是竖版，别替用户横过来）；\n"
-    "  moss-light1 / moss-light2 = 原话点名「moss光影1 / moss光影2」才填"
-    "（同 moss 骨架，两套固定的 LoRA 光影组合，竖版 25 步）；\n"
-    "  moss + LoRA 名 = 照旧填 `moss-qunyou`，再把名字原样填进 `lora` 参数"
-    "（不用写 .safetensors、不用写强度，代码统一按 0.8 单挂；两个用 `+` 连）。"
-    "名字留在 prompt 开头也认——「米山舞 一只猫」会自动抽走米山舞、正文只剩一只猫。"
-    "可选名字见渠道表那一行；\n"
+    "  moss-light = 原话点名「moss光影」才填（同 moss 骨架，多 LoRA 光影组合"
+    "——光影+nai5+米山舞+光润皮肤，竖版 25 步；老说法 moss光影1/2/3 也归这条）；\n"
     "  jank = 原话明说「jank」才填（用户自定义渠道）。\n"
     "  silver-hd = silver 的 4x 超清版，原话明说「silver-hd」或「silver 超清」才填。\n"
     "  qwen-hd = qwen 的 4x 超清版，原话明说「qwen-hd」或「qwen 超清」才填。\n"
@@ -1888,7 +1869,7 @@ def _random_resample(kind):
 
 
 def _enqueue(skill, prompt, text, source_image=False, seed=None,
-             resample_fn=None, lora=None):
+             resample_fn=None):
     """转译结果落队。返回要发回会话的文本；成功且回执已直发返回 ""。
 
     source_image=True → 垫本轮引用的那张图（传 "1"，下游 comfy_src.resolve
@@ -1897,14 +1878,9 @@ def _enqueue(skill, prompt, text, source_image=False, seed=None,
     seed 非空 → 复刻账本里那张图的种子（引用 HT 图换档场景），下游
     _resolve_seed 会校验范围；只往本机渠道传（NAI 拒收 seed）。
     resample_fn 非空 → 随机口令的「被拦静默重抽」钩子（见 _random_resample）。
-    lora 非空 → 模型点名的 LoRA（2026-10-29 加，moss 单挂用）：原样透传给
-    `_generate_image`。模型没填也不怕——名字留在 prompt 开头时，那边会自己抽
-    （见 lora_slots.take_leading），两条路等效。
     """
     from app.tools.normal import generate_image as gi
     extra = {}
-    if lora:
-        extra["lora"] = lora
     if source_image:
         extra["source_image"] = "1"
     if seed:
@@ -2595,8 +2571,7 @@ def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):
         # 构图，改词重画够用，但用户明说图生图时他要的是 qwen。
         skill = _I2I_FALLBACK_SKILL if source_image else _FALLBACK_SKILL
     _remember_job(session_key, skill, prompt)
-    return _enqueue(skill, prompt, text, source_image=source_image,
-                    lora=(data.get("lora") or "").strip())
+    return _enqueue(skill, prompt, text, source_image=source_image)
 
 
 def decide(own_text, history, voluntary, data_urls=None, at_me=True):
@@ -2851,7 +2826,7 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         if not data:
             return _FINAL_PROMPT_NO_CHAN_TEXT
         _remember_job(session_key, data["skill"], data["prompt"])
-        return _enqueue(data["skill"], data["prompt"], text, lora=data.get("lora"))
+        return _enqueue(data["skill"], data["prompt"], text)
 
     # 2026-10-17 用户拍板：**删掉「再来一张」的关键词早退**（原来是
     # `_AGAIN_RE` 命中 + 内存 `_LAST_JOB` 有值就零调用直出）。理由同 `_revise`：
@@ -2884,7 +2859,7 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
                 return _enqueue_comic(data["comic"], text)
             if data:
                 _remember_job(session_key, data["skill"], data["prompt"])
-                return _enqueue(data["skill"], data["prompt"], text, lora=data.get("lora"))
+                return _enqueue(data["skill"], data["prompt"], text)
             return ("引用的内容没转成生图指令，引用一条带画面描述的消息"
                     "再试，或直接 @我 渠道 描述。")
         # 引用回执（HT- 编号）→ 重跑上次任务，渠道可换。
@@ -2916,7 +2891,7 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
             return _enqueue_comic(data["comic"], text)
         if data:
             _remember_job(session_key, data["skill"], data["prompt"])
-            return _enqueue(data["skill"], data["prompt"], text, lora=data.get("lora"))
+            return _enqueue(data["skill"], data["prompt"], text)
         return "这条没转译成生图指令。照格式来：@我 渠道 描述。"
 
     # 走到这里 = 没图 / 没渠道词 / 没成品串 / 没「再来一张」的纯文本轮
@@ -2935,5 +2910,5 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         return _enqueue_comic(data["comic"], text)
     if data:
         _remember_job(session_key, data["skill"], data["prompt"])
-        return _enqueue(data["skill"], data["prompt"], text, lora=data.get("lora"))
+        return _enqueue(data["skill"], data["prompt"], text)
     return None      # 转译失败 → 不接管，交回上层（不再回菜单）

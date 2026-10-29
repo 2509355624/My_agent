@@ -155,7 +155,7 @@ def load_skill(skill_name):
     fm = _parse_frontmatter(skill_md)
     kind = fm.get("kind", "")
     # 展示名（可选）：渠道 id 是 ASCII（目录名），但界面上要给中文名时写这里
-    # （2026-10-29 `moss-light1` → 「moss光影1」）。
+    # （2026-10-29 `moss-light` → 「moss光影」）。
     label = fm.get("label", "")
 
     

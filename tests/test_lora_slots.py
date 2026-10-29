@@ -38,10 +38,11 @@ TPL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
 MALIKER = "moss-maliker_moss_base_style_v3_e40.safetensors"
 
 
-def _tpl():
+def _tpl(skill=SKILL):
     """每测一份新的模板 dict（load_workflow 每次都会重新读文件）。"""
-    wf = load_workflow(TPL)
-    assert wf, "读不到 %s" % TPL
+    path = os.path.join(os.path.dirname(TPL), "..", skill, "workflow.json")
+    wf = load_workflow(path)
+    assert wf, "读不到 %s" % path
     return wf
 
 
@@ -58,13 +59,20 @@ class ReadSlotsTest(unittest.TestCase):
         self.assertTrue(all(s["name"] and s["name"].lower() != "none" for s in slots))
 
     def test_default_on_slots(self):
-        """2026-10-29 用户定档的 moss 默认风格组合：模板默认只开这四槽。
+        """2026-10-29 用户定档：默认 moss 只挂 8 号 nai5 一个 LoRA。
 
-        光影风格@1.5（5 号）+ moss-nai5@0.8（8 号，配触发词前缀）
-        + 米山舞@0.8（10 号）+ 光润皮肤@0.8（12 号）。
-        跑图台 / 漫画台 / QQ 三处都靠这份模板兜底，所以这里钉死集合。
+        「nai5 这个 lora，单独的 lora 挂载，作为 moss 默认渠道」——原来那套
+        四件套搬到 `moss-light`（光影档）。跑图台 / 漫画台 / QQ 三处都靠这份
+        模板兜底，所以这里钉死集合。
         """
         on = {s["slot"]: s for s in L.read_slots(_tpl()) if s["on"]}
+        self.assertEqual(sorted(on), [8])
+        self.assertEqual(on[8]["name"], "moss-nai5.safetensors")
+        self.assertAlmostEqual(on[8]["strength"], 0.8)
+
+    def test_light_channel_keeps_the_four_combo(self):
+        """`moss-light`（moss光影）= 原来默认那套四件套，强度原样。"""
+        on = {s["slot"]: s for s in L.read_slots(_tpl("moss-light")) if s["on"]}
         self.assertEqual(sorted(on), [5, 8, 10, 12])
         self.assertEqual(on[5]["name"], "moss-光影风格sky02mossv1.safetensors")
         self.assertAlmostEqual(on[5]["strength"], 1.5)
@@ -289,7 +297,7 @@ class Nai5PrefixTest(unittest.TestCase):
 
     def test_other_skills_never_get_it(self):
         self.assertEqual(L.nai5_prefix("silver"), "")
-        self.assertEqual(L.nai5_prefix("moss-wide"), "")
+        self.assertEqual(L.nai5_prefix("moss-light"), "")
         self.assertEqual(L.nai5_prefix(""), "")
 
     def test_strip_removes_prefix_from_workflow(self):
@@ -314,99 +322,6 @@ class Nai5PrefixTest(unittest.TestCase):
         self.assertEqual(len(baked), 1)
         self.assertIn("1girl, tea", baked[0])
         self.assertIn("realistic material rendering", baked[0])
-
-
-class SoloLoraTest(unittest.TestCase):
-    """单挂一个 LoRA（2026-10-29 用户拍板：「这 12 个 lora 都可以单独作为
-    moss 的渠道，默认 0.8」）。
-
-    做成「一条 moss + 名字参数」而不是 12 个渠道目录，所以这里钉的是：
-    名字能认出来、只开那一个槽、强度固定 0.8、前缀只带它自己的触发词。
-    """
-
-    def setUp(self):
-        self.wf = load_workflow(TPL)
-
-    def _on(self):
-        return [(s["slot"], s["name"], s["strength"])
-                for s in L.read_slots(self.wf) if s["on"]]
-
-    def test_every_lora_can_be_named(self):
-        """12 个名字都要能认出来——群友照 /更多渠道 里那几个词打就得命中。"""
-        want = {"fkey": 1, "maliker": 2, "anireal": 3, "ningen": 4,
-                "光影": 5, "748": 6, "1999": 7, "nai5": 8,
-                "takamichi": 9, "米山舞": 10, "wangzhe": 11, "光润": 12}
-        for word, slot in want.items():
-            with self.subTest(word=word):
-                hits = L.find_slots(self.wf, word)
-                self.assertEqual([h["slot"] for h in hits], [slot])
-
-    def test_unknown_word_matches_nothing(self):
-        # 正文里的普通词不能撞到槽名上，否则每张图都会被当成单挂
-        for word in ("一只猫", "girl", "1girl", "", "风"):
-            with self.subTest(word=word):
-                self.assertEqual(L.find_slots(self.wf, word), [])
-
-    def test_solo_closes_every_other_slot_at_08(self):
-        hits = L.apply_solo(self.wf, "米山舞")
-        self.assertEqual([h["slot"] for h in hits], [10])
-        self.assertEqual([(s, n, st) for s, n, st in self._on()],
-                         [(10, "moss-米山舞.safetensors", 0.8)])
-
-    def test_two_names_can_be_stacked(self):
-        hits = L.apply_solo(self.wf, ["米山舞", "748"])
-        self.assertEqual([h["slot"] for h in hits], [6, 10])
-        self.assertEqual([s for s, _n, _st in self._on()], [6, 10])
-
-    def test_missing_name_is_a_noop(self):
-        # 认不出来就一个字都不改：宁可走默认组合，也别把槽全关成空跑
-        before = self._on()
-        self.assertEqual(L.apply_solo(self.wf, "不存在的lora"), [])
-        self.assertEqual(self._on(), before)
-
-    def test_only_the_own_trigger_goes_in(self):
-        """单挂只带它自己的触发词（用户同轮拍板），别拖着默认那串。"""
-        cases = {"maliker": "maliker, ", "748": "748cm, ",
-                 "1999": "@z1999, ", "光润": "@realskin, ",
-                 "米山舞": "", "takamichi": "", "光影": ""}
-        for word, trig in cases.items():
-            with self.subTest(word=word):
-                hits = L.apply_solo(self.wf, word)
-                self.assertEqual(L.solo_prompt_prefix(hits), trig)
-
-    def test_leading_word_is_taken_from_the_prompt(self):
-        cases = [("米山舞 一只猫", ["米山舞"], "一只猫"),
-                 ("748 少女", ["748"], "少女"),
-                 ("米山舞 748 猫", ["米山舞", "748"], "猫"),
-                 ("一只猫", [], "一只猫"),
-                 # 句子中间提到的不动：说「画风像米山舞」不该换掉整组
-                 ("一只猫 米山舞", [], "一只猫 米山舞")]
-        for text, hits, rest in cases:
-            with self.subTest(text=text):
-                self.assertEqual(L.take_leading(text, self.wf), (hits, rest))
-
-    def test_prefix_is_replaced_not_appended(self):
-        """构建好的工作流里，模板固定前缀和 nai5 前缀都要被换掉。"""
-        from app.tools.normal.generate_image import build_t2i_workflow
-        built = build_t2i_workflow(SKILL, "一只猫", 42)
-        hits = L.apply_solo(built, "米山舞")          # 米山舞没有触发词
-        self.assertTrue(hits)
-        L.set_prompt_prefix(built, L.solo_prompt_prefix(hits), SKILL)
-        texts = [v for node in built.values()
-                 for v in (node.get("inputs") or {}).values()
-                 if isinstance(v, str) and "一只猫" in v]
-        self.assertEqual(len(texts), 1)
-        self.assertEqual(texts[0], "一只猫")           # 前缀清空、正文还在
-        self.assertNotIn("@realskin", texts[0])
-        self.assertNotIn("@//neoanime/", texts[0])
-
-    def test_solo_keeps_steps_and_negative(self):
-        """只是换 LoRA，步数和负向一个字都不许动。"""
-        before = {k: v for k, v in self.wf.items()
-                  if v.get("class_type") == "KSampler"}
-        L.apply_solo(self.wf, "nai5")
-        self.assertEqual({k: v for k, v in self.wf.items()
-                          if v.get("class_type") == "KSampler"}, before)
 
 
 if __name__ == "__main__":
