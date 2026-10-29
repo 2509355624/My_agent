@@ -342,3 +342,149 @@ def save_default(skill, slots):
     log.info("LoRA 槽位存为默认：%s（%d 处字段，备份 %s）",
              skill, hits, os.path.basename(bak))
     return True, "已存为默认（备份 %s）" % os.path.basename(bak)
+
+
+# ─── 单挂一个 LoRA（2026-10-29 用户拍板）────────────────────
+#
+# 用户口径：「这些 lora 都可以单独的作为 moss 的渠道，默认 0.8」「moss 缩写
+# 就可以单个 lora 的 moss 了，ai 自己去识别，然后调用」。
+#
+# 没有建 12 个渠道目录：渠道已经 44 条、转译模板预算也卡死，再拆 12 条等于
+# 把列表冲垮；而且「单挂」只是组合里的一种（以后还要两个一起挂）。所以做成
+# **一条 moss + 名字参数**：说「moss 米山舞」就全关、只开命中那个槽、0.8。
+#
+# 触发词只带它自己的（用户同轮拍板）：单挂 maliker 就只有 `maliker, `，
+# 不再拖上 @realskin/@z1999 那一串——否则测出来的是默认组合的效果，不是
+# 这一个 LoRA 的。
+
+SOLO_STRENGTH = 0.8
+
+# 只对裸 moss 生效；moss-wide / moss-light* 是固定配方渠道，不参与单挂
+SOLO_SKILLS = ("moss-qunyou",)
+
+# 名字 → 触发词。按**文件名包含**匹配，不按槽号：槽位以后挪了也不会错位。
+_TRIGGERS = (
+    ("maliker", "maliker, "),
+    ("ningen", "ningen_mame, "),
+    ("748cm", "748cm, "),
+    ("1999", "@z1999, "),
+    ("nai5", NAI5_PREFIX),
+    ("光润", "@realskin, "),
+)
+
+
+def _norm_name(s):
+    """匹配用归一化：小写、只留字母数字汉字（吃掉 .safetensors / 空格 / 连字符）。"""
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]", "", str(s or "").lower())
+
+
+def find_slots(wf, word):
+    """按名字找槽。`米山舞` → `moss-米山舞.safetensors`，`748` → `moss-748cm`。
+
+    短于 2 个字符一律不认——单字会乱撞（`风` 能撞上 `光影风格`）。
+    """
+    w = _norm_name(word)
+    if len(w) < 2:
+        return []
+    return [s for s in read_slots(wf) if w in _norm_name(s["name"])]
+
+
+def trigger_for(name):
+    """这个 LoRA 自己的触发词（没有就空串）。"""
+    n = _norm_name(name)
+    for key, trig in _TRIGGERS:
+        if _norm_name(key) in n:
+            return trig
+    return ""
+
+
+def apply_solo(wf, word, strength=SOLO_STRENGTH):
+    """全关 + 只开命中的槽（默认 0.8）。返回命中的槽位条目；没命中返回 []。
+
+    `word` 可以是单个词，也可以是词列表（`["米山舞", "748"]`＝两个一起挂）。
+    """
+    words = [word] if isinstance(word, str) else list(word or [])
+    hits = []
+    for w in words:
+        for h in find_slots(wf, w):
+            if h not in hits:
+                hits.append(h)
+    if not hits:
+        return []
+    keep = {h["slot"] for h in hits}
+    plan = []
+    for s in read_slots(wf):
+        if s["slot"] in keep:
+            plan.append({"slot": s["slot"], "on": True, "strength": strength})
+        else:
+            plan.append({"slot": s["slot"], "on": False})
+    apply_slots(wf, plan)
+    return sorted(hits, key=lambda x: x["slot"])
+
+
+def names_hint(wf):
+    """槽里现有 LoRA 的名字（报错时给模型看，别让它瞎猜）。"""
+    return [s["name"] for s in read_slots(wf)]
+
+
+def solo_prompt_prefix(hits):
+    """单挂这几个槽时的前缀：各带各的触发词，按槽号顺序拼。"""
+    return "".join(trigger_for(h["name"])
+                   for h in sorted(hits, key=lambda x: x["slot"]))
+
+
+def take_leading(prompt, wf, max_hits=2):
+    """把 prompt **开头**命中的 LoRA 词扣走 → (命中词, 余下 prompt)。
+
+    只吃开头连续命中的那几个：`米山舞 一只猫` → `(['米山舞'], '一只猫')`；
+    `米山舞 748 一只猫` 两个都吃。句子中间提到的不碰——「画风像米山舞」
+    不该悄悄把整个组合换掉。
+    """
+    text = (prompt or "").strip()
+    hits = []
+    while len(hits) < max_hits:
+        m = re.match(r"([^\s,，、+]+)[\s,，、+]*", text)
+        if not m:
+            break
+        w = m.group(1)
+        if not find_slots(wf, w):
+            break
+        hits.append(w)
+        text = text[m.end():]
+    return hits, text.lstrip()
+
+
+def template_prefix(skill=DEFAULT_SKILL):
+    """模板里 `__MULTI_PROMPTS__` 前面那段固定前缀（nai5 前缀不在此列）。"""
+    wf = load_workflow(workflow_path(skill))
+    if not wf:
+        return ""
+    for nd in wf.values():
+        if (nd or {}).get("class_type") != "CLIPTextEncode":
+            continue
+        t = (nd.get("inputs") or {}).get("text") or ""
+        if "__MULTI_PROMPTS__" in t:
+            return t.split("__MULTI_PROMPTS__")[0]
+    return ""
+
+
+def set_prompt_prefix(wf, prefix, skill=DEFAULT_SKILL):
+    """把提示词头部的「模板固定前缀 + nai5 前缀」换成 prefix。返回改了几处。
+
+    顺序有讲究：先抠掉已经拼进去的 nai5 前缀，再换模板前缀——单挂的正好是
+    nai5 时两步会作用在同一段上，反过来做会把刚加的前缀又删掉。
+    """
+    old = template_prefix(skill)
+    n = 0
+    for nd in (wf or {}).values():
+        inputs = nd.get("inputs") or {}
+        for k, v in list(inputs.items()):
+            if not isinstance(v, str):
+                continue
+            s = v.replace(NAI5_PREFIX, "")
+            if old and s.startswith(old):
+                s = prefix + s[len(old):]
+            if s != v:
+                inputs[k] = s
+                n += 1
+    return n
