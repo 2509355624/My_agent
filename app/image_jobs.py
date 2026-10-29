@@ -372,6 +372,12 @@ SKILL_TIMEOUTS = {
     #    只有 #60 latent 宽高对调成 1536×1024——像素数相同，耗时与超时同档。
     #    见 `skills/moss-wide/skill.md`。⚠️ 模块级常量，重启 5174 生效。
     "moss-wide": 420,
+    # 光影双档（`skills/moss-light1/` / `moss-light2/`，2026-10-29 用户截图定档）：
+    #    与竖版同一份骨架（1024×1536 / 25 步 / cfg 3），只有 LoRA 槽位组合不同
+    #    ——像素数、步数全同 → 耗时同档，420 照抄。见两个目录的 skill.md。
+    #    ⚠️ 模块级常量，重启 5174 生效。
+    "moss-light1": 420,
+    "moss-light2": 420,
     # 连续漫画批量（`skills/_comic_batch/`，**不是可点名渠道**，由
     #    `comic_story.COMIC_SKILL` 指定）。这条一直在表外：之前没有键，吃的是
     #    `TASK_TIMEOUT` 兜底 180（=.env `IMAGE_GEN_TIMEOUT`），10 格够用。
@@ -2589,6 +2595,39 @@ def wait_done(prompt_id, timeout=None, abort=None):
                 strikes = 0
         time.sleep(POLL_INTERVAL)
     raise TimeoutError("生成超时 (" + str(limit) + "s)")
+
+
+def exec_seconds(entry):
+    """ComfyUI **真正执行**这张图的耗时（秒），拿不到返回 None。
+
+    口径是 `execution_start` → `execution_success` 两个时间戳之差（history
+    entry 的 `status.messages` 里，毫秒）。这两个事件都在 worker 取到任务**之后**
+    才打，所以**不含排队时间**——跑图台要的正是「模型开跑到出图」这一段，
+    而不是「我点了生成之后过了多久」（那里面还混着前面 QQ 的图在排队）。
+
+    `execution_error` 也当结束点：失败了照样要告诉用户跑了多久才崩的。
+    老版本 ComfyUI 没有 messages 时返回 None，界面那边按「无数据」显示。
+    """
+    if not isinstance(entry, dict):
+        return None
+    msgs = (entry.get("status") or {}).get("messages") or []
+    start = end = None
+    for item in msgs:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        name, data = item[0], item[1]
+        if not isinstance(data, dict):
+            continue
+        ts = data.get("timestamp")
+        if isinstance(ts, bool) or not isinstance(ts, (int, float)):
+            continue
+        if name == "execution_start" and start is None:
+            start = float(ts)
+        elif name in ("execution_success", "execution_error") and end is None:
+            end = float(ts)
+    if start is None or end is None or end < start:
+        return None
+    return round((end - start) / 1000.0, 2)
 
 
 def output_images(entry, job=None, body=""):

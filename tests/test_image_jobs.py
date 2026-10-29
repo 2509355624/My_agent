@@ -3290,7 +3290,8 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
         # 2026-10-28 晚加 `moss-wide`(420)：moss 的横屏孪生（1536×1024），像素数
         #   与竖版相同 → 耗时与超时同档，见 `skills/moss-wide/skill.md`。
         self.assertEqual(sorted(image_jobs.SKILL_TIMEOUTS),
-                         ["_comic_batch", "moss", "moss-qunyou", "moss-wide",
+                         ["_comic_batch", "moss", "moss-light1", "moss-light2",
+                          "moss-qunyou", "moss-wide",
                           "moss50", "moss8", "moss_page",
                           "qwen-charsheet", "qwen-hd", "qwen-restore", "qwen30",
                           "qwen_image_v1", "sf"])
@@ -3302,6 +3303,9 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
         self.assertEqual(image_jobs.task_timeout("moss_page"), 700)
         self.assertEqual(image_jobs.task_timeout("moss-qunyou"), 420)
         self.assertEqual(image_jobs.task_timeout("moss-wide"), 420)
+        # 2026-10-29 光影双档：同骨架同像素数 → 同档超时
+        self.assertEqual(image_jobs.task_timeout("moss-light1"), 420)
+        self.assertEqual(image_jobs.task_timeout("moss-light2"), 420)
         self.assertEqual(image_jobs.task_timeout("_comic_batch"), 240)
         self.assertEqual(image_jobs.task_timeout("qwen-restore"), 300)
         self.assertEqual(image_jobs.task_timeout("sf"), 360)

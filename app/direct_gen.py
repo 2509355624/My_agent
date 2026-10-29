@@ -418,6 +418,14 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    "mosswide": "moss-wide",
                    "moss横屏": "moss-wide", "moss横版": "moss-wide",
                    "moss横图": "moss-wide",
+                   # 光影双档（2026-10-29，`skills/moss-light1/` / `moss-light2/`）：
+                   # 用户在跑图台挑出的两套 LoRA 组合，定成两条独立渠道。
+                   # 骨架与竖版逐字节相同（1024×1536 / 25 步 / cfg 3），只有槽位
+                   # 组合和固定前缀不同，所以耗时同档。裸「moss」仍是 `moss-qunyou`。
+                   # ⚠️ 同 moss-wide：中文别名整词登记，正则认了 map 里没有就会把
+                   #    「moss光影1」原样当 id 报未知。
+                   "moss光影1": "moss-light1", "moss光影2": "moss-light2",
+                   "mosslight1": "moss-light1", "mosslight2": "moss-light2",
                    "日系": "krea2-rella"}
 _FIXED_CHAN_RE = re.compile(
     r"(?<![0-9A-Za-z_])"
@@ -484,6 +492,10 @@ _FIXED_CHAN_RE = re.compile(
     # moss 横屏孪生（2026-10-28）：必须排在裸 `moss` 前，否则「moss横屏」
     # 只吃掉「moss」、正文剩「横屏」两个字。
     r"|moss\s*(?:wide|横屏|横版|横图)"
+    # 光影双档（2026-10-29）：同样排在裸 `moss` 前，「moss光影1」才能整词吃掉；
+    # 只写 `moss` 会把「光影1」当正文喂进提示词。`[-\s]*` 同时认 `moss-light1`
+    # 与「moss 光影 1」——不给连字符的话 id 原名会被裸 `moss` 先吃掉。
+    r"|moss[-\s]*(?:light|光影)\s*[12]"
     r"|moss)"
     r"(?![0-9A-Za-z_])",
     re.I)
@@ -975,7 +987,7 @@ GUIDE_TEXT = (
     "　nffa　　插画感\n"
     "　cunny　超分重渠道 · 单张 2~4 分钟\n"
     "　miao　　皮肤质感滑嫩 · 2x 出 3072×4608\n"
-    "　moss　　MOSS-Image · 图里写中英文最准 · **30 步 1024×1536 约 86 秒**\n"
+    "　moss　　MOSS-Image · 图里写中英文最准 · **25 步 1024×1536 约 74 秒**\n"
     "　　　　　（就这一条，没有 8/50 步档了；已内置 nai5 二次元风格，\n"
     "　　　　　触发词自动加，提示词里别再写 @//neoanime/）\n"
     "　moss横屏 同上 · **1536×1024 横版**（说「moss横屏/横版/横图」才走，\n"
@@ -1366,8 +1378,9 @@ _MASTER_TEMPLATE = (
     "\n"
     "### 五条基本写法\n"
     "\n"
-    "- 中文需求翻成英文再写。画面里要出现的文字用引号原样保留，"
-    "例如招牌上的 `营业中`。\n"
+    "- 中文需求翻成英文再写。画面文字（招牌、台词等）原文照抄，"
+    "用英文双引号括住，紧跟形式与位置：台词 `speech bubble`，字幕 "
+    "`subtitle at the bottom`。十个字内，超了印前半句。\n"
     "- prompt 只写画面内容，「重绘 / 高清 / 加强细节」这类操作词交给渠道参数。\n"
     "- 每一轮都是新请求：角色、服装、动作、场景按这轮重新写。\n"
     "- 同一个意思写一个词就够，重复写不加强效果，反而稀释别的词。\n"
@@ -1459,8 +1472,9 @@ _MASTER_TEMPLATE = (
     "| sd | `image_gen_v1` | 点名 sd |\n"
     "| jank | `jank` | 点名 jank |\n"
     "| nffa、cunny、miao | 同名 id | 点名才用，cunny / miao 很慢 |\n"
-    "| moss | `moss-qunyou` | 点名 moss，竖版 MOSS 渠道（30 步 1024×1536 约 86 秒），出字最准；已内置 nai5 二次元风格，触发词自动加，别往提示词里写 @//neoanime/ |\n"
-    "| moss横向、moss-wide | `moss-wide` | 点名 moss 且要横向画面（1536×1024，其余同 moss；裸「moss」永远竖版；中文点名词由代码直接归一到这条，轮不到你填） |\n"
+    "| moss | `moss-qunyou` | 点名 moss：竖版 25 步约 74 秒，出字最准；nai5 触发词自动加，提示词不用写 @//neoanime/ |\n"
+    "| moss横向 | `moss-wide` | 点名横向才走（1536×1024，其余同 moss；裸「moss」永远竖版） |\n"
+    "| moss光影1/2 | `moss-light1`/`moss-light2` | 只点名才走，两套固定 LoRA 组合 |\n"
     "| anima线条 | `anima-line` | 点名，线条感重 |\n"
     "| anima写实 | `anima-real` | 点名，真人质感 |\n"
     "| anima鬼针草 | `anima-guizhencao` | 点名，鬼针草画风 |\n"
@@ -1572,11 +1586,13 @@ _REVISE_TEMPLATE = (
     "  ⚠️ 通用「krea2」已下架，原话只说了 krea2 没带风格词时**别填 krea2 系**"
     "（那 13 个名字都不是他说的），skill 别填。\n"
     "  nffa / cunny / miao = 原话点名才填；\n"
-    "  moss = 原话点名「moss」才填（MOSS-Image 5B，**30 步** / 1024×1536 / "
-    "约 86 秒，画面出字最准，纯文生图；8 步 / 50 步两档已下架，"
+    "  moss = 原话点名「moss」才填（MOSS-Image 5B，**25 步** / 1024×1536 / "
+    "约 74 秒，画面出字最准，纯文生图；8 步 / 50 步两档已下架，"
     "说「moss8 / moss50」也一律落这一条）；\n"
     "  moss-wide = 同模型横版 1536×1024（其余同 moss；原话点名横向才填，"
     "裸「moss」永远是竖版，别替用户横过来）；\n"
+    "  moss-light1 / moss-light2 = 原话点名「moss光影1 / moss光影2」才填"
+    "（同 moss 骨架，两套固定的 LoRA 光影组合，竖版 25 步）；\n"
     "  jank = 原话明说「jank」才填（用户自定义渠道）。\n"
     "  silver-hd = silver 的 4x 超清版，原话明说「silver-hd」或「silver 超清」才填。\n"
     "  qwen-hd = qwen 的 4x 超清版，原话明说「qwen-hd」或「qwen 超清」才填。\n"

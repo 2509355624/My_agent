@@ -117,6 +117,40 @@ class SubmitTest(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
         self.assertIn("画师串太长", r.get_json()["error"])
 
+    def test_steps_out_of_range_is_400(self):
+        """步数是可选参数，但填错要当场退——别等出图线程跑几十秒才炸。"""
+        for bad in (0, 101, 999):
+            r = self._submit(steps=bad)
+            self.assertEqual(r.status_code, 400, bad)
+            self.assertIn("步数", r.get_json()["error"])
+
+    def test_steps_non_integer_is_400(self):
+        r = self._submit(steps="很多")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("整数", r.get_json()["error"])
+
+    def test_steps_is_optional_and_kept_on_job(self):
+        def finish(job):
+            job["state"] = "done"
+
+        with mock.patch.object(gen_api, "_run", side_effect=finish):
+            r = self._submit(steps=45)
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.get_json()["job"]["steps"], 45)
+            r2 = self._submit()
+            self.assertEqual(r2.status_code, 200)
+            self.assertIsNone(r2.get_json()["job"]["steps"])
+
+    def test_steps_ignored_for_cloud_channel(self):
+        """NAI 是云端参数，本地步数没有意义：传了也不往 job 上挂。"""
+        def finish(job):
+            job["state"] = "done"
+
+        with mock.patch.object(gen_api, "_run", side_effect=finish):
+            r = self._submit(skill="nai", steps=45)
+        self.assertEqual(r.status_code, 200)
+        self.assertIsNone(r.get_json()["job"]["steps"])
+
     def test_active_cap_rejects_sixth(self):
         """在途满 5 张时第 6 张被拒（image_jobs 每会话在途也是 5，话术要先说清）。"""
         gate = threading.Event()
@@ -149,7 +183,11 @@ class RunTest(unittest.TestCase):
             for j in self.c.get("/api/gen/status").get_json()["jobs"]))
 
     def test_success_writes_ledger_row(self):
-        with mock.patch.object(comic, "_submit", return_value="Ani4K_00001_.png"), \
+        entry = {"status": {"messages": [
+            ["execution_start", {"timestamp": 1793246804747}],
+            ["execution_success", {"timestamp": 1793246872683}]]}}
+        with mock.patch.object(comic, "_submit",
+                               return_value=("Ani4K_00001_.png", entry)), \
              mock.patch.object(comic, "_submit_retry",
                                side_effect=lambda fn, what: fn()):
             jid = self.c.post("/api/gen/submit",
@@ -164,6 +202,59 @@ class RunTest(unittest.TestCase):
             self.assertEqual(row["prompt"], "1girl, solo, white hair")
             self.assertEqual(row["file"], "Ani4K_00001_.png")
             self.assertIsInstance(row["seed"], int)
+            # 2026-10-29：账本要记「这张跑了几步、ComfyUI 真跑多久」
+            self.assertEqual(row["steps"], "8+12")      # silver 模板 8 + 12
+            self.assertAlmostEqual(row["secs"], 67.94, places=2)
+
+    def test_steps_override_is_applied_to_workflow(self):
+        """填 50 步 → 提交给 ComfyUI 的工作流里采样步数必须是 50，
+        账本和任务记录也要记下「这张是 50 步」。"""
+        seen = {}
+
+        def fake_build(skill, prompt, seed):
+            return {"10": {"class_type": "KSampler",
+                           "inputs": {"steps": 8, "cfg": 3.5}},
+                    "11": {"class_type": "KSampler",
+                           "inputs": {"steps": 12, "cfg": 3.5}}}
+
+        def fake_submit(wf, skill, prompt, seed, **kw):
+            seen["steps"] = [n["inputs"]["steps"] for n in wf.values()]
+            seen["with_entry"] = kw.get("with_entry")
+            return ("x.png", {"status": {"messages": []}})
+
+        with mock.patch.object(gen_api, "generate_image_build", fake_build), \
+             mock.patch.object(comic, "_submit", side_effect=fake_submit), \
+             mock.patch.object(comic, "_submit_retry",
+                               side_effect=lambda fn, what: fn()):
+            jid = self.c.post("/api/gen/submit",
+                              json={"skill": "silver", "prompt": "1girl",
+                                    "steps": 50}).get_json()["job"]["id"]
+            self.assertTrue(self._wait_job(jid, "done"))
+
+        self.assertEqual(seen["steps"], [50, 50])
+        self.assertTrue(seen["with_entry"])
+        row = next(r for r in gen_api._ledger_rows() if r["tag"] == jid)
+        # 两段都改成 50 后取值相同，describe 折成 "50"（多段不同才写 "8+12"）
+        self.assertEqual(row["steps"], "50")
+        self.assertIsNone(row["secs"])      # entry 里没时间戳 → 未知，不编数
+
+    def test_default_steps_follow_the_template(self):
+        """不填步数 = 按模板跑，账本记的就是模板值。"""
+        def fake_build(skill, prompt, seed):
+            return {"10": {"class_type": "KSampler",
+                           "inputs": {"steps": 30}}}
+
+        with mock.patch.object(gen_api, "generate_image_build", fake_build), \
+             mock.patch.object(comic, "_submit",
+                               return_value=("y.png", {"status": {"messages": []}})), \
+             mock.patch.object(comic, "_submit_retry",
+                               side_effect=lambda fn, what: fn()):
+            jid = self.c.post("/api/gen/submit",
+                              json={"skill": "moss-qunyou",
+                                    "prompt": "1girl"}).get_json()["job"]["id"]
+            self.assertTrue(self._wait_job(jid, "done"))
+        row = next(r for r in gen_api._ledger_rows() if r["tag"] == jid)
+        self.assertEqual(row["steps"], "30")
 
     def test_failure_writes_ledger_row_with_error(self):
         with mock.patch.object(comic, "_submit_retry",

@@ -55,15 +55,34 @@ if not defined CFY_DIR (
 echo   解释器 : %PY%
 echo   工作目录 : %CFY_DIR%
 
-rem [!] 这里**不 taskkill**。看门狗是「探活连续 3 次失败」才叫到这里，
-rem 那会儿进程已经没了，杀不杀都一样；反过来万一探活误判（ComfyUI 正在
-rem 自己重启、或只是卡了一下），一杀就是把正在跑的图连进程一起干掉。
-rem 端口被占时 ComfyUI 自己会报 bind 失败并退出，不会开成两个。
+rem 2026-10-28 改：手动启动（不带 auto 参数）时，8188 已被旧实例占用就先
+rem 强杀再启动 —— 用户拍板的「先杀死旧的，然后再启动」。auto 模式（看门狗
+rem 调用）保持原行为不杀：看门狗探活失败叫到这里时进程多半已经没了，杀了
+rem 也白杀；反过来万一探活误判（ComfyUI 只是卡了一下），一杀就是把正在跑
+rem 的图连进程一起干掉。端口没被占时下面的循环自然什么都不做。
 
 rem [!!] 必须先 cd 进 ComfyUI 自己的目录。models/ output/ user/ input/ 全是按
 rem      当前工作目录找的 —— 在 D:\AI\My_agent 下启动会开出一个「空」ComfyUI：
 rem      没有模型、没有 anime2 工作流，而且它会占着 8188 让人以为一切正常。
 cd /d "%CFY_DIR%"
+
+rem ── 先杀死占用 8188 的旧实例（仅手动模式）──
+if defined AUTO_RUN goto :no_kill
+set "OLD_PID="
+for /f "delims=" %%p in ('%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command "(Get-NetTCPConnection -LocalPort 8188 -State Listen -ErrorAction SilentlyContinue).OwningProcess"') do set "OLD_PID=%%p"
+if not defined OLD_PID goto :no_kill
+echo   发现旧实例占用 8188（PID %OLD_PID%），先结束它...
+taskkill /F /PID %OLD_PID% >nul 2>&1
+set "TRY=0"
+:wait_port
+timeout /t 2 /nobreak >nul
+set "STILL="
+for /f "delims=" %%p in ('%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command "(Get-NetTCPConnection -LocalPort 8188 -State Listen -ErrorAction SilentlyContinue).OwningProcess"') do set "STILL=%%p"
+if not defined STILL goto :no_kill
+set /a TRY+=1
+if %TRY% lss 5 goto :wait_port
+echo   [WARN] 旧实例 10 秒后仍在（PID %STILL%），继续尝试启动
+:no_kill
 
 rem 参数 = run_comfyui.bat 那一套（2026-10-01 起两边一致）：
 rem   --vram-headroom 1  给系统留 1GB 显存（DynamicVRAM 用）

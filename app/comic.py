@@ -883,7 +883,8 @@ def _out_dir_for(task):
     return "web/漫画_%s" % tid if tid else ""
 
 
-def _submit(workflow, skill, prompt, seed, task=None, out_dir=None, abort=None):
+def _submit(workflow, skill, prompt, seed, task=None, out_dir=None, abort=None,
+            with_entry=False):
     """排进全局串行队列并等出图，返回 ComfyUI 那边的输出图（相对路径）。
 
     target=None 是「网页侧」路径：worker 出图后只把 history entry 挂到 job 上，
@@ -921,6 +922,11 @@ def _submit(workflow, skill, prompt, seed, task=None, out_dir=None, abort=None):
     names = image_jobs.output_images(entry, job=job)
     if not names:
         raise RuntimeError("跑完了但没找到输出图片")
+    if with_entry:
+        # 跑图台要 history entry 算「ComfyUI 真跑这张图用了多久」
+        # （image_jobs.exec_seconds 读 status.messages 的时间戳）。
+        # 其余调用方签名不变，仍然只拿文件名。
+        return names[0], entry
     return names[0]
 
 

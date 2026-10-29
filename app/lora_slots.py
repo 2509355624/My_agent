@@ -34,7 +34,7 @@ log = logging.getLogger("lora_slots")
 
 TOGGLE_CLASS = "MOSSLoRAToggle"
 DEFAULT_SKILL = "moss-qunyou"
-SLOT_MAX = 10
+SLOT_MAX = 14
 STRENGTH_RANGE = (0.0, 2.0)
 
 # 模板里空槽写成 `"None"`（字符串），别当成真文件名

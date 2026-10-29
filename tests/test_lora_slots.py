@@ -46,22 +46,34 @@ def _tpl():
 
 
 class ReadSlotsTest(unittest.TestCase):
-    def test_reads_the_eight_named_slots(self):
-        """模板里 1~8 填了名字（8 = moss-nai5，2026-10-28 深夜挂上）、
-        9~10 是 "None" → 界面只该看到 8 槽。"""
+    def test_reads_named_slots_and_skips_blanks(self):
+        """有名字的槽按槽号升序返回，空槽（`"None"`）不露面。
+
+        不钉总数——用户随时会往模板里挂新 LoRA（2026-10-29 加到 11 个槽）。
+        """
         slots = L.read_slots(_tpl())
-        self.assertEqual([s["slot"] for s in slots],
-                         [1, 2, 3, 4, 5, 6, 7, 8])
-        self.assertEqual(slots[7]["name"], "moss-nai5.safetensors")
+        nums = [s["slot"] for s in slots]
+        self.assertEqual(nums, sorted(nums))
+        self.assertTrue(set(range(1, 9)) <= set(nums))
+        self.assertTrue(all(s["name"] and s["name"].lower() != "none" for s in slots))
 
     def test_default_on_slots(self):
-        """2026-10-28 深夜现状：用户把其余槽全存成了关，模板只开
-        moss-nai5@0.8（8 号槽，配触发词前缀）。这里钉「有且只有 8 号槽开」，
-        不钉别的槽的状态。"""
-        on = [s for s in L.read_slots(_tpl()) if s["on"]]
-        self.assertEqual([s["slot"] for s in on], [8])
-        self.assertEqual(on[0]["name"], "moss-nai5.safetensors")
-        self.assertAlmostEqual(on[0]["strength"], 0.8)
+        """2026-10-29 用户定档的 moss 默认风格组合：模板默认只开这四槽。
+
+        光影风格@1.5（5 号）+ moss-nai5@0.8（8 号，配触发词前缀）
+        + 米山舞@0.8（10 号）+ 光润皮肤@0.8（12 号）。
+        跑图台 / 漫画台 / QQ 三处都靠这份模板兜底，所以这里钉死集合。
+        """
+        on = {s["slot"]: s for s in L.read_slots(_tpl()) if s["on"]}
+        self.assertEqual(sorted(on), [5, 8, 10, 12])
+        self.assertEqual(on[5]["name"], "moss-光影风格sky02mossv1.safetensors")
+        self.assertAlmostEqual(on[5]["strength"], 1.5)
+        self.assertEqual(on[8]["name"], "moss-nai5.safetensors")
+        self.assertAlmostEqual(on[8]["strength"], 0.8)
+        self.assertEqual(on[10]["name"], "moss-米山舞.safetensors")
+        self.assertAlmostEqual(on[10]["strength"], 0.8)
+        self.assertEqual(on[12]["name"], "MOSS-style-光润皮肤.safetensors")
+        self.assertAlmostEqual(on[12]["strength"], 0.8)
 
     def test_no_toggle_node_means_no_slots(self):
         """别的渠道（anima-line 是 LoraLoader 链）不该被当成 toggle。"""
@@ -92,8 +104,9 @@ class ApplySlotsTest(unittest.TestCase):
 
     def test_out_of_range_slot_is_skipped(self):
         wf = _tpl()
+        over = L.SLOT_MAX + 1
         self.assertEqual(L.apply_slots(wf, [{"slot": 0, "on": True},
-                                            {"slot": 11, "on": True}]), 0)
+                                            {"slot": over, "on": True}]), 0)
 
     def test_strength_is_clamped(self):
         wf = _tpl()
@@ -116,7 +129,7 @@ class NormalizeTest(unittest.TestCase):
 
     def test_slot_number_out_of_range(self):
         _s, errs, _w = L.normalize([{"slot": 99, "on": True}])
-        self.assertTrue(any("超出 1~10" in e for e in errs))
+        self.assertTrue(any("超出 1~%d" % L.SLOT_MAX in e for e in errs))
 
     def test_duplicate_slot(self):
         _s, errs, _w = L.normalize([{"slot": 3, "on": True},
@@ -171,7 +184,7 @@ class SaveDefaultTest(unittest.TestCase):
         self.assertIn("__SEED__", text)          # 模板占位符一个都不能丢
         self.assertIn("__MULTI_PROMPTS__", text)
         wf = load_workflow(self.path)
-        self.assertEqual(wf["70"]["inputs"]["steps"], 30)   # 步数没被顺手改掉
+        self.assertEqual(wf["70"]["inputs"]["steps"], 25)   # 步数没被顺手改掉
         got = {s["slot"]: s for s in L.read_slots(wf)}
         self.assertTrue(got[1]["on"])
         self.assertAlmostEqual(got[1]["strength"], 0.7)
@@ -229,12 +242,14 @@ class ComicCapsTest(unittest.TestCase):
         caps = ro.caps(_tpl())
         self.assertTrue(caps["lora"])
         self.assertEqual(caps["lora_kind"], "toggle")
-        self.assertTrue(caps["editable"])       # 采样步数仍不可改（30 步定死）
+        self.assertTrue(caps["editable"])       # 采样步数仍不可改（模板定死 25 步）
 
     def test_defaults_reads_toggle_slots(self):
+        """读的是模板当前槽位，不钉总数——用户随时会挂新 LoRA。"""
         d = ro.defaults(SKILL)
-        self.assertEqual(len(d["loras"]), 8)
-        self.assertEqual([x["slot"] for x in d["loras"]], list(range(1, 9)))
+        nums = [x["slot"] for x in d["loras"]]
+        self.assertEqual(nums, sorted(nums))
+        self.assertTrue(set(range(1, 9)) <= set(nums))
 
     def test_apply_does_not_rebuild_chain(self):
         """toggle 渠道走 apply_slots：节点数不变（重建链的话这里会多出节点）。"""
@@ -245,7 +260,7 @@ class ComicCapsTest(unittest.TestCase):
         got = {s["slot"]: s for s in L.read_slots(out)}
         self.assertTrue(got[1]["on"])
         self.assertFalse(got[2]["on"])
-        self.assertEqual(out["70"]["inputs"]["steps"], 30)
+        self.assertEqual(out["70"]["inputs"]["steps"], 25)
 
     def test_anima_line_is_still_chain(self):
         """回归护栏：这条改动不能把 anima 那 6 槽的链式面板改没。"""

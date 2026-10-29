@@ -80,11 +80,12 @@ STATE_ROOT = os.path.join(BASE_DIR, "state", "moss_comic")
 # 50 步（`moss50`）、整页档（`moss_page`）全部进 `skills.ARCHIVED_SKILLS`，
 # 目录保留只为让历史任务重画 / 旧图显示，不再是可点名的渠道。
 #
-# 2026-10-28 深夜再改 25 → **30**：渠道挂上群友的 moss-nai5（二次元，NAI5
-# 训练集）后作者实测「30-40 步才稳」，且二次元细节（发丝/眼睛高光）比写实
-# 更吃步数。用户确认「耗时就增加 10 秒钟的样子」，30 步一页约 86 秒。
+# 2026-10-28 深夜改 25 → 30（挂上群友 moss-nai5 后作者建议 30-40 步）。
+# 2026-10-29 用户改回 **25**：把「光影风格 + nai5 + 米山舞 + 光润皮肤」四 LoRA
+# 组合定为 moss 默认风格，25 步一页约 74 秒，跟跑图台渠道模板保持一致
+# （skills/moss-qunyou/workflow.json 的 KSampler.steps 也是 25）。
 SKILL = "moss-qunyou"
-STEPS = 30
+STEPS = 25
 # 分辨率：群友原版 1024×1536。实测这个尺寸在 12GB 卡上能出图（8 步 72 秒），
 # 降到 896×1344 反而在采样阶段出纯噪声，所以保持原版尺寸不动。
 # 改这里必须同步 `moss_comic._CANVAS_W/_CANVAS_H`，否则 bbox 会整体偏。

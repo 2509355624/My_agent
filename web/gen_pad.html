@@ -91,7 +91,7 @@
   /* ── LoRA 槽（只有 moss 这种 Toggle 渠道出现）──
      默认**收起**，只留一行摘要（开了几个 + 名字/强度），点「展开」才露出槽位——
      7 个槽铺开要占掉输入区一大截，收起来是常态（2026-10-28）。
-     展开后两列排布（窄屏 auto-fit 自动退回一列）。名字短的显示短名，全名在 title。 */
+     展开后两列排布（窄屏 auto-fit 自动退回一列）。名字短的显示短名，全名在悬停卡片里。 */
   .lora-options { display: none; margin-bottom: 8px; padding: 4px 10px;
     background: var(--bg-input); border: 1px solid var(--border);
     border-radius: var(--radius-sm); }
@@ -121,6 +121,16 @@
   .composer .cur { font-size: 12px; color: var(--text-dim); }
   .composer .cur b { color: var(--info); font-weight: 400; }
   .composer .qdepth { font-size: 12px; color: var(--warn); }
+  /* 步数：留空 = 按渠道模板（placeholder 显示默认值）。NAI 云端渠道整块藏起来 */
+  .steps-box { display: none; align-items: center; gap: 6px; font-size: 12px;
+    color: var(--text-dim); }
+  .steps-box.on { display: flex; }
+  .steps-box input { width: 62px; background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    color: var(--text); padding: 5px 7px; font: inherit; font-size: 12px;
+    outline: none; }
+  .steps-box input:focus { border-color: var(--accent); }
+  .steps-box .hint { color: var(--text-mute); font-size: 11px; }
   .composer .spacer { flex: 1; }
   .btn { background: var(--bg-input); color: var(--text); border: 1px solid var(--border);
     border-radius: var(--radius-sm); padding: 6px 14px; font: inherit; font-size: 13px;
@@ -151,6 +161,7 @@
   .h-item .sk { font-size: 12px; color: var(--info); }
   .h-item .sd { font-size: 11px; color: var(--text-mute); }
   .h-item .tm { font-size: 11px; color: var(--text-mute); }
+  .h-item .dur { font-size: 11px; color: var(--success); }
   .h-item .bad { font-size: 11px; color: var(--error); }
   .h-item .lor { font-size: 10px; color: var(--warn); overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; }
@@ -170,6 +181,23 @@
     background: var(--bg-elev); border: 1px solid var(--error); color: var(--error);
     padding: 8px 16px; border-radius: var(--radius-sm); font-size: 13px;
     display: none; z-index: 10; max-width: 70vw; }
+
+  /* ── 自绘悬停卡片（2026-10-29）──────────────────────────
+     为什么不用原生 title：浏览器在任何按键（哪怕只按一下 Ctrl）时都会立刻
+     收掉 tooltip，用户想 Ctrl+Alt+A 截图根本抓不住，试了很多次才截到。
+     这个 div 只由鼠标进出控制显隐，**不绑任何键盘事件**，按住 Ctrl 也不收。 */
+  .hovercard { position: fixed; z-index: 60; left: 0; top: 0;
+    max-width: 470px; max-height: 62vh; overflow: auto; display: none;
+    background: var(--bg-elev); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 10px 12px;
+    font-size: 12px; line-height: 1.7; color: var(--text-dim);
+    box-shadow: 0 14px 36px rgba(0,0,0,.55); pointer-events: none;
+    word-break: break-word; }
+  .hovercard.on { display: block; }
+  .hovercard .hc-title { color: var(--info); font-size: 12px;
+    margin-bottom: 5px; word-break: break-all; }
+  .hovercard .hc-body { white-space: pre-wrap; }
+  .hovercard .hc-key { color: var(--text-mute); }
 
   /* ── 灯箱：在本页放大看图（不跳新标签页） ────── */
   .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.9);
@@ -235,6 +263,12 @@
           placeholder="提示词：英文 tag 或自然句子都行（按渠道习惯写，silver/krea2/anima 用 tag 串，qwen 用完整句子）"></textarea>
         <div class="bar">
           <span class="cur">渠道：<b id="curChan">未选</b></span>
+          <span class="steps-box" id="stepsBox">
+            <label for="stepsIn">步数</label>
+            <input id="stepsIn" type="number" min="1" max="100" step="1"
+                   placeholder="默认" title="留空按渠道模板；填了只影响这次提交">
+            <span class="hint" id="stepsHint"></span>
+          </span>
           <span class="qdepth" id="qdepth" style="display:none"></span>
           <span class="spacer"></span>
           <button class="btn primary" id="btnGen" onclick="gen()">生成</button>
@@ -262,6 +296,7 @@
   </div>
 
   <div class="toast" id="toast"></div>
+  <div class="hovercard" id="hovercard"></div>
 
 <script>
 let CHANNELS = [];
@@ -273,6 +308,8 @@ let PINNED_AUTO = false;    // PINNED 是轮询自动展示的（true）还是�
                             // 区分这两者：自动展示的可以被更新完成的图顶掉；
                             // 用户手点的历史行不能被抢（2026-10-28 修「出图不自动刷」）。
 let POLL = null;
+// 步数（2026-10-29）：留空 = 按渠道模板；填了只影响这一次提交，记在本机。
+let STEPS = localStorage.getItem('gp_steps') || '';
 let NAI_ARTISTS = JSON.parse(localStorage.getItem('gp_nai_artists') || '[]');
 
 function isNai() { return CUR === 'nai' || CUR === 'nai_wide'; }
@@ -314,6 +351,53 @@ function toast(msg) {
   clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', 4000);
 }
 
+// ── 自绘悬停卡片（2026-10-29 用户要求）────────────────────
+// 原生的 `title` 属性在任何按键（哪怕只按下 Ctrl）时会被浏览器**立刻收掉**，
+// 用户想 Ctrl+Alt+A 截图根本抓不住，试了很多次才截到两张。这里换成一个普通
+// div：显示/隐藏只由 mouseenter / mouseleave 决定，**完全不绑键盘事件**，
+// 按住 Ctrl / Shift / Alt 都不会消失。
+//
+// 位置：默认贴在被悬停元素的右侧，右边放不下就翻到左侧；上下夹在视口内。
+// `pointer-events: none` 保证它不会挡住鼠标、也就不会自己触发 mouseleave。
+const HCARD = document.getElementById('hovercard');
+
+function hideHoverCard() { HCARD.classList.remove('on'); }
+
+function showHoverCard(el, title, body) {
+  if (!title && !body) { hideHoverCard(); return; }
+  HCARD.innerHTML = '';
+  if (title) {
+    const t = document.createElement('div');
+    t.className = 'hc-title'; t.textContent = title;
+    HCARD.appendChild(t);
+  }
+  if (body) {
+    const b = document.createElement('div');
+    b.className = 'hc-body'; b.textContent = body;
+    HCARD.appendChild(b);
+  }
+  HCARD.classList.add('on');
+  const r = el.getBoundingClientRect();
+  const w = HCARD.offsetWidth, h = HCARD.offsetHeight;
+  let left = r.right + 10;
+  if (left + w > window.innerWidth - 8) left = Math.max(8, r.left - w - 10);
+  let top = r.top;
+  if (top + h > window.innerHeight - 8) top = Math.max(8, window.innerHeight - h - 8);
+  HCARD.style.left = left + 'px';
+  HCARD.style.top = top + 'px';
+}
+
+// 给元素挂卡片；每次悬停时现算内容（数据会变）。传 null 就只清掉原生 title。
+function bindHoverCard(el, build) {
+  el.removeAttribute('title');        // 原生 tooltip 一律不要，见上面注释
+  if (!build) return;
+  el.addEventListener('mouseenter', () => {
+    const it = build() || {};
+    showHoverCard(el, it.title, it.body);
+  });
+  el.addEventListener('mouseleave', hideHoverCard);
+}
+
 function fmtTime(ts) {
   const d = new Date(ts * 1000);
   const p = n => String(n).padStart(2, '0');
@@ -353,9 +437,15 @@ async function loadChannels() {
     el.dataset.id = c.id;
     el.innerHTML = '<div class="id"></div>' +
       (c.summary ? '<div class="sum"></div>' : '');
-    el.querySelector('.id').textContent = c.id;
+    // 展示名（2026-10-29）：`label` 是 skill.md 里写的中文名（如 moss-light1
+    // → "moss光影1"），id 仍是提交参数。没有 label 就照旧显示 id。
+    el.querySelector('.id').textContent = c.label || c.id;
     if (c.summary) el.querySelector('.sum').textContent = c.summary;
-    el.title = c.summary || c.id;
+    bindHoverCard(el, () => ({
+      title: (c.label && c.label !== c.id) ? (c.label + '（' + c.id + '）') : c.id,
+      body: [c.summary || '', c.cloud ? '云端渠道（NAI）' : '',
+             (c.steps ? '默认步数 ' + c.steps : '')].filter(Boolean).join('\n')
+    }));
     el.onclick = () => pick(c.id);
     box.appendChild(el);
   }
@@ -375,9 +465,38 @@ function pick(id) {
 }
 
 function showCur() {
-  document.getElementById('curChan').textContent = CUR || '未选';
+  const ch = curChannel();
+  document.getElementById('curChan').textContent =
+    (ch && ch.label) ? ch.label : (CUR || '未选');
   updateNaiOptions();
+  updateSteps();
 }
+
+// ── 步数输入（2026-10-29）──────────────────
+// placeholder 显示渠道模板当前值（"30" / "8+12"），留空就是按它跑；
+// NAI 是云端参数，没有本地工作流，整块藏起来。
+function curChannel() { return CHANNELS.find(c => c.id === CUR) || null; }
+
+function updateSteps() {
+  const ch = curChannel();
+  const box = document.getElementById('stepsBox');
+  const input = document.getElementById('stepsIn');
+  const hint = document.getElementById('stepsHint');
+  const cloud = !ch || ch.cloud;
+  box.classList.toggle('on', !cloud);
+  if (cloud) return;
+  const def = ch.steps || '';
+  input.placeholder = def ? ('默认 ' + def) : '默认';
+  hint.textContent = def ? '' : '该渠道没有可调步数';
+  input.disabled = !def;
+  input.value = STEPS;
+}
+
+const STEPS_INPUT = document.getElementById('stepsIn');
+STEPS_INPUT.addEventListener('input', () => {
+  STEPS = STEPS_INPUT.value.trim();
+  try { localStorage.setItem('gp_steps', STEPS); } catch (e) {}
+});
 
 // ── LoRA 槽位（2026-10-28 用户要求「自己选开哪个」）──
 // 只有 moss 这种「一个节点并联多槽」的渠道有槽位；别的渠道接口返回空，面板
@@ -469,7 +588,10 @@ function renderLoras() {
       + '<span class="lname"></span></label>'
       + '<input class="lora-str" type="number" step="0.05" min="0" max="2">';
     row.querySelector('.lname').textContent = shortName(s.name);
-    row.title = s.name;
+    // 短名看不出是哪个文件，悬停给全名（自绘卡片，按 Ctrl 也不会消失）
+    bindHoverCard(row.querySelector('.lname'), () => ({
+      title: s.name, body: '槽 ' + s.slot
+    }));
     const cb = row.querySelector('input[type=checkbox]');
     cb.checked = !!s.on;
     cb.addEventListener('change', () => { cacheLoras(); updateLoraSum(); });
@@ -525,6 +647,9 @@ async function gen(promptOverride) {
   try {
     const body = {skill: CUR, prompt: prompt, artist_prefix: artistPrefix};
     if (LORA_KIND === 'toggle' && LORA.length) body.loras = readLoraRows();
+    // 步数只在 ComfyUI 渠道发；NAI 走云端，本地步数没意义（后端也会忽略）
+    const st = STEPS_INPUT.value.trim();
+    if (st && !isNai()) body.steps = Number(st);
     const d = await api('/api/gen/submit', body);
     JOBS.unshift(d.job);
     renderJobs();
@@ -626,8 +751,12 @@ function showShot(j, auto) {
   const meta = document.createElement('div');
   meta.className = 'meta';
   meta.innerHTML = '<span class="sk"></span><span>seed ' + (j.seed ?? '云端随机') + '</span>' +
-    '<span>' + fmtTime(j.ts) + '</span>';
+    '<span>' + fmtTime(j.ts) + '</span>' +
+    (stepsText(j) ? '<span class="stp"></span>' : '') +
+    (secsText(j.secs) ? '<span class="dur"></span>' : '');
   meta.querySelector('.sk').textContent = j.skill;
+  if (stepsText(j)) meta.querySelector('.stp').textContent = stepsText(j);
+  if (secsText(j.secs)) meta.querySelector('.dur').textContent = 'ComfyUI ' + secsText(j.secs);
   el.appendChild(meta);
   if (j.prompt) {
     const p = document.createElement('div');
@@ -650,7 +779,7 @@ async function loadHistory() {
 // ── 历史行上的 LoRA 短标（2026-10-28：方便同 seed 对比）──
 // moss-maliker_moss_base_style_v3_e40.safetensors → maliker 0.4。先去扩展名
 // 和 moss- 前缀，取第一段（到 _ 或 - 为止），没有分隔符就截 7 字；
-// 完整名悬停在 title 里。
+// 完整名放在行级悬停卡片里（2026-10-29 换成自绘卡片，原生 title 按 Ctrl 会消失）。
 function loraShort(name) {
   const s = (name || '').replace(/\.safetensors$/i, '').replace(/^moss-/, '');
   return (s.split(/[_\-]/)[0] || s).slice(0, 7);
@@ -659,6 +788,18 @@ function loraTag(loras) {
   return (loras || []).filter(l => l.name).map(l =>
     loraShort(l.name) + ' ' + (Math.round((l.strength || 0) * 100) / 100)
   ).join(' · ');
+}
+
+// ── 步数 / 生成耗时（2026-10-29）──────────────
+// 耗时口径是 ComfyUI 的 execution_start → execution_success，**不含排队**：
+// 用户要看的是「模型开跑到出图」，不是「我点了之后等了多久」。
+function secsText(s) {
+  if (s === null || s === undefined || isNaN(s)) return '';
+  return (s >= 100 ? Math.round(s) : Math.round(s * 10) / 10) + 's';
+}
+function stepsText(o) {
+  const v = (o && (o.steps_label || o.steps)) || '';
+  return v ? (v + ' 步') : '';
 }
 
 function renderHistory() {
@@ -685,16 +826,23 @@ function renderHistory() {
     info.innerHTML = '<div class="sk"></div>' +
       (lt ? '<div class="lor"></div>' : '') +
       '<div class="sd"></div>' +
-      (r.ok ? '<div class="tm"></div>' : '<div class="bad"></div>');
-    info.querySelector('.sk').textContent = r.skill;
+      (r.ok ? '<div class="tm"></div>' : '<div class="bad"></div>') +
+      (r.ok && (stepsText(r) || secsText(r.secs)) ? '<div class="dur"></div>' : '');
+    info.querySelector('.sk').textContent =
+      ((CHANNELS.find(c => c.id === r.skill) || {}).label) || r.skill;
     if (lt) {
+      // 完整 LoRA 名单在行级悬停卡片里（见下面 bindHoverCard），这里不再挂
+      // 原生 title：否则鼠标停在黄字上会同时弹出浏览器 tooltip，一按 Ctrl
+      // 就消失，反而挡着截图。
       info.querySelector('.lor').textContent = lt;
-      info.querySelector('.lor').title =
-        (r.loras || []).map(l => l.name + ' ' + l.strength).join('\n');
     }
     info.querySelector('.sd').textContent = 'seed ' + (r.seed ?? '—');
     if (r.ok) info.querySelector('.tm').textContent = fmtTime(r.ts);
     else info.querySelector('.bad').textContent = (r.error || '失败').slice(0, 40);
+    if (r.ok && info.querySelector('.dur')) {
+      info.querySelector('.dur').textContent =
+        [stepsText(r), secsText(r.secs)].filter(Boolean).join(' · ');
+    }
     el.appendChild(info);
     if (r.prompt) {
       const cp = document.createElement('button');
@@ -703,7 +851,32 @@ function renderHistory() {
       cp.onclick = ev => { ev.stopPropagation(); copyText(r.prompt); };
       el.appendChild(cp);
     }
-    el.title = r.prompt || '';
+    // 悬停看这张图的**完整内容**（2026-10-29）：渠道 / LoRA 全名与强度 /
+    // 种子 / 步数 / ComfyUI 耗时 / 时间 / 整条提示词。用自绘卡片而不是原生
+    // title —— 原生 tooltip 一按 Ctrl 就没了，截不到图。
+    bindHoverCard(el, () => {
+      const ch = CHANNELS.find(c => c.id === r.skill);
+      const lines = [];
+      lines.push('渠道　' + ((ch && ch.label) ? ch.label + '（' + r.skill + '）'
+                                           : r.skill));
+      const loras = (r.loras || []).filter(l => l.name);
+      if (loras.length) {
+        lines.push('LoRA');
+        loras.forEach(l => lines.push('　' + l.name + '  ' + l.strength));
+      }
+      lines.push('种子　' + (r.seed ?? '—'));
+      if (r.ok) {
+        lines.push('步数　' + (stepsText(r) || '—'));
+        lines.push('耗时　' + (secsText(r.secs) || '—'));
+        lines.push('时间　' + fmtTime(r.ts));
+      } else {
+        lines.push('失败　' + (r.error || '未知错误'));
+      }
+      return {
+        title: r.tag + (r.ok ? '' : '（失败）'),
+        body: lines.join('\n') + (r.prompt ? '\n\n' + r.prompt : '')
+      };
+    });
     el.onclick = () => { if (r.ok && r.file) showShot(r); renderHistoryOn(); };
     box.appendChild(el);
   }
