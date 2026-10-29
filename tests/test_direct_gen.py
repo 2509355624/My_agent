@@ -2917,6 +2917,13 @@ class RandomCommandTest(unittest.TestCase):
         self.assertIn("rs29", direct_gen.GUIDE_TEXT)
         self.assertIn("rs29", direct_gen.MORE_CHAN_TEXT)
 
+    def test_moss_light_listed_in_both_menus(self):
+        # 2026-10-29：moss光影1/2 是新渠道（两套固定 LoRA 组合）。两条菜单
+        # 都必须能查到，否则群友只会看到一条裸 `moss`，不知道还能点名光影档。
+        for menu in (direct_gen.GUIDE_TEXT, direct_gen.MORE_CHAN_TEXT):
+            for word in ("moss光影1", "moss光影2"):
+                self.assertIn(word, menu)
+
     def test_direct_prefix_documented_in_menus(self):
         # 2026-10-11 反转：直通没人用，从所有展示面撤下（功能保留、
         # 只是不再写进菜单）。钉死「两个菜单都不许再出现直通介绍」。
