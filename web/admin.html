@@ -204,6 +204,13 @@
   /* 搜索框：覆盖上面 input 那条 width:100%，让它在 flex 行里只占剩余宽度 */
   #sessSearch { width: auto; flex: 1 1 auto; min-width: 120px;
                 padding: 6px 10px; font-size: 12px; }
+  /* 类型筛选（2026-10-30 用户要求「按钮，点击展示全部私聊 / 全部群聊」）：
+     全部 / 群聊 / 私聊三档，和上面的搜索框**叠加**生效（先按类型，再按关键词）。
+     选中档用 accent 描边，一眼看出现在筛的是哪一类。 */
+  .kindbar { gap: 6px; margin: 0 0 8px 0; }
+  .kindbar button { padding: 3px 10px; font-size: 11px; }
+  .kindbar button.on { color: var(--accent); border-color: var(--accent);
+                       background: rgba(124, 92, 255, 0.12); }
 
   /* 右栏用：紧凑行，只一行。点行 = 选中（高亮），「…」菜单展开设置。
      弹出的「提示词」编辑器直接插在这一行下面，仍然贴会话列里、不绕去中间。
@@ -239,6 +246,12 @@
                               white-space: nowrap; overflow: hidden;
                               text-overflow: ellipsis; }
   .sess-list .sess-row > button { padding: 3px 8px; font-size: 11px; }
+  /* 行内「审核」开关（2026-10-30 用户要求「不用点三个点展开就能开关审核」）。
+     它和「改人设」「…」挤在同一行，所以比展开区里的同款再小一号：字号 10、
+     内边距 2/5，宽度约 46px，名字那栏还能剩 100 多 px。 */
+  .sess-list .sess-row > button.audit-inline {
+    padding: 2px 5px; font-size: 10px; line-height: 1.4;
+  }
   .sess-list .sess-row.active { outline: 1px solid var(--accent); outline-offset: -1px; }
   .sess-list .sess-row:hover { background: rgba(124, 92, 255, 0.10); }
   /* 「…」= 展开这条会话的全部开关（点行也能展开） */
@@ -589,6 +602,12 @@
         <input id="sessSearch" type="text" autocomplete="off" spellcheck="false"
                placeholder="搜 QQ 号 / 群名 / 昵称">
         <button class="ghost" id="sessSearchClear">清空</button>
+      </div>
+      <!-- 类型筛选：全部 / 群聊 / 私聊。计数直接写在按钮上，省得再猜。 -->
+      <div class="sess-foot kindbar" id="sessKindBar" style="display:none;">
+        <button class="ghost" data-kind="">全部</button>
+        <button class="ghost" data-kind="group">群聊</button>
+        <button class="ghost" data-kind="private">私聊</button>
       </div>
       <div class="sess-foot" id="sessBulkBar"
            style="display:none; margin:0;">
@@ -987,6 +1006,7 @@ function renderSessions() {
   const box = $('sessList');
   box.textContent = '';
   renderSearchBar();
+  renderKindBar();
   if (!sessions.length) {
     const empty = document.createElement('div');
     empty.className = 'sess-empty';
@@ -997,11 +1017,17 @@ function renderSessions() {
   }
   const vis = visibleSessions();
   if (!vis.length) {
-    // 有别于「一条都没有」：列表是有内容的，只是被搜没了。说清楚是哪句关键词，
-    // 免得以为会话丢了他。
+    // 有别于「一条都没有」：列表是有内容的，只是被筛没了。说清楚是**哪个**
+    // 条件筛掉的（关键词 / 类型 / 两个都要），免得以为会话丢了。
     const empty = document.createElement('div');
     empty.className = 'sess-empty';
-    empty.textContent = '没有匹配「' + searchText.trim() + '」的会话。';
+    const q = searchText.trim();
+    const kindName = kindFilter ? KIND_NAME[kindFilter] : '会话';
+    if (q) {
+      empty.textContent = '没有匹配「' + q + '」的' + kindName + '。';
+    } else {
+      empty.textContent = '没有' + kindName + '。';
+    }
     box.appendChild(empty);
     renderSelBar();
     return;
@@ -1073,7 +1099,15 @@ function renderSessions() {
       row.appendChild(pb);
     }
 
-    // 「…」：展开这条会话的全部开关（主动发言 / 生图 / NAI / 审核 / 格式 /
+    // 「审核」开关直接铺在行里（2026-10-30 用户要求「不需要点那三个点展开
+    // 更多就可以开关审核是否打开」）。它是最高频的那个开关——问「这张图怎么
+    // 没审 / 怎么被拦了」时要一眼看到状态、一下切掉，藏进「…」等于多两次点击。
+    // 展开区里那份**已撤掉**，同一个开关只留一个位置（状态不会互相打架）。
+    if (s.kind === 'group' || s.kind === 'private') {
+      addAuditButton(s, row, 'audit-inline');
+    }
+
+    // 「…」：展开这条会话的全部开关（主动发言 / 生图 / NAI / 格式 /
     // 频率 / 概率 / 判断 / 删除）。默认收起——铺开 8 个按钮 × 34 条 = 拖很久。
     const more = document.createElement('button');
     more.className = 'more-btn';
@@ -1178,8 +1212,7 @@ function buildTools(s) {
     ng.addEventListener('click', () => toggleNai(s, ng));
     row.appendChild(ng);
 
-    // 「审核」开关：这条会话的生图发出去之前要不要过 NSFW 闸门。
-    addAuditButton(s, row);
+    // 「审核」开关已经挪到行内了（见 renderSessions）——这里不再重复放一个。
 
     // 「格式」按钮：这条的图发 jpg 还是 png；没单独设过就跟全局。
     addImageFmtButton(s, row);
@@ -1246,20 +1279,29 @@ function buildTools(s) {
 // **只写填了的字段，没填的一律不动**（不是「留空=清除」，那会顺手清掉
 // 这些会话别处设的附加词/借用）；想清除走「批量清除人设」或单条面板。
 
-// ─── 会话搜索（按 QQ 号 / 群名 / 昵称 快速定位）───────────
+// ─── 会话搜索 + 类型筛选（按 QQ 号 / 群名 / 昵称 快速定位）───────────
 // 需求（2026-10-03 用户提）：找一个 QQ 改人设要一条条翻。语义当场拍板：
 // ① 匹配 **QQ 号 + 群名/昵称**（不只号码，只记得群名时也能搜到）；
 // ② 号码按**子串**匹配（输 1041 就能定位 1041079621）；
 // ③ 全选 / 反选**只作用于筛选出来的行**（看不见的行不该被选中，否则批量
-//    应用人设会误伤）；不加「只看群聊/私聊」的类型筛选（用户明确不要）。
+//    应用人设会误伤）。
+// 类型筛选（2026-10-30 用户改口要的）：原先注释写「不加只看群聊/私聊的类型
+// 筛选（用户明确不要）」，现在会话涨到 70+ 条，他要「按钮，点击展示全部私聊、
+// 展示全部群聊」，于是补上三档（全部 / 群聊 / 私聊）。它是**叠加**在搜索上的
+// 另一层「且」：先按类型筛，再按关键词筛，两个条件同时生效。
 //
-// 全部在前端做：`/api/agent/<id>/sessions` 一次就把 name / target_id 都返回了，
-// 没必要再打一次后端。
+// 全部在前端做：`/api/agent/<id>/sessions` 一次就把 name / target_id / kind
+// 都返回了，没必要再打一次后端。
+
+let kindFilter = '';    // '' = 全部；'group' / 'private' = 只看那一类
+const KIND_NAME = { group: '群聊', private: '私聊' };
 
 function visibleSessions() {
   const q = (searchText || '').trim().toLowerCase();
-  if (!q) return sessions;
-  return sessions.filter((s) => {
+  // 类型先筛（这一步不看关键词），关键词为空时直接返回。
+  const typed = kindFilter ? sessions.filter(s => s.kind === kindFilter) : sessions;
+  if (!q) return typed;
+  return typed.filter((s) => {
     // 只比 target_id（QQ 号）和 name（群名/昵称）——**故意不比 key**：
     // key 是 `group_123` 这种，搜 "group" 会把所有群都匹配上，纯噪音。
     const id = s.target_id != null ? String(s.target_id).toLowerCase() : '';
@@ -1268,14 +1310,43 @@ function visibleSessions() {
   });
 }
 
+// 切类型档位。与 applySearch 同一口径：筛选一变就把**看不见的行踢出勾选**，
+// 否则切到「只看群聊」后，之前勾着的私聊行还在集合里，一次批量应用就误伤了。
+function applyKindFilter(kind) {
+  kindFilter = kind || '';
+  const vis = new Set(visibleSessions().map(s => s.key));
+  Array.from(selKeys).forEach((k) => { if (!vis.has(k)) selKeys.delete(k); });
+  renderSessions();
+}
+
+function renderKindBar() {
+  const bar = $('sessKindBar');
+  bar.style.display = sessions.length ? 'flex' : 'none';
+  const counts = { '': sessions.length, group: 0, private: 0 };
+  sessions.forEach((s) => { if (counts[s.kind] != null) counts[s.kind] += 1; });
+  bar.querySelectorAll('button').forEach((btn) => {
+    const k = btn.dataset.kind || '';
+    btn.textContent = (k ? KIND_NAME[k] : '全部') + ' ' + (counts[k] || 0);
+    btn.classList.toggle('on', kindFilter === k);
+  });
+}
+
 function renderSearchBar() {
   const q = (searchText || '').trim();
   const box = $('sessSearchBar');
   box.style.display = sessions.length ? 'flex' : 'none';
   const n = visibleSessions().length;
-  $('sessSearchCount').textContent = q
-    ? ('匹配 ' + n + ' / ' + sessions.length + ' 条')
-    : (sessions.length ? '共 ' + sessions.length + ' 条' : '');
+  // 标题上那句要跟着**筛选**一起变：只看群聊时还写「共 8 条」，
+  // 会让人以为筛选没生效（列表里明明只有 5 行）。
+  let label = '';
+  if (q) {
+    label = '匹配 ' + n + ' / ' + sessions.length + ' 条';
+  } else if (kindFilter) {
+    label = KIND_NAME[kindFilter] + ' ' + n + ' / 共 ' + sessions.length + ' 条';
+  } else if (sessions.length) {
+    label = '共 ' + sessions.length + ' 条';
+  }
+  $('sessSearchCount').textContent = label;
   $('sessSearchClear').disabled = !q;
 }
 
@@ -2015,12 +2086,14 @@ async function toggleImageFmtAll() {
 // ——群行插在「生图」与「频率」之间，私聊行插在「提示词」之前。
 // 「审核」开关（群行 / 私聊行共用）。显示的是**生效值**——管理员想知道的是
 // 「这个会话到底审不审」，不是「它有没有单独设过」。点一下写单会话覆盖。
-function addAuditButton(s, row) {
+function addAuditButton(s, row, extraClass) {
   const ab = document.createElement('button');
-  ab.className = 'toggle' + (s.image_audit ? ' on' : '');
+  ab.className = 'toggle' + (s.image_audit ? ' on' : '')
+    + (extraClass ? ' ' + extraClass : '');
   ab.textContent = s.image_audit ? '审核·开' : '审核·关';
   ab.title = '生图发出去之前让识图模型判一次：只拦性器官裸露 / 明确性行为，'
-    + '泳装内衣照常发。识图失败一律放行。';
+    + '泳装内衣照常发。识图失败一律放行。'
+    + (extraClass === 'audit-inline' ? '（点一下切换）' : '');
   ab.addEventListener('click', () => toggleAudit(s, ab));
   row.appendChild(ab);
 }
@@ -3066,6 +3139,14 @@ $('sessSearch').addEventListener('keydown', (e) => {
 });
 $('sessSearchClear').addEventListener('click', () => {
   $('sessSearch').value = ''; applySearch(''); $('sessSearch').focus();
+});
+// 类型筛选：点一下切档，再点同一档 = 回到「全部」（省得每次都要先点全部）。
+// 委托在容器上，按钮是静态 HTML 不用逐个绑定。
+$('sessKindBar').addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  const k = btn.dataset.kind || '';
+  applyKindFilter(kindFilter === k ? '' : k);
 });
 $('groupsMutedAll').addEventListener('click', toggleGroupsMutedAll);
 $('imgGenAll').addEventListener('click', toggleImageGenAll);
