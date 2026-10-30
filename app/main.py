@@ -622,13 +622,17 @@ def serve_image(filename):
 
 @app.route("/api/skills")
 def get_skills():
-    skills = []
+    # 别直接取正文第一行：带 YAML frontmatter 的 skill.md 首行是 `---`，
+    # 列表里就成一排横线（2026-10-30 部署包实测）。skill_summary 会跳过
+    # frontmatter 再找标题，两边口径也统一了（跑图台用的是同一个函数）。
+    from app.skills import skill_summary
+    out = []
     for s in list_skills():
         data = load_skill(s)
         if data:
-            desc = data["skill_md"].split("\n")[0] if data["skill_md"] else ""
-            skills.append({"name": s, "description": desc})
-    return jsonify({"skills": skills})
+            out.append({"name": s,
+                        "description": skill_summary(data["skill_md"] or "")})
+    return jsonify({"skills": out})
 
 
 # ─── 后台管理（agent 配置读写）──────────────────────

@@ -4051,6 +4051,24 @@ class PresetChannelTest(unittest.TestCase):
         got = self._run("moss-qunyou", "moss zdy-233 画个妹妹")
         self.assertEqual(got["skill"], "moss-qunyou")
 
+    def test_model_guessed_channel_yields_to_preset(self):
+        """模型自己填的渠道也算「没点名」——它跟兜底档一样不是用户的选择。
+
+        实录：`zdy-233跑一版` 模型填了 `silver-hd`，moss 的槽位被拖到 silver
+        上跑。判据只看原话里有没有渠道词，不看模型填了什么。
+        """
+        got = self._run("silver-hd", "zdy-233跑一版")
+        self.assertIsNone(got["skill"])
+
+    def test_literal_channel_id_in_text_wins(self):
+        """`silver` / `krea2-*` 是后加渠道，不在 `_named_channel` 的固定词表里。
+
+        原话里字面出现了那个 id，同样算点名——补这条是为了不把「用 silver
+        画 zdy-233」也顶成预设渠道。
+        """
+        got = self._run("silver", "silver zdy-233 画个妹妹")
+        self.assertEqual(got["skill"], "silver")
+
     def test_no_preset_keeps_default(self):
         got = self._run("silver", "画一个双马尾黑发妹妹")
         self.assertEqual(got["skill"], "silver")
@@ -4120,3 +4138,65 @@ class PresetWebCmdTest(unittest.TestCase):
                 os.remove(p)
             except OSError:
                 pass
+
+
+class QuotedPresetTest(unittest.TestCase):
+    """引用图 + `zdy-` 预设 = 照这张的味道、用这套 LoRA 画一张新的（2026-10-30）。
+
+    233 粉丝群实录：引用一张图 + 「zdy-233」，机器人只回了一段反推提示词，
+    一张图没出。原因是这一轮落进了改图管道 `_revise`——那边把「图 + 一句话」
+    当修改请求交给模型，而 `zdy-233` 对模型只是个陌生词，它就只读图回文本。
+    判据是**去掉令牌后剩下的字数**：≤4 个字算「只说预设」，直接按预设出图；
+    带明确改图要求（「把衣服改成红色」）的仍旧交给 `_revise`。
+    """
+
+    def setUp(self):
+        from app import lora_presets as lp
+        lp.save("10000001", "233",
+                [{"slot": 1, "on": True, "strength": 1.0,
+                  "name": "a.safetensors"}], public=True)
+
+    def _decide(self, text, seen="1girl, solo, blue hair"):
+        with mock.patch.object(direct_gen.llm, "call_llm",
+                               return_value='{"skill": "silver", "prompt": "x"}'), \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="group_1"), \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=""), \
+             mock.patch("app.vision.describe", return_value=seen), \
+             mock.patch.object(direct_gen.image_log, "lookup",
+                               return_value=None), \
+             mock.patch.object(gi, "_generate_image",
+                               return_value=RECEIPT) as m_gen:
+            out = direct_gen.decide(text, [], False,
+                                    data_urls=["data:image/jpeg;base64,A"])
+            direct_gen._LAST_JOB.pop("group_1", None)
+        return out, m_gen
+
+    def test_preset_plus_image_queues_instead_of_reversing(self):
+        out, m_gen = self._decide("zdy-233")
+        self.assertEqual(out, "")           # 不是一段反推文本
+        self.assertEqual(m_gen.call_args[0][0], "1girl, solo, blue hair")
+        # 渠道交给预设自己定——传下去的 skill 必须是 None
+        self.assertIsNone(m_gen.call_args.kwargs["skill"])
+        self.assertEqual(m_gen.call_args.kwargs["preset"], "zdy-233")
+
+    def test_short_tail_after_preset_still_queues(self):
+        # 「跑一版」是语气不是要求，别把它当成改图请求丢给模型
+        out, m_gen = self._decide("zdy-233 跑一版")
+        self.assertEqual(out, "")
+        m_gen.assert_called_once()
+
+    def test_real_edit_request_still_goes_to_revise(self):
+        with mock.patch.object(direct_gen, "_revise",
+                               return_value="改图去了") as m_rev, \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="group_1"), \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=""), \
+             mock.patch.object(direct_gen.image_log, "lookup",
+                               return_value=None):
+            out = direct_gen.decide("zdy-233 把衣服改成红色", [], False,
+                                    data_urls=["data:image/jpeg;base64,A"])
+        m_rev.assert_called_once()
+        self.assertEqual(out, "改图去了")

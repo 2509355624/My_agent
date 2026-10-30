@@ -1969,15 +1969,24 @@ def _enqueue(skill, prompt, text, source_image=False, seed=None,
         # 令牌不是画面内容：留在提示词里会被当成标签画进图里
         if _tok in prompt:
             prompt = prompt.replace(_tok, " ").strip(" ，,、。")
-        # ── 预设自带渠道（2026-10-30 修）────────────────────────────
+        # ── 预设自带渠道（2026-10-30 修，同日晚二修）──────────────────
         # 预设是在某个渠道上调出来的一套**槽位号**，槽号只对那个模板有意义。
-        # 而调用方没点名时传下来的 `skill` 是兜底默认档（silver），那是代码
-        # 填的，不是用户选的：拿它套 moss 的槽位 = 3 个 moss LoRA 被按顺序
-        # 塞进 silver 的 2 个槽，出一张风格全错的图（私聊 zdy-233 实录）。
-        # 所以传下去的就是兜底值时，改传 None，让 generate_image 用预设
-        # 自己记的渠道（见它那段 `if not skill and _found.get("skill")`）。
+        # 而调用方没点名渠道时传下来的 `skill` 不是用户的选择：可能是兜底
+        # 默认档，更常见的是模型自己猜的（实测 `zdy-233跑一版` 被模型填成
+        # silver-hd）。拿它套 moss 的槽位 = 3 个 moss LoRA 被按顺序塞进
+        # silver 的 2 个槽，出一张风格全错的图。
+        # 判据只用代码可检测的事实：**原话里有没有点名渠道**。没点名就一律
+        # 交给预设自己的渠道；点名了就按点名的跑（`_named_channel` 只认固定
+        # 渠道词，不认画风词，不会把 `soft_focus` 这类误当渠道）。
         _named, _ = _named_channel(text or "")
-        if skill == _FALLBACK_SKILL and not _named:
+        # `_named_channel` 只认一张固定词表，而 silver / silver-hd / krea2-*
+        # 这些是后来从 skills/ 目录长出来的渠道，不在表里（实测「silver
+        # zdy-233」它返回 None）。所以再补一条字面判据：**原话里真的出现了
+        # 那个渠道 id** 也算点名。查的是完整 id，不是两个字的关键词，
+        # 不会把正文里的普通词误判成渠道。
+        if not _named and skill and str(skill).lower() in (text or "").lower():
+            _named = skill
+        if not _named:
             skill = None
     # skill 为 None = 「交给下游定」（预设渠道，再不行才默认档）。日志里
     # 不能打成 None，否则查日志时看不出这单到底走了哪条。
@@ -2907,6 +2916,37 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     #      `source_image`**，代码不扫机制词。图生文（「这画的是什么」）也走
     #      这里——模型判不是修改请求就回一段反推文本。
     if data_urls:
+        # ── `zdy-` 预设 + 引用图（2026-10-30）────────────────────────────
+        # 用户给一张图 + 一个 `zdy-` 名字，要的是「照这张、用这套 LoRA 画一张」。
+        # **不能落进下面的 `_revise`**：那边把「图 + 一句话」当修改请求交给
+        # 模型，而 `zdy-233` 对模型只是个陌生词，它就读图回一段反推文本，
+        # 一张图都不出——2026-10-30 定格群连着三条都是这样，用户原话
+        # 「大大怪没有直接反推提示词然后给我直接生图」。
+        # 走的是跟「引用图 + 只打渠道」同一条路：自家图查账本、别人的图识图
+        # 反推，拿到的 tag 直接当提示词入队；**渠道交给预设自己定**（`ch` 传
+        # 下去可能是 None，`_enqueue` 会按预设记的渠道走）。
+        # 判据「去掉令牌后剩不超过 4 个字」：`zdy-233`、`zdy-233 跑一版`、
+        # `zdy-233 画个妹妹` 都算「只说预设」；带明确改图要求（「把衣服改成
+        # 红色」）的不劫，仍旧交给 `_revise`。
+        from app import lora_presets as _lp
+        _ph = _lp.extract(text)
+        if _ph:
+            _rest = re.sub(r"[\s，,、。！!？?~～…·\-—]+", "",
+                           text[:_ph[1]] + text[_ph[2]:])
+        else:
+            _rest = ""
+        if _ph and len(_rest) <= 4:
+            own_prompt, _skill, own_seed = _ledger_hit(quoted)
+            # 多图反推放开到 3 张（2026-10-05 用户拍板）：turbo 免费烧得
+            # 起。numbered=False——合并结果直接当生成提示词，「（第 N 张）」
+            # 中文前缀是污染。
+            tags = own_prompt or _recall_tags(data_urls[:3], numbered=False)
+            if not tags:
+                return "没认出引用的图，重发一次，或直接 @我 渠道 描述。"
+            _remember_job(session_key, ch, tags)
+            seed = own_seed if (own_seed and ch and
+                                _LOCAL_SEED_SKILL_RE.match(ch)) else None
+            return _enqueue(ch, tags, text, seed=seed)
         if ch and not desc:
             own_prompt, _skill, own_seed = _ledger_hit(quoted)
             # 多图反推放开到 3 张（2026-10-05 用户拍板）：turbo 免费烧得
