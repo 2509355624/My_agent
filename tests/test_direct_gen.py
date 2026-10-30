@@ -4016,3 +4016,107 @@ class BooruOrderTest(unittest.TestCase):
         # qwen 专有的 cfg=1.0 那条不混进通用规则，收在渠道表 qwen 行
         self.assertNotIn("cfg=1.0", rules)
         self.assertIn("cfg=1.0", direct_gen._MASTER_TEMPLATE)
+
+
+class PresetChannelTest(unittest.TestCase):
+    """预设自带渠道（2026-10-30）。
+
+    预设是一套**槽位号**，槽号只对当初那个模板有意义。调用方没点名渠道时
+    传下来的 `skill` 是**兜底默认档**（silver，代码填的、不是用户选的）——
+    拿它套 moss 的槽位，3 个 moss LoRA 会被按顺序塞进 silver 的 2 个槽，
+    出一张风格全错的图（私聊 zdy-233 实录）。所以要改传 None，交给
+    generate_image 用预设自己记的渠道；用户真点名了就照点名的跑。
+    """
+
+    def _run(self, skill, text):
+        from unittest import mock
+        seen = {}
+
+        def fake(prompt, skill=None, **kw):
+            seen["skill"] = skill
+            seen["preset"] = kw.get("preset")
+            return "任务已收到，开始画了"
+
+        with mock.patch("app.tools.normal.generate_image._generate_image",
+                        side_effect=fake):
+            direct_gen._enqueue(skill, "1girl, solo", text)
+        return seen
+
+    def test_default_skill_yields_to_preset(self):
+        got = self._run("silver", "，zdy-233，画一个双马尾黑发妹妹")
+        self.assertIsNone(got["skill"])          # None = 让下游用预设渠道
+        self.assertEqual(got["preset"], "zdy-233")
+
+    def test_named_channel_wins(self):
+        got = self._run("moss-qunyou", "moss zdy-233 画个妹妹")
+        self.assertEqual(got["skill"], "moss-qunyou")
+
+    def test_no_preset_keeps_default(self):
+        got = self._run("silver", "画一个双马尾黑发妹妹")
+        self.assertEqual(got["skill"], "silver")
+        self.assertIsNone(got["preset"])
+
+
+class PresetWebCmdTest(unittest.TestCase):
+    """`/预设网页`（2026-10-30）：群聊只给一句，私聊才给地址。
+
+    地址是 Cloudflare Quick Tunnel 的随机域名，重启就换，所以只能是「读文件」
+    而不是「记在模板里」。文件没有 = 隧道没开，照实说，绝不拿旧地址顶上。
+    """
+
+    URL = "https://calm-otter-1234.trycloudflare.com"
+
+    def test_only_with_slash(self):
+        for t in ("/预设网页", "／预设网页", "/画图网页", "/群友页", "/预设地址"):
+            self.assertTrue(direct_gen._PRESET_WEB_RE.match(t), t)
+        # 裸说「预设网页」多半是在问「那是什么东西」，该交给 AI，不甩一张表
+        self.assertFalse(direct_gen._PRESET_WEB_RE.match("预设网页"))
+
+    def test_private_chat_gets_the_url(self):
+        from app import friend_site
+        from unittest import mock
+        with mock.patch.object(friend_site, "url", return_value=self.URL), \
+                mock.patch.object(direct_gen.qq_api, "current_context",
+                                  return_value=("private", "2509355624")):
+            text = direct_gen._preset_web_text()
+        self.assertIn(self.URL, text)
+        self.assertIn("验证码", text)
+
+    def test_group_chat_withholds_the_url(self):
+        from app import friend_site
+        from unittest import mock
+        with mock.patch.object(friend_site, "url", return_value=self.URL), \
+                mock.patch.object(direct_gen.qq_api, "current_context",
+                                  return_value=("group", "1103174141")):
+            text = direct_gen._preset_web_text()
+        self.assertNotIn(self.URL, text)
+        self.assertIn("私聊", text)
+
+    def test_tunnel_down_says_so(self):
+        from app import friend_site
+        from unittest import mock
+        with mock.patch.object(friend_site, "url", return_value=""):
+            text = direct_gen._preset_web_text()
+        self.assertIn("没开", text)
+        self.assertNotIn("https://", text)
+
+    def test_reader_rejects_junk(self):
+        """文件被手改坏时不能把垃圾地址发出去——对方只会以为页面挂了。"""
+        import os
+        from app import friend_site
+        p = friend_site.state_path("friend_url.txt")
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        try:
+            for junk in ("", "http://127.0.0.1:5175", "file:///C:/x",
+                         "not a url"):
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(junk)
+                self.assertEqual(friend_site.url(), "", junk)
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(self.URL + "/\n")
+            self.assertEqual(friend_site.url(), self.URL)
+        finally:
+            try:
+                os.remove(p)
+            except OSError:
+                pass

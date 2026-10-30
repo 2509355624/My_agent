@@ -75,6 +75,7 @@ import json
 import logging
 import os
 import re
+import time
 
 from app import image_jobs, image_log, llm, qq_api, random_tags
 from app.config import IMAGE_DEFAULT_SKILL, QQ_GROUP_KEYWORDS
@@ -189,6 +190,17 @@ _MENU_RE = re.compile(r"^\s*[\/／!！]?\s*(菜单|帮助|帮助菜单|help|指�
 _GUIDE_RE = re.compile(
     r"^\s*(?:[\/／]\s*菜单|使用指南|详细指南|详细使用指南|使用说明|帮助指南)\s*$",
     re.I)
+# 「/自定义预设」= 列公开预设池（2026-10-30）。**必须带斜杠**才认——裸说
+# 「自定义预设」经常是在问「这词什么意思」，那种该交给 AI 解释，不是甩一张表。
+# 走确定性查库、零 LLM：40 个名字让模型背一遍既费 token 又可能写错。
+_PRESET_CMD_RE = re.compile(r"^\s*[\/／]\s*自定义预设\s*$")
+
+# 「/预设网页」= 要群友页的网址（2026-10-30 用户拍板）。
+# **必须带斜杠**：裸说「预设网页」多半是在问「那是什么东西」，该交给 AI。
+# 群聊里只回「私聊我发你」——虽然进页面要 QQ 号 + 私聊验证码、陌生人本来就
+# 进不去，也没必要把入口挂在群里（管理员拍板的选项）。
+_PRESET_WEB_RE = re.compile(
+    r"^\s*[\/／]\s*(?:预设网页|画图网页|群友页|预设地址|群友网址)\s*$")
 # 生图意图粗判（画图动词）。「生成」后面 0~4 字内接「图」才算，避免
 # 「生成一下总结」误中。
 _INTENT_RE = re.compile(r"画|绘|来张|来一张|来幅|生成.{0,4}图|图.{0,2}一[张幅]")
@@ -1149,6 +1161,59 @@ def _parse_direct(text):
         return "", None, None
     return skill, prompt, ""
 
+# ─── 「/自定义预设」─────────────────────────────────────────
+# QQ 号 → 昵称，10 分钟缓存。列表里带上归属（`zdy-光影（小明）`）——
+# 只列名字的话，40 个名字里挑一个，群友根本不知道该去找谁问。
+_NICK_CACHE = {"ts": 0.0, "map": {}}
+
+
+def _nick_lookup(qq):
+    now = time.time()
+    if now - _NICK_CACHE["ts"] > 600:
+        try:
+            rows = qq_api.get_friend_list() or []
+            m = {}
+            for f in rows:
+                uid = str(f.get("user_id") or "")
+                if uid:
+                    m[uid] = (f.get("remark") or f.get("nickname") or "").strip()
+            _NICK_CACHE["map"] = m
+        except Exception:
+            # 好友列表拿不到就只列名字，**不能因为查不到昵称就把整条指令废掉**
+            log.warning("好友列表取不到，预设列表里不显示归属", exc_info=True)
+        _NICK_CACHE["ts"] = now      # 失败也记时间，别每条消息都撞一次
+    return _NICK_CACHE["map"].get(str(qq), "")
+
+
+def _preset_pool_text():
+    from app import lora_presets
+    return lora_presets.describe_pool(nick=_nick_lookup)
+
+
+def _preset_web_text():
+    """`/预设网页` 的正文。零 LLM：只读一个文件，读不到就照实说。
+
+    地址由 `friend_tunnel.py` 在拿到 Quick Tunnel 域名的那一刻写进
+    `state/friend_url.txt`——隧道重启就换地址，缓存或硬编任何一个旧值都会
+    发出一串打不开的链接。
+    """
+    from app import friend_site
+    url = friend_site.url()
+    if not url:
+        return ("群友页的隧道现在没开，所以没有地址可发（Quick Tunnel 每次重启"
+                "都会换域名，旧的发过去也是打不开的）。\n"
+                "让群主双击「启动群友隧道.bat」，起来之后这里就有了。")
+    tgt, _tid = qq_api.current_context()
+    if tgt == "group":
+        # 群里只给一句（2026-10-30 用户拍板）：进页面本来就要 QQ 号 + 私聊
+        # 验证码、陌生人进不去，但也没必要把入口挂在群里。
+        return "群友页的网址我私聊发你——先加我好友，私聊发「/预设网页」就行。"
+    return ("群友页：%s\n"
+            "打开后填你的 QQ 号，点「获取验证码」，验证码会发到这个私聊里。\n"
+            "进去可以调 LoRA 组合、存成预设；之后私聊或群里发"
+            "「zdy-名字 + 提示词」就能直接用那套。" % url)
+
+
 # ─── 提示词的「写法 + 语言」按渠道分家 ─────────────────────
 # 2026-10-05 用户点名要明确写进模板：「如果我给的是中文的需求，他要翻译成
 # 英文再跑图」——**这条必须明写**，不然模型看到中文输入很容易把中文原样抄进
@@ -1892,19 +1957,48 @@ def _enqueue(skill, prompt, text, source_image=False, seed=None,
         extra["seed"] = seed
     if resample_fn:
         extra["resample_fn"] = resample_fn
+    # 原话里带 `zdy-xxx` 令牌 → 交给下游套用那套 LoRA 槽位。
+    # **在这里抽而不是让十几个调用点各传一遍**：漏掉一个的表现是「预设说了
+    # 却没生效」，出图了、风格不对，最难查的那种。
+    from app import lora_presets as _lp
+    _hit = _lp.extract(text or "")
+    _tok = ""
+    if _hit:
+        _tok = (text or "")[_hit[1]:_hit[2]]
+        extra["preset"] = _tok
+        # 令牌不是画面内容：留在提示词里会被当成标签画进图里
+        if _tok in prompt:
+            prompt = prompt.replace(_tok, " ").strip(" ，,、。")
+        # ── 预设自带渠道（2026-10-30 修）────────────────────────────
+        # 预设是在某个渠道上调出来的一套**槽位号**，槽号只对那个模板有意义。
+        # 而调用方没点名时传下来的 `skill` 是兜底默认档（silver），那是代码
+        # 填的，不是用户选的：拿它套 moss 的槽位 = 3 个 moss LoRA 被按顺序
+        # 塞进 silver 的 2 个槽，出一张风格全错的图（私聊 zdy-233 实录）。
+        # 所以传下去的就是兜底值时，改传 None，让 generate_image 用预设
+        # 自己记的渠道（见它那段 `if not skill and _found.get("skill")`）。
+        _named, _ = _named_channel(text or "")
+        if skill == _FALLBACK_SKILL and not _named:
+            skill = None
+    # skill 为 None = 「交给下游定」（预设渠道，再不行才默认档）。日志里
+    # 不能打成 None，否则查日志时看不出这单到底走了哪条。
+    _shown = skill or (_tok if _hit else "默认")
     try:
         result = gi._generate_image(
             prompt, skill=skill, _skip_confirm=True, **extra)
     except Exception:
         log.exception("[direct] 直接入队失败")
         return "生图请求没发出去，稍后再试。"
-    log.info("[direct] 直达入队：%s %r（原话 %r）", skill, prompt[:50],
+    # 先判错误再记「已入队」：从前这两行在错误路径上也会打，日志写着
+    # 「直达入队成功」而实际什么都没排上（2026-10-30 查 `zdy-233` 时踩到）。
+    if result.startswith("错误："):
+        log.warning("[direct] 未入队：%s %r → %s", _shown, prompt[:50],
+                    result[:120])
+        return _humanize_error(result)
+    log.info("[direct] 直达入队：%s %r（原话 %r）", _shown, prompt[:50],
              text[:50])
-    _note_desc("[直达生图] %s：%s" % (skill, prompt[:200]))
+    _note_desc("[直达生图] %s：%s" % (_shown, prompt[:200]))
     if result.startswith(image_jobs.RECEIPT_SENT_MARK):
         return ""          # 回执已由工具直发，本轮闭嘴
-    if result.startswith("错误："):
-        return _humanize_error(result)
     return result
 
 
@@ -2630,6 +2724,13 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
             return _enqueue(d_skill, d_prompt, text,
                             source_image=bool(data_urls))
         # d_skill == ""：渠道段认不出 → 不直通，继续往下交 AI。
+    # 「/自定义预设」= 列公开池，零 LLM 查库直回（见上方 `_PRESET_CMD_RE`）
+    if _PRESET_CMD_RE.match(text):
+        return _preset_pool_text()
+    # 「/预设网页」= 群友页地址（2026-10-30）。零 LLM，只读一个文件；
+    # 放在这里而不是模板里——地址每次重启都变，模型记不住也不该记。
+    if _PRESET_WEB_RE.match(text):
+        return _preset_web_text()
     # 详细使用指南（/菜单、使用指南）：零 LLM，常量直回。比菜单判断更前，
     # 因为「/菜单」含「菜单」二字，得先于短菜单分支。
     if _GUIDE_RE.match(text):

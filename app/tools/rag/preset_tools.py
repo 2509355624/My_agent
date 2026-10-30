@@ -91,8 +91,9 @@ def preset_save(name, prompt, negative_prompt="", params="", note=""):
     result = _get_client().ingest(_kb_for(qq), [entry])
     if not result.get("ok"):
         return "[保存失败] " + result.get("error", "未知错误")
-    return ("[预设 '%s'] 已保存（QQ %s 私有）。用 preset_search / preset_list 查看，"
-            "或说『用这个预设画一张』即可调用。" % (name, qq))
+    return ("[预设 '%s'] 已保存（QQ %s 私有）。用 preset_search / preset_list 查看。"
+            "注意：这里存的是**提示词**；要连 LoRA 组合一起复用，让他在网页上"
+            "存成 `zdy-` 预设。" % (name, qq))
 
 
 def preset_search(query, k=3):

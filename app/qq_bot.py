@@ -579,6 +579,15 @@ REASON_NO_MENTION = "未 @ 且未命中关键词"
 # 更前——关键词可能被群里闲聊误撞，前缀是刻意写的命令，不会误伤。
 _DIRECT_PREFIX_RE = re.compile(r"^\s*[\/／]\s*直通\s*[-－—]")
 
+# 「/自定义预设」= 查公开预设池（2026-10-30）。同样**等同被 @**：群里发指令
+# 还要求先 @ 一下机器人太别扭，而且这条命令本身零成本（纯查库，不调模型）。
+_PRESET_CMD_RE = re.compile(r"^\s*[\/／]\s*自定义预设\s*$")
+
+# 「/预设网页」= 要群友页地址（2026-10-30）。同样**等同被 @**：查的是本地一个
+# 文件，零成本，没必要先 @ 一下。
+_PRESET_WEB_RE = re.compile(
+    r"^\s*[\/／]\s*(?:预设网页|画图网页|群友页|预设地址|群友网址)\s*$")
+
 
 def _private_gate(user_id):
     """私聊闸：settings.json 优先（管理页热改，不用重启），缺省回落 .env。
@@ -688,6 +697,10 @@ def _should_reply(ev, target, target_id, text, at_me, has_image=False,
     # 「/直通-」前缀等同被 @：用户刻意写的下单命令，直接放行（见上方常量注释）。
     if _DIRECT_PREFIX_RE.match(text):
         return True, "直通前缀"
+    if _PRESET_CMD_RE.match(text):
+        return True, "预设指令"
+    if _PRESET_WEB_RE.match(text):
+        return True, "预设网页指令"
     # 「只认 @」的群（管理页可逐群开）：关键词这条路直接掐掉，只有真 @ 才回。
     if group_id not in _at_only_groups():
         for kw in QQ_GROUP_KEYWORDS:

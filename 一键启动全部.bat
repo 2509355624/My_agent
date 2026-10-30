@@ -12,6 +12,8 @@ set "WEB_BAT=%~dp0一键启动.bat"
 set "NAPCAT_BAT=D:\AI\NapCat\启动NapCat.bat"
 set "SNOWLUMA_BAT=%~dp0启动SnowLuma.bat"
 set "BOT_BAT=%~dp0启动QQ机器人.bat"
+set "FRIEND_BAT=%~dp0启动群友页.bat"
+set "TUNNEL_BAT=%~dp0启动群友隧道.bat"
 rem ComfyUI 是**可选**的：缺了只影响生图，聊天照常，所以下面只 WARN 不 exit。
 set "COMFY_BAT=%~dp0启动ComfyUI.bat"
 
@@ -58,7 +60,7 @@ set "AUTO_RUN="
 if /i "%~2"=="auto" set "AUTO_RUN=1"
 
 echo ==================================================
-echo   全部启动 : Agent 网页 + %PROTO_NAME% + QQ 适配层 + ComfyUI + llama.cpp
+echo   全部启动 : Agent 网页 + 群友页 + 公网隧道 + %PROTO_NAME% + QQ 适配层 + ComfyUI + llama.cpp
 echo ==================================================
 echo.
 echo   【注意】会强制结束 QQ 客户端
@@ -81,6 +83,12 @@ if not exist "%BOT_BAT%" (
     if not defined AUTO_RUN pause
     exit /b 1
 )
+if not exist "%FRIEND_BAT%" (
+    echo [WARN] 找不到 "%FRIEND_BAT%"，群友页不会启动
+)
+if not exist "%TUNNEL_BAT%" (
+    echo [WARN] 找不到 "%TUNNEL_BAT%"，公网隧道不会启动
+)
 
 rem 协议端已在跑说明小号已登录，重启要重新扫码 -> 跳过它，只重启网页端和适配层
 set "PROTO_RUNNING="
@@ -91,6 +99,16 @@ for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":5174 " ^| findstr "L
     echo       结束网页端 PID %%a
     taskkill /PID %%a /F >nul 2>&1
 )
+rem 群友页是独立进程（5175），不复用 5174 的进程；不先收掉再 start 会端口占用。
+rem 2026-10-30 加：用户要求「一键启动全部」把群友页一起拉起。
+for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":5175 " ^| findstr "LISTENING"') do (
+    echo       关闭群友页 PID %%a
+    taskkill /PID %%a /F >nul 2>&1
+)
+taskkill /FI "WINDOWTITLE eq FRIEND-WEB" /F >nul 2>&1
+rem 隧道同理：不收掉会同时挂两条，state\friend_url.txt 里留下的可能是
+rem 上一条的地址，群友点开就是 1033。
+taskkill /FI "WINDOWTITLE eq FRIEND-TUNNEL" /F >nul 2>&1
 rem 关掉上一次的网页端窗口（cmd 会跟着命令改名，所以 一键启动.bat 里显式 title 了）
 rem 不带 /T：那个窗口里还挂着 start 拉起来的浏览器，别顺手把人家的浏览器关了
 taskkill /FI "WINDOWTITLE eq AGENT-WEB" /F >nul 2>&1
@@ -156,6 +174,21 @@ rem 子脚本会重新猜 python，把这里已经找到的传下去（否则它会落到 PATH）
 set "AGENT_PY=%PY%"
 start "AGENT-WEB" cmd /k "%WEB_BAT%"
 echo       Agent Web        网页端  http://localhost:5174
+rem 群友页要等 5174 起来才有后端可代理，所以排在同一步之后、协议端之前。
+rem banner 打印完就立刻 start 会赶在 5174 bind 之前，启动脚本里那条
+rem "5174 没监听" 的 WARN 会误报，所以等两秒。
+ping -n 3 127.0.0.1 >nul
+if exist "%FRIEND_BAT%" (
+    start "FRIEND-WEB" cmd /k "%FRIEND_BAT%"
+    echo       FRIEND-WEB       群友页  http://127.0.0.1:5175
+)
+rem 隧道要等 5175 真监听上：提前建也能成，但公网打开是空页面。
+rem 地址由 friend_tunnel.py 写进 state\friend_url.txt，机器人回 /预设网页 时读它。
+if exist "%TUNNEL_BAT%" (
+    ping -n 3 127.0.0.1 >nul
+    start "FRIEND-TUNNEL" cmd /k "%TUNNEL_BAT%"
+    echo       FRIEND-TUNNEL    公网隧道（随机地址，重启就换）
+)
 if defined FORCE_RESTART (
     start "%PROTO_NAME%" cmd /k "%PROTO_BAT%"
     echo       %PROTO_NAME%           QQ 协议端 [force]

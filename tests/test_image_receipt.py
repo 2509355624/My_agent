@@ -285,6 +285,25 @@ class ReceiptNoteTest(_SubmitHarness):
                                return_value=""):
             self.assertEqual(gi._receipt_text(0), "任务已提交，正在画了。")
 
+    def test_preset_name_rides_along_with_the_channel(self):
+        """用了 zdy- 预设：渠道行要把预设名一起报出来。
+
+        预设会把渠道顶成它自己记的那个（moss-qunyou），只报渠道，群友会以为
+        「我点的 zdy-233 没生效」（2026-10-30 群聊实录，当场被问）。
+        """
+        with mock.patch.object(agent_store, "receipt_note",
+                               return_value=""):
+            text = gi._receipt_text(0, "moss-qunyou", preset="zdy-233")
+        self.assertEqual(text.splitlines()[1],
+                         "当前渠道：moss-qunyou（预设 zdy-233）")
+
+    def test_preset_without_channel_still_names_it(self):
+        """渠道名取不到也别把预设名吞掉——那是用户唯一认得的东西。"""
+        with mock.patch.object(agent_store, "receipt_note",
+                               return_value=""):
+            text = gi._receipt_text(0, None, preset="zdy-233")
+        self.assertEqual(text.splitlines()[1], "当前预设：zdy-233")
+
 
 class ReceiptSendFailureTest(_SubmitHarness):
     def test_failure_falls_back_to_the_old_receipt(self):

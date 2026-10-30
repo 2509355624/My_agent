@@ -27,6 +27,7 @@ from app import vision as vision_mod
 from app import comic_api
 from app import moss_api
 from app import gen_api
+from app import friend_api
 from app import card_api
 from app import output_api
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
@@ -120,6 +121,28 @@ app.register_blueprint(moss_api.bp)
 
 # 手动跑图台 API（独立 Blueprint，见 app/gen_api.py）：无 AI 的文生图页面
 app.register_blueprint(gen_api.bp)
+
+# 群友生图页的内核（独立 Blueprint，见 app/friend_api.py）。**不对公网**：
+# 只有 5175（friend_app.py）带 X-Friend-Token 转发进来时才认。
+app.register_blueprint(friend_api.bp)
+
+
+@app.before_request
+def _tunnel_guard():
+    """万一隧道错指到 5174，也只放行群友页那几个接口。
+
+    隧道连的是 127.0.0.1:5174，`remote_addr` 和本机浏览器一模一样，分不开；
+    但隧道请求一定带 `CF-Connecting-IP`（或 `CF-Ray`），本机浏览器不会。
+    所以这一道能准确识别「这是从公网进来的」，并把管理页、输出删除、agent
+    聊天全部挡在外面——隧道本身是 5175 的，这里只是双保险。
+    """
+    if not (request.headers.get("CF-Connecting-IP")
+            or request.headers.get("CF-Ray")):
+        return None
+    p = request.path or ""
+    if p.startswith("/api/friend/") or p == "/health":
+        return None
+    return jsonify({"ok": False, "error": "not found"}), 404
 
 # 角色卡工作台 API（独立 Blueprint，见 app/card_api.py）：一句话 → 星陨AI 的
 # 五个文本框 + 竖版封面

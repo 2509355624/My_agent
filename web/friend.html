@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>大大怪 · 生图页</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%237c5cff'/></svg>">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  :root {
+    --bg: #0a0a0f; --bg-elev: #12121a; --bg-input: #1a1a24;
+    --border: #2a2a3a; --border-soft: #1f1f2e;
+    --text: #e8e8f0; --text-dim: #8888a0; --text-mute: #555570;
+    --accent: #7c5cff; --success: #4ade80; --error: #f87171;
+    --warn: #fbbf24; --info: #4fc3f7; --radius: 12px; --radius-sm: 8px;
+  }
+  html, body { background: var(--bg); color: var(--text); height: 100%;
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 14px; }
+  body { display: flex; flex-direction: column; overflow: hidden; }
+
+  .topbar { display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+    border-bottom: 1px solid var(--border-soft); flex: none; }
+  .topbar .brand { font-size: 15px; font-weight: 600; letter-spacing: .5px; }
+  .topbar .brand i { color: var(--accent); font-style: normal; }
+  .topbar .sp { flex: 1; }
+  .topbar .who { color: var(--text-dim); font-size: 12px; }
+  .btn { background: var(--bg-input); color: var(--text); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 7px 14px; font-size: 13px; cursor: pointer;
+    font-family: inherit; transition: border-color .15s, background .15s; }
+  .btn:hover:not(:disabled) { border-color: var(--accent); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff;
+    font-weight: 500; }
+  .btn.primary:hover:not(:disabled) { background: #8d70ff; }
+  .btn.sm { padding: 4px 10px; font-size: 12px; }
+  .btn.danger { color: var(--error); }
+
+  /* ── 登录 ── */
+  #login { flex: 1; display: flex; align-items: center; justify-content: center;
+    padding: 24px; overflow-y: auto; }
+  .card { width: 100%; max-width: 360px; background: var(--bg-elev);
+    border: 1px solid var(--border-soft); border-radius: var(--radius); padding: 26px 22px; }
+  .card h2 { font-size: 17px; font-weight: 600; margin-bottom: 6px; }
+  .card p.hint { color: var(--text-mute); font-size: 12px; line-height: 1.7;
+    margin-bottom: 20px; }
+  .field { margin-bottom: 12px; }
+  .field label { display: block; color: var(--text-dim); font-size: 12px;
+    margin-bottom: 6px; }
+  input[type=text], input[type=number], textarea { width: 100%; background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);
+    padding: 10px 12px; font-size: 14px; font-family: inherit; outline: none; }
+  input:focus, textarea:focus { border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 96px; line-height: 1.6; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  .msg { font-size: 12px; margin-top: 10px; line-height: 1.6; min-height: 18px; }
+  .msg.err { color: var(--error); }
+  .msg.ok { color: var(--success); }
+
+  /* ── 主界面 ── */
+  #app { flex: 1; display: none; min-height: 0; }
+  #app.on { display: flex; }
+  .left { width: 340px; flex: none; border-right: 1px solid var(--border-soft);
+    display: flex; flex-direction: column; background: var(--bg-elev); overflow-y: auto; }
+  .right { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+  .sec { padding: 14px; border-bottom: 1px solid var(--border-soft); }
+  .sec:last-child { border-bottom: none; }
+  .sec-h { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .sec-h h3 { font-size: 13px; font-weight: 500; color: var(--text-dim); }
+  .sec-h .sp { flex: 1; }
+  .sec-h .cnt { color: var(--text-mute); font-size: 12px; }
+
+  /* LoRA 槽 */
+  .slot { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+  .slot label { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0;
+    cursor: pointer; }
+  .slot .nm { font-size: 12px; color: var(--text-dim); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .slot.on .nm { color: var(--text); }
+  .slot input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent);
+    flex: none; cursor: pointer; }
+  .slot input[type=number] { width: 62px; flex: none; padding: 4px 7px; font-size: 12px;
+    text-align: center; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { background: var(--bg-input); border: 1px solid var(--border);
+    border-radius: 999px; padding: 5px 12px; font-size: 12px; cursor: pointer;
+    display: flex; align-items: center; gap: 6px; }
+  .chip:hover { border-color: var(--accent); }
+  .chip .x { color: var(--text-mute); font-size: 14px; line-height: 1; }
+  .chip .x:hover { color: var(--error); }
+  /* 公开的预设描边用主色——它是唯一「群里别人也能用」的那个 */
+  .chip.pub { border-color: var(--accent); }
+  .chip .star { font-size: 13px; line-height: 1; color: var(--text-mute); }
+  .chip .star.on, .chip .star:hover { color: var(--accent); }
+  .pquota { font-size: 11px; color: var(--text-mute); line-height: 1.8;
+    margin: -2px 0 9px; }
+  .pquota b { color: var(--text-dim); font-weight: 600; }
+
+  .sw { display: flex; align-items: center; gap: 8px; font-size: 12px;
+    color: var(--text-dim); cursor: pointer; margin-top: 10px; }
+  .sw input { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+
+  /* 进度 */
+  .job { background: var(--bg-elev); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: 12px 14px; margin: 14px 14px 0; }
+  .job .l1 { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .job .st { margin-left: auto; font-size: 12px; }
+  .job .st.queued { color: var(--warn); }
+  .job .st.running { color: var(--info); }
+  .job .st.done { color: var(--success); }
+  .job .st.error { color: var(--error); }
+  .job .p { color: var(--text-mute); font-size: 12px; margin-top: 6px;
+    word-break: break-all; max-height: 44px; overflow: hidden; }
+  .bar { height: 3px; background: var(--bg-input); border-radius: 2px; margin-top: 10px;
+    overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 30%; background: var(--accent);
+    border-radius: 2px; animation: slide 1.4s ease-in-out infinite; }
+  @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }
+
+  /* 右侧 = 画布：进度条在上，下面是「刚画好的那张」。
+     窄屏（手机）没有「右边」这个概念，画布整块隐藏，改成出图时弹灯箱，
+     否则会在地表单下面白占一大块，又回到之前那个遮挡问题。 */
+  .right { flex: 1; min-width: 0; display: flex; flex-direction: column;
+    min-height: 0; overflow: hidden; }
+  #jobBox:empty { display: none; }
+
+  .stage { flex: 1; min-height: 0; display: flex; flex-direction: column;
+    align-items: center; gap: 12px; padding: 18px 18px 16px; }
+  .stage-empty { flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 6px;
+    color: var(--text-mute); font-size: 13px; line-height: 1.9;
+    text-align: center; }
+  .stage-empty b { font-weight: 500; color: var(--text-dim); }
+  .stage-pic { flex: 1; min-height: 0; display: flex; flex-direction: column;
+    align-items: center; gap: 10px; width: 100%; }
+  /* 图片吃掉剩余高度（flex:1 + object-fit:contain），2:3 竖图在宽屏里
+     左右留白，但永远顶不满、也压不到下面的按钮 */
+  .stage-pic img { flex: 1; min-height: 0; width: 100%; object-fit: contain;
+    border-radius: var(--radius); cursor: zoom-in; }
+  .stage-ops { display: flex; gap: 8px; flex-wrap: wrap;
+    justify-content: center; flex: none; }
+  .stage-cap { color: var(--text-mute); font-size: 11px; flex: none; }
+
+  /* 历史独立页 */
+  #viewHist { position: fixed; inset: 0; background: var(--bg); display: none;
+    flex-direction: column; z-index: 30; }
+  #viewHist.on { display: flex; }
+  .hist-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+    border-bottom: 1px solid var(--border-soft); background: var(--bg-elev); flex: none; }
+  .hist-bar h3 { font-size: 15px; font-weight: 600; }
+  .hist-bar .sp { flex: 1; }
+  .hist-bar .cnt { color: var(--text-mute); font-size: 12px; }
+  .hist-body { flex: 1; overflow-y: auto; padding: 14px; }
+
+  /* 历史 */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+    gap: 8px; }
+  .thumb { position: relative; aspect-ratio: 2/3; border-radius: var(--radius-sm);
+    overflow: hidden; background: var(--bg-input); cursor: pointer;
+    border: 1px solid var(--border-soft); }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb.gone { display: flex; align-items: center; justify-content: center;
+    color: var(--text-mute); font-size: 12px; text-align: center; padding: 8px; }
+  .empty { color: var(--text-mute); text-align: center; padding: 50px 0; font-size: 13px;
+    line-height: 2; }
+
+  /* 灯箱 */
+  #box { position: fixed; inset: 0; background: rgba(0,0,0,.94); display: none;
+    align-items: center; justify-content: center; z-index: 50; flex-direction: column; }
+  #box.on { display: flex; }
+  #box img { max-width: 94vw; max-height: 78vh; object-fit: contain;
+    border-radius: var(--radius-sm); }
+  #box .ops { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap;
+    justify-content: center; padding: 0 14px; }
+  #box .cap { color: var(--text-dim); font-size: 12px; margin-top: 10px; }
+
+  @media (max-width: 760px) {
+    /* 手机上整屏归表单：13 个 LoRA 槽本来就长，别再和进度抢空间。
+       进度框只在真有任务时出现，钉在底部一直看得见。 */
+    #app.on { flex-direction: column; }
+    .left { width: auto; flex: 1; max-height: none; border-right: none;
+      border-bottom: none; }
+    .right { flex: none; }
+    /* 手机上画布不占位：出图直接弹灯箱（见 watch() 里的 isNarrow 分支） */
+    .stage { display: none; }
+    /* 进度框钉在底部时不贴死屏幕边（iPhone 还有一条 home 指示条要吃） */
+    .job { margin-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
+    .grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand">大大怪<i> · </i>生图</span>
+  <span class="sp"></span>
+  <span class="who" id="who"></span>
+  <button class="btn sm" id="logoutBtn" style="display:none">退出</button>
+</div>
+
+<!-- 登录 -->
+<div id="login">
+  <div class="card">
+    <h2>先确认是你本人</h2>
+    <p class="hint">填你的 QQ 号，点「获取验证码」，大大怪会私聊你一个 6 位数字。<br>
+      只有已经加了好友的号才能收到。</p>
+    <div class="field">
+      <label>QQ 号</label>
+      <input type="text" id="qq" inputmode="numeric" autocomplete="off" placeholder="例如 123456789">
+    </div>
+    <div class="field">
+      <label>验证码</label>
+      <div class="row">
+        <input type="text" id="code" inputmode="numeric" autocomplete="one-time-code"
+               maxlength="6" placeholder="6 位数字">
+        <button class="btn" id="sendBtn" style="flex:none;width:118px">获取验证码</button>
+      </div>
+    </div>
+    <button class="btn primary" id="verifyBtn" style="width:100%;margin-top:6px">进入</button>
+    <div class="msg" id="loginMsg"></div>
+  </div>
+</div>
+
+<!-- 主界面 -->
+<div id="app">
+  <div class="left">
+    <div class="sec">
+      <div class="sec-h">
+        <h3>LoRA 组合</h3>
+        <span class="sp"></span>
+        <span class="cnt" id="loraCnt"></span>
+      </div>
+      <div id="slots"></div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-h">
+        <h3>我的预设</h3>
+        <span class="sp"></span>
+        <button class="btn sm" id="savePresetBtn">存当前组合</button>
+      </div>
+      <div class="pquota" id="presetQuota"></div>
+      <div class="chips" id="presetList"></div>
+      <div class="msg" id="presetMsg"></div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-h"><h3>提示词</h3></div>
+      <textarea id="prompt" placeholder="英文 tag 效果最好，例如：
+1girl, solo, white hair, blue eyes, smile, upper body, simple background"></textarea>
+      <label class="sw"><input type="checkbox" id="sendQQ" checked>
+        画好后也私聊发我一份</label>
+      <button class="btn primary" id="goBtn" style="width:100%;margin-top:12px">
+        生成</button>
+      <div class="msg" id="mainMsg"></div>
+      <button class="btn" id="openHistBtn" style="width:100%;margin-top:4px">
+        我画过的</button>
+    </div>
+  </div>
+
+  <div class="right">
+    <div id="jobBox"></div>
+    <div class="stage">
+      <div class="stage-empty" id="stageEmpty">
+        <b>画好的图会显示在这里</b>
+        <span>在左边选好 LoRA、写好提示词，点「生成」</span>
+      </div>
+      <div class="stage-pic" id="stagePic" style="display:none">
+        <img id="stageImg" alt="">
+        <div class="stage-ops">
+          <button class="btn sm" id="stageFull">看大图</button>
+          <button class="btn sm" id="stageDl">下载</button>
+          <button class="btn sm" id="stageSave">用这套组合存预设</button>
+        </div>
+        <div class="stage-cap" id="stageCap"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="viewHist">
+  <div class="hist-bar">
+    <button class="btn sm" id="histBack">‹ 返回</button>
+    <h3>我画过的</h3>
+    <span class="sp"></span>
+    <span class="cnt" id="histCnt"></span>
+  </div>
+  <div class="hist-body">
+    <div class="grid" id="hist"></div>
+    <div class="empty" id="histEmpty">还没有画过图</div>
+  </div>
+</div>
+
+<div id="box">
+  <img id="boxImg" alt="">
+  <div class="cap" id="boxCap"></div>
+  <div class="ops">
+    <button class="btn" id="boxPreset">用这张的 LoRA 存预设</button>
+    <a class="btn" id="boxDl" download>下载</a>
+    <button class="btn" id="boxClose">关闭</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var state = { qq: '', slots: [], presets: [], quota: null, prefix: 'zdy-',
+    hist: [], boxTag: null, timer: null,
+    stageFile: null, stageTag: null, stageLoras: null };
+
+  function api(path, opts) {
+    opts = opts || {};
+    return fetch(path, {
+      method: opts.method || 'GET',
+      headers: opts.body ? { 'Content-Type': 'application/json' } : {},
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+      credentials: 'same-origin'
+    }).then(function (r) {
+      return r.json().catch(function () { return { ok: false, error: '服务器返回看不懂' }; })
+        .then(function (d) { d.__status = r.status; return d; });
+    }).catch(function () {
+      return { ok: false, error: '网络断了，检查一下再试', __status: 0 };
+    });
+  }
+
+  function say(el, text, cls) {
+    el.textContent = text || '';
+    el.className = 'msg' + (cls ? ' ' + cls : '');
+  }
+
+  // ── 登录 ──────────────────────────────────────────
+
+  var sendTimer = 0;
+  function countdown(sec) {
+    var btn = $('sendBtn');
+    clearInterval(sendTimer);
+    if (sec <= 0) { btn.disabled = false; btn.textContent = '获取验证码'; return; }
+    btn.disabled = true;
+    btn.textContent = sec + ' 秒后重发';
+    sendTimer = setInterval(function () {
+      sec -= 1;
+      if (sec <= 0) { clearInterval(sendTimer); btn.disabled = false;
+        btn.textContent = '获取验证码'; }
+      else { btn.textContent = sec + ' 秒后重发'; }
+    }, 1000);
+  }
+
+  $('sendBtn').onclick = function () {
+    var qq = $('qq').value.trim();
+    if (!/^[1-9][0-9]{4,11}$/.test(qq)) {
+      say($('loginMsg'), 'QQ 号看着不对，检查一下', 'err'); return;
+    }
+    $('sendBtn').disabled = true;
+    say($('loginMsg'), '正在发…');
+    api('/login/send', { method: 'POST', body: { qq: qq } }).then(function (d) {
+      if (d.ok) {
+        say($('loginMsg'), d.message || '验证码已发出', 'ok');
+        countdown(60); $('code').focus();
+      } else {
+        say($('loginMsg'), d.error || d.message || '发不出去', 'err');
+        $('sendBtn').disabled = false;
+      }
+    });
+  };
+
+  $('verifyBtn').onclick = function () {
+    var qq = $('qq').value.trim(), code = $('code').value.trim();
+    if (!code) { say($('loginMsg'), '把收到的 6 位数字填上', 'err'); return; }
+    $('verifyBtn').disabled = true;
+    say($('loginMsg'), '验证中…');
+    api('/login/verify', { method: 'POST', body: { qq: qq, code: code } })
+      .then(function (d) {
+        $('verifyBtn').disabled = false;
+        if (d.ok) { enter(qq); }
+        else { say($('loginMsg'), d.error || '验证没过', 'err'); }
+      });
+  };
+
+  function enter(qq) {
+    state.qq = qq;
+    $('login').style.display = 'none';
+    $('app').classList.add('on');
+    $('who').textContent = qq;
+    $('logoutBtn').style.display = '';
+    loadLoras(); loadPresets(); loadHistory();
+    // 直接从 .../#hist 打开时要把历史页显示出来（popstate 不会为首屏触发）
+    applyRoute();
+  }
+
+  $('logoutBtn').onclick = function () {
+    api('/logout', { method: 'POST', body: {} }).then(function () {
+      location.reload();
+    });
+  };
+
+  // ── LoRA 槽 ───────────────────────────────────────
+
+  function loadLoras() {
+    api('/api/friend/loras').then(function (d) {
+      if (!d.ok) { say($('mainMsg'), d.error || '读不到 LoRA 列表', 'err'); return; }
+      state.slots = d.slots || [];
+      state.range = d.range || [0, 2];
+      renderSlots();
+    });
+  }
+
+  function renderSlots() {
+    var box = $('slots');
+    box.innerHTML = '';
+    state.slots.forEach(function (s) {
+      var row = document.createElement('div');
+      row.className = 'slot' + (s.on ? ' on' : '');
+      row.dataset.slot = s.slot;
+      var lb = document.createElement('label');
+      var cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.checked = !!s.on;
+      cb.onchange = function () { s.on = cb.checked;
+        row.classList.toggle('on', cb.checked); refreshCnt(); };
+      var nm = document.createElement('span');
+      nm.className = 'nm'; nm.textContent = s.name.replace(/\.safetensors$/i, '');
+      nm.title = s.name;
+      lb.appendChild(cb); lb.appendChild(nm);
+      var num = document.createElement('input');
+      num.type = 'number'; num.step = '0.05'; num.min = state.range[0];
+      num.max = state.range[1]; num.value = s.strength;
+      num.oninput = function () { s.strength = parseFloat(num.value) || 0; };
+      row.appendChild(lb); row.appendChild(num);
+      box.appendChild(row);
+    });
+    refreshCnt();
+  }
+
+  function refreshCnt() {
+    var on = state.slots.filter(function (s) { return s.on; }).length;
+    $('loraCnt').textContent = on + ' / ' + state.slots.length + ' 已开';
+  }
+
+  function currentLoras() {
+    // 全量提交：勾着的传 on:true，没勾的传 on:false——只传勾着的，
+    // 模板里原本开着的槽就关不掉了。
+    //
+    // **name 必须一起带上**（2026-10-30 修）：漏了它，后端只能存下一串
+    // 空名字的槽位，`lora_string()` 拼不出任何 LoRA，QQ 那边就报「这套预设
+    // 全关着」——用户照着提示重新存，还是空名字，永远修不好。
+    return state.slots.map(function (s) {
+      return { slot: s.slot, on: !!s.on, strength: s.strength, name: s.name };
+    });
+  }
+
+  // ── 预设 ──────────────────────────────────────────
+
+  function loadPresets() {
+    api('/api/friend/presets').then(function (d) {
+      if (!d.ok) return;
+      state.presets = d.rows || [];
+      state.quota = d.quota || null;
+      if (d.prefix) state.prefix = d.prefix;
+      renderPresets();
+    });
+  }
+
+  function renderQuota() {
+    var q = state.quota;
+    if (!q) { $('presetQuota').textContent = ''; return; }
+    $('presetQuota').innerHTML =
+      '公开 <b>' + q.public + '/' + q.public_max + '</b>' +
+      '　私有 <b>' + q.private + '/' + q.private_max + '</b>' +
+      '　点 ☆ 变公开后，群里发「' + state.prefix + '名字 + 提示词」就能用';
+  }
+
+  function renderPresets() {
+    renderQuota();
+    var box = $('presetList');
+    box.innerHTML = '';
+    if (!state.presets.length) {
+      box.innerHTML = '<span style="color:var(--text-mute);font-size:12px">' +
+        '还没有预设。调好组合后点上面的「存当前组合」。</span>';
+      return;
+    }
+    state.presets.forEach(function (p) {
+      var chip = document.createElement('span');
+      chip.className = 'chip' + (p.public ? ' pub' : '');
+      // ☆ / ★ 是公开开关：私有的只有自己私聊能用，公开的群里别人也能用
+      var star = document.createElement('span');
+      star.className = 'star' + (p.public ? ' on' : '');
+      star.textContent = p.public ? '★' : '☆';
+      star.title = p.public ? '已公开 · 点一下取消' : '设为公开（群里别人也能用）';
+      star.onclick = function (e) { e.stopPropagation(); togglePublic(p); };
+      var t = document.createElement('span');
+      t.textContent = p.name;
+      t.title = '套用这套组合';
+      t.onclick = function () { applyPreset(p); };
+      var x = document.createElement('span');
+      x.className = 'x'; x.textContent = '×'; x.title = '删除';
+      x.onclick = function (e) {
+        e.stopPropagation();
+        if (!confirm('删掉预设「' + p.name + '」？')) return;
+        api('/api/friend/preset?name=' + encodeURIComponent(p.name),
+            { method: 'DELETE' }).then(function (d) {
+          if (d.ok) loadPresets();
+          else say($('presetMsg'), d.error || '删不掉', 'err');
+        });
+      };
+      chip.appendChild(star); chip.appendChild(t); chip.appendChild(x);
+      box.appendChild(chip);
+    });
+  }
+
+  function togglePublic(p) {
+    api('/api/friend/preset/public', {
+      method: 'POST', body: { name: p.name, public: !p.public }
+    }).then(function (d) {
+      if (d.ok) { say($('presetMsg'), d.msg || '已更新', 'ok'); loadPresets(); }
+      else say($('presetMsg'), d.error || '改不了', 'err');
+    });
+  }
+
+  function applyPreset(p) {
+    var map = {};
+    (p.loras || []).forEach(function (l) { map[l.slot] = l; });
+    state.slots.forEach(function (s) {
+      var hit = map[s.slot];
+      if (!hit) { s.on = false; return; }
+      // 存的时候连关着的槽一起存了，套用时必须照着 on 走：一律当开着的，
+      // 用户特意关掉的默认槽（比如 8 号 nai5）就会自己开回来，
+      // 出来的风格和他存的那套不是一回事。
+      s.on = hit.on !== false;
+      if (hit.strength != null) s.strength = hit.strength;
+      // name 不还原：它由当前模板决定，预设里那份只是存的时候的快照。
+      // 拿旧快照覆盖，模板换过就会去加载一个根本不在这个槽的 LoRA。
+    });
+    renderSlots();
+    say($('presetMsg'), '已套用「' + p.name + '」', 'ok');
+  }
+
+  $('savePresetBtn').onclick = function () {
+    var on = state.slots.filter(function (s) { return s.on; });
+    if (!on.length) { say($('presetMsg'), '先勾上至少一个 LoRA', 'err'); return; }
+    var name = prompt('给这套组合起个名字（1~16 个字，之后发「' +
+      state.prefix + '名字 + 提示词」就能用）');
+    if (!name) return;
+    savePresetNamed(name.trim(), currentLoras());
+  };
+
+  function savePresetNamed(name, loras) {
+    api('/api/friend/preset', { method: 'POST', body: { name: name, loras: loras } })
+      .then(function (d) {
+        if (d.ok) {
+          say($('presetMsg'), d.msg || '已保存', 'ok');
+          loadPresets();
+        } else {
+          say($('presetMsg'), d.error || '保存失败', 'err');
+        }
+      });
+  }
+
+  // ── 生成 ──────────────────────────────────────────
+
+  $('goBtn').onclick = function () {
+    var p = $('prompt').value.trim();
+    if (!p) { say($('mainMsg'), '先写点提示词', 'err'); return; }
+    $('goBtn').disabled = true;
+    say($('mainMsg'), '提交中…');
+    var snapshot = currentLoras();
+    api('/api/friend/submit', {
+      method: 'POST',
+      body: { prompt: p, loras: snapshot, send_qq: $('sendQQ').checked }
+    }).then(function (d) {
+      if (!d.ok) {
+        say($('mainMsg'), d.error || '提交失败', 'err');
+        $('goBtn').disabled = false;
+        return;
+      }
+      say($('mainMsg'), '');
+      watch(d.tag, p, d.ahead, snapshot);
+    });
+  };
+
+  function watch(tag, prompt, ahead, loras) {
+    var box = $('jobBox');
+    box.innerHTML = '<div class="job"><div class="l1"><span>正在排队</span>' +
+      '<span class="st queued" id="st">排队中</span></div>' +
+      '<div class="p" id="jp"></div><div class="bar"><i></i></div></div>';
+    $('jp').textContent = prompt;
+    clearInterval(state.timer);
+    state.timer = setInterval(function () {
+      api('/api/friend/status?tag=' + encodeURIComponent(tag)).then(function (d) {
+        if (!d.ok) return;
+        var j = d.job, st = $('st');
+        if (!st) { clearInterval(state.timer); return; }
+        if (j.state === 'done') {
+          clearInterval(state.timer);
+          $('goBtn').disabled = false;
+          box.innerHTML = '';
+          loadHistory();
+          if (j.file) {
+            // 宽屏右边就是画布，直接铺在那儿；手机没有「右边」，
+            // 还是弹灯箱，否则图会挤在表单下面。
+            if (isNarrow()) openBox(j.file, j.tag, loras);
+            else showStage(j.file, j.tag, loras);
+          }
+        } else if (j.state === 'error') {
+          clearInterval(state.timer);
+          $('goBtn').disabled = false;
+          st.className = 'st error'; st.textContent = '失败了';
+          say($('mainMsg'), j.error || '画不出来', 'err');
+        } else if (j.ahead > 0) {
+          st.className = 'st queued';
+          st.textContent = '前面还有 ' + j.ahead + ' 张';
+        } else {
+          st.className = 'st running';
+          st.textContent = '画着呢…';
+        }
+      });
+    }, 2000);
+  }
+
+  // ── 视图切换（主界面 ⇄ 我画过的）────────────────────
+
+  // 用 history 而不是纯 class 切换：手机的系统返回键/侧滑返回能回到主界面，
+  // 不然群友一进历史页就被困住，只能再点一次「返回」。
+  function applyRoute() {
+    // 判「已登录」看 #app 有没有 .on（enter() 加的），不要看 state.qq——
+    // 没登录却把历史页盖在登录页上，群友会看到一整屏空白还找不到出口
+    // （刷新在 #hist 就是这个下场），所以这里要拦住。
+    var on = $('app').classList.contains('on') && location.hash === '#hist';
+    $('viewHist').classList.toggle('on', on);
+    if (on) loadHistory();
+  }
+  window.addEventListener('popstate', applyRoute);
+
+  $('openHistBtn').onclick = function () {
+    if (location.hash === '#hist') return;
+    history.pushState({ v: 'hist' }, '', '#hist');
+    applyRoute();
+  };
+
+  $('histBack').onclick = function () {
+    // 从主界面进来的（栈里有我们压的那条）就回退，浏览器历史跟着一起干净；
+    // 直接拿 #hist 链接打开的就地清掉 hash，别把用户顶出站点。
+    if (history.state && history.state.v === 'hist') {
+      history.back();
+    } else {
+      history.replaceState(null, '', location.pathname + location.search);
+      applyRoute();
+    }
+  };
+
+  // ── 历史 ──────────────────────────────────────────
+
+  function loadHistory() {
+    api('/api/friend/history').then(function (d) {
+      if (!d.ok) return;
+      state.hist = d.rows || [];
+      renderHistory();
+      // 刚进来（或刷新）时右侧不该空着：把最近画的一张铺上去。
+      // 只在还没有画布内容时填，别把刚出图的那张顶掉。
+      if (!state.stageFile) {
+        var last = null;
+        state.hist.some(function (r) { if (r.file) { last = r; return true; } });
+        if (last) showStage(last.file, last.tag, last.loras, '最近一张');
+      }
+    });
+  }
+
+  function renderHistory() {
+    var box = $('hist');
+    box.innerHTML = '';
+    var alive = 0;
+    state.hist.forEach(function (r) {
+      var el = document.createElement('div');
+      if (r.file) {
+        alive += 1;
+        el.className = 'thumb';
+        var img = document.createElement('img');
+        // 网格用缩略图（30KB），灯箱才拉原图（2~11MB）。缩略图还没生成时
+        // 退回原图——出图那一刻归档可能刚写完，别让格子空着。
+        var stem = r.file.replace(/\.[^.]+$/, '');
+        img.src = '/api/friend/img?f=' + encodeURIComponent(stem + '.thumb.webp');
+        img.onerror = function () {
+          img.onerror = null;
+          img.src = '/api/friend/img?f=' + encodeURIComponent(r.file);
+        };
+        img.loading = 'lazy'; img.alt = r.tag || '';
+        el.appendChild(img);
+        el.onclick = function () { openBox(r.file, r.tag, r.loras); };
+      } else {
+        el.className = 'thumb gone';
+        el.textContent = r.ok ? '已清理' : '失败';
+      }
+      box.appendChild(el);
+    });
+    $('histEmpty').style.display = state.hist.length ? 'none' : '';
+    $('histCnt').textContent = alive ? alive + ' 张' : '';
+  }
+
+  // ── 画布（宽屏右侧显示刚画好的图）───────────────────
+
+  function isNarrow() { return window.matchMedia('(max-width: 760px)').matches; }
+
+  function showStage(file, tag, loras, note) {
+    if (!file) return;
+    var stem = file.replace(/\.[^.]+$/, '');
+    var thumb = '/api/friend/img?f=' + encodeURIComponent(stem + '.thumb.webp');
+    var full = '/api/friend/img?f=' + encodeURIComponent(file);
+    state.stageFile = file;
+    state.stageTag = tag || '';
+    state.stageLoras = loras || null;
+    var img = $('stageImg');
+    // 先挂缩略图（~20KB，秒出），原图（2~11MB）在后台加载完再换上来。
+    // 直接挂原图的话，外网群友要对着空白盯好几秒，看着像坏了。
+    img.src = thumb;
+    var big = new Image();
+    big.onload = function () { if (state.stageFile === file) img.src = full; };
+    big.src = full;
+    var cap = (note ? note + ' · ' : '') + (tag || '');
+    $('stageCap').textContent = cap;
+    $('stageDl').href = full;
+    $('stageDl').download = ((tag || 'image') + '.png');
+    $('stageEmpty').style.display = 'none';
+    $('stagePic').style.display = '';
+  }
+
+  $('stageImg').onclick = $('stageFull').onclick = function () {
+    if (state.stageFile) openBox(state.stageFile, state.stageTag, state.stageLoras);
+  };
+  $('stageSave').onclick = function () {
+    saveFromLoras(state.stageLoras);
+  };
+
+  function saveFromLoras(loras) {
+    // 优先用这张图当初的 LoRA 组合；老记录没带就用当前界面的
+    var use = loras && loras.length ? loras : currentLoras();
+    if (!use.filter(function (l) { return l.on; }).length) {
+      alert('这张图没有开 LoRA，存不了预设'); return;
+    }
+    var name = prompt('给这套组合起个名字（1~16 个字，之后发「' +
+      state.prefix + '名字 + 提示词」就能用）');
+    if (!name) return;
+    savePresetNamed(name.trim(), use);
+  }
+
+  // ── 灯箱 ──────────────────────────────────────────
+
+  function openBox(file, tag, loras) {
+    state.boxTag = tag;
+    state.boxLoras = loras || null;
+    $('boxImg').src = '/api/friend/img?f=' + encodeURIComponent(file);
+    $('boxDl').href = $('boxImg').src;
+    $('boxDl').download = ((tag || 'image') + '.png');
+    $('boxCap').textContent = tag || '';
+    $('box').classList.add('on');
+  }
+
+  $('boxClose').onclick = function () { $('box').classList.remove('on'); };
+  $('box').onclick = function (e) { if (e.target === $('box')) $('box').classList.remove('on'); };
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') $('box').classList.remove('on');
+  });
+
+  $('boxPreset').onclick = function () {
+    saveFromLoras(state.boxLoras);
+  };
+
+  // ── 启动 ──────────────────────────────────────────
+
+  api('/me').then(function (d) {
+    if (d.ok && d.qq) enter(d.qq);
+    else { $('login').style.display = 'flex'; }
+  });
+})();
+</script>
+</body>
+</html>
