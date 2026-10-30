@@ -124,6 +124,24 @@ class DirectReceiptTest(_SubmitHarness):
         self.assertEqual((target, tid), ("private", "42"))
         self.assertEqual(text.splitlines()[0], "任务已提交，正在画了。")
 
+    def test_group_receipt_says_one_image_only(self):
+        """群聊统一单图（2026-10-30 用户拍板）。
+
+        用户原话：「群聊的提示词告诉 ai 它不可以多图，私聊才能多图…然后我们
+        到时候任务回执加一个群聊不可以多图即可」。这句是发给**群友**看的，
+        所以走直发那条（`receipt_line` 只取第一行，追加在第二行不干扰它）。
+        """
+        self._submit(("group", "9"))
+        text = self.sent[0][2]
+        self.assertIn("群里一次只出一张", text)
+        # 第一行必须还是那句状态，别把追加行顶到前面去
+        self.assertEqual(text.splitlines()[0], "任务已提交，正在画了。")
+
+    def test_private_receipt_has_no_group_note(self):
+        """私聊照旧能出多张，回执里不该冒出这句。"""
+        self._submit(("private", "42"))
+        self.assertNotIn("群里一次只出一张", self.sent[0][2])
+
     def test_web_side_sends_no_receipt(self):
         """网页端本来就要同步等到出图，没有这条回执（也发不出去）。"""
         with mock.patch.object(image_jobs.Job, "wait",

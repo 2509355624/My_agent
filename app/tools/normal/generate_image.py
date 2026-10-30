@@ -543,6 +543,11 @@ def _qq_receipt(job, target, target_id, source_note="", quota_tail=""):
     # ComfyUI」。真 Job 这里是 `bool(...)` 赋的值，恒为 True/False。
     waiting = getattr(job, "comfy_down", False) is True
     receipt = _receipt_text(ahead, getattr(job, "skill", None), waiting=waiting)
+    # 群聊一律单图（2026-10-30 用户拍板）：回执里把这条讲明白，省得群里反复
+    # 要「再来几张」。只加进**直发**那条（群友真能看到的那句）；下面「发给模型
+    # 转述」的几条不加——模板里已经交代过，写两遍只会挤掉真正要说的话。
+    if target == "group":
+        receipt += "\n（群里一次只出一张，要一组图私聊我）"
     tail = _note_tail(source_note) + quota_tail
     if _send_receipt(target, target_id, receipt):
         return (image_jobs.RECEIPT_SENT_MARK + receipt + "\n"
