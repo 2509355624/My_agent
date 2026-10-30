@@ -57,15 +57,28 @@ def _write_url(url):
     return path
 
 
-def _clear_url():
+def _clear_url(url=""):
     """隧道断了就把文件删掉。
 
     不删的后果很具体：地址只在隧道活着的时候有效，进程一没它就 1033。
     留着文件，`/预设网页` 会把一个打不开的链接发给群友，而他们只会觉得
     「这网站坏了」，没人会想到是隧道没了。
+
+    **只删自己写的那条**：`启动群友隧道.bat` 现在每次启动都先杀光
+    cloudflared，旧进程收到 EOF 才退出，比新进程慢半拍是常事。无脑删会把
+    新隧道刚写进去的地址一起抹掉，于是「刚显示 [OK] 就又变成没有地址」。
+    文件里存的不是自己的域名，就说明这轮已经被别人接手了，闭嘴让路。
     """
+    path = os.path.join(ROOT, "state", "friend_url.txt")
     try:
-        os.remove(os.path.join(ROOT, "state", "friend_url.txt"))
+        with open(path, encoding="utf-8") as f:
+            cur = f.read().strip()
+    except OSError:
+        return
+    if url and cur and cur != url:
+        return
+    try:
+        os.remove(path)
     except OSError:
         pass
 
@@ -112,7 +125,7 @@ def main():
         # ⚠️ 直接关 bat 窗口时 Windows 会硬杀进程，`finally` 跑不到，文件会
         # 残留——那种情况下 `/预设网页` 可能发一次死链，重开隧道就被覆盖了。
         if got:
-            _clear_url()
+            _clear_url(got)
             print("[BYE] 隧道已断，已清掉 state/friend_url.txt（旧地址不再发出）")
     if not got:
         print("")
