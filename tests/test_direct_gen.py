@@ -298,6 +298,44 @@ class LeftmostChannelTest(unittest.TestCase):
         self.assertIn("就用它", captured["content"])
 
 
+class GroupSingleImageHintTest(unittest.TestCase):
+    """群聊里给模型的附加说明（2026-10-30 用户拍板：「群聊一律单图」）。
+
+    `_translate` 没有 target 形参（四个调用点都不带会话身份），所以判据走
+    `qq_api.current_context()` 的线程本地绑定——本函数恒在会话线程里跑。
+    网页端 / 测试没有绑定 → `(None, None)` → 不加这段，行为不变。
+
+    这段 hint 和模板正文是**两处都要写**：模板说明「这条路只在私聊成立」，
+    hint 说明「本轮就是群聊」。只写模板的话，模型还得自己去猜此刻在哪儿。
+    """
+
+    def _content(self, ctx, text="画 5 张 女骑士"):
+        captured = {}
+
+        def fake_ask(content):
+            captured["content"] = content
+            return {"reply": "好的"}
+
+        with mock.patch.object(direct_gen, "_ask", side_effect=fake_ask), \
+                mock.patch.object(direct_gen.qq_api, "current_context",
+                                  return_value=ctx):
+            direct_gen._translate(text, [])
+        return captured.get("content", "")
+
+    def test_group_turn_is_told_to_draw_one(self):
+        c = self._content(("group", "9"))
+        self.assertIn("本轮在", c)
+        self.assertIn("群聊", c)
+        self.assertIn("只出一张", c)
+
+    def test_private_turn_gets_no_group_hint(self):
+        self.assertNotIn("本轮在", self._content(("private", "42")) or "")
+
+    def test_no_binding_means_no_hint(self):
+        """网页端 / 测试没有会话绑定，不该被塞进一段「本轮在群聊」。"""
+        self.assertNotIn("本轮在", self._content((None, None)) or "")
+
+
 class SkillIdChannelTest(unittest.TestCase):
     """用户直接给**渠道 id 原名**时也要认（2026-10-16 用户报）。
 
@@ -1687,6 +1725,20 @@ class MasterPromptTest(unittest.TestCase):
         self.assertIn("连续漫画", t)
         self.assertIn("brief", t)
         self.assertIn("panels", t)
+
+    def test_comic_tool_is_private_only(self):
+        """群聊只出单图（2026-10-30 用户拍板）。
+
+        病根：模板正文原先无条件写着「要好几张只有这一条路」，而
+        `generate_comic` 自己开头有一道「群聊禁 silver 漫画」的硬闸（2026-10-20
+        用户要求，防刷屏）。于是群里读到「画 5 张」时模型先答应、再撞闸、再改口
+        道歉——群友看到的就是「被拦下了」。模板必须写明这条路只在私聊成立，
+        并且给出群里的替代做法（直接用 generate_image 出一张）。
+        """
+        t = self._rendered()
+        self.assertIn("仅私聊", t)
+        self.assertIn("群聊里没有这条路", t)
+        self.assertIn("群里一次只出一张", t)
 
     def test_template_no_longer_teaches_the_dash_batch(self):
         """2026-10-09 用户拍板：sd 保留，但**提示词不再告诉 AI「--- 可以批量」**。

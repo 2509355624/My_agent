@@ -392,16 +392,15 @@ class LandscapeSnapshotTest(unittest.TestCase):
 
 
 class GroupComicBlockTest(unittest.TestCase):
-    """群聊禁连续漫画（2026-10-20 用户要求：「帮我群聊禁止使用 silver 漫画，
-    不然容易刷屏」）。
+    """群聊一律单图（2026-10-30 用户拍板；此前的 10-20 版本是「直接拒绝」）。
 
-    拦在 `generate_comic._generate_comic()` 里——工具路径（模型调
+    收口在 `generate_comic._generate_comic()` —— 工具路径（模型调
     `generate_comic`）和直判路径（`direct_gen._enqueue_comic`）最终都汇到它，
-    所以一处收口就够。判据只有两条：**群聊 + `style == "silver"`**。
-    私聊照旧、「anima多图」（默认 3 格）没禁。
+    所以一处判就够。判据只有一条：**会话是群聊**（与 style 无关）。
 
-    ⚠️ 拒绝必须发生在 `write_story` **之前**：那一步要跑好几秒 LLM 才吐出
-    分镜，先拒才省得掉这整轮的开销（下面用 `assert_not_called` 钉住）。
+    行为从「报错」改成「降级」：群里要 N 张就只画一格。用户原话「群聊调用
+    工作流的时候，就默认调用单图的即可」——他要的是一张图，不是一段道歉。
+    私聊不受影响（silver 默认 10 / anima 默认 3 照旧）。
     """
 
     def _run(self, target, style):
@@ -417,23 +416,31 @@ class GroupComicBlockTest(unittest.TestCase):
             out = gc._generate_comic("少女在河边散步", panels=3, style=style)
         return out, m_write, m_start
 
-    def test_group_refuses_the_silver_comic(self):
+    def test_group_downgrades_the_silver_comic_to_one_panel(self):
+        """2026-10-30 用户拍板：群聊**不再拒绝**，就地降成一格。
+
+        原话：「群聊调用工作流的时候，就默认调用单图的即可」。原先（10-20）
+        直接返回错误，实测观感是「AI 先答应画 5 张、再撞墙、再道歉」。
+        """
         out, m_write, m_start = self._run("group", "silver")
-        self.assertIn("群里不画连续漫画", out)
-        # 剧本一个字都没写：省掉写分镜那几秒 LLM，也别起渲染线程
-        m_write.assert_not_called()
-        m_start.assert_not_called()
+        self.assertNotIn("错误", out)
+        self.assertIn("群里一次只出一张", out)
+        # 编剧只写一格（不是用户报的 3 格），渲染线程照常起
+        m_write.assert_called_once_with("少女在河边散步", panels=1)
+        m_start.assert_called_once()
 
     def test_private_still_draws_the_silver_comic(self):
         out, m_write, m_start = self._run("private", "silver")
         m_write.assert_called_once()
         m_start.assert_called_once()
+        # 私聊按用户报的格数走，不被降级
+        self.assertEqual(m_write.call_args.kwargs["panels"], 3)
 
-    def test_group_still_allows_the_three_panel_anima_batch(self):
-        """用户只说「silver 漫画」。anima多图默认 3 格、量小，这次不动它。"""
+    def test_group_downgrades_the_anima_batch_too(self):
+        """「群里一律单图」不分渠道：anima多图 3 张在群里也只出一张。"""
         out, m_write, m_start = self._run("group", "anima")
-        m_write.assert_called_once()
-        m_start.assert_called_once()
+        self.assertIn("群里一次只出一张", out)
+        self.assertEqual(m_write.call_args.kwargs["panels"], 1)
 
 
 if __name__ == "__main__":

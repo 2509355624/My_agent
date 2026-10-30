@@ -46,23 +46,22 @@ def _generate_comic(brief, panels=None, style="silver", landscape=None):
 
     style = (style or "silver").strip() or "silver"
 
-    # 群聊不画连续漫画（2026-10-20 用户要求：「帮我群聊禁止使用 silver 漫画，
-    # 不然容易刷屏」）。silver 批量一次默认 **10 格**，群里连着发就是一屏图。
-    # 范围只到「群聊 + silver」：
-    #   · 私聊照旧（一对一，发 10 张不算刷屏，也是用户要的完整剧情）；
-    #   · 网页端漫画台不受影响（target is None 时上面已经返回了）；
-    #   · 「anima多图」默认 3 格，量小，这次没禁（用户只说 silver 漫画）。
-    # 位置钉在 `write_story` **之前**：那一步要跑好几秒 LLM，先拒能省掉整轮开销。
-    # 文案按 `_qq_gate` 的惯例返回一句模型能直接转述的话，不抛错。
-    if style == "silver" and target == "group":
-        return ("错误：群里不画连续漫画，一次十张会把群刷屏，这个群只能画单张。"
-                "这一轮别再重试、也别自己改画十张单图；"
-                "直接告诉对方：想要图就点名单张渠道一张一张来"
-                "（「silver <需求>」「qwen <需求>」都行）；"
-                "真要画整段剧情，让他私聊发。")
+    # 群聊一律单图（2026-10-30 用户拍板：「群聊的提示词告诉 ai 它不可以多图，
+    # 私聊才能多图…群聊调用工作流的时候，就默认调用单图的即可」）。
+    #
+    # 这里**不再拒绝**。2026-10-20 那版是直接返回错误（防刷屏），用户实测的
+    # 观感是「AI 先答应画 5 张、再撞墙、再道歉」——他要的是一张图，不是一段
+    # 道歉。所以改成就地降级：格数在 `write_story` 之前钉成 1，照常写分镜、
+    # 照常渲染，只是只画一格。省掉的是后面几格的分镜与采样。
+    #   · 私聊照旧按 panels（silver 默认 10 / anima 默认 3）；
+    #   · 网页端在上面已经因为 target is None 返回了，走不到这里；
+    #   · 判据只看「会话是群」，与 style 无关——用户要的是「群里一律单图」。
+    group_one = (target == "group")
 
     n = comic_story.clamp_panels(panels,
                                  default=comic_story.default_panels(style))
+    if group_one:
+        n = 1
 
     try:
         fixed, dyns = comic_story.write_story(brief, panels=n)
@@ -76,7 +75,11 @@ def _generate_comic(brief, panels=None, style="silver", landscape=None):
 
     # 批量模式是**一次全给**，拿不到中间产物（见 comic_story.render 的注释），
     # 所以不能说「画好一张发一张」。
-    if style == "anima":
+    if group_one:
+        # 群里已经降级成一张（格数在上面就钉死了），回执别再说「N 格」——
+        # 那句话会让群里以为还有一堆在后面排着。
+        receipt = "群里一次只出一张，这一张正在画，画完就发（要整组私聊我）。"
+    elif style == "anima":
         receipt = "多图已开工：%d 张，正在画，画完一起发。" % len(dyns)
     else:
         receipt = "漫画已开工：%d 格，正在画，画完一起发。" % len(dyns)
@@ -101,6 +104,13 @@ tool = {
         "**只在用户明确要「漫画 / 连环画 / 多格 / 条漫 / 多图」，或要「N 张」"
         "（生成10张 / 来5张…）时用**。\n"
         "**单张图不要用这个**，用 generate_image。\n\n"
+        # 2026-10-30 用户拍板：「群聊一律单图」。这道说明是**给模型看的**——
+        # 群聊里真正拦它的是下面 `_generate_comic` 开头那道硬闸（2026-10-20
+        # 用户要求，防刷屏）。写在描述里是为了让它**别先承诺「画 5 张」再撞墙**，
+        # 直接把需求收敛成一张。私聊不受任何影响。
+        "**群聊里用不了**：QQ 群聊一次只出一张图。群里用户要 N 张 / 漫画 / 多格，"
+        "就用 generate_image 画最代表他那句需求的一张，不要调这个工具、"
+        "别承诺张数；回话时提一句「群里一次只能一张，要一组图私聊我」。\n\n"
         "它会自己完成三件事：① 按 skills/storyboard-prompt 的规范把剧情写成"
         "「固定块（角色外观）+ 动态块（每格动作/场景/服饰/灯光）」；② 整批渲染；"
         "③ 画完一起发回来。**格数越多越慢**（10 格约 1 分钟）。\n\n"

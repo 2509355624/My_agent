@@ -1269,7 +1269,7 @@ _MASTER_TEMPLATE = (
     "- `source_image` 填 1 表示垫图，判据见下面「带图轮怎么走」。\n"
     "- `seed` 只在用户点名种子时填。用不上的字段省略。\n"
     "\n"
-    "### 画一组图或连续漫画\n"
+    "### 画一组图或连续漫画（仅私聊）\n"
     "\n"
     "{{\"tool\": \"generate_comic\", \"brief\": \"中文剧情\", \"panels\": 10}}\n"
     "\n"
@@ -1278,6 +1278,11 @@ _MASTER_TEMPLATE = (
     "\n"
     "用在三种情况：用户要漫画、连环画、多格、条漫；用户要「N 张」"
     "（生成10张 / 来5张 / 出4张）；用户点名「anima多图」。要好几张只有这一条路。\n"
+    "\n"
+    "群聊里没有这条路：群里一次只出一张。群里用户要 N 张 / 漫画 / 多格，"
+    "就挑最能代表他那句需求的一屏，用 `generate_image` 出一张，"
+    "别调 generate_comic、别承诺张数，回话时顺口说一句「群里一次只能一张，"
+    "要一组图私聊我」。要几张照画几张会被系统挡下，你白承诺一次。\n"
     "\n"
     "走哪条渠道由代码从原话判定，你省略渠道字段。只要 1 张时用 `generate_image`。\n"
     "\n"
@@ -1959,10 +1964,15 @@ def _enqueue_comic(comic, text):
         return "漫画请求没发出去，稍后再试。"
     panels = comic_story.clamp_panels(
         comic.get("panels"), default=comic_story.default_panels(style))
+    # 群聊只画一格（2026-10-30 用户拍板）：判据在 `generate_comic._generate_comic`
+    # 里（那边已经把格数钉成 1）。这里**必须同步**——否则账本写「10 格」而实际
+    # 只出一张，`_recent_lines` 会把那个假的格数当事实回喂给下一轮。
+    if qq_api.current_context()[0] == "group":
+        panels = 1
     log.info("[direct] 漫画入队：%d 格 %r（style=%s，原话 %r）", panels, brief[:50],
              style, text[:50])
     if result.startswith("错误："):
-        # 被闸拦掉（群聊禁 silver 漫画 / 生图关了 / 额度用完）= **一张都没画**，
+        # 被闸拦掉（生图关了 / 额度用完）= **一张都没画**，
         # 绝不能写进「本轮做了什么」的账本：那一行会被 `_recent_lines` 当事实
         # 回喂给下一轮，模型会照着「[直达漫画] 10 格」继续往下说。
         return _humanize_error(result)
@@ -2144,6 +2154,17 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
                 "（除非他确实在问这个渠道本身的事。）\n" % named)
     else:
         hint = ""
+    # 群聊只出单图（2026-10-30 用户拍板）：模板那条 generate_comic 的路在群里
+    # 其实走不通——`generate_comic` 自己开头就有一道「群聊禁 silver 漫画」的硬
+    # 闸（2026-10-20 用户要求，防刷屏）。但模板正文还在教模型「要好几张只有这
+    # 一条路」，于是群里读到「画 5 张」时它会先答应、再撞闸、再改口道歉。所以
+    # 把「本轮是不是群聊」明写在 hint 里，让它开口前就落到单图。
+    # 判据走 qq_api 的线程本地绑定（本函数恒在会话线程里跑）；网页端/测试没有
+    # 绑定时 current_context() 返回 (None, None)，in_group=False，行为不变。
+    if qq_api.current_context()[0] == "group":
+        hint += ("\n本轮在**群聊**：不管用户要几张，只出一张。用 generate_image "
+                 "画最能代表他那句需求的一张，不要 generate_comic、不要承诺「N 张」；"
+                 "回话时顺口提一句「群里一次只能一张，要一组图私聊我」。\n")
     content = _MASTER_TEMPLATE.format(
         recent=_recent_lines(history) or "（无）",
         text=text,
