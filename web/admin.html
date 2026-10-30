@@ -212,8 +212,27 @@
                           align-items: center; }
   .sess-list .sess-row .info { flex: 1 1 auto; min-width: 0; }
   .sess-list .sess-row .nm { font-size: 12px; line-height: 1.35;
-                              white-space: nowrap; overflow: hidden;
-                              text-overflow: ellipsis; }
+                              display: flex; align-items: center; gap: 5px; }
+  /* 名字本体自己截断：`.nm` 改成 flex 之后 ellipsis 落在了它身上就不生效了
+     （flex 子项要先有 min-width:0 才允许收缩）。 */
+  .sess-list .sess-row .nm .nmtxt { min-width: 0; overflow: hidden;
+                                    text-overflow: ellipsis; white-space: nowrap; }
+  /* 类型徽章（2026-10-30 用户要求「右边的会话列表可以区分群聊和私聊」）。
+     后端给的名字是「昵称（号）」或「群名（号）」——**只要有名字，群和私聊
+     长得一模一样**，76 条里根本认不出哪个是群。徽章钉在名字前，不占副行
+     （副行要塞 QQ 号 + 消息数 + 时间，本来就紧）。群=蓝、私=绿。 */
+  .sess-list .sess-row .kbadge {
+    flex: 0 0 auto; font-size: 10px; line-height: 1; padding: 2px 4px;
+    border-radius: 3px; border: 1px solid transparent;
+  }
+  .sess-list .sess-row .kbadge.group {
+    color: #4ea1ff; background: rgba(78, 161, 255, 0.16);
+    border-color: rgba(78, 161, 255, 0.35);
+  }
+  .sess-list .sess-row .kbadge.private {
+    color: var(--success); background: rgba(74, 222, 128, 0.14);
+    border-color: rgba(74, 222, 128, 0.32);
+  }
   /* 副行：**QQ 号留在这**——右列的用途就是「按号找到这条」，号必须看得见。
      消息数 / 最后活动 是次要信息，号后面跟着，溢出就截断。 */
   .sess-list .sess-row .sub { font-size: 10px; line-height: 1.3; margin-top: 1px;
@@ -1016,7 +1035,21 @@ function renderSessions() {
     info.className = 'info';
     const nm = document.createElement('div');
     nm.className = 'nm';
-    nm.textContent = s.name || s.key;
+    // 类型徽章（2026-10-30 用户要求「区分群聊和私聊」）：`s.name` 是
+    // 「昵称（号）」或「群名（号）」，有名字时两边一模一样，只能靠徽章分。
+    // 主会话（kind=main，网页端）不加——它名字本身已经是 accent 色。
+    if (s.kind === 'group' || s.kind === 'private') {
+      const kb = document.createElement('span');
+      kb.className = 'kbadge ' + s.kind;
+      kb.textContent = s.kind === 'group' ? '群' : '私';
+      kb.title = s.kind === 'group' ? 'QQ 群聊' : 'QQ 私聊';
+      nm.appendChild(kb);
+    }
+    // 名字包一层：`.nm` 是 flex 容器，文字要自己那层才能正常省略号截断。
+    const nmtxt = document.createElement('span');
+    nmtxt.className = 'nmtxt';
+    nmtxt.textContent = s.name || s.key;
+    nm.appendChild(nmtxt);
     nm.title = nm.textContent;                 // 名字被截断了还能悬浮看全
     const sub = document.createElement('div');
     sub.className = 'sub';
