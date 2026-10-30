@@ -505,6 +505,48 @@
     color: var(--text-dim);
     font-size: 0.9em;
   }
+  /* 代码块右上角的「复制这一块」：消息底部那个复制给的是整条 Markdown 原文，
+     用户只想要这段 JSON / 这段代码时还得自己挑，所以单独挂一个入口。 */
+  .md .code-wrap {
+    position: relative;
+    margin: 10px 0;
+  }
+  /* 外边距挪到包裹层上，pre 自己归零，按钮才会贴着块的右上角 */
+  .md .code-wrap pre { margin: 0; }
+  .md .code-copy {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    font-family: inherit;
+    font-size: 11px;
+    line-height: 1;
+    padding: 4px 8px;
+    color: var(--text-dim);
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+  }
+  /* 默认藏着：代码块可能很长，常驻会压住第一行右侧的字符。鼠标进块才露头 */
+  .md .code-wrap:hover .code-copy,
+  .md .code-copy:focus-visible { opacity: 0.9; }
+  .md .code-copy:hover {
+    opacity: 1;
+    color: var(--text);
+    border-color: var(--accent);
+  }
+  .md .code-copy.copied {
+    opacity: 1;
+    color: var(--success);
+    border-color: var(--success);
+  }
+  .md .code-copy.failed {
+    opacity: 1;
+    color: var(--error);
+    border-color: var(--error);
+  }
   .md a {
     color: var(--tool-name);
     text-decoration: none;
@@ -2266,6 +2308,28 @@ async function copyText(text) {
   }
 }
 
+// ─── 代码块复制（只要这一段）────────────────────────
+// 挂在消息容器上做事件委托：代码块是拼字符串 + innerHTML 进来的，
+// 渲染那一刻按钮还不存在，绑不了 click。
+// 复制内容取 `pre code` 的 textContent —— 它就是分块收集到的原文
+// （escapeHtml 转过的实体，textContent 会自动还原），不走 innerHTML 抄一遍。
+messagesEl.addEventListener('click', async (e) => {
+  const btn = e.target.closest('.code-copy');
+  if (!btn) return;
+  const block = btn.parentElement.querySelector('pre code');
+  const text = block ? block.textContent : '';
+  if (!text) return;
+  const ok = await copyText(text);
+  btn.classList.toggle('copied', ok);
+  btn.classList.toggle('failed', !ok);
+  btn.textContent = ok ? '已复制' : '复制失败';
+  clearTimeout(btn._resetTimer);
+  btn._resetTimer = setTimeout(() => {
+    btn.classList.remove('copied', 'failed');
+    btn.textContent = '复制';
+  }, 1500);
+});
+
 // ─── 编辑用户消息并重发 ──────────────────────────────
 // 会话是一条线，不是一棵树：编辑第 k 条用户消息，就是从它这里重新开始，
 // 它之后的问答全部作废——那些内容都在回应被改掉的那一句，留着会让模型
@@ -2456,7 +2520,13 @@ function renderMarkdown(md) {
     // 去除首尾空行
     while (codeBuffer.length && codeBuffer[0].trim() === '') codeBuffer.shift();
     while (codeBuffer.length && codeBuffer[codeBuffer.length - 1].trim() === '') codeBuffer.pop();
-    html.push('<pre><code>' + escapeHtml(codeBuffer.join('\n')) + '</code></pre>');
+    // 外面裹一层 .code-wrap，右上角挂「复制」。这里只出结构，点击事件走
+    // `messagesEl` 上的委托——这段 HTML 是拼成字符串再 innerHTML 进去的，
+    // 进 DOM 之前绑不上监听。
+    html.push('<div class="code-wrap">' +
+      '<button type="button" class="code-copy" title="复制这段代码">复制</button>' +
+      '<pre><code>' + escapeHtml(codeBuffer.join('\n')) + '</code></pre>' +
+      '</div>');
     codeBuffer = [];
     inCodeBlock = false;
   }
