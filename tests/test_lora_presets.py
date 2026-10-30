@@ -222,7 +222,7 @@ class ResolveTest(_Base):
     def test_group_missing_mentions_command(self):
         p, err = lp.resolve("不存在", qq="1002", in_group=True)
         self.assertIsNone(p)
-        self.assertIn("/自定义预设", err)
+        self.assertIn("自定义预设", err)
 
 
 class SetPublicTest(_Base):

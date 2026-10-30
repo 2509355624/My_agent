@@ -4084,11 +4084,16 @@ class PresetWebCmdTest(unittest.TestCase):
 
     URL = "https://calm-otter-1234.trycloudflare.com"
 
-    def test_only_with_slash(self):
-        for t in ("/预设网页", "／预设网页", "/画图网页", "/群友页", "/预设地址"):
-            self.assertTrue(direct_gen._PRESET_WEB_RE.match(t), t)
-        # 裸说「预设网页」多半是在问「那是什么东西」，该交给 AI，不甩一张表
-        self.assertFalse(direct_gen._PRESET_WEB_RE.match("预设网页"))
+    def test_keyword_without_slash(self):
+        # 2026-10-30 二修：关键词命中即可，不再要求斜杠 + 整句（用户口径
+        # 「群友有时候会打错字，只要有预设网页即可」）。
+        for t in ("/预设网页", "预设网页", "预设网页打不开", "群友页在哪",
+                  "／画图网页", "这个群友网址多少"):
+            self.assertTrue(direct_gen._PRESET_WEB_RE.search(t), t)
+
+    def test_plain_chat_does_not_fire(self):
+        for t in ("画个妹妹", "帮我看看这张图", "更多渠道"):
+            self.assertIsNone(direct_gen._PRESET_WEB_RE.search(t), t)
 
     def test_private_chat_gets_the_url(self):
         from app import friend_site

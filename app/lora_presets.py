@@ -207,8 +207,8 @@ def resolve(raw_name, qq=None, in_group=False):
                 return dict(p, _owner=owner), ""
         if qq and name in (data.get(str(qq)) or {}):
             return None, ("「%s」是你的私有预设，群里用不了——私聊我就能用，"
-                          "或者发 /自定义预设 看公开的" % label(name))
-        return None, ("没有「%s」这个公开预设，发 /自定义预设 看现在能用哪些"
+                          "或者发「自定义预设」看公开的" % label(name))
+        return None, ("没有「%s」这个公开预设，发「自定义预设」看现在能用哪些"
                       % label(name))
 
     mine = data.get(str(qq)) or {}
