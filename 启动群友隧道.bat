@@ -26,7 +26,22 @@ rem Two tunnels at once also means two random hostnames, and Cloudflare
 rem usually refuses the second one. The symptom is a 530 page behind a link
 rem that still looks perfectly normal - so clean up before every start.
 taskkill /F /IM cloudflared.exe >nul 2>&1
-if %errorlevel% equ 0 (echo [OK] stopped every old cloudflared) else (echo [OK] no cloudflared was running)
+if errorlevel 1 (echo [OK] no cloudflared was running) else (echo [OK] stopped every old cloudflared)
+
+rem taskkill returns before the process lets go of its socket, and a
+rem lingering one can steal the new tunnel's port. Wait until the list is
+rem empty before starting, max 10s so a stuck one cannot hang this window.
+set "WAITN=0"
+:WAIT_CF
+tasklist /FI "IMAGENAME eq cloudflared.exe" 2>nul | findstr /I "cloudflared.exe" >nul
+if errorlevel 1 goto CF_GONE
+set /a WAITN+=1
+if %WAITN% geq 10 goto CF_STUCK
+timeout /t 1 /nobreak >nul
+goto WAIT_CF
+:CF_STUCK
+echo [WARN] a cloudflared is still alive after 10s - starting anyway
+:CF_GONE
 if exist "state\friend_url.txt" (
     del /q "state\friend_url.txt" >nul 2>&1
     echo [OK] stale URL cleared - a new one is printed below
