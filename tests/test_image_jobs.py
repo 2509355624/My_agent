@@ -129,15 +129,20 @@ class _Base(unittest.TestCase):
         self.sent_captions = []
         # seed 也单独记一份：它决定 caption 上那行字有没有最后一段。
         self.sent_seeds = []
+        # 引用 / @ 也单独记一份：(reply_to, at_user)，空引用时是 ("", None)。
+        self.sent_refs = []
 
         # `prompt=`（2026-10-06）：只在这些图**被审核拦下**时才用得上——进人工
         # 二审队列要带着它，管理员点过审补发后账本才补得上（编号 → 提示词）。
         # 替身接住它就行，老断言看的是前六项。
         def _fake_image(target, tid, url, tag="", skill="", seed=None,
-                        prompt=""):
+                        prompt="", notify=True, reply_to="", at_user=None):
             self.sent_images.append((target, tid, url))
             self.sent_captions.append(tag)
             self.sent_seeds.append(seed)
+            # 引用 / @（2026-10-30）：发图那一步按 job 上快照的值走，单独记一份
+            # （(reply_to, at_user) 二元组），老断言不用改。
+            self.sent_refs.append((reply_to, at_user))
 
         def _fake_text(target, tid, text):
             self.sent_texts.append((target, tid, text))
@@ -3391,7 +3396,7 @@ class SilentRetryTest(_Base):
         """_send_image 替身：按 results 顺序决定放行/拦截，记录 notify。"""
         seen = []
         def fake_send(target, tid, name, tag="", skill="", seed=None,
-                      notify=True, prompt=""):
+                      notify=True, prompt="", reply_to="", at_user=None):
             seen.append({"notify": notify, "seed": seed})
             return results.pop(0) if results else False
         p = mock.patch.object(image_jobs, "_send_image", fake_send)
@@ -3473,7 +3478,7 @@ class BatchBlockedNoticeTest(_Base):
         order = list(range(n))
 
         def fake_send(target, tid, name, tag="", skill="", seed=None,
-                      notify=True, prompt=""):
+                      notify=True, prompt="", reply_to="", at_user=None):
             notices.append(notify)
             return order.pop(0) < ok_count
 
@@ -4299,6 +4304,60 @@ class ForceRestartOnHungSubmitTest(unittest.TestCase):
         self.assertTrue(getattr(ctx.exception, "force_restart_tried", False))
         self.assertIn("已经强制重启过一轮",
                       image_jobs._fail_text(ctx.exception, "submit", "silver"))
+
+
+class OrderRefTest(_Base):
+    """出图挂回点单那条消息 + @ 点单人（2026-10-30）。
+
+    用户在群里看到的现场：几分钟前点了单，图出来了却没人知道。所以发图那一行
+    要把图挂到他那句话下面，并 @ 他一下。
+    """
+
+    def _bind(self, target="group", tid="9", mid="153", uin=42):
+        qq_api.bind_context("%s_%s" % (target, tid), target, tid,
+                            message_id=mid, sender_uin=uin)
+        self.addCleanup(qq_api.clear_context)
+
+    def test_job_snapshots_the_order_message(self):
+        """入队那一刻就得存下来：worker 线程里线程本地变量早不是本轮了。"""
+        self._bind()
+        job, reason = self._enqueue()
+        self.assertIsNone(reason)
+        self.assertEqual(job.reply_to, "153")
+        self.assertEqual(job.at_user, 42)
+
+    def test_private_orders_do_not_at(self):
+        """私聊 @ 自己没意义，只引用不点名。"""
+        self._bind(target="private", tid="123")
+        job, _ = self._enqueue(ctx=("private", "123"))
+        self.assertEqual(job.reply_to, "153")
+        self.assertIsNone(job.at_user)
+
+    def test_no_context_means_no_refs(self):
+        """网页端 / 跑图台没有 QQ 上下文：空引用，发图行为与从前一致。"""
+        job, _ = self._enqueue()
+        self.assertEqual(job.reply_to, "")
+        self.assertIsNone(job.at_user)
+
+    def test_every_image_of_a_batch_carries_it(self):
+        """一次点单出多张：**每张都挂**（2026-10-30 用户拍板）。"""
+        self._bind()
+        entry = {"outputs": {"9": {"images": [
+            {"filename": n} for n in ("a.png", "b.png", "c.png")]}}}
+        with mock.patch.object(image_jobs, "wait_done", return_value=entry), \
+                mock.patch.object(image_jobs.image_log, "save"):
+            job, _ = self._enqueue()
+            image_jobs._drain()
+        self.assertFalse(getattr(job, "error", ""), "这批图不该失败")
+        self.assertEqual(self.sent_refs, [("153", 42)] * 3)
+
+    def test_explicit_empty_reply_wins_over_context(self):
+        """确认闸重入队时会显式传当初快照的值（可能为空）：不能又被上下文覆盖。"""
+        self._bind()
+        job, _ = image_jobs.enqueue("group", "9", {"1": {}}, "hd_3_clear",
+                                    reply_to="", at_user=None)
+        self.assertEqual(job.reply_to, "")
+        self.assertIsNone(job.at_user)
 
 
 if __name__ == "__main__":

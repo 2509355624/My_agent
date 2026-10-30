@@ -14,12 +14,20 @@ from app import confirm_gate, image_jobs
 
 
 @contextlib.contextmanager
-def _fake_ctx(target="group", target_id="123"):
-    """同时绑上下文与原话——intercept 用守卫家族判据：没有原话（None）放行。"""
+def _fake_ctx(target="group", target_id="123", message_id="", sender_uin=None):
+    """同时绑上下文与原话——intercept 用守卫家族判据：没有原话（None）放行。
+
+    message_id / sender_uin（2026-10-30）：定义「点单那条消息」的引用和 @ 对象，
+    确认闸要在拦下那一刻把它们快照进 pending。
+    """
     with mock.patch("app.qq_api.current_context",
                     return_value=(target, target_id)), \
          mock.patch("app.qq_api.current_turn_text",
-                    return_value="大大怪跑这个"):
+                    return_value="大大怪跑这个"), \
+         mock.patch("app.qq_api.current_message_id",
+                    return_value=message_id), \
+         mock.patch("app.qq_api.current_sender_uin",
+                    return_value=sender_uin):
         yield
 
 
@@ -136,7 +144,8 @@ class ConsumeTest(unittest.TestCase):
         self.assertEqual(reply, "回执")
         en.assert_called_once_with("group", "123", {"w": 1}, "anima_clear",
                                    prompt="1girl", intent="k", seed=42,
-                                   landscape=None, comfy_down=False)
+                                   landscape=None, comfy_down=False,
+                                   reply_to="", at_user=None)
         rc.assert_called_once()
         self.assertNotIn(("group", "123"), confirm_gate._PENDING)
 
@@ -178,6 +187,46 @@ class ConsumeTest(unittest.TestCase):
             confirm_gate.intercept("comfy", skill="silver", prompt="1girl",
                                    workflow={"w": 1})
         self.assertFalse(confirm_gate._PENDING[("group", "123")]["landscape"])
+
+    def test_intercept_snapshots_reply_to_and_at_user(self):
+        """引用 / @（2026-10-30）：和横屏同一个理由——确认发生在下一条消息
+        （「好」）里，那时 current_message_id() 指的是「好」，拿它引用等于引用
+        一句「好」。必须在拦下这一刻存点单那条的 id 和点单人的号。"""
+        with _fake_ctx(message_id="153", sender_uin=42), \
+             mock.patch("app.tools.normal.generate_image._send_receipt"):
+            confirm_gate.intercept("comfy", skill="silver", prompt="1girl",
+                                   workflow={"w": 1})
+        pend = confirm_gate._PENDING[("group", "123")]
+        self.assertEqual(pend["reply_to"], "153")
+        self.assertEqual(pend["at_user"], 42)
+
+    def test_private_order_never_snapshots_at_user(self):
+        """私聊不 @（@ 自己没有意义），但引用照样留。"""
+        with _fake_ctx(target="private", target_id="7",
+                       message_id="153", sender_uin=42), \
+             mock.patch("app.tools.normal.generate_image._send_receipt"):
+            confirm_gate.intercept("comfy", skill="silver", prompt="1girl",
+                                   workflow={"w": 1})
+        pend = confirm_gate._PENDING[("private", "7")]
+        self.assertEqual(pend["reply_to"], "153")
+        self.assertIsNone(pend["at_user"])
+
+    def test_snapshotted_refs_survive_into_enqueue(self):
+        """确认后重入队时，快照的引用要原样带进 Job。"""
+        self._pending_comfy()
+        confirm_gate._PENDING[("group", "123")]["reply_to"] = "153"
+        confirm_gate._PENDING[("group", "123")]["at_user"] = 42
+        job = mock.Mock()
+        with mock.patch("app.image_jobs.comfy_alive", return_value=True), \
+             mock.patch("app.image_jobs.enqueue",
+                        return_value=(job, None)) as en, \
+             mock.patch("app.tools.normal.generate_image._charge_quota",
+                        return_value=""), \
+             mock.patch("app.tools.normal.generate_image._qq_receipt",
+                        return_value="回执"):
+            confirm_gate.consume_if_confirmed("group", "123", "好")
+        self.assertEqual(en.call_args.kwargs["reply_to"], "153")
+        self.assertEqual(en.call_args.kwargs["at_user"], 42)
 
     def test_comfy_dead_on_confirm_still_enqueues(self):
         """确认那一刻 ComfyUI 不在线（正在重启）：**照常入队**，不再拒单

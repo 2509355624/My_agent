@@ -78,19 +78,23 @@ def parse(text):
 
 # ─── 主流程 ───────────────────────────────────────────
 
-def start(target, target_id, brief, reply_to=""):
+def start(target, target_id, brief, reply_to="", sender_uin=None):
     """起后台线程，**立刻返回**。
 
     编剧 2~6 秒 + 出图 81 秒，堵在消息线程上等于这一分半整个群都听不见
     机器人说话（同 `card_bot` / `image_jobs` 那条口径）。
+
+    `sender_uin` 是点单人的 QQ 号（2026-10-30）：图好了要 @ 他一下，不然
+    一分半之后没人知道自己那张出图了。
     """
     th = threading.Thread(target=_work, name="moss-comic", daemon=True,
-                          args=(target, target_id, brief, str(reply_to or "")))
+                          args=(target, target_id, brief, str(reply_to or ""),
+                                sender_uin))
     th.start()
     return th
 
 
-def _work(target, target_id, brief, reply_to):
+def _work(target, target_id, brief, reply_to, sender_uin=None):
     t0 = time.time()
     say = _say
 
@@ -137,11 +141,15 @@ def _work(target, target_id, brief, reply_to):
     secs = round(time.time() - t0, 1)
     caption = ("《%s》· %d 步 · %dx%d · 共 %.0f 秒 · seed %d"
                % (title, moss_api.STEPS, moss_api.WIDTH, moss_api.HEIGHT, secs, seed))
-    _send_image(target, target_id, rel, caption, reply_to)
+    _send_image(target, target_id, rel, caption, reply_to, sender_uin)
 
 
-def _send_image(target, target_id, rel, caption, reply_to=""):
-    """过格式、过审核、发出去。审核拦下时它自己会回一句，这里只管不给图。"""
+def _send_image(target, target_id, rel, caption, reply_to="", sender_uin=None):
+    """过格式、过审核、发出去。审核拦下时它自己会回一句，这里只管不给图。
+
+    图这条**一定带引用**（`reply_to` 是点单那句）：这里从前把 reply_to 收下
+    却没用，结果文字回执引用着、图本身裸发——用户要的就是图跟着引用回来。
+    """
     from app import image_audit
     from app.agents import image_send_format
     try:
@@ -156,7 +164,9 @@ def _send_image(target, target_id, rel, caption, reply_to=""):
                                       meta={"kind": "moss_comic",
                                             "caption": caption}):
             return False
-        qq_api.send_image(target, target_id, path, caption=caption)
+        qq_api.send_image(target, target_id, path, caption=caption,
+                          reply_to=reply_to or None,
+                          at_user=(sender_uin if target == "group" else None))
         return True
     except Exception as exc:                    # noqa: BLE001
         log.exception("moss 图发不出去 %s", rel)

@@ -115,7 +115,8 @@ _turn_seq = itertools.count(1)
 
 
 def bind_context(session_key, target, target_id, quoted_images=None,
-                 own_images=None, user_text=None, quoted_text=None):
+                 own_images=None, user_text=None, quoted_text=None,
+                 message_id=None, sender_uin=None):
     """绑定当前线程正在处理的 QQ 会话。target 取 "private" / "group"。
 
     quoted_images 是**本轮**消息引用（reply）到的图片直链，按被引消息里出现
@@ -134,6 +135,10 @@ def bind_context(session_key, target, target_id, quoted_images=None,
     和 `_t2i_guard`（明说文生图却传了 source_image）。图生图那道关键词硬闸
     2026-10-06 已拆，口径改写在提示词里交给模型判。
     不传 = 这一轮没有可判的原话（网页端）。
+
+    message_id / sender_uin（2026-10-30）：**点单那条消息本身**的 id 和点单人
+    的 QQ 号。生图要几分钟，出图时早就不在「收消息」那一刻的上下文里了，所以
+    必须在这里存下来，由 Job 一路带到发图那一行——见 `current_message_id`。
     """
     _local.session_key = session_key
     _local.target = target
@@ -141,6 +146,8 @@ def bind_context(session_key, target, target_id, quoted_images=None,
     _local.quoted_images = list(quoted_images or [])
     _local.own_images = list(own_images or [])
     _local.quoted_text = str(quoted_text or "")
+    _local.message_id = str(message_id or "")
+    _local.sender_uin = sender_uin
     _local.turn_id = next(_turn_seq)
     if user_text is not None:
         _local.user_text = str(user_text)
@@ -149,7 +156,8 @@ def bind_context(session_key, target, target_id, quoted_images=None,
 def clear_context():
     """摘掉绑定。worker 线程是复用的，不清理会把上一个会话带进下一轮。"""
     for attr in ("session_key", "target", "target_id", "quoted_images",
-                 "own_images", "turn_id", "user_text", "quoted_text"):
+                 "own_images", "turn_id", "user_text", "quoted_text",
+                 "message_id", "sender_uin"):
         if hasattr(_local, attr):
             delattr(_local, attr)
 
@@ -179,6 +187,23 @@ def current_quoted_text():
     署名前缀）。直达管道的「引用提示词 + 渠道词」场景靠它；没引用时为空串。
     """
     return getattr(_local, "quoted_text", "") or ""
+
+
+def current_message_id():
+    """本轮**触发这条回复的消息**的 id；不在 QQ 会话里或拿不到时为 ""。
+
+    出图要几分钟，等图的时候「收消息那一刻」早就过去了，所以发图那一行只能
+    靠这个值把图挂回点单那句下面（`send_image(reply_to=...)`）。
+    """
+    return getattr(_local, "message_id", "") or ""
+
+
+def current_sender_uin():
+    """本轮说话人的 QQ 号；拿不到时为 None。
+
+    只给「图好了，@ 他一下」用——比昵称可靠：群名片随时会改，号不会。
+    """
+    return getattr(_local, "sender_uin", None)
 
 
 def current_session_key():
@@ -502,6 +527,20 @@ def image_segment(path_or_url):
     return {"type": "image", "data": {"file": "file://" + abs_path}}
 
 
+def at_segment(user_id):
+    """@ 某人（OneBot 11：`{"type":"at","data":{"qq":...}}`）。
+
+    和引用不是一回事：引用只把被引那句摆在上面，**手机端会不会因此弹提醒
+    取决于对方的客户端设置**；`at` 段是 QQ 自己的「有人叫你」，一定提醒。
+    所以「图好了，把点单的人叫回来」要两个一起带（2026-10-30 用户拍板：
+    「引用 + 真 @」）。
+
+    qq 必须转字符串：协议端两种写法都收，但数字 id 走 JSON 大整数容易在
+    中间层丢精度，字符串最稳。
+    """
+    return {"type": "at", "data": {"qq": str(user_id)}}
+
+
 def reply_segment(message_id):
     """引用回复段（OneBot 11：`{"type":"reply","data":{"id":...}}`）。
 
@@ -775,20 +814,46 @@ def send_forward(target, target_id, nodes, timeout=60):
     return data
 
 
-def send_image(target, target_id, image_path, caption=""):
-    """发一张图（可选带一句文字）。target 取 "private" 或 "group"。
+def send_image(target, target_id, image_path, caption="", reply_to=None,
+               at_user=None):
+    """发一张图（可选带一句文字 / 引用 / @）。target 取 "private" 或 "group"。
 
     私聊走 `_call_private` 同一套「非好友 → 群临时会话」兜底。**图这条尤其要兜**：
     对方看到「在画了」然后什么都没有，比文字发不出去更让人干等。
+
+    `reply_to` / `at_user`（2026-10-30，群友点单出图要提醒到人）：段顺序
+    **引用 → @ → 文字 → 图**。引用必须在最前面，QQ 只认第一段的 reply；
+    @ 排在引用后面、图前面，这样一条消息里既显示「回复了 XXX」又直接点了名。
+
+    `reply_to` 指向的消息**可能已经被撤回**（点单到出图隔几分钟是常态）。
+    这时协议端要么报错、要么把引用段吞掉，前者会让整张图发不出去——所以
+    发送失败时**剔掉引用段重发一次**，宁可没有引用也不能丢图。
     """
     segs = []
+    if reply_to:
+        segs.append(reply_segment(reply_to))
+    if at_user:
+        segs.append(at_segment(at_user))
     if caption:
         segs.append(text_segment(to_qq_text(caption)))
     segs.append(image_segment(image_path))
-    if target == "private":
-        _call_private(target_id, segs, timeout=60)
-    else:
-        _call("send_group_msg",
-              {"group_id": int(target_id), "message": segs}, timeout=60)
+    try:
+        if target == "private":
+            _call_private(target_id, segs, timeout=60)
+        else:
+            _call("send_group_msg",
+                  {"group_id": int(target_id), "message": segs}, timeout=60)
+    except RuntimeError as exc:
+        bare = [s for s in segs if s.get("type") != "reply"]
+        if len(bare) == len(segs):
+            raise                     # 本来就没带引用，照原样往上报
+        log.warning("带引用的图发不出去（%s %s），去掉引用重发一次：%s",
+                    target, target_id, exc)
+        segs = bare
+        if target == "private":
+            _call_private(target_id, segs, timeout=60)
+        else:
+            _call("send_group_msg",
+                  {"group_id": int(target_id), "message": segs}, timeout=60)
     _send_log(target, target_id, segs)
     return 1

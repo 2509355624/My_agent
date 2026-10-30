@@ -844,17 +844,20 @@ class SessionRunner:
         self.batch_senders = []     # 本轮合并了哪些人的消息
 
     def submit(self, text, sender_name="", images=None, quotes=None,
-               tentative=False, at_me=False, reply_to=""):
+               tentative=False, at_me=False, reply_to="", sender_uin=None):
         """tentative=True 表示「这条没 @ 机器人、也没命中触发词」——它不是
         非回不可的消息，要不要开口得先问一次判断模型（见 _run_turn 开头）。
         at_me=True 表示这条是**真 @**（区别于关键词命中/全量模式）：直达管道
         的兜底行为看它（@ 轮兜底回菜单，关键词轮兜底静默）。
         reply_to 是本条消息的 message_id —— 扮演态回话时要引用它。
+        sender_uin 是说话人的 QQ 号：出图要几分钟，发图时早就不在收消息那一刻
+        了，@ 他得靠这个号（见 qq_api.bind_context）。
         """
         item = {"text": text, "sender": sender_name,
                 "images": images or [], "quotes": quotes or [],
                 "tentative": bool(tentative), "at_me": bool(at_me),
-                "reply_to": str(reply_to or "")}
+                "reply_to": str(reply_to or ""),
+                "sender_uin": sender_uin}
         self._pending.append(item)
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._loop())
@@ -1203,7 +1206,11 @@ class SessionRunner:
         # 必须在这里圈死；引用为空时退回「他自己发的那张」（见 comfy_src.resolve）。
         qq_api.bind_context(self.session_key, self.target, self.target_id,
                             quoted_images=quote_images, own_images=own_images,
-                            user_text=own_text, quoted_text=quoted_text)
+                            user_text=own_text, quoted_text=quoted_text,
+                            # 点单那条消息的 id 与点单人的号（2026-10-30）：
+                            # 出图后要「引用他这句 + @ 他一下」，见 qq_api.send_image。
+                            message_id=batch[0].get("reply_to") or "",
+                            sender_uin=batch[0].get("sender_uin"))
         # 生图确认闸（2026-10-04）：上一轮的生图被 confirm_gate 拦下等确认，
         # 这条消息若是确认话（好/确认/跑吧…）就原样入队发回执、接管整轮；
         # 不是确认话就作废 pending 放行。主动接话轮不消费（群聊路人的「好」
@@ -1263,7 +1270,8 @@ class SessionRunner:
                         self._deliver(False, moss_tip, [], "", reply_to=msg_id)
                     else:
                         moss_bot.start(self.target, self.target_id, moss_brief,
-                                       reply_to=msg_id)
+                                       reply_to=msg_id,
+                                       sender_uin=batch[0].get("sender_uin"))
                 finally:
                     qq_api.clear_context()
                 return
@@ -1630,7 +1638,12 @@ class QQBot:
         runner.submit(
             text, sender, image_urls, quotes,
             at_me=(reason.startswith("被 @") or reason == "私聊"),
-            reply_to=str(ev.get("message_id") or ""))
+            reply_to=str(ev.get("message_id") or ""),
+            # 群友点单出图后要 @ 回到他：昵称会改、号不会，所以存号。
+            # sender.user_id 与事件顶层的 user_id 是同一个值，取到哪个都行
+            # （有些协议端实现只在其中一处给）。
+            sender_uin=((ev.get("sender") or {}).get("user_id")
+                        or ev.get("user_id")))
 
     async def _probe(self):
         """启动时探一下协议端在不在，不在就只警告、照常去连 WS。"""

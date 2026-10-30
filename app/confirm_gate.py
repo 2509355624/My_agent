@@ -139,6 +139,12 @@ def intercept(kind, *, skill, prompt, seed=None, intent=None, workflow=None,
             # 里才发生的，那时 `current_turn_text()` 已经是「好」，横屏这个词
             # 早没了；而 enqueue 那一刻的线程本地变量也不是本轮了。
             "landscape": image_jobs.turn_is_landscape(),
+            # 引用 / @（2026-10-30）：确认是在**下一条消息**（「好」）里发生的，
+            # 那时 current_message_id() 指的是那句「好」——引用它毫无意义。
+            # 所以和 landscape 一样在拦下的这一刻快照点单那条消息。
+            "reply_to": qq_api.current_message_id(),
+            "at_user": (qq_api.current_sender_uin()
+                        if target == "group" else None),
         }
     card = _card_text(_PENDING[(target, target_id)])
     from app.tools.normal.generate_image import _send_receipt
@@ -180,7 +186,9 @@ def consume_if_confirmed(target, target_id, text):
                                          skill=pend["skill"],
                                          nai_i2i=pend["nai_i2i"],
                                          intent=pend["intent"],
-                                         landscape=pend.get("landscape"))
+                                         landscape=pend.get("landscape"),
+                                         reply_to=pend.get("reply_to") or "",
+                                         at_user=pend.get("at_user"))
         if reason is not None:
             return reason
         quota_tail = gi._charge_quota(job, target, target_id)
@@ -197,7 +205,9 @@ def consume_if_confirmed(target, target_id, text):
                                      pend["skill"], prompt=pend["prompt"],
                                      intent=pend["intent"], seed=pend["seed"],
                                      landscape=pend.get("landscape"),
-                                     comfy_down=comfy_down)
+                                     comfy_down=comfy_down,
+                                     reply_to=pend.get("reply_to") or "",
+                                     at_user=pend.get("at_user"))
     if reason is not None:
         return reason
     quota_tail = gi._charge_quota(job, target, target_id)

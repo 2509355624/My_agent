@@ -347,5 +347,89 @@ class TempSessionFallbackTest(unittest.TestCase):
         self.assertIsNone(qq_api.temp_group_of("3985441738"))
 
 
+class ImageReplyAtTest(unittest.TestCase):
+    """发图带引用 + @（2026-10-30）。
+
+    群友点单、几分钟后图才出来，那时他早不盯着群了；把图挂回他那句话下面
+    并 @ 一下，才叫「告诉他跑好了」。
+    """
+
+    def setUp(self):
+        self.payloads = []
+        p = mock.patch.object(
+            qq_api, "_call",
+            side_effect=lambda action, payload, timeout=30:
+            self.payloads.append(payload) or {})
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(qq_api, "_send_log", lambda *a, **k: None)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _types(self, i=0):
+        return [s["type"] for s in self.payloads[i]["message"]]
+
+    def test_reply_comes_first_then_at_then_text_then_image(self):
+        """引用必须是**第一段**（QQ 只认第一段的 reply），@ 排在图和字之前。"""
+        qq_api.send_image("group", "9", "a.png", caption="图来了",
+                          reply_to="153", at_user=42)
+        self.assertEqual(self._types(), ["reply", "at", "text", "image"])
+        segs = self.payloads[0]["message"]
+        self.assertEqual(segs[0]["data"]["id"], "153")
+        self.assertEqual(segs[1]["data"]["qq"], "42")
+
+    def test_without_refs_the_message_shape_is_unchanged(self):
+        """没引用没 @ 就是老样子，别平白多出空段。"""
+        qq_api.send_image("group", "9", "a.png", caption="图来了")
+        self.assertEqual(self._types(), ["text", "image"])
+
+    def test_reply_failure_resends_without_reply(self):
+        """点单消息被撤回时协议端会拒 → 剔掉引用重发，**图不能丢**。"""
+        def _call(action, payload, timeout=30):
+            self.payloads.append(payload)
+            if any(s["type"] == "reply" for s in payload["message"]):
+                raise RuntimeError("OneBot 调用失败 send_group_msg: reply not found")
+            return {}
+        with mock.patch.object(qq_api, "_call", side_effect=_call):
+            qq_api.send_image("group", "9", "a.png", caption="图来了",
+                              reply_to="153", at_user=42)
+        self.assertEqual(len(self.payloads), 2)
+        # 重发那次去掉的只有引用，@ 和人话、图都还在
+        self.assertEqual([s["type"] for s in self.payloads[1]["message"]],
+                         ["at", "text", "image"])
+
+    def test_failure_without_reply_is_raised_as_before(self):
+        with mock.patch.object(qq_api, "_call",
+                               side_effect=RuntimeError("断了")):
+            with self.assertRaises(RuntimeError):
+                qq_api.send_image("group", "9", "a.png", caption="图来了")
+
+
+class MessageIdContextTest(unittest.TestCase):
+    """点单那条消息的 id / 说话人号要能存进线程上下文再读出来。"""
+
+    def tearDown(self):
+        qq_api.clear_context()
+
+    def test_roundtrip(self):
+        qq_api.bind_context("group_9", "group", "9", message_id="153",
+                            sender_uin=42)
+        self.assertEqual(qq_api.current_message_id(), "153")
+        self.assertEqual(qq_api.current_sender_uin(), 42)
+
+    def test_clear_wipes_them(self):
+        qq_api.bind_context("group_9", "group", "9", message_id="153",
+                            sender_uin=42)
+        qq_api.clear_context()
+        self.assertEqual(qq_api.current_message_id(), "")
+        self.assertIsNone(qq_api.current_sender_uin())
+
+    def test_unbound_reads_are_harmless(self):
+        """网页端 / 单测直接调工具时没有绑定：空串和 None，不抛。"""
+        qq_api.clear_context()
+        self.assertEqual(qq_api.current_message_id(), "")
+        self.assertIsNone(qq_api.current_sender_uin())
+
+
 if __name__ == "__main__":
     unittest.main()

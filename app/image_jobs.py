@@ -650,7 +650,7 @@ class Job:
     def __init__(self, target, target_id, workflow, skill=None, weight=1, seq=0,
                  nai_i2i=None, tag=None, prompt=None, intent=None, seed=None,
                  chan=None, landscape=False, quiet=False, batch=None,
-                 out_dir=None, comfy_down=False):
+                 out_dir=None, comfy_down=False, reply_to="", at_user=None):
         self.target = target
         self.target_id = target_id
         self.workflow = workflow
@@ -695,6 +695,12 @@ class Job:
         # （2026-10-07 实测：主线程绑 'silver 横屏 一个女孩'，子线程读出 None。
         #   教训：判据一律在入队线程算，别在 worker 里现读。）
         self.landscape = bool(landscape)
+        # 出图后把图挂回「点单那条消息」（2026-10-30，用户要的「引用 + @」）：
+        # `reply_to` 是消息 id，`at_user` 是点单人的 QQ 号（只有群里 @）。
+        # **必须在入队时快照**，理由和上面 landscape 一模一样：worker 线程里
+        # `qq_api.current_message_id()` 恒为 ""，现读等于没带。
+        self.reply_to = str(reply_to or "")
+        self.at_user = at_user
         # 静默出图（2026-10-16，扮演态配图专用）：worker **只把图跑出来、不投递**，
         # 失败也不刷话术——投递由调用方 `persona.draw` 拿到文件名后自己发。
         # 聊天里每轮一张图，图后面跟一行「HT-xxxx · 480x720 · _persona_fast ·
@@ -1038,7 +1044,8 @@ def snapshot():
 
 def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
             intent=None, seed=None, resample_fn=None, landscape=None,
-            quiet=False, batch=None, out_dir=None, comfy_down=False):
+            quiet=False, batch=None, out_dir=None, comfy_down=False,
+            reply_to=None, at_user=None):
     """把一张图排进**它该去的那条通道**的队列，返回 (job, reason)。
 
     prompt 是模型写的那段原始提示词，只用来**出图后记进账本**（编号 → 提示词，
@@ -1077,6 +1084,15 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
     # 那时候的原话里根本没有「横屏」这个词，只能靠当初快照的值。
     if landscape is None:
         landscape = turn_is_landscape()
+    # 引用 / @（2026-10-30）：同一套规矩——判据只能在入队线程算，worker 里
+    # qq_api 的上下文早不是本轮了（见 Job.reply_to）。不传 = 自动取本轮那条
+    # 点单消息；显式传 = 确认闸那种「下一条消息（「好」）里重入队」的场景，
+    # 必须用它当初快照的值，不然引用的是那句「好」。
+    if reply_to is None:
+        from app import qq_api
+        reply_to = qq_api.current_message_id()
+        if at_user is None and target == "group":
+            at_user = qq_api.current_sender_uin()
     with _lock:
         depth = chan.depth()
         if depth >= chan.max_queue:
@@ -1096,7 +1112,8 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
         job = Job(target, target_id, workflow, skill, weight, chan.seq,
                   nai_i2i=nai_i2i, prompt=prompt, intent=intent, seed=seed,
                   chan=chan, landscape=landscape, quiet=quiet, batch=batch,
-                  out_dir=out_dir, comfy_down=comfy_down)
+                  out_dir=out_dir, comfy_down=comfy_down,
+                  reply_to=reply_to, at_user=at_user)
         # 随机口令的「被拦静默重抽」钩子（2026-10-05）：resample_fn 是无参
         # 可调用体，被审核拦下时由 worker 调它换一条新提示词，同 job 重跑。
         # 最多重抽 2 次（3 尝试）；普通生图不传，拦截行为与从前完全一致。
@@ -2033,10 +2050,14 @@ def process(job):
         quiet_audit = silent or batch
         # notify 只在需要静默的 job 上降级——单张普通 job 的调用形态与从前完全
         # 一致（worker 层有别的 _send_image 替身按老签名接，别无条件加参）。
+        # 每张都挂引用 + @（2026-10-30 用户拍板）：一次点单出 4 张，四张都能
+        # 顺着引用点回他那句话；QQ 会把连续的引用叠在一起显示，不算刷屏。
         sent = sum(1 for name in names
                    if _send_image(job.target, job.target_id, name, job.tag,
                                   skill=job.skill or "", seed=job.seed,
                                   prompt=job.prompt or "",
+                                  reply_to=getattr(job, "reply_to", "") or "",
+                                  at_user=getattr(job, "at_user", None),
                                   **({"notify": False} if quiet_audit else {})))
         blocked = len(names) - sent
         if sent:
@@ -2939,7 +2960,7 @@ def _notify_batch_blocked(target, target_id, sent, blocked, total):
 
 
 def _send_image(target, target_id, filename, tag="", skill="", seed=None,
-                notify=True, prompt=""):
+                notify=True, prompt="", reply_to="", at_user=None):
     """发回原会话。先过 image_out 出副本（jpg 压扁丢元数据 / png 原样带工作流），
     格式看管理页开关。
 
@@ -2971,7 +2992,14 @@ def _send_image(target, target_id, filename, tag="", skill="", seed=None,
                                         "seed": seed, "caption": caption,
                                         "file": filename, "prompt": prompt}):
         return False
-    qq_api.send_image(target, target_id, path, caption=caption)
+    # 只在真有引用/@ 时才多传参数：没有的时候调用形态与从前**完全一致**，
+    # 那些按老签名接的替身（测试、其他投递路径）不会平白收到新 kwarg。
+    extra = {}
+    if reply_to:
+        extra["reply_to"] = reply_to
+    if at_user:
+        extra["at_user"] = at_user
+    qq_api.send_image(target, target_id, path, caption=caption, **extra)
     return True
 
 

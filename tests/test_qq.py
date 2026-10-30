@@ -994,10 +994,11 @@ class DispatchQuoteTest(unittest.TestCase):
         class FakeRunner:
             def submit(self, text, sender, images, quotes=None,
                        tentative=False, user_id="", at_me=False,
-                       reply_to=""):
+                       reply_to="", sender_uin=None):
                 captured.update(text=text, sender=sender,
                                 images=images, quotes=quotes,
-                                user_id=user_id)
+                                user_id=user_id, reply_to=reply_to,
+                                sender_uin=sender_uin)
 
         msg = list(segs)
         if at:
@@ -1023,6 +1024,15 @@ class DispatchQuoteTest(unittest.TestCase):
         got = self._dispatch([{"type": "reply", "data": {"id": "153"}}])
         self.assertEqual(got["text"], "")
         self.assertEqual(got["quotes"], [{"kind": "reply", "id": "153"}])
+
+    def test_sender_uin_is_carried_to_runner(self):
+        """点单人的号要一路带到 runner（2026-10-30）。
+
+        出图要几分钟，发图那一刻早就不在「收消息」的上下文里了；@ 回他只能
+        靠这里存下来的号，昵称随时会改。
+        """
+        got = self._dispatch([{"type": "text", "data": {"text": "画个猫"}}])
+        self.assertEqual(got["sender_uin"], 1)
 
     def test_at_without_any_content_is_still_ignored(self):
         self.assertEqual(self._dispatch([]), {})
