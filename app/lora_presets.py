@@ -9,10 +9,12 @@
 规则（2026-10-30 用户拍板）：
 
 - 前缀固定 `zdy-`，**所有人共用**；`-` 后面才是各人自己的命名
-- 每人最多 **1 个公开**、**5 个私有**（公开的那个不占私有额度）
+- 每人最多 **3 个公开**、**5 个私有**（公开的不占私有额度）
 - **公开名全站唯一**；私有名只在自己范围内唯一，撞别人的公开名没关系
 - **私有预设只在私聊可用**，群里一律只能调公开池
-- 想换公开的那个不用先取消，**新的顶替旧的**，但要告诉用户原来那个被取消了
+- 公开满了**不再自动顶替**：第 4 个直接拒，让他先取消一个（用户
+  2026-10-30 拍板）。1 个上限时「顶掉旧的」只有一个候选、说得清；3 个的
+  时候顶谁都是猜，猜错了动的是别人已经在群里发惯的名字。
 
 前缀容错：全角 `－`、破折号 `—` / `–`、连字符 `‐` / `‑`、减号 `−` 都当 `-`；
 `zdy` / `Zdy` / `ZDY` 大小写都认。中文输入法把 `-` 打成全角是最高频的
@@ -31,7 +33,7 @@ from app.config import state_path
 log = logging.getLogger("lora_presets")
 
 PREFIX = "zdy-"
-MAX_PUBLIC = 1
+MAX_PUBLIC = 3
 MAX_PRIVATE = 5
 
 # 名字：1~16 个汉字 / 字母 / 数字 / 下划线。
@@ -83,16 +85,43 @@ def _write(data):
 
 # ─── 名字 ────────────────────────────────────────────────
 
+def all_names():
+    """全站所有预设名（公开 + 私有）。`extract` 拿它切中文用。"""
+    out = set()
+    for row in load().values():
+        if isinstance(row, dict):
+            out.update(k for k in row if isinstance(k, str) and k)
+    return out
+
+
 def extract(text):
     """从一句话里找出 `zdy-xxx` 令牌，返回 (name, start, end)；没有返回 None。
 
     只取**第一个**：一句话里出现两个令牌本身就是有歧义的，猜错了浪费的是
     一整个出图等待，不如让调用方明确报错。
+
+    **中文没有词边界，所以要按已知名字切一刀**：`zdy-233跑一版` 会被正则
+    整段吃成名字 `233跑一版`，然后 resolve 报「没有这个公开预设」，用户只
+    是想「用 233 再画一版」（2026-10-30 定格群实录）。做法是拿库里**真实
+    存在**的名字做最长前缀匹配，切在 `233`，剩下的「跑一版」留在原话里。
+    这不是猜——匹配的是一个确定存在的集合；一个都对不上就原样返回，照实
+    报错，不硬凑。
     """
-    m = TOKEN_RE.search(text or "")
+    text = text or ""
+    m = TOKEN_RE.search(text)
     if not m:
         return None
-    return m.group(1), m.start(), m.end()
+    cand = m.group(1)
+    names = all_names()
+    if names and cand not in names:
+        best = ""
+        for n in names:
+            if cand.startswith(n) and len(n) > len(best):
+                best = n
+        if best:
+            # group(1) 的起点 + 名字长度 = 令牌真正的右边界
+            return best, m.start(), m.start(1) + len(best)
+    return cand, m.start(), m.end()
 
 
 def clean_name(raw):
@@ -130,7 +159,7 @@ def for_qq(qq):
 
 
 def quota(qq):
-    """额度用量，给网页顶部显示「公开 0/1 · 私有 3/5」。"""
+    """额度用量，给网页顶部显示「公开 0/3 · 私有 3/5」。"""
     row = load().get(str(qq)) or {}
     pub = sum(1 for p in row.values() if p.get("public"))
     priv = sum(1 for p in row.values() if not p.get("public"))
@@ -230,9 +259,8 @@ def save(qq, raw_name, loras, public=False, skill=""):
     文件名都绑死在那个渠道的模板上，套到别的渠道轻则强度错位、重则直接
     「这些 lora 不存在」。存了它，没点名渠道时就能自动回到这个渠道。
 
-    public=True 时：公开名全站唯一（撞了就拒）+ 每人只留一个（旧的自动降级）。
-    「自动顶替」是 2026-10-30 用户拍板的，但**必须告诉他哪个被顶掉了**——
-    不然他会以为两个都是公开的。
+    public=True 时：公开名全站唯一（撞了就拒）+ 每人最多 3 个，满了拒。
+    更新一条**本来就是公开**的预设不算新增，所以第 3 个还能改槽位存回去。
     """
     qq = str(qq)
     name = clean_name(raw_name)
@@ -246,16 +274,16 @@ def save(qq, raw_name, loras, public=False, skill=""):
     with _LOCK:
         data = load()
         row = data.setdefault(qq, {})
-        kicked = ""
         if public:
             owner = public_owner(name, data)
             if owner and owner != qq:
                 return False, "「%s」这个名字已经被别人公开了，换一个" % name
-            for other, p in row.items():
-                if other != name and p.get("public"):
-                    p["public"] = False
-                    kicked = other
-                    break
+            # 已经是公开的那条是「改内容」，不占新额度
+            if not (row.get(name) or {}).get("public"):
+                pub = [n for n, p in row.items() if p.get("public")]
+                if len(pub) >= MAX_PUBLIC:
+                    return False, ("公开预设已经有 %d 个（上限 %d 个），"
+                                   "先取消一个再公开" % (len(pub), MAX_PUBLIC))
         else:
             priv = [n for n, p in row.items() if not p.get("public") and n != name]
             if len(priv) >= MAX_PRIVATE:
@@ -275,17 +303,13 @@ def save(qq, raw_name, loras, public=False, skill=""):
         if not _write(data):
             return False, "保存失败"
 
-    msg = ("已公开「%s」" if public else "已保存「%s」") % name
-    if kicked:
-        msg += "，原来的公开预设「%s」已自动取消公开" % kicked
-    return True, msg
+    return True, ("已公开「%s」" if public else "已保存「%s」") % name
 
 
 def set_public(qq, raw_name, public):
     """只改公开状态（网页上那个开关用）。返回 (ok, 话)。"""
     qq = str(qq)
     name = clean_name(raw_name)
-    kicked = ""
     with _LOCK:
         data = load()
         row = data.get(qq) or {}
@@ -299,11 +323,10 @@ def set_public(qq, raw_name, public):
             if owner and owner != qq:
                 return False, ("「%s」这个名字已经被别人公开了，"
                                "改个名再公开" % name)
-            for other, q in row.items():
-                if other != name and q.get("public"):
-                    q["public"] = False
-                    kicked = other
-                    break
+            pub = [n for n, q in row.items() if q.get("public")]
+            if len(pub) >= MAX_PUBLIC:
+                return False, ("公开预设已经有 %d 个（上限 %d 个），"
+                               "先取消一个再公开" % (len(pub), MAX_PUBLIC))
             p["public"] = True
         else:
             p["public"] = False
@@ -312,8 +335,7 @@ def set_public(qq, raw_name, public):
 
     if not public:
         return True, "「%s」已取消公开" % name
-    return True, ("已公开「%s」" % name
-                  + ("，原来的「%s」已自动取消公开" % kicked if kicked else ""))
+    return True, "已公开「%s」" % name
 
 
 def delete(qq, raw_name):

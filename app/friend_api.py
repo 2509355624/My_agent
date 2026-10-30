@@ -472,7 +472,7 @@ def api_presets():
     rows = [{"name": k, "loras": v.get("loras") or [],
              "public": bool(v.get("public")), "ts": v.get("ts")}
             for k, v in mine.items() if isinstance(v, dict)]
-    # 公开的排最前——它是唯一「别人也能用」的那个，值得占第一格
+    # 公开的排最前——那几个「别人也能用」，值得占前面几格
     rows.sort(key=lambda r: (not r["public"], -(r.get("ts") or 0)))
     return jsonify({"ok": True, "rows": rows,
                     "quota": lora_presets.quota(qq),
@@ -508,8 +508,8 @@ def api_preset_save():
 def api_preset_public():
     """只切公开状态。单开一个口，因为网页上是个开关，不必把槽位重存一遍。
 
-    每人只留一个公开：公开新的会自动把旧的降成私有（用户 2026-10-30 拍板的
-    「自动顶替」），返回的 msg 里会点名是哪个被顶掉了。
+    每人最多 3 个公开（用户 2026-10-30 拍板）。满了第 4 个直接拒，不再自动
+    顶替——3 个上限下「顶掉哪个」只能靠猜，猜错了动的是别人在群里发惯的名字。
     """
     bad = _guard()
     if bad:

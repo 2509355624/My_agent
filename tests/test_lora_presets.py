@@ -63,6 +63,40 @@ class ParseTest(unittest.TestCase):
         self.assertIsNone(lp.extract("azdy-光影"))
 
 
+class KnownNameSplitTest(_Base):
+    """中文没有词边界：`zdy-233跑一版` 要切在 `233`（2026-10-30 定格群实录）。
+
+    不切的话正则会把「跑一版」一起当成名字，resolve 报「没有这个公开预设」，
+    用户只是想「用 233 再画一版」。切法不是猜：拿**库里真实存在**的名字做
+    最长前缀匹配；一个都对不上就原样返回，让 resolve 照实报错。
+    """
+
+    def setUp(self):
+        super().setUp()
+        lp.save("10000001", "233", _loras(1), public=True)
+
+    def test_verb_suffix_is_cut_off(self):
+        hit = lp.extract("zdy-233跑一版")
+        self.assertEqual(hit[0], "233")
+        # 令牌本身（text[start:end]）必须正好是 `zdy-233`，剩下的字留在原话里
+        self.assertEqual("zdy-233跑一版"[hit[1]:hit[2]], "zdy-233")
+
+    def test_longest_prefix_wins(self):
+        lp.save("10000001", "233跑", _loras(1))
+        hit = lp.extract("zdy-233跑一版")
+        self.assertEqual(hit[0], "233跑")
+
+    def test_exact_name_is_untouched(self):
+        hit = lp.extract("zdy-233，1girl, solo")
+        self.assertEqual(hit[0], "233")
+        self.assertEqual("zdy-233，1girl, solo"[hit[1]:hit[2]], "zdy-233")
+
+    def test_unknown_name_is_returned_as_is(self):
+        """库里没有的名字不硬凑——照实返回，让 resolve 报「没有这个预设」。"""
+        hit = lp.extract("zdy-999画一张")
+        self.assertEqual(hit[0], "999画一张")
+
+
 class CleanNameTest(unittest.TestCase):
     def test_strip_prefix(self):
         # 直接粘 zdy-光影 存进去，名字不该变成 zdy-光影（否则越用越长）
@@ -97,12 +131,26 @@ class QuotaTest(_Base):
         q = lp.quota("1001")
         self.assertEqual((q["public"], q["private"]), (1, 5))
 
-    def test_only_one_public_per_person(self):
-        lp.save("1001", "甲", _loras(), public=True)
-        lp.save("1001", "乙", _loras(), public=True)
-        q = lp.quota("1001")
-        self.assertEqual(q["public"], 1)
-        self.assertEqual(q["private"], 1)     # 被顶替的那个降成私有
+    def test_public_quota_is_three(self):
+        for n in ("甲", "乙", "丙"):
+            ok, msg = lp.save("1001", n, _loras(), public=True)
+            self.assertTrue(ok, msg)
+        ok, msg = lp.save("1001", "丁", _loras(), public=True)
+        self.assertFalse(ok)
+        self.assertIn("上限", msg)
+        self.assertEqual(lp.quota("1001")["public"], 3)
+        self.assertEqual(len(lp.public_pool()), 3)
+        # 满了不自动顶：前三个必须还在
+        self.assertEqual([n for n, _ in lp.public_pool()], ["丙", "乙", "甲"])
+
+    def test_resave_public_does_not_eat_quota(self):
+        # 已经是公开的那条改槽位重存，是「改内容」不是「新增」
+        for n in ("甲", "乙", "丙"):
+            lp.save("1001", n, _loras(), public=True)
+        ok, msg = lp.save("1001", "丙", _loras(strength=0.5), public=True)
+        self.assertTrue(ok, msg)
+        self.assertEqual(lp.quota("1001")["public"], 3)
+        self.assertEqual(lp.for_qq("1001")["丙"]["loras"][0]["strength"], 0.5)
 
 
 class PublicUniqueTest(_Base):
@@ -178,13 +226,16 @@ class ResolveTest(_Base):
 
 
 class SetPublicTest(_Base):
-    def test_replace_tells_which_one_dropped(self):
-        lp.save("1001", "甲", _loras(), public=True)
-        lp.save("1001", "乙", _loras())
-        ok, msg = lp.set_public("1001", "乙", True)
-        self.assertTrue(ok)
-        self.assertIn("甲", msg)             # 必须说是哪个被顶掉了
-        self.assertEqual(lp.quota("1001")["public"], 1)
+    def test_publish_until_full_then_reject(self):
+        for n in ("甲", "乙", "丙"):
+            lp.save("1001", n, _loras(), public=True)
+        lp.save("1001", "丁", _loras())
+        ok, msg = lp.set_public("1001", "丁", True)
+        self.assertFalse(ok)
+        self.assertIn("上限", msg)
+        # 满了不顶替：前面三个都还在公开池里
+        self.assertEqual(lp.quota("1001")["public"], 3)
+        self.assertEqual(len(lp.public_pool()), 3)
 
     def test_unpublish(self):
         lp.save("1001", "甲", _loras(), public=True)
