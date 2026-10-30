@@ -60,7 +60,10 @@ _JOBS_LOCK = threading.Lock()
 _MAX_ACTIVE = 5          # 本台同时在跑/排队的上限（image_jobs 每会话在途也是 5）
 _JOB_KEEP = 40           # 内存里最多留几个任务记录
 _LORA_SAVE_LOCK = threading.Lock()   # 「存为默认」是改模板文件，串行化
-_MAX_PROMPT = 4000       # 提示词长度上限（防手滑贴进一整篇小说）
+# 提示词长度上限（2026-10-30 由 4000 提到 10 万）：这个台是给长稿用的——
+# 跑 moss 小漫画的分镜提示词动辄几千字，4000 会直接吃 400 把稿子挡在外面。
+# 原来那句「防手滑贴进一整篇小说」的顾虑交给用户自己判断，代码不再替他砍。
+_MAX_PROMPT = 100000
 
 # 账本与「清空截止」（测试进程经 state_path 自动落临时目录，互不污染）。
 _LEDGER = state_path("gen_pad.jsonl")
