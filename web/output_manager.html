@@ -109,6 +109,9 @@
   #lb .nav { border: 1px solid var(--border); background: var(--bg-input);
     color: var(--text); border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; }
   #lb .nav:hover { border-color: var(--accent); }
+  /* 灯箱里的删除：危险动作单独一档颜色，跟「关闭」拉开距离，别点错 */
+  #lb .nav.danger { border-color: #6b2b2b; color: var(--error); }
+  #lb .nav.danger:hover { border-color: var(--error); background: #2a1414; }
   /* 图两侧的大箭头：之前只有顶栏小按钮，用户没看到 */
   #lb .bigarrow { position: absolute; top: 50%; transform: translateY(-50%);
     width: 58px; height: 104px; font-size: 44px; line-height: 1;
@@ -179,6 +182,7 @@
   <div class="bar">
     <span class="nm" id="lbName"></span>
     <span class="cnt" id="lbCnt">1 / 1</span>
+    <button class="nav danger" id="lbDel" title="移入回收站（可恢复）">删除</button>
     <button class="nav" id="lbClose">关闭 (Esc)</button>
   </div>
   <div class="stage">
@@ -191,9 +195,11 @@
 <!-- 删除确认 -->
 <div id="mask">
   <div id="dlg">
-    <h3>&#9888;&#65039; 确认删除</h3>
+    <h3>&#9888;&#65039; 确认移入回收站</h3>
     <div class="body" id="dlgBody"></div>
-    <div class="warn">删除后不进回收站、不可恢复，正在生成中的图如果被删掉这一格就废了。</div>
+    <div class="warn" id="dlgWarn">确认后移入 state/output_trash（保留原目录结构），
+      需要时把这个文件夹拖回 output 就能恢复。注意：正在生成中的图被移走后这一格就废了；
+      回收站里的图仍然占磁盘，想真腾空间得去把它清掉。</div>
     <div class="acts">
       <button class="btn" id="dlgNo">取消</button>
       <button class="btn danger" id="dlgYes">确认删除</button>
@@ -443,7 +449,7 @@ function selectDir(rel) {
   });
   if (rootRow) rootRow.classList.toggle("on", curRel === "");
   revealPath(curRel);
-  renderMain();
+  return renderMain();
 }
 
 // 兼容旧调用名
@@ -479,7 +485,8 @@ function renderMain() {
   grid.innerHTML = "";
   $("dirInfo").textContent = curRel ? curRel : "output 根目录";
   $("btnDelDir").style.display = curRel ? "" : "none";
-  loadTree(curRel).then(function (d) {
+  // 返回 promise：删除后要等新一屏渲染完再决定灯箱停在哪一张
+  return loadTree(curRel).then(function (d) {
     if (seq !== _mainSeq) return;
     lbList = d.files;
     if (!d.files.length) {
@@ -556,6 +563,10 @@ function doDelete() {
   var paths = pendingDel;
   $("mask").classList.remove("on");
   $("dlgYes").disabled = true;
+  // 在灯箱里点删除时，删完不该把人一脚踢回网格——接着看下一张更顺。
+  // 记下位置，等新一屏渲染完再按新列表把灯箱摆回同一格。
+  var lbOpen = $("lb").classList.contains("on");
+  var lbAt = lbIdx;
   fetch("/api/output/delete", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -564,13 +575,19 @@ function doDelete() {
     .then(function (d) {
       $("dlgYes").disabled = false;
       pendingDel = null;
+      // 旧后端（还没重启时）只回 deleted / freed_human，没有 moved / moved_human。
+      // 前端先更新、服务后重启的那几分钟里，不兜这一下就会直接抛
+      // 「Cannot read property 'length' of undefined」——图已经删了，
+      // 界面却报错，比什么都不做更吓人。
+      var n = (d.moved || d.deleted || []).length;
+      var human = d.moved_human || d.freed_human || "";
       if (d.ok) {
-        toast("已删除 " + d.deleted.length + " 项，释放 " + (d.freed_human || ""), true);
+        toast("已移入回收站 " + n + " 项（" + human + "），可手动恢复", true);
       } else {
         var msg = "部分失败：" + (d.failed || []).map(function (f) {
           return f.rel + " (" + f.error + ")";
         }).join("；");
-        toast("已删 " + d.deleted.length + " 项；" + msg, false);
+        toast("已移入 " + n + " 项；" + msg, false);
       }
       // 当前目录被整删了就退回上一级。**树要重建**（nodeMap 里那条已失效）
       var curGone = paths.indexOf(curRel) >= 0;
@@ -581,7 +598,14 @@ function doDelete() {
         parent = parts.join("/");
       }
       expanded = {};
-      renderTree().then(function () { selectDir(curGone ? parent : curRel); });
+      return renderTree().then(function () {
+        return selectDir(curGone ? parent : curRel);
+      }).then(function () {
+        if (!lbOpen) return;
+        if (!lbList.length) { closeLb(); return; }   // 整个目录被删光
+        // 删掉的那张让位给同位置的下一张；删的是最后一张就往前收一格
+        openLb(Math.min(lbAt, lbList.length - 1));
+      });
     })
     .catch(function (e) {
       $("dlgYes").disabled = false;
@@ -623,11 +647,20 @@ $("btnDelDir").onclick = function () {
 $("dlgYes").onclick = doDelete;
 $("dlgNo").onclick = function () { $("mask").classList.remove("on"); pendingDel = null; };
 $("mask").onclick = function (ev) { if (ev.target === $("mask")) $("dlgNo").onclick(); };
+$("lbDel").onclick = function () {
+  var f = lbList[lbIdx];
+  if (f) askDelete([f.rel], "1 张图片");
+};
 $("lbClose").onclick = closeLb;
 $("lbPrev").onclick = function () { openLb(lbIdx - 1); };
 $("lbNext").onclick = function () { openLb(lbIdx + 1); };
 $("lb").onclick = function (ev) { if (ev.target === $("lb")) closeLb(); };
 document.addEventListener("keydown", function (ev) {
+  // 确认弹窗盖在灯箱上面：这时候 Esc 该关弹窗，不该顺手把灯箱也关了
+  if ($("mask").classList.contains("on")) {
+    if (ev.key === "Escape") { ev.preventDefault(); $("dlgNo").onclick(); }
+    return;
+  }
   if (!$("lb").classList.contains("on")) return;
   if (ev.key === "Escape") closeLb();
   if (ev.key === "ArrowLeft") openLb(lbIdx - 1);

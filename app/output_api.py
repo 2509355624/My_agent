@@ -15,7 +15,9 @@
   GET  /api/output/thumb?path=&w=    网格用缩略图（JPEG，落盘缓存在
                                      state/output_thumbs/，键含 mtime+size）
   POST /api/output/delete           {"paths": ["web/生图页/miao", ...]}
-                                     文件就删文件，目录就整棵删；返回释放字节
+                                     文件就删文件，目录就整棵删；**移进回收站**
+                                     （state/output_trash/，保留原目录结构），
+                                     不真删磁盘，挪回去就能恢复
 
 取图：网格走 `/api/output/thumb`（一屏 18 张原图 150 MB，必卡）；灯箱走
 main.py 的 `/api/image/<path:filename>`（先读本地磁盘，没有才代理 ComfyUI
@@ -30,8 +32,10 @@ main.py 的 `/api/image/<path:filename>`（先读本地磁盘，没有才代理 
 """
 
 import hashlib
+import json
 import os
 import re
+import shutil
 import threading
 import time
 
@@ -123,6 +127,80 @@ def _tree_bytes(path):
             except OSError:
                 pass
     return total
+
+
+# ── 回收站 ───────────────────────────────────────────────
+# 2026-10-30 用户要求：「删掉瑕疵图的时候，二次确认后丢进回收站」。
+# 之前这里是真的 os.remove / shutil.rmtree —— 鼠标一点图就没了，误删无解。
+#
+# 放在 `state/output_trash/` 而不是 output 里面，两个原因：
+#   · output 里的任何目录都会被 `/api/output/tree` 当成子目录列出来，
+#     回收站混进去等于自己污染自己的目录树；
+#   · ComfyUI 自己也会扫 output，一堆待删的图搁在里面容易被误当成产出。
+#
+# **保留原目录结构**（output/web/生图页/x.png → trash/web/生图页/x.png），
+# 不按日期建批次目录：恢复的时候要的是「这张图原来在哪」，多一层日期只是
+# 让人多点两下。想撤销就直接把 trash 里那层拖回 output，不用查任何记录。
+TRASH_ROOT = os.path.join(BASE_DIR, "state", "output_trash")
+_TRASH_LOG = os.path.join(TRASH_ROOT, "_deleted.jsonl")
+
+
+def _unique_dest(dest):
+    """回收站里已有同名项时加 `-1`、`-2` 后缀。
+
+    **绝不覆盖**：覆盖等于换个位置真删一次，那这层回收站就白建了。
+    目录也走这条路（`os.path.splitext` 对目录名只会切出空扩展，名字整段保留）。
+    """
+    if not os.path.exists(dest):
+        return dest
+    stem, ext = os.path.splitext(dest)
+    n = 1
+    while True:
+        cand = "%s-%d%s" % (stem, n, ext)
+        if not os.path.exists(cand):
+            return cand
+        n += 1
+
+
+def _move_to_trash(rel, target):
+    """把 output 里的一项挪进回收站，返回回收站里的绝对路径。"""
+    parts = [p for p in str(rel or "").replace("\\", "/").split("/") if p]
+    if not parts or any(p in (".", "..") for p in parts):
+        raise ValueError("路径不合法：%r" % (rel,))
+
+    dest = os.path.abspath(os.path.join(TRASH_ROOT, *parts))
+    # 第二道保险：`rel` 进来前已过 `_safe_abs`，这里再钉一次「必须落在 trash 内」。
+    # 回收站是文件系统里真实可写的目录，拼错一次就是往外写。
+    try:
+        if os.path.commonpath([dest, os.path.abspath(TRASH_ROOT)]) != os.path.abspath(TRASH_ROOT):
+            raise ValueError("目标越界：%r" % (rel,))
+    except ValueError:
+        raise ValueError("目标越界：%r" % (rel,))
+
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    dest = _unique_dest(dest)
+    # `shutil.move` 同盘走 rename、跨盘自动 copy+删源；
+    # 不能用 `os.replace`——trash 和 output 不在同一个盘符时会直接抛异常。
+    shutil.move(target, dest)
+    return dest
+
+
+def _log_trash(rel, dest, size):
+    """往 `_deleted.jsonl` 追一行删除记录（时间 + 原路径 + 大小）。
+
+    只是给人看「什么时候删的」，恢复不依赖它。写失败不影响删除本身——
+    记录丢了图还在，反过来才是灾难。
+    """
+    try:
+        os.makedirs(TRASH_ROOT, exist_ok=True)
+        row = {"ts": round(time.time(), 3),
+               "rel": rel,
+               "trash": os.path.relpath(dest, TRASH_ROOT).replace("\\", "/"),
+               "bytes": size}
+        with open(_TRASH_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception:                                # noqa: BLE001
+        pass
 
 
 # ── 总占用缓存 ───────────────────────────────────────────
@@ -280,10 +358,16 @@ def api_thumb():
     return send_file(cache, mimetype="image/jpeg", max_age=86400, conditional=True)
 
 
-# ── 删除 ─────────────────────────────────────────────────
+# ── 删除（移入回收站）─────────────────────────────────────
 @bp.route("/api/output/delete", methods=["POST"])
 def api_delete():
-    """删文件或整目录。逐条独立 try，汇总回报；释放字节删前统计。"""
+    """把文件或整目录挪进回收站。逐条独立 try，汇总回报。
+
+    返回值里 `moved_bytes` 是**本次挪出 output 的字节数**，不是「磁盘腾出了
+    多少」——图还在 `state/output_trash/` 里占着，真要腾空间得清空回收站。
+    旧字段 `freed` / `freed_human` 保留同名同义（= moved_bytes），免得别处
+    引用旧响应的地方拿到 undefined。
+    """
     body = request.get_json(silent=True) or {}
     paths = body.get("paths") or []
     if isinstance(paths, str):
@@ -293,26 +377,30 @@ def api_delete():
     if len(paths) > 200:
         return jsonify({"ok": False, "error": "一次最多删 200 条"}), 400
 
-    deleted, failed, freed = [], [], 0
+    moved, failed, moved_bytes = [], [], 0
     for rel in paths:
         target = _safe_abs(rel)
         if not target:
             failed.append({"rel": rel, "error": "路径不合法或不存在"})
             continue
         try:
-            freed += _tree_bytes(target)
-            if os.path.isdir(target) and not os.path.islink(target):
-                import shutil
-                shutil.rmtree(target)
-            else:
-                os.remove(target)
-            deleted.append(rel)
+            size = _tree_bytes(target) if os.path.isdir(target) else os.path.getsize(target)
+            dest = _move_to_trash(rel, target)
+            _log_trash(rel, dest, size)
+            moved.append(rel)
+            moved_bytes += size
         except Exception as exc:                      # noqa: BLE001
             failed.append({"rel": rel, "error": str(exc)})
 
     # 让 /stat 立刻反映新账
     with _STAT_LOCK:
         _STAT["t"] = 0.0
-    return jsonify({"ok": not failed, "deleted": deleted,
-                    "failed": failed, "freed": freed,
-                    "freed_human": _fmt_bytes(freed)})
+    human = _fmt_bytes(moved_bytes)
+    return jsonify({"ok": not failed,
+                    "deleted": moved,          # 旧名，前端一直在用
+                    "moved": moved,
+                    "failed": failed,
+                    "moved_bytes": moved_bytes,
+                    "moved_human": human,
+                    "freed": moved_bytes,      # 兼容旧调用方
+                    "freed_human": human})
