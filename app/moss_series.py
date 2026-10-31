@@ -25,25 +25,39 @@
 私聊不允许分叉，回头就截断（后页标 `dead`，图留盘）。
 **两种策略共用同一份数据**，差别只在「回头时删不删」，见 `truncate`。
 
-## 系列是全局的，不是挂在会话上（2026-10-31 用户改的口径）
+## 系列是全局的，但**会话之间不串**
 
 一开始这里是「一个会话一个系列」，用户否了：他要的是**一份数据、一对 N**——
-群里玩到第 5 页，把那一页的回执分享出去，私聊里接着画；或者干脆在群里
-把编号给朋友，让对方在他的群里继续。所以：
+群里玩到第 5 页，把那一页的回执分享出去，私聊里接着画。所以：
 
     state/moss_series/S7K3/series.json     剧情本体，只有一份
     state/moss_series/_index.json          各会话「当前在用哪个系列」
 
 `S7K3` 是 4 位短码（去掉了 0/O/1/I 这些看错的），谁拿到都能续。
-**安全边界**是「编号不外传」：群里所有人都看得到回执，所以群里开出来的
+
+**但「共享剧情」不等于「共享主线」**（2026-10-31 用户第二次强调会话隔离）：
+
+    群聊玩到第 3 页 → 私聊搬过去续出第 4 页
+    → 群聊的 `moss合集` **不能**把私聊那第 4 页也打包进去
+    → 私聊回头截断第 3 页 **不能**把群聊的第 3 页也标没了
+
+所以每页记一个 `owner`（产生它的会话键），`dead` 之外再加 `dead_in`
+（在哪些会话里不可见）。分界就一条：
+
+  · **往根走 = 共享**：`chain` / `prev_lines` / `prev_scene` 不过滤会话，
+    私聊接着画时照样看得到群里那几页的剧情和场景卡——这正是「搬过来」的意思；
+  · **往后长 = 隔离**：`latest` / `alive` / `truncate` / `合集取链` 都按
+    owner 过滤，一个会话续出来的页、作废的页，绝不影响另一个会话。
+
+安全边界是「编号不外传」：群里所有人都看得到回执，所以群里开出来的
 系列对全群可见；私聊里开出来的，只有拿到编号的人能接。用户认这个边界。
 
 ## 最新的那一页 = 下一个续集接的地方
 
-`latest()` 取 `pages` 里**最后一条还没 dead 的**，不是取 n 最大的。
+`latest()` 取 `pages` 里**最后一条这个会话还看得到的**，不是取 n 最大的。
 群聊里 A 从 5 跑到 6a/7a、B 从 5 跑到 6b，latest 是 6b——
 谁刚跑完就接谁，这是用户认可的解法（「不断接最新的就行」）。
-`active_chain()` 顺着 parent 回到根，就是 `moss合集` 要的那条线。
+`chain()` 顺着 parent 回到根，就是 `moss合集` 要的那条线。
 
 ## 重画不是新页
 
@@ -167,6 +181,8 @@ def _load_raw(series_id):
     for pg in s["pages"]:
         pg.setdefault("history", [])
         pg.setdefault("dead", False)
+        pg.setdefault("dead_in", [])
+        pg.setdefault("owner", "")
     return s
 
 
@@ -183,12 +199,21 @@ def _save_raw(s):
 
 # ─── 会话索引 ─────────────────────────────────────────
 
-def _sess(target, target_id):
-    """会话 → 索引键。只留数字/字母，挡住路径分隔符。"""
+def session_key(target, target_id):
+    """会话 → 隔离键。只留数字/字母，挡住路径分隔符。
+
+    这个键同时是页的 `owner`：**同一条线上，各会话续出来的页互不影响**
+    （2026-10-31 用户第二次强调的会话隔离）。群聊是 `g<群号>`，
+    私聊是 `p<号>`，天然不会撞。
+    """
     tid = "".join(ch for ch in str(target_id or "") if ch.isalnum())
     if not tid:
         raise ValueError("会话 id 不合法：%r" % (target_id,))
     return ("g" if target == "group" else "p") + tid
+
+
+# 老名字，内部还有几处在用，别删
+_sess = session_key
 
 
 def _load_index():
@@ -278,18 +303,42 @@ def open_new(target, target_id, title="", style="", cast=None):
 
 # ─── 页查询 ───────────────────────────────────────────
 
-def alive(series):
-    """没被截断的页，按创建顺序（= `pages` 数组顺序）。"""
-    return [p for p in series.get("pages") or [] if not p.get("dead")]
+def alive(series, owner=""):
+    """这个会话看得到的页，按创建顺序。
+
+    两条过滤，都跟会话隔离有关：
+      · `dead`     —— 老的全局作废标记（兼容早期档案），所有会话都看不到；
+      · `dead_in`  —— 「在**这些会话**里作废」。私聊回头截断只往这里加自己的
+        键，群聊那边照样看得见——这是 2026-10-31 用户要的隔离：
+        私聊里重开一条线，不能把群里正在玩的那几页弄没。
+
+    `owner` 给空串 = 不分会话的全局视角（测试和排查用）。
+    """
+    out = []
+    for p in series.get("pages") or []:
+        if p.get("dead"):
+            continue
+        if owner and owner in (p.get("dead_in") or []):
+            continue
+        out.append(p)
+    return out
 
 
-def latest(series):
-    """下一个续集该接的那一页 = 最后一条还活着的页。
+def latest(series, owner=""):
+    """下一个续集该接的那一页 = 最后一条**这个会话**还看得到的页。
 
     取「创建顺序的最后一条」而不是「n 最大的」：群聊里 B 从第 5 页重开
     跑出 6b，6b 在数组末尾，但它和 6a 同号。按 n 取会拿回 6a，接错分支。
+
+    按 owner 过滤是隔离的一部分：私聊在 S7K3 上续出的第 6 页，
+    不该在群里变成「最新页」。同号分支两边各有一个时，**取本会话自己那个**——
+    所以这里跟 `by_n` 一样先按 owner 收窄，收窄后为空才退回全局最后一个。
     """
-    ok = alive(series)
+    ok = alive(series, owner)
+    if owner:
+        mine = [p for p in ok if p.get("owner") == owner]
+        if mine:
+            return mine[-1]
     return ok[-1] if ok else None
 
 
@@ -300,10 +349,21 @@ def by_id(series, page_id):
     return None
 
 
-def by_n(series, n, include_dead=False):
-    """第 n 页。同号有多个分支时取**最新创建的**那个。"""
+def by_n(series, n, owner="", include_dead=False):
+    """第 n 页。同号有多个分支时**优先本会话那个**，其次取最新创建的。
+
+    手打编号 `S7K3-P06` 时，群聊和私聊各有一个第 6 页是完全正常的
+    （两边各续各的）。不按 owner 优先就会把人送到对面那条线上去。
+    """
     hit = [p for p in (series.get("pages") or [])
-           if p.get("n") == int(n) and (include_dead or not p.get("dead"))]
+           if p.get("n") == int(n)
+           and (include_dead or (not p.get("dead")
+                                 and (not owner
+                                      or owner not in (p.get("dead_in") or []))))]
+    if owner:
+        mine = [p for p in hit if p.get("owner") == owner]
+        if mine:
+            hit = mine
     return hit[-1] if hit else None
 
 
@@ -331,9 +391,14 @@ def chain(series, page_id):
     return out
 
 
-def active_chain(series):
-    """当前活跃那条线（最新页所在的链）——`moss合集` 就发这一条。"""
-    last = latest(series)
+def active_chain(series, owner=""):
+    """这个会话当前活跃那条线（最新页所在的链）。
+
+    `moss合集` **已经不用它了**——合集改成「引用哪一页就发它所在的那条链」
+    （`chain(series, page_id)`），那才是真的隔离：群里引用第 3 页，
+    就只发到第 3 页，不会把私聊后来续的页一起打包。留着是给排查用。
+    """
+    last = latest(series, owner)
     return chain(series, last["id"]) if last else []
 
 
@@ -366,11 +431,14 @@ def _next_id(series, n):
 
 
 def add_page(series, *, parent_id, task, brief, seed=None,
-             summary="", scene="", title=""):
+             summary="", scene="", title="", owner=""):
     """追一页。返回新页节点。
 
     `parent_id` 为空 = 系列第一页。`n` 由 parent 推：parent 的 n + 1，
     没有 parent 就是 1。私聊截断后从第 5 页重开，新页照样是 6。
+
+    `owner` 是**产生这一页的会话键**（`session_key`）。会话隔离全靠它：
+    谁续出来的页算谁的，别的会话看得到剧情、但不会把它当成自己的主线。
     """
     parent = by_id(series, parent_id) if parent_id else None
     n = (parent["n"] + 1) if parent else 1
@@ -383,7 +451,9 @@ def add_page(series, *, parent_id, task, brief, seed=None,
         "seed": seed,
         "summary": summary,
         "scene": scene,
+        "owner": owner or "",
         "dead": False,
+        "dead_in": [],
         "history": [],
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -405,12 +475,18 @@ def fill(series, page_id, **kw):
     return pg
 
 
-def truncate(series, page_id):
-    """私聊回头：把这一页**之后**的页标 dead，返回被杀掉的那批。
+def truncate(series, page_id, owner=""):
+    """私聊回头：把这一页**之后**的页从**这个会话**里移出主线，返回那批页。
 
     「之后」按 n 判，不按链判——私聊不允许分支，n 一定单调递增，
-    所以 n > 本页 n 的就是要作废的。图不删，只标 dead，
-    用户回头想捞还捞得回来（`moss合集` 不会带它们）。
+    所以 n > 本页 n 的就是要作废的。
+
+    **只往 `dead_in` 里加 owner，不写全局 `dead`**（2026-10-31 用户要求
+    的会话隔离）。否则：群里玩到第 3 页 → 私聊搬过去 → 私聊回头从第 2 页
+    重开 → 群里第 3 页也跟着消失。群里那些人什么也没干，线就断了。
+
+    图不删，只是在这个会话里看不见；`moss合集` 也不会带它们。
+    `owner` 给空串才写全局 `dead`（老行为，只有测试和手工修复会用到）。
     """
     pg = by_id(series, page_id)
     if pg is None:
@@ -419,9 +495,17 @@ def truncate(series, page_id):
     for p in series.get("pages") or []:
         if p is pg or p.get("dead"):
             continue
-        if p.get("n", 0) > pg.get("n", 0):
+        if p.get("n", 0) <= pg.get("n", 0):
+            continue
+        if not owner:
             p["dead"] = True
             killed.append(p)
+            continue
+        seen = p.setdefault("dead_in", [])
+        if owner in seen:
+            continue
+        seen.append(owner)
+        killed.append(p)
     return killed
 
 

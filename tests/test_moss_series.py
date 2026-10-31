@@ -8,6 +8,9 @@
 2. **截断**（私聊）：回头之后后面的页要标死，但**图不能删**——用户回头
    可能还想捞回来。
 3. **重画**：换种子顶替同一页，旧版本进 history，页号 parent 都不动。
+4. **会话隔离**（2026-10-31 用户第二次强调）：剧情一份共享，但**往后长**和
+   **作废**按会话分开——私聊续出的页不能跑进群聊的合集，私聊回头截断
+   不能把群聊正在玩的那几页弄没。见 `SessionIsolationTest`。
 
 全部用临时目录，不碰真档案。
 """
@@ -254,6 +257,99 @@ class SharingTest(_Base):
         moss_series.bind("private", "2", sid)
         self.assertEqual(len(moss_series.load(
             moss_series.current("private", "2"))["pages"]), 1)
+
+
+class SessionIsolationTest(_Base):
+    """群聊和私聊共用一份剧情，但**主线互不干扰**（2026-10-31 用户要求）。
+
+    用户原话：「群聊把编号搬到我私聊这一边，然后我私聊这边自己去聊……
+    不然你私聊场景跑之后，你可能会影响到那边群聊的。」
+
+    两个真实会串的地方都钉死：
+      · 群聊 `moss合集` 不能把私聊续出的页打包（以前用全局 `active_chain`）；
+      · 私聊回头截断不能把群聊的页弄没（以前写全局 `dead`）。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.G = moss_series.session_key("group", "1103174141")
+        self.P = moss_series.session_key("private", "1627547639")
+        s = moss_series.open_new("group", "1103174141", title="醒来之后")
+        self.sid = s["id"]
+        self.p1 = self.add("", "群1", self.G)
+        self.p2 = self.add(self.p1["id"], "群2", self.G)
+        self.p3 = self.add(self.p2["id"], "群3", self.G)
+
+    def add(self, parent, brief, owner):
+        return moss_series.mutate(self.sid, lambda x: moss_series.add_page(
+            x, parent_id=parent, task=brief, brief=brief, seed=1,
+            summary=brief + "演了什么", owner=owner))
+
+    def test_group_album_stops_at_the_quoted_page(self):
+        """群聊引用第 3 页说合集：只能到第 3 页，不许带上私聊续的第 4 页。"""
+        self.add(self.p3["id"], "私聊4", self.P)
+        line = moss_series.chain(moss_series.load(self.sid), self.p3["id"])
+        self.assertEqual([p["brief"] for p in line], ["群1", "群2", "群3"])
+
+    def test_private_album_includes_its_own_page(self):
+        p4 = self.add(self.p3["id"], "私聊4", self.P)
+        line = moss_series.chain(moss_series.load(self.sid), p4["id"])
+        self.assertEqual([p["brief"] for p in line], ["群1", "群2", "群3", "私聊4"])
+
+    def test_private_truncate_leaves_the_group_alone(self):
+        """**这是最要命的一条**：群里的人什么都没干，线不能断。"""
+        self.add(self.p3["id"], "私聊4", self.P)
+        killed = moss_series.mutate(
+            self.sid, lambda x: moss_series.truncate(x, self.p2["id"], self.P))
+        self.assertEqual(len(killed), 2)
+        group_view = moss_series.alive(moss_series.load(self.sid), self.G)
+        self.assertEqual([p["brief"] for p in group_view], ["群1", "群2", "群3", "私聊4"])
+        private_view = moss_series.alive(moss_series.load(self.sid), self.P)
+        self.assertEqual([p["brief"] for p in private_view], ["群1", "群2"])
+
+    def test_truncate_does_not_touch_the_global_dead_flag(self):
+        """隔离靠 `dead_in` 记会话，不是把页真的打死——图还得留着。"""
+        self.add(self.p3["id"], "私聊4", self.P)
+        moss_series.mutate(
+            self.sid, lambda x: moss_series.truncate(x, self.p2["id"], self.P))
+        for p in moss_series.load(self.sid)["pages"]:
+            self.assertFalse(p["dead"], p["brief"])
+
+    def test_latest_follows_the_session(self):
+        self.add(self.p3["id"], "群-第4页", self.G)
+        self.add(self.p3["id"], "私-第4页", self.P)
+        s = moss_series.load(self.sid)
+        self.assertEqual(moss_series.latest(s, self.G)["brief"], "群-第4页")
+        self.assertEqual(moss_series.latest(s, self.P)["brief"], "私-第4页")
+
+    def test_same_page_number_resolves_to_own_branch(self):
+        """群私各有一个第 4 页时，手打 `XXXX-P04` 必须给本会话那个。"""
+        self.add(self.p3["id"], "群-第4页", self.G)
+        self.add(self.p3["id"], "私-第4页", self.P)
+        code = moss_series.code_of(self.sid, 4)
+        sid_g, pg_g, _ = moss_msgs.locate("", code, owner=self.G)
+        sid_p, pg_p, _ = moss_msgs.locate("", code, owner=self.P)
+        self.assertEqual((sid_g, pg_g["brief"]), (self.sid, "群-第4页"))
+        self.assertEqual((sid_p, pg_p["brief"]), (self.sid, "私-第4页"))
+
+    def test_quote_by_id_is_not_owner_filtered(self):
+        """引用是精确指向某一条消息，就算引用的是对面会话的页也得认。"""
+        p4 = self.add(self.p3["id"], "私聊4", self.P)
+        moss_msgs.remember("MID-P4", self.sid, p4["id"], 4)
+        sid, pg, how = moss_msgs.locate("MID-P4", "", owner=self.G)
+        self.assertEqual((sid, pg["brief"], how), (self.sid, "私聊4", "id"))
+
+    def test_prev_context_is_shared_on_purpose(self):
+        """前情不隔离：私聊接着画时，**必须**看得到群里那几页。"""
+        p4 = self.add(self.p3["id"], "私聊4", self.P)
+        s = moss_series.load(self.sid)
+        self.assertIn("群1", moss_series.prev_lines(s, p4["id"]))
+        self.assertIn("群3", moss_series.prev_lines(s, p4["id"]))
+
+    def test_session_key_separates_group_and_private(self):
+        self.assertEqual(self.G, "g1103174141")
+        self.assertEqual(self.P, "p1627547639")
+        self.assertNotEqual(self.G, self.P)
 
 
 class PrevContextTest(_Base):

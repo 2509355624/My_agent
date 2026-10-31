@@ -323,7 +323,16 @@ def _pend(target, target_id, **kw):
 
 # ─── 入口 ─────────────────────────────────────────────
 
-def _miss_note(quote_text, payload):
+def _owner(target, target_id):
+    """本会话的隔离键。取不到就当没隔离，不让它把整轮指令打断。"""
+    try:
+        return series_mod.session_key(target, target_id)
+    except ValueError:
+        log.warning("moss 会话键取不到（%s %r），按全局处理", target, target_id)
+        return ""
+
+
+def _miss_note(quote_text, payload, owner=""):
     """定位失败时，说清是**哪种**失败。
 
     三种情况差很多，笼统回一句「认不出来」用户只能瞎猜：
@@ -347,7 +356,7 @@ def _miss_note(quote_text, payload):
         return ("没找到编号 `%s` 这条线。\n"
                 "编号是不是打错了？卡片上印的是 `S7K3-P05` 这种。\n"
                 "也可以直接**引用那一页的图**，那样不用打编号。" % code)
-    total = len(series_mod.alive(series))
+    total = len(series_mod.alive(series, owner))
     return ("`%s` 这条线一共 %d 页，没有第 %02d 页。\n"
             "编号对不对？" % (sid, total, n))
 
@@ -363,12 +372,15 @@ def start(target, target_id, action, payload, quote_id="", quote_text="",
         return _fire(target, target_id, "new", payload, "",
                      "", reply_to, sender_uin)
 
-    sid, page, how = moss_msgs.locate(quote_id, quote_text)
+    # 会话隔离（2026-10-31 用户强调）：同一条线，群聊和私聊各续各的。
+    # 定位时带上本会话的键，手打编号才会优先命中他自己那个第 6 页。
+    owner = _owner(target, target_id)
+    sid, page, how = moss_msgs.locate(quote_id, quote_text, owner=owner)
     if not page and payload:
         # 转发/截图之后 id 失效、又没引用——用户手打的编号就在正文里
-        sid, page, how = moss_msgs.locate("", payload)
+        sid, page, how = moss_msgs.locate("", payload, owner=owner)
     if not page:
-        return False, _miss_note(quote_text, payload)
+        return False, _miss_note(quote_text, payload, owner)
 
     log.info("moss 定位成功：%s 第 %s 页（靠 %s）", sid, page.get("n"), how)
 
@@ -376,7 +388,7 @@ def start(target, target_id, action, payload, quote_id="", quote_text="",
     # 放在 `_fire` 之前：占位要等真开跑，弹确认时还没开跑，不能白占一个名额。
     if action == "continue" and target != "group":
         series = series_mod.load(sid)
-        behind = [p for p in series_mod.alive(series or {})
+        behind = [p for p in series_mod.alive(series or {}, owner)
                   if p.get("n", 0) > page.get("n", 0)]
         if behind:
             last = behind[-1].get("n")
@@ -414,19 +426,20 @@ def _fire(target, target_id, action, payload, sid, page_id,
 
     th = threading.Thread(target=_work, name="moss-comic", daemon=True,
                           args=(target, target_id, action, payload, sid, page_id,
-                                str(reply_to or ""), sender_uin, truncate))
+                                str(reply_to or ""), sender_uin, truncate,
+                                _owner(target, target_id)))
     th.start()
     return True, ""
 
 
 def _work(target, target_id, action, payload, sid, page_id, reply_to,
-          sender_uin, truncate):
+          sender_uin, truncate, owner):
     try:
         if action == "new":
-            _do_new(target, target_id, payload, reply_to, sender_uin)
+            _do_new(target, target_id, payload, reply_to, sender_uin, owner)
         elif action == "continue":
             _do_continue(target, target_id, payload, sid, page_id, reply_to,
-                         sender_uin, truncate)
+                         sender_uin, truncate, owner)
         elif action == "redo":
             _do_redo(target, target_id, sid, page_id, reply_to, sender_uin)
         elif action == "album":
@@ -443,7 +456,7 @@ def _work(target, target_id, action, payload, sid, page_id, reply_to,
 
 # ─── 动作：新开 ───────────────────────────────────────
 
-def _do_new(target, target_id, brief, reply_to, sender_uin):
+def _do_new(target, target_id, brief, reply_to, sender_uin, owner=""):
     layout, brief, picked = _layout(brief)
     if not brief:
         _say(target, target_id,
@@ -465,7 +478,7 @@ def _do_new(target, target_id, brief, reply_to, sender_uin):
     seed = random.randint(1, 2 ** 31 - 1)
     page = series_mod.mutate(sid, lambda x: series_mod.add_page(
         x, parent_id="", task=d, brief=brief, seed=seed,
-        title=spec.get("title") or ""))
+        title=spec.get("title") or "", owner=owner))
     _say(target, target_id,
          "🀄 新开一条线 **%s** · 第 01 页\n%s\n%d 格 · %d 步 · cfg %s · 约 100 秒"
          % (sid, _lines(spec), cells, moss_api.STEPS, moss_api.CFG), reply_to)
@@ -480,7 +493,7 @@ def _do_new(target, target_id, brief, reply_to, sender_uin):
 # ─── 动作：续集 ───────────────────────────────────────
 
 def _do_continue(target, target_id, brief, sid, page_id, reply_to, sender_uin,
-                 truncate):
+                 truncate, owner=""):
     series = series_mod.load(sid)
     if not series:
         _say(target, target_id, "这条线不在了（编号 %s）" % sid, reply_to)
@@ -498,12 +511,14 @@ def _do_continue(target, target_id, brief, sid, page_id, reply_to, sender_uin,
         return
 
     # 私聊：回头续 = 截断，先问一句。群聊：直接开新分支（用户拍板的）。
+    # 截断**只作废本会话看得到的页**（`truncate` 往 dead_in 加 owner）：
+    # 群里那些人还在往下画的时候，私聊回头重开不该把他们那几页弄没。
     if truncate:
-        behind = [p for p in series_mod.alive(series)
+        behind = [p for p in series_mod.alive(series, owner)
                   if p.get("n", 0) > page.get("n", 0)]
         if behind:
             killed = series_mod.mutate(
-                sid, lambda x: series_mod.truncate(x, page_id)) or []
+                sid, lambda x: series_mod.truncate(x, page_id, owner)) or []
             # 占位号要跟着截断走：原来按「后面还有几页」估的，现在只剩一页了
             _release(sid)
             _take(sid, int(page.get("n") or 0) + 1)
@@ -524,7 +539,7 @@ def _do_continue(target, target_id, brief, sid, page_id, reply_to, sender_uin,
     seed = random.randint(1, 2 ** 31 - 1)
     nxt = int(page.get("n") or 0) + 1
     new_page = series_mod.mutate(sid, lambda x: series_mod.add_page(
-        x, parent_id=page_id, task=d, brief=brief, seed=seed))
+        x, parent_id=page_id, task=d, brief=brief, seed=seed, owner=owner))
     _say(target, target_id,
          "🀄 %s · 第 %02d 页\n%s\n%d 格 · %d 步 · cfg %s · 约 100 秒"
          % (sid, nxt, _lines(spec), cells, moss_api.STEPS, moss_api.CFG),
@@ -573,9 +588,13 @@ def _do_album(target, target_id, sid, page_id, rest, reply_to):
     if not series:
         _say(target, target_id, "这条线不在了（编号 %s）" % sid, reply_to)
         return
-    # 取**引用那一页所在的整条链**，不是只有它前面那几页：
-    # 用户引用第 2 页说「合集」，期待的是「这条线」，不是「前两页」。
-    line = series_mod.active_chain(series)
+    # 取**引用那一页所在的整条链**（`chain` 顺着 parent 往根走，不过滤会话）。
+    #
+    # 这里以前用的是 `active_chain`（= 全局最新页那条链），会串会话：
+    # 群聊玩到第 3 页 → 私聊搬过去续出第 4 页 → 群里引用第 3 页说 `moss合集`，
+    # 结果把私聊那第 4 页也打包发到群里了（2026-10-31 用户点出来的）。
+    # 按 page_id 取链天然就隔离：引用哪一页，就发到那一页为止。
+    line = series_mod.chain(series, page_id)
     if not line:
         _say(target, target_id, "这条线还是空的", reply_to)
         return

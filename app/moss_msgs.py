@@ -87,11 +87,16 @@ def recall(message_id):
         return _load().get(str(message_id or "").strip())
 
 
-def locate(quoted_id="", quoted_text=""):
+def locate(quoted_id="", quoted_text="", owner=""):
     """引用一段 → `(series_id, 页节点, 命中方式)`，认不出返回 `("", None, "")`。
 
     `quoted_text` 是被引消息的正文（引用段里除图之外的全部文字），
     用来在上面没有 id 时抠 `S7K3-P05`。
+
+    `owner` 是**发指令那个会话**的键（`moss_series.session_key`）。同一条线上
+    群聊和私聊可能都有「第 6 页」，手打编号时必须优先给他自己那个，
+    否则会把群友送到别人的分支上（2026-10-31 用户要的会话隔离）。
+    引用命中 `id` 时不看 owner——那是精确指向某一条消息，本来就不该改。
     """
     rec = recall(quoted_id) if quoted_id else None
     if rec:
@@ -104,7 +109,7 @@ def locate(quoted_id="", quoted_text=""):
     if sid and n:
         s = series_mod.load(sid)
         if s:
-            pg = series_mod.by_n(s, n)
+            pg = series_mod.by_n(s, n, owner=owner)
             if pg:
                 return sid, pg, "code"
     return "", None, ""
