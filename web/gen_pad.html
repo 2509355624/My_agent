@@ -695,12 +695,15 @@ async function gen(promptOverride) {
     const body = {skill: CUR, prompt: prompt, artist_prefix: artistPrefix};
     if (LORA_KIND === 'toggle' && LORA.length) body.loras = readLoraRows();
     // 步数 / CFG / 负向只在 ComfyUI 渠道发；NAI 走云端，本地参数没意义
-    // （后端也会忽略，但前端先拦住，免得用户以为填了生效）。
+    // （后端也会忽略，但前端先拦住，免得用户以为填了生效）。输入框被禁用
+    // （渠道模板没这个字段）或整块藏起来（渠道没有负向节点）时不发——
+    // 否则会带着上一个渠道留下的值跑，后端只能打条警告然后忽略。
     const st = STEPS_INPUT.value.trim();
-    if (st && !isNai()) body.steps = Number(st);
+    if (st && !isNai() && !STEPS_INPUT.disabled) body.steps = Number(st);
     const cf = CFG_INPUT.value.trim();
-    if (cf && !isNai()) body.cfg = Number(cf);
-    const ng = NEG_INPUT.value.trim();
+    if (cf && !isNai() && !CFG_INPUT.disabled) body.cfg = Number(cf);
+    const negOn = document.getElementById('negBox').classList.contains('on');
+    const ng = negOn ? NEG_INPUT.value.trim() : '';
     if (ng && !isNai()) body.negative = ng;
     const d = await api('/api/gen/submit', body);
     JOBS.unshift(d.job);
