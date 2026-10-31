@@ -137,6 +137,67 @@ class ThreeTierFivePanelTest(unittest.TestCase):
         self.assertEqual(moss_comic.layout_min_width("不存在的版式"), 0)
 
 
+class TwoTierSixPanelTest(unittest.TestCase):
+    """六格「上二下四」（`2t4b`，2026-10-31 起的默认六格）。
+
+    存在的理由是**版式必须有主次**：六格等分（`3x2`）每格 341 宽、各占 16.7%，
+    读起来像幻灯片，字数预算也只有 512 格的一半。这个版式把上排两格做成
+    512×768（各 25%），下排四格 512×384（各 12.5%），面积比 2:1，格宽全 512。
+    下面钉住这几条性质，防止后来被改成「看起来像上二下四、其实不均匀」。
+    """
+
+    def boxes(self):
+        return moss_comic.LAYOUT_BOXES["2t4b"]
+
+    def test_six_panels(self):
+        self.assertEqual(len(moss_comic.LAYOUTS["2t4b"][1]), 6)
+        self.assertEqual(len(self.boxes()), 6)
+
+    def test_covers_canvas_exactly(self):
+        total = sum(_area(b) for b in self.boxes())
+        self.assertEqual(total, moss_comic._CANVAS_W * moss_comic._CANVAS_H)
+
+    def test_no_overlap(self):
+        boxes = self.boxes()
+        for i in range(len(boxes)):
+            for j in range(i + 1, len(boxes)):
+                self.assertFalse(_overlap(boxes[i], boxes[j]), (i, j))
+
+    def test_reading_order_top_row_then_bottom_grid(self):
+        """顺序必须和方位名对上：上左 → 上右 → 中左 → 中右 → 下左 → 下右。"""
+        top_l, top_r, mid_l, mid_r, bot_l, bot_r = self.boxes()
+        # 上排整幅落在上半区，下排四格落在下半区
+        for b in (top_l, top_r):
+            self.assertEqual((b[0], b[2]), (-moss_comic._HY, 0))
+        for b in (mid_l, mid_r, bot_l, bot_r):
+            self.assertGreaterEqual(b[0], 0)
+        self.assertEqual((mid_l[2], bot_l[2]), (moss_comic._QM, moss_comic._HY))
+        # 同排左在右前
+        self.assertLess(top_l[1], top_r[1])
+        self.assertLess(mid_l[1], mid_r[1])
+        self.assertLess(bot_l[1], bot_r[1])
+        # 中排在排在前
+        self.assertLess(mid_l[0], bot_l[0])
+
+    def test_top_row_weighs_twice_the_bottom(self):
+        """面积比 2:1 是「主次一眼可见」的全部来源，差 1.2 倍是看不出来的。"""
+        areas = [_area(b) for b in self.boxes()]
+        self.assertEqual(max(areas), 2 * min(areas))
+        self.assertEqual(areas[:2], [max(areas)] * 2)
+
+    def test_key_panel_constraint_is_satisfiable(self):
+        """`key_panel` 要求「落在面积最大那格」——这里就是第 1 或第 2 格。"""
+        areas = [_area(b) for b in self.boxes()]
+        biggest = max(areas)
+        self.assertEqual([i for i, a in enumerate(areas) if a == biggest], [0, 1])
+
+    def test_every_panel_is_at_least_512_wide(self):
+        """格宽全 512 = 2x2 的规整格，所以台词预算和 2x2 一致，这是选它当默认的理由。"""
+        widths = [b[3] - b[1] for b in self.boxes()]
+        self.assertEqual(set(widths), {512})
+        self.assertEqual(moss_comic.layout_min_width("2t4b"), 512)
+
+
 class SixPanelPromptTest(unittest.TestCase):
     @staticmethod
     def _spec(n=6, layout="3x2"):

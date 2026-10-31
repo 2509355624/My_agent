@@ -128,16 +128,21 @@ class SmallComicWordTest(unittest.TestCase):
         self.assertEqual(brief, "")
         self.assertEqual(tip, moss_bot.USAGE)
 
-    def test_layout_is_five_panels(self):
-        """单页默认五格：LAYOUT 和 LAYOUTS 必须对得上，不然 check 会报格数不符。"""
+    def test_layout_is_six_panels(self):
+        """单页默认六格：LAYOUT 和 LAYOUTS 必须对得上，不然 check 会报格数不符。"""
         from app import moss_comic
-        self.assertEqual(moss_bot.LAYOUT, "1t2m2b")
+        self.assertEqual(moss_bot.LAYOUT, "2t4b")
         self.assertEqual(moss_bot.PAGES, 1)
-        self.assertEqual(len(moss_comic.LAYOUTS[moss_bot.LAYOUT][1]), 5)
+        self.assertEqual(len(moss_comic.LAYOUTS[moss_bot.LAYOUT][1]), 6)
+
+    def test_default_is_not_the_equal_grid(self):
+        """默认不能退回等分六格：等权平铺没有主次，字数预算也砍半。"""
+        self.assertNotEqual(moss_bot.LAYOUT, "3x2")
 
     def test_usage_mentions_default_panels(self):
-        self.assertIn("默认五格", moss_bot.USAGE)
-        self.assertIn("六格", moss_bot.USAGE)   # 点名六格仍是选项
+        self.assertIn("默认六格", moss_bot.USAGE)
+        self.assertIn("五格", moss_bot.USAGE)   # 点名五格仍是选项
+        self.assertIn("等分六格", moss_bot.USAGE)  # 等分六格怎么要也写清楚
 
 
 class DetectLayoutTest(unittest.TestCase):
@@ -153,7 +158,8 @@ class DetectLayoutTest(unittest.TestCase):
         cases = {
             "四格：知更鸟登台演唱": "2x2",
             "知更鸟登台演唱，画成四格": "2x2",
-            "六格 鲁迪推开洛琪希家的门": "3x2",
+            # 裸说六格给「上二下四」，不是等分六格
+            "六格 鲁迪推开洛琪希家的门": "2t4b",
             "两格：雨夜便利店": "2h",
             "三格 她走进房间": "3h",
         }
@@ -161,6 +167,13 @@ class DetectLayoutTest(unittest.TestCase):
             lay, _clean, ok = self._pick(text)
             self.assertTrue(ok, text)
             self.assertEqual(lay, want, text)
+
+    def test_equal_six_panels_must_be_asked_for(self):
+        """要等分六格必须说出来：默认六格是有主次的「上二下四」。"""
+        for text in ("等分六格 他愣在原地", "六格一样大 他愣在原地", "上三下三 他愣在原地"):
+            lay, _clean, ok = self._pick(text)
+            self.assertTrue(ok, text)
+            self.assertEqual(lay, "3x2", text)
 
     def test_five_panels_defaults_to_the_writable_one(self):
         """裸说「五格」给 1t2m2b：四小格 512 宽，能正常写字。"""
@@ -173,8 +186,10 @@ class DetectLayoutTest(unittest.TestCase):
         cases = {
             "上面一大格 她推开门，发现屋里有别人": "1t2m2b",
             "上排三个小格 他愣住，然后转身": "3t2b",
+            "上面两个大格 她和他隔着一道门": "2t4b",
             "用 1t2m2b 她坐在窗边": "1t2m2b",
             "3t2b 三个反应加两个大画面": "3t2b",
+            "用 2t4b 她坐在窗边": "2t4b",
         }
         for text, want in cases.items():
             lay, _clean, ok = self._pick(text)
@@ -210,6 +225,7 @@ class DetectLayoutTest(unittest.TestCase):
             "四格：知更鸟登台演唱": "知更鸟登台演唱",
             "知更鸟登台演唱，画成四格": "知更鸟登台演唱",
             "六格 鲁迪推开洛琪希家的门": "鲁迪推开洛琪希家的门",
+            "等分六格 鲁迪推开洛琪希家的门": "鲁迪推开洛琪希家的门",
             "用 1t2m2b 她坐在窗边": "她坐在窗边",
         }
         for text, want in cases.items():
@@ -220,7 +236,8 @@ class DetectLayoutTest(unittest.TestCase):
     def test_every_picked_layout_exists(self):
         """认出来的键必须在 LAYOUTS / LAYOUT_BOXES 里都有，否则编译时 KeyError。"""
         for text in ("四格 x", "六格 x", "五格 x", "两格 x", "三格 x", "一格：x",
-                     "上面一大格 x", "上排三个小格 x"):
+                     "上面一大格 x", "上排三个小格 x", "上面两个大格 x",
+                     "等分六格 x"):
             lay, _clean, ok = self._pick(text)
             self.assertTrue(ok, text)
             self.assertIn(lay, moss_comic.LAYOUTS, text)
