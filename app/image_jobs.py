@@ -153,6 +153,7 @@ unet 4487MB ≈ 10.5GB 权重，而空闲可用只有 10.78GB。当天实测的�
 """
 
 import collections
+import json
 import logging
 import os
 import random
@@ -650,7 +651,8 @@ class Job:
     def __init__(self, target, target_id, workflow, skill=None, weight=1, seq=0,
                  nai_i2i=None, tag=None, prompt=None, intent=None, seed=None,
                  chan=None, landscape=False, quiet=False, batch=None,
-                 out_dir=None, comfy_down=False, reply_to="", at_user=None):
+                 out_dir=None, comfy_down=False, reply_to="", at_user=None,
+                 i2i_src=None, i2i_name=""):
         self.target = target
         self.target_id = target_id
         self.workflow = workflow
@@ -720,6 +722,19 @@ class Job:
         # 影响一件事：回执不能再说「正在画了」，得说「正在重启，回来就画」。
         # 默认 False：网页端和漫画台不吃这条（漫画台自己会先 wait_comfy_up）。
         self.comfy_down = bool(comfy_down)
+        # 垫图的源图字节与工作流里的占位名（2026-10-31 用户拍板）。
+        #
+        # 为什么不在入队前传：`/upload/image` 要求 ComfyUI 在线，而上传这一步
+        # 在 `generate_image` 里跑，位于**入队之前**——碰不上 worker 那层
+        # `wait_comfy_up`。于是 ComfyUI 一进重启窗口，文生图安静地等，垫图却
+        # 当场报「源图传不进」，同一台机器两种口径。用户原话：「难道不应该是
+        # 垫图到队列，然后等待 ComfyUI 跑起来之后自动跑吗？」
+        #
+        # 现在的做法：入队时工作流里先填 `i2i_name`（一个占位名），把缩放后的
+        # PNG 字节挂在这里；worker 等到 ComfyUI 上线后真正上传，再把占位名
+        # 换成它返回的真名（见 `_worker`）。传完立即把 `i2i_src` 置 None 释放。
+        self.i2i_src = i2i_src
+        self.i2i_name = i2i_name or ""
         self.waits = 0              # 被冷却 / 被插队推回过几次（只为日志）
         self.skill_done = False     # 已经成功跑完一张？决定跑完要不要开冷却
         self.prompt_id = None
@@ -1045,7 +1060,7 @@ def snapshot():
 def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
             intent=None, seed=None, resample_fn=None, landscape=None,
             quiet=False, batch=None, out_dir=None, comfy_down=False,
-            reply_to=None, at_user=None):
+            reply_to=None, at_user=None, i2i_src=None, i2i_name=""):
     """把一张图排进**它该去的那条通道**的队列，返回 (job, reason)。
 
     prompt 是模型写的那段原始提示词，只用来**出图后记进账本**（编号 → 提示词，
@@ -1113,7 +1128,8 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
                   nai_i2i=nai_i2i, prompt=prompt, intent=intent, seed=seed,
                   chan=chan, landscape=landscape, quiet=quiet, batch=batch,
                   out_dir=out_dir, comfy_down=comfy_down,
-                  reply_to=reply_to, at_user=at_user)
+                  reply_to=reply_to, at_user=at_user,
+                  i2i_src=i2i_src, i2i_name=i2i_name)
         # 随机口令的「被拦静默重抽」钩子（2026-10-05）：resample_fn 是无参
         # 可调用体，被审核拦下时由 worker 调它换一条新提示词，同 job 重跑。
         # 最多重抽 2 次（3 尝试）；普通生图不传，拦截行为与从前完全一致。
@@ -1254,6 +1270,56 @@ def _take(chan):
         chan.wake.clear()
 
 
+def _submit_i2i_source(job):
+    """把这张的源图传进 ComfyUI 并换掉占位名。返回 True=可以提交。
+
+    失败时原因已经挂在 `job.error` 上，调用方负责发通知 + `_finish`。
+
+    **`_worker` 和 `_drain` 共用**：后者是测试用的同步驱动器，走的不是 worker
+    线程。漏掉这一步的话，测试看到的工作流里还留着占位名，而线上提交的是真名
+    ——等于拿一个假的中间态去验证，测出来的绿没有任何意义。
+    """
+    # `isinstance(..., bytes)` 而不是 `is not None`：测试里有把 Mock 当 job 传
+    # 进来的（见 `_take` 那段的注释），Mock 上取任何属性都拿得到东西，用 None
+    # 判断会把每一张都当成垫图去上传。
+    if not isinstance(getattr(job, "i2i_src", None), (bytes, bytearray)):
+        return True
+    try:
+        _upload_i2i(job)
+        return True
+    except RuntimeError as exc:
+        log.warning("垫图的源图没传上去，这张不跑（%s %s）：%s",
+                    job.target, job.target_id, exc)
+        job.error = exc
+        return False
+
+
+def _upload_i2i(job):
+    """把这张的源图送进 ComfyUI，并把工作流里的占位名换成它返回的真名。
+
+    只有垫图会走到这里，且**只在 worker 里调**：此刻 ComfyUI 已经被
+    `wait_comfy_up` 确认在线，所以带 `wait=False` —— 那是入口传图时代的
+    遗留兜底，worker 这条路上再等一遍纯属浪费。
+
+    成功后立刻把字节放掉：队列上限 20 张，每张缩放后的 PNG 一到两兆，挂着
+    不放就是几十兆白占内存（这台机器跑完 moss 只剩 1~2GB 可用）。
+
+    失败抛 RuntimeError（`comfy_src.upload` 抛的就是一句能直接转述的人话）。
+    """
+    from app import comfy_src
+
+    real = comfy_src.upload(job.i2i_src, wait=False)
+    ph = job.i2i_name
+    if ph:
+        # 占位名是带引号的 JSON 字符串，跟着引号一起换，免得撞上别处的字面串
+        # （文件名里 `__I2I_SRC__` 只可能来自我们填的那一处）。
+        job.workflow = json.loads(
+            json.dumps(job.workflow).replace(json.dumps(ph), json.dumps(real)))
+    job.i2i_src = None
+    job.i2i_name = ""
+    return real
+
+
 def _worker(chan):
     """这条通道的工作线程：本地一张接一张串行；云端 N 个线程并行。
 
@@ -1293,6 +1359,20 @@ def _worker(chan):
             log.warning("等了 %.0f 秒 ComfyUI 仍没在线，这张不跑（%s %s）",
                         COMFY_WAIT_UP, job.target, job.target_id)
             job.error = ComfyGone(COMFY_WAIT_UP)
+            if not getattr(job, "quiet", False):
+                _notice(job)
+            _finish(job)
+            continue
+        # 垫图的源图**在这里**才上传（2026-10-31 用户拍板：「垫图到队列，然后
+        # 等待 ComfyUI 跑起来之后自动跑」）。
+        #
+        # 入队时工作流里填的是一个占位名，此刻 ComfyUI 刚被上面那步确认在线，
+        # 正是能传的时候。放在 gate 之前（不是 process 里）：上传不占采样资源，
+        # 而且等不到 gate 的话（另一条通道卡着）也不用白传一张图。
+        #
+        # 失败要**明说**，不能静默跳过：对方以为垫了自己那张图，拿到的却是
+        # 凭空画的一张，比直接失败糟得多。字幕出图（quiet）例外，一声不吭。
+        if not _submit_i2i_source(job):
             if not getattr(job, "quiet", False):
                 _notice(job)
             _finish(job)
@@ -2188,6 +2268,11 @@ def _drain():
         if job is None:
             return
         try:
+            # 垫图的源图在这里传（见 `_submit_i2i_source`）。worker 那边排在
+            # wait_comfy_up 之后，这里不重复等——`_drain` 的语义就是「把它跑完」，
+            # 等待属于 worker。
+            if not _submit_i2i_source(job):
+                continue
             process(job)
         finally:
             _finish(job)
@@ -2780,6 +2865,12 @@ def _fail_text(exc, stage="submit", skill=None):
     if stage != "send" and _is_unreachable(exc):
         return ("图没画出来——ComfyUI 没在线（%s 连不上）。"
                 "让对方稍后再试。" % COMFYUI_URL)
+    # 源图上传失败（2026-10-31）：上传现在在 worker 里、**入队之后**，失败时
+    # 这句就是对方能看到的全部解释。`comfy_src` 那边已经把 HTTPConnectionPool
+    # 翻成了人话，直接用它——再套一层并按 40 字截断，截出来是「图没画出来
+    # （源图传不进 ComfyUI：ComfyUI 没在运行（连接被）」，括号都没闭合。
+    if isinstance(exc, RuntimeError) and str(exc).startswith("源图没能传进"):
+        return str(exc)
     return "图没画出来（%s）" % _reason(exc)
 
 

@@ -145,7 +145,10 @@ class ConsumeTest(unittest.TestCase):
         en.assert_called_once_with("group", "123", {"w": 1}, "anima_clear",
                                    prompt="1girl", intent="k", seed=42,
                                    landscape=None, comfy_down=False,
-                                   reply_to="", at_user=None)
+                                   reply_to="", at_user=None,
+                                   # 垫图源图（2026-10-31）：跟 workflow 一样在
+                                   # 拦下的那一刻快照，这里没有垫图，所以是空的。
+                                   i2i_src=None, i2i_name="")
         rc.assert_called_once()
         self.assertNotIn(("group", "123"), confirm_gate._PENDING)
 

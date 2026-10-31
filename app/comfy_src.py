@@ -213,26 +213,31 @@ def _retryable(exc):
             or "disconnected" in s)
 
 
-def upload(raw, suffix=".png"):
+def upload(raw, suffix=".png", wait=True):
     """把图片字节送进 ComfyUI 的 input 目录，返回它在那边认得的名字。
 
     `/upload/image` 是 ComfyUI 自带接口（实测返回 {"name","subfolder",...}），
     工作流的 LoadImage 就认这个名字。失败抛 RuntimeError。
 
-    **先等 ComfyUI 上线再传**（2026-10-31）。这一步发生在 `generate_image`
-    入队**之前**，不在 worker 那层 `wait_comfy_up` 的保护范围里：ComfyUI 一进
-    重启窗口，文生图会安静地等最多 120 秒，垫图却当场报「源图传不进」——
-    同一台机器上两种口径，群友感受到的就是「有时候能等，有时候直接失败」。
-    """
-    from app import image_jobs
+    **wait=True 时先等 ComfyUI 上线再传**（2026-10-31）。这条路是给「调用方
+    自己就要拿文件名、后面紧接着要拼工作流」的场景兜底的。
 
-    limit = image_jobs.COMFY_WAIT_UP
-    if not image_jobs.wait_comfy_up(limit=limit, gap=_UP_GAP):
-        log.warning("源图上传前等了 %.0f 秒，ComfyUI 仍没上线（%s）",
-                    limit, COMFYUI_URL)
-        raise RuntimeError(
-            "ComfyUI 正在重启，等了 %.0f 秒还没起来，这张源图现在传不进去。"
-            "过一两分钟再发一次就行。" % limit)
+    **正常生图不走 wait=True**：垫图的源图现在跟着任务进队列，由 worker 等到
+    ComfyUI 上线后才调这里（见 `image_jobs._upload_i2i`，传 `wait=False`）。
+    原来在 `generate_image` 里（入队**之前**）同步上传，够不着 worker 那层
+    `wait_comfy_up`，于是 ComfyUI 一进重启窗口，文生图安静地等、垫图却当场
+    报「源图传不进」——同一台机器两种口径。
+    """
+    if wait:
+        from app import image_jobs
+
+        limit = image_jobs.COMFY_WAIT_UP
+        if not image_jobs.wait_comfy_up(limit=limit, gap=_UP_GAP):
+            log.warning("源图上传前等了 %.0f 秒，ComfyUI 仍没上线（%s）",
+                        limit, COMFYUI_URL)
+            raise RuntimeError(
+                "源图没能传进 ComfyUI——它正在重启，等了 %.0f 秒还没起来。"
+                "过一两分钟把这张图再发一次就行。" % limit)
 
     name = "i2isrc_" + uuid.uuid4().hex[:10] + suffix
     url = COMFYUI_URL.rstrip("/") + "/upload/image"
@@ -250,13 +255,13 @@ def upload(raw, suffix=".png"):
             log.warning("源图上传失败（第 %d/%d 次，%s）：%s: %s",
                         attempt, _ATTEMPTS, url, type(exc).__name__, exc)
             if attempt >= _ATTEMPTS or not _retryable(exc):
-                raise RuntimeError("源图传不进 ComfyUI：%s，过一会儿再试。"
-                                   % _explain(exc))
+                raise RuntimeError("源图没能传进 ComfyUI：%s。"
+                                   "稍后把这张图再发一次就行。" % _explain(exc))
             time.sleep(_RETRY_GAP)
 
     if info is None:        # 理论上到不了；失败分支已经在循环里 raise 了
-        raise RuntimeError("源图传不进 ComfyUI：%s，过一会儿再试。"
-                           % _explain(last))
+        raise RuntimeError("源图没能传进 ComfyUI：%s。"
+                           "稍后把这张图再发一次就行。" % _explain(last))
 
     got = str(info.get("name") or name)
     sub = str(info.get("subfolder") or "")

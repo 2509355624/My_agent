@@ -14,6 +14,7 @@ from unittest import mock
 import requests
 
 import app.agents as agents
+from app import comfy_src
 from app import image_jobs
 from app import image_log
 from app import nai
@@ -4358,6 +4359,86 @@ class OrderRefTest(_Base):
                                     reply_to="", at_user=None)
         self.assertEqual(job.reply_to, "")
         self.assertIsNone(job.at_user)
+
+
+class I2iSourceQueueTest(unittest.TestCase):
+    """垫图的源图跟着任务进队列（2026-10-31 用户拍板）。
+
+    用户原话：「难道不应该是垫图到队列，然后等待 ComfyUI 跑起来之后自动跑吗？
+    应该是说 ComfyUI 正在重启，重启后自动推送。」所以上传从「入队之前」挪到
+    「worker 等到 ComfyUI 在线之后」：入队时工作流里是占位名，此刻才换成真名。
+
+    这里测的是那个换名动作本身（`_submit_i2i_source`），不碰网络。
+    """
+
+    PLACEHOLDER = "__I2I_SRC__"
+
+    def _job(self, name=None):
+        name = self.PLACEHOLDER if name is None else name
+        wf = {"1": {"class_type": "LoadImage", "inputs": {"image": name}}}
+        job = image_jobs.Job("group", "1", wf, "anima_clear")
+        job.i2i_src = b"PNGBYTES"
+        job.i2i_name = name
+        return job
+
+    def test_placeholder_is_swapped_for_the_real_name(self):
+        job = self._job()
+        with mock.patch.object(comfy_src, "upload",
+                               lambda raw, wait=True: "i2isrc_real.png"):
+            self.assertTrue(image_jobs._submit_i2i_source(job))
+        self.assertEqual(job.workflow["1"]["inputs"]["image"],
+                         "i2isrc_real.png")
+
+    def test_bytes_are_dropped_after_upload(self):
+        """队列里挂着十几张垫图就是十几兆，传完必须放手。"""
+        job = self._job()
+        with mock.patch.object(comfy_src, "upload",
+                               lambda raw, wait=True: "x.png"):
+            image_jobs._submit_i2i_source(job)
+        self.assertIsNone(job.i2i_src)
+        self.assertEqual(job.i2i_name, "")
+
+    def test_upload_does_not_wait_again(self):
+        """worker 已经等到 ComfyUI 在线了，上传时再等一遍是白等。"""
+        seen = {}
+
+        def fake(raw, wait=True):
+            seen["wait"] = wait
+            return "x.png"
+
+        with mock.patch.object(comfy_src, "upload", fake):
+            image_jobs._submit_i2i_source(self._job())
+        self.assertIs(seen["wait"], False)
+
+    def test_failure_marks_the_job_instead_of_raising(self):
+        """传不上去要能收场：挂错误、返回 False，别把 worker 线程炸掉。"""
+        job = self._job()
+        with mock.patch.object(comfy_src, "upload",
+                               side_effect=RuntimeError("传不进去")):
+            self.assertFalse(image_jobs._submit_i2i_source(job))
+        self.assertEqual(str(job.error), "传不进去")
+
+    def test_text2img_job_is_untouched(self):
+        job = image_jobs.Job("group", "1", {"1": {}}, "anima_clear")
+        with mock.patch.object(comfy_src, "upload",
+                               side_effect=AssertionError("文生图不该上传")):
+            self.assertTrue(image_jobs._submit_i2i_source(job))
+
+    def test_mock_job_is_not_treated_as_i2i(self):
+        """测试里有人拿 Mock 当 job：Mock 上取什么都非 None，别顺手传一张。"""
+        with mock.patch.object(comfy_src, "upload",
+                               side_effect=AssertionError("Mock 不该上传")):
+            self.assertTrue(image_jobs._submit_i2i_source(mock.Mock()))
+
+    def test_enqueue_keeps_the_source_on_the_job(self):
+        image_jobs._reset()
+        with mock.patch.object(image_jobs, "_ensure_worker", lambda: None):
+            job, why = image_jobs.enqueue(
+                "group", "1", {"1": {}}, "anima_clear",
+                i2i_src=b"PNG", i2i_name=self.PLACEHOLDER)
+        self.assertIsNone(why)
+        self.assertEqual(job.i2i_src, b"PNG")
+        self.assertEqual(job.i2i_name, self.PLACEHOLDER)
 
 
 if __name__ == "__main__":

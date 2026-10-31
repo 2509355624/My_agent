@@ -112,7 +112,8 @@ def _card_text(pend):
 
 
 def intercept(kind, *, skill, prompt, seed=None, intent=None, workflow=None,
-              nai_i2i=None, note="", skip_confirm=False):
+              nai_i2i=None, note="", skip_confirm=False, i2i_src=None,
+              i2i_name=""):
     """生图提交前的最后一道闸。返回 None=放行（网页端），返回 str=已拦下等确认
     （以 RECEIPT_SENT_MARK 开头，工具原样返回，agent 掐断本轮）。
 
@@ -145,6 +146,12 @@ def intercept(kind, *, skill, prompt, seed=None, intent=None, workflow=None,
             "reply_to": qq_api.current_message_id(),
             "at_user": (qq_api.current_sender_uin()
                         if target == "group" else None),
+            # 垫图源图（2026-10-31）：跟 workflow 一样必须**在拦下的这一刻**
+            # 快照。确认发生在下一条消息里，那时 `generate_image` 的局部变量
+            # 早就没了；不存的话，对方回「好」之后重入队的任务里只有占位名、
+            # 没有字节，worker 传不了图，这张会缺源图。
+            "i2i_src": i2i_src,
+            "i2i_name": i2i_name or "",
         }
     card = _card_text(_PENDING[(target, target_id)])
     from app.tools.normal.generate_image import _send_receipt
@@ -207,7 +214,9 @@ def consume_if_confirmed(target, target_id, text):
                                      landscape=pend.get("landscape"),
                                      comfy_down=comfy_down,
                                      reply_to=pend.get("reply_to") or "",
-                                     at_user=pend.get("at_user"))
+                                     at_user=pend.get("at_user"),
+                                     i2i_src=pend.get("i2i_src"),
+                                     i2i_name=pend.get("i2i_name") or "")
     if reason is not None:
         return reason
     quota_tail = gi._charge_quota(job, target, target_id)

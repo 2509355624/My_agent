@@ -805,6 +805,15 @@ def apply_prompt_placeholders(workflow_str, prompt, seed):
     return json.loads(workflow_str)
 
 
+# 垫图源图的占位名（2026-10-31）。入队时工作流里填它，worker 等到 ComfyUI
+# 上线、真正上传完之后再换成 `/upload/image` 返回的文件名。
+#
+# 为什么能用一个固定串、不用每张随机：替换是在 worker 里对着**这一张自己的
+# workflow** 做的，不同任务各改各的副本，撞不上。带双下划线是为了在 json 里
+# 一眼看出「这是没换掉的占位」，别跟 ComfyUI 那边的真文件名混淆。
+_I2I_SRC_PLACEHOLDER = "__I2I_SRC__"
+
+
 def _apply_i2i_placeholders(workflow, uploaded, denoise_txt):
     """图生图专用占位符（只在 workflow_i2i.json 里出现）。"""
     for key, val in (('"__SOURCE_IMAGE__"', json.dumps(uploaded)),
@@ -1084,6 +1093,9 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 降级 / 改判说明都走 source_note 这一个通道进回执。t2i_note 在
     # is_i2i 被清成 False 后走到这里，所以也要带上。
     source_note, denoise_txt, uploaded = hd_note + t2i_note, "", ""
+    # 垫图的源图字节（2026-10-31）：**跟着任务进队列**，不入队前上传。
+    # 见下面 is_i2i 分支与 image_jobs._upload_i2i。
+    i2i_src = None
     # 没有 i2i 骨架 → **降级文生图**，不再硬报错（2026-10-11，理由见
     # `_I2I_DEGRADE_NOTE` 上面那段）。垫不垫图是模型判的，判错一次就让对方
     # 白等一轮、还得自己补一句「文生图」重发，不值当。
@@ -1116,7 +1128,13 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
             fitted, _size = comfy_src.fit(
                 raw, max_side=_canvas_long_side(skill_data["workflow"])
                 or comfy_src.MAX_SIDE)
-            uploaded = comfy_src.upload(fitted)
+            # 不在这儿上传（2026-10-31 用户拍板）：`/upload/image` 要 ComfyUI
+            # 在线，而上传发生在入队**之前**，够不着 worker 那层 `wait_comfy_up`。
+            # ComfyUI 一进重启窗口，文生图安静地等、垫图当场报「源图传不进」。
+            # 现在工作流里先填一个占位名，字节挂在 job 上，由 worker 等到
+            # ComfyUI 上线后再传、再把占位名换成真名（见 image_jobs._upload_i2i）。
+            uploaded = _I2I_SRC_PLACEHOLDER
+            i2i_src = fitted
         except RuntimeError as e:
             return str(e)
         workflow = i2i
@@ -1190,7 +1208,8 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     gate = confirm_gate.intercept("comfy", skill=skill, prompt=prompt, seed=seed,
                                   intent=intent, workflow=workflow,
                                   note=source_note,
-                                  skip_confirm=_skip_confirm)
+                                  skip_confirm=_skip_confirm,
+                                  i2i_src=i2i_src, i2i_name=uploaded)
     if gate is not None:
         return gate
     # prompt 一路带到队列里，只为出图后记账本（编号 → 提示词）；出图用的是
@@ -1199,7 +1218,8 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     job, reason = image_jobs.enqueue(target, target_id, workflow, skill,
                                      prompt=prompt, intent=intent, seed=seed,
                                      resample_fn=resample_fn,
-                                     comfy_down=comfy_down)
+                                     comfy_down=comfy_down,
+                                     i2i_src=i2i_src, i2i_name=uploaded)
     if reason is not None:
         # 拒收时工作流还在手上，ComfyUI 一点算力都没浪费，也不会留下「画了
         # 却没人发」的孤儿图。

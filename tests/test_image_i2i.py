@@ -285,7 +285,8 @@ class UploadTest(unittest.TestCase):
         with mock.patch.object(comfy_src._session, "post", boom):
             with self.assertRaises(RuntimeError) as cm:
                 comfy_src.upload(b"x")
-        self.assertIn("传不进 ComfyUI", str(cm.exception))
+        # 文案要能直接当回执发出去（`_fail_text` 认这个前缀，原样转给对方）
+        self.assertTrue(str(cm.exception).startswith("源图没能传进 ComfyUI"))
 
     def test_waits_for_comfy_before_uploading(self):
         """上传前先等 ComfyUI——图生图起在入队之前，够不着 worker 那层等待。"""
@@ -309,7 +310,7 @@ class UploadTest(unittest.TestCase):
                     comfy_src.upload(b"x")
         post.assert_not_called()
         self.assertIn("正在重启", str(cm.exception))
-        self.assertIn("传不进去", str(cm.exception))
+        self.assertIn("再发一次", str(cm.exception))
 
     def test_connection_failure_retries_once(self):
         """连接被拒重发一次：ComfyUI 刚起来的第一下常是这种。"""
@@ -658,7 +659,7 @@ class _I2IRunner(object):
 
     KEY = ("group", 999001)
 
-    def _run(self, **kw):
+    def _run(self, comfy_alive=True, **kw):
         captured = {}
 
         def fake_queue(workflow):
@@ -670,7 +671,10 @@ class _I2IRunner(object):
             mock.patch.object(gi, "_qq_gate", lambda: None),
             # 入队前探活 / 提交前查显存水位：不挡就会真去 GET 真机的
             # /system_stats——本模块自称「零网络」，这两条是漏网的。
-            mock.patch.object(gi.image_jobs, "comfy_alive", lambda: True),
+            # `comfy_alive` 由调用方决定真假：垫图正是要在「它不在线」时照样
+            # 入队（2026-10-31），所以这一个不能写死。
+            mock.patch.object(gi.image_jobs, "comfy_alive",
+                              lambda: comfy_alive),
             mock.patch.object(gi.image_jobs, "_free_vram_gb", lambda: None),
             # 提交动作现在发生在 image_jobs 的 worker 里，所以拦的是它那边
             mock.patch.object(gi.image_jobs, "_queue_prompt", fake_queue),
@@ -704,7 +708,10 @@ class _I2IRunner(object):
             mock.patch.object(comfy_src, "resolve",
                               lambda spec: (b"RAW", "引用的那张图")),
             mock.patch.object(comfy_src, "fit", fake_fit),
-            mock.patch.object(comfy_src, "upload", lambda raw: name),
+            # wait 是 2026-10-31 加的：worker 等到 ComfyUI 在线后才传，传的时候
+            # 自然不用再等一遍（`_upload_i2i` 传 wait=False）。
+            mock.patch.object(comfy_src, "upload",
+                              lambda raw, wait=True: name),
         )
 
     def _kinds(self, wf):
@@ -879,14 +886,44 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
         self.assertEqual(out, "这儿没有图")
         self.assertEqual(wf, {})
 
-    def test_upload_failure_reports_and_submits_nothing(self):
+    def test_upload_failure_stops_the_job_but_keeps_it_queued(self):
+        """上传失败在 worker 里收场：这张不提交，但**入队本身是成功的**。
+
+        2026-10-31 之前上传发生在入队前，失败时 `_generate_image` 直接返回
+        「传不进去」，一张都没排上。现在源图跟着任务进队列，等 ComfyUI 上线
+        才传——传不上去是 worker 阶段的事，所以：
+          · 回执照常是「已提交」（对，它确实排上了）
+          · 但工作流不会被提交给 ComfyUI（否则画出来的是没垫图的另一张）
+          · 失败由 `_notice` 单独发一句，对方不会干等
+        """
         p1, p2, _ = self._feed()
         with p1, p2, mock.patch.object(comfy_src, "upload",
                                        side_effect=RuntimeError("传不进去")):
             out, wf = self._run(prompt="x", skill="anima_clear",
                                 source_image="1")
-        self.assertEqual(out, "传不进去")
+        self.assertIn("任务已提交", out)
         self.assertEqual(wf, {})
+
+    def test_offline_comfy_still_queues_the_i2i(self):
+        """ComfyUI 不在线时，垫图**照样排进队列**，回执说「正在重启，自动开画」。
+
+        用户原话（2026-10-31）：「难道不应该是垫图到队列，然后等待 ComfyUI
+        跑起来之后自动跑吗？应该是说 ComfyUI 正在重启，重启后自动推送。」
+
+        以前上传发生在入队之前，探不到 ComfyUI 就直接返回「源图传不进」，
+        一张都没排上——这正是「有时候报这个错」的来源。
+        """
+        p1, p2, p3 = self._feed(name="i2isrc_after_wake.png")
+        with p1, p2, p3:
+            out, wf = self._run(prompt="x", skill="anima_clear",
+                                source_image="1", comfy_alive=False)
+        # 是「排上了」而不是「传不进去」
+        self.assertIn("任务已收到", out)
+        self.assertIn("正在重启", out)
+        self.assertNotIn("传不进", out)
+        # 而且工作流确实提交了，LoadImage 里是上传后的真名（不是占位符）
+        load = self._one(wf, "LoadImage")
+        self.assertEqual(wf[load]["inputs"]["image"], "i2isrc_after_wake.png")
 
     def test_blank_source_image_is_not_i2i(self):
         """空串等于没传（`if str(source_image or "").strip()`）——别把它当垫图。"""
