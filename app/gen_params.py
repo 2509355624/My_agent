@@ -1,13 +1,13 @@
-"""跑图台「自定义 CFG / 负向提示词」：只改内存里的工作流 dict，不碰模板文件。
+"""跑图台「自定义 CFG / 负向提示词 / 尺寸」：只改内存里的工作流 dict，不碰模板文件。
 
 ## 为什么和 `gen_steps` 分开
 
 `gen_steps` 的契约是「只认键名恰好是 `steps` 的整数字段」，一个文件一个可调
-参数，改错互不影响。CFG 和负向的**找法完全不同**（CFG 是采样器上的浮点数，
-负向要顺着 `KSampler.negative` 的连线反查 `CLIPTextEncode`），混在一起会让
-两边都不好读。共同的约束只有一条：**只改内存 dict，绝不 json.dump 回写**
-——模板里有 `__SEED__` / `__MULTI_PROMPTS__` 这种非 JSON 字面量，dump 一次
-模板就废了（和 `gen_steps` / `lora_slots` 同一条理由）。
+参数，改错互不影响。CFG、负向、尺寸的**找法各不相同**（CFG 是采样器上的浮点
+数；负向要顺着 `KSampler.negative` 的连线反查 `CLIPTextEncode`；尺寸看画布节点
+上的 width/height），混在一起会让两边都不好读。共同的约束只有一条：**只改内存
+dict，绝不 json.dump 回写**——模板里有 `__SEED__` / `__MULTI_PROMPTS__` 这种
+非 JSON 字面量，dump 一次模板就废了（和 `gen_steps` / `lora_slots` 同一条理由）。
 
 ## 负向为什么要顺着连线找
 
@@ -27,6 +27,10 @@
 CFG_RANGE = (0.0, 20.0)
 NEG_MAX = 2000
 NEG_SEP = ", "
+# 尺寸：和漫画台（`comic_render_opts.SIZE_RANGE`）取同一套边界与对齐规则，
+# 免得「同一个数字在跑图台能填、在漫画台被钳」这种两套口径。
+SIZE_RANGE = (256, 4096)
+SIZE_ALIGN = 8
 
 
 def _is_sampler(node):
@@ -201,4 +205,117 @@ def apply_negative(wf, text):
         old = (ins.get("text") or "").rstrip()
         ins["text"] = (old + NEG_SEP + text) if old else text
         n += 1
+    return n
+
+
+# ─── 尺寸（底图宽高）────────────────────────────────────
+
+def size_hosts(wf):
+    """写宽高的节点：`class_type` 以 `Empty` 开头且带 width/height 的画布节点
+    （`EmptyLatentImage` / `EmptyFlux2LatentImage` / `EmptySD3LatentImage`）。
+
+    和 `comic_render_opts._latent_ids` 同一套认法，没有抄它的 `_size_hosts`：
+    那边还要顺带认 sd/miao 的 batch 复合节点，跑图台目前只对 moss 开放尺寸
+    （moss 两个渠道都是独立 latent、没有放大链），多带一份依赖没意义。
+    """
+    out = []
+    if not isinstance(wf, dict):
+        return out
+    for nid, node in wf.items():
+        if not isinstance(node, dict):
+            continue
+        if not str(node.get("class_type") or "").startswith("Empty"):
+            continue
+        ins = node.get("inputs")
+        if isinstance(ins, dict) and "width" in ins and "height" in ins:
+            out.append(nid)
+    return out
+
+
+def read_size(wf):
+    """模板当前底图尺寸 `(w, h)`；认不出返回 `(None, None)`。"""
+    for nid in size_hosts(wf):
+        ins = wf[nid]["inputs"]
+        w, h = ins.get("width"), ins.get("height")
+        if isinstance(w, int) and isinstance(h, int):
+            return w, h
+    return None, None
+
+
+def describe_size(wf):
+    """给界面看的默认尺寸："1024×1536"。认不出返回空串。"""
+    w, h = read_size(wf)
+    return "%d×%d" % (w, h) if w and h else ""
+
+
+def _blank_size(v):
+    """宽高的「没填」判定：None 或空字符串（前端留空就是 ""）。"""
+    return v is None or (isinstance(v, str) and not v.strip())
+
+
+def _int_size(v):
+    """宽高的单个值 → int；非法返回 None。`True` 不算数字。"""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float):
+        return int(v)
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return None
+        try:
+            return int(round(float(s)))
+        except ValueError:
+            return None
+    return None
+
+
+def normalize_size(width, height):
+    """规整宽高，返回 `((w, h) | None, 错误, 提示)`。
+
+    - 两个都没填 → `(None, None, "")`，表示「不覆盖，按模板」；
+    - 只填了一个 → 报错（半套尺寸没有意义，也免得用户以为另一个沿用模板）；
+    - 越界钳进 256~4096，不是 8 的倍数**向下对齐**（ComfyUI 的 latent 本来
+      就是 //8 截断，按真正会跑的尺寸记下来比拒绝有用）。
+    """
+    if _blank_size(width) and _blank_size(height):
+        return None, None, ""
+    w, h = _int_size(width), _int_size(height)
+    if w is None or h is None:
+        return None, "宽高要一起填整数（收到 %r × %r）" % (width, height), ""
+    if w <= 0 or h <= 0:
+        return None, "宽高要大于 0（收到 %d×%d）" % (w, h), ""
+    lo, hi = SIZE_RANGE
+    cw, ch = min(max(w, lo), hi), min(max(h, lo), hi)
+    aw, ah = cw // SIZE_ALIGN * SIZE_ALIGN, ch // SIZE_ALIGN * SIZE_ALIGN
+    notes = []
+    if (cw, ch) != (w, h):
+        notes.append("%d×%d 超出 %d~%d，已钳成 %d×%d"
+                     % (w, h, lo, hi, cw, ch))
+    if (aw, ah) != (cw, ch):
+        notes.append("%d×%d 不是 %d 的倍数，按 %d×%d 渲染"
+                     % (cw, ch, SIZE_ALIGN, aw, ah))
+    return (aw, ah), None, "；".join(notes)
+
+
+def apply_size(wf, width, height):
+    """把底图尺寸改成 width×height，返回改了节点数。
+
+    顺带把 `enable_hires` 渠道的第二段（`hires_width` / `hires_height`）改成
+    同一尺寸——跑图台要的是「就这么大」，第二段留旧值等于出图尺寸被悄悄改掉。
+    """
+    size, err, _note = normalize_size(width, height)
+    if err or size is None:
+        return 0
+    w, h = size
+    n = 0
+    for nid in size_hosts(wf):
+        ins = wf[nid]["inputs"]
+        if (ins.get("width"), ins.get("height")) != (w, h):
+            ins["width"], ins["height"] = w, h
+            n += 1
+        if ins.get("enable_hires") and "hires_width" in ins:
+            ins["hires_width"], ins["hires_height"] = w, h
     return n

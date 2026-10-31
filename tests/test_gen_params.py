@@ -174,6 +174,99 @@ class NegativeApplyTest(unittest.TestCase):
         self.assertEqual(wf["50"]["inputs"]["text"], "__MULTI_PROMPTS__")
 
 
+class SizeNormalizeTest(unittest.TestCase):
+    def test_empty_means_template_default(self):
+        self.assertEqual(gen_params.normalize_size(None, None), (None, None, ""))
+        self.assertEqual(gen_params.normalize_size("", ""), (None, None, ""))
+
+    def test_only_one_side_is_error(self):
+        for w, h in ((1536, None), (None, 2048), (1536, ""), ("", 2048)):
+            size, err, _note = gen_params.normalize_size(w, h)
+            self.assertIsNone(size, repr((w, h)))
+            self.assertIn("整数", err)
+
+    def test_strings_and_floats(self):
+        self.assertEqual(gen_params.normalize_size("1536", "2048")[0],
+                         (1536, 2048))
+        self.assertEqual(gen_params.normalize_size(1536.0, 2048.0)[0],
+                         (1536, 2048))
+
+    def test_aligns_down_to_multiple_of_eight(self):
+        size, err, note = gen_params.normalize_size(1530, 2050)
+        self.assertIsNone(err)
+        self.assertEqual(size, (1528, 2048))
+        self.assertIn("8 的倍数", note)
+
+    def test_clamped_into_range(self):
+        size, err, note = gen_params.normalize_size(100, 5000)
+        self.assertIsNone(err)
+        self.assertEqual(size, (256, 4096))
+        self.assertIn("256~4096", note)
+
+    def test_junk_and_non_positive(self):
+        self.assertIsNone(gen_params.normalize_size("abc", 2048)[0])
+        self.assertIn("大于 0", gen_params.normalize_size(0, 2048)[1])
+        self.assertIn("大于 0", gen_params.normalize_size(-8, 2048)[1])
+
+    def test_bool_is_not_a_size(self):
+        self.assertIsNone(gen_params.normalize_size(True, 2048)[0])
+
+
+class SizeReadTest(unittest.TestCase):
+    def test_reads_latent_size(self):
+        wf = {"60": {"class_type": "EmptyFlux2LatentImage",
+                     "inputs": {"width": 1024, "height": 1536}},
+              "61": {"class_type": "EmptyLatentImage",
+                     "inputs": {"width": 1536, "height": 1024}}}
+        self.assertEqual(gen_params.read_size(wf), (1024, 1536))
+        self.assertEqual(gen_params.describe_size(wf), "1024×1536")
+
+    def test_channel_without_latent(self):
+        self.assertEqual(gen_params.read_size({"1": {"inputs": {}}}),
+                         (None, None))
+        self.assertEqual(gen_params.describe_size(None), "")
+
+
+class SizeApplyTest(unittest.TestCase):
+    def _wf(self):
+        return {"60": {"class_type": "EmptyFlux2LatentImage",
+                       "inputs": {"width": 1024, "height": 1536,
+                                  "batch_size": 1}},
+                "70": {"class_type": "KSampler",
+                       "inputs": {"steps": 25, "cfg": 3.0, "seed": "__SEED__"}}}
+
+    def test_sets_latent_size(self):
+        wf = self._wf()
+        self.assertEqual(gen_params.apply_size(wf, 1536, 2048), 1)
+        self.assertEqual(wf["60"]["inputs"]["width"], 1536)
+        self.assertEqual(wf["60"]["inputs"]["height"], 2048)
+
+    def test_leaves_other_inputs_and_samplers_alone(self):
+        wf = self._wf()
+        gen_params.apply_size(wf, 1536, 2048)
+        self.assertEqual(wf["60"]["inputs"]["batch_size"], 1)
+        self.assertEqual(wf["70"]["inputs"]["steps"], 25)
+        self.assertEqual(wf["70"]["inputs"]["seed"], "__SEED__")
+
+    def test_hires_stage_follows(self):
+        wf = {"40": {"class_type": "EmptyLatentImage",
+                     "inputs": {"width": 720, "height": 1280,
+                                "enable_hires": True,
+                                "hires_width": 1440, "hires_height": 2560}}}
+        self.assertEqual(gen_params.apply_size(wf, 832, 1216), 1)
+        self.assertEqual(wf["40"]["inputs"]["hires_width"], 832)
+        self.assertEqual(wf["40"]["inputs"]["hires_height"], 1216)
+
+    def test_same_value_counts_zero(self):
+        wf = self._wf()
+        self.assertEqual(gen_params.apply_size(wf, 1024, 1536), 0)
+
+    def test_bad_value_is_ignored(self):
+        wf = self._wf()
+        self.assertEqual(gen_params.apply_size(wf, 0, 0), 0)
+        self.assertEqual(wf["60"]["inputs"]["width"], 1024)
+
+
 class RealMossTemplateTest(unittest.TestCase):
     """真模板：moss-qunyou 当前是单段 cfg 3 + `#51` 四段结构化负向池。"""
 
@@ -188,6 +281,14 @@ class RealMossTemplateTest(unittest.TestCase):
         self.assertEqual(gen_params.describe_cfg(wf), "3")
         self.assertTrue(gen_params.has_negative(wf))
         self.assertIn("<|pose_and_clothing_neg|>", gen_params.read_negative(wf))
+
+    def test_size_read_and_apply(self):
+        wf = load_workflow(self.path)
+        self.assertEqual(gen_params.read_size(wf), (1024, 1536))
+        self.assertEqual(gen_params.describe_size(wf), "1024×1536")
+        self.assertEqual(gen_params.apply_size(wf, 1536, 2048), 1)
+        self.assertEqual(gen_params.describe_size(wf), "1536×2048")
+        self.assertEqual(wf["50"]["inputs"]["text"], "__MULTI_PROMPTS__")
 
     def test_apply_keeps_structured_pool_and_placeholders(self):
         wf = load_workflow(self.path)

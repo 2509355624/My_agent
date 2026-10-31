@@ -94,6 +94,18 @@ _HEAD = ("silver", "silver-hd", "hd_3_clear", "hd_3_curvy", "hd_3_gloss",
          "nai", "nai_wide", "cunny", "miao", "jank", "nffa")
 
 
+def _size_editable(skill):
+    """跑图台能不能自定义这个渠道的底图尺寸。
+
+    **只开 moss 系**（`moss-qunyou` / `moss-light`，用户 2026-10-31 的原话是
+    「我只针对跑图台的 moss 渠道」）：这两个渠道工作流里没有
+    `LatentUpscaleBy` / `ImageUpscaleWithModel`，填多少就出多少。其余渠道
+    带放大链，改底图会让最终像素和填写值对不上（silver 填 1024×1536 实际出
+    2048×3072），不想让人误以为能精确控制。要放开哪个渠道，加在这里。
+    """
+    return str(skill or "").startswith("moss")
+
+
 def channels():
     """跑图台可见渠道 = QQ 可点名渠道中的 ComfyUI 文生图渠道 + NAI 云端渠道。
 
@@ -135,7 +147,13 @@ def channels():
                     "cfg": gen_params.describe_cfg(sd.get("workflow") or {}),
                     # 有没有可写的负向节点（qwen-charsheet 这类没有 CLIP 的
                     # 渠道为 False，界面把负向输入框藏起来）。
-                    "negative": gen_params.has_negative(sd.get("workflow") or {})})
+                    "negative": gen_params.has_negative(sd.get("workflow") or {}),
+                    # 底图尺寸：模板当前值 + 能不能在跑图台改。
+                    # **只有 moss 渠道开放**（用户 2026-10-31 明确要求「我只针对
+                    # 跑图台的 moss 渠道」）——别的渠道带放大链，改底图会让最终
+                    # 像素跟填写值对不上，不想让人误以为能精确控制。
+                    "size": gen_params.describe_size(sd.get("workflow") or {}),
+                    "size_editable": _size_editable(sk)})
     out.sort(key=lambda c: (0 if c["id"] in _HEAD else 1,
                             _HEAD.index(c["id"]) if c["id"] in _HEAD else 0,
                             c["id"]))
@@ -198,7 +216,8 @@ def _public(job):
     return {k: job.get(k) for k in ("id", "skill", "prompt", "seed",
                                     "state", "error", "file", "ts",
                                     "steps", "steps_label", "cfg",
-                                    "negative", "secs")}
+                                    "negative", "width", "height",
+                                    "size_label", "secs")}
 
 
 def _enabled_loras(job):
@@ -229,6 +248,7 @@ def _run(job):
             file_ref = "nai:" + name
             seed = None
             steps_label = ""
+            size_label = ""
             secs = None
         else:
             wf = generate_image_build(job["skill"], job["prompt"], job["seed"])
@@ -263,6 +283,12 @@ def _run(job):
                 if not gen_params.apply_negative(wf, job["negative"]):
                     log.warning("跑图台 %s：渠道 %s 没有可追加的负向节点，已忽略",
                                 job["id"], job["skill"])
+            # 自定义尺寸（2026-10-31）：只对 moss 渠道受理（提交时已筛过）。
+            if job.get("width") and job.get("height"):
+                if not gen_params.apply_size(wf, job["width"], job["height"]):
+                    log.warning("跑图台 %s：渠道 %s 没有可改的底图节点，按模板尺寸跑",
+                                job["id"], job["skill"])
+            size_label = gen_params.describe_size(wf)
             # _submit_retry 只对超时重试；其余错误一次抛清。
             # with_entry=True：拿 history entry 算 ComfyUI 真跑这张图的耗时。
             name, entry = comic._submit_retry(
@@ -283,16 +309,20 @@ def _run(job):
             row["cfg"] = job["cfg"]
         if job.get("negative"):
             row["negative"] = job["negative"]
+        if job.get("width") and job.get("height"):
+            row["size"] = size_label or ("%d×%d" % (job["width"], job["height"]))
         _ledger_append(row)
         with _JOBS_LOCK:
             job["state"] = "done"
             job["file"] = file_ref
             job["seed"] = seed
             job["steps_label"] = steps_label
+            job["size_label"] = size_label
             job["secs"] = secs
-        log.info("跑图台 %s 完成：%s seed %s %s 步 cfg %s ComfyUI 耗时 %s 秒",
+        log.info("跑图台 %s 完成：%s seed %s %s 步 cfg %s %s ComfyUI 耗时 %s 秒",
                  job["id"], job["skill"], seed, steps_label or "-",
                  job.get("cfg") if job.get("cfg") is not None else "-",
+                 size_label or "-",
                  "%.1f" % secs if secs is not None else "未知")
     except Exception as e:
         msg = str(e) or e.__class__.__name__
@@ -406,10 +436,23 @@ def api_submit():
     negative, neg_err = gen_params.normalize_negative(data.get("negative"))
     if neg_err:
         return jsonify({"ok": False, "error": neg_err}), 400
+    # 底图尺寸（2026-10-31）：只在 moss 渠道受理——别的渠道带放大链，
+    # 改底图会让最终像素和填写值对不上（见 `_size_editable`）。老页面
+    # 或手搓请求带着 width 打过来，忽略并记一条，不报错也不生效。
+    size, size_err, size_note = gen_params.normalize_size(data.get("width"),
+                                                          data.get("height"))
+    if size_err:
+        return jsonify({"ok": False, "error": size_err}), 400
+    if size and size_note:
+        log.info("跑图台 %s 尺寸规整：%s", skill, size_note)
+    if size and not _size_editable(skill):
+        log.info("跑图台：渠道 %s 不开尺寸自定义，忽略 %d×%d", skill, *size)
+        size = None
     if skill in image_jobs.NAI_SKILLS:
         steps = None
         cfg = None
         negative = None
+        size = None
     # 槽位补文件名：前端只传槽号，账本行要靠名字显示「这张图挂了哪个 LoRA」
     if slots:
         wf = (load_skill(skill) or {}).get("workflow") or {}
@@ -430,6 +473,9 @@ def api_submit():
                "loras": slots,
                "steps": steps, "steps_label": "",
                "cfg": cfg, "negative": negative,
+               "width": size[0] if size else None,
+               "height": size[1] if size else None,
+               "size_label": "",
                "secs": None,
                "state": "queued", "error": "", "file": "",
                "ts": time.time()}

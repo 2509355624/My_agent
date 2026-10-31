@@ -117,7 +117,8 @@
     color: var(--text); padding: 2px 6px; font: inherit; font-size: 12px;
     outline: none; }
   .lora-row input[type=number]:focus { border-color: var(--accent); }
-  .composer .bar { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  .composer .bar { display: flex; align-items: center; gap: 10px; margin-top: 8px;
+    flex-wrap: wrap; }
   .composer .cur { font-size: 12px; color: var(--text-dim); }
   .composer .cur b { color: var(--info); font-weight: 400; }
   .composer .qdepth { font-size: 12px; color: var(--warn); }
@@ -131,6 +132,13 @@
     outline: none; }
   .steps-box input:focus { border-color: var(--accent); }
   .steps-box .hint { color: var(--text-mute); font-size: 11px; }
+  /* 尺寸（2026-10-31，只在 moss 渠道出现）：宽 × 高 + 预设下拉 + 存/删 */
+  .steps-box .x { color: var(--text-mute); }
+  .steps-box select { max-width: 118px; background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    color: var(--text); padding: 5px 6px; font: inherit; font-size: 12px;
+    outline: none; }
+  .steps-box select:focus { border-color: var(--accent); }
   .composer .spacer { flex: 1; }
   /* 负向提示词（2026-10-31）：留空 = 只用渠道模板那段。NAI 云端渠道、
      以及没有 CLIP 负向节点的渠道（如 qwen-charsheet）整块藏起来。 */
@@ -284,6 +292,22 @@
                    placeholder="默认" title="留空按渠道模板；填了只影响这次提交">
             <span class="hint" id="cfgHint"></span>
           </span>
+          <span class="steps-box" id="sizeBox">
+            <label for="wIn">尺寸</label>
+            <input id="wIn" type="number" min="256" max="4096" step="8"
+                   placeholder="宽" title="留空按渠道模板；不是 8 的倍数会向下对齐">
+            <span class="x">×</span>
+            <input id="hIn" type="number" min="256" max="4096" step="8"
+                   placeholder="高" title="留空按渠道模板；不是 8 的倍数会向下对齐">
+            <select id="sizePreset" title="存过的尺寸">
+              <option value="">按模板</option>
+            </select>
+            <button class="btn small" id="sizeSave" type="button"
+                    title="把当前宽高存成预设（只记在这台浏览器）">存</button>
+            <button class="btn small" id="sizeDel" type="button"
+                    title="删掉下拉里选中的预设">删</button>
+            <span class="hint" id="sizeHint"></span>
+          </span>
           <span class="qdepth" id="qdepth" style="display:none"></span>
           <span class="spacer"></span>
           <button class="btn primary" id="btnGen" onclick="gen()">生成</button>
@@ -329,6 +353,14 @@ let STEPS = localStorage.getItem('gp_steps') || '';
 // 负向在后端是**追加**到模板负向池后面，不是替换。
 let CFG = localStorage.getItem('gp_cfg') || '';
 let NEG = localStorage.getItem('gp_neg') || '';
+// 尺寸（2026-10-31）：只在 moss 渠道出现。宽高一起填才生效，留空按模板；
+// 「预设」是这台浏览器里的尺寸书签（1536×2048 这类），不写回渠道模板。
+let SIZE_W = localStorage.getItem('gp_w') || '';
+let SIZE_H = localStorage.getItem('gp_h') || '';
+let SIZE_PRESETS = [];
+try { SIZE_PRESETS = JSON.parse(localStorage.getItem('gp_size_presets') || '[]'); }
+catch (e) { SIZE_PRESETS = []; }
+if (!Array.isArray(SIZE_PRESETS)) SIZE_PRESETS = [];
 let NAI_ARTISTS = JSON.parse(localStorage.getItem('gp_nai_artists') || '[]');
 
 function isNai() { return CUR === 'nai' || CUR === 'nai_wide'; }
@@ -512,6 +544,11 @@ function updateParams() {
   stepsBox.classList.toggle('on', !cloud);
   cfgBox.classList.toggle('on', !cloud);
   negBox.classList.toggle('on', !cloud && !!(ch && ch.negative));
+  // 尺寸只在 moss 渠道出现（后端 size_editable）——别的渠道带放大链，
+  // 改了底图最终像素和填写值对不上，不给入口比给个假精确好。
+  const sizeBox = document.getElementById('sizeBox');
+  const canSize = !cloud && !!(ch && ch.size_editable);
+  sizeBox.classList.toggle('on', canSize);
   if (cloud) return;
   const def = ch.steps || '';
   input.placeholder = def ? ('默认 ' + def) : '默认';
@@ -524,7 +561,114 @@ function updateParams() {
   cfgIn.disabled = !defCfg;
   cfgIn.value = CFG;
   negIn.value = NEG;
+  if (canSize) {
+    const dw = (ch.size || '').split('×');
+    const wIn = document.getElementById('wIn');
+    const hIn = document.getElementById('hIn');
+    wIn.placeholder = dw[0] || '宽';
+    hIn.placeholder = dw[1] || '高';
+    wIn.value = SIZE_W;
+    hIn.value = SIZE_H;
+    renderSizePresets();
+    updateSizeHint();
+  }
 }
+
+// ── 尺寸输入（2026-10-31，只在 moss 渠道）──────
+function renderSizePresets() {
+  const sel = document.getElementById('sizePreset');
+  const keep = sel.value;
+  sel.innerHTML = '<option value="">按模板</option>';
+  for (const p of SIZE_PRESETS) {
+    const o = document.createElement('option');
+    o.value = p; o.textContent = p;
+    sel.appendChild(o);
+  }
+  const cur = (SIZE_W && SIZE_H) ? (SIZE_W + '×' + SIZE_H) : '';
+  sel.value = SIZE_PRESETS.includes(cur) ? cur
+    : (SIZE_PRESETS.includes(keep) ? keep : '');
+}
+
+function updateSizeHint() {
+  const hint = document.getElementById('sizeHint');
+  const w = parseInt(document.getElementById('wIn').value, 10);
+  const h = parseInt(document.getElementById('hIn').value, 10);
+  if (!w || !h) { hint.textContent = ''; return; }
+  // 和后端 normalize_size 同一条算法：向下对齐到 8 的倍数
+  const aw = Math.floor(w / 8) * 8, ah = Math.floor(h / 8) * 8;
+  hint.textContent = (aw !== w || ah !== h) ? ('实际 ' + aw + '×' + ah) : '';
+}
+
+function persistSize() {
+  try {
+    localStorage.setItem('gp_w', SIZE_W);
+    localStorage.setItem('gp_h', SIZE_H);
+  } catch (e) {}
+}
+
+// 提交前取尺寸：返回 null（按模板）/ [w, h] / false（校验没过，已 toast）
+function readSizeForSubmit() {
+  if (!document.getElementById('sizeBox').classList.contains('on')) return null;
+  const w = parseInt(document.getElementById('wIn').value, 10);
+  const h = parseInt(document.getElementById('hIn').value, 10);
+  if (!w && !h) return null;
+  if (!w || !h) { toast('宽和高要一起填（两个都留空 = 按模板）'); return false; }
+  return [w, h];
+}
+
+const W_IN = document.getElementById('wIn');
+const H_IN = document.getElementById('hIn');
+const SIZE_PRESET = document.getElementById('sizePreset');
+
+function onSizeInput() {
+  SIZE_W = W_IN.value.trim();
+  SIZE_H = H_IN.value.trim();
+  persistSize();
+  updateSizeHint();
+  // 手改了就不再对应原来选中的预设
+  SIZE_PRESET.value = '';
+}
+
+W_IN.addEventListener('input', onSizeInput);
+H_IN.addEventListener('input', onSizeInput);
+
+SIZE_PRESET.addEventListener('change', () => {
+  const v = SIZE_PRESET.value;
+  if (!v) {                       // 「按模板」= 清空，提交时不带宽高
+    SIZE_W = ''; SIZE_H = '';
+    W_IN.value = ''; H_IN.value = '';
+  } else {
+    const p = v.split('×');
+    SIZE_W = p[0] || ''; SIZE_H = p[1] || '';
+    W_IN.value = SIZE_W; H_IN.value = SIZE_H;
+  }
+  persistSize();
+  updateSizeHint();
+});
+
+document.getElementById('sizeSave').addEventListener('click', () => {
+  const w = parseInt(W_IN.value, 10), h = parseInt(H_IN.value, 10);
+  if (!w || !h) { toast('先填宽和高再存'); return; }
+  const key = w + '×' + h;
+  if (!SIZE_PRESETS.includes(key)) SIZE_PRESETS.push(key);
+  try {
+    localStorage.setItem('gp_size_presets', JSON.stringify(SIZE_PRESETS));
+  } catch (e) {}
+  renderSizePresets();
+  SIZE_PRESET.value = key;
+  toast('已存尺寸预设 ' + key);
+});
+
+document.getElementById('sizeDel').addEventListener('click', () => {
+  const key = SIZE_PRESET.value;
+  if (!key) { toast('先在下拉里选一个要删的预设'); return; }
+  SIZE_PRESETS = SIZE_PRESETS.filter(p => p !== key);
+  try {
+    localStorage.setItem('gp_size_presets', JSON.stringify(SIZE_PRESETS));
+  } catch (e) {}
+  renderSizePresets();
+  toast('已删除预设 ' + key);
+});
 
 const STEPS_INPUT = document.getElementById('stepsIn');
 STEPS_INPUT.addEventListener('input', () => {
@@ -689,6 +833,10 @@ async function gen(promptOverride) {
   const prompt = (promptOverride !== undefined ? promptOverride : TA.value).trim();
   if (!prompt) { toast('提示词是空的'); TA.focus(); return; }
   if (!CUR) { toast('先在左边选个渠道'); return; }
+  // 尺寸要先校验：只填一个宽（或一个高）说明用户以为自己填了，实际不会生效，
+  // 这里直接挡下来，别让他等到出图才发现还是 1024×1536。
+  const sizeBody = readSizeForSubmit();
+  if (sizeBody === false) return;
   const artistPrefix = promptOverride === undefined ? selectedNaiPrefix() : '';
   document.getElementById('btnGen').disabled = true;
   try {
@@ -705,6 +853,8 @@ async function gen(promptOverride) {
     const negOn = document.getElementById('negBox').classList.contains('on');
     const ng = negOn ? NEG_INPUT.value.trim() : '';
     if (ng && !isNai()) body.negative = ng;
+    // 尺寸只有 moss 渠道的输入框会亮（后端也只对这些渠道受理）
+    if (sizeBody) { body.width = sizeBody[0]; body.height = sizeBody[1]; }
     const d = await api('/api/gen/submit', body);
     JOBS.unshift(d.job);
     renderJobs();
@@ -809,10 +959,12 @@ function showShot(j, auto) {
     '<span>' + fmtTime(j.ts) + '</span>' +
     (stepsText(j) ? '<span class="stp"></span>' : '') +
     (cfgText(j) ? '<span class="cf"></span>' : '') +
+    (sizeText(j) ? '<span class="sz"></span>' : '') +
     (secsText(j.secs) ? '<span class="dur"></span>' : '');
   meta.querySelector('.sk').textContent = j.skill;
   if (stepsText(j)) meta.querySelector('.stp').textContent = stepsText(j);
   if (cfgText(j)) meta.querySelector('.cf').textContent = cfgText(j);
+  if (sizeText(j)) meta.querySelector('.sz').textContent = sizeText(j);
   if (secsText(j.secs)) meta.querySelector('.dur').textContent = 'ComfyUI ' + secsText(j.secs);
   el.appendChild(meta);
   if (j.prompt) {
@@ -864,6 +1016,11 @@ function cfgText(o) {
   const v = o && o.cfg;
   return (v === null || v === undefined || v === '') ? '' : ('cfg ' + v);
 }
+// 尺寸（2026-10-31）：只有当次填了才会有值；任务里是 size_label（改完工作流
+// 读回来的真实尺寸），账本行里是 size。
+function sizeText(o) {
+  return (o && (o.size_label || o.size)) || '';
+}
 
 function renderHistory() {
   const box = document.getElementById('hList');
@@ -890,7 +1047,7 @@ function renderHistory() {
       (lt ? '<div class="lor"></div>' : '') +
       '<div class="sd"></div>' +
       (r.ok ? '<div class="tm"></div>' : '<div class="bad"></div>') +
-      (r.ok && (stepsText(r) || cfgText(r) || secsText(r.secs)) ? '<div class="dur"></div>' : '');
+      (r.ok && (sizeText(r) || stepsText(r) || cfgText(r) || secsText(r.secs)) ? '<div class="dur"></div>' : '');
     info.querySelector('.sk').textContent =
       ((CHANNELS.find(c => c.id === r.skill) || {}).label) || r.skill;
     if (lt) {
@@ -904,7 +1061,8 @@ function renderHistory() {
     else info.querySelector('.bad').textContent = (r.error || '失败').slice(0, 40);
     if (r.ok && info.querySelector('.dur')) {
       info.querySelector('.dur').textContent =
-        [stepsText(r), cfgText(r), secsText(r.secs)].filter(Boolean).join(' · ');
+        [sizeText(r), stepsText(r), cfgText(r), secsText(r.secs)]
+          .filter(Boolean).join(' · ');
     }
     el.appendChild(info);
     if (r.prompt) {
@@ -929,6 +1087,7 @@ function renderHistory() {
       }
       lines.push('种子　' + (r.seed ?? '—'));
       if (r.ok) {
+        if (sizeText(r)) lines.push('尺寸　' + sizeText(r));
         lines.push('步数　' + (stepsText(r) || '—'));
         lines.push('CFG　' + (cfgText(r).replace(/^cfg /, '') || '—'));
         if (r.negative) lines.push('负向追加　' + r.negative);

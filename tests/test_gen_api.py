@@ -161,10 +161,42 @@ class SubmitTest(unittest.TestCase):
             job["state"] = "done"
 
         with mock.patch.object(gen_api, "_run", side_effect=finish):
-            r = self._submit(skill="nai", cfg=3.5, negative="bad hands")
+            r = self._submit(skill="nai", cfg=3.5, negative="bad hands",
+                             width=1536, height=2048)
         self.assertEqual(r.status_code, 200)
         self.assertIsNone(r.get_json()["job"]["cfg"])
         self.assertIsNone(r.get_json()["job"]["negative"])
+        self.assertIsNone(r.get_json()["job"]["width"])
+
+    def test_size_needs_both_sides(self):
+        for w, h in ((1536, None), (None, 2048)):
+            r = self._submit(width=w, height=h)
+            self.assertEqual(r.status_code, 400, repr((w, h)))
+            self.assertIn("整数", r.get_json()["error"])
+
+    def test_size_junk_is_400(self):
+        self.assertEqual(self._submit(width="abc", height=2048).status_code, 400)
+        self.assertEqual(self._submit(width=0, height=2048).status_code, 400)
+
+    def test_size_is_aligned_to_multiple_of_eight(self):
+        def finish(job):
+            job["state"] = "done"
+
+        with mock.patch.object(gen_api, "_run", side_effect=finish):
+            r = self._submit(skill="moss-qunyou", width=1530, height=2050)
+        job = r.get_json()["job"]
+        self.assertEqual((job["width"], job["height"]), (1528, 2048))
+
+    def test_size_is_ignored_for_channels_without_the_entry(self):
+        """silver 带放大链，跑图台不给尺寸入口；带上来也忽略，不报错。"""
+        def finish(job):
+            job["state"] = "done"
+
+        with mock.patch.object(gen_api, "_run", side_effect=finish):
+            r = self._submit(skill="silver", width=1536, height=2048)
+        self.assertEqual(r.status_code, 200)
+        self.assertIsNone(r.get_json()["job"]["width"])
+        self.assertIsNone(r.get_json()["job"]["height"])
 
     def test_steps_is_optional_and_kept_on_job(self):
         def finish(job):
@@ -315,6 +347,39 @@ class RunTest(unittest.TestCase):
         row = next(r for r in gen_api._ledger_rows() if r["tag"] == jid)
         self.assertEqual(row["cfg"], 3.5)
         self.assertEqual(row["negative"], "bad hands")
+
+    def test_size_override_is_applied_to_workflow(self):
+        """moss 填 1536×2048 → 提交给 ComfyUI 的底图节点必须是这个尺寸，
+        账本里记下实际尺寸。"""
+        seen = {}
+
+        def fake_build(skill, prompt, seed):
+            return {"60": {"class_type": "EmptyFlux2LatentImage",
+                           "inputs": {"width": 1024, "height": 1536,
+                                      "batch_size": 1}},
+                    "70": {"class_type": "KSampler",
+                           "inputs": {"steps": 25, "cfg": 3.0}}}
+
+        def fake_submit(wf, skill, prompt, seed, **kw):
+            seen["size"] = (wf["60"]["inputs"]["width"],
+                            wf["60"]["inputs"]["height"])
+            seen["batch"] = wf["60"]["inputs"]["batch_size"]
+            return ("x.png", {"status": {"messages": []}})
+
+        with mock.patch.object(gen_api, "generate_image_build", fake_build), \
+             mock.patch.object(comic, "_submit", side_effect=fake_submit), \
+             mock.patch.object(comic, "_submit_retry",
+                               side_effect=lambda fn, what: fn()):
+            jid = self.c.post("/api/gen/submit",
+                              json={"skill": "moss-qunyou", "prompt": "1girl",
+                                    "width": 1536, "height": 2048}
+                              ).get_json()["job"]["id"]
+            self.assertTrue(self._wait_job(jid, "done"))
+
+        self.assertEqual(seen["size"], (1536, 2048))
+        self.assertEqual(seen["batch"], 1)      # 别的输入不动
+        row = next(r for r in gen_api._ledger_rows() if r["tag"] == jid)
+        self.assertEqual(row["size"], "1536×2048")
 
     def test_default_steps_follow_the_template(self):
         """不填步数 = 按模板跑，账本记的就是模板值。"""
