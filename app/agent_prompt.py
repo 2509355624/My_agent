@@ -424,6 +424,12 @@ def build_stable_prompt(agent_id=None, persona_override=None):
 
     sections = []
 
+    # 有没有工具，决定要不要给「工具调用格式」和工具清单。
+    # `tools` 写成空数组的 agent（如 moss 漫画助手，2026-10-31）一个工具都没有，
+    # 但原来照样被塞了一段格式说明 + 一个 `[[TOOL:工具名]]` 的占位示范——
+    # 模型会照着占位符往外吐工具块，解析不到、还当成正文显示出来。
+    has_tools = any(agent_store.allows_tool(agent_id, t["name"]) for t in TOOLS)
+
     # [P1] 角色（来自 agent 人设）
     sections.append((P_ROLE, "Role", persona))
 
@@ -435,6 +441,14 @@ def build_stable_prompt(agent_id=None, persona_override=None):
     guide = agent_store.image_guide_text(agent_id)
     if guide:
         sections.append((P_IMAGE, "生图方法", guide))
+
+    # [P1] 固定注入的 skill 正文（agent.json 的 inject_skills，2026-10-31）
+    # 单独成段而不是并进 Role，理由跟上面的生图方法一样：会话级自定义人设是
+    # **整份顶替** Role 的，写在一起就会被顶掉。而这段是「这个 agent 的作业
+    # 规范」——换个人设不该把分镜格式一起丢掉。
+    injected = agent_store.injected_skills_text(agent_id)
+    if injected:
+        sections.append((P_IMAGE, "Skill 规范", injected))
 
     # [P1] 工具调用格式（核心协议，不能丢）
     # 示例里的工具名必须来自本 agent 白名单：模型会照着示例调工具，
@@ -511,11 +525,16 @@ def build_stable_prompt(agent_id=None, persona_override=None):
     ))
 
     # [P3] 行为规则（只放通用条款；依赖具体工具的规则进 _TOOL_HINTS，按白名单裁剪）
-    sections.append((P_RULES, "Rules",
-        "- 不需要工具时直接回答，不要强行调用工具\n"
-        "- 调用工具后，根据结果继续回答或调用下一个工具\n"
-        "- 回复简洁明了，不要过度解释"
-    ))
+    if has_tools:
+        _rules = ("- 不需要工具时直接回答，不要强行调用工具\n"
+                  "- 调用工具后，根据结果继续回答或调用下一个工具\n"
+                  "- 回复简洁明了，不要过度解释")
+    else:
+        # 没有工具时上面两条是空话，还容易引出「我要不要调个工具」这种犹豫。
+        # 明说「你没有工具」，比让它自己从 Available Tools 的空列表里推断可靠。
+        _rules = ("- 本 agent 没有任何工具，**不要输出任何工具调用块**\n"
+                  "- 直接把结果给出来，不要解释自己的过程")
+    sections.append((P_RULES, "Rules", _rules))
 
     # [P3] Skill 目录
     # 「怎么深入」按白名单给：没有 list_files/read_file 的 agent（如 qq），
@@ -543,6 +562,13 @@ def build_stable_prompt(agent_id=None, persona_override=None):
         env_lines.append("- ComfyUI 地址: http://127.0.0.1:8188")
         env_lines.append("- 生图引擎: 本地 ComfyUI（具体工作流由所选 skill 决定）")
     sections.append((P_ENV, "Environment", "\n".join(env_lines)))
+
+    # 无工具的 agent 剔掉这两个段（见上面 has_tools 的说明）。
+    # 放在这里统一过滤，而不是给每段各包一层 if——这两段是同一件事的两面
+    # （怎么调 / 有什么可调），要留就都留，要去就都去。
+    if not has_tools:
+        sections = [s for s in sections
+                    if s[1] not in ("Tool Call Format", "Available Tools")]
 
     # 按 priority 排序（小的在前）
     sections.sort(key=lambda x: x[0])

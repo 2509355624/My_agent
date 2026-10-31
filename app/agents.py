@@ -17,12 +17,16 @@ Agent 定义与解析
 """
 
 import json
+import logging
 import os
 import re
 
 from app.config import (AGENTS_DIR, DEFAULT_AGENT_ID, NAI_ENABLED,
                         NAI_OPEN_ACCESS, PROVIDERS, QQ_INTERJECT_COOLDOWN,
-                        QQ_INTERJECT_MIN_GAP)
+                        QQ_INTERJECT_MIN_GAP, SKILLS_DIR)
+from app.skills import load_skill
+
+log = logging.getLogger("agents")
 
 
 # 字母数字开头，后跟字母数字 / 下划线 / 连字符；限长防超长文件名。
@@ -39,6 +43,9 @@ _DEFAULT_CONFIG = {
     "prompt_file": "prompt.md",
     "tools": None,
     "skills": None,
+    # 要**整段注入** system prompt 的 skill 名单（见 injected_skills_text）。
+    # 跟 skills 白名单语义相反，默认空列表 = 什么都不注入。
+    "inject_skills": [],
     "provider": "",
     "model": "",
     "context_budget": 0,
@@ -860,6 +867,20 @@ def _normalize(cfg):
                 items.append(x.strip())
         out[key] = items
 
+    # inject_skills 跟上面两个**反向**收敛：它们 None = 不限制，
+    # 这里 None / 写错一律变成 []（什么都不注入）。
+    # 原因：「全部注入」等于把这个人的所有生图渠道规范全文塞进提示词，
+    # 十几个 skill 直接几十万字，上下文当场爆掉。没有「放行」这个安全缺省，
+    # 只能一个一个点名。
+    seen, injected = set(), []
+    raw_inject = out.get("inject_skills")
+    if isinstance(raw_inject, (list, tuple)):
+        for x in raw_inject:
+            if isinstance(x, str) and x.strip() and x.strip() not in seen:
+                seen.add(x.strip())
+                injected.append(x.strip())
+    out["inject_skills"] = injected
+
     # provider / model 留空串 = 继承 .env 的全局默认。
     # provider 写错（不在 PROVIDERS 里）一律清空而不是原样保留：留着会让请求
     # 带着一个不存在的名字走到 llm 层，再被静默回退到全局默认，界面显示的和
@@ -1074,6 +1095,41 @@ def image_guide_text(agent_id):
         return ""
 
 
+def injected_skills(agent_id):
+    """该 agent 要**整段注入** system prompt 的 skill 名单（agent.json 的 inject_skills）。
+
+    跟 skills 白名单是两件事，别混：
+    - `skills` 决定「这个 agent 看得见哪些 skill」，模型要用还得自己 load_skill；
+    - `inject_skills` 决定「哪些 skill 的正文压根不用调工具，一开始就在提示词里」。
+
+    后者是给「一个 agent 只干一件事」的场景准备的（2026-10-31 moss 漫画助手）：
+    它每轮都要照着同一份规范写分镜，让模型先调一次 load_skill 既浪费一轮，
+    又有模型偷懒不调的风险——不调它就凭印象乱写，格式全错。
+    """
+    return list(agent_config(agent_id).get("inject_skills") or [])
+
+
+def injected_skills_text(agent_id):
+    """注入段正文：把每个 skill 的主规范（含 references）拼成一段。
+
+    读不到就跳过并记一条告警，不让整个 agent 起不来：名字拼错、目录被删的
+    后果只是「模型不知道规矩」，这比服务 500 好排查得多。
+    """
+    blocks = []
+    for name in injected_skills(agent_id):
+        data = load_skill(name)
+        body = (data or {}).get("skill_md") or ""
+        if not body.strip():
+            log.warning("inject_skills：读不到 skill %r 的主规范，已跳过", name)
+            continue
+        block = "## Skill: %s\n\n%s" % (name, body.strip())
+        refs = ((data.get("references") or "")).strip()
+        if refs:
+            block += "\n\n### 参考\n\n" + refs
+        blocks.append(block)
+    return "\n\n".join(blocks)
+
+
 def revision(agent_id):
     """该 agent 配置的版本串（agent.json、人设文件、生图方法文档的 mtime 拼接）。
 
@@ -1091,7 +1147,29 @@ def revision(agent_id):
             parts.append(str(os.path.getmtime(path)))
         except OSError:
             parts.append("0")
+    # 被注入的 skill 也必须算进版本串：它的正文直接进了 system prompt，
+    # 改了却不重建，就得重启服务才生效——跟「skill 改完下一轮就用上」相反。
+    # 这里只取 mtime、不读正文（revision 每轮都会调，读全文太亏）。
+    for name in cfg.get("inject_skills") or []:
+        parts.append("%s:%s" % (name, _skill_stamp(name)))
     return "|".join(parts)
+
+
+def _skill_stamp(name):
+    """skill 主规范的 mtime，只给指纹用。
+
+    目录规则跟 `app.skills._resolve_skill_dir` 对齐：先看 skills/<name>/，
+    没有规范文件再看 skills/<name>/<name>/（历史上出现过的同名嵌套）。
+    取不到一律 0——指纹里多个 0 顶多是缓存重建一次，比抛异常好。
+    """
+    base = os.path.join(SKILLS_DIR, name)
+    for d in (base, os.path.join(base, name)):
+        for fname in ("SKILL.md", "skill.md"):
+            try:
+                return os.path.getmtime(os.path.join(d, fname))
+            except OSError:
+                continue
+    return 0.0
 
 
 def allows_tool(agent_id, name):
