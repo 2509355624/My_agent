@@ -128,15 +128,16 @@ class SmallComicWordTest(unittest.TestCase):
         self.assertEqual(brief, "")
         self.assertEqual(tip, moss_bot.USAGE)
 
-    def test_layout_is_six_panels(self):
-        """单页六格：LAYOUT 和 LAYOUTS 必须对得上，不然 check 会报格数不符。"""
+    def test_layout_is_five_panels(self):
+        """单页默认五格：LAYOUT 和 LAYOUTS 必须对得上，不然 check 会报格数不符。"""
         from app import moss_comic
-        self.assertEqual(moss_bot.LAYOUT, "3x2")
+        self.assertEqual(moss_bot.LAYOUT, "1t2m2b")
         self.assertEqual(moss_bot.PAGES, 1)
-        self.assertEqual(len(moss_comic.LAYOUTS[moss_bot.LAYOUT][1]), 6)
+        self.assertEqual(len(moss_comic.LAYOUTS[moss_bot.LAYOUT][1]), 5)
 
-    def test_usage_mentions_six_panels(self):
-        self.assertIn("六格", moss_bot.USAGE)
+    def test_usage_mentions_default_panels(self):
+        self.assertIn("默认五格", moss_bot.USAGE)
+        self.assertIn("六格", moss_bot.USAGE)   # 点名六格仍是选项
 
 
 class DetectLayoutTest(unittest.TestCase):
