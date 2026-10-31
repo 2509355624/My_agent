@@ -232,6 +232,7 @@ if not exist "%COMFY_BAT%" (
     echo       ComfyUI          已在运行，本次不动
 ) else (
     start "COMFYUI" cmd /k "%COMFY_BAT%"
+    call :wait_comfy 180
     echo       ComfyUI          生图后端  http://127.0.0.1:8188
 )
 echo.
@@ -259,3 +260,33 @@ echo ==================================================
 echo.
 echo   新开的窗口请勿关闭。本窗口可以关。
 if not defined AUTO_RUN pause
+exit /b 0
+
+
+rem ---------------------------------------------------------------------------
+rem  等 ComfyUI 真的能接了再往下走（2026-10-31 加）。
+rem  以前 start 完就直接 [4/4] 起看门狗并结束：nightly 冷启动要加载自定义节点 +
+rem  aimdo + 模型，60~180 秒内 8188 根本不监听，这期间跑图一律报「ComfyUI 不在线」，
+rem  用户看到的就是「一键启动了却唤不醒」。
+rem  判据用 netstat 看 8188 有没有 LISTENING：ComfyUI 是先绑端口再服务，绑上就快了，
+rem  这一步够用，也不依赖 python / curl。
+rem  %1 = 最多等多少秒（默认 180）。等不到只 WARN，绝不卡住启动流程。
+rem ---------------------------------------------------------------------------
+:wait_comfy
+set "WAIT_MAX=%~1"
+if not defined WAIT_MAX set "WAIT_MAX=180"
+set /a WAIT_N=0
+:wait_comfy_loop
+set "COMFY_UP="
+for /f %%a in ('netstat -ano 2^>nul ^| findstr ":8188 " ^| findstr "LISTENING"') do set "COMFY_UP=1"
+if defined COMFY_UP (
+    if %WAIT_N% GTR 0 echo       ComfyUI 已就绪（等了约 %WAIT_N% 秒）
+    goto :eof
+)
+set /a WAIT_N+=2
+if %WAIT_N% GEQ %WAIT_MAX% (
+    echo       [WARN] ComfyUI %WAIT_MAX% 秒内没就绪，先继续；这期间跑图会报「不在线」
+    goto :eof
+)
+ping -n 3 127.0.0.1 >nul
+goto :wait_comfy_loop

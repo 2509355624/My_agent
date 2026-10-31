@@ -64,6 +64,19 @@ rem 的图连进程一起干掉。端口没被占时下面的循环自然什么都不做。
 rem [!!] 必须先 cd 进 ComfyUI 自己的目录。models/ output/ user/ input/ 全是按
 rem      当前工作目录找的 —— 在 D:\AI\My_agent 下启动会开出一个「空」ComfyUI：
 rem      没有模型、没有 anime2 工作流，而且它会占着 8188 让人以为一切正常。
+rem [!!] 取参数必须放在 cd 进 ComfyUI 目录**之前**（2026-10-31 修）。
+rem      ComfyUI-nightly 自带一个 app\__init__.py，cd 进去之后
+rem      `from app import comfy_launch` 会命中它、必然 ImportError，
+rem      只能一路走兜底参数 —— 在 .env 里改 COMFYUI_LAUNCH_ARGS 永远不生效。
+set "CFY_ARGS="
+for /f "delims=" %%a in ('"%PY%" -c "import sys;from app import comfy_launch;sys.stdout.write(' '.join(comfy_launch.launch_args()))" 2^>nul') do set "CFY_ARGS=%%a"
+if not defined CFY_ARGS (
+    echo   [WARN] 读不到 comfy_launch 的参数，用内置兜底（nightly 三件套）
+    set "CFY_ARGS=--listen 127.0.0.1 --port 8188 --disable-comfy-compiler --enable-triton-backend --enable-cors-header *"
+) else (
+    call echo   启动参数 : %%CFY_ARGS%%
+)
+
 cd /d "%CFY_DIR%"
 
 rem ── 先杀死占用 8188 的旧实例（仅手动模式）──
@@ -104,14 +117,6 @@ rem [!] 参数**不在这里写死**：看门狗（watchdog._trigger_comfy_restart）和
 rem     采样降级强杀（image_jobs._force_restart_comfy）都从 app/comfy_launch.py
 rem     取命令。手动双击这份 bat 如果自己另写一套，就会出现「自动拉起能跑、
 rem     手动拉起跑不动」的诡异差异。所以这里也去问它，问不到才用兜底。
-set "CFY_ARGS="
-for /f "delims=" %%a in ('"%PY%" -c "import sys;from app import comfy_launch;sys.stdout.write(' '.join(comfy_launch.launch_args()))" 2^>nul') do set "CFY_ARGS=%%a"
-if not defined CFY_ARGS (
-    echo   [WARN] 读不到 comfy_launch 的参数，用内置兜底（nightly 三件套）
-    set "CFY_ARGS=--listen 127.0.0.1 --port 8188 --disable-comfy-compiler --enable-triton-backend --enable-cors-header *"
-) else (
-    echo   启动参数 : %CFY_ARGS%
-)
 
 rem 12GB 卡缺了 expandable_segments 很容易碎片化 OOM（app/comfy_launch.env() 同样补这一项）
 if not defined PYTORCH_CUDA_ALLOC_CONF set "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
