@@ -45,7 +45,7 @@ from app import (card_bot, confirm_gate, direct_gen, image_jobs, image_log,
                  image_out, interject,
                  logsetup,
                  longterm, moss_bot, notify, persona, qq_api, qq_status, recent,
-                 stickers, usage)
+                 stickers, trigger, usage)
 from app.agent import run_agent_stream, tail_tokens
 from app.agent_prompt import build_stable_prompt
 from app.config import (
@@ -579,15 +579,17 @@ REASON_NO_MENTION = "未 @ 且未命中关键词"
 # 更前——关键词可能被群里闲聊误撞，前缀是刻意写的命令，不会误伤。
 _DIRECT_PREFIX_RE = re.compile(r"^\s*[\/／]\s*直通\s*[-－—]")
 
-# 「自定义预设」= 查公开预设池（2026-10-30）。同样**等同被 @**：群里发指令
-# 还要求先 @ 一下机器人太别扭，而且这条命令本身零成本（纯查库，不调模型）。
-# 2026-10-30 二修：改成**关键词命中**，不再要求斜杠 + 整句——用户口径是
-# 「群友有时候会打错字」。正则与 `app/direct_gen.py` 那两份保持一字不差。
+# 「自定义预设」= 查公开预设池（2026-10-30）。2026-10-30 二修改成**关键词
+# 命中**，不再要求斜杠 + 整句（用户口径是「群友有时候会打错字」），正则与
+# `app/direct_gen.py` 那两份保持一字不差。
+# **2026-10-31 收紧**：不再「等同被 @」——回执本身把这个词印在群聊里，
+# 谁复述一句就会被当成指令。现在要喊一声机器人（@ 或「大大怪」）才放行，
+# 判据见 `app/trigger.py`。
 _PRESET_CMD_RE = re.compile(r"自定义预设")
 
-# 「预设网页」= 要群友页地址（2026-10-30）。同样**等同被 @**：查的是本地一个
-# 文件，零成本，没必要先 @ 一下。二修同上，也是关键词命中；两条同时出现时
-# 先认这条（给地址），所以判断顺序不能反。
+# 「预设网页」= 要群友页地址（2026-10-30）。二修同上，也是关键词命中；两条
+# 同时出现时先认这条（给地址），所以判断顺序不能反。
+# 门槛与上一条同步收紧（2026-10-31）：喊名字才给地址。
 _PRESET_WEB_RE = re.compile(
     r"预设网页|画图网页|群友页|预设地址|群友网址")
 
@@ -700,10 +702,13 @@ def _should_reply(ev, target, target_id, text, at_me, has_image=False,
     # 「/直通-」前缀等同被 @：用户刻意写的下单命令，直接放行（见上方常量注释）。
     if _DIRECT_PREFIX_RE.match(text):
         return True, "直通前缀"
-    if _PRESET_WEB_RE.search(text):
-        return True, "预设网页指令"
-    if _PRESET_CMD_RE.search(text):
-        return True, "预设指令"
+    # 2026-10-31：预设网页 / 自定义预设这两条**不再无条件放行**，得先喊一声
+    # 机器人（@ 或「大大怪」）。它们原本「关键词命中就免 @」，结果菜单和回执
+    # 把这两个词印在群聊里，谁复述一句就把地址/名单甩出来。判据见 app/trigger.py。
+    if trigger.called(text) and _PRESET_WEB_RE.search(text):
+        return True, "预设网页指令（喊了名字）"
+    if trigger.called(text) and _PRESET_CMD_RE.search(text):
+        return True, "预设指令（喊了名字）"
     # 「只认 @」的群（管理页可逐群开）：关键词这条路直接掐掉，只有真 @ 才回。
     if group_id not in _at_only_groups():
         for kw in QQ_GROUP_KEYWORDS:
@@ -1292,8 +1297,9 @@ class SessionRunner:
             # 四格。必须同样排在直达管道**前面**——这个词里含渠道词 `moss`，
             # 交给 direct_gen 会画出一张写着「moss漫画」四个字的图。
             # 编剧/出图都在后台线程里跑（约 90 秒），这条消息线程立刻放行。
-            # 2026-10-31：加触发门槛——必须真 @，或者句子里带「大大怪」，
-            # 只写「moss漫画」不接管（群里误触发一次就是 100~250 秒的出图）。
+            # 2026-10-31：四个词统一加触发门槛——必须真 @，或者句子里带
+            # 「大大怪」（判据在 app/trigger.py）。只写 `moss合集` 不接管：
+            # 回执本身就把这四个词印在群聊里，谁复述一句就会被当成指令。
             # 私聊没有 @ 这回事，直接放行。
             # 引用信息：`moss续集` / `moss重画` / `moss合集` **全靠它定位是哪
             # 一系列第几页**（2026-10-31 用户拍板：四个词必须带 moss 前缀）。

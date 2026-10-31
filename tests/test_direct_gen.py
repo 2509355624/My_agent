@@ -2957,6 +2957,34 @@ class RandomCommandTest(unittest.TestCase):
                 self.assertEqual(out, direct_gen.MORE_CHAN_TEXT)
                 m_gen.assert_not_called()
 
+    def _quiet(self, text, at_me=False):
+        """跑一遍 decide，但让后面的 AI 转译返回空（只关心闸门有没有放行）。"""
+        with mock.patch.object(direct_gen.llm, "call_llm", return_value=""), \
+             mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="group_1"), \
+             mock.patch.object(direct_gen.qq_api, "current_quoted_text",
+                               return_value=""):
+            return direct_gen.decide(text, [], False, at_me=at_me)
+
+    def test_keyword_lists_need_the_robot_to_be_called(self):
+        """**2026-10-31 用户报的误触发**：回执本身把这些词印在群聊里。
+
+        菜单最后一行写着「/更多渠道 ｜ 使用指南」，谁复述一句就直回整篇。
+        现在群里必须 @ 或喊「大大怪」才认（判据见 `app/trigger.py`）。
+        """
+        consts = (direct_gen.MORE_CHAN_TEXT, direct_gen.GUIDE_TEXT,
+                  direct_gen.MENU_TEXT)
+        for t in ("更多渠道", "使用指南", "预设网页", "自定义预设", "菜单"):
+            with self.subTest(t=t):
+                self.assertNotIn(self._quiet(t), consts, t)
+
+    def test_saying_the_name_still_gets_the_list(self):
+        """喊了名字就照旧直回——门槛只挡「没在跟我说话」的消息。"""
+        for t, want in (("大大怪 更多渠道", direct_gen.MORE_CHAN_TEXT),
+                        ("大大怪 使用指南", direct_gen.GUIDE_TEXT)):
+            with self.subTest(t=t):
+                self.assertEqual(self._quiet(t), want)
+
     def test_cunny_listed_in_both_menus(self):
         # 2026-10-05：cunny 渠道要同时出现在「使用指南」和「/更多渠道」里。
         self.assertIn("cunny", direct_gen.GUIDE_TEXT)

@@ -77,7 +77,7 @@ import os
 import re
 import time
 
-from app import image_jobs, image_log, llm, qq_api, random_tags
+from app import image_jobs, image_log, llm, qq_api, random_tags, trigger
 from app.config import IMAGE_DEFAULT_SKILL, QQ_GROUP_KEYWORDS
 from app.confirm_gate import _ATTRIBUTION_RE
 from app.skills import list_skills, load_skill
@@ -956,9 +956,11 @@ MENU_TEXT = (
     "　渠道可省，省了走 anima-line · 封面按该渠道默认分辨率出，两三分钟\n"
     "　引用那张卡片说「重新生成」→ 只换种子重画封面\n"
     "\n"
-    "🀄 moss漫画：一句话出一页四格（编剧写分镜 + 台词）\n"
+    "🀄 moss漫画：一句话出一页漫画（编剧写分镜 + 台词），可以连载\n"
     "　例：moss漫画 雨夜便利店，两个陌生人共用一把伞\n"
-    "　720×1280 竖屏 · 30 步 · 约 90 秒\n"
+    "　默认六格 · 1024×1536 · 约 100~250 秒\n"
+    "　续/重画/合集：先引用那一页的图再发命令\n"
+    "　完整玩法：说「moss漫画说明书」\n"
     "\n"
     "「silver-hd」= 4x 超清出图\n"
     "「/更多渠道」= 档位/画风/其他AI ｜ 「使用指南」= 详细玩法"
@@ -2737,24 +2739,31 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
             return _enqueue(d_skill, d_prompt, text,
                             source_image=bool(data_urls))
         # d_skill == ""：渠道段认不出 → 不直通，继续往下交 AI。
+    # ── 零成本关键词直出，先过「在跟我说话」这道闸（2026-10-31 用户拍板）──
+    # 菜单 / 回执把这些词印在群聊里，谁复述一句就会被当成指令：说「使用指南」
+    # 就刷一整篇长文，说「预设网页打不开」就把地址甩出来。判据见 app/trigger.py
+    # ——群里必须 @ 或喊「大大怪」，私聊不受限（调用方传 at_me=True）。
+    # ⚠️ 用 `own_text` 不能用 `text`：后者开头的名字已经被 `_strip_own_names`
+    # 剥掉了，「大大怪 使用指南」剥完只剩「使用指南」，闸门当场失效。
+    addressed = trigger.called(own_text, at_me)
     # 「预设网页」= 群友页地址（2026-10-30）。零 LLM，只读一个文件；
     # 放在这里而不是模板里——地址每次重启都变，模型记不住也不该记。
     # 关键词命中即可（见 `_PRESET_WEB_RE` 注释），所以用 search 不是 match。
-    if _PRESET_WEB_RE.search(text):
+    if addressed and _PRESET_WEB_RE.search(text):
         return _preset_web_text()
     # 「自定义预设」= 列公开池，零 LLM 查库直回（见上方 `_PRESET_CMD_RE`）。
     # 排在地址后面：两句都出现时给地址（见常量区注释）。
-    if _PRESET_CMD_RE.search(text):
+    if addressed and _PRESET_CMD_RE.search(text):
         return _preset_pool_text()
     # 详细使用指南（/菜单、使用指南）：零 LLM，常量直回。比菜单判断更前，
     # 因为「/菜单」含「菜单」二字，得先于短菜单分支。
-    if _GUIDE_RE.match(text):
+    if addressed and _GUIDE_RE.match(text):
         return GUIDE_TEXT
     # 用户**明确**要菜单（「菜单」「/菜单」「help」）→ 零 LLM 直回常量。
     # 2026-10-05 用户拍板：**删掉「命中触发词/关键词就回菜单」的自动兜底**。
     # 普通轮次一律交给 AI 判意图——是画图就画，是聊天/提问就回话，不再用
     # 硬编码菜单吞掉整轮。用户原话：「AI 识别用户的意图…不要搞这个菜单触发了」。
-    if _MENU_RE.match(text) and not data_urls:
+    if addressed and _MENU_RE.match(text) and not data_urls:
         return MENU_TEXT
     # 裸 @ / 空消息：没内容可判 → 不接管，交回上层。
     if not text and not data_urls:
@@ -2810,8 +2819,9 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         _remember_job(session_key, _FALLBACK_SKILL, prompt)
         return _enqueue(_FALLBACK_SKILL, prompt, text,
                         resample_fn=_random_resample("waifu"))
-    # 「/更多渠道」：全部跑法罗列（零 API）。关键词命中即可（见 _MORE_CHAN_RE）。
-    if _MORE_CHAN_RE.search(text):
+    # 「/更多渠道」：全部跑法罗列（零 API）。关键词命中即可（见 _MORE_CHAN_RE），
+    # 但同样要先过「在跟我说话」的闸——它正是印在菜单最后一行那个词。
+    if addressed and _MORE_CHAN_RE.search(text):
         return MORE_CHAN_TEXT
 
     # 「提取提示词」直通（2026-10-07 用户拍板收窄到**就这 5 个字**）：命中 →

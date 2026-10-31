@@ -79,7 +79,13 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(tip, moss_bot.USAGE)
 
     def test_question_is_not_a_brief(self):
-        for text in ("moss漫画 怎么用", "moss漫画 支持什么", "moss漫画 是什么"):
+        """问句不能当成剧情，否则会画一张叫「怎么用」的图。"""
+        # 「怎么用」直接给说明书（比 USAGE 全）
+        hit, act, payload, tip = moss_bot.parse("moss漫画 怎么用", at_me=True)
+        self.assertTrue(hit)
+        self.assertEqual((act, payload), ("", ""))
+        self.assertEqual(tip, moss_bot.MANUAL)
+        for text in ("moss漫画 支持什么", "moss漫画 是什么"):
             hit, act, payload, tip = moss_bot.parse(text, at_me=True)
             self.assertTrue(hit, text)
             self.assertEqual(act, "", text)
@@ -155,7 +161,7 @@ class GateTest(unittest.TestCase):
         self.assertEqual((hit, act), (False, ""))
 
     def test_prefixed_word_always_takes_over(self):
-        """带 moss 前缀的四个词无条件接管（哪怕没引用，也要回一句怎么用）。"""
+        """带 moss 前缀的四个词，只要喊了名字就接管（哪怕没引用，也回一句怎么用）。"""
         cases = {
             "moss续集 她走了": "continue",
             "moss 续集 她走了": "continue",
@@ -165,14 +171,65 @@ class GateTest(unittest.TestCase):
             "MOSS合集 1-5": "album",
         }
         for text, want in cases.items():
-            hit, act, _payload, _tip = moss_bot.parse(text)
+            hit, act, _payload, _tip = moss_bot.parse(text, at_me=True)
             self.assertTrue(hit, text)
             self.assertEqual(act, want, text)
+
+    def test_prefix_alone_is_not_enough_in_a_group(self):
+        """**2026-10-31 第二次收紧：带前缀也不再免喊名。**
+
+        回执本身把 `moss续集` / `moss重画` / `moss合集` 印在群聊里，
+        谁复述一句「moss合集」就被当成指令，回一条「认不出引用」的报错。
+        现在四个词口径统一：不带 @ 也不喊「大大怪」就不接管。
+        """
+        for text in ("moss续集 她走了", "moss重画", "moss合集", "moss合集 1-5"):
+            self.assertEqual(moss_bot.parse(text), (False, "", "", ""), text)
+            # 喊了名字就认
+            self.assertTrue(moss_bot.parse("大大怪 " + text)[0], text)
+            self.assertTrue(moss_bot.parse(text, at_me=True)[0], text)
+
+    def test_repeating_the_receipt_stays_quiet(self):
+        """群友复述回执里的四个词，只要没在叫机器人就不理。"""
+        for text in ("刚那张 moss合集 挺好用", "用 moss续集 就能接着画",
+                     "moss重画 是换种子吧？"):
+            self.assertEqual(moss_bot.parse(text), (False, "", "", ""), text)
 
     def test_usage_says_the_prefix_is_required(self):
         """用法里必须写明「这四个词要带 moss」，不然用户还会说裸词。"""
         self.assertIn("带 moss", moss_bot.USAGE)
         self.assertIn("moss续集", moss_bot.USAGE)
+
+
+class ManualTest(unittest.TestCase):
+    """说明书（2026-10-31 用户点名要的）：关键词触发，但同样要喊名字。"""
+
+    def test_manual_by_keyword(self):
+        for text in ("moss漫画说明书", "moss说明书", "moss小漫画说明书",
+                     "moss漫画 说明书"):
+            hit, act, payload, tip = moss_bot.parse(text, at_me=True)
+            self.assertTrue(hit, text)
+            self.assertEqual((act, payload), ("", ""), text)
+            self.assertEqual(tip, moss_bot.MANUAL, text)
+
+    def test_manual_needs_a_name_in_a_group(self):
+        """群里光说「moss漫画说明书」不接管——说明书里自己就印着这个词。"""
+        self.assertEqual(moss_bot.parse("moss漫画说明书"), (False, "", "", ""))
+        self.assertTrue(moss_bot.parse("大大怪 moss漫画说明书")[0])
+
+    def test_manual_is_never_drawn_as_a_comic(self):
+        """回归：以前 `moss漫画说明书` 先命中 `moss漫画`，「说明书」被当成剧情。
+
+        真跑起来就是一次 100~250 秒的出图，画一张叫「说明书」的图。
+        """
+        hit, act, payload, _tip = moss_bot.parse("moss漫画说明书", at_me=True)
+        self.assertEqual((hit, act, payload), (True, "", ""))
+
+    def test_manual_covers_everything_a_newcomer_asks(self):
+        m = moss_bot.MANUAL
+        for word in ("moss漫画", "moss续集", "moss重画", "moss合集"):
+            self.assertIn(word, m)
+        for must in ("引用", "编号", "私聊", "群聊", "六格", "大大怪"):
+            self.assertIn(must, m)
         self.assertIn("moss重画", moss_bot.USAGE)
         self.assertIn("moss合集", moss_bot.USAGE)
 
@@ -208,7 +265,7 @@ class QuoteTest(unittest.TestCase):
 
     def test_continue_by_quote(self):
         hit, act, payload, tip = moss_bot.parse(
-            "moss续集 她发现伞被人拿走了", quote_id="MID-2",
+            "moss续集 她发现伞被人拿走了", at_me=True, quote_id="MID-2",
             quote_text="%s · 第 02 页 ·《醒来之后》" % moss_series.code_of(self.sid, 2))
         self.assertTrue(hit)
         self.assertEqual(act, "continue")
@@ -216,17 +273,20 @@ class QuoteTest(unittest.TestCase):
         self.assertEqual(tip, "")
 
     def test_redo_by_quote(self):
-        hit, act, _payload, _tip = moss_bot.parse("moss重画", quote_id="MID-2")
+        hit, act, _payload, _tip = moss_bot.parse(
+            "moss重画", at_me=True, quote_id="MID-2")
         self.assertTrue(hit)
         self.assertEqual(act, "redo")
 
     def test_album_by_quote(self):
-        hit, act, _payload, _tip = moss_bot.parse("moss合集", quote_id="MID-2")
+        hit, act, _payload, _tip = moss_bot.parse(
+            "moss合集", at_me=True, quote_id="MID-2")
         self.assertTrue(hit)
         self.assertEqual(act, "album")
 
     def test_album_range_is_kept(self):
-        hit, act, payload, _tip = moss_bot.parse("moss合集 1-10", quote_id="MID-2")
+        hit, act, payload, _tip = moss_bot.parse(
+            "moss合集 1-10", at_me=True, quote_id="MID-2")
         self.assertTrue(hit)
         self.assertEqual(act, "album")
         self.assertEqual(payload, "1-10")
@@ -239,7 +299,7 @@ class QuoteTest(unittest.TestCase):
         """
         code = moss_series.code_of(self.sid, 2)
         hit, act, _payload, _tip = moss_bot.parse(
-            "moss续集 她走了", quote_id="MID-转发后不认识",
+            "moss续集 她走了", at_me=True, quote_id="MID-转发后不认识",
             quote_text="[转发的聊天记录]\n昵称：《醒来之后》· %s · 第 02 页 · 6 格" % code)
         self.assertTrue(hit)
         self.assertEqual(act, "continue")
@@ -250,7 +310,8 @@ class QuoteTest(unittest.TestCase):
     def test_typed_code_locates_too(self):
         """手打编号：编号只用来定位，不许混进剧情。"""
         code = moss_series.code_of(self.sid, 2)
-        hit, act, payload, _tip = moss_bot.parse("moss续集 %s 她推门进来" % code)
+        hit, act, payload, _tip = moss_bot.parse(
+            "moss续集 %s 她推门进来" % code, at_me=True)
         self.assertTrue(hit)
         self.assertEqual(act, "continue")
         self.assertIn(code, payload)          # parse 保留，start 靠它定位
