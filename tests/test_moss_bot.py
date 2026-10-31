@@ -32,7 +32,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-from app import moss_api, moss_bot, moss_comic, moss_msgs, moss_series, qq_api
+from app import (image_out, moss_api, moss_bot, moss_comic, moss_msgs,
+                 moss_series, qq_api)
 
 
 class ParseTest(unittest.TestCase):
@@ -628,6 +629,99 @@ class ReceiptTest(unittest.TestCase):
                                       {"title": "t", "pages": [{"panels": []}]},
                                       "T1", 1, "", None)
         self.assertEqual(calls, ["C:/tmp/a.png", "C:/tmp/b.png"])
+
+
+class AlbumTest(unittest.TestCase):
+    """`moss合集` 拼合并转发卡片（2026-10-31 用户实跑翻车后补的）。
+
+    翻车现场：ComfyUI 停着，`prepare_for_send` 取不到图就回落成
+    `http://127.0.0.1:8188/view?…`，塞进节点后协议端去拉 = `fetch failed`，
+    **整张卡片一条都发不出去**。现在那一页算缺，其余照发；全缺才报错。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self._old = (moss_series.STATE_ROOT, moss_series.INDEX_FILE)
+        moss_series.STATE_ROOT = self.tmp
+        moss_series.INDEX_FILE = os.path.join(self.tmp, "_index.json")
+        self.addCleanup(self._restore)
+        s = moss_series.open_new("group", "1103174141", title="红缝")
+        self.sid = s["id"]
+        self.pages = []
+        parent = ""
+        for i in (1, 2, 3):
+            pg = moss_series.mutate(self.sid, lambda x, p=parent, i=i:
+                                    moss_series.add_page(
+                                        x, parent_id=p, task="T%d" % i,
+                                        brief="第%d页" % i, seed=i,
+                                        summary="她醒了" if i == 1 else ""))
+            self.pages.append(pg)
+            parent = pg["id"]
+
+    def _restore(self):
+        moss_series.STATE_ROOT, moss_series.INDEX_FILE = self._old
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _album(self, paths):
+        """`paths` = 每页 prepare_for_send 的返回（按页序）。"""
+        sent, said = [], []
+
+        def fake_prepare(rel, fmt=None):
+            return paths.pop(0)
+
+        with mock.patch.object(moss_api, "_task_dir", lambda t: t), \
+             mock.patch.object(moss_api, "_page_file",
+                               lambda d, n: "x/%s.png" % d), \
+             mock.patch.object(image_out, "prepare_for_send", fake_prepare), \
+             mock.patch("app.agents.image_send_format", return_value="jpg"), \
+             mock.patch.object(qq_api, "send_forward",
+                               lambda t, i, nodes: sent.append(nodes)), \
+             mock.patch.object(moss_bot, "_say",
+                               lambda t, i, text, r="": said.append(text)):
+            moss_bot._do_album("group", "1103174141", self.sid,
+                               self.pages[-1]["id"], "", "")
+        return sent, said
+
+    def test_pages_without_a_local_file_are_skipped(self):
+        """第 2 页只有远端 URL → 跳过它，卡片照发（别把它连累成 fetch failed）。"""
+        sent, said = self._album(["C:/a.jpg",
+                                  "http://127.0.0.1:8188/view?filename=b.png",
+                                  "C:/c.jpg"])
+        self.assertEqual(len(sent), 1)
+        nodes = sent[0]
+        names = [n["data"]["name"] for n in nodes]
+        self.assertIn("第 01 页", names)
+        self.assertIn("第 03 页", names)
+        self.assertNotIn("第 02 页", names)
+        self.assertTrue(any("缺了 1 张" in t for t in said))
+
+    def test_all_pages_missing_says_why_instead_of_sending(self):
+        """全缺就不发空卡片，直接说清是取不到图。"""
+        sent, said = self._album(["http://127.0.0.1:8188/view?a",
+                                  "http://127.0.0.1:8188/view?b",
+                                  "http://127.0.0.1:8188/view?c"])
+        self.assertEqual(sent, [])
+        self.assertTrue(any("一张都没取出来" in t for t in said), said)
+
+    def test_send_failure_reads_like_a_sentence(self):
+        """协议端失败要给原因，不要把整个返回体 dict 甩给群友。"""
+        said = []
+        with mock.patch.object(moss_api, "_task_dir", lambda t: t), \
+             mock.patch.object(moss_api, "_page_file", lambda d, n: "x.png"), \
+             mock.patch.object(image_out, "prepare_for_send",
+                               lambda rel, fmt=None: "C:/a.jpg"), \
+             mock.patch("app.agents.image_send_format", return_value="jpg"), \
+             mock.patch.object(qq_api, "send_forward",
+                               mock.Mock(side_effect=RuntimeError(
+                                   "OneBot 调用失败 send_group_forward_msg: "
+                                   "{'status': 'failed', 'retcode': 100, "
+                                   "'wording': 'fetch failed'}"))), \
+             mock.patch.object(moss_bot, "_say",
+                               lambda t, i, text, r="": said.append(text)):
+            moss_bot._do_album("group", "1103174141", self.sid,
+                               self.pages[-1]["id"], "", "")
+        self.assertTrue(any("fetch failed" in t for t in said), said)
+        self.assertFalse(any("retcode" in t for t in said), said)
 
 
 if __name__ == "__main__":

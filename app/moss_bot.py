@@ -702,6 +702,7 @@ def _do_album(target, target_id, sid, page_id, rest, reply_to):
         name="moss 小漫画", uin=0)]
     miss = 0
     for pg in part:
+        rel = ""
         try:
             d = moss_api._task_dir(pg.get("task") or "")   # noqa: SLF001
             rel = moss_api._page_file(d, 1)                # noqa: SLF001
@@ -713,6 +714,16 @@ def _do_album(target, target_id, sid, page_id, rest, reply_to):
             log.warning("合集取图失败 %s 第 %s 页", sid, pg.get("n"))
             miss += 1
             continue
+        if str(path).startswith(("http://", "https://")):
+            # `prepare_for_send` 只在「本地磁盘和 ComfyUI 都取不到」时才回落成
+            # 原图 URL。合并转发是**协议端自己去拉图**，那个 URL 指向本机
+            # 8188——ComfyUI 停着时整张卡片一条都发不出去，报的是
+            # `send_group_forward_msg 失败：fetch failed`（2026-10-31 实测）。
+            # 与其拖垮整张卡，不如把这一页算缺，其余的照样发。
+            log.warning("合集第 %s 页只有远端地址，合并转发拉不到：%s",
+                        pg.get("n"), rel)
+            miss += 1
+            continue
         nodes.append(qq_api.node_segment(
             [qq_api.image_segment(path)],
             name="第 %02d 页" % (pg.get("n") or 0), uin=0))
@@ -722,16 +733,21 @@ def _do_album(target, target_id, sid, page_id, rest, reply_to):
                 name="剧情", uin=0))
 
     if len(nodes) == 1:
-        _say(target, target_id, "这几页的图都取不出来了（%d 张缺）" % miss, reply_to)
+        _say(target, target_id,
+             "这条线一共 %d 页，图一张都没取出来（%d 张缺）。\n"
+             "多半是 ComfyUI 没开、图还在磁盘上但读不到，"
+             "等它起来再喊我一次。" % (len(part), miss), reply_to)
         return
     try:
         qq_api.send_forward(target, target_id, nodes)
     except Exception as exc:                    # noqa: BLE001
         log.exception("moss 合集发不出去")
-        _say(target, target_id, "合集没发出去（%s）" % exc, reply_to)
+        _say(target, target_id,
+             "合集没发出去（%s）" % qq_api.error_reason(exc), reply_to)
         return
     if miss:
-        _say(target, target_id, "合集缺了 %d 张（任务目录被清掉了）" % miss, reply_to)
+        _say(target, target_id, "合集缺了 %d 张（这页的图取不出来）" % miss,
+             reply_to)
 
 
 # ─── 出图 + 发图 + 记账 ───────────────────────────────

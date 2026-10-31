@@ -12,6 +12,8 @@ png 那条（2026-10-18 用户拍板）反过来：**字节原样，工作流一
 
 import io
 import os
+import shutil
+import tempfile
 import time
 import unittest
 from unittest import mock
@@ -52,6 +54,12 @@ class PrepareTest(unittest.TestCase):
     def setUp(self):
         self.d = image_out._out_dir()
         self.before = set(os.listdir(self.d))
+        # 取图现在**先读本机 output 目录**（见 image_out._read_local）。测试用的
+        # 文件名要是正好撞上本机 output 里真有一张，就会绕开这里 mock 的 HTTP
+        # 替身、读到真文件——本机有没有那张图不该决定测试结果，所以一律拨空。
+        p = mock.patch.object(image_out, "COMFYUI_OUTPUT_DIR", "")
+        p.start()
+        self.addCleanup(p.stop)
 
     def tearDown(self):
         # 产物落在系统 temp 里，测试自己收拾干净，不给下回留垃圾
@@ -202,3 +210,69 @@ class PrepareTest(unittest.TestCase):
     def test_session_ignores_env_proxy(self):
         """回环地址不能被系统代理劫持（本机常驻 Clash 之类，一劫持就 502）。"""
         self.assertFalse(image_out._session.trust_env)
+
+
+class LocalDiskTest(unittest.TestCase):
+    """取图**先读本机 output 目录**，读不到才走 `/view`（2026-10-31 加）。
+
+    那天用户跑 `moss合集` 全挂：ComfyUI 停着（8188 10061），每张图都回落成
+    `http://127.0.0.1:8188/view?…` 塞进合并转发，协议端去拉就是
+    `send_group_forward_msg 失败：fetch failed`。可那些图一直躺在 output 里。
+    """
+
+    def setUp(self):
+        self.out = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.out, True)
+        p = mock.patch.object(image_out, "COMFYUI_OUTPUT_DIR", self.out)
+        p.start()
+        self.addCleanup(p.stop)
+        d = image_out._out_dir()
+        self.before = set(os.listdir(d))
+        self.addCleanup(self._clean, d)
+
+    def _clean(self, d):
+        for name in set(os.listdir(d)) - self.before:
+            try:
+                os.remove(os.path.join(d, name))
+            except OSError:
+                pass
+
+    def _put(self, rel, data=None):
+        p = os.path.join(self.out, *rel.split("/"))
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "wb") as f:
+            f.write(data if data is not None else _png_bytes())
+        return p
+
+    def test_reads_disk_without_touching_comfy(self):
+        """ComfyUI 一个请求都不能发——它没开的时候这条是唯一能走通的路。"""
+        self._put("web/moss漫画/20261031_2335_红缝/moss-qunyou/M_1_.png")
+        get = mock.Mock(side_effect=AssertionError("不该走 HTTP"))
+        with mock.patch.object(image_out._session, "get", get):
+            got = image_out.prepare_for_send(
+                "web/moss漫画/20261031_2335_红缝/moss-qunyou/M_1_.png")
+        self.assertTrue(os.path.isfile(got), got)
+        self.assertFalse(got.startswith("http"))
+        self.assertFalse(get.called)
+
+    def test_disk_wins_over_http(self):
+        """两边都能取时用磁盘：本机读盘没有「服务在不在」这个前提。"""
+        self._put("qq/群_1/anima/A_1_.png")
+        get = mock.Mock(side_effect=AssertionError("不该走 HTTP"))
+        with mock.patch.object(image_out._session, "get", get):
+            got = image_out.prepare_for_send("qq/群_1/anima/A_1_.png", "png")
+        self.assertTrue(os.path.isfile(got), got)
+
+    def test_missing_on_disk_still_goes_to_view(self):
+        """磁盘上没有（远端 ComfyUI）就照旧走 `/view`。"""
+        get = mock.Mock(return_value=_Resp(_png_bytes()))
+        with mock.patch.object(image_out._session, "get", get):
+            got = image_out.prepare_for_send("qq/群_1/anima/A_1_.png")
+        self.assertTrue(os.path.isfile(got), got)
+        self.assertTrue(get.called)
+
+    def test_both_gone_falls_back_to_url(self):
+        get = mock.Mock(side_effect=OSError("connection refused"))
+        with mock.patch.object(image_out._session, "get", get):
+            got = image_out.prepare_for_send("qq/群_1/anima/A_1_.png")
+        self.assertIn("/view?filename=A_1_.png", got)

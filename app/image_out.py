@@ -39,7 +39,7 @@ from urllib.parse import quote
 import requests
 
 from app import comfy_out
-from app.config import COMFYUI_URL
+from app.config import COMFYUI_OUTPUT_DIR, COMFYUI_URL
 
 log = logging.getLogger("image_out")
 
@@ -129,6 +129,51 @@ def missing_file_error(exc):
             or "file not found" in low)
 
 
+def _read_local(name, sub):
+    """直接从 ComfyUI 的 output 目录读原图字节；读不到返回 None。
+
+    **先读盘、再走 HTTP**（2026-10-31 用户报的 moss 合集翻车）：ComfyUI 停着
+    的时候 `prepare_for_send` 取不到图，就回落成 `http://127.0.0.1:8188/view?…`
+    塞进合并转发，协议端去拉就是 `fetch failed`，整张卡片发不出去——可那张
+    图明明一直躺在 output 目录里（实测 2.2 MB，落盘 5 分钟后还在）。
+
+    本机部署下读盘永远比 HTTP 快，也没有「服务在不在」这个前提条件。
+    """
+    root = (COMFYUI_OUTPUT_DIR or "").strip()
+    if not root:
+        return None
+    rel = "/".join(x for x in (sub, name) if x)
+    p = os.path.join(root, *rel.split("/"))
+    if not os.path.isfile(p):
+        return None
+    try:
+        with open(p, "rb") as fh:
+            return fh.read()
+    except OSError:
+        log.warning("读盘取图失败 %s", p, exc_info=True)
+        return None
+
+
+def _view(name, sub):
+    """走 ComfyUI 的 `/view` 取原图字节（本地目录没配 / 磁盘上没有时兜底）。"""
+    params = {"filename": name}
+    if sub:
+        params["subfolder"] = sub
+    resp = _session.get(COMFYUI_URL.rstrip("/") + "/view",
+                        params=params, timeout=30)
+    if sub and getattr(resp, "status_code", 200) == 404:
+        # 自愈（2026-10-18）：两种图会被报成 404 ——
+        # ① 分目录之前生成的老图，实际躺在 output 根目录；
+        # ② `BatchPromptImageGenerator` 明知图在子目录里，history 却把
+        #    subfolder 报成空串（真机实测）。退回裸文件名再取一次，
+        #    取不到就照旧走下面的回落，反正不能把图卡死在这一步。
+        log.info("带 subfolder 取 %s 是 404，退回 output 根目录再试", name)
+        resp = _session.get(COMFYUI_URL.rstrip("/") + "/view",
+                            params={"filename": name}, timeout=30)
+    resp.raise_for_status()
+    return resp.content
+
+
 def prepare_for_send(filename, fmt=DEFAULT_FORMAT):
     """把一张 ComfyUI 输出图变成可对外发送的副本（fmt = "jpg" 或 "png"）。
 
@@ -141,8 +186,9 @@ def prepare_for_send(filename, fmt=DEFAULT_FORMAT):
     发的都是 temp 里的副本，ComfyUI output 里的原图一个字节都不动。
 
     `filename` 可以是相对路径（`qq/群_1/anima/Anima_0001_.png`，2026-10-18 起
-    `image_jobs.output_images` 返回的就是这个形态）：这里拆成 filename + subfolder
-    再打 `/view`，调用方传什么都是同一个字符串，签名不变。
+    `image_jobs.output_images` 返回的就是这个形态）：这里拆成 filename + subfolder，
+    先按这个相对路径**读本机 output 目录**，读不到再打 `/view`，调用方传什么都是
+    同一个字符串，签名不变。
 
     成功返回本地文件路径（协议端用 file:// 读它，见 qq_api.image_segment）；
     任何一步失败都返回 ComfyUI 的原图 URL，保证图照样发得出去。
@@ -153,22 +199,10 @@ def prepare_for_send(filename, fmt=DEFAULT_FORMAT):
     try:
         from PIL import Image
 
-        params = {"filename": name}
-        if sub:
-            params["subfolder"] = sub
-        resp = _session.get(COMFYUI_URL.rstrip("/") + "/view",
-                            params=params, timeout=30)
-        if sub and getattr(resp, "status_code", 200) == 404:
-            # 自愈（2026-10-18）：两种图会被报成 404 ——
-            # ① 分目录之前生成的老图，实际躺在 output 根目录；
-            # ② `BatchPromptImageGenerator` 明知图在子目录里，history 却把
-            #    subfolder 报成空串（真机实测）。退回裸文件名再取一次，
-            #    取不到就照旧走下面的回落，反正不能把图卡死在这一步。
-            log.info("带 subfolder 取 %s 是 404，退回 output 根目录再试", name)
-            resp = _session.get(COMFYUI_URL.rstrip("/") + "/view",
-                                params={"filename": name}, timeout=30)
-        resp.raise_for_status()
-        im = Image.open(io.BytesIO(resp.content))
+        data = _read_local(name, sub)
+        if data is None:
+            data = _view(name, sub)
+        im = Image.open(io.BytesIO(data))
         im.load()
 
         d = _out_dir()
@@ -179,7 +213,7 @@ def prepare_for_send(filename, fmt=DEFAULT_FORMAT):
             if im.format == "PNG":
                 # 带工作流的原图：字节原样落盘，一个 tEXt 都不动。
                 with open(dst, "wb") as f:
-                    f.write(resp.content)
+                    f.write(data)
                 return dst
             # 不是 PNG（某渠道 SaveImage 出了别的格式）→ 老老实实转一份，
             # 免得扩展名和内容对不上。

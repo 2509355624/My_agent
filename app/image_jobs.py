@@ -152,7 +152,6 @@ unet 4487MB ≈ 10.5GB 权重，而空闲可用只有 10.78GB。当天实测的�
 将来想单独收紧不用碰本地）。所以理论上两条队各能排 20 张。
 """
 
-import ast
 import collections
 import json
 import logging
@@ -2796,59 +2795,17 @@ def _is_unreachable(exc):
     return isinstance(exc, OSError)
 
 
-# `qq_api._call` 失败时抛的是 `OneBot 调用失败 <action>: {协议端返回的 dict}`，
-# 真实原因（wording）在 dict 里面。这里把它抠出来——`_reason` 从前一律截 30
-# 字，而 `OneBot 调用失败 send_private_msg: ` 这个前缀**正好 35 字**，一截就
-# 只留个冒号，2026-10-31 23:03 那次「图画好了，但没发出去（）」就是这么来的，
-# 真实原因（ENOENT: no such file or directory）全被切掉，谁也看不出来。
-_ONEBOT_FAIL_RE = re.compile(r"OneBot 调用失败\s*(\S+?)\s*:\s*(.*)", re.S)
-
-# 原因本身也给个上限，免得一个超长路径把整条回执撑爆。
-_REASON_MAX = 80
-
-
-def _clip(text, limit=_REASON_MAX):
-    text = (text or "").strip().replace("\n", " ")
-    return text if len(text) <= limit else text[:limit] + "…"
-
-
-def _onebot_reason(text):
-    """把 OneBot 失败串翻成一句人话；不是这个形状就返回空串。"""
-    m = _ONEBOT_FAIL_RE.search(text or "")
-    if not m:
-        return ""
-    action, body = m.group(1), (m.group(2) or "").strip()
-    data = {}
-    try:
-        got = ast.literal_eval(body)
-    except (ValueError, SyntaxError, MemoryError, RecursionError):
-        got = None
-    if isinstance(got, dict):
-        data = got
-    # 协议端不同版本的字段名不统一：wording 是 NapCat 的，message / msg 是
-    # 其它实现（go-cqhttp 一类）的。按可能性从高到低取第一个非空的。
-    for key in ("wording", "message", "msg", "detail"):
-        val = data.get(key)
-        if isinstance(val, str) and val.strip():
-            return "%s 失败：%s" % (action, _clip(val))
-    rc = data.get("retcode")
-    if rc not in (None, 0, "0"):
-        return "%s 失败（retcode %s，协议端没给原因）" % (action, rc)
-    if body and not data:
-        return "%s 失败：%s" % (action, _clip(body))
-    return "%s 失败（协议端没给原因）" % action
-
-
 def _reason(exc):
     """失败原因一句话（截断防刷屏）。
 
-    OneBot 的失败单独走 `_onebot_reason`：它的原因藏在返回体里，硬截 30 字
-    只会把原因整段切掉（2026-10-31 的事故，见 `_ONEBOT_FAIL_RE` 注释）。
+    OneBot 的失败单独解析：它的原因藏在返回体的 `wording` 里，硬截 30 字只会
+    把原因整段切掉（2026-10-31 的事故，解析在 `qq_api.onebot_reason`）。
     """
     if isinstance(exc, TimeoutError):
         return "超时"
+    from app import qq_api
     text = str(exc) or type(exc).__name__
-    return _onebot_reason(text) or text[:30]
+    return qq_api.onebot_reason(text) or text[:30]
 
 
 def _fail_text(exc, stage="submit", skill=None):

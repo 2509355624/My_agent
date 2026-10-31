@@ -9,6 +9,7 @@ NapCat（OneBot 11）HTTP API 封装 + QQ 文本适配
 先降级成纯文本，再按段落切成若干条。
 """
 
+import ast
 import itertools
 import logging
 import os
@@ -280,6 +281,50 @@ def _call(action, payload=None, timeout=20):
     if data.get("status") == "failed" or data.get("retcode") not in (0, None):
         raise RuntimeError("OneBot 调用失败 %s: %s" % (action, str(data)[:300]))
     return data.get("data") or {}
+
+
+# 协议端失败时抛的是 `OneBot 调用失败 <action>: <返回体 dict>`，**真实原因在
+# 返回体的 `wording` 里**（NapCat 的字段名），别的实现叫 `message` / `msg`。
+# 调用方拿到异常时通常只剩一个冒号——2026-10-31 用户看到的就是
+# `图画好了，但没发出去（OneBot 调用失败 send_private_msg: ）`，因为调用方
+# 按 30 字截断，而这句话的前缀正好 35 字。这里把原因挖出来，别再让人猜。
+_ONEBOT_FAIL_RE = re.compile(r"OneBot 调用失败\s*(\S+?)\s*:\s*(.*)", re.S)
+
+
+def _clip_line(text, limit):
+    text = (text or "").strip().replace("\n", " ")
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def onebot_reason(text, limit=80):
+    """把 OneBot 失败串翻成一句人话；不是这个形状就返回空串。"""
+    m = _ONEBOT_FAIL_RE.search(text or "")
+    if not m:
+        return ""
+    action, body = m.group(1), (m.group(2) or "").strip()
+    data = {}
+    try:
+        got = ast.literal_eval(body)
+    except (ValueError, SyntaxError, MemoryError, RecursionError):
+        got = None
+    if isinstance(got, dict):
+        data = got
+    for key in ("wording", "message", "msg", "detail"):
+        val = data.get(key)
+        if isinstance(val, str) and val.strip():
+            return "%s 失败：%s" % (action, _clip_line(val, limit))
+    rc = data.get("retcode")
+    if rc not in (None, 0, "0"):
+        return "%s 失败（retcode %s，协议端没给原因）" % (action, rc)
+    if body and not data:
+        return "%s 失败：%s" % (action, _clip_line(body, limit))
+    return "%s 失败（协议端没给原因）" % action
+
+
+def error_reason(exc, limit=80):
+    """异常 → 一句给人看的原因。协议端错误走解析，其它原样短截。"""
+    text = str(exc or "") or type(exc).__name__
+    return onebot_reason(text, limit) or _clip_line(text, limit)
 
 
 def check_alive(timeout=5):
