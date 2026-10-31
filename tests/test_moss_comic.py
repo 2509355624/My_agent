@@ -75,6 +75,68 @@ class LayoutGeometryTest(unittest.TestCase):
                 self.assertLessEqual(b[3], hx, name)
 
 
+class ThreeTierFivePanelTest(unittest.TestCase):
+    """五格「三层 1+2+2」（`1t2m2b`）。
+
+    这个版式存在的**唯一理由**是格宽：四小格都是 512 宽，等于 2×2 的规整格，
+    文字能按正常字数写；而 `3t2b` 的上排三格只有 341 宽。所以下面不但要钉
+    几何，还要钉住「最窄格宽 ≥512」这个性质——一旦有人改成不规则铺法把
+    某格挤窄，字数标准就跟不上了。
+    """
+
+    def boxes(self):
+        return moss_comic.LAYOUT_BOXES["1t2m2b"]
+
+    def test_five_panels(self):
+        self.assertEqual(len(moss_comic.LAYOUTS["1t2m2b"][1]), 5)
+        self.assertEqual(len(self.boxes()), 5)
+
+    def test_covers_canvas_exactly(self):
+        total = sum(_area(b) for b in self.boxes())
+        self.assertEqual(total, moss_comic._CANVAS_W * moss_comic._CANVAS_H)
+
+    def test_no_overlap(self):
+        boxes = self.boxes()
+        for i in range(len(boxes)):
+            for j in range(i + 1, len(boxes)):
+                self.assertFalse(_overlap(boxes[i], boxes[j]), (i, j))
+
+    def test_reading_order_top_then_middle_then_bottom(self):
+        """顺序必须和方位名对上：上 → 中左 → 中右 → 下左 → 下右。"""
+        top, m1, m2, b1, b2 = self.boxes()
+        # 三层的纵坐标严格递增
+        self.assertLess(top[0], m1[0])
+        self.assertLess(m1[0], b1[0])
+        # 中排、下排各自左在右前
+        self.assertLess(m1[1], m2[1])
+        self.assertLess(b1[1], b2[1])
+        # 上格横跨整幅
+        self.assertEqual((top[1], top[3]),
+                         (-moss_comic._HX, moss_comic._HX))
+
+    def test_top_panel_is_the_biggest(self):
+        """`key_panel` 契约要求「落在最大那格」，这里就是第 1 格。"""
+        areas = [_area(b) for b in self.boxes()]
+        self.assertEqual(areas.index(max(areas)), 0)
+        self.assertEqual(max(areas), moss_comic._CANVAS_W * (moss_comic._CANVAS_H // 3))
+
+    def test_every_panel_is_at_least_512_wide(self):
+        """这是选它当默认五格的理由，不能被后来改成更窄的铺法。"""
+        widths = [b[3] - b[1] for b in self.boxes()]
+        self.assertGreaterEqual(min(widths), 512)
+        self.assertEqual(min(widths), 512)
+
+    def test_min_width_matches_the_letters_budget(self):
+        """`layout_min_width` 要能算出真实的窄格，别处靠它提示字数。"""
+        self.assertEqual(moss_comic.layout_min_width("1t2m2b"), 512)
+        self.assertEqual(moss_comic.layout_min_width("2x2"), 512)
+        self.assertEqual(moss_comic.layout_min_width("3x2"), 341)
+        # 3t2b 的上排三格是 341，下排两格 512 → 取最窄
+        self.assertEqual(moss_comic.layout_min_width("3t2b"), 341)
+        self.assertEqual(moss_comic.layout_min_width("single"), 1024)
+        self.assertEqual(moss_comic.layout_min_width("不存在的版式"), 0)
+
+
 class SixPanelPromptTest(unittest.TestCase):
     @staticmethod
     def _spec(n=6, layout="3x2"):

@@ -1,4 +1,4 @@
-"""QQ moss 漫画：`moss漫画 <一句话剧情>`（也认 `moss小漫画`）→ 一页六格。
+"""QQ moss 漫画：`moss漫画 <一句话剧情>`（也认 `moss小漫画`）→ 一页分格漫画。
 
 ## 为什么不用 comic_agent
 
@@ -7,7 +7,9 @@
 `(tag:1.2)` 那套加权（工作流里连 LoRA 槽都空着），所以这边直接走
 `moss_comic`：编剧模型写剧本 → 脚本拼整页提示词 → **一页一次生成**。
 
-一页六格 3×2、1024×1536 / 30 步 / cfg 3.5（2026-10-31 从四格 25 步升级）。
+一页默认六格 3×2、1024×1536 / 30 步 / cfg 3.5（2026-10-31 从四格 25 步升级）。
+2026-10-31 起**用户可以在需求里点名格数**（「四格」「上面一大格」），认到就钉死，
+不认才走 `LAYOUT` 默认值——见 `detect_layout`。
 
 两边零 import，只共用 `image_jobs` 队列和 `moss_api` 的落盘/出图函数。
 
@@ -68,7 +70,9 @@ _ASK_RE = re.compile(r"^(怎么|如何|咋|怎样|什么|啥|能不能|可不可
 USAGE = ("moss小漫画这样用：先 **@我**，或者句子里带上「大大怪」，然后写\n"
          "`moss小漫画 <一句话剧情>`\n"
          "例：`@大大怪 moss小漫画 雨夜便利店，两个陌生人共用一把伞`\n"
-         "一页六格，编剧自己写分镜和台词，约 100~250 秒。")
+         "**想要几格直接说**：`moss小漫画 四格 …` / `六格` / `两格`，\n"
+         "五格可以说「五格」或「上面一大格」。不说就默认六格。\n"
+         "编剧自己写分镜和台词，约 100~250 秒。")
 
 
 # ─── 识别 ─────────────────────────────────────────────
@@ -95,6 +99,63 @@ def parse(text, at_me=False):
     return True, rest, ""
 
 
+# ─── 版式识别 ─────────────────────────────────────────
+#
+# 用户说「四格」「上面一大格」就照办（2026-10-31 用户原话：用户会要求自己想要
+# 什么格式，我们就得按用户的要求来）。所以这是**硬指定**，不是给编剧的建议。
+#
+# 顺序有意义：**先具体、后笼统**。显式键名放最前（跑图台和文档里就是这个写法），
+# 然后是「上排三个小格」这类描述性说法，最后才是裸的「五格」。
+_LAYOUT_ALIASES = (
+    (r"1t2m2b", "1t2m2b"),
+    (r"3t2b", "3t2b"),
+    (r"3\s*[x×]\s*2", "3x2"),
+    (r"2\s*[x×]\s*2", "2x2"),
+    (r"(?:上面|上排|顶上)[^。，,]{0,4}(?:三|3)\s*[个小][^。，,]{0,2}格", "3t2b"),
+    (r"(?:上面|上排|顶上)[^。，,]{0,6}(?:一|1)\s*[个张]?\s*[大宽满]", "1t2m2b"),
+    # 「一格」不能裸认：「他一格一格地爬上楼梯」会被当成单格版式。
+    # 只认三种明确写法——单格/单幅、句首的「一格：」、带指令词的「画成一格」。
+    (r"(?:单格|单幅|整页一格)", "single"),
+    (r"^\s*一格(?:\s|[：:，,、])", "single"),
+    (r"(?:画成|画做|做成|改成|换成|用|按|来|要)\s*一格", "single"),
+    (r"(?:两格|二格|2\s*格)", "2h"),
+    (r"(?:三格|3\s*格)", "3h"),
+    (r"(?:四格|4\s*格)", "2x2"),
+    (r"(?:五格|5\s*格)", "1t2m2b"),
+    (r"(?:六格|6\s*格)", "3x2"),
+)
+
+# 剥离版式词，分两档：
+#   ① 强模式：带指令词（「画成四格」「要六格」），剥掉不会伤剧情；
+#   ② 首模式：只在开头且后面跟分隔符（「四格：剧情」）。
+# 不做一条通吃的原因：群里真有人会说「他一格一格地爬楼梯」，通吃会把剧情删坏。
+_LAYOUT_KEYS_PAT = (r"1t2m2b|3t2b|3x2|2x2|single|2h|3h|3t|"
+                    r"单格|一格|两格|二格|三格|四格|五格|六格|[1-6]\s*格")
+_LAYOUT_STRONG_RE = re.compile(
+    r"(?:画成|画做|做成|改成|换成|用|按|来|要)\s*(?:%s)\s*(?:版式|格式|漫画|分镜|的)?"
+    % _LAYOUT_KEYS_PAT)
+_LAYOUT_LEAD_RE = re.compile(r"^\s*(?:%s)\s*[：:，,、\s]\s*" % _LAYOUT_KEYS_PAT)
+
+
+def detect_layout(brief):
+    """从需求里认出用户要的版式。返回 `(版式键, 干净剧情, 是否认到)`。
+
+    认到就**钉死**，编剧没有否决权；认不到才走 `LAYOUT` 默认值。
+    """
+    text = brief or ""
+    picked = ""
+    for pat, key in _LAYOUT_ALIASES:
+        if re.search(pat, text, re.I):
+            picked = key
+            break
+    if not picked:
+        return LAYOUT, text, False
+    clean = _LAYOUT_STRONG_RE.sub(" ", text)
+    clean = _LAYOUT_LEAD_RE.sub("", clean)
+    clean = re.sub(r"\s{2,}", " ", clean).strip(" ，,。.:：、")
+    return picked, clean, True
+
+
 # ─── 主流程 ───────────────────────────────────────────
 
 def start(target, target_id, brief, reply_to="", sender_uin=None):
@@ -117,9 +178,20 @@ def _work(target, target_id, brief, reply_to, sender_uin=None):
     t0 = time.time()
     say = _say
 
+    layout, clean_brief, picked = detect_layout(brief)
+    if picked:
+        brief = clean_brief
+        if len(brief) < 2:
+            say(target, target_id,
+                "moss小漫画：要 `%s` 版式，但没说画什么。\n"
+                "补一句剧情再来，比如\n`moss小漫画 四格 雨夜便利店，两个陌生人共用一把伞`"
+                % layout, reply_to)
+            return
+        log.info("moss 版式由用户指定：%s（%s）", layout, brief[:24])
+
     try:
         spec, raw, err = moss_comic.write(
-            brief, pages=PAGES, layout=LAYOUT,
+            brief, pages=PAGES, layout=layout,
             ratio="%dx%d" % (moss_api.WIDTH, moss_api.HEIGHT))
     except Exception as exc:                    # noqa: BLE001
         log.exception("moss 编剧炸了：%s", brief[:40])

@@ -10,7 +10,7 @@
 
 import unittest
 
-from app import moss_bot
+from app import moss_bot, moss_comic
 
 
 class ParseTest(unittest.TestCase):
@@ -137,6 +137,93 @@ class SmallComicWordTest(unittest.TestCase):
 
     def test_usage_mentions_six_panels(self):
         self.assertIn("六格", moss_bot.USAGE)
+
+
+class DetectLayoutTest(unittest.TestCase):
+    """用户在需求里说格数，就必须照着出（2026-10-31 用户要求）。
+
+    这是**硬指定**不是建议：用户说四格出六格，就等于没听懂话。
+    """
+
+    def _pick(self, text):
+        return moss_bot.detect_layout(text)
+
+    def test_panel_count_words(self):
+        cases = {
+            "四格：知更鸟登台演唱": "2x2",
+            "知更鸟登台演唱，画成四格": "2x2",
+            "六格 鲁迪推开洛琪希家的门": "3x2",
+            "两格：雨夜便利店": "2h",
+            "三格 她走进房间": "3h",
+        }
+        for text, want in cases.items():
+            lay, _clean, ok = self._pick(text)
+            self.assertTrue(ok, text)
+            self.assertEqual(lay, want, text)
+
+    def test_five_panels_defaults_to_the_writable_one(self):
+        """裸说「五格」给 1t2m2b：四小格 512 宽，能正常写字。"""
+        for text in ("五格：她站在门口", "五格 她站在门口", "5格 她站在门口"):
+            lay, _clean, ok = self._pick(text)
+            self.assertTrue(ok, text)
+            self.assertEqual(lay, "1t2m2b", text)
+
+    def test_descriptive_phrasing(self):
+        cases = {
+            "上面一大格 她推开门，发现屋里有别人": "1t2m2b",
+            "上排三个小格 他愣住，然后转身": "3t2b",
+            "用 1t2m2b 她坐在窗边": "1t2m2b",
+            "3t2b 三个反应加两个大画面": "3t2b",
+        }
+        for text, want in cases.items():
+            lay, _clean, ok = self._pick(text)
+            self.assertTrue(ok, text)
+            self.assertEqual(lay, want, text)
+
+    def test_single_panel_needs_clear_signal(self):
+        """「一格」这个词太日常，只有在句首或带指令词时才算版式。"""
+        for text in ("一格 整页就是一个大特写", "一格：整页大特写", "画成一格 她回头"):
+            lay, _clean, ok = self._pick(text)
+            self.assertTrue(ok, text)
+            self.assertEqual(lay, "single", text)
+
+    def test_does_not_misfire_on_fiction(self):
+        """剧情里出现「一格」不能当成版式指令，更不能被删掉。"""
+        text = "他一格一格地爬上楼梯，气喘吁吁"
+        lay, clean, ok = self._pick(text)
+        self.assertFalse(ok)
+        self.assertEqual(lay, moss_bot.LAYOUT)
+        self.assertEqual(clean, text)       # 一个字都不许动
+
+    def test_no_layout_word_keeps_brief_intact(self):
+        for text in ("雨夜便利店，两个陌生人共用一把伞",
+                     "鲁迪推开洛琪希家的门，发现屋里有个陌生男人"):
+            lay, clean, ok = self._pick(text)
+            self.assertFalse(ok)
+            self.assertEqual(lay, moss_bot.LAYOUT)
+            self.assertEqual(clean, text)
+
+    def test_layout_word_is_stripped_from_brief(self):
+        """版式词不能留在剧情里，否则会被当成画面内容写进 desc。"""
+        cases = {
+            "四格：知更鸟登台演唱": "知更鸟登台演唱",
+            "知更鸟登台演唱，画成四格": "知更鸟登台演唱",
+            "六格 鲁迪推开洛琪希家的门": "鲁迪推开洛琪希家的门",
+            "用 1t2m2b 她坐在窗边": "她坐在窗边",
+        }
+        for text, want in cases.items():
+            _lay, clean, ok = self._pick(text)
+            self.assertTrue(ok, text)
+            self.assertEqual(clean, want, text)
+
+    def test_every_picked_layout_exists(self):
+        """认出来的键必须在 LAYOUTS / LAYOUT_BOXES 里都有，否则编译时 KeyError。"""
+        for text in ("四格 x", "六格 x", "五格 x", "两格 x", "三格 x", "一格：x",
+                     "上面一大格 x", "上排三个小格 x"):
+            lay, _clean, ok = self._pick(text)
+            self.assertTrue(ok, text)
+            self.assertIn(lay, moss_comic.LAYOUTS, text)
+            self.assertIn(lay, moss_comic.LAYOUT_BOXES, text)
 
 
 class LinesTest(unittest.TestCase):
