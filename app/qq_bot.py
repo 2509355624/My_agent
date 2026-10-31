@@ -1227,6 +1227,19 @@ class SessionRunner:
                             # 出图后要「引用他这句 + @ 他一下」，见 qq_api.send_image。
                             message_id=batch[0].get("reply_to") or "",
                             sender_uin=batch[0].get("sender_uin"))
+        # moss 小漫画的「回头续集」确认（2026-10-31）：私聊里从中间某页重开
+        # 会把后面几页踢出主线，所以先弹一句问。**排在生图确认闸前面**——
+        # 两个 pending 可能同时挂着，截断比白画一张严重得多，先让它吃。
+        # 不是发起人说话时它自己放过（pending 留着），不挡生图那一路。
+        if not (voluntary or borrowed):
+            try:
+                if moss_bot.consume_if_confirmed(
+                        self.target, self.target_id, own_text,
+                        batch[0].get("sender_uin")):
+                    qq_api.clear_context()
+                    return
+            except Exception:                   # noqa: BLE001
+                log.exception("moss 截断确认闸出错 %s", self.session_key)
         # 生图确认闸（2026-10-04）：上一轮的生图被 confirm_gate 拦下等确认，
         # 这条消息若是确认话（好/确认/跑吧…）就原样入队发回执、接管整轮；
         # 不是确认话就作废 pending 放行。主动接话轮不消费（群聊路人的「好」
@@ -1282,16 +1295,37 @@ class SessionRunner:
             # 2026-10-31：加触发门槛——必须真 @，或者句子里带「大大怪」，
             # 只写「moss漫画」不接管（群里误触发一次就是 100~250 秒的出图）。
             # 私聊没有 @ 这回事，直接放行。
-            moss_hit, moss_brief, moss_tip = moss_bot.parse(
-                own_text, at_me=(at_me or self.target == "private"))
+            # 引用信息：`moss续集` / `moss重画` / `moss合集` **全靠它定位是哪
+            # 一系列第几页**（2026-10-31 用户拍板：四个词必须带 moss 前缀）。
+            # `q.id` 就是发图时拿到的 message_id，`quoted_text` 是被引那条的
+            # 正文——里面有卡上印的 `S7K3-P05`。转发（forward 段）之后 id 变了，
+            # 正文照样会被 `_resolve_quote` 展开，编号就在里面，所以
+            # 「转发到私聊自己玩」也能接上（见 moss_msgs）。
+            # 注意：**不做「扫到编号就主动开口」**——那样机器人自己发一句
+            # 带编号的话，又被自己扫到，就是死循环。纯转发走普通聊天管道。
+            quote_id = ""
+            for _it in batch:
+                for _q in (_it.get("quotes") or []):
+                    if _q.get("id"):
+                        quote_id = str(_q["id"])
+                        break
+                if quote_id:
+                    break
+            moss_hit, moss_act, moss_payload, moss_tip = moss_bot.parse(
+                own_text, at_me=(at_me or self.target == "private"),
+                quote_id=quote_id, quote_text=quoted_text)
             if moss_hit:
                 try:
-                    if not moss_brief:
+                    if not moss_act:
                         self._deliver(False, moss_tip, [], "", reply_to=msg_id)
                     else:
-                        moss_bot.start(self.target, self.target_id, moss_brief,
-                                       reply_to=msg_id,
-                                       sender_uin=batch[0].get("sender_uin"))
+                        ok, why = moss_bot.start(
+                            self.target, self.target_id, moss_act, moss_payload,
+                            quote_id=quote_id, quote_text=quoted_text,
+                            reply_to=msg_id,
+                            sender_uin=batch[0].get("sender_uin"))
+                        if not ok and why:
+                            self._deliver(False, why, [], "", reply_to=msg_id)
                 finally:
                     qq_api.clear_context()
                 return

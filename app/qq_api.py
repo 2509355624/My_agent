@@ -828,6 +828,11 @@ def send_image(target, target_id, image_path, caption="", reply_to=None,
     `reply_to` 指向的消息**可能已经被撤回**（点单到出图隔几分钟是常态）。
     这时协议端要么报错、要么把引用段吞掉，前者会让整张图发不出去——所以
     发送失败时**剔掉引用段重发一次**，宁可没有引用也不能丢图。
+
+    返回发出那条消息的 `message_id`（字符串），拿不到就返回 ""。
+    2026-10-31 起 moss 小漫画靠它做「引用这张图 → 从这一页续集」的定位：
+    引用段里带回来的 `id` 就是这里返回的值，中间不经过任何猜测。
+    拿不到也不抛——图发出去才是正事，账本记不上顶多是那一页之后引用认不出来。
     """
     segs = []
     if reply_to:
@@ -837,12 +842,13 @@ def send_image(target, target_id, image_path, caption="", reply_to=None,
     if caption:
         segs.append(text_segment(to_qq_text(caption)))
     segs.append(image_segment(image_path))
+    data = {}
     try:
         if target == "private":
-            _call_private(target_id, segs, timeout=60)
+            data = _call_private(target_id, segs, timeout=60)
         else:
-            _call("send_group_msg",
-                  {"group_id": int(target_id), "message": segs}, timeout=60)
+            data = _call("send_group_msg",
+                         {"group_id": int(target_id), "message": segs}, timeout=60)
     except RuntimeError as exc:
         bare = [s for s in segs if s.get("type") != "reply"]
         if len(bare) == len(segs):
@@ -851,9 +857,11 @@ def send_image(target, target_id, image_path, caption="", reply_to=None,
                     target, target_id, exc)
         segs = bare
         if target == "private":
-            _call_private(target_id, segs, timeout=60)
+            data = _call_private(target_id, segs, timeout=60)
         else:
-            _call("send_group_msg",
-                  {"group_id": int(target_id), "message": segs}, timeout=60)
+            data = _call("send_group_msg",
+                         {"group_id": int(target_id), "message": segs}, timeout=60)
+    # 日志必须在 return 前面：加返回值那次把它落到了 return 之后，
+    # 等于发图一行日志都不打（2026-10-31 修）。
     _send_log(target, target_id, segs)
-    return 1
+    return str((data or {}).get("message_id") or "")

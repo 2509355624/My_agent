@@ -428,8 +428,13 @@ def _draw(page, prompt, base_wf, seed, out_dir, title):
     # 不退回写死编号）。
     wf[_node_id(wf, "KSampler", "cfg")]["inputs"]["cfg"] = CFG
     n = page.get("n")
+    # 落到独立子目录（2026-10-31 用户要求）：moss 的图单独一块地方，
+    # 一眼能认出来，免得跟生图混在 output 根目录里被误删。
+    # `filename_prefix` 带 `/` 时 ComfyUI 会自动建子目录；`output_images`
+    # 返回的相对路径本来就支持子目录（现在就在处理 `qq/群_1/anima/...`），
+    # 所以 `/view` 那条路不用改。
     wf[_node_id(wf, "SaveImage", "filename_prefix")]["inputs"]["filename_prefix"] = (
-        "MossComic_%s_P%02d" % (_slug(title), n))
+        "qq-moss漫画/MossComic_%s_P%02d" % (_slug(title), n))
     # nai5 触发词跟着模板的 8 号槽走（2026-10-28）：模板开着就拼，用户「存为
     # 默认」关掉后这里自动就不拼了，两处永不脱节。
     prompt = lora_slots.nai5_prefix(SKILL) + prompt

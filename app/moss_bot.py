@@ -1,4 +1,4 @@
-"""QQ moss 漫画：`moss漫画 <一句话剧情>`（也认 `moss小漫画`）→ 一页分格漫画。
+"""QQ moss 漫画：一句话开一条线，引用上一页往下续。
 
 ## 为什么不用 comic_agent
 
@@ -9,32 +9,71 @@
 
 一页默认六格 `2t4b`（上排两格 512×768 建场 + 下排四格 512×384 连打反应）、
 1024×1536 / 30 步 / cfg 3.5。
-（版式演进：2026-10-31 白天四格 25 步 → 六格 `3x2` 30 步 → 当晚默认五格 `1t2m2b`
-→ 当晚再改回六格，但换成有主次的 `2t4b`。来回换的判据始终是同一条：**格宽**
-——341 宽的格子气泡加旁白一超 20 字就漏字，512 宽才稳。`3x2` 的 341 问题这次
-不靠减少格数解决，而是靠「上面两格大、下面四格小」：格宽全部 512，同时保住
-了六格的叙事容量和主次落差。）
-2026-10-31 起**用户可以在需求里点名格数**（「四格」「五格」「上面一大格」），认到就钉死，
-不认才走 `LAYOUT` 默认值——见 `detect_layout`。
+2026-10-31 起**用户可以在需求里点名格数**（「四格」「五格」「上面一大格」），
+认到就钉死，不认才走 `LAYOUT` 默认值——见 `detect_layout`。
 
-两边零 import，只共用 `image_jobs` 队列和 `moss_api` 的落盘/出图函数。
+## 连载：四个词，**必须带 `moss` 前缀**（2026-10-31 用户拍板的形态）
 
-## 为什么接在 direct_gen 前面
+一开始这里打算做七个指令（`moss续集 5 <剧情>` 之类），被用户否了。
+中间试过砍成裸词 `续集` / `重画` / `合集`（靠「有没有引用」来判断），
+**当晚又被用户推翻了**，理由很实在（原话）：
 
-`moss漫画` 这个词里含渠道词 `moss`。放到直达管道后面，`direct_gen` 会把它
-当画面内容，最后画出一张写着「moss漫画」四个字的图。必须整轮接管——
-和造卡（`card_bot`）同一个位置、同一个理由。
+    你不能说续集、重画、合集，我不能这么说了，你必须得给我加上 moss。
+    这 4 个字母你必须给我加上来，这样我才能够精确地带走代码闸门。
+
+裸词的危险不在误触发，而在**闸门会去猜**：群里说「这个续集不错」，
+代码得先翻账本看有没有引用才敢决定接不接——猜错了白跑一张图，
+猜漏了用户说「我明明引用了」。带上前缀就没有猜的余地：
+
+    moss漫画 <剧情>     新开一条线
+    moss续集 <剧情>     从**引用那一页**往下接
+    moss重画            引用那一页，换个种子重画
+    moss合集            把这条线整串拼成聊天记录卡片
+
+**定位靠编号，且只靠编号。** 引用段带回来的 `reply.id` 对应发图时的
+`message_id`，账本一查就知道「哪一系列第几页」（见 `moss_msgs`）；
+`quote.id` 查不到时（转发之后 id 变了）就从**被引消息正文**里正则抠
+`S7K3-P05`。两条都不通就**明确报错**，绝不猜一个系列往下画——
+接错线比不画糟糕得多。
+
+## 转发到私聊自己玩
+
+群友想把群里的线搬到自己私聊接着画，做法是把那一页的**回执转发给
+大大怪**——转发段（`forward`）的正文会被 `qq_bot._resolve_quote` 展开，
+卡片上的编号就在里面，照样能定位（`quote_id` 是新的 forward id，
+账本查不到，走编号兜底）。所以**第一页的回执后面会多一句用法提示**。
+
+这里绝对不做「扫到编号就主动搭话」：纯转发（不说指令）走普通聊天管道，
+进了代码闸门也不会自己开口——否则机器人回一句带编号的话，
+又被自己扫到，就是死循环（用户 2026-10-31 点出来的）。
+
+## 群聊和私聊**故意不一样**
+
+  · **群聊**：谁都能从任意一页重开，**不拦、不截断**，新页挂在同一个
+    parent 下变成分支。多人一起玩本来就会分叉，拦住只会把有意思的部分
+    拦掉（用户 2026-10-31 的判断：「你敢在群聊玩，就是大家一起玩」）。
+    换来的代价是「最新创建的那一页」才是下一个续集接的地方。
+  · **私聊**：一对一，用户要的是唯一主线。从中间某页重开时**先弹确认**，
+    确认后把后面的页标 `dead`（图留盘，只是移出主线）。
+
+两条都用同一份数据（`moss_series` 的树），差别只在「回头时删不删」。
+
+## 并发：同系列同时只跑一张
+
+群里十个人同时点续集，就是十张图一起跑、接在同一页上，最后炸出十个
+几乎一样的分支。所以开跑前占位，已经在跑就直接告诉他「第 06 页还在画」。
 
 ## 回执（2026-10-22 用户点名要的）
 
 分三条，一条都不能省：
-1. 编剧出来先报**标题 + 每格台词**——让人在等的 80 秒里就能发现「它理解跑偏了」，
-   而不是等图出来才知道白等；
-2. 出图完，图下面带标题 / 步数 / 尺寸 / 耗时 / seed；
-3. 任何一步失败都得有话说（编剧没写出来、出图失败、图取不出来），
-   绝不能让用户对着「在画了」干等。
+1. 编剧出来先报**标题 + 每格台词**——让人在等的 80 秒里就能发现「它理解跑偏了」；
+2. 出图完，图下面带**编号** / 标题 / 步数 / 尺寸 / 耗时 / seed；
+3. 任何一步失败都得有话说，绝不能让用户对着「在画了」干等。
 
-## 需求只取「moss漫画」后面那段
+编号印在卡上还有个副作用是好的：转发/截图之后 `message_id` 会变，
+账本查不到，这时靠卡上的 `S7K3-P05` 手打也能接上（`moss_msgs.locate`）。
+
+## 需求只取关键词后面那段
 
 和造卡同一个坑：群消息进来前面带着「昵称：」，对方还常先喊一句机器人名字。
 早期造卡把这两样当成了需求，结果卡名就叫「大大怪」。所以前面一律丢掉。
@@ -42,73 +81,110 @@
 
 import json
 import logging
+import os
 import random
 import re
 import threading
 import time
 
-from app import image_out, moss_api, moss_comic, qq_api
+from app import (image_out, moss_api, moss_comic, moss_msgs,
+                 moss_series as series_mod, qq_api)
 from app.config import QQ_AGENT_ID
 
 log = logging.getLogger("moss_bot")
 
-WORD = "moss漫画"
-# 「小」是可选的（2026-10-31）：用户口头说的是「moss 小漫画」，群里有人打
-# 「moss漫画」、也有人打「moss 小 漫画」。`小\s*` 挂在 `moss\s*` 后面，
-# 三种写法都落进同一套逻辑，不额外维护第二个关键词。
-_WORD_RE = re.compile(r"moss\s*(?:小\s*)?漫画", re.I)
-
-# 触发门槛（2026-10-31 用户要求）：**必须 @ 机器人，或者句子里出现「大大怪」**。
-# 只写「moss漫画」不接管——群里聊到这个词太容易误触发，一误触发就是一次
-# 编剧 + 一页 100~250 秒的出图，而且会盖掉别人的正常对话。
-#
-# @ 在解析阶段已经从文本里剥掉了（`_parse_message` 只留 text 段，另给 at_me），
-# 所以这里不能指望从文本里看到 "@大大怪"，只能靠调用方把 at_me 传进来。
-NAME = "大大怪"
-_NAME_RE = re.compile(r"大大怪")
 # 默认六格 `2t4b`（2026-10-31 晚用户决定：默认六格，但不要等权平铺）。
-# 上排两格 512×768 建场（各 25%），下排四格 512×384 连打反应（各 12.5%）。
-# 换掉旧默认 3x2 的两个理由：六格等分没有视觉重心；341 宽的窄格字数预算只有
-# 512 格的一半。`3x2` 仍然可用（「等分六格」「上三下三」「3x2」），
-# 只是留给「六个同权瞬间」那类戏。用户点名几格就照几格，这只是默认值。
 LAYOUT = "2t4b"
 PAGES = 1
 
-# 「moss漫画怎么用」「支持什么」——问句不是需求，不挡住会被当成一句剧情，
-# 最后画出一张主题叫「怎么用」的分格漫画。
+NAME = "大大怪"
+_NAME_RE = re.compile(r"大大怪")
+
+
+# ─── 指令关键词 ───────────────────────────────────────
+#
+# 四个词**都带 `moss` 前缀**（2026-10-31 用户拍板，见模块开头）。
+# 裸「续集」「重画」「合集」一律不接管——群里天天有人用这几个词，
+# 一旦要靠「有没有引用」去猜，就必然在这两个错之间来回：
+# 猜宽了白跑一张 100 秒的图，猜窄了用户明明引用了却不理他。
+#
+# `小\s*` 挂在 `moss` 后面：用户口头就说「moss小漫画」，三种写法落一套逻辑。
+_CMD_RE = re.compile(r"moss\s*(?:小\s*)?(漫画|续\s*集|重\s*画|合\s*集)", re.I)
+_ACTS = {"漫画": "new", "续集": "continue", "重画": "redo", "合集": "album"}
+
 _ASK_RE = re.compile(r"^(怎么|如何|咋|怎样|什么|啥|能不能|可不可以|可以|支持|是啥|是什)")
 
-USAGE = ("moss小漫画这样用：先 **@我**，或者句子里带上「大大怪」，然后写\n"
-         "`moss小漫画 <一句话剧情>`\n"
-         "例：`@大大怪 moss小漫画 雨夜便利店，两个陌生人共用一把伞`\n"
-         "**默认六格**（上排两格大画面建场，下排四格连打反应）；想要别的直接说：\n"
-         "`五格` / `四格` / `两格` / 一格（或「上面一大格」「上排三个小格」）；\n"
-         "想要六个一样大的格子就说「等分六格」。\n"
-         "编剧自己写分镜和台词，约 100~250 秒。")
+USAGE = ("moss小漫画这样用：\n"
+         "① 新开一条线（不用引用）：\n"
+         "   `moss漫画 <一句话剧情>`\n"
+         "② 接着往下画（**先引用上一页那张图**）：\n"
+         "   引用 → 回 `moss续集 <接下来发生什么>`\n"
+         "③ 这一页画崩了（**先引用那一页**）：\n"
+         "   引用 → 回 `moss重画`\n"
+         "④ 把整条线打包成一张卡片（**先引用任意一页**）：\n"
+         "   引用 → 回 `moss合集`（也可以 `moss合集 1-10` 只取一段）\n"
+         "\n"
+         "每张图上都印着编号，像 `S7K3 · 第 05 页`。转发出去以后\n"
+         "引用就认不出来了，那时直接打编号：`moss续集 S7K3-P05 <剧情>`。\n"
+         "\n"
+         "**这四个词必须要带 moss**：「续集」「重画」这些词群里天天有人说，\n"
+         "不带前缀我分不清你是在跟我说话还是在聊天。\n"
+         "**默认六格**（上排两格大画面建场，下排四格连打反应），\n"
+         "想要别的直接说 `四格` / `五格` / `等分六格`。约 100~250 秒。")
 
 
-# ─── 识别 ─────────────────────────────────────────────
+# ─── 指令解析 ─────────────────────────────────────────
 
-def parse(text, at_me=False):
-    """这条消息是不是 moss 漫画指令。返回 `(是不是, 剧情, 提示语)`。
+def parse(text, at_me=False, quote_id="", quote_text=""):
+    """这条消息是不是 moss 指令。返回 `(是不是, 动作, 载荷, 提示语)`。
 
-    剧情 = 「moss漫画」**后面**那一段；前面的一律丢掉（昵称 / @ / 机器人名字）。
-    「moss 漫画」中间带空格也认。命中但没给剧情、或者问怎么用 → 回用法。
+    动作只有四个：`"new"` / `"continue"` / `"redo"` / `"album"`。
+    动作给空串、提示语非空 = 接管了但只回一段说明（不跑图）。
 
-    `at_me` 是「这条消息真 @ 了机器人」（`qq_bot` 从消息段里解析出来的布尔值）。
-    没有 @ 时要求文本里出现「大大怪」，否则返回未命中——见 `NAME` 那段注释。
+    **`parse` 只认词，不认引用**：带 `moss` 前缀就归这边管，能不能定位
+    到具体一页是 `start` 的事（`parse` 不做 IO，测试也好写）。
+    `quote_id` / `quote_text` 收在这里只是为了让调用方少写一遍转发。
     """
     t = (text or "").strip()
-    m = _WORD_RE.search(t)
+    if not t:
+        return False, "", "", ""
+    m = _CMD_RE.search(t)
     if not m:
-        return False, "", ""
-    if not at_me and not _NAME_RE.search(t):
-        return False, "", ""
-    rest = t[m.end():].lstrip(" #＃，,。.:：、\n")
-    rest = rest.strip(" ，,。.:：、\n")
-    if not rest or len(rest) < 2 or _ASK_RE.match(rest):
-        return True, "", USAGE
-    return True, rest, ""
+        return False, "", "", ""
+    act = _ACTS[re.sub(r"\s+", "", m.group(1))]
+    rest = _clean(t[m.end():])
+
+    if act == "new":
+        # 触发门槛（2026-10-31）：必须真 @，或者句子里带「大大怪」。
+        # 只写「moss漫画」不接管——群里聊到这个词太容易误触发。
+        # 私聊没有 @ 这回事，调用方传 at_me=True 放行。
+        if not at_me and not _NAME_RE.search(t):
+            return False, "", "", ""
+        if not rest or len(rest) < 2 or _ASK_RE.match(rest):
+            return True, "", "", USAGE
+        return True, "new", rest, ""
+
+    # 续集 / 重画 / 合集：有前缀就接管，问用法的回说明。
+    # 带前缀的三个词**不设 @ 门槛**——比裸词明确得多，再要求 @ 反而难用。
+    if rest and _ASK_RE.match(rest):
+        return True, "", "", USAGE
+    return True, act, rest, ""
+
+
+def _clean(s):
+    s = (s or "").lstrip(" #＃，,。.:：、\n")
+    return s.strip(" ，,。.:：、\n")
+
+
+def _span(rest, total):
+    """`moss合集 1-10` 里的范围。认 `3-8` / `3~8` / `3到8`，抠不到就是全篇。"""
+    m = re.search(r"(\d{1,3})\s*[-~～到至]\s*(\d{1,3})", rest or "")
+    if not m:
+        return 1, total
+    a, b = int(m.group(1)), int(m.group(2))
+    if a > b:
+        a, b = b, a
+    return max(1, a), min(total, b)
 
 
 # ─── 版式识别 ─────────────────────────────────────────
@@ -174,91 +250,457 @@ def detect_layout(brief):
     return picked, clean, True
 
 
-# ─── 主流程 ───────────────────────────────────────────
+# ─── 闸门 ─────────────────────────────────────────────
 
-def start(target, target_id, brief, reply_to="", sender_uin=None):
-    """起后台线程，**立刻返回**。
+_RUN_LOCK = threading.Lock()
+_RUNNING = {}          # series_id -> {"n": 第几页, "ts": 开跑时间}
+
+_PEND_LOCK = threading.Lock()
+_PENDING = {}          # (target, target_id) -> 私聊截断确认
+PEND_TTL = 180         # 3 分钟。截断是危险操作，不能让半小时前的警告还挂着
+
+
+def _take(series_id, n):
+    """占位。已经在跑就返回它正在跑第几页（0 = 占到了）。"""
+    with _RUN_LOCK:
+        cur = _RUNNING.get(series_id)
+        if cur:
+            return cur.get("n") or 1
+        _RUNNING[series_id] = {"n": n, "ts": time.time()}
+        return 0
+
+
+def _release(series_id):
+    with _RUN_LOCK:
+        _RUNNING.pop(series_id, None)
+
+
+def running_page(series_id):
+    with _RUN_LOCK:
+        cur = _RUNNING.get(series_id)
+    return (cur or {}).get("n") or 0
+
+
+def consume_if_confirmed(target, target_id, text, sender_uin=None):
+    """轮入口调用：私聊里那条截断确认。
+
+    命中（现在就开跑）返回 True，调用方直接结束本轮；否则返回 False。
+
+    跟 `confirm_gate` 一样的语义——pending 只活到**下一条消息**，
+    不是确认就作废。不一样的两点：
+      · **绑人**：只有发起截断的那个人回「好」才算（群里路人回一句「好」
+        不能把别人的线截掉），不是他说话时 pending 原样留着，不清；
+      · **有过期**：3 分钟。`confirm_gate` 那边没有超时，因为生图确认
+        错了最坏是白画一张；截断是把用户画好的后面几页踢出主线。
+    """
+    key = (target, target_id)
+    with _PEND_LOCK:
+        pend = _PENDING.get(key)
+        if not pend:
+            return False
+        if time.time() - pend.get("ts", 0) > PEND_TTL:
+            _PENDING.pop(key, None)
+            return False
+        if sender_uin and pend.get("uin") and str(sender_uin) != str(pend["uin"]):
+            # 不是他说的「好」，当没看见——pending 留着，等他本人回
+            return False
+        _PENDING.pop(key, None)
+    from app import confirm_gate
+    if not confirm_gate.is_confirm(text):
+        log.info("moss 截断确认作废（对方说的是 %r）", (text or "")[:30])
+        return False
+    _fire(target, target_id, "continue", pend.get("payload") or "",
+          pend.get("sid") or "", pend.get("page_id") or "",
+          pend.get("reply_to") or "", pend.get("uin"), truncate=True)
+    return True
+
+
+def _pend(target, target_id, **kw):
+    kw["ts"] = time.time()
+    with _PEND_LOCK:
+        _PENDING[(target, target_id)] = kw
+
+
+# ─── 入口 ─────────────────────────────────────────────
+
+def _miss_note(quote_text, payload):
+    """定位失败时，说清是**哪种**失败。
+
+    三种情况差很多，笼统回一句「认不出来」用户只能瞎猜：
+      ① 压根没给编号      → 教他怎么给（引用 / 打编号）
+      ② 编号打了但没这条线 → 大概率打错字，把那串原样贴回去让他自己看
+      ③ 线在但没有这一页   → 报总页数，他立刻知道越界了
+
+    用户 2026-10-31 原话：「编号错误，很抱歉，我没有找到这一个对应的编号，
+    你是不是编号弄错了？请给我正确的编号，不然我没有办法给你跑。」
+    """
+    code = series_mod.find_code("%s %s" % (quote_text or "", payload or ""))
+    if not code:
+        return ("没认出要接哪一页。\n\n"
+                "两种用法：\n"
+                "① **引用**那一页的图 → 回 `moss续集 <剧情>`\n"
+                "② 直接打编号 → `moss续集 S7K3-P05 <剧情>`\n"
+                "（编号印在图下面那行回执上）")
+    sid, n = series_mod.parse_code(code)
+    series = series_mod.load(sid)
+    if not series:
+        return ("没找到编号 `%s` 这条线。\n"
+                "编号是不是打错了？卡片上印的是 `S7K3-P05` 这种。\n"
+                "也可以直接**引用那一页的图**，那样不用打编号。" % code)
+    total = len(series_mod.alive(series))
+    return ("`%s` 这条线一共 %d 页，没有第 %02d 页。\n"
+            "编号对不对？" % (sid, total, n))
+
+
+def start(target, target_id, action, payload, quote_id="", quote_text="",
+          reply_to="", sender_uin=None):
+    """起后台线程，**立刻返回**。返回 `(起没起, 要说的话)`。
 
     编剧 2~6 秒 + 出图 81 秒，堵在消息线程上等于这一分半整个群都听不见
     机器人说话（同 `card_bot` / `image_jobs` 那条口径）。
-
-    `sender_uin` 是点单人的 QQ 号（2026-10-30）：图好了要 @ 他一下，不然
-    一分半之后没人知道自己那张出图了。
     """
+    if action == "new":
+        return _fire(target, target_id, "new", payload, "",
+                     "", reply_to, sender_uin)
+
+    sid, page, how = moss_msgs.locate(quote_id, quote_text)
+    if not page and payload:
+        # 转发/截图之后 id 失效、又没引用——用户手打的编号就在正文里
+        sid, page, how = moss_msgs.locate("", payload)
+    if not page:
+        return False, _miss_note(quote_text, payload)
+
+    log.info("moss 定位成功：%s 第 %s 页（靠 %s）", sid, page.get("n"), how)
+
+    # 私聊「回头续」= 截断，先问一句（群聊不问：群里允许分支，用户拍板的）。
+    # 放在 `_fire` 之前：占位要等真开跑，弹确认时还没开跑，不能白占一个名额。
+    if action == "continue" and target != "group":
+        series = series_mod.load(sid)
+        behind = [p for p in series_mod.alive(series or {})
+                  if p.get("n", 0) > page.get("n", 0)]
+        if behind:
+            last = behind[-1].get("n")
+            _pend(target, target_id, sid=sid, page_id=page.get("id") or "",
+                  payload=payload, reply_to=reply_to, uin=sender_uin)
+            return False, (
+                "你要从第 %02d 页往下续，但这条线已经到第 %02d 页了。\n\n"
+                "确认的话 %02d~%02d 会从主线移出（图还在磁盘，不删），\n"
+                "新的第 %02d 页接在第 %02d 页后面。\n\n"
+                "继续 → 回「好」\n"
+                "算了 → 别理它，%d 分钟后自动失效"
+                % (page.get("n") or 0, last,
+                   (page.get("n") or 0) + 1, last,
+                   (page.get("n") or 0) + 1, page.get("n") or 0,
+                   PEND_TTL // 60))
+
+    return _fire(target, target_id, action, payload, sid, page.get("id") or "",
+                 reply_to, sender_uin)
+
+
+def _fire(target, target_id, action, payload, sid, page_id,
+          reply_to, sender_uin, truncate=False):
+    """占位 + 起线程。占不到位就回话（不排队：排到半小时后剧情早变了）。"""
+    series = series_mod.load(sid) if sid else None
+    if sid and not series:
+        return False, "这条线不在了（编号 %s），重新开一条吧" % sid
+
+    if sid:
+        page = series_mod.by_id(series, page_id)
+        nxt = (int((page or {}).get("n") or 0) + 1) if page else 1
+        busy = _take(sid, nxt)
+        if busy:
+            return False, ("第 %02d 页还在画，等它出来再续。\n"
+                           "（同一条线同时只跑一张，不然会炸出一堆一样的）" % busy)
+
     th = threading.Thread(target=_work, name="moss-comic", daemon=True,
-                          args=(target, target_id, brief, str(reply_to or ""),
-                                sender_uin))
+                          args=(target, target_id, action, payload, sid, page_id,
+                                str(reply_to or ""), sender_uin, truncate))
     th.start()
-    return th
+    return True, ""
 
 
-def _work(target, target_id, brief, reply_to, sender_uin=None):
-    t0 = time.time()
-    say = _say
+def _work(target, target_id, action, payload, sid, page_id, reply_to,
+          sender_uin, truncate):
+    try:
+        if action == "new":
+            _do_new(target, target_id, payload, reply_to, sender_uin)
+        elif action == "continue":
+            _do_continue(target, target_id, payload, sid, page_id, reply_to,
+                         sender_uin, truncate)
+        elif action == "redo":
+            _do_redo(target, target_id, sid, page_id, reply_to, sender_uin)
+        elif action == "album":
+            _do_album(target, target_id, sid, page_id, payload, reply_to)
+        else:
+            _say(target, target_id, USAGE, reply_to)
+    except Exception as exc:                    # noqa: BLE001
+        log.exception("moss 线程炸了：%s", action)
+        _say(target, target_id, "moss漫画没成：%s" % exc, reply_to)
+    finally:
+        if sid:
+            _release(sid)
 
-    layout, clean_brief, picked = detect_layout(brief)
-    if picked:
-        brief = clean_brief
-        if len(brief) < 2:
-            say(target, target_id,
-                "moss小漫画：要 `%s` 版式，但没说画什么。\n"
-                "补一句剧情再来，比如\n`moss小漫画 四格 雨夜便利店，两个陌生人共用一把伞`"
-                % layout, reply_to)
-            return
-        log.info("moss 版式由用户指定：%s（%s）", layout, brief[:24])
 
+# ─── 动作：新开 ───────────────────────────────────────
+
+def _do_new(target, target_id, brief, reply_to, sender_uin):
+    layout, brief, picked = _layout(brief)
+    if not brief:
+        _say(target, target_id,
+             "moss小漫画：要 `%s` 版式，但没说画什么。\n"
+             "补一句剧情再来，比如\n`moss漫画 四格 雨夜便利店，两个陌生人共用一把伞`"
+             % layout, reply_to)
+        return
+
+    spec, d, _err = _write_spec(target, target_id, brief, layout, "", "", {},
+                                reply_to)
+    if not spec:
+        return
+    cells = len((spec.get("pages") or [{}])[0].get("panels") or [])
+    series = series_mod.open_new(target, target_id,
+                                 title=spec.get("title") or "",
+                                 style=spec.get("style") or "",
+                                 cast=spec.get("cast") or {})
+    sid = series["id"]
+    seed = random.randint(1, 2 ** 31 - 1)
+    page = series_mod.mutate(sid, lambda x: series_mod.add_page(
+        x, parent_id="", task=d, brief=brief, seed=seed,
+        title=spec.get("title") or ""))
+    _say(target, target_id,
+         "🀄 新开一条线 **%s** · 第 01 页\n%s\n%d 格 · %d 步 · cfg %s · 约 100 秒"
+         % (sid, _lines(spec), cells, moss_api.STEPS, moss_api.CFG), reply_to)
+    _render_and_send(target, target_id, sid, page, spec, d, seed,
+                     reply_to, sender_uin,
+                     hint=("想搬到别处自己玩（比如私聊）：把这张图**转发**给"
+                           "大大怪，或把那行编号复制过去，\n再说 "
+                           "`moss续集 %s <接下来的剧情>`，就是同一份剧情接着画。"
+                           % series_mod.code_of(sid, 1)))
+
+
+# ─── 动作：续集 ───────────────────────────────────────
+
+def _do_continue(target, target_id, brief, sid, page_id, reply_to, sender_uin,
+                 truncate):
+    series = series_mod.load(sid)
+    if not series:
+        _say(target, target_id, "这条线不在了（编号 %s）" % sid, reply_to)
+        return
+    page = series_mod.by_id(series, page_id)
+    if not page:
+        _say(target, target_id, "第 %s 页找不到了" % page_id, reply_to)
+        return
+
+    layout, brief, _picked = _layout(series_mod.strip_code(brief))
+    if not brief:
+        _say(target, target_id,
+             "续集要写接下来的剧情，比如\n`moss续集 她发现伞被人拿走了`",
+             reply_to)
+        return
+
+    # 私聊：回头续 = 截断，先问一句。群聊：直接开新分支（用户拍板的）。
+    if truncate:
+        behind = [p for p in series_mod.alive(series)
+                  if p.get("n", 0) > page.get("n", 0)]
+        if behind:
+            killed = series_mod.mutate(
+                sid, lambda x: series_mod.truncate(x, page_id)) or []
+            # 占位号要跟着截断走：原来按「后面还有几页」估的，现在只剩一页了
+            _release(sid)
+            _take(sid, int(page.get("n") or 0) + 1)
+            if killed:
+                _say(target, target_id,
+                     "第 %s 页之后那 %d 页已经移出主线（图还在磁盘上，没删）。"
+                     % (page.get("n"), len(killed)), reply_to)
+
+    prev = series_mod.prev_lines(series, page_id)
+    prev_scene = series_mod.prev_scene(series, page_id)
+    cast = series.get("cast") or {}
+
+    spec, d, _err = _write_spec(target, target_id, brief, layout, prev,
+                                prev_scene, cast, reply_to)
+    if not spec:
+        return
+    cells = len((spec.get("pages") or [{}])[0].get("panels") or [])
+    seed = random.randint(1, 2 ** 31 - 1)
+    nxt = int(page.get("n") or 0) + 1
+    new_page = series_mod.mutate(sid, lambda x: series_mod.add_page(
+        x, parent_id=page_id, task=d, brief=brief, seed=seed))
+    _say(target, target_id,
+         "🀄 %s · 第 %02d 页\n%s\n%d 格 · %d 步 · cfg %s · 约 100 秒"
+         % (sid, nxt, _lines(spec), cells, moss_api.STEPS, moss_api.CFG),
+         reply_to)
+    _render_and_send(target, target_id, sid, new_page, spec, d, seed,
+                     reply_to, sender_uin)
+
+
+# ─── 动作：重画 ───────────────────────────────────────
+
+def _do_redo(target, target_id, sid, page_id, reply_to, sender_uin):
+    series = series_mod.load(sid)
+    page = series_mod.by_id(series or {}, page_id)
+    if not page:
+        _say(target, target_id, "第 %s 页找不到了" % page_id, reply_to)
+        return
+    old_dir = page.get("task") or ""
+    try:
+        d_old = moss_api._task_dir(old_dir)     # noqa: SLF001
+        with open(os.path.join(d_old, "spec.json"), encoding="utf-8") as fh:
+            spec = json.load(fh)
+    except Exception as exc:                    # noqa: BLE001
+        _say(target, target_id,
+             "这一页的剧本取不出来了（%s），只能重新开一页" % exc, reply_to)
+        return
+
+    # 新建任务目录：**绝不覆盖原图**。重画经常画得比原来还差，
+    # 用户得能说「还是原来那张好」。
+    d = moss_api._new_task_dir(spec)            # noqa: SLF001
+    moss_api._save(d, spec)                     # noqa: SLF001  raw=None 不写剧本原文
+    seed = random.randint(1, 2 ** 31 - 1)
+    series_mod.mutate(sid, lambda x: series_mod.bump(
+        x, page_id, task=d, seed=seed))
+    _say(target, target_id,
+         "🎲 重画 %s · 第 %02d 页（换了个种子，剧情一个字没动）"
+         % (sid, page.get("n") or 0), reply_to)
+    fresh = dict(page, task=d, seed=seed)
+    _render_and_send(target, target_id, sid, fresh, spec, d, seed,
+                     reply_to, sender_uin)
+
+
+# ─── 动作：合集 ───────────────────────────────────────
+
+def _do_album(target, target_id, sid, page_id, rest, reply_to):
+    series = series_mod.load(sid)
+    if not series:
+        _say(target, target_id, "这条线不在了（编号 %s）" % sid, reply_to)
+        return
+    # 取**引用那一页所在的整条链**，不是只有它前面那几页：
+    # 用户引用第 2 页说「合集」，期待的是「这条线」，不是「前两页」。
+    line = series_mod.active_chain(series)
+    if not line:
+        _say(target, target_id, "这条线还是空的", reply_to)
+        return
+    a, b = _span(series_mod.strip_code(rest), len(line))
+    part = line[a - 1:b]
+    if not part:
+        _say(target, target_id, "这个范围里没有页（一共 %d 页）" % len(line), reply_to)
+        return
+
+    from app.agents import image_send_format
+    try:
+        fmt = image_send_format(QQ_AGENT_ID, target, target_id)
+    except Exception:                           # noqa: BLE001
+        fmt = None
+
+    full = (a, b) == (1, len(line))
+    nodes = [qq_api.node_segment(
+        "《%s》· %s\n共 %d 页%s"
+        % (series.get("title") or "无题", sid, len(part),
+           "" if full else "（第 %d~%d 页）" % (a, b)),
+        name="moss 小漫画", uin=0)]
+    miss = 0
+    for pg in part:
+        try:
+            d = moss_api._task_dir(pg.get("task") or "")   # noqa: SLF001
+            rel = moss_api._page_file(d, 1)                # noqa: SLF001
+            if not rel:
+                miss += 1
+                continue
+            path = image_out.prepare_for_send(rel, fmt) if fmt else rel
+        except Exception:                       # noqa: BLE001
+            log.warning("合集取图失败 %s 第 %s 页", sid, pg.get("n"))
+            miss += 1
+            continue
+        nodes.append(qq_api.node_segment(
+            [qq_api.image_segment(path)],
+            name="第 %02d 页" % (pg.get("n") or 0), uin=0))
+        if pg.get("summary"):
+            nodes.append(qq_api.node_segment(
+                "第 %02d 页：%s" % (pg.get("n") or 0, pg["summary"]),
+                name="剧情", uin=0))
+
+    if len(nodes) == 1:
+        _say(target, target_id, "这几页的图都取不出来了（%d 张缺）" % miss, reply_to)
+        return
+    try:
+        qq_api.send_forward(target, target_id, nodes)
+    except Exception as exc:                    # noqa: BLE001
+        log.exception("moss 合集发不出去")
+        _say(target, target_id, "合集没发出去（%s）" % exc, reply_to)
+        return
+    if miss:
+        _say(target, target_id, "合集缺了 %d 张（任务目录被清掉了）" % miss, reply_to)
+
+
+# ─── 出图 + 发图 + 记账 ───────────────────────────────
+
+def _write_spec(target, target_id, brief, layout, prev, prev_scene, cast,
+                reply_to):
+    """调编剧。失败时自己回话并返回 `(None, "", 原因)`。"""
     try:
         spec, raw, err = moss_comic.write(
             brief, pages=PAGES, layout=layout,
-            ratio="%dx%d" % (moss_api.WIDTH, moss_api.HEIGHT))
+            ratio="%dx%d" % (moss_api.WIDTH, moss_api.HEIGHT),
+            prev=prev, prev_scene=prev_scene, cast=cast)
     except Exception as exc:                    # noqa: BLE001
         log.exception("moss 编剧炸了：%s", brief[:40])
-        say(target, target_id, "moss漫画没成：编剧这步出了岔子（%s）\n再试一次？"
-            % exc, reply_to)
-        return
+        _say(target, target_id, "moss漫画没成：编剧这步出了岔子（%s）\n再试一次？"
+             % exc, reply_to)
+        return None, "", str(exc)
     if not spec:
         log.warning("moss 剧本解析失败：%s", (raw or "")[:200])
-        say(target, target_id,
-            "moss漫画没成：剧本没写出来%s\n换个说法再试一次？"
-            % (("（%s）" % err) if err else ""), reply_to)
-        return
-
+        _say(target, target_id,
+             "moss漫画没成：剧本没写出来%s\n换个说法再试一次？"
+             % (("（%s）" % err) if err else ""), reply_to)
+        return None, "", err
     d = moss_api._new_task_dir(spec)            # noqa: SLF001  同包复用
     moss_api._save(d, spec, raw)                # noqa: SLF001
-    title = spec.get("title") or "无题"
-    # 格数从 spec 里读，不拿 LAYOUT 反推：`check()` 只报不拦，编剧偶尔会少给
-    # 一格（5 格也会照画），回执写死「六格」就会和图对不上。
-    cells = len((spec.get("pages") or [{}])[0].get("panels") or [])
+    return spec, d, ""
 
-    # 回执①：标题 + 每格台词。看不懂画面，但看得懂台词跑没跑偏。
-    say(target, target_id,
-        "🀄 moss小漫画《%s》\n%s\n%d 格 · %d 步 · cfg %s · 约 100 秒"
-        % (title, _lines(spec), cells, moss_api.STEPS, moss_api.CFG), reply_to)
 
-    seed = random.randint(1, 2 ** 31 - 1)
+def _render_and_send(target, target_id, sid, page, spec, d, seed,
+                     reply_to, sender_uin, hint=""):
+    """出图 → 存档卡 → 发图 → 记账。任何一步失败都回话，绝不干等。"""
+    t0 = time.time()
     try:
         moss_api._run(d, spec, [1], seed)       # noqa: SLF001  内部已兜异常
     except Exception as exc:                    # noqa: BLE001
         log.exception("moss 出图线程炸了 %s", d)
-        say(target, target_id, "moss漫画没成：出图那步炸了（%s）" % exc, reply_to)
+        _say(target, target_id, "moss漫画没成：出图那步炸了（%s）" % exc, reply_to)
         return
 
     st = (moss_api._load_state(d).get("pages") or {}).get("1") or {}   # noqa: SLF001
     rel = st.get("file") or ""
     if st.get("status") != "done" or not rel:
-        say(target, target_id,
-            "moss漫画没成：%s" % (st.get("error") or "跑完了但没找到图"), reply_to)
+        _say(target, target_id,
+             "moss漫画没成：%s" % (st.get("error") or "跑完了但没找到图"), reply_to)
         return
 
+    # 存档卡：一次调用同时产「这一页演了什么」和「这一页长什么样」。
+    # 放在出图**之后**——出图失败就不必花这次调用。
+    summary, scene = moss_comic.digest(spec)
+    pid = (page or {}).get("id") or ""
+    n = (page or {}).get("n") or 1
+    if pid:
+        series_mod.mutate(sid, lambda x: series_mod.fill(
+            x, pid, summary=summary, scene=scene, task=d, seed=seed))
+
     secs = round(time.time() - t0, 1)
-    caption = ("《%s》· %d 格 · %d 步 · cfg %s · %dx%d · 共 %.0f 秒 · seed %d"
-               % (title, cells, moss_api.STEPS, moss_api.CFG,
+    cells = len((spec.get("pages") or [{}])[0].get("panels") or [])
+    caption = ("%s · 第 %02d 页 ·《%s》\n%d 格 · %d 步 · cfg %s · %dx%d · "
+               "共 %.0f 秒 · seed %d"
+               % (series_mod.code_of(sid, n), n, spec.get("title") or "无题",
+                  cells, moss_api.STEPS, moss_api.CFG,
                   moss_api.WIDTH, moss_api.HEIGHT, secs, seed))
-    _send_image(target, target_id, rel, caption, reply_to, sender_uin)
+    mid = _send_image(target, target_id, rel, caption, reply_to, sender_uin)
+    # 记「这条消息 → 哪一页」，引用它就是定位（见 moss_msgs）。
+    # 记不上不致命：卡片上的编号照样能接上。
+    moss_msgs.remember(mid, sid, pid, n)
+    if hint:
+        _say(target, target_id, hint, reply_to)
 
 
 def _send_image(target, target_id, rel, caption, reply_to="", sender_uin=None):
-    """过格式、过审核、发出去。审核拦下时它自己会回一句，这里只管不给图。
+    """过格式、过审核、发出去。返回 message_id（拿不到是空串）。
 
     图这条**一定带引用**（`reply_to` 是点单那句）：这里从前把 reply_to 收下
     却没用，结果文字回执引用着、图本身裸发——用户要的就是图跟着引用回来。
@@ -271,20 +713,33 @@ def _send_image(target, target_id, rel, caption, reply_to="", sender_uin=None):
     except Exception as exc:                    # noqa: BLE001
         log.exception("moss 图取不出来：%s", rel)
         _say(target, target_id, "图画出来了但取不到文件（%s）" % exc, reply_to)
-        return False
+        return ""
     try:
         if not image_audit.allow_send(path, QQ_AGENT_ID, target, target_id,
                                       meta={"kind": "moss_comic",
                                             "caption": caption}):
-            return False
-        qq_api.send_image(target, target_id, path, caption=caption,
-                          reply_to=reply_to or None,
-                          at_user=(sender_uin if target == "group" else None))
-        return True
+            return ""
+        return qq_api.send_image(target, target_id, path, caption=caption,
+                                 reply_to=reply_to or None,
+                                 at_user=(sender_uin if target == "group"
+                                          else None))
     except Exception as exc:                    # noqa: BLE001
         log.exception("moss 图发不出去 %s", rel)
         _say(target, target_id, "图画好了但发不出去（%s）" % exc, reply_to)
-        return False
+        return ""
+
+
+# ─── 小工具 ───────────────────────────────────────────
+
+def _layout(brief):
+    """版式识别 + 清洗。返回 `(版式, 干净剧情, 认没认到)`；剧情太短给空串。"""
+    layout, clean, picked = detect_layout(brief)
+    if picked:
+        if len(clean) < 2:
+            return layout, "", True
+        log.info("moss 版式由用户指定：%s（%s）", layout, clean[:24])
+        return layout, clean, True
+    return layout, brief, False
 
 
 def _lines(spec):

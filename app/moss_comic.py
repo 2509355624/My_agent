@@ -637,8 +637,41 @@ def system_prompt():
     return (_SKILL_HEAD % body) + _SYSTEM
 
 
-def _user_brief(brief, pages, style, ratio, layout=""):
+def _user_brief(brief, pages, style, ratio, layout="", prev="", prev_scene="",
+                cast=None):
     lines = ["剧情要求：%s" % brief.strip(), ""]
+    # ── 连载（2026-10-31）──
+    # 续集要记住两样东西，而且**必须分开给**：
+    #   · 前情（每页一行 50~80 字摘要）→ 管剧情别割裂，给了全部页
+    #   · 上一页场景卡（200~300 字）→ 管画面别崩，**只给上一页**
+    # 场景卡不给更早的页：跨两三页场景本来就要变，再往前给只会互相打架
+    # （用户原话：对当前画面有借鉴依据的其实就只有最近的一页）。
+    # 历史一律中文散文、不给 JSON：一页 spec 三千多字英文 desc，堆五页
+    # 就会把上面那 4412 字的中文规范淹掉，模型开始模仿英文 JSON 的腔调，
+    # 格式先于上下文长度崩掉。
+    if (prev or "").strip():
+        lines.append("**这条线前面已经画过的**（故事从这里接着往下走）：")
+        lines.append(prev.strip())
+        lines.append("")
+    if (prev_scene or "").strip():
+        lines.append("**上一页的画面**（下一页默认就在同一个地方、同一批东西里发生）：")
+        lines.append(prev_scene.strip())
+        lines.append("")
+    if (prev or prev_scene):
+        lines.append("接续要求（每一条都要守）：")
+        lines.append("① 不许重演前情里已经演过的节拍，也不许把已经揭晓的事再演一遍；")
+        lines.append("② 人物关系、情绪、已经发生的事必须延续——上一页她刚被拒绝，"
+                     "这一页就不能当没发生过；")
+        lines.append("③ **场景、家具、光线、手里拿的东西默认沿用上一页**，只有剧情"
+                     "明确要求换场才换；换场必须有因果（人走出去 / 时间跳），"
+                     "不能让读者觉得是跳帧；")
+        lines.append("④ 人物外观照下面那套 `cast` 引，一个键都不许改、一个字都不许重写。")
+        lines.append("")
+    if cast:
+        lines.append("**沿用这套人物设定**（`cast` 的键名原样引用，不要增删改）：")
+        for k, v in cast.items():
+            lines.append("  · %s：%s" % (k, v))
+        lines.append("")
     lines.append("总共 %d 页。" % pages)
     lines.append("**一页只画一个地点**：剧情跨了几个地点就需要几页。页数不够时"
                  "只画前面能画完的地点，不要把两个地点塞进同一页——模型会把它们"
@@ -946,12 +979,19 @@ def resolve_style(name):
 
 
 def write(brief, pages=4, style="", ratio="1024x1536", provider=None,
-          timeout=240, progress=None, layout=""):
-    """一句话剧情 → 整篇 spec。返回 (spec, raw, error)。"""
+          timeout=240, progress=None, layout="", prev="", prev_scene="",
+          cast=None):
+    """一句话剧情 → 整篇 spec。返回 (spec, raw, error)。
+
+    `prev` / `prev_scene` / `cast` 是连载用的（2026-10-31）：前情摘要、
+    上一页场景卡、要继承的人物设定。为空时行为与从前完全一致。
+    """
     style_text = resolve_style(style)
     messages = [
         {"role": "system", "content": system_prompt()},
-        {"role": "user", "content": _user_brief(brief, pages, style_text, ratio, layout)},
+        {"role": "user", "content": _user_brief(
+            brief, pages, style_text, ratio, layout,
+            prev=prev, prev_scene=prev_scene, cast=cast)},
     ]
     if progress:
         progress("编剧开始")
@@ -969,7 +1009,114 @@ def write(brief, pages=4, style="", ratio="1024x1536", provider=None,
     if style_text:                       # 预设画风以脚本为准，模型抄跑就改回来
         spec["style"] = style_text
     spec.setdefault("cast", {})
+    # 连载：人物设定**以档案为准**，无条件盖掉模型自己写的那份。
+    # 模型每页都会把 cast 重写一遍（哪怕提示词说了别改），重写完脸就变了。
+    # 这是跨页崩坏里最难救的一种——场景还能靠场景卡扳回来，脸变了没法扳。
+    if cast:
+        spec["cast"] = dict(cast)
     spec.setdefault("pages", [])
     for i, p in enumerate(spec["pages"], 1):
         p["n"] = i
     return spec, raw, ""
+
+
+# ══════════════════════════════════════════════════════════
+#  存档卡：一页 spec → (摘要, 场景卡)
+# ══════════════════════════════════════════════════════════
+#
+# 连载要记住两样东西，**一次调用同时产**（分两次就是两倍钱）：
+#   · summary 50~80 字 —— 这一页演了什么，喂给下一话当前情
+#   · scene   200~300 字 —— 这一页长什么样，喂给下一话当画面锚
+#
+# 为什么场景卡要从 **spec 的 desc** 里抽，而不是拿生成的图去识图：
+# 每格 desc 本来就是「方位 + 家具 + 光线 + 姿态 + 道具」的完整描述，
+# 是当时**为了让模型照着画**才写那么细的，比事后识图准得多，也便宜
+# （图要按张算 token，1024×1536 一页不便宜）。
+
+_DIGEST_SYSTEM = """你在给一部连载小漫画做存档卡。看完一页的分镜，用中文写两段话。
+
+只输出一个 JSON 对象，不要 markdown 围栏，不要解释：
+{
+  "summary": "这一页演了什么，50~80 字。谁做了什么、结果是什么。只写剧情，不写画法。",
+  "scene": "这一页长什么样，200~300 字。写：地点、关键家具在画面哪一侧、光源从哪来"
+           "、有几个人各在什么位置、手里拿着什么、最后一格定格在哪个画面。"
+           "写给下一页的编剧看，让他接着画不跳戏。只描述你看到的，不评价好坏。"
+}
+
+两段都要用中文。scene 里方位必须写清（左/右/前景/背景），因为下一页要靠它摆东西。"""
+
+
+def _digest_user(spec):
+    page = (spec.get("pages") or [{}])[0]
+    lines = ["标题：%s" % (spec.get("title") or "无题")]
+    cast = spec.get("cast") or {}
+    if cast:
+        lines.append("人物：" + "；".join("%s=%s" % (k, v) for k, v in cast.items()))
+    if page.get("scene"):
+        lines.append("场景设定：%s" % page["scene"])
+    lines.append("")
+    lines.append("分格：")
+    for i, p in enumerate(page.get("panels") or [], 1):
+        bits = ["第 %d 格" % i]
+        if p.get("desc"):
+            bits.append("画面=%s" % p["desc"])
+        if p.get("caption"):
+            bits.append("旁白=%s" % p["caption"])
+        if p.get("bubble"):
+            bits.append("台词=%s" % p["bubble"])
+        if p.get("sfx"):
+            bits.append("拟声=%s" % p["sfx"])
+        lines.append("· " + "；".join(bits))
+    lines.append("")
+    lines.append("按前面的格式输出 JSON。")
+    return "\n".join(lines)
+
+
+def _digest_fallback(spec):
+    """模型挂了时的规则兜底：至少把台词和英文画面描述留下来。
+
+    比空着强——空着的场景卡会让下一页完全没有画面锚，等于回到连载之前。
+    英文 desc 虽然不理想（存档卡原本要求中文），但它含方位和道具，
+    下一页的编剧读得懂。
+    """
+    page = (spec.get("pages") or [{}])[0]
+    panels = page.get("panels") or []
+    words = []
+    for p in panels:
+        w = (p.get("caption") or p.get("bubble") or p.get("sfx") or "").strip()
+        if w:
+            words.append(w)
+    summary = "；".join(words)[:90]
+    scene_bits = []
+    if page.get("scene"):
+        scene_bits.append(str(page["scene"]).strip())
+    for p in panels:
+        d = str(p.get("desc") or "").strip()
+        if d:
+            scene_bits.append(d[:80])
+    return summary, "｜".join(scene_bits)[:400]
+
+
+def digest(spec, provider=None, timeout=90):
+    """一页 spec → `(摘要, 场景卡)`。失败返回兜底内容，不抛。
+
+    调用方拿到后写进 `moss_series` 的对应页：`summary` 给后面每一话当前情，
+    `scene` 只给紧接着的下一页当画面锚。
+    """
+    try:
+        text = llm.call_llm(
+            [{"role": "system", "content": _DIGEST_SYSTEM},
+             {"role": "user", "content": _digest_user(spec)}],
+            timeout=timeout, provider=provider, max_tokens=900)
+    except Exception:                           # noqa: BLE001
+        log.exception("moss 存档卡调用失败，走规则兜底")
+        return _digest_fallback(spec)
+    got, _why = parse_json(text or "")
+    if not isinstance(got, dict):
+        return _digest_fallback(spec)
+    summary = str(got.get("summary") or "").strip()
+    scene = str(got.get("scene") or "").strip()
+    if not summary or not scene:
+        fb_s, fb_c = _digest_fallback(spec)
+        return (summary or fb_s), (scene or fb_c)
+    return summary, scene
