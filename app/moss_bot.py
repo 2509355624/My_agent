@@ -569,10 +569,9 @@ def _do_new(target, target_id, brief, reply_to, sender_uin, owner=""):
          % (sid, _lines(spec), cells, moss_api.STEPS, moss_api.CFG), reply_to)
     _render_and_send(target, target_id, sid, page, spec, d, seed,
                      reply_to, sender_uin,
-                     hint=("想搬到别处自己玩（比如私聊）：把这张图**转发**给"
-                           "大大怪，或把那行编号复制过去，\n再说 "
-                           "`moss续集 %s <接下来的剧情>`，就是同一份剧情接着画。"
-                           % series_mod.code_of(sid, 1)))
+                     hint="迁移到私聊：私聊发 moss续集 %s <接下来的剧情>"
+                          "（转发这张图也行）"
+                          % series_mod.code_of(sid, 1))
 
 
 # ─── 动作：续集 ───────────────────────────────────────
@@ -790,17 +789,20 @@ def _render_and_send(target, target_id, sid, page, spec, d, seed,
 
     secs = round(time.time() - t0, 1)
     cells = len((spec.get("pages") or [{}])[0].get("panels") or [])
-    caption = ("%s · 第 %02d 页 ·《%s》\n%d 格 · %d 步 · cfg %s · %dx%d · "
-               "共 %.0f 秒 · seed %d"
+    caption = ("%s · 第 %02d 页 ·《%s》\n"
+               "%d 格 · %d 步 · cfg %s · %dx%d · 共 %.0f 秒 · seed %d\n"
+               "指令：moss续集，moss合集，moss重画"
                % (series_mod.code_of(sid, n), n, spec.get("title") or "无题",
                   cells, moss_api.STEPS, moss_api.CFG,
                   moss_api.WIDTH, moss_api.HEIGHT, secs, seed))
+    if hint:
+        # 并进**同一条**回执（2026-10-31 用户报刷屏）：一个生图结果只给一条
+        # 消息，图 + 编号 + 怎么用一次说完，不再追发第二条。
+        caption += "\n" + hint
     mid = _send_image(target, target_id, rel, caption, reply_to, sender_uin)
     # 记「这条消息 → 哪一页」，引用它就是定位（见 moss_msgs）。
     # 记不上不致命：卡片上的编号照样能接上。
     moss_msgs.remember(mid, sid, pid, n)
-    if hint:
-        _say(target, target_id, hint, reply_to)
 
 
 def _send_image(target, target_id, rel, caption, reply_to="", sender_uin=None):
@@ -823,14 +825,33 @@ def _send_image(target, target_id, rel, caption, reply_to="", sender_uin=None):
                                       meta={"kind": "moss_comic",
                                             "caption": caption}):
             return ""
-        return qq_api.send_image(target, target_id, path, caption=caption,
-                                 reply_to=reply_to or None,
-                                 at_user=(sender_uin if target == "group"
-                                          else None))
     except Exception as exc:                    # noqa: BLE001
         log.exception("moss 图发不出去 %s", rel)
         _say(target, target_id, "图画好了但发不出去（%s）" % exc, reply_to)
         return ""
+
+    def _send(p):
+        return qq_api.send_image(target, target_id, p, caption=caption,
+                                 reply_to=reply_to or None,
+                                 at_user=(sender_uin if target == "group"
+                                          else None))
+
+    try:
+        return _send(path)
+    except Exception as exc:                    # noqa: BLE001
+        # 与普通生图同一条自愈（2026-10-31）：temp 里的副本被外部清掉了，
+        # 从 ComfyUI 原图重取一份再发——图没坏，不值得让用户重画一页。
+        if not image_out.missing_file_error(exc):
+            log.exception("moss 图发不出去 %s", rel)
+            _say(target, target_id, "图画好了但发不出去（%s）" % exc, reply_to)
+            return ""
+        log.warning("moss 发送副本不见了（%s），从原图重取一份重发：%s", exc, rel)
+        try:
+            return _send(image_out.prepare_for_send(rel, fmt))
+        except Exception as exc2:               # noqa: BLE001
+            log.exception("moss 图重取后仍发不出去 %s", rel)
+            _say(target, target_id, "图画好了但发不出去（%s）" % exc2, reply_to)
+            return ""
 
 
 # ─── 小工具 ───────────────────────────────────────────

@@ -30,8 +30,9 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
-from app import moss_bot, moss_comic, moss_msgs, moss_series
+from app import moss_api, moss_bot, moss_comic, moss_msgs, moss_series, qq_api
 
 
 class ParseTest(unittest.TestCase):
@@ -529,6 +530,104 @@ class LinesTest(unittest.TestCase):
     def test_empty_spec_does_not_crash(self):
         self.assertEqual(moss_bot._lines({}), "")
         self.assertEqual(moss_bot._lines({"pages": []}), "")
+
+
+class ReceiptTest(unittest.TestCase):
+    """一页 = **一条**消息（2026-10-31 用户报刷屏）。
+
+    用户原话：「我一个生图结果，你给我2个回执，这是刷屏，你直接在这个
+    `AAVU-P01 · 第 01 页 ·《早起的小猫》` … 里」。所以图、编号、指令、迁移
+    提示全在同一张图的 caption 里，`_render_and_send` 收尾**不许再追发**文字。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self._old = (moss_series.STATE_ROOT, moss_series.INDEX_FILE)
+        moss_series.STATE_ROOT = self.tmp
+        moss_series.INDEX_FILE = os.path.join(self.tmp, "_index.json")
+        self.addCleanup(self._restore)
+        s = moss_series.open_new("group", "1103174141", title="早起的小猫")
+        self.sid = s["id"]
+        self.page = moss_series.mutate(self.sid, lambda x: moss_series.add_page(
+            x, parent_id="", task="T1", brief="猫醒了", seed=1110055932))
+
+    def _restore(self):
+        moss_series.STATE_ROOT, moss_series.INDEX_FILE = self._old
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _run(self, hint):
+        sent = {"captions": [], "texts": []}
+        spec = {"title": "早起的小猫",
+                "pages": [{"panels": [{"caption": "a"}] * 6}]}
+        with mock.patch.object(moss_api, "_run"), \
+             mock.patch.object(moss_api, "_load_state",
+                               return_value={"pages": {"1": {"status": "done",
+                                                             "file": "x.png"}}}), \
+             mock.patch.object(moss_comic, "digest",
+                               return_value=("她醒了", "桌上有杯牛奶")), \
+             mock.patch.object(moss_bot, "_send_image",
+                               lambda *a, **k: sent["captions"].append(a[3])), \
+             mock.patch.object(moss_bot, "_say",
+                               lambda *a, **k: sent["texts"].append(a[2])):
+            moss_bot._render_and_send("group", "1103174141", self.sid,
+                                      self.page, spec, "T1", 1110055932,
+                                      "", None, hint=hint)
+        return sent
+
+    def test_only_one_message(self):
+        sent = self._run("迁移到私聊：私聊发 moss续集 X <接下来的剧情>")
+        self.assertEqual(len(sent["captions"]), 1)   # 图那条
+        self.assertEqual(sent["texts"], [])          # 没有第二条
+
+    def test_caption_carries_code_and_commands(self):
+        """编号、指令、迁移提示都在**同一条** caption 里，一个字都不能少。"""
+        hint = ("迁移到私聊：私聊发 moss续集 %s <接下来的剧情>"
+                % moss_series.code_of(self.sid, 1))
+        cap = self._run(hint)["captions"][0]
+        lines = cap.splitlines()
+        self.assertEqual(len(lines), 4)
+        self.assertIn(moss_series.code_of(self.sid, 1), lines[0])
+        self.assertIn("第 01 页", lines[0])
+        self.assertIn("seed 1110055932", lines[1])
+        self.assertIn("moss续集", lines[2])
+        self.assertIn("moss合集", lines[2])
+        self.assertIn("moss重画", lines[2])
+        self.assertIn("迁移到私聊", lines[3])
+
+    def test_continue_page_has_no_migration_line(self):
+        """只有第 1 页说「怎么搬走」——每页都说就变成另一种刷屏。"""
+        cap = self._run("")["captions"][0]
+        self.assertEqual(len(cap.splitlines()), 3)
+        self.assertNotIn("迁移到私聊", cap)
+
+    def test_missing_copy_is_refetched(self):
+        """副本被外部清掉时重取一份再发，不许报「图画好了但发不出去」。"""
+        from app import image_out
+        paths = iter(["C:/tmp/a.png", "C:/tmp/b.png"])
+        calls = []
+
+        def fake_send(target, tid, path, caption="", **kw):
+            calls.append(path)
+            if len(calls) == 1:
+                raise RuntimeError("OneBot 调用失败 send_private_msg: "
+                                   "{'wording': \"ENOENT: no such file\"}")
+
+        with mock.patch.object(moss_api, "_run"), \
+             mock.patch.object(moss_api, "_load_state",
+                               return_value={"pages": {"1": {"status": "done",
+                                                             "file": "x.png"}}}), \
+             mock.patch.object(moss_comic, "digest",
+                               return_value=("她醒了", "桌上")), \
+             mock.patch.object(image_out, "prepare_for_send",
+                               lambda f, fmt="jpg": next(paths)), \
+             mock.patch("app.image_audit.allow_send", return_value=True), \
+             mock.patch("app.agents.image_send_format", return_value="jpg"), \
+             mock.patch.object(qq_api, "send_image", fake_send):
+            moss_bot._render_and_send("group", "1103174141", self.sid,
+                                      self.page,
+                                      {"title": "t", "pages": [{"panels": []}]},
+                                      "T1", 1, "", None)
+        self.assertEqual(calls, ["C:/tmp/a.png", "C:/tmp/b.png"])
 
 
 if __name__ == "__main__":

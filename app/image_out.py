@@ -111,6 +111,24 @@ def _flatten(im):
     return im.convert("RGB")
 
 
+def missing_file_error(exc):
+    """这个异常是不是「协议端读不到那个副本文件」？
+
+    2026-10-31 23:03 实测：ComfyUI 出图 2 秒后，`%TEMP%\\wb_qq_img` 里那份
+    副本就没了（同目录其它文件还在，按时间清理解释不通，多半是杀毒/管家类
+    工具扫走了大 PNG），NapCat 读它时报 ENOENT，整张图发不出去。
+
+    判据**认措辞不认异常类型**：这个错是被 `qq_api` 包成 RuntimeError 抛上来
+    的，没有可用的 errno / FileNotFoundError 可抓。
+    """
+    text = str(exc or "")
+    low = text.lower()
+    return ("ENOENT" in text
+            or "no such file or directory" in low
+            or "cannot find the file" in low
+            or "file not found" in low)
+
+
 def prepare_for_send(filename, fmt=DEFAULT_FORMAT):
     """把一张 ComfyUI 输出图变成可对外发送的副本（fmt = "jpg" 或 "png"）。
 

@@ -1161,6 +1161,91 @@ class SendImageTest(unittest.TestCase):
             image_jobs._send_image("group", "9", "b.png", "HT-20261001-074112-384")
         self.assertNotIn("seed", sent[0][1])
 
+    def test_refetches_the_copy_when_it_vanished(self):
+        """副本被外部清掉时，从原图重取一份重发——**不让用户白等一张**。
+
+        2026-10-31 23:03 真机事故：图 23:03:04 落盘，23:03:06 副本就没了，
+        NapCat 报 ENOENT，用户收到「图画好了，但没发出去（）。」。图本身
+        一直好好的在 ComfyUI output 里，重取一次就能发出去。
+        """
+        from app import image_out
+        paths = iter(["C:/tmp/first.jpg", "C:/tmp/second.jpg"])
+        calls = []
+
+        def fake_send(target, tid, path, caption="", **kw):
+            calls.append(path)
+            if len(calls) == 1:
+                raise RuntimeError(
+                    "OneBot 调用失败 send_private_msg: {'status': 'failed', "
+                    "'wording': \"ENOENT: no such file or directory, stat "
+                    "'C:/tmp/first.jpg'\"}")
+
+        with mock.patch.object(image_out, "prepare_for_send",
+                               lambda f, fmt="jpg": next(paths)), \
+             mock.patch.object(qq_api, "send_image", fake_send):
+            self.assertTrue(image_jobs._send_image("group", "9", "b.png"))
+        self.assertEqual(calls, ["C:/tmp/first.jpg", "C:/tmp/second.jpg"])
+
+    def test_other_send_errors_still_raise(self):
+        """只有「文件没了」才重取。别的失败重取一遍也是白搭，照旧往上报。"""
+        from app import image_out
+        with mock.patch.object(image_out, "prepare_for_send",
+                               lambda f, fmt="jpg": "C:/tmp/y.jpg"), \
+             mock.patch.object(qq_api, "send_image",
+                               mock.Mock(side_effect=RuntimeError(
+                                   "OneBot 调用失败 send_private_msg: "
+                                   "{'retcode': 1200}"))):
+            with self.assertRaises(RuntimeError):
+                image_jobs._send_image("group", "9", "b.png")
+
+
+class ReasonTest(unittest.TestCase):
+    """失败原因必须是**原因**，不是 `OneBot 调用失败 xxx: ` 这个前缀。
+
+    2026-10-31 用户报的那句「图画好了，但没发出去（OneBot 调用失败
+    send_private_msg: ）。」：前缀正好 35 字，`_reason` 截 30 字，原因全没了。
+    """
+
+    _REAL = ("OneBot 调用失败 send_private_msg: {'status': 'failed', "
+             "'retcode': 100, 'data': None, 'message': '', "
+             "'wording': \"ENOENT: no such file or directory, stat "
+             "'C:/tmp/wb_qq_img/a.png'\", 'echo': ''}")
+
+    def test_wording_is_pulled_out(self):
+        got = image_jobs._reason(RuntimeError(self._REAL))
+        self.assertIn("ENOENT", got)
+        self.assertIn("send_private_msg", got)
+        self.assertNotEqual(got, self._REAL[:30])
+
+    def test_retcode_is_used_when_no_wording(self):
+        got = image_jobs._reason(RuntimeError(
+            "OneBot 调用失败 send_private_msg: {'retcode': 1200}"))
+        self.assertIn("1200", got)
+
+    def test_plain_errors_are_still_short(self):
+        self.assertEqual(image_jobs._reason(RuntimeError("connection refused")),
+                         "connection refused")
+        self.assertEqual(image_jobs._reason(TimeoutError()), "超时")
+
+
+class MissingFileTest(unittest.TestCase):
+    """`image_out.missing_file_error` 只认「读不到文件」，不能把别的错也认进来。"""
+
+    def test_recognizes_enoent(self):
+        from app import image_out
+        for text in ("ENOENT: no such file or directory, stat 'x.png'",
+                     "No such file or directory",
+                     "cannot find the file specified"):
+            with self.subTest(text=text):
+                self.assertTrue(image_out.missing_file_error(RuntimeError(text)))
+
+    def test_ignores_other_failures(self):
+        from app import image_out
+        for text in ("取图 404", "OneBot 调用失败 send_private_msg: "
+                     "{'retcode': 1200}", "connection refused", ""):
+            with self.subTest(text=text):
+                self.assertFalse(image_out.missing_file_error(RuntimeError(text)))
+
 
 class CaptionNoteTest(unittest.TestCase):
     """出图 caption 后面那段附言：管理页可编辑，三态（2026-10-06 用户拍板）。
