@@ -33,12 +33,16 @@ data URL 喂给识图模型就丢了。所以图生图必须把那份字节再�
 """
 
 import io
+import logging
 import os
+import time
 import uuid
 
 import requests
 
 from app.config import COMFYUI_URL
+
+log = logging.getLogger(__name__)
 
 # 源图最长边缩到多少。太大跑得慢、吃显存（Anima 那边后面还有一段精修），
 # 太小出图糊。1216 是 SDXL 档位附近、Anima 也吃得住的折中。
@@ -169,21 +173,90 @@ def fit(raw, max_side=MAX_SIDE):
     return buf.getvalue(), (nw, nh)
 
 
+# 上传前等 ComfyUI 上线的探测间隔。上限用 `image_jobs.COMFY_WAIT_UP`
+# （`.env` 可覆盖，默认 120 秒）——跟 worker 提交前那层等待是同一条线，
+# 两处口径一致，不会出现「文生图在等、垫图在报错」。
+_UP_GAP = 5
+
+# 失败后重发几次。**只对连接层失败重发**：ComfyUI 被内存水位重启时，连接会在
+# 请求中途被 reset，它起来之后重发一次就过了；读超时说明它卡在别的任务上，
+# 重发只会再白等一个 timeout。
+_ATTEMPTS = 2
+
+# 重发前的间隔（秒）。
+_RETRY_GAP = 2
+
+
+def _explain(exc):
+    """把 requests 的原始异常翻成一句人话。
+
+    回执里给对方看的就是这句。原来直接把 `str(exc)` 塞进消息，群友收到的是
+    `HTTPConnectionPool(host='127.0.0.1', port=8188): Max retries exceeded ...`，
+    既看不懂也不知道该不该重发。
+    """
+    s = str(exc)
+    low = s.lower()
+    if "10061" in s or "refused" in low or "积极拒绝" in s:
+        return "ComfyUI 没在运行（连接被拒）"
+    if "timed out" in low or "timeout" in low:
+        return "ComfyUI 60 秒没应答"
+    if "reset" in low or "broken pipe" in low or "aborted" in low:
+        return "ComfyUI 中途断开了连接"
+    return type(exc).__name__ + "：" + s[:80]
+
+
+def _retryable(exc):
+    """连接层失败才值得重发；超时重发是白等。"""
+    s = str(exc).lower()
+    return ("10061" in s or "refused" in s or "积极拒绝" in s
+            or "reset" in s or "broken pipe" in s or "aborted" in s
+            or "disconnected" in s)
+
+
 def upload(raw, suffix=".png"):
     """把图片字节送进 ComfyUI 的 input 目录，返回它在那边认得的名字。
 
     `/upload/image` 是 ComfyUI 自带接口（实测返回 {"name","subfolder",...}），
     工作流的 LoadImage 就认这个名字。失败抛 RuntimeError。
+
+    **先等 ComfyUI 上线再传**（2026-10-31）。这一步发生在 `generate_image`
+    入队**之前**，不在 worker 那层 `wait_comfy_up` 的保护范围里：ComfyUI 一进
+    重启窗口，文生图会安静地等最多 120 秒，垫图却当场报「源图传不进」——
+    同一台机器上两种口径，群友感受到的就是「有时候能等，有时候直接失败」。
     """
+    from app import image_jobs
+
+    limit = image_jobs.COMFY_WAIT_UP
+    if not image_jobs.wait_comfy_up(limit=limit, gap=_UP_GAP):
+        log.warning("源图上传前等了 %.0f 秒，ComfyUI 仍没上线（%s）",
+                    limit, COMFYUI_URL)
+        raise RuntimeError(
+            "ComfyUI 正在重启，等了 %.0f 秒还没起来，这张源图现在传不进去。"
+            "过一两分钟再发一次就行。" % limit)
+
     name = "i2isrc_" + uuid.uuid4().hex[:10] + suffix
-    try:
-        resp = _session.post(COMFYUI_URL.rstrip("/") + "/upload/image",
-                             files={"image": (name, raw, "image/png")},
-                             data={"overwrite": "true"}, timeout=60)
-        resp.raise_for_status()
-        info = resp.json()
-    except Exception as exc:
-        raise RuntimeError("源图传不进 ComfyUI（%s），稍后再试。" % exc)
+    url = COMFYUI_URL.rstrip("/") + "/upload/image"
+    info, last = None, None
+    for attempt in range(1, _ATTEMPTS + 1):
+        try:
+            resp = _session.post(url,
+                                 files={"image": (name, raw, "image/png")},
+                                 data={"overwrite": "true"}, timeout=60)
+            resp.raise_for_status()
+            info = resp.json()
+            break
+        except Exception as exc:
+            last = exc
+            log.warning("源图上传失败（第 %d/%d 次，%s）：%s: %s",
+                        attempt, _ATTEMPTS, url, type(exc).__name__, exc)
+            if attempt >= _ATTEMPTS or not _retryable(exc):
+                raise RuntimeError("源图传不进 ComfyUI：%s，过一会儿再试。"
+                                   % _explain(exc))
+            time.sleep(_RETRY_GAP)
+
+    if info is None:        # 理论上到不了；失败分支已经在循环里 raise 了
+        raise RuntimeError("源图传不进 ComfyUI：%s，过一会儿再试。"
+                           % _explain(last))
 
     got = str(info.get("name") or name)
     sub = str(info.get("subfolder") or "")

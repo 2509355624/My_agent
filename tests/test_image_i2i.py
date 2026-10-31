@@ -30,7 +30,7 @@ from unittest import mock
 
 from PIL import Image
 
-from app import agents, comfy_src, nai, qq_api, stickers, vision
+from app import agents, comfy_src, image_jobs, nai, qq_api, stickers, vision
 from app.skills import load_workflow
 from app.tools.normal import generate_image as gi
 
@@ -240,6 +240,17 @@ class UploadTest(unittest.TestCase):
         def json(self):
             return self._payload
 
+    def setUp(self):
+        # upload 现在会先等 ComfyUI 上线（起在入队之前，够不着 worker 的等待）。
+        # 单元测试不碰网络：默认「它在线」，各用例要模拟掉线自己再 patch。
+        wait = mock.patch.object(image_jobs, "wait_comfy_up", return_value=True)
+        wait.start()
+        self.addCleanup(wait.stop)
+        # 重发间隔置 0，别让用例真睡 2 秒。
+        gap = mock.patch.object(comfy_src, "_RETRY_GAP", 0)
+        gap.start()
+        self.addCleanup(gap.stop)
+
     def _post(self, payload, seen):
         def fake(url, files=None, data=None, timeout=None):
             seen["url"] = url
@@ -275,6 +286,56 @@ class UploadTest(unittest.TestCase):
             with self.assertRaises(RuntimeError) as cm:
                 comfy_src.upload(b"x")
         self.assertIn("传不进 ComfyUI", str(cm.exception))
+
+    def test_waits_for_comfy_before_uploading(self):
+        """上传前先等 ComfyUI——图生图起在入队之前，够不着 worker 那层等待。"""
+        seen = {}
+        payload = {"name": "i2isrc_ab.png", "subfolder": ""}
+        with mock.patch.object(image_jobs, "wait_comfy_up",
+                               return_value=True) as wait:
+            with mock.patch.object(comfy_src._session, "post",
+                                   self._post(payload, seen)):
+                comfy_src.upload(b"x")
+        self.assertEqual(wait.call_count, 1)
+        # 上限必须跟文生图 worker 走同一个配置，不然又会出现两套口径
+        self.assertEqual(wait.call_args.kwargs["limit"],
+                         image_jobs.COMFY_WAIT_UP)
+
+    def test_never_comes_up_does_not_post(self):
+        """等满了还不起来：直接说「正在重启」，不去白传一次。"""
+        with mock.patch.object(image_jobs, "wait_comfy_up", return_value=False):
+            with mock.patch.object(comfy_src._session, "post") as post:
+                with self.assertRaises(RuntimeError) as cm:
+                    comfy_src.upload(b"x")
+        post.assert_not_called()
+        self.assertIn("正在重启", str(cm.exception))
+        self.assertIn("传不进去", str(cm.exception))
+
+    def test_connection_failure_retries_once(self):
+        """连接被拒重发一次：ComfyUI 刚起来的第一下常是这种。"""
+        calls = []
+
+        def boom(*a, **kw):
+            calls.append(1)
+            raise OSError("[WinError 10061] 由于目标计算机积极拒绝，无法连接。")
+        with mock.patch.object(comfy_src._session, "post", boom):
+            with self.assertRaises(RuntimeError) as cm:
+                comfy_src.upload(b"x")
+        self.assertEqual(len(calls), 2)
+        self.assertIn("没在运行", str(cm.exception))
+
+    def test_timeout_is_not_retried(self):
+        """读超时说明它卡在别的任务上，重发只是再等一个 60 秒。"""
+        calls = []
+
+        def boom(*a, **kw):
+            calls.append(1)
+            raise OSError("HTTPConnectionPool: Read timed out. (read timeout=60)")
+        with mock.patch.object(comfy_src._session, "post", boom):
+            with self.assertRaises(RuntimeError) as cm:
+                comfy_src.upload(b"x")
+        self.assertEqual(len(calls), 1)
+        self.assertIn("没应答", str(cm.exception))
 
 
 class LoadWorkflowTest(unittest.TestCase):
