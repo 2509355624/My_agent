@@ -75,6 +75,23 @@ LAYOUTS = {
          "Bottom left panel", "Bottom middle panel", "Bottom right panel"],
         "3×2 六格：单页讲完一段小剧情（起承转合 + 两个反应）",
     ),
+    # 2026-10-31：五格「上三下二」。
+    #
+    # 为什么不是别的五格排法：`上一下四` 下排每格只有 256×1152（宽高比 0.22，
+    # 比 3×2 更窄）；`二上三下` 上排是 512×512 方格，人像在方格里难放。
+    # 只有「上三下二」既保住上排的推进节奏，又让下排两格宽到 512（宽高比
+    # 0.67，接近 3:4 的正常人像比例），天然形成「小格堆节奏 + 大格砸高潮」。
+    #
+    # 版式句能钉死：行内全部等宽，只是两行列数不同，模型对「3 等分 / 2 等分」
+    # 这种规整描述服从度高，不像不规则拼贴会自己乱分。
+    "3t2b": (
+        "A comic page divided into exactly five panels: three equal narrow panels "
+        "in the top row and two equal wider panels in the bottom row, all separated "
+        "by thin white gutters.",
+        ["Top left panel", "Top middle panel", "Top right panel",
+         "Bottom left panel", "Bottom right panel"],
+        "上三下二五格：上排三格快速推进（脸与局部），下排两个大格放高潮与收尾",
+    ),
 }
 
 # 画风预设（`--style` 可以直接传这些名字）
@@ -108,6 +125,26 @@ _MEDIUM = "A soft luminous 2D anime manga page"
 # 最后那半句是他在 caption 里为字幕做的唯一铺垫（其余全在 items 里）。
 _TAIL = ("Clean flat anime coloring with delicate cel shading, %s, "
          "crisp clean Chinese comic text in sharp speech bubbles.")
+
+# 2026-10-31：整页无文字时**必须换尾句**。
+# 原来无条件用 `_TAIL`（说「有清晰中文气泡」），后面再追加 `_NO_TEXT`
+# （说「页面上任何地方都没有文字」），同一段 caption 里两句互相打脸，
+# 模型择一执行——这是「空格子被补出台词」的一个直接诱因，不是只有 bbox 软约束。
+_TAIL_NOTE = ("Clean flat anime coloring with delicate cel shading, %s, "
+              "no text and no speech bubbles anywhere on the page.")
+
+# 单格无文字时拼进该格 caption 尾部的硬声明（逐格用，不是整页）。
+# 注意前导空格：拼接时是 `body + "." + _NO_TEXT_CELL`，少了这个空格会变成
+# `…covering her body.No speech bubble…`（2026-10-31 首跑实测就是粘连的）。
+_NO_TEXT_CELL = " No speech bubble and no text in this panel."
+
+# 模型会**误用**这条规则：在明明有气泡的格子里也自己写一句
+# `no speech bubble, no text in this panel`（2026-10-31 第二跑实测，第 2 格
+# 有气泡「就是现在」却写着 no text）。这类自写的否定句会和真实存在的文字元素
+# 打架，所以有字的格子要把它们清掉，没字的格子才保留/追加。
+_NO_TXT_CLAUSE = re.compile(
+    r"\s*[,.;]?\s*(?:no speech bubbles?(?:,?\s*no text)?|no text)(?:\s+in this panel)?",
+    re.I)
 
 # 只放「光」。画风不在这里（已由 _META + LoRA 决定），所以这里不写任何
 # 画法/媒介词，避免又变成自创的画风串。
@@ -190,6 +227,12 @@ LAYOUT_BOXES["3x2"] = [
     [0, -_HX, _HY, _C3A], [0, _C3A, _HY, _C3B], [0, _C3B, _HY, _HX],
 ]
 
+# 五格「上三下二」：上排沿用横向三等分，下排横向二等分（每格 512 宽）。
+LAYOUT_BOXES["3t2b"] = [
+    [-_HY, -_HX, 0, _C3A], [-_HY, _C3A, 0, _C3B], [-_HY, _C3B, 0, _HX],
+    [0, -_HX, _HY, 0], [0, 0, _HY, _HX],
+]
+
 _PH_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
@@ -207,14 +250,19 @@ _SYSTEM = """你是漫画编剧，也负责把每一页写成**生图模型能�
   "style": "画风串（英文，见下）",
   "cast": {"角色名": "英文外形串", "另一个角色": "…"},
   "pages": [
-    {"n": 1, "layout": "single", "scene": "英文场景串",
+    {"n": 1, "layout": "3t2b",
+     "plan": {"key_panel": 4,
+              "shots": ["close-up", "medium shot", "close-up", "wide shot", "wide shot"]},
+     "scene": "英文场景串",
      "panels": [{"desc": "英文画面描述", "bubble": "", "sfx": "", "caption": ""}]}
   ]
 }
 
 # 字段规则
 
-**style**：**只写光**，不写画法。英文 12~25 词，说清光源方向、色温、软硬。
+**style**：**只写光**，不写画法。**必须用英文写**，一个中文字都不要（这条链路的
+positive 提示词是英文的，中途夹一段中文会让光照描述被截断）。英文 12~25 词，
+说清光源方向、色温、软硬。
 画风（二次元赛璐璐）由系统固定的 meta tag + 7 个 LoRA 权重决定，**你不需要
 也不许写任何画法词**——不要出现 `cel shading` / `lineart` / `二阶色` / `平涂`
 这类描述，写了反而会和负向池打架。例：
@@ -228,6 +276,21 @@ _SYSTEM = """你是漫画编剧，也负责把每一页写成**生图模型能�
 每页都长在手上）。key 用**英文小写单词**：woman / man / girl / boy / cat / old_man。例：
   "woman": "a young woman with long black hair tied up high, a white long-sleeved robe, a dark blue sash"
 
+**plan**（每页一条，**必须写在 scene 和 panels 之前**）：
+  先想清楚整页怎么走，再动笔写每一格。这是防止「六格全画中景、整页平淡」的唯一手段——
+  逐格局部决策必然产出一模一样的构图。三个键：
+  - `key_panel`：这一页的**视觉重心**是第几格。必须是格数最大的那一格
+    （3t2b 是第 4 或第 5 格；3x2 任选；2x2 任选）。整页最贵的那个画面放这里。
+  - `shots`：每格的景别，英文，**长度必须等于格数**，按顺序对应。
+    相邻两格不许同景别，整页至少三档（close-up / medium shot / wide shot）。
+  - `state`：这一页的**穿着与状态轨迹**，一句话说清哪几格什么状态、从第几格起变化。
+    例：`panels 1-3 wearing the black feathered gown; panels 4-5 completely nude,
+    the gown lying on the stage floor behind her`。
+    这是治「上一格脱了、下一格又穿回去」的唯一手段——`cast` 里写的是常穿的衣服，
+    模型每格都会默认把它画回来，必须靠这句轨迹压住。
+  写完 plan 之后，下面每一格的 `desc` 必须**按 shots 定的景别、按 state 定的状态执行**，
+  不许临时改。
+
 **scene**（每页一条）：这一页发生在哪，英文 15~40 词，写清地点、时间、光源、
 两三个具体物件。
 
@@ -238,22 +301,41 @@ _SYSTEM = """你是漫画编剧，也负责把每一页写成**生图模型能�
 浴室+厨房混合背景）。页数给得不够时，宁可只画前几个地点，也不要跨地点压进一页。
 
 **panels**：格数必须和 layout 完全一致：
-  single=1格 / 2h=2格 / 3h=3格 / 3t=3格 / 2x2=4格 / 3x2=6格
+  single=1格 / 2h=2格 / 3h=3格 / 3t=3格 / 2x2=4格 / 3x2=6格 / 3t2b=5格
 
 **desc**（每格）：英文 25~60 词，一到三句，按这个顺序写：
-  ① 谁在做什么（角色一律写 {角色名} 占位符，**不要重复写外形**）
-  ② 景别：wide shot / medium shot / medium close-up / close-up / extreme close-up
+  ① **景别，直接放在第一句开头**：`A close-up of …` / `A wide shot of …` /
+     `A medium shot of …`。景别写在句子后半截，模型经常只取前半句，
+     最后整页变成同一个景别——这是整页平的直接原因。
+  ② 谁在做什么（角色一律写 {角色名} 占位符，**不要重复写外形**）
   ③ 机位：eye level / from above / from below / from behind / over the shoulder
   ④ 一个能让画面对的东西（手的动作、视线方向、前景物件、光线落点）
+  ⑤ **该角色的固定锚点，最多 6 词复述一次**：发色 + 瞳色 + 一个配饰。
+     每一格都要写，不能只在第一格写。六格共用一个 latent，不重复写锚点，
+     第 2 格开始头发颜色、瞳色、配饰就会各自漂移。
+  ⑥ **这一格最容易被画错的东西，用一句 no X covering Y 反向钉住**。例：
+     `no hands or hair covering her face`；`no speech bubble, no text in this panel`；
+     `no other hands in frame`。反向钉住比正面多写十个形容词有效。
+
+**把过程写成结果**：衣物、动作、姿态一律写成**已经完成的状态**，不用过程动词。
+写 `her cardigan already slipped off one shoulder`，不写 `she pulls her cardigan down`
+——过程动词会让同一格里的手数量失控，长出第三只手。
 
 **bubble**（对白气泡）：中文台词，**≤10 字**，像真人说话，不要书面语。
-  **每一页都必须给一句**，不许空着。**台词不要说画面已经画出来的事**（画出来就是废话）
-  ——写她此刻在想什么、在抱怨什么、在催谁。
+  **台词不要说画面已经画出来的事**（画出来就是废话）——写她此刻在想什么、
+  在抱怨什么、在催谁。
 **caption**（旁白框）：中文**≤10 字**，交代时间、地点、前情或内心状态。
-  **每一页都必须给一条**，和 bubble 同时出现，不许空着。
 **sfx**（拟声字）：中文 2~3 字，只在真的有动作声时写，每页最多 1 个。
   能写就写（脚步、水声、翻页），没有就留空。sfx 不占 bubble/caption 的额度。
   旁白框固定在画面左上、气泡固定在右下，两者不会打架，所以都写也不挤。
+
+**每页的排版节奏**：一页里**至少有一格有字**（caption 或 bubble 至少一条），
+不要整页空白。但**允许单格无字**——收尾定格、纯视觉冲击的那一格留空更有力。
+留空的那一格，编译时会自动追加 `No speech bubble and no text in this panel`，
+你不用自己写。**你绝对不要在 `desc` 里自己写这句话**——只有真的没有文字的格子
+才该有它，写进有气泡的格子会和气泡打架，气泡会被挤掉或者位置乱跑。
+也**不要为了填满硬凑一句废话**。
+⚠️ 别连着空两格以上：模型对空格的服从度靠这句声明维持，连续空格会失效。
 
 ⚠️ 字数是有实测根据的：moss 画中文，**11 字以内基本零错字**（11 字竖排两行气泡
 全对、9 字横排旁白全对），**12 字就开始出错**——实测「雪夜，客栈只剩一个客人。」
@@ -276,6 +358,20 @@ _SYSTEM = """你是漫画编剧，也负责把每一页写成**生图模型能�
 7. 局部特写可以写，模型画得出来：眼睛、手、剑身反光、鞋踩进雪里。
 8. 不要写真实人名、真实地名，角色名就用 cast 里的 key。
 9. 不要每一格都写「看着对方」，镜头要动起来。
+10. **状态必须跨格延续**。任何一格改掉了角色的状态（脱下衣服、衣服落地、头发湿透、
+    衣服被扯开、跌倒后沾了灰），**后面每一格都要用一句短语重申当前状态**
+    （`still completely nude`、`her coat still lying on the floor behind her`）。
+    不重申，模型会退回 `cast` 里那套默认服装——实测出现过「上一格全裸、下一格
+    又穿回原来的短裙套装」，读者直接出戏。
+11. **同一页里相邻的两格不要写同一句台词或旁白**。实测第 5、6 格都写「台下只剩光点」，
+    两格并排出现一模一样的字，观感上等于失误。每格的 `bubble` / `caption` 都要是
+    不同的句子。
+12. **一页必须有视觉落差，不要每格一样大**。这是「整页平淡」的根因，逐条执行：
+    - 至少一格 `close-up` 或 `extreme close-up`（脸、手、眼睛、局部）
+    - 至少一格 `wide shot`（全身 + 环境，人物在画面里可以很小）
+    - `key_panel` 那一格写全页信息量最大的画面：全身、双人同框、大情绪或大场面
+    - 其余格用 `medium shot` / `medium close-up` 过渡
+    全部写成中景或胸像 = 整页平，这是最常见的翻车方式。
 
 # 版式选择（配合叙事节奏）
   single —— 开场建立、结尾定格、一个很大的情绪画面
@@ -284,6 +380,9 @@ _SYSTEM = """你是漫画编剧，也负责把每一页写成**生图模型能�
   2x2    —— 连续动作的四拍，节奏要快
   3h     —— 三段式推进
   3x2    —— 单页讲完一整段小剧情：起承转合之后还有两个反应的位置
+  3t2b   —— 单页五格：上排三格快节奏推进（脸、局部、反应），下排两个大格
+            放高潮与收尾。**每格更宽、有大小对比，比 3x2 不平**，
+            适合「一个动作 + 两个反应 + 两个大画面」这种故事
 
 ⚠️ 3x2 的每一格只有 341 像素宽（2x2 是 512），**气泡和旁白加起来别超过 20 字**，
   格子越窄越吃字数；六格全塞满长台词，中文会开始漏字。
@@ -292,6 +391,13 @@ _SYSTEM = """你是漫画编剧，也负责把每一页写成**生图模型能�
 - 页与页之间必须往前走，**不要重复同一个构图**。
 - 最后一页要收住，可以无字。
 - 全篇是一个完整小故事，有起、有转折、有收。
+- **剧情要求什么就写什么，不要自行降级**。用户写「露出身体」就明确写
+  `completely nude` / `her bare breasts visible`，不要退成 `bare shoulders`
+  这种含糊词糊过去——含糊词会让模型只画到肩膀为止。
+  同时保持 `anatomically correct and natural`，并用一句 `no hands or hair
+  covering …` 钉住关键部位别被挡住。
+- 角色一律按成年写（除非用户明说年龄）：`an adult woman in her mid-twenties`，
+  不要用 `girl` / `teen` 泛指成年角色。
 
 # 示例（只示范格式和粒度，不要照抄内容）
 {
@@ -318,7 +424,16 @@ _SYSTEM = """你是漫画编剧，也负责把每一页写成**生图模型能�
 #   · 下面的 `_SYSTEM` 管「输出什么 JSON 结构」。
 # 两者**互补，谁也替代不了谁**——SKILL.md 通篇没有一句讲 title/style/cast/pages，
 # 而 `_SYSTEM` 也没讲分块和语序。所以系统提示是两份拼起来，不是二选一。
-_SKILL_MD_PATH = os.path.join(BASE_DIR, "skills", "moss-image-prompt", "SKILL.md")
+# 2026-10-31：改用**六格专用裁剪版**（4.4k 字符，原版 48.5k）。
+#
+# 原版是给「人手工写一张图 + 给采样参数」设计的，整篇塞进 system 后 88% 的
+# 提示词都在讲摄影档位、Negative 池、二次元画风通道、Layout JSON——这些在这条
+# 链路上要么由代码接管、要么由固定负向池接管，模型读完 4.8 万字才能开始干活。
+# 裁剪版只留「一格怎么写成模型能画准的英文」那几条。
+#
+# 原版仍被 `agents/moss/agent.json`（主页 moss 助手）与两份 skill.md 引用，
+# 所以**不改原文件**，只把这里指过去。要回退就把文件名改回 SKILL.md。
+_SKILL_MD_PATH = os.path.join(BASE_DIR, "skills", "moss-image-prompt", "SKILL.comic.md")
 _SKILL_CACHE = {"mtime": 0.0, "text": ""}
 _FRONTMATTER_RE = re.compile(r"^\s*---\s*\n.*?\n\s*---\s*\n", re.S)
 
@@ -339,7 +454,7 @@ _FRONTMATTER_RE = re.compile(r"^\s*---\s*\n.*?\n\s*---\s*\n", re.S)
 _SKILL_HEAD = """下面是一份 MOSS-Image 提示词规范，是所有画面描述的唯一写法依据。
 
 ┌────────────────────────────────────────────────────────────┐
-│ 先读：本任务的适用边界（它决定下面五万字里哪些条款管你）        │
+│ 先读：本任务的适用边界（它决定下面这份规范里哪些条款管你）        │
 └────────────────────────────────────────────────────────────┘
 
 这份规范是给「手工写一张图、并给出采样参数」的场景写的。**你的任务不是那个**：
@@ -354,9 +469,9 @@ _SKILL_HEAD = """下面是一份 MOSS-Image 提示词规范，是所有画面描
   ——画风由系统固定的 meta tag 和 7 个 LoRA 权重决定，你不需要也不许自己定。
 · §7 的毛孔基底、§11 负面池里封杀 `anime, illustration, 2d, cel shading` 那组
   ——不要照搬，也不要反过来在描述里堆画风词。
-· §14 的固定采样点（640×960 / 25 步 / cfg 3.5 / SLG 置空）——已换成
-  1024×1536 / 8 步 / cfg 3 / SLG 22，由脚本写死。§14 的证据强度声明只是标注，
-  不影响你要写的内容。
+· 原版 §14 的固定采样点，以及**一切分辨率 / 步数 / cfg / SLG 的具体数值**——
+  实际档位由脚本常量固定，且会随渠道调整；你不写参数，也不需要知道当前是
+  多少。§14 的证据强度声明只是标注，不影响你要写的内容。
 
 **三条铁律**：
 
@@ -374,9 +489,8 @@ _SKILL_HEAD = """下面是一份 MOSS-Image 提示词规范，是所有画面描
    服装在画面里交叉错位。
 
 **仍然适用的部分**（这才是你写 `desc` 的主要依据）：
-§2 词条清洗、§5 结构分流、§8 多人防克隆、§9 画面内文字、§11 自检清单的第
-2/5/6/7 条（衣物写成静态结果、多人互斥发色、液体描述、删掉器官与半裸词）、
-§15 Layout JSON schema。
+§1 词条清洗、§2 一人一块、§3 镜头距离、§4 年龄与体型锁、§5 液体写法、
+§6 多人防克隆、§7 图内文字、§8 输出前自检。
 
 ────────────────────────────────────────────────────────────
 以下是规范全文：
@@ -445,10 +559,17 @@ def _user_brief(brief, pages, style, ratio, layout=""):
     lines.append("画面比例：竖版 %s。" % ratio)
     # 每页两种文字都要有：这是版面要求，不是叙事需要。放在 user 段而不是
     # system 段，是因为 system 里有五万字的 SKILL.md，规则容易被稀释。
-    lines.append("**每页的文字**：`caption`（旁白，≤10 字，交代时间/地点/状态）和 "
-                 "`bubble`（台词，≤10 字）**两条都必须写，都不许空**。"
+    lines.append("**每页的文字**：一页里**至少有一格有字**（`caption` 旁白 ≤10 字，"
+                 "或 `bubble` 台词 ≤10 字）。**允许单格无字**——收尾定格、纯视觉冲击"
+                 "的那一格留空更有力，编译时会自动补一句 "
+                 "`No speech bubble and no text in this panel`，你不用自己写。"
+                 "但别为了填满硬凑废话，也别连着空两格以上。"
                  "旁白框钉在左上、气泡钉在右下，位置由脚本给定，两者不会互相挤压。"
                  "`sfx` 有动作声就写，没有留空。")
+    lines.append("**每页先写 `plan` 再写 `panels`**：`plan.key_panel` 是整页视觉重心"
+                 "（必须落在最大那格），`plan.shots` 是每格景别、长度等于格数、"
+                 "相邻不许相同、整页至少三档。写完 plan 再逐格写 `desc`，"
+                 "景别照 plan 执行——不先规划整页，六格会全变成一样的胸像。")
     lines.append("")
     lines.append("按前面的 schema 直接输出 JSON。")
     return "\n".join(lines)
@@ -505,6 +626,26 @@ def check(spec):
                           % (n, lay, "/".join(LAYOUTS)))
             continue
         want = len(LAYOUTS[lay][1])
+        # plan 校验（只报不拦）：没有 plan 的页基本就是「逐格局部决策」，
+        # 出图八成是整页同景别。这里把它报出来，别等出图才发现平。
+        plan = p.get("plan") if isinstance(p.get("plan"), dict) else {}
+        shots = plan.get("shots") or []
+        if not plan:
+            issues.append("第 %s 页没有 plan（缺整页视觉规划）" % n)
+        else:
+            if len(shots) != want:
+                issues.append("第 %s 页 plan.shots 给了 %d 个，应为 %d 个"
+                              % (n, len(shots), want))
+            else:
+                norm = [str(s or "").strip().lower() for s in shots]
+                for k in range(1, len(norm)):
+                    if norm[k] and norm[k] == norm[k - 1]:
+                        issues.append("第 %s 页 plan.shots 第 %d、%d 格景别相同（%s）"
+                                      % (n, k, k + 1, norm[k]))
+                levels = {s for s in norm if s}
+                if len(levels) < 3:
+                    issues.append("第 %s 页 plan.shots 只有 %d 档景别，整页会平"
+                                  % (n, len(levels)))
         panels = p.get("panels") or []
         if len(panels) != want:
             issues.append("第 %s 页 %s 要 %d 格，给了 %d 格"
@@ -616,7 +757,9 @@ def build_page_prompt(spec, page, with_text=True):
             cap.append(first.rstrip(" .,") + ".")
     if scene:
         cap.append(scene.rstrip(" .,") + ".")
-    cap.append(_TAIL % light)
+
+    # 尾句推迟到循环之后：要先知道这一页到底有没有文字，才能选 `_TAIL` 还是
+    # `_TAIL_NOTE`（见 `_TAIL_NOTE` 注释里那对自相矛盾的句子）。
 
     seen = set()
     items = []
@@ -624,6 +767,24 @@ def build_page_prompt(spec, page, with_text=True):
     for i, panel in enumerate(panels):
         cell = boxes[i] if i < len(boxes) else boxes[-1]
         desc = _fill_page((panel.get("desc") or "").strip(), cast, seen)
+        # 2026-10-31：**逐格**声明空格子。
+        # 原来只有「整页一个字都没有」才追加 `_NO_TEXT`，一格有字一格没字时
+        # 什么都不声明，模型会按「每格都该有气泡」的版面先验自己补一个
+        # （实测第 5 格凭空冒出了第 4 格的台词）。这里改成空格子自己说清楚。
+        cell_texts = [panel.get(k) or "" for k in ("caption", "bubble", "sfx")]
+        has_cell_text = any(t.strip() for t in cell_texts)
+        if with_text and not has_cell_text:
+            # 没字的格子：模型自己写过的就不重复追加
+            if not _NO_TXT_CLAUSE.search(desc):
+                body = desc.rstrip(" .")
+                # 不 strip：`_NO_TEXT_CELL` 自带前导空格，拼出来才是
+                # `…covering her body. No speech bubble…`
+                desc = (body + "." if body else "") + _NO_TEXT_CELL
+        elif with_text:
+            # 有字的格子：模型误写的否定句必须清掉，否则和气泡打架
+            cleaned = _NO_TXT_CLAUSE.sub("", desc).strip(" ,;.")
+            if cleaned:
+                desc = cleaned + "."
         items.append({
             "label": "character",
             "caption": desc,
@@ -648,6 +809,9 @@ def build_page_prompt(spec, page, with_text=True):
 
     if not has_text:
         cap.append(_NO_TEXT)
+    # 有文字才说「有清晰中文气泡」，没文字就换成「页面上没有文字」——
+    # 两句不能同时出现（见 `_TAIL_NOTE` 注释）。
+    cap.append((_TAIL if has_text else _TAIL_NOTE) % light)
 
     summary = {
         "meta": list(_META),

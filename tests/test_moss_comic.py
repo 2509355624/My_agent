@@ -78,12 +78,18 @@ class LayoutGeometryTest(unittest.TestCase):
 class SixPanelPromptTest(unittest.TestCase):
     @staticmethod
     def _spec(n=6, layout="3x2"):
+        # 2026-10-31 起 `check()` 会校验 plan（整页视觉规划）：shots 长度要
+        # 等于格数、相邻不许同景别、整页至少三档。测试 spec 必须带上，
+        # 否则 `test_check_passes_full_six` 会多报一条「没有 plan」。
+        shots = ["wide shot", "medium shot", "medium close-up",
+                 "wide shot", "medium shot", "close-up"][:n]
         return {
             "title": "开门",
             "style": "warm indoor window light from the upper left",
             "cast": {"woman": "a young woman with pale lilac hair, a white robe"},
             "pages": [{
                 "n": 1, "layout": layout,
+                "plan": {"key_panel": 1, "shots": shots},
                 "scene": "a small apartment doorway in the morning",
                 "panels": [{"desc": "Wide shot of {woman} standing in the doorway holding "
                                     "a grocery bag, eye level, warm light from the corridor "
