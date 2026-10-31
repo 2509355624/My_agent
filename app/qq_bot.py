@@ -1279,7 +1279,11 @@ class SessionRunner:
             # 四格。必须同样排在直达管道**前面**——这个词里含渠道词 `moss`，
             # 交给 direct_gen 会画出一张写着「moss漫画」四个字的图。
             # 编剧/出图都在后台线程里跑（约 90 秒），这条消息线程立刻放行。
-            moss_hit, moss_brief, moss_tip = moss_bot.parse(own_text)
+            # 2026-10-31：加触发门槛——必须真 @，或者句子里带「大大怪」，
+            # 只写「moss漫画」不接管（群里误触发一次就是 100~250 秒的出图）。
+            # 私聊没有 @ 这回事，直接放行。
+            moss_hit, moss_brief, moss_tip = moss_bot.parse(
+                own_text, at_me=(at_me or self.target == "private"))
             if moss_hit:
                 try:
                     if not moss_brief:

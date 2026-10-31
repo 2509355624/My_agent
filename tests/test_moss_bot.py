@@ -2,6 +2,10 @@
 
 出图那条链路靠 `tests/test_moss_api.py` 和手工实跑覆盖——这里只钉住
 「什么消息该被接管、回执长什么样」这两件纯逻辑。
+
+2026-10-31 起多了一条触发门槛：**必须 @ 机器人，或句子里出现「大大怪」**。
+所以下面凡是「只写 moss漫画」的用例都要显式传 `at_me=True`（模拟真 @），
+而 `GateTest` 专门钉住「两样都没有就不接管」。
 """
 
 import unittest
@@ -11,18 +15,18 @@ from app import moss_bot
 
 class ParseTest(unittest.TestCase):
     def test_plain(self):
-        hit, brief, tip = moss_bot.parse("moss漫画 雨夜便利店，共撑一把伞")
+        hit, brief, tip = moss_bot.parse("moss漫画 雨夜便利店，共撑一把伞", at_me=True)
         self.assertTrue(hit)
         self.assertEqual(brief, "雨夜便利店，共撑一把伞")
         self.assertEqual(tip, "")
 
     def test_space_between_words(self):
-        hit, brief, _ = moss_bot.parse("moss 漫画 一只橘猫跳上主人的胸口")
+        hit, brief, _ = moss_bot.parse("moss 漫画 一只橘猫跳上主人的胸口", at_me=True)
         self.assertTrue(hit)
         self.assertEqual(brief, "一只橘猫跳上主人的胸口")
 
     def test_case_insensitive(self):
-        hit, brief, _ = moss_bot.parse("MOSS漫画 雨夜")
+        hit, brief, _ = moss_bot.parse("MOSS漫画 雨夜", at_me=True)
         self.assertTrue(hit)
         self.assertEqual(brief, "雨夜")
 
@@ -30,31 +34,32 @@ class ParseTest(unittest.TestCase):
         """群消息前面带「昵称：」和机器人名字——都不能进剧情。
 
         造卡那边踩过：昵称被当成了角色名，卡就叫「大大怪」。
+        这条不需要 at_me：文本里就有「大大怪」，本身满足门槛。
         """
         hit, brief, _ = moss_bot.parse("大大怪，moss漫画 雨夜便利店")
         self.assertTrue(hit)
         self.assertEqual(brief, "雨夜便利店")
 
     def test_hash_prefix(self):
-        hit, brief, _ = moss_bot.parse("#moss漫画 一句话剧情")
+        hit, brief, _ = moss_bot.parse("#moss漫画 一句话剧情", at_me=True)
         self.assertTrue(hit)
         self.assertEqual(brief, "一句话剧情")
 
     def test_bare_word_returns_usage(self):
-        hit, brief, tip = moss_bot.parse("moss漫画")
+        hit, brief, tip = moss_bot.parse("moss漫画", at_me=True)
         self.assertTrue(hit)
         self.assertEqual(brief, "")
         self.assertEqual(tip, moss_bot.USAGE)
 
     def test_question_is_not_a_brief(self):
         for text in ("moss漫画 怎么用", "moss漫画 支持什么", "moss漫画 是什么"):
-            hit, brief, tip = moss_bot.parse(text)
+            hit, brief, tip = moss_bot.parse(text, at_me=True)
             self.assertTrue(hit, text)
             self.assertEqual(brief, "", text)
             self.assertEqual(tip, moss_bot.USAGE, text)
 
     def test_one_char_is_not_a_brief(self):
-        hit, brief, tip = moss_bot.parse("moss漫画 a")
+        hit, brief, tip = moss_bot.parse("moss漫画 a", at_me=True)
         self.assertTrue(hit)
         self.assertEqual(brief, "")
         self.assertEqual(tip, moss_bot.USAGE)
@@ -63,6 +68,39 @@ class ParseTest(unittest.TestCase):
         """silver漫画 是另一条路（多图批量），不能让这边吃掉。"""
         for text in ("今天天气不错", "silver漫画 10个 雷电将军", "anima 女骑士"):
             self.assertEqual(moss_bot.parse(text), (False, "", ""), text)
+
+
+class GateTest(unittest.TestCase):
+    """触发门槛（2026-10-31 用户要求）。
+
+    只写「moss漫画」不接管；@ 了、或者句子里带「大大怪」，才接管。
+    """
+
+    def test_bare_word_without_at_or_name_is_ignored(self):
+        for text in ("moss漫画 雨夜便利店", "moss小漫画 开门发现别的男人",
+                     "moss 漫画 一只猫", "MOSS漫画 雨夜"):
+            self.assertEqual(moss_bot.parse(text), (False, "", ""), text)
+
+    def test_at_me_is_enough(self):
+        hit, brief, _ = moss_bot.parse("moss漫画 雨夜便利店", at_me=True)
+        self.assertTrue(hit)
+        self.assertEqual(brief, "雨夜便利店")
+
+    def test_name_keyword_is_enough(self):
+        for text in ("大大怪 moss漫画 雨夜便利店", "大大怪：moss漫画 雨夜便利店",
+                     "喊一下大大怪，moss漫画 雨夜便利店"):
+            hit, brief, _ = moss_bot.parse(text)
+            self.assertTrue(hit, text)
+            self.assertEqual(brief, "雨夜便利店", text)
+
+    def test_name_does_not_leak_into_brief(self):
+        """「大大怪」在词前面，本身就在 rest 之外，不该混进剧情。"""
+        _, brief, _ = moss_bot.parse("大大怪 moss小漫画 开门发现别的男人")
+        self.assertEqual(brief, "开门发现别的男人")
+
+    def test_usage_tells_people_how_to_trigger(self):
+        self.assertIn("大大怪", moss_bot.USAGE)
+        self.assertIn("@", moss_bot.USAGE)
 
 
 class SmallComicWordTest(unittest.TestCase):
@@ -74,7 +112,7 @@ class SmallComicWordTest(unittest.TestCase):
     def test_small_comic_hit(self):
         for text in ("moss小漫画 雨夜便利店", "moss 小漫画 雨夜便利店",
                      "moss 小 漫画 雨夜便利店", "MOSS小漫画 开门"):
-            hit, brief, tip = moss_bot.parse(text)
+            hit, brief, tip = moss_bot.parse(text, at_me=True)
             self.assertTrue(hit, text)
             self.assertEqual(tip, "", text)
             self.assertTrue(brief, text)
@@ -85,7 +123,7 @@ class SmallComicWordTest(unittest.TestCase):
         self.assertEqual(brief, "开门发现别的男人")
 
     def test_small_comic_bare_returns_usage(self):
-        hit, brief, tip = moss_bot.parse("moss小漫画")
+        hit, brief, tip = moss_bot.parse("moss小漫画", at_me=True)
         self.assertTrue(hit)
         self.assertEqual(brief, "")
         self.assertEqual(tip, moss_bot.USAGE)
