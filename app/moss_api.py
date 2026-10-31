@@ -86,7 +86,18 @@ STATE_ROOT = os.path.join(BASE_DIR, "state", "moss_comic")
 # `moss-light`（moss光影），现在 `moss-qunyou` 只挂 nai5 一个——漫画台跟着
 # 变成 nai5 单挂，要四件套得另指 `moss-light`。
 SKILL = "moss-qunyou"
-STEPS = 25
+# 2026-10-31：moss 小漫画频道定档 **30 步 / cfg 3.5**（用户拍板）。
+#
+# 25 → 30 的依据是上面那张实测表：25→30 多花约 12 秒，与 50 步的像素差从
+# 7.22 降到 6.19，肉眼看不出差别，但**一格文字的面积越小越吃步数**——2×2
+# （每格 512 宽）在 25 步就够，3×2（每格 341 宽）留一点余量更稳。
+#
+# ⚠️ cfg 从 3.0 提到 3.5 **不是纯画质参数**。`skills/moss-qunyou/skill.md`
+# 第 122 行记着：`<|pose_and_clothing_neg|>` 那段结构化负向**只在 cfg>1 时
+# 起作用**。提 cfg 等于把整个负向池的拽力一起加大，构图可能被往「床上/脱衣」
+# 方向带。跑几张如果发现人物姿态被拽跑，第一件事是把这里退回 3.0。
+STEPS = 30
+CFG = 3.5
 # 分辨率：群友原版 1024×1536。实测这个尺寸在 12GB 卡上能出图（8 步 72 秒），
 # 降到 896×1344 反而在采样阶段出纯噪声，所以保持原版尺寸不动。
 # 改这里必须同步 `moss_comic._CANVAS_W/_CANVAS_H`，否则 bbox 会整体偏。
@@ -413,6 +424,9 @@ def _draw(page, prompt, base_wf, seed, out_dir, title):
     wf[lat]["inputs"]["width"] = WIDTH
     wf[lat]["inputs"]["height"] = HEIGHT
     wf[_node_id(wf, "KSampler", "steps")]["inputs"]["steps"] = STEPS
+    # cfg 同样只认这里的常量，不吃模板里的 3.0（`_node_id` 找不到就抛，
+    # 不退回写死编号）。
+    wf[_node_id(wf, "KSampler", "cfg")]["inputs"]["cfg"] = CFG
     n = page.get("n")
     wf[_node_id(wf, "SaveImage", "filename_prefix")]["inputs"]["filename_prefix"] = (
         "MossComic_%s_P%02d" % (_slug(title), n))

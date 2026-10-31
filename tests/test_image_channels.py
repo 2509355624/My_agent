@@ -2446,13 +2446,18 @@ class MossFourStepRetiredTest(unittest.TestCase):
                 self.assertNotIn(gone, ids)
         self.assertIn("moss-qunyou", ids)
 
-    def test_the_only_moss_channel_runs_twenty_five_steps(self):
-        """步数钉死在 25（2026-10-29 用户定档：四 LoRA 风格组合 + 25 步）——
-        别退回 8 / 30 / 50。
+    def test_moss_comic_runs_thirty_steps_while_the_pad_template_stays_25(self):
+        """漫画台 30 步 / cfg 3.5，跑图台模板仍 25 步 / cfg 3.0（2026-10-31）。
 
-        两处都要对：工作流文件（跑图台直接吃它）和 `moss_api.STEPS`
-        （漫画台 `_draw()` 提交前会再覆写一次，两边漂移就会出现
-        「跑图台 25 步、漫画台 30 步」这种诡异差异）。
+        **这是刻意分档，不是漂移。** 两边的取值路径本来就不一样：
+
+        · 跑图台直接吃 `skills/moss-qunyou/workflow.json` → 25 步 / cfg 3.0，
+          用户在跑图台可以手填覆盖；
+        · 漫画台 `_draw()` 提交前按 `moss_api.STEPS / CFG` 覆写 → 30 步 / cfg 3.5，
+          六格版式（每格仅 341px 宽）留一点采样余量。
+
+        所以这里不要求两处相等，但**两边的值都必须写死断言**：任何一边被手滑
+        改掉（作者、编辑器、一次 merge），这里立刻红。
         """
         from app import moss_api
 
@@ -2460,8 +2465,10 @@ class MossFourStepRetiredTest(unittest.TestCase):
         samplers = [n for n in wf.values()
                     if n.get("class_type") in ("KSampler", "KSamplerAdvanced")]
         self.assertEqual(len(samplers), 1)
-        self.assertEqual(samplers[0]["inputs"]["steps"], 25)
-        self.assertEqual(moss_api.STEPS, 25)
+        self.assertEqual(samplers[0]["inputs"]["steps"], 25)     # 跑图台模板
+        self.assertEqual(samplers[0]["inputs"]["cfg"], 3.0)
+        self.assertEqual(moss_api.STEPS, 30)                     # 漫画台覆写
+        self.assertEqual(moss_api.CFG, 3.5)
         self.assertEqual(moss_api.SKILL, "moss-qunyou")
 
     def test_nai5_slot_is_on_by_default(self):

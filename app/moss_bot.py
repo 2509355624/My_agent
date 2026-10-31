@@ -1,4 +1,4 @@
-"""QQ moss 漫画：`moss漫画 <一句话剧情>` → 一页四格。
+"""QQ moss 漫画：`moss漫画 <一句话剧情>`（也认 `moss小漫画`）→ 一页六格。
 
 ## 为什么不用 comic_agent
 
@@ -6,7 +6,8 @@
 后期再用 qwen 贴气泡。moss 的文本编码器是 Qwen3.5-9B，吃自然语言、不吃
 `(tag:1.2)` 那套加权（工作流里连 LoRA 槽都空着），所以这边直接走
 `moss_comic`：编剧模型写剧本 → 脚本拼整页提示词 → **一页一次生成**。
-一页四格、720×1280 / 30 步、实测 81 秒。
+
+一页六格 3×2、1024×1536 / 30 步 / cfg 3.5（2026-10-31 从四格 25 步升级）。
 
 两边零 import，只共用 `image_jobs` 队列和 `moss_api` 的落盘/出图函数。
 
@@ -44,17 +45,20 @@ from app.config import QQ_AGENT_ID
 log = logging.getLogger("moss_bot")
 
 WORD = "moss漫画"
-_WORD_RE = re.compile(r"moss\s*漫画", re.I)
-LAYOUT = "2x2"
+# 「小」是可选的（2026-10-31）：用户口头说的是「moss 小漫画」，群里有人打
+# 「moss漫画」、也有人打「moss 小 漫画」。`小\s*` 挂在 `moss\s*` 后面，
+# 三种写法都落进同一套逻辑，不额外维护第二个关键词。
+_WORD_RE = re.compile(r"moss\s*(?:小\s*)?漫画", re.I)
+LAYOUT = "3x2"
 PAGES = 1
 
 # 「moss漫画怎么用」「支持什么」——问句不是需求，不挡住会被当成一句剧情，
-# 最后画出一张主题叫「怎么用」的四格。
+# 最后画出一张主题叫「怎么用」的六格。
 _ASK_RE = re.compile(r"^(怎么|如何|咋|怎样|什么|啥|能不能|可不可以|可以|支持|是啥|是什)")
 
-USAGE = ("moss漫画这样用：`moss漫画 <一句话剧情>`\n"
-         "例：`moss漫画 雨夜便利店，两个陌生人共用一把伞`\n"
-         "一页四格，编剧自己写分镜和台词，约 90 秒。")
+USAGE = ("moss小漫画这样用：`moss小漫画 <一句话剧情>`\n"
+         "例：`moss小漫画 雨夜便利店，两个陌生人共用一把伞`\n"
+         "一页六格，编剧自己写分镜和台词，约 100 秒。")
 
 
 # ─── 识别 ─────────────────────────────────────────────
@@ -117,11 +121,14 @@ def _work(target, target_id, brief, reply_to, sender_uin=None):
     d = moss_api._new_task_dir(spec)            # noqa: SLF001  同包复用
     moss_api._save(d, spec, raw)                # noqa: SLF001
     title = spec.get("title") or "无题"
+    # 格数从 spec 里读，不拿 LAYOUT 反推：`check()` 只报不拦，编剧偶尔会少给
+    # 一格（5 格也会照画），回执写死「六格」就会和图对不上。
+    cells = len((spec.get("pages") or [{}])[0].get("panels") or [])
 
     # 回执①：标题 + 每格台词。看不懂画面，但看得懂台词跑没跑偏。
     say(target, target_id,
-        "🀄 moss漫画《%s》\n%s\n四格 · %d 步 · 约 90 秒"
-        % (title, _lines(spec), moss_api.STEPS), reply_to)
+        "🀄 moss小漫画《%s》\n%s\n%d 格 · %d 步 · cfg %s · 约 100 秒"
+        % (title, _lines(spec), cells, moss_api.STEPS, moss_api.CFG), reply_to)
 
     seed = random.randint(1, 2 ** 31 - 1)
     try:
@@ -139,8 +146,9 @@ def _work(target, target_id, brief, reply_to, sender_uin=None):
         return
 
     secs = round(time.time() - t0, 1)
-    caption = ("《%s》· %d 步 · %dx%d · 共 %.0f 秒 · seed %d"
-               % (title, moss_api.STEPS, moss_api.WIDTH, moss_api.HEIGHT, secs, seed))
+    caption = ("《%s》· %d 格 · %d 步 · cfg %s · %dx%d · 共 %.0f 秒 · seed %d"
+               % (title, cells, moss_api.STEPS, moss_api.CFG,
+                  moss_api.WIDTH, moss_api.HEIGHT, secs, seed))
     _send_image(target, target_id, rel, caption, reply_to, sender_uin)
 
 

@@ -65,6 +65,42 @@ class ParseTest(unittest.TestCase):
             self.assertEqual(moss_bot.parse(text), (False, "", ""), text)
 
 
+class SmallComicWordTest(unittest.TestCase):
+    """「moss小漫画」也走同一条路（2026-10-31 用户口头就这么说）。
+
+    不额外维护第二个关键词：`小\\s*` 挂在 `moss\\s*` 后面，三种写法落一套逻辑。
+    """
+
+    def test_small_comic_hit(self):
+        for text in ("moss小漫画 雨夜便利店", "moss 小漫画 雨夜便利店",
+                     "moss 小 漫画 雨夜便利店", "MOSS小漫画 开门"):
+            hit, brief, tip = moss_bot.parse(text)
+            self.assertTrue(hit, text)
+            self.assertEqual(tip, "", text)
+            self.assertTrue(brief, text)
+
+    def test_small_comic_still_drops_prefix(self):
+        hit, brief, _ = moss_bot.parse("大大怪：moss小漫画 开门发现别的男人")
+        self.assertTrue(hit)
+        self.assertEqual(brief, "开门发现别的男人")
+
+    def test_small_comic_bare_returns_usage(self):
+        hit, brief, tip = moss_bot.parse("moss小漫画")
+        self.assertTrue(hit)
+        self.assertEqual(brief, "")
+        self.assertEqual(tip, moss_bot.USAGE)
+
+    def test_layout_is_six_panels(self):
+        """单页六格：LAYOUT 和 LAYOUTS 必须对得上，不然 check 会报格数不符。"""
+        from app import moss_comic
+        self.assertEqual(moss_bot.LAYOUT, "3x2")
+        self.assertEqual(moss_bot.PAGES, 1)
+        self.assertEqual(len(moss_comic.LAYOUTS[moss_bot.LAYOUT][1]), 6)
+
+    def test_usage_mentions_six_panels(self):
+        self.assertIn("六格", moss_bot.USAGE)
+
+
 class LinesTest(unittest.TestCase):
     SPEC = {"pages": [{"n": 1, "layout": "2x2", "panels": [
         {"desc": "a", "caption": "雨夜，忘带伞。"},

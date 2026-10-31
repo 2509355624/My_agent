@@ -62,6 +62,19 @@ LAYOUTS = {
         ["Top left panel", "Top right panel", "Bottom left panel", "Bottom right panel"],
         "2×2 四格：快节奏连续动作",
     ),
+    # 2026-10-31：moss 小漫画频道要「单页讲完一个小故事」。
+    # 为什么是 3×2 而不是 5 格：5 格只能写成「上一下四」或「二上三下」，
+    # 版式句说不准，模型会自己乱分格，格子边界一歪气泡就压线上；3×2 是规整
+    # 网格，一句话能钉死。代价是每格宽度从 512 掉到 341（高度 768 没变），
+    # 气泡/旁白的 bbox 是按格内比例算的，会自动跟着缩。
+    "3x2": (
+        "A comic page divided into exactly six panels in a two by three grid, three "
+        "equal panels in the top row and three equal panels in the bottom row, all "
+        "separated by thin white gutters.",
+        ["Top left panel", "Top middle panel", "Top right panel",
+         "Bottom left panel", "Bottom middle panel", "Bottom right panel"],
+        "3×2 六格：单页讲完一段小剧情（起承转合 + 两个反应）",
+    ),
 }
 
 # 画风预设（`--style` 可以直接传这些名字）
@@ -158,6 +171,25 @@ LAYOUT_BOXES = {
             [0, -_HX, _HY, 0], [0, 0, _HY, _HX]],
 }
 
+
+def _thirds():
+    """横向三等分的两个切点（画布中心为原点）。
+
+    单独算成函数而不是写死 `-171 / 170`：换尺寸时 `_HX` 变了，这里跟着走，
+    不用再去改一串魔数。1024 宽下是 -171 / 170（三段 341/341/342）。
+    """
+    step = (2 * _HX) // 3
+    a = -_HX + step
+    return a, a + step
+
+
+_C3A, _C3B = _thirds()
+
+LAYOUT_BOXES["3x2"] = [
+    [-_HY, -_HX, 0, _C3A], [-_HY, _C3A, 0, _C3B], [-_HY, _C3B, 0, _HX],
+    [0, -_HX, _HY, _C3A], [0, _C3A, _HY, _C3B], [0, _C3B, _HY, _HX],
+]
+
 _PH_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
@@ -206,7 +238,7 @@ _SYSTEM = """你是漫画编剧，也负责把每一页写成**生图模型能�
 浴室+厨房混合背景）。页数给得不够时，宁可只画前几个地点，也不要跨地点压进一页。
 
 **panels**：格数必须和 layout 完全一致：
-  single=1格 / 2h=2格 / 3h=3格 / 3t=3格 / 2x2=4格
+  single=1格 / 2h=2格 / 3h=3格 / 3t=3格 / 2x2=4格 / 3x2=6格
 
 **desc**（每格）：英文 25~60 词，一到三句，按这个顺序写：
   ① 谁在做什么（角色一律写 {角色名} 占位符，**不要重复写外形**）
@@ -251,6 +283,10 @@ _SYSTEM = """你是漫画编剧，也负责把每一页写成**生图模型能�
   3t     —— 大场面推进 + 底下两个细节特写（手、眼睛、道具）
   2x2    —— 连续动作的四拍，节奏要快
   3h     —— 三段式推进
+  3x2    —— 单页讲完一整段小剧情：起承转合之后还有两个反应的位置
+
+⚠️ 3x2 的每一格只有 341 像素宽（2x2 是 512），**气泡和旁白加起来别超过 20 字**，
+  格子越窄越吃字数；六格全塞满长台词，中文会开始漏字。
 
 # 叙事要求
 - 页与页之间必须往前走，**不要重复同一个构图**。
