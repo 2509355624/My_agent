@@ -132,6 +132,11 @@
   .steps-box input:focus { border-color: var(--accent); }
   .steps-box .hint { color: var(--text-mute); font-size: 11px; }
   .composer .spacer { flex: 1; }
+  /* 负向提示词（2026-10-31）：留空 = 只用渠道模板那段。NAI 云端渠道、
+     以及没有 CLIP 负向节点的渠道（如 qwen-charsheet）整块藏起来。 */
+  .neg-box { display: none; margin-top: 8px; }
+  .neg-box.on { display: block; }
+  .neg-box textarea { min-height: 36px; font-size: 12px; }
   .btn { background: var(--bg-input); color: var(--text); border: 1px solid var(--border);
     border-radius: var(--radius-sm); padding: 6px 14px; font: inherit; font-size: 13px;
     cursor: pointer; }
@@ -261,6 +266,10 @@
         </div>
         <textarea id="prompt" rows="2"
           placeholder="提示词：英文 tag 或自然句子都行（按渠道习惯写，silver/krea2/anima 用 tag 串，qwen 用完整句子）"></textarea>
+        <div class="neg-box" id="negBox">
+          <textarea id="neg" rows="2"
+            placeholder="负向提示词：追加在渠道模板的负向后面（留空 = 只用模板；不要写正向内容）"></textarea>
+        </div>
         <div class="bar">
           <span class="cur">渠道：<b id="curChan">未选</b></span>
           <span class="steps-box" id="stepsBox">
@@ -268,6 +277,12 @@
             <input id="stepsIn" type="number" min="1" max="100" step="1"
                    placeholder="默认" title="留空按渠道模板；填了只影响这次提交">
             <span class="hint" id="stepsHint"></span>
+          </span>
+          <span class="steps-box" id="cfgBox">
+            <label for="cfgIn">CFG</label>
+            <input id="cfgIn" type="number" min="0" max="20" step="0.1"
+                   placeholder="默认" title="留空按渠道模板；填了只影响这次提交">
+            <span class="hint" id="cfgHint"></span>
           </span>
           <span class="qdepth" id="qdepth" style="display:none"></span>
           <span class="spacer"></span>
@@ -310,6 +325,10 @@ let PINNED_AUTO = false;    // PINNED 是轮询自动展示的（true）还是�
 let POLL = null;
 // 步数（2026-10-29）：留空 = 按渠道模板；填了只影响这一次提交，记在本机。
 let STEPS = localStorage.getItem('gp_steps') || '';
+// CFG / 负向（2026-10-31）：同一套约定——留空按模板、只影响本次、记在本机。
+// 负向在后端是**追加**到模板负向池后面，不是替换。
+let CFG = localStorage.getItem('gp_cfg') || '';
+let NEG = localStorage.getItem('gp_neg') || '';
 let NAI_ARTISTS = JSON.parse(localStorage.getItem('gp_nai_artists') || '[]');
 
 function isNai() { return CUR === 'nai' || CUR === 'nai_wide'; }
@@ -444,7 +463,8 @@ async function loadChannels() {
     bindHoverCard(el, () => ({
       title: (c.label && c.label !== c.id) ? (c.label + '（' + c.id + '）') : c.id,
       body: [c.summary || '', c.cloud ? '云端渠道（NAI）' : '',
-             (c.steps ? '默认步数 ' + c.steps : '')].filter(Boolean).join('\n')
+             (c.steps ? '默认步数 ' + c.steps : ''),
+             (!c.cloud && c.cfg ? '默认 CFG ' + c.cfg : '')].filter(Boolean).join('\n')
     }));
     el.onclick = () => pick(c.id);
     box.appendChild(el);
@@ -469,33 +489,60 @@ function showCur() {
   document.getElementById('curChan').textContent =
     (ch && ch.label) ? ch.label : (CUR || '未选');
   updateNaiOptions();
-  updateSteps();
+  updateParams();
 }
 
-// ── 步数输入（2026-10-29）──────────────────
+// ── 参数输入：步数 / CFG / 负向（2026-10-29 起，10-31 加 CFG 与负向）──
 // placeholder 显示渠道模板当前值（"30" / "8+12"），留空就是按它跑；
-// NAI 是云端参数，没有本地工作流，整块藏起来。
+// NAI 是云端参数，没有本地工作流，整块藏起来。负向还要看渠道有没有
+// 接进采样器的 CLIPTextEncode（`ch.negative` 由后端算）。
 function curChannel() { return CHANNELS.find(c => c.id === CUR) || null; }
 
-function updateSteps() {
+function updateParams() {
   const ch = curChannel();
-  const box = document.getElementById('stepsBox');
+  const cloud = !ch || ch.cloud;
+  const stepsBox = document.getElementById('stepsBox');
   const input = document.getElementById('stepsIn');
   const hint = document.getElementById('stepsHint');
-  const cloud = !ch || ch.cloud;
-  box.classList.toggle('on', !cloud);
+  const cfgBox = document.getElementById('cfgBox');
+  const cfgIn = document.getElementById('cfgIn');
+  const cfgHint = document.getElementById('cfgHint');
+  const negBox = document.getElementById('negBox');
+  const negIn = document.getElementById('neg');
+  stepsBox.classList.toggle('on', !cloud);
+  cfgBox.classList.toggle('on', !cloud);
+  negBox.classList.toggle('on', !cloud && !!(ch && ch.negative));
   if (cloud) return;
   const def = ch.steps || '';
   input.placeholder = def ? ('默认 ' + def) : '默认';
   hint.textContent = def ? '' : '该渠道没有可调步数';
   input.disabled = !def;
   input.value = STEPS;
+  const defCfg = ch.cfg || '';
+  cfgIn.placeholder = defCfg ? ('默认 ' + defCfg) : '默认';
+  cfgHint.textContent = defCfg ? '' : '该渠道没有可调 CFG';
+  cfgIn.disabled = !defCfg;
+  cfgIn.value = CFG;
+  negIn.value = NEG;
 }
 
 const STEPS_INPUT = document.getElementById('stepsIn');
 STEPS_INPUT.addEventListener('input', () => {
   STEPS = STEPS_INPUT.value.trim();
   try { localStorage.setItem('gp_steps', STEPS); } catch (e) {}
+});
+
+const CFG_INPUT = document.getElementById('cfgIn');
+CFG_INPUT.addEventListener('input', () => {
+  CFG = CFG_INPUT.value.trim();
+  try { localStorage.setItem('gp_cfg', CFG); } catch (e) {}
+});
+
+const NEG_INPUT = document.getElementById('neg');
+NEG_INPUT.addEventListener('input', () => {
+  // 负向保留原样（换行/逗号都是用户的事），提交前才 trim
+  NEG = NEG_INPUT.value;
+  try { localStorage.setItem('gp_neg', NEG); } catch (e) {}
 });
 
 // ── LoRA 槽位（2026-10-28 用户要求「自己选开哪个」）──
@@ -647,9 +694,14 @@ async function gen(promptOverride) {
   try {
     const body = {skill: CUR, prompt: prompt, artist_prefix: artistPrefix};
     if (LORA_KIND === 'toggle' && LORA.length) body.loras = readLoraRows();
-    // 步数只在 ComfyUI 渠道发；NAI 走云端，本地步数没意义（后端也会忽略）
+    // 步数 / CFG / 负向只在 ComfyUI 渠道发；NAI 走云端，本地参数没意义
+    // （后端也会忽略，但前端先拦住，免得用户以为填了生效）。
     const st = STEPS_INPUT.value.trim();
     if (st && !isNai()) body.steps = Number(st);
+    const cf = CFG_INPUT.value.trim();
+    if (cf && !isNai()) body.cfg = Number(cf);
+    const ng = NEG_INPUT.value.trim();
+    if (ng && !isNai()) body.negative = ng;
     const d = await api('/api/gen/submit', body);
     JOBS.unshift(d.job);
     renderJobs();
@@ -753,9 +805,11 @@ function showShot(j, auto) {
   meta.innerHTML = '<span class="sk"></span><span>seed ' + (j.seed ?? '云端随机') + '</span>' +
     '<span>' + fmtTime(j.ts) + '</span>' +
     (stepsText(j) ? '<span class="stp"></span>' : '') +
+    (cfgText(j) ? '<span class="cf"></span>' : '') +
     (secsText(j.secs) ? '<span class="dur"></span>' : '');
   meta.querySelector('.sk').textContent = j.skill;
   if (stepsText(j)) meta.querySelector('.stp').textContent = stepsText(j);
+  if (cfgText(j)) meta.querySelector('.cf').textContent = cfgText(j);
   if (secsText(j.secs)) meta.querySelector('.dur').textContent = 'ComfyUI ' + secsText(j.secs);
   el.appendChild(meta);
   if (j.prompt) {
@@ -801,6 +855,12 @@ function stepsText(o) {
   const v = (o && (o.steps_label || o.steps)) || '';
   return v ? (v + ' 步') : '';
 }
+// CFG（2026-10-31）：只有本次显式填了才会出现在账本 / 任务里；
+// 按模板跑的行没有这个字段，就不用显示。
+function cfgText(o) {
+  const v = o && o.cfg;
+  return (v === null || v === undefined || v === '') ? '' : ('cfg ' + v);
+}
 
 function renderHistory() {
   const box = document.getElementById('hList');
@@ -827,7 +887,7 @@ function renderHistory() {
       (lt ? '<div class="lor"></div>' : '') +
       '<div class="sd"></div>' +
       (r.ok ? '<div class="tm"></div>' : '<div class="bad"></div>') +
-      (r.ok && (stepsText(r) || secsText(r.secs)) ? '<div class="dur"></div>' : '');
+      (r.ok && (stepsText(r) || cfgText(r) || secsText(r.secs)) ? '<div class="dur"></div>' : '');
     info.querySelector('.sk').textContent =
       ((CHANNELS.find(c => c.id === r.skill) || {}).label) || r.skill;
     if (lt) {
@@ -841,7 +901,7 @@ function renderHistory() {
     else info.querySelector('.bad').textContent = (r.error || '失败').slice(0, 40);
     if (r.ok && info.querySelector('.dur')) {
       info.querySelector('.dur').textContent =
-        [stepsText(r), secsText(r.secs)].filter(Boolean).join(' · ');
+        [stepsText(r), cfgText(r), secsText(r.secs)].filter(Boolean).join(' · ');
     }
     el.appendChild(info);
     if (r.prompt) {
@@ -867,6 +927,8 @@ function renderHistory() {
       lines.push('种子　' + (r.seed ?? '—'));
       if (r.ok) {
         lines.push('步数　' + (stepsText(r) || '—'));
+        lines.push('CFG　' + (cfgText(r).replace(/^cfg /, '') || '—'));
+        if (r.negative) lines.push('负向追加　' + r.negative);
         lines.push('耗时　' + (secsText(r.secs) || '—'));
         lines.push('时间　' + fmtTime(r.ts));
       } else {

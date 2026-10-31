@@ -38,7 +38,7 @@ import requests
 from flask import Blueprint, Response, jsonify, request, send_from_directory
 
 from app import comic, image_jobs, image_out, lora_slots
-from app import gen_steps
+from app import gen_params, gen_steps
 from app.config import COMFYUI_URL, NAI_API_KEY, WEB_DIR, state_path
 from app.direct_gen import _allowed_skills
 from app.skills import load_skill, skill_summary
@@ -130,7 +130,12 @@ def channels():
                     "cloud": False,
                     # 模板当前步数（"30" / "8+12"）：界面拿它当输入框 placeholder，
                     # 用户留空就是「按渠道默认」，不用每个渠道都写死一个数。
-                    "steps": gen_steps.describe(sd.get("workflow") or {})})
+                    "steps": gen_steps.describe(sd.get("workflow") or {}),
+                    # 同上，CFG 的模板当前值（"3" / "1+3"）。
+                    "cfg": gen_params.describe_cfg(sd.get("workflow") or {}),
+                    # 有没有可写的负向节点（qwen-charsheet 这类没有 CLIP 的
+                    # 渠道为 False，界面把负向输入框藏起来）。
+                    "negative": gen_params.has_negative(sd.get("workflow") or {})})
     out.sort(key=lambda c: (0 if c["id"] in _HEAD else 1,
                             _HEAD.index(c["id"]) if c["id"] in _HEAD else 0,
                             c["id"]))
@@ -192,7 +197,8 @@ def _public(job):
     """任务记录脱敏给前端（内部字段不下发）。"""
     return {k: job.get(k) for k in ("id", "skill", "prompt", "seed",
                                     "state", "error", "file", "ts",
-                                    "steps", "steps_label", "secs")}
+                                    "steps", "steps_label", "cfg",
+                                    "negative", "secs")}
 
 
 def _enabled_loras(job):
@@ -246,6 +252,17 @@ def _run(job):
                     log.warning("跑图台 %s：渠道 %s 没有可改的步数节点，按模板跑",
                                 job["id"], job["skill"])
             steps_label = gen_steps.describe(wf)
+            # 自定义 CFG / 负向（2026-10-31）：同样只改内存里的 dict。
+            # 顺序在步数之后无所谓，两者不碰同一个字段。负向是**追加**在
+            # 模板负向池后面（见 `gen_params` 模块头），不覆盖。
+            if job.get("cfg") is not None:
+                if not gen_params.apply_cfg(wf, job["cfg"]):
+                    log.warning("跑图台 %s：渠道 %s 没有可改的 cfg 节点，按模板跑",
+                                job["id"], job["skill"])
+            if job.get("negative"):
+                if not gen_params.apply_negative(wf, job["negative"]):
+                    log.warning("跑图台 %s：渠道 %s 没有可追加的负向节点，已忽略",
+                                job["id"], job["skill"])
             # _submit_retry 只对超时重试；其余错误一次抛清。
             # with_entry=True：拿 history entry 算 ComfyUI 真跑这张图的耗时。
             name, entry = comic._submit_retry(
@@ -255,19 +272,27 @@ def _run(job):
             secs = image_jobs.exec_seconds(entry)
             file_ref = name
             seed = job["seed"]
-        _ledger_append({"tag": job["id"], "skill": job["skill"],
-                        "prompt": job["prompt"], "seed": seed,
-                        "file": file_ref, "ts": job["ts"], "ok": True,
-                        "steps": steps_label, "secs": secs,
-                        "loras": _enabled_loras(job)})
+        row = {"tag": job["id"], "skill": job["skill"],
+               "prompt": job["prompt"], "seed": seed,
+               "file": file_ref, "ts": job["ts"], "ok": True,
+               "steps": steps_label, "secs": secs,
+               "loras": _enabled_loras(job)}
+        # 只记「这次真的改过」的字段（NAI 云端没有本地 cfg / 负向，
+        # 不写空值，免得历史行里全是 cfg: null 的噪声）。
+        if job.get("cfg") is not None:
+            row["cfg"] = job["cfg"]
+        if job.get("negative"):
+            row["negative"] = job["negative"]
+        _ledger_append(row)
         with _JOBS_LOCK:
             job["state"] = "done"
             job["file"] = file_ref
             job["seed"] = seed
             job["steps_label"] = steps_label
             job["secs"] = secs
-        log.info("跑图台 %s 完成：%s seed %s %s 步 ComfyUI 耗时 %s 秒",
+        log.info("跑图台 %s 完成：%s seed %s %s 步 cfg %s ComfyUI 耗时 %s 秒",
                  job["id"], job["skill"], seed, steps_label or "-",
+                 job.get("cfg") if job.get("cfg") is not None else "-",
                  "%.1f" % secs if secs is not None else "未知")
     except Exception as e:
         msg = str(e) or e.__class__.__name__
@@ -372,8 +397,19 @@ def api_submit():
     steps, step_err = gen_steps.normalize(data.get("steps"))
     if step_err:
         return jsonify({"ok": False, "error": step_err}), 400
+    # 自定义 CFG / 负向（2026-10-31）：同样「不传/空 = 按渠道模板」。
+    # 负向只做**追加**（模板负向池保留），空串等于没填。NAI 是云端参数，
+    # 本地这两个都不认，一并清掉（前端也把输入框藏了）。
+    cfg, cfg_err = gen_params.normalize_cfg(data.get("cfg"))
+    if cfg_err:
+        return jsonify({"ok": False, "error": cfg_err}), 400
+    negative, neg_err = gen_params.normalize_negative(data.get("negative"))
+    if neg_err:
+        return jsonify({"ok": False, "error": neg_err}), 400
     if skill in image_jobs.NAI_SKILLS:
         steps = None
+        cfg = None
+        negative = None
     # 槽位补文件名：前端只传槽号，账本行要靠名字显示「这张图挂了哪个 LoRA」
     if slots:
         wf = (load_skill(skill) or {}).get("workflow") or {}
@@ -393,6 +429,7 @@ def api_submit():
                         else random.randint(0, 2 ** 31 - 1)),
                "loras": slots,
                "steps": steps, "steps_label": "",
+               "cfg": cfg, "negative": negative,
                "secs": None,
                "state": "queued", "error": "", "file": "",
                "ts": time.time()}

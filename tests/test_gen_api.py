@@ -20,7 +20,7 @@ from unittest import mock
 
 from flask import Response
 
-from app import comic, gen_api, image_jobs, main
+from app import comic, gen_api, gen_params, image_jobs, main
 from app.skills import load_skill
 
 
@@ -128,6 +128,43 @@ class SubmitTest(unittest.TestCase):
         r = self._submit(steps="很多")
         self.assertEqual(r.status_code, 400)
         self.assertIn("整数", r.get_json()["error"])
+
+    def test_cfg_out_of_range_is_400(self):
+        for bad in (-1, 21, "abc"):
+            r = self._submit(cfg=bad)
+            self.assertEqual(r.status_code, 400, repr(bad))
+            self.assertIn("CFG", r.get_json()["error"])
+
+    def test_negative_too_long_is_400(self):
+        r = self._submit(negative="x" * (gen_params.NEG_MAX + 1))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("太长", r.get_json()["error"])
+
+    def test_cfg_and_negative_are_optional_and_kept_on_job(self):
+        def finish(job):
+            job["state"] = "done"
+
+        with mock.patch.object(gen_api, "_run", side_effect=finish):
+            r = self._submit(cfg="3.5", negative="  bad hands  ")
+        self.assertEqual(r.status_code, 200)
+        job = r.get_json()["job"]
+        self.assertEqual(job["cfg"], 3.5)
+        self.assertEqual(job["negative"], "bad hands")     # 提交时就去掉首尾空白
+
+        with mock.patch.object(gen_api, "_run", side_effect=finish):
+            r2 = self._submit()
+        self.assertIsNone(r2.get_json()["job"]["cfg"])
+        self.assertIsNone(r2.get_json()["job"]["negative"])
+
+    def test_cfg_and_negative_ignored_for_cloud_channel(self):
+        def finish(job):
+            job["state"] = "done"
+
+        with mock.patch.object(gen_api, "_run", side_effect=finish):
+            r = self._submit(skill="nai", cfg=3.5, negative="bad hands")
+        self.assertEqual(r.status_code, 200)
+        self.assertIsNone(r.get_json()["job"]["cfg"])
+        self.assertIsNone(r.get_json()["job"]["negative"])
 
     def test_steps_is_optional_and_kept_on_job(self):
         def finish(job):
@@ -237,6 +274,47 @@ class RunTest(unittest.TestCase):
         # 两段都改成 50 后取值相同，describe 折成 "50"（多段不同才写 "8+12"）
         self.assertEqual(row["steps"], "50")
         self.assertIsNone(row["secs"])      # entry 里没时间戳 → 未知，不编数
+
+    def test_cfg_and_negative_override_are_applied_to_workflow(self):
+        """填了 CFG 3.5 + 负向 → 提交给 ComfyUI 的工作流里两者都要落地，
+        负向是追加（模板那段结构化池保留），账本也要记下来。"""
+        seen = {}
+
+        def fake_build(skill, prompt, seed):
+            return {
+                "10": {"class_type": "KSampler",
+                       "inputs": {"steps": 25, "cfg": 3.0,
+                                  "positive": ["50", 0], "negative": ["51", 0]}},
+                "50": {"class_type": "CLIPTextEncode",
+                       "inputs": {"text": "__MULTI_PROMPTS__"}},
+                "51": {"class_type": "CLIPTextEncode",
+                       "inputs": {"text": "<|pose_and_clothing_neg|>nude"
+                                          "<|/pose_and_clothing_neg|>"}},
+            }
+
+        def fake_submit(wf, skill, prompt, seed, **kw):
+            seen["cfg"] = wf["10"]["inputs"]["cfg"]
+            seen["steps"] = wf["10"]["inputs"]["steps"]
+            seen["neg"] = wf["51"]["inputs"]["text"]
+            return ("x.png", {"status": {"messages": []}})
+
+        with mock.patch.object(gen_api, "generate_image_build", fake_build), \
+             mock.patch.object(comic, "_submit", side_effect=fake_submit), \
+             mock.patch.object(comic, "_submit_retry",
+                               side_effect=lambda fn, what: fn()):
+            jid = self.c.post("/api/gen/submit",
+                              json={"skill": "moss-qunyou", "prompt": "1girl",
+                                    "cfg": 3.5, "negative": "bad hands"}
+                              ).get_json()["job"]["id"]
+            self.assertTrue(self._wait_job(jid, "done"))
+
+        self.assertEqual(seen["cfg"], 3.5)
+        self.assertEqual(seen["steps"], 25)                  # 没填步数 → 模板不动
+        self.assertIn("<|pose_and_clothing_neg|>", seen["neg"])
+        self.assertTrue(seen["neg"].endswith(", bad hands"))
+        row = next(r for r in gen_api._ledger_rows() if r["tag"] == jid)
+        self.assertEqual(row["cfg"], 3.5)
+        self.assertEqual(row["negative"], "bad hands")
 
     def test_default_steps_follow_the_template(self):
         """不填步数 = 按模板跑，账本记的就是模板值。"""
