@@ -751,6 +751,16 @@ GALLERY_ROOTS = _parse_gallery_roots(os.getenv("GALLERY_ROOTS", ""))
 # 留空 = 管理功能整体关闭（宁可关掉也不猜，猜错了等于把删除权限给了别人）。
 GALLERY_OWNER_QQ = os.getenv("GALLERY_OWNER_QQ", "").strip()
 
+
+# ─── 提示词工坊 ─────────────────────────────────────────
+#
+# 一个完全自包含的单文件 HTML（别人的工具，原样发出去，一个字都不改）。
+# **不复制进 `web/`**：4.6MB 进 git 没意义，而且它按版本号换目录
+# （1.3.5 → 1.3.6），配置一行比复制一份好维护。
+#
+# 留空 = 这个入口整个不存在（返回 404），不会在页面上留一个点不开的链接。
+WORKSHOP_HTML = os.getenv("WORKSHOP_HTML", "").strip()
+
 # 多 agent：每个 agent 一个自包含目录（agents/<id>/ 里放 agent.json 配置、
 # prompt.md 人设、session.jsonl 会话）。会话文件路径由 app/agents.py 解析，
 # 不再有「全局单会话文件」这种东西。

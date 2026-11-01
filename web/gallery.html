@@ -37,6 +37,9 @@
     header{gap:8px;padding-left:12px;padding-right:12px}
     .brand{font-size:16px}
     .tabs button{padding:6px 10px;font-size:12.5px}
+    /* 窄屏顶栏要装下「画廊 + 三个 tab + 预设 + 工坊」，两个入口各瘦一点，
+       320px 的旧机型才不会把 tab 挤扁 */
+    .go{padding:6px 8px;font-size:12px}
     .go .g1{display:none}
     .go .g2{display:inline}
   }
@@ -262,6 +265,7 @@
     <button data-tab="mine">我的</button>
   </div>
   <a class="go" href="/preset"><span class="g1">自定义预设</span><span class="g2">预设</span></a>
+  <a class="go" href="/workshop"><span class="g1">提示词工坊</span><span class="g2">工坊</span></a>
 </header>
 
 <!-- 「我的」下面再分三格：作品 / 收藏 / 点赞。只在「我的」时出现 -->

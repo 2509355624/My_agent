@@ -24,6 +24,7 @@
 可用 `FRIEND_BACKEND` 覆盖。
 """
 
+import gzip
 import json
 import logging
 import os
@@ -35,7 +36,7 @@ from flask import (Flask, Response, jsonify, make_response, request,
                    send_from_directory, stream_with_context)
 
 from app import friend_auth
-from app.config import WEB_DIR
+from app.config import WEB_DIR, WORKSHOP_HTML
 from app.logsetup import setup as log_setup
 
 log = logging.getLogger("friend_app")
@@ -118,10 +119,16 @@ def _secure(resp):
     # private 不能去掉：图片要过登录态，存到 Cloudflare 边缘就等于泄漏。
     # 页面和接口一律 no-store——共享设备上退出登录后不该还能翻到东西。
     ctype = str(resp.headers.get("Content-Type") or "")
-    resp.headers["Cache-Control"] = (
-        "private, max-age=31536000, immutable"
-        if ctype.startswith("image/")
-        else "no-store")
+    if ctype.startswith("image/"):
+        resp.headers["Cache-Control"] = (
+            "private, max-age=31536000, immutable")
+    elif (request.path or "").startswith("/workshop"):
+        # 提示词工坊是 4.6MB 的单文件，no-store 等于每次刷新都从这台机器
+        # 重新传一遍。文件换没换由 ETag 判（mtime 变 → ETag 变），这里只
+        # 负责别让同一个人每进一次就重下一遍。
+        resp.headers["Cache-Control"] = "private, max-age=600"
+    else:
+        resp.headers["Cache-Control"] = "no-store"
     return resp
 
 
@@ -221,6 +228,78 @@ def gallery_page():
     if not _logged_in():
         return send_from_directory(WEB_DIR, "friend.html")
     return send_from_directory(WEB_DIR, "gallery.html")
+
+
+# ─── 提示词工坊 ──────────────────────────────────────────
+#
+# 一个 4.6MB 的单文件 HTML，**不是我们写的**，原样发出去（一个字节都不改，
+# 好让以后换 1.3.6 时只是换个路径）。它是纯前端：不联网、没有外部资源，
+# 状态存在自己的 localStorage 里，所以不需要任何后端配合。
+#
+# 两件事必须做，否则手机上基本打不开：
+#
+# 1. **gzip**：那份文件九成是标签库的 JSON 和重复的样式，压完 600KB 上下。
+#    走家用上行 + 隧道，4.6MB 要三秒多，600KB 一秒内。压一次缓存住，
+#    按文件 mtime 失效——每次现压要 0.3 秒 CPU，还占着请求线程。
+# 2. **能不能缓存**：`_secure` 默认把页面设成 `no-store`（共享设备上退出
+#    登录后不该还翻得到东西），但这条对几 MB 的单文件等于「每次刷新重传
+#    一遍」。这里单独放行，交给 ETag 判断「文件到底换没换」。
+_ws_lock = threading.Lock()
+_ws_cache = {}          # path -> (mtime, raw, gz)
+
+
+def _workshop_payload(path):
+    mt = os.path.getmtime(path)
+    with _ws_lock:
+        got = _ws_cache.get(path)
+        if got and got[0] == mt:
+            return got
+        with open(path, "rb") as f:
+            raw = f.read()
+        got = (mt, raw, gzip.compress(raw, 6))
+        _ws_cache[path] = got
+        return got
+
+
+@app.route("/workshop")
+@app.route("/workshop.html")
+def workshop_page():
+    """提示词工坊。登录过的人都能看（2026-11-01 用户拍板）。"""
+    if not _logged_in():
+        return send_from_directory(WEB_DIR, "friend.html")
+    path = WORKSHOP_HTML
+    if not path or not os.path.isfile(path):
+        return _workshop_missing()
+    try:
+        mt, raw, gz = _workshop_payload(path)
+    except OSError:
+        log.warning("提示词工坊读不出来：%s", path, exc_info=True)
+        return _workshop_missing()
+
+    use_gz = "gzip" in (request.headers.get("Accept-Encoding") or "").lower()
+    body = gz if use_gz else raw
+    resp = app.response_class(body, mimetype="text/html")
+    if use_gz:
+        resp.headers["Content-Encoding"] = "gzip"
+    # 同一个 URL 两种字节，缓存/代理必须按这个头分开存
+    resp.headers["Vary"] = "Accept-Encoding"
+    resp.set_etag("%x-%x%s" % (int(mt), len(raw), "z" if use_gz else ""))
+    resp.content_length = len(body)
+    return resp.make_conditional(request)
+
+
+def _workshop_missing():
+    """没配、或文件不在了：说人话，别把本机路径吐给群友。"""
+    return app.response_class(
+        "<!doctype html><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<body style=\"background:#0f1116;color:#dfe3ec;"
+        "font:15px/1.75 system-ui,sans-serif;padding:44px 22px\">"
+        "提示词工坊还没配上。<br>"
+        "<span style=\"color:#7e8699;font-size:13px\">"
+        "在 .env 里加一行 WORKSHOP_HTML=工坊 html 的完整路径，"
+        "再重启群友页。</span></body>",
+        status=404, mimetype="text/html")
 
 
 @app.route("/health")
