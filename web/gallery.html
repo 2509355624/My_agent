@@ -447,7 +447,9 @@
     if (!it) return;
     var a = document.createElement("a");
     a.href = "/api/gal/img/" + it.id + "?s=full";
-    a.download = (S.cur ? S.cur.title : "image") + "-" + (S.idx + 1);
+    // 后缀必须带：没后缀的文件在手机上点了打不开，会变成"下载了一个陌生文件"
+    a.download = (S.cur ? S.cur.title : "image") + "-" + (S.idx + 1) +
+                 "." + (it.ext || "png");
     a.click();
   };
   $("vdel").onclick = function () {

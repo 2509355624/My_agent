@@ -186,7 +186,7 @@ def api_work(wid):
             return jsonify({"ok": False, "error": "没有这个作品集"}), 404
 
         items = con.execute(
-            "SELECT id, idx FROM items WHERE work_id=? ORDER BY idx",
+            "SELECT id, idx, path FROM items WHERE work_id=? ORDER BY idx",
             (wid,)).fetchall()
         rows = con.execute(
             "SELECT item_id, kind FROM marks WHERE qq=?"
@@ -208,7 +208,10 @@ def api_work(wid):
         "items": [{"id": r["id"], "idx": r["idx"],
                    "like": 1 if r["id"] in liked else 0,
                    "fav": 1 if r["id"] in faved else 0,
-                   "likes": likes.get(r["id"], 0)} for r in items],
+                   "likes": likes.get(r["id"], 0),
+                   # 给下载按钮拼文件名用。只吐后缀，路径不出接口。
+                   "ext": (os.path.splitext(r["path"])[1].lstrip(".") or "png").lower()}
+                  for r in items],
     })
 
 

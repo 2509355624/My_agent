@@ -32,7 +32,7 @@ import time
 
 import requests
 from flask import (Flask, Response, jsonify, make_response, request,
-                   send_from_directory)
+                   send_from_directory, stream_with_context)
 
 from app import friend_auth
 from app.config import WEB_DIR
@@ -217,9 +217,22 @@ def _forward(prefix, sub):
     headers = {"X-Friend-Token": friend_auth.secret()}
     params = dict(request.args)
     params["qq"] = qq
+
+    # 下载原图时浏览器和下载器会带 Range（断点续传、多线程分段）。不转发出去
+    # 就退化成每次都整包重传，一张 8MB 的图白下好几遍。
+    for h in ("Range", "If-None-Match", "If-Modified-Since"):
+        if request.headers.get(h):
+            headers[h] = request.headers[h]
+
+    # 图片走流式。requests 默认 stream=False 会把整个响应体读进内存，一张
+    # 26MB 的原图在 5175 里就多占一份，几个人同时下能把这个进程顶爆。
+    # 只对图片这么干：接口响应都很小，流式没有收益，反而多一层生成器。
+    streaming = (request.method == "GET"
+                 and (request.path or "").startswith("/api/gal/img/"))
     try:
         if request.method == "GET":
-            r = _SESSION.get(url, params=params, headers=headers, timeout=60)
+            r = _SESSION.get(url, params=params, headers=headers,
+                             timeout=(10, 600), stream=streaming)
         elif request.method == "DELETE":
             r = _SESSION.delete(url, params=params, headers=headers, timeout=60)
         elif request.mimetype == "multipart/form-data":
@@ -240,8 +253,25 @@ def _forward(prefix, sub):
         log.warning("转发失败 %s：%s", sub, e)
         return jsonify({"ok": False, "error": "后台没响应，稍后再试"}), 502
     ctype = r.headers.get("Content-Type") or "application/json"
-    if ctype.startswith("image/"):
-        return Response(r.content, status=r.status_code, content_type=ctype)
+
+    if streaming and ctype.startswith("image/"):
+        def _pump():
+            try:
+                for chunk in r.iter_content(64 * 1024):
+                    if chunk:
+                        yield chunk
+            finally:
+                r.close()          # 客户端中途取消也要把上游连接放掉
+        resp = Response(stream_with_context(_pump()), status=r.status_code,
+                        content_type=ctype)
+        # 这几个头必须照抄：少了 Content-Length 浏览器不知道进度，
+        # 少了 Content-Range 断点续传直接坏。
+        for h in ("Content-Length", "Content-Range", "Accept-Ranges",
+                  "ETag", "Last-Modified"):
+            if r.headers.get(h):
+                resp.headers[h] = r.headers[h]
+        return resp
+
     try:
         return Response(r.content, status=r.status_code, content_type=ctype)
     except Exception:
