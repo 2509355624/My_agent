@@ -36,7 +36,7 @@ log = logging.getLogger("gallery_api")
 bp = Blueprint("gallery", __name__, url_prefix="/api/gal")
 
 PAGE_MAX = 60
-UPLOAD_MAX = 10                     # 一次最多传几张
+UPLOAD_MAX = 5                      # 一次最多传几张
 UPLOAD_BYTES = 25 << 20             # 单张上限 25MB
 UPLOAD_TOTAL = 250 << 20            # 一次合计上限 250MB
 

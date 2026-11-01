@@ -306,7 +306,7 @@
     <h3>上传作品集</h3>
     <p>一次选多张，就是一个作品集。上传会压成 1600px 的 WebP，原图不用你管。</p>
     <input type="text" id="uptitle" placeholder="给这个作品集起个名字" maxlength="40">
-    <label class="pick" id="pick">＋ 选择图片（最多 10 张）
+    <label class="pick" id="pick">＋ 选择图片（最多 5 张）
       <input type="file" id="file" accept="image/*" multiple hidden>
     </label>
     <div id="prev"></div>
@@ -348,12 +348,14 @@
 
   function $(id) { return document.getElementById(id); }
 
-  function toast(msg) {
+  function toast(msg, ms) {
     var t = $("toast");
     t.textContent = msg;
     t.classList.add("on");
     clearTimeout(toast._t);
-    toast._t = setTimeout(function () { t.classList.remove("on"); }, 2400);
+    // 上传完那条要报七八个数字，2.4 秒看不完
+    toast._t = setTimeout(function () { t.classList.remove("on"); },
+                          ms || 2400);
   }
 
   function api(path, opt) {
@@ -1078,13 +1080,22 @@
                         : Math.max(1, Math.round(n / 1024)) + "KB";
   }
 
+  // 上传速率。隧道那头有多快，光看"处理中"是看不出来的——
+  // 150KB 走 10 秒和走 0.3 秒，症状一模一样。
+  function speed(bytes, ms) {
+    if (!bytes || ms < 100) return "";
+    var kbs = bytes / 1024 / (ms / 1000);
+    return kbs >= 1024 ? (kbs / 1024).toFixed(1) + "MB/s"
+                       : Math.round(kbs) + "KB/s";
+  }
+
   function openUpload() {
     picked = [];
     $("uptitle").value = "";
     $("file").value = "";
     $("prev").innerHTML = "";
     $("pick").classList.remove("has");
-    $("pick").firstChild.textContent = "＋ 选择图片（最多 10 张）";
+    $("pick").firstChild.textContent = "＋ 选择图片（最多 5 张）";
     $("upsubmit").disabled = true;
     $("upsubmit").textContent = "上传";
     $("up").classList.add("on");
@@ -1096,7 +1107,7 @@
 
   $("file").onchange = function () {
     var fs = Array.prototype.slice.call(this.files || []);
-    if (fs.length > 10) { toast("一次最多 10 张，多的先去掉"); fs = fs.slice(0, 10); }
+    if (fs.length > 5) { toast("一次最多 5 张，多的先去掉"); fs = fs.slice(0, 5); }
     picked = fs;
     $("prev").innerHTML = "";
     fs.forEach(function (f) {
@@ -1119,16 +1130,34 @@
     var b = this;
     var title = $("uptitle").value.trim();
     var total = picked.length;
-    var wid = 0, ok = 0, bad = 0, inB = 0, outB = 0, lastErr = "";
+    var wid = 0, ok = 0, bad = 0, inB = 0, outB = 0, upB = 0, lastErr = "";
+    // 三个计时：整批、压缩、纯上传（不含服务端落盘）。
+    // 10 张等了一百多秒的时候，光看"处理中"根本不知道慢在浏览器还是网络。
+    var tAll = performance.now(), tComp = 0, tUp = 0;
+    var label = "准备", ticker = null;
+
+    function secs(ms) { return (ms / 1000).toFixed(1) + "s"; }
+
+    function show() {
+      b.textContent = label + " · " + secs(performance.now() - tAll);
+    }
+
     b.disabled = true;
+    ticker = setInterval(show, 200);
+
+    function stop() {
+      if (ticker) { clearInterval(ticker); ticker = null; }
+    }
 
     function fail(msg) {
+      stop();
       toast(msg || "上传失败");
       b.disabled = false;
       b.textContent = "上传";
     }
 
     function done() {
+      stop();
       if (!ok) {
         // 一张都没成：把空壳作品集收回去，别在墙上留个空的
         if (wid) {
@@ -1139,8 +1168,10 @@
         return fail(lastErr || "一张都没传成");
       }
       var saved = outB < inB ? " · " + mb(inB) + "→" + mb(outB) : "";
-      toast("传好了，" + ok + " 张" + saved
-            + (bad ? "，失败 " + bad + " 张" : ""));
+      var split = "（压缩 " + secs(tComp) + " / 上传 " + secs(tUp)
+                + (upB ? " · " + speed(upB, tUp) : "") + "）";
+      toast("传好了，" + ok + " 张 · 共 " + secs(performance.now() - tAll)
+            + split + saved + (bad ? "，失败 " + bad + " 张" : ""), 6000);
       closeUpload();
       setTab("mine", "works");
     }
@@ -1149,12 +1180,19 @@
     // 一直在动；某张失败也只丢那一张，不用把整批重传一遍。
     function step(i) {
       if (i >= total) return done();
-      b.textContent = (i + 1) + "/" + total + " 压缩中…";
+      label = (i + 1) + "/" + total + " 压缩中";
+      show();
       inB += picked[i].size || 0;
+      var t0 = performance.now();
       shrink(picked[i]).then(function (f2) {
+        tComp += performance.now() - t0;
         outB += f2.size || 0;
         send(i, f2);
-      }, function () { bad++; step(i + 1); });
+      }, function () {
+        tComp += performance.now() - t0;
+        bad++;
+        step(i + 1);
+      });
     }
 
     function send(i, f) {
@@ -1164,10 +1202,17 @@
       fd.append("file", f, f.name);
       var xhr = new XMLHttpRequest();
       xhr.open("POST", "/api/gal/upload/one");
+      var t1 = performance.now();
+      // 请求体发完的那一下，才是"网络"的真实耗时；之后是服务端在转码落盘。
+      xhr.upload.onload = function () {
+        tUp += performance.now() - t1;
+        upB += f.size || 0;
+      };
       xhr.upload.onprogress = function (e) {
         if (!e.lengthComputable) return;
         var pct = Math.round(e.loaded / e.total * 100);
-        b.textContent = (i + 1) + "/" + total + " · 上传 " + pct + "%";
+        label = (i + 1) + "/" + total + " 上传 " + pct + "%";
+        show();
       };
       xhr.onload = function () {
         var d = {};
