@@ -59,6 +59,29 @@
   .msg.err { color: var(--error); }
   .msg.ok { color: var(--success); }
 
+  /* ── 登录页上方的两个入口 ──
+     卡片本身就是画廊的门（登录完原地变画廊），所以上面这两块不负责导航，
+     只负责「让人一眼看见还有个不用登录的东西」。 */
+  .gate { width: 100%; max-width: 360px; display: flex; flex-direction: column;
+    gap: 14px; }
+  .entry { display: flex; flex-direction: column; gap: 10px; }
+  .ent { display: flex; align-items: center; gap: 12px; width: 100%;
+    padding: 13px 15px; border-radius: var(--radius); font: inherit;
+    text-align: left; text-decoration: none; cursor: pointer;
+    background: var(--bg-elev); color: var(--text);
+    border: 1px solid var(--border); transition: border-color .15s, background .15s; }
+  .ent:active { transform: scale(.985); }
+  .ent .ico { font-size: 20px; line-height: 1; flex: none; }
+  .ent .txt { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .ent .txt b { font-size: 14.5px; font-weight: 600; }
+  .ent .txt i { font-style: normal; font-size: 11.5px; color: var(--text-mute); }
+  .ent .arr { margin-left: auto; font-size: 15px; color: var(--text-mute); flex: none; }
+  /* 工坊那个走实心主色：不用登录、点一下就真能看到东西，让它在两排里更扎眼 */
+  .ent.plain { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .ent.plain .txt i, .ent.plain .arr { color: rgba(255, 255, 255, .74); }
+  .ent:hover { border-color: var(--accent); }
+  .ent.plain:hover { background: #8d70ff; border-color: #8d70ff; }
+
   /* ── 主界面 ── */
   #app { flex: 1; display: none; min-height: 0; }
   #app.on { display: flex; }
@@ -210,8 +233,21 @@
 
 <!-- 登录 -->
 <div id="login">
-  <div class="card">
-    <h2>先确认是你本人</h2>
+  <div class="gate">
+    <div class="entry">
+      <button class="ent" type="button" id="entGallery">
+        <span class="ico">🖼️</span>
+        <span class="txt"><b>画廊</b><i>要登录 · 填下面的 QQ 号</i></span>
+        <span class="arr">↓</span>
+      </button>
+      <a class="ent plain" href="/workshop">
+        <span class="ico">🎨</span>
+        <span class="txt"><b>提示词工坊</b><i>不用登录 · 点了直接进</i></span>
+        <span class="arr">→</span>
+      </a>
+    </div>
+    <div class="card">
+      <h2>先确认是你本人</h2>
     <p class="hint">填你的 QQ 号，点「获取验证码」，大大怪会私聊你一个 6 位数字。<br>
       只有已经加了好友的号才能收到。</p>
     <div class="field">
@@ -228,6 +264,7 @@
     </div>
     <button class="btn primary" id="verifyBtn" style="width:100%;margin-top:6px">进入</button>
     <div class="msg" id="loginMsg"></div>
+    </div>
   </div>
 </div>
 
@@ -339,6 +376,16 @@
   }
 
   // ── 登录 ──────────────────────────────────────────
+
+  // 上面那排「画廊」并不是另一个页面：这张登录卡本身就是画廊的门，登录完
+  // 原地变成画廊。所以它不跳转，只把光标送进 QQ 框，并顺手说明一句——
+  // 否则群友会以为点了个没反应的东西。
+  $('entGallery').onclick = function () {
+    var q = $('qq');
+    q.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    q.focus();
+    say($('loginMsg'), '填 QQ 号，收一条验证码，进来就是画廊');
+  };
 
   var sendTimer = 0;
   function countdown(sec) {

@@ -264,9 +264,16 @@ def _workshop_payload(path):
 @app.route("/workshop")
 @app.route("/workshop.html")
 def workshop_page():
-    """提示词工坊。登录过的人都能看（2026-11-01 用户拍板）。"""
-    if not _logged_in():
-        return send_from_directory(WEB_DIR, "friend.html")
+    """提示词工坊。**不登录也能看**（2026-11-01 用户拍板，改掉了当天早些
+    时候「登录可见」的版本）。
+
+    它是个纯前端单文件：不调接口、不读登录态、草稿存在浏览器本地，所以
+    登录与否看到的东西一模一样，挡着它只会白让群友多收一次验证码。
+
+    代价得记住：这条路径等于对「拿到隧道链接的任何人」公开，里面那套
+    1197 个 NSFW 标签也跟着公开。链接只在私聊和群里出现，但转发出去就
+    拦不住了——这是用户明确接受的前提，不是漏掉的判断。
+    """
     path = WORKSHOP_HTML
     if not path or not os.path.isfile(path):
         return _workshop_missing()

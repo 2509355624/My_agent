@@ -150,6 +150,16 @@ class PageRoutingTest(unittest.TestCase):
         html = self._title("/preset", True)
         self.assertIn('href="/"', html)
 
+    def test_login_page_offers_both_doors(self):
+        """登录页得同时给出「画廊（要登录）」和「工坊（直接进）」两条路。
+
+        工坊那个是真链接（不用登录也能走到），画廊那个只是把光标送进 QQ
+        框——登录卡本身就是画廊的门，再叠一层跳转只会让人以为地址跑了。
+        """
+        html = self._title("/", False)
+        self.assertIn('href="/workshop"', html, "工坊入口没接上就点不过去")
+        self.assertIn('id="entGallery"', html)
+
 
 class WorkshopPageTest(unittest.TestCase):
     """提示词工坊：第三方做的纯前端单文件（4.6MB），挂在 /workshop。
@@ -195,11 +205,18 @@ class WorkshopPageTest(unittest.TestCase):
         self.assertTrue(r.headers["Content-Type"].startswith("text/html"))
         self.assertIn("雨夜 便利店", r.get_data(as_text=True))
 
-    def test_logged_out_gets_the_login_page(self):
-        """没登录别给内容——登录页本身就是入口（它会自己 reload 回来）。"""
+    def test_logged_out_still_gets_the_workshop(self):
+        """**不登录也给**（2026-11-01 用户拍板）。
+
+        它是纯前端单文件，不调接口、不读登录态，登录与否看到的字节一样，
+        挡着只会白让群友多收一次验证码。这条测试钉的就是「别再有人给它
+        加回登录判断」——真要加，得先想清楚为什么。
+        """
         r = self.client(False).get("/workshop")
         self.assertEqual(r.status_code, 200)
-        self.assertIn('id="login"', r.get_data(as_text=True))
+        self.assertIn("雨夜 便利店", r.get_data(as_text=True))
+        self.assertIsNone(r.headers.get("Set-Cookie"),
+                          "不登录的访客不该被塞会话 cookie")
 
     def test_gzip_when_the_client_asks(self):
         r = self.client().get("/workshop", headers={"Accept-Encoding": "gzip"})
