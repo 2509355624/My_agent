@@ -182,17 +182,40 @@ def me():
 
 # ─── 页面 ────────────────────────────────────────────────
 
+def _logged_in():
+    return bool(friend_auth.check_cookie(
+        request.cookies.get(friend_auth.COOKIE_NAME)))
+
+
 @app.route("/")
 @app.route("/index.html")
 def page():
+    """根路径 = 画廊（2026-11-01 用户拍板：画廊是核心，预设降成二级入口）。
+
+    未登录仍旧回 `friend.html`——它本身就是登录页（`#login` 和 `#app` 两态
+    同一个文件），登录成功后由前端 `location.reload()` 回来，服务器这时
+    才看得到 cookie，才会发画廊。
+    """
+    if not _logged_in():
+        return send_from_directory(WEB_DIR, "friend.html")
+    return send_from_directory(WEB_DIR, "gallery.html")
+
+
+@app.route("/preset")
+@app.route("/preset.html")
+def preset_page():
+    """自定义预设（原根页面）：调 LoRA 组合、存预设、直接出图。
+
+    已登录/未登录都发同一个文件，它自己按 `/me` 的结果切两态。
+    """
     return send_from_directory(WEB_DIR, "friend.html")
 
 
 @app.route("/gallery")
 @app.route("/gallery.html")
 def gallery_page():
-    """画廊。和生图页同一个登录态，没登录直接踢回登录页。"""
-    if not friend_auth.check_cookie(request.cookies.get(friend_auth.COOKIE_NAME)):
+    """老地址，保留：QQ 里已经发出去的链接、群友的收藏都还指着它。"""
+    if not _logged_in():
         return send_from_directory(WEB_DIR, "friend.html")
     return send_from_directory(WEB_DIR, "gallery.html")
 

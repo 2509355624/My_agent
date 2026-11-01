@@ -30,7 +30,16 @@
     font-size:13px;padding:6px 14px;border-radius:8px;cursor:pointer}
   .tabs button.on{background:var(--card2);color:var(--tx);font-weight:600}
   .go{font-size:13px;color:var(--dim);padding:6px 10px;border:1px solid var(--line);
-    border-radius:9px}
+    border-radius:9px;white-space:nowrap;flex:0 0 auto}
+  /* 顶栏三样（标题/两个 tab/入口）在 360px 上装不下整句，窄屏只留两个字的 */
+  .go .g2{display:none}
+  @media(max-width:430px){
+    header{gap:8px;padding-left:12px;padding-right:12px}
+    .brand{font-size:16px}
+    .tabs button{padding:6px 10px;font-size:12.5px}
+    .go .g1{display:none}
+    .go .g2{display:inline}
+  }
 
   /* ── 工具条 ── */
   .tools{display:flex;gap:8px;flex-wrap:wrap;padding:12px 14px 4px}
@@ -43,11 +52,17 @@
 
   /* ── 网格 ── */
   main{padding:6px 14px calc(40px + env(safe-area-inset-bottom,0))}
-  #grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+  /* 320px 的老 SE 也要能放两列：2×140 + 10 间隙 = 290 ≤ 屏宽减边距 */
+  #grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}
   @media(min-width:760px){#grid{grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px}}
   .card{position:relative;border-radius:12px;overflow:hidden;background:var(--card);
     cursor:pointer;transition:transform .15s ease,box-shadow .15s ease}
   .card:active{transform:scale(.975)}
+  /* 桌面才有 hover，触摸设备上按住就亮会很脏（:hover 在手机上会粘住） */
+  @media(hover:hover) and (pointer:fine){
+    .card:hover{transform:translateY(-3px);
+      box-shadow:0 10px 28px rgba(0,0,0,.5),0 0 0 1px var(--line)}
+  }
   .card .ph{width:100%;aspect-ratio:3/4;display:block;object-fit:cover;
     background:linear-gradient(135deg,#1a1a21,#22222b);opacity:0;transition:opacity .35s}
   .card .ph.ok{opacity:1}
@@ -96,6 +111,16 @@
     background:rgba(0,0,0,.45);color:#fff;width:40px;height:58px;border-radius:10px;
     font-size:20px;cursor:pointer}
   .nav.l{left:8px}.nav.r{right:8px}
+  /* 触摸设备上箭头纯属挡图：手指本来就能滑（见下面那段 touchstart/move），
+     40×58 的方块还正好压在图片左右两边。 */
+  @media(hover:none){.nav{display:none}}
+  /* 手机上底部四个元素在 320px 上会顶出去，允许换行兜底；同时把按钮压窄一点，
+     正常 360px 及以上的机型还是一行。 */
+  @media(max-width:430px){
+    .vbot{gap:5px;padding-left:12px;padding-right:12px;flex-wrap:wrap}
+    .vbot .pg{min-width:52px;font-size:12px}
+    .act{padding:7px 10px;font-size:12.5px;gap:4px}
+  }
 
   /* ── 上传面板 ── */
   #up{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.72);display:none;
@@ -136,7 +161,7 @@
     <button data-tab="all" class="on">全部</button>
     <button data-tab="mine">我的</button>
   </div>
-  <a class="go" href="/">生图</a>
+  <a class="go" href="/preset"><span class="g1">自定义预设</span><span class="g2">预设</span></a>
 </header>
 
 <div class="tools" id="tools"></div>

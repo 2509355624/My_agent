@@ -190,6 +190,10 @@
     /* 进度框钉在底部时不贴死屏幕边（iPhone 还有一条 home 指示条要吃） */
     .job { margin-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
     .grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
+    /* 顶栏四样东西在 360px 上会挤成一坨：QQ 号是给别人看的，先让它走 */
+    .topbar { gap: 8px; padding: 10px 12px; }
+    .topbar .who { display: none; }
+    .topbar .btn.sm { padding: 6px 11px; }
   }
 </style>
 </head>
@@ -199,9 +203,8 @@
   <span class="brand">大大怪<i> · </i>生图</span>
   <span class="sp"></span>
   <span class="who" id="who"></span>
-  <a class="btn sm" href="/gallery" style="text-decoration:none;display:inline-flex;
-     align-items:center">画廊</a>
-  <button class="btn sm" id="logoutBtn" style="display:none">退出</button>
+  <a class="btn sm" href="/" style="text-decoration:none;display:inline-flex;
+     align-items:center">画廊</a>  <button class="btn sm" id="logoutBtn" style="display:none">退出</button>
 </div>
 
 <!-- 登录 -->
@@ -377,7 +380,12 @@
     api('/login/verify', { method: 'POST', body: { qq: qq, code: code } })
       .then(function (d) {
         $('verifyBtn').disabled = false;
-        if (d.ok) { enter(qq); }
+        if (d.ok) {
+          // 必须让服务器重新判一次落点：`/` 现在按登录态决定发画廊还是
+          // 登录页，前端切 `#app` 只会停在预设界面、地址栏还写着 `/`，
+          // 一刷新就变成画廊——那是最让人困惑的一种状态。
+          location.reload();
+        }
         else { say($('loginMsg'), d.error || '验证没过', 'err'); }
       });
   };

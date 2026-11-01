@@ -91,5 +91,62 @@ class StreamForwardTest(unittest.TestCase):
         self.assertEqual(r.status_code, 401)
 
 
+class PageRoutingTest(unittest.TestCase):
+    """`/` = 画廊，`/preset` = 自定义预设（2026-11-01 用户拍板）。
+
+    用户原话：「我希望进去之后就是默认画廊，然后右上角才是自定义预设的功能，
+    因为画廊才是核心」。所以根路径改发画廊，预设降成二级入口。
+
+    `/gallery` 必须留着——QQ 里已经发出去的 `/画廊` 链接、群友的浏览器收藏
+    都还指着它，删了就全是 404。
+    """
+
+    GALLERY = "画廊"
+    PRESET = "大大怪 · 生图页"
+
+    def _client(self, logged_in):
+        c = friend_app.app.test_client()
+        if logged_in:
+            c.set_cookie("fr_sess", friend_auth.issue_cookie("2509355624"))
+        return c
+
+    def _title(self, path, logged_in):
+        r = self._client(logged_in).get(path)
+        self.assertEqual(r.status_code, 200, path)
+        return r.get_data(as_text=True)
+
+    def test_root_is_the_gallery_when_logged_in(self):
+        html = self._title("/", True)
+        self.assertIn("<title>" + self.GALLERY + "</title>", html)
+        self.assertNotIn(self.PRESET, html)
+
+    def test_root_falls_back_to_the_login_page(self):
+        """没登录不能直接给画廊——它会一直在那儿转圈等着 401。"""
+        html = self._title("/", False)
+        self.assertIn(self.PRESET, html)
+
+    def test_preset_page_serves_the_old_root(self):
+        for logged in (True, False):
+            with self.subTest(logged=logged):
+                html = self._title("/preset", logged)
+                self.assertIn(self.PRESET, html)
+
+    def test_old_gallery_url_still_works(self):
+        """QQ 里已经发出去的链接不能碎。"""
+        html = self._title("/gallery", True)
+        self.assertIn("<title>" + self.GALLERY + "</title>", html)
+        html = self._title("/gallery", False)
+        self.assertIn(self.PRESET, html)
+
+    def test_gallery_links_to_the_preset_page(self):
+        """右上角那个入口得指对地方，否则点一下 404。"""
+        html = self._title("/", True)
+        self.assertIn('href="/preset"', html)
+
+    def test_preset_page_links_back_to_root(self):
+        html = self._title("/preset", True)
+        self.assertIn('href="/"', html)
+
+
 if __name__ == "__main__":
     unittest.main()
