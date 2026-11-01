@@ -593,6 +593,12 @@ _PRESET_CMD_RE = re.compile(r"自定义预设")
 _PRESET_WEB_RE = re.compile(
     r"预设网页|画图网页|群友页|预设地址|群友网址")
 
+# 「/画廊」= 要画廊地址（2026-11-01）。**必须带斜杠且顶在句首**——「画廊」
+# 两个字在群聊里太常见，纯关键词命中等于每聊一次就甩一次链接。斜杠已经是
+# 门槛，所以这条**不用再喊名字**（与 `/直通-` 前缀同理）。正则与
+# `app/direct_gen.py` 那份保持一字不差。
+_GALLERY_RE = re.compile(r"^\s*[\/／]\s*画廊")
+
 
 def _private_gate(user_id):
     """私聊闸：settings.json 优先（管理页热改，不用重启），缺省回落 .env。
@@ -702,6 +708,9 @@ def _should_reply(ev, target, target_id, text, at_me, has_image=False,
     # 「/直通-」前缀等同被 @：用户刻意写的下单命令，直接放行（见上方常量注释）。
     if _DIRECT_PREFIX_RE.match(text):
         return True, "直通前缀"
+    # 「/画廊」同理：斜杠即命令，群里不用 @ 也不用喊名字（见上方常量注释）。
+    if _GALLERY_RE.match(text):
+        return True, "画廊指令（带斜杠）"
     # 2026-10-31：预设网页 / 自定义预设这两条**不再无条件放行**，得先喊一声
     # 机器人（@ 或「大大怪」）。它们原本「关键词命中就免 @」，结果菜单和回执
     # 把这两个词印在群聊里，谁复述一句就把地址/名单甩出来。判据见 app/trigger.py。

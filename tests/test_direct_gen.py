@@ -4173,6 +4173,96 @@ class PresetWebCmdTest(unittest.TestCase):
                 pass
 
 
+class GalleryCmdTest(unittest.TestCase):
+    """`/画廊`（2026-11-01）：**必须带斜杠且顶在句首**，群里也只回「私聊我发你」。
+
+    和 `/预设网页` 的关键差别是触发词。那一条放宽到「关键词命中即可」，
+    是因为「预设网页」是个生造组合词、日常对话撞不上；「画廊」不是——
+    「这个画廊不错」「P站画廊」都会出现在群聊里，纯关键词等于每聊一次就甩
+    一次链接。用户 2026-11-01 拍板只认带斜杠的写法。
+
+    也正因为斜杠已经是门槛，这条**不过 `trigger.called` 那道闸**（群里
+    不用 @ 也不用喊名字）——和 `/直通-` 前缀同理。
+    """
+
+    URL = "https://calm-otter-1234.trycloudflare.com"
+
+    def _text(self, where="private"):
+        from unittest import mock
+        from app import friend_site
+        with mock.patch.object(friend_site, "url", return_value=self.URL), \
+                mock.patch.object(direct_gen.qq_api, "current_context",
+                                  return_value=(where, "2509355624")):
+            return direct_gen._gallery_text()
+
+    def test_slash_forms_hit(self):
+        for t in ("/画廊", "／画廊", "/ 画廊", "/画廊 怎么进", "  /画廊"):
+            self.assertTrue(direct_gen._GALLERY_RE.match(t), t)
+
+    def test_bare_word_does_not_fire(self):
+        """纯「画廊」交给 AI 正常聊天——这是本类存在的全部理由。"""
+        for t in ("画廊", "这个画廊不错", "P站画廊", "画廊在哪"):
+            self.assertIsNone(direct_gen._GALLERY_RE.match(t), t)
+
+    def test_slash_must_start_the_line(self):
+        """句中出现的斜杠不算指令：转发别人一句话不该触发。"""
+        for t in ("你看 /画廊", "去发/画廊"):
+            self.assertIsNone(direct_gen._GALLERY_RE.match(t), t)
+
+    def test_private_chat_gets_the_gallery_url(self):
+        text = self._text("private")
+        self.assertIn(self.URL + "/gallery", text)
+        self.assertIn("验证码", text)
+
+    def test_group_chat_withholds_the_url(self):
+        text = self._text("group")
+        self.assertNotIn(self.URL, text)
+        self.assertIn("私聊", text)
+
+    def test_tunnel_down_says_so(self):
+        from unittest import mock
+        from app import friend_site
+        with mock.patch.object(friend_site, "url", return_value=""):
+            text = direct_gen._gallery_text()
+        self.assertIn("没开", text)
+        self.assertNotIn("https://", text)
+
+    def test_group_turn_needs_no_mention(self):
+        """群里没 @ 也没喊名字，照样直出——斜杠即命令。"""
+        from unittest import mock
+        from app import friend_site
+        with mock.patch.object(friend_site, "url", return_value=self.URL), \
+                mock.patch.object(direct_gen.qq_api, "current_context",
+                                  return_value=("group", "1103174141")), \
+                mock.patch.object(direct_gen.llm, "call_llm") as m_llm:
+            out = direct_gen.decide("/画廊", [], False)
+        self.assertEqual(out, "画廊在群友页里，网址我私聊发你——先加我好友，"
+                              "私聊发「/画廊」就行。")
+        m_llm.assert_not_called()
+
+    def test_bare_word_still_goes_to_ai(self):
+        """群里单说「画廊」不能被当成指令吞掉。"""
+        from unittest import mock
+        with mock.patch.object(direct_gen.llm, "call_llm",
+                               return_value='{"skill": "", "prompt": "", '
+                                            '"reply": "那个画廊啊"}'):
+            out = direct_gen.decide("这个画廊不错", [], False)
+        self.assertEqual(out, "那个画廊啊")
+
+    def test_both_menus_mention_it(self):
+        """不给入口就没人知道有这功能——两条说明书都得提到。"""
+        self.assertIn("/画廊", direct_gen.MENU_TEXT)
+        self.assertIn("/画廊", direct_gen.GUIDE_TEXT)
+
+    def test_qq_bot_gate_lets_slash_through(self):
+        """群聊闸门：带斜杠直接放行，不带就得走关键词/@。"""
+        from app import qq_bot
+        ev = {"user_id": "1"}
+        ok, why = qq_bot._should_reply(ev, "group", "9", "/画廊", False)
+        self.assertTrue(ok)
+        self.assertIn("画廊", why)
+
+
 class QuotedPresetTest(unittest.TestCase):
     """引用图 + `zdy-` 预设 = 照这张的味道、用这套 LoRA 画一张新的（2026-10-30）。
 
