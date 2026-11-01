@@ -478,6 +478,11 @@ def save_upload(qq, files):
 
     上传一律重新编码，不信原文件名、也不保留原图：站主要省的是空间，
     一张 8MB 的 PNG 压完是 150KB，留着原图等于没做这件事。
+
+    例外：浏览器已经压过的（WebP 且长边 ≤1600）原样落盘。前端上传前会
+    在 canvas 里缩一遍再传——不这么做，几十 MB 的原图要顺着家宽上行推过
+    隧道，一张传十几秒；压完只有 150KB。既然已经压到位，服务端再编一次
+    只是白白丢画质，体积也省不下几个字节。
     """
     from io import BytesIO
 
@@ -497,11 +502,17 @@ def save_upload(qq, files):
     rows = []
     for i, (name, raw) in enumerate(files, 1):
         try:
+            p = os.path.join(d, "%03d.webp" % i)
             with Image.open(BytesIO(raw)) as im:
-                im = _norm_mode(im)
-                im.thumbnail((1600, 1600), Image.LANCZOS)
-                p = os.path.join(d, "%03d.webp" % i)
-                im.save(p, "WEBP", quality=88, method=4)
+                already = ((im.format or "").upper() == "WEBP"
+                           and max(im.size) <= 1600)
+                if already:
+                    with open(p, "wb") as f:
+                        f.write(raw)
+                else:
+                    out = _norm_mode(im)
+                    out.thumbnail((1600, 1600), Image.LANCZOS)
+                    out.save(p, "WEBP", quality=88, method=4)
             rows.append((wid, i - 1, p, os.path.getsize(p)))
         except Exception:
             log.warning("上传的第 %d 张转码失败：%s", i, name, exc_info=True)

@@ -402,6 +402,9 @@
   }
 
   $('logoutBtn').onclick = function () {
+    // 退出要二次确认：手机上一滑就点到的位置，误触一次就得重新走验证码，
+    // 而验证码是私聊发的，人不在 QQ 旁边就等于被锁在外面。
+    if (!confirm('确定退出登录？\n\n退出后要重新填 QQ 号、收一次验证码才能进来。')) return;
     api('/logout', { method: 'POST', body: {} }).then(function () {
       location.reload();
     });

@@ -536,3 +536,47 @@ class ConfigTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UploadAlreadySmallTest(_Base):
+    """浏览器压过的图，服务端别再压第二遍。
+
+    上传慢的根因是传输：一张 8MB 的原图顺着家宽上行推过隧道要十几秒。
+    现在前端先在 canvas 里缩到 1600、转 WebP（约 150KB）再传，服务端
+    看到「WebP 且长边 ≤1600」就原样落盘 —— 再编一次只是白白丢画质。
+    """
+
+    def _webp(self, size, quality=85):
+        b = io.BytesIO()
+        Image.new("RGB", size, (200, 120, 90)).save(b, "WEBP", quality=quality)
+        return b.getvalue()
+
+    def _saved(self, wid):
+        with gallery.connect() as con:
+            return con.execute("SELECT path FROM items WHERE work_id=?",
+                               (wid,)).fetchone()["path"]
+
+    def test_small_webp_is_stored_byte_for_byte(self):
+        raw = self._webp((1600, 1200))
+        wid, n = gallery.save_upload("20002", [("x.webp", raw)])
+        self.assertEqual(n, 1)
+        p = self._saved(wid)
+        self.assertEqual(os.path.getsize(p), len(raw))
+        with open(p, "rb") as f:
+            self.assertEqual(f.read(), raw)
+
+    def test_big_webp_still_gets_shrunk(self):
+        raw = self._webp((2400, 1800))
+        wid, n = gallery.save_upload("20002", [("x.webp", raw)])
+        self.assertEqual(n, 1)
+        with Image.open(self._saved(wid)) as im:
+            self.assertLessEqual(max(im.size), 1600)
+
+    def test_png_without_precompression_still_converted(self):
+        """前端压不动的（老浏览器 / 内存不够）传了原图，服务端照旧兜底。"""
+        wid, n = gallery.save_upload("20002", [("x.png", _png(size=(900, 1200)))])
+        self.assertEqual(n, 1)
+        p = self._saved(wid)
+        self.assertTrue(p.endswith(".webp"))
+        with Image.open(p) as im:
+            self.assertEqual(im.format, "WEBP")
