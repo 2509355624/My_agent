@@ -722,6 +722,35 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 DOCUMENTS_DIR = os.path.join(BASE_DIR, "documents")
 VECTOR_STORE_DIR = os.path.join(BASE_DIR, "vector_store", "chroma")
 
+
+# ─── 画廊 ───────────────────────────────────────────
+#
+# 站主磁盘上的图片根目录。**只登记路径，不复制文件**：那 60G 本来就在盘上，
+# 画廊是「把磁盘挂出来看」，不是「再存一份」。
+#
+# 格式：多个用分号隔开，每项 `显示名|绝对路径`（显示名可省，则取目录名）。
+# 不用冒号分隔，因为 Windows 盘符本身就带冒号。
+def _parse_gallery_roots(raw):
+    out = []
+    for part in str(raw or "").split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        name, _, path = part.partition("|")
+        path = (path or name).strip()
+        if not path:
+            continue
+        name = (name if _ else "").strip() or os.path.basename(path.rstrip("\\/")) or path
+        out.append((name, path))
+    return tuple(out)
+
+
+GALLERY_ROOTS = _parse_gallery_roots(os.getenv("GALLERY_ROOTS", ""))
+
+# 站主的 QQ：只有它登录能看到「扫描文件夹」「全部作品」这些管理动作。
+# 留空 = 管理功能整体关闭（宁可关掉也不猜，猜错了等于把删除权限给了别人）。
+GALLERY_OWNER_QQ = os.getenv("GALLERY_OWNER_QQ", "").strip()
+
 # 多 agent：每个 agent 一个自包含目录（agents/<id>/ 里放 agent.json 配置、
 # prompt.md 人设、session.jsonl 会话）。会话文件路径由 app/agents.py 解析，
 # 不再有「全局单会话文件」这种东西。

@@ -62,6 +62,9 @@ LIMITS = {
     # 一次刷新页面 ≈ 1 次页面 + 3 次 API + N 张缩略图，给到 240 才不至于
     # 自己把自己挡住（原来是 120，网格一屏十几张就撞墙）
     "all": (240, 60),
+    # 图片单独一口桶：画廊翻两屏就是几十张缩略图，跟「接口调用」混在一个
+    # 计数里等于让看图把功能位吃掉。1500/分钟 对家用上行已经是天花板了。
+    "img": (1500, 60),
     "send": (10, 3600),      # 发码：每小时 10 次
     "verify": (30, 600),     # 验码：10 分钟 30 次
 }
@@ -121,7 +124,8 @@ def _secure(resp):
 
 @app.before_request
 def _gate():
-    if not rate_ok("all"):
+    bucket = "img" if (request.path or "").startswith("/api/gal/img/") else "all"
+    if not rate_ok(bucket):
         return _secure(jsonify({"ok": False, "error": "请求太频繁，歇一下"})), 429
     return None
 
@@ -184,6 +188,15 @@ def page():
     return send_from_directory(WEB_DIR, "friend.html")
 
 
+@app.route("/gallery")
+@app.route("/gallery.html")
+def gallery_page():
+    """画廊。和生图页同一个登录态，没登录直接踢回登录页。"""
+    if not friend_auth.check_cookie(request.cookies.get(friend_auth.COOKIE_NAME)):
+        return send_from_directory(WEB_DIR, "friend.html")
+    return send_from_directory(WEB_DIR, "gallery.html")
+
+
 @app.route("/health")
 def health():
     return jsonify({"ok": True})
@@ -191,12 +204,16 @@ def health():
 
 # ─── 转发 ────────────────────────────────────────────────
 
-@app.route("/api/friend/<path:sub>", methods=["GET", "POST", "DELETE"])
-def proxy(sub):
+def _forward(prefix, sub):
+    """把请求原样转给 5174，并补上登录态里的 QQ 号。
+
+    `qq` 一律由这里写死塞进去（参数或表单），**不信客户端传来的 qq**——
+    否则谁都能改个 qq 就看别人的东西。
+    """
     qq = friend_auth.check_cookie(request.cookies.get(friend_auth.COOKIE_NAME))
     if not qq:
         return jsonify({"ok": False, "error": "还没登录"}), 401
-    url = "%s/api/friend/%s" % (BACKEND, sub)
+    url = "%s%s/%s" % (BACKEND, prefix, sub)
     headers = {"X-Friend-Token": friend_auth.secret()}
     params = dict(request.args)
     params["qq"] = qq
@@ -205,6 +222,15 @@ def proxy(sub):
             r = _SESSION.get(url, params=params, headers=headers, timeout=60)
         elif request.method == "DELETE":
             r = _SESSION.delete(url, params=params, headers=headers, timeout=60)
+        elif request.mimetype == "multipart/form-data":
+            # 上传作品集：文件必须原样转发（不能先读进内存再重编码——
+            # 几百 MB 一次读进来会把 5175 顶爆）。requests 支持传 fileobj。
+            files = [(k, (f.filename, f.stream, f.mimetype))
+                     for k, f in request.files.items(multi=True)]
+            form = request.form.to_dict()
+            form["qq"] = qq
+            r = _SESSION.post(url, params=params, data=form, files=files,
+                              headers=headers, timeout=300)
         else:
             body = request.get_json(silent=True) or {}
             body["qq"] = qq
@@ -220,6 +246,16 @@ def proxy(sub):
         return Response(r.content, status=r.status_code, content_type=ctype)
     except Exception:
         return jsonify({"ok": False, "error": "后台返回看不懂"}), 502
+
+
+@app.route("/api/friend/<path:sub>", methods=["GET", "POST", "DELETE"])
+def proxy(sub):
+    return _forward("/api/friend", sub)
+
+
+@app.route("/api/gal/<path:sub>", methods=["GET", "POST", "DELETE"])
+def proxy_gal(sub):
+    return _forward("/api/gal", sub)
 
 
 def run():

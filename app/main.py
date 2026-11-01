@@ -28,6 +28,7 @@ from app import comic_api
 from app import moss_api
 from app import gen_api
 from app import friend_api
+from app import gallery_api
 from app import card_api
 from app import output_api
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
@@ -126,6 +127,10 @@ app.register_blueprint(gen_api.bp)
 # 只有 5175（friend_app.py）带 X-Friend-Token 转发进来时才认。
 app.register_blueprint(friend_api.bp)
 
+# 画廊（独立 Blueprint，见 app/gallery_api.py）：站主磁盘目录 → 作品集，
+# 群友上传 → 压缩后入库。同样只认内部令牌，公网入口在 5175。
+app.register_blueprint(gallery_api.bp)
+
 
 @app.before_request
 def _tunnel_guard():
@@ -140,7 +145,7 @@ def _tunnel_guard():
             or request.headers.get("CF-Ray")):
         return None
     p = request.path or ""
-    if p.startswith("/api/friend/") or p == "/health":
+    if p.startswith("/api/friend/") or p.startswith("/api/gal/") or p == "/health":
         return None
     return jsonify({"ok": False, "error": "not found"}), 404
 
