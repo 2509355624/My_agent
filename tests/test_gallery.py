@@ -138,6 +138,19 @@ class ThumbTest(_Base):
             f.write(b"not an image")
         self.assertIsNone(gallery.thumb(p, "t"))
 
+    def test_reuse_direct_only_for_webp_within_edge(self):
+        """已经是我们压过的 webp 就不该再编码一次——掉画质还白占缓存。"""
+        png = self.mk("1", "a.png")
+        self.assertFalse(gallery.reuse_direct(png))
+
+        small = os.path.join(self.root, "1", "s.webp")
+        Image.new("RGB", (300, 400), (10, 20, 30)).save(small, "WEBP")
+        self.assertTrue(gallery.reuse_direct(small))
+
+        big = os.path.join(self.root, "1", "b.webp")
+        Image.new("RGB", (2000, 3000), (10, 20, 30)).save(big, "WEBP")
+        self.assertFalse(gallery.reuse_direct(big), "超 1600 的 webp 仍要缩")
+
 
 class AliasTest(unittest.TestCase):
     def test_same_qq_same_alias(self):
@@ -206,6 +219,28 @@ class ApiTest(_Base):
         self.assertEqual(r.headers["Content-Type"], "image/webp")
         self.assertLess(len(r.data), 200 * 1024)
 
+    def test_full_no_longer_serves_the_original(self):
+        """原图下载已取消：传 s=full 也只拿到 webp 压缩图。
+
+        原图中位 5MB、最大 149MB，一个作品集拖一遍就是几 GB 上行。
+        站主要原图直接开磁盘，不该从网页出去。
+        """
+        wid = self.j(self.c.get("/api/gal/list?qq=10001", headers=self.h))["works"][0]["id"]
+        iid = self.j(self.c.get("/api/gal/work/%d?qq=10001" % wid, headers=self.h))["items"][0]["id"]
+        with gallery.connect() as con:
+            src = con.execute("SELECT path FROM items WHERE id=?", (iid,)).fetchone()["path"]
+        r = self.c.get("/api/gal/img/%d?s=full&qq=10001" % iid, headers=self.h)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers["Content-Type"], "image/webp")
+        with open(src, "rb") as f:
+            self.assertNotEqual(r.data, f.read(), "s=full 不该再吐出源文件")
+
+    def test_item_ext_is_webp_even_for_png_sources(self):
+        """下载拿到的是 webp，文件名就不能按 .png 拼——手机上打不开。"""
+        wid = self.j(self.c.get("/api/gal/list?qq=10001", headers=self.h))["works"][0]["id"]
+        items = self.j(self.c.get("/api/gal/work/%d?qq=10001" % wid, headers=self.h))["items"]
+        self.assertTrue(all(x["ext"] == "webp" for x in items))
+
 
 class UploadTest(_Base):
     def setUp(self):
@@ -239,6 +274,18 @@ class UploadTest(_Base):
         self.assertEqual(len(other["works"]), 1)
         # 但看不到 QQ 号
         self.assertNotIn("20002", str(other))
+
+    def test_uploaded_webp_served_without_extra_cache(self):
+        """群友上传落盘时就是 1600px webp，下载直接发源文件，不再压一遍。"""
+        wid = self.upload("20002").get_json()["work_id"]
+        iid = self.c.get("/api/gal/work/%d?qq=20002" % wid,
+                         headers=self.h).get_json()["items"][0]["id"]
+        before = set(os.listdir(gallery.CACHE)) if os.path.isdir(gallery.CACHE) else set()
+        r = self.c.get("/api/gal/img/%d?s=v&qq=20002" % iid, headers=self.h)
+        after = set(os.listdir(gallery.CACHE)) if os.path.isdir(gallery.CACHE) else set()
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers["Content-Type"], "image/webp")
+        self.assertEqual(before, after, "已是 webp 的图不该再生成缓存副本")
 
     def test_author_can_delete_other_cannot(self):
         wid = self.upload("20002").get_json()["work_id"]

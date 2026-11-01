@@ -209,8 +209,10 @@ def api_work(wid):
                    "like": 1 if r["id"] in liked else 0,
                    "fav": 1 if r["id"] in faved else 0,
                    "likes": likes.get(r["id"], 0),
-                   # 给下载按钮拼文件名用。只吐后缀，路径不出接口。
-                   "ext": (os.path.splitext(r["path"])[1].lstrip(".") or "png").lower()}
+                   # 下载拿到的永远是压缩图（webp），不是源文件的格式。
+                   # 这里写死而不是读 path 后缀：按 .png 命名一个 webp，
+                   # 手机上点了打不开。
+                   "ext": "webp"}
                   for r in items],
     })
 
@@ -239,11 +241,18 @@ def api_img(iid):
     if not os.path.isfile(src):
         return jsonify({"ok": False, "error": "文件不在了"}), 404
 
+    # 画廊只发压缩图。原图中位 5MB、库里最大一张 149MB，一个作品集被完整
+    # 拖一遍就是几个 GB 的上行；站主要原图直接开磁盘，不必过网页。
+    # 传 `s=full` 也只会拿到预览图（不报错，免得旧链接碎掉）。
     mode = str(request.args.get("s") or "t").lower()
-    if mode == "full":
-        return send_file(src, conditional=True, max_age=600)
 
-    p = gallery.thumb(src, "v" if mode == "v" else "t")
+    # 群友上传的图落盘时就是 1600px WebP，直接发源文件：
+    # 再压一次只掉画质，还白占一份缓存。
+    if mode != "t" and gallery.reuse_direct(src):
+        return send_file(src, mimetype="image/webp", conditional=True,
+                         max_age=600)
+
+    p = gallery.thumb(src, "t" if mode == "t" else "v")
     if not p:
         return jsonify({"ok": False, "error": "转码失败"}), 415
     return send_file(p, mimetype="image/webp", conditional=True, max_age=600)

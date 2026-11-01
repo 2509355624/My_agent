@@ -446,10 +446,12 @@
     var it = S.items[S.idx];
     if (!it) return;
     var a = document.createElement("a");
-    a.href = "/api/gal/img/" + it.id + "?s=full";
-    // 后缀必须带：没后缀的文件在手机上点了打不开，会变成"下载了一个陌生文件"
+    // 下载发的是 1600px 压缩图，不是磁盘上的 PNG 原图：原图中位 5MB、
+    // 最大 149MB，一个作品集整个拖一遍就是几个 GB 的上行。
+    a.href = "/api/gal/img/" + it.id + "?s=v";
+    // 后缀必须和实际格式一致，否则手机上下出来打不开。
     a.download = (S.cur ? S.cur.title : "image") + "-" + (S.idx + 1) +
-                 "." + (it.ext || "png");
+                 "." + (it.ext || "webp");
     a.click();
   };
   $("vdel").onclick = function () {

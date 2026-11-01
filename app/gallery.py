@@ -292,11 +292,26 @@ def _norm_mode(im):
     return im.convert("RGB")
 
 
+def reuse_direct(src, edge=1600):
+    """已经是我们自己压过的 webp、且不比 edge 大 —— 直接发源文件。
+
+    群友上传的图在落盘时就是 1600px WebP，再压一次只掉画质、还多占一份缓存。
+    只认 `.webp`：站主那边的小 PNG/JPEG 转 webp 仍然划算（体积能差十倍）。
+    """
+    if not str(src).lower().endswith(".webp"):
+        return False
+    try:
+        with Image.open(src) as im:
+            return max(im.size) <= edge
+    except Exception:
+        return False
+
+
 def thumb(src, kind="t"):
     """按需生成缓存图。→ 缓存文件绝对路径，失败返回 None。
 
-    kind: `t` 网格缩略（360px）、`v` 预览（1600px）。
-    `full` 不走这里，直接发原图。
+    kind: `t` 网格缩略（360px）、`v` 预览（1600px）。画廊只发这两种，
+    原图不出服务端。
     """
     edge = {"t": 360, "v": 1600}.get(kind)
     if not edge:
