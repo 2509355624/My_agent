@@ -88,6 +88,50 @@
 
   .empty{text-align:center;color:var(--dim);padding:56px 20px;font-size:14px;line-height:1.8}
 
+  /* ── 作品集详情（网格）── */
+  #detail{position:fixed;inset:0;z-index:40;background:var(--bg);display:none;
+    flex-direction:column}
+  #detail.on{display:flex}
+  .dtop{display:flex;align-items:center;gap:10px;padding:12px 14px;
+    padding-top:calc(12px + env(safe-area-inset-top,0));flex:0 0 auto;
+    background:rgba(13,13,16,.9);backdrop-filter:blur(14px);
+    border-bottom:1px solid var(--line)}
+  .dtop button{border:0;background:rgba(255,255,255,.08);color:var(--tx);
+    font:inherit;font-size:20px;line-height:1;width:36px;height:36px;
+    border-radius:50%;cursor:pointer;flex:0 0 auto}
+  .dinfo{flex:1;min-width:0}
+  .dt{font-size:15px;font-weight:600;overflow:hidden;white-space:nowrap;
+    text-overflow:ellipsis}
+  .dby{font-size:12px;color:var(--dim);margin-top:1px}
+  /* 排版切换：按钮上直接写「现在是哪种」，比一个抽象图标好猜 */
+  #dmode{width:auto;border-radius:10px;padding:0 12px;font-size:13px;
+    background:var(--card);border:1px solid var(--line);height:32px}
+  /* 两列是默认（和主页一致），单列给「想看清楚点」的场景 */
+  #dgrid{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;
+    display:grid;gap:8px;grid-template-columns:repeat(2,1fr);
+    align-content:start;
+    padding:10px 12px calc(28px + env(safe-area-inset-bottom,0))}
+  /* 单列改用 flex 竖排：grid 的行高会把 13 张图平均压进一屏，
+     表现是每张只剩一条 50px 的横条。flex 下高度全由图片自己决定。 */
+  #dgrid.one{display:flex;flex-direction:column;gap:8px;
+    max-width:720px;margin:0 auto;width:100%}
+  @media(min-width:760px){
+    #dgrid{grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
+  }
+  .shot{position:relative;border-radius:10px;overflow:hidden;background:var(--card);
+    cursor:pointer;aspect-ratio:3/4}
+  #dgrid.one .shot{aspect-ratio:auto;flex:0 0 auto}
+  .shot img{width:100%;height:100%;object-fit:cover;display:block;opacity:0;
+    transition:opacity .3s}
+  #dgrid.one .shot img{height:auto;object-fit:contain;background:#000}
+  .shot img.ok{opacity:1}
+  .shot .pg{position:absolute;left:6px;top:6px;background:rgba(0,0,0,.62);
+    color:#fff;font-size:11px;padding:1px 6px;border-radius:20px;
+    backdrop-filter:blur(4px)}
+  .shot .mk{position:absolute;right:7px;top:6px;font-size:14px;
+    text-shadow:0 1px 4px rgba(0,0,0,.9)}
+  .dempty{text-align:center;color:var(--dim);padding:48px 20px;font-size:14px}
+
   /* ── 查看器 ── */
   #viewer{position:fixed;inset:0;z-index:50;background:#000;display:none;
     flex-direction:column}
@@ -212,6 +256,19 @@
 
 <main><div id="grid"></div></main>
 
+<!-- 作品集详情：先进这里看网格，点某张才全屏 -->
+<div id="detail">
+  <div class="dtop">
+    <button id="dback" title="返回">‹</button>
+    <div class="dinfo">
+      <div class="dt" id="dtitle"></div>
+      <div class="dby" id="dby"></div>
+    </div>
+    <button id="dmode" title="切换排版">⊞ 两列</button>
+  </div>
+  <div id="dgrid"></div>
+</div>
+
 <!-- 查看器 -->
 <div id="viewer">
   <div class="vtop">
@@ -280,7 +337,7 @@
 
   var S = { tab: "owner", sub: "works", page: 1, more: true, busy: false,
             owner: false, works: [], cur: null, idx: 0, items: [], likes: {},
-            fav: {} };
+            fav: {}, layout: "2" };
 
   function $(id) { return document.getElementById(id); }
 
@@ -583,24 +640,104 @@
     }).catch(function (e) { toast(e.message); });
   }
 
-  // ── 查看器 ────────────────────────────────────────────
-  // `at` 给了就停在第几张（从「收藏 / 点赞」点进来时用），不给就从第一张开始。
+  // ── 作品集详情 ────────────────────────────────────────
+  // 点卡片进来先看网格（两列 / 单列可切），再点某张才全屏滑动。
+  // `at` 有值时（从收藏、点赞点进来）直接替你打开全屏并停在那张，
+  // 但详情页依然垫在它下面，关掉查看器不会一脚踹回首页。
   function openWork(id, at) {
     api("work/" + id).then(function (d) {
       S.cur = d.work;
       S.items = d.items || [];
-      S.idx = 0;
       S.fav = {};
       (d.items || []).forEach(function (it) { if (it.fav) S.fav[it.id] = 1; });
-      $("vtitle").textContent = d.work.title;
-      $("vby").textContent = d.work.by + (d.work.n > 1 ? " · " + d.work.n + " 张" : "");
-      $("vdel").style.display = d.work.can_delete ? "" : "none";
-      $("viewer").classList.add("on");
+      renderDetail();
+      $("detail").classList.add("on");
       document.body.style.overflow = "hidden";
-      buildTrack();
-      var n = S.items.length ? Math.max(0, Math.min(S.items.length - 1, at || 0)) : 0;
-      go(n, true);
+      $("dgrid").scrollTop = 0;
+      if (at != null) openViewer(at);
     }).catch(function (e) { toast(e.message); });
+  }
+
+  function renderDetail() {
+    if (!S.cur) return;
+    $("dtitle").textContent = S.cur.title;
+    $("dby").textContent = S.cur.by +
+      (S.cur.n > 1 ? " · " + S.cur.n + " 张" : "") +
+      (S.cur.hidden ? " · 已下架" : "");
+
+    var box = $("dgrid");
+    box.innerHTML = "";
+    if (!S.items.length) {
+      box.innerHTML = '<div class="dempty">这个作品集里没有能看的图</div>';
+      return;
+    }
+    S.items.forEach(function (it, i) {
+      var s = document.createElement("div");
+      s.className = "shot";
+      s.onclick = function () { openViewer(i); };
+
+      var im = document.createElement("img");
+      im.loading = "lazy";              // 一个作品集可能 288 张，不能全拉
+      im.decoding = "async";
+      im.alt = "";
+      im.src = "/api/gal/img/" + it.id + "?s=t";
+      im.onload = function () { im.classList.add("ok"); };
+      im.onerror = function () { im.classList.add("ok"); im.style.opacity = ".3"; };
+      s.appendChild(im);
+
+      var pg = document.createElement("div");
+      pg.className = "pg";
+      pg.textContent = i + 1;
+      s.appendChild(pg);
+
+      if (it.fav) {
+        var mk = document.createElement("div");
+        mk.className = "mk";
+        mk.textContent = "★";
+        s.appendChild(mk);
+      }
+      box.appendChild(s);
+    });
+  }
+
+  function closeDetail() {
+    $("detail").classList.remove("on");
+    document.body.style.overflow = "";
+    $("dgrid").innerHTML = "";
+    S.cur = null;
+    S.items = [];
+    if (location.hash.indexOf("#w=") === 0) {
+      history.replaceState(null, "", location.pathname + location.search);
+    }
+    // 在收藏 / 点赞里改过标记，回到墙面上要重拉，否则卡片还是老样子。
+    // 没动过就不重拉，保住原来的滚动位置。
+    if (S.dirty) { S.dirty = false; if (isPhoto()) load(true); }
+  }
+
+  // 排版：两列 / 单列。记住上次选的，别每次进来都重置。
+  function setLayout(m) {
+    S.layout = (m === "one") ? "one" : "2";
+    try { localStorage.setItem("gal_layout", S.layout); } catch (e) {}
+    $("dgrid").classList.toggle("one", S.layout === "one");
+    $("dmode").textContent = S.layout === "one" ? "☰ 单列" : "⊞ 两列";
+  }
+
+  $("dback").onclick = closeDetail;
+  $("dmode").onclick = function () {
+    setLayout(S.layout === "one" ? "2" : "one");
+  };
+
+  // ── 查看器 ────────────────────────────────────────────
+  function openViewer(i) {
+    if (!S.items.length || !S.cur) return;
+    $("vtitle").textContent = S.cur.title;
+    $("vby").textContent = S.cur.by +
+      (S.cur.n > 1 ? " · " + S.cur.n + " 张" : "");
+    $("vdel").style.display = S.cur.can_delete ? "" : "none";
+    buildTrack();
+    $("viewer").classList.add("on");
+    var n = Math.max(0, Math.min(S.items.length - 1, i || 0));
+    go(n, true);
   }
 
   function buildTrack() {
@@ -666,6 +803,7 @@
     else {
       S.fav = S.fav || {};
       S.fav[it.id] = !S.fav[it.id];
+      it.fav = S.fav[it.id] ? 1 : 0;   // 详情网格的星标读这个
     }
     S.dirty = true;                 // 关查看器时决定要不要重拉列表
     syncMark();
@@ -679,13 +817,29 @@
 
   function closeViewer() {
     $("viewer").classList.remove("on");
-    document.body.style.overflow = "";
     $("track").innerHTML = "";
-    S.items = [];
-    // 在「收藏 / 点赞」里取消过，回来就得重拉一次，否则卡片还挂在墙上。
-    // 没动过收藏就不重拉，免得白白丢滚动位置。
-    if (S.dirty && isPhoto()) { S.dirty = false; load(true); }
-    else { S.dirty = false; }
+    // 详情页还垫在下面，body 继续锁滚动；两层都关了才放开。
+    if (!$("detail").classList.contains("on")) document.body.style.overflow = "";
+    // 收藏星标要跟手更新，不然刚收藏完退回网格还是空的
+    if (S.dirty) syncDetailMarks();
+  }
+
+  // 把 S.items 上的收藏状态同步到详情网格右上角那颗星
+  function syncDetailMarks() {
+    var shots = $("dgrid").children;
+    S.items.forEach(function (it, i) {
+      var s = shots[i];
+      if (!s) return;
+      var mk = s.querySelector(".mk");
+      if (it.fav && !mk) {
+        mk = document.createElement("div");
+        mk.className = "mk";
+        mk.textContent = "★";
+        s.appendChild(mk);
+      } else if (!it.fav && mk) {
+        mk.parentNode.removeChild(mk);
+      }
+    });
   }
 
   $("vclose").onclick = closeViewer;
@@ -713,6 +867,7 @@
         if (!d.ok) throw new Error(d.error || "删除失败");
         toast("已删除");
         closeViewer();
+        closeDetail();
         load(true);
       }).catch(function (e) { toast(e.message); });
   };
@@ -749,10 +904,14 @@
   })();
 
   document.addEventListener("keydown", function (e) {
-    if (!$("viewer").classList.contains("on")) return;
-    if (e.key === "Escape") closeViewer();
-    if (e.key === "ArrowLeft") go(S.idx - 1);
-    if (e.key === "ArrowRight") go(S.idx + 1);
+    if ($("viewer").classList.contains("on")) {
+      if (e.key === "Escape") closeViewer();
+      if (e.key === "ArrowLeft") go(S.idx - 1);
+      if (e.key === "ArrowRight") go(S.idx + 1);
+      return;
+    }
+    // 查看器没开时 ESC 退详情页，不然全屏层里按 ESC 什么都不会发生
+    if (e.key === "Escape" && $("detail").classList.contains("on")) closeDetail();
   });
 
   // ── 上传 ──────────────────────────────────────────────
@@ -878,6 +1037,12 @@
       b.classList.toggle("on", b.dataset.tab === S.tab);
     });
     renderSubtabs();
+  })();
+  // 排版沿用上次选的（两列 / 单列），默认两列
+  (function () {
+    var m = "2";
+    try { m = localStorage.getItem("gal_layout") || "2"; } catch (e) {}
+    setLayout(m);
   })();
   load(true);
   setTimeout(fromHash, 600);
