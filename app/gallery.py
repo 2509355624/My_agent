@@ -470,65 +470,109 @@ def upload_dir(qq, wid):
     return os.path.join(UPLOAD, str(qq), str(wid))
 
 
-def save_upload(qq, files):
-    """把上传的图压成 1600px WebP 落盘。
+def create_work(qq, title=""):
+    """先开一个空的作品集壳，返回 wid。
 
-    files: [(filename, bytes)]，已由调用方做过分类型和大小检查。
-    → (work_id, 存了几张)
+    逐张上传要用它：前端压好一张就传一张，第一张落地时后面九张可能还没
+    解压完。所以壳必须先于图存在，否则每张都得等上一张。
 
-    上传一律重新编码，不信原文件名、也不保留原图：站主要省的是空间，
-    一张 8MB 的 PNG 压完是 150KB，留着原图等于没做这件事。
-
-    例外：浏览器已经压过的（WebP 且长边 ≤1600）原样落盘。前端上传前会
-    在 canvas 里缩一遍再传——不这么做，几十 MB 的原图要顺着家宽上行推过
-    隧道，一张传十几秒；压完只有 150KB。既然已经压到位，服务端再编一次
-    只是白白丢画质，体积也省不下几个字节。
+    中途关掉页面最多留一个空壳，`abort_upload` 负责回收。
     """
-    from io import BytesIO
-
-    os.makedirs(UPLOAD, exist_ok=True)
     now = time.time()
     with connect() as con:
         cur = con.execute(
             "INSERT INTO works(key, src, owner, grp, title, path, cover, n,"
             " sort, ts, seen) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-            ("", "user", str(qq), "群友", "", "", "", 0, 0, now, now))
+            ("", "user", str(qq), "群友", title or "未命名作品", "",
+             "", 0, 0, now, now))
         wid = cur.lastrowid
         con.execute("UPDATE works SET key=? WHERE id=?",
                     ("user:%s/%d" % (qq, wid), wid))
+    return wid
+
+
+def own_work(qq, wid):
+    """这个作品集是不是他自己的。→ (是, 已经存了几张)"""
+    with connect() as con:
+        row = con.execute(
+            "SELECT n FROM works WHERE id=? AND src='user' AND owner=?",
+            (wid, str(qq))).fetchone()
+    return (True, int(row["n"] or 0)) if row else (False, 0)
+
+
+def append_upload(qq, wid, name, raw, idx=None):
+    """往已有作品集里追加一张，压成 1600px WebP 落盘。→ 存下的序号（1 基）
+
+    上传一律重新编码，不信原文件名、也不保留原图：一张 8MB 的 PNG 压完
+    是 150KB，留着原图等于没做这件事。
+
+    例外：浏览器已经压过的（WebP 且长边 ≤1600）原样落盘。前端上传前会
+    在浏览器里缩一遍再传——不这么做，几十 MB 的原图要顺着家宽上行推过
+    隧道，一张传十几秒；压完只有 150KB。既然已经压到位，服务端再编一次
+    只是白白丢画质，体积也省不下几个字节。
+    """
+    from io import BytesIO
 
     d = upload_dir(qq, wid)
     os.makedirs(d, exist_ok=True)
-    rows = []
+    with connect() as con:
+        row = con.execute("SELECT n FROM works WHERE id=?", (wid,)).fetchone()
+        used = int(row["n"] or 0) if row else 0
+    i = idx if idx and idx > 0 else used + 1
+
+    p = os.path.join(d, "%03d.webp" % i)
+    with Image.open(BytesIO(raw)) as im:
+        already = ((im.format or "").upper() == "WEBP"
+                   and max(im.size) <= 1600)
+        if already:
+            with open(p, "wb") as f:
+                f.write(raw)
+        else:
+            out = _norm_mode(im)
+            out.thumbnail((1600, 1600), Image.LANCZOS)
+            out.save(p, "WEBP", quality=88, method=4)
+
+    size = os.path.getsize(p)
+    with connect() as con:
+        # 同一个序号重传（上一张失败后重试）就顶掉旧行，不留重复
+        con.execute("DELETE FROM items WHERE work_id=? AND idx=?", (wid, i - 1))
+        con.execute("INSERT INTO items(work_id, idx, path, bytes)"
+                    " VALUES(?,?,?,?)", (wid, i - 1, p, size))
+        con.execute(
+            "UPDATE works SET path=?,"
+            " cover=CASE WHEN cover='' OR cover IS NULL THEN ? ELSE cover END,"
+            " n=(SELECT COUNT(*) FROM items WHERE work_id=works.id)"
+            " WHERE id=?", (d, p, wid))
+    return i
+
+
+def abort_upload(qq, wid):
+    """回收空壳：一张都没存下的作品集别留在墙上。→ 真的删了为 True"""
+    ok, n = own_work(qq, wid)
+    if not ok or n:
+        return False
+    delete_work(wid, owner=qq)
+    return True
+
+
+def save_upload(qq, files):
+    """一次传多张：开壳 + 逐张落盘。→ (work_id, 存了几张)
+
+    files: [(filename, bytes)]，已由调用方做过大小检查。
+    逐张上传的接口走 create_work + append_upload，这里是批量兜底。
+    """
+    wid = create_work(qq)
+    n = 0
     for i, (name, raw) in enumerate(files, 1):
         try:
-            p = os.path.join(d, "%03d.webp" % i)
-            with Image.open(BytesIO(raw)) as im:
-                already = ((im.format or "").upper() == "WEBP"
-                           and max(im.size) <= 1600)
-                if already:
-                    with open(p, "wb") as f:
-                        f.write(raw)
-                else:
-                    out = _norm_mode(im)
-                    out.thumbnail((1600, 1600), Image.LANCZOS)
-                    out.save(p, "WEBP", quality=88, method=4)
-            rows.append((wid, i - 1, p, os.path.getsize(p)))
+            append_upload(qq, wid, name, raw, idx=i)
+            n += 1
         except Exception:
             log.warning("上传的第 %d 张转码失败：%s", i, name, exc_info=True)
-
-    if rows:
-        with connect() as con:
-            con.executemany("INSERT INTO items(work_id, idx, path, bytes)"
-                            " VALUES(?,?,?,?)", rows)
-            con.execute("UPDATE works SET n=?, cover=?, path=? WHERE id=?",
-                        (len(rows), rows[0][2], d, wid))
-        return wid, len(rows)
-    # 一张都没转成功：别留一个空壳作品集在墙上
-    with connect() as con:
-        con.execute("DELETE FROM works WHERE id=?", (wid,))
-    shutil.rmtree(d, ignore_errors=True)
-    return None, 0
+    if not n:
+        delete_work(wid)
+        return None, 0
+    return wid, n
 
 
 def load_upload_image(raw):

@@ -580,3 +580,135 @@ class UploadAlreadySmallTest(_Base):
         self.assertTrue(p.endswith(".webp"))
         with Image.open(p) as im:
             self.assertEqual(im.format, "WEBP")
+
+
+class UploadOneByOneTest(_Base):
+    """逐张上传：先开壳，压好一张塞一张。
+
+    换掉「攒一批一次 POST」的原因是第一张就能落地，不用等整批压完。
+    这里盯的是壳和图的一致性：序号连续、封面只认第一张、同一序号重传
+    不会多出一条、空壳能收回去。
+    """
+
+    def _webp(self, color=(10, 20, 30)):
+        b = io.BytesIO()
+        Image.new("RGB", (1600, 1200), color).save(b, "WEBP", quality=85)
+        return b.getvalue()
+
+    def _work(self, wid):
+        with gallery.connect() as con:
+            r = con.execute("SELECT * FROM works WHERE id=?",
+                            (wid,)).fetchone()
+        return dict(r) if r else None
+
+    def _items(self, wid):
+        with gallery.connect() as con:
+            return [dict(r) for r in con.execute(
+                "SELECT * FROM items WHERE work_id=? ORDER BY idx", (wid,))]
+
+    def test_shell_starts_empty(self):
+        wid = gallery.create_work("20003", "测试")
+        w = self._work(wid)
+        self.assertEqual(w["n"], 0)
+        self.assertEqual(w["cover"], "")
+        self.assertEqual(w["title"], "测试")
+        self.assertEqual(w["src"], "user")
+        self.assertEqual(w["key"], "user:20003/%d" % wid)
+
+    def test_append_keeps_order_and_cover(self):
+        wid = gallery.create_work("20003")
+        self.assertEqual(
+            gallery.append_upload("20003", wid, "a.webp", self._webp()), 1)
+        self.assertEqual(
+            gallery.append_upload("20003", wid, "b.webp", self._webp()), 2)
+        items = self._items(wid)
+        self.assertEqual([i["idx"] for i in items], [0, 1])
+        self.assertEqual(self._work(wid)["n"], 2)
+        # 封面只认第一张，后面追加不动它
+        self.assertEqual(self._work(wid)["cover"], items[0]["path"])
+
+    def test_append_same_idx_overwrites(self):
+        """同一张失败重传：顶掉旧行，不该变成两条记录。"""
+        wid = gallery.create_work("20003")
+        gallery.append_upload("20003", wid, "a.webp", self._webp(), idx=1)
+        gallery.append_upload("20003", wid, "a.webp", self._webp(), idx=1)
+        self.assertEqual(self._work(wid)["n"], 1)
+        self.assertEqual(len(self._items(wid)), 1)
+
+    def test_own_work_only_for_owner(self):
+        wid = gallery.create_work("20003")
+        self.assertEqual(gallery.own_work("20003", wid), (True, 0))
+        self.assertEqual(gallery.own_work("99999", wid), (False, 0))
+
+    def test_abort_only_removes_empty_shell(self):
+        wid = gallery.create_work("20003")
+        self.assertFalse(gallery.abort_upload("99999", wid))   # 不是他的，不动
+        self.assertTrue(gallery.abort_upload("20003", wid))    # 空壳 → 收回
+        self.assertIsNone(self._work(wid))
+
+    def test_abort_keeps_work_with_images(self):
+        wid = gallery.create_work("20003")
+        gallery.append_upload("20003", wid, "a.webp", self._webp())
+        self.assertFalse(gallery.abort_upload("20003", wid))
+        self.assertEqual(self._work(wid)["n"], 1)
+
+
+class UploadOneByOneApiTest(_Base):
+    """`/upload/one`：第一张不带 wid 开壳，后面带着同一个 wid 追加。"""
+
+    def setUp(self):
+        super().setUp()
+        from flask import Flask
+        self.app = Flask(__name__)
+        self.app.register_blueprint(gallery_api.bp)
+        self.c = self.app.test_client()
+        self.h = {"X-Friend-Token": "tok"}
+        p1 = mock.patch.object(friend_auth, "secret", lambda: "tok")
+        p1.start()
+        self.addCleanup(p1.stop)
+
+    def _webp(self):
+        b = io.BytesIO()
+        Image.new("RGB", (1600, 1200), (30, 60, 90)).save(b, "WEBP",
+                                                         quality=85)
+        return b.getvalue()
+
+    def post(self, qq="20003", **form):
+        data = dict(form)
+        data["file"] = (io.BytesIO(self._webp()), "a.webp")
+        return self.c.post("/api/gal/upload/one?qq=" + qq, headers=self.h,
+                           data=data, content_type="multipart/form-data")
+
+    def test_first_creates_then_appends(self):
+        d1 = self.post(title="测试").get_json()
+        self.assertTrue(d1["ok"])
+        self.assertEqual(d1["n"], 1)
+        wid = d1["work_id"]
+
+        d2 = self.post(wid=str(wid)).get_json()
+        self.assertTrue(d2["ok"])
+        self.assertEqual(d2["work_id"], wid)
+        self.assertEqual(d2["n"], 2)
+
+    def test_cannot_append_to_someone_else(self):
+        wid = self.post().get_json()["work_id"]
+        r = self.post(qq="30003", wid=str(wid))
+        self.assertEqual(r.status_code, 404)
+
+    def test_bad_image_is_rejected_not_saved(self):
+        r = self.c.post("/api/gal/upload/one?qq=20003", headers=self.h,
+                        data={"file": (io.BytesIO(b"not an image"), "x.png")},
+                        content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 400)
+
+    def test_abort_removes_the_shell(self):
+        wid = self.post().get_json()["work_id"]
+        r = self.c.post("/api/gal/upload/abort?qq=20003", headers=self.h,
+                        data={"wid": str(wid)},
+                        content_type="multipart/form-data")
+        self.assertFalse(r.get_json()["removed"])     # 已经有一张，不删
+        wid2 = gallery.create_work("20003")
+        r2 = self.c.post("/api/gal/upload/abort?qq=20003", headers=self.h,
+                         data={"wid": str(wid2)},
+                         content_type="multipart/form-data")
+        self.assertTrue(r2.get_json()["removed"])

@@ -306,7 +306,7 @@
     <h3>上传作品集</h3>
     <p>一次选多张，就是一个作品集。上传会压成 1600px 的 WebP，原图不用你管。</p>
     <input type="text" id="uptitle" placeholder="给这个作品集起个名字" maxlength="40">
-    <label class="pick" id="pick">＋ 选择图片（最多 40 张）
+    <label class="pick" id="pick">＋ 选择图片（最多 10 张）
       <input type="file" id="file" accept="image/*" multiple hidden>
     </label>
     <div id="prev"></div>
@@ -985,45 +985,91 @@
   })();
 
   // 传之前先在浏览器里缩到 1600 长边、转 WebP。
-  // 慢的不是转码，是传输：一张 8MB 的原图要顺着家宽上行推过隧道，
-  // 十几秒才到；缩完约 150KB。服务端本来就压到 1600，这里压到同一尺寸，
+  // 慢的不是转码，是传输：一张 13MB 的原图要顺着家宽上行推过隧道，
+  // 二十几秒才到；缩完约 150KB。服务端本来就压到 1600，这里压到同一尺寸，
   // 画质一点没多损，省下的是 98% 的流量。
+  //
+  // 刻意不看 f.type 判断「是不是图」：手机相册、微信选出来的 File 经常
+  // type 是空串，按 MIME 挡一道等于把压缩整个跳过，结果就是上百 MB 原图
+  // 直接上路——那才是「一直处理中」的真凶。能不能解，交给解码器自己说，
+  // 解不开再老老实实回退原图。
+  function toFile(cv, name) {
+    var type = CAN_WEBP ? "image/webp" : "image/jpeg";
+    return new Promise(function (res, rej) {
+      cv.toBlob(function (b) {
+        if (!b) return rej(new Error("编码失败"));
+        res(new File([b], name.replace(/\.[^.]+$/, "")
+                     + (CAN_WEBP ? ".webp" : ".jpg"), { type: type }));
+      }, type, 0.85);
+    });
+  }
+
+  function paint(src, w, h, cw, ch, done) {
+    try {
+      var cv = document.createElement("canvas");
+      cv.width = cw;
+      cv.height = ch;
+      var ctx = cv.getContext("2d");
+      if (!CAN_WEBP) {
+        ctx.fillStyle = "#fff";     // 不铺白底，透明 PNG 压完是黑块
+        ctx.fillRect(0, 0, cw, ch);
+      }
+      ctx.drawImage(src, 0, 0, cw, ch);
+      done(cv);
+    } catch (e) { done(null); }
+  }
+
+  // 快路径：先只读尺寸（不落像素），再让浏览器**按目标尺寸**解码。
+  // JPEG 能直接走 1/2、1/4 降采样，比「全解进内存再缩」快好几倍，
+  // 而且解码在后台线程，主线程不卡。
+  function shrinkFast(f, res) {
+    var url = URL.createObjectURL(f);
+    var probe = new Image();
+    probe.onload = function () {
+      var w = probe.naturalWidth, h = probe.naturalHeight;
+      URL.revokeObjectURL(url);
+      if (!w || !h) return shrinkSlow(f, res);
+      var m = Math.min(1, 1600 / Math.max(w, h));
+      var cw = Math.max(1, Math.round(w * m));
+      var ch = Math.max(1, Math.round(h * m));
+      createImageBitmap(f, { resizeWidth: cw, resizeHeight: ch,
+                             resizeQuality: "high" })
+        .then(function (bm) {
+          paint(bm, w, h, cw, ch, function (cv) {
+            bm.close && bm.close();
+            if (!cv) return shrinkSlow(f, res);
+            toFile(cv, f.name).then(res, function () { res(f); });
+          });
+        })
+        .catch(function () { shrinkSlow(f, res); });
+    };
+    probe.onerror = function () { URL.revokeObjectURL(url); res(f); };
+    probe.src = url;
+  }
+
+  // 慢路径 / 兜底：老浏览器没有 createImageBitmap 时走这条。
+  function shrinkSlow(f, res) {
+    var url = URL.createObjectURL(f);
+    var img = new Image();
+    img.onload = function () {
+      var w = img.naturalWidth, h = img.naturalHeight;
+      var m = Math.min(1, 1600 / Math.max(w, h));
+      var cw = Math.max(1, Math.round(w * m));
+      var ch = Math.max(1, Math.round(h * m));
+      paint(img, w, h, cw, ch, function (cv) {
+        URL.revokeObjectURL(url);
+        if (!cv) return res(f);
+        toFile(cv, f.name).then(res, function () { res(f); });
+      });
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); res(f); };
+    img.src = url;
+  }
+
   function shrink(f) {
     return new Promise(function (res) {
-      if (!/^image\//.test(f.type || "")) return res(f);
-      var url = URL.createObjectURL(f);
-      var img = new Image();
-      img.onload = function () {
-        var w = img.naturalWidth, h = img.naturalHeight;
-        try {
-          var m = Math.min(1, 1600 / Math.max(w, h));
-          var cw = Math.max(1, Math.round(w * m));
-          var ch = Math.max(1, Math.round(h * m));
-          var cv = document.createElement("canvas");
-          cv.width = cw;
-          cv.height = ch;
-          var ctx = cv.getContext("2d");
-          if (!CAN_WEBP) {
-            ctx.fillStyle = "#fff";
-            ctx.fillRect(0, 0, cw, ch);
-          }
-          ctx.drawImage(img, 0, 0, cw, ch);
-          var type = CAN_WEBP ? "image/webp" : "image/jpeg";
-          cv.toBlob(function (b) {
-            URL.revokeObjectURL(url);
-            if (!b) return res(f);
-            var ext = CAN_WEBP ? ".webp" : ".jpg";
-            res(new File([b], f.name.replace(/\.[^.]+$/, "") + ext,
-                         { type: type }));
-          }, type, 0.85);
-        } catch (e) {
-          // 内存不够、canvas 被禁：压不动就传原图，别把上传卡死在这
-          URL.revokeObjectURL(url);
-          res(f);
-        }
-      };
-      img.onerror = function () { URL.revokeObjectURL(url); res(f); };
-      img.src = url;
+      if (window.createImageBitmap) shrinkFast(f, res);
+      else shrinkSlow(f, res);
     });
   }
 
@@ -1038,7 +1084,7 @@
     $("file").value = "";
     $("prev").innerHTML = "";
     $("pick").classList.remove("has");
-    $("pick").firstChild.textContent = "＋ 选择图片（最多 40 张）";
+    $("pick").firstChild.textContent = "＋ 选择图片（最多 10 张）";
     $("upsubmit").disabled = true;
     $("upsubmit").textContent = "上传";
     $("up").classList.add("on");
@@ -1050,7 +1096,7 @@
 
   $("file").onchange = function () {
     var fs = Array.prototype.slice.call(this.files || []);
-    if (fs.length > 40) { toast("最多 40 张，多的先去掉"); fs = fs.slice(0, 40); }
+    if (fs.length > 10) { toast("一次最多 10 张，多的先去掉"); fs = fs.slice(0, 10); }
     picked = fs;
     $("prev").innerHTML = "";
     fs.forEach(function (f) {
@@ -1072,48 +1118,65 @@
     if (!picked.length) return;
     var b = this;
     var title = $("uptitle").value.trim();
-    var before = picked.reduce(function (s, f) { return s + (f.size || 0); }, 0);
-    var out = [];
+    var total = picked.length;
+    var wid = 0, ok = 0, bad = 0, inB = 0, outB = 0, lastErr = "";
     b.disabled = true;
 
-    function fail(e) {
-      toast(e.message || "上传失败");
+    function fail(msg) {
+      toast(msg || "上传失败");
       b.disabled = false;
       b.textContent = "上传";
     }
 
-    // 串行压：一张 4000×6000 的解码要吃近 100MB 内存，并行几张中低端
-    // 手机会直接白屏。慢一点没关系，反正比传原图还是快几十倍。
-    function step(i) {
-      if (i >= picked.length) return send();
-      b.textContent = "压缩 " + (i + 1) + "/" + picked.length;
-      shrink(picked[i]).then(function (f2) { out.push(f2); step(i + 1); })
-        .catch(function () { out.push(picked[i]); step(i + 1); });
+    function done() {
+      if (!ok) {
+        // 一张都没成：把空壳作品集收回去，别在墙上留个空的
+        if (wid) {
+          var fd = new FormData();
+          fd.append("wid", wid);
+          fetch("/api/gal/upload/abort", { method: "POST", body: fd });
+        }
+        return fail(lastErr || "一张都没传成");
+      }
+      var saved = outB < inB ? " · " + mb(inB) + "→" + mb(outB) : "";
+      toast("传好了，" + ok + " 张" + saved
+            + (bad ? "，失败 " + bad + " 张" : ""));
+      closeUpload();
+      setTab("mine", "works");
     }
 
-    function send() {
+    // 压一张、传一张，而不是攒够一整套再发：第一张几秒内就落地，进度
+    // 一直在动；某张失败也只丢那一张，不用把整批重传一遍。
+    function step(i) {
+      if (i >= total) return done();
+      b.textContent = (i + 1) + "/" + total + " 压缩中…";
+      inB += picked[i].size || 0;
+      shrink(picked[i]).then(function (f2) {
+        outB += f2.size || 0;
+        send(i, f2);
+      }, function () { bad++; step(i + 1); });
+    }
+
+    function send(i, f) {
       var fd = new FormData();
       fd.append("title", title);
-      out.forEach(function (f) { fd.append("files", f, f.name); });
-      var after = out.reduce(function (s, f) { return s + (f.size || 0); }, 0);
+      if (wid) fd.append("wid", wid);
+      fd.append("file", f, f.name);
       var xhr = new XMLHttpRequest();
-      xhr.open("POST", "/api/gal/upload");
-      // fetch 看不到上传进度，慢的时候人不知道是在传还是卡死了
+      xhr.open("POST", "/api/gal/upload/one");
       xhr.upload.onprogress = function (e) {
         if (!e.lengthComputable) return;
-        b.textContent = e.loaded >= e.total ? "处理中…"
-          : "上传 " + Math.round(e.loaded / e.total * 100) + "%";
+        var pct = Math.round(e.loaded / e.total * 100);
+        b.textContent = (i + 1) + "/" + total + " · 上传 " + pct + "%";
       };
       xhr.onload = function () {
         var d = {};
         try { d = JSON.parse(xhr.responseText) || {}; } catch (e) {}
-        if (!d.ok) return fail(new Error(d.error || "上传失败"));
-        var saved = after < before ? " · " + mb(before) + "→" + mb(after) : "";
-        toast("传好了，" + d.n + " 张" + saved);
-        closeUpload();
-        setTab("mine", "works");
+        if (d.ok) { wid = d.work_id; ok++; }
+        else { bad++; lastErr = d.error || "上传失败"; }
+        step(i + 1);
       };
-      xhr.onerror = function () { fail(new Error("网络断了，重试一下")); };
+      xhr.onerror = function () { bad++; lastErr = "网络断了"; step(i + 1); };
       xhr.send(fd);
     }
 

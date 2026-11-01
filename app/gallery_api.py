@@ -36,9 +36,9 @@ log = logging.getLogger("gallery_api")
 bp = Blueprint("gallery", __name__, url_prefix="/api/gal")
 
 PAGE_MAX = 60
-UPLOAD_MAX = 40                     # 一次最多传几张
+UPLOAD_MAX = 10                     # 一次最多传几张
 UPLOAD_BYTES = 25 << 20             # 单张上限 25MB
-UPLOAD_TOTAL = 300 << 20            # 一次合计上限 300MB
+UPLOAD_TOTAL = 250 << 20            # 一次合计上限 250MB
 
 
 # ─── 公共小件 ────────────────────────────────────────────
@@ -496,6 +496,74 @@ def api_upload():
         con.execute("UPDATE works SET title=? WHERE id=?",
                     (title or "未命名作品", wid))
     return jsonify({"ok": True, "work_id": wid, "n": n})
+
+
+@bp.route("/upload/one", methods=["POST"])
+def api_upload_one():
+    """逐张上传：压好一张传一张。
+
+    `wid` 空着就开一个新作品集并把 id 返回，后面几张带着同一个 wid 追加。
+    这样第一张几秒内就能落地，不用等十张全压完；某一张失败也只影响它
+    自己，不连累已经传上去的。
+    """
+    bad = _guard()
+    if bad:
+        return bad
+    qq = _qq()
+    if not qq:
+        return jsonify({"ok": False, "error": "参数不对"}), 400
+
+    title = str(request.form.get("title") or "").strip()[:40]
+    f = (request.files.getlist("file") or [None])[0]
+    if not f or not f.filename:
+        return jsonify({"ok": False, "error": "没收到图片"}), 400
+    raw = f.read()
+    if not raw:
+        return jsonify({"ok": False, "error": "空文件"}), 400
+    if len(raw) > UPLOAD_BYTES:
+        return jsonify({"ok": False,
+                        "error": "「%s」超过 25MB" % f.filename}), 400
+    if not gallery.load_upload_image(raw):
+        return jsonify({"ok": False,
+                        "error": "「%s」不是能读的图片" % f.filename}), 400
+
+    try:
+        wid = int(str(request.form.get("wid") or "0"))
+    except ValueError:
+        wid = 0
+    if wid:
+        mine, _ = gallery.own_work(qq, wid)
+        if not mine:
+            return jsonify({"ok": False, "error": "作品集不存在"}), 404
+    else:
+        wid = gallery.create_work(qq, title or "未命名作品")
+
+    try:
+        idx = gallery.append_upload(qq, wid, f.filename, raw)
+    except Exception:
+        log.warning("追加图片失败：%s", f.filename, exc_info=True)
+        return jsonify({"ok": False,
+                        "error": "这张转码失败，换一张试试"}), 500
+    _, n = gallery.own_work(qq, wid)
+    return jsonify({"ok": True, "work_id": wid, "n": n, "idx": idx})
+
+
+@bp.route("/upload/abort", methods=["POST"])
+def api_upload_abort():
+    """一组图一张都没传成：把空壳作品集收回去，别留在墙上。"""
+    bad = _guard()
+    if bad:
+        return bad
+    qq = _qq()
+    if not qq:
+        return jsonify({"ok": False, "error": "参数不对"}), 400
+    try:
+        wid = int(str(request.form.get("wid") or "0"))
+    except ValueError:
+        wid = 0
+    if not wid:
+        return jsonify({"ok": True})
+    return jsonify({"ok": True, "removed": gallery.abort_upload(qq, wid)})
 
 
 @bp.route("/me")
