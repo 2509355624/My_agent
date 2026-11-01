@@ -240,6 +240,20 @@ class ThumbTest(_Base):
         Image.new("RGB", (2000, 3000), (10, 20, 30)).save(big, "WEBP")
         self.assertFalse(gallery.reuse_direct(big), "超 1600 的 webp 仍要缩")
 
+    def test_view_of_uploaded_webp_is_the_file_itself(self):
+        """群友上传落盘的就是 1600px webp，预览版等于它本身。
+
+        再编码一次只掉画质、白占一份磁盘；后台按作品集预热大图时还会
+        白跑一遍 CPU（一张 0.2 秒）。
+        """
+        p = os.path.join(self.root, "1", "s.webp")
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        Image.new("RGB", (1200, 1600), (10, 20, 30)).save(p, "WEBP")
+        self.assertEqual(gallery.thumb(p, "v"), p)
+        self.assertFalse(os.path.exists(gallery.cache_path(p, "v")))
+        # 缩略图另算：那个非得生成不可
+        self.assertNotEqual(gallery.thumb(p, "t"), p)
+
 
 class AliasTest(unittest.TestCase):
     def test_same_qq_same_alias(self):
@@ -981,6 +995,83 @@ class ThumbsBatchApiTest(_Base):
         r = self.c.get("/api/gal/thumbs?qq=30001&ids=", headers=h)
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.get_json()["items"], {})
+
+
+class WarmApiTest(_Base):
+    """打开详情页就把「接下来要看的大图」提前算好。
+
+    一张 5MB 原图现转码 0.4 秒，点开的那 0.4 秒浏览器是纯黑屏。前端知道
+    整集列表，就把活提前派出去；后端算完，回来只是 send_file。
+    这里验的是排得对不对：排的是 `v` 不是 `t`、顺序跟请求一致（第一个才
+    是马上就要看的）、越权的图一张都不排。
+    """
+
+    def setUp(self):
+        super().setUp()
+        from flask import Flask
+        self.app = Flask(__name__)
+        self.app.register_blueprint(gallery_api.bp)
+        self.c = self.app.test_client()
+        p = mock.patch.object(friend_auth, "secret", lambda: "tok")
+        p.start()
+        self.addCleanup(p.stop)
+
+        self.wid = gallery.create_work("30001", "预热")
+        b = io.BytesIO()
+        Image.new("RGB", (900, 1200), (10, 20, 30)).save(b, "PNG")
+        for _ in range(3):
+            gallery.append_upload("30001", self.wid, "a.png", b.getvalue())
+        with gallery.connect() as con:
+            rows = con.execute("SELECT id, path FROM items WHERE work_id=?"
+                               " ORDER BY idx", (self.wid,)).fetchall()
+        self.items = [(r["id"], r["path"]) for r in rows]
+        self.calls = []
+
+    def post(self, ids, qq="30001"):
+        def fake(paths, kinds=("t",), front=False):
+            self.calls.append((list(paths), kinds, front))
+            return len(paths)
+        with mock.patch.object(gallery, "warm", fake):
+            return self.c.post("/api/gal/warm?qq=" + qq,
+                               json={"ids": ids},
+                               headers={"X-Friend-Token": "tok"})
+
+    def test_queues_view_size_in_requested_order(self):
+        ids = [self.items[2][0], self.items[0][0], self.items[1][0]]
+        d = self.post(ids).get_json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["n"], 3)
+        paths, kinds, front = self.calls[0]
+        self.assertEqual(kinds, ("v",), "大图预热就该排预览图，不是缩略图")
+        self.assertTrue(front, "正在看的那几张要插队")
+        self.assertEqual(paths, [self.items[2][1], self.items[0][1],
+                                 self.items[1][1]])
+
+    def test_hidden_work_is_not_queued_for_others(self):
+        with gallery.connect() as con:
+            con.execute("UPDATE works SET hidden=1 WHERE id=?", (self.wid,))
+        self.post([i for i, _ in self.items], qq="30002")
+        self.assertEqual(self.calls, [], "别人下架的图不该为外人占 CPU")
+
+    def test_ids_are_capped_and_junk_dropped(self):
+        """一次最多 WARM_MAX 个：这是「提前算几张」的闸门，不是全库预热入口。"""
+        junk = ["x", None, {}, 999999]
+        real = [i for i, _ in self.items]
+        self.post(junk + real)
+        paths = self.calls[0][0]
+        self.assertEqual(paths, [p for _, p in self.items],
+                         "垃圾 id 跳过，真的照顺序排")
+        # 假的排在前面，挤满名额之后真的一个也进不去 —— 说明截断发生在
+        # 查库之前，不是查完再砍。
+        many = list(range(900000, 900000 + gallery_api.WARM_MAX + 20)) + real
+        self.calls = []
+        self.post(many)
+        self.assertEqual(self.calls, [], "超上限的 id 压根不该查库")
+
+    def test_empty_is_not_a_500(self):
+        r = self.post([])
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.calls, [])
 
 
 class WarmCacheTest(_Base):

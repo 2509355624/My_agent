@@ -393,30 +393,40 @@
   // 拿回来的 dataURL 存在内存里：同一张图在同一页里只取一次，翻回去、
   // 重进作品集都不用再问。按字节数封顶，超了先丢最早的那批——手机内存
   // 经不起把整墙图都留成 base64。
+  //
+  // 键必须带尺寸：`t` 是 360px 缩略图，`v` 是 1600px 预览。早先只按 id 存，
+  // 网格预取过缩略图之后，点开大图 `picSrc(id,"v")` 直接把那 360px 的
+  // dataURL 还给查看器——看着像「大图迟迟不变清楚」，其实是永远拿不到了。
   var PIC = new Map(), PIC_BYTES = 0, PIC_MAX = 8 << 20;
   var PIC_CHUNK = 24;
 
-  function picPut(id, url) {
-    if (PIC.has(id)) return;
-    PIC.set(id, url);
+  function picKey(id, mode) { return (mode || "t") + ":" + id; }
+
+  function picPut(id, url, mode) {
+    var k = picKey(id, mode);
+    if (PIC.has(k)) return;
+    PIC.set(k, url);
     PIC_BYTES += url.length;
     while (PIC_BYTES > PIC_MAX && PIC.size > 1) {
-      var k = PIC.keys().next().value;
-      PIC_BYTES -= PIC.get(k).length;
-      PIC.delete(k);
+      var old = PIC.keys().next().value;
+      PIC_BYTES -= PIC.get(old).length;
+      PIC.delete(old);
     }
   }
 
+  function picGet(id, mode) { return PIC.get(picKey(id, mode)); }
+
   function picSrc(id, mode) {
-    return PIC.get(id) || ("/api/gal/img/" + id + "?s=" + (mode || "t"));
+    return picGet(id, mode) || ("/api/gal/img/" + id + "?s=" + (mode || "t"));
   }
 
   // 把一批 id 预取到内存里。永远 resolve，最多等 ms 毫秒——慢也不能把
   // 整个页面卡在这个 await 上，超时就退回逐张请求。
   function prefetch(ids, mode, ms) {
+    mode = mode || "t";
     var need = [], seen = {};
     ids.forEach(function (id) {
-      if (!id || seen[id] || PIC.has(id)) return;
+      if (!id || seen[id] || picGet(id, mode)) return;
       seen[id] = 1;
       need.push(id);
     });
@@ -429,11 +439,11 @@
     }
     var all = Promise.all(jobs.map(function (chunk) {
       return fetch("/api/gal/thumbs?ids=" + chunk.join(",") +
-                   "&s=" + (mode || "t"))
+                   "&s=" + mode)
         .then(function (r) { return r.json(); })
         .then(function (d) {
           if (!d || !d.ok || !d.items) return;
-          Object.keys(d.items).forEach(function (k) { picPut(+k, d.items[k]); });
+          Object.keys(d.items).forEach(function (k) { picPut(+k, d.items[k], mode); });
         })
         .catch(function () {});       // 预取失败就当没做，逐张请求照样能看
     }));
@@ -469,7 +479,7 @@
       prefetch(ids, mode, 8000).then(function () {
         need.forEach(function (x) {
           if (!x.el.isConnected) return;
-          var u = PIC.get(x.id);
+          var u = picGet(x.id, mode);
           x.el.style.opacity = "";
           // 批请求失败就退回单张：宁可慢一点，也不能让图空在那里
           x.el.src = u || ("/api/gal/img/" + x.id + "?s=" + mode);
@@ -782,6 +792,10 @@
       $("detail").classList.add("on");
       document.body.style.overflow = "hidden";
       $("dgrid").scrollTop = 0;
+      // 详情页一打开就把头几张的大图热起来（浏览器缓存 + 后端转码）。
+      // 从网格点进去是最常见路径，那一下不该再等 0.4 秒转码加一次往返。
+      var head = (at != null && at > 1) ? Math.max(0, at - 1) : 0;
+      warmHd(S.items.slice(head, head + 6).map(function (it) { return it.id; }));
       if (at != null) openViewer(at);
     }).catch(function (e) { toast(e.message); });
   }
@@ -953,16 +967,61 @@
     S.items.forEach(function (_it, i) { tr.children[i].style.width = (100 / S.items.length) + "%"; });
   }
 
-  // 大图走单张请求：一张 1600px 的预览 90KB 上下，走批接口反而把 base64
-  // 灌进内存。但相邻两张提前取——左右一划就该有，不能每次都在等隧道。
-  function src(i) {
-    return S.items[i] ? picSrc(S.items[i].id, "v") : "";
+  // 大图走单张请求：一张 1600px 的预览 170KB 上下，走批接口只是把 base64
+  // 灌进内存，多花 1/3 体积。但**不能等点开才开始要**——一张 5MB 原图要
+  // 现转码 0.4 秒，再走隧道一次往返，头一秒半就是纯黑屏。所以：
+  //   1) 详情页一打开就预热前几张（浏览器缓存 + 后端转码一起）；
+  //   2) 打开查看器时先铺已经到手的 360px 缩略图，立刻有画面；
+  //   3) 1600px 到了再顶上去，浏览器会等新图解码完才换，不闪白。
+  function hdUrl(id) { return "/api/gal/img/" + id + "?s=v"; }
+
+  // 用 <img> 预取而不是塞 PIC：图片带一年 immutable，浏览器磁盘缓存足够，
+  // 真正打开时 src 完全一样 → 0 请求。1600px 的 base64 一张顶三张缩略图，
+  // 那点手机内存留给网格更划算。
+  var WARMING = {}, WARM_IMGS = [], warmT = 0, warmQ = [];
+
+  function warmHd(ids) {
+    var fresh = [];
+    ids.forEach(function (id) {
+      if (!id || WARMING[id]) return;
+      WARMING[id] = 1;
+      fresh.push(id);
+      var im = new Image();
+      im.decoding = "async";
+      im.onerror = function () { delete WARMING[id]; };   // 失败就下次再说
+      im.src = hdUrl(id);
+      WARM_IMGS.push(im);
+    });
+    while (WARM_IMGS.length > 24) WARM_IMGS.shift();   // 别把解码后的位图留一墙
+    if (!fresh.length) return;
+    warmQ = warmQ.concat(fresh);
+    if (warmT) return;
+    // 服务端也要提前算：缓存没备好时它是真在解码原图。攒一小会儿再发，
+    // 免得滑动时一次一次地打请求。
+    warmT = setTimeout(function () {
+      var ids = warmQ.slice(0, 12);
+      warmQ = [];
+      warmT = 0;
+      if (!ids.length) return;
+      api("warm", { method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ ids: ids }) }).catch(function () {});
+    }, 250);
   }
 
   function preload(i) {
     if (i < 0 || i >= S.items.length) return;
-    var im = $("track").children[i].querySelector("img");
-    if (im && !im.src) im.src = src(i);
+    var s = $("track").children[i];
+    if (!s || s.dataset.on) return;          // 同一张只铺一次，别来回重下
+    var im = s.querySelector("img");
+    if (!im) return;
+    s.dataset.on = "1";
+    var id = S.items[i].id;
+    im.onload = function () { im.classList.add("ok"); };
+    var low = picGet(id, "t");
+    if (!low) { im.src = hdUrl(id); return; }
+    im.src = low;                            // 手里已经有的，0 延迟
+    im.classList.add("ok");
+    setTimeout(function () { im.src = hdUrl(id); }, 16);
   }
 
   function go(i, instant) {
@@ -976,10 +1035,9 @@
     preload(S.idx);
     preload(S.idx + 1);
     preload(S.idx - 1);
-    // 再往外的两三张也悄悄备着：连着划的时候不该每次都等隧道。
-    prefetch([S.idx + 2, S.idx + 3, S.idx - 2].map(function (k) {
-      return S.items[k] ? S.items[k].id : 0;
-    }), "v", 8000);
+    // 再往外的几张只「备着」，不挂进 DOM：连着划的时候不该每次都等隧道。
+    warmHd([S.idx + 2, S.idx + 3, S.idx - 2, S.idx + 4, S.idx + 5]
+      .map(function (k) { return S.items[k] ? S.items[k].id : 0; }));
 
     $("vpg").textContent = (S.idx + 1) + " / " + S.items.length;
     $("vprev").style.visibility = S.idx > 0 ? "visible" : "hidden";

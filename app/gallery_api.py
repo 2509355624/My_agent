@@ -53,6 +53,10 @@ IMG_MAX_AGE = 31536000
 THUMB_BATCH = 24
 THUMB_BATCH_V = 6
 
+# 前端一次最多能让我预生成几张预览图。多了就是在替「全库预热」开门，
+# 一万三千张 × 0.4 秒没人等得起。
+WARM_MAX = 24
+
 
 def _img(path):
     """发一张图，并让它长期留在浏览器里。
@@ -385,6 +389,60 @@ def api_thumbs():
             if got:
                 items[str(got[0])] = "data:image/webp;base64," + got[1]
     return jsonify({"ok": True, "s": mode, "items": items})
+
+
+@bp.route("/warm", methods=["POST"])
+def api_warm():
+    """提前把「大图预览」算好，排进后台队列，立刻返回。
+
+    点开一张 5MB 原图要 0.4 秒转码，这段时间浏览器是纯黑屏。既然前端
+    知道接下来要看哪几张（详情页一打开就有整集列表），就把活提前派出去：
+    后端慢慢算，回来时缓存已经躺在磁盘上，请求只是 send_file。
+
+    只排传进来的这几个 id（上限 24），不扫全库——一万三千张 × 0.4 秒
+    是一个半小时的 CPU 和 2GB 磁盘，没人看的时候不该烧。
+
+    已经是我们自己压过的 1600px webp 不用排：`thumb` 会直接返回源文件。
+    """
+    bad = _guard()
+    if bad:
+        return bad
+    qq = _qq()
+    if not qq:
+        return jsonify({"ok": False, "error": "参数不对"}), 400
+
+    body = request.get_json(silent=True) or {}
+    ids = []
+    for x in (body.get("ids") or [])[:WARM_MAX]:
+        try:
+            i = int(x)
+        except (TypeError, ValueError):
+            continue
+        if i not in ids:
+            ids.append(i)
+    if not ids:
+        return jsonify({"ok": True, "n": 0})
+
+    marks = ",".join("?" * len(ids))
+    with gallery.connect() as con:
+        rows = con.execute(
+            "SELECT i.id, i.path, w.hidden, w.owner FROM items i"
+            " JOIN works w ON w.id=i.work_id WHERE i.id IN (%s)" % marks,
+            ids).fetchall()
+
+    mine_ok = _is_owner(qq)
+    ok = {}
+    for r in rows:
+        if r["hidden"] and r["owner"] != str(qq) and not mine_ok:
+            continue
+        if not r["path"] or not os.path.isfile(r["path"]):
+            continue
+        ok[r["id"]] = r["path"]
+    # 按前端给的顺序排，不是按 SQL 返回的顺序：第一个是马上要看的，
+    # 后台线程按队列顺序算，先算它。
+    paths = [ok[i] for i in ids if i in ok]
+    n = gallery.warm(paths, ("v",), front=True) if paths else 0
+    return jsonify({"ok": True, "n": n})
 
 
 # ─── 点赞 / 收藏 ─────────────────────────────────────────

@@ -498,6 +498,11 @@ def thumb(src, kind="t"):
     if not os.path.isfile(src):
         return None
 
+    # 本来就是 1600px 的 webp，预览版就是它自己。省下一次解码编码，
+    # 也省一份磁盘——后台按作品集预热时才不会白跑。
+    if kind == "v" and reuse_direct(src):
+        return src
+
     out = cache_path(src, kind)
     try:
         if os.path.exists(out) and os.path.getmtime(out) >= os.path.getmtime(src):
@@ -546,9 +551,11 @@ def warm(paths, kinds=("t",), front=False):
 
     `front=True` 插队到最前面：刚上传的那几张必须马上好——站主扫完一万张
     的队列可能还在跑，群友传完立刻进作品集，不该排在人家后面等。
+    插队的一批（比如「这个人正打开的那几张」）仍按传入顺序执行：先排第一张，
+    它才是马上就要看的。
     """
     global _warm_alive
-    added = 0
+    new = []
     with _warm_cv:
         for p in paths:
             if not p:
@@ -556,20 +563,21 @@ def warm(paths, kinds=("t",), front=False):
             key = (p, kinds)
             if key in _warm_seen:
                 continue
-            if len(_warm_q) >= WARM_QUEUE_MAX:
+            if len(_warm_q) + len(new) >= WARM_QUEUE_MAX:
                 break
             _warm_seen.add(key)
+            new.append(key)
+        if new:
             if front:
-                _warm_q.appendleft(key)
+                _warm_q.extendleft(reversed(new))
             else:
-                _warm_q.append(key)
-            added += 1
-        if added and not _warm_alive:
-            _warm_alive = True
-            threading.Thread(target=_warm_loop, name="gal-warm",
-                             daemon=True).start()
-        _warm_cv.notify()
-    return added
+                _warm_q.extend(new)
+            if not _warm_alive:
+                _warm_alive = True
+                threading.Thread(target=_warm_loop, name="gal-warm",
+                                 daemon=True).start()
+            _warm_cv.notify()
+    return len(new)
 
 
 def _warm_loop():
