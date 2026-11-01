@@ -104,9 +104,21 @@
     text-overflow:ellipsis}
   .dby{font-size:12px;color:var(--dim);margin-top:1px}
   /* 排版切换：按钮上直接写「现在是哪种」，比一个抽象图标好猜 */
-  #dmode,#dadd{width:auto;border-radius:10px;padding:0 12px;font-size:13px;
+  #dmode{width:auto;border-radius:10px;padding:0 12px;font-size:13px;
     background:var(--card);border:1px solid var(--line);height:32px}
-  #dadd{margin-right:8px;display:none}
+  /* 「加图」单独占一行放在左上：36px 的圆形按钮里塞三个字点不准，
+     而且在顶栏里还得跟标题抢位置。给个 44px 高的大按钮，拇指一按就到。 */
+  .daddbar{display:none;align-items:center;gap:10px;padding:10px 14px 12px;
+    flex:0 0 auto;background:rgba(13,13,16,.9);backdrop-filter:blur(14px);
+    border-bottom:1px solid var(--line)}
+  .daddbar.on{display:flex}
+  #dadd{height:44px;border:0;border-radius:12px;padding:0 22px;font:inherit;
+    font-size:16px;font-weight:700;letter-spacing:.5px;color:#141418;
+    background:linear-gradient(135deg,#ff5c8a,#ffa0bd);cursor:pointer;
+    box-shadow:0 6px 18px rgba(255,92,138,.28);white-space:nowrap}
+  #dadd:active{transform:scale(.97)}
+  .daddhint{font-size:12.5px;color:var(--dim);min-width:0;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
   /* 网格是默认，单列给「想看清楚点」的场景。
      ⚠️ 两种都按原比例完整显示，绝不裁切 —— 之前用 aspect-ratio:3/4
      配 object-fit:cover，4928×7360 的竖图被切掉上下，人物脸都在框外。
@@ -272,8 +284,11 @@
       <div class="dt" id="dtitle"></div>
       <div class="dby" id="dby"></div>
     </div>
-    <button id="dadd" title="给这个作品集加图">＋ 加图</button>
     <button id="dmode" title="切换排版">⊞ 网格</button>
+  </div>
+  <div class="daddbar" id="daddbar">
+    <button id="dadd" title="给这个作品集加图">＋ 加图</button>
+    <span class="daddhint" id="daddhint"></span>
   </div>
   <div id="dgrid"></div>
 </div>
@@ -685,10 +700,16 @@
       (S.cur.n > 1 ? " · " + S.cur.n + " 张" : "") +
       (S.cur.hidden ? " · 已下架" : "");
 
-    // 只有自己传的作品集能继续加图，而且到了 100 张就不再给入口——
-    // 留着按钮点进去必然失败，不如让它消失。
-    $("dadd").style.display =
-      (S.cur.can_delete && (S.cur.n || 0) < WORK_MAX) ? "" : "none";
+    // 只有自己传的作品集能继续加图，到了 100 张就不再给入口——留着按钮
+    // 点进去必然失败，不如让它消失。
+    // ⚠️ 用 class 控制显隐，别用 style.display = ""：那条 inline 只是把
+    // 样式撤掉，CSS 里的 display:none 会重新生效，按钮等于永远不出现。
+    var n = S.cur.n || 0;
+    var canAdd = !!S.cur.can_delete && n < WORK_MAX;
+    $("daddbar").classList.toggle("on", canAdd);
+    if (canAdd) {
+      $("daddhint").textContent = "这个作品集还能加 " + (WORK_MAX - n) + " 张";
+    }
 
     var box = $("dgrid");
     box.innerHTML = "";
