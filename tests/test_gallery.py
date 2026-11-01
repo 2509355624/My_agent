@@ -464,6 +464,61 @@ class UploadTest(_Base):
         self.assertEqual(len(d["items"]), 1)
         self.assertEqual(d["items"][0]["id"], iid)
 
+    def test_scope_owner_is_only_the_owners(self):
+        """站长 tab：磁盘目录 + 站主自己上传的，群友传的不在里面。"""
+        self.mk("1", "a.png")
+        gallery.scan([("图库", self.root)])
+        self.upload("20002", title="群友的")
+        self.upload("10001", title="站主传的")
+        d = self.c.get("/api/gal/list?scope=owner&qq=30003",
+                       headers=self.h).get_json()
+        titles = sorted(w["title"] for w in d["works"])
+        self.assertEqual(titles, ["1", "站主传的"])
+
+    def test_scope_pub_is_only_other_people(self):
+        """公开 tab：只有群友上传的，站长的磁盘目录和站主上传都不在。"""
+        self.mk("1", "a.png")
+        gallery.scan([("图库", self.root)])
+        self.upload("20002", title="群友的")
+        self.upload("10001", title="站主传的")
+        d = self.c.get("/api/gal/list?scope=pub&qq=30003",
+                       headers=self.h).get_json()
+        self.assertEqual([w["title"] for w in d["works"]], ["群友的"])
+
+    def test_list_without_scope_is_still_everything(self):
+        """不带 scope 的老链接行为不能变，否则旧地址会突然少一半。"""
+        self.mk("1", "a.png")
+        gallery.scan([("图库", self.root)])
+        self.upload("20002", title="群友的")
+        d = self.c.get("/api/gal/list?qq=30003", headers=self.h).get_json()
+        self.assertEqual(len(d["works"]), 2)
+
+    def test_like_shows_up_in_likes(self):
+        wid = self.upload("20002").get_json()["work_id"]
+        iid = self.c.get("/api/gal/work/%d?qq=20002" % wid,
+                         headers=self.h).get_json()["items"][0]["id"]
+        self.c.post("/api/gal/mark",
+                    json={"item_id": iid, "kind": "like", "on": True,
+                          "qq": "30003"}, headers=self.h)
+        d = self.c.get("/api/gal/likes?qq=30003", headers=self.h).get_json()
+        self.assertEqual(len(d["items"]), 1)
+        self.assertEqual(d["items"][0]["id"], iid)
+
+    def test_marked_items_carry_work_and_position(self):
+        """收藏/点赞返回的是单张图，必须带 work + idx 才能直接跳到那一张。"""
+        wid = self.upload("20002").get_json()["work_id"]
+        items = self.c.get("/api/gal/work/%d?qq=20002" % wid,
+                           headers=self.h).get_json()["items"]
+        for it in items:
+            self.c.post("/api/gal/mark",
+                        json={"item_id": it["id"], "kind": "fav", "on": True,
+                              "qq": "30003"}, headers=self.h)
+        d = self.c.get("/api/gal/favs?qq=30003", headers=self.h).get_json()
+        self.assertEqual(len(d["items"]), 2)
+        for row in d["items"]:
+            self.assertEqual(row["work"], wid)
+            self.assertIn(row["idx"], (0, 1))
+
 
 class ConfigTest(unittest.TestCase):
     def test_parse_roots(self):

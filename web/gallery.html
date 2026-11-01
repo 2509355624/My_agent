@@ -48,6 +48,16 @@
   .tools button:active{background:var(--card2)}
   .tools button.primary{background:var(--pink);border-color:var(--pink);
     color:#fff;font-weight:600}
+  /* 「我的」的子标签：作品 / 收藏 / 点赞。做成下划线式，不跟顶栏那两个
+     药丸抢视觉——这里切的是同一页的内容细分，不是换去处。 */
+  .subtabs{display:none;gap:18px;padding:10px 14px 2px;border-bottom:1px solid var(--line)}
+  .subtabs.on{display:flex}
+  .subtabs button{border:0;background:transparent;color:var(--dim);font:inherit;
+    font-size:13.5px;padding:0 0 9px;cursor:pointer;position:relative}
+  .subtabs button.on{color:var(--tx);font-weight:600}
+  .subtabs button.on::after{content:"";position:absolute;left:0;right:0;bottom:-1px;
+    height:2px;background:var(--pink);border-radius:2px}
+
   .hint{padding:0 14px 6px;color:var(--dim);font-size:12.5px;line-height:1.6}
 
   /* ── 网格 ── */
@@ -183,11 +193,19 @@
 <header>
   <div class="brand">画<i>廊</i></div>
   <div class="tabs">
-    <button data-tab="all" class="on">全部</button>
+    <button data-tab="owner" class="on">站长</button>
+    <button data-tab="pub">公开</button>
     <button data-tab="mine">我的</button>
   </div>
   <a class="go" href="/preset"><span class="g1">自定义预设</span><span class="g2">预设</span></a>
 </header>
+
+<!-- 「我的」下面再分三格：作品 / 收藏 / 点赞。只在「我的」时出现 -->
+<div class="subtabs" id="subtabs">
+  <button data-sub="works" class="on">作品</button>
+  <button data-sub="favs">收藏</button>
+  <button data-sub="likes">点赞</button>
+</div>
 
 <div class="tools" id="tools"></div>
 <div class="hint" id="hint">正在加载…</div>
@@ -260,8 +278,9 @@
 (function () {
   "use strict";
 
-  var S = { tab: "all", page: 1, more: true, busy: false, owner: false,
-            works: [], cur: null, idx: 0, items: [], likes: {} };
+  var S = { tab: "owner", sub: "works", page: 1, more: true, busy: false,
+            owner: false, works: [], cur: null, idx: 0, items: [], likes: {},
+            fav: {} };
 
   function $(id) { return document.getElementById(id); }
 
@@ -284,22 +303,38 @@
   }
 
   // ── 列表 ──────────────────────────────────────────────
+  // 「我的 / 收藏」「我的 / 点赞」是**按图**排的（item 级），其它都是作品集。
+  function isPhoto() { return S.tab === "mine" && S.sub !== "works"; }
+
   function load(reset) {
     if (S.busy) return;
     if (!reset && !S.more) return;
     S.busy = true;
     if (reset) { S.page = 1; S.more = true; S.works = []; $("grid").innerHTML = ""; }
-    var q = "list?page=" + S.page + "&size=24";
-    if (S.tab === "mine") q = "mine?page=" + S.page + "&size=24";
+    var photo = isPhoto();
+    var q;
+    if (photo) {
+      q = (S.sub === "favs" ? "favs" : "likes") + "?page=" + S.page + "&size=24";
+    } else if (S.tab === "mine") {
+      q = "mine?page=" + S.page + "&size=24";
+    } else {
+      // scope=owner 站长的（磁盘目录 + 站主网页上传的）；scope=pub 其他人的
+      q = "list?scope=" + (S.tab === "pub" ? "pub" : "owner") +
+          "&page=" + S.page + "&size=24";
+    }
 
     api(q).then(function (d) {
       S.owner = !!d.owner;
       renderTools();
-      (d.works || []).forEach(function (w) { S.works.push(w); addCard(w); });
+      if (photo) {
+        (d.items || []).forEach(function (it) { S.works.push(it); addPhoto(it); });
+      } else {
+        (d.works || []).forEach(function (w) { S.works.push(w); addCard(w); });
+      }
       S.more = !!d.has_more;
       S.page += 1;
       $("hint").textContent = S.works.length
-        ? (S.more ? "继续往下滑…" : "一共 " + S.works.length + " 个作品集")
+        ? (S.more ? "继续往下滑…" : "一共 " + S.works.length + (photo ? " 张" : " 个作品集"))
         : "";
       if (!S.works.length) showEmpty();
     }).catch(function (e) {
@@ -322,10 +357,16 @@
     var d = document.createElement("div");
     d.className = "empty";
     d.style.gridColumn = "1 / -1";
-    if (S.tab === "mine") {
+    if (S.tab === "mine" && S.sub === "favs") {
+      d.innerHTML = "还没收藏过。<br>点开任意一张图，点右下角的「☆ 收藏」。";
+    } else if (S.tab === "mine" && S.sub === "likes") {
+      d.innerHTML = "还没点过赞。<br>看到喜欢的图点一下 ♡ 就行。";
+    } else if (S.tab === "mine") {
       d.innerHTML = S.owner
-        ? "还没有作品集。<br>点上面的「扫描文件夹」，把磁盘上的目录列出来。"
+        ? "还没有作品集。<br>切到「站长」可以扫描磁盘上的文件夹。"
         : "你还没上传过作品。<br>点上面的「上传作品集」选几张图试试。";
+    } else if (S.tab === "pub") {
+      d.innerHTML = "还没有其他人上传。<br>群友在「我的」里传了自己的图，就会出现在这里。";
     } else {
       d.innerHTML = "画廊还是空的。<br>站主扫描一下磁盘，或者自己传一组上去。";
     }
@@ -373,17 +414,47 @@
     $("grid").appendChild(c);
   }
 
+  // 收藏 / 点赞里的单张图。点开直接进查看器并停在那一张，
+  // 不经过「先列作品集、再进去找」这一步。
+  function addPhoto(it) {
+    var c = document.createElement("div");
+    c.className = "card";
+    c.onclick = function () { openWork(it.work, it.idx); };
+
+    var img = document.createElement("img");
+    img.className = "ph";
+    img.loading = "lazy";
+    img.decoding = "async";
+    img.alt = it.title;
+    img.src = "/api/gal/img/" + it.id + "?s=t";
+    img.onload = function () { img.classList.add("ok"); };
+    img.onerror = function () { img.classList.add("ok"); img.style.opacity = ".35"; };
+    c.appendChild(img);
+
+    var m = document.createElement("div");
+    m.className = "meta";
+    var t = document.createElement("div");
+    t.className = "t";
+    t.textContent = it.title;
+    var s = document.createElement("div");
+    s.className = "s";
+    s.textContent = it.by;
+    m.appendChild(t); m.appendChild(s);
+    c.appendChild(m);
+    $("grid").appendChild(c);
+  }
+
   // ── 工具条 ────────────────────────────────────────────
   function renderTools() {
     var t = $("tools");
     t.innerHTML = "";
-    if (S.tab === "mine") {
+    if (S.tab === "mine" && S.sub === "works") {
       t.appendChild(btn("＋ 上传作品集", "primary", openUpload));
     }
-    // 扫描是站主的事，和 tab 无关：原来只在「我的」里显示，而「我的」当时
-    // 查不到站主的目录，扫完一片空白，等于把按钮放进了死胡同。
-    if (S.owner) {
-      t.appendChild(btn("⟳ 扫描文件夹", S.tab === "mine" ? "" : "primary", openScan));
+    // 扫描是站主的事，放「站长」tab —— 它扫的就是这一批目录，
+    // 放在这里按钮和内容对得上，也不用挤在「我的」里。
+    if (S.owner && S.tab === "owner") {
+      t.appendChild(btn("⟳ 扫描文件夹", "primary", openScan));
       t.appendChild(btn("↻ 全部重扫", "", scanAll));
       t.appendChild(btn("⌫ 清理失效", "", clean));
     }
@@ -491,11 +562,7 @@
         toast("扫完了：" + (r.works || 0) + " 个作品集，"
               + (r.items || 0) + " 张图");
         closeScan();
-        S.tab = "all";
-        document.querySelectorAll(".tabs button").forEach(function (x) {
-          x.classList.toggle("on", x.dataset.tab === "all");
-        });
-        load(true);
+        setTab("owner");
       }).catch(function (e) { toast(e.message); })
       .then(function () { b.disabled = false; b.textContent = "扫描这里"; });
   }
@@ -517,7 +584,8 @@
   }
 
   // ── 查看器 ────────────────────────────────────────────
-  function openWork(id) {
+  // `at` 给了就停在第几张（从「收藏 / 点赞」点进来时用），不给就从第一张开始。
+  function openWork(id, at) {
     api("work/" + id).then(function (d) {
       S.cur = d.work;
       S.items = d.items || [];
@@ -530,7 +598,8 @@
       $("viewer").classList.add("on");
       document.body.style.overflow = "hidden";
       buildTrack();
-      go(0, true);
+      var n = S.items.length ? Math.max(0, Math.min(S.items.length - 1, at || 0)) : 0;
+      go(n, true);
     }).catch(function (e) { toast(e.message); });
   }
 
@@ -598,6 +667,7 @@
       S.fav = S.fav || {};
       S.fav[it.id] = !S.fav[it.id];
     }
+    S.dirty = true;                 // 关查看器时决定要不要重拉列表
     syncMark();
     api("mark", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -612,6 +682,10 @@
     document.body.style.overflow = "";
     $("track").innerHTML = "";
     S.items = [];
+    // 在「收藏 / 点赞」里取消过，回来就得重拉一次，否则卡片还挂在墙上。
+    // 没动过收藏就不重拉，免得白白丢滚动位置。
+    if (S.dirty && isPhoto()) { S.dirty = false; load(true); }
+    else { S.dirty = false; }
   }
 
   $("vclose").onclick = closeViewer;
@@ -731,8 +805,7 @@
         if (!d.ok) throw new Error(d.error || "上传失败");
         toast("传好了，" + d.n + " 张");
         closeUpload();
-        S.tab = "mine";
-        setTab("mine");
+        setTab("mine", "works");
       }).catch(function (e) {
         toast(e.message);
         b.disabled = false; b.textContent = "上传";
@@ -740,16 +813,37 @@
   };
 
   // ── tab / 滚动 ────────────────────────────────────────
-  function setTab(name) {
+  function setTab(name, sub) {
     S.tab = name;
+    if (sub) S.sub = sub;
     document.querySelectorAll(".tabs button").forEach(function (b) {
       b.classList.toggle("on", b.dataset.tab === name);
     });
+    renderSubtabs();
+    renderTools();
     load(true);
+  }
+
+  function setSub(name) {
+    S.sub = name;
+    renderSubtabs();
+    renderTools();
+    load(true);
+  }
+
+  function renderSubtabs() {
+    var box = $("subtabs");
+    box.classList.toggle("on", S.tab === "mine");
+    box.querySelectorAll("button").forEach(function (b) {
+      b.classList.toggle("on", b.dataset.sub === S.sub);
+    });
   }
 
   document.querySelectorAll(".tabs button").forEach(function (b) {
     b.onclick = function () { setTab(b.dataset.tab); };
+  });
+  document.querySelectorAll("#subtabs button").forEach(function (b) {
+    b.onclick = function () { setSub(b.dataset.sub); };
   });
 
   var sentinel = document.createElement("div");
@@ -760,22 +854,31 @@
     }, { rootMargin: "600px" }).observe(sentinel);
   }
 
-  // 深链接：/gallery#w=35 打开某个作品集，/gallery#mine 直接进我的
+  // 深链接：/gallery#w=35 打开某个作品集；#pub / #mine / #favs / #likes 直接切过去
   function fromHash() {
     var h = location.hash || "";
-    if (h === "#mine") { if (S.tab !== "mine") setTab("mine"); return; }
+    if (h === "#mine") { setTab("mine", "works"); return; }
+    if (h === "#favs") { setTab("mine", "favs"); return; }
+    if (h === "#likes") { setTab("mine", "likes"); return; }
+    if (h === "#pub") { setTab("pub"); return; }
+    if (h === "#owner") { setTab("owner"); return; }
     var m = /^#w=(\d+)$/.exec(h);
     if (m) openWork(parseInt(m[1], 10));
   }
   window.addEventListener("hashchange", fromHash);
 
-  // 首屏 tab 先按 hash 定，避免「先请求 all、再切 mine」跑两遍
-  if (location.hash === "#mine") {
-    S.tab = "mine";
+  // 首屏先按 hash 定 tab，避免「先请求站长、再切我的」跑两遍
+  (function () {
+    var h = location.hash || "";
+    if (h === "#pub") S.tab = "pub";
+    else if (h === "#mine" || h === "#favs" || h === "#likes") S.tab = "mine";
+    if (h === "#favs") S.sub = "favs";
+    else if (h === "#likes") S.sub = "likes";
     document.querySelectorAll(".tabs button").forEach(function (b) {
-      b.classList.toggle("on", b.dataset.tab === "mine");
+      b.classList.toggle("on", b.dataset.tab === S.tab);
     });
-  }
+    renderSubtabs();
+  })();
   load(true);
   setTimeout(fromHash, 600);
 })();

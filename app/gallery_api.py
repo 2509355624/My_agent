@@ -128,14 +128,25 @@ def api_list():
         where.append("(w.hidden=0 OR (w.src='user' AND w.owner=?))")
         args.append(str(qq))
 
+    # scope=owner → 站长的（磁盘目录 + 他自己用网页传的，口径同 _work_row）；
+    # scope=pub   → 其他人的。**不传 scope 就还是全部**，老链接和测试不受影响。
+    order = " ORDER BY (w.src='user') ASC, w.sort ASC, w.id DESC"
+    scope = str(request.args.get("scope") or "").strip().lower()
+    if scope == "owner":
+        where.append("(w.src='owner' OR (w.src='user' AND w.owner=?))")
+        args.append(str(GALLERY_OWNER_QQ or ""))
+    elif scope == "pub":
+        where.append("w.src='user' AND w.owner<>?")
+        args.append(str(GALLERY_OWNER_QQ or ""))
+        order = " ORDER BY w.id DESC"        # 公开墙看最新的，不care发现顺序
+
     grp = str(request.args.get("grp") or "").strip()
     if grp:
         where.append("w.grp=?")
         args.append(grp)
 
     sql = (_SELECT_WORK + " WHERE " + " AND ".join(where) +
-           " ORDER BY (w.src='user') ASC, w.sort ASC, w.id DESC"
-           " LIMIT ? OFFSET ?")
+           order + " LIMIT ? OFFSET ?")
     args += [size + 1, (page - 1) * size]
 
     with gallery.connect() as con:
@@ -303,6 +314,34 @@ def api_mark():
     return jsonify({"ok": True, "on": on, "count": cnt})
 
 
+def _marked(kind, qq, page, size):
+    """「我收藏的 / 我点赞的」——按图（item）排，不按作品集。
+
+    收藏和点赞只差一个 `kind`，两张表都不用建，走同一段 SQL。
+    返回的每条带 `work` + `idx`：前端拿它直接开查看器并跳到那一张，
+    不用为了看一张图先加载整个作品集。
+    """
+    where = ["m.qq=?", "m.kind=?", "w.n > 0"]
+    args = [str(qq), kind]
+    if not _is_owner(qq):
+        # 下架的图别出现在「我收藏的」里（除了作者本人，他本来就还能看）
+        where.append("(w.hidden=0 OR (w.src='user' AND w.owner=?))")
+        args.append(str(qq))
+    sql = ("SELECT i.id, i.work_id, i.idx, w.title, w.src, w.owner"
+           " FROM marks m JOIN items i ON i.id=m.item_id"
+           " JOIN works w ON w.id=i.work_id"
+           " WHERE " + " AND ".join(where) +
+           " ORDER BY m.ts DESC, i.id DESC LIMIT ? OFFSET ?")
+    args += [size + 1, (page - 1) * size]
+    with gallery.connect() as con:
+        rows = con.execute(sql, args).fetchall()
+    out = [{"id": r["id"], "work": r["work_id"], "idx": r["idx"],
+            "title": r["title"] or "未命名",
+            "by": "站长" if r["src"] == "owner" else gallery.alias(r["owner"])}
+           for r in rows[:size]]
+    return {"ok": True, "items": out, "has_more": len(rows) > size}
+
+
 @bp.route("/favs")
 def api_favs():
     bad = _guard()
@@ -312,21 +351,19 @@ def api_favs():
     if not qq:
         return jsonify({"ok": False, "error": "参数不对"}), 400
     page, size = _page_args()
-    with gallery.connect() as con:
-        rows = con.execute(
-            "SELECT i.id, i.work_id, i.idx, w.title, w.src, w.owner, w.hidden"
-            " FROM marks m JOIN items i ON i.id=m.item_id"
-            " JOIN works w ON w.id=i.work_id"
-            " WHERE m.qq=? AND m.kind='fav'"
-            " ORDER BY m.ts DESC LIMIT ? OFFSET ?",
-            (str(qq), size + 1, (page - 1) * size)).fetchall()
-    out = []
-    for r in rows[:size]:
-        if r["hidden"] and r["owner"] != str(qq) and not _is_owner(qq):
-            continue
-        out.append({"id": r["id"], "work": r["work_id"], "title": r["title"],
-                    "by": "站长" if r["src"] == "owner" else gallery.alias(r["owner"])})
-    return jsonify({"ok": True, "items": out, "has_more": len(rows) > size})
+    return jsonify(_marked("fav", qq, page, size))
+
+
+@bp.route("/likes")
+def api_likes():
+    bad = _guard()
+    if bad:
+        return bad
+    qq = _qq()
+    if not qq:
+        return jsonify({"ok": False, "error": "参数不对"}), 400
+    page, size = _page_args()
+    return jsonify(_marked("like", qq, page, size))
 
 
 # ─── 站主：选目录 / 扫描 / 下架 ─────────────────────────
