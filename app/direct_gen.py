@@ -947,7 +947,7 @@ def _lead_typo_channel(text):
 _FINAL_PROMPT_NO_CHAN_TEXT = (
     "这段带权号的提示词我照原样收下了，但这轮没说渠道，我不敢替你选"
     "（选错就是整张图换风味）。在前面补一个渠道词再发："
-    "nai（画师串/权号这种写法就是它的）/ silver（单张·最快）/ silver-hd（4x超清）/ "
+    "nai（画师串/权号这种写法就是它的）/ silver（单张·最快）/ silver-hd（3x超清）/ "
     "anima（三档）/ sd / qwen / nffa / jank / krea2米山舞"
     "（krea2 系 13 条按风格拆，点名要带风格词）。")
 
@@ -973,7 +973,7 @@ MENU_TEXT = (
     "　续/重画/合集：先引用那一页的图再发命令\n"
     "　完整玩法：说「moss漫画说明书」\n"
     "\n"
-    "「silver-hd」= 4x 超清出图\n"
+    "「silver-hd」= 3x 超清出图\n"
     "「/更多渠道」= 档位/画风/其他AI ｜ 「使用指南」= 详细玩法\n"
     "「/画廊」= 看大家出过的图（私聊发你网址）"
 )
@@ -1001,7 +1001,7 @@ GUIDE_TEXT = (
     "【点名渠道】把渠道名写最前面就行\n"
     "　anima多图　双模型两段 · 一次 3 张（要明说）\n"
     "　rs29　跟 anima clear 同参数，底模换 realskin 2.9（更新版）\n"
-    "　silver-hd　4x超清 · 4928×7360（约28MB）\n"
+    "　silver-hd　3x超清 · 3696×5520（约18MB）\n"
     "　jank　NoobAI 自定义（有权号词就用它）\n"
     "　anima线条　anima 堆 6 条 LoRA 的版本 · 2456×3686\n"
     "　anima写实　同上，一段底模换成 AnimeReality\n"
@@ -1709,7 +1709,7 @@ _REVISE_TEMPLATE = (
     "  moss-light = 原话点名「moss光影」才填（同 moss 骨架，多 LoRA 光影组合"
     "——光影+nai5+米山舞+光润皮肤，竖版 25 步；老说法 moss光影1/2/3 也归这条）；\n"
     "  jank = 原话明说「jank」才填（用户自定义渠道）。\n"
-    "  silver-hd = silver 的 4x 超清版，原话明说「silver-hd」或「silver 超清」才填。\n"
+    "  silver-hd = silver 的 3x 超清版，原话明说「silver-hd」或「silver 超清」才填。\n"
     "  qwen-hd = qwen 的 4x 超清版，原话明说「qwen-hd」或「qwen 超清」才填。\n"
     "  ⚠️ silver / silver-hd **有锁构图骨架**（见下面【图生图】）；"
     "jank 是文生图专用、没有骨架。"

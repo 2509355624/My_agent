@@ -159,13 +159,24 @@ def api_mine():
         return jsonify({"ok": False, "error": "参数不对"}), 400
     page, size = _page_args()
     with gallery.connect() as con:
-        rows = con.execute(
-            _SELECT_WORK + " WHERE w.src='user' AND w.owner=?"
-            " ORDER BY w.id DESC LIMIT ? OFFSET ?",
-            (str(qq), size + 1, (page - 1) * size)).fetchall()
+        if _is_owner(qq):
+            # 站主的「我的」必须包含他磁盘上那批目录（src='owner'）。
+            # 只查 src='user' 的话这里是 0 条，而扫描按钮恰好挂在这个 tab 上，
+            # 扫完报「13285 张图」却一张都不显示——站主会以为扫描没生效。
+            rows = con.execute(
+                _SELECT_WORK + " WHERE (w.src='user' AND w.owner=?)"
+                " OR w.src='owner'"
+                " ORDER BY (w.src='user') ASC, w.sort ASC, w.id DESC"
+                " LIMIT ? OFFSET ?",
+                (str(qq), size + 1, (page - 1) * size)).fetchall()
+        else:
+            rows = con.execute(
+                _SELECT_WORK + " WHERE w.src='user' AND w.owner=?"
+                " ORDER BY w.id DESC LIMIT ? OFFSET ?",
+                (str(qq), size + 1, (page - 1) * size)).fetchall()
     return jsonify({"ok": True, "works": [_work_row(r, qq) for r in rows[:size]],
                     "has_more": len(rows) > size, "owner": _is_owner(qq),
-                    "alias": gallery.alias(qq)})
+                    "alias": "站长" if _is_owner(qq) else gallery.alias(qq)})
 
 
 @bp.route("/work/<int:wid>")
@@ -318,7 +329,23 @@ def api_favs():
     return jsonify({"ok": True, "items": out, "has_more": len(rows) > size})
 
 
-# ─── 站主：扫描 / 下架 ───────────────────────────────────
+# ─── 站主：选目录 / 扫描 / 下架 ─────────────────────────
+
+@bp.route("/browse")
+def api_browse():
+    """列目录，给站主点选要扫描的文件夹。只有站主能看自己的磁盘结构。"""
+    bad = _guard()
+    if bad:
+        return bad
+    qq = _qq()
+    if not _is_owner(qq):
+        return jsonify({"ok": False, "error": "只有站主能选文件夹"}), 403
+    out = gallery.browse(request.args.get("path") or "")
+    if out.get("error"):
+        return jsonify({"ok": False, "error": out["error"]}), 400
+    out["ok"] = True
+    return jsonify(out)
+
 
 @bp.route("/scan", methods=["POST"])
 def api_scan():
@@ -329,11 +356,16 @@ def api_scan():
     if not _is_owner(qq):
         return jsonify({"ok": False,
                         "error": "没配 GALLERY_OWNER_QQ 或你不是站主"}), 403
+    body = request.get_json(silent=True) or {}
+    path = str(body.get("path") or "").strip()
     try:
-        out = gallery.scan()
+        # 带 path 就只扫站主指定的这一个目录；不带就扫全部已配置的根。
+        out = gallery.scan_path(path) if path else gallery.scan()
     except Exception as e:
         log.warning("扫描失败", exc_info=True)
         return jsonify({"ok": False, "error": "扫描出错：%s" % e}), 500
+    if out.get("error"):
+        return jsonify({"ok": False, "error": out["error"]}), 400
     return jsonify({"ok": True, "result": out})
 
 

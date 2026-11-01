@@ -111,6 +111,81 @@ class ScanTest(_Base):
         self.assertTrue(self.works()[0]["cover"].endswith("a.png"))
 
 
+class ScanPathTest(_Base):
+    """站主自己挑一个文件夹扫：只扫这一个，标题用目录名而不是分组名。"""
+
+    def test_scan_path_only_touches_that_dir(self):
+        self.mk("a/1", "x.png")
+        self.mk("b/2", "y.png")
+        out = gallery.scan_path(os.path.join(self.root, "a"))
+        self.assertEqual(out["items"], 1)
+        self.assertEqual([w["title"] for w in self.works()], ["1"])
+
+    def test_scanning_another_dir_keeps_the_first(self):
+        """分两次选不同目录，两边都要在（扫描只增不删）。"""
+        self.mk("a/1", "x.png")
+        self.mk("b/2", "y.png")
+        gallery.scan_path(os.path.join(self.root, "a"))
+        gallery.scan_path(os.path.join(self.root, "b"))
+        self.assertEqual(sorted(w["title"] for w in self.works()), ["1", "2"])
+
+    def test_root_own_title_is_dir_name(self):
+        """选 new\\35 扫，作品集标题必须是 35，不能变成分组名「图库」。"""
+        self.mk("35", "x.png")
+        gallery.scan_path(os.path.join(self.root, "35"))
+        w = self.works()[0]
+        self.assertEqual(w["title"], "35")
+        # 临时目录不在 GALLERY_ROOTS 里 → 自成一组，用目录自己的名字
+        self.assertEqual(w["grp"], "35")
+
+    def test_grp_follows_configured_root(self):
+        """落在配置根里面就沿用原分组名，别把「图库」改成「35」。"""
+        self.mk("35", "x.png")
+        p = os.path.join(self.root, "35")
+        with mock.patch.object(gallery, "GALLERY_ROOTS",
+                               (("图库", self.root),)):
+            self.assertEqual(gallery.grp_for(p), "图库")
+
+    def test_rescan_does_not_reorder_existing_works(self):
+        """单独扫一个子目录，不能把别的作品集挤到后面去。"""
+        self.mk("a/1", "x.png")
+        self.mk("b/2", "y.png")
+        gallery.scan_path(self.root)
+        before = [(w["id"], w["sort"]) for w in self.works()]
+        gallery.scan_path(os.path.join(self.root, "b"))
+        after = [(w["id"], w["sort"]) for w in self.works()]
+        self.assertEqual(before, after)
+
+    def test_missing_path_reports_error(self):
+        out = gallery.scan_path(os.path.join(self.root, "nope"))
+        self.assertIn("error", out)
+        self.assertNotIn("works", out)
+
+    def test_browse_lists_subdirs_with_counts(self):
+        self.mk("a", "x.png")
+        self.mk("a", "y.png")
+        os.makedirs(os.path.join(self.root, "empty"))
+        out = gallery.browse(self.root)
+        names = [d["name"] for d in out["dirs"]]
+        self.assertIn("a", names)
+        self.assertIn("empty", names)
+        a = [d for d in out["dirs"] if d["name"] == "a"][0]
+        empty = [d for d in out["dirs"] if d["name"] == "empty"][0]
+        self.assertEqual(a["n"], 2)
+        self.assertEqual(empty["n"], 0)
+        self.assertEqual(out["images"], 0)
+        self.assertEqual(out["parent"], os.path.dirname(self.root))
+
+    def test_browse_reports_direct_images(self):
+        """目录自己也直接放图时，面板要能显示「这里有 N 张」。"""
+        self.mk("", "z.png")
+        out = gallery.browse(self.root)
+        self.assertEqual(out["images"], 1)
+
+    def test_browse_missing_dir_is_error(self):
+        self.assertIn("error", gallery.browse(os.path.join(self.root, "nope")))
+
+
 class ThumbTest(_Base):
     def test_thumb_and_view_are_small_webp(self):
         p = self.mk("1", "a.png")
@@ -198,6 +273,55 @@ class ApiTest(_Base):
         self.assertEqual(d["works"][0]["title"], "1")
         self.assertEqual(d["works"][0]["by"], "站长")
         self.assertIsNotNone(d["works"][0]["cover"])
+
+    def test_owner_mine_includes_disk_works(self):
+        """站主的「我的」必须包含磁盘那批目录。
+
+        只查 src='user' 的话这里是 0 条，而「扫描文件夹」按钮恰好挂在这个 tab
+        上——扫描报「13285 张图」却一张都不显示，站主会以为扫描没生效。
+        """
+        d = self.j(self.c.get("/api/gal/mine?qq=10001", headers=self.h))
+        self.assertTrue(d["ok"])
+        self.assertEqual(len(d["works"]), 1)
+        self.assertEqual(d["works"][0]["title"], "1")
+        self.assertEqual(d["alias"], "站长")
+
+    def test_normal_user_mine_is_empty(self):
+        d = self.j(self.c.get("/api/gal/mine?qq=20002", headers=self.h))
+        self.assertEqual(d["works"], [])
+        self.assertNotEqual(d["alias"], "站长")
+
+    def test_only_owner_can_browse(self):
+        r = self.c.get("/api/gal/browse?qq=20002", headers=self.h)
+        self.assertEqual(r.status_code, 403)
+        with mock.patch.object(gallery, "GALLERY_ROOTS", ()):
+            d = self.j(self.c.get("/api/gal/browse?qq=10001", headers=self.h))
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["path"], "")          # 不带 path 时给起点
+        self.assertTrue(any(x["path"].endswith(":\\") for x in d["dirs"]))
+
+    def test_browse_starts_from_configured_roots(self):
+        """打开面板直接看到「图库 / 小漫画」，不用从盘符一层层点。"""
+        with mock.patch.object(gallery, "GALLERY_ROOTS", (("我的图", self.root),)):
+            d = self.j(self.c.get("/api/gal/browse?qq=10001", headers=self.h))
+        self.assertEqual([x["name"] for x in d["dirs"]], ["我的图"])
+        self.assertEqual(d["dirs"][0]["path"], os.path.abspath(self.root))
+        self.assertEqual(d["dirs"][0]["hint"], self.root)
+
+    def test_scan_accepts_a_chosen_path(self):
+        self.mk("2", "c.png")
+        r = self.c.post("/api/gal/scan",
+                        json={"qq": "10001", "path": os.path.join(self.root, "2")},
+                        headers=self.h)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.j(r)["result"]["items"], 1)
+
+    def test_scan_with_bad_path_is_400(self):
+        r = self.c.post("/api/gal/scan",
+                        json={"qq": "10001", "path": os.path.join(self.root, "nope")},
+                        headers=self.h)
+        self.assertEqual(r.status_code, 400)
+        self.assertFalse(self.j(r)["ok"])
 
     def test_only_owner_can_scan(self):
         r = self.c.post("/api/gal/scan", json={"qq": "20002"}, headers=self.h)

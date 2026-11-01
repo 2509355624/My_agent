@@ -595,9 +595,9 @@ class MenuAndGateTest(unittest.TestCase):
         # 短菜单里要指路到详细版
         self.assertIn("使用指南", direct_gen.MENU_TEXT)
 
-    def test_menu_mentions_the_4x_channel(self):
+    def test_menu_mentions_the_hd_channel(self):
         """短菜单给 silver-hd 一行曝光（2026-10-07 用户拍板）——短菜单本身
-        不列渠道，但「4x 超清」这条得让用户看得见。"""
+        不列渠道，但「超清」这条得让用户看得见。"""
         self.assertIn("silver-hd", direct_gen.MENU_TEXT)
 
     def test_attribution_prefix_is_stripped_before_menu_match(self):
@@ -4323,3 +4323,44 @@ class QuotedPresetTest(unittest.TestCase):
                                     data_urls=["data:image/jpeg;base64,A"])
         m_rev.assert_called_once()
         self.assertEqual(out, "改图去了")
+
+
+class SilverHdUpscaleTest(unittest.TestCase):
+    """silver-hd 的放大链必须是 3x（4x 模型 + 缩 0.75）。
+
+    2026-11-01 从 4x 降到 3x：4x 出 4928×7360，PNG 实测 29~33 MB，
+    正好卡在腾讯图片上传硬限 32 MiB 边上，画面一碎就 `highway upload
+    error_code=323` 发不出去（连续两张 34368771 / 34397645 字节被拒）。
+    3x 是 3696×5520、PNG 约 18 MB，留足余量。
+    """
+
+    def _load(self, name):
+        with open("skills/silver-hd/" + name, encoding="utf-8") as f:
+            s = (f.read().replace("__SEED__", "1")
+                 .replace("__MULTI_PROMPTS__", "a cat")
+                 .replace("__SOURCE_IMAGE__", "x.png"))
+        return json.loads(s)
+
+    def test_both_workflows_upscale_3x(self):
+        for name in ("workflow.json", "workflow_i2i.json"):
+            with self.subTest(workflow=name):
+                wf = self._load(name)
+                up = [k for k, v in wf.items()
+                      if v["class_type"] == "ImageUpscaleWithModel"]
+                sc = [v["inputs"] for v in wf.values()
+                      if v["class_type"] == "ImageScaleBy"]
+                self.assertEqual(len(up), 1, "缺 4x 放大节点")
+                self.assertEqual(len(sc), 1, "缺缩小节点")
+                # 4x × 0.75 = 3x，接在放大后面
+                self.assertAlmostEqual(sc[0]["scale_by"], 0.75)
+                self.assertEqual(sc[0]["image"][0], up[0])
+
+    def test_save_takes_the_scaled_output_not_the_4x(self):
+        """SaveImage 必须接 ImageScaleBy，接回 4x 就等于没改。"""
+        for name in ("workflow.json", "workflow_i2i.json"):
+            with self.subTest(workflow=name):
+                wf = self._load(name)
+                saves = [v["inputs"]["images"][0] for v in wf.values()
+                         if v["class_type"] == "SaveImage"]
+                self.assertEqual(len(saves), 1)
+                self.assertEqual(wf[saves[0]]["class_type"], "ImageScaleBy")

@@ -161,7 +161,7 @@ def safe_inside(base, path):
 
 # ─── 扫描（站主磁盘）──────────────────────────────────────
 
-def _walk(grp, root, cur, out, depth=0):
+def _walk(grp, root, cur, out, depth=0, root_title=None):
     try:
         entries = list(os.scandir(cur))
     except OSError:
@@ -183,13 +183,18 @@ def _walk(grp, root, cur, out, depth=0):
     if files:
         files.sort(key=lambda x: _natkey(x.name))
         rel = os.path.relpath(cur, root)
-        title = grp if rel == "." else rel.replace(os.sep, "/")
+        if rel == ".":
+            # 扫的是配置根 → 用分组名；扫的是站主临时选的一个子目录 →
+            # 用它自己的名字，不然选 new\35 会冒出一个标题叫「图库」的作品集。
+            title = root_title or os.path.basename(os.path.abspath(cur))
+        else:
+            title = rel.replace(os.sep, "/")
         out.append((grp, title, os.path.abspath(cur),
                     [(f.name, _size(f)) for f in files]))
     if depth >= 8:
         return
     for d in sorted(dirs, key=lambda x: _natkey(x.name)):
-        _walk(grp, root, d.path, out, depth + 1)
+        _walk(grp, root, d.path, out, depth + 1, root_title)
 
 
 def _size(entry):
@@ -208,6 +213,9 @@ def _fingerprint(files):
 def scan(roots=None):
     """扫站主目录，登记所有「直接含图」的目录。
 
+    roots 的元素是 `(分组名, 绝对路径)`，或者 `(分组名, 绝对路径, 根标题)`——
+    第三项只在「根目录自己也直接放图」时决定那个作品集叫什么。
+
     → {"works": 新增+更新的作品集数, "items": 图片数, "skipped": 没变的目录数,
        "seconds": 耗时}
     """
@@ -218,11 +226,13 @@ def scan(roots=None):
 
     t0 = time.time()
     found = []
-    for grp, root in roots:
+    for item in roots:
+        grp, root = item[0], item[1]
+        root_title = item[2] if len(item) > 2 else grp
         if not os.path.isdir(root):
             log.warning("画廊根目录不存在：%s", root)
             continue
-        _walk(grp, root, root, found)
+        _walk(grp, root, root, found, 0, root_title)
 
     now = time.time()
     added = changed = skipped = total_items = 0
@@ -231,16 +241,21 @@ def scan(roots=None):
         old = {r["key"]: r for r in con.execute(
             "SELECT key, id, fp FROM works WHERE src='owner'")}
         seen_keys = set()
+        # sort 只决定墙上的先后顺序。已有作品集**绝不重排**——站主单独选一个
+        # 子目录扫一遍，不该让它从「图库 · 35」瞬移到整个墙的最前面。
+        # 新发现的才排到末尾。
+        row = con.execute("SELECT MAX(sort) m FROM works").fetchone()
+        next_sort = (row["m"] or 0) + 1
 
-        for seq, (grp, title, abspath, files) in enumerate(found):
+        for grp, title, abspath, files in found:
             key = "owner:" + abspath.lower()
             seen_keys.add(key)
             fp = _fingerprint(files)
             row = old.get(key)
             if row and row["fp"] == fp:
                 skipped += 1
-                con.execute("UPDATE works SET seen=?, sort=? WHERE id=?",
-                            (now, seq, row["id"]))
+                con.execute("UPDATE works SET seen=? WHERE id=?",
+                            (now, row["id"]))
                 total_items += len(files)
                 continue
 
@@ -248,8 +263,8 @@ def scan(roots=None):
             if row:
                 con.execute(
                     "UPDATE works SET grp=?, title=?, path=?, cover=?, n=?, "
-                    "fp=?, sort=?, seen=? WHERE id=?",
-                    (grp, title, abspath, cover, len(files), fp, seq, now,
+                    "fp=?, seen=? WHERE id=?",
+                    (grp, title, abspath, cover, len(files), fp, now,
                      row["id"]))
                 wid = row["id"]
                 con.execute("DELETE FROM items WHERE work_id=?", (wid,))
@@ -259,8 +274,9 @@ def scan(roots=None):
                     "INSERT INTO works(key, src, owner, grp, title, path, cover,"
                     " n, fp, sort, ts, seen) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                     (key, "owner", "", grp, title, abspath, cover, len(files),
-                     fp, seq, now, now))
+                     fp, next_sort, now, now))
                 wid = cur.lastrowid
+                next_sort += 1
                 added += 1
 
             con.executemany(
@@ -278,6 +294,107 @@ def scan(roots=None):
     return {"works": added + changed, "added": added, "changed": changed,
             "skipped": skipped, "items": total_items,
             "seconds": round(time.time() - t0, 1)}
+
+
+def grp_for(path):
+    """扫描单个目录时该归到哪个分组。
+
+    落在已配置的根里面就沿用它原来的分组名（选 `new\\35` 还是归「图库」），
+    否则用目录自己的名字。不这么做的话，站主随便选一个子目录扫一遍，
+    就会把那个作品集的分组从「图库」改成「35」，墙上凭空多出一个分组。
+    """
+    p = os.path.abspath(path)
+    for grp, root in GALLERY_ROOTS:
+        if safe_inside(root, p):
+            return grp
+    name = os.path.basename(p.rstrip("\\/"))
+    return name or p
+
+
+def scan_path(path):
+    """只扫站主指定的那一个目录（含子目录）。站主在网页上自己挑的路径。"""
+    p = os.path.abspath(str(path or "").strip())
+    if not os.path.isdir(p):
+        return {"error": "目录不存在：%s" % p}
+    name = os.path.basename(p.rstrip("\\/")) or p
+    out = scan([(grp_for(p), p, name)])
+    out["path"] = p
+    return out
+
+
+def browse(path=""):
+    """列一层目录，给站主点选要扫描的文件夹。
+
+    和扫描一样只读元数据：`scandir` 一层，不递归、不开图。每个子目录后面
+    带一个「直接含多少张图」，站主一眼就能认出哪个是他要的作品集目录。
+
+    `path` 为空时先给「已经配置好的根」——站主最常扫的就是这两个，
+    从盘符一层层点进去反而是绕路；没配根才退回到盘符列表。
+    """
+    p = str(path or "").strip()
+    if not p:
+        roots = []
+        for grp, root in GALLERY_ROOTS:
+            if os.path.isdir(root):
+                roots.append({"name": grp, "path": root,
+                              "n": _count_images(root), "hint": root})
+        if roots:
+            return {"path": "", "parent": "", "dirs": roots, "images": 0}
+        if os.name == "nt":
+            dirs = []
+            for ch in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+                root = ch + ":\\"
+                if os.path.isdir(root):
+                    dirs.append({"name": root.rstrip("\\"), "path": root,
+                                 "n": _count_images(root)})
+            return {"path": "", "parent": "", "dirs": dirs, "images": 0}
+        p = "/"
+
+    p = os.path.abspath(p)
+    if not os.path.isdir(p):
+        return {"error": "目录不存在：%s" % p}
+
+    dirs, images = [], 0
+    try:
+        entries = list(os.scandir(p))
+    except OSError as e:
+        return {"error": "读不了这个目录：%s" % e}
+
+    for e in entries:
+        if e.name.startswith("."):
+            continue
+        try:
+            if e.is_dir(follow_symlinks=False):
+                if e.name.lower() in SKIP_DIRS:
+                    continue
+                dirs.append({"name": e.name, "path": os.path.join(p, e.name),
+                             "n": _count_images(e.path)})
+            elif e.is_file(follow_symlinks=False) and e.name.lower().endswith(IMG_EXT):
+                images += 1
+        except OSError:
+            continue
+
+    dirs.sort(key=lambda x: _natkey(x["name"]))
+    # 盘根（D:\）的上一级是空字符串，前端拿它当「已经到顶」。
+    parent = os.path.dirname(p.rstrip("\\/") or p)
+    return {"path": p, "parent": parent, "dirs": dirs, "images": images}
+
+
+def _count_images(d):
+    """一个目录里**直接**放了多少张图（不算子目录）。给选文件夹时看的。"""
+    n = 0
+    try:
+        for e in os.scandir(d):
+            try:
+                if (not e.name.startswith(".")
+                        and e.is_file(follow_symlinks=False)
+                        and e.name.lower().endswith(IMG_EXT)):
+                    n += 1
+            except OSError:
+                continue
+    except OSError:
+        return 0
+    return n
 
 
 # ─── 缩略图 / 预览图 ────────────────────────────────────

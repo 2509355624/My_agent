@@ -146,6 +146,31 @@
   .row .ok{background:var(--pink);color:#fff;font-weight:600}
   .row .ok[disabled]{opacity:.5}
 
+  /* ── 选文件夹面板 ── */
+  #scanbox{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.72);
+    display:none;align-items:flex-end;justify-content:center}
+  #scanbox.on{display:flex}
+  @media(min-width:600px){#scanbox{align-items:center}}
+  .sheet .row input[type=text]{margin-bottom:0}
+  .sheet .row .up{flex:0 0 auto;background:var(--card2);border:0;color:var(--tx);
+    font:inherit;font-size:16px;padding:0 15px;border-radius:10px;cursor:pointer}
+  .dirs{max-height:42vh;overflow:auto;border:1px solid var(--line);border-radius:12px;
+    background:var(--card2);margin-bottom:12px;-webkit-overflow-scrolling:touch}
+  .dirs .d{display:flex;align-items:center;gap:9px;padding:11px 12px;cursor:pointer;
+    font-size:13.5px;border-bottom:1px solid var(--line)}
+  .dirs .d:last-child{border-bottom:0}
+  .dirs .d:active{background:var(--card)}
+  .dirs .d .mid{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+  .dirs .d .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dirs .d .hp{color:var(--dim);font-size:11px;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .dirs .d .ct{color:var(--gold);font-size:12px;flex:0 0 auto}
+  .dirs .d .ct.z{color:var(--dim)}
+  .dirs .n{padding:20px 12px;text-align:center;color:var(--dim);font-size:13px}
+  .nowline{font-size:12.5px;color:var(--dim);margin-bottom:10px;line-height:1.6;
+    word-break:break-all}
+  .nowline b{color:var(--tx);font-weight:600}
+
   #toast{position:fixed;left:50%;bottom:32px;transform:translate(-50%,20px);
     background:rgba(30,30,38,.97);color:#fff;font-size:13px;padding:10px 18px;
     border-radius:20px;opacity:0;pointer-events:none;transition:.24s;z-index:99;
@@ -210,6 +235,25 @@
   </div>
 </div>
 
+<!-- 选文件夹扫描 -->
+<div id="scanbox">
+  <div class="sheet">
+    <h3>扫描文件夹</h3>
+    <p>点进目录选中它，或者直接粘完整路径。选中的目录连同子目录一起扫，
+      每个「直接放着图」的目录算一个作品集。</p>
+    <div class="nowline" id="scnow"></div>
+    <div class="row" style="margin-bottom:10px">
+      <input type="text" id="scpath" placeholder="D:\Users\gjl\Pictures\new">
+      <button class="up" id="scup" title="上一级">↑</button>
+    </div>
+    <div class="dirs" id="scdirs"></div>
+    <div class="row">
+      <button class="cancel" id="sccancel">取消</button>
+      <button class="ok" id="scgo">扫描这里</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -260,7 +304,16 @@
       if (!S.works.length) showEmpty();
     }).catch(function (e) {
       $("hint").textContent = e.message || "加载失败";
-    }).then(function () { S.busy = false; });
+    }).then(function () {
+      S.busy = false;
+      // 首屏没撑满一屏时，IntersectionObserver 只会在页面刚加载时回调一次，
+      // 那会儿 busy 还是 true，直接被 return 吞掉；之后 sentinel 一直没离开
+      // 视口，就再也不会回调 —— 表现就是「永远只有第一页 24 个」。这里补一次。
+      if (S.more && sentinel && window.innerHeight &&
+          sentinel.getBoundingClientRect().top < window.innerHeight + 600) {
+        load(false);
+      }
+    });
   }
 
   function showEmpty() {
@@ -325,12 +378,14 @@
     var t = $("tools");
     t.innerHTML = "";
     if (S.tab === "mine") {
-      var up = btn("＋ 上传作品集", "primary", openUpload);
-      t.appendChild(up);
-      if (S.owner) {
-        t.appendChild(btn("⟳ 扫描文件夹", "", scan));
-        t.appendChild(btn("⌫ 清理失效", "", clean));
-      }
+      t.appendChild(btn("＋ 上传作品集", "primary", openUpload));
+    }
+    // 扫描是站主的事，和 tab 无关：原来只在「我的」里显示，而「我的」当时
+    // 查不到站主的目录，扫完一片空白，等于把按钮放进了死胡同。
+    if (S.owner) {
+      t.appendChild(btn("⟳ 扫描文件夹", S.tab === "mine" ? "" : "primary", openScan));
+      t.appendChild(btn("↻ 全部重扫", "", scanAll));
+      t.appendChild(btn("⌫ 清理失效", "", clean));
     }
   }
 
@@ -342,7 +397,8 @@
     return b;
   }
 
-  function scan() {
+  // 扫全部已配置的根（.env 里那两个）。日常增量更新点这个。
+  function scanAll() {
     if (S.busy) return;
     S.busy = true;
     toast("正在扫描磁盘…");
@@ -351,10 +407,106 @@
       var r = d.result || {};
       toast("扫完了：" + (r.works || 0) + " 个作品集，"
             + (r.items || 0) + " 张图，" + (r.seconds || 0) + " 秒");
+      // 必须先放开 busy 再 load：load() 开头就有 `if (S.busy) return`，
+      // 原来这里 busy 还是 true，扫完原地不动 —— 看起来就是「扫了没反应」。
+      S.busy = false;
       load(true);
-    }).catch(function (e) { toast(e.message); })
-      .then(function () { S.busy = false; });
+    }).catch(function (e) { toast(e.message); S.busy = false; });
   }
+
+  // ── 选文件夹 ──────────────────────────────────────────
+  var SC = { path: "", parent: "" };
+
+  function openScan() {
+    $("scanbox").classList.add("on");
+    var last = "";
+    try { last = localStorage.getItem("gal_scan_path") || ""; } catch (e) {}
+    browseTo(last);
+  }
+  function closeScan() { $("scanbox").classList.remove("on"); }
+
+  function browseTo(p) {
+    api("browse?path=" + encodeURIComponent(p || "")).then(function (d) {
+      SC.path = d.path || "";
+      SC.parent = d.parent || "";
+      $("scpath").value = SC.path;
+      try { localStorage.setItem("gal_scan_path", SC.path); } catch (e) {}
+
+      var now = $("scnow");
+      now.innerHTML = "";
+      if (SC.path) {
+        var has = d.images || 0;
+        now.appendChild(document.createTextNode("当前："));
+        var b = document.createElement("b");
+        b.textContent = SC.path;
+        now.appendChild(b);
+        now.appendChild(document.createTextNode(
+          has ? "（这里直接有 " + has + " 张图）" : "（这里没有直接的图，只有子目录）"));
+      } else {
+        now.textContent = "点下面的文件夹进去，或者在上面粘一个完整路径。";
+      }
+
+      var box = $("scdirs");
+      box.innerHTML = "";
+      if (!d.dirs || !d.dirs.length) {
+        box.innerHTML = '<div class="n">这里面没有子目录</div>';
+        return;
+      }
+      d.dirs.forEach(function (x) {
+        var r = document.createElement("div");
+        r.className = "d";
+        var ic = document.createElement("span");
+        ic.textContent = "📁";
+        var mid = document.createElement("span");
+        mid.className = "mid";
+        var nm = document.createElement("span");
+        nm.className = "nm";
+        nm.textContent = x.name;
+        mid.appendChild(nm);
+        if (x.hint) {
+          var hp = document.createElement("span");
+          hp.className = "hp";
+          hp.textContent = x.hint;
+          mid.appendChild(hp);
+        }
+        var ct = document.createElement("span");
+        ct.className = "ct" + (x.n ? "" : " z");
+        ct.textContent = x.n ? x.n + " 张" : "";
+        r.appendChild(ic); r.appendChild(mid); r.appendChild(ct);
+        r.onclick = function () { browseTo(x.path); };
+        box.appendChild(r);
+      });
+    }).catch(function (e) { toast(e.message); });
+  }
+
+  function goScan() {
+    if (!SC.path) { toast("先点进一个文件夹"); return; }
+    var b = $("scgo");
+    b.disabled = true;
+    b.textContent = "扫描中…";
+    api("scan", { method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ path: SC.path }) })
+      .then(function (d) {
+        var r = d.result || {};
+        toast("扫完了：" + (r.works || 0) + " 个作品集，"
+              + (r.items || 0) + " 张图");
+        closeScan();
+        S.tab = "all";
+        document.querySelectorAll(".tabs button").forEach(function (x) {
+          x.classList.toggle("on", x.dataset.tab === "all");
+        });
+        load(true);
+      }).catch(function (e) { toast(e.message); })
+      .then(function () { b.disabled = false; b.textContent = "扫描这里"; });
+  }
+
+  $("sccancel").onclick = closeScan;
+  $("scanbox").onclick = function (e) { if (e.target === $("scanbox")) closeScan(); };
+  $("scup").onclick = function () { if (SC.path) browseTo(SC.parent); };
+  $("scgo").onclick = goScan;
+  $("scpath").onkeydown = function (e) {
+    if (e.key === "Enter") { e.preventDefault(); browseTo(this.value.trim()); }
+  };
 
   function clean() {
     api("clean", { method: "POST", headers: { "Content-Type": "application/json" },
