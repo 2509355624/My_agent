@@ -178,6 +178,41 @@ class SaveTest(_Base):
         self.assertTrue(out["ok"])
         self.assertTrue(any("要 4 格" in x for x in out["issues"]))
 
+    def test_save_keeps_two_bubbles(self):
+        """`bubbles` 是数组（2026-11-01 加），spec 清洗只按字符串收字段会吞掉它。
+
+        踩过的坑：清洗那行写成 `for k in ("desc","bubble","sfx","caption")`，
+        一页两条台词的页存盘后第二条直接消失，出图时那个气泡就没有了，
+        而且不报错——最难查的一类。
+        """
+        name, d = self._mk_task()
+        spec = _spec()
+        spec["pages"][0]["panels"][0] = {
+            "desc": "{girl} sits by the window in a medium shot at eye level",
+            "bubbles": ["总算来了。", "……不是这班。"], "sfx": "", "caption": ""}
+        out = self.c.post("/api/moss/save", json={"task": name, "spec": spec}).get_json()
+        self.assertTrue(out["ok"])
+        with open(os.path.join(d, "spec.json"), encoding="utf-8") as fh:
+            saved = json.load(fh)
+        self.assertEqual(saved["pages"][0]["panels"][0]["bubbles"],
+                         ["总算来了。", "……不是这班。"])
+
+        texts = [x["text"] for x in json.loads(out["pages"][0]["prompt"])["items"]
+                 if x["label"] == "text"]
+        self.assertIn("总算来了。", texts)
+        self.assertIn("……不是这班。", texts)
+
+    def test_save_strips_blank_bubbles(self):
+        name, _ = self._mk_task()
+        spec = _spec()
+        spec["pages"][0]["panels"][0] = {
+            "desc": "{girl} sits by the window in a medium shot at eye level",
+            "bubbles": ["  晚安  ", "", "   "], "sfx": "", "caption": ""}
+        out = self.c.post("/api/moss/save", json={"task": name, "spec": spec}).get_json()
+        texts = [x["text"] for x in json.loads(out["pages"][0]["prompt"])["items"]
+                 if x["label"] == "text"]
+        self.assertEqual(texts, ["晚安", "哗"])     # 第 2 格的拟声字照旧
+
 
 class LegacyTest(_Base):
     """CLI 时代的老任务没有 state.json，靠出图目录兜底。"""

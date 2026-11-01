@@ -263,5 +263,148 @@ class SixPanelPromptTest(unittest.TestCase):
                          moss_comic.LAYOUT_BOXES["2x2"])
 
 
+class MultiBubbleTest(unittest.TestCase):
+    """一格两条气泡（2026-11-01 加）。
+
+    背景：原来一格只有一个 `bubble` 字段、上限 10 字，一页最多 20 字文字，
+    写不出「一问一答」。改成 `bubbles` 数组、单条仍 ≤11 字**靠条数堆量**。
+    这里钉住的是「编译层真的落下来了」——`moss_api` 的 spec 清洗以前只保留
+    四个键，`bubbles` 会在存盘那一步被静默丢掉（这台机器上踩过一次）。
+    """
+
+    @staticmethod
+    def _spec(panels, layout="2t4b"):
+        n = len(panels)
+        shots = ["wide shot", "medium shot", "medium close-up",
+                 "wide shot", "medium shot", "close-up"][:n]
+        return {
+            "title": "试",
+            "style": "cool blue dusk light from the left",
+            "cast": {"woman": "a young woman with short black hair, a grey blazer"},
+            "pages": [{
+                "n": 1, "layout": layout,
+                "plan": {"key_panel": 1, "shots": shots},
+                "scene": "a bus stop at dusk",
+                "panels": panels,
+            }],
+        }
+
+    def _desc(self, i):
+        return ("A medium close-up of {woman} standing at the stop, warm dusk light "
+                "on one side of her face, shot at eye level, panel %d." % i)
+
+    def test_two_bubbles_become_two_text_items(self):
+        spec = self._spec([{"desc": self._desc(1),
+                            "bubbles": ["总算来了。", "……不是这班。"],
+                            "caption": "", "sfx": ""}], layout="single")
+        spec["pages"][0]["plan"]["shots"] = ["medium close-up"]
+        d = json.loads(moss_comic.build_page_prompt(spec, spec["pages"][0]))
+        texts = [i["text"] for i in d["items"]
+                 if i["label"] == "text" and i["text"] in ("总算来了。", "……不是这班。")]
+        self.assertEqual(len(texts), 2, d["items"])
+
+    def test_two_bubbles_have_separate_boxes(self):
+        """两个气泡的 bbox 不许重叠——贴在一起模型会画成一个大气泡。"""
+        cell = (0, 0, 384, 512)
+        a = moss_comic._text_bbox(cell, "bubble", 0)
+        b = moss_comic._text_bbox(cell, "bubble", 1)
+        self.assertFalse(_overlap(a, b), (a, b))
+
+    def test_second_bubble_is_above_the_first(self):
+        cell = (0, 0, 384, 512)
+        a = moss_comic._text_bbox(cell, "bubble", 0)
+        b = moss_comic._text_bbox(cell, "bubble", 1)
+        self.assertLess(b[2], a[2])          # 上边更靠上
+        self.assertLess(b[0], a[0])
+
+    def test_legacy_bubble_field_still_works(self):
+        """老 spec / 已存连载页全是 `bubble`，重画旧页必须还能读。"""
+        got = moss_comic._bubbles({"bubble": "晚安", "bubbles": []})
+        self.assertEqual(got, ["晚安"])
+
+    def test_legacy_field_goes_first_when_both_present(self):
+        got = moss_comic._bubbles({"bubble": "一", "bubbles": ["二"]})
+        self.assertEqual(got, ["一", "二"])
+
+    def test_only_the_cap_is_used(self):
+        got = moss_comic._bubbles({"bubbles": ["一", "二", "三"]})
+        self.assertEqual(len(got), moss_comic.MAX_BUBBLES)
+
+    def test_blank_entries_are_dropped(self):
+        got = moss_comic._bubbles({"bubbles": ["一", "", "  ", None]})
+        self.assertEqual(got, ["一"])
+
+    def test_check_reports_a_too_long_bubble(self):
+        spec = self._spec([{"desc": self._desc(1),
+                            "bubbles": ["这句话明显超过了十一个字的上限"],
+                            "caption": "", "sfx": ""}], layout="single")
+        spec["pages"][0]["plan"]["shots"] = ["medium close-up"]
+        issues = moss_comic.check(spec)
+        self.assertTrue(any("超 11 字" in s for s in issues), issues)
+
+    def test_check_allows_a_long_caption_up_to_22(self):
+        cap = "末班车晚了四十分钟，站牌上的时刻表还是去年的"   # 21 字
+        spec = self._spec([{"desc": self._desc(1), "bubbles": [],
+                            "caption": cap, "sfx": ""}], layout="single")
+        spec["pages"][0]["plan"]["shots"] = ["medium close-up"]
+        issues = moss_comic.check(spec)
+        # single 只有一格，shots 必然只有一档，那条「整页会平」的提示是预期的
+        self.assertFalse(any("超 22 字" in s or "长旁白" in s for s in issues), issues)
+
+    def test_check_reports_two_long_captions_in_one_page(self):
+        """长旁白只给最大的格用，一页两处就是叙述压过画面。"""
+        cap = "末班车晚了四十分钟，站牌上的时刻表还是去年的"
+        panels = [{"desc": self._desc(i), "bubbles": [], "caption": cap, "sfx": ""}
+                  for i in (1, 2)]
+        spec = self._spec(panels, layout="2h")
+        spec["pages"][0]["plan"]["shots"] = ["wide shot", "close-up"]
+        issues = moss_comic.check(spec)
+        self.assertTrue(any("长旁白" in s for s in issues), issues)
+
+    def test_caption_box_got_taller_for_the_long_tier(self):
+        """长旁白靠双列竖排，框高要跟着放，不然 11 行压不进 18% 的格高。"""
+        cell = (0, 0, 384, 512)
+        box = moss_comic._text_bbox(cell, "caption")
+        self.assertGreater(box[2] - box[0], 0.20 * 384)
+
+
+class ExampleSpecTest(unittest.TestCase):
+    """系统提示里那个示例，**自己必须先合自己的规**。
+
+    模型对示例的模仿力度高于对规则的服从：示例里相邻两格写同一个景别，
+    它整篇都会这么写；示例台词全空，它就一个字都不写（2026-11-01 换示例
+    之前就是两格全空，等于在教模型「不要写台词」）。
+
+    所以示例改完必须过一遍 `check()`，这条测试就是那道闸门。
+    """
+
+    def _example(self):
+        sys_text = moss_comic._SYSTEM
+        chunk = sys_text[sys_text.rindex("# 示例"):]
+        spec, why = moss_comic.parse_json(
+            chunk[chunk.find("{"):chunk.rfind("}") + 1])
+        self.assertIsNotNone(spec, why)
+        return spec
+
+    def test_example_parses(self):
+        self.assertTrue(self._example().get("pages"))
+
+    def test_example_passes_its_own_check(self):
+        issues = moss_comic.check(self._example())
+        self.assertEqual(issues, [])
+
+    def test_example_shows_two_bubbles(self):
+        """示例要真的示范「一格两条」，光在规则里写不管用。"""
+        got = [len(moss_comic._bubbles(p))
+               for p in self._example()["pages"][0]["panels"]]
+        self.assertIn(2, got, got)
+
+    def test_example_compiles_to_layout_json(self):
+        spec = self._example()
+        d = json.loads(moss_comic.build_page_prompt(spec, spec["pages"][0]))
+        texts = [i for i in d["items"] if i["label"] == "text"]
+        self.assertEqual(len(texts), 5, [t["text"] for t in texts])
+
+
 if __name__ == "__main__":
     unittest.main()

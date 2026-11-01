@@ -884,20 +884,32 @@ def _layout(brief):
 
 
 def _lines(spec):
-    """每格挑一句中文台词当预览（旁白 > 气泡 > 拟声）。
+    """每格挑中文文案当预览（旁白 + 气泡，用 `｜` 隔开）。
 
     没台词的格子补一个「—」而不是直接跳过：跳过会变成 `1· 2· 4·`，
     看着像少了一格，群里第一反应是「出 bug 了」。
+
+    2026-11-01：一格可以有两条气泡了，这里**全都要露出来**——回执的作用
+    就是让人在等的 80 秒里发现「它理解跑偏了」，少显示一条就少一次纠错机会。
     """
     page = (spec.get("pages") or [{}])[0]
     out = []
     for i, p in enumerate(page.get("panels") or [], 1):
-        word = ""
-        for key in ("caption", "bubble", "sfx"):
-            word = str(p.get(key) or "").strip()
-            if word:
-                break
-        out.append("　%d· %s" % (i, word or "—"))
+        bits = []
+        cap = str(p.get("caption") or "").strip()
+        if cap:
+            bits.append(cap)
+        bs = [str(x or "").strip() for x in (p.get("bubbles") or [])
+              if str(x or "").strip()]
+        one = str(p.get("bubble") or "").strip()    # 老 spec 的单条字段
+        if one and one not in bs:
+            bs.insert(0, one)
+        bits.extend(bs)
+        if not bits:
+            sfx = str(p.get("sfx") or "").strip()
+            if sfx:
+                bits.append(sfx)
+        out.append("　%d· %s" % (i, "｜".join(bits) or "—"))
     return "\n".join(out)
 
 

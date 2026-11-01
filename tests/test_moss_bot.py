@@ -514,9 +514,28 @@ class LinesTest(unittest.TestCase):
         {"desc": "d", "sfx": "哗哗"},
     ]}]}
 
-    def test_caption_wins_over_bubble(self):
+    def test_caption_and_bubble_both_shown(self):
+        """2026-11-01 改：旁白和气泡**都露出来**，不再二选一。
+
+        回执是让人在等的两分钟里发现「它理解跑偏了」，少显示一条就少一次
+        纠错机会。两段之间用 `｜` 隔开。
+        """
         spec = {"pages": [{"panels": [{"caption": "旁白", "bubble": "台词"}]}]}
-        self.assertIn("旁白", moss_bot._lines(spec))
+        line = moss_bot._lines(spec)
+        self.assertIn("旁白", line)
+        self.assertIn("台词", line)
+        self.assertIn("旁白｜台词", line)
+
+    def test_two_bubbles_are_both_listed(self):
+        spec = {"pages": [{"panels": [{"bubbles": ["总算来了。", "……不是这班。"]}]}]}
+        line = moss_bot._lines(spec)
+        self.assertIn("总算来了。", line)
+        self.assertIn("……不是这班。", line)
+
+    def test_new_and_legacy_bubble_fields_combine(self):
+        """老 spec 的 `bubble` 和新格式 `bubbles` 同时存在时都要显示。"""
+        spec = {"pages": [{"panels": [{"bubble": "一", "bubbles": ["二"]}]}]}
+        self.assertIn("一｜二", moss_bot._lines(spec))
 
     def test_every_panel_keeps_its_number(self):
         """没台词的格子补「—」——跳过会变成 1·2·4·，看着像少了一格。"""

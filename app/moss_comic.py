@@ -19,7 +19,7 @@ Danbooru tag 工程师（32.8 万标签库 + POV 判据 + 补正员），这边�
       "cast":  {"woman": "…", "man": "…"},
       "pages": [
         {"n": 1, "layout": "single", "scene": "…",
-         "panels": [{"desc": "…{woman}…", "bubble": "", "sfx": "", "caption": "…"}]}
+         "panels": [{"desc": "…{woman}…", "bubbles": ["…", "…"], "sfx": "", "caption": "…"}]}
       ]
     }
 """
@@ -202,6 +202,12 @@ STYLES = {
 _TXT_BUBBLE = ("Tall rounded oval speech bubble with a thin black outline and clean "
                "vertical Chinese dialogue text in %s, short pointer tail on its edge "
                "pointing toward the speaker's face.")
+# 一格第二条气泡必须**在排版描述里也说出来**：两个 text item 用同一句 caption，
+# 模型读到的信息就是「这里有个气泡」，只画一个，第二句台词直接长不出来
+# （2026-11-01 预判，同一格里重复元素不给区分描述是通病）。
+_TXT_BUBBLE2 = ("A second tall rounded oval speech bubble stacked above the first "
+                "one, thin black outline, clean vertical Chinese dialogue text in %s, "
+                "short pointer tail pointing toward the speaker's face.")
 _TXT_CAPTION = ("Tall white rectangular narration box with a thin black outline and "
                 "clean vertical Chinese text in %s (no bubble tail).")
 _TXT_SFX = ("Hand-lettered Chinese sound effect drawn large inside this panel in clean "
@@ -336,7 +342,9 @@ _SYSTEM = """你是漫画编剧，也负责把每一页写成**生图模型能�
               "shots": ["wide shot", "medium shot", "close-up",
                         "medium close-up", "close-up", "extreme close-up"]},
      "scene": "英文场景串",
-     "panels": [{"desc": "英文画面描述", "bubble": "", "sfx": "", "caption": ""}]}
+     "panels": [{"desc": "英文画面描述",
+                 "bubbles": ["第一条台词", "第二条台词"],
+                 "caption": "旁白", "sfx": ""}]}
   ]
 }
 
@@ -407,25 +415,35 @@ positive 提示词是英文的，中途夹一段中文会让光照描述被截�
 写 `her cardigan already slipped off one shoulder`，不写 `she pulls her cardigan down`
 ——过程动词会让同一格里的手数量失控，长出第三只手。
 
-**bubble**（对白气泡）：中文台词，**≤10 字**，像真人说话，不要书面语。
-  **台词不要说画面已经画出来的事**（画出来就是废话）——写她此刻在想什么、
-  在抱怨什么、在催谁。
-**caption**（旁白框）：中文**≤10 字**，交代时间、地点、前情或内心状态。
+**bubbles**（对白气泡，**数组，1~2 条**）：中文台词，**每条 ≤11 字**，像真人说话。
+  一格两条是「一问一答」或「一句顶一句」，**不是把一句话切成两半**。
+  两条要能各自独立成立——读者只看第二条也懂。
+  **台词不许解释画面**（画着她在哭，就别写"我在哭"）；写她此刻在争什么、
+  在试探什么、在嘴硬什么。
+**caption**（旁白框）：中文旁白，交代时间、地点、前情、或一句**台词给不了**的话。
+  字数分两档，**别混用**：
+  · **≤22 字**——只给整页面积最大的那几格用（2t4b 上排两格、1t2m2b 第 1 格、
+    3t 上格、single），这里是给「一段叙述」的位置；
+  · **≤11 字**——其余小格一律短句，小格里塞长旁白会糊成一团。
+  一页最多一格用长旁白，其余都是短句。
 **sfx**（拟声字）：中文 2~3 字，只在真的有动作声时写，每页最多 1 个。
-  能写就写（脚步、水声、翻页），没有就留空。sfx 不占 bubble/caption 的额度。
-  旁白框固定在画面左上、气泡固定在右下，两者不会打架，所以都写也不挤。
+  能写就写（脚步、水声、翻页），没有就留空。sfx 不占 bubbles/caption 的额度。
+  旁白框固定在画面左上、气泡贴在右下并往上叠，三者不会互相打架。
 
-**每页的排版节奏**：一页里**至少有一格有字**（caption 或 bubble 至少一条），
-不要整页空白。但**允许单格无字**——收尾定格、纯视觉冲击的那一格留空更有力。
+**每页的排版节奏**：一页六格里**至少三格有字、最多空两格**，不要整页空白。
+但**允许单格无字**——收尾定格、纯视觉冲击的那一格留空更有力。
 留空的那一格，编译时会自动追加 `No speech bubble and no text in this panel`，
 你不用自己写。**你绝对不要在 `desc` 里自己写这句话**——只有真的没有文字的格子
 才该有它，写进有气泡的格子会和气泡打架，气泡会被挤掉或者位置乱跑。
 也**不要为了填满硬凑一句废话**。
 ⚠️ 别连着空两格以上：模型对空格的服从度靠这句声明维持，连续空格会失效。
+⚠️ 台词量不够是这一页最典型的问题：宁可让两个人把话说完、说一半、被打断，
+也不要让格子空着靠画面硬撑。**一格两条气泡是常态，不是例外。**
 
-⚠️ 字数是有实测根据的：moss 画中文，**11 字以内基本零错字**（11 字竖排两行气泡
-全对、9 字横排旁白全对），**12 字就开始出错**——实测「雪夜，客栈只剩一个客人。」
-被写成「客栈一个剩个客人」，漏字 + 字序乱。所以宁短不长，能拆成两句就别写成一句。
+⚠️ 字数是实测出来的：单条**11 字以内基本零错字**，**12 字起开始漏字乱序**
+（「雪夜，客栈只剩一个客人。」被写成「客栈一个剩个客人」）。所以**不要再单条
+写更长**，要更多内容就**多开一条气泡**——两条 11 字抵得上一句 22 字的对白，
+而且零风险。旁白走多列竖排，22 字档是安全的（实测 21 字单列全对）。
 
 # 画面描述的硬规则
 1. **禁止 tag 语法**：不写 1girl / 2boys / from_above / score_7 / (smile:1.2)。
@@ -450,8 +468,8 @@ positive 提示词是英文的，中途夹一段中文会让光照描述被截�
     不重申，模型会退回 `cast` 里那套默认服装——实测出现过「上一格全裸、下一格
     又穿回原来的短裙套装」，读者直接出戏。
 11. **同一页里相邻的两格不要写同一句台词或旁白**。实测第 5、6 格都写「台下只剩光点」，
-    两格并排出现一模一样的字，观感上等于失误。每格的 `bubble` / `caption` 都要是
-    不同的句子。
+    两格并排出现一模一样的字，观感上等于失误。每格的 `bubbles` 里每一条、以及
+    `caption`，都要是不同的句子。
 12. **一页必须有视觉落差，不要每格一样大**。这是「整页平淡」的根因，逐条执行：
     - 至少一格 `close-up` 或 `extreme close-up`（脸、手、眼睛、局部）
     - 至少一格 `wide shot`（全身 + 环境，人物在画面里可以很小）
@@ -479,14 +497,57 @@ positive 提示词是英文的，中途夹一段中文会让光照描述被截�
             放高潮与收尾。适合「三个短促反应 + 两个大画面」，上排别塞长台词
 
 ⚠️ 文字容量跟着**格宽**走，不跟格数走（窄格塞满长台词会开始漏字）：
-  · 512 宽（2x2 全部、2t4b 全部六格、1t2m2b 四小格、3t2b 下排、3t 下排）：气泡、旁白各 ≤11 字
-  · 341 宽（3x2 全部六格、3t2b 上排三格）：**气泡+旁白合计 ≤20 字**，宁短不长
-  · 1024 宽（1t2m2b 第 1 格、3t 上格、3h 全部）：可以放整句，仍别超 14 字
+  · 512 宽（2x2 全部、2t4b 全部六格、1t2m2b 四小格、3t2b 下排、3t 下排）：
+    每条气泡 ≤11 字（最多两条），旁白 ≤11 字
+  · 341 宽（3x2 全部六格、3t2b 上排三格）：**气泡+旁白合计 ≤20 字**，
+    这种格子只放一条短气泡，不要开第二条
+  · 1024 宽（1t2m2b 第 1 格、3t 上格、3h 全部）：旁白可以写到 22 字，
+    气泡仍按条算（最多两条、每条 ≤11 字）
 
-# 叙事要求
+# 故事怎么写（这一页要让人想翻下一页）
+
+动笔前先想清三件事，想不清就先别写 desc：
+1. **这一页谁想要什么**——具体到「她想要他把伞还回来」，不是「她有点在意」。
+2. **什么挡着**——人、规矩、时间，或者她自己嘴硬。没有阻力的场景没有戏。
+3. **这一页结束时什么变了**——关系、处境、认知，至少变一样。
+   什么都没变＝这一页白画。
+
+格数不是画面数，是**节拍数**。五格/六格按这条线走：
+
+  建场 → 诱发 → 升级 → 转折 → 收束
+
+  · **建场**：谁在哪、气氛对不对。前情多的时候这里用长旁白（≤22 字）。
+  · **诱发**：一个东西出现了——一句话、一个动作、一件物品、一个人。
+  · **升级**：反应比上一拍更过一点（语气、两人的距离、手上的动作）。
+  · **转折**：读者以为的 A 其实是 B。**这一拍不能省**，省了整页就是平铺直叙。
+  · **收束**：停在「刚落地」或「还没完」的画面上。
+  六格时把「升级」拆成两拍，**不是多加一个收束**。
+
+**每一格都必须推进**：读者看完这格，要多知道一件事、或多感觉到一层情绪。
+判断方法：把这格的台词和上一格对调，故事完全一样 → 这格是废格，换一个节拍。
+
+## 台词
+好台词只有两个标准，**两条都过才算**：
+1. **有立场**：请求、拒绝、试探、嘴硬、撒娇、挑衅、装傻。看不出立场的话是废话。
+2. **有潜台词**：说的和想的不是一回事。她说「不用了」，可画面上她手还伸着。
+
+四条禁令：
+· **不许解释画面**。画着她在哭就别写「我在哭」，画着门被锁就别写「门锁了」。
+· **不许自我介绍、报设定**（「我叫小美，今年十五」）。背景交给旁白，而且只给
+  读者非知道不可的那一句，其余让画面说。
+· **不许两条台词说同一件事**。一条进，另一条就要退、要顶回去、要答非所问。
+· **不许每格都在解说剧情**。留一两格让人只是反应、只是沉默、只是看一眼。
+
+**旁白和台词分工**：旁白给台词给不了的东西——过了多久、这个人不知道的事、
+一句冷眼旁观的话、一个时间地点的坐标。旁白复述台词＝白占一个框。
+
+## 整篇
 - 页与页之间必须往前走，**不要重复同一个构图**。
-- 最后一页要收住，可以无字。
+- 最后一页要收住：要么一个画面把情绪压住（可以无字），要么留一句话在读者
+  脑子里响。**不许用「从此他们幸福地生活在一起」这种收尾。**
 - 全篇是一个完整小故事，有起、有转折、有收。
+
+# 内容边界
 - **剧情要求什么就写什么，不要自行降级**。用户写「露出身体」就明确写
   `completely nude` / `her bare breasts visible`，不要退成 `bare shoulders`
   这种含糊词糊过去——含糊词会让模型只画到肩膀为止。
@@ -495,16 +556,30 @@ positive 提示词是英文的，中途夹一段中文会让光照描述被截�
 - 角色一律按成年写（除非用户明说年龄）：`an adult woman in her mid-twenties`，
   不要用 `girl` / `teen` 泛指成年角色。
 
-# 示例（只示范格式和粒度，不要照抄内容）
+# 示例（只示范格式、粒度和**台词的写法**，不要照抄内容）
 {
-  "title": "雨夜",
-  "style": "cool blue night light from the shop window on the right, wet reflections on the asphalt, hard shadow edges",
-  "cast": {"girl": "a girl with shoulder-length wavy brown hair, a mustard yellow knit scarf, an olive green duffel coat"},
+  "title": "最后一班车",
+  "style": "cool blue dusk light from behind the platform roof, long shadows on the concrete, warm lamp glow on one side",
+  "cast": {"woman": "a young woman in her early twenties with short black hair tucked behind one ear, a grey blazer, a red scarf"},
   "pages": [
-    {"n": 1, "layout": "2h", "scene": "the entrance of a small convenience store at night, heavy rain, wet asphalt reflecting warm light from inside",
+    {"n": 1, "layout": "1t2m2b",
+     "plan": {"key_panel": 1,
+              "shots": ["wide shot", "medium close-up", "close-up",
+                        "extreme close-up", "medium shot"]},
+     "scene": "a rural bus stop at dusk, a rusted timetable board, one wooden bench, dry grass and a leaning utility pole at the roadside",
      "panels": [
-       {"desc": "{girl} stands outside the glass door holding an umbrella low, seen from behind in a medium wide shot at eye level, rain streaks crossing the frame and the bright window reflecting on the wet ground", "bubble": "", "sfx": "", "caption": ""},
-       {"desc": "A close-up of her hand pushing the glass door open, water dripping from the umbrella tip, the warm light spilling onto her sleeve, shot from the side at waist height", "bubble": "", "sfx": "", "caption": ""}
+       {"desc": "A wide shot of {woman} sitting alone on a wooden bench at a rural bus stop at dusk, seen from the side at eye level, a rusted timetable board behind her and dry grass bending in the wind at the roadside",
+        "bubbles": [], "sfx": "",
+        "caption": "末班车晚了四十分钟，站牌上的时刻表还是去年。"},
+       {"desc": "A medium close-up of {woman} lifting her head toward the road, her short black hair moving in the wind, the red scarf loose at her throat, warm dusk light on one side of her face, shot at eye level",
+        "bubbles": ["总算来了。", "……不是这班。"], "sfx": "",
+        "caption": ""},
+       {"desc": "A close-up of {woman} looking down at her own hands in her lap, fingers tightening around a folded paper ticket, the grey blazer sleeve wrinkled, no other hands in frame, shot from above",
+        "bubbles": ["你先上吧。"], "sfx": "", "caption": ""},
+       {"desc": "A close-up of the expired ticket in her palm, the printed date faded and the corner torn, her thumb pressing the fold flat, cold blue shadow across her knuckles, shot from above",
+        "bubbles": [], "sfx": "", "caption": "票是去年的。"},
+       {"desc": "A medium shot of {woman} still sitting on the bench as the bus pulls away behind her, red tail lights shrinking, her head turned away from the camera, dry grass in the foreground at eye level",
+        "bubbles": [], "sfx": "", "caption": ""}
      ]}
   ]
 }
@@ -693,14 +768,21 @@ def _user_brief(brief, pages, style, ratio, layout="", prev="", prev_scene="",
         lines.append("画风固定用这一串（照抄进 style 字段）：%s" % style)
     lines.append("画面比例：竖版 %s。" % ratio)
     # 每页两种文字都要有：这是版面要求，不是叙事需要。放在 user 段而不是
-    # system 段，是因为 system 里有五万字的 SKILL.md，规则容易被稀释。
-    lines.append("**每页的文字**：一页里**至少有一格有字**（`caption` 旁白 ≤10 字，"
-                 "或 `bubble` 台词 ≤10 字）。**允许单格无字**——收尾定格、纯视觉冲击"
-                 "的那一格留空更有力，编译时会自动补一句 "
-                 "`No speech bubble and no text in this panel`，你不用自己写。"
-                 "但别为了填满硬凑废话，也别连着空两格以上。"
-                 "旁白框钉在左上、气泡钉在右下，位置由脚本给定，两者不会互相挤压。"
-                 "`sfx` 有动作声就写，没有留空。")
+    # system 段，是因为 system 里有五万多字的规范，规则容易被稀释。
+    #
+    # 2026-11-01 用户点名改口径：「格数可以只要五个，但剧情和台词必须说清」。
+    # 原来的 `bubble ≤10 字` 单条上限把台词压成了标语，改成**一格最多两条**，
+    # 单条仍 ≤11 字（零错字区），靠条数把话说完——正好是参考图的写法。
+    lines.append("**台词是这一页的重头**：每格 `bubbles` 是数组，"
+                 "**能写两条就写两条**（一问一答、一句顶一句、一句追一句），"
+                 "每条 ≤11 字；只有一条也行。两条必须是**两个不同的句子**，"
+                 "不是把一句话从中间劈开。")
+    lines.append("`caption` 旁白分两档：小格 ≤11 字；整页面积最大的那几格可以到 "
+                 "22 字，**一页最多一格用长旁白**。旁白只写台词给不了的东西"
+                 "——过了多久、这个人不知道的事、一句冷眼旁观。**不许复述台词**。")
+    lines.append("**每页至少三格有字、最多空两格**（收尾定格可以无字）。"
+                 "空格子的 `No speech bubble and no text in this panel` 由编译自动补，"
+                 "你不要自己写进 `desc`。`sfx` 有动作声就写，没有留空。")
     lines.append("**每页先写 `plan` 再写 `panels`**：`plan.key_panel` 是整页视觉重心"
                  "（必须落在最大那格），`plan.shots` 是每格景别、长度等于格数、"
                  "相邻不许相同、整页至少三档。写完 plan 再逐格写 `desc`，"
@@ -785,6 +867,7 @@ def check(spec):
         if len(panels) != want:
             issues.append("第 %s 页 %s 要 %d 格，给了 %d 格"
                           % (n, lay, want, len(panels)))
+        long_caps = []
         for k, panel in enumerate(panels, 1):
             desc = panel.get("desc") or ""
             w = _words(desc)
@@ -795,14 +878,26 @@ def check(spec):
             for ph in _PH_RE.findall(desc):
                 if ph not in cast:
                     issues.append("第 %s 页第 %d 格用了 {%s}，cast 里没有" % (n, k, ph))
-            b = (panel.get("bubble") or "").strip()
-            if len(b) > 11:
-                issues.append("第 %s 页第 %d 格气泡「%s」%d 字，超 10 字（实测 12 字起会漏字乱序）"
-                              % (n, k, b, len(b)))
+            bs = _bubbles(panel)
+            if len(bs) > MAX_BUBBLES:
+                issues.append("第 %s 页第 %d 格给了 %d 条气泡，最多 %d 条"
+                              % (n, k, len(bs), MAX_BUBBLES))
+            for j, b in enumerate(bs, 1):
+                if len(b) > 11:
+                    issues.append("第 %s 页第 %d 格第 %d 条气泡「%s」%d 字，超 11 字"
+                                  "（实测 12 字起会漏字乱序，拆成两条）"
+                                  % (n, k, j, b, len(b)))
             cap = (panel.get("caption") or "").strip()
-            if len(cap) > 11:
-                issues.append("第 %s 页第 %d 格旁白「%s」%d 字，超 10 字"
+            if len(cap) > 22:
+                issues.append("第 %s 页第 %d 格旁白「%s」%d 字，超 22 字"
                               % (n, k, cap, len(cap)))
+            elif len(cap) > 11:
+                long_caps.append(k)
+        # 长旁白只给面积最大的格用（见 `_SYSTEM` 的字数分档）。一页两处以上
+        # 长旁白＝叙述压过画面，读者会当小说看而不是漫画。
+        if len(long_caps) > 1:
+            issues.append("第 %s 页有 %d 格用了长旁白（第 %s 格），每页最多一格"
+                          % (n, len(long_caps), "、".join(str(x) for x in long_caps)))
     return issues
 
 
@@ -836,22 +931,52 @@ def _fill_page(text, cast, seen):
     return _PH_RE.sub(sub, text or "")
 
 
-def _text_bbox(cell, kind):
+def _text_bbox(cell, kind, i=0):
     """在一格内部给文字框定位（同样是 yxyx）。
 
-    位置按实测收敛：旁白贴左上、气泡贴右下、拟声放中间。**box 不贴画面边缘**
-    —— 贴边实测会生出前缀乱码（「陋升郑凯出门啦。」这种）。
+    位置按实测收敛：旁白贴左上、气泡贴右下并**按序往上叠**、拟声放中间。
+    **box 不贴画面边缘**——贴边实测会生出前缀乱码（「陋升郑凯出门啦。」这种）。
+
+    气泡从 2026-11-01 起可以一格两条（`i` 是第几条）。第二条整体上移 0.29 格高，
+    两条之间留 0.08 格高的缝：贴在一起模型会把两个气泡画成一个，字全挤进来。
     """
     y0, x0, y1, x1 = cell
     h, w = y1 - y0, x1 - x0
     if kind == "caption":
+        # 高度从 0.18 放到 0.23：长旁白（≤22 字）走双列，11 行才排得下，
+        # 小格（512×384）按 11 字算也有 8px 一行的余量。
         return [int(y0 + h * 0.05), int(x0 + w * 0.07),
-                int(y0 + h * 0.23), int(x0 + w * 0.56)]
+                int(y0 + h * 0.28), int(x0 + w * 0.56)]
     if kind == "bubble":
-        return [int(y1 - h * 0.27), int(x1 - w * 0.49),
-                int(y1 - h * 0.06), int(x1 - w * 0.07)]
+        up = 0.29 * max(0, int(i))
+        return [int(y1 - h * (0.27 + up)), int(x1 - w * 0.49),
+                int(y1 - h * (0.06 + up)), int(x1 - w * 0.07)]
     return [int(y0 + h * 0.34), int(x0 + w * 0.24),
             int(y0 + h * 0.66), int(x1 - w * 0.24)]
+
+
+# 一格最多几条气泡。两条是「一问一答 / 一句顶一句」的上限；第三条开始
+# 512×384 的小格要挤四个文字框，实测会互相压掉（2026-11-01 定的口径）。
+MAX_BUBBLES = 2
+
+
+def _bubbles(panel):
+    """一格里的对白，按阅读顺序返回。
+
+    `bubbles` 是数组（2026-11-01 加的），`bubble` 是单条老格式，**两种都要认**：
+    历史 spec、已存的连载页、存档卡里全是 `bubble`，重画旧页会读到它们。
+    两边都有时老字段排前面——它是模型在旧格式下写的「主要那句」。
+    """
+    got = panel.get("bubbles")
+    out = []
+    if isinstance(got, list):
+        out = [str(x or "").strip() for x in got]
+    elif isinstance(got, str):
+        out = [got.strip()]
+    one = (panel.get("bubble") or "").strip()
+    if one and one not in out:
+        out.insert(0, one)
+    return [x for x in out if x][:MAX_BUBBLES]
 
 
 def build_page_prompt(spec, page, with_text=True):
@@ -906,7 +1031,8 @@ def build_page_prompt(spec, page, with_text=True):
         # 原来只有「整页一个字都没有」才追加 `_NO_TEXT`，一格有字一格没字时
         # 什么都不声明，模型会按「每格都该有气泡」的版面先验自己补一个
         # （实测第 5 格凭空冒出了第 4 格的台词）。这里改成空格子自己说清楚。
-        cell_texts = [panel.get(k) or "" for k in ("caption", "bubble", "sfx")]
+        cell_texts = ([panel.get("caption") or "", panel.get("sfx") or ""]
+                      + _bubbles(panel))
         has_cell_text = any(t.strip() for t in cell_texts)
         if with_text and not has_cell_text:
             # 没字的格子：模型自己写过的就不重复追加
@@ -927,8 +1053,7 @@ def build_page_prompt(spec, page, with_text=True):
         })
         if not with_text:
             continue
-        for key, tpl in (("caption", _TXT_CAPTION), ("bubble", _TXT_BUBBLE),
-                         ("sfx", _TXT_SFX)):
+        for key, tpl in (("caption", _TXT_CAPTION), ("sfx", _TXT_SFX)):
             text = (panel.get(key) or "").strip()
             if not text:
                 continue
@@ -940,6 +1065,17 @@ def build_page_prompt(spec, page, with_text=True):
                 "caption": cap_text,
                 "text": text,
                 "bbox": _text_bbox(cell, key),
+            })
+        # 气泡是数组，一格可以两条：按序从下往上叠（`i=0` 贴右下，
+        # `i=1` 叠在它上方）。缝隙见 `_text_bbox`——贴在一起模型会画成一个
+        # 大气泡，两条台词挤成一坨。
+        for i, text in enumerate(_bubbles(panel)):
+            has_text = True
+            items.append({
+                "label": "text",
+                "caption": (_TXT_BUBBLE if i == 0 else _TXT_BUBBLE2) % _cols(text),
+                "text": text,
+                "bbox": _text_bbox(cell, "bubble", i),
             })
 
     if not has_text:
@@ -1062,8 +1198,9 @@ def _digest_user(spec):
             bits.append("画面=%s" % p["desc"])
         if p.get("caption"):
             bits.append("旁白=%s" % p["caption"])
-        if p.get("bubble"):
-            bits.append("台词=%s" % p["bubble"])
+        bs = _bubbles(p)
+        if bs:
+            bits.append("台词=%s" % "／".join(bs))
         if p.get("sfx"):
             bits.append("拟声=%s" % p["sfx"])
         lines.append("· " + "；".join(bits))
@@ -1083,7 +1220,8 @@ def _digest_fallback(spec):
     panels = page.get("panels") or []
     words = []
     for p in panels:
-        w = (p.get("caption") or p.get("bubble") or p.get("sfx") or "").strip()
+        bs = _bubbles(p)
+        w = (p.get("caption") or (bs[0] if bs else "") or p.get("sfx") or "").strip()
         if w:
             words.append(w)
     summary = "；".join(words)[:90]

@@ -303,7 +303,12 @@ function loadPayload(p) {
       return {
         n: x.n, layout: x.layout, scene: x.scene,
         panels: (x.panels || []).map(function (pan) {
-          return { desc: pan.desc, bubble: pan.bubble, sfx: pan.sfx, caption: pan.caption };
+          // 一格两条气泡（2026-11-01）。老 spec 只有单条 `bubble`，转成数组；
+          // 统一补齐成两个槽位，界面上两个输入框就一一对应，不用判断长度。
+          var bs = Array.isArray(pan.bubbles) ? pan.bubbles.slice(0, 2) : [];
+          if (!bs.length && pan.bubble) bs = [pan.bubble];
+          while (bs.length < 2) bs.push("");
+          return { desc: pan.desc, bubbles: bs, sfx: pan.sfx, caption: pan.caption };
         })
       };
     })
@@ -375,17 +380,20 @@ function renderPage(page) {
   page.panels.forEach(function (pan, i) {
     var d = document.createElement("div");
     d.className = "panel";
+    var bs = pan.bubbles || ["", ""];
     d.innerHTML =
       '<div class="ph">格 ' + (i + 1) + "</div>" +
       '<textarea data-field="desc" data-page="' + page.n + '" data-panel="' + i + '">' +
       esc(pan.desc) + "</textarea>" +
       '<div class="trow">' +
-      '<input data-field="bubble" data-page="' + page.n + '" data-panel="' + i + '" ' +
-      'placeholder="气泡 ≤10 字" value="' + esc(pan.bubble) + '">' +
+      '<input data-field="bubble" data-idx="0" data-page="' + page.n + '" data-panel="' + i + '" ' +
+      'placeholder="气泡1 ≤11 字" value="' + esc(bs[0] || "") + '">' +
+      '<input data-field="bubble" data-idx="1" data-page="' + page.n + '" data-panel="' + i + '" ' +
+      'placeholder="气泡2（可空）" value="' + esc(bs[1] || "") + '">' +
       '<input data-field="sfx" data-page="' + page.n + '" data-panel="' + i + '" ' +
       'placeholder="拟声" value="' + esc(pan.sfx) + '">' +
       '<input data-field="caption" data-page="' + page.n + '" data-panel="' + i + '" ' +
-      'placeholder="旁白 ≤10 字" value="' + esc(pan.caption) + '">' +
+      'placeholder="旁白：小格 11 / 大格 22 字" value="' + esc(pan.caption) + '">' +
       "</div>";
     panels.appendChild(d);
   });
@@ -491,7 +499,7 @@ document.addEventListener("input", function (e) {
     page.layout = t.value;
     var want = LAYOUT_N[t.value] || 1;
     while (page.panels.length < want) {
-      page.panels.push({ desc: "", bubble: "", sfx: "", caption: "" });
+      page.panels.push({ desc: "", bubbles: ["", ""], sfx: "", caption: "" });
     }
     if (page.panels.length > want) page.panels.length = want;
     var old = document.querySelector('.page-block[data-page="' + n + '"]');
@@ -504,7 +512,15 @@ document.addEventListener("input", function (e) {
   if (field === "scene") {
     page.scene = t.value;
   } else if (t.dataset.panel !== undefined) {
-    page.panels[parseInt(t.dataset.panel, 10)][field] = t.value;
+    var pi = parseInt(t.dataset.panel, 10);
+    if (field === "bubble") {
+      // 两个气泡输入框共用一个 field 名，靠 `data-idx` 区分槽位
+      var arr = page.panels[pi].bubbles;
+      if (!Array.isArray(arr)) arr = page.panels[pi].bubbles = ["", ""];
+      arr[parseInt(t.dataset.idx || "0", 10)] = t.value;
+    } else {
+      page.panels[pi][field] = t.value;
+    }
   } else return;
   scheduleSave();
 });

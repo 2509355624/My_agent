@@ -241,8 +241,15 @@ def _normalize(spec):
         for panel in page.get("panels") or []:
             if not isinstance(panel, dict):
                 continue
-            panels.append({k: str(panel.get(k) or "").strip()
-                           for k in ("desc", "bubble", "sfx", "caption")})
+            clean = {k: str(panel.get(k) or "").strip()
+                     for k in ("desc", "bubble", "sfx", "caption")}
+            # `bubbles` 是数组（2026-11-01 加），不能走上面那行的字符串清洗，
+            # 漏掉它整页台词会在存盘这一步被静默丢掉。
+            got = panel.get("bubbles")
+            if isinstance(got, list):
+                clean["bubbles"] = [str(x or "").strip() for x in got
+                                    if str(x or "").strip()]
+            panels.append(clean)
         page["panels"] = panels
         pages.append(page)
     spec["pages"] = pages
