@@ -161,6 +161,53 @@ def safe_inside(base, path):
 
 # ─── 扫描（站主磁盘）──────────────────────────────────────
 
+def _drop_noise_tail(found, min_count=5):
+    """把「几乎每个作品集都多出来的同一层目录名」从标题里去掉。
+
+    ComfyUI 的漫画输出是「任务名/moss-qunyou/图」，67 个任务底下都顶着
+    同一个 `moss-qunyou`——它不是内容，是导出时固定塞进来的渠道目录，
+    挂在墙上纯噪音。
+
+    只在**够多作品集共享同一层**时才动手。一两个目录重名很可能真是内容
+    （`角色A/便利店`、`角色B/便利店`），抹掉就把信息弄没了；而 67 个里
+    有 67 个都叫这个名字，那它就是结构，不是内容。
+    """
+    tails = {}
+    multi = 0
+    for _grp, title, _p, _f in found:
+        if "/" in title:
+            multi += 1
+            tail = title.rsplit("/", 1)[1]
+            tails[tail] = tails.get(tail, 0) + 1
+    if not multi:
+        return found
+    noisy = {t for t, n in tails.items()
+             if n >= min_count and n >= multi * 0.8}
+    if not noisy:
+        return found
+
+    out = []
+    for grp, title, path, files in found:
+        if "/" in title:
+            head, _sep, tail = title.rpartition("/")
+            if head and tail in noisy:
+                title = head
+        out.append((grp, title, path, files))
+    return out
+
+
+def _title_for(root, cur, root_title):
+    """作品集在墙上的名字。
+
+    扫的是配置根 → 用分组名；站主临时选的子目录 → 用它自己的名字
+    （不然选 `new\\35` 会冒出一个叫「图库」的作品集）；再往下取相对路径。
+    """
+    rel = os.path.relpath(cur, root)
+    if rel == ".":
+        return root_title or os.path.basename(os.path.abspath(cur))
+    return rel.replace(os.sep, "/")
+
+
 def _walk(grp, root, cur, out, depth=0, root_title=None):
     try:
         entries = list(os.scandir(cur))
@@ -182,14 +229,8 @@ def _walk(grp, root, cur, out, depth=0, root_title=None):
             continue
     if files:
         files.sort(key=lambda x: _natkey(x.name))
-        rel = os.path.relpath(cur, root)
-        if rel == ".":
-            # 扫的是配置根 → 用分组名；扫的是站主临时选的一个子目录 →
-            # 用它自己的名字，不然选 new\35 会冒出一个标题叫「图库」的作品集。
-            title = root_title or os.path.basename(os.path.abspath(cur))
-        else:
-            title = rel.replace(os.sep, "/")
-        out.append((grp, title, os.path.abspath(cur),
+        out.append((grp, _title_for(root, cur, root_title),
+                    os.path.abspath(cur),
                     [(f.name, _size(f)) for f in files]))
     if depth >= 8:
         return
@@ -233,6 +274,7 @@ def scan(roots=None):
             log.warning("画廊根目录不存在：%s", root)
             continue
         _walk(grp, root, root, found, 0, root_title)
+    found = _drop_noise_tail(found)
 
     now = time.time()
     added = changed = skipped = total_items = 0
@@ -328,27 +370,29 @@ def browse(path=""):
     和扫描一样只读元数据：`scandir` 一层，不递归、不开图。每个子目录后面
     带一个「直接含多少张图」，站主一眼就能认出哪个是他要的作品集目录。
 
-    `path` 为空时先给「已经配置好的根」——站主最常扫的就是这两个，
-    从盘符一层层点进去反而是绕路；没配根才退回到盘符列表。
+    `path` 为空时给「已经配置好的根」**加**盘符列表。以前只给根，结果配
+    完根之后站主就被锁在那两个目录里了——ComfyUI 的输出目录在别的盘，
+    想扫一下得先去改 .env 再重启，这没道理。
     """
     p = str(path or "").strip()
     if not p:
-        roots = []
+        dirs = []
         for grp, root in GALLERY_ROOTS:
             if os.path.isdir(root):
-                roots.append({"name": grp, "path": root,
-                              "n": _count_images(root), "hint": root})
-        if roots:
-            return {"path": "", "parent": "", "dirs": roots, "images": 0}
+                dirs.append({"name": grp, "path": root,
+                             "n": _count_images(root), "hint": root})
         if os.name == "nt":
-            dirs = []
             for ch in "CDEFGHIJKLMNOPQRSTUVWXYZ":
-                root = ch + ":\\"
-                if os.path.isdir(root):
-                    dirs.append({"name": root.rstrip("\\"), "path": root,
-                                 "n": _count_images(root)})
+                d = ch + ":\\"
+                if os.path.isdir(d):
+                    dirs.append({"name": d.rstrip("\\"), "path": d,
+                                 "n": _count_images(d), "hint": "整块盘"})
+        if dirs:
             return {"path": "", "parent": "", "dirs": dirs, "images": 0}
-        p = "/"
+        if os.name == "nt":
+            p = "C:\\"
+        else:
+            p = "/"
 
     p = os.path.abspath(p)
     if not os.path.isdir(p):

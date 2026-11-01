@@ -301,12 +301,19 @@ class ApiTest(_Base):
         self.assertTrue(any(x["path"].endswith(":\\") for x in d["dirs"]))
 
     def test_browse_starts_from_configured_roots(self):
-        """打开面板直接看到「图库 / 小漫画」，不用从盘符一层层点。"""
+        """打开面板直接看到「图库 / 小漫画」，不用从盘符一层层点。
+
+        根后面还要留着盘符入口：ComfyUI 的输出目录在别的盘，配了根之后
+        不该把站主锁死在这两个目录里（以前就是这个毛病，想扫个别的地方
+        得先去改 .env 再重启）。
+        """
         with mock.patch.object(gallery, "GALLERY_ROOTS", (("我的图", self.root),)):
             d = self.j(self.c.get("/api/gal/browse?qq=10001", headers=self.h))
-        self.assertEqual([x["name"] for x in d["dirs"]], ["我的图"])
+        self.assertEqual(d["dirs"][0]["name"], "我的图")
         self.assertEqual(d["dirs"][0]["path"], os.path.abspath(self.root))
         self.assertEqual(d["dirs"][0]["hint"], self.root)
+        if os.name == "nt":
+            self.assertTrue(any(x["path"].endswith(":\\") for x in d["dirs"]))
 
     def test_scan_accepts_a_chosen_path(self):
         self.mk("2", "c.png")
@@ -712,3 +719,38 @@ class UploadOneByOneApiTest(_Base):
                          data={"wid": str(wid2)},
                          content_type="multipart/form-data")
         self.assertTrue(r2.get_json()["removed"])
+
+
+class NoiseTailTest(_Base):
+    """标题里「几乎每个作品集都多出来的那一层」要去掉，但不许误杀真内容。
+
+    ComfyUI 的漫画输出是「任务名/moss-qunyou/图」，67 个任务全顶着同一个
+    moss-qunyou，挂墙上纯噪音；而 `角色A/便利店`、`角色B/便利店` 这种重名
+    是真内容，抹掉就把信息弄丢了——靠「多少个作品集共享这一层」来分。
+    """
+
+    def found(self, titles):
+        return [("g", t, "/x/" + t.replace("/", "_"), [("a.png", 1)])
+                for t in titles]
+
+    def titles(self, found):
+        return [t for _g, t, _p, _f in found]
+
+    def test_shared_tail_is_dropped(self):
+        out = gallery._drop_noise_tail(
+            self.found(["任务%d/moss-qunyou" % i for i in range(8)]))
+        self.assertEqual(self.titles(out), ["任务%d" % i for i in range(8)])
+
+    def test_a_few_duplicates_are_kept(self):
+        """只有两三个重名时，那层很可能是内容，留着。"""
+        src = ["角色A/便利店", "角色B/便利店", "角色C/图书馆"]
+        self.assertEqual(self.titles(gallery._drop_noise_tail(self.found(src))),
+                         src)
+
+    def test_single_level_titles_untouched(self):
+        src = ["图库", "小漫画"]
+        self.assertEqual(self.titles(gallery._drop_noise_tail(self.found(src))),
+                         src)
+
+    def test_empty_input(self):
+        self.assertEqual(gallery._drop_noise_tail([]), [])
