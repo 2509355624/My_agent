@@ -835,3 +835,63 @@ class UploadLimitApiTest(_Base):
             r = self.post(wid=str(wid))
         self.assertEqual(r.status_code, 400)
         self.assertIn("传满", r.get_json()["error"])
+
+
+class ImageCacheApiTest(_Base):
+    """图片要能长期留在浏览器里。
+
+    原先只给 10 分钟，等于「过十分钟再来，几十张缩略图全从这台机器重传一遍」。
+    item id 是一次性的（重传 DELETE 再 INSERT 换来新 id），同一个 URL 的字节
+    不会变，所以可以 immutable；但必须带 private，否则 Cloudflare 边缘会存下来，
+    变成「猜到 id 就能绕过登录拿图」。
+    """
+
+    def setUp(self):
+        super().setUp()
+        from flask import Flask
+        self.app = Flask(__name__)
+        self.app.register_blueprint(gallery_api.bp)
+        self.c = self.app.test_client()
+        p1 = mock.patch.object(friend_auth, "secret", lambda: "tok")
+        p1.start()
+        self.addCleanup(p1.stop)
+
+        b = io.BytesIO()
+        Image.new("RGB", (1200, 1600), (30, 60, 90)).save(b, "WEBP", quality=85)
+        self.wid = gallery.create_work("20005", "缓存")
+        gallery.append_upload("20005", self.wid, "a.webp", b.getvalue())
+        with gallery.connect() as con:
+            self.iid = con.execute(
+                "SELECT id FROM items WHERE work_id=?", (self.wid,)
+            ).fetchone()["id"]
+
+    def get(self, headers=None):
+        h = {"X-Friend-Token": "tok"}
+        if headers:
+            h.update(headers)
+        return self.c.get("/api/gal/img/%d?qq=20005&s=t" % self.iid, headers=h)
+
+    def test_header_allows_long_private_cache(self):
+        cc = self.get().headers.get("Cache-Control") or ""
+        self.assertIn("max-age=31536000", cc)
+        self.assertIn("immutable", cc)
+        self.assertIn("private", cc)
+
+    def test_etag_still_returns_304(self):
+        r = self.get()
+        self.assertEqual(r.status_code, 200)
+        et = r.headers.get("ETag")
+        self.assertTrue(et)
+        r2 = self.get(headers={"If-None-Match": et})
+        self.assertEqual(r2.status_code, 304)
+        self.assertEqual(len(r2.data), 0)
+
+    def test_hidden_work_is_404_for_others(self):
+        """别的群友能看公开作品，但作者下架之后就该 404，不能被缓存头绕过。"""
+        h = {"X-Friend-Token": "tok"}
+        r = self.c.get("/api/gal/img/%d?qq=20006&s=t" % self.iid, headers=h)
+        self.assertEqual(r.status_code, 200)      # 公开的，谁都能看
+        with gallery.connect() as con:
+            con.execute("UPDATE works SET hidden=1 WHERE id=?", (self.wid,))
+        r2 = self.c.get("/api/gal/img/%d?qq=20006&s=t" % self.iid, headers=h)
+        self.assertEqual(r2.status_code, 404)

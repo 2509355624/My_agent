@@ -112,13 +112,16 @@ def _secure(resp):
         "form-action 'self'")
     if request.headers.get("X-Forwarded-Proto") == "https":
         resp.headers["Strict-Transport-Security"] = "max-age=15552000"
-    # 图片允许私有缓存：群友自己的手机，10 分钟内翻来翻去不用重传
-    # （一张缩略图 30KB、一张原图 2~11MB，家用上行经不起反复拉）。
+    # 图片缓存一年：item id 是一次性的（重传换新 id），同一个 URL 的字节不变，
+    # 所以可以 immutable，翻回上一页、第二天再打开都不用重传。原先 10 分钟
+    # 等于「每次进来都从头拉一遍」，几十张缩略图全走家用上行，慢得有道理。
+    # private 不能去掉：图片要过登录态，存到 Cloudflare 边缘就等于泄漏。
     # 页面和接口一律 no-store——共享设备上退出登录后不该还能翻到东西。
     ctype = str(resp.headers.get("Content-Type") or "")
-    resp.headers["Cache-Control"] = ("private, max-age=600"
-                                     if ctype.startswith("image/")
-                                     else "no-store")
+    resp.headers["Cache-Control"] = (
+        "private, max-age=31536000, immutable"
+        if ctype.startswith("image/")
+        else "no-store")
     return resp
 
 

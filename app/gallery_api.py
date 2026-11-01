@@ -40,6 +40,26 @@ UPLOAD_MAX = 10                     # 一次最多传几张（单个作品集上
 UPLOAD_BYTES = 25 << 20             # 单张上限 25MB
 UPLOAD_TOTAL = 250 << 20            # 一次合计上限 250MB
 
+# 图片缓存一年。item id 是一次性的：重传会 DELETE 再 INSERT 拿到新 id，
+# 所以同一个 URL 的字节永远不会变，可以 immutable。原先只给 10 分钟——
+# 换算下来每次重新打开画廊，几十张缩略图全要从这台机器重传一遍。
+IMG_MAX_AGE = 31536000
+
+
+def _img(path):
+    """发一张图，并让它长期留在浏览器里。
+
+    `private` 是必须的：图片要过登录态，不能让 Cloudflare 边缘存下来——
+    存了就等于「猜到 id 就能不看登录直接拿图」。
+    站主下架的图服务端仍然 404，只是浏览器里已有的副本还能打开；那是本人
+    之前就看过的图，不算多给任何人一份。
+    """
+    resp = send_file(path, mimetype="image/webp", conditional=True,
+                     max_age=IMG_MAX_AGE)
+    resp.headers["Cache-Control"] = ("private, max-age=%d, immutable"
+                                     % IMG_MAX_AGE)
+    return resp
+
 
 # ─── 公共小件 ────────────────────────────────────────────
 
@@ -271,13 +291,12 @@ def api_img(iid):
     # 群友上传的图落盘时就是 1600px WebP，直接发源文件：
     # 再压一次只掉画质，还白占一份缓存。
     if mode != "t" and gallery.reuse_direct(src):
-        return send_file(src, mimetype="image/webp", conditional=True,
-                         max_age=600)
+        return _img(src)
 
     p = gallery.thumb(src, "t" if mode == "t" else "v")
     if not p:
         return jsonify({"ok": False, "error": "转码失败"}), 415
-    return send_file(p, mimetype="image/webp", conditional=True, max_age=600)
+    return _img(p)
 
 
 # ─── 点赞 / 收藏 ─────────────────────────────────────────
