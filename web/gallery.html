@@ -106,31 +106,38 @@
   /* 排版切换：按钮上直接写「现在是哪种」，比一个抽象图标好猜 */
   #dmode{width:auto;border-radius:10px;padding:0 12px;font-size:13px;
     background:var(--card);border:1px solid var(--line);height:32px}
-  /* 两列是默认（和主页一致），单列给「想看清楚点」的场景 */
+  /* 网格是默认，单列给「想看清楚点」的场景。
+     ⚠️ 两种都按原比例完整显示，绝不裁切 —— 之前用 aspect-ratio:3/4
+     配 object-fit:cover，4928×7360 的竖图被切掉上下，人物脸都在框外。
+     网格用几个子列各自向下堆（瀑布流），一行里高度不同也不会互相拉扯；
+     单列直接竖排。高度全由图片自己决定，别用 grid 的行高（会把十几张
+     平均压进一屏，每张只剩一条横条）。 */
   #dgrid{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;
-    display:grid;gap:8px;grid-template-columns:repeat(2,1fr);
-    align-content:start;
+    display:flex;gap:8px;align-items:flex-start;
     padding:10px 12px calc(28px + env(safe-area-inset-bottom,0))}
-  /* 单列改用 flex 竖排：grid 的行高会把 13 张图平均压进一屏，
-     表现是每张只剩一条 50px 的横条。flex 下高度全由图片自己决定。 */
-  #dgrid.one{display:flex;flex-direction:column;gap:8px;
-    max-width:720px;margin:0 auto;width:100%}
+  #dgrid.one{flex-direction:column;gap:10px;max-width:760px;
+    margin:0 auto;width:100%;align-items:stretch}
+  .dcol{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px}
   @media(min-width:760px){
-    #dgrid{grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
+    #dgrid{gap:12px}
+    .dcol{gap:12px}
   }
   .shot{position:relative;border-radius:10px;overflow:hidden;background:var(--card);
-    cursor:pointer;aspect-ratio:3/4}
-  #dgrid.one .shot{aspect-ratio:auto;flex:0 0 auto}
-  .shot img{width:100%;height:100%;object-fit:cover;display:block;opacity:0;
-    transition:opacity .3s}
-  #dgrid.one .shot img{height:auto;object-fit:contain;background:#000}
+    cursor:pointer;
+    /* ⚠️ flex 里子项默认会被压缩：不给 flex:0 0 auto，十几张图会被挤进
+       一屏，每张只剩一条几十像素的横条（单列和两列都踩过这个坑）。 */
+    flex:0 0 auto;width:100%}
+  /* aspect-ratio 只是懒加载前的占位，加载完 onload 会换成真实比例 */
+  .shot img{width:100%;height:auto;display:block;opacity:0;
+    transition:opacity .3s;aspect-ratio:3/4;background:var(--card)}
   .shot img.ok{opacity:1}
   .shot .pg{position:absolute;left:6px;top:6px;background:rgba(0,0,0,.62);
-    color:#fff;font-size:11px;padding:1px 6px;border-radius:20px;
-    backdrop-filter:blur(4px)}
-  .shot .mk{position:absolute;right:7px;top:6px;font-size:14px;
+    color:#fff;font-size:11px;line-height:16px;padding:1px 6px;
+    border-radius:20px;backdrop-filter:blur(4px)}
+  .shot .mk{position:absolute;right:7px;top:6px;font-size:14px;line-height:1;
     text-shadow:0 1px 4px rgba(0,0,0,.9)}
-  .dempty{text-align:center;color:var(--dim);padding:48px 20px;font-size:14px}
+  .dempty{text-align:center;color:var(--dim);padding:48px 20px;font-size:14px;
+    flex:1;width:100%}
 
   /* ── 查看器 ── */
   #viewer{position:fixed;inset:0;z-index:50;background:#000;display:none;
@@ -264,7 +271,7 @@
       <div class="dt" id="dtitle"></div>
       <div class="dby" id="dby"></div>
     </div>
-    <button id="dmode" title="切换排版">⊞ 两列</button>
+    <button id="dmode" title="切换排版">⊞ 网格</button>
   </div>
   <div id="dgrid"></div>
 </div>
@@ -337,7 +344,7 @@
 
   var S = { tab: "owner", sub: "works", page: 1, more: true, busy: false,
             owner: false, works: [], cur: null, idx: 0, items: [], likes: {},
-            fav: {}, layout: "2" };
+            fav: {}, layout: "2", shotEls: [] };
 
   function $(id) { return document.getElementById(id); }
 
@@ -658,6 +665,15 @@
     }).catch(function (e) { toast(e.message); });
   }
 
+  // 网格铺几列：手机 2、平板 3、桌面 4。按视口宽度算，别写死成两列 ——
+  // 1280 的屏幕上两列每张 620px 宽，一屏只能看到两张的头顶。
+  function colCount() {
+    var w = window.innerWidth || document.documentElement.clientWidth || 390;
+    if (w >= 1180) return 4;
+    if (w >= 840) return 3;
+    return 2;
+  }
+
   function renderDetail() {
     if (!S.cur) return;
     $("dtitle").textContent = S.cur.title;
@@ -667,10 +683,26 @@
 
     var box = $("dgrid");
     box.innerHTML = "";
+    S.shotEls = [];
+    box.classList.toggle("one", S.layout === "one");
     if (!S.items.length) {
       box.innerHTML = '<div class="dempty">这个作品集里没有能看的图</div>';
       return;
     }
+
+    // 两列：两个子列交替放，各自往下堆；单列：直接塞进 #dgrid 竖排。
+    var cols = null;
+    if (S.layout !== "one") {
+      var n = colCount();
+      cols = [];
+      for (var k = 0; k < n; k++) {
+        var d = document.createElement("div");
+        d.className = "dcol";
+        cols.push(d);
+        box.appendChild(d);
+      }
+    }
+
     S.items.forEach(function (it, i) {
       var s = document.createElement("div");
       s.className = "shot";
@@ -681,7 +713,13 @@
       im.decoding = "async";
       im.alt = "";
       im.src = "/api/gal/img/" + it.id + "?s=t";
-      im.onload = function () { im.classList.add("ok"); };
+      im.onload = function () {
+        im.classList.add("ok");
+        // 占位比例换成真实比例，图才是完整的（不裁、不留黑边）
+        if (im.naturalWidth && im.naturalHeight) {
+          im.style.aspectRatio = im.naturalWidth + " / " + im.naturalHeight;
+        }
+      };
       im.onerror = function () { im.classList.add("ok"); im.style.opacity = ".3"; };
       s.appendChild(im);
 
@@ -696,7 +734,8 @@
         mk.textContent = "★";
         s.appendChild(mk);
       }
-      box.appendChild(s);
+      S.shotEls[i] = s;
+      (cols ? cols[i % cols.length] : box).appendChild(s);
     });
   }
 
@@ -704,6 +743,7 @@
     $("detail").classList.remove("on");
     document.body.style.overflow = "";
     $("dgrid").innerHTML = "";
+    S.shotEls = [];
     S.cur = null;
     S.items = [];
     if (location.hash.indexOf("#w=") === 0) {
@@ -714,13 +754,31 @@
     if (S.dirty) { S.dirty = false; if (isPhoto()) load(true); }
   }
 
-  // 排版：两列 / 单列。记住上次选的，别每次进来都重置。
+  // 排版：网格 / 单列。记住上次选的，别每次进来都重置。
+  // 两种排版的 DOM 结构不一样（几个子列 vs 直接竖排），所以切换得重建。
   function setLayout(m) {
     S.layout = (m === "one") ? "one" : "2";
     try { localStorage.setItem("gal_layout", S.layout); } catch (e) {}
-    $("dgrid").classList.toggle("one", S.layout === "one");
-    $("dmode").textContent = S.layout === "one" ? "☰ 单列" : "⊞ 两列";
+    $("dmode").textContent = S.layout === "one" ? "☰ 单列" : "⊞ 网格";
+    if (S.cur) {
+      var y = $("dgrid").scrollTop;
+      renderDetail();
+      $("dgrid").scrollTop = y;
+    }
   }
+
+  // 旋转屏幕 / 拉窗口会改变列数，重建一次。防抖，别每像素重排。
+  var _rsz = 0;
+  window.addEventListener("resize", function () {
+    if (!S.cur || S.layout === "one") return;
+    clearTimeout(_rsz);
+    _rsz = setTimeout(function () {
+      if (!S.cur) return;
+      var y = $("dgrid").scrollTop;
+      renderDetail();
+      $("dgrid").scrollTop = y;
+    }, 250);
+  });
 
   $("dback").onclick = closeDetail;
   $("dmode").onclick = function () {
@@ -824,11 +882,11 @@
     if (S.dirty) syncDetailMarks();
   }
 
-  // 把 S.items 上的收藏状态同步到详情网格右上角那颗星
+  // 把 S.items 上的收藏状态同步到详情网格右上角那颗星。
+  // 两列时 DOM 是按 1/3/5 和 2/4/6 分进两个子列的，不能靠 children 下标取。
   function syncDetailMarks() {
-    var shots = $("dgrid").children;
     S.items.forEach(function (it, i) {
-      var s = shots[i];
+      var s = (S.shotEls || [])[i];
       if (!s) return;
       var mk = s.querySelector(".mk");
       if (it.fav && !mk) {
