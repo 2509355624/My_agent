@@ -33,6 +33,16 @@ URL_RE = re.compile(r"https://[a-z0-9][a-z0-9-]*\.trycloudflare\.com")
 
 TARGET = os.getenv("FRIEND_TUNNEL_TARGET", "http://127.0.0.1:5175")
 
+# 传输协议：http2（TCP）而不是默认的 quic（UDP）。
+#
+# 不是口味问题，是实测：同一个 5175、同一台机器、同一时刻，
+#   quic  传 1.6MB 要 68 秒（约 25KB/s）
+#   http2 传 3.3MB 只要 15 秒（约 218KB/s）
+# 差别在于这条线路对 UDP 有 QoS 压制，而边缘节点在 LAX（往返 186ms），
+# QUIC 的拥塞窗口在这种高延迟 + 丢包的链路上涨不起来；换成 TCP 就正常了。
+# 想改回默认就设 FRIEND_TUNNEL_PROTOCOL=quic。
+PROTOCOL = os.getenv("FRIEND_TUNNEL_PROTOCOL", "http2")
+
 _BIN_CANDIDATES = (
     r"C:\Program Files (x86)\cloudflared\cloudflared.exe",
     r"C:\Program Files\cloudflared\cloudflared.exe",
@@ -89,10 +99,12 @@ def main():
     print("  FRIEND TUNNEL  ->  %s" % TARGET)
     print("=" * 50)
     print("bin : %s" % exe)
+    print("协议: %s" % PROTOCOL)
     print("")
     try:
         proc = subprocess.Popen(
-            [exe, "tunnel", "--url", TARGET, "--no-autoupdate"],
+            [exe, "tunnel", "--url", TARGET, "--no-autoupdate",
+             "--protocol", PROTOCOL],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace", bufsize=1)
     except OSError as e:

@@ -754,3 +754,84 @@ class NoiseTailTest(_Base):
 
     def test_empty_input(self):
         self.assertEqual(gallery._drop_noise_tail([]), [])
+
+
+class UploadLimitTest(_Base):
+    """一个作品集最多 100 张，一次最多 10 张 —— 两条限制管的是不同的事。
+
+    单次上限是「一口气别等太久」，作品集上限是「别把一个作品集塞成仓库」。
+    群友会分几次往同一个作品集里加图，所以上限必须拦在 append 这一层：
+    只拦接口的话，换个入口（旧的批量上传）就绕过去了。
+    """
+
+    def _webp(self):
+        b = io.BytesIO()
+        Image.new("RGB", (1600, 1200), (9, 9, 9)).save(b, "WEBP", quality=85)
+        return b.getvalue()
+
+    def test_work_max_is_hundred(self):
+        self.assertEqual(gallery.WORK_MAX, 100)
+
+    def test_append_stops_at_cap(self):
+        wid = gallery.create_work("20004")
+        with mock.patch.object(gallery, "WORK_MAX", 2):
+            gallery.append_upload("20004", wid, "a.webp", self._webp())
+            gallery.append_upload("20004", wid, "b.webp", self._webp())
+            with self.assertRaises(gallery.WorkFull):
+                gallery.append_upload("20004", wid, "c.webp", self._webp())
+
+    def test_resend_same_index_past_cap_is_allowed(self):
+        """满了之后，重传同一个序号（上一张失败的重试）不算新增，放行。"""
+        wid = gallery.create_work("20004")
+        with mock.patch.object(gallery, "WORK_MAX", 1):
+            gallery.append_upload("20004", wid, "a.webp", self._webp())
+            self.assertEqual(
+                gallery.append_upload("20004", wid, "a2.webp", self._webp(),
+                                      idx=1), 1)
+
+    def test_under_cap_still_appends(self):
+        wid = gallery.create_work("20004")
+        with mock.patch.object(gallery, "WORK_MAX", 3):
+            for _ in range(3):
+                gallery.append_upload("20004", wid, "a.webp", self._webp())
+        _, n = gallery.own_work("20004", wid)
+        self.assertEqual(n, 3)
+
+
+class UploadLimitApiTest(_Base):
+    """接口层：满了要在**收包前**就说，别让群友白等十张。"""
+
+    def setUp(self):
+        super().setUp()
+        from flask import Flask
+        self.app = Flask(__name__)
+        self.app.register_blueprint(gallery_api.bp)
+        self.c = self.app.test_client()
+        self.h = {"X-Friend-Token": "tok"}
+        p1 = mock.patch.object(friend_auth, "secret", lambda: "tok")
+        p1.start()
+        self.addCleanup(p1.stop)
+
+    def _webp(self):
+        b = io.BytesIO()
+        Image.new("RGB", (1600, 1200), (40, 50, 60)).save(b, "WEBP",
+                                                          quality=85)
+        return b.getvalue()
+
+    def post(self, qq="20004", **form):
+        data = dict(form)
+        data["file"] = (io.BytesIO(self._webp()), "a.webp")
+        return self.c.post("/api/gal/upload/one?qq=" + qq, headers=self.h,
+                           data=data, content_type="multipart/form-data")
+
+    def test_reports_remaining_slots(self):
+        d = self.post(title="配额").get_json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["left"], gallery.WORK_MAX - 1)
+
+    def test_full_work_is_rejected_before_reading(self):
+        wid = self.post(title="满").get_json()["work_id"]
+        with mock.patch.object(gallery, "WORK_MAX", 1):
+            r = self.post(wid=str(wid))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("传满", r.get_json()["error"])

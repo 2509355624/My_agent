@@ -36,7 +36,7 @@ log = logging.getLogger("gallery_api")
 bp = Blueprint("gallery", __name__, url_prefix="/api/gal")
 
 PAGE_MAX = 60
-UPLOAD_MAX = 5                      # 一次最多传几张
+UPLOAD_MAX = 10                     # 一次最多传几张（单个作品集上限见 gallery.WORK_MAX）
 UPLOAD_BYTES = 25 << 20             # 单张上限 25MB
 UPLOAD_TOTAL = 250 << 20            # 一次合计上限 250MB
 
@@ -532,20 +532,30 @@ def api_upload_one():
     except ValueError:
         wid = 0
     if wid:
-        mine, _ = gallery.own_work(qq, wid)
+        mine, used = gallery.own_work(qq, wid)
         if not mine:
             return jsonify({"ok": False, "error": "作品集不存在"}), 404
+        # 满 100 张就别再收包了：等传完十张才说「满了」等于白等五分钟。
+        if used >= gallery.WORK_MAX:
+            return jsonify({"ok": False,
+                            "error": "这个作品集已经 %d 张，传满了"
+                                     % gallery.WORK_MAX}), 400
     else:
         wid = gallery.create_work(qq, title or "未命名作品")
 
     try:
         idx = gallery.append_upload(qq, wid, f.filename, raw)
+    except gallery.WorkFull:
+        return jsonify({"ok": False,
+                        "error": "这个作品集已经 %d 张，传满了"
+                                 % gallery.WORK_MAX}), 400
     except Exception:
         log.warning("追加图片失败：%s", f.filename, exc_info=True)
         return jsonify({"ok": False,
                         "error": "这张转码失败，换一张试试"}), 500
     _, n = gallery.own_work(qq, wid)
-    return jsonify({"ok": True, "work_id": wid, "n": n, "idx": idx})
+    return jsonify({"ok": True, "work_id": wid, "n": n, "idx": idx,
+                    "left": max(0, gallery.WORK_MAX - n)})
 
 
 @bp.route("/upload/abort", methods=["POST"])

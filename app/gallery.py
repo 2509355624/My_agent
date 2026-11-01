@@ -54,6 +54,14 @@ UPLOAD = state_path("gallery_upload")
 
 IMG_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
 
+# 一个作品集最多存几张。群友会分几次往同一个作品集里加图（一次传不完
+# 十张就先传一批），所以上限得管在「作品集」这一层，而不是只管一次请求。
+WORK_MAX = 100
+
+
+class WorkFull(Exception):
+    """这个作品集已经到上限，不能再加图。"""
+
 # 只跳过明确的系统垃圾目录，不做「名字像缓存就跳过」这种猜测——
 # 站主自己的文件夹爱叫什么就叫什么。
 SKIP_DIRS = {"@eadir", "$recycle.bin", "system volume information",
@@ -562,6 +570,10 @@ def append_upload(qq, wid, name, raw, idx=None):
     with connect() as con:
         row = con.execute("SELECT n FROM works WHERE id=?", (wid,)).fetchone()
         used = int(row["n"] or 0) if row else 0
+    # 上限拦在这里而不是只拦在接口层：换个入口（旧批量上传）也绕不过去。
+    # 同一个序号的重传（上一张失败后重试）不算新增，放行。
+    if used >= WORK_MAX and (not idx or idx > used):
+        raise WorkFull("这个作品集已经 %d 张了" % WORK_MAX)
     i = idx if idx and idx > 0 else used + 1
 
     p = os.path.join(d, "%03d.webp" % i)

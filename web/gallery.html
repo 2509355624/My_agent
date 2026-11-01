@@ -104,8 +104,9 @@
     text-overflow:ellipsis}
   .dby{font-size:12px;color:var(--dim);margin-top:1px}
   /* 排版切换：按钮上直接写「现在是哪种」，比一个抽象图标好猜 */
-  #dmode{width:auto;border-radius:10px;padding:0 12px;font-size:13px;
+  #dmode,#dadd{width:auto;border-radius:10px;padding:0 12px;font-size:13px;
     background:var(--card);border:1px solid var(--line);height:32px}
+  #dadd{margin-right:8px;display:none}
   /* 网格是默认，单列给「想看清楚点」的场景。
      ⚠️ 两种都按原比例完整显示，绝不裁切 —— 之前用 aspect-ratio:3/4
      配 object-fit:cover，4928×7360 的竖图被切掉上下，人物脸都在框外。
@@ -271,6 +272,7 @@
       <div class="dt" id="dtitle"></div>
       <div class="dby" id="dby"></div>
     </div>
+    <button id="dadd" title="给这个作品集加图">＋ 加图</button>
     <button id="dmode" title="切换排版">⊞ 网格</button>
   </div>
   <div id="dgrid"></div>
@@ -303,10 +305,10 @@
 <!-- 上传 -->
 <div id="up">
   <div class="sheet">
-    <h3>上传作品集</h3>
+    <h3 id="upttl">上传作品集</h3>
     <p>一次选多张，就是一个作品集。上传会压成 1600px 的 WebP，原图不用你管。</p>
     <input type="text" id="uptitle" placeholder="给这个作品集起个名字" maxlength="40">
-    <label class="pick" id="pick">＋ 选择图片（最多 5 张）
+    <label class="pick" id="pick">＋ 选择图片（最多 10 张）
       <input type="file" id="file" accept="image/*" multiple hidden>
     </label>
     <div id="prev"></div>
@@ -515,7 +517,7 @@
     var t = $("tools");
     t.innerHTML = "";
     if (S.tab === "mine" && S.sub === "works") {
-      t.appendChild(btn("＋ 上传作品集", "primary", openUpload));
+      t.appendChild(btn("＋ 上传作品集", "primary", function () { openUpload(); }));
     }
     // 扫描是站主的事，放「站长」tab —— 它扫的就是这一批目录，
     // 放在这里按钮和内容对得上，也不用挤在「我的」里。
@@ -683,6 +685,11 @@
       (S.cur.n > 1 ? " · " + S.cur.n + " 张" : "") +
       (S.cur.hidden ? " · 已下架" : "");
 
+    // 只有自己传的作品集能继续加图，而且到了 100 张就不再给入口——
+    // 留着按钮点进去必然失败，不如让它消失。
+    $("dadd").style.display =
+      (S.cur.can_delete && (S.cur.n || 0) < WORK_MAX) ? "" : "none";
+
     var box = $("dgrid");
     box.innerHTML = "";
     S.shotEls = [];
@@ -785,6 +792,9 @@
   $("dback").onclick = closeDetail;
   $("dmode").onclick = function () {
     setLayout(S.layout === "one" ? "2" : "one");
+  };
+  $("dadd").onclick = function () {
+    if (S.cur) openUpload(S.cur.id);
   };
 
   // ── 查看器 ────────────────────────────────────────────
@@ -976,6 +986,11 @@
 
   // ── 上传 ──────────────────────────────────────────────
   var picked = [];
+  // 与服务端 UPLOAD_MAX / gallery.WORK_MAX 对齐。一次选多少、一个作品集
+  // 总共能装多少是两件事：群友传不完可以先传一批，回头进作品集再接着加。
+  var UP_MAX = 10, WORK_MAX = 100;
+  var upWid = 0;          // 非 0 = 往已有作品集里加图
+  var upLeft = WORK_MAX;  // 这个作品集还能加几张
 
   // 浏览器能不能编 WebP。Safari 老版本只能 JPEG，那就在 canvas 里先铺白底，
   // 否则透明 PNG 压完是黑块。
@@ -1089,13 +1104,30 @@
                        : Math.round(kbs) + "KB/s";
   }
 
-  function openUpload() {
+  // 这一次最多能选几张：单次上限和作品集剩余名额取小的那个。
+  function pickMax() { return Math.max(0, Math.min(UP_MAX, upLeft)); }
+
+  function pickHint() {
+    if (!upWid) return "＋ 选择图片（最多 " + UP_MAX + " 张）";
+    return "＋ 选择图片（最多 " + pickMax() + " 张，这个作品集还能加 "
+           + upLeft + " 张）";
+  }
+
+  // wid 传了就是「往这个作品集加图」：不新建、不问标题、按剩余名额截。
+  // 只认正整数——按钮的 onclick 会把事件对象当第一个参数塞进来，
+  // 不挡一下就会把一个 MouseEvent 当成作品集 id。
+  function openUpload(wid) {
+    upWid = (typeof wid === "number" && wid > 0) ? wid : 0;
+    upLeft = upWid ? Math.max(0, WORK_MAX - ((S.cur && S.cur.n) || 0))
+                   : WORK_MAX;
     picked = [];
     $("uptitle").value = "";
     $("file").value = "";
     $("prev").innerHTML = "";
     $("pick").classList.remove("has");
-    $("pick").firstChild.textContent = "＋ 选择图片（最多 5 张）";
+    $("upttl").textContent = upWid ? "往作品集里加图" : "上传作品集";
+    $("uptitle").style.display = upWid ? "none" : "";
+    $("pick").firstChild.textContent = pickHint();
     $("upsubmit").disabled = true;
     $("upsubmit").textContent = "上传";
     $("up").classList.add("on");
@@ -1107,7 +1139,12 @@
 
   $("file").onchange = function () {
     var fs = Array.prototype.slice.call(this.files || []);
-    if (fs.length > 5) { toast("一次最多 5 张，多的先去掉"); fs = fs.slice(0, 5); }
+    var cap = pickMax();
+    if (fs.length > cap) {
+      toast(cap ? "这一次最多 " + cap + " 张，多的先去掉"
+                : "这个作品集已经 " + WORK_MAX + " 张，满了");
+      fs = fs.slice(0, cap);
+    }
     picked = fs;
     $("prev").innerHTML = "";
     fs.forEach(function (f) {
@@ -1120,7 +1157,7 @@
     $("pick").firstChild.textContent =
       "已选 " + fs.length + " 张 · " + mb(sz) + "（点这里重选）";
     $("upsubmit").disabled = !fs.length;
-    if (!$("uptitle").value && fs.length === 1) {
+    if (!$("uptitle").value && fs.length === 1 && !upWid) {
       $("uptitle").value = fs[0].name.replace(/\.[^.]+$/, "").slice(0, 40);
     }
   };
@@ -1128,9 +1165,11 @@
   $("upsubmit").onclick = function () {
     if (!picked.length) return;
     var b = this;
-    var title = $("uptitle").value.trim();
+    var title = upWid ? "" : $("uptitle").value.trim();
+    var adding = !!upWid;
     var total = picked.length;
-    var wid = 0, ok = 0, bad = 0, inB = 0, outB = 0, upB = 0, lastErr = "";
+    var wid = upWid || 0, ok = 0, bad = 0, inB = 0, outB = 0, upB = 0;
+    var lastErr = "";
     // 三个计时：整批、压缩、纯上传（不含服务端落盘）。
     // 10 张等了一百多秒的时候，光看"处理中"根本不知道慢在浏览器还是网络。
     var tAll = performance.now(), tComp = 0, tUp = 0;
@@ -1159,8 +1198,9 @@
     function done() {
       stop();
       if (!ok) {
-        // 一张都没成：把空壳作品集收回去，别在墙上留个空的
-        if (wid) {
+        // 一张都没成：把空壳作品集收回去，别在墙上留个空的。
+        // 往已有作品集加图时没这个壳，别去碰它。
+        if (wid && !adding) {
           var fd = new FormData();
           fd.append("wid", wid);
           fetch("/api/gal/upload/abort", { method: "POST", body: fd });
@@ -1170,10 +1210,13 @@
       var saved = outB < inB ? " · " + mb(inB) + "→" + mb(outB) : "";
       var split = "（压缩 " + secs(tComp) + " / 上传 " + secs(tUp)
                 + (upB ? " · " + speed(upB, tUp) : "") + "）";
-      toast("传好了，" + ok + " 张 · 共 " + secs(performance.now() - tAll)
-            + split + saved + (bad ? "，失败 " + bad + " 张" : ""), 6000);
+      toast((adding ? "又加了 " : "传好了，") + ok + " 张 · 共 "
+            + secs(performance.now() - tAll) + split + saved
+            + (bad ? "，失败 " + bad + " 张" : ""), 6000);
       closeUpload();
-      setTab("mine", "works");
+      // 加图之后停在原作品集上刷新，跳回墙上反而让人找不到刚加的那几张
+      if (adding) openWork(wid);
+      else setTab("mine", "works");
     }
 
     // 压一张、传一张，而不是攒够一整套再发：第一张几秒内就落地，进度
