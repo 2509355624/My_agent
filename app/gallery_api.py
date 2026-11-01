@@ -22,9 +22,11 @@
 里读一次盘。
 """
 
+import base64
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from flask import Blueprint, jsonify, request, send_file
 
@@ -44,6 +46,12 @@ UPLOAD_TOTAL = 250 << 20            # 一次合计上限 250MB
 # 所以同一个 URL 的字节永远不会变，可以 immutable。原先只给 10 分钟——
 # 换算下来每次重新打开画廊，几十张缩略图全要从这台机器重传一遍。
 IMG_MAX_AGE = 31536000
+
+# 批量取图：一次能带几张。24 张 ≈ 一屏（手机两列 × 12 行），再多变成
+# 一次传几 MB，反而不如让它先渲染出来。`v` 是 1600px 预览，一张 90KB
+# 上下，一次只给 6 张（只用来预取相邻的那两张）。
+THUMB_BATCH = 24
+THUMB_BATCH_V = 6
 
 
 def _img(path):
@@ -299,6 +307,86 @@ def api_img(iid):
     return _img(p)
 
 
+@bp.route("/thumbs")
+def api_thumbs():
+    """一次拿一屏缩略图，把 24 次往返压成 1 次。
+
+    慢的从来不是带宽，是往返：走隧道取一张 17KB 的缩略图中位 593ms，
+    一屏 24 张乘下来就是十几秒的延迟，图本身才 400KB。这里把图直接塞进
+    JSON（base64），浏览器一次请求全拿到；多花 1/3 的体积，省掉 23 次
+    「等对方机器回话」。
+
+    单张的 `/img` 照旧保留：全屏大图、点开看、下载、以及浏览器自己的
+    磁盘缓存都还走它 —— 长缓存（immutable）只在那条路上生效。
+
+    参数：`ids=12,13,14`（最多 24 个）、`s=t|v`。拿不到的（文件没了、
+    别人下架的、转码失败）直接从结果里省掉，前端退回单张请求，不报错。
+    """
+    bad = _guard()
+    if bad:
+        return bad
+    qq = _qq()
+    if not qq:
+        return jsonify({"ok": False, "error": "参数不对"}), 400
+
+    mode = "v" if str(request.args.get("s") or "t").lower() == "v" else "t"
+    cap = THUMB_BATCH_V if mode == "v" else THUMB_BATCH
+    ids = []
+    for chunk in str(request.args.get("ids") or "").split(","):
+        chunk = chunk.strip()
+        if not chunk.isdigit():
+            continue
+        i = int(chunk)
+        if i not in ids:
+            ids.append(i)
+        if len(ids) >= cap:
+            break
+    if not ids:
+        return jsonify({"ok": True, "s": mode, "items": {}})
+
+    marks = ",".join("?" * len(ids))
+    with gallery.connect() as con:
+        rows = con.execute(
+            "SELECT i.id, i.path, w.hidden, w.owner FROM items i"
+            " JOIN works w ON w.id=i.work_id WHERE i.id IN (%s)" % marks,
+            ids).fetchall()
+
+    mine_ok = _is_owner(qq)
+    todo = []
+    for r in rows:
+        if r["hidden"] and r["owner"] != str(qq) and not mine_ok:
+            continue                       # 别人下架的图，一张都不给
+        if not r["path"] or not os.path.isfile(r["path"]):
+            continue
+        todo.append((r["id"], r["path"]))
+    if not todo:
+        return jsonify({"ok": True, "s": mode, "items": {}})
+
+    # 缓存没备好时这里是真在算图，一张 0.1~0.3 秒；四路一起算，别让
+    # 「一屏 24 张」串成六秒。PIL 编解码基本不占 GIL，多线程有实际收益。
+    def one(item):
+        iid, src = item
+        try:
+            if mode == "v" and gallery.reuse_direct(src):
+                p = src
+            else:
+                p = gallery.thumb(src, mode)
+            if not p:
+                return None
+            with open(p, "rb") as f:
+                return iid, base64.b64encode(f.read()).decode("ascii")
+        except Exception:
+            log.warning("批量出图失败 iid=%s", iid, exc_info=True)
+            return None
+
+    items = {}
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        for got in ex.map(one, todo):
+            if got:
+                items[str(got[0])] = "data:image/webp;base64," + got[1]
+    return jsonify({"ok": True, "s": mode, "items": items})
+
+
 # ─── 点赞 / 收藏 ─────────────────────────────────────────
 
 @bp.route("/mark", methods=["POST"])
@@ -422,6 +510,9 @@ def api_scan():
         return jsonify({"ok": False, "error": "扫描出错：%s" % e}), 500
     if out.get("error"):
         return jsonify({"ok": False, "error": out["error"]}), 400
+    # 扫完就让后台把缺的缩略图补出来。一万三千张全量现算要好几个小时，
+    # 但那是没人看的时候在后台跑，等群友点进来缓存已经在盘上了。
+    gallery.warm_all()
     return jsonify({"ok": True, "result": out})
 
 

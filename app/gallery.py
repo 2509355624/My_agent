@@ -19,11 +19,13 @@
 有 457 张、底下还有 3 个角色目录，那它同时是作品集和合集——两边都成立，
 前端分两块显示即可。不做「猜哪个是主」这种判断。
 
-## 缩略图为什么按需生成
+## 缩略图怎么来
 
-13285 张全量转一遍要 1~4 小时。一次请求只转当前这屏的十几张（每张约
-0.3 秒），其余挂在那里等有人真看。后台不跑常驻任务——一个只读的画廊
-没有理由在没人访问的时候占 CPU。
+13285 张全量转一遍要 1~4 小时，所以不会在请求里现算一整墙。取图时缺的
+当场补（每张 0.1~0.3 秒），另外**扫描/上传之后挂一个后台线程把缺的补完**：
+站主扫完一万张就去干别的了，等群友点进来时缓存已经备好。
+
+后台线程**队列空了就退出**，不是常驻——没人访问的时候不该有东西在跑。
 
 ## 磁盘上的图被删了怎么办
 
@@ -41,6 +43,7 @@ import shutil
 import sqlite3
 import threading
 import time
+from collections import deque
 
 from PIL import Image
 
@@ -476,6 +479,13 @@ def reuse_direct(src, edge=1600):
         return False
 
 
+def cache_path(src, kind):
+    """某张图的缓存落在哪。文件名用路径的哈希：同一个文件改了名就该重算，
+    所以只认路径不认内容。"""
+    key = hashlib.sha1(src.encode("utf-8", "replace")).hexdigest()[:20]
+    return os.path.join(CACHE, key + "_" + kind + ".webp")
+
+
 def thumb(src, kind="t"):
     """按需生成缓存图。→ 缓存文件绝对路径，失败返回 None。
 
@@ -488,8 +498,7 @@ def thumb(src, kind="t"):
     if not os.path.isfile(src):
         return None
 
-    key = hashlib.sha1(src.encode("utf-8", "replace")).hexdigest()[:20]
-    out = os.path.join(CACHE, key + "_" + kind + ".webp")
+    out = cache_path(src, kind)
     try:
         if os.path.exists(out) and os.path.getmtime(out) >= os.path.getmtime(src):
             return out
@@ -514,6 +523,123 @@ def thumb(src, kind="t"):
         except Exception:
             log.warning("生成预览失败 %s", src, exc_info=True)
             return None
+
+
+# ─── 后台预生成缩略图 ────────────────────────────────────
+# 扫完一万三千张，等群友点进来时才现算就晚了：一张 0.1~0.3 秒，一屏十几张
+# 就是两三秒纯 CPU。这里挂一个后台线程，扫描/上传之后把缺的补上。
+#
+# 队列空了线程就退出，不常驻——画廊没人看的时候不该有东西在占 CPU。
+
+_warm_q = deque()
+_warm_seen = set()          # 已在队列里的 (path, kinds)，别重复排
+_warm_cv = threading.Condition()
+_warm_alive = False
+WARM_QUEUE_MAX = 30000      # 队列上限，防止一次塞进几十万条
+
+
+def warm(paths, kinds=("t",), front=False):
+    """把「生成缩略图」排队，后台线程慢慢消化。→ 排进去几条。
+
+    已经在队列里、或者刚刚生成过的都不算新增（`thumb` 自己会认缓存，
+    重复排只是白跑一次 stat）。
+
+    `front=True` 插队到最前面：刚上传的那几张必须马上好——站主扫完一万张
+    的队列可能还在跑，群友传完立刻进作品集，不该排在人家后面等。
+    """
+    global _warm_alive
+    added = 0
+    with _warm_cv:
+        for p in paths:
+            if not p:
+                continue
+            key = (p, kinds)
+            if key in _warm_seen:
+                continue
+            if len(_warm_q) >= WARM_QUEUE_MAX:
+                break
+            _warm_seen.add(key)
+            if front:
+                _warm_q.appendleft(key)
+            else:
+                _warm_q.append(key)
+            added += 1
+        if added and not _warm_alive:
+            _warm_alive = True
+            threading.Thread(target=_warm_loop, name="gal-warm",
+                             daemon=True).start()
+        _warm_cv.notify()
+    return added
+
+
+def _warm_loop():
+    global _warm_alive
+    while True:
+        with _warm_cv:
+            if not _warm_q:
+                _warm_alive = False       # 队列空了就退出
+                return
+            src, kinds = _warm_q.popleft()
+        try:
+            for kind in kinds:
+                thumb(src, kind)
+        except Exception:
+            log.warning("预生成缩略图失败 %s", src, exc_info=True)
+        finally:
+            with _warm_cv:
+                _warm_seen.discard((src, kinds))
+        # 让一下 GIL：这个线程和「正在取图的请求」抢 CPU，图再快点也没用，
+        # 人家等的是首屏。每张挪 5ms，一万三千张也只多花一分多钟。
+        time.sleep(0.005)
+
+
+def warm_ids(wids, kinds=("t",)):
+    """按作品集排队。扫描完只排刚扫的那几个，不必全库重来。"""
+    wids = [int(w) for w in wids]
+    if not wids:
+        return 0
+    marks = ",".join("?" * len(wids))
+    with connect() as con:
+        rows = con.execute("SELECT path FROM items WHERE work_id IN (%s)" % marks,
+                           wids).fetchall()
+    return warm([r["path"] for r in rows], kinds)
+
+
+def missing_cache(paths, kind="t"):
+    """挑出还没有缓存图的那些。文件没了的也跳过——排了也是白跑。"""
+    todo = []
+    for p in paths:
+        if not p:
+            continue
+        try:
+            if not os.path.isfile(p):
+                continue
+            if os.path.exists(cache_path(p, kind)):
+                continue
+        except OSError:
+            continue
+        todo.append(p)
+    return todo
+
+
+def warm_all(kinds=("t",)):
+    """全库补一遍：把还没有缩略图的条目排队。
+
+    放在线程里查库——一万三千行 + 一万三千次 stat 要几百毫秒，不该让
+    「扫描」这个请求等它。
+    """
+    def job():
+        try:
+            with connect() as con:
+                rows = [r["path"] for r in con.execute("SELECT path FROM items")]
+        except Exception:
+            log.warning("预生成：读图列表失败", exc_info=True)
+            return
+        n = warm(missing_cache(rows, kinds[0]), kinds)
+        if n:
+            log.info("预生成缩略图：排了 %d 张", n)
+
+    threading.Thread(target=job, name="gal-warm-scan", daemon=True).start()
 
 
 # ─── 群友上传 ────────────────────────────────────────────
@@ -599,6 +725,9 @@ def append_upload(qq, wid, name, raw, idx=None):
             " cover=CASE WHEN cover='' OR cover IS NULL THEN ? ELSE cover END,"
             " n=(SELECT COUNT(*) FROM items WHERE work_id=works.id)"
             " WHERE id=?", (d, p, wid))
+    # 顺手把这一张的缩略图排上，插队到头里：群友传完立刻进作品集看，
+    # 不该排在站主扫描那一万张的后面等。
+    warm([p], front=True)
     return i
 
 

@@ -385,6 +385,99 @@
     });
   }
 
+  // ── 缩略图批取 ────────────────────────────────────────
+  // 一张 17KB 的缩略图走隧道要 0.6 秒，而那 0.6 秒几乎全是「等对方回话」，
+  // 不是传图。首屏 24 张各自等一次就是十几秒。这里一次请求把一屏全拿回来
+  // （服务端 base64 塞 JSON），只等一次。
+  //
+  // 拿回来的 dataURL 存在内存里：同一张图在同一页里只取一次，翻回去、
+  // 重进作品集都不用再问。按字节数封顶，超了先丢最早的那批——手机内存
+  // 经不起把整墙图都留成 base64。
+  var PIC = new Map(), PIC_BYTES = 0, PIC_MAX = 8 << 20;
+  var PIC_CHUNK = 24;
+
+  function picPut(id, url) {
+    if (PIC.has(id)) return;
+    PIC.set(id, url);
+    PIC_BYTES += url.length;
+    while (PIC_BYTES > PIC_MAX && PIC.size > 1) {
+      var k = PIC.keys().next().value;
+      PIC_BYTES -= PIC.get(k).length;
+      PIC.delete(k);
+    }
+  }
+
+  function picSrc(id, mode) {
+    return PIC.get(id) || ("/api/gal/img/" + id + "?s=" + (mode || "t"));
+  }
+
+  // 把一批 id 预取到内存里。永远 resolve，最多等 ms 毫秒——慢也不能把
+  // 整个页面卡在这个 await 上，超时就退回逐张请求。
+  function prefetch(ids, mode, ms) {
+    var need = [], seen = {};
+    ids.forEach(function (id) {
+      if (!id || seen[id] || PIC.has(id)) return;
+      seen[id] = 1;
+      need.push(id);
+    });
+    if (!need.length) return Promise.resolve();
+
+    var per = mode === "v" ? 6 : PIC_CHUNK;
+    var jobs = [];
+    for (var i = 0; i < need.length; i += per) {
+      jobs.push(need.slice(i, i + per));
+    }
+    var all = Promise.all(jobs.map(function (chunk) {
+      return fetch("/api/gal/thumbs?ids=" + chunk.join(",") +
+                   "&s=" + (mode || "t"))
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (!d || !d.ok || !d.items) return;
+          Object.keys(d.items).forEach(function (k) { picPut(+k, d.items[k]); });
+        })
+        .catch(function () {});       // 预取失败就当没做，逐张请求照样能看
+    }));
+    return Promise.race([
+      all,
+      new Promise(function (res) { setTimeout(res, ms || 5000); })
+    ]);
+  }
+
+  // 图片怎么铺：
+  // 1) 先按正常 URL 拉。图带一年 immutable，翻回去、清屏重开都是 0 请求
+  //    ——这条不能丢，它是「第二次打开快」的全部依据。
+  // 2) 一秒后还没出来的（隧道一次一次往返，24 张能拖十几秒），改走批接口
+  //    一次全拿回来。只补「屏幕上和下一屏」的，一个作品集 288 张的话不能
+  //    把没滚动到的全预取下来。
+  // 两条路都失败也不报错，图就是灰底占位，跟以前一样。
+  function fillPics(list, mode) {
+    if (!list.length) return;
+    list.forEach(function (x) { x.el.src = picSrc(x.id, mode); });
+
+    setTimeout(function () {
+      var vh = window.innerHeight || 800;
+      var need = list.filter(function (x) {
+        if (!x.el.isConnected || x.el.complete) return false;
+        var r = x.el.getBoundingClientRect();
+        return r.bottom > -vh && r.top < vh * 2.2;
+      });
+      if (!need.length) return;
+      // 这些还在一个个慢慢拉，先把它们掐掉——不然批请求要和二十几个
+      // 半截请求抢同一条窄管道，等于白传一遍。
+      var ids = need.map(function (x) { return x.id; });
+      need.forEach(function (x) { x.el.removeAttribute("src"); });
+      prefetch(ids, mode, 8000).then(function () {
+        need.forEach(function (x) {
+          if (!x.el.isConnected) return;
+          var u = PIC.get(x.id);
+          x.el.style.opacity = "";
+          // 批请求失败就退回单张：宁可慢一点，也不能让图空在那里
+          x.el.src = u || ("/api/gal/img/" + x.id + "?s=" + mode);
+        });
+      });
+    }, 900);
+  }
+
   // ── 列表 ──────────────────────────────────────────────
   // 「我的 / 收藏」「我的 / 点赞」是**按图**排的（item 级），其它都是作品集。
   function isPhoto() { return S.tab === "mine" && S.sub !== "works"; }
@@ -409,11 +502,17 @@
     api(q).then(function (d) {
       S.owner = !!d.owner;
       renderTools();
+      var pics = [];
       if (photo) {
-        (d.items || []).forEach(function (it) { S.works.push(it); addPhoto(it); });
+        (d.items || []).forEach(function (it) {
+          S.works.push(it); addPhoto(it, pics);
+        });
       } else {
-        (d.works || []).forEach(function (w) { S.works.push(w); addCard(w); });
+        (d.works || []).forEach(function (w) {
+          S.works.push(w); addCard(w, pics);
+        });
       }
+      fillPics(pics, "t");
       S.more = !!d.has_more;
       S.page += 1;
       $("hint").textContent = S.works.length
@@ -456,7 +555,7 @@
     g.appendChild(d);
   }
 
-  function addCard(w) {
+  function addCard(w, out) {
     var c = document.createElement("div");
     c.className = "card";
     c.onclick = function () { openWork(w.id); };
@@ -466,7 +565,9 @@
     img.loading = "lazy";
     img.decoding = "async";
     img.alt = w.title;
-    if (w.cover) img.src = "/api/gal/img/" + w.cover + "?s=t";
+    // src 先不填：这一屏的封面统一走一次批请求，回来再一起填。
+    if (w.cover && out) out.push({ id: w.cover, el: img });
+    else if (w.cover) img.src = "/api/gal/img/" + w.cover + "?s=t";
     img.onload = function () { img.classList.add("ok"); };
     img.onerror = function () { img.classList.add("ok"); img.style.opacity = ".35"; };
     c.appendChild(img);
@@ -499,7 +600,7 @@
 
   // 收藏 / 点赞里的单张图。点开直接进查看器并停在那一张，
   // 不经过「先列作品集、再进去找」这一步。
-  function addPhoto(it) {
+  function addPhoto(it, out) {
     var c = document.createElement("div");
     c.className = "card";
     c.onclick = function () { openWork(it.work, it.idx); };
@@ -509,7 +610,8 @@
     img.loading = "lazy";
     img.decoding = "async";
     img.alt = it.title;
-    img.src = "/api/gal/img/" + it.id + "?s=t";
+    if (out) out.push({ id: it.id, el: img });
+    else img.src = "/api/gal/img/" + it.id + "?s=t";
     img.onload = function () { img.classList.add("ok"); };
     img.onerror = function () { img.classList.add("ok"); img.style.opacity = ".35"; };
     c.appendChild(img);
@@ -733,6 +835,7 @@
       }
     }
 
+    var pics = [];
     S.items.forEach(function (it, i) {
       var s = document.createElement("div");
       s.className = "shot";
@@ -742,7 +845,7 @@
       im.loading = "lazy";              // 一个作品集可能 288 张，不能全拉
       im.decoding = "async";
       im.alt = "";
-      im.src = "/api/gal/img/" + it.id + "?s=t";
+      pics.push({ id: it.id, el: im });
       im.onload = function () {
         im.classList.add("ok");
         // 占位比例换成真实比例，图才是完整的（不裁、不留黑边）
@@ -767,6 +870,7 @@
       S.shotEls[i] = s;
       (cols ? cols[i % cols.length] : box).appendChild(s);
     });
+    fillPics(pics, "t");
   }
 
   function closeDetail() {
@@ -849,7 +953,11 @@
     S.items.forEach(function (_it, i) { tr.children[i].style.width = (100 / S.items.length) + "%"; });
   }
 
-  function src(i) { return S.items[i] ? "/api/gal/img/" + S.items[i].id + "?s=v" : ""; }
+  // 大图走单张请求：一张 1600px 的预览 90KB 上下，走批接口反而把 base64
+  // 灌进内存。但相邻两张提前取——左右一划就该有，不能每次都在等隧道。
+  function src(i) {
+    return S.items[i] ? picSrc(S.items[i].id, "v") : "";
+  }
 
   function preload(i) {
     if (i < 0 || i >= S.items.length) return;
@@ -868,6 +976,10 @@
     preload(S.idx);
     preload(S.idx + 1);
     preload(S.idx - 1);
+    // 再往外的两三张也悄悄备着：连着划的时候不该每次都等隧道。
+    prefetch([S.idx + 2, S.idx + 3, S.idx - 2].map(function (k) {
+      return S.items[k] ? S.items[k].id : 0;
+    }), "v", 8000);
 
     $("vpg").textContent = (S.idx + 1) + " / " + S.items.length;
     $("vprev").style.visibility = S.idx > 0 ? "visible" : "hidden";

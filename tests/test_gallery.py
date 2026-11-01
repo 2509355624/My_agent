@@ -13,12 +13,18 @@ import io
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from unittest import mock
 
 from PIL import Image
 
 from app import friend_auth, gallery, gallery_api
+
+# 预热线程在 _Base 里默认被关掉（它会往缓存目录写文件，干扰数目录的用例），
+# 这里先留一份真的，给专门验它的用例用。
+_REAL_WARM = gallery.warm
+_REAL_WARM_ALL = gallery.warm_all
 
 
 def _png(color=(200, 120, 90), size=(64, 96)):
@@ -40,6 +46,14 @@ class _Base(unittest.TestCase):
         self.root = tempfile.mkdtemp(prefix="gal_test_")
         self.addCleanup(shutil.rmtree, self.root, True)
         self.addCleanup(_reset)
+        # 后台预热会往 CACHE 目录里写文件，而有的用例正在数那个目录里有
+        # 几个文件（"已是 webp 的不该再生成缓存副本"）—— 后台线程一写，
+        # 那个用例就偶发失败。默认关掉，要验预热本身的 WarmCacheTest
+        # 自己打开。
+        for name in ("warm", "warm_all"):
+            p = mock.patch.object(gallery, name, (lambda *a, **k: 0))
+            p.start()
+            self.addCleanup(p.stop)
 
     def mk(self, rel, name="a.png"):
         d = os.path.join(self.root, rel)
@@ -895,3 +909,128 @@ class ImageCacheApiTest(_Base):
             con.execute("UPDATE works SET hidden=1 WHERE id=?", (self.wid,))
         r2 = self.c.get("/api/gal/img/%d?qq=20006&s=t" % self.iid, headers=h)
         self.assertEqual(r2.status_code, 404)
+
+
+class ThumbsBatchApiTest(_Base):
+    """一屏缩略图一次拿回来 —— 这是「首屏十几秒」唯一划算的解法。
+
+    瓶颈不是带宽（一屏 400KB），是往返：走隧道取一张中位 593ms，24 张各自
+    等一次就是十几秒。批接口把 24 次等待压成 1 次。所以这里要验的是
+    「一次请求真的能拿到多张」以及「权限照旧，不能因为批量就放松」。
+    """
+
+    def setUp(self):
+        super().setUp()
+        from flask import Flask
+        self.app = Flask(__name__)
+        self.app.register_blueprint(gallery_api.bp)
+        self.c = self.app.test_client()
+        p1 = mock.patch.object(friend_auth, "secret", lambda: "tok")
+        p1.start()
+        self.addCleanup(p1.stop)
+
+        b = io.BytesIO()
+        Image.new("RGB", (1200, 1600), (70, 90, 120)).save(b, "WEBP",
+                                                          quality=85)
+        self.wid = gallery.create_work("30001", "批量")
+        for _ in range(3):
+            gallery.append_upload("30001", self.wid, "a.webp", b.getvalue())
+        with gallery.connect() as con:
+            self.ids = [r["id"] for r in con.execute(
+                "SELECT id FROM items WHERE work_id=? ORDER BY idx",
+                (self.wid,))]
+
+    def get(self, ids, qq="30001", s="t"):
+        h = {"X-Friend-Token": "tok"}
+        return self.c.get("/api/gal/thumbs?qq=%s&s=%s&ids=%s"
+                          % (qq, s, ",".join(str(i) for i in ids)), headers=h)
+
+    def test_all_requested_images_come_back_in_one_response(self):
+        d = self.get(self.ids).get_json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(sorted(int(k) for k in d["items"]), sorted(self.ids))
+        for v in d["items"].values():
+            self.assertTrue(v.startswith("data:image/webp;base64,"))
+            self.assertGreater(len(v), 200)
+
+    def test_ids_are_capped(self):
+        """要 40 个只给 24 个：一屏的量，再多就是一次传几 MB。"""
+        many = list(range(1, 41))
+        d = self.get(many).get_json()
+        self.assertLessEqual(len(d["items"]), gallery_api.THUMB_BATCH)
+
+    def test_junk_and_missing_ids_are_dropped_silently(self):
+        h = {"X-Friend-Token": "tok"}
+        r = self.c.get("/api/gal/thumbs?qq=30001&ids=abc,,%d,999999"
+                       % self.ids[0], headers=h)
+        d = r.get_json()
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(list(d["items"]), [str(self.ids[0])])
+
+    def test_hidden_work_is_not_leaked_to_others(self):
+        """别人下架的作品集，批量接口也必须一张都不给（不能绕过单张的 404）。"""
+        with gallery.connect() as con:
+            con.execute("UPDATE works SET hidden=1 WHERE id=?", (self.wid,))
+        d = self.get(self.ids, qq="30002").get_json()
+        self.assertEqual(d["items"], {})
+        # 作者自己还能看见
+        self.assertEqual(len(self.get(self.ids).get_json()["items"]), 3)
+
+    def test_empty_ids_is_not_a_500(self):
+        h = {"X-Friend-Token": "tok"}
+        r = self.c.get("/api/gal/thumbs?qq=30001&ids=", headers=h)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["items"], {})
+
+
+class WarmCacheTest(_Base):
+    """扫完之后后台补缩略图：有人点进来时缓存应该已经好了。
+
+    线程是「队列空了就退出」的那种，不是常驻任务，所以这里必须等到文件
+    真的落盘再断言 —— 只看「排进去了」是假通过。
+    """
+
+    def setUp(self):
+        super().setUp()
+        with gallery._warm_cv:
+            gallery._warm_q.clear()
+            gallery._warm_seen.clear()
+        for name, fn in (("warm", _REAL_WARM), ("warm_all", _REAL_WARM_ALL)):
+            p = mock.patch.object(gallery, name, fn)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_warm_writes_thumb_in_background(self):
+        b = io.BytesIO()
+        Image.new("RGB", (1200, 1600), (10, 20, 30)).save(b, "WEBP", quality=85)
+        wid = gallery.create_work("30003", "预热")
+        gallery.append_upload("30003", wid, "a.webp", b.getvalue())
+        with gallery.connect() as con:
+            p = con.execute("SELECT path FROM items WHERE work_id=?",
+                            (wid,)).fetchone()["path"]
+        out = gallery.cache_path(p, "t")
+        # append_upload 自己会排一次（插队到最前面），等它落盘就是验收标准。
+        for _ in range(100):
+            if os.path.exists(out):
+                break
+            time.sleep(0.05)
+        self.assertTrue(os.path.exists(out), "后台没把缩略图算出来")
+
+    def test_uploaded_image_jumps_the_queue(self):
+        """上传的图插队：站主扫一万张时，群友刚传的十张不能排在后面等。"""
+        a = self.mk("1", "a.png")
+        b = self.mk("2", "b.png")
+        gallery.warm([a], front=False)
+        gallery.warm([b], front=True)
+        with gallery._warm_cv:
+            order = [k[0] for k in gallery._warm_q]
+        self.assertEqual(order[:2], [b, a])
+
+    def test_missing_cache_skips_cached_and_vanished(self):
+        a = self.mk("1", "a.png")
+        b = self.mk("2", "b.png")
+        gallery.thumb(a, "t")                      # a 已经有缓存
+        missing = gallery.missing_cache([a, b, os.path.join(self.root, "nope.png")])
+        self.assertEqual(missing, [b])
+
+
