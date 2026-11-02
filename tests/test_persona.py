@@ -474,6 +474,36 @@ class IntentTest(unittest.TestCase):
         self.assertEqual(persona._intent_block("", ""), "")
 
 
+class IntimateGuideTest(unittest.TestCase):
+    """亲密指导按需注入（2026-11-03）：省 1,284 字，只在用得上时发。"""
+
+    CARD = {"name": "纱雾", "systemPrompt": "你是纱雾。"}
+
+    def test_intimate_head_has_the_guide(self):
+        head = persona.build_head(self.CARD, "private_1", "", intimate=True)
+        self.assertIn("亲密场景", head)
+        self.assertIn("小穴", head)
+
+    def test_plain_head_drops_the_guide(self):
+        head = persona.build_head(self.CARD, "private_1", "", intimate=False)
+        self.assertNotIn("亲密场景", head)
+        self.assertNotIn("小穴", head)
+        # 但格式要求、画面、心情、状态这些必须还在
+        self.assertIn("## 画面", head)
+        self.assertIn("## 心情", head)
+        self.assertIn("## 状态", head)
+
+    def test_plain_head_is_much_shorter(self):
+        a = persona.build_head(self.CARD, "private_1", "", intimate=True)
+        b = persona.build_head(self.CARD, "private_1", "", intimate=False)
+        self.assertGreater(len(a) - len(b), 1000)
+
+    def test_default_is_intimate_for_old_callers(self):
+        """老调用方不传 intimate 时行为不变。"""
+        head = persona.build_head(self.CARD, "private_1", "")
+        self.assertIn("亲密场景", head)
+
+
 class ClearCommandTest(PersonaBase):
     """`#清空`（2026-11-02）：清记忆、保留角色。"""
 
