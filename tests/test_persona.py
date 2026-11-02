@@ -403,6 +403,47 @@ class DrawTest(unittest.TestCase):
         ij.enqueue.assert_not_called()
 
 
+class ClearCommandTest(PersonaBase):
+    """`#清空`（2026-11-02）：清记忆、保留角色。"""
+
+    def setUp(self):
+        super().setUp()
+        persona.save_cards([_card("纱雾")])
+        self.card = persona.find_card("纱雾")
+
+    def test_clear_keeps_card_but_wipes_memory(self):
+        persona.switch("private_1", self.card)
+        persona._save_hist("private_1", [{"role": "user", "content": "旧"}])
+        st = persona._load_state()
+        st["private_1"].update({"note": "记着点", "turns": 7,
+                                "mood": "害羞", "intensity": 8, "state": "裸着"})
+        persona._save_state(st)
+
+        msg = persona.clear("private_1")
+
+        st = persona._load_state()["private_1"]
+        self.assertEqual(st["card"], self.card["id"])   # 角色还在
+        self.assertEqual(st["note"], "")
+        self.assertEqual(st["turns"], 0)
+        self.assertEqual(st["state"], "")
+        self.assertEqual(persona._load_hist("private_1"), [])
+        self.assertIn("清空", msg)
+
+    def test_clear_when_not_playing(self):
+        self.assertIn("没有在演", persona.clear("private_nobody"))
+
+    def test_clear_word_goes_through_command(self):
+        persona.switch("private_1", self.card)
+        got = persona.handle_command("private_1", "#清空")
+        self.assertIsNotNone(got)
+        self.assertNotIn("出戏", got)
+
+    def test_clear_alias(self):
+        for word in ("#重置", "#重开", "#从头开始"):
+            persona.switch("private_1", self.card)
+            self.assertIsNotNone(persona.handle_command("private_1", word), word)
+
+
 class GroupModeTest(unittest.TestCase):
     """群聊放开（2026-11-02）：按人隔离 + 尺度克制条款。"""
 
