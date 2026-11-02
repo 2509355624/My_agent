@@ -139,6 +139,16 @@ _CONTRACT = (
     "\n"
     "要写清：在哪、在做什么、什么表情、什么东西在她哪一侧、什么镜头、什么光。\n"
     "\n"
+    "**必须写她身上穿着什么，这一项不许省。** 具体到哪一件、什么状态：\n"
+    "\n"
+    "- 穿着：`loose grey hoodie and black lounge shorts`、`pink pajama top`\n"
+    "- 半脱：`pajama top unbuttoned and slipping off one shoulder`、"
+    "`the collar pulled open`\n"
+    "- 没有：`completely nude`\n"
+    "\n"
+    "写清这一件的状态，别用 `dressed` / `casual clothes` 这种含糊词。**这一行"
+    "直接拿去生图，你写什么就画什么**——没写服装就会被画成没穿。\n"
+    "\n"
     "**她长什么样不用写，我照角色卡上的样子画。**\n"
     "\n"
     "## 心情\n"
@@ -778,103 +788,27 @@ def _fixed_block(card):
     return ", ".join(p for p in parts if p).strip(", ").strip()
 
 
-def _outfit_from_state(state):
-    """从「状态」里抠出「穿什么」那一段，翻成英文标签。
-
-    2026-11-02：**这是服装词唯一的来源**。模型写「画面」那一行时经常整段不写
-    衣服（只写动作/表情/镜头），而它自己写的「状态」里明明有「穿着灰色家居服」。
-    两行都由模型产出，但只有「状态」被要求写穿着，所以从这里取。
-
-    状态是「·」分段的：`坐在房间书桌前 · 穿着宽松的灰色家居服 · 没有肢体接触`。
-    取含衣着关键词的那一段，用 `_OUTFIT_MAP` 翻成英文；翻不出来就原样丢弃
-    （中文塞进英文提示词没用，还会干扰）。
-    """
-    segs = [s.strip() for s in str(state or "").split("·") if s.strip()]
-    out = []
-    for seg in segs:
-        # 先排除「没有接触 / 无接触」这类段——它们也含「没有」，若不先排除，
-        # 后面判断衣着时会被误伤（2026-11-02 实测：这段写在中间，导致整句被跳）。
-        if "没有肢体接触" in seg or "无接触" in seg or "没有接触" in seg:
-            continue
-        hit = False
-        # 一段里常写着**两件**单品（「白T恤和居家短裤」），所以这里不是 break，
-        # 而是把命中的都收下；同类别冲突交给 `_OUTFIT_GROUPS` 去重。
-        for en, words in _OUTFIT_MAP.items():
-            if any(w in seg for w in words):
-                out.append(en)
-                hit = True
-        if not hit and any(w in seg for w in _CLOTHES_NOUNS + _CLOTHES_ACTIONS):
-            # 认得出是衣着段但翻不出来：不硬塞中文，只提醒**这一轮她有穿**，
-            # 让负面词 + `dressed` 一起兜住「不许裸」。
-            out.append("fully dressed in casual clothes")
-    # 去重但保序
-    seen, uniq = set(), []
-    for e in out:
-        if e not in seen:
-            seen.add(e)
-            uniq.append(e)
-    # 同类只留第一个：`skirt` 和 `pleated skirt` 选一个、`shirt` 和 `white blouse`
-    # 选一个，否则提示词里会同时出现两条互相矛盾的描述。
-    picked, used_groups = [], set()
-    for e in uniq:
-        grp = _OUTFIT_GROUPS.get(e, e)
-        if grp in used_groups:
-            continue
-        used_groups.add(grp)
-        picked.append(e)
-    return ", ".join(picked)
-
-
-# 同类别分组：组内只保留第一个命中的词。没列出的按自身当独立组。
-_OUTFIT_GROUPS = {
-    "white blouse": "shirt",
-    "shirt": "shirt",
-    "white t-shirt": "shirt",
-    "grey hoodie": "top",
-    "knit sweater": "top",
-    "casual loungewear": "top",
-    "pleated skirt": "skirt",
-    "skirt": "skirt",
-    "lounge shorts": "bottom",
-    "lounge pants": "bottom",
-}
-
-
-# 中文衣着 → 英文提示词片段。
+# 2026-11-02 删掉整段中文→英文的服装翻译表（`_OUTFIT_MAP` / `_OUTFIT_GROUPS` /
+# `_outfit_from_state`）。
 #
-# 2026-11-02 补过一轮：头版只有 8 组，实测「宽松白T恤和居家短裤」整段只命中
-# 一个 `裤`，拼出 `long-sleeved casual top and shorts` 这种和实物不符的词。
-# 现在按**具体单品**铺开，顺序即优先级（`_outfit_from_state` 里一段只认第一个
-# 命中的）。
-_OUTFIT_MAP = {
-    "white t-shirt": ("T恤", "T shirt", "t-shirt", "短袖"),
-    "grey hoodie": ("卫衣", "连帽"),
-    "lounge shorts": ("短裤",),
-    "lounge pants": ("长裤",),
-    "knit sweater": ("毛衣", "针织"),
-    "white blouse": ("白衬衫",),
-    "shirt": ("衬衫",),
-    "pleated skirt": ("百褶裙",),
-    "skirt": ("裙",),
-    "school uniform": ("校服", "制服"),
-    "pajamas": ("睡衣",),
-    "bathrobe": ("浴袍", "浴巾"),
-    "casual loungewear": ("家居服", "居家服"),
-}
+# 为什么删：模型本来就写得比翻译表准。它写在「画面」里的
+# `hands clutching the loosened collar of her pajamas` 是准确的，而翻译表只能
+# 从「状态」的中文里捞出 `pajamas` 这种粗粒度标签——等于把模型写好的信息扔掉，
+# 换成我手写的猜测。现在契约要求「画面行必须写穿着」，服装直接由模型给英文，
+# 不再经过这一层。
 
 
 def build_prompt(card, scene, state=""):
-    """出图提示词 = 角色卡固定块 + 这一轮的状态（衣着）+ 动态画面。
+    """出图提示词 = 角色卡固定块 + 这一轮的画面。
 
-    `state`（2026-11-02）：模型在「状态」行里写了她此刻的穿着。不拼进来的话，
-    模型写「画面」时漏写衣服，出来的就是裸体（实测两次）。
+    `state` 保留在签名里但**不再参与拼装**（2026-11-02）：服装由模型写在
+    「画面」行里，契约已强制要求。它现在只用于 `clothes_changed()` 判断
+    要不要出图。
     """
     fixed, scene = _fixed_block(card), _clean_scene(scene)
-    outfit = _outfit_from_state(state)
-    body = ", ".join(p for p in (outfit, scene) if p)
-    if fixed and body:
-        return fixed + ", " + body
-    return fixed or body
+    if fixed and scene:
+        return fixed + ", " + scene
+    return fixed or scene
 
 
 def image_caption(spoken, limit=20):
