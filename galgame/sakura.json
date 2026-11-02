@@ -2,69 +2,63 @@
   "id": "sakura",
   "title": "樱花庄的午后",
   "cast": "izumi_sagiri",
-  "start": "ch1",
-  "nodes": {
-    "ch1": {
-      "title": "樱花树下",
-      "say": "放学后，操场边的樱花落了一地。你抄近路穿过那里，看见一个抱着素描本的女孩站在树下，正仰头看枝头的花。她察觉到你的视线，肩膀一下子绷紧了。",
-      "cg": "full body, standing under cherry blossom tree, holding a sketchbook against chest, looking up at branches, petals falling, school uniform, afternoon sunlight, warm tones",
-      "opts": [
-        { "k": "A", "t": "先开口打个招呼", "to": "ch2a", "aff": 5 },
-        { "k": "B", "t": "装作没看见，继续走", "to": "ch2b", "aff": -3 }
-      ]
+  "beats": [
+    {
+      "id": "ch1",
+      "name": "放学后的走廊",
+      "scene": "放学后的走廊，樱花瓣从半开的窗缝里飘进来。她抱着一摞素描本往这边走，看见你，脚步慢了半拍，还是低声说了句「……早」。",
+      "goal": "她的素描本掉在地上，纸散了一地，你蹲下去帮她捡起来，还到她手里",
+      "tension": "她想说一件关于「下个月要搬走」的事，一直没开口",
+      "min_turns": 2,
+      "max_turns": 5,
+      "cg": "full body, standing in school corridor, holding a stack of sketchbooks against chest, cherry blossom petals floating in from window, school uniform, backlight, shy expression, afternoon"
     },
-
-    "ch2a": {
-      "title": "素描本",
-      "say": "她像是被吓了一跳，整个人往树干后面缩了半步，只露出半张脸。你注意到她脚边掉着一本翻开的素描本，风一吹，纸页哗哗地响。",
-      "cg": "upper body, half hiding behind tree trunk, only half face visible, nervous expression, sketchbook fallen on the ground, wind blowing pages, cherry petals",
-      "opts": [
-        { "k": "A", "t": "蹲下捡起素描本还给她", "to": "ch3a", "aff": 10 },
-        { "k": "B", "t": "道歉一声，转身走开", "to": "ch3b", "aff": -5 }
-      ]
+    {
+      "id": "ch2",
+      "name": "天台上的两个人",
+      "scene": "午休的天台，风很大。她背对着你站在栏杆边，校服口袋鼓着一角，像塞了张纸。听见你的脚步声，她肩膀明显绷紧了。",
+      "goal": "她终于问出「如果我搬走了，你会记得我吗」，并且你给了她一个明确的回答",
+      "tension": "她口袋里揣着一张转学申请，从早上到现在都没拿出来",
+      "min_turns": 2,
+      "max_turns": 6,
+      "cg": "full body, standing at rooftop railing with her back turned, hiding a piece of paper behind her back, sunset sky, wind blowing skirt, school rooftop"
     },
-
-    "ch2b": {
-      "title": "身后的声音",
-      "say": "你低下头加快脚步。走出七八步，身后传来一句很轻的话，被风削掉了一半，听不真切。",
-      "opts": [
-        { "k": "A", "t": "停下回头", "to": "ch3a", "aff": 2 },
-        { "k": "B", "t": "当作没听见", "to": "end_stranger", "aff": -5 }
-      ]
+    {
+      "id": "ch3",
+      "name": "雨季的最后一天",
+      "scene": "放学时下起了雨。你在校门口看见她，没撑伞，站在雨里，刘海贴在额头上，书包抱在胸前。她看见你，也没躲。",
+      "goal": "你在雨里找到她，把 ch2 里没说完的话说清楚，让她知道你听见了那个问题",
+      "tension": "明天一早她就要走了，行李已经收拾好",
+      "min_turns": 2,
+      "max_turns": 5,
+      "cg": "full body, standing in the rain without umbrella, wet hair, holding school bag against chest, school gate, rainy day, looking up"
     },
-
-    "ch3a": {
-      "title": "谢谢",
-      "say": "你把素描本递过去。她愣了一下才伸手接住，抱在怀里，小声说了句什么，声音小到几乎被樱花盖住。",
-      "opts": [
-        { "k": "A", "t": "蹲下来，跟她平视", "to": "end_good", "aff": 10 },
-        { "k": "B", "t": "站着等她说完", "to": "end_normal", "aff": 2 }
-      ]
-    },
-
-    "ch3b": {
-      "title": "沉默的道别",
-      "say": "她没有再看你。你走出操场，铁门在身后合上，发出很钝的一声响。回头时，那棵樱花树已经被人群挡住了。",
-      "end": "还差一点"
-    },
-
-    "end_stranger": {
-      "title": "擦肩而过",
-      "say": "你没有回头。走到校门口时，风又起了一阵，把几片花瓣吹到你肩上。你没有拂开，也没有想起那个站在树下的人。",
-      "end": "擦肩而过"
-    },
-
-    "end_normal": {
-      "title": "还差一点",
-      "say": "她低着头把话说完，声音还是很小。你听清了最后两个字，是「谢谢」。然后她抱着素描本，从你身边绕过去，走得很慢，但没有再回头。",
-      "end": "还差一点"
-    },
-
-    "end_good": {
-      "title": "樱花色的下午",
-      "say": "你蹲下来，视线和她齐平。她怔了几秒，忽然把素描本翻到某一页推到你面前——上面画的就是这棵樱花树，树下站着一个还没画完的人影。",
-      "cg": "crouching down at eye level, showing an open sketchbook toward viewer, cherry blossom tree drawing on the page, shy smile, blush, warm afternoon light, petals in the air, detailed background",
-      "end": "樱花色的下午"
+    {
+      "id": "ch4",
+      "name": "站台",
+      "scene": "清晨的站台，人不多。她拖着行李箱站在黄线后，手里捏着一张车票，指节发白。广播在报下一班车次。",
+      "goal": "列车进站之前，你做出最后的选择，并且真的说出口了",
+      "tension": "车票已经在她手里，她一直在等你说点什么",
+      "min_turns": 2,
+      "max_turns": 4,
+      "cg": "full body, standing on train platform with a suitcase, turning back to look, morning backlight, wind blowing hair, railway station"
     }
-  }
+  ],
+  "endings": [
+    {
+      "id": "good",
+      "when": "你说出了心里话，但没有强留她，她带着这句话上了车",
+      "end": "会再见的"
+    },
+    {
+      "id": "best",
+      "when": "你留住了她，或者她主动决定留下来",
+      "end": "樱花色的下午"
+    },
+    {
+      "id": "bad",
+      "when": "你到最后什么都没说出口，让她上了车",
+      "end": "擦肩而过"
+    }
+  ]
 }

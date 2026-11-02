@@ -1055,11 +1055,11 @@ class SessionRunner:
             self._deliver(False, "", [name], "", quiet_images=True)
 
     def _run_galgame_turn(self, batch):
-        """galgame 态的一轮：**1 次** LLM 调用，正文 + 选项一次发完，CG 挂后台。
+        """galgame 态的一轮：**1 次** LLM 调用，正文 + 建议动作一次发完，CG 挂后台。
 
-        跟扮演态是同一条路子（`_run_persona_turn`），差别在于**选项不走模型**
-        ——它从剧本里取（`galgame._opt_text`），模型只负责把这一幕演出来。所以
-        模型再弱也毁不掉分支。
+        跟扮演态是同一条路子（`_run_persona_turn`），差别在于模型要多交一份
+        结构化结果（正文 / 事实 / 好感 / 建议动作 / 是否翻章），由 `galgame`
+        校验后才落地。**翻章和状态范围的最终决定权在代码**：模型只提，改不动。
         """
         texts = [(it.get("text") or "").strip() for it in batch]
         texts = [t for t in texts if t]
@@ -1740,7 +1740,12 @@ class QQBot:
         # 排在 persona 之后：两者都以「整条消息」为判据，`gal 开局` 和
         # `#和泉纱雾` 互不干扰。进游戏之后这条会话由 _run_turn 分流到 galgame
         # 支路（见那里），不进普通聊天链。
-        gal = galgame.handle_command(session_key, text)
+        #
+        # `addressed` 把「这条消息在叫我」这件事一起传下去：群里发
+        # 「@大大怪 gal 开局」时正文可能带着名字（协议端把 at 段转成文本，
+        # 或者用户手打了昵称），不剥掉前缀就永远对不上 `gal` 开头。
+        gal = galgame.handle_command(
+            session_key, text, addressed=(at_me or trigger.called(text)))
         if gal is not None:
             try:
                 send = (qq_api.send_group if target == "group"
