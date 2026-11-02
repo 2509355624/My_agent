@@ -677,6 +677,20 @@ def create_work(qq, title=""):
     return wid
 
 
+def latest_open_work(qq):
+    """这个用户最近一个还没装满的作品集 id；一个都没有就返回 0。
+
+    上传默认往这里塞：凑满 100 张再开下一个，墙上不会散落一堆两三张的
+    小集。想单独开一个的时候由调用方传 `force_new` 绕开它。
+    """
+    with connect() as con:
+        row = con.execute(
+            "SELECT id FROM works WHERE src='user' AND owner=? AND n < ?"
+            " ORDER BY id DESC LIMIT 1",
+            (str(qq), WORK_MAX)).fetchone()
+    return int(row["id"]) if row else 0
+
+
 def own_work(qq, wid):
     """这个作品集是不是他自己的。→ (是, 已经存了几张)"""
     with connect() as con:
@@ -702,13 +716,27 @@ def append_upload(qq, wid, name, raw, idx=None):
     d = upload_dir(qq, wid)
     os.makedirs(d, exist_ok=True)
     with connect() as con:
-        row = con.execute("SELECT n FROM works WHERE id=?", (wid,)).fetchone()
-        used = int(row["n"] or 0) if row else 0
+        row = con.execute(
+            "SELECT COUNT(*) c, COALESCE(MAX(idx), -1) m FROM items"
+            " WHERE work_id=?", (wid,)).fetchone()
+    used = int(row["c"] or 0)
+    maxi = int(row["m"] if row["m"] is not None else -1)
     # 上限拦在这里而不是只拦在接口层：换个入口（旧批量上传）也绕不过去。
     # 同一个序号的重传（上一张失败后重试）不算新增，放行。
     if used >= WORK_MAX and (not idx or idx > used):
         raise WorkFull("这个作品集已经 %d 张了" % WORK_MAX)
-    i = idx if idx and idx > 0 else used + 1
+    # 序号按「现有最大 idx + 1」推，而不是「张数 + 1」：删过图的集张数和
+    # 最大序号对不上，按张数算会算出已经被占用的号，把旧文件直接覆盖掉。
+    #
+    # 显式给了 idx 的是「上一张失败后重传同一个号」，本来就该顶掉那一张，
+    # 不避让；只有自动取号才需要躲开已经存在的文件——躲是为了防静默丢图，
+    # 不是为了防重传。
+    if idx and idx > 0:
+        i = idx
+    else:
+        i = maxi + 2
+        while os.path.exists(os.path.join(d, "%03d.webp" % i)):
+            i += 1
 
     p = os.path.join(d, "%03d.webp" % i)
     with Image.open(BytesIO(raw)) as im:
@@ -748,13 +776,16 @@ def abort_upload(qq, wid):
     return True
 
 
-def save_upload(qq, files):
-    """一次传多张：开壳 + 逐张落盘。→ (work_id, 存了几张)
+def save_upload(qq, files, force_new=False):
+    """一次传多张：并入最近一集（或者新开）+ 逐张落盘。→ (work_id, 存了几张)
 
     files: [(filename, bytes)]，已由调用方做过大小检查。
-    逐张上传的接口走 create_work + append_upload，这里是批量兜底。
+    逐张上传的接口走 latest_open_work + append_upload，这里是批量兜底。
+    默认和逐张一致：没装满的那个集先填，`force_new=True` 才另起一个。
     """
-    wid = create_work(qq)
+    wid = 0 if force_new else latest_open_work(qq)
+    if not wid:
+        wid = create_work(qq)
     n = 0
     for i, (name, raw) in enumerate(files, 1):
         try:
@@ -799,6 +830,100 @@ def delete_work(wid, owner=None):
     except OSError:
         pass
     return True, ""
+
+
+def _drop_cache(src):
+    """删掉某张图的缩略图/预览缓存。源文件删掉或改名之后调。"""
+    for kind in ("t", "v"):
+        p = cache_path(src, kind)
+        try:
+            if os.path.isfile(p):
+                os.remove(p)
+        except OSError:
+            pass
+
+
+def _reindex_items(con, wid):
+    """把作品集里的图重排成 idx 0..n-1、文件名 001..n.webp。
+
+    删掉中间一张之后必须调：`append_upload` 按「最大序号 + 1」取号，洞
+    留多了文件名会一路跳号，idx 和文件名也对不上，翻到第几张全靠 idx 撑。
+    一次排干净最省事。
+
+    两阶段改名：先把该动的都挪到 `.reidx` 临时名，再落最终名。直接 A→B
+    会在「B 这个序号正好还被别人占着」的时候互相踩。
+    """
+    rows = con.execute(
+        "SELECT id, path FROM items WHERE work_id=? ORDER BY idx, id",
+        (wid,)).fetchall()
+    moves = []
+    for pos, r in enumerate(rows):
+        old = r["path"]
+        folder = os.path.dirname(old) or "."
+        dst = os.path.join(folder, "%03d.webp" % (pos + 1))
+        tmp = None
+        if os.path.abspath(old) != os.path.abspath(dst) and os.path.isfile(old):
+            tmp = dst + ".reidx"
+            try:
+                if os.path.isfile(tmp):
+                    os.remove(tmp)
+                os.replace(old, tmp)
+            except OSError:
+                log.warning("重排序号：暂存失败 %s", old, exc_info=True)
+                tmp = None
+        moves.append((r["id"], pos, old, tmp, dst))
+    for iid, pos, old, tmp, dst in moves:
+        if tmp:
+            try:
+                os.replace(tmp, dst)
+            except OSError:
+                log.warning("重排序号：落位失败 %s", dst, exc_info=True)
+        if os.path.abspath(old) != os.path.abspath(dst):
+            _drop_cache(old)          # 缓存按路径哈希，改名之后旧的就是垃圾
+        con.execute("UPDATE items SET idx=?, path=? WHERE id=?",
+                    (pos, dst, iid))
+
+
+def delete_item(qq, iid, is_owner=False):
+    """删作品集里的一张图。→ (ok, why, work_id)
+
+    只删得掉群友上传的（src='user'）。站主那批磁盘目录不从这里删：DB 里
+    删了下一次扫描又会回来，还会顺手把别人点的赞和收藏一起弄丢——那批图
+    归磁盘管。
+
+    顺序是「删记录 → 删文件 → 重排序号」。文件必须在重排之前删掉：待删的
+    这张还占着某个序号，后面那张要顶到它的位置上来，先改名就会被随后的
+    删除一并干掉。
+    """
+    with connect() as con:
+        row = con.execute(
+            "SELECT i.id, i.work_id, i.path, w.src, w.owner FROM items i"
+            " JOIN works w ON w.id=i.work_id WHERE i.id=?", (iid,)).fetchone()
+        if not row:
+            return False, "没这张图", 0
+        wid = int(row["work_id"])
+        if row["src"] == "owner":
+            return False, "站主作品集的图请到磁盘上删", wid
+        if str(row["owner"]) != str(qq) and not is_owner:
+            return False, "只能删自己的", wid
+
+        src = row["path"]
+        con.execute("DELETE FROM marks WHERE item_id=?", (iid,))
+        con.execute("DELETE FROM items WHERE id=?", (iid,))
+        try:
+            if os.path.isfile(src):
+                os.remove(src)
+        except OSError:
+            log.warning("删图：文件删不掉 %s", src, exc_info=True)
+        _drop_cache(src)
+        _reindex_items(con, wid)
+        left = con.execute("SELECT COUNT(*) c FROM items WHERE work_id=?",
+                           (wid,)).fetchone()["c"]
+        con.execute(
+            "UPDATE works SET n=?,"
+            " cover=COALESCE((SELECT path FROM items WHERE work_id=works.id"
+            " ORDER BY idx LIMIT 1),'') WHERE id=?", (left, wid))
+    return True, "", wid
 
 
 def drop_orphans():

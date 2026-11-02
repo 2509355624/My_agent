@@ -318,6 +318,7 @@
     <button class="act" id="vlike">♡ <b id="vlikec">0</b></button>
     <button class="act fav" id="vfav">☆ 收藏</button>
     <button class="act" id="vdl">↓ 下载</button>
+    <button class="act" id="vdelone" title="删掉这一张" style="display:none">删这张</button>
   </div>
 </div>
 
@@ -325,8 +326,13 @@
 <div id="up">
   <div class="sheet">
     <h3 id="upttl">上传作品集</h3>
-    <p>一次选多张，就是一个作品集。上传会压成 1600px 的 WebP，原图不用你管。</p>
+    <p>默认并进你上一个没装满的作品集，凑满 100 张才开新的。上传会压成
+      1600px 的 WebP，原图不用你管。</p>
     <input type="text" id="uptitle" placeholder="给这个作品集起个名字" maxlength="40">
+    <label id="newline" style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--dim);padding:0 0 10px">
+      <input type="checkbox" id="upnew" style="width:16px;height:16px">
+      单独开一个新作品集
+    </label>
     <label class="pick" id="pick">＋ 选择图片（最多 10 张）
       <input type="file" id="file" accept="image/*" multiple hidden>
     </label>
@@ -947,6 +953,7 @@
     $("vby").textContent = S.cur.by +
       (S.cur.n > 1 ? " · " + S.cur.n + " 张" : "");
     $("vdel").style.display = S.cur.can_delete ? "" : "none";
+    $("vdelone").style.display = S.cur.can_delete ? "" : "none";
     buildTrack();
     $("viewer").classList.add("on");
     var n = Math.max(0, Math.min(S.items.length - 1, i || 0));
@@ -1124,6 +1131,39 @@
                  "." + (it.ext || "webp");
     a.click();
   };
+  // 删单张：只在自己作品集的查看器里出现。删完不重新拉整集——本地先摘掉
+  // 那一条，停在原来的位置看下一张，省一次往返，也不会跳回网格。
+  $("vdelone").onclick = function () {
+    var it = S.items[S.idx];
+    if (!it || !S.cur || !S.cur.can_delete) return;
+    if (!confirm("删掉这一张？删了不能恢复。")) return;
+    var at = S.idx;
+    fetch("/api/gal/item/" + it.id, { method: "DELETE" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) throw new Error(d.error || "删除失败");
+        S.items.splice(at, 1);
+        if (S.cur) S.cur.n = Math.max(0, (S.cur.n || 1) - 1);
+        PIC.delete(picKey(it.id, "t"));
+        PIC.delete(picKey(it.id, "v"));
+        if (!S.items.length) {
+          // 一张不剩：作品集还在库里（留着下次上传接着填），但墙上不显示
+          // 空集，所以退回墙上去，别停在一个空查看器里。
+          toast("删完了，这个作品集空了");
+          closeViewer();
+          closeDetail();
+          load(true);
+          return;
+        }
+        buildTrack();
+        $("vtitle").textContent = S.cur.title;
+        $("vby").textContent = S.cur.by +
+          (S.cur.n > 1 ? " · " + S.cur.n + " 张" : "");
+        go(Math.min(at, S.items.length - 1), true);
+        toast("已删除这张");
+      }).catch(function (e) { toast(e.message); });
+  };
+
   $("vdel").onclick = function () {
     if (!S.cur || !confirm("删掉整个作品集？图片会一起删，不能恢复。")) return;
     fetch("/api/gal/work/" + S.cur.id, { method: "DELETE" })
@@ -1322,6 +1362,9 @@
     $("pick").classList.remove("has");
     $("upttl").textContent = upWid ? "往作品集里加图" : "上传作品集";
     $("uptitle").style.display = upWid ? "none" : "";
+    // 往已有作品集加图时这条没意义——目标已经定死了
+    $("newline").style.display = upWid ? "none" : "flex";
+    $("upnew").checked = false;
     $("pick").firstChild.textContent = pickHint();
     $("upsubmit").disabled = true;
     $("upsubmit").textContent = "上传";
@@ -1365,6 +1408,7 @@
     var total = picked.length;
     var wid = upWid || 0, ok = 0, bad = 0, inB = 0, outB = 0, upB = 0;
     var lastErr = "";
+    var mergedName = "";        // 并进了哪个已有作品集（非空才提示）
     // 三个计时：整批、压缩、纯上传（不含服务端落盘）。
     // 10 张等了一百多秒的时候，光看"处理中"根本不知道慢在浏览器还是网络。
     var tAll = performance.now(), tComp = 0, tUp = 0;
@@ -1405,7 +1449,10 @@
       var saved = outB < inB ? " · " + mb(inB) + "→" + mb(outB) : "";
       var split = "（压缩 " + secs(tComp) + " / 上传 " + secs(tUp)
                 + (upB ? " · " + speed(upB, tUp) : "") + "）";
-      toast((adding ? "又加了 " : "传好了，") + ok + " 张 · 共 "
+      var head = adding ? "又加了 "
+               : mergedName ? "并到《" + mergedName + "》，加了 "
+               : "传好了，";
+      toast(head + ok + " 张 · 共 "
             + secs(performance.now() - tAll) + split + saved
             + (bad ? "，失败 " + bad + " 张" : ""), 6000);
       closeUpload();
@@ -1436,7 +1483,12 @@
     function send(i, f) {
       var fd = new FormData();
       fd.append("title", title);
-      if (wid) fd.append("wid", wid);
+      if (wid) {
+        fd.append("wid", wid);
+      } else if ($("upnew").checked) {
+        // 只有第一张才决定「新建还是并入」：后面几张已经认准同一个集了
+        fd.append("force_new", "1");
+      }
       fd.append("file", f, f.name);
       var xhr = new XMLHttpRequest();
       xhr.open("POST", "/api/gal/upload/one");
@@ -1455,7 +1507,11 @@
       xhr.onload = function () {
         var d = {};
         try { d = JSON.parse(xhr.responseText) || {}; } catch (e) {}
-        if (d.ok) { wid = d.work_id; ok++; }
+        if (d.ok) {
+          wid = d.work_id; ok++;
+          // 第一张回来才知道落到哪个集：不是新建的就记下人家的名字
+          if (!adding && d.new === false && !mergedName) mergedName = d.title;
+        }
         else { bad++; lastErr = d.error || "上传失败"; }
         step(i + 1);
       };

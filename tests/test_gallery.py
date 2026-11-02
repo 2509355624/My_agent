@@ -1125,3 +1125,208 @@ class WarmCacheTest(_Base):
         self.assertEqual(missing, [b])
 
 
+class DeleteItemTest(_Base):
+    """删单张：权限、文件、重排序号。
+
+    最要紧的一条是「删了中间一张之后再传一张，不能把别人顶掉」——
+    append_upload 拿序号当文件名，序号没排干净就是静默覆盖，看着像丢了图。
+    """
+
+    def _webp(self, color=(10, 20, 30)):
+        b = io.BytesIO()
+        Image.new("RGB", (1600, 1200), color).save(b, "WEBP", quality=85)
+        return b.getvalue()
+
+    def _items(self, wid):
+        with gallery.connect() as con:
+            return [dict(r) for r in con.execute(
+                "SELECT * FROM items WHERE work_id=? ORDER BY idx", (wid,))]
+
+    def _work(self, wid):
+        with gallery.connect() as con:
+            r = con.execute("SELECT * FROM works WHERE id=?",
+                            (wid,)).fetchone()
+        return dict(r) if r else None
+
+    def _make(self, qq="20005", n=5):
+        wid = gallery.create_work(qq, "删图测试")
+        for i in range(n):
+            gallery.append_upload(qq, wid, "a.webp",
+                                  self._webp((i * 20, 30, 40)))
+        return wid
+
+    def test_delete_middle_reindexes_and_keeps_files(self):
+        wid = self._make(n=5)
+        before = {i["id"] for i in self._items(wid)}
+        victim = self._items(wid)[2]
+        ok, why, got = gallery.delete_item("20005", victim["id"])
+        self.assertTrue(ok, why)
+        self.assertEqual(got, wid)
+
+        left = self._items(wid)
+        self.assertEqual(len(left), 4)
+        self.assertEqual([i["idx"] for i in left], [0, 1, 2, 3])
+        self.assertEqual(sorted(os.path.basename(i["path"]) for i in left),
+                         ["001.webp", "002.webp", "003.webp", "004.webp"])
+        for i in left:
+            self.assertTrue(os.path.isfile(i["path"]), i["path"])
+        # 路径会被顶上来复用（003.webp 现在是原来第 4 张），所以这里按
+        # item id 判断，不能按路径——剩下 4 条正好是原来 5 条去掉被删那条。
+        self.assertNotIn(victim["id"], [i["id"] for i in left])
+        self.assertEqual({i["id"] for i in left}, before - {victim["id"]})
+        self.assertEqual(self._work(wid)["n"], 4)
+
+    def test_delete_cover_moves_cover_to_next(self):
+        wid = self._make(n=3)
+        gallery.delete_item("20005", self._items(wid)[0]["id"])
+        left = self._items(wid)
+        self.assertEqual(self._work(wid)["cover"], left[0]["path"])
+
+    def test_append_after_delete_does_not_overwrite(self):
+        """删一张再传一张：老图不能被顶掉。"""
+        wid = self._make(n=4)
+        before = {i["id"] for i in self._items(wid)}
+        victim = self._items(wid)[1]
+        gallery.delete_item("20005", victim["id"])
+
+        n = gallery.append_upload("20005", wid, "new.webp", self._webp())
+        after = self._items(wid)
+        self.assertEqual(len(after), 4)
+        self.assertEqual([i["idx"] for i in after], [0, 1, 2, 3])
+        self.assertTrue((before - {victim["id"]}).issubset(
+            {i["id"] for i in after}))
+        self.assertEqual(n, 4)
+        for i in after:
+            self.assertTrue(os.path.isfile(i["path"]), i["path"])
+
+    def test_only_author_or_owner_can_delete(self):
+        wid = self._make(qq="20005", n=2)
+        iid = self._items(wid)[0]["id"]
+        ok, _why, _ = gallery.delete_item("30003", iid)
+        self.assertFalse(ok)
+        ok, _why, _ = gallery.delete_item("30003", iid, is_owner=True)
+        self.assertTrue(ok)
+
+    def test_missing_item_is_not_an_error_with_work(self):
+        ok, _why, wid = gallery.delete_item("20005", 999999)
+        self.assertFalse(ok)
+        self.assertEqual(wid, 0)
+
+    def test_disk_work_cannot_be_deleted_from_web(self):
+        self.mk("35")
+        gallery.scan([("图库", self.root, "图库")])
+        wid = self.works()[0]["id"]
+        iid = self._items(wid)[0]["id"]
+        ok, why, _ = gallery.delete_item("20005", iid, is_owner=True)
+        self.assertFalse(ok)
+        self.assertIn("磁盘", why)
+
+    def test_marks_go_with_the_image(self):
+        wid = self._make(qq="20005", n=2)
+        iid = self._items(wid)[0]["id"]
+        with gallery.connect() as con:
+            con.execute("INSERT INTO marks(qq,item_id,kind,ts)"
+                        " VALUES(?,?,?,?)", ("30003", iid, "like", time.time()))
+        gallery.delete_item("20005", iid)
+        with gallery.connect() as con:
+            c = con.execute("SELECT COUNT(*) c FROM marks WHERE item_id=?",
+                            (iid,)).fetchone()["c"]
+        self.assertEqual(c, 0)
+
+
+class DeleteItemApiTest(_Base):
+    def setUp(self):
+        super().setUp()
+        from flask import Flask
+        self.app = Flask(__name__)
+        self.app.register_blueprint(gallery_api.bp)
+        self.c = self.app.test_client()
+        self.h = {"X-Friend-Token": "tok"}
+        for target, attr, val in ((friend_auth, "secret", lambda: "tok"),
+                                  (gallery_api, "GALLERY_OWNER_QQ", "10001")):
+            p = mock.patch.object(target, attr, val)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _one(self, qq="20002"):
+        return self.c.post(
+            "/api/gal/upload?qq=" + qq,
+            data={"title": "t", "files": [(io.BytesIO(_png()), "x.png")]},
+            headers=self.h, content_type="multipart/form-data").get_json()
+
+    def test_delete_single_image(self):
+        wid = self._one()["work_id"]
+        iid = self.c.get("/api/gal/work/%d?qq=20002" % wid,
+                         headers=self.h).get_json()["items"][0]["id"]
+        r = self.c.delete("/api/gal/item/%d?qq=20002" % iid, headers=self.h)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["left"], 0)
+
+    def test_others_cannot_delete_single_image(self):
+        wid = self._one()["work_id"]
+        iid = self.c.get("/api/gal/work/%d?qq=20002" % wid,
+                         headers=self.h).get_json()["items"][0]["id"]
+        r = self.c.delete("/api/gal/item/%d?qq=30003" % iid, headers=self.h)
+        self.assertEqual(r.status_code, 403)
+
+    def test_missing_image_is_404(self):
+        r = self.c.delete("/api/gal/item/999999?qq=20002", headers=self.h)
+        self.assertEqual(r.status_code, 404)
+
+
+class MergeUploadTest(_Base):
+    """默认并进最近一个没装满的作品集，凑满 100 张才开下一个。"""
+
+    def setUp(self):
+        super().setUp()
+        from flask import Flask
+        self.app = Flask(__name__)
+        self.app.register_blueprint(gallery_api.bp)
+        self.c = self.app.test_client()
+        self.h = {"X-Friend-Token": "tok"}
+        for target, attr, val in ((friend_auth, "secret", lambda: "tok"),
+                                  (gallery_api, "GALLERY_OWNER_QQ", "10001")):
+            p = mock.patch.object(target, attr, val)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _up(self, qq="20006", force_new=False, title="t"):
+        data = {"title": title,
+                "files": [(io.BytesIO(_png()), "x.png")]}
+        if force_new:
+            data["force_new"] = "1"
+        return self.c.post("/api/gal/upload?qq=" + qq, data=data,
+                           headers=self.h,
+                           content_type="multipart/form-data").get_json()
+
+    def test_second_upload_merges_into_the_first(self):
+        a = self._up()
+        b = self._up()
+        self.assertEqual(a["work_id"], b["work_id"])
+        self.assertTrue(b["merged"])
+
+    def test_force_new_makes_another_one(self):
+        a = self._up()
+        b = self._up(force_new=True)
+        self.assertNotEqual(a["work_id"], b["work_id"])
+        self.assertFalse(b["merged"])
+
+    def test_full_work_starts_a_new_one(self):
+        a = self._up()
+        with mock.patch.object(gallery, "WORK_MAX", 1):
+            b = self._up()
+        self.assertNotEqual(a["work_id"], b["work_id"])
+
+    def test_two_users_never_share(self):
+        self.assertNotEqual(self._up(qq="20006")["work_id"],
+                            self._up(qq="20007")["work_id"])
+
+    def test_merge_keeps_the_original_title(self):
+        self._up(title="第一个")
+        d = self._up(title="第二个")
+        with gallery.connect() as con:
+            t = con.execute("SELECT title FROM works WHERE id=?",
+                            (d["work_id"],)).fetchone()["title"]
+        self.assertEqual(t, "第一个")
+
+

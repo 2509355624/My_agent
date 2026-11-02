@@ -620,6 +620,29 @@ def api_delete_work(wid):
     return jsonify({"ok": True})
 
 
+@bp.route("/item/<int:iid>", methods=["DELETE"])
+def api_delete_item(iid):
+    """删作品集里的一张图。
+
+    作者本人删自己的，站主能删任何人的——但都只限群友上传的那批
+    （src='user'）。站主磁盘目录里的图不从这里删：删了下次扫描又回来，
+    还顺带把别人点的赞和收藏一起弄丢。
+    """
+    bad = _guard()
+    if bad:
+        return bad
+    qq = _qq()
+    if not qq:
+        return jsonify({"ok": False, "error": "参数不对"}), 400
+    ok, why, wid = gallery.delete_item(qq, iid, is_owner=_is_owner(qq))
+    if not ok:
+        return jsonify({"ok": False, "error": why}), (404 if not wid else 403)
+    with gallery.connect() as con:
+        row = con.execute("SELECT n FROM works WHERE id=?", (wid,)).fetchone()
+    return jsonify({"ok": True, "work_id": wid,
+                    "left": int(row["n"] or 0) if row else 0})
+
+
 # ─── 群友上传 ────────────────────────────────────────────
 
 @bp.route("/upload", methods=["POST"])
@@ -657,13 +680,18 @@ def api_upload():
     if not payload:
         return jsonify({"ok": False, "error": "没收到图片"}), 400
 
-    wid, n = gallery.save_upload(qq, payload)
+    force_new = str(request.form.get("force_new") or "").strip() in ("1", "true", "yes")
+    # 先记下「按当前状态会落到哪个集」：落点是自己就等于合并，这时候不能
+    # 拿这次填的标题去覆盖人家原来的名字。
+    target = 0 if force_new else gallery.latest_open_work(qq)
+    wid, n = gallery.save_upload(qq, payload, force_new=force_new)
     if not wid:
         return jsonify({"ok": False, "error": "图片都转码失败了"}), 500
-    with gallery.connect() as con:
-        con.execute("UPDATE works SET title=? WHERE id=?",
-                    (title or "未命名作品", wid))
-    return jsonify({"ok": True, "work_id": wid, "n": n})
+    if wid != target:
+        with gallery.connect() as con:
+            con.execute("UPDATE works SET title=? WHERE id=?",
+                        (title or "未命名作品", wid))
+    return jsonify({"ok": True, "work_id": wid, "n": n, "merged": wid == target})
 
 
 @bp.route("/upload/one", methods=["POST"])
@@ -699,6 +727,8 @@ def api_upload_one():
         wid = int(str(request.form.get("wid") or "0"))
     except ValueError:
         wid = 0
+    force_new = str(request.form.get("force_new") or "").strip() in ("1", "true", "yes")
+    made = False
     if wid:
         mine, used = gallery.own_work(qq, wid)
         if not mine:
@@ -709,7 +739,13 @@ def api_upload_one():
                             "error": "这个作品集已经 %d 张，传满了"
                                      % gallery.WORK_MAX}), 400
     else:
-        wid = gallery.create_work(qq, title or "未命名作品")
+        # 默认并进最近一个还没装满的集——100 张填满再开下一个，墙上不会
+        # 散落一堆两三张的小集。勾了「新建作品集」才跳过这一步。
+        if not force_new:
+            wid = gallery.latest_open_work(qq)
+        if not wid:
+            wid = gallery.create_work(qq, title or "未命名作品")
+            made = True
 
     try:
         idx = gallery.append_upload(qq, wid, f.filename, raw)
@@ -722,8 +758,13 @@ def api_upload_one():
         return jsonify({"ok": False,
                         "error": "这张转码失败，换一张试试"}), 500
     _, n = gallery.own_work(qq, wid)
+    with gallery.connect() as con:
+        trow = con.execute("SELECT title FROM works WHERE id=?",
+                           (wid,)).fetchone()
     return jsonify({"ok": True, "work_id": wid, "n": n, "idx": idx,
-                    "left": max(0, gallery.WORK_MAX - n)})
+                    "left": max(0, gallery.WORK_MAX - n),
+                    "new": made,
+                    "title": (trow["title"] or "") if trow else ""})
 
 
 @bp.route("/upload/abort", methods=["POST"])
