@@ -1703,7 +1703,10 @@ class PersonaTurnTest(unittest.TestCase):
 
     def test_reply_goes_out_and_draw_starts(self):
         runner = self._runner()
-        turn = qq_bot.persona.Turn("你好呀", "1girl, sitting, smile")
+        # 2026-11-02：配图要过门槛（情绪强度 >= 7 或换衣），所以这里给强度 8。
+        # 没改门槛之前是「有画面行就出图」，这轮改成有条件的。
+        turn = qq_bot.persona.Turn("你好呀", "1girl, sitting, smile",
+                                   "害羞", 8, "坐在桌前 · 白T恤")
         with mock.patch.object(qq_bot.persona, "run_turn", return_value=turn), \
              mock.patch.object(runner, "_deliver") as dv, \
              mock.patch.object(qq_bot.threading, "Thread") as th:
@@ -1711,12 +1714,26 @@ class PersonaTurnTest(unittest.TestCase):
         self.assertEqual(dv.call_args[0][1], "你好呀")           # 正文
         self.assertEqual(dv.call_args[1]["reply_to"], "m1")     # 引用触发那句
         th.assert_called_once()
-        self.assertEqual(th.call_args[1]["args"], ("1girl, sitting, smile",))
+        # args 现在是 (画面, reply_to, 她说的话, 状态)——后两个用来做 caption
+        # 和服装词，见 `_draw_persona` 的说明。
+        self.assertEqual(th.call_args[1]["args"],
+                         ("1girl, sitting, smile", "m1", "你好呀",
+                          "坐在桌前 · 白T恤"))
+
+    def test_low_intensity_skips_draw(self):
+        """情绪不强、状态也没变 → 不出图（2026-11-02 加的门槛）。"""
+        runner = self._runner()
+        turn = qq_bot.persona.Turn("嗯。", "1girl, sitting", "平静", 3, "坐在桌前")
+        with mock.patch.object(qq_bot.persona, "run_turn", return_value=turn), \
+             mock.patch.object(runner, "_deliver"), \
+             mock.patch.object(qq_bot.threading, "Thread") as th:
+            runner._run_persona_turn(self._batch())
+        th.assert_not_called()
 
     def test_no_scene_line_means_no_draw(self):
         """模型没写「画面：」那一行 → 这一轮不出图（代码不兜底凑一张）。"""
         runner = self._runner()
-        turn = qq_bot.persona.Turn("你好呀", "")
+        turn = qq_bot.persona.Turn("你好呀", "", "害羞", 8, "")
         with mock.patch.object(qq_bot.persona, "run_turn", return_value=turn), \
              mock.patch.object(runner, "_deliver") as dv, \
              mock.patch.object(qq_bot.threading, "Thread") as th:
@@ -1741,8 +1758,10 @@ class PersonaTurnTest(unittest.TestCase):
              mock.patch.object(runner, "_deliver") as dv:
             runner._draw_persona("1girl")
         dr.assert_called_once()
-        # 只发图、不带文字；被审核拦下时也不吭声（quiet_images）
-        dv.assert_called_once_with(False, "", ["a.png"], "", quiet_images=True)
+        # 只发图、不带文字；被审核拦下时也不吭声（quiet_images）。
+        # 2026-11-02 起多传一个 reply_to（图要引用玩家那条消息）。
+        dv.assert_called_once_with(False, "", ["a.png"], "", quiet_images=True,
+                                   reply_to="")
 
     def test_draw_failure_changes_nothing_in_the_chat(self):
         """画不出来就画不出来——聊天那边一个字都不该多。"""
