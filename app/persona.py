@@ -118,32 +118,54 @@ NOTE_EVERY_TURNS = 10
 DEBOUNCE_SECONDS = 10.0
 
 _CONTRACT = (
-    "【输出格式：必须遵守】\n"
-    "你每一轮都必须按下面这个格式输出，四行，缺一行都不行：\n"
     "\n"
-    "第一行起：正文。以这个角色的口吻说想说的话，就像真的在跟他聊天。\n"
-    "想写心里想的事，就写在括号里。正文可以多行。\n"
+    "## 输出格式\n"
     "\n"
-    "正文结束后，**空一行**，然后严格按顺序写下面三行，每行以行首的中文标签开头：\n"
+    "每一轮都必须按下面四段输出，**缺一段都不行**：\n"
     "\n"
-    "画面：<英文一行>\n"
-    "心情：<情绪> 强度<0~10 的整数>\n"
-    "状态：<中文一句话>\n"
+    "1. **正文** —— 以这个角色的口吻说想说的话，就像真的在跟他聊天。"
+    "心里想的事写在括号里。正文可以多行。\n"
+    "2. **`画面：`** —— 英文一行。\n"
+    "3. **`心情：`** —— 情绪 + 强度。\n"
+    "4. **`状态：`** —— 中文一句话。\n"
     "\n"
-    "这三行是**格式要求，不是正文**，不要用括号包、不要改标签名、不要写进对话里。"
+    "正文之后空一行，然后严格按 2→3→4 的顺序写三行，每行以行首的中文标签开头。"
+    "这三行是格式要求，不是正文：不要用括号包、不要改标签名、不要写进对话里。\n"
     "\n"
-    "【画面】用英文写一行：属性用标签（小写，多词用下划线），方位和互动用英文\n"
-    "短语补（`on the left side of the desk`、`holding a mug in her right hand`）——\n"
-    "在哪、在做什么、什么表情、什么东西在她哪一侧、什么镜头、什么光。\n"
-    "她长什么样不用你写，我照角色卡上的样子画。\n"
+    "## 画面\n"
     "\n"
-    "【心情】情绪只能从这十个里挑**一个**，不许自己编：" + " / ".join(MOODS) + "\n"
+    "用英文写一行，属性用标签（小写，多词用下划线），方位和互动用英文短语补，"
+    "例如 `on the left side of the desk`、`holding a mug in her right hand`。\n"
+    "\n"
+    "要写清：在哪、在做什么、什么表情、什么东西在她哪一侧、什么镜头、什么光。\n"
+    "\n"
+    "**她长什么样不用写，我照角色卡上的样子画。**\n"
+    "\n"
+    "## 心情\n"
+    "\n"
+    "格式：`情绪 强度N`，N 是 0~10 的整数。\n"
+    "\n"
+    "情绪只能从这十个里挑**一个**，不许自己编：\n"
+    + " / ".join(MOODS) + "\n"
+    "\n"
     "强度说这一下来的有多猛：4 以下当作平常，7 以上我才会给她配一张图。\n"
     "\n"
-    "【状态】她此刻身上的客观状态，用「·」分成几段：在哪、穿什么（具体到哪件、\n"
-    "什么状态）、跟她有没有肢体接触。\n"
-    "例：`状态：靠窗坐着 · 白衬衫解开两粒扣 · 你扶着她的肩`\n"
-    "状态是**接着上一轮往下写的**：上一轮脱掉的外套这一轮不会自己穿回去。"
+    "## 状态\n"
+    "\n"
+    "她此刻身上的客观状态，用「·」分成几段，**三段都要有**：\n"
+    "\n"
+    "- 在哪\n"
+    "- **穿什么**（具体到哪件、什么状态。这一项最重要，直接决定画面里她穿什么）\n"
+    "- 跟他有没有肢体接触\n"
+    "\n"
+    "示例：`靠窗坐着 · 白衬衫解开两粒扣 · 你扶着她的肩`\n"
+    "\n"
+    "两条硬规则：\n"
+    "\n"
+    "- **穿着必须写清楚**。写「宽松白T恤和居家短裤」「浴袍」「只裹着浴巾」，"
+    "不写空、不写「穿着衣服」这种含糊话。\n"
+    "- **状态接着上一轮往下写**。上一轮脱掉的外套这一轮不会自己穿回去；"
+    "上一轮已经全裸，这一轮就写全裸，不要凭空给她穿回衣服。\n"
 )
 
 _NOTE_PROMPT = (
@@ -540,8 +562,8 @@ def build_head(card, session_key, sender, note="", state=""):
     if note.strip():
         parts.append("【之前的事】\n" + note.strip())
     if str(state or "").strip():
-        parts.append("【她此刻的样子】\n" + str(state).strip()
-                     + "\n（这是上一轮结束时的状态，接着它往下演，"
+        parts.append("## 她此刻的样子\n\n" + str(state).strip()
+                     + "\n\n（这是上一轮结束时的状态，接着它往下演，"
                        "不要自己给她换回原来的衣服）")
     return "\n\n".join(parts)
 
@@ -554,10 +576,10 @@ def _env_note(session_key, sender):
     """
     target, _, tid = (session_key or "").partition("_")
     if target == "group":
-        return ("【当前环境】你在一个 QQ 群里（群号 %s），群里有很多人。"
+        return ("## 当前环境\n\n你在一个 QQ 群里（群号 %s），群里有很多人。"
                 "刚才跟你说话的是%s，回他一个就行，别管其他人。"
                 % (tid, sender or "群里某个人"))
-    return "【当前环境】你在跟一个人私聊（QQ %s）。" % tid
+    return "## 当前环境\n\n你在跟一个人私聊（QQ %s）。" % tid
 
 
 def run_turn(session_key, text, target, sender=""):
@@ -890,46 +912,16 @@ def _session_target(session_key):
     return target, tid
 
 
-# 扮演态配图**追加**到渠道负面词后面的一段（2026-11-02）。
+# 2026-11-02 撤掉：原来这里有一段给「不许裸」追加负面词（`nude, naked,
+# topless...`）的 `_apply_nude_neg`，理由是 silver 那套 LoRA 裸体倾向强。
 #
-# 为什么要加：`silver` 的负面只有 `worst quality, low quality, score_1...` 这种
-# 画质词，**一个字都没提服装和身体**。而它烘焙的 6 个 LoRA 里有
-# `_cowani_epoch_10` @0.8 这类裸体倾向很强的角色 LoRA，cfg=1 时正面提示词里
-# 只要没有明确的服装词，输出就是裸体（实测两次：一次 fast 渠道、一次 silver）。
+# 实测推翻了那个判断：几轮出裸图的提示词里**一个服装词都没有**——模型只写了
+# 动作、表情、镜头，没写穿什么，模型只能落回先验。补上 `grey hoodie,
+# lounge shorts` 之后立刻就穿回去了，负面词根本没参与。
 #
-# 这里只封「没穿衣服」这一类，不封姿势、不封表情——日常场景里她本来就该穿着
-# 家居服和人聊天。真要脱，正面提示词会明写，到那时这段负面反而是**障碍**，
-# 所以 `draw()` 支持 `allow_nude=True` 跳过它。
-_NUDE_NEG = ("nude, naked, topless, bottomless, nipples, areola, genitals, "
-             "completely undressed, exposed breasts, exposed chest, underwear only")
-
-
-def _apply_nude_neg(wf, allow_nude=False):
-    """把 `_NUDE_NEG` 拼到工作流里所有 CLIPTextEncode 负面节点的末尾。
-
-    判据：节点 id 是不是被 KSampler 的 `negative` 输入引用。这样不用记节点号
-    （渠道换了照样能找到），也不会误改正面节点。
-    """
-    if allow_nude or not isinstance(wf, dict):
-        return wf
-    neg_ids = set()
-    for node in wf.values():
-        if not isinstance(node, dict):
-            continue
-        if node.get("class_type") in ("KSampler", "KSamplerAdvanced"):
-            ref = (node.get("inputs") or {}).get("negative")
-            if isinstance(ref, list) and ref:
-                neg_ids.add(str(ref[0]))
-    for nid in neg_ids:
-        node = wf.get(nid)
-        if not isinstance(node, dict) or node.get("class_type") != "CLIPTextEncode":
-            continue
-        inp = node.setdefault("inputs", {})
-        cur = str(inp.get("text") or "").strip().rstrip(",")
-        if "nude" in cur:
-            continue
-        inp["text"] = (cur + ", " + _NUDE_NEG) if cur else _NUDE_NEG
-    return wf
+# 而且 cfg=1 的 turbo 档里负面词本就没多少效果，那段反而会把「她真的脱了」
+# 这个场景一并压住——用户要的恰恰是「状态里写什么就是什么」。所以整段删掉，
+# 服装完全交给正面提示词里 `状态` 行翻译出来的标签。
 
 
 def draw(scene, card, session_key, reply_to="", state=""):
@@ -963,9 +955,6 @@ def draw(scene, card, session_key, reply_to="", state=""):
     if wf is None:
         log.warning("扮演配图渠道 %s 没有文生图工作流", FAST_SKILL)
         return ""
-    # 默认追加「不许裸」的负面段（见 `_NUDE_NEG`）。她这一轮的「状态」里明说了
-    # 穿什么，就不该光着——silver 的 6 个 LoRA 里有两个裸体倾向很强，不封必露。
-    wf = _apply_nude_neg(wf, allow_nude=False)
     if not image_jobs.comfy_alive():
         log.info("扮演配图：ComfyUI 没在线，%s 这一轮不出图", session_key)
         return ""
