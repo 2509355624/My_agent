@@ -1009,22 +1009,36 @@ class SessionRunner:
             return
         if turn.reply.strip():
             self._deliver(False, turn.reply, [], "", reply_to=reply_to)
-        if turn.scene.strip():
-            threading.Thread(target=self._draw_persona, args=(turn.scene,),
+        # 配图门槛（2026-11-02）：情绪强度 >= 7，或这一轮身上换了衣服才出图。
+        # 每轮都出会把对话框刷成图册、还白烧显卡。判定要用**上一轮**的状态
+        # 比，所以在这里取一次再传下去。
+        prev_state = str((persona._entry(self.session_key) or {}).get("state") or "")  # noqa: SLF001
+        if turn.scene.strip() and persona.should_draw(
+                turn.intensity, prev_state, turn.state):
+            threading.Thread(target=self._draw_persona,
+                             args=(turn.scene, reply_to, turn.reply, turn.state),
                              name="persona-draw", daemon=True).start()
 
-    def _draw_persona(self, scene):
-        """扮演态配图（跑在后台线程里）：出一张快图，画好就发回这条会话。
+    def _draw_persona(self, scene, reply_to="", spoken="", state=""):
+        """扮演态配图（跑在后台线程里）：出一张图，画好就发回这条会话。
+
+        `reply_to` 是**本轮玩家那条消息的 id**，必须在消息线程上取好传进来——
+        后台线程里 `qq_api` 的上下文已经不是本轮了（见 `persona.draw`）。
+        `spoken` 是这一轮她说的话，取前 20 字当图的 caption，让「这张图对应
+        哪句话」一眼能对上。
+        `state` 是这一轮「状态」行，**服装词只能从这儿来**——模型写「画面」
+        那一行时经常整段不写衣服（2026-11-02 实测三次，出来全是裸体）。
 
         **没有画面就不画、画不出来也不吭声**——图是附赠，聊天才是正事（判据都
-        在 `persona.draw` 里）。出场前再取一次卡：出图要两三秒，这中间对方完全
-        可能已经发了 `#出戏`。
+        在 `persona.draw` 里）。出场前再取一次卡：出图要一两分钟，这中间对方
+        完全可能已经发了 `#出戏`。
         """
         card = persona.active_card(self.session_key)
         if card is None:
             return
         try:
-            name = persona.draw(scene, card, self.session_key)
+            name = persona.draw(scene, card, self.session_key,
+                                reply_to=reply_to, state=state)
         except Exception:
             log.exception("扮演配图异常 %s", self.session_key)
             return
@@ -1032,7 +1046,8 @@ class SessionRunner:
             # 走 _deliver 而不是 qq_api.send_image：发送格式、审核闸门、
             # 「开过口要重新计时」这三件事都在那里，别绕过去。
             # quiet_images：被审核拦下时也不吭声（见 _deliver 的说明）。
-            self._deliver(False, "", [name], "", quiet_images=True)
+            self._deliver(False, "", [name], persona.image_caption(spoken),
+                          quiet_images=True, reply_to=reply_to)
 
     def start_cg(self, scene):
         """galgame 的 CG 挂后台线程出，画好发回本会话。
@@ -1104,7 +1119,12 @@ class SessionRunner:
         # 扮演态走自己那条路：不给工具、只一次调用、纯文字。判定放在最前面，
         # 因为下面整段都是「生图机器人」的逻辑（confirm_gate / direct_gen /
         # agent 循环），扮演态一个都不该碰上。
-        if not borrowed and persona.active_card(self.session_key) is not None:
+        #
+        # 2026-11-02：**群聊不走扮演态**。命令层已经拦住「进角色」，这里再挡
+        # 一次是因为会话状态可能是群聊时代留下的（切到群聊后那条线还绑着卡），
+        # 不挡的话群里会继续接着演下去。
+        if (not borrowed and self.target != "group"
+                and persona.active_card(self.session_key) is not None):
             self._run_persona_turn(batch)
             return
         # 表情包收藏：群图趁链接活着赶紧落盘，跟「这轮回不回」无关——
@@ -1725,7 +1745,15 @@ class QQBot:
         # 拦在加说话人前缀之前（命令要认整条原文），也拦在下面所有生图逻辑
         # 之前。群里照旧要 @ 才走得到这儿 —— 这里已经在 _should_reply 放行
         # 之后，所以没开「不 @ 也能使唤它」这个口子。
-        cmd = persona.handle_command(session_key, text)
+        #
+        # 2026-11-02：**角色扮演只在私聊开**。群里不进入扮演态——群里多人围观，
+        # 亲密内容会脱离可控范围，配图也没法用引用指向具体某个人。私聊里
+        # `#出戏` / `#角色扮演` 列表照常能认，免得有人卡住了退不出来。
+        if target == "group":
+            cmd = None
+            log.debug("群聊不进扮演态，跳过 persona 命令：%s", session_key)
+        else:
+            cmd = persona.handle_command(session_key, text)
         if cmd is not None:
             try:
                 send = (qq_api.send_group if target == "group"

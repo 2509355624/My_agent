@@ -205,10 +205,29 @@ class TurnTest(PersonaBase):
         self.assertEqual(out.reply, "你好呀")
         self.assertEqual(out.scene, "1girl, sitting, smile")
 
-    def test_scene_line_does_not_enter_history(self):
-        """历史里只留角色说过的话——「画面：」是给代码的元数据，不是台词。"""
-        self._run("你好呀\n画面：1girl, sitting")
-        self.assertEqual(persona._load_hist("group_1")[1]["content"], "你好呀")
+    def test_meta_lines_stay_in_history_as_few_shot(self):
+        """历史里**保留**画面/心情/状态三行（2026-11-02 反转了旧结论）。
+
+        旧行为是剥掉再落盘，理由是「元数据不是台词」。实测证明那样做会让
+        模型第 2 轮起跟着历史把格式丢掉（第 1 轮完美、第 2 轮全空），所以
+        改成保留完整原文当 few-shot，展示时再由 `split_turn` 剥。
+        """
+        self._run("你好呀\n画面：1girl, sitting\n心情：害羞 强度6\n状态：坐在桌前")
+        ent = persona._load_hist("group_1")[1]["content"]
+        self.assertIn("你好呀", ent)
+        self.assertIn("画面：1girl, sitting", ent)
+        self.assertIn("心情：害羞 强度6", ent)
+        self.assertIn("状态：坐在桌前", ent)
+
+    def test_split_turn_strips_meta_from_display(self):
+        """存进历史的是全的，但**用户看到的正文**里不许有这三行。"""
+        self._run("你好呀\n画面：1girl, sitting\n心情：害羞 强度6\n状态：坐在桌前")
+        turn = persona.split_turn(persona._load_hist("group_1")[1]["content"])
+        self.assertEqual(turn[0], "你好呀")
+        self.assertEqual(turn[1], "1girl, sitting")
+        self.assertEqual(turn[2], "害羞")
+        self.assertEqual(turn[3], 6)
+        self.assertEqual(turn[4], "坐在桌前")
 
     def test_history_keeps_dialogue_only(self):
         self._run("你好呀")
@@ -379,6 +398,71 @@ class DrawTest(unittest.TestCase):
         self.assertEqual(persona.draw("x", {"appearancePrompt": "1girl"},
                                       "group_1"), "")
         ij.enqueue.assert_not_called()
+
+
+class MoodAndStateTest(unittest.TestCase):
+    """自由模式的情绪与状态（2026-11-02）。"""
+
+    def test_parse_all_three_lines(self):
+        body, scene, mood, val, state = persona.split_turn(
+            "你好呀\n画面：1girl, sitting\n心情：害羞 强度8\n状态：靠窗坐着 · 白衬衫")
+        self.assertEqual(body, "你好呀")
+        self.assertEqual(scene, "1girl, sitting")
+        self.assertEqual(mood, "害羞")
+        self.assertEqual(val, 8)
+        self.assertEqual(state, "靠窗坐着 · 白衬衫")
+
+    def test_missing_lines_are_empty_not_crash(self):
+        self.assertEqual(persona.split_turn("就一句话。"),
+                         ("就一句话。", "", "", 0, ""))
+
+    def test_invented_mood_is_rejected(self):
+        """模型自创情绪词 → 不收录，强度仍保留。"""
+        self.assertEqual(persona._parse_mood("怅然若失 强度9"), ("", 9))
+
+    def test_intensity_is_clamped(self):
+        self.assertEqual(persona._parse_mood("心动 强度99"), ("心动", 10))
+
+    def test_draw_threshold_by_intensity(self):
+        self.assertTrue(persona.should_draw(7, "", ""))
+        self.assertFalse(persona.should_draw(6, "", ""))
+
+    def test_static_outfit_is_not_a_change(self):
+        """只写着「家居卫衣」不算换衣——否则每轮都出图。"""
+        self.assertFalse(persona.clothes_changed(
+            "站在门口 · 家居卫衣和短裤", "站在门口 · 家居卫衣和短裤 · 抱着外套"))
+
+    def test_action_word_is_a_change(self):
+        self.assertTrue(persona.clothes_changed("白衬衫", "白衬衫解开两粒扣"))
+
+    def test_noun_swap_is_a_change(self):
+        self.assertTrue(persona.clothes_changed("穿着卫衣", "穿着浴巾"))
+
+    def test_caption_skips_leading_brackets(self):
+        self.assertEqual(
+            persona.image_caption("（听到门响，缩了一下）啊……你、你回来了。"),
+            "配图 ·「啊……你、你回来了。」")
+
+    def test_caption_all_actions_falls_back(self):
+        self.assertTrue(persona.image_caption("（全是动作描写）").startswith("配图 ·「（"))
+
+
+class DrawReplyToTest(unittest.TestCase):
+    """`draw` 必须把 reply_to 显式交给 enqueue（2026-11-02 引用修复）。"""
+
+    def test_reply_to_is_passed_through(self):
+        import app.image_jobs as ij
+        from unittest import mock
+        job = mock.MagicMock()
+        job.wait.return_value = {"ok": True}
+        with mock.patch.object(ij, "enqueue", return_value=(job, "")) as en, \
+                mock.patch.object(ij, "comfy_alive", return_value=True), \
+                mock.patch.object(ij, "output_images", return_value=["a.png"]):
+            from app.tools.normal import generate_image as gi
+            with mock.patch.object(gi, "build_t2i_workflow", return_value={"1": {}}):
+                persona.draw("x", {"appearancePrompt": "1girl"}, "private_1",
+                             reply_to="7000001")
+        self.assertEqual(en.call_args.kwargs.get("reply_to"), "7000001")
 
 
 if __name__ == "__main__":

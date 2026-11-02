@@ -62,7 +62,42 @@ log = logging.getLogger("persona")
 # 一轮的结果：`reply` 是要发回去的正文，`scene` 是这一轮要画的画面（可能为空）。
 # 用命名元组而不是 `(reply, scene)`：调用方写 `turn.reply` 比 `[0]` 看得懂，
 # 也不会在改动时把两个字段的顺序弄反。
-Turn = collections.namedtuple("Turn", "reply scene")
+# 2026-11-02：加三个字段做「自由模式」的情绪与视觉状态。
+# `mood` 是情绪名（十个之一），`intensity` 是 0~10 的整数，`state` 是她此刻
+# 身上的客观状态（穿着、位置、有没有肢体接触）。用 defaults 而不是新加一个
+# 类：老调用方读 `.reply` / `.scene` 完全不受影响。
+Turn = collections.namedtuple(
+    "Turn", "reply scene mood intensity state", defaults=("", 0, ""))
+
+# 情绪词表（自由模式）。模型只能从这十个里挑，多一个字都不认——不限定的话
+# 它会每轮自己发明一个词，代码就没法按强度做出图判断了。
+MOODS = ("平静", "开心", "害羞", "紧张", "生气", "撒娇", "心动", "难过", "疲惫", "暧昧")
+
+# 出图门槛：强度到这条线才配图，或者这一轮发生了服装变化。
+# 每轮都出会把对话框刷成图册，而且白烧显卡（用户 2026-11-02 定）。
+DRAW_INTENSITY = 7
+
+# 「心情：<情绪> 强度<数字>」那一行。半角/全角冒号、全角数字都认。
+_MOOD_RE = re.compile(r"^[ \t]*心情[：:][ \t]*(.+)$", re.M)
+# 「状态：<一句话>」那一行。
+_STATE_RE = re.compile(r"^[ \t]*状态[：:][ \t]*(.+)$", re.M)
+
+# 服装变化判定用的关键词。**只用来触发配图，不用来改画面**——真正的穿着
+# 描述仍由模型写在「画面：」里。
+#
+# 2026-11-02 收紧过一次：原来收了「衣 / 裙 / 衬衫」这些名词，结果状态里正常
+# 写着「家居卫衣」也会命中，等于每轮都判成换衣、每轮都出图。现在只认
+# **动作词**（脱、解开、褪、换…），名词交给「文案变化」那条判据。
+_CLOTHES_ACTIONS = (
+    "脱", "解开", "拉开", "褪", "滑落", "掀", "撩起", "换上", "换回", "穿上",
+    "披上", "裹着", "只穿", "仅剩", "只剩", "浴巾", "裸",
+)
+# 服装名词：**只收「穿在身上」的那类**。手里抱着的外套、搭在椅背上的浴巾
+# 都不算换装信号，混进来会让「接过外套」被误判成换衣（2026-11-02 实测）。
+_CLOTHES_NOUNS = (
+    "衬衫", "裙", "裤", "袜", "鞋", "内衣", "浴袍", "睡衣", "卫衣", "毛衣",
+    "制服", "校服", "泳装", "浴巾",
+)
 
 # 历史：最近 20 条（AI 和用户合计），单条超 200 字截断。
 #
@@ -83,17 +118,32 @@ NOTE_EVERY_TURNS = 10
 DEBOUNCE_SECONDS = 10.0
 
 _CONTRACT = (
-    "【怎么回话】\n"
-    "以这个角色的口吻说想说的话，就像真的在跟他聊天。\n"
-    "想写心里想的事，就写在括号里。\n"
+    "【输出格式：必须遵守】\n"
+    "你每一轮都必须按下面这个格式输出，四行，缺一行都不行：\n"
     "\n"
-    "【画面】\n"
-    "回完话，最后另起一行写「画面：」，后面跟这一轮该画出来的那一幕，\n"
-    "用英文写一行：属性用标签（小写，多词用下划线），方位和互动用英文短语补\n"
-    "（`on the left side of the desk`、`holding a mug in her right hand`）——\n"
+    "第一行起：正文。以这个角色的口吻说想说的话，就像真的在跟他聊天。\n"
+    "想写心里想的事，就写在括号里。正文可以多行。\n"
+    "\n"
+    "正文结束后，**空一行**，然后严格按顺序写下面三行，每行以行首的中文标签开头：\n"
+    "\n"
+    "画面：<英文一行>\n"
+    "心情：<情绪> 强度<0~10 的整数>\n"
+    "状态：<中文一句话>\n"
+    "\n"
+    "这三行是**格式要求，不是正文**，不要用括号包、不要改标签名、不要写进对话里。"
+    "\n"
+    "【画面】用英文写一行：属性用标签（小写，多词用下划线），方位和互动用英文\n"
+    "短语补（`on the left side of the desk`、`holding a mug in her right hand`）——\n"
     "在哪、在做什么、什么表情、什么东西在她哪一侧、什么镜头、什么光。\n"
     "她长什么样不用你写，我照角色卡上的样子画。\n"
-    "每一轮都要写这一行。"
+    "\n"
+    "【心情】情绪只能从这十个里挑**一个**，不许自己编：" + " / ".join(MOODS) + "\n"
+    "强度说这一下来的有多猛：4 以下当作平常，7 以上我才会给她配一张图。\n"
+    "\n"
+    "【状态】她此刻身上的客观状态，用「·」分成几段：在哪、穿什么（具体到哪件、\n"
+    "什么状态）、跟她有没有肢体接触。\n"
+    "例：`状态：靠窗坐着 · 白衬衫解开两粒扣 · 你扶着她的肩`\n"
+    "状态是**接着上一轮往下写的**：上一轮脱掉的外套这一轮不会自己穿回去。"
 )
 
 _NOTE_PROMPT = (
@@ -112,10 +162,17 @@ EXIT_WORDS = ("出戏",)
 
 _SAFE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
-# 扮演态专用的配图渠道（`skills/_persona_fast/`，480×720 / 3 步，实测 ≈2~3 秒/张）。
-# 它是个**内部渠道**（目录名 `_` 开头，AI 点不到、管理页也看不到），只由本模块
-# 的 `draw()` 引用——扮演态的配图永远走这条路，不受「用户点名了什么渠道」影响。
-FAST_SKILL = "_persona_fast"
+# 扮演态专用的配图渠道。
+#
+# 2026-11-02 换成 `silver`（用户定）：默认生图渠道，两段采样（12 步 + 8 步）
+# 能把提示词里的服装描述落实下来。之前的 `_persona_fast` 是单段 3 步的
+# BatchPromptImageGenerator，同样 6 个 LoRA、同一个底模，但 3 步只抓最强的主语
+# （`1girl, silver hair, solo`），「浅灰色宽松卫衣」这种后段弱语义直接丢，
+# 实测画成了裸体。
+#
+# 代价是慢（两段采样 + 两级放大），但排队是正常现象、用户等得起（用户原话）。
+# 走的是**正常 QQ 队列**，不插队、不特殊处理——单张图别把自己排成特例。
+FAST_SKILL = "silver"
 
 # 「画面：」那一行。半角/全角冒号都认（模型两种都写过）。取**最后一处**匹配：
 # 契约要求它写在正文末尾，而正文里偶尔也会出现「画面」这个词。
@@ -288,9 +345,14 @@ def active_card(session_key):
 
 
 def switch(session_key, card):
-    """进扮演态。**换卡 = 清掉这条线的小记和轮次**：那是上一个角色的记忆。"""
+    """进扮演态。**换卡 = 清掉这条线的小记和轮次**：那是上一个角色的记忆。
+
+    同时清掉情绪与状态（`mood` / `intensity` / `state`）：上一个角色害羞到 9，
+    不该带进下一个角色。
+    """
     state = _load_state()
-    state[session_key] = {"card": card["id"], "note": "", "turns": 0}
+    state[session_key] = {"card": card["id"], "note": "", "turns": 0,
+                          "mood": "", "intensity": 0, "state": ""}
     _save_state(state)
     log.info("扮演态开启：%s → %s（%s）", session_key, card["name"], card["id"])
 
@@ -411,6 +473,10 @@ def trim(hist):
 
     裁的是**送进模型的副本**；落盘那份也是裁过的（扮演态的历史只留窗口内的
     20 条，久了不聊自然就淡了，这也是用户要的「先试 20 条」）。
+
+    2026-11-02：assistant 那几条**保留结构化尾巴**。截断只砍正文，最后三行
+    （画面 / 心情 / 状态）原样留着——它们是 few-shot 示范，历史里全是纯对话
+    的话，模型第 2 轮起就会跟着历史把格式丢掉（实测第 1 轮完美、第 2 轮全空）。
     """
     msgs = [m for m in (hist or [])
             if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
@@ -419,13 +485,43 @@ def trim(hist):
     for m in msgs:
         c = str(m.get("content") or "").strip()
         if len(c) > MSG_MAX_CHARS:
-            c = c[:MSG_MAX_CHARS] + "…"
+            if m["role"] == "assistant":
+                body, tail = _split_meta(c)
+                room = max(20, MSG_MAX_CHARS - len(tail) - 1)
+                c = body[:room].rstrip() + "…" + tail
+            else:
+                c = c[:MSG_MAX_CHARS] + "…"
         out.append({"role": m["role"], "content": c})
     return out
 
 
-def build_head(card, session_key, sender, note=""):
-    """扮演态的系统头：角色人设 + 输出契约 + 环境（+ 小记）。
+def _split_meta(text):
+    """把一条 assistant 回复切成「正文」和「结构化的三行」。
+
+    返回 `(正文, "\\n画面：…\\n心情：…\\n状态：…")`；没有结构化行时尾巴为空串。
+    用行首匹配而不是别处出现的词，避免正文里提到「画面」被误切。
+    """
+    lines = str(text or "").split("\n")
+    keep, idx = [], len(lines)
+    # 从尾巴往回找连续的三类元数据行（允许中间夹空行）
+    metas, i = [], len(lines) - 1
+    while i >= 0:
+        ln = lines[i].strip()
+        if not ln or any(rx.match(ln) for rx in (_SCENE_RE, _MOOD_RE, _STATE_RE)):
+            if ln and any(rx.match(ln) for rx in (_SCENE_RE, _MOOD_RE, _STATE_RE)):
+                metas.insert(0, lines[i])
+                idx = i
+            i -= 1
+            continue
+        break
+    if not metas:
+        return str(text or ""), ""
+    keep = lines[:idx]
+    return "\n".join(keep).rstrip() + "\n", "\n" + "\n".join(metas)
+
+
+def build_head(card, session_key, sender, note="", state=""):
+    """扮演态的系统头：角色人设 + 输出契约 + 环境（+ 小记 + 此刻状态）。
 
     **刻意不带别的东西**——不拼工具目录、不拼 Skill 目录、不拼表情包清单、
     不拼长期记忆，也不拼任何审核 / 限制条款。用户 2026-10-16 点名：
@@ -433,7 +529,8 @@ def build_head(card, session_key, sender, note=""):
     不上、还白烧 token（他那套角色扮演系统里，一万字的提示词有五千字是
     审核话术，他明确不要这个）。
 
-    头在会话内是稳定的（只有换卡或小记重写才变），所以能吃到前缀缓存。
+    `state`（2026-11-02）：上一轮她身上的状态（穿着 / 位置 / 接触）。不喂回去
+    的话，模型每轮都从零猜「她现在穿什么」，几轮之后衣服会自己长回来。
     """
     parts = []
     persona = str(card.get("systemPrompt") or "").strip()
@@ -442,6 +539,10 @@ def build_head(card, session_key, sender, note=""):
     parts.append(_env_note(session_key, sender))
     if note.strip():
         parts.append("【之前的事】\n" + note.strip())
+    if str(state or "").strip():
+        parts.append("【她此刻的样子】\n" + str(state).strip()
+                     + "\n（这是上一轮结束时的状态，接着它往下演，"
+                       "不要自己给她换回原来的衣服）")
     return "\n\n".join(parts)
 
 
@@ -468,8 +569,10 @@ def run_turn(session_key, text, target, sender=""):
     if card is None:
         return Turn("", "")
 
-    note = str((_entry(session_key) or {}).get("note") or "")
-    head = build_head(card, session_key, sender, note)
+    ent = _entry(session_key) or {}
+    note = str(ent.get("note") or "")
+    prev_state = str(ent.get("state") or "")
+    head = build_head(card, session_key, sender, note, prev_state)
     hist = trim(_load_hist(session_key))
 
     # 群里带上说话人，模型才知道是谁在说话（同 qq_bot 正文前缀的做法）；
@@ -485,24 +588,54 @@ def run_turn(session_key, text, target, sender=""):
     except Exception:
         log.exception("扮演轮调用失败 %s", session_key)
         return Turn("", "")
-    reply, scene = split_scene(raw)
+    reply, scene, mood, intensity, state = split_turn(
+        raw, default_mood=str(ent.get("mood") or ""))
     if not reply:
         # 整轮空 = 模型没交作业。这属于可用性问题，值得说一句，
         # 但**不重跑**：重跑一次未必更好，还白烧一轮。
         log.warning("扮演轮空回复 %s", session_key)
         return Turn("（我这会儿有点卡，你再说一句？）", "")
 
-    # 落历史：只放对话本身，**不留「画面：」那一行**——它是给代码的元数据，
-    # 不是角色说过的话。system 头和小记也是每轮重新拼的，同样不进历史。
+    # 落历史：存**完整原文**（含「画面 / 心情 / 状态」三行）。2026-11-02 改：
+    # 这三行是下一轮的 few-shot 示范，剥掉的话模型第 2 轮起就把格式丢了
+    # （实测第 1 轮完美、第 2 轮全空）。展示时由 `split_turn` 再剥一次。
     hist.append({"role": "user", "content": said})
-    hist.append({"role": "assistant", "content": reply})
+    hist.append({"role": "assistant", "content": str(raw or "").strip()})
     try:
         _save_hist(session_key, hist[-HISTORY_LIMIT:])
     except Exception:
         log.exception("扮演轮落史失败 %s", session_key)
 
+    # 情绪与状态落盘（2026-11-02）：只覆盖不累加——情绪是当下的，
+    # 状态是这一格的结果，下一轮读 `state` 续着演。
+    _save_mood(session_key, mood, intensity, state, prev_state)
+
     _bump_turn(session_key)
-    return Turn(reply, scene)
+    return Turn(reply, scene, mood, intensity, state)
+
+
+def _save_mood(session_key, mood, intensity, state, prev_state=""):
+    """把这一轮的情绪/状态写回会话条目。**已经出戏的不写。**
+
+    2026-11-02：模型偶尔整轮不交三行（同一份契约、同一句话，实测有 1/6 概率
+    全空）。这时候**保留上一轮的值**而不是写空——否则下一轮 `state` 变成空串，
+    「她穿着什么」这条线就断了，出图又会回到裸体。
+    """
+    state_data = _load_state()
+    st = state_data.get(session_key)
+    if not isinstance(st, dict):
+        return
+    if mood:
+        st["mood"] = mood
+    try:
+        val = int(intensity or 0)
+    except (TypeError, ValueError):
+        val = 0
+    if val or not st.get("intensity"):
+        st["intensity"] = val
+    if state:
+        st["state"] = str(state)[:200]
+    _save_state(state_data)
 
 
 # ─── 画面与出图 ──────────────────────────────────────
@@ -527,6 +660,85 @@ def split_scene(text):
     return body, scene
 
 
+def split_turn(text, default_mood=""):
+    """把一轮输出切成 `(正文, 画面, 情绪, 强度, 状态)`。
+
+    「画面：」「心情：」「状态：」三行都是给代码的元数据，**全部从正文里剥掉**
+    ——用户不该在聊天里看到「状态：白衬衫解开两粒扣」这种东西。
+
+    三条都取**最后一处**匹配（同 `_SCENE_RE` 的理由：正文里偶尔会提到这些词）。
+    缺哪行就当没写：情绪空串、强度 0、状态空串，调用方不许兜底。
+    """
+    raw = str(text or "")
+    body = raw
+    out = {"scene": "", "mood": "", "intensity": 0, "state": ""}
+
+    for key, rx in (("scene", _SCENE_RE), ("mood", _MOOD_RE), ("state", _STATE_RE)):
+        hits = list(rx.finditer(body))
+        if not hits:
+            continue
+        val = hits[-1].group(1).strip()
+        body = rx.sub("", body)
+        out[key] = val
+
+    out["scene"] = _clean_scene(out["scene"])
+    out["mood"], out["intensity"] = _parse_mood(out["mood"])
+    out["state"] = _clean_scene(out["state"])
+    body = re.sub(r"\n{3,}", "\n\n", body).strip()
+    if not out["mood"] and default_mood:
+        out["mood"] = default_mood
+    return body, out["scene"], out["mood"], out["intensity"], out["state"]
+
+
+def _parse_mood(raw):
+    """「害羞 强度8」/「心动强度7」/「暧昧 强度 9」 → `("害羞", 8)`。
+
+    情绪必须落在 `MOODS` 里，否则当没写——模型偶尔会自创「怅然若失」这种词，
+    收录它等于让出图门槛失效。强度钳到 0~10。
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return "", 0
+    m = re.search(r"强度\s*[：:]?\s*(\d{1,2})", s)
+    val = int(m.group(1)) if m else 0
+    val = max(0, min(10, val))
+    head = (s[:m.start()] if m else s).strip(" ，,·:：")
+    for mood in MOODS:
+        if mood in head:
+            return mood, val
+    return "", val
+
+
+def clothes_changed(prev_state, state):
+    """这一轮的「状态」里有没有服装变化。**只用来决定配不配图。**
+
+    两条判据，任一成立才算：
+      1. 新状态里出现**动作词**（脱 / 解开 / 褪 / 换上 …）；
+      2. 两轮的服装名词集合不一样（多了「浴巾」、少了「外套」）。
+    只是「穿着家居卫衣」这种静态描述**不算变化**——否则每轮都命中，
+    每轮都出图，等于没有门槛（2026-11-02 实测踩过）。
+    """
+    cur = str(state or "").strip()
+    if not cur or cur == str(prev_state or "").strip():
+        return False
+    if any(w in cur for w in _CLOTHES_ACTIONS):
+        return True
+    prev = str(prev_state or "").strip()
+    now_nouns = {w for w in _CLOTHES_NOUNS if w in cur}
+    old_nouns = {w for w in _CLOTHES_NOUNS if w in prev}
+    return now_nouns != old_nouns
+
+
+def should_draw(intensity, prev_state, state):
+    """这一轮要不要配图：情绪够强，或者身上换了衣服。"""
+    try:
+        if int(intensity or 0) >= DRAW_INTENSITY:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return clothes_changed(prev_state, state)
+
+
 def _clean_scene(raw):
     """画面标签的最小清理：去反引号/星号、去首尾逗号和空白。"""
     s = _SCENE_NOISE_RE.sub("", str(raw or "")).strip()
@@ -544,12 +756,130 @@ def _fixed_block(card):
     return ", ".join(p for p in parts if p).strip(", ").strip()
 
 
-def build_prompt(card, scene):
-    """出图提示词 = 角色卡固定块 + 这一轮的动态画面。"""
+def _outfit_from_state(state):
+    """从「状态」里抠出「穿什么」那一段，翻成英文标签。
+
+    2026-11-02：**这是服装词唯一的来源**。模型写「画面」那一行时经常整段不写
+    衣服（只写动作/表情/镜头），而它自己写的「状态」里明明有「穿着灰色家居服」。
+    两行都由模型产出，但只有「状态」被要求写穿着，所以从这里取。
+
+    状态是「·」分段的：`坐在房间书桌前 · 穿着宽松的灰色家居服 · 没有肢体接触`。
+    取含衣着关键词的那一段，用 `_OUTFIT_MAP` 翻成英文；翻不出来就原样丢弃
+    （中文塞进英文提示词没用，还会干扰）。
+    """
+    segs = [s.strip() for s in str(state or "").split("·") if s.strip()]
+    out = []
+    for seg in segs:
+        # 先排除「没有接触 / 无接触」这类段——它们也含「没有」，若不先排除，
+        # 后面判断衣着时会被误伤（2026-11-02 实测：这段写在中间，导致整句被跳）。
+        if "没有肢体接触" in seg or "无接触" in seg or "没有接触" in seg:
+            continue
+        hit = False
+        # 一段里常写着**两件**单品（「白T恤和居家短裤」），所以这里不是 break，
+        # 而是把命中的都收下；同类别冲突交给 `_OUTFIT_GROUPS` 去重。
+        for en, words in _OUTFIT_MAP.items():
+            if any(w in seg for w in words):
+                out.append(en)
+                hit = True
+        if not hit and any(w in seg for w in _CLOTHES_NOUNS + _CLOTHES_ACTIONS):
+            # 认得出是衣着段但翻不出来：不硬塞中文，只提醒**这一轮她有穿**，
+            # 让负面词 + `dressed` 一起兜住「不许裸」。
+            out.append("fully dressed in casual clothes")
+    # 去重但保序
+    seen, uniq = set(), []
+    for e in out:
+        if e not in seen:
+            seen.add(e)
+            uniq.append(e)
+    # 同类只留第一个：`skirt` 和 `pleated skirt` 选一个、`shirt` 和 `white blouse`
+    # 选一个，否则提示词里会同时出现两条互相矛盾的描述。
+    picked, used_groups = [], set()
+    for e in uniq:
+        grp = _OUTFIT_GROUPS.get(e, e)
+        if grp in used_groups:
+            continue
+        used_groups.add(grp)
+        picked.append(e)
+    return ", ".join(picked)
+
+
+# 同类别分组：组内只保留第一个命中的词。没列出的按自身当独立组。
+_OUTFIT_GROUPS = {
+    "white blouse": "shirt",
+    "shirt": "shirt",
+    "white t-shirt": "shirt",
+    "grey hoodie": "top",
+    "knit sweater": "top",
+    "casual loungewear": "top",
+    "pleated skirt": "skirt",
+    "skirt": "skirt",
+    "lounge shorts": "bottom",
+    "lounge pants": "bottom",
+}
+
+
+# 中文衣着 → 英文提示词片段。
+#
+# 2026-11-02 补过一轮：头版只有 8 组，实测「宽松白T恤和居家短裤」整段只命中
+# 一个 `裤`，拼出 `long-sleeved casual top and shorts` 这种和实物不符的词。
+# 现在按**具体单品**铺开，顺序即优先级（`_outfit_from_state` 里一段只认第一个
+# 命中的）。
+_OUTFIT_MAP = {
+    "white t-shirt": ("T恤", "T shirt", "t-shirt", "短袖"),
+    "grey hoodie": ("卫衣", "连帽"),
+    "lounge shorts": ("短裤",),
+    "lounge pants": ("长裤",),
+    "knit sweater": ("毛衣", "针织"),
+    "white blouse": ("白衬衫",),
+    "shirt": ("衬衫",),
+    "pleated skirt": ("百褶裙",),
+    "skirt": ("裙",),
+    "school uniform": ("校服", "制服"),
+    "pajamas": ("睡衣",),
+    "bathrobe": ("浴袍", "浴巾"),
+    "casual loungewear": ("家居服", "居家服"),
+}
+
+
+def build_prompt(card, scene, state=""):
+    """出图提示词 = 角色卡固定块 + 这一轮的状态（衣着）+ 动态画面。
+
+    `state`（2026-11-02）：模型在「状态」行里写了她此刻的穿着。不拼进来的话，
+    模型写「画面」时漏写衣服，出来的就是裸体（实测两次）。
+    """
     fixed, scene = _fixed_block(card), _clean_scene(scene)
-    if fixed and scene:
-        return fixed + ", " + scene
-    return fixed or scene
+    outfit = _outfit_from_state(state)
+    body = ", ".join(p for p in (outfit, scene) if p)
+    if fixed and body:
+        return fixed + ", " + body
+    return fixed or body
+
+
+def image_caption(spoken, limit=20):
+    """配图下面的那行字：`配图 ·「她说的话（前 limit 字）」`。
+
+    为什么要有它：图是 2~3 秒后才出来的，那时候她可能已经又说了几句。
+    光靠引用玩家那条消息，用户未必记得这张图对应她哪一句（2026-11-02 用户要的）。
+
+    2026-11-02：**跳过开头的括号段**再取。扮演态的正文常常以
+    「（听到门响，整个人缩了一下）」这种动作描写开场，直接截前 20 字会全是
+    括号，看不出是哪句话。优先取第一句**不在括号里**的台词。
+    """
+    raw = re.sub(r"\s+", " ", str(spoken or "")).strip()
+    if not raw:
+        return ""
+    # 把开头连续的括号段丢掉
+    s = raw
+    while s.startswith("（") or s.startswith("("):
+        end = max(s.find("）"), s.find(")"))
+        if end < 0:
+            break
+        s = s[end + 1:].strip()
+    if not s:
+        s = raw                      # 整段都是动作描写，那就退回原文
+    if len(s) > limit:
+        s = s[:limit].rstrip() + "…"
+    return "配图 ·「%s」" % s
 
 
 def _session_target(session_key):
@@ -560,12 +890,63 @@ def _session_target(session_key):
     return target, tid
 
 
-def draw(scene, card, session_key):
+# 扮演态配图**追加**到渠道负面词后面的一段（2026-11-02）。
+#
+# 为什么要加：`silver` 的负面只有 `worst quality, low quality, score_1...` 这种
+# 画质词，**一个字都没提服装和身体**。而它烘焙的 6 个 LoRA 里有
+# `_cowani_epoch_10` @0.8 这类裸体倾向很强的角色 LoRA，cfg=1 时正面提示词里
+# 只要没有明确的服装词，输出就是裸体（实测两次：一次 fast 渠道、一次 silver）。
+#
+# 这里只封「没穿衣服」这一类，不封姿势、不封表情——日常场景里她本来就该穿着
+# 家居服和人聊天。真要脱，正面提示词会明写，到那时这段负面反而是**障碍**，
+# 所以 `draw()` 支持 `allow_nude=True` 跳过它。
+_NUDE_NEG = ("nude, naked, topless, bottomless, nipples, areola, genitals, "
+             "completely undressed, exposed breasts, exposed chest, underwear only")
+
+
+def _apply_nude_neg(wf, allow_nude=False):
+    """把 `_NUDE_NEG` 拼到工作流里所有 CLIPTextEncode 负面节点的末尾。
+
+    判据：节点 id 是不是被 KSampler 的 `negative` 输入引用。这样不用记节点号
+    （渠道换了照样能找到），也不会误改正面节点。
+    """
+    if allow_nude or not isinstance(wf, dict):
+        return wf
+    neg_ids = set()
+    for node in wf.values():
+        if not isinstance(node, dict):
+            continue
+        if node.get("class_type") in ("KSampler", "KSamplerAdvanced"):
+            ref = (node.get("inputs") or {}).get("negative")
+            if isinstance(ref, list) and ref:
+                neg_ids.add(str(ref[0]))
+    for nid in neg_ids:
+        node = wf.get(nid)
+        if not isinstance(node, dict) or node.get("class_type") != "CLIPTextEncode":
+            continue
+        inp = node.setdefault("inputs", {})
+        cur = str(inp.get("text") or "").strip().rstrip(",")
+        if "nude" in cur:
+            continue
+        inp["text"] = (cur + ", " + _NUDE_NEG) if cur else _NUDE_NEG
+    return wf
+
+
+def draw(scene, card, session_key, reply_to="", state=""):
     """出一张配图，返回文件名（没画出来返回 ""）。**阻塞**——调用方放后台线程。
 
-    走 `skills/_persona_fast`（480×720 / 3 步的 silver 漫画变体，实测 ≈2~3 秒）。
-    入队带 `quiet=True`：图直接发回会话、**不带编号 caption、失败也不刷话术**
-    ——聊天里突然冒一句「图没画出来」比不画还糟。
+    走 `silver`（默认生图渠道，两段采样 12+8 步 → 1.2× 潜空间放大 → 2x 像素
+    放大，出图约 2464×3680）。排队走**正常 QQ 队列**，不插队。
+    入队带 `quiet=True`：worker 只跑图不发，图由调用方拿去 `_deliver`（要带
+    caption 和引用，见 `qq_bot._draw_persona`）。
+
+    `reply_to`（2026-11-02）：玩家触发这一轮的那条消息 id。**必须在消息线程上
+    传进来**——`enqueue` 的 `reply_to=None` 会去读 `qq_api.current_message_id()`，
+    而本函数跑在后台线程，那时上下文早不是本轮了，读出来是空或者别的轮次。
+    这就是「图不引用消息」的根因。
+
+    `state`（2026-11-02）：这一轮「状态」行里她穿什么。**必须传**——模型写
+    「画面」时经常漏写衣服，只有这里才有服装信息，不拼进去就会画出裸体。
 
     也不扣私聊每日额度：扮演态配图是聊天的一部分，不是「点单生图」。队列满 /
     ComfyUI 没在线 / 被审核拦下，一律静默跳过这一轮，聊天照常。
@@ -573,7 +954,7 @@ def draw(scene, card, session_key):
     from app import image_jobs
     from app.tools.normal import generate_image as gi
 
-    prompt = build_prompt(card, scene)
+    prompt = build_prompt(card, scene, state)
     target, target_id = _session_target(session_key)
     if not _clean_scene(scene) or not prompt or not target:
         return ""       # 没写画面行 = 这一轮不出图，调用方不用替它守
@@ -582,6 +963,9 @@ def draw(scene, card, session_key):
     if wf is None:
         log.warning("扮演配图渠道 %s 没有文生图工作流", FAST_SKILL)
         return ""
+    # 默认追加「不许裸」的负面段（见 `_NUDE_NEG`）。她这一轮的「状态」里明说了
+    # 穿什么，就不该光着——silver 的 6 个 LoRA 里有两个裸体倾向很强，不封必露。
+    wf = _apply_nude_neg(wf, allow_nude=False)
     if not image_jobs.comfy_alive():
         log.info("扮演配图：ComfyUI 没在线，%s 这一轮不出图", session_key)
         return ""
@@ -591,7 +975,8 @@ def draw(scene, card, session_key):
         # 「本轮原话里有没有横屏」，而这里恒为 None。
         job, reason = image_jobs.enqueue(
             target, target_id, wf, skill=FAST_SKILL, prompt=prompt,
-            seed=seed, landscape=False, quiet=True)
+            seed=seed, landscape=False, quiet=True,
+            reply_to=str(reply_to or ""))
     except Exception:
         log.exception("扮演配图入队失败 %s", session_key)
         return ""
