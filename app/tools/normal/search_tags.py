@@ -69,6 +69,37 @@ agent 存在的理由。代码单干一定选错。
 
 **均匀抽 = 最符合铁律第 8 条的抽样方式**：不排序、不筛选、不推荐，纯随机，
 没有任何热度信号。所以随机这一路和 SKILL.md 不冲突。
+
+## 2026-11-02：extract() 的三条检索盲区
+
+用户反馈「群友已经明确指出用哪个角色了，AI 还是画错」。查下来根因不在 LLM
+判断，而在 `extract()` 是生图链路里**唯一在跑的检索层**（`DIRECT_SEARCH_AGENT`
+当时是 0），而它有三个确定的盲区：
+
+    纯外文名   Saber / Frieren / Hatsune Miku   → 开头 `_CJK` 守卫直接返回空
+    尾字简称   绫华 / 初音 / 康娜                → 滑窗只能「query 里找 key」
+    作品名     原神 / 崩坏：星穹铁道              → 只查了 cat=4/0，没查 cat=3
+
+最典型的证据：搜「绫华」只命中 `ayaka_(charismabard)`（魅力吟游诗人），而
+神里绫华（`kamisato_ayaka`）就在库里，中文名是「神里绫华（原神）」——名字更长，
+滑窗**永远**匹配不上。这不是排序问题，是真答案压根没进候选池。
+
+对应补了三张表和一条新路径（都不引入热度信号，铁律第 8 条不受影响）：
+
+    alias    角色主名的 2~3 字前/后缀 → 完整主名    反向补全简称
+    cp_win   cat=3 的滑窗表                          认作品名
+    ASCII    by_tag 的 空格转下划线 精确 + 前缀查      认外文名
+
+**反查只在「滑窗已认出这是角色词」时触发**（外加一条兜底：一个角色都没认出时
+从原话切 2~3 字中文窗口）。这个约束很重要——第一版拿整句乱切窗口，`Saber`
+被切成 `Sab` / `er`，`er` 撞出 Amber / Joker 一屏；`一个女仆在煮咖啡` 也吐出
+一堆叫「女仆XX」的角色。噪音全部来自「不对的词也拿去反查」。
+
+排序只用**命名结构**：先「完整名是不是以你说的词开头」（初音 → 初音未来 是，
+初音 → 交响初音 不是），再名字长度，最后 tag 字典序。这三条都不是热度。
+
+代价实测：索引 142 MB → 156 MB（+14 MB），建索引 0.31 s → 0.99 s（进程首次
+调用时一次），单次查询仍在亚毫秒级。
 """
 
 import os
@@ -94,6 +125,46 @@ GEN_CATS = ("0", "3")
 GEN_WINDOW_CATS = ("0",)
 # 滑窗命中的中文键最短长度。1 个字（库里 147 条）必然乱撞，直接不收。
 MIN_GEN_KEY = 2
+
+# 作品/出处（cat=3）单独一张滑窗表，只给 extract() 用。
+# 为什么必须单独建：`zh_gen` 里混着通用（cat=0）和作品（cat=3），而 extract
+# 只用它做了 cat=0 的滑窗，于是「原神」「崩坏：星穹铁道」这类作品名在生图
+# 链路里**一个都查不到**（2026-11-02 实测 doc 为空）。
+CP_CATS = ("3",)
+
+# ── 简称反查（2026-11-02）──────────────────────────────────────────────
+# 滑窗是「从 query 里找 key」的单向匹配，所以群友说「绫华」时，库里那个叫
+# 「神里绫华」的角色**永远匹配不上**——这不是排序问题，是真答案压根没进
+# 候选池。实测：`绫华` 只命中 `ayaka_(charismabard)`（魅力吟游诗人），而
+# 神里绫华（`kamisato_ayaka`）就在库里，只是名字更长。
+#
+# 所以额外建一张反查表：角色主名的前/后缀（2~3 字）→ 完整主名。
+# 查「绫华」能反查到「神里绫华」，查「初音」能反查到「初音未来」。
+ALIAS_LENS = (2, 3)
+# 反查表只收**名字不长**的角色。长名几乎全是活动/联动变体
+# （`初音未来博览会`、`神里绫华（GiGo联动）`），收进来只增噪音和内存。
+ALIAS_NAME_MAX = 6
+# 一次最多补几个「更完整的名字」。补多了等于拿噪音灌提示词。
+ALIAS_SHOW = 6
+# 完整名最多比原词长几个字。这是**结构**约束不是热度：简称就是「原词 +
+# 一两个字」（神里绫华 ← 绫华、初音未来 ← 初音、康娜卡姆依 ← 康娜）。
+# 放宽到 3 是为了「康娜」这类中间还差一个字的情况；再长就全是活动/联动变体，
+# 一律不进。
+ALIAS_MAX_EXTRA = 3
+# 只对这么短的词做反查。已经是完整长名（`神里绫华`）就不必再找更长的。
+ALIAS_QUERY_MAX = 4
+# 兜底时一次最多从原话里切几个简称词。
+ALIAS_TOKENS = 3
+
+# ── 外文名（2026-11-02）────────────────────────────────────────────────
+# `extract()` 原先开头就 `if not _CJK.search(q): return empty`，纯外文一律
+# 不处理。但群友直接用英文/罗马音点角色很常见（Saber / Frieren / Makima /
+# Hatsune Miku），而 `by_tag` 的键本来就是英文 tag 名，白白浪费了。
+ASCII_WORD = re.compile(r"[A-Za-z][A-Za-z0-9'\-_]*")
+# 外文名退化成前缀查时只认这两类。画师（cat=1）和通用（cat=0）的前缀噪音
+# 太大——实测查 `miku` 前缀全是 `miku-moko` / `miku1201_fe` 这类画师名。
+ASCII_PREFIX_CATS = ("3", "4")
+ASCII_LIMIT = 8
 
 # 随机抽样开放的类别。0=通用 1=画师 4=角色。
 # ⚠️ cat=0 必须带 pattern（实测裸抽会出手枪和自行车架）。
@@ -132,6 +203,8 @@ def _build(path):
     win:     中文主名 -> [(tag, 中文, 类别)]   —— 滑窗查（仅 WINDOW_CATS=角色）
     zh_gen:  中文主名 -> [tag]                 —— 整串精确查（仅 GEN_CATS=通用/作品）
     gen_win: 中文主名 -> [(tag, 中文, 类别)]   —— 滑窗查（仅 GEN_WINDOW_CATS=通用）
+    cp_win:  中文主名 -> [(tag, 中文, 类别)]   —— 滑窗查（仅 CP_CATS=作品/出处）
+    alias:   2~3 字前缀/后缀 -> [完整主名]     —— 简称反查（仅角色）
     by_cat:  类别码 -> [tag]                   —— 随机抽样（O(1) 取一条）
 
     中文主名要剥掉「（作品名）」再进 win，同时**整串也进**——用户可能连作品名
@@ -149,6 +222,8 @@ def _build(path):
     win = {}
     zh_gen = {}
     gen_win = {}
+    cp_win = {}
+    alias = {}
     by_cat = {}
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -164,14 +239,29 @@ def _build(path):
                 for key in {main, full}:
                     if key:
                         win.setdefault(key, []).append((tag, full, cat))
+                if main and len(main) <= ALIAS_NAME_MAX:
+                    L = len(main)
+                    for ln in ALIAS_LENS:
+                        if L - ln >= 2:
+                            for a in (main[:ln], main[-ln:]):
+                                bucket = alias.get(a)
+                                if bucket is None:
+                                    alias[a] = [main]
+                                elif bucket[-1] != main:
+                                    bucket.append(main)
             elif cat in GEN_CATS and main:
                 zh_gen.setdefault(main, []).append(tag)
             if cat in GEN_WINDOW_CATS:
                 for key in {main, full}:
                     if len(key) >= MIN_GEN_KEY:
                         gen_win.setdefault(key, []).append((tag, full, cat))
+            if cat in CP_CATS:
+                for key in {main, full}:
+                    if len(key) >= MIN_GEN_KEY:
+                        cp_win.setdefault(key, []).append((tag, full, cat))
     return {"by_tag": by_tag, "win": win, "zh_gen": zh_gen,
-            "gen_win": gen_win, "by_cat": by_cat}
+            "gen_win": gen_win, "cp_win": cp_win, "alias": alias,
+            "by_cat": by_cat}
 
 
 def _index(path):
@@ -485,6 +575,112 @@ def detect_random(text):
     return None
 
 
+def _reverse_names(key, alias, win, skip=(), limit=ALIAS_SHOW):
+    """把「群友说的短词」反查成库里**更完整的角色主名**。
+
+    滑窗只能做「query 里含 key」，所以「绫华」永远碰不到「神里绫华」。这里补上
+    反方向：查 `alias`（主名前/后缀 → 完整主名），把长名字捞回来。
+
+    返回 [(完整名, tag, 中文), …]。
+
+    ⚠️ 排序**不是热度**（铁律第 8 条）：先用「这个完整名是不是以你说的词开头」
+    （`初音` → `初音未来` 是；`初音` → `交响初音` 不是），再按名字长度，最后按
+    tag 字典序。前两条都是**命名结构**判断，和 `_base_first` 同一性质——只用来
+    保证「别把最像你原词的那个截掉」，不引入任何人气信号。
+    """
+    names = alias.get(key) or ()
+    if not names:
+        return []
+    rows = []
+    seen = set()
+    for full in names:
+        if full == key or full in seen or full in skip:
+            continue
+        if len(full) - len(key) > ALIAS_MAX_EXTRA:
+            continue
+        seen.add(full)
+        cands = win.get(full) or ()
+        if not cands:
+            continue
+        # 每个完整名只给一个最可能的写法：无括号的基础 tag 优先（同样的结构规则）
+        tag, zh, _cat = _base_first(cands)[0]
+        rows.append((0 if full.startswith(key) else 1, len(full), tag, full, zh))
+    rows.sort()
+    return [(full, tag, zh) for _p, _n, tag, full, zh in rows[:limit]]
+
+
+def _ascii_lookup(q, by_tag, limit=ASCII_LIMIT):
+    """从原话里认**外文名**（Saber / Frieren / Hatsune Miku / silver_wolf）。
+
+    三步，逐级放宽：
+
+      ① 整串拼起来精确查：`Hatsune Miku` → `hatsune_miku`
+      ② 每个词单独精确查：`Frieren` → `frieren`
+      ③ 还没有才前缀查（只认作品/角色两类）：`Saber` → `saber_(...)_(fate)`
+
+    为什么③要限类别：30 多万条 tag 里，`miku` 前缀几乎全是画师名
+    （`miku-moko` / `miku1201_fe`），放进来就是纯噪音。画师名有自己的入口
+    （`search_tags` 工具），不需要挤进生图资料。
+
+    返回 [(tag, 中文, 类别)]。
+    """
+    words = [w.lower() for w in ASCII_WORD.findall(q or "")]
+    if not words:
+        return []
+    out, seen = [], set()
+
+    def add(tag):
+        if tag in seen or tag not in by_tag:
+            return
+        seen.add(tag)
+        out.append(tag)
+
+    add("_".join(words))
+    for w in words:
+        add(w)
+
+    if not out:
+        # 前缀兜底：按 by_tag 的插入顺序（= 文件顺序）取，不做任何热度排序
+        for w in words:
+            if len(w) < 3:
+                continue
+            for t, (_zh, cat) in by_tag.items():
+                if cat in ASCII_PREFIX_CATS and t.startswith(w):
+                    add(t)
+                    if len(out) >= limit:
+                        break
+            if len(out) >= limit:
+                break
+
+    return [(t, by_tag[t][0], by_tag[t][1]) for t in out[:limit]]
+
+
+def _alias_tokens(q, alias, limit=ALIAS_TOKENS):
+    """在用户原话里滑窗找**可能是简称的中文词**（最长匹配、不重叠）。
+
+    只作为兜底：滑窗一个角色都没认出来时才用。典型场景是「康娜」——它是群友
+    常用的简称，但**本身不是**库里任何条目（库里叫「康娜卡姆依」），所以
+    `_scan_zh` 认不出它，只能直接从原话里切词去撞 `alias`。
+
+    ⚠️ 只收含中文的窗口。不收的话 `Saber` 会被切成 `Sab` / `er`，
+    `er` 还能撞出 `Amber` / `Joker` 一大堆——实测踩过。
+    """
+    out, L, i = [], len(q), 0
+    while i < L and len(out) < limit:
+        hit = None
+        for ln in (3, 2):
+            key = q[i:i + ln]
+            if len(key) == ln and key in alias and _CJK.search(key):
+                hit = key
+                break
+        if hit:
+            out.append(hit)
+            i += len(hit)
+        else:
+            i += 1
+    return out
+
+
 def extract(text, max_keys=20, budget=600, rng=None):
     """从用户原话里**定点**抽出库里真实存在的标签。不调 LLM、0 token。
 
@@ -521,12 +717,18 @@ def extract(text, max_keys=20, budget=600, rng=None):
         idx = _index(path)
     except Exception:
         return empty
-    by_tag, zh_gen = idx["by_tag"], idx["zh_gen"]
-    if not _CJK.search(q):
-        return empty
+    by_tag = idx["by_tag"]
+    zh_gen = idx["zh_gen"]
+    alias = idx.get("alias") or {}
+    win = idx["win"]
+    has_cjk = bool(_CJK.search(q))
 
-    chr_hits = _scan_zh(q, idx["win"])
-    gen_hits = _scan_zh(q, idx["gen_win"])
+    # 没有中文就不跑滑窗（滑窗的键全是中文），但**不再直接返回空**——
+    # 纯外文名走 `_ascii_lookup`，否则 `Saber` / `Frieren` 这种常见说法
+    # 连一个字都拿不到（2026-11-02 之前就是直接 return empty）。
+    chr_hits = _scan_zh(q, win) if has_cjk else []
+    gen_hits = _scan_zh(q, idx["gen_win"]) if has_cjk else []
+    cp_hits = _scan_zh(q, idx.get("cp_win") or {}) if has_cjk else []
     # 命中角色窗口的词，在通用段里要拿它的候选基础名去查重（见 _is_char_variant）
     chr_bases = {key: _char_bases(rows) for key, rows in chr_hits}
 
@@ -554,6 +756,57 @@ def extract(text, max_keys=20, budget=600, rng=None):
             chr_entries.append((key, "- %s → %s %s（有多个候选，按用户意图挑）"
                                 % (key, " ｜ ".join(parts), more), True))
 
+    # ── 简称补全（2026-11-02）──────────────────────────────────────────
+    # 群友说「绫华」时，滑窗只会命中另一个叫「绫华」的角色（魅力吟游诗人），
+    # 而库里的「神里绫华」因为名字更长、永远匹配不上。这里反查一次，把更
+    # 完整的名字也摆出来，让下游有机会选对。
+    chr_keys = {k for k, _ln, _amb in chr_entries}
+    rev_entries = []
+    if chr_keys:
+        seeds = [k for k, _ln, _amb in chr_entries[:3] if len(k) <= ALIAS_QUERY_MAX]
+    else:
+        # 一个角色都没认出来：简称可能本身就不是库里的条目（「康娜」→
+        # 「康娜卡姆依」），退一步直接在原话里切词去撞别名表。
+        # ⚠️ 必须排掉三类：库里有角色条目的词（「女仆」「咖啡」——它们是被
+        # 当成通用词才没进 chr 段的）、泛指词（「女孩」「角色」）、以及本身
+        # 就是通用标签的词（「咖啡」→ coffee）。不然「一个女仆在煮咖啡」
+        # 会吐出一屏无关角色。
+        seeds = [t for t in _alias_tokens(q, alias)
+                 if t not in win and t not in _GENERIC_ZH and t not in zh_gen]
+    for key in seeds:
+        got = _reverse_names(key, alias, win, skip=chr_keys)
+        if not got:
+            continue
+        parts = ["%s → %s%s" % (full, tag,
+                                (zh[len(full):] if zh.startswith(full) else zh))
+                 for full, tag, zh in got]
+        rev_entries.append((key, "- %s 可能是简称：%s"
+                            % (key, " ｜ ".join(parts)), False))
+
+    # ── 作品/出处（2026-11-02）──────────────────────────────────────────
+    # 「原神」「崩坏：星穹铁道」是 cat=3，原先 extract 只查了 cat=4/cat=0，
+    # 结果群友说作品名时 doc 直接是空的。
+    cp_entries = []
+    for key, rows in cp_hits[:max_keys]:
+        if key in _GENERIC_ZH:
+            continue
+        # 「雷电将军」里的「雷电」不是作品名，只是它的一段。
+        # 不排掉的话「画个雷电将军」会附赠一个 `raiden_(series)`。
+        if any(key in ck for ck in chr_keys):
+            continue
+        parts = []
+        for tag, zh, _cat in _base_first(rows)[:3]:
+            tail = zh[len(key):] if zh.startswith(key) else zh
+            parts.append("%s%s" % (tag, tail))
+        cp_entries.append((key, "- %s → %s" % (key, " ｜ ".join(parts)), False))
+
+    # ── 外文名（2026-11-02）─────────────────────────────────────────────
+    ascii_entries = []
+    for tag, zh, cat in _ascii_lookup(q, by_tag):
+        line = "- %s → %s" % (tag, zh)
+        ascii_entries.append((tag, line, False))
+
+
     # 通用标签：先滤掉角色变体和「借名条目」，再一次性找同族。
     kept = []
     for key, rows in gen_hits[:max_keys]:
@@ -578,8 +831,15 @@ def extract(text, max_keys=20, budget=600, rng=None):
     rand_block = random_tags(cat=rand[0], pattern=rand[1], rng=rng) if rand else ""
 
     # 按价值顺序拼，**逐行**卡预算——绝不从中间切断某一行。
-    ordered = (("【原话里提到的角色/专有名词】（库里真实存在的候选）", chr_entries),
-               ("【原话里能直接认出的通用标签】（库里真实存在，直接用）", gen_entries))
+    # 顺序 = 价值顺序。角色段必须第一（见 docstring 里那个「被从尾巴截断」
+    # 的教训）；简称补全紧跟角色段，因为它回答的是同一个问题。
+    ordered = (
+        ("【原话里提到的角色/专有名词】（库里真实存在的候选）", chr_entries),
+        ("【简称补全：库里更完整的名字】", rev_entries),
+        ("【原话里的外文名】", ascii_entries),
+        ("【原话里提到的作品/出处】", cp_entries),
+        ("【原话里能直接认出的通用标签】（库里真实存在，直接用）", gen_entries),
+    )
     blocks, kept_keys, used = [], [], 0
     for title, entries in ordered:
         if not entries:

@@ -42,6 +42,8 @@ FIXTURE = (
     "ginro_(dr._stone)\t银狼（Dr.STONE）\t4\n"
     "raiden_shogun\t雷电将军（原神）\t4\n"
     "raiden_shogun_(cosplay)\t雷电将军（Cosplay）\t0\n"
+    "kamisato_ayaka\t神里绫华（原神）\t4\n"
+    "ayaka_(charismabard)\t绫华（魅力吟游诗人）\t4\n"
     "maid\t女仆\t0\n"
     "maid_(disgaea)\t女仆（魔界战记）\t4\n"
     "girl_(anime_expo)\t女孩（Anime_Expo）\t3\n"
@@ -362,9 +364,66 @@ class ExtractTest(_Base):
         self.assertEqual(r["confirmed"], [])
         self.assertEqual(r["ambiguous"], [])
 
-    def test_pure_ascii_need_yields_empty_doc(self):
-        # 没有中文就没有滑窗可言；ASCII tag 名交给 search_tags / 搜索 agent
-        self.assertEqual(st.extract("silver_wolf")["doc"], "")
+    def test_pure_ascii_name_is_resolved_now(self):
+        """纯外文名必须能查到（2026-11-02 改）。
+
+        回归点：`extract()` 原先是 `if not _CJK.search(q): return empty`，
+        群友打 `Saber` / `Frieren` / `Hatsune Miku` 时资料包直接是空的，
+        生图只能凭模型记忆瞎写——正是「角色画错」的一大来源。
+        """
+        r = st.extract("silver_wolf")
+        self.assertIn("silver_wolf_(honkai:_star_rail)", r["doc"])
+        # 空格要能当成分隔符拼成 tag 名
+        r2 = st.extract("Hatsune Miku")
+        self.assertIn("hatsune_miku", r2["doc"])
+
+    def test_short_name_falls_back_to_the_full_name(self):
+        """群友说「绫华」，库里那个角色叫「神里绫华」——必须补全。
+
+        回归点：滑窗只做「query 里含 key」的单向匹配，所以「绫华」永远碰不到
+        「神里绫华」。这里钉住反查补全。
+        """
+        r = st.extract("画个绫华")
+        self.assertIn("kamisato_ayaka", r["doc"])
+        self.assertIn("神里绫华", r["doc"])
+
+    def test_short_name_variant_also_resolves(self):
+        """「初音」不命中任何角色词时，也要能补到「初音未来」→ hatsune_miku。"""
+        r = st.extract("画个初音")
+        self.assertIn("hatsune_miku", r["doc"])
+
+    def test_series_name_is_resolved(self):
+        """作品名是 cat=3，原来 extract 只查 cat=4/cat=0，一个都查不到。"""
+        r = st.extract("画个原神的角色")
+        self.assertIn("genshin_impact", r["doc"])
+
+    def test_reverse_fill_does_not_duplicate_the_full_name(self):
+        """说了完整名就别再列「更完整的名字」，否则全是重复噪音。"""
+        r = st.extract("画个神里绫华")
+        self.assertIn("kamisato_ayaka", r["doc"])
+        self.assertNotIn("可能是简称", r["doc"])
+
+    def test_generic_words_are_not_treated_as_abbreviations(self):
+        """`女仆` / `咖啡` 是通用词，不能拿去反查出一堆叫「女仆XX」的角色。
+
+        回归点：反查兜底曾经在整句里乱切 2~3 字窗口，「一个女仆在煮咖啡」
+        会吐出 `maid_girl_(...)`、`coffee_candy_cookie` 这类无关角色。
+        """
+        r = st.extract("一个女仆在煮咖啡")
+        self.assertIn("maid", r["doc"])
+        self.assertNotIn("可能是简称", r["doc"])
+
+    def test_ascii_is_never_split_into_abbreviation_tokens(self):
+        """`Saber` 不能被切成 `Sab` / `er`——`er` 会撞出 Amber / Joker。"""
+        r = st.extract("Saber")
+        self.assertNotIn("Amber", r["doc"])
+        self.assertNotIn("可能是简称", r["doc"])
+
+    def test_series_fragment_inside_a_character_name_is_not_a_series(self):
+        """`雷电将军` 里的「雷电」不是作品名，不该附赠 `raiden_(series)`。"""
+        r = st.extract("画个雷电将军")
+        self.assertIn("raiden_shogun", r["doc"])
+        self.assertNotIn("raiden_(series)", r["doc"])
 
     def test_empty_text_is_safe(self):
         self.assertEqual(st.extract("")["doc"], "")
