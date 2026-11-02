@@ -334,21 +334,41 @@ def _brief(err, limit=60):
 # 一次并发碰撞废掉一整天，比碰撞本身贵得多。
 _CONCURRENCY_HINTS = ("concurrency", "too many concurrent")
 
+# 服务端临时不可用的状态码（2026-11-03）。
+#
+# 为什么单独判：中转站的并发上限很低，同一时刻占满了就回 503。它和
+# 「concurrency」是同一个病（同时的请求太多），只是措辞不同。之前这类
+# 失败落到 `LLM_FALLBACK_TTL`（.env 里设的 3600 秒），一个过载就把中转站
+# 黑一小时——而其实等几十秒、在飞的请求返回之后就能再用。
+#
+# 502/504 同理：网关扛不住、上游超时，都是「等一下就好」，不是模型退役。
+_TRANSIENT_HINTS = (
+    "503", "502", "504",
+    "service unavailable", "bad gateway", "gateway timeout",
+    "temporarily unavailable", "overloaded",
+)
+
 
 def _ttl_for(err):
     """这个失败该拉黑多久。
 
-    分三档：
-      - **并发冲突** → `LLM_CONCURRENCY_TTL`（默认 60 秒）。等那时在飞的请求
-        返回就能再试。判据是错误体里的 `concurrency` / `too many concurrent`。
-      - **429（额度/频率到顶）** → 24 小时。免费额度按天重置，600 秒后重试纯
-        属白撞，让降级链把请求直接交给还能用的模型。
-      - **其余**（网络抖动、超时、模型退役）→ 默认短 TTL，到期自愈，不用重启。
+    分四档（2026-11-03 加第二档）：
+      - **并发冲突** → `LLM_CONCURRENCY_TTL`（默认 60 秒）。判据是错误体里的
+        `concurrency` / `too many concurrent`。
+      - **服务端临时不可用（502/503/504）** → 同样 60 秒。中转站的并发上限低，
+        占满了就回 503，本质和并发冲突是同一件事，只是措辞不同。等几十秒、
+        在飞的请求返回之后就能再用，不该按硬故障黑一小时。
+      - **429（额度/频率到顶）** → `LLM_RATE_LIMIT_TTL`（默认 24 小时）。
+        免费额度按天重置，短时间重试纯属白撞。
+      - **其余**（模型退役、key 失效、网络硬故障）→ `LLM_FALLBACK_TTL`。
 
-    ⚠️ 顺序不能反：并发冲突的响应**也是 429**，先按 429 判就全被算成额度到顶。
+    ⚠️ 顺序不能反：并发冲突和临时不可用的响应**也可能是 429**，先按 429 判
+    就全被算成额度到顶。
     """
     text = str(err).lower()
     if any(h in text for h in _CONCURRENCY_HINTS):
+        return LLM_CONCURRENCY_TTL
+    if any(h in text for h in _TRANSIENT_HINTS):
         return LLM_CONCURRENCY_TTL
     if "429" in text:
         return LLM_RATE_LIMIT_TTL

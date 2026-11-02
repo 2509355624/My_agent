@@ -199,6 +199,25 @@ class RateLimitBanTest(_ChainBase):
         self.assertEqual(llm._ttl_for(RuntimeError("HTTP 500 Server Error")),
                          llm.LLM_FALLBACK_TTL)
 
+    def test_transient_503_gets_the_short_ttl(self):
+        """503/502/504 = 服务端临时扛不住，几十秒自愈，不该按硬故障黑一小时。
+
+        2026-11-03 实录：hfapi 中转站并发占满直接回 503，而它落到
+        `LLM_FALLBACK_TTL`（.env 里 3600 秒），一次过载把中转站黑了一小时。
+        本质和 concurrency 是同一件事，只是措辞不同。
+        """
+        for err in (
+            "LLM 请求失败 HTTP 503 Service Unavailable @https://hfapi.cloud/v1",
+            "HTTP 502 Bad Gateway",
+            "HTTP 504 Gateway Timeout",
+            "service temporarily unavailable",
+        ):
+            self.assertEqual(llm._ttl_for(RuntimeError(err)),
+                             llm.LLM_CONCURRENCY_TTL, err)
+
+    def test_503_short_ttl_is_much_shorter_than_fallback(self):
+        self.assertLess(llm.LLM_CONCURRENCY_TTL, llm.LLM_FALLBACK_TTL)
+
     def test_explicit_ttl_overrides_the_default(self):
         before = time.time()
         llm._mark_dead(("volc", "a"), "x", ttl=123)
