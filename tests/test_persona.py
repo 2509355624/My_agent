@@ -163,7 +163,7 @@ class HeadTest(PersonaBase):
         self.assertIn("画面：", head)           # 每轮一行画面标签（配图用）
         self.assertIn("QQ 群", head)           # 群聊环境
         self.assertIn("张三", head)
-        self.assertNotIn("###", head)
+        self.assertNotIn("####", head)   # 只禁用四级以上的深嵌套
         # 刻意不带的东西：工具协议、Skill 目录、审核话术（用户点名不要）
         self.assertNotIn("[[TOOL:", head)
         self.assertNotIn("Skill", head)
@@ -233,11 +233,18 @@ class TurnTest(PersonaBase):
         self.assertEqual(turn[4], "坐在桌前")
 
     def test_history_keeps_dialogue_only(self):
+        """历史里每条 assistant 都必须带三行（2026-11-02 起会补齐）。
+
+        模型漏写时 `_ensure_meta` 补占位——不给下一轮留「可以不写」的示范。
+        """
         self._run("你好呀")
         hist = persona._load_hist("group_1")
         self.assertEqual([m["role"] for m in hist], ["user", "assistant"])
         self.assertEqual(hist[0]["content"], "张三：在吗")
-        self.assertEqual(hist[1]["content"], "你好呀")
+        self.assertTrue(hist[1]["content"].startswith("你好呀"))
+        # 三行被补齐了（模型没写画面，补成空值也算形状完整）
+        self.assertIn("心情：", hist[1]["content"])
+        self.assertIn("状态：", hist[1]["content"])
 
     def test_group_prefixes_sender_private_does_not(self):
         self._run("嗯", text="在吗", sender="张三")
