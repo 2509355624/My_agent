@@ -142,7 +142,10 @@ class TrimTest(unittest.TestCase):
         self.assertEqual(out[-1]["content"], "m29")
 
     def test_truncates_long_message(self):
-        out = persona.trim([{"role": "user", "content": "长" * 900}])
+        # 用比上限长一大截的内容，别贴着边界写——上限从 200 调到 900 时，
+        # 「长」×900 正好不超，这条就假失败了。
+        out = persona.trim([{"role": "user",
+                             "content": "长" * (persona.MSG_MAX_CHARS + 500)}])
         self.assertEqual(len(out[0]["content"]), persona.MSG_MAX_CHARS + 1)
 
     def test_drops_non_dialogue_roles(self):
@@ -156,7 +159,7 @@ class HeadTest(PersonaBase):
     def test_head_has_persona_contract_env_and_nothing_else(self):
         head = persona.build_head(_card("纱雾"), "group_1", "张三")
         self.assertIn("说话很轻", head)        # 角色人设
-        self.assertIn("以这个角色的口吻", head)  # 输出契约
+        self.assertIn("第三人称叙述", head)     # 输出契约（2026-11-02 改小说式）
         self.assertIn("画面：", head)           # 每轮一行画面标签（配图用）
         self.assertIn("QQ 群", head)           # 群聊环境
         self.assertIn("张三", head)
