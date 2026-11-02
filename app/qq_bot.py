@@ -41,7 +41,8 @@ try:
 except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
-from app import (card_bot, confirm_gate, direct_gen, image_jobs, image_log,
+from app import (card_bot, confirm_gate, direct_gen, galgame, image_jobs,
+                 image_log,
                  image_out, interject,
                  logsetup,
                  longterm, moss_bot, notify, persona, qq_api, qq_status, recent,
@@ -1033,6 +1034,53 @@ class SessionRunner:
             # quiet_images：被审核拦下时也不吭声（见 _deliver 的说明）。
             self._deliver(False, "", [name], "", quiet_images=True)
 
+    def start_cg(self, scene):
+        """galgame 的 CG 挂后台线程出，画好发回本会话。
+
+        跟 `_draw_persona` 一个思路，区别只在渠道：这边走 `galgame.draw_cg`
+        （anima 渠道，一张几十秒），所以等图的时候正文早就发出去了，节奏不受影响。
+        """
+        threading.Thread(target=self._draw_gal_cg, args=(scene,),
+                         name="galgame-cg", daemon=True).start()
+
+    def _draw_gal_cg(self, scene):
+        try:
+            name = galgame.draw_cg(scene, self.session_key)
+        except Exception:
+            log.exception("galgame CG 异常 %s", self.session_key)
+            return
+        if name:
+            # quiet_images：被审核拦下不吭声——游戏里突然冒一句「图没过审」
+            # 比没有图更出戏。
+            self._deliver(False, "", [name], "", quiet_images=True)
+
+    def _run_galgame_turn(self, batch):
+        """galgame 态的一轮：**1 次** LLM 调用，正文 + 选项一次发完，CG 挂后台。
+
+        跟扮演态是同一条路子（`_run_persona_turn`），差别在于**选项不走模型**
+        ——它从剧本里取（`galgame._opt_text`），模型只负责把这一幕演出来。所以
+        模型再弱也毁不掉分支。
+        """
+        texts = [(it.get("text") or "").strip() for it in batch]
+        texts = [t for t in texts if t]
+        if not texts:
+            return
+        # 引用**触发这条会话的那句**（合并批的第一条）：连发三条时，对方看到
+        # 「机器人引用了我最先说的那句」，指向最清楚。同 _run_persona_turn。
+        reply_to = str(batch[0].get("reply_to") or "")
+        turn = None
+        try:
+            turn = galgame.run_turn(self.session_key, "\n".join(texts),
+                                    self.target, batch[0].get("sender") or "")
+        except Exception:
+            log.exception("galgame 轮异常 %s", self.session_key)
+        if turn is None:
+            return
+        if turn.reply.strip():
+            self._deliver(False, turn.reply, [], "", reply_to=reply_to)
+        if turn.scene.strip():
+            self.start_cg(turn.scene)
+
     def _run_turn(self, batch):
         """在 worker 线程里跑一轮（run_agent_stream 是同步生成器）。"""
         # 这条会话线有没有被别的 agent 接管（settings 的 session_prompt_agents）。
@@ -1046,6 +1094,13 @@ class SessionRunner:
         # `[direct] 模型判回话`）。
         run_agent = _effective_agent(self.session_key)
         borrowed = run_agent != QQ_AGENT_ID
+        # galgame 态**排在扮演态前面**：两者都是「这条会话被接管」，但 galgame
+        # 手里有进度要推进，扮演态只是个长期状态。会话同时命中两个（先
+        # `gal 开局`、之后又发了 `#和泉纱雾`）时游戏优先——不然人正在选分支，
+        # 机器人突然跳去自由聊天，进度就卡在那一格了。
+        if not borrowed and galgame.active(self.session_key):
+            self._run_galgame_turn(batch)
+            return
         # 扮演态走自己那条路：不给工具、只一次调用、纯文字。判定放在最前面，
         # 因为下面整段都是「生图机器人」的逻辑（confirm_gate / direct_gen /
         # agent 循环），扮演态一个都不该碰上。
@@ -1679,6 +1734,26 @@ class QQBot:
                      reply_to=str(ev.get("message_id") or "") or None)
             except Exception:
                 log.exception("回角色扮演命令失败 %s", session_key)
+            return
+
+        # ── galgame：`gal 开局` / `gal 结束` / `gal 存档` 这类命令 ──────
+        # 排在 persona 之后：两者都以「整条消息」为判据，`gal 开局` 和
+        # `#和泉纱雾` 互不干扰。进游戏之后这条会话由 _run_turn 分流到 galgame
+        # 支路（见那里），不进普通聊天链。
+        gal = galgame.handle_command(session_key, text)
+        if gal is not None:
+            try:
+                send = (qq_api.send_group if target == "group"
+                        else qq_api.send_private)
+                if gal.reply:
+                    send(target_id, gal.reply,
+                         reply_to=str(ev.get("message_id") or "") or None)
+            except Exception:
+                log.exception("回 galgame 命令失败 %s", session_key)
+            # 开场的 CG 挂后台出：一张几十秒，等在这儿命令回执就被拖到几十秒后。
+            if gal.scene:
+                self._runner_for(session_key, target, target_id).start_cg(
+                    gal.scene)
             return
 
         runner = self._runner_for(session_key, target, target_id)
