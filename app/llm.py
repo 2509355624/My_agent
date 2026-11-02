@@ -84,6 +84,25 @@ LAST_USAGE = _usage()
 CURRENT_PROVIDER = LLM_PROVIDER
 
 
+def describe_effective(provider=None, model=None):
+    """一行说清「现在真正在用的是谁」，供启动日志与排障用。
+
+    2026-11-02 加：`config.MODEL` 是被自定义 provider 覆盖前的旧默认值，和
+    实际生效的 model 经常不是一回事（当前 MODEL 指火山的
+    `deepseek-v4-flash-ga-260731`，实际跑的是中转站的 `deepseek-v4.1-flash`）。
+    排障时看错这两行会一路走偏，所以把它们一起念出来。
+    """
+    try:
+        eff = get_effective_config(provider, model)
+    except Exception:                           # noqa: BLE001  配置坏了不该拦住启动
+        return "llm 生效配置解析失败"
+    key = str(eff.get("api_key") or "")
+    tail = ("…" + key[-4:]) if len(key) > 4 else ""
+    return ("[llm] 生效 provider=%s  base_url=%s  model=%s  key=%s****%s"
+            % (eff.get("provider"), eff.get("base_url"), eff.get("model"),
+               ("…" if tail else ""), tail))
+
+
 def get_effective_config(provider=None, model=None):
     """解析出一次请求要用的 (base_url, model, api_key, provider)"""
     provider = (provider or CURRENT_PROVIDER or LLM_PROVIDER).lower()
