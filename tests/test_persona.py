@@ -400,6 +400,35 @@ class DrawTest(unittest.TestCase):
         ij.enqueue.assert_not_called()
 
 
+class GroupModeTest(unittest.TestCase):
+    """群聊放开（2026-11-02）：按人隔离 + 尺度克制条款。"""
+
+    def test_private_key_is_unchanged(self):
+        self.assertEqual(persona._persona_key("private_123", "999"), "private_123")
+
+    def test_group_key_is_per_person(self):
+        """同一个群里两个人是两条独立的线——不然 A 刷的好感会算到 B 头上。"""
+        a = persona._persona_key("group_456", "111")
+        b = persona._persona_key("group_456", "222")
+        self.assertEqual(a, "group_456_111")
+        self.assertNotEqual(a, b)
+
+    def test_group_key_without_uid_falls_back(self):
+        """拿不到 QQ 号时退回原键：宁可共用一条，也好过整轮不演。"""
+        self.assertEqual(persona._persona_key("group_456", ""), "group_456")
+
+    def test_group_head_has_restraint_note(self):
+        card = {"name": "纱雾", "systemPrompt": "你是纱雾。"}
+        head = persona.build_head(card, "group_1", "张三")
+        self.assertIn("这是群聊", head)
+        self.assertIn("点到为止", head)
+
+    def test_private_head_has_no_restraint_note(self):
+        card = {"name": "纱雾", "systemPrompt": "你是纱雾。"}
+        head = persona.build_head(card, "private_1", "")
+        self.assertNotIn("这是群聊", head)
+
+
 class MoodAndStateTest(unittest.TestCase):
     """自由模式的情绪与状态（2026-11-02）。"""
 

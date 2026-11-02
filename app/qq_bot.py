@@ -998,21 +998,30 @@ class SessionRunner:
         # 引用**触发这条会话的那句**（合并批的第一条），不是最后一条：
         # 连发三条时，对方看到「机器人引用了我最先说的那句」，指向最清楚。
         reply_to = str(batch[0].get("reply_to") or "")
+        # 群里说话人的 QQ：群聊按人隔离状态（见 `persona._persona_key`）。
+        # 取**第一条**的，和 `reply_to` 同一个口径——这一批就是他连发的那几句。
+        sender_uin = str(batch[0].get("sender_uin") or "")
         turn = None
         try:
             turn = persona.run_turn(self.session_key, "\n".join(texts),
                                     self.target,
-                                    batch[0].get("sender") or "")
+                                    batch[0].get("sender") or "",
+                                    sender_uin=sender_uin)
         except Exception:
             log.exception("扮演轮异常 %s", self.session_key)
         if turn is None:
             return
         if turn.reply.strip():
             self._deliver(False, turn.reply, [], "", reply_to=reply_to)
+        # 2026-11-02：**群聊不出图**。图发到群里所有人可见、又没法用引用指向
+        # 具体某个人，还会把对话刷掉；私聊才配图。文字和状态照常记录。
+        if self.target == "group":
+            return
         # 配图门槛（2026-11-02）：情绪强度 >= 7，或这一轮身上换了衣服才出图。
         # 每轮都出会把对话框刷成图册、还白烧显卡。判定要用**上一轮**的状态
         # 比，所以在这里取一次再传下去。
-        prev_state = str((persona._entry(self.session_key) or {}).get("state") or "")  # noqa: SLF001
+        key = persona._persona_key(self.session_key, sender_uin)  # noqa: SLF001
+        prev_state = str((persona._entry(key) or {}).get("state") or "")  # noqa: SLF001
         if turn.scene.strip() and persona.should_draw(
                 turn.intensity, prev_state, turn.state):
             threading.Thread(target=self._draw_persona,
@@ -1120,13 +1129,14 @@ class SessionRunner:
         # 因为下面整段都是「生图机器人」的逻辑（confirm_gate / direct_gen /
         # agent 循环），扮演态一个都不该碰上。
         #
-        # 2026-11-02：**群聊不走扮演态**。命令层已经拦住「进角色」，这里再挡
-        # 一次是因为会话状态可能是群聊时代留下的（切到群聊后那条线还绑着卡），
-        # 不挡的话群里会继续接着演下去。
-        if (not borrowed and self.target != "group"
-                and persona.active_card(self.session_key) is not None):
-            self._run_persona_turn(batch)
-            return
+        # 2026-11-02：**群聊也走扮演态了**。判定要按**人**算
+        # （`_persona_key`），不然群里 A 在演、B 说句话也会被当成 A。
+        if not borrowed:
+            _pk = persona._persona_key(  # noqa: SLF001
+                self.session_key, batch[0].get("sender_uin") or "")
+            if persona.active_card(_pk) is not None:
+                self._run_persona_turn(batch)
+                return
         # 表情包收藏：群图趁链接活着赶紧落盘，跟「这轮回不回」无关——
         # 接话被拒的轮次里出现的图也照收。下载是阻塞 IO，好在已经在
         # worker 线程上。失败只记日志，别让它碰倒整轮对话。
@@ -1746,14 +1756,11 @@ class QQBot:
         # 之前。群里照旧要 @ 才走得到这儿 —— 这里已经在 _should_reply 放行
         # 之后，所以没开「不 @ 也能使唤它」这个口子。
         #
-        # 2026-11-02：**角色扮演只在私聊开**。群里不进入扮演态——群里多人围观，
-        # 亲密内容会脱离可控范围，配图也没法用引用指向具体某个人。私聊里
-        # `#出戏` / `#角色扮演` 列表照常能认，免得有人卡住了退不出来。
-        if target == "group":
-            cmd = None
-            log.debug("群聊不进扮演态，跳过 persona 命令：%s", session_key)
-        else:
-            cmd = persona.handle_command(session_key, text)
+        # 2026-11-02：**群聊也能进扮演态了**，但按人隔离——同一个人在不同群里
+        # 是两条线，同一个群里不同人是不同的线（见 `persona._persona_key`）。
+        # 群里的尺度由 `_GROUP_NOTE` 压着，而且群里不出图。
+        persona_key = persona._persona_key(session_key, user_id)  # noqa: SLF001
+        cmd = persona.handle_command(persona_key, text)
         if cmd is not None:
             try:
                 send = (qq_api.send_group if target == "group"

@@ -151,8 +151,7 @@ _CONTRACT = (
     "\n"
     "**她长什么样不用写，我照角色卡上的样子画。**\n"
     "\n"
-    "## 心情\n"
-    "\n"
+    "## 心情\n"    "\n"
     "格式：`情绪 强度N`，N 是 0~10 的整数。\n"
     "\n"
     "情绪只能从这十个里挑**一个**，不许自己编：\n"
@@ -177,6 +176,28 @@ _CONTRACT = (
     "- **状态接着上一轮往下写**。上一轮脱掉的外套这一轮不会自己穿回去；"
     "上一轮已经全裸，这一轮就写全裸，不要凭空给她穿回衣服。\n"
 )
+
+# 群聊专用的一段，追加在 `_CONTRACT` 之后（2026-11-02）。
+#
+# 私聊是一对一，尺度交给角色卡人设；群聊不一样——一屋子人看着，说出去的话
+# 收不回来，而且模型在群里更容易被围观者起哄带跑。所以群里单独压一道：
+# 亲密描写点到为止，不展开、不露骨。
+# 注意这只是**语气与尺度**的约束，不是让角色出戏，她仍然是同一个人。
+_GROUP_NOTE = (
+    "## 这是群聊\n"
+    "\n"
+    "现在是一个群里，**不止一个人在看**，而且随时可能被人截图。\n"
+    "\n"
+    "所以：\n"
+    "\n"
+    "- 亲密的话点到为止，不要展开写、不要露骨描写，一句带过就好。\n"
+    "- 有人起哄、追问更露骨的内容时，用角色自己的方式岔开——害羞、生气、"
+    "换话题都行，**不要顺着往下写**。\n"
+    "- 你不是在演给一个人看，别对着某一个人说悄悄话。\n"
+    "\n"
+    "这不影响你作为她本人说话，只是这个场合不适合那些内容。\n"
+)
+
 
 _NOTE_PROMPT = (
     "把下面的对话压成一段 %d 字以内的回忆，用「我」的第一人称写，"
@@ -354,6 +375,23 @@ def _save_state(state):
     if parent:
         os.makedirs(parent, exist_ok=True)
     _atomic_write_text(_STATE_PATH, json.dumps(state, ensure_ascii=False, indent=2))
+
+
+def _persona_key(session_key, sender_uin=""):
+    """扮演态的状态键。**群里按人隔离，私聊不隔离。**
+
+    2026-11-02：群聊放开之前，状态是整条会话线一份（`group_<群号>`）——群里
+    A 把好感刷到 50、B 进来看到的就是恋人关系，历史也混在一起，模型分不清
+    谁在说话。所以群里改成 `group_<群号>_<QQ号>`，每人一条独立的线和档案；
+    私聊本来就是一对一，`private_<QQ号>` 已经是隔离的，不用再加一层。
+
+    拿不到对方 QQ 号时退回原键（宁可大家共用一条，也好过整轮不演）。
+    """
+    key = str(session_key or "")
+    uid = str(sender_uin or "").strip()
+    if not uid or not key.startswith("group_"):
+        return key
+    return key + "_" + uid
 
 
 def _entry(session_key):
@@ -568,6 +606,9 @@ def build_head(card, session_key, sender, note="", state=""):
     persona = str(card.get("systemPrompt") or "").strip()
     parts.append(persona if persona else "你是%s。" % card["name"])
     parts.append(_CONTRACT)
+    # 群聊多压一道尺度约束（2026-11-02）：私聊交给角色卡人设，群里不放开。
+    if str(session_key or "").startswith("group_"):
+        parts.append(_GROUP_NOTE)
     parts.append(_env_note(session_key, sender))
     if note.strip():
         parts.append("【之前的事】\n" + note.strip())
@@ -592,20 +633,24 @@ def _env_note(session_key, sender):
     return "## 当前环境\n\n你在跟一个人私聊（QQ %s）。" % tid
 
 
-def run_turn(session_key, text, target, sender=""):
-    """扮演态的一轮：**1 次** LLM 调用，返回 `Turn(正文, 画面)`。
+def run_turn(session_key, text, target, sender="", sender_uin=""):
+    """扮演态的一轮：**1 次** LLM 调用，返回 `Turn(正文, 画面, 情绪, 强度, 状态)`。
 
-    正文空 = 这轮什么都不发（调用方别开口）；画面空 = 这轮不出图（见 `split_scene`）。
+    正文空 = 这轮什么都不发（调用方别开口）；画面空 = 这轮不出图。
+
+    `sender_uin`（2026-11-02）：群里说话人的 QQ 号。**群聊按人隔离状态**，
+    见 `_persona_key`——不隔离的话 A 刷的好感会算到 B 头上。私聊传不传都行。
     """
-    card = active_card(session_key)
+    key = _persona_key(session_key, sender_uin)
+    card = active_card(key)
     if card is None:
         return Turn("", "")
 
-    ent = _entry(session_key) or {}
+    ent = _entry(key) or {}
     note = str(ent.get("note") or "")
     prev_state = str(ent.get("state") or "")
     head = build_head(card, session_key, sender, note, prev_state)
-    hist = trim(_load_hist(session_key))
+    hist = trim(_load_hist(key))
 
     # 群里带上说话人，模型才知道是谁在说话（同 qq_bot 正文前缀的做法）；
     # 私聊和空正文都不加——「张三：」后面什么都没有比不写更糊涂。
@@ -618,14 +663,14 @@ def run_turn(session_key, text, target, sender=""):
     try:
         raw = llm.call_llm(msgs)
     except Exception:
-        log.exception("扮演轮调用失败 %s", session_key)
+        log.exception("扮演轮调用失败 %s", key)
         return Turn("", "")
     reply, scene, mood, intensity, state = split_turn(
         raw, default_mood=str(ent.get("mood") or ""))
     if not reply:
         # 整轮空 = 模型没交作业。这属于可用性问题，值得说一句，
         # 但**不重跑**：重跑一次未必更好，还白烧一轮。
-        log.warning("扮演轮空回复 %s", session_key)
+        log.warning("扮演轮空回复 %s", key)
         return Turn("（我这会儿有点卡，你再说一句？）", "")
 
     # 落历史：存**完整原文**（含「画面 / 心情 / 状态」三行）。2026-11-02 改：
@@ -634,15 +679,15 @@ def run_turn(session_key, text, target, sender=""):
     hist.append({"role": "user", "content": said})
     hist.append({"role": "assistant", "content": str(raw or "").strip()})
     try:
-        _save_hist(session_key, hist[-HISTORY_LIMIT:])
+        _save_hist(key, hist[-HISTORY_LIMIT:])
     except Exception:
-        log.exception("扮演轮落史失败 %s", session_key)
+        log.exception("扮演轮落史失败 %s", key)
 
     # 情绪与状态落盘（2026-11-02）：只覆盖不累加——情绪是当下的，
     # 状态是这一格的结果，下一轮读 `state` 续着演。
-    _save_mood(session_key, mood, intensity, state, prev_state)
+    _save_mood(key, mood, intensity, state, prev_state)
 
-    _bump_turn(session_key)
+    _bump_turn(key)
     return Turn(reply, scene, mood, intensity, state)
 
 

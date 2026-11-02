@@ -1696,10 +1696,13 @@ class PersonaTurnTest(unittest.TestCase):
     """
 
     def _runner(self):
-        return qq_bot.SessionRunner(None, "group_9", "group", "9")
+        # 2026-11-02：改成私聊。群聊现在**不出图**（图发到群里所有人可见、
+        # 又没法指向具体某个人），这些配图用例必须在私聊前提下测。
+        return qq_bot.SessionRunner(None, "private_9", "private", "9")
 
     def _batch(self, text="在吗"):
-        return [{"text": text, "sender": "张三", "reply_to": "m1"}]
+        return [{"text": text, "sender": "张三", "reply_to": "m1",
+                 "sender_uin": "10000"}]
 
     def test_reply_goes_out_and_draw_starts(self):
         runner = self._runner()
