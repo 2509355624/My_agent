@@ -819,8 +819,132 @@ def _env_note(session_key, sender):
     return "## 当前环境\n\n你在跟一个人私聊（QQ %s）。" % tid
 
 
+# ─── 意图判断（两段式第一段，2026-11-02）────────────────────
+#
+# 为什么拆成两段：原来一次调用里塞了人设、契约、亲密指导、格式要求，模型只能
+# 挑最要紧的执行。实测同一句「做红烧兔头」，四个角色把它当成真的要做菜
+# （学姐在教焯水、妹妹已经把兔头下锅了），而白色小兔因为设定里有兔子的身份，
+# 反而听出了双关。缺的不是更长的人设，是「这是在开玩笑」这一层判断。
+#
+# 拆法：先用一段**短提示词、不带人设**的调用判断意图，把结论以一行注入到
+# 主提示词里。判断段只有判断，表演段只有表演，互不抢注意力。
+#
+# 失败一律退化成 `None`：调用方不注入那一行，走原来的单次流程。分类挂了
+# 不该让整轮回不了话。
+
+# 意图类别。前三类是私聊的主要场景，joke 是这次要治的，insult 兜底。
+INTENTS = {
+    "intimate": "亲密/求欢：想亲近、调情、要求身体接触或性",
+    "joke": "玩笑/逗你：拿角色开玩笑、威胁着玩、故意说离谱的话",
+    "literal": "字面请求：真的要求做某件事、问某个问题",
+    "insult": "冒犯：贬低、辱骂、羞辱角色本身",
+    "neutral": "普通对话：闲聊、叙述、没有明确指向",
+}
+
+_INTENT_PROMPT = """判断下面这句话**在干什么**，只输出一个 JSON 对象，不要解释。
+
+{
+  "intent": "intimate | joke | literal | insult | neutral",
+  "note": "用不超过 15 个字说明他到底在干什么"
+}
+
+类别：
+- intimate —— 亲密/求欢：想亲近、调情、要求身体接触或性
+- joke —— 玩笑/逗你：拿对方开玩笑、威胁着玩、故意说离谱的话
+- literal —— 字面请求：真的要求做某件事、问某个问题
+- insult —— 冒犯：贬低、辱骂、羞辱对方
+- neutral —— 普通对话：闲聊、叙述、没有明确指向
+
+判断要点：
+- 「做红烧兔头」「把你吃掉」「打包带走」这类**针对角色本身**的离谱说法，
+  通常是玩笑，不是真的要做菜或者真的要伤害。判 joke。
+- 「抱抱」「亲一下」「过来」这种直接的亲近要求，判 intimate。
+- 「帮我倒水」「今天几号」这种正常的事项，判 literal。
+- 拿不准时判 neutral。
+
+角色是谁：%(who)s
+他说的：%(said)s"""
+
+
+def _judge_intent(card, said, state=""):
+    """判断这句话在干什么。返回 `(intent, note)`；判断失败返回 `(None, "")`。
+
+    单独一次调用、不带人设——人设会影响判断（傲娇角色看什么都像调戏）。
+    超时短、输出短，失败就退化成原流程，不阻塞这一轮。
+    """
+    who = str((card or {}).get("name") or "对方")
+    prompt = _INTENT_PROMPT % {
+        "who": who + ("（" + state + "）" if state else ""),
+        "said": str(said or "")[:200],
+    }
+    try:
+        raw = llm.call_llm([{"role": "user", "content": prompt}], timeout=20)
+    except Exception:                            # noqa: BLE001
+        log.warning("意图判断调用失败，走原流程")
+        return None, ""
+    d = _parse_json_loose(raw)
+    if not isinstance(d, dict):
+        log.info("意图判断没交 JSON，走原流程：%r", str(raw or "")[:80])
+        return None, ""
+    intent = str(d.get("intent") or "").strip().lower()
+    if intent not in INTENTS:
+        log.info("意图判断给了不认识的类别 %r，走原流程", intent)
+        return None, ""
+    note = str(d.get("note") or "").strip()[:30]
+    return intent, note
+
+
+def _parse_json_loose(raw):
+    """从回复里抠 JSON。**不做语义修补**，抠不出来就返回 None。"""
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    a, b = s.find("{"), s.rfind("}")
+    if a >= 0 and b > a:
+        try:
+            return json.loads(s[a:b + 1])
+        except ValueError:
+            return None
+    return None
+
+
+# 意图 → 主提示词里那行注入。没有这一条对应项就什么都不加。
+_INTENT_HINT = {
+    "intimate": ("对方在求欢、要亲近。", "顺着接，可以进入亲密描写；"
+                                     "尺度按他说到哪儿写到哪儿。"),
+    "joke": ("对方在开玩笑、逗你，不是认真地要你去做这件事。",
+             "**先听出这是玩笑**：可以回怼、翻个白眼、配合着演、或者假装生气。"
+             "不要当真去办事（别真的讨论怎么做菜），也不要因为这句话就脸红心跳——"
+             "玩笑归玩笑，害羞留给真正的亲近。"),
+    "literal": ("对方在认真地要求你做事或问问题。", "正常应对，该做做、该答答。"),
+    "insult": ("对方在贬低、羞辱你。", "会难过或者会生气，按角色性格反应，不要当没事。"),
+    "neutral": ("", ""),
+}
+
+
+def _intent_block(intent, note):
+    """把判断结果拼成系统头里的一段。intent 为空时不加。"""
+    if not intent or intent not in _INTENT_HINT:
+        return ""
+    what, how = _INTENT_HINT[intent]
+    if not what:
+        return ""
+    lines = ["## 他刚才在干什么", "", what]
+    if note:
+        lines.append("（系统判断：%s）" % note)
+    lines.append("")
+    lines.append(how)
+    return "\n".join(lines)
+
+
 def run_turn(session_key, text, target, sender="", sender_uin=""):
-    """扮演态的一轮：**1 次** LLM 调用，返回 `Turn(正文, 画面, 情绪, 强度, 状态)`。
+    """扮演态的一轮：**两次** LLM 调用，返回 `Turn(正文, 画面, 情绪, 强度, 状态)`。
+
+    2026-11-02 起是两段式：
+      1. `_judge_intent()` —— 短提示词、不带人设，判断这句话在干什么；
+      2. 主调用 —— 拿着判断结果写正文。
+    第一段失败（超时、没交 JSON、类别不认识）就退化成原来的单次流程，
+    只是少了那一行注入，不影响这一轮能回话。
 
     正文空 = 这轮什么都不发（调用方别开口）；画面空 = 这轮不出图。
 
@@ -835,7 +959,13 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     ent = _entry(key) or {}
     note = str(ent.get("note") or "")
     prev_state = str(ent.get("state") or "")
+
+    # 第一段：这句话在干什么。**用原始文本判**，不带「张三：」这种前缀。
+    intent, inote = _judge_intent(card, text, prev_state)
     head = build_head(card, session_key, sender, note, prev_state)
+    block = _intent_block(intent, inote)
+    if block:
+        head = head + "\n\n" + block
     hist = trim(_load_hist(key))
 
     # 群里带上说话人，模型才知道是谁在说话（同 qq_bot 正文前缀的做法）；
