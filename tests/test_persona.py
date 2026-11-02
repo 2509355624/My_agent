@@ -134,12 +134,20 @@ class CommandTest(PersonaBase):
 
 
 class TrimTest(unittest.TestCase):
-    def test_keeps_last_twenty(self):
-        hist = [{"role": "user", "content": "m%d" % i} for i in range(30)]
+    def test_keeps_only_the_last_window(self):
+        """只留窗口内最近 N 条（2026-11-03 从 20 降到 12）。"""
+        n = 30
+        hist = [{"role": "user", "content": "m%d" % i} for i in range(n)]
         out = persona.trim(hist)
         self.assertEqual(len(out), persona.HISTORY_LIMIT)
-        self.assertEqual(out[0]["content"], "m10")
-        self.assertEqual(out[-1]["content"], "m29")
+        self.assertEqual(out[0]["content"], "m%d" % (n - persona.HISTORY_LIMIT))
+        self.assertEqual(out[-1]["content"], "m%d" % (n - 1))
+
+    def test_note_runs_more_often_than_the_window(self):
+        """压缩周期必须小于窗口轮数，否则内容会「掉出窗口又没进小记」。"""
+        rounds = persona.HISTORY_LIMIT // 2
+        self.assertLess(persona.NOTE_EVERY_TURNS, rounds,
+                        "NOTE_EVERY_TURNS 必须 < %d 轮" % rounds)
 
     def test_truncates_long_message(self):
         # 用比上限长一大截的内容，别贴着边界写——上限从 200 调到 900 时，
