@@ -3689,41 +3689,29 @@ class SearchHookTest(unittest.TestCase):
     `_translate` 内部提到了 `decide()` 入口（`_prefetch_search`）。所以这里
     分两段钉：① `_prefetch_search` 本身的行为；② `_translate` / `_revise`
     拿到 doc 后有没有正确塞进模板。
+
+    2026-11-02 用户拍板拆掉「代码定点抽取作前置」——`extract()` 不再参与，
+    完整原话直接交给搜索 Agent。所以这一类用例现在还要钉一条**反向守卫**：
+    代码不许在交给模型之前先替它查一遍、也不许把结论塞给它。
     """
 
     def setUp(self):
         p = mock.patch.object(direct_gen, "SEARCH_ENABLED", True)
         p.start()
         self.addCleanup(p.stop)
-        # 线上 .env 是 DIRECT_SEARCH_AGENT=0（2026-10-23 关掉 LLM 补漏层），
-        # 而 config 启动时会 load_dotenv，测试进程也会读到。这一类用例测的是
-        # 「开启搜索时链路对不对」，与线上开关无关，显式打开。
-        q = mock.patch.object(direct_gen, "SEARCH_AGENT_ON", True)
-        q.start()
-        self.addCleanup(q.stop)
 
-    def _prefetch(self, doc="", boom=False, text="画个胡桃", det=""):
+    def _prefetch(self, doc="", boom=False, text="画个胡桃"):
         """跑一次 `_prefetch_search`，返回 (返回的资料包, 搜索 mock)。
 
-        ⚠️ 两段都要 mock：
-          - `search_agent.search` —— 走 LLM，用例里绝不出网；
-          - `search_tags.extract` —— 它会去读**真的** 32.8 万行标签库
-            （首次约 0.5 s + 110 MB），而且结果随库变，不能进单测。
+        ⚠️ `search_agent.search` 必须 mock —— 它走 LLM，用例里绝不出网。
         """
         from app import search_agent
-        from app.tools.normal import search_tags
 
-        def fake(need, hint=""):
+        def fake(need):
             if boom:
                 raise RuntimeError("搜索炸了")
             return doc
 
-        dp = mock.patch.object(
-            search_tags, "extract",
-            return_value={"doc": det, "hint": "已经查过的词：X",
-                          "confirmed": ["X"], "ambiguous": []})
-        dp.start()
-        self.addCleanup(dp.stop)
         sp = mock.patch.object(search_agent, "search", side_effect=fake)
         m_search = sp.start()
         self.addCleanup(sp.stop)
@@ -3759,6 +3747,31 @@ class SearchHookTest(unittest.TestCase):
         _, m_search = self._prefetch("资料", text="画个胡桃")
         self.assertEqual(m_search.call_args[0][0], "画个胡桃")
 
+    def test_full_question_is_passed_verbatim(self):
+        """2026-11-02：**整句原话**进，不裁剪、不改写、不摘要。"""
+        need = "画个原神里的绫华，左眼有泪痣，穿白色连衣裙在雨里撑黑伞，站街边"
+        _, m_search = self._prefetch("资料", text=need)
+        self.assertEqual(m_search.call_args[0][0], need)
+
+    def test_code_extraction_does_not_run_before_the_agent(self):
+        """反向守卫：交给模型之前，代码不许先替它扫一遍库。
+
+        用户 2026-11-02 原话「人工干预没有意义」——代码扫漏的词，模型看到
+        「已查过」就不会补，反而比不查更差。所以 `extract()` 在这一层必须
+        一次都不被调用。
+        """
+        from app.tools.normal import search_tags
+
+        with mock.patch.object(search_tags, "extract",
+                               side_effect=AssertionError("代码又抢着查了")) as m_ext:
+            doc, _ = self._prefetch("资料", text="画个胡桃")
+        m_ext.assert_not_called()
+        self.assertEqual(doc, "资料")
+
+    def test_agent_answer_is_trimmed_on_both_ends(self):
+        doc, _ = self._prefetch("  资料X \n")
+        self.assertEqual(doc, "资料X")
+
     def test_disabled_flag_skips_search_entirely(self):
         with mock.patch.object(direct_gen, "SEARCH_ENABLED", False):
             from app import search_agent
@@ -3767,32 +3780,20 @@ class SearchHookTest(unittest.TestCase):
         m_search.assert_not_called()
         self.assertEqual(out, "")
 
-    def test_agent_off_keeps_free_extract(self):
-        """DIRECT_SEARCH_AGENT=0：不调 LLM，但定点抽取的资料照样交出去。
-
-        两层必须分开：extract 是代码扫库（0 token、微秒级），关它省不到钱，
-        只是白丢准确性；花钱和变慢的是 search_agent 那 1~3 次 LLM 调用。
-        """
-        from app import search_agent
-        from app.tools.normal import search_tags
-
-        det = "角色：胡桃 → hu_tao_(genshin_impact)"
-        with mock.patch.object(
-                search_tags, "extract",
-                return_value={"doc": det, "hint": "", "confirmed": [],
-                              "ambiguous": []}):
-            with mock.patch.object(
-                    search_agent, "search",
-                    return_value="补漏资料（应当被丢弃）") as m_search:
-                with mock.patch.object(direct_gen, "SEARCH_AGENT_ON", False):
-                    out = direct_gen._prefetch_search("画个胡桃")
-        m_search.assert_not_called()
-        self.assertIn("hu_tao", out)
-        self.assertNotIn("补漏资料", out)
-
     def test_empty_text_skips_search(self):
         _, m_search = self._prefetch("资料", text="   ")
         m_search.assert_not_called()
+
+    def test_doc_is_capped_at_two_thousand(self):
+        out, _ = self._prefetch("甲" * 5000)
+        self.assertLessEqual(len(out), direct_gen.DOC_MAX_CHARS + 1)
+        self.assertEqual(direct_gen.DOC_MAX_CHARS, 2000)
+        self.assertTrue(out.endswith("…"))
+
+    def test_short_doc_is_not_touched(self):
+        out, _ = self._prefetch("乙" * 1999)
+        self.assertEqual(len(out), 1999)
+        self.assertNotIn("…", out)
 
     def test_template_still_renders_without_search(self):
         """老路必须原样能跑：没有 search 槽的调用方不该炸。"""
@@ -3801,95 +3802,44 @@ class SearchHookTest(unittest.TestCase):
         self.assertIn("【用户】", out)
 
 
-class DocPackTest(unittest.TestCase):
-    """资料包 = 定点抽取（代码，确定性）+ 搜索 Agent（LLM，补漏）。
+class DocSingleSourceTest(unittest.TestCase):
+    """资料只有**一个来源**：搜索 Agent。
 
-    用户 2026-10-06 原话：「我们进行搜索应该是一套工作流，跑一次搜索，然后
-    组合成差不多 500~1000 个字的这样一套东西发给这个生图 API，让它去可以
-    参考这个写法。」
-
-    这里钉住拼接顺序、hint 透传、和总长度上限。
+    2026-11-02 之前是「代码定点抽取 + Agent 补漏」两段拼接，那天整段拆掉了
+    （用户原话「人工干预没有意义」）。这里钉住拼接逻辑确实没了：`extract()`
+    的结果不会再出现在资料里，也不可能再抢在 Agent 前面。
     """
 
     def setUp(self):
         p = mock.patch.object(direct_gen, "SEARCH_ENABLED", True)
         p.start()
         self.addCleanup(p.stop)
-        # 线上 .env 是 DIRECT_SEARCH_AGENT=0（2026-10-23 关掉 LLM 补漏层），
-        # 而 config 启动时会 load_dotenv，测试进程也会读到。这一类用例测的是
-        # 「开启搜索时链路对不对」，与线上开关无关，显式打开。
-        q = mock.patch.object(direct_gen, "SEARCH_AGENT_ON", True)
-        q.start()
-        self.addCleanup(q.stop)
-        from app.tools.normal import search_tags
+
+    def test_extract_output_never_reaches_the_doc(self):
         from app import search_agent
-        self.st = search_tags
-        self.sa = search_agent
-
-    def _run(self, det="", agent="", text="画个胡桃"):
         from app.tools.normal import search_tags
-        from app import search_agent
 
-        dp = mock.patch.object(
-            search_tags, "extract",
-            return_value={"doc": det, "hint": "h", "confirmed": [],
-                          "ambiguous": []})
-        dp.start()
-        self.addCleanup(dp.stop)
-        sp = mock.patch.object(search_agent, "search",
-                               side_effect=lambda need, hint="": agent)
-        m = sp.start()
-        self.addCleanup(sp.stop)
-        return direct_gen._prefetch_search(text), m
-
-    def test_deterministic_part_comes_first(self):
-        """定点抽取排前面：它是确定性真值，LLM 那段是补漏。"""
-        out, _ = self._run(det="【定点】连衣裙 → dress", agent="【Agent】泳装 → swimsuit")
-        self.assertIn("连衣裙", out)
-        self.assertIn("swimsuit", out)
-        self.assertLess(out.index("连衣裙"), out.index("swimsuit"))
-
-    def test_hint_is_forwarded_to_the_agent(self):
-        """成本全靠这条：告诉模型哪些词代码已经查实了，别重复查。"""
-        _, m = self._run(det="【定点】x", agent="y")
-        self.assertEqual(m.call_args[1].get("hint"), "h")
-
-    def test_agent_still_gets_the_raw_need(self):
-        _, m = self._run(agent="y", text="画个银狼在打游戏")
-        self.assertEqual(m.call_args[0][0], "画个银狼在打游戏")
-
-    def test_deterministic_part_alone_is_enough(self):
-        """搜索 Agent 返回空（比如它判定「无需查库」）时，定点抽取照样交出去。"""
-        out, _ = self._run(det="【定点】连衣裙 → dress", agent="")
-        self.assertIn("dress", out)
-
-    def test_agent_part_alone_is_enough(self):
-        out, _ = self._run(det="", agent="【Agent】泳装 → swimsuit")
-        self.assertIn("swimsuit", out)
-
-    def test_both_empty_gives_empty(self):
-        out, _ = self._run(det="", agent="")
-        self.assertEqual(out, "")
-
-    def test_extract_failure_falls_back_to_the_agent(self):
-        from app.tools.normal import search_tags
-        from app import search_agent
-        with mock.patch.object(search_tags, "extract",
-                               side_effect=RuntimeError("库炸了")):
+        with mock.patch.object(
+                search_tags, "extract",
+                return_value={"doc": "【定点】连衣裙 → dress", "hint": "h",
+                              "confirmed": [], "ambiguous": []}):
             with mock.patch.object(search_agent, "search",
-                                   side_effect=lambda need, hint="": "【Agent】y"):
+                                   return_value="【Agent】泳装 → swimsuit"):
                 out = direct_gen._prefetch_search("画个胡桃")
-        self.assertEqual(out, "【Agent】y")
+        self.assertEqual(out, "【Agent】泳装 → swimsuit")
+        self.assertNotIn("连衣裙", out)
+
+    def test_empty_agent_answer_gives_empty_doc(self):
+        from app import search_agent
+        with mock.patch.object(search_agent, "search", return_value=""):
+            self.assertEqual(direct_gen._prefetch_search("画个胡桃"), "")
 
     def test_total_length_is_capped(self):
-        out, _ = self._run(det="甲" * 900, agent="乙" * 900)
+        from app import search_agent
+        with mock.patch.object(search_agent, "search",
+                               return_value="乙" * 5000):
+            out = direct_gen._prefetch_search("画个胡桃")
         self.assertLessEqual(len(out), direct_gen.DOC_MAX_CHARS + 1)
-
-    def test_cap_keeps_the_deterministic_head(self):
-        """超长时从尾巴截——定点抽取是真值，不能被截掉。"""
-        out, _ = self._run(det="甲" * 900, agent="乙" * 900)
-        self.assertTrue(out.startswith("甲"))
-        self.assertIn("…", out)
 
 
 class DecidePrefetchTest(unittest.TestCase):

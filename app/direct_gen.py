@@ -89,36 +89,25 @@ log = logging.getLogger(__name__)
 # 关——不然跑真实 _run_turn 的用例会截胡，甚至真调转译 API。
 ENABLED = os.getenv("DIRECT_GEN", "1") == "1"
 
-# 标签库前置搜索（.env DIRECT_SEARCH=0 可关）。
+# 前置搜索（.env DIRECT_SEARCH=0 可关）。
 #
-# 开：转译之前先让 search_agent 查一遍标签库，把「角色名 → 真实 tag」的候选
+# 开：转译之前把**用户完整原话**交给 `search_agent`，由它自己判断查什么
+#     （标签库 search_tags + 必要时 web_search 核对出处），拿回一份 ≤2000 字
 #     资料塞进模板。解决两个问题：**角色不对**、**提示词不符合要求**。
 # 关：完全走老路，一个字都不多花。
 #
 # 关掉它的场景：搜索 Agent 出问题要紧急熔断、或者想对比「有没有搜索」的
 # 效果差。关掉后 _translate 的模板里那一格是空的，模型按自己的判断写。
-# 成本（实测）：搜索 Agent 约 1,254 token/张（2 轮），资料本身约 350 token
-# 进转译调用。500 张/天合计约 80 万，占 600 万文本额度的 13%。
+# 成本（实测）：搜索 Agent 约 1,254 token/张（2 轮），500 张/天约 80 万，
+# 占 600 万文本额度的 13%。2026-11-02 资料上限 600→2000 字后，进转译那一段
+# 的 input 会变长，账单重开/提额后要重新量一次。
 SEARCH_ENABLED = os.getenv("DIRECT_SEARCH", "1") == "1"
 
-# 搜索 agent 的 **LLM 补漏层**（2026-10-23 用户关掉）。
-#
-# ⚠️ 这个和上面的 SEARCH_ENABLED 是**两件事**，别混：
-#   - `search_tags.extract()`：代码扫 32.8 万条标签库，**0 token、微秒级、
-#     不可能编造**。字面出现的词直接定成 tag（连衣裙→dress）。这一层留着的
-#     好处是白拿的，关它省不到一分钱。
-#   - `search_agent.search()`：1~3 次 LLM 调用，只补 extract 补不到的
-#     （同义词、歧义角色、库外名词）。**花钱和变慢的都是这一层。**
-#
-# 用户口径：「效果提升一般，而且还费钱，我们直接一次 api 请求即可」。
-# 关掉后生图链路 = extract（免费）→ 生图 API（1 次），不再多跑 LLM。
-# 2026-10-23 实账：搜索 20 天 ¥5.91（占总盘 12%），其中 **64% 的调用结局是
-# 「判定无需查库」**——extract 已经查完，模型没东西可补，白花一次调用。
-# ⚠️ 默认值就是 **"0"（关）**，不是 "1"：`.env` 是本地文件、不进仓库，写成默认 1
-#    的话换台机器/重装一次 `.env` 丢了，这笔钱会**静默长回来**。要补漏再显式写
-#    `DIRECT_SEARCH_AGENT=1`。
-SEARCH_AGENT_ON = os.getenv("DIRECT_SEARCH_AGENT", "0") == "1"
-_SEARCH_OFF_LOGGED = False          # 关闭态只提醒一次，别每张图刷一行
+# ⚠️ 2026-11-02：`DIRECT_SEARCH_AGENT`（只开 LLM 补漏层、保留免费定点抽取的
+# 中间态）**已删除**。用户当天拍板拆掉「代码定点抽取作前置」——完整原话交给
+# 搜索 Agent，查什么由模型自己判断（理由见 `_prefetch_search` 的说明）。
+# 只剩一层之后这个中间态没有意义了；要省钱就整条 `DIRECT_SEARCH=0` 关掉。
+# `.env` 里那行 `DIRECT_SEARCH_AGENT=1` 留着也无害，代码不再读它。
 
 # ─── 渠道清单 ────────────────────────────────────────────
 # hd 渠道是「档位_画风」的组合命名（skills/ 下真实存在）；其余是固定渠道名。
@@ -1633,8 +1622,8 @@ _MASTER_TEMPLATE = (
 # 照抄**（防编造，这是库的真正价值），**其余描述词/气氛/气质/镜头全交模型**。
 # 另补一条下划线转空格——库里存的 `white_shirt` 原先被原样抄进 prompt。
 _SEARCH_HEADER = (
-    "\n【标签库资料】从 Danbooru 标签库（32.8 万条真实条目）里查出来的，"
-    "**只是参考池，不是词表上限**。\n"
+    "\n【标签库资料】搜索员查回来的，主体是 Danbooru 标签库（32.8 万条真实条目），"
+    "必要时也核对过联网出处。**只是参考池，不是词表上限**。\n"
     "格式 `中文 → tag 名`；`｜同族：…` 是同一主体在库里还能怎么修饰。\n"
     "**怎么用**：\n"
     "1. 它是**候选池和写法参考**，不是必须全用。只取和用户需求相符的；"
@@ -2132,34 +2121,34 @@ def _enqueue_comic(comic, text):
     return result
 
 
-# 资料包总上限。用户 2026-10-06 定的：一次搜索组合成 500~1000 字发给生图 API。
-# 分两段拼：代码定点抽取（≤600 字，确定性）+ 搜索 Agent（≤600 字，补漏）。
-# 真超了从**尾巴**截——尾巴是 Agent 那段，定点抽取是确定性的真值，不能动。
-DOC_MAX_CHARS = 1000
+# 资料包总上限。**2026-11-02 用户拍板：给搜索 Agent 最多 2000 字回复。**
+# 原来是「代码定点抽取 ≤600 + Agent ≤600，合计 1000」，那套同一天拆掉了
+# （见 `_prefetch_search`）。超了从尾巴截。
+DOC_MAX_CHARS = 2000
 
 
 def _prefetch_search(text):
-    """组装一份资料包：代码定点抽取 + 搜索 Agent 补漏。失败返回 ""。
+    """把用户这一轮的**完整原话**交给搜索 Agent，拿回一份资料。失败返回 ""。
 
-    **用户 2026-10-06 拍板：全部流程默认先走一遍搜索，再由最后的单次生图
-    API 出提示词。** 所以搜索提到 `decide()` 入口统一做一次，`_translate`
-    和 `_revise` 共用——原先只有 `_translate` 内部会搜，而改图管道 `_revise`
-    根本不经过它，导致群里最常见的「图生图，角色换XX」从来没走过搜索。
+    **用户 2026-10-06 拍板：全部流程默认先走一遍搜索**，所以搜索提到
+    `decide()` 入口统一做一次，`_translate` 和 `_revise` 共用——原先只有
+    `_translate` 内部会搜，改图管道 `_revise` 根本不经过它，导致群里最常见
+    的「图生图，角色换XX」从来没走过搜索。
 
-    **同一天的第二轮改动**：用户原话「我们进行搜索应该是一套工作流，跑一次
-    搜索，然后组合成差不多 500~1000 个字的这样一套东西发给这个生图 API，
-    让它去可以参考这个写法」。所以这里变成两段：
+    **2026-11-02 用户拍板，拆掉「代码定点抽取作前置」。** 原话：
+    「代码定点抽取给我去除，完整用户问题直接给搜索 agent，然后大模型自己处理，
+    我们人是无法用代码处理用户的问题的，或者你定点抽取之后，完整的用户问题
+    也要给搜索agent，让agent进行判断，主要还是要大模型自己去进行搜索才是正确
+    的，不然人工干预没有意义。」
 
-      ① `search_tags.extract()` —— 代码扫库，**0 token、微秒级、不可能编造**。
-         用户原话里字面出现的词直接定成 tag（连衣裙→dress、白色围裙→white_apron），
-         还顺带给同族标签（dress → white_dress / floral_print_dress…）。
-      ② `search_agent.search(hint=…)` —— 1 次 LLM，只补 ① 补不到的：
-         同义词桥接、歧义角色、库外名词、联网。
+    所以原来那段 ① `search_tags.extract()` 整段删了，连带交给模型的
+    「已经查过哪些词」摘要（hint）一起删。**理由不是它不准，而是它错位**：
+    代码先扫一遍、再把「这些词查过了」写进提示词，等于用一份人写的规则框住
+    模型该查什么；代码扫漏的词，模型看到「已查过」就不会再补——而它恰恰是
+    唯一能补上「绫华 → 神里绫华」这类盲区的一层。
 
-    为什么 ① 放在前面：用户的目标是「AI 不要犯错」。确定性抽取错不了，而
-    LLM 层要为每个词各跑一轮才等价——那正是 10-06 上午实测出 4,325 miss
-    token / 单场 14,487 token 的原因。让代码干确定的活，LLM 只干需要判断的活，
-    两边都变好。
+    现在只剩一步：完整原话进 → 资料出（≤2000 字）。查什么、查几个、要不要
+    联网，全由模型自己判断。
 
     失败/查不到返回 ""，调用方按「没有资料」继续走原来的路——搜索是增强，
     不是主链路，它挂了不该让生图也挂。
@@ -2170,33 +2159,14 @@ def _prefetch_search(text):
     if not text:
         return ""
 
-    parts, hint = [], ""
     try:
-        from app.tools.normal.search_tags import extract
-        got = extract(text)
-        if got.get("doc"):
-            parts.append(got["doc"])
-            hint = got.get("hint") or ""
+        from app import search_agent
+        out = search_agent.search(text) or ""
     except Exception:
-        log.exception("[direct] 定点抽取失败，按无资料继续")
+        log.exception("[direct] 前置搜索失败，按无资料继续")
+        return ""
 
-    if SEARCH_AGENT_ON:
-        try:
-            from app import search_agent
-            doc = search_agent.search(text, hint=hint) or ""
-            if doc:
-                parts.append(doc)
-        except Exception:
-            log.exception("[direct] 前置搜索失败，按无资料继续")
-    else:
-        # 只提醒一次：确认线上真的按「extract → 生图 API」单请求在跑
-        global _SEARCH_OFF_LOGGED
-        if not _SEARCH_OFF_LOGGED:
-            _SEARCH_OFF_LOGGED = True
-            log.info("[direct] 搜索 agent 已关闭（DIRECT_SEARCH_AGENT=0），"
-                     "只走 0 成本的定点抽取")
-
-    out = "\n\n".join(parts)
+    out = out.strip()
     if len(out) > DOC_MAX_CHARS:
         out = out[:DOC_MAX_CHARS].rstrip() + "…"
     return out

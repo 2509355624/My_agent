@@ -255,27 +255,26 @@ class ScopeTest(_Base):
         self.assertIn("不许编", sa.SEARCH_PROMPT)
 
     def test_prompt_caps_doc_length(self):
-        # 2026-10-06 从 1000 降到 600：定点抽取会先交一份 300~600 字的确定性
-        # 资料，这一层只补漏，两层加起来才是用户要的 500~1000 字。
-        self.assertIn("600 字", sa.SEARCH_PROMPT)
+        # 2026-11-02：拆掉定点抽取后这一层是唯一来源，用户定 2000 字。
+        self.assertIn("2000 字", sa.SEARCH_PROMPT)
 
-    def test_doc_cap_leaves_room_for_the_deterministic_part(self):
-        self.assertEqual(sa.MAX_DOC_CHARS, 600)
+    def test_doc_cap_is_two_thousand(self):
+        self.assertEqual(sa.MAX_DOC_CHARS, 2000)
 
     def test_prompt_tells_it_to_bridge_synonyms(self):
-        """定点抽取按**字面**匹配，用户的说法和库里不一样就漏。
+        """按**字面**查库，用户的说法和库里不一样就漏。
 
         这一层最主要的价值就是补这个：用户说「泳衣」库里叫「泳装」、
-        说「初音」库里叫「初音未来」。不提这一条，模型只会去查原词。
+        说「初音」库里叫「初音未来」、说「绫华」库里叫「神里绫华」。
+        不提这一条，模型只会去查原词。
         """
         self.assertIn("同义词", sa.SEARCH_PROMPT)
 
     def test_prompt_documents_the_random_mode(self):
         self.assertIn("random", sa.SEARCH_PROMPT)
 
-    def test_prompt_tells_it_not_to_repeat_the_deterministic_pass(self):
-        """成本全靠这条压下来——重复查代码已经查实的词是纯浪费。"""
-        self.assertIn("别重复查", sa.SEARCH_PROMPT)
+    def test_prompt_tells_it_not_to_repeat_a_word(self):
+        self.assertIn("同一个词不要重复查", sa.SEARCH_PROMPT)
 
     def test_need_is_passed_verbatim(self):
         seen = self._llm(["资料"])
@@ -342,43 +341,53 @@ class WebSearchTest(_Base):
         self.assertIn("网页结果", joined)
 
 
-class HintTest(_Base):
-    """`hint` = 代码定点抽取的结果摘要（2026-10-06 加）。
+class FullNeedTest(_Base):
+    """2026-11-02 用户拍板：**完整用户原话**直接给搜索 Agent，查什么由模型自己判断。
 
-    它**不是历史**——是**同一轮**里代码先跑出来的一步。塞进来只为一件事：
-    让模型别把同样的词再查一遍。成本全靠这一条压下来。
+    原话：「代码定点抽取给我去除，完整用户问题直接给搜索 agent，然后大模型自己
+    处理……主要还是要大模型自己去进行搜索才是正确的，不然人工干预没有意义。」
+
+    所以这一组钉三件事：
+      ① 原话一字不剪地进 prompt（不做代码预抽取、不裁剪）；
+      ② 提示词里**不再有**「定点抽取结果」那种代码结论块；
+      ③ `hint` 这个参数已经删掉，谁再想从代码侧塞结论进去会直接 TypeError。
     """
 
-    def test_hint_reaches_the_prompt(self):
+    def test_full_need_reaches_the_prompt_verbatim(self):
         seen = self._llm(["资料"])
-        sa.search("画个胡桃", hint="已经查过的词：连衣裙、撑伞")
-        content = seen[0][0]["content"]
-        self.assertIn("连衣裙", content)
-        self.assertIn("【定点抽取结果", content)
+        need = "画个原神里的绫华，左眼有泪痣，穿着白色连衣裙在雨里撑黑伞"
+        sa.search(need)
+        self.assertIn(need, seen[0][0]["content"])
 
-    def test_no_hint_leaves_no_block(self):
+    def test_prompt_has_no_code_digest_block(self):
         seen = self._llm(["资料"])
         sa.search("画个胡桃")
-        # 提示词正文里本来就提到「定点抽取结果」（告诉模型先看它），
-        # 所以这里钉的是**那个块本身**有没有出现
-        self.assertNotIn("【定点抽取结果", seen[0][0]["content"])
+        content = seen[0][0]["content"]
+        self.assertNotIn("【定点抽取结果", content)
+        self.assertNotIn("已经查过的词", content)
 
-    def test_hint_is_not_a_backdoor_for_history(self):
-        """守卫：hint 不能变成夹带会话历史的暗门。"""
+    def test_prompt_tells_the_model_to_judge_by_itself(self):
+        """代码不再替它挑词，提示词就必须明写「查什么由你自己判断」。"""
         seen = self._llm(["资料"])
-        sa.search("画个胡桃", hint="已经查过的词：胡桃")
-        self.assertNotIn("最近对话", seen[0][0]["content"])
+        sa.search("画个胡桃")
+        self.assertIn("查什么由你自己判断", seen[0][0]["content"])
 
-    def test_need_is_still_passed_verbatim_alongside_hint(self):
-        seen = self._llm(["资料"])
-        sa.search("画个银狼在打游戏", hint="x")
-        self.assertIn("画个银狼在打游戏", seen[0][0]["content"])
+    def test_hint_parameter_is_gone(self):
+        self._llm(["资料"])
+        with self.assertRaises(TypeError):
+            sa.search("画个胡桃", hint="已经查过的词：连衣裙")
 
-    def test_hint_still_produces_one_single_user_message(self):
+    def test_need_is_still_a_single_user_message(self):
         seen = self._llm(["资料"])
-        sa.search("画个胡桃", hint="x")
+        sa.search("画个胡桃")
         self.assertEqual(len(seen[0]), 1)
         self.assertEqual(seen[0][0]["role"], "user")
+
+    def test_no_history_backdoor(self):
+        """守卫：原话之外不许夹带会话历史。"""
+        seen = self._llm(["资料"])
+        sa.search("画个胡桃")
+        self.assertNotIn("最近对话", seen[0][0]["content"])
 
 
 class RandomToolTest(_Base):
