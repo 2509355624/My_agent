@@ -193,11 +193,25 @@ class TurnTest(PersonaBase):
             out = persona.run_turn("group_1", text, "group", sender)
         return out, m
 
-    def test_one_call_returns_the_reply(self):
+    def test_two_calls_intent_then_reply(self):
+        """2026-11-02 起是两段式：先判意图、再写正文。
+
+        原来只调用一次（人设、契约、格式全挤在一次），模型只能挑最要紧的
+        执行——「做红烧兔头」被当成真要做菜就是这个原因。现在拆成
+        「判断」和「表演」两次，各管一件事。
+        """
         out, m = self._run("你好呀")
-        self.assertEqual(m.call_count, 1)              # 就一次调用
+        self.assertEqual(m.call_count, 2)              # 意图 + 正文
         self.assertEqual(out.reply, "你好呀")           # 回话原样发回去
         self.assertEqual(out.scene, "")                # 没写画面行 = 这轮不出图
+
+    def test_intent_judgement_failure_still_replies(self):
+        """判断段挂了也要能回话——退化成单次流程，不是整轮哑掉。"""
+        with mock.patch.object(persona, "_judge_intent",
+                               return_value=(None, "")), \
+             mock.patch.object(persona.llm, "call_llm", return_value="你好呀") as m:
+            persona.run_turn("group_1", "在吗", "group", "张三")
+        self.assertEqual(m.call_count, 1)
 
     def test_scene_line_is_split_out_of_the_reply(self):
         """模型顺手写的那行「画面：」要剥出来：正文发回去，标签拿去出图。
@@ -408,6 +422,56 @@ class DrawTest(unittest.TestCase):
         self.assertEqual(persona.draw("x", {"appearancePrompt": "1girl"},
                                       "group_1"), "")
         ij.enqueue.assert_not_called()
+
+
+class IntentTest(unittest.TestCase):
+    """两段式第一段：意图判断（2026-11-02）。"""
+
+    CARD = {"name": "白色小兔"}
+
+    def _judge(self, raw, exc=None):
+        from unittest import mock
+        if exc:
+            side = exc
+        else:
+            side = raw
+        with mock.patch.object(persona.llm, "call_llm",
+                               side_effect=exc, return_value=raw):
+            return persona._judge_intent(self.CARD, "做红烧兔头")
+
+    def test_reads_joke(self):
+        got = self._judge('{"intent": "joke", "note": "拿兔子开玩笑"}')
+        self.assertEqual(got, ("joke", "拿兔子开玩笑"))
+
+    def test_reads_intimate(self):
+        got = self._judge('{"intent": "intimate", "note": "求抱抱"}')
+        self.assertEqual(got[0], "intimate")
+
+    def test_unknown_intent_falls_back(self):
+        """模型自创类别 → 当作没判断，走原流程。"""
+        self.assertEqual(self._judge('{"intent": "tease", "note": "x"}'),
+                         (None, ""))
+
+    def test_non_json_falls_back(self):
+        self.assertEqual(self._judge("我觉得他在开玩笑"), (None, ""))
+
+    def test_exception_falls_back(self):
+        from unittest import mock
+        with mock.patch.object(persona.llm, "call_llm",
+                               side_effect=RuntimeError("超时")):
+            self.assertEqual(persona._judge_intent(self.CARD, "x"), (None, ""))
+
+    def test_intent_block_tells_it_how_to_react(self):
+        block = persona._intent_block("joke", "拿兔子开玩笑")
+        self.assertIn("玩笑", block)
+        self.assertIn("不要当真", block)
+        self.assertIn("拿兔子开玩笑", block)
+
+    def test_neutral_block_is_empty(self):
+        self.assertEqual(persona._intent_block("neutral", ""), "")
+
+    def test_unknown_intent_block_is_empty(self):
+        self.assertEqual(persona._intent_block("", ""), "")
 
 
 class ClearCommandTest(PersonaBase):
