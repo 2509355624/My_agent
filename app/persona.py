@@ -1863,7 +1863,21 @@ intent（这句话在干什么）：
 - insult —— 冒犯：贬低、辱骂、羞辱对方
 - neutral —— 普通对话：闲聊、叙述、没有明确指向
 
-delta（整数，她对他的好感这轮变化多少）：
+**先认人，再判分。同一个做法对不同的人值多少分不一样，按下面「她是谁」里她的
+性格判，不要按通用的礼貌标准判：**
+- 她黏人、缺人陪、缺安全感：你主动靠近、记得她说过的事，往高给。
+- 她戒备、冷淡、被伤过：同样的靠近会让她往后退，往低给，甚至可以扣分。
+  她真正要的是「不越线地待着」——你做到了这一点才该加分，不是你冲了多猛。
+- 她高傲、好胜、嘴硬：直白的讨好她不吃，能让她服气、被你说中的话才算分。
+- 她单纯、没见过世面：一点小事就够她记很久，别按老练的人的标准压分。
+
+给分的是**她的感受**，不是这个人做得对不对、够不够感人。
+**性格不同的两张卡，对同一句话就该给不同的分。**
+
+delta（整数，她对他的好感这轮变化多少）。下面是**基准区间，不是标准答案**：
+她吃这一套 → 取区间上限甚至再往上一档；
+她不吃、这么做会让她退 → 取下限以下，甚至给扣分；
+对她是「可有可无」的 → 宁可给 1~2，不要拿中间值凑数。
 - 普通聊天、日常问候、逗乐：-2 ~ +3
 - 真诚的关心、记得她说过的事、让她舒服：+3 ~ +6
 - 主动推进场景的动作（约她出去、带她去哪、递东西、兑现小事）：+3 ~ +6
@@ -1895,8 +1909,34 @@ turn_type（这轮是什么）：
 
 当前关系：好感 %(value)+d，阶段【%(tier)s】
 %(recent)s
-角色是谁：%(who)s
+
+她是谁：
+%(profile)s
+
 他说的：%(said)s"""
+
+
+def _score_profile(card, state=""):
+    """打分用的「她是谁」：名字 + 当前状态 + 性格 + 设定。
+
+    2026-11-03：以前只传名字，等于所有卡共用一把尺子，谁都不难攻略。现在把
+    性格和设定给打分模型，让它按**这个人的感受**判分值——黏人的角色靠近就
+    加分，戒备的角色同样的靠近要扣分，难度自然长在卡上，而不是长在代码里。
+
+    截断是为了控制这段的长度：personality 常见一两百字，description 可能
+    几千字，全塞进去既慢又容易把「他说的」挤到后面被忽略。1600 字的卡
+    前面这段就够模型认人了。
+    """
+    c = card if isinstance(card, dict) else {}
+    name = str(c.get("name") or "").strip() or "对方"
+    lines = ["- 名字：" + name + (("（" + state + "）") if state else "")]
+    p = str(c.get("personality") or "").strip()
+    if p:
+        lines.append("- 性格：" + p[:200])
+    d = str(c.get("description") or "").strip()
+    if d:
+        lines.append("- 设定：" + d[:300])
+    return "\n".join(lines)
 
 
 def _judge_intent_scored(card, said, state="", line_key=""):
@@ -1905,14 +1945,13 @@ def _judge_intent_scored(card, said, state="", line_key=""):
     判断失败时 `(None, "", None)`——退化成没判过（跟 `_judge_intent` 同一
     口径），**打不出分就按 +0 结算**，不让整轮回不了话。
     """
-    who = str((card or {}).get("name") or "对方")
     ctx = affection.scoring_ctx(line_key) or {"value": 0, "tier": "正常关系",
                                               "recent": "（暂无记录）"}
     prompt = _SCORE_PROMPT % {
         "value": ctx["value"],
         "tier": ctx["tier"],
         "recent": ctx["recent"],
-        "who": who + ("（" + state + "）" if state else ""),
+        "profile": _score_profile(card, state),
         "said": str(said or "")[:200],
     }
     try:

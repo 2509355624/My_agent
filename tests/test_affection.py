@@ -342,6 +342,59 @@ class RaidTurnTest(AffBase):
         self.assertNotIn("你们现在的关系", head)
 
 
+class ScoreProfileTest(AffBase):
+    """打分那段要看得见角色卡的性格和设定（2026-11-03）。
+
+    以前只传名字，所有卡共用一把尺子；现在按角色的感受判分值，难度长在
+    卡上。这里钉住三件事：设定真的进了提示词、超长会被截、空卡不炸。
+    """
+
+    KEY = "private_1"
+    REPLY = ("好呀。\n画面：1girl, smile\n"
+             "心情：开心 强度3\n状态：在家 · 家居服 · 无接触")
+    SCORE = ('{"intent": "neutral", "delta": 3, "turn_type": "chat",'
+             ' "reason": "主动搭话", "note": "闲聊"}')
+
+    def _raid_with(self, **kw):
+        persona.save_cards([_card("纱雾", **kw)])
+        card = persona.find_card("纱雾")
+        persona.switch_line(self.KEY, card)
+        self.assertIsNotNone(
+            affection.set_mode(persona.resolve_line(self.KEY), True))
+        return persona.resolve_line(self.KEY)
+
+    def test_personality_and_description_reach_prompt(self):
+        self._raid_with(personality="嘴上凶，怕孤单，被夸就慌",
+                        description="画涩漫的独居老师，通宵赶稿")
+        with mock.patch.object(persona.llm, "call_llm",
+                               side_effect=[self.SCORE, self.REPLY]) as m:
+            persona.run_turn(self.KEY, "在吗", "private")
+        prompt = m.call_args_list[0][0][0][0]["content"]
+        self.assertIn("嘴上凶，怕孤单", prompt)
+        self.assertIn("画涩漫的独居老师", prompt)
+        self.assertIn("她是谁", prompt)
+        # 按性格判分的口径也要在
+        self.assertIn("先认人，再判分", prompt)
+
+    def test_profile_truncates_long_fields(self):
+        p = persona._score_profile({"name": "A",
+                                    "personality": "性" * 500,
+                                    "description": "设" * 1000})
+        self.assertIn("性" * 200, p)
+        self.assertNotIn("性" * 201, p)
+        self.assertIn("设" * 300, p)
+        self.assertNotIn("设" * 301, p)
+
+    def test_profile_survives_empty_card(self):
+        self.assertIn("对方", persona._score_profile(None))
+        self.assertIn("只留名字", persona._score_profile({"name": "只留名字"}))
+        self.assertNotIn("性格", persona._score_profile({"name": "x"}))
+
+    def test_state_goes_with_name(self):
+        p = persona._score_profile({"name": "纱雾"}, "在房间")
+        self.assertIn("纱雾（在房间）", p)
+
+
 class CommandTest(AffBase):
     def test_raid_commands_roundtrip(self):
         self._enter()
