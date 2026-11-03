@@ -185,15 +185,13 @@
   @media (max-width: 1000px) { .app { grid-template-columns: 1fr; } }
   @media (max-width: 1000px) { .side2 { display: none; } }
   @media (max-width: 1000px) {
-    /* ⚠️ 2026-11-03 手机端点不到角色：根因是**层叠上下文**。
-       `.side` 在 `.app`（position: fixed）**内部**，而 `.mask` 是 body 的
-       直接子元素——两者不在同一个层叠上下文里比 z-index。
-       `.app` 自身形成上下文，`.side` 的 z-index: 100 只在这个上下文内有效；
-       在 body 这一层看，`.app` 的层级就是 auto，于是 `.mask` 的 90 反而
-       盖住了整个 `.app`，包括抽屉。
-
-       修法：抽屉也提到 `.app` 之外比（fixed 元素本就不受父级布局约束），
-       并把 z-index 抬到 150 —— 高于 `.mask` 的 90、低于 `.zoom` 的 200。 */
+    /* ⚠️ 2026-11-03 手机端抽屉灰色点不到角色：层叠上下文囚禁。
+       `.app` 是 position:fixed，自己就是层叠上下文；`.side` 的 z-index
+       无论抬多高都只在这堵墙**内部**有效，出不了墙。遮罩 `.mask` 若在
+       body 层（墙外），z-index 90 就能盖住整棵 `.app`——之前把 100 抬到
+       150 没用就是这个原因（CDP 实测卡片正中心命中 DIV#mask）。
+       真修法：把 `.mask` 挪进 `.app`（见 HTML 里的注释），让遮罩和抽屉
+       在同一个上下文里比。这里只负责抽屉本身的定位。 */
     .side { position: fixed; left: 0; top: 0; bottom: 0; width: 250px;
       z-index: 150; transform: translateX(-100%); transition: transform .22s;
       /* 抽屉底部也让出安全区 */
@@ -265,9 +263,16 @@
       <div class="v" id="sNote" style="color:var(--text-dim)">—</div></div>
     <div class="st"><div class="k">轮次</div><div class="v" id="sTurns">0</div></div>
   </aside>
+
+  <!-- 遮罩必须在 .app 里面！手机端「抽屉灰色点不到角色」的真因：
+       .app 是 position:fixed，自己形成层叠上下文，.side 的 z-index 150
+       只在这堵墙**内部**有效；遮罩原来放在 body 层，z-index 90 在墙外，
+       于是墙外看 .app 整体是 auto——遮罩反而盖住整棵 .app（含抽屉）。
+       把遮罩挪进来，它和抽屉就在同一个上下文里比：side(150) > mask(90)。
+       zoom(200) / toast(300) 在 body 层，照旧压过一切，不受影响。 -->
+  <div class="mask" id="mask"></div>
 </div>
 
-<div class="mask" id="mask"></div>
 <div class="zoom" id="zoom"><img id="zoomImg" alt=""></div>
 <div class="toast" id="toast"></div>
 
@@ -723,15 +728,24 @@ $("cards").addEventListener("click", function (ev) {
 // 触摸设备上补一道：某些老 WebView 的 click 事件在快速点击时会被吞
 //
 // ⚠️ 2026-11-03：touchend 和 click 在手机上**都会触发**，不防重会让 `pick`
-// 被调两次——第二次进来 `busy` 已经是 true，于是弹「上一件事还没做完」，
-// 用户看到的就是「点了没反应」。
-// 用一个时间戳标记：150ms 内同一个卡片只处理一次。
+// 被调两次——第二次进来 `busy` 已经是 true，于是弹「上一件事还没做完」。
+// 窗口给 350ms：slow WebView 上合成 click 可能迟到 200ms+，150ms 挡不住。
+// 代价只是 350ms 内对同一张卡的第二次点按被忽略，没有实际损失。
 function tapOnce(cid) {
   const now = Date.now();
-  if (LAST_TAP.id === cid && now - LAST_TAP.t < 150) return false;
+  if (LAST_TAP.id === cid && now - LAST_TAP.t < 350) return false;
   LAST_TAP = { id: cid, t: now };
   return true;
 }
+// 滑动误触保护：touchend 在**滑动列表停在卡片上**时也会触发，不判位移的话
+// 划一下列表就会随机切角色。touchstart 记下起点，touchend 只认
+// 「位移 < 12px 且按住 < 600ms」的真点按；滑动则放行（不 preventDefault，
+// 让浏览器正常处理滚动和惯性）。
+let TOUCH_START = null;
+$("cards").addEventListener("touchstart", function (ev) {
+  const t = ev.touches[0];
+  TOUCH_START = t ? { x: t.clientX, y: t.clientY, t: Date.now() } : null;
+}, { passive: true });
 $("cards").addEventListener("touchend", function (ev) {
   let t = ev.target;
   while (t && t !== this && !t.getAttribute("data-cid")) {
@@ -741,6 +755,15 @@ $("cards").addEventListener("touchend", function (ev) {
   const cid = t.getAttribute("data-cid");
   const c = CARD_MAP[cid];
   if (!c) return;
+  const s = TOUCH_START;
+  TOUCH_START = null;
+  if (s) {
+    const end = ev.changedTouches[0];
+    const dx = end ? Math.abs(end.clientX - s.x) : 99;
+    const dy = end ? Math.abs(end.clientY - s.y) : 99;
+    const dt = Date.now() - s.t;
+    if (dx + dy > 12 || dt > 600) return;   // 是滑动，不是点按
+  }
   ev.preventDefault();          // 阻止随后那次 click，交给这里统一处理
   if (tapOnce(cid)) pick(c);
 }, { passive: false });
