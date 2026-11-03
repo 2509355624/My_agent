@@ -87,12 +87,40 @@ def _attach_guest_cookie(resp, token):
 
 
 def _key(qq):
-    """网页会话键。**和 QQ 的 `private_<qq>` 分开**，两边各聊各的。
+    """网页会话的基础键。**和 QQ 的 `private_<qq>` 分开**，两边各聊各的。
 
     不隔离的话，网页上说一句、QQ 上接着说，会变成同一个上下文，
     用户会看到「她怎么突然记得我在另一头说过的话」。
     """
     return "web_" + (qq or "local")
+
+
+def _active_key(base):
+    """「这个人此刻在跟谁演」→ 真正要用的会话键。
+
+    2026-11-03 用户要求：「选择其他的角色就是另一个会话了」。
+
+    所以一个 base（`web_<qq>`）下可能同时挂着多个角色的活跃态：
+
+        web_2509355624__izumi_sagiri   演纱雾时的历史
+        web_2509355624__rem            演雷姆时的历史
+
+    怎么知道「此刻」是哪个？看 base 上记的 `card`——`switch()` 会写进去。
+    base 上没有记录时（还没选过角色）就返回 base 本身，保持老行为。
+
+    这样：
+      · 切角色 → 切到另一条独立的线，历史不混
+      · 切回来 → 接着原来那条线聊
+      · 不传角色 → 用最近演的那个
+    """
+    try:
+        ent = persona._entry(base) or {}                  # noqa: SLF001
+    except Exception:                                     # noqa: BLE001
+        return base
+    cid = str(ent.get("card") or "").strip()
+    if not cid:
+        return base
+    return persona.card_key(base, cid)
 
 
 def _card_json(card):
@@ -143,7 +171,7 @@ def get_session():
     if role == "guest":
         return _guest_session(who, token)
 
-    key = _key(who)
+    key = _active_key(_key(who))
     ent = persona._entry(key) or {}                       # noqa: SLF001
     card = _card_by_id(ent.get("card"))
     hist = persona.trim(persona._load_hist(key))          # noqa: SLF001
@@ -230,11 +258,21 @@ def switch():
         _attach_guest_cookie(resp, token)
         return resp
 
-    key = _key(who)
+    base = _key(who)
     card = persona.find_card(want)
     if card is None:
         return jsonify({"ok": False, "error": "没有这个角色：%s" % want}), 404
-    persona.switch(key, card)
+
+    # 两条线都要写：
+    #   base      记「此刻在演谁」（`_active_key` 靠它找）
+    #   ckey      角色专属线，历史/小记/状态都挂这儿
+    # 这样切角色 = 换一条独立的线，切回来还能接上。
+    ckey = persona.card_key(base, card["id"])
+    persona.switch(ckey, card)
+    st = persona._load_state()                            # noqa: SLF001
+    st[base] = dict(st.get(ckey) or {})
+    persona._save_state(st)                               # noqa: SLF001
+    log.info("网页切角色：%s → %s（线 %s）", base, card["name"], ckey)
     return jsonify({"ok": True, "card": _card_json(card),
                     "reply": "从现在起我是%s。" % card["name"]})
 
@@ -247,7 +285,7 @@ def leave():
         resp = jsonify({"ok": True, "reply": "体验版不用出戏，关掉页面就行。"})
         _attach_guest_cookie(resp, token)
         return resp
-    key = _key(who)
+    key = _active_key(_key(who))
     if not persona.active_card(key):
         return jsonify({"ok": True, "reply": "本来就没在演。"})
     persona.leave(key)
@@ -263,7 +301,7 @@ def clear():
                         "reply": "体验版不能清空。登录后可以随时重来。"})
         _attach_guest_cookie(resp, token)
         return resp
-    key = _key(who)
+    key = _active_key(_key(who))
     return jsonify({"ok": True, "reply": persona.clear(key)})
 
 
@@ -283,7 +321,7 @@ def chat():
     if role == "guest":
         return _guest_chat(text, who, token)
 
-    key = _key(who)
+    key = _active_key(_key(who))
     card = persona.active_card(key)
     if card is None:
         return jsonify({"ok": False, "error": "还没选角色"}), 400
@@ -390,7 +428,7 @@ def shot():
             "limit": True,
         }), 403
 
-    key = _key(who)
+    key = _active_key(_key(who))
     card = persona.active_card(key)
     if card is None:
         return jsonify({"ok": False, "error": "还没选角色"}), 400
@@ -504,6 +542,26 @@ def comic_status():
         # 兜底：万一哪天一目录多页，取最后一条
         rec = pages_map[sorted(pages_map.keys())[-1]]
     status = rec.get("status") or "pending"
+
+    # 僵尸 running（2026-11-03）：进程被重启后，`state.json` 会永远停在
+    # `running`——出图线程死了，没人回写结果。前端会一直轮询到超时。
+    #
+    # 判据：状态是 running，但 `updated` 已经超过 12 分钟。单张图实测
+    # 100~180 秒，12 分钟还没动静一定是死了。
+    if status == "running":
+        try:
+            upd = str(st.get("updated") or "")
+            if upd:
+                import time as _t
+                ts = _t.mktime(_t.strptime(upd, "%Y-%m-%d %H:%M:%S"))
+                if _t.time() - ts > 12 * 60:
+                    log.warning("[web] 出图卡死超 12 分钟，判失败：%s", task)
+                    status = "failed"
+                    rec = dict(rec)
+                    rec["error"] = "出图中途断了（进程重启），重出一次"
+        except Exception:                          # noqa: BLE001
+            pass
+
     out = {"ok": True, "status": status, "sid": sid, "page": int(page)}
     if status == "done":
         rel = str(rec.get("file") or "")
