@@ -73,6 +73,11 @@ log = logging.getLogger("qq_bot")
 _RECONNECT_MIN = 5
 _RECONNECT_MAX = 60
 
+# galgame 模式已关闭（2026-11-04 用户要求）：`gal 开局` 这类关键词不再触发，
+# 已经在游戏里的会话下一句话就回落到原来的生图机器人链路。改回 True 即恢复，
+# 进度存档（state/galgame_saves）不删，只是不再认它的命令。
+GAL_ENABLED = False
+
 # websockets 用 proxy=None 显式关掉代理，旧版本没有这个参数。不关代理会被
 # 本机的 Clash 之类劫持：连 ws://127.0.0.1 的握手会被送去代理，换回
 # 502 InvalidProxyStatus 并让进程当场退出。
@@ -1229,9 +1234,13 @@ class SessionRunner:
         # 手里有进度要推进，扮演态只是个长期状态。会话同时命中两个（先
         # `gal 开局`、之后又发了 `#和泉纱雾`）时游戏优先——不然人正在选分支，
         # 机器人突然跳去自由聊天，进度就卡在那一格了。
-        if not borrowed and galgame.active(self.session_key):
+        if not borrowed and GAL_ENABLED and galgame.active(self.session_key):
             self._run_galgame_turn(batch)
             return
+        # galgame 已关：这条会话要是还压在游戏进度里，下一句就地退场。不退的话
+        # 状态文件会一直挂着，将来改回 True 会从半截剧情里把人叫回来。
+        if not borrowed and not GAL_ENABLED and galgame.active(self.session_key):
+            galgame.leave(self.session_key)
         # 扮演态走自己那条路：不给工具、只一次调用、纯文字。判定放在最前面，
         # 因为下面整段都是「生图机器人」的逻辑（confirm_gate / direct_gen /
         # agent 循环），扮演态一个都不该碰上。
@@ -1924,15 +1933,15 @@ class QQBot:
             return
 
         # ── galgame：`gal 开局` / `gal 结束` / `gal 存档` 这类命令 ──────
-        # 排在 persona 之后：两者都以「整条消息」为判据，`gal 开局` 和
-        # `#和泉纱雾` 互不干扰。进游戏之后这条会话由 _run_turn 分流到 galgame
-        # 支路（见那里），不进普通聊天链。
+        # 2026-11-04 用户要求关闭 gal 模式：`GAL_ENABLED` 为 False 时这里恒为
+        # None，`gal xxx` 落到普通聊天链，不再有进入游戏的关键词入口。
         #
         # `addressed` 把「这条消息在叫我」这件事一起传下去：群里发
         # 「@大大怪 gal 开局」时正文可能带着名字（协议端把 at 段转成文本，
         # 或者用户手打了昵称），不剥掉前缀就永远对不上 `gal` 开头。
-        gal = galgame.handle_command(
+        gal = (galgame.handle_command(
             session_key, text, addressed=(at_me or trigger.called(text)))
+            if GAL_ENABLED else None)
         if gal is not None:
             try:
                 send = (qq_api.send_group if target == "group"
