@@ -686,6 +686,26 @@ def _cards_path():
     return os.path.join(d, "characters.json")
 
 
+def _as_int(v, default=None, lo=None, hi=None):
+    """宽松取整数：空/坏值回退 default（可能是 None），可选夹区间。"""
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return default
+    if lo is not None:
+        n = max(lo, n)
+    if hi is not None:
+        n = min(hi, n)
+    return n
+
+
+def _level_names(v):
+    """距离层级的自定义叫法（6 个词），坏值当没填。"""
+    if not isinstance(v, list):
+        return []
+    return [str(x or "").strip() for x in v][:8]
+
+
 def _norm_card(c):
     """补齐缺省字段；`id` 缺失时用建卡时间兜一个。"""
     out = {
@@ -704,6 +724,13 @@ def _norm_card(c):
         # 房间与私物（2026-11-03）：只在「你离开她视线、进她房间」时当素材用。
         # 留空也能玩——由她按人设临场编，这里只是给个锚，避免每次房间都不一样。
         "room": str(c.get("room") or "").strip(),
+        # 攻略起点（2026-11-04）：不同角色不该都从「陌生人」开始。
+        # 骨科卡可以一上来就是「妹妹」，同事卡可以一上来就是「同事」。
+        # start_level = 距离层级 0~5；start_value 留空就卡在该级门槛上；
+        # level_names 可以覆盖那 6 级的叫法（不填就用通用名）。
+        "start_level": _as_int(c.get("start_level"), 0, 0, 5),
+        "start_value": _as_int(c.get("start_value"), None, -50, 50),
+        "level_names": _level_names(c.get("level_names")),
         "referenceImage": str(c.get("referenceImage") or "").strip(),
     }
     try:
@@ -1852,6 +1879,10 @@ _SCORE_PROMPT = """判断下面这句话**在干什么**，并给这句话对你
   "intent": "intimate | joke | literal | insult | neutral",
   "delta": 0,
   "turn_type": "chat | action",
+  "arousal": 0,
+  "cross": "none | mild | hard",
+  "allow": "yes | hesitate | no",
+  "beat": false,
   "reason": "不超过15个字",
   "note": "不超过15个字"
 }
@@ -1907,7 +1938,32 @@ turn_type（这轮是什么）：
   判断只问一件事：**这句话里有没有改变现状的动作**。有就是 action，
   哪怕动作很小；只有态度、情绪、承诺就是 chat。
 
+arousal（整数，这轮把她的「冲动」推高或压低多少，基准 -40 ~ +40）：
+冲动是**此刻**的，不是长期感情。回合结束会回落，所以它只影响这一次。
+- 喝酒 +25、独处没别人的地方 +15、身体接触（扶/靠/碰手）+20、
+  情话调情 +10、看到别人亲密（街上、电影、书里）+10、深夜 +10
+- 尴尬收场 -15、被拒绝 -20、话题转冷 -10、她在生气 -20
+不一定全给，看这轮**实际发生了什么**。什么都没发生就填 0。
+
+cross（他这轮有没有越过你们现在这条线）：
+- none —— 没有。正常说话、正常动作。
+- mild —— 越了。开口要那件事、手伸过去、翻她的东西、说了一句明显过分的话。
+- hard —— 她已经表示不愿意，他还在继续。这是最严重的一档，别轻易给。
+
+allow（她对 cross 的回应，**只有 cross 不是 none 才填**）：
+- yes —— 她接受了（可能勉强，但没拒绝）
+- hesitate —— 没答应也没走开：装没听懂、转开话题、嘴上说不要身体没躲
+- no —— 明确拒绝：说了不行、退开、把他的手拿开
+
+beat（这轮有没有让你们的距离实质往前挪了一格）：
+- 是就填 true。判断标准是**两个人之间真的发生了点什么**：她第一次说了
+  从没跟别人说过的事、你们第一次单独待了很长一段、她第一次没有躲开。
+- 只是气氛好、只是说了句好话、只是他做了件好事 → false。
+- 门槛由系统把关（好感够不够这一级的门票），你只需要判「有没有发生」。
+
 当前关系：好感 %(value)+d，阶段【%(tier)s】
+你们到这一步了：【%(level)s】
+她此刻的冲动：%(arousal)d / 100
 %(recent)s
 
 她是谁：
@@ -1946,10 +2002,13 @@ def _judge_intent_scored(card, said, state="", line_key=""):
     口径），**打不出分就按 +0 结算**，不让整轮回不了话。
     """
     ctx = affection.scoring_ctx(line_key) or {"value": 0, "tier": "正常关系",
+                                              "level": "隔得很远", "arousal": 0,
                                               "recent": "（暂无记录）"}
     prompt = _SCORE_PROMPT % {
         "value": ctx["value"],
         "tier": ctx["tier"],
+        "level": ctx.get("level") or "?",
+        "arousal": int(ctx.get("arousal") or 0),
         "recent": ctx["recent"],
         "profile": _score_profile(card, state),
         "said": str(said or "")[:200],
@@ -1969,7 +2028,14 @@ def _judge_intent_scored(card, said, state="", line_key=""):
     note = str(d.get("note") or "").strip()[:30]
     score = {"delta": d.get("delta"),
              "turn_type": d.get("turn_type") or "chat",
-             "reason": d.get("reason") or ""}
+             "reason": d.get("reason") or "",
+             # 2026-11-04 距离层级三件事：这一刻的气氛、有没有越界、她答不答应、
+             # 有没有做成一件能让关系往前走的事。**别在这里漏掉任何一项**——
+             # 这个 dict 是 settle 唯一的输入，漏了就等于模型白判。
+             "arousal": d.get("arousal"),
+             "cross": d.get("cross"),
+             "allow": d.get("allow"),
+             "beat": d.get("beat")}
     return intent, note, score
 
 

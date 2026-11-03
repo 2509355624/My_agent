@@ -246,7 +246,7 @@ class ModeTest(AffBase):
         key = self._raid()
         affection.settle(key, {"delta": 8, "turn_type": "action"})
         out = affection.restart(key)
-        self.assertIn("归零", out)
+        self.assertIn("重新攻略", out)
         st = affection.status(key)
         self.assertEqual(st["value"], 0)
         self.assertIsNotNone(persona.active_card(key))  # 角色还在
@@ -265,7 +265,9 @@ class InjectionTest(AffBase):
         blk = affection.injection_block(res)
         self.assertIn("【肢体接触】", blk)
         self.assertIn("帮她解围", blk)
-        self.assertIn("+12", blk)
+        # 2026-11-04：注入块不再带好感数字，只给「关系 + 感觉」两件事
+        self.assertNotIn("+12", blk)
+        self.assertIn("她对你的感觉", blk)
 
     def test_block_empty_when_free(self):
         self.assertFalse(affection.injection_block({"active": False}))
@@ -280,9 +282,11 @@ class InjectionTest(AffBase):
 
     def test_tail_line(self):
         res = {"active": True, "value": 22, "tierName": "开始凿",
-               "ending": "", "applied": 3}
-        self.assertIn("开始凿", affection.tail_line(res))
-        self.assertIn("+22", affection.tail_line(res))
+               "level": 2, "levelName": "说得上话", "ending": "", "applied": 3}
+        line = affection.tail_line(res)
+        self.assertIn("说得上话", line)
+        # 2026-11-04：尾行不再暴露数字，玩家只能靠感觉判断进度
+        self.assertNotIn("+22", line)
 
     def test_detail_nodes_needs_record(self):
         self._enter()
@@ -312,7 +316,7 @@ class RaidTurnTest(AffBase):
         self.assertEqual(m.call_count, 2)
         # 第二段提示词里要有档位注入块
         head = m.call_args_list[1][0][0][0]["content"]
-        self.assertIn("你们现在的关系", head)
+        self.assertIn("你们现在到这一步了", head)
         self.assertIn("肢体接触", head)
         self.assertIn("帮她解围", head)
         # Turn 带回结算结果
@@ -412,13 +416,13 @@ class CommandTest(AffBase):
         self.assertFalse(persona.is_affection_query("好感怎么刷"))
         out = persona.handle_command("private_1", "好感")
         self.assertIn("攻略档案", out)
-        self.assertIn("当前好感", out)
+        self.assertIn("你们：", out)
 
     def test_restart_command(self):
         self._raid()
         persona.handle_command("private_1", "好感")     # 生成一条记录
         out = persona.handle_command("private_1", "重新开始")
-        self.assertIn("归零", out)
+        self.assertIn("重新攻略", out)
 
     def test_plain_sentence_with_keyword_is_not_a_command(self):
         self._raid()
@@ -455,10 +459,171 @@ class DepthHintTest(unittest.TestCase):
         self.assertEqual(affection.depth_hint("no_such_tier"), "")
 
     def test_injection_block_carries_depth(self):
-        res = {"active": True, "value": 25, "tier": "start", "tierName": "开始凿"}
+        # 深度从 2026-11-04 起绑距离层级（不再绑好感档位）
+        res = {"active": True, "value": 25, "tier": "start", "level": 4,
+               "tierName": "开始凿"}
         blk = affection.injection_block(res, _cfg())
         self.assertIn("让你看到多深", blk)
         self.assertIn("几乎不再藏了", blk)
+        # 距离只有 2 级时她不该让玩家翻到私密的东西
+        res2 = {"active": True, "value": 25, "tier": "start", "level": 2,
+                "tierName": "开始凿"}
+        self.assertIn("允许你看到一部分",
+                      affection.injection_block(res2, _cfg()))
+
+
+class LevelTest(AffBase):
+    """距离层级 + 冲动 + 越界（2026-11-04）。
+
+    这一层的存在意义是让「她拒绝」有依据：以前只有一根好感轴，好感够了就
+    自动解锁一切；现在好感只决定她愿不愿意，能不能往前还要靠一件事撑着。
+    """
+
+    def _raid_card(self, **card_kw):
+        persona.save_cards([_card("纱雾", **card_kw)])
+        card = persona.find_card("纱雾")
+        persona.switch_line("private_1", card)
+        affection.set_mode(persona.resolve_line("private_1"), True)
+        return persona.resolve_line("private_1")
+
+    def test_card_can_start_at_a_level(self):
+        """骨科卡这类不该从「陌生人」开局：卡片自己指定起点。"""
+        key = self._raid_card(start_level=2)
+        st = affection.status(key)
+        self.assertEqual(st["level"], 2)
+        self.assertEqual(st["levelName"], "说得上话")
+        # 没给 start_value 就卡在这一级的门槛上，不是 0
+        self.assertEqual(st["value"], 12)
+
+    def test_card_can_start_with_value(self):
+        key = self._raid_card(start_level=2, start_value=18)
+        self.assertEqual(affection.status(key)["value"], 18)
+
+    def test_card_level_names_override(self):
+        key = self._raid_card(start_level=2,
+                              level_names=["邻居", "邻居", "常来串门的邻居"])
+        self.assertEqual(affection.status(key)["levelName"], "常来串门的邻居")
+
+    def test_level_up_needs_both_event_and_gate(self):
+        key = self._raid_card()
+        # 只做了事、好感还没到门槛 → 不升
+        r1 = affection.settle(key, {"delta": 3, "turn_type": "action", "beat": True})
+        self.assertEqual(r1["rose"], 0)
+        self.assertEqual(r1["level"], 0)
+        # 好感够了、但没做成事 → 还是不升
+        r2 = affection.settle(key, {"delta": 6, "turn_type": "action", "beat": False})
+        self.assertEqual(r2["rose"], 0)
+        self.assertEqual(r2["level"], 0)
+        # 两个都满足 → 升一级
+        r3 = affection.settle(key, {"delta": 6, "turn_type": "action", "beat": True})
+        self.assertEqual(r3["rose"], 1)
+        self.assertEqual(r3["level"], 1)
+
+    def test_only_one_level_per_turn(self):
+        key = self._raid_card()
+        r = affection.settle(key, {"delta": 15, "turn_type": "action", "beat": True})
+        self.assertEqual(r["level"], 1)      # 好感 15 够 l2(12)，但一轮只升一级
+
+    def test_level_never_drops(self):
+        key = self._raid_card()
+        affection.settle(key, {"delta": 15, "turn_type": "action", "beat": True})
+        r = affection.settle(key, {"delta": -12, "turn_type": "action"})
+        self.assertEqual(r["level"], 1)      # 好感掉回去，距离不退回
+
+    def test_arousal_accumulates_and_decays(self):
+        key = self._raid_card()
+        r1 = affection.settle(key, {"delta": 1, "turn_type": "action", "arousal": 40})
+        self.assertEqual(r1["arousal"], 25)          # 0 + 40 - 15
+        r2 = affection.settle(key, {"delta": 1, "turn_type": "action", "arousal": 40})
+        self.assertEqual(r2["arousal"], 50)
+        r3 = affection.settle(key, {"delta": 1, "turn_type": "action"})
+        self.assertEqual(r3["arousal"], 35)          # 什么都不做就往下掉
+
+    def test_arousal_floors_at_zero(self):
+        key = self._raid_card()
+        r = affection.settle(key, {"delta": 1, "turn_type": "action"})
+        self.assertEqual(r["arousal"], 0)
+
+    def test_refused_cross_escalates(self):
+        key = self._raid_card()
+        r1 = affection.settle(key, {"delta": 0, "turn_type": "chat",
+                                    "cross": "mild", "allow": "no"})
+        self.assertEqual(r1["applied"], -3)          # 第一次当玩笑，轻扣
+        r2 = affection.settle(key, {"delta": 0, "turn_type": "chat",
+                                    "cross": "mild", "allow": "no"})
+        self.assertEqual(r2["applied"], -6)          # 同一天第二次，加倍
+
+    def test_hesitate_costs_nothing(self):
+        key = self._raid_card()
+        r = affection.settle(key, {"delta": 0, "turn_type": "chat",
+                                   "cross": "mild", "allow": "hesitate"})
+        self.assertEqual(r["applied"], 0)            # 半推半就：不罚
+
+    def test_hard_cross_twice_ends_the_line(self):
+        key = self._raid_card()
+        r1 = affection.settle(key, {"delta": 0, "turn_type": "chat", "cross": "hard"})
+        self.assertEqual(r1["applied"], -affection.CROSS_HARD)
+        self.assertEqual(r1["ending"], "")
+        r2 = affection.settle(key, {"delta": 0, "turn_type": "chat", "cross": "hard"})
+        self.assertEqual(r2["just_ended"], affection.ENDING_JAIL)
+
+    def test_old_record_gets_level_backfilled(self):
+        """加层级之前的老存档不能一夜之间退回「隔得很远」。"""
+        old = {"mode": "raid", "value": 22, "tier": "start", "day": "2026-11-01",
+               "chat": 0, "acts": 0, "hist": [], "ending": ""}
+        rec = affection.record_of({"affection": old})
+        self.assertEqual(rec["level"], 3)            # 22 ≥ l3 的门槛 20
+        self.assertEqual(rec["arousal"], 0)
+        self.assertEqual(rec["cross_n"], 0)
+
+    def test_tail_line_hides_numbers(self):
+        key = self._raid_card()
+        r = affection.settle(key, {"delta": 8, "turn_type": "action"})
+        line = affection.tail_line(r)
+        self.assertNotIn("+8", line)
+        self.assertIn("❤", line)
+
+
+    def test_score_payload_keeps_new_fields(self):
+        """第一段的 JSON 要先被**完整**带出来，settle 才能用。
+
+        曾经在这里重新拼了一个只含 delta/turn_type/reason 的 dict，
+        结果模型老老实实判了 cross/beat，全被丢掉，新机制等于没接上。
+        """
+        self._enter()
+        key = persona.resolve_line("private_1")
+        raw = ('{"intent": "intimate", "delta": 4, "turn_type": "chat",'
+               ' "arousal": 25, "cross": "mild", "allow": "hesitate",'
+               ' "beat": true, "reason": "试探", "note": "留她过夜"}')
+        with mock.patch.object(persona.llm, "call_llm", return_value=raw):
+            intent, _note, score = persona._judge_intent_scored(
+                persona.find_card("纱雾"), "今晚别回去了", "", key)
+        self.assertEqual(intent, "intimate")
+        self.assertEqual(score["arousal"], 25)
+        self.assertEqual(score["cross"], "mild")
+        self.assertEqual(score["allow"], "hesitate")
+        self.assertIs(score["beat"], True)
+
+
+    def test_tier_copy_switches_with_distance(self):
+        """距离没到身体那一步时，前四档只能念感情版本。
+
+        九档原文案里 `touch/start/care/full` 写的是身体进度（「界限已经松了」
+        「开始凿」），距离还在「说得上话」就拿出来念，和距离层级直接打架。
+        """
+        cfg = _cfg()
+        full = next(t for t in cfg["tiers"] if t["key"] == "full")
+        full["name"], full["prompt"] = "随便凿", "界限已经松了"
+        full["name_soft"], full["prompt_soft"] = "彻底信任", "她不再藏着什么"
+        self.assertEqual(affection._tier_view(full, 2)["name"], "彻底信任")
+        self.assertEqual(affection._tier_view(full, 2)["prompt"], "她不再藏着什么")
+        self.assertEqual(affection._tier_view(full, 4)["name"], "随便凿")
+        self.assertEqual(affection._tier_view(full, 5)["prompt"], "界限已经松了")
+
+    def test_tier_copy_falls_back_when_no_soft(self):
+        cfg = _cfg()
+        normal = next(t for t in cfg["tiers"] if t["key"] == "miffed")
+        self.assertEqual(affection._tier_view(normal, 0)["name"], "小反感")
 
 
 if __name__ == "__main__":

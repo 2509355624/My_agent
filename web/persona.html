@@ -520,21 +520,15 @@ function affLine(a) {
   const div = document.createElement("div");
   div.className = "aff" + (a.just_ended ? " end" : "");
   if (a.just_ended) {
-    div.textContent = a.just_ended === "graduated"
-      ? "🎓 已结局：毕业（好感 " + (a.value > 0 ? "+" : "") + a.value + "）"
-      : "🚨 已结局：进局子（好感 " + a.value + "）";
+    div.textContent = a.just_ended === "graduated" ? "🎓 已结局：毕业" : "🚨 已结局：进局子";
     return div;
   }
-  // 总数在前、本轮在后：和 QQ 端同一套格式，避免把总数读成本轮加减。
-  div.innerHTML = "❤ 好感 <b class=\"t\"></b><span class=\"d\"></span> ·【<b class=\"n\"></b>】";
-  div.querySelector(".t").textContent = (a.value > 0 ? "+" : "") + (a.value || 0);
-  div.querySelector(".n").textContent = a.tierName || "正常关系";
-  const v = a.applied || 0;
-  const d = div.querySelector(".d");
-  if (v) {
-    d.textContent = (v > 0 ? "+" : "") + v;
-    d.className = "d " + (v > 0 ? "up" : "dn");
-  }
+  // 2026-11-04：只报「你们到哪一步」，不再挂数字——挂数字玩家就会算账，
+  // 算账的人不看正文。想知道大概进度可以点「好感」看档案。
+  let txt = "❤ " + (a.levelName || a.tierName || "");
+  if (a.rose) txt += " ↑";
+  else if (a.cross === "hard") txt += " · 她退开了";
+  div.textContent = txt;
   return div;
 }
 
@@ -560,10 +554,12 @@ function renderAff(a) {
     : (a ? "好感 · 已封存" : "好感 · 未开启");
   $("sAff").textContent = !a ? "—"
     : (a.ending
-       ? ((a.ending === "graduated" ? "已毕业 " : "已进局子 ") + a.value)
-       : (a.value + " · " + (a.tierName || "正常关系")));
+       ? (a.ending === "graduated" ? "已毕业" : "已进局子")
+       : ((a.levelName || "—") + " · " + (a.tierName || "正常关系")));
+  // 进度条按「距离层级 0~5」走，不再按好感刻度——好感是后台分数，
+  // 摆出来玩家就会算「还差几分」，那就变成刷分了。
   $("affBar").style.width =
-    Math.max(0, Math.min(100, (a ? (a.value | 0) : 0) + 50)) + "%";
+    Math.max(0, Math.min(100, ((a ? (a.level | 0) : 0) / 5) * 100)) + "%";
   $("btnAffRestart").style.display = raid ? "" : "none";
 }
 
