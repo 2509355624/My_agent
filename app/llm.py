@@ -371,6 +371,12 @@ def _ttl_for(err):
     就全被算成额度到顶。
     """
     text = str(err).lower()
+    # 解析类异常（TypeError/KeyError/AttributeError）= 对方回了 2xx 但 body
+    # 不成形（null / 缺字段）。这是**瞬时**的垃圾响应，不是服务坏了——
+    # 60 秒短拉黑即可。原来落进「其余」档黑 3600s，等于把一次抽风当硬故障
+    # （2026-11-03 实测：官方 DeepSeek 回 null body，被黑了一小时）。
+    if isinstance(err, (TypeError, AttributeError, KeyError)):
+        return LLM_CONCURRENCY_TTL
     if any(h in text for h in _CONCURRENCY_HINTS):
         return LLM_CONCURRENCY_TTL
     if any(h in text for h in _TRANSIENT_HINTS):
@@ -483,7 +489,11 @@ def _call_provider(eff, body, timeout):
     resp = _session.post(url, json=body, headers=headers, timeout=timeout)
     if resp.status_code >= 400:
         _raise_with_detail(resp)
-    data = resp.json()
+    # ⚠️ 2026-11-03：`or {}` 不是画蛇添足。服务端（实测 DeepSeek 官方）故障时
+    # 可能回 2xx + body「null」，resp.json() 解析出 **None**，下面 data.get(...)
+    # 抛 TypeError——而这个 TypeError 会被 _ttl_for 归进「其余」档拉黑 3600s，
+    # 一小时的瞬时故障当成硬故障拉黑（当天日志：18:12:56 / 18:14:50 两次）。
+    data = resp.json() or {}
 
     _record_usage(data.get("usage"), resp.elapsed.total_seconds(),
                   provider=eff["provider"], model=eff["model"], kind="sync")
@@ -523,7 +533,7 @@ def _call_ollama(base_url, body, timeout):
     resp = _session.post(url, json=ollama_body, timeout=timeout)
     if resp.status_code >= 400:
         _raise_with_detail(resp)
-    data = resp.json()
+    data = resp.json() or {}
     msg = data.get("message") or {}
     content = msg.get("content") or ""
     # 思考虽已关掉，这里仍记录字数：万一某天模型仍吐 thinking，诊断日志要能
