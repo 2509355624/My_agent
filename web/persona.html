@@ -553,6 +553,7 @@ async function loadSession() {
     renderQuota();
     renderAll(d.messages || []);
     renderState(d);
+    loadPics();          // 服务器映射恢复历史图（重登/换设备也能看到）
     await loadCards();
     applyRoleUI();
   } catch (e) { toast(e.message, true); }
@@ -687,6 +688,41 @@ async function shoot(domIdx, btn, isRegen) {
 }
 
 // ── 抽屉（窄屏）───────────────────────────────────────
+
+// 第 ai 条 assistant 回复在 msgs 里的下标（aiIndexOf 的反演）
+function domIndexOfAi(ai) {
+  let n = -1;
+  for (let i = 0; i < msgs.length; i++) {
+    if (msgs[i].role === "assistant") { n++; if (n === ai) return i; }
+  }
+  return -1;
+}
+
+// 按服务器映射恢复图（2026-11-03）：重登/换设备/清缓存后 localStorage 是
+// 空的，但「哪条回复配哪页图」存在服务器上（/api/persona/comics），照着
+// 拉一遍就行。picStore 继续当本地缓存用，两边互不冲突。
+async function loadPics() {
+  let pics;
+  try { pics = (await api("/api/persona/comics")).pics || {}; }
+  catch (e) { return; }
+  for (const k of Object.keys(pics)) {
+    const ai = parseInt(k.slice(2), 10);
+    if (isNaN(ai)) continue;
+    const domIdx = domIndexOfAi(ai);
+    if (domIdx < 0) continue;
+    const p = pics[k];
+    if (!p || !p.sid || !p.page) continue;
+    try {
+      const st = await api("/api/persona/comic?sid=" + encodeURIComponent(p.sid)
+                            + "&page=" + p.page);
+      if (st.status === "done" && st.url) {
+        setPic(domIdx, st.url);
+        picStore.set(k, st.url);
+      }
+    } catch (e) { /* 单张挂了不影响其他 */ }
+  }
+}
+
 function openDrawer() { $("side").classList.add("open"); $("mask").classList.add("on"); }
 function closeDrawer() { $("side").classList.remove("open"); $("mask").classList.remove("on"); }
 $("btnBurger").onclick = openDrawer;
