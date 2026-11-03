@@ -818,6 +818,23 @@ def _merge_batch(batch, max_items=None, max_chars=None, prefix=True):
 _FRIEND_REQUIRED_NOTIFIED = set()
 
 
+def _ach_line(ach):
+    """成就解锁的通知文案（2026-11-04）。
+
+    单独一条气泡，不并进正文尾行：夹在状态行里会被当成「她又变了」划过去，
+    成就得有个停顿。多解几个就一次列完，不刷屏。
+    """
+    items = [a for a in (ach or []) if isinstance(a, dict)]
+    if not items:
+        return ""
+    head = "🏅 解锁成就" if len(items) == 1 else "🏅 解锁 %d 个成就" % len(items)
+    rows = [head, ""]
+    for a in items:
+        rows.append("%s %s" % (a.get("icon") or "🏅", a.get("name") or "成就"))
+    rows += ["", "发「成就」看全部。"]
+    return "\n".join(rows)
+
+
 def _note_private_send_failure(target, target_id, exc):
     """私聊回发失败时给一条**看得见**的信号。返回 True = 已识别并处理。
 
@@ -1078,6 +1095,15 @@ class SessionRunner:
                     self._deliver(False, hint, [], "")
                 except Exception:
                     log.exception("结局提示发送失败 %s", self.session_key)
+            # 成就（2026-11-04）：结算说这轮解锁了什么，单独一条气泡。
+            # 和正文分开是有意的——夹在尾巴里会被当成普通状态行划过去，
+            # 成就得有个「叮」的停顿。一次最多解两个（升级 + 进档同轮）。
+            ach = (aff or {}).get("ach") or []
+            if ach:
+                try:
+                    self._deliver(False, _ach_line(ach), [], "")
+                except Exception:
+                    log.exception("成就提示发送失败 %s", self.session_key)
 
     def _comic_from_persona(self, card, key, reply_to="", sender_uin="",
                             extra=""):
@@ -1868,6 +1894,13 @@ class QQBot:
                         persona.resolve_line(persona_key))      # noqa: SLF001
                 except Exception:                # noqa: BLE001
                     log.exception("生成好感档案失败 %s", session_key)
+            elif persona.is_achievement_query(text, addressed=(at_me or trigger.called(text))):
+                # 「成就」（2026-11-04）：解锁的列出来，没解锁的只留锁。
+                try:
+                    node_texts = persona.affection.achievement_nodes(
+                        persona.resolve_line(persona_key))      # noqa: SLF001
+                except Exception:                # noqa: BLE001
+                    log.exception("生成成就卡片失败 %s", session_key)
             try:
                 if node_texts:
                     nodes = [qq_api.node_segment(t, name=QQ_BOT_NAME, uin=0)

@@ -92,6 +92,14 @@ DEFAULT_CONFIG = {
         "graduated": {"at": 50,  "name": "毕业",   "prompt": ""},
         "jail":      {"at": -50, "name": "进局子", "prompt": ""},
     },
+    # 冲动档位兜底（2026-11-04）：给玩家看的是**词**，不是 0~100 的数字。
+    # 数字一露，玩家就开始算「再来两杯酒就能过线」——那就不叫气氛了。
+    "arousal_levels": [
+        {"key": "open",  "min": 75, "name": "不设防", "short": "她这会儿没在拦。"},
+        {"key": "messy", "min": 50, "name": "很乱",   "short": "她心里有点乱，话会绕。"},
+        {"key": "warm",  "min": 25, "name": "有点乱", "short": "她比刚才软了一点。"},
+        {"key": "calm",  "min": 0,  "name": "平静",   "short": "她跟平时一样。"},
+    ],
     # 距离层级兜底：config 里没有 intimacy 时用这套中性名，机制不因缺配置停摆
     "intimacy": {"levels": [
         {"key": "l0", "name": "隔得很远",     "gate": 0,  "guard": 50, "prompt": ""},
@@ -189,6 +197,39 @@ def level_name(n, cfg=None, card=None):
     return str(level_cfg(n, cfg).get("name") or "")
 
 
+# ── 冲动档位（2026-11-04）─────────────────────────────
+
+def arousal_levels(cfg=None):
+    """冲动四档配置，按 min 从高到低。配置坏了回退默认表。"""
+    cfg = cfg or load_config()
+    lst = cfg.get("arousal_levels")
+    if not isinstance(lst, list) or not lst:
+        lst = DEFAULT_CONFIG.get("arousal_levels") or []
+    return sorted(lst, key=lambda x: int(x.get("min") or 0), reverse=True)
+
+
+def arousal_level(v, cfg=None):
+    """冲动值 → 它落在哪一档（返回整条配置）。"""
+    try:
+        v = int(v or 0)
+    except (TypeError, ValueError):
+        v = 0
+    v = max(0, min(AROUSAL_MAX, v))
+    for l in arousal_levels(cfg):
+        if v >= int(l.get("min") or 0):
+            return l
+    return {}
+
+
+def arousal_name(v, cfg=None):
+    """冲动值 → 给玩家看的那个词（平静 / 有点乱 / 很乱 / 不设防）。
+
+    只给词不给数字：数字一摆出来，玩家就开始算「再喝两杯能不能过线」，
+    那就不叫气氛了，叫刷条。
+    """
+    return str(arousal_level(v, cfg).get("name") or "")
+
+
 def card_start(card):
     """角色卡给的起点：{value, level}。没配就从 0 / 第 0 级开始。"""
     card = card if isinstance(card, dict) else {}
@@ -229,7 +270,7 @@ def _blank(line_key="", value=None):
     return {"mode": MODE_RAID, "value": st["value"], "tier": str(t.get("key") or ""),
             "level": st["level"], "arousal": 0, "cross_n": 0,
             "down": 0, "ending": "", "day": _today(), "chat": 0, "acts": 0,
-            "hist": []}
+            "streak": 1, "turns": 0, "ach": [], "hist": []}
 
 
 def _entry(line_key):
@@ -275,6 +316,13 @@ def _migrate(rec):
         rec["arousal"] = 0
     if "cross_n" not in rec:
         rec["cross_n"] = 0
+    # 2026-11-04 加成就与连续天数：老存档没有这两个，按「从今天开始算」补
+    if "ach" not in rec or not isinstance(rec.get("ach"), list):
+        rec["ach"] = []
+    if "streak" not in rec:
+        rec["streak"] = 1
+    if "turns" not in rec:
+        rec["turns"] = 0
     return rec
 
 
@@ -294,19 +342,31 @@ def is_raid(line_key):
 
 
 def status(line_key):
-    """给网页/管理页看的只读快照。没开过攻略返回 None。"""
+    """给网页/管理页看的只读快照。没开过攻略返回 None。
+
+    2026-11-04 加冲动与越界次数：网页右栏要画三轴，缺一个就得再请求一次。
+    `levelMax` 一起给，前端不用把「5」写死在 JS 里。
+    """
     rec = record_of(_entry(line_key))
     if not rec:
         return None
     cfg = load_config()
-    t = tier_for(int(rec.get("value") or 0), cfg) or {}
+    value = int(rec.get("value") or 0)
+    t = tier_for(value, cfg) or {}
+    lv = int(rec.get("level") or 0)
+    ar = int(rec.get("arousal") or 0)
     return {
         "mode": str(rec.get("mode") or MODE_FREE),
-        "value": int(rec.get("value") or 0),
+        "value": value,
         "tier": str(rec.get("tier") or ""),
-        "tierName": _tier_view(t, rec.get("level")).get("name") or "",
-        "level": int(rec.get("level") or 0),
-        "levelName": level_name(int(rec.get("level") or 0), cfg, _card_of(line_key)),
+        "tierName": _tier_view(t, lv).get("name") or "",
+        "level": lv,
+        "levelMax": LEVEL_MAX,
+        "levelName": level_name(lv, cfg, _card_of(line_key)),
+        "arousal": ar,
+        "arousalName": arousal_name(ar, cfg),
+        "arousalShort": str(arousal_level(ar, cfg).get("short") or ""),
+        "crossN": int(rec.get("cross_n") or 0),
         "ending": str(rec.get("ending") or ""),
     }
 
@@ -373,11 +433,16 @@ def set_mode(line_key, raid):
 
 def restart(line_key):
     """「重新开始」：数值回到**这张卡的起点**（不是硬归零）、记录清空、结局解除；
-    **聊天记忆保留**。"""
+    **聊天记忆保留**。成就是「经历过的事」，不跟着数值清——重开一次就把
+    之前攒的勋章抹掉，玩家下次就懒得重开了。"""
     ent = _entry(line_key)
-    if not ent or record_of(ent) is None:
+    old = record_of(ent)
+    if not ent or old is None:
         return None           # 从没开过攻略：当普通消息
-    ent["affection"] = _blank(line_key)
+    fresh = _blank(line_key)
+    if isinstance(old.get("ach"), list) and old["ach"]:
+        fresh["ach"] = old["ach"]
+    ent["affection"] = fresh
     _save_entry(line_key, ent)
     return ("已经回到原点，重新攻略。之前聊过的她还记得，"
             "但你们的关系从最初那一步再来一遍。")
@@ -450,11 +515,17 @@ def settle(line_key, score):
 
     # 跨天：聊天/剧情计数清零，警惕也散一点（隔一天气会消）
     if str(rec.get("day") or "") != _today():
+        prev_day = str(rec.get("day") or "")
         rec["day"] = _today()
         rec["chat"] = 0
         rec["acts"] = 0
         rec["cross_n"] = max(0, int(rec.get("cross_n") or 0) - 1)
         rec["arousal"] = 0
+        # 连续陪伴（2026-11-04）：昨天刚来过就 +1，断过就从 1 重算。
+        # 首聊当天不算跨天（day 就是今天），streak 在 `_blank` 里已经是 1。
+        yday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        rec["streak"] = (int(rec.get("streak") or 0) + 1) if prev_day == yday else 1
+    rec["turns"] = int(rec.get("turns") or 0) + 1
 
     score = score if isinstance(score, dict) else {}
     try:
@@ -566,8 +637,6 @@ def settle(line_key, score):
                  "ts": datetime.datetime.now().strftime("%m-%d %H:%M")})
     rec["hist"] = hist[-HIST_KEEP:]
     rec["value"] = value
-    ent["affection"] = rec
-    _save_entry(line_key, ent)
 
     # 对外报**生效档位**（滞回扣着的那个），不是按值现算的——不然注入和
     # 尾行会先一步换档，玩家看到她态度跳来跳去。
@@ -575,14 +644,28 @@ def settle(line_key, score):
     eff_t = next((t for t in (cfg.get("tiers") or [])
                   if t.get("key") == eff_key), None) or new_t
     tv = _tier_view(eff_t, lv)
-    return {"applied": applied, "active": True, "mode": MODE_RAID, "value": value,
-            "tier": eff_key, "changed": changed,
-            "tierName": tv["name"] or str(eff_t.get("name") or ""),
-            "level": lv, "levelName": level_name(lv, cfg, _card_of(line_key)),
-            "rose": rose, "arousal": int(rec.get("arousal") or 0),
-            "cross": cross, "allow": allow, "crossN": int(rec.get("cross_n") or 0),
-            "ending": str(rec.get("ending") or ""),
-            "just_ended": just_ended, "reason": reason}
+    res = {"applied": applied, "active": True, "mode": MODE_RAID, "value": value,
+           "tier": eff_key, "changed": changed,
+           "tierName": tv["name"] or str(eff_t.get("name") or ""),
+           "level": lv, "levelMax": LEVEL_MAX,
+           "levelName": level_name(lv, cfg, _card_of(line_key)),
+           "rose": rose, "arousal": int(rec.get("arousal") or 0),
+           "arousalName": arousal_name(rec.get("arousal"), cfg),
+           "cross": cross, "allow": allow, "crossN": int(rec.get("cross_n") or 0),
+           "ending": str(rec.get("ending") or ""),
+           "just_ended": just_ended, "reason": reason}
+
+    # 成就（2026-11-04）：只认确定性事实，判定在 `achievements` 里。
+    # 放在最后——升级、结局、越界次数这一刻才都定下来了。
+    from app import achievements
+    fresh = achievements.check(rec, res, cfg, _card_of(line_key))
+    if fresh:
+        achievements.mark(rec, fresh)
+        res["ach"] = fresh
+
+    ent["affection"] = rec
+    _save_entry(line_key, ent)
+    return res
 
 
 # ── 注入与展示 ────────────────────────────────────────
@@ -744,6 +827,11 @@ def tail_line(res):
 
     2026-11-04 改：**不报数字**。原来挂「好感 +6」等于把每轮的奖励提前兑现，
     玩家开始算账就不看正文了。现在只报「你们到哪一步」，再加一句模糊的体感。
+
+    2026-11-04 再加冲动：格式固定成 `❤ 关系 · 气氛`，每轮都带。
+    用户拍板要常驻——多数时候就是「平静」，但正因为它一直在，突然变成
+    「很乱」才有分量。原来那两个软提示（「她好像有点不一样了」「她脸色
+    不太对」）被气氛取代了：两条都在说「她此刻不太一样」，并排放是重复。
     """
     if not isinstance(res, dict) or not res.get("active"):
         return ""
@@ -753,16 +841,12 @@ def tail_line(res):
         name = (ending_cfg(ending, load_config()) or {}).get("name") or "结局"
         return "%s 已结局【%s】" % (mark, name)
     lname = res.get("levelName") or level_name(int(res.get("level") or 0)) or "?"
-    applied = int(res.get("applied") or 0)
-    if res.get("rose"):
-        return "❤ %s ↑" % lname
+    # 越界那一轮气氛不是重点——这轮要说的是「她退开了」，气氛留给没出事的时候
     if res.get("cross") == "hard":
         return "❤ %s · 她退开了" % lname
-    if applied >= 6:
-        return "❤ %s · 她好像有点不一样了" % lname
-    if applied <= -6:
-        return "❤ %s · 她脸色不太对" % lname
-    return "❤ %s" % lname
+    ar = arousal_name(res.get("arousal") or 0)
+    head = "❤ %s%s" % (lname, " ↑" if res.get("rose") else "")
+    return "%s · %s" % (head, ar) if ar else head
 
 
 def detail_nodes(line_key):
@@ -790,6 +874,14 @@ def detail_nodes(line_key):
     head.append("你们：%s" % (level_name(lv, cfg, card) or "?"))
     head.append("她对你的感觉：%s"
                 % (_tier_view(tier_for(value, cfg), lv).get("name") or "?"))
+    # 气氛（2026-11-04）：冲动是一次性的，查档案这一刻看到的就是「此刻」。
+    # 卡片第一页给词，第二页不重复——重复就变成刷状态了。
+    ar = int(rec.get("arousal") or 0)
+    an = arousal_name(ar, cfg)
+    if an:
+        head.append("此刻的气氛：%s" % an)
+    if int(rec.get("cross_n") or 0) > 0:
+        head.append("越界被拒：%d 次" % int(rec.get("cross_n") or 0))
     if not ending:
         head.append("好感 %+d" % value)
         if lv < LEVEL_MAX:
@@ -806,6 +898,16 @@ def detail_nodes(line_key):
                                          h.get("r") or ""))
     else:
         rows.append("还没有记录，多陪她聊聊？")
+    # 成就（2026-11-04）：只在解到过东西时追问一句，没解到不提——
+    # 每次都写「成就 0/12」等于提醒玩家「你还没解锁」，是负担不是奖励。
+    got = [a for a in (rec.get("ach") or []) if isinstance(a, dict)]
+    if got:
+        from app import achievements
+        rows += ["", "🏅 成就 %d 个（发「成就」看全部）" % len(got)]
+        for a in got[-3:]:
+            # 名字要跟着这张卡的叫法走——同名成就换张卡就不一样了
+            rows.append("%s %s" % (achievements.icon(a.get("k")),
+                                   achievements.name(a.get("k"), cfg, card, lv)))
     page2 = "\n".join(rows)
     return [page1, page2]
 
@@ -813,6 +915,23 @@ def detail_nodes(line_key):
 def detail_text(line_key):
     """「好感」指令的纯文本兜底（协议端发不了卡片时用）。没开过返回 None。"""
     nodes = detail_nodes(line_key)
+    if nodes is None:
+        return None
+    return "\n\n".join(nodes)
+
+
+def achievement_nodes(line_key):
+    """「成就」指令的卡片。没开过攻略返回 None（当普通消息）。"""
+    rec = record_of(_entry(line_key))
+    if not rec:
+        return None
+    from app import achievements
+    return [achievements.nodes(rec, load_config(), _card_of(line_key))]
+
+
+def achievement_text(line_key):
+    """「成就」的纯文本兜底。"""
+    nodes = achievement_nodes(line_key)
     if nodes is None:
         return None
     return "\n\n".join(nodes)
