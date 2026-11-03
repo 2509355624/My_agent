@@ -185,9 +185,18 @@
   @media (max-width: 1000px) { .app { grid-template-columns: 1fr; } }
   @media (max-width: 1000px) { .side2 { display: none; } }
   @media (max-width: 1000px) {
+    /* ⚠️ 2026-11-03 手机端点不到角色：根因是**层叠上下文**。
+       `.side` 在 `.app`（position: fixed）**内部**，而 `.mask` 是 body 的
+       直接子元素——两者不在同一个层叠上下文里比 z-index。
+       `.app` 自身形成上下文，`.side` 的 z-index: 100 只在这个上下文内有效；
+       在 body 这一层看，`.app` 的层级就是 auto，于是 `.mask` 的 90 反而
+       盖住了整个 `.app`，包括抽屉。
+
+       修法：抽屉也提到 `.app` 之外比（fixed 元素本就不受父级布局约束），
+       并把 z-index 抬到 150 —— 高于 `.mask` 的 90、低于 `.zoom` 的 200。 */
     .side { position: fixed; left: 0; top: 0; bottom: 0; width: 250px;
-      z-index: 100; transform: translateX(-100%); transition: transform .22s;
-      /* 抽屉底部也让出安全区，不然「清空/出戏」会被手势条压住 */
+      z-index: 150; transform: translateX(-100%); transition: transform .22s;
+      /* 抽屉底部也让出安全区 */
       padding-bottom: env(safe-area-inset-bottom); }
     .side.open { transform: none; }
     .top .burger { display: inline-block; }
@@ -267,6 +276,7 @@ const $ = id => document.getElementById(id);
 const QQ = new URLSearchParams(location.search).get("qq") || "";
 let card = null, busy = false, msgs = [];
 let CARD_MAP = {};      // id → 卡对象，给角色列表的事件委托用
+let LAST_TAP = { id: "", t: 0 };   // 防手机端 touchend + click 重复触发
 let ROLE = "member";     // member / guest
 let GUEST_LEFT = 0;      // 游客还剩几轮
 
@@ -707,18 +717,32 @@ $("cards").addEventListener("click", function (ev) {
   if (!t || t === this) return;
   const cid = t.getAttribute("data-cid");
   const c = CARD_MAP[cid];
-  console.log("[cards] 委托触发", cid, c && c.name);
-  if (c) pick(c);
+  console.log("[cards] click", cid, c && c.name);
+  if (c && tapOnce(cid)) pick(c);
 });
 // 触摸设备上补一道：某些老 WebView 的 click 事件在快速点击时会被吞
+//
+// ⚠️ 2026-11-03：touchend 和 click 在手机上**都会触发**，不防重会让 `pick`
+// 被调两次——第二次进来 `busy` 已经是 true，于是弹「上一件事还没做完」，
+// 用户看到的就是「点了没反应」。
+// 用一个时间戳标记：150ms 内同一个卡片只处理一次。
+function tapOnce(cid) {
+  const now = Date.now();
+  if (LAST_TAP.id === cid && now - LAST_TAP.t < 150) return false;
+  LAST_TAP = { id: cid, t: now };
+  return true;
+}
 $("cards").addEventListener("touchend", function (ev) {
   let t = ev.target;
   while (t && t !== this && !t.getAttribute("data-cid")) {
     t = t.parentNode;
   }
   if (!t || t === this) return;
-  const c = CARD_MAP[t.getAttribute("data-cid")];
-  if (c) { ev.preventDefault(); pick(c); }
+  const cid = t.getAttribute("data-cid");
+  const c = CARD_MAP[cid];
+  if (!c) return;
+  ev.preventDefault();          // 阻止随后那次 click，交给这里统一处理
+  if (tapOnce(cid)) pick(c);
 }, { passive: false });
 // 「清空 / 出戏 / 自检」三个按钮已经去掉（2026-11-03 用户要求）：
 //   出戏  —— 没意义了，选另一个角色就是另一条线
