@@ -355,7 +355,9 @@ class ShotTest(PersonaApiBase):
                 self.assertTrue(d["ok"])
                 # GET 也必须在补丁里：读的是同一份临时映射文件
                 pics = self.get("/api/persona/comics")["pics"]
-        self.assertEqual(pics.get("ai4"), {"sid": "SID", "page": 3})
+        # key 用归档行号（`n4`），不再用「窗口内第几条回复」（`ai4`）——
+        # 那个号每聊一轮整体前移，图会挂到错的甚至最新的气泡下（2026-11-04）
+        self.assertEqual(pics.get("n4"), {"sid": "SID", "page": 3})
 
     def test_shot_without_card_is_rejected(self):
         d = self.post("/api/persona/shot")
@@ -433,6 +435,64 @@ class SessionAffTest(PersonaApiBase):
         d = self.get("/api/persona/session")
         self.assertFalse([m for m in d["messages"] if m.get("aff")])
         self.assertIsNotNone(d.get("affection"))   # 档案本身还给，只是封存
+
+
+class HistoryArchiveApiTest(PersonaApiBase):
+    """回看完整历史（2026-11-04）。
+
+    用户原话：「我主要是要我可以回到看从开始到现在的聊天记录」。
+    以前 `/session` 只喂 12 条窗口，聊过 6 轮就翻不到更早的——数据一直在
+    归档里。这里测「首屏给最后一页 + 往回翻一直到第 0 条」。
+    """
+
+    def _line(self):
+        self.post("/api/persona/switch", name="纱雾")
+        return persona_api._active_key(persona_api._key(QQ))
+
+    def _seed(self, key, turns):
+        rows = []
+        for i in range(turns):
+            rows.append({"role": "user", "content": "问%d" % i})
+            rows.append({"role": "assistant",
+                         "content": "答%d\n画面：s%d\n心情：平静 强度1\n状态：坐着"
+                                    % (i, i)})
+        persona._save_hist(key, rows)
+        persona._append_archive(key, [], seed=rows)
+
+    def test_session_returns_last_page_with_ids(self):
+        key = self._line()
+        self._seed(key, 30)                            # 60 条
+        d = self.get("/api/persona/session")
+        self.assertEqual(d["total"], 60)
+        self.assertTrue(d["more"])
+        self.assertEqual(len(d["messages"]), persona.ARCHIVE_PAGE)
+        self.assertEqual(d["messages"][-1]["n"], 59)
+        self.assertEqual(d["messages"][0]["n"], 60 - persona.ARCHIVE_PAGE)
+
+    def test_history_reaches_the_beginning(self):
+        key = self._line()
+        self._seed(key, 30)
+        start = 60 - persona.ARCHIVE_PAGE
+        before, got = start, list(range(start, 60))
+        for _ in range(10):                            # 防止死循环
+            d = self.get("/api/persona/history?before=%d" % before)
+            ids = [m["n"] for m in d["messages"]]
+            got = ids + got
+            if not d["more"] or not ids:
+                break
+            before = ids[0]
+        self.assertEqual(got, list(range(60)))         # 一条不重不漏
+
+    def test_legacy_ai_keys_are_not_returned(self):
+        """老的 `ai<窗口序号>` 已经对不上任何消息了，回给前端只会挂错位置。"""
+        key = self._line()
+        import os as _os
+        with mock.patch("app.persona_api._pic_map_path",
+                        return_value=_os.path.join(self.tmp.name, "pic.json")):
+            persona_api._pic_map_set(key, "ai3", {"sid": "S", "page": 1})
+            persona_api._pic_map_set(key, "n3", {"sid": "S", "page": 2})
+            pics = self.get("/api/persona/comics")["pics"]
+        self.assertEqual(pics, {"n3": {"sid": "S", "page": 2}})
 
 
 if __name__ == "__main__":

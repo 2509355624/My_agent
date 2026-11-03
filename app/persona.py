@@ -119,6 +119,11 @@ HISTORY_LIMIT = 12
 # 就接不上了。900 是「一段完整场景」的上限。
 MSG_MAX_CHARS = 900
 
+# 网页回看历史（2026-11-04 用户要求「能回到看从开始到现在」）：一页多少条。
+# 24 条 = 12 轮，和模型窗口同量级——首屏不会一次塞几百条，再往上滚由前端
+# 要更早的一页。这只是**展示**分页，不进模型、不改上下文预算。
+ARCHIVE_PAGE = 24
+
 # 采样温度（2026-11-03）。
 #
 # `llm.call_llm()` 原来**根本不支持这个参数**，温度一直走服务端默认（一般
@@ -584,10 +589,10 @@ def comic_brief(card, session_key, extra="", msg_index=None):
 
     `extra`（引用内容）只在真有字的时候加，且排在用户原话之后。
 
-    `msg_index`（2026-11-03 第三次加，网页端要的）：**指定画第几条回复**。
+    `msg_index`（2026-11-03 加，2026-11-04 改口径）：**指定画哪一条回复**。
     - `None` → 取最后一轮（QQ 端「出图」走这条，行为不变）
-    - `N` → 取历史里第 N 条 assistant，用**它自己那轮**的正文、状态、
-      以及它前面那条用户消息
+    - `N` → 取**归档里第 N 行**（必须是 assistant），用它自己那轮的正文、状态、
+      以及它前面那条用户消息。归档只增不删，所以这个号不会随窗口裁剪漂移。
 
     网页端每条回复下面都有「出图」按钮，画错位置就全乱了，所以必须能定位。
     好消息是每条回复在历史里**本来就带着 `画面：` / `状态：` 行**（见
@@ -620,25 +625,25 @@ def comic_brief(card, session_key, extra="", msg_index=None):
             if last_user and last_ai:
                 break
     else:
-        # 按序号定位：assistant 消息从头数第 msg_index 条
-        seen = -1
-        for i, m in enumerate(hist):
-            if m["role"] != "assistant":
-                continue
-            seen += 1
-            if seen != int(msg_index):
-                continue
-            last_ai, sc, _mo, _it, st = split_turn(m["content"] or "")
+        # 按**归档下标**定位（2026-11-04）。以前这里是「窗口里第几条 assistant」，
+        # 而窗口每次落盘都会裁，聊一轮整体前移一位——网页点旧气泡出图时传的
+        # 是当时的号，压缩后就指到别人那条上。归档只增不删，行号才是稳定锚。
+        try:
+            n = int(msg_index)
+        except (TypeError, ValueError):
+            n = -1
+        rows = load_archive(session_key)
+        if 0 <= n < len(rows) and rows[n].get("role") == "assistant":
+            last_ai, sc, _mo, _it, st = split_turn(rows[n].get("content") or "")
             last_ai = last_ai.strip()
             scene = (sc or "").strip()          # 用**那一轮**的画面，不是最后一轮
             if st.strip():
                 state = st.strip()      # 用**那一轮**的状态，不是此刻的
             # 往前找最近的一条用户消息
-            for j in range(i - 1, -1, -1):
-                if hist[j]["role"] == "user":
-                    last_user = str(hist[j]["content"] or "").strip()
+            for j in range(n - 1, -1, -1):
+                if rows[j].get("role") == "user":
+                    last_user = str(rows[j].get("content") or "").strip()
                     break
-            break
 
     lines = ["这是一部成人向漫画的一页。", ""]
     lines.append("## 画什么")
@@ -1069,10 +1074,11 @@ def _persona_key(session_key, sender_uin=""):
 def _erase(session_key):
     """把这条线的存档整份抹掉，**保留角色卡本身**。
 
-    抹三样：
+    抹四样：
       1. 历史文件 `sessions/persona_<key>.jsonl`（整份删掉）；
-      2. 状态里的 `note` / `turns` / `mood` / `intensity` / `state`；
-      3. 好感记录整份换新（`affection.wipe_numbers` → 回到**这张卡的起点**，
+      2. 归档 `sessions/persona_archive_<key>.jsonl`（同删，否则网页还能翻出来）；
+      3. 状态里的 `note` / `turns` / `mood` / `intensity` / `state`；
+      4. 好感记录整份换新（`affection.wipe_numbers` → 回到**这张卡的起点**，
          成就、结局、连续天数、机会次数一起清）。
 
     不动 `card`：要删的是这段关系，不是这个人。想换角色发另一个 `#角色名`，
@@ -1106,12 +1112,21 @@ def _erase(session_key):
             except Exception:
                 log.exception("清空历史时连写空文件都失败 %s", path)
 
-    # 2) 好感：交给 affection 整份换新，它自己读盘写盘。
+    # 2) 归档：**必须一起删**（2026-11-04）。网页回看历史改成读归档之后，
+    #    只删窗口的话「清空存档」就变成假删——聊天记录还能整段翻出来。
+    ap = _archive_path(line)
+    if ap and os.path.exists(ap):
+        try:
+            os.remove(ap)
+        except OSError:
+            log.exception("清空归档失败 %s", ap)
+
+    # 3) 好感：交给 affection 整份换新，它自己读盘写盘。
     #    必须在下面读 `_entry` **之前**做 —— 反过来的话，这层拿的是旧记录，
     #    最后整份 `_save_state` 会把刚换新的好感又盖回旧值。
     affection.wipe_numbers(line)
 
-    # 3) 扮演态：保留 card，其余归零
+    # 4) 扮演态：保留 card，其余归零
     ent = _entry(line)
     if not isinstance(ent, dict):
         return None
@@ -1771,6 +1786,69 @@ def _append_archive(session_key, msgs, seed=None):
                     fh.write(json.dumps(m, ensure_ascii=False) + "\n")
     except OSError:
         log.exception("归档写不进去：%s", p)
+
+
+def load_archive(session_key):
+    """读**完整**归档（`persona_archive_*.jsonl`）。网页回看历史读的是这一份。
+
+    2026-11-04：以前网页读的是 `_load_hist` 的 12 条滑动窗口，所以「超过 6 轮
+    就翻不到更早的」——数据一直在归档里，只是接口没给。这里不加新存储，只把
+    已有的那份读出来。
+
+    没有归档（功能上线前的老线，或归档写失败）就退回窗口原文——那时能看到的
+    只有窗口内的这些，救不回来。**不调用 `trim()`**：回看要全文，截到 900 字
+    加个省略号就不是「回顾」了。
+    """
+    p = _archive_path(session_key)
+    rows = []
+    if p and os.path.exists(p):
+        try:
+            with open(p, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        m = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue            # 单行坏了不该让整段历史读不出来
+                    if isinstance(m, dict) and m.get("role") in ("user", "assistant"):
+                        rows.append(m)
+        except OSError:
+            log.exception("归档读不出来：%s", p)
+            rows = []
+    if not rows:
+        rows = [m for m in _load_hist(session_key)
+                if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
+    return rows
+
+
+def archive_len(session_key):
+    """归档一共多少条。给 `chat` 回包算「这一轮是第几条」用。"""
+    return len(load_archive(session_key))
+
+
+def history_page(session_key, before=None, limit=None):
+    """归档里 `[before-limit, before)` 这一段，返回 (start, chunk, total)。
+
+    `before=None` → 最后 limit 条（首屏）；否则往前翻一页。
+    下标就是归档**行号**，也是前端气泡的 id —— 归档只增不删，所以它稳定，
+    不会像「窗口内第几条」那样聊一轮整体前移。
+    """
+    rows = load_archive(session_key)
+    total = len(rows)
+    try:
+        end = total if before is None else int(before)
+    except (TypeError, ValueError):
+        end = total
+    end = max(0, min(total, end))
+    try:
+        lim = int(limit or ARCHIVE_PAGE)
+    except (TypeError, ValueError):
+        lim = ARCHIVE_PAGE
+    lim = max(1, min(200, lim))
+    start = max(0, end - lim)
+    return start, rows[start:end], total
 
 
 def _hist_path(session_key):
