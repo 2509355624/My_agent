@@ -486,12 +486,14 @@ CLEAR_WORDS = ("清空", "重置", "重开", "从头开始")
 
 # 攻略模式（2026-11-03）：好感度数值层。判据和上面一样——**整条消息**才认。
 # 「攻略模式」开（有封存就解冻）、「自由模式」关（数值封存不清零）、
-# 「好感」查档案、「重新开始」数值归零但聊天记忆保留（和「重开」的区别：
-# 重开连记忆一起清，重新开始只清数值——玩崩了想缓一缓用的）。
+# 「好感」查档案。2026-11-04 起不再有「只清数值、记忆留着」的中间档：
+# 要么接着玩（自由模式封存），要么整份删掉（清空存档，要二次确认）。
 RAID_WORDS = ("攻略模式",)
 FREE_WORDS = ("自由模式",)
 AFF_WORDS = ("好感", "好感度")
-RESTART_WORDS = ("重新开始",)
+# 「清空存档」（2026-11-04）：原来叫「重新开始」，只清数值、聊天记忆留着，
+# 玩家删完发现她还记得上周聊的，觉得「没惩罚」。现在改成真删，并且要二次确认。
+# 词表 `WIPE_WORDS` / 确认句 `WIPE_CONFIRM` 和 pending 一起放在 `wipe_request` 那边。
 # 「再给我一次机会」（2026-11-04）：结局之后的明面出口，每人 3 次。
 # 效果和「切自由模式再切回来」一模一样（结局解除、好感往线内挪一格），
 # 只是它留在攻略模式里，而且会扣次数。
@@ -1064,30 +1066,33 @@ def _persona_key(session_key, sender_uin=""):
     return key + "_" + uid
 
 
-def clear(session_key):
-    """`#清空`：把这条线的记忆清干净，**保留当前角色**。
+def _erase(session_key):
+    """把这条线的存档整份抹掉，**保留角色卡本身**。
 
-    清三样（2026-11-02）：
+    抹三样：
       1. 历史文件 `sessions/persona_<key>.jsonl`（整份删掉）；
       2. 状态里的 `note` / `turns` / `mood` / `intensity` / `state`；
-      3. 不动卡本身——她还是她，只是忘了之前发生过什么。
+      3. 好感记录整份换新（`affection.wipe_numbers` → 回到**这张卡的起点**，
+         成就、结局、连续天数、机会次数一起清）。
 
-    为什么不清 `card`：用户要的是「重新开始」，不是「换个人」。想换人就发
-    另一个 `#角色名`，想退出就 `#出戏`。
+    不动 `card`：要删的是这段关系，不是这个人。想换角色发另一个 `#角色名`，
+    想退出扮演发 `#出戏`。
 
-    返回一句确认话术。清不干净（历史文件删不掉）也照常回，只在日志里记一笔
-    ——命令失败不该让用户卡在那儿干等。
+    历史文件删不掉也照常往下走，只在日志里记一笔 —— 命令失败不该让用户卡在
+    那儿干等。
+
+    返回角色名；这条线没在演任何人时返回 None。
     """
     state = _load_state()
     ent = state.get(session_key)
     if not isinstance(ent, dict):
-        return "现在没有在演谁，没什么可清的。发「#角色名」挑一个吧。"
+        return None
     card = get_card(str(ent.get("card") or ""))
     name = (card or {}).get("name") or "她"
 
     # 1) 历史：整份删。删失败就清空成空文件，至少别让下一轮读到旧内容。
     #    QQ 私聊分线（2026-11-03）：传 base 键时先换算成当前角色线——
-    #    「清空」清的是**现在演的这个角色**的记忆，不碰别的线。
+    #    删的是**现在演的这个角色**的存档，不碰别的线。
     line = resolve_line(session_key)
     path = _hist_path(line)
     if path and os.path.exists(path):
@@ -1101,24 +1106,104 @@ def clear(session_key):
             except Exception:
                 log.exception("清空历史时连写空文件都失败 %s", path)
 
-    # 2) 状态：保留 card，其余归零
+    # 2) 好感：交给 affection 整份换新，它自己读盘写盘。
+    #    必须在下面读 `_entry` **之前**做 —— 反过来的话，这层拿的是旧记录，
+    #    最后整份 `_save_state` 会把刚换新的好感又盖回旧值。
+    affection.wipe_numbers(line)
+
+    # 3) 扮演态：保留 card，其余归零
     ent = _entry(line)
     if not isinstance(ent, dict):
-        return "现在没有在演谁，没什么可清的。发「#角色名」挑一个吧。"
+        return None
     ent.update({"note": "", "turns": 0, "mood": "", "intensity": 0, "state": ""})
-    # 记忆清了，好感也该从头来：数值/档位/结局归零，**模式保留**（开着攻略
-    # 的清完还是攻略模式，从 0 开始重新刷）。
-    if isinstance(ent.get("affection"), dict):
-        rec = ent["affection"]
-        ent["affection"] = dict(affection._blank(), mode=rec.get("mode"))  # noqa: SLF001
     state = _load_state()
     state[line] = ent
     if line != session_key:
         # 输入是 base：base 上的副本也刷新，管理页/状态查询别显示旧小记
         state[session_key] = dict(ent)
     _save_state(state)
-    log.info("扮演态已清空：%s（保留角色 %s）", session_key, ent.get("card"))
+    log.info("存档已删除：%s（保留角色 %s）", session_key, ent.get("card"))
+    return name
+
+
+def clear(session_key):
+    """`#清空`：把这条线的记忆清干净，**保留当前角色**（2026-11-02 的老命令）。
+
+    和 `wipe()` 做的事现在完全一样，只是回执口气轻一些 —— 这个命令是给
+    「聊多了接不上、想从头来一遍」用的，不是玩家主动要毁存档。
+    """
+    name = _erase(session_key)
+    if name is None:
+        return "现在没有在演谁，没什么可清的。发「#角色名」挑一个吧。"
     return "记忆清空了，就当今天第一次见面。还是%s，想换人就发「#角色名」。\n" % name
+
+
+def wipe(session_key):
+    """「清空存档」执行体：真删。
+
+    2026-11-04 用户拍板：老版本这里叫「重新开始」，但只清数值、聊天记忆留着，
+    玩家删完发现她还记得上周聊的，觉得「没惩罚」。所以改成真删，并且
+    改名「清空存档」+ 二次确认（见 `wipe_request`）。
+    """
+    name = _erase(session_key)
+    if name is None:
+        return None           # 没在演谁：当普通消息
+    return ("🚨 存档已删除。\n"
+            "你们的聊天记录、好感、关系进度、成就、连续天数全部清掉了，"
+            "一切回到这张卡的最初。\n"
+            "她还在这儿 —— 想继续就跟她说话，想换人发「#角色名」。")
+
+
+# ── 「清空存档」的两步确认（2026-11-04）─────────────────
+# 网页那边是输入框 + 确认按钮；QQ 没有按钮，只能靠**再说一句话**确认：
+#
+#     玩家：清空存档
+#     机器人：🚨 会删掉……真删就回我一句「我同意删除该存档」
+#     玩家：我同意删除该存档
+#     机器人：🚨 存档已删除。
+#
+# pending 只存在内存里，进程重启就没了 —— 那是可接受的：玩家重发一次命令
+# 而已，反正真删是不可逆的，宁可让他多确认一次。
+WIPE_WORDS = ("清空存档", "删除存档", "重新开始")
+WIPE_CONFIRM = "我同意删除该存档"
+_WIPE_TTL = 120.0
+_WIPE_PENDING = {}
+
+
+def wipe_request(session_key):
+    """第一步：亮红灯 + 说清删什么，等玩家回确认句。"""
+    if _entry(resolve_line(session_key)) is None:
+        return None           # 没在演谁：当普通消息，别拿命令去吓人
+    card = active_card(session_key) or {}
+    name = _card_label(card)
+    _WIPE_PENDING[session_key] = time.time() + _WIPE_TTL
+    return ("🚨 清空存档 —— 删掉就找不回来了。\n"
+            "\n"
+            "会删掉和「%s」的全部内容：\n"
+            "· 聊天记录\n"
+            "· 好感、关系进度、气氛\n"
+            "· 成就、连续天数、剩下的机会次数\n"
+            "\n"
+            "不会删角色卡本身，她还在这儿，只是从头认识你。\n"
+            "\n"
+            "真的删，就回我一句：\n"
+            "%s\n"
+            "\n"
+            "（两分钟内有效；回别的就当你改主意了）" % (name, WIPE_CONFIRM))
+
+
+def wipe_confirm(session_key):
+    """第二步：验证确认句 + 未过期，才真删。"""
+    exp = _WIPE_PENDING.pop(session_key, 0)
+    if not exp or exp < time.time():
+        return None           # 没有待确认 / 过期了：这句当普通聊天
+    return wipe(session_key)
+
+
+def _card_label(card):
+    """角色卡里能给人看的名字。"""
+    card = card if isinstance(card, dict) else {}
+    return str(card.get("name") or "她")
 
 
 def _entry(session_key):
@@ -1328,18 +1413,19 @@ def roster_text(site_url=""):
         "- 掉到 -50：她走了，故事翻车。",
         "- 触发结局后数值锁定。**「再给我一次机会」**：她留下来，好感往线内挪一格，",
         "　接着攻略——每人只有 3 次，用完就真没有了。",
-        "　**「重新开始」** 是从这张卡的起点重走一遍，关系层级也回起点。",
         "",
         "## 攻略模式的指令",
         "",
         "- 「好感」 —— 档案：你们到哪一步、她此刻的气氛、最近几轮因为什么涨的掉的",
         "- 「成就」 —— 做成过什么（第一次走进她心里、毕业、连着七天来找她……）",
         "- 「再给我一次机会」 —— 结局之后用，她留下来接着攻略；每人 3 次",
-        "- 「重新开始」 —— 数值回到这张卡的起点，**聊天记忆保留**",
         "- 「自由模式」 —— 收起数值接着聊，封存不清零；发「攻略模式」随时回来",
+        "- 「清空存档」 —— **真删**：聊天记录、好感、关系进度、成就全部清掉，",
+        "　角色卡留着，她会从头认识你。**删了就找不回来**，所以会先亮一次红灯，",
+        "　要你回一句「我同意删除该存档」才动手。网页端是弹框手打这句。",
         "",
         "（这条页里的指令全部**不用加 `#`**、单独发一个词就行；",
-        "网页端在右栏开关、顶栏「重开」按钮，一样的玩法。）",
+        "网页端在右栏开关、顶栏「清空存档」按钮，一样的玩法。）",
         "",
     ]
 
@@ -1577,8 +1663,14 @@ def handle_command(session_key, text, addressed=False):
             return affection.set_mode(line, True)
         if body in FREE_WORDS:
             return affection.set_mode(line, False)
-        if body in RESTART_WORDS:
-            return affection.restart(line)
+        if body in WIPE_WORDS:
+            return wipe_request(session_key)
+        if body == WIPE_CONFIRM:
+            return wipe_confirm(session_key)
+        # 说了别的话：上一步的确认作废。不这样的话，玩家 12:00 发了
+        # 「清空存档」又反悔聊了两句，12:01 随口一句「我同意删除该存档」
+        # 就真删了 —— 两分钟的窗口不该这么宽。
+        _WIPE_PENDING.pop(session_key, None)
         if body in MERCY_WORDS:
             return affection.mercy(line)
         if body in AFF_WORDS:

@@ -250,6 +250,34 @@
   .toast.on { opacity: 1; }
   .toast.err { border-color: var(--err); color: var(--err); }
 
+  /* ─── 清空存档（2026-11-04）───
+     用户要求：红色感叹号警告 + 必须手打确认句。所以不用原生 confirm ——
+     那个只能点「确定」，手滑一样过，等于没拦。
+     注意 `.danger` 的颜色写死不跟主题走：这是唯一的破坏性按钮，它就该刺眼。 */
+  .btn.danger { background: #7f1d1d; border-color: #b91c1c; color: #fecaca; }
+  .btn.danger:hover:not(:disabled) { background: #b91c1c; border-color: #ef4444;
+    color: #fff; }
+
+  .wipeMask { display: none; position: fixed; inset: 0; z-index: 400;
+    background: rgba(0,0,0,.72); align-items: center; justify-content: center;
+    padding: 20px; }
+  .wipeMask.on { display: flex; }
+  .wipeBox { width: min(430px, 100%); background: var(--bg-elev);
+    border: 1px solid #7f1d1d; border-radius: var(--r); padding: 20px;
+    box-shadow: 0 18px 50px rgba(0,0,0,.6); }
+  .wipeBox h3 { font-size: 16px; color: #f87171; margin-bottom: 10px; }
+  .wipeBox .wtext { font-size: 13px; line-height: 1.8; color: var(--text-dim); }
+  .wipeBox .wtext b { color: var(--text); }
+  .wipeBox .wcode { margin: 12px 0 8px; padding: 9px 12px; font-size: 13px;
+    color: #fca5a5; background: #1a0c0c; border: 1px dashed #7f1d1d;
+    border-radius: var(--rs); user-select: all; text-align: center; }
+  .wipeBox input { width: 100%; padding: 10px 12px; font: inherit; font-size: 13px;
+    color: var(--text); background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: var(--rs); outline: none; }
+  .wipeBox input:focus { border-color: #b91c1c; }
+  .wipeBox .wbtns { display: flex; gap: 8px; margin-top: 14px; }
+  .wipeBox .wbtns .btn { flex: 1; display: flex; justify-content: center; }
+
   .mask { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6);
     z-index: 90; }
   .mask.on { display: block; }
@@ -310,8 +338,8 @@
       <button class="btn sm burger" id="btnBurger">☰</button>
       <a class="btn sm back" id="btnGallery" href="/gallery"
          title="回到画廊">← 画廊</a>
-      <button class="btn sm" id="btnReset" style="display:none"
-              title="玩崩了重开：攻略模式=好感归零重新攻略；自由模式=清空记忆从头认识">重开</button>
+      <button class="btn sm danger" id="btnReset" style="display:none"
+              title="把这条线的存档删掉：聊天记录、好感、成就一起清，角色卡保留。删了就找不回来，要手打确认句。">❗ 清空存档</button>
       <span class="nm" id="curName">选一个角色</span>
       <span class="live" id="live" style="display:none">扮演中</span>
       <span class="sp"></span>
@@ -350,8 +378,10 @@
       </div>
       <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
         <!-- 模式开关已挪到顶部 #btnMode（2026-11-03）：留在这里的话，没开过攻略
-             模式就整块不显示，开关等于永远点不到。这里只留「重新开始」。 -->
-        <button class="btn sm" id="btnAffRestart" style="display:none">重新开始</button>
+             模式就整块不显示，开关等于永远点不到。
+             这里只留「清空存档」（2026-11-04）：它管的是整份存档，不只是好感，
+             所以和顶栏那个是同一个动作、同一个弹窗。 -->
+        <button class="btn sm danger" id="btnAffRestart" style="display:none">❗ 清空存档</button>
       </div>
     </div>
     <!-- 气氛（2026-11-04）：冲动是第三轴，和「关系」分开画——它每轮都会回落，
@@ -375,6 +405,29 @@
 
 <div class="zoom" id="zoom"><img id="zoomImg" alt=""></div>
 <div class="toast" id="toast"></div>
+
+<!-- 「清空存档」二次确认（2026-11-04）。
+     不用原生 confirm：那个只能点「确定」，手滑一样过。这里要玩家把确认句
+     原样打一遍，打错一个字的按钮就是灰的。
+     确认句和按钮状态只是前端的第一道；后端还会再校验一遍（防直接打接口）。 -->
+<div class="wipeMask" id="wipeMask">
+  <div class="wipeBox">
+    <h3>❗ 清空存档</h3>
+    <div class="wtext">
+      这一步删掉就找不回来了。<br>
+      会删掉<b>你和她的全部聊天记录</b>，好感、关系进度、气氛、成就、
+      连续天数也一起清空。<br>
+      角色卡本身还在 —— 她还在这儿，只是从头认识你。
+    </div>
+    <div class="wcode" id="wipeCode">我同意删除该存档</div>
+    <input id="wipeInput" autocomplete="off" spellcheck="false"
+           placeholder="把上面这句原样打一遍">
+    <div class="wbtns">
+      <button class="btn" id="wipeCancel">取消</button>
+      <button class="btn danger" id="wipeOk" disabled>确认删除</button>
+    </div>
+  </div>
+</div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -882,8 +935,9 @@ function applyRoleUI() {
   // 游客：隐藏「新建角色」（那是站主才有的事）
   $("btnNew").style.display = guest ? "none" : "";
   $("btnLogin").style.display = guest ? "" : "none";
-  // 顶栏「重开」：登录用户常驻（玩崩了一键重来的入口）
-  $("btnReset").style.display = guest ? "none" : "";
+  // 顶栏「清空存档」：只在真有一段关系可删时出现。没选角色就摆个红色按钮
+  // 在那儿，点开一层警告再跟人说「没什么可删的」，是纯粹的耍人。
+  $("btnReset").style.display = (guest || !card) ? "none" : "";
   // 用完 15 轮就锁输入框
   const done = guest && GUEST_LEFT <= 0;
   $("inp").disabled = done;
@@ -936,7 +990,7 @@ async function deliver(text, isRetry) {
       renderAff(AFF);
       if (AFF.just_ended) {
         toast(AFF.just_ended === "graduated"
-          ? "🎓 恭喜毕业！" : "🚨 进局子了……切自由模式或重新开始", true);
+          ? "🎓 恭喜毕业！" : "🚨 进局子了……发「再给我一次机会」或切自由模式", true);
       }
     }
     if (ROLE === "guest" && d.remaining !== undefined) {
@@ -1086,37 +1140,49 @@ $("btnMode").addEventListener("click", async () => {
     renderAff(AFF);
   } catch (e) { toast(e.message, true); }
 });
-$("btnAffRestart").addEventListener("click", async () => {
-  if (ROLE === "guest") return;
+// ── 清空存档（2026-11-04）──
+// 用户原话：「想不开去点那个重新开始，导致存档全没了」——所以要拦一道。
+// 拦法不是原生 confirm（那个只能点「确定」，手滑一样过），而是让玩家把
+// 确认句原样打一遍，打错一个字按钮就是灰的。
+// 右栏和顶栏两个按钮是同一个动作：删的是整份存档，不分攻略/自由模式。
+const WIPE_TEXT = "我同意删除该存档";
+function openWipe() {
+  if (ROLE === "guest") { toast("体验版没有存档可删", true); return; }
+  $("wipeInput").value = "";
+  $("wipeOk").disabled = true;
+  $("wipeMask").classList.add("on");
+  setTimeout(() => { try { $("wipeInput").focus(); } catch (e) {} }, 60);
+}
+function closeWipe() { $("wipeMask").classList.remove("on"); }
+$("wipeInput").addEventListener("input", e => {
+  $("wipeOk").disabled = e.target.value.trim() !== WIPE_TEXT;
+});
+$("wipeInput").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !$("wipeOk").disabled) $("wipeOk").click();
+  if (e.key === "Escape") closeWipe();
+});
+$("wipeCancel").onclick = closeWipe;
+$("wipeMask").addEventListener("click", e => {
+  if (e.target === $("wipeMask")) closeWipe();
+});
+$("wipeOk").onclick = async () => {
+  const btn = $("wipeOk");
+  btn.disabled = true;
+  btn.textContent = "删除中…";
   try {
-    const d = await post("/api/persona/affection/restart", {});
-    toast(d.reply || "好感已归零");
-    AFF = d.affection || AFF;
-    renderAff(AFF);
-  } catch (e) { toast(e.message, true); }
-});
-// 顶栏「重开」（2026-11-03）：玩崩了一键重来的常驻入口。
-// 攻略模式 → 好感归零、结局解除，聊天记忆保留（=「重新开始」）；
-// 自由模式 → 清空这段记忆从头认识（好感一并归零，角色不变）。
-$("btnReset").addEventListener("click", async () => {
-  if (ROLE === "guest") return;
-  if (isRaid(AFF)) {
-    if (!confirm("好感归零、结局解除，重新攻略？\n（聊天记忆保留，她记得你们聊过什么）")) return;
-    try {
-      const d = await post("/api/persona/affection/restart", {});
-      toast(d.reply || "好感已归零，重新开始");
-      AFF = d.affection || null;
-      renderAff(AFF);
-    } catch (e) { toast(e.message, true); }
-  } else {
-    if (!confirm("清空这段记忆，和她从头认识？\n（角色不变，好感也一并归零）")) return;
-    try {
-      const d = await post("/api/persona/clear", {});
-      toast(d.reply || "记忆已清空，从头开始");
-      await loadSession();
-    } catch (e) { toast(e.message, true); }
+    const d = await post("/api/persona/affection/wipe", { confirm: WIPE_TEXT });
+    closeWipe();
+    toast(d.reply || "存档已删除");
+    await loadSession();          // 聊天记录和好感都清了，整屏重画
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.textContent = "确认删除";
+    btn.disabled = $("wipeInput").value.trim() !== WIPE_TEXT;
   }
-});
+};
+$("btnAffRestart").addEventListener("click", openWipe);
+$("btnReset").addEventListener("click", openWipe);
 $("btnBurger").onclick = openDrawer;
 $("mask").onclick = closeDrawer;
 

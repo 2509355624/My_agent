@@ -54,6 +54,9 @@ class AffBase(unittest.TestCase):
         self.addCleanup(c.stop)
         agents.clear_cache()
         self.addCleanup(agents.clear_cache)
+        # 「清空存档」的两步确认存在模块级 dict 里，不隔离会串到下一个用例
+        persona._WIPE_PENDING.clear()
+        self.addCleanup(persona._WIPE_PENDING.clear)
 
     def _enter(self, key="private_1", name="纱雾"):
         persona.save_cards([_card(name)])
@@ -242,19 +245,38 @@ class ModeTest(AffBase):
         self.assertEqual(st["mode"], "raid")
         self.assertEqual(st["value"], 8)               # 原值接着来
 
-    def test_restart_resets_value_keeps_memory(self):
-        key = self._raid()
-        affection.settle(key, {"delta": 8, "turn_type": "action"})
-        out = affection.restart(key)
-        self.assertIn("重新攻略", out)
-        st = affection.status(key)
-        self.assertEqual(st["value"], 0)
-        self.assertIsNotNone(persona.active_card(key))  # 角色还在
-        self.assertEqual(len(persona._load_hist(key)), 0)  # 没动历史（这里本来就空）
+    def test_wipe_numbers_resets_to_card_start(self):
+        """清空存档 = 好感整份换新（2026-11-04 用户拍板）。
 
-    def test_restart_without_raid_is_none(self):
+        和老的 `restart()` 的区别：那个只删数值、留着成就。存档既然真删了，
+        「经历过的事」也不该留着——否则删完还能看到「毕业」勋章，很怪。
+        """
+        key = self._raid()
+        affection.settle(key, {"delta": 20, "turn_type": "action", "beat": True})
+        self.assertTrue(affection.record_of(affection._entry(key))["ach"])
+        fresh = affection.wipe_numbers(key)
+        self.assertIsNotNone(fresh)
+        rec = affection.record_of(affection._entry(key))
+        self.assertEqual(rec["value"], 0)        # 测试卡没配 start_level
+        self.assertEqual(rec["ach"], [])         # 成就跟着存档一起没
+        self.assertEqual(rec["ending"], "")
+        self.assertIsNotNone(persona.active_card(key))   # 角色还在
+
+    def test_wipe_numbers_goes_back_to_card_start(self):
+        """配了起点的卡（妹妹这种）删完回到起点，不是掉回陌生人。"""
+        persona.save_cards([_card("妹妹", start_level=2)])
+        persona.switch_line("private_1", persona.find_card("妹妹"))
+        key = persona.resolve_line("private_1")
+        affection.set_mode(key, True)
+        affection.settle(key, {"delta": 10, "turn_type": "action"})
+        affection.wipe_numbers(key)
+        st = affection.status(key)
+        self.assertEqual(st["level"], 2)
+        self.assertEqual(st["value"], 12)        # 二级门槛
+
+    def test_wipe_numbers_without_raid_is_none(self):
         self._enter()
-        self.assertIsNone(affection.restart(persona.resolve_line("private_1")))
+        self.assertIsNone(affection.wipe_numbers(persona.resolve_line("private_1")))
 
     def _to_jail(self, key):
         """把这条线打到进局子，返回结局 key。
@@ -520,11 +542,43 @@ class CommandTest(AffBase):
         self.assertIn("攻略档案", out)
         self.assertIn("你们：", out)
 
-    def test_restart_command(self):
+    def test_wipe_command_asks_before_deleting(self):
+        """「清空存档」两步（2026-11-04）：先说删什么，回确认句才动手。"""
+        key = self._raid()
+        affection.settle(key, {"delta": 9, "turn_type": "action"})
+        warn = persona.handle_command("private_1", "清空存档")
+        self.assertIn("找不回来", warn)
+        self.assertIn(persona.WIPE_CONFIRM, warn)
+        self.assertNotEqual(affection.status(key)["value"], 0)   # 这一步什么都不删
+        out = persona.handle_command("private_1", persona.WIPE_CONFIRM)
+        self.assertIn("存档已删除", out)
+        self.assertEqual(affection.status(key)["value"], 0)
+
+    def test_wipe_confirm_alone_is_plain_text(self):
+        """没先发命令，光说确认句要当普通聊天，不能顺手把档删了。"""
         self._raid()
-        persona.handle_command("private_1", "好感")     # 生成一条记录
-        out = persona.handle_command("private_1", "重新开始")
-        self.assertIn("重新攻略", out)
+        persona.handle_command("private_1", "好感")
+        self.assertIsNone(persona.handle_command("private_1", persona.WIPE_CONFIRM))
+
+    def test_wipe_pending_cancelled_by_other_message(self):
+        """中间说了别的话，上一步的确认就作废——两分钟的窗口不该这么宽。"""
+        self._raid()
+        persona.handle_command("private_1", "好感")
+        persona.handle_command("private_1", "清空存档")
+        persona.handle_command("private_1", "算了，今天先不聊这个")
+        self.assertIsNone(persona.handle_command("private_1", persona.WIPE_CONFIRM))
+
+    def test_wipe_deletes_chat_history(self):
+        """真删：聊天历史也要没（老版「重新开始」是不动的）。"""
+        key = self._raid()
+        persona._save_hist(key, [
+            {"role": "user", "content": "上周我们聊了什么"},
+            {"role": "assistant", "content": "你说你加班到很晚"},
+        ])
+        self.assertEqual(len(persona._load_hist(key)), 2)
+        persona.handle_command("private_1", "清空存档")
+        persona.handle_command("private_1", persona.WIPE_CONFIRM)
+        self.assertEqual(persona._load_hist(key), [])
 
     def test_plain_sentence_with_keyword_is_not_a_command(self):
         self._raid()
@@ -860,16 +914,20 @@ class AchievementTest(AffBase):
         keys = [a["k"] for a in res.get("ach") or []]
         self.assertIn("graduate", keys)
 
-    def test_achievement_survives_restart(self):
-        """重开清的是数值，不是经历——抹掉勋章玩家下次就不重开了。"""
+    def test_achievement_dies_with_the_save(self):
+        """成就跟着存档走（2026-11-04 翻转）。
+
+        老版本这里叫 `test_achievement_survives_restart`，理由是「抹掉勋章
+        玩家就不重开了」。但用户把「重新开始」改成了真删的「清空存档」：
+        归档既然整份删，勋章留着就等于没删干净。
+        """
         key = self._raid()
         res = self._settle(key, delta=20, beat=True)
         self.assertTrue(res.get("ach"))
-        before = len(res["ach"])
-        affection.restart(key)
+        affection.wipe_numbers(key)
         rec = affection.record_of(affection._entry(key))
         self.assertEqual(rec["value"], 0)
-        self.assertEqual(len(rec["ach"]), before)
+        self.assertEqual(rec["ach"], [])
 
     def test_card_hides_locked_names(self):
         key = self._raid()
