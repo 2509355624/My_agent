@@ -37,9 +37,9 @@
   /* flex 兜底的栏宽（grid 生效时被下面的 @supports 覆盖回 auto） */
   .app > .side { flex: 0 0 230px; }
   .app > .mid { flex: 1 1 auto; min-width: 0; }
-  .app > .side2 { flex: 0 0 260px; }
+  .app > .side2 { flex: 0 0 288px; }
   @supports (display: grid) {
-    .app { display: grid; grid-template-columns: 230px 1fr 260px; }
+    .app { display: grid; grid-template-columns: 230px 1fr 288px; }
     .app > .side, .app > .mid, .app > .side2 { flex: none; }
   }
 
@@ -173,14 +173,40 @@
   .btn.sm { padding: 5px 11px; font-size: 12px; }
 
   /* ─── 右：状态 ─── */
+  /* grid 项默认 min-height:auto，内容一多就把 .app 撑破——面板七行起，
+     必须给 0 才轮得到 overflow-y:auto 生效（2026-11-04 深夜）。 */
   .side2 { border-left: 1px solid var(--border-soft); padding: 14px;
-    overflow-y: auto; background: var(--bg-elev); }
-  .side2 h2 { font-size: 11px; color: var(--text-mute); margin-bottom: 8px;
-    letter-spacing: .5px; }
+    overflow-y: auto; min-height: 0; background: var(--bg-elev); }
+  /* 标题「此刻」已去掉（2026-11-04 深夜）：侧栏里第一个东西现在是状态
+     面板本身，它的标题就是「状态 · 攻略模式」，再加一个总标题纯占高度。 */
   .st { margin-bottom: 16px; }
   .st .k { font-size: 11px; color: var(--text-mute); margin-bottom: 3px; }
   .st .v { font-size: 12.5px; line-height: 1.65; word-break: break-word; }
   .st .v.mood { color: var(--accent); }
+
+  /* ─── 紧凑「此刻」区（2026-11-04 深夜）──
+     心情/状态/轮次原来是三个独立小块，各占一段间距，把面板顶到屏幕外。
+     现在挤成一块：标签在左、值在右，一行一个。 */
+  .nowrow { display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; }
+  .nowrow .k { margin: 0; flex: none; }
+  .nowrow .v { flex: 1 1 auto; text-align: right;
+    font-variant-numeric: tabular-nums; }
+
+  /* ─── 可折叠的「回忆」（2026-11-04 深夜）──
+     小记能到上千字，展开就把下面的东西全挤出可视区。默认收起，
+     标题那一行整行可点（手机上点得中），箭头转 90 度表示开着。 */
+  .fold { margin-bottom: 10px; }
+  .foldhead { display: flex; align-items: center; gap: 6px; cursor: pointer;
+    padding: 4px 0; user-select: none; -webkit-tap-highlight-color: transparent; }
+  .foldhead .k { margin: 0; flex: 1 1 auto; }
+  .foldmark { font-size: 10px; color: var(--text-mute);
+    transition: transform .18s; display: inline-block; }
+  .fold.open .foldmark { transform: rotate(90deg); color: var(--accent); }
+  /* 收起时用 max-height 而不是 display:none —— 后者会让高度瞬间跳变，
+     抽屉里看起来像闪一下。展开上限给足，超出的自己滚。 */
+  .foldbody { max-height: 0; overflow: hidden; color: var(--text-dim);
+    transition: max-height .22s ease; }
+  .fold.open .foldbody { max-height: 42vh; overflow-y: auto; }
   /* 侧栏数值（2026-11-04）：一行一个，右对齐好比较大小。 */
   .st .nums { margin-top: 5px; font-size: 12px; color: var(--text-mute); }
   .st .nums > div { display: flex; justify-content: space-between;
@@ -205,10 +231,12 @@
      人的眼睛会去找「差几个」，这就是驱动力——不需要再加别的东西。 */
   .panel { margin-top: 2px; }
   .panel h3 { font-size: 11px; font-weight: 500; color: var(--text-mute);
-    margin: 10px 0 4px; letter-spacing: .5px; }
+    margin: 9px 0 3px; letter-spacing: .5px; }
   .panel h3:first-child { margin-top: 0; }
-  .prow { display: flex; align-items: baseline; gap: 6px;
-    font-size: 12px; line-height: 1.72;
+  /* 行高从 1.72 收到 1.6、字号 12 → 11.5（2026-11-04 深夜）：
+     整张表 24 行，每行省 1px 就是 24px——侧栏一屏能多露出一整段。 */
+  .prow { display: flex; align-items: baseline; gap: 5px;
+    font-size: 11.5px; line-height: 1.6;
     font-variant-numeric: tabular-nums; }
   .prow .mk { width: 12px; flex: none; color: var(--text-mute); }
   .prow .nm { flex: 1 1 auto; color: var(--text-mute); }
@@ -409,23 +437,34 @@
   </main>
 
   <aside class="side2">
-    <h2>此刻</h2>
-    <div class="st"><div class="k">心情</div>
-      <div class="v mood" id="sMood">—</div>
-      <div class="bar"><i id="sBar"></i></div></div>
-    <div class="st"><div class="k">状态</div><div class="v" id="sState">—</div></div>
-    <div class="st"><div class="k">回忆</div>
-      <div class="v" id="sNote" style="color:var(--text-dim)">—</div></div>
-    <div class="st"><div class="k">轮次</div><div class="v" id="sTurns">0</div></div>
-    <!-- 状态面板（2026-11-04 深夜）：替换掉原来「关系 / 气氛 / 兴奋」三块。
-         用户要的是一张竖表——每行一个数值，左边当前、右边门槛，够格亮不够灰。
-         三块独立小条看不出「离下一步还差多少」，这才是玩家真正想看的。 -->
+    <!-- 状态面板放**最上面**（2026-11-04 深夜）：玩家开侧栏第一眼要看到的
+         就是「我现在卡在哪、还差多少」。以前它在心情/状态/回忆/轮次下面，
+         手机抽屉里得往下滑才能看见——那是最该看见的一块，却被挤到了最底下。 -->
     <div class="st panel" id="panelBox" style="display:none">
       <div class="k" id="panelK">状态</div>
       <div id="panelBody"></div>
       <div class="pnote" id="panelNote"></div>
     </div>
-    <!-- 「清空存档」单独留在下面：它管的是整份存档，不只是好感。 -->
+    <!-- 心情 / 状态 / 轮次压成一块紧凑区：三个各占一行会把面板顶下去。 -->
+    <div class="st" id="nowBox">
+      <div class="nowrow"><span class="k">心情</span>
+        <span class="v mood" id="sMood">—</span></div>
+      <div class="bar"><i id="sBar"></i></div>
+      <div class="nowrow"><span class="k">状态</span>
+        <span class="v" id="sState">—</span></div>
+      <div class="nowrow"><span class="k">轮次</span>
+        <span class="v" id="sTurns">0</span></div>
+    </div>
+    <!-- 回忆改成可折叠（2026-11-04 深夜）：小记能长到上千字，展开就把面板
+         挤出屏幕。默认收起，点标题展开；记一下展开状态，同一局里不用反复点。 -->
+    <div class="st fold" id="noteBox">
+      <div class="foldhead" id="noteHead" role="button" tabindex="0">
+        <span class="k">回忆</span>
+        <span class="foldmark" id="noteMark">▸</span>
+      </div>
+      <div class="v foldbody" id="sNote">—</div>
+    </div>
+    <!-- 「清空存档」留最后：它是低频动作，不该占着最显眼的位置。 -->
     <div class="st" id="affBox" style="display:none">
       <button class="btn sm danger" id="btnAffRestart">❗ 清空存档</button>
     </div>
@@ -1076,7 +1115,42 @@ function renderState(s) {
   $("sState").textContent = s.state || "—";
   $("sNote").textContent = s.note || "—";
   $("sTurns").textContent = s.turns || 0;
+  // 收起的「回忆」看不出有没有内容——标题上标一个字，
+  // 玩家知道点开有东西看，不用盲点。
+  const mark = $("noteMark");
+  const box = $("noteBox");
+  if (mark && box && !box.classList.contains("open")) {
+    mark.textContent = (s.note && s.note.trim()) ? "▸ ●" : "▸";
+  }
 }
+
+// ── 回忆折叠（2026-11-04 深夜）──────────────────────────
+// 小记能长到上千字，默认展开会把状态面板挤出屏幕。默认收起，
+// 点标题展开；`localStorage` 记住选择，同一台设备上不用每局重开。
+// 键盘也认（Enter / Space）——侧栏在桌面端是常驻的，只有鼠标能点会别扭。
+(function bindNoteFold() {
+  const head = $("noteHead");
+  const box = $("noteBox");
+  if (!head || !box) return;
+  const KEY = "persona_note_open";
+  try {
+    if (localStorage.getItem(KEY) === "1") box.classList.add("open");
+  } catch (e) { /* 隐私模式读不到就算了 */ }
+  function toggle() {
+    box.classList.toggle("open");
+    const on = box.classList.contains("open");
+    const mark = $("noteMark");
+    if (mark) {
+      mark.textContent = on ? "▾ ●" : ($("sNote").textContent.trim() !== "—"
+                                       ? "▸ ●" : "▸");
+    }
+    try { localStorage.setItem(KEY, on ? "1" : "0"); } catch (e) {}
+  }
+  head.addEventListener("click", toggle);
+  head.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+  });
+})();
 
 // ── 图片地址缓存（刷新后还能看到图）────────────────────
 const picStore = {

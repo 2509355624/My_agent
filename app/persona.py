@@ -854,7 +854,26 @@ def is_builtin_card(card_or_id):
     return cid in BUILTIN_CARD_IDS
 
 
-def save_cards(cards):
+class SaveCardsRejected(Exception):
+    """`save_cards()` 的批量删除闸（2026-11-04 深夜）。
+
+    卡库是整表覆盖写的，任何一次「列表被截断」的提交都会静默删卡。这个异常
+    在「提交的卡不到磁盘上一半」时抛出，调用方**必须**把它变成一条明确的
+    错误回给用户，不能吞掉——吞掉就退化成原来的静默删卡。
+
+    想真删一批：分几次删（每次少一半以内），或者显式 `force=True`。
+    """
+
+    def __init__(self, old_n, new_n, lost):
+        self.old_n = old_n
+        self.new_n = new_n
+        self.lost = list(lost or [])
+        super().__init__(
+            "拒绝覆盖：卡库会从 %d 张变成 %d 张，疑似列表被截断（丢失 %d 张）"
+            % (old_n, new_n, len(self.lost)))
+
+
+def save_cards(cards, force=False):
     """原子写卡库（临时文件 + os.replace，见 agents._atomic_write_text）。
 
     写之前逐张规范化、丢掉没名字的、给撞了的 id 补一枚新的——卡池页送来的
@@ -867,6 +886,18 @@ def save_cards(cards):
     现在无论传什么——
       · 传了内置卡的 id：用**现有版本**，内容不许改
       · 没传：从现有卡库里补回来，位置按原顺序
+
+    **批量删除的闸**（2026-11-04 深夜）：这个函数是整份覆盖，所以任何一次
+    「只带了半截列表」的提交都会把没带的卡静默删掉。实测事故（当天凌晨）：
+    卡库从 25 张变成 12 张，丢了 14 张（含用户的原版伊蕾娜卡），而备份只
+    幸运地留在 `state/` 里才捡回来。
+
+    内置卡那道补丁只护得住内置卡，用户自己建的卡一张都没护住。所以再加
+    一道：**提交的卡比磁盘上少超过一半时直接拒绝**，除非调用方明确
+    `force=True`。想真删一批就分几次删，或者显式 force。
+
+    返回 True 表示写了；抛 SaveCardsRejected 表示被闸拦下（调用方要告诉
+    用户为什么，不能静默成功）。
     """
     path = _cards_path()
     if not path:
@@ -902,6 +933,14 @@ def save_cards(cards):
         if b["id"] not in seen:
             out.append(_norm_card(b))
             seen.add(b["id"])
+
+    # 批量删除闸：补完内置卡之后还不到磁盘上的一半 → 判成「列表被截断了」
+    if not force and old and len(out) * 2 < len(old):
+        lost = [c.get("id") for c in old
+                if str(c.get("id") or "") not in seen]
+        log.error("拒绝整表覆盖：%d 张 → %d 张，疑似截断，丢失 %s",
+                  len(old), len(out), lost[:20])
+        raise SaveCardsRejected(len(old), len(out), lost)
 
     parent = os.path.dirname(path)
     if parent:
