@@ -363,15 +363,26 @@ class MissNoteTest(unittest.TestCase):
 
 
 class LayoutDefaultTest(unittest.TestCase):
-    """单页默认六格，而且**不是**等分六格。"""
+    """单页默认五格（2026-11-03 从六格改回五格，见 moss_bot.LAYOUT 注释）。"""
 
-    def test_layout_is_six_panels(self):
-        self.assertEqual(moss_bot.LAYOUT, "2t4b")
+    def test_layout_is_five_panels(self):
+        self.assertEqual(moss_bot.LAYOUT, "1t2m2b")
         self.assertEqual(moss_bot.PAGES, 1)
-        self.assertEqual(len(moss_comic.LAYOUTS[moss_bot.LAYOUT][1]), 6)
+        self.assertEqual(len(moss_comic.LAYOUTS[moss_bot.LAYOUT][1]), 5)
+
+    def test_every_panel_has_enough_pixels(self):
+        """每格至少 25 万像素——低于这个数中文会糊。
+
+        旧默认 `2t4b` 的下排四格只有 512×384 = 19.7 万，是出图质量差的主因。
+        """
+        for b in moss_comic.LAYOUT_BOXES[moss_bot.LAYOUT]:
+            w, h = b[3] - b[1], b[2] - b[0]
+            self.assertGreaterEqual(w * h, 250000,
+                                    "格子 %dx%d 只有 %.1f 万像素"
+                                    % (w, h, w * h / 10000))
 
     def test_default_is_not_the_equal_grid(self):
-        """默认不能退回等分六格：等权平铺没有主次，字数预算也砍半。"""
+        """默认不能退回等分网格：等权平铺没有主次。"""
         self.assertNotEqual(moss_bot.LAYOUT, "3x2")
 
     def test_usage_mentions_default_panels(self):
