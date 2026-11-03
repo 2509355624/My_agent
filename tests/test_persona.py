@@ -942,6 +942,67 @@ def _strip_quoted(text):
     return s
 
 
+class LayeredGuideTest(unittest.TestCase):
+    """分层亲密指导（2026-11-04 深夜）。
+
+    素材来自 `skills/writing/`。核心是**按高潮值分档**：同一个「做」，
+    高潮值 20 和 90 的写法完全是两回事，不分层模型会一路用同一个调子
+    写到结束——从「还没起来」直接跳到「到了」，中间三档等于不存在。
+
+    ⚠️ 类名别叫 `IntimateGuideTest`——文件里已经有一个，同名会**覆盖**掉
+    它（Python 后定义者胜），那 4 条老测试就静默消失了。踩过一次。
+    """
+
+    def test_free_mode_adds_nothing(self):
+        """没开攻略 / 自由模式：只留通用写法，不拼分层。"""
+        self.assertEqual(persona.intimate_guide(None), "")
+        self.assertEqual(persona.intimate_guide({}), "")
+        self.assertEqual(persona.intimate_guide({"active": False}), "")
+
+    def test_each_orgasm_level_gets_its_own_block(self):
+        """五档各有一块，而且互不相同。"""
+        seen = {}
+        for ex in (10, 40, 60, 80, 95):
+            g = persona.intimate_guide({"active": True, "excite": ex,
+                                        "corrupt": 0})
+            heads = [l for l in g.splitlines() if l.startswith("###")]
+            self.assertEqual(len(heads), 1, "excite=%d 应该正好一块" % ex)
+            seen[ex] = heads[0]
+        self.assertEqual(len(set(seen.values())), 5, "五档不能有重复的块")
+
+    def test_out_of_scene_has_no_layer(self):
+        """场景外（高潮值 0）不拼分层——那不是「还没被带起来」，是没开始。"""
+        g = persona.intimate_guide({"active": True, "excite": 0, "corrupt": 0})
+        self.assertEqual(g, "")
+
+    def test_high_corruption_adds_another_layer(self):
+        """堕落 >= 50 时多加一层：她的反应里有一层她不想要的东西。"""
+        low = persona.intimate_guide({"active": True, "excite": 60,
+                                      "corrupt": 20})
+        high = persona.intimate_guide({"active": True, "excite": 60,
+                                       "corrupt": 60})
+        self.assertNotIn("她现在不一样了", low)
+        self.assertIn("她现在不一样了", high)
+
+    def test_base_guide_teaches_orgasm_and_dialogue(self):
+        """通用段必须覆盖两件最容易写坏的事。
+
+        - 高潮不能一句话带过（要三层：越界的瞬间 / 连续反应 / 之后怎么接）
+        - 对话要跟着兴奋度碎掉，但不能全程只有「嗯啊」
+        """
+        base = persona._INTIMATE_GUIDE
+        self.assertIn("高潮不是一句话", base)
+        self.assertIn("对话要跟着碎", base)
+        self.assertIn("别把「指导」写进正文", base)
+
+    def test_guide_uses_second_person(self):
+        """分层块里不能出现「他」——人称规则对通用段和分层段一视同仁。"""
+        for ex in (10, 40, 60, 80, 95):
+            g = persona.intimate_guide({"active": True, "excite": ex,
+                                        "corrupt": 60})
+            self.assertNotIn("他", g, "excite=%d 的分层里还有「他」" % ex)
+
+
 class PronounRuleTest(unittest.TestCase):
     """人称规则（2026-11-03）：她是「她」，对面是「你」，不许写成「他」。
 
