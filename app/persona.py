@@ -613,16 +613,46 @@ def load_cards():
     return cards
 
 
+def is_builtin_card(card_or_id):
+    """这张卡是不是内置的（不可改、不可删）。
+
+    2026-11-03 用户要求「创建角色不能动我的默认角色」。名单在
+    `config.BUILTIN_CARD_IDS`——`card_maker` 那边也认同一份，因为扮演态和
+    造卡页是两个独立的卡库，各护各的会漏。
+    """
+    from app.config import BUILTIN_CARD_IDS
+    if isinstance(card_or_id, dict):
+        if card_or_id.get("builtin") is True:
+            return True
+        cid = str(card_or_id.get("id") or "").strip()
+    else:
+        cid = str(card_or_id or "").strip()
+    return cid in BUILTIN_CARD_IDS
+
+
 def save_cards(cards):
     """原子写卡库（临时文件 + os.replace，见 agents._atomic_write_text）。
 
     写之前逐张规范化、丢掉没名字的、给撞了的 id 补一枚新的——卡池页送来的
     是浏览器里那份（可能少字段、也可能刚「复制一张」出来两张同 id 的），
     这些规矩不该让前端自己知道。
+
+    **内置卡永远保留**（2026-11-03）：这个函数是整体覆盖写，传进来的列表里
+    没有内置卡就等于把它们全删了。实测事故：一个没做隔离的测试调了
+    `save_cards([一张卡])`，用户 11 张默认卡当场没了。
+    现在无论传什么——
+      · 传了内置卡的 id：用**现有版本**，内容不许改
+      · 没传：从现有卡库里补回来，位置按原顺序
     """
     path = _cards_path()
     if not path:
         return False
+
+    # 先把现有卡库里的内置卡捞出来（内容以磁盘为准，不信调用方）
+    old = load_cards()
+    old_by_id = {str(c.get("id") or ""): c for c in old}
+    builtins = [c for c in old if is_builtin_card(c)]
+
     from app.agents import _atomic_write_text
     out, seen = [], set()
     for c in (cards or []):
@@ -631,10 +661,24 @@ def save_cards(cards):
         card = _norm_card(c)
         if not card["name"]:
             continue
+        if is_builtin_card(card):
+            # 内置卡：一律用磁盘上那份，调用方传的改动不算数
+            keep = old_by_id.get(card["id"])
+            if keep:
+                card = _norm_card(keep)
         if card["id"] in seen:
             card["id"] = str(int(time.time() * 1000))
         seen.add(card["id"])
         out.append(card)
+
+    # 内置卡：传进来的列表里漏了谁，就从磁盘补回来。
+    # 这一条是那次事故的直接补丁——`save_cards` 是整体覆盖，前端只传半截
+    # 就等于把默认卡删了。
+    for b in builtins:
+        if b["id"] not in seen:
+            out.append(_norm_card(b))
+            seen.add(b["id"])
+
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
