@@ -17,7 +17,9 @@
 
 好感 -50 ~ +50，初始 0。9 个行为档 + 2 个结局（毕业 / 进局子）。
 结局**越线即触发**（≥50 / ≤-50），触发后数值锁定，直到「重新开始」
-（归零）或切回自由模式（封存，再切回来原值恢复）。
+（回到这张卡的起点）或切回自由模式（封存原值）。切自由模式会**顺手解除结局**
+（2026-11-04）：不解除的话，切回攻略模式的第一轮结算会拿同一个越线值
+再判一次结局，玩家等于被关在局子里出不来。
 
 ## 状态长什么样
 
@@ -143,14 +145,20 @@ def tier_for(value, cfg=None):
     return tiers[-1] if tiers else None
 
 
-def ending_for(value, cfg=None):
-    """越线判定：≥max 毕业 / ≤min 进局子；没越线返回 None。"""
+def bounds(cfg=None):
+    """好感的上下限 `(hi, lo)`。config 可覆盖（越线判定和「退出结局」都用它）。"""
     cfg = cfg or load_config()
     try:
         hi = int(cfg.get("max") if cfg.get("max") is not None else MAX_V)
         lo = int(cfg.get("min") if cfg.get("min") is not None else MIN_V)
     except (TypeError, ValueError):
         hi, lo = MAX_V, MIN_V
+    return hi, lo
+
+
+def ending_for(value, cfg=None):
+    """越线判定：≥max 毕业 / ≤min 进局子；没越线返回 None。"""
+    hi, lo = bounds(cfg)
     if value >= hi:
         return ENDING_GRAD
     if value <= lo:
@@ -446,8 +454,9 @@ def set_mode(line_key, raid):
             _save_entry(line_key, ent)
             ename = str(ending_cfg(str(rec["ending"]), load_config())
                         .get("name") or "结局")
-            return ("还接着上次的结局（%s）：数值已锁定，她停在那天的情绪里。"
-                    "想重新攻略就发「重新开始」。" % ename)
+            return ("这条线还停在结局（%s），数值锁定，她留在那天的情绪里。"
+                    "想从那页翻出来接着聊就发「自由模式」，想彻底重来发「重新开始」。"
+                    % ename)
         if rec.get("mode") == MODE_RAID:
             return "现在已经是攻略模式了，当前好感 %d。" % int(
                 rec.get("value") or 0)
@@ -460,6 +469,25 @@ def set_mode(line_key, raid):
     if existing is None:
         return "现在本来就是自由模式。发「攻略模式」开启好感玩法。"
     rec = existing
+    # 结局不是死路（2026-11-04 用户提：报警结局之后想接着聊）。
+    # 切自由模式 = 这一页翻过去：结局标记清掉、数值封存不动，她回到平时的样子。
+    # 好感要从越线那一格退回到线内 1 分——不然下次切回攻略模式，第一轮结算
+    # 会拿同一个越线值再判一次同样的结局，玩家刚出来就被弹回局子。
+    # 排在 `mode == free` 判断**之前**：已经切成自由的旧线（free + ending=jail）
+    # 结局还挂着，就是这个顺序卡住了玩家。
+    if rec.get("ending"):
+        ended = str(rec["ending"])
+        ename = str(ending_cfg(ended, load_config()).get("name") or "结局")
+        hi, lo = bounds()
+        v = max(lo + 1, min(hi - 1, int(rec.get("value") or 0)))
+        rec["value"] = v
+        rec["ending"] = ""
+        rec["mode"] = MODE_FREE
+        ent["affection"] = rec
+        _save_entry(line_key, ent)
+        return ("【%s】这一页翻过去了，切回自由模式：她不再按结局那天的样子对你，"
+                "数值封存着（好感 %d）。想接着攻略就发「攻略模式」，"
+                "想干净地从头再来就发「重新开始」。" % (ename, v))
     if rec.get("mode") == MODE_FREE:
         return "现在就是自由模式（好感 %d 封存中）。发「攻略模式」接着玩。" % int(
             rec.get("value") or 0)

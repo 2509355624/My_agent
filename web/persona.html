@@ -712,9 +712,14 @@ function renderMode() {
   const raid = isRaid(AFF);
   b.textContent = raid ? "攻略模式" : "自由模式";
   b.classList.toggle("on", raid);
-  b.title = raid
-    ? "现在按好感档位演；点一下切回自由模式（好感封存不清零）"
-    : "现在只聊天；点一下开攻略模式（开始按档位算好感）";
+  // 结局定格（2026-11-04）：结局之后点一下就是「翻过这一页」——切自由模式
+  // 会解除结局、数值封存。切回攻略模式只会回一句「还停在结局」，等于死路，
+  // 所以这里先把话说清楚。
+  b.title = (AFF && AFF.ending)
+    ? "这条线已经结局了。点一下切自由模式，把这一页翻过去接着聊（数值封存）"
+    : (raid
+       ? "现在按好感档位演；点一下切回自由模式（好感封存不清零）"
+       : "现在只聊天；点一下开攻略模式（开始按档位算好感）");
   b.style.display = (ROLE === "guest" || !card) ? "none" : "";
 }
 
@@ -1016,8 +1021,11 @@ $("btnMode").addEventListener("click", async () => {
   if (ROLE === "guest") { toast("体验版没有攻略模式", true); return; }
   if (!card) { toast("先选一个角色", true); return; }
   try {
-    const d = await post("/api/persona/affection",
-                         { mode: isRaid(AFF) ? "free" : "raid" });
+    // 结局定格时，无论按钮眼下显示的是哪一态，点下去都是「切自由模式」：
+    // 那是唯一能翻过结局这一页的操作（切回攻略模式只会提示「还停在结局」）。
+    const mode = (AFF && AFF.ending) ? "free"
+                                     : (isRaid(AFF) ? "free" : "raid");
+    const d = await post("/api/persona/affection", { mode: mode });
     toast(d.reply || "已切换");
     AFF = d.affection || AFF;
     renderAff(AFF);
