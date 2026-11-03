@@ -377,7 +377,9 @@ def _forward(prefix, sub, allow_guest=False):
     # 26MB 的原图在 5175 里就多占一份，几个人同时下能把这个进程顶爆。
     # 只对图片这么干：接口响应都很小，流式没有收益，反而多一层生成器。
     streaming = (request.method == "GET"
-                 and (request.path or "").startswith("/api/gal/img/"))
+                 and ((request.path or "").startswith("/api/gal/img/")
+                      or (request.path or "").startswith("/api/moss/img")))
+    #  ↑ moss 漫画图单张 2MB+（2026-11-03 实测），一并流式。
     # 每个请求一个干净 session，用完就关（见 `_new_session` 的说明）。
     # 绝不能复用全局 session：那会把上一个用户的 cookie 带给下一个用户。
     sess = _new_session()
@@ -501,6 +503,21 @@ def persona_page():
 @app.route("/api/persona/<path:sub>", methods=["GET", "POST", "DELETE"])
 def proxy_persona(sub):
     return _forward("/api/persona", sub, allow_guest=True)
+
+
+# ─── 角色扮演的漫画图（2026-11-03）──────────────────────
+#
+# persona 页出的漫画图走 `/api/moss/img`（persona_api.comic_status 返回的
+# url 就是它）。这条不转发的话，手机端（5175/隧道）请求全部 404 → 气泡
+# 下面永远是一张破图，桌面端（直连 5174）反而正常——用户实测就是这样。
+#
+# ⚠️ 只放这一条 GET：`/api/moss/*` 其余（render/delete/spec/list）是漫画
+# 管理台的接口，不能跟着暴露到公网。img 本身只读，路径钉死在
+# `state/moss_comic` 的任务目录里（moss_api._task_dir 校验），安全。
+
+@app.route("/api/moss/img", methods=["GET"])
+def proxy_moss_img():
+    return _forward("/api/moss", "img")
 
 
 @app.route("/compat")
