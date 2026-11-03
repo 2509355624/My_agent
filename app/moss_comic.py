@@ -24,11 +24,14 @@ Danbooru tag 工程师（32.8 万标签库 + POV 判据 + 补正员），这边�
     }
 """
 import json
+import logging
 import os
 import re
 
 from . import llm
 from .config import BASE_DIR
+
+log = logging.getLogger("moss_comic")
 
 # ── 版式：模板句 + 每格方位名 ─────────────────────────────────
 LAYOUTS = {
@@ -881,6 +884,109 @@ def _words(s):
     return len(re.findall(r"[A-Za-z][A-Za-z'-]*", s or ""))
 
 
+def hard_issues(spec, brief=""):
+    """**硬伤**清单：只为「要不要补一遍」服务，不是给人看的体检报告。
+
+    2026-11-03 用户拍板：单次调用没有自我纠错的回路（agent 循环才有），
+    所以加一道条件触发——**只有真出问题才重写一次**，正常情况下一次成。
+    实测批量 8 个样本硬伤率 0%，所以这条路不会常态多花一次调用。
+
+    三类判据（用户点名）：
+      1. 结构硬伤：动作未覆盖、景别 <3 档、格数不对
+      2. 文字超限：气泡 >11 字、旁白 >22 字（零错字区，超了会漏字乱序）
+      3. 套路化：五格景别永远是同一个顺序（模板排列，不是按内容规划）
+
+    返回 `[(类别, 说明), ...]`；空列表 = 没有硬伤。
+    """
+    out = []
+    if not isinstance(spec, dict):
+        return [("结构", "不是 JSON 对象")]
+
+    for p in (spec.get("pages") or []):
+        n = p.get("n")
+        lay = p.get("layout") or ""
+        if lay not in LAYOUTS:
+            out.append(("结构", "第 %s 页 layout 不认识" % n))
+            continue
+        want = len(LAYOUTS[lay][1])
+        panels = p.get("panels") or []
+        if len(panels) != want:
+            out.append(("结构", "第 %s 页要 %d 格，给了 %d 格"
+                        % (n, want, len(panels))))
+
+        # 景别档数 + 相邻重复
+        plan = p.get("plan") if isinstance(p.get("plan"), dict) else {}
+        shots = [str(s or "").strip().lower() for s in (plan.get("shots") or [])]
+        levels = {s for s in shots if s}
+        if len(levels) < 3:
+            out.append(("结构", "第 %s 页景别只有 %d 档，整页会平"
+                        % (n, len(levels))))
+        for k in range(1, len(shots)):
+            if shots[k] and shots[k] == shots[k - 1]:
+                out.append(("结构", "第 %s 页第 %d、%d 格景别相同"
+                            % (n, k, k + 1)))
+                break
+        # 套路化：连续两页景别顺序完全一致。单页没法判，交给调用方跨页比。
+        sig = "|".join(shots)
+        if sig:
+            p["_shot_sig"] = sig
+
+        # 文字超限
+        for k, panel in enumerate(panels, 1):
+            for b in _bubbles(panel):
+                if len(b) > 11:
+                    out.append(("文字", "第 %s 页第 %d 格气泡「%s」%d 字超 11"
+                                % (n, k, b[:12], len(b))))
+            cap = (panel.get("caption") or "").strip()
+            if len(cap) > 22:
+                out.append(("文字", "第 %s 页第 %d 格旁白 %d 字超 22"
+                            % (n, k, len(cap))))
+
+    # 动作覆盖：用户点名要画的动作，desc 里得有对应词
+    if brief:
+        hit, miss = _action_coverage(brief, spec)
+        if miss:
+            out.append(("结构", "点名要画的动作没画到：%s" % "、".join(miss)))
+    return out
+
+
+# 动作词 → 英文 desc 里该出现的词。判据宁可宽，漏判比误判更伤（误判会白跑
+# 一次补正）。只收高频的，其它交给模型。
+_ACTION_KEYS = {
+    "舔": ("lick", "mouth on", "mouth press", "tongue", "between her legs",
+           "between her thighs", "eating her"),
+    "吸": ("suck", "lick", "mouth"),
+    "掰开": ("spread", "parted", "open", "pulled apart", "parting"),
+    "分开": ("spread", "parted", "open", "parting"),
+    "插入": ("insert", "enter", "penetrat", "inside"),
+    "进入": ("insert", "enter", "penetrat", "inside"),
+    "跪": ("kneel", "on her knees"),
+    "趴": ("on all fours", "bent over", "lying face down", "on her stomach"),
+    "躺": ("lying", "on her back"),
+    "抱": ("hug", "embrace", "arm around", "holding"),
+    "吻": ("kiss", "lips pressed"),
+    "摸": ("hand on", "fingers", "touch"),
+    "脱": ("undress", "slipping off", "pulled off", "removed", "pulling"),
+    "露": ("bare", "exposed", "naked", "visible"),
+}
+
+
+def _action_coverage(brief, spec):
+    """brief 里出现的动作词，在 spec 的 desc 里有没有对应。返回 (命中, 未命中)。"""
+    text = " ".join(str(p.get("desc") or "").lower()
+                    for pg in (spec.get("pages") or [])
+                    for p in (pg.get("panels") or []))
+    hit, miss = [], []
+    for word, keys in _ACTION_KEYS.items():
+        if word not in brief:
+            continue
+        if any(k in text for k in keys):
+            hit.append(word)
+        else:
+            miss.append(word)
+    return hit, miss
+
+
 def check(spec):
     """体检报告。**只报不拦**——判据全表也不该当准入闸门。"""
     issues = []
@@ -1174,13 +1280,57 @@ def resolve_style(name):
     return STYLES.get(key.lower(), key)
 
 
+def repair(spec, problems, brief, pages, layout, ratio, style_text,
+           provider=None, timeout=240):
+    """把**硬伤清单**交给模型，让它只改有问题的格子，返回新的 spec。
+
+    2026-11-03 用户拍板：单次调用没有自我纠错的回路，用一次额外的「补正」
+    补上。**只在 `hard_issues()` 报出硬伤时才走这条**——批量实测正常情况
+    硬伤率 0%，所以不会常态多花一次调用。
+
+    设计要点：
+    - 给的是**清单**，不是「重新写一遍」。模型只该动提到的格子，其余原样
+      返回，避免改好一处弄坏三处。
+    - 输出仍是整份 spec JSON（让它改完整体回吐，比局部 patch 更稳）。
+    - 任何失败都退回原文，绝不因为补正失败把一手稿也丢了。
+    """
+    lines = ["下面是一份已经写好的漫画脚本，体检发现了几处问题。",
+             "**只改有问题的格子，其余一个字都别动**，改完整份 JSON 原样返回。",
+             "", "## 问题清单"]
+    for kind, msg in problems:
+        lines.append("- [%s] %s" % (kind, msg))
+    lines.append("")
+    lines.append("## 原脚本")
+    lines.append(json.dumps({"title": spec.get("title") or "",
+                             "style": spec.get("style") or "",
+                             "cast": spec.get("cast") or {},
+                             "pages": spec.get("pages") or []},
+                            ensure_ascii=False))
+    lines.append("")
+    lines.append("改完直接输出 JSON，不要解释。")
+    msgs = [{"role": "system", "content": system_prompt()},
+            {"role": "user", "content": "\n".join(lines)}]
+    try:
+        text = llm.call_llm(msgs, timeout=timeout, provider=provider,
+                            max_tokens=max(4096, int(pages) * 900))
+    except Exception:                            # noqa: BLE001
+        return None, ""
+    new_spec, _why = parse_json(text or "")
+    if not isinstance(new_spec, dict):
+        return None, text or ""
+    return new_spec, text or ""
+
+
 def write(brief, pages=4, style="", ratio="1024x1536", provider=None,
           timeout=240, progress=None, layout="", prev="", prev_scene="",
-          cast=None):
+          cast=None, repair_rounds=1):
     """一句话剧情 → 整篇 spec。返回 (spec, raw, error)。
 
     `prev` / `prev_scene` / `cast` 是连载用的（2026-10-31）：前情摘要、
     上一页场景卡、要继承的人物设定。为空时行为与从前完全一致。
+
+    `repair_rounds`（2026-11-03）：最多补正几轮。**0 = 关闭**。默认 1——
+    只有 `hard_issues()` 报出硬伤才真的多跑一次（见函数尾部）。
     """
     style_text = resolve_style(style)
     messages = [
@@ -1213,6 +1363,40 @@ def write(brief, pages=4, style="", ratio="1024x1536", provider=None,
     spec.setdefault("pages", [])
     for i, p in enumerate(spec["pages"], 1):
         p["n"] = i
+
+    # ── 条件补正（2026-11-03 用户拍板）─────────────────────────────
+    # 单次调用没有 agent 那种「第二轮自我纠错」的回路，所以这里补一道：
+    # **只在真出硬伤时**再要一遍。批量实测 8 个样本硬伤率 0%，正常不触发。
+    #
+    # 补正失败（调用挂了 / JSON 坏了 / 改完更差）一律保留一手稿——
+    # 补正是锦上添花，不能把本来能用的稿子弄丢。
+    if repair_rounds > 0:
+        for _ in range(int(repair_rounds)):
+            problems = hard_issues(spec, brief)
+            if not problems:
+                break
+            log.info("moss 编剧有 %d 处硬伤，开始补正：%s",
+                     len(problems), problems[0][1][:60])
+            new_spec, new_raw = repair(spec, problems, brief, pages, layout,
+                                       ratio, style_text, provider=provider,
+                                       timeout=timeout)
+            if not isinstance(new_spec, dict):
+                log.warning("moss 补正没交回可用 JSON，保留一手稿")
+                break
+            # 补正稿也得过同样的后处理（画风盖回、cast 继承、页号重排）
+            if style_text:
+                new_spec["style"] = style_text
+            if cast:
+                new_spec["cast"] = dict(cast)
+            new_spec.setdefault("pages", [])
+            for i, p in enumerate(new_spec["pages"], 1):
+                p["n"] = i
+            after = hard_issues(new_spec, brief)
+            if len(after) >= len(problems):
+                log.warning("moss 补正后硬伤没减少（%d → %d），保留一手稿",
+                            len(problems), len(after))
+                break
+            spec, raw = new_spec, new_raw
     return spec, raw, ""
 
 
