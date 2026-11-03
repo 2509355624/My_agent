@@ -200,7 +200,13 @@ class TurnTest(PersonaBase):
         super().setUp()
         persona.save_cards([_card("纱雾")])
         self.card = persona.find_card("纱雾")
-        persona.switch(self.KEY, self.card)
+        # 2026-11-03 方案 B：QQ 私聊也按角色分线了。用 `switch_line` 走和
+        # 线上完全一致的路径（线键 + base 指针）；读历史用 `resolve_line`
+        # 换算——测试里出现的键从此是 `private_1__纱雾`。
+        persona.switch_line(self.KEY, self.card)
+
+    def _hist_key(self):
+        return persona.resolve_line(self.KEY)
 
     def _run(self, reply_text, text="在吗", sender="张三"):
         with mock.patch.object(persona.llm, "call_llm",
@@ -245,7 +251,7 @@ class TurnTest(PersonaBase):
         改成保留完整原文当 few-shot，展示时再由 `split_turn` 剥。
         """
         self._run("你好呀\n画面：1girl, sitting\n心情：害羞 强度6\n状态：坐在桌前")
-        ent = persona._load_hist("private_1")[1]["content"]
+        ent = persona._load_hist(self._hist_key())[1]["content"]
         self.assertIn("你好呀", ent)
         self.assertIn("画面：1girl, sitting", ent)
         self.assertIn("心情：害羞 强度6", ent)
@@ -254,7 +260,8 @@ class TurnTest(PersonaBase):
     def test_split_turn_strips_meta_from_display(self):
         """存进历史的是全的，但**用户看到的正文**里不许有这三行。"""
         self._run("你好呀\n画面：1girl, sitting\n心情：害羞 强度6\n状态：坐在桌前")
-        turn = persona.split_turn(persona._load_hist("private_1")[1]["content"])
+        turn = persona.split_turn(
+            persona._load_hist(self._hist_key())[1]["content"])
         self.assertEqual(turn[0], "你好呀")
         self.assertEqual(turn[1], "1girl, sitting")
         self.assertEqual(turn[2], "害羞")
@@ -267,7 +274,7 @@ class TurnTest(PersonaBase):
         模型漏写时 `_ensure_meta` 补占位——不给下一轮留「可以不写」的示范。
         """
         self._run("你好呀")
-        hist = persona._load_hist("private_1")
+        hist = persona._load_hist(self._hist_key())
         self.assertEqual([m["role"] for m in hist], ["user", "assistant"])
         # 私聊不加「张三：」前缀（群聊那条已经关掉了，见 GroupNoRoleplayTest）
         self.assertEqual(hist[0]["content"], "在吗")
@@ -307,7 +314,7 @@ class TurnTest(PersonaBase):
         # 生图机器人的历史落在同一目录的另一份文件里，这边读到的只有对话
         self.assertFalse(os.path.exists(
             os.path.join(agents.AGENTS_DIR, "qq", "sessions", "group_1.jsonl")))
-        self.assertTrue(os.path.exists(persona._hist_path("private_1")))
+        self.assertTrue(os.path.exists(persona._hist_path(self._hist_key())))
 
 
 class SceneSplitTest(unittest.TestCase):
@@ -1160,6 +1167,124 @@ class DrawReplyToTest(unittest.TestCase):
                 persona.draw("x", {"appearancePrompt": "1girl"}, "private_1",
                              reply_to="7000001")
         self.assertEqual(en.call_args.kwargs.get("reply_to"), "7000001")
+
+
+class LineSplitTest(PersonaBase):
+    """QQ 私聊分线（2026-11-03 方案 B）：不同角色各一条线，互不污染。
+
+    用户原话：「qq也和网页一样，不同的角色有自己的分支」。行为对齐网页：
+    切角色 = 换线（历史/小记/好感独立），切回来 = 接着原来那条聊。
+    """
+
+    def setUp(self):
+        super().setUp()
+        persona.save_cards([_card("纱雾"), _card("雷姆")])
+
+    def _run(self, key, reply="嗯"):
+        with mock.patch.object(persona.llm, "call_llm", return_value=reply):
+            return persona.run_turn(key, "在吗", "private")
+
+    def test_switch_writes_line_and_pointer(self):
+        card = persona.find_card("纱雾")
+        persona.switch_line("private_1", card)
+        line = persona.card_key("private_1", card["id"])
+        self.assertEqual(persona._entry(line)["card"], card["id"])
+        self.assertEqual(persona._entry("private_1")["card"], card["id"])
+        self.assertEqual(persona.resolve_line("private_1"), line)
+
+    def test_resolve_line_passthrough(self):
+        # 已是线键 / 群聊 / 没在演 → 原样返回
+        self.assertEqual(persona.resolve_line("private_1__rem"),
+                         "private_1__rem")
+        self.assertEqual(persona.resolve_line("group_9_100"), "group_9_100")
+        self.assertEqual(persona.resolve_line("private_1"), "private_1")
+
+    def test_histories_are_separate_per_card(self):
+        rem = persona.find_card("雷姆")
+        sm = persona.find_card("纱雾")
+        persona.switch_line("private_1", rem)
+        self._run("private_1", "雷姆的回复")
+        persona.switch_line("private_1", sm)
+        self._run("private_1", "纱雾的回复")
+        rem_hist = persona._load_hist(persona.card_key("private_1", rem["id"]))
+        sm_hist = persona._load_hist(persona.card_key("private_1", sm["id"]))
+        self.assertTrue(rem_hist[1]["content"].startswith("雷姆的回复"))
+        self.assertTrue(sm_hist[1]["content"].startswith("纱雾的回复"))
+        # 雷姆那条线没有被纱雾的对话污染
+        self.assertNotIn("纱雾", "".join(m["content"] for m in rem_hist))
+
+    def test_switch_back_resumes_old_line(self):
+        rem = persona.find_card("雷姆")
+        sm = persona.find_card("纱雾")
+        persona.switch_line("private_1", rem)
+        self._run("private_1", "雷姆的回复")
+        persona.switch_line("private_1", sm)
+        persona.switch_line("private_1", rem)          # 切回来
+        line = persona.card_key("private_1", rem["id"])
+        self.assertEqual(persona._entry(line)["turns"], 1)   # 轮次保留
+        self._run("private_1", "又来啦")
+        hist = persona._load_hist(line)
+        self.assertEqual(len(hist), 4)
+        self.assertEqual(hist[0]["content"], "在吗")
+        self.assertTrue(hist[1]["content"].startswith("雷姆的回复"))
+        self.assertEqual(hist[2]["content"], "在吗")
+        self.assertTrue(hist[3]["content"].startswith("又来啦"))
+
+    def test_leave_then_reenter_resumes(self):
+        rem = persona.find_card("雷姆")
+        persona.switch_line("private_1", rem)
+        self._run("private_1", "雷姆的回复")
+        persona.handle_command("private_1", "出戏")
+        self.assertIsNone(persona.active_card("private_1"))
+        persona.switch_line("private_1", rem)          # 再进来
+        self.assertEqual(
+            persona._entry(persona.resolve_line("private_1"))["turns"], 1)
+
+    def test_clear_on_base_hits_current_line_only(self):
+        rem = persona.find_card("雷姆")
+        sm = persona.find_card("纱雾")
+        persona.switch_line("private_1", rem)
+        self._run("private_1", "雷姆的回复")
+        persona.switch_line("private_1", sm)
+        self._run("private_1", "纱雾的回复")
+        persona.clear("private_1")                     # 现在演的是纱雾
+        self.assertEqual(
+            persona._load_hist(persona.card_key("private_1", sm["id"])), [])
+        self.assertEqual(
+            len(persona._load_hist(persona.card_key("private_1", rem["id"]))), 2)
+        # base 副本同步刷新：card 保留、计数归零
+        self.assertEqual(persona._entry("private_1")["card"], sm["id"])
+        self.assertEqual(persona._entry("private_1")["turns"], 0)
+
+    def test_migrate_old_layout(self):
+        """旧布局（base 挂整份状态 + 一份共享历史）自动搬到分线布局。"""
+        card = persona.find_card("纱雾")
+        persona._save_state({"private_9": {
+            "card": card["id"], "note": "旧小记", "turns": 3,
+            "mood": "开心", "intensity": 5, "state": "坐着"}})
+        persona._save_hist("private_9",
+                           [{"role": "user", "content": "旧对话"}])
+        old_hist = persona._hist_path("private_9")
+        self.assertTrue(os.path.exists(old_hist))
+
+        st = persona._load_state()                     # 触发迁移
+        line = persona.card_key("private_9", card["id"])
+        self.assertEqual(st[line]["note"], "旧小记")
+        self.assertEqual(st[line]["turns"], 3)
+        self.assertEqual(st["private_9"]["card"], card["id"])
+        self.assertFalse(os.path.exists(old_hist))
+        self.assertTrue(os.path.exists(persona._hist_path(line)))
+
+    def test_migrate_is_idempotent(self):
+        card = persona.find_card("纱雾")
+        persona._save_state({"private_9": {
+            "card": card["id"], "note": "旧小记", "turns": 3,
+            "mood": "", "intensity": 0, "state": ""}})
+        persona._load_state()                          # 第一次：迁移
+        line = persona.card_key("private_9", card["id"])
+        st = persona._load_state()                     # 第二次：不再动
+        self.assertEqual(st[line]["note"], "旧小记")
+        self.assertEqual(st["private_9"]["note"], "旧小记")
 
 
 if __name__ == "__main__":
