@@ -398,10 +398,35 @@ def record_of(ent):
     return _migrate(rec) if isinstance(rec, dict) else None
 
 
-def is_raid(line_key):
-    """这条线现在是否在攻略模式（raid 且有角色线）。"""
+def _ensure(line_key):
+    """这条线的好感记录；没有就按角色卡起点建一份。
+
+    2026-11-04 用户要求「一进来就是攻略模式」：以前只有手动切过一次模式的线
+    才有 `affection` 记录，新线全走自由模式——网页右栏整块不显示、QQ 尾行也
+    没有好感，玩家不知道自己在玩什么。现在只要有角色线就懒建一份（`_blank`
+    的默认 mode 本来就是 raid，起点取角色卡的 `start_level`）。
+
+    返回 `(ent, rec)`；没在演谁时都是 None。
+    """
     ent = _entry(line_key)
+    if not isinstance(ent, dict) or not str(ent.get("card") or "").strip():
+        return None, None
     rec = record_of(ent)
+    if rec is not None:
+        return ent, rec
+    rec = _blank(line_key)
+    ent["affection"] = rec
+    try:
+        _save_entry(line_key, ent)
+    except Exception:                                     # noqa: BLE001
+        # 落盘失败不能挡住这一轮：内存里的 rec 已经能用，下次读再试。
+        log.warning("新建好感记录落盘失败 %s", line_key)
+    return ent, rec
+
+
+def is_raid(line_key):
+    """这条线现在是否在攻略模式（默认就是；切过自由模式才算不是）。"""
+    _ent, rec = _ensure(line_key)
     return bool(rec) and rec.get("mode") == MODE_RAID
 
 
@@ -415,12 +440,14 @@ def mercy_left(rec):
 
 
 def status(line_key):
-    """给网页/管理页看的只读快照。没开过攻略返回 None。
+    """给网页/管理页看的只读快照。没在演谁返回 None。
 
     2026-11-04 加冲动与越界次数：网页右栏要画三轴，缺一个就得再请求一次。
     `levelMax` 一起给，前端不用把「5」写死在 JS 里。
+    2026-11-04 晚：默认攻略模式——没记录的线在这里顺手建一份，所以右栏一进来
+    就有东西可画，不用等玩家先发一条消息。
     """
-    rec = record_of(_entry(line_key))
+    _ent, rec = _ensure(line_key)
     if not rec:
         return None
     cfg = load_config()
@@ -483,24 +510,12 @@ def set_mode(line_key, raid):
     `_blank()` 的默认 mode 就是 raid，先落盘再判断，不然第一次永远命中
     「已经是攻略模式」分支，记录根本不落（实测踩过）。
     """
-    ent = _entry(line_key)
-    if not ent or not str(ent.get("card") or "").strip():
+    ent, existing = _ensure(line_key)
+    if ent is None:
         return None           # 没在演谁：当普通消息，不认
-    from app import persona
-    existing = record_of(ent)
     if raid:
-        if existing is None:
-            rec = _blank(line_key)
-            ent["affection"] = rec
-            _save_entry(line_key, ent)
-            lv = int(rec.get("level") or 0)
-            if lv > 0:
-                return ("攻略模式开启。你们已经到【%s】这一步，从这里接着往下走。"
-                        "发「好感」随时查。" % (level_name(lv, card=_card_of(line_key))
-                                                or "认识"))
-            return ("攻略模式开启，好感从 0 开始。聊天会慢慢涨，"
-                    "剧情里的照顾和付出涨得快，把她说烦了会掉。发「好感」随时查。")
         rec = existing
+        lv = int(rec.get("level") or 0)
         if rec.get("ending"):
             rec["mode"] = MODE_RAID
             ent["affection"] = rec
@@ -511,16 +526,16 @@ def set_mode(line_key, raid):
                     "想从那页翻出来接着聊就发「自由模式」，想彻底删档发「清空存档」。"
                     % ename)
         if rec.get("mode") == MODE_RAID:
-            return "现在已经是攻略模式了，当前好感 %d。" % int(
-                rec.get("value") or 0)
+            return ("现在就是攻略模式，你们到【%s】，好感 %d。"
+                    % (level_name(lv, card=_card_of(line_key)) or "认识",
+                       int(rec.get("value") or 0)))
         was = int(rec.get("value") or 0)
         rec["mode"] = MODE_RAID
         ent["affection"] = rec
         _save_entry(line_key, ent)
-        return "攻略模式已恢复：好感 %d，接着上次来。" % was
+        return ("攻略模式已恢复：你们到【%s】，好感 %d，接着上次来。"
+                % (level_name(lv, card=_card_of(line_key)) or "认识", was))
     # → 自由模式：封存
-    if existing is None:
-        return "现在本来就是自由模式。发「攻略模式」开启好感玩法。"
     rec = existing
     # 结局不是死路（2026-11-04 用户提：报警结局之后想接着聊）。
     # 切自由模式 = 这一页翻过去：结局标记清掉、好感往线内挪一格，她回到平时的样子。
@@ -561,10 +576,9 @@ def wipe_numbers(line_key, keep_mode=True):
     只负责好感这一层；聊天历史与扮演态由 `persona.wipe()` 删。
     返回新记录（`persona` 拿它写进状态），没开过攻略时返回 None。
     """
-    ent = _entry(line_key)
-    old = record_of(ent)
-    if not ent or old is None:
-        return None           # 从没开过攻略：当普通消息
+    ent, old = _ensure(line_key)
+    if ent is None or old is None:
+        return None           # 没在演谁：当普通消息
     fresh = _blank(line_key)
     if keep_mode and old.get("mode"):
         fresh["mode"] = old["mode"]
@@ -585,10 +599,9 @@ def mercy(line_key):
     用户 2026-11-04 定的：进局子那一刻得有个看得见的出口，不然玩家会以为
     「存档要没了」，索性不玩了。
     """
-    ent = _entry(line_key)
-    rec = record_of(ent)
-    if not ent or rec is None:
-        return None           # 从没开过攻略：当普通消息
+    ent, rec = _ensure(line_key)
+    if ent is None or rec is None:
+        return None           # 没在演谁：当普通消息
     if rec.get("mode") != MODE_RAID:
         return "现在是自由模式，没有被结局锁住。想接着攻略发「攻略模式」。"
     if not rec.get("ending"):
@@ -615,7 +628,7 @@ def scoring_ctx(line_key):
     返回 dict：value / tier（档位名）/ recent（最近几条变化，拼好的多行文本）。
     没在攻略时返回 None（调用方就不用打分版提示词）。
     """
-    rec = record_of(_entry(line_key))
+    _ent, rec = _ensure(line_key)
     if not rec or rec.get("mode") != MODE_RAID:
         return None
     cfg = load_config()
@@ -642,9 +655,8 @@ def settle(line_key, score):
     `score`：第一段模型输出的 {"delta": int, "turn_type": "...", "reason": "..."}。
     没交作业 / 解析失败时传 None——按 +0 处理，**不让整轮回不了话**。
     """
-    ent = _entry(line_key)
-    rec = record_of(ent)
-    if not ent or not rec or rec.get("mode") != MODE_RAID:
+    ent, rec = _ensure(line_key)
+    if not rec or rec.get("mode") != MODE_RAID:
         # **mode 必须带上**：网页端拿这个回包直接渲染开关状态，
         # 缺了就会被判成「自由模式」——聊天一轮后控件自己跳到自由模式
         # （2026-11-03 群友实测：好感 +20 时突然变自由模式，其实数值没变）。

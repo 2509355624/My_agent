@@ -227,9 +227,15 @@ class TurnTest(PersonaBase):
         self.assertEqual(out.scene, "")                # 没写画面行 = 这轮不出图
 
     def test_intent_judgement_failure_still_replies(self):
-        """判断段挂了也要能回话——退化成单次流程，不是整轮哑掉。"""
+        """判断段挂了也要能回话——退化成单次流程，不是整轮哑掉。
+
+        2026-11-04 起默认攻略模式，第一段走的是「意图 + 打分」那个版本
+        （`_judge_intent_scored`），两个都得 patch 掉才算「判断段整体不可用」。
+        """
         with mock.patch.object(persona, "_judge_intent",
                                return_value=(None, "")), \
+             mock.patch.object(persona, "_judge_intent_scored",
+                               return_value=(None, "", None)), \
              mock.patch.object(persona.llm, "call_llm", return_value="你好呀") as m:
             persona.run_turn("private_1", "在吗", "private", "张三")
         self.assertEqual(m.call_count, 1)
@@ -838,6 +844,86 @@ class NoteBudgetTest(unittest.TestCase):
         approx_tokens = total_chars * 0.65
         self.assertLess(approx_tokens, 8000,
                         "扮演一轮 %.0f token，超过生图链路太多" % approx_tokens)
+
+
+class NoteClipTest(unittest.TestCase):
+    """小记超长时的截断（2026-11-04 用户报的 bug）。
+
+    他做的早餐被 AI 说成「我做的」，同时「回忆」看着一直没更新。根因是
+    `note[:1000]` 硬切：小记按时序写，**最新的事在末尾**，一超长就整段被砍，
+    日志里那条线连续 7 次压缩全是「正好 1000 字」，全切在最新那段之前。
+    """
+
+    def test_short_note_untouched(self):
+        s = "第一段。\n\n第二段。"
+        self.assertEqual(persona._clip_note(s, 1000), s)
+
+    def test_long_note_keeps_head_and_tail(self):
+        head = "【开头】我们认识很久了，他是我最亲近的人。"
+        tail = "【结尾】今天早上他做了早餐，我吃了，还说好吃。"
+        middle = "\n".join("中间第%d段，写些不太重要的过渡。" % i
+                           for i in range(200))
+        out = persona._clip_note("\n".join([head, middle, tail]), 320)
+        self.assertLessEqual(len(out), 320)
+        self.assertIn("【开头】", out)       # 关系的基础要留住
+        self.assertIn("【结尾】", out)       # 刚发生的事更要留住
+
+    def test_single_block_cut_at_sentence_end(self):
+        """整段没有换行时退化成按句截，不能切在半句上。"""
+        s = "他做了早餐。" * 100
+        out = persona._clip_note(s, 100)
+        self.assertLessEqual(len(out), 100)
+        self.assertTrue(out.endswith("。") or out.endswith("…"), out[-6:])
+
+    def test_clip_never_exceeds_limit(self):
+        s = "\n".join("第%d段。" % i + "字" * 40 for i in range(100))
+        for limit in (50, 120, 300, 1000):
+            self.assertLessEqual(len(persona._clip_note(s, limit)), limit)
+
+
+class OpeningTest(PersonaBase):
+    """开场导读（2026-11-04 用户要求）。
+
+    「开始聊天的时候给我网页一段灰色的摘要，先说明当前是什么情况，不然我就
+    莫名其妙地开始了」。它只在新线生成一次，之后读缓存——不能每开一次页面
+    都多烧一次 LLM。
+    """
+
+    def _line(self, name="纱雾"):
+        persona.save_cards([_card(name)])
+        persona.switch_line("private_1", persona.find_card(name))
+        return persona.resolve_line("private_1")
+
+    def test_generated_intro_is_cached(self):
+        key = self._line()
+        with mock.patch.object(persona.llm, "call_llm",
+                               return_value="早上，她在二楼画画。") as m:
+            self.assertEqual(persona.opening(key), "早上，她在二楼画画。")
+            self.assertEqual(m.call_count, 1)
+        # 第二次走缓存，不再调模型
+        with mock.patch.object(persona.llm, "call_llm") as m2:
+            self.assertEqual(persona.opening(key), "早上，她在二楼画画。")
+            m2.assert_not_called()
+
+    def test_no_card_returns_empty(self):
+        self.assertEqual(persona.opening(persona.resolve_line("private_9")), "")
+
+    def test_failure_returns_empty(self):
+        """生成失败不能让页面打不开，也不能把空串写进缓存。"""
+        key = self._line()
+        with mock.patch.object(persona.llm, "call_llm",
+                               side_effect=RuntimeError("boom")):
+            self.assertEqual(persona.opening(key), "")
+        self.assertEqual(str((persona._entry(key) or {}).get("intro") or ""), "")
+
+    def test_wipe_clears_intro(self):
+        """清空存档后要按新起点重铺开场，不能留着上一轮的场景。"""
+        key = self._line()
+        st = persona._load_state()
+        st[key]["intro"] = "旧场景"
+        persona._save_state(st)
+        persona.wipe(key)
+        self.assertEqual(str((persona._entry(key) or {}).get("intro") or ""), "")
 
 
 def _strip_quoted(text):

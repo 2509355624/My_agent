@@ -437,6 +437,46 @@ class SessionAffTest(PersonaApiBase):
         self.assertIsNotNone(d.get("affection"))   # 档案本身还给，只是封存
 
 
+class OpeningApiTest(PersonaApiBase):
+    """开场导读接口（2026-11-04）。
+
+    新线第一屏要有块灰底说明「现在是什么情况」，不然打开是空的不知道
+    怎么开口。这里只测接线：有缓存就直接给、没有就去生成一次。
+    """
+
+    def _line(self):
+        name = self.get("/api/persona/cards")["cards"][0]["name"]
+        self.post("/api/persona/switch", name=name)
+        return persona_api._active_key(persona_api._key(QQ))
+
+    def test_returns_cached_intro(self):
+        key = self._line()
+        st = persona._load_state()
+        st[key]["intro"] = "早上，她在二楼画画。"
+        persona._save_state(st)
+        d = self.get("/api/persona/opening")
+        self.assertEqual(d["intro"], "早上，她在二楼画画。")
+
+    def test_generates_once_then_cached(self):
+        self._line()
+        with mock.patch.object(persona.llm, "call_llm",
+                               return_value="早上，她在二楼画画。") as m:
+            self.assertEqual(self.get("/api/persona/opening")["intro"],
+                             "早上，她在二楼画画。")
+            self.get("/api/persona/opening")
+            self.assertEqual(m.call_count, 1)
+
+    def test_session_carries_intro(self):
+        key = self._line()
+        st = persona._load_state()
+        st[key]["intro"] = "门关着。"
+        persona._save_state(st)
+        self.assertEqual(self.get("/api/persona/session").get("intro"), "门关着。")
+
+    def test_no_card_returns_empty(self):
+        self.assertEqual(self.get("/api/persona/opening")["intro"], "")
+
+
 class HistoryArchiveApiTest(PersonaApiBase):
     """回看完整历史（2026-11-04）。
 
