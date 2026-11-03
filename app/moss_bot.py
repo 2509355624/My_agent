@@ -465,6 +465,12 @@ def start(target, target_id, action, payload, quote_id="", quote_text="",
         return _fire(target, target_id, "new", payload, "",
                      "", reply_to, sender_uin)
 
+    # `append`（2026-11-03）：往这个会话当前那条线上加一页，不用引用/编号。
+    # 扮演态说「出图」走这条——见 `_do_append`。
+    if action == "append":
+        return _fire(target, target_id, "append", payload, "",
+                     "", reply_to, sender_uin)
+
     # 会话隔离（2026-10-31 用户强调）：同一条线，群聊和私聊各续各的。
     # 定位时带上本会话的键，手打编号才会优先命中他自己那个第 6 页。
     owner = _owner(target, target_id)
@@ -530,6 +536,8 @@ def _work(target, target_id, action, payload, sid, page_id, reply_to,
     try:
         if action == "new":
             _do_new(target, target_id, payload, reply_to, sender_uin, owner)
+        elif action == "append":
+            _do_append(target, target_id, payload, reply_to, sender_uin, owner)
         elif action == "continue":
             _do_continue(target, target_id, payload, sid, page_id, reply_to,
                          sender_uin, truncate, owner)
@@ -580,6 +588,76 @@ def _do_new(target, target_id, brief, reply_to, sender_uin, owner=""):
                      hint="迁移到私聊：私聊发 moss续集 %s <接下来的剧情>"
                           "（转发这张图也行）"
                           % series_mod.code_of(sid, 1))
+
+
+# ─── 动作：往当前这条线上加一页 ─────────────────────────
+#
+# 2026-11-03 用户报：「私聊的漫画都是新开一条线」。扮演态说「出图」走的
+# `action="new"`，每次 open_new——一条对话里画三次就是三条线，编号也会重置，
+# 用户没法顺着翻。
+#
+# 正确行为：**同一个会话已经有线，就往那条线上加一页**（父页接最新一页）；
+# 没有线才新开。和 `continue` 的区别是它不需要引用/编号定位——扮演态里本来
+# 就没有「第几页」这个概念，用户只是说「出图」。
+
+def _do_append(target, target_id, brief, reply_to, sender_uin, owner=""):
+    sid = series_mod.current(target, target_id)
+    series = series_mod.load(sid) if sid else None
+    if not series:
+        # 这条会话还没画过 → 正常新开一条
+        return _do_new(target, target_id, brief, reply_to, sender_uin, owner)
+
+    layout, brief, _picked = _layout(brief)
+    if not brief:
+        _say(target, target_id, "要画什么？补一句剧情再来。", reply_to)
+        return
+
+    # 接在最新那一页后面，剧情才连得上
+    newest = series_mod.latest(series, owner)
+    parent_id = (newest or {}).get("id") or ""
+    prev_brief = (newest or {}).get("brief") or ""
+    prev_scene = ""
+    nxt = int((newest or {}).get("n") or 0) + 1
+
+    # 同一条线同时只跑一张（和 `continue` 同一条规矩）。`_fire` 那边因为
+    # append 没传 sid，跳过了这项检查，所以在这里补。
+    #
+    # ⚠️ 占位必须自己释放：`_work` 的 finally 是 `if sid: _release(sid)`，
+    # 而 append 传进去的 sid 是空串，它不会替我们放。
+    busy = _take(sid, nxt)
+    if busy:
+        _say(target, target_id,
+             "第 %02d 页还在画，等它出来再出下一张。" % busy, reply_to)
+        return
+
+    try:
+        spec, d, _err = _write_spec(target, target_id, brief, layout,
+                                    prev_brief, prev_scene,
+                                    spec_cast(series), reply_to)
+        if not spec:
+            return
+        cells = len((spec.get("pages") or [{}])[0].get("panels") or [])
+        seed = random.randint(1, 2 ** 31 - 1)
+        page = series_mod.mutate(sid, lambda x: series_mod.add_page(
+            x, parent_id=parent_id, task=d, brief=brief, seed=seed,
+            title=spec.get("title") or "", owner=owner))
+        n = (page or {}).get("n") or 0
+        _say(target, target_id,
+             "🀄 第 %02d 页 · %s\n%s\n%d 格 · %d 步 · cfg %s · 约 100 秒"
+             % (n, spec.get("title") or "", _lines(spec), cells,
+                moss_api.STEPS, moss_api.CFG), reply_to)
+        _render_and_send(target, target_id, sid, page, spec, d, seed,
+                         reply_to, sender_uin)
+    finally:
+        _release(sid)
+
+
+def spec_cast(series):
+    """从系列档案里取出 cast，给续页用——不给的话新一页的角色外形会重编。"""
+    try:
+        return dict((series or {}).get("cast") or {})
+    except Exception:                            # noqa: BLE001
+        return {}
 
 
 # ─── 动作：续集 ───────────────────────────────────────
