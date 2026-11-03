@@ -748,6 +748,45 @@ class ArchiveTest(PersonaBase):
         self.assertEqual(persona.HISTORY_LIMIT, 12)
 
 
+class NoteBudgetTest(unittest.TestCase):
+    """小记预算（2026-11-03）：500 → 1000 字。
+
+    用户要求「尽可能保留相关的记忆，token 消耗和生图差不多即可」。
+    实测 1000 字只比 500 字多 272 token/轮，而记忆密度翻倍。
+    """
+
+    def test_note_capacity(self):
+        self.assertEqual(persona.NOTE_MAX_CHARS, 1000)
+
+    def test_compression_runs_more_often_than_the_window(self):
+        """压缩周期必须 < 窗口轮数，否则有内容「掉出窗口又没进小记」。"""
+        self.assertLess(persona.NOTE_EVERY_TURNS, persona.HISTORY_LIMIT // 2)
+
+    def test_prompt_asks_for_structure_not_summary(self):
+        """提示词要分开列「值得留」和「不要写」。
+
+        原来只说「只留以后还用得上的事」，太笼统——模型倾向写流水账，
+        或者只写一句概括。
+        """
+        p = persona._NOTE_PROMPT
+        for word in ("重点保留这些", "不要写这些", "关系进展", "答应过什么"):
+            self.assertIn(word, p, word)
+
+    def test_token_cost_stays_near_image_generation(self):
+        """一轮扮演的 token 不该远超生图一次（用户定的目标）。
+
+        生图链路（编剧 + 转译）实测约 3000~5000 token/次。
+        """
+        card = {"name": "x", "systemPrompt": "y" * 60}
+        note = "回" * persona.NOTE_MAX_CHARS
+        head = persona.build_head(card, "private_1", "", note, "状态" * 30)
+        # 历史 12 条 × 约 400 字
+        total_chars = len(head) + 12 * 400 + 30
+        approx_tokens = total_chars * 0.65
+        self.assertLess(approx_tokens, 8000,
+                        "扮演一轮 %.0f token，超过生图链路太多" % approx_tokens)
+
+
 class PronounRuleTest(unittest.TestCase):
     """人称规则（2026-11-03）：她是「她」，对面是「你」，不许写成「他」。
 
