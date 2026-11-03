@@ -1060,7 +1060,10 @@ class SessionRunner:
         from app import moss_bot
         brief = persona.comic_brief(card, key, extra=extra)
         try:
-            took, note = moss_bot.start(self.target, self.target_id, "new",
+            # `append`（2026-11-03）：这个会话已经画过就接在那条线上，
+            # 没画过才新开。原来固定 `new`，一条对话里画三次就是三条线、
+            # 编号还各自从 01 开始，用户没法顺着翻（用户报的 bug）。
+            took, note = moss_bot.start(self.target, self.target_id, "append",
                                         brief, reply_to=reply_to,
                                         sender_uin=sender_uin)
         except Exception:
