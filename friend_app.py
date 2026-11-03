@@ -410,13 +410,22 @@ def _forward(prefix, sub, allow_guest=False):
 
 
 def _relay_guest_cookie(resp, upstream):
-    """照抄上游 Set-Cookie 里的 `gs_id`。"""
+    """照抄上游的 `gs_id` 游客 cookie（2026-11-03）。
+
+    第一版读 `upstream.raw.headers.getlist("Set-Cookie")`，实测**拿不到**
+    ——响应体已被 `r.content` 消费，raw 头在这一步不可靠。
+    改成问 `requests` 要它已经解析好的 cookie，稳得多。
+
+    这个 cookie 必须转给浏览器：不转的话，游客每发一句话都被当成新游客，
+    15 轮配额永远用不完，「体验版」形同虚设。
+    """
     try:
-        for raw in upstream.raw.headers.getlist("Set-Cookie"):
-            if raw.startswith("gs_id="):
-                resp.headers.add("Set-Cookie", raw)
+        val = upstream.cookies.get("gs_id")
     except Exception:                              # noqa: BLE001
-        pass
+        val = None
+    if val:
+        resp.set_cookie("gs_id", val, max_age=30 * 24 * 3600,
+                        httponly=True, samesite="Lax", path="/")
 
 
 @app.route("/api/friend/<path:sub>", methods=["GET", "POST", "DELETE"])
