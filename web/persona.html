@@ -357,13 +357,35 @@
   .wipeBox .wbtns { display: flex; gap: 8px; margin-top: 14px; }
   .wipeBox .wbtns .btn { flex: 1; display: flex; justify-content: center; }
 
+  /* 顶栏的「状态」按钮（2026-11-04 深夜）：默认不显示，只有窄屏
+     （<=1000px）才在媒体查询里放出来。基类写死 none 是为了宽屏——
+     宽屏有常驻右栏，再来个按钮就是重复入口。 */
+  .top .stats-btn { display: none; }
+
   .mask { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6);
     z-index: 90; }
   .mask.on { display: block; }
 
   /* ─── 窄屏：抽屉 ─── */
   @media (max-width: 1000px) { .app { grid-template-columns: 1fr; } }
-  @media (max-width: 1000px) { .side2 { display: none; } }
+  /* 状态面板在窄屏**不再藏起来**（2026-11-04 深夜改）：改为右侧抽屉，
+     由顶栏那个「状态」按钮唤起。原来 `display:none` 等于手机用户根本
+     看不到面板——而手机才是主要场景。 */
+  @media (max-width: 1000px) {
+    .side2 { position: fixed; right: 0; top: 0; bottom: 0; width: 300px;
+      max-width: 86vw; z-index: 150;
+      transform: translateX(100%); transition: transform .22s;
+      padding-bottom: env(safe-area-inset-bottom);
+      box-shadow: -8px 0 24px rgba(0,0,0,.35); }
+    .side2.open { transform: none; }
+    /* 顶栏的「状态」按钮只在窄屏出现——宽屏右栏一直开着，不需要它。
+       ⚠️ 用 `.top .stats-btn` 提高优先级：JS 里为了「选没选角色」会写
+       内联 `display:''`，内联样式压不过 `@media` 里的同名声明是**恰好**
+       的巧合（内联空串 = 没设置），但显式用两条媒体查询更稳。 */
+    .top .stats-btn { display: inline-block; }
+    /* 抽屉打开时，点遮罩两边都能关。 */
+  }
+  @media (min-width: 1001px) { .top .stats-btn { display: none !important; } }
   @media (max-width: 1000px) {
     /* ⚠️ 2026-11-03 手机端抽屉灰色点不到角色：层叠上下文囚禁。
        `.app` 是 position:fixed，自己就是层叠上下文；`.side` 的 z-index
@@ -423,6 +445,10 @@
       <span class="live" id="live" style="display:none">扮演中</span>
       <span class="sp"></span>
       <button class="btn sm mode" id="btnMode" style="display:none">自由模式</button>
+      <!-- 「状态」：窄屏专用，点开右侧抽屉看面板（2026-11-04 深夜）。
+           宽屏有这个按钮也不显示——右栏本来就一直开着。 -->
+      <button class="btn sm stats-btn" id="btnStats"
+              title="看她现在到哪一步了">状态</button>
       <a class="btn sm" id="btnLogin" style="display:none;text-decoration:none"
          href="/" title="登录后可以无限对话、还能出图">登录</a>
       <span class="quota" id="quota" style="display:none"></span>
@@ -1034,6 +1060,17 @@ function renderMode() {
        ? "现在按好感档位演；点一下切回自由模式（好感封存不清零）"
        : "现在只聊天；点一下开攻略模式（开始按档位算好感）");
   b.style.display = (ROLE === "guest" || !card) ? "none" : "";
+
+  // 「状态」按钮（2026-11-04 深夜）：和模式开关同样的显隐条件——
+  // 没选角色 / 游客都没有面板可看。窄屏才显示（CSS 那条 @media 管）。
+  const s = $("btnStats");
+  if (s) {
+    const on = !(ROLE === "guest" || !card);
+    // 用 '' 而不是 'inline-block'：显示规则交给 CSS 的媒体查询，
+    // 这里只管「该不该有」，别和窄屏判断抢。
+    s.style.display = on ? "" : "none";
+    if (!on) closeStats();
+  }
 }
 
 function setPic(idx, url) {  const pic = $("pic-" + idx);
@@ -1427,8 +1464,31 @@ async function loadPics() {
   }
 }
 
-function openDrawer() { $("side").classList.add("open"); $("mask").classList.add("on"); }
-function closeDrawer() { $("side").classList.remove("open"); $("mask").classList.remove("on"); }
+// ── 两个抽屉（2026-11-04 深夜）──────────────────────────
+// 左边：角色列表（.side）。右边：状态面板（.side2，窄屏专用）。
+// 两个共用同一张遮罩——它们不会同时开：开一个就先关另一个，
+// 否则手机上两层抽屉叠着，点哪里都关不掉。
+function openDrawer() {
+  closeStats();                       // 左右互斥
+  $("side").classList.add("open");
+  $("mask").classList.add("on");
+}
+function closeDrawer() {
+  $("side").classList.remove("open");
+  // 左边关了才收遮罩——右边可能还开着（见 openStats 的互斥处理）
+  if (!$("side2").classList.contains("open")) $("mask").classList.remove("on");
+}
+function openStats() {
+  closeDrawer();
+  $("side2").classList.add("open");
+  $("mask").classList.add("on");
+  // 打开时刷一次：抽屉关着的时候面板不渲染，数据可能是旧的
+  refreshPanel();
+}
+function closeStats() {
+  $("side2").classList.remove("open");
+  if (!$("side").classList.contains("open")) $("mask").classList.remove("on");
+}
 
 // ── 攻略模式：开关与重开（2026-11-03）──────────────────
 // 开关在顶部（#btnMode）。点一次切一次，靠服务端返回的 affection 回写状态——
@@ -1493,7 +1553,10 @@ $("wipeOk").onclick = async () => {
 $("btnAffRestart").addEventListener("click", openWipe);
 $("btnReset").addEventListener("click", openWipe);
 $("btnBurger").onclick = openDrawer;
-$("mask").onclick = closeDrawer;
+// 遮罩两边都要能关：哪个开着就关哪个（同一次点击里可能两个都判一下，
+// 但 openDrawer / openStats 已经保证了不会同时开）。
+$("mask").onclick = function () { closeDrawer(); closeStats(); };
+$("btnStats").onclick = openStats;
 
 // ── 绑定 ──────────────────────────────────────────────
 $("btnSend").onclick = send;
