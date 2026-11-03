@@ -1101,7 +1101,15 @@ def _fill_page(text, cast, seen):
         if key in seen:
             return _pronoun(val)
         seen.add(key)
-        return val if val.lower().startswith(("a ", "an ", "the ")) else "the " + val
+        # 外形串是**自然语言**（2026-11-04 起），不是 tag 串，直接怼在动作前面
+        # 会读成「a naturally slim adult build lying back across…」——外形变成了
+        # 动作的施动者。补一个逗号把它断开：
+        #   `… and a naturally slim adult build, lying back across the chair`
+        body = val if val.lower().startswith(("a ", "an ", "the ")) else "the " + val
+        tail = text[m.end():m.end() + 1]
+        if tail not in (",", ".", ";") and not body.rstrip().endswith((",", ".", ";")):
+            body = body.rstrip() + ","
+        return body
     return _PH_RE.sub(sub, text or "")
 
 
