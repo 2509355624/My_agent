@@ -216,6 +216,71 @@ def level_name(n, cfg=None, card=None):
     return str(level_cfg(n, cfg).get("name") or "")
 
 
+def _intimacy_label(value, g):
+    """亲密度那一句人话（QQ 尾行和网页共用，别在两边各写一套）。
+
+    - 负分：只报分——这时候没有「下一档」可言，赎罪期看的是能不能回到 0；
+    - 到顶：`42 到顶`；
+    - 分数够但没收成：`够了 · 差一步`。**不写数字比**：好感能涨到 50，
+      等级却卡在 l1 的 `50/12`，分子比分母大，看着像 bug。这句话在说的是
+      「分够了，那场戏还没做成」（升一级要 `beat` + 门槛两个条件），不是卡住；
+    - 其余：`21/30 · 还差 9`。
+    """
+    v = int(value or 0)
+    if g.get("maxed"):
+        return "%d 到顶" % v
+    if v < 0 or not g.get("nextGate"):
+        return "%d" % v
+    if int(g.get("need") or 0) <= 0:
+        return "够了 · 差一步"
+    return "%d/%d · 还差 %d" % (v, int(g.get("nextGate") or 0),
+                                int(g.get("need") or 0))
+
+
+def intimacy_gauge(level, value, card=None, cfg=None):
+    """亲密度进度：从**这一档的门槛**走到**下一档的门槛**。
+
+    2026-11-04 用户报「只看到档名叫什么，不知道怎么触发后续剧情」——
+    档名（家里的人 → 靠得很近）本身在变，但玩家看不出还差多远。这里只报
+    事实：这一档的下限、下一档叫什么、还差几分。**升不升还是模型说了算**，
+    分数只是门票，`beat`（这轮做成了那件事）照样要过。
+
+    返回 dict：
+        gate      这一档的门槛 = 档内进度的起点
+        nextGate  下一档门槛；满级时等于 gate
+        nextName  下一档在这张卡里叫什么；满级时空串
+        need      还差几分到下一档（分数已够 / 满级时为 0）
+        pct       档内进度 0~100（低于本档门槛时压到 0，满级 100）
+        maxed     已经到顶
+        label     给人看的一句，见 `_intimacy_label`
+    """
+    cfg = cfg or load_config()
+    try:
+        lv = int(level or 0)
+    except (TypeError, ValueError):
+        lv = 0
+    lv = max(0, min(LEVEL_MAX, lv))
+    gate = int(level_cfg(lv, cfg).get("gate") or 0)
+    try:
+        v = int(value or 0)
+    except (TypeError, ValueError):
+        v = 0
+    if lv >= LEVEL_MAX:
+        g = {"gate": gate, "nextGate": gate, "nextName": "",
+             "need": 0, "pct": 100, "maxed": True}
+        g["label"] = _intimacy_label(v, g)
+        return g
+    ngate = int(level_cfg(lv + 1, cfg).get("gate") or 0)
+    span = max(1, ngate - gate)          # 配置被改成同级门槛也别除零
+    pct = int(round((v - gate) * 100.0 / span))
+    g = {"gate": gate, "nextGate": ngate,
+         "nextName": level_name(lv + 1, cfg, card),
+         "need": max(0, ngate - v),
+         "pct": max(0, min(100, pct)), "maxed": False}
+    g["label"] = _intimacy_label(v, g)
+    return g
+
+
 # ── 冲动档位（2026-11-04）─────────────────────────────
 
 def arousal_levels(cfg=None):
@@ -455,6 +520,7 @@ def status(line_key):
     t = tier_for(value, cfg) or {}
     lv = int(rec.get("level") or 0)
     ar = int(rec.get("arousal") or 0)
+    card = _card_of(line_key)
     return {
         "mode": str(rec.get("mode") or MODE_FREE),
         "value": value,
@@ -462,7 +528,8 @@ def status(line_key):
         "tierName": _tier_view(t, lv).get("name") or "",
         "level": lv,
         "levelMax": LEVEL_MAX,
-        "levelName": level_name(lv, cfg, _card_of(line_key)),
+        "levelName": level_name(lv, cfg, card),
+        "intimacy": intimacy_gauge(lv, value, card, cfg),
         "arousal": ar,
         "arousalName": arousal_name(ar, cfg),
         "arousalShort": str(arousal_level(ar, cfg).get("short") or ""),
@@ -794,11 +861,13 @@ def settle(line_key, score):
     eff_t = next((t for t in (cfg.get("tiers") or [])
                   if t.get("key") == eff_key), None) or new_t
     tv = _tier_view(eff_t, lv)
+    gauge = intimacy_gauge(lv, value, _card_of(line_key), cfg)
     res = {"applied": applied, "active": True, "mode": MODE_RAID, "value": value,
            "tier": eff_key, "changed": changed,
            "tierName": tv["name"] or str(eff_t.get("name") or ""),
            "level": lv, "levelMax": LEVEL_MAX,
            "levelName": level_name(lv, cfg, _card_of(line_key)),
+           "intimacy": gauge,
            "rose": rose, "arousal": int(rec.get("arousal") or 0),
            "arousalName": arousal_name(rec.get("arousal"), cfg),
            "cross": cross, "allow": allow, "crossN": int(rec.get("cross_n") or 0),
@@ -986,13 +1055,14 @@ def tail_line(res):
     反过来要数字：「看到数值浮动才有成就感」。所以数值**一行一个**，
     正数不带加号、负数才带负号。
 
-    格式（当日三次修订）：`第 3 级 / 共 5 级` 也是行话——玩家不懂「级」是量什么，
-    要的是能直接读懂的词。关系行只留**关系叫什么**，进度靠叫法本身会变
-    （点头之交 → 说得上话 → 靠得很近），不需要数字：
+    格式（当日四次修订）：`第 3 级 / 共 5 级` 也是行话——玩家不懂「级」是量什么，
+    要的是能直接读懂的词。关系行只留**关系叫什么**；第四次修订（同日）把
+    「好感 21」换成 **`亲密 21/30 · 还差 9`**——用户报「看不出怎么触发后续
+    剧情」，只给档名不够，得让「离下一档多远」直接读得出来：
 
         ❤ 关系 家里的人
         气氛 平静
-        好感 21
+        亲密 21/30 · 还差 9
         冲动 0
 
     越界那一轮气氛让位给「她退开了」——那轮的信号是「她退开了」，不是气氛；
@@ -1021,7 +1091,9 @@ def tail_line(res):
     rows = [head]
     if mood:
         rows.append(mood)
-    rows.append("好感 %d" % int(res.get("value") or 0))
+    g = res.get("intimacy") or intimacy_gauge(
+        res.get("level"), res.get("value"))
+    rows.append("亲密 " + str(g.get("label") or int(res.get("value") or 0)))
     rows.append("冲动 %d" % int(res.get("arousal") or 0))
     return "\n".join(rows)
 
@@ -1062,7 +1134,11 @@ def detail_nodes(line_key):
     if int(rec.get("cross_n") or 0) > 0:
         head.append("越界被拒：%d 次" % int(rec.get("cross_n") or 0))
     if not ending:
-        head.append("好感 %d" % value)
+        # 2026-11-04 第四次修订：原来只报「好感 21」，看不出还差多远。
+        # 现在和尾行同一句（`亲密 21/30 · 还差 9`），下面那句解释照旧——
+        # 分数只是门票，升一级还得有一件能让她愿意往前走的事。
+        head.append("亲密 %s"
+                    % intimacy_gauge(lv, value, card, cfg).get("label", value))
         if lv < LEVEL_MAX:
             head += ["", "再往前一步不靠攒分——得有一件能让她愿意往前走的事。"]
         else:
