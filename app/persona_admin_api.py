@@ -216,6 +216,12 @@ def api_detail():
 
     kind, label, short = _label(key)
     st = persona._load_state().get(key) or {}       # noqa: SLF001
+    mt = 0
+    if path:
+        try:
+            mt = os.path.getmtime(path)
+        except OSError:
+            pass
     return jsonify({
         "ok": True,
         "key": key,
@@ -226,6 +232,9 @@ def api_detail():
         "note": str(st.get("note") or ""),
         "state": str(st.get("state") or ""),
         "messages": _norm(raw),
+        "mtime": mt,
+        "mtime_text": _ts(mt),
+        "total": len(raw),
     })
 
 
