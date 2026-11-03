@@ -254,6 +254,9 @@
   .affbar > i { background: #e8779c; }
   /* 气氛用暖橙，和关系的玫红分开：同一屏上看得出是两个不同的东西 */
   .arobar > i { background: #f0a35e; }
+  /* 兴奋用紫，和上面两条都区分开：它是「进行中的那一场」，不是常驻状态 */
+  .exbar > i { background: #c96bd6; }
+  .aff .b.ex > i { background: #c96bd6; }
 
   /* 图片放大 */
   .zoom { position: fixed; inset: 0; background: rgba(0,0,0,.94);
@@ -407,6 +410,14 @@
       <div class="v" id="sAro">—</div>
       <div class="bar arobar"><i id="aroBar"></i></div>
       <div class="nums"><div>冲动<b id="nAro">—</b></div></div>
+    </div>
+    <!-- 兴奋（2026-11-04 晚）：第四轴，**只在进行中才出现**。它不是常驻状态，
+         是「这一场里她到哪了」——所以场景一停，这一整块就藏起来。 -->
+    <div class="st" id="exciteBox" style="display:none">
+      <div class="k">兴奋</div>
+      <div class="v" id="sEx">—</div>
+      <div class="bar exbar"><i id="exBar"></i></div>
+      <div class="nums"><div>程度<b id="nEx">—</b></div></div>
     </div>
   </aside>
 
@@ -663,6 +674,9 @@ function affLine(a) {
   const kind = a.just_ended || a.ending;
   div.className = "aff" + (kind ? " end" : "");
   if (kind) {
+    // 2026-11-04 晚：「毕业」结局退休（50 只是里程碑，不锁数值），
+    // 现在只剩进局子这一条真结局。老档若还带着 graduated，照样显示，
+    // 但不再给「再给我一次机会」——那不是翻车，是收场。
     const t = document.createElement("div");
     t.textContent = kind === "graduated" ? "🎓 已结局：毕业" : "🚨 已结局：进局子";
     div.appendChild(t);
@@ -698,6 +712,9 @@ function affLine(a) {
   div.appendChild(miniBar("rel", g ? (g.pct | 0) : 0));
   // 气氛条：只在有气氛时才画。它是温度计不是进度条，归零不代表坏事。
   if (a.arousal > 0) div.appendChild(miniBar("aro", a.arousal));
+  // 兴奋条（2026-11-04 晚）：只在「正在进行」时才画——它描述的是这一场里
+  // 她到哪了，场景一停就没有意义，归零也不该显示成「她冷下来了」。
+  if (a.excite > 0) div.appendChild(miniBar("ex", a.excite));
 
   // 数值（2026-11-04 用户要的）：一行一个，只在最新一条上展开（`.cur`，
   // 见 markLastAff）——十几条各带几行数字，整屏都是数，反而看不出
@@ -709,6 +726,7 @@ function affLine(a) {
   gline.textContent = "亲密 " + (g && g.label ? g.label : (a.value | 0));
   nums.appendChild(gline);
   nums.appendChild(numLine("冲动", a.arousal | 0));
+  if (a.excite > 0) nums.appendChild(numLine("兴奋", a.excite | 0));
   div.appendChild(nums);
   return div;
 }
@@ -790,9 +808,11 @@ function renderAff(a) {
   renderMode();
   const box = $("affBox");
   const aro = $("aroBox");
+  const exBox = $("exciteBox");
   if (ROLE === "guest") {
     box.style.display = "none";
     if (aro) aro.style.display = "none";
+    if (exBox) exBox.style.display = "none";
     return;
   }
   // mode 缺字段时的兜底：只要不是明确「没激活」，就按攻略模式显示。
@@ -844,6 +864,18 @@ function renderAff(a) {
       : "—";
     $("aroBar").style.width = Math.max(0, Math.min(100, ar)) + "%";
     setNum("nAro", live ? ar : null);
+  }
+  // 兴奋（2026-11-04 晚）：整块只在场景内出现。场景外是「没有这一项」，
+  // 不是「这一项是 0」——所以藏起来，不画一条归零的空条。
+  if (exBox) {
+    const ex = a ? (a.excite | 0) : 0;
+    const onEx = live && ex > 0;
+    exBox.style.display = onEx ? "" : "none";
+    if (onEx) {
+      $("sEx").textContent = (a.exciteName || "—");
+      $("exBar").style.width = Math.max(0, Math.min(100, ex)) + "%";
+      setNum("nEx", ex);
+    }
   }
   $("btnAffRestart").style.display = raid ? "" : "none";
 }
@@ -1105,6 +1137,9 @@ async function deliver(text, isRetry) {
         toast(AFF.just_ended === "graduated"
           ? "🎓 恭喜毕业！" : "🚨 进局子了……发「再给我一次机会」或切自由模式", true);
       }
+      // 里程碑（2026-11-04 晚）：和结局不是一回事，不用红字警告，
+      // 也不给任何「怎么办」的出口——故事接着走。
+      if (AFF.just_milestone) toast("💞 在一起了。故事还在往下走。");
     }
     if (ROLE === "guest" && d.remaining !== undefined) {
       GUEST_LEFT = d.remaining;

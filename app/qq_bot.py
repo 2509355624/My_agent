@@ -1089,13 +1089,9 @@ class SessionRunner:
                 # 结局提示**单独一条气泡**。2026-11-04 起把「再给我一次机会」
                 # 摆在第一位：进局子那一刻玩家容易以为存档要没了，得先给他
                 # 一个看得见的出口，再说自由模式和重新开始。
+                # 2026-11-04 晚：「毕业」结局退休，这里只剩进局子。
                 left = int(aff.get("mercy") or 0)
-                if aff["just_ended"] == "graduated":
-                    hint = ("🎓 恭喜毕业！你们的故事走到了圆满结局。"
-                            "发「自由模式」可以继续陪她聊。\n"
-                            "想从头再来就发「清空存档」——"
-                            "那会把整份存档删掉（要二次确认）。")
-                elif left > 0:
+                if left > 0:
                     hint = ("🚨 攻略失败……她报警了。\n"
                             "想再试一次就发「再给我一次机会 %d/3」，"
                             "她留下来，你接着攻略。\n"
@@ -1109,6 +1105,16 @@ class SessionRunner:
                     self._deliver(False, hint, [], "")
                 except Exception:
                     log.exception("结局提示发送失败 %s", self.session_key)
+            # 里程碑（2026-11-04 晚）：和结局长得像，但**不是收场**——只道贺
+            # 一句，不摆任何「接下来怎么办」的出口，免得把玩家吓成「这局完了」。
+            if aff and aff.get("just_milestone"):
+                mc = persona.affection.milestone_cfg(        # noqa: SLF001
+                    aff["just_milestone"])
+                mname = str(mc.get("name") or "新的阶段")
+                try:
+                    self._deliver(False, "💞 %s。\n故事还在往下走。" % mname, [], "")
+                except Exception:
+                    log.exception("里程碑提示发送失败 %s", self.session_key)
             # 成就（2026-11-04）：结算说这轮解锁了什么，单独一条气泡。
             # 和正文分开是有意的——夹在尾巴里会被当成普通状态行划过去，
             # 成就得有个「叮」的停顿。一次最多解两个（升级 + 进档同轮）。
