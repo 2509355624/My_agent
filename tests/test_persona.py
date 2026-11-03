@@ -92,45 +92,45 @@ class CardStoreTest(PersonaBase):
 class CommandTest(PersonaBase):
     def test_plain_text_is_not_a_command(self):
         persona.save_cards([_card("纱雾")])
-        self.assertIsNone(persona.handle_command("group_1", "在吗"))
-        self.assertIsNone(persona.handle_command("group_1", ""))
-        self.assertIsNone(persona.handle_command("group_1", "#"))
+        self.assertIsNone(persona.handle_command("private_1", "在吗"))
+        self.assertIsNone(persona.handle_command("private_1", ""))
+        self.assertIsNone(persona.handle_command("private_1", "#"))
         # `#` 开头但认不出卡名 → 放行，当普通消息
-        self.assertIsNone(persona.handle_command("group_1", "#银发少女怎么画"))
+        self.assertIsNone(persona.handle_command("private_1", "#银发少女怎么画"))
 
     def test_list_enter_leave(self):
         persona.save_cards([_card("纱雾", description="害羞的插画师")])
-        out = persona.handle_command("group_1", "#角色扮演")
+        out = persona.handle_command("private_1", "#角色扮演")
         self.assertIn("纱雾", out)
         self.assertIn("害羞的插画师", out)
         self.assertIn("出戏", out)
         # 别名同义
-        self.assertIn("纱雾", persona.handle_command("group_1", "#人设列表"))
+        self.assertIn("纱雾", persona.handle_command("private_1", "#人设列表"))
 
-        out = persona.handle_command("group_1", "#纱雾")
+        out = persona.handle_command("private_1", "#纱雾")
         self.assertIn("纱雾", out)
-        self.assertIsNotNone(persona.active_card("group_1"))
+        self.assertIsNotNone(persona.active_card("private_1"))
 
-        out = persona.handle_command("group_1", "#出戏")
+        out = persona.handle_command("private_1", "#出戏")
         self.assertIn("出戏", out)
-        self.assertIsNone(persona.active_card("group_1"))
+        self.assertIsNone(persona.active_card("private_1"))
 
     def test_leave_when_not_playing_is_not_a_command(self):
-        self.assertIsNone(persona.handle_command("group_1", "#出戏"))
+        self.assertIsNone(persona.handle_command("private_1", "#出戏"))
 
     def test_scope_is_per_session_line(self):
         persona.save_cards([_card("纱雾")])
-        persona.handle_command("group_1", "#纱雾")
-        self.assertIsNotNone(persona.active_card("group_1"))
+        persona.handle_command("private_1", "#纱雾")
+        self.assertIsNotNone(persona.active_card("private_1"))
         self.assertIsNone(persona.active_card("group_2"))      # 别的群不受影响
         self.assertIsNone(persona.active_card("private_9"))
 
     def test_deleting_the_card_ends_the_roleplay(self):
         persona.save_cards([_card("纱雾")])
-        persona.handle_command("group_1", "#纱雾")
+        persona.handle_command("private_1", "#纱雾")
         persona.save_cards([])
         # 卡没了就自动当没在演，不会卡在一个取不到的 id 上
-        self.assertIsNone(persona.active_card("group_1"))
+        self.assertIsNone(persona.active_card("private_1"))
 
 
 class TrimTest(unittest.TestCase):
@@ -182,23 +182,29 @@ class HeadTest(PersonaBase):
         self.assertIn("私聊", head)
 
     def test_note_is_attached(self):
-        head = persona.build_head(_card("纱雾"), "group_1", "张三",
+        head = persona.build_head(_card("纱雾"), "private_1", "张三",
                                   "他昨天让我画了只兔子。")
         self.assertIn("【之前的事】", head)
         self.assertIn("画了只兔子", head)
 
 
 class TurnTest(PersonaBase):
+    # ⚠️ 2026-11-03：这一组全部改用 `private_1`。
+    # 群聊已经不再实际扮演（`run_turn` 遇 group 直接返回空 Turn，见
+    # `GroupNoRoleplayTest`），而这里测的是**引擎本身**——两段式、格式拆分、
+    # 历史落盘、出图门槛。用群聊键会让它们全都拿到空 Turn。
+    KEY = "private_1"
+
     def setUp(self):
         super().setUp()
         persona.save_cards([_card("纱雾")])
         self.card = persona.find_card("纱雾")
-        persona.switch("group_1", self.card)
+        persona.switch(self.KEY, self.card)
 
     def _run(self, reply_text, text="在吗", sender="张三"):
         with mock.patch.object(persona.llm, "call_llm",
                                return_value=reply_text) as m:
-            out = persona.run_turn("group_1", text, "group", sender)
+            out = persona.run_turn(self.KEY, text, "private", sender)
         return out, m
 
     def test_two_calls_intent_then_reply(self):
@@ -218,7 +224,7 @@ class TurnTest(PersonaBase):
         with mock.patch.object(persona, "_judge_intent",
                                return_value=(None, "")), \
              mock.patch.object(persona.llm, "call_llm", return_value="你好呀") as m:
-            persona.run_turn("group_1", "在吗", "group", "张三")
+            persona.run_turn("private_1", "在吗", "private", "张三")
         self.assertEqual(m.call_count, 1)
 
     def test_scene_line_is_split_out_of_the_reply(self):
@@ -238,7 +244,7 @@ class TurnTest(PersonaBase):
         改成保留完整原文当 few-shot，展示时再由 `split_turn` 剥。
         """
         self._run("你好呀\n画面：1girl, sitting\n心情：害羞 强度6\n状态：坐在桌前")
-        ent = persona._load_hist("group_1")[1]["content"]
+        ent = persona._load_hist("private_1")[1]["content"]
         self.assertIn("你好呀", ent)
         self.assertIn("画面：1girl, sitting", ent)
         self.assertIn("心情：害羞 强度6", ent)
@@ -247,7 +253,7 @@ class TurnTest(PersonaBase):
     def test_split_turn_strips_meta_from_display(self):
         """存进历史的是全的，但**用户看到的正文**里不许有这三行。"""
         self._run("你好呀\n画面：1girl, sitting\n心情：害羞 强度6\n状态：坐在桌前")
-        turn = persona.split_turn(persona._load_hist("group_1")[1]["content"])
+        turn = persona.split_turn(persona._load_hist("private_1")[1]["content"])
         self.assertEqual(turn[0], "你好呀")
         self.assertEqual(turn[1], "1girl, sitting")
         self.assertEqual(turn[2], "害羞")
@@ -260,21 +266,26 @@ class TurnTest(PersonaBase):
         模型漏写时 `_ensure_meta` 补占位——不给下一轮留「可以不写」的示范。
         """
         self._run("你好呀")
-        hist = persona._load_hist("group_1")
+        hist = persona._load_hist("private_1")
         self.assertEqual([m["role"] for m in hist], ["user", "assistant"])
-        self.assertEqual(hist[0]["content"], "张三：在吗")
+        # 私聊不加「张三：」前缀（群聊那条已经关掉了，见 GroupNoRoleplayTest）
+        self.assertEqual(hist[0]["content"], "在吗")
         self.assertTrue(hist[1]["content"].startswith("你好呀"))
         # 三行被补齐了（模型没写画面，补成空值也算形状完整）
         self.assertIn("心情：", hist[1]["content"])
         self.assertIn("状态：", hist[1]["content"])
 
-    def test_group_prefixes_sender_private_does_not(self):
-        self._run("嗯", text="在吗", sender="张三")
-        self.assertEqual(persona._load_hist("group_1")[0]["content"], "张三：在吗")
-        persona.switch("private_9", self.card)
+    def test_group_turn_is_disabled(self):
+        """群聊不再实际扮演（2026-11-03）——回空 Turn，也不写历史。
+
+        原来的 `test_group_prefixes_sender_private_does_not` 测「群里给正文加
+        『张三：』前缀」。群聊关掉之后那段逻辑走不到，测试前提消失，改验新行为。
+        """
+        persona.switch("group_1", self.card)
         with mock.patch.object(persona.llm, "call_llm", return_value="嗯"):
-            persona.run_turn("private_9", "在吗", "private", "张三")
-        self.assertEqual(persona._load_hist("private_9")[0]["content"], "在吗")
+            turn = persona.run_turn("group_1", "在吗", "group", "张三")
+        self.assertEqual(turn.reply, "")
+        self.assertEqual(persona._load_hist("group_1"), [])
 
     def test_empty_reply_says_so(self):
         """模型整轮没交作业：说一句「卡了一下」。
@@ -285,9 +296,9 @@ class TurnTest(PersonaBase):
         self.assertIn("卡", out.reply)
 
     def test_not_in_roleplay_is_a_noop(self):
-        persona.leave("group_1")
+        persona.leave("private_1")
         with mock.patch.object(persona.llm, "call_llm") as m:
-            self.assertEqual(persona.run_turn("group_1", "在吗", "group").reply, "")
+            self.assertEqual(persona.run_turn("private_1", "在吗", "private").reply, "")
         m.assert_not_called()
 
     def test_history_is_separate_from_the_image_bot(self):
@@ -295,7 +306,7 @@ class TurnTest(PersonaBase):
         # 生图机器人的历史落在同一目录的另一份文件里，这边读到的只有对话
         self.assertFalse(os.path.exists(
             os.path.join(agents.AGENTS_DIR, "qq", "sessions", "group_1.jsonl")))
-        self.assertTrue(os.path.exists(persona._hist_path("group_1")))
+        self.assertTrue(os.path.exists(persona._hist_path("private_1")))
 
 
 class SceneSplitTest(unittest.TestCase):
@@ -394,7 +405,7 @@ class DrawTest(unittest.TestCase):
     def test_prompt_goes_into_the_workflow(self):
         self._patch()
         import app.tools.normal.generate_image as gi
-        persona.draw("sitting, smile", {"appearancePrompt": "1girl"}, "group_1")
+        persona.draw("sitting, smile", {"appearancePrompt": "1girl"}, "private_1")
         self.assertEqual(gi.build_t2i_workflow.call_args[0][0],
                          persona.FAST_SKILL)
         self.assertEqual(gi.build_t2i_workflow.call_args[0][1],
@@ -403,32 +414,32 @@ class DrawTest(unittest.TestCase):
     def test_comfy_down_is_silent(self):
         self._patch(alive=False)
         import app.image_jobs as ij
-        self.assertEqual(persona.draw("x", {}, "group_1"), "")
+        self.assertEqual(persona.draw("x", {}, "private_1"), "")
         ij.enqueue.assert_not_called()
 
     def test_empty_scene_does_not_enqueue(self):
         self._patch()
         import app.image_jobs as ij
         self.assertEqual(persona.draw("   ", {"appearancePrompt": "1girl"},
-                                      "group_1"), "")
+                                      "private_1"), "")
         ij.enqueue.assert_not_called()
 
     def test_queue_rejection_is_silent(self):
         self._patch(reason="现在排队的人太多了（前面还有 9 张），这一张先不画。")
         self.assertEqual(persona.draw("x", {"appearancePrompt": "1girl"},
-                                      "group_1"), "")
+                                      "private_1"), "")
 
     def test_draw_failure_is_silent(self):
         job = self._patch()
         job.wait.side_effect = RuntimeError("ComfyUI 掉线")
         self.assertEqual(persona.draw("x", {"appearancePrompt": "1girl"},
-                                      "group_1"), "")
+                                      "private_1"), "")
 
     def test_no_workflow_is_silent(self):
         self._patch(wf=None)
         import app.image_jobs as ij
         self.assertEqual(persona.draw("x", {"appearancePrompt": "1girl"},
-                                      "group_1"), "")
+                                      "private_1"), "")
         ij.enqueue.assert_not_called()
 
 
@@ -679,6 +690,42 @@ class NoHashCommandTest(PersonaBase):
                                                     addressed=True))
 
 
+class GroupNoRoleplayTest(PersonaBase):
+    """群聊不实际扮演（2026-11-03 用户反馈）。
+
+    起因：群里机器人发的话**全群可见**，状态隔离（`_persona_key`）没坏，
+    但内容公开这件事压不住。用户玩的是亲密内容，不能公开。
+    """
+
+    def setUp(self):
+        super().setUp()
+        persona.save_cards([_card("纱雾")])
+
+    def test_group_card_name_redirects(self):
+        got = persona.handle_command("group_1_100", "纱雾", addressed=True)
+        self.assertIsNotNone(got)
+        self.assertIn("不方便演", got)
+        self.assertIn("私聊", got)
+        # 不能在群里真的切进角色
+        self.assertIsNone(persona.active_card("group_1_100"))
+
+    def test_group_roster_still_visible(self):
+        """规则本身不敏感，群里看规则仍然允许。"""
+        got = persona.handle_command("group_1_100", "角色扮演", addressed=True)
+        self.assertIn("角色名单", got)
+
+    def test_group_turn_returns_nothing(self):
+        """群聊这条线彻底不演——即使 state 里还留着旧的扮演态。"""
+        persona.switch("group_1_100", persona.find_card("纱雾"))
+        turn = persona.run_turn("group_1_100", "在吗", "group", "张三", "100")
+        self.assertEqual(turn.reply, "")
+
+    def test_private_still_works(self):
+        got = persona.handle_command("private_100", "纱雾", addressed=True)
+        self.assertIn("纱雾", got)
+        self.assertIsNotNone(persona.active_card("private_100"))
+
+
 class RosterWebLinkTest(PersonaBase):
     """私聊的规则里带网页入口，群聊不带（2026-11-03 用户拍板）。
 
@@ -782,6 +829,12 @@ class GroupModeTest(unittest.TestCase):
         self.assertEqual(persona._persona_key("group_456", ""), "group_456")
 
     def test_group_head_has_restraint_note(self):
+        """`build_head` 仍支持群聊头（带 `_GROUP_NOTE`）。
+
+        注意：2026-11-03 起群聊不再实际扮演（`run_turn` 遇 group 直接回空），
+        所以 `_GROUP_NOTE` 现在走不到。这条测试留着是为了保住 `build_head`
+        这条能力——哪天恢复群聊扮演还能用。
+        """
         card = {"name": "纱雾", "systemPrompt": "你是纱雾。"}
         head = persona.build_head(card, "group_1", "张三")
         self.assertIn("这是群聊", head)
