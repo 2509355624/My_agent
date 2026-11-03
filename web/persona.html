@@ -79,6 +79,10 @@
   .quota { font-size: 11px; color: var(--warn); border: 1px solid #6b5218;
     padding: 2px 9px; border-radius: 10px; white-space: nowrap; }
   .quota.done { color: var(--err); border-color: #6b2020; }
+  /* 回画廊（2026-11-03 用户要求）。做成主色边框，别让它混在一排灰按钮里。 */
+  .top a.back { text-decoration: none; border-color: var(--border);
+    color: var(--text-dim); }
+  .top a.back:hover { border-color: var(--accent); color: var(--accent); }
 
   /* `min-height: 0` 不能省：flex 子项的 min-height 默认是 `auto`，内容一多
      它就不肯收缩，会把下面的 `.composer` 挤出可视区（老浏览器上尤其明显）。*/
@@ -231,6 +235,8 @@
   <main class="mid">
     <div class="top">
       <button class="btn sm burger" id="btnBurger">☰</button>
+      <a class="btn sm back" id="btnGallery" href="/gallery"
+         title="回到画廊">← 画廊</a>
       <span class="nm" id="curName">选一个角色</span>
       <span class="live" id="live" style="display:none">扮演中</span>
       <span class="sp"></span>
@@ -269,6 +275,33 @@ const QQ = new URLSearchParams(location.search).get("qq") || "";
 let card = null, busy = false, msgs = [];
 let ROLE = "member";     // member / guest
 let GUEST_LEFT = 0;      // 游客还剩几轮
+
+// ── 回画廊（2026-11-03）─────────────────────────────────
+// 页面同时跑在 5175（群友页，有 /gallery）和 5174（本机，没有 /gallery）。
+// 直接 `<a href="/gallery">` 在 5174 上会 404，所以点的时候先探一下：
+//   能开 → 跳过去
+//   打不开 → 退回 5175 的地址（从当前 host 推断），还不行就回首页
+(function bindGalleryLink() {
+  const a = $("btnGallery");
+  if (!a) return;
+  a.addEventListener("click", function (e) {
+    e.preventDefault();
+    const q = QQ ? ("?qq=" + encodeURIComponent(QQ)) : "";
+    // 已经在 5175（有 /gallery）就直接走
+    fetch("/gallery", { method: "HEAD" }).then(function (r) {
+      if (r.ok) { location.href = "/gallery" + q; return; }
+      // 5174 上：换端口试 5175，再不行回首页
+      const h = location.hostname;
+      if (location.port === "5174") {
+        location.href = location.protocol + "//" + h + ":5175/gallery" + q;
+      } else {
+        location.href = "/" + q;
+      }
+    }).catch(function () {
+      location.href = "/" + q;
+    });
+  });
+})();
 
 // ── 手机视口高度（2026-11-03）────────────────────────────
 // 软键盘弹出时 `100vh` 不变，输入框会被键盘挡住。`visualViewport` 量的是
