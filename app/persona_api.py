@@ -508,6 +508,27 @@ def affection_restart():
                     "affection": affection.status(key)})
 
 
+@bp.route("/api/persona/affection/mercy", methods=["POST"])
+def affection_mercy():
+    """「再给我一次机会」（2026-11-04）：结局解除、好感往线内挪一格，每人 3 次。
+
+    效果和「切自由模式再切回攻略」一样，只是它留在攻略模式里、并且扣次数。
+    """
+    from app import affection
+    role, who, token = _who()
+    if role == "guest":
+        resp = jsonify({"ok": False, "error": "体验版没有攻略模式。"})
+        resp.status_code = 403
+        _attach_guest_cookie(resp, token)
+        return resp
+    key = _active_key(_key(who))
+    reply = affection.mercy(key)
+    if reply is None:
+        return jsonify({"ok": False, "error": "先选一个角色再开攻略模式"}), 400
+    return jsonify({"ok": True, "reply": reply,
+                    "affection": affection.status(key)})
+
+
 @bp.route("/api/persona/shot", methods=["POST"])
 def shot():
     """「出图」→ 交给 moss 漫画出五格。

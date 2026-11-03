@@ -75,6 +75,12 @@ MODE_FREE = "free"
 ENDING_GRAD = "graduated"
 ENDING_JAIL = "jail"
 
+# 「再给我一次机会」（2026-11-04 用户定的）：进局子之后能真的重来一次，
+# 但每人只给 MERCY_MAX 次，**按每条角色线各算**。
+# 存在的理由不是宽容，是防人跑：只给「重新开始」的话，玩家在进局子那一刻
+# 会以为存档要没了，索性不玩了。用完就只剩自由模式（封存）和重新开始。
+MERCY_MAX = 3
+
 # ── 默认配置（config 文件缺失/坏掉时的兜底；prompt 留空 = 该档只注入档位名）──
 DEFAULT_CONFIG = {
     "min": MIN_V, "max": MAX_V, "initial": INITIAL_V,
@@ -278,7 +284,8 @@ def _blank(line_key="", value=None):
     return {"mode": MODE_RAID, "value": st["value"], "tier": str(t.get("key") or ""),
             "level": st["level"], "arousal": 0, "cross_n": 0,
             "down": 0, "ending": "", "day": _today(), "chat": 0, "acts": 0,
-            "streak": 1, "turns": 0, "ach": [], "hist": []}
+            "streak": 1, "turns": 0, "ach": [], "hist": [],
+            "mercy": MERCY_MAX}
 
 
 def _entry(line_key):
@@ -371,6 +378,10 @@ def _migrate(rec):
         rec["streak"] = 1
     if "turns" not in rec:
         rec["turns"] = 0
+    # 「再给我一次机会」的次数（2026-11-04 加）：老档没有这个字段，
+    # 按满额算——不能因为系统后加，就把已经进过局子的人判成「机会用完了」。
+    if "mercy" not in rec:
+        rec["mercy"] = MERCY_MAX
     return rec
 
 
@@ -387,6 +398,15 @@ def is_raid(line_key):
     ent = _entry(line_key)
     rec = record_of(ent)
     return bool(rec) and rec.get("mode") == MODE_RAID
+
+
+def mercy_left(rec):
+    """这条线还剩几次「再给我一次机会」。缺字段的老档按满额算。"""
+    try:
+        n = int(rec.get("mercy", MERCY_MAX))
+    except (TypeError, ValueError):
+        n = MERCY_MAX
+    return max(0, min(MERCY_MAX, n))
 
 
 def status(line_key):
@@ -416,10 +436,38 @@ def status(line_key):
         "arousalShort": str(arousal_level(ar, cfg).get("short") or ""),
         "crossN": int(rec.get("cross_n") or 0),
         "ending": str(rec.get("ending") or ""),
+        "mercy": mercy_left(rec),
+        "mercyMax": MERCY_MAX,
     }
 
 
 # ── 模式切换 / 重开 ────────────────────────────────────
+
+def _lift_ending(rec, cfg=None):
+    """把结局这一页翻过去：清标记，好感往线内挪**一格**。
+
+    为什么是挪一格而不是拉回起点：结局有两种触发方式——分数越线，或者
+    越界次数到顶（`force_ending`）。后者可能停在 -30 这种远没到线的地方，
+    把 -30 拉回起点等于抹掉玩家一晚上的账。「挪一格」两种情形都成立：
+    进局子 -50 → -49、报警时 -30 → -29、毕业 +50 → +49。
+    挪完必须在区间内，不然切回攻略模式的第一轮结算会拿越线值再判一次结局。
+
+    2026-11-04 用户明确：这条和「再给我一次机会」是**同一个效果**，
+    区别只在「再给我一次机会」是明面上的按钮、要扣次数。
+    返回被解除的结局 key（本来没结局就是空串）。
+    """
+    if not isinstance(rec, dict):
+        return ""
+    ended = str(rec.get("ending") or "")
+    if not ended:
+        return ""
+    hi, lo = bounds(cfg)
+    v = int(rec.get("value") or 0)
+    v += -1 if ended == ENDING_GRAD else 1
+    rec["value"] = max(lo + 1, min(hi - 1, v))
+    rec["ending"] = ""
+    return ended
+
 
 def set_mode(line_key, raid):
     """开/关攻略模式。返回给用户看的确认话术。
@@ -470,24 +518,20 @@ def set_mode(line_key, raid):
         return "现在本来就是自由模式。发「攻略模式」开启好感玩法。"
     rec = existing
     # 结局不是死路（2026-11-04 用户提：报警结局之后想接着聊）。
-    # 切自由模式 = 这一页翻过去：结局标记清掉、数值封存不动，她回到平时的样子。
-    # 好感要从越线那一格退回到线内 1 分——不然下次切回攻略模式，第一轮结算
-    # 会拿同一个越线值再判一次同样的结局，玩家刚出来就被弹回局子。
+    # 切自由模式 = 这一页翻过去：结局标记清掉、好感往线内挪一格，她回到平时的样子。
     # 排在 `mode == free` 判断**之前**：已经切成自由的旧线（free + ending=jail）
     # 结局还挂着，就是这个顺序卡住了玩家。
     if rec.get("ending"):
         ended = str(rec["ending"])
         ename = str(ending_cfg(ended, load_config()).get("name") or "结局")
-        hi, lo = bounds()
-        v = max(lo + 1, min(hi - 1, int(rec.get("value") or 0)))
-        rec["value"] = v
-        rec["ending"] = ""
+        _lift_ending(rec)
         rec["mode"] = MODE_FREE
         ent["affection"] = rec
         _save_entry(line_key, ent)
         return ("【%s】这一页翻过去了，切回自由模式：她不再按结局那天的样子对你，"
                 "数值封存着（好感 %d）。想接着攻略就发「攻略模式」，"
-                "想干净地从头再来就发「重新开始」。" % (ename, v))
+                "想干净地从头再来就发「重新开始」。"
+                % (ename, int(rec.get("value") or 0)))
     if rec.get("mode") == MODE_FREE:
         return "现在就是自由模式（好感 %d 封存中）。发「攻略模式」接着玩。" % int(
             rec.get("value") or 0)
@@ -514,6 +558,40 @@ def restart(line_key):
     _save_entry(line_key, ent)
     return ("已经回到原点，重新攻略。之前聊过的她还记得，"
             "但你们的关系从最初那一步再来一遍。")
+
+
+def mercy(line_key):
+    """「再给我一次机会」：结局之后明面上的重来按钮，每人 MERCY_MAX 次。
+
+    效果和「切自由模式再切回攻略」**完全一样**——都是 `_lift_ending`：
+    结局解除、好感往线内挪一格（-50 → -49，报警时 -30 → -29）。
+    区别只有两点：
+      - 它留在攻略模式里，点完就能接着玩，不用来回切两次；
+      - 它扣次数；那 3 次用完，就只剩自由模式那条不扣次数的路（不对外宣传）。
+
+    用户 2026-11-04 定的：进局子那一刻得有个看得见的出口，不然玩家会以为
+    「存档要没了」，索性不玩了。
+    """
+    ent = _entry(line_key)
+    rec = record_of(ent)
+    if not ent or rec is None:
+        return None           # 从没开过攻略：当普通消息
+    if rec.get("mode") != MODE_RAID:
+        return "现在是自由模式，没有被结局锁住。想接着攻略发「攻略模式」。"
+    if not rec.get("ending"):
+        return "现在还没到结局，用不上这个。"
+    left = mercy_left(rec)
+    if left <= 0:
+        return ("三次机会都用完了，这次没有了。发「自由模式」能接着聊（数值封存），"
+                "发「重新开始」是从这张卡的起点重走一遍。")
+    _lift_ending(rec)
+    rec["cross_n"] = 0        # 案子了结：再犯一次不会立刻又报警
+    rec["arousal"] = 0
+    rec["mercy"] = left - 1
+    ent["affection"] = rec
+    _save_entry(line_key, ent)
+    return ("她留下了，接着攻略：好感 %d。这条机会还剩 %d 次。"
+            % (int(rec.get("value") or 0), left - 1))
 
 
 # ── 结算 ──────────────────────────────────────────────
@@ -579,6 +657,7 @@ def settle(line_key, score):
                 "tier": rec.get("tier") or "",
                 "tierName": str((tier_for(value, cfg) or {}).get("name") or ""),
                 "ending": str(rec.get("ending")), "just_ended": False,
+                "mercy": mercy_left(rec), "mercyMax": MERCY_MAX,
                 "reason": ""}
 
     # 跨天：聊天/剧情计数清零，警惕也散一点（隔一天气会消）
@@ -721,6 +800,7 @@ def settle(line_key, score):
            "arousalName": arousal_name(rec.get("arousal"), cfg),
            "cross": cross, "allow": allow, "crossN": int(rec.get("cross_n") or 0),
            "ending": str(rec.get("ending") or ""),
+           "mercy": mercy_left(rec), "mercyMax": MERCY_MAX,
            "just_ended": just_ended, "reason": reason}
 
     # 成就（2026-11-04）：只认确定性事实，判定在 `achievements` 里。

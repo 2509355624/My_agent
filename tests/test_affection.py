@@ -257,17 +257,24 @@ class ModeTest(AffBase):
         self.assertIsNone(affection.restart(persona.resolve_line("private_1")))
 
     def _to_jail(self, key):
-        """把这条线打到进局子，返回结局 key。"""
-        for _ in range(4):
+        """把这条线打到进局子，返回结局 key。
+
+        打到就停：结局之后 `settle` 会走「数值锁定」提前返回，
+        再打下去最后一轮拿到的 `just_ended` 反而是 False。
+        """
+        res = {}
+        for _ in range(6):
             res = affection.settle(key, {"delta": -13, "turn_type": "action"})
-        self.assertEqual(res["just_ended"], "jail")
+            if res.get("just_ended") == "jail":
+                break
+        self.assertEqual(res.get("just_ended"), "jail")
         return key
 
     def test_free_mode_lifts_ending(self):
         """2026-11-04 用户提：报警结局之后要能切自由模式接着聊。
 
         结局不是死路——切自由模式就把这一页翻过去：结局标记清掉、数值封存，
-        好感从越线那一格退回线内 1 分（不然切回攻略模式第一轮又判一次结局）。
+        好感**往线内挪一格**（不挪的话切回攻略模式第一轮又拿越线值判一次结局）。
         """
         key = self._to_jail(self._raid())
         out = affection.set_mode(key, False)
@@ -282,6 +289,7 @@ class ModeTest(AffBase):
         """老线是 `free` 但结局还挂着的（改动前切过自由模式的那批）。
 
         这个分支必须排在「已经是自由模式」判断之前，否则玩家永远卡在结局里。
+        报警线不一定停在线上（越界次数到顶也会结局），所以 -30 也得挪到 -29。
         """
         key = self._raid()
         ent = affection._entry(key)
@@ -292,7 +300,48 @@ class ModeTest(AffBase):
         self.assertIn("翻过去", out)
         st = affection.status(key)
         self.assertEqual(st["ending"], "")
-        self.assertEqual(st["value"], -30)      # 没越线就不动玩家的账
+        self.assertEqual(st["value"], -29)
+
+    def test_mercy_matches_free_mode_toggle(self):
+        """「再给我一次机会」和「切自由模式再切回攻略」是同一个效果。
+
+        用户 2026-11-04 明确：-50 变 -49、-30 变 -29，别另搞一套。
+        """
+        key = self._to_jail(self._raid())
+        before = affection.status(key)
+        out = affection.mercy(key)
+        self.assertIn("她留下了", out)
+        st = affection.status(key)
+        self.assertEqual(st["ending"], "")
+        self.assertEqual(st["value"], affection.MIN_V + 1)
+        self.assertEqual(st["mercy"], before["mercy"] - 1)
+        self.assertEqual(st["mercyMax"], 3)
+
+    def test_mercy_runs_out_after_three(self):
+        """机会只有 3 次，用完就不给了——剩下的路是自由模式 / 重新开始。"""
+        key = self._raid()
+        for i in range(3):
+            self._to_jail(key)
+            self.assertIn("还剩 %d 次" % (2 - i), affection.mercy(key))
+        self._to_jail(key)
+        out = affection.mercy(key)
+        self.assertIn("用完", out)
+        self.assertEqual(affection.status(key)["ending"], "jail")  # 没被解除
+
+    def test_mercy_needs_an_ending(self):
+        """没到结局时用不上，也不扣次数。"""
+        key = self._raid()
+        out = affection.mercy(key)
+        self.assertIn("还没到结局", out)
+        self.assertEqual(affection.status(key)["mercy"], 3)
+
+    def test_mercy_command_is_wired(self):
+        """QQ 私聊发整句「再给我一次机会」要能进到 affection.mercy。"""
+        self._to_jail(self._raid())
+        out = persona.handle_command("private_1", "再给我一次机会")
+        self.assertIn("她留下了", out)
+        self.assertEqual(affection.status(persona.resolve_line("private_1"))
+                         ["ending"], "")
 
     def test_raid_after_lifted_ending_does_not_re_end(self):
         key = self._to_jail(self._raid())
