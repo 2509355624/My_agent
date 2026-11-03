@@ -458,12 +458,24 @@ def injection_block(res, cfg=None):
 
 
 def tail_line(res):
-    """QQ 回复尾部追加的那行状态。没在攻略 / 这轮没结算就空串。"""
+    """QQ 回复尾部追加的那行状态。没在攻略 / 这轮没结算就空串。
+
+    格式（2026-11-03 调整）：总数在前、本轮在后——原来的
+    「【档位】（好感 +6）」容易被读成本轮加了 6，玩家问了才知道是总数。
+    """
     if not isinstance(res, dict) or not res.get("active"):
         return ""
-    mark = {ENDING_GRAD: "🎓", ENDING_JAIL: "🚨"}.get(res.get("ending") or "", "❤")
-    return "%s 她现在对你【%s】（好感 %+d）" % (
-        mark, res.get("tierName") or "?", int(res.get("value") or 0))
+    value = int(res.get("value") or 0)
+    ending = str(res.get("ending") or "")
+    if ending:
+        mark = {ENDING_GRAD: "🎓", ENDING_JAIL: "🚨"}.get(ending, "❤")
+        name = (ending_cfg(ending, load_config()) or {}).get("name") or "结局"
+        return "%s 好感 %+d · 已结局【%s】" % (mark, value, name)
+    applied = int(res.get("applied") or 0)
+    tier = res.get("tierName") or "?"
+    if applied:
+        return "❤ 好感 %+d（这轮 %+d）·【%s】" % (value, applied, tier)
+    return "❤ 好感 %+d ·【%s】" % (value, tier)
 
 
 def detail_nodes(line_key):
