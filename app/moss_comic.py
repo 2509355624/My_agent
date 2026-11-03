@@ -47,7 +47,7 @@ LAYOUTS = {
         "A comic page divided into exactly three horizontal panels of equal size, "
         "separated by thin white gutters.",
         ["Top panel", "Middle panel", "Bottom panel"],
-        "上中下三格：三段式推进",
+        "上中下三格：三个并列的切面（单页时是同一瞬间的三个视角）",
     ),
     "3t": (
         "A comic page divided into exactly three panels: one large wide panel filling "
@@ -800,16 +800,30 @@ def _user_brief(brief, pages, style, ratio, layout="", prev="", prev_scene="",
     if layout:
         lay = LAYOUTS.get(layout)
         if lay:
+            n_cells = len(lay[1])
             lines.append("**版式固定**：每一页都用 `%s`（%d 格）——%s。"
                          "这是用户点名的版式，**不许换、不许多给或少给格子**。"
-                         % (layout, len(lay[1]), lay[2]))
+                         % (layout, n_cells, lay[2]))
             mw = layout_min_width(layout)
             if mw and mw < 512:
                 # 341 宽的窄格：21 字以上就开始漏字，逼它把重点放回画面
                 lines.append("⚠️ 这个版式最窄的格子只有 **%d 像素宽**：气泡和旁白"
                              "**合计 ≤20 字**，宁可少写，把信息量交给画面。" % mw)
-            lines.append("这 %d 格必须是**连续的瞬间**：一格推进一拍，读完是一段完整的"
-                         "小故事；收尾格只画结果，不要回头补前面的动作。" % len(lay[1]))
+            # 单页 / 多页 说两种完全不同的话（2026-11-03 用户拍板）。
+            #
+            # 原来这里无条件写「一格推进一拍，读完是一段完整的小故事」——
+            # 那是给**多页连载**用的口径。单页出图时它和 system 里的
+            # 「一页 = 一个瞬间」直接打架，模型两头看，结果画成一个过程。
+            #
+            # 判据是页数：`pages > 1` 才谈推进，单页只谈视角。
+            if int(pages) <= 1:
+                lines.append("**这一页 %d 格画的是同一瞬间的不同视角，不是一段过程**："
+                             "格与格之间**不推进时间**（表情没变完、动作在半路上、"
+                             "光没移动），推进的是**看的角度和距离**。"
+                             "不要一格一个节拍地讲故事。" % n_cells)
+            else:
+                lines.append("这 %d 格必须是**连续的瞬间**：一格推进一拍，读完是一段完整的"
+                             "小故事；收尾格只画结果，不要回头补前面的动作。" % n_cells)
     if style:
         lines.append("画风固定用这一串（照抄进 style 字段）：%s" % style)
     lines.append("画面比例：竖版 %s。" % ratio)
