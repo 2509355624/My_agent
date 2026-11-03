@@ -1830,7 +1830,12 @@ class QQBot:
             node_texts = None
             if persona.is_roster_request(text, addressed=(at_me or trigger.called(text))):
                 try:
-                    node_texts = persona.roster_nodes()
+                    # 私聊才带网页入口，群里不带（外链在群聊容易被风控）。
+                    site = ""
+                    if target == "private":
+                        from app import friend_site
+                        site = friend_site.url()
+                    node_texts = persona.roster_nodes(site_url=site)
                 except Exception:                # noqa: BLE001
                     log.exception("生成规则卡片失败 %s", session_key)
             try:

@@ -842,7 +842,7 @@ def leave(session_key):
 
 # ─── 命令 ────────────────────────────────────────────
 
-def roster_text():
+def roster_text(site_url=""):
     """`#角色扮演` / `#人设列表` 的回话：完整规则 + 角色名单。
 
     2026-11-03 用户拍板：规则要**写全**，并且用「聊天记录卡片」发出去
@@ -850,6 +850,11 @@ def roster_text():
     用户原话：「以后她忘记规则就继续 #角色扮演」。
 
     所以这份文案是**唯一的规则出口**，每次有人忘了怎么玩，发这个就行。
+
+    `site_url`（2026-11-03 加）：群友页的公网地址，**只在私聊传**。
+    传了就在名单前补一段「网页版」——用户原话「QQ 单纯的指令很多人根本
+    不会玩，改成网页端反而更容易玩，点按钮即可」。
+    群聊不传：外链发群里容易被风控，而且一次就刷屏。
     """
     cards = load_cards()
     if not cards:
@@ -885,9 +890,23 @@ def roster_text():
         "",
         "（这些**都不用加 `#`**，单独发就够了。）",
         "",
-        "## 角色名单",
-        "",
     ]
+
+    if site_url:
+        lines += [
+            "## 网页版（推荐）",
+            "",
+            "打字太麻烦就上网页，点按钮就行：",
+            "",
+            site_url.rstrip("/") + "/persona",
+            "",
+            "- 每条回复下面有**出图按钮**，不用自己打字",
+            "- 右边能看到她此刻的心情和状态",
+            "- 没登录也能玩（体验版 15 轮），登录后无限聊 + 能出图",
+            "",
+        ]
+
+    lines += ["## 角色名单", ""]
     for c in cards:
         tag = c.get("description") or c.get("personality") or ""
         # 不写 `#` 前缀（2026-11-03）：用户反馈大家不爱打井号，名单跟着改，
@@ -896,7 +915,7 @@ def roster_text():
     return "\n".join(lines)
 
 
-def roster_nodes(limit_per_node=400):
+def roster_nodes(limit_per_node=400, site_url=""):
     """把规则拆成「聊天记录卡片」的节点（2026-11-03）。
 
     为什么要拆：完整规则一千多字，直接发会刷屏、还会被 QQ 折成一坨。
@@ -904,7 +923,7 @@ def roster_nodes(limit_per_node=400):
 
     按段落切，每段不超过 `limit_per_node` 字——太长单张卡片里也难读。
     """
-    text = roster_text()
+    text = roster_text(site_url=site_url)
     if not text:
         return []
     # 按二级标题切段，每段独立成一个节点
@@ -1028,7 +1047,16 @@ def handle_command(session_key, text, addressed=False):
         return None
 
     if body in LIST_WORDS:
-        return roster_text()
+        # 私聊才带网页入口（2026-11-03 用户拍板）。群里发外链容易被风控、
+        # 而且一次就刷屏，所以群里只回规则本身。
+        url = ""
+        if str(session_key or "").startswith("private"):
+            try:
+                from app import friend_site
+                url = friend_site.url()
+            except Exception:                      # noqa: BLE001
+                url = ""
+        return roster_text(site_url=url)
     if body in EXIT_WORDS:
         if not _entry(session_key):
             return None                     # 本来就没在演，当普通消息
