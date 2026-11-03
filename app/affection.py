@@ -1144,6 +1144,10 @@ def panel_text(line_key):
         return None
     cfg = load_config()
     rows = ["📊 你们现在到哪了", ""]
+    # 负分时不画「当前值/门槛」（2026-11-04 深夜修）：羁绊 -20 会写成
+    # `-20/10`、而且每一档都这么写，读起来像「负 20 比 10 大」。
+    # 负分区间根本不在正向档位的坐标系里，只报「欠多少」。
+    neg = int(p["value"]) < 0
 
     # 一、身体进度：七行，到了的打勾，没到的挂门槛
     rows.append("— 身体进度 —")
@@ -1153,6 +1157,8 @@ def panel_text(line_key):
         # 第一级没有门槛（0），写「42/0」只会让人以为满了；
         # 直接从这一行开始报「离这一级还差多少」。
         if gate <= 0:
+            line = "%s %s" % (mark, r["name"])
+        elif neg:
             line = "%s %s" % (mark, r["name"])
         else:
             line = "%s %s  %s/%s" % (mark, r["name"], p["value"], gate)
@@ -1167,7 +1173,7 @@ def panel_text(line_key):
     rows += ["", "— 感情 —"]
     for r in p["tiers"]:
         mark = {"reached": "✔", "current": "▶", "locked": "·"}[r["state"]]
-        if r["gate"] <= 0:
+        if r["gate"] <= 0 or neg:
             rows.append("%s %s" % (mark, r["name"]))
         else:
             rows.append("%s %s  %s/%s" % (mark, r["name"], p["value"], r["gate"]))
@@ -1224,6 +1230,10 @@ def panel_text(line_key):
     rows.append("")
     if p["ending"]:
         rows.append("结局已定格。想翻过去发「自由模式」。")
+    elif neg:
+        # 负分区间没有「下一级」可言——她还没消气，先回到 0 再说。
+        rows.append("她还在算账（羁绊 %d）。想往前推，先把这 %d 点的账还上。"
+                    % (p["value"], -p["value"]))
     elif p["needValue"] or p["needArousal"]:
         gap = []
         if p["needValue"]:
@@ -1599,6 +1609,15 @@ def settle(line_key, score):
         # 模型没显式说「这是安抚」，就不许往下扣。不设这个口子的话，
         # 「堕落」会随着模型心情来回涨跌，那就不叫堕落了。
         cor_delta = 0
+    # 高潮也算一次堕落（2026-11-04 深夜，用户追加）。
+    # 为什么要有这一条：在此之前堕落**只有越界能涨**——玩家要是规规矩矩地
+    # 顺着气氛做到底，堕落永远停在 0，两轴四格里只用得上左边一列。
+    # 「她在这场里到了」本身就是一种往下陷：身体先于心意投降，这是这套设定里
+    # 最不该白给的一次。
+    # 只在她**已经到了**的那一拍加，不是每轮加；而且只在正常场景里加——
+    # 越界那轮已经按 hard 的下限记过账了，别叠两次。
+    if just_orgasm and not cross:
+        cor_delta += ch["up"].get("她在这场里到了", 6)
     rec["corrupt"] = max(0, min(CORRUPT_MAX, prev_corrupt + cor_delta))
 
     prev_submit = int(rec.get("submit") or 0)

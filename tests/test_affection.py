@@ -421,6 +421,33 @@ class ModeTest(AffBase):
         affection.settle(key, {"delta": 0, "submit": -15})
         self.assertLess(affection.status(key)["submit"], up)
 
+    def test_orgasm_raises_corruption_without_crossing(self):
+        """规规矩矩做到高潮也会推高堕落（2026-11-04 深夜，用户追加）。
+
+        没有这一条的话，堕落**只有越界能涨**——玩家要是一路顺着气氛做，
+        堕落永远停在 0，两轴四格里只用到左边一列。身体先于心意投降，
+        这本身就是一次往下陷。
+        """
+        key = self._raid()
+        for _ in range(5):
+            res = affection.settle(key, {"delta": 0, "turn_type": "action",
+                                         "in_scene": True, "act": "intense"})
+            if res["just_orgasm"]:
+                break
+        self.assertGreater(res["just_orgasm"], 0)
+        self.assertGreater(res["corrupt"], 0)
+        self.assertEqual(res["crossN"], 0)      # 一次都没越界
+
+    def test_orgasm_does_not_double_count_on_a_cross(self):
+        """越界那轮已经按 hard 记过账了，别再叠一次高潮。"""
+        key = self._raid()
+        res = affection.settle(key, {"delta": 0, "turn_type": "action",
+                                     "in_scene": True, "act": "intense",
+                                     "cross": "hard", "allow": "no"})
+        if res["just_orgasm"]:
+            # hard + allow=no 的floor 是 24，不该变成 24+6
+            self.assertEqual(res["corrupt"], 24)
+
     def test_corruption_clamped_to_range(self):
         key = self._raid()
         for _ in range(5):
