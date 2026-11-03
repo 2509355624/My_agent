@@ -863,15 +863,20 @@ def injection_block(res, cfg=None):
 
 
 def tail_line(res):
-    """QQ 回复尾部追加的那行状态。
+    """QQ 回复尾部追加的状态块。
 
-    2026-11-04 改：**不报数字**。原来挂「好感 +6」等于把每轮的奖励提前兑现，
-    玩家开始算账就不看正文了。现在只报「你们到哪一步」，再加一句模糊的体感。
+    2026-11-04 早先的版本**不报数字**（怕玩家算账）；当天晚些时候用户拍板
+    反过来要数字：「看到数值浮动才有成就感」。所以现在是**一行一个数值**，
+    正数不带加号、负数才带负号。
 
-    2026-11-04 再加冲动：格式固定成 `❤ 关系 · 气氛`，每轮都带。
-    用户拍板要常驻——多数时候就是「平静」，但正因为它一直在，突然变成
-    「很乱」才有分量。原来那两个软提示（「她好像有点不一样了」「她脸色
-    不太对」）被气氛取代了：两条都在说「她此刻不太一样」，并排放是重复。
+    格式：
+        ❤ 说得进心里 · 有点乱
+        好感 12
+        距离 3/5
+        冲动 42
+
+    越界那一轮气氛让位给「她退开了」——那轮的信号是「她退开了」，不是气氛；
+    数字照给，因为这一轮的掉分正是要看的东西。
     """
     if not isinstance(res, dict) or not res.get("active"):
         return ""
@@ -881,12 +886,24 @@ def tail_line(res):
         name = (ending_cfg(ending, load_config()) or {}).get("name") or "结局"
         return "%s 已结局【%s】" % (mark, name)
     lname = res.get("levelName") or level_name(int(res.get("level") or 0)) or "?"
+    head = "❤ %s%s" % (lname, " ↑" if res.get("rose") else "")
     # 越界那一轮气氛不是重点——这轮要说的是「她退开了」，气氛留给没出事的时候
     if res.get("cross") == "hard":
-        return "❤ %s · 她退开了" % lname
-    ar = arousal_name(res.get("arousal") or 0)
-    head = "❤ %s%s" % (lname, " ↑" if res.get("rose") else "")
-    return "%s · %s" % (head, ar) if ar else head
+        head += " · 她退开了"
+    else:
+        ar = arousal_name(res.get("arousal") or 0)
+        if ar:
+            head += " · " + ar
+    if int(res.get("crossN") or 0) > 0:
+        head += " · 被拒 %d 次" % int(res.get("crossN") or 0)
+    lv = int(res.get("level") or 0)
+    lv_max = int(res.get("levelMax") or LEVEL_MAX)
+    return "\n".join([
+        head,
+        "好感 %d" % int(res.get("value") or 0),
+        "距离 %d/%d" % (lv, lv_max),
+        "冲动 %d" % int(res.get("arousal") or 0),
+    ])
 
 
 def detail_nodes(line_key):
