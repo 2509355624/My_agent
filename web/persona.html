@@ -212,6 +212,25 @@
     font-variant-numeric: tabular-nums; }
   .aff .nums b.dn { color: var(--err); }
   .aff.end { color: var(--err); }
+  /* 结局的出口（2026-11-04）：进局子那一刻玩家容易以为「只能重新开始、
+     存档要没了」，所以这个按钮要显眼——玫红实心、带呼吸光晕、占满气泡宽度。 */
+  .aff.end { width: auto; min-width: 170px; }
+  /* 按钮只在最新一条上出现（.cur）：结局之后每一轮都会挂着 ending，
+     十几条各带一个按钮就成了刷屏。 */
+  .aff .mercy { display: none; margin-top: 7px; padding: 9px 14px;
+    font-family: inherit; font-size: 13px; font-weight: 600; white-space: nowrap;
+    color: #fff; background: #e0457b; border: 0; border-radius: 8px;
+    letter-spacing: .5px; cursor: pointer;
+    animation: mercyPulse 1.9s ease-out infinite; }
+  .aff.cur .mercy { display: inline-block; }
+  .aff .mercy:hover { background: #c93a6c; }
+  .aff .mercy:disabled { background: var(--bg-elev); color: var(--text-mute);
+    animation: none; cursor: default; }
+  @keyframes mercyPulse {
+    0%   { box-shadow: 0 0 0 0 rgba(224,69,123,.5); }
+    70%  { box-shadow: 0 0 0 9px rgba(224,69,123,0); }
+    100% { box-shadow: 0 0 0 0 rgba(224,69,123,0); }
+  }
   .affbar { position: relative; }
   .affbar > i { background: #e8779c; }
   /* 气氛用暖橙，和关系的玫红分开：同一屏上看得出是两个不同的东西 */
@@ -561,9 +580,15 @@ function makeRow(m, idx) {
 // 内容全部 textContent 填，不拼服务端原文，防注入。
 function affLine(a) {
   const div = document.createElement("div");
-  div.className = "aff" + (a.just_ended ? " end" : "");
-  if (a.just_ended) {
-    div.textContent = a.just_ended === "graduated" ? "🎓 已结局：毕业" : "🚨 已结局：进局子";
+  // 刷新后 `just_ended` 没了，但 `ending` 还在（get_session 挂的 status），
+  // 所以两个都要认，否则一刷新按钮就消失。
+  const kind = a.just_ended || a.ending;
+  div.className = "aff" + (kind ? " end" : "");
+  if (kind) {
+    const t = document.createElement("div");
+    t.textContent = kind === "graduated" ? "🎓 已结局：毕业" : "🚨 已结局：进局子";
+    div.appendChild(t);
+    if (kind !== "graduated") div.appendChild(mercyBtn(a));
     return div;
   }
   // 2026-11-04 三次修订：`第 3 级 / 共 5 级` 也是行话，玩家不懂「级」在量什么。
@@ -604,6 +629,36 @@ function affLine(a) {
   nums.appendChild(numLine("冲动", a.arousal | 0));
   div.appendChild(nums);
   return div;
+}
+
+// 「再给我一次机会」（2026-11-04）：进局子那一刻的显眼出口，每人 3 次。
+// 效果和「切自由模式再切回攻略」完全一样（结局解除、好感往线内挪一格），
+// 差别只在于它是明面上的、而且会扣次数。
+function mercyBtn(a) {
+  const b = document.createElement("button");
+  b.className = "mercy";
+  const max = (a && a.mercyMax) || 3;
+  const left = (a && a.mercy != null) ? (a.mercy | 0) : max;
+  if (left <= 0) {
+    b.disabled = true;
+    b.textContent = "三次机会都用完了";
+    return b;
+  }
+  b.textContent = "再给我一次机会 " + left + "/" + max;
+  b.addEventListener("click", async () => {
+    b.disabled = true;
+    try {
+      const d = await post("/api/persona/affection/mercy", {});
+      toast(d.reply || "她留下了");
+      AFF = d.affection || AFF;
+      renderAff(AFF);
+      await loadSession();        // 重画聊天：结局那行的按钮要跟着消失
+    } catch (e) {
+      b.disabled = false;
+      toast(e.message, true);
+    }
+  });
+  return b;
 }
 
 function numLine(label, v) {
