@@ -435,51 +435,82 @@ def is_shot_request(text):
 
 
 def comic_brief(card, session_key, extra=""):
-    """把「男主特征 + 女主特征 + 当前状态 + 最近剧情」拼成 moss 漫画的 brief。
+    """把「用户点名要画的 + 她此刻 + 状态 + 人物」拼成 moss 漫画的 brief。
 
-    2026-11-03：用户主动「出图」时走这条。moss 的编剧拿到的是自然语言剧情，
-    不是提示词——所以这里要写成"这一幕发生了什么"，而不是堆标签。
+    2026-11-03 第二次改（用户实测反馈「都不按剧情来的」）：
 
-    `extra` 是用户这一轮附带的说明（比如引用了某条消息），拼在最后。
+    第一版把**最近三轮**对话塞进「刚才发生的事」，结果编剧看到三个不同场景，
+    自然画成「过程」——这正是用户抱怨的「六格写完一个过程，磨磨唧唧」。
+
+    现在的结构按**重要性**排，而且只取**最后一轮**：
+
+      1. `用户点名要画的` —— 最后一条用户消息**全文**。这才是「他要看什么」，
+         不该依赖引用（引用经常是空的，还会把「（没有可读内容）」这种噪声
+         塞进最高优先段）。
+      2. `她此刻` —— 最后一条她的回复正文，画面和她这一刻的动作对齐。
+      3. `状态` —— 在哪 / 穿什么 / 接触。
+      4. `人物` —— 女主外观 + 固定男主。
+
+    `extra`（引用内容）只在真有字的时候加，且排在用户原话之后。
     """
     ent = _entry(session_key) or {}
     state = str(ent.get("state") or "").strip()
     name = str((card or {}).get("name") or "女主角")
     look = _fixed_block(card)
 
+    hist = [m for m in trim(_load_hist(session_key))
+            if m.get("role") in ("user", "assistant")]
+    last_user = ""
+    last_ai = ""
+    for m in reversed(hist):
+        body = split_turn(m["content"])[0].strip() if m["role"] == "assistant" \
+            else str(m["content"] or "").strip()
+        if m["role"] == "assistant" and not last_ai:
+            last_ai = body
+        elif m["role"] == "user" and not last_user:
+            last_user = body
+        if last_user and last_ai:
+            break
+
     lines = ["这是一部成人向漫画的一页。", ""]
     lines.append("## 画什么")
-    lines.append("**这是一页，不是一个故事。** 只画下面「这一刻」的那一个瞬间，"
-                 "用五格从不同角度拍它，不要推进时间、不要讲起承转合。")
-    lines.append("用户点名要看的东西，就正对着它拍、写到最具体。")
+    lines.append("**这是一页，不是一个故事。** 只画下面那一个瞬间，"
+                 "用多个格子从不同角度拍它，不要推进时间、不要讲起承转合。")
+
+    if last_user:
+        lines.append("")
+        lines.append("## 用户点名要画的（最高优先，**必须有格子直接画它**）")
+        lines.append(last_user[:600])
+        lines.append("")
+        lines.append("这一节描述的是一个**动作**。整页至少一格要画这个动作正在"
+                     "发生的那一下（谁的身体在做什么、接触在哪里、什么部位露出来），"
+                     "不能只画旁边的人脸、大腿或衣角就交差。")
+
+    if extra.strip():
+        lines.append("")
+        lines.append("## 用户另外引用的内容（同样要照画）")
+        lines.append(extra.strip()[:400])
+
+    if last_ai:
+        lines.append("")
+        lines.append("## 她此刻正在做什么（画面要和这段一致）")
+        lines.append(last_ai[:600])
+
+    if state:
+        lines.append("")
+        lines.append("## 她身上的状态（**只作参考**）")
+        lines.append(state)
+        lines.append("")
+        lines.append("⚠️ 这条状态是上一轮结束时的快照，**可能落后于上面的动作**。"
+                     "它和「用户点名要画的」冲突时，**以动作那一节为准**——"
+                     "动作说要躺下就画躺下，动作说要被打开就画被打开，"
+                     "不要为了迁就状态里的姿势把动作省掉。")
+
     lines.append("")
     lines.append("## 人物")
     lines.append("- 女主角：%s。外观固定：%s" % (name, look or "按角色卡"))
     lines.append("- 男主角：%s。他是读者本人，不要给他起名字、不要画脸特写。"
                  % MALE_PROTAGONIST)
-
-    if state:
-        lines.append("")
-        lines.append("## 这一刻的状态（画面里必须和它一致）")
-        lines.append(state)
-
-    # 最近三轮对话：那是「这一刻」的上下文，不是要讲完的剧情。
-    hist = [m for m in trim(_load_hist(session_key)) if m.get("role") in
-            ("user", "assistant")][-6:]
-    if hist:
-        lines.append("")
-        lines.append("## 这一刻之前在说什么（只取最后这一下的氛围，"
-                     "**不要把这些对话逐条画成格子**）")
-        for m in hist:
-            body = split_turn(m["content"])[0]
-            if body.strip():
-                who = "他" if m["role"] == "user" else name
-                lines.append("%s：%s" % (who, body.strip()[:200]))
-
-    if extra.strip():
-        lines.append("")
-        lines.append("## 用户点名要画的（最高优先，别绕开）")
-        lines.append(extra.strip()[:400])
 
     return "\n".join(lines)
 

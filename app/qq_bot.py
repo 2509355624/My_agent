@@ -455,7 +455,12 @@ def _quote_body(ev, limit):
     text, _at, images = _parse_segments(ev)
     who = ((ev.get("sender") or {}).get("card")
            or (ev.get("sender") or {}).get("nickname") or "")
-    body = text or ("（图片）" if images else "（没有可读内容）")
+    # 2026-11-03：正文为空时**返回空串**，由调用方决定怎么处理。
+    # 原来填「（没有可读内容）」，这个占位符会被当成真内容塞进扮演态 brief 的
+    # 「用户点名要画的（最高优先）」段，把用户真正的需求挤掉。
+    body = str(text or "").strip()
+    if not body and images:
+        body = "（图片）"
     if limit > 0 and len(body) > limit:
         body = body[:limit] + "……（过长已截断）"
     return body, who, images
@@ -496,6 +501,12 @@ def _resolve_quote(q, limit):
         log.warning("拉取引用的消息失败 %s：%s", q.get("id"), exc)
         return "[引用的消息无法读取]", []
     body, who, images = _quote_body(msg, limit)
+    # 2026-11-03：引用了一条**取不到正文**的消息（常见于引用机器人自己发的图
+    # 或已撤回的消息）时返回空串，让调用方跳过。
+    # 原来返回 `"[引用 大大怪 的消息] "`（后面什么都没有），这段垃圾会被塞进
+    # 扮演态的 brief「用户点名要画的（最高优先）」，把真需求挤掉。
+    if not str(body or "").strip() and not images:
+        return "", []
     head = "[引用 %s 的消息] " % who if who else "[引用的消息] "
     return head + body, images
 
