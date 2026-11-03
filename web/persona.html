@@ -960,6 +960,16 @@ function renderPanel(a, p) {
       + "/" + (p.orgasmMax | 0) + " 次", p.orgasms_rows, p.excite));
   }
 
+  // 五、堕落（2026-11-04 深夜）：常驻。0 的时候也画——
+  // 这根轴是「她变成了什么样」，玩家要能一眼看到自己把它推到了哪。
+  // 和冲动不同：冲动会自己回落，堕落不会。
+  body.appendChild(panelSection(
+    "堕落 " + (p.corrupt | 0) + "/100", p.corrupts, p.corrupt));
+
+  // 六、屈服：和堕落并排但语义不同——这个会掉。
+  body.appendChild(panelSection(
+    "屈服 " + (p.submit | 0) + "/100", p.submits, p.submit));
+
   // 结论：还差什么。这一行是整块面板的落点——
   // 没有它，玩家看完一堆数字不知道该干嘛。
   const note = $("panelNote");
