@@ -891,6 +891,17 @@ def persona_admin_page():
     return send_from_directory(WEB_DIR, "persona_admin.html")
 
 
+@app.route("/compat")
+def compat_page():
+    """兼容自检（2026-11-03）。
+
+    群友反馈「看不到输入框」，但不同手机/浏览器表现不一样。这一页把
+    UA、视口实测值、各特性是否支持全列出来，让问题可以截图定位，
+    不用靠猜。
+    """
+    return send_from_directory(WEB_DIR, "compat.html")
+
+
 @app.route("/output")
 def output_page():
     """图片管理台：ComfyUI output 目录的网页资源管理器（见 app/output_api.py）。"""
