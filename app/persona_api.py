@@ -302,11 +302,9 @@ def switch():
     #   base      记「此刻在演谁」（`_active_key` 靠它找）
     #   ckey      角色专属线，历史/小记/状态都挂这儿
     # 这样切角色 = 换一条独立的线，切回来还能接上。
-    ckey = persona.card_key(base, card["id"])
-    persona.switch(ckey, card)
-    st = persona._load_state()                            # noqa: SLF001
-    st[base] = dict(st.get(ckey) or {})
-    persona._save_state(st)                               # noqa: SLF001
+    # （2026-11-03 起这段逻辑收进 persona.switch_line——QQ 私聊分线用的是
+    #   同一套，切回旧线时小记/轮次保留的行为两边自然一致。）
+    ckey = persona.switch_line(base, card)                # noqa: SLF001
     log.info("网页切角色：%s → %s（线 %s）", base, card["name"], ckey)
     return jsonify({"ok": True, "card": _card_json(card),
                     "reply": "从现在起我是%s。" % card["name"]})

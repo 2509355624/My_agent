@@ -520,6 +520,9 @@ def is_shot_request(text):
 def comic_brief(card, session_key, extra="", msg_index=None):
     """把「用户点名要画的 + 她此刻 + 状态 + 人物」拼成 moss 漫画的 brief。
 
+    `session_key` 传 base 或线键都行——内部 `resolve_line` 统一换算
+    （QQ 私聊分线后，brief 里读的历史必须来自**当前角色线**）。
+
     2026-11-03 第二次改（用户实测反馈「都不按剧情来的」）：
 
     第一版把**最近三轮**对话塞进「刚才发生的事」，结果编剧看到三个不同场景，
@@ -545,6 +548,7 @@ def comic_brief(card, session_key, extra="", msg_index=None):
     好消息是每条回复在历史里**本来就带着 `画面：` / `状态：` 行**（见
     `split_turn`），不用另存一份。
     """
+    session_key = resolve_line(session_key)
     ent = _entry(session_key) or {}
     name = str((card or {}).get("name") or "女主角")
     look = _fixed_block(card)
@@ -694,7 +698,7 @@ def load_cards():
             continue
         card = _norm_card(c)
         if card["id"] in seen:              # id 撞了就给后来的一枚新的
-            card["id"] = str(int(time.time() * 1000))
+            card["id"] = _fresh_id(seen)
         seen.add(card["id"])
         cards.append(card)
     return cards
@@ -754,7 +758,7 @@ def save_cards(cards):
             if keep:
                 card = _norm_card(keep)
         if card["id"] in seen:
-            card["id"] = str(int(time.time() * 1000))
+            card["id"] = _fresh_id(seen)
         seen.add(card["id"])
         out.append(card)
 
@@ -825,6 +829,22 @@ def _write_cards_raw(cards):
     return True
 
 
+def _fresh_id(seen):
+    """给撞了 id 的卡发一枚**绝不重复**的新 id。
+
+    2026-11-03：原来这里用 `str(int(time.time() * 1000))`——同一毫秒内
+    连发的第二张卡拿到**一模一样**的 id，去重等于没去。实测：`save_cards`
+    两张无 id 的卡落盘共用一个 id，之后 `load_cards` 每次给第二张重新生成
+    （每次加载都漂移），`get_card` 永远找不到它——扮演态切到那张卡直接
+    空 Turn。uuid 短哈希彻底根治。
+    """
+    import uuid
+    while True:
+        i = uuid.uuid4().hex[:12]
+        if i not in seen:
+            return i
+
+
 def get_card(card_id):
     cid = str(card_id or "").strip()
     if not cid:
@@ -867,7 +887,56 @@ def _load_state():
             d = json.load(f)
     except (OSError, ValueError):
         return {}
-    return d if isinstance(d, dict) else {}
+    d = d if isinstance(d, dict) else {}
+    # QQ 私聊分线的一次性迁移（2026-11-03 方案 B）。幂等：迁移完的库再扫
+    # 一遍不会写盘（线键已存在、副本一致）。
+    if d and _migrate_private_lines(d):
+        _save_state(d)
+    return d
+
+
+def _migrate_private_lines(state):
+    """把分线之前的 QQ 私聊状态搬到新布局。
+
+    旧布局：`private_<qq>` 上挂整份状态 + 一份**所有角色共用**的历史。
+    新布局：`private_<qq>__<card>` 持有那条角色线的真实状态，`private_<qq>`
+    只留副本（`resolve_line` 靠它找线）。历史/归档文件同步改名。
+
+    幂等：线键已存在就只对齐副本；没有 card 的键（出过戏）不动。
+    """
+    changed = False
+    for key in [k for k in state
+                if k.startswith("private_") and "__" not in k]:
+        cid = str((state[key] or {}).get("card") or "").strip()
+        if not cid:
+            continue
+        line = card_key(key, cid)
+        if line not in state:
+            state[line] = dict(state[key])
+            _migrate_persona_files(key, line)
+            changed = True
+        if state.get(key) != state.get(line):
+            state[key] = dict(state[line])
+            changed = True
+    return changed
+
+
+def _migrate_persona_files(old_key, new_key):
+    """历史 + 归档文件搬到新线键名下。目标已存在时不覆盖（防御）。"""
+    for maker in (_hist_path, _archive_path):
+        try:
+            src = maker(old_key)
+            dst = maker(new_key)
+        except Exception:                      # noqa: BLE001
+            continue
+        if (src and dst and os.path.isfile(src)
+                and not os.path.exists(dst)):
+            try:
+                os.rename(src, dst)
+                log.info("分线迁移：%s → %s",
+                         os.path.basename(src), os.path.basename(dst))
+            except OSError:
+                log.exception("分线迁移失败 %s", src)
 
 
 def _save_state(state):
@@ -917,7 +986,10 @@ def clear(session_key):
     name = (card or {}).get("name") or "她"
 
     # 1) 历史：整份删。删失败就清空成空文件，至少别让下一轮读到旧内容。
-    path = _hist_path(session_key)
+    #    QQ 私聊分线（2026-11-03）：传 base 键时先换算成当前角色线——
+    #    「清空」清的是**现在演的这个角色**的记忆，不碰别的线。
+    line = resolve_line(session_key)
+    path = _hist_path(line)
     if path and os.path.exists(path):
         try:
             os.remove(path)
@@ -930,8 +1002,15 @@ def clear(session_key):
                 log.exception("清空历史时连写空文件都失败 %s", path)
 
     # 2) 状态：保留 card，其余归零
+    ent = _entry(line)
+    if not isinstance(ent, dict):
+        return "现在没有在演谁，没什么可清的。发「#角色名」挑一个吧。"
     ent.update({"note": "", "turns": 0, "mood": "", "intensity": 0, "state": ""})
-    state[session_key] = ent
+    state = _load_state()
+    state[line] = ent
+    if line != session_key:
+        # 输入是 base：base 上的副本也刷新，管理页/状态查询别显示旧小记
+        state[session_key] = dict(ent)
     _save_state(state)
     log.info("扮演态已清空：%s（保留角色 %s）", session_key, ent.get("card"))
     return "记忆清空了，就当今天第一次见面。还是%s，想换人就发「#角色名」。\n" % name
@@ -945,10 +1024,11 @@ def _entry(session_key):
 def active_card(session_key):
     """这条会话线正在演谁（返回卡 dict）；没在演、或卡已经被删了 → None。
 
-    卡被删掉时自动当作没在演：不然会一直卡在一个取不到的卡 id 上，
-    每轮都拼不出人设，还只能靠 `#出戏` 自救。
+    传 base 键（QQ 的 `private_<qq>`）也行——内部先 `resolve_line` 换成
+    当前线键再查。卡被删掉时自动当作没在演：不然会一直卡在一个取不到的
+    卡 id 上，每轮都拼不出人设，还只能靠 `#出戏` 自救。
     """
-    st = _entry(session_key)
+    st = _entry(resolve_line(session_key))
     if not st:
         return None
     cid = str(st.get("card") or "").strip()
@@ -984,17 +1064,66 @@ def card_key(session_key, card_id=""):
     return k + "__" + cid
 
 
-def switch(session_key, card):
-    """进扮演态。**换卡 = 清掉这条线的小记和轮次**：那是上一个角色的记忆。
+def resolve_line(session_key):
+    """base 键 → 此刻该用的**线键**（QQ 私聊分线，2026-11-03 方案 B）。
 
-    同时清掉情绪与状态（`mood` / `intensity` / `state`）：上一个角色害羞到 9，
-    不该带进下一个角色。
+    网页端调用方（persona_api）传进来的已经是线键（带 `__`），原样返回；
+    QQ 端传的是 base（`private_<qq>`），按 base 上记的 `card` 派生出
+    `private_<qq>__<角色>`。这样：
+
+      · 切角色 → 各聊各的线，历史/小记/好感互不污染（和网页一致）
+      · 切回来 → 接着原来那条线聊
+    群聊不分线（已停演），没在演时返回 base 本身。
+    """
+    key = str(session_key or "")
+    if "__" in key or not key.startswith("private_"):
+        return key
+    ent = _entry(key) or {}
+    cid = str(ent.get("card") or "").strip()
+    return card_key(key, cid) if cid else key
+
+
+def switch_line(base, card):
+    """切角色（QQ 私聊分线版）：**两条都要写**——
+
+      · 线键 `base__<card_id>`：这条角色线的真实状态（历史/小记/好感都挂它）
+      · base：记「此刻在演谁」的副本（`resolve_line` 靠它找线）
+
+    切回一条演过的线时，`switch()` 会保留它的小记/轮次——真正「接着聊」。
+    网页端 switch 端点与本函数是同一套语义（2026-11-03 起共用这里）。
+    """
+    ckey = card_key(base, card["id"])
+    switch(ckey, card)
+    st = _load_state()
+    st[base] = dict(st.get(ckey) or {})
+    _save_state(st)
+    return ckey
+
+
+def switch(session_key, card):
+    """进扮演态（`session_key` 应传**线键**，见 `switch_line`/`resolve_line`）。
+
+    分线后的语义（2026-11-03 方案 B）：
+      - **新线**（这个角色在这条会话没演过）→ 小记/轮次/心情全空白；
+      - **切回旧线**（条目已存在且 card 相同）→ **原样保留**小记/轮次/心情
+        ——「切回来接着原来那条线聊」，和网页的承诺一致。
+        （旧版这里无条件清零，网页切回来小记也被洗掉，是同一处疏漏。）
+
+    「上一个角色的记忆不该带进来」由**分线本身**保证：每条角色线有自己的
+    小记和历史，换人 = 换线，天然互不污染。
     """
     state = _load_state()
+    old = state.get(session_key)
+    if isinstance(old, dict) and str(old.get("card") or "") == card["id"]:
+        log.info("扮演态回到旧线：%s（保留小记 %d 字 / %s 轮）",
+                 session_key, len(str(old.get("note") or "")),
+                 old.get("turns"))
+        return
     state[session_key] = {"card": card["id"], "note": "", "turns": 0,
                           "mood": "", "intensity": 0, "state": ""}
     _save_state(state)
-    log.info("扮演态开启：%s → %s（%s）", session_key, card["name"], card["id"])
+    log.info("扮演态开启：%s → %s（%s，新线）",
+             session_key, card["name"], card["id"])
 
 
 def leave(session_key):
@@ -1297,7 +1426,9 @@ def handle_command(session_key, text, addressed=False):
         return _group_redirect(card)
 
     was = active_card(session_key)
-    switch(session_key, card)
+    # 分线切换（2026-11-03 方案 B）：写线键 + base 指针。切回演过的角色时
+    # 那条线的小记/历史原样保留——「接着上次聊」。
+    switch_line(session_key, card)
     if was and was["id"] == card["id"]:
         return "我现在就是%s呀。" % card["name"]
     return "好，从现在起我是%s。想让我变回来就发「#出戏」。" % card["name"]
@@ -1648,6 +1779,9 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     见 `_persona_key`——不隔离的话 A 刷的好感会算到 B 头上。私聊传不传都行。
     """
     key = _persona_key(session_key, sender_uin)
+    # QQ 私聊分线（2026-11-03 方案 B）：base → 当前角色线。网页传来的已是
+    # 线键，resolve 幂等。历史/小记/好感从此按角色各存各的。
+    key = resolve_line(key)
 
     # ── 群聊不演（2026-11-03 用户反馈）──────────────────────────
     #
