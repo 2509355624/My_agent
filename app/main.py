@@ -125,6 +125,11 @@ app.register_blueprint(moss_api.bp)
 from app import persona_api                        # noqa: E402
 app.register_blueprint(persona_api.bp)
 
+# 角色扮演「查看台」（2026-11-03）：看谁玩过、聊了什么。
+# 只挂 5174，公网只映射 5175 的网关，所以这里不需要额外鉴权。
+from app import persona_admin_api                  # noqa: E402
+app.register_blueprint(persona_admin_api.bp)
+
 # 手动跑图台 API（独立 Blueprint，见 app/gen_api.py）：无 AI 的文生图页面
 app.register_blueprint(gen_api.bp)
 
@@ -874,6 +879,16 @@ def persona_page():
     见 `app/persona_api.py`。
     """
     return send_from_directory(WEB_DIR, "persona.html")
+
+
+@app.route("/persona_admin")
+def persona_admin_page():
+    """角色扮演查看台（2026-11-03）：谁玩过、聊了什么。
+
+    只在 5174，且 5174 不对外——公网只映射 5175 的网关。同 `admin` / `comic`
+    那些管理页一个口径。
+    """
+    return send_from_directory(WEB_DIR, "persona_admin.html")
 
 
 @app.route("/output")

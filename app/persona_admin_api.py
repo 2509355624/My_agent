@@ -1,0 +1,262 @@
+"""角色扮演的「查看台」接口（2026-11-03）。
+
+## 干什么
+
+给站主看：**谁玩过角色扮演、聊了什么**。
+
+只挂在 5174，而且 5174 不对外（公网只映射 5175 的网关），所以不需要额外
+鉴权——和 `admin` / `comic` 那些管理页同一个口径。
+
+## 数据有两个来源
+
+    登录 / 网页    agents/qq/sessions/persona_<key>.jsonl
+    游客           agents/qq/游客-角色扮演/<日期>/<uuid>.jsonl
+
+游客按天分目录，同一个 uuid 可能散在多天的文件里，读的时候要合并。
+
+## 会话键长什么样
+
+    private_<QQ>              QQ 私聊
+    group_<群号>_<QQ>         群聊（2026-11-03 起不再实际扮演，这是历史数据）
+    group_<群号>              群聊早期版本（没按人隔离）
+    web_<QQ>                  网页端登录用户
+    web_local                 网页端未传身份
+    <uuid>                    游客
+"""
+import glob
+import json
+import logging
+import os
+
+from flask import Blueprint, jsonify, request
+
+from app import guest, persona
+from app.config import BASE_DIR
+
+log = logging.getLogger("persona_admin")
+
+bp = Blueprint("persona_admin", __name__)
+
+SESS_DIR = os.path.join(BASE_DIR, "agents", "qq", "sessions")
+
+
+def _norm(msgs):
+    """把一份历史拆成展示用的消息列表（剥掉三行元数据）。"""
+    out = []
+    for m in msgs:
+        if not isinstance(m, dict):
+            continue
+        body = m.get("content") or ""
+        if m.get("role") == "user":
+            out.append({"role": "user", "text": body})
+        else:
+            reply, _scene, mood, intensity, state = persona.split_turn(body)
+            if reply.strip():
+                out.append({"role": "assistant", "text": reply,
+                            "mood": mood, "intensity": intensity,
+                            "state": state})
+    return out
+
+
+def _read_jsonl(path):
+    msgs = []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    msgs.append(json.loads(line))
+                except ValueError:
+                    pass
+    except OSError:
+        log.warning("读不了 %s", path)
+    return msgs
+
+
+def _label(key):
+    """会话键 → (类型, 展示名, 简写)。"""
+    k = str(key or "")
+    if k.startswith("private_"):
+        return "私聊", "QQ %s" % k[8:], "QQ私聊"
+    if k.startswith("group_"):
+        rest = k[6:]
+        if "_" in rest:
+            gid, uid = rest.rsplit("_", 1)
+            return "群聊", "群 %s · QQ %s" % (gid, uid), "QQ群聊"
+        return "群聊", "群 %s" % rest, "QQ群聊"
+    if k.startswith("web_"):
+        who = k[4:]
+        if who == "local":
+            return "网页", "网页（未登录）", "网页"
+        return "网页", "网页 · %s" % who, "网页"
+    return "游客", "游客 %s" % k[:8], "游客"
+
+
+def _sessions_from_files():
+    """扫登录/网页的历史文件。"""
+    out = []
+    for p in glob.glob(os.path.join(SESS_DIR, "persona_*.jsonl")):
+        name = os.path.basename(p)
+        key = name[len("persona_"):-len(".jsonl")]
+        msgs = _read_jsonl(p)
+        if not msgs:
+            continue
+        kind, label, short = _label(key)
+        try:
+            mtime = os.path.getmtime(p)
+        except OSError:
+            mtime = 0
+        out.append({
+            "key": key,
+            "kind": kind,
+            "short": short,
+            "label": label,
+            "source": "file",
+            "messages": len(msgs),
+            "turns": sum(1 for m in msgs if m.get("role") == "assistant"),
+            "mtime": mtime,
+            "path": p,
+        })
+    return out
+
+
+def _sessions_from_guests():
+    """扫游客目录，按 uuid 合并跨天的文件。"""
+    out = []
+    if not os.path.isdir(guest.GUEST_ROOT):
+        return out
+    seen = {}
+    for day in sorted(os.listdir(guest.GUEST_ROOT)):
+        d = os.path.join(guest.GUEST_ROOT, day)
+        if not os.path.isdir(d):
+            continue
+        for f in os.listdir(d):
+            if not f.endswith(".jsonl"):
+                continue
+            uid = f[: -len(".jsonl")]
+            p = os.path.join(d, f)
+            msgs = _read_jsonl(p)
+            rec = seen.setdefault(uid, {"key": uid, "kind": "游客",
+                                        "short": "游客", "label":
+                                        "游客 %s" % uid[:8],
+                                        "source": "guest",
+                                        "messages": 0, "turns": 0,
+                                        "mtime": 0, "path": p})
+            rec["messages"] += len(msgs)
+            rec["turns"] += sum(1 for m in msgs
+                                if m.get("role") == "assistant")
+            try:
+                rec["mtime"] = max(rec["mtime"], os.path.getmtime(p))
+            except OSError:
+                pass
+    out.extend(seen.values())
+    return out
+
+
+def _card_name(card_id):
+    if not card_id:
+        return ""
+    c = persona.find_card(card_id)
+    return (c or {}).get("name") or card_id
+
+
+@bp.route("/api/persona_admin/list")
+def api_list():
+    """所有玩过的会话，按最后活动时间倒序。"""
+    rows = _sessions_from_files() + _sessions_from_guests()
+
+    # 补上「当前演的是谁」——state 里有就显示，没有就算了
+    st = persona._load_state()                     # noqa: SLF001
+    for r in rows:
+        ent = st.get(r["key"]) or {}
+        if r["source"] == "guest":
+            # 游客不存 state（走 guest 模块那套），但他们固定演一张卡
+            from app.persona_api import GUEST_CARD_ID
+            r["card"] = _card_name(GUEST_CARD_ID)
+        else:
+            r["card"] = _card_name(ent.get("card"))
+        r["state"] = str(ent.get("state") or "")
+
+    rows.sort(key=lambda r: r["mtime"], reverse=True)
+    for r in rows:
+        r["mtime_text"] = _ts(r["mtime"])
+        r.pop("path", None)
+    return jsonify({"ok": True, "total": len(rows), "sessions": rows})
+
+
+def _ts(sec):
+    if not sec:
+        return ""
+    import time
+    return time.strftime("%m-%d %H:%M", time.localtime(sec))
+
+
+@bp.route("/api/persona_admin/detail")
+def api_detail():
+    """某个会话的完整对话。游客会跨天合并。"""
+    key = str(request.args.get("key") or "").strip()
+    source = str(request.args.get("source") or "file").strip()
+    if not key:
+        return jsonify({"ok": False, "error": "缺 key"}), 400
+
+    if source == "guest":
+        uid = guest.check_id(key) or key
+        raw = guest.load_hist(uid)
+        path = ""
+    else:
+        # 键里可能有路径分隔符，挡一下
+        if "/" in key or "\\" in key or ".." in key:
+            return jsonify({"ok": False, "error": "key 不合法"}), 400
+        path = os.path.join(SESS_DIR, "persona_%s.jsonl" % key)
+        if not os.path.isfile(path):
+            return jsonify({"ok": False, "error": "这个会话没有记录"}), 404
+        raw = _read_jsonl(path)
+
+    kind, label, short = _label(key)
+    st = persona._load_state().get(key) or {}       # noqa: SLF001
+    return jsonify({
+        "ok": True,
+        "key": key,
+        "kind": kind,
+        "short": short,
+        "label": label,
+        "card": _card_name(st.get("card")),
+        "note": str(st.get("note") or ""),
+        "state": str(st.get("state") or ""),
+        "messages": _norm(raw),
+    })
+
+
+@bp.route("/api/persona_admin/delete", methods=["POST"])
+def api_delete():
+    """删掉一个会话（游客目录里的文件 / 登录历史 + state）。"""
+    body = request.get_json(silent=True) or {}
+    key = str(body.get("key") or "").strip()
+    source = str(body.get("source") or "file").strip()
+    if not key:
+        return jsonify({"ok": False, "error": "缺 key"}), 400
+
+    if source == "guest":
+        uid = guest.check_id(key) or key
+        n = 0
+        if os.path.isdir(guest.GUEST_ROOT):
+            for day in os.listdir(guest.GUEST_ROOT):
+                p = os.path.join(guest.GUEST_ROOT, day, uid + ".jsonl")
+                if os.path.isfile(p):
+                    os.remove(p)
+                    n += 1
+        return jsonify({"ok": True, "deleted": n})
+
+    if "/" in key or "\\" in key or ".." in key:
+        return jsonify({"ok": False, "error": "key 不合法"}), 400
+    p = os.path.join(SESS_DIR, "persona_%s.jsonl" % key)
+    if os.path.isfile(p):
+        os.remove(p)
+    # state 里那条也清掉，不然列表还挂着「扮演中」
+    st = persona._load_state()                      # noqa: SLF001
+    if key in st:
+        st.pop(key)
+        persona._save_state(st)                     # noqa: SLF001
+    return jsonify({"ok": True, "deleted": 1})

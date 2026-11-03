@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>角色扮演 · 查看台</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23f472b6'/></svg>">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0a0a0f; --bg-elev: #12121a; --bg-input: #1a1a24;
+    --border: #2a2a3a; --border-soft: #1f1f2e;
+    --text: #e8e8f0; --text-dim: #8888a0; --text-mute: #555570;
+    --accent: #f472b6; --accent-dim: #6d2a48;
+    --ok: #4ade80; --err: #f87171; --warn: #fbbf24;
+    --r: 10px; --rs: 7px;
+  }
+  html, body { background: var(--bg); color: var(--text); height: 100%;
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 13px; overflow: hidden; }
+  .app { display: grid; grid-template-columns: 360px 1fr; height: 100vh; }
+
+  /* 左栏 */
+  .side { border-right: 1px solid var(--border-soft); display: flex;
+    flex-direction: column; min-height: 0; background: var(--bg-elev); }
+  .side-head { padding: 12px 14px; border-bottom: 1px solid var(--border-soft); }
+  .side-head h1 { font-size: 14px; font-weight: 600; display: flex;
+    align-items: center; gap: 8px; }
+  .side-head .cnt { font-size: 11px; color: var(--text-mute); font-weight: 400; }
+  .filters { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .chip { background: var(--bg-input); border: 1px solid var(--border);
+    color: var(--text-dim); border-radius: 20px; padding: 3px 10px;
+    font-size: 11px; cursor: pointer; }
+  .chip.on { border-color: var(--accent); color: var(--accent); }
+  .side-list { flex: 1; overflow-y: auto; padding: 6px; }
+  .row { padding: 9px 11px; border-radius: var(--rs); cursor: pointer;
+    margin-bottom: 2px; border: 1px solid transparent; }
+  .row:hover { background: var(--bg-input); }
+  .row.on { background: var(--bg-input); border-color: var(--accent-dim); }
+  .row .l1 { display: flex; align-items: center; gap: 6px; }
+  .row .tag { font-size: 10px; padding: 1px 6px; border-radius: 8px;
+    border: 1px solid var(--border); color: var(--text-mute); }
+  .row .tag.g { color: var(--warn); border-color: #6b5218; }
+  .row .tag.w { color: #4fc3f7; border-color: #1e4a5c; }
+  .row .tag.v { color: var(--accent); border-color: var(--accent-dim); }
+  .row .nm { font-size: 12.5px; flex: 1; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .row .l2 { font-size: 11px; color: var(--text-mute); margin-top: 3px;
+    display: flex; gap: 8px; }
+  .row.on .nm { color: var(--accent); }
+
+  /* 右栏 */
+  .main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .top { padding: 11px 16px; border-bottom: 1px solid var(--border-soft);
+    display: flex; align-items: center; gap: 10px; min-height: 48px; }
+  .top .who { font-size: 14px; font-weight: 600; }
+  .top .meta { font-size: 11px; color: var(--text-mute); }
+  .top .sp { flex: 1; }
+  .btn { background: var(--bg-input); border: 1px solid var(--border);
+    color: var(--text); border-radius: var(--rs); padding: 6px 12px;
+    font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.danger:hover { border-color: var(--err); color: var(--err); }
+
+  .log { flex: 1; overflow-y: auto; padding: 18px; display: flex;
+    flex-direction: column; gap: 12px; }
+  .msg { max-width: 74%; }
+  .msg.u { align-self: flex-end; }
+  .msg.a { align-self: flex-start; }
+  .msg .b { padding: 10px 14px; border-radius: var(--r); line-height: 1.75;
+    white-space: pre-wrap; word-break: break-word; }
+  .msg.u .b { background: var(--accent-dim); }
+  .msg.a .b { background: var(--bg-elev); border: 1px solid var(--border-soft); }
+  .msg .m { font-size: 10.5px; color: var(--text-mute); margin-top: 3px; }
+  .empty { color: var(--text-mute); text-align: center; padding: 80px 20px;
+    font-size: 13px; line-height: 2; }
+  .note { margin: 0 18px 10px; padding: 10px 14px; background: var(--bg-elev);
+    border-left: 2px solid var(--accent); border-radius: var(--rs);
+    font-size: 12px; color: var(--text-dim); line-height: 1.7; }
+  .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+    background: var(--bg-input); border: 1px solid var(--border);
+    padding: 8px 16px; border-radius: 18px; font-size: 12.5px; opacity: 0;
+    transition: opacity .2s; pointer-events: none; z-index: 99; }
+  .toast.on { opacity: 1; }
+  .toast.err { border-color: var(--err); color: var(--err); }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="side">
+    <div class="side-head">
+      <h1>角色扮演 <span class="cnt" id="cnt">加载中…</span></h1>
+      <div class="filters" id="filters">
+        <button class="chip on" data-k="all">全部</button>
+        <button class="chip" data-k="网页">网页</button>
+        <button class="chip" data-k="游客">游客</button>
+        <button class="chip" data-k="私聊">QQ私聊</button>
+        <button class="chip" data-k="群聊">QQ群聊</button>
+      </div>
+    </div>
+    <div class="side-list" id="list"></div>
+  </aside>
+
+  <main class="main">
+    <div class="top">
+      <span class="who" id="who">选一个会话</span>
+      <span class="meta" id="meta"></span>
+      <span class="sp"></span>
+      <button class="btn" id="refresh">刷新</button>
+      <button class="btn danger" id="del" style="display:none">删除</button>
+    </div>
+    <div class="note" id="note" style="display:none"></div>
+    <div class="log" id="log">
+      <div class="empty">左边点一个人<br>看他跟角色聊了什么</div>
+    </div>
+  </main>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let ALL = [], FILTER = "all", CUR = null;
+
+async function api(p, opt) {
+  const r = await fetch(p, opt);
+  let d;
+  try { d = await r.json(); } catch (e) { d = { ok: false, error: "返回不是 JSON" }; }
+  if (!r.ok || d.ok === false) throw new Error(d.error || ("HTTP " + r.status));
+  return d;
+}
+
+function toast(t, err) {
+  const el = $("toast");
+  el.textContent = t;
+  el.className = "toast on" + (err ? " err" : "");
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.className = "toast"; }, 2600);
+}
+
+function tagClass(kind) {
+  return kind === "游客" ? "v" : kind === "网页" ? "w"
+       : kind === "群聊" ? "g" : "";
+}
+
+function render() {
+  const box = $("list");
+  box.innerHTML = "";
+  const rows = ALL.filter(r => FILTER === "all" || r.short === FILTER);
+  if (!rows.length) {
+    box.innerHTML = '<div class="empty" style="padding:30px 10px">没有匹配的会话</div>';
+    return;
+  }
+  rows.forEach(r => {
+    const el = document.createElement("div");
+    el.className = "row" + (CUR && CUR.key === r.key && CUR.source === r.source ? " on" : "");
+    el.innerHTML =
+      '<div class="l1"><span class="tag ' + tagClass(r.kind) + '"></span>' +
+      '<span class="nm"></span></div>' +
+      '<div class="l2"><span class="card"></span><span class="st"></span>' +
+      '<span class="tm"></span></div>';
+    el.querySelector(".tag").textContent = r.short;
+    el.querySelector(".nm").textContent = r.label;
+    el.querySelector(".card").textContent = r.card ? ("演 " + r.card) : "";
+    el.querySelector(".st").textContent = r.turns + " 轮";
+    el.querySelector(".tm").textContent = r.mtime_text;
+    el.onclick = () => open(r);
+    box.appendChild(el);
+  });
+  $("cnt").textContent = "共 " + ALL.length + " 个会话";
+}
+
+function setNote(text) {
+  const n = $("note");
+  if (text) { n.textContent = "【之前的事】" + text; n.style.display = ""; }
+  else { n.style.display = "none"; }
+}
+
+async function open(r) {
+  CUR = r;
+  render();
+  $("who").textContent = r.label;
+  $("meta").textContent = r.short + " · " + r.turns + " 轮 · " + r.mtime_text;
+  $("del").style.display = "";
+  const log = $("log");
+  log.innerHTML = '<div class="empty">读取中…</div>';
+  try {
+    const d = await api("/api/persona_admin/detail?key=" +
+      encodeURIComponent(r.key) + "&source=" + encodeURIComponent(r.source));
+    $("who").textContent = d.label + (d.card ? ("　" + d.card) : "");
+    setNote(d.note);
+    log.innerHTML = "";
+    const msgs = d.messages || [];
+    if (!msgs.length) {
+      log.innerHTML = '<div class="empty">这个会话没有消息</div>';
+      return;
+    }
+    msgs.forEach(m => {
+      const el = document.createElement("div");
+      el.className = "msg " + (m.role === "user" ? "u" : "a");
+      el.innerHTML = '<div class="b"></div><div class="m"></div>';
+      el.querySelector(".b").textContent = m.text;
+      if (m.role === "assistant" && m.mood) {
+        el.querySelector(".m").textContent =
+          m.mood + " " + (m.intensity || 0) + (m.state ? ("　" + m.state) : "");
+      }
+      log.appendChild(el);
+    });
+    log.scrollTop = 0;
+  } catch (e) {
+    log.innerHTML = '<div class="empty">读取失败：' + e.message + '</div>';
+    toast(e.message, true);
+  }
+}
+
+async function load() {
+  try {
+    const d = await api("/api/persona_admin/list");
+    ALL = d.sessions || [];
+    $("cnt").textContent = "共 " + ALL.length + " 个会话";
+    render();
+  } catch (e) { toast(e.message, true); }
+}
+
+$("filters").onclick = (e) => {
+  const b = e.target.closest(".chip");
+  if (!b) return;
+  FILTER = b.dataset.k;
+  [...$("filters").children].forEach(x => x.classList.toggle("on", x === b));
+  render();
+};
+
+$("refresh").onclick = () => { load(); toast("已刷新"); };
+
+$("del").onclick = async () => {
+  if (!CUR) return;
+  if (!confirm("删掉「" + CUR.label + "」的全部对话记录？删了找不回来。")) return;
+  try {
+    await api("/api/persona_admin/delete", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: CUR.key, source: CUR.source }),
+    });
+    toast("已删除");
+    CUR = null;
+    $("del").style.display = "none";
+    $("who").textContent = "选一个会话";
+    $("meta").textContent = "";
+    setNote("");
+    $("log").innerHTML = '<div class="empty">左边点一个人<br>看他跟角色聊了什么</div>';
+    load();
+  } catch (e) { toast(e.message, true); }
+};
+
+load();
+</script>
+</body>
+</html>
