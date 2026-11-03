@@ -139,6 +139,16 @@
   .empty { color: var(--text-mute); text-align: center; padding: 70px 20px;
     font-size: 13px; line-height: 2; }
 
+  /* 开场导读（2026-11-04）：新线第一屏先交代「现在是什么情况」，
+     不然玩家打开就是空的，不知道怎么开口。灰色 = 系统说话，不是她说的。 */
+  .intro { margin: 10px 2px 18px; padding: 12px 14px; border-radius: var(--rs);
+    background: var(--bg-elev);
+    border: 1px dashed var(--border);
+    color: var(--text-dim); font-size: 13px; line-height: 1.85;
+    white-space: pre-wrap; }
+  .intro::before { content: "开场"; display: block; margin-bottom: 6px;
+    font-size: 11px; letter-spacing: .12em; color: var(--text-mute); }
+
   /* `flex: none` 保证输入区不被压缩——它是这一页唯一的操作口。
      `padding-bottom` 走 `max()`：底部安全区（全面屏手势条、QQ 浏览器的
      返回栏）有多高就留多高，没有就退回原来的 10px。
@@ -433,6 +443,8 @@
 const $ = id => document.getElementById(id);
 const QQ = new URLSearchParams(location.search).get("qq") || "";
 let card = null, busy = false, msgs = [];
+// 开场导读（2026-11-04）：新线第一屏的灰色背景说明，由后端生成一次后缓存。
+let INTRO = "";
 // 用户气泡的临时序号（它们不挂图，不需要归档行号，只要 DOM id 唯一）。
 let U_SEQ = 0;
 // 更早的记录还能不能往回翻（`/api/persona/session` 的 `more`）。
@@ -865,13 +877,47 @@ function setPicError(idx, text) {
   pic.innerHTML = '<div class="ph" style="color:var(--err)">' + text + '</div>';
 }
 
+// ── 开场导读（2026-11-04）──────────────────────────────
+// 新线（一点历史都没有）第一屏先说明「现在是什么情况」，再让玩家开口。
+// 用户原话：「不然我就莫名其妙地开始了，都不知道怎么聊」。灰条是**系统**
+// 说话，不是她说的，所以不复用气泡样式，也不进消息数组。
+function renderIntro() {
+  const log = $("log");
+  const old = log.querySelector(".intro");
+  if (old) old.remove();
+  if (!INTRO) {
+    if (!msgs.length) {
+      log.innerHTML = '<div class="empty">还没开始<br>说句话试试</div>';
+    }
+    return;
+  }
+  const el = document.createElement("div");
+  el.className = "intro";
+  el.textContent = INTRO;
+  log.insertBefore(el, log.firstChild);
+}
+
+async function ensureIntro() {
+  if (msgs.length || !card) return;         // 有历史 / 没选角色：不需要开场
+  if (!INTRO) {
+    // 生成要一次 LLM 调用（2~4 秒），先给个占位，别让第一屏空着。
+    INTRO = "正在铺开场…";
+    renderIntro();
+    try { INTRO = (await api("/api/persona/opening")).intro || ""; }
+    catch (e) { INTRO = ""; }
+  }
+  renderIntro();
+  const log = $("log");
+  log.scrollTop = log.scrollHeight;
+}
+
 function renderAll(list) {
   msgs = list || [];
   const log = $("log");
   log.innerHTML = "";
   if (!msgs.length) {
-    log.innerHTML = '<div class="empty">还没开始<br>说句话试试</div>';
-    return;
+    log.innerHTML = "";
+    return;                 // 空屏交给 renderIntro：有导读就铺开场，没有才提示
   }
   msgs.forEach((m, i) => {
     const num = (typeof m.n === "number") ? m.n : null;
@@ -930,7 +976,9 @@ async function loadEarlier() {
           if (saved) setPic(m.n, saved);
         }
       });
-      log.insertBefore(frag, log.firstChild);
+      log.insertBefore(frag, log.querySelector(".intro")
+                             ? log.querySelector(".intro").nextSibling
+                             : log.firstChild);
       msgs = rows.concat(msgs);
       log.scrollTop = log.scrollHeight - keep;   // 视觉上停在原地
     }
@@ -951,11 +999,13 @@ async function loadSession() {
     $("curName").textContent = card ? card.name : "选一个角色";
     $("live").style.display = card ? "" : "none";
     renderQuota();
+    INTRO = d.intro || "";     // 后端缓存的开场导读（清空存档后会变空）
     renderAll(d.messages || []);
     MORE_HIST = !!d.more;      // 归档里还有更早的，往上滚就翻
     renderState(d);
     AFF = d.affection || null;
     renderAff(AFF);
+    ensureIntro();       // 新线：铺一段灰底说明当前情况（不阻塞上面的渲染）
     loadPics();          // 服务器映射恢复历史图（重登/换设备也能看到）
     await loadCards();
     applyRoleUI();
@@ -1206,6 +1256,7 @@ $("wipeOk").onclick = async () => {
     const d = await post("/api/persona/affection/wipe", { confirm: WIPE_TEXT });
     closeWipe();
     clearPicStore();              // 本地图缓存也得清：行号从 0 重数，旧图会挂到新气泡上
+    INTRO = "";                   // 开场导读要按新起点重铺，别留着上一轮的场景
     toast(d.reply || "存档已删除");
     await loadSession();          // 聊天记录和好感都清了，整屏重画
   } catch (e) {

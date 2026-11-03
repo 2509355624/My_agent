@@ -72,6 +72,40 @@ class AffBase(unittest.TestCase):
         return persona.resolve_line(key)
 
 
+class DefaultRaidTest(AffBase):
+    """默认攻略模式（2026-11-04 用户要求）。
+
+    以前只有手动切过一次的线才有好感记录，新线全走自由模式——网页右栏整块
+    不显示、QQ 尾行没有好感、结算也不跑，玩家进来不知道自己在玩什么。
+    """
+
+    def test_new_line_is_raid_by_default(self):
+        self._enter()
+        key = persona.resolve_line("private_1")
+        self.assertTrue(affection.is_raid(key))
+        self.assertEqual(affection.status(key)["mode"], "raid")
+
+    def test_default_raid_starts_at_card_start(self):
+        """默认开启也要认角色卡的起点，不能一律从 0 开始。"""
+        persona.save_cards([_card("妹妹", start_level=2)])
+        persona.switch_line("private_1", persona.find_card("妹妹"))
+        st = affection.status(persona.resolve_line("private_1"))
+        self.assertEqual(st["level"], 2)
+        self.assertEqual(st["value"], 12)
+
+    def test_no_card_still_no_record(self):
+        """没在演谁就不该凭空建记录（这条线还没选角色）。"""
+        self.assertIsNone(affection.status(persona.resolve_line("private_9")))
+
+    def test_switching_to_free_sticks(self):
+        """默认攻略 ≠ 切不回自由：封存之后下次读仍然是自由模式。"""
+        self._enter()
+        key = persona.resolve_line("private_1")
+        affection.set_mode(key, False)
+        self.assertFalse(affection.is_raid(key))
+        self.assertEqual(affection.status(key)["mode"], "free")
+
+
 class ConfigTest(AffBase):
     def test_missing_config_falls_back_to_default(self):
         with mock.patch.object(affection, "config_path",
@@ -110,9 +144,11 @@ class ConfigTest(AffBase):
 
 class SettleTest(AffBase):
     def test_free_mode_is_a_noop(self):
+        """切到自由模式之后才不结算（2026-11-04 起默认就是攻略）。"""
         self._enter()
-        res = affection.settle(persona.resolve_line("private_1"),
-                               {"delta": 10, "turn_type": "chat"})
+        key = persona.resolve_line("private_1")
+        affection.set_mode(key, False)          # 显式封存
+        res = affection.settle(key, {"delta": 10, "turn_type": "chat"})
         self.assertFalse(res["active"])
 
     def test_result_always_carries_mode(self):
@@ -268,9 +304,10 @@ class ModeTest(AffBase):
         self.assertEqual(st["level"], 2)
         self.assertEqual(st["value"], 12)        # 二级门槛
 
-    def test_wipe_numbers_without_raid_is_none(self):
-        self._enter()
-        self.assertIsNone(affection.wipe_numbers(persona.resolve_line("private_1")))
+    def test_wipe_numbers_without_line_is_none(self):
+        """没在演谁时没东西可清（默认攻略只对有角色线的会话生效）。"""
+        self.assertIsNone(affection.wipe_numbers(
+            persona.resolve_line("private_9")))
 
     def _to_jail(self, key):
         """把这条线打到进局子，返回结局 key。
@@ -474,6 +511,7 @@ class RaidTurnTest(AffBase):
 
     def test_free_mode_has_no_affection_field(self):
         self._enter()
+        affection.set_mode(persona.resolve_line("private_1"), False)
         with mock.patch.object(persona.llm, "call_llm",
                                side_effect=['{"intent": "neutral", "note": "闲聊"}',
                                             self.REPLY]) as m:
@@ -540,7 +578,7 @@ class CommandTest(AffBase):
     def test_raid_commands_roundtrip(self):
         self._enter()
         out = persona.handle_command("private_1", "攻略模式")
-        self.assertIn("攻略模式开启", out)
+        self.assertIn("攻略模式", out)      # 默认就是，回执说「现在就是」
         self.assertTrue(affection.is_raid(persona.resolve_line("private_1")))
         out = persona.handle_command("private_1", "自由模式")
         self.assertIn("封存", out)

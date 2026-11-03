@@ -272,6 +272,7 @@ def get_session():
         "ok": True,
         "card": _card_json(card),
         "note": str(ent.get("note") or ""),
+        "intro": str(ent.get("intro") or ""),
         "state": str(ent.get("state") or ""),
         "mood": str(ent.get("mood") or ""),
         "intensity": int(ent.get("intensity") or 0),
@@ -282,6 +283,21 @@ def get_session():
         "affection": aff,
         "role": "member",
     })
+
+
+@bp.route("/api/persona/opening")
+def persona_opening():
+    """开场导读：她此刻在哪、在干什么、你们什么关系、从哪儿开口。
+
+    2026-11-04 用户要的：「不然我就莫名其妙地开始了，都不知道怎么聊」。
+    没有历史的新线上，网页先画一块灰条说明背景；生成一次就缓存进状态，
+    清空存档后重铺。生成失败回空串，前端就不画那块（不该挡住整页）。
+    """
+    role, who, _token = _who()
+    if role == "guest":
+        return jsonify({"ok": True, "intro": ""})
+    key = _active_key(_key(who))
+    return jsonify({"ok": True, "intro": persona.opening(key)})
 
 
 @bp.route("/api/persona/history")
@@ -392,6 +408,13 @@ def switch():
     # （2026-11-03 起这段逻辑收进 persona.switch_line——QQ 私聊分线用的是
     #   同一套，切回旧线时小记/轮次保留的行为两边自然一致。）
     ckey = persona.switch_line(base, card)                # noqa: SLF001
+    # 默认攻略模式（2026-11-04）：切过来就把好感记录建好（按这张卡的起点），
+    # 右栏一打开就有「关系 · 攻略模式」，不用等玩家先发一句话。
+    try:
+        from app import affection
+        affection.status(ckey)
+    except Exception:                                     # noqa: BLE001
+        pass
     log.info("网页切角色：%s → %s（线 %s）", base, card["name"], ckey)
     return jsonify({"ok": True, "card": _card_json(card),
                     "reply": "从现在起我是%s。" % card["name"]})

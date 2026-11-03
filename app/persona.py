@@ -46,6 +46,7 @@ settings.json**：那是用户在管理页手配的长期配置，扮演态是�
 """
 
 import collections
+import datetime
 import json
 import logging
 import os
@@ -151,6 +152,16 @@ TEMPERATURE = 1.05
 # 所以「扮演一轮 ≈ 生图一次」这个用户定的目标是达成的。
 NOTE_MAX_CHARS = 1000
 NOTE_EVERY_TURNS = 5
+
+# 提示词里报给模型的字数，比硬上限留一成余量。
+#
+# 2026-11-04 用户报的 bug：他做的早餐，AI 说成是自己做的，而且「回忆」看着
+# 一直不更新。查下来是 `note[:1000]` 硬切——小记按时间顺序写，**最新的事在
+# 末尾**，只要模型写超一点，被切掉的永远是刚发生的那段。日志里这条线连续
+# 7 次压缩全是「正好 1000 字」，最后一次切在「第二天」三个字后面，早餐整段
+# 没进记忆；再叠上 12 条窗口已经把「我准备了早餐」挤出去，模型手里再没有
+# 任何反证，就顺着「谢谢纱雾」演成「谢谢我做的饭」。
+NOTE_SOFT = 900
 
 # 扮演态的静默窗口（秒）：这之内的连发算同一条。用户 2026-10-16 定的 10 秒。
 # 群聊默认那 1.5 秒是给「连发三句问同一件事」用的；聊天不一样——人打字是
@@ -323,6 +334,11 @@ _CONTRACT = (
     "\n"
     "**不要替对方决定你做了什么。** 你做了的事，她只写自己的反应。\n"
     "\n"
+    "**谁做的，照对话原文。** 你说「谢谢」不等于你谢的是她做的东西——"
+    "饭是谁做的、茶是谁泡的、东西是谁买的，按你说过的话算。"
+    "没搞清是谁做的，就只写她自己的反应（脸红、嘴硬、低头），"
+    "**不要替自己认领一件没做过的事**。\n"
+    "\n"
     "### 你离开她视线的时候\n"
     "\n"
     "你会走开——去别的房间、去楼下、去上班。**镜头不许跟着你走空**，"
@@ -469,11 +485,16 @@ _NOTE_PROMPT = (
     "- 答应过什么、约定了什么、还没做完的事\n"
     "- 对方喜欢什么、不喜欢什么、忌讳什么\n"
     "- 现在的处境：在哪、什么时间、彼此什么状态\n"
+    "- **谁做了什么事**（他做的饭、他泡的茶、我答应的事）——写清是谁，"
+    "不要因为一句「谢谢」就认成自己做的\n"
     "\n"
     "**不要写这些**：\n"
     "- 不要复述原话，不要「对方说」「我说」这类标记\n"
     "- 不要一次性的细节（当时穿的什么衣服、说了哪句玩笑）——除非它后面还有用\n"
     "- 不要评价，不要总结「这一天很特别」这种话\n"
+    "\n"
+    "**写超了怎么办**：先删「我原来记得的」里不重要的旧事，"
+    "把「最近发生的」写完——**最新的事比早期的细节重要，不许写到一半断掉**。\n"
     "\n"
     "直接写回忆本身，不要标题，不要分点。\n"
     "\n"
@@ -1130,7 +1151,8 @@ def _erase(session_key):
     ent = _entry(line)
     if not isinstance(ent, dict):
         return None
-    ent.update({"note": "", "turns": 0, "mood": "", "intensity": 0, "state": ""})
+    ent.update({"note": "", "turns": 0, "mood": "", "intensity": 0, "state": "",
+                "intro": ""})     # 开场导读一起清：下一屏要按新起点重铺
     state = _load_state()
     state[line] = ent
     if line != session_key:
@@ -1733,7 +1755,14 @@ def handle_command(session_key, text, addressed=False):
     switch_line(session_key, card)
     if was and was["id"] == card["id"]:
         return "我现在就是%s呀。" % card["name"]
-    return "好，从现在起我是%s。想让我变回来就发「#出戏」。" % card["name"]
+    # 默认攻略模式（2026-11-04 用户要求）：进来就先有一份好感记录，
+    # 网页右栏 / QQ 尾行立刻有东西可看；顺手把玩法讲明白，别让玩家自己猜。
+    try:
+        affection.status(resolve_line(session_key))
+    except Exception:                                  # noqa: BLE001
+        log.warning("进入扮演时建好感记录失败 %s", session_key)
+    return ("好，从现在起我是%s（攻略模式）。每轮回话末尾会带一行你俩现在的关系，"
+            "想关掉就发「自由模式」。想让我变回来就发「#出戏」。" % card["name"])
 
 
 # ─── 一轮 ────────────────────────────────────────────
@@ -2384,6 +2413,15 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
             head = head + "\n\n" + blk
     hist = trim(_load_hist(key))
 
+    # 第一轮把网页上那段开场导读也发给模型（2026-11-04）。
+    # 否则玩家照着导读里的场景开口（「咖啡好香」），模型手里根本没这个场景，
+    # 只能另起一个头，两边当场对不上。只在没有历史时拼，之后靠状态行承接。
+    if not hist:
+        intro = str((_entry(key) or {}).get("intro") or "").strip()
+        if intro:
+            head += ("\n\n【此刻】\n" + intro
+                     + "\n（这是场景设定，照着它写，不要把这段话复述出来。）")
+
     # 群里带上说话人，模型才知道是谁在说话（同 qq_bot 正文前缀的做法）；
     # 私聊和空正文都不加——「张三：」后面什么都没有比不写更糊涂。
     said = text
@@ -2791,6 +2829,157 @@ def _bump_turn(session_key):
                          name="persona-note", daemon=True).start()
 
 
+def _cut_sentence(text, limit):
+    """截到 `limit` 以内，尽量停在句末标点上（不切半句）。"""
+    raw = str(text or "")
+    if len(raw) <= limit:
+        return raw
+    head = raw[:limit]
+    cut = -1
+    for ch in "。！？…\n":
+        cut = max(cut, head.rfind(ch))
+    if cut >= limit * 0.5:
+        return head[:cut + 1].rstrip()
+    return head.rstrip() + "…"
+
+
+def _clip_note(text, limit=NOTE_MAX_CHARS):
+    """把过长的小记压进 `limit`：**保开头也保结尾，丢中间**。
+
+    2026-11-04 修：原来 `note[:limit]` 硬切，而小记是按时序写的——最新的
+    在末尾，一超长就被砍掉的正好是刚发生的事（实测这条线连续 7 次压缩都是
+    「正好 1000 字」，全切在最新那段之前）。结果就是「回忆」永远停在上一次，
+    模型手里既没有窗口也没有小记，只能凭句式瞎猜谁做了什么。
+
+    开头留着是因为那是关系的基础，结尾留着是因为那是刚发生的事，中间的过渡
+    细节最不值钱——小记本来就是摘要，不是流水账。
+
+    按段落取舍，段内再按句末标点收尾；段落太少（一整块）时退化成按句截尾。
+    """
+    s = str(text or "").strip()
+    if len(s) <= limit:
+        return s
+    paras = [p.strip() for p in s.replace("\r", "").split("\n") if p.strip()]
+    if len(paras) < 3:
+        return _cut_sentence(s, limit)
+    # 尾部拿七成（2026-11-04 实测：模型根本不理「900 字以内」，这次直接写了
+    # 2002 字）。既然注定要丢，就丢旧的——玩家能感觉到「她不记得刚才」，
+    # 但感觉不到「她记不清上周」。
+    head_budget = int(limit * 0.3)
+    tail_budget = limit - head_budget - 6          # 6 给中间的「……」
+    head, used = [], 0
+    for p in paras:
+        if used + len(p) + 1 > head_budget:
+            break
+        head.append(p)
+        used += len(p) + 1
+    if not head:                                   # 第一段就超预算
+        return _cut_sentence(s, limit)
+    tail, used = [], 0
+    for p in reversed(paras[len(head):]):
+        if used + len(p) + 1 > tail_budget:
+            break
+        tail.insert(0, p)
+        used += len(p) + 1
+    if not tail:
+        return _cut_sentence("\n".join(head), limit)
+    return "\n".join(head) + "\n……\n" + "\n".join(tail)
+
+
+# ── 开场导读（2026-11-04）──────────────────────────────
+#
+# 用户的原话：「开始聊天的时候给我网页一段灰色的摘要，先说明当前是什么情况，
+# 不然我就莫名其妙地开始了，都不知道怎么聊。至少要有一个背景吧，这样 AI 和
+# 我才能知道怎么去开始。」
+#
+# 所以它不是她的台词，是给玩家看的**场景说明**：时间、地点、她正在干什么、
+# 你们是什么关系、从哪儿开口。只在没有历史的新线上生成一次，缓存进 state。
+OPENING_MAX = 260
+
+_OPENING_PROMPT = (
+    "写一段给玩家看的开场导读，%d 字以内。\n"
+    "\n"
+    "【角色】\n%s\n"
+    "\n"
+    "【你们现在的关系】%s\n"
+    "【现在的时间】%s\n"
+    "\n"
+    "要交代清楚这四件事：\n"
+    "1. 现在是什么时间、你们在什么地方；\n"
+    "2. 她这会儿正在做什么——给一个具体的、能被撞见的动作；\n"
+    "3. 你们现在是什么关系（用日常说法，**不要写等级数字**）；\n"
+    "4. 一个可以自然开口的由头（门开着、有东西在响、她手上正拿着什么）。\n"
+    "\n"
+    "**不要写**：\n"
+    "- 她的台词和内心独白（那是后面演出来的，别提前用掉）\n"
+    "- 玩家的动作、台词、心理（玩家还没开口，不许替他决定）\n"
+    "- 评价、抒情总结、堆砌的景物描写\n"
+    "- 「你可以试着…」这种游戏提示语\n"
+    "\n"
+    "用「你」指玩家、第三人称写她。直接写场景本身，不要标题，不要分点。"
+)
+
+_DAYPARTS = ((5, "深夜"), (8, "早上"), (11, "上午"), (13, "中午"),
+             (17, "下午"), (19, "傍晚"), (23, "夜里"), (24, "深夜"))
+
+
+def _daypart():
+    """现在大概是一天里的什么时候（只给个粗粒度，写进导读就够用）。"""
+    h = datetime.datetime.now().hour
+    for edge, name in _DAYPARTS:
+        if h < edge:
+            return name
+    return "深夜"
+
+
+def opening(session_key, force=False):
+    """这条线的开场导读；生成过一次就缓存。
+
+    没有角色时返回空串（网页不画那块灰条）。生成失败也返回空串——开场导读
+    是个锦上添花的东西，不能因为它挂掉整页打不开。
+    """
+    card = active_card(session_key)
+    if card is None:
+        return ""
+    ent = _entry(session_key) or {}
+    cur = str(ent.get("intro") or "").strip()
+    if cur and not force:
+        return cur
+
+    rel = ""
+    try:
+        st = affection.status(session_key) or {}          # 顺手建好感记录
+        bits = [str(st.get("levelName") or ""), str(st.get("tierName") or "")]
+        rel = "、".join([b for b in bits if b]) or "还不熟"
+    except Exception:                                     # noqa: BLE001
+        rel = "还不熟"
+
+    who = "，".join([b for b in (
+        str(card.get("name") or ""),
+        str(card.get("description") or ""),
+        str(card.get("personality") or "")) if b])
+    sysp = str(card.get("systemPrompt") or "").strip()
+    if sysp:
+        who += "\n" + sysp[:260]
+    prompt = _OPENING_PROMPT % (OPENING_MAX, who, rel, _daypart())
+    try:
+        text = str(llm.call_llm([{"role": "user", "content": prompt}],
+                                max_tokens=700) or "").strip()
+    except Exception:                                     # noqa: BLE001
+        log.exception("开场导读生成失败 %s", session_key)
+        return ""
+    if not text:
+        return ""
+    text = _cut_sentence(text, OPENING_MAX)
+    state = _load_state()
+    st = state.get(session_key)
+    if isinstance(st, dict):
+        st["intro"] = text
+        _save_state(state)
+    log.info("开场导读已生成 %s（%d 字）", session_key, len(text))
+    return text
+
+
 def compress_note(session_key):
     """把旧小记 + 最近这 20 条压成一份 ≤500 字的新小记。失败就保持原样。
 
@@ -2807,7 +2996,7 @@ def compress_note(session_key):
     convo = "\n".join(
         "%s：%s" % ("我" if m["role"] == "assistant" else "对方", m["content"])
         for m in hist)
-    prompt = _NOTE_PROMPT % (NOTE_MAX_CHARS, old or "（还没有）", convo)
+    prompt = _NOTE_PROMPT % (NOTE_SOFT, old or "（还没有）", convo)
     try:
         # 输出上限要显式给：1000 字中文约 1500 token，不给的话服务端
         # 默认上限可能截在半句话上（同 `moss_comic.write` 的坑）。
@@ -2822,8 +3011,9 @@ def compress_note(session_key):
     st = state.get(session_key)
     if not isinstance(st, dict):
         return False                          # 压缩期间出戏了，别把它写回去
-    st["note"] = note[:NOTE_MAX_CHARS]
+    st["note"] = _clip_note(note)
     st["turns"] = 0
     _save_state(state)
-    log.info("小记已更新 %s（%d 字）", session_key, len(st["note"]))
+    log.info("小记已更新 %s（%d 字，原始 %d）", session_key, len(st["note"]),
+             len(note))
     return True
