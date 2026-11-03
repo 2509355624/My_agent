@@ -209,6 +209,84 @@ class ComicStatusTest(PersonaApiBase):
         self.assertEqual(d["status"], "pending")
 
 
+class PerCardSessionTest(PersonaApiBase):
+    """切角色 = 换一条独立会话线（2026-11-03 用户要求）。
+
+    原话：「选择其他的角色就是另一个会话了，就是相同 QQ 账号的其他角色的会话」。
+
+    所以每条线的身份是 `(会话线, 角色)`：
+        web_2509355624__izumi_sagiri
+        web_2509355624__rem
+    """
+
+    def test_card_key_format(self):
+        k = persona.card_key("web_123", "rem")
+        self.assertEqual(k, "web_123__rem")
+        # 幂等：带过了不再叠
+        self.assertEqual(persona.card_key(k, "rem"), k)
+
+    def test_card_key_without_card_is_unchanged(self):
+        self.assertEqual(persona.card_key("web_123", ""), "web_123")
+
+    def test_switch_creates_separate_lines(self):
+        self.post("/api/persona/switch", name="纱雾")
+        self.post("/api/persona/switch", name="雷姆")
+        st = persona._load_state()
+        self.assertIn("web_2509355624__izumi_sagiri", st)
+        self.assertIn("web_2509355624__rem", st)
+
+    def test_active_key_follows_current_card(self):
+        self.post("/api/persona/switch", name="雷姆")
+        key = persona_api._active_key(persona_api._key(QQ))
+        self.assertTrue(key.endswith("__rem"), key)
+
+    def test_histories_are_separate(self):
+        """两条线各写各的历史，互不混。"""
+        turn = persona.Turn("回复", "1girl", "平静", 3, "坐着")
+        self.post("/api/persona/switch", name="纱雾")
+        with mock.patch.object(persona, "run_turn", return_value=turn):
+            self.post("/api/persona/chat", text="给纱雾的话")
+        self.post("/api/persona/switch", name="雷姆")
+        with mock.patch.object(persona, "run_turn", return_value=turn):
+            self.post("/api/persona/chat", text="给雷姆的话")
+
+        # `run_turn` 被 mock 了，不会自己写真历史——按线上行为补写一条，
+        # 验的是「键分开之后，两个角色落在不同文件」。
+        k1 = persona.card_key(persona_api._key(QQ), "izumi_sagiri")
+        k2 = persona.card_key(persona_api._key(QQ), "rem")
+        persona._save_hist(k1, [{"role": "user", "content": "给纱雾的话"}])
+        persona._save_hist(k2, [{"role": "user", "content": "给雷姆的话"}])
+
+        self.assertNotEqual(k1, k2)
+        self.assertIn("纱雾", persona._load_hist(k1)[0]["content"])
+        self.assertIn("雷姆", persona._load_hist(k2)[0]["content"])
+
+
+class StuckComicTest(PersonaApiBase):
+    """僵尸 running 要判失败，不能让前端无限轮询（2026-11-03）。
+
+    进程重启后 `state.json` 会永远停在 running，出图线程死了没人回写。
+    实测有过一页从 13:16 卡到 16:30。
+    """
+
+    def test_old_running_becomes_failed(self):
+        import time
+        d = os.path.join(self.tmp.name, "moss_comic", "stuck")
+        os.makedirs(d, exist_ok=True)
+        old = time.strftime("%Y-%m-%d %H:%M:%S",
+                            time.localtime(time.time() - 3600))
+        with open(os.path.join(d, "state.json"), "w", encoding="utf-8") as fh:
+            json.dump({"pages": {"1": {"status": "running", "error": ""}},
+                       "updated": old}, fh)
+        series = {"id": "S", "pages": [{"n": 1, "task": d}]}
+        with mock.patch("app.moss_series.load", return_value=series), \
+             mock.patch("app.moss_series.by_n",
+                        side_effect=lambda s, n, owner="": {"n": 1, "task": d}):
+            r = self.get("/api/persona/comic?sid=S&page=1")
+        self.assertEqual(r["status"], "failed")
+        self.assertIn("断", r.get("error") or "")
+
+
 class ShotTest(PersonaApiBase):
 
     def test_shot_passes_brief_to_moss(self):

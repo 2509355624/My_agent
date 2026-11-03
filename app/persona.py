@@ -957,6 +957,33 @@ def active_card(session_key):
     return get_card(cid)
 
 
+def card_key(session_key, card_id=""):
+    """「这个人 × 这个角色」的会话键（2026-11-03 用户要求）。
+
+    用户原话：「选择其他的角色就是另一个会话了，就是相同 QQ 账号的其他
+    角色的会话」。
+
+    所以一条线的身份是 `(会话线, 角色)`，不是只有会话线。
+
+        web_2509355624            + izumi_sagiri → web_2509355624__izumi_sagiri
+        web_2509355624            + rem          → web_2509355624__rem
+        private_2509355624        + asuna        → private_2509355624__asuna
+
+    分隔符用 `__`（双下划线）：`_SAFE_KEY` 允许它，而且不会和现有的
+    `group_<群号>_<QQ>` 撞（那是一个下划线）。
+
+    `card_id` 为空时返回原键——没选角色就没有「按角色分」这回事。
+    """
+    k = str(session_key or "")
+    cid = str(card_id or "").strip()
+    if not cid or not k:
+        return k
+    # 已经带过了就不要再叠（幂等）
+    if k.endswith("__" + cid):
+        return k
+    return k + "__" + cid
+
+
 def switch(session_key, card):
     """进扮演态。**换卡 = 清掉这条线的小记和轮次**：那是上一个角色的记忆。
 

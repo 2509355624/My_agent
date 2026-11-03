@@ -223,13 +223,6 @@
       <button class="btn sm" id="btnNew" title="去角色管理新建">＋</button>
     </div>
     <div class="side-list" id="cards"></div>
-    <div class="side-foot">
-      <button class="btn sm" id="btnClear">清空</button>
-      <button class="btn sm" id="btnLeave">出戏</button>
-      <a class="btn sm" id="btnCompat" href="/compat" target="_blank"
-         style="text-decoration:none;text-align:center"
-         title="页面显示不正常？点这里看浏览器兼容报告">自检</a>
-    </div>
   </aside>
 
   <main class="mid">
@@ -360,15 +353,25 @@ async function loadCards() {
 
 async function pick(c) {
   if (busy) return;
+  // 已经在演这个角色就别白跑一次请求
+  if (card && card.id === c.id) { closeDrawer(); return; }
   busy = true;
   try {
     const d = await post("/api/persona/switch", { id: c.id });
     card = d.card;
+    // 换角色 = 换一条会话线，画面缓存也要跟着清——不清的话会把上一个
+    // 角色的图挂到新角色第一条回复下面（编号撞车）。
+    clearPicStore();
+    msgs = [];
     toast("现在是 " + c.name);
     closeDrawer();
     await loadSession();
   } catch (e) { toast(e.message, true); }
   finally { busy = false; }
+}
+
+function clearPicStore() {
+  try { localStorage.removeItem(picStore.key()); } catch (e) {}
 }
 
 // ── 中栏渲染 ──────────────────────────────────────────
@@ -523,10 +526,8 @@ function renderQuota() {
 
 function applyRoleUI() {
   const guest = ROLE === "guest";
-  // 游客：隐藏换角色入口、清空/出戏；出图按钮禁掉
+  // 游客：隐藏「新建角色」（那是站主才有的事）
   $("btnNew").style.display = guest ? "none" : "";
-  $("btnClear").style.display = guest ? "none" : "";
-  $("btnLeave").style.display = guest ? "none" : "";
   $("btnLogin").style.display = guest ? "" : "none";
   // 用完 15 轮就锁输入框
   const done = guest && GUEST_LEFT <= 0;
@@ -657,17 +658,10 @@ $("inp").addEventListener("input", e => {
   e.target.style.height = Math.min(140, e.target.scrollHeight) + "px";
 });
 $("btnNew").onclick = () => { location.href = "/characters" + (QQ ? ("?qq=" + QQ) : ""); };
-$("btnClear").onclick = async () => {
-  if (!confirm("忘掉之前所有的事？角色不变。")) return;
-  try { const d = await post("/api/persona/clear");
-        toast(d.reply); localStorage.removeItem(picStore.key()); await loadSession(); }
-  catch (e) { toast(e.message, true); }
-};
-$("btnLeave").onclick = async () => {
-  try { const d = await post("/api/persona/leave");
-        toast(d.reply); await loadSession(); }
-  catch (e) { toast(e.message, true); }
-};
+// 「清空 / 出戏 / 自检」三个按钮已经去掉（2026-11-03 用户要求）：
+//   出戏  —— 没意义了，选另一个角色就是另一条线
+//   清空  —— 同上，换角色 = 换会话
+//   自检  —— 兼容问题已经收干净，留着只是多一个按钮
 $("zoom").onclick = () => $("zoom").classList.remove("on");
 
 loadSession();
