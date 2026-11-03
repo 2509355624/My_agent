@@ -406,6 +406,25 @@ class InjectionTest(AffBase):
         self.assertIn("好感 22", line)
         self.assertNotIn("+22", line)
 
+    def test_negative_value_never_reads_as_arousal(self):
+        """负分时冲动再高也不是「她在犹豫」——不然「赎罪期一路挡掉」的文案
+        会和这句打架，模型会演成半推半就。（2026-11-04 用户点出的问题）"""
+        key = self._raid()
+        for _ in range(2):
+            res = affection.settle(key, {"delta": -13, "arousal": 60,
+                                         "turn_type": "action"})
+        self.assertLess(res["value"], 0)
+        blk = affection.injection_block(res)
+        self.assertIn("别把这点波动演成愿意", blk)
+        self.assertNotIn("她会绕", blk)
+
+    def test_positive_value_keeps_soft_arousal(self):
+        key = self._raid()
+        res = affection.settle(key, {"delta": 10, "arousal": 40,
+                                     "turn_type": "action"})
+        blk = affection.injection_block(res)
+        self.assertNotIn("别把这点波动演成愿意", blk)
+
     def test_detail_nodes_needs_record(self):
         self._enter()
         self.assertIsNone(affection.detail_nodes(
