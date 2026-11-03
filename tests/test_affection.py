@@ -2,8 +2,8 @@
 
 覆盖 `app/affection.py` 的结算规则和 persona 集成：
 
-  - 结算：夹上限、纯聊天每日递减、剧情型每日次数、降档滞回、越线结局、
-    结局锁定、封存/解冻、重新开始；
+  - 结算：夹单轮上限、聊天与剧情同权（无按天额度）、降档滞回、越线结局、
+    结局锁定、封存/解冻、清空存档；
   - 集成：攻略模式 run_turn 走打分段 + 档位注入；自由模式完全不变；
     QQ 指令（攻略模式/自由模式/好感/重新开始）；清空重置好感。
 
@@ -140,43 +140,37 @@ class SettleTest(AffBase):
         self.assertFalse(free["active"])
         self.assertEqual(free.get("mode"), "free")
 
-    def test_chat_diminishing_returns(self):
-        """纯聊天递减但**不会归零**：3 2 1 1 之后每 3 轮补 1 分。
+    def test_chat_no_longer_diminishes(self):
+        """纯聊天不再按「当天第几次」打折（2026-11-04 晚用户拍板）。
 
-        2026-11-03 群友实测：原来第 5 轮起恒为 0，聊 33 轮只涨 6 分，
-        玩家以为系统坏了。现在改成「一直聊一直能涨，只是越来越慢」。
+        原来 3/2/1/1 之后每 3 轮 +1，效果是「今天补不完，明天再来」。
+        用户的原话：「没有人喜欢一个限制你 24 小时的游戏」。
+        现在每轮按模型给的 delta 全额走，只受单轮上限约束。
         """
         key = self._raid()
-        for expect in (3, 2, 1, 1, 1, 0, 0, 1, 0, 0, 1):
-            res = affection.settle(key, {"delta": 5, "turn_type": "chat"})
-            self.assertEqual(res["applied"], expect)
+        for _ in range(10):
+            res = affection.settle(key, {"delta": 3, "turn_type": "chat"})
+            self.assertEqual(res["applied"], 3)
 
-    def test_one_day_of_chat_can_advance_a_tier(self):
-        """聊满一天（30 轮）至少够升一档（10 分），又不能一天冲到高亲密。"""
+    def test_chat_can_keep_advancing_within_one_session(self):
+        """一次会话里连着聊就能一直推进，不用等第二天。"""
         key = self._raid()
-        for _ in range(30):
-            affection.settle(key, {"delta": 5, "turn_type": "chat"})
-        value = affection.status(key)["value"]
-        self.assertGreaterEqual(value, 10)     # 有进度感：至少升一档
-        self.assertLess(value, 20)             # 但不靠纯聊天一天到「开始凿」
+        for _ in range(20):
+            res = affection.settle(key, {"delta": 2, "turn_type": "chat"})
+            self.assertEqual(res["applied"], 2)
+        self.assertEqual(affection.status(key)["value"], 40)
 
     def test_action_bypasses_diminishing_but_has_round_cap(self):
         key = self._raid()
         res = affection.settle(key, {"delta": 99, "turn_type": "action"})
         self.assertEqual(res["applied"], affection.ROUND_CAP)
 
-    def test_action_daily_budget_exhausts_into_chat_track(self):
-        """剧情型一天最多 ACTION_DAILY 次大额，超了按聊天递减管。
-
-        用 +4 的小额：5 次共 20 分，别把好感顶到 +50 触发结局锁定。
-        """
+    def test_action_has_no_daily_budget(self):
+        """剧情型也不再限制「每天几次大额」：连做 8 轮都是全额。"""
         key = self._raid()
-        for _ in range(affection.ACTION_DAILY):
+        for _ in range(8):
             res = affection.settle(key, {"delta": 4, "turn_type": "action"})
             self.assertEqual(res["applied"], 4)
-        # 第 6 次：走聊天通道。聊天次数还是 0 → 上限 3
-        res = affection.settle(key, {"delta": 10, "turn_type": "action"})
-        self.assertEqual(res["applied"], 3)
 
     def test_negative_delta_not_diminished(self):
         key = self._raid()
