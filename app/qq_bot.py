@@ -1759,8 +1759,13 @@ class QQBot:
         # 2026-11-02：**群聊也能进扮演态了**，但按人隔离——同一个人在不同群里
         # 是两条线，同一个群里不同人是不同的线（见 `persona._persona_key`）。
         # 群里的尺度由 `_GROUP_NOTE` 压着，而且群里不出图。
+        #
+        # 2026-11-03：把 `addressed` 传下去。群里手打「@大大怪 #青梅竹马」时
+        # `#` 前面还有东西，不剥前缀就认不出命令，整条会落到 direct_gen 被当成
+        # 画面需求（实测群友发这个，机器人回「青梅竹马这个主题前面已经画过一张了」）。
         persona_key = persona._persona_key(session_key, user_id)  # noqa: SLF001
-        cmd = persona.handle_command(persona_key, text)
+        cmd = persona.handle_command(
+            persona_key, text, addressed=(at_me or trigger.called(text)))
         if cmd is not None:
             try:
                 send = (qq_api.send_group if target == "group"

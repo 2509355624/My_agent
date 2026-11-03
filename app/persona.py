@@ -54,7 +54,7 @@ import re
 import threading
 import time
 
-from app import llm
+from app import llm, trigger
 from app.config import BASE_DIR, QQ_AGENT_ID, QQ_BOT_NAME
 
 log = logging.getLogger("persona")
@@ -668,17 +668,39 @@ def roster_text():
     return "\n".join(lines)
 
 
-def handle_command(session_key, text):
+# 命令前缀：群里手打「@大大怪 #角色名」时，`#` 前面还有东西。
+#
+# 只在 `addressed` 为真时才剥（真 @，或者句子里喊了名字），所以私聊里
+# 「我#tag 了一下」这种不会被误判成命令。抄的是 `galgame._PREFIX_RE`——
+# 那边早就踩过同一个坑（2026-11-02 群友反馈 `@大大怪 gal 开局` 没反应）。
+_PREFIX_RE = re.compile(
+    r"^\s*(?:@[^\s，,、:：]+|" + re.escape(trigger.NAME) + r")\s*[，,、:：]?\s*")
+
+
+def handle_command(session_key, text, addressed=False):
     """认 `#` 命令。返回要回的话；**不是命令返回 None**（照常往下走）。
 
-    只认「整条消息正好是 `#命令词`」这一种形态，所以：
+    认「整条消息正好是 `#命令词`」这一种形态，所以：
 
       - `#和泉纱雾`   → 进角色
       - `#出戏`       → 退出
       - `#角色扮演`   → 列清单（`#人设列表` 同义）
       - `#银发少女怎么画` → 认不出卡名 → **当普通消息**，不拦
+
+    `addressed`（2026-11-03）：群里这条消息**确实在叫机器人**（真 @，或者
+    句子里喊了「大大怪」）。为真时先把开头的 `@某人` / 名字剥掉再认 `#`——
+    不剥的话「@大大怪 #青梅竹马」因为不以 `#` 开头，整条命令被当成普通
+    聊天，落到 direct_gen 被当成画面需求（实测群友发这个，机器人回了
+    「青梅竹马这个主题前面已经画过一张了」）。
     """
     t = (text or "").strip()
+    if addressed:
+        # 最多剥三次：「@大大怪 大大怪 #角色名」这种叠着喊的也认。
+        for _ in range(3):
+            stripped = _PREFIX_RE.sub("", t, count=1).strip()
+            if stripped == t:
+                break
+            t = stripped
     if not t.startswith("#"):
         return None
     body = t[1:].strip()
@@ -698,7 +720,18 @@ def handle_command(session_key, text):
             return None                     # 没在演时不算命令，免得误触
         return clear(session_key)
 
-    card = find_card(body)
+    # `#角色扮演 青梅竹马` / `#人设列表 学姐` 也认（2026-11-03）。
+    # 群友的自然写法是「命令词 + 卡名」，而原来只认纯命令词，这种写法会被
+    # 当成画面需求落到 direct_gen。剥掉命令词再取剩下那段当卡名。
+    card = None
+    target = body
+    for w in LIST_WORDS:
+        if body.startswith(w):
+            rest = body[len(w):].strip(" ，,、:：")
+            if rest:
+                target = rest
+            break
+    card = find_card(target)
     if card is None:
         return None
     was = active_card(session_key)

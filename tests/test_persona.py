@@ -512,6 +512,55 @@ class IntimateGuideTest(unittest.TestCase):
         self.assertIn("亲密场景", head)
 
 
+class AddressedCommandTest(PersonaBase):
+    """群聊命令的前缀剥离与组合写法（2026-11-03）。
+
+    实测事故：群友在群里发「@大大怪 #青梅竹马」，因为不以 `#` 开头，
+    `handle_command` 认不出，整条落到 `direct_gen` 被当成画面需求——
+    机器人回了一句「青梅竹马这个主题前面已经画过一张了」。
+    """
+
+    def setUp(self):
+        super().setUp()
+        persona.save_cards([_card("纱雾"), _card("青梅竹马")])
+        self.card = persona.find_card("青梅竹马")
+
+    def test_at_prefix_is_stripped_when_addressed(self):
+        got = persona.handle_command("private_1", "@大大怪 #青梅竹马",
+                                     addressed=True)
+        self.assertIsNotNone(got)
+        self.assertIn("青梅竹马", got)
+
+    def test_at_prefix_is_not_stripped_when_not_addressed(self):
+        """没在叫它的时候不许剥——私聊里「我@某人 #tag」不该被当成命令。"""
+        self.assertIsNone(
+            persona.handle_command("private_1", "@大大怪 #青梅竹马",
+                                   addressed=False))
+
+    def test_name_prefix_is_stripped(self):
+        got = persona.handle_command("private_1", "大大怪 #角色扮演",
+                                     addressed=True)
+        self.assertIsNotNone(got)
+        self.assertIn("怎么玩", got)
+
+    def test_repeated_prefixes(self):
+        got = persona.handle_command("private_1", "@大大怪 大大怪 #青梅竹马",
+                                     addressed=True)
+        self.assertIsNotNone(got)
+        self.assertIn("青梅竹马", got)
+
+    def test_word_plus_card_name(self):
+        """`#角色扮演 青梅竹马` 这种自然写法也要认。"""
+        got = persona.handle_command("private_1", "#角色扮演 青梅竹马",
+                                     addressed=True)
+        self.assertIsNotNone(got)
+        self.assertIn("青梅竹马", got)
+
+    def test_plain_chat_is_still_ignored(self):
+        self.assertIsNone(
+            persona.handle_command("private_1", "今天天气不错", addressed=True))
+
+
 class ClearCommandTest(PersonaBase):
     """`#清空`（2026-11-02）：清记忆、保留角色。"""
 
