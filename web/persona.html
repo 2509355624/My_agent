@@ -84,6 +84,14 @@
     color: var(--text-dim); }
   .top a.back:hover { border-color: var(--accent); color: var(--accent); }
 
+  /* 右上角的模式开关（2026-11-03 用户报「登录后看不到切换开关」）。
+     原来它躺在右栏「此刻」的 #affBox 里，而那个区块 `if (!a) display:none`——
+     a 只有开过攻略模式才有。于是：想开攻略模式 → 得点按钮 → 按钮在区块里 →
+     区块要开过攻略模式才显示。**入口被锁在自己打开的那道门里。**
+     现在提到顶部常驻，用边框色区分两态（灰=自由，玫红=攻略）。 */
+  .top .mode { border-color: var(--border); color: var(--text-dim); }
+  .top .mode.on { border-color: #e8779c; color: #e8779c; }
+
   /* `min-height: 0` 不能省：flex 子项的 min-height 默认是 `auto`，内容一多
      它就不肯收缩，会把下面的 `.composer` 挤出可视区（老浏览器上尤其明显）。*/
   .log { flex: 1; min-height: 0; overflow-y: auto; padding: 16px;
@@ -100,6 +108,11 @@
   .row.u .bubble { background: var(--accent-dim); border-bottom-right-radius: 4px; }
   .row.a .bubble { background: var(--bg-elev); border: 1px solid var(--border-soft);
     border-bottom-left-radius: 4px; }
+  /* 这轮没发出去 → 原样重发的入口（超时/断流后不用重新打字） */
+  .retryRow { display: flex; align-items: center; gap: 10px;
+    margin: 6px 4px 0; font-size: 12px; color: var(--text-mute);
+    flex-wrap: wrap; }
+  .retryRow .btn { flex: none; }
 
   /* 图片区：**挂在气泡正下方**，不另起一行消息 */
   .pic { margin-top: 6px; border-radius: var(--r); overflow: hidden;
@@ -249,9 +262,12 @@
       <button class="btn sm burger" id="btnBurger">☰</button>
       <a class="btn sm back" id="btnGallery" href="/gallery"
          title="回到画廊">← 画廊</a>
+      <button class="btn sm" id="btnReset" style="display:none"
+              title="玩崩了重开：攻略模式=好感归零重新攻略；自由模式=清空记忆从头认识">重开</button>
       <span class="nm" id="curName">选一个角色</span>
       <span class="live" id="live" style="display:none">扮演中</span>
       <span class="sp"></span>
+      <button class="btn sm mode" id="btnMode" style="display:none">自由模式</button>
       <a class="btn sm" id="btnLogin" style="display:none;text-decoration:none"
          href="/" title="登录后可以无限对话、还能出图">登录</a>
       <span class="quota" id="quota" style="display:none"></span>
@@ -279,7 +295,8 @@
       <div class="v" id="sAff">—</div>
       <div class="bar affbar"><i id="affBar"></i></div>
       <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
-        <button class="btn sm" id="btnAffToggle">开攻略模式</button>
+        <!-- 模式开关已挪到顶部 #btnMode（2026-11-03）：留在这里的话，没开过攻略
+             模式就整块不显示，开关等于永远点不到。这里只留「重新开始」。 -->
         <button class="btn sm" id="btnAffRestart" style="display:none">重新开始</button>
       </div>
     </div>
@@ -504,12 +521,14 @@ function affLine(a) {
   div.className = "aff" + (a.just_ended ? " end" : "");
   if (a.just_ended) {
     div.textContent = a.just_ended === "graduated"
-      ? "🎓 结局：毕业（好感 +" + a.value + "）"
-      : "🚨 结局：进局子（好感 " + a.value + "）";
+      ? "🎓 已结局：毕业（好感 " + (a.value > 0 ? "+" : "") + a.value + "）"
+      : "🚨 已结局：进局子（好感 " + a.value + "）";
     return div;
   }
-  div.innerHTML = "❤ 她现在对你【<b></b>】<span class=\"d\"></span>";
-  div.querySelector("b").textContent = a.tierName || "正常关系";
+  // 总数在前、本轮在后：和 QQ 端同一套格式，避免把总数读成本轮加减。
+  div.innerHTML = "❤ 好感 <b class=\"t\"></b><span class=\"d\"></span> ·【<b class=\"n\"></b>】";
+  div.querySelector(".t").textContent = (a.value > 0 ? "+" : "") + (a.value || 0);
+  div.querySelector(".n").textContent = a.tierName || "正常关系";
   const v = a.applied || 0;
   const d = div.querySelector(".d");
   if (v) {
@@ -519,19 +538,41 @@ function affLine(a) {
   return div;
 }
 
-// 侧栏的好感区块：数值 + 进度条 + 模式开关
+// 侧栏的好感区块：数值 + 进度条。（模式开关在顶部 #btnMode，见 renderMode）
+// **登录用户永远显示**——以前 a 为 null（从没开过攻略）时整块藏掉，
+// 结果「开攻略模式」按钮只对开过的人可见，死锁：没开过的人找不到入口。
+// 2026-11-03 晚：开关本身也挪到顶部常驻了（用户说「登录后右上角看不到切换开关」），
+// 这里只留数值，避免同一个动作两个入口、文案还不一致。
 function renderAff(a) {
+  renderMode();
   const box = $("affBox");
-  if (!a) { box.style.display = "none"; return; }
+  if (ROLE === "guest") { box.style.display = "none"; return; }
   box.style.display = "";
-  const raid = a.mode === "raid";
-  $("affModeK").textContent = raid ? "好感 · 攻略模式" : "好感 · 已封存";
-  $("sAff").textContent = a.ending
-    ? ((a.ending === "graduated" ? "已毕业 " : "已进局子 ") + a.value)
-    : (a.value + " · " + (a.tierName || "正常关系"));
-  $("affBar").style.width = Math.max(0, Math.min(100, a.value + 50)) + "%";
-  $("btnAffToggle").textContent = raid ? "切自由模式" : "开攻略模式";
+  const raid = !!a && a.mode === "raid";
+  $("affModeK").textContent = raid ? "好感 · 攻略模式"
+    : (a ? "好感 · 已封存" : "好感 · 未开启");
+  $("sAff").textContent = !a ? "—"
+    : (a.ending
+       ? ((a.ending === "graduated" ? "已毕业 " : "已进局子 ") + a.value)
+       : (a.value + " · " + (a.tierName || "正常关系")));
+  $("affBar").style.width =
+    Math.max(0, Math.min(100, (a ? (a.value | 0) : 0) + 50)) + "%";
   $("btnAffRestart").style.display = raid ? "" : "none";
+}
+
+// 顶部的自由/攻略开关：两态都常驻，靠边框色区分（灰=自由，玫红=攻略）。
+// 游客没有攻略模式（后端 affection_mode 里 403 挡住），直接不给看；
+// 还没选角色时也不给看——后端会回「先选一个角色」。
+function renderMode() {
+  const b = $("btnMode");
+  if (!b) return;
+  const raid = !!(AFF && AFF.mode === "raid");
+  b.textContent = raid ? "攻略模式" : "自由模式";
+  b.classList.toggle("on", raid);
+  b.title = raid
+    ? "现在按好感档位演；点一下切回自由模式（好感封存不清零）"
+    : "现在只聊天；点一下开攻略模式（开始按档位算好感）";
+  b.style.display = (ROLE === "guest" || !card) ? "none" : "";
 }
 
 function setPic(idx, url) {  const pic = $("pic-" + idx);
@@ -637,6 +678,8 @@ function applyRoleUI() {
   // 游客：隐藏「新建角色」（那是站主才有的事）
   $("btnNew").style.display = guest ? "none" : "";
   $("btnLogin").style.display = guest ? "" : "none";
+  // 顶栏「重开」：登录用户常驻（玩崩了一键重来的入口）
+  $("btnReset").style.display = guest ? "none" : "";
   // 用完 15 轮就锁输入框
   const done = guest && GUEST_LEFT <= 0;
   $("inp").disabled = done;
@@ -661,7 +704,14 @@ async function send() {
   const idxU = msgs.length;
   msgs.push({ role: "user", text });
   log.appendChild(makeRow(msgs[idxU], idxU));
+  await deliver(text, false);
+}
 
+// deliver：真正发一轮。send 和「重新发送」共用——重发不重复 push 用户
+// 消息（它失败时**留在画面和 msgs 里**；服务端没记成功这一轮，重发不重账）。
+async function deliver(text, isRetry) {
+  busy = true;
+  const log = $("log");
   const idxA = msgs.length;
   const pending = makeRow({ role: "assistant", text: "…" }, idxA);
   log.appendChild(pending);
@@ -694,12 +744,29 @@ async function send() {
     }
   } catch (err) {
     pending.remove();
-    msgs.pop();
-    // 游客额度用完：后端回 403 + limit:true
-    if (ROLE === "guest" && /体验版/.test(err.message)) {
+    // 游客额度用完：后端回 403 + limit:true。这种没有「重发」的意义。
+    const quotaGone = ROLE === "guest" && /体验版/.test(err.message);
+    if (quotaGone) {
       GUEST_LEFT = 0;
       renderQuota();
       applyRoleUI();
+    } else {
+      // 超时 / 断流 / 她这轮没说话：用户消息留着，给一个原样重发的入口
+      const retry = document.createElement("div");
+      retry.className = "retryRow";
+      const why = document.createElement("span");
+      why.textContent = "这轮没发出去：" + err.message;
+      const btn = document.createElement("button");
+      btn.className = "btn sm";
+      btn.textContent = "重新发送";
+      btn.onclick = async () => {
+        if (busy) return;
+        retry.remove();
+        await deliver(text, true);
+      };
+      retry.appendChild(why);
+      retry.appendChild(btn);
+      log.appendChild(retry);
     }
     toast(err.message, true);
   } finally {
@@ -798,7 +865,9 @@ function openDrawer() { $("side").classList.add("open"); $("mask").classList.add
 function closeDrawer() { $("side").classList.remove("open"); $("mask").classList.remove("on"); }
 
 // ── 攻略模式：开关与重开（2026-11-03）──────────────────
-$("btnAffToggle").addEventListener("click", async () => {
+// 开关在顶部（#btnMode）。点一次切一次，靠服务端返回的 affection 回写状态——
+// 不要在前端自己取反：服务端才是权威（封存/恢复都发生在它那边）。
+$("btnMode").addEventListener("click", async () => {
   if (ROLE === "guest") { toast("体验版没有攻略模式", true); return; }
   if (!card) { toast("先选一个角色", true); return; }
   try {
@@ -817,6 +886,28 @@ $("btnAffRestart").addEventListener("click", async () => {
     AFF = d.affection || AFF;
     renderAff(AFF);
   } catch (e) { toast(e.message, true); }
+});
+// 顶栏「重开」（2026-11-03）：玩崩了一键重来的常驻入口。
+// 攻略模式 → 好感归零、结局解除，聊天记忆保留（=「重新开始」）；
+// 自由模式 → 清空这段记忆从头认识（好感一并归零，角色不变）。
+$("btnReset").addEventListener("click", async () => {
+  if (ROLE === "guest") return;
+  if (AFF && AFF.mode === "raid") {
+    if (!confirm("好感归零、结局解除，重新攻略？\n（聊天记忆保留，她记得你们聊过什么）")) return;
+    try {
+      const d = await post("/api/persona/affection/restart", {});
+      toast(d.reply || "好感已归零，重新开始");
+      AFF = d.affection || null;
+      renderAff(AFF);
+    } catch (e) { toast(e.message, true); }
+  } else {
+    if (!confirm("清空这段记忆，和她从头认识？\n（角色不变，好感也一并归零）")) return;
+    try {
+      const d = await post("/api/persona/clear", {});
+      toast(d.reply || "记忆已清空，从头开始");
+      await loadSession();
+    } catch (e) { toast(e.message, true); }
+  }
 });
 $("btnBurger").onclick = openDrawer;
 $("mask").onclick = closeDrawer;
