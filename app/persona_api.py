@@ -205,19 +205,54 @@ def shot():
         return jsonify({"ok": False, "error": "还没选角色"}), 400
 
     brief = persona.comic_brief(card, key, extra=extra, msg_index=idx)
+
+    # 网页会话在 moss 里的身份：`("private", "web_<qq>")`。
+    #
+    # 不能用字面量 `"web"`（第一版就是这么写的，后果见下）：
+    #   1. `_say()` 会拿它当 QQ 号去发消息 → 每次出图都刷「moss 回话失败」
+    #   2. `series_mod.current("private", "web")` 是**全局共享**的，所有用户
+    #      的图会串进同一条线
+    web_tid = "web_" + (_qq() or "local")
     try:
-        took, note = moss_bot.start("private", _qq() or "web", "append",
-                                    brief, sender_uin=_qq())
+        # 网页模式：出图照跑（走同一条 `image_jobs` 队列），但不往 QQ 发任何
+        # 东西。回执由这个 HTTP 响应自己带。
+        with moss_bot.web_mode():
+            took, note = moss_bot.start("private", web_tid, "append",
+                                        brief, sender_uin=_qq())
     except Exception as exc:                       # noqa: BLE001
         log.exception("网页出图失败 %s", key)
         return jsonify({"ok": False, "error": str(exc)}), 500
     if not took:
         return jsonify({"ok": False, "error": note or "排队中"}), 429
 
-    sid = moss_series.current("private", _qq() or "web")
+    sid = moss_series.current("private", web_tid)
     series = moss_series.load(sid) if sid else None
     newest = moss_series.latest(series or {}, "") or {}
-    return jsonify({"ok": True, "sid": sid, "page": newest.get("n") or 0,
+    page = newest.get("n") or 0
+    if not sid or not page:
+        # 出图线程刚起，系列/页还没落盘。
+        #
+        # 为什么必须等：`moss_bot.start()` 是**先起线程再返回**，而线程里
+        # 要先跑编剧（一次 LLM 调用，实测 5~8 秒）才 `open_new()` 建档。
+        # 不等的话这里拿到空 sid，前端直接报「没拿到页号」（实测就是这样）。
+        #
+        # 等多久：编剧最多 timeout=240 秒，但那是极端情况。这里给 45 秒——
+        # 正常情况下 5~10 秒就建好了。等不到也不是错误：前端拿空 sid 会
+        # 提示「还在排」，用户重试即可。
+        import time
+        log.info("[web] 等系列落盘：%s", web_tid)
+        for _ in range(180):
+            time.sleep(0.25)
+            sid = moss_series.current("private", web_tid)
+            series = moss_series.load(sid) if sid else None
+            newest = moss_series.latest(series or {}, "") or {}
+            page = newest.get("n") or 0
+            if sid and page:
+                log.info("[web] 系列落盘：%s 第 %s 页", sid, page)
+                break
+        else:
+            log.warning("[web] 等系列落盘超时（45s）：%s", web_tid)
+    return jsonify({"ok": True, "sid": sid, "page": page,
                     "msgIndex": idx,
                     "reply": "在画了，一页五格，大概一两分钟。"})
 
@@ -244,7 +279,11 @@ def comic_status():
     series = moss_series.load(sid)
     if not series:
         return jsonify({"ok": False, "error": "这条线不在了"}), 404
-    pg = moss_series.by_n(series, int(page), owner="")
+    # owner 要和 `shot` 里建档时一致（`web_<qq>`）。传空串在私聊线上能查到，
+    # 但网页系列的页 owner 是 `web_xxx`，用 "" 查会漏。
+    owner = "web_" + (_qq() or "local")
+    pg = (moss_series.by_n(series, int(page), owner=owner)
+          or moss_series.by_n(series, int(page), owner=""))
     if not pg:
         return jsonify({"ok": False, "error": "没有这一页"}), 404
 

@@ -111,6 +111,10 @@ from app.config import QQ_AGENT_ID
 
 log = logging.getLogger("moss_bot")
 
+# 网页模式开关（2026-11-03）：见 `web_mode()`。用 dict 而不是 bool，方便
+# 以后加别的开关而不改调用点。
+_WEB_MODE = {"on": False}
+
 # 默认五格 `1t2m2b`（2026-11-03 用户改：六格出图质量差，主要是每格太小）。
 #
 # 像素账（1024×1536）：
@@ -523,16 +527,25 @@ def _fire(target, target_id, action, payload, sid, page_id,
             return False, ("第 %02d 页还在画，等它出来再续。\n"
                            "（同一条线同时只跑一张，不然会炸出一堆一样的）" % busy)
 
+    # 线程继承调用时刻的模式（2026-11-03）：`with web_mode():` 退出时后台
+    # 线程可能还没跑完，而 `_WEB_MODE` 是模块级共享的——不在这里快照的话，
+    # 线程跑到 `_say`/`_send_image` 时开关已经关回去，又开始往 QQ 发。
+    web = bool(_WEB_MODE.get("on"))
     th = threading.Thread(target=_work, name="moss-comic", daemon=True,
                           args=(target, target_id, action, payload, sid, page_id,
                                 str(reply_to or ""), sender_uin, truncate,
-                                _owner(target, target_id)))
+                                _owner(target, target_id), web))
     th.start()
     return True, ""
 
 
 def _work(target, target_id, action, payload, sid, page_id, reply_to,
-          sender_uin, truncate, owner):
+          sender_uin, truncate, owner, web=False):
+    # 线程内**重新设一次**开关（2026-11-03）：`with web_mode():` 只管调用方
+    # 那个线程，后台线程是独立的，不设就是普通模式 → 又往 QQ 发了。
+    old = _WEB_MODE.get("on")
+    if web:
+        _WEB_MODE["on"] = True
     try:
         if action == "new":
             _do_new(target, target_id, payload, reply_to, sender_uin, owner)
@@ -553,6 +566,8 @@ def _work(target, target_id, action, payload, sid, page_id, reply_to,
     finally:
         if sid:
             _release(sid)
+        if web:                        # 恢复，别让开关漏到别的线程
+            _WEB_MODE["on"] = old
 
 
 # ─── 动作：新开 ───────────────────────────────────────
@@ -915,6 +930,15 @@ def _send_image(target, target_id, rel, caption, reply_to="", sender_uin=None):
     """
     from app import image_audit
     from app.agents import image_send_format
+
+    # 网页模式：图已经落在磁盘上了，前端自己去 `/api/persona/comic` 取，
+    # 这里只要保证文件可取就行——**不过图审、不进 QQ 发送队列**。
+    # 图审是给群发把关的（防群里发出不该发的），网页是私人在自己浏览器里看，
+    # 拦在这儿只会让页面永远等不到图。
+    if _WEB_MODE.get("on"):
+        log.info("[web] moss 图就绪（不发）：%s", rel)
+        return ""
+
     try:
         fmt = image_send_format(QQ_AGENT_ID, target, target_id)
         path = image_out.prepare_for_send(rel, fmt)
@@ -1000,6 +1024,12 @@ def _lines(spec):
 
 
 def _say(target, target_id, text, reply_to=""):
+    # 网页端（2026-11-03）：`persona_api` 借这条链路出图，但**没有 QQ 会话
+    # 可以发**。`target_id` 会传成 `"web"` 这种假 id，真去发就是一堆
+    # 「moss 回话失败」。所以网页模式下一律不回话——回执由 HTTP 响应自己带。
+    if _WEB_MODE.get("on"):
+        log.info("[web] moss 回话（不发）：%s", str(text)[:80])
+        return
     try:
         if target == "group":
             qq_api.send_group(target_id, text, reply_to=reply_to or None)
@@ -1007,3 +1037,29 @@ def _say(target, target_id, text, reply_to=""):
             qq_api.send_private(target_id, text, reply_to=reply_to or None)
     except Exception:                           # noqa: BLE001
         log.exception("moss 回话失败：%s", str(text)[:60])
+
+
+def web_mode():
+    """进入「网页模式」：出图照跑，但不往任何 QQ 会话发消息。
+
+    用法（只在网页请求线程里用）：
+
+        with moss_bot.web_mode():
+            moss_bot.start("private", "web", "append", brief)
+
+    为什么不用改 `start()` 签名：那条链路里 `_say` / `_send_image` 有十几处
+    调用，逐个加参数改动面太大。一个上下文开关只影响「发不发」，出图、编队、
+    存档全部照旧。
+    """
+    import contextlib
+
+    @contextlib.contextmanager
+    def _cm():
+        old = _WEB_MODE.get("on")
+        _WEB_MODE["on"] = True
+        try:
+            yield
+        finally:
+            _WEB_MODE["on"] = old
+
+    return _cm()
