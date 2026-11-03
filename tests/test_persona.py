@@ -690,6 +690,82 @@ class NoHashCommandTest(PersonaBase):
                                                     addressed=True))
 
 
+class ExampleDialogueTest(unittest.TestCase):
+    """示例对话（2026-11-03）：酒馆的 `mes_example`，影响文风最重的一块。
+
+    抽象规则让模型「推导」怎么写，示例让它「照着学」——实测同一句话，
+    加了示例之后动作密度和断句方式明显向示例靠拢。
+    """
+
+    def _head(self, ex):
+        c = {"name": "纱雾", "systemPrompt": "你是纱雾。"}
+        if ex:
+            c["exampleDialogue"] = ex
+        return persona.build_head(c, "private_1", "")
+
+    def test_example_is_injected(self):
+        h = self._head("他：在吗？\n她：……嗯。")
+        self.assertIn("她说话的示范", h)
+        self.assertIn("……嗯。", h)
+
+    def test_no_example_is_fine(self):
+        for ex in ("", None):
+            h = self._head(ex)
+            self.assertNotIn("她说话的示范", h)
+            # 没示例也不能少契约
+            self.assertIn("最优先的一条", h)
+
+    def test_example_comes_before_contract(self):
+        """示例在人设之后、契约之前。
+
+        放契约后面的话，模型会照抄示例的格式（比如不写三行）；
+        放人设后面，它读起来是「这个人说话是这样的」。
+        """
+        h = self._head("他：在吗？\n她：……嗯。")
+        self.assertLess(h.find("她说话的示范"), h.find("最优先的一条"))
+
+    def test_norm_card_keeps_the_field(self):
+        c = persona._norm_card({"name": "x", "exampleDialogue": "  abc  "})
+        self.assertEqual(c["exampleDialogue"], "abc")
+
+    def test_missing_field_defaults_to_empty(self):
+        c = persona._norm_card({"name": "x"})
+        self.assertEqual(c["exampleDialogue"], "")
+
+
+class UpdateCardFieldsTest(PersonaBase):
+    """按字段更新（2026-11-03）：内置卡也能改，但只动点名的字段。"""
+
+    def setUp(self):
+        super().setUp()
+        persona.save_cards([{"id": "izumi_sagiri", "name": "纱雾",
+                             "systemPrompt": "原版人设"}] * 1)
+
+    def test_can_update_builtin_card(self):
+        r = persona.update_card_fields("izumi_sagiri", exampleDialogue="示范")
+        self.assertIsNotNone(r)
+        c = [x for x in persona.load_cards() if x["id"] == "izumi_sagiri"][0]
+        self.assertEqual(c["exampleDialogue"], "示范")
+        # 别的字段没被动
+        self.assertEqual(c["systemPrompt"], "原版人设")
+
+    def test_id_cannot_be_changed(self):
+        persona.update_card_fields("izumi_sagiri", id="hacked")
+        ids = [x["id"] for x in persona.load_cards()]
+        self.assertIn("izumi_sagiri", ids)
+        self.assertNotIn("hacked", ids)
+
+    def test_unknown_card_returns_none(self):
+        self.assertIsNone(persona.update_card_fields("nope", exampleDialogue="x"))
+
+    def test_save_cards_still_protects_builtin(self):
+        """`save_cards` 那条保护没被削弱——两条口子分开的。"""
+        persona.save_cards([{"id": "izumi_sagiri", "name": "篡改",
+                             "systemPrompt": "改了"}])
+        c = [x for x in persona.load_cards() if x["id"] == "izumi_sagiri"][0]
+        self.assertEqual(c["systemPrompt"], "原版人设")
+
+
 class GroupNoRoleplayTest(PersonaBase):
     """群聊不实际扮演（2026-11-03 用户反馈）。
 

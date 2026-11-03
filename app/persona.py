@@ -573,6 +573,10 @@ def _norm_card(c):
         "avatar": str(c.get("avatar") or "").strip(),
         "personality": str(c.get("personality") or "").strip(),
         "systemPrompt": str(c.get("systemPrompt") or "").strip(),
+        # 示例对话（2026-11-03）：酒馆里叫 `mes_example`，是影响文风最重的
+        # 一块。抽象规则让模型「推导」怎么写，示例让它「照着学」——后者
+        # 稳得多。**空着就跳过**，不强制每张卡都填。
+        "exampleDialogue": str(c.get("exampleDialogue") or "").strip(),
         "appearancePrompt": str(c.get("appearancePrompt") or "").strip(),
         "outfitPrompt": str(c.get("outfitPrompt") or "").strip(),
         "referenceImage": str(c.get("referenceImage") or "").strip(),
@@ -682,6 +686,58 @@ def save_cards(cards):
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
+    _atomic_write_text(path, json.dumps(out, ensure_ascii=False, indent=2))
+    return True
+
+
+def update_card_fields(card_id, **fields):
+    """**只改点名的几个字段**，其余原样保留。内置卡也允许改。
+
+    2026-11-03：`save_cards()` 是「前端整卡覆盖」的口径，内置卡一律拒绝——
+    那条保护是为了防误删（真出过事故：一个没隔离的测试把 11 张卡写成了 1 张）。
+
+    但保护做过头了：连「给内置卡加一段示例对话」都改不了。所以拆开——
+
+      · `save_cards()`      前端提交整张卡 → 内置卡拒绝（保护）
+      · `update_card_fields()`  脚本点名字段 → 允许（维护）
+
+    返回改好的卡；找不到返回 None。
+    """
+    want = str(card_id or "").strip()
+    if not want:
+        return None
+    cards = load_cards()
+    hit = None
+    for c in cards:
+        if str(c.get("id")) == want:
+            hit = c
+            break
+    if hit is None:
+        return None
+    for k, v in (fields or {}).items():
+        if k in ("id", "createdAt"):
+            continue                      # id / 建卡时间不许改
+        hit[k] = v
+    # 缓存里的旧对象也要跟着变，不然同一进程里读到的是旧值
+    for i, c in enumerate(cards):
+        if str(c.get("id")) == want:
+            cards[i] = hit
+            break
+    _write_cards_raw(cards)
+    return hit
+
+
+def _write_cards_raw(cards):
+    """原样写入，**不做内置卡保护**。只给 `update_card_fields` 用。"""
+    path = _cards_path()
+    if not path:
+        return False
+    from app.agents import _atomic_write_text
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    out = [_norm_card(c) for c in (cards or []) if isinstance(c, dict)]
+    out = [c for c in out if c["name"]]
     _atomic_write_text(path, json.dumps(out, ensure_ascii=False, indent=2))
     return True
 
@@ -1260,6 +1316,17 @@ def build_head(card, session_key, sender, note="", state="", intimate=True):
     parts = []
     persona = str(card.get("systemPrompt") or "").strip()
     parts.append(persona if persona else "你是%s。" % card["name"])
+    # 示例对话（2026-11-03）：放在人设之后、契约之前。
+    #
+    # 为什么不放最后：放最后模型会把它当成「上一轮的输出」，接着往下写；
+    # 放人设后面，它读起来是「这个人说话是这样的」——示范作用更强。
+    #
+    # 为什么要在契约之前：契约里有格式要求（正文 + 三行），示例只示范**文风**
+    # 和**节奏**，格式交给契约。顺序反了的话，模型会照抄示例的格式。
+    ex = str(card.get("exampleDialogue") or "").strip()
+    if ex:
+        parts.append("## 她说话的示范（**只学语气和节奏，不要照抄内容**）\n\n"
+                     + ex)
     parts.append(_CONTRACT if intimate else _CONTRACT_NO_INTIMATE)
     # 群聊多压一道尺度约束（2026-11-02）：私聊交给角色卡人设，群里不放开。
     if str(session_key or "").startswith("group_"):
