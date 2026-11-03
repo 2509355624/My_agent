@@ -637,12 +637,14 @@ def _migrate(rec):
     """
     if not isinstance(rec, dict):
         return rec
+    v = int(rec.get("value") or 0)
+    # 按门槛反推「好感够得上第几级」
+    by_gate = 0
+    for i, l in enumerate(levels_of()):
+        if v >= int(l.get("gate") or 0):
+            by_gate = i
     if "level" not in rec:
-        v = int(rec.get("value") or 0)
-        lv = 0
-        for i, l in enumerate(levels_of()):
-            if v >= int(l.get("gate") or 0):
-                lv = i
+        lv = by_gate
         # 老玩家补偿（2026-11-04 用户拍板）：旧的单轴里根本没有「距离」这个
         # 概念，按好感反推出来的层级天然偏保守——好感 20 的老档在旧系统里
         # 身体早就到了（档位叫「开始凿」），新标尺一上却退回「还隔着一层」，
@@ -656,6 +658,20 @@ def _migrate(rec):
             if lv >= LEVEL_MAX and v < int(level_cfg(LEVEL_MAX).get("gate") or 0):
                 lv = LEVEL_MAX - 1
         rec["level"] = lv
+    else:
+        # 2026-11-04 深夜：**换标尺之后才有的分支**。原来这里什么都不做，
+        # 于是「已经有 level 字段」的老档被原样保留——用户那条伊蕾娜线就是
+        # value=50、level=1（旧 5 级标尺下的 1 级），换到 7 级标尺后
+        # 50 分本该是第 5 级「做过了」，却还挂在「能碰到了」。
+        #
+        # 层级**只升不降**：已经记下的层级是「走过的路」，不能因为标尺重排
+        # 就收回去。所以只在「反推值比记录高」时往上抬，从不往下按。
+        try:
+            cur_lv = int(rec.get("level") or 0)
+        except (TypeError, ValueError):
+            cur_lv = 0
+        if by_gate > cur_lv:
+            rec["level"] = min(LEVEL_MAX, by_gate)
     if "arousal" not in rec:
         rec["arousal"] = 0
     if "cross_n" not in rec:

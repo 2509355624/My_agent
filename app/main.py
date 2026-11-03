@@ -930,13 +930,30 @@ def api_put_characters():
     **只影响卡库，不动任何正在进行的会话**：某条会话线正在演的角色要是被
     删了，下一次说话时 `persona.active_card` 会取不到卡，自动退回生图机器人
     （不需要额外清理）。
+
+    **批量删除闸**（2026-11-04 深夜）：整表覆盖 + 前端列表被截断 = 静默删卡。
+    实测丢过 14 张。现在 `save_cards` 在「提交的卡不到磁盘一半」时抛
+    `SaveCardsRejected`，这里把它变成 409 回给前端。想真删一批要带
+    `{"force": true}`——故意多一个词，让「删掉一大片」变成一个有意识的动作。
     """
     from app import persona
     data = request.get_json(silent=True) or {}
     cards = data.get("cards")
     if not isinstance(cards, list):
         return jsonify({"ok": False, "error": "cards 必须是列表"}), 400
-    if not persona.save_cards(cards):
+    try:
+        ok = persona.save_cards(cards, force=bool(data.get("force")))
+    except persona.SaveCardsRejected as e:
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "rejected": True,
+            "oldCount": e.old_n,
+            "newCount": e.new_n,
+            "lost": e.lost,
+            "hint": "如果确实要删这么多，请在请求里带 force=true。",
+        }), 409
+    if not ok:
         return jsonify({"ok": False, "error": "卡库路径不可用"}), 500
     return jsonify({"ok": True, "cards": persona.load_cards()})
 

@@ -1247,22 +1247,26 @@ class PanelTest(AffBase):
         self.assertTrue(affection.panel(key)["inScene"])
 
     def test_panel_text_lists_every_row(self):
-        """「状态」指令的文本版要把每一行都列出来，不能只给一句结论。"""
+        """「状态」指令的文本版要把每一行都列出来，不能只给一句结论。
+
+        42 分会经 `_migrate` 抬到 lv4「碰过了」（要 40/65），
+        下一级是 lv5「做过了」（要 50/77）——所以**两条缺口都在**：
+        感情差 8、气氛差 65。这里测的就是「两样都缺时两条都报」。
+        """
         key = self._raid()
-        # 42 羁绊 + 12 冲动：l4「碰过了」要 40/65，感情够了，卡在气氛
-        self._set(key, value=42, level=3, arousal=12)
+        self._set(key, value=42, arousal=12)
         t = affection.panel_text(key)
         self.assertIn("身体进度", t)
         self.assertIn("还没碰过", t)
         self.assertIn("要不够", t)
-        self.assertIn("气氛还差", t)          # 12 < 65
-        self.assertNotIn("感情还差", t)       # 42 > 40，感情这关过了
-        # 感情缺口也要能报出来：站在 lv1，下一级「能抱了」要 20/35，
-        # 羁绊 15 就差 5 点——两样都缺的时候必须两条都报。
-        self._set(key, value=15, level=1, arousal=12)
+        self.assertIn("感情还差", t)          # 42 < 50
+        self.assertIn("气氛还差", t)          # 12 < 77
+        # 感情够、只缺气氛：55 分已在 lv5，下一级 lv6 要 65/88，
+        # 感情还差 10——所以换 70 分，那才是「只缺气氛」
+        self._set(key, value=70, arousal=12)
         t2 = affection.panel_text(key)
-        self.assertIn("感情还差", t2)
-        self.assertIn("气氛还差", t2)
+        self.assertNotIn("感情还差", t2)      # 70 > 65
+        self.assertIn("气氛还差", t2)         # 12 < 88
 
     def test_panel_needs_a_card(self):
         """没在演谁就没有面板（和 detail_nodes 同一口径）。"""

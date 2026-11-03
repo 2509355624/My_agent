@@ -129,7 +129,10 @@ class CommandTest(PersonaBase):
     def test_deleting_the_card_ends_the_roleplay(self):
         persona.save_cards([_card("纱雾")])
         persona.handle_command("private_1", "#纱雾")
-        persona.save_cards([])
+        # 这里是**有意的清空**，要走 force——不带 force 时整表清空会被
+        # 批量删除闸拦下（2026-11-04 深夜加的，见 test_builtin_cards
+        # 的 GuardTest）。那条闸防的是「列表被截断」，不是防「真想删」。
+        persona.save_cards([], force=True)
         # 卡没了就自动当没在演，不会卡在一个取不到的 id 上
         self.assertIsNone(persona.active_card("private_1"))
 
