@@ -19,6 +19,7 @@
 """
 
 import os
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -688,6 +689,70 @@ class NoHashCommandTest(PersonaBase):
         persona.switch("private_1", persona.find_card("妹妹"))
         self.assertIn("清空", persona.handle_command("private_1", "清空",
                                                     addressed=True))
+
+
+class PronounRuleTest(unittest.TestCase):
+    """人称规则（2026-11-03）：她是「她」，对面是「你」，不许写成「他」。
+
+    用户原话：「不要用她怎么样他，要用她怎么样你」。这是第二人称代入——
+    读的人就是对话里那个人。
+    """
+
+    CARD = {"name": "纱雾", "systemPrompt": "你是纱雾。"}
+
+    def test_contract_has_no_he_pronoun(self):
+        h = persona.build_head(self.CARD, "private_1", "")
+        # 规则说明里会**引用**「他」当反例（「不是「他」」「把「他」换成「你」」），
+        # 那是必要的教学文本。这里把引号/反引号里的内容剔掉再数——
+        # 剩下的正文描述里不该出现代词「他」。
+        body = re.sub(r"「[^」]*」|`[^`]*`", "", h)
+        self.assertEqual(body.count("他"), 0,
+                         "系统头正文里还有「他」，模型会照着学")
+
+    def test_contract_states_the_rule(self):
+        h = persona.build_head(self.CARD, "private_1", "")
+        self.assertIn("人称", h)
+        self.assertIn("她是「她」", h)
+
+    def test_rule_repeated_at_the_end(self):
+        """契约末尾要再强调一次——长上下文里开头的规则会被稀释。"""
+        h = persona.build_head(self.CARD, "private_1", "")
+        tail = h[-500:]
+        self.assertIn("「你」", tail)
+
+    def test_plain_contract_also_clean(self):
+        h = persona.build_head(self.CARD, "private_1", "", intimate=False)
+        body = re.sub(r"「[^」]*」|`[^`]*`", "", h)
+        self.assertEqual(body.count("他"), 0)
+
+    def test_example_dialogue_uses_you(self):
+        """示例对话里也不能有「他」——它的影响力比契约还大。
+
+        实测：契约改了但示例没改，生成的内容里「他」出现 7 次；
+        示例改完之后降到 0 次。
+        """
+        c = dict(self.CARD)
+        c["exampleDialogue"] = "你：在吗？\n她：……嗯。"
+        h = persona.build_head(c, "private_1", "")
+        self.assertIn("你：在吗？", h)
+        self.assertNotIn("他", c["exampleDialogue"])
+
+
+class TemperatureTest(unittest.TestCase):
+
+    def test_persona_uses_non_default_temperature(self):
+        """角色扮演要走自己的温度，不能用服务端默认。
+
+        默认（一般 0.7）写日常够用，写亲密场景偏保守。
+        """
+        self.assertGreaterEqual(persona.TEMPERATURE, 1.0)
+        self.assertLessEqual(persona.TEMPERATURE, 1.3)
+
+    def test_call_llm_accepts_temperature(self):
+        import inspect
+        from app import llm
+        sig = inspect.signature(llm.call_llm)
+        self.assertIn("temperature", sig.parameters)
 
 
 class ExampleDialogueTest(unittest.TestCase):
