@@ -412,6 +412,30 @@ class AllowSendTest(unittest.TestCase):
         gate.assert_not_called()
         desc.assert_not_called()
 
+    def test_web_prefixed_target_always_passes(self):
+        """target_id 带 `web_` 前缀（网页端会话）直接放行，连开关都不读。
+
+        2026-11-03 用户拍板：网页端角色扮演出图不过审。结构性判定，
+        不依赖 moss_bot 的 `_WEB_MODE` 线程开关——那个开关并发时会竞态
+        （16:26 实测同一会话第 3 页被拦、第 4 页正常）。
+        """
+        with mock.patch.object(agents, "image_audit_enabled") as gate, \
+             mock.patch("app.vision.describe") as desc, \
+             mock.patch("app.image_review.record") as rec:
+            self.assertTrue(image_audit.allow_send(
+                self.path, "qq", "private", "web_2509355624"))
+        gate.assert_not_called()
+        desc.assert_not_called()
+        rec.assert_not_called()
+
+    def test_numeric_target_not_confused_with_web(self):
+        """QQ 号是纯数字，不会被 `web_` 前缀判定误伤——开关照读、照审。"""
+        with self._with_enabled(True), \
+             mock.patch("app.vision.describe",
+                        return_value='{"allow": false, "category": "nudity"}'):
+            self.assertFalse(image_audit.allow_send(
+                self.path, "qq", "private", "2509355624"))
+
     def test_settings_read_error_does_not_block(self):
         """读不到 settings 时放行 —— 这**不是** fail-open 的残留。
 
