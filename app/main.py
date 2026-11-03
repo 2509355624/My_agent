@@ -2826,6 +2826,15 @@ def run():
     for aid in agent_ids:
         _ensure_system_prompt(aid)
 
+    # 游客会话目录现状（2026-11-03）。
+    # **只报不删**——用户要自己手动清（原话：「我有时间也会自己去手动清洗」）。
+    # 这里把超过 24 小时的目录点名出来，方便他按目录删。
+    try:
+        from app import guest
+        guest.log_status()
+    except Exception:                              # noqa: BLE001
+        logging.getLogger("main").exception("游客目录检查失败")
+
     host = "0.0.0.0"  # 监听所有网卡，允许手机/iPad 局域网访问
     ip = _local_ip()
     print("=" * 50)

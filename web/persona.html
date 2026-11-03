@@ -49,6 +49,9 @@
   .top .live { font-size: 10px; color: var(--accent); border: 1px solid var(--accent-dim);
     padding: 1px 7px; border-radius: 9px; }
   .top .sp { flex: 1; }
+  .quota { font-size: 11px; color: var(--warn); border: 1px solid #6b5218;
+    padding: 2px 9px; border-radius: 10px; white-space: nowrap; }
+  .quota.done { color: var(--err); border-color: #6b2020; }
 
   .log { flex: 1; overflow-y: auto; padding: 16px; display: flex;
     flex-direction: column; gap: 12px; scroll-behavior: smooth; }
@@ -172,6 +175,9 @@
       <span class="nm" id="curName">选一个角色</span>
       <span class="live" id="live" style="display:none">扮演中</span>
       <span class="sp"></span>
+      <a class="btn sm" id="btnLogin" style="display:none;text-decoration:none"
+         href="/" title="登录后可以无限对话、还能出图">登录</a>
+      <span class="quota" id="quota" style="display:none"></span>
     </div>
     <div class="log" id="log">
       <div class="empty">左边点一个角色开始<br>或者直接用输入框说话</div>
@@ -202,6 +208,8 @@
 const $ = id => document.getElementById(id);
 const QQ = new URLSearchParams(location.search).get("qq") || "";
 let card = null, busy = false, msgs = [];
+let ROLE = "member";     // member / guest
+let GUEST_LEFT = 0;      // 游客还剩几轮
 
 // ── 请求 ──────────────────────────────────────────────
 async function api(p, opt) {
@@ -283,8 +291,8 @@ function makeRow(m, idx) {
 
   if (m.imageUrl) setPic(idx, m.imageUrl);
 
-  // ★ 工具条：出图 / 重新生图
-  if (m.role === "assistant") {
+  // ★ 工具条：出图 / 重新生图（**游客不显示**——体验版不能出图）
+  if (m.role === "assistant" && ROLE !== "guest") {
     const tools = document.createElement("div");
     tools.className = "tools";
 
@@ -383,13 +391,43 @@ const picStore = {
 async function loadSession() {
   try {
     const d = await api("/api/persona/session");
+    ROLE = d.role || "member";
+    GUEST_LEFT = (d.remaining === undefined) ? -1 : d.remaining;
     card = d.card;
     $("curName").textContent = card ? card.name : "选一个角色";
     $("live").style.display = card ? "" : "none";
+    renderQuota();
     renderAll(d.messages || []);
     renderState(d);
     await loadCards();
+    applyRoleUI();
   } catch (e) { toast(e.message, true); }
+}
+
+function renderQuota() {
+  const q = $("quota");
+  if (ROLE !== "guest") { q.style.display = "none"; return; }
+  q.style.display = "";
+  q.className = "quota" + (GUEST_LEFT <= 0 ? " done" : "");
+  q.textContent = GUEST_LEFT > 0
+    ? ("体验版 剩 " + GUEST_LEFT + " 轮")
+    : "体验版已用完";
+}
+
+function applyRoleUI() {
+  const guest = ROLE === "guest";
+  // 游客：隐藏换角色入口、清空/出戏；出图按钮禁掉
+  $("btnNew").style.display = guest ? "none" : "";
+  $("btnClear").style.display = guest ? "none" : "";
+  $("btnLeave").style.display = guest ? "none" : "";
+  $("btnLogin").style.display = guest ? "" : "none";
+  // 用完 15 轮就锁输入框
+  const done = guest && GUEST_LEFT <= 0;
+  $("inp").disabled = done;
+  $("btnSend").disabled = done;
+  $("inp").placeholder = done
+    ? "体验版玩完啦，点右上角登录继续"
+    : "说点什么…";
 }
 
 // ── 发消息 ────────────────────────────────────────────
@@ -422,9 +460,23 @@ async function send() {
     renderState({ mood: d.mood, intensity: d.intensity, state: d.state,
                   note: $("sNote").textContent,
                   turns: (+$("sTurns").textContent || 0) + 1 });
+    if (ROLE === "guest" && d.remaining !== undefined) {
+      GUEST_LEFT = d.remaining;
+      renderQuota();
+      applyRoleUI();
+      if (GUEST_LEFT <= 2 && GUEST_LEFT > 0) {
+        toast("体验版还剩 " + GUEST_LEFT + " 轮");
+      }
+    }
   } catch (err) {
     pending.remove();
     msgs.pop();
+    // 游客额度用完：后端回 403 + limit:true
+    if (ROLE === "guest" && /体验版/.test(err.message)) {
+      GUEST_LEFT = 0;
+      renderQuota();
+      applyRoleUI();
+    }
     toast(err.message, true);
   } finally {
     busy = false;
