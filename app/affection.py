@@ -449,24 +449,24 @@ def set_mode(line_key, raid):
             return ("还接着上次的结局（%s）：数值已锁定，她停在那天的情绪里。"
                     "想重新攻略就发「重新开始」。" % ename)
         if rec.get("mode") == MODE_RAID:
-            return "现在已经是攻略模式了，当前好感 %+d。" % int(
+            return "现在已经是攻略模式了，当前好感 %d。" % int(
                 rec.get("value") or 0)
         was = int(rec.get("value") or 0)
         rec["mode"] = MODE_RAID
         ent["affection"] = rec
         _save_entry(line_key, ent)
-        return "攻略模式已恢复：好感 %+d，接着上次来。" % was
+        return "攻略模式已恢复：好感 %d，接着上次来。" % was
     # → 自由模式：封存
     if existing is None:
         return "现在本来就是自由模式。发「攻略模式」开启好感玩法。"
     rec = existing
     if rec.get("mode") == MODE_FREE:
-        return "现在就是自由模式（好感 %+d 封存中）。发「攻略模式」接着玩。" % int(
+        return "现在就是自由模式（好感 %d 封存中）。发「攻略模式」接着玩。" % int(
             rec.get("value") or 0)
     rec["mode"] = MODE_FREE
     ent["affection"] = rec
     _save_entry(line_key, ent)
-    return ("已切回自由模式（好感 %+d 封存，她不再按档位演戏）。"
+    return ("已切回自由模式（好感 %d 封存，她不再按档位演戏）。"
             "想接着攻略就发「攻略模式」，好感原样恢复。" % int(
                 rec.get("value") or 0))
 
@@ -866,14 +866,17 @@ def tail_line(res):
     """QQ 回复尾部追加的状态块。
 
     2026-11-04 早先的版本**不报数字**（怕玩家算账）；当天晚些时候用户拍板
-    反过来要数字：「看到数值浮动才有成就感」。所以现在是**一行一个数值**，
+    反过来要数字：「看到数值浮动才有成就感」。所以数值**一行一个**，
     正数不带加号、负数才带负号。
 
-    格式：
-        ❤ 说得进心里 · 有点乱
-        好感 12
-        距离 3/5
-        冲动 42
+    格式（当日二次修订）：原来首行是 `❤ 家里的人 · 平静`，玩家会把它读成
+    「她现在的状态」——「家里的人」其实是**关系**、「平静」是**气氛**；
+    `距离 3/5` 也抽象得看不懂。现在每个词都带标签，距离改成人话：
+
+        ❤ 关系 家里的人 · 第 3 级 / 共 5 级
+        气氛 平静
+        好感 21
+        冲动 0
 
     越界那一轮气氛让位给「她退开了」——那轮的信号是「她退开了」，不是气氛；
     数字照给，因为这一轮的掉分正是要看的东西。
@@ -886,24 +889,26 @@ def tail_line(res):
         name = (ending_cfg(ending, load_config()) or {}).get("name") or "结局"
         return "%s 已结局【%s】" % (mark, name)
     lname = res.get("levelName") or level_name(int(res.get("level") or 0)) or "?"
-    head = "❤ %s%s" % (lname, " ↑" if res.get("rose") else "")
-    # 越界那一轮气氛不是重点——这轮要说的是「她退开了」，气氛留给没出事的时候
-    if res.get("cross") == "hard":
-        head += " · 她退开了"
-    else:
-        ar = arousal_name(res.get("arousal") or 0)
-        if ar:
-            head += " · " + ar
-    if int(res.get("crossN") or 0) > 0:
-        head += " · 被拒 %d 次" % int(res.get("crossN") or 0)
     lv = int(res.get("level") or 0)
     lv_max = int(res.get("levelMax") or LEVEL_MAX)
-    return "\n".join([
-        head,
-        "好感 %d" % int(res.get("value") or 0),
-        "距离 %d/%d" % (lv, lv_max),
-        "冲动 %d" % int(res.get("arousal") or 0),
-    ])
+    head = "❤ 关系 %s · 第 %d 级 / 共 %d 级" % (lname, lv, lv_max)
+    if res.get("rose"):
+        head += " ↑"
+    # 第二行：气氛。越界那一轮不是重点——那轮要说的是「她退开了」。
+    if res.get("cross") == "hard":
+        mood = "她退开了"
+    else:
+        ar = arousal_name(res.get("arousal") or 0)
+        mood = ("气氛 " + ar) if ar else ""
+    if int(res.get("crossN") or 0) > 0:
+        part = "被拒 %d 次" % int(res.get("crossN") or 0)
+        mood = (mood + " · " + part) if mood else part
+    rows = [head]
+    if mood:
+        rows.append(mood)
+    rows.append("好感 %d" % int(res.get("value") or 0))
+    rows.append("冲动 %d" % int(res.get("arousal") or 0))
+    return "\n".join(rows)
 
 
 def detail_nodes(line_key):
@@ -928,7 +933,10 @@ def detail_nodes(line_key):
     else:
         head.append("状态：攻略中")
     lv = int(rec.get("level") or 0)
-    head.append("你们：%s" % (level_name(lv, cfg, card) or "?"))
+    # 关系叫法 + 等级写在一起，和 QQ 尾行同一套说法（2026-11-04 二次修订：
+    # 只写「你们：家里的人」看不出还有几级，写「距离 3/5」又没人知道在量什么）。
+    head.append("你们：%s（第 %d 级 / 共 %d 级）"
+                % (level_name(lv, cfg, card) or "?", lv, LEVEL_MAX))
     head.append("她对你的感觉：%s"
                 % (_tier_view(tier_for(value, cfg), lv).get("name") or "?"))
     # 气氛（2026-11-04）：冲动是一次性的，查档案这一刻看到的就是「此刻」。
@@ -940,7 +948,7 @@ def detail_nodes(line_key):
     if int(rec.get("cross_n") or 0) > 0:
         head.append("越界被拒：%d 次" % int(rec.get("cross_n") or 0))
     if not ending:
-        head.append("好感 %+d" % value)
+        head.append("好感 %d" % value)
         if lv < LEVEL_MAX:
             head += ["", "再往前一步不靠攒分——得有一件能让她愿意往前走的事。"]
         else:
