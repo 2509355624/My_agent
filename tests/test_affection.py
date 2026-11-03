@@ -91,7 +91,7 @@ class DefaultRaidTest(AffBase):
         persona.switch_line("private_1", persona.find_card("妹妹"))
         st = affection.status(persona.resolve_line("private_1"))
         self.assertEqual(st["level"], 2)
-        self.assertEqual(st["value"], 12)
+        self.assertEqual(st["value"], 20)
 
     def test_no_card_still_no_record(self):
         """没在演谁就不该凭空建记录（这条线还没选角色）。"""
@@ -320,7 +320,7 @@ class ModeTest(AffBase):
         affection.wipe_numbers(key)
         st = affection.status(key)
         self.assertEqual(st["level"], 2)
-        self.assertEqual(st["value"], 12)        # 二级门槛
+        self.assertEqual(st["value"], 20)        # 二级门槛（2026-11-04 深夜换标尺）
 
     def test_wipe_numbers_without_line_is_none(self):
         """没在演谁时没东西可清（默认攻略只对有角色线的会话生效）。"""
@@ -454,13 +454,13 @@ class InjectionTest(AffBase):
 
     def test_tail_line(self):
         res = {"active": True, "value": 22, "tierName": "开始凿",
-               "level": 2, "levelName": "说得上话", "ending": "", "applied": 3}
+               "level": 2, "levelName": "能抱了", "ending": "", "applied": 3}
         line = affection.tail_line(res)
-        self.assertIn("说得上话", line)
+        self.assertIn("能抱了", line)
         # 2026-11-04 用户改口要数字：正数**不带加号**，只有负数才带负号。
-        # 同日第四次修订：光有分数看不出「还有多远」，改成档内进度——
-        # l2 的下一档是 l3（门槛 20），22 已经够格但没升上来。
-        self.assertIn("亲密 够了 · 差一步", line)
+        # 同日第四次修订：光有分数看不出「还有多远」，改成档内进度。
+        # 深夜换标尺后 l2 的门槛是 20、下一档 l3 是 30 —— 22 就是 22/30。
+        self.assertIn("亲密 22/30 · 还差 8", line)
         self.assertNotIn("+22", line)
 
     def test_negative_value_never_reads_as_arousal(self):
@@ -718,9 +718,9 @@ class LevelTest(AffBase):
         key = self._raid_card(start_level=2)
         st = affection.status(key)
         self.assertEqual(st["level"], 2)
-        self.assertEqual(st["levelName"], "说得上话")
+        self.assertEqual(st["levelName"], "能抱了")
         # 没给 start_value 就卡在这一级的门槛上，不是 0
-        self.assertEqual(st["value"], 12)
+        self.assertEqual(st["value"], 20)
 
     def test_card_can_start_with_value(self):
         key = self._raid_card(start_level=2, start_value=18)
@@ -795,13 +795,13 @@ class LevelTest(AffBase):
         self.assertEqual(r2["just_ended"], affection.ENDING_JAIL)
 
     def test_old_record_gets_level_backfilled(self):
-        """加层级之前的老存档不能一夜之间退回「隔得很远」。"""
+        """加层级之前的老存档不能一夜之间退回「还没碰过」。"""
         old = {"mode": "raid", "value": 22, "tier": "start", "day": "2026-11-01",
                "chat": 0, "acts": 0, "hist": [], "ending": ""}
         rec = affection.record_of({"affection": old})
-        # 22 ≥ l3 的门槛 20，老档再补一级 → l4；不补就是「进度被抹」，
+        # 22 ≥ l2 的门槛 20，老档再补一级 → l3；不补就是「进度被抹」，
         # 老玩家回来发现身体上的关系退回去了（2026-11-04 用户拍板补一级）
-        self.assertEqual(rec["level"], 4)
+        self.assertEqual(rec["level"], 3)
         self.assertEqual(rec["arousal"], 0)
         self.assertEqual(rec["cross_n"], 0)
 
@@ -860,13 +860,16 @@ class LevelTest(AffBase):
     # 但看不出还差多远；所以补一个「这一档走到下一档」的进度。
 
     def test_gauge_counts_within_the_current_level(self):
-        """分母是**下一档门槛**，不是总上限：l3(20) → l4(30)，21 分差的 9。"""
-        g = affection.intimacy_gauge(3, 21)
-        self.assertEqual((g["gate"], g["nextGate"]), (20, 30))
-        self.assertEqual(g["need"], 9)
-        self.assertEqual(g["pct"], 10)          # (21-20)/10
+        """分母是**下一档门槛**，不是总上限：l3(30) → l4(40)，34 分差的 6。
+
+        2026-11-04 深夜换标尺：7 级，门槛 0/10/20/30/40/50/65。
+        """
+        g = affection.intimacy_gauge(3, 34)
+        self.assertEqual((g["gate"], g["nextGate"]), (30, 40))
+        self.assertEqual(g["need"], 6)
+        self.assertEqual(g["pct"], 40)          # (34-30)/10
         self.assertFalse(g["maxed"])
-        self.assertEqual(g["label"], "21/30 · 还差 9")
+        self.assertEqual(g["label"], "34/40 · 还差 6")
 
     def test_gauge_says_ready_but_not_risen(self):
         """分数够了、那场戏还没做成 → 「够了 · 差一步」。
@@ -875,7 +878,7 @@ class LevelTest(AffBase):
         不写 `30/30` 也不写 `50/12`：好感能涨到 50，等级却可能卡在 l1，
         分子比分母大那句话就没法看了。
         """
-        g = affection.intimacy_gauge(3, 30)
+        g = affection.intimacy_gauge(3, 40)     # l3 门槛 30，l4 门槛 40
         self.assertEqual(g["need"], 0)
         self.assertEqual(g["pct"], 100)
         self.assertFalse(g["maxed"])            # 还没升到 l4，别报「到顶」
@@ -887,18 +890,19 @@ class LevelTest(AffBase):
     def test_gauge_switches_to_tiers_after_max_level(self):
         """等级满级不等于到顶（2026-11-04 晚）：好感上限 100，档位还能往后走。
 
-        等级只有 6 档，40 分就满了；可 50（在一起了）、75（交给你了）在后面。
+        7 级满级门槛是 65；可 75（交给你了）还在后面。
         满级后必须改由档位算「下一站」，否则会误报「到顶」，玩家又以为结束了。
         """
-        g = affection.intimacy_gauge(5, 55)
+        g = affection.intimacy_gauge(6, 70)
         self.assertFalse(g["maxed"])
         self.assertEqual(g["nextGate"], 75)
-        self.assertEqual(g["label"], "55/75 · 还差 20")
-        # 45 分、等级已满 → 下一站是 50 那一档
-        self.assertEqual(affection.intimacy_gauge(5, 45)["label"], "45/50 · 还差 5")
+        self.assertEqual(g["label"], "70/75 · 还差 5")
+        # 66 分、等级已满 → 下一站仍是 75
+        self.assertEqual(affection.intimacy_gauge(6, 66)["label"],
+                         "66/75 · 还差 9")
 
     def test_gauge_really_maxed_only_after_last_tier(self):
-        g = affection.intimacy_gauge(5, 80)
+        g = affection.intimacy_gauge(6, 80)
         self.assertTrue(g["maxed"])
         self.assertEqual(g["label"], "80 到顶")
         self.assertEqual(g["pct"], 100)
@@ -926,10 +930,14 @@ class LevelTest(AffBase):
 
 
 class ExciteTest(AffBase):
-    """兴奋度（2026-11-04 晚）：只在进行中累积，场景一停就归零。
+    """高潮值（2026-11-04 深夜，原「兴奋度」）：只在进行中累积，场景一停归零。
 
-    和冲动的分工是这一层的关键——冲动是「她此刻想不想」（每轮回落），
-    兴奋度是「这一场里她到哪了」（场景内涨、场景外没有）。
+    和冲动的分工是这一层的关键——冲动值 = 「她此刻想不想做」（每轮回落，
+    和羁绊一起决定接不接得住）；高潮值 = 「这一场里她到哪了」（场景内涨、
+    场景外没有，决定这一拍怎么写）。
+
+    记法也在这一版改了：**不再是模型给增量**，而是它判「这一轮在干什么」
+    （`act`），涨多少由 `orgasm_hints.base` 那张表算。
     """
 
     def _raid(self):
@@ -945,64 +953,151 @@ class ExciteTest(AffBase):
         sc.update(score)
         return affection.settle(key, sc)
 
+    def _base(self, act):
+        return affection.act_base(act)[1]
+
     def test_starts_from_a_baseline_then_accumulates(self):
-        """刚进场景不是从 0 起：她已经在这个状态里了。"""
+        """刚进场景不是从 0 起：她已经在这个状态里了。涨多少看动作档位。"""
         key = self._raid()
-        res = self._settle(key, in_scene=True, excite=10)
-        self.assertEqual(res["excite"], affection.EXCITE_START + 10)
+        res = self._settle(key, in_scene=True, act="foreplay")
+        self.assertEqual(res["excite"], affection.EXCITE_START + self._base("foreplay"))
         self.assertTrue(res["in_scene"])
-        # 还在里面：继续累加
-        res = self._settle(key, in_scene=True, excite=10)
-        self.assertEqual(res["excite"], affection.EXCITE_START + 20)
+        # 还在里面：继续按动作档累加
+        res = self._settle(key, in_scene=True, act="hand")
+        self.assertEqual(res["excite"],
+                         affection.EXCITE_START + self._base("foreplay")
+                         + self._base("hand"))
+
+    def test_action_tier_drives_the_curve(self):
+        """同样的轮数，「加重」比「前戏」涨得快——这是动作强度表的意义。"""
+        a = self._raid()
+        self._settle(a, in_scene=True, act="intense")
+        slow = self._raid()
+        self.assertEqual(
+            self._settle(self._raid(), in_scene=True, act="intense")["excite"]
+            > self._settle(slow, in_scene=True, act="foreplay")["excite"], True)
 
     def test_negative_delta_pulls_it_back(self):
+        """中途停下/被打断，高潮值要掉。"""
         key = self._raid()
-        self._settle(key, in_scene=True, excite=30)
-        res = self._settle(key, in_scene=True, excite=-15)
-        self.assertEqual(res["excite"], affection.EXCITE_START + 15)
+        self._settle(key, in_scene=True, act="intense")
+        before = self._settle(key, in_scene=True, act="none")["excite"]
+        res = self._settle(key, in_scene=True, act="stop")
+        self.assertLess(res["excite"], before)
 
     def test_drops_to_zero_when_scene_ends(self):
         """场景一停就归零——它不是常驻状态，是这一场里的进度。"""
         key = self._raid()
-        self._settle(key, in_scene=True, excite=40)
+        self._settle(key, in_scene=True, act="intense")
         res = self._settle(key, in_scene=False)
         self.assertEqual(res["excite"], 0)
         self.assertFalse(res["in_scene"])
 
-    def test_clamped_to_range(self):
+    def test_reaches_top_and_falls_back_not_clamped(self):
+        """到 100 触发一次高潮并回落到余韵值，不是死死卡在 100。"""
         key = self._raid()
-        for _ in range(4):
-            res = self._settle(key, in_scene=True, excite=60)
-        self.assertEqual(res["excite"], affection.EXCITE_MAX)
+        res = None
+        for _ in range(6):
+            res = self._settle(key, in_scene=True, act="intense")
+        self.assertGreaterEqual(res["orgasms"], 1)
+        self.assertLess(res["excite"], affection.EXCITE_MAX)
+        self.assertGreater(res["excite"], 0)
+
+    def test_capped_after_max_orgasms(self):
+        """单场用满次数就强制收场：场景结束、高潮值归零。"""
+        key = self._raid()
+        res = None
+        for _ in range(40):
+            res = self._settle(key, in_scene=True, act="intense")
+            if res["sceneCapped"]:
+                break
+        self.assertTrue(res["sceneCapped"])
+        self.assertFalse(res["in_scene"])
+        self.assertEqual(res["excite"], 0)
+        self.assertEqual(res["orgasms"], affection.ORGASM_MAX)
 
     def test_tail_line_only_shows_it_in_scene(self):
-        """没在场景里不该多一行「兴奋 0」——那会让人以为她冷了。"""
-        res = {"active": True, "level": 2, "levelName": "说得上话",
+        """没在场景里不该多一行「高潮 0」——那会让人以为她冷了。"""
+        res = {"active": True, "level": 2, "levelName": "能抱了",
                "value": 20, "arousal": 30, "ending": ""}
-        self.assertNotIn("兴奋", affection.tail_line(res))
+        self.assertNotIn("高潮", affection.tail_line(res))
         res["excite"] = 62
-        self.assertIn("兴奋 62", affection.tail_line(res))
+        self.assertIn("高潮 62 · 0/5", affection.tail_line(res))
 
     def test_high_arousal_lets_her_lead(self):
-        """冲动高到 90 且接得住时，注入要放她「先动」的许可（用户要的反客为主）。"""
-        res = {"active": True, "value": 40, "level": 5, "levelName": "不分彼此",
-               "tierName": "在一起", "arousal": 95, "excite": 0, "ending": ""}
+        """冲动够高且接得住时，注入要放她「先动」的许可（用户要的反客为主）。
+
+        2026-11-04 深夜：门槛改成双轴之后，光冲动高不够——羁绊也得够
+        （l6 要 65 羁绊 / 88 冲动）。所以这里给的是两样都过的一组数。
+        """
+        res = {"active": True, "value": 70, "level": 6, "levelName": "要不够",
+               "tierName": "在一起", "arousal": 95, "excite": 40, "ending": ""}
         blk = affection.injection_block(res)
         self.assertIn("由她先动", blk)
 
     def test_high_excite_also_lets_her_lead(self):
-        """兴奋度够高一样推她主动——不只看冲动。"""
-        res = {"active": True, "value": 40, "level": 5, "levelName": "不分彼此",
-               "tierName": "在一起", "arousal": 0, "excite": 90, "ending": ""}
+        """高潮值够高一样推她主动——不只看冲动。"""
+        res = {"active": True, "value": 70, "level": 6, "levelName": "要不够",
+               "tierName": "在一起", "arousal": 90, "excite": 90, "ending": ""}
         blk = affection.injection_block(res)
         self.assertIn("由她先动", blk)
 
     def test_negative_value_never_gets_lead_permission(self):
         """赎罪期不许反客为主：她还在算账，主动靠近不成立。"""
-        res = {"active": True, "value": -22, "level": 3, "levelName": "说得进心里",
+        res = {"active": True, "value": -22, "level": 3, "levelName": "亲过了",
                "tierName": "在等你认错", "arousal": 95, "excite": 90, "ending": ""}
         blk = affection.injection_block(res)
         self.assertNotIn("由她先动", blk)
+
+
+class CanCrossTest(AffBase):
+    """双轴门槛（2026-11-04 深夜）：羁绊和冲动**两条都要过**。
+
+    这是用户实测那个毛病的修复点：旧版只判 `value >= guard - arousal//5`，
+    于是「好感 40、冲动 0」也能推倒——中间没有气氛这一环。
+    """
+
+    def test_both_axes_required(self):
+        cfg = _cfg()
+        # l5 做过了：gate 50 / arousal_gate 77
+        self.assertFalse(affection._can_cross(60, 5, 0, cfg))
+        self.assertFalse(affection._can_cross(40, 5, 90, cfg))
+        self.assertTrue(affection._can_cross(60, 5, 80, cfg))
+
+    def test_need_reports_the_gap(self):
+        """`_need_to_cross` 报的是**下一级**的门槛，不是当前级。
+
+        站在 lv5「做过了」（50/77），下一级 l6「要不够」要 65/88：
+        40 羁绊差 25、50 冲动差 38。
+        """
+        cfg = _cfg()
+        dv, da = affection._need_to_cross(40, 5, 50, cfg)
+        self.assertEqual(dv, 25)
+        self.assertEqual(da, 38)
+
+    def test_cross_gap_reports_the_current_level(self):
+        """`_cross_gap` 报的是**当前级**的门槛：这一轮能不能做。
+
+        同一个位置（lv5、40 羁绊、50 冲动）：差 10 / 差 27。
+        两个函数差一整级，混用一次注入就会说错话。
+        """
+        cfg = _cfg()
+        dv, da = affection._cross_gap(40, 5, 50, cfg)
+        self.assertEqual(dv, 10)
+        self.assertEqual(da, 27)
+
+    def test_need_at_top_level_falls_back_to_current(self):
+        """到顶了没有「下一级」，退回按当前级算，不能报一个不存在的门槛。"""
+        cfg = _cfg()
+        self.assertEqual(affection._need_to_cross(70, affection.LEVEL_MAX, 90, cfg),
+                         affection._cross_gap(70, affection.LEVEL_MAX, 90, cfg))
+
+    def test_falls_back_to_old_rule_without_arousal_gate(self):
+        """老配置没有 arousal_gate 时退回单轴判法，不能直接崩。"""
+        cfg = {"intimacy": {"levels": [
+            {"key": "l0", "name": "x", "gate": 0, "guard": 15}]}}
+        self.assertTrue(affection._can_cross(20, 0, 0, cfg))
+        self.assertFalse(affection._can_cross(0, 0, 0, cfg))
 
 
 class ArousalViewTest(AffBase):
@@ -1010,8 +1105,9 @@ class ArousalViewTest(AffBase):
 
     def test_arousal_name_boundaries(self):
         cfg = _cfg()
-        cases = [(0, "平静"), (24, "平静"), (25, "有点乱"), (49, "有点乱"),
-                 (50, "很乱"), (74, "很乱"), (75, "不设防"), (100, "不设防")]
+        cases = [(0, "没什么"), (19, "没什么"), (20, "有点想"), (44, "有点想"),
+                 (45, "想"), (69, "想"), (70, "很想"), (89, "很想"),
+                 (90, "忍不住了"), (100, "忍不住了")]
         for v, want in cases:
             self.assertEqual(affection.arousal_name(v, cfg), want, v)
 
@@ -1019,7 +1115,7 @@ class ArousalViewTest(AffBase):
         """用户把 arousal_levels 删了也不能空着——回退默认四档。"""
         cfg = _cfg()
         cfg.pop("arousal_levels", None)
-        self.assertEqual(affection.arousal_name(80, cfg), "不设防")
+        self.assertEqual(affection.arousal_name(80, cfg), "很想")
 
     def test_tail_line_carries_arousal(self):
         """尾行要常驻气氛：首行说关系，第二行单独说气氛。
@@ -1032,37 +1128,37 @@ class ArousalViewTest(AffBase):
                "arousal": 55, "tier": "", "ending": ""}
         rows = affection.tail_line(res).splitlines()
         self.assertEqual(rows[0], "❤ 关系 说得上话")
-        self.assertEqual(rows[1], "气氛 很乱")
+        self.assertEqual(rows[1], "气氛 想")
 
     def test_tail_line_skips_arousal_on_hard_cross(self):
         """越界那轮气氛不是重点，别把「她退开了」挤掉。"""
-        res = {"active": True, "level": 2, "levelName": "说得上话",
+        res = {"active": True, "level": 2, "levelName": "能抱了",
                "arousal": 70, "cross": "hard", "ending": ""}
         rows = affection.tail_line(res).splitlines()
-        self.assertEqual(rows[0], "❤ 关系 说得上话")
+        self.assertEqual(rows[0], "❤ 关系 能抱了")
         self.assertEqual(rows[1], "她退开了")
 
     def test_tail_line_marks_level_up(self):
-        res = {"active": True, "level": 3, "levelName": "说得进心里",
-               "arousal": 30, "rose": 3, "ending": ""}
+        res = {"active": True, "level": 3, "levelName": "亲过了",
+               "arousal": 50, "rose": 3, "ending": ""}
         rows = affection.tail_line(res).splitlines()
-        self.assertEqual(rows[0], "❤ 关系 说得进心里 ↑")
-        self.assertEqual(rows[1], "气氛 有点乱")
+        self.assertEqual(rows[0], "❤ 关系 亲过了 ↑")
+        self.assertEqual(rows[1], "气氛 想")
 
     def test_tail_line_is_one_number_per_line(self):
         """一行一个数值（2026-11-04 用户要求的排版）：亲密 / 冲动。
 
         关系进度不再是 `距离 3/5`（玩家看不懂 3/5 是在量什么），也不再写
         「第 3 级 / 共 5 级」（级是行话）。第四次修订又把它加回来了，但换成
-        「这一档走到下一档」的读法：`亲密 21/30 · 还差 9`——分母就是下一档
+        「这一档走到下一档」的读法：`亲密 34/40 · 还差 6`——分母就是下一档
         的门槛，玩家一眼能算出还要几分。
         """
-        res = {"active": True, "level": 3, "levelMax": 5,
-               "levelName": "说得进心里", "value": 21, "arousal": 42,
+        res = {"active": True, "level": 3, "levelMax": 6,
+               "levelName": "亲过了", "value": 34, "arousal": 50,
                "ending": ""}
         rows = affection.tail_line(res).splitlines()
-        self.assertEqual(rows[0], "❤ 关系 说得进心里")
-        self.assertEqual(rows[1:], ["气氛 有点乱", "亲密 21/30 · 还差 9", "冲动 42"])
+        self.assertEqual(rows[0], "❤ 关系 亲过了")
+        self.assertEqual(rows[1:], ["气氛 想", "亲密 34/40 · 还差 6", "冲动 50"])
         # 关系和气氛之外的词都是行话，玩家读不懂，一律不出现
         self.assertNotIn("距离", affection.tail_line(res))
         self.assertNotIn("级", affection.tail_line(res))
@@ -1073,7 +1169,7 @@ class ArousalViewTest(AffBase):
         负分时不报「到下一档还差多少」：赎罪期看的是能不能回到 0，
         那个分母一点意义都没有。
         """
-        res = {"active": True, "level": 0, "levelName": "隔得很远",
+        res = {"active": True, "level": 0, "levelName": "还没碰过",
                "value": -8, "arousal": 0, "ending": ""}
         self.assertIn("亲密 -8", affection.tail_line(res))
 
@@ -1082,10 +1178,96 @@ class ArousalViewTest(AffBase):
         key = self._raid()
         st = affection.status(key)
         self.assertEqual(st["level"], 0)
-        self.assertEqual(st["levelMax"], 5)
+        self.assertEqual(st["levelMax"], 6)
         self.assertEqual(st["arousal"], 0)
-        self.assertEqual(st["arousalName"], "平静")
+        self.assertEqual(st["arousalName"], "没什么")
         self.assertIn("crossN", st)
+
+
+class PanelTest(AffBase):
+    """状态面板（2026-11-04 深夜）：把每一档摊平画成「当前值/门槛」。
+
+    用户的原话：「一列下来，每一行它都有对应的一个数值，对应当前的
+    一个状态」。所以这里测的是**行数和标记**，不是文案。
+    """
+
+    def _raid(self):
+        persona.save_cards([_card("纱雾")])
+        card = persona.find_card("纱雾")
+        persona.switch_line("private_1", card)
+        key = persona.resolve_line("private_1")
+        affection.set_mode(key, True)
+        return key
+
+    def _set(self, key, **kw):
+        ent, rec = affection._ensure(key)
+        rec.update(kw)
+        ent["affection"] = rec
+        affection._save_entry(key, ent)
+        return rec
+
+    def test_panel_has_all_four_sections(self):
+        """四段都要在：身体进度 / 感情 / 冲动 / 高潮。少一段玩家就缺一块信息。"""
+        key = self._raid()
+        p = affection.panel(key)
+        self.assertEqual(len(p["intimacy"]), 7)      # 七级身体进度
+        self.assertEqual(len(p["arousals"]), 5)      # 冲动五档
+        self.assertEqual(len(p["orgasms_rows"]), 5)  # 高潮五档
+        self.assertGreaterEqual(len(p["tiers"]), 5)  # 感情正向档位
+        self.assertIn("needValue", p)
+        self.assertIn("needArousal", p)
+
+    def test_current_row_is_marked(self):
+        """值落在哪一档，那一行就是 current —— 高亮错了整个面板就废了。"""
+        key = self._raid()
+        # 冲动 52 落在「想」（45~69）
+        self._set(key, arousal=52, value=42, level=3)
+        p = affection.panel(key)
+        cur = [r for r in p["arousals"] if r["state"] == "current"]
+        self.assertEqual(len(cur), 1)
+        self.assertEqual(cur[0]["name"], "想")
+
+    def test_highlights_follow_the_value_up(self):
+        """值往上走，高亮行要跟着往上——这是「看到条被顶满」的全部意义。"""
+        key = self._raid()
+        seen = []
+        for v in (10, 52, 95):
+            self._set(key, arousal=v)
+            cur = [r["name"] for r in affection.panel(key)["arousals"]
+                   if r["state"] == "current"]
+            seen.append(cur[0] if cur else "")
+        self.assertEqual(seen, ["没什么", "想", "忍不住了"])
+
+    def test_orgasm_section_only_in_scene(self):
+        """高潮值没在进行时不该进面板——那不是「0」，是「没有这一项」。"""
+        key = self._raid()
+        self._set(key, excite=0, scene=False)
+        self.assertFalse(affection.panel(key)["inScene"])
+        self._set(key, excite=68, scene=True)
+        self.assertTrue(affection.panel(key)["inScene"])
+
+    def test_panel_text_lists_every_row(self):
+        """「状态」指令的文本版要把每一行都列出来，不能只给一句结论。"""
+        key = self._raid()
+        # 42 羁绊 + 12 冲动：l4「碰过了」要 40/65，感情够了，卡在气氛
+        self._set(key, value=42, level=3, arousal=12)
+        t = affection.panel_text(key)
+        self.assertIn("身体进度", t)
+        self.assertIn("还没碰过", t)
+        self.assertIn("要不够", t)
+        self.assertIn("气氛还差", t)          # 12 < 65
+        self.assertNotIn("感情还差", t)       # 42 > 40，感情这关过了
+        # 感情缺口也要能报出来：站在 lv1，下一级「能抱了」要 20/35，
+        # 羁绊 15 就差 5 点——两样都缺的时候必须两条都报。
+        self._set(key, value=15, level=1, arousal=12)
+        t2 = affection.panel_text(key)
+        self.assertIn("感情还差", t2)
+        self.assertIn("气氛还差", t2)
+
+    def test_panel_needs_a_card(self):
+        """没在演谁就没有面板（和 detail_nodes 同一口径）。"""
+        self._enter()
+        self.assertIsNone(affection.panel(persona.resolve_line("private_9")))
 
 
 class AchievementTest(AffBase):
@@ -1106,7 +1288,7 @@ class AchievementTest(AffBase):
         self.assertIn("lv1", keys)
         self.assertIn("tier_touch", keys)
         self.assertEqual(next(a for a in res["ach"] if a["k"] == "lv1")["name"],
-                         "点头之交")
+                         "能碰到了")
 
     def test_card_level_names_drive_achievement_name(self):
         """骨科卡第 1 级叫「妹妹」，成就名也得叫这个——两处不一致像两个系统。"""
@@ -1163,7 +1345,7 @@ class AchievementTest(AffBase):
         nodes = affection.achievement_nodes(key)
         self.assertTrue(nodes)
         body = nodes[0]
-        self.assertIn("点头之交", body)
+        self.assertIn("能碰到了", body)
         self.assertIn("？？？", body)
         self.assertNotIn("进局子", body)      # 没解锁的不剧透
 
@@ -1192,18 +1374,21 @@ class MigrationTest(AffBase):
 
     def test_level_backfilled_from_value(self):
         """老档按好感反推层级，再**补一级**——旧系统没有「距离」这个轴，
-        反推出来必然保守，不补就等于把走过的那段路抹了（2026-11-04 用户拍板）。"""
-        cases = [(0, 0), (7, 2), (20, 4), (33, 4), (47, 5)]
+        反推出来必然保守，不补就等于把走过的那段路抹了（2026-11-04 用户拍板）。
+
+        2026-11-04 深夜换标尺后重算：门槛 0/10/20/30/40/50/65。
+        """
+        cases = [(0, 0), (7, 0), (20, 3), (33, 4), (47, 5), (66, 6)]
         for v, want in cases:
             rec = affection._migrate(self._legacy(value=v))
             self.assertEqual(rec["level"], want, v)
 
     def test_bonus_never_reaches_top_level(self):
-        """33 分反推 lv4，补一级就到顶了——顶格是终点站，白送就没有下一步。"""
-        rec = affection._migrate(self._legacy(value=33))
+        """45 分反推 lv5，补一级就到顶了——顶格是终点站，白送就没有下一步。"""
+        rec = affection._migrate(self._legacy(value=45))
         self.assertEqual(rec["level"], affection.LEVEL_MAX - 1)
-        # 好感自己够到最高一级门票（40）的，自然就是 5
-        rec = affection._migrate(self._legacy(value=41))
+        # 好感自己够到最高一级门票（65）的，自然就是 6
+        rec = affection._migrate(self._legacy(value=66))
         self.assertEqual(rec["level"], affection.LEVEL_MAX)
 
     def test_zero_progress_gets_no_bonus(self):

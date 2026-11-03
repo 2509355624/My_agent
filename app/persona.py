@@ -517,6 +517,11 @@ CLEAR_WORDS = ("清空", "重置", "重开", "从头开始")
 RAID_WORDS = ("攻略模式",)
 FREE_WORDS = ("自由模式",)
 AFF_WORDS = ("好感", "好感度")
+# 状态面板（2026-11-04 深夜）：用户要的「一列一列看数值和对应状态」。
+# 和「好感」的区别：好感是两页档案（数值 + 最近变化），状态是**一张全表**——
+# 身体进度七级、感情七档、冲动五档、高潮五档，每行「当前值/门槛」。
+# 玩家要的不是回顾，是「我还差多少」。
+STATUS_WORDS = ("状态", "进度", "面板")
 # 「清空存档」（2026-11-04）：原来叫「重新开始」，只清数值、聊天记忆留着，
 # 玩家删完发现她还记得上周聊的，觉得「没惩罚」。现在改成真删，并且要二次确认。
 # 词表 `WIPE_WORDS` / 确认句 `WIPE_CONFIRM` 和 pending 一起放在 `wipe_request` 那边。
@@ -1624,6 +1629,18 @@ def is_achievement_query(text, addressed=False):
     return t in ACH_WORDS
 
 
+def is_status_query(text, addressed=False):
+    """这条消息是不是在查「状态面板」（2026-11-04 深夜）。
+
+    同 `is_affection_query` 的道理：要把整张表画成聊天记录卡片，
+    直接发一条长消息会把聊天刷没。
+    """
+    t = _strip_prefix(text, addressed)
+    if t.startswith("#"):
+        t = t[1:].strip()
+    return t in STATUS_WORDS
+
+
 def _strip_prefix(text, addressed=False):
     """把开头的 `@某人` / 「大大怪」剥掉（最多三次，叠着喊的也认）。
 
@@ -1723,6 +1740,8 @@ def handle_command(session_key, text, addressed=False):
             return affection.detail_text(line)
         if body in ACH_WORDS:
             return affection.achievement_text(line)
+        if body in STATUS_WORDS:
+            return affection.panel_text(line)
 
     # `角色扮演 青梅竹马` / `角色扮演，你是我的白色小兔妹妹`：
     # 剥掉命令词，剩下那段先当卡名找；找不到再看整条是不是卡名。
@@ -2168,6 +2187,7 @@ _SCORE_PROMPT = """判断下面这句话**在干什么**，并给这句话对你
   "allow": "yes | hesitate | no",
   "beat": false,
   "in_scene": false,
+  "act": "none",
   "excite": 0,
   "reason": "不超过15个字",
   "note": "不超过15个字"
@@ -2251,16 +2271,27 @@ in_scene（这一轮是不是**正处在**那个行为当中）：
 - true —— 已经开始、还在进行。哪怕是刚起头、或者这一轮刚收尾还没分开。
 - false —— 没在这件事里。分开、穿好、换地方、转头说别的，都算结束。
 - 「他动手但她拒绝了」→ false：没成，就不算在场景里。
-- 这一项只决定「要不要给她的兴奋度记账」，不决定她答不答应。
+- 这一项只决定「要不要给她的高潮值记账」，不决定她答不答应。
 
-excite（她的兴奋度这轮变化多少，-40 ~ +40，**只在 in_scene 为 true 时填**，
-其余一律填 0）：
-- 他做得对、节奏合适、她话都说不利索了：+10 ~ +25
-- 她在忍，想装作没事，其实反应已经出来了：+5 ~ +15
-- 太快太急、她不舒服、走神、被什么打断了：-15 ~ -5
-- 她喊停、明确不要、疼：-30 ~ -20
-- 这不是好感，**不要拿它代替 delta**。它只描述「这一场里她到哪了」，
-  会累加成一个 0~100 的进度，不是感情分。
+act（这一轮**在做什么动作**，只描述动作，不评价她爽不爽）：
+- none —— 没在场景里，或者什么都没发生（in_scene 为 false 时一律填 none）
+- foreplay —— 前戏、接吻、隔着衣服摸、还没到下面
+- hand —— 手指、手掌、手在下面弄
+- mouth —— 用嘴，口、舔、含
+- enter —— 刚进去的那一下、进入
+- thrust —— 在抽送、在动，但节奏正常
+- intense —— 冲刺、加重、换姿势、加深、加快
+- stop —— 中途停了、退出来、被打断、她喊停
+
+**只判动作，不判强度感受。** 涨多少由系统按上面这张档位表算，你不用给幅度；
+如果这一轮明显比档位描述得更狠（或者更轻），可以用 excite 做 ±40 以内的微调，
+不确定就填 0。
+
+excite（微调量，-40 ~ +40，一般填 0）：
+- 这一轮比它那个档位明显更狠：+10 ~ +25
+- 这一轮明显更轻、她在忍、被什么打断了：-15 ~ -5
+- **不要拿它代替 delta**。它不是好感：好感是「她心里怎么看你」，
+  高潮值是「她身上正发生到什么程度」，会累加成一个 0~100 的进度。
 
 当前关系：好感 %(value)+d，阶段【%(tier)s】
 你们到这一步了：【%(level)s】
@@ -2340,6 +2371,9 @@ def _judge_intent_scored(card, said, state="", line_key=""):
              # 2026-11-04 晚 兴奋度两件事：这轮在不在场景里、她的兴奋涨落多少。
              # 同样**不许漏**——settle 只认这个 dict。
              "in_scene": d.get("in_scene"),
+             # 2026-11-04 深夜：涨多少不再由模型拍板，它只判**动作档位**，
+             # 系统按 orgasm_hints.base 换算。`excite` 降级成微调量。
+             "act": d.get("act"),
              "excite": d.get("excite")}
     return intent, note, score
 

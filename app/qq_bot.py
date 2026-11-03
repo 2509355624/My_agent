@@ -1925,6 +1925,15 @@ class QQBot:
                         persona.resolve_line(persona_key))      # noqa: SLF001
                 except Exception:                # noqa: BLE001
                     log.exception("生成成就卡片失败 %s", session_key)
+            elif persona.is_status_query(text, addressed=(at_me or trigger.called(text))):
+                # 「状态」（2026-11-04 深夜）：整张面板——每行一个数值，
+                # 左边当前、右边门槛，够格亮、不够灰。玩家要的是「还差多少」。
+                try:
+                    _t = persona.affection.panel_text(
+                        persona.resolve_line(persona_key))      # noqa: SLF001
+                    node_texts = [_t] if _t else None
+                except Exception:                # noqa: BLE001
+                    log.exception("生成状态面板失败 %s", session_key)
             try:
                 if node_texts:
                     nodes = [qq_api.node_segment(t, name=QQ_BOT_NAME, uin=0)
