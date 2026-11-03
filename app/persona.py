@@ -597,16 +597,20 @@ def comic_brief(card, session_key, extra="", msg_index=None):
 
     last_user = ""
     last_ai = ""
+    scene = ""                  # 「画面：」那一行——本轮画面的定稿
     state = str(ent.get("state") or "").strip()
 
     if msg_index is None:
         for m in reversed(hist):
-            body = split_turn(m["content"])[0].strip() if m["role"] == "assistant" \
-                else str(m["content"] or "").strip()
-            if m["role"] == "assistant" and not last_ai:
-                last_ai = body
-            elif m["role"] == "user" and not last_user:
-                last_user = body
+            if m["role"] == "assistant":
+                body, sc, _mo, _it, _st = split_turn(m["content"] or "")
+                if not last_ai:
+                    last_ai = body.strip()
+                    scene = (sc or "").strip()
+            else:
+                body = str(m["content"] or "").strip()
+                if not last_user:
+                    last_user = body
             if last_user and last_ai:
                 break
     else:
@@ -618,8 +622,9 @@ def comic_brief(card, session_key, extra="", msg_index=None):
             seen += 1
             if seen != int(msg_index):
                 continue
-            last_ai, _sc, _mo, _it, st = split_turn(m["content"] or "")
+            last_ai, sc, _mo, _it, st = split_turn(m["content"] or "")
             last_ai = last_ai.strip()
+            scene = (sc or "").strip()          # 用**那一轮**的画面，不是最后一轮
             if st.strip():
                 state = st.strip()      # 用**那一轮**的状态，不是此刻的
             # 往前找最近的一条用户消息
@@ -634,14 +639,35 @@ def comic_brief(card, session_key, extra="", msg_index=None):
     lines.append("**这是一页，不是一个故事。** 只画下面那一个瞬间，"
                  "用多个格子从不同角度拍它，不要推进时间、不要讲起承转合。")
 
+    # 画面行排第一（2026-11-04）：这是**她这一轮自己写的画面描述**，景别、姿态、
+    # 衣着、接触点都已经定稿，本来就是给生图用的。
+    #
+    # 之前这里只传正文，`split_turn()[0]` 把 scene 丢了，编剧拿着中文散文
+    # 「拽住开衫的衣角盖在膝上」去猜英文构图，猜成了「脊背拱在椅沿」——
+    # 实测一张「坐在小凳上」的画成了反折在椅子上、头抵地。
+    if scene:
+        lines.append("")
+        lines.append("## 这一页的画面（**已定稿，照它画**）")
+        lines.append(scene[:400])
+        lines.append("")
+        lines.append("这一段是**已经写好的画面**，不是素材。景别、姿态、衣着、"
+                     "身体朝向、接触点在哪儿，全部以它为准。")
+        lines.append("")
+        lines.append("可以做的：换角度、换机位、把同一个姿势拆成不同景别拍（全身→"
+                     "近景→手或脸的特写）。")
+        lines.append("**不可以做的**：改姿势。她写「坐着」就画坐着，不许改成躺着、"
+                     "跪着、反折在椅子上；她写「膝盖并拢」就画膝盖并拢。"
+                     "用户原话里如果有和这段冲突的动作描述，**以这一段为准**——"
+                     "原话是他要做什么，这一段才是做完之后她实际的样子。")
+
     if last_user:
         lines.append("")
-        lines.append("## 用户点名要画的（最高优先，**必须有格子直接画它**）")
+        lines.append("## 用户这一轮做了什么")
         lines.append(last_user[:600])
         lines.append("")
-        lines.append("这一节描述的是一个**动作**。整页至少一格要画这个动作正在"
-                     "发生的那一下（谁的身体在做什么、接触在哪里、什么部位露出来），"
-                     "不能只画旁边的人脸、大腿或衣角就交差。")
+        lines.append("这一节说明**发生了什么、接触在哪里**，用来定格子的内容；"
+                     "但**姿势与衣着不从这里推断**——上面那段画面已经定好了，"
+                     "这里只补充「谁在做什么」。")
 
     if extra.strip():
         lines.append("")
@@ -650,18 +676,19 @@ def comic_brief(card, session_key, extra="", msg_index=None):
 
     if last_ai:
         lines.append("")
-        lines.append("## 她此刻正在做什么（画面要和这段一致）")
+        lines.append("## 她此刻正在做什么（正文）")
         lines.append(last_ai[:600])
+        lines.append("")
+        lines.append("正文里**引号中的话**可以直接当台词用，但**不许改写她的台词、"
+                     "也不许替她编旁白**——旁白写什么见下面 `caption` 的规则。")
 
     if state:
         lines.append("")
-        lines.append("## 她身上的状态（**只作参考**）")
+        lines.append("## 上一轮结束时的快照（**只作参考**）")
         lines.append(state)
         lines.append("")
-        lines.append("⚠️ 这条状态是上一轮结束时的快照，**可能落后于上面的动作**。"
-                     "它和「用户点名要画的」冲突时，**以动作那一节为准**——"
-                     "动作说要躺下就画躺下，动作说要被打开就画被打开，"
-                     "不要为了迁就状态里的姿势把动作省掉。")
+        lines.append("⚠️ 这条快照可能落后于上面的画面。"
+                     "它和「这一页的画面」冲突时，**以画面为准**。")
 
     lines.append("")
     lines.append("## 人物")

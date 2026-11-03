@@ -612,6 +612,44 @@ class ShotComicTest(unittest.TestCase):
         self.assertIn("我抱住她", brief)                 # 剧情
         self.assertIn("引用的那段剧情", brief)            # 引用内容
 
+    def test_comic_brief_carries_scene_line(self):
+        """「画面：」必须进 brief，而且排在用户原话**之前**。
+
+        2026-11-04：这里以前只取 `split_turn()[0]`，把画面行丢了。编剧拿着
+        中文散文猜英文构图，实测把「坐在小凳上」画成「反折在椅子上、头抵地」。
+        画面行是她自己写好的定稿，姿态/衣着/接触点都在里面。
+        """
+        from unittest import mock
+        card = {"name": "纱雾", "appearancePrompt": "an adult woman with silver hair"}
+        scene = "sitting on the stool with her knees drawn together, medium close-up"
+        hist = [{"role": "user", "content": "我按住她的手。"},
+                {"role": "assistant",
+                 "content": "她低下头。\n画面：" + scene + "\n心情：害羞 强度8\n状态：坐在小凳上"}]
+        with mock.patch.object(persona, "trim", return_value=hist):
+            brief = persona.comic_brief(card, "private_1")
+        self.assertIn(scene, brief)
+        # 画面在用户原话之前（优先级：画面 > 原话 > 快照）
+        self.assertLess(brief.find(scene), brief.find("我按住她的手"))
+        # 并且明确写了「不许改姿势」
+        self.assertIn("改姿势", brief)
+
+    def test_comic_brief_msg_index_uses_that_turn_scene(self):
+        """按序号取回复时，用的必须是**那一轮**的画面，不是最后一轮的。"""
+        from unittest import mock
+        card = {"name": "纱雾", "appearancePrompt": "an adult woman with silver hair"}
+        hist = [{"role": "user", "content": "第一句"},
+                {"role": "assistant",
+                 "content": "第一次回复。\n画面：standing by the window\n心情：平静 强度2\n状态：站在窗边"},
+                {"role": "user", "content": "第二句"},
+                {"role": "assistant",
+                 "content": "第二次回复。\n画面：lying on the bed\n心情：害羞 强度6\n状态：躺在床上"}]
+        with mock.patch.object(persona, "trim", return_value=hist):
+            brief = persona.comic_brief(card, "private_1", msg_index=0)
+        self.assertIn("standing by the window", brief)
+        self.assertNotIn("lying on the bed", brief)
+        self.assertIn("第一句", brief)                 # 它前面那条用户消息
+        self.assertNotIn("第二句", brief)
+
 
 class RosterCardTest(PersonaBase):
     """`#角色扮演` 的规则用聊天记录卡片发（2026-11-03）。"""
