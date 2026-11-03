@@ -647,36 +647,46 @@ class ArousalViewTest(AffBase):
         self.assertEqual(affection.arousal_name(80, cfg), "不设防")
 
     def test_tail_line_carries_arousal(self):
-        """尾行要常驻气氛：首行固定成 `❤ 关系 · 气氛`。
+        """尾行要常驻气氛：首行说关系，第二行单独说气氛。
 
         用户 2026-11-04 拍板要常驻——多数时候是「平静」，但正因为它一直在，
-        突然变成「很乱」才有分量。
+        突然变成「很乱」才有分量。同日二次修订：**每个词都带标签**，
+        原来 `❤ 家里的人 · 平静` 会被读成「她此刻的状态」。
         """
         res = {"active": True, "level": 2, "levelName": "说得上话",
                "arousal": 55, "tier": "", "ending": ""}
-        self.assertEqual(affection.tail_line(res).splitlines()[0],
-                         "❤ 说得上话 · 很乱")
+        rows = affection.tail_line(res).splitlines()
+        self.assertEqual(rows[0], "❤ 关系 说得上话 · 第 2 级 / 共 5 级")
+        self.assertEqual(rows[1], "气氛 很乱")
 
     def test_tail_line_skips_arousal_on_hard_cross(self):
         """越界那轮气氛不是重点，别把「她退开了」挤掉。"""
         res = {"active": True, "level": 2, "levelName": "说得上话",
                "arousal": 70, "cross": "hard", "ending": ""}
-        self.assertEqual(affection.tail_line(res).splitlines()[0],
-                         "❤ 说得上话 · 她退开了")
+        rows = affection.tail_line(res).splitlines()
+        self.assertEqual(rows[0], "❤ 关系 说得上话 · 第 2 级 / 共 5 级")
+        self.assertEqual(rows[1], "她退开了")
 
     def test_tail_line_marks_level_up(self):
         res = {"active": True, "level": 3, "levelName": "说得进心里",
                "arousal": 30, "rose": 3, "ending": ""}
-        self.assertEqual(affection.tail_line(res).splitlines()[0],
-                         "❤ 说得进心里 ↑ · 有点乱")
+        rows = affection.tail_line(res).splitlines()
+        self.assertEqual(rows[0], "❤ 关系 说得进心里 · 第 3 级 / 共 5 级 ↑")
+        self.assertEqual(rows[1], "气氛 有点乱")
 
     def test_tail_line_is_one_number_per_line(self):
-        """一行一个数值（2026-11-04 用户要求的排版）：好感 / 距离 / 冲动。"""
+        """一行一个数值（2026-11-04 用户要求的排版）：好感 / 冲动。
+
+        关系进度不再是 `距离 3/5`（玩家看不懂 3/5 是在量什么），
+        改成首行里的「第 3 级 / 共 5 级」。
+        """
         res = {"active": True, "level": 3, "levelMax": 5,
                "levelName": "说得进心里", "value": 21, "arousal": 42,
                "ending": ""}
         rows = affection.tail_line(res).splitlines()
-        self.assertEqual(rows[1:], ["好感 21", "距离 3/5", "冲动 42"])
+        self.assertEqual(rows[0], "❤ 关系 说得进心里 · 第 3 级 / 共 5 级")
+        self.assertEqual(rows[1:], ["气氛 有点乱", "好感 21", "冲动 42"])
+        self.assertNotIn("距离", affection.tail_line(res))
 
     def test_tail_line_keeps_minus_sign(self):
         """负数才带负号——掉分的时候玩家要看得见那个减号。"""
