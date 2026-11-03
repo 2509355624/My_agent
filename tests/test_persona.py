@@ -691,6 +691,63 @@ class NoHashCommandTest(PersonaBase):
                                                     addressed=True))
 
 
+class ArchiveTest(PersonaBase):
+    """归档（2026-11-03）：窗口只留 12 条给模型看，存档要全。
+
+    用户报「记录的轮次有问题」——查下来是历史文件卡在 `HISTORY_LIMIT`，
+    聊超过 6 轮之后早先的对话被挤掉了，查看台只能看到最近几轮。
+    """
+
+    def setUp(self):
+        super().setUp()
+        persona.save_cards([_card("纱雾")])
+        self.card = persona.find_card("纱雾")
+
+    def test_archive_path_differs_from_window(self):
+        a = persona._archive_path("private_1")
+        w = persona._hist_path("private_1")
+        self.assertNotEqual(a, w)
+        self.assertIn("archive", os.path.basename(a))
+
+    def test_seed_creates_archive(self):
+        """补写：msgs 为空、seed 非空也要能写。
+
+        第一版守卫写成 `if not msgs: return`，把铺底短路掉了——
+        补写脚本报「已写入」，实际一个文件都没建。
+        """
+        persona._append_archive("private_1", [], seed=[
+            {"role": "user", "content": "a"},
+            {"role": "assistant", "content": "b"},
+        ])
+        p = persona._archive_path("private_1")
+        self.assertTrue(os.path.isfile(p))
+        self.assertEqual(len(persona._read_jsonl(p)) if hasattr(persona, "_read_jsonl")
+                         else sum(1 for _ in open(p, encoding="utf-8")), 2)
+
+    def test_append_does_not_duplicate_seed(self):
+        """归档已存在时只追加新消息，不重铺 seed。"""
+        persona._append_archive("private_1", [], seed=[{"role": "user", "content": "a"}])
+        persona._append_archive("private_1", [{"role": "user", "content": "b"}],
+                                seed=[{"role": "user", "content": "a"}])
+        p = persona._archive_path("private_1")
+        n = sum(1 for _ in open(p, encoding="utf-8"))
+        self.assertEqual(n, 2, "应该 a + b，不能重复写 a")
+
+    def test_archive_survives_window_truncation(self):
+        """窗口被截断后，归档仍然保留全部。"""
+        key = "private_arc"
+        # 手动模拟：10 轮对话，每轮追加到归档
+        for i in range(10):
+            persona._append_archive(key, [
+                {"role": "user", "content": "u%d" % i},
+                {"role": "assistant", "content": "a%d" % i},
+            ])
+        arc = persona._archive_path(key)
+        self.assertEqual(sum(1 for _ in open(arc, encoding="utf-8")), 20)
+        # 窗口只有 12 条的限制不受影响
+        self.assertEqual(persona.HISTORY_LIMIT, 12)
+
+
 class PronounRuleTest(unittest.TestCase):
     """人称规则（2026-11-03）：她是「她」，对面是「你」，不许写成「他」。
 

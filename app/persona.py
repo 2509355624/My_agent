@@ -1222,6 +1222,56 @@ def handle_command(session_key, text, addressed=False):
 
 # ─── 一轮 ────────────────────────────────────────────
 
+def _archive_path(session_key):
+    """归档文件：**完整**历史，不受 `HISTORY_LIMIT` 限制。
+
+    2026-11-03 用户报「记录的轮次有问题」——查下来是 `persona_web_xxx.jsonl`
+    正好卡在 12 条（`HISTORY_LIMIT`）。也就是说聊超过 6 轮之后，早先的对话
+    被滑动窗口挤掉了，查看台只能看到最近 6 轮。
+
+    扮演带 12 条是为了省 token，但**查看记录是另一回事**——存档不该被窗口
+    影响。所以现在两条线并行：
+
+        persona_<key>.jsonl          滑动窗口，只给模型看（12 条）
+        persona_archive_<key>.jsonl  只增不删，给查看台看
+
+    代价是归档会一直变长。暂时不清理——先保证记录完整，等真占地方了再加
+    裁剪策略（按天分文件之类）。
+    """
+    p = _hist_path(session_key)
+    if not p:
+        return None
+    d, n = os.path.split(p)
+    return os.path.join(d, "persona_archive_" + session_key + ".jsonl")
+
+
+def _append_archive(session_key, msgs, seed=None):
+    """往归档里追几条。`seed` 非空时，归档不存在就先把它整份铺进去。
+
+    为什么要 seed：老会话在加这个功能之前就已经被截断了，它们的完整历史
+    早没了。能抢救的只有「当前窗口里这 12 条」——第一次补写时拿它当起点，
+    之后每轮追加，至少从这轮开始不再丢。
+    """
+    p = _archive_path(session_key)
+    # 注意：seed 非空、msgs 为空是**合法**的调用（首次铺底），
+    # 所以判断要把两者一起看。写成 `if not msgs: return` 会把铺底短路掉
+    # （2026-11-03 踩过：补写脚本报「已写入」，实际一个文件都没建）。
+    if not p or (not msgs and not seed):
+        return
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        fresh = not os.path.exists(p)
+        with open(p, "a", encoding="utf-8") as fh:
+            if fresh and seed:
+                for m in seed:
+                    fh.write(json.dumps(m, ensure_ascii=False) + "\n")
+            else:
+                for m in msgs:
+                    fh.write(json.dumps(m, ensure_ascii=False) + "\n")
+    except OSError:
+        log.exception("归档写不进去：%s", p)
+
+
 def _hist_path(session_key):
     """扮演态的历史单独一份，**不跟生图机器人共用**。
 
@@ -1586,6 +1636,13 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
         _save_hist(key, hist[-HISTORY_LIMIT:])
     except Exception:
         log.exception("扮演轮落史失败 %s", key)
+
+    # 归档（2026-11-03）：窗口只留 12 条给模型看，**存档要全**。
+    # 老会话第一次补写时拿当前窗口当起点——更早的已经没了，救不回来。
+    try:
+        _append_archive(key, hist[-2:], seed=hist[-HISTORY_LIMIT:])
+    except Exception:
+        log.exception("归档失败 %s", key)
 
     # 情绪与状态落盘（2026-11-02）：只覆盖不累加——情绪是当下的，
     # 状态是这一格的结果，下一轮读 `state` 续着演。
