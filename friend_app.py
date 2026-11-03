@@ -503,6 +503,18 @@ def proxy_persona(sub):
     return _forward("/api/persona", sub, allow_guest=True)
 
 
+@app.route("/compat")
+@app.route("/compat.html")
+def compat_page():
+    """兼容自检（2026-11-03）。
+
+    群友反馈「看不到输入框」，但不同手机/浏览器表现不一样。这一页不读登录态、
+    不调接口，打开就能看：UA、视口实测、各特性支持与否，还有一个「复制诊断」
+    按钮——让他们把结果发过来，不用猜。
+    """
+    return send_from_directory(WEB_DIR, "compat.html")
+
+
 def run():
     log_setup("friend")
     print("=" * 50)

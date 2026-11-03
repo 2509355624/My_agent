@@ -61,6 +61,11 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .side-foot { padding: 8px; border-top: 1px solid var(--border-soft);
     display: flex; gap: 6px; }
+  /* 三个按钮平分宽度（清空 / 出戏 / 自检）。老浏览器没有 gap，
+     靠下面的 @supports 兜底补 margin。 */
+  .side-foot > * { flex: 1; }
+  .side-foot a.btn { display: flex; align-items: center;
+    justify-content: center; }
 
   /* ─── 中：聊天 ─── */
   .mid { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
@@ -217,6 +222,9 @@
     <div class="side-foot">
       <button class="btn sm" id="btnClear">清空</button>
       <button class="btn sm" id="btnLeave">出戏</button>
+      <a class="btn sm" id="btnCompat" href="/compat" target="_blank"
+         style="text-decoration:none;text-align:center"
+         title="页面显示不正常？点这里看浏览器兼容报告">自检</a>
     </div>
   </aside>
 
