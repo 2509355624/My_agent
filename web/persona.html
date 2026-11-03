@@ -163,6 +163,18 @@
   .bar > i { display: block; height: 100%; background: var(--accent);
     width: 0; transition: width .3s; }
 
+  /* ─── 攻略模式（好感度）── */
+  /* 气泡下方的状态行：档位名是重点，增减跟着走一条 */
+  .aff { font-size: 11.5px; color: var(--text-mute); margin-top: 5px;
+    letter-spacing: .3px; }
+  .aff b { color: var(--accent); font-weight: 500; }
+  .aff .d { margin-left: 6px; }
+  .aff .d.up { color: #e8779c; }
+  .aff .d.dn { color: var(--err); }
+  .aff.end { color: var(--err); }
+  .affbar { position: relative; }
+  .affbar > i { background: #e8779c; }
+
   /* 图片放大 */
   .zoom { position: fixed; inset: 0; background: rgba(0,0,0,.94);
     display: none; align-items: center; justify-content: center; z-index: 200;
@@ -262,6 +274,15 @@
     <div class="st"><div class="k">回忆</div>
       <div class="v" id="sNote" style="color:var(--text-dim)">—</div></div>
     <div class="st"><div class="k">轮次</div><div class="v" id="sTurns">0</div></div>
+    <div class="st" id="affBox" style="display:none">
+      <div class="k" id="affModeK">好感</div>
+      <div class="v" id="sAff">—</div>
+      <div class="bar affbar"><i id="affBar"></i></div>
+      <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+        <button class="btn sm" id="btnAffToggle">开攻略模式</button>
+        <button class="btn sm" id="btnAffRestart" style="display:none">重新开始</button>
+      </div>
+    </div>
   </aside>
 
   <!-- 遮罩必须在 .app 里面！手机端「抽屉灰色点不到角色」的真因：
@@ -284,6 +305,7 @@ let CARD_MAP = {};      // id → 卡对象，给角色列表的事件委托用
 let LAST_TAP = { id: "", t: 0 };   // 防手机端 touchend + click 重复触发
 let ROLE = "member";     // member / guest
 let GUEST_LEFT = 0;      // 游客还剩几轮
+let AFF = null;          // 攻略模式状态（session/chat 带回来；null=没开过）
 
 // ── 回画廊（2026-11-03）─────────────────────────────────
 // 页面同时跑在 5175（群友页，有 /gallery）和 5174（本机，没有 /gallery）。
@@ -437,6 +459,9 @@ function makeRow(m, idx) {
   b.textContent = m.text;
   wrap.appendChild(b);
 
+  // ★ 攻略模式（2026-11-03）：AI 回复下方的关系状态行
+  if (m.role === "assistant" && m.aff) wrap.appendChild(affLine(m.aff));
+
   // ★ 图片容器：**就挂在气泡正下方**，不另起一行消息
   const pic = document.createElement("div");
   pic.className = "pic";
@@ -472,8 +497,44 @@ function makeRow(m, idx) {
   return row;
 }
 
-function setPic(idx, url) {
-  const pic = $("pic-" + idx);
+// 攻略模式状态行（2026-11-03）：档位名 + 本轮增减 / 结局标记。
+// 内容全部 textContent 填，不拼服务端原文，防注入。
+function affLine(a) {
+  const div = document.createElement("div");
+  div.className = "aff" + (a.just_ended ? " end" : "");
+  if (a.just_ended) {
+    div.textContent = a.just_ended === "graduated"
+      ? "🎓 结局：毕业（好感 +" + a.value + "）"
+      : "🚨 结局：进局子（好感 " + a.value + "）";
+    return div;
+  }
+  div.innerHTML = "❤ 她现在对你【<b></b>】<span class=\"d\"></span>";
+  div.querySelector("b").textContent = a.tierName || "正常关系";
+  const v = a.applied || 0;
+  const d = div.querySelector(".d");
+  if (v) {
+    d.textContent = (v > 0 ? "+" : "") + v;
+    d.className = "d " + (v > 0 ? "up" : "dn");
+  }
+  return div;
+}
+
+// 侧栏的好感区块：数值 + 进度条 + 模式开关
+function renderAff(a) {
+  const box = $("affBox");
+  if (!a) { box.style.display = "none"; return; }
+  box.style.display = "";
+  const raid = a.mode === "raid";
+  $("affModeK").textContent = raid ? "好感 · 攻略模式" : "好感 · 已封存";
+  $("sAff").textContent = a.ending
+    ? ((a.ending === "graduated" ? "已毕业 " : "已进局子 ") + a.value)
+    : (a.value + " · " + (a.tierName || "正常关系"));
+  $("affBar").style.width = Math.max(0, Math.min(100, a.value + 50)) + "%";
+  $("btnAffToggle").textContent = raid ? "切自由模式" : "开攻略模式";
+  $("btnAffRestart").style.display = raid ? "" : "none";
+}
+
+function setPic(idx, url) {  const pic = $("pic-" + idx);
   if (!pic) return;
   pic.innerHTML = "";
   pic.classList.add("show");
@@ -553,6 +614,8 @@ async function loadSession() {
     renderQuota();
     renderAll(d.messages || []);
     renderState(d);
+    AFF = d.affection || null;
+    renderAff(AFF);
     loadPics();          // 服务器映射恢复历史图（重登/换设备也能看到）
     await loadCards();
     applyRoleUI();
@@ -606,13 +669,21 @@ async function send() {
 
   try {
     const d = await post("/api/persona/chat", { text });
-    msgs.push({ role: "assistant", text: d.reply });
+    msgs.push({ role: "assistant", text: d.reply, aff: d.affection || null });
     pending.remove();
     const row = makeRow(msgs[idxA], idxA);
     log.appendChild(row);
     renderState({ mood: d.mood, intensity: d.intensity, state: d.state,
                   note: $("sNote").textContent,
                   turns: (+$("sTurns").textContent || 0) + 1 });
+    if (d.affection) {
+      AFF = d.affection;
+      renderAff(AFF);
+      if (AFF.just_ended) {
+        toast(AFF.just_ended === "graduated"
+          ? "🎓 恭喜毕业！" : "🚨 进局子了……切自由模式或重新开始", true);
+      }
+    }
     if (ROLE === "guest" && d.remaining !== undefined) {
       GUEST_LEFT = d.remaining;
       renderQuota();
@@ -725,6 +796,28 @@ async function loadPics() {
 
 function openDrawer() { $("side").classList.add("open"); $("mask").classList.add("on"); }
 function closeDrawer() { $("side").classList.remove("open"); $("mask").classList.remove("on"); }
+
+// ── 攻略模式：开关与重开（2026-11-03）──────────────────
+$("btnAffToggle").addEventListener("click", async () => {
+  if (ROLE === "guest") { toast("体验版没有攻略模式", true); return; }
+  if (!card) { toast("先选一个角色", true); return; }
+  try {
+    const d = await post("/api/persona/affection",
+                         { mode: (AFF && AFF.mode === "raid") ? "free" : "raid" });
+    toast(d.reply || "已切换");
+    AFF = d.affection || AFF;
+    renderAff(AFF);
+  } catch (e) { toast(e.message, true); }
+});
+$("btnAffRestart").addEventListener("click", async () => {
+  if (ROLE === "guest") return;
+  try {
+    const d = await post("/api/persona/affection/restart", {});
+    toast(d.reply || "好感已归零");
+    AFF = d.affection || AFF;
+    renderAff(AFF);
+  } catch (e) { toast(e.message, true); }
+});
 $("btnBurger").onclick = openDrawer;
 $("mask").onclick = closeDrawer;
 
