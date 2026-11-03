@@ -295,7 +295,12 @@ def persona_opening():
     """
     role, who, _token = _who()
     if role == "guest":
-        return jsonify({"ok": True, "intro": ""})
+        # 游客攻略化（2026-11-05）：游客也有自己的线，同样给开场导读——
+        # 「莫名其妙地开始，不知道怎么聊」对游客更是劝退。
+        ckey = _guest_line(who)
+        if ckey is None:
+            return jsonify({"ok": True, "intro": ""})
+        return jsonify({"ok": True, "intro": persona.opening(ckey)})
     key = _active_key(_key(who))
     return jsonify({"ok": True, "intro": persona.opening(key)})
 
@@ -312,12 +317,17 @@ def history():
       - `before`：归档行号（不含），不传 = 最后一页
       - `limit`：一页多少条，默认 `persona.ARCHIVE_PAGE`
 
-    游客没有归档（只有 15 轮，本就翻不了页），直接回空。
+    游客攻略化（2026-11-05）后也有归档，同一套分页照给——30 轮也够翻几页的。
     """
     role, who, _token = _who()
     if role == "guest":
-        return jsonify({"ok": True, "messages": [], "total": 0, "more": False})
-    key = _active_key(_key(who))
+        ckey = _guest_line(who)
+        if ckey is None:
+            return jsonify({"ok": True, "messages": [], "total": 0,
+                            "more": False})
+        key = ckey
+    else:
+        key = _active_key(_key(who))
     start, rows, total = persona.history_page(
         key, request.args.get("before"), request.args.get("limit"))
     return jsonify({
@@ -351,38 +361,115 @@ def _aff_panel(key):
         return None
 
 
-def _guest_session(uid, token):
-    """游客的会话状态：固定一个角色，历史从游客目录读。"""
-    from app import guest
+def _guest_line(uid):
+    """游客的 persona 线键（2026-11-05 游客攻略化）。
+
+    游客原来走的是**简化管线**：固定卡、无打分、无好感，30 轮纯聊天。
+    攻略模式默认化之后，主引擎（`persona.run_turn`）自带打分/结算/注入/
+    尾行/开场导读/完整归档——所以游客改成直接领一条真的 persona 线
+    （`guest_<uid>__<卡id>`），一套机制两端共用，不再手搓第二份好感。
+
+    没有 line 就当场建（固定 `GUEST_CARD_ID`，用户拍板不换卡）。
+    """
     card = _card_by_id(GUEST_CARD_ID)
     if card is None:
         cards = persona.load_cards()
         card = cards[0] if cards else None
+    if card is None:
+        return None
+    ckey = persona.card_key("guest_" + str(uid or ""), str(card.get("id") or ""))
+    if persona._entry(ckey) is None:                      # noqa: SLF001
+        persona.switch(ckey, card)
+        log.info("游客新线：%s（%s）", ckey, card["name"])
+    return ckey
 
-    msgs = []
-    for n, m in enumerate(guest.load_hist(uid)):
-        if m.get("role") == "user":
-            msgs.append({"n": n, "role": "user", "text": m.get("content") or ""})
-        else:
-            reply, scene, mood, intensity, state = persona.split_turn(
-                m.get("content") or "")
-            if reply.strip():
-                msgs.append({"n": n, "role": "assistant", "text": reply,
-                             "mood": mood, "intensity": intensity,
-                             "state": state})
+
+def _guest_sweep():
+    """清掉超过 `guest.GUEST_TTL` 没动的游客线（2026-11-05）。
+
+    游客改走 persona 存储后，历史/归档/好感都挂在 `guest_*` 线上——
+    老 guest 目录那套「只点名不删」的约定不再够用，状态文件会一直涨。
+    这里按**窗口文件的 mtime** 判过期，整线擦掉（历史+好感+条目一起）。
+    只在游客聊天入口调用：读 state 的 key 列表 + 每个 key 一次 getmtime，
+    量级很小。
+    """
+    import os
+    import time
+    from app import guest as G
+    now = time.time()
+    stale = []
+    for key in list(persona._load_state()):               # noqa: SLF001
+        if not key.startswith("guest_"):
+            continue
+        try:
+            age = now - os.path.getmtime(persona._hist_path(key))  # noqa: SLF001
+        except OSError:
+            continue                       # 从没聊过 / 已清：不动
+        if age > G.GUEST_TTL:
+            stale.append((key, age))
+    for key, age in stale:
+        try:
+            persona.wipe(key)
+            log.info("游客线过期清理：%s（%.1f 小时没动）", key, age / 3600.0)
+        except Exception:                                 # noqa: BLE001
+            log.exception("游客线清理失败 %s", key)
+
+
+def _guest_turns(ckey):
+    """游客已用轮数 = 归档里的 assistant 条数。
+
+    ⚠️ 不能拿 persona 线的 `turns` 字段——那是**小记压缩计数**，每满
+    `NOTE_EVERY_TURNS` 轮被 `compress_note` 清零，拿来当额度永远到不了 30。
+    归档只增不删、每轮恰好 +2 行，数 assistant 就是真实轮数。
+    """
+    try:
+        rows = persona.load_archive(ckey)
+    except Exception:                                     # noqa: BLE001
+        return 0
+    return sum(1 for r in rows if (r or {}).get("role") == "assistant")
+
+
+def _guest_session(uid, token):
+    """游客的会话状态。
+
+    2026-11-05 攻略化：和登录用户同一个会话形状（归档分页 / 开场导读 /
+    好感状态都给），只多 `remaining` / `limit` 两个字段——30 轮上限保留
+    （用户拍板），到顶后前端锁输入框引导登录。
+    """
+    from app import guest
+    ckey = _guest_line(uid)
+    if ckey is None:
+        return jsonify({"ok": False, "error": "没有可用角色"}), 500
+
+    ent = persona._entry(ckey) or {}                      # noqa: SLF001
+    card = _card_by_id(ent.get("card"))
+    start, rows, total = persona.history_page(ckey)
+    msgs = _msgs_from(rows, start)
+
+    aff = _aff_status(ckey)
+    # 和成员端同一条规则：当前状态挂到最后一她的回复上，刷新不丢状态行。
+    if aff and str(aff.get("mode") or "") == "raid":
+        for m in reversed(msgs):
+            if m.get("role") == "assistant":
+                m["aff"] = aff
+                break
+
+    turns = _guest_turns(ckey)
     resp = jsonify({
         "ok": True,
         "card": _card_json(card),
-        "note": "",
-        "state": "",
-        "mood": "",
-        "intensity": 0,
-        "turns": guest.turns_used(uid),
+        "note": str(ent.get("note") or ""),
+        "intro": str(ent.get("intro") or ""),
+        "state": str(ent.get("state") or ""),
+        "mood": str(ent.get("mood") or ""),
+        "intensity": int(ent.get("intensity") or 0),
+        "turns": turns,
         "messages": msgs,
-        "total": len(msgs),
-        "more": False,
+        "total": total,
+        "more": start > 0,
+        "affection": aff,
         "role": "guest",
-        "remaining": guest.remaining(uid),
+        "remaining": max(0, guest.GUEST_TURNS - turns),
         "limit": guest.GUEST_TURNS,
     })
     _attach_guest_cookie(resp, token)
@@ -514,11 +601,20 @@ def chat():
 
 
 def _guest_chat(text, uid, token):
-    """游客的一轮。用 `persona` 的引擎，但历史存到游客自己的目录。"""
-    from app import guest
-    from app import persona as P
+    """游客的一轮（2026-11-05 攻略化）。
 
-    used = guest.turns_used(uid)
+    直接走 `persona.run_turn` 主引擎：打分、好感结算、档位注入、开场导读
+    全套和登录用户一致——体验版给的就是攻略模式本身，不是阉割版聊天。
+    差别只剩三样：固定卡、30 轮上限、不能出图/删档。
+    """
+    from app import guest
+
+    _guest_sweep()                          # 顺手清过期线，量级很小
+    ckey = _guest_line(uid)
+    if ckey is None:
+        return jsonify({"ok": False, "error": "没有可用角色"}), 500
+
+    used = _guest_turns(ckey)
     if used >= guest.GUEST_TURNS:
         resp = jsonify({
             "ok": False,
@@ -530,46 +626,26 @@ def _guest_chat(text, uid, token):
         _attach_guest_cookie(resp, token)
         return resp
 
-    card = P.find_card(GUEST_CARD_ID)
-    if card is None:
-        # 找不到默认卡就退回第一张
-        cards = P.load_cards()
-        card = cards[0] if cards else None
-    if card is None:
-        return jsonify({"ok": False, "error": "没有可用角色"}), 500
-
-    # 用游客自己的历史（不走 persona 那套存储）
-    hist = guest.load_hist(uid)[-P.HISTORY_LIMIT:]
-    head = P.build_head(card, "guest", "", "", "", intimate=True)
-    msgs = ([{"role": "system", "content": head}] + hist
-            + [{"role": "user", "content": text}])
-    try:
-        # 游客的用量单独归一类（guest_<uid前8>），和登录用户的 web_ 分开——
-        # 体验版是「拉新成本」，得看清楚它值不值。
-        with usage.scope("guest_" + str(uid or "anon")[:8]):
-            raw = P.llm.call_llm(msgs)
-    except Exception:                              # noqa: BLE001
-        log.exception("游客对话调用失败 %s", uid[:8])
+    # 游客的用量单独归一类（guest_<uid前8>），和登录用户的 web_ 分开——
+    # 体验版是「拉新成本」，得看清楚它值不值。run_turn 内部的两次调用
+    # （打分 + 正文）都在这个 scope 里。
+    with usage.scope("guest_" + str(uid or "anon")[:8]):
+        turn = persona.run_turn(ckey, text, "private", "")
+    if not turn.reply.strip():
         return jsonify({"ok": False, "error": "她这会儿有点卡"}), 502
 
-    reply, scene, mood, intensity, state = P.split_turn(raw or "")
-    if not reply.strip():
-        return jsonify({"ok": False, "error": "她这轮没说话"}), 502
-
-    guest.append_hist(uid, [
-        {"role": "user", "content": text},
-        {"role": "assistant",
-         "content": P._ensure_meta(raw, scene, mood, intensity, state)},
-    ])
-
-    total = len(guest.load_hist(uid))
-    resp = jsonify({
-        "ok": True, "reply": reply, "scene": scene,
-        "mood": mood, "intensity": intensity, "state": state,
+    out = {
+        "ok": True, "reply": turn.reply, "scene": turn.scene,
+        "mood": turn.mood, "intensity": turn.intensity, "state": turn.state,
         "role": "guest",
-        "n": {"user": max(0, total - 2), "assistant": max(0, total - 1)},
         "remaining": max(0, guest.GUEST_TURNS - used - 1),
-    })
+        "limit": guest.GUEST_TURNS,
+    }
+    total = persona.archive_len(ckey)
+    out["n"] = {"user": max(0, total - 2), "assistant": max(0, total - 1)}
+    if getattr(turn, "aff", None):
+        out["affection"] = turn.aff
+    resp = jsonify(out)
     _attach_guest_cookie(resp, token)
     return resp
 
@@ -609,11 +685,20 @@ def affection_panel_api():
     一次给全：身体进度七级、感情七档、冲动五档、高潮五档，
     每行带 `gate`（门槛）和 `state`（reached / current / locked）。
     前端不重算任何东西——档位表都在 config 里，前端算一遍就会两边不一致。
+
+    游客攻略化（2026-11-05）：游客也有面板——体验版要展示的就是攻略玩法
+    本身，藏着等于白改。
     """
     role, who, token = _who()
     if role == "guest":
-        resp = jsonify({"ok": False, "error": "体验版没有攻略模式。"})
-        resp.status_code = 403
+        ckey = _guest_line(who)
+        if ckey is None:
+            resp = jsonify({"ok": False, "error": "没有可用角色"})
+            resp.status_code = 500
+            _attach_guest_cookie(resp, token)
+            return resp
+        p = _aff_panel(ckey)
+        resp = jsonify({"ok": True, "panel": p})
         _attach_guest_cookie(resp, token)
         return resp
     key = _active_key(_key(who))
@@ -655,12 +740,28 @@ def affection_mercy():
     """「再给我一次机会」（2026-11-04）：结局解除、好感往线内挪一格，每人 3 次。
 
     效果和「切自由模式再切回攻略」一样，只是它留在攻略模式里、并且扣次数。
+
+    游客攻略化（2026-11-05）：游客也能用——进局子是攻略玩法的一部分，
+    把出口对游客关上等于让人卡死在结局页面。它只是一次数值搬移，没有
+    LLM 成本。
     """
     from app import affection
     role, who, token = _who()
     if role == "guest":
-        resp = jsonify({"ok": False, "error": "体验版没有攻略模式。"})
-        resp.status_code = 403
+        ckey = _guest_line(who)
+        if ckey is None:
+            resp = jsonify({"ok": False, "error": "没有可用角色"})
+            resp.status_code = 500
+            _attach_guest_cookie(resp, token)
+            return resp
+        reply = affection.mercy(ckey)
+        if reply is None:
+            resp = jsonify({"ok": False, "error": "先选一个角色再开攻略模式"})
+            resp.status_code = 400
+            _attach_guest_cookie(resp, token)
+            return resp
+        resp = jsonify({"ok": True, "reply": reply,
+                        "affection": affection.status(ckey)})
         _attach_guest_cookie(resp, token)
         return resp
     key = _active_key(_key(who))

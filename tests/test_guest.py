@@ -1,11 +1,13 @@
-"""游客模式的限额与隔离（2026-11-03）。
+"""游客模式的限额与隔离（2026-11-03；2026-11-05 攻略化）。
 
 用户定的规则：
-  · 游客 **15 轮**（按 AI 回复次数算）
+  · 游客 **30 轮**（按 AI 回复次数算），到顶引导登录
   · 身份是服务端签名的 UUID
-  · 游客不能出图、不能换角色
-  · 游客对话单独目录，24 小时后由用户手动清
-  · 登录后不继承游客数据
+  · 游客不能出图、不能换角色、不能删档
+  · 2026-11-05 起**游客就是攻略模式**：直接领一条 persona 线
+    （`guest_<uid>__<卡>`），打分/好感/归档和登录用户同一套引擎；
+    差别只剩固定卡 + 轮数上限 + 不能出图/删档
+  · 游客线超过 24 小时没动，在下次聊天入口顺手整线清掉
 """
 import os
 import shutil
@@ -41,6 +43,14 @@ class GuestBase(unittest.TestCase):
                               os.path.join(self.tmp.name, "游客-角色扮演"))
         p.start()
         self.addCleanup(p.stop)
+
+        # 游客攻略化（2026-11-05）：游客会话现在会写 persona 状态
+        # （好感/小记/轮次都挂在 `guest_*` 线上）——必须指到临时文件，
+        # 否则测试会把真实 `state/persona_sessions.json` 染上游客线。
+        ps = os.path.join(self.tmp.name, "persona_sessions.json")
+        psp = mock.patch.object(persona, "_STATE_PATH", ps)
+        psp.start()
+        self.addCleanup(psp.stop)
 
         agents.clear_cache()
         self.addCleanup(agents.clear_cache)
@@ -110,6 +120,82 @@ class GuestLimitTest(GuestBase):
         self.c.set_cookie("gs_id", gid)
         # 把签发 id 换成预置了历史的那个会需要重签，这里直接测计数函数
         self.assertTrue(guest.check_id(gid))
+
+
+class GuestRaidTest(GuestBase):
+    """游客攻略化（2026-11-05）：体验版给的就是攻略模式本身。"""
+
+    def _mock_llm(self):
+        """打分段直接给分，正文段回一句带三行的话。"""
+        jit = mock.patch.object(
+            persona, "_judge_intent_scored",
+            return_value=("intimate", "",
+                          {"delta": 1, "turn_type": "chat", "reason": "聊"}))
+        jit.start()
+        self.addCleanup(jit.stop)
+        llm = mock.patch.object(
+            persona.llm, "call_llm",
+            return_value="她抬眼看了看你。\n画面：sitting\n"
+                         "心情：平静 强度2\n状态：在桌边")
+        llm.start()
+        self.addCleanup(llm.stop)
+
+    def test_session_carries_raid_affection(self):
+        """游客一打开就有攻略面板数据——体验版要展示的就是这套玩法。"""
+        d = self.get("/api/persona/session")
+        self.assertEqual(d["role"], "guest")
+        aff = d.get("affection") or {}
+        self.assertEqual(aff.get("mode"), "raid")
+
+    def test_panel_allowed_for_guest(self):
+        d = self.get("/api/persona/affection/panel")
+        self.assertTrue(d["ok"], d)
+
+    def test_chat_returns_affection_and_counts_down(self):
+        self._mock_llm()
+        d1 = self.post("/api/persona/chat", text="在吗")
+        self.assertTrue(d1["ok"], d1)
+        self.assertIn("affection", d1)                 # 攻略结算跟着回包走
+        self.assertEqual(d1["remaining"], guest.GUEST_TURNS - 1)
+        d2 = self.get("/api/persona/session")
+        self.assertEqual(d2["remaining"], guest.GUEST_TURNS - 1)
+        self.assertEqual(d2["turns"], 1)               # 轮数记在 persona 线上
+
+    def test_blocked_after_limit(self):
+        self._mock_llm()
+        for i in range(guest.GUEST_TURNS):
+            d = self.post("/api/persona/chat", text="第 %d 句" % i)
+            self.assertTrue(d["ok"], (i, d))
+        d = self.post("/api/persona/chat", text="再来一句")
+        self.assertFalse(d["ok"])
+        self.assertTrue(d.get("limit"))
+
+    def test_mercy_allowed_for_guest(self):
+        """进局子是攻略玩法的一部分，出口不能对游客关上。"""
+        self._mock_llm()
+        d = self.post("/api/persona/affection/mercy")
+        self.assertTrue(d["ok"], d)                    # 没结局时也该礼貌回话
+
+    def test_wipe_still_forbidden(self):
+        d = self.post("/api/persona/affection/wipe", confirm="随便")
+        self.assertFalse(d["ok"])
+
+    def test_stale_guest_line_swept(self):
+        """超过 24h 没动的游客线，下次聊天入口顺手清掉。"""
+        import time
+        self._mock_llm()
+        self.post("/api/persona/chat", text="在吗")
+        stale_uid = str(uuid_mod.uuid4())
+        stale_key = persona.card_key("guest_" + stale_uid,
+                                     persona_api.GUEST_CARD_ID)
+        persona.switch(stale_key, persona.find_card(persona_api.GUEST_CARD_ID))
+        persona._save_hist(stale_key, [{"role": "user", "content": "旧"}])
+        old = time.time() - guest.GUEST_TTL - 60
+        os.utime(persona._hist_path(stale_key), (old, old))
+        self.assertIsNotNone(persona._entry(stale_key))
+        self.post("/api/persona/chat", text="又来了")     # sweep 挂在聊天入口
+        self.assertTrue(persona._load_hist(stale_key) == [],
+                        "过期游客线该被清掉")
 
 
 class GuestPermissionTest(GuestBase):

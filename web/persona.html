@@ -954,14 +954,16 @@ function renderPanel(a, p) {
   const box = $("panelBox");
   const affBox = $("affBox");
   if (!box) return;
-  if (ROLE === "guest" || !p) {
+  if (!p) {
     box.style.display = "none";
     if (affBox) affBox.style.display = "none";
     return;
   }
   const raid = isRaid(a);
   box.style.display = "";
-  if (affBox) affBox.style.display = raid ? "" : "none";
+  // 游客攻略化（2026-11-05）：游客也看面板，但「清空存档」仍然不给——
+  // 游客的存档 24 小时自动过期，手动删没有意义（后端对 wipe 也还是 403）。
+  if (affBox) affBox.style.display = (raid && ROLE !== "guest") ? "" : "none";
   $("panelK").textContent = raid ? "状态 · 攻略模式"
     : (a ? "状态 · 已封存" : "状态 · 未开启");
 
@@ -1014,13 +1016,14 @@ function renderPanel(a, p) {
 }
 
 // 拉一次面板。失败就静默——面板挂了不该挡住聊天。
+// 游客攻略化（2026-11-05）：游客也有面板，不再提前返回。
 async function refreshPanel() {
-  if (ROLE === "guest") return;
   try {
     const r = await fetch("/api/persona/affection/panel");
     const d = await r.json();
     if (d && d.ok) {
       PANEL = d.panel;
+      renderAff(AFF);
       renderPanel(AFF, PANEL);
     }
   } catch (e) { /* 网络抖一下就算了，下一轮还会再拉 */ }
@@ -1030,16 +1033,9 @@ function renderAff(a) {
   renderMode();
   const box = $("affBox");
   const panelBox = $("panelBox");
-  if (ROLE === "guest") {
-    if (box) box.style.display = "none";
-    if (panelBox) panelBox.style.display = "none";
-    return;
-  }
-  const raid = isRaid(a);
-  // #affBox 里现在只有「清空存档」这一个按钮（2026-11-05 顶栏那个删了），
-  // 它成了唯一入口——所以只要选了角色就显示，不再挑模式：自由模式下
-  // 也得有地方删存档，不能因为没开攻略就把删除入口藏起来。
-  if (box) box.style.display = (card ? "" : "none");
+  // 游客攻略化（2026-11-05）：好感、面板、尾行全给，唯独「清空存档」
+  // 不给（游客线 24 小时自动过期，手动删没意义，后端也仍 403）。
+  if (box) box.style.display = (ROLE !== "guest" && card) ? "" : "none";
   if (panelBox) panelBox.style.display = "";
   // 面板数据是异步来的；这里先用上次的渲染一次（避免闪空白），
   // 然后立刻拉新的。第一次进来 PANEL 是 null，就等 refreshPanel 填。
@@ -1066,11 +1062,12 @@ function renderMode() {
        : "现在只聊天；点一下开攻略模式（开始按档位算好感）");
   b.style.display = (ROLE === "guest" || !card) ? "none" : "";
 
-  // 「状态」按钮（2026-11-04 深夜）：和模式开关同样的显隐条件——
-  // 没选角色 / 游客都没有面板可看。窄屏才显示（CSS 那条 @media 管）。
+  // 「状态」按钮（2026-11-04 深夜）：窄屏开右侧抽屉看面板。
+  // 游客攻略化（2026-11-05）：游客也有面板，显隐只看选没选角色
+  // （游客的 session 一直带卡，所以常显）。没选角色时不给。
   const s = $("btnStats");
   if (s) {
-    const on = !(ROLE === "guest" || !card);
+    const on = !!card;
     // 用 '' 而不是 'inline-block'：显示规则交给 CSS 的媒体查询，
     // 这里只管「该不该有」，别和窄屏判断抢。
     s.style.display = on ? "" : "none";

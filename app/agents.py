@@ -20,6 +20,8 @@ import json
 import logging
 import os
 import re
+import threading
+import time
 
 from app.config import (AGENTS_DIR, DEFAULT_AGENT_ID, NAI_ENABLED,
                         NAI_OPEN_ACCESS, PROVIDERS, QQ_INTERJECT_COOLDOWN,
@@ -1000,13 +1002,38 @@ def _atomic_write_text(path, text):
 
     和 memory.save_history 同一套路：直接 open("w") 覆盖时，写到一半进程
     被杀就留下半截文件，下次读直接解析失败。
+
+    tmp 名带**进程号 + 线程号**（2026-11-05）：固定名在多线程下会自己撞
+    自己——persona 的小记压缩是后台线程（`persona.py` 里 `Thread(target=
+    compress_note)`），它落盘和主线程的聊天落盘都用 `<path>.json.tmp`，
+    Windows 下第二个 `open(tmp, "w")` 直接 Errno 13 / `os.replace` WinError 32。
+    测试里 LLM 被 mock 成瞬时返回后必现；生产上压缩要几秒所以只是小概率，
+    但坑一直在。同一线程内写入是顺序的，pid+tid 足够互斥。
+
+    `os.replace` 还要**短重试**：目标文件正被别的线程 `open()` 读时，
+    Windows 拒绝换名（读句柄默认不带 FILE_SHARE_DELETE），报 WinError 5。
+    读一个几 KB 的 json 是微秒级，退几毫秒再试必然让开。
     """
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    tmp = "%s.%d.%d.tmp" % (path, os.getpid(), threading.get_ident())
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        for attempt in range(10):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                if attempt == 9:
+                    raise
+                time.sleep(0.002 * (attempt + 1))   # 2ms 起步，最多 ~110ms
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def agent_raw_config(agent_id):
