@@ -316,19 +316,31 @@ def health():
 
 # ─── 转发 ────────────────────────────────────────────────
 
-def _forward(prefix, sub):
+def _forward(prefix, sub, allow_guest=False):
     """把请求原样转给 5174，并补上登录态里的 QQ 号。
 
     `qq` 一律由这里写死塞进去（参数或表单），**不信客户端传来的 qq**——
     否则谁都能改个 qq 就看别人的东西。
+
+    `allow_guest`（2026-11-03）：角色扮演那条要放游客进来。游客没有 qq，
+    转发时不塞 `qq`——5174 那边收到空 qq 会走游客分支（见
+    `persona_api._who()`），身份由它自己签发的 `gs_id` cookie 认。
+    cookie 要**整条带过去**，不然 5174 认不出同一个游客。
     """
     qq = friend_auth.check_cookie(request.cookies.get(friend_auth.COOKIE_NAME))
-    if not qq:
+    if not qq and not allow_guest:
         return jsonify({"ok": False, "error": "还没登录"}), 401
     url = "%s%s/%s" % (BACKEND, prefix, sub)
     headers = {"X-Friend-Token": friend_auth.secret()}
     params = dict(request.args)
-    params["qq"] = qq
+
+    # 游客身份 cookie 必须透传：5175 不解析它，只负责原样送到 5174。
+    gs = request.cookies.get("gs_id")
+    if gs:
+        headers["Cookie"] = "gs_id=" + gs
+
+    if qq:
+        params["qq"] = qq
 
     # 下载原图时浏览器和下载器会带 Range（断点续传、多线程分段）。不转发出去
     # 就退化成每次都整包重传，一张 8MB 的图白下好几遍。
@@ -353,12 +365,14 @@ def _forward(prefix, sub):
             files = [(k, (f.filename, f.stream, f.mimetype))
                      for k, f in request.files.items(multi=True)]
             form = request.form.to_dict()
-            form["qq"] = qq
+            if qq:
+                form["qq"] = qq
             r = _SESSION.post(url, params=params, data=form, files=files,
                               headers=headers, timeout=300)
         else:
             body = request.get_json(silent=True) or {}
-            body["qq"] = qq
+            if qq:
+                body["qq"] = qq
             r = _SESSION.post(url, params=params, json=body,
                               headers=headers, timeout=60)
     except requests.RequestException as e:
@@ -385,9 +399,24 @@ def _forward(prefix, sub):
         return resp
 
     try:
-        return Response(r.content, status=r.status_code, content_type=ctype)
+        resp = Response(r.content, status=r.status_code, content_type=ctype)
     except Exception:
         return jsonify({"ok": False, "error": "后台返回看不懂"}), 502
+
+    # 把 5174 下发的游客 cookie 转给浏览器（2026-11-03）。
+    # 不转的话，游客每发一句话都被当成新游客，永远停在第一轮。
+    _relay_guest_cookie(resp, r)
+    return resp
+
+
+def _relay_guest_cookie(resp, upstream):
+    """照抄上游 Set-Cookie 里的 `gs_id`。"""
+    try:
+        for raw in upstream.raw.headers.getlist("Set-Cookie"):
+            if raw.startswith("gs_id="):
+                resp.headers.add("Set-Cookie", raw)
+    except Exception:                              # noqa: BLE001
+        pass
 
 
 @app.route("/api/friend/<path:sub>", methods=["GET", "POST", "DELETE"])
@@ -398,6 +427,37 @@ def proxy(sub):
 @app.route("/api/gal/<path:sub>", methods=["GET", "POST", "DELETE"])
 def proxy_gal(sub):
     return _forward("/api/gal", sub)
+
+
+# ─── 角色扮演（2026-11-03）──────────────────────────────
+#
+# 用户定的架构：**角色扮演必须走 5175**，5174 只在隧道后面，绝不直接暴露
+# （5174 上有管理页）。所以这里加一层网关：
+#   · 页面 `/persona` 从 5174 拉 HTML，**不转发 cookie 校验**，游客也能进
+#   · 接口 `/api/persona/*` 转发，登录用户注入 qq，游客透传 `gs_id`
+#
+# 限额（15 轮）和游客身份都在 5174 的 `persona_api` 里做——网关只管转发，
+# 不掺和业务判断，两边职责不重叠。
+
+@app.route("/persona")
+@app.route("/persona.html")
+def persona_page():
+    """角色扮演页。未登录也放行——5174 那边会按游客处理。"""
+    try:
+        r = _SESSION.get(BACKEND + "/persona",
+                         headers={"X-Friend-Token": friend_auth.secret()},
+                         timeout=(10, 30))
+        resp = Response(r.content, status=r.status_code,
+                        content_type="text/html; charset=utf-8")
+        return resp
+    except requests.RequestException as e:
+        log.warning("取角色扮演页失败：%s", e)
+        return "后台没响应，稍后再试", 502
+
+
+@app.route("/api/persona/<path:sub>", methods=["GET", "POST", "DELETE"])
+def proxy_persona(sub):
+    return _forward("/api/persona", sub, allow_guest=True)
 
 
 def run():
