@@ -290,13 +290,16 @@ def settle(line_key, score):
     ent = _entry(line_key)
     rec = record_of(ent)
     if not ent or not rec or rec.get("mode") != MODE_RAID:
-        return {"applied": 0, "active": False}
+        # **mode 必须带上**：网页端拿这个回包直接渲染开关状态，
+        # 缺了就会被判成「自由模式」——聊天一轮后控件自己跳到自由模式
+        # （2026-11-03 群友实测：好感 +20 时突然变自由模式，其实数值没变）。
+        return {"applied": 0, "active": False, "mode": MODE_FREE}
     value = int(rec.get("value") or 0)
     cfg = load_config()
 
     # 结局已触发：数值锁定，不再结算
     if rec.get("ending"):
-        return {"applied": 0, "active": True, "value": value,
+        return {"applied": 0, "active": True, "mode": MODE_RAID, "value": value,
                 "tier": rec.get("tier") or "",
                 "tierName": str((tier_for(value, cfg) or {}).get("name") or ""),
                 "ending": str(rec.get("ending")), "just_ended": False,
@@ -377,7 +380,7 @@ def settle(line_key, score):
     eff_key = str(rec.get("tier") or "")
     eff_t = next((t for t in (cfg.get("tiers") or [])
                   if t.get("key") == eff_key), None) or new_t
-    return {"applied": applied, "active": True, "value": value,
+    return {"applied": applied, "active": True, "mode": MODE_RAID, "value": value,
             "tier": eff_key, "changed": changed,
             "tierName": str(eff_t.get("name") or ""),
             "ending": str(rec.get("ending") or ""),

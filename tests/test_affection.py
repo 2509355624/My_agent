@@ -112,6 +112,31 @@ class SettleTest(AffBase):
                                {"delta": 10, "turn_type": "chat"})
         self.assertFalse(res["active"])
 
+    def test_result_always_carries_mode(self):
+        """回包必须带 mode——网页端拿它渲染开关，缺了会自己跳成自由模式。
+
+        2026-11-03 群友实测：好感涨到 +20 时控件突然显示「已封存」，
+        其实数值一动没动，是 `settle` 的返回里根本没这个字段。
+        """
+        key = self._raid()
+        self.assertEqual(
+            affection.settle(key, {"delta": 3, "turn_type": "chat"}).get("mode"),
+            "raid")
+        # 结局锁定那条分支也要带
+        res = {}
+        for _ in range(8):                     # 单轮夹 ±15，多推几次到顶
+            res = affection.settle(key, {"delta": 50, "turn_type": "action"})
+            if res.get("ending"):
+                break
+        locked = affection.settle(key, {"delta": 3, "turn_type": "chat"})
+        self.assertTrue(locked.get("ending"))
+        self.assertEqual(locked.get("mode"), "raid")
+        # 自由模式不结算，但要明确告诉前端「现在是 free」
+        affection.set_mode(key, False)
+        free = affection.settle(key, {"delta": 3, "turn_type": "chat"})
+        self.assertFalse(free["active"])
+        self.assertEqual(free.get("mode"), "free")
+
     def test_chat_diminishing_returns(self):
         """纯聊天当天递减：+3 → +2 → +1 → +1 → 0。防甜言蜜语刷满。"""
         key = self._raid()

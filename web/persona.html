@@ -543,12 +543,19 @@ function affLine(a) {
 // 结果「开攻略模式」按钮只对开过的人可见，死锁：没开过的人找不到入口。
 // 2026-11-03 晚：开关本身也挪到顶部常驻了（用户说「登录后右上角看不到切换开关」），
 // 这里只留数值，避免同一个动作两个入口、文案还不一致。
+// AFF 现在是不是攻略模式。
+// `mode` 是权威字段；万一后端回包没带（历史 bug），用 `active` 兜底——
+// 不能默认 false，否则一轮对话后整个控件会自己跳成「自由模式」。
+function isRaid(a) { return !!a && (a.mode ? a.mode === "raid" : a.active !== false); }
+
 function renderAff(a) {
   renderMode();
   const box = $("affBox");
   if (ROLE === "guest") { box.style.display = "none"; return; }
   box.style.display = "";
-  const raid = !!a && a.mode === "raid";
+  // mode 缺字段时的兜底：只要不是明确「没激活」，就按攻略模式显示。
+  // （后端每轮回包曾漏带 mode，导致聊一轮后控件自己跳成「自由模式」。）
+  const raid = isRaid(a);
   $("affModeK").textContent = raid ? "好感 · 攻略模式"
     : (a ? "好感 · 已封存" : "好感 · 未开启");
   $("sAff").textContent = !a ? "—"
@@ -566,7 +573,7 @@ function renderAff(a) {
 function renderMode() {
   const b = $("btnMode");
   if (!b) return;
-  const raid = !!(AFF && AFF.mode === "raid");
+  const raid = isRaid(AFF);
   b.textContent = raid ? "攻略模式" : "自由模式";
   b.classList.toggle("on", raid);
   b.title = raid
@@ -872,7 +879,7 @@ $("btnMode").addEventListener("click", async () => {
   if (!card) { toast("先选一个角色", true); return; }
   try {
     const d = await post("/api/persona/affection",
-                         { mode: (AFF && AFF.mode === "raid") ? "free" : "raid" });
+                         { mode: isRaid(AFF) ? "free" : "raid" });
     toast(d.reply || "已切换");
     AFF = d.affection || AFF;
     renderAff(AFF);
@@ -892,7 +899,7 @@ $("btnAffRestart").addEventListener("click", async () => {
 // 自由模式 → 清空这段记忆从头认识（好感一并归零，角色不变）。
 $("btnReset").addEventListener("click", async () => {
   if (ROLE === "guest") return;
-  if (AFF && AFF.mode === "raid") {
+  if (isRaid(AFF)) {
     if (!confirm("好感归零、结局解除，重新攻略？\n（聊天记忆保留，她记得你们聊过什么）")) return;
     try {
       const d = await post("/api/persona/affection/restart", {});
