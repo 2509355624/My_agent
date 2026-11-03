@@ -179,11 +179,21 @@
   /* ─── 攻略模式（好感度）── */
   /* 气泡下方的状态行：档位名是重点，增减跟着走一条 */
   .aff { font-size: 11.5px; color: var(--text-mute); margin-top: 5px;
-    letter-spacing: .3px; }
+    letter-spacing: .3px; width: 170px; max-width: 100%; }
   .aff b { color: var(--accent); font-weight: 500; }
   .aff .d { margin-left: 6px; }
   .aff .d.up { color: #e8779c; }
   .aff .d.dn { color: var(--err); }
+  /* 气泡下方的两条细进度条（2026-11-04）：手机端没有右栏，状态得跟着
+     她说的话走。玫红=走到哪一步，暖橙=此刻的气氛；气氛为 0 时只画一条，
+     免得给人「气氛归零了很严重」的错觉。 */
+  .aff .b { height: 3px; border-radius: 2px; margin-top: 4px; overflow: hidden;
+    background: var(--bg-elev); }
+  .aff .b > i { display: block; height: 100%; width: 0;
+    transition: width .3s; }
+  .aff .b.rel > i { background: #e8779c; }
+  .aff .b.aro { height: 2px; }
+  .aff .b.aro > i { background: #f0a35e; }
   .aff.end { color: var(--err); }
   .affbar { position: relative; }
   .affbar > i { background: #e8779c; }
@@ -534,12 +544,31 @@ function affLine(a) {
   }
   // 2026-11-04：只报「你们到哪一步」，不再挂数字——挂数字玩家就会算账，
   // 算账的人不看正文。想知道大概进度可以点「好感」看档案。
-  let txt = "❤ " + (a.levelName || a.tierName || "");
-  if (a.rose) txt += " ↑";
-  else if (a.cross === "hard") txt += " · 她退开了";
-  else if (a.arousalName) txt += " · " + a.arousalName;   // 气氛：和 QQ 尾行一致
-  div.textContent = txt;
+  const txt = document.createElement("div");
+  let s = "❤ " + (a.levelName || a.tierName || "");
+  if (a.rose) s += " ↑";
+  else if (a.cross === "hard") s += " · 她退开了";
+  else if (a.arousalName) s += " · " + a.arousalName;   // 气氛：和 QQ 尾行一致
+  if (a.crossN > 0) s += " · 被拒 " + a.crossN + " 次";
+  txt.textContent = s;
+  div.appendChild(txt);
+
+  // 关系条：和右栏同一条进度，只是缩小放到气泡下面。窄屏没有右栏，
+  // 这一条就是玩家唯一能看见「离下一步还有多远」的地方（宽度照样不给数字）。
+  const max = a.levelMax || 5;
+  div.appendChild(miniBar("rel", ((a.level | 0) / max) * 100));
+  // 气氛条：只在有气氛时才画。它是温度计不是进度条，归零不代表坏事。
+  if (a.arousal > 0) div.appendChild(miniBar("aro", a.arousal));
   return div;
+}
+
+function miniBar(cls, pct) {
+  const b = document.createElement("div");
+  b.className = "b " + cls;
+  const i = document.createElement("i");
+  i.style.width = Math.max(0, Math.min(100, pct)) + "%";
+  b.appendChild(i);
+  return b;
 }
 
 // 侧栏的好感区块：数值 + 进度条。（模式开关在顶部 #btnMode，见 renderMode）

@@ -223,6 +223,16 @@ def get_session():
                 msgs.append({"role": "assistant", "text": reply,
                              "scene": scene, "mood": mood,
                              "intensity": intensity, "state": state})
+    aff = _aff_status(key)
+    # 状态行跟着「她说的最后一句话」走（2026-11-04）：刷新后历史里没有
+    # 每轮的 aff 快照，手机端就整条状态凭空消失。只把**当前**状态挂到
+    # 最后一条她的回复上——那条之后没再发生过任何事，所以它就是此刻。
+    if aff and str(aff.get("mode") or "") == "raid":
+        for m in reversed(msgs):
+            if m.get("role") == "assistant":
+                m["aff"] = aff
+                break
+
     return jsonify({
         "ok": True,
         "card": _card_json(card),
@@ -232,7 +242,7 @@ def get_session():
         "intensity": int(ent.get("intensity") or 0),
         "turns": int(ent.get("turns") or 0),
         "messages": msgs,
-        "affection": _aff_status(key),
+        "affection": aff,
         "role": "member",
     })
 
