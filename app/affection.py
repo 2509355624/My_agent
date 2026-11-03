@@ -16,7 +16,7 @@
 ## 数值与档位
 
 好感 -50 ~ +50，初始 0。9 个行为档 + 2 个结局（毕业 / 进局子）。
-结局**越线即触发**（≥50 / ≤-50），触发后数值锁定，直到「重新开始」
+结局**越线即触发**（≥50 / ≤-50），触发后数值锁定，直到「清空存档」
 （回到这张卡的起点）或切回自由模式（封存原值）。切自由模式会**顺手解除结局**
 （2026-11-04）：不解除的话，切回攻略模式的第一轮结算会拿同一个越线值
 再判一次结局，玩家等于被关在局子里出不来。
@@ -77,7 +77,7 @@ ENDING_JAIL = "jail"
 
 # 「再给我一次机会」（2026-11-04 用户定的）：进局子之后能真的重来一次，
 # 但每人只给 MERCY_MAX 次，**按每条角色线各算**。
-# 存在的理由不是宽容，是防人跑：只给「重新开始」的话，玩家在进局子那一刻
+# 存在的理由不是宽容，是防人跑：只给「清空存档」的话，玩家在进局子那一刻
 # 会以为存档要没了，索性不玩了。用完就只剩自由模式（封存）和重新开始。
 MERCY_MAX = 3
 
@@ -503,7 +503,7 @@ def set_mode(line_key, raid):
             ename = str(ending_cfg(str(rec["ending"]), load_config())
                         .get("name") or "结局")
             return ("这条线还停在结局（%s），数值锁定，她留在那天的情绪里。"
-                    "想从那页翻出来接着聊就发「自由模式」，想彻底重来发「重新开始」。"
+                    "想从那页翻出来接着聊就发「自由模式」，想彻底删档发「清空存档」。"
                     % ename)
         if rec.get("mode") == MODE_RAID:
             return "现在已经是攻略模式了，当前好感 %d。" % int(
@@ -530,7 +530,7 @@ def set_mode(line_key, raid):
         _save_entry(line_key, ent)
         return ("【%s】这一页翻过去了，切回自由模式：她不再按结局那天的样子对你，"
                 "数值封存着（好感 %d）。想接着攻略就发「攻略模式」，"
-                "想干净地从头再来就发「重新开始」。"
+                "想彻底删档重来就发「清空存档」。"
                 % (ename, int(rec.get("value") or 0)))
     if rec.get("mode") == MODE_FREE:
         return "现在就是自由模式（好感 %d 封存中）。发「攻略模式」接着玩。" % int(
@@ -543,21 +543,29 @@ def set_mode(line_key, raid):
                 rec.get("value") or 0))
 
 
-def restart(line_key):
-    """「重新开始」：数值回到**这张卡的起点**（不是硬归零）、记录清空、结局解除；
-    **聊天记忆保留**。成就是「经历过的事」，不跟着数值清——重开一次就把
-    之前攒的勋章抹掉，玩家下次就懒得重开了。"""
+def wipe_numbers(line_key, keep_mode=True):
+    """把好感记录整份换新，重置成**这张卡的起点**，供「清空存档」调用。
+
+    2026-11-04 用户拍板：存档既然是真删，就没有「经历过的事」可言——
+    好感、关系层级、结局、成就、连续天数、机会次数（mercy）全部回到初始，
+    连 `wipe` 之前攒的勋章一起清掉。
+
+    和改动前的 `restart()` 的区别：那个只删数值、留着成就、聊天记忆也不动。
+    玩家删完发现她还记得上周聊的，惩罚感是假的。
+
+    只负责好感这一层；聊天历史与扮演态由 `persona.wipe()` 删。
+    返回新记录（`persona` 拿它写进状态），没开过攻略时返回 None。
+    """
     ent = _entry(line_key)
     old = record_of(ent)
     if not ent or old is None:
         return None           # 从没开过攻略：当普通消息
     fresh = _blank(line_key)
-    if isinstance(old.get("ach"), list) and old["ach"]:
-        fresh["ach"] = old["ach"]
+    if keep_mode and old.get("mode"):
+        fresh["mode"] = old["mode"]
     ent["affection"] = fresh
     _save_entry(line_key, ent)
-    return ("已经回到原点，重新攻略。之前聊过的她还记得，"
-            "但你们的关系从最初那一步再来一遍。")
+    return fresh
 
 
 def mercy(line_key):
@@ -583,7 +591,7 @@ def mercy(line_key):
     left = mercy_left(rec)
     if left <= 0:
         return ("三次机会都用完了，这次没有了。发「自由模式」能接着聊（数值封存），"
-                "发「重新开始」是从这张卡的起点重走一遍。")
+                "发「清空存档」是把这条线彻底删掉（会要你二次确认）。")
     _lift_ending(rec)
     rec["cross_n"] = 0        # 案子了结：再犯一次不会立刻又报警
     rec["arousal"] = 0

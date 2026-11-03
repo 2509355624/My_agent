@@ -490,10 +490,18 @@ def affection_mode():
                     "affection": affection.status(key)})
 
 
+@bp.route("/api/persona/affection/wipe", methods=["POST"])
 @bp.route("/api/persona/affection/restart", methods=["POST"])
-def affection_restart():
-    """「重新开始」：好感归零、结局解除；聊天记忆保留。"""
-    from app import affection
+def affection_wipe():
+    """「清空存档」：真删 —— 聊天记录 + 好感 + 成就 + 结局，角色卡保留。
+
+    2026-11-04 用户定：这是不可逆操作，前端弹输入框要玩家手打
+    「我同意删除该存档」。后端照样校验一遍 —— 前端那道是防手滑，这道是
+    防有人直接打接口绕过前端。
+
+    老的 `/restart` 路径保留：玩家可能开着旧页面没刷新，点下去不该报 404。
+    两条路径行为一致，都是真删。
+    """
     role, who, token = _who()
     if role == "guest":
         resp = jsonify({"ok": False, "error": "体验版没有攻略模式。"})
@@ -501,11 +509,13 @@ def affection_restart():
         _attach_guest_cookie(resp, token)
         return resp
     key = _active_key(_key(who))
-    reply = affection.restart(key)
+    body = request.get_json(silent=True) or {}
+    if str(body.get("confirm") or "").strip() != persona.WIPE_CONFIRM:
+        return jsonify({"ok": False, "error": "确认句不对，存档没有删。"}), 400
+    reply = persona.wipe(key)
     if reply is None:
-        return jsonify({"ok": False, "error": "还没开过攻略模式"}), 400
-    return jsonify({"ok": True, "reply": reply,
-                    "affection": affection.status(key)})
+        return jsonify({"ok": False, "error": "现在没有在演谁，没什么可删的。"}), 400
+    return jsonify({"ok": True, "reply": reply})
 
 
 @bp.route("/api/persona/affection/mercy", methods=["POST"])
