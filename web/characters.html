@@ -205,14 +205,16 @@ function renderPane() {
       <div class="tip">这一段就是它的身份、性格和说话方式——扮演态的系统提示词里只有这个，没有别的规矩。</div>
     </div>
     <div class="field">
-      <label>外观固定块（英文 booru 标签）</label>
+      <label>外观固定块（英文自然语言，一句）</label>
       <textarea class="mid" id="f_appearance">${esc(c.appearancePrompt)}</textarea>
-      <div class="tip">发色 / 发型 / 瞳色 / 体型这类不变的特征。扮演态每轮回话都会配一张图，这一段就是**每轮固定拼在画面最前面**的部分——同一个角色靠它不换脸。只写不变的特征，别写动作 / 场景 / 表情（那些由角色自己按剧情写）。</div>
+      <div class="tip">发色 / 发型 / 瞳色 / 体型这类不变的特征，写成**一句连贯英文**，以 <code>an adult woman with …</code> 开头。<br>
+        例：<code>an adult woman with waist-length silver hair in twin tails, clear blue eyes, pale skin and a slim adult build</code><br>
+        不要写标签串（<code>1girl, solo, silver hair</code>）、质量词（<code>masterpiece, best quality</code>）、<code>sfw</code> 或权重语法（<code>(tag:1.2)</code>）——漫画编剧读的是自然语言，标签串会被原样塞进画面描述，出来的是「the masterpiece, best quality, 1girl …」这种句子。动作 / 场景 / 表情由角色按剧情写，这里只写不变的特征。</div>
     </div>
     <div class="field">
-      <label>服饰（英文 booru 标签，可留空）</label>
+      <label>服饰（英文自然语言，可留空）</label>
       <textarea class="mid" id="f_outfit">${esc(c.outfitPrompt)}</textarea>
-      <div class="tip">常服装扮。跟外观固定块一起拼进每轮的画面里；留空就只按外观固定块画。</div>
+      <div class="tip">常服装扮，同样用自然语言写（<code>a loose white shirt and grey shorts</code>）。跟外观固定块一起拼进画面；留空就只按外观固定块画。</div>
     </div>
     <div class="field">
       <label>房间与私物（可留空，中文）</label>
