@@ -23,7 +23,7 @@ import time
 
 from flask import Blueprint, jsonify, request
 
-from app import friend_auth, persona
+from app import friend_auth, persona, usage
 
 log = logging.getLogger("persona_api")
 
@@ -369,7 +369,12 @@ def chat():
     if card is None:
         return jsonify({"ok": False, "error": "还没选角色"}), 400
 
-    turn = persona.run_turn(key, text, "private", "")
+    # 用量归属（2026-11-03）：网页端的扮演调用以前没打标签，全落进 usage 的
+    # "other" 兜底，和跑图台、管理页的调用混在一起——「网页端扮演烧了多少
+    # token」永远统计不出来。QQ 侧是在 qq_bot 的轮次外层包的，这里补同一层，
+    # 标签用活动线键（web_<qq>__<card>），能精确到「哪个角色烧了多少」。
+    with usage.scope(key):
+        turn = persona.run_turn(key, text, "private", "")
     if not turn.reply.strip():
         return jsonify({"ok": False, "error": "她这轮没说话"}), 502
     out = {
@@ -419,7 +424,10 @@ def _guest_chat(text, uid, token):
     msgs = ([{"role": "system", "content": head}] + hist
             + [{"role": "user", "content": text}])
     try:
-        raw = P.llm.call_llm(msgs)
+        # 游客的用量单独归一类（guest_<uid前8>），和登录用户的 web_ 分开——
+        # 体验版是「拉新成本」，得看清楚它值不值。
+        with usage.scope("guest_" + str(uid or "anon")[:8]):
+            raw = P.llm.call_llm(msgs)
     except Exception:                              # noqa: BLE001
         log.exception("游客对话调用失败 %s", uid[:8])
         return jsonify({"ok": False, "error": "她这会儿有点卡"}), 502
