@@ -11,7 +11,7 @@
 
   - 距离层级首次到达某一级
   - 档位首次升进某一档（只认正向四档）
-  - 结局（毕业 / 进局子）
+  - 里程碑（在一起）/ 结局（进局子）
   - 越界被拒累计 3 次
   - 连续陪伴 7 天
   - 单线聊到 100 轮
@@ -32,7 +32,9 @@ _TIER_KEYS = ("touch", "start", "care", "full")
 
 # 固定成就：key → (icon, 兜底名, 条件说明)
 _FIXED = {
-    "graduate": ("🎓", "毕业", "把这条线走到圆满结局"),
+    # 2026-11-04 晚：「毕业」结局退休（50 不再是终点），这条成就改成里程碑
+    # 事件「在一起」——同一个位置、同一种「走到这一步了」的意思，但不再是收场。
+    "together": ("💞", "在一起", "把关系走到确定下来"),
     "jail": ("🚨", "进局子", "把这条线玩到结局破裂"),
     "refused3": ("🚪", "她说过三次不", "累计越界被拒 3 次"),
     "streak7": ("📅", "连着七天", "连续 7 天都来找她"),
@@ -121,8 +123,12 @@ def check(rec, res, cfg=None, card=None):
     if tier in _TIER_KEYS:
         cand.append("tier_" + tier)
     ended = str(res.get("just_ended") or "")
-    if ended in ("graduated", "jail"):
-        cand.append("graduate" if ended == "graduated" else "jail")
+    if ended == "jail":
+        cand.append("jail")
+    # 里程碑「在一起」：2026-11-04 晚替代原来的「毕业」。
+    # 只认**这一轮刚触发**（just_milestone），老档在 `_migrate` 里补发。
+    if str(res.get("just_milestone") or "") == "together":
+        cand.append("together")
     if int(rec.get("cross_n") or 0) >= 3:
         cand.append("refused3")
     if int(rec.get("streak") or 0) >= 7:

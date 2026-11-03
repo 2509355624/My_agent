@@ -125,7 +125,11 @@ class ConfigTest(AffBase):
 
     def test_tier_boundaries(self):
         cfg = _cfg()
-        self.assertEqual(affection.tier_for(50, cfg)["key"], "full")
+        # 2026-11-04 晚：上限抬到 100，50 之后补了两档（在一起了 / 交给你了）
+        self.assertEqual(affection.tier_for(100, cfg)["key"], "devoted")
+        self.assertEqual(affection.tier_for(75, cfg)["key"], "devoted")
+        self.assertEqual(affection.tier_for(74, cfg)["key"], "lover")
+        self.assertEqual(affection.tier_for(50, cfg)["key"], "lover")
         self.assertEqual(affection.tier_for(40, cfg)["key"], "full")
         self.assertEqual(affection.tier_for(39, cfg)["key"], "care")
         self.assertEqual(affection.tier_for(20, cfg)["key"], "start")
@@ -135,8 +139,14 @@ class ConfigTest(AffBase):
         self.assertEqual(affection.tier_for(-50, cfg)["key"], "fallen")
 
     def test_ending_boundaries(self):
+        """2026-11-04 晚：只剩进局子这一条结局。
+
+        好感顶到 max **不再是结局**——用户实测 20 轮就「毕业」，锁死数值之后
+        什么都推不动，「这样根本没有意思」。100 也一样，到顶只是到顶。
+        """
         cfg = _cfg()
-        self.assertEqual(affection.ending_for(50, cfg), "graduated")
+        self.assertIsNone(affection.ending_for(50, cfg))
+        self.assertIsNone(affection.ending_for(100, cfg))
         self.assertIsNone(affection.ending_for(49, cfg))
         self.assertIsNone(affection.ending_for(-49, cfg))
         self.assertEqual(affection.ending_for(-50, cfg), "jail")
@@ -161,10 +171,11 @@ class SettleTest(AffBase):
         self.assertEqual(
             affection.settle(key, {"delta": 3, "turn_type": "chat"}).get("mode"),
             "raid")
-        # 结局锁定那条分支也要带
+        # 结局锁定那条分支也要带。2026-11-04 晚起只剩进局子这一条结局了，
+        # 所以往下推（原来是往上推到「毕业」）。
         res = {}
-        for _ in range(8):                     # 单轮夹 ±15，多推几次到顶
-            res = affection.settle(key, {"delta": 50, "turn_type": "action"})
+        for _ in range(5):                     # 单轮夹 ±15，推到 -50 越线
+            res = affection.settle(key, {"delta": -50, "turn_type": "action"})
             if res.get("ending"):
                 break
         locked = affection.settle(key, {"delta": 3, "turn_type": "chat"})
@@ -235,17 +246,24 @@ class SettleTest(AffBase):
         self.assertEqual(res["tier"], "normal")
         self.assertTrue(res["changed"])
 
-    def test_graduated_ends_and_locks(self):
+    def test_50_is_a_milestone_not_an_ending(self):
+        """2026-11-04 晚：好感 50 不再「毕业」锁死，只触发一次里程碑。
+
+        用户原话：「我不需要这个啊，这样根本没有意思了，我 20 轮就达到了」。
+        现在 50 给一段叙事（在一起），数值照常往上走，回合照常结算。
+        """
         key = self._raid()
         for _ in range(4):
             res = affection.settle(key, {"delta": 13, "turn_type": "action"})
-        self.assertEqual(res["just_ended"], "graduated")
-        self.assertEqual(res["value"], affection.MAX_V)
-        # 锁定后不再结算
+        self.assertEqual(res["just_ended"], "")
+        self.assertEqual(res["just_milestone"], "together")
+        self.assertEqual(res["value"], 52)
+        # 不锁：还能继续涨
         res = affection.settle(key, {"delta": 5, "turn_type": "action"})
-        self.assertEqual(res["applied"], 0)
-        self.assertFalse(res["just_ended"])
-        self.assertTrue(res["active"])
+        self.assertEqual(res["applied"], 5)
+        self.assertEqual(res["value"], 57)
+        # 里程碑只报一次，别每轮都「在一起了」
+        self.assertEqual(res["just_milestone"], "")
 
     def test_jail_ends_and_locks(self):
         key = self._raid()
@@ -866,12 +884,24 @@ class LevelTest(AffBase):
         self.assertEqual(affection.intimacy_gauge(1, 50)["label"],
                          "够了 · 差一步")
 
-    def test_gauge_at_max_level(self):
-        g = affection.intimacy_gauge(5, 42)
+    def test_gauge_switches_to_tiers_after_max_level(self):
+        """等级满级不等于到顶（2026-11-04 晚）：好感上限 100，档位还能往后走。
+
+        等级只有 6 档，40 分就满了；可 50（在一起了）、75（交给你了）在后面。
+        满级后必须改由档位算「下一站」，否则会误报「到顶」，玩家又以为结束了。
+        """
+        g = affection.intimacy_gauge(5, 55)
+        self.assertFalse(g["maxed"])
+        self.assertEqual(g["nextGate"], 75)
+        self.assertEqual(g["label"], "55/75 · 还差 20")
+        # 45 分、等级已满 → 下一站是 50 那一档
+        self.assertEqual(affection.intimacy_gauge(5, 45)["label"], "45/50 · 还差 5")
+
+    def test_gauge_really_maxed_only_after_last_tier(self):
+        g = affection.intimacy_gauge(5, 80)
         self.assertTrue(g["maxed"])
-        self.assertEqual(g["nextName"], "")
+        self.assertEqual(g["label"], "80 到顶")
         self.assertEqual(g["pct"], 100)
-        self.assertEqual(g["label"], "42 到顶")
 
     def test_gauge_negative_has_no_denominator(self):
         """负分不报「到下一档还差多少」——赎罪期看的是能不能回到 0。"""
@@ -893,6 +923,86 @@ class LevelTest(AffBase):
         self.assertEqual(g["label"], "15")
         self.assertGreaterEqual(g["pct"], 0)
         self.assertLessEqual(g["pct"], 100)
+
+
+class ExciteTest(AffBase):
+    """兴奋度（2026-11-04 晚）：只在进行中累积，场景一停就归零。
+
+    和冲动的分工是这一层的关键——冲动是「她此刻想不想」（每轮回落），
+    兴奋度是「这一场里她到哪了」（场景内涨、场景外没有）。
+    """
+
+    def _raid(self):
+        persona.save_cards([_card("纱雾")])
+        card = persona.find_card("纱雾")
+        persona.switch_line("private_1", card)
+        key = persona.resolve_line("private_1")
+        affection.set_mode(key, True)
+        return key
+
+    def _settle(self, key, **score):
+        sc = {"delta": 0, "turn_type": "action", "reason": "测试"}
+        sc.update(score)
+        return affection.settle(key, sc)
+
+    def test_starts_from_a_baseline_then_accumulates(self):
+        """刚进场景不是从 0 起：她已经在这个状态里了。"""
+        key = self._raid()
+        res = self._settle(key, in_scene=True, excite=10)
+        self.assertEqual(res["excite"], affection.EXCITE_START + 10)
+        self.assertTrue(res["in_scene"])
+        # 还在里面：继续累加
+        res = self._settle(key, in_scene=True, excite=10)
+        self.assertEqual(res["excite"], affection.EXCITE_START + 20)
+
+    def test_negative_delta_pulls_it_back(self):
+        key = self._raid()
+        self._settle(key, in_scene=True, excite=30)
+        res = self._settle(key, in_scene=True, excite=-15)
+        self.assertEqual(res["excite"], affection.EXCITE_START + 15)
+
+    def test_drops_to_zero_when_scene_ends(self):
+        """场景一停就归零——它不是常驻状态，是这一场里的进度。"""
+        key = self._raid()
+        self._settle(key, in_scene=True, excite=40)
+        res = self._settle(key, in_scene=False)
+        self.assertEqual(res["excite"], 0)
+        self.assertFalse(res["in_scene"])
+
+    def test_clamped_to_range(self):
+        key = self._raid()
+        for _ in range(4):
+            res = self._settle(key, in_scene=True, excite=60)
+        self.assertEqual(res["excite"], affection.EXCITE_MAX)
+
+    def test_tail_line_only_shows_it_in_scene(self):
+        """没在场景里不该多一行「兴奋 0」——那会让人以为她冷了。"""
+        res = {"active": True, "level": 2, "levelName": "说得上话",
+               "value": 20, "arousal": 30, "ending": ""}
+        self.assertNotIn("兴奋", affection.tail_line(res))
+        res["excite"] = 62
+        self.assertIn("兴奋 62", affection.tail_line(res))
+
+    def test_high_arousal_lets_her_lead(self):
+        """冲动高到 90 且接得住时，注入要放她「先动」的许可（用户要的反客为主）。"""
+        res = {"active": True, "value": 40, "level": 5, "levelName": "不分彼此",
+               "tierName": "在一起", "arousal": 95, "excite": 0, "ending": ""}
+        blk = affection.injection_block(res)
+        self.assertIn("由她先动", blk)
+
+    def test_high_excite_also_lets_her_lead(self):
+        """兴奋度够高一样推她主动——不只看冲动。"""
+        res = {"active": True, "value": 40, "level": 5, "levelName": "不分彼此",
+               "tierName": "在一起", "arousal": 0, "excite": 90, "ending": ""}
+        blk = affection.injection_block(res)
+        self.assertIn("由她先动", blk)
+
+    def test_negative_value_never_gets_lead_permission(self):
+        """赎罪期不许反客为主：她还在算账，主动靠近不成立。"""
+        res = {"active": True, "value": -22, "level": 3, "levelName": "说得进心里",
+               "tierName": "在等你认错", "arousal": 95, "excite": 90, "ending": ""}
+        blk = affection.injection_block(res)
+        self.assertNotIn("由她先动", blk)
 
 
 class ArousalViewTest(AffBase):
@@ -1020,15 +1130,17 @@ class AchievementTest(AffBase):
         second = self._settle(key, delta=0, turn_type="chat")
         self.assertNotIn("ach", second)
 
-    def test_ending_unlocks(self):
+    def test_milestone_unlocks(self):
+        """跨过 50 拿到「在一起」成就（2026-11-04 晚替代原来的「毕业」）。"""
         key = self._raid()
-        # 每次 +15（ROUND_CAP），四轮推满 50 越线毕业
+        # 每次 +15（ROUND_CAP），四轮推过 50
         for _ in range(3):
             self._settle(key, delta=15)
         res = self._settle(key, delta=15)
-        self.assertEqual(res["just_ended"], "graduated")
+        self.assertEqual(res["just_milestone"], "together")
+        self.assertEqual(res["just_ended"], "")
         keys = [a["k"] for a in res.get("ach") or []]
-        self.assertIn("graduate", keys)
+        self.assertIn("together", keys)
 
     def test_achievement_dies_with_the_save(self):
         """成就跟着存档走（2026-11-04 翻转）。
@@ -1112,9 +1224,15 @@ class MigrationTest(AffBase):
         self.assertFalse([a for a in rec["ach"] if a["k"].startswith("tier_")])
 
     def test_ending_achievement_granted(self):
-        """定格在结局的线不会再走结算，结局成就只能在迁移时补。"""
+        """定格在结局的线不会再走结算，结局成就只能在迁移时补。
+
+        2026-11-04 晚：「毕业」退休，老档的 graduated 在迁移时**顺手解锁**
+        （数值原样保留，转成里程碑），成就换成 `together`。
+        """
         rec = affection._migrate(self._legacy(value=50, ending="graduated"))
-        self.assertIn("graduate", [a["k"] for a in rec["ach"]])
+        self.assertEqual(rec["ending"], "")          # 解锁了，不再定格
+        self.assertEqual(rec["milestone"], "together")
+        self.assertIn("together", [a["k"] for a in rec["ach"]])
         rec = affection._migrate(self._legacy(value=-50, ending="jail"))
         self.assertIn("jail", [a["k"] for a in rec["ach"]])
 

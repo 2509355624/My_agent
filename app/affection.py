@@ -17,8 +17,14 @@
 
 ## 数值与档位
 
-好感 -50 ~ +50，初始 0。9 个行为档 + 2 个结局（毕业 / 进局子）。
-结局**越线即触发**（≥50 / ≤-50），触发后数值锁定，直到「清空存档」
+好感 -50 ~ +100，初始 0。11 个行为档 + 1 个结局（进局子）。
+
+**2026-11-04 晚：毕业结局退休**。原来 ≥50 就「毕业」、数值锁死，用户实测
+20 轮就到了——到了反而没得玩。现在 50 只是**里程碑**（在一起，见
+`config.milestones`），触发一次、不锁数值，接着往上走；100 到顶也不收场。
+理由很直接：这类玩法要的是「一直有下一步」，不是一个奖状。
+
+结局只剩**越线进局子**（≤-50），触发后数值锁定，直到「清空存档」
 （回到这张卡的起点）或切回自由模式（封存原值）。切自由模式会**顺手解除结局**
 （2026-11-04）：不解除的话，切回攻略模式的第一轮结算会拿同一个越线值
 再判一次结局，玩家等于被关在局子里出不来。
@@ -28,7 +34,9 @@
 存在 persona 分线条目的 `affection` 字段（没有这个字段 = 自由模式）：
 
     {"mode": "raid" | "free", "value": 12, "tier": "touch",
-     "down": 0, "ending": "" | "graduated" | "jail",
+     "down": 0, "ending": "" | "jail",
+     "milestone": "" | "together",
+     "excite": 0, "scene": false,
      "day": "2026-11-03", "chat": 0, "acts": 0,
      "hist": [{"d": 3, "r": "原因", "ts": "..."}]}
 
@@ -44,7 +52,7 @@ from app.config import BASE_DIR
 log = logging.getLogger("affection")
 
 MIN_V = -50
-MAX_V = 50
+MAX_V = 100             # 2026-11-04 晚从 50 抬到 100：50 处只放「在一起」里程碑
 INITIAL_V = 0
 ROUND_CAP = 15          # 单轮加分绝对值上限（防一句话刷满）
 
@@ -55,6 +63,13 @@ ROUND_CAP = 15          # 单轮加分绝对值上限（防一句话刷满）
 LEVEL_MAX = 5
 AROUSAL_MAX = 100       # 冲动：此刻被激起的程度，一次性机会
 AROUSAL_DECAY = 15      # 每轮回落多少（回合结束就凉）
+# 兴奋度（2026-11-04 晚，用户要的第二根轴）：**只在进行那个行为的时候**有意义。
+# 和冲动的分工——
+#   冲动是「她此刻想不想」，每轮回落，决定她接不接得住、会不会主动；
+#   兴奋度是「正在做的时候，她到什么程度了」，只在场景内累积，场景一停就归零。
+# 两者都不进好感结算，只影响她这一轮怎么演。
+EXCITE_MAX = 100
+EXCITE_START = 15       # 刚进入场景时的起步值：不是从 0 开始，她已经有反应了
 # 越界被拒的代价，按当晚第几次递增（不冻结、不降级——自己哄回来）
 CROSS_PENALTY = (3, 6, 10)
 CROSS_HARD = 20         # 她说了不要还继续：一次就够狠
@@ -71,8 +86,12 @@ MODE_RAID = "raid"
 MODE_FREE = "free"
 
 # 结局 key → 触发线
-ENDING_GRAD = "graduated"
+# 2026-11-04 晚：`graduated`（毕业）退休。它原来的语义是「好感触顶 = 故事收场」，
+# 但用户实测 20 轮就到、到了反而没得玩。现在 50 只是里程碑（`MILESTONE_TOGETHER`），
+# 不锁数值；100 到顶也不收场。只剩「进局子」这一条真结局。
 ENDING_JAIL = "jail"
+# 里程碑（不是结局）：到点触发一次，记在 rec["milestone"] 里，回头不再重复。
+MILESTONE_TOGETHER = "together"
 
 # 「再给我一次机会」（2026-11-04 用户定的）：进局子之后能真的重来一次，
 # 但每人只给 MERCY_MAX 次，**按每条角色线各算**。
@@ -84,6 +103,10 @@ MERCY_MAX = 3
 DEFAULT_CONFIG = {
     "min": MIN_V, "max": MAX_V, "initial": INITIAL_V,
     "tiers": [
+        {"key": "devoted", "min": 75, "name": "交给你了",  "name_soft": "认准你了",
+         "prompt": ""},
+        {"key": "lover",   "min": 50, "name": "在一起了",  "name_soft": "心里有你",
+         "prompt": ""},
         {"key": "full",   "min": 40,  "name": "随便凿",   "prompt": ""},
         {"key": "care",   "min": 30,  "name": "凿+关心",  "prompt": "",
          "aftercare": True},
@@ -102,8 +125,11 @@ DEFAULT_CONFIG = {
         {"key": "fallen", "min": -50, "name": "随时会走",   "prompt": ""},
     ],
     "endings": {
-        "graduated": {"at": 50,  "name": "毕业",   "prompt": ""},
-        "jail":      {"at": -50, "name": "进局子", "prompt": ""},
+        "jail": {"at": -50, "name": "进局子", "prompt": ""},
+    },
+    # 里程碑兜底：config 缺了也不会因为「找不到 together 的文案」而崩
+    "milestones": {
+        "together": {"at": 50, "name": "在一起", "prompt": ""},
     },
     # 冲动档位兜底（2026-11-04）：给玩家看的是**词**，不是 0~100 的数字。
     # 数字一露，玩家就开始算「再来两杯酒就能过线」——那就不叫气氛了。
@@ -112,6 +138,14 @@ DEFAULT_CONFIG = {
         {"key": "messy", "min": 50, "name": "很乱",   "short": "她心里有点乱，话会绕。"},
         {"key": "warm",  "min": 25, "name": "有点乱", "short": "她比刚才软了一点。"},
         {"key": "calm",  "min": 0,  "name": "平静",   "short": "她跟平时一样。"},
+    ],
+    # 兴奋度兜底（2026-11-04 晚）：只在场景内出现，0 时不显示。
+    # 词义是「进行中她已经到哪了」，和冲动的「想不想」不是一回事。
+    "excite_levels": [
+        {"key": "high", "min": 75, "name": "快不行了",   "prompt": ""},
+        {"key": "mid",  "min": 50, "name": "跟着你走",   "prompt": ""},
+        {"key": "low",  "min": 25, "name": "有点发紧",   "prompt": ""},
+        {"key": "zero", "min": 0,  "name": "还没开始",   "prompt": ""},
     ],
     # 距离层级兜底：config 里没有 intimacy 时用这套中性名，机制不因缺配置停摆
     "intimacy": {"levels": [
@@ -168,13 +202,53 @@ def bounds(cfg=None):
 
 
 def ending_for(value, cfg=None):
-    """越线判定：≥max 毕业 / ≤min 进局子；没越线返回 None。"""
-    hi, lo = bounds(cfg)
-    if value >= hi:
-        return ENDING_GRAD
+    """越线判定：只剩 **≤min 进局子**。
+
+    ≥max 不再是结局（2026-11-04 晚）：好感顶到 100 只是「到顶了」，戏照样
+    能演下去。原来 ≥50 判「毕业」，用户实测 20 轮就到，到了锁数值、什么都不
+    能推——「这样根本没有意思了」。50 那个点改成了里程碑，见 `milestone_for`。
+    """
+    _hi, lo = bounds(cfg)
     if value <= lo:
         return ENDING_JAIL
     return None
+
+
+def milestone_for(value, rec, cfg=None):
+    """跨过里程碑线时返回它的 key（已经触发过就返回空串）。
+
+    和结局的区别只有一个：**不锁数值**。触发一次、记在 `rec["milestone"]` 里，
+    回头不再重复——它的作用是给一段叙事，不是给一个奖状。
+    """
+    rec = rec if isinstance(rec, dict) else {}
+    got = str(rec.get("milestone") or "")
+    for key, m in (cfg_milestones(cfg) or {}).items():
+        if not isinstance(m, dict):
+            continue
+        at = m.get("at")
+        if at is None:
+            continue
+        try:
+            at = int(at)
+        except (TypeError, ValueError):
+            continue
+        if int(value or 0) >= at and got != key:
+            return key
+    return ""
+
+
+def cfg_milestones(cfg=None):
+    """里程碑配置表（key → {at, name, prompt}）。去掉注释键。"""
+    cfg = cfg or load_config()
+    raw = cfg.get("milestones")
+    if not isinstance(raw, dict):
+        raw = DEFAULT_CONFIG.get("milestones") or {}
+    return {k: v for k, v in raw.items()
+            if not str(k).startswith("_") and isinstance(v, dict)}
+
+
+def milestone_cfg(key, cfg=None):
+    return cfg_milestones(cfg).get(str(key or "")) or {}
 
 
 def ending_cfg(key, cfg=None):
@@ -237,6 +311,24 @@ def _intimacy_label(value, g):
                                 int(g.get("need") or 0))
 
 
+def _next_tier_gate(value, cfg=None):
+    """关系等级满级之后，用**档位门槛**接着算「下一站」。
+
+    为什么需要它：等级只有 6 档（门槛 0/5/12/20/30/40），好感上限却是 100。
+    升到「不分彼此」之后等级不再变，如果这里直接报「到顶」，玩家会以为
+    后面没内容了——而 50（在一起了）、75（交给你了）两档恰恰在后面。
+    所以满级后把进度交给档位算：45/50 → 55/75 → 85 到顶。
+    """
+    cfg = cfg or load_config()
+    tiers = [t for t in (cfg.get("tiers") or [])
+             if isinstance(t, dict) and int(t.get("min") or 0) >= 0]
+    tiers.sort(key=lambda x: int(x.get("min") or 0))
+    for t in tiers:
+        if int(t.get("min") or 0) > int(value or 0):
+            return int(t.get("min") or 0), str(t.get("name") or "")
+    return 0, ""
+
+
 def intimacy_gauge(level, value, card=None, cfg=None):
     """亲密度进度：从**这一档的门槛**走到**下一档的门槛**。
 
@@ -245,12 +337,15 @@ def intimacy_gauge(level, value, card=None, cfg=None):
     事实：这一档的下限、下一档叫什么、还差几分。**升不升还是模型说了算**，
     分数只是门票，`beat`（这轮做成了那件事）照样要过。
 
+    2026-11-04 晚：上限抬到 100 之后，等级满级（不分彼此）**不等于到顶**——
+    50 / 75 两个档位还在后面。所以满级时改用档位门槛计算，见 `_next_tier_gate`。
+
     返回 dict：
         gate      这一档的门槛 = 档内进度的起点
-        nextGate  下一档门槛；满级时等于 gate
-        nextName  下一档在这张卡里叫什么；满级时空串
-        need      还差几分到下一档（分数已够 / 满级时为 0）
-        pct       档内进度 0~100（低于本档门槛时压到 0，满级 100）
+        nextGate  下一档门槛；真的到顶时等于 gate
+        nextName  下一档叫什么；到顶时空串
+        need      还差几分到下一档（分数已够 / 到顶时为 0）
+        pct       档内进度 0~100（低于本档门槛时压到 0，到顶 100）
         maxed     已经到顶
         label     给人看的一句，见 `_intimacy_label`
     """
@@ -265,11 +360,29 @@ def intimacy_gauge(level, value, card=None, cfg=None):
         v = int(value or 0)
     except (TypeError, ValueError):
         v = 0
+
     if lv >= LEVEL_MAX:
-        g = {"gate": gate, "nextGate": gate, "nextName": "",
-             "need": 0, "pct": 100, "maxed": True}
+        # 等级满级：下一站改由档位给。档位也没了，才算真的到顶。
+        ngate, nname = _next_tier_gate(v, cfg)
+        if not ngate:
+            g = {"gate": gate, "nextGate": gate, "nextName": "",
+                 "need": 0, "pct": 100, "maxed": True}
+            g["label"] = _intimacy_label(v, g)
+            return g
+        # 档内起点 = 当前所在档位的门槛（比等级门槛更贴），没有就用等级门槛
+        cur = 0
+        for t in (cfg.get("tiers") or []):
+            if isinstance(t, dict) and int(t.get("min") or 0) >= 0 \
+                    and int(t.get("min") or 0) <= v:
+                cur = max(cur, int(t.get("min") or 0))
+        span = max(1, ngate - cur)
+        pct = int(round((v - cur) * 100.0 / span))
+        g = {"gate": cur, "nextGate": ngate, "nextName": nname,
+             "need": max(0, ngate - v),
+             "pct": max(0, min(100, pct)), "maxed": False}
         g["label"] = _intimacy_label(v, g)
         return g
+
     ngate = int(level_cfg(lv + 1, cfg).get("gate") or 0)
     span = max(1, ngate - gate)          # 配置被改成同级门槛也别除零
     pct = int(round((v - gate) * 100.0 / span))
@@ -314,6 +427,41 @@ def arousal_name(v, cfg=None):
     return str(arousal_level(v, cfg).get("name") or "")
 
 
+# ── 兴奋度档位（2026-11-04 晚）────────────────────────
+# 和冲动一样只出词、不出数字。词义是**进行中**她的状态，不是「想不想」——
+# 冲动的词（平静/很乱/不设防）说的是意愿，这里的词说她已经到哪了。
+
+def excite_levels(cfg=None):
+    """兴奋度四档，按 min 从高到低。配置坏了回退默认表。"""
+    cfg = cfg or load_config()
+    lst = cfg.get("excite_levels")
+    if not isinstance(lst, list) or not lst:
+        lst = DEFAULT_CONFIG.get("excite_levels") or []
+    return sorted(lst, key=lambda x: int(x.get("min") or 0), reverse=True)
+
+
+def excite_level(v, cfg=None):
+    try:
+        v = int(v or 0)
+    except (TypeError, ValueError):
+        v = 0
+    v = max(0, min(EXCITE_MAX, v))
+    for l in excite_levels(cfg):
+        if v >= int(l.get("min") or 0):
+            return l
+    return {}
+
+
+def excite_name(v, cfg=None):
+    """兴奋度 → 给玩家看的词。0 时返回空串（没在进行，不占一行）。"""
+    try:
+        if int(v or 0) <= 0:
+            return ""
+    except (TypeError, ValueError):
+        return ""
+    return str(excite_level(v, cfg).get("name") or "")
+
+
 def card_start(card):
     """角色卡给的起点：{value, level}。没配就从 0 / 第 0 级开始。"""
     card = card if isinstance(card, dict) else {}
@@ -353,7 +501,9 @@ def _blank(line_key="", value=None):
     t = tier_for(st["value"]) or {}
     return {"mode": MODE_RAID, "value": st["value"], "tier": str(t.get("key") or ""),
             "level": st["level"], "arousal": 0, "cross_n": 0,
-            "down": 0, "ending": "", "day": _today(), "chat": 0, "acts": 0,
+            "down": 0, "ending": "", "milestone": "",
+            "excite": 0, "scene": False,
+            "day": _today(), "chat": 0, "acts": 0,
             "streak": 1, "turns": 0, "ach": [], "hist": [],
             "mercy": MERCY_MAX}
 
@@ -440,10 +590,11 @@ def _migrate(rec):
                       for i in range(1, int(rec.get("level") or 0) + 1)]
         # 已经定格在结局的线不会再走结算，这两个只能在这里补
         ended = str(rec.get("ending") or "")
-        if ended == "graduated":
-            rec["ach"].append({"k": "graduate", "ts": ""})
-        elif ended == "jail":
+        if ended == "jail":
             rec["ach"].append({"k": "jail", "ts": ""})
+        # 老档的 graduate 勋章：成就表里那条已经改成「在一起」，这里换成新 key
+        if ended == "graduated" or int(rec.get("value") or 0) >= 50:
+            rec["ach"].append({"k": "together", "ts": ""})
     if "streak" not in rec:
         rec["streak"] = 1
     if "turns" not in rec:
@@ -452,6 +603,20 @@ def _migrate(rec):
     # 按满额算——不能因为系统后加，就把已经进过局子的人判成「机会用完了」。
     if "mercy" not in rec:
         rec["mercy"] = MERCY_MAX
+    # 2026-11-04 晚 毕业结局退休：原来被锁在 graduated 的线（用户那条伊蕾娜
+    # 就是 value=50 锁死、连消息都推不动）在这里**就地解锁**，把 50 转成里程碑，
+    # 数值原样保留——不降级、不收走已经攒到的分。
+    if str(rec.get("ending") or "") == "graduated":
+        rec["ending"] = ""
+        if not rec.get("milestone"):
+            rec["milestone"] = MILESTONE_TOGETHER
+    if "milestone" not in rec:
+        rec["milestone"] = ""
+    # 兴奋度（2026-11-04 晚）：只在亲密场景里累积，场景外归零
+    if "excite" not in rec:
+        rec["excite"] = 0
+    if "scene" not in rec:
+        rec["scene"] = False
     return rec
 
 
@@ -533,6 +698,11 @@ def status(line_key):
         "arousal": ar,
         "arousalName": arousal_name(ar, cfg),
         "arousalShort": str(arousal_level(ar, cfg).get("short") or ""),
+        # 兴奋度（2026-11-04 晚）：只在场景内大于 0，网页按这个决定要不要画第三条
+        "excite": int(rec.get("excite") or 0),
+        "exciteName": excite_name(rec.get("excite"), cfg),
+        "inScene": bool(rec.get("scene")),
+        "milestone": str(rec.get("milestone") or ""),
         "crossN": int(rec.get("cross_n") or 0),
         "ending": str(rec.get("ending") or ""),
         "mercy": mercy_left(rec),
@@ -548,8 +718,12 @@ def _lift_ending(rec, cfg=None):
     为什么是挪一格而不是拉回起点：结局有两种触发方式——分数越线，或者
     越界次数到顶（`force_ending`）。后者可能停在 -30 这种远没到线的地方，
     把 -30 拉回起点等于抹掉玩家一晚上的账。「挪一格」两种情形都成立：
-    进局子 -50 → -49、报警时 -30 → -29、毕业 +50 → +49。
+    进局子 -50 → -49、报警时 -30 → -29。
     挪完必须在区间内，不然切回攻略模式的第一轮结算会拿越线值再判一次结局。
+
+    2026-11-04 晚：`graduated`（毕业）退休，现在只剩进局子这一种结局，
+    所以「往上挪一格」那个分支没有实际用途了——但**老档里可能还留着**
+    `ending="graduated"`（`_migrate` 会顺手解锁），这里照样兜住。
 
     2026-11-04 用户明确：这条和「再给我一次机会」是**同一个效果**，
     区别只在「再给我一次机会」是明面上的按钮、要扣次数。
@@ -562,7 +736,8 @@ def _lift_ending(rec, cfg=None):
         return ""
     hi, lo = bounds(cfg)
     v = int(rec.get("value") or 0)
-    v += -1 if ended == ENDING_GRAD else 1
+    # 进局子往上挪到线内；老档的 graduated 往下挪一格（那是高线）
+    v += -1 if ended == "graduated" else 1
     rec["value"] = max(lo + 1, min(hi - 1, v))
     rec["ending"] = ""
     return ended
@@ -788,6 +963,23 @@ def settle(line_key, score):
     rec["arousal"] = max(0, min(AROUSAL_MAX,
                                  int(rec.get("arousal") or 0) + arose - AROUSAL_DECAY))
 
+    # ── 兴奋度（2026-11-04 晚）────────────────────────
+    # 只在场景内累积：模型说这轮还在进行中（in_scene）才动它，场景一停就归零。
+    # **不给默认增量**——模型没说就当她这轮没什么变化，别自己往上推。
+    prev_scene = bool(rec.get("scene"))
+    in_scene = bool(score.get("in_scene"))
+    try:
+        ex_delta = int(score.get("excite") or 0)
+    except (TypeError, ValueError):
+        ex_delta = 0
+    ex_delta = max(-60, min(60, ex_delta))
+    if in_scene:
+        base = int(rec.get("excite") or 0) if prev_scene else EXCITE_START
+        rec["excite"] = max(0, min(EXCITE_MAX, base + ex_delta))
+    else:
+        rec["excite"] = 0
+    rec["scene"] = in_scene
+
     force_ending = ""
     if cross:
         if cross == "hard":
@@ -826,6 +1018,16 @@ def settle(line_key, score):
     if ending:
         rec["ending"] = ending
         just_ended = ending
+
+    # 里程碑（2026-11-04 晚）：和结局长得很像，但**不锁数值**。
+    # 跨过 50 的那一刻给一段叙事（「在一起」），记下来，回头不再重复。
+    # 结局回合不再判里程碑——那一轮要说的是收场，不是开工。
+    just_milestone = ""
+    if not ending:
+        mk = milestone_for(value, rec, cfg)
+        if mk:
+            rec["milestone"] = mk
+            just_milestone = mk
 
     # 档位：升档立即，降档连续 DOWN_CONFIRM 轮才认
     cur_key = str(rec.get("tier") or "")
@@ -868,6 +1070,11 @@ def settle(line_key, score):
            "level": lv, "levelMax": LEVEL_MAX,
            "levelName": level_name(lv, cfg, _card_of(line_key)),
            "intimacy": gauge,
+           "milestone": str(rec.get("milestone") or ""),
+           "just_milestone": just_milestone,
+           "excite": int(rec.get("excite") or 0),
+           "exciteName": excite_name(rec.get("excite"), cfg),
+           "in_scene": bool(rec.get("scene")),
            "rose": rose, "arousal": int(rec.get("arousal") or 0),
            "arousalName": arousal_name(rec.get("arousal"), cfg),
            "cross": cross, "allow": allow, "crossN": int(rec.get("cross_n") or 0),
@@ -977,6 +1184,17 @@ def injection_block(res, cfg=None):
         lines += ["", "这是收场回合：把这段结局剧情演完、收住。"]
         return "\n".join(lines)
 
+    # 里程碑（2026-11-04 晚）：不是收场。**必须和历史结局撇干净**——
+    # 模型见过太多「关系确立 = 全文完」的收尾，这里要把话说死。
+    if res.get("just_milestone"):
+        mc = milestone_cfg(res["just_milestone"], cfg)
+        lines.append("**关系走到里程碑：【%s】**" % (mc.get("name") or ""))
+        txt = str(mc.get("prompt") or "").strip()
+        if txt:
+            lines += ["", txt]
+        lines += ["", "这一轮把这一刻演出来。**这不是收场**：故事接着往下走，"
+                      "数值照常结算，后面还有日子要过——别写「全剧终」那种收尾。"]
+
     lv = int(res.get("level") or 0)
     # 不报好感数字：好感和「距离」本来就可以不同步（好感够了但没做成事，
     # 你们还是原来那一步）。两个数字一起摆出来，模型会纠结该信哪个。
@@ -1000,6 +1218,7 @@ def injection_block(res, cfg=None):
 
     # 这一刻的气氛：冲动决定「她此刻想不想」，防线决定「接不接得住」
     ar = int(res.get("arousal") or 0)
+    ex = int(res.get("excite") or 0)
     can = _can_cross(value, lv, ar, cfg)
     if ar >= 35 and value < 0:
         # 负分档（2026-11-04）：她这时候不可能「有点乱到会绕」——气还没消，
@@ -1032,6 +1251,37 @@ def injection_block(res, cfg=None):
     # 一条硬约束：不许每轮都给干脆答案
     lines += ["", "（怎么反应由你演，但**别每轮都给干脆的答案**：她可以装没听懂、可以反问、"
                   "可以嘴上说不要但没躲、可以答应完自己后悔。真实的犹豫比干脆的拒绝好看。）"]
+
+    # ── 反客为主（2026-11-04 晚，用户要的）────────────
+    # 冲动和兴奋度都会把她往「自己先动」的方向推：冲动是「她此刻想要」，
+    # 兴奋度是「这一场里她已经到了」。两个都高的时候，她不该还躺在那里
+    # 等他下一步——那样再高的数值也只是个装饰。
+    # 代码只给「她有这个余地」这个事实，主动成什么样、做到哪一步由模型按当场演。
+    if can and value >= 0:
+        lead = ""
+        if ar >= 90 or ex >= 85:
+            lead = "will"
+        elif ar >= 75 or ex >= 60:
+            lead = "may"
+        if lead == "will":
+            lines += ["", "（她这会儿不是在等你。**这一轮大概率由她先动**——先开口、先凑过来、"
+                          "先伸手，动作比她平时快，也比平时不客气。她已经顾不上谁先谁后了，"
+                          "你别抢着替她做决定。）"]
+        elif lead == "may":
+            lines += ["", "（她有可能会自己先动一下——不保证，但别把她写成只能被动等着。"
+                          "她伸手、她凑近、她说出那句平时不会说的话，都算。）"]
+
+    # 兴奋度（2026-11-04 晚）：只在场景里报，报的是「她已经到哪了」
+    if ex > 0:
+        el = excite_level(ex, cfg)
+        en = str(el.get("name") or "")
+        ep = str(el.get("prompt") or "").strip()
+        if en:
+            body = "（这一场进行到现在，她已经到【%s】了。" % en
+            if ep:
+                body += " " + ep
+            lines += ["", body + "）"]
+
 
     if res.get("rose"):
         lines += ["", "（你们的关系刚刚往前跨了一步，到了【%s】。这一步要有实感——"
@@ -1072,7 +1322,9 @@ def tail_line(res):
         return ""
     ending = str(res.get("ending") or "")
     if ending:
-        mark = {ENDING_GRAD: "🎓", ENDING_JAIL: "🚨"}.get(ending, "❤")
+        # 只剩进局子一种结局了（毕业 2026-11-04 晚退休）；老档若还留着
+        # graduated，照样给个标记，别让它变成「❤ 已结局【】」这种空壳。
+        mark = {"graduated": "🎓", ENDING_JAIL: "🚨"}.get(ending, "❤")
         name = (ending_cfg(ending, load_config()) or {}).get("name") or "结局"
         return "%s 已结局【%s】" % (mark, name)
     lname = res.get("levelName") or level_name(int(res.get("level") or 0)) or "?"
@@ -1095,6 +1347,11 @@ def tail_line(res):
         res.get("level"), res.get("value"))
     rows.append("亲密 " + str(g.get("label") or int(res.get("value") or 0)))
     rows.append("冲动 %d" % int(res.get("arousal") or 0))
+    # 兴奋度（2026-11-04 晚）：**只在**场景内出现。没在进行时这一行不该有——
+    # 它不是一个持续存在的状态条，是「这一场里她到哪了」。
+    ex = int(res.get("excite") or 0)
+    if ex > 0:
+        rows.append("兴奋 %d" % ex)
     return "\n".join(rows)
 
 
