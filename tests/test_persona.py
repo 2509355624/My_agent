@@ -787,6 +787,19 @@ class NoteBudgetTest(unittest.TestCase):
                         "扮演一轮 %.0f token，超过生图链路太多" % approx_tokens)
 
 
+def _strip_quoted(text):
+    """剔掉各种引号/反引号/星号包起来的内容，只留叙述正文。
+
+    契约里会**引用**坏例子当反例（「不是「他」」「把「他」换成「你」」），
+    那是必要的教学文本，数人称时不该算进去。
+    """
+    s = re.sub(r"「[^」]*」", "", text)
+    s = re.sub(r"`[^`]*`", "", s)
+    s = re.sub(r"\*[^*]*\*", "", s)
+    s = re.sub(r"【[^】]*】", "", s)
+    return s
+
+
 class PronounRuleTest(unittest.TestCase):
     """人称规则（2026-11-03）：她是「她」，对面是「你」，不许写成「他」。
 
@@ -799,27 +812,28 @@ class PronounRuleTest(unittest.TestCase):
     def test_contract_has_no_he_pronoun(self):
         h = persona.build_head(self.CARD, "private_1", "")
         # 规则说明里会**引用**「他」当反例（「不是「他」」「把「他」换成「你」」），
-        # 那是必要的教学文本。这里把引号/反引号里的内容剔掉再数——
+        # 那是必要的教学文本。这里把各种引号里的内容剔掉再数——
         # 剩下的正文描述里不该出现代词「他」。
-        body = re.sub(r"「[^」]*」|`[^`]*`", "", h)
+        body = _strip_quoted(h)
         self.assertEqual(body.count("他"), 0,
                          "系统头正文里还有「他」，模型会照着学")
 
     def test_contract_states_the_rule(self):
         h = persona.build_head(self.CARD, "private_1", "")
         self.assertIn("人称", h)
-        self.assertIn("她是「她」", h)
+        self.assertIn("记得用「你」", h)
+        self.assertIn("心理活动要写足", h)
 
     def test_rule_repeated_at_the_end(self):
-        """契约末尾要再强调一次——长上下文里开头的规则会被稀释。"""
+        """契约末尾要再强调——长上下文里开头的规则会被稀释。"""
         h = persona.build_head(self.CARD, "private_1", "")
-        tail = h[-500:]
+        tail = h[-700:]
         self.assertIn("「你」", tail)
+        self.assertIn("内心独白", tail)
 
     def test_plain_contract_also_clean(self):
         h = persona.build_head(self.CARD, "private_1", "", intimate=False)
-        body = re.sub(r"「[^」]*」|`[^`]*`", "", h)
-        self.assertEqual(body.count("他"), 0)
+        self.assertEqual(_strip_quoted(h).count("他"), 0)
 
     def test_example_dialogue_uses_you(self):
         """示例对话里也不能有「他」——它的影响力比契约还大。
