@@ -171,6 +171,13 @@
   .st .k { font-size: 11px; color: var(--text-mute); margin-bottom: 3px; }
   .st .v { font-size: 12.5px; line-height: 1.65; word-break: break-word; }
   .st .v.mood { color: var(--accent); }
+  /* 侧栏数值（2026-11-04）：一行一个，右对齐好比较大小。 */
+  .st .nums { margin-top: 5px; font-size: 12px; color: var(--text-mute); }
+  .st .nums > div { display: flex; justify-content: space-between;
+    line-height: 1.7; }
+  .st .nums b { color: var(--text-dim); font-weight: 500;
+    font-variant-numeric: tabular-nums; }
+  .st .nums b.dn { color: var(--err); }
   .bar { height: 3px; background: var(--bg-input); border-radius: 2px;
     margin-top: 6px; overflow: hidden; }
   .bar > i { display: block; height: 100%; background: var(--accent);
@@ -194,6 +201,16 @@
   .aff .b.rel > i { background: #e8779c; }
   .aff .b.aro { height: 2px; }
   .aff .b.aro > i { background: #f0a35e; }
+  /* 数值（2026-11-04）：条只给「位置」，数值给「变化」——玩家要的是看到
+     数字往上跳那一下。一行一个，正数**不带加号**，只有负数才带负号。
+     只在**最新一条**她的回复上展开（.cur），不然十几条叠下来整屏都是数字。 */
+  .aff .nums { display: none; margin-top: 5px; font-size: 11.5px;
+    line-height: 1.62; color: var(--text-mute); }
+  .aff.cur .nums { display: block; }
+  .aff .nums .n { display: flex; justify-content: space-between; gap: 12px; }
+  .aff .nums b { font-weight: 500; color: var(--text-dim);
+    font-variant-numeric: tabular-nums; }
+  .aff .nums b.dn { color: var(--err); }
   .aff.end { color: var(--err); }
   .affbar { position: relative; }
   .affbar > i { background: #e8779c; }
@@ -306,6 +323,12 @@
       <div class="k" id="affModeK">好感</div>
       <div class="v" id="sAff">—</div>
       <div class="bar affbar"><i id="affBar"></i></div>
+      <!-- 数值（2026-11-04）：条给位置，数字给「刚才涨了多少」的实感。
+           正数不带加号，负数才带负号。 -->
+      <div class="nums">
+        <div>好感<b id="nAff">—</b></div>
+        <div>距离<b id="nLv">—</b></div>
+      </div>
       <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
         <!-- 模式开关已挪到顶部 #btnMode（2026-11-03）：留在这里的话，没开过攻略
              模式就整块不显示，开关等于永远点不到。这里只留「重新开始」。 -->
@@ -313,11 +336,12 @@
       </div>
     </div>
     <!-- 气氛（2026-11-04）：冲动是第三轴，和「关系」分开画——它每轮都会回落，
-         不是进度条，是温度计。只给词不给数字，露数字玩家就会算「再喝两杯够不够」。 -->
+         不是进度条，是温度计。 -->
     <div class="st" id="aroBox" style="display:none">
       <div class="k">气氛</div>
       <div class="v" id="sAro">—</div>
       <div class="bar arobar"><i id="aroBar"></i></div>
+      <div class="nums"><div>冲动<b id="nAro">—</b></div></div>
     </div>
   </aside>
 
@@ -559,7 +583,41 @@ function affLine(a) {
   div.appendChild(miniBar("rel", ((a.level | 0) / max) * 100));
   // 气氛条：只在有气氛时才画。它是温度计不是进度条，归零不代表坏事。
   if (a.arousal > 0) div.appendChild(miniBar("aro", a.arousal));
+
+  // 数值（2026-11-04 用户要的）：一行一个，正数不带加号、负数才带负号。
+  // 只在最新一条上展开（`.cur`，见 markLastAff）——十几条各带三行数字，
+  // 整屏都是数，反而看不出「刚才那一下涨了」。
+  const nums = document.createElement("div");
+  nums.className = "nums";
+  nums.appendChild(numLine("好感", a.value | 0));
+  nums.appendChild(numLine("距离", (a.level | 0) + "/" + max));
+  nums.appendChild(numLine("冲动", a.arousal | 0));
+  div.appendChild(nums);
   return div;
+}
+
+function numLine(label, v) {
+  const d = document.createElement("div");
+  d.className = "n";
+  const s = document.createElement("span");
+  s.textContent = label;
+  const b = document.createElement("b");
+  b.textContent = String(v);
+  if (typeof v === "number" && v < 0) b.className = "dn";
+  d.appendChild(s);
+  d.appendChild(b);
+  return d;
+}
+
+// 只有最新一条她的回复展开数值，旧的收起来。渲染完统一调一次，
+// 免得每加一条都要回头去改上一条的 class。
+function markLastAff() {
+  const log = $("log");
+  if (!log) return;
+  const all = log.querySelectorAll(".aff");
+  for (let i = 0; i < all.length; i++) {
+    all[i].classList.toggle("cur", i === all.length - 1);
+  }
 }
 
 function miniBar(cls, pct) {
@@ -609,6 +667,17 @@ function renderAff(a) {
   const lvMax = (a && a.levelMax) || 5;
   $("affBar").style.width =
     Math.max(0, Math.min(100, ((a ? (a.level | 0) : 0) / lvMax) * 100)) + "%";
+  // 数值（2026-11-04）：一行一个。好感可能是负的（带负号），距离写「3/5」，
+  // 冲动 0~100。自由模式下数值是封存的，一律显示「—」而不是摆一堆不动的数。
+  const setNum = (id, v) => {
+    const el = $(id);
+    if (!el) return;
+    el.textContent = (v === null || v === undefined) ? "—" : String(v);
+    el.className = (typeof v === "number" && v < 0) ? "dn" : "";
+  };
+  const live = raid && !!a;
+  setNum("nAff", live ? (a.value | 0) : null);
+  setNum("nLv", live ? ((a.level | 0) + "/" + lvMax) : null);
   if (aro) {
     // 气氛条按 0~100 走：它本来就是「此刻有多热」，会自己降下去
     const ar = a ? (a.arousal | 0) : 0;
@@ -617,6 +686,7 @@ function renderAff(a) {
       ? ((a.arousalName || "—") + extra)
       : "—";
     $("aroBar").style.width = Math.max(0, Math.min(100, ar)) + "%";
+    setNum("nAro", live ? ar : null);
   }
   $("btnAffRestart").style.display = raid ? "" : "none";
 }
@@ -681,6 +751,7 @@ function renderAll(list) {
       if (saved) setPic(i, saved);
     }
   });
+  markLastAff();
   log.scrollTop = log.scrollHeight;
 }
 
@@ -784,6 +855,7 @@ async function deliver(text, isRetry) {
     pending.remove();
     const row = makeRow(msgs[idxA], idxA);
     log.appendChild(row);
+    markLastAff();          // 数值只留在最新那条上
     renderState({ mood: d.mood, intensity: d.intensity, state: d.state,
                   note: $("sNote").textContent,
                   turns: (+$("sTurns").textContent || 0) + 1 });
