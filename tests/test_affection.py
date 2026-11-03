@@ -1244,6 +1244,17 @@ class MigrationTest(AffBase):
         out = affection._migrate(rec)
         self.assertEqual([a["k"] for a in out["ach"]], ["lv5"])
 
+    def test_old_graduate_achievement_becomes_together(self):
+        """老档 ach 里的 `graduate` 要换成 `together`。
+
+        不换的话成就页会显示「7/12」却只列出 6 个——计数用的是 ach 长度，
+        展示用的是 `_keys()`，`graduate` 已经不在里面了。
+        """
+        rec = self._legacy(value=50)
+        rec["ach"] = [{"k": "lv1", "ts": ""}, {"k": "graduate", "ts": ""}]
+        out = affection._migrate(rec)
+        self.assertEqual([a["k"] for a in out["ach"]], ["lv1", "together"])
+
     def test_migration_persists_once(self):
         """迁移要落盘一次：不然用户改一次 gate，同一条线的层级就跟着漂。"""
         key = self._raid()

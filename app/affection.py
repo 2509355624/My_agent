@@ -595,6 +595,11 @@ def _migrate(rec):
         # 老档的 graduate 勋章：成就表里那条已经改成「在一起」，这里换成新 key
         if ended == "graduated" or int(rec.get("value") or 0) >= 50:
             rec["ach"].append({"k": "together", "ts": ""})
+    # 已经有 ach 数组的老档同样要换：不然成就页会「7/12」却只列出 6 个
+    # （graduate 已经不在 _keys 里，数得出来、画不出来）。
+    for a in (rec.get("ach") or []):
+        if isinstance(a, dict) and str(a.get("k") or "") == "graduate":
+            a["k"] = "together"
     if "streak" not in rec:
         rec["streak"] = 1
     if "turns" not in rec:
@@ -641,8 +646,22 @@ def _ensure(line_key):
     ent = _entry(line_key)
     if not isinstance(ent, dict) or not str(ent.get("card") or "").strip():
         return None, None
+    # 先快照再迁移：`_migrate` 是就地改，等它跑完就看不出「这原本是老档」了。
+    # 老档（缺 excite/milestone，或还锁在 graduated）迁移完顺手落一次盘，
+    # 否则磁盘上永远是旧结构，每次读都要重算一遍。
+    raw = ent.get("affection")
+    stale = (isinstance(raw, dict)
+             and ("excite" not in raw or "milestone" not in raw
+                  or str(raw.get("ending") or "") == "graduated"
+                  or any(isinstance(a, dict) and str(a.get("k") or "") == "graduate"
+                         for a in (raw.get("ach") or []))))
     rec = record_of(ent)
     if rec is not None:
+        if stale:
+            try:
+                _save_entry(line_key, ent)
+            except Exception:                             # noqa: BLE001
+                log.warning("迁移后落盘失败 %s", line_key)
         return ent, rec
     rec = _blank(line_key)
     ent["affection"] = rec
