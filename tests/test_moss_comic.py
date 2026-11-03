@@ -406,5 +406,35 @@ class ExampleSpecTest(unittest.TestCase):
         self.assertEqual(len(texts), 5, [t["text"] for t in texts])
 
 
+class FillPageTest(unittest.TestCase):
+    """角色外形填进 `desc` 时的断句。
+
+    2026-11-04 起外形是**自然语言**（卡字段规范改了），不再是 tag 串。
+    直接怼在动作前面会读成「a naturally slim adult build lying back across the
+    chair」——外形变成动作的施动者，画出来人物关系就错。所以要补逗号断开。
+    """
+
+    LOOK = ("an adult woman in her early twenties with waist-length silver hair, "
+            "clear blue eyes and a naturally slim adult build")
+
+    def test_look_followed_by_action_gets_comma(self):
+        got = moss_comic._fill_page("A wide shot of {gull} lying back on the chair.",
+                                    {"gull": self.LOOK}, set())
+        self.assertIn("adult build, lying back", got)
+
+    def test_no_double_comma_when_placeholder_already_followed_by_one(self):
+        got = moss_comic._fill_page("A close-up of {gull}, her face turned away.",
+                                    {"gull": self.LOOK}, set())
+        self.assertNotIn(",,", got)
+        self.assertIn("adult build, her face", got)
+
+    def test_second_mention_uses_pronoun(self):
+        seen = set()
+        moss_comic._fill_page("{gull} sits down.", {"gull": self.LOOK}, seen)
+        got = moss_comic._fill_page("{gull} looks up.", {"gull": self.LOOK}, seen)
+        self.assertIn("the woman", got)
+        self.assertNotIn("silver hair", got)
+
+
 if __name__ == "__main__":
     unittest.main()
