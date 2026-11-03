@@ -273,6 +273,9 @@
   .header-actions {
     display: flex;
     gap: 8px;
+    /* 按钮多到挤不下时换行，别把中文压成竖排小字（2026-11-03） */
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 
   .btn {
@@ -285,12 +288,27 @@
     font-size: 12px;
     font-family: inherit;
     transition: all 0.15s ease;
+    /* 按钮文字不许折行——折了就成了竖排小字，认不出来 */
+    white-space: nowrap;
   }
 
   .btn:hover {
     color: var(--text);
     border-color: var(--accent);
     background: rgba(124, 92, 255, 0.1);
+  }
+
+  /* 「扮演记录」单独上色（2026-11-03）：这一排十几个按钮、全灰、还是竖排
+     小字，用户说「没看到跳转按钮」。粉色和角色扮演主题一致，一眼能找到。 */
+  .btn.persona-go {
+    color: #f472b6;
+    border-color: #6d2a48;
+    background: rgba(244, 114, 182, 0.08);
+  }
+  .btn.persona-go:hover {
+    color: #fff;
+    border-color: #f472b6;
+    background: #6d2a48;
   }
 
   .btn.danger:hover {
@@ -1349,7 +1367,7 @@
       <button class="btn" onclick="window.open('/moss','_blank')" title="moss 漫画台：一句话剧情 → 编剧写整页分镜 → moss 一次出图，四格小漫画一步到位（新标签打开）">🀄 moss 漫画</button>
       <button class="btn" onclick="window.open('/gen','_blank')" title="跑图台：无 AI 裸跑图 —— 左边选渠道、下面写提示词、点生成直接出图（新标签打开）">🎨 跑图台</button>
       <button class="btn" onclick="window.open('/characters','_blank')" title="人设卡池：QQ 角色扮演用的人设卡 —— 外观固定块由代码原样拼在每张画面最前面，保证第 100 张还是同一个人（新标签打开）">🎭 角色</button>
-      <button class="btn" onclick="window.open('/persona_admin','_blank')" title="角色扮演查看台：谁玩过、聊了什么 —— 左边列出所有会话（QQ私聊/群聊/网页/游客），点开看完整对话（新标签打开）">💬 扮演记录</button>
+      <button class="btn persona-go" onclick="window.open('/persona_admin','_blank')" title="角色扮演查看台：谁玩过、聊了什么 —— 左边列出所有会话（QQ私聊/群聊/网页/游客），点开看完整对话（新标签打开）">💬 扮演记录</button>
       <button class="btn" onclick="window.open('/output','_blank')" title="图片管理台：ComfyUI output 目录的网页资源管理器 —— 左边目录树点开就看，右边缩略图网格，勾选即删，整目录一键删（新标签打开）">🗂 图片管理</button>
       <button class="btn" onclick="window.open('/card','_blank')" title="造卡台：一句话描述 → 星陨AI 创建表单要的那五段文案 + 864×1536 竖版封面，逐框复制粘贴（新标签打开）">📇 造卡</button>
       <button class="btn toggle-read" id="readModeBtn" onclick="toggleReadMode()">📖 阅读</button>
