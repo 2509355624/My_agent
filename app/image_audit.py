@@ -353,10 +353,18 @@ def allow_send(path, agent_id, target, target_id, notify=True, meta=None):
 
     target 传 None（网页端）时按「没开会话」处理——审核只管 QQ 外发那一步，
     网页端是自己在本地看的。
+
+    target_id 以 `web_` 开头（2026-11-03 用户拍板：网页端角色扮演出图不过审）
+    同样直接放行。这比 moss_bot 的 `_WEB_MODE` 线程开关可靠：那个开关是全局
+    变量，两个网页出图并发时，先收尾的线程会在 finally 里把开关关回去，
+    后收尾的那张就掉回 QQ 分支被审（16:26 实测 9J74 第 3 页被拦、第 4 页
+    正常，就是这个竞态）。QQ 号是纯数字，`web_` 前缀不会撞上真会话。
     """
     from app.agents import image_audit_enabled
 
     if target is None:
+        return True
+    if str(target_id or "").startswith("web_"):
         return True
     try:
         if not image_audit_enabled(agent_id, target, target_id):
