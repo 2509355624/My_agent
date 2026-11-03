@@ -228,7 +228,6 @@ def _ts(sec):
     import time
     return time.strftime("%m-%d %H:%M", time.localtime(sec))
 
-
 @bp.route("/api/persona_admin/detail")
 def api_detail():
     """某个会话的完整对话。游客会跨天合并。"""
