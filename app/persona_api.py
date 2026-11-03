@@ -15,7 +15,11 @@
 沿用画廊那套：请求带 `qq` 参数，用 `friend_auth.QQ_RE` 校验。
 没有登录态也能跑单人本地的场景（不传 qq 时退回 `web_local`）。
 """
+import json
 import logging
+import os
+import threading
+import time
 
 from flask import Blueprint, jsonify, request
 
@@ -33,6 +37,37 @@ GUEST_COOKIE_TTL = 30 * 24 * 3600      # cookie 活 30 天（对话数据只保 
 # 游客进来先演谁。游客不选角色（省一步），直接给这张卡。
 # 想换就改这一个字符串（卡的 id）。
 GUEST_CARD_ID = "izumi_sagiri"
+
+# ── 「回复 ↔ 漫画页」映射（2026-11-03）────────────────────
+#
+# 出图成功后存一份「哪条回复 → 漫画第几页」到**服务器**。以前这层关联只活
+# 在浏览器 localStorage（picStore）里，换设备/手机重登/清缓存就全丢——历史
+# 气泡下面空空如也，但图明明在服务器磁盘上。
+# 结构：{会话线 key: {"ai3": {"sid": "9J74", "page": 5}}}
+_PIC_LOCK = threading.Lock()
+
+
+def _pic_map_path():
+    from app.config import BASE_DIR
+    return os.path.join(str(BASE_DIR), "state", "persona_pic_map.json")
+
+
+def _pic_map_load():
+    try:
+        with open(_pic_map_path(), encoding="utf-8") as fh:
+            return json.load(fh) or {}
+    except Exception:
+        return {}
+
+
+def _pic_map_set(key, ai_key, val):
+    with _PIC_LOCK:
+        d = _pic_map_load()
+        d.setdefault(key, {})[ai_key] = val
+        tmp = _pic_map_path() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(d, fh, ensure_ascii=False)
+        os.replace(tmp, _pic_map_path())
 
 
 def _qq():
@@ -435,13 +470,24 @@ def shot():
 
     brief = persona.comic_brief(card, key, extra=extra, msg_index=idx)
 
-    # 网页会话在 moss 里的身份：`("private", "web_<qq>")`。
+    # 网页会话在 moss 里的身份：`("private", "web_<qq>)"`。
     #
     # 不能用字面量 `"web"`（第一版就是这么写的，后果见下）：
     #   1. `_say()` 会拿它当 QQ 号去发消息 → 每次出图都刷「moss 回话失败」
     #   2. `series_mod.current("private", "web")` 是**全局共享**的，所有用户
     #      的图会串进同一条线
     web_tid = "web_" + (_qq() or "local")
+
+    # 起跑前记下这条线的最新页号，等一下要等「**比它大的**页号出现」。
+    # ⚠️ 2026-11-03：旧版等的是「系列有页」——老系列秒返回旧页号，前端把
+    # 旧图挂在新气泡下，新画的那页永远不显示（17:35 实测：雷姆线连点两次
+    # 出图，都返回第 4 页，显示的是 16:28 的旧图）。
+    pre = 0
+    pre_sid = moss_series.current("private", web_tid)
+    if pre_sid:
+        pre = int((moss_series.latest(moss_series.load(pre_sid) or {}, "")
+                   or {}).get("n") or 0)
+
     try:
         # 网页模式：出图照跑（走同一条 `image_jobs` 队列），但不往 QQ 发任何
         # 东西。回执由这个 HTTP 响应自己带。
@@ -454,36 +500,46 @@ def shot():
     if not took:
         return jsonify({"ok": False, "error": note or "排队中"}), 429
 
-    sid = moss_series.current("private", web_tid)
-    series = moss_series.load(sid) if sid else None
-    newest = moss_series.latest(series or {}, "") or {}
-    page = newest.get("n") or 0
-    if not sid or not page:
-        # 出图线程刚起，系列/页还没落盘。
-        #
-        # 为什么必须等：`moss_bot.start()` 是**先起线程再返回**，而线程里
-        # 要先跑编剧（一次 LLM 调用，实测 5~8 秒）才 `open_new()` 建档。
-        # 不等的话这里拿到空 sid，前端直接报「没拿到页号」（实测就是这样）。
-        #
-        # 等多久：编剧最多 timeout=240 秒，但那是极端情况。这里给 45 秒——
-        # 正常情况下 5~10 秒就建好了。等不到也不是错误：前端拿空 sid 会
-        # 提示「还在排」，用户重试即可。
-        import time
-        log.info("[web] 等系列落盘：%s", web_tid)
-        for _ in range(180):
-            time.sleep(0.25)
-            sid = moss_series.current("private", web_tid)
-            series = moss_series.load(sid) if sid else None
-            newest = moss_series.latest(series or {}, "") or {}
-            page = newest.get("n") or 0
-            if sid and page:
-                log.info("[web] 系列落盘：%s 第 %s 页", sid, page)
-                break
-        else:
-            log.warning("[web] 等系列落盘超时（45s）：%s", web_tid)
+    # 等新页建档（编剧 2~6 秒 LLM 调用后才 add_page，渲染要更久不用等）。
+    sid, page = pre_sid or "", 0
+    for _ in range(180):
+        time.sleep(0.25)
+        sid = moss_series.current("private", web_tid)
+        series = moss_series.load(sid) if sid else None
+        page = int((moss_series.latest(series or {}, "") or {}).get("n") or 0)
+        if sid and page > pre:
+            log.info("[web] 新页落盘：%s 第 %s 页（起跑前 %s）", sid, page, pre)
+            break
+    else:
+        # 两种可能：编剧太慢 / 这条线上一张还在画（_do_append 里 _take
+        # 失败，线程静默退出——网页模式没处说话）。都按失败回，前端弹提示。
+        log.warning("[web] 等新页落盘超时（45s）：%s（前值 %s）", web_tid, pre)
+        return jsonify({
+            "ok": False,
+            "error": "上一张可能还在画，等它出来再点一次出图",
+        }), 504
+
+    # 存「回复 ↔ 页」映射，重登/换设备按这个恢复（见 /api/persona/comics）。
+    if idx is not None:
+        _pic_map_set(key, "ai%d" % idx, {"sid": sid, "page": page})
     return jsonify({"ok": True, "sid": sid, "page": page,
                     "msgIndex": idx,
                     "reply": "在画了，一页五格，大概一两分钟。"})
+
+
+@bp.route("/api/persona/comics")
+def comic_map():
+    """当前会话线的「第几条回复 → 漫画第几页」映射。
+
+    前端登录后拉一次，按映射逐条调 `/api/persona/comic` 恢复图。
+    这是**服务器上的权威关联**——换设备、手机重登、清 localStorage 都在。
+    """
+    role, who, _token = _who()
+    if role == "guest":
+        # 游客不能出图，自然没有映射
+        return jsonify({"ok": True, "pics": {}})
+    key = _active_key(_key(who))
+    return jsonify({"ok": True, "pics": _pic_map_load().get(key) or {}})
 
 
 @bp.route("/api/persona/comic")

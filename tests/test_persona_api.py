@@ -289,21 +289,73 @@ class StuckComicTest(PersonaApiBase):
 
 class ShotTest(PersonaApiBase):
 
-    def test_shot_passes_brief_to_moss(self):
+    @staticmethod
+    def _latest_advancing(first, then):
+        """latest 的替身：第一次返回旧页号，之后返回新页号。
+
+        shot() 要等「页号 > 起跑前」——旧版等「系列有页」会把老系列的
+        旧页号立刻返回给前端（17:35 实测显示旧图），2026-11-03 改的。
+        """
+        calls = {"n": 0}
+
+        def fake(series, owner=""):
+            calls["n"] += 1
+            return {"n": first if calls["n"] == 1 else then}
+
+        return fake
+
+    def test_shot_waits_for_new_page(self):
         name = self.get("/api/persona/cards")["cards"][0]["name"]
         self.post("/api/persona/switch", name=name)
         with mock.patch("app.moss_bot.start", return_value=(True, "")) as ms, \
              mock.patch("app.moss_series.current", return_value="SID"), \
              mock.patch("app.moss_series.load", return_value={"pages": []}), \
-             mock.patch("app.moss_series.latest", return_value={"n": 2}):
+             mock.patch("app.moss_series.latest",
+                        side_effect=self._latest_advancing(2, 3)), \
+             mock.patch("app.persona_api.time.sleep"):
             d = self.post("/api/persona/shot")
         self.assertTrue(d["ok"])
         self.assertEqual(d["sid"], "SID")
-        self.assertEqual(d["page"], 2)
+        # 返回的是**新**页号，不是起跑前的旧页（旧版这里会返回 2）
+        self.assertEqual(d["page"], 3)
         self.assertTrue(ms.called)
         brief = ms.call_args[0][3]
         self.assertIn("女主角", brief)
         self.assertIn("男主角", brief)
+
+    def test_shot_timeout_returns_504(self):
+        """页号一直不涨（编剧慢 / 上一张还在画）→ 504，不返回旧页号。"""
+        name = self.get("/api/persona/cards")["cards"][0]["name"]
+        self.post("/api/persona/switch", name=name)
+        with mock.patch("app.moss_bot.start", return_value=(True, "")), \
+             mock.patch("app.moss_series.current", return_value="SID"), \
+             mock.patch("app.moss_series.load", return_value={"pages": []}), \
+             mock.patch("app.moss_series.latest",
+                        side_effect=lambda s, owner="": {"n": 2}), \
+             mock.patch("app.persona_api.time.sleep"):
+            r = self.c.post("/api/persona/shot", json={"qq": QQ})
+        self.assertEqual(r.status_code, 504)
+        self.assertFalse(r.get_json()["ok"])
+
+    def test_shot_records_pic_map(self):
+        """出图后「回复↔页」映射要落盘，/api/persona/comics 能查回来。"""
+        import tempfile
+        name = self.get("/api/persona/cards")["cards"][0]["name"]
+        self.post("/api/persona/switch", name=name)
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch("app.moss_bot.start", return_value=(True, "")), \
+                 mock.patch("app.moss_series.current", return_value="SID"), \
+                 mock.patch("app.moss_series.load", return_value={"pages": []}), \
+                 mock.patch("app.moss_series.latest",
+                            side_effect=self._latest_advancing(2, 3)), \
+                 mock.patch("app.persona_api.time.sleep"), \
+                 mock.patch("app.persona_api._pic_map_path",
+                            return_value=os.path.join(td, "m.json")):
+                d = self.post("/api/persona/shot", msgIndex=4)
+                self.assertTrue(d["ok"])
+                # GET 也必须在补丁里：读的是同一份临时映射文件
+                pics = self.get("/api/persona/comics")["pics"]
+        self.assertEqual(pics.get("ai4"), {"sid": "SID", "page": 3})
 
     def test_shot_without_card_is_rejected(self):
         d = self.post("/api/persona/shot")
