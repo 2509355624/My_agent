@@ -433,6 +433,10 @@
 const $ = id => document.getElementById(id);
 const QQ = new URLSearchParams(location.search).get("qq") || "";
 let card = null, busy = false, msgs = [];
+// 用户气泡的临时序号（它们不挂图，不需要归档行号，只要 DOM id 唯一）。
+let U_SEQ = 0;
+// 更早的记录还能不能往回翻（`/api/persona/session` 的 `more`）。
+let MORE_HIST = false, LOADING_MORE = false;
 let CARD_MAP = {};      // id → 卡对象，给角色列表的事件委托用
 let LAST_TAP = { id: "", t: 0 };   // 防手机端 touchend + click 重复触发
 let ROLE = "member";     // member / guest
@@ -573,10 +577,13 @@ function clearPicStore() {
 }
 
 // ── 中栏渲染 ──────────────────────────────────────────
-function makeRow(m, idx) {
+// `id` 是气泡的 DOM 标识：助手那条用**归档行号**（`m.n`，稳定，聊多少轮都不变），
+// 用户那条和「…」占位用临时串（它们不挂图，不需要稳定）。2026-11-04 之前这里
+// 一律用数组下标，历史一压缩整体前移，图就自己跑到最新那条下面了。
+function makeRow(m, id) {
   const row = document.createElement("div");
   row.className = "row " + (m.role === "user" ? "u" : "a");
-  row.dataset.idx = idx;
+  row.dataset.idx = id;
 
   const wrap = document.createElement("div");
   wrap.className = "bubble-wrap";
@@ -597,10 +604,10 @@ function makeRow(m, idx) {
   // ★ 图片容器：**就挂在气泡正下方**，不另起一行消息
   const pic = document.createElement("div");
   pic.className = "pic";
-  pic.id = "pic-" + idx;
+  pic.id = "pic-" + id;
   wrap.appendChild(pic);
 
-  if (m.imageUrl) setPic(idx, m.imageUrl);
+  if (m.imageUrl) setPic(id, m.imageUrl);
 
   // ★ 工具条：出图 / 重新生图（**游客不显示**——体验版不能出图）
   if (m.role === "assistant" && ROLE !== "guest") {
@@ -610,14 +617,14 @@ function makeRow(m, idx) {
     const bShot = document.createElement("button");
     bShot.className = "tb";
     bShot.textContent = "出图";
-    bShot.onclick = () => shoot(idx, bShot);
+    bShot.onclick = () => shoot(id, bShot);
     tools.appendChild(bShot);
 
     const bRe = document.createElement("button");
     bRe.className = "tb";
     bRe.textContent = "重新生图";
     bRe.style.display = m.imageUrl ? "" : "none";
-    bRe.onclick = () => shoot(idx, bRe, true);
+    bRe.onclick = () => shoot(id, bRe, true);
     tools.appendChild(bRe);
 
     wrap.appendChild(tools);
@@ -866,14 +873,14 @@ function renderAll(list) {
     log.innerHTML = '<div class="empty">还没开始<br>说句话试试</div>';
     return;
   }
-  let ai = -1;
   msgs.forEach((m, i) => {
-    if (m.role === "assistant") ai++;
-    log.appendChild(makeRow(m, i));
-    // 恢复已生成的图（存在 localStorage 里，刷新不丢）
-    if (m.role === "assistant") {
-      const saved = picStore.get(m.key || ("ai" + ai));
-      if (saved) setPic(i, saved);
+    const num = (typeof m.n === "number") ? m.n : null;
+    log.appendChild(makeRow(m, num === null ? ("u" + i) : num));
+    // 恢复已生成的图：key 是 `n<归档行号>`，不再用「第几条回复」——
+    // 那个号每聊一轮就整体前移一位，图会挂到错的、甚至最新的气泡下面。
+    if (m.role === "assistant" && num !== null) {
+      const saved = picStore.get("n" + num);
+      if (saved) setPic(num, saved);
     }
   });
   markLastAff();
@@ -901,6 +908,40 @@ const picStore = {
 };
 
 // ── 会话 ──────────────────────────────────────────────
+// 往回翻更早的记录（2026-11-04 用户要的「能回到看从开始到现在」）。
+// 后端读的是 `persona_archive_*.jsonl`（只增不删），不是模型那 12 条窗口。
+// 每页以最上面那条的归档行号为游标；插入时保持滚动位置，别让人一翻就跳。
+async function loadEarlier() {
+  if (LOADING_MORE || !MORE_HIST || !msgs.length) return;
+  const first = msgs[0].n;
+  if (typeof first !== "number") return;
+  LOADING_MORE = true;
+  const log = $("log");
+  try {
+    const d = await api("/api/persona/history?before=" + first);
+    const rows = d.messages || [];
+    if (rows.length) {
+      const keep = log.scrollHeight - log.scrollTop;
+      const frag = document.createDocumentFragment();
+      rows.forEach(m => {
+        frag.appendChild(makeRow(m, (typeof m.n === "number") ? m.n : ("u" + m.n)));
+        if (m.role === "assistant" && typeof m.n === "number") {
+          const saved = picStore.get("n" + m.n);
+          if (saved) setPic(m.n, saved);
+        }
+      });
+      log.insertBefore(frag, log.firstChild);
+      msgs = rows.concat(msgs);
+      log.scrollTop = log.scrollHeight - keep;   // 视觉上停在原地
+    }
+    MORE_HIST = !!d.more && rows.length > 0;
+  } catch (e) {
+    MORE_HIST = false;      // 拉不到就别再反复试，免得滚动时一直打接口
+  } finally {
+    LOADING_MORE = false;
+  }
+}
+
 async function loadSession() {
   try {
     const d = await api("/api/persona/session");
@@ -911,6 +952,7 @@ async function loadSession() {
     $("live").style.display = card ? "" : "none";
     renderQuota();
     renderAll(d.messages || []);
+    MORE_HIST = !!d.more;      // 归档里还有更早的，往上滚就翻
     renderState(d);
     AFF = d.affection || null;
     renderAff(AFF);
@@ -960,8 +1002,8 @@ async function send() {
   if (e) e.remove();
 
   const idxU = msgs.length;
-  msgs.push({ role: "user", text });
-  log.appendChild(makeRow(msgs[idxU], idxU));
+  msgs.push({ role: "user", text, n: null });
+  log.appendChild(makeRow(msgs[idxU], "u" + (++U_SEQ)));
   await deliver(text, false);
 }
 
@@ -970,16 +1012,19 @@ async function send() {
 async function deliver(text, isRetry) {
   busy = true;
   const log = $("log");
-  const idxA = msgs.length;
-  const pending = makeRow({ role: "assistant", text: "…" }, idxA);
+  const pending = makeRow({ role: "assistant", text: "…" }, "p" + Date.now());
   log.appendChild(pending);
   log.scrollTop = log.scrollHeight;
 
   try {
     const d = await post("/api/persona/chat", { text });
-    msgs.push({ role: "assistant", text: d.reply, aff: d.affection || null });
+    // 这一轮在归档里的行号（后端回包带的）。用它当气泡 id，图才挂得对位置——
+    // 用数组下标的话，历史一压缩就整体前移，图会跑到最新那条下面。
+    const nA = (d.n && typeof d.n.assistant === "number") ? d.n.assistant : null;
+    msgs.push({ role: "assistant", text: d.reply, aff: d.affection || null, n: nA });
     pending.remove();
-    const row = makeRow(msgs[idxA], idxA);
+    const row = makeRow(msgs[msgs.length - 1],
+                        nA === null ? ("a" + Date.now()) : nA);
     log.appendChild(row);
     markLastAff();          // 数值只留在最新那条上
     renderState({ mood: d.mood, intensity: d.intensity, state: d.state,
@@ -1035,24 +1080,22 @@ async function deliver(text, isRetry) {
 }
 
 // ── 出图：挂到**这条回复的气泡下方** ────────────────────
-function aiIndexOf(domIdx) {
-  let n = -1;
-  for (let i = 0; i <= domIdx && i < msgs.length; i++) {
-    if (msgs[i].role === "assistant") n++;
-  }
-  return n;
-}
-
-async function shoot(domIdx, btn, isRegen) {
+// `n` 就是这条回复在**归档**里的行号（气泡的 DOM id 也是它）。后端按行号取
+// 那一轮，历史压缩多少次都不会画错、也不会挂到别的气泡上（2026-11-04）。
+async function shoot(n, btn, isRegen) {
   if (btn) btn.disabled = true;
-  const aiIdx = aiIndexOf(domIdx);
-  setPicPending(domIdx, "在画了，一页五格");
+  if (typeof n !== "number") {
+    toast("这一条还没落档，刷新一下再出图", true);
+    if (btn) btn.disabled = false;
+    return;
+  }
+  setPicPending(n, "在画了，一页五格");
   try {
-    // 告诉后端「画第几条回复」——不传就是最后一轮
-    const d = await post("/api/persona/shot", { msgIndex: aiIdx });
+    // 告诉后端「画哪一条」——不传就是最后一轮
+    const d = await post("/api/persona/shot", { msgIndex: n });
     const sid = d.sid, page = d.page;
     if (!sid || !page) throw new Error("没拿到页号");
-    // 轮询，出完挂到这条气泡下面（认 domIdx，不认时间，顺序不会乱）
+    // 轮询，出完挂到这条气泡下面（认行号，不认时间，顺序不会乱）
     for (let i = 0; i < 200; i++) {
       await new Promise(r => setTimeout(r, 3000));
       let st;
@@ -1060,24 +1103,24 @@ async function shoot(domIdx, btn, isRegen) {
                             + "&page=" + page); }
       catch (e) { continue; }
       if (st.status === "done" && st.url) {
-        setPic(domIdx, st.url);
-        picStore.set("ai" + aiIdx, st.url);
+        setPic(n, st.url);
+        picStore.set("n" + n, st.url);
         toast("画好了");
         return;
       }
       if (st.status === "failed") {
-        setPicError(domIdx, "出图失败：" + (st.error || "未知"));
+        setPicError(n, "出图失败：" + (st.error || "未知"));
         return;
       }
       // running / pending 都算还在画。前几轮提示一次，之后一直换文案，
       // 免得用户以为卡死了（实测一张图 100~180 秒）。
-      if (i === 2) setPicPending(domIdx, "正在画，一张图要一两分钟");
-      if (i === 20) setPicPending(domIdx, "还在画，别急");
-      if (i === 40) setPicPending(domIdx, "画得慢，再等等");
+      if (i === 2) setPicPending(n, "正在画，一张图要一两分钟");
+      if (i === 20) setPicPending(n, "还在画，别急");
+      if (i === 40) setPicPending(n, "画得慢，再等等");
     }
-    setPicError(domIdx, "等太久了，去 Moss 漫画台看看");
+    setPicError(n, "等太久了，去 Moss 漫画台看看");
   } catch (e) {
-    setPicError(domIdx, e.message);
+    setPicError(n, e.message);
     toast(e.message, true);
   } finally {
     if (btn) btn.disabled = false;
@@ -1086,34 +1129,24 @@ async function shoot(domIdx, btn, isRegen) {
 
 // ── 抽屉（窄屏）───────────────────────────────────────
 
-// 第 ai 条 assistant 回复在 msgs 里的下标（aiIndexOf 的反演）
-function domIndexOfAi(ai) {
-  let n = -1;
-  for (let i = 0; i < msgs.length; i++) {
-    if (msgs[i].role === "assistant") { n++; if (n === ai) return i; }
-  }
-  return -1;
-}
-
 // 按服务器映射恢复图（2026-11-03）：重登/换设备/清缓存后 localStorage 是
 // 空的，但「哪条回复配哪页图」存在服务器上（/api/persona/comics），照着
 // 拉一遍就行。picStore 继续当本地缓存用，两边互不冲突。
+// 键是 `n<归档行号>`（2026-11-04）；老的 `ai<窗口序号>` 后端已经不回了。
 async function loadPics() {
   let pics;
   try { pics = (await api("/api/persona/comics")).pics || {}; }
   catch (e) { return; }
   for (const k of Object.keys(pics)) {
-    const ai = parseInt(k.slice(2), 10);
-    if (isNaN(ai)) continue;
-    const domIdx = domIndexOfAi(ai);
-    if (domIdx < 0) continue;
+    const n = parseInt(k.slice(1), 10);
+    if (isNaN(n)) continue;
     const p = pics[k];
     if (!p || !p.sid || !p.page) continue;
     try {
       const st = await api("/api/persona/comic?sid=" + encodeURIComponent(p.sid)
                             + "&page=" + p.page);
       if (st.status === "done" && st.url) {
-        setPic(domIdx, st.url);
+        setPic(n, st.url);
         picStore.set(k, st.url);
       }
     } catch (e) { /* 单张挂了不影响其他 */ }
@@ -1172,6 +1205,7 @@ $("wipeOk").onclick = async () => {
   try {
     const d = await post("/api/persona/affection/wipe", { confirm: WIPE_TEXT });
     closeWipe();
+    clearPicStore();              // 本地图缓存也得清：行号从 0 重数，旧图会挂到新气泡上
     toast(d.reply || "存档已删除");
     await loadSession();          // 聊天记录和好感都清了，整屏重画
   } catch (e) {
@@ -1266,6 +1300,14 @@ $("cards").addEventListener("touchend", function (ev) {
 //   清空  —— 同上，换角色 = 换会话
 //   自检  —— 兼容问题已经收干净，留着只是多一个按钮
 $("zoom").onclick = () => $("zoom").classList.remove("on");
+
+// 滚到顶就自动翻更早的记录（2026-11-04）。留 64px 余量，手指还没顶到头
+// 就开始加载，翻起来不会一顿一顿的。
+$("log").addEventListener("scroll", () => {
+  if ($("log").scrollTop < 64) loadEarlier();
+});
+// 第一次打开如果一屏就装下了（新线只有几轮），也允许手动往回翻：
+// 这条线本来就没更多了，MORE_HIST 会是 false，函数自己会退出。
 
 loadSession();
 </script>

@@ -70,6 +70,26 @@ def _pic_map_set(key, ai_key, val):
         os.replace(tmp, _pic_map_path())
 
 
+def _pic_map_clear(key):
+    """清空存档时连图映射一起抹（2026-11-04）。
+
+    不清的话：清空后重开同一条线，归档行号从 0 重新数，旧的 `n5` 会挂到
+    新对话的第 6 条上 —— 图又「自己跑到最新消息下面」了。
+    """
+    with _PIC_LOCK:
+        d = _pic_map_load()
+        if key not in d:
+            return
+        d.pop(key, None)
+        tmp = _pic_map_path() + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(d, fh, ensure_ascii=False)
+            os.replace(tmp, _pic_map_path())
+        except OSError:
+            log.exception("图片映射清理失败 %s", key)
+
+
 def _qq():
     """取当前用户。跟 `gallery_api._qq()` 同一套口径：query 或 body 里带。
 
@@ -198,9 +218,34 @@ def _card_by_id(cid):
     return None
 
 
+def _msgs_from(rows, start):
+    """归档切片 → 前端要的消息数组。
+
+    `n` = 归档行号（`start + i`）。前端拿它当气泡 id、图片锚点和翻页游标——
+    它是稳定的：归档只增不删，而窗口序号每聊一轮就整体前移一位。
+    """
+    out = []
+    for i, m in enumerate(rows):
+        n = start + i
+        if m.get("role") == "user":
+            out.append({"n": n, "role": "user", "text": m.get("content") or ""})
+            continue
+        reply, scene, mood, intensity, state = persona.split_turn(
+            m.get("content") or "")
+        if reply.strip():
+            out.append({"n": n, "role": "assistant", "text": reply,
+                        "scene": scene, "mood": mood,
+                        "intensity": intensity, "state": state})
+    return out
+
+
 @bp.route("/api/persona/session")
 def get_session():
-    """这条会话现在是什么状态：演的谁、聊了几轮、她此刻的样子。"""
+    """这条会话现在是什么状态：演的谁、聊了几轮、她此刻的样子。
+
+    2026-11-04：消息从**归档**取最后 `ARCHIVE_PAGE` 条（以前是 12 条滑动窗口，
+    聊过 6 轮就翻不到更早的）。更早的由 `/api/persona/history` 分页往回翻。
+    """
     role, who, token = _who()
 
     if role == "guest":
@@ -209,20 +254,10 @@ def get_session():
     key = _active_key(_key(who))
     ent = persona._entry(key) or {}                       # noqa: SLF001
     card = _card_by_id(ent.get("card"))
-    hist = persona.trim(persona._load_hist(key))          # noqa: SLF001
 
-    # 按原顺序回填，助手那条要拆出情绪/状态
-    msgs = []
-    for m in hist:
-        if m.get("role") == "user":
-            msgs.append({"role": "user", "text": m.get("content") or ""})
-        else:
-            reply, scene, mood, intensity, state = persona.split_turn(
-                m.get("content") or "")
-            if reply.strip():
-                msgs.append({"role": "assistant", "text": reply,
-                             "scene": scene, "mood": mood,
-                             "intensity": intensity, "state": state})
+    start, rows, total = persona.history_page(key)
+    msgs = _msgs_from(rows, start)
+
     aff = _aff_status(key)
     # 状态行跟着「她说的最后一句话」走（2026-11-04）：刷新后历史里没有
     # 每轮的 aff 快照，手机端就整条状态凭空消失。只把**当前**状态挂到
@@ -242,8 +277,38 @@ def get_session():
         "intensity": int(ent.get("intensity") or 0),
         "turns": int(ent.get("turns") or 0),
         "messages": msgs,
+        "total": total,                 # 归档总条数（前端翻页的游标上限）
+        "more": start > 0,              # 还有更早的可以往回翻
         "affection": aff,
         "role": "member",
+    })
+
+
+@bp.route("/api/persona/history")
+def history():
+    """往回翻更早的聊天记录（2026-11-04）。
+
+    以前网页只喂 12 条滑动窗口，聊过 6 轮就看不到更早的——数据其实一直在
+    `persona_archive_*.jsonl` 里，只是接口没给。现在首屏给最后一页，往上滚
+    一页要一页。
+
+    query:
+      - `before`：归档行号（不含），不传 = 最后一页
+      - `limit`：一页多少条，默认 `persona.ARCHIVE_PAGE`
+
+    游客没有归档（只有 15 轮，本就翻不了页），直接回空。
+    """
+    role, who, _token = _who()
+    if role == "guest":
+        return jsonify({"ok": True, "messages": [], "total": 0, "more": False})
+    key = _active_key(_key(who))
+    start, rows, total = persona.history_page(
+        key, request.args.get("before"), request.args.get("limit"))
+    return jsonify({
+        "ok": True,
+        "messages": _msgs_from(rows, start),
+        "total": total,
+        "more": start > 0,
     })
 
 
@@ -265,14 +330,14 @@ def _guest_session(uid, token):
         card = cards[0] if cards else None
 
     msgs = []
-    for m in guest.load_hist(uid):
+    for n, m in enumerate(guest.load_hist(uid)):
         if m.get("role") == "user":
-            msgs.append({"role": "user", "text": m.get("content") or ""})
+            msgs.append({"n": n, "role": "user", "text": m.get("content") or ""})
         else:
             reply, scene, mood, intensity, state = persona.split_turn(
                 m.get("content") or "")
             if reply.strip():
-                msgs.append({"role": "assistant", "text": reply,
+                msgs.append({"n": n, "role": "assistant", "text": reply,
                              "mood": mood, "intensity": intensity,
                              "state": state})
     resp = jsonify({
@@ -284,6 +349,8 @@ def _guest_session(uid, token):
         "intensity": 0,
         "turns": guest.turns_used(uid),
         "messages": msgs,
+        "total": len(msgs),
+        "more": False,
         "role": "guest",
         "remaining": guest.remaining(uid),
         "limit": guest.GUEST_TURNS,
@@ -355,7 +422,9 @@ def clear():
         _attach_guest_cookie(resp, token)
         return resp
     key = _active_key(_key(who))
-    return jsonify({"ok": True, "reply": persona.clear(key)})
+    reply = persona.clear(key)
+    _pic_map_clear(key)          # 归档一起没了，图映射留着只会挂错位置
+    return jsonify({"ok": True, "reply": reply})
 
 
 @bp.route("/api/persona/chat", methods=["POST"])
@@ -396,6 +465,10 @@ def chat():
         "state": turn.state,
         "role": "member",
     }
+    # 这一轮落在归档的第几行（2026-11-04）：前端拿它当气泡 id 和图片锚点。
+    # 归档是「首次铺底 + 每轮追加两条」，所以最后两条就是这一轮。
+    total = persona.archive_len(key)
+    out["n"] = {"user": max(0, total - 2), "assistant": max(0, total - 1)}
     # 攻略模式（2026-11-03）：把这一轮的结算带给前端——AI 回复下方的
     # 状态条直接用它渲染。自由模式 turn.aff 是 None，不带这个字段。
     if getattr(turn, "aff", None):
@@ -452,10 +525,12 @@ def _guest_chat(text, uid, token):
          "content": P._ensure_meta(raw, scene, mood, intensity, state)},
     ])
 
+    total = len(guest.load_hist(uid))
     resp = jsonify({
         "ok": True, "reply": reply, "scene": scene,
         "mood": mood, "intensity": intensity, "state": state,
         "role": "guest",
+        "n": {"user": max(0, total - 2), "assistant": max(0, total - 1)},
         "remaining": max(0, guest.GUEST_TURNS - used - 1),
     })
     _attach_guest_cookie(resp, token)
@@ -515,6 +590,7 @@ def affection_wipe():
     reply = persona.wipe(key)
     if reply is None:
         return jsonify({"ok": False, "error": "现在没有在演谁，没什么可删的。"}), 400
+    _pic_map_clear(key)          # 归档和窗口都删了，映射不删就会挂到新对话上
     return jsonify({"ok": True, "reply": reply})
 
 
@@ -548,7 +624,8 @@ def shot():
     否则会绕过队列的串行/水位控制，把 ComfyUI 打爆（用户点名要求）。
 
     body: {msgIndex?, extra?}
-      - `msgIndex` 指定画第几条 assistant 回复（网页每条回复下面的按钮传它）
+      - `msgIndex` 指定画哪一条回复：**归档行号**（`/api/persona/session`
+        每条消息的 `n`，网页每条回复下面的按钮传它）
       - 不传 = 画最后一轮（QQ 端「出图」的行为）
       - `extra` 额外剧情，可选
     """
@@ -628,8 +705,10 @@ def shot():
         }), 504
 
     # 存「回复 ↔ 页」映射，重登/换设备按这个恢复（见 /api/persona/comics）。
+    # key 用 `n<归档行号>`（2026-11-04）：老的 `ai<窗口序号>` 聊几轮就会指到
+    # 别人那条上（图跑到最新消息下面就是这么来的），一律作废。
     if idx is not None:
-        _pic_map_set(key, "ai%d" % idx, {"sid": sid, "page": page})
+        _pic_map_set(key, "n%d" % idx, {"sid": sid, "page": page})
     return jsonify({"ok": True, "sid": sid, "page": page,
                     "msgIndex": idx,
                     "reply": "在画了，一页五格，大概一两分钟。"})
@@ -647,7 +726,11 @@ def comic_map():
         # 游客不能出图，自然没有映射
         return jsonify({"ok": True, "pics": {}})
     key = _active_key(_key(who))
-    return jsonify({"ok": True, "pics": _pic_map_load().get(key) or {}})
+    # 只回 `n<行号>` 这一套（2026-11-04）。老的 `ai<窗口序号>` 已经对不上任何
+    # 消息了，回给前端只会挂到错误的气泡上——用户定：老图直接作废。
+    pics = {k: v for k, v in (_pic_map_load().get(key) or {}).items()
+            if k.startswith("n")}
+    return jsonify({"ok": True, "pics": pics})
 
 
 @bp.route("/api/persona/comic")

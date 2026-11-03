@@ -634,17 +634,21 @@ class ShotComicTest(unittest.TestCase):
         self.assertIn("改姿势", brief)
 
     def test_comic_brief_msg_index_uses_that_turn_scene(self):
-        """按序号取回复时，用的必须是**那一轮**的画面，不是最后一轮的。"""
+        """按归档行号取回复时，用的必须是**那一轮**的画面，不是最后一轮的。
+
+        2026-11-04 改口径：`msg_index` 从「窗口里第几条 assistant」变成
+        「归档第几行」。窗口序号每聊一轮就整体前移，压缩后点旧气泡会画错人。
+        """
         from unittest import mock
         card = {"name": "纱雾", "appearancePrompt": "an adult woman with silver hair"}
-        hist = [{"role": "user", "content": "第一句"},
+        rows = [{"role": "user", "content": "第一句"},
                 {"role": "assistant",
                  "content": "第一次回复。\n画面：standing by the window\n心情：平静 强度2\n状态：站在窗边"},
                 {"role": "user", "content": "第二句"},
                 {"role": "assistant",
                  "content": "第二次回复。\n画面：lying on the bed\n心情：害羞 强度6\n状态：躺在床上"}]
-        with mock.patch.object(persona, "trim", return_value=hist):
-            brief = persona.comic_brief(card, "private_1", msg_index=0)
+        with mock.patch.object(persona, "load_archive", return_value=rows):
+            brief = persona.comic_brief(card, "private_1", msg_index=1)
         self.assertIn("standing by the window", brief)
         self.assertNotIn("lying on the bed", brief)
         self.assertIn("第一句", brief)                 # 它前面那条用户消息
@@ -1068,6 +1072,75 @@ class RosterWebLinkTest(PersonaBase):
                                          addressed=True)
         self.assertIn("角色名单", got)
         self.assertNotIn("网页版", got)
+
+
+class ArchiveHistoryTest(PersonaBase):
+    """网页回看历史（2026-11-04）：读**归档**，不是 12 条滑动窗口。
+
+    用户原话：「我主要是要我可以回到看从开始到现在的聊天记录」。
+    数据本来就在 `persona_archive_*.jsonl` 里，以前的接口只喂窗口。
+    """
+
+    def setUp(self):
+        super().setUp()
+        persona.save_cards([_card("纱雾")])
+        self.card = persona.find_card("纱雾")
+        self.key = "web_1__" + self.card["id"]
+        persona.switch(self.key, self.card)
+
+    def _seed(self, turns):
+        rows = []
+        for i in range(turns):
+            rows.append({"role": "user", "content": "第%d问" % i})
+            rows.append({"role": "assistant",
+                         "content": "第%d答\n画面：scene %d\n心情：平静 强度2\n状态：坐着"
+                                    % (i, i)})
+        persona._save_hist(self.key, rows)
+        persona._append_archive(self.key, [], seed=rows)
+        return rows
+
+    def test_archive_keeps_more_than_window(self):
+        self._seed(10)                              # 20 条
+        # 模型看到的是窗口（`trim` 裁到 12），归档一条不少
+        self.assertEqual(len(persona.trim(persona._load_hist(self.key))),
+                         persona.HISTORY_LIMIT)
+        self.assertEqual(len(persona.load_archive(self.key)), 20)
+
+    def test_archive_keeps_long_text_whole(self):
+        """回看不截断：`trim()` 的 900 字上限是给模型省 token 的，
+        拿来截历史会让每条回复都变成半句话。"""
+        long = "很长的正文，" * 200                 # 1200 字
+        rows = [{"role": "user", "content": "说点长的"},
+                {"role": "assistant", "content": long}]
+        persona._save_hist(self.key, rows)
+        persona._append_archive(self.key, [], seed=rows)
+        self.assertEqual(persona.load_archive(self.key)[1]["content"], long)
+
+    def test_history_page_walks_backwards(self):
+        self._seed(20)                               # 40 条
+        start, chunk, total = persona.history_page(self.key)
+        self.assertEqual(total, 40)
+        self.assertEqual(start, 40 - persona.ARCHIVE_PAGE)
+        self.assertEqual(len(chunk), persona.ARCHIVE_PAGE)
+        # 上一页：结尾正好接在首屏第一条前面，不重不漏
+        start2, chunk2, _ = persona.history_page(self.key, before=start)
+        self.assertEqual(start2, 0)
+        self.assertEqual(start2 + len(chunk2), start)
+        self.assertEqual(chunk2[-1]["content"], "第7答\n画面：scene 7\n心情：平静 强度2\n状态：坐着")
+
+    def test_archive_falls_back_to_window(self):
+        """归档还没建起来的老线：退回窗口原文，不能整段空白。"""
+        persona._save_hist(self.key, [{"role": "user", "content": "只有窗口"}])
+        self.assertEqual(persona.load_archive(self.key)[0]["content"], "只有窗口")
+
+    def test_erase_removes_archive(self):
+        """清空存档要连归档一起删，否则「删了」还能整段翻出来。"""
+        self._seed(3)
+        path = persona._archive_path(self.key)
+        self.assertTrue(os.path.exists(path))
+        persona.wipe(self.key)
+        self.assertFalse(os.path.exists(path))
+        self.assertEqual(persona.load_archive(self.key), [])
 
 
 class ClearCommandTest(PersonaBase):
