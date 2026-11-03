@@ -679,6 +679,50 @@ class NoHashCommandTest(PersonaBase):
                                                     addressed=True))
 
 
+class RosterWebLinkTest(PersonaBase):
+    """私聊的规则里带网页入口，群聊不带（2026-11-03 用户拍板）。
+
+    理由：QQ 里打字出图太麻烦，网页点按钮就行；但外链发群里容易被风控、
+    一次就刷屏，所以群里只回规则本身。
+    """
+
+    def setUp(self):
+        super().setUp()
+        persona.save_cards([_card("纱雾")])
+
+    def test_private_roster_has_web_link(self):
+        t = persona.roster_text(site_url="https://x.trycloudflare.com")
+        self.assertIn("网页版", t)
+        self.assertIn("https://x.trycloudflare.com/persona", t)
+
+    def test_group_roster_has_no_web_link(self):
+        t = persona.roster_text(site_url="")
+        self.assertNotIn("网页版", t)
+        self.assertNotIn("trycloudflare", t)
+
+    def test_private_command_includes_link(self):
+        with mock.patch("app.friend_site.url",
+                        return_value="https://y.trycloudflare.com"):
+            got = persona.handle_command("private_1", "角色扮演",
+                                         addressed=True)
+        self.assertIn("https://y.trycloudflare.com/persona", got)
+
+    def test_group_command_excludes_link(self):
+        with mock.patch("app.friend_site.url",
+                        return_value="https://y.trycloudflare.com"):
+            got = persona.handle_command("group_1", "角色扮演",
+                                         addressed=True)
+        self.assertNotIn("trycloudflare", got)
+
+    def test_tunnel_down_still_returns_roster(self):
+        """隧道没开（拿不到地址）时，规则本身不能少。"""
+        with mock.patch("app.friend_site.url", return_value=""):
+            got = persona.handle_command("private_1", "角色扮演",
+                                         addressed=True)
+        self.assertIn("角色名单", got)
+        self.assertNotIn("网页版", got)
+
+
 class ClearCommandTest(PersonaBase):
     """`#清空`（2026-11-02）：清记忆、保留角色。"""
 
