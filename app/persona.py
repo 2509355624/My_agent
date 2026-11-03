@@ -434,7 +434,7 @@ def is_shot_request(text):
     return False
 
 
-def comic_brief(card, session_key, extra=""):
+def comic_brief(card, session_key, extra="", msg_index=None):
     """把「用户点名要画的 + 她此刻 + 状态 + 人物」拼成 moss 漫画的 brief。
 
     2026-11-03 第二次改（用户实测反馈「都不按剧情来的」）：
@@ -452,24 +452,55 @@ def comic_brief(card, session_key, extra=""):
       4. `人物` —— 女主外观 + 固定男主。
 
     `extra`（引用内容）只在真有字的时候加，且排在用户原话之后。
+
+    `msg_index`（2026-11-03 第三次加，网页端要的）：**指定画第几条回复**。
+    - `None` → 取最后一轮（QQ 端「出图」走这条，行为不变）
+    - `N` → 取历史里第 N 条 assistant，用**它自己那轮**的正文、状态、
+      以及它前面那条用户消息
+
+    网页端每条回复下面都有「出图」按钮，画错位置就全乱了，所以必须能定位。
+    好消息是每条回复在历史里**本来就带着 `画面：` / `状态：` 行**（见
+    `split_turn`），不用另存一份。
     """
     ent = _entry(session_key) or {}
-    state = str(ent.get("state") or "").strip()
     name = str((card or {}).get("name") or "女主角")
     look = _fixed_block(card)
 
     hist = [m for m in trim(_load_hist(session_key))
             if m.get("role") in ("user", "assistant")]
+
     last_user = ""
     last_ai = ""
-    for m in reversed(hist):
-        body = split_turn(m["content"])[0].strip() if m["role"] == "assistant" \
-            else str(m["content"] or "").strip()
-        if m["role"] == "assistant" and not last_ai:
-            last_ai = body
-        elif m["role"] == "user" and not last_user:
-            last_user = body
-        if last_user and last_ai:
+    state = str(ent.get("state") or "").strip()
+
+    if msg_index is None:
+        for m in reversed(hist):
+            body = split_turn(m["content"])[0].strip() if m["role"] == "assistant" \
+                else str(m["content"] or "").strip()
+            if m["role"] == "assistant" and not last_ai:
+                last_ai = body
+            elif m["role"] == "user" and not last_user:
+                last_user = body
+            if last_user and last_ai:
+                break
+    else:
+        # 按序号定位：assistant 消息从头数第 msg_index 条
+        seen = -1
+        for i, m in enumerate(hist):
+            if m["role"] != "assistant":
+                continue
+            seen += 1
+            if seen != int(msg_index):
+                continue
+            last_ai, _sc, _mo, _it, st = split_turn(m["content"] or "")
+            last_ai = last_ai.strip()
+            if st.strip():
+                state = st.strip()      # 用**那一轮**的状态，不是此刻的
+            # 往前找最近的一条用户消息
+            for j in range(i - 1, -1, -1):
+                if hist[j]["role"] == "user":
+                    last_user = str(hist[j]["content"] or "").strip()
+                    break
             break
 
     lines = ["这是一部成人向漫画的一页。", ""]

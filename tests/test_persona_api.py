@@ -1,0 +1,217 @@
+"""`app/persona_api.py` 的接线测试（2026-11-03）。
+
+只测「请求进、JSON 出」这一层：引擎本身在 `tests/test_persona.py` 里，
+这里不重复测。跑 Flask test_client，不启动服务、不调真模型。
+"""
+import os
+import tempfile
+import unittest
+from unittest import mock
+
+import flask
+
+from app import agents, persona, persona_api
+
+QQ = "2509355624"
+
+
+class PersonaApiBase(unittest.TestCase):
+    """每个用例一套独立的临时状态/历史文件。
+
+    2026-11-03：第一版直接读写真实的 `persona_sessions.json`，用例之间互相
+    污染（`test_clear_keeps_card` 单独跑过、全跑时挂，因为前面的用例把状态
+    换成别的卡了）。这里照 `test_persona.PersonaBase` 的做法，把
+    `_STATE_PATH` 指到临时目录。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        # cleanup 是**后进先出**：先把 clear_cache 挂上，再挂 tmp.cleanup，
+        # 这样收尾时先清缓存、再删目录。反过来的话，下一个用例拿到的缓存
+        # 指向已删除的临时目录，`load_cards` 返回空、`find_card` 全找不到。
+        self.addCleanup(self.tmp.cleanup)
+        agents.clear_cache()
+        self.addCleanup(agents.clear_cache)
+
+        root = os.path.join(self.tmp.name, "agents")
+        os.makedirs(root, exist_ok=True)
+        p = mock.patch.object(agents, "AGENTS_DIR", root)
+        p.start()
+        self.addCleanup(p.stop)
+        q = mock.patch.object(
+            persona, "_STATE_PATH",
+            os.path.join(self.tmp.name, "state", "persona_sessions.json"))
+        q.start()
+        self.addCleanup(q.stop)
+
+        # 临时目录是空的，先放两张卡进去（不依赖仓库里那份 characters.json，
+        # 那份是 gitignore 的，换台机器跑测试就没了）
+        #
+        # ⚠️ 顺序要紧：`save_cards` 之前**先清一次缓存**，否则上一个用例的
+        # 卡列表还挂在模块级缓存里，`find_card` 会去旧列表里找刚写的卡，
+        # 找不到（2026-11-03 踩过：test_clear_keeps_card 全跑时挂、单跑时过）。
+        agents.clear_cache()
+        persona.save_cards([
+            {"id": "izumi_sagiri", "name": "纱雾",
+             "description": "害羞的插画师", "personality": "内向",
+             "systemPrompt": "你是纱雾。",
+             "appearancePrompt": "1girl, silver hair"},
+            {"id": "rem", "name": "雷姆",
+             "description": "鬼族女仆", "personality": "温柔",
+             "systemPrompt": "你是雷姆。",
+             "appearancePrompt": "1girl, blue hair"},
+        ])
+        # ⚠️ 顺序要紧：先清缓存再写卡，写完**再清一次**——`save_cards` 落盘后
+        # `load_cards` 可能还握着旧的空缓存，`find_card` 就找不到刚写的卡
+        # （2026-11-03 踩过：test_clear_keeps_card 全跑时挂、单跑时过）。
+        agents.clear_cache()
+        self.addCleanup(agents.clear_cache)
+
+        app = flask.Flask(__name__)
+        app.register_blueprint(persona_api.bp)
+        self.c = app.test_client()
+
+    def get(self, path):
+        # 必须带上 qq，否则 `_qq()` 取不到人、`_key()` 退化成 `web_local`，
+        # 和 `post()` 用的会话不是同一条（2026-11-03 踩过：单看代码都对，
+        # 就是读不到刚切好的角色）。
+        sep = "&" if "?" in path else "?"
+        return self.c.get(path + sep + "qq=" + QQ).get_json()
+
+    def post(self, path, **body):
+        body.setdefault("qq", QQ)
+        return self.c.post(path, json=body).get_json()
+
+
+class CardListTest(PersonaApiBase):
+
+    def test_lists_cards(self):
+        d = self.get("/api/persona/cards")
+        self.assertTrue(d["ok"])
+        self.assertTrue(d["cards"])
+        self.assertTrue(all("name" in c for c in d["cards"]))
+
+    def test_card_fields_are_safe(self):
+        """只回前端要用的字段，不把整张卡（含 systemPrompt）甩出去。"""
+        d = self.get("/api/persona/cards")
+        c = d["cards"][0]
+        self.assertNotIn("systemPrompt", c)
+        self.assertNotIn("appearancePrompt", c)
+
+
+class SessionKeyTest(unittest.TestCase):
+
+    def test_web_key_is_separate_from_qq(self):
+        self.assertNotEqual(persona_api._key(QQ), "private_" + QQ)
+        self.assertTrue(persona_api._key(QQ).startswith("web_"))
+
+    def test_no_qq_falls_back_to_local(self):
+        self.assertEqual(persona_api._key(""), "web_local")
+
+
+class SwitchTest(PersonaApiBase):
+
+    def test_switch_by_name(self):
+        name = self.get("/api/persona/cards")["cards"][0]["name"]
+        d = self.post("/api/persona/switch", name=name)
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["card"]["name"], name)
+
+    def test_switch_by_id(self):
+        card = self.get("/api/persona/cards")["cards"][0]
+        d = self.post("/api/persona/switch", id=card["id"])
+        self.assertTrue(d["ok"])
+
+    def test_unknown_card_is_404(self):
+        r = self.c.post("/api/persona/switch",
+                        json={"name": "不存在的人", "qq": QQ})
+        self.assertEqual(r.status_code, 404)
+
+    def test_empty_name_is_400(self):
+        r = self.c.post("/api/persona/switch", json={"qq": QQ})
+        self.assertEqual(r.status_code, 400)
+
+
+class ChatTest(PersonaApiBase):
+
+    def _enter(self):
+        name = self.get("/api/persona/cards")["cards"][0]["name"]
+        self.post("/api/persona/switch", name=name)
+        return name
+
+    def test_chat_without_card_is_rejected(self):
+        d = self.post("/api/persona/chat", text="在吗")
+        self.assertFalse(d["ok"])
+
+    def test_chat_returns_reply_and_mood(self):
+        self._enter()
+        turn = persona.Turn("她抬眼看了你一下。", "1girl", "害羞", 6, "坐在桌前")
+        with mock.patch.object(persona, "run_turn", return_value=turn):
+            d = self.post("/api/persona/chat", text="在吗")
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["reply"], "她抬眼看了你一下。")
+        self.assertEqual(d["mood"], "害羞")
+        self.assertEqual(d["intensity"], 6)
+
+    def test_empty_text_is_400(self):
+        self._enter()
+        r = self.c.post("/api/persona/chat", json={"text": "  ", "qq": QQ})
+        self.assertEqual(r.status_code, 400)
+
+
+class ShotTest(PersonaApiBase):
+
+    def test_shot_passes_brief_to_moss(self):
+        name = self.get("/api/persona/cards")["cards"][0]["name"]
+        self.post("/api/persona/switch", name=name)
+        with mock.patch("app.moss_bot.start", return_value=(True, "")) as ms, \
+             mock.patch("app.moss_series.current", return_value="SID"), \
+             mock.patch("app.moss_series.load", return_value={"pages": []}), \
+             mock.patch("app.moss_series.latest", return_value={"n": 2}):
+            d = self.post("/api/persona/shot")
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["sid"], "SID")
+        self.assertEqual(d["page"], 2)
+        self.assertTrue(ms.called)
+        brief = ms.call_args[0][3]
+        self.assertIn("女主角", brief)
+        self.assertIn("男主角", brief)
+
+    def test_shot_without_card_is_rejected(self):
+        d = self.post("/api/persona/shot")
+        self.assertFalse(d["ok"])
+
+    def test_busy_returns_429(self):
+        name = self.get("/api/persona/cards")["cards"][0]["name"]
+        self.post("/api/persona/switch", name=name)
+        with mock.patch("app.moss_bot.start", return_value=(False, "在画了")):
+            r = self.c.post("/api/persona/shot", json={"qq": QQ})
+        self.assertEqual(r.status_code, 429)
+
+
+class LeaveClearTest(PersonaApiBase):
+
+    def test_leave_when_idle(self):
+        d = self.post("/api/persona/leave")
+        self.assertTrue(d["ok"])
+
+    def test_leave_after_switch(self):
+        name = self.get("/api/persona/cards")["cards"][0]["name"]
+        self.post("/api/persona/switch", name=name)
+        d = self.post("/api/persona/leave")
+        self.assertIn("出戏", d["reply"])
+
+    def test_clear_keeps_card(self):
+        name = self.get("/api/persona/cards")["cards"][0]["name"]
+        r = self.post("/api/persona/switch", name=name)
+        self.assertTrue(r["ok"], r)
+        d = self.post("/api/persona/clear")
+        self.assertTrue(d["reply"])
+        s = self.get("/api/persona/session")
+        # 清空后角色必须还在——测试里显式断言，别只看 reply 文案
+        self.assertEqual((s.get("card") or {}).get("name"), name,
+                         "清空后角色丢了：%r" % s.get("card"))
+
+
+if __name__ == "__main__":
+    unittest.main()
