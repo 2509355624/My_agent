@@ -285,7 +285,8 @@ class InjectionTest(AffBase):
                "level": 2, "levelName": "说得上话", "ending": "", "applied": 3}
         line = affection.tail_line(res)
         self.assertIn("说得上话", line)
-        # 2026-11-04：尾行不再暴露数字，玩家只能靠感觉判断进度
+        # 2026-11-04 用户改口要数字：正数**不带加号**，只有负数才带负号
+        self.assertIn("好感 22", line)
         self.assertNotIn("+22", line)
 
     def test_detail_nodes_needs_record(self):
@@ -578,7 +579,8 @@ class LevelTest(AffBase):
         self.assertEqual(rec["arousal"], 0)
         self.assertEqual(rec["cross_n"], 0)
 
-    def test_tail_line_hides_numbers(self):
+    def test_tail_line_has_no_plus_sign(self):
+        """正数不带加号（`好感 8`，不是 `好感 +8`）——加号看着像在报奖励。"""
         key = self._raid_card()
         r = affection.settle(key, {"delta": 8, "turn_type": "action"})
         line = affection.tail_line(r)
@@ -645,25 +647,42 @@ class ArousalViewTest(AffBase):
         self.assertEqual(affection.arousal_name(80, cfg), "不设防")
 
     def test_tail_line_carries_arousal(self):
-        """尾行要常驻气氛：`❤ 关系 · 气氛`。
+        """尾行要常驻气氛：首行固定成 `❤ 关系 · 气氛`。
 
         用户 2026-11-04 拍板要常驻——多数时候是「平静」，但正因为它一直在，
         突然变成「很乱」才有分量。
         """
         res = {"active": True, "level": 2, "levelName": "说得上话",
                "arousal": 55, "tier": "", "ending": ""}
-        self.assertEqual(affection.tail_line(res), "❤ 说得上话 · 很乱")
+        self.assertEqual(affection.tail_line(res).splitlines()[0],
+                         "❤ 说得上话 · 很乱")
 
     def test_tail_line_skips_arousal_on_hard_cross(self):
         """越界那轮气氛不是重点，别把「她退开了」挤掉。"""
         res = {"active": True, "level": 2, "levelName": "说得上话",
                "arousal": 70, "cross": "hard", "ending": ""}
-        self.assertEqual(affection.tail_line(res), "❤ 说得上话 · 她退开了")
+        self.assertEqual(affection.tail_line(res).splitlines()[0],
+                         "❤ 说得上话 · 她退开了")
 
     def test_tail_line_marks_level_up(self):
         res = {"active": True, "level": 3, "levelName": "说得进心里",
                "arousal": 30, "rose": 3, "ending": ""}
-        self.assertEqual(affection.tail_line(res), "❤ 说得进心里 ↑ · 有点乱")
+        self.assertEqual(affection.tail_line(res).splitlines()[0],
+                         "❤ 说得进心里 ↑ · 有点乱")
+
+    def test_tail_line_is_one_number_per_line(self):
+        """一行一个数值（2026-11-04 用户要求的排版）：好感 / 距离 / 冲动。"""
+        res = {"active": True, "level": 3, "levelMax": 5,
+               "levelName": "说得进心里", "value": 21, "arousal": 42,
+               "ending": ""}
+        rows = affection.tail_line(res).splitlines()
+        self.assertEqual(rows[1:], ["好感 21", "距离 3/5", "冲动 42"])
+
+    def test_tail_line_keeps_minus_sign(self):
+        """负数才带负号——掉分的时候玩家要看得见那个减号。"""
+        res = {"active": True, "level": 0, "levelName": "隔得很远",
+               "value": -8, "arousal": 0, "ending": ""}
+        self.assertIn("好感 -8", affection.tail_line(res))
 
     def test_status_exposes_three_axes(self):
         """网页右栏要一次画完三轴，status 必须一次给全。"""
