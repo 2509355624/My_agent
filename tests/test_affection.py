@@ -656,7 +656,7 @@ class ArousalViewTest(AffBase):
         res = {"active": True, "level": 2, "levelName": "说得上话",
                "arousal": 55, "tier": "", "ending": ""}
         rows = affection.tail_line(res).splitlines()
-        self.assertEqual(rows[0], "❤ 关系 说得上话 · 第 2 级 / 共 5 级")
+        self.assertEqual(rows[0], "❤ 关系 说得上话")
         self.assertEqual(rows[1], "气氛 很乱")
 
     def test_tail_line_skips_arousal_on_hard_cross(self):
@@ -664,29 +664,31 @@ class ArousalViewTest(AffBase):
         res = {"active": True, "level": 2, "levelName": "说得上话",
                "arousal": 70, "cross": "hard", "ending": ""}
         rows = affection.tail_line(res).splitlines()
-        self.assertEqual(rows[0], "❤ 关系 说得上话 · 第 2 级 / 共 5 级")
+        self.assertEqual(rows[0], "❤ 关系 说得上话")
         self.assertEqual(rows[1], "她退开了")
 
     def test_tail_line_marks_level_up(self):
         res = {"active": True, "level": 3, "levelName": "说得进心里",
                "arousal": 30, "rose": 3, "ending": ""}
         rows = affection.tail_line(res).splitlines()
-        self.assertEqual(rows[0], "❤ 关系 说得进心里 · 第 3 级 / 共 5 级 ↑")
+        self.assertEqual(rows[0], "❤ 关系 说得进心里 ↑")
         self.assertEqual(rows[1], "气氛 有点乱")
 
     def test_tail_line_is_one_number_per_line(self):
         """一行一个数值（2026-11-04 用户要求的排版）：好感 / 冲动。
 
-        关系进度不再是 `距离 3/5`（玩家看不懂 3/5 是在量什么），
-        改成首行里的「第 3 级 / 共 5 级」。
+        关系进度不再是 `距离 3/5`（玩家看不懂 3/5 是在量什么），也不再写
+        「第 3 级 / 共 5 级」（级是行话）——只留关系叫什么，进度靠叫法自己变。
         """
         res = {"active": True, "level": 3, "levelMax": 5,
                "levelName": "说得进心里", "value": 21, "arousal": 42,
                "ending": ""}
         rows = affection.tail_line(res).splitlines()
-        self.assertEqual(rows[0], "❤ 关系 说得进心里 · 第 3 级 / 共 5 级")
+        self.assertEqual(rows[0], "❤ 关系 说得进心里")
         self.assertEqual(rows[1:], ["气氛 有点乱", "好感 21", "冲动 42"])
+        # 关系和气氛之外的词都是行话，玩家读不懂，一律不出现
         self.assertNotIn("距离", affection.tail_line(res))
+        self.assertNotIn("级", affection.tail_line(res))
 
     def test_tail_line_keeps_minus_sign(self):
         """负数才带负号——掉分的时候玩家要看得见那个减号。"""

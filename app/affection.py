@@ -869,11 +869,11 @@ def tail_line(res):
     反过来要数字：「看到数值浮动才有成就感」。所以数值**一行一个**，
     正数不带加号、负数才带负号。
 
-    格式（当日二次修订）：原来首行是 `❤ 家里的人 · 平静`，玩家会把它读成
-    「她现在的状态」——「家里的人」其实是**关系**、「平静」是**气氛**；
-    `距离 3/5` 也抽象得看不懂。现在每个词都带标签，距离改成人话：
+    格式（当日三次修订）：`第 3 级 / 共 5 级` 也是行话——玩家不懂「级」是量什么，
+    要的是能直接读懂的词。关系行只留**关系叫什么**，进度靠叫法本身会变
+    （点头之交 → 说得上话 → 靠得很近），不需要数字：
 
-        ❤ 关系 家里的人 · 第 3 级 / 共 5 级
+        ❤ 关系 家里的人
         气氛 平静
         好感 21
         冲动 0
@@ -889,9 +889,7 @@ def tail_line(res):
         name = (ending_cfg(ending, load_config()) or {}).get("name") or "结局"
         return "%s 已结局【%s】" % (mark, name)
     lname = res.get("levelName") or level_name(int(res.get("level") or 0)) or "?"
-    lv = int(res.get("level") or 0)
-    lv_max = int(res.get("levelMax") or LEVEL_MAX)
-    head = "❤ 关系 %s · 第 %d 级 / 共 %d 级" % (lname, lv, lv_max)
+    head = "❤ 关系 %s" % lname
     if res.get("rose"):
         head += " ↑"
     # 第二行：气氛。越界那一轮不是重点——那轮要说的是「她退开了」。
@@ -933,10 +931,9 @@ def detail_nodes(line_key):
     else:
         head.append("状态：攻略中")
     lv = int(rec.get("level") or 0)
-    # 关系叫法 + 等级写在一起，和 QQ 尾行同一套说法（2026-11-04 二次修订：
-    # 只写「你们：家里的人」看不出还有几级，写「距离 3/5」又没人知道在量什么）。
-    head.append("你们：%s（第 %d 级 / 共 %d 级）"
-                % (level_name(lv, cfg, card) or "?", lv, LEVEL_MAX))
+    # 只写关系叫什么（2026-11-04 三次修订：「第 3 级 / 共 5 级」是行话，
+    # 玩家看不懂级是在量什么。叫法本身就会随关系往前而变）。
+    head.append("你们：%s" % (level_name(lv, cfg, card) or "?"))
     head.append("她对你的感觉：%s"
                 % (_tier_view(tier_for(value, cfg), lv).get("name") or "?"))
     # 气氛（2026-11-04）：冲动是一次性的，查档案这一刻看到的就是「此刻」。

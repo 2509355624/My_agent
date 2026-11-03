@@ -566,17 +566,16 @@ function affLine(a) {
     div.textContent = a.just_ended === "graduated" ? "🎓 已结局：毕业" : "🚨 已结局：进局子";
     return div;
   }
-  // 2026-11-04 二次修订：原来首行是 `❤ 家里的人 · 平静`，玩家会把它读成
-  // 「她此刻的状态」——「家里的人」其实是**关系**、「平静」是**气氛**。
-  // 现在每个词都带标签，说法和 QQ 尾行完全一致：
-  //   ❤ 关系 家里的人 · 第 3 级 / 共 5 级
+  // 2026-11-04 三次修订：`第 3 级 / 共 5 级` 也是行话，玩家不懂「级」在量什么。
+  // 关系行只留关系叫什么，说法和 QQ 尾行完全一致：
+  //   ❤ 关系 家里的人
   //   气氛 平静
+  // 进度不靠数字——叫法本身会变（点头之交 → 说得上话 → 靠得很近）。
   const lv = a.level | 0;
   const max = a.levelMax || 5;
 
   const rel = document.createElement("div");
-  let s = "❤ 关系 " + (a.levelName || a.tierName || "") +
-          " · 第 " + lv + " 级 / 共 " + max + " 级";
+  let s = "❤ 关系 " + (a.levelName || a.tierName || "");
   if (a.rose) s += " ↑";
   rel.textContent = s;
   div.appendChild(rel);
@@ -666,16 +665,16 @@ function renderAff(a) {
   // 它没有「未开启」这个中间态，没数据就整块藏掉，免得多一个空条。
   box.style.display = "";
   if (aro) aro.style.display = (raid && !!a) ? "" : "none";
-  // 2026-11-04 二次修订：这里原来显示 `家里的人 · 正常关系`——「正常关系」是
-  // **好感档名**，跟「关系」两个字撞车，玩家会把它和关系等级混在一起。
-  // 现在只报关系叫法 + 等级，说法和 QQ 尾行完全一致。
+  // 2026-11-04 三次修订：这里原来显示 `家里的人 · 正常关系`——「正常关系」是
+  // **好感档名**，跟「关系」两个字撞车；后来改成 `第 3 级 / 共 5 级`，但「级」
+  // 同样是行话。现在只报关系叫什么，说法和 QQ 尾行完全一致。
   const lvMax = (a && a.levelMax) || 5;
   $("affModeK").textContent = raid ? "关系 · 攻略模式"
     : (a ? "关系 · 已封存" : "关系 · 未开启");
   $("sAff").textContent = !a ? "—"
     : (a.ending
        ? (a.ending === "graduated" ? "已毕业" : "已进局子")
-       : ((a.levelName || "—") + " · 第 " + (a.level | 0) + " 级 / 共 " + lvMax + " 级"));
+       : (a.levelName || "—"));
   // 进度条按「关系等级 0~5」走，不再按好感刻度——好感是后台分数，
   // 摆出来玩家就会算「还差几分」，那就变成刷分了。
   // 分母用后端给的 levelMax，别在 JS 里写死 5。
