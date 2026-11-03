@@ -1704,10 +1704,13 @@ class PersonaTurnTest(unittest.TestCase):
         return [{"text": text, "sender": "张三", "reply_to": "m1",
                  "sender_uin": "10000"}]
 
-    def test_reply_goes_out_and_draw_starts(self):
+    def test_reply_goes_out_and_no_auto_draw(self):
+        """2026-11-03 起**不再自动配图**——用户主动说「出图」才出。
+
+        原来这轮是「正文发出去 + 起线程画一张快图」，现在配图整条挪到了
+        `_comic_from_persona`（走 moss 漫画出六格）。
+        """
         runner = self._runner()
-        # 2026-11-02：配图要过门槛（情绪强度 >= 7 或换衣），所以这里给强度 8。
-        # 没改门槛之前是「有画面行就出图」，这轮改成有条件的。
         turn = qq_bot.persona.Turn("你好呀", "1girl, sitting, smile",
                                    "害羞", 8, "坐在桌前 · 白T恤")
         with mock.patch.object(qq_bot.persona, "run_turn", return_value=turn), \
@@ -1716,15 +1719,49 @@ class PersonaTurnTest(unittest.TestCase):
             runner._run_persona_turn(self._batch())
         self.assertEqual(dv.call_args[0][1], "你好呀")           # 正文
         self.assertEqual(dv.call_args[1]["reply_to"], "m1")     # 引用触发那句
-        th.assert_called_once()
-        # args 现在是 (画面, reply_to, 她说的话, 状态)——后两个用来做 caption
-        # 和服装词，见 `_draw_persona` 的说明。
-        self.assertEqual(th.call_args[1]["args"],
-                         ("1girl, sitting, smile", "m1", "你好呀",
-                          "坐在桌前 · 白T恤"))
+        th.assert_not_called()                                  # 不出图
+
+    def test_shot_request_goes_to_moss_comic(self):
+        """「出图」→ 交给 moss 漫画（2026-11-03 用户拍板）。"""
+        runner = self._runner()
+        with mock.patch.object(qq_bot.persona, "active_card",
+                               return_value={"name": "纱雾"}), \
+             mock.patch.object(qq_bot.persona, "comic_brief",
+                               return_value="BRIEF") as cb, \
+             mock.patch.object(runner, "_comic_from_persona") as cc, \
+             mock.patch.object(qq_bot.persona, "run_turn") as rt:
+            runner._run_persona_turn(self._batch("出图"))
+        cc.assert_called_once()
+        rt.assert_not_called()          # 出图这一轮不跑对话
+
+    def test_shot_request_forwards_quoted_text(self):
+        """引用聊天记录说「出图」→ 那段记录跟着一起给 moss。"""
+        runner = self._runner()
+        with mock.patch.object(qq_bot.persona, "active_card",
+                               return_value={"name": "纱雾"}), \
+             mock.patch.object(qq_bot, "_resolve_quote",
+                               return_value=("[转发的聊天记录]\n他：在窗边", [])), \
+             mock.patch.object(runner, "_comic_from_persona") as cc:
+            batch = [{"text": "出图", "sender": "张三", "reply_to": "m1",
+                      "sender_uin": "10000",
+                      "quotes": [{"kind": "forward", "id": "f1"}]}]
+            runner._run_persona_turn(batch)
+        extra = cc.call_args[1]["extra"]
+        self.assertIn("在窗边", extra)
+
+    def test_plain_chat_does_not_trigger_comic(self):
+        runner = self._runner()
+        turn = qq_bot.persona.Turn("嗯。", "", "平静", 3, "")
+        with mock.patch.object(qq_bot.persona, "active_card",
+                               return_value={"name": "纱雾"}), \
+             mock.patch.object(qq_bot.persona, "run_turn", return_value=turn), \
+             mock.patch.object(runner, "_comic_from_persona") as cc, \
+             mock.patch.object(runner, "_deliver"):
+            runner._run_persona_turn(self._batch("出图了"))
+        cc.assert_not_called()
 
     def test_low_intensity_skips_draw(self):
-        """情绪不强、状态也没变 → 不出图（2026-11-02 加的门槛）。"""
+        """情绪不强也不再自动出图（本来就只是聊天）。"""
         runner = self._runner()
         turn = qq_bot.persona.Turn("嗯。", "1girl, sitting", "平静", 3, "坐在桌前")
         with mock.patch.object(qq_bot.persona, "run_turn", return_value=turn), \

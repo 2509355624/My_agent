@@ -385,9 +385,97 @@ _SAFE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 # （`1girl, silver hair, solo`），「浅灰色宽松卫衣」这种后段弱语义直接丢，
 # 实测画成了裸体。
 #
-# 代价是慢（两段采样 + 两级放大），但排队是正常现象、用户等得起（用户原话）。
-# 走的是**正常 QQ 队列**，不插队、不特殊处理——单张图别把自己排成特例。
+# ⚠️ 2026-11-03：扮演态**不再自动出图**（用户拍板）。配图改由用户主动说
+# 「出图」触发，走 moss 漫画那条线（一次出六格）。这个常量留给 `draw()`
+# 的兼容路径，正常流程不再走它。
 FAST_SKILL = "silver"
+
+
+# ─── 用户（男主）的固定外观 ────────────────────────────────
+#
+# 2026-11-03 用户拍板：出图时要有统一的男主，代表用户本人。没有这个的话
+# 六格漫画里的男方每格长得都不一样（moss 的 cast 由编剧自己写，不给他
+# 固定的串，他会每页临时编一个）。
+#
+# 写成中性、可复用的描述：成年男性、短发、日常深色上衣。**不要写具体长相**
+# ——那是用户自己的脸，读者要能代入。
+MALE_PROTAGONIST = (
+    "an adult man in his late twenties, short black hair, plain dark shirt, "
+    "average build, natural proportions"
+)
+
+# 「出图」触发词。用户说这些就调 moss 漫画出六格。
+#
+# 判据要严：`出图` 两个字太常见（「我刚才出图了」「出图失败」都是正常聊天），
+# 所以**只在扮演态里**、且整条消息就是这个意思时才触发。见 `is_shot_request`。
+SHOT_WORDS = ("出图", "画一张", "画一下", "来张图", "出张图", "画个图")
+
+
+def is_shot_request(text):
+    """这条消息是不是在要求「按当前场景出图」。
+
+    只认**整条消息**是触发词（可带 # 前缀、可带「一下」「吧」这类语气词），
+    不做子串匹配——扮演态里的「你刚才出图了？」是在聊天，不是在下命令。
+    """
+    t = str(text or "").strip()
+    if not t:
+        return False
+    if t.startswith("#"):
+        t = t[1:].strip()
+    if t in SHOT_WORDS:
+        return True
+    # 去掉结尾的语气词再比。**注意顺序**：先比原串再剥——「画一张」本身就在
+    # 词表里，先剥「一张」会剥成「画」，反而认不出（实测踩过）。
+    for tail in ("吧", "啊", "呀", "呢", "一下", "一张", "！", "!", "。", "."):
+        if t.endswith(tail):
+            t = t[: -len(tail)].strip()
+            if t in SHOT_WORDS:
+                return True
+    return False
+
+
+def comic_brief(card, session_key, extra=""):
+    """把「男主特征 + 女主特征 + 当前状态 + 最近剧情」拼成 moss 漫画的 brief。
+
+    2026-11-03：用户主动「出图」时走这条。moss 的编剧拿到的是自然语言剧情，
+    不是提示词——所以这里要写成"这一幕发生了什么"，而不是堆标签。
+
+    `extra` 是用户这一轮附带的说明（比如引用了某条消息），拼在最后。
+    """
+    ent = _entry(session_key) or {}
+    state = str(ent.get("state") or "").strip()
+    name = str((card or {}).get("name") or "女主角")
+    look = _fixed_block(card)
+
+    lines = ["这是一部成人向六格漫画的一页，画的是刚才这一幕。", ""]
+    lines.append("## 人物")
+    lines.append("- 女主角：%s。外观固定：%s" % (name, look or "按角色卡"))
+    lines.append("- 男主角：%s。他是读者本人，不要给他起名字、不要画脸特写。"
+                 % MALE_PROTAGONIST)
+
+    if state:
+        lines.append("")
+        lines.append("## 此刻的状态")
+        lines.append(state)
+
+    # 最近三轮对话当剧情（再往前的事编剧用不上，还会冲淡当前这一幕）
+    hist = [m for m in trim(_load_hist(session_key)) if m.get("role") in
+            ("user", "assistant")][-6:]
+    if hist:
+        lines.append("")
+        lines.append("## 刚才发生的事")
+        for m in hist:
+            body = split_turn(m["content"])[0]
+            if body.strip():
+                who = "他" if m["role"] == "user" else name
+                lines.append("%s：%s" % (who, body.strip()[:200]))
+
+    if extra.strip():
+        lines.append("")
+        lines.append("## 补充")
+        lines.append(extra.strip()[:400])
+
+    return "\n".join(lines)
 
 # 「画面：」那一行。半角/全角冒号都认（模型两种都写过）。取**最后一处**匹配：
 # 契约要求它写在正文末尾，而正文里偶尔也会出现「画面」这个词。
@@ -643,29 +731,88 @@ def leave(session_key):
 # ─── 命令 ────────────────────────────────────────────
 
 def roster_text():
-    """`#角色扮演` / `#人设列表` 的回话：清单 + **底部把指令说清楚**。
+    """`#角色扮演` / `#人设列表` 的回话：完整规则 + 角色名单。
 
-    2026-11-02：底部指令从两行扩成一块。用户测试时不知道发完 `#角色名`
-    之后该怎么说话、怎么重置、为什么没有图，全在聊天里问——这些本来就该
-    写在清单结尾。
+    2026-11-03 用户拍板：规则要**写全**，并且用「聊天记录卡片」发出去
+    （见 `roster_nodes`）——太长会刷屏，但藏在卡片里点开就能看。
+    用户原话：「以后她忘记规则就继续 #角色扮演」。
+
+    所以这份文案是**唯一的规则出口**，每次有人忘了怎么玩，发这个就行。
     """
     cards = load_cards()
     if not cards:
         return "我这儿还没有人设卡。"
-    lines = ["## 怎么玩", "",
-             "1. 发 `#角色名` 进入扮演（下面是名单，发哪个就演哪个）",
-             "2. 进入后**直接说话**，不用再加 `#`，她按角色回你",
-             "3. 每轮她会顺手写一段画面；情绪强度 ≥7 或换了衣服才配图",
-             "4. 聊岔了、想重新开始 → `#清空`（保留角色，忘掉之前的事）",
-             "5. 不想演了 → `#出戏`，变回生图机器人",
-             "",
-             "私聊和群聊都能玩。**群里不配图**，尺度也收着；私聊随意。",
-             "",
-             "## 角色名单", ""]
+
+    lines = [
+        "## 这是什么",
+        "",
+        "私聊里跟一个角色一对一聊天。她会用小说式的第三人称写自己在做什么、",
+        "什么表情、身体怎么反应，台词用「」写在叙述里。",
+        "",
+        "## 怎么开始",
+        "",
+        "- 发 `#角色名` 进入扮演（名单在最后）。",
+        "- 进入后**直接说话**，不用再加 `#`，她按角色回你。",
+        "- 想换人就发另一个 `#角色名`，随时切换。",
+        "",
+        "## 「出图」",
+        "",
+        "- 想把她这一刻画下来，就发 `出图`（或 `画一张`、`来张图`）。",
+        "- 会按当前这一幕画**一页六格漫画**，大概一两分钟。",
+        "- 也可以**引用一条消息**再发 `出图`，那样画的就是那条消息里的剧情。",
+        "- 男主角统一代表你自己，不用另外说明长相。",
+        "",
+        "## 其它指令",
+        "",
+        "- `#清空` —— 忘掉之前发生过的一切，角色不变，从今天重新认识。",
+        "- `#出戏` —— 退出扮演，变回生图机器人。",
+        "- `#角色扮演` —— 就是这条，忘了规则随时再看一遍。",
+        "",
+        "## 说明",
+        "",
+        "- 私聊和群聊都能玩。**群里不出图**（只在私聊画）。",
+        "- 群聊里要先 @ 我或者喊「大大怪」，私聊直接说话就行。",
+        "- 她记着最近六轮对话，更早的事会压成一段回忆。",
+        "",
+        "## 角色名单",
+        "",
+    ]
     for c in cards:
         tag = c.get("description") or c.get("personality") or ""
         lines.append("#%s%s" % (c["name"], ("　" + tag) if tag else ""))
     return "\n".join(lines)
+
+
+def roster_nodes(limit_per_node=400):
+    """把规则拆成「聊天记录卡片」的节点（2026-11-03）。
+
+    为什么要拆：完整规则一千多字，直接发会刷屏、还会被 QQ 折成一坨。
+    合并成卡片，点开才展开，和角色卡同一套做法。
+
+    按段落切，每段不超过 `limit_per_node` 字——太长单张卡片里也难读。
+    """
+    text = roster_text()
+    if not text:
+        return []
+    # 按二级标题切段，每段独立成一个节点
+    parts, buf = [], []
+    for line in text.splitlines():
+        if line.startswith("## ") and buf:
+            parts.append("\n".join(buf).strip())
+            buf = [line]
+        else:
+            buf.append(line)
+    if buf:
+        parts.append("\n".join(buf).strip())
+
+    # 合并过短的段，避免卡片里出现只有标题的节点
+    merged = []
+    for p in parts:
+        if merged and len(merged[-1]) + len(p) < limit_per_node:
+            merged[-1] = merged[-1] + "\n\n" + p
+        else:
+            merged.append(p)
+    return [m for m in merged if m]
 
 
 # 命令前缀：群里手打「@大大怪 #角色名」时，`#` 前面还有东西。
@@ -675,6 +822,35 @@ def roster_text():
 # 那边早就踩过同一个坑（2026-11-02 群友反馈 `@大大怪 gal 开局` 没反应）。
 _PREFIX_RE = re.compile(
     r"^\s*(?:@[^\s，,、:：]+|" + re.escape(trigger.NAME) + r")\s*[，,、:：]?\s*")
+
+
+def is_roster_request(text, addressed=False):
+    """这条消息是不是在要「规则 / 名单」（`#角色扮演` / `#人设列表`）。
+
+    单独一个函数是因为 `handle_command` 只能返回一段文字，而调用方需要知道
+    「这段文字要不要用聊天记录卡片发」（规则一千多字，直接发会刷屏）。
+    剥前缀的逻辑和 `handle_command` 保持一致，见 `_PREFIX_RE`。
+    """
+    t = _strip_prefix(text, addressed)
+    if not t.startswith("#"):
+        return False
+    return t[1:].strip() in LIST_WORDS
+
+
+def _strip_prefix(text, addressed=False):
+    """把开头的 `@某人` / 「大大怪」剥掉（最多三次，叠着喊的也认）。
+
+    只在 `addressed` 为真时剥——私聊里「我@某人 #tag」不该被当成命令。
+    """
+    t = str(text or "").strip()
+    if not addressed:
+        return t
+    for _ in range(3):
+        stripped = _PREFIX_RE.sub("", t, count=1).strip()
+        if stripped == t:
+            break
+        t = stripped
+    return t
 
 
 def handle_command(session_key, text, addressed=False):
@@ -693,14 +869,7 @@ def handle_command(session_key, text, addressed=False):
     聊天，落到 direct_gen 被当成画面需求（实测群友发这个，机器人回了
     「青梅竹马这个主题前面已经画过一张了」）。
     """
-    t = (text or "").strip()
-    if addressed:
-        # 最多剥三次：「@大大怪 大大怪 #角色名」这种叠着喊的也认。
-        for _ in range(3):
-            stripped = _PREFIX_RE.sub("", t, count=1).strip()
-            if stripped == t:
-                break
-            t = stripped
+    t = _strip_prefix(text, addressed)
     if not t.startswith("#"):
         return None
     body = t[1:].strip()

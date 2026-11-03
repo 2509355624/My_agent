@@ -993,7 +993,21 @@ class SessionRunner:
         """
         texts = [(it.get("text") or "").strip() for it in batch]
         texts = [t for t in texts if t]
-        if not texts:
+        # 引用内容（2026-11-03）：扮演态原来**只看 text、不看 quotes**，
+        # 所以引用一条聊天记录卡片再说话，角色完全看不到卡片里写了什么。
+        # 群里「引用消息 + 出图」这条用法就是靠它。
+        quoted = []
+        for it in batch:
+            for q in (it.get("quotes") or []):
+                try:
+                    block, _q_imgs = _resolve_quote(q, QQ_QUOTE_MAX_CHARS)
+                except Exception:                # noqa: BLE001
+                    log.exception("扮演态解析引用失败")
+                    block = ""
+                if block:
+                    quoted.append(block)
+        quoted_text = "\n\n".join(quoted)
+        if not texts and not quoted_text:
             return
         # 引用**触发这条会话的那句**（合并批的第一条），不是最后一条：
         # 连发三条时，对方看到「机器人引用了我最先说的那句」，指向最清楚。
@@ -1001,9 +1015,26 @@ class SessionRunner:
         # 群里说话人的 QQ：群聊按人隔离状态（见 `persona._persona_key`）。
         # 取**第一条**的，和 `reply_to` 同一个口径——这一批就是他连发的那几句。
         sender_uin = str(batch[0].get("sender_uin") or "")
+        key = persona._persona_key(self.session_key, sender_uin)  # noqa: SLF001
+        card = persona.active_card(key)
+
+        # ── 「出图」：调 moss 漫画出六格（2026-11-03 用户拍板）──────────
+        # 扮演态不再自动配图，改由用户主动要求。走的是 moss 漫画那条完整链路
+        # （编剧 → 6 格 → 出图 → 回执），不是以前那种单张快图。
+        #
+        # 引用内容一起带过去：用户引用某条聊天记录说「出图」，那段记录就是
+        # 他要画的剧情。
+        joined = "\n".join(texts)
+        if persona.is_shot_request(joined) and card is not None:
+            self._comic_from_persona(card, key, reply_to, sender_uin,
+                                     extra=quoted_text)
+            return
+        if not joined:
+            return
+
         turn = None
         try:
-            turn = persona.run_turn(self.session_key, "\n".join(texts),
+            turn = persona.run_turn(self.session_key, joined,
                                     self.target,
                                     batch[0].get("sender") or "",
                                     sender_uin=sender_uin)
@@ -1013,20 +1044,33 @@ class SessionRunner:
             return
         if turn.reply.strip():
             self._deliver(False, turn.reply, [], "", reply_to=reply_to)
-        # 2026-11-02：**群聊不出图**。图发到群里所有人可见、又没法用引用指向
-        # 具体某个人，还会把对话刷掉；私聊才配图。文字和状态照常记录。
-        if self.target == "group":
+
+    def _comic_from_persona(self, card, key, reply_to="", sender_uin="",
+                            extra=""):
+        """「出图」→ 把男主/女主/状态/剧情拼成 brief，交给 moss 漫画。
+
+        2026-11-03 用户拍板：扮演态的配图从「每轮自动一张快图」改成「用户说
+        出图，出一页六格」。理由：单张快图撑不起剧情的连贯感，而且模型每轮
+        重写「画面：」会让场景漂移。
+
+        `extra` 是他引用的那条消息（可能就是他要画的那段剧情）。
+
+        moss 那边自己会发编剧回执 + 成图回执，所以这里只要把 brief 递过去。
+        """
+        from app import moss_bot
+        brief = persona.comic_brief(card, key, extra=extra)
+        try:
+            took, note = moss_bot.start(self.target, self.target_id, "new",
+                                        brief, reply_to=reply_to,
+                                        sender_uin=sender_uin)
+        except Exception:
+            log.exception("扮演态转 moss 漫画失败 %s", key)
+            self._deliver(False, "出图这步出了岔子，再试一次？", [], "",
+                          reply_to=reply_to)
             return
-        # 配图门槛（2026-11-02）：情绪强度 >= 7，或这一轮身上换了衣服才出图。
-        # 每轮都出会把对话框刷成图册、还白烧显卡。判定要用**上一轮**的状态
-        # 比，所以在这里取一次再传下去。
-        key = persona._persona_key(self.session_key, sender_uin)  # noqa: SLF001
-        prev_state = str((persona._entry(key) or {}).get("state") or "")  # noqa: SLF001
-        if turn.scene.strip() and persona.should_draw(
-                turn.intensity, prev_state, turn.state):
-            threading.Thread(target=self._draw_persona,
-                             args=(turn.scene, reply_to, turn.reply, turn.state),
-                             name="persona-draw", daemon=True).start()
+        if not took and note:
+            # moss 拒单时它自己会说明原因（排队长、ComfyUI 没在线等）
+            self._deliver(False, note, [], "", reply_to=reply_to)
 
     def _draw_persona(self, scene, reply_to="", spoken="", state=""):
         """扮演态配图（跑在后台线程里）：出一张图，画好就发回这条会话。
@@ -1767,13 +1811,34 @@ class QQBot:
         cmd = persona.handle_command(
             persona_key, text, addressed=(at_me or trigger.called(text)))
         if cmd is not None:
+            # 2026-11-03：`#角色扮演` 的规则很长，走「聊天记录卡片」发出去
+            # （点开才展开，不刷屏）。其它命令仍是一句话，直接发。
+            node_texts = None
+            if persona.is_roster_request(text, addressed=(at_me or trigger.called(text))):
+                try:
+                    node_texts = persona.roster_nodes()
+                except Exception:                # noqa: BLE001
+                    log.exception("生成规则卡片失败 %s", session_key)
             try:
-                send = (qq_api.send_group if target == "group"
-                        else qq_api.send_private)
-                send(target_id, cmd,
-                     reply_to=str(ev.get("message_id") or "") or None)
+                if node_texts:
+                    nodes = [qq_api.node_segment(t, name=QQ_BOT_NAME, uin=0)
+                             for t in node_texts]
+                    qq_api.send_forward(target, target_id, nodes)
+                else:
+                    send = (qq_api.send_group if target == "group"
+                            else qq_api.send_private)
+                    send(target_id, cmd,
+                         reply_to=str(ev.get("message_id") or "") or None)
             except Exception:
                 log.exception("回角色扮演命令失败 %s", session_key)
+                # 卡片发失败就退回纯文字——规则不能因为协议端不支持卡片就没了
+                if node_texts:
+                    try:
+                        send = (qq_api.send_group if target == "group"
+                                else qq_api.send_private)
+                        send(target_id, cmd)
+                    except Exception:
+                        log.exception("规则退回纯文字也失败 %s", session_key)
             return
 
         # ── galgame：`gal 开局` / `gal 结束` / `gal 存档` 这类命令 ──────

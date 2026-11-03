@@ -541,7 +541,7 @@ class AddressedCommandTest(PersonaBase):
         got = persona.handle_command("private_1", "大大怪 #角色扮演",
                                      addressed=True)
         self.assertIsNotNone(got)
-        self.assertIn("怎么玩", got)
+        self.assertIn("角色名单", got)
 
     def test_repeated_prefixes(self):
         got = persona.handle_command("private_1", "@大大怪 大大怪 #青梅竹马",
@@ -559,6 +559,67 @@ class AddressedCommandTest(PersonaBase):
     def test_plain_chat_is_still_ignored(self):
         self.assertIsNone(
             persona.handle_command("private_1", "今天天气不错", addressed=True))
+
+
+class ShotComicTest(unittest.TestCase):
+    """「出图」→ moss 漫画（2026-11-03）。"""
+
+    def test_shot_words(self):
+        for t in ("出图", "#出图", "出图吧", "画一张", "来张图", "画一下"):
+            self.assertTrue(persona.is_shot_request(t), t)
+
+    def test_normal_chat_is_not_a_shot(self):
+        for t in ("出图了", "你刚才出图了？", "我想出图", "出图失败", ""):
+            self.assertFalse(persona.is_shot_request(t), t)
+
+    def test_male_protagonist_is_fixed(self):
+        """男主必须有统一外形，否则六格里他每格长得都不一样。"""
+        self.assertTrue(persona.MALE_PROTAGONIST.strip())
+        self.assertIn("adult man", persona.MALE_PROTAGONIST)
+
+    def test_comic_brief_contains_all_four_parts(self):
+        """brief 要含：女主特征 + 男主特征 + 状态 + 剧情。"""
+        from unittest import mock
+        card = {"name": "纱雾",
+                "appearancePrompt": "1girl, silver hair, twintails"}
+        hist = [{"role": "user", "content": "我抱住她。"},
+                {"role": "assistant", "content": "她的呼吸乱了。\n画面：x\n心情：害羞 强度8\n状态：y"}]
+        with mock.patch.object(persona, "trim", return_value=hist):
+            brief = persona.comic_brief(card, "private_1",
+                                        extra="引用的那段剧情")
+        self.assertIn("纱雾", brief)                    # 女主名
+        self.assertIn("silver hair", brief)             # 女主外观
+        self.assertIn(persona.MALE_PROTAGONIST, brief)  # 男主特征
+        self.assertIn("我抱住她", brief)                 # 剧情
+        self.assertIn("引用的那段剧情", brief)            # 引用内容
+
+
+class RosterCardTest(PersonaBase):
+    """`#角色扮演` 的规则用聊天记录卡片发（2026-11-03）。"""
+
+    def setUp(self):
+        super().setUp()
+        persona.save_cards([_card("纱雾")])
+
+    def test_roster_asks_for_a_card(self):
+        for t in ("#角色扮演", "#人设列表", "@大大怪 #角色扮演"):
+            self.assertTrue(persona.is_roster_request(t, addressed=True), t)
+
+    def test_card_name_is_not_a_roster(self):
+        self.assertFalse(persona.is_roster_request("#纱雾", addressed=True))
+
+    def test_nodes_split_and_cover_everything(self):
+        nodes = persona.roster_nodes()
+        self.assertGreaterEqual(len(nodes), 2)
+        joined = "\n".join(nodes)
+        for word in ("出图", "#清空", "#出戏", "角色名单", "纱雾"):
+            self.assertIn(word, joined, word)
+
+    def test_roster_explains_shot_command(self):
+        """规则里必须写清「出图」怎么用——这是用户点名要的。"""
+        text = persona.roster_text()
+        self.assertIn("出图", text)
+        self.assertIn("六格", text)
 
 
 class ClearCommandTest(PersonaBase):
