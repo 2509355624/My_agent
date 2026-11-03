@@ -754,5 +754,73 @@ class AchievementTest(AffBase):
             persona.resolve_line("private_1")))
 
 
+class MigrationTest(AffBase):
+    """老存档升级（2026-11-04）：加了三轴和成就，不能让老玩家一夜回到解放前。"""
+
+    def _legacy(self, value=0, tier="normal", ending=""):
+        """造一份 11-04 之前的记录：只有单轴字段，没有 level/arousal/ach。"""
+        return {"mode": "raid", "value": value, "tier": tier, "down": 0,
+                "ending": ending, "day": affection._today(),
+                "chat": 0, "acts": 0,
+                "hist": [{"d": 3, "r": "陪她", "ts": "11-03 20:00"}]}
+
+    def test_value_and_tier_untouched(self):
+        """数值一个都不能动——迁移只加字段。"""
+        rec = affection._migrate(self._legacy(value=47, tier="full"))
+        self.assertEqual(rec["value"], 47)
+        self.assertEqual(rec["tier"], "full")
+
+    def test_level_backfilled_from_value(self):
+        cases = [(0, 0), (7, 1), (20, 3), (33, 4), (47, 5)]
+        for v, want in cases:
+            rec = affection._migrate(self._legacy(value=v))
+            self.assertEqual(rec["level"], want, v)
+
+    def test_level_achievements_granted(self):
+        """层级只升不降，反推出第 N 级 = 前 N 级都走过，可以确定地补。"""
+        rec = affection._migrate(self._legacy(value=47))
+        got = [a["k"] for a in rec["ach"]]
+        self.assertEqual(got, ["lv1", "lv2", "lv3", "lv4", "lv5"])
+
+    def test_tier_achievements_not_granted(self):
+        """档位会涨会掉，确认不了当年是否首次进过，所以不补。"""
+        rec = affection._migrate(self._legacy(value=47, tier="full"))
+        self.assertFalse([a for a in rec["ach"] if a["k"].startswith("tier_")])
+
+    def test_ending_achievement_granted(self):
+        """定格在结局的线不会再走结算，结局成就只能在迁移时补。"""
+        rec = affection._migrate(self._legacy(value=50, ending="graduated"))
+        self.assertIn("graduate", [a["k"] for a in rec["ach"]])
+        rec = affection._migrate(self._legacy(value=-50, ending="jail"))
+        self.assertIn("jail", [a["k"] for a in rec["ach"]])
+
+    def test_existing_ach_not_double_filled(self):
+        """已经迁移过的记录再读一次，不能把成就重刷一遍。"""
+        rec = self._legacy(value=47)
+        rec["level"] = 5
+        rec["ach"] = [{"k": "lv5", "ts": "11-04 01:00"}]
+        out = affection._migrate(rec)
+        self.assertEqual([a["k"] for a in out["ach"]], ["lv5"])
+
+    def test_migration_persists_once(self):
+        """迁移要落盘一次：不然用户改一次 gate，同一条线的层级就跟着漂。"""
+        key = self._raid()
+        ent = persona._entry(key)
+        ent["affection"] = self._legacy(value=33, tier="care")
+        affection._save_entry(key, ent)
+        # 读一次：触发迁移并写回
+        got = affection.record_of(affection._entry(key))
+        self.assertEqual(got["level"], 4)
+        self.assertEqual(got["value"], 33)
+        # 直接看磁盘：level / ach 已经落进去了
+        import json
+        with open(persona._STATE_PATH, encoding="utf-8") as f:
+            raw = json.load(f)
+        on_disk = raw[key]["affection"]
+        self.assertIn("level", on_disk)
+        self.assertEqual(on_disk["level"], 4)
+        self.assertIn("ach", on_disk)
+
+
 if __name__ == "__main__":
     unittest.main()
