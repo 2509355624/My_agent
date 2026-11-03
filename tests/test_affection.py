@@ -572,7 +572,9 @@ class LevelTest(AffBase):
         old = {"mode": "raid", "value": 22, "tier": "start", "day": "2026-11-01",
                "chat": 0, "acts": 0, "hist": [], "ending": ""}
         rec = affection.record_of({"affection": old})
-        self.assertEqual(rec["level"], 3)            # 22 ≥ l3 的门槛 20
+        # 22 ≥ l3 的门槛 20，老档再补一级 → l4；不补就是「进度被抹」，
+        # 老玩家回来发现身体上的关系退回去了（2026-11-04 用户拍板补一级）
+        self.assertEqual(rec["level"], 4)
         self.assertEqual(rec["arousal"], 0)
         self.assertEqual(rec["cross_n"], 0)
 
@@ -771,10 +773,26 @@ class MigrationTest(AffBase):
         self.assertEqual(rec["tier"], "full")
 
     def test_level_backfilled_from_value(self):
-        cases = [(0, 0), (7, 1), (20, 3), (33, 4), (47, 5)]
+        """老档按好感反推层级，再**补一级**——旧系统没有「距离」这个轴，
+        反推出来必然保守，不补就等于把走过的那段路抹了（2026-11-04 用户拍板）。"""
+        cases = [(0, 0), (7, 2), (20, 4), (33, 4), (47, 5)]
         for v, want in cases:
             rec = affection._migrate(self._legacy(value=v))
             self.assertEqual(rec["level"], want, v)
+
+    def test_bonus_never_reaches_top_level(self):
+        """33 分反推 lv4，补一级就到顶了——顶格是终点站，白送就没有下一步。"""
+        rec = affection._migrate(self._legacy(value=33))
+        self.assertEqual(rec["level"], affection.LEVEL_MAX - 1)
+        # 好感自己够到最高一级门票（40）的，自然就是 5
+        rec = affection._migrate(self._legacy(value=41))
+        self.assertEqual(rec["level"], affection.LEVEL_MAX)
+
+    def test_zero_progress_gets_no_bonus(self):
+        """一分没有的老档不补：那是真的还没开始，补一级等于白送。"""
+        rec = affection._migrate(self._legacy(value=0))
+        self.assertEqual(rec["level"], 0)
+        self.assertEqual(rec["ach"], [])
 
     def test_level_achievements_granted(self):
         """层级只升不降，反推出第 N 级 = 前 N 级都走过，可以确定地补。"""
@@ -808,7 +826,7 @@ class MigrationTest(AffBase):
         ent = persona._entry(key)
         ent["affection"] = self._legacy(value=33, tier="care")
         affection._save_entry(key, ent)
-        # 读一次：触发迁移并写回
+        # 读一次：触发迁移并写回（33 分反推第 3 级，老档再补一级到第 4 级）
         got = affection.record_of(affection._entry(key))
         self.assertEqual(got["level"], 4)
         self.assertEqual(got["value"], 33)

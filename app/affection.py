@@ -329,6 +329,18 @@ def _migrate(rec):
         for i, l in enumerate(levels_of()):
             if v >= int(l.get("gate") or 0):
                 lv = i
+        # 老玩家补偿（2026-11-04 用户拍板）：旧的单轴里根本没有「距离」这个
+        # 概念，按好感反推出来的层级天然偏保守——好感 20 的老档在旧系统里
+        # 身体早就到了（档位叫「开始凿」），新标尺一上却退回「还隔着一层」，
+        # 等于把走过的路抹了。凡是反推出至少走过一级的，一律再补一级（到顶为止）。
+        # 宁可让老玩家快一步，也不让他们觉得「我的进度没了」。
+        if lv >= 1:
+            lv = min(LEVEL_MAX, lv + 1)
+            # 但**不许白送到顶格**：「不分彼此」是终点站，靠补偿走到那里
+            # 就没有下一步可走了，往后聊什么都只是原地。要顶格得自己够到
+            # 最高一级的门票。
+            if lv >= LEVEL_MAX and v < int(level_cfg(LEVEL_MAX).get("gate") or 0):
+                lv = LEVEL_MAX - 1
         rec["level"] = lv
     if "arousal" not in rec:
         rec["arousal"] = 0

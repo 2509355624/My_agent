@@ -393,5 +393,47 @@ class LeaveClearTest(PersonaApiBase):
                          "清空后角色丢了：%r" % s.get("card"))
 
 
+class SessionAffTest(PersonaApiBase):
+    """刷新后气泡下面的状态条（2026-11-04）。
+
+    历史里没存每轮的 aff 快照，手机端一刷新整条状态就没了——而手机端没有
+    右栏，那是唯一能看到「到哪一步」的地方。所以后端把**当前**状态挂到
+    最后一条她的回复上：那条之后没再发生过任何事，它就是此刻。
+    """
+
+    def _line(self):
+        name = self.get("/api/persona/cards")["cards"][0]["name"]
+        self.post("/api/persona/switch", name=name)
+        return persona_api._active_key(persona_api._key(QQ))
+
+    def _seed(self, key):
+        persona._save_hist(key, [
+            {"role": "user", "content": "在吗"},
+            {"role": "assistant", "content": "嗯，在的。"},
+        ])
+
+    def test_last_assistant_message_carries_status(self):
+        key = self._line()
+        from app import affection
+        affection.set_mode(key, True)
+        self._seed(key)
+        msgs = self.get("/api/persona/session")["messages"]
+        self.assertTrue(msgs[-1].get("aff"), msgs)
+        self.assertIn("levelName", msgs[-1]["aff"])
+        self.assertIn("levelMax", msgs[-1]["aff"])
+        self.assertNotIn("aff", msgs[0])          # 只有最后一条挂，别每条都挂
+
+    def test_free_mode_has_no_status(self):
+        """自由模式下数值是封存的，别在气泡下面摆一条不动的进度。"""
+        key = self._line()
+        from app import affection
+        affection.set_mode(key, True)
+        affection.set_mode(key, False)
+        self._seed(key)
+        d = self.get("/api/persona/session")
+        self.assertFalse([m for m in d["messages"] if m.get("aff")])
+        self.assertIsNotNone(d.get("affection"))   # 档案本身还给，只是封存
+
+
 if __name__ == "__main__":
     unittest.main()
