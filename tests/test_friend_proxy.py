@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from unittest.mock import patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -44,10 +45,19 @@ class StreamForwardTest(unittest.TestCase):
     def setUp(self):
         self.client = friend_app.app.test_client()
         self.client.set_cookie("fr_sess", friend_auth.issue_cookie("2509355624"))
+        # 2026-11-03：网关改成「每个请求一个干净 session」（见
+        # `friend_app._new_session`）——共用全局 `requests.Session` 会把
+        # 上一个用户的 cookie 带给下一个用户（实测 B 能看到 A 的对话）。
+        # 所以这里要 patch `_new_session` 返回的对象的 `.get`，而不再是
+        # 模块级的 `_SESSION`。
+        self._sess = mock.MagicMock()
+        p = patch.object(friend_app, "_new_session", return_value=self._sess)
+        p.start()
+        self.addCleanup(p.stop)
 
     def _get(self, path, headers=None, resp=None):
         exp = resp or _FakeResp()
-        with patch.object(friend_app._SESSION, "get", return_value=exp) as m:
+        with patch.object(self._sess, "get", return_value=exp) as m:
             r = self.client.get(path, headers=headers or {})
         return r, exp, m
 
@@ -92,6 +102,48 @@ class StreamForwardTest(unittest.TestCase):
         anon = friend_app.app.test_client()
         r = anon.get("/api/gal/img/7?s=full")
         self.assertEqual(r.status_code, 401)
+
+
+class SessionIsolationTest(unittest.TestCase):
+    """每个转发请求必须用**独立** session（2026-11-03）。
+
+    共用 `requests.Session` 会让上游的 `Set-Cookie` 泄漏给下一个用户：
+    A 拿到的 `gs_id` 被 B 的请求自动带上，B 就变成了 A。
+    实测：A 聊一句，B 打开链接看到那 2 条消息。
+    """
+
+    def test_new_session_returns_distinct_objects(self):
+        a = friend_app._new_session()
+        b = friend_app._new_session()
+        self.assertIsNot(a, b)
+        self.assertIsNot(a.cookies, b.cookies)
+
+    def test_each_forward_creates_its_own_session(self):
+        """转发两次 → 建两个 session，不能复用同一个。"""
+        made = []
+
+        def _fake():
+            s = mock.MagicMock()
+            made.append(s)
+            return s
+
+        client = friend_app.app.test_client()
+        with patch.object(friend_app, "_new_session", side_effect=_fake):
+            for _ in range(2):
+                # 用 persona 这条（allow_guest=True）——它不会在登录检查那步
+                # 就返回，能真正走到建 session 的地方。
+                client.get("/api/persona/session")
+
+        self.assertEqual(len(made), 2, "两次转发应该建两个 session")
+        self.assertIsNot(made[0], made[1])
+
+    def test_session_is_closed_after_use(self):
+        """用完必须 close——否则连接一直挂着。"""
+        sess = mock.MagicMock()
+        with patch.object(friend_app, "_new_session", return_value=sess):
+            client = friend_app.app.test_client()
+            client.get("/api/persona/session")
+        self.assertTrue(sess.close.called, "转发完要关 session")
 
 
 class PageRoutingTest(unittest.TestCase):

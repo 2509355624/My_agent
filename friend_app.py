@@ -52,6 +52,31 @@ app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 _SESSION = requests.Session()
 _SESSION.trust_env = False          # 走系统代理只会绕远路
 
+
+def _new_session():
+    """每次请求一个干净 session。
+
+    ⚠️ 2026-11-03 事故：网关原来所有转发共用一个 `_SESSION`（全局
+    `requests.Session`）。`requests` 会**自动保存上游的 Set-Cookie 并在后续
+    请求里自动带上**——于是：
+
+        A 打开 /persona（无 cookie）→ 5174 签发 gs_id_A → 存进 _SESSION
+        B 打开同一个链接 → _SESSION 自动带上 gs_id_A → 5174 认为 B 就是 A
+        → **B 看到 A 的全部对话**
+
+    实测复现：A 聊一句，B 打开就看到那 2 条消息。
+
+    `requests` 的 cookie jar 是 session 级共享的，没法按请求隔离；
+    显式传 `headers["Cookie"]` 也压不住它自己那份（会被合并）。
+    所以**每个请求新建一个 session**，用完就 close，谁也别想蹭谁的 cookie。
+
+    代价是失去连接复用。转发请求量很小（群友页），这个开销可以接受；
+    图片流式那段另算，见 `_forward` 里的处理。
+    """
+    s = requests.Session()
+    s.trust_env = False
+    return s
+
 # ─── 限流 ────────────────────────────────────────────────
 #
 # 内存计数即可：进程重启就清零，没人会盯着重启窗口刷。
@@ -353,12 +378,15 @@ def _forward(prefix, sub, allow_guest=False):
     # 只对图片这么干：接口响应都很小，流式没有收益，反而多一层生成器。
     streaming = (request.method == "GET"
                  and (request.path or "").startswith("/api/gal/img/"))
+    # 每个请求一个干净 session，用完就关（见 `_new_session` 的说明）。
+    # 绝不能复用全局 session：那会把上一个用户的 cookie 带给下一个用户。
+    sess = _new_session()
     try:
         if request.method == "GET":
-            r = _SESSION.get(url, params=params, headers=headers,
-                             timeout=(10, 600), stream=streaming)
+            r = sess.get(url, params=params, headers=headers,
+                         timeout=(10, 600), stream=streaming)
         elif request.method == "DELETE":
-            r = _SESSION.delete(url, params=params, headers=headers, timeout=60)
+            r = sess.delete(url, params=params, headers=headers, timeout=60)
         elif request.mimetype == "multipart/form-data":
             # 上传作品集：文件必须原样转发（不能先读进内存再重编码——
             # 几百 MB 一次读进来会把 5175 顶爆）。requests 支持传 fileobj。
@@ -367,15 +395,16 @@ def _forward(prefix, sub, allow_guest=False):
             form = request.form.to_dict()
             if qq:
                 form["qq"] = qq
-            r = _SESSION.post(url, params=params, data=form, files=files,
-                              headers=headers, timeout=300)
+            r = sess.post(url, params=params, data=form, files=files,
+                          headers=headers, timeout=300)
         else:
             body = request.get_json(silent=True) or {}
             if qq:
                 body["qq"] = qq
-            r = _SESSION.post(url, params=params, json=body,
-                              headers=headers, timeout=60)
+            r = sess.post(url, params=params, json=body,
+                          headers=headers, timeout=60)
     except requests.RequestException as e:
+        sess.close()
         log.warning("转发失败 %s：%s", sub, e)
         return jsonify({"ok": False, "error": "后台没响应，稍后再试"}), 502
     ctype = r.headers.get("Content-Type") or "application/json"
@@ -388,6 +417,7 @@ def _forward(prefix, sub, allow_guest=False):
                         yield chunk
             finally:
                 r.close()          # 客户端中途取消也要把上游连接放掉
+                sess.close()       # 这个请求专属的 session 一起收掉
         resp = Response(stream_with_context(_pump()), status=r.status_code,
                         content_type=ctype)
         # 这几个头必须照抄：少了 Content-Length 浏览器不知道进度，
@@ -401,7 +431,9 @@ def _forward(prefix, sub, allow_guest=False):
     try:
         resp = Response(r.content, status=r.status_code, content_type=ctype)
     except Exception:
+        sess.close()
         return jsonify({"ok": False, "error": "后台返回看不懂"}), 502
+    sess.close()
 
     # 把 5174 下发的游客 cookie 转给浏览器（2026-11-03）。
     # 不转的话，游客每发一句话都被当成新游客，永远停在第一轮。
@@ -453,9 +485,11 @@ def proxy_gal(sub):
 def persona_page():
     """角色扮演页。未登录也放行——5174 那边会按游客处理。"""
     try:
-        r = _SESSION.get(BACKEND + "/persona",
-                         headers={"X-Friend-Token": friend_auth.secret()},
-                         timeout=(10, 30))
+        sess = _new_session()
+        r = sess.get(BACKEND + "/persona",
+                     headers={"X-Friend-Token": friend_auth.secret()},
+                     timeout=(10, 30))
+        sess.close()
         resp = Response(r.content, status=r.status_code,
                         content_type="text/html; charset=utf-8")
         return resp
