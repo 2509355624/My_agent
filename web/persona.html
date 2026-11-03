@@ -28,12 +28,20 @@
      WebView 太老不认。不认的话**整条声明被丢弃**，`.app` 没有高度，页面
      退回文档流 —— `.log` 的 `flex:1` 失效、一路撑高，`.composer` 被顶到
      视口外面，用户看到的就是「没有输入框」。 */
-  .app { display: grid; grid-template-columns: 230px 1fr 260px;
+  .app { display: flex;        /* 老浏览器兜底：Chromium < 57 没有 grid */
     position: fixed; top: 0; right: 0; bottom: 0; left: 0;
     height: 100vh; height: 100dvh;
     /* ④ 最后一道：手机软键盘弹出时视口会变矮，`vh` 不变、`dvh` 未必认，
        所以下面那段 JS 会量出真实可视高度写进 `--vh`。没跑 JS 就退回 dvh。 */
     height: var(--vh, 100dvh); }
+  /* flex 兜底的栏宽（grid 生效时被下面的 @supports 覆盖回 auto） */
+  .app > .side { flex: 0 0 230px; }
+  .app > .mid { flex: 1 1 auto; min-width: 0; }
+  .app > .side2 { flex: 0 0 260px; }
+  @supports (display: grid) {
+    .app { display: grid; grid-template-columns: 230px 1fr 260px; }
+    .app > .side, .app > .mid, .app > .side2 { flex: none; }
+  }
 
   /* ─── 左：角色 ─── */
   .side { border-right: 1px solid var(--border-soft); display: flex;
@@ -176,6 +184,23 @@
     .top .burger { display: inline-block; }
     .bubble-wrap { max-width: 88%; }
     .log { padding: 12px; }
+  }
+
+  /* ─── 老浏览器兜底：flex 的 `gap` 要 Chromium 84（2020-07）───────
+     QQ 内置浏览器走 X5 内核，版本常常低于这个线。不支持 `gap` 时元素会
+     **贴在一起**（不是崩溃，是挤成一坨），输入框、出图按钮都没了间距。
+
+     `@supports not (gap: 1rem)` 只在「认不得 gap」的浏览器里命中；
+     支持 gap 的新浏览器完全不进入这里，保持原来干净的写法。
+
+     用 `> * + *` 只给「第二个及以后」的元素加边距，第一个不加。 */
+  @supports not (gap: 1rem) {
+    .filters > * + * { margin-left: 6px; }
+    .top > * + * { margin-left: 10px; }
+    .tools > * + * { margin-left: 6px; }
+    .composer > * + * { margin-left: 8px; }
+    /* `.log` 是纵向排列，间距走 margin-top */
+    .log > * + * { margin-top: 12px; }
   }
 </style>
 </head>
