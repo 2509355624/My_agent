@@ -439,8 +439,10 @@ class InjectionTest(AffBase):
                "level": 2, "levelName": "说得上话", "ending": "", "applied": 3}
         line = affection.tail_line(res)
         self.assertIn("说得上话", line)
-        # 2026-11-04 用户改口要数字：正数**不带加号**，只有负数才带负号
-        self.assertIn("好感 22", line)
+        # 2026-11-04 用户改口要数字：正数**不带加号**，只有负数才带负号。
+        # 同日第四次修订：光有分数看不出「还有多远」，改成档内进度——
+        # l2 的下一档是 l3（门槛 20），22 已经够格但没升上来。
+        self.assertIn("亲密 够了 · 差一步", line)
         self.assertNotIn("+22", line)
 
     def test_negative_value_never_reads_as_arousal(self):
@@ -835,6 +837,63 @@ class LevelTest(AffBase):
         normal = next(t for t in cfg["tiers"] if t["key"] == "miffed")
         self.assertEqual(affection._tier_view(normal, 0)["name"], "小反感")
 
+    # ── 亲密度进度（2026-11-04 第四次修订）────────────────
+    # 用户报「只看到档名叫什么，不知道怎么触发后续剧情」。档名本身会变，
+    # 但看不出还差多远；所以补一个「这一档走到下一档」的进度。
+
+    def test_gauge_counts_within_the_current_level(self):
+        """分母是**下一档门槛**，不是总上限：l3(20) → l4(30)，21 分差的 9。"""
+        g = affection.intimacy_gauge(3, 21)
+        self.assertEqual((g["gate"], g["nextGate"]), (20, 30))
+        self.assertEqual(g["need"], 9)
+        self.assertEqual(g["pct"], 10)          # (21-20)/10
+        self.assertFalse(g["maxed"])
+        self.assertEqual(g["label"], "21/30 · 还差 9")
+
+    def test_gauge_says_ready_but_not_risen(self):
+        """分数够了、那场戏还没做成 → 「够了 · 差一步」。
+
+        这句话是防玩家把「分够了却不升」当成卡 bug（升一级要 beat + 门槛）。
+        不写 `30/30` 也不写 `50/12`：好感能涨到 50，等级却可能卡在 l1，
+        分子比分母大那句话就没法看了。
+        """
+        g = affection.intimacy_gauge(3, 30)
+        self.assertEqual(g["need"], 0)
+        self.assertEqual(g["pct"], 100)
+        self.assertFalse(g["maxed"])            # 还没升到 l4，别报「到顶」
+        self.assertEqual(g["label"], "够了 · 差一步")
+        # 溢出也走同一句
+        self.assertEqual(affection.intimacy_gauge(1, 50)["label"],
+                         "够了 · 差一步")
+
+    def test_gauge_at_max_level(self):
+        g = affection.intimacy_gauge(5, 42)
+        self.assertTrue(g["maxed"])
+        self.assertEqual(g["nextName"], "")
+        self.assertEqual(g["pct"], 100)
+        self.assertEqual(g["label"], "42 到顶")
+
+    def test_gauge_negative_has_no_denominator(self):
+        """负分不报「到下一档还差多少」——赎罪期看的是能不能回到 0。"""
+        g = affection.intimacy_gauge(2, -22)
+        self.assertEqual(g["label"], "-22")
+        self.assertEqual(g["pct"], 0)
+
+    def test_gauge_next_name_follows_card(self):
+        """下一档叫什么要跟着卡走（同一套叫法，别混进通用名）。"""
+        g = affection.intimacy_gauge(
+            2, 15, {"level_names": ["邻居", "邻居", "常来串门", "会留你吃饭"]})
+        self.assertEqual(g["nextName"], "会留你吃饭")
+
+    def test_gauge_survives_broken_config(self):
+        """配置里没有 levels 不能除零崩页面：退回纯数字，pct 夹在 0~100。"""
+        from unittest import mock
+        with mock.patch.object(affection, "levels_of", return_value=[]):
+            g = affection.intimacy_gauge(2, 15)
+        self.assertEqual(g["label"], "15")
+        self.assertGreaterEqual(g["pct"], 0)
+        self.assertLessEqual(g["pct"], 100)
+
 
 class ArousalViewTest(AffBase):
     """冲动的**展示层**（2026-11-04）：只出词，不出数字。"""
@@ -881,26 +940,32 @@ class ArousalViewTest(AffBase):
         self.assertEqual(rows[1], "气氛 有点乱")
 
     def test_tail_line_is_one_number_per_line(self):
-        """一行一个数值（2026-11-04 用户要求的排版）：好感 / 冲动。
+        """一行一个数值（2026-11-04 用户要求的排版）：亲密 / 冲动。
 
         关系进度不再是 `距离 3/5`（玩家看不懂 3/5 是在量什么），也不再写
-        「第 3 级 / 共 5 级」（级是行话）——只留关系叫什么，进度靠叫法自己变。
+        「第 3 级 / 共 5 级」（级是行话）。第四次修订又把它加回来了，但换成
+        「这一档走到下一档」的读法：`亲密 21/30 · 还差 9`——分母就是下一档
+        的门槛，玩家一眼能算出还要几分。
         """
         res = {"active": True, "level": 3, "levelMax": 5,
                "levelName": "说得进心里", "value": 21, "arousal": 42,
                "ending": ""}
         rows = affection.tail_line(res).splitlines()
         self.assertEqual(rows[0], "❤ 关系 说得进心里")
-        self.assertEqual(rows[1:], ["气氛 有点乱", "好感 21", "冲动 42"])
+        self.assertEqual(rows[1:], ["气氛 有点乱", "亲密 21/30 · 还差 9", "冲动 42"])
         # 关系和气氛之外的词都是行话，玩家读不懂，一律不出现
         self.assertNotIn("距离", affection.tail_line(res))
         self.assertNotIn("级", affection.tail_line(res))
 
     def test_tail_line_keeps_minus_sign(self):
-        """负数才带负号——掉分的时候玩家要看得见那个减号。"""
+        """负数才带负号——掉分的时候玩家要看得见那个减号。
+
+        负分时不报「到下一档还差多少」：赎罪期看的是能不能回到 0，
+        那个分母一点意义都没有。
+        """
         res = {"active": True, "level": 0, "levelName": "隔得很远",
                "value": -8, "arousal": 0, "ending": ""}
-        self.assertIn("好感 -8", affection.tail_line(res))
+        self.assertIn("亲密 -8", affection.tail_line(res))
 
     def test_status_exposes_three_axes(self):
         """网页右栏要一次画完三轴，status 必须一次给全。"""

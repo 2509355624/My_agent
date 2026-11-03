@@ -188,6 +188,11 @@
   .st .nums b { color: var(--text-dim); font-weight: 500;
     font-variant-numeric: tabular-nums; }
   .st .nums b.dn { color: var(--err); }
+  /* 亲密度那一行（2026-11-04）：档名只说明「现在在哪」，这行说明「还差多远」。
+     和 QQ 尾行同一套文案（后端 `_intimacy_label` 算好，前端不重算）。 */
+  .st .gauge { margin-top: 5px; font-size: 12px; color: var(--text-dim);
+    font-variant-numeric: tabular-nums; }
+  .st .gauge.dn { color: var(--err); }
   .bar { height: 3px; background: var(--bg-input); border-radius: 2px;
     margin-top: 6px; overflow: hidden; }
   .bar > i { display: block; height: 100%; background: var(--accent);
@@ -218,6 +223,10 @@
     line-height: 1.62; color: var(--text-mute); }
   .aff.cur .nums { display: block; }
   .aff .nums .n { display: flex; justify-content: space-between; gap: 12px; }
+  /* 亲密度那一行（2026-11-04）：和 QQ 尾行同句，数字用等宽好比较。 */
+  .aff .nums .g { color: var(--text-dim);
+    font-variant-numeric: tabular-nums; }
+  .aff .nums .g.dn { color: var(--err); }
   .aff .nums b { font-weight: 500; color: var(--text-dim);
     font-variant-numeric: tabular-nums; }
   .aff .nums b.dn { color: var(--err); }
@@ -377,15 +386,12 @@
       <div class="v" id="sNote" style="color:var(--text-dim)">—</div></div>
     <div class="st"><div class="k">轮次</div><div class="v" id="sTurns">0</div></div>
     <div class="st" id="affBox" style="display:none">
-      <div class="k" id="affModeK">好感</div>
+      <div class="k" id="affModeK">关系</div>
       <div class="v" id="sAff">—</div>
       <div class="bar affbar"><i id="affBar"></i></div>
-      <!-- 数值（2026-11-04）：条给位置，数字给「刚才涨了多少」的实感。
-           正数不带加号，负数才带负号。关系等级写在上面那行值里，
-           这里只放好感——同一个数字出现两次，玩家反而不知道该看哪个。 -->
-      <div class="nums">
-        <div>好感<b id="nAff">—</b></div>
-      </div>
+      <!-- 亲密度进度（2026-11-04）：bar 画的是**档内**进度，不只是「第几档」。
+           原来按 level/5 画，跨一整档都看不出来，玩家不知道还差多少。 -->
+      <div class="gauge" id="sGauge">—</div>
       <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
         <!-- 模式开关已挪到顶部 #btnMode（2026-11-03）：留在这里的话，没开过攻略
              模式就整块不显示，开关等于永远点不到。
@@ -667,9 +673,11 @@ function affLine(a) {
   // 关系行只留关系叫什么，说法和 QQ 尾行完全一致：
   //   ❤ 关系 家里的人
   //   气氛 平静
-  // 进度不靠数字——叫法本身会变（点头之交 → 说得上话 → 靠得很近）。
-  const lv = a.level | 0;
-  const max = a.levelMax || 5;
+  // 第四次修订（同日）：只给叫法还是不够——叫法本身会变（点头之交 → 说得上话
+  // → 靠得很近），但玩家看不出「还差多远」，用户原话「不知道怎么触发后续
+  // 剧情」。所以加回数字，但只加在 `.cur`（最新一条）上，且用**档内进度**
+  // `21/30`，不是后台刻度。
+  const g = a.intimacy || null;
 
   const rel = document.createElement("div");
   let s = "❤ 关系 " + (a.levelName || a.tierName || "");
@@ -685,19 +693,21 @@ function affLine(a) {
   if (m) mood.textContent = m;
   div.appendChild(mood);
 
-  // 关系条：和右栏同一条进度，只是缩小放到气泡下面。窄屏没有右栏，
-  // 这一条就是玩家唯一能看见「离下一步还有多远」的地方（宽度照样不给数字）。
-  div.appendChild(miniBar("rel", (lv / max) * 100));
+  // 关系条：和右栏同一条进度（都走 intimacy.pct），只是缩小放到气泡下面。
+  // 窄屏没有右栏，这一条就是玩家唯一能看见「离下一档还有多远」的地方。
+  div.appendChild(miniBar("rel", g ? (g.pct | 0) : 0));
   // 气氛条：只在有气氛时才画。它是温度计不是进度条，归零不代表坏事。
   if (a.arousal > 0) div.appendChild(miniBar("aro", a.arousal));
 
-  // 数值（2026-11-04 用户要的）：一行一个，正数不带加号、负数才带负号。
-  // 只在最新一条上展开（`.cur`，见 markLastAff）——十几条各带几行数字，
-  // 整屏都是数，反而看不出「刚才那一下涨了」。
-  // 关系等级已经写在首行，这里不再重复一行「距离」。
+  // 数值（2026-11-04 用户要的）：一行一个，只在最新一条上展开（`.cur`，
+  // 见 markLastAff）——十几条各带几行数字，整屏都是数，反而看不出
+  // 「刚才那一下涨了」。
   const nums = document.createElement("div");
   nums.className = "nums";
-  nums.appendChild(numLine("好感", a.value | 0));
+  const gline = document.createElement("div");
+  gline.className = "g" + ((a.value | 0) < 0 ? " dn" : "");
+  gline.textContent = "亲密 " + (g && g.label ? g.label : (a.value | 0));
+  nums.appendChild(gline);
   nums.appendChild(numLine("冲动", a.arousal | 0));
   div.appendChild(nums);
   return div;
@@ -795,28 +805,36 @@ function renderAff(a) {
   // 2026-11-04 三次修订：这里原来显示 `家里的人 · 正常关系`——「正常关系」是
   // **好感档名**，跟「关系」两个字撞车；后来改成 `第 3 级 / 共 5 级`，但「级」
   // 同样是行话。现在只报关系叫什么，说法和 QQ 尾行完全一致。
-  const lvMax = (a && a.levelMax) || 5;
   $("affModeK").textContent = raid ? "关系 · 攻略模式"
     : (a ? "关系 · 已封存" : "关系 · 未开启");
   $("sAff").textContent = !a ? "—"
     : (a.ending
        ? (a.ending === "graduated" ? "已毕业" : "已进局子")
        : (a.levelName || "—"));
-  // 进度条按「关系等级 0~5」走，不再按好感刻度——好感是后台分数，
-  // 摆出来玩家就会算「还差几分」，那就变成刷分了。
-  // 分母用后端给的 levelMax，别在 JS 里写死 5。
-  $("affBar").style.width =
-    Math.max(0, Math.min(100, ((a ? (a.level | 0) : 0) / lvMax) * 100)) + "%";
-  // 数值（2026-11-04）：好感可能是负的（带负号），冲动 0~100。
-  // 自由模式下数值是封存的，一律显示「—」而不是摆一堆不动的数。
+  // 数值（2026-11-04）：自由模式下数值是封存的，一律不给数，免得玩家对着
+  // 一堆不动的数以为还能涨。
+  const live = raid && !!a;
+  // 进度条按「这一档走到下一档」算（2026-11-04 第四次修订）：原来按
+  // level/5 画，跨一整档看不出变化，玩家不知道还差多少才升。pct 由后端
+  // `intimacy_gauge` 算好，前端只管画。满级 100，负分 0。
+  const g = (a && a.intimacy) || null;
+  $("affBar").style.width = (live && g ? (g.pct | 0) : 0) + "%";
+  // 亲密度那一行：和 QQ 尾行同一句话（亲密 21/30 · 还差 9）。
+  // 数字只在这里出现一次——以前「好感 21」和进度条并排，同一个数看两遍。
+  const gEl = $("sGauge");
+  if (gEl) {
+    const on = live && !!(g && g.label);
+    gEl.style.display = on ? "" : "none";
+    gEl.textContent = on ? ("亲密 " + g.label) : "";
+    gEl.className = "gauge" + ((a && (a.value | 0) < 0) ? " dn" : "");
+  }
+  // 冲动 0~100、好感可能是负的（带负号）。
   const setNum = (id, v) => {
     const el = $(id);
     if (!el) return;
     el.textContent = (v === null || v === undefined) ? "—" : String(v);
     el.className = (typeof v === "number" && v < 0) ? "dn" : "";
   };
-  const live = raid && !!a;
-  setNum("nAff", live ? (a.value | 0) : null);
   if (aro) {
     // 气氛条按 0~100 走：它本来就是「此刻有多热」，会自己降下去
     const ar = a ? (a.arousal | 0) : 0;
