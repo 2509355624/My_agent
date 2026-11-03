@@ -96,11 +96,11 @@ class GuestLimitTest(GuestBase):
         self.assertEqual(d["limit"], guest.GUEST_TURNS)
 
     def test_counting_is_by_assistant_replies(self):
-        """15 轮 = 15 条 AI 回复，不是 15 条消息。"""
+        """限额按 AI 回复条数算，不是按消息条数。"""
         uid = str(uuid_mod.uuid4())
         self._seed(uid, 3)                     # 3 回复 + 3 用户 = 6 条消息
         self.assertEqual(guest.turns_used(uid), 3)
-        self.assertEqual(guest.remaining(uid), 12)
+        self.assertEqual(guest.remaining(uid), guest.GUEST_TURNS - 3)
 
     def test_blocked_after_limit(self):
         uid = str(uuid_mod.uuid4())
