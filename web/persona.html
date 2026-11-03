@@ -439,8 +439,10 @@
       <button class="btn sm burger" id="btnBurger">☰</button>
       <a class="btn sm back" id="btnGallery" href="/gallery"
          title="回到画廊">← 画廊</a>
-      <button class="btn sm danger" id="btnReset" style="display:none"
-              title="把这条线的存档删掉：聊天记录、好感、成就一起清，角色卡保留。删了就找不回来，要手打确认句。">❗ 清空存档</button>
+      <!-- 「清空存档」不再放顶栏（2026-11-05 用户要求）：手机端塞在 ☰ 和
+           画廊之间太挤，而且它是个低频危险动作，混在导航里容易误点。
+           入口统一挪进右栏状态区（#affBox 里的 #btnAffRestart）——
+           手机展开右侧抽屉才看得到，桌面右栏常驻。 -->
       <span class="nm" id="curName">选一个角色</span>
       <span class="live" id="live" style="display:none">扮演中</span>
       <span class="sp"></span>
@@ -462,7 +464,7 @@
     </div>
   </main>
 
-  <aside class="side2">
+  <aside class="side2" id="side2">
     <!-- 状态面板放**最上面**（2026-11-04 深夜）：玩家开侧栏第一眼要看到的
          就是「我现在卡在哪、还差多少」。以前它在心情/状态/回忆/轮次下面，
          手机抽屉里得往下滑才能看见——那是最该看见的一块，却被挤到了最底下。 -->
@@ -1034,7 +1036,10 @@ function renderAff(a) {
     return;
   }
   const raid = isRaid(a);
-  if (box) box.style.display = raid ? "" : "none";
+  // #affBox 里现在只有「清空存档」这一个按钮（2026-11-05 顶栏那个删了），
+  // 它成了唯一入口——所以只要选了角色就显示，不再挑模式：自由模式下
+  // 也得有地方删存档，不能因为没开攻略就把删除入口藏起来。
+  if (box) box.style.display = (card ? "" : "none");
   if (panelBox) panelBox.style.display = "";
   // 面板数据是异步来的；这里先用上次的渲染一次（避免闪空白），
   // 然后立刻拉新的。第一次进来 PANEL 是 null，就等 refreshPanel 填。
@@ -1285,9 +1290,7 @@ function applyRoleUI() {
   // 游客：隐藏「新建角色」（那是站主才有的事）
   $("btnNew").style.display = guest ? "none" : "";
   $("btnLogin").style.display = guest ? "" : "none";
-  // 顶栏「清空存档」：只在真有一段关系可删时出现。没选角色就摆个红色按钮
-  // 在那儿，点开一层警告再跟人说「没什么可删的」，是纯粹的耍人。
-  $("btnReset").style.display = (guest || !card) ? "none" : "";
+  // 顶栏「清空存档」已删（2026-11-05）：入口挪进右栏 #affBox。
   // 用完 15 轮就锁输入框
   const done = guest && GUEST_LEFT <= 0;
   $("inp").disabled = done;
@@ -1551,7 +1554,6 @@ $("wipeOk").onclick = async () => {
   }
 };
 $("btnAffRestart").addEventListener("click", openWipe);
-$("btnReset").addEventListener("click", openWipe);
 $("btnBurger").onclick = openDrawer;
 // 遮罩两边都要能关：哪个开着就关哪个（同一次点击里可能两个都判一下，
 // 但 openDrawer / openStats 已经保证了不会同时开）。
