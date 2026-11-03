@@ -1054,7 +1054,30 @@ class SessionRunner:
         if turn is None:
             return
         if turn.reply.strip():
-            self._deliver(False, turn.reply, [], "", reply_to=reply_to)
+            # 攻略模式（2026-11-03）：回复尾部带一行关系状态，让玩家每轮
+            # 都有「她对我的态度」的体感；数值本身不藏，但档位才是重点。
+            out = turn.reply
+            aff = getattr(turn, "aff", None)
+            if aff and aff.get("active"):
+                tail = persona.affection.tail_line(aff)          # noqa: SLF001
+                if tail:
+                    out = out + "\n\n" + tail
+            self._deliver(False, out, [], "", reply_to=reply_to)
+            if aff and aff.get("just_ended"):
+                # 结局提示**单独一条气泡**：毕业祝贺 / 进局子劝退，告诉玩家
+                # 还有自由模式（封存续玩）和重新开始（归零重刷）两条路。
+                if aff["just_ended"] == "graduated":
+                    hint = ("🎓 恭喜毕业！你们的故事走到了圆满结局。"
+                            "发「自由模式」可以继续陪她聊，"
+                            "发「重新开始」从好感 0 重新攻略一遍。")
+                else:
+                    hint = ("🚨 攻略失败……她离开了。"
+                            "发「自由模式」可以无视好感继续聊，"
+                            "发「重新开始」重新攻略（记忆保留，好感归零）。")
+                try:
+                    self._deliver(False, hint, [], "")
+                except Exception:
+                    log.exception("结局提示发送失败 %s", self.session_key)
 
     def _comic_from_persona(self, card, key, reply_to="", sender_uin="",
                             extra=""):
@@ -1838,6 +1861,13 @@ class QQBot:
                     node_texts = persona.roster_nodes(site_url=site)
                 except Exception:                # noqa: BLE001
                     log.exception("生成规则卡片失败 %s", session_key)
+            elif persona.is_affection_query(text, addressed=(at_me or trigger.called(text))):
+                # 「好感」档案（2026-11-03）：两页卡片——档案页 + 最近变化页。
+                try:
+                    node_texts = persona.affection.detail_nodes(
+                        persona.resolve_line(persona_key))      # noqa: SLF001
+                except Exception:                # noqa: BLE001
+                    log.exception("生成好感档案失败 %s", session_key)
             try:
                 if node_texts:
                     nodes = [qq_api.node_segment(t, name=QQ_BOT_NAME, uin=0)

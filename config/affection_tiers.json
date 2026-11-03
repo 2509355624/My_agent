@@ -1,0 +1,20 @@
+{
+  "min": -50,
+  "max": 50,
+  "initial": 0,
+  "tiers": [
+    { "key": "full",   "min": 40,  "name": "随便凿",   "prompt": "" },
+    { "key": "care",   "min": 30,  "name": "凿+关心",  "prompt": "", "aftercare": true },
+    { "key": "start",  "min": 20,  "name": "开始凿",   "prompt": "" },
+    { "key": "touch",  "min": 10,  "name": "肢体接触", "prompt": "" },
+    { "key": "normal", "min": 0,   "name": "正常关系", "prompt": null },
+    { "key": "miffed", "min": -10, "name": "小反感",   "prompt": "" },
+    { "key": "cold",   "min": -20, "name": "爱答不理", "prompt": "" },
+    { "key": "forced", "min": -30, "name": "强制爱",   "prompt": "" },
+    { "key": "fallen", "min": -50, "name": "堕落模式", "prompt": "" }
+  ],
+  "endings": {
+    "graduated": { "at": 50,  "name": "毕业",   "prompt": "" },
+    "jail":      { "at": -50, "name": "进局子", "prompt": "" }
+  }
+}

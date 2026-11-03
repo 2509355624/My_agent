@@ -232,8 +232,18 @@ def get_session():
         "intensity": int(ent.get("intensity") or 0),
         "turns": int(ent.get("turns") or 0),
         "messages": msgs,
+        "affection": _aff_status(key),
         "role": "member",
     })
+
+
+def _aff_status(key):
+    """这条线的好感状态（给网页状态条）；没开过攻略返回 None。"""
+    try:
+        from app import affection
+        return affection.status(key)
+    except Exception:                                     # noqa: BLE001
+        return None
 
 
 def _guest_session(uid, token):
@@ -362,7 +372,7 @@ def chat():
     turn = persona.run_turn(key, text, "private", "")
     if not turn.reply.strip():
         return jsonify({"ok": False, "error": "她这轮没说话"}), 502
-    return jsonify({
+    out = {
         "ok": True,
         "reply": turn.reply,
         "scene": turn.scene,
@@ -370,7 +380,12 @@ def chat():
         "intensity": turn.intensity,
         "state": turn.state,
         "role": "member",
-    })
+    }
+    # 攻略模式（2026-11-03）：把这一轮的结算带给前端——AI 回复下方的
+    # 状态条直接用它渲染。自由模式 turn.aff 是 None，不带这个字段。
+    if getattr(turn, "aff", None):
+        out["affection"] = turn.aff
+    return jsonify(out)
 
 
 def _guest_chat(text, uid, token):
@@ -427,6 +442,52 @@ def _guest_chat(text, uid, token):
     })
     _attach_guest_cookie(resp, token)
     return resp
+
+
+@bp.route("/api/persona/affection", methods=["POST"])
+def affection_mode():
+    """攻略模式开关。body: {mode: "raid" | "free"}
+
+    同一条线在 QQ 端发「攻略模式 / 自由模式」是同一套状态（affection 模块），
+    两边切来切去互不冲突。没在演谁时返回 400。
+    """
+    from app import affection
+    body = request.get_json(silent=True) or {}
+    mode = str(body.get("mode") or "").strip().lower()
+    if mode not in ("raid", "free"):
+        return jsonify({"ok": False, "error": "mode 要是 raid 或 free"}), 400
+
+    role, who, token = _who()
+    if role == "guest":
+        resp = jsonify({"ok": False, "error": "体验版没有攻略模式。"})
+        resp.status_code = 403
+        _attach_guest_cookie(resp, token)
+        return resp
+
+    key = _active_key(_key(who))
+    reply = affection.set_mode(key, raid=(mode == "raid"))
+    if reply is None:
+        return jsonify({"ok": False, "error": "先选一个角色再开攻略模式"}), 400
+    return jsonify({"ok": True, "reply": reply,
+                    "affection": affection.status(key)})
+
+
+@bp.route("/api/persona/affection/restart", methods=["POST"])
+def affection_restart():
+    """「重新开始」：好感归零、结局解除；聊天记忆保留。"""
+    from app import affection
+    role, who, token = _who()
+    if role == "guest":
+        resp = jsonify({"ok": False, "error": "体验版没有攻略模式。"})
+        resp.status_code = 403
+        _attach_guest_cookie(resp, token)
+        return resp
+    key = _active_key(_key(who))
+    reply = affection.restart(key)
+    if reply is None:
+        return jsonify({"ok": False, "error": "还没开过攻略模式"}), 400
+    return jsonify({"ok": True, "reply": reply,
+                    "affection": affection.status(key)})
 
 
 @bp.route("/api/persona/shot", methods=["POST"])

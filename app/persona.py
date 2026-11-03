@@ -54,7 +54,7 @@ import re
 import threading
 import time
 
-from app import llm, trigger
+from app import affection, llm, trigger
 from app.config import BASE_DIR, QQ_AGENT_ID, QQ_BOT_NAME
 
 log = logging.getLogger("persona")
@@ -67,7 +67,8 @@ log = logging.getLogger("persona")
 # 身上的客观状态（穿着、位置、有没有肢体接触）。用 defaults 而不是新加一个
 # 类：老调用方读 `.reply` / `.scene` 完全不受影响。
 Turn = collections.namedtuple(
-    "Turn", "reply scene mood intensity state", defaults=("", 0, ""))
+    "Turn", "reply scene mood intensity state aff",
+    defaults=("", 0, "", None))
 
 # 情绪词表（自由模式）。模型只能从这十个里挑，多一个字都不认——不限定的话
 # 它会每轮自己发明一个词，代码就没法按强度做出图判断了。
@@ -457,6 +458,15 @@ EXIT_WORDS = ("出戏",)
 # 与 `#出戏` 的区别：出戏是变回生图机器人，清空是还演她、但忘了之前的一切
 # （2026-11-02：用户测试时发现聊多了接不上，需要从头来一遍）。
 CLEAR_WORDS = ("清空", "重置", "重开", "从头开始")
+
+# 攻略模式（2026-11-03）：好感度数值层。判据和上面一样——**整条消息**才认。
+# 「攻略模式」开（有封存就解冻）、「自由模式」关（数值封存不清零）、
+# 「好感」查档案、「重新开始」数值归零但聊天记忆保留（和「重开」的区别：
+# 重开连记忆一起清，重新开始只清数值——玩崩了想缓一缓用的）。
+RAID_WORDS = ("攻略模式",)
+FREE_WORDS = ("自由模式",)
+AFF_WORDS = ("好感", "好感度")
+RESTART_WORDS = ("重新开始",)
 
 _SAFE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
@@ -1006,6 +1016,11 @@ def clear(session_key):
     if not isinstance(ent, dict):
         return "现在没有在演谁，没什么可清的。发「#角色名」挑一个吧。"
     ent.update({"note": "", "turns": 0, "mood": "", "intensity": 0, "state": ""})
+    # 记忆清了，好感也该从头来：数值/档位/结局归零，**模式保留**（开着攻略
+    # 的清完还是攻略模式，从 0 开始重新刷）。
+    if isinstance(ent.get("affection"), dict):
+        rec = ent["affection"]
+        ent["affection"] = dict(affection._blank(), mode=rec.get("mode"))  # noqa: SLF001
     state = _load_state()
     state[line] = ent
     if line != session_key:
@@ -1183,6 +1198,15 @@ def roster_text(site_url=""):
         "- 「清空」 —— 忘掉之前发生过的一切，角色不变，从今天重新认识。",
         "- 「角色扮演」 —— 就是这条，忘了规则随时再看一遍。",
         "",
+        "## 攻略模式（好感度玩法）",
+        "",
+        "- 单独发「攻略模式」开启：她会按你们的关系阶段改变态度，聊天慢慢涨，"
+        "剧情里的照料、付出、解围涨得快。",
+        "- 单独发「好感」查档案：现在多少、最近因为什么涨的掉的。",
+        "- 好感攒到 +50 是毕业，掉到 -50 会进局子——都是结局。",
+        "- 玩崩了可以发「自由模式」封存好感接着聊，想重刷就发「重新开始」",
+        "（记忆保留，好感归零）。",
+        "",
         "（这些**都不用加 `#`**，单独发就够了。）",
         "",
     ]
@@ -1316,6 +1340,18 @@ def is_roster_request(text, addressed=False):
     return t[1:].strip() in LIST_WORDS
 
 
+def is_affection_query(text, addressed=False):
+    """这条消息是不是在查「好感」档案（要用聊天记录卡片发）。
+
+    同 `is_roster_request` 的道理：`handle_command` 只能回一段文字，
+    调用方需要知道「这段要不要拆成卡片节点」。带不带 `#` 都认。
+    """
+    t = _strip_prefix(text, addressed)
+    if t.startswith("#"):
+        t = t[1:].strip()
+    return t in AFF_WORDS
+
+
 def _strip_prefix(text, addressed=False):
     """把开头的 `@某人` / 「大大怪」剥掉（最多三次，叠着喊的也认）。
 
@@ -1390,6 +1426,21 @@ def handle_command(session_key, text, addressed=False):
         if not _entry(session_key):
             return None                     # 没在演时不算命令，免得误触
         return clear(session_key)
+
+    # ── 攻略模式命令（2026-11-03）────────────────────────
+    # 只在私聊认：群聊不扮演（上面群聊分支会拦），而且「好感」这种词在
+    # 群聊日常里太常见，整条消息才认已经够了，私聊再放行。
+    # 词表见文件头 RAID_WORDS 一带；细节在 app/affection.py。
+    if str(session_key or "").startswith("private"):
+        line = resolve_line(session_key)
+        if body in RAID_WORDS:
+            return affection.set_mode(line, True)
+        if body in FREE_WORDS:
+            return affection.set_mode(line, False)
+        if body in RESTART_WORDS:
+            return affection.restart(line)
+        if body in AFF_WORDS:
+            return affection.detail_text(line)
 
     # `角色扮演 青梅竹马` / `角色扮演，你是我的白色小兔妹妹`：
     # 剥掉命令词，剩下那段先当卡名找；找不到再看整条是不是卡名。
@@ -1735,6 +1786,87 @@ def _parse_json_loose(raw):
     return None
 
 
+# ── 攻略模式的第一段（2026-11-03）────────────────────
+#
+# 自由模式的第一段只判意图；攻略模式下同一次调用**顺带打分**：
+# 意图（决定亲密指导拼不拼）+ 关系影响（delta / 剧情还是聊天 / 原因）。
+# 一次调用干两件事，不多烧一轮。
+#
+# 评分标准（rubric）只是**指导不是硬规则**——斟酌权在模型。代码侧只做
+# 夹上限、每日递减、降档滞回（见 `affection.settle`）。
+#
+# 「空口宣称的大事按聊天力度给分」这条是防刷分的核心：不然群友一句
+# 「我把她救回家了」白嫖 +15。有没有铺垫和细节，模型读上下文能看出来。
+_SCORE_PROMPT = """判断下面这句话**在干什么**，并给这句话对你们关系的影响打分。只输出一个 JSON 对象，不要解释。
+
+{
+  "intent": "intimate | joke | literal | insult | neutral",
+  "delta": 0,
+  "turn_type": "chat | action",
+  "reason": "不超过15个字",
+  "note": "不超过15个字"
+}
+
+intent（这句话在干什么）：
+- intimate —— 亲密/求欢：想亲近、调情、要求身体接触或性
+- joke —— 玩笑/逗你：拿对方开玩笑、威胁着玩、故意说离谱的话
+- literal —— 字面请求：真的要求做某件事、问某个问题
+- insult —— 冒犯：贬低、辱骂、羞辱对方
+- neutral —— 普通对话：闲聊、叙述、没有明确指向
+
+delta（整数，她对他的好感这轮变化多少）：
+- 普通聊天、日常问候、逗乐：-2 ~ +3
+- 真诚的关心、记得她说过的事、让她舒服：+3 ~ +6
+- 照料/付出/解围（有铺垫、有细节的实际行动）：+6 ~ +12
+- 冒险或付出代价的守护：+10 ~ +15
+- 冒犯、油腻、让她不适：-3 ~ -8
+- 严重的伤害、背叛：-8 ~ -15
+
+turn_type（这轮是什么）：
+- chat —— 只是说话。**空口宣称的大事（比如没头没尾一句「我把你救回家了」）没有铺垫和细节，按 chat 力度给分**
+- action —— 叙述里有具体的行动、付出、照料，他真的在为她做事
+
+当前关系：好感 %(value)+d，阶段【%(tier)s】
+%(recent)s
+角色是谁：%(who)s
+他说的：%(said)s"""
+
+
+def _judge_intent_scored(card, said, state="", line_key=""):
+    """攻略模式的第一段：意图 + 关系打分。返回 `(intent, note, score)`。
+
+    判断失败时 `(None, "", None)`——退化成没判过（跟 `_judge_intent` 同一
+    口径），**打不出分就按 +0 结算**，不让整轮回不了话。
+    """
+    who = str((card or {}).get("name") or "对方")
+    ctx = affection.scoring_ctx(line_key) or {"value": 0, "tier": "正常关系",
+                                              "recent": "（暂无记录）"}
+    prompt = _SCORE_PROMPT % {
+        "value": ctx["value"],
+        "tier": ctx["tier"],
+        "recent": ctx["recent"],
+        "who": who + ("（" + state + "）" if state else ""),
+        "said": str(said or "")[:200],
+    }
+    try:
+        raw = llm.call_llm([{"role": "user", "content": prompt}], timeout=20)
+    except Exception:                            # noqa: BLE001
+        log.warning("攻略模式打分调用失败，按 0 分走")
+        return None, "", None
+    d = _parse_json_loose(raw)
+    if not isinstance(d, dict):
+        log.info("攻略模式没交 JSON，按 0 分走：%r", str(raw or "")[:80])
+        return None, "", None
+    intent = str(d.get("intent") or "").strip().lower()
+    if intent not in INTENTS:
+        intent = None
+    note = str(d.get("note") or "").strip()[:30]
+    score = {"delta": d.get("delta"),
+             "turn_type": d.get("turn_type") or "chat",
+             "reason": d.get("reason") or ""}
+    return intent, note, score
+
+
 # 意图 → 主提示词里那行注入。没有这一条对应项就什么都不加。
 _INTENT_HINT = {
     "intimate": ("对方在求欢、要亲近。", "顺着接，可以进入亲密描写；"
@@ -1807,7 +1939,14 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     prev_state = str(ent.get("state") or "")
 
     # 第一段：这句话在干什么。**用原始文本判**，不带「张三：」这种前缀。
-    intent, inote = _judge_intent(card, text, prev_state)
+    # 攻略模式（2026-11-03）：同一次调用顺带给关系打分，不多烧一轮。
+    raid = affection.is_raid(key)
+    score = None
+    if raid:
+        intent, inote, score = _judge_intent_scored(card, text, prev_state,
+                                                    line_key=key)
+    else:
+        intent, inote = _judge_intent(card, text, prev_state)
     # 亲密场景那 1,284 字只在该用的时候拼（2026-11-03）。
     # 判不出来（intent 为空）时按 True 走——宁可多发，不要因为分类失败让
     # 亲密场景写得干巴巴。`neutral` 也带上，它随时可能拐到亲密去。
@@ -1817,6 +1956,14 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     block = _intent_block(intent, inote)
     if block:
         head = head + "\n\n" + block
+    # 攻略模式结算（2026-11-03）：分数落账 → 按档位往主提示词里注入关系块。
+    # 没打出分（score 为 None）也照走 settle——按 +0 记账，档位注入照常。
+    aff_res = None
+    if raid:
+        aff_res = affection.settle(key, score)
+        blk = affection.injection_block(aff_res)
+        if blk:
+            head = head + "\n\n" + blk
     hist = trim(_load_hist(key))
 
     # 群里带上说话人，模型才知道是谁在说话（同 qq_bot 正文前缀的做法）；
@@ -1866,7 +2013,7 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     _save_mood(key, mood, intensity, state, prev_state)
 
     _bump_turn(key)
-    return Turn(reply, scene, mood, intensity, state)
+    return Turn(reply, scene, mood, intensity, state, aff_res)
 
 
 def _ensure_meta(raw, scene, mood, intensity, state):
