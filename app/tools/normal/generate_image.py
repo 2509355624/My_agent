@@ -1149,6 +1149,11 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 不传的话前缀永远按**模板**默认（8 号开着）拼，群友在预设里关掉 8 号
     # 之后 LoRA 关了、`@//neoanime/` 那段还留在提示词里空喊。
     # preset_slots 为 None（非预设路径）时照旧读模板，行为不变。
+    # moss 系先洗干净（2026-11-04）：QQ 侧通用写法里的质量词 / 权重语法 /
+    # 打码词对 moss 是纯噪音，`score_7` 这种还会挤掉前段本该写「谁在做什么」
+    # 的注意力。判据在 `moss_prompt.is_moss`，非 moss 渠道原样返回。
+    from app import moss_prompt
+    prompt = moss_prompt.clean(skill, prompt)
     prompt = lora_slots.nai5_prefix(skill, preset_slots) + prompt
     workflow_str = json.dumps(workflow)
     workflow = apply_prompt_placeholders(workflow_str, prompt, seed)
