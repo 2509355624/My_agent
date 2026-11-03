@@ -138,11 +138,24 @@ class SettleTest(AffBase):
         self.assertEqual(free.get("mode"), "free")
 
     def test_chat_diminishing_returns(self):
-        """纯聊天当天递减：+3 → +2 → +1 → +1 → 0。防甜言蜜语刷满。"""
+        """纯聊天递减但**不会归零**：3 2 1 1 之后每 3 轮补 1 分。
+
+        2026-11-03 群友实测：原来第 5 轮起恒为 0，聊 33 轮只涨 6 分，
+        玩家以为系统坏了。现在改成「一直聊一直能涨，只是越来越慢」。
+        """
         key = self._raid()
-        for expect in (3, 2, 1, 1, 0, 0):
+        for expect in (3, 2, 1, 1, 1, 0, 0, 1, 0, 0, 1):
             res = affection.settle(key, {"delta": 5, "turn_type": "chat"})
             self.assertEqual(res["applied"], expect)
+
+    def test_one_day_of_chat_can_advance_a_tier(self):
+        """聊满一天（30 轮）至少够升一档（10 分），又不能一天冲到高亲密。"""
+        key = self._raid()
+        for _ in range(30):
+            affection.settle(key, {"delta": 5, "turn_type": "chat"})
+        value = affection.status(key)["value"]
+        self.assertGreaterEqual(value, 10)     # 有进度感：至少升一档
+        self.assertLess(value, 20)             # 但不靠纯聊天一天到「开始凿」
 
     def test_action_bypasses_diminishing_but_has_round_cap(self):
         key = self._raid()
