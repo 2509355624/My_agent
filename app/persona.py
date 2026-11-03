@@ -980,6 +980,34 @@ def _match_card_in_text(text):
     return hits[0][2]
 
 
+def _group_redirect(card):
+    """群里不让开演，回一段说明 + 去处。
+
+    2026-11-03 用户反馈「群里其他人能看到别人的聊天内容」——状态隔离没坏，
+    坏的是**群聊内容本来就公开**。所以群里不再实际扮演。
+    """
+    lines = [
+        "这里人多，**不方便演**——我说的话一屋子人都看得到。",
+        "",
+        "想跟她单独聊，两个地方：",
+        "",
+        "1. **私聊我**，发「%s」就能开始" % card["name"],
+    ]
+    try:
+        from app import friend_site
+        site = friend_site.url()
+    except Exception:                              # noqa: BLE001
+        site = ""
+    if site:
+        lines.append("2. **网页上玩**（能点按钮出图、看她的状态）：")
+        lines.append("   %s/persona" % site.rstrip("/"))
+    else:
+        lines.append("2. **网页上玩**：找我主人要个地址")
+    lines.append("")
+    lines.append("（群里发「角色扮演」还是能看到完整规则的。）")
+    return "\n".join(lines)
+
+
 def is_roster_request(text, addressed=False):
     """这条消息是不是在要「规则 / 名单」（`#角色扮演` / `#人设列表`）。
 
@@ -1087,6 +1115,21 @@ def handle_command(session_key, text, addressed=False):
         card = find_card(body)
     if card is None:
         return None
+
+    # ── 群聊不实际扮演，只做引导（2026-11-03 用户反馈）────────────
+    #
+    # 起因：群友在群里跟机器人聊，**其他群成员能直接看到全部内容**。
+    # 状态隔离（`_persona_key`）一直是好的，隔离的是记忆和好感；但机器人
+    # 发到群里的消息本来就是全群可见，这是 QQ 群聊的固有属性，压不住。
+    #
+    # 用户玩的又是亲密内容，公开出去不合适。所以群里不再开演，改成把话
+    # 说清楚 + 给私聊/网页的去处。
+    #
+    # 群里发「角色扮演」看规则仍然允许（规则本身不敏感），只有真正「切进
+    # 某个角色」这一步被拦下来。
+    if str(session_key or "").startswith("group_"):
+        return _group_redirect(card)
+
     was = active_card(session_key)
     switch(session_key, card)
     if was and was["id"] == card["id"]:
@@ -1378,6 +1421,22 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     见 `_persona_key`——不隔离的话 A 刷的好感会算到 B 头上。私聊传不传都行。
     """
     key = _persona_key(session_key, sender_uin)
+
+    # ── 群聊不演（2026-11-03 用户反馈）──────────────────────────
+    #
+    # 用户发现「群里其他人能看到别人的聊天内容」。状态隔离一直是好的，
+    # 问题在**群聊内容本来就公开**——机器人发的消息全群可见，隔离记忆
+    # 没用。所以群聊这条彻底关掉实际扮演。
+    #
+    # 返回空的 Turn：调用方不会发任何东西（`_run_persona_turn` 里
+    # `turn.reply.strip()` 为空就不发）。群里想玩的人会先收到
+    # `handle_command` 的引导语，不会莫名其妙等一个没反应。
+    #
+    # 存量的 `group_<群号>_<QQ号>` 扮演态自然失效——那条线再也不会被激活。
+    if str(session_key or "").startswith("group_"):
+        log.info("群聊不扮演，已忽略：%s", key)
+        return Turn("", "")
+
     card = active_card(key)
     if card is None:
         return Turn("", "")
