@@ -56,20 +56,34 @@ MAX_V = 100             # 2026-11-04 晚从 50 抬到 100：50 处只放「在�
 INITIAL_V = 0
 ROUND_CAP = 15          # 单轮加分绝对值上限（防一句话刷满）
 
-# ── 距离层级（2026-11-04）────────────────────────────────
-# 「你们到哪一步了」。0~5，描述**亲疏**不描述**身份**——这样一张骨科卡
-# 可以从「妹妹」这个起点开始，不用被「陌生人」框死。卡片可用
-# `start_level` 指定起点、`level_names` 覆盖 6 级的叫法。
-LEVEL_MAX = 5
-AROUSAL_MAX = 100       # 冲动：此刻被激起的程度，一次性机会
-AROUSAL_DECAY = 15      # 每轮回落多少（回合结束就凉）
-# 兴奋度（2026-11-04 晚，用户要的第二根轴）：**只在进行那个行为的时候**有意义。
-# 和冲动的分工——
-#   冲动是「她此刻想不想」，每轮回落，决定她接不接得住、会不会主动；
-#   兴奋度是「正在做的时候，她到什么程度了」，只在场景内累积，场景一停就归零。
-# 两者都不进好感结算，只影响她这一轮怎么演。
+# ── 身体进度（2026-11-04 深夜改版）──────────────────────
+# 「你们到哪一步了」。0~6 级，**每一级的名字就是这一级能做什么**：
+# 还没碰过 / 能碰到了 / 能抱了 / 亲过了 / 碰过了 / 做过了 / 要不够。
+#
+# 改名的理由：原来的名字（隔得很远 / 点头之交 / 说得上话 / 说得进心里 /
+# 靠得很近 / 不分彼此）是**社交距离量表**，描述「多熟」不描述「能做什么」。
+# 玩家站在第 3 级，看不出这一级解锁了什么、下一级要做什么，只能靠猜。
+#
+# 为什么从 5 级加到 6 级：用户指出「亲过了」和「做过了」之间少了一整级——
+# 脱光、亲乳头、手指、用嘴，这些**都不是做爱但都过线了**，塞进任何一边
+# 都会让那一级的文案自相矛盾。现在 l4「碰过了」专门放这些。
+LEVEL_MAX = 6
+AROUSAL_MAX = 100       # 冲动值：她此刻有多想，持续性气氛值
+AROUSAL_DECAY = 15      # 每轮回落多少（不去拱它就会凉）
+# ── 冲动与高潮的分工（2026-11-04 深夜）─────────────────
+# 用户把这两根轴的语义彻底定死了：
+#   冲动值 = 「她此刻想不想做、想多狠」。**持续性**气氛值，靠喝酒/独处/
+#            触碰/情话/深夜拱起来，每轮自然回落。它和羁绊**一起**决定
+#            她接不接得住（见 `_can_cross`）——这是双轴门槛的核心。
+#   高潮值 = 「这一场里她到哪了」。只在场景内累积，按**这一轮动作的强度**
+#            给基数（前戏/手指/嘴/进入/抽送/加重），到 100 触发一次高潮、
+#            回落到余韵值，单场最多 5 次，用满强制收场。
+# 旧名 `excite`/`兴奋度` 保留成字段名兼容老存档，但对外一律叫「高潮值」。
 EXCITE_MAX = 100
 EXCITE_START = 15       # 刚进入场景时的起步值：不是从 0 开始，她已经有反应了
+ORGASM_AFTER = 55       # 高潮之后的余韵值：不是回 0，是回到还想要的半路
+ORGASM_MAX = 5          # 单场最多几次。用满强制收场——不只是她受不了，
+                        # 更是再写下去就是水词了，第 6 次不会比第 5 次好看
 # 越界被拒的代价，按当晚第几次递增（不冻结、不降级——自己哄回来）
 CROSS_PENALTY = (3, 6, 10)
 CROSS_HARD = 20         # 她说了不要还继续：一次就够狠
@@ -131,30 +145,42 @@ DEFAULT_CONFIG = {
     "milestones": {
         "together": {"at": 50, "name": "在一起", "prompt": ""},
     },
-    # 冲动档位兜底（2026-11-04）：给玩家看的是**词**，不是 0~100 的数字。
-    # 数字一露，玩家就开始算「再来两杯酒就能过线」——那就不叫气氛了。
+    # 冲动档位兜底（2026-11-04 深夜改版）：五档，词义从「心里乱」改成
+    # **「想不想做」**。旧的四档（平静/有点乱/很乱/不设防）描述的是心绪，
+    # 玩家看不出「她现在能不能推到」，也看不出离门槛还差多少。
     "arousal_levels": [
-        {"key": "open",  "min": 75, "name": "不设防", "short": "她这会儿没在拦。"},
-        {"key": "messy", "min": 50, "name": "很乱",   "short": "她心里有点乱，话会绕。"},
-        {"key": "warm",  "min": 25, "name": "有点乱", "short": "她比刚才软了一点。"},
-        {"key": "calm",  "min": 0,  "name": "平静",   "short": "她跟平时一样。"},
+        {"key": "burning", "min": 90, "name": "忍不住了", "short": "她这会儿自己会动手。"},
+        {"key": "hot",     "min": 70, "name": "很想",     "short": "她眼神已经不一样了。"},
+        {"key": "warm",    "min": 45, "name": "想",       "short": "她在往你这边靠。"},
+        {"key": "mild",    "min": 20, "name": "有点想",   "short": "她比刚才近了半步。"},
+        {"key": "calm",    "min": 0,  "name": "没什么",   "short": "她跟平时一样。"},
     ],
-    # 兴奋度兜底（2026-11-04 晚）：只在场景内出现，0 时不显示。
-    # 词义是「进行中她已经到哪了」，和冲动的「想不想」不是一回事。
-    "excite_levels": [
-        {"key": "high", "min": 75, "name": "快不行了",   "prompt": ""},
-        {"key": "mid",  "min": 50, "name": "跟着你走",   "prompt": ""},
-        {"key": "low",  "min": 25, "name": "有点发紧",   "prompt": ""},
-        {"key": "zero", "min": 0,  "name": "还没开始",   "prompt": ""},
+    # 高潮值兜底（2026-11-04 深夜）：旧名「兴奋度」，五档按**身体信号**排。
+    # 旧四档（还没开始/有点发紧/跟着你走/快不行了）描述的是「状态」，
+    # 新五档描述的是「到她身上发生到什么程度了」，写文时可以直接照着落笔。
+    "orgasm_levels": [
+        {"key": "over",   "min": 90, "name": "到了",     "prompt": ""},
+        {"key": "edge",   "min": 75, "name": "快要",     "prompt": ""},
+        {"key": "rising", "min": 55, "name": "上来了",   "prompt": ""},
+        {"key": "awake",  "min": 30, "name": "有反应了", "prompt": ""},
+        {"key": "cold",   "min": 0,  "name": "还没起来", "prompt": ""},
     ],
-    # 距离层级兜底：config 里没有 intimacy 时用这套中性名，机制不因缺配置停摆
+    "orgasm_hints": {
+        "start": EXCITE_START, "max": EXCITE_MAX,
+        "max_orgasm": ORGASM_MAX, "after": ORGASM_AFTER,
+        "base": {"foreplay": 12, "hand": 22, "mouth": 28,
+                 "enter": 25, "thrust": 32, "intense": 40, "stop": -25},
+    },
+    # 身体进度兜底（2026-11-04 深夜）：名字 = 这一级能做什么。
+    # `arousal_gate` 是新增的第二道门槛——见 `_can_cross`。
     "intimacy": {"levels": [
-        {"key": "l0", "name": "隔得很远",     "gate": 0,  "guard": 50, "prompt": ""},
-        {"key": "l1", "name": "点头之交",     "gate": 5,  "guard": 46, "prompt": ""},
-        {"key": "l2", "name": "说得上话",     "gate": 12, "guard": 40, "prompt": ""},
-        {"key": "l3", "name": "说得进心里",   "gate": 20, "guard": 34, "prompt": ""},
-        {"key": "l4", "name": "靠得很近",     "gate": 30, "guard": 25, "prompt": ""},
-        {"key": "l5", "name": "不分彼此",     "gate": 40, "guard": 15, "prompt": ""},
+        {"key": "l0", "name": "还没碰过", "gate": 0,  "arousal_gate": 0,  "guard": 50, "prompt": ""},
+        {"key": "l1", "name": "能碰到了", "gate": 10, "arousal_gate": 20, "guard": 46, "prompt": ""},
+        {"key": "l2", "name": "能抱了",   "gate": 20, "arousal_gate": 35, "guard": 40, "prompt": ""},
+        {"key": "l3", "name": "亲过了",   "gate": 30, "arousal_gate": 50, "guard": 34, "prompt": ""},
+        {"key": "l4", "name": "碰过了",   "gate": 40, "arousal_gate": 65, "guard": 28, "prompt": ""},
+        {"key": "l5", "name": "做过了",   "gate": 50, "arousal_gate": 77, "guard": 20, "prompt": ""},
+        {"key": "l6", "name": "要不够",   "gate": 65, "arousal_gate": 88, "guard": 14, "prompt": ""},
     ]},
 }
 
@@ -419,47 +445,100 @@ def arousal_level(v, cfg=None):
 
 
 def arousal_name(v, cfg=None):
-    """冲动值 → 给玩家看的那个词（平静 / 有点乱 / 很乱 / 不设防）。
+    """冲动值 → 给玩家看的那个词（没什么 / 有点想 / 想 / 很想 / 忍不住了）。
 
-    只给词不给数字：数字一摆出来，玩家就开始算「再喝两杯能不能过线」，
-    那就不叫气氛了，叫刷条。
+    2026-11-04 深夜改语义：这五个词说的都是**「她想不想做」**，不是心绪。
+    旧版（平静/有点乱/很乱/不设防）玩家看不出离门槛还差多少，也不知道
+    「不设防」是能推还是不能推。
     """
     return str(arousal_level(v, cfg).get("name") or "")
 
 
-# ── 兴奋度档位（2026-11-04 晚）────────────────────────
-# 和冲动一样只出词、不出数字。词义是**进行中**她的状态，不是「想不想」——
-# 冲动的词（平静/很乱/不设防）说的是意愿，这里的词说她已经到哪了。
+# ── 高潮值档位（2026-11-04 深夜，原「兴奋度」）──────────
+# 和冲动分工：冲动 = 她**想不想**（持续性气氛，决定接不接得住）；
+# 高潮值 = 她**到哪了**（只在场景内，决定这一拍怎么写）。
+# 五档全是身体信号（还没起来 / 有反应了 / 上来了 / 快要 / 到了），
+# 写文时可以直接照着落笔，不需要再翻译一层。
 
-def excite_levels(cfg=None):
-    """兴奋度四档，按 min 从高到低。配置坏了回退默认表。"""
+def orgasm_levels(cfg=None):
+    """高潮值五档，按 min 从高到低。配置坏了回退默认表。"""
     cfg = cfg or load_config()
-    lst = cfg.get("excite_levels")
+    lst = cfg.get("orgasm_levels")
     if not isinstance(lst, list) or not lst:
-        lst = DEFAULT_CONFIG.get("excite_levels") or []
+        lst = DEFAULT_CONFIG.get("orgasm_levels") or []
     return sorted(lst, key=lambda x: int(x.get("min") or 0), reverse=True)
 
 
-def excite_level(v, cfg=None):
+def orgasm_level(v, cfg=None):
     try:
         v = int(v or 0)
     except (TypeError, ValueError):
         v = 0
     v = max(0, min(EXCITE_MAX, v))
-    for l in excite_levels(cfg):
+    for l in orgasm_levels(cfg):
         if v >= int(l.get("min") or 0):
             return l
     return {}
 
 
-def excite_name(v, cfg=None):
-    """兴奋度 → 给玩家看的词。0 时返回空串（没在进行，不占一行）。"""
+def orgasm_name(v, cfg=None):
+    """高潮值 → 给玩家看的词。0 时返回空串（没在进行，不占一行）。"""
     try:
         if int(v or 0) <= 0:
             return ""
     except (TypeError, ValueError):
         return ""
-    return str(excite_level(v, cfg).get("name") or "")
+    return str(orgasm_level(v, cfg).get("name") or "")
+
+
+# 旧名兼容：老代码和老测试还在叫 excite_*，指向同一套实现
+excite_levels = orgasm_levels
+excite_level = orgasm_level
+excite_name = orgasm_name
+
+
+def orgasm_hints(cfg=None):
+    """高潮值的记账参数：起步值、上限、单场次数、余韵值、各动作档基数。"""
+    cfg = cfg or load_config()
+    raw = cfg.get("orgasm_hints")
+    if not isinstance(raw, dict):
+        raw = DEFAULT_CONFIG.get("orgasm_hints") or {}
+    base = raw.get("base")
+    base = base if isinstance(base, dict) else {}
+    return {
+        "start": int(raw.get("start") or EXCITE_START),
+        "max": int(raw.get("max") or EXCITE_MAX),
+        "max_orgasm": int(raw.get("max_orgasm") or ORGASM_MAX),
+        "after": int(raw.get("after") if raw.get("after") is not None
+                     else ORGASM_AFTER),
+        "base": {str(k): int(v) for k, v in base.items()},
+    }
+
+
+# 动作档位的别名表：模型可能回 act/motion/action 等几种写法，统一成
+# 配置里 `base` 的 key。认不出来的按 foreplay 记（宁可少给，别给多）。
+_ACT_ALIAS = {
+    "foreplay": "foreplay", "前戏": "foreplay", "touch": "foreplay",
+    "hand": "hand", "finger": "hand", "手指": "hand",
+    "mouth": "mouth", "oral": "mouth", "嘴": "mouth", "口": "mouth",
+    "enter": "enter", "insert": "enter", "进入": "enter",
+    "thrust": "thrust", "抽送": "thrust", "piston": "thrust",
+    "intense": "intense", "hard": "intense", "加重": "intense", "冲刺": "intense",
+    "stop": "stop", "pause": "stop", "停": "stop", "中断": "stop",
+}
+
+
+def act_base(act, cfg=None):
+    """这一轮**动作档位** → 高潮值基数。
+
+    2026-11-04 深夜改法：以前是模型自己给 `excite` 增量（-40~+40），它想给
+    多少给多少——换个模型、降一次智，曲线就全歪了。现在模型只判「这一轮
+    在干什么」，涨多少由这张表说了算。
+    """
+    h = orgasm_hints(cfg)
+    key = _ACT_ALIAS.get(str(act or "").strip().lower(), "foreplay")
+    d = int(h["base"].get(key) or h["base"].get("foreplay") or 12)
+    return key, d
 
 
 def card_start(card):
@@ -502,7 +581,7 @@ def _blank(line_key="", value=None):
     return {"mode": MODE_RAID, "value": st["value"], "tier": str(t.get("key") or ""),
             "level": st["level"], "arousal": 0, "cross_n": 0,
             "down": 0, "ending": "", "milestone": "",
-            "excite": 0, "scene": False,
+            "excite": 0, "scene": False, "orgasms": 0,
             "day": _today(), "chat": 0, "acts": 0,
             "streak": 1, "turns": 0, "ach": [], "hist": [],
             "mercy": MERCY_MAX}
@@ -622,6 +701,9 @@ def _migrate(rec):
         rec["excite"] = 0
     if "scene" not in rec:
         rec["scene"] = False
+    # 高潮次数（2026-11-04 深夜）：单场累计，场景结束清零
+    if "orgasms" not in rec:
+        rec["orgasms"] = 0
     return rec
 
 
@@ -717,9 +799,11 @@ def status(line_key):
         "arousal": ar,
         "arousalName": arousal_name(ar, cfg),
         "arousalShort": str(arousal_level(ar, cfg).get("short") or ""),
-        # 兴奋度（2026-11-04 晚）：只在场景内大于 0，网页按这个决定要不要画第三条
+        # 兴奋度/高潮值（2026-11-04 晚/深夜）：只在场景内大于 0，网页按这个决定要不要画第三条
         "excite": int(rec.get("excite") or 0),
         "exciteName": excite_name(rec.get("excite"), cfg),
+        "orgasms": int(rec.get("orgasms") or 0),
+        "orgasmMax": orgasm_hints(cfg)["max_orgasm"],
         "inScene": bool(rec.get("scene")),
         "milestone": str(rec.get("milestone") or ""),
         "crossN": int(rec.get("cross_n") or 0),
@@ -727,6 +811,236 @@ def status(line_key):
         "mercy": mercy_left(rec),
         "mercyMax": MERCY_MAX,
     }
+
+
+# ── 状态面板（2026-11-04 深夜，用户要的）────────────────
+# 玩家真正想看的东西：**每一行一个数值，左边现在多少、右边满是多少，
+# 中间挂着这一行对应的是什么状态**。够格的行亮、不够的灰掉——
+# 人看到「差 3 个」就会想去补齐，这是这类玩法最原始的驱动力。
+#
+# 为什么不做成「成就」：成就只回答「到没到过」，回答不了「现在卡在哪、
+# 还差多少」。玩家要的是把条顶满，不是收集徽章。
+
+def _panel_rows(levels, cur, key_field="name", extra=None):
+    """把一个档位表画成面板行：每一行 = 这一级 + 它够没够。
+
+    `levels` 要按从低到高排（面板从上往下读是「往上爬」）。
+    每一行给：
+        name   这一级叫什么
+        gate   这一级的门槛（左边画「当前值/门槛」时用）
+        state  reached（到了）/ current（就在这一级）/ locked（还没到）
+    """
+    rows = []
+    for i, l in enumerate(levels or []):
+        if not isinstance(l, dict):
+            continue
+        gate = int(l.get("gate") if l.get("gate") is not None
+                   else l.get("min") or 0)
+        st = "locked"
+        if i == cur:
+            st = "current"
+        elif i < cur:
+            st = "reached"
+        r = {"key": str(l.get("key") or ""),
+             "name": str(l.get(key_field) or l.get("name") or ""),
+             "gate": gate, "state": st}
+        if extra:
+            r.update({k: l.get(k) for k in extra})
+        rows.append(r)
+    return rows
+
+
+def panel(line_key):
+    """给网页右栏和 QQ「状态」指令共用的**整张面板**。
+
+    一次算全，两边不各写一套：网页画竖列，QQ 拼成聊天记录卡片。
+    返回 None = 没在演谁（这条线还没选角色）。
+
+    三段：
+        intimacy  身体进度七级（还差多少、下一级叫什么）
+        arousal   冲动五档（她此刻想不想做）
+        orgasm    高潮五档 + 单场次数（只在进行中显示）
+    另有 `tiers`：羁绊的档位表，用来回答「感情到哪一档了」。
+    """
+    _ent, rec = _ensure(line_key)
+    if not rec:
+        return None
+    cfg = load_config()
+    card = _card_of(line_key)
+    value = int(rec.get("value") or 0)
+    lv = max(0, min(LEVEL_MAX, int(rec.get("level") or 0)))
+    ar = int(rec.get("arousal") or 0)
+    ex = int(rec.get("excite") or 0)
+    oh = orgasm_hints(cfg)
+
+    # 身体进度：七级，从「还没碰过」往上排
+    levels = levels_of(cfg)
+    int_rows = []
+    for i, l in enumerate(levels):
+        gate = int(l.get("gate") or 0)
+        agate = l.get("arousal_gate")
+        int_rows.append({
+            "key": str(l.get("key") or ""), "name": level_name(i, cfg, card),
+            "gate": gate,
+            "arousalGate": None if agate is None else int(agate),
+            "state": "current" if i == lv else ("reached" if i < lv else "locked"),
+        })
+
+    # 羁绊档位：正向的几档（负向是事故，不进面板）
+    tier_rows = []
+    for t in sorted([x for x in (cfg.get("tiers") or [])
+                     if isinstance(x, dict) and int(x.get("min") or 0) >= 0],
+                    key=lambda x: int(x.get("min") or 0)):
+        mn = int(t.get("min") or 0)
+        tier_rows.append({
+            "key": str(t.get("key") or ""),
+            "name": _tier_view(t, lv).get("name") or str(t.get("name") or ""),
+            "gate": mn,
+            "state": "current" if mn == (tier_for(value, cfg) or {}).get("min")
+                     else ("reached" if value >= mn else "locked"),
+        })
+
+    # 冲动：五档，从低到高。`_index_at` 要拿**展示顺序**的列表去查，
+    # 不能用配置里的原始顺序（那是高→低，下标正好反过来）。
+    ar_sorted = sorted(arousal_levels(cfg), key=lambda x: int(x.get("min") or 0))
+    ar_rows = _panel_rows(ar_sorted, _index_at(ar_sorted, ar), "name",
+                          extra=("short",))
+    # 高潮：五档（只在进行中有意义）
+    ex_sorted = sorted(orgasm_levels(cfg), key=lambda x: int(x.get("min") or 0))
+    ex_rows = _panel_rows(ex_sorted, _index_at(ex_sorted, ex), "name",
+                          extra=("prompt",))
+
+    dv, da = _need_to_cross(value, lv, ar, cfg)
+    return {
+        "value": value,
+        "max": bounds(cfg)[0],
+        "min": bounds(cfg)[1],
+        "level": lv,
+        "levelMax": LEVEL_MAX,
+        "levelName": level_name(lv, cfg, card),
+        "arousal": ar,
+        "arousalName": arousal_name(ar, cfg),
+        "excite": ex,
+        "exciteName": excite_name(ex, cfg),
+        "orgasms": int(rec.get("orgasms") or 0),
+        "orgasmMax": oh["max_orgasm"],
+        "inScene": bool(rec.get("scene")),
+        "tiers": tier_rows,
+        "intimacy": int_rows,
+        "arousals": ar_rows,
+        "orgasms_rows": ex_rows,
+        "canCross": _can_cross(value, lv, ar, cfg),
+        "needValue": dv,
+        "needArousal": da,
+        "crossN": int(rec.get("cross_n") or 0),
+        "ending": str(rec.get("ending") or ""),
+        "mode": str(rec.get("mode") or MODE_FREE),
+    }
+
+
+def _index_at(levels, v):
+    """值落在第几档，返回**在给定（已按低→高排好的）列表里的下标**。
+
+    规则是「取满足 min ≤ v 的**最后**那一个」——不是第一个。
+    踩过两次：
+      1. 配置里的 `arousal_levels` 是高→低序，直接查出来下标整体翻转；
+      2. 改成低→高之后仍写 `第一个满足`，那列表第一个是 0，永远命中，
+         于是「冲动 52」被标成 current 在「没什么」。
+    升序列表要的是**从后往前找第一个满足的**，也就是最大的那个门槛。
+    """
+    lst = list(levels or [])
+    try:
+        v = int(v or 0)
+    except (TypeError, ValueError):
+        v = 0
+    cur = 0
+    for i, l in enumerate(lst):
+        if v >= int(l.get("min") or 0):
+            cur = i
+    return cur
+
+
+def panel_text(line_key):
+    """「状态」指令的纯文本面板（QQ 聊天记录卡片 / 协议端发不了卡片时用）。
+
+    排版照用户的原话：**左边当前值，斜杠，右边满值，后面挂状态词**。
+    对齐用全角空格补，QQ 卡片的等宽效果比空格稳。
+    """
+    p = panel(line_key)
+    if p is None:
+        return None
+    cfg = load_config()
+    rows = ["📊 你们现在到哪了", ""]
+
+    # 一、身体进度：七行，到了的打勾，没到的挂门槛
+    rows.append("— 身体进度 —")
+    for r in p["intimacy"]:
+        mark = {"reached": "✔", "current": "▶", "locked": "·"}[r["state"]]
+        gate = r["gate"]
+        # 第一级没有门槛（0），写「42/0」只会让人以为满了；
+        # 直接从这一行开始报「离这一级还差多少」。
+        if gate <= 0:
+            line = "%s %s" % (mark, r["name"])
+        else:
+            line = "%s %s  %s/%s" % (mark, r["name"], p["value"], gate)
+        ag = r.get("arousalGate")
+        if ag:
+            line += "  冲动≥%d" % ag
+        if r["state"] == "current":
+            line += "   ←现在这里"
+        rows.append(line)
+
+    # 二、羁绊档位（感情那一轴）
+    rows += ["", "— 感情 —"]
+    for r in p["tiers"]:
+        mark = {"reached": "✔", "current": "▶", "locked": "·"}[r["state"]]
+        if r["gate"] <= 0:
+            rows.append("%s %s" % (mark, r["name"]))
+        else:
+            rows.append("%s %s  %s/%s" % (mark, r["name"], p["value"], r["gate"]))
+
+    # 三、冲动：她此刻想不想。这一档给的是「离下一个词还差多少」，
+    # 不是「离 100 还差多少」——玩家要看的是下一格在哪。
+    rows += ["", "— 冲动 %d/100 —" % p["arousal"]]
+    for r in p["arousals"]:
+        mark = {"reached": "✔", "current": "▶", "locked": "·"}[r["state"]]
+        line = "%s %s" % (mark, r["name"])
+        if r["gate"] <= 0:
+            pass
+        elif r["state"] == "current":
+            line += "  %d/%d" % (p["arousal"], r["gate"])
+        else:
+            line += "  ≥%d" % r["gate"]
+        rows.append(line)
+
+    # 四、高潮：只在进行中有意义
+    if p["inScene"]:
+        rows += ["", "— 高潮 %d/100 · 第 %d/%d 次 —"
+                  % (p["excite"], p["orgasms"], p["orgasmMax"])]
+        for r in p["orgasms_rows"]:
+            mark = {"reached": "✔", "current": "▶", "locked": "·"}[r["state"]]
+            line = "%s %s" % (mark, r["name"])
+            if r["gate"] > 0:
+                line += ("  %d/%d" % (p["excite"], r["gate"])
+                         if r["state"] == "current" else "  ≥%d" % r["gate"])
+            rows.append(line)
+
+    # 五、结论：能不能往前一步
+    rows.append("")
+    if p["ending"]:
+        rows.append("结局已定格。想翻过去发「自由模式」。")
+    elif p["needValue"] or p["needArousal"]:
+        gap = []
+        if p["needValue"]:
+            gap.append("感情还差 %d" % p["needValue"])
+        if p["needArousal"]:
+            gap.append("气氛还差 %d（冲动每轮回落，得自己拱）" % p["needArousal"])
+        rows.append("再往前一步（%s）：%s"
+                    % (level_name(p["level"] + 1, cfg, _card_of(line_key)),
+                       "、".join(gap)))
+    else:
+        rows.append("再往前一步：两样都够了，就差那一件事。")
+    return "\n".join(rows)
 
 
 # ── 模式切换 / 重开 ────────────────────────────────────
@@ -982,21 +1296,47 @@ def settle(line_key, score):
     rec["arousal"] = max(0, min(AROUSAL_MAX,
                                  int(rec.get("arousal") or 0) + arose - AROUSAL_DECAY))
 
-    # ── 兴奋度（2026-11-04 晚）────────────────────────
-    # 只在场景内累积：模型说这轮还在进行中（in_scene）才动它，场景一停就归零。
-    # **不给默认增量**——模型没说就当她这轮没什么变化，别自己往上推。
+    # ── 高潮值（2026-11-04 深夜改版，原「兴奋度」）──────
+    # 记法变了：**不再是模型自己给增量**，而是它判「这一轮在干什么」，
+    # 涨多少由 `orgasm_hints.base` 那张表说了算。换模型、降智都不会把曲线写歪。
+    #
+    # 到 100 → 触发一次高潮：记进 `orgasms`、回落到余韵值（不是回 0），
+    # 单场最多 `max_orgasm` 次（默认 5）。用满之后**强制收场**：
+    # 场景结束、高潮值归零、这一轮之后直接跨到第二天。
+    # 收场的理由不只是她受不了——第 6 次高潮写出来只是水词。
     prev_scene = bool(rec.get("scene"))
     in_scene = bool(score.get("in_scene"))
+    oh = orgasm_hints(cfg)
+    act_key, act_raise = act_base(score.get("act"), cfg)
+    # 模型若仍然回了数字型 excite（老前端/老提示词），当成修正量叠加
     try:
-        ex_delta = int(score.get("excite") or 0)
+        ex_mod = int(score.get("excite") or 0)
     except (TypeError, ValueError):
-        ex_delta = 0
-    ex_delta = max(-60, min(60, ex_delta))
+        ex_mod = 0
+    ex_mod = max(-40, min(40, ex_mod))
+
+    just_orgasm = 0
+    capped = False
+    total_orgasm = int(rec.get("orgasms") or 0)   # 这一场累计（对外报用，收场后不清）
     if in_scene:
-        base = int(rec.get("excite") or 0) if prev_scene else EXCITE_START
-        rec["excite"] = max(0, min(EXCITE_MAX, base + ex_delta))
+        base = int(rec.get("excite") or 0) if prev_scene else oh["start"]
+        rec["excite"] = max(0, min(oh["max"], base + act_raise + ex_mod))
+        # 触发高潮：到顶就落一次，然后回到余韵值
+        if rec["excite"] >= oh["max"]:
+            total_orgasm += 1
+            rec["orgasms"] = total_orgasm
+            just_orgasm = total_orgasm
+            rec["excite"] = oh["after"]
+            if total_orgasm >= oh["max_orgasm"]:
+                # 用满次数：这一场到此为止，强制收场
+                capped = True
+                in_scene = False
+                rec["excite"] = 0
     else:
         rec["excite"] = 0
+        if prev_scene:
+            total_orgasm = 0       # 场景结束，次数清零（下一次重新算）
+        rec["orgasms"] = 0
     rec["scene"] = in_scene
 
     force_ending = ""
@@ -1094,6 +1434,10 @@ def settle(line_key, score):
            "excite": int(rec.get("excite") or 0),
            "exciteName": excite_name(rec.get("excite"), cfg),
            "in_scene": bool(rec.get("scene")),
+           "act": act_key, "just_orgasm": just_orgasm,
+           "orgasms": total_orgasm,
+           "orgasmMax": oh["max_orgasm"],
+           "sceneCapped": bool(capped),
            "rose": rose, "arousal": int(rec.get("arousal") or 0),
            "arousalName": arousal_name(rec.get("arousal"), cfg),
            "cross": cross, "allow": allow, "crossN": int(rec.get("cross_n") or 0),
@@ -1171,12 +1515,76 @@ def _tier_view(t, level):
 
 
 def _can_cross(value, level, arousal, cfg=None):
-    """按「防线 − 冲动加成」算：以你们现在的距离，她接不接得住。
+    """**双轴门槛**：以你们现在的进度，她接不接得住。
 
-    这只是一个**概率性事实**，不是命令——所以注入里永远写「可能」，不写「一定」。
+    2026-11-04 深夜改法——这是整套机制最重要的一处。旧版是单轴的：
+
+        value >= guard - arousal // 5
+
+    也就是说**冲动从来不是门槛**，只是给好感打个 -5~-20 的折扣。结果就是
+    用户实测到的那个毛病：好感 40、冲动 0，`40 >= 15` 成立，她「挡不住」，
+    玩家可以直接推倒——「好感够了就能做爱」，中间没有气氛这一环。
+
+    现在两条都要过：
+
+        value >= 这一级的 gate   （羁绊够不够）
+        arousal >= 这一级的 arousal_gate   （她此刻想不想要）
+
+    想推倒她得多堆几轮气氛：喝酒、独处、触碰、情话、深夜，每轮还会自然
+    回落 15——所以「今天晚上推不了」是真的推不了，得先把气氛拱起来。
+
+    这两个都成立只是「她能接得住」，**不是「她一定答应」**：她还是可以
+    装没听懂、可以绕、可以嘴上说不要身体不躲。判定权始终在模型手里。
     """
-    guard = int(level_cfg(level, cfg).get("guard") or 0)
-    return value >= guard - int(arousal or 0) // 5
+    lc = level_cfg(level, cfg)
+    gate = int(lc.get("gate") or 0)
+    agate = lc.get("arousal_gate")
+    if agate is None:
+        # 老配置没这个字段：退回旧单轴判法（至少不要让老配置炸掉）
+        guard = int(lc.get("guard") or 0)
+        return int(value or 0) >= guard - int(arousal or 0) // 5
+    return (int(value or 0) >= gate
+            and int(arousal or 0) >= int(agate))
+
+
+def _cross_gap(value, level, arousal, cfg=None):
+    """**当前这一级**还差多少才接得住。返回 `(缺羁绊, 缺冲动)`。
+
+    和 `_need_to_cross` 的分工（2026-11-04 深夜拆开）：
+      - `_cross_gap`    —— 「这一轮她挡不挡得住」。`_can_cross` 的判据，
+                          缺口也是按**当前级**算，因为问的是「现在能不能做」。
+      - `_need_to_cross` —— 「升到下一级还差什么」。面板和结论句用，
+                          按**下一级**门槛算，因为问的是「再往前一步」。
+    这两个数字一样，语义差一整级。混用一次就会让注入说错话。
+    """
+    lc = level_cfg(level, cfg)
+    dv = max(0, int(lc.get("gate") or 0) - int(value or 0))
+    ag = lc.get("arousal_gate")
+    da = 0 if ag is None else max(0, int(ag) - int(arousal or 0))
+    return dv, da
+
+
+def _need_to_cross(value, level, arousal, cfg=None):
+    """离「再往前一步」还差什么。返回 `(缺羁绊多少, 缺冲动多少)`，都够是 (0, 0)。
+
+    2026-11-04 深夜修正：这里原来算的是**当前这一级**的门槛，
+    也就是「以现在的进度她接不接得住」。但面板和注入里那句话说的是
+    「再往前一步」——玩家想知道的是**升到下一级**还差什么。
+    两者差整整一级：站在 lv1、羁绊 15、冲动 12 时，
+    按当前级算是「差 0 / 差 8」（看着快到了），按下一级算才是
+    「差 5 / 差 23」——这才是真实的距离。
+
+    已经到顶（lv 是最高一级）时没有「下一级」，退回按当前级算，
+    免得报一个不存在的门槛。
+    """
+    lv = int(level or 0)
+    try:
+        lv = max(0, min(LEVEL_MAX, lv))
+    except (TypeError, ValueError):
+        lv = 0
+    target = lv + 1 if lv < LEVEL_MAX else lv
+    return _cross_gap(value, target, arousal, cfg)
+
 
 
 def injection_block(res, cfg=None):
@@ -1215,7 +1623,7 @@ def injection_block(res, cfg=None):
                       "数值照常结算，后面还有日子要过——别写「全剧终」那种收尾。"]
 
     lv = int(res.get("level") or 0)
-    # 不报好感数字：好感和「距离」本来就可以不同步（好感够了但没做成事，
+    # 不报好感数字：好感和「进度」本来就可以不同步（好感够了但没做成事，
     # 你们还是原来那一步）。两个数字一起摆出来，模型会纠结该信哪个。
     lines.append("关系：【%s】  她对你的感觉：【%s】"
                  % (res.get("levelName") or "?", res.get("tierName") or "?"))
@@ -1223,11 +1631,26 @@ def injection_block(res, cfg=None):
     if lp:
         lines += ["", lp]
 
+    # 这一刻的气氛：冲动决定「她此刻想不想」，双轴门槛决定「接不接得住」
+    ar = int(res.get("arousal") or 0)
+    ex = int(res.get("excite") or 0)
+    can = _can_cross(value, lv, ar, cfg)
+
     # 档位文案按**生效档位**取（res["tier"]），不能用 tier_for(value)——
-    # 降档滞回期间两者不一致，会提前把新档位的语气漏给模型
+    # 降档滞回期间两者不一致，会提前把新档位的语气漏给模型。
+    #
+    # 2026-11-04 深夜：**在场景里（高潮值 > 0）且这个档位有 `prompt_intimate`，
+    # 就改用做爱版文案**。这是「露骨方向」最关键的一处改动——旧版只按距离
+    # 挑 soft/荤两版，导致「关系冷着她还让你做」这件事根本没有文案支撑，
+    # 模型只能自己往「她不情愿→你该停」的方向找补。现在 cold / fallen 都有
+    # 自己那一版：做了，但冷着做、麻木地做。
     t = next((x for x in (cfg.get("tiers") or [])
               if x.get("key") == res.get("tier")), None) or tier_for(value, cfg) or {}
-    tv = _tier_view(t, lv)
+    intimate = str(t.get("prompt_intimate") or "").strip()
+    if ex > 0 and intimate:
+        tv = {"name": str(t.get("name") or ""), "prompt": intimate}
+    else:
+        tv = _tier_view(t, lv)
     txt = tv["prompt"].strip()
     if txt:
         lines += ["", txt]
@@ -1235,28 +1658,42 @@ def injection_block(res, cfg=None):
     if hint:
         lines += ["", "（她现在让你看到多深：%s）" % hint]
 
-    # 这一刻的气氛：冲动决定「她此刻想不想」，防线决定「接不接得住」
-    ar = int(res.get("arousal") or 0)
-    ex = int(res.get("excite") or 0)
-    can = _can_cross(value, lv, ar, cfg)
+    # 门槛这一句要**说具体**：只写「她挡得住」等于什么都没说，
+    # 模型不知道差的是感情还是气氛，只能瞎猜。
+    dv, da = _need_to_cross(value, lv, ar, cfg)
     if ar >= 35 and value < 0:
         # 负分档（2026-11-04）：她这时候不可能「有点乱到会绕」——气还没消，
         # 冲动高也只是把火拱得更旺。原来的暧昧句会让模型演成「半推半就」，
-        # 和这两档「一路挡掉身体靠近」的文案打架。这里只纠方向，不判结果。
-        lines += ["", "（她心里是有波动的，但那不是心动——是气，是失望，是还没算完的账。"
-                      "别把这点波动演成愿意。）"]
-    elif ar >= 65 and can:
-        lines += ["", "（她此刻几乎没在设防，而且以你们现在的距离，这一点她也清楚。"
-                      "这个状态下的她可能主动——先开口、先靠近、先留下你。）"]
-    elif ar >= 65:
-        lines += ["", "（她此刻很乱，但你们之间的距离还撑不住这个。她会被自己的反应吓到，"
-                      "然后退回去。别把她的乱当成同意。）"]
-    elif ar >= 35:
-        lines += ["", "（她此刻有点乱。她不会干脆说不，也不会干脆答应，她会绕。）"]
+        # 和这几档「一路挡掉身体靠近」的文案打架。这里只纠方向，不判结果。
+        #
+        # 2026-11-04 深夜补：负分档**不是清教徒**。cold / fallen 有
+        # `prompt_intimate` 那一版——如果已经在场景里，就是「做了，但冷着做 /
+        # 麻木地做」。这里只纠正「被动情」的误读，不禁止场景本身。
+        if ex > 0:
+            lines += ["", "（她心里是有波动的，但那不是心动——是气，是失望，是还没算完的账。"
+                          "这一场可以是她让了、认了、或者根本不在乎了；但别写成她动情。）"]
+        else:
+            lines += ["", "（她心里是有波动的，但那不是心动——是气，是失望，是还没算完的账。"
+                          "别把这点波动演成愿意。）"]
     elif can:
-        lines += ["", "（她此刻是清醒的，但以你们现在的距离，她挡不住太认真的一句话。）"]
+        # 已经接得住了（当前这一级门槛过了）。这里**不再报「还差多少」**——
+        # 那句数字现在算的是「升到下一级还差什么」（见 `_need_to_cross`），
+        # 和「这一轮能不能做」不是一回事，混在一起说模型会以为还不能。
+        lines += ["", "（她这会儿接得住：感情够，气氛也到这儿了。"
+                      "这个状态下的她可能主动——先开口、先靠近、先留下你。）"]
     else:
-        lines += ["", "（她此刻是清醒的。这个状态下越界，她挡得住，也说得出口。）"]
+        # 只在「接不住」的时候报缺口。数字是当前这一级的门槛，
+        # 也就是「她要答应，你还得补多少」。
+        cdv, cda = _cross_gap(value, lv, ar, cfg)
+        gap = []
+        if cdv:
+            gap.append("感情还差 %d 点" % cdv)
+        if cda:
+            gap.append("这会儿的气氛还差 %d 点（冲动会每轮回落，得自己拱）" % cda)
+        lines += ["", "（她挡得住——%s。这个状态下越界，她躲得开，也说得出口。"
+                      "她不会一上来就把门关死：多半是先按住你的手、说一句「等一下」，"
+                      "把话头岔开，或者干脆装作没听懂。）" % "、".join(gap or ["两样都还差点"])]
+
 
     if res.get("cross"):
         if res.get("cross") == "hard":
@@ -1271,28 +1708,31 @@ def injection_block(res, cfg=None):
     lines += ["", "（怎么反应由你演，但**别每轮都给干脆的答案**：她可以装没听懂、可以反问、"
                   "可以嘴上说不要但没躲、可以答应完自己后悔。真实的犹豫比干脆的拒绝好看。）"]
 
-    # ── 反客为主（2026-11-04 晚，用户要的）────────────
-    # 冲动和兴奋度都会把她往「自己先动」的方向推：冲动是「她此刻想要」，
-    # 兴奋度是「这一场里她已经到了」。两个都高的时候，她不该还躺在那里
+    # ── 反客为主（2026-11-04 晚，用户要的；深夜调阈值）────────
+    # 冲动和**高潮值**都会把她往「自己先动」的方向推：冲动是「她此刻想要」，
+    # 高潮值是「这一场里她已经到了」。两个都高的时候，她不该还躺在那里
     # 等他下一步——那样再高的数值也只是个装饰。
-    # 代码只给「她有这个余地」这个事实，主动成什么样、做到哪一步由模型按当场演。
+    #
+    # 深夜调整：旧阈值（冲动 75 / 高潮 60 就「可能会」）太松——她第一次做
+    # 的时候不该就自己坐上来。现在分两档，而且**必须先过了双轴门槛**。
     if can and value >= 0:
         lead = ""
-        if ar >= 90 or ex >= 85:
+        if ar >= 88 or ex >= 85:
             lead = "will"
-        elif ar >= 75 or ex >= 60:
+        elif ar >= 65 or ex >= 55:
             lead = "may"
         if lead == "will":
             lines += ["", "（她这会儿不是在等你。**这一轮大概率由她先动**——先开口、先凑过来、"
                           "先伸手，动作比她平时快，也比平时不客气。她已经顾不上谁先谁后了，"
-                          "你别抢着替她做决定。）"]
+                          "你别抢着替她做决定；她要什么就让她自己说出来、自己做到。）"]
         elif lead == "may":
             lines += ["", "（她有可能会自己先动一下——不保证，但别把她写成只能被动等着。"
                           "她伸手、她凑近、她说出那句平时不会说的话，都算。）"]
 
-    # 兴奋度（2026-11-04 晚）：只在场景里报，报的是「她已经到哪了」
+    # 高潮值（2026-11-04 深夜）：只在场景里报。报的是「她身上正发生到什么
+    # 程度」，五档正文直接是身体信号，写的时候照抄那个层次就行。
     if ex > 0:
-        el = excite_level(ex, cfg)
+        el = orgasm_level(ex, cfg)
         en = str(el.get("name") or "")
         ep = str(el.get("prompt") or "").strip()
         if en:
@@ -1301,6 +1741,17 @@ def injection_block(res, cfg=None):
                 body += " " + ep
             lines += ["", body + "）"]
 
+    # 刚高潮（2026-11-04 深夜）：这一拍是**余韵**，不是重新开始
+    jo = int(res.get("just_orgasm") or 0)
+    if jo:
+        lines += ["", "（她刚刚到了一次（第 %d 次）。**这一轮写的是余韵**：人还软着、"
+                      "抖还没停、说不出完整的话。别立刻接着往下推——她想缓，"
+                      "或者嘴上说着不行了身体却还缠着你不放，两种都行。"
+                      "剩下的空间留到下一轮。）" % jo]
+    if res.get("sceneCapped"):
+        lines += ["", "（这一场到这儿收住。不是她不想了，是已经累到没力气再要。"
+                      "**这一轮要写收尾**：擦、抱、睡，或者干脆让她直接睡过去。"
+                      "下一轮开头就是第二天，换到白天、换到别的地方，别再接着写这一场。）"]
 
     if res.get("rose"):
         lines += ["", "（你们的关系刚刚往前跨了一步，到了【%s】。这一步要有实感——"
@@ -1366,11 +1817,14 @@ def tail_line(res):
         res.get("level"), res.get("value"))
     rows.append("亲密 " + str(g.get("label") or int(res.get("value") or 0)))
     rows.append("冲动 %d" % int(res.get("arousal") or 0))
-    # 兴奋度（2026-11-04 晚）：**只在**场景内出现。没在进行时这一行不该有——
-    # 它不是一个持续存在的状态条，是「这一场里她到哪了」。
+    # 高潮值（2026-11-04 深夜，原「兴奋」）：**只在**场景内出现。
+    # 没在进行时这一行不该有——它不是常驻状态条，是「这一场里她到哪了」。
+    # 高潮次数一起报：`高潮 82 · 2/5`，玩家一眼看出还得几次就收场。
     ex = int(res.get("excite") or 0)
     if ex > 0:
-        rows.append("兴奋 %d" % ex)
+        n = int(res.get("orgasms") or 0)
+        mx = int(res.get("orgasmMax") or ORGASM_MAX)
+        rows.append("高潮 %d · %d/%d" % (ex, n, mx))
     return "\n".join(rows)
 
 
@@ -1398,15 +1852,28 @@ def detail_nodes(line_key):
     lv = int(rec.get("level") or 0)
     # 只写关系叫什么（2026-11-04 三次修订：「第 3 级 / 共 5 级」是行话，
     # 玩家看不懂级是在量什么。叫法本身就会随关系往前而变）。
+    # 2026-11-04 深夜：级名改成身体进度（能抱了 / 亲过了 / 做过了），
+    # 这一行现在直接回答「我们能到哪一步」。
     head.append("你们：%s" % (level_name(lv, cfg, card) or "?"))
     head.append("她对你的感觉：%s"
                 % (_tier_view(tier_for(value, cfg), lv).get("name") or "?"))
     # 气氛（2026-11-04）：冲动是一次性的，查档案这一刻看到的就是「此刻」。
     # 卡片第一页给词，第二页不重复——重复就变成刷状态了。
+    # 深夜改：这行改成「她现在有多想」，因为冲动值的新语义就是「想不想做」。
     ar = int(rec.get("arousal") or 0)
     an = arousal_name(ar, cfg)
     if an:
-        head.append("此刻的气氛：%s" % an)
+        head.append("此刻的气氛：%s（%d）" % (an, ar))
+    # 卡在哪一步要说清楚：两条门槛都过才进得去（2026-11-04 深夜）
+    dv, da = _need_to_cross(value, lv, ar, cfg)
+    if not ending and lv < LEVEL_MAX and (dv or da):
+        need = []
+        if dv:
+            need.append("感情还差 %d" % dv)
+        if da:
+            need.append("气氛还差 %d" % da)
+        head.append("再往前一步：「%s」——%s"
+                    % (level_name(lv + 1, cfg, card) or "下一级", "、".join(need)))
     if int(rec.get("cross_n") or 0) > 0:
         head.append("越界被拒：%d 次" % int(rec.get("cross_n") or 0))
     if not ending:

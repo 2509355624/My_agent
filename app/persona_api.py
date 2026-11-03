@@ -337,6 +337,20 @@ def _aff_status(key):
         return None
 
 
+def _aff_panel(key):
+    """整张状态面板（2026-11-04 深夜）：网页右栏的竖排表直接画这个。
+
+    和 `status` 分开是因为两者给的东西不一样：`status` 是「此刻那几个词」，
+    面板是**全部档位 + 当前卡在第几个**。前端要画「一列一列看数值」，
+    只有 status 是不够的——它拿不到「下一级叫什么、还差多少」之外的行。
+    """
+    try:
+        from app import affection
+        return affection.panel(key)
+    except Exception:                                     # noqa: BLE001
+        return None
+
+
 def _guest_session(uid, token):
     """游客的会话状态：固定一个角色，历史从游客目录读。"""
     from app import guest
@@ -586,6 +600,25 @@ def affection_mode():
         return jsonify({"ok": False, "error": "先选一个角色再开攻略模式"}), 400
     return jsonify({"ok": True, "reply": reply,
                     "affection": affection.status(key)})
+
+
+@bp.route("/api/persona/affection/panel")
+def affection_panel_api():
+    """状态面板（2026-11-04 深夜）：网页右栏的整张竖排表。
+
+    一次给全：身体进度七级、感情七档、冲动五档、高潮五档，
+    每行带 `gate`（门槛）和 `state`（reached / current / locked）。
+    前端不重算任何东西——档位表都在 config 里，前端算一遍就会两边不一致。
+    """
+    role, who, token = _who()
+    if role == "guest":
+        resp = jsonify({"ok": False, "error": "体验版没有攻略模式。"})
+        resp.status_code = 403
+        _attach_guest_cookie(resp, token)
+        return resp
+    key = _active_key(_key(who))
+    p = _aff_panel(key)
+    return jsonify({"ok": True, "panel": p})
 
 
 @bp.route("/api/persona/affection/wipe", methods=["POST"])

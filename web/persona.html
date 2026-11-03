@@ -198,6 +198,35 @@
   .bar > i { display: block; height: 100%; background: var(--accent);
     width: 0; transition: width .3s; }
 
+  /* ─── 状态面板（2026-11-04 深夜）──
+     用户的原话：「一列下来，每一行它都有对应的一个数值，对应当前的一个状态」。
+     所以这里不是三根独立的条，是**一张表**：每行左边名字、右边「当前/门槛」，
+     到了的打勾、当前那行高亮并挂左箭头、没到的灰掉。
+     人的眼睛会去找「差几个」，这就是驱动力——不需要再加别的东西。 */
+  .panel { margin-top: 2px; }
+  .panel h3 { font-size: 11px; font-weight: 500; color: var(--text-mute);
+    margin: 10px 0 4px; letter-spacing: .5px; }
+  .panel h3:first-child { margin-top: 0; }
+  .prow { display: flex; align-items: baseline; gap: 6px;
+    font-size: 12px; line-height: 1.72;
+    font-variant-numeric: tabular-nums; }
+  .prow .mk { width: 12px; flex: none; color: var(--text-mute); }
+  .prow .nm { flex: 1 1 auto; color: var(--text-mute); }
+  .prow .vl { flex: none; color: var(--text-mute); font-size: 11.5px; }
+  /* 到了：名字恢复正常色，前面打勾 */
+  .prow.reached .mk { color: #6fbf8a; }
+  .prow.reached .nm { color: var(--text-dim); }
+  /* 就在这一行：高亮 + 一个左箭头，一眼看到自己站在哪 */
+  .prow.current .mk { color: var(--accent); }
+  .prow.current .nm { color: var(--accent); font-weight: 600; }
+  .prow.current .vl { color: var(--accent); }
+  .prow.locked { opacity: .55; }
+  .prow .req { color: #f0a35e; font-size: 11px; }
+  /* 面板底部的结论句 */
+  .pnote { margin-top: 8px; font-size: 11.5px; color: var(--text-mute);
+    line-height: 1.6; }
+  .pnote b { color: var(--accent); font-weight: 500; }
+
   /* ─── 攻略模式（好感度）── */
   /* 气泡下方的状态行：档位名是重点，增减跟着走一条 */
   .aff { font-size: 11.5px; color: var(--text-mute); margin-top: 5px;
@@ -388,36 +417,17 @@
     <div class="st"><div class="k">回忆</div>
       <div class="v" id="sNote" style="color:var(--text-dim)">—</div></div>
     <div class="st"><div class="k">轮次</div><div class="v" id="sTurns">0</div></div>
+    <!-- 状态面板（2026-11-04 深夜）：替换掉原来「关系 / 气氛 / 兴奋」三块。
+         用户要的是一张竖表——每行一个数值，左边当前、右边门槛，够格亮不够灰。
+         三块独立小条看不出「离下一步还差多少」，这才是玩家真正想看的。 -->
+    <div class="st panel" id="panelBox" style="display:none">
+      <div class="k" id="panelK">状态</div>
+      <div id="panelBody"></div>
+      <div class="pnote" id="panelNote"></div>
+    </div>
+    <!-- 「清空存档」单独留在下面：它管的是整份存档，不只是好感。 -->
     <div class="st" id="affBox" style="display:none">
-      <div class="k" id="affModeK">关系</div>
-      <div class="v" id="sAff">—</div>
-      <div class="bar affbar"><i id="affBar"></i></div>
-      <!-- 亲密度进度（2026-11-04）：bar 画的是**档内**进度，不只是「第几档」。
-           原来按 level/5 画，跨一整档都看不出来，玩家不知道还差多少。 -->
-      <div class="gauge" id="sGauge">—</div>
-      <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
-        <!-- 模式开关已挪到顶部 #btnMode（2026-11-03）：留在这里的话，没开过攻略
-             模式就整块不显示，开关等于永远点不到。
-             这里只留「清空存档」（2026-11-04）：它管的是整份存档，不只是好感，
-             所以和顶栏那个是同一个动作、同一个弹窗。 -->
-        <button class="btn sm danger" id="btnAffRestart" style="display:none">❗ 清空存档</button>
-      </div>
-    </div>
-    <!-- 气氛（2026-11-04）：冲动是第三轴，和「关系」分开画——它每轮都会回落，
-         不是进度条，是温度计。 -->
-    <div class="st" id="aroBox" style="display:none">
-      <div class="k">气氛</div>
-      <div class="v" id="sAro">—</div>
-      <div class="bar arobar"><i id="aroBar"></i></div>
-      <div class="nums"><div>冲动<b id="nAro">—</b></div></div>
-    </div>
-    <!-- 兴奋（2026-11-04 晚）：第四轴，**只在进行中才出现**。它不是常驻状态，
-         是「这一场里她到哪了」——所以场景一停，这一整块就藏起来。 -->
-    <div class="st" id="exciteBox" style="display:none">
-      <div class="k">兴奋</div>
-      <div class="v" id="sEx">—</div>
-      <div class="bar exbar"><i id="exBar"></i></div>
-      <div class="nums"><div>程度<b id="nEx">—</b></div></div>
+      <button class="btn sm danger" id="btnAffRestart">❗ 清空存档</button>
     </div>
   </aside>
 
@@ -726,7 +736,13 @@ function affLine(a) {
   gline.textContent = "亲密 " + (g && g.label ? g.label : (a.value | 0));
   nums.appendChild(gline);
   nums.appendChild(numLine("冲动", a.arousal | 0));
-  if (a.excite > 0) nums.appendChild(numLine("兴奋", a.excite | 0));
+  if (a.excite > 0) {
+    // 高潮值（2026-11-04 深夜，原「兴奋」）：和冲动不是一回事——
+    // 冲动是「她此刻想不想做」，高潮值是「这一场里她到哪了」。
+    // 一起报次数，玩家能看出还得几次就收场。
+    const n = a.orgasms | 0, mx = a.orgasmMax | 0;
+    nums.appendChild(numLine("高潮", (a.excite | 0) + (mx ? " · " + n + "/" + mx : "")));
+  }
   div.appendChild(nums);
   return div;
 }
@@ -804,80 +820,151 @@ function miniBar(cls, pct) {
 // 不能默认 false，否则一轮对话后整个控件会自己跳成「自由模式」。
 function isRaid(a) { return !!a && (a.mode ? a.mode === "raid" : a.active !== false); }
 
+// ── 状态面板渲染（2026-11-04 深夜）──
+// 用户的原话：「一列下来，每一行它都有对应的一个数值，对应当前的一个状态」。
+// 所以这里不做三根独立的小条，而是**一张竖表**：每行左边名字、右边
+// 「当前/门槛」，到了的打勾、当前那行高亮并挂左箭头、没到的灰掉。
+//
+// 数据全部来自后端 `/api/persona/affection/panel`（`affection.panel()`），
+// 前端**不重算任何门槛**——档位表在 config 里，前端再算一遍就会两边不一致。
+//
+// 刷新时机：每轮对话结束后拉一次；切角色/切模式也拉。它比 status 多请求
+// 一次，但换来的是一张能一直盯着看的表，值。
+
+let PANEL = null;          // 最近一次拉到的面板数据
+
+const PANEL_ICON = { reached: "✔", current: "▶", locked: "·" };
+
+// 一行：✔ 能抱了   42/20   冲动≥35
+function panelRow(r, curValue, unit) {
+  const d = document.createElement("div");
+  d.className = "prow " + (r.state || "locked");
+  const mk = document.createElement("span");
+  mk.className = "mk";
+  mk.textContent = PANEL_ICON[r.state] || "·";
+  d.appendChild(mk);
+
+  const nm = document.createElement("span");
+  nm.className = "nm";
+  nm.textContent = r.name || "—";
+  d.appendChild(nm);
+
+  const vl = document.createElement("span");
+  vl.className = "vl";
+  // 门槛 0 的那一级不写分数（写「42/0」像已经满了）
+  if ((r.gate | 0) > 0) {
+    if (r.state === "current") {
+      vl.textContent = (curValue | 0) + "/" + (r.gate | 0) + (unit || "");
+    } else {
+      vl.textContent = "≥" + (r.gate | 0) + (unit || "");
+    }
+  }
+  d.appendChild(vl);
+
+  // 身体进度那一级还要额外报冲动门槛（双轴）
+  if (r.arousalGate) {
+    const req = document.createElement("span");
+    req.className = "req";
+    req.textContent = "冲" + r.arousalGate;
+    d.appendChild(req);
+  }
+  return d;
+}
+
+function panelSection(title, rows, curValue, unit) {
+  const wrap = document.createElement("div");
+  const h = document.createElement("h3");
+  h.textContent = title;
+  wrap.appendChild(h);
+  (rows || []).forEach(function (r) {
+    wrap.appendChild(panelRow(r, curValue, unit));
+  });
+  return wrap;
+}
+
+// 把整张面板画进右栏。a 是旧的 status（用来判断模式），p 是面板。
+function renderPanel(a, p) {
+  const box = $("panelBox");
+  const affBox = $("affBox");
+  if (!box) return;
+  if (ROLE === "guest" || !p) {
+    box.style.display = "none";
+    if (affBox) affBox.style.display = "none";
+    return;
+  }
+  const raid = isRaid(a);
+  box.style.display = "";
+  if (affBox) affBox.style.display = raid ? "" : "none";
+  $("panelK").textContent = raid ? "状态 · 攻略模式"
+    : (a ? "状态 · 已封存" : "状态 · 未开启");
+
+  const body = $("panelBody");
+  body.innerHTML = "";
+  const v = p.value | 0;
+
+  // 一、身体进度：七级，「还没碰过 → 要不够」。
+  // 这一块是玩家最想看的——它直接回答「我们能不能做 / 到哪一步了」。
+  body.appendChild(panelSection("身体进度", p.intimacy, v));
+
+  // 二、感情（羁绊档位）：正向几档。负向是事故，不进面板。
+  body.appendChild(panelSection("感情", p.tiers, v));
+
+  // 三、冲动：此刻想不想做。每轮回落 15，所以它是会掉的——
+  // 掉下去那段正是「得重新拱气氛」的玩法。
+  body.appendChild(panelSection(
+    "冲动 " + (p.arousal | 0) + "/100", p.arousals, p.arousal));
+
+  // 四、高潮：只在进行中才有意义，场景一停就收起
+  if (p.inScene) {
+    body.appendChild(panelSection(
+      "高潮 " + (p.excite | 0) + "/100 · 第 " + (p.orgasms | 0)
+      + "/" + (p.orgasmMax | 0) + " 次", p.orgasms_rows, p.excite));
+  }
+
+  // 结论：还差什么。这一行是整块面板的落点——
+  // 没有它，玩家看完一堆数字不知道该干嘛。
+  const note = $("panelNote");
+  if (p.ending) {
+    note.innerHTML = "已经结局了。发「自由模式」能翻过这一页。";
+  } else if (p.needValue || p.needArousal) {
+    const parts = [];
+    if (p.needValue) parts.push("感情还差 <b>" + p.needValue + "</b>");
+    if (p.needArousal) parts.push("气氛还差 <b>" + p.needArousal + "</b>");
+    note.innerHTML = "再往前一步：" + parts.join("、");
+  } else {
+    note.innerHTML = "两样都够了，<b>就差那一件事</b>。";
+  }
+}
+
+// 拉一次面板。失败就静默——面板挂了不该挡住聊天。
+async function refreshPanel() {
+  if (ROLE === "guest") return;
+  try {
+    const r = await fetch("/api/persona/affection/panel");
+    const d = await r.json();
+    if (d && d.ok) {
+      PANEL = d.panel;
+      renderPanel(AFF, PANEL);
+    }
+  } catch (e) { /* 网络抖一下就算了，下一轮还会再拉 */ }
+}
+
 function renderAff(a) {
   renderMode();
   const box = $("affBox");
-  const aro = $("aroBox");
-  const exBox = $("exciteBox");
+  const panelBox = $("panelBox");
   if (ROLE === "guest") {
-    box.style.display = "none";
-    if (aro) aro.style.display = "none";
-    if (exBox) exBox.style.display = "none";
+    if (box) box.style.display = "none";
+    if (panelBox) panelBox.style.display = "none";
     return;
   }
-  // mode 缺字段时的兜底：只要不是明确「没激活」，就按攻略模式显示。
-  // （后端每轮回包曾漏带 mode，导致聊一轮后控件自己跳成「自由模式」。）
   const raid = isRaid(a);
-  // 好感区块对登录用户**一直显示**（见上面那段死锁注释）；气氛不一样——
-  // 它没有「未开启」这个中间态，没数据就整块藏掉，免得多一个空条。
-  box.style.display = "";
-  if (aro) aro.style.display = (raid && !!a) ? "" : "none";
-  // 2026-11-04 三次修订：这里原来显示 `家里的人 · 正常关系`——「正常关系」是
-  // **好感档名**，跟「关系」两个字撞车；后来改成 `第 3 级 / 共 5 级`，但「级」
-  // 同样是行话。现在只报关系叫什么，说法和 QQ 尾行完全一致。
-  $("affModeK").textContent = raid ? "关系 · 攻略模式"
-    : (a ? "关系 · 已封存" : "关系 · 未开启");
-  $("sAff").textContent = !a ? "—"
-    : (a.ending
-       ? (a.ending === "graduated" ? "已毕业" : "已进局子")
-       : (a.levelName || "—"));
-  // 数值（2026-11-04）：自由模式下数值是封存的，一律不给数，免得玩家对着
-  // 一堆不动的数以为还能涨。
-  const live = raid && !!a;
-  // 进度条按「这一档走到下一档」算（2026-11-04 第四次修订）：原来按
-  // level/5 画，跨一整档看不出变化，玩家不知道还差多少才升。pct 由后端
-  // `intimacy_gauge` 算好，前端只管画。满级 100，负分 0。
-  const g = (a && a.intimacy) || null;
-  $("affBar").style.width = (live && g ? (g.pct | 0) : 0) + "%";
-  // 亲密度那一行：和 QQ 尾行同一句话（亲密 21/30 · 还差 9）。
-  // 数字只在这里出现一次——以前「好感 21」和进度条并排，同一个数看两遍。
-  const gEl = $("sGauge");
-  if (gEl) {
-    const on = live && !!(g && g.label);
-    gEl.style.display = on ? "" : "none";
-    gEl.textContent = on ? ("亲密 " + g.label) : "";
-    gEl.className = "gauge" + ((a && (a.value | 0) < 0) ? " dn" : "");
-  }
-  // 冲动 0~100、好感可能是负的（带负号）。
-  const setNum = (id, v) => {
-    const el = $(id);
-    if (!el) return;
-    el.textContent = (v === null || v === undefined) ? "—" : String(v);
-    el.className = (typeof v === "number" && v < 0) ? "dn" : "";
-  };
-  if (aro) {
-    // 气氛条按 0~100 走：它本来就是「此刻有多热」，会自己降下去
-    const ar = a ? (a.arousal | 0) : 0;
-    const extra = (a && a.crossN) ? " · 被拒 " + a.crossN + " 次" : "";
-    $("sAro").textContent = a
-      ? ((a.arousalName || "—") + extra)
-      : "—";
-    $("aroBar").style.width = Math.max(0, Math.min(100, ar)) + "%";
-    setNum("nAro", live ? ar : null);
-  }
-  // 兴奋（2026-11-04 晚）：整块只在场景内出现。场景外是「没有这一项」，
-  // 不是「这一项是 0」——所以藏起来，不画一条归零的空条。
-  if (exBox) {
-    const ex = a ? (a.excite | 0) : 0;
-    const onEx = live && ex > 0;
-    exBox.style.display = onEx ? "" : "none";
-    if (onEx) {
-      $("sEx").textContent = (a.exciteName || "—");
-      $("exBar").style.width = Math.max(0, Math.min(100, ex)) + "%";
-      setNum("nEx", ex);
-    }
-  }
-  $("btnAffRestart").style.display = raid ? "" : "none";
+  if (box) box.style.display = raid ? "" : "none";
+  if (panelBox) panelBox.style.display = "";
+  // 面板数据是异步来的；这里先用上次的渲染一次（避免闪空白），
+  // 然后立刻拉新的。第一次进来 PANEL 是 null，就等 refreshPanel 填。
+  renderPanel(a, PANEL);
+  refreshPanel();
 }
 
 // 顶部的自由/攻略开关：两态都常驻，靠边框色区分（灰=自由，玫红=攻略）。
