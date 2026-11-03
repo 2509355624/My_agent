@@ -43,6 +43,18 @@ MIN_V = -50
 MAX_V = 50
 INITIAL_V = 0
 ROUND_CAP = 15          # 单轮加分绝对值上限（防一句话刷满）
+
+# ── 距离层级（2026-11-04）────────────────────────────────
+# 「你们到哪一步了」。0~5，描述**亲疏**不描述**身份**——这样一张骨科卡
+# 可以从「妹妹」这个起点开始，不用被「陌生人」框死。卡片可用
+# `start_level` 指定起点、`level_names` 覆盖 6 级的叫法。
+LEVEL_MAX = 5
+AROUSAL_MAX = 100       # 冲动：此刻被激起的程度，一次性机会
+AROUSAL_DECAY = 15      # 每轮回落多少（回合结束就凉）
+# 越界被拒的代价，按当晚第几次递增（不冻结、不降级——自己哄回来）
+CROSS_PENALTY = (3, 6, 10)
+CROSS_HARD = 20         # 她说了不要还继续：一次就够狠
+CROSS_JAIL_AT = 2       # 强行几次触发报警（这条线结束，只能重开）
 ACTION_DAILY = 5        # 每天剧情(action)型大额加分的次数上限，超了按聊天算
 CHAT_SCALE = (3, 2, 1, 1)   # 纯聊天：当天第 1~4 次的加分上限
 # 第 5 次起不再归零，改成「每 CHAT_TAIL_EVERY 轮补 1 分」——**不设日上限**，
@@ -80,6 +92,15 @@ DEFAULT_CONFIG = {
         "graduated": {"at": 50,  "name": "毕业",   "prompt": ""},
         "jail":      {"at": -50, "name": "进局子", "prompt": ""},
     },
+    # 距离层级兜底：config 里没有 intimacy 时用这套中性名，机制不因缺配置停摆
+    "intimacy": {"levels": [
+        {"key": "l0", "name": "隔得很远",     "gate": 0,  "guard": 50, "prompt": ""},
+        {"key": "l1", "name": "点头之交",     "gate": 5,  "guard": 46, "prompt": ""},
+        {"key": "l2", "name": "说得上话",     "gate": 12, "guard": 40, "prompt": ""},
+        {"key": "l3", "name": "说得进心里",   "gate": 20, "guard": 34, "prompt": ""},
+        {"key": "l4", "name": "靠得很近",     "gate": 30, "guard": 25, "prompt": ""},
+        {"key": "l5", "name": "不分彼此",     "gate": 40, "guard": 15, "prompt": ""},
+    ]},
 }
 
 
@@ -134,13 +155,79 @@ def ending_cfg(key, cfg=None):
     return (cfg.get("endings") or {}).get(key) or {}
 
 
+# ── 距离层级 ──────────────────────────────────────────
+
+def levels_of(cfg=None):
+    """六级的配置列表，按 0→5 顺序。配置坏了回退默认表。"""
+    cfg = cfg or load_config()
+    lst = (cfg.get("intimacy") or {}).get("levels")
+    if not isinstance(lst, list) or not lst:
+        lst = (DEFAULT_CONFIG.get("intimacy") or {}).get("levels") or []
+    return lst
+
+
+def level_cfg(n, cfg=None):
+    """第 n 级（0~5）的配置；越界取边缘。"""
+    lst = levels_of(cfg)
+    if not lst:
+        return {}
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        n = 0
+    return lst[max(0, min(len(lst) - 1, n))]
+
+
+def level_name(n, cfg=None, card=None):
+    """这一级在**这张卡**里叫什么。卡片给了 level_names 就用卡片的
+    （骨科卡第 1 级可能叫「妹妹」），没给就用通用名。"""
+    names = (card or {}).get("level_names") if isinstance(card, dict) else None
+    if isinstance(names, list) and 0 <= int(n or 0) < len(names):
+        got = str(names[int(n or 0)] or "").strip()
+        if got:
+            return got
+    return str(level_cfg(n, cfg).get("name") or "")
+
+
+def card_start(card):
+    """角色卡给的起点：{value, level}。没配就从 0 / 第 0 级开始。"""
+    card = card if isinstance(card, dict) else {}
+    try:
+        lv = int(card.get("start_level") or 0)
+    except (TypeError, ValueError):
+        lv = 0
+    lv = max(0, min(LEVEL_MAX, lv))
+    gate = int(level_cfg(lv).get("gate") or 0)
+    try:
+        val = int(card.get("start_value"))
+    except (TypeError, ValueError):
+        val = gate          # 没给分数：正好卡在这一级的门槛上
+    return {"value": max(MIN_V, min(MAX_V, val)), "level": lv}
+
+
 def _today():
     return datetime.date.today().isoformat()
 
 
-def _blank(value=INITIAL_V):
-    t = tier_for(value) or {}
-    return {"mode": MODE_RAID, "value": value, "tier": str(t.get("key") or ""),
+def _blank(line_key="", value=None):
+    """新建一份攻略记录。
+
+    起点**不是**固定的 0：先看角色卡有没有配 `start_level` / `start_value`。
+    骨科卡可以一上来就是「妹妹」（第 2 级），不用从陌生人爬。
+    """
+    card = {}
+    if line_key:
+        try:
+            from app import persona
+            card = persona.active_card(line_key) or {}
+        except Exception:                                  # noqa: BLE001
+            card = {}
+    st = card_start(card)
+    if value is not None:
+        st["value"] = max(MIN_V, min(MAX_V, int(value)))
+    t = tier_for(st["value"]) or {}
+    return {"mode": MODE_RAID, "value": st["value"], "tier": str(t.get("key") or ""),
+            "level": st["level"], "arousal": 0, "cross_n": 0,
             "down": 0, "ending": "", "day": _today(), "chat": 0, "acts": 0,
             "hist": []}
 
@@ -159,12 +246,44 @@ def _save_entry(line_key, ent):
     persona._save_state(state)                            # noqa: SLF001
 
 
+def _card_of(line_key):
+    """这条线现在演的角色卡（取不到就空字典）。"""
+    try:
+        from app import persona
+        card = persona.active_card(line_key)
+        return card if isinstance(card, dict) else {}
+    except Exception:                                      # noqa: BLE001
+        return {}
+
+
+def _migrate(rec):
+    """老存档（只有 value/tier，没有 level/arousal）就地补齐。
+
+    2026-11-04 加距离层级之前的记录没有这两个字段，直接按 0 算会让老玩家
+    一夜之间退回「隔得很远」。这里按现有好感反推一个相符的层级。
+    """
+    if not isinstance(rec, dict):
+        return rec
+    if "level" not in rec:
+        v = int(rec.get("value") or 0)
+        lv = 0
+        for i, l in enumerate(levels_of()):
+            if v >= int(l.get("gate") or 0):
+                lv = i
+        rec["level"] = lv
+    if "arousal" not in rec:
+        rec["arousal"] = 0
+    if "cross_n" not in rec:
+        rec["cross_n"] = 0
+    return rec
+
+
 def record_of(ent):
     """条目里的好感记录；没有（自由模式从没开过）返回 None。"""
     if not isinstance(ent, dict):
         return None
     rec = ent.get("affection")
-    return rec if isinstance(rec, dict) else None
+    return _migrate(rec) if isinstance(rec, dict) else None
 
 
 def is_raid(line_key):
@@ -185,7 +304,9 @@ def status(line_key):
         "mode": str(rec.get("mode") or MODE_FREE),
         "value": int(rec.get("value") or 0),
         "tier": str(rec.get("tier") or ""),
-        "tierName": str(t.get("name") or ""),
+        "tierName": _tier_view(t, rec.get("level")).get("name") or "",
+        "level": int(rec.get("level") or 0),
+        "levelName": level_name(int(rec.get("level") or 0), cfg, _card_of(line_key)),
         "ending": str(rec.get("ending") or ""),
     }
 
@@ -208,8 +329,14 @@ def set_mode(line_key, raid):
     existing = record_of(ent)
     if raid:
         if existing is None:
-            ent["affection"] = _blank()
+            rec = _blank(line_key)
+            ent["affection"] = rec
             _save_entry(line_key, ent)
+            lv = int(rec.get("level") or 0)
+            if lv > 0:
+                return ("攻略模式开启。你们已经到【%s】这一步，从这里接着往下走。"
+                        "发「好感」随时查。" % (level_name(lv, card=_card_of(line_key))
+                                                or "认识"))
             return ("攻略模式开启，好感从 0 开始。聊天会慢慢涨，"
                     "剧情里的照顾和付出涨得快，把她说烦了会掉。发「好感」随时查。")
         rec = existing
@@ -245,14 +372,15 @@ def set_mode(line_key, raid):
 
 
 def restart(line_key):
-    """「重新开始」：数值归零、变化记录清空、结局解除；**聊天记忆保留**。"""
+    """「重新开始」：数值回到**这张卡的起点**（不是硬归零）、记录清空、结局解除；
+    **聊天记忆保留**。"""
     ent = _entry(line_key)
     if not ent or record_of(ent) is None:
         return None           # 从没开过攻略：当普通消息
-    ent["affection"] = _blank()
+    ent["affection"] = _blank(line_key)
     _save_entry(line_key, ent)
-    return ("好感已归零，重新攻略。之前聊过的她还记得，"
-            "但你们的关系从「初识」再来一遍。")
+    return ("已经回到原点，重新攻略。之前聊过的她还记得，"
+            "但你们的关系从最初那一步再来一遍。")
 
 
 # ── 结算 ──────────────────────────────────────────────
@@ -274,8 +402,13 @@ def scoring_ctx(line_key):
         recent_rows.append("· %s（%+d）" % (h.get("r") or "", int(h.get("d") or 0)))
     recent = ("最近发生：\n" + "\n".join(recent_rows)) if recent_rows \
         else "（你们还没什么交集）"
+    lv = int(rec.get("level") or 0)
+    tv = _tier_view(tier_for(value, cfg), lv)
     return {"value": value,
-            "tier": str((tier_for(value, cfg) or {}).get("name") or "?"),
+            "tier": tv["name"] or "?",
+            "level": level_name(lv, cfg, _card_of(line_key)) or "?",
+            "levelN": lv,
+            "arousal": int(rec.get("arousal") or 0),
             "recent": recent}
 
 
@@ -315,11 +448,13 @@ def settle(line_key, score):
                 "ending": str(rec.get("ending")), "just_ended": False,
                 "reason": ""}
 
-    # 跨天：聊天/剧情计数清零
+    # 跨天：聊天/剧情计数清零，警惕也散一点（隔一天气会消）
     if str(rec.get("day") or "") != _today():
         rec["day"] = _today()
         rec["chat"] = 0
         rec["acts"] = 0
+        rec["cross_n"] = max(0, int(rec.get("cross_n") or 0) - 1)
+        rec["arousal"] = 0
 
     score = score if isinstance(score, dict) else {}
     try:
@@ -348,9 +483,58 @@ def settle(line_key, score):
     value = max(MIN_V, min(MAX_V, value + applied))
     applied = value - prev_value      # 夹到边缘后以实际变动为准
 
+    # ── 越界与冲动（2026-11-04）────────────────────────
+    # 判定权在第一段模型：它说越界了就是越界了，说她不答应就是不答应。
+    # 代码只按「越界了几次」施加代价——**不冻结、不降级**，扣完自己哄回来。
+    cross = str(score.get("cross") or "").strip().lower()
+    if cross not in ("mild", "hard"):
+        cross = ""
+    allow = str(score.get("allow") or "").strip().lower()
+
+    # 冲动是一次性的机会：本轮场景给的增量 + 回合结束回落
+    try:
+        arose = int(score.get("arousal") or 0)
+    except (TypeError, ValueError):
+        arose = 0
+    arose = max(-60, min(60, arose))
+    rec["arousal"] = max(0, min(AROUSAL_MAX,
+                                 int(rec.get("arousal") or 0) + arose - AROUSAL_DECAY))
+
+    force_ending = ""
+    if cross:
+        if cross == "hard":
+            rec["cross_n"] = int(rec.get("cross_n") or 0) + 1
+            extra = -CROSS_HARD
+        elif allow == "no":
+            n = int(rec.get("cross_n") or 0)
+            extra = -CROSS_PENALTY[min(n, len(CROSS_PENALTY) - 1)]
+            rec["cross_n"] = n + 1
+        else:
+            extra = 0             # 半推半就 / 她答应了：这一步不罚
+        if extra:
+            prev_value = value
+            value = max(MIN_V, min(MAX_V, value + extra))
+            applied += value - prev_value
+        if cross == "hard" and int(rec.get("cross_n") or 0) >= CROSS_JAIL_AT:
+            force_ending = ENDING_JAIL
+
+    # ── 距离升级 ─────────────────────────────────────
+    # 升一级要两个条件：模型判定「这轮做成了那件事」+ 好感够这一级的门票。
+    # 缺一个都不升，**只升不降**（身体和记忆不会因为分数掉回去而复原）。
+    cfg_levels = levels_of(cfg)
+    lv = int(rec.get("level") or 0)
+    rose = 0
+    if bool(score.get("beat")) and lv < LEVEL_MAX:
+        nxt = lv + 1
+        gate = int(level_cfg(nxt, cfg).get("gate") or 0)
+        if value >= gate:
+            lv = nxt
+            rose = nxt
+            rec["level"] = lv
+
     # 越线结局：一次就触发
     just_ended = ""
-    ending = ending_for(value, cfg)
+    ending = force_ending or ending_for(value, cfg)
     if ending:
         rec["ending"] = ending
         just_ended = ending
@@ -390,9 +574,13 @@ def settle(line_key, score):
     eff_key = str(rec.get("tier") or "")
     eff_t = next((t for t in (cfg.get("tiers") or [])
                   if t.get("key") == eff_key), None) or new_t
+    tv = _tier_view(eff_t, lv)
     return {"applied": applied, "active": True, "mode": MODE_RAID, "value": value,
             "tier": eff_key, "changed": changed,
-            "tierName": str(eff_t.get("name") or ""),
+            "tierName": tv["name"] or str(eff_t.get("name") or ""),
+            "level": lv, "levelName": level_name(lv, cfg, _card_of(line_key)),
+            "rose": rose, "arousal": int(rec.get("arousal") or 0),
+            "cross": cross, "allow": allow, "crossN": int(rec.get("cross_n") or 0),
             "ending": str(rec.get("ending") or ""),
             "just_ended": just_ended, "reason": reason}
 
@@ -401,6 +589,10 @@ def settle(line_key, score):
 
 # 场外能翻到多深（2026-11-03）：给主模型一个**事实**——她现在让你看到哪一层。
 # 代码只报事实，写不写、写多深、翻到什么，全交给模型判断。
+# 2026-11-04：从「绑好感档位」改成「绑距离层级」。以前好感一过 20 就说
+# 「几乎不再藏了」，可她连你的手都没碰过——场外那段当场穿帮。
+_DEPTH_BY_LEVEL = {0: "low", 1: "low", 2: "mid", 3: "mid", 4: "high", 5: "high"}
+# 老调用（传档位 key）的映射，保留兼容
 _DEPTH_LEVEL = {
     "miffed": "low", "cold": "low", "forced": "low", "fallen": "low",
     "normal": "mid", "touch": "mid",
@@ -416,10 +608,46 @@ _DEPTH_TEXT = {
 }
 
 
-def depth_hint(tier_key):
-    """按**生效档位**给出「她现在让你看到多深」。未知档位返回空串——
+def depth_hint(level):
+    """按**距离层级**给出「她现在让你看到多深」。未知返回空串——
     多注入一句反而会被模型当成硬规则。"""
-    return _DEPTH_TEXT.get(_DEPTH_LEVEL.get(str(tier_key or ""), ""), "")
+    if isinstance(level, str) and not level.strip().isdigit():
+        return _DEPTH_TEXT.get(_DEPTH_LEVEL.get(level.strip(), ""), "")
+    try:
+        lv = int(level)
+    except (TypeError, ValueError):
+        return ""
+    return _DEPTH_TEXT.get(_DEPTH_BY_LEVEL.get(lv, ""), "")
+
+
+def _tier_view(t, level):
+    """这一档在你现在这个距离上该怎么念。
+
+    前四档的原文案写的是**身体进度**（「界限已经松了」「开始凿」），
+    那是距离 4~5 级才成立的画面。距离还没到的时候只有感情，
+    用 `prompt_soft`（用户随时可以改），没有 soft 版就退回原文。
+    """
+    t = t if isinstance(t, dict) else {}
+    try:
+        lv = int(level or 0)
+    except (TypeError, ValueError):
+        lv = 0
+    if lv >= 4:
+        return {"name": str(t.get("name") or ""),
+                "prompt": str(t.get("prompt") or "")}
+    soft_name = str(t.get("name_soft") or "").strip()
+    soft_txt = str(t.get("prompt_soft") or "").strip()
+    return {"name": soft_name or str(t.get("name") or ""),
+            "prompt": soft_txt or str(t.get("prompt") or "")}
+
+
+def _can_cross(value, level, arousal, cfg=None):
+    """按「防线 − 冲动加成」算：以你们现在的距离，她接不接得住。
+
+    这只是一个**概率性事实**，不是命令——所以注入里永远写「可能」，不写「一定」。
+    """
+    guard = int(level_cfg(level, cfg).get("guard") or 0)
+    return value >= guard - int(arousal or 0) // 5
 
 
 def injection_block(res, cfg=None):
@@ -427,68 +655,114 @@ def injection_block(res, cfg=None):
     if not isinstance(res, dict) or not res.get("active"):
         return ""
     cfg = cfg or load_config()
-    lines = ["## 你们现在的关系到这一步了（系统按好感结算，照这个状态演）", ""]
+    lines = ["## 你们现在到这一步了（系统按状态结算的事实，照这个演，不要自己改）", ""]
     value = int(res.get("value") or 0)
     if res.get("ending") and not res.get("just_ended"):
         # 结局已定格（切模式回来接着演的线）：维持结局情绪，不再结算
         ec = ending_cfg(res["ending"], cfg)
-        lines.append("好感 %+d —— 剧情已经停在结局【%s】，关系不会再变。"
-                     % (value, ec.get("name") or ""))
+        lines.append("剧情已经停在结局【%s】，关系不会再变。" % (ec.get("name") or ""))
         txt = str(ec.get("prompt") or "").strip()
         if txt:
             lines += ["", txt]
         return "\n".join(lines)
     if res.get("just_ended"):
         ec = ending_cfg(res["just_ended"], cfg)
-        lines.append("好感 %+d —— **剧情到达结局：【%s】**" % (value, ec.get("name") or ""))
+        lines.append("**剧情到达结局：【%s】**" % (ec.get("name") or ""))
         txt = str(ec.get("prompt") or "").strip()
         if txt:
             lines += ["", txt]
         lines += ["", "这是收场回合：把这段结局剧情演完、收住。"]
         return "\n".join(lines)
-    lines.append("好感 %+d —— 当前阶段：【%s】"
-                 % (value, res.get("tierName") or "?"))
+
+    lv = int(res.get("level") or 0)
+    # 不报好感数字：好感和「距离」本来就可以不同步（好感够了但没做成事，
+    # 你们还是原来那一步）。两个数字一起摆出来，模型会纠结该信哪个。
+    lines.append("关系：【%s】  她对你的感觉：【%s】"
+                 % (res.get("levelName") or "?", res.get("tierName") or "?"))
+    lp = str(level_cfg(lv, cfg).get("prompt") or "").strip()
+    if lp:
+        lines += ["", lp]
+
     # 档位文案按**生效档位**取（res["tier"]），不能用 tier_for(value)——
     # 降档滞回期间两者不一致，会提前把新档位的语气漏给模型
     t = next((x for x in (cfg.get("tiers") or [])
               if x.get("key") == res.get("tier")), None) or tier_for(value, cfg) or {}
-    txt = str(t.get("prompt") or "").strip()
+    tv = _tier_view(t, lv)
+    txt = tv["prompt"].strip()
     if txt:
         lines += ["", txt]
-    hint = depth_hint(res.get("tier"))
+    hint = depth_hint(lv)
     if hint:
         lines += ["", "（她现在让你看到多深：%s）" % hint]
+
+    # 这一刻的气氛：冲动决定「她此刻想不想」，防线决定「接不接得住」
+    ar = int(res.get("arousal") or 0)
+    can = _can_cross(value, lv, ar, cfg)
+    if ar >= 65 and can:
+        lines += ["", "（她此刻几乎没在设防，而且以你们现在的距离，这一点她也清楚。"
+                      "这个状态下的她可能主动——先开口、先靠近、先留下你。）"]
+    elif ar >= 65:
+        lines += ["", "（她此刻很乱，但你们之间的距离还撑不住这个。她会被自己的反应吓到，"
+                      "然后退回去。别把她的乱当成同意。）"]
+    elif ar >= 35:
+        lines += ["", "（她此刻有点乱。她不会干脆说不，也不会干脆答应，她会绕。）"]
+    elif can:
+        lines += ["", "（她此刻是清醒的，但以你们现在的距离，她挡不住太认真的一句话。）"]
+    else:
+        lines += ["", "（她此刻是清醒的。这个状态下越界，她挡得住，也说得出口。）"]
+
+    if res.get("cross"):
+        if res.get("cross") == "hard":
+            lines += ["", "（她刚才明确表示不愿意，你还是继续了。她现在的反应不是害羞，"
+                          "是怕，或者恼。）"]
+        elif str(res.get("allow") or "") == "no":
+            lines += ["", "（她拒绝了。这一轮她不会松口——除非你先退回到安全的位置。）"]
+        else:
+            lines += ["", "（她没有明确答应，也没有走开。这个状态最难看也最好看。）"]
+
+    # 一条硬约束：不许每轮都给干脆答案
+    lines += ["", "（怎么反应由你演，但**别每轮都给干脆的答案**：她可以装没听懂、可以反问、"
+                  "可以嘴上说不要但没躲、可以答应完自己后悔。真实的犹豫比干脆的拒绝好看。）"]
+
+    if res.get("rose"):
+        lines += ["", "（你们的关系刚刚往前跨了一步，到了【%s】。这一步要有实感——"
+                      "她的某个反应、某句话，得和之前不一样。）"
+                  % (res.get("levelName") or "")]
     if res.get("changed"):
-        # 跨档回合：让她语气有明显体感，不然数值在后台动、玩家感知不到
         lines += ["", "（你们的关系刚刚跨进【%s】这一档——这一轮开始，"
                       "她对你的态度要和之前**明显不一样**，转折要自然。）"
                   % (res.get("tierName") or "")]
     reason = str(res.get("reason") or "").strip()
     applied = int(res.get("applied") or 0)
     if applied and reason:
-        lines += ["", "（刚才那件事：%s —— 好感 %+d。）" % (reason, applied)]
+        lines += ["", "（刚才那件事：%s。）" % reason]
     return "\n".join(lines)
 
 
 def tail_line(res):
-    """QQ 回复尾部追加的那行状态。没在攻略 / 这轮没结算就空串。
+    """QQ 回复尾部追加的那行状态。
 
-    格式（2026-11-03 调整）：总数在前、本轮在后——原来的
-    「【档位】（好感 +6）」容易被读成本轮加了 6，玩家问了才知道是总数。
+    2026-11-04 改：**不报数字**。原来挂「好感 +6」等于把每轮的奖励提前兑现，
+    玩家开始算账就不看正文了。现在只报「你们到哪一步」，再加一句模糊的体感。
     """
     if not isinstance(res, dict) or not res.get("active"):
         return ""
-    value = int(res.get("value") or 0)
     ending = str(res.get("ending") or "")
     if ending:
         mark = {ENDING_GRAD: "🎓", ENDING_JAIL: "🚨"}.get(ending, "❤")
         name = (ending_cfg(ending, load_config()) or {}).get("name") or "结局"
-        return "%s 好感 %+d · 已结局【%s】" % (mark, value, name)
+        return "%s 已结局【%s】" % (mark, name)
+    lname = res.get("levelName") or level_name(int(res.get("level") or 0)) or "?"
     applied = int(res.get("applied") or 0)
-    tier = res.get("tierName") or "?"
-    if applied:
-        return "❤ 好感 %+d（这轮 %+d）·【%s】" % (value, applied, tier)
-    return "❤ 好感 %+d ·【%s】" % (value, tier)
+    if res.get("rose"):
+        return "❤ %s ↑" % lname
+    if res.get("cross") == "hard":
+        return "❤ %s · 她退开了" % lname
+    if applied >= 6:
+        return "❤ %s · 她好像有点不一样了" % lname
+    if applied <= -6:
+        return "❤ %s · 她脸色不太对" % lname
+    return "❤ %s" % lname
 
 
 def detail_nodes(line_key):
@@ -507,16 +781,21 @@ def detail_nodes(line_key):
 
     head = ["❤ 攻略档案 · %s" % name, ""]
     if mode == MODE_FREE:
-        head.append("状态：自由模式（好感封存中）")
+        head.append("状态：自由模式（进度封存中）")
     elif ending:
         head.append("状态：已结局【%s】" % (ending_cfg(ending, cfg).get("name") or ""))
     else:
         head.append("状态：攻略中")
-    head += ["当前好感：%+d（%s）" % (value, (tier_for(value, cfg) or {}).get("name") or "?")]
+    lv = int(rec.get("level") or 0)
+    head.append("你们：%s" % (level_name(lv, cfg, card) or "?"))
+    head.append("她对你的感觉：%s"
+                % (_tier_view(tier_for(value, cfg), lv).get("name") or "?"))
     if not ending:
-        head += ["距离毕业（%+d）还差 %d 点好感" % (MAX_V, MAX_V - value),
-                 "距离进局子（%+d）还有 %d 点好感" % (MIN_V, value - MIN_V)]
-    head += ["", "纯聊天涨得慢（每天前几次有效），剧情里的照料、付出、解围涨得快。"]
+        head.append("好感 %+d" % value)
+        if lv < LEVEL_MAX:
+            head += ["", "再往前一步不靠攒分——得有一件能让她愿意往前走的事。"]
+        else:
+            head += ["", "她已经不设防了。剩下的只看这一刻的气氛。"]
     page1 = "\n".join(head)
 
     hist = rec.get("hist") if isinstance(rec.get("hist"), list) else []

@@ -79,12 +79,14 @@
   .field { margin-bottom: 16px; }
   .field label { display: block; font-size: 13px; color: var(--text-dim); margin-bottom: 6px; }
   .field .tip { font-size: 12px; color: var(--text-mute); margin-top: 5px; }
-  input[type=text], textarea {
+  input[type=text], input[type=number], select, textarea {
     width: 100%; background: var(--bg-input); color: var(--text);
     border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px;
     font-family: inherit; font-size: 13px; line-height: 1.7; resize: vertical;
   }
-  input[type=text]:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  input[type=text]:focus, input[type=number]:focus, select:focus, textarea:focus {
+    outline: none; border-color: var(--accent);
+  }
   textarea.big { min-height: 180px; }
   textarea.mid { min-height: 96px; }
   .row { display: flex; gap: 16px; }
@@ -119,6 +121,10 @@
 </div>
 
 <script>
+// 距离层级的默认叫法（和后端 config/affection_tiers.json 对齐）。
+// 卡片可以用「六级的叫法」覆盖，骨科/青梅/同事这类关系直接改名。
+const LEVEL_NAMES = ["隔得很远", "点头之交", "说得上话", "说得进心里",
+                     "靠得很近", "不分彼此"];
 const $ = (id) => document.getElementById(id);
 let cards = [];
 let cur = -1;
@@ -214,6 +220,27 @@ function renderPane() {
       <div class="tip">她房间里有什么、藏了什么。只在**你离开她视线、进她房间**时当素材用（比如：书桌、没关严的抽屉、衣柜里没拆标的泳衣、压在枕头下的速写本）。留空就由她按人设临场编，只是每次可能不一样。</div>
     </div>
     <div class="field">
+      <label>攻略起点（可留空）</label>
+      <div style="display:flex;gap:10px;align-items:center">
+        <select id="f_start_level" style="flex:1">
+          ${[0, 1, 2, 3, 4, 5].map(i =>
+            `<option value="${i}" ${(c.start_level | 0) === i ? "selected" : ""}>第 ${i} 级 · ${LEVEL_NAMES[i]}</option>`
+          ).join("")}
+        </select>
+        <input type="number" id="f_start_value" min="-50" max="50"
+               placeholder="初始好感" style="width:120px"
+               value="${c.start_value == null ? "" : esc(c.start_value)}">
+      </div>
+      <div class="tip">她一开始就在哪一步。留空就是陌生人从第 0 级开始。无血缘妹妹这类可以选第 2 级、初始好感 14——一上来就是「熟」，不用从陌生人重新爬。初始好感留空就卡在这一级的门槛上。</div>
+    </div>
+    <div class="field">
+      <label>六级的叫法（可留空，逗号分隔）</label>
+      <input type="text" id="f_level_names"
+             placeholder="妹妹,依赖你的妹妹,会跟你撒娇的妹妹,只对你这样的妹妹"
+             value="${esc((c.level_names || []).join(","))}">
+      <div class="tip">覆盖默认的「${LEVEL_NAMES.join(" / ")}」。填几个算几个，没填的用默认名。骨科、青梅、同事这类关系直接在这里改叫法。</div>
+    </div>
+    <div class="field">
       <label>参考图（可留空）</label>
       <input type="text" id="f_ref" value="${esc(c.referenceImage)}">
     </div>
@@ -235,6 +262,11 @@ function collect() {
   c.appearancePrompt = $("f_appearance").value.trim();
   c.outfitPrompt = $("f_outfit").value.trim();
   c.room = $("f_room").value.trim();
+  c.start_level = parseInt($("f_start_level").value, 10) || 0;
+  const sv = $("f_start_value").value.trim();
+  // 留空要传 null（不是 0）——后端靠 null 判断「没填，卡在这一级门槛上」
+  c.start_value = sv === "" ? null : Math.max(-50, Math.min(50, parseInt(sv, 10) || 0));
+  c.level_names = $("f_level_names").value.split(",").map(x => x.trim()).filter(Boolean);
   c.referenceImage = $("f_ref").value.trim();
 }
 
@@ -250,6 +282,7 @@ function add() {
     id: "", name: "新角色", description: "", avatar: "",
     personality: "", systemPrompt: "", appearancePrompt: "",
     outfitPrompt: "", room: "", referenceImage: "",
+    start_level: 0, start_value: null, level_names: [],
   });
   cur = cards.length - 1;
   render();
