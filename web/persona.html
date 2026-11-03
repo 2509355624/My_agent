@@ -467,7 +467,11 @@ async function shoot(domIdx, btn, isRegen) {
         setPicError(domIdx, "出图失败：" + (st.error || "未知"));
         return;
       }
-      if (i === 3) setPicPending(domIdx, "慢慢画着，别急");
+      // running / pending 都算还在画。前几轮提示一次，之后一直换文案，
+      // 免得用户以为卡死了（实测一张图 100~180 秒）。
+      if (i === 2) setPicPending(domIdx, "正在画，一张图要一两分钟");
+      if (i === 20) setPicPending(domIdx, "还在画，别急");
+      if (i === 40) setPicPending(domIdx, "画得慢，再等等");
     }
     setPicError(domIdx, "等太久了，去 Moss 漫画台看看");
   } catch (e) {
