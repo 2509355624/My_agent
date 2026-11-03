@@ -3,6 +3,7 @@
 只测「请求进、JSON 出」这一层：引擎本身在 `tests/test_persona.py` 里，
 这里不重复测。跑 Flask test_client，不启动服务、不调真模型。
 """
+import json
 import os
 import tempfile
 import unittest
@@ -157,6 +158,55 @@ class ChatTest(PersonaApiBase):
         self._enter()
         r = self.c.post("/api/persona/chat", json={"text": "  ", "qq": QQ})
         self.assertEqual(r.status_code, 400)
+
+
+class ComicStatusTest(PersonaApiBase):
+    """查某一页出完没有（2026-11-03）。
+
+    用户报「网页端出图有问题」——查下来是页号错配：每个系列页有自己的任务
+    目录，每次渲染只出一页，所以那个目录的 `state.json` 里页号**永远是 "1"**。
+    拿系列第 2 页的 2 去查，永远查不到 → 前端一直 pending。
+    """
+
+    def _make_task(self, name, status="done", file="web/x/a.png"):
+        d = os.path.join(self.tmp.name, "moss_comic", name)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "state.json"), "w", encoding="utf-8") as fh:
+            json.dump({"pages": {"1": {"status": status, "file": file}}}, fh)
+        return d
+
+    def test_series_page_2_resolves(self):
+        """系列第 2 页要能查到——这正是修之前坏掉的地方。"""
+        d = self._make_task("20261103_1530_test")
+        series = {"id": "SID", "pages": [
+            {"n": 1, "task": d},
+            {"n": 2, "task": d},
+        ]}
+        with mock.patch("app.moss_series.load", return_value=series), \
+             mock.patch("app.moss_series.by_n",
+                        side_effect=lambda s, n, owner="": (
+                            [p for p in series["pages"] if p["n"] == n] or [None])[0]):
+            d2 = self.get("/api/persona/comic?sid=SID&page=2")
+        self.assertEqual(d2["status"], "done")
+        self.assertIn("test", d2["url"])
+
+    def test_url_uses_task_page_one(self):
+        """取图地址里的 `n` 必须是任务目录内的 1，不是系列页号。"""
+        d = self._make_task("20261103_1600_t")
+        series = {"id": "S", "pages": [{"n": 3, "task": d}]}
+        with mock.patch("app.moss_series.load", return_value=series), \
+             mock.patch("app.moss_series.by_n",
+                        side_effect=lambda s, n, owner="": {"n": 3, "task": d}):
+            d2 = self.get("/api/persona/comic?sid=S&page=3")
+        self.assertTrue(d2["url"].endswith("n=1"), d2["url"])
+
+    def test_missing_state_reports_pending(self):
+        series = {"id": "S", "pages": [{"n": 1, "task": ""}]}
+        with mock.patch("app.moss_series.load", return_value=series), \
+             mock.patch("app.moss_series.by_n",
+                        side_effect=lambda s, n, owner="": {"n": 1, "task": ""}):
+            d = self.get("/api/persona/comic?sid=S&page=1")
+        self.assertEqual(d["status"], "pending")
 
 
 class ShotTest(PersonaApiBase):

@@ -490,15 +490,28 @@ def comic_status():
         return jsonify({"ok": True, "status": "pending", "sid": sid,
                         "page": int(page)})
 
-    rec = (st.get("pages") or {}).get(str(page)) or {}
+    # ⚠️ 2026-11-03：这里**不能用系列页号**去查 `state.json`。
+    #
+    # 每个系列页有自己的任务目录（`moss_comic/20261103_1459_xxx/`），
+    # 而每次渲染只出一页，所以那个目录的 `state.json` 里页号**永远是 "1"**。
+    # 拿系列第 2 页的 2 去查，永远查不到 → 前端一直认为 pending
+    # （用户报「网页端出图有问题」就是这个）。
+    #
+    # 正确做法：任务目录里只有一页，直接取它的唯一记录。
+    pages_map = st.get("pages") or {}
+    rec = pages_map.get("1") or {}
+    if not rec and pages_map:
+        # 兜底：万一哪天一目录多页，取最后一条
+        rec = pages_map[sorted(pages_map.keys())[-1]]
     status = rec.get("status") or "pending"
     out = {"ok": True, "status": status, "sid": sid, "page": int(page)}
     if status == "done":
         rel = str(rec.get("file") or "")
         out["file"] = rel
-        # 走已有的出图接口取文件（它只认 state.json 里记过的相对路径）
-        out["url"] = ("/api/moss/img?task=%s&n=%s"
-                      % (request.args.get("task") or _rel_task(task), page))
+        # 走已有的出图接口取文件（它只认 state.json 里记过的相对路径）。
+        # `n` 也要传 "1"——那是任务目录内的页号，不是系列页号。
+        out["url"] = ("/api/moss/img?task=%s&n=1"
+                      % (request.args.get("task") or _rel_task(task)))
     elif status == "failed":
         out["error"] = rec.get("error") or "出图失败"
     return jsonify(out)
