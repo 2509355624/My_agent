@@ -9,7 +9,9 @@
 设计原则（和整个项目一致）：
 
   - **判断交给 AI**：这轮算多少分、算聊天还是剧情，由第一段模型斟酌；
-  - **代码只做检测和记账**：夹上限、每日递减、降档滞回、越线判结局；
+  - **代码只做检测和记账**：夹单轮上限、降档滞回、越线判结局；
+  - **不设按天的时间闸**（2026-11-04 晚）：聊天和剧情同权，玩家一次会话里
+    能一路推到底，不存在「今天涨够了明天再来」；
   - 档位**文案**全部来自 `config/affection_tiers.json`（用户自己配），
     机制层只认 key / 区间 / aftercare 标记，不掺和内容。
 
@@ -57,14 +59,11 @@ AROUSAL_DECAY = 15      # 每轮回落多少（回合结束就凉）
 CROSS_PENALTY = (3, 6, 10)
 CROSS_HARD = 20         # 她说了不要还继续：一次就够狠
 CROSS_JAIL_AT = 2       # 强行几次触发报警（这条线结束，只能重开）
-ACTION_DAILY = 5        # 每天剧情(action)型大额加分的次数上限，超了按聊天算
-CHAT_SCALE = (3, 2, 1, 1)   # 纯聊天：当天第 1~4 次的加分上限
-# 第 5 次起不再归零，改成「每 CHAT_TAIL_EVERY 轮补 1 分」——**不设日上限**，
-# 一直聊就一直能涨，只是慢。用户 2026-11-03 拍板：卡死到 0 会让玩家以为
-# 系统坏了（实测有人聊 33 轮只涨 6 分，后 13 轮全是 +0）。
-# 一天 30 轮 ≈ 7 + 9 = 16 分，两天升到「开始凿」，三天冲刺毕业；
-# 想要更慢就调大这个数，想更快调小。
-CHAT_TAIL_EVERY = 3
+# 2026-11-04 晚：**按天的额度全部取消**。原来剧情每天 5 次大额、纯聊天按
+# 「当天第几次」递减（3/2/1/1 之后每 3 轮 +1），造成的实际效果是「今天补不完，
+# 明天再来」——用户拍板去掉：「没有人喜欢一个限制你 24 小时的游戏」。
+# 现在聊天和剧情同权，每轮按模型给的 delta 走，只留 ROUND_CAP 兜底。
+# 想再调节奏就改 ROUND_CAP，不要再往回合数上按天加闸。
 DOWN_CONFIRM = 2        # 降档要连续 N 轮确认（防阈值边缘反复横跳）
 HIST_KEEP = 8           # 每条线留最近 N 条变化记录（给「好感」卡片看）
 
@@ -631,18 +630,6 @@ def scoring_ctx(line_key):
             "recent": recent}
 
 
-def _chat_allowance(rec):
-    """纯聊天这轮还能加多少（按当天第几次）。
-
-    前 4 次按 CHAT_SCALE 递减，之后**不会归零**：每 CHAT_TAIL_EVERY 轮
-    补 1 分。聊天永远有收益，只是越来越慢，主要升力留给 action。
-    """
-    n = int(rec.get("chat") or 0)
-    if n < len(CHAT_SCALE):
-        return CHAT_SCALE[n]
-    return 1 if (n - len(CHAT_SCALE)) % CHAT_TAIL_EVERY == 0 else 0
-
-
 def settle(line_key, score):
     """把第一段的打分结算进状态。返回结果 dict（调用方拼注入和尾行）。
 
@@ -668,12 +655,11 @@ def settle(line_key, score):
                 "mercy": mercy_left(rec), "mercyMax": MERCY_MAX,
                 "reason": ""}
 
-    # 跨天：聊天/剧情计数清零，警惕也散一点（隔一天气会消）
+    # 跨天：把隔夜会散掉的东西散掉。**不再有额度要重置**——聊天和剧情
+    # 都不按天算次数（2026-11-04 晚），这里只管气氛和警惕。
     if str(rec.get("day") or "") != _today():
         prev_day = str(rec.get("day") or "")
         rec["day"] = _today()
-        rec["chat"] = 0
-        rec["acts"] = 0
         rec["cross_n"] = max(0, int(rec.get("cross_n") or 0) - 1)
         rec["arousal"] = 0
         # 连续陪伴（2026-11-04）：昨天刚来过就 +1，断过就从 1 重算。
@@ -691,19 +677,10 @@ def settle(line_key, score):
     ttype = str(score.get("turn_type") or "chat").strip().lower()
     reason = str(score.get("reason") or "").strip()[:40]
 
-    # 防刷分：纯聊天每日递减；剧情型每天前 ACTION_DAILY 次不吃递减，超了同聊天
-    # （额度按**加之前的次数**取——先加再取会整体错位一档）
-    if ttype == "action" and int(rec.get("acts") or 0) < ACTION_DAILY:
-        rec["acts"] = int(rec.get("acts") or 0) + 1
-        applied = delta
-    else:
-        if ttype == "action":
-            rec["acts"] = int(rec.get("acts") or 0) + 1
-        if delta > 0:
-            applied = min(delta, _chat_allowance(rec))
-            rec["chat"] = int(rec.get("chat") or 0) + 1
-        else:
-            applied = delta           # 扣分不受递减管
+    # 聊天和剧情同权（2026-11-04 晚）：不再按「当天第几次」打折，也不再限制
+    # 剧情型每天几次大额。单轮只受 ROUND_CAP 约束——那是防一句话刷满，
+    # 不是时间闸。`ttype` 仍然带下来，只用于记录和展示，不参与额度计算。
+    applied = delta
 
     prev_value = value
     value = max(MIN_V, min(MAX_V, value + applied))
