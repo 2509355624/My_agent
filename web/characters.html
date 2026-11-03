@@ -209,6 +209,11 @@ function renderPane() {
       <div class="tip">常服装扮。跟外观固定块一起拼进每轮的画面里；留空就只按外观固定块画。</div>
     </div>
     <div class="field">
+      <label>房间与私物（可留空，中文）</label>
+      <textarea class="mid" id="f_room">${esc(c.room || "")}</textarea>
+      <div class="tip">她房间里有什么、藏了什么。只在**你离开她视线、进她房间**时当素材用（比如：书桌、没关严的抽屉、衣柜里没拆标的泳衣、压在枕头下的速写本）。留空就由她按人设临场编，只是每次可能不一样。</div>
+    </div>
+    <div class="field">
       <label>参考图（可留空）</label>
       <input type="text" id="f_ref" value="${esc(c.referenceImage)}">
     </div>
@@ -229,6 +234,7 @@ function collect() {
   c.systemPrompt = $("f_system").value.trim();
   c.appearancePrompt = $("f_appearance").value.trim();
   c.outfitPrompt = $("f_outfit").value.trim();
+  c.room = $("f_room").value.trim();
   c.referenceImage = $("f_ref").value.trim();
 }
 
@@ -243,7 +249,7 @@ function add() {
   cards.push({
     id: "", name: "新角色", description: "", avatar: "",
     personality: "", systemPrompt: "", appearancePrompt: "",
-    outfitPrompt: "", referenceImage: "",
+    outfitPrompt: "", room: "", referenceImage: "",
   });
   cur = cards.length - 1;
   render();

@@ -386,6 +386,29 @@ def settle(line_key, score):
 
 # ── 注入与展示 ────────────────────────────────────────
 
+# 场外能翻到多深（2026-11-03）：给主模型一个**事实**——她现在让你看到哪一层。
+# 代码只报事实，写不写、写多深、翻到什么，全交给模型判断。
+_DEPTH_LEVEL = {
+    "miffed": "low", "cold": "low", "forced": "low", "fallen": "low",
+    "normal": "mid", "touch": "mid",
+    "start": "high", "care": "high", "full": "high",
+}
+_DEPTH_TEXT = {
+    "low": "她**不打算让你看到什么**——你能翻到的只有她无所谓的东西"
+           "（外卖单、没关的屏幕、随手扔的衣服）。往深里翻，她会当成冒犯。",
+    "mid": "她**允许你看到一部分**——衣柜、书桌、写了一半的东西会自然落进"
+           "你眼里；真正私密的还锁着。",
+    "high": "她**几乎不再藏了**——速写本、旧照片、她偷偷留着的东西，"
+            "都摆在你翻得到的地方。",
+}
+
+
+def depth_hint(tier_key):
+    """按**生效档位**给出「她现在让你看到多深」。未知档位返回空串——
+    多注入一句反而会被模型当成硬规则。"""
+    return _DEPTH_TEXT.get(_DEPTH_LEVEL.get(str(tier_key or ""), ""), "")
+
+
 def injection_block(res, cfg=None):
     """主对话（第二段）系统头里追加的那段。自由模式返回空串。"""
     if not isinstance(res, dict) or not res.get("active"):
@@ -419,6 +442,9 @@ def injection_block(res, cfg=None):
     txt = str(t.get("prompt") or "").strip()
     if txt:
         lines += ["", txt]
+    hint = depth_hint(res.get("tier"))
+    if hint:
+        lines += ["", "（她现在让你看到多深：%s）" % hint]
     if res.get("changed"):
         # 跨档回合：让她语气有明显体感，不然数值在后台动、玩家感知不到
         lines += ["", "（你们的关系刚刚跨进【%s】这一档——这一轮开始，"

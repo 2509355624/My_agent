@@ -641,9 +641,13 @@ class RosterCardTest(PersonaBase):
         self.assertIn("五格", text)
 
     def test_roster_says_hash_is_optional(self):
-        """用户不爱打井号，规则里要明说「单独发就行」。"""
+        """用户不爱打井号，规则里要明说「单独发就行」。
+
+        2026-11-03 规则卡重写后，措辞从「不用打」统一成「不用加 `#`」，
+        断言跟着认这两种写法，别再因为换词变红。
+        """
         text = persona.roster_text()
-        self.assertIn("不用打", text)
+        self.assertTrue("不用加 `#`" in text or "不用打" in text)
         self.assertNotIn("#妹妹", text)      # 名单里不再带井号前缀
 
 
@@ -1102,6 +1106,40 @@ class GroupModeTest(unittest.TestCase):
         card = {"name": "纱雾", "systemPrompt": "你是纱雾。"}
         head = persona.build_head(card, "private_1", "")
         self.assertNotIn("这是群聊", head)
+
+
+class OffscreenTest(unittest.TestCase):
+    """你离开她视线时的写法 + 房间素材（2026-11-03）。"""
+
+    def test_contract_has_offscreen_section(self):
+        head = persona.build_head({"name": "纱雾", "systemPrompt": "你是纱雾。"},
+                                  "private_1", "")
+        self.assertIn("你离开她视线的时候", head)
+        self.assertIn("不要替你动手", head)
+        self.assertIn("发现必须回到她身上", head)
+
+    def test_offscreen_section_survives_no_intimate_variant(self):
+        """亲密场景块被剔掉时，场外写法还得在（两个版本共用同一节）。"""
+        head = persona.build_head({"name": "纱雾", "systemPrompt": "你是纱雾。"},
+                                  "private_1", "", intimate=False)
+        self.assertIn("你离开她视线的时候", head)
+
+    def test_room_material_only_in_private(self):
+        card = {"name": "纱雾", "systemPrompt": "你是纱雾。",
+                "room": "书桌、没关严的抽屉、衣柜里没拆标的泳衣"}
+        priv = persona.build_head(card, "private_1", "")
+        group = persona.build_head(card, "group_1", "张三")
+        self.assertIn("衣柜里没拆标的泳衣", priv)
+        self.assertNotIn("衣柜里没拆标的泳衣", group)   # 群聊用不上，不占预算
+
+    def test_empty_room_leaves_no_block(self):
+        head = persona.build_head({"name": "纱雾", "systemPrompt": "你是纱雾。"},
+                                  "private_1", "")
+        self.assertNotIn("她的房间（你离开她视线", head)
+
+    def test_norm_card_keeps_room(self):
+        c = persona._norm_card({"name": "纱雾", "room": " 一屋子的稿纸 "})
+        self.assertEqual(c["room"], "一屋子的稿纸")
 
 
 class MoodAndStateTest(unittest.TestCase):

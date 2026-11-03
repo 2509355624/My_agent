@@ -345,5 +345,30 @@ class CommandTest(AffBase):
         self.assertEqual(st["mode"], "raid")            # 模式保留
 
 
+class DepthHintTest(unittest.TestCase):
+    """场外能翻到多深：档位给事实，写多深交给模型（2026-11-03）。"""
+
+    def test_low_tier_is_shallow(self):
+        self.assertIn("不打算让你看到什么", affection.depth_hint("cold"))
+        self.assertIn("不打算让你看到什么", affection.depth_hint("fallen"))
+
+    def test_mid_tier_is_partial(self):
+        self.assertIn("允许你看到一部分", affection.depth_hint("normal"))
+
+    def test_high_tier_stops_hiding(self):
+        self.assertIn("几乎不再藏了", affection.depth_hint("full"))
+
+    def test_unknown_tier_says_nothing(self):
+        # 空串而不是兜底文案：多注入一句会被模型当成硬规则
+        self.assertEqual(affection.depth_hint(""), "")
+        self.assertEqual(affection.depth_hint("no_such_tier"), "")
+
+    def test_injection_block_carries_depth(self):
+        res = {"active": True, "value": 25, "tier": "start", "tierName": "开始凿"}
+        blk = affection.injection_block(res, _cfg())
+        self.assertIn("让你看到多深", blk)
+        self.assertIn("几乎不再藏了", blk)
+
+
 if __name__ == "__main__":
     unittest.main()
