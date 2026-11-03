@@ -44,7 +44,13 @@ MAX_V = 50
 INITIAL_V = 0
 ROUND_CAP = 15          # 单轮加分绝对值上限（防一句话刷满）
 ACTION_DAILY = 5        # 每天剧情(action)型大额加分的次数上限，超了按聊天算
-CHAT_SCALE = (3, 2, 1, 1)   # 纯聊天：当天第 1~4 次的加分上限，之后为 0
+CHAT_SCALE = (3, 2, 1, 1)   # 纯聊天：当天第 1~4 次的加分上限
+# 第 5 次起不再归零，改成「每 CHAT_TAIL_EVERY 轮补 1 分」——**不设日上限**，
+# 一直聊就一直能涨，只是慢。用户 2026-11-03 拍板：卡死到 0 会让玩家以为
+# 系统坏了（实测有人聊 33 轮只涨 6 分，后 13 轮全是 +0）。
+# 一天 30 轮 ≈ 7 + 9 = 16 分，两天升到「开始凿」，三天冲刺毕业；
+# 想要更慢就调大这个数，想更快调小。
+CHAT_TAIL_EVERY = 3
 DOWN_CONFIRM = 2        # 降档要连续 N 轮确认（防阈值边缘反复横跳）
 HIST_KEEP = 8           # 每条线留最近 N 条变化记录（给「好感」卡片看）
 
@@ -274,11 +280,15 @@ def scoring_ctx(line_key):
 
 
 def _chat_allowance(rec):
-    """纯聊天这轮还能加多少（按当天第几次）。用完就是 0。"""
+    """纯聊天这轮还能加多少（按当天第几次）。
+
+    前 4 次按 CHAT_SCALE 递减，之后**不会归零**：每 CHAT_TAIL_EVERY 轮
+    补 1 分。聊天永远有收益，只是越来越慢，主要升力留给 action。
+    """
     n = int(rec.get("chat") or 0)
     if n < len(CHAT_SCALE):
         return CHAT_SCALE[n]
-    return 0
+    return 1 if (n - len(CHAT_SCALE)) % CHAT_TAIL_EVERY == 0 else 0
 
 
 def settle(line_key, score):
