@@ -256,6 +256,58 @@ class ModeTest(AffBase):
         self._enter()
         self.assertIsNone(affection.restart(persona.resolve_line("private_1")))
 
+    def _to_jail(self, key):
+        """把这条线打到进局子，返回结局 key。"""
+        for _ in range(4):
+            res = affection.settle(key, {"delta": -13, "turn_type": "action"})
+        self.assertEqual(res["just_ended"], "jail")
+        return key
+
+    def test_free_mode_lifts_ending(self):
+        """2026-11-04 用户提：报警结局之后要能切自由模式接着聊。
+
+        结局不是死路——切自由模式就把这一页翻过去：结局标记清掉、数值封存，
+        好感从越线那一格退回线内 1 分（不然切回攻略模式第一轮又判一次结局）。
+        """
+        key = self._to_jail(self._raid())
+        out = affection.set_mode(key, False)
+        self.assertIn("进局子", out)
+        self.assertIn("自由模式", out)
+        st = affection.status(key)
+        self.assertEqual(st["mode"], "free")
+        self.assertEqual(st["ending"], "")
+        self.assertEqual(st["value"], affection.MIN_V + 1)
+
+    def test_free_mode_lifts_ending_on_line_already_free(self):
+        """老线是 `free` 但结局还挂着的（改动前切过自由模式的那批）。
+
+        这个分支必须排在「已经是自由模式」判断之前，否则玩家永远卡在结局里。
+        """
+        key = self._raid()
+        ent = affection._entry(key)
+        ent["affection"].update({"mode": "free", "value": -30,
+                                 "ending": "jail"})
+        affection._save_entry(key, ent)
+        out = affection.set_mode(key, False)
+        self.assertIn("翻过去", out)
+        st = affection.status(key)
+        self.assertEqual(st["ending"], "")
+        self.assertEqual(st["value"], -30)      # 没越线就不动玩家的账
+
+    def test_raid_after_lifted_ending_does_not_re_end(self):
+        key = self._to_jail(self._raid())
+        affection.set_mode(key, False)
+        self.assertIn("恢复", affection.set_mode(key, True))
+        res = affection.settle(key, {"delta": 3, "turn_type": "chat"})
+        self.assertEqual(res["ending"], "")
+        self.assertEqual(res["value"], affection.MIN_V + 4)
+
+    def test_raid_on_ended_line_points_at_free_mode(self):
+        key = self._to_jail(self._raid())
+        out = affection.set_mode(key, True)
+        self.assertIn("自由模式", out)
+        self.assertEqual(affection.status(key)["ending"], "jail")  # 没说切就不切
+
 
 class InjectionTest(AffBase):
     def test_block_has_tier_and_delta(self):
