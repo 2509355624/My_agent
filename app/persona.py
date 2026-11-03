@@ -447,7 +447,12 @@ def comic_brief(card, session_key, extra=""):
     name = str((card or {}).get("name") or "女主角")
     look = _fixed_block(card)
 
-    lines = ["这是一部成人向六格漫画的一页，画的是刚才这一幕。", ""]
+    lines = ["这是一部成人向漫画的一页。", ""]
+    lines.append("## 画什么")
+    lines.append("**这是一页，不是一个故事。** 只画下面「这一刻」的那一个瞬间，"
+                 "用五格从不同角度拍它，不要推进时间、不要讲起承转合。")
+    lines.append("用户点名要看的东西，就正对着它拍、写到最具体。")
+    lines.append("")
     lines.append("## 人物")
     lines.append("- 女主角：%s。外观固定：%s" % (name, look or "按角色卡"))
     lines.append("- 男主角：%s。他是读者本人，不要给他起名字、不要画脸特写。"
@@ -455,15 +460,16 @@ def comic_brief(card, session_key, extra=""):
 
     if state:
         lines.append("")
-        lines.append("## 此刻的状态")
+        lines.append("## 这一刻的状态（画面里必须和它一致）")
         lines.append(state)
 
-    # 最近三轮对话当剧情（再往前的事编剧用不上，还会冲淡当前这一幕）
+    # 最近三轮对话：那是「这一刻」的上下文，不是要讲完的剧情。
     hist = [m for m in trim(_load_hist(session_key)) if m.get("role") in
             ("user", "assistant")][-6:]
     if hist:
         lines.append("")
-        lines.append("## 刚才发生的事")
+        lines.append("## 这一刻之前在说什么（只取最后这一下的氛围，"
+                     "**不要把这些对话逐条画成格子**）")
         for m in hist:
             body = split_turn(m["content"])[0]
             if body.strip():
@@ -472,7 +478,7 @@ def comic_brief(card, session_key, extra=""):
 
     if extra.strip():
         lines.append("")
-        lines.append("## 补充")
+        lines.append("## 用户点名要画的（最高优先，别绕开）")
         lines.append(extra.strip()[:400])
 
     return "\n".join(lines)
