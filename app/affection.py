@@ -171,6 +171,41 @@ DEFAULT_CONFIG = {
         "base": {"foreplay": 12, "hand": 22, "mouth": 28,
                  "enter": 25, "thrust": 32, "intense": 40, "stop": -25},
     },
+    # 堕落 / 屈服兜底（2026-11-04 深夜）：五档，和 config 里的词对齐。
+    # 堕落**只涨不掉**（soothe 是唯一的口子），屈服会回涨——两根轴的落差
+    # 才是这类剧情好看的地方，别把它们的涨跌规则做成一样。
+    #
+    # ⚠️ `prompt` 这里**必须带正文**，不能像别的兜底表那样留空串。
+    # 这三个字读起来像注释，其实是踩出来的：配置坏了的时候，堕落这段
+    # 注入会只剩一个档位名（「认了」），模型拿到「认了」三个字不知道该
+    # 演成什么样，整根轴等于失效。兜底文案短一点没关系，不能没有。
+    "corruption_levels": [
+        {"key": "unbroken", "min": 0, "name": "还是她",
+         "prompt": "被逼到的时候她会反抗、会骂、会记仇，事后还会哭。"},
+        {"key": "cracked", "min": 25, "name": "开始松",
+         "prompt": "嘴上还硬，力气先没了；开始给自己找理由，难受的时间变短。"},
+        {"key": "giving", "min": 50, "name": "认了",
+         "prompt": "不再每次都推，推两下就放；刻意不去想这是被逼的。"},
+        {"key": "sinking", "min": 70, "name": "陷进去",
+         "prompt": "开始主动凑近，然后自己被吓到；怕的是发现自己竟然想要。"},
+        {"key": "ruined", "min": 90, "name": "回不去了",
+         "prompt": "不再解释也不再拦，会自己开口要；最糟的是她不再哭了。"},
+    ],
+    "submission_levels": [
+        {"key": "proud", "min": 0, "name": "不服",
+         "prompt": "顶嘴、拖延、阳奉阴违，眼神不躲。"},
+        {"key": "reluctant", "min": 25, "name": "勉强",
+         "prompt": "照做了，但动作里带着不服气。"},
+        {"key": "yielding", "min": 50, "name": "让了",
+         "prompt": "不争也不主动，让做什么做什么，做完不吭声。"},
+        {"key": "trained", "min": 70, "name": "听话",
+         "prompt": "会猜你想听什么，先一步把话递上来，做完还等你反应。"},
+        {"key": "owned", "min": 90, "name": "认主",
+         "prompt": "不用开口她就动了，自己给自己定规矩，还怕做得不够。"},
+    ],
+    "corrupt_hints": {
+        "up": {}, "submit_up": {}, "soothe": -10,
+    },
     # 身体进度兜底（2026-11-04 深夜）：名字 = 这一级能做什么。
     # `arousal_gate` 是新增的第二道门槛——见 `_can_cross`。
     "intimacy": {"levels": [
@@ -228,15 +263,20 @@ def bounds(cfg=None):
 
 
 def ending_for(value, cfg=None):
-    """越线判定：只剩 **≤min 进局子**。
+    """越线判定。**2026-11-04 深夜：结局全部拿掉了，这里恒返回 None。**
 
-    ≥max 不再是结局（2026-11-04 晚）：好感顶到 100 只是「到顶了」，戏照样
-    能演下去。原来 ≥50 判「毕业」，用户实测 20 轮就到，到了锁数值、什么都不
-    能推——「这样根本没有意思了」。50 那个点改成了里程碑，见 `milestone_for`。
+    用户拍板：想玩胁迫和半推半就，那两条线必然被判成 `cross=hard`；
+    而旧规则是「hard 累计 2 次 → 进局子、数值锁死」，等于在最想玩的那条
+    线上装了个只响两次的警报。玩到一半被强制收场，比没有处罚更难受。
+
+    现在越界只有**软后果**：掉羁绊 + 推高堕落（见 `settle` 里那段），
+    故事接着走。羁绊跌到下限也不收场——她可以很恨你，戏还能演。
+
+    函数留着不是因为还有别的结局，是因为调用方（`settle` /
+    `injection_block` / `tail_line`）和一堆测试都按「可能返回结局 key」
+    写的。留着这个口子，以后想加真结局（不是报警那种）不用再把调用链
+    改一遍。
     """
-    _hi, lo = bounds(cfg)
-    if value <= lo:
-        return ENDING_JAIL
     return None
 
 
@@ -541,7 +581,94 @@ def act_base(act, cfg=None):
     return key, d
 
 
+# ── 堕落 / 屈服（2026-11-04 深夜，用户加的第五、第六根轴）──────
+# 和羁绊的分工：
+#   羁绊（value）   「她心里怎么看你」——会涨会跌，正常交流就能涨。
+#   堕落（corrupt） 「她变成了什么样」——**只涨不掉**（除了主动安抚），
+#                    越界、被拒后继续、事后不管她，都会推高。
+#   屈服（submit）  「她此刻听不听话」——会掉，压一压就降下来。
+#
+# 为什么要有这两根：拿掉「进局子」之后，越界如果只是掉羁绊，那惩罚太软、
+# 而且掉到 -50 就没戏可掉了。堕落值给了越界一个**不会饱和、也不会锁死**
+# 的去处——账记在她身上，不在数字上。她可以很恨你（羁绊低），同时身体
+# 已经完全驯服（堕落高）。这个落差就是这类剧情最有张力的地方。
+CORRUPT_MAX = 100
+SUBMIT_MAX = 100
+
+
+def corrupt_levels(cfg=None):
+    """堕落五档，按 min 从高到低。配置坏了回退默认表。"""
+    cfg = cfg or load_config()
+    lst = cfg.get("corruption_levels")
+    if not isinstance(lst, list) or not lst:
+        lst = DEFAULT_CONFIG.get("corruption_levels") or []
+    return sorted(lst, key=lambda x: int(x.get("min") or 0), reverse=True)
+
+
+def corrupt_level(v, cfg=None):
+    try:
+        v = int(v or 0)
+    except (TypeError, ValueError):
+        v = 0
+    v = max(0, min(CORRUPT_MAX, v))
+    for l in corrupt_levels(cfg):
+        if v >= int(l.get("min") or 0):
+            return l
+    return {}
+
+
+def corrupt_name(v, cfg=None):
+    """堕落 → 词。0 时是「还是她」，不是空串——这根轴一直在，只是没动。"""
+    return str(corrupt_level(v, cfg).get("name") or "")
+
+
+def submit_levels(cfg=None):
+    """屈服五档，按 min 从高到低。配置坏了回退默认表。"""
+    cfg = cfg or load_config()
+    lst = cfg.get("submission_levels")
+    if not isinstance(lst, list) or not lst:
+        lst = DEFAULT_CONFIG.get("submission_levels") or []
+    return sorted(lst, key=lambda x: int(x.get("min") or 0), reverse=True)
+
+
+def submit_level(v, cfg=None):
+    try:
+        v = int(v or 0)
+    except (TypeError, ValueError):
+        v = 0
+    v = max(0, min(SUBMIT_MAX, v))
+    for l in submit_levels(cfg):
+        if v >= int(l.get("min") or 0):
+            return l
+    return {}
+
+
+def submit_name(v, cfg=None):
+    return str(submit_level(v, cfg).get("name") or "")
+
+
+def corrupt_hints(cfg=None):
+    """堕落/屈服的记账参数。配置缺失时回退默认表，机制不能因缺配置停摆。"""
+    cfg = cfg or load_config()
+    raw = cfg.get("corrupt_hints")
+    if not isinstance(raw, dict):
+        raw = DEFAULT_CONFIG.get("corrupt_hints") or {}
+
+    def _num(d, k, dv):
+        try:
+            return int((d or {}).get(k, dv))
+        except (TypeError, ValueError):
+            return dv
+
+    up = raw.get("up") if isinstance(raw.get("up"), dict) else {}
+    sub = raw.get("submit_up") if isinstance(raw.get("submit_up"), dict) else {}
+    return {"up": {str(k): _num(up, k, 0) for k in up},
+            "submit_up": {str(k): _num(sub, k, 0) for k in sub},
+            "soothe": _num(raw, "soothe", -10)}
+
+
 def card_start(card):
+
     """角色卡给的起点：{value, level}。没配就从 0 / 第 0 级开始。"""
     card = card if isinstance(card, dict) else {}
     try:
@@ -582,6 +709,7 @@ def _blank(line_key="", value=None):
             "level": st["level"], "arousal": 0, "cross_n": 0,
             "down": 0, "ending": "", "milestone": "",
             "excite": 0, "scene": False, "orgasms": 0,
+            "corrupt": 0, "submit": 0,
             "day": _today(), "chat": 0, "acts": 0,
             "streak": 1, "turns": 0, "ach": [], "hist": [],
             "mercy": MERCY_MAX}
@@ -720,6 +848,13 @@ def _migrate(rec):
     # 高潮次数（2026-11-04 深夜）：单场累计，场景结束清零
     if "orgasms" not in rec:
         rec["orgasms"] = 0
+    # 堕落 / 屈服（2026-11-04 深夜）：老档按 0 起——「她还是她」。
+    # 不按羁绊反推：这两根轴记录的是「被怎么对待过」，旧系统里根本没这个
+    # 概念，猜不出来。给 0 是最保守也最诚实的答案。
+    if "corrupt" not in rec:
+        rec["corrupt"] = 0
+    if "submit" not in rec:
+        rec["submit"] = 0
     return rec
 
 
@@ -824,6 +959,12 @@ def status(line_key):
         "milestone": str(rec.get("milestone") or ""),
         "crossN": int(rec.get("cross_n") or 0),
         "ending": str(rec.get("ending") or ""),
+        # 堕落 / 屈服（2026-11-04 深夜）：和冲动/高潮不一样，这两根是**常驻**的，
+        # 不进场景也在，所以一直给，不靠 inScene 开关。
+        "corrupt": int(rec.get("corrupt") or 0),
+        "corruptName": corrupt_name(rec.get("corrupt"), cfg),
+        "submit": int(rec.get("submit") or 0),
+        "submitName": submit_name(rec.get("submit"), cfg),
         "mercy": mercy_left(rec),
         "mercyMax": MERCY_MAX,
     }
@@ -926,6 +1067,16 @@ def panel(line_key):
     ex_rows = _panel_rows(ex_sorted, _index_at(ex_sorted, ex), "name",
                           extra=("prompt",))
 
+    # 堕落 / 屈服（2026-11-04 深夜）：常驻两段，场景外也在。
+    co = int(rec.get("corrupt") or 0)
+    su = int(rec.get("submit") or 0)
+    co_sorted = sorted(corrupt_levels(cfg), key=lambda x: int(x.get("min") or 0))
+    co_rows = _panel_rows(co_sorted, _index_at(co_sorted, co), "name",
+                          extra=("prompt",))
+    su_sorted = sorted(submit_levels(cfg), key=lambda x: int(x.get("min") or 0))
+    su_rows = _panel_rows(su_sorted, _index_at(su_sorted, su), "name",
+                          extra=("prompt",))
+
     dv, da = _need_to_cross(value, lv, ar, cfg)
     return {
         "value": value,
@@ -945,6 +1096,12 @@ def panel(line_key):
         "intimacy": int_rows,
         "arousals": ar_rows,
         "orgasms_rows": ex_rows,
+        "corrupt": co,
+        "corruptName": corrupt_name(co, cfg),
+        "corrupts": co_rows,
+        "submit": su,
+        "submitName": submit_name(su, cfg),
+        "submits": su_rows,
         "canCross": _can_cross(value, lv, ar, cfg),
         "needValue": dv,
         "needArousal": da,
@@ -1041,7 +1198,29 @@ def panel_text(line_key):
                          if r["state"] == "current" else "  ≥%d" % r["gate"])
             rows.append(line)
 
-    # 五、结论：能不能往前一步
+    # 五、堕落 / 屈服（2026-11-04 深夜）：常驻两段，场景外也在。
+    # 堕落只涨不掉——它是「她变成了什么样」；屈服会回涨——它是「此刻听不听话」。
+    rows.append("")
+    rows.append("— 堕落 %d/100 —" % p["corrupt"])
+    for r in p["corrupts"]:
+        mark = {"reached": "✔", "current": "▶", "locked": "·"}[r["state"]]
+        line = "%s %s" % (mark, r["name"])
+        if r["gate"] > 0:
+            line += ("  %d/%d" % (p["corrupt"], r["gate"])
+                     if r["state"] == "current" else "  ≥%d" % r["gate"])
+        rows.append(line)
+
+    rows.append("")
+    rows.append("— 屈服 %d/100 —" % p["submit"])
+    for r in p["submits"]:
+        mark = {"reached": "✔", "current": "▶", "locked": "·"}[r["state"]]
+        line = "%s %s" % (mark, r["name"])
+        if r["gate"] > 0:
+            line += ("  %d/%d" % (p["submit"], r["gate"])
+                     if r["state"] == "current" else "  ≥%d" % r["gate"])
+        rows.append(line)
+
+    # 六、结论：能不能往前一步
     rows.append("")
     if p["ending"]:
         rows.append("结局已定格。想翻过去发「自由模式」。")
@@ -1237,6 +1416,10 @@ def scoring_ctx(line_key):
             "level": level_name(lv, cfg, _card_of(line_key)) or "?",
             "levelN": lv,
             "arousal": int(rec.get("arousal") or 0),
+            # 堕落 / 屈服（2026-11-04 深夜）：打分模型要知道她现在被弄成什么样，
+            # 否则「同一句话」在堕落 0 和堕落 80 时会给出一样的 delta。
+            "corrupt": int(rec.get("corrupt") or 0),
+            "submit": int(rec.get("submit") or 0),
             "recent": recent}
 
 
@@ -1256,12 +1439,20 @@ def settle(line_key, score):
     cfg = load_config()
 
     # 结局已触发：数值锁定，不再结算
+    # （2026-11-04 深夜起 `ending_for` 恒返回 None，这条分支只服务老存档里
+    #   已经定格在 jail / graduated 的线——那些线还得能正常显示。）
     if rec.get("ending"):
         return {"applied": 0, "active": True, "mode": MODE_RAID, "value": value,
                 "tier": rec.get("tier") or "",
                 "tierName": str((tier_for(value, cfg) or {}).get("name") or ""),
                 "ending": str(rec.get("ending")), "just_ended": False,
                 "mercy": mercy_left(rec), "mercyMax": MERCY_MAX,
+                "corrupt": int(rec.get("corrupt") or 0),
+                "corruptName": corrupt_name(rec.get("corrupt"), cfg),
+                "corruptDelta": 0,
+                "submit": int(rec.get("submit") or 0),
+                "submitName": submit_name(rec.get("submit"), cfg),
+                "submitDelta": 0,
                 "reason": ""}
 
     # 跨天：把隔夜会散掉的东西散掉。**不再有额度要重置**——聊天和剧情
@@ -1370,8 +1561,53 @@ def settle(line_key, score):
             prev_value = value
             value = max(MIN_V, min(MAX_V, value + extra))
             applied += value - prev_value
-        if cross == "hard" and int(rec.get("cross_n") or 0) >= CROSS_JAIL_AT:
-            force_ending = ENDING_JAIL
+        # 2026-11-04 深夜：**不再判结局**。原来 hard 累计 2 次就进局子、锁死
+        # 数值——用户要在胁迫/半推半就这条线上玩下去，那条规则等于玩到一半
+        # 把桌子掀了。现在越界的代价只有：掉羁绊（上面）+ 推高堕落（下面）。
+        #
+        # `force_ending` 这个变量留着，方便以后加真的（非报警的）结局分支；
+        # 现在是空串，`ending_for` 也恒返回 None，所以结局永远不会触发。
+
+    # ── 堕落 / 屈服（2026-11-04 深夜）──────────────────
+    # 两根轴的分工见 `corrupt_levels` 上面的注释。这里只做记账：
+    #   `corrupt` 模型给增量，**负值不生效**——堕落是只涨不掉的，
+    #             唯一的例外是 `soothe`（事后安抚），由模型显式给。
+    #   `submit`  模型给增量，正负都收：她可以被压服，也可以顶回去。
+    # 代码不做「越界自动 +N」的硬编码——涨多少交给模型判，它读得到上下文。
+    # 唯一例外是 `cross=hard` 时给一个**下限**：那种事不可能毫无后果。
+    ch = corrupt_hints(cfg)
+    prev_corrupt = int(rec.get("corrupt") or 0)
+    try:
+        cor_delta = int(score.get("corrupt") or 0)
+    except (TypeError, ValueError):
+        cor_delta = 0
+    if cross == "hard":
+        # 她说过不要、还被继续了：至少按「她明确说过不要」那一档记账。
+        # 这是**下限**不是加成——模型给了更多的照它给的来。
+        #
+        # 下限取 `她明确说过不要`（10）和 `越界被拒还继续`（12）里大的那个，
+        # 再乘 2：单纯 hard 是「他越界了」，而 hard + allow=no 是「她说了不
+        # 他还做」——这两件事的量级不该一样。《2026-11-04 深夜：原来只给
+        # 10，用户要的三次越界连「开始松」都推不到，太慢。》
+        floor = max(ch["up"].get("她明确说过不要", 10),
+                    ch["up"].get("越界被拒还继续", 12))
+        if str(allow or "") == "no":
+            floor *= 2
+        if cor_delta < floor:
+            cor_delta = floor
+    if cor_delta < 0 and str(score.get("soothe") or "") not in ("1", "true", "True"):
+        # 模型没显式说「这是安抚」，就不许往下扣。不设这个口子的话，
+        # 「堕落」会随着模型心情来回涨跌，那就不叫堕落了。
+        cor_delta = 0
+    rec["corrupt"] = max(0, min(CORRUPT_MAX, prev_corrupt + cor_delta))
+
+    prev_submit = int(rec.get("submit") or 0)
+    try:
+        sub_delta = int(score.get("submit") or 0)
+    except (TypeError, ValueError):
+        sub_delta = 0
+    sub_delta = max(-40, min(40, sub_delta))
+    rec["submit"] = max(0, min(SUBMIT_MAX, prev_submit + sub_delta))
 
     # ── 距离升级 ─────────────────────────────────────
     # 升一级要两个条件：模型判定「这轮做成了那件事」+ 好感够这一级的门票。
@@ -1457,6 +1693,12 @@ def settle(line_key, score):
            "rose": rose, "arousal": int(rec.get("arousal") or 0),
            "arousalName": arousal_name(rec.get("arousal"), cfg),
            "cross": cross, "allow": allow, "crossN": int(rec.get("cross_n") or 0),
+           "corrupt": int(rec.get("corrupt") or 0),
+           "corruptName": corrupt_name(rec.get("corrupt"), cfg),
+           "corruptDelta": int(rec.get("corrupt") or 0) - prev_corrupt,
+           "submit": int(rec.get("submit") or 0),
+           "submitName": submit_name(rec.get("submit"), cfg),
+           "submitDelta": int(rec.get("submit") or 0) - prev_submit,
            "ending": str(rec.get("ending") or ""),
            "mercy": mercy_left(rec), "mercyMax": MERCY_MAX,
            "just_ended": just_ended, "reason": reason}
@@ -1769,6 +2011,36 @@ def injection_block(res, cfg=None):
                       "**这一轮要写收尾**：擦、抱、睡，或者干脆让她直接睡过去。"
                       "下一轮开头就是第二天，换到白天、换到别的地方，别再接着写这一场。）"]
 
+    # ── 堕落 / 屈服（2026-11-04 深夜）────────────────────
+    # 这两段注入**不写数字**，只写「她现在是个什么状态」——数字是给玩家看的，
+    # 模型该看到的是人。堕落那段尤其重要：它是**越界之后唯一的叙事回报**，
+    # 拿掉「进局子」之后，戏的张力全落在这里。
+    co = int(res.get("corrupt") or 0)
+    su = int(res.get("submit") or 0)
+    co_d = int(res.get("corruptDelta") or 0)
+    su_d = int(res.get("submitDelta") or 0)
+    if co > 0:
+        cp = str(corrupt_level(co, cfg).get("prompt") or "").strip()
+        if cp:
+            lines += ["", "（她被你弄成这样了：%s）" % cp]
+    if co_d > 0:
+        lines += ["", "（这一轮她又碎了一点。**别写成她突然乐意了**——堕落不是喜欢，"
+                      "是她越来越挡不住自己、越来越不想去想了。写那个过程。）"]
+    if co_d < 0:
+        lines += ["", "（这一轮你把她往回拉了一点。她会缓过来，但那道裂缝还在。）"]
+    if su > 0:
+        sp = str(submit_level(su, cfg).get("prompt") or "").strip()
+        if sp:
+            lines += ["", "（她现在对你是什么态度：%s）" % sp]
+    if su_d > 0:
+        lines += ["", "（她这一轮服软了。服软不等于心甘情愿——把她心里那点不服气留着。）"]
+    if su_d < 0:
+        lines += ["", "（她这一轮顶回来了。让她硬气一回，别下一句又软下去。）"]
+    if str(res.get("cross") or "") == "hard":
+        # 越界那一轮专门说一句：堕落是拿关系换来的，不是白得的
+        lines += ["", "（她说了不要，你还是继续了。这件事会记在她身上——她也许当下没反抗，"
+                      "但那不是同意。堕落值越高，她越不会为了这个跟你吵，可那反而更糟。）"]
+
     if res.get("rose"):
         lines += ["", "（你们的关系刚刚往前跨了一步，到了【%s】。这一步要有实感——"
                       "她的某个反应、某句话，得和之前不一样。）"
@@ -1841,6 +2113,14 @@ def tail_line(res):
         n = int(res.get("orgasms") or 0)
         mx = int(res.get("orgasmMax") or ORGASM_MAX)
         rows.append("高潮 %d · %d/%d" % (ex, n, mx))
+    # 堕落 / 屈服（2026-11-04 深夜）：常驻两行。堕落**只在动了之后**才出现——
+    # 「堕落 0」天天挂着像在提醒玩家「你还没下手」，那是压力不是信息。
+    co = int(res.get("corrupt") or 0)
+    if co > 0:
+        rows.append("堕落 %d · %s" % (co, res.get("corruptName") or ""))
+    su = int(res.get("submit") or 0)
+    if su > 0:
+        rows.append("屈服 %d · %s" % (su, res.get("submitName") or ""))
     return "\n".join(rows)
 
 

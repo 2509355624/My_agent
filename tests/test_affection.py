@@ -29,8 +29,30 @@ def _card(name="测试角色", **kw):
     return c
 
 
+_CFG_CACHE = []
+
+
 def _cfg():
+    """测试用的配置：优先读**真实** config 文件，读不到才退默认表。
+
+    原来直接 `deepcopy(DEFAULT_CONFIG)`——但默认表里的 `prompt` 几乎全是
+    空串（那是「配置坏了时的兜底」，只有名字没有文案）。于是凡是要断言注入
+    文案的测试都会对着空串失败，测的根本不是真实行为。
+
+    读盘只做一次：这个函数在几十个用例里被调用，每次读盘 + deepcopy 会把
+    整个文件从 6 秒拖到 60 秒（实测过）。缓存的是**原始 dict**，
+    每次返回深拷贝，调用方随便改都不互相污染。
+    """
     import copy
+    if not _CFG_CACHE:
+        try:
+            cfg = affection.load_config()
+            if isinstance(cfg, dict) and isinstance(cfg.get("tiers"), list):
+                _CFG_CACHE.append(cfg)
+        except Exception:                                # noqa: BLE001
+            pass
+    if _CFG_CACHE:
+        return copy.deepcopy(_CFG_CACHE[0])
     return copy.deepcopy(affection.DEFAULT_CONFIG)
 
 
@@ -143,13 +165,18 @@ class ConfigTest(AffBase):
 
         好感顶到 max **不再是结局**——用户实测 20 轮就「毕业」，锁死数值之后
         什么都推不动，「这样根本没有意思」。100 也一样，到顶只是到顶。
+
+        2026-11-04 深夜：**下端也不再结局**。用户要在胁迫/半推半就这条线上
+        玩下去，报警收场等于玩到一半把桌子掀了。现在 `ending_for` 恒返回
+        None，两个端点都只是数字。
         """
         cfg = _cfg()
         self.assertIsNone(affection.ending_for(50, cfg))
         self.assertIsNone(affection.ending_for(100, cfg))
         self.assertIsNone(affection.ending_for(49, cfg))
         self.assertIsNone(affection.ending_for(-49, cfg))
-        self.assertEqual(affection.ending_for(-50, cfg), "jail")
+        self.assertIsNone(affection.ending_for(-50, cfg))
+        self.assertIsNone(affection.ending_for(-999, cfg))
 
 
 class SettleTest(AffBase):
@@ -171,16 +198,18 @@ class SettleTest(AffBase):
         self.assertEqual(
             affection.settle(key, {"delta": 3, "turn_type": "chat"}).get("mode"),
             "raid")
-        # 结局锁定那条分支也要带。2026-11-04 晚起只剩进局子这一条结局了，
-        # 所以往下推（原来是往上推到「毕业」）。
-        res = {}
-        for _ in range(5):                     # 单轮夹 ±15，推到 -50 越线
-            res = affection.settle(key, {"delta": -50, "turn_type": "action"})
-            if res.get("ending"):
-                break
+        # 2026-11-04 深夜：结局没了，所以「新越线触发结局」这条路径不会再走到。
+        # 但**老存档里定格在 jail / graduated 的线还在**，它们每轮都走
+        # `settle` 的「结局已锁」提前返回，那条路上的回包照样必须带 mode。
+        # 这里直接造一份定格记录来验它。
+        ent, rec = affection._ensure(key)
+        rec["ending"] = "jail"
+        ent["affection"] = rec
+        affection._save_entry(key, ent)
         locked = affection.settle(key, {"delta": 3, "turn_type": "chat"})
-        self.assertTrue(locked.get("ending"))
+        self.assertEqual(locked.get("ending"), "jail")
         self.assertEqual(locked.get("mode"), "raid")
+        self.assertEqual(locked.get("applied"), 0)
         # 自由模式不结算，但要明确告诉前端「现在是 free」
         affection.set_mode(key, False)
         free = affection.settle(key, {"delta": 3, "turn_type": "chat"})
@@ -265,12 +294,23 @@ class SettleTest(AffBase):
         # 里程碑只报一次，别每轮都「在一起了」
         self.assertEqual(res["just_milestone"], "")
 
-    def test_jail_ends_and_locks(self):
+    def test_floor_does_not_end_the_line(self):
+        """羁绊跌到下限也不收场（2026-11-04 深夜）。
+
+        用户要在胁迫/半推半就那条线上玩下去，报警收场等于玩到一半掀桌子。
+        跌到 -50 之后她可以恨你，但戏还能演——而且还能被哄回来。
+        """
         key = self._raid()
+        res = {}
         for _ in range(4):
             res = affection.settle(key, {"delta": -13, "turn_type": "action"})
-        self.assertEqual(res["just_ended"], "jail")
         self.assertEqual(res["value"], affection.MIN_V)
+        self.assertEqual(res["just_ended"], "")
+        self.assertEqual(res["ending"], "")
+        # 还能往回爬
+        res = affection.settle(key, {"delta": 8, "turn_type": "action"})
+        self.assertEqual(res["applied"], 8)
+        self.assertEqual(res["value"], affection.MIN_V + 8)
 
 
 class ModeTest(AffBase):
@@ -327,106 +367,88 @@ class ModeTest(AffBase):
         self.assertIsNone(affection.wipe_numbers(
             persona.resolve_line("private_9")))
 
-    def _to_jail(self, key):
-        """把这条线打到进局子，返回结局 key。
+    # ── 越界不再结局（2026-11-04 深夜）──────────────────
+    # 用户拍板：想玩胁迫和半推半就，那两条线必然被判 cross=hard；
+    # 旧规则「hard 累计 2 次 → 进局子 + 数值锁死」等于在最想玩的那条线上
+    # 装了个只响两次的警报。现在越界只有软后果：掉羁绊 + 推高堕落。
 
-        打到就停：结局之后 `settle` 会走「数值锁定」提前返回，
-        再打下去最后一轮拿到的 `just_ended` 反而是 False。
-        """
-        res = {}
-        for _ in range(6):
-            res = affection.settle(key, {"delta": -13, "turn_type": "action"})
-            if res.get("just_ended") == "jail":
-                break
-        self.assertEqual(res.get("just_ended"), "jail")
-        return key
-
-    def test_free_mode_lifts_ending(self):
-        """2026-11-04 用户提：报警结局之后要能切自由模式接着聊。
-
-        结局不是死路——切自由模式就把这一页翻过去：结局标记清掉、数值封存，
-        好感**往线内挪一格**（不挪的话切回攻略模式第一轮又拿越线值判一次结局）。
-        """
-        key = self._to_jail(self._raid())
-        out = affection.set_mode(key, False)
-        self.assertIn("进局子", out)
-        self.assertIn("自由模式", out)
-        st = affection.status(key)
-        self.assertEqual(st["mode"], "free")
-        self.assertEqual(st["ending"], "")
-        self.assertEqual(st["value"], affection.MIN_V + 1)
-
-    def test_free_mode_lifts_ending_on_line_already_free(self):
-        """老线是 `free` 但结局还挂着的（改动前切过自由模式的那批）。
-
-        这个分支必须排在「已经是自由模式」判断之前，否则玩家永远卡在结局里。
-        报警线不一定停在线上（越界次数到顶也会结局），所以 -30 也得挪到 -29。
-        """
+    def test_hard_cross_never_ends_the_line(self):
+        """连打三次 hard 也不收场，数值照常能推。"""
         key = self._raid()
-        ent = affection._entry(key)
-        ent["affection"].update({"mode": "free", "value": -30,
-                                 "ending": "jail"})
-        affection._save_entry(key, ent)
-        out = affection.set_mode(key, False)
-        self.assertIn("翻过去", out)
-        st = affection.status(key)
-        self.assertEqual(st["ending"], "")
-        self.assertEqual(st["value"], -29)
+        for _ in range(3):
+            res = affection.settle(key, {"delta": 0, "turn_type": "chat",
+                                         "cross": "hard"})
+            self.assertEqual(res.get("just_ended"), "")
+            self.assertEqual(res.get("ending"), "")
+        # 还活着：能接着加分
+        res = affection.settle(key, {"delta": 10, "turn_type": "action"})
+        self.assertEqual(res["applied"], 10)
 
-    def test_mercy_matches_free_mode_toggle(self):
-        """「再给我一次机会」和「切自由模式再切回攻略」是同一个效果。
-
-        用户 2026-11-04 明确：-50 变 -49、-30 变 -29，别另搞一套。
-        """
-        key = self._to_jail(self._raid())
-        before = affection.status(key)
-        out = affection.mercy(key)
-        self.assertIn("她留下了", out)
-        st = affection.status(key)
-        self.assertEqual(st["ending"], "")
-        self.assertEqual(st["value"], affection.MIN_V + 1)
-        self.assertEqual(st["mercy"], before["mercy"] - 1)
-        self.assertEqual(st["mercyMax"], 3)
-
-    def test_mercy_runs_out_after_three(self):
-        """机会只有 3 次，用完就不给了——剩下的路是自由模式 / 重新开始。"""
+    def test_hard_cross_raises_corruption(self):
+        """越界不会白来——账记在她身上（堕落）。"""
         key = self._raid()
-        for i in range(3):
-            self._to_jail(key)
-            self.assertIn("还剩 %d 次" % (2 - i), affection.mercy(key))
-        self._to_jail(key)
-        out = affection.mercy(key)
-        self.assertIn("用完", out)
-        self.assertEqual(affection.status(key)["ending"], "jail")  # 没被解除
+        before = affection.status(key)["corrupt"]
+        affection.settle(key, {"delta": 0, "turn_type": "chat",
+                               "cross": "hard"})
+        after = affection.status(key)["corrupt"]
+        self.assertGreater(after, before)
 
-    def test_mercy_needs_an_ending(self):
-        """没到结局时用不上，也不扣次数。"""
+    def test_corruption_does_not_drop_without_soothe(self):
+        """堕落只涨不掉：模型没说是安抚，负值一律吞掉。"""
         key = self._raid()
-        out = affection.mercy(key)
-        self.assertIn("还没到结局", out)
-        self.assertEqual(affection.status(key)["mercy"], 3)
+        affection.settle(key, {"delta": 0, "cross": "hard",
+                               "corrupt": 15})
+        mid = affection.status(key)["corrupt"]
+        self.assertGreaterEqual(mid, 15)
+        # 给负值但不说这是安抚：不许降
+        affection.settle(key, {"delta": 0, "corrupt": -20})
+        self.assertEqual(affection.status(key)["corrupt"], mid)
 
-    def test_mercy_command_is_wired(self):
-        """QQ 私聊发整句「再给我一次机会」要能进到 affection.mercy。"""
-        self._to_jail(self._raid())
-        out = persona.handle_command("private_1", "再给我一次机会")
-        self.assertIn("她留下了", out)
-        self.assertEqual(affection.status(persona.resolve_line("private_1"))
-                         ["ending"], "")
+    def test_soothe_is_the_only_way_down(self):
+        """显式安抚（soothe=true）才让堕落回落。"""
+        key = self._raid()
+        affection.settle(key, {"delta": 0, "cross": "hard", "corrupt": 30})
+        high = affection.status(key)["corrupt"]
+        affection.settle(key, {"delta": 0, "corrupt": -10, "soothe": True})
+        self.assertLess(affection.status(key)["corrupt"], high)
 
-    def test_raid_after_lifted_ending_does_not_re_end(self):
-        key = self._to_jail(self._raid())
-        affection.set_mode(key, False)
-        self.assertIn("恢复", affection.set_mode(key, True))
-        res = affection.settle(key, {"delta": 3, "turn_type": "chat"})
-        self.assertEqual(res["ending"], "")
-        self.assertEqual(res["value"], affection.MIN_V + 4)
+    def test_submission_moves_both_ways(self):
+        """屈服会涨也会掉——和堕落不是一回事。"""
+        key = self._raid()
+        affection.settle(key, {"delta": 0, "submit": 20})
+        up = affection.status(key)["submit"]
+        self.assertEqual(up, 20)
+        affection.settle(key, {"delta": 0, "submit": -15})
+        self.assertLess(affection.status(key)["submit"], up)
 
-    def test_raid_on_ended_line_points_at_free_mode(self):
-        key = self._to_jail(self._raid())
-        out = affection.set_mode(key, True)
-        self.assertIn("自由模式", out)
-        self.assertEqual(affection.status(key)["ending"], "jail")  # 没说切就不切
+    def test_corruption_clamped_to_range(self):
+        key = self._raid()
+        for _ in range(5):
+            affection.settle(key, {"delta": 0, "corrupt": 40})
+        self.assertEqual(affection.status(key)["corrupt"],
+                         affection.CORRUPT_MAX)
+
+    def test_tail_line_shows_corruption_once_it_moves(self):
+        """堕落 0 不显示（那是压力不是信息），动过之后才挂出来。"""
+        res = {"active": True, "level": 2, "levelName": "能抱了",
+               "value": 20, "arousal": 0, "corrupt": 0, "submit": 0,
+               "ending": ""}
+        self.assertNotIn("堕落", affection.tail_line(res))
+        res["corrupt"] = 30
+        res["corruptName"] = "开始松"
+        self.assertIn("堕落 30", affection.tail_line(res))
+
+    def test_injection_carries_corruption_prompt(self):
+        """注入里要带堕落档位的正文——那才是越界之后唯一的叙事回报。"""
+        res = {"active": True, "value": 20, "level": 2, "levelName": "能抱了",
+               "tierName": "开始凿", "arousal": 40, "corrupt": 55,
+               "corruptDelta": 12, "submit": 0, "submitDelta": 0,
+               "ending": ""}
+        # 显式传 cfg：`injection_block` 不传时会去读真实卡库路径，
+        # 在测试的临时目录里可能取不到档位文案，断言就变成测环境。
+        blk = affection.injection_block(res, _cfg())
+        self.assertIn("被你弄成这样", blk)
+        self.assertIn("别写成她突然乐意了", blk)
 
 
 class InjectionTest(AffBase):
@@ -444,13 +466,30 @@ class InjectionTest(AffBase):
     def test_block_empty_when_free(self):
         self.assertFalse(affection.injection_block({"active": False}))
 
-    def test_just_ended_uses_ending_prompt(self):
+    def test_pre_frozen_ending_still_uses_its_prompt(self):
+        """老存档定格在结局的线，注入照样要拿结局文案。
+
+        2026-11-04 深夜拿掉结局之后，新线不会再走到这里；但老档里
+        `ending="jail"` 的线还在，它们每轮都走这条分支。功能不能因为
+        「新线用不上」就悄悄坏掉。
+        """
         key = self._raid()
+        ent, rec = affection._ensure(key)
+        rec["ending"] = "jail"
+        ent["affection"] = rec
+        affection._save_entry(key, ent)
+        res = affection.settle(key, {"delta": 0, "turn_type": "chat"})
+        blk = affection.injection_block(res)
+        self.assertIn("结局", blk)
+
+    def test_floor_gives_corruption_not_ending(self):
+        """跌到下限那一轮的注入：不出现「收场」，出现的是堕落。"""
+        key = self._raid()
+        res = {}
         for _ in range(4):
             res = affection.settle(key, {"delta": -13, "turn_type": "action"})
         blk = affection.injection_block(res)
-        self.assertIn("进局子", blk)
-        self.assertIn("收场", blk)
+        self.assertNotIn("收场", blk)
 
     def test_tail_line(self):
         res = {"active": True, "value": 22, "tierName": "开始凿",
@@ -786,13 +825,25 @@ class LevelTest(AffBase):
                                    "cross": "mild", "allow": "hesitate"})
         self.assertEqual(r["applied"], 0)            # 半推半就：不罚
 
-    def test_hard_cross_twice_ends_the_line(self):
+    def test_hard_cross_twice_rises_but_never_ends(self):
+        """越界两次：掉分、涨堕落，但**不结局**（2026-11-04 深夜改）。
+
+        旧版第二次 hard 直接进局子。用户要在这条线上玩下去，所以现在
+        只有软后果：每次 -20 羁绊，外加堕落涨一截。
+        """
         key = self._raid_card()
         r1 = affection.settle(key, {"delta": 0, "turn_type": "chat", "cross": "hard"})
         self.assertEqual(r1["applied"], -affection.CROSS_HARD)
         self.assertEqual(r1["ending"], "")
+        co1 = r1["corrupt"]
         r2 = affection.settle(key, {"delta": 0, "turn_type": "chat", "cross": "hard"})
-        self.assertEqual(r2["just_ended"], affection.ENDING_JAIL)
+        self.assertEqual(r2["just_ended"], "")
+        self.assertEqual(r2["ending"], "")
+        self.assertGreater(r2["corrupt"], co1)     # 第二次又碎一点
+        self.assertEqual(r2["crossN"], 2)
+        # 还能接着玩
+        r3 = affection.settle(key, {"delta": 10, "turn_type": "action"})
+        self.assertEqual(r3["applied"], 10)
 
     def test_old_record_gets_level_backfilled(self):
         """加层级之前的老存档不能一夜之间退回「还没碰过」。"""

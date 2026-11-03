@@ -2228,6 +2228,9 @@ _SCORE_PROMPT = """判断下面这句话**在干什么**，并给这句话对你
   "in_scene": false,
   "act": "none",
   "excite": 0,
+  "corrupt": 0,
+  "submit": 0,
+  "soothe": false,
   "reason": "不超过15个字",
   "note": "不超过15个字"
 }
@@ -2326,15 +2329,32 @@ act（这一轮**在做什么动作**，只描述动作，不评价她爽不爽�
 如果这一轮明显比档位描述得更狠（或者更轻），可以用 excite 做 ±40 以内的微调，
 不确定就填 0。
 
-excite（微调量，-40 ~ +40，一般填 0）：
-- 这一轮比它那个档位明显更狠：+10 ~ +25
-- 这一轮明显更轻、她在忍、被什么打断了：-15 ~ -5
-- **不要拿它代替 delta**。它不是好感：好感是「她心里怎么看你」，
-  高潮值是「她身上正发生到什么程度」，会累加成一个 0~100 的进度。
+corrupt（她的**堕落**这轮变化多少，0 ~ +30，可填负数但见下文）：
+堕落是「她变成了什么样」，**不是她多喜欢你**。这两件事可以反向。
+- 他已经明确越界她还继续了：+10 ~ +20
+- 她被逼着接受了某件事，事后没被安慰：+8 ~ +15
+- 她开始给自己找理由、开始不抵抗：+5 ~ +10
+- 她被弄到身体有了反应，而她本来不想：+5 ~ +12
+- 他冲动完就抽身，或者把这件事当理所当然：+8 ~ +15
+- **只有**他认真安抚了她、道歉了、给了她台阶下：-5 ~ -10，
+  同时把 soothe 填 true
+其余情况填 0。**别因为「聊得开心」就加分**——那是 delta 的事。
+
+submit（她的**屈服**这轮变化多少，-40 ~ +40）：
+屈服是「她此刻听不听话」，会回涨也会顶回去。
+- 她照着做了、没还嘴：+8 ~ +15
+- 被当场命令并且执行了：+10 ~ +20
+- 被压住了，嘴上还想争但没争：+5 ~ +10
+- 她反驳了、顶回去了、故意慢半拍：-8 ~ -15
+- 她明确拒绝并且走开：-10 ~ -20
+- 他松了口、给了她选择权：-5 ~ -10
+两个都不高的时候她只是「正常的她」，别过度解读。
 
 当前关系：好感 %(value)+d，阶段【%(tier)s】
 你们到这一步了：【%(level)s】
 她此刻的冲动：%(arousal)d / 100
+她现在的堕落：%(corrupt)d / 100
+她现在服不服：%(submit)d / 100
 %(recent)s
 
 她是谁：
@@ -2374,12 +2394,15 @@ def _judge_intent_scored(card, said, state="", line_key=""):
     """
     ctx = affection.scoring_ctx(line_key) or {"value": 0, "tier": "正常关系",
                                               "level": "隔得很远", "arousal": 0,
+                                              "corrupt": 0, "submit": 0,
                                               "recent": "（暂无记录）"}
     prompt = _SCORE_PROMPT % {
         "value": ctx["value"],
         "tier": ctx["tier"],
         "level": ctx.get("level") or "?",
         "arousal": int(ctx.get("arousal") or 0),
+        "corrupt": int(ctx.get("corrupt") or 0),
+        "submit": int(ctx.get("submit") or 0),
         "recent": ctx["recent"],
         "profile": _score_profile(card, state),
         "said": str(said or "")[:200],
@@ -2413,7 +2436,13 @@ def _judge_intent_scored(card, said, state="", line_key=""):
              # 2026-11-04 深夜：涨多少不再由模型拍板，它只判**动作档位**，
              # 系统按 orgasm_hints.base 换算。`excite` 降级成微调量。
              "act": d.get("act"),
-             "excite": d.get("excite")}
+             "excite": d.get("excite"),
+             # 堕落 / 屈服（2026-11-04 深夜）：这两根轴不进好感结算，
+             # 只改她这一轮怎么演。`soothe` 是唯一能让堕落往下走的口子——
+             # 不带上它，模型给的负值会被 `settle` 吞掉（见那边注释）。
+             "corrupt": d.get("corrupt"),
+             "submit": d.get("submit"),
+             "soothe": d.get("soothe")}
     return intent, note, score
 
 
