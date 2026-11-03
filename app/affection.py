@@ -84,6 +84,8 @@ EXCITE_START = 15       # 刚进入场景时的起步值：不是从 0 开始，
 ORGASM_AFTER = 55       # 高潮之后的余韵值：不是回 0，是回到还想要的半路
 ORGASM_MAX = 5          # 单场最多几次。用满强制收场——不只是她受不了，
                         # 更是再写下去就是水词了，第 6 次不会比第 5 次好看
+ORGASM_COOLDOWN = 6     # 用满之后要歇几**轮**才能再开一场。
+                        # 不按真实世界的天算：剧本里的时间不该被日历决定。
 # 越界被拒的代价，按当晚第几次递增（不冻结、不降级——自己哄回来）
 CROSS_PENALTY = (3, 6, 10)
 CROSS_HARD = 20         # 她说了不要还继续：一次就够狠
@@ -168,6 +170,7 @@ DEFAULT_CONFIG = {
     "orgasm_hints": {
         "start": EXCITE_START, "max": EXCITE_MAX,
         "max_orgasm": ORGASM_MAX, "after": ORGASM_AFTER,
+        "cooldown": ORGASM_COOLDOWN,
         "base": {"foreplay": 12, "hand": 22, "mouth": 28,
                  "enter": 25, "thrust": 32, "intense": 40, "stop": -25},
     },
@@ -538,7 +541,7 @@ excite_name = orgasm_name
 
 
 def orgasm_hints(cfg=None):
-    """高潮值的记账参数：起步值、上限、单场次数、余韵值、各动作档基数。"""
+    """高潮值的记账参数：起步值、上限、单场次数、余韵值、冷却轮数、动作档基数。"""
     cfg = cfg or load_config()
     raw = cfg.get("orgasm_hints")
     if not isinstance(raw, dict):
@@ -551,6 +554,9 @@ def orgasm_hints(cfg=None):
         "max_orgasm": int(raw.get("max_orgasm") or ORGASM_MAX),
         "after": int(raw.get("after") if raw.get("after") is not None
                      else ORGASM_AFTER),
+        # 冷却按**轮次**算，不按天（2026-11-04 深夜用户要求）
+        "cooldown": int(raw.get("cooldown") if raw.get("cooldown") is not None
+                        else ORGASM_COOLDOWN),
         "base": {str(k): int(v) for k, v in base.items()},
     }
 
@@ -708,7 +714,7 @@ def _blank(line_key="", value=None):
     return {"mode": MODE_RAID, "value": st["value"], "tier": str(t.get("key") or ""),
             "level": st["level"], "arousal": 0, "cross_n": 0,
             "down": 0, "ending": "", "milestone": "",
-            "excite": 0, "scene": False, "orgasms": 0,
+            "excite": 0, "scene": False, "orgasms": 0, "cool_left": 0,
             "corrupt": 0, "submit": 0,
             "day": _today(), "chat": 0, "acts": 0,
             "streak": 1, "turns": 0, "ach": [], "hist": [],
@@ -848,6 +854,26 @@ def _migrate(rec):
     # 高潮次数（2026-11-04 深夜）：单场累计，场景结束清零
     if "orgasms" not in rec:
         rec["orgasms"] = 0
+    # 冷却（2026-11-04 深夜，按轮次不按天）：用满次数后还要歇几轮。
+    # 老档没有这个字段——如果它恰好停在「已经满了却还在场景里」（线上
+    # 那条伊蕾娜线就是 orgasms=5 + scene=True），就地补一次收场 + 冷却，
+    # 不然它会一直卡在「第 5 次了还能接着写」。
+    if "cool_left" not in rec:
+        rec["cool_left"] = 0
+        try:
+            _hints = orgasm_hints()
+            _max_o = _hints["max_orgasm"]
+            _cool = _hints["cooldown"]
+        except Exception:                                  # noqa: BLE001
+            _max_o, _cool = ORGASM_MAX, ORGASM_COOLDOWN
+        if int(rec.get("orgasms") or 0) >= _max_o:
+            rec["cool_left"] = _cool
+            rec["scene"] = False
+            rec["excite"] = 0
+            rec["orgasms"] = 0
+    # 旧的 `scene_capped`（第一版补丁用过一晚上）：已经由 `cool_left` 取代，
+    # 这里清掉，免得两套标记并存以后又互相打架。
+    rec.pop("scene_capped", None)
     # 堕落 / 屈服（2026-11-04 深夜）：老档按 0 起——「她还是她」。
     # 不按羁绊反推：这两根轴记录的是「被怎么对待过」，旧系统里根本没这个
     # 概念，猜不出来。给 0 是最保守也最诚实的答案。
@@ -956,6 +982,7 @@ def status(line_key):
         "orgasms": int(rec.get("orgasms") or 0),
         "orgasmMax": orgasm_hints(cfg)["max_orgasm"],
         "inScene": bool(rec.get("scene")),
+        "coolLeft": int(rec.get("cool_left") or 0),
         "milestone": str(rec.get("milestone") or ""),
         "crossN": int(rec.get("cross_n") or 0),
         "ending": str(rec.get("ending") or ""),
@@ -1092,6 +1119,7 @@ def panel(line_key):
         "orgasms": int(rec.get("orgasms") or 0),
         "orgasmMax": oh["max_orgasm"],
         "inScene": bool(rec.get("scene")),
+        "coolLeft": int(rec.get("cool_left") or 0),
         "tiers": tier_rows,
         "intimacy": int_rows,
         "arousals": ar_rows,
@@ -1230,6 +1258,11 @@ def panel_text(line_key):
     rows.append("")
     if p["ending"]:
         rows.append("结局已定格。想翻过去发「自由模式」。")
+    elif int(p.get("coolLeft") or 0) > 0:
+        # 冷却期（2026-11-04 深夜）：这几轮推不动是**有意的**，
+        # 不写出来玩家会以为卡住了。
+        rows.append("她还没缓过来，还要歇 %d 轮。这几轮聊点别的、抱抱就行。"
+                    % int(p["coolLeft"]))
     elif neg:
         # 负分区间没有「下一级」可言——她还没消气，先回到 0 再说。
         rows.append("她还在算账（羁绊 %d）。想往前推，先把这 %d 点的账还上。"
@@ -1535,6 +1568,23 @@ def settle(line_key, score):
     just_orgasm = 0
     capped = False
     total_orgasm = int(rec.get("orgasms") or 0)   # 这一场累计（对外报用，收场后不清）
+    # ── 封顶后的**轮次冷却**（2026-11-04 深夜）──────────────
+    # 线上踩到两个问题，这是第二次修：
+    #   1. `capped` 只在「本轮到顶」那一拍判一次，判完只改内存里的 in_scene，
+    #      没留持久标记 → 下一轮模型又判 in_scene=true，场景原地复活。
+    #   2. 第一版补丁按「当天」生效（`day == _today()`）——用户不要这个：
+    #      剧本里的时间不该被真实世界的日历决定。玩家半夜连聊三轮就跨天了，
+    #      冷却凭空失效；反过来白天玩一整小时，冷却一直挂着。
+    #
+    # 现在按**轮次**冷却：封顶时记下 `cool_left`（还要歇几轮），之后每轮减一。
+    # 冷却期间模型判了 in_scene 也压成 False，但她歇够了（归零）又能再来一场。
+    # 完全不碰 `day`——这是剧本内的节奏，不是现实时钟。
+    cool_cfg = int(orgasm_hints(cfg).get("cooldown") or ORGASM_COOLDOWN)
+    cool_left = int(rec.get("cool_left") or 0)
+    if cool_left > 0:
+        in_scene = False
+        rec["excite"] = 0
+        rec["cool_left"] = cool_left - 1     # 这一轮也算歇了一轮
     if in_scene:
         base = int(rec.get("excite") or 0) if prev_scene else oh["start"]
         rec["excite"] = max(0, min(oh["max"], base + act_raise + ex_mod))
@@ -1545,10 +1595,12 @@ def settle(line_key, score):
             just_orgasm = total_orgasm
             rec["excite"] = oh["after"]
             if total_orgasm >= oh["max_orgasm"]:
-                # 用满次数：这一场到此为止，强制收场
+                # 用满次数：这一场到此为止，进入轮次冷却
                 capped = True
                 in_scene = False
                 rec["excite"] = 0
+                # 冷却记在这里，不是 `day`：剧本里的时间不该被现实日历决定
+                rec["cool_left"] = cool_cfg
     else:
         rec["excite"] = 0
         if prev_scene:
@@ -1709,6 +1761,9 @@ def settle(line_key, score):
            "orgasms": total_orgasm,
            "orgasmMax": oh["max_orgasm"],
            "sceneCapped": bool(capped),
+           # 冷却还剩几轮（2026-11-04 深夜）：>0 时说明她刚被弄满，
+           # 注入和尾行都要说一句，玩家才知道这会儿推不动是为什么。
+           "coolLeft": int(rec.get("cool_left") or 0),
            "rose": rose, "arousal": int(rec.get("arousal") or 0),
            "arousalName": arousal_name(rec.get("arousal"), cfg),
            "cross": cross, "allow": allow, "crossN": int(rec.get("cross_n") or 0),
@@ -2027,8 +2082,14 @@ def injection_block(res, cfg=None):
                       "剩下的空间留到下一轮。）" % jo]
     if res.get("sceneCapped"):
         lines += ["", "（这一场到这儿收住。不是她不想了，是已经累到没力气再要。"
-                      "**这一轮要写收尾**：擦、抱、睡，或者干脆让她直接睡过去。"
-                      "下一轮开头就是第二天，换到白天、换到别的地方，别再接着写这一场。）"]
+                      "**这一轮要写收尾**：擦、抱、缓过来，或者干脆让她睡过去。"
+                      "别再接着写这一场。）"]
+    elif int(res.get("coolLeft") or 0) > 0:
+        # 冷却期（2026-11-04 深夜）：不是不能演，是她还没缓过来。
+        # 这几轮照常生活、照常说话，只是推不动——不然玩家会以为卡住了。
+        lines += ["", "（她还没缓过来。这几轮可以抱着、可以说别的、可以睡，"
+                      "但**别再往下写那一件事**——现在推她只会让她躲。"
+                      "歇过来之后，她自己会先动。）"]
 
     # ── 堕落 / 屈服（2026-11-04 深夜）────────────────────
     # 这两段注入**不写数字**，只写「她现在是个什么状态」——数字是给玩家看的，
@@ -2132,6 +2193,11 @@ def tail_line(res):
         n = int(res.get("orgasms") or 0)
         mx = int(res.get("orgasmMax") or ORGASM_MAX)
         rows.append("高潮 %d · %d/%d" % (ex, n, mx))
+    # 冷却（2026-11-04 深夜）：用满次数之后挂一行，玩家才知道这几轮
+    # 推不动不是 bug。只在还剩几轮时出现。
+    cool = int(res.get("coolLeft") or 0)
+    if cool > 0:
+        rows.append("歇一歇 · 还要 %d 轮" % cool)
     # 堕落 / 屈服（2026-11-04 深夜）：常驻两行。堕落**只在动了之后**才出现——
     # 「堕落 0」天天挂着像在提醒玩家「你还没下手」，那是压力不是信息。
     co = int(res.get("corrupt") or 0)

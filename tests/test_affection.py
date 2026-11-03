@@ -1082,7 +1082,7 @@ class ExciteTest(AffBase):
         self.assertGreater(res["excite"], 0)
 
     def test_capped_after_max_orgasms(self):
-        """单场用满次数就强制收场：场景结束、高潮值归零。"""
+        """单场用满次数就强制收场：场景结束、高潮值归零、进入冷却。"""
         key = self._raid()
         res = None
         for _ in range(40):
@@ -1093,6 +1093,57 @@ class ExciteTest(AffBase):
         self.assertFalse(res["in_scene"])
         self.assertEqual(res["excite"], 0)
         self.assertEqual(res["orgasms"], affection.ORGASM_MAX)
+        self.assertGreater(res["coolLeft"], 0)
+
+    def test_cooldown_blocks_the_next_scene(self):
+        """封顶之后，模型再判 in_scene=True 也开不起来（2026-11-04 深夜修）。
+
+        线上踩的：orgasms=5 但 scene=True，第 6 次还在写。根因是封顶只在
+        「本轮到顶」那一拍判一次、只改了内存，没留持久标记。
+        """
+        key = self._raid()
+        for _ in range(40):
+            if self._settle(key, in_scene=True, act="intense")["sceneCapped"]:
+                break
+        # 冷却期内硬要继续
+        for _ in range(3):
+            res = self._settle(key, in_scene=True, act="intense")
+            self.assertFalse(res["in_scene"], "冷却期场景不该复活")
+            self.assertEqual(res["excite"], 0)
+
+    def test_cooldown_counts_down_and_expires(self):
+        """冷却是**轮次**，不是真实世界的天；数完就能再来。"""
+        key = self._raid()
+        for _ in range(40):
+            if self._settle(key, in_scene=True, act="intense")["sceneCapped"]:
+                break
+        left = []
+        for _ in range(affection.ORGASM_COOLDOWN + 2):
+            res = self._settle(key, in_scene=True, act="intense")
+            left.append(res["coolLeft"])
+        # 一路递减到 0
+        self.assertEqual(left[-1], 0)
+        self.assertEqual(left[:-1], sorted(left[:-1], reverse=True))
+        # 数完之后场景能重新开（不用等第二天）
+        self.assertTrue(res["in_scene"], "冷却结束后应该能再开一场")
+        self.assertGreater(res["excite"], 0)
+
+    def test_cooldown_is_not_day_based(self):
+        """冷却期内改动 `day` 不影响它——剧本时间不吃真实日历那一套。"""
+        key = self._raid()
+        for _ in range(40):
+            if self._settle(key, in_scene=True, act="intense")["sceneCapped"]:
+                break
+        ent, rec = affection._ensure(key)
+        before = int(rec.get("cool_left") or 0)
+        self.assertGreater(before, 0)
+        # 假装隔了一天：冷却还剩几轮就该还是几轮（只看轮次）
+        rec["day"] = "2000-01-01"
+        ent["affection"] = rec
+        affection._save_entry(key, ent)
+        res = self._settle(key, in_scene=True, act="intense")
+        self.assertFalse(res["in_scene"], "改 day 不该让冷却失效")
+
 
     def test_tail_line_only_shows_it_in_scene(self):
         """没在场景里不该多一行「高潮 0」——那会让人以为她冷了。"""
