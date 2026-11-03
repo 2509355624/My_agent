@@ -162,6 +162,32 @@
       }
     ]
   },
+  "arousal_levels": [
+    {
+      "key": "open",
+      "min": 75,
+      "name": "不设防",
+      "short": "她这会儿没在拦。"
+    },
+    {
+      "key": "messy",
+      "min": 50,
+      "name": "很乱",
+      "short": "她心里有点乱，话会绕。"
+    },
+    {
+      "key": "warm",
+      "min": 25,
+      "name": "有点乱",
+      "short": "她比刚才软了一点。"
+    },
+    {
+      "key": "calm",
+      "min": 0,
+      "name": "平静",
+      "short": "她跟平时一样。"
+    }
+  ],
   "arousal_hints": {
     "_note": "冲动是一次性的机会：每轮回落 15，离开场景清零。判定时防线 -= 冲动 // 5。",
     "decay": 15,

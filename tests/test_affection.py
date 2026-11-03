@@ -626,5 +626,133 @@ class LevelTest(AffBase):
         self.assertEqual(affection._tier_view(normal, 0)["name"], "小反感")
 
 
+class ArousalViewTest(AffBase):
+    """冲动的**展示层**（2026-11-04）：只出词，不出数字。"""
+
+    def test_arousal_name_boundaries(self):
+        cfg = _cfg()
+        cases = [(0, "平静"), (24, "平静"), (25, "有点乱"), (49, "有点乱"),
+                 (50, "很乱"), (74, "很乱"), (75, "不设防"), (100, "不设防")]
+        for v, want in cases:
+            self.assertEqual(affection.arousal_name(v, cfg), want, v)
+
+    def test_arousal_falls_back_when_config_missing(self):
+        """用户把 arousal_levels 删了也不能空着——回退默认四档。"""
+        cfg = _cfg()
+        cfg.pop("arousal_levels", None)
+        self.assertEqual(affection.arousal_name(80, cfg), "不设防")
+
+    def test_tail_line_carries_arousal(self):
+        """尾行要常驻气氛：`❤ 关系 · 气氛`。
+
+        用户 2026-11-04 拍板要常驻——多数时候是「平静」，但正因为它一直在，
+        突然变成「很乱」才有分量。
+        """
+        res = {"active": True, "level": 2, "levelName": "说得上话",
+               "arousal": 55, "tier": "", "ending": ""}
+        self.assertEqual(affection.tail_line(res), "❤ 说得上话 · 很乱")
+
+    def test_tail_line_skips_arousal_on_hard_cross(self):
+        """越界那轮气氛不是重点，别把「她退开了」挤掉。"""
+        res = {"active": True, "level": 2, "levelName": "说得上话",
+               "arousal": 70, "cross": "hard", "ending": ""}
+        self.assertEqual(affection.tail_line(res), "❤ 说得上话 · 她退开了")
+
+    def test_tail_line_marks_level_up(self):
+        res = {"active": True, "level": 3, "levelName": "说得进心里",
+               "arousal": 30, "rose": 3, "ending": ""}
+        self.assertEqual(affection.tail_line(res), "❤ 说得进心里 ↑ · 有点乱")
+
+    def test_status_exposes_three_axes(self):
+        """网页右栏要一次画完三轴，status 必须一次给全。"""
+        key = self._raid()
+        st = affection.status(key)
+        self.assertEqual(st["level"], 0)
+        self.assertEqual(st["levelMax"], 5)
+        self.assertEqual(st["arousal"], 0)
+        self.assertEqual(st["arousalName"], "平静")
+        self.assertIn("crossN", st)
+
+
+class AchievementTest(AffBase):
+    """成就（2026-11-04）：只挂确定性事件，不靠模型判里程碑。"""
+
+    def _settle(self, key, **score):
+        sc = {"delta": 0, "turn_type": "action", "reason": "测试"}
+        sc.update(score)
+        return affection.settle(key, sc)
+
+    def test_unlock_on_level_up(self):
+        key = self._raid()
+        res = self._settle(key, delta=20, beat=True)
+        self.assertEqual(res["level"], 1)
+        keys = [a["k"] for a in res["ach"]]
+        # 一轮里同时升级和进档是常见的（+20 既到 lv1 又进「肢体接触」），
+        # 两个都该解
+        self.assertIn("lv1", keys)
+        self.assertIn("tier_touch", keys)
+        self.assertEqual(next(a for a in res["ach"] if a["k"] == "lv1")["name"],
+                         "点头之交")
+
+    def test_card_level_names_drive_achievement_name(self):
+        """骨科卡第 1 级叫「妹妹」，成就名也得叫这个——两处不一致像两个系统。"""
+        self._enter()
+        card = persona.find_card("纱雾")
+        card["level_names"] = ["陌生人", "妹妹", "知心", "心动", "相依", "一体"]
+        card["start_level"] = 1
+        persona.save_cards([card])
+        persona.switch_line("private_1", card)
+        affection.set_mode(persona.resolve_line("private_1"), True)
+        key = persona.resolve_line("private_1")
+        res = self._settle(key, delta=10)
+        lv1 = next(a for a in res["ach"] if a["k"] == "lv1")
+        self.assertEqual(lv1["name"], "妹妹")
+
+    def test_no_duplicate_unlock(self):
+        key = self._raid()
+        first = self._settle(key, delta=20, beat=True)
+        self.assertTrue(first.get("ach"))
+        # 第二轮啥也没发生：没升级、没进档，不该再带 ach
+        second = self._settle(key, delta=0, turn_type="chat")
+        self.assertNotIn("ach", second)
+
+    def test_ending_unlocks(self):
+        key = self._raid()
+        # 每次 +15（ROUND_CAP），四轮推满 50 越线毕业
+        for _ in range(3):
+            self._settle(key, delta=15)
+        res = self._settle(key, delta=15)
+        self.assertEqual(res["just_ended"], "graduated")
+        keys = [a["k"] for a in res.get("ach") or []]
+        self.assertIn("graduate", keys)
+
+    def test_achievement_survives_restart(self):
+        """重开清的是数值，不是经历——抹掉勋章玩家下次就不重开了。"""
+        key = self._raid()
+        res = self._settle(key, delta=20, beat=True)
+        self.assertTrue(res.get("ach"))
+        before = len(res["ach"])
+        affection.restart(key)
+        rec = affection.record_of(affection._entry(key))
+        self.assertEqual(rec["value"], 0)
+        self.assertEqual(len(rec["ach"]), before)
+
+    def test_card_hides_locked_names(self):
+        key = self._raid()
+        self._settle(key, delta=20, beat=True)
+        nodes = affection.achievement_nodes(key)
+        self.assertTrue(nodes)
+        body = nodes[0]
+        self.assertIn("点头之交", body)
+        self.assertIn("？？？", body)
+        self.assertNotIn("进局子", body)      # 没解锁的不剧透
+
+    def test_no_record_returns_none(self):
+        """从没开过攻略：当普通消息，不能凭空回一张空成就表。"""
+        self._enter()
+        self.assertIsNone(affection.achievement_nodes(
+            persona.resolve_line("private_1")))
+
+
 if __name__ == "__main__":
     unittest.main()
