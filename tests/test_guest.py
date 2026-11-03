@@ -23,10 +23,27 @@ class GuestBase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+
+        # ⚠️ 必须在 `save_cards` **之前**把卡库指到临时目录。
+        #
+        # 2026-11-03 事故：这一版最初只 patch 了 `guest.GUEST_ROOT`，然后
+        # 直接 `persona.save_cards([...])`——`_cards_path()` 走的是
+        # `agents.agent_dir()`，于是**把用户真正的 11 张卡覆盖成了 1 张**。
+        # 从那以后，凡是碰 `save_cards` 的测试都必须先 patch `AGENTS_DIR`。
+        from app import agents
+        root = os.path.join(self.tmp.name, "agents")
+        os.makedirs(root, exist_ok=True)
+        pa = mock.patch.object(agents, "AGENTS_DIR", root)
+        pa.start()
+        self.addCleanup(pa.stop)
+
         p = mock.patch.object(guest, "GUEST_ROOT",
                               os.path.join(self.tmp.name, "游客-角色扮演"))
         p.start()
         self.addCleanup(p.stop)
+
+        agents.clear_cache()
+        self.addCleanup(agents.clear_cache)
 
         app = flask.Flask(__name__)
         app.register_blueprint(persona_api.bp)
@@ -37,6 +54,7 @@ class GuestBase(unittest.TestCase):
             "description": "体验角色", "personality": "",
             "systemPrompt": "你是纱雾。", "appearancePrompt": "1girl",
         }])
+        agents.clear_cache()
 
     def get(self, path):
         return self.c.get(path).get_json()

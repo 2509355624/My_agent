@@ -27,7 +27,49 @@ from flask import Blueprint, Response, jsonify, request, send_file, send_from_di
 from app import card_maker
 from app.config import WEB_DIR
 
-log = logging.getLogger("card")
+log = logging.getLogger("card_api")
+
+
+# ─── 谁能创建/修改角色（2026-11-03 用户要求「游客无法创建角色」）─────
+#
+# 现状：角色卡的接口全在 5174，而公网只映射 5175 的网关，`/api/card/*`
+# 根本没转发出去——游客天然碰不到。
+#
+# 但「天然没暴露」不等于「有保障」：万一以后有人图省事往 5175 加了转发，
+# 游客就能建卡、甚至改内置卡。所以这里加一道**显式**判断：
+#
+#   · 本地直连 5174（没有 `X-Friend-Token`）→ 放行。那是用户的自己人场景，
+#     管理页本来就不对外。
+#   · 经 5175 网关转发（带 `X-Friend-Token`）→ 必须是站主本人。
+#     游客没有 qq，登录的普通群友也不是站主，都会被挡住。
+#
+# 不引入新概念：判据就是网关那只"这个请求是从外网来的"的标记 + 站主 QQ。
+
+def _via_gateway():
+    """这个请求是不是从 5175 网关转发来的。"""
+    return bool(request.headers.get("X-Friend-Token"))
+
+
+def _is_owner():
+    """站主本人？（`GALLERY_OWNER_QQ` 没配就等于没有站主）"""
+    from app.config import GALLERY_OWNER_QQ
+    if not GALLERY_OWNER_QQ:
+        return False
+    qq = str(request.args.get("qq") or "").strip()
+    if not qq:
+        body = request.get_json(silent=True) or {}
+        qq = str(body.get("qq") or "").strip()
+    return qq == str(GALLERY_OWNER_QQ)
+
+
+def _may_write():
+    """能不能建卡/改卡/删卡。返回 `(ok, 原因)`。"""
+    if not _via_gateway():
+        return True, ""
+    if _is_owner():
+        return True, ""
+    return False, "游客和普通用户不能创建或修改角色。这是站主的权限。"
+
 
 bp = Blueprint("card", __name__)
 
@@ -75,20 +117,37 @@ def api_card_list():
 
 @bp.route("/api/card/save", methods=["POST"])
 def api_card_save():
+    ok, why = _may_write()
+    if not ok:
+        return jsonify({"ok": False, "error": why}), 403
     data = request.get_json(silent=True) or {}
     card = data.get("card") or {}
     if not isinstance(card, dict):
         return jsonify({"ok": False, "error": "card 格式不对"}), 400
-    rec = card_maker.save_card(card, data.get("id") or card.get("id") or "")
+    cid = data.get("id") or card.get("id") or ""
+    # 内置卡不许改（2026-11-03 用户要求）。`card_maker.save_card` 会拒绝并
+    # 返回 None，这里翻译成人话——不然前端只会看到「存好了」但内容没变。
+    if card_maker.is_builtin(cid or card.get("id")):
+        return jsonify({"ok": False,
+                        "error": "这是内置角色，不能修改。想改就另存一份新的。"}), 403
+    rec = card_maker.save_card(card, cid)
+    if rec is None:
+        return jsonify({"ok": False, "error": "这张卡不能改"}), 403
     return jsonify({"ok": True, "card": rec, "warnings": card_maker.check(rec)})
 
 
 @bp.route("/api/card/delete", methods=["POST"])
 def api_card_delete():
+    ok, why = _may_write()
+    if not ok:
+        return jsonify({"ok": False, "error": why}), 403
     data = request.get_json(silent=True) or {}
     cid = str(data.get("id") or "").strip()
     if not cid:
         return jsonify({"ok": False, "error": "缺 id"}), 400
+    if card_maker.is_builtin(cid):
+        return jsonify({"ok": False,
+                        "error": "这是内置角色，不能删除。"}), 403
     with _LOCK:
         running = cid in _RUNNING
     if running:
@@ -112,6 +171,9 @@ def _cover_worker(cid, card):
 @bp.route("/api/card/cover", methods=["POST"])
 def api_card_cover():
     """出一张封面。卡必须先存过（图要落到它自己的目录里）。"""
+    ok, why = _may_write()
+    if not ok:
+        return jsonify({"ok": False, "error": why}), 403
     data = request.get_json(silent=True) or {}
     cid = str(data.get("id") or "").strip()
     card = card_maker.get_card(cid) or data.get("card") or {}

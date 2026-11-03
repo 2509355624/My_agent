@@ -679,6 +679,28 @@ def get_card(cid):
     return None
 
 
+# ─── 内置卡保护（2026-11-03 用户要求）─────────────────────
+#
+# 「创建角色不能动我的默认角色」。名单放在 `config.BUILTIN_CARD_IDS`——
+# `persona`（扮演态）和这里（造卡页）是两个独立的卡库，必须认同一份名单，
+# 否则会出现「扮演列表里护住了、造卡页里能删」的漏洞。
+#
+# 判据两条，任一命中即算内置：
+#   1. 卡上带 `"builtin": true` —— 以后想保护新卡，改 json 就行
+#   2. id 在 `BUILTIN_CARD_IDS` 里 —— 兜底老卡（它们身上还没那个字段）
+
+def is_builtin(card_or_id):
+    """这张卡是不是内置的（不可改、不可删）。"""
+    from app.config import BUILTIN_CARD_IDS
+    if isinstance(card_or_id, dict):
+        if card_or_id.get("builtin") is True:
+            return True
+        cid = _txt(card_or_id.get("id"))
+    else:
+        cid = _txt(card_or_id)
+    return cid in BUILTIN_CARD_IDS
+
+
 def _new_id():
     base = "K" + time.strftime("%Y%m%d-%H%M%S")
     ids = {c.get("id") for c in load_cards()}
@@ -691,9 +713,16 @@ def _new_id():
 
 
 def save_card(card, cid=""):
-    """存一张卡（cid 空 = 新建）。返回存好的记录。"""
+    """存一张卡（cid 空 = 新建）。返回存好的记录；改内置卡返回 None。
+
+    2026-11-03 用户要求「创建角色不能动我的默认角色」：内置卡一律拒绝覆盖。
+    """
     items = load_cards()
-    cid = _txt(cid) or _new_id()
+    cid = _txt(cid) or _txt((card or {}).get("id")) or _new_id()
+    if is_builtin(cid):
+        log.warning("拒绝覆盖内置角色卡：%s（要改它得先把 id 从 BUILTIN_IDS 删掉）",
+                    cid)
+        return None
     rec = dict(card or {})
     rec["id"] = cid
     now = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -727,8 +756,16 @@ def update_card(cid, patch):
 
 
 def delete_card(cid):
+    """删一张卡。内置卡拒绝删（返回 False）。
+
+    2026-11-03 用户要求「创建角色不能动我的默认角色」——默认卡连删都不许删。
+    """
+    cid = _txt(cid)
+    if is_builtin(cid):
+        log.warning("拒绝删除内置角色卡：%s", cid)
+        return False
     items = load_cards()
-    left = [c for c in items if c.get("id") != _txt(cid)]
+    left = [c for c in items if c.get("id") != cid]
     if len(left) == len(items):
         return False
     _write_cards(left)
