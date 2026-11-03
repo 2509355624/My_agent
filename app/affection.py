@@ -274,10 +274,25 @@ def _blank(line_key="", value=None):
 
 
 def _entry(line_key):
-    """读分线条目（懒导入 persona，避免循环依赖）。"""
+    """读分线条目（懒导入 persona，避免循环依赖）。
+
+    2026-11-04：老存档（没 level 字段）在这里**迁移一次并落盘**。
+    以前只在 `record_of` 里就地补内存，每次读都重算——用户改一次
+    `affection_tiers.json` 的 gate，同一条线的层级就跟着漂。
+    """
     from app import persona
     ent = persona._entry(line_key)                        # noqa: SLF001
-    return ent if isinstance(ent, dict) else None
+    if not isinstance(ent, dict):
+        return None
+    rec = ent.get("affection")
+    if isinstance(rec, dict) and "level" not in rec:
+        _migrate(rec)
+        try:
+            _save_entry(line_key, ent)
+        except Exception:                                 # noqa: BLE001
+            # 落盘失败不能挡住这一轮——内存里已经迁好了，下次读再试
+            log.warning("老存档迁移落盘失败 %s", line_key)
+    return ent
 
 
 def _save_entry(line_key, ent):
@@ -298,10 +313,13 @@ def _card_of(line_key):
 
 
 def _migrate(rec):
-    """老存档（只有 value/tier，没有 level/arousal）就地补齐。
+    """老存档（只有 value/tier，没有 level/arousal/ach）就地补齐。
 
     2026-11-04 加距离层级之前的记录没有这两个字段，直接按 0 算会让老玩家
     一夜之间退回「隔得很远」。这里按现有好感反推一个相符的层级。
+
+    ⚠️ 反推的是「你现在的好感够得上哪一级」，不是「你当年走过哪几级」——
+    旧的单轴系统里没有距离这个概念，这个信息本来就不存在，猜不出来。
     """
     if not isinstance(rec, dict):
         return rec
@@ -318,7 +336,17 @@ def _migrate(rec):
         rec["cross_n"] = 0
     # 2026-11-04 加成就与连续天数：老存档没有这两个，按「从今天开始算」补
     if "ach" not in rec or not isinstance(rec.get("ach"), list):
-        rec["ach"] = []
+        # 补发：已经走过的层级不能因为「升级系统才做」就没记录。
+        # 距离层级只升不降，反推出第 N 级 = 前 N 级都走过，可以确定地补。
+        # 档位**不补**——档位会涨会掉，没法确认当年是否真的首次进过。
+        rec["ach"] = [{"k": "lv%d" % i, "ts": ""}
+                      for i in range(1, int(rec.get("level") or 0) + 1)]
+        # 已经定格在结局的线不会再走结算，这两个只能在这里补
+        ended = str(rec.get("ending") or "")
+        if ended == "graduated":
+            rec["ach"].append({"k": "graduate", "ts": ""})
+        elif ended == "jail":
+            rec["ach"].append({"k": "jail", "ts": ""})
     if "streak" not in rec:
         rec["streak"] = 1
     if "turns" not in rec:
