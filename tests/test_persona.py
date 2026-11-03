@@ -103,7 +103,7 @@ class CommandTest(PersonaBase):
         out = persona.handle_command("group_1", "#角色扮演")
         self.assertIn("纱雾", out)
         self.assertIn("害羞的插画师", out)
-        self.assertIn("#出戏", out)
+        self.assertIn("出戏", out)
         # 别名同义
         self.assertIn("纱雾", persona.handle_command("group_1", "#人设列表"))
 
@@ -612,14 +612,71 @@ class RosterCardTest(PersonaBase):
         nodes = persona.roster_nodes()
         self.assertGreaterEqual(len(nodes), 2)
         joined = "\n".join(nodes)
-        for word in ("出图", "#清空", "#出戏", "角色名单", "纱雾"):
+        for word in ("出图", "清空", "出戏", "角色名单", "纱雾"):
             self.assertIn(word, joined, word)
 
     def test_roster_explains_shot_command(self):
         """规则里必须写清「出图」怎么用——这是用户点名要的。"""
         text = persona.roster_text()
         self.assertIn("出图", text)
-        self.assertIn("六格", text)
+        self.assertIn("五格", text)
+
+    def test_roster_says_hash_is_optional(self):
+        """用户不爱打井号，规则里要明说「单独发就行」。"""
+        text = persona.roster_text()
+        self.assertIn("不用打", text)
+        self.assertNotIn("#妹妹", text)      # 名单里不再带井号前缀
+
+
+class NoHashCommandTest(PersonaBase):
+    """`#` 可选（2026-11-03）。
+
+    用户反馈：「大家玩角色扮演，不喜欢加前面的 # 来触发，他们喜欢单独的词
+    一个气泡来触发」。日志实证：`妹妹`、`角色扮演`、`大大怪，角色扮演`
+    全都没被认出来。
+    """
+
+    def setUp(self):
+        super().setUp()
+        persona.save_cards([_card("妹妹"), _card("妹妹闺蜜")])
+
+    def test_bare_card_name_enters_role(self):
+        got = persona.handle_command("private_1", "妹妹", addressed=True)
+        self.assertIsNotNone(got)
+        self.assertIn("妹妹", got)
+
+    def test_bare_list_word(self):
+        got = persona.handle_command("private_1", "角色扮演", addressed=True)
+        self.assertIsNotNone(got)
+        self.assertIn("角色名单", got)
+
+    def test_name_prefix_then_bare_word(self):
+        got = persona.handle_command("private_1", "大大怪，角色扮演",
+                                     addressed=True)
+        self.assertIsNotNone(got)
+        self.assertIn("角色名单", got)
+
+    def test_command_word_plus_description(self):
+        """「角色扮演，你是我的白色小兔妹妹」→ 从描述里认出卡名。"""
+        got = persona.handle_command(
+            "private_1", "角色扮演，你是我的妹妹闺蜜，我们相依为命",
+            addressed=True)
+        self.assertIsNotNone(got)
+        self.assertIn("妹妹闺蜜", got)      # 长名字优先，不能被「妹妹」抢走
+
+    def test_partial_mention_does_not_trigger(self):
+        """整条消息必须是卡名——「妹妹想你了」是聊天，不是切角色。"""
+        for t in ("她妹妹", "我的妹妹", "妹妹说", "妹妹想你了"):
+            self.assertIsNone(
+                persona.handle_command("private_1", t, addressed=True), t)
+
+    def test_leave_and_clear_without_hash(self):
+        persona.switch("private_1", persona.find_card("妹妹"))
+        self.assertIn("出戏", persona.handle_command("private_1", "出戏",
+                                                    addressed=True))
+        persona.switch("private_1", persona.find_card("妹妹"))
+        self.assertIn("清空", persona.handle_command("private_1", "清空",
+                                                    addressed=True))
 
 
 class ClearCommandTest(PersonaBase):
