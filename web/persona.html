@@ -266,6 +266,7 @@
 const $ = id => document.getElementById(id);
 const QQ = new URLSearchParams(location.search).get("qq") || "";
 let card = null, busy = false, msgs = [];
+let CARD_MAP = {};      // id → 卡对象，给角色列表的事件委托用
 let ROLE = "member";     // member / guest
 let GUEST_LEFT = 0;      // 游客还剩几轮
 
@@ -339,25 +340,50 @@ async function loadCards() {
     const d = await api("/api/persona/cards");
     const box = $("cards");
     box.innerHTML = "";
-    (d.cards || []).forEach(c => {
+    const list = d.cards || [];
+    console.log("[cards] 拿到", list.length, "张");
+    if (!list.length) {
+      box.innerHTML = '<div style="padding:20px;color:var(--text-mute);' +
+        'text-align:center;font-size:12px">没有可选角色</div>';
+      return;
+    }
+    CARD_MAP = {};                                // 给事件委托用
+    list.forEach(c => {
+      CARD_MAP[String(c.id)] = c;
       const el = document.createElement("div");
       el.className = "ci" + (card && card.id === c.id ? " on" : "");
+      el.setAttribute("data-cid", c.id);          // 事件委托靠它认卡片
       el.innerHTML = '<div class="nm"></div><div class="ds"></div>';
       el.querySelector(".nm").textContent = c.name;
       el.querySelector(".ds").textContent = c.description || "";
-      el.onclick = () => pick(c);
       box.appendChild(el);
     });
-  } catch (e) { toast(e.message, true); }
+  } catch (e) {
+    console.error("[cards] 拉列表失败", e);
+    toast("拉角色列表失败：" + e.message, true);
+  }
 }
 
 async function pick(c) {
-  if (busy) return;
+  // 诊断（2026-11-03）：用户报「点角色没反应」，但后端全正常。
+  // 先把每次点击的状态打出来，出问题时一眼能看到卡在哪。
+  console.log("[pick] 点击", c && c.name, "busy=", busy,
+              "current=", card && card.name);
+  if (busy) {
+    console.warn("[pick] busy=true，被上一条请求挡着，忽略这次点击");
+    toast("上一件事还没做完，稍等一下");
+    return;
+  }
   // 已经在演这个角色就别白跑一次请求
-  if (card && card.id === c.id) { closeDrawer(); return; }
+  if (card && card.id === c.id) {
+    console.log("[pick] 已经是这个角色，直接关抽屉");
+    closeDrawer();
+    return;
+  }
   busy = true;
   try {
     const d = await post("/api/persona/switch", { id: c.id });
+    console.log("[pick] 切换成功", d);
     card = d.card;
     // 换角色 = 换一条会话线，画面缓存也要跟着清——不清的话会把上一个
     // 角色的图挂到新角色第一条回复下面（编号撞车）。
@@ -366,7 +392,10 @@ async function pick(c) {
     toast("现在是 " + c.name);
     closeDrawer();
     await loadSession();
-  } catch (e) { toast(e.message, true); }
+  } catch (e) {
+    console.error("[pick] 切换失败", e);
+    toast("切换失败：" + e.message, true);
+  }
   finally { busy = false; }
 }
 
@@ -658,6 +687,39 @@ $("inp").addEventListener("input", e => {
   e.target.style.height = Math.min(140, e.target.scrollHeight) + "px";
 });
 $("btnNew").onclick = () => { location.href = "/characters" + (QQ ? ("?qq=" + QQ) : ""); };
+
+// ── 角色列表的点击：**事件委托**（2026-11-03）────────────────
+//
+// 用户报「点角色没反应」。原来是把 onclick 挂在每个动态创建的 `.ci` 上——
+// 但 `loadCards()` 每次刷新都会 `innerHTML = ""` 重建节点，稍有不慎就挂不上；
+// 而且 `.mask`（抽屉遮罩，z-index 90）在某些布局下会盖住列表，事件根本到
+// 不了元素本身。
+//
+// 改成在**容器上一次性委托**，用 `data-cid` 找回是哪张卡：
+//   · 节点重建多少次都不影响
+//   · 冒泡到容器，遮罩层只要没盖住容器就照样触发
+$("cards").addEventListener("click", function (ev) {
+  // 从实际点到的元素往上找，直到碰到带 data-cid 的那层
+  let t = ev.target;
+  while (t && t !== this && !t.getAttribute("data-cid")) {
+    t = t.parentNode;
+  }
+  if (!t || t === this) return;
+  const cid = t.getAttribute("data-cid");
+  const c = CARD_MAP[cid];
+  console.log("[cards] 委托触发", cid, c && c.name);
+  if (c) pick(c);
+});
+// 触摸设备上补一道：某些老 WebView 的 click 事件在快速点击时会被吞
+$("cards").addEventListener("touchend", function (ev) {
+  let t = ev.target;
+  while (t && t !== this && !t.getAttribute("data-cid")) {
+    t = t.parentNode;
+  }
+  if (!t || t === this) return;
+  const c = CARD_MAP[t.getAttribute("data-cid")];
+  if (c) { ev.preventDefault(); pick(c); }
+}, { passive: false });
 // 「清空 / 出戏 / 自检」三个按钮已经去掉（2026-11-03 用户要求）：
 //   出戏  —— 没意义了，选另一个角色就是另一条线
 //   清空  —— 同上，换角色 = 换会话
