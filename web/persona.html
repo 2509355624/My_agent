@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>角色扮演</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23f472b6'/></svg>">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #000; --bg-elev: #0e0e12; --bg-input: #17171f;
+    --border: #26262f; --border-soft: #1a1a22;
+    --text: #e6e6ec; --text-dim: #8a8a9a; --text-mute: #55556a;
+    --accent: #f472b6; --accent-dim: #6d2a48;
+    --ok: #4ade80; --err: #f87171; --warn: #fbbf24;
+    --r: 12px; --rs: 8px;
+  }
+  html, body { background: var(--bg); color: var(--text); height: 100%;
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px; overflow: hidden; -webkit-text-size-adjust: 100%; }
+
+  .app { display: grid; grid-template-columns: 230px 1fr 260px; height: 100dvh; }
+
+  /* ─── 左：角色 ─── */
+  .side { border-right: 1px solid var(--border-soft); display: flex;
+    flex-direction: column; min-height: 0; background: var(--bg-elev); }
+  .side-head { padding: 14px 14px 10px; border-bottom: 1px solid var(--border-soft);
+    display: flex; align-items: center; }
+  .side-head h1 { font-size: 14px; font-weight: 600; letter-spacing: .5px; }
+  .side-head .sp { flex: 1; }
+  .side-list { flex: 1; overflow-y: auto; padding: 6px; }
+  .ci { padding: 9px 11px; border-radius: var(--rs); cursor: pointer;
+    margin-bottom: 2px; border: 1px solid transparent; }
+  .ci:hover { background: var(--bg-input); }
+  .ci.on { background: var(--bg-input); border-color: var(--accent-dim); }
+  .ci .nm { font-size: 13px; font-weight: 500; }
+  .ci.on .nm { color: var(--accent); }
+  .ci .ds { font-size: 11px; color: var(--text-mute); margin-top: 2px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .side-foot { padding: 8px; border-top: 1px solid var(--border-soft);
+    display: flex; gap: 6px; }
+
+  /* ─── 中：聊天 ─── */
+  .mid { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .top { padding: 10px 16px; border-bottom: 1px solid var(--border-soft);
+    display: flex; align-items: center; gap: 10px; min-height: 50px; }
+  .top .burger { display: none; }
+  .top .nm { font-size: 15px; font-weight: 600; }
+  .top .live { font-size: 10px; color: var(--accent); border: 1px solid var(--accent-dim);
+    padding: 1px 7px; border-radius: 9px; }
+  .top .sp { flex: 1; }
+
+  .log { flex: 1; overflow-y: auto; padding: 16px; display: flex;
+    flex-direction: column; gap: 12px; scroll-behavior: smooth; }
+
+  .row { display: flex; }
+  .row.u { justify-content: flex-end; }
+  .bubble-wrap { max-width: min(76%, 720px); }
+  .row.u .bubble-wrap { display: flex; flex-direction: column; align-items: flex-end; }
+  .who { font-size: 11px; color: var(--text-mute); margin: 0 4px 3px; }
+  .bubble { padding: 10px 14px; border-radius: var(--r); line-height: 1.72;
+    white-space: pre-wrap; word-break: break-word; }
+  .row.u .bubble { background: var(--accent-dim); border-bottom-right-radius: 4px; }
+  .row.a .bubble { background: var(--bg-elev); border: 1px solid var(--border-soft);
+    border-bottom-left-radius: 4px; }
+
+  /* 图片区：**挂在气泡正下方**，不另起一行消息 */
+  .pic { margin-top: 6px; border-radius: var(--r); overflow: hidden;
+    border: 1px solid var(--border-soft); background: #0a0a0f; display: none; }
+  .pic.show { display: block; }
+  .pic img { display: block; width: 100%; height: auto; cursor: zoom-in; }
+  .pic .ph { padding: 14px; font-size: 12px; color: var(--text-mute);
+    text-align: center; }
+  .pic .ph .dots::after { content: ""; animation: d 1.2s steps(4) infinite; }
+  @keyframes d { 0%{content:"";} 25%{content:"·";} 50%{content:"··";}
+    75%{content:"···";} }
+
+  /* 气泡下方工具条 */
+  .tools { display: flex; gap: 6px; margin: 5px 4px 0; opacity: 0;
+    transition: opacity .15s; }
+  .row.a:hover .tools, .row.a:focus-within .tools, .tools.always { opacity: 1; }
+  @media (hover: none) { .tools { opacity: 1; } }
+  .tb { background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+    border-radius: 14px; padding: 3px 10px; font-size: 11px; cursor: pointer;
+    font-family: inherit; transition: all .12s; white-space: nowrap; }
+  .tb:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .tb:disabled { opacity: .35; cursor: default; }
+
+  .empty { color: var(--text-mute); text-align: center; padding: 70px 20px;
+    font-size: 13px; line-height: 2; }
+
+  .composer { border-top: 1px solid var(--border-soft); padding: 10px 14px;
+    display: flex; gap: 8px; align-items: flex-end; }
+  .composer textarea { flex: 1; background: var(--bg-input); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--rs); padding: 11px 13px;
+    font: inherit; line-height: 1.5; resize: none; min-height: 44px; max-height: 140px;
+    outline: none; }
+  .composer textarea:focus { border-color: var(--accent); }
+  .btn { background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
+    border-radius: var(--rs); padding: 10px 16px; font: inherit; cursor: pointer;
+    white-space: nowrap; transition: all .12s; }
+  .btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .btn:disabled { opacity: .4; cursor: default; }
+  .btn.pri { background: var(--accent-dim); border-color: var(--accent); }
+  .btn.pri:hover:not(:disabled) { background: var(--accent); color: #000; }
+  .btn.sm { padding: 5px 11px; font-size: 12px; }
+
+  /* ─── 右：状态 ─── */
+  .side2 { border-left: 1px solid var(--border-soft); padding: 14px;
+    overflow-y: auto; background: var(--bg-elev); }
+  .side2 h2 { font-size: 11px; color: var(--text-mute); margin-bottom: 8px;
+    letter-spacing: .5px; }
+  .st { margin-bottom: 16px; }
+  .st .k { font-size: 11px; color: var(--text-mute); margin-bottom: 3px; }
+  .st .v { font-size: 12.5px; line-height: 1.65; word-break: break-word; }
+  .st .v.mood { color: var(--accent); }
+  .bar { height: 3px; background: var(--bg-input); border-radius: 2px;
+    margin-top: 6px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--accent);
+    width: 0; transition: width .3s; }
+
+  /* 图片放大 */
+  .zoom { position: fixed; inset: 0; background: rgba(0,0,0,.94);
+    display: none; align-items: center; justify-content: center; z-index: 200;
+    cursor: zoom-out; padding: 20px; }
+  .zoom.on { display: flex; }
+  .zoom img { max-width: 100%; max-height: 100%; object-fit: contain; }
+
+  .toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+    background: var(--bg-input); border: 1px solid var(--border);
+    padding: 9px 18px; border-radius: 20px; font-size: 13px; opacity: 0;
+    transition: opacity .2s; pointer-events: none; z-index: 300; max-width: 80vw; }
+  .toast.on { opacity: 1; }
+  .toast.err { border-color: var(--err); color: var(--err); }
+
+  .mask { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6);
+    z-index: 90; }
+  .mask.on { display: block; }
+
+  /* ─── 窄屏：抽屉 ─── */
+  @media (max-width: 1000px) { .app { grid-template-columns: 1fr; } }
+  @media (max-width: 1000px) { .side2 { display: none; } }
+  @media (max-width: 1000px) {
+    .side { position: fixed; left: 0; top: 0; bottom: 0; width: 250px;
+      z-index: 100; transform: translateX(-100%); transition: transform .22s; }
+    .side.open { transform: none; }
+    .top .burger { display: inline-block; }
+    .bubble-wrap { max-width: 88%; }
+    .log { padding: 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="side" id="side">
+    <div class="side-head">
+      <h1>角色</h1>
+      <span class="sp"></span>
+      <button class="btn sm" id="btnNew" title="去角色管理新建">＋</button>
+    </div>
+    <div class="side-list" id="cards"></div>
+    <div class="side-foot">
+      <button class="btn sm" id="btnClear">清空</button>
+      <button class="btn sm" id="btnLeave">出戏</button>
+    </div>
+  </aside>
+
+  <main class="mid">
+    <div class="top">
+      <button class="btn sm burger" id="btnBurger">☰</button>
+      <span class="nm" id="curName">选一个角色</span>
+      <span class="live" id="live" style="display:none">扮演中</span>
+      <span class="sp"></span>
+    </div>
+    <div class="log" id="log">
+      <div class="empty">左边点一个角色开始<br>或者直接用输入框说话</div>
+    </div>
+    <div class="composer">
+      <textarea id="inp" rows="1" placeholder="说点什么…"></textarea>
+      <button class="btn pri" id="btnSend">发送</button>
+    </div>
+  </main>
+
+  <aside class="side2">
+    <h2>此刻</h2>
+    <div class="st"><div class="k">心情</div>
+      <div class="v mood" id="sMood">—</div>
+      <div class="bar"><i id="sBar"></i></div></div>
+    <div class="st"><div class="k">状态</div><div class="v" id="sState">—</div></div>
+    <div class="st"><div class="k">回忆</div>
+      <div class="v" id="sNote" style="color:var(--text-dim)">—</div></div>
+    <div class="st"><div class="k">轮次</div><div class="v" id="sTurns">0</div></div>
+  </aside>
+</div>
+
+<div class="mask" id="mask"></div>
+<div class="zoom" id="zoom"><img id="zoomImg" alt=""></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const QQ = new URLSearchParams(location.search).get("qq") || "";
+let card = null, busy = false, msgs = [];
+
+// ── 请求 ──────────────────────────────────────────────
+async function api(p, opt) {
+  const u = p + (p.includes("?") ? "&" : "?") + "qq=" + encodeURIComponent(QQ);
+  const r = await fetch(u, opt);
+  let d;
+  try { d = await r.json(); } catch (e) { d = { ok: false, error: "返回不是 JSON" }; }
+  if (!r.ok || d.ok === false) throw new Error(d.error || ("HTTP " + r.status));
+  return d;
+}
+const post = (p, body) => api(p, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body || {}),
+});
+
+function toast(t, err) {
+  const el = $("toast");
+  el.textContent = t;
+  el.className = "toast on" + (err ? " err" : "");
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.className = "toast"; }, 2800);
+}
+
+// ── 左栏 ──────────────────────────────────────────────
+async function loadCards() {
+  try {
+    const d = await api("/api/persona/cards");
+    const box = $("cards");
+    box.innerHTML = "";
+    (d.cards || []).forEach(c => {
+      const el = document.createElement("div");
+      el.className = "ci" + (card && card.id === c.id ? " on" : "");
+      el.innerHTML = '<div class="nm"></div><div class="ds"></div>';
+      el.querySelector(".nm").textContent = c.name;
+      el.querySelector(".ds").textContent = c.description || "";
+      el.onclick = () => pick(c);
+      box.appendChild(el);
+    });
+  } catch (e) { toast(e.message, true); }
+}
+
+async function pick(c) {
+  if (busy) return;
+  busy = true;
+  try {
+    const d = await post("/api/persona/switch", { id: c.id });
+    card = d.card;
+    toast("现在是 " + c.name);
+    closeDrawer();
+    await loadSession();
+  } catch (e) { toast(e.message, true); }
+  finally { busy = false; }
+}
+
+// ── 中栏渲染 ──────────────────────────────────────────
+function makeRow(m, idx) {
+  const row = document.createElement("div");
+  row.className = "row " + (m.role === "user" ? "u" : "a");
+  row.dataset.idx = idx;
+
+  const wrap = document.createElement("div");
+  wrap.className = "bubble-wrap";
+
+  const who = document.createElement("div");
+  who.className = "who";
+  who.textContent = m.role === "user" ? "你" : (card ? card.name : "她");
+  wrap.appendChild(who);
+
+  const b = document.createElement("div");
+  b.className = "bubble";
+  b.textContent = m.text;
+  wrap.appendChild(b);
+
+  // ★ 图片容器：**就挂在气泡正下方**，不另起一行消息
+  const pic = document.createElement("div");
+  pic.className = "pic";
+  pic.id = "pic-" + idx;
+  wrap.appendChild(pic);
+
+  if (m.imageUrl) setPic(idx, m.imageUrl);
+
+  // ★ 工具条：出图 / 重新生图
+  if (m.role === "assistant") {
+    const tools = document.createElement("div");
+    tools.className = "tools";
+
+    const bShot = document.createElement("button");
+    bShot.className = "tb";
+    bShot.textContent = "出图";
+    bShot.onclick = () => shoot(idx, bShot);
+    tools.appendChild(bShot);
+
+    const bRe = document.createElement("button");
+    bRe.className = "tb";
+    bRe.textContent = "重新生图";
+    bRe.style.display = m.imageUrl ? "" : "none";
+    bRe.onclick = () => shoot(idx, bRe, true);
+    tools.appendChild(bRe);
+
+    wrap.appendChild(tools);
+    row._tools = tools;
+    row._regen = bRe;
+  }
+
+  row.appendChild(wrap);
+  return row;
+}
+
+function setPic(idx, url) {
+  const pic = $("pic-" + idx);
+  if (!pic) return;
+  pic.innerHTML = "";
+  pic.classList.add("show");
+  const img = document.createElement("img");
+  img.src = url;
+  img.loading = "lazy";
+  img.onclick = () => { $("zoomImg").src = url; $("zoom").classList.add("on"); };
+  pic.appendChild(img);
+  const row = document.querySelector('.row[data-idx="' + idx + '"]');
+  if (row && row._regen) row._regen.style.display = "";
+}
+
+function setPicPending(idx, text) {
+  const pic = $("pic-" + idx);
+  if (!pic) return;
+  pic.classList.add("show");
+  pic.innerHTML = '<div class="ph"><span class="dots">' + text + '</span></div>';
+}
+
+function setPicError(idx, text) {
+  const pic = $("pic-" + idx);
+  if (!pic) return;
+  pic.classList.add("show");
+  pic.innerHTML = '<div class="ph" style="color:var(--err)">' + text + '</div>';
+}
+
+function renderAll(list) {
+  msgs = list || [];
+  const log = $("log");
+  log.innerHTML = "";
+  if (!msgs.length) {
+    log.innerHTML = '<div class="empty">还没开始<br>说句话试试</div>';
+    return;
+  }
+  let ai = -1;
+  msgs.forEach((m, i) => {
+    if (m.role === "assistant") ai++;
+    log.appendChild(makeRow(m, i));
+    // 恢复已生成的图（存在 localStorage 里，刷新不丢）
+    if (m.role === "assistant") {
+      const saved = picStore.get(m.key || ("ai" + ai));
+      if (saved) setPic(i, saved);
+    }
+  });
+  log.scrollTop = log.scrollHeight;
+}
+
+function renderState(s) {
+  $("sMood").textContent = s.mood ? (s.mood + " " + s.intensity) : "—";
+  $("sBar").style.width = Math.min(100, (s.intensity || 0) * 10) + "%";
+  $("sState").textContent = s.state || "—";
+  $("sNote").textContent = s.note || "—";
+  $("sTurns").textContent = s.turns || 0;
+}
+
+// ── 图片地址缓存（刷新后还能看到图）────────────────────
+const picStore = {
+  key: () => "persona_pics_" + (QQ || "local"),
+  all() { try { return JSON.parse(localStorage.getItem(this.key()) || "{}"); }
+          catch (e) { return {}; } },
+  get(k) { return this.all()[k] || ""; },
+  set(k, v) {
+    const a = this.all(); a[k] = v;
+    try { localStorage.setItem(this.key(), JSON.stringify(a)); } catch (e) {}
+  },
+};
+
+// ── 会话 ──────────────────────────────────────────────
+async function loadSession() {
+  try {
+    const d = await api("/api/persona/session");
+    card = d.card;
+    $("curName").textContent = card ? card.name : "选一个角色";
+    $("live").style.display = card ? "" : "none";
+    renderAll(d.messages || []);
+    renderState(d);
+    await loadCards();
+  } catch (e) { toast(e.message, true); }
+}
+
+// ── 发消息 ────────────────────────────────────────────
+async function send() {
+  const inp = $("inp");
+  const text = inp.value.trim();
+  if (!text || busy) return;
+  if (!card) { toast("先选一个角色", true); return; }
+  busy = true; inp.value = ""; inp.style.height = "auto";
+
+  const log = $("log");
+  const e = log.querySelector(".empty");
+  if (e) e.remove();
+
+  const idxU = msgs.length;
+  msgs.push({ role: "user", text });
+  log.appendChild(makeRow(msgs[idxU], idxU));
+
+  const idxA = msgs.length;
+  const pending = makeRow({ role: "assistant", text: "…" }, idxA);
+  log.appendChild(pending);
+  log.scrollTop = log.scrollHeight;
+
+  try {
+    const d = await post("/api/persona/chat", { text });
+    msgs.push({ role: "assistant", text: d.reply });
+    pending.remove();
+    const row = makeRow(msgs[idxA], idxA);
+    log.appendChild(row);
+    renderState({ mood: d.mood, intensity: d.intensity, state: d.state,
+                  note: $("sNote").textContent,
+                  turns: (+$("sTurns").textContent || 0) + 1 });
+  } catch (err) {
+    pending.remove();
+    msgs.pop();
+    toast(err.message, true);
+  } finally {
+    busy = false;
+    log.scrollTop = log.scrollHeight;
+  }
+}
+
+// ── 出图：挂到**这条回复的气泡下方** ────────────────────
+function aiIndexOf(domIdx) {
+  let n = -1;
+  for (let i = 0; i <= domIdx && i < msgs.length; i++) {
+    if (msgs[i].role === "assistant") n++;
+  }
+  return n;
+}
+
+async function shoot(domIdx, btn, isRegen) {
+  if (btn) btn.disabled = true;
+  const aiIdx = aiIndexOf(domIdx);
+  setPicPending(domIdx, "在画了，一页五格");
+  try {
+    // 告诉后端「画第几条回复」——不传就是最后一轮
+    const d = await post("/api/persona/shot", { msgIndex: aiIdx });
+    const sid = d.sid, page = d.page;
+    if (!sid || !page) throw new Error("没拿到页号");
+    // 轮询，出完挂到这条气泡下面（认 domIdx，不认时间，顺序不会乱）
+    for (let i = 0; i < 200; i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      let st;
+      try { st = await api("/api/persona/comic?sid=" + encodeURIComponent(sid)
+                            + "&page=" + page); }
+      catch (e) { continue; }
+      if (st.status === "done" && st.url) {
+        setPic(domIdx, st.url);
+        picStore.set("ai" + aiIdx, st.url);
+        toast("画好了");
+        return;
+      }
+      if (st.status === "failed") {
+        setPicError(domIdx, "出图失败：" + (st.error || "未知"));
+        return;
+      }
+      if (i === 3) setPicPending(domIdx, "慢慢画着，别急");
+    }
+    setPicError(domIdx, "等太久了，去 Moss 漫画台看看");
+  } catch (e) {
+    setPicError(domIdx, e.message);
+    toast(e.message, true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ── 抽屉（窄屏）───────────────────────────────────────
+function openDrawer() { $("side").classList.add("open"); $("mask").classList.add("on"); }
+function closeDrawer() { $("side").classList.remove("open"); $("mask").classList.remove("on"); }
+$("btnBurger").onclick = openDrawer;
+$("mask").onclick = closeDrawer;
+
+// ── 绑定 ──────────────────────────────────────────────
+$("btnSend").onclick = send;
+$("inp").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+});
+$("inp").addEventListener("input", e => {
+  e.target.style.height = "auto";
+  e.target.style.height = Math.min(140, e.target.scrollHeight) + "px";
+});
+$("btnNew").onclick = () => { location.href = "/characters" + (QQ ? ("?qq=" + QQ) : ""); };
+$("btnClear").onclick = async () => {
+  if (!confirm("忘掉之前所有的事？角色不变。")) return;
+  try { const d = await post("/api/persona/clear");
+        toast(d.reply); localStorage.removeItem(picStore.key()); await loadSession(); }
+  catch (e) { toast(e.message, true); }
+};
+$("btnLeave").onclick = async () => {
+  try { const d = await post("/api/persona/leave");
+        toast(d.reply); await loadSession(); }
+  catch (e) { toast(e.message, true); }
+};
+$("zoom").onclick = () => $("zoom").classList.remove("on");
+
+loadSession();
+</script>
+</body>
+</html>

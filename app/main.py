@@ -120,6 +120,11 @@ app.register_blueprint(comic_api.bp)
 # moss 漫画台 API（独立 Blueprint，见 app/moss_api.py）：一句话 → 编剧写整页 → 一次出图
 app.register_blueprint(moss_api.bp)
 
+# 网页端角色扮演 API（独立 Blueprint，见 app/persona_api.py）：和 QQ 同一套引擎，
+# 会话键用 `web_<qq>` 与 QQ 的 `private_<qq>` 隔离。2026-11-03 用户要的。
+from app import persona_api                        # noqa: E402
+app.register_blueprint(persona_api.bp)
+
 # 手动跑图台 API（独立 Blueprint，见 app/gen_api.py）：无 AI 的文生图页面
 app.register_blueprint(gen_api.bp)
 
@@ -859,6 +864,16 @@ def comic_page():
 def moss_comic_page():
     """moss 漫画台：一句话 → 编剧写整页 → 一次出图（见 app/moss_api.py）。"""
     return send_from_directory(WEB_DIR, "moss_studio.html")
+
+
+@app.route("/persona")
+def persona_page():
+    """网页端角色扮演（2026-11-03）。
+
+    三栏：左选角色 / 中聊天 / 右看状态。和 QQ 用同一套 `persona` 引擎，
+    见 `app/persona_api.py`。
+    """
+    return send_from_directory(WEB_DIR, "persona.html")
 
 
 @app.route("/output")
