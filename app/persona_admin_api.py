@@ -95,11 +95,46 @@ def _label(key):
 
 
 def _sessions_from_files():
-    """扫登录/网页的历史文件。"""
+    """扫登录/网页的历史文件。
+
+    **优先读归档**（`persona_archive_*.jsonl`）：那是只增不删的完整记录，
+    而 `persona_*.jsonl` 只是给模型看的 12 条滑动窗口。
+    2026-11-03 用户报「轮次有问题」，查下来就是窗口把早期对话挤掉了。
+    """
     out = []
+    seen = set()
+    for p in glob.glob(os.path.join(SESS_DIR, "persona_archive_*.jsonl")):
+        name = os.path.basename(p)
+        key = name[len("persona_archive_"):-len(".jsonl")]
+        msgs = _read_jsonl(p)
+        if not msgs:
+            continue
+        seen.add(key)
+        kind, label, short = _label(key)
+        try:
+            mtime = os.path.getmtime(p)
+        except OSError:
+            mtime = 0
+        out.append({
+            "key": key,
+            "kind": kind,
+            "short": short,
+            "label": label,
+            "source": "file",
+            "messages": len(msgs),
+            "turns": sum(1 for m in msgs if m.get("role") == "assistant"),
+            "mtime": mtime,
+            "path": p,
+        })
+
+    # 还没有归档的老会话：退回读窗口文件（至少能看到最近几轮）
     for p in glob.glob(os.path.join(SESS_DIR, "persona_*.jsonl")):
         name = os.path.basename(p)
+        if name.startswith("persona_archive_"):
+            continue
         key = name[len("persona_"):-len(".jsonl")]
+        if key in seen:
+            continue
         msgs = _read_jsonl(p)
         if not msgs:
             continue
@@ -118,6 +153,7 @@ def _sessions_from_files():
             "turns": sum(1 for m in msgs if m.get("role") == "assistant"),
             "mtime": mtime,
             "path": p,
+            "truncated": True,        # 标记：这份只是窗口，不是全部
         })
     return out
 
@@ -209,8 +245,14 @@ def api_detail():
         # 键里可能有路径分隔符，挡一下
         if "/" in key or "\\" in key or ".." in key:
             return jsonify({"ok": False, "error": "key 不合法"}), 400
-        path = os.path.join(SESS_DIR, "persona_%s.jsonl" % key)
-        if not os.path.isfile(path):
+        # 优先读归档（完整记录）；没有就退回窗口文件（只有最近 12 条）
+        arc = os.path.join(SESS_DIR, "persona_archive_%s.jsonl" % key)
+        win = os.path.join(SESS_DIR, "persona_%s.jsonl" % key)
+        if os.path.isfile(arc):
+            path = arc
+        elif os.path.isfile(win):
+            path = win
+        else:
             return jsonify({"ok": False, "error": "这个会话没有记录"}), 404
         raw = _read_jsonl(path)
 
