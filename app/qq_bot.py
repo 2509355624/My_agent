@@ -876,6 +876,59 @@ def _note_private_send_failure(target, target_id, exc):
     return True
 
 
+# ─── 上一轮 message_id 账本（回退用，2026-11-05）──────────────────
+#
+# 2026-11-05 用户实测：重启适配层后，引用**重启前**那张聊天记录卡片发「回退」，
+# 机器人只回「先引用我上一条回复」——账本原来只活在进程内存里，一重启就空，
+# 而重启恰恰是改完代码第一件要做的事。
+#
+# 落盘到 `state/qq_last_turn.json`：{session_key: [message_id, ...]}。
+# 账本很小（一轮几条 id），只在扮演轮结束/回退时写一次，不是每轮一次。
+_LAST_TURN_LOCK = threading.Lock()
+
+
+def _last_turn_file():
+    """账本路径**现算**（不缓存）：测试会把 `qq_bot.BASE_DIR` 指到临时目录。"""
+    return os.path.join(str(BASE_DIR), "state", "qq_last_turn.json")
+
+
+def _load_last_turn(key):
+    """读这条会话线上一轮发出的消息 id（文件不存在/坏了返回空表）。"""
+    try:
+        with open(_last_turn_file(), encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    ids = data.get(key) if isinstance(data, dict) else None
+    return [str(x) for x in ids] if isinstance(ids, list) else []
+
+
+def _save_last_turn(key, ids):
+    """把账本落盘（空表 = 删掉这条，别留空壳）。"""
+    path = _last_turn_file()
+    with _LAST_TURN_LOCK:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError):
+            data = {}
+        ids = [str(x) for x in (ids or []) if x]
+        if ids:
+            data[key] = ids
+        else:
+            data.pop(key, None)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, ensure_ascii=False)
+            os.replace(tmp, path)
+        except OSError:
+            log.warning("回退账本落盘失败 %s", path, exc_info=True)
+
+
 class SessionRunner:
     """把同一条会话线上的消息排队、合并、串行交给 agent。
 
@@ -910,7 +963,9 @@ class SessionRunner:
         # （长回复分段、配图各算一条）。用户引用其中任意一条发「回退」，就
         # 把这批全撤回 + 历史回滚。`_turn_ids` 是本轮收集中间的容器（跑完
         # 移交 last_turn_ids），None = 当前不在扮演轮里。
-        self.last_turn_ids = []
+        # 2026-11-05：账本落盘（`state/qq_last_turn.json`）——重启进程后
+        # 引用上一轮卡片照样能退，否则每次改完代码重启就废一次。
+        self.last_turn_ids = _load_last_turn(self.session_key)
         self._turn_ids = None
 
     def submit(self, text, sender_name="", images=None, quotes=None,
@@ -1031,8 +1086,9 @@ class SessionRunner:
         try:
             self._persona_turn_inner(batch)
         finally:
-            self.last_turn_ids = self._turn_ids
+            self.last_turn_ids = self._turn_ids or []
             self._turn_ids = None
+            _save_last_turn(self.session_key, self.last_turn_ids)
 
     def _persona_turn_inner(self, batch):
         """扮演态的一轮。**跟生图那条路完全没有交集**，所以单列一个函数。
@@ -1864,6 +1920,7 @@ class SessionRunner:
         `persona.rollback_last_turn` 负责，撤回只是把聊天记录擦干净。
         """
         ids, self.last_turn_ids = self.last_turn_ids, []
+        _save_last_turn(self.session_key, [])
         ok = 0
         for mid in ids:
             try:
@@ -2010,6 +2067,10 @@ class QQBot:
             _rb_send = (qq_api.send_group if target == "group"
                         else qq_api.send_private)
             if not runner.can_rollback(qids):
+                # 记下到底对不上什么：引用给的是什么 id、账本里有什么。
+                # 上一次只回提示、不留证据，排查全靠猜（2026-11-05 补）。
+                log.info("回退被拒 %s：引用=%s 账本=%s",
+                         persona_key, qids, runner.last_turn_ids)
                 _rb_send(target_id, "要回退的话，先**引用我上一条回复**，"
                          "再单独发「回退」。只能退上一条，退不了更早的。",
                          reply_to=_rb_reply)
