@@ -1176,14 +1176,14 @@ class SessionRunner:
                 left = int(aff.get("mercy") or 0)
                 if left > 0:
                     hint = ("🚨 攻略失败……她报警了。\n"
-                            "想再试一次就发「再给我一次机会 %d/3」，"
+                            "想再试一次就发「#再给我一次机会 %d/3」，"
                             "她留下来，你接着攻略。\n"
-                            "「清空存档」是把这条线彻底删掉（聊天记录、好感、"
+                            "「#清空存档」是把这条线彻底删掉（聊天记录、好感、"
                             "成就一起清，还会要你二次确认），删了就找不回来。" % left)
                 else:
                     hint = ("🚨 攻略失败……她报警了，三次机会也用完了。\n"
-                            "发「自由模式」可以无视好感继续聊，数值封存着。\n"
-                            "「清空存档」是把这条线彻底删掉，删了就找不回来。")
+                            "发「#自由模式」可以无视好感继续聊，数值封存着。\n"
+                            "「#清空存档」是把这条线彻底删掉，删了就找不回来。")
                 try:
                     self._deliver(False, hint, [], "")
                 except Exception:
@@ -1231,9 +1231,25 @@ class SessionRunner:
         发图，没传给 `draw_shot`，于是 `image_jobs.enqueue(reply_to="")`
         在后台线程里自己去读本轮上下文——那时早不是本轮了，读出来是空，
         图就不引用玩家的消息。
+
+        提交成功先回一句「已提交」（2026-11-05 用户要求）：出图几十秒到
+        一两分钟，不回执用户甚至不知道这一轮到底有没有提交任务。回执交给
+        `image_jobs._send_text`——那边一律走聊天记录卡片，不刷屏。
         """
+        def _receipt(job):
+            ahead = 0
+            try:
+                ahead = image_jobs.ahead_of(job)
+            except Exception:
+                ahead = 0
+            line = ("配图任务已提交，前面还有 %d 张，画好会自动发到这里。" % ahead
+                    if ahead > 0
+                    else "配图任务已提交，画好会自动发到这里。")
+            image_jobs._send_text(self.target, self.target_id, line)
+
         try:
-            name, note = persona.draw_shot(card, key, reply_to=reply_to)
+            name, note = persona.draw_shot(card, key, reply_to=reply_to,
+                                           on_submit=_receipt)
         except Exception:
             log.exception("扮演出图异常 %s", key)
             name, note = "", "出图这步出了岔子，再试一次？"
@@ -2072,7 +2088,7 @@ class QQBot:
                 log.info("回退被拒 %s：引用=%s 账本=%s",
                          persona_key, qids, runner.last_turn_ids)
                 _rb_send(target_id, "要回退的话，先**引用我上一条回复**，"
-                         "再单独发「回退」。只能退上一条，退不了更早的。",
+                         "再单独发「#回退」。只能退上一条，退不了更早的。",
                          reply_to=_rb_reply)
                 return
             _rb_res = persona.rollback_last_turn(persona_key,

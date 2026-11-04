@@ -431,6 +431,44 @@ class SessionTargetTest(unittest.TestCase):
         self.assertEqual(persona._session_target("web_local"), ("", ""))
 
 
+class StatePersistenceTest(PersonaBase):
+    """整份状态落盘的合并与拒写（2026-11-05 存档成片消失的根因）。"""
+
+    def test_save_keeps_lines_written_by_another_process(self):
+        """两个进程「读整份→改一条→写整份」时，后写的一方不能盖掉新线。
+
+        今天 546587874 的学妹线和其他二十多条线就是这么没的：A 拿着旧快照
+        写回，B 在中间新建的线全被覆盖。合并后两边都在。
+        """
+        persona._save_state({"private_old": {"turns": 3}})
+        persona._save_state({"private_new": {"turns": 1}})
+        st = persona._load_state()
+        self.assertIn("private_old", st)
+        self.assertIn("private_new", st)
+
+    def test_explicit_delete_survives_the_merge(self):
+        """真要删线（出戏 / 管理页删除）必须显式声明，不然会被合并复活。"""
+        persona._save_state({"private_1": {"turns": 2}})
+        persona._save_state({"private_2": {"turns": 1}}, deleted={"private_1"})
+        st = persona._load_state()
+        self.assertNotIn("private_1", st)
+        self.assertIn("private_2", st)
+
+    def test_transient_read_error_does_not_return_an_empty_library(self):
+        """读盘失败以前会假装「没有存档」，反手一写就全清空。现在直接报错。"""
+        persona._save_state({"private_1": {"turns": 2}})
+        with mock.patch("builtins.open", side_effect=PermissionError("locked")):
+            with self.assertRaises(OSError):
+                persona._load_state()
+
+    def test_unreadable_file_refuses_to_be_overwritten(self):
+        """盘上有文件却读不出来时，写盘必须拒绝，不能拿空字典盖上去。"""
+        persona._save_state({"private_1": {"turns": 2}})
+        with mock.patch.object(persona, "_read_state_raw", return_value=None):
+            with self.assertRaises(RuntimeError):
+                persona._save_state({"private_2": {"turns": 1}})
+
+
 class DrawTest(unittest.TestCase):
     """扮演态配图：走 `_persona_fast`，入队带 quiet，失败一律静默。"""
 
@@ -517,6 +555,39 @@ class DrawTest(unittest.TestCase):
         job.wait.side_effect = RuntimeError("ComfyUI 掉线")
         self.assertEqual(persona.draw("x", {"appearancePrompt": "1girl"},
                                       "private_1"), "")
+
+    def test_on_submit_fires_after_a_real_enqueue(self):
+        """提交成功才回调（2026-11-05）：回执是「排上了」，没排上不能报喜。"""
+        job = self._patch()
+        seen = []
+        persona.draw("x", {"appearancePrompt": "1girl"}, "private_1",
+                     on_submit=seen.append)
+        self.assertEqual(seen, [job])
+
+    def test_on_submit_skipped_when_the_queue_rejects(self):
+        self._patch(reason="现在排队的人太多了")
+        seen = []
+        persona.draw("x", {"appearancePrompt": "1girl"}, "private_1",
+                     on_submit=seen.append)
+        self.assertEqual(seen, [])
+        # 没画面 / ComfyUI 没在线也算没提交
+        self._patch(alive=False)
+        seen2 = []
+        persona.draw("x", {"appearancePrompt": "1girl"}, "private_1",
+                     on_submit=seen2.append)
+        self.assertEqual(seen2, [])
+
+    def test_receipt_failure_does_not_kill_the_draw(self):
+        """回执发不出去只记日志——图还是要照常画、照常交回。"""
+        self._patch()
+
+        def boom(job):
+            raise RuntimeError("回执发送失败")
+
+        with mock.patch.object(persona.log, "exception"):
+            name = persona.draw("x", {"appearancePrompt": "1girl"}, "private_1",
+                                on_submit=boom)
+        self.assertEqual(name, "a.png")
 
     def test_no_workflow_is_silent(self):
         self._patch(wf=None)
@@ -795,6 +866,17 @@ class RosterCardTest(PersonaBase):
         for t in ("#角色扮演", "#人设列表", "@大大怪 #角色扮演"):
             self.assertTrue(persona.is_roster_request(t, addressed=True), t)
 
+    def test_bare_words_no_longer_ask_for_a_card(self):
+        """不带前缀的「角色扮演」是普通聊天（2026-11-05 用户改口）。
+
+        之前为了「大家不爱打井号」放开了不带前缀，结果日常聊天里的
+        「妹妹」「角色扮演」都可能误触。现在命令统一要 `#` / `/`。
+        """
+        for t in ("角色扮演", "人设列表", "@大大怪 角色扮演"):
+            self.assertFalse(persona.is_roster_request(t, addressed=True), t)
+        self.assertFalse(persona.is_roster_request("角色扮演"))
+        self.assertTrue(persona.is_roster_request("/角色扮演"))
+
     def test_card_name_is_not_a_roster(self):
         self.assertFalse(persona.is_roster_request("#纱雾", addressed=True))
 
@@ -811,66 +893,76 @@ class RosterCardTest(PersonaBase):
         self.assertIn("出图", text)
         self.assertIn("横屏 CG", text)
 
-    def test_roster_says_hash_is_optional(self):
-        """用户不爱打井号，规则里要明说「单独发就行」。
-
-        2026-11-03 规则卡重写后，措辞从「不用打」统一成「不用加 `#`」，
-        断言跟着认这两种写法，别再因为换词变红。
-        """
+    def test_roster_requires_prefix_and_says_so(self):
+        """2026-11-05 用户改口：规则里要明说命令得带 `#` / `/` 前缀。"""
         text = persona.roster_text()
-        self.assertTrue("不用加 `#`" in text or "不用打" in text)
-        self.assertNotIn("#妹妹", text)      # 名单里不再带井号前缀
+        self.assertIn("带前缀", text)
+        self.assertIn("`#` 或 `/`", text)
+        self.assertIn("#纱雾", text)      # 名单里也带前缀，玩家照着发就行
 
 
-class NoHashCommandTest(PersonaBase):
-    """`#` 可选（2026-11-03）。
+class PrefixCommandTest(PersonaBase):
+    """命令统一要 `#` / `/` 前缀（2026-11-05 用户改口）。
 
-    用户反馈：「大家玩角色扮演，不喜欢加前面的 # 来触发，他们喜欢单独的词
-    一个气泡来触发」。日志实证：`妹妹`、`角色扮演`、`大大怪，角色扮演`
-    全都没被认出来。
+    前一版为了「大家不爱打井号」把前缀做成可选，结果日常聊天里的
+    「妹妹」「清空」「好感」都有可能被误触。现在不带前缀一律当普通聊天。
     """
 
     def setUp(self):
         super().setUp()
         persona.save_cards([_card("妹妹"), _card("妹妹闺蜜")])
 
-    def test_bare_card_name_enters_role(self):
-        got = persona.handle_command("private_1", "妹妹", addressed=True)
-        self.assertIsNotNone(got)
-        self.assertIn("妹妹", got)
+    def test_bare_card_name_is_plain_chat(self):
+        self.assertIsNone(
+            persona.handle_command("private_1", "妹妹", addressed=True))
+        self.assertIsNone(persona.active_card("private_1"))
 
-    def test_bare_list_word(self):
-        got = persona.handle_command("private_1", "角色扮演", addressed=True)
-        self.assertIsNotNone(got)
-        self.assertIn("角色名单", got)
+    def test_bare_list_word_is_plain_chat(self):
+        self.assertIsNone(
+            persona.handle_command("private_1", "角色扮演", addressed=True))
 
-    def test_name_prefix_then_bare_word(self):
-        got = persona.handle_command("private_1", "大大怪，角色扮演",
-                                     addressed=True)
-        self.assertIsNotNone(got)
-        self.assertIn("角色名单", got)
+    def test_name_prefix_without_hash_is_plain_chat(self):
+        """叫了机器人但没打前缀：还是普通聊天，不切角色。"""
+        self.assertIsNone(
+            persona.handle_command("private_1", "大大怪，角色扮演",
+                                   addressed=True))
+
+    def test_hash_and_slash_both_work(self):
+        for text in ("#妹妹", "/妹妹"):
+            got = persona.handle_command("private_1", text, addressed=True)
+            self.assertIsNotNone(got, text)
+            self.assertIn("妹妹", got)
+            self.assertIsNotNone(persona.active_card("private_1"))
 
     def test_command_word_plus_description(self):
-        """「角色扮演，你是我的白色小兔妹妹」→ 从描述里认出卡名。"""
+        """「#角色扮演，你是我的白色小兔妹妹」→ 从描述里认出卡名。"""
         got = persona.handle_command(
-            "private_1", "角色扮演，你是我的妹妹闺蜜，我们相依为命",
+            "private_1", "#角色扮演，你是我的妹妹闺蜜，我们相依为命",
             addressed=True)
         self.assertIsNotNone(got)
         self.assertIn("妹妹闺蜜", got)      # 长名字优先，不能被「妹妹」抢走
 
     def test_partial_mention_does_not_trigger(self):
         """整条消息必须是卡名——「妹妹想你了」是聊天，不是切角色。"""
-        for t in ("她妹妹", "我的妹妹", "妹妹说", "妹妹想你了"):
+        for t in ("她妹妹", "我的妹妹", "妹妹说", "妹妹想你了",
+                  "#她妹妹", "#我的妹妹"):
             self.assertIsNone(
                 persona.handle_command("private_1", t, addressed=True), t)
 
-    def test_leave_and_clear_without_hash(self):
+    def test_prefixed_leave_and_clear(self):
         persona.switch("private_1", persona.find_card("妹妹"))
-        self.assertIn("出戏", persona.handle_command("private_1", "出戏",
+        self.assertIn("出戏", persona.handle_command("private_1", "#出戏",
                                                     addressed=True))
         persona.switch("private_1", persona.find_card("妹妹"))
-        self.assertIn("清空", persona.handle_command("private_1", "清空",
+        self.assertIn("清空", persona.handle_command("private_1", "#清空",
                                                     addressed=True))
+
+    def test_bare_leave_and_clear_are_plain_chat(self):
+        persona.switch("private_1", persona.find_card("妹妹"))
+        self.assertIsNone(persona.handle_command("private_1", "出戏",
+                                                 addressed=True))
+        self.assertIsNone(persona.handle_command("private_1", "清空",
+                                                 addressed=True))
 
 
 class ArchiveTest(PersonaBase):
@@ -1276,7 +1368,7 @@ class GroupNoRoleplayTest(PersonaBase):
         persona.save_cards([_card("纱雾")])
 
     def test_group_card_name_redirects(self):
-        got = persona.handle_command("group_1_100", "纱雾", addressed=True)
+        got = persona.handle_command("group_1_100", "#纱雾", addressed=True)
         self.assertIsNotNone(got)
         self.assertIn("不方便演", got)
         self.assertIn("私聊", got)
@@ -1285,7 +1377,7 @@ class GroupNoRoleplayTest(PersonaBase):
 
     def test_group_roster_still_visible(self):
         """规则本身不敏感，群里看规则仍然允许。"""
-        got = persona.handle_command("group_1_100", "角色扮演", addressed=True)
+        got = persona.handle_command("group_1_100", "#角色扮演", addressed=True)
         self.assertIn("角色名单", got)
 
     def test_group_turn_returns_nothing(self):
@@ -1295,7 +1387,7 @@ class GroupNoRoleplayTest(PersonaBase):
         self.assertEqual(turn.reply, "")
 
     def test_private_still_works(self):
-        got = persona.handle_command("private_100", "纱雾", addressed=True)
+        got = persona.handle_command("private_100", "#纱雾", addressed=True)
         self.assertIn("纱雾", got)
         self.assertIsNotNone(persona.active_card("private_100"))
 
@@ -1324,21 +1416,21 @@ class RosterWebLinkTest(PersonaBase):
     def test_private_command_includes_link(self):
         with mock.patch("app.friend_site.url",
                         return_value="https://y.trycloudflare.com"):
-            got = persona.handle_command("private_1", "角色扮演",
+            got = persona.handle_command("private_1", "#角色扮演",
                                          addressed=True)
         self.assertIn("https://y.trycloudflare.com/persona", got)
 
     def test_group_command_excludes_link(self):
         with mock.patch("app.friend_site.url",
                         return_value="https://y.trycloudflare.com"):
-            got = persona.handle_command("group_1", "角色扮演",
+            got = persona.handle_command("group_1", "#角色扮演",
                                          addressed=True)
         self.assertNotIn("trycloudflare", got)
 
     def test_tunnel_down_still_returns_roster(self):
         """隧道没开（拿不到地址）时，规则本身不能少。"""
         with mock.patch("app.friend_site.url", return_value=""):
-            got = persona.handle_command("private_1", "角色扮演",
+            got = persona.handle_command("private_1", "#角色扮演",
                                          addressed=True)
         self.assertIn("角色名单", got)
         self.assertNotIn("网页版", got)
@@ -1655,7 +1747,7 @@ class LineSplitTest(PersonaBase):
         rem = persona.find_card("雷姆")
         persona.switch_line("private_1", rem)
         self._run("private_1", "雷姆的回复")
-        persona.handle_command("private_1", "出戏")
+        persona.handle_command("private_1", "#出戏")
         self.assertIsNone(persona.active_card("private_1"))
         persona.switch_line("private_1", rem)          # 再进来
         self.assertEqual(
@@ -1828,7 +1920,7 @@ class GameDayTest(PersonaBase):
     def test_skip_word_is_a_command(self):
         raw = "早。\n画面：\n心情：平淡 强度1\n状态：起床"
         with mock.patch.object(persona.llm, "call_llm", return_value=raw):
-            out = persona.handle_command(self.KEY, "睡到明天")
+            out = persona.handle_command(self.KEY, "#睡到明天")
         self.assertIsNotNone(out)
         self.assertIn("早", out)
 
@@ -1917,10 +2009,13 @@ class RollbackTurnTest(PersonaBase):
         self.assertEqual([m["content"] for m in arch], ["别的线的旧内容"])
 
     def test_is_rollback_text_whole_word_only(self):
-        """整条消息才是命令——「回退」两个字在日常聊天里太常见。"""
-        self.assertTrue(persona.is_rollback_text("回退"))
-        self.assertTrue(persona.is_rollback_text("撤回"))
-        self.assertTrue(persona.is_rollback_text("@大大怪 回退", addressed=True))
+        """整条消息 + `#` / `/` 前缀才是命令（2026-11-05 统一前缀）。"""
+        self.assertTrue(persona.is_rollback_text("#回退"))
+        self.assertTrue(persona.is_rollback_text("/撤回"))
+        self.assertTrue(persona.is_rollback_text("@大大怪 #回退",
+                                                 addressed=True))
+        self.assertFalse(persona.is_rollback_text("回退"))
+        self.assertFalse(persona.is_rollback_text("撤回"))
         self.assertFalse(persona.is_rollback_text("我们回退一下"))
         self.assertFalse(persona.is_rollback_text("回退一下"))
         self.assertFalse(persona.is_rollback_text("明天回退给我看"))

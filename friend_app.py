@@ -378,8 +378,10 @@ def _forward(prefix, sub, allow_guest=False):
     # 只对图片这么干：接口响应都很小，流式没有收益，反而多一层生成器。
     streaming = (request.method == "GET"
                  and ((request.path or "").startswith("/api/gal/img/")
-                      or (request.path or "").startswith("/api/moss/img")))
-    #  ↑ moss 漫画图单张 2MB+（2026-11-03 实测），一并流式。
+                      or (request.path or "").startswith("/api/moss/img")
+                      or (request.path or "").startswith("/api/image/web/")))
+    #  ↑ moss 漫画图单张 2MB+（2026-11-03 实测），persona 的 CG 单张 8MB+
+    #    （2026-11-04 实测），一并流式。
     # 每个请求一个干净 session，用完就关（见 `_new_session` 的说明）。
     # 绝不能复用全局 session：那会把上一个用户的 cookie 带给下一个用户。
     sess = _new_session()
@@ -518,6 +520,19 @@ def proxy_persona(sub):
 @app.route("/api/moss/img", methods=["GET"])
 def proxy_moss_img():
     return _forward("/api/moss", "img")
+
+
+# ─── 角色扮演的单张 CG（2026-11-04）─────────────────────
+#
+# persona 页「出图」的结果地址是 `/api/image/web/生图页/...`。这条不转发的话，
+# 手机端（5175/隧道）请求全部 404——用户报「网页端出图没有显示成果」，5174
+# 的日志里连一条 `/api/image` 请求都没有（请求根本没出网关）。
+#
+# ⚠️ 只放 `web/` 这一支：`/api/image` 底下还有 QQ 私聊/群聊的图，目录名里
+# 带 QQ 号/群号，不能整支暴露到公网。CG 只读，路径在 5174 侧还会做越界校验。
+@app.route("/api/image/web/<path:sub>", methods=["GET"])
+def proxy_web_img(sub):
+    return _forward("/api/image/web", sub)
 
 
 @app.route("/compat")

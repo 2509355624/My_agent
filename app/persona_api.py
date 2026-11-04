@@ -938,6 +938,18 @@ def affection_mercy():
                     "affection": affection.status(key)})
 
 
+def _img_rel(f):
+    """磁盘相对名 → URL 里能用的相对路径（统一正斜杠）。
+
+    2026-11-04 用户报「网页端出图没有显示成果」：图其实出好了，17:30 那次
+    `image_jobs` 交回的是 `web\\生图页\\anima-line/Anima_00049_.png`（Windows
+    反斜杠和正斜杠混着），拼成 `/api/image/web\\生图页\\...` 塞给 `<img src>`，
+    浏览器/5175 网关那一段不认，一个取图请求都没发出来。
+    落盘和读盘两头都过一遍，老映射里的反斜杠也能被纠正。
+    """
+    return "/".join(x for x in str(f or "").replace("\\", "/").split("/") if x)
+
+
 @bp.route("/api/persona/shot", methods=["POST"])
 def shot():
     """「出图」→ anima-line 单张横屏 CG（2026-11-04 换线，原 moss 五格漫画）。
@@ -995,7 +1007,8 @@ def shot():
             log.exception("网页出图异常 %s", key)
             name, note = "", "出图这步出了岔子，再试一次"
         _pic_map_set(key, slot,
-                     {"file": name} if name else {"error": note or "出图失败"})
+                     {"file": _img_rel(name)} if name
+                     else {"error": note or "出图失败"})
 
     threading.Thread(target=_work, daemon=True, name="persona-shot").start()
     return jsonify({"ok": True, "msgIndex": idx,
@@ -1021,7 +1034,7 @@ def shot_status():
         return jsonify({"ok": True, "status": "none"})
     if ent.get("pending"):
         return jsonify({"ok": True, "status": "running"})
-    f = str(ent.get("file") or "")
+    f = _img_rel(ent.get("file"))
     if f:
         return jsonify({"ok": True, "status": "done",
                         "url": "/api/image/" + f})
@@ -1050,6 +1063,11 @@ def comic_map():
     pics = {k: v for k, v in raw.items()
             if k.startswith("n") and isinstance(v, dict)
             and (v.get("file") or (v.get("sid") and v.get("page")))}
+    # 老映射里的 `file` 可能是 Windows 反斜杠（见 `_img_rel`），恢复时也纠正，
+    # 否则刷新页面后图又「凭空消失」。
+    for v in pics.values():
+        if v.get("file"):
+            v["file"] = _img_rel(v["file"])
     return jsonify({"ok": True, "pics": pics})
 
 
