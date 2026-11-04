@@ -2028,8 +2028,12 @@ class QQBot:
                      reply_to=_rb_reply)
             return
 
-        cmd = persona.handle_command(
-            persona_key, text, addressed=(at_me or trigger.called(text)))
+        _addr = (at_me or trigger.called(text))
+        # 引用的消息 id（2026-11-05）：删档确认要核对「引用的是不是那条警告」。
+        qids = [str(q.get("id") or "") for q in (quotes or [])
+                if q.get("kind") in ("reply", "forward")]
+        cmd = persona.handle_command(persona_key, text, addressed=_addr,
+                                     quoted_ids=qids)
         if cmd is not None:
             # 2026-11-03：`#角色扮演` 的规则很长，走「聊天记录卡片」发出去
             # （点开才展开，不刷屏）。其它命令仍是一句话，直接发。
@@ -2075,8 +2079,12 @@ class QQBot:
                 else:
                     send = (qq_api.send_group if target == "group"
                             else qq_api.send_private)
-                    send(target_id, cmd,
-                         reply_to=str(ev.get("message_id") or "") or None)
+                    ids = send(target_id, cmd,
+                               reply_to=str(ev.get("message_id") or "") or None)
+                    # 删档第一步的警告：把这条消息的 id 记进 pending，
+                    # 之后只有**引用它**回确认句才真删（2026-11-05 用户要求）。
+                    if persona.is_wipe_request(text, addressed=_addr):
+                        persona.note_wipe_prompt(persona_key, ids)
             except Exception:
                 log.exception("回角色扮演命令失败 %s", session_key)
                 # 卡片发失败就退回纯文字——规则不能因为协议端不支持卡片就没了

@@ -685,16 +685,34 @@ class CommandTest(AffBase):
         self.assertIn("你们：", out)
 
     def test_wipe_command_asks_before_deleting(self):
-        """「清空存档」两步（2026-11-04）：先说删什么，回确认句才动手。"""
+        """「清空存档」两步（2026-11-04；2026-11-05 加引用闸门）。"""
         key = self._raid()
         affection.settle(key, {"delta": 9, "turn_type": "action"})
         warn = persona.handle_command("private_1", "清空存档")
         self.assertIn("找不回来", warn)
         self.assertIn(persona.WIPE_CONFIRM, warn)
         self.assertNotEqual(affection.status(key)["value"], 0)   # 这一步什么都不删
-        out = persona.handle_command("private_1", persona.WIPE_CONFIRM)
+        # 模拟 qq_bot 发完警告后回填消息 id
+        persona.note_wipe_prompt("private_1", ["w1"])
+        out = persona.handle_command("private_1", persona.WIPE_CONFIRM,
+                                     quoted_ids=["w1"])
         self.assertIn("存档已删除", out)
         self.assertEqual(affection.status(key)["value"], 0)
+
+    def test_wipe_confirm_without_quoting_the_warning_changes_nothing(self):
+        """光回确认句、没引用那条警告：只提示，不删（2026-11-05 用户要求）。"""
+        key = self._raid()
+        affection.settle(key, {"delta": 9, "turn_type": "action"})
+        persona.handle_command("private_1", "清空存档")
+        persona.note_wipe_prompt("private_1", ["w1"])
+        out = persona.handle_command("private_1", persona.WIPE_CONFIRM)
+        self.assertIn("引用", out)
+        self.assertNotEqual(affection.status(key)["value"], 0)
+        # 引用了一条不相干的旧消息，同样不算
+        out = persona.handle_command("private_1", persona.WIPE_CONFIRM,
+                                     quoted_ids=["别的消息"])
+        self.assertIn("引用", out)
+        self.assertNotEqual(affection.status(key)["value"], 0)
 
     def test_wipe_confirm_alone_is_plain_text(self):
         """没先发命令，光说确认句要当普通聊天，不能顺手把档删了。"""
@@ -708,7 +726,8 @@ class CommandTest(AffBase):
         persona.handle_command("private_1", "好感")
         persona.handle_command("private_1", "清空存档")
         persona.handle_command("private_1", "算了，今天先不聊这个")
-        self.assertIsNone(persona.handle_command("private_1", persona.WIPE_CONFIRM))
+        self.assertIsNone(persona.handle_command("private_1", persona.WIPE_CONFIRM,
+                                                 quoted_ids=["w1"]))
 
     def test_wipe_deletes_chat_history(self):
         """真删：聊天历史也要没（老版「重新开始」是不动的）。"""
@@ -719,7 +738,8 @@ class CommandTest(AffBase):
         ])
         self.assertEqual(len(persona._load_hist(key)), 2)
         persona.handle_command("private_1", "清空存档")
-        persona.handle_command("private_1", persona.WIPE_CONFIRM)
+        persona.note_wipe_prompt("private_1", ["w1"])
+        persona.handle_command("private_1", persona.WIPE_CONFIRM, quoted_ids=["w1"])
         self.assertEqual(persona._load_hist(key), [])
 
     def test_plain_sentence_with_keyword_is_not_a_command(self):
@@ -727,15 +747,28 @@ class CommandTest(AffBase):
         self.assertIsNone(persona.handle_command("private_1", "你的好感怎么来的"))
         self.assertIsNone(persona.handle_command("private_1", "我对她有好感"))
 
-    def test_clear_resets_affection_keeps_mode(self):
-        self._raid()
-        affection.settle(persona.resolve_line("private_1"),
-                         {"delta": 10, "turn_type": "action"})
-        out = persona.handle_command("private_1", "清空")
-        self.assertIn("记忆清空", out)
-        st = affection.status(persona.resolve_line("private_1"))
-        self.assertEqual(st["value"], 0)
-        self.assertEqual(st["mode"], "raid")            # 模式保留
+    def test_bare_clear_no_longer_wipes_without_confirmation(self):
+        """2026-11-05 用户实测：发「清空」直接把记忆删了，不可接受。
+
+        现在「清空」只是删档第一步（亮红灯），要引用警告 + 回确认句才动手。
+        """
+        key = self._raid()
+        affection.settle(key, {"delta": 10, "turn_type": "action"})
+        warn = persona.handle_command("private_1", "清空")
+        self.assertIn("清空存档", warn)
+        st = affection.status(key)
+        self.assertNotEqual(st["value"], 0)     # 这一步什么都没删
+        self.assertEqual(st["mode"], "raid")    # 模式保留
+
+    def test_clear_alias_goes_through_the_same_gate(self):
+        """「重置 / 重开 / 从头开始」也不再直接删——同一个闸门。"""
+        key = self._raid()
+        affection.settle(key, {"delta": 10, "turn_type": "action"})
+        for word in ("重置", "重开", "从头开始"):
+            warn = persona.handle_command("private_1", word)
+            self.assertIsNotNone(warn, word)
+            self.assertIn("清空存档", warn, word)
+        self.assertNotEqual(affection.status(key)["value"], 0)
 
 
 class DepthHintTest(unittest.TestCase):
