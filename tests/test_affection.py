@@ -829,13 +829,21 @@ class LevelTest(AffBase):
         self.assertEqual(r["level"], 1)      # 好感掉回去，距离不退回
 
     def test_arousal_accumulates_and_decays(self):
+        """2026-11-05 改：有人在拱气氛的那一轮**不回落**。
+
+        旧规则是「每轮无条件 -15」。打分模型给的常态增量只有 +10~+15
+        （情话 +10、独处 +15），净值恒为负 → 夹在 0 上永远不动，
+        网页右栏那条冲动条看起来是死的（用户实测反馈）。
+        现在只有「这一轮没在拱」（arose <= 0）才回落：有人推就攒得住，
+        没人管会凉——「得重新拱气氛」的本意不变。
+        """
         key = self._raid_card()
         r1 = affection.settle(key, {"delta": 1, "turn_type": "action", "arousal": 40})
-        self.assertEqual(r1["arousal"], 25)          # 0 + 40 - 15
+        self.assertEqual(r1["arousal"], 40)          # 0 + 40（有增量就不扣）
         r2 = affection.settle(key, {"delta": 1, "turn_type": "action", "arousal": 40})
-        self.assertEqual(r2["arousal"], 50)
+        self.assertEqual(r2["arousal"], 80)
         r3 = affection.settle(key, {"delta": 1, "turn_type": "action"})
-        self.assertEqual(r3["arousal"], 35)          # 什么都不做就往下掉
+        self.assertEqual(r3["arousal"], 65)          # 什么都不做就往下掉 15
 
     def test_arousal_floors_at_zero(self):
         key = self._raid_card()
@@ -1075,6 +1083,47 @@ class ExciteTest(AffBase):
         res = self._settle(key, in_scene=False)
         self.assertEqual(res["excite"], 0)
         self.assertFalse(res["in_scene"])
+
+    def test_act_overrides_false_in_scene(self):
+        """模型说 in_scene=false 却给了动作：按进行中算（2026-11-05 修）。
+
+        以前只认 in_scene，模型偶尔把这个字段填成 false 或字符串 "false"，
+        这一轮就被判成「场景已结束」——高潮值当场清零、网页面板整块收起，
+        玩家看到的就是「刚才还有，怎么没了」。
+        """
+        key = self._raid()
+        res = self._settle(key, in_scene=False, act="hand")
+        self.assertTrue(res["in_scene"])
+        self.assertGreater(res["excite"], 0)
+        # 字符串 "false" 也要能读对
+        key2 = self._raid()
+        res2 = self._settle(key2, in_scene="false", act="foreplay")
+        self.assertTrue(res2["in_scene"])
+
+    def test_stop_is_not_in_scene(self):
+        """`act=stop` 是收场信号，不能反过来把场景判回进行中。"""
+        key = self._raid()
+        self._settle(key, in_scene=True, act="intense")
+        res = self._settle(key, in_scene=False, act="stop")
+        self.assertFalse(res["in_scene"])
+        self.assertEqual(res["excite"], 0)
+
+    def test_sleep_closes_the_night(self):
+        """过夜：场景结束、高潮值与次数清零、冲动回落（2026-11-05）。
+
+        「睡到第二天」以前只推游戏日、不碰好感记录，第二天早上面板还挂着
+        昨晚的高潮值，状态行也还是床上的样子。
+        """
+        key = self._raid()
+        self._settle(key, in_scene=True, act="intense", arousal=40)
+        self.assertGreater(affection.panel(key)["excite"], 0)
+        affection.sleep(key)
+        p = affection.panel(key)
+        self.assertFalse(p["inScene"])
+        self.assertEqual(p["excite"], 0)
+        self.assertEqual(p["orgasms"], 0)
+        self.assertGreater(p["arousal"], 0)      # 回落不是清零：刚醒来还记得
+        self.assertLess(p["arousal"], 40)
 
     def test_reaches_top_and_falls_back_not_clamped(self):
         """到 100 触发一次高潮并回落到余韵值，不是死死卡在 100。"""

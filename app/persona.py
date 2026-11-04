@@ -850,6 +850,11 @@ def draw_shot(card, session_key, msg_index=None, reply_to=""):
     scene = shot_scene(session_key, msg_index)
     if not scene:
         return "", "这一轮没有可画的画面"
+    # 排查用（2026-11-05）：线上反馈「出图还是六格漫画」。这条日志把
+    # **实际用的渠道和画幅**打出来，一眼就能分辨是代码没生效（进程跑着旧
+    # 版本 → 没有这行）还是走了别的入口（这行有但渠道不是 anima-line）。
+    log.info("扮演出图：渠道=%s 画幅=横屏 行号=%s 画面=%s",
+             SHOT_SKILL, msg_index, scene[:60])
     name = draw(scene, card, session_key, reply_to=reply_to,
                 skill=SHOT_SKILL, landscape=True)
     if not name:
@@ -3074,9 +3079,69 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
 
 # 「睡到明天」时塞给她的话。**这条不进历史**——历史要以她的开场收尾，
 # 下一轮玩家的真消息直接接在她的话后面，模型不会看到这行系统腔。
+#
+# 2026-11-05 修（用户：睡到第二天剧情严重不连贯）：原来只说「新的一天刚开始，
+# 由你先开口」，模型手里只有一段滑动窗口，又收到「新的一天」的强指令，
+# 它就另起一个头——换个地点、忘掉昨晚说过的话、把约定跳过去。
+# 现在明确三件事：接着前情写、别重写已经发生的、昨晚没收尾的先交代收尾。
 _SKIP_TASK = ("【这一轮】新的一天刚开始（第 %d 天），他还没说话。"
               "**由你先开口**：早安或自然地把今天带出来%s。"
-              "按平常的格式输出（正文 + 画面 + 心情 + 状态）。")
+              "\n\n接住上面「前情」往下写，不要另起一个场景："
+              "\n- 昨晚/此前的约定、没说完的话、没做完的事，这一轮要接着它走；"
+              "\n- 已经发生过的事**不要重写**，也不要假装没发生；"
+              "\n- 昨晚如果还停在场景里（衣物、地点、谁先睡着），先用一两句交代"
+              "这一夜是怎么过完的，再进入今天；"
+              "\n- 「状态」行是昨晚的，今天要重新写（醒来后的衣着、位置）。"
+              "\n按平常的格式输出（正文 + 画面 + 心情 + 状态）。")
+
+_RECAP_TURNS = 6      # 前情带最近几轮
+_RECAP_CHARS = 90     # 每段截断，免得把系统头撑爆
+
+
+def _brief(text, limit=_RECAP_CHARS):
+    """把一段正文压成一行：去空白、去元信息行、截断。"""
+    s = str(text or "").replace("\r", "")
+    s = re.sub(r"\n+", " ", s)
+    s = re.sub(r"\s{2,}", " ", s).strip()
+    return s[:limit]
+
+
+def _recap_block(session_key):
+    """跨日开场的「前情」：最近几轮到底发生了什么（2026-11-05）。
+
+    `skip_day` 以前直接把滑动窗口丢给模型，再补一句「新的一天」——窗口里
+    是零散对白，没有任何一句告诉模型「昨天停在哪、说好了什么」。模型于是
+    自己编一个开头，玩家看到的就是断片。
+
+    这里按**轮**把归档拆开，只留她和他各自说的那部分（去掉画面/心情/状态
+    三行），压成短清单。加约定和昨晚的场景状态，模型才有连贯的起点。
+    """
+    rows = load_archive(session_key) or []
+    pairs = []
+    pending_user = ""
+    for m in rows:
+        role = m.get("role")
+        if role == "user":
+            pending_user = _brief(m.get("content"))
+        elif role == "assistant":
+            body, _sc, _mo, _it, _st = split_turn(m.get("content") or "")
+            body = _brief(body)
+            if body or pending_user:
+                pairs.append((pending_user, body))
+            pending_user = ""
+    pairs = pairs[-_RECAP_TURNS:]
+    if not pairs:
+        return ""
+    lines = ["【前情 · 这一夜之前发生的事】",
+             "（按时间顺序，最后一条就是昨晚停下的地方。接着它写，"
+             "不要另起炉灶。）"]
+    for i, (u, a) in enumerate(pairs, 1):
+        if u:
+            lines.append("%d. 他：%s" % (i, u))
+        if a:
+            lines.append("   她：%s" % a)
+    return "\n".join(lines)
+
 
 
 def skip_day(session_key, sender="", sender_uin=""):
@@ -3097,10 +3162,23 @@ def skip_day(session_key, sender="", sender_uin=""):
     note = str(ent.get("note") or "")
     prev_state = str(ent.get("state") or "")
 
+    # 过夜收场（2026-11-05）：场景结束、高潮值归零、冲动回落。
+    # 不这么做的话，第二天早上面板还挂着昨晚的高潮值，状态行也还是床上的
+    # 衣着和位置，模型只能接着昨晚写——「睡了一觉什么都没变」。
+    try:
+        affection.sleep(key)
+    except Exception:                                  # noqa: BLE001
+        log.exception("跨夜状态收场失败 %s", key)
+
     head = build_head(card, key, sender, note, prev_state, intimate=False)
     tblock = _gameday_block(gd)
     if tblock:
         head = head + "\n\n" + tblock
+    # 前情（2026-11-05）：把最近几轮压成清单拼进系统头。没有它，「新的一天」
+    # 就是一道把模型推去另起炉灶的指令——玩家看到的就是剧情断片。
+    recap = _recap_block(key)
+    if recap:
+        head = head + "\n\n" + recap
     event = str((gd or {}).get("event") or "").strip()
     task = _SKIP_TASK % ((gd or {}).get("day") or 1,
                          ("（今天：%s）" % event) if event else "")

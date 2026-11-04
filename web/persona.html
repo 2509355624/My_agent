@@ -1067,12 +1067,33 @@ function renderPanel(a, p) {
   body.appendChild(panelSection(
     "冲动 " + (p.arousal | 0) + "/100", p.arousals, p.arousal));
 
-  // 四、高潮：只在进行中才有意义，场景一停就收起
-  if (p.inScene) {
-    body.appendChild(panelSection(
-      "高潮 " + (p.excite | 0) + "/100 · 第 " + (p.orgasms | 0)
-      + "/" + (p.orgasmMax | 0) + " 次", p.orgasms_rows, p.excite));
+  // 四、高潮：常驻（和冲动/堕落/屈服一样，0 也画）。
+  // 2026-11-05 修（用户：高潮值消失了）：原来只在 inScene 时画，场景一结束
+  // 整块凭空不见——玩家分不清「收场了」和「界面坏了」。
+  // 2026-11-05 再修（用户截图问「为什么右边没有高潮值」）：上一版仍留了
+  // `inScene || 有值 || 有次数` 的门槛，于是**这一场还没开始**的存档
+  // （excite=0、orgasms=0、scene=false）整块不画 —— 玩家看到的是
+  // 冲动/堕落/屈服都在，唯独高潮凭空少一轴，像界面坏了。
+  // 现在和其它三轴一样常驻：0 也写出来，用一句小字说明是「还没开始」，
+  // 而不是靠「不显示」表达「没意义」。
+  const exV = p.excite | 0;
+  const exN = p.orgasms | 0;
+  const sec = panelSection(
+    "高潮 " + exV + "/100 · 第 " + exN
+    + "/" + (p.orgasmMax | 0) + " 次", p.orgasms_rows, exV);
+  if (!p.inScene) {
+    const tip = document.createElement("div");
+    tip.style.cssText = "font-size:11.5px;color:var(--text-mute);padding:2px 0 4px;";
+    if (p.coolLeft > 0) {
+      tip.textContent = "刚收场，还要歇 " + p.coolLeft + " 轮";
+    } else if (exV > 0 || exN > 0) {
+      tip.textContent = "这一场已经收场了";
+    } else {
+      tip.textContent = "这一场还没开始（它记的是单场进度，收场就归零）";
+    }
+    sec.appendChild(tip);
   }
+  body.appendChild(sec);
 
   // 五、堕落（2026-11-04 深夜）：常驻。0 的时候也画——
   // 这根轴是「她变成了什么样」，玩家要能一眼看到自己把它推到了哪。

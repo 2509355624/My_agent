@@ -1071,10 +1071,11 @@ class SessionRunner:
         key = persona._persona_key(self.session_key, sender_uin)  # noqa: SLF001
         card = persona.active_card(key)
 
-        # ── 「出图」：调 moss 漫画出六格（2026-11-03 用户拍板）──────────
-        # 扮演态不再自动配图，改由用户主动要求。走的是 moss 漫画那条完整链路
-        # （编剧 → 6 格 → 出图 → 回执），不是以前那种单张快图。
-        #
+        # ── 「出图」：anima-line 单张横屏 CG（2026-11-04 换线）──────────
+        # 2026-11-03 那一版是 moss 一页六格，实测剧情差、出图慢，已换掉。
+        # 现在走 `_comic_from_persona` → `persona.draw_shot`：画面行（她每轮
+        # 自己写的英文定稿）+ 角色外观串直喂 anima-line，零额外 LLM 调用。
+        # moss 漫画链**保留**，但那只剩群聊 `/moss` 在用（见 handle_command）。
         # 引用内容一起带过去：用户引用某条聊天记录说「出图」，那段记录就是
         # 他要画的剧情。
         joined = "\n".join(texts)
@@ -1162,9 +1163,15 @@ class SessionRunner:
                          name="persona-shot", daemon=True).start()
 
     def _draw_shot_persona(self, card, key, reply_to=""):
-        """`_comic_from_persona` 的后台执行体：出图 → 发回本会话。"""
+        """`_comic_from_persona` 的后台执行体：出图 → 发回本会话。
+
+        `reply_to` 必须一路传进 `draw_shot`（2026-11-05 修）：以前这里只拿它
+        发图，没传给 `draw_shot`，于是 `image_jobs.enqueue(reply_to="")`
+        在后台线程里自己去读本轮上下文——那时早不是本轮了，读出来是空，
+        图就不引用玩家的消息。
+        """
         try:
-            name, note = persona.draw_shot(card, key)
+            name, note = persona.draw_shot(card, key, reply_to=reply_to)
         except Exception:
             log.exception("扮演出图异常 %s", key)
             name, note = "", "出图这步出了岔子，再试一次？"
