@@ -668,27 +668,28 @@ class ScoreProfileTest(AffBase):
 class CommandTest(AffBase):
     def test_raid_commands_roundtrip(self):
         self._enter()
-        out = persona.handle_command("private_1", "攻略模式")
+        out = persona.handle_command("private_1", "#攻略模式")
         self.assertIn("攻略模式", out)      # 默认就是，回执说「现在就是」
         self.assertTrue(affection.is_raid(persona.resolve_line("private_1")))
-        out = persona.handle_command("private_1", "自由模式")
+        out = persona.handle_command("private_1", "#自由模式")
         self.assertIn("封存", out)
         self.assertFalse(affection.is_raid(persona.resolve_line("private_1")))
 
     def test_affection_query_and_card(self):
         self._raid()
-        self.assertTrue(persona.is_affection_query("好感"))
+        self.assertTrue(persona.is_affection_query("#好感"))
         self.assertTrue(persona.is_affection_query("#好感度"))
+        self.assertFalse(persona.is_affection_query("好感"))
         self.assertFalse(persona.is_affection_query("好感怎么刷"))
-        out = persona.handle_command("private_1", "好感")
+        out = persona.handle_command("private_1", "#好感")
         self.assertIn("攻略档案", out)
         self.assertIn("你们：", out)
 
     def test_wipe_command_asks_before_deleting(self):
-        """「清空存档」两步（2026-11-04；2026-11-05 加引用闸门）。"""
+        """「#清空存档」两步（2026-11-04；2026-11-05 加引用闸门）。"""
         key = self._raid()
         affection.settle(key, {"delta": 9, "turn_type": "action"})
-        warn = persona.handle_command("private_1", "清空存档")
+        warn = persona.handle_command("private_1", "#清空存档")
         self.assertIn("找不回来", warn)
         self.assertIn(persona.WIPE_CONFIRM, warn)
         self.assertNotEqual(affection.status(key)["value"], 0)   # 这一步什么都不删
@@ -703,7 +704,7 @@ class CommandTest(AffBase):
         """光回确认句、没引用那条警告：只提示，不删（2026-11-05 用户要求）。"""
         key = self._raid()
         affection.settle(key, {"delta": 9, "turn_type": "action"})
-        persona.handle_command("private_1", "清空存档")
+        persona.handle_command("private_1", "#清空存档")
         persona.note_wipe_prompt("private_1", ["w1"])
         out = persona.handle_command("private_1", persona.WIPE_CONFIRM)
         self.assertIn("引用", out)
@@ -717,14 +718,14 @@ class CommandTest(AffBase):
     def test_wipe_confirm_alone_is_plain_text(self):
         """没先发命令，光说确认句要当普通聊天，不能顺手把档删了。"""
         self._raid()
-        persona.handle_command("private_1", "好感")
+        persona.handle_command("private_1", "#好感")
         self.assertIsNone(persona.handle_command("private_1", persona.WIPE_CONFIRM))
 
     def test_wipe_pending_cancelled_by_other_message(self):
         """中间说了别的话，上一步的确认就作废——两分钟的窗口不该这么宽。"""
         self._raid()
-        persona.handle_command("private_1", "好感")
-        persona.handle_command("private_1", "清空存档")
+        persona.handle_command("private_1", "#好感")
+        persona.handle_command("private_1", "#清空存档")
         persona.handle_command("private_1", "算了，今天先不聊这个")
         self.assertIsNone(persona.handle_command("private_1", persona.WIPE_CONFIRM,
                                                  quoted_ids=["w1"]))
@@ -737,7 +738,7 @@ class CommandTest(AffBase):
             {"role": "assistant", "content": "你说你加班到很晚"},
         ])
         self.assertEqual(len(persona._load_hist(key)), 2)
-        persona.handle_command("private_1", "清空存档")
+        persona.handle_command("private_1", "#清空存档")
         persona.note_wipe_prompt("private_1", ["w1"])
         persona.handle_command("private_1", persona.WIPE_CONFIRM, quoted_ids=["w1"])
         self.assertEqual(persona._load_hist(key), [])
@@ -747,24 +748,25 @@ class CommandTest(AffBase):
         self.assertIsNone(persona.handle_command("private_1", "你的好感怎么来的"))
         self.assertIsNone(persona.handle_command("private_1", "我对她有好感"))
 
-    def test_bare_clear_no_longer_wipes_without_confirmation(self):
-        """2026-11-05 用户实测：发「清空」直接把记忆删了，不可接受。
+    def test_prefixed_clear_no_longer_wipes_without_confirmation(self):
+        """2026-11-05：发「#清空」只是删档第一步（亮红灯），不是真删。
 
-        现在「清空」只是删档第一步（亮红灯），要引用警告 + 回确认句才动手。
+        它要引用警告 + 回确认句才动手；不带前缀的「清空」现在连命令都不算。
         """
         key = self._raid()
         affection.settle(key, {"delta": 10, "turn_type": "action"})
-        warn = persona.handle_command("private_1", "清空")
+        warn = persona.handle_command("private_1", "#清空")
         self.assertIn("清空存档", warn)
         st = affection.status(key)
         self.assertNotEqual(st["value"], 0)     # 这一步什么都没删
         self.assertEqual(st["mode"], "raid")    # 模式保留
+        self.assertIsNone(persona.handle_command("private_1", "清空"))
 
     def test_clear_alias_goes_through_the_same_gate(self):
-        """「重置 / 重开 / 从头开始」也不再直接删——同一个闸门。"""
+        """「#重置 / #重开 / #从头开始」也不再直接删——同一个闸门。"""
         key = self._raid()
         affection.settle(key, {"delta": 10, "turn_type": "action"})
-        for word in ("重置", "重开", "从头开始"):
+        for word in ("#重置", "#重开", "#从头开始"):
             warn = persona.handle_command("private_1", word)
             self.assertIsNotNone(warn, word)
             self.assertIn("清空存档", warn, word)
@@ -1132,6 +1134,17 @@ class ExciteTest(AffBase):
         key2 = self._raid()
         res2 = self._settle(key2, in_scene="false", act="foreplay")
         self.assertTrue(res2["in_scene"])
+
+    def test_refusal_with_body_reaction_still_counts(self):
+        """她嘴上拒绝、身体确实被碰到：高潮值照涨（2026-11-05 用户要求）。
+
+        情感 AI 要按上下文给分，不能因为「她没答应」就把身体反应判成 0；
+        否则被拒的轮次高潮永远上不去，这根轴等于摆设。
+        """
+        key = self._raid()
+        res = self._settle(key, in_scene=False, act="foreplay",
+                           allow="no", reason="被碰到但推开")
+        self.assertGreater(res["excite"], 0)
 
     def test_stop_is_not_in_scene(self):
         """`act=stop` 是收场信号，不能反过来把场景判回进行中。"""

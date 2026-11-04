@@ -308,5 +308,5 @@ def api_delete():
     st = persona._load_state()                      # noqa: SLF001
     if key in st:
         st.pop(key)
-        persona._save_state(st)                     # noqa: SLF001
+        persona._save_state(st, deleted={key})      # noqa: SLF001
     return jsonify({"ok": True, "deleted": 1})

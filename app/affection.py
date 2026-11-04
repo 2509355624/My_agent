@@ -1686,6 +1686,18 @@ def settle(line_key, score):
     if applied > 0 and sus_prev >= SUSPICION_DISCOUNT_AT:
         applied = applied // 2
 
+    # 冲动预测挪到前面（原在下面的冲动段）：这一次算出来给下面几处共用，
+    # 避免同一套公式写两遍。
+    try:
+        arose = int(score.get("arousal") or 0)
+    except (TypeError, ValueError):
+        arose = 0
+    arose = max(-60, min(60, arose))
+    _aro_prev = int(rec.get("arousal") or 0)
+    _aro_pred = (_aro_prev + arose if arose > 0
+                 else _aro_prev + arose - AROUSAL_DECAY)
+    _aro_pred = max(0, min(AROUSAL_MAX, _aro_pred))
+
     prev_value = value
     value = max(MIN_V, min(MAX_V, value + applied))
     applied = value - prev_value      # 夹到边缘后以实际变动为准
@@ -1706,17 +1718,8 @@ def settle(line_key, score):
     # 玩家看到的确实是「一条死掉的进度条」。
     # 现在只有「这一轮没在拱气氛」（arose <= 0）才回落：有人在推就攒得住，
     # 没人管会凉——「得重新拱气氛」的本意保住了，但不再是把所有加分吃掉。
-    try:
-        arose = int(score.get("arousal") or 0)
-    except (TypeError, ValueError):
-        arose = 0
-    arose = max(-60, min(60, arose))
-    _aro_prev = int(rec.get("arousal") or 0)
-    if arose > 0:
-        _aro_now = _aro_prev + arose
-    else:
-        _aro_now = _aro_prev + arose - AROUSAL_DECAY
-    rec["arousal"] = max(0, min(AROUSAL_MAX, _aro_now))
+    # 计算已在上面完成（`_aro_pred`），这里只落账。
+    rec["arousal"] = _aro_pred
 
     # ── 高潮值（2026-11-04 深夜改版，原「兴奋度」）──────
     # 记法变了：**不再是模型自己给增量**，而是它判「这一轮在干什么」，

@@ -839,7 +839,7 @@ def shot_scene(session_key, msg_index=None):
     return _shot_parts(session_key, msg_index)[2]
 
 
-def draw_shot(card, session_key, msg_index=None, reply_to=""):
+def draw_shot(card, session_key, msg_index=None, reply_to="", on_submit=None):
     """「出图」→ `SHOT_SKILL`（anima-line）单张**横屏** CG。
 
     返回 `(文件名, note)`：note 非空 = 没画出来及原因。**阻塞**几十秒，
@@ -858,7 +858,7 @@ def draw_shot(card, session_key, msg_index=None, reply_to=""):
     log.info("扮演出图：渠道=%s 画幅=横屏 行号=%s 画面=%s",
              SHOT_SKILL, msg_index, scene[:60])
     name = draw(scene, card, session_key, reply_to=reply_to,
-                skill=SHOT_SKILL, landscape=True)
+                skill=SHOT_SKILL, landscape=True, on_submit=on_submit)
     if not name:
         return "", "没画出来（排队满 / ComfyUI 没在线 / 被审核拦下）"
     return name, ""
@@ -1290,18 +1290,78 @@ def find_card(word):
 _STATE_PATH = os.path.join(BASE_DIR, "state", "persona_sessions.json")
 
 
+def _read_state_raw():
+    """直接读盘，**不迁移、不落盘**。给 `_save_state` 做合并用。
+
+    返回 None 表示「文件在、但读不了」——调用方必须当成危险信号，不能拿
+    空字典去覆盖。
+    """
+    try:
+        with open(_STATE_PATH, "r", encoding="utf-8") as f:
+            d = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        return None
+    return d if isinstance(d, dict) else {}
+
+
 def _load_state():
     try:
         with open(_STATE_PATH, "r", encoding="utf-8") as f:
             d = json.load(f)
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return {}
+    except ValueError:
+        # 文件真坏了：先把它挪去旁边留尸，再从空库起——但绝不静默覆盖。
+        bad = "%s.corrupt-%s" % (_STATE_PATH, time.strftime("%Y%m%d-%H%M%S"))
+        log.exception("角色扮演状态文件坏了，已挪到 %s", bad)
+        try:
+            os.replace(_STATE_PATH, bad)
+        except OSError:
+            log.exception("坏状态文件挪不动，继续用空库（写盘会再次被拒）")
+        return {}
+    except OSError:
+        # 2026-11-05：这里以前是 `return {}`。读到一半权限/占用失败时，
+        # 调用方拿空库继续跑、反手整份写回，就把所有人的存档洗掉了
+        # （今天 546587874 的学妹线和其他二十多条线就是这么没的）。
+        # 现在宁可让这一轮报错，也不许用空库覆盖。
+        log.exception("读角色扮演状态失败（拒绝用空库覆盖）：%s", _STATE_PATH)
+        raise
     d = d if isinstance(d, dict) else {}
     # QQ 私聊分线的一次性迁移（2026-11-03 方案 B）。幂等：迁移完的库再扫
     # 一遍不会写盘（线键已存在、副本一致）。
     if d and _migrate_private_lines(d):
         _save_state(d)
     return d
+
+
+def _save_state(state, deleted=None):
+    """整份落盘，但**先把盘上别的线合并回来**。
+
+    2026-11-05 修（存档成片消失）：两个进程（QQ 适配层 / 网页后端）都是
+    「读整份 → 改一条 → 写整份」。A 读完还没写回，B 已经新建了几条线；
+    A 一写回就把 B 刚建的线按旧快照盖掉——今天丢的那二十多条线正是这么来的。
+    合并只补「盘上有、这次没带」的键；真要删线必须显式传 `deleted`，
+    不然删档会被合并动作复活。
+    """
+    cur = _read_state_raw()
+    if cur is None:
+        if os.path.exists(_STATE_PATH):
+            log.error("状态文件读不出来，拒绝整份覆盖：%s", _STATE_PATH)
+            raise RuntimeError("persona state unreadable; refuse to overwrite")
+        cur = {}
+    drop = {str(k) for k in (deleted or ())}
+    for k, v in cur.items():
+        if k not in state and k not in drop:
+            state[k] = v
+
+    from app.agents import _atomic_write_text
+    parent = os.path.dirname(_STATE_PATH)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    _atomic_write_text(_STATE_PATH, json.dumps(state, ensure_ascii=False, indent=2))
+
 
 
 def _migrate_private_lines(state):
@@ -1346,14 +1406,6 @@ def _migrate_persona_files(old_key, new_key):
                          os.path.basename(src), os.path.basename(dst))
             except OSError:
                 log.exception("分线迁移失败 %s", src)
-
-
-def _save_state(state):
-    from app.agents import _atomic_write_text
-    parent = os.path.dirname(_STATE_PATH)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    _atomic_write_text(_STATE_PATH, json.dumps(state, ensure_ascii=False, indent=2))
 
 
 def _persona_key(session_key, sender_uin=""):
@@ -1550,11 +1602,12 @@ def wipe_confirm(session_key, quoted_ids=None):
 
 
 def is_wipe_request(text, addressed=False):
-    """这条消息是不是删档第一步（`qq_bot` 发完要回填消息 id）。"""
-    body = _strip_prefix(text, addressed).strip()
-    if body.startswith("#"):
-        body = body[1:].strip()
-    return body in WIPE_WORDS or body in CLEAR_WORDS
+    """这条消息是不是删档第一步（`qq_bot` 发完要回填消息 id）。
+
+    2026-11-05 起和其它命令一样要前缀；确认句不走这里（见 `wipe_confirm`）。
+    """
+    return _command_body(text, addressed) in WIPE_WORDS or \
+        _command_body(text, addressed) in CLEAR_WORDS
 
 
 def _card_label(card):
@@ -1691,7 +1744,7 @@ def leave(session_key):
     state = _load_state()
     had = state.pop(session_key, None)
     if had is not None:
-        _save_state(state)
+        _save_state(state, deleted={session_key})
         log.info("扮演态结束：%s（原 %s）", session_key, had.get("card"))
 
 
@@ -1724,9 +1777,9 @@ def roster_text(site_url=""):
         "",
         "【怎么开始】",
         "",
-        "· 发一个「角色名」就进角色 —— **单独发，不用加 `#`**",
+        "· 发一个「#角色名」就进角色 —— 带前缀单独发，避免聊天误触",
         "· 全部角色拉到最后，名单里挑",
-        "· 忘了规则随时发「角色扮演」再看一遍",
+        "· 忘了规则随时发「#角色扮演」再看一遍",
         "",
         "【怎么聊】",
         "",
@@ -1736,19 +1789,20 @@ def roster_text(site_url=""):
         "",
         "【常用指令】",
         "",
-        "都是单独发一个词，不用加 `#`：",
+        "都要**带前缀单独发**（`#` 或 `/` 都行，例：`#出戏`、`/出戏`）——",
+        "不带前缀的当普通聊天，不会误触：",
         "",
-        "· 「角色名」 —— 进入 / 切换角色，各聊各的，记忆分开",
-        "· 「角色扮演，你是我的……」 —— 带描述自定义人设进角色",
-        "· 「出图」 —— 把当前剧情画成一张横屏 CG，几十秒",
-        "· 「状态」 —— 完整面板：每根轴到哪一格、离门槛还差多少",
-        "· 「回退」/「撤回」 —— 引用她上一条回复再发，撤掉那一轮",
-        "· 「睡到明天」 —— 推进一天，她会先开口；约好的事就在明天",
-        "· 「出戏」 —— 退出扮演，变回生图机器人",
+        "· 「#角色名」 —— 进入 / 切换角色，各聊各的，记忆分开",
+        "· 「#角色扮演，你是我的……」 —— 带描述自定义人设进角色",
+        "· 「#出图」 —— 把当前剧情画成一张横屏 CG，几十秒",
+        "· 「#状态」 —— 完整面板：每根轴到哪一格、离门槛还差多少",
+        "· 「#回退」/「#撤回」 —— 引用她上一条回复再发，撤掉那一轮",
+        "· 「#睡到明天」 —— 推进一天，她会先开口；约好的事就在明天",
+        "· 「#出戏」 —— 退出扮演，变回生图机器人",
         "",
         "【攻略模式】",
         "",
-        "发「攻略模式」开，发「自由模式」收（数值封存、不清零）。",
+        "发「#攻略模式」开，发「#自由模式」收（数值封存、不清零）。",
         "不开也能聊，只是她不记账。开了以后，这么几根轴各自在走：",
         "",
         "· **身体进度** —— 还没碰过 → 能碰到了 → 能抱了 → 亲过了 →",
@@ -1767,13 +1821,13 @@ def roster_text(site_url=""):
         "【越界与结局】",
         "",
         "· 她说了不要还继续：一次重扣分，两次进局子，这条线就结束了。",
-        "· 进局子后数值锁死。发「再给我一次机会」：她留下，好感挪回线内，",
+        "· 进局子后数值锁死。发「#再给我一次机会」：她留下，好感挪回线内，",
         "  每人 3 次，用完就真没有了。",
         "· 掉到 -50 也是同一个结局：她走了。",
         "",
         "【清空存档】",
         "",
-        "· 发「清空存档」：聊天记录、好感、进度、成就、连续天数全部删掉，",
+        "· 发「#清空存档」：聊天记录、好感、进度、成就、连续天数全部删掉，",
         "  角色卡保留，她从最初重新认识你。",
         "· **删了就找不回来**：我会先亮一次红灯，你**引用那条警告**，",
         "  回一句「我同意清空存档」，才真删。",
@@ -1799,9 +1853,8 @@ def roster_text(site_url=""):
         if c.get("hidden"):
             continue    # 暂下架的卡不上名单（卡还在，会话还能接着演）
         tag = c.get("description") or c.get("personality") or ""
-        # 不写 `#` 前缀（2026-11-03）：用户反馈大家不爱打井号，名单跟着改，
-        # 免得看到 `#妹妹` 以为必须带井号。
-        lines.append("%s%s" % (c["name"], ("　" + tag) if tag else ""))
+        # 2026-11-05：命令统一要前缀了，名单也跟着写 `#名字`，玩家不用猜。
+        lines.append("#%s%s" % (c["name"], ("　" + tag) if tag else ""))
     return "\n".join(lines)
 
 
@@ -1894,41 +1947,42 @@ def _group_redirect(card):
     else:
         lines.append("2. **网页上玩**：找我主人要个地址")
     lines.append("")
-    lines.append("（群里发「角色扮演」还是能看到完整规则的。）")
+    lines.append("（群里发「#角色扮演」还是能看到完整规则的。）")
     return "\n".join(lines)
 
 
+def _command_body(text, addressed=False):
+    """剥掉 @/名字前缀后取命令正文。**必须带 `#` 或 `/` 前缀**。
+
+    2026-11-05 用户改口：之前为了「大家不爱打井号」把前缀做成了可选，
+    结果群里聊到「妹妹」「清空」这种日常词也可能被当成命令。现在统一
+    要求前缀，`#` 和 `/` 都认；不带前缀一律当普通聊天。
+    """
+    t = _strip_prefix(text, addressed)
+    if not t or t[0] not in "#/":
+        return None
+    body = t[1:].strip()
+    return body or None
+
+
 def is_roster_request(text, addressed=False):
-    """这条消息是不是在要「规则 / 名单」（`#角色扮演` / `#人设列表`）。
+    """这条消息是不是在要「规则 / 名单」（`#角色扮演` / `/角色扮演`）。
 
     单独一个函数是因为 `handle_command` 只能返回一段文字，而调用方需要知道
     「这段文字要不要用聊天记录卡片发」（规则一千多字，直接发会刷屏）。
-    剥前缀的逻辑和 `handle_command` 保持一致，见 `_PREFIX_RE`。
+    前缀判据和 `handle_command` 共用 `_command_body`，别再各写一套。
     """
-    t = _strip_prefix(text, addressed)
-    if not t.startswith("#"):
-        return False
-    return t[1:].strip() in LIST_WORDS
+    return _command_body(text, addressed) in LIST_WORDS
 
 
 def is_affection_query(text, addressed=False):
-    """这条消息是不是在查「好感」档案（要用聊天记录卡片发）。
-
-    同 `is_roster_request` 的道理：`handle_command` 只能回一段文字，
-    调用方需要知道「这段要不要拆成卡片节点」。带不带 `#` 都认。
-    """
-    t = _strip_prefix(text, addressed)
-    if t.startswith("#"):
-        t = t[1:].strip()
-    return t in AFF_WORDS
+    """这条消息是不是在查「好感」档案（要用聊天记录卡片发）。"""
+    return _command_body(text, addressed) in AFF_WORDS
 
 
 def is_achievement_query(text, addressed=False):
     """这条消息是不是在查「成就」。同 `is_affection_query`，也要走卡片。"""
-    t = _strip_prefix(text, addressed)
-    if t.startswith("#"):
-        t = t[1:].strip()
-    return t in ACH_WORDS
+    return _command_body(text, addressed) in ACH_WORDS
 
 
 def is_status_query(text, addressed=False):
@@ -1937,10 +1991,7 @@ def is_status_query(text, addressed=False):
     同 `is_affection_query` 的道理：要把整张表画成聊天记录卡片，
     直接发一条长消息会把聊天刷没。
     """
-    t = _strip_prefix(text, addressed)
-    if t.startswith("#"):
-        t = t[1:].strip()
-    return t in STATUS_WORDS
+    return _command_body(text, addressed) in STATUS_WORDS
 
 
 def _strip_prefix(text, addressed=False):
@@ -1963,34 +2014,25 @@ def is_rollback_text(text, addressed=False):
     """正文是不是「回退」命令（2026-11-04）。
 
     只判正文整词；引用匹不匹配机器人上一条回复由 `qq_bot` 侧把关——
-    单发「回退」两个字永远不是命令，落回普通聊天。
+    单发「回退」两个字永远不是命令，落回普通聊天。2026-11-05 起也要带
+    `#` / `/` 前缀（`#回退`、`/撤回`），和其它命令一致。
     """
-    t = _strip_prefix(text, addressed).strip()
-    return t in ROLLBACK_WORDS
+    return _command_body(text, addressed) in ROLLBACK_WORDS
 
 
 def handle_command(session_key, text, addressed=False, quoted_ids=None):
     """认扮演命令。返回要回的话；**不是命令返回 None**（照常往下走）。
 
-    2026-11-03 用户反馈：「大家玩角色扮演，不喜欢加前面的 # 来触发，他们
-    喜欢单独的词一个气泡来触发」。日志实证：群里/私聊发的是 `妹妹`、
-    `角色扮演`、`大大怪，角色扮演`，全都没被认出来。
+    2026-11-05 用户改口：所有命令**必须带 `#` 或 `/` 前缀**，避免日常聊天
+    里的「妹妹」「清空」「好感」被误触。认这几种形态：
 
-    所以 **`#` 变成可选**。认这几种形态：
+      - `#和泉纱雾` / `/和泉纱雾`           → 进角色
+      - `#角色扮演` / `/角色扮演`           → 列清单
+      - `#出戏` / `/出戏`                   → 退出
+      - `#角色扮演，你是我的白兔妹妹…`      → 进角色（命令词后面带描述也认）
 
-      - `#和泉纱雾` / `和泉纱雾`     → 进角色
-      - `#角色扮演` / `角色扮演`      → 列清单
-      - `#出戏` / `出戏`             → 退出
-      - `角色扮演，你是我的白兔妹妹…` → 进角色（命令词后面带描述也认）
-
-    ⚠️ 去掉 `#` 之后最大的风险是**误触发**：「妹妹」「清空」这些词在日常对话
-    里太常见。所以判据收紧成——
-
-      1. 必须是**整条消息**（剥掉 @前缀 和语气词后完全等于命令词），
-         不做子串匹配；
-      2. `#` 开头的放宽（用户明确在打命令，允许带参数）；
-      3. 不带 `#` 时，**卡名必须是整条消息**；只有 LIST/EXIT/CLEAR 这类
-         词才允许「词 + 逗号 + 描述」的写法。
+    ⚠️ 例外只有一个：删档第二句的确认句（「我同意清空存档」）本身不是
+    打命令，而是**引用警告后回的一句话**，不要求前缀——它已经有引用闸门。
 
     `addressed`（2026-11-03）：群里这条消息**确实在叫机器人**（真 @，或者
     句子里喊了「大大怪」）。为真时先把开头的 `@某人` / 名字剥掉——
@@ -2004,9 +2046,18 @@ def handle_command(session_key, text, addressed=False, quoted_ids=None):
     if not t:
         return None
 
-    explicit = t.startswith("#")     # 带井号 = 用户明确在打命令
-    body = t[1:].strip() if explicit else t
-    if not body:
+    # 删档确认句：不要求前缀（见 docstring）。引用闸门在 `wipe_confirm` 里。
+    if t == WIPE_CONFIRM:
+        if not str(session_key or "").startswith("private"):
+            return None
+        return wipe_confirm(session_key, quoted_ids)
+
+    body = _command_body(text, addressed)
+    if body is None:
+        # 没带前缀的普通聊天：上一步的删档确认作废。不这样的话，玩家
+        # 12:00 发了「#清空存档」又反悔聊了两句，12:01 引用警告回一句
+        # 「我同意清空存档」就真删了——两分钟的窗口不该这么宽。
+        _WIPE_PENDING.pop(session_key, None)
         return None
 
     if body in LIST_WORDS:
@@ -2049,11 +2100,9 @@ def handle_command(session_key, text, addressed=False, quoted_ids=None):
             return turn.reply
         if body in WIPE_WORDS:
             return wipe_request(session_key)
-        if body == WIPE_CONFIRM:
-            return wipe_confirm(session_key, quoted_ids)
         # 说了别的话：上一步的确认作废。不这样的话，玩家 12:00 发了
-        # 「清空存档」又反悔聊了两句，12:01 随口一句「我同意清空存档」
-        # 就真删了 —— 两分钟的窗口不该这么宽。
+        # 「#清空存档」又反悔聊了两句，12:01 引用警告回一句
+        # 「我同意清空存档」就真删了 —— 两分钟的窗口不该这么宽。
         _WIPE_PENDING.pop(session_key, None)
         if body in MERCY_WORDS:
             return affection.mercy(line)
@@ -2064,7 +2113,7 @@ def handle_command(session_key, text, addressed=False, quoted_ids=None):
         if body in STATUS_WORDS:
             return affection.panel_text(line)
 
-    # `角色扮演 青梅竹马` / `角色扮演，你是我的白色小兔妹妹`：
+    # `#角色扮演 青梅竹马` / `#角色扮演，你是我的白色小兔妹妹`：
     # 剥掉命令词，剩下那段先当卡名找；找不到再看整条是不是卡名。
     target = body
     for w in LIST_WORDS:
@@ -2078,9 +2127,6 @@ def handle_command(session_key, text, addressed=False, quoted_ids=None):
     if card is None and target != body:
         # 「角色扮演，你是我的白色小兔妹妹…」这种没写准卡名的，从描述里找。
         card = _match_card_in_text(target)
-    if card is None and not explicit:
-        # 不带井号时，整条必须是卡名本身——「妹妹想你了」不能算切角色
-        card = find_card(body)
     if card is None:
         return None
 
@@ -2111,7 +2157,7 @@ def handle_command(session_key, text, addressed=False, quoted_ids=None):
     except Exception:                                  # noqa: BLE001
         log.warning("进入扮演时建好感记录失败 %s", session_key)
     return ("好，从现在起我是%s（攻略模式）。每轮回话末尾会带一行你俩现在的关系，"
-            "想关掉就发「自由模式」。想让我变回来就发「#出戏」。" % card["name"])
+            "想关掉就发「#自由模式」。想让我变回来就发「#出戏」。" % card["name"])
 
 
 # ─── 一轮 ────────────────────────────────────────────
@@ -2618,11 +2664,12 @@ beat（这轮有没有让你们的距离实质往前挪了一格）：
 in_scene（这一轮是不是**正处在**那个行为当中）：
 - true —— 已经开始、还在进行。哪怕是刚起头、或者这一轮刚收尾还没分开。
 - false —— 没在这件事里。分开、穿好、换地方、转头说别的，都算结束。
-- 「他动手但她拒绝了」→ false：没成，就不算在场景里。
-- 这一项只决定「要不要给她的高潮值记账」，不决定她答不答应。
+- 这一项**不决定高潮值记不记账**：高潮值按下面的 `act` 记，她答不答应不影响。
 
 act（这一轮**在做什么动作**，只描述动作，不评价她爽不爽）：
-- none —— 没在场景里，或者什么都没发生（in_scene 为 false 时一律填 none）
+- none —— 这一轮**完全没有身体接触**（纯聊天、只是嘴上说、只是走近）。
+- 他碰了她、她却拒绝或推开：只要身体确实被碰到（摸、吻、手指、进入），
+  就按**实际发生的动作**填，别因为「没成」填 none——身体反应不看嘴。
 - foreplay —— 前戏、接吻、隔着衣服摸、还没到下面
 - hand —— 手指、手掌、手在下面弄
 - mouth —— 用嘴，口、舔、含
@@ -2634,6 +2681,8 @@ act（这一轮**在做什么动作**，只描述动作，不评价她爽不爽�
 **只判动作，不判强度感受。** 涨多少由系统按上面这张档位表算，你不用给幅度；
 如果这一轮明显比档位描述得更狠（或者更轻），可以用 excite 做 ±40 以内的微调，
 不确定就填 0。
+她嘴上拒绝、身体却有反应（发抖、发软、湿了、喘）时，act 照实填——
+**身体反应不看嘴**，这是要被记进高潮值里的。
 
 corrupt（她的**堕落**这轮变化多少，0 ~ +30，可填负数但见下文）：
 堕落是「她变成了什么样」，**不是她多喜欢你**。这两件事可以反向。
@@ -3632,7 +3681,7 @@ def _session_target(session_key):
 
 
 def draw(scene, card, session_key, reply_to="", state="", skill=None,
-         landscape=False):
+         landscape=False, on_submit=None):
     """出一张配图，返回文件名（没画出来返回 ""）。**阻塞**——调用方放后台线程。
 
     走 `silver`（默认生图渠道，两段采样 12+8 步 → 1.2× 潜空间放大 → 2x 像素
@@ -3683,6 +3732,14 @@ def draw(scene, card, session_key, reply_to="", state="", skill=None,
     if reason:
         log.info("扮演配图没排上（%s）：%s", session_key, reason)
         return ""
+    # 提交成功那一刻给调用方一个钩子（2026-11-05 用户要求）：出图要几十秒到
+    # 一两分钟，不回一句「已提交」，用户根本不知道这单到底排上没有。
+    # 只传 job 不传调度细节——回执文案由调用方决定（QQ 用卡片发，网页蹲轮询）。
+    if on_submit is not None:
+        try:
+            on_submit(job)
+        except Exception:
+            log.exception("扮演配图回执失败 %s", session_key)
     try:
         entry = job.wait()
     except Exception as e:

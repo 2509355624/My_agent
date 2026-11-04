@@ -341,6 +341,32 @@ class ShotTest(PersonaApiBase):
         self.assertEqual(st["status"], "done")
         self.assertEqual(st["url"], "/api/image/a.png")
 
+    def test_shot_file_with_backslashes_becomes_a_usable_url(self):
+        """Windows 反斜杠必须转成正斜杠，否则前端 `img src` 取不到图。
+
+        2026-11-04 用户报「网页端出图没有显示成果」：`image_jobs` 交回的是
+        `web\\生图页\\anima-line/Anima_x.png`，直接拼 URL 时浏览器那一段
+        一个取图请求都发不出来。落盘、轮询、恢复三条出口都要是正斜杠。
+        """
+        import tempfile
+        name = self.get("/api/persona/cards")["cards"][0]["name"]
+        self.post("/api/persona/switch", name=name)
+        rel = os.path.join("web", "生图页", "anima-line") + "/a.png"
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch("app.persona.shot_scene",
+                            return_value="standing, smile"), \
+                 mock.patch("app.persona.draw_shot",
+                            return_value=(rel, "")), \
+                 self._inline_thread(), \
+                 mock.patch("app.persona_api._pic_map_path",
+                            return_value=os.path.join(td, "m.json")):
+                self.post("/api/persona/shot", msgIndex=4)
+                pics = self.get("/api/persona/comics")["pics"]
+                st = self.get("/api/persona/shot_status?n=4")
+        want = "web/生图页/anima-line/a.png"
+        self.assertEqual(pics.get("n4"), {"file": want})
+        self.assertEqual(st["url"], "/api/image/" + want)
+
     def test_shot_without_scene_is_rejected(self):
         """没有画面行 → 400 直接拒绝（用户拍板不做 LLM 兜底翻译）。"""
         name = self.get("/api/persona/cards")["cards"][0]["name"]

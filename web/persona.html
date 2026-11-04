@@ -1193,6 +1193,9 @@ function renderMode() {
 
 function setPic(idx, url) {  const pic = $("pic-" + idx);
   if (!pic) return;
+  // 2026-11-04：老版本存下来的地址带 Windows 反斜杠（`web\生图页\...`），
+  // 浏览器那一段发不出取图请求。localStorage 里的旧值也走这里，顺手纠正。
+  url = String(url || "").replace(/\\/g, "/");
   pic.innerHTML = "";
   pic.classList.add("show");
   const img = document.createElement("img");

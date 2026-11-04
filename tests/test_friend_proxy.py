@@ -103,6 +103,35 @@ class StreamForwardTest(unittest.TestCase):
         r = anon.get("/api/gal/img/7?s=full")
         self.assertEqual(r.status_code, 401)
 
+    def test_persona_cg_is_forwarded(self):
+        """角色扮演的 CG 必须从 5175 转出去（2026-11-04）。
+
+        用户报「网页端出图没有显示成果」：图出完了，但地址 `/api/image/web/...`
+        在 5175 没有路由，手机端直接 404，5174 日志里连请求都没有。
+        """
+        r, exp, m = self._get(
+            "/api/image/web/生图页/anima-line/Anima_00049_.png")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(r.data), len(exp.content))
+        self.assertIn("/api/image/web/生图页/anima-line/Anima_00049_.png",
+                      m.call_args.args[0])
+        self.assertTrue(m.call_args.kwargs.get("stream"), "8MB 的图要流式")
+
+    def test_persona_cg_requires_login(self):
+        anon = friend_app.app.test_client()
+        r = anon.get("/api/image/web/生图页/anima-line/x.png")
+        self.assertEqual(r.status_code, 401)
+
+    def test_other_image_branches_are_not_exposed(self):
+        """`/api/image` 底下还有 QQ 私聊/群聊的图，只放 `web/` 这一支。"""
+        r = self._client_for_qq().get("/api/image/qq/私聊_123/x.png")
+        self.assertEqual(r.status_code, 404)
+
+    def _client_for_qq(self):
+        c = friend_app.app.test_client()
+        c.set_cookie("fr_sess", friend_auth.issue_cookie("2509355624"))
+        return c
+
 
 class SessionIsolationTest(unittest.TestCase):
     """每个转发请求必须用**独立** session（2026-11-03）。

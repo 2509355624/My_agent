@@ -1831,6 +1831,33 @@ class PersonaTurnTest(unittest.TestCase):
         dv.assert_called_once()
         self.assertEqual(dv.call_args[0][2], ["a.png"])
 
+    def test_shot_submits_a_card_receipt(self):
+        """出图提交成功先回一句回执（2026-11-05 用户要求）。
+
+        出图要几十秒到一两分钟，不回执用户根本不知道这单排上没有。
+        回执统一走 `image_jobs._send_text`（那边用聊天记录卡片发）。
+        """
+        runner = self._runner()
+        sent = []
+
+        def fake_draw(card, key, reply_to="", on_submit=None):
+            on_submit(object())          # 真提交成功那一刻
+            return "a.png", ""
+
+        with mock.patch.object(qq_bot.threading, "Thread") as th, \
+             mock.patch.object(runner, "_deliver"), \
+             mock.patch.object(qq_bot.persona, "draw_shot",
+                               side_effect=fake_draw), \
+             mock.patch.object(qq_bot.image_jobs, "ahead_of", return_value=2), \
+             mock.patch.object(qq_bot.image_jobs, "_send_text",
+                               lambda t, tid, text: sent.append((t, tid, text))):
+            runner._comic_from_persona({"name": "纱雾"}, "private_9")
+            th.call_args[1]["target"](*th.call_args[1]["args"])
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0][:2], ("private", "9"))
+        self.assertIn("已提交", sent[0][2])
+        self.assertIn("前面还有 2 张", sent[0][2])
+
     def test_shot_refusal_gets_a_note(self):
         """没画出来（没画面行 / 排队满）→ 把原因发回会话，不静默。"""
         runner = self._runner()
@@ -1935,13 +1962,15 @@ class RollbackQQTest(unittest.TestCase):
         self.addCleanup(self._base.stop)
 
     def test_whole_word_only(self):
-        self.assertTrue(qq_bot.persona.is_rollback_text("回退"))
+        self.assertTrue(qq_bot.persona.is_rollback_text("#回退"))
+        self.assertFalse(qq_bot.persona.is_rollback_text("回退"))
         self.assertFalse(qq_bot.persona.is_rollback_text("我们回退一下"))
 
     def test_recall_word_is_also_rollback(self):
         """2026-11-05 用户要求：「撤回」和「回退」一样算回退命令。"""
-        self.assertTrue(qq_bot.persona.is_rollback_text("撤回"))
-        self.assertTrue(qq_bot.persona.is_rollback_text("@大大怪 撤回", addressed=True))
+        self.assertTrue(qq_bot.persona.is_rollback_text("/撤回"))
+        self.assertTrue(qq_bot.persona.is_rollback_text("@大大怪 #撤回", addressed=True))
+        self.assertFalse(qq_bot.persona.is_rollback_text("撤回"))
         self.assertFalse(qq_bot.persona.is_rollback_text("我们撤回一下"))
 
     def test_can_rollback_matches_quoted_id(self):
