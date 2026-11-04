@@ -1321,6 +1321,53 @@ def panel_text(line_key):
     return "\n".join(rows)
 
 
+def panel_brief(line_key):
+    """每轮自动跟在角色回复后面的「此刻」窄条（2026-11-05 用户要求）。
+
+    和 `panel_text` 的分工：那边是**完整阶梯表**（手动发「状态」才看）；
+    这边每轮都附着，所以只报**箭头 ▶ 指着的那一格**，不铺整张表——
+    铺了会把卡片正文淹掉。取不到线（没在演）返回 ""。
+    """
+    p = panel(line_key)
+    if p is None:
+        return ""
+
+    def cur(rows, value, fallback):
+        """当前那一格的「档名 当前值/门槛」；门槛为 0 只报档名。"""
+        for r in rows or []:
+            if r.get("state") == "current":
+                gate = int(r.get("gate") or 0)
+                name = r.get("name") or fallback
+                if gate > 0 and int(value) >= 0:
+                    return "%s %d/%d" % (name, int(value), gate)
+                return name
+        return fallback
+
+    rows = ["📊 此刻（发「状态」看完整面板）"]
+    b1 = "身体 ▶ %s" % cur(p["intimacy"], p["value"], p["levelName"])
+    heart = cur(p["tiers"], p["value"], "")
+    if heart:
+        b1 += " ｜ 感情 ▶ %s" % heart
+    rows.append(b1)
+    b2 = "冲动 ▶ %s" % cur(p["arousals"], p["arousal"], p["arousalName"])
+    if p["inScene"]:
+        b2 += " ｜ 高潮 ▶ %s（第 %d/%d 次）" % (
+            cur(p["orgasms_rows"], p["excite"], p["exciteName"]),
+            p["orgasms"], p["orgasmMax"])
+    rows.append(b2)
+    b3 = "堕落 ▶ %s ｜ 屈服 ▶ %s" % (
+        cur(p["corrupts"], p["corrupt"], p["corruptName"]),
+        cur(p["submits"], p["submit"], p["submitName"]))
+    if p.get("suspicionName"):
+        b3 += " ｜ 戒备 ▶ %s" % p["suspicionName"]
+    rows.append(b3)
+    if p["ending"]:
+        rows.append("结局已定格。想翻过去发「自由模式」。")
+    elif int(p.get("coolLeft") or 0) > 0:
+        rows.append("她还没缓过来，还要歇 %d 轮。" % int(p["coolLeft"]))
+    return "\n".join(rows)
+
+
 # ── 模式切换 / 重开 ────────────────────────────────────
 
 def _lift_ending(rec, cfg=None):

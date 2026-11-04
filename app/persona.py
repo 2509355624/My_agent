@@ -688,11 +688,11 @@ FREE_WORDS = ("自由模式",)
 # 「睡到明天」（2026-11-04）：推进游戏内一天，她先开口。词要挑**聊天里
 # 不会自然出现**的——「明天见」这种就不能进表，整条消息匹配也会误触。
 SKIP_WORDS = ("睡到明天", "跳过今天")
-# 「回退」（2026-11-04）：撤掉上一轮——她的回复从聊天里撤回、历史里删掉、
-# 好感/游戏日/心情退回这轮之前。**真正的闸门不在词上**：单发「回退」两个字
-# 不触发（聊天里太常见），必须**引用机器人上一条扮演回复**再发（判据在
-# `qq_bot` 侧：引用的 message_id 得对得上它记的上一轮）。词表只管正文。
-ROLLBACK_WORDS = ("回退",)
+# 「回退 / 撤回」（2026-11-04，2026-11-05 加「撤回」）：撤掉上一轮——她的回复
+# 从聊天里撤回、历史里删掉、好感/游戏日/心情退回这轮之前。**真正的闸门不在词
+# 上**：单发这两个字不触发（聊天里太常见），必须**引用机器人上一条扮演回复**
+# 再发（判据在 `qq_bot` 侧：引用的 message_id 得对得上它记的上一轮）。
+ROLLBACK_WORDS = ("回退", "撤回")
 AFF_WORDS = ("好感", "好感度")
 # 状态面板（2026-11-04 深夜）：用户要的「一列一列看数值和对应状态」。
 # 和「好感」的区别：好感是两页档案（数值 + 最近变化），状态是**一张全表**——
@@ -1587,6 +1587,19 @@ def resolve_line(session_key):
     ent = _entry(key) or {}
     cid = str(ent.get("card") or "").strip()
     return card_key(key, cid) if cid else key
+
+
+def status_brief(session_key):
+    """每轮跟在角色回复后面的「此刻」窄条（2026-11-05 用户要求）。
+
+    和手动「状态」的分工：那边是**完整阶梯表**；这边只报箭头 ▶ 指着的那
+    一格，免得每轮都把表格铺一遍。没在演（取不到线）返回 ""，调用方别拼。
+    """
+    try:
+        return affection.panel_brief(resolve_line(session_key))
+    except Exception:                            # noqa: BLE001
+        log.warning("生成「此刻」简报失败 %s", session_key, exc_info=True)
+        return ""
 
 
 def switch_line(base, card):
@@ -3559,8 +3572,31 @@ def image_caption(spoken, limit=20):
 
 
 def _session_target(session_key):
-    """会话线 → `(target, target_id)`（`group_123` → `("group", "123")`）。"""
-    target, _, tid = str(session_key or "").partition("_")
+    """会话线 → `(target, target_id)`（`group_123` → `("group", "123")`）。
+
+    **网页线（2026-11-04 补）**：`web_<qq>` / `web_<qq>__<卡名>` → `(None, qq)`。
+
+    为什么 target 是 `None`：`image_jobs` 早就把 None 当「网页侧」——
+    照常排进**同一条图片队列**（同渠道、同优先级、同一块显卡，用户要的
+    「网页也走 QQ 那条队列」就是这个意思），但 worker 不往 QQ 发任何东西
+    （`_notice` / `_deliver` 在 target 为 None 时直接返回），图落
+    `output/web/生图页/`（`comfy_out.session_base` 的既有约定）。
+
+    `target_id` 仍然带 qq：`enqueue` 的会话键是 `("", qq)`，每个网页用户
+    各算各的在途张数。都填 None 会让所有人共用 `("", "")` 这一个额度。
+
+    不映射 `web_` 的后果：这里返回 `("", "")` → `draw()` 认为「这条线没有
+    队列身份」直接返回空，网页「出图」永远失败。实测 `logs/agent.log`
+    只有「扮演出图」那行，后面既没有「扮演配图完成」也没有「没画出来」，
+    就是卡在这个静默分支。
+
+    返回 `("", "")` 只表示这条线真的没有队列身份（不该出图）。
+    """
+    key = str(session_key or "")
+    target, _, tid = key.partition("_")
+    if target == "web":
+        qq = tid.split("__", 1)[0]
+        return (None, qq) if qq and qq != "local" else ("", "")
     if target not in ("group", "private") or not tid:
         return "", ""
     return target, tid
@@ -3603,7 +3639,9 @@ def draw(scene, card, session_key, reply_to="", state="", skill=None,
 
     prompt = build_prompt(card, scene, state)
     target, target_id = _session_target(session_key)
-    if not _clean_scene(scene) or not prompt or not target:
+    # `target == ""` 才是「这条线没有队列身份」。不能用 `not target`：网页线
+    # 的 target 是 None（见 `_session_target`），那也是合法身份。
+    if not _clean_scene(scene) or not prompt or target == "":
         return ""       # 没写画面行 = 这一轮不出图，调用方不用替它守
     seed = random.randint(0, 2 ** 32 - 1)
     chan = skill or FAST_SKILL

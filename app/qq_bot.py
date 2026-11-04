@@ -1101,11 +1101,17 @@ class SessionRunner:
             # 都有「她对我的态度」的体感；数值本身不藏，但档位才是重点。
             out = turn.reply
             aff = getattr(turn, "aff", None)
+            # 自由模式没有 `tail_line`，这里每轮补一条「此刻」窄条（2026-11-05
+            # 用户要求：箭头 ▶ 指着哪一格就报哪一格）；攻略模式 tail_line 已经
+            # 把状态报了一遍，再叠窄条就是两段状态，所以那边传空串。
+            status_key = key
             if aff and aff.get("active"):
                 tail = persona.affection.tail_line(aff)          # noqa: SLF001
                 if tail:
                     out = out + "\n\n" + tail
-            self._deliver(False, out, [], "", reply_to=reply_to)
+                    status_key = ""
+            self._deliver(False, out, [], "", reply_to=reply_to,
+                          persona_key=key, status_key=status_key)
             if aff and aff.get("just_ended"):
                 # 结局提示**单独一条气泡**。2026-11-04 起把「再给我一次机会」
                 # 摆在第一位：进局子那一刻玩家容易以为存档要没了，得先给他
@@ -1719,7 +1725,7 @@ class SessionRunner:
         self._deliver(sent_by_tool, reply, images, receipt_spoke)
 
     def _deliver(self, sent_by_tool, reply, images, receipt_spoke="",
-                 reply_to="", quiet_images=False):
+                 reply_to="", quiet_images=False, persona_key="", status_key=""):
         """把结果发回 QQ。图片过一遍 image_out（jpg 压扁丢元数据 / png 原样带
         工作流），格式看管理页开关。
 
@@ -1733,6 +1739,12 @@ class SessionRunner:
         `quiet_images=True`（2026-10-16，扮演态配图）：图被审核拦下时**不吭声**
         ——那一张没来就没来，聊天照常往下走；在角色扮演里插一句「这张没过审」
         比少一张图更出戏。也不把它算成「开过口」（它确实一个字都没说）。
+
+        两个和扮演相关的开关（2026-11-05）：
+        `persona_key` 非空 = 这一轮是扮演轮，**正文一律走聊天记录卡片**
+        （反复要图时不让人物回执刷屏；最终图照旧单发）。
+        `status_key` 非空 = 在卡片底部附一条「此刻」窄条（自由模式用；
+        攻略模式已经有 `tail_line` 状态块，调用方传空串，别叠两遍）。
         """
         from app.agents import image_send_format
         send_text = (qq_api.send_group if self.target == "group"
@@ -1741,22 +1753,33 @@ class SessionRunner:
 
         if not sent_by_tool and reply.strip():
             plain = qq_api.to_qq_text(reply).strip() or reply.strip()
+            # 扮演轮：把「此刻」窄条一起塞进卡片底部（2026-11-05 用户要求）。
+            # 只报箭头 ▶ 指着的那一格；完整阶梯表还是手动发「状态」才看。
+            brief = persona.status_brief(status_key) if status_key else ""
             try:
-                if len(plain) >= QQ_LONG_REPLY_CARD_CHARS:
-                    # 长回复整段放进一张聊天记录卡片，不再按句子切分或连发多条。
-                    # 只放一个节点，点开后看到的就是完整正文；reply_to 不能挂在
-                    # 卡片内部，卡片本身的引用能力由协议端决定。
+                # 扮演轮**一律**走聊天记录卡片（2026-11-05 用户要求）：反复
+                # 要图时人物回执不再把会话刷屏，最终图照常单发（见下面的 images）。
+                # 其余路径维持原阈值：短回复还是普通气泡。
+                if persona_key or len(plain) >= QQ_LONG_REPLY_CARD_CHARS:
+                    # 正文一个节点，状态一个节点——点开卡片先看正文，再看
+                    # 「此刻」；不拆节点的话状态会跟正文黏成一坨。
+                    # reply_to 不能挂在卡片内部，卡片本身的引用能力由协议端决定。
+                    nodes = [qq_api.node_segment(plain, name=QQ_BOT_NAME)]
+                    if brief:
+                        nodes.append(qq_api.node_segment(brief, name=QQ_BOT_NAME))
                     try:
-                        qq_api.send_forward(
-                            self.target, self.target_id,
-                            [qq_api.node_segment(plain, name=QQ_BOT_NAME)],
-                        )
-                        # 卡片的 message_id 拿不到（send_forward 不回传），
-                        # 撤回对它只能尽力：回退时这条撤不掉，账本照回滚。
+                        data = qq_api.send_forward(self.target, self.target_id, nodes)
+                        # 卡片的 message_id **是拿得到的**（send_forward 返回协议端
+                        # data 里的 message_id）。必须记进本轮账本：用户引用这张
+                        # 聊天记录卡片发「回退/撤回」时，判据就是它。之前没记，
+                        # 所以引用卡片永远回退不了（2026-11-05 用户实测）。
+                        self._remember_ids([(data or {}).get("message_id")])
                     except Exception as exc:
                         # 合并转发失败时回退普通发送；底层 send_* 仍会按 QQ 单条限制
                         # 兜底分段，保证卡片能力偶发不可用时正文不丢。
-                        self._remember_ids(send_text(self.target_id, plain,
+                        # 状态也一起带上：卡片折了不代表「此刻」就不用看了。
+                        text = plain + ("\n\n" + brief if brief else "")
+                        self._remember_ids(send_text(self.target_id, text,
                                                 reply_to=reply_to or None))
                         log.warning("长回复聊天记录卡片发送失败，已回退普通消息 %s：%s",
                                     self.session_key, exc)
@@ -1976,8 +1999,12 @@ class QQBot:
         # 「引用 + 整词」，词表在 handle_command 的普通命令流里不认它。
         if persona.is_rollback_text(text,
                                     addressed=(at_me or trigger.called(text))):
+            # 引用「聊天记录卡片」在多数协议端上报成 reply 段（id 就是卡片自己的
+            # message_id，`_deliver` 发卡片时会记进账本）；有的实现把被引用的合并
+            # 转发展开成 forward 段，id 也一并认——同一种操作别换个协议端就失效
+            # （2026-11-05 用户实测引用卡片回退无效，根因是卡片 id 没记账本）。
             qids = [str(q.get("id") or "") for q in (quotes or [])
-                    if q.get("kind") == "reply"]
+                    if q.get("kind") in ("reply", "forward")]
             runner = self._runner_for(session_key, target, target_id)
             _rb_reply = str(ev.get("message_id") or "") or None
             _rb_send = (qq_api.send_group if target == "group"

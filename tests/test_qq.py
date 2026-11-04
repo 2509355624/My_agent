@@ -1142,6 +1142,68 @@ class DeliverTest(unittest.TestCase):
         self.assertEqual(sent, ["短" * 199])
         send_forward.assert_not_called()
 
+    def test_persona_reply_always_goes_out_as_card(self):
+        """扮演轮再短也走聊天记录卡片（2026-11-05）——反复要图时不刷屏。"""
+        card = []
+        with mock.patch.object(
+                qq_api, "send_forward",
+                lambda target, target_id, nodes: card.append(nodes)):
+            with mock.patch.object(qq_api, "send_group") as send_group:
+                self._runner()._deliver(False, "嗯。", [], persona_key="group_9")
+        self.assertEqual(len(card), 1)
+        send_group.assert_not_called()
+
+    def test_persona_card_id_goes_into_rollback_ledger(self):
+        """卡片自己的 message_id 必须记账本，否则引用卡片发「回退」永远不认。"""
+        runner = self._runner()
+        runner._turn_ids = []
+        with mock.patch.object(
+                qq_api, "send_forward",
+                lambda target, target_id, nodes: {"message_id": 777}):
+            runner._deliver(False, "正文", [], persona_key="group_9")
+        self.assertEqual(runner._turn_ids, ["777"])
+        # 一轮结束时 `_run_persona_turn` 把账本移交给 last_turn_ids
+        runner.last_turn_ids = runner._turn_ids
+        self.assertTrue(runner.can_rollback(["777"]))
+
+    def test_persona_card_carries_brief_as_second_node(self):
+        """「此刻」窄条单独一个节点，不跟正文黏成一坨。"""
+        card = []
+        with mock.patch.object(
+                qq_api, "send_forward",
+                lambda target, target_id, nodes: card.append(nodes)), \
+             mock.patch.object(qq_bot.persona, "status_brief",
+                               lambda key: "📊 此刻"):
+            self._runner()._deliver(False, "正文", [], persona_key="group_9",
+                                    status_key="group_9")
+        self.assertEqual(len(card[0]), 2)
+        self.assertEqual(card[0][1]["data"]["content"][0]["data"]["text"],
+                         "📊 此刻")
+
+    def test_card_failure_keeps_brief_in_plain_fallback(self):
+        """卡片发不出去时，正文和「此刻」一起走普通消息，状态不能丢。"""
+        sent = []
+        with mock.patch.object(qq_api, "send_forward",
+                               side_effect=RuntimeError("协议端不支持")), \
+             mock.patch.object(
+                 qq_api, "send_group",
+                 lambda gid, msg, limit=None, reply_to=None: (
+                     sent.append(msg), 1)[1]), \
+             mock.patch.object(qq_bot.persona, "status_brief",
+                               lambda key: "📊 此刻"):
+            self._runner()._deliver(False, "正文", [], persona_key="group_9",
+                                    status_key="group_9")
+        self.assertEqual(sent, ["正文\n\n📊 此刻"])
+
+    def test_no_brief_when_status_key_empty(self):
+        """攻略模式已经有 tail_line，status_key 空串时卡片只放正文一个节点。"""
+        card = []
+        with mock.patch.object(
+                qq_api, "send_forward",
+                lambda target, target_id, nodes: card.append(nodes)):
+            self._runner()._deliver(False, "正文", [], persona_key="group_9")
+        self.assertEqual(len(card[0]), 1)
+
     def test_empty_reply_is_not_sent(self):
         sent = []
         with mock.patch.object(
@@ -1858,6 +1920,12 @@ class RollbackQQTest(unittest.TestCase):
     def test_whole_word_only(self):
         self.assertTrue(qq_bot.persona.is_rollback_text("回退"))
         self.assertFalse(qq_bot.persona.is_rollback_text("我们回退一下"))
+
+    def test_recall_word_is_also_rollback(self):
+        """2026-11-05 用户要求：「撤回」和「回退」一样算回退命令。"""
+        self.assertTrue(qq_bot.persona.is_rollback_text("撤回"))
+        self.assertTrue(qq_bot.persona.is_rollback_text("@大大怪 撤回", addressed=True))
+        self.assertFalse(qq_bot.persona.is_rollback_text("我们撤回一下"))
 
     def test_can_rollback_matches_quoted_id(self):
         runner = qq_bot.SessionRunner(None, "private_1", "private", "1")
