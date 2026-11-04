@@ -838,7 +838,17 @@ def build_t2i_workflow(skill, prompt, seed):
     # 显式关的场景由 gen_api._run 里 strip_nai5_prefix 剥掉。
     from app import lora_slots
     prompt = lora_slots.nai5_prefix(skill) + prompt
-    return apply_prompt_placeholders(json.dumps(sd["workflow"]),
+    # 角色 LoRA（2026-11-04）：prompt 里点名了库里的角色 → 模板副本插一个
+    # 角色 LoRA 节点、触发词追加进提示词。没命中零干预；文件缺失时
+    # match 返回 None（宁可角色不像，不能整单报 value_not_in_list）。
+    from app import char_loras
+    entry = char_loras.match(skill, prompt)
+    wf = sd["workflow"]
+    if entry:
+        wf = char_loras.patch(wf, entry)
+        if entry.get("trigger"):
+            prompt = "%s, %s" % (prompt, entry["trigger"])
+    return apply_prompt_placeholders(json.dumps(wf),
                                      prompt, seed)
 
 

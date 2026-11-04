@@ -790,7 +790,8 @@ def _with_reply(chunk, i, reply_to):
 
 
 def send_private(user_id, message, limit=None, reply_to=None):
-    """给某个好友发消息（自动分段）。返回发出的条数。
+    """给某个好友发消息（自动分段）。返回发出的各条 `message_id` 列表
+    （哪条拿不到 id 就是 ""——拿 id 是为了「回退」能撤回，2026-11-04）。
 
     非好友直接私聊会被 QQ 拒；能救的情况由 `_call_private` 兜底（群临时会话）。
     **逐条兜底**而不是整段重发：这样已经发出去的段不会重复发一遍。
@@ -798,27 +799,45 @@ def send_private(user_id, message, limit=None, reply_to=None):
     """
     chunks = message if isinstance(message, list) else split_message(
         to_qq_text(message), limit)
+    ids = []
     for i, chunk in enumerate(chunks):
         if i:
             time.sleep(_SEND_INTERVAL)
         seg = _with_reply(chunk, i, reply_to)
-        _call_private(user_id, seg)
+        data = _call_private(user_id, seg)
+        ids.append(str((data or {}).get("message_id") or ""))
         _send_log("private", user_id, seg)
-    return len(chunks)
+    return ids
 
 
 def send_group(group_id, message, limit=None, reply_to=None):
-    """往某个群发消息（自动分段）。返回发出的条数。reply_to 见 `_with_reply`。"""
+    """往某个群发消息（自动分段）。返回各条 `message_id` 列表（同上）。
+    reply_to 见 `_with_reply`。"""
     chunks = message if isinstance(message, list) else split_message(
         to_qq_text(message), limit)
+    ids = []
     for i, chunk in enumerate(chunks):
         if i:
             time.sleep(_SEND_INTERVAL)
         seg = _with_reply(chunk, i, reply_to)
-        _call("send_group_msg",
-              {"group_id": int(group_id), "message": seg}, timeout=30)
+        data = _call("send_group_msg",
+                     {"group_id": int(group_id), "message": seg}, timeout=30)
+        ids.append(str((data or {}).get("message_id") or ""))
         _send_log("group", group_id, seg)
-    return len(chunks)
+    return ids
+
+
+def delete_msg(message_id):
+    """撤回一条消息（OneBot `delete_msg`，2026-11-04 回退功能用）。
+
+    撤**自己发的**消息一般没有时限/权限问题；对方的消息要管理员。
+    消息太老、合并转发卡片、协议端不支持时 OneBot 会报错——调用方自己
+    兜（回退的口径：撤不回就跳过，账本照回滚）。
+    """
+    mid = str(message_id or "").strip()
+    if not mid.isdigit():
+        raise ValueError("delete_msg：message_id 不是数字：%r" % mid)
+    return _call("delete_msg", {"message_id": int(mid)}, timeout=10)
 
 
 def node_segment(content, name="", uin=0):

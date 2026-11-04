@@ -99,6 +99,17 @@ class CardListTest(PersonaApiBase):
         self.assertNotIn("systemPrompt", c)
         self.assertNotIn("appearancePrompt", c)
 
+    def test_hidden_cards_are_not_listed(self):
+        """暂下架的卡不进选人列表（卡池页 /api/characters 仍能看到）。"""
+        cards = persona.load_cards()
+        for c in cards:
+            c["hidden"] = c["id"] == "rem"
+        persona.save_cards(cards)
+        agents.clear_cache()
+        names = [c["name"] for c in self.get("/api/persona/cards")["cards"]]
+        self.assertIn("纱雾", names)
+        self.assertNotIn("雷姆", names)
+
 
 class SessionKeyTest(unittest.TestCase):
 
@@ -288,87 +299,81 @@ class StuckComicTest(PersonaApiBase):
 
 
 class ShotTest(PersonaApiBase):
+    """「出图」= anima-line 单张横屏 CG（2026-11-04 换线，原 moss 五格漫画）。
+
+    shot() 把真正的出图放**后台线程**，接口只落 pending 记录就返回。用例里
+    把 threading.Thread 换成**立刻执行 target**，整条流程就同步了。
+    """
 
     @staticmethod
-    def _latest_advancing(first, then):
-        """latest 的替身：第一次返回旧页号，之后返回新页号。
+    def _inline_thread():
+        import threading as _t
+        real_thread = _t.Thread       # 先抓真身：patch 之后 Thread 是 MagicMock
 
-        shot() 要等「页号 > 起跑前」——旧版等「系列有页」会把老系列的
-        旧页号立刻返回给前端（17:35 实测显示旧图），2026-11-03 改的。
-        """
-        calls = {"n": 0}
+        def fake(*_a, **kw):
+            fn = kw.get("target")
+            if fn:
+                fn()
+            return real_thread(target=lambda: None)
 
-        def fake(series, owner=""):
-            calls["n"] += 1
-            return {"n": first if calls["n"] == 1 else then}
+        return mock.patch("app.persona_api.threading.Thread",
+                          side_effect=fake)
 
-        return fake
-
-    def test_shot_waits_for_new_page(self):
-        name = self.get("/api/persona/cards")["cards"][0]["name"]
-        self.post("/api/persona/switch", name=name)
-        with mock.patch("app.moss_bot.start", return_value=(True, "")) as ms, \
-             mock.patch("app.moss_series.current", return_value="SID"), \
-             mock.patch("app.moss_series.load", return_value={"pages": []}), \
-             mock.patch("app.moss_series.latest",
-                        side_effect=self._latest_advancing(2, 3)), \
-             mock.patch("app.persona_api.time.sleep"):
-            d = self.post("/api/persona/shot")
-        self.assertTrue(d["ok"])
-        self.assertEqual(d["sid"], "SID")
-        # 返回的是**新**页号，不是起跑前的旧页（旧版这里会返回 2）
-        self.assertEqual(d["page"], 3)
-        self.assertTrue(ms.called)
-        brief = ms.call_args[0][3]
-        self.assertIn("女主角", brief)
-        self.assertIn("男主角", brief)
-
-    def test_shot_timeout_returns_504(self):
-        """页号一直不涨（编剧慢 / 上一张还在画）→ 504，不返回旧页号。"""
-        name = self.get("/api/persona/cards")["cards"][0]["name"]
-        self.post("/api/persona/switch", name=name)
-        with mock.patch("app.moss_bot.start", return_value=(True, "")), \
-             mock.patch("app.moss_series.current", return_value="SID"), \
-             mock.patch("app.moss_series.load", return_value={"pages": []}), \
-             mock.patch("app.moss_series.latest",
-                        side_effect=lambda s, owner="": {"n": 2}), \
-             mock.patch("app.persona_api.time.sleep"):
-            r = self.c.post("/api/persona/shot", json={"qq": QQ})
-        self.assertEqual(r.status_code, 504)
-        self.assertFalse(r.get_json()["ok"])
-
-    def test_shot_records_pic_map(self):
-        """出图后「回复↔页」映射要落盘，/api/persona/comics 能查回来。"""
+    def test_shot_records_file_and_status(self):
         import tempfile
         name = self.get("/api/persona/cards")["cards"][0]["name"]
         self.post("/api/persona/switch", name=name)
         with tempfile.TemporaryDirectory() as td:
-            with mock.patch("app.moss_bot.start", return_value=(True, "")), \
-                 mock.patch("app.moss_series.current", return_value="SID"), \
-                 mock.patch("app.moss_series.load", return_value={"pages": []}), \
-                 mock.patch("app.moss_series.latest",
-                            side_effect=self._latest_advancing(2, 3)), \
-                 mock.patch("app.persona_api.time.sleep"), \
+            with mock.patch("app.persona.shot_scene",
+                            return_value="standing, smile"), \
+                 mock.patch("app.persona.draw_shot",
+                            return_value=("a.png", "")), \
+                 self._inline_thread(), \
                  mock.patch("app.persona_api._pic_map_path",
                             return_value=os.path.join(td, "m.json")):
                 d = self.post("/api/persona/shot", msgIndex=4)
                 self.assertTrue(d["ok"])
-                # GET 也必须在补丁里：读的是同一份临时映射文件
+                self.assertEqual(d["msgIndex"], 4)
+                # 归档行号当锚（`n4`），恢复映射和状态轮询都能查到
                 pics = self.get("/api/persona/comics")["pics"]
-        # key 用归档行号（`n4`），不再用「窗口内第几条回复」（`ai4`）——
-        # 那个号每聊一轮整体前移，图会挂到错的甚至最新的气泡下（2026-11-04）
-        self.assertEqual(pics.get("n4"), {"sid": "SID", "page": 3})
+                st = self.get("/api/persona/shot_status?n=4")
+        self.assertEqual(pics.get("n4"), {"file": "a.png"})
+        self.assertEqual(st["status"], "done")
+        self.assertEqual(st["url"], "/api/image/a.png")
+
+    def test_shot_without_scene_is_rejected(self):
+        """没有画面行 → 400 直接拒绝（用户拍板不做 LLM 兜底翻译）。"""
+        name = self.get("/api/persona/cards")["cards"][0]["name"]
+        self.post("/api/persona/switch", name=name)
+        with mock.patch("app.persona.shot_scene", return_value=""), \
+             mock.patch("app.persona.draw_shot") as ds:
+            r = self.c.post("/api/persona/shot",
+                            json={"qq": QQ, "msgIndex": 2})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("没有可画的画面", r.get_json()["error"])
+        ds.assert_not_called()
+
+    def test_shot_failure_is_recorded(self):
+        """后台出图失败 → pic_map 记 error，轮询回 failed 带原因。"""
+        import tempfile
+        name = self.get("/api/persona/cards")["cards"][0]["name"]
+        self.post("/api/persona/switch", name=name)
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch("app.persona.shot_scene",
+                            return_value="standing, smile"), \
+                 mock.patch("app.persona.draw_shot",
+                            return_value=("", "排队满")), \
+                 self._inline_thread(), \
+                 mock.patch("app.persona_api._pic_map_path",
+                            return_value=os.path.join(td, "m.json")):
+                self.post("/api/persona/shot", msgIndex=4)
+                st = self.get("/api/persona/shot_status?n=4")
+        self.assertEqual(st["status"], "failed")
+        self.assertIn("排队满", st["error"])
 
     def test_shot_without_card_is_rejected(self):
         d = self.post("/api/persona/shot")
         self.assertFalse(d["ok"])
-
-    def test_busy_returns_429(self):
-        name = self.get("/api/persona/cards")["cards"][0]["name"]
-        self.post("/api/persona/switch", name=name)
-        with mock.patch("app.moss_bot.start", return_value=(False, "在画了")):
-            r = self.c.post("/api/persona/shot", json={"qq": QQ})
-        self.assertEqual(r.status_code, 429)
 
 
 class LeaveClearTest(PersonaApiBase):
@@ -533,6 +538,41 @@ class HistoryArchiveApiTest(PersonaApiBase):
             persona_api._pic_map_set(key, "n3", {"sid": "S", "page": 2})
             pics = self.get("/api/persona/comics")["pics"]
         self.assertEqual(pics, {"n3": {"sid": "S", "page": 2}})
+
+
+class RollbackApiTest(PersonaApiBase):
+    """POST /api/persona/rollback（2026-11-04）：web 端回退上一轮。"""
+
+    def _setup_line(self):
+        d = self.post("/api/persona/switch", id="izumi_sagiri")
+        self.assertTrue(d["ok"])
+        return persona.resolve_line(
+            persona_api._active_key(persona_api._key(QQ)))
+
+    def test_rollback_requires_a_turn(self):
+        self._setup_line()
+        d = self.post("/api/persona/rollback")
+        self.assertFalse(d["ok"])
+        self.assertIn("没有可回退", d["error"])
+
+    def test_rollback_drops_last_turn_and_pic_slots(self):
+        """回退要连带抹掉被删两行的图映射——归档行号是复用的，
+        旧映射不清，上一张图会「鬼影」到新一轮的气泡上。"""
+        key = self._setup_line()
+        rows = [{"role": "user", "content": "你好"},
+                {"role": "assistant", "content": "嗨"}]
+        persona._save_hist(key, rows)
+        persona._save_archive(key, [dict(r) for r in rows])
+        persona_api._pic_map_set(key, "n0", {"file": "a.png"})
+        persona_api._pic_map_set(key, "n1", {"file": "b.png"})
+        persona_api._pic_map_set(key, "n9", {"file": "keep.png"})
+        d = self.post("/api/persona/rollback")
+        self.assertTrue(d["ok"])
+        self.assertEqual(persona._load_hist(key), [])
+        slots = persona_api._pic_map_load().get(key, {})
+        self.assertNotIn("n0", slots)
+        self.assertNotIn("n1", slots)
+        self.assertIn("n9", slots)          # 更早的映射不动
 
 
 if __name__ == "__main__":

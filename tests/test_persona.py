@@ -90,6 +90,36 @@ class CardStoreTest(PersonaBase):
         self.assertIsNone(persona.find_card("和泉纱雾怎么画"))
 
 
+class CardHiddenTest(PersonaBase):
+    """暂下架开关（2026-11-04）：hidden 只藏不删，会话照常能演。"""
+
+    def test_hidden_roundtrips(self):
+        persona.save_cards([_card("可见"), _card("下架", hidden=True)])
+        got = {c["name"]: c for c in persona.load_cards()}
+        self.assertFalse(got["可见"]["hidden"])
+        self.assertTrue(got["下架"]["hidden"])
+
+    def test_builtin_hidden_flag_updates_but_content_is_protected(self):
+        """内置卡内容以磁盘为准，但 hidden 开关要放行——不然卡池页勾了白勾。"""
+        persona.save_cards([_card("默认卡", id="default_1",
+                                  systemPrompt="原始人设")])
+        with mock.patch("app.config.BUILTIN_CARD_IDS", {"default_1"}):
+            # 调用方试图改内容 + 下架：内容改动不算数，下架算数
+            persona.save_cards([_card("默认卡", id="default_1",
+                                      systemPrompt="篡改", hidden=True)])
+        got = persona.load_cards()[0]
+        self.assertEqual(got["systemPrompt"], "原始人设")
+        self.assertTrue(got["hidden"])
+
+    def test_roster_skips_hidden(self):
+        persona.save_cards([_card("台上的", description="可见"),
+                            _card("幕后的", description="藏起来",
+                                  hidden=True)])
+        text = persona.roster_text()
+        self.assertIn("台上的", text)
+        self.assertNotIn("幕后的", text)
+
+
 class CommandTest(PersonaBase):
     def test_plain_text_is_not_a_command(self):
         persona.save_cards([_card("纱雾")])
@@ -459,6 +489,38 @@ class DrawTest(unittest.TestCase):
                                       "private_1"), "")
         ij.enqueue.assert_not_called()
 
+    def test_skill_and_landscape_passthrough(self):
+        """draw 的渠道/横屏参数必须原样传到 enqueue 和工作流构造。"""
+        self._patch()
+        name = persona.draw("sitting, smile", {"appearancePrompt": "1girl"},
+                            "group_1", skill="anima-line", landscape=True)
+        self.assertEqual(name, "a.png")
+        import app.image_jobs as ij
+        import app.tools.normal.generate_image as gi
+        _, kw = ij.enqueue.call_args
+        self.assertEqual(kw["skill"], "anima-line")
+        self.assertTrue(kw["landscape"])
+        self.assertEqual(gi.build_t2i_workflow.call_args[0][0], "anima-line")
+
+    def test_draw_shot_uses_anima_line_landscape(self):
+        """draw_shot：画面行 → draw(SHOT_SKILL, 横屏)；没画面行 → 拒绝。"""
+        from unittest import mock
+        self._patch()
+        with mock.patch.object(persona, "shot_scene",
+                               return_value="sitting, smile"):
+            name, note = persona.draw_shot({"appearancePrompt": "1girl"},
+                                           "group_1")
+        self.assertEqual(name, "a.png")
+        self.assertEqual(note, "")
+        import app.image_jobs as ij
+        _, kw = ij.enqueue.call_args
+        self.assertEqual(kw["skill"], persona.SHOT_SKILL)
+        self.assertTrue(kw["landscape"])
+        # 没画面行：直接拒绝，note 带原因
+        with mock.patch.object(persona, "shot_scene", return_value=""):
+            self.assertEqual(persona.draw_shot({}, "group_1"),
+                             ("", "这一轮没有可画的画面"))
+
 
 class IntentTest(unittest.TestCase):
     """两段式第一段：意图判断（2026-11-02）。"""
@@ -663,6 +725,28 @@ class ShotComicTest(unittest.TestCase):
         self.assertIn("第一句", brief)                 # 它前面那条用户消息
         self.assertNotIn("第二句", brief)
 
+    def test_shot_scene_shares_extraction_with_comic_brief(self):
+        """单张 CG 的画面提取和 moss 漫画同源：同轮同画面、同归档行号口径。"""
+        from unittest import mock
+        rows = [{"role": "user", "content": "第一句"},
+                {"role": "assistant",
+                 "content": "第一次回复。\n画面：standing by the window\n心情：平静 强度2\n状态：站在窗边"},
+                {"role": "user", "content": "第二句"},
+                {"role": "assistant",
+                 "content": "第二次回复。\n画面：lying on the bed\n心情：害羞 强度6\n状态：躺在床上"}]
+        with mock.patch.object(persona, "load_archive", return_value=rows):
+            self.assertEqual(persona.shot_scene("private_1", 1),
+                             "standing by the window")
+            self.assertEqual(persona.shot_scene("private_1", 3),
+                             "lying on the bed")
+
+    def test_shot_scene_empty_when_no_scene_line(self):
+        """没有画面行 → 空串（调用方按拍板提示「没得画」，不做 LLM 兜底）。"""
+        from unittest import mock
+        with mock.patch.object(persona, "trim", return_value=[
+                {"role": "assistant", "content": "没有画面行的一轮"}]):
+            self.assertEqual(persona.shot_scene("private_1"), "")
+
 
 class RosterCardTest(PersonaBase):
     """`#角色扮演` 的规则用聊天记录卡片发（2026-11-03）。"""
@@ -689,7 +773,7 @@ class RosterCardTest(PersonaBase):
         """规则里必须写清「出图」怎么用——这是用户点名要的。"""
         text = persona.roster_text()
         self.assertIn("出图", text)
-        self.assertIn("五格", text)
+        self.assertIn("横屏 CG", text)
 
     def test_roster_says_hash_is_optional(self):
         """用户不爱打井号，规则里要明说「单独发就行」。
@@ -1584,6 +1668,171 @@ class LineSplitTest(PersonaBase):
         st = persona._load_state()                     # 第二次：不再动
         self.assertEqual(st[line]["note"], "旧小记")
         self.assertEqual(st["private_9"]["note"], "旧小记")
+
+
+class GameDayTest(PersonaBase):
+    """游戏内时间（2026-11-04）：打分 AI 顺带判跨天，代码只记账。
+
+    定位：攻略模式要有推进感，70 轮不能像一天。约定 > 随机事件 > 普通一天。
+    """
+
+    KEY = "private_1"
+
+    def setUp(self):
+        super().setUp()
+        persona.save_cards([_card("纱雾")])
+        persona.switch_line(self.KEY, persona.find_card("纱雾"))
+
+    def _gday(self):
+        return persona._gameday(
+            persona._entry(persona.resolve_line(self.KEY)))
+
+    def test_old_entry_defaults_to_day_one(self):
+        """老存档没有 gameday 字段，自动从第 1 天开始。"""
+        self.assertEqual(self._gday()["day"], 1)
+
+    def test_overnight_advances_day_and_resets_turns(self):
+        line = persona.resolve_line(self.KEY)
+        persona._apply_gameday(line, {"time": "none"})
+        persona._apply_gameday(line, {"time": "none"})
+        gd = persona._apply_gameday(line, {"time": "overnight",
+                                           "phase": "早晨"})
+        self.assertEqual(gd["day"], 2)
+        self.assertEqual(gd["turns_today"], 0)
+        self.assertEqual(gd["phase"], "早晨")
+
+    def test_plan_is_booked_and_redeemed_next_day(self):
+        """说定的约定挂账，过夜兑现后销账。"""
+        line = persona.resolve_line(self.KEY)
+        persona._apply_gameday(line, {"time": "none", "plan": "去游乐场"})
+        gd = self._gday()
+        self.assertEqual(gd["plan"], "去游乐场")
+        self.assertEqual(gd["plan_day"], 2)
+        persona._apply_gameday(line, {"time": "overnight"})
+        gd = self._gday()
+        self.assertEqual(gd["event"], "约定：「去游乐场」")
+        self.assertEqual(gd["plan"], "")
+
+    def test_block_shows_day_plan_and_soft_curfew(self):
+        line = persona.resolve_line(self.KEY)
+        persona._apply_gameday(line, {"time": "none", "plan": "去游乐场"})
+        blk = persona._gameday_block(self._gday())
+        self.assertIn("第 1 天", blk)
+        self.assertIn("去游乐场", blk)
+        for _ in range(30):                        # 超过 _DAY_TURNS_SOFT
+            persona._apply_gameday(line, {"time": "none"})
+        self.assertIn("天色不早", persona._gameday_block(self._gday()))
+
+    def test_skip_day_opens_with_her_words(self):
+        """睡到明天：推进一天、由她先开口，系统任务行不进历史。"""
+        raw = "早啊。\n画面：1girl, smiling\n心情：平淡 强度2\n状态：刚醒"
+        with mock.patch.object(persona.llm, "call_llm", return_value=raw):
+            turn = persona.skip_day(self.KEY)
+        self.assertIsNotNone(turn)
+        self.assertIn("早啊", turn.reply)
+        self.assertEqual(self._gday()["day"], 2)
+        hist = persona._load_hist(persona.resolve_line(self.KEY))
+        self.assertEqual(len(hist), 1)
+        self.assertEqual(hist[0]["role"], "assistant")
+
+    def test_skip_word_is_a_command(self):
+        raw = "早。\n画面：\n心情：平淡 强度1\n状态：起床"
+        with mock.patch.object(persona.llm, "call_llm", return_value=raw):
+            out = persona.handle_command(self.KEY, "睡到明天")
+        self.assertIsNotNone(out)
+        self.assertIn("早", out)
+
+
+class RollbackTurnTest(PersonaBase):
+    """回退上一轮（2026-11-04）：历史/归档/游戏日/心情/轮次一次退净。
+
+    定位：发错消息秒撤回但 AI 已经接上了，要把 AI 那边整轮擦掉。
+    每次调用退**一轮**；好感账本在 test_affection.RollbackTest 里测。
+    """
+
+    KEY = "private_1"
+
+    def setUp(self):
+        super().setUp()
+        persona.save_cards([_card("纱雾")])
+        persona.switch_line(self.KEY, persona.find_card("纱雾"))
+
+    def _line(self):
+        return persona.resolve_line(self.KEY)
+
+    def _feed(self, line, turns=2):
+        rows = []
+        for i in range(turns):
+            rows.append({"role": "user", "content": "第%d句" % (i + 1)})
+            rows.append({"role": "assistant", "content": "第%d答" % (i + 1)})
+        persona._save_hist(line, rows)
+        persona._save_archive(line, [dict(r) for r in rows])
+        return rows
+
+    def test_drops_last_turn_from_hist_and_archive(self):
+        line = self._line()
+        self._feed(line)
+        res = persona.rollback_last_turn(self.KEY)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["dropped"], 2)
+        self.assertEqual([m["content"] for m in persona._load_hist(line)],
+                         ["第1句", "第1答"])
+        self.assertEqual([m["content"] for m in persona._read_archive_file(line)],
+                         ["第1句", "第1答"])
+
+    def test_skip_day_tail_drops_only_her_line(self):
+        """「睡到明天」的开场只有她一条（系统任务不进历史），只退一条。"""
+        line = self._line()
+        persona._save_hist(line, [{"role": "assistant", "content": "早"}])
+        persona._save_archive(line, [{"role": "assistant", "content": "早"}])
+        res = persona.rollback_last_turn(self.KEY)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["dropped"], 1)
+        self.assertEqual(persona._load_hist(line), [])
+        self.assertEqual(persona._read_archive_file(line), [])
+
+    def test_restores_gameday_mood_and_turns(self):
+        line = self._line()
+        self._feed(line)
+        persona._apply_gameday(line, {"time": "none"})
+        persona._apply_gameday(line, {"time": "overnight", "phase": "早晨"})
+        self.assertEqual(persona._gameday(persona._entry(line))["day"], 2)
+        persona._save_mood(line, "开心", 3, "在家里")
+        persona._bump_turn(line)
+        persona._bump_turn(line)
+        res = persona.rollback_last_turn(self.KEY)
+        self.assertTrue(res["ok"])
+        gd = persona._gameday(persona._entry(line))
+        self.assertEqual(gd["day"], 1)          # 「过夜」也退回来了
+        self.assertEqual(gd["turns_today"], 1)
+        self.assertEqual(res["mood"], "")       # 退回这轮覆盖前的空状态
+        self.assertEqual(persona._entry(line).get("turns"), 1)
+
+    def test_refuses_when_tail_is_not_hers(self):
+        line = self._line()
+        persona._save_hist(line, [{"role": "user", "content": "只有一句"}])
+        res = persona.rollback_last_turn(self.KEY)
+        self.assertFalse(res["ok"])
+        self.assertIn("没有可回退", res["error"])
+
+    def test_archive_tail_mismatch_leaves_archive_alone(self):
+        """归档和窗口错位时宁可不删归档，也不能错删（铺底失败的老线）。"""
+        line = self._line()
+        self._feed(line)
+        persona._save_archive(line,
+                              [{"role": "user", "content": "别的线的旧内容"}])
+        res = persona.rollback_last_turn(self.KEY)
+        self.assertTrue(res["ok"])              # 窗口照退
+        arch = persona._read_archive_file(line)
+        self.assertEqual([m["content"] for m in arch], ["别的线的旧内容"])
+
+    def test_is_rollback_text_whole_word_only(self):
+        """整条消息才是命令——「回退」两个字在日常聊天里太常见。"""
+        self.assertTrue(persona.is_rollback_text("回退"))
+        self.assertTrue(persona.is_rollback_text("@大大怪 回退", addressed=True))
+        self.assertFalse(persona.is_rollback_text("我们回退一下"))
+        self.assertFalse(persona.is_rollback_text("回退一下"))
+        self.assertFalse(persona.is_rollback_text("明天回退给我看"))
 
 
 if __name__ == "__main__":

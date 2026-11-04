@@ -166,7 +166,7 @@ function render() {
       const sub = c.description || c.personality || "";
       return '<div class="card-item' + (i === cur ? " on" : "") + '" onclick="pick(' + i + ')">'
         + '<div class="av">' + av + '</div>'
-        + '<div class="txt"><div class="nm">' + esc(c.name || "(无名)") + '</div>'
+        + '<div class="txt"><div class="nm">' + esc(c.name || "(无名)") + (c.hidden ? '　<em style="font-style:normal;font-size:11px;opacity:.65">[已下架]</em>' : '') + '</div>'
         + '<div class="ds">' + esc(sub) + '</div></div></div>';
     }).join("");
   }
@@ -246,6 +246,12 @@ function renderPane() {
       <label>参考图（可留空）</label>
       <input type="text" id="f_ref" value="${esc(c.referenceImage)}">
     </div>
+    <div class="field">
+      <label style="display:flex;gap:8px;align-items:center;cursor:pointer">
+        <input type="checkbox" id="f_hidden" ${(c.hidden ? "checked" : "")} style="width:16px;height:16px">
+        <span>暂下架（不在选人列表和 QQ 名单出现；卡和数据都保留，取消勾选即恢复）</span>
+      </label>
+    </div>
     <div class="foot">
       <span class="badge">id: ${esc(c.id || "待生成")}</span>
       <span class="spacer"></span>
@@ -270,6 +276,7 @@ function collect() {
   c.start_value = sv === "" ? null : Math.max(-50, Math.min(50, parseInt(sv, 10) || 0));
   c.level_names = $("f_level_names").value.split(",").map(x => x.trim()).filter(Boolean);
   c.referenceImage = $("f_ref").value.trim();
+  c.hidden = $("f_hidden").checked;
 }
 
 function pick(i) {

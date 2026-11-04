@@ -380,7 +380,12 @@ class ModeTest(AffBase):
                                          "cross": "hard"})
             self.assertEqual(res.get("just_ended"), "")
             self.assertEqual(res.get("ending"), "")
-        # 还活着：能接着加分
+        # 还活着：能接着加分。
+        # 2026-11-05 戒备轴上线后要先消戒备：三次 hard 的保底下限（每次 +8）
+        # 已把戒备顶到 24 ≥ 20 的折减线，正 delta 会被减半——这正是「越界
+        # 有代价」的本意，不卸掉它就不能按原额加分。
+        affection.settle(key, {"delta": 0, "turn_type": "chat",
+                               "suspicion": -20})
         res = affection.settle(key, {"delta": 10, "turn_type": "action"})
         self.assertEqual(res["applied"], 10)
 
@@ -1591,6 +1596,154 @@ class MigrationTest(AffBase):
         self.assertIn("level", on_disk)
         self.assertEqual(on_disk["level"], 4)
         self.assertIn("ach", on_disk)
+
+
+class SuspicionTest(AffBase):
+    """戒备轴（2026-11-05，用户拍板的「爽要带代价」）。
+
+    玩家拍板的两条核心：越界行为在指标没到时要降好感、涨戒备；
+    戒备高时好话的收益要打折。判据在打分模型，这里测的是结算器：
+    记账、clamp、保底下限、代码层折减、注入的模糊描述。
+    """
+
+    def _settle(self, key, **score):
+        base = {"delta": 0, "turn_type": "chat"}
+        base.update(score)
+        return affection.settle(key, base)
+
+    def test_new_line_starts_calm(self):
+        key = self._raid()
+        res = self._settle(key)
+        self.assertEqual(res["suspicion"], 0)
+        self.assertEqual(res["suspicionName"], "坦然")
+
+    def test_positive_suspicion_accumulates_and_clamps(self):
+        key = self._raid()
+        res = self._settle(key, suspicion=20)      # 单轮上限 +20
+        self.assertEqual(res["suspicion"], 20)
+        self._settle(key, suspicion=20)
+        res = self._settle(key, suspicion=20)      # 20+20 clamp 到 40
+        self.assertEqual(res["suspicion"], 40)
+        self.assertEqual(res["suspicionName"], "戒备")
+
+    def test_negative_suspicion_relieves_but_stays_nonnegative(self):
+        key = self._raid()
+        self._settle(key, suspicion=15)
+        res = self._settle(key, suspicion=-10)
+        self.assertEqual(res["suspicion"], 5)
+        res = self._settle(key, suspicion=-20)
+        self.assertEqual(res["suspicion"], 0)      # 不透支成负数
+
+    def test_hard_cross_has_suspicion_floor(self):
+        # 她说了不要还被继续：哪怕模型手松给了 0，戒备至少 +8
+        key = self._raid()
+        res = self._settle(key, delta=-5, cross="hard", allow="no",
+                           suspicion=0)
+        self.assertGreaterEqual(res["suspicion"], 8)
+
+    def test_mild_rejected_has_suspicion_floor(self):
+        key = self._raid()
+        res = self._settle(key, cross="mild", allow="no", suspicion=0)
+        self.assertGreaterEqual(res["suspicion"], 4)
+        # 她答应了（yes）不设下限——戒备只记模型判的
+        res = self._settle(key, cross="mild", allow="yes", suspicion=0)
+        self.assertEqual(res["suspicionDelta"], 0)
+
+    def test_high_suspicion_halves_positive_delta(self):
+        # 戒备 ≥20 时正 delta 减半：好话的收益打折——「付出代价」的核心
+        key = self._raid()
+        self._settle(key, suspicion=20)
+        res = self._settle(key, delta=10)
+        self.assertEqual(res["applied"], 5)
+        # 负 delta 不打折：惩罚不因为她在戒备就缩水
+        res = self._settle(key, delta=-6)
+        self.assertEqual(res["applied"], -6)
+
+    def test_low_suspicion_no_discount(self):
+        key = self._raid()
+        self._settle(key, suspicion=10)            # 10 < 20：还不到折减线
+        res = self._settle(key, delta=8)
+        self.assertEqual(res["applied"], 8)
+
+    def test_injection_blurs_the_number(self):
+        # 注入只描述态度，不露数字——露了就变成刷警戒循环
+        key = self._raid()
+        self._settle(key, suspicion=20)
+        self._settle(key, suspicion=15)            # 35 → 戒备档
+        ent = affection._entry(key)
+        rec = affection.record_of(ent)
+        res = affection.settle(key, {"delta": 0, "turn_type": "chat"})
+        block = affection.injection_block(res)
+        self.assertIn("戒备", block)
+        self.assertNotIn(str(rec["suspicion"]), block)
+
+    def test_scoring_ctx_carries_suspicion(self):
+        # 打分模型要看到她现在起没起疑，才知道这轮放行还是往回打
+        key = self._raid()
+        ctx = affection.scoring_ctx(key)
+        self.assertEqual(ctx["suspicion"], 0)
+        self._settle(key, suspicion=18)
+        ctx = affection.scoring_ctx(key)
+        self.assertEqual(ctx["suspicion"], 18)
+        # recent 扩到 8 条：重复衰减要靠它数「同一招用过几次」
+        for i in range(10):
+            self._settle(key, delta=1)
+        ctx = affection.scoring_ctx(key)
+        self.assertLessEqual(ctx["recent"].count("·"), 8)
+
+
+class RollbackTest(AffBase):
+    """回退上一轮（2026-11-04）：settle 动手前快照，rollback_last 整体还原。
+
+    settle 动的字段太多（value/tier/arousal/excite/corrupt/submit/suspicion/
+    hist…），逐字段倒推漏一个就是脏账——所以实现是整份快照。这里验：
+    快照在改动前、还原是全字段、只支持一级。
+    """
+
+    def _raid(self):
+        persona.save_cards([_card("纱雾")])
+        persona.switch_line("private_1", persona.find_card("纱雾"))
+        return persona.resolve_line("private_1")
+
+    def test_snapshot_taken_before_mutation(self):
+        key = self._raid()
+        affection.settle(key, {"delta": 6, "turn_type": "chat",
+                               "suspicion": 5, "corrupt": 3})
+        prev = affection.record_of(affection._entry(key)).get("_prev")
+        self.assertIsInstance(prev, dict)
+        self.assertEqual(prev["value"], 0)
+        self.assertEqual(prev["suspicion"], 0)
+        self.assertEqual(prev["corrupt"], 0)
+
+    def test_rollback_restores_all_axes(self):
+        key = self._raid()
+        affection.settle(key, {"delta": 6, "turn_type": "chat"})
+        affection.settle(key, {"delta": 10, "turn_type": "chat",
+                               "suspicion": 12, "corrupt": 8, "submit": 4})
+        rec = affection.record_of(affection._entry(key))
+        self.assertEqual(rec["value"], 16)
+        res = affection.rollback_last(key)
+        self.assertTrue(res["rolled_back"])
+        self.assertEqual(res["value"], 6)
+        rec = affection.record_of(affection._entry(key))
+        self.assertEqual(rec["value"], 6)
+        self.assertEqual(rec["suspicion"], 0)
+        self.assertEqual(rec["corrupt"], 0)
+        self.assertEqual(rec["submit"], 0)
+        self.assertEqual(rec["hist"], [{"d": 6, "r": "", "ts": rec["hist"][0]["ts"]}])
+
+    def test_rollback_only_one_level(self):
+        """退过一次就没有更早的快照了——「回退」不是时光机。"""
+        key = self._raid()
+        affection.settle(key, {"delta": 6, "turn_type": "chat"})
+        affection.settle(key, {"delta": 4, "turn_type": "chat"})
+        self.assertIsNotNone(affection.rollback_last(key))
+        self.assertIsNone(affection.rollback_last(key))
+
+    def test_free_mode_has_nothing_to_rollback(self):
+        key = self._raid()
+        affection.set_mode(key, False)
+        self.assertIsNone(affection.rollback_last(key))
 
 
 if __name__ == "__main__":
