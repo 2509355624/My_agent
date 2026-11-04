@@ -495,6 +495,7 @@
     </div>
     <div class="composer">
       <textarea id="inp" rows="1" placeholder="说点什么…"></textarea>
+      <button class="btn" id="btnSkip" title="推进到第二天，由她先开口">🌙 睡到明天</button>
       <button class="btn pri" id="btnSend">发送</button>
     </div>
   </main>
@@ -517,6 +518,8 @@
         <span class="v" id="sState">—</span></div>
       <div class="nowrow"><span class="k">轮次</span>
         <span class="v" id="sTurns">0</span></div>
+      <div class="nowrow"><span class="k">剧情</span>
+        <span class="v" id="sDay">—</span></div>
     </div>
     <!-- 回忆改成可折叠（2026-11-04 深夜）：小记能长到上千字，展开就把面板
          挤出屏幕。默认收起，点标题展开；记一下展开状态，同一局里不用反复点。 -->
@@ -804,6 +807,16 @@ function makeRow(m, id) {
     bRe.onclick = () => shoot(id, bRe, true);
     tools.appendChild(bRe);
 
+    // ★ 回退（2026-11-04）：删掉这轮，好感/天数/心情退回这轮之前。
+    // 每条她的回复都带这个按钮，但点了之后只在它是**最新一条**时生效——
+    // 只支持一级，退不了更早的（后端也一样拦）。
+    const bRb = document.createElement("button");
+    bRb.className = "tb";
+    bRb.textContent = "⏪ 回退";
+    bRb.title = "撤掉这一轮（她的回复和你上一句话），好感退回这轮之前";
+    bRb.onclick = () => rollbackLast();
+    tools.appendChild(bRb);
+
     wrap.appendChild(tools);
     row._tools = tools;
     row._regen = bRe;
@@ -1071,6 +1084,17 @@ function renderPanel(a, p) {
   body.appendChild(panelSection(
     "屈服 " + (p.submit | 0) + "/100", p.submits, p.submit));
 
+  // 七、戒备（2026-11-05）：只有档名，不给数字——露数字会变成
+  // 「刷警戒-消警戒」的循环攻略。坦然的时候不画，别让面板噪音变多。
+  if (p.suspicionName && p.suspicionName !== "坦然") {
+    const sus = document.createElement("div");
+    sus.style.cssText = "font-size:12px;color:var(--text-dim);padding:6px 0 2px;";
+    sus.innerHTML = "她的戒备：<b style=\"color:var(--text)\">"
+      + p.suspicionName + "</b>——她对「你图什么」起了心思，"
+      + "这阵子说什么都先过一遍脑子";
+    body.appendChild(sus);
+  }
+
   // 结论：还差什么。这一行是整块面板的落点——
   // 没有它，玩家看完一堆数字不知道该干嘛。
   const note = $("panelNote");
@@ -1235,6 +1259,9 @@ function renderState(s) {
   $("sState").textContent = s.state || "—";
   $("sNote").textContent = s.note || "—";
   $("sTurns").textContent = s.turns || 0;
+  // 游戏内天数（2026-11-04）：只在回包带了 day 时刷新，别处传来的
+  // 局部状态不带它，不能把已显示的天数抹掉。
+  if (s.day) $("sDay").textContent = "第 " + s.day + " 天";
   // 收起的「回忆」看不出有没有内容——标题上标一个字，
   // 玩家知道点开有东西看，不用盲点。
   const mark = $("noteMark");
@@ -1464,6 +1491,66 @@ async function deliver(text, isRetry) {
   }
 }
 
+// ── 回退上一轮（2026-11-04）──────────────────────────
+// 发错消息想重来：删掉她最后一条回复和你对应那句话，好感 / 游戏天数 /
+// 心情状态退回这轮之前。只支持一级——只能退最新这轮。
+// 成功后整页重拉 session：气泡、状态条、天数、图映射一次刷齐，
+// 不做局部删减（归档行号复用，局部算号容易漏）。
+async function rollbackLast() {
+  if (busy || !card) return;
+  const last = msgs[msgs.length - 1];
+  if (!last || last.role !== "assistant") {
+    toast("只能回退她最新那条回复", true);
+    return;
+  }
+  busy = true;
+  try {
+    await post("/api/persona/rollback", {});
+    toast("已回退，重新说吧");
+    // 行号会被新一轮复用，浏览器的图缓存一并清掉，防止旧图挂新气泡
+    clearPicStore();
+    await loadSession();
+  } catch (e) {
+    toast("回退失败：" + e.message, true);
+  } finally {
+    busy = false;
+  }
+}
+
+// ── 睡到明天（2026-11-04）────────────────────────────
+// 推进游戏内一天，由她先开口。约定了「明天去做什么」的，第二天的开场
+// 就是这件事；偶尔撞上随机事件（台风天之类）。不消耗输入框内容。
+async function skipDay() {
+  if (busy || !card) return;
+  busy = true;
+  const log = $("log");
+  const pending = makeRow({ role: "assistant", text: "…" }, "p" + Date.now());
+  log.appendChild(pending);
+  log.scrollTop = log.scrollHeight;
+  try {
+    const d = await post("/api/persona/skip_day", CM ? { custom: CM } : {});
+    const nA = (d.n && typeof d.n.assistant === "number") ? d.n.assistant : null;
+    msgs.push({ role: "assistant", text: d.reply, aff: d.affection || null, n: nA });
+    pending.remove();
+    log.appendChild(makeRow(msgs[msgs.length - 1],
+                            nA === null ? ("a" + Date.now()) : nA));
+    markLastAff();
+    renderState({ mood: d.mood, intensity: d.intensity, state: d.state,
+                  note: $("sNote").textContent, day: d.day });
+    if (d.affection) { AFF = d.affection; renderAff(AFF); }
+    if (ROLE === "guest" && d.remaining !== undefined) {
+      GUEST_LEFT = d.remaining; renderQuota(); applyRoleUI();
+    }
+  } catch (err) {
+    pending.remove();
+    toast("没跳成：" + err.message, true);
+  } finally {
+    busy = false;
+    log.scrollTop = log.scrollHeight;
+  }
+}
+// `n` 就是这条回复在**归档**里的行号（气泡的 DOM id 也是它）。后端按行号取
+// 那一轮，历史压缩多少次都不会画错、也不会挂到别的气泡上（2026-11-04）。
 // ── 出图：挂到**这条回复的气泡下方** ────────────────────
 // `n` 就是这条回复在**归档**里的行号（气泡的 DOM id 也是它）。后端按行号取
 // 那一轮，历史压缩多少次都不会画错、也不会挂到别的气泡上（2026-11-04）。
@@ -1474,18 +1561,15 @@ async function shoot(n, btn, isRegen) {
     if (btn) btn.disabled = false;
     return;
   }
-  setPicPending(n, "在画了，一页五格");
+  setPicPending(n, "在画了，横屏单图");
   try {
     // 告诉后端「画哪一条」——不传就是最后一轮
-    const d = await post("/api/persona/shot", { msgIndex: n });
-    const sid = d.sid, page = d.page;
-    if (!sid || !page) throw new Error("没拿到页号");
-    // 轮询，出完挂到这条气泡下面（认行号，不认时间，顺序不会乱）
-    for (let i = 0; i < 200; i++) {
+    await post("/api/persona/shot", { msgIndex: n });
+    // 轮询，出完挂到这条气泡下面（认归档行号，顺序不会乱）
+    for (let i = 0; i < 100; i++) {
       await new Promise(r => setTimeout(r, 3000));
       let st;
-      try { st = await api("/api/persona/comic?sid=" + encodeURIComponent(sid)
-                            + "&page=" + page); }
+      try { st = await api("/api/persona/shot_status?n=" + n); }
       catch (e) { continue; }
       if (st.status === "done" && st.url) {
         setPic(n, st.url);
@@ -1497,13 +1581,11 @@ async function shoot(n, btn, isRegen) {
         setPicError(n, "出图失败：" + (st.error || "未知"));
         return;
       }
-      // running / pending 都算还在画。前几轮提示一次，之后一直换文案，
-      // 免得用户以为卡死了（实测一张图 100~180 秒）。
-      if (i === 2) setPicPending(n, "正在画，一张图要一两分钟");
-      if (i === 20) setPicPending(n, "还在画，别急");
-      if (i === 40) setPicPending(n, "画得慢，再等等");
+      // running 都算还在画。单张 CG 几十秒，提示换着来免得以为卡死
+      if (i === 2) setPicPending(n, "正在画，几十秒就好");
+      if (i === 10) setPicPending(n, "还在画，别急");
     }
-    setPicError(n, "等太久了，去 Moss 漫画台看看");
+    setPicError(n, "等太久了，刷新页面看看结果");
   } catch (e) {
     setPicError(n, e.message);
     toast(e.message, true);
@@ -1526,6 +1608,14 @@ async function loadPics() {
     const n = parseInt(k.slice(1), 10);
     if (isNaN(n)) continue;
     const p = pics[k];
+    // 新单张 CG（2026-11-04）：条目里直接带文件名，不用再查状态。
+    // picStore 里存的是完整 URL（和轮询分支一致），这里补前缀。
+    if (p && p.file) {
+      const u = "/api/image/" + p.file;
+      setPic(n, u);
+      picStore.set("n" + n, u);
+      continue;
+    }
     if (!p || !p.sid || !p.page) continue;
     try {
       const st = await api("/api/persona/comic?sid=" + encodeURIComponent(p.sid)
@@ -1706,6 +1796,7 @@ $("btnStats").onclick = openStats;
 
 // ── 绑定 ──────────────────────────────────────────────
 $("btnSend").onclick = send;
+$("btnSkip").onclick = skipDay;
 $("inp").addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
 });

@@ -48,7 +48,9 @@ def _send_qq_message(message, target=None, target_id=None):
             sent = qq_api.send_private(target_id, text)
     except Exception as e:
         return "发送失败：" + str(e)
-    return "已发送给 %s %s，共 %d 条" % (target, target_id, sent)
+    # send_* 返回的是各条 message_id 列表（2026-11-04 起，回退撤回要用），
+    # 条数取列表长度。
+    return "已发送给 %s %s，共 %d 条" % (target, target_id, len(sent))
 
 
 tool = {

@@ -179,7 +179,7 @@ class TempSessionFallbackTest(unittest.TestCase):
     def test_uses_known_temp_session_directly(self):
         qq_api.note_temp_session("3985441738", "1103174141")
         self.session.post.side_effect = [self._not_friend(), self._ok()]
-        self.assertEqual(qq_api.send_private("3985441738", "你好"), 1)
+        self.assertEqual(len(qq_api.send_private("3985441738", "你好")), 1)
         sent = self._payloads()
         self.assertEqual(len(sent), 2)          # 没有多余的探测
         self.assertNotIn("group_id", sent[0])
@@ -191,7 +191,7 @@ class TempSessionFallbackTest(unittest.TestCase):
         self.session.post.side_effect = [self._not_friend(),   # 普通私聊被拒
                                          self._no_session(),   # 群 1041446471 没会话
                                          self._ok()]           # 群 1103174141 通
-        self.assertEqual(qq_api.send_private("3985441738", "你好"), 1)
+        self.assertEqual(len(qq_api.send_private("3985441738", "你好")), 1)
         sent = self._payloads()
         self.assertEqual(len(sent), 3)
         self.assertEqual(sent[1]["group_id"], 1041446471)
@@ -244,7 +244,7 @@ class TempSessionFallbackTest(unittest.TestCase):
         """分段发送：已发出去的段不能重发（对方会收到两遍）。"""
         qq_api.note_temp_session("3985441738", "1103174141")
         self.session.post.side_effect = [self._ok(), self._not_friend(), self._ok()]
-        self.assertEqual(qq_api.send_private("3985441738", ["第一段", "第二段"]), 2)
+        self.assertEqual(len(qq_api.send_private("3985441738", ["第一段", "第二段"])), 2)
         sent = self._payloads()
         self.assertEqual(len(sent), 3)
         self.assertEqual(sent[1]["message"], "第二段")
@@ -279,7 +279,7 @@ class TempSessionFallbackTest(unittest.TestCase):
         self.session.post.side_effect = [self._verify_identify_fail(),
                                          self._no_session(),   # 1041446471
                                          self._ok()]           # 1103174141
-        self.assertEqual(qq_api.send_private("3985441738", "你好"), 1)
+        self.assertEqual(len(qq_api.send_private("3985441738", "你好")), 1)
         sent = self._payloads()
         self.assertEqual(len(sent), 3)
         self.assertEqual(sent[2]["group_id"], 1103174141)
@@ -310,7 +310,7 @@ class TempSessionFallbackTest(unittest.TestCase):
                                          self._no_session(),   # 记住的群：过期了
                                          self._no_session(),   # 探测 1041446471
                                          self._ok()]           # 探测 1103174141：通了
-        self.assertEqual(qq_api.send_private("3985441738", "你好"), 1)
+        self.assertEqual(len(qq_api.send_private("3985441738", "你好")), 1)
         sent = self._payloads()
         self.assertEqual(len(sent), 4)
         self.assertEqual(sent[1]["group_id"], 1103174141)      # 先试记住的

@@ -46,6 +46,7 @@ settings.json**：那是用户在管理页手配的长期配置，扮演态是�
 """
 
 import collections
+import copy
 import datetime
 import json
 import logging
@@ -487,6 +488,19 @@ _CONTRACT = (
     "- **推进**：这一轮要有变化。位置变了、距离近了、衣服动了、情绪翻了，"
     "不要原地重复上一轮的姿态\n"
     "\n"
+    "### 手感（像人写的，不像 AI 写的）\n"
+    "\n"
+    "- **句子长短要错落**：禁止连续三句长度和结构都差不多。偶尔一句独立成段。\n"
+    "- **连贯叙述少用句号**：动作连着动作、情绪连着情绪的地方，用逗号把语流"
+    "接住；句号留给情绪高点、转折和段落结尾。内心独白里问号、感叹号可以自然用。\n"
+    "- **破折号不要用**，用逗号或句号替代。\n"
+    "- **动作和原话已经写出来的情绪，就停住**，不追一句「她感到又羞又恼」"
+    "这样的解释。\n"
+    "- **加生活颗粒**：无用的闲笔、她的小习惯、走神、嘴硬、记错的小事——"
+    "人不是每句话都有目的的。\n"
+    "- **强度要有起伏**：不是每一轮都在升温。平淡的一轮、突然的不对劲、"
+    "她没来由的沉默，都是戏——全速推进反而假。\n"
+    "\n"
     "**不要替对方决定你做了什么。** 你做了的事，她只写自己的反应。\n"
     "\n"
     "**谁做的，照对话原文。** 你说「谢谢」不等于你谢的是她做的东西——"
@@ -671,6 +685,14 @@ CLEAR_WORDS = ("清空", "重置", "重开", "从头开始")
 # 要么接着玩（自由模式封存），要么整份删掉（清空存档，要二次确认）。
 RAID_WORDS = ("攻略模式",)
 FREE_WORDS = ("自由模式",)
+# 「睡到明天」（2026-11-04）：推进游戏内一天，她先开口。词要挑**聊天里
+# 不会自然出现**的——「明天见」这种就不能进表，整条消息匹配也会误触。
+SKIP_WORDS = ("睡到明天", "跳过今天")
+# 「回退」（2026-11-04）：撤掉上一轮——她的回复从聊天里撤回、历史里删掉、
+# 好感/游戏日/心情退回这轮之前。**真正的闸门不在词上**：单发「回退」两个字
+# 不触发（聊天里太常见），必须**引用机器人上一条扮演回复**再发（判据在
+# `qq_bot` 侧：引用的 message_id 得对得上它记的上一轮）。词表只管正文。
+ROLLBACK_WORDS = ("回退",)
 AFF_WORDS = ("好感", "好感度")
 # 状态面板（2026-11-04 深夜）：用户要的「一列一列看数值和对应状态」。
 # 和「好感」的区别：好感是两页档案（数值 + 最近变化），状态是**一张全表**——
@@ -700,9 +722,13 @@ _SAFE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 # 实测画成了裸体。
 #
 # ⚠️ 2026-11-03：扮演态**不再自动出图**（用户拍板）。配图改由用户主动说
-# 「出图」触发，走 moss 漫画那条线（一次出六格）。这个常量留给 `draw()`
-# 的兼容路径，正常流程不再走它。
+# 「出图」触发。这个常量留给 `draw()` 的兼容路径，正常流程不再走它。
 FAST_SKILL = "silver"
+
+# 「出图」的渠道（2026-11-04 用户拍板）：moss 五格漫画剧情差、出图慢，
+# 换成 anima-line 单张横屏 CG——画面行本来就是英文定稿，零额外 LLM 调用；
+# 角色 LoRA 自动装填（`app/char_loras.py`）挂在这条渠道上，IP 角色自动吃加成。
+SHOT_SKILL = "anima-line"
 
 
 # ─── 用户（男主）的固定外观 ────────────────────────────────
@@ -718,7 +744,7 @@ MALE_PROTAGONIST = (
     "average build, natural proportions"
 )
 
-# 「出图」触发词。用户说这些就调 moss 漫画出六格。
+# 「出图」触发词。用户说这些就出一张 anima 横屏单图 CG。
 #
 # 判据要严：`出图` 两个字太常见（「我刚才出图了」「出图失败」都是正常聊天），
 # 所以**只在扮演态里**、且整条消息就是这个意思时才触发。见 `is_shot_request`。
@@ -746,6 +772,89 @@ def is_shot_request(text):
             if t in SHOT_WORDS:
                 return True
     return False
+
+
+def _shot_parts(session_key, msg_index=None):
+    """「出图」要用的素材：`(用户原话, 她的正文, 画面行, 状态)`。
+
+    `msg_index=None` → 最后一轮（扫窗口）；数字 → **归档第 N 行**的 assistant
+    （必须是 assistant 行，行号只增不删，不会随窗口裁剪漂移）。
+    `comic_brief`（moss 漫画 brief）和 `shot_scene`（单张 CG）共用这套提取，
+    保证两个出图路径画的是同一轮。
+    """
+    session_key = resolve_line(session_key)
+    ent = _entry(session_key) or {}
+
+    last_user = ""
+    last_ai = ""
+    scene = ""                  # 「画面：」那一行——本轮画面的定稿
+    state = str(ent.get("state") or "").strip()
+
+    if msg_index is None:
+        hist = [m for m in trim(_load_hist(session_key))
+                if m.get("role") in ("user", "assistant")]
+        for m in reversed(hist):
+            if m["role"] == "assistant":
+                body, sc, _mo, _it, _st = split_turn(m["content"] or "")
+                if not last_ai:
+                    last_ai = body.strip()
+                    scene = (sc or "").strip()
+            else:
+                body = str(m["content"] or "").strip()
+                if not last_user:
+                    last_user = body
+            if last_user and last_ai:
+                break
+    else:
+        # 按**归档下标**定位（2026-11-04）。以前这里是「窗口里第几条 assistant」，
+        # 而窗口每次落盘都会裁，聊一轮整体前移一位——网页点旧气泡出图时传的
+        # 是当时的号，压缩后就指到别人那条上。归档只增不删，行号才是稳定锚。
+        try:
+            n = int(msg_index)
+        except (TypeError, ValueError):
+            n = -1
+        rows = load_archive(session_key)
+        if 0 <= n < len(rows) and rows[n].get("role") == "assistant":
+            last_ai, sc, _mo, _it, st = split_turn(rows[n].get("content") or "")
+            last_ai = last_ai.strip()
+            scene = (sc or "").strip()          # 用**那一轮**的画面，不是最后一轮
+            if st.strip():
+                state = st.strip()      # 用**那一轮**的状态，不是此刻的
+            # 往前找最近的一条用户消息
+            for j in range(n - 1, -1, -1):
+                if rows[j].get("role") == "user":
+                    last_user = str(rows[j].get("content") or "").strip()
+                    break
+    return last_user, last_ai, scene, state
+
+
+def shot_scene(session_key, msg_index=None):
+    """「出图」这一轮的「画面：」行（英文定稿）。没有就返回空串。
+
+    没有画面行就**直接提示没得画**（2026-11-04 用户拍板），不做 LLM 兜底
+    翻译——正常轮次的输出契约保证每轮都有画面行，空是极少数边缘情况。
+    """
+    return _shot_parts(session_key, msg_index)[2]
+
+
+def draw_shot(card, session_key, msg_index=None, reply_to=""):
+    """「出图」→ `SHOT_SKILL`（anima-line）单张**横屏** CG。
+
+    返回 `(文件名, note)`：note 非空 = 没画出来及原因。**阻塞**几十秒，
+    调用方放后台线程。和 moss 漫画共用同一套画面提取（`_shot_parts`），
+    但不经编剧——画面行本来就是给生图写的英文定稿，直接拼角色外观串用。
+
+    引用内容（`extra`）在单张路径里**不参与**：画面行是权威，冲突时以它为准；
+    没有画面行时按拍板直接拒绝，不拿中文引用原文硬喂给 CLIP。
+    """
+    scene = shot_scene(session_key, msg_index)
+    if not scene:
+        return "", "这一轮没有可画的画面"
+    name = draw(scene, card, session_key, reply_to=reply_to,
+                skill=SHOT_SKILL, landscape=True)
+    if not name:
+        return "", "没画出来（排队满 / ComfyUI 没在线 / 被审核拦下）"
+    return name, ""
 
 
 def comic_brief(card, session_key, extra="", msg_index=None):
@@ -780,51 +889,10 @@ def comic_brief(card, session_key, extra="", msg_index=None):
     `split_turn`），不用另存一份。
     """
     session_key = resolve_line(session_key)
-    ent = _entry(session_key) or {}
     name = str((card or {}).get("name") or "女主角")
     look = _fixed_block(card)
 
-    hist = [m for m in trim(_load_hist(session_key))
-            if m.get("role") in ("user", "assistant")]
-
-    last_user = ""
-    last_ai = ""
-    scene = ""                  # 「画面：」那一行——本轮画面的定稿
-    state = str(ent.get("state") or "").strip()
-
-    if msg_index is None:
-        for m in reversed(hist):
-            if m["role"] == "assistant":
-                body, sc, _mo, _it, _st = split_turn(m["content"] or "")
-                if not last_ai:
-                    last_ai = body.strip()
-                    scene = (sc or "").strip()
-            else:
-                body = str(m["content"] or "").strip()
-                if not last_user:
-                    last_user = body
-            if last_user and last_ai:
-                break
-    else:
-        # 按**归档下标**定位（2026-11-04）。以前这里是「窗口里第几条 assistant」，
-        # 而窗口每次落盘都会裁，聊一轮整体前移一位——网页点旧气泡出图时传的
-        # 是当时的号，压缩后就指到别人那条上。归档只增不删，行号才是稳定锚。
-        try:
-            n = int(msg_index)
-        except (TypeError, ValueError):
-            n = -1
-        rows = load_archive(session_key)
-        if 0 <= n < len(rows) and rows[n].get("role") == "assistant":
-            last_ai, sc, _mo, _it, st = split_turn(rows[n].get("content") or "")
-            last_ai = last_ai.strip()
-            scene = (sc or "").strip()          # 用**那一轮**的画面，不是最后一轮
-            if st.strip():
-                state = st.strip()      # 用**那一轮**的状态，不是此刻的
-            # 往前找最近的一条用户消息
-            for j in range(n - 1, -1, -1):
-                if rows[j].get("role") == "user":
-                    last_user = str(rows[j].get("content") or "").strip()
-                    break
+    last_user, last_ai, scene, state = _shot_parts(session_key, msg_index)
 
     lines = ["这是一部成人向漫画的一页。", ""]
     lines.append("## 画什么")
@@ -955,6 +1023,9 @@ def _norm_card(c):
         "start_value": _as_int(c.get("start_value"), None, -50, 50),
         "level_names": _level_names(c.get("level_names")),
         "referenceImage": str(c.get("referenceImage") or "").strip(),
+        # 暂下架（2026-11-04）：不删卡、只是不在选人列表/名单里出现。
+        # 正在演这张卡的会话不受影响（按 id 找卡的路径不过这个开关）。
+        "hidden": bool(c.get("hidden")),
     }
     try:
         out["createdAt"] = int(c.get("createdAt"))
@@ -1072,10 +1143,14 @@ def save_cards(cards, force=False):
         if not card["name"]:
             continue
         if is_builtin_card(card):
-            # 内置卡：一律用磁盘上那份，调用方传的改动不算数
+            # 内置卡：一律用磁盘上那份，调用方传的改动不算数。
+            # 唯一例外是 hidden（2026-11-04）：下架/上架是个运营开关，
+            # 不属于「不许动我的默认角色」保护的内容本身。
             keep = old_by_id.get(card["id"])
             if keep:
+                hidden = card.get("hidden")
                 card = _norm_card(keep)
+                card["hidden"] = bool(hidden)
         if card["id"] in seen:
             card["id"] = _fresh_id(seen)
         seen.add(card["id"])
@@ -1592,7 +1667,7 @@ def roster_text(site_url=""):
         "**你也是剧情的推动者**：带她去做事、制造一场相遇、帮她解围，",
         "她都会接住往下演。",
         "",
-        "③ 想看画面就发「出图」 —— 按当前剧情画一页五格漫画。",
+        "③ 想看画面就发「出图」 —— 按当前剧情画一张横屏 CG。",
         "",
         "## 全部指令",
         "",
@@ -1600,10 +1675,10 @@ def roster_text(site_url=""):
         "",
         "- 「角色名」 —— 进入 / 切换这个角色（切了以后各聊各的，记忆分开）",
         "- 「角色扮演，你是我的……」 —— 带一句描述自定义人设进角色",
-        "- 「出图」 —— 把当前剧情画成一页五格漫画，一两分钟；",
-        "　也可以**引用某条消息**再发「出图」，画的就是那条里的剧情",
+        "- 「出图」 —— 把当前剧情画成一张横屏 CG，几十秒",
         "- 「出戏」 —— 退出扮演，变回生图机器人",
         "- 「清空」 —— 忘掉和她的全部对话，重新认识（角色不变）",
+        "- 「睡到明天」 —— 推进到第二天，她会先开口；约好的事就在明天",
         "- 「成就」 —— 做成过什么（开了攻略模式才有）",
         "- 「角色扮演」 —— 忘了怎么玩，随时看这份规则",
         "",
@@ -1690,6 +1765,8 @@ def roster_text(site_url=""):
 
     lines += ["## 角色名单", ""]
     for c in cards:
+        if c.get("hidden"):
+            continue    # 暂下架的卡不上名单（卡还在，会话还能接着演）
         tag = c.get("description") or c.get("personality") or ""
         # 不写 `#` 前缀（2026-11-03）：用户反馈大家不爱打井号，名单跟着改，
         # 免得看到 `#妹妹` 以为必须带井号。
@@ -1851,6 +1928,16 @@ def _strip_prefix(text, addressed=False):
     return t
 
 
+def is_rollback_text(text, addressed=False):
+    """正文是不是「回退」命令（2026-11-04）。
+
+    只判正文整词；引用匹不匹配机器人上一条回复由 `qq_bot` 侧把关——
+    单发「回退」两个字永远不是命令，落回普通聊天。
+    """
+    t = _strip_prefix(text, addressed).strip()
+    return t in ROLLBACK_WORDS
+
+
 def handle_command(session_key, text, addressed=False):
     """认扮演命令。返回要回的话；**不是命令返回 None**（照常往下走）。
 
@@ -1920,6 +2007,11 @@ def handle_command(session_key, text, addressed=False):
             return affection.set_mode(line, True)
         if body in FREE_WORDS:
             return affection.set_mode(line, False)
+        if body in SKIP_WORDS:
+            turn = skip_day(session_key)
+            if turn is None:
+                return None             # 没在演：当普通消息，不误触
+            return turn.reply
         if body in WIPE_WORDS:
             return wipe_request(session_key)
         if body == WIPE_CONFIRM:
@@ -2039,6 +2131,34 @@ def _append_archive(session_key, msgs, seed=None):
         log.exception("归档写不进去：%s", p)
 
 
+def _read_archive_file(session_key):
+    """只读归档**文件本身**；缺失 / 读不了返回 []，**不回退窗口**。
+
+    为什么单拎出来：`load_archive` 对空归档会退回窗口副本（给查看台兜底
+    用的），但「回退」拿归档当账本删条目时，删副本再落盘等于拿窗口冒充
+    完整历史——会把窗口里更早的轮也误删掉。回退必须只认文件。
+    """
+    p = _archive_path(session_key)
+    rows = []
+    if not (p and os.path.exists(p)):
+        return rows
+    try:
+        with open(p, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    m = json.loads(line)
+                except json.JSONDecodeError:
+                    continue            # 单行坏了不该让整段历史读不出来
+                if isinstance(m, dict) and m.get("role") in ("user", "assistant"):
+                    rows.append(m)
+    except OSError:
+        log.exception("归档读不出来：%s", p)
+    return rows
+
+
 def load_archive(session_key):
     """读**完整**归档（`persona_archive_*.jsonl`）。网页回看历史读的是这一份。
 
@@ -2050,24 +2170,7 @@ def load_archive(session_key):
     只有窗口内的这些，救不回来。**不调用 `trim()`**：回看要全文，截到 900 字
     加个省略号就不是「回顾」了。
     """
-    p = _archive_path(session_key)
-    rows = []
-    if p and os.path.exists(p):
-        try:
-            with open(p, "r", encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        m = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue            # 单行坏了不该让整段历史读不出来
-                    if isinstance(m, dict) and m.get("role") in ("user", "assistant"):
-                        rows.append(m)
-        except OSError:
-            log.exception("归档读不出来：%s", p)
-            rows = []
+    rows = _read_archive_file(session_key)
     if not rows:
         rows = [m for m in _load_hist(session_key)
                 if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
@@ -2385,6 +2488,10 @@ _SCORE_PROMPT = """判断下面这句话**在干什么**，并给这句话对你
   "excite": 0,
   "corrupt": 0,
   "submit": 0,
+  "suspicion": 0,
+  "time": "none",
+  "phase": "",
+  "plan": "",
   "soothe": false,
   "reason": "不超过15个字",
   "note": "不超过15个字"
@@ -2450,13 +2557,22 @@ arousal（整数，这轮把她的「冲动」推高或压低多少，基准 -40
 
 cross（他这轮有没有越过你们现在这条线）：
 - none —— 没有。正常说话、正常动作。
-- mild —— 越了。开口要那件事、手伸过去、翻她的东西、说了一句明显过分的话。
+- mild —— 越了。开口要那件事、手伸过去、翻她的东西、说了一句明显过分的话，
+  **或者场景跳了一格**：把关系还浅的她带去私密空间（他的房间、酒店、
+  没别人的地方）、刻意制造两人独处、在她不方便的时间上门——
+  空间和距离的跨越本身就是越界，哪怕他嘴上什么都没说。
 - hard —— 她已经表示不愿意，他还在继续。这是最严重的一档，别轻易给。
 
 allow（她对 cross 的回应，**只有 cross 不是 none 才填**）：
 - yes —— 她接受了（可能勉强，但没拒绝）
 - hesitate —— 没答应也没走开：装没听懂、转开话题、嘴上说不要身体没躲
 - no —— 明确拒绝：说了不行、退开、把他的手拿开
+- **她戒备越高（看下面戒备值），yes 就越要吝啬**：戒备 20 以上，
+  除非他这一轮真的把事情圆回来了，否则最多 hesitate。
+
+**她接不住的越界不是台阶，是事故。** cross 不是 none 且 allow 不是 yes 的
+那一轮，delta 要往负给（-3 ~ -10）：她不会因为「你胆子大」加分，
+这一轮就是白来了，他要先把故事圆回去。别让「场景推进」变成无条件涨分。
 
 beat（这轮有没有让你们的距离实质往前挪了一格）：
 - 是就填 true。判断标准是**两个人之间真的发生了点什么**：她第一次说了
@@ -2505,11 +2621,48 @@ submit（她的**屈服**这轮变化多少，-40 ~ +40）：
 - 他松了口、给了她选择权：-5 ~ -10
 两个都不高的时候她只是「正常的她」，别过度解读。
 
+suspicion（整数，她的**戒备**这轮变化多少，-20 ~ +20）：
+戒备是「他对我这么好/这么急，是不是有所图」的那个念头。它不看单句，
+看**行为和关系的落差**：
+- 关系还浅，他做了远超当前关系的事：刚认识就喊老婆、直接上手抱/牵、
+  把她往私密空间带、突然表白或索吻：+8 ~ +20
+- 频繁的物质投入（反复送礼、给钱、请客）或者多轮连着高强度讨好，
+  而他们其实还不熟：+5 ~ +15
+- 行为和当前关系相称、兑现了他说过的话、把之前的误会圆回来了：-5 ~ -15
+- 平常的一轮：0
+她是谁照旧要算：缺爱缺安全感的，同样的靠近戒备低；被伤过、边界感重的，
+戒备高。**戒备不是讨厌**：她可以一边戒备一边被逗笑——但心里那根弦没松。
+
+**重复衰减（治「同一招用一百遍」）：**
+看下面「最近发生」里他已经做过的事。同一类讨好（夸她、送东西、
+嘘寒问暖、哄开心）：
+- 头一次：按上面的基准区间给
+- 最近已经做过两三次：区间减半
+- 最近已经四五次：给 0~1，甚至 -2（「又来这套」——她开始觉得他不用心）
+照料/守护/兑现承诺这类高价值行动衰减慢：重复时按区间的一半给，
+但也不该每次都拿满。
+
+**时间（剧情里的日子）：**
+time（这轮剧情跨了多少时间）：
+- none —— 还在同一时段里（绝大多数轮次都该是这个）
+- overnight —— 这一天**真的收场了**：说了「明天见」、各自回去睡、
+  场景明确切到了第二天。话题提到明天不算，要真的跨过去才算。
+- skip_days —— 明确隔了好几天：约的是「周末见」、他出了趟远门回来。
+
+phase（跨天之后的新时段，两三个字）：早晨 / 放学后 / 傍晚 / 深夜…
+time 是 none 时一律留空。
+
+plan（这轮**说定了**的约定）：把约定写成一句话（「周末去游乐场」）。
+只是提议还没被答应、或者被岔开的，不算。已有约定且没变化就填空串。
+
 当前关系：好感 %(value)+d，阶段【%(tier)s】
 你们到这一步了：【%(level)s】
+现在是剧情里的第 %(gday)d 天
+%(gplan)s
 她此刻的冲动：%(arousal)d / 100
 她现在的堕落：%(corrupt)d / 100
 她现在服不服：%(submit)d / 100
+她现在的戒备：%(suspicion)d / 40（0 是坦然，越高越觉得你有所图）
 %(recent)s
 
 她是谁：
@@ -2541,15 +2694,18 @@ def _score_profile(card, state=""):
     return "\n".join(lines)
 
 
-def _judge_intent_scored(card, said, state="", line_key=""):
+def _judge_intent_scored(card, said, state="", line_key="", gameday=None):
     """攻略模式的第一段：意图 + 关系打分。返回 `(intent, note, score)`。
 
     判断失败时 `(None, "", None)`——退化成没判过（跟 `_judge_intent` 同一
     口径），**打不出分就按 +0 结算**，不让整轮回不了话。
     """
+    gd = gameday if isinstance(gameday, dict) else {}
+    plan = str(gd.get("plan") or "").strip()
     ctx = affection.scoring_ctx(line_key) or {"value": 0, "tier": "正常关系",
                                               "level": "隔得很远", "arousal": 0,
                                               "corrupt": 0, "submit": 0,
+                                              "suspicion": 0,
                                               "recent": "（暂无记录）"}
     prompt = _SCORE_PROMPT % {
         "value": ctx["value"],
@@ -2558,7 +2714,17 @@ def _judge_intent_scored(card, said, state="", line_key=""):
         "arousal": int(ctx.get("arousal") or 0),
         "corrupt": int(ctx.get("corrupt") or 0),
         "submit": int(ctx.get("submit") or 0),
+        # 戒备（2026-11-05）：模型要知道她现在起没起疑心，才知道同一句话
+        # 该放行还是该往回打。缺字段的老 ctx 按 0 走。
+        "suspicion": int(ctx.get("suspicion") or 0),
         "recent": ctx["recent"],
+        # 游戏内时间（2026-11-04）：打分 AI 顺带管时间推进，得知道今天第几天、
+        # 有没有挂着没兑现的约定。
+        "gday": int(gd.get("day") or 1),
+        "gplan": ("有个还没兑现的约定：" + plan
+                  + ("（约在第 %d 天）" % int(gd["plan_day"])
+                     if gd.get("plan_day") else ""))
+                  if plan else "（暂时没有约定）",
         "profile": _score_profile(card, state),
         "said": str(said or "")[:200],
     }
@@ -2597,7 +2763,14 @@ def _judge_intent_scored(card, said, state="", line_key=""):
              # 不带上它，模型给的负值会被 `settle` 吞掉（见那边注释）。
              "corrupt": d.get("corrupt"),
              "submit": d.get("submit"),
-             "soothe": d.get("soothe")}
+             "soothe": d.get("soothe"),
+             # 戒备（2026-11-05）：settle 只认这个 dict，漏了警戒轴就死在 0。
+             "suspicion": d.get("suspicion"),
+             # 游戏内时间（2026-11-04）：settle 不认识这几个键，会原样忽略；
+             # run_turn 从同一个 dict 里取，落进会话的 gameday。
+             "time": d.get("time"),
+             "phase": d.get("phase"),
+             "plan": d.get("plan")}
     return intent, note, score
 
 
@@ -2628,6 +2801,129 @@ def _intent_block(intent, note):
     lines.append("")
     lines.append(how)
     return "\n".join(lines)
+
+
+# ─── 游戏内时间（2026-11-04）────────────────────────────
+#
+# 用户诊断：70 轮对话像一天——「时间」这个维度不存在，玩起来没有推进感。
+# 方案（已对齐）：代码只记「天」，**时段和跨天由打分 AI 顺带判**（它每轮
+# 都在读剧情，最有资格说「这一天过完了没有」），零新增 LLM 调用。
+# 好感结算器已经不按现实日历记账（按天额度 11-04 晚全取消），这里的时间
+# 是纯剧情时间，跟现实时钟、跟 streak 都不相干。
+
+# 同一天聊过这个轮数，就往注入里塞一句「天色不早了」——兜底用，
+# 正常的过夜应该由打分 AI 的 time=overnight 触发。
+_DAY_TURNS_SOFT = 24
+
+# 通用事件池（约定之外的日子随机撒）。只写**当天有效**的一句话场景约束，
+# 不带数值后果——后果由打分 AI 按剧情自然判。卡专属事件是后续候选。
+_EVENT_POOL = (
+    "台风天，风大雨大，今天哪儿也去不了",
+    "一整天都在下雨，气氛黏糊糊的",
+    "周末，不用上班也不用上学",
+    "她说不上来为什么，今天有点提不起劲",
+    "傍晚突然停了一次电，几分钟后自己来了",
+)
+
+
+def _gameday(ent):
+    """会话条目里的游戏日状态；缺字段补默认（老存档兼容）。
+
+    注意：gd 必须挂回 ent——老条目第一次补默认时 gd 是个新字典，
+    不挂回去的话调用方改完 `_save_state` 存的是没动过的 ent（实测踩过）。
+    """
+    gd = ent.get("gameday")
+    if not isinstance(gd, dict):
+        gd = {}
+    gd["day"] = max(1, _as_int(gd.get("day"), 1, 1, 99999))
+    gd["phase"] = str(gd.get("phase") or "")[:12]
+    gd["plan"] = str(gd.get("plan") or "")[:80]     # 挂着的约定
+    gd["plan_day"] = _as_int(gd.get("plan_day"), 0, 0, 99999)
+    gd["event"] = str(gd.get("event") or "")[:60]   # 今天的事件
+    gd["turns_today"] = max(0, _as_int(gd.get("turns_today"), 0, 0, 99999))
+    ent["gameday"] = gd
+    return gd
+
+
+def _roll_event(gd):
+    """新的一天开什么：约定 > 随机事件（两成）> 普通的一天。"""
+    plan = str(gd.get("plan") or "").strip()
+    if plan and (gd.get("plan_day") or 0) <= (gd.get("day") or 1):
+        gd["plan"] = ""                             # 兑现了，销账
+        gd["plan_day"] = 0
+        return "约定：「%s」" % plan
+    if random.random() < 0.2:
+        return random.choice(_EVENT_POOL)
+    return ""
+
+
+def _apply_gameday(key, score=None, force_new_day=False):
+    """把这一轮的时间推进落账，返回最新 gameday（会话不存在返回 None）。
+
+    force_new_day（「睡到明天」）：不看打分，直接 +1 天并掷事件。
+    """
+    st = _load_state()
+    ent = st.get(key)
+    if not isinstance(ent, dict):
+        return None
+    gd = _gameday(ent)
+    # 回退快照（2026-11-04）：这轮把时间推进之前先留一份原样。「回退上一轮」
+    # 时整个换回去——不然撤掉一条「说好明天见」的消息，游戏日却停在了第 2 天。
+    # 只保一级：每次覆盖上一份（deepcopy 里不会嵌 gameday_prev，它挂在 ent 上）。
+    ent["gameday_prev"] = copy.deepcopy(gd)
+    gd["turns_today"] = int(gd.get("turns_today") or 0) + 1
+    if force_new_day:
+        gd["day"] = int(gd["day"]) + 1
+        gd["phase"] = "早晨"
+        gd["event"] = _roll_event(gd)
+        gd["turns_today"] = 0
+    elif isinstance(score, dict):
+        t = str(score.get("time") or "none").strip().lower()
+        if t in ("overnight", "skip_days"):
+            gd["day"] = int(gd["day"]) + (3 if t == "skip_days" else 1)
+            gd["phase"] = str(score.get("phase") or "")[:12]
+            gd["event"] = _roll_event(gd)
+            gd["turns_today"] = 0
+        else:
+            ph = str(score.get("phase") or "").strip()
+            if ph:
+                gd["phase"] = ph[:12]
+        plan = str(score.get("plan") or "").strip()
+        if plan:
+            gd["plan"] = plan[:80]
+            gd["plan_day"] = int(gd["day"]) + 1
+    _save_state(st)
+    return gd
+
+
+def _gameday_block(gd):
+    """拼进系统头的游戏时间块。没有状态（自由模式从没进过线等）返回空。"""
+    if not isinstance(gd, dict):
+        return ""
+    phase = str(gd.get("phase") or "").strip()
+    lines = ["【游戏时间】第 %d 天%s" % (gd.get("day") or 1,
+                                      ("，" + phase) if phase else "")]
+    event = str(gd.get("event") or "").strip()
+    if event:
+        lines.append("今天的事：%s。把它织进今天的剧情，别复述这句话。" % event)
+    plan = str(gd.get("plan") or "").strip()
+    if plan:
+        pd = gd.get("plan_day") or 0
+        when = ("（约在第 %d 天）" % pd) if pd and pd > (gd.get("day") or 1) \
+            else "（就说今天）"
+        lines.append("挂着的约定：%s%s" % (plan, when))
+    if int(gd.get("turns_today") or 0) >= _DAY_TURNS_SOFT:
+        lines.append("这一天已经过了很久，天色不早了——找个合适的节拍把今天"
+                     "收束掉（道别、回家、说明天见），别无限聊下去。")
+    return "\n".join(lines)
+
+
+def game_day(session_key):
+    """这条线游戏内第几天（面板/回包用）；没在演返回 None。"""
+    ent = _entry(resolve_line(session_key))
+    if not isinstance(ent, dict):
+        return None
+    return _gameday(ent).get("day")
 
 
 def run_turn(session_key, text, target, sender="", sender_uin=""):
@@ -2671,6 +2967,7 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     ent = _entry(key) or {}
     note = str(ent.get("note") or "")
     prev_state = str(ent.get("state") or "")
+    gd = _gameday(ent) if ent else None
 
     # 第一段：这句话在干什么。**用原始文本判**，不带「张三：」这种前缀。
     # 攻略模式（2026-11-03）：同一次调用顺带给关系打分，不多烧一轮。
@@ -2678,7 +2975,7 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     score = None
     if raid:
         intent, inote, score = _judge_intent_scored(card, text, prev_state,
-                                                    line_key=key)
+                                                    line_key=key, gameday=gd)
     else:
         intent, inote = _judge_intent(card, text, prev_state)
     # 亲密场景那 1,284 字只在该用的时候拼（2026-11-03）。
@@ -2698,6 +2995,12 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
         blk = affection.injection_block(aff_res)
         if blk:
             head = head + "\n\n" + blk
+        # 游戏内时间（2026-11-04）：把打分 AI 判的跨天/约定落账，
+        # 再把「第 N 天 + 今天的事 + 约定」拼进系统头。
+        gd = _apply_gameday(key, score) or gd
+        tblock = _gameday_block(gd)
+        if tblock:
+            head = head + "\n\n" + tblock
     # 分层写法（2026-11-04 深夜）：按**这一轮的高潮值**挑一块「这一拍该怎么写」
     # 拼上去。放在 settle 之后是因为要拿最新状态——放在 build_head 里只能拿到
     # 上一轮的值，永远慢一拍。
@@ -2769,6 +3072,148 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     return Turn(reply, scene, mood, intensity, state, aff_res)
 
 
+# 「睡到明天」时塞给她的话。**这条不进历史**——历史要以她的开场收尾，
+# 下一轮玩家的真消息直接接在她的话后面，模型不会看到这行系统腔。
+_SKIP_TASK = ("【这一轮】新的一天刚开始（第 %d 天），他还没说话。"
+              "**由你先开口**：早安或自然地把今天带出来%s。"
+              "按平常的格式输出（正文 + 画面 + 心情 + 状态）。")
+
+
+def skip_day(session_key, sender="", sender_uin=""):
+    """睡到明天（2026-11-04）：推进一天，**由她先开口**。
+
+    事件优先级在 `_roll_event`：约定 > 随机事件 > 普通的一天。
+    返回 `Turn`；没在演（没有会话条目）返回 None，调用方当普通消息处理。
+    """
+    key = resolve_line(_persona_key(session_key, sender_uin))
+    card = active_card(key)
+    if card is None:
+        return None
+    ent = _entry(key)
+    if not ent:
+        return None
+
+    gd = _apply_gameday(key, force_new_day=True)
+    note = str(ent.get("note") or "")
+    prev_state = str(ent.get("state") or "")
+
+    head = build_head(card, key, sender, note, prev_state, intimate=False)
+    tblock = _gameday_block(gd)
+    if tblock:
+        head = head + "\n\n" + tblock
+    event = str((gd or {}).get("event") or "").strip()
+    task = _SKIP_TASK % ((gd or {}).get("day") or 1,
+                         ("（今天：%s）" % event) if event else "")
+    hist = trim(_load_hist(key))
+    msgs = ([{"role": "system", "content": head}] + hist
+            + [{"role": "user", "content": task}])
+    try:
+        raw = llm.call_llm(msgs, temperature=TEMPERATURE)
+    except Exception:                                  # noqa: BLE001
+        log.exception("睡到明天开场失败 %s", key)
+        return None
+    reply, scene, mood, intensity, state = split_turn(
+        raw, default_mood=str(ent.get("mood") or ""))
+    if not reply:
+        return None
+    # 只归档她的开场，不归档那行系统任务（见 _SKIP_TASK 注释）。
+    hist.append({"role": "assistant",
+                 "content": _ensure_meta(raw, scene, mood, intensity, state)})
+    try:
+        _save_hist(key, hist[-HISTORY_LIMIT:])
+        _append_archive(key, hist[-1:], seed=hist[-HISTORY_LIMIT:])
+    except Exception:
+        log.exception("睡到明天落史失败 %s", key)
+    _save_mood(key, mood, intensity, state, prev_state)
+    _bump_turn(key)
+    return Turn(reply, scene, mood, intensity, state, None)
+
+
+def _save_archive(session_key, rows):
+    """整份重写归档（回退用）。只有 `rollback_last_turn` 会删归档条目，
+    平时只增不删；写法和 `_save_hist` 一致，走原子替换防半截文件。"""
+    p = _archive_path(session_key)
+    if not p:
+        return
+    from app.agents import _atomic_write_text
+    parent = os.path.dirname(p)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    _atomic_write_text(p,
+                       "".join(json.dumps(m, ensure_ascii=False) + "\n"
+                               for m in rows))
+
+
+def rollback_last_turn(session_key, sender_uin=""):
+    """回退上一轮（2026-11-04）：发错消息的后悔药。
+
+    只支持**一级**——「上一条」的上一条退不了，不是时光机。一轮要退的账
+    有五处，这里一次清完：
+
+      1. 历史窗口 + 归档：删掉最后一轮（她的回复 + 你的那句话；
+         「睡到明天」的开场只有她一条，就只删一条）；
+      2. 好感：`affection.rollback_last` 按结算前快照整体还原；
+      3. 游戏日：还原这轮推进前的 `gameday`（跨天/约定也随之退回）；
+      4. 心情/状态：还原这轮覆盖前的那份（状态行是下一轮拼头用的）；
+      5. 轮次计数 -1（小记压缩的节拍器）。
+
+    返回 dict：`ok` / `error` / 还原后的 mood、intensity、state、day。
+    没在演、没有可退的轮，`ok=False` 并带原因——调用方把原因带给用户。
+    """
+    key = resolve_line(_persona_key(session_key, sender_uin))
+    ent = _entry(key)
+    if not ent:
+        return {"ok": False, "error": "这条线还没有在演的角色"}
+
+    # ── 历史 + 归档 ─────────────────────────────────
+    hist = _load_hist(key)
+    if not hist or str((hist[-1] or {}).get("role")) != "assistant":
+        return {"ok": False, "error": "没有可回退的轮（最新一条不是她的回复）"}
+    n = 2 if (len(hist) >= 2
+              and str((hist[-2] or {}).get("role")) == "user") else 1
+    tail_pat = [str((m or {}).get("role")) for m in hist[-n:]]
+    del hist[-n:]
+    _save_hist(key, hist)
+
+    # 归档只在**文件真实存在**时动：`load_archive` 对缺失文件会退回窗口副本，
+    # 拿副本当账本删会把窗口里更早的轮也误删掉、还落成一个假归档文件。
+    # 另外尾部形状要和窗口删掉的那轮一致——不一致说明归档和窗口已经错位
+    # （铺底/写失败），宁可不删这条也不能错删。
+    arch = _read_archive_file(key)
+    if arch and [str((m or {}).get("role")) for m in arch[-n:]] == tail_pat:
+        del arch[-n:]
+        _save_archive(key, arch)
+    else:
+        log.warning("归档缺失或尾部和窗口对不上，回退只删了窗口 %s", key)
+
+    # ── 游戏日 / 心情状态 / 轮次 ─────────────────────
+    gd_prev = ent.pop("gameday_prev", None)
+    if isinstance(gd_prev, dict):
+        ent["gameday"] = gd_prev
+    day = _gameday(ent).get("day")
+
+    mp = ent.pop("mood_prev", None)
+    if isinstance(mp, dict):
+        ent["mood"] = str(mp.get("mood") or "")
+        ent["intensity"] = mp.get("intensity") or 0
+        ent["state"] = str(mp.get("state") or "")
+    mood = str(ent.get("mood") or "")
+    intensity = ent.get("intensity") or 0
+    state = str(ent.get("state") or "")
+
+    state_map = _load_state()
+    state_map[key] = ent
+    st_turns = int(ent.get("turns") or 0)
+    ent["turns"] = max(0, st_turns - 1)      # `_bump_turn` 的逆操作
+    _save_state(state_map)
+
+    # ── 好感（快照还原；自由模式没结算过 → None，不算失败）────
+    aff = affection.rollback_last(key)
+
+    return {"ok": True, "dropped": n, "aff": aff, "day": day,
+            "mood": mood, "intensity": intensity, "state": state}
+
+
 def _ensure_meta(raw, scene, mood, intensity, state):
     """把这一轮的回复规范成「正文 + 三行」的形状再进历史。
 
@@ -2813,6 +3258,12 @@ def _save_mood(session_key, mood, intensity, state, prev_state=""):
     st = state_data.get(session_key)
     if not isinstance(st, dict):
         return
+    # 回退快照（2026-11-04）：这轮覆盖之前先留一份。回退上一轮时还原——
+    # 状态行（她穿着什么/在哪）是下一轮拼系统头用的，留着一轮发错消息的
+    # 状态，剧情会顺着错的方向演下去。
+    st["mood_prev"] = {"mood": str(st.get("mood") or ""),
+                       "intensity": st.get("intensity") or 0,
+                       "state": str(st.get("state") or "")}
     if mood:
         st["mood"] = mood
     try:
@@ -3049,7 +3500,8 @@ def _session_target(session_key):
 # 服装完全交给正面提示词里 `状态` 行翻译出来的标签。
 
 
-def draw(scene, card, session_key, reply_to="", state=""):
+def draw(scene, card, session_key, reply_to="", state="", skill=None,
+         landscape=False):
     """出一张配图，返回文件名（没画出来返回 ""）。**阻塞**——调用方放后台线程。
 
     走 `silver`（默认生图渠道，两段采样 12+8 步 → 1.2× 潜空间放大 → 2x 像素
@@ -3076,9 +3528,10 @@ def draw(scene, card, session_key, reply_to="", state=""):
     if not _clean_scene(scene) or not prompt or not target:
         return ""       # 没写画面行 = 这一轮不出图，调用方不用替它守
     seed = random.randint(0, 2 ** 32 - 1)
-    wf = gi.build_t2i_workflow(FAST_SKILL, prompt, seed)
+    chan = skill or FAST_SKILL
+    wf = gi.build_t2i_workflow(chan, prompt, seed)
     if wf is None:
-        log.warning("扮演配图渠道 %s 没有文生图工作流", FAST_SKILL)
+        log.warning("扮演配图渠道 %s 没有文生图工作流", chan)
         return ""
     if not image_jobs.comfy_alive():
         log.info("扮演配图：ComfyUI 没在线，%s 这一轮不出图", session_key)
@@ -3088,8 +3541,8 @@ def draw(scene, card, session_key, reply_to="", state=""):
         # 上下文是 threading.local），不能让 enqueue 自己去判——判不出会退回
         # 「本轮原话里有没有横屏」，而这里恒为 None。
         job, reason = image_jobs.enqueue(
-            target, target_id, wf, skill=FAST_SKILL, prompt=prompt,
-            seed=seed, landscape=False, quiet=True,
+            target, target_id, wf, skill=chan, prompt=prompt,
+            seed=seed, landscape=bool(landscape), quiet=True,
             reply_to=str(reply_to or ""))
     except Exception:
         log.exception("扮演配图入队失败 %s", session_key)

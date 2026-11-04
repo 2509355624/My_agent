@@ -61,7 +61,9 @@ class GroupSendLogTest(_Base):
         long = "很长的第一段。\n\n很长的第二段。" * 200
         with mock.patch.object(qq_api.time, "sleep"), \
                 self.assertLogs("qq_api", level="INFO") as cm:
-            n = qq_api.send_group(1, long, limit=50)
+            ids = qq_api.send_group(1, long, limit=50)
+        # 2026-11-04 起返回各段 message_id 列表（回退撤回用），条数即长度
+        n = len(ids)
         self.assertGreater(n, 1)
         self.assertEqual(len(cm.output), n)   # 每个实际发出的分段一行
 

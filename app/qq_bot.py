@@ -906,6 +906,12 @@ class SessionRunner:
         self.state_since = time.monotonic()
         self.turn_preview = ""      # 本轮首条消息（谁在问什么）
         self.batch_senders = []     # 本轮合并了哪些人的消息
+        # 「回退」（2026-11-04）：上一条扮演回复真正发出去的 message_id 列表
+        # （长回复分段、配图各算一条）。用户引用其中任意一条发「回退」，就
+        # 把这批全撤回 + 历史回滚。`_turn_ids` 是本轮收集中间的容器（跑完
+        # 移交 last_turn_ids），None = 当前不在扮演轮里。
+        self.last_turn_ids = []
+        self._turn_ids = None
 
     def submit(self, text, sender_name="", images=None, quotes=None,
                tentative=False, at_me=False, reply_to="", sender_uin=None):
@@ -1015,6 +1021,20 @@ class SessionRunner:
             self._run_turn(batch)
 
     def _run_persona_turn(self, batch):
+        """扮演轮的壳（2026-11-04）：开收 message_id 账本，怎么退场都收口。
+
+        真正的一轮在 `_persona_turn_inner`。账本记的是这一轮发出去的所有
+        QQ 消息 id（正文分段、配图），跑完移交 `last_turn_ids` 给「回退」
+        用——用户引用其中任意一条发「回退」，就把这批全撤回。
+        """
+        self._turn_ids = []
+        try:
+            self._persona_turn_inner(batch)
+        finally:
+            self.last_turn_ids = self._turn_ids
+            self._turn_ids = None
+
+    def _persona_turn_inner(self, batch):
         """扮演态的一轮。**跟生图那条路完全没有交集**，所以单列一个函数。
 
         两件事：把这几条连发拼成一句 → `persona` 那边一次调用 → 发回正文，
@@ -1127,32 +1147,33 @@ class SessionRunner:
 
     def _comic_from_persona(self, card, key, reply_to="", sender_uin="",
                             extra=""):
-        """「出图」→ 把男主/女主/状态/剧情拼成 brief，交给 moss 漫画。
+        """「出图」→ anima-line 单张横屏 CG（2026-11-04 用户拍板换线）。
 
-        2026-11-03 用户拍板：扮演态的配图从「每轮自动一张快图」改成「用户说
-        出图，出一页六格」。理由：单张快图撑不起剧情的连贯感，而且模型每轮
-        重写「画面：」会让场景漂移。
+        原来（2026-11-03 拍板）是 moss 一页六格；实测剧情差、磨叽、出图慢，
+        改成单张关键场景 CG：画面行（她每轮自己写的英文画面定稿）直接拼
+        角色外观串喂 anima-line，零额外 LLM 调用，几十秒出图。moss 漫画链
+        **保留**——群聊 /moss 命令还在用它。
 
-        `extra` 是他引用的那条消息（可能就是他要画的那段剧情）。
-
-        moss 那边自己会发编剧回执 + 成图回执，所以这里只要把 brief 递过去。
+        引用内容（`extra`）在单张路径里不参与：没有画面行就提示没得画，
+        不拿中文引用原文硬喂给 CLIP。
         """
-        from app import moss_bot
-        brief = persona.comic_brief(card, key, extra=extra)
+        threading.Thread(target=self._draw_shot_persona,
+                         args=(card, key, reply_to),
+                         name="persona-shot", daemon=True).start()
+
+    def _draw_shot_persona(self, card, key, reply_to=""):
+        """`_comic_from_persona` 的后台执行体：出图 → 发回本会话。"""
         try:
-            # `append`（2026-11-03）：这个会话已经画过就接在那条线上，
-            # 没画过才新开。原来固定 `new`，一条对话里画三次就是三条线、
-            # 编号还各自从 01 开始，用户没法顺着翻（用户报的 bug）。
-            took, note = moss_bot.start(self.target, self.target_id, "append",
-                                        brief, reply_to=reply_to,
-                                        sender_uin=sender_uin)
+            name, note = persona.draw_shot(card, key)
         except Exception:
-            log.exception("扮演态转 moss 漫画失败 %s", key)
-            self._deliver(False, "出图这步出了岔子，再试一次？", [], "",
+            log.exception("扮演出图异常 %s", key)
+            name, note = "", "出图这步出了岔子，再试一次？"
+        if name:
+            # 走 _deliver 而不是 qq_api.send_image：发送格式、审核闸门这些
+            # 都在那里。quiet_images：被审核拦下时不吭声。
+            self._deliver(False, "", [name], "", quiet_images=True,
                           reply_to=reply_to)
-            return
-        if not took and note:
-            # moss 拒单时它自己会说明原因（排队长、ComfyUI 没在线等）
+        elif note:
             self._deliver(False, note, [], "", reply_to=reply_to)
 
     def _draw_persona(self, scene, reply_to="", spoken="", state=""):
@@ -1723,16 +1744,18 @@ class SessionRunner:
                             self.target, self.target_id,
                             [qq_api.node_segment(plain, name=QQ_BOT_NAME)],
                         )
+                        # 卡片的 message_id 拿不到（send_forward 不回传），
+                        # 撤回对它只能尽力：回退时这条撤不掉，账本照回滚。
                     except Exception as exc:
                         # 合并转发失败时回退普通发送；底层 send_* 仍会按 QQ 单条限制
                         # 兜底分段，保证卡片能力偶发不可用时正文不丢。
-                        send_text(self.target_id, plain,
-                                  reply_to=reply_to or None)
+                        self._remember_ids(send_text(self.target_id, plain,
+                                                reply_to=reply_to or None))
                         log.warning("长回复聊天记录卡片发送失败，已回退普通消息 %s：%s",
                                     self.session_key, exc)
                 else:
-                    send_text(self.target_id, plain,
-                              reply_to=reply_to or None)
+                    self._remember_ids(send_text(self.target_id, plain,
+                                            reply_to=reply_to or None))
                 spoke = True
             except Exception as exc:
                 # 非好友拒收是可预期的策略限制，给一句人话；别的失败照旧留堆栈。
@@ -1753,7 +1776,10 @@ class SessionRunner:
                                               notify=not quiet_images):
                     blocked += 1
                     continue
-                qq_api.send_image(self.target, self.target_id, path)
+                mid = qq_api.send_image(self.target, self.target_id, path)
+                # send_image 返回这条图的 message_id（拿不到是 ""）——
+                # 扮演轮里发的图也在回退范围内（2026-11-04）。
+                self._remember_ids([mid])
                 spoke = True
             except Exception as exc:
                 if not _note_private_send_failure(self.target, self.target_id, exc):
@@ -1776,6 +1802,46 @@ class SessionRunner:
             interject.mark_spoke(QQ_AGENT_ID, self.target_id)
             recent.remember(QQ_AGENT_ID, self.target_id, QQ_BOT_NAME,
                             reply or receipt_spoke)
+
+    # ── 回退（2026-11-04）────────────────────────────────
+    def _remember_ids(self, ids):
+        """发出去的 message_id 记进本轮账本（回退撤回用，2026-11-04）。
+
+        只在扮演轮里记（`_turn_ids` 非 None）——galgame / 命令回执那些路径
+        共用同一个 runner，不能被误当成扮演回复。不是 id 列表（测试桩返回
+        条数 int 之类）或空串都跳过。
+        """
+        if self._turn_ids is None or not isinstance(ids, (list, tuple)):
+            return
+        for mid in ids:
+            if mid:
+                self._turn_ids.append(str(mid))
+
+    def can_rollback(self, quoted_ids):
+        """引用的 id 里有没有一条正是上一条扮演回复本身。
+
+        这是「回退」的真正闸门：词谁都会打，但只有引用了机器人上一轮的
+        消息才算数——只回退一级，退不了更早的。
+        """
+        return any(str(q) in self.last_turn_ids
+                   for q in (quoted_ids or []) if q)
+
+    def recall_last_turn(self):
+        """把上一条扮演回发的每条消息撤回（尽力而为）。返回撤回条数。
+
+        撤不回的情况（消息超过时限、合并转发卡片、协议端抽风）只跳过
+        不报错——账本回滚是另一条腿，不跟这里绑。账本本身由
+        `persona.rollback_last_turn` 负责，撤回只是把聊天记录擦干净。
+        """
+        ids, self.last_turn_ids = self.last_turn_ids, []
+        ok = 0
+        for mid in ids:
+            try:
+                qq_api.delete_msg(mid)
+                ok += 1
+            except Exception as exc:
+                log.info("回退：撤回 %s 没成功（%s），跳过", mid, exc)
+        return ok
 
 
 # ─── 适配层主体 ──────────────────────────────────────
@@ -1895,6 +1961,39 @@ class QQBot:
         # `#` 前面还有东西，不剥前缀就认不出命令，整条会落到 direct_gen 被当成
         # 画面需求（实测群友发这个，机器人回「青梅竹马这个主题前面已经画过一张了」）。
         persona_key = persona._persona_key(session_key, user_id)  # noqa: SLF001
+
+        # ── 回退（2026-11-04）：引用我上一条扮演回复发「回退」────────
+        # 发错消息秒撤回，但 AI 已经接上了——剧情乱套。撤回是用户自己的事，
+        # 这里管的是把 AI 那边擦干净：撤回它的回复、历史删一轮、好感/游戏日/
+        # 心情退回这轮之前。拦在 handle_command 之前，因为命令认的是
+        # 「引用 + 整词」，词表在 handle_command 的普通命令流里不认它。
+        if persona.is_rollback_text(text,
+                                    addressed=(at_me or trigger.called(text))):
+            qids = [str(q.get("id") or "") for q in (quotes or [])
+                    if q.get("kind") == "reply"]
+            runner = self._runner_for(session_key, target, target_id)
+            _rb_reply = str(ev.get("message_id") or "") or None
+            _rb_send = (qq_api.send_group if target == "group"
+                        else qq_api.send_private)
+            if not runner.can_rollback(qids):
+                _rb_send(target_id, "要回退的话，先**引用我上一条回复**，"
+                         "再单独发「回退」。只能退上一条，退不了更早的。",
+                         reply_to=_rb_reply)
+                return
+            _rb_res = persona.rollback_last_turn(persona_key,
+                                                 sender_uin=user_id)
+            if not _rb_res.get("ok"):
+                _rb_send(target_id,
+                         "回不了：" + str(_rb_res.get("error") or "没有可退的轮"),
+                         reply_to=_rb_reply)
+                return
+            _rb_n = runner.recall_last_turn()
+            _rb_note = ("撤回了 %d 条消息" % _rb_n) if _rb_n \
+                else "消息过了时限撤不回了，但记录已经回滚"
+            _rb_send(target_id, "⏪ 已回退上一轮（%s）。重新说吧。" % _rb_note,
+                     reply_to=_rb_reply)
+            return
+
         cmd = persona.handle_command(
             persona_key, text, addressed=(at_me or trigger.called(text)))
         if cmd is not None:

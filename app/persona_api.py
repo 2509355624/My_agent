@@ -90,6 +90,33 @@ def _pic_map_clear(key):
             log.exception("图片映射清理失败 %s", key)
 
 
+def _pic_map_drop_tail(key, dropped, total):
+    """回退后抹掉被删那几条的图映射（2026-11-04）。
+
+    归档行号是**复用**的：退掉最后一轮再聊，新一轮还是占 `n<total-2>`/
+    `n<total-1>` 这两个号——旧映射不删，上一次那张图会「鬼影」到新气泡上
+    （和 `_pic_map_clear` 注释里是同一类坑，只是范围小）。
+    `total` 是回退**前**的归档长度，被删的是最后 `dropped` 行。
+    """
+    if dropped <= 0 or total <= 0:
+        return
+    slots = ["n%d" % i for i in range(max(0, total - dropped), total)]
+    with _PIC_LOCK:
+        d = _pic_map_load()
+        ent = d.get(key)
+        if not ent:
+            return
+        for s in slots:
+            ent.pop(s, None)
+        tmp = _pic_map_path() + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(d, fh, ensure_ascii=False)
+            os.replace(tmp, _pic_map_path())
+        except OSError:
+            log.exception("回退图片映射清理失败 %s", key)
+
+
 def _qq():
     """取当前用户。跟 `gallery_api._qq()` 同一套口径：query 或 body 里带。
 
@@ -192,9 +219,12 @@ def _card_json(card):
 
 @bp.route("/api/persona/cards")
 def list_cards():
-    """可选角色列表：网页左栏用。"""
+    """可选角色列表：网页左栏用。hidden 的卡是暂下架，不进这个列表
+    （卡池页 /api/characters 仍能看到全部，那边的开关管上下架）。"""
     out = []
     for c in persona.load_cards():
+        if c.get("hidden"):
+            continue
         out.append(_card_json(c))
     return jsonify({"ok": True, "cards": out})
 
@@ -605,6 +635,7 @@ def _chat_turn(text):
     # 归档是「首次铺底 + 每轮追加两条」，所以最后两条就是这一轮。
     total = persona.archive_len(key)
     out["n"] = {"user": max(0, total - 2), "assistant": max(0, total - 1)}
+    out["day"] = persona.game_day(key)      # 游戏内第几天（2026-11-04）
     # 攻略模式（2026-11-03）：把这一轮的结算带给前端——AI 回复下方的
     # 状态条直接用它渲染。自由模式 turn.aff 是 None，不带这个字段。
     if getattr(turn, "aff", None):
@@ -660,6 +691,107 @@ def _guest_chat(text, uid, token):
     resp = jsonify(out)
     _attach_guest_cookie(resp, token)
     return resp
+
+
+@bp.route("/api/persona/skip_day", methods=["POST"])
+def skip_day_api():
+    """睡到明天（2026-11-04）：推进游戏内一天，**由她先开口**。
+
+    body 可带 custom（自定义模型）——开场那一次 LLM 调用同样走它。
+    """
+    body = request.get_json(silent=True) or {}
+    llm.set_custom_override(body.get("custom"))
+    try:
+        role, who, token = _who()
+        if role == "guest":
+            from app import guest
+
+            _guest_sweep()
+            ckey = _guest_line(who)
+            if ckey is None:
+                return jsonify({"ok": False, "error": "没有可用角色"}), 500
+            used = _guest_turns(ckey)
+            if used >= guest.GUEST_TURNS:
+                resp = jsonify({"ok": False, "limit": True, "remaining": 0,
+                                "error": "体验版玩完啦"})
+                resp.status_code = 403
+                _attach_guest_cookie(resp, token)
+                return resp
+            with usage.scope("guest_" + str(who or "anon")[:8]):
+                turn = persona.skip_day(ckey, "")
+            if turn is None or not turn.reply.strip():
+                return jsonify({"ok": False, "error": "没跳成，再试一次"}), 502
+            out = {
+                "ok": True, "reply": turn.reply, "scene": turn.scene,
+                "mood": turn.mood, "intensity": turn.intensity,
+                "state": turn.state, "role": "guest",
+                "remaining": max(0, guest.GUEST_TURNS - used - 1),
+                "limit": guest.GUEST_TURNS,
+            }
+            total = persona.archive_len(ckey)
+            out["n"] = {"user": max(0, total - 2), "assistant": max(0, total - 1)}
+            out["day"] = persona.game_day(ckey)
+            resp = jsonify(out)
+            _attach_guest_cookie(resp, token)
+            return resp
+
+        key = _active_key(_key(who))
+        card = persona.active_card(key)
+        if card is None:
+            return jsonify({"ok": False, "error": "还没选角色"}), 400
+        with usage.scope(key):
+            turn = persona.skip_day(key, "")
+        if turn is None or not turn.reply.strip():
+            return jsonify({"ok": False, "error": "没跳成，再试一次"}), 502
+        out = {
+            "ok": True, "reply": turn.reply, "scene": turn.scene,
+            "mood": turn.mood, "intensity": turn.intensity,
+            "state": turn.state, "role": "member",
+        }
+        total = persona.archive_len(key)
+        out["n"] = {"user": max(0, total - 2), "assistant": max(0, total - 1)}
+        if getattr(turn, "aff", None):
+            out["affection"] = turn.aff
+        out["day"] = persona.game_day(key)
+        return jsonify(out)
+    finally:
+        llm.set_custom_override(None)
+
+
+@bp.route("/api/persona/rollback", methods=["POST"])
+def rollback_api():
+    """回退上一轮（2026-11-04）：删掉她最后一条回复和你对应的那句话，
+    好感/游戏日/心情退回这轮之前。只支持一级，没有参数。
+
+    游客也放行（体验版发错消息同样要救），但**额度不退**——轮数已经
+    烧掉了，回退不白嫖。前端拿到 ok 后整页重拉 session 刷新气泡和状态条。
+    """
+    role, who, token = _who()
+    if role == "guest":
+        from app import guest
+
+        _guest_sweep()
+        ckey = _guest_line(who)
+        if ckey is None:
+            return jsonify({"ok": False, "error": "没有可用角色"}), 500
+        res = persona.rollback_last_turn(ckey)
+        resp = jsonify(res)
+        resp.status_code = 200 if res.get("ok") else 400
+        _attach_guest_cookie(resp, token)
+        return resp
+
+    key = _active_key(_key(who))
+    card = persona.active_card(key)
+    if card is None:
+        return jsonify({"ok": False, "error": "还没选角色"}), 400
+    total = persona.archive_len(key)        # 回退前的行数：图映射按它算尾号
+    res = persona.rollback_last_turn(key)
+    if not res.get("ok"):
+        return jsonify(res), 400
+    _pic_map_drop_tail(key, int(res.get("dropped") or 0), total)
+    # 前端成功后整页重拉 session（气泡、状态条、天数一次刷齐），
+    # 这里的字段只是顺手带上：aff 是还原后的好感面板，day 是还原后的天数。
+    return jsonify(res)
 
 
 @bp.route("/api/persona/custom_test", methods=["POST"])
@@ -808,21 +940,21 @@ def affection_mercy():
 
 @bp.route("/api/persona/shot", methods=["POST"])
 def shot():
-    """「出图」→ 交给 moss 漫画出五格。
+    """「出图」→ anima-line 单张横屏 CG（2026-11-04 换线，原 moss 五格漫画）。
 
-    **走的是 `image_jobs` 那条全局队列**（`moss_bot.start` → `moss_api._draw`
-    → `image_jobs.enqueue`），和 QQ 端完全同源。网页不能自己开一条出图路径，
-    否则会绕过队列的串行/水位控制，把 ComfyUI 打爆（用户点名要求）。
+    仍走 `image_jobs` 那条全局队列（`persona.draw_shot` → `image_jobs.enqueue`），
+    不绕过队列的串行/水位控制。**后台线程**出图，这个接口立刻返回；完成情况
+    写进 pic_map 的 `n<归档行号>` 条目：
+    - 排队中：`{"pending": true}`
+    - 成功：`{"file": 文件名}`
+    - 失败：`{"error": 原因}`
+    前端轮询 `/api/persona/shot_status?n=<行号>` 拿结果。
 
-    body: {msgIndex?, extra?}
-      - `msgIndex` 指定画哪一条回复：**归档行号**（`/api/persona/session`
-        每条消息的 `n`，网页每条回复下面的按钮传它）
-      - 不传 = 画最后一轮（QQ 端「出图」的行为）
-      - `extra` 额外剧情，可选
+    body: {msgIndex?}
+      - `msgIndex` 指定画哪一条回复：**归档行号**（每条回复下面的按钮传它）
+      - 不传 = 画最后一轮
     """
-    from app import moss_bot, moss_series
     body = request.get_json(silent=True) or {}
-    extra = str(body.get("extra") or "").strip()
     idx = body.get("msgIndex")
     if idx is not None:
         try:
@@ -844,65 +976,58 @@ def shot():
     if card is None:
         return jsonify({"ok": False, "error": "还没选角色"}), 400
 
-    brief = persona.comic_brief(card, key, extra=extra, msg_index=idx)
+    if idx is None:
+        idx = max(0, persona.archive_len(key) - 1)
 
-    # 网页会话在 moss 里的身份：`("private", "web_<qq>)"`。
-    #
-    # 不能用字面量 `"web"`（第一版就是这么写的，后果见下）：
-    #   1. `_say()` 会拿它当 QQ 号去发消息 → 每次出图都刷「moss 回话失败」
-    #   2. `series_mod.current("private", "web")` 是**全局共享**的，所有用户
-    #      的图会串进同一条线
-    web_tid = "web_" + (_qq() or "local")
+    # 先验画面：没有「画面：」行就直接拒绝（用户拍板不做 LLM 兜底翻译），
+    # 别让后台线程白排一趟队。
+    if not persona.shot_scene(key, idx):
+        return jsonify({"ok": False,
+                        "error": "这一轮没有可画的画面"}), 400
 
-    # 起跑前记下这条线的最新页号，等一下要等「**比它大的**页号出现」。
-    # ⚠️ 2026-11-03：旧版等的是「系列有页」——老系列秒返回旧页号，前端把
-    # 旧图挂在新气泡下，新画的那页永远不显示（17:35 实测：雷姆线连点两次
-    # 出图，都返回第 4 页，显示的是 16:28 的旧图）。
-    pre = 0
-    pre_sid = moss_series.current("private", web_tid)
-    if pre_sid:
-        pre = int((moss_series.latest(moss_series.load(pre_sid) or {}, "")
-                   or {}).get("n") or 0)
+    slot = "n%d" % idx
+    _pic_map_set(key, slot, {"pending": True})
 
+    def _work():
+        try:
+            name, note = persona.draw_shot(card, key, msg_index=idx)
+        except Exception:                          # noqa: BLE001
+            log.exception("网页出图异常 %s", key)
+            name, note = "", "出图这步出了岔子，再试一次"
+        _pic_map_set(key, slot,
+                     {"file": name} if name else {"error": note or "出图失败"})
+
+    threading.Thread(target=_work, daemon=True, name="persona-shot").start()
+    return jsonify({"ok": True, "msgIndex": idx,
+                    "reply": "在画了，横屏单图，几十秒。"})
+
+
+@bp.route("/api/persona/shot_status")
+def shot_status():
+    """轮询单张 CG 出完没有。query: n（归档行号）。
+
+    status: none（没这张的记录）/ running / done（带 url）/ failed。
+    """
+    role, who, _token = _who()
+    if role == "guest":
+        return jsonify({"ok": True, "status": "none"})
     try:
-        # 网页模式：出图照跑（走同一条 `image_jobs` 队列），但不往 QQ 发任何
-        # 东西。回执由这个 HTTP 响应自己带。
-        with moss_bot.web_mode():
-            took, note = moss_bot.start("private", web_tid, "append",
-                                        brief, sender_uin=_qq())
-    except Exception as exc:                       # noqa: BLE001
-        log.exception("网页出图失败 %s", key)
-        return jsonify({"ok": False, "error": str(exc)}), 500
-    if not took:
-        return jsonify({"ok": False, "error": note or "排队中"}), 429
+        n = int(request.args.get("n", -1))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "要数字 n"}), 400
+    key = _active_key(_key(who))
+    ent = (_pic_map_load().get(key) or {}).get("n%d" % max(0, n))
+    if not ent:
+        return jsonify({"ok": True, "status": "none"})
+    if ent.get("pending"):
+        return jsonify({"ok": True, "status": "running"})
+    f = str(ent.get("file") or "")
+    if f:
+        return jsonify({"ok": True, "status": "done",
+                        "url": "/api/image/" + f})
+    return jsonify({"ok": True, "status": "failed",
+                    "error": str(ent.get("error") or "出图失败")})
 
-    # 等新页建档（编剧 2~6 秒 LLM 调用后才 add_page，渲染要更久不用等）。
-    sid, page = pre_sid or "", 0
-    for _ in range(180):
-        time.sleep(0.25)
-        sid = moss_series.current("private", web_tid)
-        series = moss_series.load(sid) if sid else None
-        page = int((moss_series.latest(series or {}, "") or {}).get("n") or 0)
-        if sid and page > pre:
-            log.info("[web] 新页落盘：%s 第 %s 页（起跑前 %s）", sid, page, pre)
-            break
-    else:
-        # 两种可能：编剧太慢 / 这条线上一张还在画（_do_append 里 _take
-        # 失败，线程静默退出——网页模式没处说话）。都按失败回，前端弹提示。
-        log.warning("[web] 等新页落盘超时（45s）：%s（前值 %s）", web_tid, pre)
-        return jsonify({
-            "ok": False,
-            "error": "上一张可能还在画，等它出来再点一次出图",
-        }), 504
-
-    # 存「回复 ↔ 页」映射，重登/换设备按这个恢复（见 /api/persona/comics）。
-    # key 用 `n<归档行号>`（2026-11-04）：老的 `ai<窗口序号>` 聊几轮就会指到
-    # 别人那条上（图跑到最新消息下面就是这么来的），一律作废。
-    if idx is not None:
-        _pic_map_set(key, "n%d" % idx, {"sid": sid, "page": page})
-    return jsonify({"ok": True, "sid": sid, "page": page,
-                    "msgIndex": idx,
-                    "reply": "在画了，一页五格，大概一两分钟。"})
 
 
 @bp.route("/api/persona/comics")
@@ -919,8 +1044,12 @@ def comic_map():
     key = _active_key(_key(who))
     # 只回 `n<行号>` 这一套（2026-11-04）。老的 `ai<窗口序号>` 已经对不上任何
     # 消息了，回给前端只会挂到错误的气泡上——用户定：老图直接作废。
-    pics = {k: v for k, v in (_pic_map_load().get(key) or {}).items()
-            if k.startswith("n")}
+    # 两种条目都回：老 moss 漫画 `{sid,page}`（前端走 /api/persona/comic 查）、
+    # 新单张 CG `{file}`（前端直接用）。pending / error 不回——恢复时没意义。
+    raw = (_pic_map_load().get(key) or {})
+    pics = {k: v for k, v in raw.items()
+            if k.startswith("n") and isinstance(v, dict)
+            and (v.get("file") or (v.get("sid") and v.get("page")))}
     return jsonify({"ok": True, "pics": pics})
 
 

@@ -1314,7 +1314,7 @@ class SendQqMessageToolTest(unittest.TestCase):
         calls = []
         with mock.patch.object(
                 qq_api, "send_group",
-                lambda gid, text, limit=None, reply_to=None: (calls.append((gid, text)), 1)[1]):
+                lambda gid, text, limit=None, reply_to=None: (calls.append((gid, text)), ["m1"])[1]):
             out = send_qq_message._send_qq_message("你好")
         self.assertEqual(calls, [("9", "你好")])
         self.assertIn("已发送", out)
@@ -1324,7 +1324,7 @@ class SendQqMessageToolTest(unittest.TestCase):
         calls = []
         with mock.patch.object(
                 qq_api, "send_private",
-                lambda uid, text, limit=None, reply_to=None: (calls.append((uid, text)), 1)[1]):
+                lambda uid, text, limit=None, reply_to=None: (calls.append((uid, text)), ["m1"])[1]):
             send_qq_message._send_qq_message("悄悄话", target="private",
                                              target_id="123")
         self.assertEqual(calls, [(123, "悄悄话")])
@@ -1335,7 +1335,7 @@ class SendQqMessageToolTest(unittest.TestCase):
         calls = []
         with mock.patch.object(
                 qq_api, "send_group",
-                lambda gid, text, limit=None, reply_to=None: (calls.append(gid), 1)[1]):
+                lambda gid, text, limit=None, reply_to=None: (calls.append(gid), ["m1"])[1]):
             send_qq_message._send_qq_message("转发", target_id="77")
         self.assertEqual(calls, [77])
 
@@ -1721,13 +1721,11 @@ class PersonaTurnTest(unittest.TestCase):
         self.assertEqual(dv.call_args[1]["reply_to"], "m1")     # 引用触发那句
         th.assert_not_called()                                  # 不出图
 
-    def test_shot_request_goes_to_moss_comic(self):
-        """「出图」→ 交给 moss 漫画（2026-11-03 用户拍板）。"""
+    def test_shot_request_goes_to_single_cg(self):
+        """「出图」→ 单张横屏 CG（2026-11-04 换线，原 moss 五格漫画）。"""
         runner = self._runner()
         with mock.patch.object(qq_bot.persona, "active_card",
                                return_value={"name": "纱雾"}), \
-             mock.patch.object(qq_bot.persona, "comic_brief",
-                               return_value="BRIEF") as cb, \
              mock.patch.object(runner, "_comic_from_persona") as cc, \
              mock.patch.object(qq_bot.persona, "run_turn") as rt:
             runner._run_persona_turn(self._batch("出图"))
@@ -1748,6 +1746,31 @@ class PersonaTurnTest(unittest.TestCase):
             runner._run_persona_turn(batch)
         extra = cc.call_args[1]["extra"]
         self.assertIn("在窗边", extra)
+
+    def test_shot_delivers_single_cg(self):
+        """「出图」→ 后台线程 draw_shot，成图发回本会话。"""
+        runner = self._runner()
+        with mock.patch.object(qq_bot.threading, "Thread") as th, \
+             mock.patch.object(runner, "_deliver") as dv, \
+             mock.patch.object(qq_bot.persona, "draw_shot",
+                               return_value=("a.png", "")):
+            runner._comic_from_persona({"name": "纱雾"}, "private_9")
+            th.assert_called_once()
+            # 后台体立刻执行（补丁还在场内）
+            th.call_args[1]["target"](*th.call_args[1]["args"])
+        dv.assert_called_once()
+        self.assertEqual(dv.call_args[0][2], ["a.png"])
+
+    def test_shot_refusal_gets_a_note(self):
+        """没画出来（没画面行 / 排队满）→ 把原因发回会话，不静默。"""
+        runner = self._runner()
+        with mock.patch.object(qq_bot.threading, "Thread") as th, \
+             mock.patch.object(runner, "_deliver") as dv, \
+             mock.patch.object(qq_bot.persona, "draw_shot",
+                               return_value=("", "这一轮没有可画的画面")):
+            runner._comic_from_persona({"name": "纱雾"}, "private_9")
+            th.call_args[1]["target"](*th.call_args[1]["args"])
+        self.assertIn("没有可画的画面", dv.call_args[0][1])
 
     def test_plain_chat_does_not_trigger_comic(self):
         runner = self._runner()
@@ -1823,6 +1846,67 @@ class PersonaTurnTest(unittest.TestCase):
             runner._draw_persona("1girl")
         dr.assert_not_called()
         dv.assert_not_called()
+
+
+class RollbackQQTest(unittest.TestCase):
+    """回退（2026-11-04）：引用机器人上一条扮演回复发「回退」。
+
+    闸门在引用匹配（can_rollback），词单发不算；撤回是尽力而为——
+    消息太老 / 合并转发卡片撤不回时跳过，账本回滚不跟它绑。
+    """
+
+    def test_whole_word_only(self):
+        self.assertTrue(qq_bot.persona.is_rollback_text("回退"))
+        self.assertFalse(qq_bot.persona.is_rollback_text("我们回退一下"))
+
+    def test_can_rollback_matches_quoted_id(self):
+        runner = qq_bot.SessionRunner(None, "private_1", "private", "1")
+        runner.last_turn_ids = ["101", "102"]
+        self.assertTrue(runner.can_rollback(["102"]))
+        self.assertTrue(runner.can_rollback(["999", "101"]))
+        self.assertFalse(runner.can_rollback(["999"]))
+        self.assertFalse(runner.can_rollback([]))
+        self.assertFalse(runner.can_rollback([""]))    # 空引用不算
+
+    def test_remember_ids_only_in_persona_turn(self):
+        """message_id 账本只在扮演轮里记——其它路径（galgame 等）共享 runner，
+        不能被误当成扮演回复。"""
+        runner = qq_bot.SessionRunner(None, "private_1", "private", "1")
+        runner._remember_ids(["55"])          # 轮外：不记
+        self.assertEqual(runner.last_turn_ids, [])
+        runner._turn_ids = []
+        runner._remember_ids(["66", "", 77])  # 轮内：记，空串跳过
+        self.assertEqual(runner._turn_ids, ["66", "77"])
+
+    def test_remember_ids_ignores_count_fakes(self):
+        """测试桩把 send_* 桩成返回条数 int——不能把 int 当列表迭代炸掉。"""
+        runner = qq_bot.SessionRunner(None, "private_1", "private", "1")
+        runner._turn_ids = []
+        runner._remember_ids(1)
+        self.assertEqual(runner._turn_ids, [])
+
+    def test_recall_last_turn_records_and_clears(self):
+        runner = qq_bot.SessionRunner(None, "private_1", "private", "1")
+        runner.last_turn_ids = ["1", "2"]
+        rec = []
+        with mock.patch.object(qq_api, "delete_msg",
+                               lambda mid: rec.append(mid)):
+            n = runner.recall_last_turn()
+        self.assertEqual(n, 2)
+        self.assertEqual(rec, ["1", "2"])
+        self.assertEqual(runner.last_turn_ids, [])   # 撤完清空，防重复回退
+
+    def test_recall_is_best_effort(self):
+        runner = qq_bot.SessionRunner(None, "private_1", "private", "1")
+        runner.last_turn_ids = ["1", "2"]
+
+        def boom(mid):
+            if mid == "1":
+                raise RuntimeError("消息太老，撤不回了")
+
+        with mock.patch.object(qq_api, "delete_msg", boom):
+            n = runner.recall_last_turn()
+        self.assertEqual(n, 1)                # 失败的那条跳过，另一条照撤
 
 
 if __name__ == "__main__":

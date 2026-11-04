@@ -42,6 +42,7 @@
 
 `mode` 为 "free" 时数值**封存不删**——切回 raid 原值接着来。
 """
+import copy
 import datetime
 import json
 import logging
@@ -90,6 +91,20 @@ ORGASM_COOLDOWN = 6     # 用满之后要歇几**轮**才能再开一场。
 CROSS_PENALTY = (3, 6, 10)
 CROSS_HARD = 20         # 她说了不要还继续：一次就够狠
 CROSS_JAIL_AT = 2       # 强行几次触发报警（这条线结束，只能重开）
+
+# ── 戒备（2026-11-05，用户拍板的「爽要带代价」）─────────────
+# 「他对我这么好，是不是有所图」。独立于好感的一根弦：
+#   - 涨：关系浅却做远超关系的事（喊老婆、直接上手、带去私密空间）、
+#         高频物质投入、无铺垫的表白——判据在打分 prompt 的 suspicion 字段。
+#   - 降：行为和关系相称、兑现承诺、把误会圆回来（模型给负值）。
+# 效果两层：prompt 层（注入她的戒备状态，模型自己演冷淡/试探）+ 代码层保底
+# （戒备高时正 delta 减半——模型手松也不能让戒备变成摆设；负分不打折）。
+# 区间 0~40 就够：它是个「减速带」，不是第二套好感，做满 100 等于凭空
+# 再养一条进度条。
+SUSPICION_MAX = 40
+SUSPICION_DISCOUNT_AT = 20   # 从这个值起，正 delta 减半
+SUSPICION_HARD_FLOOR = 8     # hard 越界这轮，戒备至少涨这么多（模型手松的保底）
+SUSPICION_NO_FLOOR = 4       # mild 越界被明确拒绝：至少 +4
 # 2026-11-04 晚：**按天的额度全部取消**。原来剧情每天 5 次大额、纯聊天按
 # 「当天第几次」递减（3/2/1/1 之后每 3 轮 +1），造成的实际效果是「今天补不完，
 # 明天再来」——用户拍板去掉：「没有人喜欢一个限制你 24 小时的游戏」。
@@ -653,6 +668,24 @@ def submit_name(v, cfg=None):
     return str(submit_level(v, cfg).get("name") or "")
 
 
+# 戒备的模糊档（2026-11-05）。**刻意不给配置文件**：这四档是给玩家和模型看的
+# 态度描述，不是数值曲线——没有「调参」需求，硬编码反而防止配置写飞。
+# 玩家侧只露档名（犯嘀咕/起疑/戒备），露数字会变成「刷警戒-消警戒」的循环。
+SUSPICION_BANDS = ((30, "戒备"), (20, "起疑"), (10, "犯嘀咕"), (0, "坦然"))
+
+
+def suspicion_name(v, cfg=None):
+    try:
+        v = int(v or 0)
+    except (TypeError, ValueError):
+        v = 0
+    v = max(0, min(SUSPICION_MAX, v))
+    for lo, name in SUSPICION_BANDS:
+        if v >= lo:
+            return name
+    return "坦然"
+
+
 def corrupt_hints(cfg=None):
     """堕落/屈服的记账参数。配置缺失时回退默认表，机制不能因缺配置停摆。"""
     cfg = cfg or load_config()
@@ -718,7 +751,7 @@ def _blank(line_key="", value=None):
             "corrupt": 0, "submit": 0,
             "day": _today(), "chat": 0, "acts": 0,
             "streak": 1, "turns": 0, "ach": [], "hist": [],
-            "mercy": MERCY_MAX}
+            "mercy": MERCY_MAX, "suspicion": 0}
 
 
 def _entry(line_key):
@@ -851,6 +884,9 @@ def _migrate(rec):
         rec["excite"] = 0
     if "scene" not in rec:
         rec["scene"] = False
+    # 戒备（2026-11-05）：老档没有这个字段，从 0 起——她还没起疑。
+    if "suspicion" not in rec:
+        rec["suspicion"] = 0
     # 高潮次数（2026-11-04 深夜）：单场累计，场景结束清零
     if "orgasms" not in rec:
         rec["orgasms"] = 0
@@ -1130,6 +1166,10 @@ def panel(line_key):
         "submit": su,
         "submitName": submit_name(su, cfg),
         "submits": su_rows,
+        # 戒备（2026-11-05）：只露档名不露数字——露数字会变成
+        # 「刷警戒-消警戒」的循环攻略，玩家该看到的是她的态度。
+        "suspicion": int(rec.get("suspicion") or 0),
+        "suspicionName": suspicion_name(rec.get("suspicion"), cfg),
         "canCross": _can_cross(value, lv, ar, cfg),
         "needValue": dv,
         "needArousal": da,
@@ -1446,9 +1486,11 @@ def scoring_ctx(line_key):
         return None
     cfg = load_config()
     value = int(rec.get("value") or 0)
+    # 最近发生（2026-11-05 扩到 8 条）：打分 prompt 的「重复衰减」要靠它数
+    # 「同一类讨好他做过几次」，3 条不够看出模式。
     recent_rows = []
     hist = rec.get("hist") if isinstance(rec.get("hist"), list) else []
-    for h in reversed(hist[-3:]):
+    for h in reversed(hist[-8:]):
         recent_rows.append("· %s（%+d）" % (h.get("r") or "", int(h.get("d") or 0)))
     recent = ("最近发生：\n" + "\n".join(recent_rows)) if recent_rows \
         else "（你们还没什么交集）"
@@ -1463,6 +1505,9 @@ def scoring_ctx(line_key):
             # 否则「同一句话」在堕落 0 和堕落 80 时会给出一样的 delta。
             "corrupt": int(rec.get("corrupt") or 0),
             "submit": int(rec.get("submit") or 0),
+            # 戒备（2026-11-05）：模型要看到她现在起没起疑，才知道这轮放行
+            # 还是往回打。
+            "suspicion": int(rec.get("suspicion") or 0),
             "recent": recent}
 
 
@@ -1498,6 +1543,17 @@ def settle(line_key, score):
                 "submitDelta": 0,
                 "reason": ""}
 
+    # ── 回退快照（2026-11-04）────────────────────────
+    # 「回退上一轮」的账本基础：动手改任何字段**之前**，把整份记录原样
+    # 拷一份挂在 `_prev` 里。回退时（`rollback_last`）整体还原，不用逐字段
+    # 逆运算——settle 动的字段太多（value/tier/level/arousal/excite/scene/
+    # corrupt/submit/suspicion/cross_n/hist…），逐个倒推漏一个就是脏账。
+    # 只保一级：新快照盖旧快照时把旧的 pop 掉，不然 deep copy 会把上上次
+    # 的快照也带上，存档无限膨胀。
+    _snap = copy.deepcopy(rec)
+    _snap.pop("_prev", None)
+    rec["_prev"] = _snap
+
     # 跨天：把隔夜会散掉的东西散掉。**不再有额度要重置**——聊天和剧情
     # 都不按天算次数（2026-11-04 晚），这里只管气氛和警惕。
     if str(rec.get("day") or "") != _today():
@@ -1524,6 +1580,15 @@ def settle(line_key, score):
     # 剧情型每天几次大额。单轮只受 ROUND_CAP 约束——那是防一句话刷满，
     # 不是时间闸。`ttype` 仍然带下来，只用于记录和展示，不参与额度计算。
     applied = delta
+
+    # ── 戒备折减（2026-11-05，用户拍板的「付出代价」）──────
+    # 她正戒备着的时候，好话和动作的收益减半。prompt 层已经压过一轮
+    # （模型看得到戒备值和规则），这里是代码保底——「模型给分太慷慨」
+    # 正是这套系统被用户点名的问题，不能全押在模型自觉上。
+    # 负分不打折：惩罚不因为她在戒备就缩水，越界该掉还是掉。
+    sus_prev = int(rec.get("suspicion") or 0)
+    if applied > 0 and sus_prev >= SUSPICION_DISCOUNT_AT:
+        applied = applied // 2
 
     prev_value = value
     value = max(MIN_V, min(MAX_V, value + applied))
@@ -1680,6 +1745,22 @@ def settle(line_key, score):
     sub_delta = max(-40, min(40, sub_delta))
     rec["submit"] = max(0, min(SUBMIT_MAX, prev_submit + sub_delta))
 
+    # ── 戒备记账（2026-11-05）────────────────────────────
+    # 涨落全由打分模型判（判据在 prompt 的 suspicion 字段），代码只做两件
+    # 事：clamp 到 -20~+20，和给「越界被拒」兜下限——同 corrupt 的 hard
+    # 下限同构：她说过不要还被继续，这种事不可能不起戒心，模型手松也不能
+    # 让它记成 0。
+    try:
+        sus_delta = int(score.get("suspicion") or 0)
+    except (TypeError, ValueError):
+        sus_delta = 0
+    sus_delta = max(-20, min(20, sus_delta))
+    if cross == "hard":
+        sus_delta = max(sus_delta, SUSPICION_HARD_FLOOR)
+    elif cross == "mild" and allow == "no":
+        sus_delta = max(sus_delta, SUSPICION_NO_FLOOR)
+    rec["suspicion"] = max(0, min(SUSPICION_MAX, sus_prev + sus_delta))
+
     # ── 距离升级 ─────────────────────────────────────
     # 升一级要两个条件：模型判定「这轮做成了那件事」+ 好感够这一级的门票。
     # 缺一个都不升，**只升不降**（身体和记忆不会因为分数掉回去而复原）。
@@ -1773,6 +1854,9 @@ def settle(line_key, score):
            "submit": int(rec.get("submit") or 0),
            "submitName": submit_name(rec.get("submit"), cfg),
            "submitDelta": int(rec.get("submit") or 0) - prev_submit,
+           "suspicion": int(rec.get("suspicion") or 0),
+           "suspicionName": suspicion_name(rec.get("suspicion"), cfg),
+           "suspicionDelta": int(rec.get("suspicion") or 0) - sus_prev,
            "ending": str(rec.get("ending") or ""),
            "mercy": mercy_left(rec), "mercyMax": MERCY_MAX,
            "just_ended": just_ended, "reason": reason}
@@ -1788,6 +1872,54 @@ def settle(line_key, score):
     ent["affection"] = rec
     _save_entry(line_key, ent)
     return res
+
+
+def rollback_last(line_key):
+    """把最近一次 settle 的效果整体退回去（2026-11-04 回退功能）。
+
+    实现靠 settle 动手前的 `_prev` 快照：整份记录原样换回去，不逐字段
+    倒推。**只支持一级**——再上一轮的快照早被这轮盖掉了，这是设计：
+    回退是「发错了救一下」，不是时光机。
+
+    返回还原后的状态 dict（和 settle 的返回同构，调用方可直接回给前端
+    刷新状态条）；没有可退的（自由模式没结算过 / 结局定格轮 / 已经退过）
+    返回 None。历史和归档的删除不归这里管——在 `persona.rollback_last_turn`。
+    """
+    ent = _entry(line_key)
+    if not ent:
+        return None
+    rec = ent.get("affection")
+    if not isinstance(rec, dict) or "_prev" not in rec:
+        return None
+    prev = rec.pop("_prev")
+    ent["affection"] = prev
+    _save_entry(line_key, ent)
+    cfg = load_config()
+    card = _card_of(line_key)
+    lv = int(prev.get("level") or 0)
+    value = int(prev.get("value") or 0)
+    return {"applied": 0, "rolled_back": True, "active": True,
+            "mode": str(prev.get("mode") or MODE_RAID), "value": value,
+            "tier": str(prev.get("tier") or ""),
+            "tierName": str((tier_for(value, cfg) or {}).get("name") or ""),
+            "level": lv, "levelMax": LEVEL_MAX,
+            "levelName": level_name(lv, cfg, card),
+            "arousal": int(prev.get("arousal") or 0),
+            "arousalName": arousal_name(prev.get("arousal"), cfg),
+            "excite": int(prev.get("excite") or 0),
+            "in_scene": bool(prev.get("scene")),
+            "corrupt": int(prev.get("corrupt") or 0),
+            "corruptName": corrupt_name(prev.get("corrupt"), cfg),
+            "corruptDelta": 0,
+            "submit": int(prev.get("submit") or 0),
+            "submitName": submit_name(prev.get("submit"), cfg),
+            "submitDelta": 0,
+            "suspicion": int(prev.get("suspicion") or 0),
+            "suspicionName": suspicion_name(prev.get("suspicion"), cfg),
+            "suspicionDelta": 0,
+            "ending": str(prev.get("ending") or ""),
+            "milestone": str(prev.get("milestone") or ""),
+            "just_ended": "", "just_milestone": ""}
 
 
 # ── 注入与展示 ────────────────────────────────────────
@@ -2120,6 +2252,29 @@ def injection_block(res, cfg=None):
         # 越界那一轮专门说一句：堕落是拿关系换来的，不是白得的
         lines += ["", "（她说了不要，你还是继续了。这件事会记在她身上——她也许当下没反抗，"
                       "但那不是同意。堕落值越高，她越不会为了这个跟你吵，可那反而更糟。）"]
+
+    # ── 戒备（2026-11-05，模糊档，不报数字）────────────────
+    # 玩家在面板上看到的是档名（犯嘀咕/起疑/戒备），模型看到的这句也一样
+    # 不带数字——「她开始琢磨你图什么」比「戒备 23」更像一个人。
+    # 降价台词要和好感档位的文案叠着读：戒备是「他图什么」，好感是「她烦不烦他」，
+    # 两件事可以同时成立。
+    su_v = int(res.get("suspicion") or 0)
+    su_d = int(res.get("suspicionDelta") or 0)
+    if su_v >= 30:
+        lines += ["", "（她现在对你有明显的戒备：你的好她接着，但心里一直挂着「他到底想干什么」。"
+                      "眼神会躲、话题会岔、身体接触会退。这时候他说什么她都先过一遍脑子——"
+                      "他得用**行动**给她一个说法，说破嘴皮子没用。）"]
+    elif su_v >= 20:
+        lines += ["", "（她开始琢磨你对她的好到底图什么了。对你的投入她会迟疑着收下，"
+                      "收下之后反而不自在。她想听你亲口把事情说清楚——或者看你做不做得到。）"]
+    elif su_v >= 10:
+        lines += ["", "（她有点在意你为什么对她这么好。没到反感的程度，甚至有点受用——"
+                      "但那点「无事献殷勤」的嘀咕压不下去了，问出来的话会带刺。）"]
+    if su_d >= 8:
+        lines += ["", "（你这轮的做法让她心里那根弦绷紧了一截。她会记住这件事——"
+                      "下次再这样，就不是嘀咕了。）"]
+    elif su_d <= -8:
+        lines += ["", "（你这一轮把她的戒备卸下去了一点。她自己也说不清为什么松了口气。）"]
 
     if res.get("rose"):
         lines += ["", "（你们的关系刚刚往前跨了一步，到了【%s】。这一步要有实感——"
