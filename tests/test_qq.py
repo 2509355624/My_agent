@@ -1762,6 +1762,14 @@ class PersonaTurnTest(unittest.TestCase):
         # 又没法指向具体某个人），这些配图用例必须在私聊前提下测。
         return qq_bot.SessionRunner(None, "private_9", "private", "9")
 
+    def setUp(self):
+        # `_run_persona_turn` 会把回退账本落盘：指到临时目录，别写真实 state/。
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._base = mock.patch.object(qq_bot, "BASE_DIR", self._tmp.name)
+        self._base.start()
+        self.addCleanup(self._base.stop)
+
     def _batch(self, text="在吗"):
         return [{"text": text, "sender": "张三", "reply_to": "m1",
                  "sender_uin": "10000"}]
@@ -1917,6 +1925,15 @@ class RollbackQQTest(unittest.TestCase):
     消息太老 / 合并转发卡片撤不回时跳过，账本回滚不跟它绑。
     """
 
+    def setUp(self):
+        # 回退账本要落盘（state/qq_last_turn.json）：指到临时目录，
+        # 别把测试里的 message_id 写进真实 state/（2026-11-05）。
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._base = mock.patch.object(qq_bot, "BASE_DIR", self._tmp.name)
+        self._base.start()
+        self.addCleanup(self._base.stop)
+
     def test_whole_word_only(self):
         self.assertTrue(qq_bot.persona.is_rollback_text("回退"))
         self.assertFalse(qq_bot.persona.is_rollback_text("我们回退一下"))
@@ -1935,6 +1952,20 @@ class RollbackQQTest(unittest.TestCase):
         self.assertFalse(runner.can_rollback(["999"]))
         self.assertFalse(runner.can_rollback([]))
         self.assertFalse(runner.can_rollback([""]))    # 空引用不算
+
+    def test_ledger_survives_a_restart(self):
+        """2026-11-05 用户实测：重启进程后引用上一轮卡片发「回退」被拒。
+
+        根因就是账本只在内存里——重启正好发生在改完代码要先做的那一步。
+        现在落盘，重开进程照样认。
+        """
+        qq_bot._save_last_turn("private_1", ["11", "12"])
+        fresh = qq_bot.SessionRunner(None, "private_1", "private", "1")
+        self.assertEqual(fresh.last_turn_ids, ["11", "12"])
+        self.assertTrue(fresh.can_rollback(["12"]))
+        # 别的会话线不受影响
+        other = qq_bot.SessionRunner(None, "private_2", "private", "2")
+        self.assertEqual(other.last_turn_ids, [])
 
     def test_remember_ids_only_in_persona_turn(self):
         """message_id 账本只在扮演轮里记——其它路径（galgame 等）共享 runner，
@@ -1963,6 +1994,7 @@ class RollbackQQTest(unittest.TestCase):
         self.assertEqual(n, 2)
         self.assertEqual(rec, ["1", "2"])
         self.assertEqual(runner.last_turn_ids, [])   # 撤完清空，防重复回退
+        self.assertEqual(qq_bot._load_last_turn("private_1"), [])   # 落盘也清掉
 
     def test_recall_is_best_effort(self):
         runner = qq_bot.SessionRunner(None, "private_1", "private", "1")
