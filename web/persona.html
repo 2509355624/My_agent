@@ -357,6 +357,41 @@
   .wipeBox .wbtns { display: flex; gap: 8px; margin-top: 14px; }
   .wipeBox .wbtns .btn { flex: 1; display: flex; justify-content: center; }
 
+  /* ─── 自定义模型弹窗（2026-11-05）───────────────────────
+     克隆 wipeMask 的壳：居中遮罩 + 430px 面板。区别是这里没有危险动作，
+     所以不走红色系，用中性边框；三个输入框 + 测试/恢复/保存三个动作。 */
+  .cmMask { display: none; position: fixed; inset: 0; z-index: 400;
+    background: rgba(0,0,0,.72); align-items: center; justify-content: center;
+    padding: 20px; }
+  .cmMask.on { display: flex; }
+  .cmBox { width: min(430px, 100%); background: var(--bg-elev);
+    border: 1px solid var(--border); border-radius: var(--r); padding: 20px;
+    box-shadow: 0 18px 50px rgba(0,0,0,.6);
+    max-height: calc(100vh - 40px); overflow-y: auto; }
+  .cmBox h3 { font-size: 16px; margin-bottom: 8px; }
+  .cmBox .cmt { font-size: 12px; line-height: 1.7; color: var(--text-dim); }
+  .cmBox .cmt b { color: var(--text); }
+  .cmBox label { display: block; font-size: 12px; color: var(--text-dim);
+    margin: 12px 0 4px; }
+  .cmBox input { width: 100%; padding: 10px 12px; font: inherit; font-size: 13px;
+    color: var(--text); background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: var(--rs); outline: none;
+    box-sizing: border-box; }
+  .cmBox input:focus { border-color: var(--border-h, var(--border)); }
+  .cmBox .cmStatus { min-height: 18px; font-size: 12px; margin-top: 10px;
+    line-height: 1.6; word-break: break-all; color: var(--text-dim); }
+  .cmBox .cmStatus.ok { color: #4ade80; }
+  .cmBox .cmStatus.err { color: #f87171; }
+  .cmBox .wbtns { display: flex; gap: 8px; margin-top: 14px; }
+  .cmBox .wbtns .btn { flex: 1; display: flex; justify-content: center; }
+  /* 侧栏里「当前用的是谁」的一行小字。 */
+  .cmNow { font-size: 11px; color: var(--text-dim); margin-top: 6px;
+    line-height: 1.5; word-break: break-all; }
+  /* 手机：输入框 16px 起——iOS Safari 聚焦字号小于 16px 会强行放大页面。 */
+  @media (max-width: 1000px) {
+    .cmBox input { font-size: 16px; }
+  }
+
   /* 顶栏的「状态」按钮（2026-11-04 深夜）：默认不显示，只有窄屏
      （<=1000px）才在媒体查询里放出来。基类写死 none 是为了宽屏——
      宽屏有常驻右栏，再来个按钮就是重复入口。 */
@@ -496,6 +531,12 @@
     <div class="st" id="affBox" style="display:none">
       <button class="btn sm danger" id="btnAffRestart">❗ 清空存档</button>
     </div>
+    <!-- 自定义模型（2026-11-05）放最底：自带 OpenAI 兼容接口。游客也能
+         用——体验版之外「自带钥匙来玩」的口子。配置只存浏览器本地。 -->
+    <div class="st" id="customBox">
+      <button class="btn sm" id="btnCustom">自定义模型</button>
+      <div class="cmNow" id="cmNow" style="display:none"></div>
+    </div>
   </aside>
 
   <!-- 遮罩必须在 .app 里面！手机端「抽屉灰色点不到角色」的真因：
@@ -509,6 +550,36 @@
 
 <div class="zoom" id="zoom"><img id="zoomImg" alt=""></div>
 <div class="toast" id="toast"></div>
+
+<!-- 自定义模型（2026-11-05）：自带 OpenAI 兼容接口。
+     key 只存浏览器 localStorage，每轮聊天随请求发给后端临时用一次，
+     后端不落盘。保存前可以先「测试链接」——走后端转发 ping 一条，
+     报错原文直接回显（浏览器直连各家接口会被 CORS 拦，测试也必须走后端）。 -->
+<div class="cmMask" id="cmMask">
+  <div class="cmBox">
+    <h3>自定义模型</h3>
+    <div class="cmt">
+      用你自己的 OpenAI 兼容接口和她聊天。配置只保存在<b>本机浏览器</b>里，
+      每轮对话发给服务器临时用一次、用完即弃。挂了会直接报错，
+      不会偷偷换回默认模型。
+    </div>
+    <label for="cmUrl">接口地址（如 https://api.deepseek.com/v1）</label>
+    <input id="cmUrl" autocomplete="off" spellcheck="false"
+           placeholder="https://…">
+    <label for="cmModel">模型名</label>
+    <input id="cmModel" autocomplete="off" spellcheck="false"
+           placeholder="deepseek-chat">
+    <label for="cmKey">API Key</label>
+    <input id="cmKey" type="password" autocomplete="off" spellcheck="false"
+           placeholder="sk-…">
+    <div class="cmStatus" id="cmStatus"></div>
+    <div class="wbtns">
+      <button class="btn" id="cmTest">测试链接</button>
+      <button class="btn" id="cmClear">恢复默认</button>
+      <button class="btn pri" id="cmSave">保存</button>
+    </div>
+  </div>
+</div>
 
 <!-- 「清空存档」二次确认（2026-11-04）。
      不用原生 confirm：那个只能点「确定」，手滑一样过。这里要玩家把确认句
@@ -1325,7 +1396,10 @@ async function deliver(text, isRetry) {
   log.scrollTop = log.scrollHeight;
 
   try {
-    const d = await post("/api/persona/chat", { text });
+    // 自定义模型（2026-11-05）：存了配置就随每轮带给后端临时用一次；
+    // 没带 = 老行为，走默认模型。
+    const d = await post("/api/persona/chat",
+                         CM ? { text, custom: CM } : { text });
     // 这一轮在归档里的行号（后端回包带的）。用它当气泡 id，图才挂得对位置——
     // 用数组下标的话，历史一压缩就整体前移，图会跑到最新那条下面。
     const nA = (d.n && typeof d.n.assistant === "number") ? d.n.assistant : null;
@@ -1552,6 +1626,79 @@ $("wipeOk").onclick = async () => {
 };
 $("btnAffRestart").addEventListener("click", openWipe);
 $("btnBurger").onclick = openDrawer;
+
+// ── 自定义模型（2026-11-05）───────────────────────────
+// key 只存浏览器 localStorage；每轮聊天 body 里带给后端临时用一次（见
+// deliver）。CM 为 null = 用默认模型。「测试链接」把弹窗里的现值直接
+// 发给 /custom_test，测的是没保存的草稿，报错原样回显。
+const CM_KEY = "persona_custom_model";
+let CM = null;
+try { CM = JSON.parse(localStorage.getItem(CM_KEY) || "null"); } catch (e) { CM = null; }
+if (!CM || !CM.base_url || !CM.model || !CM.api_key) CM = null;
+
+function renderCmNow() {
+  const el = $("cmNow");
+  if (CM) { el.style.display = ""; el.textContent = "当前：" + CM.model; }
+  else { el.style.display = "none"; el.textContent = ""; }
+}
+function openCm() {
+  $("cmUrl").value = CM ? CM.base_url : "";
+  $("cmModel").value = CM ? CM.model : "";
+  $("cmKey").value = CM ? CM.api_key : "";
+  const s = $("cmStatus");
+  s.textContent = ""; s.className = "cmStatus";
+  $("cmMask").classList.add("on");
+}
+function closeCm() { $("cmMask").classList.remove("on"); }
+$("btnCustom").onclick = openCm;
+$("cmMask").addEventListener("click", e => {
+  if (e.target === $("cmMask")) closeCm();
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && $("cmMask").classList.contains("on")) closeCm();
+});
+
+function cmFields() {
+  return { base_url: $("cmUrl").value.trim(),
+           model: $("cmModel").value.trim(),
+           api_key: $("cmKey").value.trim() };
+}
+function cmFilled(f) { return f.base_url && f.model && f.api_key; }
+
+$("cmTest").onclick = async () => {
+  const s = $("cmStatus");
+  const f = cmFields();
+  if (!cmFilled(f)) { s.className = "cmStatus err"; s.textContent = "三个框都要填"; return; }
+  s.className = "cmStatus"; s.textContent = "测试中…";
+  try {
+    const d = await post("/api/persona/custom_test", f);
+    s.className = "cmStatus ok";
+    s.textContent = "通了，" + d.elapsed + "s" + (d.info ? " · 她说：" + d.info : "");
+  } catch (err) {
+    s.className = "cmStatus err"; s.textContent = err.message;
+  }
+};
+
+$("cmSave").onclick = () => {
+  const f = cmFields();
+  if (!cmFilled(f)) { toast("接口地址、模型名、Key 都要填", true); return; }
+  CM = f;
+  try { localStorage.setItem(CM_KEY, JSON.stringify(CM)); } catch (e) {}
+  renderCmNow();
+  closeCm();
+  toast("自定义模型已启用：" + CM.model);
+};
+
+$("cmClear").onclick = () => {
+  CM = null;
+  try { localStorage.removeItem(CM_KEY); } catch (e) {}
+  $("cmUrl").value = ""; $("cmModel").value = ""; $("cmKey").value = "";
+  const s = $("cmStatus"); s.textContent = ""; s.className = "cmStatus";
+  renderCmNow();
+  toast("已恢复默认模型");
+};
+renderCmNow();
+
 // 遮罩两边都要能关：哪个开着就关哪个（同一次点击里可能两个都判一下，
 // 但 openDrawer / openStats 已经保证了不会同时开）。
 $("mask").onclick = function () { closeDrawer(); closeStats(); };

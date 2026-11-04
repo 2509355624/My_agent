@@ -23,7 +23,7 @@ import time
 
 from flask import Blueprint, jsonify, request
 
-from app import friend_auth, persona, usage
+from app import friend_auth, llm, persona, usage
 
 log = logging.getLogger("persona_api")
 
@@ -553,15 +553,27 @@ def clear():
 
 @bp.route("/api/persona/chat", methods=["POST"])
 def chat():
-    """一轮对话。body: {text}
+    """一轮对话。body: {text, custom?}
 
-    登录用户 → 无限；游客 → 15 轮（按 AI 回复次数算），超了硬拒绝。
+    登录用户 → 无限；游客 → 30 轮（按 AI 回复次数算），超了硬拒绝。
+    `custom`（2026-11-05）：{base_url, model, api_key}——用户自带的
+    OpenAI 兼容模型，配置只存在浏览器 localStorage，随请求带给后端**临时
+    用一轮**（主回复、好感打分、小记压缩全走它），请求结束立刻摘掉，
+    后端不落盘。缺 custom 或字段不全 = 用默认模型，老前端不受影响。
     """
     body = request.get_json(silent=True) or {}
     text = str(body.get("text") or "").strip()
     if not text:
         return jsonify({"ok": False, "error": "说点什么"}), 400
 
+    llm.set_custom_override(body.get("custom"))
+    try:
+        return _chat_turn(text)
+    finally:
+        llm.set_custom_override(None)
+
+
+def _chat_turn(text):
     role, who, token = _who()
 
     if role == "guest":
@@ -648,6 +660,28 @@ def _guest_chat(text, uid, token):
     resp = jsonify(out)
     _attach_guest_cookie(resp, token)
     return resp
+
+
+@bp.route("/api/persona/custom_test", methods=["POST"])
+def custom_test():
+    """「测试链接」（2026-11-05）：拿用户填的模型配置发一条 ping。
+
+    body: {base_url, model, api_key}——就是弹窗里那三个框的现值，**不读
+    localStorage 也不落盘**，测的是草稿。成功回 {ok, elapsed, info}（模型
+    的回话），失败回 {ok:false, error}（错误原文，含 HTTP 状态和 detail）。
+    """
+    body = request.get_json(silent=True) or {}
+    base_url = str(body.get("base_url") or "").strip()
+    model = str(body.get("model") or "").strip()
+    api_key = str(body.get("api_key") or "").strip()
+    if not (base_url.startswith(("http://", "https://"))
+            and model and api_key):
+        return jsonify({"ok": False,
+                        "error": "接口地址（http/https）、模型名、API Key 都要填"}), 400
+    ok, elapsed, info = llm.test_custom(base_url, model, api_key)
+    if not ok:
+        return jsonify({"ok": False, "elapsed": elapsed, "error": info})
+    return jsonify({"ok": True, "elapsed": elapsed, "info": info})
 
 
 @bp.route("/api/persona/affection", methods=["POST"])

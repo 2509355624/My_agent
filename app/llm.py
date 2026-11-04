@@ -84,6 +84,38 @@ LAST_USAGE = _usage()
 CURRENT_PROVIDER = LLM_PROVIDER
 
 
+# ─── 请求级自定义模型（2026-11-05）───────────────────────
+# 网页端「自定义模型」：用户自己的 OpenAI 兼容接口（base_url + model +
+# api_key）只存在**浏览器 localStorage**，每轮聊天随请求体带给后端，这里
+# 临时挂到当前线程（Flask 一请求一线程，threading.local 正好圈住一轮内部
+# 的主回复 + 好感打分 + 小记压缩全部调用），请求结束由 persona_api 在
+# finally 里摘掉。key 不落盘、不进 .env、不进任何会话状态。
+#
+# 覆盖是**整体换人**不是降级备胎：自定义模型不走降级链（call_llm 里单目标
+# 直调，失败直接抛）——挂了就报错，绝不偷偷烧回默认那几家的额度。
+_custom_ctx = threading.local()
+
+
+def set_custom_override(cfg):
+    """挂上 / 摘掉当前线程的自定义模型。cfg 缺关键字段视为摘除。"""
+    if isinstance(cfg, dict) and str(cfg.get("base_url") or "").strip() \
+            and str(cfg.get("api_key") or "").strip():
+        _custom_ctx.cfg = {
+            "base_url": str(cfg["base_url"]).strip(),
+            "model": str(cfg.get("model") or "").strip(),
+            "api_key": str(cfg["api_key"]).strip(),
+        }
+    else:
+        _custom_ctx.cfg = None
+
+
+def _custom_active():
+    cfg = getattr(_custom_ctx, "cfg", None)
+    if cfg and cfg.get("base_url") and cfg.get("api_key"):
+        return cfg
+    return None
+
+
 def describe_effective(provider=None, model=None):
     """一行说清「现在真正在用的是谁」，供启动日志与排障用。
 
@@ -105,6 +137,18 @@ def describe_effective(provider=None, model=None):
 
 def get_effective_config(provider=None, model=None):
     """解析出一次请求要用的 (base_url, model, api_key, provider)"""
+    # 请求级自定义模型（2026-11-05）：调用方没有点名 provider/model 时，
+    # 当前线程挂着自定义配置就整个换人——一轮里的主回复、打分、压缩全走它。
+    if not provider and not model:
+        cust = _custom_active()
+        if cust:
+            return {
+                "provider": "custom",
+                "base_url": cust["base_url"],
+                "model": cust["model"],
+                "api_key": cust["api_key"],
+                "reasoning_effort": "",
+            }
     provider = (provider or CURRENT_PROVIDER or LLM_PROVIDER).lower()
     if provider not in PROVIDERS:
         provider = LLM_PROVIDER
@@ -149,6 +193,17 @@ def call_llm(messages, timeout=None, provider=None, model=None, strict=False,
     兼容旧调用 call_llm(messages)：用当前生效配置。
     """
     timeout = timeout or LLM_REQUEST_TIMEOUT
+    # 自定义模型（2026-11-05）：单目标直调，不进降级链——用户自己的接口挂了
+    # 就把错误原样抛回去，绝不偷偷换默认那几家（额度是钱，静默降级=烧钱不吭声）。
+    if not provider and _custom_active():
+        eff = get_effective_config()
+        _log_effective(eff, stream=False, attempt=(1, 1))
+        body = {"messages": messages, "stream": False, "model": eff["model"]}
+        if max_tokens:
+            body["max_tokens"] = int(max_tokens)
+        if temperature is not None:
+            body["temperature"] = float(temperature)
+        return _call_provider(eff, body, timeout)
     targets = _chain_targets(provider, model, strict=strict)
     last_err = None
     for i, (pid, mname) in enumerate(targets):
@@ -166,6 +221,35 @@ def call_llm(messages, timeout=None, provider=None, model=None, strict=False,
             last_err = e
             _mark_dead((pid, mname), _brief(e), ttl=_ttl_for(e))
     raise last_err
+
+
+def test_custom(base_url, model, api_key, timeout=20.0):
+    """「测试链接」（2026-11-05）：拿用户自带的配置发一条 ping 小请求。
+
+    返回 (ok, 耗时秒, 信息)——成功时 info 是模型回话的前 60 字，失败时是
+    错误原文（截 300 字）。独立于线程覆盖：测试的是「还没保存的草稿配置」，
+    不碰 _custom_ctx。
+    """
+    eff = {
+        "provider": "custom",
+        "base_url": str(base_url or "").strip().rstrip("/"),
+        "model": str(model or "").strip(),
+        "api_key": str(api_key or "").strip(),
+        "reasoning_effort": "",
+    }
+    body = {
+        "messages": [{"role": "user", "content": "ping"}],
+        "stream": False,
+        "model": eff["model"],
+        "max_tokens": 16,
+    }
+    t0 = time.time()
+    try:
+        reply = _call_provider(eff, body, timeout)
+        elapsed = round(time.time() - t0, 1)
+        return True, elapsed, (reply or "").strip()[:60]
+    except Exception as e:                       # noqa: BLE001  错误原文就是测试结果
+        return False, round(time.time() - t0, 1), str(e)[:300]
 
 
 def _extract_error(resp):
