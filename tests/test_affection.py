@@ -1451,6 +1451,36 @@ class PanelTest(AffBase):
         self.assertNotIn("感情还差", t2)      # 70 > 65
         self.assertIn("气氛还差", t2)         # 12 < 88
 
+    def test_panel_brief_reports_only_the_current_rows(self):
+        """每轮附着的窄条只报 ▶ 指着的那一格，不铺整张阶梯表（2026-11-05）。"""
+        key = self._raid()
+        self._set(key, value=42, level=4, arousal=52, corrupt=30, submit=60)
+        b = affection.panel_brief(key)
+        self.assertIn("此刻", b)
+        self.assertIn("身体 ▶ 碰过了", b)
+        self.assertIn("冲动 ▶ 想", b)
+        self.assertIn("堕落 ▶ 开始松", b)
+        self.assertIn("屈服 ▶ 让了", b)
+        # 整张表里的其它档不能出现，否则窄条会把卡片正文淹掉
+        self.assertNotIn("还没碰过", b)
+        self.assertNotIn("要不够", b)
+        self.assertNotIn("感情还差", b)
+
+    def test_panel_brief_skips_orgasm_outside_scene(self):
+        key = self._raid()
+        self._set(key, scene=False)
+        self.assertNotIn("高潮", affection.panel_brief(key))
+        self._set(key, scene=True, excite=68, orgasms=2)
+        b = affection.panel_brief(key)
+        self.assertIn("高潮 ▶", b)
+        self.assertIn("第 2/5 次", b)
+
+    def test_panel_brief_empty_without_a_line(self):
+        """没在演谁就没有窄条（返回空串，调用方别拼）。"""
+        self._enter()
+        self.assertEqual(affection.panel_brief(
+            persona.resolve_line("private_9")), "")
+
     def test_panel_needs_a_card(self):
         """没在演谁就没有面板（和 detail_nodes 同一口径）。"""
         self._enter()

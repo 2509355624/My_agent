@@ -415,6 +415,21 @@ class SessionTargetTest(unittest.TestCase):
         self.assertEqual(persona._session_target("weird"), ("", ""))
         self.assertEqual(persona._session_target(""), ("", ""))
 
+    def test_web_line_uses_the_qq_queue_without_qq_delivery(self):
+        """网页线（2026-11-04 修）：`web_<qq>` 必须映射成「网页侧」队列身份。
+
+        不映射的话这里返回 `("", "")`，`draw()` 直接返回空——网页「出图」
+        永远失败，日志里只有「扮演出图」、没有「扮演配图完成」。
+        target 用 None 是 image_jobs 既有的网页侧约定：照常排队 + 落
+        `output/web/生图页/`，但 worker 不往 QQ 发东西。
+        """
+        self.assertEqual(persona._session_target("web_2509355624"),
+                         (None, "2509355624"))
+        self.assertEqual(persona._session_target("web_2509355624__izumi_sagiri"),
+                         (None, "2509355624"))
+        # 游客线没有 QQ 号，没有队列身份
+        self.assertEqual(persona._session_target("web_local"), ("", ""))
+
 
 class DrawTest(unittest.TestCase):
     """扮演态配图：走 `_persona_fast`，入队带 quiet，失败一律静默。"""
@@ -448,6 +463,27 @@ class DrawTest(unittest.TestCase):
         self.assertEqual(kw["skill"], persona.FAST_SKILL)
         self.assertTrue(kw["quiet"])                     # 不带编号 caption
         self.assertFalse(kw["landscape"])                # 后台线程判不了，写死竖版
+
+    def test_web_line_enqueues_into_the_same_queue(self):
+        """网页「出图」必须真的入队（2026-11-04 用户报「走不了 QQ 队列」）。
+
+        之前 `_session_target("web_…")` 返回 `("", "")`，`draw()` 在入队前
+        就 return ""，网页永远拿不到图，前端只能看到「没画出来」。
+        """
+        self._patch()
+        name = persona.draw("sitting, smile", {"appearancePrompt": "1girl"},
+                            "web_2509355624__izumi_sagiri",
+                            skill="anima-line", landscape=True)
+        self.assertEqual(name, "a.png")
+        import app.image_jobs as ij
+        from app import comfy_out
+        args, kw = ij.enqueue.call_args
+        self.assertEqual(args[:2], (None, "2509355624"))   # 网页侧 + 本人在途额度
+        self.assertTrue(kw["quiet"])                       # 不往 QQ 发
+        self.assertEqual(kw["skill"], "anima-line")
+        # 图落网页侧目录，不混进 QQ 私聊
+        self.assertEqual(comfy_out.session_base(None, "2509355624"),
+                         "web/生图页")
 
     def test_prompt_goes_into_the_workflow(self):
         self._patch()
@@ -1881,6 +1917,7 @@ class RollbackTurnTest(PersonaBase):
     def test_is_rollback_text_whole_word_only(self):
         """整条消息才是命令——「回退」两个字在日常聊天里太常见。"""
         self.assertTrue(persona.is_rollback_text("回退"))
+        self.assertTrue(persona.is_rollback_text("撤回"))
         self.assertTrue(persona.is_rollback_text("@大大怪 回退", addressed=True))
         self.assertFalse(persona.is_rollback_text("我们回退一下"))
         self.assertFalse(persona.is_rollback_text("回退一下"))
