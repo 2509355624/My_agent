@@ -1735,6 +1735,58 @@ class GameDayTest(PersonaBase):
         self.assertEqual(len(hist), 1)
         self.assertEqual(hist[0]["role"], "assistant")
 
+    def test_skip_day_carries_previous_plot_into_prompt(self):
+        """跨日开场要把前情拼进系统头（2026-11-05 修）。
+
+        用户反馈「睡到第二天剧情严重不连贯」：以前只给滑动窗口 + 一句
+        「新的一天刚开始」，模型就另起一个头。现在显式给一份前情清单，
+        并要求接着它写、不要重写已经发生的事。
+        """
+        line = persona.resolve_line(self.KEY)
+        persona._save_hist(line, [
+            {"role": "user", "content": "明天带你去游乐园，说好了"},
+            {"role": "assistant",
+             "content": "好。\n画面：1girl, nodding\n心情：开心 强度2\n状态：客厅"},
+        ])
+        persona._save_archive(line, [
+            {"role": "user", "content": "明天带你去游乐园，说好了"},
+            {"role": "assistant",
+             "content": "好。\n画面：1girl, nodding\n心情：开心 强度2\n状态：客厅"},
+        ])
+        seen = {}
+
+        def _fake(msgs, **kw):
+            seen["prompt"] = "\n".join(m["content"] for m in msgs)
+            return "嗯，今天就去吗？\n画面：1girl\n心情：期待 强度2\n状态：门口"
+
+        with mock.patch.object(persona.llm, "call_llm", side_effect=_fake):
+            turn = persona.skip_day(self.KEY)
+        self.assertIsNotNone(turn)
+        self.assertIn("游乐园", seen["prompt"])
+        self.assertIn("前情", seen["prompt"])
+        self.assertIn("不要另起一个场景", seen["prompt"])
+        # 前情本身只留正文：画面/心情/状态三行是给模型看的 few-shot，
+        # 不该被当成「剧情」复述进前情清单。
+        recap = persona._recap_block(line)
+        self.assertIn("明天带你去游乐园", recap)
+        self.assertNotIn("1girl, nodding", recap)
+        self.assertNotIn("画面：", recap)
+
+    def test_skip_day_closes_yesterdays_scene(self):
+        """睡到第二天：昨晚进行中的场景要收场，别带着高潮值过夜。"""
+        from app import affection
+        line = persona.resolve_line(self.KEY)
+        affection.set_mode(line, True)
+        affection.settle(line, {"delta": 1, "turn_type": "action",
+                                "in_scene": True, "act": "intense"})
+        self.assertGreater(affection.panel(line)["excite"], 0)
+        with mock.patch.object(persona.llm, "call_llm",
+                               return_value="早。\n画面：\n心情：平淡 强度1\n状态：起床"):
+            persona.skip_day(self.KEY)
+        p = affection.panel(line)
+        self.assertFalse(p["inScene"])
+        self.assertEqual(p["excite"], 0)
+
     def test_skip_word_is_a_command(self):
         raw = "早。\n画面：\n心情：平淡 强度1\n状态：起床"
         with mock.patch.object(persona.llm, "call_llm", return_value=raw):

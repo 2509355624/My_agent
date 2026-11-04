@@ -1511,6 +1511,55 @@ def scoring_ctx(line_key):
             "recent": recent}
 
 
+def sleep(line_key):
+    """过夜：把这一夜的场面收掉，返回结算后的状态（没在演返回 None）。
+
+    2026-11-05 修（用户：「睡到第二天」剧情断片 + 状态条跨夜不对）：
+    `skip_day` 以前**只推游戏日，完全不碰好感记录**。于是：
+      · 第二天早上面板还挂着昨晚的高潮值和「进行中」的场景，冲动也停在
+        睡前那个数——玩家看到的是「睡了一觉什么都没变」；
+      · 模型拿到的状态行也是昨晚的（衣着、位置、接触点全是床上的），
+        它自然接着昨晚写，白天该有的「醒来、换衣、出门」全没有。
+    这里按「过夜」处理：场景结束、高潮值归零、单场次数清零、冲动回落。
+    **不清零冲动**——刚醒来还记得昨晚，只是凉下去了。
+    好感 / 堕落 / 屈服 / 戒备一律不动：那些是关系事实，不该因为睡一觉消失。
+
+    和 `settle` 一样留 `_prev` 快照，回退上一轮时能整体换回去。
+    """
+    ent, rec = _ensure(line_key)
+    if not rec:
+        return None
+    _snap = copy.deepcopy(rec)
+    _snap.pop("_prev", None)
+    rec["_prev"] = _snap
+    prev_aro = int(rec.get("arousal") or 0)
+    rec["arousal"] = max(0, prev_aro - AROUSAL_DECAY * 2)
+    rec["excite"] = 0
+    rec["scene"] = False
+    rec["orgasms"] = 0
+    rec["cool_left"] = 0
+    ent["affection"] = rec
+    _save_entry(line_key, ent)
+    return {"arousal": rec["arousal"],
+            "arousalName": arousal_name(rec["arousal"]),
+            "excite": 0, "in_scene": False,
+            "value": int(rec.get("value") or 0)}
+
+
+def _as_bool(v):
+    """把模型可能给的几种写法统一成 bool。
+
+    2026-11-05：实测打分模型会把 `false` 写成字符串 `"false"`，`bool("false")`
+    是 True，场景判定直接翻车。这里只认「明确表示否」的那几种写法。
+    """
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    s = str(v or "").strip().lower()
+    return s in ("1", "true", "yes", "y", "是", "对", "on")
+
+
 def settle(line_key, score):
     """把第一段的打分结算进状态。返回结果 dict（调用方拼注入和尾行）。
 
@@ -1602,14 +1651,25 @@ def settle(line_key, score):
         cross = ""
     allow = str(score.get("allow") or "").strip().lower()
 
-    # 冲动是一次性的机会：本轮场景给的增量 + 回合结束回落
+    # 冲动是一次性的机会：本轮场景给的增量 + 回合结束回落。
+    #
+    # 2026-11-05 修（用户：网页右栏「冲动值一直不变」）：原来**每轮无条件
+    # -15**，而打分模型给的常态增量只有 +10~+15（情话 +10、独处 +15，
+    # 身体接触 +20 但不是每轮都有）→ 净值长期为负，夹在 0 上就再也不动。
+    # 玩家看到的确实是「一条死掉的进度条」。
+    # 现在只有「这一轮没在拱气氛」（arose <= 0）才回落：有人在推就攒得住，
+    # 没人管会凉——「得重新拱气氛」的本意保住了，但不再是把所有加分吃掉。
     try:
         arose = int(score.get("arousal") or 0)
     except (TypeError, ValueError):
         arose = 0
     arose = max(-60, min(60, arose))
-    rec["arousal"] = max(0, min(AROUSAL_MAX,
-                                 int(rec.get("arousal") or 0) + arose - AROUSAL_DECAY))
+    _aro_prev = int(rec.get("arousal") or 0)
+    if arose > 0:
+        _aro_now = _aro_prev + arose
+    else:
+        _aro_now = _aro_prev + arose - AROUSAL_DECAY
+    rec["arousal"] = max(0, min(AROUSAL_MAX, _aro_now))
 
     # ── 高潮值（2026-11-04 深夜改版，原「兴奋度」）──────
     # 记法变了：**不再是模型自己给增量**，而是它判「这一轮在干什么」，
@@ -1620,9 +1680,22 @@ def settle(line_key, score):
     # 场景结束、高潮值归零、这一轮之后直接跨到第二天。
     # 收场的理由不只是她受不了——第 6 次高潮写出来只是水词。
     prev_scene = bool(rec.get("scene"))
-    in_scene = bool(score.get("in_scene"))
+    in_scene = _as_bool(score.get("in_scene"))
     oh = orgasm_hints(cfg)
     act_key, act_raise = act_base(score.get("act"), cfg)
+    # 2026-11-05 修（用户：网页「高潮值消失了」）：模型给的两个字段经常打架
+    # ——`act` 明明写了在做什么（foreplay/hand/…），`in_scene` 却填 false，
+    # 或者把 false 写成字符串。按原逻辑这一轮会被判成「场景已结束」，
+    # 高潮值当场清零、面板整块收起，玩家看到的就是「刚才还有，怎么没了」。
+    # 以**动作**为准：它更具体，也更难随手填错。
+    #
+    # 只认**模型真的给了动作**的情况：`act_base(None)` 会兜底成 foreplay，
+    # 那是「没填也按前戏记」的老行为，拿它反推 in_scene 会把「场景结束」
+    # 一律判回进行中（`stop` 同理，它是收场信号，不是进行中）。
+    _raw_act = str(score.get("act") or "").strip().lower()
+    if (not in_scene and _raw_act
+            and _raw_act not in ("none", "stop", "pause", "停", "中断")):
+        in_scene = True
     # 模型若仍然回了数字型 excite（老前端/老提示词），当成修正量叠加
     try:
         ex_mod = int(score.get("excite") or 0)
