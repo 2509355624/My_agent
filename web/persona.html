@@ -597,7 +597,7 @@
       连续天数也一起清空。<br>
       角色卡本身还在 —— 她还在这儿，只是从头认识你。
     </div>
-    <div class="wcode" id="wipeCode">我同意删除该存档</div>
+    <div class="wcode" id="wipeCode">我同意清空存档</div>
     <input id="wipeInput" autocomplete="off" spellcheck="false"
            placeholder="把上面这句原样打一遍">
     <div class="wbtns">
@@ -1697,7 +1697,7 @@ $("btnMode").addEventListener("click", async () => {
 // 拦法不是原生 confirm（那个只能点「确定」，手滑一样过），而是让玩家把
 // 确认句原样打一遍，打错一个字按钮就是灰的。
 // 右栏和顶栏两个按钮是同一个动作：删的是整份存档，不分攻略/自由模式。
-const WIPE_TEXT = "我同意删除该存档";
+const WIPE_TEXT = "我同意清空存档";
 function openWipe() {
   if (ROLE === "guest") { toast("体验版没有存档可删", true); return; }
   $("wipeInput").value = "";

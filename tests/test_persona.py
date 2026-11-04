@@ -1414,43 +1414,45 @@ class ArchiveHistoryTest(PersonaBase):
 
 
 class ClearCommandTest(PersonaBase):
-    """`#清空`（2026-11-02）：清记忆、保留角色。"""
+    """`#清空`（2026-11-02）；2026-11-05 起不再直接删，改走删档两步确认。"""
 
     def setUp(self):
         super().setUp()
         persona.save_cards([_card("纱雾")])
         self.card = persona.find_card("纱雾")
+        # 分线后状态挂在 `private_1__<卡 id>` 上；和线上同一条路径。
+        persona.switch_line("private_1", self.card)
 
-    def test_clear_keeps_card_but_wipes_memory(self):
-        persona.switch("private_1", self.card)
-        persona._save_hist("private_1", [{"role": "user", "content": "旧"}])
+    def test_clear_word_only_raises_the_warning(self):
+        """「清空」只是删档第一步——什么都没删，等引用 + 确认句。"""
+        line = persona.resolve_line("private_1")
+        persona._save_hist(line, [{"role": "user", "content": "旧"}])
         st = persona._load_state()
-        st["private_1"].update({"note": "记着点", "turns": 7,
-                                "mood": "害羞", "intensity": 8, "state": "裸着"})
+        st[line].update({"note": "记着点", "turns": 7,
+                         "mood": "害羞", "intensity": 8, "state": "裸着"})
         persona._save_state(st)
 
-        msg = persona.clear("private_1")
+        warn = persona.handle_command("private_1", "#清空")
 
-        st = persona._load_state()["private_1"]
+        self.assertIn("清空存档", warn)
+        self.assertIn(persona.WIPE_CONFIRM, warn)
+        st = persona._load_state()[line]
         self.assertEqual(st["card"], self.card["id"])   # 角色还在
-        self.assertEqual(st["note"], "")
-        self.assertEqual(st["turns"], 0)
-        self.assertEqual(st["state"], "")
-        self.assertEqual(persona._load_hist("private_1"), [])
-        self.assertIn("清空", msg)
+        self.assertEqual(st["note"], "记着点")            # 什么都没清
+        self.assertEqual(st["turns"], 7)
+        self.assertEqual(len(persona._load_hist(line)), 1)
 
-    def test_clear_when_not_playing(self):
-        self.assertIn("没有在演", persona.clear("private_nobody"))
+    def test_clear_when_not_playing_is_plain_text(self):
+        self.assertIsNone(persona.handle_command("private_nobody", "#清空"))
 
     def test_clear_word_goes_through_command(self):
-        persona.switch("private_1", self.card)
         got = persona.handle_command("private_1", "#清空")
         self.assertIsNotNone(got)
         self.assertNotIn("出戏", got)
 
     def test_clear_alias(self):
         for word in ("#重置", "#重开", "#从头开始"):
-            persona.switch("private_1", self.card)
+            persona.switch_line("private_1", self.card)
             self.assertIsNotNone(persona.handle_command("private_1", word), word)
 
 
