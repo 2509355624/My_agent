@@ -459,6 +459,9 @@
     color: var(--text-dim); }
   .pregRules p { margin: 0 0 9px; }
   .pregRules b { color: var(--text); }
+  /* 射精选择的按钮行（2026-11-05）：五个位置分两排，别挤成一长条。 */
+  .finBtns { margin: 8px 0 0; }
+  .finBtns .btn { font-size: 13px; }
 
   /* ─── 自定义模型弹窗（2026-11-05）───────────────────────
      克隆 wipeMask 的壳：居中遮罩 + 430px 面板。区别是这里没有危险动作，
@@ -813,6 +816,39 @@
   </div>
 </div>
 
+<!-- 射精选择（2026-11-05）：她的高潮值满了之后弹出来。
+     玩家不用自己在正文里写「射在哪里」——那样他得猜什么时候该写。
+     选了之后由系统交给编剧，下一轮写出来。 -->
+<div class="skipMask" id="finishMask">
+  <div class="skipBox">
+    <h3>她已经到了</h3>
+    <p class="skipt" id="finishTip">你想射在哪里？</p>
+    <div class="skipBtns finBtns">
+      <button class="btn" data-spot="pussy">小穴里</button>
+      <button class="btn" data-spot="anus">肛门里</button>
+      <button class="btn" data-spot="mouth">嘴里</button>
+    </div>
+    <div class="skipBtns finBtns">
+      <button class="btn" data-spot="body">身上</button>
+      <button class="btn" data-spot="none">不射</button>
+    </div>
+    <button class="btn skipGo" id="finishCancel">先不选</button>
+  </div>
+</div>
+
+<!-- 第五次之后（2026-11-05）：她连着到了五次，累到没力气。 -->
+<div class="skipMask" id="fiveMask">
+  <div class="skipBox">
+    <h3>她已经不行了</h3>
+    <p class="skipt">她连着到了五次，人已经软掉了——眼睛睁不开，
+      手抬到一半又落回去。<br>还要再来一次吗？</p>
+    <div class="skipBtns">
+      <button class="btn" id="fiveEnd">就到这里</button>
+      <button class="btn pri" id="fiveLast">最后一次</button>
+    </div>
+  </div>
+</div>
+
 <!-- 怀孕规则（2026-11-05）：状态条旁边的小问号点开。只解释机制，
      不显示当前处在周期的哪一段——那个要玩家自己按天算。 -->
 <div class="skipMask" id="pregHelpMask">
@@ -918,6 +954,84 @@ function toast(t, err) {
   el.className = "toast on" + (err ? " err" : "");
   clearTimeout(el._t);
   el._t = setTimeout(() => { el.className = "toast"; }, 2800);
+}
+
+// ── 射精选择 / 第五次之后（2026-11-05）──────────────────
+//
+// 用户原话：「玩家不需要自己去写，他只需要负责推动剧情就行了。女主来到
+// 高潮之后，就给选项让玩家自己选，这样可以避免玩家不知道什么时候去写
+// 这个摄入会比较好——相当于系统帮玩家去做这个决定。」
+//
+// 两段：
+//   1. 高潮满了 → askFinish() 问射在哪里 → POST /api/persona/finish；
+//      选择只挂在会话上，**不进历史**，下一轮由编剧写出来。
+//   2. 如果这是第 5 次，紧接着 askFive() 问「结束 / 最后一次」，
+//      选完由 `/api/persona/finish_night` 直接生成（一个气泡写完夜里和第二天）。
+
+let CLIMAX = null;          // 当前这次高潮的信息 {n, of, last}
+
+function askFinish(cl) {
+  CLIMAX = cl || null;
+  if (!CLIMAX) return;
+  const tip = $("finishTip");
+  if (tip) {
+    tip.textContent = CLIMAX.last
+      ? "第 " + CLIMAX.n + " 次了。你想射在哪里？"
+      : "第 " + CLIMAX.n + " 次。你想射在哪里？";
+  }
+  $("finishMask").classList.add("on");
+}
+
+async function pickFinish(spot) {
+  $("finishMask").classList.remove("on");
+  const last = !!(CLIMAX && CLIMAX.last);
+  CLIMAX = null;
+  try {
+    await api("/api/persona/finish", {
+      method: "POST", body: { spot: spot, last: last } });
+  } catch (e) {
+    toast("没记上，再选一次", true);
+    return;
+  }
+  // 选完立刻把「她累了」那一问接上——不用等下一轮。
+  if (last) {
+    $("fiveMask").classList.add("on");
+  } else {
+    toast("记下了：这一拍他会射在" + FINISH_CN[spot]);
+  }
+}
+
+const FINISH_CN = { pussy: "小穴里", anus: "肛门里", mouth: "嘴里",
+                    body: "身上", none: "（不射）" };
+
+async function pickFive(last) {
+  $("fiveMask").classList.remove("on");
+  const pend = document.createElement("div");
+  pend.className = "row a pending";
+  pend.innerHTML = last
+    ? '<div class="bubble">（她累得说不出话……）</div>'
+    : '<div class="bubble">（这一场收住了……）</div>';
+  $("log").appendChild(pend);
+  scrollBottom();
+  try {
+    const d = await api("/api/persona/finish_night", {
+      method: "POST", body: { last: last } });
+    pend.remove();
+    const nA = d.n ? d.n.assistant : null;
+    const row = renderRow({ role: "assistant", text: d.reply,
+                            aff: d.affection || null, n: nA },
+                          nA === null ? ("a" + Date.now()) : nA);
+    $("log").appendChild(row);
+    markLastAff();
+    renderState({ mood: d.mood, intensity: d.intensity, state: d.state,
+                  note: $("sNote").textContent, day: d.day,
+                  phase: d.phase, finish: "", preg: d.preg,
+                  turns: (+$("sTurns").textContent || 0) + 1 });
+    scrollBottom();
+  } catch (e) {
+    pend.remove();
+    toast("没写成，再试一次", true);
+  }
 }
 
 // ── 左栏 ──────────────────────────────────────────────
@@ -2018,6 +2132,9 @@ async function deliver(text, isRetry) {
       // 里程碑（2026-11-04 晚）：和结局不是一回事，不用红字警告，
       // 也不给任何「怎么办」的出口——故事接着走。
       if (AFF.just_milestone) toast("💞 在一起了。故事还在往下走。");
+      // 高潮满了 → 问她射在哪里（2026-11-05）。选择由系统转给编剧，
+      // 玩家不用自己在正文里写——那件事他本来也不知道什么时候该写。
+      if (AFF.climax) askFinish(AFF.climax);
     }
     if (ROLE === "guest" && d.remaining !== undefined) {
       GUEST_LEFT = d.remaining;
@@ -2456,6 +2573,27 @@ $("pregHelpClose").onclick = () =>
   $("pregHelpMask").classList.remove("on");
 $("pregHelpMask").addEventListener("click", e => {
   if (e.target === $("pregHelpMask")) $("pregHelpMask").classList.remove("on");
+});
+// 射精选择（2026-11-05）：五个位置 + 「先不选」。
+document.querySelectorAll("#finishMask [data-spot]").forEach(btn => {
+  btn.onclick = () => pickFinish(btn.getAttribute("data-spot"));
+});
+$("finishCancel").onclick = () => {
+  // 先不选 = 这一轮不提射精，不留任何东西。下一轮他自然会写。
+  $("finishMask").classList.remove("on");
+  CLIMAX = null;
+};
+$("finishMask").addEventListener("click", e => {
+  if (e.target === $("finishMask")) {
+    $("finishMask").classList.remove("on");
+    CLIMAX = null;
+  }
+});
+// 第五次之后（2026-11-05）：结束 / 最后一次。
+$("fiveEnd").onclick = () => pickFive(false);
+$("fiveLast").onclick = () => pickFive(true);
+$("fiveMask").addEventListener("click", e => {
+  if (e.target === $("fiveMask")) $("fiveMask").classList.remove("on");
 });
 $("skipGo").onclick = doJump;
 document.querySelectorAll(".skipBtns [data-days]").forEach(btn => {

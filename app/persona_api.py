@@ -606,6 +606,63 @@ def clear():
     return jsonify({"ok": True, "reply": reply})
 
 
+@bp.route("/api/persona/finish", methods=["POST"])
+def finish_api():
+    """她高潮满了，玩家在弹窗里选「射在哪里」（2026-11-05）。
+
+    body: `{spot, custom?}` —— spot 是 mouth / body / pussy / anus / none。
+
+    这个选择**不进历史**，只挂在会话上，下一轮由编剧写出来。所以这里只
+    存不发，返回 `{ok, last}`；`last` 只是把前端刚才告诉我们的「这是第 5 次」
+    原样回传，方便它接着弹第二个窗。
+    """
+    body = request.get_json(silent=True) or {}
+    spot = str(body.get("spot") or "").strip().lower()
+    role, who, token = _who()
+    if role == "guest":
+        # 游客不玩攻略数值，也没有射精选择这回事。
+        return jsonify({"ok": False, "error": "体验版没有这个"}), 403
+    key = _active_key(_key(who))
+    if not persona.set_finish(key, spot):
+        return jsonify({"ok": False, "error": "位置不对"}), 400
+    return jsonify({"ok": True, "spot": spot,
+                    "last": bool(body.get("last"))})
+
+
+@bp.route("/api/persona/finish_night", methods=["POST"])
+def finish_night_api():
+    """第 5 次之后：结束 / 再来最后一次（2026-11-05）。
+
+    body: `{last, custom?}` —— last=true 再来最后一次并进第二天；
+    false 就收场留在当晚。生成的是**一个气泡**（夜里那一下 + 第二天早晨）。
+    """
+    body = request.get_json(silent=True) or {}
+    last = bool(body.get("last"))
+    llm.set_custom_override(body.get("custom"))
+    try:
+        role, who, token = _who()
+        if role == "guest":
+            return jsonify({"ok": False, "error": "体验版没有这个"}), 403
+        key = _active_key(_key(who))
+        if persona.active_card(key) is None:
+            return jsonify({"ok": False, "error": "还没选角色"}), 400
+        with usage.scope(key):
+            turn = persona.finish_night(key, last=last)
+        if turn is None or not turn.reply.strip():
+            return jsonify({"ok": False, "error": "没写出来，再试一次"}), 502
+        out = {"ok": True, "reply": turn.reply, "scene": turn.scene,
+               "mood": turn.mood, "intensity": turn.intensity,
+               "state": turn.state, "role": "member"}
+        total = persona.archive_len(key)
+        out["n"] = {"user": max(0, total - 2), "assistant": max(0, total - 1)}
+        out["day"] = persona.game_day(key)
+        out["phase"] = persona.game_phase(key)
+        out["preg"] = persona.pregnancy_status(key)
+        return jsonify(out)
+    finally:
+        llm.set_custom_override(None)
+
+
 @bp.route("/api/persona/chat", methods=["POST"])
 def chat():
     """一轮对话。body: {text, custom?}

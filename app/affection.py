@@ -94,6 +94,30 @@ ORGASM_MAX = 5          # 单场最多几次。用满强制收场——不只是
 # 也**不再有冷却期**——用满 5 次这一场就收，下一轮想开随时能开。
 ORGASM_IDLE_DECAY = 8   # 空闲轮的默认回落（AI 没给负值时用它）
 ORGASM_IDLE_END = 2     # 连续几轮空闲才算真收场
+# 高潮冷却（2026-11-05，用户拍板）：高潮值记的是**女主的体力**，不是男主的
+# 蓄力条。她刚被弄到一次，身子是软的，至少要再被弄三轮才可能到第二次。
+# 不写死「三轮」这个数，而是给一个逐轮松开的天花板：她爬得上去但上不到顶，
+# 第三轮才放开。这样进度条一直在动（70→85→100），不是死卡在 99 不动。
+ORGASM_RECOVER = 3
+# recover → 这一轮最多能涨到多少（按 `max` 的比例算，配置改了也不用跟着改）。
+# 递减是**先减后查**：高潮后 recover=3，下一轮先减成 2 再查表 → 85；
+# 再下一轮减成 1 → 95；第三轮减成 0 → 解禁，这一轮就能到。
+# 所以「至少三轮」是这么来的，`1` 那一档故意留在 95（不让她第三轮之前到）。
+_RECOVER_RATIO = {2: 0.85, 1: 0.95}
+
+
+def _recover_cap(recover, max_v):
+    """冷却还剩 `recover` 轮时，高潮值最多涨到多少。"""
+    try:
+        r = int(recover or 0)
+        m = int(max_v or EXCITE_MAX)
+    except (TypeError, ValueError):
+        return EXCITE_MAX
+    ratio = _RECOVER_RATIO.get(r)
+    if ratio is None:
+        return m
+    return max(1, int(round(m * ratio)))
+
 # 越界被拒的代价，按当晚第几次递增（不冻结、不降级——自己哄回来）
 CROSS_PENALTY = (3, 6, 10)
 CROSS_HARD = 20         # 她说了不要还继续：一次就够狠
@@ -1197,6 +1221,10 @@ def _migrate(rec):
         rec["corrupt"] = 0
     if "submit" not in rec:
         rec["submit"] = 0
+    # 高潮冷却（2026-11-05）：老档按 0 起——没有「刚高潮过」这个记录，
+    # 就当她还没到过，下一轮照常可以到。
+    if "recover" not in rec:
+        rec["recover"] = 0
     # 开发度（2026-11-05）：老档从 0 起。已开发过的量没有痕迹可推，
     # 按 0 是最诚实的；缺某个部位（手工改过存档）也只补那一个。
     dev = rec.get("dev") if isinstance(rec.get("dev"), dict) else {}
@@ -2096,6 +2124,12 @@ def settle(line_key, score):
     just_orgasm = 0
     total_orgasm = int(rec.get("orgasms") or 0)
     idle = int(rec.get("idle") or 0)
+    # 高潮冷却（2026-11-05）：还剩几轮不能再到。高潮那一轮重新置满。
+    try:
+        recover = max(0, int(rec.get("recover") or 0))
+    except (TypeError, ValueError):
+        recover = 0
+    just_recover = False
     # 开发度（2026-11-05）：先取旧值算敏感系数，再叠加这一轮的增量。
     # **先算后加**是有意的：这一轮给的开发度影响的是下一轮，不然她这一轮
     # 刚被开发、同一轮就变敏感，读起来像数值跳帧。
@@ -2155,15 +2189,36 @@ def settle(line_key, score):
         # 断崖式掉下去。
         if step > 0:
             step = int(round(step * sens))
-        rec["excite"] = max(0, min(oh["max"], base + step))
+        want = base + step
+        # ── 高潮冷却（2026-11-05，用户拍板）────────────────────
+        # 高潮值不是「男主的蓄力条」，是**女主的体力条**：她刚被弄到过一回，
+        # 身子是软的，不可能两轮之内又到。所以高潮之后要封顶两轮：
+        #
+        #     第 1 轮 → 最多涨到 70
+        #     第 2 轮 → 最多涨到 85
+        #     第 3 轮 → 放开，可以再到
+        #
+        # 递减放在**算封顶之前**：这样第三轮就已经解禁，正好「至少三轮」。
+        # 表现上她一轮轮往上爬（70→85→100），不是死卡在 99 不动。
+        if not just_recover and recover > 0:
+            recover -= 1
+        if recover > 0:
+            cap = _recover_cap(recover, oh["max"])
+            if want > cap:
+                want = cap
+        rec["excite"] = max(0, min(oh["max"], want))
         # 触发高潮：到顶就落一次，然后回到余韵值。
         # **2026-11-05 取消 5 次封顶**（用户拍板）：只记次数，不收场。
         # 收场只由「连续两轮没接触」决定——那条在下面的空闲分支里。
-        if rec["excite"] >= oh["max"]:
+        # 冷却没解禁时封顶在 95 以下，到不了 100，所以不会提前触发。
+        if rec["excite"] >= oh["max"] and recover <= 0:
             total_orgasm += 1
             rec["orgasms"] = total_orgasm
             just_orgasm = total_orgasm
             rec["excite"] = after_now
+            # 到过这一回，接下来两轮封顶（见上面那张表）。
+            recover = ORGASM_RECOVER
+            just_recover = True
     elif prev_scene:
         # 空闲轮：**不清零**。这一轮只是在说别的、在缓、在穿衣服。
         # 数值按 AI 判的负增量往下走；它没给就减默认值。
@@ -2186,6 +2241,10 @@ def settle(line_key, score):
         rec["orgasms"] = 0
         total_orgasm = 0
         idle = 0
+        recover = 0              # 没在场景里就没有「刚要了」这回事
+    # 注意：递减**只在上面 `_contact` 分支里做一次**，这里不要再减。
+    # 之前两处都减，等于每轮扣两格，「至少三轮」变成两轮——实测过的坑。
+    rec["recover"] = recover
     rec["idle"] = idle
     rec["scene"] = in_scene
 
@@ -2358,6 +2417,10 @@ def settle(line_key, score):
            "orgasms": total_orgasm,
            "orgasmMax": oh["max_orgasm"],
            "sceneCapped": False,
+           # 冷却（2026-11-05）：还剩几轮到不了。前端据此在进度条上标
+           # 「缓一缓」，玩家才知道不是数值坏了。
+           "recover": recover,
+           "exciteCap": _recover_cap(recover, oh["max"]) if recover > 0 else oh["max"],
            # 开发度（2026-11-05）：五部位原值 + 每部位档名 + 总百分比。
            # 面板要「当前/500」，演员要「她身上哪里被开发到什么程度」。
            "dev": {k: int(rec.get("dev", {}).get(k) or 0) for k in DEV_KEYS},

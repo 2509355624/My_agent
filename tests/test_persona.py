@@ -262,18 +262,19 @@ class TurnTest(PersonaBase):
         self.assertEqual(out.reply, "你好呀")           # 回话原样发回去
         self.assertEqual(out.scene, "")                # 没写画面行 = 这轮不出图
 
-    def test_fifth_time_auto_advances_to_next_day(self):
-        """连续第 5 次（1/5 满）且内射：自动推进到第二天（2026-11-05）。
+    def test_fifth_time_does_not_auto_advance(self):
+        """第 5 次**不再**自动跨天（2026-11-05 改）。
 
-        用户要的是「满 5 次就翻篇」，而且这一轮由编剧把过渡写进去；
-        代码只负责把 gameday 推到下一天、把这一场收掉。
+        用户拍板：那一步改成弹窗驱动——第五次正常输出，AI 回完再问
+        「结束 / 最后一次」。自动跳会让玩家没得选，而且第五次那一轮被塞了
+        「过渡到第二天」的指令，写出来就不是那一场本身了。
         """
         score = {"finish": "inside", "act": "intense", "excite": 30,
                  "delta": 1}
         aff = {"active": True, "excite": 95, "orgasms": 5, "orgasmMax": 5,
                "just_orgasm": 5, "finish": "inside", "value": 50,
                "corrupt": 0, "submit": 0, "arousal": 50}
-        raw = "最后一次之后，天亮了。\n画面：1girl\n心情：疲惫 强度1\n状态：床上"
+        raw = "她累得说不出话。\n画面：1girl\n心情：疲惫 强度1\n状态：床上"
         with mock.patch.object(persona, "_judge_intent_scored",
                                return_value=("intimate", "", score)), \
              mock.patch.object(persona.affection, "settle",
@@ -281,7 +282,12 @@ class TurnTest(PersonaBase):
              mock.patch.object(persona.llm, "call_llm", return_value=raw):
             out = persona.run_turn(self.KEY, "再要一次", "private", "张三")
         self.assertTrue(out.reply)
-        self.assertEqual(persona.game_day(self.KEY), 2)
+        # 还在同一天——跨天由 `/api/persona/finish_night` 负责。
+        self.assertEqual(persona.game_day(self.KEY), 1)
+        # 但要告诉前端「这是第 5 次，该弹第二个窗了」。
+        self.assertIsInstance(out.aff, dict)
+        self.assertTrue(out.aff["climax"]["last"])
+        self.assertEqual(out.aff["climax"]["n"], 5)
 
     def test_intent_judgement_failure_still_replies(self):
         """判断段挂了也要能回话——退化成单次流程，不是整轮哑掉。
