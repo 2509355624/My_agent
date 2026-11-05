@@ -222,6 +222,16 @@ function renderPane() {
       <div class="tip">她房间里有什么、藏了什么。只在**你离开她视线、进她房间**时当素材用（比如：书桌、没关严的抽屉、衣柜里没拆标的泳衣、压在枕头下的速写本）。留空就由她按人设临场编，只是每次可能不一样。</div>
     </div>
     <div class="field">
+      <label>状态下的她（四段自由文本，可留空）</label>
+      <div class="tip" style="margin-bottom:6px">给编剧 AI 看的：数值高了之后她会怎么变。**不是阈值**，不要写「到 80 就怎样」，写她的表现。留空就让编剧按性格临场推。</div>
+      <div style="display:grid;gap:6px">
+        <textarea class="mid" id="f_sb_submit" placeholder="屈服高时：嘴上不再顶，但会用沉默/眼神保留自尊……">${esc((c.stateBehavior || {}).submit || "")}</textarea>
+        <textarea class="mid" id="f_sb_corrupt" placeholder="堕落高时：开始给自己找理由，但被提到某件事会突然停住……">${esc((c.stateBehavior || {}).corrupt || "")}</textarea>
+        <textarea class="mid" id="f_sb_affection" placeholder="好感高时：主动但不承认，用别扭的方式关心……">${esc((c.stateBehavior || {}).affection || "")}</textarea>
+        <textarea class="mid" id="f_sb_suspicion" placeholder="戒备高时：笑着套话，回答很圆，不把真话放表面……">${esc((c.stateBehavior || {}).suspicion || "")}</textarea>
+      </div>
+    </div>
+    <div class="field">
       <label>攻略起点（可留空）</label>
       <div style="display:flex;gap:10px;align-items:center">
         <select id="f_start_level" style="flex:1">
@@ -270,6 +280,12 @@ function collect() {
   c.appearancePrompt = $("f_appearance").value.trim();
   c.outfitPrompt = $("f_outfit").value.trim();
   c.room = $("f_room").value.trim();
+  c.stateBehavior = {
+    submit: $("f_sb_submit").value.trim(),
+    corrupt: $("f_sb_corrupt").value.trim(),
+    affection: $("f_sb_affection").value.trim(),
+    suspicion: $("f_sb_suspicion").value.trim(),
+  };
   c.start_level = parseInt($("f_start_level").value, 10) || 0;
   const sv = $("f_start_value").value.trim();
   // 留空要传 null（不是 0）——后端靠 null 判断「没填，卡在这一级门槛上」
@@ -291,6 +307,7 @@ function add() {
     id: "", name: "新角色", description: "", avatar: "",
     personality: "", systemPrompt: "", appearancePrompt: "",
     outfitPrompt: "", room: "", referenceImage: "",
+    stateBehavior: { submit: "", corrupt: "", affection: "", suspicion: "" },
     start_level: 0, start_value: null, level_names: [],
   });
   cur = cards.length - 1;

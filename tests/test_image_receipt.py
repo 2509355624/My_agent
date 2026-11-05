@@ -17,6 +17,7 @@
 **绝不谎报「已提交」**，那正是这次要修的毛病。
 """
 
+import json
 import unittest
 from unittest import mock
 
@@ -397,6 +398,50 @@ class BotKeepsQuietTest(unittest.TestCase):
             runner._deliver(False, "", [], "任务已提交，正在画了。")
         self.assertEqual(sent, [])
         self.assertTrue(spoke.called)
+
+
+class SendTextUsesCardTest(unittest.TestCase):
+    """系统回执一律走聊天记录卡片（2026-11-05 用户要求）。
+
+    用户原话：「任务回执用消息卡片的形式去发送」「群聊和私聊生成图片的时候，
+    ai 返回的任务回执都用消息卡片」。回执不是聊天内容，一条条气泡插进去会把
+    会话刷掉；卡片收起来只占一行，点开才看详情。
+    """
+
+    def test_receipt_is_sent_as_a_forward_card(self):
+        with mock.patch.object(qq_api, "send_forward") as fwd, \
+                mock.patch.object(qq_api, "send_group") as grp:
+            image_jobs._send_text("group", "9", "任务已提交，正在画了。")
+        self.assertTrue(fwd.called)
+        self.assertEqual(fwd.call_args.args[:2], ("group", "9"))
+        nodes = fwd.call_args.args[2]
+        self.assertEqual(len(nodes), 1)
+        self.assertEqual(nodes[0]["type"], "node")
+        self.assertIn("任务已提交，正在画了。",
+                      json.dumps(nodes, ensure_ascii=False))
+        grp.assert_not_called()
+
+    def test_private_receipt_also_goes_out_as_a_card(self):
+        with mock.patch.object(qq_api, "send_forward") as fwd, \
+                mock.patch.object(qq_api, "send_private") as priv:
+            image_jobs._send_text("private", "42", "任务已提交")
+        self.assertTrue(fwd.called)
+        self.assertEqual(fwd.call_args.args[:2], ("private", "42"))
+        priv.assert_not_called()
+
+    def test_card_failure_falls_back_to_a_plain_message(self):
+        """协议端不支持合并转发时不丢回执。"""
+        with mock.patch.object(qq_api, "send_forward",
+                               side_effect=RuntimeError("转发失败")), \
+                mock.patch.object(image_jobs.log, "warning"), \
+                mock.patch.object(qq_api, "send_private") as priv:
+            image_jobs._send_text("private", "42", "任务已提交")
+        self.assertEqual(priv.call_args.args, ("42", "任务已提交"))
+
+    def test_blank_text_sends_nothing(self):
+        with mock.patch.object(qq_api, "send_forward") as fwd:
+            image_jobs._send_text("group", "9", "   ")
+        fwd.assert_not_called()
 
 
 if __name__ == "__main__":

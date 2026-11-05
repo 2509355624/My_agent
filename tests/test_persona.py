@@ -100,16 +100,18 @@ class CardHiddenTest(PersonaBase):
         self.assertTrue(got["下架"]["hidden"])
 
     def test_builtin_hidden_flag_updates_but_content_is_protected(self):
-        """内置卡内容以磁盘为准，但 hidden 开关要放行——不然卡池页勾了白勾。"""
+        """内置卡内容以磁盘为准，但 hidden / 状态下的她要放行。"""
         persona.save_cards([_card("默认卡", id="default_1",
                                   systemPrompt="原始人设")])
         with mock.patch("app.config.BUILTIN_CARD_IDS", {"default_1"}):
-            # 调用方试图改内容 + 下架：内容改动不算数，下架算数
+            # 调用方试图改内容 + 下架 + 填状态行为：内容改动不算数，后两者算数
             persona.save_cards([_card("默认卡", id="default_1",
-                                      systemPrompt="篡改", hidden=True)])
+                                      systemPrompt="篡改", hidden=True,
+                                      stateBehavior={"submit": "她不再顶嘴"})])
         got = persona.load_cards()[0]
         self.assertEqual(got["systemPrompt"], "原始人设")
         self.assertTrue(got["hidden"])
+        self.assertEqual(got["stateBehavior"]["submit"], "她不再顶嘴")
 
     def test_roster_skips_hidden(self):
         persona.save_cards([_card("台上的", description="可见"),
@@ -291,6 +293,20 @@ class TurnTest(PersonaBase):
         head = m.call_args_list[1][0][0][0]["content"]
         self.assertIn("对方心里有话没说出口", head)
         self.assertNotIn("对方真正在：想被留住", head)
+
+    def test_state_and_lead_reach_the_actor(self):
+        """编剧的「状态底色 + 主动判定」要进演员系统头，不是只落库。"""
+        score = ('{"intent": "neutral", "delta": 2, "turn_type": "chat",'
+                 ' "reason": "试探", "note": "试探",'
+                 ' "persona_mode": "屈服", "tension": "照做了，但手指扣着衣角",'
+                 ' "lead": "act", "lead_form": "情感", "lead_reason": "她憋了几天"}')
+        with mock.patch.object(persona.llm, "call_llm",
+                               side_effect=[score, "她没松手。"]) as m:
+            persona.run_turn(self.KEY, "我走了。", "private")
+        head = m.call_args_list[1][0][0][0]["content"]
+        self.assertIn("她此刻的底色：屈服", head)
+        self.assertIn("张力：照做了", head)
+        self.assertIn("可以主动做一件事（情感）", head)
 
     def test_scene_line_is_split_out_of_the_reply(self):
         """模型顺手写的那行「画面：」要剥出来：正文发回去，标签拿去出图。
@@ -829,6 +845,54 @@ class LedgerTest(unittest.TestCase):
             self.assertIn("## " + key, out)
 
 
+class StateBehaviorTest(unittest.TestCase):
+    """卡上的四段「状态下的她」+ 编剧的状态覆盖/主动判定（2026-11-05）。"""
+
+    def test_norm_state_behavior_accepts_chinese_keys(self):
+        sb = persona._norm_state_behavior({
+            "屈服": "她不再顶嘴", "corrupt": "她开始找理由",
+            "好感": "她别别扭扭地关心", "suspicion": "她笑着套话",
+        })
+        self.assertEqual(sb["submit"], "她不再顶嘴")
+        self.assertEqual(sb["corrupt"], "她开始找理由")
+        self.assertEqual(sb["affection"], "她别别扭扭地关心")
+        self.assertEqual(sb["suspicion"], "她笑着套话")
+
+    def test_state_behavior_text_is_not_thresholds(self):
+        text = persona._state_behavior_text({
+            "stateBehavior": {"submit": "嘴上顺从，眼神不服"}})
+        self.assertIn("屈服高时：嘴上顺从，眼神不服", text)
+
+    def test_score_profile_carries_state_behavior(self):
+        p = persona._score_profile({
+            "name": "测试卡", "stateBehavior": {"affection": "主动但不承认"}})
+        self.assertIn("好感高时：主动但不承认", p)
+
+    def test_director_reads_persona_mode_and_lead(self):
+        info = persona._director_fields({
+            "persona_mode": "屈服", "tension": "照做了，但手指扣着衣角",
+            "lead": "act", "lead_form": "情感", "lead_reason": "她憋了几天",
+        })
+        self.assertEqual(info["persona_mode"], "屈服")
+        self.assertEqual(info["lead"], "act")
+        self.assertEqual(info["lead_form"], "情感")
+
+    def test_director_block_renders_state_and_lead(self):
+        block = persona._director_block({
+            "persona_mode": "屈服", "tension": "照做了，但手指扣着衣角",
+            "lead": "act", "lead_form": "情感", "lead_reason": "她憋了几天",
+        })
+        self.assertIn("她此刻的底色：屈服", block)
+        self.assertIn("张力：照做了", block)
+        self.assertIn("可以主动做一件事（情感）", block)
+        self.assertIn("不要替玩家做决定", block)
+
+    def test_secret_thought_hides_lead_reason(self):
+        block = persona._director_block({
+            "secret": True, "lead": "act", "lead_reason": "他其实想留下"})
+        self.assertNotIn("他其实想留下", block)
+
+
 class IntimateGuideTest(unittest.TestCase):
     """亲密指导按需注入（2026-11-03）：省 1,284 字，只在用得上时发。"""
 
@@ -1324,20 +1388,36 @@ class LayeredGuideTest(unittest.TestCase):
         self.assertEqual(persona.intimate_guide({"active": False}), "")
 
     def test_each_orgasm_level_gets_its_own_block(self):
-        """五档各有一块，而且互不相同。"""
+        """五档各有一块，而且互不相同。
+
+        2026-11-05：笔法层（`writing_skills`）接进来之后，`###` 标题还会多出
+        规范库自己的小标题。这里只认节奏层的「### 这一拍：…」。
+        """
         seen = {}
         for ex in (10, 40, 60, 80, 95):
             g = persona.intimate_guide({"active": True, "excite": ex,
                                         "corrupt": 0})
-            heads = [l for l in g.splitlines() if l.startswith("###")]
+            heads = [l for l in g.splitlines()
+                     if l.startswith("### 这一拍：")]
             self.assertEqual(len(heads), 1, "excite=%d 应该正好一块" % ex)
             seen[ex] = heads[0]
         self.assertEqual(len(set(seen.values())), 5, "五档不能有重复的块")
 
     def test_out_of_scene_has_no_layer(self):
-        """场景外（高潮值 0）不拼分层——那不是「还没被带起来」，是没开始。"""
-        g = persona.intimate_guide({"active": True, "excite": 0, "corrupt": 0})
-        self.assertEqual(g, "")
+        """场景外（高潮值 0、四根轴都没动）不拼分层——那不是「还没被带起来」，是没开始。
+
+        2026-11-05：这条只在「什么都没起来」时成立。堕落/屈服/戒备/好感
+        任何一根起来了，这一拍就还有该写的笔法，那时该拼。
+        """
+        st = {"active": True, "excite": 0, "corrupt": 0,
+              "submit": 0, "suspicion": 0, "value": 0}
+        self.assertEqual(persona.intimate_guide(st), "")
+        for kw in ({"corrupt": 60}, {"submit": 60}, {"suspicion": 30},
+                   {"value": 60}):
+            s = dict(st)
+            s.update(kw)
+            self.assertNotEqual(persona.intimate_guide(s), "",
+                                "有轴在动就该拼：%s" % kw)
 
     def test_high_corruption_adds_another_layer(self):
         """堕落 >= 50 时多加一层：她的反应里有一层她不想要的东西。"""
