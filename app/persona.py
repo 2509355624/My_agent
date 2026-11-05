@@ -54,6 +54,7 @@ import logging
 import os
 import random
 import re
+import shutil
 import threading
 import time
 
@@ -1560,6 +1561,14 @@ def _save_state(state, deleted=None):
     parent = os.path.dirname(_STATE_PATH)
     if parent:
         os.makedirs(parent, exist_ok=True)
+    # 上一代备份（2026-11-06 事故之后加的）：每次落盘前把**旧文件**留一份。
+    # 没有它的话，一次错误的整份覆盖就把所有人的数值抹掉了，事后只能从
+    # 别的线、别的备份里捞。只留一代，写失败也不影响主流程。
+    try:
+        if os.path.exists(_STATE_PATH):
+            shutil.copy2(_STATE_PATH, _STATE_PATH + ".prev")
+    except OSError:
+        log.warning("写前备份失败（不影响落盘）：%s", _STATE_PATH)
     _atomic_write_text(_STATE_PATH, json.dumps(state, ensure_ascii=False, indent=2))
 
 
