@@ -2903,18 +2903,96 @@ def _judge_intent(card, said, state="", history=None, note=""):
 
 
 
+def _close_json(s):
+    """把被截断的 JSON 补成合法结构。**只补语法，不改值。**
+
+    2026-11-05 事故：打分 JSON 加上 `spot` / `dev` / `hook` 之后变长，
+    小模型（flash 档）经常在 `literal` 那一行被硬截断，末尾还粘一句
+    「Sorry, I can't respond...」。原来的 `rfind("}")` 会命中 `segments`
+    里那个内层右括号，`json.loads` 必然失败 → 整轮按 0 分走 →
+    玩家看到的是「高潮值只掉不涨、开发度不动」。
+
+    这里逐字符扫一遍，只做四件事：
+      · 记住还没闭合的 `{` / `[`，在末尾按顺序补上；
+      · 字符串中途断掉就把引号补上；
+      · 断在 `"key":` 后面时补 `null`；
+      · 去掉尾部多余的逗号。
+
+    救回来的字段值原样保留——补出来的只有括号和引号，不会凭空造分。
+    """
+    out, stack = [], []
+    in_str = esc = False
+    for ch in s:
+        if in_str:
+            if esc:
+                out.append(ch)
+                esc = False
+            elif ch == "\\":
+                out.append(ch)
+                esc = True
+            elif ch == '"':
+                out.append(ch)
+                in_str = False
+            elif ord(ch) < 0x20:
+                # JSON 字符串里不许有裸的控制字符。模型被截断时经常在这里
+                # 带一个真实换行进来，整段就废了——转义掉，值本身不动。
+                out.append("\\n" if ch == "\n" else
+                           ("\\r" if ch == "\r" else
+                            ("\\t" if ch == "\t" else " ")))
+            else:
+                out.append(ch)
+            continue
+        if ch == '"':
+            in_str = True
+            out.append(ch)
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+            out.append(ch)
+        elif ch in "}]":
+            # 和栈顶对不上 = 多出来的右括号（多半是截断后粘上的正文），
+            # 到这里就截住，别把它塞进去。
+            if not stack or stack[-1] != ch:
+                break
+            stack.pop()
+            out.append(ch)
+        else:
+            out.append(ch)
+    body = "".join(out).rstrip()
+    if in_str:
+        body += '"'
+    if body.endswith(":"):
+        body += " null"
+    for closer in reversed(stack):
+        body += closer
+    # `,}` / `,]` 是截断后最常见的非法结构，补完括号再清一次。
+    body = re.sub(r",\s*([}\]])", r"\1", body)
+    return body
+
+
 def _parse_json_loose(raw):
-    """从回复里抠 JSON。**不做语义修补**，抠不出来就返回 None。"""
+    """从回复里抠 JSON。
+
+    先按最紧的边界原样解析；失败再**补一次语法**（见 `_close_json`）——
+    截断的回复里前面那些数值（`act` / `excite` / `dev`）都是好的，扔了可惜。
+    **不做语义修补**：补不出来的字段就是没有，由调用方按缺省走。
+    """
     s = str(raw or "").strip()
     if not s:
         return None
-    a, b = s.find("{"), s.rfind("}")
-    if a >= 0 and b > a:
+    a = s.find("{")
+    if a < 0:
+        return None
+    b = s.rfind("}")
+    if b > a:
         try:
             return json.loads(s[a:b + 1])
         except ValueError:
-            return None
-    return None
+            pass
+    # 截断救援：从第一个 `{` 一路扫到文末，补括号后再试。
+    try:
+        return json.loads(_close_json(s[a:]))
+    except ValueError:
+        return None
 
 
 # ── 攻略模式的第一段（2026-11-03）────────────────────
@@ -2932,24 +3010,29 @@ def _parse_json_loose(raw):
 # 「我把她救回家了」白嫖 +15。有没有铺垫和细节，模型读上下文能看出来。
 _SCORE_PROMPT = """判断下面这句话**在干什么**，并给这句话对你们关系的影响打分。只输出一个 JSON 对象，不要解释。
 
+**字段顺序就是重要性顺序，请按这个顺序写。** 前面的是数值，后面的是文字；
+如果输出被截断，至少数值必须已经写完了。
+
 {
   "intent": "intimate | joke | literal | insult | neutral",
   "delta": 0,
   "turn_type": "chat | action",
-  "arousal": 0,
-  "cross": "none | mild | hard",
-  "allow": "yes | hesitate | no",
-  "beat": false,
   "in_scene": false,
   "act": "none",
+  "spot": "none",
+  "dev": {"mouth": 0, "nipple": 0, "pussy": 0, "anus": 0, "body": 0},
   "excite": 0,
+  "arousal": 0,
   "corrupt": 0,
   "submit": 0,
   "suspicion": 0,
+  "cross": "none | mild | hard",
+  "allow": "yes | hesitate | no",
+  "beat": false,
+  "soothe": false,
   "time": "none",
   "phase": "",
   "plan": "",
-  "soothe": false,
   "reason": "不超过15个字",
   "note": "不超过15个字",
   "segments": [
@@ -2965,8 +3048,6 @@ _SCORE_PROMPT = """判断下面这句话**在干什么**，并给这句话对你
   "lead": "none | hint | act",
   "lead_form": "情感 | 身体 | 言语",
   "lead_reason": "不超过25个字，为什么这一拍会/不会主动",
-  "spot": "mouth | nipple | pussy | anus | body | none",
-  "dev": {"mouth": 0, "nipple": 0, "pussy": 0, "anus": 0, "body": 0},
   "hook": "场景外身体先失控的一句话，没有就空串"
 }
 
@@ -3142,7 +3223,9 @@ suspicion（整数，她的**戒备**这轮变化多少，-20 ~ +20）：
 但也不该每次都拿满。
 
 spot / dev（2026-11-05，**开发度**）：
-spot 是这一轮他碰的**主要部位**，没有身体接触就填 none。
+spot 是这一轮他碰的**主要部位**，取值只有五个 + none：
+mouth（嘴/口交）/ nipple（乳头/胸）/ pussy（小穴）/ anus（肛门）/ body（身体其他部位）。
+没有身体接触就填 none。同时碰了多处时，填**最激烈**的那一处。
 dev 是五个部位这一轮各涨多少，**按动作的激烈程度判，不设上限**：
 - 只是碰到、隔着衣服：+2 ~ +5
 - 脱了、直接摸、含、舔：+8 ~ +15
@@ -3292,13 +3375,20 @@ def _judge_intent_scored(card, said, state="", line_key="", gameday=None,
         "_director_guide": _DIRECTOR_GUIDE,
     }
     try:
-        raw = llm.call_llm([{"role": "user", "content": prompt}], timeout=30)
+        # 输出上限（2026-11-05）：JSON 有二十多个字段，其中 segments 是数组，
+        # 不给 max_tokens 会被服务端默认值截在半句话上（实测截在 literal，
+        # 后面所有字段全丢）。1600 够写完一整个对象还有余量。
+        raw = llm.call_llm([{"role": "user", "content": prompt}], timeout=30,
+                           max_tokens=1600)
     except Exception:                            # noqa: BLE001
         log.warning("攻略模式打分调用失败，按 0 分走")
         return None, "", None
     d = _parse_json_loose(raw)
     if not isinstance(d, dict):
-        log.info("攻略模式没交 JSON，按 0 分走：%r", str(raw or "")[:80])
+        # 打日志时给足上下文：前面是回复开头，后面是结尾——截断的现场在末尾。
+        log.warning("攻略模式没交 JSON，按 0 分走（共 %d 字）：头=%r 尾=%r",
+                    len(str(raw or "")), str(raw or "")[:120],
+                    str(raw or "")[-120:])
         return None, "", None
     intent = str(d.get("intent") or "").strip().lower()
     if intent not in INTENTS:
@@ -3344,6 +3434,12 @@ def _judge_intent_scored(card, said, state="", line_key="", gameday=None,
     # 导演条（2026-11-05）：分段 + 潜台词，第二段演员要拿它。
     # 放在 score 里一起返回，不另开接口——`settle` 不认识这些键，会原样忽略。
     score.update(_director_fields(d))
+    # 诊断行（2026-11-05）：以前只看得到失败，成功的打分一次都不留痕，
+    # 「数值为什么不涨」只能靠猜。这一行把模型实际给的关键字段摊出来，
+    # 排查时 grep `[score]` 就行。
+    log.info("[score] act=%r spot=%r excite=%r dev=%r Δ=%r",
+             d.get("act"), d.get("spot"), d.get("excite"), d.get("dev"),
+             d.get("delta"))
     return intent, note, score
 
 

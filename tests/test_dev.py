@@ -181,6 +181,26 @@ class DevSettleTest(unittest.TestCase):
                          hook="公交上看别人搂抱，她开始夹腿")
         self.assertIn("公交", r["devHook"])
 
+    def test_missing_dev_falls_back_to_spot(self):
+        """模型只给 spot、dev 整个丢掉时，按动作档位补一笔。
+
+        2026-11-05 线上：打分 JSON 被截断，`dev` 在末尾经常丢，玩家明明
+        写了「插小穴」，数值却一动不动。
+        """
+        r = self._settle(in_scene=True, act="thrust", spot="pussy")
+        self.assertGreater(r["dev"]["pussy"], 0)
+
+    def test_explicit_zero_is_respected(self):
+        """模型明确给了 0（她躲开了）就不替它加分——补的是缺失，不是零。"""
+        r = self._settle(in_scene=True, act="thrust", spot="pussy",
+                         dev={"pussy": 0})
+        self.assertEqual(r["dev"]["pussy"], 0)
+
+    def test_fallback_still_capped(self):
+        step = affection.dev_cfg()["step"]
+        r = self._settle(in_scene=True, act="intense", spot="anus")
+        self.assertLessEqual(r["dev"]["anus"], step)
+
 
 class DevInjectionTest(unittest.TestCase):
     def test_injection_lists_each_developed_spot(self):
