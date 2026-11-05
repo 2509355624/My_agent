@@ -103,6 +103,21 @@ class StreamForwardTest(unittest.TestCase):
         r = anon.get("/api/gal/img/7?s=full")
         self.assertEqual(r.status_code, 401)
 
+    def test_guest_can_read_the_gallery(self):
+        """游客（2026-11-04）：带着游客标记能读，但不带任何 qq。"""
+        anon = friend_app.app.test_client()
+        anon.set_cookie(friend_app.GUEST_COOKIE, "1")
+        sess = mock.MagicMock()
+        with patch.object(friend_app, "_new_session", return_value=sess):
+            with patch.object(sess, "get",
+                              return_value=_FakeResp(
+                                  body=b'{"ok": true}',
+                                  ctype="application/json")) as m:
+                r = anon.get("/api/gal/list?qq=2509355624")
+        self.assertEqual(r.status_code, 200)
+        self.assertNotIn("qq", m.call_args.kwargs["params"],
+                         "游客自己带的 qq 不能转出去冒充别人")
+
     def test_persona_cg_is_forwarded(self):
         """角色扮演的 CG 必须从 5175 转出去（2026-11-04）。
 
@@ -240,6 +255,26 @@ class PageRoutingTest(unittest.TestCase):
         html = self._title("/", False)
         self.assertIn('href="/workshop"', html, "工坊入口没接上就点不过去")
         self.assertIn('id="entGallery"', html)
+
+    def test_login_page_offers_guest_gallery(self):
+        """游客入口（2026-11-04）：不登录也能先看画廊。"""
+        html = self._title("/", False)
+        self.assertIn('href="/guest"', html)
+
+    def test_guest_ticket_opens_the_gallery(self):
+        c = friend_app.app.test_client()
+        r = c.get("/guest")
+        self.assertEqual(r.status_code, 302)
+        self.assertIn(friend_app.GUEST_COOKIE + "=1",
+                      r.headers.get("Set-Cookie", ""))
+        html = c.get("/").get_data(as_text=True)
+        self.assertIn("<title>" + self.GALLERY + "</title>", html)
+
+    def test_guest_still_does_not_see_the_preset_page(self):
+        c = friend_app.app.test_client()
+        c.set_cookie(friend_app.GUEST_COOKIE, "1")
+        html = c.get("/preset").get_data(as_text=True)
+        self.assertIn(self.PRESET, html, "预设页仍该落在登录页")
 
 
 class WorkshopPageTest(unittest.TestCase):

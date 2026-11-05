@@ -262,9 +262,11 @@
   <div class="tabs">
     <button data-tab="owner" class="on">站长</button>
     <button data-tab="pub">公开</button>
-    <button data-tab="mine">我的</button>
+    <button data-tab="mine" id="tabMine">我的</button>
   </div>
-  <a class="go" href="/preset"><span class="g1">自定义预设</span><span class="g2">预设</span></a>
+  <a class="go" href="/preset" id="presetLink"><span class="g1">自定义预设</span><span class="g2">预设</span></a>
+  <!-- 游客用「登录」占住预设那个位置：点了回到登录页，登完再进画廊 -->
+  <a class="go" href="/preset" id="guestLogin" style="display:none"><span class="g1">登录</span><span class="g2">登录</span></a>
   <a class="go" href="/workshop"><span class="g1">提示词工坊</span><span class="g2">工坊</span></a>
   <!-- 角色扮演（2026-11-03）：登录后从这里进。未登录时的入口在 friend.html -->
   <a class="go" href="/persona"><span class="g1">角色扮演</span><span class="g2">扮演</span></a>
@@ -372,8 +374,8 @@
   "use strict";
 
   var S = { tab: "owner", sub: "works", page: 1, more: true, busy: false,
-            owner: false, works: [], cur: null, idx: 0, items: [], likes: {},
-            fav: {}, layout: "2", shotEls: [] };
+            owner: false, guest: false, works: [], cur: null, idx: 0,
+            items: [], likes: {}, fav: {}, layout: "2", shotEls: [] };
 
   function $(id) { return document.getElementById(id); }
 
@@ -1566,9 +1568,29 @@
     }, { rootMargin: "600px" }).observe(sentinel);
   }
 
+  // 游客模式（2026-11-04）：只读。收掉「我的」和「自定义预设」，换成「登录」。
+  // 隐藏只是界面层的收窄——写接口在 5174 仍然要 qq，藏不藏按钮都改不了数据。
+  function applyGuest() {
+    S.guest = true;
+    var mine = $("tabMine");
+    if (mine) mine.style.display = "none";
+    var preset = $("presetLink");
+    if (preset) preset.style.display = "none";
+    var login = $("guestLogin");
+    if (login) login.style.display = "";
+    if (S.tab === "mine") { S.tab = "owner"; S.sub = "works"; }
+    document.querySelectorAll(".tabs button").forEach(function (b) {
+      b.classList.toggle("on", b.dataset.tab === S.tab);
+    });
+    renderSubtabs();
+  }
+
   // 深链接：/gallery#w=35 打开某个作品集；#pub / #mine / #favs / #likes 直接切过去
   function fromHash() {
     var h = location.hash || "";
+    if (S.guest && (h === "#mine" || h === "#favs" || h === "#likes")) {
+      h = "#owner";                      // 游客没有「我的」，别把人送进空页
+    }
     if (h === "#mine") { setTab("mine", "works"); return; }
     if (h === "#favs") { setTab("mine", "favs"); return; }
     if (h === "#likes") { setTab("mine", "likes"); return; }
@@ -1597,7 +1619,11 @@
     try { m = localStorage.getItem("gal_layout") || "2"; } catch (e) {}
     setLayout(m);
   })();
-  load(true);
+  // 先问一句「我是谁」再走：游客要收掉两个入口，不能先渲染出「我的」再闪掉。
+  // /me 在本机是同一进程，几十毫秒；失败也照常进画廊（登录页已经拦过一道）。
+  fetch("/me").then(function (r) { return r.json(); }).then(function (m) {
+    if (m && m.guest) applyGuest();
+  }).catch(function () {}).then(function () { load(true); });
   setTimeout(fromHash, 600);
 })();
 </script>

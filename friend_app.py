@@ -32,7 +32,7 @@ import threading
 import time
 
 import requests
-from flask import (Flask, Response, jsonify, make_response, request,
+from flask import (Flask, Response, jsonify, make_response, redirect, request,
                    send_from_directory, stream_with_context)
 
 from app import friend_auth
@@ -43,6 +43,12 @@ log = logging.getLogger("friend_app")
 
 PORT = int(os.getenv("FRIEND_PORT", "5175"))
 BACKEND = os.getenv("FRIEND_BACKEND", "http://127.0.0.1:5174").rstrip("/")
+
+# 游客逛画廊（2026-11-04 用户要）：只读，没有「我的」和「自定义预设」，
+# 但能从这里转去角色扮演。标记放在 5175 自己的 cookie 里，不进 5174 的
+# 登录态——游客没有 QQ 号，本来就不该有一张「登录凭证」。
+GUEST_COOKIE = "fr_guest"
+GUEST_TTL = 7 * 86400
 
 app = Flask(__name__, static_folder=None)
 # 页面里没有任何外部资源，CSP 就按最紧的写：只允许自己和内联样式/脚本。
@@ -206,13 +212,15 @@ def login_verify():
 def logout():
     resp = make_response(jsonify({"ok": True}))
     resp.delete_cookie(friend_auth.COOKIE_NAME, path="/")
+    resp.delete_cookie(GUEST_COOKIE, path="/")
     return resp
 
 
 @app.route("/me")
 def me():
     qq = friend_auth.check_cookie(request.cookies.get(friend_auth.COOKIE_NAME))
-    return jsonify({"ok": True, "qq": qq})
+    return jsonify({"ok": True, "qq": qq,
+                    "guest": bool(not qq and _guest_in())})
 
 
 # ─── 页面 ────────────────────────────────────────────────
@@ -222,6 +230,25 @@ def _logged_in():
         request.cookies.get(friend_auth.COOKIE_NAME)))
 
 
+def _guest_in():
+    """游客标记。只在没登录时算数：真登录之后游客态自然失效。"""
+    return bool(not _logged_in()
+                and request.cookies.get(GUEST_COOKIE) == "1")
+
+
+@app.route("/guest")
+def guest_entry():
+    """游客入口：发一个只读标记，再进画廊。
+
+    只读是服务端强制的（5174 的写接口一律要 qq），不是前端藏按钮就算——
+    藏起来只能防手滑，防不住改 URL。
+    """
+    resp = make_response(redirect("/"))
+    resp.set_cookie(GUEST_COOKIE, "1", max_age=GUEST_TTL, httponly=True,
+                    samesite="Lax", secure=_cookie_secure(), path="/")
+    return resp
+
+
 @app.route("/")
 @app.route("/index.html")
 def page():
@@ -229,9 +256,9 @@ def page():
 
     未登录仍旧回 `friend.html`——它本身就是登录页（`#login` 和 `#app` 两态
     同一个文件），登录成功后由前端 `location.reload()` 回来，服务器这时
-    才看得到 cookie，才会发画廊。
+    才看得到 cookie，才会发画廊。带游客标记的人直接进画廊（只读）。
     """
-    if not _logged_in():
+    if not _logged_in() and not _guest_in():
         return send_from_directory(WEB_DIR, "friend.html")
     return send_from_directory(WEB_DIR, "gallery.html")
 
@@ -250,7 +277,7 @@ def preset_page():
 @app.route("/gallery.html")
 def gallery_page():
     """老地址，保留：QQ 里已经发出去的链接、群友的收藏都还指着它。"""
-    if not _logged_in():
+    if not _logged_in() and not _guest_in():
         return send_from_directory(WEB_DIR, "friend.html")
     return send_from_directory(WEB_DIR, "gallery.html")
 
@@ -366,6 +393,9 @@ def _forward(prefix, sub, allow_guest=False):
 
     if qq:
         params["qq"] = qq
+    else:
+        # 游客请求不能自带 qq：否则改个参数就能看别人的「我的」和私密条目
+        params.pop("qq", None)
 
     # 下载原图时浏览器和下载器会带 Range（断点续传、多线程分段）。不转发出去
     # 就退化成每次都整包重传，一张 8MB 的图白下好几遍。
@@ -399,12 +429,16 @@ def _forward(prefix, sub, allow_guest=False):
             form = request.form.to_dict()
             if qq:
                 form["qq"] = qq
+            else:
+                form.pop("qq", None)
             r = sess.post(url, params=params, data=form, files=files,
                           headers=headers, timeout=300)
         else:
             body = request.get_json(silent=True) or {}
             if qq:
                 body["qq"] = qq
+            else:
+                body.pop("qq", None)
             r = sess.post(url, params=params, json=body,
                           headers=headers, timeout=60)
     except requests.RequestException as e:
@@ -471,7 +505,9 @@ def proxy(sub):
 
 @app.route("/api/gal/<path:sub>", methods=["GET", "POST", "DELETE"])
 def proxy_gal(sub):
-    return _forward("/api/gal", sub)
+    # 游客能看画廊（只读）：必须先在登录页点 /guest 拿到标记，凭空打接口仍 401。
+    # 下游 5174 的写接口一律要 qq，所以游客这一支只能读。
+    return _forward("/api/gal", sub, allow_guest=_guest_in())
 
 
 # ─── 角色扮演（2026-11-03）──────────────────────────────
