@@ -1,17 +1,18 @@
-"""游客模式的限额与隔离（2026-11-03；2026-11-05 攻略化）。
+"""游客模式的限额与隔离（2026-11-03；2026-11-05 改自由模式）。
 
 用户定的规则：
   · 游客 **30 轮**（按 AI 回复次数算），到顶引导登录
   · 身份是服务端签名的 UUID
   · 游客不能出图、不能换角色、不能删档
-  · 2026-11-05 起**游客就是攻略模式**：直接领一条 persona 线
-    （`guest_<uid>__<卡>`），打分/好感/归档和登录用户同一套引擎；
-    差别只剩固定卡 + 轮数上限 + 不能出图/删档
+  · 2026-11-05 起**游客默认自由模式**：直接领一条 persona 线
+    （`guest_<uid>__<卡>`），不跑好感打分/档位，和 QQ 自由模式同一套引擎；
+    固定演学妹（`GUEST_CARD_ID = "junior"`），不提供切角色
   · 游客线超过 24 小时没动，在下次聊天入口顺手整线清掉
 """
 import os
 import shutil
 import tempfile
+import threading
 import unittest
 import uuid as uuid_mod
 from unittest import mock
@@ -59,12 +60,24 @@ class GuestBase(unittest.TestCase):
         app.register_blueprint(persona_api.bp)
         self.c = app.test_client()
 
+        # 注册在 `tmp.cleanup` 之后 → LIFO 先跑：等小记压缩线程落完盘再删目录。
+        self.addCleanup(self._join_note_threads)
+
         persona.save_cards([{
             "id": persona_api.GUEST_CARD_ID, "name": "纱雾",
             "description": "体验角色", "personality": "",
             "systemPrompt": "你是纱雾。", "appearancePrompt": "1girl",
         }])
         agents.clear_cache()
+
+    def _join_note_threads(self):
+        """小记压缩是 daemon 线程，可能还在往这个临时目录里写状态文件。
+
+        不等它落完，`TemporaryDirectory.cleanup` 会报「目录不是空的」（Windows）。
+        """
+        for t in threading.enumerate():
+            if t.name == "persona-note" and t.is_alive():
+                t.join(timeout=2)
 
     def get(self, path):
         return self.c.get(path).get_json()
@@ -122,8 +135,8 @@ class GuestLimitTest(GuestBase):
         self.assertTrue(guest.check_id(gid))
 
 
-class GuestRaidTest(GuestBase):
-    """游客攻略化（2026-11-05）：体验版给的就是攻略模式本身。"""
+class GuestFreeModeTest(GuestBase):
+    """游客默认自由模式（2026-11-05 用户拍板）：不跑攻略那套。"""
 
     def _mock_llm(self):
         """打分段直接给分，正文段回一句带三行的话。"""
@@ -140,22 +153,22 @@ class GuestRaidTest(GuestBase):
         llm.start()
         self.addCleanup(llm.stop)
 
-    def test_session_carries_raid_affection(self):
-        """游客一打开就有攻略面板数据——体验版要展示的就是这套玩法。"""
+    def test_session_defaults_to_free_mode(self):
+        """游客一打开就是自由模式——体验版不展示攻略面板。"""
         d = self.get("/api/persona/session")
         self.assertEqual(d["role"], "guest")
         aff = d.get("affection") or {}
-        self.assertEqual(aff.get("mode"), "raid")
+        self.assertEqual(aff.get("mode"), "free")
 
     def test_panel_allowed_for_guest(self):
         d = self.get("/api/persona/affection/panel")
         self.assertTrue(d["ok"], d)
 
-    def test_chat_returns_affection_and_counts_down(self):
+    def test_chat_has_no_raid_settlement(self):
         self._mock_llm()
         d1 = self.post("/api/persona/chat", text="在吗")
         self.assertTrue(d1["ok"], d1)
-        self.assertIn("affection", d1)                 # 攻略结算跟着回包走
+        self.assertNotIn("affection", d1)              # 自由模式不结算好感
         self.assertEqual(d1["remaining"], guest.GUEST_TURNS - 1)
         d2 = self.get("/api/persona/session")
         self.assertEqual(d2["remaining"], guest.GUEST_TURNS - 1)
@@ -206,8 +219,13 @@ class GuestPermissionTest(GuestBase):
         self.assertIn("登录", d["error"])
 
     def test_guest_cannot_switch_card(self):
+        """游客固定学妹，不提供换人（2026-11-05 用户拍板）。"""
         d = self.post("/api/persona/switch", name="雷姆")
         self.assertFalse(d["ok"])
+
+    def test_guest_session_is_junior(self):
+        d = self.get("/api/persona/session")
+        self.assertEqual((d.get("card") or {}).get("id"), "junior")
 
     def test_guest_cannot_clear(self):
         d = self.post("/api/persona/clear")
