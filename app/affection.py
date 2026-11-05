@@ -243,6 +243,18 @@ DEFAULT_CONFIG = {
         {"key": "l5", "name": "做过了",   "gate": 50, "arousal_gate": 77, "guard": 20, "prompt": ""},
         {"key": "l6", "name": "要不够",   "gate": 65, "arousal_gate": 88, "guard": 14, "prompt": ""},
     ]},
+    # 压迫模式（2026-11-05，用户拍板）：好感低 + 堕落高 + 气氛/身体在动。
+    # 这三件事同时成立，才是「她不是愿意的，可她拦不住自己」。
+    # 每一档堕落降一次门槛——第一次要堆满气氛，第二次只要一半。
+    "forced": {
+        "_note": "压迫模式的门槛。value 好感上限 / corrupt 堕落下限 / arousal 冲动下限；"
+                 "discount 是每跨一个堕落档位，冲动门槛降多少。",
+        "value_max": 20,
+        "corrupt_min": 45,
+        "arousal_min": 30,
+        "discount": 12,
+        "corrupt_steps": [25, 50, 70, 90],
+    },
 }
 
 
@@ -1180,6 +1192,9 @@ def panel(line_key):
         "canCross": _can_cross(value, lv, ar, cfg),
         "needValue": dv,
         "needArousal": da,
+        # 压迫模式（2026-11-05）：玩家要看得见「再推几次就降门槛了」，
+        # 否则递减对他来说是不存在的机制。`gap` 为 0 表示现在就能进。
+        "forced": forced_progress(co, ar, cfg),
         "crossN": int(rec.get("cross_n") or 0),
         "ending": str(rec.get("ending") or ""),
         "mode": str(rec.get("mode") or MODE_FREE),
@@ -2129,6 +2144,10 @@ def _can_cross(value, level, arousal, cfg=None):
 
     这两个都成立只是「她能接得住」，**不是「她一定答应」**：她还是可以
     装没听懂、可以绕、可以嘴上说不要身体不躲。判定权始终在模型手里。
+
+    **压迫模式（2026-11-05）**：`_ensure` 之后 `settle` 会把 `forced` 标进
+    `res`，注入层据此换一套说法。这里不掺和——好感门槛照旧是门槛，
+    压迫戏也不该白给。
     """
     lc = level_cfg(level, cfg)
     gate = int(lc.get("gate") or 0)
@@ -2139,6 +2158,104 @@ def _can_cross(value, level, arousal, cfg=None):
         return int(value or 0) >= guard - int(arousal or 0) // 5
     return (int(value or 0) >= gate
             and int(arousal or 0) >= int(agate))
+
+
+# ── 压迫模式（2026-11-05）──────────────────────────────
+#
+# 用户原话：「好感度低 + 堕落值 + 高潮，就可以写这种有点屈辱的、有点强迫的
+# 感觉，因为都是不同的玩法」。
+#
+# 为什么需要它单独一层，而不是让模型自己看着办：原来的注入是**双轴门槛**
+# 的教学式写法——「感情够 + 气氛够才接得住」，「接不住」时注入会说「她挡得
+# 住，越界她躲得开，也说得出口」。这句话和「她堕落 60」同时出现时，模型
+# 手里是两条互相打架的指令，最后写出来的通常是半推半就的温吞水。
+#
+# 所以这里给一道**显式覆盖**：三件事同时成立时，机制层面承认这一场是压迫戏，
+# 注入换成那一套说法，并把笔法层切到 `forced` 轴。
+#
+# 三个条件缺一不可：
+#   · 好感低  —— 「她愿意」这个托词不成立，她要的不是你
+#   · 堕落高  —— 她已经被弄坏了一截，不会真的翻脸走人
+#   · 气氛/身体在动 —— 这一拍真的会发生（光有前两个只是「她怕你」）
+#
+# 缺一样都不算：好感低 + 堕落也低 → 她挡得住，就是普通的越界被拒；
+# 堕落高但气氛没起来 → 她还没到那一步，硬写就是无来由的崩塌。
+
+def forced_cfg(cfg=None):
+    """压迫模式的门槛配置。配置坏了就用兜底值，机制不能因配置挂掉。"""
+    cfg = cfg or load_config()
+    raw = cfg.get("forced")
+    if not isinstance(raw, dict):
+        raw = DEFAULT_CONFIG.get("forced") or {}
+
+    def _i(k, dv):
+        try:
+            return int(raw.get(k, dv))
+        except (TypeError, ValueError):
+            return dv
+
+    steps = raw.get("corrupt_steps")
+    if not isinstance(steps, list) or not steps:
+        steps = (DEFAULT_CONFIG.get("forced") or {}).get("corrupt_steps") or []
+    try:
+        steps = sorted(int(x) for x in steps)
+    except (TypeError, ValueError):
+        steps = [25, 50, 70, 90]
+    return {"value_max": _i("value_max", 20),
+            "corrupt_min": _i("corrupt_min", 45),
+            "arousal_min": _i("arousal_min", 30),
+            "discount": _i("discount", 0),
+            "corrupt_steps": steps}
+
+
+def corrupt_stage(corrupt, cfg=None):
+    """堕落跨到第几档（0~4）。跨一档，压迫模式的门槛降一次。"""
+    co = int(corrupt or 0)
+    n = 0
+    for step in forced_cfg(cfg)["corrupt_steps"]:
+        if co >= int(step):
+            n += 1
+    return n
+
+
+def forced_arousal_min(corrupt, cfg=None):
+    """这一档堕落对应的冲动门槛。第一次要堆满气氛，第二次只要一半。"""
+    fc = forced_cfg(cfg)
+    floor = max(0, fc["arousal_min"] - corrupt_stage(corrupt, cfg) * fc["discount"])
+    return floor
+
+
+def is_forced(value, corrupt, arousal=0, excite=0, cfg=None):
+    """这一拍是不是压迫戏。**只在攻略模式里判**（调用方保证）。"""
+    fc = forced_cfg(cfg)
+    return (int(value or 0) < fc["value_max"]
+            and int(corrupt or 0) >= fc["corrupt_min"]
+            and (int(arousal or 0) >= forced_arousal_min(corrupt, cfg)
+                 or int(excite or 0) > 0))
+
+
+def forced_progress(corrupt, arousal=0, cfg=None):
+    """压迫模式给面板看的进度：她已经被推到哪一档、还差多少冲动。
+
+    返回 `{on, stage, need, gap}`——`gap` 为 0 表示现在就能进这一场。
+    """
+    fc = forced_cfg(cfg)
+    stage = corrupt_stage(corrupt, cfg)
+    need = forced_arousal_min(corrupt, cfg)
+    gap = max(0, need - int(arousal or 0))
+    return {"on": int(corrupt or 0) >= fc["corrupt_min"],
+            "stage": stage, "need": need, "gap": gap}
+
+
+def forced_gap(corrupt, arousal=0, cfg=None):
+    """压迫模式还差多少冲动。已经够了返回 0。
+
+    单独给一个函数是因为注入里那句要**说具体**（「还差 8 点」），
+    但只用得上一个数，不用把整个 dict 搬过去。
+    """
+    return forced_progress(corrupt, arousal, cfg)["gap"]
+
+
 
 
 def _cross_gap(value, level, arousal, cfg=None):
@@ -2229,6 +2346,11 @@ def injection_block(res, cfg=None):
     ar = int(res.get("arousal") or 0)
     ex = int(res.get("excite") or 0)
     can = _can_cross(value, lv, ar, cfg)
+    co = int(res.get("corrupt") or 0)
+    # 压迫模式（2026-11-05）：三件事同时成立才算——好感低、堕落高、气氛在动。
+    # 判定放在注入里做而不是 settle 里，是因为它**随这一轮的气氛变**：
+    # 同一段堕落，冲动掉下来这一场就不是压迫戏了，下一轮拱起来又是。
+    forced = is_forced(value, co, ar, ex, cfg)
 
     # 档位文案按**生效档位**取（res["tier"]），不能用 tier_for(value)——
     # 降档滞回期间两者不一致，会提前把新档位的语气漏给模型。
@@ -2240,8 +2362,15 @@ def injection_block(res, cfg=None):
     # 自己那一版：做了，但冷着做、麻木地做。
     t = next((x for x in (cfg.get("tiers") or [])
               if x.get("key") == res.get("tier")), None) or tier_for(value, cfg) or {}
+    # 压迫戏的档位文案另取一套（2026-11-05）：`prompt_intimate` 是写给
+    # 「她其实愿意」的那条线的（「她什么都要，也什么都敢要」），这一场用那句
+    # 就没有屈辱可言了。有 `prompt_forced` 就用它，没有退回原文案——
+    # 老配置不改也能跑。
     intimate = str(t.get("prompt_intimate") or "").strip()
-    if ex > 0 and intimate:
+    t_forced = str(t.get("prompt_forced") or "").strip()
+    if ex > 0 and forced and t_forced:
+        tv = {"name": str(t.get("name") or ""), "prompt": t_forced}
+    elif ex > 0 and intimate:
         tv = {"name": str(t.get("name") or ""), "prompt": intimate}
     else:
         tv = _tier_view(t, lv)
@@ -2269,6 +2398,16 @@ def injection_block(res, cfg=None):
         else:
             lines += ["", "（她心里是有波动的，但那不是心动——是气，是失望，是还没算完的账。"
                           "别把这点波动演成愿意。）"]
+    elif forced:
+        # 压迫模式（2026-11-05）：**顶掉**「她挡得住」和「她接得住」两句。
+        # 这两句和「她已经堕落成这样」同时出现时，模型只能写半推半就，
+        # 那正好是最没劲的写法。这里只陈述事实，不催它写，写多狠仍由它判。
+        gap = forced_gap(co, ar, cfg)
+        tail = ("门槛还差 %d 点冲动" % gap) if gap else "这一场现在就能开"
+        lines += ["", "（这一拍不是她愿意的。她心里清楚你不是她想要的那种人——"
+                      "可她已经被弄成现在这样了，拦不住的是她自己的反应。%s。"
+                      "写的时候把这两件事分开：嘴上、眼里在拒，身上在应，"
+                      "中间那道裂缝才是这一场的看点。）" % tail]
     elif can:
         # 已经接得住了（当前这一级门槛过了）。这里**不再报「还差多少」**——
         # 那句数字现在算的是「升到下一级还差什么」（见 `_need_to_cross`），
@@ -2295,12 +2434,32 @@ def injection_block(res, cfg=None):
                           "是怕，或者恼。）"]
         elif str(res.get("allow") or "") == "no":
             lines += ["", "（她拒绝了。这一轮她不会松口——除非你先退回到安全的位置。）"]
+        elif forced:
+            # 压迫场里「没明确答应也没走开」不是暧昧，是**拦不住**。
+            # 同一句原文在别的场合最好看，在这里会把屈辱改写成半推半就。
+            lines += ["", "（她没答应，也没能走开。这一刻她脸上的东西不是欲拒还迎，"
+                          "是「怎么会这样」——写她的表情和呼吸，别写她配合。）"]
         else:
             lines += ["", "（她没有明确答应，也没有走开。这个状态最难看也最好看。）"]
 
     # 一条硬约束：不许每轮都给干脆答案
     lines += ["", "（怎么反应由你演，但**别每轮都给干脆的答案**：她可以装没听懂、可以反问、"
                   "可以嘴上说不要但没躲、可以答应完自己后悔。真实的犹豫比干脆的拒绝好看。）"]
+
+    # ── 压迫戏的主旋律（2026-11-05）────────────────────────
+    # 上面那句「别给干脆答案」在压迫场里方向是反的：那一场**必须要有一个
+    # 干脆的拒绝**——她得真的不愿意，屈辱才立得住。所以这里给它一道覆盖，
+    # 并把「她不知道自己要什么」改写成「她知道自己不要什么」。
+    if forced:
+        lines += ["", "（**这一场的主旋律是屈辱，不是甜。** 和上面那句相反："
+                      "这一场**必须有一个明确的、具体的拒绝**——她别过脸、她说「不要」、"
+                      "她推着你的胸口说「松开」，而且要写实，不要写成「她挣扎了一下」。"
+                      "她清楚自己在被怎么对待，别让她中途变成心甘情愿。"
+                      "快感是加在她身上的，不是她要的：她会为自己的反应感到羞耻，"
+                      "这个羞耻比快感更该被写出来。）"]
+        lines += ["", "（事后必须留痕：她躲开、不说话、去洗手、第二天不敢看你，"
+                      "或者把被弄乱的衣服一件件穿回去、穿得很慢。这一场不会因为结束就不存在。"
+                      "**别写事后温存**——那是另一条线的写法。）"]
 
     # ── 反客为主（2026-11-04 晚，用户要的；深夜调阈值）────────
     # 冲动和**高潮值**都会把她往「自己先动」的方向推：冲动是「她此刻想要」，
@@ -2309,7 +2468,11 @@ def injection_block(res, cfg=None):
     #
     # 深夜调整：旧阈值（冲动 75 / 高潮 60 就「可能会」）太松——她第一次做
     # 的时候不该就自己坐上来。现在分两档，而且**必须先过了双轴门槛**。
-    if can and value >= 0:
+    #
+    # 2026-11-05 压迫场里**整段跳过**：那一场她不是「想要」，是自己先动
+    # 就等于把屈辱线写成了甜线。她能做的极限是身体先贴上去再自己停下、
+    # 骂自己一句——这个张力放在 `forced` 那段里写，不走「反客为主」。
+    if can and value >= 0 and not forced:
         lead = ""
         if ar >= 88 or ex >= 85:
             lead = "will"
@@ -2351,7 +2514,8 @@ def injection_block(res, cfg=None):
     # 这两段注入**不写数字**，只写「她现在是个什么状态」——数字是给玩家看的，
     # 模型该看到的是人。堕落那段尤其重要：它是**越界之后唯一的叙事回报**，
     # 拿掉「进局子」之后，戏的张力全落在这里。
-    co = int(res.get("corrupt") or 0)
+    #
+    # `co` 开头那段几行前已经取过一次（压迫模式判定要用），这里不再重取。
     su = int(res.get("submit") or 0)
     co_d = int(res.get("corruptDelta") or 0)
     su_d = int(res.get("submitDelta") or 0)
@@ -2412,6 +2576,18 @@ def injection_block(res, cfg=None):
     applied = int(res.get("applied") or 0)
     if applied and reason:
         lines += ["", "（刚才那件事：%s。）" % reason]
+
+    # 压迫模式的进度（2026-11-05）：**给玩家看的那句**不走这里，这里只
+    # 告诉演员「这一条路还没关」。跨一档堕落，门槛降一次——她越是被弄成
+    # 这样，下一次越容易，这是这套玩法能反复玩下去的核心。
+    if co > 0:
+        fp = forced_progress(co, ar, cfg)
+        if fp["on"]:
+            stage_word = ("第一次" if fp["stage"] == 0
+                          else "已经走过 %d 次" % fp["stage"])
+            lines += ["", "（她能被你推到这一步，%s。堕落每往上走一档，"
+                          "下一回需要的气氛就少一截——这个门槛不该被说出来，"
+                          "但你的演法该让它自己显出来。）" % stage_word]
     return "\n".join(lines)
 
 
@@ -2477,6 +2653,14 @@ def tail_line(res):
     co = int(res.get("corrupt") or 0)
     if co > 0:
         rows.append("堕落 %d · %s" % (co, res.get("corruptName") or ""))
+        # 压迫模式的进度（2026-11-05）：玩家要看得见「再推几次就降门槛了」，
+        # 否则那套递减对他是隐藏机制，等于没用。
+        fp = forced_progress(co, res.get("arousal") or 0)
+        if fp["on"]:
+            if fp["gap"] > 0:
+                rows.append("压迫 差 %d 冲动 · 已降 %d 档" % (fp["gap"], fp["stage"]))
+            else:
+                rows.append("压迫 现在就能开 · 已降 %d 档" % fp["stage"])
     su = int(res.get("submit") or 0)
     if su > 0:
         rows.append("屈服 %d · %s" % (su, res.get("submitName") or ""))

@@ -382,6 +382,25 @@ _CORRUPT_LAYER = (
     "她越配合，越该有一个瞬间让你看见她其实清楚自己在做什么。\n"
 )
 
+# 压迫场（2026-11-05）。和 `_CORRUPT_LAYER` 分工：
+#   堕落层管「她的反应里有她不想要的东西」——那条线默认她是被说动的；
+#   这一层管「她从头到尾没同意」，快感是加在她身上的，不是她要的。
+# 所以这里不再写「她会主动一点」——那句话在这一场里会直接把屈辱写没。
+_FORCED_LAYER = (
+    "### 这一场是在压迫下发生的\n"
+    "\n"
+    "**她不是自愿的。** 这个事实不许被任何一句甜腻的描写盖过去：\n"
+    "\n"
+    "- **嘴和身体分开写**：她说的和身上发生的对不上，这道裂缝就是这一场的看点。\n"
+    "- **给一个具体的不愿意**：别过脸、咬着下唇没出声、手推在你胸口但没真的用力——"
+    "挑一个写实，别写「她挣扎了一下」。\n"
+    "- **不许她求欢**。她可以求你别继续、可以求你快一点结束——那是她的处境，不是她的欲望。\n"
+    "- **她的身体反应要让她自己难堪**：湿了、软了、叫出来了，她的第一反应是羞耻，"
+    "不是享受。写她想去遮、想咬住、想把声音吞回去。\n"
+    "- **事后必须留痕**：躲开、不说话、去洗手、把衣服一件件穿回去，"
+    "或者第二天不敢看你。**别写事后温存**——那是另一条线的写法。\n"
+)
+
 
 def intimate_guide(aff_res=None):
     """按当前状态拼出「这一拍该怎么写」那段。
@@ -409,6 +428,11 @@ def intimate_guide(aff_res=None):
             out.append(layer)
     if int(aff_res.get("corrupt") or 0) >= 50:
         out.append(_CORRUPT_LAYER)
+    # 压迫场（2026-11-05）：`injection_block` 判出这一场是压迫戏时，会在
+    # res 里标 `forced`。这里只加**怎么写**，不加「该不该做」——那些在
+    # `injection_block` 和 `writing_skills` 里已经说过了，重复三遍模型会麻木。
+    if aff_res.get("forced"):
+        out.append(_FORCED_LAYER)
     # 笔法层（2026-11-05，第一步）：从这里开始，除了「这一拍走到哪一步」，
     # 再按数值轴挑一小段 `skills/writing/` 的规范原文。上面几块管**节奏**，
     # 这块管**用词和肉感**——两者不重叠，所以叠在一起拼。
@@ -3586,6 +3610,15 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     #
     # 只在判成亲密时拼：`joke` / `literal` / `insult` 那些场合用不上「到了怎么写」，
     # 拼进去只会分走注意力。
+    #
+    # 压迫模式（2026-11-05）：在 `aff_res` 上补一个 `forced` 标记。
+    # **必须在这里补，不能指望 `injection_block` 写回**——它是纯函数，
+    # 拿结果拼完就丢；这里不补的话，下面 `intimate_guide` 里的压迫层
+    # 和 `writing_skills` 的 forced 轴永远进不去，整套玩法等于没接。
+    if isinstance(aff_res, dict) and aff_res.get("active"):
+        aff_res["forced"] = affection.is_forced(
+            aff_res.get("value"), aff_res.get("corrupt"),
+            aff_res.get("arousal"), aff_res.get("excite"))
     if intimate:
         extra = intimate_guide(aff_res)
         if extra:
