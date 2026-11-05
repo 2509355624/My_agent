@@ -57,7 +57,7 @@ import re
 import threading
 import time
 
-from app import affection, llm, trigger, writing_skills
+from app import affection, llm, persona_rag, trigger, writing_skills
 from app.config import BASE_DIR, QQ_AGENT_ID, QQ_BOT_NAME
 
 log = logging.getLogger("persona")
@@ -1619,6 +1619,14 @@ def _erase(session_key):
         except OSError:
             log.exception("清空归档失败 %s", ap)
 
+    # 2.5) 长期记忆向量库（2026-11-05）：只删**这一条线**的 collection，
+    #      别人的用户/角色不受影响。后台队列执行；这期间该线检索被 blocked，
+    #      不会把刚清掉的旧回忆又翻出来。
+    try:
+        persona_rag.drop_line(line)
+    except Exception:                                    # noqa: BLE001
+        log.exception("清空回忆库失败 %s", line)
+
     # 3) 好感：交给 affection 整份换新，它自己读盘写盘。
     #    必须在下面读 `_entry` **之前**做 —— 反过来的话，这层拿的是旧记录，
     #    最后整份 `_save_state` 会把刚换新的好感又盖回旧值。
@@ -2654,6 +2662,28 @@ def render_user_block(segments, addressed=True, fallback=""):
         lines.append("【他这一轮的原话，照着它演】")
         lines.append(str(fallback).strip())
     return "\n".join(lines)
+
+
+def _visible_user_text(segments, fallback=""):
+    """给 RAG 用的「用户可见文本」：只留说 / 做，不含想。
+
+    没有分段就退回原文。只有「想」时返回空——宁可这一条只索引她的回复，
+    也不要把玩家没说出口的话写进长期记忆（那是演员本来就不该知道的东西）。
+    """
+    if not segments:
+        return str(fallback or "").strip()
+    parts = []
+    for seg in segments:
+        if not isinstance(seg, dict):
+            continue
+        if str(seg.get("who") or "用户") == "助手":
+            continue
+        if str(seg.get("type") or "说") == "想":
+            continue
+        text = str(seg.get("text") or "").strip()
+        if text:
+            parts.append(text)
+    return "\n".join(parts)
 
 
 def _render_hist(hist):
@@ -3736,6 +3766,13 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     if card is None:
         return Turn("", "")
 
+    # 长期记忆 RAG（2026-11-05）：小模型 CPU 冷启动十几秒，只在后台拉起来。
+    # 这一轮如果还没 ready，就照常聊，不带回忆；下一轮开始生效。
+    # 游客只玩 30 轮，不存也不查（见 `persona_rag.enabled_for`）——不白占资源。
+    rag_on = persona_rag.enabled_for(key)
+    if rag_on:
+        persona_rag.warm()
+
     ent = _entry(key) or {}
     note = str(ent.get("note") or "")
     prev_state = str(ent.get("state") or "")
@@ -3774,6 +3811,17 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     dblock = _director_block(extras)
     if dblock:
         head = head + "\n\n" + dblock
+    # 长期记忆（2026-11-05）：按玩家这一轮**看得见的话**去翻旧账。
+    # 用户没说出口的「想」不参与检索——拿心里话去翻回忆，容易让她提前知道。
+    visible = _visible_user_text(extras.get("segments") if isinstance(extras, dict)
+                                 else [], text)
+    if rag_on:
+        try:
+            rblock = persona_rag.build_block(key, visible)
+            if rblock:
+                head = head + "\n\n" + rblock
+        except Exception:                                # noqa: BLE001
+            log.exception("回忆注入失败 %s", key)
     # 攻略模式结算（2026-11-03）：分数落账 → 按档位往主提示词里注入关系块。
     # 没打出分（score 为 None）也照走 settle——按 +0 记账，档位注入照常。
     aff_res = None
@@ -3881,6 +3929,15 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     _save_mood(key, mood, intensity, state, prev_state)
 
     _bump_turn(key)
+    # 长期记忆（2026-11-05）：先攒进缓冲，每 N 轮才在后台提炼成事实入库。
+    # 只写用户可见的话 + 她的回复；「想」不进去（见 `_visible_user_text`）。
+    # 自定义模型配置要在这里取一份：后台线程没有请求线程的线程本地覆盖。
+    if rag_on:
+        try:
+            persona_rag.remember(key, _visible_user_text(segments, said), reply,
+                                 custom=llm.get_custom_override())
+        except Exception:                                # noqa: BLE001
+            log.exception("回忆入库失败 %s", key)
     return Turn(reply, scene, mood, intensity, state, aff_res)
 
 
@@ -4092,6 +4149,12 @@ def rollback_last_turn(session_key, sender_uin=""):
     st_turns = int(ent.get("turns") or 0)
     ent["turns"] = max(0, st_turns - 1)      # `_bump_turn` 的逆操作
     _save_state(state_map)
+
+    # 回退也把这一轮从回忆缓冲/最近一批入库里撤掉（2026-11-05）。
+    try:
+        persona_rag.forget_last(key)
+    except Exception:                                    # noqa: BLE001
+        log.exception("回退回忆失败 %s", key)
 
     # ── 好感（快照还原；自由模式没结算过 → None，不算失败）────
     aff = affection.rollback_last(key)

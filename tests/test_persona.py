@@ -26,6 +26,7 @@ from unittest import mock
 
 import app.agents as agents
 import app.persona as persona
+import app.persona_rag as persona_rag
 
 
 def _card(name="测试角色", **kw):
@@ -293,6 +294,42 @@ class TurnTest(PersonaBase):
         head = m.call_args_list[1][0][0][0]["content"]
         self.assertIn("对方心里有话没说出口", head)
         self.assertNotIn("对方真正在：想被留住", head)
+
+    def test_rag_remembers_only_visible_text(self):
+        """长期记忆入库：只收「说/做」，心里话不进去；条目挂在当前线。"""
+        score = ('{"intent": "neutral", "delta": 2, "turn_type": "chat",'
+                 ' "segments": ['
+                 '   {"who": "用户", "type": "说", "text": "我走了。"},'
+                 '   {"who": "用户", "type": "想", "text": "其实想留下"}],'
+                 ' "addressed": true}')
+        with mock.patch.object(persona.llm, "call_llm",
+                               side_effect=[score, "她没松手。"]), \
+             mock.patch.object(persona_rag, "enabled_for", return_value=True), \
+             mock.patch.object(persona_rag, "warm"), \
+             mock.patch.object(persona_rag, "build_block", return_value=""), \
+             mock.patch.object(persona_rag, "remember") as remember:
+            persona.run_turn(self.KEY, "我走了。", "private")
+        remember.assert_called_once()
+        line, user_text, reply = remember.call_args[0]
+        self.assertEqual(line, self._hist_key())
+        self.assertIn("我走了", user_text)
+        self.assertNotIn("其实想留下", user_text)
+        self.assertEqual(reply, "她没松手。")
+        self.assertIsNone(remember.call_args.kwargs.get("custom"))
+
+    def test_rag_block_reaches_the_actor(self):
+        """检索到的旧回忆要拼进演员系统头。"""
+        with mock.patch.object(persona.llm, "call_llm",
+                               return_value="嗯。") as m, \
+             mock.patch.object(persona_rag, "enabled_for", return_value=True), \
+             mock.patch.object(persona_rag, "warm"), \
+             mock.patch.object(persona_rag, "build_block",
+                               return_value="【相关回忆】\n- 她怕打雷。") as bb:
+            persona.run_turn(self.KEY, "今天打雷了", "private")
+        head = m.call_args[0][0][0]["content"]
+        self.assertIn("她怕打雷", head)
+        bb.assert_called_once()
+        self.assertEqual(bb.call_args[0][0], self._hist_key())
 
     def test_state_and_lead_reach_the_actor(self):
         """编剧的「状态底色 + 主动判定」要进演员系统头，不是只落库。"""

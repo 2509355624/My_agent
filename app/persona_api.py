@@ -21,9 +21,9 @@ import os
 import threading
 import time
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_file
 
-from app import friend_auth, llm, persona, usage
+from app import chat_bg, friend_auth, llm, persona, usage
 
 log = logging.getLogger("persona_api")
 
@@ -1186,3 +1186,94 @@ def _rel_task(task):
     """
     import os
     return os.path.basename(str(task or "").rstrip("\\/"))
+
+
+# ─── 聊天背景（2026-11-05）─────────────────────────────────
+#
+# 三种来源的优先级在 `chat_bg.resolve()` 里：账号 > 这张卡 > 全局默认 >
+# 内置图。游客不参与账号层——体验版没有稳定身份，存了也会随浏览器丢；
+# 所以游客只看卡/全局默认，上传接口直接 403。
+
+def _bg_card_id(role, who):
+    """当前这条会话演的是哪张卡；没有就返回空。"""
+    if role == "guest":
+        ckey = _guest_line(who)
+        ent = persona._entry(ckey) if ckey else {}
+    else:
+        key = _active_key(_key(who))
+        ent = persona._entry(key) or {}
+    if not isinstance(ent, dict):
+        return GUEST_CARD_ID if role == "guest" else ""
+    cid = str(ent.get("card") or "").strip()
+    return cid or (GUEST_CARD_ID if role == "guest" else "")
+
+
+@bp.route("/api/persona/background")
+def get_background():
+    """当前账号应该用哪张背景：账号自己的 > 卡的默认 > 全局默认。"""
+    role, who, token = _who()
+    guest = role == "guest"
+    bg = chat_bg.resolve("" if guest else who, _bg_card_id(role, who),
+                         allow_user=not guest)
+    resp = jsonify({
+        "ok": True,
+        "role": role,
+        "editable": not guest,
+        **bg,
+    })
+    if guest:
+        _attach_guest_cookie(resp, token)
+    return resp
+
+
+@bp.route("/api/persona/background", methods=["POST"])
+def upload_background():
+    """账号换一张自己的背景。游客 403。"""
+    role, who, token = _who()
+    if role == "guest":
+        resp = jsonify({"ok": False, "limit": True,
+                        "error": "体验版不能换背景，登录后可以。"})
+        resp.status_code = 403
+        _attach_guest_cookie(resp, token)
+        return resp
+    try:
+        bg = chat_bg.save(request.files.get("file"), "user", who)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    return jsonify({"ok": True, "source": "user", **bg})
+
+
+@bp.route("/api/persona/background/reset", methods=["POST"])
+def reset_background():
+    """删掉账号自己的背景，回落到这张卡/全局默认。"""
+    role, who, token = _who()
+    if role == "guest":
+        resp = jsonify({"ok": False, "limit": True,
+                        "error": "体验版不能换背景，登录后可以。"})
+        resp.status_code = 403
+        _attach_guest_cookie(resp, token)
+        return resp
+    chat_bg.delete("user", who)
+    bg = chat_bg.resolve(who, _bg_card_id(role, who), allow_user=True)
+    return jsonify({"ok": True, **bg})
+
+
+@bp.route("/api/persona/background/file")
+def background_file():
+    """背景图本身。账号层只认当前身份，不能拿别人的 hash 来读。"""
+    kind = str(request.args.get("kind") or "default").strip().lower()
+    ident = str(request.args.get("id") or "").strip()
+    thumb = str(request.args.get("thumb") or "") in ("1", "true", "yes")
+    if kind == "user":
+        role, who, token = _who()
+        if role == "guest":
+            resp = jsonify({"ok": False, "error": "没有背景"})
+            resp.status_code = 403
+            _attach_guest_cookie(resp, token)
+            return resp
+        ident = who
+    p = chat_bg.path_for(kind, ident, thumb=thumb)
+    if not p or not os.path.isfile(p):
+        return jsonify({"ok": False, "error": "没有背景"}), 404
+    return send_file(p, conditional=True, max_age=3600)
+

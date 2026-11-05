@@ -919,8 +919,11 @@ def api_get_characters():
     """读卡库。卡库是**整表**读写的：卡的数量是几张、几十张的量级，
     整表替换比逐张 diff 简单得多，也不会出现半张卡存进去的状态。
     """
-    from app import persona
-    return jsonify({"cards": persona.load_cards()})
+    from app import chat_bg, persona
+    cards = persona.load_cards()
+    for c in cards:
+        c["background"] = chat_bg.info("card", str(c.get("id") or ""))
+    return jsonify({"cards": cards})
 
 
 @app.route("/api/characters", methods=["PUT"])
@@ -936,7 +939,7 @@ def api_put_characters():
     `SaveCardsRejected`，这里把它变成 409 回给前端。想真删一批要带
     `{"force": true}`——故意多一个词，让「删掉一大片」变成一个有意识的动作。
     """
-    from app import persona
+    from app import chat_bg, persona
     data = request.get_json(silent=True) or {}
     cards = data.get("cards")
     if not isinstance(cards, list):
@@ -955,7 +958,10 @@ def api_put_characters():
         }), 409
     if not ok:
         return jsonify({"ok": False, "error": "卡库路径不可用"}), 500
-    return jsonify({"ok": True, "cards": persona.load_cards()})
+    out = persona.load_cards()
+    for c in out:
+        c["background"] = chat_bg.info("card", str(c.get("id") or ""))
+    return jsonify({"ok": True, "cards": out})
 
 
 @app.route("/api/status")

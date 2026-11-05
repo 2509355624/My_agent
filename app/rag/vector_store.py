@@ -74,18 +74,24 @@ class VectorStore:
         col.upsert(**kwargs)
         return len(ids)
 
-    def query(self, kb_name: str, query_embedding: list[float], k: int = 4) -> list[dict]:
+    def query(self, kb_name: str, query_embedding: list[float], k: int = 4,
+              where: dict | None = None) -> list[dict]:
         col = self._collection(kb_name)
         if col.count() == 0:
             return []
 
         # MMR: 先取候选池，再按多样性选 k 条
         fetch_n = min(max(k * 5, 20), col.count())
-        result = col.query(
-            query_embeddings=[query_embedding],
-            n_results=fetch_n,
-            include=["documents", "metadatas", "distances", "embeddings"],
-        )
+        kwargs = {
+            "query_embeddings": [query_embedding],
+            "n_results": fetch_n,
+            "include": ["documents", "metadatas", "distances", "embeddings"],
+        }
+        # 2026-11-05：角色扮演只认提炼过的记忆（source=batch_summary_v3）。
+        # 老版本存进去的对话原文没有这个字段，用 where 过滤掉，不删也不污染。
+        if where:
+            kwargs["where"] = where
+        result = col.query(**kwargs)
 
         candidates = []
         for i in range(len(result["ids"][0])):

@@ -114,7 +114,8 @@ def _handle(req: dict, embeddings: LocalEmbeddings, store: VectorStore) -> dict:
             if not kb_name or not query:
                 raise ValueError("kb_name and query are required")
             q_vec = embeddings.embed_query(query)
-            docs = store.query(kb_name, q_vec, k=k)
+            where = req.get("where") or None
+            docs = store.query(kb_name, q_vec, k=k, where=where)
             return {"id": req_id, "ok": True, "docs": docs}
 
         if cmd == "ingest":

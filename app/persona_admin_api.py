@@ -30,7 +30,7 @@ import os
 
 from flask import Blueprint, jsonify, request
 
-from app import guest, persona
+from app import chat_bg, guest, persona, persona_rag
 from app.config import BASE_DIR
 
 log = logging.getLogger("persona_admin")
@@ -297,6 +297,14 @@ def api_delete():
                 if os.path.isfile(p):
                     os.remove(p)
                     n += 1
+        # 游客的向量库挂在 `guest_<uid>__<卡>` 上，一起清掉（2026-11-05）
+        try:
+            st = persona._load_state()                  # noqa: SLF001
+            for k in list(st):
+                if k.startswith("guest_%s__" % uid):
+                    persona_rag.drop_line(k)
+        except Exception:                                # noqa: BLE001
+            log.exception("游客向量库清理失败 %s", uid)
         return jsonify({"ok": True, "deleted": n})
 
     if "/" in key or "\\" in key or ".." in key:
@@ -309,4 +317,76 @@ def api_delete():
     if key in st:
         st.pop(key)
         persona._save_state(st, deleted={key})      # noqa: SLF001
+    # 向量库也只删这一条线（2026-11-05）
+    persona_rag.drop_line(key)
     return jsonify({"ok": True, "deleted": 1})
+
+
+# ─── 角色扮演管理：默认背景 / 角色背景（2026-11-05）────────────
+#
+# 页面 `/characters`（5174）用。5174 本身不对外，但如果以后有人往 5175
+# 转发，仍按卡管理的口径拦一道：本地直连放行，经网关只给站主。
+
+def _may_manage():
+    from app.card_api import _may_write
+    return _may_write()
+
+
+def _manage_denied(reason):
+    return jsonify({"ok": False, "error": reason}), 403
+
+
+@bp.route("/api/persona_admin/background/default")
+def admin_default_background():
+    """页面加载时看当前全局默认图；同时带出内置兜底图，方便显示「当前用哪张」。"""
+    return jsonify({
+        "ok": True,
+        "default": chat_bg.info("default", ""),
+        "builtin": chat_bg.info("builtin", ""),
+    })
+
+
+@bp.route("/api/persona_admin/background/default", methods=["POST"])
+def admin_upload_default_background():
+    ok, why = _may_manage()
+    if not ok:
+        return _manage_denied(why)
+    try:
+        info = chat_bg.save(request.files.get("file"), "default", "")
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    return jsonify({"ok": True, "background": info})
+
+
+@bp.route("/api/persona_admin/background/default", methods=["DELETE"])
+def admin_delete_default_background():
+    ok, why = _may_manage()
+    if not ok:
+        return _manage_denied(why)
+    chat_bg.delete("default", "")
+    return jsonify({"ok": True, "default": chat_bg.info("default", ""),
+                    "builtin": chat_bg.info("builtin", "")})
+
+
+@bp.route("/api/persona_admin/background/card/<cid>", methods=["POST"])
+def admin_upload_card_background(cid):
+    ok, why = _may_manage()
+    if not ok:
+        return _manage_denied(why)
+    if persona.get_card(cid) is None:
+        return jsonify({"ok": False, "error": "没有这张卡"}), 404
+    try:
+        info = chat_bg.save(request.files.get("file"), "card", cid)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    return jsonify({"ok": True, "background": info})
+
+
+@bp.route("/api/persona_admin/background/card/<cid>", methods=["DELETE"])
+def admin_delete_card_background(cid):
+    ok, why = _may_manage()
+    if not ok:
+        return _manage_denied(why)
+    chat_bg.delete("card", cid)
+    return jsonify({"ok": True, "background": chat_bg.info("card", cid)})
+

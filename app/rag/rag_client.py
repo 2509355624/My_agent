@@ -17,7 +17,7 @@ class RagClient:
     _instance: Optional["RagClient"] = None
     _lock = threading.Lock()
 
-    def __init__(self):
+    def __init__(self, env_extra: Optional[dict] = None):
         self._proc: Optional[subprocess.Popen] = None
         self._ready = False
         self._pending = {}  # id -> event
@@ -25,6 +25,9 @@ class RagClient:
         self._counter = 0
         self._read_thread: Optional[threading.Thread] = None
         self._stderr_thread: Optional[threading.Thread] = None
+        # 2026-11-05：角色扮演的 RAG 用**另一个** daemon（小模型 + 独立数据目录）。
+        # 这里只存 spawn 时要覆盖的环境变量，不影响主 RAG 的单例。
+        self._env_extra = dict(env_extra or {})
 
     @classmethod
     def get(cls) -> "RagClient":
@@ -32,6 +35,14 @@ class RagClient:
             if cls._instance is None:
                 cls._instance = cls()
             return cls._instance
+
+    def is_ready(self) -> bool:
+        """daemon 已经加载完模型、可以接请求了吗。
+
+        调用方拿这个判断「这一轮要不要检索」——不能用 `_call` 来试，
+        那个会先 `start()`，冷启动要等十几秒，聊天会被拖住。
+        """
+        return bool(self._ready and self._proc and self._proc.poll() is None)
 
     def start(self) -> bool:
         """启动 daemon 进程。返回是否成功启动。"""
@@ -42,6 +53,7 @@ class RagClient:
         daemon_script = Path(__file__).parent / "rag_daemon.py"
 
         env = os.environ.copy()
+        env.update(self._env_extra)
         env["PYTHONUNBUFFERED"] = "1"
 
         self._proc = subprocess.Popen(
@@ -100,9 +112,17 @@ class RagClient:
             # 直接透传到主进程 stderr
             print(line, file=sys.stderr, end="")
 
-    def _call(self, cmd: str, **kwargs) -> dict:
-        """同步调用 daemon。"""
-        if not self.start():
+    def _call(self, cmd: str, timeout: float = 30, allow_start: bool = True,
+              **kwargs) -> dict:
+        """同步调用 daemon。
+
+        `allow_start=False` 用于聊天轮这类**不能等冷启动**的场景：
+        没 ready 就直接返回失败，绝不在这里拉起模型。
+        """
+        if not allow_start:
+            if not self.is_ready():
+                return {"ok": False, "error": "RAG daemon 未就绪"}
+        elif not self.start():
             return {"ok": False, "error": "RAG daemon 启动失败"}
 
         if not self._proc or self._proc.poll() is not None:
@@ -122,8 +142,9 @@ class RagClient:
             self._pending.pop(req_id, None)
             return {"ok": False, "error": f"写入 daemon 失败: {e}"}
 
-        # 等 30 秒超时
-        if not event.wait(timeout=30):
+        # 等超时。默认 30 秒是给建库/灌库的；检索可以传更短，
+        # 聊天轮不能为了等一条回忆卡住（2026-11-05）。
+        if not event.wait(timeout=timeout):
             self._pending.pop(req_id, None)
             return {"ok": False, "error": "RAG daemon 调用超时"}
 
@@ -132,8 +153,12 @@ class RagClient:
 
     # ─── 便捷方法 ───────────────────────────────────
 
-    def search(self, kb_name: str, query: str, k: int = 4) -> dict:
-        return self._call("search", kb_name=kb_name, query=query, k=k)
+    def search(self, kb_name: str, query: str, k: int = 4,
+               timeout: float = 30, allow_start: bool = True,
+               where: Optional[dict] = None) -> dict:
+        return self._call("search", kb_name=kb_name, query=query, k=k,
+                          timeout=timeout, allow_start=allow_start,
+                          where=where)
 
     def ingest(self, kb_name: str, entries: list[dict]) -> dict:
         return self._call("ingest", kb_name=kb_name, entries=entries)
