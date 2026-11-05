@@ -1483,7 +1483,9 @@ class NoteBudgetTest(unittest.TestCase):
         approx_tokens = total_chars * 0.65
         # 2026-11-05：加了「分段 + 导演条」后只涨了约 100 token（+1.7%），
         # 仍在生图链路（3000~5000 token）的两倍以内，门槛从 8000 放到 8200。
-        self.assertLess(approx_tokens, 8200,
+        # 2026-11-06：系统头最前面加了一段约 120 字的「私下虚构创作」框定
+        # （压掉跳出角色的元话语），再涨约 80 token，门槛放到 8400。
+        self.assertLess(approx_tokens, 8400,
                         "扮演一轮 %.0f token，超过生图链路太多" % approx_tokens)
 
 
