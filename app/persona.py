@@ -2602,16 +2602,23 @@ def render_user_block(segments, addressed=True, fallback=""):
 
     没有分段就退回原文（`fallback`）。分段里的「想」**必须明确写成看不见**，
     不然模型会把心里话当成已经知道的事实——这是 2026-11-05 用户报的 bug。
+
+    2026-11-05 晚补：分段里的「做」现在只带**一句话概括**（不再原文照抄，
+    见 `_SEGMENT_GUIDE`），因为让打分模型复述露骨原文会把整份输出掐断。
+    代价是演员会丢掉动作的细节，所以：
+      · 这一轮**没有**「想」分段 → 把原文整段补在最后，信息一点不少；
+      · 有「想」→ 不能补原文（会把心里话带出去），只能靠概括。
     """
     if not segments:
         return fallback
     lines = ["【这一轮你收到的（按发生顺序）】"]
+    has_think = False
     for seg in segments:
         who = str(seg.get("who") or "用户")
         typ = str(seg.get("type") or "说")
         text = str(seg.get("text") or "").strip()
-        if not text:
-            continue
+        if typ == "想":
+            has_think = True
         if who == "助手":
             if typ == "说":
                 label = "助手 · 说（已经发生）"
@@ -2619,12 +2626,15 @@ def render_user_block(segments, addressed=True, fallback=""):
                 label = "助手 · 做（已经发生，照它往下演）"
             else:
                 label = "助手 · 想（只有你自己知道）"
-            lines.append("- %s：%s" % (label, text))
+            if text:
+                lines.append("- %s：%s" % (label, text))
             continue
         if typ == "想":
             # **心里话的正文不给演员看**（2026-11-05）。只告诉它「有一句没说出口」，
             # 不然模型读得到内容，再怎么叮嘱「你不知道」也容易漏。
             lines.append("- 用户 · 想（你看不见，也不知道内容）：他没有说出口")
+            continue
+        if not text:
             continue
         if typ == "说":
             label = "用户 · 说（你听得见）"
@@ -2634,6 +2644,11 @@ def render_user_block(segments, addressed=True, fallback=""):
     if not addressed:
         lines.append("（他这一轮不是在对你说，可能只是自言自语或旁白；"
                      "写你看到的反应，不要当成他在跟你对话。）")
+    # 没有心里话时，把原文完整补上——上面那些是标签，细节以原文为准。
+    if not has_think and str(fallback or "").strip():
+        lines.append("")
+        lines.append("【他这一轮的原话，照着它演】")
+        lines.append(str(fallback).strip())
     return "\n".join(lines)
 
 
@@ -2705,8 +2720,16 @@ _SEGMENT_GUIDE = (
     "- 没有引号的普通聊天，你自己判断：像日常对话就是「说」，像动作/场景描写就是「做」。\n"
     "- 拿不准就按「说」处理，不要硬拆；宁可少拆，不要拆错。\n"
     "\n"
-    "**原文照抄**：每段的 text 必须是原消息里的原话，不许改写、合并、翻译、补字；"
-    "顺序按发生先后排。\n"
+    "**每段 text 怎么写（2026-11-05 改，这一条很关键）：**\n"
+    "- 「说」→ **原文照抄**引号里那句话。它短，是他的原话，演员要一字不差地听见。\n"
+    "- 「做」→ **一句话概括**这一段在做什么，十五个字以内，**不要复述露骨细节**。\n"
+    "  例：原文「（把伊蕾娜按到墙上，从后面顶进去）」，text 写「按到墙上从后面进入」。\n"
+    "- 「想」→ **不要写出内容**，text 一律填空字符串 \"\"。只标出这里有一句没说出口的话，\n"
+    "  内容不许抄、不许概括、不许暗示。\n"
+    "  原文的完整细节系统会另外交给演员，这里只要标签。\n"
+    "\n"
+    "**为什么必须这样**：把「做」写成原文照抄，整份输出会在中途被掐断（实测断在\n"
+    "JSON 一半，后面的数值全部丢失），玩家那边就是「数值怎么都不动」。\n"
 )
 
 _DIRECTOR_GUIDE = (
@@ -2725,7 +2748,7 @@ _INTENT_PROMPT = """先判断下面这句话**在干什么**，再把这一轮�
   "intent": "intimate | joke | literal | insult | neutral",
   "note": "用不超过 15 个字说明他到底在干什么",
   "segments": [
-    {"who": "用户 | 助手", "type": "说 | 做 | 想", "text": "原文照抄"}
+    {"who": "用户 | 助手", "type": "说 | 做 | 想", "text": "说→原文；做→一句话概括；想→空串"}
   ],
   "addressed": true,
   "literal": "他字面上在说什么",
@@ -2784,10 +2807,18 @@ def _parse_segments(raw):
         if not isinstance(item, dict):
             continue
         text = str(item.get("text") or "").strip()
-        if not text:
-            continue
         who = who_alias.get(str(item.get("who") or "").strip().lower()) or "用户"
         typ = type_alias.get(str(item.get("type") or "").strip().lower()) or "说"
+        # 「想」故意不带内容（2026-11-05）：提示词要求它填空字符串，就是因为
+        # 让模型复述心里话会被内容审核掐断整份输出。所以这一类**不能因为
+        # text 为空就丢掉**——它本身是个标记，「这里有一句没说出口的话」。
+        if typ == "想":
+            out.append({"who": who, "type": typ, "text": ""})
+            if len(out) >= SEG_MAX:
+                break
+            continue
+        if not text:
+            continue
         out.append({"who": who, "type": typ, "text": text[:SEG_TEXT_MAX]})
         if len(out) >= SEG_MAX:
             break
@@ -3036,7 +3067,7 @@ _SCORE_PROMPT = """判断下面这句话**在干什么**，并给这句话对你
   "reason": "不超过15个字",
   "note": "不超过15个字",
   "segments": [
-    {"who": "用户 | 助手", "type": "说 | 做 | 想", "text": "原文照抄"}
+    {"who": "用户 | 助手", "type": "说 | 做 | 想", "text": "说→原文；做→一句话概括；想→空串"}
   ],
   "addressed": true,
   "literal": "他字面上在说什么",
@@ -3375,11 +3406,12 @@ def _judge_intent_scored(card, said, state="", line_key="", gameday=None,
         "_director_guide": _DIRECTOR_GUIDE,
     }
     try:
-        # 输出上限（2026-11-05）：JSON 有二十多个字段，其中 segments 是数组，
-        # 不给 max_tokens 会被服务端默认值截在半句话上（实测截在 literal，
-        # 后面所有字段全丢）。1600 够写完一整个对象还有余量。
-        raw = llm.call_llm([{"role": "user", "content": prompt}], timeout=30,
-                           max_tokens=1600)
+        # **不传 max_tokens**（2026-11-05 用户拍板：不要任何输出上限）。
+        # 实测过三档：不传（服务端默认）706 字、1600 给 582 字、4000 给 615 字
+        # ——根本不是长度限制的问题，加了反而更短。真正的原因在提示词里
+        # 那句「原文照抄」：模型逐字复述露骨原文时会被内容审核当场掐断，
+        # 末尾补一句 `Sorry, I can't respond`。改措辞就好了（见 `segments`）。
+        raw = llm.call_llm([{"role": "user", "content": prompt}], timeout=30)
     except Exception:                            # noqa: BLE001
         log.warning("攻略模式打分调用失败，按 0 分走")
         return None, "", None
