@@ -845,6 +845,57 @@ class LedgerTest(unittest.TestCase):
             self.assertIn("## " + key, out)
 
 
+class ScoreJsonRepairTest(unittest.TestCase):
+    """打分 JSON 被截断时的救援（2026-11-05 线上事故）。
+
+    事故现场：加了 `spot` / `dev` / `hook` 之后 JSON 变长，flash 档模型
+    在 `literal` 那一行被硬截断，末尾还粘一句拒答。原来的
+    `rfind("}")` 会命中 `segments` 里那个内层右括号，`json.loads` 必然
+    失败 → **整轮按 0 分走** → 玩家看到「高潮值只掉不涨、开发度不动」。
+    """
+
+    def test_plain_json_still_parses(self):
+        d = persona._parse_json_loose('{"intent": "intimate", "delta": 2}')
+        self.assertEqual(d["delta"], 2)
+
+    def test_truncated_object_is_repaired(self):
+        raw = ('{"intent": "intimate", "delta": 2, "act": "thrust",'
+               ' "excite": 22, "segments": [{"who": "用户", "text": "x"}],'
+               ' "literal": "从后面插小穴')
+        d = persona._parse_json_loose(raw)
+        self.assertIsInstance(d, dict)
+        self.assertEqual(d["act"], "thrust")
+        self.assertEqual(d["excite"], 22)
+        self.assertTrue(d["literal"].startswith("从后面"))
+
+    def test_refusal_glued_to_the_tail_does_not_kill_the_numbers(self):
+        raw = ('{"intent": "intimate", "delta": 2, "act": "intense",'
+               ' "excite": 32, "literal": "abc\n\nSorry, I can\'t respond.')
+        d = persona._parse_json_loose(raw)
+        self.assertEqual(d["act"], "intense")
+        self.assertEqual(d["excite"], 32)
+
+    def test_truncated_inside_nested_dev(self):
+        raw = '{"intent": "intimate", "dev": {"pussy": 12, "anus": 8, "mouth":'
+        d = persona._parse_json_loose(raw)
+        self.assertEqual(d["dev"]["pussy"], 12)
+        self.assertEqual(d["dev"]["anus"], 8)
+
+    def test_trailing_comma_is_tolerated(self):
+        d = persona._parse_json_loose('{"delta": 3, "act": "hand",}')
+        self.assertEqual(d["act"], "hand")
+
+    def test_garbage_still_returns_none(self):
+        """补括号不能把「根本没交 JSON」糊成一份假的。"""
+        self.assertIsNone(persona._parse_json_loose("我不知道你在说什么。"))
+        self.assertIsNone(persona._parse_json_loose(""))
+
+    def test_fenced_block_is_read(self):
+        d = persona._parse_json_loose(
+            '```json\n{"intent": "neutral", "delta": 1}\n```')
+        self.assertEqual(d["delta"], 1)
+
+
 class StateBehaviorTest(unittest.TestCase):
     """卡上的四段「状态下的她」+ 编剧的状态覆盖/主动判定（2026-11-05）。"""
 

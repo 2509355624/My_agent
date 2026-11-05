@@ -2097,6 +2097,16 @@ def settle(line_key, score):
         if str(score.get("spot") or "").strip():
             dev_hit = _DEV_ALIAS.get(str(score.get("spot") or "").strip().lower(), "")
         dc = dev_cfg(cfg)
+        # 兜底（2026-11-05）：模型**只给了 spot、没给 dev** 时，按动作档位
+        # 补一个合理增量。线上实测打分 JSON 会被截断，`dev` 在末尾经常丢，
+        # 结果玩家看得见「小穴被插了」，数值却一动不动。有了这条，
+        # 只要 spot 还在，这一处至少会往前走。
+        # 注意只在 `dev` **整个缺失**时补；模型明确给了 `{"pussy": 0}`
+        # 是「她躲开了」的意思，那个 0 要尊重，不能替它加分。
+        if d is None and dev_hit in DEV_KEYS:
+            base = {"foreplay": 4, "hand": 10, "mouth": 12,
+                    "enter": 14, "thrust": 18, "intense": 22}.get(act_key, 4)
+            raw_dev[dev_hit] = min(dc["step"], base)
         # 压迫场里开发得更快（2026-11-05）：那些事本来就不是她同意的。
         mult = 1.5 if forced_now else 1.0
         for k in DEV_KEYS:
