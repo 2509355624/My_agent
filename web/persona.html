@@ -1084,9 +1084,7 @@ function renderPanel(a, p) {
   if (!p.inScene) {
     const tip = document.createElement("div");
     tip.style.cssText = "font-size:11.5px;color:var(--text-mute);padding:2px 0 4px;";
-    if (p.coolLeft > 0) {
-      tip.textContent = "刚收场，还要歇 " + p.coolLeft + " 轮";
-    } else if (exV > 0 || exN > 0) {
+    if (exV > 0 || exN > 0) {
       tip.textContent = "这一场已经收场了";
     } else {
       tip.textContent = "这一场还没开始（它记的是单场进度，收场就归零）";
