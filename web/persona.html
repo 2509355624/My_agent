@@ -1147,6 +1147,13 @@ async function goFinish() {
     toast("那这一下就先跳过");
     return;
   }
+  // ★ 提交的当下就记账（2026-11-06 用户报「点了确定还一直弹」）：
+  // 生成要十几秒，这期间服务端的 pending 还没清。只要这中间有一次
+  // `loadSession`（切角色、回到页面、刷新都会触发），`askFinish` 就又弹一次，
+  // 玩家再点一次就是又一发——于是「永远弹不完」。
+  // 现在点下去就先把这一号标记成已处理，失败了再回滚。
+  const prevSeen = FIN_SEEN;
+  if (keep) FIN_SEEN = Math.max(FIN_SEEN, keep.n || 0);
   lockInput(true);
   const pend = document.createElement("div");
   pend.className = "row a pending";
@@ -1170,6 +1177,7 @@ async function goFinish() {
     pend.remove();
     // 没写成 → 把弹窗**恢复**（2026-11-06）：以前这里只 toast 一下，
     // 弹窗没了、CLIMAX 也清了，玩家再也没机会补这一段。
+    FIN_SEEN = prevSeen;              // 回滚「已处理」，允许重试
     CLIMAX = keep;
     if (keep) { FIN_OPEN = true; $("finishMask").classList.add("on"); }
     toast("没写成，再试一次", true);
