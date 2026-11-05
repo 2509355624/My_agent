@@ -664,6 +664,12 @@ def finish_api():
                 return jsonify({"ok": True, "skipped": True, "reply": "",
                                 "why": "busy"})
             _FIN_BUSY.add(key)
+        # ★ 先把待办摘掉再生成（2026-11-06 用户第三次报「还是弹」）：
+        # 以前是「生成成功之后才清」，可生成要七八秒，这期间任何一次
+        # `/api/persona/session`（切角色、切回标签页、翻历史）都会读到它，
+        # 于是又弹一次。现在点下去就摘，生成期间弹窗不可能再出现；
+        # 万一生成了却没写出来，再把待办放回去让玩家重试。
+        persona._set_pending_finish(key, None)         # noqa: SLF001
         try:
             with usage.scope(key):
                 turn = persona.finish_action(key, spot=spot, text=text)
@@ -671,7 +677,7 @@ def finish_api():
             with _FIN_GUARD:
                 _FIN_BUSY.discard(key)
         if turn is None or not turn.reply.strip():
-            # 给了指令却没写出来 = 真失败。回 502，前端据此**保留弹窗**让玩家重试。
+            persona._set_pending_finish(key, pend)     # noqa: SLF001
             return jsonify({"ok": False, "error": "这一下没写成，再试一次"}), 502
         out = {"ok": True, "reply": turn.reply, "scene": turn.scene,
                "mood": turn.mood, "intensity": turn.intensity,
