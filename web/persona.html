@@ -1121,8 +1121,9 @@ async function goFinish() {
   $("finishMask").classList.remove("on");
   const text = ($("finishText") && $("finishText").value || "").trim();
   const last = !!(CLIMAX && CLIMAX.last);
-  CLIMAX = null;
+  const keep = CLIMAX;                 // 失败时要把弹窗原样还回来
   if (!text && !FIN_SPOT) {           // 什么都没给 = 这一下不写
+    CLIMAX = null;
     toast("那这一下就先跳过");
     return;
   }
@@ -1133,14 +1134,23 @@ async function goFinish() {
   $("log").appendChild(pend);
   scrollBottom();
   try {
-    const d = await api("/api/persona/finish", {
-      method: "POST", body: { spot: FIN_SPOT, text: text } });
+    // ⚠️ 必须走 `post()`：它会给 fetch 加 JSON 头并 JSON.stringify。
+    // 2026-11-06 直接写 `body: {...}` 传了对象，fetch 把它变成字符串
+    // "[object Object]"，后端解析不出 spot/text → 当成「什么都没选」跳过，
+    // 于是高潮值已经扣了、正文却一个字都没有。
+    const d = await post("/api/persona/finish", {
+      spot: FIN_SPOT, text: text });
     pend.remove();
+    CLIMAX = null;
     if (d.reply) pushAssistant(d);
     // 第 5 次：射完立刻问「还要不要继续」，不用等玩家再发消息。
     if (last) $("fiveMask").classList.add("on");
   } catch (e) {
     pend.remove();
+    // 没写成 → 把弹窗**恢复**（2026-11-06）：以前这里只 toast 一下，
+    // 弹窗没了、CLIMAX 也清了，玩家再也没机会补这一段。
+    CLIMAX = keep;
+    if (keep) $("finishMask").classList.add("on");
     toast("没写成，再试一次", true);
   } finally {
     lockInput(false);
@@ -1156,8 +1166,7 @@ async function pickFive(last) {
   $("log").appendChild(pend);
   scrollBottom();
   try {
-    const d = await api("/api/persona/finish_night", {
-      method: "POST", body: { last: last } });
+    const d = await post("/api/persona/finish_night", { last: last });
     pend.remove();
     if (d.reply) pushAssistant(d);
     if (!last) return;                 // 「就到这里」——不跨天，收尾就完了
@@ -1166,8 +1175,7 @@ async function pickFive(last) {
     const veil = $("dayVeil");
     if (veil) veil.classList.add("on");
     await new Promise(r => setTimeout(r, 900));
-    const m = await api("/api/persona/next_morning", {
-      method: "POST", body: {} });
+    const m = await post("/api/persona/next_morning", {});
     if (m.reply) pushAssistant(m);
     if (veil) veil.classList.remove("on");
   } catch (e) {
@@ -2047,6 +2055,10 @@ async function loadSession() {
     renderState(d);
     AFF = d.affection || null;
     renderAff(AFF);
+    // 上一轮欠着一个「射在哪里」没答（刷新/断线/关页面都在这一档）：
+    // 后端把它存在存档里了，这里重新弹一次。不弹的话高潮值已经扣过，
+    // 那段正文就永远缺一块（2026-11-06 用户踩到的就是这个）。
+    if (d.pending) askFinish(d.pending);
     ensureIntro();       // 新线：铺一段灰底说明当前情况（不阻塞上面的渲染）
     loadPics();          // 服务器映射恢复历史图（重登/换设备也能看到）
     await loadCards();

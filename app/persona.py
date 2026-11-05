@@ -3240,6 +3240,52 @@ _FINISH_HINT = {
 }
 
 
+def _set_pending_finish(key, info):
+    """把「等着问射在哪里」这个待办记进存档（2026-11-06）。
+
+    为什么需要它：高潮值是在**普通一轮**里结算的（`settle` 已经把它扣了），
+    而「射在哪里」的弹窗是那一轮之后才弹的。如果玩家点确定之前页面刷新、
+    断网、或者干脆关了标签，弹窗就没了——数值已经扣过，文本却没写。
+    之前就是这么丢了那一段。
+
+    所以把待办落盘：刷新后 `/api/persona/session` 会把它带回来，
+    前端重新弹一次。玩家真写了（或者明确跳过）才清掉。
+    """
+    if not key:
+        return
+    try:
+        ent = _entry(key) or {}
+        if info:
+            ent["pending_finish"] = dict(info)
+        else:
+            if "pending_finish" not in ent:
+                return          # 本来就没有待办：不白写一次盘
+            ent.pop("pending_finish", None)
+        state = _load_state()
+        state[key] = ent
+        _save_state(state)
+    except Exception:                                  # noqa: BLE001
+        log.exception("待办射精落盘失败 %s", key)
+
+
+def pending_finish(key):
+    """这条线有没有一个「还没回答」的射精弹窗。"""
+    try:
+        ent = _entry(key) or {}
+        v = ent.get("pending_finish")
+    except Exception:                                  # noqa: BLE001
+        return None
+    if not isinstance(v, dict):
+        return None
+    try:
+        n = int(v.get("n") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return None
+    return {"n": n, "of": int(v.get("of") or 0), "last": bool(v.get("last"))}
+
+
 def _climax_info(res):
     """这一轮是不是刚到高潮 / 是不是第 5 次。没到返回 None。
 
@@ -4255,6 +4301,10 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     # 线键，resolve 幂等。历史/小记/好感从此按角色各存各的。
     key = resolve_line(key)
 
+    # 玩家直接说话了 = 那个「射在哪里」的弹窗被跳过了（2026-11-06）。
+    # 不清的话，刷新页面还会把上一轮的弹窗再弹一次。
+    _set_pending_finish(key, None)
+
     # ── 群聊不演（2026-11-03 用户反馈）──────────────────────────
     #
     # 用户发现「群里其他人能看到别人的聊天内容」。状态隔离一直是好的，
@@ -4388,6 +4438,9 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
             cl = _climax_info(aff_res)
             if cl:
                 aff_res["climax"] = cl
+                # 落盘成待办：页面刷新/断网后还能再问一次（见
+                # `_set_pending_finish` 的说明）。
+                _set_pending_finish(key, cl)
         blk = affection.injection_block(aff_res)
         if blk:
             head = head + "\n\n" + blk
@@ -4961,8 +5014,13 @@ def finish_action(session_key, spot="", text="", sender="", sender_uin=""):
     hint = (_FINISH_CUSTOM_HINT % text) if text else finish_block(spot)
     if hint:
         head = head + "\n\n" + hint
-    return _gen_and_save(key, ent, card, head, _FINISH_ACT_TASK,
+    turn = _gen_and_save(key, ent, card, head, _FINISH_ACT_TASK,
                          sender=sender, prev_state=prev_state, tag="射精")
+    # 写成功了才把待办清掉（2026-11-06）：失败时留着，页面刷新还能再问一次，
+    # 不然就变成「数值扣了、文本没了」那种断层。
+    if turn is not None:
+        _set_pending_finish(key, None)
+    return turn
 
 
 def finish_night(session_key, last=True, sender="", sender_uin=""):
