@@ -3517,6 +3517,7 @@ _SCORE_PROMPT = """判断下面这句话**在干什么**，并给这句话对你
   "time": "none",
   "phase": "",
   "plan": "",
+  "place": "",
   "reason": "不超过15个字",
   "note": "不超过15个字",
   "segments": [
@@ -3765,6 +3766,10 @@ time 是 none 时一律留空。
 
 plan（这轮**说定了**的约定）：把约定写成一句话（「周末去游乐场」）。
 只是提议还没被答应、或者被岔开的，不算。已有约定且没变化就填空串。
+
+place（他们**现在**在哪儿）：只有这一轮真的换了地方才填，写一句短地名
+（「情爱城·城南旅店」「回廊尽头的亭子」）。还在原处就填空串——它不是
+行程，是事实，别把「准备去」写成 place。
 
 persona_mode（她此刻的底色，由你判，不要套阈值）：
 - 日常 —— 还是平常的她；
@@ -4090,6 +4095,9 @@ def _gameday(ent):
     gd["plan"] = str(gd.get("plan") or "")[:80]     # 挂着的约定
     gd["plan_day"] = _as_int(gd.get("plan_day"), 0, 0, 99999)
     gd["event"] = str(gd.get("event") or "")[:60]   # 今天的事件
+    # 现在在哪儿（2026-11-06 用户要求）：只记一句地名，编剧判到「换地方」才改。
+    # 没有它，模型只能从「约定」和「前情」里猜行程，于是人到目的地了还在写赶路。
+    gd["place"] = str(gd.get("place") or "")[:40]
     gd["turns_today"] = max(0, _as_int(gd.get("turns_today"), 0, 0, 99999))
     ent["gameday"] = gd
     return gd
@@ -4160,6 +4168,10 @@ def _apply_gameday(key, score=None, force_new_day=False, days=1):
         if plan:
             gd["plan"] = plan[:80]
             gd["plan_day"] = int(gd["day"]) + 1
+        # 换地方了就更新（2026-11-06）：留空表示「还在原处」，别每轮都写。
+        place = str(score.get("place") or "").strip()
+        if place:
+            gd["place"] = place[:40]
     _save_state(st)
     return gd
 
@@ -4171,6 +4183,11 @@ def _gameday_block(gd):
     phase = str(gd.get("phase") or "").strip()
     lines = ["【游戏时间】第 %d 天%s" % (gd.get("day") or 1,
                                       ("，" + phase) if phase else "")]
+    place = str(gd.get("place") or "").strip()
+    if place:
+        lines.append("【所在地】%s。这是**已经到的地方**，不是要去的地方；"
+                     "除非这一轮剧情里真的动身，否则别再写「前往…」「路上」"
+                     "这一类的行程。" % place)
     event = str(gd.get("event") or "").strip()
     if event:
         if event.startswith("已经办完"):
