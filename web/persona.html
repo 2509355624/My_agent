@@ -895,6 +895,13 @@
       <input type="number" id="skipDays" min="1" max="365"
              inputmode="numeric" placeholder="自定义天数">
     </div>
+    <!-- 这段时间在干什么（2026-11-06）：跳好几天却只写「几天后到了」很空，
+         填一句「一路赶路去情爱城」，她就照这个把过程写出来。 -->
+    <div class="skipCustom" style="margin-top:10px">
+      <textarea id="skipDo" rows="3" maxlength="200"
+                placeholder="这段时间在做什么？（例如：一路赶路去情爱城，中途在驿站歇了一晚）"></textarea>
+    </div>
+    <div class="skipt" style="margin-top:2px">跳 3 天以上建议写一句——不写她就只能写成「几天后到了」。</div>
     <div class="skipt" style="margin-top:2px">跳过几天由她先开口；选时段和选天数二选一。</div>
     <button class="btn pri skipGo" id="skipGo">跳</button>
     <button class="btn skipGo" id="skipCancel">取消</button>
@@ -2486,6 +2493,7 @@ function clearJumpSel() {
   document.querySelectorAll(".phaseBtns .btn, .skipBtns [data-days]")
     .forEach(b => b.classList.remove("on"));
   if ($("skipDays")) $("skipDays").value = "";
+  if ($("skipDo")) $("skipDo").value = "";
 }
 function pickPhase(p) {
   JUMP_SEL = { phase: p, days: 0 };
@@ -2507,7 +2515,15 @@ function pickDays(n) {
 function doJump() {
   if (busy) return;
   if (JUMP_SEL.phase) { setPhase(JUMP_SEL.phase); return; }
-  if (JUMP_SEL.days > 0) { skipDay(JUMP_SEL.days); return; }
+  if (JUMP_SEL.days > 0) {
+    // 跳一天的事，写「这段时间在干什么」是多余的；三天以上才提醒。
+    if (JUMP_SEL.days >= 3 && !($("skipDo") && $("skipDo").value.trim())) {
+      toast("填一句这几天在做什么，她才能写出过程", true);
+      return;
+    }
+    skipDay(JUMP_SEL.days);
+    return;
+  }
   toast("先选一个时段，或者选/填要跳几天", true);
 }
 
@@ -2522,6 +2538,9 @@ async function skipDay(days) {
   log.scrollTop = log.scrollHeight;
   try {
     const body = { days: days };
+    const doBox = $("skipDo");
+    const doing = doBox ? doBox.value.trim().slice(0, 200) : "";
+    if (doing) body.doing = doing;
     if (CM) body.custom = CM;
     const d = await post("/api/persona/skip_day", body);
     const nA = (d.n && typeof d.n.assistant === "number") ? d.n.assistant : null;

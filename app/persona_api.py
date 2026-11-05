@@ -866,6 +866,9 @@ def skip_day_api():
         days = max(1, min(365, int(body.get("days") or 1)))
     except (TypeError, ValueError):
         days = 1
+    # 这段时间在干什么（2026-11-06）：有值就按它写过程，
+    # 而不是把一段旅程压缩成「几天后到了」。
+    doing = str(body.get("doing") or "").strip()[:200]
     try:
         role, who, token = _who()
         if role == "guest":
@@ -883,7 +886,7 @@ def skip_day_api():
                 _attach_guest_cookie(resp, token)
                 return resp
             with usage.scope("guest_" + str(who or "anon")[:8]):
-                turn = persona.skip_day(ckey, "", days=days)
+                turn = persona.skip_day(ckey, "", days=days, doing=doing)
             if turn is None or not turn.reply.strip():
                 return jsonify({"ok": False, "error": "没跳成，再试一次"}), 502
             out = {
@@ -912,7 +915,7 @@ def skip_day_api():
         if card is None:
             return jsonify({"ok": False, "error": "还没选角色"}), 400
         with usage.scope(key):
-            turn = persona.skip_day(key, "", days=days)
+            turn = persona.skip_day(key, "", days=days, doing=doing)
         if turn is None or not turn.reply.strip():
             return jsonify({"ok": False, "error": "没跳成，再试一次"}), 502
         out = {

@@ -4637,6 +4637,25 @@ _SKIP_TASK_MULTI = ("【这一轮】时间已经过去 %d 天（现在是第 %d 
                     "\n- 「状态」行按现在的衣着、地点、时间写。"
                     "\n按平常的格式输出（正文 + 画面 + 心情 + 状态）。")
 
+# 跳很多天 + 玩家写了「这段时间在干什么」（2026-11-06 用户提的）。
+#
+# 原来的多天跳转只有一句「写这段时间之后她这边的变化」——模型拿到的信号是
+# 「跳过」，于是交出来的是压缩后的结论（「一周后，你们到了」）。可玩家心里
+# 想的是**过程**：一路赶路、风餐露宿、路上说的话。跳 7 天不是想省 7 天，
+# 是想把 7 天的路走完。
+#
+# 所以玩家给了内容就换这条：按他写的主线把过程写出来，结尾落在「现在」。
+_SKIP_TASK_DOING = ("【这一轮】时间往前走了 %d 天（现在是第 %d 天），他还没说话。"
+                    "\n这段时间他们在做这件事，照它写：%s"
+                    "\n\n**由你先开口**，写这段时间**本身**，不要一句「几天后到了」跳过："
+                    "\n- 挑两三个有画面的片段按顺序写（出发、路上、落脚、某一次说话），"
+                    "不是逐日流水账；"
+                    "\n- 赶路就写路程、天气、脚上的泡、干粮、夜里的火、靠得多近；"
+                    "\n- 结尾必须落在**现在**：第 %d 天的具体地点、时辰、她在做什么，"
+                    "然后是她开口的第一句话；"
+                    "\n- 已经发生过的事不要重写；「状态」行按现在的衣着、地点、时间写。"
+                    "\n按平常的格式输出（正文 + 画面 + 心情 + 状态）。")
+
 # 同一天切时段（2026-11-05）：不是「睡到明天」，所以不用「新的一天」那套，
 # 重点是**把刚才那段收尾**、再进入新时段。玩家把早晨的早餐拖到中午，
 # 她可以抱怨、追问——跳转本身就代表上一段 do 结束了。
@@ -4774,8 +4793,12 @@ def jump_phase(session_key, phase, sender="", sender_uin=""):
     return Turn(reply, scene, mood, intensity, state, None, "")
 
 
-def skip_day(session_key, sender="", sender_uin="", days=1):
+def skip_day(session_key, sender="", sender_uin="", days=1, doing=""):
     """时间跳跃（2026-11-04；2026-11-05 支持多天）：推进 days 天，**由她先开口**。
+
+    `doing`（2026-11-06）：玩家写的一句「这段时间在干什么」，比如
+    「一路赶路去情爱城」。给了就按它写**过程**，而不是写成压缩后的结论——
+    跳七天不是想省七天，是想把那七天的路走完。
 
     事件优先级在 `_roll_event`：约定 > 随机事件 > 普通的一天；跳多天时不掷
     日常小事件。跨天时先结算怀孕，再拼开场提示词。
@@ -4785,6 +4808,7 @@ def skip_day(session_key, sender="", sender_uin="", days=1):
         days = max(1, min(365, int(days or 1)))
     except (TypeError, ValueError):
         days = 1
+    doing = str(doing or "").strip()[:200]
     key = resolve_line(_persona_key(session_key, sender_uin))
     card = active_card(key)
     if card is None:
@@ -4829,7 +4853,10 @@ def skip_day(session_key, sender="", sender_uin="", days=1):
     if recap:
         head = head + "\n\n" + recap
     event = str((gd or {}).get("event") or "").strip()
-    if days == 1:
+    if doing:
+        # 玩家交代了过程：按他给的主线写这一段，不写「压缩摘要」。
+        task = _SKIP_TASK_DOING % (days, new_day, doing, new_day)
+    elif days == 1:
         task = _SKIP_TASK % (new_day,
                              ("（今天：%s）" % event) if event else "")
     else:
