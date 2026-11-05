@@ -842,12 +842,7 @@ def build_t2i_workflow(skill, prompt, seed):
     # 角色 LoRA 节点、触发词追加进提示词。没命中零干预；文件缺失时
     # match 返回 None（宁可角色不像，不能整单报 value_not_in_list）。
     from app import char_loras
-    entry = char_loras.match(skill, prompt)
-    wf = sd["workflow"]
-    if entry:
-        wf = char_loras.patch(wf, entry)
-        if entry.get("trigger"):
-            prompt = "%s, %s" % (prompt, entry["trigger"])
+    wf, prompt = char_loras.apply(skill, prompt, sd["workflow"])
     return apply_prompt_placeholders(json.dumps(wf),
                                      prompt, seed)
 
@@ -1165,6 +1160,11 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     from app import moss_prompt
     prompt = moss_prompt.clean(skill, prompt)
     prompt = lora_slots.nai5_prefix(skill, preset_slots) + prompt
+    # 角色 LoRA（2026-11-04）：QQ 直达生图也在这里装填。之前只有
+    # `build_t2i_workflow`（网页跑图台 / 漫画 / 角色卡那几条）接了，
+    # 群友在群里点名角色时一直没挂上 LoRA，画出来当然不像。
+    from app import char_loras
+    workflow, prompt = char_loras.apply(skill, prompt, workflow)
     workflow_str = json.dumps(workflow)
     workflow = apply_prompt_placeholders(workflow_str, prompt, seed)
     if is_i2i:

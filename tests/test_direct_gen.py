@@ -131,7 +131,9 @@ class ChannelParseTest(unittest.TestCase):
                           ("krea2柔光", "krea2-softlight"),
                           ("krea2奶油", "krea2-creamy"),
                           ("krea2写实", "krea2-real"),
-                          ("krea2通用", "krea2-general")):
+                          ("krea2通用", "krea2-general"),
+                          # 2026-11-04 新增：极光（用户挪进 loras 目录的那条）
+                          ("krea2极光", "krea2-jiguang")):
             with self.subTest(name=name):
                 self.assertEqual(_pc("%s 1girl" % name), (cid, "1girl"))
                 # 名字里夹空格也认（`krea2 米山舞` / `krea2 真人 cos`）
@@ -426,6 +428,9 @@ class BareKrea2WordTest(unittest.TestCase):
                          "anima-guizhencao")
         self.assertEqual(direct_gen._parse_channel("krea2鬼针草 初音")[0],
                          "krea2-guizhencao")
+        # 2026-11-04：极光是独特词，裸名也认，照样落 krea2-jiguang
+        self.assertEqual(direct_gen._parse_channel("极光 初音")[0],
+                         "krea2-jiguang")
 
     def test_flesh_needs_anima_prefix(self):
         """2026-10-23 新增 `anima-flesh`：带 `anima` 前缀才点名。
