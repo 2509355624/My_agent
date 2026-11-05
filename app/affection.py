@@ -2510,20 +2510,36 @@ def settle(line_key, score, game_day=None):
             recover = ORGASM_RECOVER
             just_recover = True
     elif prev_scene:
-        # 空闲轮：**不清零**。这一轮只是在说别的、在缓、在穿衣服。
-        # 数值按 AI 判的负增量往下走；它没给就减默认值。
-        idle += 1
-        if idle >= ORGASM_IDLE_END:
-            # 连续两轮都没有接触：这一场真的结束了，次数归零
-            in_scene = False
-            rec["excite"] = 0
-            rec["orgasms"] = 0
-            total_orgasm = 0
+        # 已经满着进这一轮（2026-11-06）：她其实早就到了，只是上一轮没落下账
+        # （外部改过数值、或者冷却封顶刚好卡在 99）。这时候不能再走「空闲回落」，
+        # 否则玩家看到她满格却不弹窗、数字还往下掉——用户就是这么被卡住的。
+        #
+        # 判定只认「满格 + 不在冷却 + 还在场景里」，不管这一轮聊的是不是那件事：
+        # 到了就是到了，不该因为这句话是纯对话就当作没发生。
+        if int(rec.get("excite") or 0) >= oh["max"] and recover <= 0:
+            total_orgasm += 1
+            rec["orgasms"] = total_orgasm
+            just_orgasm = total_orgasm
+            rec["excite"] = after_now
+            recover = ORGASM_RECOVER
+            just_recover = True
+            in_scene = True
             idle = 0
         else:
-            decel = ex_mod if ex_mod < 0 else -oh["idle_decay"]
-            rec["excite"] = max(0, int(rec.get("excite") or 0) + decel)
-            in_scene = True        # 还在这场里，只是这一轮没动
+            # 空闲轮：**不清零**。这一轮只是在说别的、在缓、在穿衣服。
+            # 数值按 AI 判的负增量往下走；它没给就减默认值。
+            idle += 1
+            if idle >= ORGASM_IDLE_END:
+                # 连续两轮都没有接触：这一场真的结束了，次数归零
+                in_scene = False
+                rec["excite"] = 0
+                rec["orgasms"] = 0
+                total_orgasm = 0
+                idle = 0
+            else:
+                decel = ex_mod if ex_mod < 0 else -oh["idle_decay"]
+                rec["excite"] = max(0, int(rec.get("excite") or 0) + decel)
+                in_scene = True    # 还在这场里，只是这一轮没动
     else:
         # 本来就不在场景里：保持 0
         in_scene = False
