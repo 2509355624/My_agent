@@ -53,6 +53,10 @@ SLICE_MAX = 720
 # 分轴段能占的总预算比例。剩下的是常驻层（用词纪律 + 动词），
 # 这部分哪根轴都要用，所以不能被轴段挤没。
 AXIS_SHARE = 0.62
+# 压迫模式的总上限（2026-11-05）：那一场要「权力语言 + 许可制度 + 身体诚实」
+# 三份同时到位，1400 字按 62% 分给轴段只够塞一份半。这里放到 1800，
+# 依然远小于 `_INTIMATE_GUIDE` 本身（约 1900 字），不至于把历史挤掉。
+FORCED_CHARS = 1800
 
 _H_WRITING = "02-h-tech/h-writing.md"
 _CONQUEST = "05-style/conquest-style.md"
@@ -135,6 +139,16 @@ _BY_AXIS = {
         ("声音与液体", _CONQUEST, "### ⑤ 声音 + 液体成对", "### ⑦ 破瓜见血", None),
         ("高潮控制", _H_WRITING, "### 4.4 高潮控制", "## 五、体位描写", None),
     ),
+    # 压迫模式（2026-11-05）：低好感 + 高堕落 + 气氛在动。
+    # 这三份材料合起来是同一件事：**权力被服从**——命令、许可、心理弧线。
+    # 和 `corrupt` 那根轴的区别在「她愿不愿意」：那根轴默认她是被说动的，
+    # 这一根默认她从没同意过，张力全在「她拦不住自己」。
+    "forced": (
+        ("权力语言", _DOMINATION, "## 二、权力语言体系", "## 三、高潮许可制度", None),
+        ("许可与断崖", _DOMINATION, "## 三、高潮许可制度", "## 四、惩罚与奖励的循环",
+         None),
+        ("嘴硬身体诚实", _CONQUEST, "### ④ 强制与崩坏并重", "### ⑥ 高潮链写足", None),
+    ),
 }
 
 # 全部标记都在这些文件里，启动时校一遍——改规范断了切片就早炸，
@@ -176,7 +190,14 @@ def _top_axis(aff_res):
     **只比大小、不比阈值**：谁最高就用谁。多给一条 `corrupt` 的加成是
     因为它是唯一「只涨不掉」的轴，一旦起来了就是这场戏的主旋律，
     和屈服/戒备同分时它该先说话。
+
+    **压迫模式优先**（2026-11-05）：`affection.injection_block()` 判出这一场
+    是压迫戏时，会在 res 里标 `forced=True`。那时候不管哪根轴最高，都走
+    `forced` 那一套——压力戏的写法不是「堕落轴的高配版」，是另一套材料。
     """
+    if aff_res.get("forced"):
+        return "forced"
+
     def n(k):
         try:
             return int(aff_res.get(k) or 0)
@@ -222,14 +243,18 @@ def guide(aff_res=None, chars=MAX_CHARS):
                 or max(0, _n("value")) >= 50)
     if not in_scene and not has_axis:
         return ""
+    # 轴段先占位，再填常驻层——不然常驻层的器官表会把轴段挤没，等于白挑。
+    # 压迫模式另给一份更大的预算表（2026-11-05）：那一场要三份材料同时到位，
+    # 三份各分一点，总字数得跟上；不然轴段被截成半张表，比不给还差。
+    axis = _top_axis(aff_res)
+    if axis == "forced":
+        chars = max(chars, FORCED_CHARS)
     head = "\n## 这一拍的笔法（从写作规范里挑的，**学写法和用词，不要抄情节**）\n\n"
     tail = "\n\n（上面是笔法参考。她的性格和这条线怎么走，以人设和前面的状态为准。）"
     budget = chars - len(head) - len(tail)
     if budget <= 0:
         return ""
 
-    # 轴段先占位，再填常驻层——不然常驻层的器官表会把轴段挤没，等于白挑。
-    axis = _top_axis(aff_res)
     axis_parts, used = [], 0
     for name, rel, a, b, u in _BY_AXIS.get(axis, ()):
         if used >= budget * AXIS_SHARE:
