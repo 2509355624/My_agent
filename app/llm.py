@@ -308,6 +308,10 @@ def _record_usage(usage, elapsed=None, provider="", model="", kind="llm"):
         details = usage.get("prompt_tokens_details") or {}
         hit = details.get("cached_tokens", 0)
         miss = (usage.get("prompt_tokens") or 0) - (hit or 0)
+    elif miss is None:
+        # 2026-11-06：DeepSeek 会只回 hit、不回 miss，原来 miss 保持 None，
+        # 下一行 `%d` 直接抛 TypeError，每轮打一串 logging traceback。
+        miss = max(0, int(usage.get("prompt_tokens") or 0) - int(hit or 0))
     total = (hit or 0) + (miss or 0)
     if total <= 0:
         return

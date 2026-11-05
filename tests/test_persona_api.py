@@ -554,6 +554,17 @@ class HistoryArchiveApiTest(PersonaApiBase):
             before = ids[0]
         self.assertEqual(got, list(range(60)))         # 一条不重不漏
 
+    def test_session_turns_is_total_not_note_beat(self):
+        """轮次显示累计交流轮数（2026-11-06）：压缩清零 `turns` 不影响它。"""
+        key = self._line()
+        self._seed(key, 12)                       # 归档 12 轮
+        st = persona._load_state()
+        st[key]["turns"] = 0                      # 模拟刚压过小记
+        st[key]["turn_total"] = 12
+        persona._save_state(st)
+        d = self.get("/api/persona/session")
+        self.assertEqual(d["turns"], 12)
+
     def test_legacy_ai_keys_are_not_returned(self):
         """老的 `ai<窗口序号>` 已经对不上任何消息了，回给前端只会挂错位置。"""
         key = self._line()
@@ -599,6 +610,54 @@ class RollbackApiTest(PersonaApiBase):
         self.assertNotIn("n0", slots)
         self.assertNotIn("n1", slots)
         self.assertIn("n9", slots)          # 更早的映射不动
+
+
+    def test_rollback_decrements_total_turns(self):
+        """回退时累计轮次跟着 -1（2026-11-06 用户要求）。"""
+        key = self._setup_line()
+        rows = [{"role": "user", "content": "你好"},
+                {"role": "assistant", "content": "嗨"}]
+        persona._save_hist(key, rows)
+        persona._save_archive(key, [dict(r) for r in rows])
+        st = persona._load_state()
+        st[key]["turn_total"] = 1
+        persona._save_state(st)
+        d = self.post("/api/persona/rollback")
+        self.assertTrue(d["ok"])
+        self.assertEqual(persona.turn_total(key), 0)
+
+
+class TurnOutAffectionTest(PersonaApiBase):
+    """跨天/收场三段回包要带最新 affection（2026-11-06 群友反馈）。
+
+    `finish_night` / `next_morning` 会 `affection.sleep` 收场，冲动和高潮值
+    都变了；不带回去，网页右栏要手动刷新才更新。
+    """
+
+    def test_turn_out_carries_affection(self):
+        self.post("/api/persona/switch", id="izumi_sagiri")
+        key = persona.resolve_line(
+            persona_api._active_key(persona_api._key(QQ)))
+        turn = persona.Turn("早", "", "平静", 1, "床边", None)
+        out = persona_api._turn_out(key, turn)
+        self.assertIn("affection", out)
+        self.assertIn("day", out)
+        self.assertIn("turns", out)
+
+
+class ManualChatApiTest(PersonaApiBase):
+    """精确输入（2026-11-06）：主输入框空、只填分栏也能发。"""
+
+    def test_fields_without_text_is_accepted(self):
+        self.post("/api/persona/switch", id="izumi_sagiri")
+        turn = persona.Turn("好", "", "平静", 1, "房间", None)
+        with mock.patch.object(persona, "run_turn",
+                               return_value=turn) as rt:
+            d = self.post("/api/persona/chat",
+                          fields={"action": "拿起杯子"})
+        self.assertTrue(d.get("ok"))
+        self.assertEqual(rt.call_args.kwargs.get("manual"),
+                         {"action": "拿起杯子"})
 
 
 if __name__ == "__main__":

@@ -43,7 +43,6 @@
 `mode` 为 "free" 时数值**封存不删**——切回 raid 原值接着来。
 """
 import copy
-import datetime
 import json
 import logging
 import os
@@ -628,6 +627,184 @@ excite_level = orgasm_level
 excite_name = orgasm_name
 
 
+# ── 动态状态规则（2026-11-06）────────────────────────────
+# 冲动 / 高潮是**这一轮的气氛**，不是长期人设：同样的她，冲动 10 和 95
+# 会做出完全不同的举动。长期轴（好感/堕落/屈服）已经有各自的长文案，
+# 这里补的是「这一刻到什么档、她这一拍会怎么动」的临时规则。
+#
+# 三条来源：冲动档、高潮档、以及两条组合（combo key = 冲动key+高潮key）。
+# 文案放在 config 的 `dynamic_rules` 里，用户可改；缺了回退这张表。
+DYNAMIC_RULES = {
+    "arousal": {
+        "calm": "跟平时一样，不会往那方面想。你靠近她不躲，但她不主动；"
+                "注意力在别的事上。",
+        "mild": "比平时近了半步。会多看你两眼、找话说；被碰到会顿一下，"
+                "但不承认。她不先开口，等你给台阶。",
+        "warm": "开始往你这边靠。会找借口碰你——递东西、整理你的衣领、"
+                "走得更近；话里有话，在等你的信号。你给明确回应，她就接。",
+        "hot": "眼神不一样了，呼吸变浅，坐不住。会主动靠近、暗示、问"
+               "「什么时候走」；嘴上还硬，身体已经朝你。她可能先开口，"
+               "也可能等你一句话——你一给回应她就不推。",
+        "burning": "已经忍不住了，不再等。会主动开口、主动靠近、找机会把你带走。"
+                   "在外面或有旁人时：压着声音、拉你衣角、说「我们回去」，"
+                   "不会当众做到最后，但会想办法制造独处。被拒绝会恼、会委屈，"
+                   "不会退很远。",
+    },
+    "orgasm": {
+        "cold": "身体还没跟上。嘴上可能说到，身上还是干、紧、躲；"
+                "表情是忍耐或走神，不是享受。",
+        "awake": "身体先答了。耳根发热、呼吸变浅、衣料底下先有反应；"
+                 "她想藏，眼神躲、嘴唇抿住。情绪是慌和羞。",
+        "rising": "理智只剩薄薄一层。声音拔高又压回去，手在找东西抓；"
+                  "嘴上说「等一下」「不行」，实际是「别停」。眼眶开始湿。",
+        "edge": "在临界上。求饶的话出来了，腿自己缠、腰自己往上顶，声音碎；"
+                "会突然安静或发抖。情绪是急、怕、又想要。",
+        "over": "刚到了。呼吸停住、身体一下一下地收、眼神失焦，说不出完整的话。"
+                "情绪是空白、羞、想贴着你不放。余韵至少留两行，不能立刻接着推。",
+    },
+    "combo": {
+        "burning+edge": "她自己动手或直接求，声音压不住；场合不允许就拉你走，"
+                        "压着声音说「现在」。不要让她还端着。",
+        "burning+over": "刚到了一次还想要，主动缠上来；但身体还敏感，碰一下就抖。"
+                        "写「要不够」和「受不住」同时存在。",
+        "hot+rising": "嘴还硬，身体已经跟上了，差一步就主动。你一碰她就软，"
+                      "嘴上还「别」，但不会真躲。",
+        "warm+cold": "想，但身体还没起来：会害羞、找台阶、怕自己不够湿。"
+                     "需要前戏和耐心，别写成冷淡。",
+        "hot+cold": "很想要，身体却不配合：会急、会恼、会怀疑自己；"
+                    "手先动，身体慢半拍。别写成「她不想要」。",
+        "calm+over": "身体到了，心没在场：可能麻木、走神、事后更空。"
+                     "只在她本来就不太情愿的线上用。",
+    },
+    # 单场第 N 次高潮之后（2026-11-06）：次数越多越累、越敏感，
+    # 不是每次都从「刚到了」重来一遍。
+    "count": {
+        "1": "第一次刚过去：还在余韵里，身体敏感、喘不上气；"
+             "她可能不肯承认自己到了。",
+        "2": "第二次之后：比第一次更快也更敏感，她开始有点怕自己；"
+             "嘴上说「不要了」，身体还没退。",
+        "3": "第三次之后：开始累了，声音哑、腿软，求你别太快；"
+             "但身体还跟着，没到真拒绝。",
+        "4": "第四次之后：明显过载，碰一下都抖，眼神散；"
+             "会求你停，或者说不出完整的句子。",
+        "5": "第五次之后：到极限了，几乎说不出话，只剩喘和眼泪；"
+             "之后瘫软，短时间不能再要。",
+    },
+}
+
+
+def dynamic_rules(cfg=None):
+    """取动态规则表；config 里有就用（可覆盖键），缺的用默认表。"""
+    cfg = cfg or load_config()
+    cfg_rules = cfg.get("dynamic_rules") if isinstance(cfg, dict) else None
+    if not isinstance(cfg_rules, dict):
+        cfg_rules = {}
+    out = {}
+    for axis in ("arousal", "orgasm", "combo", "count"):
+        merged = dict(DYNAMIC_RULES.get(axis) or {})
+        got = cfg_rules.get(axis)
+        if isinstance(got, dict):
+            for key, txt in got.items():
+                if str(key).startswith("_"):
+                    continue
+                if isinstance(txt, str) and txt.strip():
+                    merged[str(key)] = txt.strip()
+        out[axis] = merged
+    return out
+
+
+def dynamic_state(res, cfg=None):
+    """这一轮的冲动/高潮档位，给导演层和主角注入共用。"""
+    if not isinstance(res, dict):
+        return {}
+    ar = int(res.get("arousal") or 0)
+    ex = int(res.get("excite") or 0)
+    su = int(res.get("submit") or 0)
+    cnt = int(res.get("orgasms") or 0)
+    al = arousal_level(ar, cfg) or {}
+    ol = orgasm_level(ex, cfg) or {}
+    sl = submit_level(su, cfg) or {}
+    akey = str(al.get("key") or "")
+    okey = str(ol.get("key") or "")
+    in_scene = bool(res.get("in_scene")) or ex > 0
+    combo = ("%s+%s" % (akey, okey)) if (akey and okey and in_scene) else ""
+    return {"arousal": ar, "arousalKey": akey, "arousalName": str(al.get("name") or ""),
+            "excite": ex, "exciteKey": okey, "exciteName": str(ol.get("name") or ""),
+            "submit": su, "submitKey": str(sl.get("key") or ""),
+            "submitName": str(sl.get("name") or ""),
+            "submitPrompt": str(sl.get("prompt") or ""),
+            "orgasms": cnt,
+            "inScene": in_scene, "comboKey": combo}
+
+
+def dynamic_block(res, cfg=None):
+    """导演/演员层这一轮的临时行为规则（冲动 + 高潮 + 组合）。
+
+    只在攻略模式、且至少有一档成立时返回；空串表示这一轮不需要额外规则。
+    """
+    if not isinstance(res, dict) or not res.get("active"):
+        return ""
+    st = dynamic_state(res, cfg)
+    rules = dynamic_rules(cfg)
+    lines = []
+    if st["arousal"] >= 20:
+        txt = rules["arousal"].get(st["arousalKey"])
+        if txt:
+            lines.append("- 冲动：%s（%d/100）——%s"
+                         % (st["arousalName"] or st["arousalKey"],
+                            st["arousal"], txt))
+    if st["inScene"]:
+        txt = rules["orgasm"].get(st["exciteKey"])
+        if txt:
+            lines.append("- 高潮值：%s（%d/100）——%s"
+                         % (st["exciteName"] or st["exciteKey"],
+                            st["excite"], txt))
+        cnt = st["orgasms"]
+        if cnt >= 1:
+            txt = rules["count"].get(str(cnt))
+            if txt:
+                lines.append("- 这一场已经到第 %d 次：%s" % (cnt, txt))
+    combo = st["comboKey"]
+    if combo and rules["combo"].get(combo):
+        lines.append("- 两条一起：%s" % rules["combo"][combo])
+    # 屈服（2026-11-06）：常驻轴，但演员层一直没拿到；这里补上她此刻听不听话。
+    if st["submit"] >= 25 and st["submitPrompt"]:
+        lines.append("- 她此刻服不服：%s（%d/100）——%s"
+                     % (st["submitName"] or st["submitKey"],
+                        st["submit"], st["submitPrompt"]))
+    if not lines:
+        return ""
+    return ("## 她此刻的临时状态（只在这一轮有效，不是人设）\n\n"
+            + "\n".join(lines)
+            + "\n\n（数值变了，规则就跟着变；下一轮按新数值重新判。）")
+
+
+def dynamic_brief(res, cfg=None):
+    """给第一段导演 AI 看的短版：档位名 + 行为，让它判 lead 时不瞎猜。"""
+    st = dynamic_state(res, cfg)
+    rules = dynamic_rules(cfg)
+    parts = []
+    if st.get("arousal", 0) >= 20:
+        txt = rules["arousal"].get(st["arousalKey"])
+        if txt:
+            parts.append("冲动 %d/100（%s）：%s"
+                         % (st["arousal"], st["arousalName"], txt))
+    if st.get("inScene"):
+        txt = rules["orgasm"].get(st["exciteKey"])
+        if txt:
+            parts.append("高潮 %d/100（%s）：%s"
+                         % (st["excite"], st["exciteName"], txt))
+        cnt = int(st.get("orgasms") or 0)
+        if cnt >= 1:
+            txt = rules["count"].get(str(cnt))
+            if txt:
+                parts.append("这一场第 %d 次：%s" % (cnt, txt))
+    combo = st.get("comboKey") or ""
+    if combo and rules["combo"].get(combo):
+        parts.append("两条一起：%s" % rules["combo"][combo])
+    return "\n".join(parts)
+
+
 def orgasm_hints(cfg=None):
     """高潮值的记账参数：起步值、上限、单场次数、余韵值、空闲回落、动作档基数。"""
     cfg = cfg or load_config()
@@ -1020,10 +1197,6 @@ def card_start(card):
             "arousal": max(0, min(AROUSAL_MAX, aro))}
 
 
-def _today():
-    return datetime.date.today().isoformat()
-
-
 def _blank(line_key="", value=None):
     """新建一份攻略记录。
 
@@ -1049,7 +1222,7 @@ def _blank(line_key="", value=None):
             # 开发度（2026-11-05）：五个部位单独记，**只涨不掉、不设上限**，
             # 500 是满格（面板显示 /500）。老档在 `_migrate` 里补 0。
             "dev": dev_blank(),
-            "day": _today(), "chat": 0, "acts": 0,
+            "day": 0, "chat": 0, "acts": 0,
             "streak": 1, "turns": 0, "ach": [], "hist": [],
             "mercy": MERCY_MAX, "suspicion": 0}
 
@@ -1896,11 +2069,21 @@ def scoring_ctx(line_key):
         else "（你们还没什么交集）"
     lv = int(rec.get("level") or 0)
     tv = _tier_view(tier_for(value, cfg), lv)
+    ar = int(rec.get("arousal") or 0)
+    ex = int(rec.get("excite") or 0)
+    # 动态状态（2026-11-06）：导演 AI 不只要看数字，还要知道这个档位她这一拍
+    # 会怎么动——否则「lead 判不判 act」全靠它瞎猜。
+    dyn = {"active": True, "arousal": ar, "excite": ex,
+           "in_scene": bool(rec.get("scene"))}
     return {"value": value,
             "tier": tv["name"] or "?",
             "level": level_name(lv, cfg, _card_of(line_key)) or "?",
             "levelN": lv,
-            "arousal": int(rec.get("arousal") or 0),
+            "arousal": ar,
+            "arousalName": arousal_name(ar, cfg),
+            "excite": ex,
+            "exciteName": excite_name(ex, cfg),
+            "dynamicBrief": dynamic_brief(dyn, cfg),
             # 堕落 / 屈服（2026-11-04 深夜）：打分模型要知道她现在被弄成什么样，
             # 否则「同一句话」在堕落 0 和堕落 80 时会给出一样的 delta。
             "corrupt": int(rec.get("corrupt") or 0),
@@ -1939,6 +2122,8 @@ def sleep(line_key):
     rec["_prev"] = _snap
     prev_aro = int(rec.get("arousal") or 0)
     rec["arousal"] = max(0, prev_aro - AROUSAL_DECAY * 2)
+    if int(rec.get("corrupt") or 0) >= 50:
+        rec["arousal"] = max(45, rec["arousal"])
     rec["excite"] = 0
     rec["scene"] = False
     rec["orgasms"] = 0
@@ -1965,11 +2150,13 @@ def _as_bool(v):
     return s in ("1", "true", "yes", "y", "是", "对", "on")
 
 
-def settle(line_key, score):
+def settle(line_key, score, game_day=None):
     """把第一段的打分结算进状态。返回结果 dict（调用方拼注入和尾行）。
 
     `score`：第一段模型输出的 {"delta": int, "turn_type": "...", "reason": "..."}。
     没交作业 / 解析失败时传 None——按 +0 处理，**不让整轮回不了话**。
+    `game_day`（2026-11-06）：游戏内第几天。所有跨天/连续天数都只认它，
+    **不再读现实日期**——现实零点、跨月、时区都不参与数值。
     """
     ent, rec = _ensure(line_key)
     if not rec or rec.get("mode") != MODE_RAID:
@@ -2008,17 +2195,25 @@ def settle(line_key, score):
     _snap.pop("_prev", None)
     rec["_prev"] = _snap
 
-    # 跨天：把隔夜会散掉的东西散掉。**不再有额度要重置**——聊天和剧情
-    # 都不按天算次数（2026-11-04 晚），这里只管气氛和警惕。
-    if str(rec.get("day") or "") != _today():
-        prev_day = str(rec.get("day") or "")
-        rec["day"] = _today()
-        rec["cross_n"] = max(0, int(rec.get("cross_n") or 0) - 1)
-        rec["arousal"] = 0
-        # 连续陪伴（2026-11-04）：昨天刚来过就 +1，断过就从 1 重算。
-        # 首聊当天不算跨天（day 就是今天），streak 在 `_blank` 里已经是 1。
-        yday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
-        rec["streak"] = (int(rec.get("streak") or 0) + 1) if prev_day == yday else 1
+    # 跨天（2026-11-06 改）：只认**游戏内天数**，不再读现实日期。
+    # 现实零点、跨月、时区都不该影响数值；冲动更不该因为日期切换清零。
+    if game_day is not None:
+        try:
+            gd_now = int(game_day)
+        except (TypeError, ValueError):
+            gd_now = 0
+        if gd_now > 0:
+            try:
+                gd_prev = int(rec.get("day") or 0)
+            except (TypeError, ValueError):
+                gd_prev = 0
+            if gd_prev and gd_now > gd_prev:
+                rec["cross_n"] = max(0, int(rec.get("cross_n") or 0) - 1)
+                rec["streak"] = (int(rec.get("streak") or 0) + 1
+                                 if gd_now == gd_prev + 1 else 1)
+            elif not gd_prev:
+                rec["streak"] = max(1, int(rec.get("streak") or 1))
+            rec["day"] = gd_now
     rec["turns"] = int(rec.get("turns") or 0) + 1
 
     score = score if isinstance(score, dict) else {}
@@ -2052,9 +2247,9 @@ def settle(line_key, score):
         arose = 0
     arose = max(-60, min(60, arose))
     _aro_prev = int(rec.get("arousal") or 0)
-    _aro_pred = (_aro_prev + arose if arose > 0
-                 else _aro_prev + arose - AROUSAL_DECAY)
-    _aro_pred = max(0, min(AROUSAL_MAX, _aro_pred))
+    # 2026-11-06：冲动值完全按「当前状态 + AI 给的增量」走，不再固定 -15。
+    # 她想要多少，由这一轮的剧情判；代码只负责夹到 0~100 和下面的堕落兜底。
+    _aro_pred = max(0, min(AROUSAL_MAX, _aro_prev + arose))
 
     prev_value = value
     value = max(MIN_V, min(MAX_V, value + applied))
@@ -2070,12 +2265,9 @@ def settle(line_key, score):
 
     # 冲动是一次性的机会：本轮场景给的增量 + 回合结束回落。
     #
-    # 2026-11-05 修（用户：网页右栏「冲动值一直不变」）：原来**每轮无条件
-    # -15**，而打分模型给的常态增量只有 +10~+15（情话 +10、独处 +15，
-    # 身体接触 +20 但不是每轮都有）→ 净值长期为负，夹在 0 上就再也不动。
-    # 玩家看到的确实是「一条死掉的进度条」。
-    # 现在只有「这一轮没在拱气氛」（arose <= 0）才回落：有人在推就攒得住，
-    # 没人管会凉——「得重新拱气氛」的本意保住了，但不再是把所有加分吃掉。
+    # 2026-11-06 定稿（用户拍板）：**不再有固定回落**。冲动是「她想要的程度」，
+    # 由 AI 按当前状态给增量；没有负增量就保持，不会因为日期切换/聊了两句
+    # 就往下掉。堕落 ≥ 50 时另有 45 的下限（见下方）。
     # 计算已在上面完成（`_aro_pred`），这里只落账。
     rec["arousal"] = _aro_pred
 
@@ -2311,6 +2503,10 @@ def settle(line_key, score):
     if just_orgasm and not cross:
         cor_delta += ch["up"].get("她在这场里到了", 6)
     rec["corrupt"] = max(0, min(CORRUPT_MAX, prev_corrupt + cor_delta))
+    # 冲动下限（2026-11-06 用户拍板）：堕落 ≥ 50 之后，她再怎么说不要、
+    # AI 给再大的负增量，冲动也不会低于 45——身体已经被调成这样了。
+    if int(rec.get("corrupt") or 0) >= 50:
+        rec["arousal"] = max(45, int(rec.get("arousal") or 0))
 
     prev_submit = int(rec.get("submit") or 0)
     try:
@@ -2391,7 +2587,7 @@ def settle(line_key, score):
 
     hist = rec.get("hist") if isinstance(rec.get("hist"), list) else []
     hist.append({"d": applied, "r": reason,
-                 "ts": datetime.datetime.now().strftime("%m-%d %H:%M")})
+                 "ts": (("第%d天" % int(game_day)) if game_day else "")})
     rec["hist"] = hist[-HIST_KEEP:]
     rec["value"] = value
 

@@ -58,9 +58,25 @@ import threading
 import time
 
 from app import affection, llm, persona_rag, pregnancy, trigger, writing_skills
-from app.config import BASE_DIR, QQ_AGENT_ID, QQ_BOT_NAME
+from app.config import (BASE_DIR, PERSONA_MODEL, PERSONA_PROVIDER,
+                        QQ_AGENT_ID, QQ_BOT_NAME)
 
 log = logging.getLogger("persona")
+
+
+def _llm_call(messages, **kw):
+    """扮演链路的 LLM 调用：默认用角色扮演专用模型。
+
+    指定了 `PERSONA_PROVIDER/PERSONA_MODEL` 时，这两个会排在降级链最前面；
+    请求失败照旧依次往下走 `LLM_FALLBACK_CHAIN`。玩家在网页里临时指定了
+    自定义模型（`llm.get_custom_override()`）时那个优先——不要把玩家的选择盖掉。
+    """
+    if not llm.get_custom_override():
+        if PERSONA_PROVIDER:
+            kw.setdefault("provider", PERSONA_PROVIDER)
+        if PERSONA_MODEL:
+            kw.setdefault("model", PERSONA_MODEL)
+    return llm.call_llm(messages, **kw)
 
 # 一轮的结果：`reply` 是要发回去的正文，`scene` 是这一轮要画的画面（可能为空）。
 # 用命名元组而不是 `(reply, scene)`：调用方写 `turn.reply` 比 `[0]` 看得懂，
@@ -459,6 +475,14 @@ def intimate_guide(aff_res=None):
 
 _CONTRACT = (
     "\n"
+    "## 人称对照\n"
+    "\n"
+    "- **正文**：女主角一律「她」，玩家一律「你」。\n"
+    "- **她的台词和【心声】里**：她自称「我」（指她自己），对玩家仍用「你」。\n"
+    "- **玩家原话**：里面的「我」是玩家本人，不是你。\n"
+    "- 旁人一律用称呼或名字（摊主 / 伙计 / 同学……），不要用人称代指。\n"
+    "- **任何地方都不许用「他」指代玩家。**\n"
+    "\n"
     "## 最优先的一条\n"
     "\n"
     "**你说出口的、做出来的，就是正在发生的事。** 不用先判断「这是不是玩笑、"
@@ -495,48 +519,42 @@ _CONTRACT = (
     "## 正文怎么写\n"
     "\n"
     "**正文是小说，不是聊天记录。** 叙述用第三人称——写「她」在做什么、"
-    "身体怎么反应、周围在发生什么。她的台词用「」穿插在叙述里。"
-    "**不要用星号包动作，也不要用括号写内心**，"
-    "动作和心理都直接写进叙述。\n"
+    "身体怎么反应、周围在发生什么。她的台词用「」穿插在叙述里；动作和神态用"
+    "（）写。**不要用星号包动作**，括号里只写动作/神态，不写心理。\n"
     "\n"
     "### 心理活动要写足\n"
     "\n"
-    "**每一轮至少两处内心独白，不加任何标记符号，直接铺进段落。**\n"
+    "**每一轮至少两处内心独白，每处都必须用 `【心声】` 开头、单独成行。**\n"
+    "例如：`【心声】我不敢眨眼了。`\n"
     "\n"
-    "这不是可选项。**没有内心独白的一轮算不合格。**\n"
+    "这不是可选项。**没有【心声】的一轮算不合格。**\n"
     "\n"
-    "两种写法都行，混着用最好：\n"
-    "\n"
-    "- 带「我」的：`我不敢眨眼了。` / `我再待下去会说出很奇怪的话。`\n"
-    "- 不带「我」的：`为什么偏偏是腰。` / `明明还有正事。` / `不许睁开。`\n"
-    "\n"
-    "**至少有一处要带「我」**——完全不出现的「我」，读者进不去她的脑子。\n"
+    "带不带「我」都行，但**至少有一处要带「我」**——完全不出现的「我」，"
+    "读者进不去她的脑子。\n"
     "\n"
     "内心独白是**现在进行时的、断续的、有时不讲道理的**——不是总结，"
     "不是分析，是她脑子里当下蹦出来的那句。允许它和嘴上说的相反。\n"
     "\n"
-    "**独白里提到对方也用「你」**：写「你再往下一点」，不写「他再往下一点」。\n"
+    "**独白里提到对方一律用「你」**：写「你再往下一点」，不写「他再往下一点」。\n"
+    "\n"
+    "**指代要具体**：不要写「那一处」「那里」「某处」「身下」这种让读者猜的词；"
+    "写「被你碰到的地方」「腿间」「桌沿下面」这种读者能立刻对上的。\n"
     "\n"
     "**不要让一整段都在写动作。** 动作之间要有她怎么想、怎么看、怎么给自己找"
     "台阶。读者要的是「进得去她的脑子」，不是「看一台摄像机」。\n"
     "\n"
-    "### 自称和称呼\n"
+    "### 称呼\n"
     "\n"
-    "- 她说话、想事时**用「我」自称**，不要用「她」——「她说」是叙述，"
-    "「我想」是她的脑子。\n"
-    "- 称呼对方时**用「你」**，不用「他」。\n"
     "- 偶尔用对方的名字或身份（「哥哥」「学长」），但**不要每句都带**。\n"
-    "- **一段里「她」出现太多次是坏事**。能省则省：主语可以连着省掉，"
-    "读者跟得上。「她把脸埋起来。手还在抖。」比「她把脸埋起来。她的手还在抖」"
-    "更紧。\n"
+    "- **「她」别刷屏**。主语能省就省：「她把脸埋起来。手还在抖。」比"
+    "「她把脸埋起来。她的手还在抖」更紧。\n"
     "\n"
     "### 记得用「你」\n"
     "\n"
-    "**提到对面的动作、体温、呼吸，一律用「你」**——那是读者自己。"
-    "把对面写成第三人称，代入感立刻就散了。\n"
+    "**提到对面的动作、体温、呼吸，一律用「你」**——那是读者自己。\n"
     "\n"
     "- 这样写：`你的手停在她胸口，她整个人绷了一下。`\n"
-    "- 别这样：`某人的手停在她胸口` —— 把对面写成第三人称，代入感就没了。\n"
+    "- 别这样：`某人的手停在她胸口`。\n"
     "\n"
     "一轮写 **3~4 段**，400~800 字。每段都要有具体的感官细节：\n"
     "\n"
@@ -657,12 +675,13 @@ _CONTRACT = (
     "一部分。**只写标签不写内容是错的**（不要出现「画面：」后面空着的情况）。\n"
     "\n"
     "还有那条最容易忘的：**对面那个人是「你」，不是「他」。**\n"
-    "写完扫一眼，把所有指代对方的「他」换成「你」。\n"
+    "写完扫一眼，把所有指代对方的「他」换成「你」——心声里也一样。\n"
     "\n"
-    "另外两条也自查一下：\n"
+    "另外三条也自查一下：\n"
     "\n"
-    "- **至少两处「我」开头的内心独白**。整段全是动作、一句心理都没有，"
-    "就是没写到位。\n"
+    "- **至少两处 `【心声】`**，每处单独成行。整段全是动作、一句心理都没有，"
+    "就是没写到位；裸写的内心独白也算不合格。\n"
+    "- **指代具体**：不写「那一处 / 那里 / 某处 / 身下」。\n"
     "- **「她」别刷屏**。一句话里出现三四次「她」，读起来像说明书。\n"
 )
 
@@ -707,13 +726,21 @@ _NOTE_PROMPT = (
     "标题原样，不要改、不要少：\n"
     "\n"
     "## 关系\n"
-    "## 你的事（你说过的 / 你做的）\n"
-    "## 我的事（我说过的 / 我做的）\n"
+    "## 你的事（你做过的）\n"
+    "## 她的事（她做过的）\n"
     "## 约定与未完成\n"
     "## 忌讳与偏好\n"
     "## 日常与场景\n"
     "\n"
-    "**用「我」写她、用「你」写他**，不出现「他」——这是她自己的记忆。\n"
+    "**这是第三人称的账本：用「她」写女主角、用「你」写玩家，全文不出现「他」。**"
+    "「我」只允许出现在她引用的原话里（那个「我」指她自己）。\n"
+    "\n"
+    "**每一节都必须守住这个视角**：「你的事」只写玩家（用「你」），"
+    "「她的事」只写女主角（用「她」）。\n"
+    "\n"
+    "**旧账本里的人称写错了，先按上面的规则改写再抄**——把指代玩家的「他」"
+    "改成「你」、把写女主角的「我」改成「她」（引号里的原话不动）。"
+    "不要原样抄错人称的条目，否则错误会一轮一轮传下去。\n"
     "\n"
     "**重点保留这些**（以后接得上全靠它们）：\n"
     "- 关系进展到哪一步、怎么称呼\n"
@@ -721,8 +748,8 @@ _NOTE_PROMPT = (
     "- 答应过什么、约定了什么、还没做完的事\n"
     "- 对方喜欢什么、不喜欢什么、忌讳什么\n"
     "- 现在住在哪、常去哪、彼此什么习惯\n"
-    "- **谁做了什么事**（你做的饭、你泡的茶、我答应的事）——写清是谁，"
-    "不要因为一句「谢谢」就认成自己做的\n"
+    "- **谁做了什么事**（你做的饭、你泡的茶、她答应的事）——写清是谁，"
+    "不要因为一句「谢谢」就认成她做的\n"
     "\n"
     "**不要写这些**：\n"
     "- 不要复述原话，不要「对方说」「我说」这类标记\n"
@@ -732,10 +759,13 @@ _NOTE_PROMPT = (
     "\n"
     "**怎么写**：\n"
     "- 每条一行，以「- 」开头；同一条目不要拆成好几行。\n"
-    "- 旧账本里仍然成立的条目**原样抄过去**，不要改写措辞；变化的就地改；"
+    "- 旧账本里仍然成立的条目**除人称外**原样抄过去，不要改写措辞；"
+    "人称错的按上面的规则改；变化的就地改；"
     "完成的从「约定」里移走；过期的删掉。\n"
-    "- 每节条数上限：关系 4、他的事 8、我的事 8、约定 5、忌讳 5、日常 3。\n"
+    "- 每节条数上限：关系 4、你的事 8、她的事 8、约定 5、忌讳 5、日常 3。\n"
     "- 总字数 %d 字以内；超了先删最不重要的旧事，**六个标题必须都保留**。\n"
+    "- **输出前逐行自检**：全文不能出现指代玩家的「他」；「你的事」的主语是"
+    "「你」，「她的事」的主语是「她」；引号外不能出现「我」。有错就改，改完再交。\n"
     "\n"
     "只输出 Markdown 本身，不要解释、不要前后缀。\n"
     "\n"
@@ -2430,6 +2460,34 @@ def archive_len(session_key):
     return len(load_archive(session_key))
 
 
+def _archive_assistant_count(session_key):
+    """归档里她说过多少条——老线补算「累计轮次」用。"""
+    try:
+        return sum(1 for m in load_archive(session_key)
+                   if isinstance(m, dict) and m.get("role") == "assistant")
+    except Exception:                                    # noqa: BLE001
+        return 0
+
+
+def turn_total(session_key):
+    """这条线累计交流了多少轮（网页「轮次」显示用，2026-11-06 用户要求）。
+
+    和小记压缩的 `turns` 分开：那个每 `NOTE_EVERY_TURNS` 轮被 `compress_note`
+    清零，玩家真正想看的是总量。新线由 `_bump_turn` 维护 `turn_total`；
+    老线没有这个字段时按归档里她的回复条数补算（只读不写盘）。
+    """
+    key = resolve_line(session_key)
+    ent = _entry(key)
+    if not isinstance(ent, dict):
+        return 0
+    if ent.get("turn_total") is not None:
+        try:
+            return max(0, int(ent.get("turn_total") or 0))
+        except (TypeError, ValueError):
+            return 0
+    return _archive_assistant_count(key)
+
+
 def history_page(session_key, before=None, limit=None):
     """归档里 `[before-limit, before)` 这一段，返回 (start, chunk, total)。
 
@@ -2602,9 +2660,13 @@ def build_head(card, session_key, sender, note="", state="", intimate=True):
         parts.append(_GROUP_NOTE)
     parts.append(_env_note(session_key, sender))
     if note.strip():
-        parts.append("【之前的事】\n" + note.strip())
+        # 旧账本可能带着第三人称（2026-11-06）：注入前先纠成「你」，
+        # 存量脏账本不逐条手改也不会把演员带偏。
+        parts.append("【之前的事】\n" + _ledger_fix_pronouns(note).strip())
     if str(state or "").strip():
-        parts.append("## 她此刻的样子\n\n" + str(state).strip()
+        # 存量的「她此刻的样子」也可能写着「他」（2026-11-06）：注入前纠成「你」。
+        parts.append("## 她此刻的样子\n\n"
+                     + _PRONOUN_HE.sub("你", str(state).strip())
                      + "\n\n（这是上一轮结束时的状态，接着它往下演，"
                        "不要自己给她换回原来的衣服）")
     return "\n\n".join(parts)
@@ -2624,7 +2686,75 @@ def _env_note(session_key, sender):
     return "## 当前环境\n\n你在跟一个人私聊（QQ %s）。" % tid
 
 
-def render_user_block(segments, addressed=True, fallback=""):
+# ── 精确输入（2026-11-06 用户要求）──────────────────────────
+# 主输入框仍然是兜底；玩家也可以明确分栏写「心理活动 / 动作 / 台词 / 剧情」。
+# 分栏内容以玩家标注为准，编剧 AI 不再重拆。心理活动只进编剧层，绝不进演员层。
+_MANUAL_KEYS = ("thought", "action", "speech", "plot")
+
+
+def _manual_norm(manual):
+    """洗一遍前端传来的精确输入：只留非空字符串，长度封顶。"""
+    if not isinstance(manual, dict):
+        return {}
+    out = {}
+    for k in _MANUAL_KEYS:
+        v = str(manual.get(k) or "").strip()
+        if v:
+            out[k] = v[:2000]
+    return out
+
+
+def _manual_block(m):
+    """给编剧 AI 看的标注块。心理活动也在这里——只有它能看见。"""
+    if not m:
+        return ""
+    labels = {
+        "thought": "心理活动（她看不见，只有你知道）",
+        "action": "动作（她看得见）",
+        "speech": "台词（她听得见）",
+        "plot": "剧情推进想法（导演层，不是她已知的事）",
+    }
+    lines = ["【玩家这一轮明确标注了】"]
+    for k in _MANUAL_KEYS:
+        if m.get(k):
+            lines.append("- %s：%s" % (labels[k], m[k]))
+    lines.append("（分段以这里为准，不用你重拆；『想』的内容只用于判潜台词，"
+                 "不要写进演员提示词。）")
+    return "\n".join(lines)
+
+
+def _manual_segments(m):
+    """精确输入 → 手工分段。『想』带内容，但渲染层会把它藏起来。"""
+    segs = []
+    if m.get("thought"):
+        segs.append({"who": "用户", "type": "想", "text": m["thought"]})
+    if m.get("action"):
+        segs.append({"who": "用户", "type": "做", "text": m["action"]})
+    if m.get("speech"):
+        segs.append({"who": "用户", "type": "说", "text": m["speech"]})
+    if m.get("plot"):
+        # 剧情推进不是她说出口的话，是玩家给导演/演员的方向；单独一种段。
+        segs.append({"who": "导演", "type": "剧情", "text": m["plot"]})
+    return segs
+
+
+def _manual_display(m, text=""):
+    """落历史/网页展示用的合成文本。演员不读这个，读的是 `seg`。"""
+    parts = []
+    if m.get("thought"):
+        parts.append("（心里：%s）" % m["thought"])
+    if m.get("action"):
+        parts.append("（%s）" % m["action"])
+    if m.get("speech"):
+        parts.append("「%s」" % m["speech"])
+    if m.get("plot"):
+        parts.append("【剧情推进】%s" % m["plot"])
+    if str(text or "").strip():
+        parts.append(str(text).strip())
+    return "\n".join(parts)
+
+
+def render_user_block(segments, addressed=True, fallback="", remind=False):
     """把第一段拆好的用户消息拼成演员层能读的块。
 
     没有分段就退回原文（`fallback`）。分段里的「想」**必须明确写成看不见**，
@@ -2635,8 +2765,14 @@ def render_user_block(segments, addressed=True, fallback=""):
     代价是演员会丢掉动作的细节，所以：
       · 这一轮**没有**「想」分段 → 把原文整段补在最后，信息一点不少；
       · 有「想」→ 不能补原文（会把心里话带出去），只能靠概括。
+
+    `remind`（2026-11-06）：只给**当前这一轮**加一句人称提醒。模型最后读到的
+    一句是它，比长契约开头那一行更有用；历史消息不重复加，免得刷屏。
     """
     if not segments:
+        if remind and str(fallback or "").strip():
+            return (str(fallback).strip() + "\n"
+                    "（这一轮：她是「她」，你是「你」；任何地方都不要用「他」指玩家。）")
         return fallback
     lines = ["【这一轮你收到的（按发生顺序）】"]
     has_think = False
@@ -2644,6 +2780,11 @@ def render_user_block(segments, addressed=True, fallback=""):
         who = str(seg.get("who") or "用户")
         typ = str(seg.get("type") or "说")
         text = str(seg.get("text") or "").strip()
+        # 剧情推进（2026-11-06）：这是玩家给导演/演员的方向，不是她已知的事实。
+        if who == "导演" or typ in ("剧情", "plot"):
+            if text:
+                lines.append("- 导演意图（她不知道，只用来安排这一拍）：%s" % text)
+            continue
         if typ == "想":
             has_think = True
         if who == "助手":
@@ -2672,10 +2813,15 @@ def render_user_block(segments, addressed=True, fallback=""):
         lines.append("（他这一轮不是在对你说，可能只是自言自语或旁白；"
                      "写你看到的反应，不要当成他在跟你对话。）")
     # 没有心里话时，把原文完整补上——上面那些是标签，细节以原文为准。
+    # 2026-11-06：原文里玩家会用自己的「我」，必须当场说清那个「我」= 玩家，
+    # 不然演员会把它和她台词/心声里的「我」混成同一个人。
     if not has_think and str(fallback or "").strip():
         lines.append("")
         lines.append("【他这一轮的原话，照着它演】")
+        lines.append("（这段原话里的「我」= 玩家本人，不是你；原文里的动作都是玩家做的。）")
         lines.append(str(fallback).strip())
+    if remind:
+        lines.append("（这一轮：她是「她」，你是「你」；任何地方都不要用「他」指玩家。）")
     return "\n".join(lines)
 
 
@@ -2691,14 +2837,36 @@ def _visible_user_text(segments, fallback=""):
     for seg in segments:
         if not isinstance(seg, dict):
             continue
-        if str(seg.get("who") or "用户") == "助手":
+        if str(seg.get("who") or "用户") != "用户":
             continue
-        if str(seg.get("type") or "说") == "想":
+        if str(seg.get("type") or "说") in ("想", "剧情", "plot"):
             continue
         text = str(seg.get("text") or "").strip()
         if text:
             parts.append(text)
     return "\n".join(parts)
+
+
+def _rag_context(hist, rounds=2):
+    """给 RAG 的「最近几轮上下文」（2026-11-06）。
+
+    只取用户可见话 + 她的正文，压成短串。短句「你还记得昨天吗」单独去检索
+    语义太弱；带上最近两轮，能把「昨天在哪、和谁、发生了什么」带出来。
+    """
+    rows = [m for m in (hist or []) if isinstance(m, dict)]
+    parts = []
+    for m in rows[-(max(1, int(rounds or 1)) * 2):]:
+        if m.get("role") == "user":
+            # 用户消息优先用分段里的「说/做」；心里话和剧情方向不拿去检索。
+            text = _visible_user_text(m.get("seg"), m.get("content"))
+            who = "用户"
+        else:
+            text, _tail = _split_meta(str(m.get("content") or ""))
+            who = "她"
+        text = re.sub(r"\s{2,}", " ", text.replace("\r", "")).strip()
+        if text:
+            parts.append("%s：%s" % (who, text[:80]))
+    return " / ".join(parts)
 
 
 def _render_hist(hist):
@@ -2712,6 +2880,10 @@ def _render_hist(hist):
         if not isinstance(m, dict):
             continue
         content = str(m.get("content") or "")
+        # 旧回复里的「他」是历史示范（2026-11-06）：模型会照着历史学，所以
+        # 送模型前把指代玩家的第三人称纠成「你」。只改上下文副本，落盘/展示不动。
+        if m.get("role") == "assistant":
+            content = _PRONOUN_HE.sub("你", content)
         if m.get("role") == "user" and m.get("seg"):
             content = render_user_block(m["seg"], m.get("addressed", True),
                                         fallback=content)
@@ -3079,7 +3251,7 @@ def _judge_intent(card, said, state="", history=None, note=""):
     try:
         # 2026-11-05：分段 + 导演条后输出变长，20s 偶发不够；放到 30s。
         # 判挂了只是退回原文，不会阻塞这一轮，但能判出来质量更好。
-        raw = llm.call_llm([{"role": "user", "content": prompt}], timeout=30)
+        raw = _llm_call([{"role": "user", "content": prompt}], timeout=30)
     except Exception:                            # noqa: BLE001
         log.warning("意图判断调用失败，走原流程")
         return None, "", {}
@@ -3488,8 +3660,10 @@ lead（这一拍她会不会主动推进关系，由你判）：
 - act —— 主动做一件事（约、问、靠近、挑明）。
 lead_form：情感 / 身体 / 言语。
 lead_reason：一句话说清为什么这一拍会/不会主动（不超过 25 字）。
-**不要按固定数值门槛判**——看好感阶段、冲动、卡的脾气、最近账本，
-再决定她敢不敢先开口。
+**不要只按一个数字判**——看好感阶段、卡的脾气、最近账本，再看下面的
+「动态状态」：冲动到「忍不住了」时她可以 act（主动做一件事）；「很想」
+可以 hint 或 act；「想」以下通常只回应。高潮值到「快要 / 到了」时她的
+克制会明显变弱。最终仍按角色和场合判，不要把档位机械套成开关。
 
 %(_segment_guide)s
 %(_director_guide)s
@@ -3501,7 +3675,9 @@ lead_reason：一句话说清为什么这一拍会/不会主动（不超过 25 �
 你们到这一步了：【%(level)s】
 现在是剧情里的第 %(gday)d 天
 %(gplan)s
-她此刻的冲动：%(arousal)d / 100
+她此刻的冲动：%(arousal)d / 100（%(arousalName)s）
+她的高潮值：%(excite)d / 100（%(exciteName)s）
+%(dynamicBrief)s
 她现在的堕落：%(corrupt)d / 100
 她现在服不服：%(submit)d / 100
 她现在的戒备：%(suspicion)d / 40（0 是坦然，越高越觉得你有所图）
@@ -3562,6 +3738,10 @@ def _judge_intent_scored(card, said, state="", line_key="", gameday=None,
         "tier": ctx["tier"],
         "level": ctx.get("level") or "?",
         "arousal": int(ctx.get("arousal") or 0),
+        "arousalName": ctx.get("arousalName") or "—",
+        "excite": int(ctx.get("excite") or 0),
+        "exciteName": ctx.get("exciteName") or "还没进场景",
+        "dynamicBrief": ctx.get("dynamicBrief") or "（这一轮没有额外的动态规则）",
         "corrupt": int(ctx.get("corrupt") or 0),
         "submit": int(ctx.get("submit") or 0),
         # 戒备（2026-11-05）：模型要知道她现在起没起疑心，才知道同一句话
@@ -3591,7 +3771,7 @@ def _judge_intent_scored(card, said, state="", line_key="", gameday=None,
         # ——根本不是长度限制的问题，加了反而更短。真正的原因在提示词里
         # 那句「原文照抄」：模型逐字复述露骨原文时会被内容审核当场掐断，
         # 末尾补一句 `Sorry, I can't respond`。改措辞就好了（见 `segments`）。
-        raw = llm.call_llm([{"role": "user", "content": prompt}], timeout=30)
+        raw = _llm_call([{"role": "user", "content": prompt}], timeout=30)
     except Exception:                            # noqa: BLE001
         log.warning("攻略模式打分调用失败，按 0 分走")
         return None, "", None
@@ -3718,7 +3898,7 @@ def _director_block(info):
     lines = ["## 这一拍你怎么读对方", ""]
     if mode:
         lines.append("- 她此刻的底色：%s" % mode)
-    if tension:
+    if tension and not secret:
         lines.append("- 张力：%s" % tension)
     if literal:
         lines.append("- 对方字面上在说：%s" % literal)
@@ -3737,10 +3917,13 @@ def _director_block(info):
         why = ("，因为%s" % lead_reason) if (lead_reason and not secret) else ""
         lines.append("- 她这一拍可以主动做一件事%s%s。不要替玩家做决定，"
                      "也不要一次把关系推到底。" % (form, why))
-    if hook:
+    if hook and not secret:
         # 开发度的勾子（2026-11-05）：编剧已经替你想好「这一拍身体先动了」，
         # 演员要做的是把它演出来，不是照着复述。所以这里说的是「把它写到
         # 这一拍的正文里」，并明确要求给出场合/身体信号/她怎么遮掩。
+        #
+        # 2026-11-06：玩家有没说出口的心理活动时（secret），hook 可能是
+        # 编剧从心里话里推出来的——不能给演员，否则等于间接泄露。
         lines.append("- 这一拍她的身体先动了一步：%s。照着这个写进正文，"
                      "写清在什么场合、身上怎么反应、她是怎么试图遮掩的。"
                      "不要写成「她有点动情」，也不要让她自己点破。" % hook)
@@ -3975,8 +4158,13 @@ def pregnancy_block(session_key, event=None):
     return pregnancy.prompt_block(ent, day, event)
 
 
-def run_turn(session_key, text, target, sender="", sender_uin=""):
+def run_turn(session_key, text, target, sender="", sender_uin="",
+             manual=None):
     """扮演态的一轮：**两次** LLM 调用，返回 `Turn(正文, 画面, 情绪, 强度, 状态)`。
+
+    `manual`（2026-11-06）：网页「精确输入」的三栏
+    `{thought, action, speech, plot}`。填了就以它为准，编剧 AI 不用再拆主
+    输入框；`thought` 只给编剧，绝不给演员。
 
     2026-11-02 起是两段式：
       1. `_judge_intent()` —— 短提示词、不带人设，判断这句话在干什么；
@@ -4031,6 +4219,16 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     raw_hist = _load_hist(key)
     hist = trim(raw_hist)
 
+    # 精确输入（2026-11-06）：玩家分栏标注时，分段以玩家为准，编剧只负责
+    # 判意图/打分/导演条。心理活动放进编剧输入，但不进演员输入。
+    man = _manual_norm(manual)
+    man_segs = _manual_segments(man)
+    man_block = _manual_block(man)
+    judge_said = text
+    if man_block:
+        judge_said = man_block + (
+            ("\n\n【主输入框（补充）】\n" + text) if text else "")
+
     # 第一段：这句话在干什么。**用原始文本判**，不带「张三：」这种前缀。
     # 攻略模式（2026-11-03）：同一次调用顺带给关系打分，不多烧一轮。
     raid = affection.is_raid(key)
@@ -4038,13 +4236,18 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     score = None
     if raid:
         intent, inote, score = _judge_intent_scored(
-            card, text, prev_state, line_key=key, gameday=gd,
+            card, judge_said, prev_state, line_key=key, gameday=gd,
             history=hist, note=note)
         extras = score if isinstance(score, dict) else {}
     else:
         intent, inote, extras = _judge_intent(
-            card, text, prev_state, history=hist, note=note)
+            card, judge_said, prev_state, history=hist, note=note)
         extras = extras if isinstance(extras, dict) else {}
+    # 精确输入：分段直接用玩家标注的，编剧不要重拆；有心理活动就锁 secret。
+    if man_segs:
+        extras["segments"] = man_segs
+        extras["addressed"] = True
+        extras["secret"] = bool(man.get("thought"))
     finish = _norm_finish(extras.get("finish"))
     # 射精选择（2026-11-05）：上一轮她高潮满了，玩家在弹窗里选了「射在哪里」。
     # 这个选择**不是**玩家在正文里写的，所以编剧判不出来，得由系统补进去。
@@ -4079,11 +4282,13 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
         head = head + "\n\n" + fblock
     # 长期记忆（2026-11-05）：按玩家这一轮**看得见的话**去翻旧账。
     # 用户没说出口的「想」不参与检索——拿心里话去翻回忆，容易让她提前知道。
-    visible = _visible_user_text(extras.get("segments") if isinstance(extras, dict)
-                                 else [], text)
+    visible = _visible_user_text(
+        extras.get("segments") if isinstance(extras, dict) else [],
+        "" if man.get("thought") else text)
     if rag_on:
         try:
-            rblock = persona_rag.build_block(key, visible)
+            rblock = persona_rag.build_block(
+                key, visible, day=day_before, context=_rag_context(hist))
             if rblock:
                 head = head + "\n\n" + rblock
         except Exception:                                # noqa: BLE001
@@ -4093,7 +4298,7 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     preg_event = None
     aff_res = None
     if raid:
-        aff_res = affection.settle(key, score)
+        aff_res = affection.settle(key, score, game_day=day_before)
         if isinstance(aff_res, dict):
             # 让状态块知道这一轮有没有内射：高潮和内射同一拍时换写法。
             aff_res["finish"] = finish
@@ -4106,6 +4311,12 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
         blk = affection.injection_block(aff_res)
         if blk:
             head = head + "\n\n" + blk
+        # 动态状态（2026-11-06 用户要求）：冲动/高潮是这一轮的气氛，档位到了
+        # 就临时注入一段行为规则——她这一拍会主动到什么程度、脸上什么样。
+        # 和长期轴（好感/堕落/屈服）分开：只在这一轮有效。
+        dyn = affection.dynamic_block(aff_res)
+        if dyn:
+            head = head + "\n\n" + dyn
         # 游戏内时间（2026-11-04）：把打分 AI 判的跨天/约定落账，
         # 再把「第 N 天 + 今天的事 + 约定」拼进系统头。
         #
@@ -4187,12 +4398,20 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     # 判不出来就退回原文——和以前完全一样，不会让这一轮哑掉。
     segments = extras.get("segments") if isinstance(extras, dict) else []
     addressed = extras.get("addressed", True) if isinstance(extras, dict) else True
-    user_block = render_user_block(segments, addressed, fallback=said)
+    user_fallback = said
+    if man_segs:
+        segments = man_segs
+        addressed = True
+        # 填了心理活动 → 主输入框只给编剧，不给她（防止顺手写在主框里的
+        # 心里话漏出去）。看得见的内容请填动作/台词/剧情栏。
+        user_fallback = "" if man.get("thought") else said
+    user_block = render_user_block(segments, addressed, fallback=user_fallback,
+                                   remind=True)
     model_hist = _render_hist(hist)
     msgs = ([{"role": "system", "content": head}] + model_hist
             + [{"role": "user", "content": user_block}])
     try:
-        raw = llm.call_llm(msgs, temperature=TEMPERATURE)
+        raw = _llm_call(msgs, temperature=TEMPERATURE)
     except Exception:
         log.exception("扮演轮调用失败 %s", key)
         return Turn("", "")
@@ -4213,7 +4432,8 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     #
     # 2026-11-05：用户消息额外挂 `seg`（分段）。原文 `content` 不动，
     # 网页回看/归档照旧；送模型时由 `_render_hist` 再拼成结构化块。
-    new_user = {"role": "user", "content": said}
+    new_user = {"role": "user",
+                "content": _manual_display(man, text) if man else said}
     if segments:
         new_user["seg"] = segments
         new_user["addressed"] = addressed
@@ -4246,8 +4466,12 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     # 自定义模型配置要在这里取一份：后台线程没有请求线程的线程本地覆盖。
     if rag_on:
         try:
-            persona_rag.remember(key, _visible_user_text(segments, said), reply,
-                                 custom=llm.get_custom_override())
+            persona_rag.remember(
+                key, _visible_user_text(segments, said), reply,
+                custom=llm.get_custom_override(),
+                day=day_before,
+                phase=str((gd or {}).get("phase") or ""),
+                card_name=_card_label(card))
         except Exception:                                # noqa: BLE001
             log.exception("回忆入库失败 %s", key)
     return Turn(reply, scene, mood, intensity, state, aff_res, finish)
@@ -4396,7 +4620,7 @@ def jump_phase(session_key, phase, sender="", sender_uin=""):
     msgs = ([{"role": "system", "content": head}] + model_hist
             + [{"role": "user", "content": task}])
     try:
-        raw = llm.call_llm(msgs, temperature=TEMPERATURE)
+        raw = _llm_call(msgs, temperature=TEMPERATURE)
     except Exception:                                  # noqa: BLE001
         log.exception("时段跳跃开场失败 %s", key)
         return None
@@ -4483,7 +4707,7 @@ def skip_day(session_key, sender="", sender_uin="", days=1):
     msgs = ([{"role": "system", "content": head}] + model_hist
             + [{"role": "user", "content": task}])
     try:
-        raw = llm.call_llm(msgs, temperature=TEMPERATURE)
+        raw = _llm_call(msgs, temperature=TEMPERATURE)
     except Exception:                                  # noqa: BLE001
         log.exception("时间跳跃开场失败 %s", key)
         return None
@@ -4592,7 +4816,7 @@ def _gen_and_save(key, ent, card, head, task, sender="", prev_state="",
     msgs = ([{"role": "system", "content": head}] + model_hist
             + [{"role": "user", "content": task}])
     try:
-        raw = llm.call_llm(msgs, temperature=TEMPERATURE)
+        raw = _llm_call(msgs, temperature=TEMPERATURE)
     except Exception:                                  # noqa: BLE001
         log.exception("%s生成失败 %s", tag, key)
         return None
@@ -4783,6 +5007,11 @@ def rollback_last_turn(session_key, sender_uin=""):
     ent = _entry(key)
     if not ent:
         return {"ok": False, "error": "这条线还没有在演的角色"}
+    # 只允许一级（2026-11-06 用户要求）：退过一次就必须先出新的一轮，
+    # 否则窗口尾部还是「她的一条回复」，会一轮一轮把整条历史拆掉。
+    if ent.get("rollback_done"):
+        return {"ok": False,
+                "error": "刚回退过一次了，先和她重新说一句，才能再回退"}
 
     # ── 历史 + 归档 ─────────────────────────────────
     hist = _load_hist(key)
@@ -4831,13 +5060,19 @@ def rollback_last_turn(session_key, sender_uin=""):
     state_map[key] = ent
     st_turns = int(ent.get("turns") or 0)
     ent["turns"] = max(0, st_turns - 1)      # `_bump_turn` 的逆操作
+    if ent.get("turn_total") is not None:
+        ent["turn_total"] = max(0, int(ent.get("turn_total") or 0) - 1)
+    ent["rollback_done"] = True              # 锁死二级回退，等下一轮解开
     _save_state(state_map)
 
     # 回退也把这一轮从回忆缓冲/最近一批入库里撤掉（2026-11-05）。
-    try:
-        persona_rag.forget_last(key)
-    except Exception:                                    # noqa: BLE001
-        log.exception("回退回忆失败 %s", key)
+    # 只有「你的话 + 她的回复」这种成对轮才进过 RAG；时段跳跃 / 高潮后那几段
+    # 只有她一条（n=1），本来就没记，不能顺手去弹缓冲里更早的一轮。
+    if n == 2:
+        try:
+            persona_rag.forget_last(key)
+        except Exception:                                # noqa: BLE001
+            log.exception("回退回忆失败 %s", key)
 
     # ── 好感（快照还原；自由模式没结算过 → None，不算失败）────
     aff = affection.rollback_last(key)
@@ -5238,6 +5473,16 @@ def _bump_turn(session_key):
     if not isinstance(st, dict):
         return
     st["turns"] = int(st.get("turns") or 0) + 1
+    # 累计轮次（2026-11-06 用户要看的「聊了多少轮」）：`turns` 是每 5 轮
+    # 清零的压缩节拍，这里另记一份永不归零的总量。老线第一次补算时归档
+    # 已经包含这一轮，所以直接取她的回复条数，不再 +1。
+    if st.get("turn_total") is None:
+        # 归档正常时它已经包含这一轮；归档缺失（老线/写失败）至少算这一轮。
+        st["turn_total"] = max(1, _archive_assistant_count(session_key))
+    else:
+        st["turn_total"] = int(st.get("turn_total") or 0) + 1
+    # 新的一轮已经落史：刚才那级回退用完了，允许再退一次。
+    st.pop("rollback_done", None)
     _save_state(state)
     if st["turns"] >= NOTE_EVERY_TURNS:
         threading.Thread(target=compress_note, args=(session_key,),
@@ -5302,14 +5547,52 @@ def _clip_note(text, limit=NOTE_MAX_CHARS):
 
 
 # 账本的六个固定小节（2026-11-05）。顺序也是注入顺序：关系 → 你做的事 →
-# 我做的事 → 约定 → 忌讳 → 日常。标题不要求一字不差，只要包含关键词就算
+# 她做的事 → 约定 → 忌讳 → 日常。标题不要求一字不差，只要包含关键词就算
 # 这一节在——模型偶尔会给标题补半句解释，不能因此把整份账本判废。
-_LEDGER_SECTIONS = ("关系", "你的事", "我的事", "约定", "忌讳", "日常")
+# 2026-11-06：「我的事」改成「她的事」——账本统一第三人称，和正文同一套指代。
+_LEDGER_SECTIONS = ("关系", "你的事", "她的事", "约定", "忌讳", "日常")
+
+# 账本里指代玩家的第三人称（2026-11-06 用户报「上下文算他的」）。
+# 「其他 / 他们 / 他人」不是指代对方，不算违规。
+_PRONOUN_HE = re.compile(r"(?<!其)他(?!们|人)")
+# 引号内是她引用的原话，那里的「我」必须保留；只有引号外才改成「她」。
+# 外层括号是给 `split` 保留分隔符用的：没有捕获组，split 会把引号内容一起吞掉。
+_QUOTED = re.compile(
+    r"(「[^」]*」|『[^』]*』|“[^”]*”|\"[^\"]*\")")
+# 「我们」是她和玩家的合称，不能拆成「她们」。
+_PRONOUN_WO = re.compile(r"我(?!们)")
+
+
+def _ledger_fix_pronouns(text):
+    """把账本统一成第三人称：女主角=「她」，玩家=「你」。
+
+    账本曾经用第一人称写（「我的事」），和正文的第三人称混在一起，模型
+    分不清「我」是谁（2026-11-06 用户报「算他的」）。现在账本和正文用同一套
+    指代，存量脏账本在读入/再压缩前先过这一遍：
+      · 引号外：指代玩家的「他」→「你」；女主角的「我」→「她」；
+      · 引号内：她说的原话不动（「我」仍然是她自己）。
+    只改人称，不改事实。
+    """
+    out = []
+    for part in _QUOTED.split(str(text or "")):
+        if part and _QUOTED.fullmatch(part):
+            out.append(part)
+        else:
+            out.append(_PRONOUN_WO.sub("她", _PRONOUN_HE.sub("你", part)))
+    return "".join(out)
 
 
 def _ledger_ok(text):
-    """这份输出像不像一份账本：至少认出四节，否则保留旧账本。"""
-    heads = re.findall(r"^[ \t]*#{1,3}[ \t]*(.+)$", str(text or ""), re.M)
+    """这份输出像不像一份账本：至少认出四节，否则保留旧账本。
+
+    2026-11-06：再加一道人称硬校验——整份账本里只要出现指代玩家的「他」，
+    就整份拒收。宁可保留旧账本，也不能把「他」喂给演员：她读到「他」，
+    下一轮就会把「算我的」说成「算他的」。
+    """
+    raw = str(text or "")
+    if _PRONOUN_HE.search(raw):
+        return False
+    heads = re.findall(r"^[ \t]*#{1,3}[ \t]*(.+)$", raw, re.M)
     if len(heads) < 4:
         return False
     hit = 0
@@ -5432,8 +5715,8 @@ def opening(session_key, force=False):
         who += "\n" + sysp[:260]
     prompt = _OPENING_PROMPT % (OPENING_MAX, who, rel, _daypart())
     try:
-        text = str(llm.call_llm([{"role": "user", "content": prompt}],
-                                max_tokens=700) or "").strip()
+        text = str(_llm_call([{"role": "user", "content": prompt}],
+                             max_tokens=700) or "").strip()
     except Exception:                                     # noqa: BLE001
         log.exception("开场导读生成失败 %s", session_key)
         return ""
@@ -5463,7 +5746,9 @@ def compress_note(session_key):
     if card is None:
         return False
     st = _entry(session_key) or {}
-    old = str(st.get("note") or "").strip()
+    # 旧账本先纠人称再交给压缩器（2026-11-06）：不让「他」以「原样抄」的形式
+    # 传给下一版，否则坏账本会永久自复制。
+    old = _ledger_fix_pronouns(st.get("note") or "").strip()
     hist = _render_hist(trim(_load_hist(session_key)))
     if not hist:
         return False
@@ -5474,8 +5759,8 @@ def compress_note(session_key):
     try:
         # 输出上限要显式给：1000 字中文约 1500 token，不给的话服务端
         # 默认上限可能截在半句话上（同 `moss_comic.write` 的坑）。
-        note = str(llm.call_llm([{"role": "user", "content": prompt}],
-                                max_tokens=2400) or "").strip()
+        note = str(_llm_call([{"role": "user", "content": prompt}],
+                             max_tokens=2400) or "").strip()
     except Exception:
         log.exception("小记压缩失败 %s", session_key)
         return False

@@ -45,6 +45,13 @@ if os.path.exists(_env_path):
 
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "volc").lower()
 
+# 角色扮演专用默认模型（2026-11-06 用户拍板）：
+# 扮演链路的调用（主回复 / 导演 / 开场 / 小记压缩 / RAG 提炼）默认优先用这一组；
+# 请求失败仍走全局 LLM_FALLBACK_CHAIN。留空 = 用全局默认。
+# 玩家在网页里临时指定自定义模型时，那个优先（见 `persona._llm_call`）。
+PERSONA_PROVIDER = os.getenv("PERSONA_PROVIDER", "cx_a1b2c3d4").strip()
+PERSONA_MODEL = os.getenv("PERSONA_MODEL", "deepseek-v4-pro").strip()
+
 # Volcengine (Doubao)
 VOLC_API_KEY = os.getenv("VOLC_API_KEY", "")
 VOLC_BASE_URL = os.getenv("VOLC_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")

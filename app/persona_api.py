@@ -326,7 +326,7 @@ def get_session():
         "state": str(ent.get("state") or ""),
         "mood": str(ent.get("mood") or ""),
         "intensity": int(ent.get("intensity") or 0),
-        "turns": int(ent.get("turns") or 0),
+        "turns": persona.turn_total(key),
         "messages": msgs,
         "total": total,                 # 归档总条数（前端翻页的游标上限）
         "more": start > 0,              # 还有更早的可以往回翻
@@ -335,6 +335,7 @@ def get_session():
         "phase": persona.game_phase(key),
         "preg": persona.pregnancy_status(key),
         "role": "member",
+        "rolled_back": bool(ent.get("rollback_done")),
     })
 
 
@@ -526,6 +527,7 @@ def _guest_session(uid, token):
         "role": "guest",
         "remaining": max(0, guest.GUEST_TURNS - turns),
         "limit": guest.GUEST_TURNS,
+        "rolled_back": bool(ent.get("rollback_done")),
     })
     _attach_guest_cookie(resp, token)
     return resp
@@ -709,6 +711,13 @@ def _turn_out(key, turn, next_stage=""):
     out["day"] = persona.game_day(key)
     out["phase"] = persona.game_phase(key)
     out["preg"] = persona.pregnancy_status(key)
+    out["turns"] = persona.turn_total(key)   # 累计交流轮次（不是压缩节拍）
+    # 三段请求里 `finish_night` / `next_morning` 会调用 `affection.sleep`
+    # 收场，冲动/高潮/场景都变了。不把最新结果带回去，右栏要等玩家手动刷新
+    # 才会更新（2026-11-06 群友反馈「切到第二天状态栏不刷新」）。
+    aff_now = _aff_status(key)
+    if aff_now:
+        out["affection"] = aff_now
     if next_stage:
         out["next"] = next_stage
     return out
@@ -726,21 +735,23 @@ def chat():
     """
     body = request.get_json(silent=True) or {}
     text = str(body.get("text") or "").strip()
-    if not text:
+    # 精确输入（2026-11-06）：主输入框可以空，只要有一个分栏有内容就能发。
+    manual = persona._manual_norm(body.get("fields"))       # noqa: SLF001
+    if not text and not manual:
         return jsonify({"ok": False, "error": "说点什么"}), 400
 
     llm.set_custom_override(body.get("custom"))
     try:
-        return _chat_turn(text)
+        return _chat_turn(text, manual)
     finally:
         llm.set_custom_override(None)
 
 
-def _chat_turn(text):
+def _chat_turn(text, manual=None):
     role, who, token = _who()
 
     if role == "guest":
-        return _guest_chat(text, who, token)
+        return _guest_chat(text, who, token, manual)
 
     key = _active_key(_key(who))
     card = persona.active_card(key)
@@ -752,7 +763,7 @@ def _chat_turn(text):
     # token」永远统计不出来。QQ 侧是在 qq_bot 的轮次外层包的，这里补同一层，
     # 标签用活动线键（web_<qq>__<card>），能精确到「哪个角色烧了多少」。
     with usage.scope(key):
-        turn = persona.run_turn(key, text, "private", "")
+        turn = persona.run_turn(key, text, "private", "", manual=manual)
     if not turn.reply.strip():
         return jsonify({"ok": False, "error": "她这轮没说话"}), 502
     out = {
@@ -772,6 +783,7 @@ def _chat_turn(text):
     out["phase"] = persona.game_phase(key)
     out["finish"] = str(getattr(turn, "finish", "") or "")   # 这一轮有没有内射
     out["preg"] = persona.pregnancy_status(key)
+    out["turns"] = persona.turn_total(key)  # 累计交流轮次（2026-11-06）
     # 攻略模式（2026-11-03）：把这一轮的结算带给前端——AI 回复下方的
     # 状态条直接用它渲染。自由模式 turn.aff 是 None，不带这个字段。
     if getattr(turn, "aff", None):
@@ -779,7 +791,7 @@ def _chat_turn(text):
     return jsonify(out)
 
 
-def _guest_chat(text, uid, token):
+def _guest_chat(text, uid, token, manual=None):
     """游客的一轮。
 
     直接走 `persona.run_turn` 主引擎，和登录用户同一套打分/注入/归档；
@@ -808,7 +820,7 @@ def _guest_chat(text, uid, token):
     # 体验版是「拉新成本」，得看清楚它值不值。run_turn 内部的两次调用
     # （打分 + 正文）都在这个 scope 里。
     with usage.scope("guest_" + str(uid or "anon")[:8]):
-        turn = persona.run_turn(ckey, text, "private", "")
+        turn = persona.run_turn(ckey, text, "private", "", manual=manual)
     if not turn.reply.strip():
         return jsonify({"ok": False, "error": "她这会儿有点卡"}), 502
 
@@ -825,6 +837,7 @@ def _guest_chat(text, uid, token):
     out["phase"] = persona.game_phase(ckey)
     out["finish"] = str(getattr(turn, "finish", "") or "")
     out["preg"] = persona.pregnancy_status(ckey)
+    out["turns"] = _guest_turns(ckey)       # 累计交流轮次（2026-11-06）
     if getattr(turn, "aff", None):
         out["affection"] = turn.aff
     resp = jsonify(out)
@@ -876,6 +889,11 @@ def skip_day_api():
             out["day"] = persona.game_day(ckey)
             out["phase"] = persona.game_phase(ckey)
             out["preg"] = persona.pregnancy_status(ckey)
+            out["turns"] = _guest_turns(ckey)
+            # 跨天会 `affection.sleep` 收场，把最新状态一起带回去。
+            aff_now = _aff_status(ckey)
+            if aff_now:
+                out["affection"] = aff_now
             resp = jsonify(out)
             _attach_guest_cookie(resp, token)
             return resp
@@ -900,6 +918,11 @@ def skip_day_api():
         out["day"] = persona.game_day(key)
         out["phase"] = persona.game_phase(key)
         out["preg"] = persona.pregnancy_status(key)
+        out["turns"] = persona.turn_total(key)
+        # 跨天会 `affection.sleep` 收场，把最新状态一起带回去。
+        aff_now = _aff_status(key)
+        if aff_now:
+            out["affection"] = aff_now
         return jsonify(out)
     finally:
         llm.set_custom_override(None)
@@ -951,6 +974,7 @@ def set_phase_api():
             out["day"] = persona.game_day(ckey)
             out["phase"] = persona.game_phase(ckey)
             out["preg"] = persona.pregnancy_status(ckey)
+            out["turns"] = _guest_turns(ckey)
             resp = jsonify(out)
             _attach_guest_cookie(resp, token)
             return resp
@@ -980,6 +1004,7 @@ def set_phase_api():
         out["day"] = persona.game_day(key)
         out["phase"] = persona.game_phase(key)
         out["preg"] = persona.pregnancy_status(key)
+        out["turns"] = persona.turn_total(key)
         return jsonify(out)
     finally:
         llm.set_custom_override(None)
