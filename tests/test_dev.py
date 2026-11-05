@@ -60,19 +60,25 @@ class DevNormTest(unittest.TestCase):
 
 
 class DevCurveTest(unittest.TestCase):
-    def test_five_stages_at_twenties(self):
+    def test_five_stages_start_at_one(self):
+        """五档从 1 点起算：**只要动过 1 点，就不能再叫「没碰过」**。
+
+        用户点名：数值已经变了、措辞还停在初始态，看着像没生效。
+        """
         mins = sorted(l["min"] for l in affection.dev_levels() if l["min"] > 0)
-        self.assertEqual(mins, [20, 40, 60, 80, 100])
+        self.assertEqual(mins, [1, 20, 40, 60, 80])
 
     def test_stage_and_name(self):
         self.assertEqual(affection.dev_name(0), "没碰过")
-        self.assertEqual(affection.dev_name(25), "起反应")
-        self.assertEqual(affection.dev_name(45), "会要了")
-        self.assertEqual(affection.dev_name(65), "离不开")
-        self.assertEqual(affection.dev_name(85), "阈值乱了")
+        self.assertEqual(affection.dev_name(1), "起反应")
+        self.assertEqual(affection.dev_name(12), "起反应")
+        self.assertEqual(affection.dev_name(25), "会要了")
+        self.assertEqual(affection.dev_name(45), "离不开")
+        self.assertEqual(affection.dev_name(65), "阈值乱了")
+        self.assertEqual(affection.dev_name(85), "彻底开发")
         self.assertEqual(affection.dev_name(100), "彻底开发")
         self.assertEqual(affection.dev_stage(0), 0)
-        self.assertEqual(affection.dev_stage(65), 3)
+        self.assertEqual(affection.dev_stage(45), 3)
         self.assertEqual(affection.dev_stage(100), 5)
 
     def test_body_is_weighted_not_summed(self):
@@ -108,9 +114,9 @@ class DevCurveTest(unittest.TestCase):
         self.assertTrue(affection.dev_all_full(_full(100)))
         self.assertFalse(affection.dev_all_full(_full(99)))
 
-    def test_hook_ready_needs_60(self):
-        self.assertFalse(affection.dev_hook_ready({"pussy": 59}))
-        self.assertTrue(affection.dev_hook_ready({"pussy": 60}))
+    def test_hook_ready_needs_40(self):
+        self.assertFalse(affection.dev_hook_ready({"pussy": 39}))
+        self.assertTrue(affection.dev_hook_ready({"pussy": 40}))
 
     def test_dev_text_carries_body(self):
         got = affection.dev_text({"mouth": 30, "pussy": 78})

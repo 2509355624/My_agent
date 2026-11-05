@@ -231,6 +231,11 @@ DEFAULT_CONFIG = {
     "corruption_levels": [
         {"key": "unbroken", "min": 0, "name": "还是她",
          "prompt": "被逼到的时候她会反抗、会骂、会记仇，事后还会哭。"},
+        # 只要不是 0，就不能再叫「还是她」（2026-11-06 用户点名）：
+        # 数值动了、措辞还停在初始态，玩家会以为没生效。
+        {"key": "shifted", "min": 1, "name": "有点变了",
+         "prompt": "她嘴上还是原来那套，但有些地方不对了：会停顿、会避开某个词、"
+                   "事后会自己坐一会儿。"},
         {"key": "cracked", "min": 25, "name": "开始松",
          "prompt": "嘴上还硬，力气先没了；开始给自己找理由，难受的时间变短。"},
         {"key": "giving", "min": 50, "name": "认了",
@@ -243,6 +248,8 @@ DEFAULT_CONFIG = {
     "submission_levels": [
         {"key": "proud", "min": 0, "name": "不服",
          "prompt": "顶嘴、拖延、阳奉阴违，眼神不躲。"},
+        {"key": "softened", "min": 1, "name": "没那么犟",
+         "prompt": "还是会顶两句，但顶完会照做；动作里有点不情愿，可是没有真的拦。"},
         {"key": "reluctant", "min": 25, "name": "勉强",
          "prompt": "照做了，但动作里带着不服气。"},
         {"key": "yielding", "min": 50, "name": "让了",
@@ -290,20 +297,22 @@ DEFAULT_CONFIG = {
         "step": 10,
         "gain": 1.5,
         "levels": [
-            {"key": "full",   "min": 100, "name": "彻底开发",
+            {"key": "full",   "min": 80, "name": "彻底开发",
              "prompt": "这一处已经被开发透了。轻轻一碰就受不了，光是被看着就会有反应；"
                        "她自己知道，也不再遮掩。"},
-            {"key": "wild",   "min": 80, "name": "阈值乱了",
+            {"key": "wild",   "min": 60, "name": "阈值乱了",
              "prompt": "不用碰到也能起来。看见、听见、想起，都能让她当场软掉；"
                        "她自己都怕这个反应，又挡不住。"},
-            {"key": "hooked", "min": 60, "name": "离不开",
+            {"key": "hooked", "min": 40, "name": "离不开",
              "prompt": "在不相干的场合也会想。看到别人亲近就湿，会自己把身体往你那边送，"
                        "会拉着你的手往那里放，会用外套盖住不想被人看见。"},
-            {"key": "wants",  "min": 40, "name": "会要了",
+            {"key": "wants",  "min": 20, "name": "会要了",
              "prompt": "会自己凑、会开口要这个，说完自己脸红但不收回；被弄到会自己跟着动。"},
-            {"key": "reacts", "min": 20, "name": "起反应",
+            # 只要动过 1 点，就不能再叫「没碰过」（2026-11-06 用户点名）：
+            # 数值已经变了，措辞还停在初始态，看着像没生效。
+            {"key": "reacts", "min": 1,  "name": "起反应",
              "prompt": "被碰到会突然安静一下，装作没事，呼吸先变；嘴上不认，身体答了。"},
-            {"key": "virgin", "min": 0,   "name": "没碰过",
+            {"key": "virgin", "min": 0,  "name": "没碰过",
              "prompt": "这里还没被开发过。碰了会躲、会夹、会说是第一次——按她的性格来。"},
         ],
     },
@@ -954,7 +963,7 @@ DEV_LABELS = {"mouth": "嘴巴", "nipple": "乳头", "pussy": "小穴",
 DEV_WEIGHTS = {"pussy": 0.30, "anus": 0.20, "mouth": 0.20,
                "nipple": 0.15, "skin": 0.15}
 # 单处到这个值，编剧就可以在场景外给她「身体先反应」的勾子。
-DEV_HOOK_AT = 60
+DEV_HOOK_AT = 40
 _DEV_ALIAS = {
     "mouth": "mouth", "嘴": "mouth", "嘴巴": "mouth", "口": "mouth",
     "oral": "mouth",
