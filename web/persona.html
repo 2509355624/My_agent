@@ -183,6 +183,33 @@
   .st .k { font-size: 11px; color: var(--text-mute); margin-bottom: 3px; }
   .st .v { font-size: 12.5px; line-height: 1.65; word-break: break-word; }
   .st .v.mood { color: var(--accent); }
+  /* 角色详情（2026-11-05）：右栏看一眼「她最初是什么人」。
+     只读弹层，不跟剧情状态混在一起；卡片内容不随数值变化。 */
+  #btnCardDetail { width: 100%; margin-top: 8px; }
+  .cardModal { display: none; position: fixed; inset: 0; z-index: 240;
+    background: rgba(0,0,0,.72); padding: 18px; overflow-y: auto; }
+  .cardModal.on { display: flex; align-items: flex-start; justify-content: center; }
+  .cardSheet { width: min(560px, 100%); margin: auto; background: var(--bg-elev);
+    border: 1px solid var(--border); border-radius: 16px; padding: 18px;
+    box-shadow: 0 18px 60px rgba(0,0,0,.55); }
+  .cardHead { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .cardAvatar { width: 48px; height: 48px; flex: none; border-radius: 14px;
+    overflow: hidden; background: var(--bg-input); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 24px; color: var(--accent); }
+  .cardAvatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .cardHead .nm { font-size: 17px; font-weight: 600; }
+  .cardHead .tag { font-size: 11px; color: var(--text-mute); margin-top: 3px;
+    letter-spacing: .08em; }
+  .cardHead .sp { flex: 1; }
+  .cardSec { margin-top: 14px; }
+  .cardSec .k { font-size: 11px; color: var(--text-mute); margin-bottom: 4px;
+    letter-spacing: .08em; }
+  .cardSec .v { font-size: 13px; line-height: 1.8; color: var(--text);
+    white-space: pre-wrap; word-break: break-word; }
+  .cardInitial { margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--border);
+    font-size: 11px; color: var(--text-mute); line-height: 1.7; }
+
 
   /* ─── 紧凑「此刻」区（2026-11-04 深夜）──
      心情/状态/轮次原来是三个独立小块，各占一段间距，把面板顶到屏幕外。
@@ -515,6 +542,12 @@
       <div class="nowrow"><span class="k">剧情</span>
         <span class="v" id="sDay">—</span></div>
     </div>
+    <!-- 角色详情（2026-11-05）：看「她最初是什么人」，不跟剧情状态混在一起。 -->
+    <div class="st" id="cardBox">
+      <div class="nowrow"><span class="k">角色</span>
+        <span class="v" id="sCardName">—</span></div>
+      <button class="btn sm" id="btnCardDetail" disabled>查看角色卡详情</button>
+    </div>
     <!-- 攻略数值面板放第二（2026-11-05）：先看「她此刻什么心情」，
          再看「好感/冲动到哪了」。游客模式下整块隐藏（见 renderAff）。 -->
     <div class="st panel" id="panelBox" style="display:none">
@@ -550,6 +583,32 @@
        把遮罩挪进来，它和抽屉就在同一个上下文里比：side(150) > mask(90)。
        zoom(200) / toast(300) 在 body 层，照旧压过一切，不受影响。 -->
   <div class="mask" id="mask"></div>
+</div>
+
+<!-- 角色卡详情：只读。展示卡上「最初的设定」，不随好感/屈服变化。
+     放在 .app 外面、z-index 240：它要压过固定的 .app 和抽屉遮罩。 -->
+<div class="cardModal" id="cardModal">
+  <div class="cardSheet" role="dialog" aria-modal="true" aria-labelledby="cdName">
+    <div class="cardHead">
+      <div class="cardAvatar" id="cdAvatar">?</div>
+      <div>
+        <div class="nm" id="cdName">角色</div>
+        <div class="tag">角色卡 · 初始设定</div>
+      </div>
+      <span class="sp"></span>
+      <button class="btn sm" id="cdClose">关闭</button>
+    </div>
+    <div class="cardSec" id="cdDescBox">
+      <div class="k">简介</div>
+      <div class="v" id="cdDesc"></div>
+    </div>
+    <div class="cardSec" id="cdPerBox">
+      <div class="k">性格与相处方式</div>
+      <div class="v" id="cdPer"></div>
+    </div>
+    <div class="cardInitial" id="cdEmpty" style="display:none">这张卡还没有写简介。</div>
+    <div class="cardInitial">这是她最初的设定，不会随着剧情里的数值变化；她此刻的样子看右侧「心情 / 状态」。</div>
+  </div>
 </div>
 
 <div class="zoom" id="zoom"><img id="zoomImg" alt=""></div>
@@ -1455,6 +1514,7 @@ async function loadSession() {
     card = d.card;
     $("curName").textContent = card ? card.name : "选一个角色";
     $("live").style.display = card ? "" : "none";
+    renderCardBox(card);
     renderQuota();
     INTRO = d.intro || "";     // 后端缓存的开场导读（清空存档后会变空）
     renderAll(d.messages || []);
@@ -1468,6 +1528,65 @@ async function loadSession() {
     applyRoleUI();
   } catch (e) { toast(e.message, true); }
 }
+
+function renderCardBox(c) {
+  const nm = $("sCardName");
+  if (nm) nm.textContent = c ? (c.name || "角色") : "—";
+  const btn = $("btnCardDetail");
+  if (btn) btn.disabled = !c;
+}
+
+function setCardSec(boxId, valId, text) {
+  const box = $(boxId), v = $(valId);
+  const t = String(text || "").trim();
+  box.style.display = t ? "" : "none";
+  v.textContent = t;
+}
+
+function openCardDetail() {
+  if (!card) { toast("先选一个角色", true); return; }
+  const av = $("cdAvatar");
+  av.textContent = "";
+  const src = String(card.avatar || "").trim();
+  if (/^(https?:|data:|\/)/.test(src)) {
+    const img = document.createElement("img");
+    img.src = src;
+    img.alt = card.name || "";
+    av.appendChild(img);
+  } else {
+    av.textContent = src || (card.name || "?").slice(0, 1);
+  }
+  $("cdName").textContent = card.name || "角色";
+  const desc = String(card.description || "").trim();
+  const per = String(card.personality || "").trim();
+  setCardSec("cdDescBox", "cdDesc", desc);
+  setCardSec("cdPerBox", "cdPer", per);
+  $("cdEmpty").style.display = (!desc && !per) ? "" : "none";
+  $("cardModal").classList.add("on");
+  setTimeout(function () { try { $("cdClose").focus(); } catch (e) {} }, 30);
+}
+
+function closeCardDetail() {
+  $("cardModal").classList.remove("on");
+}
+
+(function bindCardDetail() {
+  const btn = $("btnCardDetail");
+  if (btn) btn.addEventListener("click", openCardDetail);
+  const close = $("cdClose");
+  if (close) close.addEventListener("click", closeCardDetail);
+  const modal = $("cardModal");
+  if (modal) {
+    modal.addEventListener("click", function (e) {
+      if (e.target === modal) closeCardDetail();
+    });
+  }
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && modal && modal.classList.contains("on")) {
+      closeCardDetail();
+    }
+  });
+})();
 
 function renderQuota() {
   const q = $("quota");
