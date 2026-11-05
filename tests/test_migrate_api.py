@@ -57,6 +57,9 @@ class MigrateRouteTest(unittest.TestCase):
             html = r.get_data(as_text=True)
         self.assertIn("'/migrate'", html)
         self.assertIn("迁移", html)
+        # 2026-11-04：画廊（5175 网关）和网页角色扮演也要能从个人页直达
+        self.assertIn("openFriendPage('/gallery')", html)
+        self.assertIn("window.open('/persona'", html)
 
     # ── 列目录 ──────────────────────────────────────────────
     def test_list_first_page(self):

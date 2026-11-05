@@ -133,7 +133,7 @@ def _work_row(row, qq):
         "cover": row["cover_item"],
         "src": row["src"],
         "by": name,
-        "mine": row["src"] == "user" and row["owner"] == str(qq),
+        "mine": row["src"] == "user" and row["owner"] == str(qq or ""),
         "hidden": bool(row["hidden"]),
     }
 
@@ -149,16 +149,14 @@ def api_list():
     if bad:
         return bad
     qq = _qq()
-    if not qq:
-        return jsonify({"ok": False, "error": "参数不对"}), 400
-
     page, size = _page_args()
     where = ["w.n > 0"]
     args = []
     if not _is_owner(qq):
-        # 下架的只有站主和作者本人能看到；公开墙一律过滤
+        # 下架的只有站主和作者本人能看到；公开墙一律过滤。
+        # 游客（qq 为空）只走 hidden=0 那一半，owner='' 谁也匹配不上。
         where.append("(w.hidden=0 OR (w.src='user' AND w.owner=?))")
-        args.append(str(qq))
+        args.append(str(qq or ""))
 
     # scope=owner → 站长的（磁盘目录 + 他自己用网页传的，口径同 _work_row）；
     # scope=pub   → 其他人的。**不传 scope 就还是全部**，老链接和测试不受影响。
@@ -187,9 +185,9 @@ def api_list():
             "SELECT DISTINCT grp FROM works WHERE n>0 AND grp<>''")]
 
     more = len(rows) > size
-    return jsonify({"ok": True, "works": [_work_row(r, qq) for r in rows[:size]],
+    return jsonify({"ok": True, "works": [_work_row(r, qq or "") for r in rows[:size]],
                     "grps": sorted(g for g in grps if g), "has_more": more,
-                    "page": page, "owner": _is_owner(qq)})
+                    "page": page, "owner": _is_owner(qq), "guest": not qq})
 
 
 @bp.route("/mine")
@@ -228,24 +226,23 @@ def api_work(wid):
     if bad:
         return bad
     qq = _qq()
-    if not qq:
-        return jsonify({"ok": False, "error": "参数不对"}), 400
 
     with gallery.connect() as con:
         row = con.execute(_SELECT_WORK + " WHERE w.id=?", (wid,)).fetchone()
         if not row:
             return jsonify({"ok": False, "error": "没有这个作品集"}), 404
-        mine = row["src"] == "user" and row["owner"] == str(qq)
+        mine = row["src"] == "user" and row["owner"] == str(qq or "")
         if row["hidden"] and not mine and not _is_owner(qq):
             return jsonify({"ok": False, "error": "没有这个作品集"}), 404
 
         items = con.execute(
             "SELECT id, idx, path FROM items WHERE work_id=? ORDER BY idx",
             (wid,)).fetchall()
+        # 游客没有 qq，跳过点赞/收藏查询——点亮的星星只属于登录的人
         rows = con.execute(
             "SELECT item_id, kind FROM marks WHERE qq=?"
             " AND item_id IN (SELECT id FROM items WHERE work_id=?)",
-            (str(qq), wid)).fetchall()
+            (str(qq), wid)).fetchall() if qq else []
         liked = {r["item_id"] for r in rows if r["kind"] == "like"}
         faved = {r["item_id"] for r in rows if r["kind"] == "fav"}
         likes = {r["item_id"]: r["c"] for r in con.execute(
@@ -253,7 +250,7 @@ def api_work(wid):
             " AND item_id IN (SELECT id FROM items WHERE work_id=?)"
             " GROUP BY item_id", (wid,))}
 
-    data = _work_row(row, qq)
+    data = _work_row(row, qq or "")
     data["can_delete"] = mine
     data["can_hide"] = _is_owner(qq) and row["src"] == "owner"
     return jsonify({
@@ -279,8 +276,6 @@ def api_img(iid):
     if bad:
         return bad
     qq = _qq()
-    if not qq:
-        return jsonify({"ok": False, "error": "参数不对"}), 400
 
     with gallery.connect() as con:
         row = con.execute(
@@ -288,7 +283,7 @@ def api_img(iid):
             " JOIN works w ON w.id=i.work_id WHERE i.id=?", (iid,)).fetchone()
     if not row:
         return jsonify({"ok": False, "error": "没这张图"}), 404
-    if row["hidden"] and row["owner"] != str(qq) and not _is_owner(qq):
+    if row["hidden"] and row["owner"] != str(qq or "") and not _is_owner(qq):
         return jsonify({"ok": False, "error": "没这张图"}), 404
 
     src = row["path"]
@@ -330,8 +325,6 @@ def api_thumbs():
     if bad:
         return bad
     qq = _qq()
-    if not qq:
-        return jsonify({"ok": False, "error": "参数不对"}), 400
 
     mode = "v" if str(request.args.get("s") or "t").lower() == "v" else "t"
     cap = THUMB_BATCH_V if mode == "v" else THUMB_BATCH
@@ -358,7 +351,7 @@ def api_thumbs():
     mine_ok = _is_owner(qq)
     todo = []
     for r in rows:
-        if r["hidden"] and r["owner"] != str(qq) and not mine_ok:
+        if r["hidden"] and r["owner"] != str(qq or "") and not mine_ok:
             continue                       # 别人下架的图，一张都不给
         if not r["path"] or not os.path.isfile(r["path"]):
             continue
@@ -408,8 +401,6 @@ def api_warm():
     if bad:
         return bad
     qq = _qq()
-    if not qq:
-        return jsonify({"ok": False, "error": "参数不对"}), 400
 
     body = request.get_json(silent=True) or {}
     ids = []
@@ -433,7 +424,7 @@ def api_warm():
     mine_ok = _is_owner(qq)
     ok = {}
     for r in rows:
-        if r["hidden"] and r["owner"] != str(qq) and not mine_ok:
+        if r["hidden"] and r["owner"] != str(qq or "") and not mine_ok:
             continue
         if not r["path"] or not os.path.isfile(r["path"]):
             continue

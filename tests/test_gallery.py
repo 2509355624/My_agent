@@ -294,6 +294,20 @@ class ApiTest(_Base):
         self.assertTrue(self.j(self.c.get("/api/gal/me?qq=10001", headers=self.h))["owner"])
         self.assertFalse(self.j(self.c.get("/api/gal/me?qq=20002", headers=self.h))["owner"])
 
+    def test_guest_can_read_the_public_wall(self):
+        """游客（2026-11-04）：不带 qq 也能列，但「我的」是空的、不能点赞。"""
+        d = self.j(self.c.get("/api/gal/list", headers=self.h))
+        self.assertTrue(d["ok"])
+        self.assertTrue(d["guest"])
+        self.assertFalse(d["works"][0]["mine"])
+
+    def test_guest_cannot_write(self):
+        r = self.c.post("/api/gal/mark", headers=self.h,
+                        json={"item_id": 1, "kind": "like", "on": True})
+        self.assertEqual(r.status_code, 400)
+        r = self.c.get("/api/gal/mine", headers=self.h)
+        self.assertEqual(r.status_code, 400)
+
     def test_list_shows_works_with_cover(self):
         d = self.j(self.c.get("/api/gal/list?qq=20002", headers=self.h))
         self.assertTrue(d["ok"])
