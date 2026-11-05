@@ -51,6 +51,16 @@
   .tools button:active{background:var(--card2)}
   .tools button.primary{background:var(--pink);border-color:var(--pink);
     color:#fff;font-weight:600}
+  /* 分类条（2026-11-05）：按主文件夹快速切换。横向可滚，手机上一行放不下。 */
+  .grps{display:none;gap:6px;padding:8px 14px 2px;overflow-x:auto;
+    -webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .grps.on{display:flex}
+  .grps::-webkit-scrollbar{display:none}
+  .grps button{flex:none;border:1px solid var(--line);background:var(--card);
+    color:var(--dim);font:inherit;font-size:12.5px;padding:5px 12px;
+    border-radius:999px;cursor:pointer;white-space:nowrap}
+  .grps button.on{background:var(--card2);border-color:var(--pink);color:var(--tx);
+    font-weight:600}
   /* 「我的」的子标签：作品 / 收藏 / 点赞。做成下划线式，不跟顶栏那两个
      药丸抢视觉——这里切的是同一页的内容细分，不是换去处。 */
   .subtabs{display:none;gap:18px;padding:10px 14px 2px;border-bottom:1px solid var(--line)}
@@ -280,6 +290,8 @@
 </div>
 
 <div class="tools" id="tools"></div>
+<!-- 分类条：按主文件夹切换（2026-11-05）。只在「站长」tab 显示 -->
+<div class="grps" id="grps"></div>
 <div class="hint" id="hint">正在加载…</div>
 
 <main><div id="grid"></div></main>
@@ -375,7 +387,8 @@
 
   var S = { tab: "owner", sub: "works", page: 1, more: true, busy: false,
             owner: false, guest: false, works: [], cur: null, idx: 0,
-            items: [], likes: {}, fav: {}, layout: "2", shotEls: [] };
+            items: [], likes: {}, fav: {}, layout: "2", shotEls: [],
+            grp: "", grps: [] };
 
   function $(id) { return document.getElementById(id); }
 
@@ -521,11 +534,14 @@
       // scope=owner 站长的（磁盘目录 + 站主网页上传的）；scope=pub 其他人的
       q = "list?scope=" + (S.tab === "pub" ? "pub" : "owner") +
           "&page=" + S.page + "&size=24";
+      if (S.grp) q += "&grp=" + encodeURIComponent(S.grp);
     }
 
     api(q).then(function (d) {
       S.owner = !!d.owner;
+      S.grps = (!photo && S.tab !== "mine") ? (d.grps || []) : [];
       renderTools();
+      renderGrps();
       var pics = [];
       if (photo) {
         (d.items || []).forEach(function (it) {
@@ -582,7 +598,10 @@
   function addCard(w, out) {
     var c = document.createElement("div");
     c.className = "card";
-    c.onclick = function () { openWork(w.id); };
+    // 单图作品集（2026-11-05）：点击直接进查看器，不再多点一次作品集详情。
+    // 两张以上才需要先看网格。
+    c.onclick = function () { openWork(w.id, w.n === 1 ? 0 : null,
+                                         w.n === 1); };
 
     var img = document.createElement("img");
     img.className = "ph";
@@ -675,6 +694,29 @@
     if (cls) b.className = cls;
     b.onclick = fn;
     return b;
+  }
+
+  // 分类条：`全部` + 接口返回的各主文件夹名。只在「站长」tab 显示——
+  // 公开墙是群友上传，没有磁盘分类这回事。
+  function renderGrps() {
+    var box = $("grps");
+    if (!box) return;
+    var show = S.owner && S.tab === "owner" && (S.grps || []).length > 0;
+    box.classList.toggle("on", show);
+    if (!show) { box.innerHTML = ""; return; }
+    box.innerHTML = "";
+    [""].concat(S.grps).forEach(function (g) {
+      var b = document.createElement("button");
+      b.textContent = g || "全部";
+      if ((S.grp || "") === g) b.className = "on";
+      b.onclick = function () {
+        if ((S.grp || "") === g) return;
+        S.grp = g;
+        load(true);
+        renderGrps();
+      };
+      box.appendChild(b);
+    });
   }
 
   // 扫全部已配置的根（.env 里那两个）。日常增量更新点这个。
@@ -796,12 +838,19 @@
   // 点卡片进来先看网格（两列 / 单列可切），再点某张才全屏滑动。
   // `at` 有值时（从收藏、点赞点进来）直接替你打开全屏并停在那张，
   // 但详情页依然垫在它下面，关掉查看器不会一脚踹回首页。
-  function openWork(id, at) {
+  function openWork(id, at, direct) {
     api("work/" + id).then(function (d) {
       S.cur = d.work;
       S.items = d.items || [];
       S.fav = {};
       (d.items || []).forEach(function (it) { if (it.fav) S.fav[it.id] = 1; });
+      // 单图作品集：不垫详情页，直接开查看器（2026-11-05 用户要求）。
+      // 关掉查看器就回墙面；`closeViewer` 已经处理了「详情页没开」的滚动。
+      if (direct && S.items.length === 1) {
+        warmHd([S.items[0].id]);
+        openViewer(0);
+        return;
+      }
       renderDetail();
       $("detail").classList.add("on");
       document.body.style.overflow = "hidden";
@@ -1529,12 +1578,14 @@
   // ── tab / 滚动 ────────────────────────────────────────
   function setTab(name, sub) {
     S.tab = name;
+    S.grp = "";                 // 切 tab 先回「全部」，分类条只属于站长
     if (sub) S.sub = sub;
     document.querySelectorAll(".tabs button").forEach(function (b) {
       b.classList.toggle("on", b.dataset.tab === name);
     });
     renderSubtabs();
     renderTools();
+    renderGrps();
     load(true);
   }
 

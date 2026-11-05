@@ -124,6 +124,75 @@ class ScanTest(_Base):
         gallery.scan([("图库", self.root)])
         self.assertTrue(self.works()[0]["cover"].endswith("a.png"))
 
+    def test_rescan_refreshes_metadata_without_rebuilding_items(self):
+        """指纹没变也要更新 grp/title（2026-11-05 修 moss 分组错乱）。
+
+        `scan` 原来遇到没变的目录只更新 seen，于是根目录从 `web` 改成
+        `moss漫画` 之后，旧作品集永远留在 `web` 组里。现在元数据变了就改，
+        items 不动——点赞和收藏不会丢。
+        """
+        self.mk("1", "a.png")
+        gallery.scan([("旧组", self.root, "旧组")])
+        wid = self.works()[0]["id"]
+        with gallery.connect() as con:
+            before = [r["id"] for r in con.execute(
+                "SELECT id FROM items WHERE work_id=?", (wid,))]
+        out = gallery.scan([("新组", self.root, "新组")])
+        self.assertEqual(out["changed"], 1)
+        self.assertEqual(self.works()[0]["grp"], "新组")
+        with gallery.connect() as con:
+            after = [r["id"] for r in con.execute(
+                "SELECT id FROM items WHERE work_id=?", (wid,))]
+        self.assertEqual(before, after, "元数据刷新不该重建 items")
+
+    def test_natural_order_key_pads_numbers(self):
+        """`ord` 排序键：2 必须排在 10 前面，不能按字典序。"""
+        self.assertLess(gallery._ord_key("2"), gallery._ord_key("10"))
+        self.assertLess(gallery._ord_key("20261031_2321_早起的小猫"),
+                        gallery._ord_key("20261031_2331_天黑之后"))
+
+
+class CategoryAssignTest(unittest.TestCase):
+    """分类归并（2026-11-05）：共享一层路径 → 分类；单层包装 → 留在根。"""
+
+    def test_shared_first_level_becomes_category(self):
+        found = [
+            ("根", "silver系列/便利店/八重神子", "p1", [], "r"),
+            ("根", "silver系列/图书馆", "p2", [], "r"),
+            ("根", "好评/四宫辉夜", "p3", [], "r"),
+            ("根", "好评/早坂爱", "p4", [], "r"),
+            ("根", "1", "p5", [], "r"),
+        ]
+        out = gallery._assign_categories(found)
+        self.assertEqual([(x[0], x[1]) for x in out], [
+            ("silver系列", "便利店/八重神子"),
+            ("silver系列", "图书馆"),
+            ("好评", "四宫辉夜"),
+            ("好评", "早坂爱"),
+            ("根", "1"),
+        ])
+
+    def test_single_wrapper_does_not_become_category(self):
+        """`moss漫画/<时间戳>` 只有一个作品集时，时间戳不能变成分类。"""
+        found = [
+            ("moss漫画", "20261031_2321", "p1", [], "r"),
+            ("moss漫画", "20261031_2325", "p2", [], "r"),
+        ]
+        out = gallery._assign_categories(found)
+        self.assertEqual([x[0] for x in out], ["moss漫画", "moss漫画"])
+
+    def test_old_web_root_splits_into_moss_category(self):
+        """根还是 web 时，`moss漫画/<时间戳>` 也会被拆成 moss漫画 分类。"""
+        found = [
+            ("web", "moss漫画/20261031_2321", "p1", [], "r"),
+            ("web", "moss漫画/20261031_2325", "p2", [], "r"),
+        ]
+        out = gallery._assign_categories(found)
+        self.assertEqual([(x[0], x[1]) for x in out], [
+            ("moss漫画", "20261031_2321"),
+            ("moss漫画", "20261031_2325"),
+        ])
+
 
 class ScanPathTest(_Base):
     """站主自己挑一个文件夹扫：只扫这一个，标题用目录名而不是分组名。"""
@@ -153,12 +222,17 @@ class ScanPathTest(_Base):
         self.assertEqual(w["grp"], "35")
 
     def test_grp_follows_configured_root(self):
-        """落在配置根里面就沿用原分组名，别把「图库」改成「35」。"""
+        """落在配置根里面就归到根文件夹的实际名字（2026-11-05 改口径）。
+
+        `.env` 里的显示名（「图库」）只留在选目录提示里；墙上分类用
+        `Pictures\\new` 的 `new`。这样扫 `new\\35` 不会冒出「35」这种假分类。
+        """
         self.mk("35", "x.png")
         p = os.path.join(self.root, "35")
         with mock.patch.object(gallery, "GALLERY_ROOTS",
                                (("图库", self.root),)):
-            self.assertEqual(gallery.grp_for(p), "图库")
+            self.assertEqual(gallery.grp_for(p),
+                             gallery._root_name(self.root))
 
     def test_rescan_does_not_reorder_existing_works(self):
         """单独扫一个子目录，不能把别的作品集挤到后面去。"""

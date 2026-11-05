@@ -160,7 +160,11 @@ def api_list():
 
     # scope=owner → 站长的（磁盘目录 + 他自己用网页传的，口径同 _work_row）；
     # scope=pub   → 其他人的。**不传 scope 就还是全部**，老链接和测试不受影响。
-    order = " ORDER BY (w.src='user') ASC, w.sort ASC, w.id DESC"
+    # 站主作品按分类 + 自然排序键排（2026-11-05）：`moss漫画` 里的
+    # `20261031_2321`、`2325`、`2331` 按数字顺序，不再按扫描发现顺序。
+    order = (" ORDER BY (w.src='user') ASC, w.grp ASC,"
+             " CASE WHEN w.ord='' THEN 1 ELSE 0 END, w.ord ASC,"
+             " w.sort ASC, w.id DESC")
     scope = str(request.args.get("scope") or "").strip().lower()
     if scope == "owner":
         where.append("(w.src='owner' OR (w.src='user' AND w.owner=?))")
@@ -181,12 +185,22 @@ def api_list():
 
     with gallery.connect() as con:
         rows = con.execute(sql, args).fetchall()
-        grps = [r["grp"] for r in con.execute(
-            "SELECT DISTINCT grp FROM works WHERE n>0 AND grp<>''")]
+        # 分类条只列「这个 tab 里真有的分类」：站长 tab 是磁盘目录，
+        # 公开 tab 是群友上传。否则点进一个空分类会看到空白墙。
+        if scope == "owner":
+            gsql = ("SELECT DISTINCT grp FROM works WHERE n>0 AND grp<>''"
+                    " AND src='owner'")
+        elif scope == "pub":
+            gsql = ("SELECT DISTINCT grp FROM works WHERE n>0 AND grp<>''"
+                    " AND src='user'")
+        else:
+            gsql = "SELECT DISTINCT grp FROM works WHERE n>0 AND grp<>''"
+        grps = [r["grp"] for r in con.execute(gsql)]
 
     more = len(rows) > size
     return jsonify({"ok": True, "works": [_work_row(r, qq or "") for r in rows[:size]],
-                    "grps": sorted(g for g in grps if g), "has_more": more,
+                    "grps": sorted((g for g in grps if g), key=gallery._natkey),
+                    "has_more": more,
                     "page": page, "owner": _is_owner(qq), "guest": not qq})
 
 
@@ -207,7 +221,9 @@ def api_mine():
             rows = con.execute(
                 _SELECT_WORK + " WHERE (w.src='user' AND w.owner=?)"
                 " OR w.src='owner'"
-                " ORDER BY (w.src='user') ASC, w.sort ASC, w.id DESC"
+                " ORDER BY (w.src='user') ASC, w.grp ASC,"
+                " CASE WHEN w.ord='' THEN 1 ELSE 0 END, w.ord ASC,"
+                " w.sort ASC, w.id DESC"
                 " LIMIT ? OFFSET ?",
                 (str(qq), size + 1, (page - 1) * size)).fetchall()
         else:
