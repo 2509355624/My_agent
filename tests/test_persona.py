@@ -771,6 +771,36 @@ class SegmentTest(unittest.TestCase):
             addressed=False)
         self.assertIn("不是在对你说", block)
 
+    def test_thought_segment_survives_empty_text(self):
+        """「想」故意不带内容——不能因为 text 空就被丢掉。
+
+        2026-11-05：提示词要求「想」的 text 填空串（让模型复述心里话会被
+        内容审核掐断整份输出）。它是个标记，不是内容。
+        """
+        segs = persona._parse_segments([
+            {"who": "用户", "type": "说", "text": "我走了。"},
+            {"who": "用户", "type": "想", "text": ""},
+        ])
+        self.assertEqual([s["type"] for s in segs], ["说", "想"])
+
+    def test_original_is_appended_when_no_thought(self):
+        """没有心里话时，原文要完整补上——分段里「做」只是概括。"""
+        block = persona.render_user_block(
+            [{"who": "用户", "type": "做", "text": "按到墙上从后面进入"}],
+            True, "（把伊蕾娜按到墙上，从后面顶进去）")
+        self.assertIn("按到墙上从后面进入", block)
+        self.assertIn("【他这一轮的原话", block)
+        self.assertIn("从后面顶进去", block)
+
+    def test_original_is_hidden_when_a_thought_exists(self):
+        """有心里话时不能补原文——那会把没说出口的内容带出去。"""
+        block = persona.render_user_block(
+            [{"who": "用户", "type": "说", "text": "我走了。"},
+             {"who": "用户", "type": "想", "text": ""}],
+            True, "我走了。（心里想：其实想留下）")
+        self.assertNotIn("其实想留下", block)
+        self.assertNotIn("【他这一轮的原话", block)
+
     def test_render_hist_uses_seg_only_for_new_messages(self):
         hist = [
             {"role": "user", "content": "旧原话"},
