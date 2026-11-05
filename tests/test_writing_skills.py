@@ -85,15 +85,31 @@ class GuideTest(unittest.TestCase):
                 self.assertLessEqual(len(ws.guide(st)), ws.MAX_CHARS)
 
     def test_carries_the_dominant_axis_section(self):
-        got = ws.guide(_state(submit=80))
+        # 已经进入正戏（excite>=55）才走露骨轴段
+        got = ws.guide(_state(submit=80, excite=60))
         self.assertIn("最吃这一口", got)
         self.assertIn("权力语言", got)
 
+    def test_early_stage_gets_sultry_layer_not_organ_tables(self):
+        """前中期只给「停/差一点/身体泄露」，不给器官用词表。"""
+        got = ws.guide(_state(corrupt=60, excite=40))
+        self.assertIn("差一点", got)
+        self.assertIn("每段至少一个「停」", got)
+        self.assertNotIn("用词纪律", got)
+        self.assertNotIn("器官命名温度阶梯", got)
+
+    def test_explicit_threshold(self):
+        self.assertFalse(ws._explicit_stage(_state(excite=54)))
+        self.assertTrue(ws._explicit_stage(_state(excite=55)))
+        self.assertIn("用词纪律", ws.guide(_state(excite=55)))
+
     def test_missing_files_do_not_raise(self):
-        """规范库被挪走时演员层要照常演。"""
+        """规范库被挪走时演员层要照常演（涩气层是代码里的，不依赖文件）。"""
         import unittest.mock as mock
         with mock.patch.object(ws, "_ROOT", "Z:/no/such/dir"):
-            self.assertEqual(ws.guide(_state(corrupt=60)), "")
+            got = ws.guide(_state(corrupt=60))
+        self.assertIn("差一点", got)
+        self.assertNotIn("规范·", got)
 
 
 class PersonaWiringTest(unittest.TestCase):
@@ -104,6 +120,11 @@ class PersonaWiringTest(unittest.TestCase):
         self.assertIn("这一拍的笔法", got)
         # 原有的节奏层还在
         self.assertIn("这一拍", got)
+
+    def test_early_scene_wiring_gets_sultry_layer(self):
+        got = persona.intimate_guide(_state(excite=40, corrupt=60))
+        self.assertIn("差一点", got)
+        self.assertNotIn("用词纪律", got)
 
     def test_free_mode_keeps_the_old_guide(self):
         got = persona.intimate_guide({"active": False})

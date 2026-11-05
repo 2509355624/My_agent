@@ -67,6 +67,14 @@ _H_WRITING = "02-h-tech/h-writing.md"
 _CONQUEST = "05-style/conquest-style.md"
 _DOMINATION = "01-structure/references/domination-training-techniques.md"
 _QUIET = "01-structure/references/quiet-exposure-techniques.md"
+_CONTENT = "03-content/成人情色写作指导.md"
+_TECH = "04-liveness/refs-打磨/techniques.md"
+
+# 高潮值到这个档位（rising，55+）才认为「已经进入」。
+# 之前用涩气层：停、差一点、身体泄露、环境见证；之后才切到器官/动作的
+# 露骨规则。直接在 low 档塞用词表，模型会把前戏写成正戏——这是 2026-11-05
+# 用户反馈「太直白、没意思」的主要来源。
+EXPLICIT_AT = 55
 
 # ── 常驻层：判成亲密就拼 ────────────────────────────────
 # (名字, 文件, 起始标记, 结束标记, 截到哪个标记为止)
@@ -78,6 +86,31 @@ _CORE = (
     ("用词纪律", _H_WRITING, "## 【用词纪律】", "## 深度范文库",
      "**用户裁决**"),
     ("动词", _H_WRITING, "### 2.1 强动词替换", "### 2.3 感官描写要求", None),
+)
+
+# ── 涩气层：还没到露骨阶段时拼这一段 ─────────────────────
+#
+# 素材来自 style-book 的②③⑤⑥、quiet-exposure 的「差一步」、techniques 的
+# 情绪体感化/感官偏见、以及 03-content 的对象感/每段变化。这里压成一段
+# 可直接执行的短规则：**先写欲望怎么被藏住，不写器官。**
+_SULTRY_GUIDE = (
+    "### 笔法：先写「差一点」，别急着写「做了什么」\n"
+    "\n"
+    "（这一拍以暗示为主：上面那套器官/动作的露骨用词规则**先不要用**；"
+    "等真正进入之后再切过去。）\n"
+    "\n"
+    "- 一场只抓一个「不能 / 不该 / 差一点」（门没锁、外面有人、她还在生气、"
+    "你马上要走），每段都让它发挥作用。\n"
+    "- 还没到那一步，就别写器官。写距离、衣物、呼吸、声音、温度、物件；"
+    "允许程度变了，再升级用词。\n"
+    "- 每段至少一个「停」：手停在衣领前一厘米、扣子解一颗又停、吻到嘴角移开、"
+    "话说一半。**没发生的事比发生了的更涩。**\n"
+    "- 情绪不写判断，写身体泄露：耳根、指节、膝盖、杯壁上的水珠、衣料摩擦。\n"
+    "- 环境当见证：外面那个正常世界越具体，室内越失控。\n"
+    "- 三轨分开，而且不要一致：叙述只写看得见的；她说的话放「」；"
+    "她没说出口的那一句单独一行、第一人称、短。嘴上说「不用」，手没抽回去，"
+    "心里是「再近一点」——色气就在这条缝里。\n"
+    "- 结尾留未完成：一个画面、一个没做完的动作，不总结、不升华。\n"
 )
 
 # 规范库里的**内部笔记行**：作者裁决、给作者看的检查项、生成前规划。
@@ -164,10 +197,30 @@ _BY_AXIS = {
     ),
 }
 
+# 涩气层按轴挑的那一小段。这里只放**不靠器官、也不带「他」**的材料：
+#   感官偏见 / 对象感 / 特殊场景。
+# 停、身体泄露、环境见证已经全部写在 `_SULTRY_GUIDE` 里，不再重复切片。
+# 同一根轴在 high 档（excite>=55）会走上面的 `_BY_AXIS`，换成露骨规则。
+_SLOW_AXIS = {
+    "suspicion": (
+        ("感官偏见", _TECH, "### 第21招：感官偏见化（反通用正确）",
+         "### 第22招：主角必须犯错（反全知视角）", None),
+    ),
+    "affection": (
+        ("对象感", _CONTENT, "## 十、写出“对象感”",
+         "## 十一、甜言蜜语与强烈动作可以并存", None),
+    ),
+    "dev": (
+        ("特殊场景", _H_WRITING, "## 九、特殊场景", "## 十、心理刺激层", None),
+    ),
+}
+
 # 全部标记都在这些文件里，启动时校一遍——改规范断了切片就早炸，
 # 别等上线了才发现某根轴永远返回空串。
 _CHECK = [(_H_WRITING, a, b) for _n, _f, a, b, _u in _CORE]
 for _rows in _BY_AXIS.values():
+    _CHECK += [(f, a, b) for _n, f, a, b, _u in _rows]
+for _rows in _SLOW_AXIS.values():
     _CHECK += [(f, a, b) for _n, f, a, b, _u in _rows]
 
 
@@ -241,12 +294,29 @@ def _top_axis(aff_res):
     return max(scores, key=lambda k: scores[k])
 
 
+def _explicit_stage(aff_res):
+    """这一拍已经进入正戏了吗？
+
+    高潮值 < 55（cold / awake）时先用涩气层：停、差一点、身体泄露、环境见证。
+    55+（rising / edge / over）才切到器官/动作/高潮的露骨规则。
+    """
+    try:
+        ex = int(aff_res.get("excite") or 0)
+    except (TypeError, ValueError):
+        ex = 0
+    return ex >= EXPLICIT_AT
+
+
 def guide(aff_res=None, chars=MAX_CHARS):
     """按状态拼一段「这一拍该怎么写」的规范原文。拿不到状态就返回空串。
 
     `aff_res` 是 `affection.settle()` 的返回值。不是攻略模式（自由模式）
     时它是 `{"active": False}` 或者 None，这时整段不拼——自由模式没有轴，
     挑轴就是瞎猜。
+
+    **两段式（2026-11-05）**：
+      · 前中期（excite < 55）→ 涩气层 + 一根非露骨轴段；
+      · 正戏期（excite >= 55）→ 原来的露骨层（用词纪律/强动词 + 轴段）。
 
     预算按**拼进提示词后的整段长度**算（含小标题和说明句），不是只算
     规范原文的长度。只算原文的话，标题一加就超，`…` 会出现在尾巴上。
@@ -274,14 +344,22 @@ def guide(aff_res=None, chars=MAX_CHARS):
     axis = _top_axis(aff_res)
     if axis == "forced":
         chars = max(chars, FORCED_CHARS)
+    explicit = _explicit_stage(aff_res)
+    rows = _BY_AXIS.get(axis, ()) if explicit else _SLOW_AXIS.get(axis, ())
     head = "\n## 这一拍的笔法（从写作规范里挑的，**学写法和用词，不要抄情节**）\n\n"
     tail = "\n\n（上面是笔法参考。她的性格和这条线怎么走，以人设和前面的状态为准。）"
     budget = chars - len(head) - len(tail)
     if budget <= 0:
         return ""
 
-    axis_parts, used = [], 0
-    for name, rel, a, b, u in _BY_AXIS.get(axis, ()):
+    parts, used = [], 0
+    if not explicit:
+        # 涩气层先占位：它管「这一拍怎么藏住欲望」，轴段只是补充。
+        parts.append(_SULTRY_GUIDE)
+        used = len(_SULTRY_GUIDE)
+
+    axis_parts = []
+    for name, rel, a, b, u in rows:
         if used >= budget * AXIS_SHARE:
             break
         s = _slice(rel, a, b, u)
@@ -291,16 +369,17 @@ def guide(aff_res=None, chars=MAX_CHARS):
             used += len(block) + 2
 
     core_parts = []
-    for name, rel, a, b, u in _CORE:
-        if used >= budget:
-            break
-        s = _slice(rel, a, b, u)
-        block = "### 规范·%s\n%s" % (name, s) if s else ""
-        if block and used + len(block) + 2 <= budget:
-            core_parts.append(block)
-            used += len(block) + 2
+    if explicit:
+        for name, rel, a, b, u in _CORE:
+            if used >= budget:
+                break
+            s = _slice(rel, a, b, u)
+            block = "### 规范·%s\n%s" % (name, s) if s else ""
+            if block and used + len(block) + 2 <= budget:
+                core_parts.append(block)
+                used += len(block) + 2
 
-    parts = core_parts + axis_parts
+    parts += core_parts + axis_parts
     if not parts:
         return ""
     return head + "\n\n".join(parts) + tail
