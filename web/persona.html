@@ -1063,10 +1063,19 @@ function toast(t, err) {
 
 let CLIMAX = null;          // 当前这次高潮的信息 {n, of, last}
 let FIN_SPOT = "";          // 射精弹窗里选中的预设位置
+let FIN_SEEN = 0;           // 已经答过/跳过的最新一次序号（只处理更大的 n）
+let FIN_OPEN = false;       // 弹窗此刻是不是开着
 
 function askFinish(cl) {
+  // 2026-11-06 用户报「一直跳弹窗」：以前 `loadSession` 每跑一次就弹一次，
+  // 而「取消」只在本地关掉、服务端那个 pending 还挂着，于是关一次弹一次。
+  // 现在两道闸：开着就不重复弹；同一序号处理过就不再问。
+  if (!cl) return;
+  if (FIN_OPEN) return;
+  if ((cl.n || 0) <= FIN_SEEN) return;
   CLIMAX = cl || null;
   if (!CLIMAX) return;
+  FIN_OPEN = true;
   FIN_SPOT = "";
   const tip = $("finishTip");
   if (tip) {
@@ -1127,11 +1136,14 @@ function pushAssistant(d) {
 // 提交：位置或自定义，二选一（两个都给时以后端为准：text 优先）。
 async function goFinish() {
   $("finishMask").classList.remove("on");
+  FIN_OPEN = false;
   const text = ($("finishText") && $("finishText").value || "").trim();
   const last = !!(CLIMAX && CLIMAX.last);
   const keep = CLIMAX;                 // 失败时要把弹窗原样还回来
   if (!text && !FIN_SPOT) {           // 什么都没给 = 这一下不写
+    if (keep) FIN_SEEN = Math.max(FIN_SEEN, keep.n || 0);
     CLIMAX = null;
+    post("/api/persona/finish", {}).catch(() => {});   // 让服务端清掉待办
     toast("那这一下就先跳过");
     return;
   }
@@ -1150,6 +1162,7 @@ async function goFinish() {
       spot: FIN_SPOT, text: text });
     pend.remove();
     CLIMAX = null;
+    if (keep) FIN_SEEN = Math.max(FIN_SEEN, keep.n || 0);
     if (d.reply) pushAssistant(d);
     // 第 5 次：射完立刻问「还要不要继续」，不用等玩家再发消息。
     if (last) $("fiveMask").classList.add("on");
@@ -1158,7 +1171,7 @@ async function goFinish() {
     // 没写成 → 把弹窗**恢复**（2026-11-06）：以前这里只 toast 一下，
     // 弹窗没了、CLIMAX 也清了，玩家再也没机会补这一段。
     CLIMAX = keep;
-    if (keep) $("finishMask").classList.add("on");
+    if (keep) { FIN_OPEN = true; $("finishMask").classList.add("on"); }
     toast("没写成，再试一次", true);
   } finally {
     lockInput(false);
@@ -2821,18 +2834,19 @@ document.querySelectorAll("#finishMask [data-spot]").forEach(btn => {
   btn.onclick = () => pickSpot(btn);
 });
 $("finishGo").onclick = goFinish;
-$("finishCancel").onclick = () => {
-  // 先不写 = 这一下跳过，什么都不留。
+// 「先不写」＝跳过（2026-11-06）：**必须告诉服务端**，否则那份 pending 还挂着，
+// 下次 loadSession 又弹一次——用户就是这么被反复弹窗卡住的。
+function dismissFinish() {
   $("finishMask").classList.remove("on");
+  FIN_OPEN = false;
+  if (CLIMAX) FIN_SEEN = Math.max(FIN_SEEN, CLIMAX.n || 0);
   CLIMAX = null;
   FIN_SPOT = "";
-};
+  post("/api/persona/finish", {}).catch(() => {});   // 空的 = 服务端清待办
+}
+$("finishCancel").onclick = dismissFinish;
 $("finishMask").addEventListener("click", e => {
-  if (e.target === $("finishMask")) {
-    $("finishMask").classList.remove("on");
-    CLIMAX = null;
-    FIN_SPOT = "";
-  }
+  if (e.target === $("finishMask")) dismissFinish();
 });
 // 第五次之后（2026-11-05）：结束 / 最后一次。
 $("fiveEnd").onclick = () => pickFive(false);
