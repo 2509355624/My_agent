@@ -501,15 +501,9 @@
   </main>
 
   <aside class="side2" id="side2">
-    <!-- 状态面板放**最上面**（2026-11-04 深夜）：玩家开侧栏第一眼要看到的
-         就是「我现在卡在哪、还差多少」。以前它在心情/状态/回忆/轮次下面，
-         手机抽屉里得往下滑才能看见——那是最该看见的一块，却被挤到了最底下。 -->
-    <div class="st panel" id="panelBox" style="display:none">
-      <div class="k" id="panelK">状态</div>
-      <div id="panelBody"></div>
-      <div class="pnote" id="panelNote"></div>
-    </div>
-    <!-- 心情 / 状态 / 轮次压成一块紧凑区：三个各占一行会把面板顶下去。 -->
+    <!-- 心情 / 状态 / 轮次压成一块，**放最上面**（2026-11-05 用户拍板）：
+         心情条是最直观的进程，打开侧栏第一眼就该看到它。
+         以前这里是攻略数值面板在最上面，现在把数值面板挪到它下面。 -->
     <div class="st" id="nowBox">
       <div class="nowrow"><span class="k">心情</span>
         <span class="v mood" id="sMood">—</span></div>
@@ -520,6 +514,13 @@
         <span class="v" id="sTurns">0</span></div>
       <div class="nowrow"><span class="k">剧情</span>
         <span class="v" id="sDay">—</span></div>
+    </div>
+    <!-- 攻略数值面板放第二（2026-11-05）：先看「她此刻什么心情」，
+         再看「好感/冲动到哪了」。游客模式下整块隐藏（见 renderAff）。 -->
+    <div class="st panel" id="panelBox" style="display:none">
+      <div class="k" id="panelK">状态</div>
+      <div id="panelBody"></div>
+      <div class="pnote" id="panelNote"></div>
     </div>
     <!-- 回忆改成可折叠（2026-11-04 深夜）：小记能长到上千字，展开就把面板
          挤出屏幕。默认收起，点标题展开；记一下展开状态，同一局里不用反复点。 -->
@@ -1038,6 +1039,13 @@ function renderPanel(a, p) {
   const box = $("panelBox");
   const affBox = $("affBox");
   if (!box) return;
+  // 游客固定自由模式（2026-11-05 最终版）：不跑好感结算，这块数值不会变。
+  // 早先「游客攻略化」留下的显示逻辑要撤掉，否则玩家看到一排 0 以为坏了。
+  if (ROLE === "guest") {
+    box.style.display = "none";
+    if (affBox) affBox.style.display = "none";
+    return;
+  }
   if (!p) {
     box.style.display = "none";
     if (affBox) affBox.style.display = "none";
@@ -1045,8 +1053,8 @@ function renderPanel(a, p) {
   }
   const raid = isRaid(a);
   box.style.display = "";
-  // 游客攻略化（2026-11-05）：游客也看面板，但「清空存档」仍然不给——
-  // 游客的存档 24 小时自动过期，手动删没有意义（后端对 wipe 也还是 403）。
+  // 右栏底部只留「清空存档」：游客没有存档可删（24 小时自动过期，后端也
+  // 仍然 403），所以这块对游客隐藏。
   if (affBox) affBox.style.display = (raid && ROLE !== "guest") ? "" : "none";
   $("panelK").textContent = raid ? "状态 · 攻略模式"
     : (a ? "状态 · 已封存" : "状态 · 未开启");
@@ -1130,8 +1138,9 @@ function renderPanel(a, p) {
 }
 
 // 拉一次面板。失败就静默——面板挂了不该挡住聊天。
-// 游客攻略化（2026-11-05）：游客也有面板，不再提前返回。
+// 游客固定自由模式（2026-11-05 最终版）：不拉、不画，数值本来就不会动。
 async function refreshPanel() {
+  if (ROLE === "guest") return;
   try {
     const r = await fetch("/api/persona/affection/panel");
     const d = await r.json();
@@ -1147,10 +1156,11 @@ function renderAff(a) {
   renderMode();
   const box = $("affBox");
   const panelBox = $("panelBox");
-  // 游客攻略化（2026-11-05）：好感、面板、尾行全给，唯独「清空存档」
-  // 不给（游客线 24 小时自动过期，手动删没意义，后端也仍 403）。
+  // 游客固定自由模式（2026-11-05 最终版）：好感区与数值面板都不给。
+  // 游客线没有打分/结算，露出一排 0 只会让人以为界面坏了。
   if (box) box.style.display = (ROLE !== "guest" && card) ? "" : "none";
-  if (panelBox) panelBox.style.display = "";
+  if (panelBox) panelBox.style.display = ROLE === "guest" ? "none" : "";
+  if (ROLE === "guest") return;
   // 面板数据是异步来的；这里先用上次的渲染一次（避免闪空白），
   // 然后立刻拉新的。第一次进来 PANEL 是 null，就等 refreshPanel 填。
   renderPanel(a, PANEL);
@@ -1176,9 +1186,9 @@ function renderMode() {
        : "现在只聊天；点一下开攻略模式（开始按档位算好感）");
   b.style.display = (ROLE === "guest" || !card) ? "none" : "";
 
-  // 「状态」按钮（2026-11-04 深夜）：窄屏开右侧抽屉看面板。
-  // 游客攻略化（2026-11-05）：游客也有面板，显隐只看选没选角色
-  // （游客的 session 一直带卡，所以常显）。没选角色时不给。
+  // 「状态」按钮（2026-11-04 深夜）：窄屏开右侧抽屉。
+  // 游客也有这一块（心情/状态/轮次/回忆），只是没有上方的数值面板
+  // （`renderAff` 对游客隐藏 panelBox）。没选角色时不给。
   const s = $("btnStats");
   if (s) {
     const on = !!card;
