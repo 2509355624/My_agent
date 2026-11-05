@@ -262,6 +262,27 @@ class TurnTest(PersonaBase):
         self.assertEqual(out.reply, "你好呀")           # 回话原样发回去
         self.assertEqual(out.scene, "")                # 没写画面行 = 这轮不出图
 
+    def test_fifth_time_auto_advances_to_next_day(self):
+        """连续第 5 次（1/5 满）且内射：自动推进到第二天（2026-11-05）。
+
+        用户要的是「满 5 次就翻篇」，而且这一轮由编剧把过渡写进去；
+        代码只负责把 gameday 推到下一天、把这一场收掉。
+        """
+        score = {"finish": "inside", "act": "intense", "excite": 30,
+                 "delta": 1}
+        aff = {"active": True, "excite": 95, "orgasms": 5, "orgasmMax": 5,
+               "just_orgasm": 5, "finish": "inside", "value": 50,
+               "corrupt": 0, "submit": 0, "arousal": 50}
+        raw = "最后一次之后，天亮了。\n画面：1girl\n心情：疲惫 强度1\n状态：床上"
+        with mock.patch.object(persona, "_judge_intent_scored",
+                               return_value=("intimate", "", score)), \
+             mock.patch.object(persona.affection, "settle",
+                               return_value=aff), \
+             mock.patch.object(persona.llm, "call_llm", return_value=raw):
+            out = persona.run_turn(self.KEY, "再要一次", "private", "张三")
+        self.assertTrue(out.reply)
+        self.assertEqual(persona.game_day(self.KEY), 2)
+
     def test_intent_judgement_failure_still_replies(self):
         """判断段挂了也要能回话——退化成单次流程，不是整轮哑掉。
 
@@ -2202,6 +2223,20 @@ class GameDayTest(PersonaBase):
         for _ in range(30):                        # 超过 _DAY_TURNS_SOFT
             persona._apply_gameday(line, {"time": "none"})
         self.assertIn("天色不早", persona._gameday_block(self._gday()))
+
+    def test_jump_phase_keeps_day_and_opens_with_her_words(self):
+        """切今天时段：天数不动、时段变了，她先开口，任务行不进历史。"""
+        raw = ("中午了，说好的早餐呢？\n画面：1girl, pouting\n"
+               "心情：生气 强度3\n状态：客厅")
+        with mock.patch.object(persona.llm, "call_llm", return_value=raw):
+            turn = persona.jump_phase(self.KEY, "中午")
+        self.assertIsNotNone(turn)
+        self.assertIn("中午", turn.reply)
+        self.assertEqual(self._gday()["day"], 1)      # 不推进天数
+        self.assertEqual(self._gday()["phase"], "中午")
+        hist = persona._load_hist(persona.resolve_line(self.KEY))
+        self.assertEqual(len(hist), 1)
+        self.assertEqual(hist[0]["role"], "assistant")
 
     def test_skip_day_opens_with_her_words(self):
         """睡到明天：推进一天、由她先开口，系统任务行不进历史。"""

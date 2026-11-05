@@ -378,6 +378,13 @@ function renderPane() {
       </label>
     </div>
     <div class="field">
+      <label style="display:flex;gap:8px;align-items:center;cursor:pointer">
+        <input type="checkbox" id="f_preg" ${(c.pregnancyEnabled === false ? "" : "checked")} style="width:16px;height:16px">
+        <span>启用怀孕玩法（仅成年角色）</span>
+      </label>
+      <div class="tip">默认开启。关掉后这条线不会记录内射，也不会有怀孕/孩子状态；新增非成年角色或不想玩这条线的卡，取消勾选。</div>
+    </div>
+    <div class="field">
       <label>这张卡的默认聊天背景（留空就用上面的全局默认）</label>
       <div class="bg-edit">
         <div class="bg-thumb">${bgThumb}</div>
@@ -424,6 +431,7 @@ function collect() {
   c.level_names = $("f_level_names").value.split(",").map(x => x.trim()).filter(Boolean);
   c.referenceImage = $("f_ref").value.trim();
   c.hidden = $("f_hidden").checked;
+  c.pregnancyEnabled = $("f_preg").checked;
 }
 
 function pick(i) {
@@ -441,6 +449,7 @@ function add() {
     stateBehavior: { submit: "", corrupt: "", affection: "", suspicion: "" },
     start_level: 0, start_value: null, level_names: [],
     background: { url: "", thumb: "", version: 0, exists: false },
+    pregnancyEnabled: true,
   });
   cur = cards.length - 1;
   render();
