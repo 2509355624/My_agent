@@ -222,8 +222,10 @@ class DevInjectionTest(unittest.TestCase):
         self.assertIn("已经没有一处是没被开发过的", blk)
 
     def test_writing_axis_switches_to_dev(self):
+        # excite 要过 55 才进「露骨层」——低于那条线走的是「先写差一点」
+        # 的涩气层（2026-11-05 上一个改动），那时挑的是慢轴不是 dev 轴。
         got = ws.guide({"active": True, "dev": {"pussy": 320},
-                        "corrupt": 10, "value": 0, "excite": 0})
+                        "corrupt": 10, "value": 0, "excite": 60})
         self.assertIn("差一步被发现", got)
 
     def test_forced_still_beats_dev(self):

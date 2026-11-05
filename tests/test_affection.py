@@ -1233,23 +1233,52 @@ class ExciteTest(AffBase):
     def test_no_cap_however_many_orgasms(self):
         """2026-11-05 取消 5 次封顶：次数只记，到多少次都不强制收场。
 
-        原来的「第 6 次是水词」被推翻了——开发度高了以后本来就该连着到。
-        收场只由「连续两轮没接触」决定。
+        注意：终点不再由次数决定，但**冷却还在**——每两次之间至少隔三轮
+        （见 `test_orgasm_cooldown_three_rounds`），所以要走够轮数。
         """
         key = self._raid()
         res = None
-        # 用「把高潮值直接推到顶」的增量刷次数，别靠动作档慢慢爬——
-        # 那样 40 轮里大半会落进空闲收场分支，次数反而涨不上去。
-        # 每两轮记一次（推到 100 才落一次，回落到 55 还要再推一轮）。
-        # 14 轮记到 7 次——刚好看得出「过了 5 次还在继续记」。
-        # 原来用 40 轮也不是不行，但每轮都要落一次盘，测试会慢一倍。
-        for _ in range(14):
+        for _ in range(20):
             res = self._settle(key, in_scene=True, act="intense", excite=40)
             self.assertFalse(res["sceneCapped"], "不该再因为次数封顶")
             self.assertTrue(res["in_scene"], "次数到了也还在场里")
         self.assertGreater(res["orgasms"], affection.ORGASM_MAX,
                            "过了 5 次还能继续记")
         self.assertNotIn("coolLeft", res, "冷却期已取消（2026-11-05）")
+
+    def test_orgasm_cooldown_three_rounds(self):
+        """高潮之后至少隔三轮才能再高潮（2026-11-05 用户拍板）。
+
+        高潮值是**女主的体力条**，不是男主的蓄力条：她刚被弄到一次，
+        不可能两轮之内又到。封顶是逐轮松开的（85 → 95 → 放开），
+        所以进度条一直在动，不是死卡在 99。
+        """
+        key = self._raid()
+        marks = []
+        for i in range(12):
+            r = self._settle(key, in_scene=True, act="intense", excite=40)
+            if r["just_orgasm"]:
+                marks.append(i)
+        self.assertGreaterEqual(len(marks), 3)
+        gaps = [b - a for a, b in zip(marks, marks[1:])]
+        self.assertTrue(all(g >= 3 for g in gaps),
+                        "两次高潮之间至少三轮，实测间隔 %r" % (gaps,))
+
+    def test_cooldown_caps_the_bar(self):
+        """冷却期间进度条要**逐轮往上爬**，不是卡死在 99 不动。"""
+        key = self._raid()
+        seen = []
+        for _ in range(6):
+            r = self._settle(key, in_scene=True, act="intense", excite=40)
+            # 高潮那一轮 `recover` 也被置上了，但它的 cap 还是满值——
+            # 那是「刚到」，不是「在冷却」，别算进来。
+            if r["recover"] > 0 and not r["just_orgasm"]:
+                seen.append((r["excite"], r["exciteCap"]))
+        self.assertTrue(seen, "应该有冷却轮")
+        caps = [c for _e, c in seen]
+        self.assertEqual(caps[:2], sorted(caps[:2]), "封顶要逐轮松开")
+        for e, c in seen:
+            self.assertLessEqual(e, c)
 
     def test_scene_ends_by_idle_not_by_count(self):
         """次数不影响收场；连续两轮不接触才算真收场。"""

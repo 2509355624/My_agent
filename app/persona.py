@@ -2930,6 +2930,110 @@ def _norm_finish(value):
     return v if v in ("inside", "outside", "none", "unknown") else "unknown"
 
 
+# ── 射精选择（2026-11-05，用户拍板）────────────────────────
+#
+# 用户原话：「玩家他不需要自己去写，他只需要负责推动剧情就行了。女主来到
+# 高潮之后，就给选项让玩家自己选，这样就可以避免玩家不知道什么时候去写
+# 这个摄入会比较好——相当于系统帮玩家去做这个决定。」
+#
+# 所以流程是：
+#   1. 高潮值满 → 前端弹窗问「射在哪里」；
+#   2. 选择存进会话（`finish_pick`），**不由玩家写在正文里**；
+#   3. 下一轮 `run_turn` 取走，拼成导演条交给编剧，由它写出来。
+#
+# 位置只有五种。`none` 是「不射」——那也是合法选择，不是没选。
+FINISH_SPOTS = {
+    "mouth": "嘴里",
+    "body": "身上",
+    "pussy": "小穴里",
+    "anus": "肛门里",
+    "none": "不射",
+}
+
+
+def set_finish(session_key, spot):
+    """记下玩家选的射精位置。下一轮 `run_turn` 取走并交给编剧。"""
+    key = resolve_line(session_key)
+    spot = str(spot or "").strip().lower()
+    if spot not in FINISH_SPOTS:
+        return False
+    st = _load_state()
+    ent = st.get(key)
+    if not isinstance(ent, dict):
+        return False
+    ent["finish_pick"] = spot
+    _save_state(st)
+    return True
+
+
+def take_finish(session_key):
+    """取走并清空。没有就返回空串。"""
+    key = resolve_line(session_key)
+    st = _load_state()
+    ent = st.get(key)
+    if not isinstance(ent, dict):
+        return ""
+    spot = str(ent.pop("finish_pick", "") or "").strip().lower()
+    if not spot:
+        return ""
+    _save_state(st)
+    return spot
+
+
+# 「身上」最容易穿帮：上一轮是后入，就不能写成射在小腹正面。所以每个位置
+# 都带一句「按你们现在的姿势找地方」，而不是给一个固定落点。
+_FINISH_HINT = {
+    "mouth": ("他射在她嘴里。写清她的反应——咽、吐、还是含着不动；"
+              "嘴里含着东西时她说不出完整的句子，这一点要写出来。"),
+    "body": ("他射在她身上。**落点要按你们这一轮的姿势定**："
+             "背后进入/后入就落在后腰、臀、脊背；面对面才可能落在小腹、胸口；"
+             "她跪着就落在脸、颈、胸口。别把落点和姿势写矛盾了。"
+             "写她皮肤上的痕迹，以及她低头看见时的表情。"),
+    "pussy": ("他射在里面。写到她感觉到的那一下——里面一热、腿根收紧、"
+              "她下意识想夹住。之后不要把这件事略过去，"
+              "她会知道那是什么，也会知道这意味着什么。"),
+    "anus": ("他射在肛门里。写她后穴的反应——被灌进来时的那种撑和热，"
+             "以及她整个人绷住的那一拍。这个位置对她更过界，"
+             "所以她的反应要跟着更重，别写成和前面一样。"),
+    "none": ("这一拍他没有射。可以写他停在里面、或者是退出来、或者只是抱着她缓；"
+             "她已经到过了，身体还在余韵里。**不要把「没射」写得像错过了什么**——"
+             "这只是一个选择。"),
+}
+
+
+def _climax_info(res):
+    """这一轮是不是刚到高潮 / 是不是第 5 次。没到返回 None。
+
+    前端拿到 `{n, of, last}` 就弹「射在哪里」；`last=True` 时答完再弹
+    「结束 / 最后一次」。判定只用 `just_orgasm`——它由 `settle` 写，
+    是「这一轮真的到了一次」的唯一事实来源。
+    """
+    try:
+        n = int((res or {}).get("just_orgasm") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return None
+    try:
+        omax = int((res or {}).get("orgasmMax") or 0)
+    except (TypeError, ValueError):
+        omax = 0
+    return {"n": n, "of": omax, "last": bool(omax and n >= omax)}
+
+
+def finish_block(spot):
+    """把「射在哪里」拼成演员层的导演条。没有选择就返回空串。"""
+    spot = str(spot or "").strip().lower()
+    hint = _FINISH_HINT.get(spot)
+    if not hint:
+        return ""
+    return ("## 这一拍：射精（系统已经替你决定了位置）\n\n"
+            + hint
+            + "\n\n（这是**已经发生的事实**，不要改成别的位置，"
+              "也不要问她「要射哪里」——她已经在高潮的余韵里，"
+              "这一拍是他自己的事。写她怎么承受、怎么反应。）")
+
+
 def _judge_recent(hist):
     """给第一段看的「最近发生过什么」。只要正文，不要画面/心情/状态三行。"""
     rows = [m for m in (hist or []) if isinstance(m, dict)]
@@ -3942,6 +4046,18 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
             card, text, prev_state, history=hist, note=note)
         extras = extras if isinstance(extras, dict) else {}
     finish = _norm_finish(extras.get("finish"))
+    # 射精选择（2026-11-05）：上一轮她高潮满了，玩家在弹窗里选了「射在哪里」。
+    # 这个选择**不是**玩家在正文里写的，所以编剧判不出来，得由系统补进去。
+    # 取一次就清，免得后面每一轮都在射。
+    fin_pick = take_finish(key)
+    if fin_pick:
+        # 位置决定「有没有射在里面」——怀孕记账只认这个，不能靠编剧猜。
+        if fin_pick in ("pussy", "anus"):
+            finish = "inside"
+        elif fin_pick in ("mouth", "body"):
+            finish = "outside"
+        else:
+            finish = "none"
     # 亲密场景那 1,284 字只在该用的时候拼（2026-11-03）。
     # 判不出来（intent 为空）时按 True 走——宁可多发，不要因为分类失败让
     # 亲密场景写得干巴巴。`neutral` 也带上，它随时可能拐到亲密去。
@@ -3956,6 +4072,11 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     dblock = _director_block(extras)
     if dblock:
         head = head + "\n\n" + dblock
+    # 射精位置（2026-11-05）：玩家在弹窗里选的那个，不由正文决定。
+    # 拼在导演条之后、结算之前——它改的是「这一拍怎么写」，不是数值。
+    fblock = finish_block(fin_pick)
+    if fblock:
+        head = head + "\n\n" + fblock
     # 长期记忆（2026-11-05）：按玩家这一轮**看得见的话**去翻旧账。
     # 用户没说出口的「想」不参与检索——拿心里话去翻回忆，容易让她提前知道。
     visible = _visible_user_text(extras.get("segments") if isinstance(extras, dict)
@@ -3976,26 +4097,23 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
         if isinstance(aff_res, dict):
             # 让状态块知道这一轮有没有内射：高潮和内射同一拍时换写法。
             aff_res["finish"] = finish
+            # 高潮满了要弹窗（2026-11-05）：前端看到 `climax` 才问
+            # 「射在哪里」。`last=True` 表示这已经是第 5 次——AI 回完之后
+            # 还要再问一次「结束 / 最后一次」。
+            cl = _climax_info(aff_res)
+            if cl:
+                aff_res["climax"] = cl
         blk = affection.injection_block(aff_res)
         if blk:
             head = head + "\n\n" + blk
-        # 连续第五次（2026-11-05）：1/5 那个计数满了，而且这一轮同时内射——
-        # 这一场就算到底了，直接推进到第二天。`affection.settle` 已经在本轮
-        # 结算完，所以要在调 LLM **之前**把新一天拼进系统头，让她在这一轮
-        # 写「最后一起到 → 收尾 → 过渡到第二天早晨」，而不是下一轮才翻篇。
-        auto_next = False
-        if finish == "inside" and isinstance(aff_res, dict):
-            try:
-                omax = int(aff_res.get("orgasmMax") or 0)
-                auto_next = omax > 0 and int(aff_res.get("orgasms") or 0) >= omax
-            except (TypeError, ValueError):
-                auto_next = False
         # 游戏内时间（2026-11-04）：把打分 AI 判的跨天/约定落账，
         # 再把「第 N 天 + 今天的事 + 约定」拼进系统头。
-        if auto_next:
-            gd = _apply_gameday(key, force_new_day=True, days=1) or gd
-        else:
-            gd = _apply_gameday(key, score) or gd
+        #
+        # **2026-11-05 取消「第五次自动跨天」**（用户拍板）：那一步改成弹窗
+        # 驱动的两段——第五次先正常输出，AI 回完再问「结束 / 最后一次」。
+        # 自动跳会让玩家没得选，而且第五次那一轮被硬塞了「过渡到第二天」的
+        # 指令，写出来就不再是那一场本身了。
+        gd = _apply_gameday(key, score) or gd
         # 怀孕记录（2026-11-05）：放在时间推进/快照**之后**写。`preg_prev`
         # 必须是这一轮开始前的状态，回退时才能把本轮的内射记录一起撤掉。
         if finish == "inside":
@@ -4009,19 +4127,6 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
                 preg_event = _preg_advance(key, day_before, new_day)
         except Exception:                                # noqa: BLE001
             log.exception("怀孕结算失败 %s", key)
-        if auto_next:
-            # 自动跨天也要把这一场收掉：不这么做的话，第二天还挂着 5/5、
-            # 下一轮再判 inside 又会立刻触发一次「连续第五次」。
-            try:
-                affection.sleep(key)
-            except Exception:                            # noqa: BLE001
-                log.exception("连续第五次收场失败 %s", key)
-            head = head + (
-                "\n\n【连续第五次 · 直接到第二天】"
-                "她刚到第五次，你也一起到了。这一轮把整场收住：先写余韵、"
-                "两个人缓下来，再用一个短过渡带到第二天早晨（睡过去、天亮、"
-                "闹钟都可以）。不要在新的一天重新开一场，也不要直接跳到第二天"
-                "却不说这一夜怎么过完。")
         tblock = _gameday_block(gd)
         if tblock:
             head = head + "\n\n" + tblock
@@ -4394,6 +4499,119 @@ def skip_day(session_key, sender="", sender_uin="", days=1):
         _append_archive(key, hist[-1:], seed=hist[-HISTORY_LIMIT:])
     except Exception:
         log.exception("时间跳跃落史失败 %s", key)
+    _save_mood(key, mood, intensity, state, prev_state)
+    _bump_turn(key)
+    return Turn(reply, scene, mood, intensity, state, None)
+
+
+# 第五次之后的两个出口（2026-11-05）。不再自动跨天，改成玩家选：
+#   结束     —— 这一场收住，留在当晚；
+#   最后一次 —— 她已经没力气了，他继续，最后一次；然后直接进第二天早晨。
+# 两段写在**同一个气泡**里（用户要求的）：先写夜里那一下，再写过到早上。
+_FINISH_NIGHT_TASK = """【今晚的最后一次】
+
+她刚才已经连着到了第五次，人已经软掉了：眼睛睁不开、说话含糊、
+手抬到一半就落回去。他是看着这样的她继续的。
+
+这一轮要写两段，**放在同一条回复里**，中间空一行：
+
+第一段：她昏昏欲睡、没力气反抗也没力气配合，他把最后那一下做完。
+写她的身体已经跟不上（里面还在抽、腿在抖、声音只剩气），
+写她迷迷糊糊说的半句话。不要写成她突然又精神了。
+
+第二段：短过渡到第二天早晨。天亮了、她睡着的姿势、身上的痕迹、
+她醒来第一眼的表情。不要重新开一场，也不要写「第二天他们做了什么」，
+就停在她醒来的那一拍。
+
+格式照旧：正文 + 画面 / 心情 / 强度 / 状态 四行。"""
+
+_FINISH_END_TASK = """【这一场到这儿收住】
+
+她连着到了第五次，已经没有力气了。这一轮只写收尾：
+他停下来、两个人缓下来、她睡过去。**不要推进到第二天**，
+也不要再开一轮。写残余的反应和这个夜里最后的样子。
+
+格式照旧：正文 + 画面 / 心情 / 强度 / 状态 四行。"""
+
+
+def finish_night(session_key, last=True, sender="", sender_uin=""):
+    """第五次之后的两条出口（2026-11-05 用户拍板）。
+
+    `last=True`  —— 再来最后一次，然后到第二天早晨（两段一个气泡）；
+    `last=False` —— 就到这里，收场，留在当晚。
+
+    玩家在弹窗里选完之后调这个：它**不再等玩家发消息**，直接生成。
+    返回 `Turn`；没在演返回 None。
+    """
+    key = resolve_line(_persona_key(session_key, sender_uin))
+    card = active_card(key)
+    if card is None:
+        return None
+    ent = _entry(key)
+    if not ent:
+        return None
+
+    old_day = int(_gameday(ent).get("day") or 1)
+    # 玩家在弹窗里选的射精位置还没被用掉（第五次没有下一轮去消费它），
+    # 这里取出来拼进导演条，别让它烂在存档里。
+    spot = take_finish(key)
+    fblk = finish_block(spot)
+
+    gd = _gameday(ent)
+    preg_event = None
+    if last:
+        gd = _apply_gameday(key, force_new_day=True, days=1) or gd
+        new_day = int((gd or {}).get("day") or old_day)
+        if pregnancy.card_enabled(card):
+            try:
+                preg_event = _preg_advance(key, old_day, new_day)
+            except Exception:                          # noqa: BLE001
+                log.exception("怀孕结算失败 %s", key)
+        # 收场放在跨天之后：`_apply_gameday` 会写 gameday_prev，
+        # 而 `sleep` 只动数值，两者互不覆盖。
+        try:
+            affection.sleep(key)
+        except Exception:                              # noqa: BLE001
+            log.exception("第五次收场失败 %s", key)
+
+    ent = _entry(key) or ent
+    note = str(ent.get("note") or "")
+    prev_state = str(ent.get("state") or "")
+    head = build_head(card, key, sender, note, prev_state, intimate=True)
+    if fblk:
+        head = head + "\n\n" + fblk
+    if last:
+        tblock = _gameday_block(gd)
+        if tblock:
+            head = head + "\n\n" + tblock
+        pblock = pregnancy_block(key, preg_event)
+        if pblock:
+            head = head + "\n\n" + pblock
+    recap = _recap_block(key)
+    if recap:
+        head = head + "\n\n" + recap
+    task = _FINISH_NIGHT_TASK if last else _FINISH_END_TASK
+
+    hist = trim(_load_hist(key))
+    model_hist = _render_hist(hist)
+    msgs = ([{"role": "system", "content": head}] + model_hist
+            + [{"role": "user", "content": task}])
+    try:
+        raw = llm.call_llm(msgs, temperature=TEMPERATURE)
+    except Exception:                                  # noqa: BLE001
+        log.exception("第五次收尾生成失败 %s", key)
+        return None
+    reply, scene, mood, intensity, state = split_turn(
+        raw, default_mood=str(ent.get("mood") or ""))
+    if not reply:
+        return None
+    hist.append({"role": "assistant",
+                 "content": _ensure_meta(raw, scene, mood, intensity, state)})
+    try:
+        _save_hist(key, hist[-HISTORY_LIMIT:])
+        _append_archive(key, hist[-1:], seed=hist[-HISTORY_LIMIT:])
+    except Exception:
+        log.exception("第五次收尾落史失败 %s", key)
     _save_mood(key, mood, intensity, state, prev_state)
     _bump_turn(key)
     return Turn(reply, scene, mood, intensity, state, None)

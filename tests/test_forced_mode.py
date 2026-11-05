@@ -134,8 +134,9 @@ class ForcedTailTest(unittest.TestCase):
 
 class ForcedGuideTest(unittest.TestCase):
     def test_writing_axis_switches_to_forced(self):
+        # excite 过 55 才进露骨层；低于它是涩气层，挑的是慢轴。
         got = ws.guide({"active": True, "forced": True, "corrupt": 60,
-                        "value": 0, "excite": 40})
+                        "value": 0, "excite": 60})
         self.assertIn("权力语言", got)
         self.assertIn("许可与断崖", got)
 
@@ -146,7 +147,9 @@ class ForcedGuideTest(unittest.TestCase):
                          "forced")
 
     def test_forced_gets_a_bigger_budget(self):
-        got = ws.guide({"active": True, "forced": True, "corrupt": 60})
+        # excite 过 55 才进露骨层——压迫场的三份材料只在那里拼。
+        got = ws.guide({"active": True, "forced": True, "corrupt": 60,
+                        "excite": 60})
         self.assertLessEqual(len(got), ws.FORCED_CHARS)
         self.assertGreater(len(got), ws.MAX_CHARS)
 
