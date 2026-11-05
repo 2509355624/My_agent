@@ -1564,10 +1564,12 @@ def panel_text(line_key):
             line += "  ≥%d" % r["gate"]
         rows.append(line)
 
-    # 四、高潮：只在进行中有意义
+    # 四、高潮：只在进行中有意义。
+    # 2026-11-05 取消 5 次封顶，次数只报「第 N 次」，不再挂分母——
+    # 挂着「/5」会让人以为到 5 就收场，而那个收场已经拿掉了。
     if p["inScene"]:
-        rows += ["", "— 高潮 %d/100 · 第 %d/%d 次 —"
-                  % (p["excite"], p["orgasms"], p["orgasmMax"])]
+        rows += ["", "— 高潮 %d/100 · 第 %d 次 —"
+                  % (p["excite"], p["orgasms"])]
         for r in p["orgasms_rows"]:
             mark = {"reached": "✔", "current": "▶", "locked": "·"}[r["state"]]
             line = "%s %s" % (mark, r["name"])
