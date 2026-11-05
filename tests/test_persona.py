@@ -2513,6 +2513,42 @@ class RollbackTurnTest(PersonaBase):
         self.assertFalse(persona.is_rollback_text("明天回退给我看"))
 
 
+class RefusalStripTest(unittest.TestCase):
+    """模型末尾补的拒答话术不该出现在正文里（2026-11-06 用户要求）。
+
+    这类句子是平台层塞的，不是剧情；但判据要保守——角色自己在剧情里说
+    「对不起」是正常的，不能被当成拒答删掉。
+    """
+
+    def test_english_tail_is_removed(self):
+        body, scene, mood, inten, state = persona.split_turn(
+            "（她看着你，没说话。）\nSorry, I can't respond to this question.")
+        self.assertEqual(body, "（她看着你，没说话。）")
+        self.assertEqual((scene, mood, inten, state), ("", "", 0, ""))
+
+    def test_chinese_tail_is_removed(self):
+        body, *_ = persona.split_turn("（她哭了。）\n\n抱歉，我无法回答这个问题。")
+        self.assertEqual(body, "（她哭了。）")
+
+    def test_ai_boilerplate_is_removed(self):
+        body, *_ = persona.split_turn("作为一个AI语言模型，我不能继续这个话题。")
+        self.assertEqual(body, "")
+
+    def test_normal_apology_kept(self):
+        text = "她说：「对不起，我不该那样。」然后转过身。"
+        body, *_ = persona.split_turn(text)
+        self.assertEqual(body, text)
+
+    def test_metadata_lines_still_parsed(self):
+        body, scene, mood, inten, state = persona.split_turn(
+            "（她没动。）\n画面：1girl\n心情：害羞 强度7\n状态：站着\n"
+            "Sorry, I can't respond to this question.")
+        self.assertEqual(body, "（她没动。）")
+        self.assertEqual(scene, "1girl")
+        self.assertEqual((mood, inten), ("害羞", 7))
+        self.assertEqual(state, "站着")
+
+
 class TurnTotalTest(PersonaBase):
     """网页「轮次」显示（2026-11-06 用户要求）：
     玩家要看累计交流了多少轮，不是每 5 轮清零的小记压缩节拍。

@@ -5394,6 +5394,49 @@ def _strip_monologue_marks(text):
 _ITALIC_RE = re.compile(r"\*([^*\n]{1,120})\*")
 
 
+# 模型的拒答尾巴（2026-11-06 用户要求「把 sorry i can't 那段屏蔽掉」）。
+#
+# 场景：正文其实已经写完了，模型在末尾又补一句平台话术。它出现在聊天里
+# 非常出戏。判据刻意保守——只认**成句的样板话**，不做「含 sorry 就删」：
+# 角色自己在剧情里说「对不起」是正常的。
+_REFUSE_PAT = re.compile(
+    # Sorry, I can't ... / I'm sorry, but I cannot ... —— 整句一起命中，
+    # 否则会留下一个孤零零的「Sorry,」。
+    r"(?:(?:sorry|i(?:'|’)?m\s+sorry)\b[^.\n]{0,20}?)?"
+    r"i\s*(?:can(?:'|’)?t|cannot|am\s+unable\s+to|won(?:'|’)?t)\s+"
+    r"(?:respond|answer|help|assist|continue|provide|comply|write|generate)"
+    r"|as an ai(?:\s+language\s+model)?"
+    r"|作为一个?\s*AI\s*(?:语言模型|助手)"
+    r"|抱歉[，,]\s*我(?:无法|不能|没办法)(?:回答|提供|协助|继续|满足)"
+    r"|我(?:无法|不能)回答(?:这个|该|此)?(?:问题|请求)",
+    re.I)
+
+
+def _strip_refusal(text):
+    """剪掉模型末尾那句拒答/报错，正文保留。
+
+    只处理「样板句」：整行命中 → 整行删；行内命中且那一句在靠后的位置 →
+    从那里截断（避免误伤「她道歉」这种剧情台词）。
+    """
+    s = str(text or "")
+    if not s:
+        return s
+    lines = []
+    for line in s.split("\n"):
+        m = _REFUSE_PAT.search(line)
+        if not m:
+            lines.append(line)
+            continue
+        # 命中位置很靠前、且这一行基本就是那句话 → 整行丢掉；
+        # 命中在后面 → 只截掉尾巴，前面的正文留着。
+        if m.start() <= 2:
+            continue
+        lines.append(line[:m.start()].rstrip())
+    out = "\n".join(lines)
+    out = re.sub(r"\n{3,}", "\n\n", out).strip()
+    return out
+
+
 def split_turn(text, default_mood=""):
     """把一轮输出切成 `(正文, 画面, 情绪, 强度, 状态)`。
 
@@ -5404,6 +5447,10 @@ def split_turn(text, default_mood=""):
     缺哪行就当没写：情绪空串、强度 0、状态空串，调用方不许兜底。
     """
     raw = str(text or "")
+    # 先把模型的拒答/报错尾巴剪掉（2026-11-06 用户要求）：正文已经写完了，
+    # 末尾偶尔会跟一句 `Sorry, I can't respond to this question.`。那是
+    # 平台层的安全话术，不是剧情，不该出现在聊天里。
+    raw = _strip_refusal(raw)
     body = raw
     out = {"scene": "", "mood": "", "intensity": 0, "state": ""}
 
