@@ -2829,6 +2829,10 @@ def _director_fields(d):
         "lead": lead,
         "lead_form": str(d.get("lead_form") or "").strip()[:8],
         "lead_reason": str(d.get("lead_reason") or "").strip()[:60],
+        # 开发度（2026-11-05）：`hook` 是编剧给演员的一句素材——「这一拍
+        # 身体先失控」，120 字上限够写一个完整的小场面。`spot` 只给日志看，
+        # 演员不需要知道这一轮「标的是哪个部位」，那会让它写得太刻意。
+        "hook": str(d.get("hook") or "").strip()[:120],
     }
 
 
@@ -2960,7 +2964,10 @@ _SCORE_PROMPT = """判断下面这句话**在干什么**，并给这句话对你
   "tension": "她嘴上/身体/选择不一致的地方，没有就空",
   "lead": "none | hint | act",
   "lead_form": "情感 | 身体 | 言语",
-  "lead_reason": "不超过25个字，为什么这一拍会/不会主动"
+  "lead_reason": "不超过25个字，为什么这一拍会/不会主动",
+  "spot": "mouth | nipple | pussy | anus | body | none",
+  "dev": {"mouth": 0, "nipple": 0, "pussy": 0, "anus": 0, "body": 0},
+  "hook": "场景外身体先失控的一句话，没有就空串"
 }
 
 intent（这句话在干什么）：
@@ -3134,6 +3141,33 @@ suspicion（整数，她的**戒备**这轮变化多少，-20 ~ +20）：
 照料/守护/兑现承诺这类高价值行动衰减慢：重复时按区间的一半给，
 但也不该每次都拿满。
 
+spot / dev（2026-11-05，**开发度**）：
+spot 是这一轮他碰的**主要部位**，没有身体接触就填 none。
+dev 是五个部位这一轮各涨多少，**按动作的激烈程度判，不设上限**：
+- 只是碰到、隔着衣服：+2 ~ +5
+- 脱了、直接摸、含、舔：+8 ~ +15
+- 进入、抽送、加重、连着弄很久：+15 ~ +25
+- 他完全没碰这个部位：0。她躲开了并且他没再碰：也 0——**开发度只涨不掉**，
+  但「被硬碰了」和「碰到了」不是一回事，后者只算碰到的那一档。
+- 中文键也认：嘴巴/乳头/小穴/肛门/身体。
+- 只有 `spot` 那一处该给主力值，其余最多 +2。**别五个部位一起满额给。**
+
+开发度是什么意思：它记的是**她身体被开发成什么样**，不是她喜不喜欢你。
+小穴 300 以上的女人，看到别人牵手都会湿；嘴巴开发高了，接吻就会腿软。
+所以它和你给她打的好感分**没有关系**——她可以恨你恨得要死，身体已经完全被
+调教成另一个样子。这两件事分开记，戏才写得出来。
+
+hook（2026-11-05，**这一轮身体先失控的那一句**）：
+先看下面「她现在的开发度」。最高的那一处到 300 以上时，她可以在**跟性完全
+无关的场合**自己发起作来——公交车上看到别人搂抱、闻到他的味道、被碰了一下
+手背、坐久了。要给就写成**一句话的画面**，写清三件事：在什么场合、身体怎么
+先背叛、她怎么试图遮住或者遮不住。例如：
+「公交上看到斜对面那对情侣搂着，她大腿开始不自觉地磨，一只手抓住你袖口，
+小声说了句『那个……可以吗』，把你的手往自己那边带，又用外套盖住。」
+- 没到 300、或者这一轮不适合给：填空串。**不要每轮都塞。**
+- 不在场景里也可以给——这正是开发度高以后该有的样子。
+- 不能写成「她想做」，要写成「她身体先动了，她自己也没料到」。
+
 **时间（剧情里的日子）：**
 time（这轮剧情跨了多少时间）：
 - none —— 还在同一时段里（绝大多数轮次都该是这个）
@@ -3177,6 +3211,7 @@ lead_reason：一句话说清为什么这一拍会/不会主动（不超过 25 �
 她现在的堕落：%(corrupt)d / 100
 她现在服不服：%(submit)d / 100
 她现在的戒备：%(suspicion)d / 40（0 是坦然，越高越觉得你有所图）
+她身上被开发到的程度（0 没碰过 / 500 满格）：%(dev)s
 %(recent)s
 
 【你记得的事】
@@ -3238,6 +3273,9 @@ def _judge_intent_scored(card, said, state="", line_key="", gameday=None,
         # 戒备（2026-11-05）：模型要知道她现在起没起疑心，才知道同一句话
         # 该放行还是该往回打。缺字段的老 ctx 按 0 走。
         "suspicion": int(ctx.get("suspicion") or 0),
+        # 开发度（2026-11-05）：编剧看到五处各到哪一档，才判得出要不要给勾子。
+        # 缺字段的老 ctx 按「都还没开发过」走。
+        "dev": ctx.get("devText") or "（五处都还没被开发过）",
         "recent": ctx["recent"],
         # 游戏内时间（2026-11-04）：打分 AI 顺带管时间推进，得知道今天第几天、
         # 有没有挂着没兑现的约定。
@@ -3292,6 +3330,12 @@ def _judge_intent_scored(card, said, state="", line_key="", gameday=None,
              "soothe": d.get("soothe"),
              # 戒备（2026-11-05）：settle 只认这个 dict，漏了警戒轴就死在 0。
              "suspicion": d.get("suspicion"),
+             # 开发度（2026-11-05）：`dev` 是五处增量、`spot` 是这一轮主碰的
+             # 部位、`hook` 是身体先失控那一句。三个都**不许漏**——settle 只认
+             # 这个 dict，漏了 developer 轴就永远停在 0，面板一行都不会动。
+             "dev": d.get("dev"),
+             "spot": d.get("spot"),
+             "hook": d.get("hook"),
              # 游戏内时间（2026-11-04）：settle 不认识这几个键，会原样忽略；
              # run_turn 从同一个 dict 里取，落进会话的 gameday。
              "time": d.get("time"),
@@ -3359,8 +3403,9 @@ def _director_block(info):
     lead = str(info.get("lead") or "none").strip().lower()
     lead_form = str(info.get("lead_form") or "").strip()
     lead_reason = str(info.get("lead_reason") or "").strip()
+    hook = str(info.get("hook") or "").strip()
     if not (literal or subtext or noticed or stance or secret or mode
-            or tension or lead in ("hint", "act")):
+            or tension or lead in ("hint", "act") or hook):
         return ""
     lines = ["## 这一拍你怎么读对方", ""]
     if mode:
@@ -3384,6 +3429,13 @@ def _director_block(info):
         why = ("，因为%s" % lead_reason) if (lead_reason and not secret) else ""
         lines.append("- 她这一拍可以主动做一件事%s%s。不要替玩家做决定，"
                      "也不要一次把关系推到底。" % (form, why))
+    if hook:
+        # 开发度的勾子（2026-11-05）：编剧已经替你想好「这一拍身体先动了」，
+        # 演员要做的是把它演出来，不是照着复述。所以这里说的是「把它写到
+        # 这一拍的正文里」，并明确要求给出场合/身体信号/她怎么遮掩。
+        lines.append("- 这一拍她的身体先动了一步：%s。照着这个写进正文，"
+                     "写清在什么场合、身上怎么反应、她是怎么试图遮掩的。"
+                     "不要写成「她有点动情」，也不要让她自己点破。" % hook)
     lines.append("")
     lines.append("这些是给你看的导演提示，**不是台词**。不要引用、不要点破，"
                  "也不要替对方把话说破。")

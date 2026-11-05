@@ -1034,6 +1034,50 @@ function panelSection(title, rows, curValue, unit) {
   return wrap;
 }
 
+// 开发度一块（2026-11-05）：五处各自一条进度条 + 当前/上限。
+// 和后端 `panel()` 的 `dev` 对齐：{key,name,value,max,stage,stageName,pct}。
+// **上限 500 必须写出来**（用户要的）——它不是一个档位表，是五条独立进度。
+function panelDev(rows, totalPct, allFull) {
+  const wrap = document.createElement("div");
+  const h = document.createElement("h3");
+  h.textContent = "开发度 · 共 " + (totalPct | 0) + "%";
+  wrap.appendChild(h);
+  (rows || []).forEach(function (r) {
+    const d = document.createElement("div");
+    d.style.cssText = "display:flex;align-items:center;gap:8px;padding:2px 0;";
+    const nm = document.createElement("span");
+    nm.style.cssText = "font-size:12px;color:var(--text-dim);width:44px;flex:none;";
+    nm.textContent = r.name || "—";
+    d.appendChild(nm);
+    const bar = document.createElement("div");
+    bar.style.cssText = "flex:1;height:6px;border-radius:3px;"
+      + "background:rgba(255,255,255,.08);overflow:hidden;";
+    const fill = document.createElement("i");
+    const pct = r.max ? Math.max(0, Math.min(100, (r.value / r.max) * 100)) : 0;
+    fill.style.cssText = "display:block;height:100%;width:" + pct + "%;"
+      + "background:" + (r.value >= r.max ? "#e6b45a"
+                                           : "rgba(230,180,90,.55)") + ";";
+    bar.appendChild(fill);
+    d.appendChild(bar);
+    const vl = document.createElement("span");
+    vl.style.cssText = "font-size:12px;color:var(--text);width:72px;text-align:right;flex:none;";
+    vl.textContent = (r.value | 0) + "/" + (r.max | 0);
+    d.appendChild(vl);
+    const st = document.createElement("span");
+    st.style.cssText = "font-size:11px;color:var(--text-mute);width:56px;flex:none;";
+    st.textContent = r.stageName || "";
+    d.appendChild(st);
+    wrap.appendChild(d);
+  });
+  if (allFull) {
+    const tip = document.createElement("div");
+    tip.style.cssText = "font-size:11.5px;color:var(--text-mute);padding:4px 0 2px;";
+    tip.textContent = "五处都满了——碰一下就溃，她自己都拦不住。";
+    wrap.appendChild(tip);
+  }
+  return wrap;
+}
+
 // 把整张面板画进右栏。a 是旧的 status（用来判断模式），p 是面板。
 function renderPanel(a, p) {
   const box = $("panelBox");
@@ -1111,7 +1155,23 @@ function renderPanel(a, p) {
   body.appendChild(panelSection(
     "屈服 " + (p.submit | 0) + "/100", p.submits, p.submit));
 
-  // 七、戒备（2026-11-05）：只有档名，不给数字——露数字会变成
+  // 七、开发度（2026-11-05）：五处各一条进度条，**上限 500 直接标出来**。
+  // 和上面几段不同，它不是档位表——玩家要的是「这一处被开发到了多少」。
+  if (Array.isArray(p.dev) && p.dev.length) {
+    body.appendChild(panelDev(p.dev, p.devPct, p.devAllFull));
+  }
+
+  // 八、压迫模式（2026-11-05）：堕落过门槛后提示「还差多少冲动就能开」。
+  // 不画进度条，那一行在尾行里也有了，这里只在「现在就能开」时提醒一句。
+  if (p.forced && p.forced.on && !p.forced.gap) {
+    const fp = document.createElement("div");
+    fp.style.cssText = "font-size:12px;color:var(--text-dim);padding:6px 0 2px;";
+    fp.innerHTML = "压迫模式：<b style=\"color:var(--text)\">现在就能开</b>"
+      + "（已降 " + (p.forced.stage | 0) + " 档门槛）";
+    body.appendChild(fp);
+  }
+
+  // 九、戒备（2026-11-05）：只有档名，不给数字——露数字会变成
   // 「刷警戒-消警戒」的循环攻略。坦然的时候不画，别让面板噪音变多。
   if (p.suspicionName && p.suspicionName !== "坦然") {
     const sus = document.createElement("div");

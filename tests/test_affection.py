@@ -1213,33 +1213,38 @@ class ExciteTest(AffBase):
         self.assertLess(res["excite"], affection.EXCITE_MAX)
         self.assertGreater(res["excite"], 0)
 
-    def test_capped_after_max_orgasms(self):
-        """单场用满次数就强制收场：场景结束、高潮值归零、次数清零。"""
+    def test_no_cap_however_many_orgasms(self):
+        """2026-11-05 取消 5 次封顶：次数只记，到多少次都不强制收场。
+
+        原来的「第 6 次是水词」被推翻了——开发度高了以后本来就该连着到。
+        收场只由「连续两轮没接触」决定。
+        """
         key = self._raid()
         res = None
-        for _ in range(40):
-            res = self._settle(key, in_scene=True, act="intense")
-            if res["sceneCapped"]:
-                break
-        self.assertTrue(res["sceneCapped"])
+        # 用「把高潮值直接推到顶」的增量刷次数，别靠动作档慢慢爬——
+        # 那样 40 轮里大半会落进空闲收场分支，次数反而涨不上去。
+        # 每两轮记一次（推到 100 才落一次，回落到 55 还要再推一轮）。
+        # 14 轮记到 7 次——刚好看得出「过了 5 次还在继续记」。
+        # 原来用 40 轮也不是不行，但每轮都要落一次盘，测试会慢一倍。
+        for _ in range(14):
+            res = self._settle(key, in_scene=True, act="intense", excite=40)
+            self.assertFalse(res["sceneCapped"], "不该再因为次数封顶")
+            self.assertTrue(res["in_scene"], "次数到了也还在场里")
+        self.assertGreater(res["orgasms"], affection.ORGASM_MAX,
+                           "过了 5 次还能继续记")
+        self.assertNotIn("coolLeft", res, "冷却期已取消（2026-11-05）")
+
+    def test_scene_ends_by_idle_not_by_count(self):
+        """次数不影响收场；连续两轮不接触才算真收场。"""
+        key = self._raid()
+        for _ in range(10):
+            self._settle(key, in_scene=True, act="intense", excite=40)
+        # 两轮不接触 → 真收场
+        self._settle(key, in_scene=False, act="none")
+        res = self._settle(key, in_scene=False, act="none")
         self.assertFalse(res["in_scene"])
         self.assertEqual(res["excite"], 0)
         self.assertEqual(res["orgasms"], 0, "收场后次数归零，下一场从头算")
-        self.assertEqual(res["just_orgasm"], affection.ORGASM_MAX)
-        self.assertNotIn("coolLeft", res, "冷却期已取消（2026-11-05）")
-
-    def test_no_cooldown_after_capping(self):
-        """用满 5 次收场之后，下一轮想开就能开（用户 2026-11-05 拍板取消冷却）。"""
-        key = self._raid()
-        for _ in range(40):
-            if self._settle(key, in_scene=True, act="intense")["sceneCapped"]:
-                break
-        res = self._settle(key, in_scene=True, act="foreplay")
-        self.assertTrue(res["in_scene"], "不该再被冷却挡住")
-        self.assertEqual(res["excite"],
-                         affection.EXCITE_START + self._base("foreplay"))
-        self.assertEqual(res["orgasms"], 0)
-
 
     def test_tail_line_only_shows_it_in_scene(self):
         """没在场景里不该多一行「高潮 0」——那会让人以为她冷了。"""
@@ -1247,7 +1252,8 @@ class ExciteTest(AffBase):
                "value": 20, "arousal": 30, "ending": ""}
         self.assertNotIn("高潮", affection.tail_line(res))
         res["excite"] = 62
-        self.assertIn("高潮 62 · 0/5", affection.tail_line(res))
+        # 2026-11-05：取消 5 次封顶，分母没了，只报「第 N 次」
+        self.assertIn("高潮 62 · 第 0 次", affection.tail_line(res))
 
     def test_high_arousal_lets_her_lead(self):
         """冲动够高且接得住时，注入要放她「先动」的许可（用户要的反客为主）。
