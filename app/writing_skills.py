@@ -57,10 +57,16 @@ AXIS_SHARE = 0.62
 # 三份同时到位，1400 字按 62% 分给轴段只够塞一份半。这里放到 1800，
 # 依然远小于 `_INTIMATE_GUIDE` 本身（约 1900 字），不至于把历史挤掉。
 FORCED_CHARS = 1800
+# 开发度轴（2026-11-05）：五处里最高的一处到这个值就切到 `dev` 轴。
+# 取 300（「离不开」）——那一档开始她会在不相干的场合自己发作，
+# 那才是这套轴真正有别于其他轴的写法。
+DEV_AXIS_AT = 300
+_DEV_KEYS = ("mouth", "nipple", "pussy", "anus", "body")
 
 _H_WRITING = "02-h-tech/h-writing.md"
 _CONQUEST = "05-style/conquest-style.md"
 _DOMINATION = "01-structure/references/domination-training-techniques.md"
+_QUIET = "01-structure/references/quiet-exposure-techniques.md"
 
 # ── 常驻层：判成亲密就拼 ────────────────────────────────
 # (名字, 文件, 起始标记, 结束标记, 截到哪个标记为止)
@@ -149,6 +155,13 @@ _BY_AXIS = {
          None),
         ("嘴硬身体诚实", _CONQUEST, "### ④ 强制与崩坏并重", "### ⑥ 高潮链写足", None),
     ),
+    # 开发度（2026-11-05）：身体被开发透之后，戏的位置从床上挪到了日常里。
+    # 这两份材料管的就是那种「不相干的地方突然发作」——车、饭桌、人群里。
+    "dev": (
+        ("差一步被发现", _QUIET, "## 二、暴露永远差一步（核心张力）",
+         "## 四、主动设计露出（进阶手法）", None),
+        ("公共场合", _H_WRITING, "## 九、特殊场景", "## 十、心理刺激层", None),
+    ),
 }
 
 # 全部标记都在这些文件里，启动时校一遍——改规范断了切片就早炸，
@@ -194,9 +207,21 @@ def _top_axis(aff_res):
     **压迫模式优先**（2026-11-05）：`affection.injection_block()` 判出这一场
     是压迫戏时，会在 res 里标 `forced=True`。那时候不管哪根轴最高，都走
     `forced` 那一套——压力戏的写法不是「堕落轴的高配版」，是另一套材料。
+
+    **开发度优先**（2026-11-05，仅次于压迫）：五处里任何一处越过
+    `DEV_AXIS_AT`，说明她的身体已经不受控到能在日常里发作，这一拍该写的是
+    「差一步被发现」那种张力，不是床上那套。压迫场里开发度让位——那是
+    另一条主轴，两套叠在一起会互相稀释。
     """
     if aff_res.get("forced"):
         return "forced"
+    dev = aff_res.get("dev") if isinstance(aff_res.get("dev"), dict) else {}
+    try:
+        dev_top = max([int(dev.get(k) or 0) for k in _DEV_KEYS] or [0])
+    except (TypeError, ValueError):
+        dev_top = 0
+    if dev_top >= DEV_AXIS_AT:
+        return "dev"
 
     def n(k):
         try:

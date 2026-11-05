@@ -246,6 +246,9 @@ DEFAULT_CONFIG = {
     # 压迫模式（2026-11-05，用户拍板）：好感低 + 堕落高 + 气氛/身体在动。
     # 这三件事同时成立，才是「她不是愿意的，可她拦不住自己」。
     # 每一档堕落降一次门槛——第一次要堆满气氛，第二次只要一半。
+    # 压迫模式（2026-11-05，用户拍板）：好感低 + 堕落高 + 气氛/身体在动。
+    # 这三件事同时成立，才是「她不是愿意的，可她拦不住自己」。
+    # 每一档堕落降一次门槛——第一次要堆满气氛，第二次只要一半。
     "forced": {
         "_note": "压迫模式的门槛。value 好感上限 / corrupt 堕落下限 / arousal 冲动下限；"
                  "discount 是每跨一个堕落档位，冲动门槛降多少。",
@@ -254,6 +257,32 @@ DEFAULT_CONFIG = {
         "arousal_min": 30,
         "discount": 12,
         "corrupt_steps": [25, 50, 70, 90],
+    },
+    # 开发度（2026-11-05，用户拍板）：五个部位，**不设上限，500 当满格**。
+    # 涨多少由打分 AI 按「这一轮动作的激烈程度」判，代码只做夹值和敏感系数。
+    # 满格（五处都 500）= 身体开发 100%：碰一下就来，她自己都怕。
+    "dev": {
+        "_note": "step 是单轮单部位上限（防止模型一笔给爆），gain 是满格时的敏感倍数。",
+        "max": 500,
+        "step": 25,
+        "gain": 1.5,
+        "levels": [
+            {"key": "full",   "min": 500, "name": "开发满了",
+             "prompt": "碰一下整个人就软。皮肤先红，水自己出来，腰跟着手走。她会主动要，"
+                       "要得比你还急；不用你开口，她自己找地方、自己脱。"},
+            {"key": "wild",   "min": 400, "name": "阈值乱了",
+             "prompt": "不用碰到也能起来。看见、听见、想起，都能让她当场软掉；"
+                       "她自己都怕这个反应，又挡不住。"},
+            {"key": "hooked", "min": 300, "name": "离不开",
+             "prompt": "在不相干的场合也会想。看到别人亲近就湿，会自己把身体往你那边送，"
+                       "会拉着你的手往那里放，会用外套盖住不想被人看见。"},
+            {"key": "wants",  "min": 200, "name": "会要了",
+             "prompt": "会自己凑、会开口要这个，说完自己脸红但不收回；被弄到会自己跟着动。"},
+            {"key": "reacts", "min": 100, "name": "起反应",
+             "prompt": "被碰到会突然安静一下，装作没事，呼吸先变；嘴上不认，身体答了。"},
+            {"key": "virgin", "min": 0,   "name": "没碰过",
+             "prompt": "这里还没被开发过。碰了会躲、会夹、会说是第一次——按她的性格来。"},
+        ],
     },
 }
 
@@ -688,6 +717,217 @@ def submit_name(v, cfg=None):
     return str(submit_level(v, cfg).get("name") or "")
 
 
+# ── 开发度（2026-11-05，用户加的第七组轴）─────────────────
+#
+# 用户原话：「把明面上的性器官都展示出来——嘴巴、乳头、小穴、肛门、身体，
+# 编剧 AI 根据玩家动作的激烈程度去加，不设上限，500 当满格」。
+#
+# 和另外几根轴的分工：
+#   羁绊   「她心里怎么看你」——双向
+#   堕落   「她被怎么对待过」——只涨不掉
+#   屈服   「她此刻听不听话」——会掉
+#   开发度 「她身体被开发成什么样」——**只涨不掉、无上限**
+#
+# 为什么单列一组：堕落在讲「她愿不愿意」，开发度在讲「她身体现在是什么
+# 状态」。她可以对你有 0 点好感、并且已经开发度 400——那正是压迫模式
+# 最吃的一套数值（见 `is_forced`）。这两件事分开记，戏才写得出来。
+#
+# 数值用途有两处：
+#   1. 敏感系数——同一个动作，开发度高的涨得更多（见 `sensitivity`）；
+#   2. 编剧 AI 的勾子——300 以上她会在**无关的日常场景**里自己发作
+#      （公交车、饭桌、看到别人牵手就湿）。这才是攻略模式压过自由模式的地方。
+DEV_MAX = 500
+DEV_KEYS = ("mouth", "nipple", "pussy", "anus", "body")
+DEV_LABELS = {"mouth": "嘴巴", "nipple": "乳头", "pussy": "小穴",
+              "anus": "肛门", "body": "身体"}
+_DEV_ALIAS = {
+    "mouth": "mouth", "嘴": "mouth", "嘴巴": "mouth", "口": "mouth",
+    "oral": "mouth",
+    "nipple": "nipple", "乳头": "nipple", "胸": "nipple", "breast": "nipple",
+    "pussy": "pussy", "小穴": "pussy", "穴": "pussy", "阴道": "pussy",
+    "vagina": "pussy",
+    "anus": "anus", "肛门": "anus", "后穴": "anus", "anal": "anus",
+    "body": "body", "身体": "body", "皮肤": "body",
+}
+
+
+def dev_cfg(cfg=None):
+    """开发度的配置：满值、单轮上限、五档阈值、敏感系数曲线。"""
+    cfg = cfg or load_config()
+    raw = cfg.get("dev")
+    if not isinstance(raw, dict):
+        raw = DEFAULT_CONFIG.get("dev") or {}
+
+    def _i(k, dv):
+        try:
+            return int(raw.get(k, dv))
+        except (TypeError, ValueError):
+            return dv
+
+    levels = raw.get("levels")
+    if not isinstance(levels, list) or not levels:
+        levels = (DEFAULT_CONFIG.get("dev") or {}).get("levels") or []
+    return {"max": _i("max", DEV_MAX),
+            "step": _i("step", 25),
+            "gain": float(raw.get("gain") or 1.5),
+            "levels": levels}
+
+
+def dev_blank():
+    return {k: 0 for k in DEV_KEYS}
+
+
+def norm_dev(v):
+    """把模型给的 `dev` 增量洗成五部位字典。中文键、英文键都认。"""
+    out = dev_blank()
+    if isinstance(v, (int, float)):
+        # 只给一个数：当成「这一轮整体在推进」，平均分到五个部位。
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            n = 0
+        if n:
+            for k in DEV_KEYS:
+                out[k] = n
+        return out
+    if not isinstance(v, dict):
+        return out
+    for key, val in v.items():
+        k = _DEV_ALIAS.get(str(key or "").strip().lower())
+        if not k:
+            continue
+        try:
+            out[k] = int(val or 0)
+        except (TypeError, ValueError):
+            out[k] = 0
+    return out
+
+
+def dev_levels(cfg=None):
+    """开发度五档，按 min 从高到低。"""
+    return sorted(dev_cfg(cfg)["levels"],
+                  key=lambda x: int(x.get("min") or 0), reverse=True)
+
+
+def dev_level(v, cfg=None):
+    try:
+        v = int(v or 0)
+    except (TypeError, ValueError):
+        v = 0
+    v = max(0, v)
+    for l in dev_levels(cfg):
+        if v >= int(l.get("min") or 0):
+            return l
+    return {}
+
+
+def dev_name(v, cfg=None):
+    """开发度 → 词。0 时是「没碰过」，不是空串——这根轴一直在。"""
+    try:
+        cur = int(v or 0)
+    except (TypeError, ValueError):
+        cur = 0
+    if cur <= 0:
+        return DEV_LABELS.get("virgin", "没碰过")
+    levels = sorted(dev_levels(cfg), key=lambda x: int(x.get("min") or 0))
+    # 语料里 500 是最高一档的最低线；刚好 500 时也要算「开发满了」。
+    for lo, name in [(int(l.get("min") or 0), str(l.get("name") or ""))
+                     for l in levels]:
+        if cur == lo:
+            return name
+    return str(dev_level(cur, cfg).get("name") or "")
+
+
+def dev_stage(v, cfg=None):
+    """跨过了几道门槛（0~5）。0 分 = 0，100 = 1，500 = 5。
+
+    注意和 `dev_level()` 的差别：`dev_level()` 返回**档位本身**（含 0 分
+    那档「没碰过」），这里返回**跨过几道**。接入方要「第几档」用前者，
+    要「跨过几次」用后者。两者正好差一，别混。
+    """
+    return sum(1 for l in dev_levels(cfg)
+               if int(l.get("min") or 0) > 0 and int(v or 0) >= int(l.get("min") or 0))
+
+
+def dev_total(dev):
+    """五个部位加起来。全满 = 5 × 500 = 2500，面板显示「开发 100%」用。"""
+    dev = dev if isinstance(dev, dict) else {}
+    return sum(max(0, int(dev.get(k) or 0)) for k in DEV_KEYS)
+
+
+def sensitivity(dev, spot=None, cfg=None):
+    """敏感系数：1.0（没开发过）→ 1 + gain（满格 2.5）。
+
+    `spot` 给了就只看那个部位，没给就取五部位里最高的——她身上只要有一处
+    被开发透了，整体反应就不会慢。
+    """
+    dc = dev_cfg(cfg)
+    dev = dev if isinstance(dev, dict) else {}
+    if spot and spot in DEV_KEYS:
+        v = int(dev.get(spot) or 0)
+    else:
+        v = max([int(dev.get(k) or 0) for k in DEV_KEYS] or [0])
+    v = max(0, min(dc["max"], v))
+    return 1.0 + (v / float(dc["max"])) * dc["gain"]
+
+
+def after_value(dev, cfg=None):
+    """高潮之后的回落值。开发度越高，她越缓不下来。
+
+    固定 55 在高开发度下会自相矛盾：明明「离不开」，做完却能安稳缓上半天。
+    500 满格时回到 75——还是能接着要，只是没到临界。
+    """
+    h = orgasm_hints(cfg)
+    dc = dev_cfg(cfg)
+    top = max([int((dev or {}).get(k) or 0) for k in DEV_KEYS] or [0])
+    add = int(round(min(top, dc["max"]) / float(dc["max"]) * 20))
+    return min(h["max"] - 10, h["after"] + add)
+
+
+def dev_all_full(dev, cfg=None):
+    """五个部位是不是全部满格。满格 = 身体开发 100%。"""
+    dc = dev_cfg(cfg)
+    dev = dev if isinstance(dev, dict) else {}
+    return all(int(dev.get(k) or 0) >= dc["max"] for k in DEV_KEYS)
+
+
+def dev_text(dev, cfg=None):
+    """五处开发度拼成一行给**编剧 AI** 看的文本（带档名，不带 /500）。
+
+    编剧要的是「她身体现在是什么状态」，不是进度条。所以这里给的是
+    「嘴巴 120（起反应）／小穴 310（离不开）」，它据此判勾子。
+    """
+    dev = dev if isinstance(dev, dict) else {}
+    parts = []
+    for k in DEV_KEYS:
+        v = max(0, int(dev.get(k) or 0))
+        if v <= 0:
+            continue
+        parts.append("%s %d（%s）" % (DEV_LABELS.get(k, k), v, dev_name(v, cfg)))
+    if not parts:
+        return "（五处都还没被开发过）"
+    return "／".join(parts)
+
+
+def dev_top(dev, cfg=None):
+    """五项里最高的那一处：`(key, 值, 档名)`。开发度轴和勾子都靠它判。"""
+    dev = dev if isinstance(dev, dict) else {}
+    k = max(DEV_KEYS, key=lambda x: int(dev.get(x) or 0))
+    v = max(0, int(dev.get(k) or 0))
+    return k, v, dev_name(v, cfg)
+
+
+def dev_hook_ready(dev, cfg=None):
+    """这一轮编剧**可以**给一个「身体先失控」的勾子：最高一处到 300 以上。
+
+    300 是「离不开」那一档——过了这条线，她才会在跟性无关的场合自己发作。
+    低于 300 硬给，就成了「明明还没被开发多少，怎么就饥渴到在公交车上
+    拉你的手」——数值和剧情对不上。
+    """
+    _k, v, _n = dev_top(dev, cfg)
+    return v >= 300
+
+
 # 戒备的模糊档（2026-11-05）。**刻意不给配置文件**：这四档是给玩家和模型看的
 # 态度描述，不是数值曲线——没有「调参」需求，硬编码反而防止配置写飞。
 # 玩家侧只露档名（犯嘀咕/起疑/戒备），露数字会变成「刷警戒-消警戒」的循环。
@@ -769,6 +1009,9 @@ def _blank(line_key="", value=None):
             "down": 0, "ending": "", "milestone": "",
             "excite": 0, "scene": False, "orgasms": 0, "idle": 0,
             "corrupt": 0, "submit": 0,
+            # 开发度（2026-11-05）：五个部位单独记，**只涨不掉、不设上限**，
+            # 500 是满格（面板显示 /500）。老档在 `_migrate` 里补 0。
+            "dev": dev_blank(),
             "day": _today(), "chat": 0, "acts": 0,
             "streak": 1, "turns": 0, "ach": [], "hist": [],
             "mercy": MERCY_MAX, "suspicion": 0}
@@ -914,17 +1157,20 @@ def _migrate(rec):
     # 2 轮才算这一场结束。
     if "idle" not in rec:
         rec["idle"] = 0
-    # 冷却期（2026-11-04 深夜 → 2026-11-05 用户拍板**取消**）。
-    # 老存档里还留着 `cool_left` 的线（以及那条停在「orgasms=5 + scene=True」
-    # 的伊蕾娜线）在这里一次性收场：清掉冷却字段、场景结束、次数归零。
-    # 之后不再有冷却——用满次数这一场就收，想再开随时能开。
+    # 冷却期（2026-11-04 深夜 → 2026-11-05 用户拍板**取消**，
+    # 当天下午再取消次数上限）。
+    # 老存档里还留着 `cool_left` 的线一次性收场：清掉冷却字段、场景结束。
+    #
+    # 2026-11-05 下午：这里原来还有一条「orgasms >= max_orgasm 就收场」——
+    # 第 4 条规则取消封顶之后它就变成了**隐藏的剩余限制**：`settle` 不再封顶，
+    # 但每次 `_ensure` 读到存档都按老规矩把次数清零。表现是玩家过了第 5 次，
+    # 下一轮面板又变回「第 0 次」。现在只认冷却残留，不认次数。
     _cool_old = rec.pop("cool_left", 0) or 0
     try:
         had_cooldown = int(_cool_old) > 0
-        _max_o = int(orgasm_hints()["max_orgasm"])
-    except Exception:                                       # noqa: BLE001
-        had_cooldown, _max_o = False, ORGASM_MAX
-    if had_cooldown or int(rec.get("orgasms") or 0) >= _max_o:
+    except (TypeError, ValueError):
+        had_cooldown = False
+    if had_cooldown:
         rec["scene"] = False
         rec["excite"] = 0
         rec["orgasms"] = 0
@@ -938,6 +1184,13 @@ def _migrate(rec):
         rec["corrupt"] = 0
     if "submit" not in rec:
         rec["submit"] = 0
+    # 开发度（2026-11-05）：老档从 0 起。已开发过的量没有痕迹可推，
+    # 按 0 是最诚实的；缺某个部位（手工改过存档）也只补那一个。
+    dev = rec.get("dev") if isinstance(rec.get("dev"), dict) else {}
+    for _k in DEV_KEYS:
+        if _k not in dev:
+            dev[_k] = 0
+    rec["dev"] = dev
     return rec
 
 
@@ -1161,6 +1414,27 @@ def panel(line_key):
                           extra=("prompt",))
 
     dv, da = _need_to_cross(value, lv, ar, cfg)
+
+    # 开发度（2026-11-05）：五个部位各一行，**带 /500 的上限**给玩家看。
+    # 用户原话：「你可以把那个上限 500 给它展示出来」。所以这一块不是
+    # 档位表，是五条独立的进度条：名字 + 当前值 + 档名。
+    dev = rec.get("dev") if isinstance(rec.get("dev"), dict) else {}
+    dmax = dev_cfg(cfg)["max"]
+    dev_rows = []
+    for k in DEV_KEYS:
+        v = max(0, int(dev.get(k) or 0))
+        dev_rows.append({
+            "key": k,
+            "name": DEV_LABELS.get(k, k),
+            "value": v,
+            "max": dmax,
+            "stage": dev_stage(v, cfg),
+            "stageName": dev_name(v, cfg),
+            "pct": int(round(v / float(dmax) * 100)),
+        })
+    dev_tot = dev_total(dev)
+    dev_full = dev_all_full(dev, cfg)
+
     return {
         "value": value,
         "max": bounds(cfg)[0],
@@ -1185,6 +1459,14 @@ def panel(line_key):
         "submit": su,
         "submitName": submit_name(su, cfg),
         "submits": su_rows,
+        # 开发度（2026-11-05）：五条独立进度，上限 500 外露。
+        "dev": dev_rows,
+        "devMax": dmax,
+        "devTotal": dev_tot,
+        "devTotalMax": dmax * len(DEV_KEYS),
+        "devPct": int(round(dev_tot / float(dmax * len(DEV_KEYS)) * 100)),
+        "devAllFull": dev_full,
+        "sensitivity": round(sensitivity(dev, cfg=cfg), 2),
         # 戒备（2026-11-05）：只露档名不露数字——露数字会变成
         # 「刷警戒-消警戒」的循环攻略，玩家该看到的是她的态度。
         "suspicion": int(rec.get("suspicion") or 0),
@@ -1316,7 +1598,20 @@ def panel_text(line_key):
                      if r["state"] == "current" else "  ≥%d" % r["gate"])
         rows.append(line)
 
-    # 六、结论：能不能往前一步
+    # 六、开发度（2026-11-05）：五处各自一条，**上限 500 直接写出来**。
+    # 和上面几段不同，这里不按档位画勾：玩家要的是「这一处到了多少 /500」，
+    # 档名只挂在后面当注释。
+    rows.append("")
+    rows.append("— 开发度 · 共 %d%% —" % p["devPct"])
+    for d in p.get("dev") or []:
+        mark = "✔" if d["value"] >= d["max"] else ("▶" if d["value"] > 0 else "·")
+        line = "%s %s  %d/%d  %s" % (mark, d["name"], d["value"], d["max"],
+                                     d["stageName"])
+        rows.append(line)
+    if p.get("devAllFull"):
+        rows.append("开发满了：碰一下就溃")
+
+    # 七、结论：能不能往前一步
     rows.append("")
     if p["ending"]:
         rows.append("结局已定格。想翻过去发「自由模式」。")
@@ -1570,6 +1865,11 @@ def scoring_ctx(line_key):
             # 戒备（2026-11-05）：模型要看到她现在起没起疑，才知道这轮放行
             # 还是往回打。
             "suspicion": int(rec.get("suspicion") or 0),
+            # 开发度（2026-11-05）：编剧要看到五处各到哪一档，才判得出
+            # 「这一轮该不该给她一个身体先动的勾子」。
+            "dev": rec.get("dev") if isinstance(rec.get("dev"), dict) else dev_blank(),
+            "devText": dev_text(rec.get("dev"), cfg),
+            "devMax": dev_cfg(cfg)["max"],
             "recent": recent}
 
 
@@ -1736,15 +2036,17 @@ def settle(line_key, score):
     # 计算已在上面完成（`_aro_pred`），这里只落账。
     rec["arousal"] = _aro_pred
 
-    # ── 高潮值（2026-11-04 深夜改版，2026-11-05 用户再改）──────
-    # 这一版的三条规则（用户 2026-11-05 早拍板）：
+    # ── 高潮值（2026-11-04 深夜改版，2026-11-05 用户再改两次）──────
+    # 这一版的规则：
     #   1. **涨多少由场景 AI 判**（它给 `excite` 增量）；它没给才按动作档位兜底。
-    #      上限不动，还是 100——只是同一步的幅度听这一轮的戏。
+    #      上限还是 100——只是同一步的幅度听这一轮的戏。
     #   2. **中断不清零**。一轮没有身体接触 = 空闲轮，只自然往下走
     #      （AI 给负值，没给就减 `idle_decay`）；连续两轮空闲才算真收场。
     #      上一轮还 70、这一轮聊了两句话就变 0 —— 那是线上被反复投诉的那个 bug。
-    #   3. **没有冷却期**。用满 5 次这一场就收（再写第 6 次是水词），
-    #      但下一轮想开随时能开，不再强制歇几轮。
+    #   3. **取消 5 次封顶**（2026-11-05 下午用户拍板）：`orgasms` 只记次数，
+    #      到几次都不会强制收场。原来那句「第 6 次是水词」是设计者的偷懒，
+    #      玩家在开发度高了之后本来就会连续到，硬砍反而不爽。
+    #   4. **敏感系数**：开发度越高，同样的动作涨得越多（见 `sensitivity`）。
     #
     # 到 100 → 触发一次高潮：记进 `orgasms`、回落到余韵值（不是回 0）。
     prev_scene = bool(rec.get("scene"))
@@ -1764,6 +2066,11 @@ def settle(line_key, score):
     _flag = _as_bool(score.get("in_scene"))
     _contact = _has_act or (not _raw_act and _flag)
     in_scene = _flag or _has_act
+    # 压迫模式（2026-11-05）：这一轮结算里要用两处——开发度涨得更快、
+    # `res["forced"]` 给演员层和笔法层挑写法。**必须在 settle 里写进 res**，
+    # `injection_block` 是纯函数不写回。
+    forced_now = is_forced(value, int(rec.get("corrupt") or 0),
+                           _aro_pred, int(rec.get("excite") or 0), cfg)
     # 模型给的增量：这一轮涨/落多少，由它按当下的戏判（-40 ~ +40）
     try:
         ex_mod = int(score.get("excite") or 0)
@@ -1772,9 +2079,45 @@ def settle(line_key, score):
     ex_mod = max(-40, min(40, ex_mod))
 
     just_orgasm = 0
-    capped = False
     total_orgasm = int(rec.get("orgasms") or 0)
     idle = int(rec.get("idle") or 0)
+    # 开发度（2026-11-05）：先取旧值算敏感系数，再叠加这一轮的增量。
+    # **先算后加**是有意的：这一轮给的开发度影响的是下一轮，不然她这一轮
+    # 刚被开发、同一轮就变敏感，读起来像数值跳帧。
+    dev_prev = norm_dev(rec.get("dev"))
+    sens = sensitivity(dev_prev, cfg=cfg)
+    after_now = after_value(dev_prev, cfg)
+    dev_gain = 0
+    dev_hit = ""
+    if _contact:
+        d = score.get("dev")
+        raw_dev = norm_dev(d)
+        if str(score.get("spot") or "").strip():
+            dev_hit = _DEV_ALIAS.get(str(score.get("spot") or "").strip().lower(), "")
+        dc = dev_cfg(cfg)
+        # 压迫场里开发得更快（2026-11-05）：那些事本来就不是她同意的。
+        mult = 1.5 if forced_now else 1.0
+        for k in DEV_KEYS:
+            try:
+                dv = int(raw_dev.get(k) or 0)
+            except (TypeError, ValueError):
+                dv = 0
+            dv = max(0, min(dc["step"], dv))
+            if dv:
+                dv = int(round(dv * mult))
+            if dv:
+                dev_prev[k] = int(dev_prev.get(k) or 0) + dv
+                dev_gain += dv
+        rec["dev"] = dev_prev
+
+    # 勾子（2026-11-05）：编剧给的那一句「身体先失控」。**不消费数值**，
+    # 只当这一轮的开场素材带回 res，`injection_block` 会把它交给演员。
+    # 开发度还没到 300 却给了勾子：模型自己加了戏，这里截掉——低于这条线
+    # 就发作会显得数值和剧情对不上。不用 `_contact` 判：场景外也会发作，
+    # 那正是「离不开」这一档该有的样子。
+    dev_hook = str(score.get("hook") or "").strip()[:120]
+    if dev_hook and not dev_hook_ready(dev_prev, cfg):
+        dev_hook = ""
 
     if _contact:
         # 有身体接触：在场景里，按增量累积
@@ -1782,20 +2125,20 @@ def settle(line_key, score):
         base = int(rec.get("excite") or 0) if prev_scene else oh["start"]
         # AI 给了就用它的；没给（0）才按动作档位记——表只做兜底
         step = ex_mod if ex_mod else act_raise
+        # 敏感系数（2026-11-05）：同一个动作，开发度越高涨得越多。
+        # 只有正增量乘系数——回落的时候不能也放大，不然开发度高反而更容易
+        # 断崖式掉下去。
+        if step > 0:
+            step = int(round(step * sens))
         rec["excite"] = max(0, min(oh["max"], base + step))
-        # 触发高潮：到顶就落一次，然后回到余韵值
+        # 触发高潮：到顶就落一次，然后回到余韵值。
+        # **2026-11-05 取消 5 次封顶**（用户拍板）：只记次数，不收场。
+        # 收场只由「连续两轮没接触」决定——那条在下面的空闲分支里。
         if rec["excite"] >= oh["max"]:
             total_orgasm += 1
             rec["orgasms"] = total_orgasm
             just_orgasm = total_orgasm
-            rec["excite"] = oh["after"]
-            if total_orgasm >= oh["max_orgasm"]:
-                # 用满次数：这一场到此为止（不设冷却，下一轮随时能再开）
-                capped = True
-                in_scene = False
-                rec["excite"] = 0
-                rec["orgasms"] = 0
-                total_orgasm = 0
+            rec["excite"] = after_now
     elif prev_scene:
         # 空闲轮：**不清零**。这一轮只是在说别的、在缓、在穿衣服。
         # 数值按 AI 判的负增量往下走；它没给就减默认值。
@@ -1989,7 +2332,22 @@ def settle(line_key, score):
            "act": act_key, "just_orgasm": just_orgasm,
            "orgasms": total_orgasm,
            "orgasmMax": oh["max_orgasm"],
-           "sceneCapped": bool(capped),
+           "sceneCapped": False,
+           # 开发度（2026-11-05）：五部位原值 + 每部位档名 + 总百分比。
+           # 面板要「当前/500」，演员要「她身上哪里被开发到什么程度」。
+           "dev": {k: int(rec.get("dev", {}).get(k) or 0) for k in DEV_KEYS},
+           "devNames": {k: dev_name(rec.get("dev", {}).get(k), cfg)
+                        for k in DEV_KEYS},
+           "devDelta": dev_gain,
+           "devHit": dev_hit,
+           "devHook": dev_hook,
+           "devTotal": dev_total(rec.get("dev")),
+           "devMax": dev_cfg(cfg)["max"] * len(DEV_KEYS),
+           "devPct": int(round(dev_total(rec.get("dev"))
+                               / float(dev_cfg(cfg)["max"] * len(DEV_KEYS)) * 100)),
+           "devAllFull": dev_all_full(rec.get("dev"), cfg),
+           "sensitivity": round(sens, 2),
+           "forced": bool(forced_now),
            "rose": rose, "arousal": int(rec.get("arousal") or 0),
            "arousalName": arousal_name(rec.get("arousal"), cfg),
            "cross": cross, "allow": allow, "crossN": int(rec.get("cross_n") or 0),
@@ -2541,6 +2899,52 @@ def injection_block(res, cfg=None):
         lines += ["", "（她说了不要，你还是继续了。这件事会记在她身上——她也许当下没反抗，"
                       "但那不是同意。堕落值越高，她越不会为了这个跟你吵，可那反而更糟。）"]
 
+    # ── 开发度（2026-11-05）──────────────────────────────
+    # 给演员的只有两件事：**她身上哪一处已经被开发到什么程度**，以及
+    # **这一档的身体会自己背叛到什么地步**。不给数字当门槛——数字是给玩家
+    # 看进度用的，演员要的是画面。
+    dev = res.get("dev") if isinstance(res.get("dev"), dict) else {}
+    dev_names = res.get("devNames") if isinstance(res.get("devNames"), dict) else {}
+    if isinstance(dev, dict) and any(int(dev.get(k) or 0) for k in DEV_KEYS):
+        parts = []
+        for k in DEV_KEYS:
+            v = int(dev.get(k) or 0)
+            if v <= 0:
+                continue
+            parts.append("%s %d（%s）" % (DEV_LABELS.get(k, k), v,
+                                          dev_names.get(k) or dev_name(v, cfg)))
+        if parts:
+            lines += ["", "（她身上被开发到的程度：%s。）" % "／".join(parts)]
+        # 取最高的那一处说「这一档会发生什么」——五处分开列太啰嗦，
+        # 而演员需要的正是最强的那个信号。
+        top_k = max(DEV_KEYS, key=lambda k: int(dev.get(k) or 0))
+        top_v = int(dev.get(top_k) or 0)
+        tp = str(dev_level(top_v, cfg).get("prompt") or "").strip()
+        if tp and top_v >= 100:
+            lines += ["", "（拿%s来说：%s）" % (DEV_LABELS.get(top_k, top_k), tp)]
+        if res.get("devDelta"):
+            lines += ["", "（这一轮她的身体又往那边走了一步。写的时候要让人看出来"
+                          "和上一轮不一样——不是靠她说，是靠那一处的反应变快了。）"]
+        if res.get("devAllFull"):
+            # 五处全满 = 身体开发 100%。这是攻略模式压过自由模式最直接的一段：
+            # 没有数值体系的地方，演不出「碰一下就不行了」这件事。
+            lines += ["", "（**她身上已经没有一处是没被开发过的了。** 这一档碰一下就会"
+                          "起反应：皮肤先热，水自己出来，腰跟着手走。她会主动——"
+                          "不是装出来的主动，是被身体推着走，自己都拦不住。"
+                          "写的时候让这个「一碰就溃」的落差被看见：她嘴上还可以骂你，"
+                          "身体已经先答应了。）"]
+        elif dev_stage(top_v, cfg) >= 3:
+            lines += ["", "（这一档她会在**不相干的时候发起作来**：看到别人亲近、"
+                          "闻到你的味道、坐得久了一点，都能让她当场软掉。"
+                          "这种勾子不用等他先动手，她自己会找个由头凑过来。）"]
+        # 编剧给的勾子（2026-11-05）：这一轮她身体先失控的那个瞬间。
+        # 直接当成「这一拍要写的事」交给演员——不是建议，是素材。
+        hook = str(res.get("devHook") or "").strip()
+        if hook:
+            lines += ["", "（这一拍她的身体先了一步：%s。写出来，别总结成"
+                          "「她有点动情」——要写她在什么场合、身体怎么先背叛、"
+                          "她怎么试图掩饰或者掩饰不住。）" % hook]
+
     # ── 戒备（2026-11-05，模糊档，不报数字）────────────────
     # 玩家在面板上看到的是档名（犯嘀咕/起疑/戒备），模型看到的这句也一样
     # 不带数字——「她开始琢磨你图什么」比「戒备 23」更像一个人。
@@ -2642,12 +3046,11 @@ def tail_line(res):
     rows.append("冲动 %d" % int(res.get("arousal") or 0))
     # 高潮值（2026-11-04 深夜，原「兴奋」）：**只在**场景内出现。
     # 没在进行时这一行不该有——它不是常驻状态条，是「这一场里她到哪了」。
-    # 高潮次数一起报：`高潮 82 · 2/5`，玩家一眼看出还得几次就收场。
+    # 2026-11-05：取消 5 次封顶，次数只报「第 N 次」，不再报分母。
     ex = int(res.get("excite") or 0)
     if ex > 0:
         n = int(res.get("orgasms") or 0)
-        mx = int(res.get("orgasmMax") or ORGASM_MAX)
-        rows.append("高潮 %d · %d/%d" % (ex, n, mx))
+        rows.append("高潮 %d · 第 %d 次" % (ex, n))
     # 堕落 / 屈服（2026-11-04 深夜）：常驻两行。堕落**只在动了之后**才出现——
     # 「堕落 0」天天挂着像在提醒玩家「你还没下手」，那是压力不是信息。
     co = int(res.get("corrupt") or 0)
@@ -2664,6 +3067,22 @@ def tail_line(res):
     su = int(res.get("submit") or 0)
     if su > 0:
         rows.append("屈服 %d · %s" % (su, res.get("submitName") or ""))
+    # 开发度（2026-11-05）：五处被开发过的才报，一行报全，末尾挂总进度
+    # 「开发 62%」。全满时单独说一句——那是攻略模式最吃的一段数值。
+    dev = res.get("dev") if isinstance(res.get("dev"), dict) else {}
+    dev_names = res.get("devNames") if isinstance(res.get("devNames"), dict) else {}
+    bits = []
+    for k in DEV_KEYS:
+        v = int(dev.get(k) or 0)
+        if v > 0:
+            bits.append("%s %d" % (DEV_LABELS.get(k, k), v))
+    if bits:
+        mx = int(res.get("devMax") or dev_cfg()["max"] * len(DEV_KEYS))
+        pct = int(res.get("devPct") or 0)
+        rows.append("开发 " + " · ".join(bits)
+                    + "（%d%% / %d）" % (pct, mx))
+        if res.get("devAllFull"):
+            rows.append("开发满了 · 碰一下就溃")
     return "\n".join(rows)
 
 
