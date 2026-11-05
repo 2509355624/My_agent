@@ -236,6 +236,34 @@ class SubmitTest(unittest.TestCase):
             gate.set()      # 放 5 条占位线程退场，别留挂在测试进程里
 
 
+class CancelTest(unittest.TestCase):
+    """中断按钮（2026-11-04）：只认本台还没结束的任务，置位自己的 abort。"""
+
+    def setUp(self):
+        self.c = main.app.test_client()
+
+    def test_unknown_id_is_404(self):
+        r = self.c.post("/api/gen/cancel", json={"id": "nope"})
+        self.assertEqual(r.status_code, 404)
+
+    def test_queued_job_gets_abort_flag(self):
+        ev = threading.Event()
+        job = {"id": "t-cancel", "state": "queued", "abort": ev}
+        with gen_api._JOBS_LOCK:
+            gen_api._JOBS["t-cancel"] = job
+        try:
+            r = self.c.post("/api/gen/cancel", json={"id": "t-cancel"})
+            self.assertEqual(r.status_code, 200)
+            self.assertTrue(ev.is_set())
+            job["state"] = "done"
+            r = self.c.post("/api/gen/cancel", json={"id": "t-cancel"})
+            self.assertEqual(r.status_code, 400)
+            self.assertIn("结束", r.get_json()["error"])
+        finally:
+            with gen_api._JOBS_LOCK:
+                gen_api._JOBS.pop("t-cancel", None)
+
+
 class RunTest(unittest.TestCase):
     """worker：提交链路走通 → 记账（成功/失败都记）。"""
 
