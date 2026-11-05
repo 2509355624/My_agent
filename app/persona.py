@@ -4101,7 +4101,10 @@ def _roll_event(gd):
     if plan and (gd.get("plan_day") or 0) <= (gd.get("day") or 1):
         gd["plan"] = ""                             # 兑现了，销账
         gd["plan_day"] = 0
-        return "约定：「%s」" % plan
+        # 用**过去式**（2026-11-06 用户报「都到目的地了还在提赶路」）：
+        # 原来写成「约定：「前往情爱城」」，模型当成还没做的待办，天天拿它
+        # 当今天的行程，人都到了还在说路上。这里明确它已经发生完了。
+        return "已经办完：%s" % plan
     if random.random() < 0.2:
         return random.choice(_EVENT_POOL)
     return ""
@@ -4135,6 +4138,13 @@ def _apply_gameday(key, score=None, force_new_day=False, days=1):
         gd["phase"] = "早晨"
         gd["event"] = _roll_event(gd) if days == 1 else ""
         gd["turns_today"] = 0
+        # 跳了好几天，挂着的约定多半已经过期（2026-11-06）：原来只在
+        # 「正好跳到那一天」时销账，跳 7 天就把它落地成了「今天的事件」，
+        # 于是人都到目的地了，模型还在按「前往某地」写行程。
+        pday = int(gd.get("plan_day") or 0)
+        if gd.get("plan") and pday and pday <= gd["day"]:
+            gd["plan"] = ""
+            gd["plan_day"] = 0
     elif isinstance(score, dict):
         t = str(score.get("time") or "none").strip().lower()
         if t in ("overnight", "skip_days"):
@@ -4163,7 +4173,14 @@ def _gameday_block(gd):
                                       ("，" + phase) if phase else "")]
     event = str(gd.get("event") or "").strip()
     if event:
-        lines.append("今天的事：%s。把它织进今天的剧情，别复述这句话。" % event)
+        if event.startswith("已经办完"):
+            # 兑现过的约定不能当待办念（2026-11-06）：模型看到「约定：去某地」
+            # 就会一直按「还在路上」写，哪怕场景里人早就到了。
+            lines.append("今天已经办完的事：%s。**它已经过去了**，不要再当成"
+                         "今天的行程或还没做的事；以「状态」里的地点为准。"
+                         % event[len("已经办完："):])
+        else:
+            lines.append("今天的事：%s。把它织进今天的剧情，别复述这句话。" % event)
     plan = str(gd.get("plan") or "").strip()
     if plan:
         pd = gd.get("plan_day") or 0

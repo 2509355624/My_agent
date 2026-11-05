@@ -2282,7 +2282,9 @@ class GameDayTest(PersonaBase):
         self.assertEqual(gd["plan_day"], 2)
         persona._apply_gameday(line, {"time": "overnight"})
         gd = self._gday()
-        self.assertEqual(gd["event"], "约定：「去游乐场」")
+        # 兑现后写成**过去式**（2026-11-06）：写成「约定：「…」」时模型会把它
+        # 当成还没做的待办，人都到了还在按「前往某地」写行程。
+        self.assertEqual(gd["event"], "已经办完：去游乐场")
         self.assertEqual(gd["plan"], "")
 
     def test_block_shows_day_plan_and_soft_curfew(self):
