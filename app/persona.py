@@ -1554,8 +1554,42 @@ def _save_state(state, deleted=None):
         cur = {}
     drop = {str(k) for k in (deleted or ())}
     for k, v in cur.items():
-        if k not in state and k not in drop:
+        if k in drop:
+            continue
+        if k not in state:
             state[k] = v
+            continue
+        # ── 同一把键两边都有：**天数只许前进**（2026-11-06 用户报的 bug）
+        #
+        # 两个进程（QQ 机器人 / 网页后端）各自「读整库 → 改一条 → 写整库」。
+        # 后写的那份会把它读到的**旧快照**盖回去：网页把天数推到第 2 天，
+        # QQ 那边一保存，第 2 天又变回第 1 天。群友报的「天数又变回去了」
+        # 就是这个。
+        #
+        # 这里不猜谁更新，只守一条**单调性**：游戏日只许涨不许跌。
+        # 回退功能要倒退时，`rollback_last_turn` 会先挂 `_day_back_ok`——
+        # 见到这个标记就放行并吃掉，所以只有「显式回退」能往回走。
+        mine, disk = state.get(k), v
+        if not isinstance(mine, dict) or not isinstance(disk, dict):
+            continue
+        if mine.pop("_day_back_ok", False) or disk.pop("_day_back_ok", False):
+            continue
+        try:
+            md = int((mine.get("gameday") or {}).get("day") or 0)
+            dd = int((disk.get("gameday") or {}).get("day") or 0)
+        except (TypeError, ValueError):
+            md = dd = 0
+        if dd > md:
+            # 连同 phase / event / 约定一起接过来，别只拿天数、时点对不上。
+            mine["gameday"] = copy.deepcopy(disk.get("gameday") or {})
+            mine.pop("gameday_prev", None)
+        try:
+            mt = int(mine.get("turn_total") or -1)
+            dt = int(disk.get("turn_total") or -1)
+        except (TypeError, ValueError):
+            mt = dt = -1
+        if dt > mt:
+            mine["turn_total"] = dt
 
     from app.agents import _atomic_write_text
     parent = os.path.dirname(_STATE_PATH)
@@ -5097,6 +5131,8 @@ def rollback_last_turn(session_key, sender_uin=""):
     if ent.get("turn_total") is not None:
         ent["turn_total"] = max(0, int(ent.get("turn_total") or 0) - 1)
     ent["rollback_done"] = True              # 锁死二级回退，等下一轮解开
+    # 放行这一把键的天数倒退（`_save_state` 的单调闸门），不然回退会被自己挡住。
+    ent["_day_back_ok"] = True
     _save_state(state_map)
 
     # 回退也把这一轮从回忆缓冲/最近一批入库里撤掉（2026-11-05）。
