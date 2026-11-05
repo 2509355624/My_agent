@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS works (
     hidden  INTEGER DEFAULT 0,    -- 站主下架
     fp      TEXT DEFAULT '',      -- 扫描指纹，没变就不重写 items
     sort    INTEGER DEFAULT 0,    -- 发现顺序，扫描时按自然序赋，翻页靠它
+    ord     TEXT DEFAULT '',      -- 自然排序键（标题里的数字补零），分类内排序用
     ts      REAL DEFAULT 0,
     seen    REAL DEFAULT 0        -- 最近一次被扫描看到的时间
 );
@@ -123,6 +124,31 @@ def _natkey(s):
     return out
 
 
+def _root_name(root):
+    """配置根 → 墙上用的分类名。**用文件夹实际名字**，不用 .env 里的显示名。
+
+    2026-11-05 用户拍板：扫描 `Pictures\\new` 之后，顶上要出现的是 `new`
+    而不是「图库」。显示名只留在选目录的提示里。
+    """
+    name = os.path.basename(os.path.abspath(str(root or "").rstrip("\\/")))
+    return name or str(root or "")
+
+
+def _ord_key(title):
+    """标题 → 可排序字符串：数字段补零，`2` 才能排在 `10` 前面。
+
+    存进 `works.ord`，列表按它排序。不能用 `title` 直接排——`35` 和 `100`
+    按字典序是 `100` 在前。数字段补到 12 位，时间戳、编号、`P01` 都能用。
+    """
+    parts = []
+    for part in _NUM.split(str(title or "").lower()):
+        if not part:
+            continue
+        parts.append("%012d" % int(part) if part.isdigit() else part)
+    return "\x01".join(parts)
+
+
+
 @contextlib.contextmanager
 def connect():
     """一次连接一个事务。用 generator 而不是裸 Connection：`with con:` 只提交
@@ -148,6 +174,11 @@ def init():
     os.makedirs(os.path.dirname(DB) or ".", exist_ok=True)
     with connect() as con:
         con.executescript(SCHEMA)
+        # 老库补列（2026-11-05）：自然排序键。SQLite 没有 ADD COLUMN IF NOT
+        # EXISTS，只能先看 PRAGMA。加完先留空，下一次扫描/迁移会填上。
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(works)")}
+        if "ord" not in cols:
+            con.execute("ALTER TABLE works ADD COLUMN ord TEXT DEFAULT ''")
         con.execute("PRAGMA journal_mode=WAL")
     return DB
 
@@ -185,7 +216,8 @@ def _drop_noise_tail(found, min_count=5):
     """
     tails = {}
     multi = 0
-    for _grp, title, _p, _f in found:
+    for item in found:
+        _grp, title, _p, _f = item[:4]
         if "/" in title:
             multi += 1
             tail = title.rsplit("/", 1)[1]
@@ -198,12 +230,50 @@ def _drop_noise_tail(found, min_count=5):
         return found
 
     out = []
-    for grp, title, path, files in found:
+    for item in found:
+        grp, title, path, files = item[:4]
         if "/" in title:
             head, _sep, tail = title.rpartition("/")
             if head and tail in noisy:
                 title = head
-        out.append((grp, title, path, files))
+        out.append((grp, title, path, files) + tuple(item[4:]))
+    return out
+
+
+def _assign_categories(found):
+    """把「根 → 作品集」的相对路径压成「分类 + 作品集标题」。
+
+    规则（2026-11-05 用户拍板）：**某个路径段下挂了 ≥2 个作品集，这一段就是
+    一个分类**；只挂 1 个的当成作品集自己的包装层。
+
+        new/1、new/2                    → 分类 new，标题 1、2
+        silver系列/便利店/八重神子       → 分类 silver系列，标题 便利店/八重神子
+        好评/四宫辉夜                    → 分类 好评，标题 四宫辉夜
+        moss漫画/<时间戳>               → 分类 moss漫画，标题 <时间戳>
+
+    这样 `moss漫画`、`new` 是分类，`silver系列`、`好评` 也各自成类；时间戳
+    这种「一层包装」不会被误当成分类。`found` 的第 5 项是根路径，用来避免
+    两个同名根把计数混在一起。
+    """
+    counts = {}
+    for item in found:
+        grp, title = item[0], item[1]
+        root = str(item[4]) if len(item) > 4 else ""
+        parts = str(title).split("/")
+        if len(parts) > 1:
+            key = (grp, root, parts[0])
+            counts[key] = counts.get(key, 0) + 1
+
+    out = []
+    for item in found:
+        grp, title, path, files = item[:4]
+        root = str(item[4]) if len(item) > 4 else ""
+        parts = str(title).split("/")
+        first = parts[0] if len(parts) > 1 else ""
+        if first and counts.get((grp, root, first), 0) >= 2:
+            out.append((first, title[len(first) + 1:], path, files))
+        else:
+            out.append((grp, title, path, files))
     return out
 
 
@@ -242,7 +312,7 @@ def _walk(grp, root, cur, out, depth=0, root_title=None):
         files.sort(key=lambda x: _natkey(x.name))
         out.append((grp, _title_for(root, cur, root_title),
                     os.path.abspath(cur),
-                    [(f.name, _size(f)) for f in files]))
+                    [(f.name, _size(f)) for f in files], root))
     if depth >= 8:
         return
     for d in sorted(dirs, key=lambda x: _natkey(x.name)):
@@ -271,10 +341,18 @@ def scan(roots=None):
     → {"works": 新增+更新的作品集数, "items": 图片数, "skipped": 没变的目录数,
        "seconds": 耗时}
     """
-    roots = tuple(roots if roots is not None else GALLERY_ROOTS)
+    if roots is None:
+        # 生产路径（站主点「全部重扫」）：分类名一律用根文件夹的实际名字，
+        # 不用 .env 里的显示名。`Pictures\new` → `new`，不是「图库」。
+        roots = tuple((_root_name(root), root, _root_name(root))
+                      for _grp, root in GALLERY_ROOTS)
+    else:
+        roots = tuple(roots)
     if not roots:
         return {"works": 0, "items": 0, "skipped": 0, "seconds": 0.0,
                 "error": "没有配置 GALLERY_ROOTS"}
+    # 幂等：新机器第一次扫描时建表/补 ord 列，不用另跑迁移脚本。
+    init()
 
     t0 = time.time()
     found = []
@@ -285,14 +363,15 @@ def scan(roots=None):
             log.warning("画廊根目录不存在：%s", root)
             continue
         _walk(grp, root, root, found, 0, root_title)
-    found = _drop_noise_tail(found)
+    found = _assign_categories(_drop_noise_tail(found))
 
     now = time.time()
     added = changed = skipped = total_items = 0
     with connect() as con:
         con.execute("PRAGMA journal_mode=WAL")
         old = {r["key"]: r for r in con.execute(
-            "SELECT key, id, fp FROM works WHERE src='owner'")}
+            "SELECT key, id, fp, grp, title, path, cover, ord"
+            " FROM works WHERE src='owner'")}
         seen_keys = set()
         # sort 只决定墙上的先后顺序。已有作品集**绝不重排**——站主单独选一个
         # 子目录扫一遍，不该让它从「图库 · 35」瞬移到整个墙的最前面。
@@ -304,20 +383,36 @@ def scan(roots=None):
             key = "owner:" + abspath.lower()
             seen_keys.add(key)
             fp = _fingerprint(files)
+            ordk = _ord_key(title)
+            cover = os.path.join(abspath, files[0][0]) if files else ""
             row = old.get(key)
             if row and row["fp"] == fp:
-                skipped += 1
-                con.execute("UPDATE works SET seen=? WHERE id=?",
-                            (now, row["id"]))
+                # 指纹没变 = 不用重写 items（点赞/收藏都留在原处）。
+                # 但 grp/title/cover 可能是旧配置留下的，必须顺手校正——
+                # 2026-11-05 用户报的「moss 漫画全挂在 web 组下」就是这里
+                # 只更新 seen、不更新 grp 造成的。
+                meta_ok = (row["grp"] == grp and row["title"] == title
+                           and row["path"] == abspath
+                           and row["cover"] == cover
+                           and (row["ord"] or "") == ordk)
+                if meta_ok:
+                    con.execute("UPDATE works SET seen=? WHERE id=?",
+                                (now, row["id"]))
+                    skipped += 1
+                else:
+                    con.execute(
+                        "UPDATE works SET grp=?, title=?, path=?, cover=?,"
+                        " ord=?, seen=? WHERE id=?",
+                        (grp, title, abspath, cover, ordk, now, row["id"]))
+                    changed += 1
                 total_items += len(files)
                 continue
 
-            cover = os.path.join(abspath, files[0][0])
             if row:
                 con.execute(
                     "UPDATE works SET grp=?, title=?, path=?, cover=?, n=?, "
-                    "fp=?, seen=? WHERE id=?",
-                    (grp, title, abspath, cover, len(files), fp, now,
+                    "fp=?, ord=?, seen=? WHERE id=?",
+                    (grp, title, abspath, cover, len(files), fp, ordk, now,
                      row["id"]))
                 wid = row["id"]
                 con.execute("DELETE FROM items WHERE work_id=?", (wid,))
@@ -325,9 +420,10 @@ def scan(roots=None):
             else:
                 cur = con.execute(
                     "INSERT INTO works(key, src, owner, grp, title, path, cover,"
-                    " n, fp, sort, ts, seen) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " n, fp, sort, ord, ts, seen)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (key, "owner", "", grp, title, abspath, cover, len(files),
-                     fp, next_sort, now, now))
+                     fp, next_sort, ordk, now, now))
                 wid = cur.lastrowid
                 next_sort += 1
                 added += 1
@@ -350,27 +446,38 @@ def scan(roots=None):
 
 
 def grp_for(path):
-    """扫描单个目录时该归到哪个分组。
+    """扫描单个目录时该归到哪个分类。
 
-    落在已配置的根里面就沿用它原来的分组名（选 `new\\35` 还是归「图库」），
-    否则用目录自己的名字。不这么做的话，站主随便选一个子目录扫一遍，
-    就会把那个作品集的分组从「图库」改成「35」，墙上凭空多出一个分组。
+    **分类名用根文件夹的实际名字**（2026-11-05 用户拍板）：落在
+    `Pictures\\new` 里面，就归 `new`，不是 .env 里写的「图库」。外面临时选的
+    目录用它自己的名字。这样无论扫的是主文件夹还是它下面的子目录，分类都
+    稳定，不会因为一次子目录扫描冒出「35」这种假分类。
     """
     p = os.path.abspath(path)
-    for grp, root in GALLERY_ROOTS:
+    for _grp, root in GALLERY_ROOTS:
         if safe_inside(root, p):
-            return grp
-    name = os.path.basename(p.rstrip("\\/"))
-    return name or p
+            return _root_name(root)
+    return _root_name(p) or p
 
 
 def scan_path(path):
-    """只扫站主指定的那一个目录（含子目录）。站主在网页上自己挑的路径。"""
+    """只扫站主指定的那一个目录（含子目录）。站主在网页上自己挑的路径。
+
+    如果选中的目录落在某个配置根里面，就**扫整个根**，而不是只扫这一层：
+    分类名和标题都要相对根目录算，只扫子目录会把 `silver系列/便利店` 算成
+    「便利店」分类。扫根只是多走几个目录，不开图，实测一万三千张也只要
+    零点几秒。
+    """
     p = os.path.abspath(str(path or "").strip())
     if not os.path.isdir(p):
         return {"error": "目录不存在：%s" % p}
-    name = os.path.basename(p.rstrip("\\/")) or p
-    out = scan([(grp_for(p), p, name)])
+    root = p
+    for _grp, r in GALLERY_ROOTS:
+        if safe_inside(r, p):
+            root = os.path.abspath(r)
+            break
+    name = _root_name(root)
+    out = scan([(grp_for(p), root, name)])
     out["path"] = p
     return out
 
