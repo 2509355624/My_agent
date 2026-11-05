@@ -266,12 +266,31 @@ class TurnTest(PersonaBase):
         （`_judge_intent_scored`），两个都得 patch 掉才算「判断段整体不可用」。
         """
         with mock.patch.object(persona, "_judge_intent",
-                               return_value=(None, "")), \
+                               return_value=(None, "", {})), \
              mock.patch.object(persona, "_judge_intent_scored",
                                return_value=(None, "", None)), \
              mock.patch.object(persona.llm, "call_llm", return_value="你好呀") as m:
             persona.run_turn("private_1", "在吗", "private", "张三")
         self.assertEqual(m.call_count, 1)
+
+    def test_segments_and_director_reach_the_actor(self):
+        """第一段拆出的「说 / 想」要按块发给第二段，导演条也要进系统头。"""
+        score = ('{"intent": "neutral", "delta": 2, "turn_type": "chat",'
+                 ' "reason": "试探", "note": "试探",'
+                 ' "segments": ['
+                 '   {"who": "用户", "type": "说", "text": "我走了。"},'
+                 '   {"who": "用户", "type": "想", "text": "其实想留下"}],'
+                 ' "addressed": true, "subtext": "想被留住", "stance": "装傻"}')
+        with mock.patch.object(persona.llm, "call_llm",
+                               side_effect=[score, "她没松手。"]) as m:
+            persona.run_turn(self.KEY, "我走了。", "private")
+        last_user = m.call_args_list[1][0][0][-1]["content"]
+        self.assertIn("用户 · 说（你听得见）：我走了。", last_user)
+        self.assertIn("用户 · 想（你看不见", last_user)
+        self.assertNotIn("其实想留下", last_user)      # 心里话的正文不给演员看
+        head = m.call_args_list[1][0][0][0]["content"]
+        self.assertIn("对方心里有话没说出口", head)
+        self.assertNotIn("对方真正在：想被留住", head)
 
     def test_scene_line_is_split_out_of_the_reply(self):
         """模型顺手写的那行「画面：」要剥出来：正文发回去，标签拿去出图。
@@ -646,7 +665,8 @@ class IntentTest(unittest.TestCase):
 
     def test_reads_joke(self):
         got = self._judge('{"intent": "joke", "note": "拿兔子开玩笑"}')
-        self.assertEqual(got, ("joke", "拿兔子开玩笑"))
+        self.assertEqual(got[:2], ("joke", "拿兔子开玩笑"))
+        self.assertEqual(got[2]["segments"], [])
 
     def test_reads_intimate(self):
         got = self._judge('{"intent": "intimate", "note": "求抱抱"}')
@@ -655,16 +675,34 @@ class IntentTest(unittest.TestCase):
     def test_unknown_intent_falls_back(self):
         """模型自创类别 → 当作没判断，走原流程。"""
         self.assertEqual(self._judge('{"intent": "tease", "note": "x"}'),
-                         (None, ""))
+                         (None, "", {}))
 
     def test_non_json_falls_back(self):
-        self.assertEqual(self._judge("我觉得他在开玩笑"), (None, ""))
+        self.assertEqual(self._judge("我觉得他在开玩笑"), (None, "", {}))
 
     def test_exception_falls_back(self):
         from unittest import mock
         with mock.patch.object(persona.llm, "call_llm",
                                side_effect=RuntimeError("超时")):
-            self.assertEqual(persona._judge_intent(self.CARD, "x"), (None, ""))
+            self.assertEqual(persona._judge_intent(self.CARD, "x"),
+                             (None, "", {}))
+
+    def test_parses_segments_and_director_fields(self):
+        got = self._judge(
+            '{"intent": "neutral", "note": "试探",'
+            ' "segments": ['
+            '   {"who": "用户", "type": "说", "text": "我走了。"},'
+            '   {"who": "助手", "type": "做", "text": "她把门拦住。"},'
+            '   {"who": "用户", "type": "想", "text": "其实想留下"}],'
+            ' "addressed": true, "literal": "他要走",'
+            ' "subtext": "想被留住", "noticed": "他站着没动",'
+            ' "stance": "装傻"}')
+        extra = got[2]
+        self.assertEqual(len(extra["segments"]), 3)
+        self.assertEqual(extra["segments"][1]["who"], "助手")
+        self.assertEqual(extra["segments"][2]["type"], "想")
+        self.assertEqual(extra["subtext"], "想被留住")
+        self.assertEqual(extra["stance"], "装傻")
 
     def test_intent_block_tells_it_how_to_react(self):
         block = persona._intent_block("joke", "拿兔子开玩笑")
@@ -677,6 +715,118 @@ class IntentTest(unittest.TestCase):
 
     def test_unknown_intent_block_is_empty(self):
         self.assertEqual(persona._intent_block("", ""), "")
+
+
+class SegmentTest(unittest.TestCase):
+    """第一段的分段与演员层渲染（2026-11-05）。"""
+
+    def test_aliases_are_normalized(self):
+        segs = persona._parse_segments([
+            {"who": "user", "type": "say", "text": "a"},
+            {"who": "assistant", "type": "act", "text": "b"},
+            {"who": "她", "type": "thought", "text": "c"},
+        ])
+        self.assertEqual([(s["who"], s["type"]) for s in segs],
+                         [("用户", "说"), ("助手", "做"), ("助手", "想")])
+
+    def test_unknown_labels_fall_back_to_user_say(self):
+        segs = persona._parse_segments([{"who": "?", "type": "?", "text": "x"}])
+        self.assertEqual((segs[0]["who"], segs[0]["type"]), ("用户", "说"))
+
+    def test_empty_segments_are_dropped(self):
+        self.assertEqual(persona._parse_segments(
+            [{"who": "用户", "type": "说", "text": "  "}]), [])
+
+    def test_thought_is_explicitly_invisible(self):
+        block = persona.render_user_block([
+            {"who": "用户", "type": "说", "text": "我走了。"},
+            {"who": "用户", "type": "想", "text": "其实想留下"},
+        ])
+        self.assertIn("用户 · 说（你听得见）：我走了。", block)
+        self.assertIn("你看不见，也不知道内容", block)
+        self.assertNotIn("其实想留下", block)
+
+    def test_no_segments_falls_back_to_raw(self):
+        self.assertEqual(persona.render_user_block([], True, "原文"), "原文")
+
+    def test_not_addressed_is_marked(self):
+        block = persona.render_user_block(
+            [{"who": "用户", "type": "做", "text": "他走到窗边"}],
+            addressed=False)
+        self.assertIn("不是在对你说", block)
+
+    def test_render_hist_uses_seg_only_for_new_messages(self):
+        hist = [
+            {"role": "user", "content": "旧原话"},
+            {"role": "user", "content": "原文",
+             "seg": [{"who": "用户", "type": "想", "text": "心里话"}],
+             "addressed": True},
+        ]
+        out = persona._render_hist(hist)
+        self.assertEqual(out[0]["content"], "旧原话")
+        self.assertIn("看不见，也不知道内容", out[1]["content"])
+
+    def test_history_keeps_seg_through_trim(self):
+        hist = [{"role": "user", "content": "原文",
+                 "seg": [{"who": "用户", "type": "想", "text": "心里话"}]}]
+        out = persona.trim(hist)
+        self.assertEqual(out[0]["content"], "原文")
+        self.assertEqual(out[0]["seg"][0]["type"], "想")
+
+
+class DirectorBlockTest(unittest.TestCase):
+    """导演条只给「怎么反应」，不给台词（2026-11-05）。"""
+
+    def test_block_is_short_and_explicit(self):
+        block = persona._director_block({
+            "literal": "他要走", "subtext": "想被留住",
+            "noticed": "他站着没动", "stance": "装傻"})
+        self.assertIn("对方字面上在说：他要走", block)
+        self.assertIn("对方真正在：想被留住", block)
+        self.assertIn("装作没听懂", block)
+        self.assertIn("不是台词", block)
+
+    def test_empty_info_adds_nothing(self):
+        self.assertEqual(persona._director_block({}), "")
+
+    def test_secret_thought_hides_subtext(self):
+        """用户写了「心里想」时，潜台词不能出现在演员的系统头里。"""
+        block = persona._director_block({
+            "subtext": "想被留住", "secret": True, "stance": "装傻"})
+        self.assertNotIn("想被留住", block)
+        self.assertIn("内容你不知道", block)
+
+
+class LedgerTest(unittest.TestCase):
+    """B：Markdown 六节账本（2026-11-05）。"""
+
+    LEDGER = (
+        "## 关系\n- 你叫我学妹\n\n"
+        "## 你的事（你说过的 / 你做的）\n- 你做了早餐\n\n"
+        "## 我的事（我说过的 / 我做的）\n- 我答应帮你复习\n\n"
+        "## 约定与未完成\n- 周末去图书馆\n\n"
+        "## 忌讳与偏好\n- 你不喜欢被翻手机\n\n"
+        "## 日常与场景\n- 住在学校附近"
+    )
+
+    def test_prompt_names_all_six_sections(self):
+        for key in persona._LEDGER_SECTIONS:
+            self.assertIn(key, persona._NOTE_PROMPT, key)
+
+    def test_valid_ledger_passes(self):
+        self.assertTrue(persona._ledger_ok(self.LEDGER))
+
+    def test_freeform_note_is_rejected(self):
+        self.assertFalse(persona._ledger_ok("我们聊了很久，她今天很开心。"))
+
+    def test_clip_keeps_every_heading(self):
+        long = "\n".join(
+            "## " + key + "\n" + ("- 这一节写了很多细节。" * 20)
+            for key in persona._LEDGER_SECTIONS)
+        out = persona._clip_ledger(long, 300)
+        self.assertLessEqual(len(out), 300)
+        for key in persona._LEDGER_SECTIONS:
+            self.assertIn("## " + key, out)
 
 
 class IntimateGuideTest(unittest.TestCase):
@@ -1057,7 +1207,9 @@ class NoteBudgetTest(unittest.TestCase):
         # 历史 12 条 × 约 400 字
         total_chars = len(head) + 12 * 400 + 30
         approx_tokens = total_chars * 0.65
-        self.assertLess(approx_tokens, 8000,
+        # 2026-11-05：加了「分段 + 导演条」后只涨了约 100 token（+1.7%），
+        # 仍在生图链路（3000~5000 token）的两倍以内，门槛从 8000 放到 8200。
+        self.assertLess(approx_tokens, 8200,
                         "扮演一轮 %.0f token，超过生图链路太多" % approx_tokens)
 
 
