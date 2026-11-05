@@ -48,6 +48,7 @@ settings.json**：那是用户在管理页手配的长期配置，扮演态是�
 import collections
 import copy
 import datetime
+import functools
 import json
 import logging
 import os
@@ -1289,7 +1290,29 @@ def find_card(word):
 
 _STATE_PATH = os.path.join(BASE_DIR, "state", "persona_sessions.json")
 
+# 状态文件的进程内互斥（2026-11-05）。
+#
+# 场景：主线程在聊天落盘的同时，小记压缩线程（`compress_note`）也在写同一份
+# 文件。两个线程「读整份 → 改 → 写整份」时，读者可能在 `os.replace` 换名的
+# 那一瞬 `open()` 失败（Windows 上报 PermissionError），按 `_load_state` 的
+# 新规矩这一轮就直接报错。游客连聊 30 轮时必现（LLM 被 mock 成瞬时返回，
+# 压缩线程每次都还在跑）。
+#
+# 用一把 RLock 把读/写串起来：同进程内不再有交叉窗口；跨进程（QQ 适配层 /
+# 网页后端各一份）不归它管，那边靠 `_save_state` 的读合并 + 原子写。
+_STATE_LOCK = threading.RLock()
 
+
+def _state_guard(fn):
+    """把状态文件的读写串行化（可重入：`_load_state` 里会调 `_save_state`）。"""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _STATE_LOCK:
+            return fn(*args, **kwargs)
+    return wrapper
+
+
+@_state_guard
 def _read_state_raw():
     """直接读盘，**不迁移、不落盘**。给 `_save_state` 做合并用。
 
@@ -1306,6 +1329,7 @@ def _read_state_raw():
     return d if isinstance(d, dict) else {}
 
 
+@_state_guard
 def _load_state():
     try:
         with open(_STATE_PATH, "r", encoding="utf-8") as f:
@@ -1336,6 +1360,7 @@ def _load_state():
     return d
 
 
+@_state_guard
 def _save_state(state, deleted=None):
     """整份落盘，但**先把盘上别的线合并回来**。
 

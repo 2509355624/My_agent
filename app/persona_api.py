@@ -34,9 +34,29 @@ bp = Blueprint("persona_api", __name__)
 GUEST_COOKIE = "gs_id"
 GUEST_COOKIE_TTL = 30 * 24 * 3600      # cookie 活 30 天（对话数据只保 24 小时）
 
-# 游客进来先演谁。游客不选角色（省一步），直接给这张卡。
-# 想换就改这一个字符串（卡的 id）。
-GUEST_CARD_ID = "izumi_sagiri"
+# 游客固定演这一张卡（2026-11-05 用户拍板：**只给一个角色**，不再允许换人）。
+# `junior` = 学妹（谦逊、崇拜学长、略带羞涩）。
+GUEST_CARD_ID = "junior"
+
+
+def _guest_free(ckey):
+    """游客一律自由模式（2026-11-05 用户拍板）。
+
+    体验版没有攻略面板、没有模式开关，所以不该被档位/结局/戒备锁住。
+    必须**显式**写一条 free 记录：`affection._ensure` 给没有记录的线默认建的
+    是 raid（2026-11-04「一进来就是攻略模式」留下的行为），不写就会跑成攻略。
+    已经有 free 记录就直接返回——不每轮都碰状态文件。
+    """
+    ent = persona._entry(ckey) or {}                      # noqa: SLF001
+    aff = ent.get("affection") if isinstance(ent, dict) else None
+    if isinstance(aff, dict) and str(aff.get("mode") or "") == "free":
+        return
+    try:
+        from app import affection
+        affection.set_mode(ckey, False)
+    except Exception:                                     # noqa: BLE001
+        log.warning("游客线转自由模式失败 %s", ckey, exc_info=True)
+
 
 # ── 「回复 ↔ 漫画页」映射（2026-11-03）────────────────────
 #
@@ -392,14 +412,11 @@ def _aff_panel(key):
 
 
 def _guest_line(uid):
-    """游客的 persona 线键（2026-11-05 游客攻略化）。
+    """游客的 persona 线键：**固定学妹，一条线，不能换人**。
 
-    游客原来走的是**简化管线**：固定卡、无打分、无好感，30 轮纯聊天。
-    攻略模式默认化之后，主引擎（`persona.run_turn`）自带打分/结算/注入/
-    尾行/开场导读/完整归档——所以游客改成直接领一条真的 persona 线
-    （`guest_<uid>__<卡id>`），一套机制两端共用，不再手搓第二份好感。
-
-    没有 line 就当场建（固定 `GUEST_CARD_ID`，用户拍板不换卡）。
+    2026-11-05 用户拍板回到单角色体验：游客只演 `GUEST_CARD_ID`（学妹），
+    不提供切角色——既然只有一个角色，也就没有「演谁」要记，没有多线。
+    每条游客线都强制自由模式（见 `_guest_free`），体验版没有攻略模式。
     """
     card = _card_by_id(GUEST_CARD_ID)
     if card is None:
@@ -411,6 +428,7 @@ def _guest_line(uid):
     if persona._entry(ckey) is None:                      # noqa: SLF001
         persona.switch(ckey, card)
         log.info("游客新线：%s（%s）", ckey, card["name"])
+    _guest_free(ckey)
     return ckey
 
 
@@ -427,8 +445,9 @@ def _guest_sweep():
     import time
     from app import guest as G
     now = time.time()
+    state = persona._load_state()                         # noqa: SLF001
     stale = []
-    for key in list(persona._load_state()):               # noqa: SLF001
+    for key in list(state):
         if not key.startswith("guest_"):
             continue
         try:
@@ -462,9 +481,9 @@ def _guest_turns(ckey):
 def _guest_session(uid, token):
     """游客的会话状态。
 
-    2026-11-05 攻略化：和登录用户同一个会话形状（归档分页 / 开场导读 /
-    好感状态都给），只多 `remaining` / `limit` 两个字段——30 轮上限保留
-    （用户拍板），到顶后前端锁输入框引导登录。
+    2026-11-05：和登录用户同一个会话形状（归档分页 / 开场导读 / 状态都给），
+    只多 `remaining` / `limit` 两个字段——30 轮上限保留（用户拍板），
+    到顶后前端锁输入框引导登录。固定学妹、默认自由模式。
     """
     from app import guest
     ckey = _guest_line(uid)
@@ -516,11 +535,11 @@ def switch():
 
     role, who, token = _who()
     if role == "guest":
-        # 游客固定演一张卡（`GUEST_CARD_ID`）。让他换人等于把体验版
-        # 变成免费全集，而且换人后历史还得跟着分桶，没必要。
+        # 游客固定学妹（`GUEST_CARD_ID`），不提供换人（2026-11-05 用户拍板）：
+        # 体验版只给一个角色，换人等于把体验版变成免费全集，也没必要。
         resp = jsonify({
             "ok": False,
-            "error": "体验版只能玩这一个角色。登录后可以随便换。",
+            "error": "体验版只能玩学妹。登录后可以随便换。",
             "limit": True,
         })
         resp.status_code = 403
@@ -644,11 +663,10 @@ def _chat_turn(text):
 
 
 def _guest_chat(text, uid, token):
-    """游客的一轮（2026-11-05 攻略化）。
+    """游客的一轮。
 
-    直接走 `persona.run_turn` 主引擎：打分、好感结算、档位注入、开场导读
-    全套和登录用户一致——体验版给的就是攻略模式本身，不是阉割版聊天。
-    差别只剩三样：固定卡、30 轮上限、不能出图/删档。
+    直接走 `persona.run_turn` 主引擎，和登录用户同一套打分/注入/归档；
+    差别只剩三样：**一律自由模式**、固定学妹、30 轮上限（不能出图/删档）。
     """
     from app import guest
 

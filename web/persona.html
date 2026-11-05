@@ -1407,6 +1407,11 @@ function applyRoleUI() {
   // 游客：隐藏「新建角色」（那是站主才有的事）
   $("btnNew").style.display = guest ? "none" : "";
   $("btnLogin").style.display = guest ? "" : "none";
+  // 游客固定学妹（2026-11-05 用户拍板）：角色抽屉不给，免得点了换人
+  // 只换来一句「体验版只能玩学妹」。
+  const burger = $("btnBurger");
+  if (burger) burger.style.display = guest ? "none" : "";
+  if (guest) closeDrawer();
   // 顶栏「清空存档」已删（2026-11-05）：入口挪进右栏 #affBox。
   // 用完 15 轮就锁输入框
   const done = guest && GUEST_LEFT <= 0;
