@@ -205,6 +205,31 @@ class SettleTest(AffBase):
         res = affection.settle(key, {"delta": 10, "turn_type": "chat"})
         self.assertFalse(res["active"])
 
+    def test_game_day_change_does_not_reset_arousal(self):
+        """2026-11-06 用户报的 bug：现实零点/游戏天变化都不能把冲动清零。"""
+        key = self._raid()
+        affection.settle(key, {"delta": 0, "arousal": 60}, game_day=1)
+        res = affection.settle(key, {"delta": 0}, game_day=2)
+        self.assertEqual(res["arousal"], 60)
+
+    def test_corrupt_floor_keeps_arousal_above_45(self):
+        """堕落 ≥ 50 后，AI 给再大的负增量，冲动也不低于 45。"""
+        key = self._raid()
+        affection.settle(key, {"delta": 0, "corrupt": 60, "arousal": 80},
+                         game_day=1)
+        res = affection.settle(key, {"delta": 0, "arousal": -60}, game_day=1)
+        self.assertGreaterEqual(res["arousal"], 45)
+
+    def test_streak_tracks_game_day(self):
+        key = self._raid()
+        affection.settle(key, {"delta": 0}, game_day=1)
+        affection.settle(key, {"delta": 0}, game_day=2)
+        _ent, rec = affection._ensure(key)                  # noqa: SLF001
+        self.assertEqual(rec["streak"], 2)
+        affection.settle(key, {"delta": 0}, game_day=5)     # 跳了 3 天
+        _ent, rec = affection._ensure(key)                  # noqa: SLF001
+        self.assertEqual(rec["streak"], 1)
+
     def test_result_always_carries_mode(self):
         """回包必须带 mode——网页端拿它渲染开关，缺了会自己跳成自由模式。
 
@@ -880,22 +905,19 @@ class LevelTest(AffBase):
         r = affection.settle(key, {"delta": -12, "turn_type": "action"})
         self.assertEqual(r["level"], 1)      # 好感掉回去，距离不退回
 
-    def test_arousal_accumulates_and_decays(self):
-        """2026-11-05 改：有人在拱气氛的那一轮**不回落**。
+    def test_arousal_accumulates_without_hard_decay(self):
+        """2026-11-06 定稿：冲动只按 AI 增量走，不再固定 -15。
 
-        旧规则是「每轮无条件 -15」。打分模型给的常态增量只有 +10~+15
-        （情话 +10、独处 +15），净值恒为负 → 夹在 0 上永远不动，
-        网页右栏那条冲动条看起来是死的（用户实测反馈）。
-        现在只有「这一轮没在拱」（arose <= 0）才回落：有人推就攒得住，
-        没人管会凉——「得重新拱气氛」的本意不变。
+        她想要多少由这一轮剧情判；没有负增量就保持，不会因为聊了两句
+        或日期切换就自己掉下去。堕落 ≥ 50 时另有 45 的下限。
         """
         key = self._raid_card()
         r1 = affection.settle(key, {"delta": 1, "turn_type": "action", "arousal": 40})
-        self.assertEqual(r1["arousal"], 40)          # 0 + 40（有增量就不扣）
+        self.assertEqual(r1["arousal"], 40)
         r2 = affection.settle(key, {"delta": 1, "turn_type": "action", "arousal": 40})
         self.assertEqual(r2["arousal"], 80)
         r3 = affection.settle(key, {"delta": 1, "turn_type": "action"})
-        self.assertEqual(r3["arousal"], 65)          # 什么都不做就往下掉 15
+        self.assertEqual(r3["arousal"], 80)          # 没有负增量就不回落
 
     def test_arousal_floors_at_zero(self):
         key = self._raid_card()
@@ -1673,7 +1695,7 @@ class MigrationTest(AffBase):
     def _legacy(self, value=0, tier="normal", ending=""):
         """造一份 11-04 之前的记录：只有单轴字段，没有 level/arousal/ach。"""
         return {"mode": "raid", "value": value, "tier": tier, "down": 0,
-                "ending": ending, "day": affection._today(),
+                "ending": ending, "day": "1",
                 "chat": 0, "acts": 0,
                 "hist": [{"d": 3, "r": "陪她", "ts": "11-03 20:00"}]}
 
@@ -1917,6 +1939,81 @@ class RollbackTest(AffBase):
         key = self._raid()
         affection.set_mode(key, False)
         self.assertIsNone(affection.rollback_last(key))
+
+
+class DynamicRulesTest(unittest.TestCase):
+    """动态数值 → 临时行为规则（2026-11-06 用户要求）。
+
+    冲动/高潮是这一轮的气氛，不是长期人设。档位到了就要给导演/演员一段
+    「她这一拍会怎么动、脸上什么样」的临时规则，而不是只丢一个数字。
+    """
+
+    def _res(self, arousal=0, excite=0, in_scene=False, **kw):
+        res = {"active": True, "arousal": arousal, "excite": excite,
+               "in_scene": in_scene}
+        res.update(kw)
+        return res
+
+    def test_burning_is_proactive_and_handles_public_place(self):
+        blk = affection.dynamic_block(self._res(arousal=95))
+        self.assertIn("忍不住", blk)
+        self.assertIn("主动", blk)
+        self.assertIn("在外面", blk)
+        self.assertIn("不会当众做到最后", blk)
+
+    def test_warm_is_softer_and_waits(self):
+        blk = affection.dynamic_block(self._res(arousal=50))
+        self.assertIn("往你这边靠", blk)
+        self.assertIn("等你的信号", blk)
+        self.assertNotIn("把你带走", blk)
+
+    def test_calm_outside_scene_has_no_dynamic_block(self):
+        self.assertEqual(affection.dynamic_block(
+            self._res(arousal=5)), "")
+
+    def test_orgasm_tier_only_in_scene(self):
+        blk = affection.dynamic_block(self._res(arousal=50, excite=82,
+                                                in_scene=True))
+        self.assertIn("临界", blk)
+        # 不在场景里（excite 0）不硬塞「身体还没跟上」
+        no_scene = affection.dynamic_block(self._res(arousal=50))
+        self.assertNotIn("身体还没跟上", no_scene)
+
+    def test_combo_burning_edge(self):
+        blk = affection.dynamic_block(self._res(arousal=95, excite=82,
+                                                in_scene=True))
+        self.assertIn("两条一起", blk)
+        self.assertIn("压着声音", blk)
+
+    def test_dynamic_brief_names_both_tiers(self):
+        brief = affection.dynamic_brief(self._res(arousal=80, excite=60,
+                                                  in_scene=True))
+        self.assertIn("很想", brief)
+        self.assertIn("上来了", brief)
+
+    def test_free_mode_returns_empty(self):
+        self.assertEqual(affection.dynamic_block({"active": False}), "")
+
+    def test_count_rule_after_multiple_orgasms(self):
+        """第 N 次之后不是重来一遍：次数越多越累、越敏感。"""
+        blk = affection.dynamic_block(
+            self._res(arousal=50, excite=60, in_scene=True, orgasms=4))
+        self.assertIn("第 4 次", blk)
+        self.assertIn("过载", blk)
+
+    def test_submit_rule_is_injected(self):
+        """屈服是常驻轴，演员层以前只有数字没有规则。"""
+        blk = affection.dynamic_block(self._res(submit=70))
+        self.assertIn("服不服", blk)
+        self.assertIn("听话", blk)
+
+    def test_low_submit_is_silent(self):
+        self.assertEqual(affection.dynamic_block(self._res(submit=10)), "")
+
+    def test_brief_carries_orgasm_count(self):
+        brief = affection.dynamic_brief(
+            self._res(arousal=50, excite=60, in_scene=True, orgasms=3))
+        self.assertIn("第 3 次", brief)
 
 
 if __name__ == "__main__":

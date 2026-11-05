@@ -136,6 +136,30 @@ class DistillTest(RagBase):
         self.assertEqual(entries[0]["id"], "1-2-0")
         self.assertIn("用户：", entries[0]["content"])
 
+    def test_parse_batch_summary_uses_day_and_name(self):
+        raw = ('{"skip": false, "summary": "旅馆里，用户把帽子摘了，'
+               '伊蕾娜嘴上说别乱放，手却自己整理好。",'
+               ' "entries": [{"about": "character",'
+               ' "content": "伊蕾娜：嘴上嫌他乱，还是把帽子收好了"}]}')
+        entries = rank.parse_memory_json(raw, 21, 25, day=2, phase="中午",
+                                        card_name="伊蕾娜")
+        self.assertEqual(entries[0]["metadata"]["kind"], "batch")
+        self.assertEqual(entries[0]["metadata"]["day"], 2)
+        self.assertIn("【第2天 · 中午】", entries[0]["content"])
+        self.assertEqual(entries[1]["metadata"]["kind"], "fact")
+        self.assertTrue(entries[1]["content"].startswith("伊蕾娜："))
+
+    def test_remember_flushes_batch_when_day_changes(self):
+        with mock.patch.object(rank, "_ensure_worker"):
+            rank.remember("web_10001__rem", "早", "答", day=1)
+            rank.remember("web_10001__rem", "再", "答", day=1)
+            kind, _line, payload = rank._QUEUE.get_nowait()
+            self.assertEqual(kind, "distill")
+            self.assertEqual([t["day"] for t in payload["turns"]], [1, 1])
+            rank.remember("web_10001__rem", "第二天", "答", day=2)
+            rec = rank.pending_for("web_10001__rem")
+            self.assertEqual([t["day"] for t in rec["items"]], [2])
+
     def test_parse_skips_garbage_and_empty(self):
         self.assertEqual(rank.parse_memory_json("不是 JSON", 1, 2), [])
         self.assertEqual(
@@ -231,9 +255,31 @@ class ForgetTest(RagBase):
             rank.forget_last("web_10001__rem")
         kind, _line, payload = rank._QUEUE.get_nowait()
         self.assertEqual(kind, "forget")
-        self.assertEqual(payload, {"start": 1, "end": 2})
+        self.assertEqual(payload["start"], 1)
+        self.assertEqual(payload["end"], 2)
+        self.assertIn("batch-1-2-0", payload["batch_ids"])
         rank._process(kind, _line, payload)
-        self.assertEqual(len(self.client.deleted_entries), 4)
+        # 新批次 id + 旧版 batch-start-end + 4 条事实
+        self.assertEqual(len(self.client.deleted_entries), 6)
+        # 回退最后一轮后，前一轮放回 pending，下一轮会重新凑批
+        rec = rank.pending_for("web_10001__rem")
+        self.assertEqual([t["turn"] for t in rec["items"]], [1])
+        self.assertEqual(rec["epoch"], 1)
+
+    def test_rollback_cancels_in_flight_distill(self):
+        line = "web_10001__rem"
+        with mock.patch.object(rank, "_ensure_worker"):
+            rank.remember(line, "一", "答一", None)
+            rank.remember(line, "二", "答二", None)
+            rank._QUEUE.get_nowait()          # 扔掉 distill，模拟还在后台
+            rank.forget_last(line)            # epoch +1
+            rank._QUEUE.get_nowait()          # 扔掉 forget
+        with mock.patch.object(rank, "distill", return_value=[]) as d:
+            rank._process("distill", line, {
+                "turns": [{"turn": 1}, {"turn": 2}],
+                "epoch": 0, "batch_id": "batch-1-2-0"})
+        self.assertEqual(self.client.ingested, [])
+        self.assertFalse(d.called)
 
 
 class GuestSkipTest(RagBase):

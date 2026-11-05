@@ -180,6 +180,40 @@
   .btn.pri:hover:not(:disabled) { background: var(--accent); color: #000; }
   .btn.sm { padding: 5px 11px; font-size: 12px; }
 
+  /* ─── 精确输入（2026-11-06）───
+     主输入框兜底；上面这条彩色按钮栏一直可见，展开后桌面三栏并排、
+     手机点哪个按钮就显示哪一栏。三栏是独立的 textarea，切换不丢内容。 */
+  #inp { border-left: 3px solid #6ea8fe; }
+  .precise { flex: none; padding: 7px 14px 0; }
+  .preciseTabs { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .ptab, .ptgl { background: transparent; border: 1px solid var(--border);
+    border-radius: 999px; padding: 5px 11px; font: inherit; font-size: 12px;
+    cursor: pointer; color: var(--text-dim); }
+  .ptab.on { background: var(--bg-input); border-color: currentColor; }
+  .ptab[data-f="thought"] { color: #b48aff; }
+  .ptab[data-f="action"] { color: #5fd6a0; }
+  .ptab[data-f="plot"] { color: #ffb86b; }
+  .ptgl { margin-left: auto; color: var(--text-mute); }
+  .preciseBody { display: none; gap: 6px; padding: 7px 0 2px; }
+  .preciseBody.open { display: flex; flex-direction: column; }
+  .pfield { display: none; }
+  .pfield.on { display: block; }
+  .pfield label { display: flex; gap: 6px; align-items: baseline;
+    font-size: 11px; color: var(--text-mute); margin-bottom: 3px; }
+  .pfield label span { font-size: 10px; opacity: .72; }
+  .pfield textarea { width: 100%; box-sizing: border-box; background: var(--bg-input);
+    color: var(--text); border: 1px solid var(--border); border-radius: var(--rs);
+    padding: 7px 9px; font: inherit; font-size: 13px; line-height: 1.45;
+    resize: vertical; min-height: 38px; outline: none; }
+  .f-thought textarea { border-left: 3px solid #b48aff; }
+  .f-action textarea { border-left: 3px solid #5fd6a0; }
+  .f-plot textarea { border-left: 3px solid #ffb86b; }
+  .pfield textarea:focus { border-color: currentColor; }
+  @media (min-width: 1001px) {
+    .preciseBody.open { flex-direction: row; }
+    .pfield { display: block; flex: 1; min-width: 0; }
+  }
+
   /* ─── 右：状态 ─── */
   /* grid 项默认 min-height:auto，内容一多就把 .app 撑破——面板七行起，
      必须给 0 才轮得到 overflow-y:auto 生效（2026-11-04 深夜）。 */
@@ -636,6 +670,37 @@
     <div class="log" id="log">
       <div class="empty">左边点一个角色开始<br>或者直接用输入框说话</div>
     </div>
+    <!-- 精确输入（2026-11-06）：主输入框依旧是兜底；这三栏填了就以它为准。
+         桌面展开后三栏并排；手机点上面的彩色按钮切换，各栏内容互不影响。 -->
+    <div class="precise" id="preciseBox">
+      <div class="preciseTabs">
+        <button class="ptab on" data-f="thought"
+                onclick="pickPField('thought')">心理活动</button>
+        <button class="ptab" data-f="action"
+                onclick="pickPField('action')">具体动作</button>
+        <button class="ptab" data-f="plot"
+                onclick="pickPField('plot')">剧情推进</button>
+        <button class="ptgl" id="btnPrecise"
+                onclick="togglePrecise()">精确输入 ▾</button>
+      </div>
+      <div class="preciseBody" id="preciseBody">
+        <div class="pfield f-thought on" data-f="thought">
+          <label>心理活动 <span>她看不见，只有编剧知道</span></label>
+          <textarea id="fThought" rows="2"
+                    placeholder="你心里想的，不会让她知道…"></textarea>
+        </div>
+        <div class="pfield f-action" data-f="action">
+          <label>具体动作 <span>她看得见</span></label>
+          <textarea id="fAction" rows="2"
+                    placeholder="你做了什么，比如：把果子接过来咬了一口"></textarea>
+        </div>
+        <div class="pfield f-plot" data-f="plot">
+          <label>剧情推进 <span>给这一拍的方向，不是她已知的事</span></label>
+          <textarea id="fPlot" rows="2"
+                    placeholder="你希望接下来往哪走，比如：让她主动一点"></textarea>
+        </div>
+      </div>
+    </div>
     <div class="composer">
       <textarea id="inp" rows="1" placeholder="说点什么…"></textarea>
       <button class="btn" id="btnSkip" title="跳过几天，由她先开口">🌙 跳过</button>
@@ -905,6 +970,9 @@ let CUR_DAY = 0, CUR_PHASE = "";
 let LAST_FINISH = "";
 // 时间弹窗里暂存的选择：先选时段或天数，点「跳」才执行。
 let JUMP_SEL = { phase: "", days: 0 };
+// 刚退过一级（2026-11-06）：退完必须先聊出新的一轮才能再退，防止连退把
+// 历史拆光。后端 session 带 `rolled_back`，新回复到达后这边同步解开。
+let ROLLED_BACK = false;
 // 开场导读（2026-11-04）：新线第一屏的灰色背景说明，由后端生成一次后缓存。
 let INTRO = "";
 // 用户气泡的临时序号（它们不挂图，不需要归档行号，只要 DOM id 唯一）。
@@ -1022,7 +1090,7 @@ function pickSpot(btn) {
 
 // 让输入框临时不可用（生成期间）。主播 AI 出字的时候不该还能发消息。
 function lockInput(on) {
-  ["inp", "btnSend"].forEach(id => {
+  ["inp", "btnSend", "fThought", "fAction", "fPlot"].forEach(id => {
     const el = $(id);
     if (el) el.disabled = !!on;
   });
@@ -1039,7 +1107,11 @@ function pushAssistant(d) {
   renderState({ mood: d.mood, intensity: d.intensity, state: d.state,
                 note: $("sNote").textContent, day: d.day,
                 phase: d.phase, finish: "", preg: d.preg,
-                turns: (+$("sTurns").textContent || 0) + 1 });
+                turns: (typeof d.turns === "number")
+                  ? d.turns : ((+$("sTurns").textContent || 0) + 1) });
+  // 高潮后三段 / 第二天早晨可能刚跨天收场（冲动、高潮值、场景都变了），
+  // 后端把最新的 affection 一起带回来，这里直接刷右栏，别等玩家手动刷新。
+  if (d.affection) { AFF = d.affection; renderAff(AFF); }
   scrollBottom();
   return row;
 }
@@ -1236,6 +1308,7 @@ function makeRow(m, id) {
     bRb.textContent = "⏪ 回退";
     bRb.title = "撤掉这一轮（她的回复和你上一句话），好感退回这轮之前";
     bRb.onclick = () => rollbackLast();
+    if (ROLLED_BACK) bRb.style.display = "none";
     tools.appendChild(bRb);
 
     wrap.appendChild(tools);
@@ -1830,7 +1903,9 @@ function renderState(s) {
   $("sBar").style.width = Math.min(100, (s.intensity || 0) * 10) + "%";
   $("sState").textContent = s.state || "—";
   $("sNote").textContent = s.note || "—";
-  $("sTurns").textContent = s.turns || 0;
+  // 轮次（2026-11-06）：后端给的是**累计交流轮数**；局部刷新不带这个字段时
+  // 保持原值，别把已显示的轮次抹回 0。
+  if (s.turns !== undefined) $("sTurns").textContent = s.turns;
   // 游戏内天数 / 时段（2026-11-04 / 2026-11-05）：只在回包带了时才刷新，
   // 别处传来的局部状态不带它，不能把已显示的天数抹掉。
   if (s.day) CUR_DAY = s.day;
@@ -1960,6 +2035,7 @@ async function loadSession() {
     renderCardBox(card);
     renderQuota();
     INTRO = d.intro || "";     // 后端缓存的开场导读（清空存档后会变空）
+    ROLLED_BACK = !!d.rolled_back;
     renderAll(d.messages || []);
     MORE_HIST = !!d.more;      // 归档里还有更早的，往上滚就翻
     renderState(d);
@@ -2144,34 +2220,91 @@ function applyRoleUI() {
   // 顶栏「清空存档」已删（2026-11-05）：入口挪进右栏 #affBox。
   // 用完 15 轮就锁输入框
   const done = guest && GUEST_LEFT <= 0;
-  $("inp").disabled = done;
-  $("btnSend").disabled = done;
+  ["inp", "btnSend", "fThought", "fAction", "fPlot"].forEach(id => {
+    const el = $(id);
+    if (el) el.disabled = done;
+  });
   $("inp").placeholder = done
     ? "体验版玩完啦，点右上角登录继续"
     : "说点什么…";
 }
 
+// ── 精确输入（2026-11-06）────────────────────────────
+// 主输入框是兜底；这三栏填了就以它为准。三栏是独立 textarea，切换不丢内容。
+let P_FIELD = "thought";
+const P_IDS = {thought: "fThought", action: "fAction", plot: "fPlot"};
+
+function collectFields() {
+  return {
+    thought: ($("fThought").value || "").trim(),
+    action: ($("fAction").value || "").trim(),
+    plot: ($("fPlot").value || "").trim(),
+  };
+}
+
+function clearFields() {
+  Object.values(P_IDS).forEach(id => { if ($(id)) $(id).value = ""; });
+}
+
+function composeDisplay(f, text) {
+  const parts = [];
+  if (f.thought) parts.push("（心里：" + f.thought + "）");
+  if (f.action) parts.push("（" + f.action + "）");
+  if (f.plot) parts.push("【剧情推进】" + f.plot);
+  if (text) parts.push(text);
+  return parts.join("\n") || text;
+}
+
+function togglePrecise() {
+  const body = $("preciseBody");
+  const open = body.classList.toggle("open");
+  $("btnPrecise").textContent = open ? "收起 ▴" : "精确输入 ▾";
+  if (open) pickPField(P_FIELD);
+}
+
+function pickPField(f) {
+  if (!P_IDS[f]) return;
+  P_FIELD = f;
+  const body = $("preciseBody");
+  if (!body.classList.contains("open")) {
+    body.classList.add("open");
+    $("btnPrecise").textContent = "收起 ▴";
+  }
+  document.querySelectorAll(".ptab").forEach(b =>
+    b.classList.toggle("on", b.dataset.f === f));
+  document.querySelectorAll(".pfield").forEach(el =>
+    el.classList.toggle("on", el.dataset.f === f));
+  const ta = $(P_IDS[f]);
+  if (ta) ta.focus();
+}
+
 // ── 发消息 ────────────────────────────────────────────
 async function send() {
+  if (busy) return;
+  if (!card) { toast("先选一个角色", true); return; }
   const inp = $("inp");
   const text = inp.value.trim();
-  if (!text || busy) return;
-  if (!card) { toast("先选一个角色", true); return; }
-  busy = true; inp.value = ""; inp.style.height = "auto";
+  const fields = collectFields();
+  const hasFields = Object.keys(fields).some(k => fields[k]);
+  if (!text && !hasFields) return;
+  busy = true;
+  inp.value = ""; inp.style.height = "auto";
+  const display = composeDisplay(fields, text);
+  clearFields();
 
   const log = $("log");
   const e = log.querySelector(".empty");
   if (e) e.remove();
 
   const idxU = msgs.length;
-  msgs.push({ role: "user", text, n: null });
+  msgs.push({ role: "user", text: display, n: null });
   log.appendChild(makeRow(msgs[idxU], "u" + (++U_SEQ)));
-  await deliver(text, false);
+  await deliver(display, false, { text, fields });
 }
 
 // deliver：真正发一轮。send 和「重新发送」共用——重发不重复 push 用户
 // 消息（它失败时**留在画面和 msgs 里**；服务端没记成功这一轮，重发不重账）。
-async function deliver(text, isRetry) {
+async function deliver(text, isRetry, payload) {
   busy = true;
   const log = $("log");
   const pending = makeRow({ role: "assistant", text: "…" }, "p" + Date.now());
@@ -2179,13 +2312,17 @@ async function deliver(text, isRetry) {
   log.scrollTop = log.scrollHeight;
 
   try {
-    // 自定义模型（2026-11-05）：存了配置就随每轮带给后端临时用一次；
-    // 没带 = 老行为，走默认模型。
-    const d = await post("/api/persona/chat",
-                         CM ? { text, custom: CM } : { text });
+    // 精确输入（2026-11-06）：payload 保留原始主输入和分栏，重发时原样再发。
+    const p = payload || { text };
+    const body = { text: p.text || "" };
+    const f = p.fields || {};
+    if (Object.keys(f).some(k => f[k])) body.fields = f;
+    if (CM) body.custom = CM;
+    const d = await post("/api/persona/chat", body);
     // 这一轮在归档里的行号（后端回包带的）。用它当气泡 id，图才挂得对位置——
     // 用数组下标的话，历史一压缩就整体前移，图会跑到最新那条下面。
     const nA = (d.n && typeof d.n.assistant === "number") ? d.n.assistant : null;
+    ROLLED_BACK = false;              // 新的一轮已落地，回退解锁
     msgs.push({ role: "assistant", text: d.reply, aff: d.affection || null, n: nA });
     pending.remove();
     const row = makeRow(msgs[msgs.length - 1],
@@ -2195,7 +2332,8 @@ async function deliver(text, isRetry) {
     renderState({ mood: d.mood, intensity: d.intensity, state: d.state,
                   note: $("sNote").textContent, day: d.day,
                   phase: d.phase, finish: d.finish, preg: d.preg,
-                  turns: (+$("sTurns").textContent || 0) + 1 });
+                  turns: (typeof d.turns === "number")
+                    ? d.turns : ((+$("sTurns").textContent || 0) + 1) });
     if (d.affection) {
       AFF = d.affection;
       renderAff(AFF);
@@ -2238,7 +2376,7 @@ async function deliver(text, isRetry) {
       btn.onclick = async () => {
         if (busy) return;
         retry.remove();
-        await deliver(text, true);
+        await deliver(text, true, payload);
       };
       retry.appendChild(why);
       retry.appendChild(btn);
@@ -2331,6 +2469,7 @@ async function skipDay(days) {
     if (CM) body.custom = CM;
     const d = await post("/api/persona/skip_day", body);
     const nA = (d.n && typeof d.n.assistant === "number") ? d.n.assistant : null;
+    ROLLED_BACK = false;              // 新的一轮已落地，回退解锁
     msgs.push({ role: "assistant", text: d.reply, aff: d.affection || null, n: nA });
     pending.remove();
     log.appendChild(makeRow(msgs[msgs.length - 1],
@@ -2338,7 +2477,8 @@ async function skipDay(days) {
     markLastAff();
     renderState({ mood: d.mood, intensity: d.intensity, state: d.state,
                   note: $("sNote").textContent, day: d.day,
-                  phase: d.phase, finish: "", preg: d.preg });
+                  phase: d.phase, finish: "", preg: d.preg,
+                  turns: d.turns });
     if (d.affection) { AFF = d.affection; renderAff(AFF); }
     if (ROLE === "guest" && d.remaining !== undefined) {
       GUEST_LEFT = d.remaining; renderQuota(); applyRoleUI();
@@ -2369,6 +2509,7 @@ async function setPhase(phase) {
     if (CM) body.custom = CM;
     const d = await post("/api/persona/set_phase", body);
     const nA = (d.n && typeof d.n.assistant === "number") ? d.n.assistant : null;
+    ROLLED_BACK = false;              // 新的一轮已落地，回退解锁
     msgs.push({ role: "assistant", text: d.reply, aff: d.affection || null, n: nA });
     pending.remove();
     log.appendChild(makeRow(msgs[msgs.length - 1],
@@ -2376,7 +2517,7 @@ async function setPhase(phase) {
     markLastAff();
     renderState({ mood: d.mood, intensity: d.intensity, state: d.state,
                   note: $("sNote").textContent, day: d.day, phase: d.phase,
-                  preg: d.preg, finish: d.finish || "" });
+                  preg: d.preg, finish: d.finish || "", turns: d.turns });
     if (d.affection) { AFF = d.affection; renderAff(AFF); }
     if (ROLE === "guest" && d.remaining !== undefined) {
       GUEST_LEFT = d.remaining; renderQuota(); applyRoleUI();

@@ -45,6 +45,7 @@ import threading
 import time
 
 from app.config import (
+    PERSONA_MODEL, PERSONA_PROVIDER,
     PERSONA_RAG, PERSONA_RAG_DATA_DIR, PERSONA_RAG_INGEST_EVERY,
     PERSONA_RAG_K, PERSONA_RAG_MAX_DISTANCE, PERSONA_RAG_MODEL,
     PERSONA_RAG_TIMEOUT, state_path,
@@ -58,6 +59,8 @@ _TESTING = "unittest" in sys.modules
 
 _COLL_PREFIX = "persona_"
 _SOURCE = "batch_summary_v3"
+# 「昨天/上次/之前」这类问法：检索时放宽阈值、多取几条（2026-11-05）。
+_TIME_QUERY = re.compile(r"昨天|昨日|昨晚|昨夜|前一天|前天|上次|之前")
 _LOCK = threading.Lock()
 _BLOCKED = set()          # 正在删库的线：删完之前不准检索，避免旧回忆漏出来
 _QUEUE = queue.Queue()
@@ -66,38 +69,39 @@ _CLIENT = None
 _FAIL_UNTIL = 0.0
 _WARMED = False
 
-# 提炼器提示词。原则和参考项目一致：先钉死「谁说的」，再只记长期有用的事实。
-_MEMORY_PROMPT = """你是角色扮演对话的记忆提炼器。把这一批对话提炼成「以后能直接拿来用的事实」，**不要保留原对话**。
+# 提炼器提示词（2026-11-06 改为「批次叙事 + 原子事实」两层）。
+# 之前的版本只让模型抽 4 条碎事实，一批 5 轮最多约 480 字，既没有整体经过、
+# 也没有角色名和天数；用户问「昨天太招摇」时手里只有零散条目。
+_MEMORY_PROMPT = """你是角色扮演对话的记忆提炼器。把这一批对话整理成两层：
+1) 一段「批次叙事」——以后问「昨天/上次」时能直接拿来回答「那时发生了什么」；
+2) 最多 4 条「原子事实」——偏好、承诺、关系变化、重要物品/地点、未解决线头。
 
 【对话（第 {start}–{end} 次回复）】
 {dialogue}
 
-【最重要：发言归属】
-1. 「用户：」开头的话只能记成用户事实；「角色：」开头的话只能记成角色事实。
-2. 角色的提问、猜测、想象、提议、自我介绍，一律不算用户观点。
-3. 禁止把角色说过的喜好/经历写成「用户喜欢……」「用户会……」。
-4. 只有用户亲口说出的偏好、经历、承诺、关系信息，才能写 about="user"。
-5. 角色亲口说出的设定、喜好、承诺，写 about="character"。
-6. 只有双方都明确同意的计划，才写 about="shared"。
+【批次叙事怎么写】
+- 200–300 字，按时间顺序写清：地点/场合 → 用户做了什么、说了什么 →
+  {name}怎么反应、身体/情绪怎么变 → 这一批结束时停在哪。
+- 用「用户」「{name}」称呼，不要写「角色」。
+- 不要写「画面/心情/状态」这些格式元数据；不要复述原对话，不要评价文笔。
+- 不要写「第 N 天」——调用方会加。
 
-【只记这些】
-- 偏好/厌恶、亲历事件、承诺与约定、关系变化、重要物品/地点、明确未解决的线头。
+【原子事实怎么写】
+- 只有用户亲口说出的偏好/经历/承诺/关系信息，才能写 about="user"。
+- {name}亲口说出的设定、喜好、承诺，写 about="character"。
+- 只有双方都明确同意的计划，才写 about="shared"。
+- 每条 content ≤120 字，必须以「用户：」「{name}：」「双方：」开头。
+- 不要记寒暄、重复日常、临场玩笑、出图 tags、穿着和镜头。
+- 确实没有值得记的原子事实 → entries=[]，但 summary 仍要写。
 
-【不要记】
-- 寒暄、重复、没有推进的日常、临场玩笑。
-- 出图 tags、穿着、镜头、场景描写、格式元数据。
-- 角色单方面编造、双方没有确认的设定，不要当成事实。
-
-【格式】
-- 最多 4 条；每条不超过 120 字；必须以「用户：」「角色：」「双方：」开头。
-- 确实没有值得记的内容 → skip=true、entries=[]。
-- 只输出 JSON：
+【输出 JSON】
 {{
   "skip": false,
+  "summary": "地点…用户…{name}…这一批结束时…",
   "entries": [
     {{"about": "user", "content": "用户：……",
-      "topics": ["主题"], "primaryEmotion": "", "openThreads": ["没说开的事"]}},
-    {{"about": "character", "content": "角色：……",
+      "topics": ["主题"], "primaryEmotion": "", "openThreads": []}},
+    {{"about": "character", "content": "{name}：……",
       "topics": [], "primaryEmotion": "", "openThreads": []}}
   ]
 }}
@@ -202,11 +206,30 @@ def pending_for(line):
         return dict(rec) if isinstance(rec, dict) else {}
 
 
-def remember(line, user_text, reply, custom=None):
+def _epoch(rec):
+    """这条线的回退代次。回退批次时 +1，旧的 distill 结果据此作废。"""
+    try:
+        return max(0, int(rec.get("epoch") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _current_epoch(line):
+    with _PENDING_LOCK:
+        rec = _pending_load().get(str(line or "")) or {}
+    return _epoch(rec if isinstance(rec, dict) else {})
+
+
+def remember(line, user_text, reply, custom=None, day=None, phase="",
+             card_name="角色"):
     """这一轮先攒进缓冲；够一批了才交给提炼器。
 
     只收「用户可见的话 + 她的回复」。用户的「想」由调用方过滤掉，
     这里不做二次判断。
+
+    `day/phase`（2026-11-06）：记下这一轮发生在游戏第几天、什么时段。
+    批次叙事要带「第 N 天 · 晚上」；跨天时强制切批，避免一批横跨两天，
+    检索「昨天」时把前天的事也算进去。
     """
     if not enabled_for(line):
         return
@@ -215,32 +238,61 @@ def remember(line, user_text, reply, custom=None):
     if not line or not reply:
         return
     batch = None
+    try:
+        day_n = int(day or 0) if day is not None else 0
+    except (TypeError, ValueError):
+        day_n = 0
     with _PENDING_LOCK:
         data = _pending_load()
         rec = data.get(line)
         if not isinstance(rec, dict):
-            rec = {"seq": 0, "items": []}
+            rec = {"seq": 0, "items": [], "epoch": 0}
+        epoch = _epoch(rec)
         rec["seq"] = int(rec.get("seq") or 0) + 1
         items = rec.get("items") if isinstance(rec.get("items"), list) else []
+        # 跨天强制切批：这批里已经有别的一天 → 先把它送走，再开新批。
+        if items and day_n:
+            first_day = int(items[0].get("day") or 0)
+            if first_day and first_day != day_n:
+                batch = list(items)
+                items = []
         items.append({"turn": rec["seq"],
                       "user": str(user_text or "").strip(),
-                      "assistant": reply})
+                      "assistant": reply,
+                      "day": day_n,
+                      "phase": str(phase or "")[:12]})
         rec["items"] = items
         if len(items) >= PERSONA_RAG_INGEST_EVERY:
             batch = list(items)
             rec["items"] = []
-            rec["last_batch"] = [int(batch[0].get("turn") or 0),
-                                 int(batch[-1].get("turn") or 0)]
+        if batch:
+            start = int(batch[0].get("turn") or 0)
+            end = int(batch[-1].get("turn") or 0)
+            rec["last_batch"] = [start, end]
+            rec["last_batch_items"] = batch
+            rec["last_batch_epoch"] = epoch
+            rec["last_batch_id"] = "batch-%d-%d-%d" % (start, end, epoch)
         data[line] = rec
         _pending_save(data)
     if batch:
-        _enqueue("distill", line, {"turns": batch, "custom": custom})
+        _enqueue("distill", line, {
+            "turns": batch,
+            "custom": custom,
+            "card_name": str(card_name or "角色"),
+            "epoch": rec.get("last_batch_epoch") if batch else 0,
+            "batch_id": rec.get("last_batch_id") if batch else "",
+        })
 
 
 def forget_last(line):
-    """回退上一轮：撤掉还没提炼的那一轮；已经入过库的删那一条批次。
+    """回退上一轮：只撤销最近这一轮，不碰更早的回合。
 
-    批次的 id 是 `start-end-idx`，所以只要记住最近一批的范围就够了。
+    2026-11-06 重做（用户报「第 5 轮刚入库又回退」）：
+      · pending 里还有未提炼的轮次 → 直接 pop，不动已入库的批次；
+      · 最近一轮正好是第 5 轮、批次已成形/已入库 → epoch +1 作废在途结果，
+        把这一批的前 4 轮放回 pending，并让后台删掉旧批次；
+        下一轮进来会重新凑成 5 轮、用新 epoch 提炼。
+    只支持回退最近一轮；不允许连续回退，避免把整条历史拆碎。
     """
     if not enabled_for(line):
         return
@@ -248,6 +300,7 @@ def forget_last(line):
     if not line:
         return
     batch = None
+    batch_ids = []
     with _PENDING_LOCK:
         data = _pending_load()
         rec = data.get(line)
@@ -260,11 +313,38 @@ def forget_last(line):
                 data[line] = rec
                 _pending_save(data)
                 return
+            stock = rec.get("last_batch_items")
             lb = rec.get("last_batch")
-            if isinstance(lb, list) and len(lb) == 2:
+            if isinstance(stock, list) and stock:
+                old_id = str(rec.get("last_batch_id") or "")
+                stock.pop()
+                rec["epoch"] = _epoch(rec) + 1
+                rec["items"] = stock
+                rec["seq"] = max(0, int(rec.get("seq") or 0) - 1)
+                rec.pop("last_batch", None)
+                rec.pop("last_batch_items", None)
+                rec.pop("last_batch_epoch", None)
+                rec.pop("last_batch_id", None)
+                data[line] = rec
+                _pending_save(data)
+                if isinstance(lb, list) and len(lb) == 2:
+                    batch = (int(lb[0]), int(lb[1]))
+                if old_id:
+                    batch_ids.append(old_id)
+            elif isinstance(lb, list) and len(lb) == 2:
+                # 老存档没有 last_batch_items：退回只删不知重提。
+                # 但 epoch 仍要 +1，否则在途的 distill 会把刚删的批次又灌回去。
+                rec["epoch"] = _epoch(rec) + 1
+                data[line] = rec
+                _pending_save(data)
                 batch = (int(lb[0]), int(lb[1]))
     if batch:
-        _enqueue("forget", line, {"start": batch[0], "end": batch[1]})
+        if not batch_ids:
+            batch_ids.append("batch-%d-%d" % (batch[0], batch[1]))
+        with _LOCK:
+            _BLOCKED.add(line)      # 回退清理完成前，这条线不检索
+        _enqueue("forget", line, {"start": batch[0], "end": batch[1],
+                                  "batch_ids": batch_ids})
 
 
 def drop_line(line):
@@ -286,8 +366,46 @@ def drop_line(line):
     _enqueue("drop", line)
 
 
-def retrieve(line, query, k=None):
-    """按当前用户的话找几条提炼过的事实；daemon 没 ready 就返回空。"""
+def _recent_docs(line, batches=3, limit=12):
+    """按批次取最近几条事实（2026-11-05）。
+
+    为什么需要：用户问「昨天」「上次」时，小模型对代词的语义匹配很差——
+    「昨天太招摇」和「被人看见/丢脸」在 512 维 embedding 里可能差 0.6~0.7，
+    正常阈值直接把它过滤掉，演员就完全想不起来。时间问法额外把最近几批
+    事实**不看距离**带进去，让演员手里至少有昨天发生过什么。
+    """
+    client = _CLIENT
+    if client is None or not client.is_ready() or not hasattr(client, "list_entries"):
+        return []
+    try:
+        r = client.list_entries(collection_name(line), timeout=PERSONA_RAG_TIMEOUT)
+    except Exception:                                    # noqa: BLE001
+        log.exception("回忆批次读取失败 %s", line)
+        return []
+    entries = [e for e in (r.get("entries") or [])
+               if str((e.get("metadata") or {}).get("source") or "") == _SOURCE]
+    groups = {}
+    for e in entries:
+        m = e.get("metadata") or {}
+        try:
+            key = (int(m.get("turn_start") or 0), int(m.get("turn_end") or 0))
+        except (TypeError, ValueError):
+            continue
+        groups.setdefault(key, []).append(e)
+    out = []
+    # 从早到晚排：问「昨天」时，最早那批（昨天发生的事）先进入演员的视野。
+    for key in sorted(groups.keys())[:max(1, int(batches or 1))]:
+        out.extend(groups[key])
+    return out[:limit]
+
+
+def retrieve(line, query, k=None, day=None):
+    """按当前用户的话找几条提炼过的记忆；daemon 没 ready 就返回空。
+
+    2026-11-06：支持按游戏天数过滤。时间问法（昨天/前天/上次）先试
+    `day=当前-1` 的 metadata 过滤，能拿到那一天所有批次叙事和事实；
+    旧数据没有 day 时，回退到原来的时间问法兜底（放宽阈值 + 最近批次）。
+    """
     if not enabled_for(line):
         return []
     line = str(line or "").strip()
@@ -299,10 +417,43 @@ def retrieve(line, query, k=None):
             return []
     client = _CLIENT
     if client is None or not client.is_ready():
+        log.info("[回忆] %s daemon 未就绪，本轮不检索", line)
         return []
+    limit = PERSONA_RAG_MAX_DISTANCE
+    kk = k or PERSONA_RAG_K
+    time_q = bool(_TIME_QUERY.search(query))
+    if time_q:
+        limit = max(limit, 0.65)
+        kk = max(kk, 12)
+    # 先按天过滤（只对时间问法 + 有新数据 day 时）
+    day_q = 0
+    if time_q and day:
+        try:
+            day_q = int(day) - 1
+        except (TypeError, ValueError):
+            day_q = 0
+    if day_q > 0:
+        try:
+            r = client.search(collection_name(line), query,
+                              k=kk, timeout=PERSONA_RAG_TIMEOUT,
+                              allow_start=False,
+                              where={"$and": [{"source": _SOURCE},
+                                              {"day": day_q}]})
+        except Exception:                                # noqa: BLE001
+            log.exception("回忆按天检索失败 %s", line)
+            r = None
+        if r and r.get("ok"):
+            out = [d for d in (r.get("docs") or [])
+                   if str((d.get("metadata") or {}).get("kind") or "") in
+                   ("batch", "fact")]
+            if out:
+                log.info("[回忆] %s 按第 %d 天命中 %d 条（query=%r）",
+                         line, day_q, len(out), query[:40])
+                return out[:12]
+    # 普通路径 / 天数过滤无结果时回退
     try:
         r = client.search(collection_name(line), query,
-                          k=k or PERSONA_RAG_K, timeout=PERSONA_RAG_TIMEOUT,
+                          k=kk, timeout=PERSONA_RAG_TIMEOUT,
                           allow_start=False,
                           where={"source": _SOURCE})
     except Exception:                                    # noqa: BLE001
@@ -316,37 +467,71 @@ def retrieve(line, query, k=None):
             dist = float(d.get("distance", 1.0))
         except (TypeError, ValueError):
             dist = 1.0
-        if dist <= PERSONA_RAG_MAX_DISTANCE:
+        if dist <= limit:
             out.append(d)
-    return out[:k or PERSONA_RAG_K]
+    # 时间问法：把最近几批事实排在最前面（不靠 embedding 距离）。
+    if time_q:
+        recent = _recent_docs(line)
+        seen = {str(d.get("id") or "") for d in recent}
+        merged = recent + [d for d in out
+                           if str(d.get("id") or "") not in seen]
+        out = merged[:12]
+    log.info("[回忆] %s 命中 %d 条（query=%r，阈值=%.2f，时间问法=%s）",
+             line, len(out), query[:40], limit, time_q)
+    return out[:kk]
 
 
-def build_block(line, query, k=None):
-    """拼成能直接塞进系统提示词的一段；没命中返回空串。"""
-    docs = retrieve(line, query, k=k)
+def build_block(line, query, k=None, day=None, context=""):
+    """拼成能直接塞进系统提示词的一段；没命中返回空串。
+
+    2026-11-06：两路检索——当前用户话 + 最近几轮上下文，合并去重后
+    优先取 2 条批次叙事 + 3 条原子事实。问「昨天」这种短句时，
+    上下文那一路能把「昨天在哪、和谁、发生了什么」带出来。
+    """
+    docs = retrieve(line, query, k=k, day=day)
+    if context:
+        extra = retrieve(line, context, k=k, day=day)
+        seen = {str(d.get("id") or "") for d in docs}
+        docs += [d for d in extra
+                 if str(d.get("id") or "") not in seen]
     if not docs:
         return ""
-    who = {"user": "用户事实", "character": "角色言行", "shared": "双方约定"}
-    lines = ["【长期记忆 · 从过去提炼出的事实，不是原对话】"]
+    batches, facts = [], []
     for d in docs:
         meta = d.get("metadata") or {}
-        about = who.get(str(meta.get("about") or ""), "记忆")
+        if str(meta.get("kind") or "") == "batch":
+            batches.append(d)
+        else:
+            facts.append(d)
+    pick = batches[:2] + facts[:3]
+    if not pick:
+        return ""
+    who = {"user": "用户事实", "character": "角色言行", "shared": "双方约定"}
+    lines = ["【长期记忆 · 从过去提炼出的经过与事实，不是原对话】"]
+    for d in pick:
+        meta = d.get("metadata") or {}
+        if str(meta.get("kind") or "") == "batch":
+            head = "[当时的经过]"
+            limit = 320
+        else:
+            about = who.get(str(meta.get("about") or ""), "记忆")
+            head = "[%s]" % about
+            limit = 160
         start = meta.get("turn_start")
         end = meta.get("turn_end")
-        rng = "第 %s–%s 次回复" % (start, end) if start and end else ""
+        rng = "｜第 %s–%s 次回复" % (start, end) if start and end else ""
         topics = meta.get("topics") or ""
-        head = "[%s%s%s]" % (
-            about, "｜" + rng if rng else "", "｜主题：" + topics if topics else "")
+        head = head[:-1] + rng + ("｜主题：" + topics if topics else "") + "]"
         text = " ".join(str(d.get("content") or "").split())
         if not text:
             continue
-        if len(text) > 160:
-            text = text[:160] + "…"
+        if len(text) > limit:
+            text = text[:limit] + "…"
         lines.append(head + "\n" + text)
     if len(lines) == 1:
         return ""
-    lines.append("【用法】用户问起自己/双方/角色的既有事实时，以此为准；"
-                 "最近对话只是提到某个话题，不等于偏好改变——旧事实只能补充，"
+    lines.append("【用法】用户问起自己/双方/角色的既有事实或「昨天/上次发生过什么」时，"
+                 "以此为准；最近对话只是提到某个话题，不等于偏好改变——旧事实只能补充，"
                  "不能被近期闲聊覆盖。")
     return "\n".join(lines)
 
@@ -380,8 +565,29 @@ def _process(kind, line, payload):
     if kind == "distill":
         turns = (payload or {}).get("turns") or []
         custom = (payload or {}).get("custom")
-        entries = distill(turns, custom)
+        card_name = str((payload or {}).get("card_name") or "角色")
+        epoch = int((payload or {}).get("epoch") or 0)
+        batch_id = str((payload or {}).get("batch_id") or "")
+        # 回退可能已经发生：当前 epoch 变了，这批就是作废的，绝不入库。
+        if epoch != _current_epoch(line):
+            log.info("记忆批次已作废，跳过入库 %s（epoch=%d）", line, epoch)
+            return
+        entries = distill(turns, custom, card_name=card_name,
+                          epoch=epoch, batch_id=batch_id)
+        if entries is None:
+            # JSON 截断/写坏：重试一次；再失败才丢弃，并留下 warning。
+            if not (payload or {}).get("_retried"):
+                payload = dict(payload or {})
+                payload["_retried"] = True
+                _enqueue("distill", line, payload)
+            else:
+                log.warning("记忆提炼连续两次失败，丢弃这批 %s", line)
+            return
         if not entries:
+            return
+        # 再检查一次：提炼期间回退也可能已经发生。
+        if epoch != _current_epoch(line):
+            log.info("记忆批次在提炼期间被回退，丢弃 %s（epoch=%d）", line, epoch)
             return
         r = client.ingest(coll, entries)
         if not r.get("ok"):
@@ -398,54 +604,104 @@ def _process(kind, line, payload):
     if kind == "forget":
         start = int((payload or {}).get("start") or 0)
         end = int((payload or {}).get("end") or 0)
+        ids = [str(x) for x in ((payload or {}).get("batch_ids") or []) if x]
         if start and end:
-            for idx in range(4):
-                entry_id = "%d-%d-%d" % (start, end, idx)
+            ids.append("batch-%d-%d" % (start, end))
+            ids += ["%d-%d-%d" % (start, end, idx) for idx in range(4)]
+        try:
+            for entry_id in ids:
                 r = client.delete_entry(coll, entry_id)
                 if not r.get("ok"):
                     log.warning("记忆删除失败 %s/%s：%s", coll, entry_id,
                                 r.get("error"))
+        finally:
+            # 回退清理完成，恢复检索；失败也要放开，不能永久锁死这条线。
+            with _LOCK:
+                _BLOCKED.discard(line)
 
 
-def _format_dialogue(turns):
+def _format_dialogue(turns, name="角色"):
     parts = []
     for it in turns:
         t = it.get("turn")
+        day = it.get("day")
         u = str(it.get("user") or "").strip()
         a = str(it.get("assistant") or "").strip()
+        prefix = ("第%s天 · " % day) if day else ""
         if u:
-            parts.append("----- 第%s次回复 · 用户 -----\n用户：%s" % (t, u))
+            parts.append("----- %s第%s次回复 · 用户 -----\n用户：%s"
+                         % (prefix, t, u))
         if a:
-            parts.append("----- 第%s次回复 · 角色 -----\n角色：%s" % (t, a))
+            parts.append("----- %s第%s次回复 · %s -----\n%s：%s"
+                         % (prefix, t, name, name, a))
     return "\n\n".join(parts)
 
 
-def distill(turns, custom=None):
-    """调 LLM 提炼一批对话，返回可入库的 entries；失败/空批返回 []。"""
+def distill(turns, custom=None, card_name="角色", epoch=0, batch_id=""):
+    """调 LLM 提炼一批对话，返回可入库的 entries；失败返回 None。
+
+    返回里第 0 条是 `kind=batch` 的批次叙事（如果模型给了 summary），
+    后面是 `kind=fact` 的原子事实。
+    """
     turns = [t for t in (turns or []) if isinstance(t, dict)]
     if not turns:
         return []
     start = int(turns[0].get("turn") or 0)
     end = int(turns[-1].get("turn") or 0)
+    day = max([int(t.get("day") or 0) for t in turns] or [0])
+    phase = ""
+    for t in turns:
+        if str(t.get("phase") or "").strip():
+            phase = str(t.get("phase") or "").strip()[:12]
     prompt = _MEMORY_PROMPT.format(start=start, end=end,
-                                   dialogue=_format_dialogue(turns))
+                                   dialogue=_format_dialogue(turns, card_name),
+                                   name=card_name or "角色")
     from app import llm
     if custom:
         llm.set_custom_override(custom)
     try:
+        # 记忆提炼也属于扮演链路：默认跟扮演模型走；玩家临时指定了自定义模型
+        # 时那个优先（`set_custom_override` 后 `get_custom_override` 非空）。
+        kw = {}
+        if not llm.get_custom_override():
+            if PERSONA_PROVIDER:
+                kw["provider"] = PERSONA_PROVIDER
+            if PERSONA_MODEL:
+                kw["model"] = PERSONA_MODEL
         raw = llm.call_llm([{"role": "user", "content": prompt}],
-                           temperature=0.2, max_tokens=1200)
+                           temperature=0.2, max_tokens=1600, **kw)
     except Exception:                                    # noqa: BLE001
         log.exception("记忆提炼调用失败 %s-%s", start, end)
-        return []
+        return None
     finally:
         if custom:
             llm.set_custom_override(None)
-    return parse_memory_json(raw, start, end)
+    parsed = parse_memory_json(raw, start, end, day=day, phase=phase,
+                               card_name=card_name, epoch=epoch,
+                               batch_id=batch_id)
+    if parsed:
+        return parsed
+    # 空结果要区分「确实没什么可记」和「JSON 被截断/写坏」：
+    # 后者必须重试，否则这一批（以及里面「被人看见」这类重要事实）会永久丢。
+    text = str(raw or "")
+    lo = text.find("{")
+    hi = text.rfind("}")
+    if lo < 0 or hi <= lo:
+        return None
+    try:
+        json.loads(text[lo:hi + 1])
+    except ValueError:
+        return None
+    return []
 
 
-def parse_memory_json(raw, start, end):
-    """解析提炼器输出 → Chroma entries。坏 JSON / 空内容一律返回 []。"""
+def parse_memory_json(raw, start, end, day=0, phase="", card_name="角色",
+                      epoch=0, batch_id=""):
+    """解析提炼器输出 → Chroma entries。坏 JSON / 空内容一律返回 []。
+
+    2026-11-06 起支持两层：`summary`（批次叙事，kind=batch）+
+    `entries`（原子事实，kind=fact）。批次叙事带「第 N 天 · 时段」前缀。
+    """
     text = str(raw or "")
     lo = text.find("{")
     hi = text.rfind("}")
@@ -458,18 +714,38 @@ def parse_memory_json(raw, start, end):
         return []
     if not isinstance(data, dict) or data.get("skip"):
         return []
+    out = []
+    summary = " ".join(str(data.get("summary") or "").split())
+    if summary:
+        prefix = "【第%d天%s】" % (int(day or 0),
+                                (" · " + str(phase)) if phase else "")
+        content = prefix + summary[:320]
+        out.append({
+            "id": str(batch_id or ("batch-%d-%d-%d"
+                                  % (start, end, int(epoch or 0)))),
+            "content": content,
+            "metadata": {
+                "kind": "batch",
+                "about": "shared",
+                "day": int(day or 0),
+                "phase": str(phase or "")[:12],
+                "turn_start": start,
+                "turn_end": end,
+                "topics": "",
+                "source": _SOURCE,
+            },
+        })
     raw_entries = data.get("entries")
     if not isinstance(raw_entries, list):
-        return []
-    out = []
+        return out
     for i, e in enumerate(raw_entries[:4]):
         if not isinstance(e, dict):
             continue
         content = str(e.get("content") or "").strip()
         if not content:
             continue
-        about = _norm_about(e.get("about"), content)
-        content = _ensure_prefix(about, content)
+        about = _norm_about(e.get("about"), content, card_name)
+        content = _ensure_prefix(about, content, card_name)
         if len(content) > 160:                    # 提示词说 120，留点余量
             content = content[:160]
         topics = e.get("topics") if isinstance(e.get("topics"), list) else []
@@ -478,7 +754,9 @@ def parse_memory_json(raw, start, end):
             "id": "%d-%d-%d" % (start, end, i),
             "content": content,
             "metadata": {
+                "kind": "fact",
                 "about": about,
+                "day": int(day or 0),
                 "turn_start": start,
                 "turn_end": end,
                 "topics": ",".join(str(x) for x in topics if x)[:120],
@@ -490,11 +768,13 @@ def parse_memory_json(raw, start, end):
     return out
 
 
-def _norm_about(about, content):
+def _norm_about(about, content, card_name="角色"):
     a = str(about or "").strip().lower()
     if a in ("user", "character", "shared"):
         return a
     c = str(content or "")
+    if card_name and re.match(r"^%s[：:]" % re.escape(str(card_name)), c):
+        return "character"
     if re.match(r"^(角色|她)[：:]", c) or c.startswith("【角色】"):
         return "character"
     if re.match(r"^(双方|我们)[：:]", c) or c.startswith("【双方】"):
@@ -502,10 +782,13 @@ def _norm_about(about, content):
     return "user"
 
 
-def _ensure_prefix(about, content):
+def _ensure_prefix(about, content, card_name="角色"):
     text = str(content or "").strip()
     if re.match(r"^(用户|角色|双方)[：:]", text) or \
             re.match(r"^【(用户|角色|双方)】", text):
         return text
-    return {"user": "用户：", "character": "角色：",
+    if about == "character" and card_name and \
+            re.match(r"^%s[：:]" % re.escape(str(card_name)), text):
+        return text
+    return {"user": "用户：", "character": (str(card_name or "角色") + "："),
             "shared": "双方："}.get(about, "用户：") + text

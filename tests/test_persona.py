@@ -829,6 +829,37 @@ class SegmentTest(unittest.TestCase):
     def test_no_segments_falls_back_to_raw(self):
         self.assertEqual(persona.render_user_block([], True, "原文"), "原文")
 
+    def test_current_turn_has_pronoun_reminder(self):
+        block = persona.render_user_block(
+            [{"who": "用户", "type": "说", "text": "我走了。"}],
+            True, "我走了。", remind=True)
+        self.assertIn("她是「她」", block)
+        self.assertIn("不要用「他」指玩家", block)
+        # 历史消息不带提醒
+        old = persona.render_user_block(
+            [{"who": "用户", "type": "说", "text": "我走了。"}],
+            True, "我走了。")
+        self.assertNotIn("不要用「他」指玩家", old)
+
+    def test_no_segments_with_remind_still_has_hint(self):
+        block = persona.render_user_block([], True, "原文", remind=True)
+        self.assertIn("原文", block)
+        self.assertIn("她是「她」", block)
+
+    def test_history_sanitizes_player_he(self):
+        """历史里的「他」会当示范被模型学走；送模型前纠成「你」。"""
+        out = persona._render_hist([
+            {"role": "assistant", "content": "他走过来，其他人没动。"},
+        ])
+        self.assertEqual(out[0]["content"], "你走过来，其他人没动。")
+
+    def test_build_head_sanitizes_legacy_state(self):
+        card = {"name": "x", "systemPrompt": "y"}
+        head = persona.build_head(card, "private_1", "",
+                                  "", "他的手和她的手臂隔得很近")
+        self.assertNotIn("他的手", head)
+        self.assertIn("你的手", head)
+
     def test_not_addressed_is_marked(self):
         block = persona.render_user_block(
             [{"who": "用户", "type": "做", "text": "他走到窗边"}],
@@ -855,6 +886,8 @@ class SegmentTest(unittest.TestCase):
         self.assertIn("按到墙上从后面进入", block)
         self.assertIn("【他这一轮的原话", block)
         self.assertIn("从后面顶进去", block)
+        # 原文里的「我」必须当场说明是玩家本人（2026-11-06）
+        self.assertIn("「我」= 玩家本人", block)
 
     def test_original_is_hidden_when_a_thought_exists(self):
         """有心里话时不能补原文——那会把没说出口的内容带出去。"""
@@ -911,9 +944,9 @@ class LedgerTest(unittest.TestCase):
     """B：Markdown 六节账本（2026-11-05）。"""
 
     LEDGER = (
-        "## 关系\n- 你叫我学妹\n\n"
-        "## 你的事（你说过的 / 你做的）\n- 你做了早餐\n\n"
-        "## 我的事（我说过的 / 我做的）\n- 我答应帮你复习\n\n"
+        "## 关系\n- 你叫她学妹\n\n"
+        "## 你的事（你做过的）\n- 你做了早餐\n\n"
+        "## 她的事（她做过的）\n- 她答应帮你复习\n\n"
         "## 约定与未完成\n- 周末去图书馆\n\n"
         "## 忌讳与偏好\n- 你不喜欢被翻手机\n\n"
         "## 日常与场景\n- 住在学校附近"
@@ -928,6 +961,38 @@ class LedgerTest(unittest.TestCase):
 
     def test_freeform_note_is_rejected(self):
         self.assertFalse(persona._ledger_ok("我们聊了很久，她今天很开心。"))
+
+    def test_third_person_pronoun_is_rejected(self):
+        """账本里出现指代玩家的「他」→ 整份退回去（2026-11-06）。"""
+        bad = self.LEDGER + "\n- 房钱他出，账记他头上"
+        self.assertFalse(persona._ledger_ok(bad))
+        # 「其他 / 他们」不是指代对方，不能误伤
+        ok = self.LEDGER + "\n- 其他人都走了，他们没再来"
+        self.assertTrue(persona._ledger_ok(ok))
+
+    def test_fix_pronouns_only_touches_the_player(self):
+        got = persona._ledger_fix_pronouns("他出钱，其他不变，他们走了，他人没来")
+        self.assertEqual(got, "你出钱，其他不变，他们走了，他人没来")
+
+    def test_fix_pronouns_makes_third_person_and_keeps_quotes(self):
+        """账本统一第三人称：她→她、玩家→你；引号里的原话保留「我」。"""
+        got = persona._ledger_fix_pronouns(
+            "我答应帮他，他说「我等你」，我们没走。")
+        self.assertEqual(got, "她答应帮你，你说「我等你」，我们没走。")
+
+    def test_contract_defines_every_pronoun(self):
+        """契约开头必须写清 你/她/我 各指代谁（2026-11-06 用户要求）。"""
+        for text in ("人称对照", "女主角一律「她」", "玩家一律「你」",
+                     "指她自己", "不许用「他」指代玩家"):
+            self.assertIn(text, persona._CONTRACT)
+
+    def test_build_head_sanitizes_legacy_note(self):
+        """存量脏账本不改数据，注入前也要把「他」纠成「你」。"""
+        card = {"name": "x", "systemPrompt": "y"}
+        head = persona.build_head(card, "private_1", "",
+                                  "- 房钱他出，账记他头上", "")
+        self.assertNotIn("他出", head)
+        self.assertIn("你出", head)
 
     def test_clip_keeps_every_heading(self):
         long = "\n".join(
@@ -2388,6 +2453,40 @@ class RollbackTurnTest(PersonaBase):
         self.assertFalse(res["ok"])
         self.assertIn("没有可回退", res["error"])
 
+    def test_second_rollback_needs_a_new_turn(self):
+        """只允许一级（2026-11-06）：退完一轮必须先出新的一轮，不能连退。"""
+        line = self._line()
+        self._feed(line)
+        res = persona.rollback_last_turn(self.KEY)
+        self.assertTrue(res["ok"])
+        # 窗口尾部还是「她的回复」，但这次必须拦住
+        again = persona.rollback_last_turn(self.KEY)
+        self.assertFalse(again["ok"])
+        self.assertIn("刚回退过一次", again["error"])
+        self.assertEqual([m["content"] for m in persona._load_hist(line)],
+                         ["第1句", "第1答"])
+        # 新的一轮落地后解锁
+        persona._bump_turn(line)
+        third = persona.rollback_last_turn(self.KEY)
+        self.assertTrue(third["ok"])
+
+    def test_rollback_calls_rag_only_for_paired_turn(self):
+        """只有成对轮进过 RAG；她单条开场（n=1）回退时不能去弹更早的一轮。"""
+        line = self._line()
+        self._feed(line)
+        with mock.patch.object(persona_rag, "forget_last") as fg:
+            persona.rollback_last_turn(self.KEY)
+        fg.assert_called_once_with(line)
+
+    def test_rollback_skips_rag_for_her_single_opening(self):
+        line = self._line()
+        persona._save_hist(line, [{"role": "assistant", "content": "早"}])
+        persona._save_archive(line, [{"role": "assistant", "content": "早"}])
+        with mock.patch.object(persona_rag, "forget_last") as fg:
+            res = persona.rollback_last_turn(self.KEY)
+        self.assertTrue(res["ok"])
+        self.assertFalse(fg.called)
+
     def test_archive_tail_mismatch_leaves_archive_alone(self):
         """归档和窗口错位时宁可不删归档，也不能错删（铺底失败的老线）。"""
         line = self._line()
@@ -2410,6 +2509,152 @@ class RollbackTurnTest(PersonaBase):
         self.assertFalse(persona.is_rollback_text("我们回退一下"))
         self.assertFalse(persona.is_rollback_text("回退一下"))
         self.assertFalse(persona.is_rollback_text("明天回退给我看"))
+
+
+class TurnTotalTest(PersonaBase):
+    """网页「轮次」显示（2026-11-06 用户要求）：
+    玩家要看累计交流了多少轮，不是每 5 轮清零的小记压缩节拍。
+    """
+
+    def _line(self, name="纱雾"):
+        persona.save_cards([_card(name)])
+        persona.switch_line("private_1", persona.find_card(name))
+        return persona.resolve_line("private_1")
+
+    def test_accumulates_across_note_reset(self):
+        line = self._line()
+        for _ in range(7):
+            persona._bump_turn(line)
+        st = persona._entry(line)
+        self.assertEqual(st["turns"], 7)
+        self.assertEqual(st["turn_total"], 7)
+        # 模拟 `compress_note` 把节拍清零：累计总量不能跟着归零
+        state = persona._load_state()
+        state[line]["turns"] = 0
+        persona._save_state(state)
+        persona._bump_turn(line)
+        self.assertEqual(persona.turn_total(line), 8)
+
+    def test_legacy_line_seeds_from_archive(self):
+        """老存档没有 turn_total：按归档里她的回复条数补算。"""
+        line = self._line()
+        persona._save_archive(line, [
+            {"role": "assistant", "content": "答%d" % i} for i in range(4)])
+        persona._bump_turn(line)              # 归档已含这一轮
+        self.assertEqual(persona.turn_total(line), 4)
+        persona._bump_turn(line)              # 之后正常 +1
+        self.assertEqual(persona.turn_total(line), 5)
+
+    def test_rollback_decrements_total(self):
+        line = self._line()
+        rows = [{"role": "user", "content": "嗨"},
+                {"role": "assistant", "content": "嗯"}]
+        persona._save_hist(line, rows)
+        persona._save_archive(line, [dict(r) for r in rows])
+        persona._bump_turn(line)
+        self.assertEqual(persona.turn_total(line), 1)
+        res = persona.rollback_last_turn("private_1")
+        self.assertTrue(res["ok"])
+        self.assertEqual(persona.turn_total(line), 0)
+
+
+class ManualInputTest(unittest.TestCase):
+    """精确输入（2026-11-06）：心理活动只给编剧，不进演员层。"""
+
+    def test_thought_is_hidden_from_actor(self):
+        segs = persona._manual_segments({
+            "thought": "其实我想让她先开口",
+            "action": "把果子接过来",
+            "speech": "你吃吧",
+        })
+        block = persona.render_user_block(segs, True, "")
+        self.assertIn("把果子接过来", block)
+        self.assertIn("你吃吧", block)
+        self.assertNotIn("其实我想让她先开口", block)
+        self.assertIn("说出口", block)
+
+    def test_manual_block_keeps_thought_for_director(self):
+        block = persona._manual_block({
+            "thought": "想让她主动", "action": "坐着不动"})
+        self.assertIn("心理活动", block)
+        self.assertIn("想让她主动", block)
+
+    def test_manual_display_keeps_thought_for_player(self):
+        text = persona._manual_display({"thought": "想让她主动"}, "")
+        self.assertIn("（心里：想让她主动）", text)
+
+    def test_visible_text_excludes_thought_and_plot(self):
+        segs = persona._manual_segments({
+            "thought": "秘密", "action": "起身", "speech": "走吧",
+            "plot": "让她主动"})
+        visible = persona._visible_user_text(segs, "主输入")
+        self.assertIn("起身", visible)
+        self.assertIn("走吧", visible)
+        self.assertNotIn("秘密", visible)
+        self.assertNotIn("让她主动", visible)
+
+    def test_secret_hides_hook(self):
+        block = persona._director_block({
+            "literal": "你吃吧", "secret": True,
+            "tension": "她想让他先开口",
+            "hook": "她身体先往你这边靠"})
+        self.assertIn("对方心里有话没说出口", block)
+        self.assertNotIn("她身体先往你这边靠", block)
+        self.assertNotIn("她想让他先开口", block)
+
+
+class ManualRunTurnTest(PersonaBase):
+    """精确输入的整轮链路（2026-11-06）：心理活动只进编剧，不进演员。"""
+
+    def setUp(self):
+        super().setUp()
+        persona.save_cards([_card("纱雾")])
+        persona.switch_line("private_1", persona.find_card("纱雾"))
+        self.line = persona.resolve_line("private_1")
+
+    def test_manual_fields_keep_thought_from_actor(self):
+        seen = []
+
+        def fake(msgs, **kw):
+            seen.append(msgs)
+            return "（她看了你一眼。）\n画面：1girl\n心情：平静 强度2\n状态：桌边"
+
+        with mock.patch.object(persona, "_judge_intent_scored",
+                               return_value=("neutral", "", {"segments": []})), \
+                mock.patch.object(persona, "_llm_call", side_effect=fake):
+            turn = persona.run_turn(
+                self.line, "", "private", "",
+                manual={"thought": "想让她主动", "action": "拿起杯子"})
+        self.assertTrue(turn.reply)
+        actor = "\n".join(m["content"] for m in seen[-1])
+        self.assertIn("拿起杯子", actor)
+        self.assertNotIn("想让她主动", actor)
+        self.assertIn("说出口", actor)
+
+
+class PersonaModelTest(unittest.TestCase):
+    """扮演专用默认模型（2026-11-06）：默认走 PERSONA_*，玩家 override 优先。"""
+
+    def test_uses_persona_default_when_no_custom(self):
+        with mock.patch.object(persona.llm, "get_custom_override",
+                               return_value=None), \
+                mock.patch.object(persona.llm, "call_llm",
+                                  return_value="x") as call:
+            persona._llm_call([{"role": "user", "content": "hi"}], timeout=10)
+        kw = call.call_args.kwargs
+        self.assertEqual(kw.get("provider"), persona.PERSONA_PROVIDER)
+        self.assertEqual(kw.get("model"), persona.PERSONA_MODEL)
+        self.assertEqual(kw.get("timeout"), 10)
+
+    def test_player_custom_override_wins(self):
+        cfg = {"base_url": "http://x", "model": "m", "api_key": "k"}
+        with mock.patch.object(persona.llm, "get_custom_override",
+                               return_value=cfg), \
+                mock.patch.object(persona.llm, "call_llm",
+                                  return_value="x") as call:
+            persona._llm_call([{"role": "user", "content": "hi"}])
+        self.assertNotIn("provider", call.call_args.kwargs)
+        self.assertNotIn("model", call.call_args.kwargs)
 
 
 if __name__ == "__main__":
