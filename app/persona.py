@@ -49,6 +49,7 @@ import collections
 import copy
 import datetime
 import functools
+import glob
 import json
 import logging
 import os
@@ -1595,13 +1596,24 @@ def _save_state(state, deleted=None):
     parent = os.path.dirname(_STATE_PATH)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    # 上一代备份（2026-11-06 事故之后加的）：每次落盘前把**旧文件**留一份。
-    # 没有它的话，一次错误的整份覆盖就把所有人的数值抹掉了，事后只能从
-    # 别的线、别的备份里捞。只留一代，写失败也不影响主流程。
+    # 写前备份（2026-11-06 事故之后加的）：
+    #   · `.prev`  —— 上一代，每次落盘前覆盖写一份；
+    #   · `.hourly-YYYYMMDD-HH` —— 每小时一份，留 12 份（半天）。
+    # 只有 `.prev` 的话，连着几次错误覆盖就把它也冲掉了；按小时留档才有
+    # 真正的「回到几小时前」。写失败一律不影响主流程。
     try:
         if os.path.exists(_STATE_PATH):
             shutil.copy2(_STATE_PATH, _STATE_PATH + ".prev")
-    except OSError:
+            hourly = _STATE_PATH + ".hourly-" + time.strftime("%Y%m%d-%H")
+            if not os.path.exists(hourly):
+                shutil.copy2(_STATE_PATH, hourly)
+                olds = sorted(glob.glob(_STATE_PATH + ".hourly-*"))
+                for old in olds[:-12]:
+                    try:
+                        os.remove(old)
+                    except OSError:
+                        pass
+    except (OSError, NameError):
         log.warning("写前备份失败（不影响落盘）：%s", _STATE_PATH)
     _atomic_write_text(_STATE_PATH, json.dumps(state, ensure_ascii=False, indent=2))
 
