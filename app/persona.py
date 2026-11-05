@@ -1137,6 +1137,10 @@ def _norm_card(c):
         # level_names 可以覆盖那 6 级的叫法（不填就用通用名）。
         "start_level": _as_int(c.get("start_level"), 0, 0, 5),
         "start_value": _as_int(c.get("start_value"), None, -50, 50),
+        # 开局冲动（2026-11-05）：「她一开始就已经很想」的卡用得上——
+        # 痴情师尊那种开局，默认的 0 会让模型按「还没起来」演，和卡面冲突。
+        # 只影响新建这条线的那一刻。
+        "start_arousal": _as_int(c.get("start_arousal"), 0, 0, 100),
         "level_names": _level_names(c.get("level_names")),
         # 状态下的她（2026-11-05）：屈服/堕落/好感/戒备高的时候，她会怎么变。
         # 四段自由文本，**不解析、不做阈值**；只给编剧 AI 当阅读材料。

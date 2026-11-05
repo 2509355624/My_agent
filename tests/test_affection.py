@@ -119,6 +119,23 @@ class DefaultRaidTest(AffBase):
         """没在演谁就不该凭空建记录（这条线还没选角色）。"""
         self.assertIsNone(affection.status(persona.resolve_line("private_9")))
 
+    def test_card_start_arousal(self):
+        """卡上配了开局冲动，新建这条线时就按它起（2026-11-05）。
+
+        痴情师尊那种「冲你已经到顶、只是不想跟你谈感情」的开局，用默认的
+        冲动 0 会让模型按「还没起来」演，和卡面自相矛盾。
+        """
+        persona.save_cards([_card("痴情师尊", start_level=4, start_value=30,
+                                  start_arousal=95)])
+        persona.switch_line("private_1", persona.find_card("痴情师尊"))
+        st = affection.status(persona.resolve_line("private_1"))
+        self.assertEqual(st["arousal"], 95)
+
+    def test_card_start_arousal_defaults_to_zero(self):
+        persona.save_cards([_card("普通卡")])
+        persona.switch_line("private_1", persona.find_card("普通卡"))
+        self.assertEqual(affection.status(persona.resolve_line("private_1"))["arousal"], 0)
+
     def test_switching_to_free_sticks(self):
         """默认攻略 ≠ 切不回自由：封存之后下次读仍然是自由模式。"""
         self._enter()

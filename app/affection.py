@@ -968,7 +968,15 @@ def corrupt_hints(cfg=None):
 
 def card_start(card):
 
-    """角色卡给的起点：{value, level}。没配就从 0 / 第 0 级开始。"""
+    """角色卡给的起点：`{value, level, arousal}`。
+
+    没配就从 0 / 第 0 级 / 冲动 0 开始。
+
+    `start_arousal`（2026-11-05）是给「她一开始就已经很想」的卡用的——
+    痴情师尊那种「冲你已经到顶、只是不想跟你谈感情」的开局，用默认的 0
+    就演不出来：模型看到她冲动 0，会按「还没起来」写，和卡面自相矛盾。
+    只影响**新建**这条线的那一刻，之后照常按每轮结算涨落。
+    """
     card = card if isinstance(card, dict) else {}
     try:
         lv = int(card.get("start_level") or 0)
@@ -980,7 +988,12 @@ def card_start(card):
         val = int(card.get("start_value"))
     except (TypeError, ValueError):
         val = gate          # 没给分数：正好卡在这一级的门槛上
-    return {"value": max(MIN_V, min(MAX_V, val)), "level": lv}
+    try:
+        aro = int(card.get("start_arousal") or 0)
+    except (TypeError, ValueError):
+        aro = 0
+    return {"value": max(MIN_V, min(MAX_V, val)), "level": lv,
+            "arousal": max(0, min(AROUSAL_MAX, aro))}
 
 
 def _today():
@@ -1005,7 +1018,7 @@ def _blank(line_key="", value=None):
         st["value"] = max(MIN_V, min(MAX_V, int(value)))
     t = tier_for(st["value"]) or {}
     return {"mode": MODE_RAID, "value": st["value"], "tier": str(t.get("key") or ""),
-            "level": st["level"], "arousal": 0, "cross_n": 0,
+            "level": st["level"], "arousal": st.get("arousal", 0), "cross_n": 0,
             "down": 0, "ending": "", "milestone": "",
             "excite": 0, "scene": False, "orgasms": 0, "idle": 0,
             "corrupt": 0, "submit": 0,
