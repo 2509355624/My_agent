@@ -256,10 +256,13 @@ class PageRoutingTest(unittest.TestCase):
         self.assertIn('href="/workshop"', html, "工坊入口没接上就点不过去")
         self.assertIn('id="entGallery"', html)
 
-    def test_login_page_offers_guest_gallery(self):
-        """游客入口（2026-11-04）：不登录也能先看画廊。"""
+    def test_login_page_hides_guest_gallery(self):
+        """游客逛画廊的入口已撤（2026-11-05 用户拍板：不登录不能看画廊）。
+
+        `/guest` 路由本身留着（老链接和票据测试还用），只是登录页不再摆入口。
+        """
         html = self._title("/", False)
-        self.assertIn('href="/guest"', html)
+        self.assertNotIn('href="/guest"', html)
 
     def test_guest_ticket_opens_the_gallery(self):
         c = friend_app.app.test_client()
