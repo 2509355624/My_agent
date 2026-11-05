@@ -1075,17 +1075,16 @@ function toast(t, err) {
 
 let CLIMAX = null;          // 当前这次高潮的信息 {n, of, last}
 let FIN_SPOT = "";          // 射精弹窗里选中的预设位置
-let FIN_SEEN = 0;           // 已经答过/跳过的最新一次序号（只处理更大的 n）
+let FIN_SEEN = 0;           // 已经答过的最新一次序号（同一个 n 不再弹）
 let FIN_OPEN = false;       // 弹窗此刻是不是开着
-let FIN_BUSY = false;       // 这一发还在生成（挡住重复点「确定」）
 
 function askFinish(cl) {
-  // 2026-11-06 用户报「一直跳弹窗」：以前 `loadSession` 每跑一次就弹一次，
-  // 而「取消」只在本地关掉、服务端那个 pending 还挂着，于是关一次弹一次。
-  // 现在两道闸：开着就不重复弹；同一序号处理过就不再问。
+  // 一次高潮只问一次（2026-11-06）：`climax` 由聊天回包带回来，
+  // 页面加载时不再去服务端翻旧账——那正是「一直弹」的来源。
   if (!cl) return;
   if (FIN_OPEN) return;
   if ((cl.n || 0) <= FIN_SEEN) return;
+  FIN_SEEN = cl.n || 0;
   CLIMAX = cl || null;
   if (!CLIMAX) return;
   FIN_OPEN = true;
@@ -1146,95 +1145,40 @@ function pushAssistant(d) {
   return row;
 }
 
-// 提交：位置或自定义，二选一（两个都给时以后端为准：text 优先）。
-async function goFinish() {
-  // 上一发还没回来就别再发（2026-11-06 用户报「一直刷屏」）：
-  // 生成要七八秒，这期间连点会连出好几段。跟正常聊天一样，等就行。
-  if (FIN_BUSY) return;
-  FIN_BUSY = true;
+// 弹窗只是**替玩家打一句话**（2026-11-06 用户拍板，我说清楚为止）。
+//
+// 它不生成、不落史、不碰数值：选完把这句话填进输入框，然后调 `send()`——
+// 跟玩家自己打字发送**完全同一条路**（编剧判 → 聊天 AI 写 → 落史）。
+// 之前那套 `/api/persona/finish`、待办、互斥、五段收尾全是我自己加的，
+// 正是它们造出了重复弹窗和重复生成。
+const FIN_TEXT = {
+  pussy: "（我把精液射进她的小穴里）",
+  anus: "（我射进她的肛门里）",
+  mouth: "（我射在她嘴里）",
+  body: "（我射在她身上）",
+};
+
+function goFinish() {
+  if (busy) return;
   $("finishMask").classList.remove("on");
   FIN_OPEN = false;
-  const text = ($("finishText") && $("finishText").value || "").trim();
-  const last = !!(CLIMAX && CLIMAX.last);
-  const keep = CLIMAX;                 // 失败时要把弹窗原样还回来
-  if (!text && !FIN_SPOT) {           // 什么都没给 = 这一下不写
-    if (keep) FIN_SEEN = Math.max(FIN_SEEN, keep.n || 0);
-    CLIMAX = null;
-    FIN_BUSY = false;
-    post("/api/persona/finish", {}).catch(() => {});   // 让服务端清掉待办
+  const custom = ($("finishText") && $("finishText").value || "").trim();
+  const msg = custom || FIN_TEXT[FIN_SPOT] || "";
+  CLIMAX = null;
+  FIN_SPOT = "";
+  const ta = $("finishText");
+  if (ta) ta.value = "";
+  if (!msg) {                          // 什么都没选 = 这一下不说
     toast("那这一下就先跳过");
     return;
   }
-  // ★ 提交的当下就记账（2026-11-06 用户报「点了确定还一直弹」）：
-  // 生成要十几秒，这期间服务端的 pending 还没清。只要这中间有一次
-  // `loadSession`（切角色、回到页面、刷新都会触发），`askFinish` 就又弹一次，
-  // 玩家再点一次就是又一发——于是「永远弹不完」。
-  // 现在点下去就先把这一号标记成已处理，失败了再回滚。
-  const prevSeen = FIN_SEEN;
-  if (keep) FIN_SEEN = Math.max(FIN_SEEN, keep.n || 0);
-  lockInput(true);
-  const pend = document.createElement("div");
-  pend.className = "row a pending";
-  pend.innerHTML = '<div class="bubble">（……）</div>';
-  $("log").appendChild(pend);
-  scrollBottom();
-  try {
-    // ⚠️ 必须走 `post()`：它会给 fetch 加 JSON 头并 JSON.stringify。
-    // 2026-11-06 直接写 `body: {...}` 传了对象，fetch 把它变成字符串
-    // "[object Object]"，后端解析不出 spot/text → 当成「什么都没选」跳过，
-    // 于是高潮值已经扣了、正文却一个字都没有。
-    const d = await post("/api/persona/finish", {
-      spot: FIN_SPOT, text: text });
-    pend.remove();
-    CLIMAX = null;
-    if (keep) FIN_SEEN = Math.max(FIN_SEEN, keep.n || 0);
-    if (d.reply) pushAssistant(d);
-    // 第 5 次：射完立刻问「还要不要继续」，不用等玩家再发消息。
-    if (last) $("fiveMask").classList.add("on");
-  } catch (e) {
-    pend.remove();
-    // 没写成 → 把弹窗**恢复**（2026-11-06）：以前这里只 toast 一下，
-    // 弹窗没了、CLIMAX 也清了，玩家再也没机会补这一段。
-    FIN_SEEN = prevSeen;              // 回滚「已处理」，允许重试
-    CLIMAX = keep;
-    if (keep) { FIN_OPEN = true; $("finishMask").classList.add("on"); }
-    toast("没写成，再试一次", true);
-  } finally {
-    FIN_BUSY = false;
-    lockInput(false);
-  }
+  // 就是这一行：填进输入框，按正常发送。
+  $("inp").value = msg;
+  send();
 }
 
-async function pickFive(last) {
-  $("fiveMask").classList.remove("on");
-  lockInput(true);
-  const pend = document.createElement("div");
-  pend.className = "row a pending";
-  pend.innerHTML = '<div class="bubble">（……）</div>';
-  $("log").appendChild(pend);
-  scrollBottom();
-  try {
-    const d = await post("/api/persona/finish_night", { last: last });
-    pend.remove();
-    if (d.reply) pushAssistant(d);
-    if (!last) return;                 // 「就到这里」——不跨天，收尾就完了
-    // 「最后一次」：先写完夜里，再浮出「第二天」，再写早上。
-    // 分两次请求就是为了中间能插这个标识（用户要的）。
-    const veil = $("dayVeil");
-    if (veil) veil.classList.add("on");
-    await new Promise(r => setTimeout(r, 900));
-    const m = await post("/api/persona/next_morning", {});
-    if (m.reply) pushAssistant(m);
-    if (veil) veil.classList.remove("on");
-  } catch (e) {
-    pend.remove();
-    const veil = $("dayVeil");
-    if (veil) veil.classList.remove("on");
-    toast("没写成，再试一次", true);
-  } finally {
-    lockInput(false);
-  }
-}
+// 第 5 次的「继续 / 结束」已经取消（2026-11-06）：高潮次数本来就不封顶，
+// 每一次都是同一条消息，不需要另一套收尾流程。
 
 // ── 左栏 ──────────────────────────────────────────────
 async function loadCards() {
@@ -2872,31 +2816,23 @@ $("pregHelpClose").onclick = () =>
 $("pregHelpMask").addEventListener("click", e => {
   if (e.target === $("pregHelpMask")) $("pregHelpMask").classList.remove("on");
 });
-// 射精选择（2026-11-05）：四个位置只是选中，下面的大框可以自己写，
-// 点「确定」才提交并立刻生成。
+// 射精选择（2026-11-06 简化）：四个位置只是选中，下面的大框可以自己写，
+// 点「确定」= 把这句话填进输入框按正常发送；什么都不给就是这一下不说。
 document.querySelectorAll("#finishMask [data-spot]").forEach(btn => {
   btn.onclick = () => pickSpot(btn);
 });
 $("finishGo").onclick = goFinish;
-// 「先不写」＝跳过（2026-11-06）：**必须告诉服务端**，否则那份 pending 还挂着，
-// 下次 loadSession 又弹一次——用户就是这么被反复弹窗卡住的。
 function dismissFinish() {
   $("finishMask").classList.remove("on");
   FIN_OPEN = false;
-  if (CLIMAX) FIN_SEEN = Math.max(FIN_SEEN, CLIMAX.n || 0);
   CLIMAX = null;
   FIN_SPOT = "";
-  post("/api/persona/finish", {}).catch(() => {});   // 空的 = 服务端清待办
+  const ta = $("finishText");
+  if (ta) ta.value = "";
 }
 $("finishCancel").onclick = dismissFinish;
 $("finishMask").addEventListener("click", e => {
   if (e.target === $("finishMask")) dismissFinish();
-});
-// 第五次之后（2026-11-05）：结束 / 最后一次。
-$("fiveEnd").onclick = () => pickFive(false);
-$("fiveLast").onclick = () => pickFive(true);
-$("fiveMask").addEventListener("click", e => {
-  if (e.target === $("fiveMask")) $("fiveMask").classList.remove("on");
 });
 $("skipGo").onclick = doJump;
 document.querySelectorAll(".skipBtns [data-days]").forEach(btn => {
