@@ -1511,6 +1511,20 @@ def _ensure(line_key):
                 log.warning("迁移后落盘失败 %s", line_key)
         return ent, rec
     rec = _blank(line_key)
+    # 数据丢失警报（2026-11-06 事故）：一条**聊过**的线（有账本或轮次）
+    # 却读不到好感记录，正常情况下不该发生——多半是迁移/读盘出了问题。
+    # 这时候新建空白记录会把真实进度盖掉，所以先留一条 error 日志，
+    # 让人能从 `.prev` 备份里捞回来（`_save_state` 每次落盘前会留一代）。
+    try:
+        had_history = bool(str(ent.get("note") or "").strip()
+                           or int(ent.get("turns") or 0) > 0
+                           or int(ent.get("turn_total") or 0) > 0)
+    except (TypeError, ValueError):
+        had_history = False
+    if had_history:
+        log.error("[affection-lost] %s 有过进度却读不到好感记录，"
+                  "正在新建空白记录。请检查 state/persona_sessions.json.prev",
+                  line_key)
     ent["affection"] = rec
     try:
         _save_entry(line_key, ent)
