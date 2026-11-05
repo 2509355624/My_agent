@@ -445,6 +445,26 @@
   .skipBox .skipt { font-size: 12px; line-height: 1.7; color: var(--text-dim); }
   .skipBtns { display: flex; gap: 8px; margin: 14px 0 10px; }
   .skipBtns .btn { flex: 1; }
+  /* 选中的预设按钮（2026-11-05）：四个位置里挑一个，再点下面的提交。 */
+  .skipBtns .btn.on { border-color: var(--accent); color: var(--accent);
+    background: var(--accent-dim); }
+  /* 射精弹窗的自定义输入（2026-11-05）：玩家说「弹出来那么小的框，
+     自己打字都很麻烦」，所以给一个真正能打字的大框。
+     字号 16px 是刻意的——iOS 上低于 16px 会强制放大页面。 */
+  .finInput { width: 100%; box-sizing: border-box; margin-top: 10px;
+    min-height: 76px; padding: 10px 12px; font: inherit; font-size: 16px;
+    line-height: 1.5; color: var(--text); background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: var(--rs);
+    outline: none; resize: vertical; }
+  .finInput:focus { border-color: var(--accent); }
+  /* 「第二天」浮层（2026-11-05）：跨天时浮在页面正中，一两秒后自己淡出。 */
+  .dayVeil { position: fixed; inset: 0; z-index: 450; display: none;
+    align-items: center; justify-content: center; pointer-events: none;
+    background: rgba(0,0,0,.55); backdrop-filter: blur(2px); }
+  .dayVeil.on { display: flex; animation: dayIn .45s ease both; }
+  .dayVeil span { font-size: 26px; letter-spacing: .3em; color: var(--text);
+    text-shadow: 0 2px 20px rgba(0,0,0,.8); }
+  @keyframes dayIn { from { opacity: 0; } to { opacity: 1; } }
   /* 选中态（2026-11-05）：先选时段/天数，再点下面的「跳」执行。 */
   .skipBtns .btn.on { border-color: var(--accent); color: var(--accent);
     background: var(--accent-dim); }
@@ -817,8 +837,8 @@
 </div>
 
 <!-- 射精选择（2026-11-05）：她的高潮值满了之后弹出来。
-     玩家不用自己在正文里写「射在哪里」——那样他得猜什么时候该写。
-     选了之后由系统交给编剧，下一轮写出来。 -->
+     2026-11-05 晚改：选完**立刻生成**，不用玩家再发一句话；原来的「不射」
+     按钮换成下面的大文本框——玩家说「不射」其实就是一种自定义做法。 -->
 <div class="skipMask" id="finishMask">
   <div class="skipBox">
     <h3>她已经到了</h3>
@@ -826,13 +846,15 @@
     <div class="skipBtns finBtns">
       <button class="btn" data-spot="pussy">小穴里</button>
       <button class="btn" data-spot="anus">肛门里</button>
-      <button class="btn" data-spot="mouth">嘴里</button>
     </div>
     <div class="skipBtns finBtns">
+      <button class="btn" data-spot="mouth">嘴里</button>
       <button class="btn" data-spot="body">身上</button>
-      <button class="btn" data-spot="none">不射</button>
     </div>
-    <button class="btn skipGo" id="finishCancel">先不选</button>
+    <textarea class="finInput" id="finishText" rows="3"
+      placeholder="或者自己写这一下怎么做（不写就按上面选的位置）：&#10;例：忍住没射，只是抵着她没动"></textarea>
+    <button class="btn pri skipGo" id="finishGo">确定</button>
+    <button class="btn skipGo" id="finishCancel">先不写这一下</button>
   </div>
 </div>
 
@@ -848,6 +870,9 @@
     </div>
   </div>
 </div>
+
+<!-- 跨天浮层（2026-11-05）：两次请求之间浮在页面正中，然后自己淡出。 -->
+<div class="dayVeil" id="dayVeil"><span>第二天</span></div>
 
 <!-- 怀孕规则（2026-11-05）：状态条旁边的小问号点开。只解释机制，
      不显示当前处在周期的哪一段——那个要玩家自己按天算。 -->
@@ -969,68 +994,117 @@ function toast(t, err) {
 //      选完由 `/api/persona/finish_night` 直接生成（一个气泡写完夜里和第二天）。
 
 let CLIMAX = null;          // 当前这次高潮的信息 {n, of, last}
+let FIN_SPOT = "";          // 射精弹窗里选中的预设位置
 
 function askFinish(cl) {
   CLIMAX = cl || null;
   if (!CLIMAX) return;
+  FIN_SPOT = "";
   const tip = $("finishTip");
   if (tip) {
     tip.textContent = CLIMAX.last
       ? "第 " + CLIMAX.n + " 次了。你想射在哪里？"
       : "第 " + CLIMAX.n + " 次。你想射在哪里？";
   }
+  const ta = $("finishText");
+  if (ta) ta.value = "";
+  document.querySelectorAll("#finishMask [data-spot]").forEach(b =>
+    b.classList.remove("on"));
   $("finishMask").classList.add("on");
 }
 
-async function pickFinish(spot) {
+// 预设按钮只是**选中**，不立刻提交——玩家可能还想在下面自己写。
+function pickSpot(btn) {
+  FIN_SPOT = btn.getAttribute("data-spot") || "";
+  document.querySelectorAll("#finishMask [data-spot]").forEach(b =>
+    b.classList.toggle("on", b === btn));
+}
+
+// 让输入框临时不可用（生成期间）。主播 AI 出字的时候不该还能发消息。
+function lockInput(on) {
+  ["inp", "btnSend"].forEach(id => {
+    const el = $(id);
+    if (el) el.disabled = !!on;
+  });
+}
+
+// 把一段生成结果画成气泡（三段请求共用）。
+function pushAssistant(d) {
+  const nA = d.n ? d.n.assistant : null;
+  const row = renderRow({ role: "assistant", text: d.reply,
+                          aff: d.affection || null, n: nA },
+                        nA === null ? ("a" + Date.now()) : nA);
+  $("log").appendChild(row);
+  markLastAff();
+  renderState({ mood: d.mood, intensity: d.intensity, state: d.state,
+                note: $("sNote").textContent, day: d.day,
+                phase: d.phase, finish: "", preg: d.preg,
+                turns: (+$("sTurns").textContent || 0) + 1 });
+  scrollBottom();
+  return row;
+}
+
+// 提交：位置或自定义，二选一（两个都给时以后端为准：text 优先）。
+async function goFinish() {
   $("finishMask").classList.remove("on");
+  const text = ($("finishText") && $("finishText").value || "").trim();
   const last = !!(CLIMAX && CLIMAX.last);
   CLIMAX = null;
-  try {
-    await api("/api/persona/finish", {
-      method: "POST", body: { spot: spot, last: last } });
-  } catch (e) {
-    toast("没记上，再选一次", true);
+  if (!text && !FIN_SPOT) {           // 什么都没给 = 这一下不写
+    toast("那这一下就先跳过");
     return;
   }
-  // 选完立刻把「她累了」那一问接上——不用等下一轮。
-  if (last) {
-    $("fiveMask").classList.add("on");
-  } else {
-    toast("记下了：这一拍他会射在" + FINISH_CN[spot]);
+  lockInput(true);
+  const pend = document.createElement("div");
+  pend.className = "row a pending";
+  pend.innerHTML = '<div class="bubble">（……）</div>';
+  $("log").appendChild(pend);
+  scrollBottom();
+  try {
+    const d = await api("/api/persona/finish", {
+      method: "POST", body: { spot: FIN_SPOT, text: text } });
+    pend.remove();
+    if (d.reply) pushAssistant(d);
+    // 第 5 次：射完立刻问「还要不要继续」，不用等玩家再发消息。
+    if (last) $("fiveMask").classList.add("on");
+  } catch (e) {
+    pend.remove();
+    toast("没写成，再试一次", true);
+  } finally {
+    lockInput(false);
   }
 }
 
-const FINISH_CN = { pussy: "小穴里", anus: "肛门里", mouth: "嘴里",
-                    body: "身上", none: "（不射）" };
-
 async function pickFive(last) {
   $("fiveMask").classList.remove("on");
+  lockInput(true);
   const pend = document.createElement("div");
   pend.className = "row a pending";
-  pend.innerHTML = last
-    ? '<div class="bubble">（她累得说不出话……）</div>'
-    : '<div class="bubble">（这一场收住了……）</div>';
+  pend.innerHTML = '<div class="bubble">（……）</div>';
   $("log").appendChild(pend);
   scrollBottom();
   try {
     const d = await api("/api/persona/finish_night", {
       method: "POST", body: { last: last } });
     pend.remove();
-    const nA = d.n ? d.n.assistant : null;
-    const row = renderRow({ role: "assistant", text: d.reply,
-                            aff: d.affection || null, n: nA },
-                          nA === null ? ("a" + Date.now()) : nA);
-    $("log").appendChild(row);
-    markLastAff();
-    renderState({ mood: d.mood, intensity: d.intensity, state: d.state,
-                  note: $("sNote").textContent, day: d.day,
-                  phase: d.phase, finish: "", preg: d.preg,
-                  turns: (+$("sTurns").textContent || 0) + 1 });
-    scrollBottom();
+    if (d.reply) pushAssistant(d);
+    if (!last) return;                 // 「就到这里」——不跨天，收尾就完了
+    // 「最后一次」：先写完夜里，再浮出「第二天」，再写早上。
+    // 分两次请求就是为了中间能插这个标识（用户要的）。
+    const veil = $("dayVeil");
+    if (veil) veil.classList.add("on");
+    await new Promise(r => setTimeout(r, 900));
+    const m = await api("/api/persona/next_morning", {
+      method: "POST", body: {} });
+    if (m.reply) pushAssistant(m);
+    if (veil) veil.classList.remove("on");
   } catch (e) {
     pend.remove();
+    const veil = $("dayVeil");
+    if (veil) veil.classList.remove("on");
     toast("没写成，再试一次", true);
+  } finally {
+    lockInput(false);
   }
 }
 
@@ -2574,19 +2648,23 @@ $("pregHelpClose").onclick = () =>
 $("pregHelpMask").addEventListener("click", e => {
   if (e.target === $("pregHelpMask")) $("pregHelpMask").classList.remove("on");
 });
-// 射精选择（2026-11-05）：五个位置 + 「先不选」。
+// 射精选择（2026-11-05）：四个位置只是选中，下面的大框可以自己写，
+// 点「确定」才提交并立刻生成。
 document.querySelectorAll("#finishMask [data-spot]").forEach(btn => {
-  btn.onclick = () => pickFinish(btn.getAttribute("data-spot"));
+  btn.onclick = () => pickSpot(btn);
 });
+$("finishGo").onclick = goFinish;
 $("finishCancel").onclick = () => {
-  // 先不选 = 这一轮不提射精，不留任何东西。下一轮他自然会写。
+  // 先不写 = 这一下跳过，什么都不留。
   $("finishMask").classList.remove("on");
   CLIMAX = null;
+  FIN_SPOT = "";
 };
 $("finishMask").addEventListener("click", e => {
   if (e.target === $("finishMask")) {
     $("finishMask").classList.remove("on");
     CLIMAX = null;
+    FIN_SPOT = "";
   }
 });
 // 第五次之后（2026-11-05）：结束 / 最后一次。

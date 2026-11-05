@@ -4504,24 +4504,51 @@ def skip_day(session_key, sender="", sender_uin="", days=1):
     return Turn(reply, scene, mood, intensity, state, None)
 
 
-# 第五次之后的两个出口（2026-11-05）。不再自动跨天，改成玩家选：
-#   结束     —— 这一场收住，留在当晚；
-#   最后一次 —— 她已经没力气了，他继续，最后一次；然后直接进第二天早晨。
-# 两段写在**同一个气泡**里（用户要求的）：先写夜里那一下，再写过到早上。
-_FINISH_NIGHT_TASK = """【今晚的最后一次】
+# ── 高潮之后的三段请求（2026-11-05 晚，用户重新定的流程）──────
+#
+# 前 4 次：她到了 → 玩家在弹窗里选位置/自己写 → **立刻生成**射精那一下。
+#          不用玩家再发一句话——他不用猜什么时候该写。
+# 第 5 次：她到了 → 选位置 → 紧接着问「继续还是结束」：
+#          · 结束   → 一次请求：射精 + 收场，留在当晚；
+#          · 继续   → 请求 1：她累瘫了 + 最后一次（含射精）；
+#                     页面中间浮出「第二天」，锁输入；
+#                     请求 2：第二天早晨。
+#
+# 拆成三段是因为用户明确要「两次 AI 请求 + 中间一个跨天标识」——
+# 一次请求写两段的话，跨天标识没地方插，读起来就是一段流水账。
+
+_FINISH_ACT_TASK = """【这一拍：他已经射了】
+
+她已经到过了，人还软着。这一轮只写这一下：他把最后那一下做完、
+射出来、然后两个人分开或者没分开。
+
+**不要重新开一场，不要把她的高潮再写一遍**——她已经到过了，
+这一轮的重点是他这一下的动作和落点，以及她承受的样子。
+写短一点，三四段就够，收在这一拍结束时。
+
+格式照旧：正文 + 画面 / 心情 / 强度 / 状态 四行。"""
+
+_FINISH_LAST_TASK = """【今晚的最后一次】
 
 她刚才已经连着到了第五次，人已经软掉了：眼睛睁不开、说话含糊、
 手抬到一半就落回去。他是看着这样的她继续的。
 
-这一轮要写两段，**放在同一条回复里**，中间空一行：
+这一轮**只写这一夜的最后一下**：她把最后那点力气也用完了，
+他把最后那一下做完。写她的身体已经跟不上（里面还在抽、腿在抖、
+声音只剩气），写她迷迷糊糊说的半句话。
 
-第一段：她昏昏欲睡、没力气反抗也没力气配合，他把最后那一下做完。
-写她的身体已经跟不上（里面还在抽、腿在抖、声音只剩气），
-写她迷迷糊糊说的半句话。不要写成她突然又精神了。
+**不要写到第二天**——天亮、醒来这些都留到下一轮。
+也不要写成她突然又精神了。
 
-第二段：短过渡到第二天早晨。天亮了、她睡着的姿势、身上的痕迹、
-她醒来第一眼的表情。不要重新开一场，也不要写「第二天他们做了什么」，
-就停在她醒来的那一拍。
+格式照旧：正文 + 画面 / 心情 / 强度 / 状态 四行。"""
+
+_FINISH_MORNING_TASK = """【第二天早晨】
+
+天亮了。她还在睡，或者刚醒。
+
+这一轮只写醒来这一拍：她的姿势、身上的痕迹、房间里和昨晚不一样的地方、
+她睁眼看见你时的第一反应。**不要重述昨晚**，也不要马上开新的一场戏——
+就停在她醒来的那一拍，把话头留给他。
 
 格式照旧：正文 + 画面 / 心情 / 强度 / 状态 四行。"""
 
@@ -4533,6 +4560,16 @@ _FINISH_END_TASK = """【这一场到这儿收住】
 
 格式照旧：正文 + 画面 / 心情 / 强度 / 状态 四行。"""
 
+# 自定义动作（玩家在弹窗文本框里自己写的）怎么交给编剧。
+_FINISH_CUSTOM_HINT = (
+    "## 这一拍：射精（玩家自己定了做法）\n\n"
+    "他这一下的做法是：%s\n\n"
+    "（照这个写。**不要改掉玩家写的做法**，也不要再问他一次；"
+    "写她怎么承受、怎么反应。如果玩家写的做法和你们现在的姿势冲突，"
+    "以他写的为准，但把衔接写顺，别让人看出是硬拗的。）"
+)
+
+
 
 def finish_night(session_key, last=True, sender="", sender_uin=""):
     """第五次之后的两条出口（2026-11-05 用户拍板）。
@@ -4543,6 +4580,134 @@ def finish_night(session_key, last=True, sender="", sender_uin=""):
     玩家在弹窗里选完之后调这个：它**不再等玩家发消息**，直接生成。
     返回 `Turn`；没在演返回 None。
     """
+def _gen_and_save(key, ent, card, head, task, sender="", prev_state="",
+                  tag="收尾"):
+    """公共尾巴：拿 head + task 调一次模型，剥格式、落史、落心情。
+
+    `finish_action` / `finish_night` / `next_morning` 三处只差提示词，
+    其余完全一样，抽出来免得三份各写一遍（写岔一次就有一处不落史）。
+    """
+    hist = trim(_load_hist(key))
+    model_hist = _render_hist(hist)
+    msgs = ([{"role": "system", "content": head}] + model_hist
+            + [{"role": "user", "content": task}])
+    try:
+        raw = llm.call_llm(msgs, temperature=TEMPERATURE)
+    except Exception:                                  # noqa: BLE001
+        log.exception("%s生成失败 %s", tag, key)
+        return None
+    reply, scene, mood, intensity, state = split_turn(
+        raw, default_mood=str((ent or {}).get("mood") or ""))
+    if not reply:
+        return None
+    hist.append({"role": "assistant",
+                 "content": _ensure_meta(raw, scene, mood, intensity, state)})
+    try:
+        _save_hist(key, hist[-HISTORY_LIMIT:])
+        _append_archive(key, hist[-1:], seed=hist[-HISTORY_LIMIT:])
+    except Exception:
+        log.exception("%s落史失败 %s", tag, key)
+    _save_mood(key, mood, intensity, state, prev_state)
+    _bump_turn(key)
+    return Turn(reply, scene, mood, intensity, state, None)
+
+
+def finish_action(session_key, spot="", text="", sender="", sender_uin=""):
+    """她高潮之后，按玩家选的位置 / 自己写的做法，**立刻**写这一下。
+
+    2026-11-05 晚改：以前是「选完等玩家再发一句话」，用户说那样很别扭——
+    他得猜什么时候该写射精。现在选完直接生成一轮，玩家只负责推动剧情。
+
+    `spot` 是预设位置（见 `FINISH_SPOTS`），`text` 是玩家自己写的做法；
+    两个都给时**以 text 为准**（自定义比预设更具体）。
+    返回 `Turn`；没在演返回 None。
+    """
+    key = resolve_line(_persona_key(session_key, sender_uin))
+    card = active_card(key)
+    if card is None:
+        return None
+    ent = _entry(key)
+    if not ent:
+        return None
+
+    text = str(text or "").strip()[:120]
+    spot = str(spot or "").strip().lower()
+    if spot not in FINISH_SPOTS:
+        spot = ""
+    if not spot and not text:
+        return None
+
+    # 位置决定内射：怀孕只认这个，不靠编剧猜。
+    finish = "none"
+    if spot in ("pussy", "anus"):
+        finish = "inside"
+    elif spot in ("mouth", "body"):
+        finish = "outside"
+    day = int(_gameday(ent).get("day") or 1)
+    if finish == "inside":
+        try:
+            _preg_record(key, card, day, finish)
+        except Exception:                              # noqa: BLE001
+            log.exception("怀孕记录失败 %s", key)
+
+    prev_state = str(ent.get("state") or "")
+    head = build_head(card, key, sender, str(ent.get("note") or ""),
+                      prev_state, intimate=True)
+    # 自定义优先，其次才是预设位置。
+    hint = (_FINISH_CUSTOM_HINT % text) if text else finish_block(spot)
+    if hint:
+        head = head + "\n\n" + hint
+    return _gen_and_save(key, ent, card, head, _FINISH_ACT_TASK,
+                         sender=sender, prev_state=prev_state, tag="射精")
+
+
+def finish_night(session_key, last=True, sender="", sender_uin=""):
+    """第五次之后的出口（2026-11-05）。
+
+    `last=True`  —— 再来最后一次（只写这一夜，**不跨天**；天亮留给
+                    `next_morning`，中间要插一个「第二天」标识）；
+    `last=False` —— 就到这里，收场，留在当晚。
+
+    玩家在弹窗里选完之后调这个，它不等玩家发消息，直接生成。
+    """
+    key = resolve_line(_persona_key(session_key, sender_uin))
+    card = active_card(key)
+    if card is None:
+        return None
+    ent = _entry(key)
+    if not ent:
+        return None
+
+    # 玩家在弹窗里选的射精位置还没被用掉（第五次没有下一轮去消费它）。
+    spot = take_finish(key)
+    fblk = finish_block(spot)
+    if last:
+        # 只收场，不跨天——跨天由 `next_morning` 单独一次请求做。
+        try:
+            affection.sleep(key)
+        except Exception:                              # noqa: BLE001
+            log.exception("第五次收场失败 %s", key)
+
+    ent = _entry(key) or ent
+    prev_state = str(ent.get("state") or "")
+    head = build_head(card, key, sender, str(ent.get("note") or ""),
+                      prev_state, intimate=True)
+    if fblk:
+        head = head + "\n\n" + fblk
+    recap = _recap_block(key)
+    if recap:
+        head = head + "\n\n" + recap
+    task = _FINISH_LAST_TASK if last else _FINISH_END_TASK
+    return _gen_and_save(key, ent, card, head, task, sender=sender,
+                         prev_state=prev_state, tag="第五次收尾")
+
+
+def next_morning(session_key, sender="", sender_uin=""):
+    """第二天早晨（2026-11-05）：跨天 + 一次开场。
+
+    单独一个函数是因为前端要在**两次请求之间**浮出「第二天」那个标识：
+    先写完夜里，再显示跨天，再写早上。合成一次就插不进去了。
+    """
     key = resolve_line(_persona_key(session_key, sender_uin))
     card = active_card(key)
     if card is None:
@@ -4552,69 +4717,35 @@ def finish_night(session_key, last=True, sender="", sender_uin=""):
         return None
 
     old_day = int(_gameday(ent).get("day") or 1)
-    # 玩家在弹窗里选的射精位置还没被用掉（第五次没有下一轮去消费它），
-    # 这里取出来拼进导演条，别让它烂在存档里。
-    spot = take_finish(key)
-    fblk = finish_block(spot)
-
-    gd = _gameday(ent)
+    gd = _apply_gameday(key, force_new_day=True, days=1) or _gameday(ent)
+    new_day = int((gd or {}).get("day") or old_day)
     preg_event = None
-    if last:
-        gd = _apply_gameday(key, force_new_day=True, days=1) or gd
-        new_day = int((gd or {}).get("day") or old_day)
-        if pregnancy.card_enabled(card):
-            try:
-                preg_event = _preg_advance(key, old_day, new_day)
-            except Exception:                          # noqa: BLE001
-                log.exception("怀孕结算失败 %s", key)
-        # 收场放在跨天之后：`_apply_gameday` 会写 gameday_prev，
-        # 而 `sleep` 只动数值，两者互不覆盖。
+    if pregnancy.card_enabled(card):
         try:
-            affection.sleep(key)
+            preg_event = _preg_advance(key, old_day, new_day)
         except Exception:                              # noqa: BLE001
-            log.exception("第五次收场失败 %s", key)
+            log.exception("怀孕结算失败 %s", key)
+    # 跨天之后这一场必然结束了，再收一次场（幂等）。
+    try:
+        affection.sleep(key)
+    except Exception:                                  # noqa: BLE001
+        log.exception("跨天收场失败 %s", key)
 
     ent = _entry(key) or ent
-    note = str(ent.get("note") or "")
     prev_state = str(ent.get("state") or "")
-    head = build_head(card, key, sender, note, prev_state, intimate=True)
-    if fblk:
-        head = head + "\n\n" + fblk
-    if last:
-        tblock = _gameday_block(gd)
-        if tblock:
-            head = head + "\n\n" + tblock
-        pblock = pregnancy_block(key, preg_event)
-        if pblock:
-            head = head + "\n\n" + pblock
+    head = build_head(card, key, sender, str(ent.get("note") or ""),
+                      prev_state, intimate=False)
+    tblock = _gameday_block(gd)
+    if tblock:
+        head = head + "\n\n" + tblock
+    pblock = pregnancy_block(key, preg_event)
+    if pblock:
+        head = head + "\n\n" + pblock
     recap = _recap_block(key)
     if recap:
         head = head + "\n\n" + recap
-    task = _FINISH_NIGHT_TASK if last else _FINISH_END_TASK
-
-    hist = trim(_load_hist(key))
-    model_hist = _render_hist(hist)
-    msgs = ([{"role": "system", "content": head}] + model_hist
-            + [{"role": "user", "content": task}])
-    try:
-        raw = llm.call_llm(msgs, temperature=TEMPERATURE)
-    except Exception:                                  # noqa: BLE001
-        log.exception("第五次收尾生成失败 %s", key)
-        return None
-    reply, scene, mood, intensity, state = split_turn(
-        raw, default_mood=str(ent.get("mood") or ""))
-    if not reply:
-        return None
-    hist.append({"role": "assistant",
-                 "content": _ensure_meta(raw, scene, mood, intensity, state)})
-    try:
-        _save_hist(key, hist[-HISTORY_LIMIT:])
-        _append_archive(key, hist[-1:], seed=hist[-HISTORY_LIMIT:])
-    except Exception:
-        log.exception("第五次收尾落史失败 %s", key)
-    _save_mood(key, mood, intensity, state, prev_state)
-    _bump_turn(key)
-    return Turn(reply, scene, mood, intensity, state, None)
+    return _gen_and_save(key, ent, card, head, _FINISH_MORNING_TASK,
+                         sender=sender, prev_state=prev_state, tag="第二天")
 
 
 def _save_archive(session_key, rows):

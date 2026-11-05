@@ -173,6 +173,55 @@ class FinishAffectsPregnancyTest(FinishBase):
         self.assertEqual(rec.call_args.args[3], "inside")
 
 
+class FinishActionTest(FinishBase):
+    """前 4 次：选完**立刻生成**，不用玩家再发一句话（2026-11-05 晚改）。"""
+
+    def _run(self, spot="", text="",
+             reply="他射了。\n画面：1girl\n心情：空 强度1\n状态：床上"):
+        with mock.patch.object(persona.llm, "call_llm", return_value=reply) as m:
+            out = persona.finish_action(self.key, spot=spot, text=text)
+        return out, m
+
+    def test_generates_a_reply(self):
+        out, m = self._run("pussy")
+        self.assertIsNotNone(out)
+        self.assertTrue(out.reply)
+        head = m.call_args.args[0][0]["content"]
+        self.assertIn("这一拍：射精", head)
+
+    def test_inside_spot_records_pregnancy(self):
+        with mock.patch.object(persona, "_preg_record") as rec:
+            self._run("anus")
+        self.assertTrue(rec.called)
+        self.assertEqual(rec.call_args.args[3], "inside")
+
+    def test_outside_spot_does_not_record(self):
+        with mock.patch.object(persona, "_preg_record") as rec:
+            self._run("body")
+        self.assertFalse(rec.called)
+
+    def test_custom_text_wins_over_the_spot(self):
+        out, m = self._run(spot="body", text="他没射，只是抵着她没动")
+        head = m.call_args.args[0][0]["content"]
+        self.assertIn("他没射，只是抵着她没动", head)
+        # 自定义优先：不该再塞预设位置那套
+        self.assertNotIn("落点要按你们这一轮的姿势定", head)
+
+    def test_custom_text_can_mean_no_ejaculation(self):
+        """「不射」不再是一个按钮，而是玩家自己写的一句话。"""
+        with mock.patch.object(persona, "_preg_record") as rec:
+            self._run(spot="", text="他没射，停在里面没动")
+        self.assertFalse(rec.called, "没射就不该记内射")
+
+    def test_nothing_chosen_means_skip(self):
+        self.assertIsNone(persona.finish_action(self.key))
+
+    def test_llm_failure_returns_none(self):
+        with mock.patch.object(persona.llm, "call_llm",
+                               side_effect=RuntimeError("炸了")):
+            self.assertIsNone(persona.finish_action(self.key, spot="mouth"))
+
+
 class FinishNightTest(FinishBase):
     """第五次之后：结束 / 最后一次。"""
 
@@ -181,17 +230,43 @@ class FinishNightTest(FinishBase):
             out = persona.finish_night(self.key, last=last)
         return out, m
 
-    def test_last_generates_and_advances(self):
+    def _run_next(self, reply="天亮了。\n画面：1girl\n心情：静 强度1\n状态：床边"):
+        with mock.patch.object(persona.llm, "call_llm", return_value=reply) as m:
+            out = persona.next_morning(self.key)
+        return out, m
+
+    def test_last_writes_the_night_only(self):
+        """「最后一次」这一步**只写夜里**，不跨天（2026-11-05 晚改）。
+
+        跨天拆成单独一次请求（`next_morning`），前端好在两次之间浮出
+        「第二天」那个标识——合成一次就没地方插了。
+        """
         persona.set_finish(self.key, "pussy")
         out, m = self._run(True)
         self.assertTrue(out.reply)
-        self.assertEqual(persona.game_day(self.key), 2,
-                         "选了「最后一次」就该到第二天")
-        # 位置要被消费掉，不能烂在存档里
+        self.assertEqual(persona.game_day(self.key), 1,
+                         "夜里那一下不该顺手把天跨了")
         self.assertEqual(persona.take_finish(self.key), "")
-        # 导演条要拼进系统头
         head = m.call_args.args[0][0]["content"]
         self.assertIn("射精", head)
+
+    def test_next_morning_advances_and_writes(self):
+        out, m = self._run_next()
+        self.assertTrue(out.reply)
+        self.assertEqual(persona.game_day(self.key), 2)
+        head = m.call_args.args[0][0]["content"]
+        self.assertIn("第 2 天", head)      # 跨天后的时间块要进系统头
+        self.assertIn("早晨", head)
+
+    def test_last_then_morning_end_to_end(self):
+        """两段接连跑：夜里 → 第二天，天数是 2，场景已收。"""
+        self._run(True)
+        out, _ = self._run_next()
+        self.assertTrue(out.reply)
+        self.assertEqual(persona.game_day(self.key), 2)
+        st = persona.affection.status(self.key)
+        self.assertFalse(st["inScene"])
+        self.assertEqual(st["excite"], 0)
 
     def test_end_stays_in_the_same_night(self):
         out, _m = self._run(False)
