@@ -283,6 +283,31 @@ def view(ent, day, enabled=True):
     return {"enabled": True, "status": "none"}
 
 
+def stage_key(ent, day, cfg=None):
+    """当前处在哪个身体阶段，给别的模块做判断用（2026-11-06）。
+
+    返回 `"early" / "mid" / "late" / "postpartum" / ""`。
+    `view()` 是给前端看的（天数、预产期），这里是给代码分支用的**稳定键**——
+    文案会改，键不会。开发度满格时「一碰就出水」的判断就靠它。
+    """
+    p = _state(ent)
+    try:
+        day = int(day or 1)
+    except (TypeError, ValueError):
+        day = 1
+    if p["status"] == "postpartum":
+        return "postpartum"
+    if p["status"] != "pregnant":
+        return ""
+    days = max(1, day - int(p.get("conceive_day") or day) + 1)
+    total = max(1, int((cfg or load_config()).get("gestation_days") or 280))
+    if days <= total * 0.3:
+        return "early"
+    if days <= total * 0.675:
+        return "mid"
+    return "late"
+
+
 def _pregnant_body(days, total):
     """按怀孕天数给编剧的身体素材：阶段、肚子、激素、她会主动做的事。
 

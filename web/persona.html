@@ -1533,13 +1533,19 @@ function panelSection(title, rows, curValue, unit) {
 function panelDev(rows, totalPct, allFull) {
   const wrap = document.createElement("div");
   const h = document.createElement("h3");
-  h.textContent = "开发度 · 共 " + (totalPct | 0) + "%";
+  // 2026-11-06：满值改 100，「体质」是五处折出来的，写在标题上。
+  h.textContent = "开发度 · 体质 " + (totalPct | 0) + "/100";
   wrap.appendChild(h);
   (rows || []).forEach(function (r) {
     const d = document.createElement("div");
     d.style.cssText = "display:flex;align-items:center;gap:8px;padding:2px 0;";
+    // 体质那一行（后端标 derived）用不同的名字颜色，暗示它不是加出来的。
+    if (r.derived) d.style.cssText += "border-top:1px solid var(--border);"
+      + "margin-top:3px;padding-top:5px;";
     const nm = document.createElement("span");
-    nm.style.cssText = "font-size:12px;color:var(--text-dim);width:44px;flex:none;";
+    nm.style.cssText = "font-size:12px;color:"
+      + (r.derived ? "var(--accent)" : "var(--text-dim)")
+      + ";width:44px;flex:none;";
     nm.textContent = r.name || "—";
     d.appendChild(nm);
     const bar = document.createElement("div");
@@ -1553,7 +1559,7 @@ function panelDev(rows, totalPct, allFull) {
     bar.appendChild(fill);
     d.appendChild(bar);
     const vl = document.createElement("span");
-    vl.style.cssText = "font-size:12px;color:var(--text);width:72px;text-align:right;flex:none;";
+    vl.style.cssText = "font-size:12px;color:var(--text);width:66px;text-align:right;flex:none;";
     vl.textContent = (r.value | 0) + "/" + (r.max | 0);
     d.appendChild(vl);
     const st = document.createElement("span");
@@ -1565,7 +1571,7 @@ function panelDev(rows, totalPct, allFull) {
   if (allFull) {
     const tip = document.createElement("div");
     tip.style.cssText = "font-size:11.5px;color:var(--text-mute);padding:4px 0 2px;";
-    tip.textContent = "五处都满了——碰一下就溃，她自己都拦不住。";
+    tip.textContent = "五处都满了——碰一下就出水，含一下就冒汁。";
     wrap.appendChild(tip);
   }
   return wrap;

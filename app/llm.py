@@ -597,6 +597,17 @@ def _call_provider(eff, body, timeout):
                   provider=eff["provider"], model=eff["model"], kind="sync")
 
     message = (data.get("choices") or [{}])[0].get("message") or {}
+    # 截断诊断（2026-11-06）：`finish_reason == "length"` = 输出被服务端上限
+    # 砍断。以前这里什么都不看，玩家只看到一句说到一半的话（末尾还带省略号），
+    # 完全分不清是模型自己收的尾还是被砍的。只在真砍断时打一条 warning。
+    try:
+        fr = (data.get("choices") or [{}])[0].get("finish_reason")
+    except (TypeError, AttributeError):
+        fr = None
+    if fr == "length":
+        log.warning("[reply-truncated] 输出被服务端上限截断（model=%s，正文 %d 字）。"
+                    "调用方该显式给 max_tokens", eff["model"],
+                    len(message.get("content") or ""))
     return message.get("content") or ""
 
 
