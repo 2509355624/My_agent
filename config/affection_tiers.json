@@ -244,11 +244,12 @@
     }
   ],
   "orgasm_hints": {
-    "_note": "高潮值只在场景里累积：按这一轮动作的强度给基数。到 100 触发一次高潮并回落到余韵值，单场最多 max_orgasm 次；用满后进入 cooldown 轮冷却（按轮次，不按真实日期），冷却结束才能再开一场。",
+    "_note": "高潮值只在有身体接触的轮次累积：涨多少由场景 AI 给的 excite 增量决定（base 表只做它没给时的兜底）。到 100 触发一次高潮并回落到余韵值，单场最多 max_orgasm 次。中断不清零：一轮没有接触只是自然回落 idle_decay，连续两轮没接触才算收场。没有冷却期。",
     "start": 15,
     "max": 100,
     "max_orgasm": 5,
     "after": 55,
+    "idle_decay": 8,
     "base": {
       "foreplay": 12,
       "hand": 22,
@@ -256,9 +257,8 @@
       "enter": 25,
       "thrust": 32,
       "intense": 40,
-      "stop": -25
-    },
-    "cooldown": 6
+      "stop": -10
+    }
   },
   "corruption_levels": [
     {

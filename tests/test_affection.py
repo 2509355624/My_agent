@@ -1103,21 +1103,35 @@ class ExciteTest(AffBase):
             self._settle(self._raid(), in_scene=True, act="intense")["excite"]
             > self._settle(slow, in_scene=True, act="foreplay")["excite"], True)
 
-    def test_negative_delta_pulls_it_back(self):
-        """中途停下/被打断，高潮值要掉。"""
+    def test_midway_stop_only_decays(self):
+        """中途停下/被打断：高潮值往下走，但不是当场清零。"""
         key = self._raid()
         self._settle(key, in_scene=True, act="intense")
-        before = self._settle(key, in_scene=True, act="none")["excite"]
-        res = self._settle(key, in_scene=True, act="stop")
+        before = affection.panel(key)["excite"]
+        res = self._settle(key, in_scene=False, act="stop")
         self.assertLess(res["excite"], before)
+        self.assertGreater(res["excite"], 0, "停一下不该把整场清空")
 
-    def test_drops_to_zero_when_scene_ends(self):
-        """场景一停就归零——它不是常驻状态，是这一场里的进度。"""
+    def test_one_idle_turn_does_not_reset(self):
+        """一轮没有接触只是「这一轮在说别的」：数值缓降，场景还在（2026-11-05）。"""
         key = self._raid()
         self._settle(key, in_scene=True, act="intense")
-        res = self._settle(key, in_scene=False)
-        self.assertEqual(res["excite"], 0)
+        before = affection.panel(key)["excite"]
+        res = self._settle(key, in_scene=False, act="none")
+        self.assertTrue(res["in_scene"], "单轮空闲不算收场")
+        self.assertGreater(res["excite"], 0, "中断不清零——这是被投诉的 bug")
+        self.assertLess(res["excite"], before)
+        self.assertEqual(res["excite"], max(0, before - affection.ORGASM_IDLE_DECAY))
+
+    def test_two_idle_turns_end_the_scene(self):
+        """连续两轮没有接触，才算这一场真的结束。"""
+        key = self._raid()
+        self._settle(key, in_scene=True, act="intense")
+        self._settle(key, in_scene=False, act="none")
+        res = self._settle(key, in_scene=False, act="none")
         self.assertFalse(res["in_scene"])
+        self.assertEqual(res["excite"], 0)
+        self.assertEqual(res["orgasms"], 0)
 
     def test_act_overrides_false_in_scene(self):
         """模型说 in_scene=false 却给了动作：按进行中算（2026-11-05 修）。
@@ -1146,13 +1160,31 @@ class ExciteTest(AffBase):
                            allow="no", reason="被碰到但推开")
         self.assertGreater(res["excite"], 0)
 
-    def test_stop_is_not_in_scene(self):
-        """`act=stop` 是收场信号，不能反过来把场景判回进行中。"""
+    def test_stop_keeps_the_scene_alive_for_one_turn(self):
+        """`act=stop` 是「这一轮停了」，不是「这一场结束了」。"""
         key = self._raid()
         self._settle(key, in_scene=True, act="intense")
         res = self._settle(key, in_scene=False, act="stop")
-        self.assertFalse(res["in_scene"])
-        self.assertEqual(res["excite"], 0)
+        self.assertTrue(res["in_scene"])
+        self.assertGreater(res["excite"], 0)
+
+    def test_model_increment_is_the_main_driver(self):
+        """涨多少由这一轮的 AI 判：它给 30 就是 +30，动作表只做兜底（2026-11-05）。"""
+        key = self._raid()
+        res = self._settle(key, in_scene=True, act="foreplay", excite=30)
+        self.assertEqual(res["excite"], affection.EXCITE_START + 30)
+        # 没给增量时才回落到动作档位
+        res = self._settle(key, in_scene=True, act="hand")
+        self.assertEqual(res["excite"],
+                         affection.EXCITE_START + 30 + self._base("hand"))
+
+    def test_ai_negative_increment_sets_the_idle_decay(self):
+        """空闲轮落多少也听 AI：它给 -5 就只落 5。"""
+        key = self._raid()
+        self._settle(key, in_scene=True, act="intense")
+        before = affection.panel(key)["excite"]
+        res = self._settle(key, in_scene=False, act="none", excite=-5)
+        self.assertEqual(res["excite"], max(0, before - 5))
 
     def test_sleep_closes_the_night(self):
         """过夜：场景结束、高潮值与次数清零、冲动回落（2026-11-05）。
@@ -1182,7 +1214,7 @@ class ExciteTest(AffBase):
         self.assertGreater(res["excite"], 0)
 
     def test_capped_after_max_orgasms(self):
-        """单场用满次数就强制收场：场景结束、高潮值归零、进入冷却。"""
+        """单场用满次数就强制收场：场景结束、高潮值归零、次数清零。"""
         key = self._raid()
         res = None
         for _ in range(40):
@@ -1192,57 +1224,21 @@ class ExciteTest(AffBase):
         self.assertTrue(res["sceneCapped"])
         self.assertFalse(res["in_scene"])
         self.assertEqual(res["excite"], 0)
-        self.assertEqual(res["orgasms"], affection.ORGASM_MAX)
-        self.assertGreater(res["coolLeft"], 0)
+        self.assertEqual(res["orgasms"], 0, "收场后次数归零，下一场从头算")
+        self.assertEqual(res["just_orgasm"], affection.ORGASM_MAX)
+        self.assertNotIn("coolLeft", res, "冷却期已取消（2026-11-05）")
 
-    def test_cooldown_blocks_the_next_scene(self):
-        """封顶之后，模型再判 in_scene=True 也开不起来（2026-11-04 深夜修）。
-
-        线上踩的：orgasms=5 但 scene=True，第 6 次还在写。根因是封顶只在
-        「本轮到顶」那一拍判一次、只改了内存，没留持久标记。
-        """
+    def test_no_cooldown_after_capping(self):
+        """用满 5 次收场之后，下一轮想开就能开（用户 2026-11-05 拍板取消冷却）。"""
         key = self._raid()
         for _ in range(40):
             if self._settle(key, in_scene=True, act="intense")["sceneCapped"]:
                 break
-        # 冷却期内硬要继续
-        for _ in range(3):
-            res = self._settle(key, in_scene=True, act="intense")
-            self.assertFalse(res["in_scene"], "冷却期场景不该复活")
-            self.assertEqual(res["excite"], 0)
-
-    def test_cooldown_counts_down_and_expires(self):
-        """冷却是**轮次**，不是真实世界的天；数完就能再来。"""
-        key = self._raid()
-        for _ in range(40):
-            if self._settle(key, in_scene=True, act="intense")["sceneCapped"]:
-                break
-        left = []
-        for _ in range(affection.ORGASM_COOLDOWN + 2):
-            res = self._settle(key, in_scene=True, act="intense")
-            left.append(res["coolLeft"])
-        # 一路递减到 0
-        self.assertEqual(left[-1], 0)
-        self.assertEqual(left[:-1], sorted(left[:-1], reverse=True))
-        # 数完之后场景能重新开（不用等第二天）
-        self.assertTrue(res["in_scene"], "冷却结束后应该能再开一场")
-        self.assertGreater(res["excite"], 0)
-
-    def test_cooldown_is_not_day_based(self):
-        """冷却期内改动 `day` 不影响它——剧本时间不吃真实日历那一套。"""
-        key = self._raid()
-        for _ in range(40):
-            if self._settle(key, in_scene=True, act="intense")["sceneCapped"]:
-                break
-        ent, rec = affection._ensure(key)
-        before = int(rec.get("cool_left") or 0)
-        self.assertGreater(before, 0)
-        # 假装隔了一天：冷却还剩几轮就该还是几轮（只看轮次）
-        rec["day"] = "2000-01-01"
-        ent["affection"] = rec
-        affection._save_entry(key, ent)
-        res = self._settle(key, in_scene=True, act="intense")
-        self.assertFalse(res["in_scene"], "改 day 不该让冷却失效")
+        res = self._settle(key, in_scene=True, act="foreplay")
+        self.assertTrue(res["in_scene"], "不该再被冷却挡住")
+        self.assertEqual(res["excite"],
+                         affection.EXCITE_START + self._base("foreplay"))
+        self.assertEqual(res["orgasms"], 0)
 
 
     def test_tail_line_only_shows_it_in_scene(self):
