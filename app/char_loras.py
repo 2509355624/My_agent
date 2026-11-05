@@ -122,6 +122,28 @@ def match(skill, prompt):
     return None
 
 
+def apply(skill, prompt, workflow):
+    """命中角色就把 LoRA 节点插进 workflow 副本、触发词追加进 prompt。
+
+    返回 `(workflow, prompt)`；没命中时原样返回，调用方零改动。网页跑图台
+    （`build_t2i_workflow`）和 QQ 直达生图（`_generate_image`）都走这一份，
+    避免两条路各写一遍装填逻辑、其中一条漏掉。
+    """
+    entry = match(skill, prompt)
+    if not entry:
+        return workflow, prompt
+    wf = patch(workflow, entry)
+    parts = [prompt.rstrip(" ,")]
+    if entry.get("identity"):
+        # 模型写英文 tag 时经常自己补一套错的外观（黑发、校服…），和 LoRA
+        # 打架；用带权重的固定外观压回去，发色 / 瞳色 / 猫耳这些是身份，
+        # 不跟着衣服走。
+        parts.append(str(entry["identity"]))
+    if entry.get("trigger"):
+        parts.append(str(entry["trigger"]))
+    return wf, ", ".join(p for p in parts if p)
+
+
 def patch(workflow, entry):
     """把角色 LoRA 插进工作流 dict 的模型链头。返回新 dict，**不动模板**。
 

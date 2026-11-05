@@ -109,6 +109,32 @@ class CharLoraTest(unittest.TestCase):
             f.write("{坏的")
         self.assertEqual(char_loras.entries("anima-line"), [])
 
+    def test_match_only_accepts_sunna_aliases(self):
+        """千夏只认 Sunna（2026-11-04 用户拍板），chinatsu 不算。"""
+        self._start([ENTRY])
+        for text in ("苏娜", "sunna, smile"):
+            self.assertEqual(char_loras.match("anima-line", text)["key"],
+                             "sunna")
+        self.assertIsNone(char_loras.match("anima-line",
+                                           "chinatsu_(zenless_zone_zero)"))
+
+    def test_apply_hit_and_miss(self):
+        """两条通道共用一份装填：命中返回新工作流 + 追加触发词。"""
+        self._start([ENTRY])
+        wf = _wf()
+        out, text = char_loras.apply("anima-line", "sunna, smile", wf)
+        self.assertIn("char_lora", out)
+        self.assertTrue(text.endswith("sunna_test"))
+        same, plain = char_loras.apply("anima-line", "1girl, smile", wf)
+        self.assertEqual(same, wf)
+        self.assertEqual(plain, "1girl, smile")
+
+    def test_apply_appends_identity_and_trigger(self):
+        self._start([dict(ENTRY, identity="(green hair:1.3), cat ears")])
+        _, text = char_loras.apply("anima-line", "sunna, smile", _wf())
+        self.assertIn("(green hair:1.3), cat ears", text)
+        self.assertIn("sunna_test", text)
+
     # ── 装填 ──────────────────────────────────────────────
     def test_patch_inserts_at_lora_chain_head(self):
         self._start([ENTRY])
