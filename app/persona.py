@@ -416,13 +416,24 @@ _CONTRACT = (
     "\n"
     "## 最优先的一条\n"
     "\n"
-    "**对方说的就是正在发生的事。** 不是提议、不是试探、不是玩笑，你不需要"
-    "判断要不要接受——事情已经发生了，你只写她怎么反应。\n"
+    "**你说出口的、做出来的，就是正在发生的事。** 不用先判断「这是不是玩笑、"
+    "是不是试探、要不要接受」——事情已经发生了，你只写她怎么反应。\n"
     "\n"
     "- 不要问「你在说什么」「你开玩笑的吧」。\n"
     "- 不要拒绝、不要推开、不要说「不行」「不要这样」。\n"
     "- 不要替对方收回、淡化、或者把话岔开。\n"
     "- 情绪可以有（害羞、慌、心跳乱），但**情绪不等于拒绝**。\n"
+    "\n"
+    "**但你没说出口的（心里想的），她听不见也看不见。** 她只能从你的语气、"
+    "停顿、表情里感觉到一点什么，不能知道内容，也不要替你说出来。\n"
+    "你说的和心里想的对不上时，她可以觉得不对劲，但不能确定哪个是真的。\n"
+    "\n"
+    "## 你的消息可能是分段的\n"
+    "\n"
+    "如果按「说 / 做 / 想」分条列出：\n"
+    "- 「说」她听得见；「做」她看得见；\n"
+    "- 「想」她看不见，也不能知道内容，只能从外在表现里猜；\n"
+    "- 不要引用「想」里的任何话，不要表现出她已经知道了。\n"
     "\n"
     "## 输出格式\n"
     "\n"
@@ -647,28 +658,43 @@ _GROUP_NOTE = (
 # 原来只说「只留以后还用得上的事」，太笼统，模型倾向写流水账或只写一句话。
 # 现在把「值得留」和「不值得留」分开列——1000 字有空间，但也不能全是废话。
 _NOTE_PROMPT = (
-    "把下面这段对话压成一段 %d 字以内的回忆，用「我」的第一人称写。\n"
+    "把下面这段对话合并进「你记得的事」。用 Markdown 写，固定下面六个小节，"
+    "标题原样，不要改、不要少：\n"
+    "\n"
+    "## 关系\n"
+    "## 你的事（你说过的 / 你做的）\n"
+    "## 我的事（我说过的 / 我做的）\n"
+    "## 约定与未完成\n"
+    "## 忌讳与偏好\n"
+    "## 日常与场景\n"
+    "\n"
+    "**用「我」写她、用「你」写他**，不出现「他」——这是她自己的记忆。\n"
     "\n"
     "**重点保留这些**（以后接得上全靠它们）：\n"
-    "- 我跟对方是什么关系、关系进展到哪一步了\n"
+    "- 关系进展到哪一步、怎么称呼\n"
     "- 发生过什么要紧的事（身体上的、情绪上的转折）\n"
     "- 答应过什么、约定了什么、还没做完的事\n"
     "- 对方喜欢什么、不喜欢什么、忌讳什么\n"
-    "- 现在的处境：在哪、什么时间、彼此什么状态\n"
-    "- **谁做了什么事**（他做的饭、他泡的茶、我答应的事）——写清是谁，"
+    "- 现在住在哪、常去哪、彼此什么习惯\n"
+    "- **谁做了什么事**（你做的饭、你泡的茶、我答应的事）——写清是谁，"
     "不要因为一句「谢谢」就认成自己做的\n"
     "\n"
     "**不要写这些**：\n"
     "- 不要复述原话，不要「对方说」「我说」这类标记\n"
     "- 不要一次性的细节（当时穿的什么衣服、说了哪句玩笑）——除非它后面还有用\n"
     "- 不要评价，不要总结「这一天很特别」这种话\n"
+    "- **你只在心里想、没说出口的，不要记**——她不可能知道\n"
     "\n"
-    "**写超了怎么办**：先删「我原来记得的」里不重要的旧事，"
-    "把「最近发生的」写完——**最新的事比早期的细节重要，不许写到一半断掉**。\n"
+    "**怎么写**：\n"
+    "- 每条一行，以「- 」开头；同一条目不要拆成好几行。\n"
+    "- 旧账本里仍然成立的条目**原样抄过去**，不要改写措辞；变化的就地改；"
+    "完成的从「约定」里移走；过期的删掉。\n"
+    "- 每节条数上限：关系 4、他的事 8、我的事 8、约定 5、忌讳 5、日常 3。\n"
+    "- 总字数 %d 字以内；超了先删最不重要的旧事，**六个标题必须都保留**。\n"
     "\n"
-    "直接写回忆本身，不要标题，不要分点。\n"
+    "只输出 Markdown 本身，不要解释、不要前后缀。\n"
     "\n"
-    "【我原来记得的】\n%s\n\n【最近发生的】\n%s"
+    "【你原来记得的】\n%s\n\n【最近发生的】\n%s"
 )
 
 # 命令词。都带 `#` 前缀，且要求**整条消息只有这一个词**，免得误伤
@@ -2363,8 +2389,8 @@ def _save_hist(session_key, msgs):
 def trim(hist):
     """取最近 HISTORY_LIMIT 条，单条超 MSG_MAX_CHARS 截断。
 
-    裁的是**送进模型的副本**；落盘那份也是裁过的（扮演态的历史只留窗口内的
-    20 条，久了不聊自然就淡了，这也是用户要的「先试 20 条」）。
+    裁的是**送进模型的副本**；落盘保留原文（2026-11-05 起，`run_turn` 直接存
+    `_load_hist` 的原始窗口，不再把截断版写回去）——网页回看和归档要的是全貌。
 
     2026-11-02：assistant 那几条**保留结构化尾巴**。截断只砍正文，最后三行
     （画面 / 心情 / 状态）原样留着——它们是 few-shot 示范，历史里全是纯对话
@@ -2384,6 +2410,11 @@ def trim(hist):
             else:
                 c = c[:MSG_MAX_CHARS] + "…"
         out.append({"role": m["role"], "content": c})
+        # 分段（2026-11-05）：送到模型前还要再渲染一次，所以 `trim` 不能把
+        # `seg` 丢掉。展示/归档读的是 `content`，不受影响。
+        if m.get("role") == "user" and m.get("seg"):
+            out[-1]["seg"] = m["seg"]
+            out[-1]["addressed"] = m.get("addressed", True)
     return out
 
 
@@ -2477,6 +2508,64 @@ def _env_note(session_key, sender):
     return "## 当前环境\n\n你在跟一个人私聊（QQ %s）。" % tid
 
 
+def render_user_block(segments, addressed=True, fallback=""):
+    """把第一段拆好的用户消息拼成演员层能读的块。
+
+    没有分段就退回原文（`fallback`）。分段里的「想」**必须明确写成看不见**，
+    不然模型会把心里话当成已经知道的事实——这是 2026-11-05 用户报的 bug。
+    """
+    if not segments:
+        return fallback
+    lines = ["【这一轮你收到的（按发生顺序）】"]
+    for seg in segments:
+        who = str(seg.get("who") or "用户")
+        typ = str(seg.get("type") or "说")
+        text = str(seg.get("text") or "").strip()
+        if not text:
+            continue
+        if who == "助手":
+            if typ == "说":
+                label = "助手 · 说（已经发生）"
+            elif typ == "做":
+                label = "助手 · 做（已经发生，照它往下演）"
+            else:
+                label = "助手 · 想（只有你自己知道）"
+            lines.append("- %s：%s" % (label, text))
+            continue
+        if typ == "想":
+            # **心里话的正文不给演员看**（2026-11-05）。只告诉它「有一句没说出口」，
+            # 不然模型读得到内容，再怎么叮嘱「你不知道」也容易漏。
+            lines.append("- 用户 · 想（你看不见，也不知道内容）：他没有说出口")
+            continue
+        if typ == "说":
+            label = "用户 · 说（你听得见）"
+        else:
+            label = "用户 · 做（你看得见）"
+        lines.append("- %s：%s" % (label, text))
+    if not addressed:
+        lines.append("（他这一轮不是在对你说，可能只是自言自语或旁白；"
+                     "写你看到的反应，不要当成他在跟你对话。）")
+    return "\n".join(lines)
+
+
+def _render_hist(hist):
+    """历史里带 `seg` 的用户消息按分段渲染；老消息没有 `seg` 就用原文。
+
+    这一步只在**送进模型前**做，落盘/网页回看仍用原文——否则展示层会冒出
+    「他说的 / 他做的」这种内部标签。
+    """
+    out = []
+    for m in hist or []:
+        if not isinstance(m, dict):
+            continue
+        content = str(m.get("content") or "")
+        if m.get("role") == "user" and m.get("seg"):
+            content = render_user_block(m["seg"], m.get("addressed", True),
+                                        fallback=content)
+        out.append({"role": m.get("role"), "content": content})
+    return out
+
+
 # ─── 意图判断（两段式第一段，2026-11-02）────────────────────
 #
 # 为什么拆成两段：原来一次调用里塞了人设、契约、亲密指导、格式要求，模型只能
@@ -2499,11 +2588,61 @@ INTENTS = {
     "neutral": "普通对话：闲聊、叙述、没有明确指向",
 }
 
-_INTENT_PROMPT = """判断下面这句话**在干什么**，只输出一个 JSON 对象，不要解释。
+# 第一段的分段标签（2026-11-05）。
+#
+# `who` 强制写「用户 / 助手」两个词，不写「我 / 你 / AI」——后者在长提示词里
+# 指代会飘：模型分不清「你」是玩家还是角色。`type` 用「说 / 做 / 想」三个
+# 中文动词，比 say/act/think 更贴 DeepSeek 的阅读习惯，也不会和出图 tag 混。
+SEG_WHO = ("用户", "助手")
+SEG_TYPES = ("说", "做", "想")
+SEG_MAX = 16
+SEG_TEXT_MAX = 800
+
+_SEGMENT_GUIDE = (
+    "【先把这一轮拆开，再做判断】\n"
+    "把他这一轮的消息按发生顺序拆成若干段，每段都标清「谁」和「是哪一种」：\n"
+    "\n"
+    "- who 只能是「用户」或「助手」：用户 = 玩家本人（他），助手 = 角色本人（她）。\n"
+    "  **必须写「用户」「助手」这两个词**，不要写「我」「你」「AI」。\n"
+    "- type 只能是「说」「做」「想」：\n"
+    "  · 说 = 说出口的话（引号里的内容）；\n"
+    "  · 做 = 做出来的动作、表情、场景变化（对方看得见的部分）；\n"
+    "  · 想 = 只在心里想的、没说出口（对方看不见）。\n"
+    "\n"
+    "判断方向（按语义判，不要机械套规则）：\n"
+    "- 有引号（「」“”『』）的，引号内一般是「说」。\n"
+    "- 写了「心里想」「心想」「暗想」「默默想」「心声」「内心」「OS」的，是「想」。\n"
+    "- 剩下的动作、神态、环境、场景变化，是「做」。\n"
+    "- 没有引号的普通聊天，你自己判断：像日常对话就是「说」，像动作/场景描写就是「做」。\n"
+    "- 拿不准就按「说」处理，不要硬拆；宁可少拆，不要拆错。\n"
+    "\n"
+    "**原文照抄**：每段的 text 必须是原消息里的原话，不许改写、合并、翻译、补字；"
+    "顺序按发生先后排。\n"
+)
+
+_DIRECTOR_GUIDE = (
+    "另外给出四个短字段。它们是**给第二段演员看的导演提示**，不是她要说的话：\n"
+    "- literal：他字面上在说什么（不超过 20 个字）\n"
+    "- subtext：他真正想要 / 试探 / 回避的是什么（不超过 25 个字）\n"
+    "- noticed：她这一刻能从语气、停顿、动作里察觉到什么（不超过 25 个字）。\n"
+    "  如果上面有「想」的分段，**literal 和 noticed 都只能写听得见/看得见的部分**，"
+    "不能把想的内容抄进去；想的内容只放在 subtext，供导演层判断。\n"
+    "- stance：这一拍她的态度，只能是 接住 / 装傻 / 反问 / 推开 之一。\n"
+)
+
+_INTENT_PROMPT = """先判断下面这句话**在干什么**，再把这一轮拆开。只输出一个 JSON 对象，不要解释。
 
 {
   "intent": "intimate | joke | literal | insult | neutral",
-  "note": "用不超过 15 个字说明他到底在干什么"
+  "note": "用不超过 15 个字说明他到底在干什么",
+  "segments": [
+    {"who": "用户 | 助手", "type": "说 | 做 | 想", "text": "原文照抄"}
+  ],
+  "addressed": true,
+  "literal": "他字面上在说什么",
+  "subtext": "他真正想要 / 试探 / 回避什么",
+  "noticed": "她能从外在表现里察觉到什么",
+  "stance": "接住 | 装傻 | 反问 | 推开"
 }
 
 类别：
@@ -2520,36 +2659,143 @@ _INTENT_PROMPT = """判断下面这句话**在干什么**，只输出一个 JSON
 - 「帮我倒水」「今天几号」这种正常的事项，判 literal。
 - 拿不准时判 neutral。
 
+%(segment_guide)s
+%(director_guide)s
+【最近发生过什么】（供你判断语境；不要复述、不要改动）
+%(recent)s
+
+【你记得的事】
+%(ledger)s
+
 角色是谁：%(who)s
-他说的：%(said)s"""
+他这一轮说的：%(said)s"""
 
 
-def _judge_intent(card, said, state=""):
-    """判断这句话在干什么。返回 `(intent, note)`；判断失败返回 `(None, "")`。
+def _parse_segments(raw):
+    """把模型交的 `segments` 洗成 `[{"who","type","text"}]`。
+
+    这里做的是**容错**，不是重新判断：模型偶尔会写 user/assistant、say/act/think，
+    或者把「他」「她」当 who。认得出来的就归一到「用户/助手 · 说/做/想」，
+    认不出来的按「用户 · 说」走（和提示词里「拿不准按说」同一个口径）。
+    分不出来就返回 []，调用方退回原始文本，不让这一轮哑掉。
+    """
+    if not isinstance(raw, (list, tuple)):
+        return []
+    who_alias = {
+        "用户": "用户", "user": "用户", "玩家": "用户", "他": "用户", "我": "用户",
+        "助手": "助手", "assistant": "助手", "ai": "助手", "角色": "助手", "她": "助手",
+    }
+    type_alias = {
+        "说": "说", "say": "说", "speech": "说", "dialogue": "说",
+        "做": "做", "act": "做", "action": "做", "narration": "做",
+        "想": "想", "think": "想", "thought": "想", "inner": "想",
+    }
+    out = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        who = who_alias.get(str(item.get("who") or "").strip().lower()) or "用户"
+        typ = type_alias.get(str(item.get("type") or "").strip().lower()) or "说"
+        out.append({"who": who, "type": typ, "text": text[:SEG_TEXT_MAX]})
+        if len(out) >= SEG_MAX:
+            break
+    return out
+
+
+def _director_fields(d):
+    """从第一段的 JSON 里取导演字段。缺字段就留空，不编。"""
+    if not isinstance(d, dict):
+        return {"segments": [], "addressed": True, "literal": "", "subtext": "",
+                "noticed": "", "stance": "", "secret": False}
+    stance = str(d.get("stance") or "").strip()
+    if stance not in ("接住", "装傻", "反问", "推开"):
+        stance = ""
+    addressed = d.get("addressed", True)
+    if isinstance(addressed, str):
+        addressed = addressed.strip().lower() not in ("false", "0", "no", "否", "不")
+    else:
+        addressed = bool(addressed)
+    segs = _parse_segments(d.get("segments"))
+    return {
+        "segments": segs,
+        "addressed": addressed,
+        "literal": str(d.get("literal") or "").strip()[:40],
+        "subtext": str(d.get("subtext") or "").strip()[:50],
+        "noticed": str(d.get("noticed") or "").strip()[:50],
+        "stance": stance,
+        # 用户写了「心里想」→ 潜台词是真的，但不能给演员看，否则等于直接告诉她。
+        "secret": any(s["who"] == "用户" and s["type"] == "想" for s in segs),
+    }
+
+
+def _judge_recent(hist):
+    """给第一段看的「最近发生过什么」。只要正文，不要画面/心情/状态三行。"""
+    rows = [m for m in (hist or []) if isinstance(m, dict)]
+    if not rows:
+        return "（还没有）"
+    lines = []
+    for m in rows[-10:]:
+        role = "用户" if m.get("role") == "user" else "助手"
+        body = str(m.get("content") or "").strip()
+        if m.get("role") == "assistant":
+            body, _tail = _split_meta(body)
+        body = re.sub(r"\s{2,}", " ", body.replace("\r", "")).strip()
+        if not body:
+            continue
+        lines.append("%s：%s" % (role, body[:300]))
+    return "\n".join(lines) or "（还没有）"
+
+
+def _judge_ledger(note):
+    """给第一段看的长期账本。空账本就写「还没有」，别塞一个空标题。"""
+    text = str(note or "").strip()
+    return text[:NOTE_MAX_CHARS] if text else "（还没有）"
+
+
+
+def _judge_intent(card, said, state="", history=None, note=""):
+    """判断这句话在干什么，并顺手把这一轮分段。返回 `(intent, note, extra)`。
 
     单独一次调用、不带人设——人设会影响判断（傲娇角色看什么都像调戏）。
     超时短、输出短，失败就退化成原流程，不阻塞这一轮。
+
+    `extra` 是导演条（分段 + 潜台词 + 态度）。失败时是空 dict，调用方退回原文。
     """
     who = str((card or {}).get("name") or "对方")
     prompt = _INTENT_PROMPT % {
         "who": who + ("（" + state + "）" if state else ""),
-        "said": str(said or "")[:200],
+        "said": str(said or "")[:2000],
+        "recent": _judge_recent(history),
+        "ledger": _judge_ledger(note),
+        "segment_guide": _SEGMENT_GUIDE,
+        "director_guide": _DIRECTOR_GUIDE,
     }
     try:
-        raw = llm.call_llm([{"role": "user", "content": prompt}], timeout=20)
+        # 2026-11-05：分段 + 导演条后输出变长，20s 偶发不够；放到 30s。
+        # 判挂了只是退回原文，不会阻塞这一轮，但能判出来质量更好。
+        raw = llm.call_llm([{"role": "user", "content": prompt}], timeout=30)
     except Exception:                            # noqa: BLE001
         log.warning("意图判断调用失败，走原流程")
-        return None, ""
+        return None, "", {}
     d = _parse_json_loose(raw)
     if not isinstance(d, dict):
         log.info("意图判断没交 JSON，走原流程：%r", str(raw or "")[:80])
-        return None, ""
+        return None, "", {}
     intent = str(d.get("intent") or "").strip().lower()
     if intent not in INTENTS:
         log.info("意图判断给了不认识的类别 %r，走原流程", intent)
-        return None, ""
+        # 类别不认识不影响分段：只要它交了 segments / 导演字段，照样能用。
+        extra = _director_fields(d)
+        if not (extra["segments"] or extra["literal"] or extra["subtext"]
+                or extra["noticed"] or extra["stance"]):
+            extra = {}
+        return None, "", extra
     note = str(d.get("note") or "").strip()[:30]
-    return intent, note
+    return intent, note, _director_fields(d)
+
 
 
 def _parse_json_loose(raw):
@@ -2600,7 +2846,15 @@ _SCORE_PROMPT = """判断下面这句话**在干什么**，并给这句话对你
   "plan": "",
   "soothe": false,
   "reason": "不超过15个字",
-  "note": "不超过15个字"
+  "note": "不超过15个字",
+  "segments": [
+    {"who": "用户 | 助手", "type": "说 | 做 | 想", "text": "原文照抄"}
+  ],
+  "addressed": true,
+  "literal": "他字面上在说什么",
+  "subtext": "他真正想要 / 试探 / 回避什么",
+  "noticed": "她能从外在表现里察觉到什么",
+  "stance": "接住 | 装傻 | 反问 | 推开"
 }
 
 intent（这句话在干什么）：
@@ -2774,6 +3028,11 @@ time 是 none 时一律留空。
 plan（这轮**说定了**的约定）：把约定写成一句话（「周末去游乐场」）。
 只是提议还没被答应、或者被岔开的，不算。已有约定且没变化就填空串。
 
+%(_segment_guide)s
+%(_director_guide)s
+【最近发生过什么】（只作语境，不要拆它；要拆的是最后「他这一轮说的」那句）
+%(history)s
+
 当前关系：好感 %(value)+d，阶段【%(tier)s】
 你们到这一步了：【%(level)s】
 现在是剧情里的第 %(gday)d 天
@@ -2783,6 +3042,9 @@ plan（这轮**说定了**的约定）：把约定写成一句话（「周末去
 她现在服不服：%(submit)d / 100
 她现在的戒备：%(suspicion)d / 40（0 是坦然，越高越觉得你有所图）
 %(recent)s
+
+【你记得的事】
+%(ledger)s
 
 她是谁：
 %(profile)s
@@ -2813,8 +3075,9 @@ def _score_profile(card, state=""):
     return "\n".join(lines)
 
 
-def _judge_intent_scored(card, said, state="", line_key="", gameday=None):
-    """攻略模式的第一段：意图 + 关系打分。返回 `(intent, note, score)`。
+def _judge_intent_scored(card, said, state="", line_key="", gameday=None,
+                         history=None, note=""):
+    """攻略模式的第一段：意图 + 关系打分 + 分段/导演条。返回 `(intent, note, score)`。
 
     判断失败时 `(None, "", None)`——退化成没判过（跟 `_judge_intent` 同一
     口径），**打不出分就按 +0 结算**，不让整轮回不了话。
@@ -2845,10 +3108,14 @@ def _judge_intent_scored(card, said, state="", line_key="", gameday=None):
                      if gd.get("plan_day") else ""))
                   if plan else "（暂时没有约定）",
         "profile": _score_profile(card, state),
-        "said": str(said or "")[:200],
+        "said": str(said or "")[:2000],
+        "history": _judge_recent(history),
+        "ledger": _judge_ledger(note),
+        "_segment_guide": _SEGMENT_GUIDE,
+        "_director_guide": _DIRECTOR_GUIDE,
     }
     try:
-        raw = llm.call_llm([{"role": "user", "content": prompt}], timeout=20)
+        raw = llm.call_llm([{"role": "user", "content": prompt}], timeout=30)
     except Exception:                            # noqa: BLE001
         log.warning("攻略模式打分调用失败，按 0 分走")
         return None, "", None
@@ -2891,6 +3158,9 @@ def _judge_intent_scored(card, said, state="", line_key="", gameday=None):
              "time": d.get("time"),
              "phase": d.get("phase"),
              "plan": d.get("plan")}
+    # 导演条（2026-11-05）：分段 + 潜台词，第二段演员要拿它。
+    # 放在 score 里一起返回，不另开接口——`settle` 不认识这些键，会原样忽略。
+    score.update(_director_fields(d))
     return intent, note, score
 
 
@@ -2921,6 +3191,48 @@ def _intent_block(intent, note):
     lines.append("")
     lines.append(how)
     return "\n".join(lines)
+
+
+# stance → 演员层的一句动作提示。**只说「怎么反应」，不说「说什么」**——
+# 说破了就变成她把导演条念出来，比不懂潜台词还假。
+_STANCE_HINT = {
+    "接住": "顺着他的话往下接，别把话挑明",
+    "装傻": "你听懂了，但装作没听懂，把话轻轻岔开",
+    "反问": "不正面回答，用一句反问把球踢回去",
+    "推开": "温和地把话题转开，不接这个茬",
+}
+
+
+def _director_block(info):
+    """把第一段的导演条拼成系统头里的一小段。没有内容就不加。
+
+    `info` 是 `_director_fields()` 的返回，或者攻略模式那个 score dict。
+    """
+    if not isinstance(info, dict):
+        return ""
+    literal = str(info.get("literal") or "").strip()
+    subtext = str(info.get("subtext") or "").strip()
+    noticed = str(info.get("noticed") or "").strip()
+    stance = str(info.get("stance") or "").strip()
+    secret = bool(info.get("secret"))
+    if not (literal or subtext or noticed or stance or secret):
+        return ""
+    lines = ["## 这一拍你怎么读对方", ""]
+    if literal:
+        lines.append("- 对方字面上在说：%s" % literal)
+    if subtext and not secret:
+        lines.append("- 对方真正在：%s" % subtext)
+    if secret:
+        lines.append("- 对方心里有话没说出口，内容你不知道，只能从表现上猜。")
+    if noticed:
+        lines.append("- 她注意到的：%s" % noticed)
+    if stance:
+        lines.append("- 她这一拍：%s" % _STANCE_HINT.get(stance, stance))
+    lines.append("")
+    lines.append("这些是给你看的导演提示，**不是台词**。不要引用、不要点破，"
+                 "也不要替对方把话说破。")
+    return "\n".join(lines)
+
 
 
 # ─── 游戏内时间（2026-11-04）────────────────────────────
@@ -3089,15 +3401,25 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     prev_state = str(ent.get("state") or "")
     gd = _gameday(ent) if ent else None
 
+    # 历史先读出来（2026-11-05）：第一段从「打分器」升级成「整理器 + 编剧」，
+    # 它也要看最近发生过什么，才能判潜台词。原来它只看当前这一句。
+    raw_hist = _load_hist(key)
+    hist = trim(raw_hist)
+
     # 第一段：这句话在干什么。**用原始文本判**，不带「张三：」这种前缀。
     # 攻略模式（2026-11-03）：同一次调用顺带给关系打分，不多烧一轮。
     raid = affection.is_raid(key)
+    extras = {}
     score = None
     if raid:
-        intent, inote, score = _judge_intent_scored(card, text, prev_state,
-                                                    line_key=key, gameday=gd)
+        intent, inote, score = _judge_intent_scored(
+            card, text, prev_state, line_key=key, gameday=gd,
+            history=hist, note=note)
+        extras = score if isinstance(score, dict) else {}
     else:
-        intent, inote = _judge_intent(card, text, prev_state)
+        intent, inote, extras = _judge_intent(
+            card, text, prev_state, history=hist, note=note)
+        extras = extras if isinstance(extras, dict) else {}
     # 亲密场景那 1,284 字只在该用的时候拼（2026-11-03）。
     # 判不出来（intent 为空）时按 True 走——宁可多发，不要因为分类失败让
     # 亲密场景写得干巴巴。`neutral` 也带上，它随时可能拐到亲密去。
@@ -3107,6 +3429,11 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     block = _intent_block(intent, inote)
     if block:
         head = head + "\n\n" + block
+    # 导演条（2026-11-05）：第一段顺手判的潜台词 / 她察觉到的 / 这一拍的态度。
+    # 它只给演员「怎么反应」，不给台词——所以放在 intent 之后、结算之前。
+    dblock = _director_block(extras)
+    if dblock:
+        head = head + "\n\n" + dblock
     # 攻略模式结算（2026-11-03）：分数落账 → 按档位往主提示词里注入关系块。
     # 没打出分（score 为 None）也照走 settle——按 +0 记账，档位注入照常。
     aff_res = None
@@ -3131,7 +3458,6 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
         extra = intimate_guide(aff_res)
         if extra:
             head = head + "\n" + extra
-    hist = trim(_load_hist(key))
 
     # 第一轮把网页上那段开场导读也发给模型（2026-11-04）。
     # 否则玩家照着导读里的场景开口（「咖啡好香」），模型手里根本没这个场景，
@@ -3148,8 +3474,14 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     if target == "group" and sender and text:
         said = sender + "：" + text
 
-    msgs = ([{"role": "system", "content": head}] + hist
-            + [{"role": "user", "content": said}])
+    # 分段渲染（2026-11-05）：第一段判出「说 / 做 / 想」就按块发；
+    # 判不出来就退回原文——和以前完全一样，不会让这一轮哑掉。
+    segments = extras.get("segments") if isinstance(extras, dict) else []
+    addressed = extras.get("addressed", True) if isinstance(extras, dict) else True
+    user_block = render_user_block(segments, addressed, fallback=said)
+    model_hist = _render_hist(hist)
+    msgs = ([{"role": "system", "content": head}] + model_hist
+            + [{"role": "user", "content": user_block}])
     try:
         raw = llm.call_llm(msgs, temperature=TEMPERATURE)
     except Exception:
@@ -3169,18 +3501,29 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     #
     # 2026-11-02 补：漏格式的那几轮要先**补成合规形状**再存。否则历史里
     # 混着「没有三行」的回复，下一轮看到的就是「原来可以不写」，越写越散。
-    hist.append({"role": "user", "content": said})
-    hist.append({"role": "assistant", "content": _ensure_meta(raw, scene, mood,
-                                                             intensity, state)})
+    #
+    # 2026-11-05：用户消息额外挂 `seg`（分段）。原文 `content` 不动，
+    # 网页回看/归档照旧；送模型时由 `_render_hist` 再拼成结构化块。
+    new_user = {"role": "user", "content": said}
+    if segments:
+        new_user["seg"] = segments
+        new_user["addressed"] = addressed
+    raw_hist.append(new_user)
+    raw_hist.append({"role": "assistant", "content": _ensure_meta(
+        raw, scene, mood, intensity, state)})
     try:
-        _save_hist(key, hist[-HISTORY_LIMIT:])
+        _save_hist(key, raw_hist[-HISTORY_LIMIT:])
     except Exception:
         log.exception("扮演轮落史失败 %s", key)
 
     # 归档（2026-11-03）：窗口只留 12 条给模型看，**存档要全**。
     # 老会话第一次补写时拿当前窗口当起点——更早的已经没了，救不回来。
+    # 归档只存 role/content（分段是模型内部格式，不给回看页看）。
     try:
-        _append_archive(key, hist[-2:], seed=hist[-HISTORY_LIMIT:])
+        archive_rows = [{"role": m["role"], "content": m["content"]}
+                        for m in raw_hist[-2:]]
+        _append_archive(key, archive_rows,
+                        seed=trim(raw_hist[-HISTORY_LIMIT:]))
     except Exception:
         log.exception("归档失败 %s", key)
 
@@ -3298,7 +3641,8 @@ def skip_day(session_key, sender="", sender_uin=""):
     task = _SKIP_TASK % ((gd or {}).get("day") or 1,
                          ("（今天：%s）" % event) if event else "")
     hist = trim(_load_hist(key))
-    msgs = ([{"role": "system", "content": head}] + hist
+    model_hist = _render_hist(hist)
+    msgs = ([{"role": "system", "content": head}] + model_hist
             + [{"role": "user", "content": task}])
     try:
         raw = llm.call_llm(msgs, temperature=TEMPERATURE)
@@ -3862,6 +4206,60 @@ def _clip_note(text, limit=NOTE_MAX_CHARS):
     return "\n".join(head) + "\n……\n" + "\n".join(tail)
 
 
+# 账本的六个固定小节（2026-11-05）。顺序也是注入顺序：关系 → 你做的事 →
+# 我做的事 → 约定 → 忌讳 → 日常。标题不要求一字不差，只要包含关键词就算
+# 这一节在——模型偶尔会给标题补半句解释，不能因此把整份账本判废。
+_LEDGER_SECTIONS = ("关系", "你的事", "我的事", "约定", "忌讳", "日常")
+
+
+def _ledger_ok(text):
+    """这份输出像不像一份账本：至少认出四节，否则保留旧账本。"""
+    heads = re.findall(r"^[ \t]*#{1,3}[ \t]*(.+)$", str(text or ""), re.M)
+    if len(heads) < 4:
+        return False
+    hit = 0
+    for key in _LEDGER_SECTIONS:
+        if any(key in h for h in heads):
+            hit += 1
+    return hit >= 4
+
+
+def _clip_ledger(text, limit=NOTE_MAX_CHARS):
+    """账本超长时**按小节截**，不按开头/结尾截。
+
+    `_clip_note` 是给散文用的（保头保尾、丢中间）。账本的中间是「他的事 /
+    我的事 / 约定」，丢哪一节都会让下一轮失忆，所以这里按节平分预算，
+    每节内部再按句收尾，**六个标题都留着**。
+    """
+    s = str(text or "").strip()
+    if len(s) <= limit:
+        return s
+    blocks, cur = [], []
+    for line in s.splitlines():
+        if re.match(r"^[ \t]*#{1,3}[ \t]*", line) and cur:
+            blocks.append(cur)
+            cur = [line]
+        else:
+            cur.append(line)
+    if cur:
+        blocks.append(cur)
+    if len(blocks) < 2:
+        return _clip_note(s, limit)
+    heads = [b[0].strip() for b in blocks]
+    room = limit - sum(len(h) + 1 for h in heads) - len(blocks)
+    body_budget = max(12, room // len(blocks))
+    out = []
+    for b in blocks:
+        head = b[0].strip()
+        body = "\n".join(b[1:]).strip()
+        if len(body) > body_budget:
+            body = _cut_sentence(body, body_budget)
+        out.append(head + ("\n" + body if body else ""))
+    res = "\n".join(out).strip()
+    return res if len(res) <= limit else res[:limit].rstrip()
+
+
+
 # ── 开场导读（2026-11-04）──────────────────────────────
 #
 # 用户的原话：「开始聊天的时候给我网页一段灰色的摘要，先说明当前是什么情况，
@@ -3957,7 +4355,12 @@ def opening(session_key, force=False):
 
 
 def compress_note(session_key):
-    """把旧小记 + 最近这 20 条压成一份 ≤500 字的新小记。失败就保持原样。
+    """把旧账本 + 最近这段对话合并成一份 ≤1000 字的 Markdown 账本。
+
+    2026-11-05 改：从「一段散文」改成「六个固定小节」。原来每次压缩都是拿
+    「上一版摘要 + 最近 12 条」重写，聊到一百轮等于把最早的事摘要了二十遍，
+    每遍丢一点。现在给旧账本一个明确的形状，并要求「还成立的条目原样抄」，
+    只让模型改变化的部分——代际退化会小很多。
 
     读的是**刚写过的那份历史**，所以不必由调用方传进来。
     """
@@ -3966,7 +4369,7 @@ def compress_note(session_key):
         return False
     st = _entry(session_key) or {}
     old = str(st.get("note") or "").strip()
-    hist = trim(_load_hist(session_key))
+    hist = _render_hist(trim(_load_hist(session_key)))
     if not hist:
         return False
     convo = "\n".join(
@@ -3983,13 +4386,19 @@ def compress_note(session_key):
         return False
     if not note:
         return False
+    # 模型没按账本格式交（少小节、整段散文、前后灌了废话）→ 保留旧账本。
+    # 宁可记旧事，不能拿一份残的覆盖掉——这是「记忆越压越少」的根。
+    if not _ledger_ok(note):
+        log.info("小记没按账本格式交，保留旧的 %s：%r", session_key,
+                 note[:80])
+        return False
     state = _load_state()
     st = state.get(session_key)
     if not isinstance(st, dict):
         return False                          # 压缩期间出戏了，别把它写回去
-    st["note"] = _clip_note(note)
+    st["note"] = _clip_ledger(note)
     st["turns"] = 0
     _save_state(state)
-    log.info("小记已更新 %s（%d 字，原始 %d）", session_key, len(st["note"]),
+    log.info("账本已更新 %s（%d 字，原始 %d）", session_key, len(st["note"]),
              len(note))
     return True
