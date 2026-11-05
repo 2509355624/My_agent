@@ -66,6 +66,11 @@ def _guest_free(ckey):
 # 结构：{会话线 key: {"ai3": {"sid": "9J74", "page": 5}}}
 _PIC_LOCK = threading.Lock()
 
+# 射精收尾的并发闸（2026-11-06）：同一条线同一时刻只允许一次生成。
+# 前端那边点得再急、或者网络重发，这里只认第一发。
+_FIN_GUARD = threading.Lock()
+_FIN_BUSY = set()
+
 
 def _pic_map_path():
     from app.config import BASE_DIR
@@ -641,8 +646,30 @@ def finish_api():
         if not spot and not text:
             persona._set_pending_finish(key, None)     # noqa: SLF001
             return jsonify({"ok": True, "skipped": True, "reply": ""})
-        with usage.scope(key):
-            turn = persona.finish_action(key, spot=spot, text=text)
+        # ── 防重复（2026-11-06 用户报「点了射精之后一直刷屏」）────────────
+        #
+        # 一次高潮只能生成一段。两道闸：
+        #   1. 没有待办就别生成——待办在第一次成功时就清掉了，后来的重复
+        #      请求到这里已经是空的，直接跳过，不会再召唤一次模型；
+        #   2. 进程内互斥——生成要七八秒，这期间的并发请求全部挡掉。
+        # 用户那边看到的就是「点一次、等几秒、一段」，不会连出三四段。
+        pend = persona.pending_finish(key)
+        if pend is None:
+            log.info("[finish] 没有待办，跳过重复请求 %s", key)
+            return jsonify({"ok": True, "skipped": True, "reply": "",
+                            "why": "no-pending"})
+        with _FIN_GUARD:
+            if key in _FIN_BUSY:
+                log.info("[finish] 上一发还没写完，挡掉并发 %s", key)
+                return jsonify({"ok": True, "skipped": True, "reply": "",
+                                "why": "busy"})
+            _FIN_BUSY.add(key)
+        try:
+            with usage.scope(key):
+                turn = persona.finish_action(key, spot=spot, text=text)
+        finally:
+            with _FIN_GUARD:
+                _FIN_BUSY.discard(key)
         if turn is None or not turn.reply.strip():
             # 给了指令却没写出来 = 真失败。回 502，前端据此**保留弹窗**让玩家重试。
             return jsonify({"ok": False, "error": "这一下没写成，再试一次"}), 502

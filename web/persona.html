@@ -1077,6 +1077,7 @@ let CLIMAX = null;          // 当前这次高潮的信息 {n, of, last}
 let FIN_SPOT = "";          // 射精弹窗里选中的预设位置
 let FIN_SEEN = 0;           // 已经答过/跳过的最新一次序号（只处理更大的 n）
 let FIN_OPEN = false;       // 弹窗此刻是不是开着
+let FIN_BUSY = false;       // 这一发还在生成（挡住重复点「确定」）
 
 function askFinish(cl) {
   // 2026-11-06 用户报「一直跳弹窗」：以前 `loadSession` 每跑一次就弹一次，
@@ -1147,6 +1148,10 @@ function pushAssistant(d) {
 
 // 提交：位置或自定义，二选一（两个都给时以后端为准：text 优先）。
 async function goFinish() {
+  // 上一发还没回来就别再发（2026-11-06 用户报「一直刷屏」）：
+  // 生成要七八秒，这期间连点会连出好几段。跟正常聊天一样，等就行。
+  if (FIN_BUSY) return;
+  FIN_BUSY = true;
   $("finishMask").classList.remove("on");
   FIN_OPEN = false;
   const text = ($("finishText") && $("finishText").value || "").trim();
@@ -1155,6 +1160,7 @@ async function goFinish() {
   if (!text && !FIN_SPOT) {           // 什么都没给 = 这一下不写
     if (keep) FIN_SEEN = Math.max(FIN_SEEN, keep.n || 0);
     CLIMAX = null;
+    FIN_BUSY = false;
     post("/api/persona/finish", {}).catch(() => {});   // 让服务端清掉待办
     toast("那这一下就先跳过");
     return;
@@ -1194,6 +1200,7 @@ async function goFinish() {
     if (keep) { FIN_OPEN = true; $("finishMask").classList.add("on"); }
     toast("没写成，再试一次", true);
   } finally {
+    FIN_BUSY = false;
     lockInput(false);
   }
 }
