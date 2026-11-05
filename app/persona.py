@@ -57,7 +57,7 @@ import re
 import threading
 import time
 
-from app import affection, llm, trigger
+from app import affection, llm, trigger, writing_skills
 from app.config import BASE_DIR, QQ_AGENT_ID, QQ_BOT_NAME
 
 log = logging.getLogger("persona")
@@ -409,6 +409,18 @@ def intimate_guide(aff_res=None):
             out.append(layer)
     if int(aff_res.get("corrupt") or 0) >= 50:
         out.append(_CORRUPT_LAYER)
+    # 笔法层（2026-11-05，第一步）：从这里开始，除了「这一拍走到哪一步」，
+    # 再按数值轴挑一小段 `skills/writing/` 的规范原文。上面几块管**节奏**，
+    # 这块管**用词和肉感**——两者不重叠，所以叠在一起拼。
+    # 读不到规范（文件缺失、标记被改）时 `writing_skills.guide()` 返回空串，
+    # 这一轮退回只靠 `_INTIMATE_GUIDE`，不影响回话。
+    try:
+        spec = writing_skills.guide(aff_res)
+    except Exception:                                     # noqa: BLE001
+        spec = ""
+        log.warning("写作规范注入失败，这一轮只用内置写法", exc_info=True)
+    if spec:
+        out.append(spec)
     return ("\n" + "\n".join(out)) if out else ""
 
 
@@ -1031,6 +1043,52 @@ def _level_names(v):
     return [str(x or "").strip() for x in v][:8]
 
 
+# 状态下的她：四个轴各一段自由文本。英文键给程序用，中文键也认（手写卡
+# 时更直观）。**不解析内容、不做阈值**——只是塞进编剧 AI 的上下文。
+_STATE_BEHAVIOR_KEYS = ("submit", "corrupt", "affection", "suspicion")
+_STATE_BEHAVIOR_ALIAS = {
+    "submit": "submit", "屈服": "submit",
+    "corrupt": "corrupt", "堕落": "corrupt",
+    "affection": "affection", "好感": "affection",
+    "suspicion": "suspicion", "戒备": "suspicion",
+}
+
+
+def _norm_state_behavior(v):
+    """把卡上的 `stateBehavior` 洗成四段。字符串就当成一段总说明。"""
+    out = {k: "" for k in _STATE_BEHAVIOR_KEYS}
+    if isinstance(v, dict):
+        for key, val in v.items():
+            k = _STATE_BEHAVIOR_ALIAS.get(str(key or "").strip().lower())
+            if k:
+                out[k] = str(val or "").strip()[:400]
+        if "note" in v:
+            out["note"] = str(v.get("note") or "").strip()[:1600]
+    elif isinstance(v, str) and v.strip():
+        out["note"] = v.strip()[:1600]
+    return out
+
+
+def _state_behavior_text(card):
+    """卡上的「状态下的她」拼成提示词里的一小段。没有就返回空串。"""
+    v = (card or {}).get("stateBehavior") if isinstance(card, dict) else None
+    if isinstance(v, str):
+        return v.strip()
+    if not isinstance(v, dict):
+        return ""
+    labels = (("submit", "屈服高时"), ("corrupt", "堕落高时"),
+              ("affection", "好感高时"), ("suspicion", "戒备高时"))
+    lines = []
+    for key, label in labels:
+        val = str(v.get(key) or "").strip()
+        if val:
+            lines.append("- %s：%s" % (label, val))
+    note = str(v.get("note") or "").strip()
+    if note:
+        lines.append("- " + note)
+    return "\n".join(lines)
+
+
 def _norm_card(c):
     """补齐缺省字段；`id` 缺失时用建卡时间兜一个。"""
     out = {
@@ -1056,6 +1114,9 @@ def _norm_card(c):
         "start_level": _as_int(c.get("start_level"), 0, 0, 5),
         "start_value": _as_int(c.get("start_value"), None, -50, 50),
         "level_names": _level_names(c.get("level_names")),
+        # 状态下的她（2026-11-05）：屈服/堕落/好感/戒备高的时候，她会怎么变。
+        # 四段自由文本，**不解析、不做阈值**；只给编剧 AI 当阅读材料。
+        "stateBehavior": _norm_state_behavior(c.get("stateBehavior")),
         "referenceImage": str(c.get("referenceImage") or "").strip(),
         # 暂下架（2026-11-04）：不删卡、只是不在选人列表/名单里出现。
         # 正在演这张卡的会话不受影响（按 id 找卡的路径不过这个开关）。
@@ -1183,8 +1244,12 @@ def save_cards(cards, force=False):
             keep = old_by_id.get(card["id"])
             if keep:
                 hidden = card.get("hidden")
+                # 状态下的她（2026-11-05）：这是「数值高了她怎么变」的调参，
+                # 和 hidden 一样属于运营开关，不是改人设正文。允许内置卡保存。
+                state_behavior = card.get("stateBehavior")
                 card = _norm_card(keep)
                 card["hidden"] = bool(hidden)
+                card["stateBehavior"] = _norm_state_behavior(state_behavior)
         if card["id"] in seen:
             card["id"] = _fresh_id(seen)
         seen.add(card["id"])
@@ -2709,10 +2774,15 @@ def _director_fields(d):
     """从第一段的 JSON 里取导演字段。缺字段就留空，不编。"""
     if not isinstance(d, dict):
         return {"segments": [], "addressed": True, "literal": "", "subtext": "",
-                "noticed": "", "stance": "", "secret": False}
+                "noticed": "", "stance": "", "secret": False,
+                "persona_mode": "", "tension": "", "lead": "none",
+                "lead_form": "", "lead_reason": ""}
     stance = str(d.get("stance") or "").strip()
     if stance not in ("接住", "装傻", "反问", "推开"):
         stance = ""
+    lead = str(d.get("lead") or "").strip().lower()
+    if lead not in ("none", "hint", "act"):
+        lead = "none"
     addressed = d.get("addressed", True)
     if isinstance(addressed, str):
         addressed = addressed.strip().lower() not in ("false", "0", "no", "否", "不")
@@ -2728,6 +2798,13 @@ def _director_fields(d):
         "stance": stance,
         # 用户写了「心里想」→ 潜台词是真的，但不能给演员看，否则等于直接告诉她。
         "secret": any(s["who"] == "用户" and s["type"] == "想" for s in segs),
+        # 状态覆盖 / 主动判定（2026-11-05）：都是编剧 AI 的自由判断，
+        # 代码只做裁剪和透传，不做阈值。
+        "persona_mode": str(d.get("persona_mode") or "").strip()[:12],
+        "tension": str(d.get("tension") or "").strip()[:60],
+        "lead": lead,
+        "lead_form": str(d.get("lead_form") or "").strip()[:8],
+        "lead_reason": str(d.get("lead_reason") or "").strip()[:60],
     }
 
 
@@ -2854,7 +2931,12 @@ _SCORE_PROMPT = """判断下面这句话**在干什么**，并给这句话对你
   "literal": "他字面上在说什么",
   "subtext": "他真正想要 / 试探 / 回避什么",
   "noticed": "她能从外在表现里察觉到什么",
-  "stance": "接住 | 装傻 | 反问 | 推开"
+  "stance": "接住 | 装傻 | 反问 | 推开",
+  "persona_mode": "日常 | 动摇 | 屈服 | 崩坏（你自己判，不要套固定阈值）",
+  "tension": "她嘴上/身体/选择不一致的地方，没有就空",
+  "lead": "none | hint | act",
+  "lead_form": "情感 | 身体 | 言语",
+  "lead_reason": "不超过25个字，为什么这一拍会/不会主动"
 }
 
 intent（这句话在干什么）：
@@ -2874,6 +2956,19 @@ intent（这句话在干什么）：
 
 给分的是**她的感受**，不是这个人做得对不对、够不够感人。
 **性格不同的两张卡，对同一句话就该给不同的分。**
+
+**状态与角色的优先级（2026-11-05）：**
+1. 当前状态决定她此刻**允许自己做什么、怎么说**——屈服高时她可能不再顶嘴，
+   堕落高时她可能给自己找理由，戒备高时她可能笑着套话。
+2. 卡的核心（身份、底线、在意的东西、说话方式）**不能被状态抹掉**。
+   高屈服不是把她换成另一个人。
+3. 状态和卡冲突时，不要二选一，**写冲突本身**：嘴上顺从但眼神不服、
+   照做了但事后沉默、笑着把真话藏起来。
+4. 除非卡上明确写了「会崩坏」，**高堕落不等于人格重置**。
+5. **不要用固定阈值判**。下面这些数值只是她此刻的事实，由你结合卡的脾气
+   和最近账本判断：她这一拍会不会主动、会做到哪一步。
+6. 第一优先是**这一拍好不好玩**：数值是参考，不是门槛；她主动要有来由，
+   但不要为了守数字把戏拖平。
 
 delta（整数，她对他的好感这轮变化多少）。下面是**基准区间，不是标准答案**：
 她吃这一套 → 取区间上限甚至再往上一档；
@@ -3028,11 +3123,28 @@ time 是 none 时一律留空。
 plan（这轮**说定了**的约定）：把约定写成一句话（「周末去游乐场」）。
 只是提议还没被答应、或者被岔开的，不算。已有约定且没变化就填空串。
 
+persona_mode（她此刻的底色，由你判，不要套阈值）：
+- 日常 —— 还是平常的她；
+- 动摇 —— 状态在推她，但她还在撑；
+- 屈服 —— 她允许自己顺着他，但核心还在；
+- 崩坏 —— 只有卡上明确写了会崩坏时才用。
+tension（她嘴上/身体/选择不一致的地方）：没有就填空串。
+
+lead（这一拍她会不会主动推进关系，由你判）：
+- none —— 不主动，只回应；
+- hint —— 给暗示、试探、话里有话；
+- act —— 主动做一件事（约、问、靠近、挑明）。
+lead_form：情感 / 身体 / 言语。
+lead_reason：一句话说清为什么这一拍会/不会主动（不超过 25 字）。
+**不要按固定数值门槛判**——看好感阶段、冲动、卡的脾气、最近账本，
+再决定她敢不敢先开口。
+
 %(_segment_guide)s
 %(_director_guide)s
 【最近发生过什么】（只作语境，不要拆它；要拆的是最后「他这一轮说的」那句）
 %(history)s
 
+【她此刻的状态】
 当前关系：好感 %(value)+d，阶段【%(tier)s】
 你们到这一步了：【%(level)s】
 现在是剧情里的第 %(gday)d 天
@@ -3072,6 +3184,9 @@ def _score_profile(card, state=""):
     d = str(c.get("description") or "").strip()
     if d:
         lines.append("- 设定：" + d[:300])
+    sb = _state_behavior_text(c)
+    if sb:
+        lines.append("- 状态下的她（不是阈值，是她高值时会怎么变）：\n" + sb)
     return "\n".join(lines)
 
 
@@ -3215,9 +3330,19 @@ def _director_block(info):
     noticed = str(info.get("noticed") or "").strip()
     stance = str(info.get("stance") or "").strip()
     secret = bool(info.get("secret"))
-    if not (literal or subtext or noticed or stance or secret):
+    mode = str(info.get("persona_mode") or "").strip()
+    tension = str(info.get("tension") or "").strip()
+    lead = str(info.get("lead") or "none").strip().lower()
+    lead_form = str(info.get("lead_form") or "").strip()
+    lead_reason = str(info.get("lead_reason") or "").strip()
+    if not (literal or subtext or noticed or stance or secret or mode
+            or tension or lead in ("hint", "act")):
         return ""
     lines = ["## 这一拍你怎么读对方", ""]
+    if mode:
+        lines.append("- 她此刻的底色：%s" % mode)
+    if tension:
+        lines.append("- 张力：%s" % tension)
     if literal:
         lines.append("- 对方字面上在说：%s" % literal)
     if subtext and not secret:
@@ -3228,6 +3353,13 @@ def _director_block(info):
         lines.append("- 她注意到的：%s" % noticed)
     if stance:
         lines.append("- 她这一拍：%s" % _STANCE_HINT.get(stance, stance))
+    if lead == "hint":
+        lines.append("- 她这一拍可以主动给暗示、试探，不必等他先开口。")
+    elif lead == "act":
+        form = ("（%s）" % lead_form) if lead_form else ""
+        why = ("，因为%s" % lead_reason) if (lead_reason and not secret) else ""
+        lines.append("- 她这一拍可以主动做一件事%s%s。不要替玩家做决定，"
+                     "也不要一次把关系推到底。" % (form, why))
     lines.append("")
     lines.append("这些是给你看的导演提示，**不是台词**。不要引用、不要点破，"
                  "也不要替对方把话说破。")

@@ -2903,11 +2903,31 @@ def _notice(job, stage="submit"):
 
 
 def _send_text(target, target_id, text):
+    """把系统那句话发进会话：**优先聊天记录卡片**（2026-11-05 用户要求）。
+
+    用户原话：「任务回执用消息卡片的形式去发送」——回执是后台发的系统话，
+    不是聊天内容；一条条气泡插在对话里既打断剧情，长回执还会把会话刷屏。
+    卡片点开才展开，收起来就是一行，正好。
+
+    卡片发不出去（协议端偶发不支持合并转发、私聊临时会话）再退回普通消息，
+    不能让一句回执因为卡片折了而彻底消失。
+    """
     from app import qq_api
+    from app.config import QQ_BOT_NAME
+    body = str(text or "").strip()
+    if not body:
+        return
+    try:
+        qq_api.send_forward(target, target_id,
+                            [qq_api.node_segment(body, name=QQ_BOT_NAME)])
+        return
+    except Exception:
+        log.warning("回执卡片发送失败，退回普通消息 %s %s", target, target_id,
+                    exc_info=True)
     if target == "group":
-        qq_api.send_group(target_id, text)
+        qq_api.send_group(target_id, body)
     else:
-        qq_api.send_private(target_id, text)
+        qq_api.send_private(target_id, body)
 
 
 # ─── 提交回执「后台直发」标记（2026-10-04 用户拍板）─────────────
