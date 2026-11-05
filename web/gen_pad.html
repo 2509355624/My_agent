@@ -126,6 +126,12 @@
   .steps-box { display: none; align-items: center; gap: 6px; font-size: 12px;
     color: var(--text-dim); }
   .steps-box.on { display: flex; }
+  /* 自定义参数总开关（2026-11-04）：默认不勾 = 完全按渠道模板跑。
+     不勾时步数/CFG/尺寸都不显示、也不提交，换渠道不会把上一个渠道的值带过来。 */
+  .params-toggle { display: flex; align-items: center; gap: 5px;
+    font-size: 12px; color: var(--text-dim); cursor: pointer;
+    user-select: none; white-space: nowrap; }
+  .params-toggle input { width: 13px; height: 13px; margin: 0; cursor: pointer; }
   .steps-box input { width: 62px; background: var(--bg-input);
     border: 1px solid var(--border); border-radius: var(--radius-sm);
     color: var(--text); padding: 5px 7px; font: inherit; font-size: 12px;
@@ -280,6 +286,9 @@
         </div>
         <div class="bar">
           <span class="cur">渠道：<b id="curChan">未选</b></span>
+          <label class="params-toggle" title="默认关闭：不勾就完全按渠道模板跑，勾上才发步数/CFG/尺寸">
+            <input type="checkbox" id="paramsOn">自定义参数
+          </label>
           <span class="steps-box" id="stepsBox">
             <label for="stepsIn">步数</label>
             <input id="stepsIn" type="number" min="1" max="100" step="1"
@@ -347,16 +356,25 @@ let PINNED_AUTO = false;    // PINNED 是轮询自动展示的（true）还是�
                             // 区分这两者：自动展示的可以被更新完成的图顶掉；
                             // 用户手点的历史行不能被抢（2026-10-28 修「出图不自动刷」）。
 let POLL = null;
-// 步数（2026-10-29）：留空 = 按渠道模板；填了只影响这一次提交，记在本机。
-let STEPS = localStorage.getItem('gp_steps') || '';
-// CFG / 负向（2026-10-31）：同一套约定——留空按模板、只影响本次、记在本机。
-// 负向在后端是**追加**到模板负向池后面，不是替换。
-let CFG = localStorage.getItem('gp_cfg') || '';
-let NEG = localStorage.getItem('gp_neg') || '';
-// 尺寸（2026-10-31）：只在 moss 渠道出现。宽高一起填才生效，留空按模板；
-// 「预设」是这台浏览器里的尺寸书签（1536×2048 这类），不写回渠道模板。
-let SIZE_W = localStorage.getItem('gp_w') || '';
-let SIZE_H = localStorage.getItem('gp_h') || '';
+// 自定义参数总开关（2026-11-04 用户要求）：**默认关闭**。不勾时步数/CFG/尺寸
+// 完全不发，换渠道也不会把上一个渠道的值带过来（25 步带到 8 步的 krea2 就是
+// 之前报错的原因）。勾上之后按渠道分开记（`gp_steps_<渠道>`），互不串味。
+let PARAMS_ON = false;
+try { PARAMS_ON = localStorage.getItem('gp_params_on') === '1'; } catch (e) {}
+let STEPS = '';
+let CFG = '';
+let NEG = '';
+let SIZE_W = '';
+let SIZE_H = '';
+
+function chanVal(name, skill) {
+  try { return localStorage.getItem('gp_' + name + '_' + (skill || '')) || ''; }
+  catch (e) { return ''; }
+}
+function saveChanVal(name, value, skill) {
+  try { localStorage.setItem('gp_' + name + '_' + (skill || ''), value); }
+  catch (e) {}
+}
 let SIZE_PRESETS = [];
 try { SIZE_PRESETS = JSON.parse(localStorage.getItem('gp_size_presets') || '[]'); }
 catch (e) { SIZE_PRESETS = []; }
@@ -541,15 +559,24 @@ function updateParams() {
   const cfgHint = document.getElementById('cfgHint');
   const negBox = document.getElementById('negBox');
   const negIn = document.getElementById('neg');
-  stepsBox.classList.toggle('on', !cloud);
-  cfgBox.classList.toggle('on', !cloud);
+  document.getElementById('paramsOn').checked = PARAMS_ON;
+  // 自定义参数没勾 = 整块收起（2026-11-04），不发步数/CFG/尺寸；
+  // 负向是另一条线，仍按渠道是否支持显示。
+  stepsBox.classList.toggle('on', PARAMS_ON && !cloud);
+  cfgBox.classList.toggle('on', PARAMS_ON && !cloud);
   negBox.classList.toggle('on', !cloud && !!(ch && ch.negative));
   // 尺寸只在 moss 渠道出现（后端 size_editable）——别的渠道带放大链，
   // 改了底图最终像素和填写值对不上，不给入口比给个假精确好。
   const sizeBox = document.getElementById('sizeBox');
-  const canSize = !cloud && !!(ch && ch.size_editable);
+  const canSize = PARAMS_ON && !cloud && !!(ch && ch.size_editable);
   sizeBox.classList.toggle('on', canSize);
   if (cloud) return;
+  // 每个渠道各记一份（`gp_steps_<渠道>`）：换渠道读自己的，读不到就空着按模板。
+  STEPS = chanVal('steps', CUR);
+  CFG = chanVal('cfg', CUR);
+  NEG = chanVal('neg', CUR);
+  SIZE_W = chanVal('w', CUR);
+  SIZE_H = chanVal('h', CUR);
   const def = ch.steps || '';
   input.placeholder = def ? ('默认 ' + def) : '默认';
   hint.textContent = def ? '' : '该渠道没有可调步数';
@@ -600,10 +627,8 @@ function updateSizeHint() {
 }
 
 function persistSize() {
-  try {
-    localStorage.setItem('gp_w', SIZE_W);
-    localStorage.setItem('gp_h', SIZE_H);
-  } catch (e) {}
+  saveChanVal('w', SIZE_W, CUR);
+  saveChanVal('h', SIZE_H, CUR);
 }
 
 // 提交前取尺寸：返回 null（按模板）/ [w, h] / false（校验没过，已 toast）
@@ -673,20 +698,29 @@ document.getElementById('sizeDel').addEventListener('click', () => {
 const STEPS_INPUT = document.getElementById('stepsIn');
 STEPS_INPUT.addEventListener('input', () => {
   STEPS = STEPS_INPUT.value.trim();
-  try { localStorage.setItem('gp_steps', STEPS); } catch (e) {}
+  saveChanVal('steps', STEPS, CUR);
 });
 
 const CFG_INPUT = document.getElementById('cfgIn');
 CFG_INPUT.addEventListener('input', () => {
   CFG = CFG_INPUT.value.trim();
-  try { localStorage.setItem('gp_cfg', CFG); } catch (e) {}
+  saveChanVal('cfg', CFG, CUR);
 });
 
 const NEG_INPUT = document.getElementById('neg');
 NEG_INPUT.addEventListener('input', () => {
   // 负向保留原样（换行/逗号都是用户的事），提交前才 trim
   NEG = NEG_INPUT.value;
-  try { localStorage.setItem('gp_neg', NEG); } catch (e) {}
+  saveChanVal('neg', NEG, CUR);
+});
+
+// 自定义参数总开关（2026-11-04）：勾上才显示并提交步数/CFG/尺寸，
+// 状态记在本机；默认不勾。
+document.getElementById('paramsOn').addEventListener('change', (e) => {
+  PARAMS_ON = !!e.target.checked;
+  try { localStorage.setItem('gp_params_on', PARAMS_ON ? '1' : '0'); }
+  catch (err) {}
+  updateParams();
 });
 
 // ── LoRA 槽位（2026-10-28 用户要求「自己选开哪个」）──
@@ -846,10 +880,11 @@ async function gen(promptOverride) {
     // （后端也会忽略，但前端先拦住，免得用户以为填了生效）。输入框被禁用
     // （渠道模板没这个字段）或整块藏起来（渠道没有负向节点）时不发——
     // 否则会带着上一个渠道留下的值跑，后端只能打条警告然后忽略。
+    // 2026-11-04：没勾「自定义参数」就**一律不发**，完全按渠道模板跑。
     const st = STEPS_INPUT.value.trim();
-    if (st && !isNai() && !STEPS_INPUT.disabled) body.steps = Number(st);
+    if (PARAMS_ON && st && !isNai() && !STEPS_INPUT.disabled) body.steps = Number(st);
     const cf = CFG_INPUT.value.trim();
-    if (cf && !isNai() && !CFG_INPUT.disabled) body.cfg = Number(cf);
+    if (PARAMS_ON && cf && !isNai() && !CFG_INPUT.disabled) body.cfg = Number(cf);
     const negOn = document.getElementById('negBox').classList.contains('on');
     const ng = negOn ? NEG_INPUT.value.trim() : '';
     if (ng && !isNai()) body.negative = ng;
@@ -897,9 +932,21 @@ function startPoll() {
 }
 function stopPoll() { clearInterval(POLL); POLL = null; }
 
+async function cancelJob(id) {
+  try {
+    const d = await api('/api/gen/cancel', {id: id});
+    toast(d.message || '已中断');
+  } catch (e) { toast(e.message); }
+  const j = JOBS.find(x => x.id === id);
+  if (j) j.state = 'cancelled';
+  renderJobs();
+  startPoll();
+}
+
 function renderJobs() {
   const box = document.getElementById('jobs');
-  const active = JOBS.filter(j => j.state === 'queued' || j.state === 'error');
+  const active = JOBS.filter(j => j.state === 'queued' || j.state === 'error'
+    || j.state === 'cancelled');
   document.getElementById('viewEmpty').style.display =
     (active.length || document.getElementById('shot').children.length) ? 'none' : '';
   if (!active.length) { box.innerHTML = ''; return; }
@@ -910,16 +957,23 @@ function renderJobs() {
     const secs = Math.max(0, Math.round(Date.now() / 1000 - j.ts));
     const st = j.state === 'queued'
       ? '<span class="state queued">排队/生成中</span>'
-      : '<span class="state error">失败了</span>';
+      : j.state === 'cancelled'
+        ? '<span class="state">已中断</span>'
+        : '<span class="state error">失败了</span>';
     el.innerHTML =
       '<div class="row1"><span class="skill"></span>' + st +
-      '<span class="seed"></span><span class="elapsed">' + secs + 's</span></div>' +
+      '<span class="seed"></span><span class="elapsed">' + secs + 's</span>' +
+      (j.state === 'queued' ? '<button class="btn small stop">中断</button>' : '') +
+      '</div>' +
       '<div class="prompt"></div>' +
       (j.error ? '<div class="err"></div>' : '') +
       (j.error ? '<button class="btn small again">把提示词放回输入栏，改改再发</button>' : '');
     el.querySelector('.skill').textContent = j.skill;
     el.querySelector('.seed').textContent = 'seed ' + (j.seed ?? '云端随机');
     el.querySelector('.prompt').textContent = j.prompt;
+    if (j.state === 'queued') {
+      el.querySelector('.stop').onclick = () => cancelJob(j.id);
+    }
     if (j.error) {
       el.querySelector('.err').textContent = j.error;
       el.querySelector('.again').onclick = () => {

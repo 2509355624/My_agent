@@ -39,6 +39,7 @@ from flask import Blueprint, Response, jsonify, request, send_from_directory
 
 from app import comic, image_jobs, image_out, lora_slots
 from app import gen_params, gen_steps
+from app.cancel import Cancelled
 from app.config import COMFYUI_URL, NAI_API_KEY, WEB_DIR, state_path
 from app.direct_gen import _allowed_skills
 from app.skills import load_skill, skill_summary
@@ -237,6 +238,7 @@ def _run(job):
                 landscape=(job["skill"] == "nai_wide"))
             if queued is None:
                 raise RuntimeError(reason or "NAI 队列拒绝了这张图")
+            queued.cancel = job["abort"]
             entry = queued.wait()
             paths = (entry or {}).get("images") or []
             if not paths:
@@ -293,7 +295,7 @@ def _run(job):
             # with_entry=True：拿 history entry 算 ComfyUI 真跑这张图的耗时。
             name, entry = comic._submit_retry(
                 lambda: comic._submit(wf, job["skill"], job["prompt"], job["seed"],
-                                      with_entry=True),
+                                      with_entry=True, abort=job["abort"]),
                 "[跑图台 %s]" % job["id"])
             secs = image_jobs.exec_seconds(entry)
             file_ref = name
@@ -324,6 +326,14 @@ def _run(job):
                  job.get("cfg") if job.get("cfg") is not None else "-",
                  size_label or "-",
                  "%.1f" % secs if secs is not None else "未知")
+    except Cancelled:
+        # 用户点了「中断」：队列里那张已由 wait() 放弃等待、worker 会跳过；
+        # 正在画的由 image_jobs 定向 /interrupt 后收工。这里只改状态，不记账、
+        # 不写失败——主动停的不算「出图失败」。
+        with _JOBS_LOCK:
+            job["state"] = "cancelled"
+            job["error"] = "已中断"
+        log.info("跑图台 %s 已中断", job["id"])
     except Exception as e:
         msg = str(e) or e.__class__.__name__
         with _JOBS_LOCK:
@@ -478,7 +488,11 @@ def api_submit():
                "size_label": "",
                "secs": None,
                "state": "queued", "error": "", "file": "",
-               "ts": time.time()}
+               "ts": time.time(),
+               # 中断信号（2026-11-04 跑图台「中断」按钮）：
+               # 置位后排队中的由 image_jobs worker 跳过、正在跑的由
+               # wait_done 走**定向** /interrupt（只停这一张，不误伤 QQ 的图）。
+               "abort": threading.Event()}
         _JOBS[job["id"]] = job
         # 只留最近 _JOB_KEEP 个，防长时间不刷新把内存堆起来
         for old in sorted(_JOBS, key=lambda k: _JOBS[k]["ts"])[:-_JOB_KEEP]:
@@ -509,6 +523,27 @@ def api_status():
         depth = None
     return jsonify({"ok": True, "jobs": [_public(j) for j in jobs],
                     "queue_depth": depth})
+
+
+@bp.route("/api/gen/cancel", methods=["POST"])
+def api_cancel():
+    """中断这一张（2026-11-04 用户要的「中断任务」按钮）。
+
+    只认本台自己发出去、还没结束的任务：置位 job 的中断 Event，
+    正在跑的那张由 `image_jobs` 带 prompt_id 做**定向** /interrupt
+    （不会像全局 /interrupt 那样把 QQ 的图一起劈掉），排队中的直接跳过。
+    """
+    data = request.get_json(silent=True) or {}
+    job_id = str(data.get("id") or "").strip()
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if job is None:
+            return jsonify({"ok": False, "error": "找不到这个任务（刷新页面重试）"}), 404
+        if job["state"] != "queued":
+            return jsonify({"ok": False, "error": "这张已经结束了"}), 400
+        job["abort"].set()
+    log.info("跑图台 %s 收到中断请求", job_id)
+    return jsonify({"ok": True, "message": "已中断，等 ComfyUI 停手"})
 
 
 @bp.route("/api/gen/history")
