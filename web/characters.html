@@ -49,6 +49,27 @@
   #status.ok { color: var(--ok); }
   #status.err { color: var(--err); }
 
+  /* 默认聊天背景（2026-11-05）：站主在这里换全局默认图；
+     每张卡下面还有一块「这张卡的默认背景」，优先级是 账号 > 卡 > 全局。 */
+  .bg-global {
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 18px; border-bottom: 1px solid var(--border);
+    background: var(--bg-elev);
+  }
+  .bg-thumb {
+    width: 120px; height: 68px; flex: none; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg-input);
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden; color: var(--text-mute); font-size: 12px;
+  }
+  .bg-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .bg-info { flex: 1; min-width: 0; }
+  .bg-title { font-size: 13px; color: var(--text); }
+  .bg-sub { font-size: 12px; color: var(--text-mute); margin-top: 3px; }
+  .bg-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .bg-edit { display: flex; gap: 12px; align-items: flex-start; }
+  .bg-edit .bg-thumb { width: 150px; height: 84px; }
+
   .body { flex: 1; display: flex; min-height: 0; }
   aside {
     width: 260px; flex-shrink: 0; border-right: 1px solid var(--border);
@@ -105,14 +126,28 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>人设卡池</h1>
+    <h1>角色扮演管理</h1>
     <div class="hint">
-      群里发「<b>#角色扮演</b>」看清单，发「<b>#角色名</b>」让它演那个角色（每句话配一张图），发「<b>#出戏</b>」变回生图机器人。私聊同样要发一次命令才进。
+      角色卡的详情文案、默认背景都在这里管理。群里发「<b>#角色扮演</b>」看清单，发「<b>#角色名</b>」让它演那个角色，发「<b>#出戏</b>」变回生图机器人。
     </div>
     <button id="btnNew">＋ 新建</button>
     <button id="btnSave" class="primary">保存</button>
     <span id="status"></span>
   </header>
+
+  <div class="bg-global">
+    <div class="bg-thumb" id="bgDefaultThumb">默认</div>
+    <div class="bg-info">
+      <div class="bg-title">默认聊天背景</div>
+      <div class="bg-sub" id="bgDefaultState">读取中…</div>
+    </div>
+    <div class="bg-actions">
+      <button type="button" id="btnBgDefault">上传默认背景</button>
+      <button type="button" class="danger" id="btnBgDefaultReset">恢复内置</button>
+    </div>
+    <input type="file" id="fileBgDefault" accept="image/jpeg,image/png,image/webp"
+           hidden onchange="uploadDefaultBg(this)">
+  </div>
 
   <div class="body">
     <aside id="list"></aside>
@@ -128,6 +163,7 @@ const LEVEL_NAMES = ["隔得很远", "点头之交", "说得上话", "说得进�
 const $ = (id) => document.getElementById(id);
 let cards = [];
 let cur = -1;
+let DEFAULT_BG = { default: null, builtin: null };
 
 function esc(s) {
   return String(s == null ? "" : s)
@@ -151,6 +187,78 @@ async function load() {
     render();
   } catch (e) {
     say("读卡库失败：" + e, "err");
+  }
+  loadDefaultBg();
+}
+
+// ── 全局默认背景 ──────────────────────────────────────────
+// 优先级：账号自己换的 > 这张卡 > 全局默认 > 内置兜底图。
+// 这里管的只有「全局默认」这一层；每张卡自己的背景在右边详情里。
+
+async function loadDefaultBg() {
+  try {
+    const r = await fetch("/api/persona_admin/background/default");
+    const d = await r.json();
+    if (!d.ok) { renderDefaultBg(); return; }
+    DEFAULT_BG.default = d.default || null;
+    DEFAULT_BG.builtin = d.builtin || null;
+    renderDefaultBg();
+  } catch (e) {
+    $("bgDefaultState").textContent = "读取默认背景失败";
+  }
+}
+
+function renderDefaultBg() {
+  const d = DEFAULT_BG.default || {};
+  const b = DEFAULT_BG.builtin || {};
+  const box = $("bgDefaultThumb");
+  const thumb = d.thumb || d.url || b.thumb || b.url || "";
+  box.innerHTML = thumb ? '<img src="' + esc(thumb) + '" alt="">' : "默认";
+  const state = $("bgDefaultState");
+  if (d.exists) {
+    state.textContent = "正在用你上传的默认背景";
+    $("btnBgDefaultReset").style.display = "";
+  } else {
+    $("btnBgDefaultReset").style.display = "none";
+    state.textContent = b.exists
+      ? "目前是内置兜底图（web/assets/chat_bg_default）"
+      : "还没有默认背景：上传一张，或放一张 web/assets/chat_bg_default.jpg";
+  }
+}
+
+async function uploadDefaultBg(input) {
+  const f = input.files && input.files[0];
+  input.value = "";
+  if (!f) return;
+  const fd = new FormData();
+  fd.append("file", f);
+  try {
+    const r = await fetch("/api/persona_admin/background/default", {
+      method: "POST", body: fd,
+    });
+    const d = await r.json();
+    if (!d.ok) { say(d.error || "上传失败", "err"); return; }
+    DEFAULT_BG.default = d.background || {};
+    renderDefaultBg();
+    say("默认背景已更新", "ok");
+  } catch (e) {
+    say("上传失败：" + e, "err");
+  }
+}
+
+async function resetDefaultBg() {
+  if (!confirm("删掉上传的默认背景，回到内置兜底图？")) return;
+  try {
+    const r = await fetch("/api/persona_admin/background/default", {
+      method: "DELETE" });
+    const d = await r.json();
+    if (!d.ok) { say(d.error || "恢复失败", "err"); return; }
+    DEFAULT_BG.default = d.default || null;
+    DEFAULT_BG.builtin = d.builtin || DEFAULT_BG.builtin;
+    renderDefaultBg();
+    say("已恢复内置默认", "ok");
+  } catch (e) {
+    say("恢复失败：" + e, "err");
   }
 }
 
@@ -180,6 +288,13 @@ function renderPane() {
     return;
   }
   const c = cards[cur];
+  const bg = c.background || {};
+  const bgThumb = (bg.exists && (bg.thumb || bg.url))
+    ? '<img src="' + esc(bg.thumb || bg.url) + '" alt="">'
+    : '<span>' + (c.id ? "这张卡没设背景" : "先保存这张卡") + '</span>';
+  const bgText = bg.exists
+    ? "正在用这张卡的背景"
+    : (c.id ? "这张卡没有单独背景，会用上面的全局默认" : "新卡先保存，拿到 id 后才能传背景");
   pane.innerHTML = `
     <div class="row">
       <div class="field">
@@ -262,6 +377,22 @@ function renderPane() {
         <span>暂下架（不在选人列表和 QQ 名单出现；卡和数据都保留，取消勾选即恢复）</span>
       </label>
     </div>
+    <div class="field">
+      <label>这张卡的默认聊天背景（留空就用上面的全局默认）</label>
+      <div class="bg-edit">
+        <div class="bg-thumb">${bgThumb}</div>
+        <div style="flex:1;min-width:0">
+          <div class="tip" style="margin:0 0 8px">${bgText}</div>
+          <div class="bg-actions">
+            ${c.id ? '<button type="button" onclick="pickCardBg()">上传这张卡的背景</button>' : ""}
+            ${bg.exists ? '<button type="button" class="danger" onclick="clearCardBg()">清除</button>' : ""}
+          </div>
+          <input type="file" id="f_bg_file" accept="image/jpeg,image/png,image/webp"
+                 hidden onchange="uploadCardBg(this)">
+        </div>
+      </div>
+      <div class="tip">优先级：账号自己设的 &gt; 这张卡 &gt; 全局默认 &gt; 内置图。上传后马上生效，不用点保存；游客只看得到卡和全局这两层。</div>
+    </div>
     <div class="foot">
       <span class="badge">id: ${esc(c.id || "待生成")}</span>
       <span class="spacer"></span>
@@ -309,6 +440,7 @@ function add() {
     outfitPrompt: "", room: "", referenceImage: "",
     stateBehavior: { submit: "", corrupt: "", affection: "", suspicion: "" },
     start_level: 0, start_value: null, level_names: [],
+    background: { url: "", thumb: "", version: 0, exists: false },
   });
   cur = cards.length - 1;
   render();
@@ -323,6 +455,57 @@ function del() {
   cards.splice(cur, 1);
   if (cur >= cards.length) cur = cards.length - 1;
   render();
+}
+
+// ── 每张卡的默认背景 ──────────────────────────────────────
+// 走管理接口（只给站主）；上传/清除都直接落盘，不经过「保存」。
+
+function pickCardBg() {
+  const inp = $("f_bg_file");
+  if (inp) inp.click();
+}
+
+async function uploadCardBg(input) {
+  const f = input.files && input.files[0];
+  input.value = "";
+  if (!f || cur < 0 || !cards[cur]) return;
+  collect();
+  const cid = cards[cur].id;
+  if (!cid) { say("先保存这张卡（新卡还没有 id）", "err"); return; }
+  const fd = new FormData();
+  fd.append("file", f);
+  try {
+    const r = await fetch("/api/persona_admin/background/card/" + encodeURIComponent(cid), {
+      method: "POST", body: fd,
+    });
+    const d = await r.json();
+    if (!d.ok) { say(d.error || "上传失败", "err"); return; }
+    cards[cur].background = d.background || {};
+    render();
+    say("这张卡的背景已更新", "ok");
+  } catch (e) {
+    say("上传失败：" + e, "err");
+  }
+}
+
+async function clearCardBg() {
+  if (cur < 0 || !cards[cur]) return;
+  collect();
+  const cid = cards[cur].id;
+  if (!cid) return;
+  if (!confirm("清掉这张卡的背景？它会回落到全局默认。")) return;
+  try {
+    const r = await fetch("/api/persona_admin/background/card/" + encodeURIComponent(cid), {
+      method: "DELETE",
+    });
+    const d = await r.json();
+    if (!d.ok) { say(d.error || "清除失败", "err"); return; }
+    cards[cur].background = d.background || {};
+    render();
+    say("已清除，回落到全局默认", "ok");
+  } catch (e) {
+    say("清除失败：" + e, "err");
+  }
 }
 
 async function save() {
@@ -352,6 +535,8 @@ async function save() {
 
 $("btnNew").onclick = add;
 $("btnSave").onclick = save;
+$("btnBgDefault").onclick = () => $("fileBgDefault").click();
+$("btnBgDefaultReset").onclick = resetDefaultBg;
 document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); save(); }
 });

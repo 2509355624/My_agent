@@ -116,6 +116,16 @@ def _custom_active():
     return None
 
 
+def get_custom_override():
+    """当前线程的自定义模型配置副本；没有返回 None。
+
+    角色扮演的记忆提炼在后台线程跑，拿不到请求线程的覆盖，所以要在
+    入队时先存一份，后台线程再 `set_custom_override` 回来。
+    """
+    cfg = _custom_active()
+    return dict(cfg) if cfg else None
+
+
 def describe_effective(provider=None, model=None):
     """一行说清「现在真正在用的是谁」，供启动日志与排障用。
 

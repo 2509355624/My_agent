@@ -722,6 +722,44 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 DOCUMENTS_DIR = os.path.join(BASE_DIR, "documents")
 VECTOR_STORE_DIR = os.path.join(BASE_DIR, "vector_store", "chroma")
 
+# ─── 角色扮演的长期记忆 RAG（2026-11-05）─────────────────
+#
+# 和主 RAG **分库分模型**：主库是 BGE-M3（1024 维），这里用 CPU 小模型
+# bge-small-zh-v1.5（512 维）。混在一个 daemon 里会维度不匹配，
+# 所以向量目录也单独一份，互不影响。
+#
+#   PERSONA_RAG=0            关掉（默认开，模型缺失时会自动降级为不检索）
+#   PERSONA_RAG_MODEL        模型名或本地目录（ModelScope 缓存能命中就不用下载）
+#   PERSONA_RAG_DATA_DIR     向量库目录（只放扮演记忆）
+#   PERSONA_RAG_K            每轮最多注入几条回忆
+#   PERSONA_RAG_MAX_DISTANCE 余弦距离上限，超过的不注入（0.60 来自实测：
+#                            相关记忆约 0.34~0.51，闲聊约 0.63+）
+PERSONA_RAG = os.getenv("PERSONA_RAG", "1").strip().lower() not in (
+    "0", "false", "no", "off")
+PERSONA_RAG_MODEL = os.getenv(
+    "PERSONA_RAG_MODEL", "BAAI/bge-small-zh-v1.5").strip()
+PERSONA_RAG_DATA_DIR = os.getenv(
+    "PERSONA_RAG_DATA_DIR",
+    os.path.join(BASE_DIR, "vector_store", "chroma_persona"))
+try:
+    PERSONA_RAG_K = max(1, int(os.getenv("PERSONA_RAG_K", "3")))
+except ValueError:
+    PERSONA_RAG_K = 3
+try:
+    PERSONA_RAG_MAX_DISTANCE = float(
+        os.getenv("PERSONA_RAG_MAX_DISTANCE", "0.60"))
+except ValueError:
+    PERSONA_RAG_MAX_DISTANCE = 0.60
+try:
+    PERSONA_RAG_TIMEOUT = float(os.getenv("PERSONA_RAG_TIMEOUT", "2.5"))
+except ValueError:
+    PERSONA_RAG_TIMEOUT = 2.5
+try:
+    PERSONA_RAG_INGEST_EVERY = max(
+        1, int(os.getenv("PERSONA_RAG_INGEST_EVERY", "5")))
+except ValueError:
+    PERSONA_RAG_INGEST_EVERY = 5
+
 
 # ─── 画廊 ───────────────────────────────────────────
 #
