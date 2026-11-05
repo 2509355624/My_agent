@@ -1199,6 +1199,11 @@ function renderPanel(a, p) {
 
 // 拉一次面板。失败就静默——面板挂了不该挡住聊天。
 // 游客固定自由模式（2026-11-05 最终版）：不拉、不画，数值本来就不会动。
+//
+// 2026-11-05 修（自激轮询）：这里原来调的是 `renderAff(AFF)`，而
+// `renderAff` 末尾又会调 `refreshPanel()` —— 拉回来渲染一次、渲染又发起
+// 下一次拉取，成了死循环。日志里每 0.7 秒一条 `GET .../panel` 就是它，
+// 一天下来白烧几万个请求、还反复读存档。现在只重画面板，不再回头触发拉取。
 async function refreshPanel() {
   if (ROLE === "guest") return;
   try {
@@ -1206,13 +1211,13 @@ async function refreshPanel() {
     const d = await r.json();
     if (d && d.ok) {
       PANEL = d.panel;
-      renderAff(AFF);
+      renderAff(AFF, true);      // true = 只重画，别再回头拉一次
       renderPanel(AFF, PANEL);
     }
   } catch (e) { /* 网络抖一下就算了，下一轮还会再拉 */ }
 }
 
-function renderAff(a) {
+function renderAff(a, noFetch) {
   renderMode();
   const box = $("affBox");
   const panelBox = $("panelBox");
@@ -1224,7 +1229,9 @@ function renderAff(a) {
   // 面板数据是异步来的；这里先用上次的渲染一次（避免闪空白），
   // 然后立刻拉新的。第一次进来 PANEL 是 null，就等 refreshPanel 填。
   renderPanel(a, PANEL);
-  refreshPanel();
+  // `noFetch` 是**防止自激**的那道闸：refreshPanel 拿到数据后回来重画，
+  // 不能再顺手发起下一次拉取，否则就是死循环。
+  if (!noFetch) refreshPanel();
 }
 
 // 顶部的自由/攻略开关：两态都常驻，靠边框色区分（灰=自由，玫红=攻略）。
