@@ -608,33 +608,52 @@ def clear():
 
 @bp.route("/api/persona/finish", methods=["POST"])
 def finish_api():
-    """她高潮满了，玩家在弹窗里选「射在哪里」（2026-11-05）。
+    """她高潮满了，玩家在弹窗里选「射在哪里 / 自己写做法」（2026-11-05）。
 
-    body: `{spot, custom?}` —— spot 是 mouth / body / pussy / anus / none。
+    body: `{spot?, text?, custom?}`
 
-    这个选择**不进历史**，只挂在会话上，下一轮由编剧写出来。所以这里只
-    存不发，返回 `{ok, last}`；`last` 只是把前端刚才告诉我们的「这是第 5 次」
-    原样回传，方便它接着弹第二个窗。
+    2026-11-05 晚改：这里**直接生成**那一拍，不再只存选择。用户说
+    「选完还要等玩家再发一句话」很别扭——他得猜什么时候该写射精。
+    现在选完就出内容，玩家只负责推动剧情。
+
+    `spot` 是预设位置（mouth/body/pussy/anus/none），`text` 是玩家自己
+    写的做法；两个都给时以 `text` 为准。
     """
     body = request.get_json(silent=True) or {}
     spot = str(body.get("spot") or "").strip().lower()
-    role, who, token = _who()
-    if role == "guest":
-        # 游客不玩攻略数值，也没有射精选择这回事。
-        return jsonify({"ok": False, "error": "体验版没有这个"}), 403
-    key = _active_key(_key(who))
-    if not persona.set_finish(key, spot):
-        return jsonify({"ok": False, "error": "位置不对"}), 400
-    return jsonify({"ok": True, "spot": spot,
-                    "last": bool(body.get("last"))})
+    text = str(body.get("text") or "").strip()[:120]
+    llm.set_custom_override(body.get("custom"))
+    try:
+        role, who, token = _who()
+        if role == "guest":
+            return jsonify({"ok": False, "error": "体验版没有这个"}), 403
+        key = _active_key(_key(who))
+        if persona.active_card(key) is None:
+            return jsonify({"ok": False, "error": "还没选角色"}), 400
+        with usage.scope(key):
+            turn = persona.finish_action(key, spot=spot, text=text)
+        if turn is None or not turn.reply.strip():
+            # 什么都没给（既没位置也没自定义）就当玩家放弃，不算错误。
+            return jsonify({"ok": True, "skipped": True, "reply": ""})
+        out = {"ok": True, "reply": turn.reply, "scene": turn.scene,
+               "mood": turn.mood, "intensity": turn.intensity,
+               "state": turn.state, "role": "member"}
+        total = persona.archive_len(key)
+        out["n"] = {"user": max(0, total - 2), "assistant": max(0, total - 1)}
+        out["preg"] = persona.pregnancy_status(key)
+        return jsonify(out)
+    finally:
+        llm.set_custom_override(None)
 
 
 @bp.route("/api/persona/finish_night", methods=["POST"])
 def finish_night_api():
     """第 5 次之后：结束 / 再来最后一次（2026-11-05）。
 
-    body: `{last, custom?}` —— last=true 再来最后一次并进第二天；
-    false 就收场留在当晚。生成的是**一个气泡**（夜里那一下 + 第二天早晨）。
+    body: `{last, custom?}`
+    · last=true  —— 写这一夜的最后一下（**不跨天**）；前端接着调
+                    `/api/persona/next_morning` 写第二天，中间插「第二天」标识。
+    · last=false —— 收场，留在当晚。
     """
     body = request.get_json(silent=True) or {}
     last = bool(body.get("last"))
@@ -650,17 +669,49 @@ def finish_night_api():
             turn = persona.finish_night(key, last=last)
         if turn is None or not turn.reply.strip():
             return jsonify({"ok": False, "error": "没写出来，再试一次"}), 502
-        out = {"ok": True, "reply": turn.reply, "scene": turn.scene,
-               "mood": turn.mood, "intensity": turn.intensity,
-               "state": turn.state, "role": "member"}
-        total = persona.archive_len(key)
-        out["n"] = {"user": max(0, total - 2), "assistant": max(0, total - 1)}
-        out["day"] = persona.game_day(key)
-        out["phase"] = persona.game_phase(key)
-        out["preg"] = persona.pregnancy_status(key)
-        return jsonify(out)
+        return jsonify(_turn_out(key, turn, next_stage="morning" if last else ""))
     finally:
         llm.set_custom_override(None)
+
+
+@bp.route("/api/persona/next_morning", methods=["POST"])
+def next_morning_api():
+    """跨到第二天早晨（2026-11-05）：一次单独请求。
+
+    单独一个接口是为了让前端在两次请求之间浮出「第二天」那个标识——
+    生成期间锁输入，生成完才放开。
+    """
+    body = request.get_json(silent=True) or {}
+    llm.set_custom_override(body.get("custom"))
+    try:
+        role, who, token = _who()
+        if role == "guest":
+            return jsonify({"ok": False, "error": "体验版没有这个"}), 403
+        key = _active_key(_key(who))
+        if persona.active_card(key) is None:
+            return jsonify({"ok": False, "error": "还没选角色"}), 400
+        with usage.scope(key):
+            turn = persona.next_morning(key)
+        if turn is None or not turn.reply.strip():
+            return jsonify({"ok": False, "error": "没写出来，再试一次"}), 502
+        return jsonify(_turn_out(key, turn))
+    finally:
+        llm.set_custom_override(None)
+
+
+def _turn_out(key, turn, next_stage=""):
+    """三段请求共用的回包形状（和 `/chat` 对齐，前端不用分支）。"""
+    out = {"ok": True, "reply": turn.reply, "scene": turn.scene,
+           "mood": turn.mood, "intensity": turn.intensity,
+           "state": turn.state, "role": "member"}
+    total = persona.archive_len(key)
+    out["n"] = {"user": max(0, total - 2), "assistant": max(0, total - 1)}
+    out["day"] = persona.game_day(key)
+    out["phase"] = persona.game_phase(key)
+    out["preg"] = persona.pregnancy_status(key)
+    if next_stage:
+        out["next"] = next_stage
+    return out
 
 
 @bp.route("/api/persona/chat", methods=["POST"])
