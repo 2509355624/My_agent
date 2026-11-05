@@ -1088,6 +1088,14 @@ function pickSpot(btn) {
     b.classList.toggle("on", b === btn));
 }
 
+// 滚到底。**必须定义**（2026-11-06 事故）：`goFinish` / `pushAssistant` /
+// `pickFive` 都调它，但之前根本没这个函数——调用直接抛 ReferenceError，
+// 于是「点确定」既不发请求也不渲染，页面看着像卡死。
+function scrollBottom() {
+  const log = $("log");
+  if (log) log.scrollTop = log.scrollHeight;
+}
+
 // 让输入框临时不可用（生成期间）。主播 AI 出字的时候不该还能发消息。
 function lockInput(on) {
   ["inp", "btnSend", "fThought", "fAction", "fPlot"].forEach(id => {

@@ -881,6 +881,25 @@ def persona_page():
     return send_from_directory(WEB_DIR, "persona.html")
 
 
+@app.after_request
+def _no_cache_persona(resp):
+    """角色扮演的前端**不许缓存**（2026-11-06）。
+
+    踩过：改了 `web/persona.html` 之后重启，浏览器还在用旧 JS——旧版里
+    弹窗的「确定」根本没有绑新逻辑，点下去毫无反应，看起来就像页面卡死。
+    这类单页工具页每次都应该拿最新的，代价只是几十 KB。
+    """
+    try:
+        if request.path.startswith("/persona") and not request.path.startswith(
+                "/api/"):
+            resp.headers["Cache-Control"] = "no-store, must-revalidate"
+            resp.headers["Pragma"] = "no-cache"
+            resp.headers["Expires"] = "0"
+    except Exception:                                  # noqa: BLE001
+        pass
+    return resp
+
+
 @app.route("/persona_admin")
 def persona_admin_page():
     """角色扮演查看台（2026-11-03）：谁玩过、聊了什么。
