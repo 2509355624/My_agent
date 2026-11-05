@@ -14,5 +14,6 @@
   "gestation_days": 280,
   "max_children": 1,
   "year_days": 365,
-  "month_days": 30
+  "month_days": 30,
+  "cycle_hint": "vague"
 }

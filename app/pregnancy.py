@@ -42,6 +42,13 @@ _DEFAULTS = {
     "max_children": 1,
     "year_days": 365,
     "month_days": 30,
+    # 周期要不要给玩家看（2026-11-06 用户问「能不能告诉她现在什么期」）：
+    #   "off"   完全不提；
+    #   "vague" 只给她自己的感觉（默认）——玩家能摸到规律，但不能直接算概率；
+    #   "exact" 直接写「安全期 / 易孕期 / 排卵期（第 N 天）」。
+    # 选 "vague" 是因为写清楚之后这局就变成倒计时：等到第 14 天再射，
+    # 中间那段张力全没了。想图省事就把这里改成 "exact"。
+    "cycle_hint": "vague",
 }
 
 _STATUS = ("none", "pregnant", "postpartum")
@@ -250,8 +257,27 @@ def child_age_text(days, cfg=None):
     return " ".join(parts)
 
 
+_CYCLE_HINT = {
+    "period": "她今天不太舒服，腰沉，话说两句就没耐心。",
+    "safe": "她这几天跟平常一样，没什么特别的。",
+    "fertile": "她这两天身上总是热的，你靠得太近她会自己挪开一点。",
+    "ovulation": "她这两天特别容易脸红，说着话会突然停一下，像在想别的。",
+}
+
+
+def _cycle_text(ci, mode):
+    """周期提示的措辞。`exact` 给名字和天数，`vague` 只给她自己的感觉。"""
+    if mode == "exact":
+        return "%s（周期第 %d 天）" % (ci["phase_name"], ci["cycle_day"])
+    return _CYCLE_HINT.get(ci["phase"], _CYCLE_HINT["safe"])
+
+
 def view(ent, day, enabled=True):
-    """给前端看的状态。没怀孕时不暴露周期细节。"""
+    """给前端看的状态。
+
+    没怀孕时默认**不暴露**周期细节（2026-11-06 起由 `cycle_hint` 控制）：
+    `vague` 只回一句她自己的感觉，`exact` 才回名字和天数，`off` 什么都不回。
+    """
     if not enabled:
         return {"enabled": False, "status": "disabled"}
     p = _state(ent)
@@ -280,7 +306,18 @@ def view(ent, day, enabled=True):
             "child_days": child_days,
             "child_text": child_age_text(child_days, cfg),
         }
-    return {"enabled": True, "status": "none"}
+    out = {"enabled": True, "status": "none"}
+    cfg = load_config()
+    mode = str(cfg.get("cycle_hint") or "vague").strip().lower()
+    if mode in ("vague", "exact"):
+        ci = cycle_info(day, cfg)
+        out["cycle"] = {
+            "phase": ci["phase"],
+            "day": ci["cycle_day"],
+            "name": ci["phase_name"],
+            "hint": _cycle_text(ci, mode),
+        }
+    return out
 
 
 def stage_key(ent, day, cfg=None):

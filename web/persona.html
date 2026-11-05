@@ -949,6 +949,10 @@
         不会当场掷概率。等跨天时（点时间跳跃，或剧情里过夜）才结算一次。</p>
       <p><b>周期：</b>从认识她的第 1 天算，28 天一轮：第 1–9 天安全期，
         第 10–16 天易孕期（第 14 天前后排卵），第 17–28 天回到安全期。</p>
+      <p><b>她处在哪一段：</b>右栏「未孕」下面会写一句她自己的感觉——
+        没有直接标「排卵期」，你得自己留意。这句话可以在
+        <code>config/pregnancy.json</code> 的 <code>cycle_hint</code> 里
+        改成 <code>exact</code>（直接写期名和天数）或 <code>off</code>（完全不说）。</p>
       <p><b>概率：</b>一次内射，安全期 2%、易孕期 15%、排卵期 22%；
         同一天多次或跨天前多次会小幅叠加，安全期最多 8%。</p>
       <p><b>怀孕到生产：</b>从受孕那天算，怀孕第 N 天、预产期第 280 天；
@@ -1986,7 +1990,12 @@ function renderPreg(p) {
     $("sPregNote").textContent = "出生 第 " + (p.born_day || 0) + " 天";
   } else {
     $("sPreg").textContent = "未孕";
-    $("sPregNote").textContent = "已开启怀孕玩法 · 点 ? 看规则";
+    // 周期提示（2026-11-06）：后端按 `cycle_hint` 决定给不给。
+    // vague = 她自己的感觉；exact = 「安全期（周期第 3 天）」。
+    const c = p.cycle;
+    $("sPregNote").textContent = (c && c.hint)
+      ? c.hint
+      : "已开启怀孕玩法 · 点 ? 看规则";
   }
 }
 
