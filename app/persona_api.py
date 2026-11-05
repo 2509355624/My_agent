@@ -331,6 +331,9 @@ def get_session():
         "total": total,                 # 归档总条数（前端翻页的游标上限）
         "more": start > 0,              # 还有更早的可以往回翻
         "affection": aff,
+        "day": persona.game_day(key),
+        "phase": persona.game_phase(key),
+        "preg": persona.pregnancy_status(key),
         "role": "member",
     })
 
@@ -517,6 +520,9 @@ def _guest_session(uid, token):
         "total": total,
         "more": start > 0,
         "affection": aff,
+        "day": persona.game_day(ckey),
+        "phase": persona.game_phase(ckey),
+        "preg": persona.pregnancy_status(ckey),
         "role": "guest",
         "remaining": max(0, guest.GUEST_TURNS - turns),
         "limit": guest.GUEST_TURNS,
@@ -655,6 +661,9 @@ def _chat_turn(text):
     total = persona.archive_len(key)
     out["n"] = {"user": max(0, total - 2), "assistant": max(0, total - 1)}
     out["day"] = persona.game_day(key)      # 游戏内第几天（2026-11-04）
+    out["phase"] = persona.game_phase(key)
+    out["finish"] = str(getattr(turn, "finish", "") or "")   # 这一轮有没有内射
+    out["preg"] = persona.pregnancy_status(key)
     # 攻略模式（2026-11-03）：把这一轮的结算带给前端——AI 回复下方的
     # 状态条直接用它渲染。自由模式 turn.aff 是 None，不带这个字段。
     if getattr(turn, "aff", None):
@@ -704,6 +713,10 @@ def _guest_chat(text, uid, token):
     }
     total = persona.archive_len(ckey)
     out["n"] = {"user": max(0, total - 2), "assistant": max(0, total - 1)}
+    out["day"] = persona.game_day(ckey)
+    out["phase"] = persona.game_phase(ckey)
+    out["finish"] = str(getattr(turn, "finish", "") or "")
+    out["preg"] = persona.pregnancy_status(ckey)
     if getattr(turn, "aff", None):
         out["affection"] = turn.aff
     resp = jsonify(out)
@@ -713,12 +726,16 @@ def _guest_chat(text, uid, token):
 
 @bp.route("/api/persona/skip_day", methods=["POST"])
 def skip_day_api():
-    """睡到明天（2026-11-04）：推进游戏内一天，**由她先开口**。
+    """时间跳跃（2026-11-04；2026-11-05 支持多天）：推进 days 天，**由她先开口**。
 
     body 可带 custom（自定义模型）——开场那一次 LLM 调用同样走它。
     """
     body = request.get_json(silent=True) or {}
     llm.set_custom_override(body.get("custom"))
+    try:
+        days = max(1, min(365, int(body.get("days") or 1)))
+    except (TypeError, ValueError):
+        days = 1
     try:
         role, who, token = _who()
         if role == "guest":
@@ -736,7 +753,7 @@ def skip_day_api():
                 _attach_guest_cookie(resp, token)
                 return resp
             with usage.scope("guest_" + str(who or "anon")[:8]):
-                turn = persona.skip_day(ckey, "")
+                turn = persona.skip_day(ckey, "", days=days)
             if turn is None or not turn.reply.strip():
                 return jsonify({"ok": False, "error": "没跳成，再试一次"}), 502
             out = {
@@ -749,6 +766,8 @@ def skip_day_api():
             total = persona.archive_len(ckey)
             out["n"] = {"user": max(0, total - 2), "assistant": max(0, total - 1)}
             out["day"] = persona.game_day(ckey)
+            out["phase"] = persona.game_phase(ckey)
+            out["preg"] = persona.pregnancy_status(ckey)
             resp = jsonify(out)
             _attach_guest_cookie(resp, token)
             return resp
@@ -758,7 +777,7 @@ def skip_day_api():
         if card is None:
             return jsonify({"ok": False, "error": "还没选角色"}), 400
         with usage.scope(key):
-            turn = persona.skip_day(key, "")
+            turn = persona.skip_day(key, "", days=days)
         if turn is None or not turn.reply.strip():
             return jsonify({"ok": False, "error": "没跳成，再试一次"}), 502
         out = {
@@ -771,6 +790,88 @@ def skip_day_api():
         if getattr(turn, "aff", None):
             out["affection"] = turn.aff
         out["day"] = persona.game_day(key)
+        out["phase"] = persona.game_phase(key)
+        out["preg"] = persona.pregnancy_status(key)
+        return jsonify(out)
+    finally:
+        llm.set_custom_override(None)
+
+
+@bp.route("/api/persona/set_phase", methods=["POST"])
+def set_phase_api():
+    """切今天时段（2026-11-05）：早晨 / 中午 / 下午 / 晚上。
+
+    不只是改状态：会让她先开口——把上一段收尾（亲密/正在做的事结束），
+    再自然进入新时段。不推进天数、不掷事件、不结算怀孕。
+    """
+    body = request.get_json(silent=True) or {}
+    llm.set_custom_override(body.get("custom"))
+    phase = str(body.get("phase") or "").strip()
+    try:
+        if phase not in persona.PHASES:
+            return jsonify({"ok": False,
+                            "error": "时段只能是早晨/中午/下午/晚上"}), 400
+        role, who, token = _who()
+        if role == "guest":
+            from app import guest
+
+            _guest_sweep()
+            ckey = _guest_line(who)
+            if ckey is None:
+                return jsonify({"ok": False, "error": "没有可用角色"}), 500
+            used = _guest_turns(ckey)
+            if used >= guest.GUEST_TURNS:
+                resp = jsonify({"ok": False, "limit": True, "remaining": 0,
+                                "error": "体验版玩完啦"})
+                resp.status_code = 403
+                _attach_guest_cookie(resp, token)
+                return resp
+            with usage.scope("guest_" + str(who or "anon")[:8]):
+                turn = persona.jump_phase(ckey, phase, "")
+            if turn is None or not turn.reply.strip():
+                return jsonify({"ok": False, "error": "没切成，再试一次"}), 502
+            out = {
+                "ok": True, "reply": turn.reply, "scene": turn.scene,
+                "mood": turn.mood, "intensity": turn.intensity,
+                "state": turn.state, "role": "guest",
+                "remaining": max(0, guest.GUEST_TURNS - used - 1),
+                "limit": guest.GUEST_TURNS,
+            }
+            total = persona.archive_len(ckey)
+            out["n"] = {"user": max(0, total - 2),
+                        "assistant": max(0, total - 1)}
+            out["day"] = persona.game_day(ckey)
+            out["phase"] = persona.game_phase(ckey)
+            out["preg"] = persona.pregnancy_status(ckey)
+            resp = jsonify(out)
+            _attach_guest_cookie(resp, token)
+            return resp
+
+        key = _active_key(_key(who))
+        card = persona.active_card(key)
+        if card is None:
+            return jsonify({"ok": False, "error": "还没选角色"}), 400
+        with usage.scope(key):
+            turn = persona.jump_phase(key, phase, "")
+        if turn is None or not turn.reply.strip():
+            return jsonify({"ok": False, "error": "没切成，再试一次"}), 502
+        out = {
+            "ok": True, "reply": turn.reply, "scene": turn.scene,
+            "mood": turn.mood, "intensity": turn.intensity,
+            "state": turn.state, "role": "member",
+        }
+        total = persona.archive_len(key)
+        out["n"] = {"user": max(0, total - 2), "assistant": max(0, total - 1)}
+        if getattr(turn, "aff", None):
+            out["affection"] = turn.aff
+        # 时段跳转已经用 `affection.sleep` 把当前场景收掉；把最新的封存
+        # 状态带回去，右栏才不会还挂着「进行中 / 高潮值」。
+        aff_now = _aff_status(key)
+        if aff_now:
+            out["affection"] = aff_now
+        out["day"] = persona.game_day(key)
+        out["phase"] = persona.game_phase(key)
+        out["preg"] = persona.pregnancy_status(key)
         return jsonify(out)
     finally:
         llm.set_custom_override(None)

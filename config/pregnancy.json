@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "cycle_length": 28,
+  "period_days": 0,
+  "fertile_start": 10,
+  "fertile_end": 16,
+  "ovulation_day": 14,
+  "chance_safe": 0.02,
+  "chance_fertile": 0.15,
+  "chance_ovulation": 0.22,
+  "extra_per_exposure": 0.02,
+  "max_chance": 0.35,
+  "max_chance_safe": 0.08,
+  "gestation_days": 280,
+  "max_children": 1,
+  "year_days": 365,
+  "month_days": 30
+}

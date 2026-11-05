@@ -227,6 +227,25 @@
   .nowrow .k { margin: 0; flex: none; }
   .nowrow .v { flex: 1 1 auto; text-align: right;
     font-variant-numeric: tabular-nums; }
+  /* 高潮 / 内射这一拍的发光标识（2026-11-05）：只亮一轮，下一轮自动消失。 */
+  .climaxBadge { display: none; margin: 0 0 8px; padding: 6px 12px;
+    border-radius: 999px; text-align: center; font-size: 12px; font-weight: 600;
+    letter-spacing: .08em; color: #fff;
+    background: linear-gradient(90deg, #f472b6, #d4537e 45%, #f0a35e);
+    box-shadow: 0 0 18px rgba(244,114,182,.65), 0 0 38px rgba(240,163,94,.35);
+    animation: climaxGlow 1.5s ease-in-out infinite; }
+  @keyframes climaxGlow {
+    0%, 100% { box-shadow: 0 0 14px rgba(244,114,182,.5),
+      0 0 30px rgba(240,163,94,.25); }
+    50% { box-shadow: 0 0 26px rgba(244,114,182,.9),
+      0 0 52px rgba(240,163,94,.5); }
+  }
+  /* 状态行末尾的小问号（怀孕规则等）：只占 16px，不把数值挤走。 */
+  .helpDot { flex: none; width: 16px; height: 16px; padding: 0;
+    border-radius: 50%; border: 1px solid var(--border); background: transparent;
+    color: var(--text-mute); font-size: 11px; line-height: 14px; cursor: pointer;
+    text-align: center; align-self: center; font-family: inherit; }
+  .helpDot:hover { border-color: var(--accent); color: var(--accent); }
 
   /* 聊天背景块（2026-11-05）：预览 + 两个按钮。游客整块隐藏
      （applyBg 里判 editable），他们只吃卡/全局默认那一层。 */
@@ -300,6 +319,13 @@
   .prow.current .vl { color: var(--accent); }
   .prow.locked { opacity: .55; }
   .prow .req { color: #f0a35e; font-size: 11px; }
+  /* 状态数值条（2026-11-05 用户要求）：档位表上面先给一行具体数字。
+     没有这一行时，玩家得自己从表里推「现在好感到底多少」，太累。 */
+  .pstats { display: flex; flex-wrap: wrap; gap: 3px 12px;
+    margin: 2px 0 8px; font-size: 11.5px; color: var(--text-mute);
+    line-height: 1.6; font-variant-numeric: tabular-nums; }
+  .pstats b { color: var(--text); font-weight: 600; }
+  .pstats em { font-style: normal; color: var(--text-dim); }
   /* 面板底部的结论句 */
   .pnote { margin-top: 8px; font-size: 11.5px; color: var(--text-mute);
     line-height: 1.6; }
@@ -407,6 +433,33 @@
   .wipeBox .wbtns { display: flex; gap: 8px; margin-top: 14px; }
   .wipeBox .wbtns .btn { flex: 1; display: flex; justify-content: center; }
 
+  /* 时间跳跃（2026-11-05）：1/7/30 天 + 自定义。 */
+  .skipMask { display: none; position: fixed; inset: 0; z-index: 400;
+    background: rgba(0,0,0,.72); align-items: center; justify-content: center;
+    padding: 20px; }
+  .skipMask.on { display: flex; }
+  .skipBox { width: min(420px, 100%); background: var(--bg-elev);
+    border: 1px solid var(--border); border-radius: var(--r); padding: 20px;
+    box-shadow: 0 18px 50px rgba(0,0,0,.6); }
+  .skipBox h3 { font-size: 16px; margin-bottom: 6px; }
+  .skipBox .skipt { font-size: 12px; line-height: 1.7; color: var(--text-dim); }
+  .skipBtns { display: flex; gap: 8px; margin: 14px 0 10px; }
+  .skipBtns .btn { flex: 1; }
+  /* 选中态（2026-11-05）：先选时段/天数，再点下面的「跳」执行。 */
+  .skipBtns .btn.on { border-color: var(--accent); color: var(--accent);
+    background: var(--accent-dim); }
+  .skipCustom { display: flex; gap: 8px; align-items: center; }
+  .skipCustom input { flex: 1; min-width: 0; padding: 9px 12px; font: inherit;
+    font-size: 13px; color: var(--text); background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: var(--rs); outline: none; }
+  .skipCustom input:focus { border-color: var(--accent); }
+  .skipGo { margin-top: 12px; width: 100%; }
+  /* 怀孕规则弹窗：复用时间跳跃的壳，正文是多段小字。 */
+  .pregRules { margin: 12px 0 4px; font-size: 12.5px; line-height: 1.75;
+    color: var(--text-dim); }
+  .pregRules p { margin: 0 0 9px; }
+  .pregRules b { color: var(--text); }
+
   /* ─── 自定义模型弹窗（2026-11-05）───────────────────────
      克隆 wipeMask 的壳：居中遮罩 + 430px 面板。区别是这里没有危险动作，
      所以不走红色系，用中性边框；三个输入框 + 测试/恢复/保存三个动作。 */
@@ -439,12 +492,13 @@
     line-height: 1.5; word-break: break-all; }
   /* 手机：输入框 16px 起——iOS Safari 聚焦字号小于 16px 会强行放大页面。 */
   @media (max-width: 1000px) {
-    .composer textarea, .wipeBox input, .cmBox input { font-size: 16px; }
+    .composer textarea, .wipeBox input, .cmBox input,
+    .skipCustom input { font-size: 16px; }
     /* 弹窗顶对齐 + 可滚动：iOS 软键盘弹出来时，居中弹窗的输入框会被键盘遮住；
        顶部对齐后用户能自己滚到输入框。 */
-    .wipeMask, .cmMask { align-items: flex-start; overflow-y: auto;
+    .wipeMask, .cmMask, .skipMask { align-items: flex-start; overflow-y: auto;
       padding-top: max(16px, env(safe-area-inset-top)); }
-    .wipeBox, .cmBox { max-height: calc(var(--vh, 100dvh) - 32px);
+    .wipeBox, .cmBox, .skipBox { max-height: calc(var(--vh, 100dvh) - 32px);
       overflow-y: auto; }
     /* 刘海 / 状态栏安全区（viewport-fit=cover 下才不是 0）。 */
     .top { padding-top: max(10px, env(safe-area-inset-top)); }
@@ -561,7 +615,7 @@
     </div>
     <div class="composer">
       <textarea id="inp" rows="1" placeholder="说点什么…"></textarea>
-      <button class="btn" id="btnSkip" title="推进到第二天，由她先开口">🌙 睡到明天</button>
+      <button class="btn" id="btnSkip" title="跳过几天，由她先开口">🌙 跳过</button>
       <button class="btn pri" id="btnSend">发送</button>
     </div>
   </main>
@@ -571,6 +625,8 @@
          心情条是最直观的进程，打开侧栏第一眼就该看到它。
          以前这里是攻略数值面板在最上面，现在把数值面板挪到它下面。 -->
     <div class="st" id="nowBox">
+      <!-- 高潮/内射这一拍的发光标识（2026-11-05）：只在这一轮出现，下一轮消失。 -->
+      <div class="climaxBadge" id="climaxBadge" style="display:none"></div>
       <div class="nowrow"><span class="k">心情</span>
         <span class="v mood" id="sMood">—</span></div>
       <div class="bar"><i id="sBar"></i></div>
@@ -578,8 +634,18 @@
         <span class="v" id="sState">—</span></div>
       <div class="nowrow"><span class="k">轮次</span>
         <span class="v" id="sTurns">0</span></div>
-      <div class="nowrow"><span class="k">剧情</span>
+      <div class="nowrow"><span class="k">时间</span>
         <span class="v" id="sDay">—</span></div>
+    </div>
+    <!-- 怀孕 / 孩子（2026-11-05）：常驻显示「未孕」，让玩家知道这条线有这回事；
+         点旁边 ? 看周期、概率和跨天规则。卡上关了怀孕玩法时整块隐藏。 -->
+    <div class="st" id="pregBox" style="display:none">
+      <div class="nowrow"><span class="k">身体</span>
+        <span class="v" id="sPreg">—</span>
+        <button class="helpDot" id="btnPregHelp" type="button"
+                title="怀孕规则">?</button></div>
+      <div class="v" id="sPregNote"
+           style="font-size:11px;color:var(--text-mute);margin-top:3px"></div>
     </div>
     <!-- 角色详情（2026-11-05）：看「她最初是什么人」，不跟剧情状态混在一起。 -->
     <div class="st" id="cardBox">
@@ -604,6 +670,7 @@
          再看「好感/冲动到哪了」。游客模式下整块隐藏（见 renderAff）。 -->
     <div class="st panel" id="panelBox" style="display:none">
       <div class="k" id="panelK">状态</div>
+      <div class="pstats" id="panelStats" style="display:none"></div>
       <div id="panelBody"></div>
       <div class="pnote" id="panelNote"></div>
     </div>
@@ -719,10 +786,64 @@
   </div>
 </div>
 
+<!-- 时间（2026-11-05）：切今天时段，或者跳过几天。 -->
+<div class="skipMask" id="skipMask">
+  <div class="skipBox">
+    <h3>时间</h3>
+    <div class="skipt">先选今天的时段，或者选要跳几天，再点下面的「跳」。</div>
+    <div class="skipBtns phaseBtns">
+      <button class="btn" data-phase="早晨">早晨</button>
+      <button class="btn" data-phase="中午">中午</button>
+      <button class="btn" data-phase="下午">下午</button>
+      <button class="btn" data-phase="晚上">晚上</button>
+    </div>
+    <div class="skipt" style="margin-top:2px">切时段不推进天数，由她先开口接上。</div>
+    <div class="skipBtns" style="margin-top:12px">
+      <button class="btn" data-days="1">1 天</button>
+      <button class="btn" data-days="7">7 天</button>
+      <button class="btn" data-days="30">30 天</button>
+    </div>
+    <div class="skipCustom">
+      <input type="number" id="skipDays" min="1" max="365"
+             inputmode="numeric" placeholder="自定义天数">
+    </div>
+    <div class="skipt" style="margin-top:2px">跳过几天由她先开口；选时段和选天数二选一。</div>
+    <button class="btn pri skipGo" id="skipGo">跳</button>
+    <button class="btn skipGo" id="skipCancel">取消</button>
+  </div>
+</div>
+
+<!-- 怀孕规则（2026-11-05）：状态条旁边的小问号点开。只解释机制，
+     不显示当前处在周期的哪一段——那个要玩家自己按天算。 -->
+<div class="skipMask" id="pregHelpMask">
+  <div class="skipBox">
+    <h3>怀孕规则</h3>
+    <div class="pregRules">
+      <p><b>什么时候判：</b>只有编剧判定这一轮「射在里面」才会记录，而且
+        不会当场掷概率。等跨天时（点时间跳跃，或剧情里过夜）才结算一次。</p>
+      <p><b>周期：</b>从认识她的第 1 天算，28 天一轮：第 1–9 天安全期，
+        第 10–16 天易孕期（第 14 天前后排卵），第 17–28 天回到安全期。</p>
+      <p><b>概率：</b>一次内射，安全期 2%、易孕期 15%、排卵期 22%；
+        同一天多次或跨天前多次会小幅叠加，安全期最多 8%。</p>
+      <p><b>怀孕到生产：</b>从受孕那天算，怀孕第 N 天、预产期第 280 天；
+        到预产期生产，孩子出生后按天显示年龄。</p>
+      <p><b>开关：</b>站主可在角色管理页按卡关闭怀孕玩法；清空存档会连
+        怀孕和孩子一起清掉。</p>
+    </div>
+    <button class="btn pri skipGo" id="pregHelpClose">知道了</button>
+  </div>
+</div>
+
 <script>
 const $ = id => document.getElementById(id);
 const QQ = new URLSearchParams(location.search).get("qq") || "";
 let card = null, busy = false, msgs = [];
+// 当前游戏日 / 时段（2026-11-05）：右栏「时间」那行显示「在一起第 N 天 · 中午」。
+let CUR_DAY = 0, CUR_PHASE = "";
+// 这一轮编剧判的内射（2026-11-05）：和 AFF.just_orgasm 一起决定发光标识。
+let LAST_FINISH = "";
+// 时间弹窗里暂存的选择：先选时段或天数，点「跳」才执行。
+let JUMP_SEL = { phase: "", days: 0 };
 // 开场导读（2026-11-04）：新线第一屏的灰色背景说明，由后端生成一次后缓存。
 let INTRO = "";
 // 用户气泡的临时序号（它们不挂图，不需要归档行号，只要 DOM id 唯一）。
@@ -1193,6 +1314,7 @@ function panelDev(rows, totalPct, allFull) {
 function renderPanel(a, p) {
   const box = $("panelBox");
   const affBox = $("affBox");
+  const stats = $("panelStats");
   if (!box) return;
   // 游客固定自由模式（2026-11-05 最终版）：不跑好感结算，这块数值不会变。
   // 早先「游客攻略化」留下的显示逻辑要撤掉，否则玩家看到一排 0 以为坏了。
@@ -1201,9 +1323,20 @@ function renderPanel(a, p) {
     if (affBox) affBox.style.display = "none";
     return;
   }
+  // 状态栏常驻（2026-11-05 用户要求）：没选角色、还没拉到面板数据时，
+  // 不再整块消失——以前玩家不知道右边这块什么时候才会出现。
   if (!p) {
-    box.style.display = "none";
+    box.style.display = "";
     if (affBox) affBox.style.display = "none";
+    $("panelK").textContent = "状态";
+    if (stats) stats.style.display = "none";
+    const body = $("panelBody");
+    body.innerHTML = "";
+    const tip = document.createElement("div");
+    tip.style.cssText = "font-size:12px;color:var(--text-mute);line-height:1.7";
+    tip.textContent = "选一个角色，这里会显示她的身体进度、感情、冲动、高潮和堕落。";
+    body.appendChild(tip);
+    $("panelNote").textContent = "";
     return;
   }
   const raid = isRaid(a);
@@ -1217,6 +1350,27 @@ function renderPanel(a, p) {
   const body = $("panelBody");
   body.innerHTML = "";
   const v = p.value | 0;
+
+  // 状态数值条（2026-11-05）：先给一行具体数字，再往下才是档位表。
+  // 自由模式下这些值不结算，但保留上次封存的值——玩家想知道自己停在哪。
+  if (stats) {
+    stats.style.display = "";
+    stats.innerHTML = "";
+    [["好感", v, ""],
+     ["屈服", p.submit | 0, p.submitName],
+     ["堕落", p.corrupt | 0, p.corruptName],
+     ["冲动", p.arousal | 0, p.arousalName],
+     ["高潮", p.excite | 0, p.exciteName]].forEach(function (x) {
+      const el = document.createElement("span");
+      el.innerHTML = x[0] + " <b>" + x[1] + "</b>";
+      if (x[2]) {
+        const em = document.createElement("em");
+        em.textContent = " " + x[2];
+        el.appendChild(em);
+      }
+      stats.appendChild(el);
+    });
+  }
 
   // 一、身体进度：七级，「还没碰过 → 要不够」。
   // 这一块是玩家最想看的——它直接回答「我们能不能做 / 到哪一步了」。
@@ -1340,8 +1494,7 @@ function renderAff(a, noFetch) {
   // 面板数据是异步来的；这里先用上次的渲染一次（避免闪空白），
   // 然后立刻拉新的。第一次进来 PANEL 是 null，就等 refreshPanel 填。
   renderPanel(a, PANEL);
-  // `noFetch` 是**防止自激**的那道闸：refreshPanel 拿到数据后回来重画，
-  // 不能再顺手发起下一次拉取，否则就是死循环。
+  renderClimax();        // AFF 更新后同步一次发光标识
   if (!noFetch) refreshPanel();
 }
 
@@ -1463,21 +1616,71 @@ function renderAll(list) {
   log.scrollTop = log.scrollHeight;
 }
 
+function renderTime() {
+  if (!CUR_DAY) { $("sDay").textContent = "—"; return; }
+  $("sDay").textContent = "在一起第 " + CUR_DAY + " 天"
+    + (CUR_PHASE ? " · " + CUR_PHASE : "");
+}
+
+// 高潮 / 内射这一拍的发光标识（2026-11-05）。两个来源：
+// ① `AFF.just_orgasm`：这一轮高潮值到顶、记了一次；
+// ② 编剧判的 `finish=inside`：这一轮有内射。两者同时出现就是「一起到了」。
+// 只在这一轮亮，下一轮普通回复会把 badge 藏回去。
+function renderClimax() {
+  const badge = $("climaxBadge");
+  if (!badge) return;
+  const org = !!(AFF && AFF.just_orgasm);
+  const inside = LAST_FINISH === "inside";
+  if (!org && !inside) { badge.style.display = "none"; return; }
+  badge.style.display = "";
+  badge.textContent = (org && inside) ? "一起到了 · 内射"
+    : (org ? "她到了" : "内射 · 这一拍");
+}
+
 function renderState(s) {
   $("sMood").textContent = s.mood ? (s.mood + " " + s.intensity) : "—";
   $("sBar").style.width = Math.min(100, (s.intensity || 0) * 10) + "%";
   $("sState").textContent = s.state || "—";
   $("sNote").textContent = s.note || "—";
   $("sTurns").textContent = s.turns || 0;
-  // 游戏内天数（2026-11-04）：只在回包带了 day 时刷新，别处传来的
-  // 局部状态不带它，不能把已显示的天数抹掉。
-  if (s.day) $("sDay").textContent = "第 " + s.day + " 天";
+  // 游戏内天数 / 时段（2026-11-04 / 2026-11-05）：只在回包带了时才刷新，
+  // 别处传来的局部状态不带它，不能把已显示的天数抹掉。
+  if (s.day) CUR_DAY = s.day;
+  if (s.phase !== undefined) CUR_PHASE = s.phase || "";
+  if (s.finish !== undefined) LAST_FINISH = s.finish || "";
+  renderTime();
+  renderClimax();
+  // 怀孕/孩子（2026-11-05）：只有回包带了 preg 才更新，局部状态不能抹掉。
+  if (s.preg !== undefined) renderPreg(s.preg);
   // 收起的「回忆」看不出有没有内容——标题上标一个字，
   // 玩家知道点开有东西看，不用盲点。
   const mark = $("noteMark");
   const box = $("noteBox");
   if (mark && box && !box.classList.contains("open")) {
     mark.textContent = (s.note && s.note.trim()) ? "▸ ●" : "▸";
+  }
+}
+
+function renderPreg(p) {
+  const box = $("pregBox");
+  if (!box) return;
+  // 卡关了怀孕玩法 / 后端不可用 → 整块隐藏；其余情况常驻。
+  // 未孕也显示「未孕」，让玩家知道这条线有这回事（2026-11-05 用户要求）。
+  if (!p || p.enabled === false || p.status === "disabled") {
+    box.style.display = "none";
+    return;
+  }
+  box.style.display = "";
+  if (p.status === "pregnant") {
+    $("sPreg").textContent = "怀孕 第 " + (p.pregnant_days || 0) + " 天";
+    $("sPregNote").textContent = "预产期 第 " + (p.due_day || 0)
+      + " 天（还有 " + (p.days_left || 0) + " 天）";
+  } else if (p.status === "postpartum") {
+    $("sPreg").textContent = "孩子 " + (p.child_text || "");
+    $("sPregNote").textContent = "出生 第 " + (p.born_day || 0) + " 天";
+  } else {
+    $("sPreg").textContent = "未孕";
+    $("sPregNote").textContent = "已开启怀孕玩法 · 点 ? 看规则";
   }
 }
 
@@ -1802,7 +2005,8 @@ async function deliver(text, isRetry) {
     log.appendChild(row);
     markLastAff();          // 数值只留在最新那条上
     renderState({ mood: d.mood, intensity: d.intensity, state: d.state,
-                  note: $("sNote").textContent,
+                  note: $("sNote").textContent, day: d.day,
+                  phase: d.phase, finish: d.finish, preg: d.preg,
                   turns: (+$("sTurns").textContent || 0) + 1 });
     if (d.affection) {
       AFF = d.affection;
@@ -1882,18 +2086,59 @@ async function rollbackLast() {
   }
 }
 
-// ── 睡到明天（2026-11-04）────────────────────────────
-// 推进游戏内一天，由她先开口。约定了「明天去做什么」的，第二天的开场
-// 就是这件事；偶尔撞上随机事件（台风天之类）。不消耗输入框内容。
-async function skipDay() {
+// ── 时间跳跃（2026-11-05）────────────────────────────
+// 1/7/30 天或自定义。后端在跨天时先结算怀孕，再由她先开口。
+function openSkip() {
   if (busy || !card) return;
+  clearJumpSel();
+  $("skipMask").classList.add("on");
+}
+function closeSkip() { $("skipMask").classList.remove("on"); }
+
+// 时间弹窗的选择：时段和天数二选一，点「跳」才真正执行。
+function clearJumpSel() {
+  JUMP_SEL = { phase: "", days: 0 };
+  document.querySelectorAll(".phaseBtns .btn, .skipBtns [data-days]")
+    .forEach(b => b.classList.remove("on"));
+  if ($("skipDays")) $("skipDays").value = "";
+}
+function pickPhase(p) {
+  JUMP_SEL = { phase: p, days: 0 };
+  document.querySelectorAll(".phaseBtns .btn").forEach(b =>
+    b.classList.toggle("on", b.getAttribute("data-phase") === p));
+  document.querySelectorAll(".skipBtns [data-days]").forEach(b =>
+    b.classList.remove("on"));
+  $("skipDays").value = "";
+}
+function pickDays(n) {
+  n = Math.max(1, Math.min(365, parseInt(n, 10) || 1));
+  JUMP_SEL = { phase: "", days: n };
+  document.querySelectorAll(".skipBtns [data-days]").forEach(b =>
+    b.classList.toggle("on", parseInt(b.getAttribute("data-days"), 10) === n));
+  document.querySelectorAll(".phaseBtns .btn").forEach(b =>
+    b.classList.remove("on"));
+  $("skipDays").value = "";
+}
+function doJump() {
+  if (busy) return;
+  if (JUMP_SEL.phase) { setPhase(JUMP_SEL.phase); return; }
+  if (JUMP_SEL.days > 0) { skipDay(JUMP_SEL.days); return; }
+  toast("先选一个时段，或者选/填要跳几天", true);
+}
+
+async function skipDay(days) {
+  if (busy || !card) return;
+  days = Math.max(1, Math.min(365, parseInt(days, 10) || 1));
+  closeSkip();
   busy = true;
   const log = $("log");
   const pending = makeRow({ role: "assistant", text: "…" }, "p" + Date.now());
   log.appendChild(pending);
   log.scrollTop = log.scrollHeight;
   try {
-    const d = await post("/api/persona/skip_day", CM ? { custom: CM } : {});
+    const body = { days: days };
+    if (CM) body.custom = CM;
+    const d = await post("/api/persona/skip_day", body);
     const nA = (d.n && typeof d.n.assistant === "number") ? d.n.assistant : null;
     msgs.push({ role: "assistant", text: d.reply, aff: d.affection || null, n: nA });
     pending.remove();
@@ -1901,7 +2146,8 @@ async function skipDay() {
                             nA === null ? ("a" + Date.now()) : nA));
     markLastAff();
     renderState({ mood: d.mood, intensity: d.intensity, state: d.state,
-                  note: $("sNote").textContent, day: d.day });
+                  note: $("sNote").textContent, day: d.day,
+                  phase: d.phase, finish: "", preg: d.preg });
     if (d.affection) { AFF = d.affection; renderAff(AFF); }
     if (ROLE === "guest" && d.remaining !== undefined) {
       GUEST_LEFT = d.remaining; renderQuota(); applyRoleUI();
@@ -1909,6 +2155,44 @@ async function skipDay() {
   } catch (err) {
     pending.remove();
     toast("没跳成：" + err.message, true);
+  } finally {
+    busy = false;
+    log.scrollTop = log.scrollHeight;
+  }
+}
+
+// 切今天时段（2026-11-05）：不推进天数，但会让她先开口——收尾上一段、
+// 带入新时段。和跳过一样渲染成一条她的消息。
+async function setPhase(phase) {
+  if (busy || !card) return;
+  phase = String(phase || "");
+  if (!phase) return;
+  closeSkip();
+  busy = true;
+  const log = $("log");
+  const pending = makeRow({ role: "assistant", text: "…" }, "p" + Date.now());
+  log.appendChild(pending);
+  log.scrollTop = log.scrollHeight;
+  try {
+    const body = { phase: phase };
+    if (CM) body.custom = CM;
+    const d = await post("/api/persona/set_phase", body);
+    const nA = (d.n && typeof d.n.assistant === "number") ? d.n.assistant : null;
+    msgs.push({ role: "assistant", text: d.reply, aff: d.affection || null, n: nA });
+    pending.remove();
+    log.appendChild(makeRow(msgs[msgs.length - 1],
+                            nA === null ? ("a" + Date.now()) : nA));
+    markLastAff();
+    renderState({ mood: d.mood, intensity: d.intensity, state: d.state,
+                  note: $("sNote").textContent, day: d.day, phase: d.phase,
+                  preg: d.preg, finish: d.finish || "" });
+    if (d.affection) { AFF = d.affection; renderAff(AFF); }
+    if (ROLE === "guest" && d.remaining !== undefined) {
+      GUEST_LEFT = d.remaining; renderQuota(); applyRoleUI();
+    }
+  } catch (err) {
+    pending.remove();
+    toast("没切成：" + err.message, true);
   } finally {
     busy = false;
     log.scrollTop = log.scrollHeight;
@@ -2161,7 +2445,38 @@ $("btnStats").onclick = openStats;
 
 // ── 绑定 ──────────────────────────────────────────────
 $("btnSend").onclick = send;
-$("btnSkip").onclick = skipDay;
+$("btnSkip").onclick = openSkip;
+$("skipCancel").onclick = closeSkip;
+$("skipMask").addEventListener("click", e => {
+  if (e.target === $("skipMask")) closeSkip();
+});
+// 怀孕规则（2026-11-05）：状态条旁边的小问号。
+$("btnPregHelp").onclick = () => $("pregHelpMask").classList.add("on");
+$("pregHelpClose").onclick = () =>
+  $("pregHelpMask").classList.remove("on");
+$("pregHelpMask").addEventListener("click", e => {
+  if (e.target === $("pregHelpMask")) $("pregHelpMask").classList.remove("on");
+});
+$("skipGo").onclick = doJump;
+document.querySelectorAll(".skipBtns [data-days]").forEach(btn => {
+  btn.onclick = () => pickDays(btn.getAttribute("data-days"));
+});
+document.querySelectorAll(".phaseBtns [data-phase]").forEach(btn => {
+  btn.onclick = () => pickPhase(btn.getAttribute("data-phase"));
+});
+// 自定义天数：输入即视为「选天数」，并清掉时段选择（二选一）。
+$("skipDays").addEventListener("input", e => {
+  const n = parseInt(e.target.value, 10);
+  if (n > 0) {
+    JUMP_SEL = { phase: "", days: Math.max(1, Math.min(365, n)) };
+    document.querySelectorAll(".skipBtns [data-days]")
+      .forEach(b => b.classList.remove("on"));
+    document.querySelectorAll(".phaseBtns .btn")
+      .forEach(b => b.classList.remove("on"));
+  } else {
+    JUMP_SEL = { phase: "", days: 0 };
+  }
+});
 $("inp").addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
 });

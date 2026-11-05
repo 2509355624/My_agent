@@ -57,7 +57,7 @@ import re
 import threading
 import time
 
-from app import affection, llm, persona_rag, trigger, writing_skills
+from app import affection, llm, persona_rag, pregnancy, trigger, writing_skills
 from app.config import BASE_DIR, QQ_AGENT_ID, QQ_BOT_NAME
 
 log = logging.getLogger("persona")
@@ -70,8 +70,8 @@ log = logging.getLogger("persona")
 # 身上的客观状态（穿着、位置、有没有肢体接触）。用 defaults 而不是新加一个
 # 类：老调用方读 `.reply` / `.scene` 完全不受影响。
 Turn = collections.namedtuple(
-    "Turn", "reply scene mood intensity state aff",
-    defaults=("", 0, "", None))
+    "Turn", "reply scene mood intensity state aff finish",
+    defaults=("", 0, "", None, ""))
 
 # 情绪词表（自由模式）。模型只能从这十个里挑，多一个字都不认——不限定的话
 # 它会每轮自己发明一个词，代码就没法按强度做出图判断了。
@@ -278,6 +278,14 @@ _INTIMATE_GUIDE = (
 "那是模板。可以写的：突然没声音了只剩短促的呼吸；从深处一层层收紧、拖得很长；\n"
 "想躲开又抱得更紧；声音反而变轻了身体反应却更大；第一次急、第二次因为太敏感\n"
 "而碎成一片；被中途停下，只留下没做完的那阵收缩。\n"
+"\n"
+"### 射精和她的高潮同一拍\n"
+"\n"
+"射的时候不要写成孤立的技术动作（「动作一顿，射了」）。通常和她的高潮/临界\n"
+"是同一拍：她先绷住、里面收紧、声音断掉，你跟着到；或者你先到，把她也带过去。\n"
+"写两个人的反应怎么叠在一起——她的收缩和你在里面的跳动、她的呼吸和你说不出\n"
+"的话、抱得更紧还是各自失神。**一轮最多一个落点**，不要把射精和高潮拆成两段\n"
+"流水账。\n"
 "\n"
 "### 别把「指导」写进正文\n"
 "\n"
@@ -1150,6 +1158,9 @@ def _norm_card(c):
         # 暂下架（2026-11-04）：不删卡、只是不在选人列表/名单里出现。
         # 正在演这张卡的会话不受影响（按 id 找卡的路径不过这个开关）。
         "hidden": bool(c.get("hidden")),
+        # 怀孕玩法（2026-11-05）：现有卡默认开（全是成年角色）；以后新增
+        # 非成年/不想玩这条线的卡，在管理页取消勾选即可。
+        "pregnancyEnabled": bool(c.get("pregnancyEnabled", True)),
     }
     try:
         out["createdAt"] = int(c.get("createdAt"))
@@ -1276,9 +1287,11 @@ def save_cards(cards, force=False):
                 # 状态下的她（2026-11-05）：这是「数值高了她怎么变」的调参，
                 # 和 hidden 一样属于运营开关，不是改人设正文。允许内置卡保存。
                 state_behavior = card.get("stateBehavior")
+                preterm = card.get("pregnancyEnabled")
                 card = _norm_card(keep)
                 card["hidden"] = bool(hidden)
                 card["stateBehavior"] = _norm_state_behavior(state_behavior)
+                card["pregnancyEnabled"] = bool(preterm)
         if card["id"] in seen:
             card["id"] = _fresh_id(seen)
         seen.add(card["id"])
@@ -1639,6 +1652,7 @@ def _erase(session_key):
         return None
     ent.update({"note": "", "turns": 0, "mood": "", "intensity": 0, "state": "",
                 "intro": ""})     # 开场导读一起清：下一屏要按新起点重铺
+    pregnancy.clear(ent)
     state = _load_state()
     state[line] = ent
     if line != session_key:
@@ -2781,6 +2795,7 @@ _INTENT_PROMPT = """先判断下面这句话**在干什么**，再把这一轮�
 
 {
   "intent": "intimate | joke | literal | insult | neutral",
+  "finish": "inside | outside | none | unknown",
   "note": "用不超过 15 个字说明他到底在干什么",
   "segments": [
     {"who": "用户 | 助手", "type": "说 | 做 | 想", "text": "说→原文；做→一句话概括；想→空串"}
@@ -2805,6 +2820,12 @@ _INTENT_PROMPT = """先判断下面这句话**在干什么**，再把这一轮�
 - 「抱抱」「亲一下」「过来」这种直接的亲近要求，判 intimate。
 - 「帮我倒水」「今天几号」这种正常的事项，判 literal。
 - 拿不准时判 neutral。
+
+finish（这一轮有没有「射在里面」）：只有明确发生/要求内射才 inside；
+戴套、体外、射在外面 outside；没进入或没发生 none；看不出来 unknown。
+普通对话一律 none，不要凭空补。内射常常和她的高潮同一拍发生；她到顶的
+那一下如果同时射了，也算 inside。射精可以连续，但刚高潮过的下一轮通常
+该是余韵，不要为了凑次数每轮都判 inside。
 
 %(segment_guide)s
 %(director_guide)s
@@ -2899,7 +2920,14 @@ def _director_fields(d):
         # 身体先失控」，120 字上限够写一个完整的小场面。`spot` 只给日志看，
         # 演员不需要知道这一轮「标的是哪个部位」，那会让它写得太刻意。
         "hook": str(d.get("hook") or "").strip()[:120],
+        # 怀孕（2026-11-05）：编剧判这一轮有没有内射。代码只在跨天时用。
+        "finish": _norm_finish(d.get("finish")),
     }
+
+
+def _norm_finish(value):
+    v = str(value or "").strip().lower()
+    return v if v in ("inside", "outside", "none", "unknown") else "unknown"
 
 
 def _judge_recent(hist):
@@ -3085,6 +3113,7 @@ _SCORE_PROMPT = """判断下面这句话**在干什么**，并给这句话对你
   "turn_type": "chat | action",
   "in_scene": false,
   "act": "none",
+  "finish": "inside | outside | none | unknown",
   "spot": "none",
   "dev": {"mouth": 0, "nipple": 0, "pussy": 0, "anus": 0, "body": 0},
   "excite": 0,
@@ -3233,6 +3262,18 @@ act（这一轮**在做什么动作**，只描述动作，不评价她爽不爽�
 
 **只判动作，不判强度感受。** 她嘴上拒绝、身体却有反应（发抖、发软、湿了、
 喘）时，act 照实填——**身体反应不看嘴**，这是要被记进高潮值里的。
+
+finish（这一轮有没有「射在里面」）：
+- inside —— 明确发生/要求内射、没有拔出来、没有戴套。
+- outside —— 戴套、体外、射在外面、中途拔出来。
+- none —— 这一轮没有进入，或根本没发生。
+- unknown —— 看不出来、没必要猜。
+只在 act 不是 none 时判；普通聊天一律 none。判不出来填 unknown，
+**不要替玩家补一个没发生的内射**。
+内射通常和她的高潮/临界同一拍：她到顶的那一下如果同时射了，判 inside，
+别因为正文主要写她的反应就漏掉。射精可以连续写，但**不要每轮都判 inside
+来刷次数**：刚一起到过的下一轮通常该是余韵/恢复，连续两次要有明确的
+剧情理由。
 
 excite（整数，这一轮高潮值**涨多少 / 落多少**，-40 ~ +40，由你判）：
 这一场里她已经到哪了，是按前面累积起来的，不是重新开始。
@@ -3660,11 +3701,16 @@ def _roll_event(gd):
     return ""
 
 
-def _apply_gameday(key, score=None, force_new_day=False):
+def _apply_gameday(key, score=None, force_new_day=False, days=1):
     """把这一轮的时间推进落账，返回最新 gameday（会话不存在返回 None）。
 
-    force_new_day（「睡到明天」）：不看打分，直接 +1 天并掷事件。
+    force_new_day（「睡到明天」/时间跳跃）：不看打分，直接 +days 天并掷事件。
+    跳多天时不掷日常小事件——「台风天」这种一句话用在一个月跨度上很怪。
     """
+    try:
+        days = max(1, min(365, int(days or 1)))
+    except (TypeError, ValueError):
+        days = 1
     st = _load_state()
     ent = st.get(key)
     if not isinstance(ent, dict):
@@ -3674,11 +3720,14 @@ def _apply_gameday(key, score=None, force_new_day=False):
     # 时整个换回去——不然撤掉一条「说好明天见」的消息，游戏日却停在了第 2 天。
     # 只保一级：每次覆盖上一份（deepcopy 里不会嵌 gameday_prev，它挂在 ent 上）。
     ent["gameday_prev"] = copy.deepcopy(gd)
+    # 怀孕状态跟着天数一起存快照（2026-11-05）：跨天那一轮可能刚掷中，
+    # 「回退上一轮」只退天数不退怀孕的话，回退完她还怀着。
+    ent["preg_prev"] = copy.deepcopy(ent.get("preg"))
     gd["turns_today"] = int(gd.get("turns_today") or 0) + 1
     if force_new_day:
-        gd["day"] = int(gd["day"]) + 1
+        gd["day"] = int(gd["day"]) + days
         gd["phase"] = "早晨"
-        gd["event"] = _roll_event(gd)
+        gd["event"] = _roll_event(gd) if days == 1 else ""
         gd["turns_today"] = 0
     elif isinstance(score, dict):
         t = str(score.get("time") or "none").strip().lower()
@@ -3727,6 +3776,99 @@ def game_day(session_key):
     if not isinstance(ent, dict):
         return None
     return _gameday(ent).get("day")
+
+
+# 网页「今天时段」手动切换的四个档（2026-11-05 用户要求）。
+# 只改 gameday.phase：不推进天数、不掷事件、不触发怀孕结算。
+PHASES = ("早晨", "中午", "下午", "晚上")
+
+
+def game_phase(session_key):
+    """这条线当前时段；没在演返回 ""。"""
+    ent = _entry(resolve_line(session_key))
+    if not isinstance(ent, dict):
+        return ""
+    return str(_gameday(ent).get("phase") or "")
+
+
+def set_phase(session_key, phase, sender_uin=""):
+    """手动切换今天时段，返回 `{"day": N, "phase": "中午"}`；没在演返回 None。
+
+    刻意不碰 `gameday_prev`：切时段不是一轮对话，回退上一轮不该把它撤掉。
+    也不重置 `turns_today`，否则「这一天聊了很久」的收束节拍会被刷掉。
+    """
+    ph = str(phase or "").strip()
+    if ph not in PHASES:
+        return None
+    key = resolve_line(_persona_key(session_key, sender_uin))
+    st = _load_state()
+    ent = st.get(key)
+    if not isinstance(ent, dict):
+        return None
+    gd = _gameday(ent)
+    gd["phase"] = ph
+    _save_state(st)
+    return {"day": gd["day"], "phase": gd["phase"]}
+
+
+# ─── 怀孕 / 时间跳跃（2026-11-05）────────────────────────
+#
+# 判定只在**跨天**发生：点时间跳跃，或编剧判出 time=overnight / skip_days。
+# 普通聊到晚上不判，避免同一场戏里反复掷骰。
+
+def _preg_record(key, card, day, finish):
+    """这一轮编剧判了 inside，就记在当天；不立刻判定。
+
+    记录是**只增不清**的：同一天后面几轮判 none / outside 不会抹掉它，
+    只有跨天结算时才统一清账。这样「今天射进去过」不会被编剧后面给出的
+    新判断覆盖。
+    """
+    if str(finish or "").strip().lower() != "inside":
+        return
+    if not pregnancy.card_enabled(card):
+        return
+    st = _load_state()
+    ent = st.get(key)
+    if not isinstance(ent, dict):
+        return
+    # 回退快照（2026-11-05）：存「记录之前」的状态；回退上一轮时连这一轮
+    # 的内射记录一起撤掉，不会出现「消息退了、精子还在」。
+    before = copy.deepcopy(ent.get("preg"))
+    if pregnancy.record_inside(ent, day):
+        ent["preg_prev"] = before
+        _save_state(st)
+
+
+def _preg_advance(key, old_day, new_day):
+    """跨天结算，返回 conceived / birth / None。"""
+    st = _load_state()
+    ent = st.get(key)
+    if not isinstance(ent, dict):
+        return None
+    event = pregnancy.advance(ent, old_day, new_day)
+    _save_state(st)
+    return event
+
+
+def pregnancy_status(session_key):
+    """给前端状态面板用的怀孕/孩子状态。"""
+    key = resolve_line(_persona_key(session_key, ""))
+    ent = _entry(key) or {}
+    card = active_card(key)
+    day = _gameday(ent).get("day") if ent else 1
+    return pregnancy.view(ent, day,
+                          enabled=bool(card and pregnancy.card_enabled(card)))
+
+
+def pregnancy_block(session_key, event=None):
+    """拼进系统头/跳跃任务的身体状态；卡没开怀孕就返回空串。"""
+    key = resolve_line(_persona_key(session_key, ""))
+    ent = _entry(key) or {}
+    card = active_card(key)
+    if not card or not pregnancy.card_enabled(card):
+        return ""
+    day = _gameday(ent).get("day") if ent else 1
+    return pregnancy.prompt_block(ent, day, event)
 
 
 def run_turn(session_key, text, target, sender="", sender_uin=""):
@@ -3778,6 +3920,7 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
     note = str(ent.get("note") or "")
     prev_state = str(ent.get("state") or "")
     gd = _gameday(ent) if ent else None
+    day_before = int((gd or {}).get("day") or 1)
 
     # 历史先读出来（2026-11-05）：第一段从「打分器」升级成「整理器 + 编剧」，
     # 它也要看最近发生过什么，才能判潜台词。原来它只看当前这一句。
@@ -3798,6 +3941,7 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
         intent, inote, extras = _judge_intent(
             card, text, prev_state, history=hist, note=note)
         extras = extras if isinstance(extras, dict) else {}
+    finish = _norm_finish(extras.get("finish"))
     # 亲密场景那 1,284 字只在该用的时候拼（2026-11-03）。
     # 判不出来（intent 为空）时按 True 走——宁可多发，不要因为分类失败让
     # 亲密场景写得干巴巴。`neutral` 也带上，它随时可能拐到亲密去。
@@ -3825,18 +3969,80 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
             log.exception("回忆注入失败 %s", key)
     # 攻略模式结算（2026-11-03）：分数落账 → 按档位往主提示词里注入关系块。
     # 没打出分（score 为 None）也照走 settle——按 +0 记账，档位注入照常。
+    preg_event = None
     aff_res = None
     if raid:
         aff_res = affection.settle(key, score)
+        if isinstance(aff_res, dict):
+            # 让状态块知道这一轮有没有内射：高潮和内射同一拍时换写法。
+            aff_res["finish"] = finish
         blk = affection.injection_block(aff_res)
         if blk:
             head = head + "\n\n" + blk
+        # 连续第五次（2026-11-05）：1/5 那个计数满了，而且这一轮同时内射——
+        # 这一场就算到底了，直接推进到第二天。`affection.settle` 已经在本轮
+        # 结算完，所以要在调 LLM **之前**把新一天拼进系统头，让她在这一轮
+        # 写「最后一起到 → 收尾 → 过渡到第二天早晨」，而不是下一轮才翻篇。
+        auto_next = False
+        if finish == "inside" and isinstance(aff_res, dict):
+            try:
+                omax = int(aff_res.get("orgasmMax") or 0)
+                auto_next = omax > 0 and int(aff_res.get("orgasms") or 0) >= omax
+            except (TypeError, ValueError):
+                auto_next = False
         # 游戏内时间（2026-11-04）：把打分 AI 判的跨天/约定落账，
         # 再把「第 N 天 + 今天的事 + 约定」拼进系统头。
-        gd = _apply_gameday(key, score) or gd
+        if auto_next:
+            gd = _apply_gameday(key, force_new_day=True, days=1) or gd
+        else:
+            gd = _apply_gameday(key, score) or gd
+        # 怀孕记录（2026-11-05）：放在时间推进/快照**之后**写。`preg_prev`
+        # 必须是这一轮开始前的状态，回退时才能把本轮的内射记录一起撤掉。
+        if finish == "inside":
+            try:
+                _preg_record(key, card, day_before, finish)
+            except Exception:                            # noqa: BLE001
+                log.exception("怀孕记录失败 %s", key)
+        try:
+            new_day = int((gd or {}).get("day") or day_before)
+            if new_day > day_before:
+                preg_event = _preg_advance(key, day_before, new_day)
+        except Exception:                                # noqa: BLE001
+            log.exception("怀孕结算失败 %s", key)
+        if auto_next:
+            # 自动跨天也要把这一场收掉：不这么做的话，第二天还挂着 5/5、
+            # 下一轮再判 inside 又会立刻触发一次「连续第五次」。
+            try:
+                affection.sleep(key)
+            except Exception:                            # noqa: BLE001
+                log.exception("连续第五次收场失败 %s", key)
+            head = head + (
+                "\n\n【连续第五次 · 直接到第二天】"
+                "她刚到第五次，你也一起到了。这一轮把整场收住：先写余韵、"
+                "两个人缓下来，再用一个短过渡带到第二天早晨（睡过去、天亮、"
+                "闹钟都可以）。不要在新的一天重新开一场，也不要直接跳到第二天"
+                "却不说这一夜怎么过完。")
         tblock = _gameday_block(gd)
         if tblock:
             head = head + "\n\n" + tblock
+    else:
+        # 自由模式不推进天数，但内射照样按天记账，等时间跳跃时统一结算。
+        if finish == "inside":
+            try:
+                _preg_record(key, card, day_before, finish)
+            except Exception:                            # noqa: BLE001
+                log.exception("怀孕记录失败 %s", key)
+        # 手动切的时段也要进系统头（2026-11-05）：否则自由模式切到晚上，
+        # 她的下一句还按白天的场景写。
+        tblock = _gameday_block(gd)
+        if tblock:
+            head = head + "\n\n" + tblock
+    # 怀孕/孩子（2026-11-05）：身体状态每轮都该在她脑子里，不需要等玩家问。
+    # 必须放在跨天结算**之后**拼：刚发现怀孕 / 刚生产这一轮就要按新状态演，
+    # 不能等下一轮才让她想起来（用户说的「先结算，再开场」）。
+    pblock = pregnancy_block(key, preg_event)
+    if pblock:
+        head = head + "\n\n" + pblock
     # 分层写法（2026-11-04 深夜）：按**这一轮的高潮值**挑一块「这一拍该怎么写」
     # 拼上去。放在 settle 之后是因为要拿最新状态——放在 build_head 里只能拿到
     # 上一轮的值，永远慢一拍。
@@ -3939,7 +4145,7 @@ def run_turn(session_key, text, target, sender="", sender_uin=""):
                                  custom=llm.get_custom_override())
         except Exception:                                # noqa: BLE001
             log.exception("回忆入库失败 %s", key)
-    return Turn(reply, scene, mood, intensity, state, aff_res)
+    return Turn(reply, scene, mood, intensity, state, aff_res, finish)
 
 
 # 「睡到明天」时塞给她的话。**这条不进历史**——历史要以她的开场收尾，
@@ -3958,6 +4164,29 @@ _SKIP_TASK = ("【这一轮】新的一天刚开始（第 %d 天），他还没�
               "这一夜是怎么过完的，再进入今天；"
               "\n- 「状态」行是昨晚的，今天要重新写（醒来后的衣着、位置）。"
               "\n按平常的格式输出（正文 + 画面 + 心情 + 状态）。")
+
+_SKIP_TASK_MULTI = ("【这一轮】时间已经过去 %d 天（现在是第 %d 天），他还没说话。"
+                    "**由你先开口**，写这段时间之后她这边的变化%s。"
+                    "\n\n不要逐天流水账，也不要重写已经发生过的事："
+                    "\n- 只写「再见面时」她记得的、变了的地方：约定有没有兑现、"
+                    "关系走到哪、她现在的状态；"
+                    "\n- 时间跨度大，允许中间发生没写出来的日常，但不要编出"
+                    "和已有设定冲突的大事；"
+                    "\n- 「状态」行按现在的衣着、地点、时间写。"
+                    "\n按平常的格式输出（正文 + 画面 + 心情 + 状态）。")
+
+# 同一天切时段（2026-11-05）：不是「睡到明天」，所以不用「新的一天」那套，
+# 重点是**把刚才那段收尾**、再进入新时段。玩家把早晨的早餐拖到中午，
+# 她可以抱怨、追问——跳转本身就代表上一段 do 结束了。
+_PHASE_TASK = ("【这一轮】时间从「%s」走到了「%s」（还是第 %d 天），他还没说话。"
+               "**由你先开口**：先把刚才那一段收个尾——如果刚才在亲密或正在做"
+               "某件事，让那一拍自然结束（整理衣服、喘口气、收拾东西、说一句"
+               "事后的话），再进入「%s」。"
+               "\n\n如果之前说好的事没做完（比如早上说想吃早餐却没吃），"
+               "你可以抱怨、追问、把他拉回那件事上。"
+               "\n接住上面「前情」往下写，不要另起一个场景；已经发生过的事不要"
+               "重写；「状态」行按现在的衣着、地点、时间重写。"
+               "\n按平常的格式输出（正文 + 画面 + 心情 + 状态）。")
 
 _RECAP_TURNS = 6      # 前情带最近几轮
 _RECAP_CHARS = 90     # 每段截断，免得把系统头撑爆
@@ -4009,12 +4238,17 @@ def _recap_block(session_key):
 
 
 
-def skip_day(session_key, sender="", sender_uin=""):
-    """睡到明天（2026-11-04）：推进一天，**由她先开口**。
+def jump_phase(session_key, phase, sender="", sender_uin=""):
+    """切到今天的某个时段，并由她先开口收尾上一段、带入新时段（2026-11-05）。
 
-    事件优先级在 `_roll_event`：约定 > 随机事件 > 普通的一天。
-    返回 `Turn`；没在演（没有会话条目）返回 None，调用方当普通消息处理。
+    和 `skip_day` 的区别：**不推进天数**、不掷事件、不结算怀孕；但会
+    `affection.sleep()` 把当前的亲密场景收掉（用户：跳转代表 do 结束），
+    再把最近几轮压成「前情」拼进系统头，避免剧情断片。
+    返回 `Turn`；没在演返回 None。
     """
+    ph = str(phase or "").strip()
+    if ph not in PHASES:
+        return None
     key = resolve_line(_persona_key(session_key, sender_uin))
     card = active_card(key)
     if card is None:
@@ -4023,7 +4257,91 @@ def skip_day(session_key, sender="", sender_uin=""):
     if not ent:
         return None
 
-    gd = _apply_gameday(key, force_new_day=True)
+    gd = _gameday(ent)
+    old_phase = str(gd.get("phase") or "").strip() or "刚才"
+    got = set_phase(key, ph)
+    if not got:
+        return None
+    gd = _gameday(_entry(key) or ent)
+
+    # 上一段 do 收场：场景结束、高潮值归零、冲动回落（好感/堕落不动）。
+    try:
+        affection.sleep(key)
+    except Exception:                                  # noqa: BLE001
+        log.exception("时段跳跃收场失败 %s", key)
+
+    ent = _entry(key) or ent
+    note = str(ent.get("note") or "")
+    prev_state = str(ent.get("state") or "")
+
+    head = build_head(card, key, sender, note, prev_state, intimate=False)
+    tblock = _gameday_block(gd)
+    if tblock:
+        head = head + "\n\n" + tblock
+    pblock = pregnancy_block(key)
+    if pblock:
+        head = head + "\n\n" + pblock
+    recap = _recap_block(key)
+    if recap:
+        head = head + "\n\n" + recap
+    task = _PHASE_TASK % (old_phase, ph, int(gd.get("day") or 1), ph)
+
+    hist = trim(_load_hist(key))
+    model_hist = _render_hist(hist)
+    msgs = ([{"role": "system", "content": head}] + model_hist
+            + [{"role": "user", "content": task}])
+    try:
+        raw = llm.call_llm(msgs, temperature=TEMPERATURE)
+    except Exception:                                  # noqa: BLE001
+        log.exception("时段跳跃开场失败 %s", key)
+        return None
+    reply, scene, mood, intensity, state = split_turn(
+        raw, default_mood=str(ent.get("mood") or ""))
+    if not reply:
+        return None
+    # 只归档她的开场，不归档那行系统任务。
+    hist.append({"role": "assistant",
+                 "content": _ensure_meta(raw, scene, mood, intensity, state)})
+    try:
+        _save_hist(key, hist[-HISTORY_LIMIT:])
+        _append_archive(key, hist[-1:], seed=hist[-HISTORY_LIMIT:])
+    except Exception:                                  # noqa: BLE001
+        log.exception("时段跳跃落史失败 %s", key)
+    _save_mood(key, mood, intensity, state, prev_state)
+    _bump_turn(key)
+    return Turn(reply, scene, mood, intensity, state, None, "")
+
+
+def skip_day(session_key, sender="", sender_uin="", days=1):
+    """时间跳跃（2026-11-04；2026-11-05 支持多天）：推进 days 天，**由她先开口**。
+
+    事件优先级在 `_roll_event`：约定 > 随机事件 > 普通的一天；跳多天时不掷
+    日常小事件。跨天时先结算怀孕，再拼开场提示词。
+    返回 `Turn`；没在演（没有会话条目）返回 None，调用方当普通消息处理。
+    """
+    try:
+        days = max(1, min(365, int(days or 1)))
+    except (TypeError, ValueError):
+        days = 1
+    key = resolve_line(_persona_key(session_key, sender_uin))
+    card = active_card(key)
+    if card is None:
+        return None
+    ent = _entry(key)
+    if not ent:
+        return None
+
+    old_day = int(_gameday(ent).get("day") or 1)
+    gd = _apply_gameday(key, force_new_day=True, days=days)
+    new_day = int((gd or {}).get("day") or old_day)
+    preg_event = None
+    if pregnancy.card_enabled(card):
+        try:
+            preg_event = _preg_advance(key, old_day, new_day)
+        except Exception:                              # noqa: BLE001
+            log.exception("怀孕结算失败 %s", key)
+    # `_preg_advance` 会重新读盘写盘，拿最新的条目，别用旧的 mood/note。
+    ent = _entry(key) or ent
     note = str(ent.get("note") or "")
     prev_state = str(ent.get("state") or "")
 
@@ -4039,14 +4357,22 @@ def skip_day(session_key, sender="", sender_uin=""):
     tblock = _gameday_block(gd)
     if tblock:
         head = head + "\n\n" + tblock
+    # 怀孕/孩子：跨天时先把结果告诉她，再让她开口。
+    pblock = pregnancy_block(key, preg_event)
+    if pblock:
+        head = head + "\n\n" + pblock
     # 前情（2026-11-05）：把最近几轮压成清单拼进系统头。没有它，「新的一天」
     # 就是一道把模型推去另起炉灶的指令——玩家看到的就是剧情断片。
     recap = _recap_block(key)
     if recap:
         head = head + "\n\n" + recap
     event = str((gd or {}).get("event") or "").strip()
-    task = _SKIP_TASK % ((gd or {}).get("day") or 1,
-                         ("（今天：%s）" % event) if event else "")
+    if days == 1:
+        task = _SKIP_TASK % (new_day,
+                             ("（今天：%s）" % event) if event else "")
+    else:
+        task = _SKIP_TASK_MULTI % (days, new_day,
+                                   ("（这段时间里：%s）" % event) if event else "")
     hist = trim(_load_hist(key))
     model_hist = _render_hist(hist)
     msgs = ([{"role": "system", "content": head}] + model_hist
@@ -4054,7 +4380,7 @@ def skip_day(session_key, sender="", sender_uin=""):
     try:
         raw = llm.call_llm(msgs, temperature=TEMPERATURE)
     except Exception:                                  # noqa: BLE001
-        log.exception("睡到明天开场失败 %s", key)
+        log.exception("时间跳跃开场失败 %s", key)
         return None
     reply, scene, mood, intensity, state = split_turn(
         raw, default_mood=str(ent.get("mood") or ""))
@@ -4067,7 +4393,7 @@ def skip_day(session_key, sender="", sender_uin=""):
         _save_hist(key, hist[-HISTORY_LIMIT:])
         _append_archive(key, hist[-1:], seed=hist[-HISTORY_LIMIT:])
     except Exception:
-        log.exception("睡到明天落史失败 %s", key)
+        log.exception("时间跳跃落史失败 %s", key)
     _save_mood(key, mood, intensity, state, prev_state)
     _bump_turn(key)
     return Turn(reply, scene, mood, intensity, state, None)
@@ -4134,6 +4460,13 @@ def rollback_last_turn(session_key, sender_uin=""):
     gd_prev = ent.pop("gameday_prev", None)
     if isinstance(gd_prev, dict):
         ent["gameday"] = gd_prev
+    # 怀孕/孩子跟着这一轮一起退（2026-11-05）：快照里没有 preg = 回退前没怀。
+    if "preg_prev" in ent:
+        pp = ent.pop("preg_prev")
+        if isinstance(pp, dict):
+            ent["preg"] = pp
+        else:
+            ent.pop("preg", None)
     day = _gameday(ent).get("day")
 
     mp = ent.pop("mood_prev", None)
