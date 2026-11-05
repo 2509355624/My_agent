@@ -222,6 +222,44 @@ class FinishActionTest(FinishBase):
             self.assertIsNone(persona.finish_action(self.key, spot="mouth"))
 
 
+class PendingFinishTest(FinishBase):
+    """「射在哪里」的待办（2026-11-06）。
+
+    高潮值在**普通一轮**里就扣了，弹窗是之后才弹的。玩家在点确定之前刷新、
+    断网、关页面，弹窗就没了——数值扣过、正文永远缺一块。所以待办要落盘，
+    刷新后能重问；只有真正写成功才清。
+    """
+
+    def _run(self, reply="他射了。\n画面：1girl\n心情：空 强度1\n状态：床上"):
+        with mock.patch.object(persona.llm, "call_llm", return_value=reply):
+            return persona.finish_action(self.key, spot="pussy")
+
+    def test_pending_round_trips(self):
+        persona._set_pending_finish(self.key, {"n": 2, "of": 5, "last": False})
+        got = persona.pending_finish(self.key)
+        self.assertEqual(got, {"n": 2, "of": 5, "last": False})
+        persona._set_pending_finish(self.key, None)
+        self.assertIsNone(persona.pending_finish(self.key))
+
+    def test_failure_keeps_the_popup(self):
+        persona._set_pending_finish(self.key, {"n": 1, "of": 5, "last": False})
+        with mock.patch.object(persona.llm, "call_llm",
+                               side_effect=RuntimeError("断网")):
+            self.assertIsNone(persona.finish_action(self.key, spot="pussy"))
+        self.assertIsNotNone(persona.pending_finish(self.key),
+                             "没写成就不能清待办，否则玩家再也补不回来")
+
+    def test_success_clears_the_popup(self):
+        persona._set_pending_finish(self.key, {"n": 1, "of": 5, "last": False})
+        self.assertIsNotNone(self._run())
+        self.assertIsNone(persona.pending_finish(self.key))
+
+    def test_skip_clears_it_too(self):
+        persona._set_pending_finish(self.key, {"n": 1, "of": 5, "last": False})
+        persona._set_pending_finish(self.key, None)
+        self.assertIsNone(persona.pending_finish(self.key))
+
+
 class FinishNightTest(FinishBase):
     """第五次之后：结束 / 最后一次。"""
 

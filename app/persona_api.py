@@ -336,6 +336,9 @@ def get_session():
         "preg": persona.pregnancy_status(key),
         "role": "member",
         "rolled_back": bool(ent.get("rollback_done")),
+        # 还没回答的「射在哪里」（2026-11-06）：刷新/断线后前端靠它重弹，
+        # 不然高潮值都扣了、正文却永远缺一块。
+        "pending": persona.pending_finish(key),
     })
 
 
@@ -632,11 +635,17 @@ def finish_api():
         key = _active_key(_key(who))
         if persona.active_card(key) is None:
             return jsonify({"ok": False, "error": "还没选角色"}), 400
+        # 什么都没给 = 玩家放弃这一下，不算错误（2026-11-06 挪到调用**之前**：
+        # 以前和「生成失败」共用同一个 skipped 回包，前端分不清，失败了也当
+        # 没事发生——用户就这么丢过一段射精文本）。
+        if not spot and not text:
+            persona._set_pending_finish(key, None)     # noqa: SLF001
+            return jsonify({"ok": True, "skipped": True, "reply": ""})
         with usage.scope(key):
             turn = persona.finish_action(key, spot=spot, text=text)
         if turn is None or not turn.reply.strip():
-            # 什么都没给（既没位置也没自定义）就当玩家放弃，不算错误。
-            return jsonify({"ok": True, "skipped": True, "reply": ""})
+            # 给了指令却没写出来 = 真失败。回 502，前端据此**保留弹窗**让玩家重试。
+            return jsonify({"ok": False, "error": "这一下没写成，再试一次"}), 502
         out = {"ok": True, "reply": turn.reply, "scene": turn.scene,
                "mood": turn.mood, "intensity": turn.intensity,
                "state": turn.state, "role": "member"}
