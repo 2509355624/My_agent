@@ -60,8 +60,8 @@ FORCED_CHARS = 1800
 # 开发度轴（2026-11-05）：五处里最高的一处到这个值就切到 `dev` 轴。
 # 取 300（「离不开」）——那一档开始她会在不相干的场合自己发作，
 # 那才是这套轴真正有别于其他轴的写法。
-DEV_AXIS_AT = 300
-_DEV_KEYS = ("mouth", "nipple", "pussy", "anus", "body")
+DEV_AXIS_AT = 60
+_DEV_KEYS = ("mouth", "nipple", "pussy", "anus", "skin")
 
 _H_WRITING = "02-h-tech/h-writing.md"
 _CONQUEST = "05-style/conquest-style.md"

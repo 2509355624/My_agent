@@ -285,23 +285,23 @@ DEFAULT_CONFIG = {
     # 涨多少由打分 AI 按「这一轮动作的激烈程度」判，代码只做夹值和敏感系数。
     # 满格（五处都 500）= 身体开发 100%：碰一下就来，她自己都怕。
     "dev": {
-        "_note": "step 是单轮单部位上限（防止模型一笔给爆），gain 是满格时的敏感倍数。",
-        "max": 500,
-        "step": 25,
+        "_note": "step 是单轮单部位上限（防止模型一笔给爆），gain 是体质满格时的敏感倍数。",
+        "max": 100,
+        "step": 10,
         "gain": 1.5,
         "levels": [
-            {"key": "full",   "min": 500, "name": "开发满了",
-             "prompt": "碰一下整个人就软。皮肤先红，水自己出来，腰跟着手走。她会主动要，"
-                       "要得比你还急；不用你开口，她自己找地方、自己脱。"},
-            {"key": "wild",   "min": 400, "name": "阈值乱了",
+            {"key": "full",   "min": 100, "name": "彻底开发",
+             "prompt": "这一处已经被开发透了。轻轻一碰就受不了，光是被看着就会有反应；"
+                       "她自己知道，也不再遮掩。"},
+            {"key": "wild",   "min": 80, "name": "阈值乱了",
              "prompt": "不用碰到也能起来。看见、听见、想起，都能让她当场软掉；"
                        "她自己都怕这个反应，又挡不住。"},
-            {"key": "hooked", "min": 300, "name": "离不开",
+            {"key": "hooked", "min": 60, "name": "离不开",
              "prompt": "在不相干的场合也会想。看到别人亲近就湿，会自己把身体往你那边送，"
                        "会拉着你的手往那里放，会用外套盖住不想被人看见。"},
-            {"key": "wants",  "min": 200, "name": "会要了",
+            {"key": "wants",  "min": 40, "name": "会要了",
              "prompt": "会自己凑、会开口要这个，说完自己脸红但不收回；被弄到会自己跟着动。"},
-            {"key": "reacts", "min": 100, "name": "起反应",
+            {"key": "reacts", "min": 20, "name": "起反应",
              "prompt": "被碰到会突然安静一下，装作没事，呼吸先变；嘴上不认，身体答了。"},
             {"key": "virgin", "min": 0,   "name": "没碰过",
              "prompt": "这里还没被开发过。碰了会躲、会夹、会说是第一次——按她的性格来。"},
@@ -930,17 +930,31 @@ def submit_name(v, cfg=None):
 #   开发度 「她身体被开发成什么样」——**只涨不掉、无上限**
 #
 # 为什么单列一组：堕落在讲「她愿不愿意」，开发度在讲「她身体现在是什么
-# 状态」。她可以对你有 0 点好感、并且已经开发度 400——那正是压迫模式
+# 状态」。她可以对你有 0 点好感、并且体质已经开发到 80——那正是压迫模式
 # 最吃的一套数值（见 `is_forced`）。这两件事分开记，戏才写得出来。
 #
 # 数值用途有两处：
 #   1. 敏感系数——同一个动作，开发度高的涨得更多（见 `sensitivity`）；
-#   2. 编剧 AI 的勾子——300 以上她会在**无关的日常场景**里自己发作
-#      （公交车、饭桌、看到别人牵手就湿）。这才是攻略模式压过自由模式的地方。
-DEV_MAX = 500
-DEV_KEYS = ("mouth", "nipple", "pussy", "anus", "body")
+#   2. 编剧 AI 的勾子——单处过 `DEV_HOOK_AT` 她会在**无关的日常场景**里
+#      自己发作（公交车、饭桌、看到别人牵手就湿）。这才是攻略模式压过
+#      自由模式的地方。
+#
+# **2026-11-06 改版**：满值从 500 收到 100，五处各 0~100，每 20 一档
+# （20/40/60/80/100）。旧的 `body`（身体其他部位）改名 `skin`（肌肤），
+# 变成「摸皮肤、亲脖子、抚背」这一路；旧存档在 `_migrate` 里按 5:1 换算。
+# 「身体/体质」不再是一个可独立增长的部位，而是**由这五处派生**——
+# 见 `body_dev()`。这样某处刷满之后继续刷它，体质不会跟着虚高。
+DEV_MAX = 100
+DEV_KEYS = ("mouth", "nipple", "pussy", "anus", "skin")
 DEV_LABELS = {"mouth": "嘴巴", "nipple": "乳头", "pussy": "小穴",
-              "anus": "肛门", "body": "身体"}
+              "anus": "肛门", "skin": "肌肤"}
+# 体质 = 五处加权。权重和为 1，所以体质也落在 0~100。
+# 入口给最高权重：它才是「身体被开发成什么样」的主信号；肌肤最低，
+# 因为摸一摸的成本远低于真的进去。
+DEV_WEIGHTS = {"pussy": 0.30, "anus": 0.20, "mouth": 0.20,
+               "nipple": 0.15, "skin": 0.15}
+# 单处到这个值，编剧就可以在场景外给她「身体先反应」的勾子。
+DEV_HOOK_AT = 60
 _DEV_ALIAS = {
     "mouth": "mouth", "嘴": "mouth", "嘴巴": "mouth", "口": "mouth",
     "oral": "mouth",
@@ -948,7 +962,8 @@ _DEV_ALIAS = {
     "pussy": "pussy", "小穴": "pussy", "穴": "pussy", "阴道": "pussy",
     "vagina": "pussy",
     "anus": "anus", "肛门": "anus", "后穴": "anus", "anal": "anus",
-    "body": "body", "身体": "body", "皮肤": "body",
+    "skin": "skin", "肌肤": "skin", "皮肤": "skin", "身体": "skin",
+    "body": "skin",
 }
 
 
@@ -1040,7 +1055,7 @@ def dev_name(v, cfg=None):
 
 
 def dev_stage(v, cfg=None):
-    """跨过了几道门槛（0~5）。0 分 = 0，100 = 1，500 = 5。
+    """跨过了几道门槛（0~5）。0 分 = 0，20 = 1，100 = 5。
 
     注意和 `dev_level()` 的差别：`dev_level()` 返回**档位本身**（含 0 分
     那档「没碰过」），这里返回**跨过几道**。接入方要「第几档」用前者，
@@ -1050,68 +1065,96 @@ def dev_stage(v, cfg=None):
                if int(l.get("min") or 0) > 0 and int(v or 0) >= int(l.get("min") or 0))
 
 
+def body_dev(dev, cfg=None):
+    """**体质**：五处按权重折出来的总分（0~100）。
+
+    用户原话：「身体应该是前面几个的一个系数的一个累加……这样如果我们
+    把某一个嘴巴开发到 100%，继续开发嘴巴，整个身体数值并不会继续增长。」
+    所以体质**不存储**，每次由五处现算——某一处刷满之后继续刷它，
+    体质不会跟着虚高，必须去开发别处才推得动。
+    """
+    dev = dev if isinstance(dev, dict) else {}
+    dc = dev_cfg(cfg)
+    total = 0.0
+    for k in DEV_KEYS:
+        try:
+            v = int(dev.get(k) or 0)
+        except (TypeError, ValueError):
+            v = 0
+        total += max(0, min(dc["max"], v)) * DEV_WEIGHTS.get(k, 0)
+    return int(round(total))
+
+
 def dev_total(dev):
-    """五个部位加起来。全满 = 5 × 500 = 2500，面板显示「开发 100%」用。"""
+    """五处原始值之和（0~500）。面板只拿它算「有没有动过」，不拿它当体质。"""
     dev = dev if isinstance(dev, dict) else {}
     return sum(max(0, int(dev.get(k) or 0)) for k in DEV_KEYS)
 
 
 def sensitivity(dev, spot=None, cfg=None):
-    """敏感系数：1.0（没开发过）→ 1 + gain（满格 2.5）。
+    """敏感系数：1.0（没开发过）→ 1 + gain（体质满格 2.5）。
 
-    `spot` 给了就只看那个部位，没给就取五部位里最高的——她身上只要有一处
-    被开发透了，整体反应就不会慢。
+    `spot` 给了就只看那一处；没给就看**体质**（五处加权）。
+    用体质而不是「最高的那一处」，是为了让「只刷小穴」不能一路推到满：
+    想更敏感得把别处也开发起来。
     """
     dc = dev_cfg(cfg)
     dev = dev if isinstance(dev, dict) else {}
     if spot and spot in DEV_KEYS:
-        v = int(dev.get(spot) or 0)
+        try:
+            v = int(dev.get(spot) or 0)
+        except (TypeError, ValueError):
+            v = 0
     else:
-        v = max([int(dev.get(k) or 0) for k in DEV_KEYS] or [0])
+        v = body_dev(dev, cfg)
     v = max(0, min(dc["max"], v))
     return 1.0 + (v / float(dc["max"])) * dc["gain"]
 
 
 def after_value(dev, cfg=None):
-    """高潮之后的回落值。开发度越高，她越缓不下来。
+    """高潮之后的回落值。体质越高，她越缓不下来。
 
-    固定 55 在高开发度下会自相矛盾：明明「离不开」，做完却能安稳缓上半天。
-    500 满格时回到 75——还是能接着要，只是没到临界。
+    固定 55 在高体质下会自相矛盾：明明「离不开」，做完却能安稳缓上半天。
+    体质满格时回到 75——还是能接着要，只是没到临界。
     """
     h = orgasm_hints(cfg)
     dc = dev_cfg(cfg)
-    top = max([int((dev or {}).get(k) or 0) for k in DEV_KEYS] or [0])
+    top = body_dev(dev, cfg)
     add = int(round(min(top, dc["max"]) / float(dc["max"]) * 20))
     return min(h["max"] - 10, h["after"] + add)
 
 
 def dev_all_full(dev, cfg=None):
-    """五个部位是不是全部满格。满格 = 身体开发 100%。"""
+    """五处是不是全部满格。满格 = 体质 100% = 一碰就溃。"""
     dc = dev_cfg(cfg)
     dev = dev if isinstance(dev, dict) else {}
     return all(int(dev.get(k) or 0) >= dc["max"] for k in DEV_KEYS)
 
 
 def dev_text(dev, cfg=None):
-    """五处开发度拼成一行给**编剧 AI** 看的文本（带档名，不带 /500）。
+    """五处开发度 + 体质，拼成一行给**编剧 AI** 看的文本。
 
     编剧要的是「她身体现在是什么状态」，不是进度条。所以这里给的是
-    「嘴巴 120（起反应）／小穴 310（离不开）」，它据此判勾子。
+    「嘴巴 30（会要了）／小穴 78（离不开）……体质 52」，它据此判勾子。
     """
     dev = dev if isinstance(dev, dict) else {}
     parts = []
     for k in DEV_KEYS:
-        v = max(0, int(dev.get(k) or 0))
+        try:
+            v = max(0, int(dev.get(k) or 0))
+        except (TypeError, ValueError):
+            v = 0
         if v <= 0:
             continue
         parts.append("%s %d（%s）" % (DEV_LABELS.get(k, k), v, dev_name(v, cfg)))
+    body = body_dev(dev, cfg)
     if not parts:
-        return "（五处都还没被开发过）"
-    return "／".join(parts)
+        return "（五处都还没被开发过，体质 0）"
+    return "／".join(parts) + "；体质 %d（%s）" % (body, dev_name(body, cfg))
 
 
 def dev_top(dev, cfg=None):
-    """五项里最高的那一处：`(key, 值, 档名)`。开发度轴和勾子都靠它判。"""
+    """五项里最高的那一处：`(key, 值, 档名)`。勾子靠它判「哪一处最敏感」。"""
     dev = dev if isinstance(dev, dict) else {}
     k = max(DEV_KEYS, key=lambda x: int(dev.get(x) or 0))
     v = max(0, int(dev.get(k) or 0))
@@ -1119,14 +1162,14 @@ def dev_top(dev, cfg=None):
 
 
 def dev_hook_ready(dev, cfg=None):
-    """这一轮编剧**可以**给一个「身体先失控」的勾子：最高一处到 300 以上。
+    """这一轮编剧**可以**给一个「身体先失控」的勾子：最高一处到 60 以上。
 
-    300 是「离不开」那一档——过了这条线，她才会在跟性无关的场合自己发作。
-    低于 300 硬给，就成了「明明还没被开发多少，怎么就饥渴到在公交车上
-    拉你的手」——数值和剧情对不上。
+    60 是「离不开」那一档的起点——过了这条线，她才会在跟性无关的场合
+    自己发作。低于它硬给，就成了「明明还没被开发多少，怎么就饥渴到在
+    公交车上拉你的手」——数值和剧情对不上。
     """
     _k, v, _n = dev_top(dev, cfg)
-    return v >= 300
+    return v >= DEV_HOOK_AT
 
 
 # 戒备的模糊档（2026-11-05）。**刻意不给配置文件**：这四档是给玩家和模型看的
@@ -1400,10 +1443,31 @@ def _migrate(rec):
         rec["recover"] = 0
     # 开发度（2026-11-05）：老档从 0 起。已开发过的量没有痕迹可推，
     # 按 0 是最诚实的；缺某个部位（手工改过存档）也只补那一个。
+    #
+    # 2026-11-06 换标度：满值 500 → 100，所以老档的每个部位按 5:1 收；
+    # 旧的 `body`（身体其他部位）改名 `skin`（肌肤）。
+    #
+    # ⚠️ 这一段**必须和上面并列**，不能缩进进 `if "recover" not in rec:`
+    # 里面——缩进去之后，已经有 `recover` 的存档会一路掉到函数末尾返回
+    # `None`，`record_of` 把它当成「没有好感记录」，于是每次读都新建一份
+    # 空白记录：好感、开发度全被清零。踩过一次，别再缩进。
     dev = rec.get("dev") if isinstance(rec.get("dev"), dict) else {}
+    if "skin" not in dev and "body" in dev:
+        dev["skin"] = dev.pop("body")
     for _k in DEV_KEYS:
         if _k not in dev:
             dev[_k] = 0
+        else:
+            try:
+                _v = int(dev[_k] or 0)
+            except (TypeError, ValueError):
+                _v = 0
+            if _v > DEV_MAX:                     # 只收一次，之后原位
+                _v = int(round(_v / 5.0))
+            dev[_k] = max(0, min(DEV_MAX, _v))
+    # 旧键不留在存档里，免得两边各读一份。
+    for _old in ("body",):
+        dev.pop(_old, None)
     rec["dev"] = dev
     return rec
 
@@ -1646,7 +1710,17 @@ def panel(line_key):
             "stageName": dev_name(v, cfg),
             "pct": int(round(v / float(dmax) * 100)),
         })
-    dev_tot = dev_total(dev)
+    # 体质（2026-11-06）：不是存储值，是上面五处加权折出来的。单独一行，
+    # 玩家一眼看到「为什么单刷小穴推不动体质」。
+    dev_body = body_dev(dev, cfg)
+    dev_rows.append({
+        "key": "body", "name": "体质", "value": dev_body, "max": dmax,
+        "stage": dev_stage(dev_body, cfg),
+        "stageName": dev_name(dev_body, cfg),
+        "pct": int(round(dev_body / float(dmax) * 100)),
+        "derived": True,
+    })
+    dev_tot = dev_body
     dev_full = dev_all_full(dev, cfg)
 
     return {
@@ -1677,8 +1751,8 @@ def panel(line_key):
         "dev": dev_rows,
         "devMax": dmax,
         "devTotal": dev_tot,
-        "devTotalMax": dmax * len(DEV_KEYS),
-        "devPct": int(round(dev_tot / float(dmax * len(DEV_KEYS)) * 100)),
+        "devTotalMax": dmax,
+        "devPct": dev_tot,
         "devAllFull": dev_full,
         "sensitivity": round(sensitivity(dev, cfg=cfg), 2),
         # 戒备（2026-11-05）：只露档名不露数字——露数字会变成
@@ -1814,18 +1888,19 @@ def panel_text(line_key):
                      if r["state"] == "current" else "  ≥%d" % r["gate"])
         rows.append(line)
 
-    # 六、开发度（2026-11-05）：五处各自一条，**上限 500 直接写出来**。
-    # 和上面几段不同，这里不按档位画勾：玩家要的是「这一处到了多少 /500」，
-    # 档名只挂在后面当注释。
+    # 六、开发度（2026-11-06 改版）：五处各 0~100，另加一行「体质」。
+    # 体质是前面五处折出来的，不是独立加点——单刷一处推不动它。
     rows.append("")
-    rows.append("— 开发度 · 共 %d%% —" % p["devPct"])
+    rows.append("— 开发度 · 体质 %d/%d —" % (p["devPct"], p.get("devMax") or 100))
     for d in p.get("dev") or []:
         mark = "✔" if d["value"] >= d["max"] else ("▶" if d["value"] > 0 else "·")
         line = "%s %s  %d/%d  %s" % (mark, d["name"], d["value"], d["max"],
                                      d["stageName"])
+        if d.get("derived"):
+            line += "  （由上面五处折算）"
         rows.append(line)
     if p.get("devAllFull"):
-        rows.append("开发满了：碰一下就溃")
+        rows.append("五处都满了：一碰就出水、一含就冒汁")
 
     # 七、结论：能不能往前一步
     rows.append("")
@@ -2625,10 +2700,10 @@ def settle(line_key, score, game_day=None):
            "devDelta": dev_gain,
            "devHit": dev_hit,
            "devHook": dev_hook,
-           "devTotal": dev_total(rec.get("dev")),
-           "devMax": dev_cfg(cfg)["max"] * len(DEV_KEYS),
-           "devPct": int(round(dev_total(rec.get("dev"))
-                               / float(dev_cfg(cfg)["max"] * len(DEV_KEYS)) * 100)),
+           "devTotal": body_dev(rec.get("dev"), cfg),
+           "devMax": dev_cfg(cfg)["max"],
+           "devPct": body_dev(rec.get("dev"), cfg),
+           "devBody": body_dev(rec.get("dev"), cfg),
            "devAllFull": dev_all_full(rec.get("dev"), cfg),
            "sensitivity": round(sens, 2),
            "forced": bool(forced_now),
@@ -3128,6 +3203,32 @@ def injection_block(res, cfg=None):
             lines += ["", "（她有可能会自己先动一下——不保证，但别把她写成只能被动等着。"
                           "她伸手、她凑近、她说出那句平时不会说的话，都算。）"]
 
+    # ── 冲动满格：她主动推进（2026-11-06 用户点名）────────────
+    # 用户原话：「冲动值已经满 100，已经忍不住了，那她是不是把你带到小巷
+    # 那边？是不是就已经想要给你？结合好感度，能抱了就会过来抱你。」
+    #
+    # 所以这一条**不看双轴门槛**（`_can_cross` 判的是「他能不能推倒她」），
+    # 只看她自己有多想要 + 她的身体进度到哪一步：想要到顶了，她会主动做到
+    # 自己这一步允许的范围——能抱就抱、能亲就亲、做过了就直接挑明。
+    # 压迫场里不给：那一场她不是「想要」。
+    if ar >= AROUSAL_MAX and not forced:
+        lv_now = int(res.get("level") or 0)
+        # 她这一步能主动到哪儿：按身体进度给上限，别越级。
+        if lv_now >= 5:
+            reach = "做到底、自己脱、自己坐上来"
+        elif lv_now >= 3:
+            reach = "主动亲、拉你的手、把身体贴上来"
+        elif lv_now >= 1:
+            reach = "主动抱你、牵你的手、把脸埋过来"
+        else:
+            reach = "只是靠近、找由头碰一下"
+        lines += ["", "（**她这会儿已经忍不住了。** 不是「等你来」，是**她要**。"
+                      "这一轮让她先动、主动往前推：她会自己找地方（拉你去没人的地方、"
+                      "把你按在墙上、把门关上），会说出平时不会说的话。"
+                      "以你们现在这一步，她能主动做到的是「%s」——到这儿为止，"
+                      "再往上要你接。她一边做一边知道自己在做什么，"
+                      "别写成她「不小心」或者「顺势」。）" % reach]
+
     # 高潮值（2026-11-04 深夜）：只在场景里报。报的是「她身上正发生到什么
     # 程度」，五档正文直接是身体信号，写的时候照抄那个层次就行。
     if ex > 0:
@@ -3205,26 +3306,38 @@ def injection_block(res, cfg=None):
                 continue
             parts.append("%s %d（%s）" % (DEV_LABELS.get(k, k), v,
                                           dev_names.get(k) or dev_name(v, cfg)))
+        body_v = body_dev(dev, cfg)
         if parts:
-            lines += ["", "（她身上被开发到的程度：%s。）" % "／".join(parts)]
+            lines += ["", "（她身上被开发到的程度：%s。整体体质 %d（%s）。）"
+                      % ("／".join(parts), body_v, dev_name(body_v, cfg))]
         # 取最高的那一处说「这一档会发生什么」——五处分开列太啰嗦，
         # 而演员需要的正是最强的那个信号。
-        top_k = max(DEV_KEYS, key=lambda k: int(dev.get(k) or 0))
-        top_v = int(dev.get(top_k) or 0)
+        top_k, top_v, _tn = dev_top(dev, cfg)
         tp = str(dev_level(top_v, cfg).get("prompt") or "").strip()
-        if tp and top_v >= 100:
+        if tp and top_v >= 20:
             lines += ["", "（拿%s来说：%s）" % (DEV_LABELS.get(top_k, top_k), tp)]
         if res.get("devDelta"):
             lines += ["", "（这一轮她的身体又往那边走了一步。写的时候要让人看出来"
                           "和上一轮不一样——不是靠她说，是靠那一处的反应变快了。）"]
         if res.get("devAllFull"):
-            # 五处全满 = 身体开发 100%。这是攻略模式压过自由模式最直接的一段：
+            # 五处全满 = 体质 100%。这是攻略模式压过自由模式最直接的一段：
             # 没有数值体系的地方，演不出「碰一下就不行了」这件事。
             lines += ["", "（**她身上已经没有一处是没被开发过的了。** 这一档碰一下就会"
                           "起反应：皮肤先热，水自己出来，腰跟着手走。她会主动——"
                           "不是装出来的主动，是被身体推着走，自己都拦不住。"
                           "写的时候让这个「一碰就溃」的落差被看见：她嘴上还可以骂你，"
                           "身体已经先答应了。）"]
+            # 怀孕/产后（2026-11-06 用户点名）：体质满格 + 这两个阶段，
+            # 反应要再上一个台阶——摸一下就出水、乳头冒汁。
+            preg_stage = str(res.get("pregStage") or "").strip().lower()
+            if preg_stage in ("mid", "late", "postpartum"):
+                lines += ["", "（她现在还在%s。体质已经满格，所以这一档是"
+                              "**一碰就出水、一含就冒汁**：光是手掌贴上去，"
+                              "那一处就先湿了；吸一下，奶水自己就出来。"
+                              "她自己也知道，所以会羞、会遮，身体却更诚实。）"
+                          % ("孕中期" if preg_stage == "mid"
+                             else ("孕晚期" if preg_stage == "late"
+                                   else "产后"))]
         # 编剧给的勾子（2026-11-05）：这一轮她身体先失控的那个瞬间。
         # 直接当成「这一拍要写的事」交给演员——不是建议，是素材。
         hook = str(res.get("devHook") or "").strip()
@@ -3362,22 +3475,21 @@ def tail_line(res):
     su = int(res.get("submit") or 0)
     if su > 0:
         rows.append("屈服 %d · %s" % (su, res.get("submitName") or ""))
-    # 开发度（2026-11-05）：五处被开发过的才报，一行报全，末尾挂总进度
-    # 「开发 62%」。全满时单独说一句——那是攻略模式最吃的一段数值。
+    # 开发度（2026-11-06 改版）：五处被开发过的才报，末尾挂体质。
+    # 体质是折出来的，所以它可能比任何单处都低——玩家看这行就知道
+    # 「只刷一处推不动体质」。
     dev = res.get("dev") if isinstance(res.get("dev"), dict) else {}
-    dev_names = res.get("devNames") if isinstance(res.get("devNames"), dict) else {}
     bits = []
     for k in DEV_KEYS:
         v = int(dev.get(k) or 0)
         if v > 0:
             bits.append("%s %d" % (DEV_LABELS.get(k, k), v))
     if bits:
-        mx = int(res.get("devMax") or dev_cfg()["max"] * len(DEV_KEYS))
+        mx = int(res.get("devMax") or dev_cfg()["max"])
         pct = int(res.get("devPct") or 0)
-        rows.append("开发 " + " · ".join(bits)
-                    + "（%d%% / %d）" % (pct, mx))
+        rows.append("开发 " + " · ".join(bits) + "｜体质 %d/%d" % (pct, mx))
         if res.get("devAllFull"):
-            rows.append("开发满了 · 碰一下就溃")
+            rows.append("体质满 · 一碰就出水")
     return "\n".join(rows)
 
 
