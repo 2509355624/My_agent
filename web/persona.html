@@ -896,12 +896,13 @@
              inputmode="numeric" placeholder="自定义天数">
     </div>
     <!-- 这段时间在干什么（2026-11-06）：跳好几天却只写「几天后到了」很空，
-         填一句「一路赶路去情爱城」，她就照这个把过程写出来。 -->
-    <div class="skipCustom" style="margin-top:10px">
-      <textarea id="skipDo" rows="3" maxlength="200"
-                placeholder="这段时间在做什么？（例如：一路赶路去情爱城，中途在驿站歇了一晚）"></textarea>
-    </div>
-    <div class="skipt" style="margin-top:2px">跳 3 天以上建议写一句——不写她就只能写成「几天后到了」。</div>
+         填一句「一路赶路去情爱城」，她就照这个把过程写出来。
+         用 `.finInput` 而不是裸 textarea——裸的会拿到浏览器默认白底，
+         在这个黑面板里像块补丁；`.finInput` 走 `--bg-input`，字也够大。 -->
+    <div class="skipt" style="margin:14px 0 4px;color:var(--text)">这段时间在做什么？</div>
+    <textarea id="skipDo" class="finInput" rows="3" maxlength="200"
+              placeholder="例如：一路赶路去情爱城，中途在驿站歇了一晚"></textarea>
+    <div class="skipt" style="margin-top:6px">跳 3 天以上建议写一句——不写她就只能写成「几天后到了」。</div>
     <div class="skipt" style="margin-top:2px">跳过几天由她先开口；选时段和选天数二选一。</div>
     <button class="btn pri skipGo" id="skipGo">跳</button>
     <button class="btn skipGo" id="skipCancel">取消</button>
