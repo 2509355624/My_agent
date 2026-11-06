@@ -37,14 +37,19 @@ import os
 
 import yaml
 
-from app.config import COMFYUI_ROOT, SKILLS_DIR
+from app.config import BASE_DIR, COMFYUI_ROOT, SKILLS_DIR
 
 log = logging.getLogger("char_loras")
 
-# 参与角色装填的渠道。先只给 anima-line（用户拍板）；anima13 家族其他渠道
-# （hd_3_clear / anima_clear / _anima_multi_batch）链结构相同，验证稳定后
-# 加进来就行。
-CHAR_LORA_SKILLS = frozenset(("anima-line",))
+# 参与角色装填的渠道（2026-11-06 用户拍板扩到 8 个）。
+# 只收「用户真在用」的那几个：silver 是默认渠道，hd_3 是高清线，
+# anima-line / anima-real 是主线。silverqaq、anima-flesh（幼感）、
+# anima-guizhencao 用得少，先不加——加了也只是多一处要维护的地方。
+CHAR_LORA_SKILLS = frozenset((
+    "anima-line", "anima-real",
+    "hd_3_clear", "hd_3_curvy", "hd_3_gloss", "hd_3_soft",
+    "silver", "silver-hd",
+))
 _INDEX_NAME = "char_loras.json"
 
 
@@ -82,7 +87,16 @@ def _find_file(name):
 
 
 def _index_path(skill):
-    return os.path.join(str(SKILLS_DIR), skill, _INDEX_NAME)
+    """这个渠道用哪本角色库。
+
+    2026-11-06：改成「渠道自己有一本就用自己那本，没有就用公共库」。
+    原来每个渠道一份，加一个渠道就要复制一遍 JSON——同一个角色十几份副本，
+    改一处忘一处。公共库放 `config/char_loras.json`，各渠道可继续单独覆盖。
+    """
+    own = os.path.join(str(SKILLS_DIR), skill, _INDEX_NAME)
+    if os.path.isfile(own):
+        return own
+    return os.path.join(str(BASE_DIR), "config", _INDEX_NAME)
 
 
 def entries(skill):
@@ -167,7 +181,11 @@ def patch(workflow, entry):
         wf[nid_new] = {
             "class_type": "LoraLoaderModelOnly",
             "inputs": {"model": list(up_ref),
-                       "lora_name": str(entry["file"]),
+                       # 子目录要用**本机分隔符**（2026-11-06）：ComfyUI 的
+                       # 下拉列表在 Windows 上是 `anima\xxx.safetensors`，
+                       # 写成 `anima/xxx` 会被 prompt 校验判 value_not_in_list，
+                       # 整单 400。索引里两种写法都收，这里统一转换。
+                       "lora_name": str(entry["file"]).replace("/", os.sep),
                        "strength_model": strength},
             "_meta": {"title": "角色 %s" % (entry.get("name")
                                             or entry.get("key") or "")},

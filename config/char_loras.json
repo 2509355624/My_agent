@@ -1,0 +1,21 @@
+{
+  "_doc": "anima-line 角色 LoRA 库（2026-11-04）。prompt 里命中任一 alias（不区分大小写）→ 自动把 file 挂进工作流链头（LoraLoaderModelOnly，strength_model=strength），trigger 追加进正向提示词。file 相对 ComfyUI loras 目录（extra_model_paths.yaml 全部 loras 项 + COMFYUI_ROOT/models/loras），文件缺失时跳过装填只记日志。顺序即优先级：同时命中多个取第一个。注意只收 Anima 架构的 LoRA（键名 lora_unet_blocks_*）；SDXL/CLIP 键名（lora_te_text_model_encoder_*）挂上无效——本机 elaina_v3 就是这种，别入库。",
+  "characters": [
+    {
+      "key": "sunna",
+      "name": "绝区零·千夏",
+      "file": "anima\\sunna-anima_20260216_2230.safetensors",
+      "trigger": "sunnazzz",
+      "identity": "(green hair:1.2), grey hair, side ponytail, hair over one eye, asymmetrical bangs, (green eyes:1.2), halo, hair ornament, earrings, white collared shirt, puffy short sleeves, red necktie, black choker, black frilled layered miniskirt, single white thighhigh, single striped loose sock, mismatched legwear, pink shoes",
+      "strength": 0.8,
+      "aliases": [
+        "sunnazzz",
+        "sunna",
+        "千夏",
+        "绝区零千夏",
+        "aod"
+      ],
+      "_note": "千夏（Sunna），绝区零 2.6 S级支援代理人、妄想天使作曲担当，官方皮肤「午后茶歇」是猫耳小女仆。角色身份只认 Sunna 这一种写法，别名不再收 chinatsu 等拼法。本机自训版（触发词 sunnazzz，训练集 227 组）。备选：Sunna-Zenless_anima-base1_v1-1.safetensors（civitai，头里无触发词）、sgb-anima-zzz-sunna-v1.safetensors（触发词 snn4）。c_sunna_*(afternoon_tea_break)_ilv1.0-xl 是 SDXL 架构，不可用于 anima13。"
+    }
+  ]
+}
