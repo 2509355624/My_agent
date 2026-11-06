@@ -1723,6 +1723,62 @@ class NovelCraftContractTest(unittest.TestCase):
             self.assertNotIn(w, g)
         self.assertIn("全程待在角色里", g)
 
+    def test_monologue_melts_into_narration(self):
+        """2026-11-06：心声改成混在第三人称叙述里的念头，靠例子教写法。"""
+        c = persona._CONTRACT_NO_INTIMATE
+        self.assertIn("念头可以就长在叙述里", c)
+        self.assertIn("这一下有点像在拖延", c)
+        self.assertIn("怎么偏偏是腰", c)
+        self.assertIn("一轮留一处就够", c)
+        self.assertIn("这一轮一句都没有也很正常", c)
+
+    def test_monologue_has_no_quota_or_tag(self):
+        """硬配额和元数据标签都要从每轮提示词里消失。"""
+        c = persona._CONTRACT_NO_INTIMATE
+        for w in ("【心声】", "两处", "单独成行", "内心独白", "每轮给她"):
+            self.assertNotIn(w, c, "契约里还留着旧心声规则：%s" % w)
+
+
+class MonologueTagTest(unittest.TestCase):
+    """2026-11-06：旧回复里的【心声】标签只剥读取/出口副本，落盘数据不动。"""
+
+    RAW = ("她把杯子转了半圈。\n\n"
+           "【心声】好烫。\n"
+           "【心声】别说明日。\n\n"
+           "她没再说话。")
+
+    def test_tag_stripped_words_kept(self):
+        out = persona._strip_monologue_tag(self.RAW)
+        self.assertNotIn("【心声】", out)
+        self.assertIn("好烫。", out)
+        self.assertIn("别说明日。", out)
+        self.assertIn("她把杯子转了半圈。", out)
+
+    def test_wrapped_tag_also_stripped(self):
+        """历史里还有用反引号 / 星号包住整行的旧格式。"""
+        out = persona._strip_monologue_marks(
+            "`【心声】好烫。`\n*【心声】别说明日。*")
+        self.assertNotIn("【心声】", out)
+        self.assertIn("别说明日。", out)
+
+    def test_split_turn_strips_tag(self):
+        body, _sc, _mo, _it, _st = persona.split_turn(self.RAW)
+        self.assertNotIn("【心声】", body)
+        self.assertIn("别说明日。", body)
+
+    def test_model_history_copy_is_clean(self):
+        hist = [{"role": "assistant", "content": self.RAW}]
+        got = persona._render_hist(hist)[0]["content"]
+        self.assertNotIn("【心声】", got)
+        self.assertEqual(hist[0]["content"], self.RAW)
+
+    def test_archive_copy_is_clean_disk_unchanged(self):
+        rows = [{"role": "assistant", "content": self.RAW}]
+        with mock.patch.object(persona, "_read_archive_file", return_value=rows):
+            got = persona.load_archive("private_1")
+        self.assertNotIn("【心声】", got[0]["content"])
+        self.assertEqual(rows[0]["content"], self.RAW)
+
 
 class PronounRuleTest(unittest.TestCase):
     """人称规则（2026-11-03）：她是「她」，对面是「你」，不许写成「他」。
@@ -1753,7 +1809,7 @@ class PronounRuleTest(unittest.TestCase):
         h = persona.build_head(self.CARD, "private_1", "")
         tail = h[-700:]
         self.assertIn("「你」", tail)
-        self.assertIn("内心独白", tail)
+        self.assertIn("她的念头", tail)
 
     def test_plain_contract_also_clean(self):
         h = persona.build_head(self.CARD, "private_1", "", intimate=False)
