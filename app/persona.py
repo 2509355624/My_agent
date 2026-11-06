@@ -2879,13 +2879,16 @@ def render_user_block(segments, addressed=True, fallback="", remind=False):
       · 这一轮**没有**「想」分段 → 把原文整段补在最后，信息一点不少；
       · 有「想」→ 不能补原文（会把心里话带出去），只能靠概括。
 
-    `remind`（2026-11-06）：只给**当前这一轮**加一句人称提醒。模型最后读到的
-    一句是它，比长契约开头那一行更有用；历史消息不重复加，免得刷屏。
+    `remind`（2026-11-06，2026-11-07 改）：只给**当前这一轮**加一句正向锚点
+    （`writing_style.tail()`）。模型最后读到的一句是它，比长契约开头那一行
+    更有用；历史消息不重复加，免得刷屏。原来是「不要用『他』指玩家」那种
+    禁令，白象效应下反而把被禁概念点亮一遍，现在只把「谁是她、谁是你、
+    镜头落在哪」说清。生产链路已在各处统一拼 `writing_style.tail()`，这个
+    参数保留给直接调用方，文案与统一尾注同源。
     """
     if not segments:
         if remind and str(fallback or "").strip():
-            return (str(fallback).strip() + "\n"
-                    "（这一轮：她是「她」，你是「你」；任何地方都不要用「他」指玩家。）")
+            return str(fallback).strip() + "\n" + writing_style.tail()
         return fallback
     lines = ["【这一轮你收到的（按发生顺序）】"]
     has_think = False
@@ -2934,7 +2937,7 @@ def render_user_block(segments, addressed=True, fallback="", remind=False):
         lines.append("（这段原话里的「我」= 玩家本人，不是你；原文里的动作都是玩家做的。）")
         lines.append(str(fallback).strip())
     if remind:
-        lines.append("（这一轮：她是「她」，你是「你」；任何地方都不要用「他」指玩家。）")
+        lines.append(writing_style.tail())
     return "\n".join(lines)
 
 
@@ -4629,18 +4632,20 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         # 心里话漏出去）。看得见的内容请填动作/台词/剧情栏。
         user_fallback = "" if man.get("thought") else said
     user_block = render_user_block(segments, addressed, fallback=user_fallback,
-                                   remind=True)
-    # 近因位（2026-11-06）：酒馆把最要紧的一句放在历史之后、生成之前。
-    # 这里把它并进最后一条玩家消息：消息角色序列不变（不插中途 system，
-    # 免得打断历史里带三行元数据的格式 few-shot），但离生成点最近。
-    # 只在玩家选了档位或写了调子时才拼，默认一条都不加。
+                                   remind=False)
+    # 近因位（2026-11-07）：所有组装路径统一用 `writing_style.tail()`，把最
+    # 要紧的一句放在历史之后、生成之前。并进最后一条玩家消息，消息角色序列
+    # 不变（不插中途 system，免得打断历史里带三行元数据的格式 few-shot）。
+    # 常态只给一句正向锚点，替换原来那句人称禁令；玩家选了档位或写了调子
+    # 才多带轮次和「这一幕」。
+    turn_no = None
     if styled:
         try:
             turn_no = turn_total(key) + 1
         except Exception:
             turn_no = 1
-        user_block = user_block + "\n\n" + writing_style.tail_note(
-            turn_no, author_note)
+    user_block = user_block + "\n\n" + writing_style.tail(
+        turn_no, author_note)
     model_hist = _render_hist(hist)
     msgs = ([{"role": "system", "content": head}] + model_hist
             + [{"role": "user", "content": user_block}])
@@ -4910,8 +4915,11 @@ def jump_phase(session_key, phase, sender="", sender_uin=""):
 
     hist = trim(_load_hist(key))
     model_hist = _render_hist(hist)
+    # 近因位跟普通轮同源：时间事实之后仍贴一句正向锚点，别让跳跃开场
+    # 因为换了条组装路径就丢了视角。
     msgs = ([{"role": "system", "content": head}] + model_hist
-            + [{"role": "user", "content": _time_boundary(gd, ph)}])
+            + [{"role": "user", "content": _time_boundary(gd, ph)
+                + "\n\n" + writing_style.tail()}])
     try:
         raw = _llm_call(msgs, temperature=TEMPERATURE)
     except Exception:                                  # noqa: BLE001
@@ -5011,8 +5019,10 @@ def skip_day(session_key, sender="", sender_uin="", days=1, doing=""):
     head = head + "\n\n" + task
     hist = trim(_load_hist(key))
     model_hist = _render_hist(hist)
+    # 睡到明天同样贴近因位，和普通轮、时段跳跃共用一句。
     msgs = ([{"role": "system", "content": head}] + model_hist
-            + [{"role": "user", "content": _time_boundary(gd)}])
+            + [{"role": "user", "content": _time_boundary(gd)
+                + "\n\n" + writing_style.tail()}])
     try:
         raw = _llm_call(msgs, temperature=TEMPERATURE)
     except Exception:                                  # noqa: BLE001
@@ -5120,8 +5130,11 @@ def _gen_and_save(key, ent, card, head, task, sender="", prev_state="",
     """
     hist = trim(_load_hist(key))
     model_hist = _render_hist(hist)
+    # 收尾 / 第二天 / 第五次收场：这一轮的最后一条是任务指令，同样在它
+    # 末尾贴统一锚点，让视角要求离生成点最近。
     msgs = ([{"role": "system", "content": head}] + model_hist
-            + [{"role": "user", "content": task}])
+            + [{"role": "user", "content": task
+                + "\n\n" + writing_style.tail()}])
     try:
         raw = _llm_call(msgs, temperature=TEMPERATURE)
     except Exception:                                  # noqa: BLE001

@@ -4,7 +4,8 @@
 覆盖四件事：
 1. 纯函数档位归一化 / 卡面速写 / 示例分块 / 贴脸尾注；
 2. `build_head` 的三层落点（卡层常驻、档位可控、示例位置不变）；
-3. `run_turn` 不传 writing 时**不加尾注、不拼档位**，传了才贴脸；
+3. `run_turn` 不传 writing 时不拼档位、尾注只给一句正向锚点，
+   传了才带上轮次和「这一幕」；
 4. `persona_api` 把 `writing` 一路透传到 `run_turn`。
 
 不调用任何真实 LLM；`run_turn` 那组用隔离的临时 agents/state 目录。
@@ -114,6 +115,25 @@ class StyleUnitTest(unittest.TestCase):
         self.assertIn("第 1 轮", writing_style.tail_note("oops"))
         self.assertIn("第 1 轮", writing_style.tail_note(-3))
 
+    def test_tail_default_is_positive_anchor(self):
+        """常态也贴一句正向锚点，替代原来那句人称禁令，不带轮次和调子。"""
+        out = writing_style.tail()
+        self.assertIn("她是「她」", out)
+        self.assertIn("镜头可以跟着她", out)
+        self.assertNotIn("第", out)
+        for bad in ("不能", "不许", "不要", "禁止", "必须"):
+            self.assertNotIn(bad, out)
+
+    def test_tail_with_turn_and_note(self):
+        out = writing_style.tail(12, "让雨声多待一会儿")
+        self.assertIn("第 12 轮", out)
+        self.assertIn("让雨声多待一会儿", out)
+        self.assertIn("镜头可以跟着她", out)
+
+    def test_tail_note_delegates_to_tail(self):
+        self.assertEqual(writing_style.tail_note(12, "雨"),
+                         writing_style.tail(12, "雨"))
+
 
 class BuildHeadTest(unittest.TestCase):
     def _head(self, **kw):
@@ -184,6 +204,21 @@ class RunTurnWritingTest(unittest.TestCase):
         self.assertNotIn("## 这一局的写法", msgs[0]["content"])
         self.assertEqual(msgs[-1]["role"], "user")
         self.assertNotIn("（第", msgs[-1]["content"])
+        # 2026-11-07：常态也贴统一正向锚点，但不带轮次和调子，也不写禁令。
+        self.assertIn("镜头可以跟着她", msgs[-1]["content"])
+        self.assertNotIn("不要用「他」", msgs[-1]["content"])
+
+    def test_aux_paths_share_the_same_tail(self):
+        """不走 run_turn 的收尾链路也贴同一句锚点。"""
+        with mock.patch.object(
+                persona, "_llm_call",
+                return_value="你好呀\n画面：坐着\n心情：平静 强度1\n状态：坐着") as m:
+            persona._gen_and_save(self.KEY, {}, _card(), "head", "收尾任务")
+        tail = m.call_args[0][0][-1]["content"]
+        self.assertIn("收尾任务", tail)
+        self.assertIn("镜头可以跟着她", tail)
+        for bad in ("不要", "不许", "禁止"):
+            self.assertNotIn(bad, tail)
 
     def test_writing_adds_head_block_and_tail(self):
         msgs = self._capture({"mode": "sensory", "note": "让雨声多待一会儿"})

@@ -830,16 +830,18 @@ class SegmentTest(unittest.TestCase):
         self.assertEqual(persona.render_user_block([], True, "原文"), "原文")
 
     def test_current_turn_has_pronoun_reminder(self):
+        # 2026-11-07：人称提醒改成正向锚点，不再写「不要用『他』」那种禁令。
         block = persona.render_user_block(
             [{"who": "用户", "type": "说", "text": "我走了。"}],
             True, "我走了。", remind=True)
         self.assertIn("她是「她」", block)
-        self.assertIn("不要用「他」指玩家", block)
+        self.assertIn("镜头可以跟着她", block)
+        self.assertNotIn("不要用「他」指玩家", block)
         # 历史消息不带提醒
         old = persona.render_user_block(
             [{"who": "用户", "type": "说", "text": "我走了。"}],
             True, "我走了。")
-        self.assertNotIn("不要用「他」指玩家", old)
+        self.assertNotIn("镜头可以跟着她", old)
 
     def test_no_segments_with_remind_still_has_hint(self):
         block = persona.render_user_block([], True, "原文", remind=True)
@@ -2620,9 +2622,11 @@ class TimeJumpPromptTest(PersonaBase):
         self.assertIn("【这一轮】", system)
         self.assertIn("按平常的格式收尾", system)
         self.assertEqual(last["role"], "user")
-        for bad in ("【这一轮】", "按平常的格式", "镜头", "状态行", "输出"):
+        for bad in ("【这一轮】", "按平常的格式", "状态行", "输出"):
             self.assertNotIn(bad, last["content"])
         self.assertRegex(last["content"], r"^（第 \d+ 天")
+        # 2026-11-07：时间事实之后贴一句统一近因锚点，它不是任务指令。
+        self.assertIn("镜头可以跟着她", last["content"])
 
     def test_phase_task_lives_in_system(self):
         turn, msgs = self._capture(lambda: persona.jump_phase(self.KEY, "中午"))
@@ -2630,6 +2634,7 @@ class TimeJumpPromptTest(PersonaBase):
         self.assertIn("【这一轮】", msgs[0]["content"])
         self.assertIn("中午", msgs[-1]["content"])
         self.assertNotIn("按平常的格式", msgs[-1]["content"])
+        self.assertIn("镜头可以跟着她", msgs[-1]["content"])
 
     def test_doing_task_lives_in_system(self):
         turn, msgs = self._capture(

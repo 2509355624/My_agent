@@ -16,8 +16,12 @@
 格式 few-shot。中途插一条 system 会把这个节奏打断，收益不如直接贴脸。所以
 作者注和近因尾注合并成一条，用词仍是正向的「可以这样」。
 
-**默认零影响的范围**：`mode=normal` 且 `note` 为空时，`head_style()` 和
-`tail_note()` 都返回空串 —— 档位块不拼、贴脸尾注不加，消息角色序列不变。
+**默认零影响的范围**：`mode=normal` 且 `note` 为空时，`head_style()` 返回
+空串 —— 档位块不拼，消息角色序列不变。近因位 `tail()` 则**每轮都拼**一句
+正向锚点：普通轮是替换掉 `render_user_block(remind=True)` 原来那句人称
+禁令，长度相当、token 净增约 0；跳跃 / 收尾那几条路径原本没有这一层，
+各多一句（约 30 字），但只在跨天或收尾时才走，不进日常聊天。轮次和
+「这一幕」只在玩家主动选了写法时才带上。
 `card_sketch()` / `format_examples()` 属于卡层，是**有意对所有会话生效**的
 小改动（把卡里写着却没用上的事实接上、把多块示例编号），约多 20 字。
 
@@ -121,20 +125,33 @@ def format_examples(text):
                        for i, part in enumerate(parts))
 
 
-def tail_note(turn_no, note=""):
-    """L3 + L4：紧跟最后一条玩家消息的贴脸短句。
+# 近因位固定句（2026-11-07）。它同时替代 `render_user_block(remind=True)`
+# 原来那句「任何地方都不要用「他」指玩家」——把被禁概念说一遍反而会点亮它。
+# 现在只把事实说清：谁是她、谁是你、镜头落在哪。全句不含禁令。
+ANCHOR = "她是「她」，你是「你」；镜头可以跟着她，落在她的反应上"
 
-    只给客观事实（第几轮 / 玩家写的这一幕调子）和一个正向可选方向。
-    「镜头可以跟着她」是酒馆 jailbreak 那层最该贴脸的一句——长对话里最
-    容易漂移的就是替玩家动手。不写「必须 / 不许」。
+
+def tail(turn_no=None, note=""):
+    """L3 + L4：所有组装路径共用的近因尾注，只拼在最后一条 user 消息末尾。
+
+    常态（不给轮次、没写调子）只返回一句锚点，长度和原来那句人称提醒相当，
+    token 净增约 0。玩家选了写法档位或写了「这一幕的调子」时才多带轮次和
+    调子。判断写什么交给模型，这里只做归一化。
     """
-    try:
-        n = max(1, int(turn_no or 1))
-    except (TypeError, ValueError):
-        n = 1
-    bits = ["第 %d 轮" % n]
+    bits = []
+    if turn_no is not None:
+        try:
+            n = max(1, int(turn_no or 1))
+        except (TypeError, ValueError):
+            n = 1
+        bits.append("第 %d 轮" % n)
     clean = _WS.sub(" ", str(note or "").strip())[:NOTE_MAX_CHARS]
     if clean:
         bits.append("这一幕：" + clean)
-    bits.append("镜头可以跟着她，落在她的反应上")
+    bits.append(ANCHOR)
     return "（" + " · ".join(bits) + "）"
+
+
+def tail_note(turn_no, note=""):
+    """兼容入口：带轮次的贴脸尾注（写法档位那条链路在用）。"""
+    return tail(turn_no, note)
