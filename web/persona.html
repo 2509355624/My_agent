@@ -216,19 +216,25 @@
   .pfield textarea:focus { border-color: currentColor; }
   /* 「字体」按钮和它弹出的滑块（2026-11-06）：锚在标签栏上方，不占输入区。
      z-index 120 在 .app 这个层叠上下文内压过气泡，仍低于弹窗 / 看图 / toast。 */
-  #btnFont.on { background: var(--bg-input); border-color: var(--accent);
-    color: var(--accent); }
-  .fontPop { position: absolute; right: 0; bottom: calc(100% + 8px);
+  #btnFont.on, #btnStyle.on { background: var(--bg-input);
+    border-color: var(--accent); color: var(--accent); }
+  .fontPop, .stylePop { position: absolute; right: 0; bottom: calc(100% + 8px);
     width: 230px; box-sizing: border-box; z-index: 120;
     background: var(--bg-elev); border: 1px solid var(--border);
     border-radius: var(--r); padding: 12px 14px; }
-  .fontPop .fpH { display: flex; justify-content: space-between;
+  .fontPop .fpH, .stylePop .fpH { display: flex; justify-content: space-between;
     align-items: baseline; font-size: 12px; color: var(--text-dim);
     margin-bottom: 10px; }
-  .fontPop .fpH b { font-size: 13px; font-weight: 500; color: var(--accent); }
+  .fontPop .fpH b, .stylePop .fpH b { font-size: 13px; font-weight: 500;
+    color: var(--accent); }
   .fontPop input[type="range"] { width: 100%; accent-color: var(--accent); }
-  .fontPop .fpTip { font-size: 11px; color: var(--text-mute);
-    line-height: 1.6; margin-top: 8px; }
+  .stylePop select, .stylePop input[type="text"] { width: 100%;
+    box-sizing: border-box; background: var(--bg-input); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--rs);
+    padding: 6px 8px; font: inherit; font-size: 12px; outline: none; }
+  .stylePop input[type="text"] { margin-top: 8px; }
+  .fontPop .fpTip, .stylePop .fpTip { font-size: 11px;
+    color: var(--text-mute); line-height: 1.6; margin-top: 8px; }
   @media (min-width: 1001px) {
     .preciseBody.open { flex-direction: row; }
     .pfield { display: block; flex: 1; min-width: 0; }
@@ -709,6 +715,17 @@
           <input type="range" id="fontRange" min="13" max="22" step="1"
                  value="14" aria-label="聊天字号">
           <div class="fpTip">只影响聊天区正文，右栏与输入框不变</div>
+        </div>
+        <!-- 文风档位（2026-11-06）：酒馆 sysprompt 那层做成可切换的一句短句，
+             作者注并进贴脸尾注。常态档不发任何额外字段，老链路不受影响。 -->
+        <button class="ptab" id="btnStyle" type="button"
+                title="这一局怎么写">写法</button>
+        <div class="stylePop" id="stylePop" style="display:none">
+          <div class="fpH"><span>这一局的写法</span><b id="styleVal">常态</b></div>
+          <select id="styleSel" aria-label="文风档位"></select>
+          <input type="text" id="styleNote" maxlength="160"
+                 placeholder="这一幕的调子（可留空）">
+          <div class="fpTip">只给这一局换个写法，随时可以改回来</div>
         </div>
         <button class="ptgl" id="btnPrecise"
                 onclick="togglePrecise()">精确输入 ▾</button>
@@ -2488,6 +2505,10 @@ async function deliver(text, isRetry, payload) {
     const f = p.fields || {};
     if (Object.keys(f).some(k => f[k])) body.fields = f;
     if (CM) body.custom = CM;
+    // 文风档位 / 这一幕的调子：常态且没写调子时整个字段都不发，
+    // 后端不拼档位块、不加贴脸尾注。
+    const w = curWriting();
+    if (w) body.writing = w;
     const d = await post("/api/persona/chat", body);
     // 这一轮在归档里的行号（后端回包带的）。用它当气泡 id，图才挂得对位置——
     // 用数组下标的话，历史一压缩就整体前移，图会跑到最新那条下面。
@@ -3143,6 +3164,77 @@ document.addEventListener("click", () => {
   $("btnFont").classList.remove("on");
 });
 initFs();
+
+// ── 文风档位 / 这一幕的调子（2026-11-06，酒馆分层写法）─────────
+// 档位清单以后端 `/api/persona/writing_styles` 为准；服务还没重启拿不到时
+// 用下面这份兜底，按钮照样能选，档位 key 和后端一致，不影响功能。
+const STYLE_KEY = "persona_writing_mode", STYLE_NOTE_KEY = "persona_writing_note";
+const STYLE_FALLBACK = [
+  { key: "normal",  label: "常态" },
+  { key: "sensory", label: "细写" },
+  { key: "brisk",   label: "轻快" },
+  { key: "slow",    label: "慢镜头" },
+  { key: "quiet",   label: "留白" }
+];
+let STYLE_MODE = "normal";
+
+function renderStyleSel(list) {
+  const sel = $("styleSel");
+  if (!sel) return;
+  sel.innerHTML = "";
+  list.forEach(s => {
+    const o = document.createElement("option");
+    o.value = s.key;
+    o.textContent = s.label;
+    sel.appendChild(o);
+  });
+  sel.value = STYLE_MODE;
+  const hit = list.find(s => s.key === STYLE_MODE);
+  $("styleVal").textContent = hit ? hit.label : "常态";
+}
+
+function curWriting() {
+  const note = (($("styleNote") && $("styleNote").value) || "").trim().slice(0, 160);
+  if (STYLE_MODE === "normal" && !note) return null;
+  return { mode: STYLE_MODE, note: note };
+}
+
+async function initStyle() {
+  try {
+    STYLE_MODE = localStorage.getItem(STYLE_KEY) || "normal";
+    const note = localStorage.getItem(STYLE_NOTE_KEY);
+    if (note && $("styleNote")) $("styleNote").value = note;
+  } catch (e) { /* 隐私模式读不到就用默认 */ }
+  renderStyleSel(STYLE_FALLBACK);
+  try {
+    const d = await api("/api/persona/writing_styles");
+    if (d && d.ok && Array.isArray(d.styles) && d.styles.length)
+      renderStyleSel(d.styles);
+  } catch (e) { /* 旧服务没这个端点，兜底清单已够用 */ }
+}
+
+$("btnStyle").onclick = function (e) {
+  e.stopPropagation();
+  const p = $("stylePop");
+  const show = p.style.display === "none";
+  p.style.display = show ? "" : "none";
+  this.classList.toggle("on", show);
+};
+$("stylePop").addEventListener("click", e => e.stopPropagation());
+$("styleSel").onchange = function () {
+  STYLE_MODE = this.value;
+  const hit = STYLE_FALLBACK.find(s => s.key === STYLE_MODE);
+  $("styleVal").textContent = hit ? hit.label : STYLE_MODE;
+  try { localStorage.setItem(STYLE_KEY, STYLE_MODE); } catch (e) {}
+};
+$("styleNote").oninput = function () {
+  try { localStorage.setItem(STYLE_NOTE_KEY, this.value); } catch (e) {}
+};
+document.addEventListener("click", () => {
+  $("stylePop").style.display = "none";
+  $("btnStyle").classList.remove("on");
+});
+initStyle();
 
 loadSession();
 </script>

@@ -23,7 +23,7 @@ import time
 
 from flask import Blueprint, jsonify, request, send_file
 
-from app import chat_bg, friend_auth, llm, persona, usage
+from app import chat_bg, friend_auth, llm, persona, usage, writing_style
 
 log = logging.getLogger("persona_api")
 
@@ -240,6 +240,17 @@ def _card_json(card):
         "personality": card.get("personality") or "",
         "avatar": card.get("avatar") or "",
     }
+
+
+@bp.route("/api/persona/writing_styles")
+def writing_styles():
+    """文风档位清单（2026-11-06）。
+
+    前端下拉从这儿取，档位文案只在 `app/writing_style.py` 一处维护。
+    纯静态、不含用户数据，游客也能读。
+    """
+    return jsonify({"ok": True, "styles": writing_style.style_list(),
+                    "default": writing_style.DEFAULT_MODE})
 
 
 @bp.route("/api/persona/cards")
@@ -784,16 +795,16 @@ def chat():
 
     llm.set_custom_override(body.get("custom"))
     try:
-        return _chat_turn(text, manual)
+        return _chat_turn(text, manual, body.get("writing"))
     finally:
         llm.set_custom_override(None)
 
 
-def _chat_turn(text, manual=None):
+def _chat_turn(text, manual=None, writing=None):
     role, who, token = _who()
 
     if role == "guest":
-        return _guest_chat(text, who, token, manual)
+        return _guest_chat(text, who, token, manual, writing)
 
     key = _active_key(_key(who))
     card = persona.active_card(key)
@@ -805,7 +816,8 @@ def _chat_turn(text, manual=None):
     # token」永远统计不出来。QQ 侧是在 qq_bot 的轮次外层包的，这里补同一层，
     # 标签用活动线键（web_<qq>__<card>），能精确到「哪个角色烧了多少」。
     with usage.scope(key):
-        turn = persona.run_turn(key, text, "private", "", manual=manual)
+        turn = persona.run_turn(key, text, "private", "",
+                                manual=manual, writing=writing)
     if not turn.reply.strip():
         return jsonify({"ok": False, "error": "她这轮没说话"}), 502
     out = {
@@ -833,7 +845,7 @@ def _chat_turn(text, manual=None):
     return jsonify(out)
 
 
-def _guest_chat(text, uid, token, manual=None):
+def _guest_chat(text, uid, token, manual=None, writing=None):
     """游客的一轮。
 
     直接走 `persona.run_turn` 主引擎，和登录用户同一套打分/注入/归档；
@@ -862,7 +874,8 @@ def _guest_chat(text, uid, token, manual=None):
     # 体验版是「拉新成本」，得看清楚它值不值。run_turn 内部的两次调用
     # （打分 + 正文）都在这个 scope 里。
     with usage.scope("guest_" + str(uid or "anon")[:8]):
-        turn = persona.run_turn(ckey, text, "private", "", manual=manual)
+        turn = persona.run_turn(ckey, text, "private", "",
+                                manual=manual, writing=writing)
     if not turn.reply.strip():
         return jsonify({"ok": False, "error": "她这会儿有点卡"}), 502
 

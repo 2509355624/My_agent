@@ -59,7 +59,8 @@ import shutil
 import threading
 import time
 
-from app import affection, llm, persona_rag, pregnancy, trigger, writing_skills
+from app import (affection, llm, persona_rag, pregnancy, trigger,
+                 writing_skills, writing_style)
 from app.config import (BASE_DIR, PERSONA_MODEL, PERSONA_PROVIDER,
                         QQ_AGENT_ID, QQ_BOT_NAME)
 
@@ -2710,8 +2711,13 @@ def _guard_block():
     return _GUARD_TEXT if on else ""
 
 
-def build_head(card, session_key, sender, note="", state="", intimate=True):
+def build_head(card, session_key, sender, note="", state="", intimate=True,
+               mode="normal"):
     """扮演态的系统头：角色人设 + 输出契约 + 环境（+ 小记 + 此刻状态）。
+
+    `mode`（2026-11-06）：酒馆 sysprompt 档位那一层，`writing_style.head_style`
+    给的**一句**正向短句，拼在契约之后。默认 `normal` 不拼。
+    `card_sketch` 那一小段卡面速写则对所有会话生效，与档位无关。
 
     **刻意不带别的东西**——不拼工具目录、不拼 Skill 目录、不拼表情包清单、
     不拼长期记忆，也不拼任何审核 / 限制条款。用户 2026-10-16 点名：
@@ -2733,6 +2739,12 @@ def build_head(card, session_key, sender, note="", state="", intimate=True):
         parts.append(g)
     persona = str(card.get("systemPrompt") or "").strip()
     parts.append(persona if persona else "你是%s。" % card["name"])
+    # 卡面速写（2026-11-06）：`description` / `personality` 一直写在卡里却没进
+    # 提示词。酒馆的卡是自包含的，这里先把**已有的事实**接上，不去替角色编
+    # 新设定；systemPrompt 里已经说过的会由 card_sketch 自动跳过。
+    sketch = writing_style.card_sketch(card)
+    if sketch:
+        parts.append(sketch)
     # 示例对话（2026-11-03）：放在人设之后、契约之前。
     #
     # 为什么不放最后：放最后模型会把它当成「上一轮的输出」，接着往下写；
@@ -2743,7 +2755,7 @@ def build_head(card, session_key, sender, note="", state="", intimate=True):
     ex = str(card.get("exampleDialogue") or "").strip()
     if ex:
         parts.append("## 她说话的示范（**只学语气和节奏，不要照抄内容**）\n\n"
-                     + ex)
+                     + writing_style.format_examples(ex))
     # 房间与私物（2026-11-03）：只在私聊里给，群里那个场景用不上，白占预算。
     # 当**素材**而不是规则——"她房间里有什么"定了以后，几次场外探索才连得上。
     room = str(card.get("room") or "").strip()
@@ -2751,6 +2763,11 @@ def build_head(card, session_key, sender, note="", state="", intimate=True):
         parts.append("## 她的房间（你离开她视线、进她房间时的素材，"
                      "可以自由发挥，不必全用）\n\n" + room)
     parts.append(_CONTRACT if intimate else _CONTRACT_NO_INTIMATE)
+    # 档位放契约之后：这一层只回答「这一局怎么写」，人设和格式都在它前面，
+    # 不会抢「她是谁」的位置。常态档不拼，head 和以前逐字节一样。
+    sty = writing_style.head_style(mode)
+    if sty:
+        parts.append(sty)
     # 群聊多压一道尺度约束（2026-11-02）：私聊交给角色卡人设，群里不放开。
     if str(session_key or "").startswith("group_"):
         parts.append(_GROUP_NOTE)
@@ -4343,8 +4360,12 @@ def pregnancy_block(session_key, event=None):
 
 
 def run_turn(session_key, text, target, sender="", sender_uin="",
-             manual=None):
+             manual=None, writing=None):
     """扮演态的一轮：**两次** LLM 调用，返回 `Turn(正文, 画面, 情绪, 强度, 状态)`。
+
+    `writing`（2026-11-06）：`{mode, note}`，酒馆那套分层写法的开关。`mode`
+    是文风档位（进 system 头），`note` 是玩家给的「这一幕的调子」（进贴脸
+    尾注）。**不传或全空 = 不拼档位、不加尾注**，提示词其余部分照旧。
 
     `manual`（2026-11-06）：网页「精确输入」的三栏
     `{thought, action, speech, plot}`。填了就以它为准，编剧 AI 不用再拆主
@@ -4362,6 +4383,10 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     见 `_persona_key`——不隔离的话 A 刷的好感会算到 B 头上。私聊传不传都行。
     """
     key = _persona_key(session_key, sender_uin)
+    # 写作档位只做归一化：非法档位退回常态，作者注压成单行。判断写什么
+    # 交给模型，这里不设准入闸门。
+    mode, author_note = writing_style.norm(writing)
+    styled = mode != writing_style.DEFAULT_MODE or bool(author_note)
     # QQ 私聊分线（2026-11-03 方案 B）：base → 当前角色线。网页传来的已是
     # 线键，resolve 幂等。历史/小记/好感从此按角色各存各的。
     key = resolve_line(key)
@@ -4454,7 +4479,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     # 亲密场景写得干巴巴。`neutral` 也带上，它随时可能拐到亲密去。
     intimate = intent in (None, "", "intimate", "neutral")
     head = build_head(card, session_key, sender, note, prev_state,
-                      intimate=intimate)
+                      intimate=intimate, mode=mode)
     block = _intent_block(intent, inote)
     if block:
         head = head + "\n\n" + block
@@ -4605,6 +4630,17 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         user_fallback = "" if man.get("thought") else said
     user_block = render_user_block(segments, addressed, fallback=user_fallback,
                                    remind=True)
+    # 近因位（2026-11-06）：酒馆把最要紧的一句放在历史之后、生成之前。
+    # 这里把它并进最后一条玩家消息：消息角色序列不变（不插中途 system，
+    # 免得打断历史里带三行元数据的格式 few-shot），但离生成点最近。
+    # 只在玩家选了档位或写了调子时才拼，默认一条都不加。
+    if styled:
+        try:
+            turn_no = turn_total(key) + 1
+        except Exception:
+            turn_no = 1
+        user_block = user_block + "\n\n" + writing_style.tail_note(
+            turn_no, author_note)
     model_hist = _render_hist(hist)
     msgs = ([{"role": "system", "content": head}] + model_hist
             + [{"role": "user", "content": user_block}])
