@@ -154,7 +154,12 @@ def search(text, k=TOP_K):
     return out
 
 
-JUDGE_SYS = """你在做一件很小的事：判断用户这句话里**有没有点名**一个角色。
+ANIMA_CHANNELS = ["anima-line", "anima-real", "hd_3_clear", "hd_3_curvy",
+                  "hd_3_gloss", "hd_3_soft", "silver", "silver-hd"]
+DEFAULT_CHANNEL = "silver"
+
+JUDGE_SYS = """你在做一件很小的事：判断用户这句话里**有没有点名**一个角色，
+以及他**有没有提到渠道**。
 
 只输出一个 JSON 对象，不要解释。
 
@@ -168,13 +173,34 @@ JUDGE_SYS = """你在做一件很小的事：判断用户这句话里**有没有
 - 用户说的是原创角色、或者候选里没有的人；
 - 用户只是提到、讨论、或者问「你认识胡桃吗」这类，没让画。
 
+渠道（channel）：用户可能把渠道名放在前面、后面、中间，也可能用简称
+（「线条」「Anima」「高清」「silver」）。你自己读原文判断他指的是哪个，
+**不要按固定位置切词**；没提就填空串。
+
 输出格式：
-  {"action": "use", "key": "候选里的 key", "why": "一句话"}
-  {"action": "skip", "why": "一句话"}
+  {"action": "use", "key": "候选里的 key", "channel": "渠道名或空串", "why": "一句话"}
+  {"action": "skip", "channel": "", "why": "一句话"}
 
 宁可 skip，也不要猜。猜错会让以后所有类似请求都被锁死成同一个角色。"""
 
 JUDGE_TMPL = "候选：\n%s\n\n用户原话：%s"
+
+
+def _norm_channel(word):
+    """AI 说的渠道 → 我们真实存在的渠道名；认不出就空串（= 没提）。"""
+    w = str(word or "").strip().lower().replace(" ", "")
+    if not w:
+        return ""
+    if w in ANIMA_CHANNELS:
+        return w
+    alias = {"线条": "anima-line", "line": "anima-line", "anima": "anima-line",
+             "real": "anima-real", "写实": "anima-real",
+             "clear": "hd_3_clear", "高清": "hd_3_clear",
+             "curvy": "hd_3_curvy", "gloss": "hd_3_gloss",
+             "soft": "hd_3_soft", "柔": "hd_3_soft",
+             "silverhd": "silver-hd", "高清银": "silver-hd",
+             "银": "silver", "server": "silver"}
+    return alias.get(w, "")
 
 
 def _judge(text, hits):
@@ -186,28 +212,34 @@ def _judge(text, hits):
                      % (h["key"], c.get("name") or h["name"],
                         c.get("category") or "",
                         "/".join(str(x) for x in (c.get("aliases") or [])[:5])))
+    # 库里只有这几个渠道，一起告诉它，免得它编出一个不存在的
+    ch_line = "可用渠道：%s\n" % " / ".join(ANIMA_CHANNELS)
     msgs = [{"role": "system", "content": JUDGE_SYS},
-            {"role": "user", "content": JUDGE_TMPL % ("\n".join(lines), text)}]
+            {"role": "user",
+             "content": ch_line + JUDGE_TMPL % ("\n".join(lines), text)}]
     try:
         raw = llm.call_llm(msgs, timeout=JUDGE_TIMEOUT,
                            provider=PERSONA_PROVIDER, model=PERSONA_MODEL)
     except Exception:                                  # noqa: BLE001
         log.warning("角色库判定调用失败，按 skip 处理", exc_info=True)
-        return {"action": "skip", "why": "判定失败"}
+        return {"action": "skip", "channel": "", "why": "判定失败"}
     import re
     m = re.search(r"\{.*\}", str(raw or ""), re.S)
     if not m:
-        return {"action": "skip", "why": "没交 JSON"}
+        return {"action": "skip", "channel": "", "why": "没交 JSON"}
     try:
         d = json.loads(m.group(0))
     except Exception:                                  # noqa: BLE001
-        return {"action": "skip", "why": "JSON 解析失败"}
+        return {"action": "skip", "channel": "", "why": "JSON 解析失败"}
+    chan = _norm_channel(d.get("channel"))
     if str(d.get("action") or "").lower() != "use":
-        return {"action": "skip", "why": str(d.get("why") or "")[:60]}
+        return {"action": "skip", "channel": chan,
+                "why": str(d.get("why") or "")[:60]}
     key = str(d.get("key") or "")
     if key not in {h["key"] for h in hits}:
-        return {"action": "skip", "why": "key 不在候选里"}
-    return {"action": "use", "key": key, "why": str(d.get("why") or "")[:60]}
+        return {"action": "skip", "channel": chan, "why": "key 不在候选里"}
+    return {"action": "use", "key": key, "channel": chan,
+            "why": str(d.get("why") or "")[:60]}
 
 
 def _cache_load():
@@ -227,29 +259,46 @@ def _cache_save(d):
         pass
 
 
-def resolve(text):
-    """用户原话 → 命中的角色条目（dict）或 None。"""
+def decide(text, current_channel=""):
+    """用户原话 → {"entry": 角色或 None, "channel": 渠道或空串, "why": ...}。
+
+    渠道规则（2026-11-06 用户拍板）：**由 AI 自己读原文判断**，不按位置切词
+    （「Anima 千夏」和「千夏用 anima 跑」都要认出来）。没提渠道就回空串，
+    调用方自己决定用默认值还是沿用上下文。
+    """
     t = str(text or "").strip()
     if not t:
-        return None
-    ck = hashlib.sha256(t.lower().encode("utf-8")).hexdigest()[:16]
+        return {"entry": None, "channel": "", "why": "空"}
+    ck = hashlib.sha256((t.lower() + "|" + str(current_channel))
+                        .encode("utf-8")).hexdigest()[:16]
     cache = _cache_load()
     hit = cache.get(ck)
     if hit is not None:
-        if hit.get("action") != "use":
-            return None
-        return next((c for c in entries()
-                     if str(c.get("key")) == hit.get("key")), None)
+        entry = None
+        if hit.get("action") == "use":
+            entry = next((c for c in entries()
+                          if str(c.get("key")) == hit.get("key")), None)
+        return {"entry": entry, "channel": hit.get("channel") or "",
+                "why": hit.get("why") or ""}
 
     cands = search(t)
     if not cands:
-        return None
+        return {"entry": None, "channel": "", "why": "没有候选"}
     d = _judge(t, cands)
     cache[ck] = {"text": t[:120], "action": d["action"],
-                 "key": d.get("key") or "", "why": d.get("why") or "",
-                 "ts": int(time.time())}
+                 "key": d.get("key") or "", "channel": d.get("channel") or "",
+                 "why": d.get("why") or "", "ts": int(time.time())}
     _cache_save(cache)
-    log.info("[lora] %s → %s %s", t[:30], d["action"], d.get("key") or "")
-    if d["action"] != "use":
-        return None
-    return next((c for c in entries() if str(c.get("key")) == d["key"]), None)
+    log.info("[lora] %s → %s %s 渠道=%s", t[:30], d["action"],
+             d.get("key") or "", d.get("channel") or "-")
+    entry = None
+    if d["action"] == "use":
+        entry = next((c for c in entries() if str(c.get("key")) == d["key"]),
+                     None)
+    return {"entry": entry, "channel": d.get("channel") or "",
+            "why": d.get("why") or ""}
+
+
+def resolve(text, current_channel=""):
+    """兼容旧调用：只要角色条目。"""
+    return decide(text, current_channel).get("entry")
