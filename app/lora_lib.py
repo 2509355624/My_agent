@@ -157,9 +157,11 @@ def search(text, k=TOP_K):
 ANIMA_CHANNELS = ["anima_clear", "anima-line", "anima-real",
                   "hd_3_clear", "hd_3_curvy", "hd_3_gloss", "hd_3_soft",
                   "silver", "silver-hd"]
-# 「anima 千夏」= 默认 anima 渠道，就是 anima_clear（用户 2026-11-06 明确纠正：
-# 不是 anima-line —— line 是另一种画风，不是默认）。
-DEFAULT_CHANNEL = "anima_clear"
+# 用户 2026-11-06 拍板：
+#   · 没提渠道            → **silver**（anima 的默认档）
+#   · 说了「anima」       → **anima_clear**
+#   · 说了「线条 / line」 → anima-line（另一种画风，不是默认）
+DEFAULT_CHANNEL = "silver"
 
 JUDGE_SYS = """你在做一件很小的事：判断用户这句话里**有没有点名**一个角色，
 以及他**有没有提到渠道**。

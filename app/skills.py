@@ -224,7 +224,11 @@ def load_skill(skill_name):
 # 这些一次性跑图脚本还按老名字取工作流，删了脚本就跑不了；而且它们只是
 # 「不同步数的同一份工作流」，留着当对照样本。
 ARCHIVED_SKILLS = tuple(
-    ["anima_" + s for s in ("clear", "curvy", "gloss", "soft")]
+    # 2026-11-06：`anima_clear` 从归档里放出来——它是「anima」这个说法的默认档
+    # （用户拍板：说 anima 就跑 clear，什么都不说才跑 silver）。放出来的效果是
+    # `list_skills()` 会吐它，QQ 的渠道校验、跑图台、AI 的渠道清单都能看到。
+    # 其余几个同批下架的（curvy / gloss / soft）继续归档，没人点名它们。
+    ["anima_" + s for s in ("curvy", "gloss", "soft")]
     + ["hd_fast_" + s for s in ("clear", "curvy", "gloss", "soft")]
     + ["hd_2_" + s for s in ("clear", "curvy", "gloss", "soft")]
     + ["krea2"]
