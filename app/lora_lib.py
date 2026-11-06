@@ -201,11 +201,40 @@ PREVIEW_LIMIT = 1500       # 整块上限（字符）
 # 1.095、千夏 0.576。取 0.45 当闸：低于它 = 这句跟角色库没关系，整块不拼。
 PREVIEW_MIN = 0.45
 
+# 每组只留一个**代表渠道**（2026-11-06 用户拍板）：用户只报角色名、没点名
+# 渠道时，用它填 `skill`。分组的事实源在 app/char_loras.py 的 _LORA_SKILLS_*，
+# 这里懒导入，避免和 char_loras.match() 里的懒导入互相套。
+_REP_BY_GROUP = (
+    ("_LORA_SKILLS_ANIMA", "silver"),
+    ("_LORA_SKILLS_SDXL", "miao"),
+    ("_LORA_SKILLS_SD15", "image_gen_v1"),
+    ("_LORA_SKILLS_MOSS", "moss"),
+)
+
+
+def rep_channels(entry):
+    """这条角色 LoRA 能挂的**代表渠道**（按 anima→SDXL→SD1.5→moss 排）。
+
+    一个角色跨架构有多条记录时会给出多个；候选块里第一个就是「只报名字」
+    时该用的那个。代码只把事实摆出来，选哪个交给模型（2026-11-06 用户原则：
+    代码只检测，判断权留给 AI）。
+    """
+    from app import char_loras as _cl
+    chans = {str(x) for x in (entry.get("channels") or [])}
+    out = []
+    for attr, rep in _REP_BY_GROUP:
+        if chans.intersection(getattr(_cl, attr, ())):
+            out.append(rep)
+    return out
+
+
 PREVIEW_HEAD = (
-    "\n【Anima 角色库 · 本次检索到的角色】\n"
+    "\n【角色库 · 本次检索到的角色】\n"
     "下面这些是按用户这句话在角色库里搜出来的（**可能无关，自己判断**）。\n"
-    "用户点名了 Anima 系渠道、并且要的就是其中某个角色 → 把该角色的 key 填进\n"
-    "JSON 的 `character` 字段；否则 `character` 留空，一切照常。\n\n"
+    "每行的「渠道」是这条角色 LoRA 能挂的底模渠道（按 anima→SDXL→SD1.5→moss 排）。\n"
+    "用户**只报了角色名、没点名渠道** → `skill` 填该行**第一个渠道**，\n"
+    "`character` 同时填它的 key；用户点名了渠道就照他说的传，别用这里的。\n"
+    "用户要的就是其中某个角色才填 `character`，否则留空，一切照常。\n\n"
 )
 
 
@@ -231,14 +260,31 @@ def preview_block(text, k=PREVIEW_K):
         return ""
     # 过了闸就只留同样过闸的那几条，别把 0.36 的凑数项带进去。
     hits = [h for h in hits if float(h.get("score") or 0.0) >= PREVIEW_MIN]
-    by_key = {str(c.get("key")): c for c in entries()}
+    # 同一个 key 可能有多条（跨架构各一份文件），按 key 聚合起来，渠道合并
+    # 到一行里——同 key 拆两行的话，模型填 `character` 时两个 key 一模一样，
+    # 反而分不清该用哪条。
+    by_key = {}
+    for c in entries():
+        by_key.setdefault(str(c.get("key")), []).append(c)
     lines = []
+    seen = set()
     for h in hits:
-        c = by_key.get(str(h.get("key"))) or {}
+        k = str(h.get("key"))
+        if k in seen:
+            continue
+        seen.add(k)
+        items = by_key.get(k) or []
+        c = items[0] if items else {}
         name = str(c.get("name") or h.get("name") or "").strip()
         trig = str(c.get("trigger") or "").strip()
         ident = str(c.get("identity") or "").strip()[:PREVIEW_IDENTITY]
-        head = "- %s｜%s" % (h["key"], name or "-")
+        reps = []
+        for it in items:
+            for r in rep_channels(it):
+                if r not in reps:
+                    reps.append(r)
+        head = "- %s｜%s｜渠道: %s" % (k, name or "-",
+                                      " / ".join(reps) or "-")
         if trig:
             head += "｜trigger: %s" % trig
         lines.append(head)

@@ -983,7 +983,7 @@ class LedgerTest(unittest.TestCase):
     def test_contract_defines_every_pronoun(self):
         """契约开头必须写清 你/她/我 各指代谁（2026-11-06 用户要求）。"""
         for text in ("人称对照", "女主角一律「她」", "玩家一律「你」",
-                     "指她自己", "不许用「他」指代玩家"):
+                     "指她自己", "指代玩家一律写「你」"):
             self.assertIn(text, persona._CONTRACT)
 
     def test_build_head_sanitizes_legacy_note(self):
@@ -1659,6 +1659,71 @@ class LayeredGuideTest(unittest.TestCase):
             self.assertNotIn("他", g, "excite=%d 的分层里还有「他」" % ex)
 
 
+class NovelCraftContractTest(unittest.TestCase):
+    """2026-11-06：把酒馆小说笔法搬进契约，按「白象效应」改成正向表述。
+
+    用户三条硬要求：① 输出内容像小说一样有趣、不死板；② 字数从 400~800
+    放宽到 1000 常态 / 2000 上限；③ 少写「不能」，多写「可以这样」。
+    单轮 token 预算给了 1 万~1 万 2，但预算不是拿来塞规范库的——
+    30 万字符的 `skills/writing/` 只萃取了十来条能直接用的招进契约。
+    """
+
+    def test_contract_is_positive_not_prohibition_heavy(self):
+        """每轮必拼的契约正文里，禁令词要几乎清零（白象效应）。"""
+        c = persona._CONTRACT_NO_INTIMATE   # 不含亲密指导，日常轮也拼这一段
+        for w in ("不许", "不能", "禁止", "必须", "算不合格", "缺一段都不行",
+                  "两条硬规矩", "不许用「他」"):
+            self.assertNotIn(w, c, "契约正文里还在用禁令词：%s" % w)
+        # 唯一剩下的「不要」是「要不要配图」，不是禁令
+        self.assertLessEqual(c.count("不要"), 1)
+
+    def test_contract_teaches_novel_craft(self):
+        """酒馆那套让内容有趣的招式，得真的进每一轮提示词。"""
+        c = persona._CONTRACT
+        for phrase in ("可以这样写", "先给她一个能碰的东西", "闲笔",
+                       "没用的道具", "对话可以碎", "情绪写成身体", "专属感",
+                       "不回收的干扰项", "潜台词", "句式跟着情绪走",
+                       "这一轮可以什么都没发生", "均匀的机灵 = AI"):
+            self.assertIn(phrase, c, "笔法节漏了：%s" % phrase)
+
+    def test_word_count_relaxed(self):
+        """1000 常态 / 2000 上限，旧的 400~800 和均匀密度配额要撤掉。"""
+        c = persona._CONTRACT
+        self.assertIn("1000 字", c)
+        self.assertIn("2000 字", c)
+        self.assertNotIn("400~800", c)
+        self.assertNotIn("3~4 段", c)
+        self.assertNotIn("每段都要有具体的感官细节", c)
+        self.assertNotIn("这一轮要有变化", c)
+
+    def test_craft_reaches_every_turn_including_non_intimate(self):
+        """笔法写在契约里，日常轮（不带亲密指导）也要吃到。"""
+        plain = persona._CONTRACT_NO_INTIMATE
+        self.assertIn("可以这样写", plain)
+        self.assertIn("闲笔", plain)
+        head = persona.build_head({"name": "x", "systemPrompt": "y"},
+                                  "private_1", "", intimate=False)
+        self.assertIn("可以这样写", head)
+
+    def test_history_keeps_a_full_long_reply(self):
+        """正文放宽到 2000 字后，历史单条也得装得下，不然下一轮只剩半截。"""
+        self.assertGreaterEqual(persona.MSG_MAX_CHARS, 2000)
+        body = "她" * 2000
+        hist = [{"role": "assistant",
+                 "content": body + "\n画面：x\n心情：平静 强度2\n状态：在家 · 卫衣 · 无"}]
+        got = persona.trim(hist)[0]["content"]
+        self.assertIn("画面：x", got)          # 结构化尾巴还在
+        self.assertGreater(len(got), 1900)     # 正文没被砍掉一多半
+        self.assertLessEqual(len(got), persona.MSG_MAX_CHARS + 40)
+
+    def test_guard_block_is_positive(self):
+        """框定段原来四条里三条是「不…」，改成正向。"""
+        g = persona._guard_block()
+        for w in ("不道歉", "不声明身份", "不要复述"):
+            self.assertNotIn(w, g)
+        self.assertIn("全程待在角色里", g)
+
+
 class PronounRuleTest(unittest.TestCase):
     """人称规则（2026-11-03）：她是「她」，对面是「你」，不许写成「他」。
 
@@ -1679,9 +1744,9 @@ class PronounRuleTest(unittest.TestCase):
 
     def test_contract_states_the_rule(self):
         h = persona.build_head(self.CARD, "private_1", "")
-        self.assertIn("人称", h)
-        self.assertIn("记得用「你」", h)
-        self.assertIn("心理活动要写足", h)
+        self.assertIn("人称对照", h)
+        self.assertIn("称呼与「你」", h)
+        self.assertIn("她的心思", h)
 
     def test_rule_repeated_at_the_end(self):
         """契约末尾要再强调——长上下文里开头的规则会被稀释。"""
@@ -2034,8 +2099,8 @@ class OffscreenTest(unittest.TestCase):
         head = persona.build_head({"name": "纱雾", "systemPrompt": "你是纱雾。"},
                                   "private_1", "")
         self.assertIn("你离开她视线的时候", head)
-        self.assertIn("不要替你动手", head)
-        self.assertIn("发现必须回到她身上", head)
+        self.assertIn("线索摆好，动作留给玩家", head)
+        self.assertIn("最后要落回她的反应", head)
 
     def test_offscreen_section_survives_no_intimate_variant(self):
         """亲密场景块被剔掉时，场外写法还得在（两个版本共用同一节）。"""
