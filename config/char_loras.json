@@ -1240,7 +1240,8 @@
         "silver",
         "silver-hd"
       ],
-      "wardrobe": "detached collar, off-shoulder dress, backless dress, backless outfit, white leotard, strapless leotard, detached sleeves, white sleeves, elbow gloves, white gloves, armor, jewelry"
+      "wardrobe": "detached collar, off-shoulder dress, backless dress, backless outfit, white leotard, strapless leotard, detached sleeves, white sleeves, elbow gloves, white gloves, armor, jewelry",
+      "also_in_pack": "anima\\鸣潮\\wuwa-all-anima-v2.safetensors"
     },
     {
       "key": "carlotta",
@@ -1519,6 +1520,114 @@
         "silver-hd"
       ],
       "wardrobe": "blue and black outfit, sleeveless top, black and blue dress, open jacket, black skirt, short skirt, blue patterned skirt, layered skirt, high slit skirt, long sleeves, belt with chain, red gem belt, blue sash, feathered accessories black boots, high boots"
+    },
+    {
+      "key": "cantarella",
+      "name": "坎特蕾拉",
+      "category": "鸣潮",
+      "file": "anima\\鸣潮\\wuwa-all-anima-v2.safetensors",
+      "trigger": "cantarella (wuthering waves)",
+      "identity": "1girl, purple hair, very long hair, hair between eyes, blue eyes, facial mark, mark under eye white dress, side slit, earrings, single thighhigh, white thighhighs",
+      "wardrobe": "wuthering waves, headdress, jewelry",
+      "strength": 0.8,
+      "aliases": [
+        "cantarella",
+        "坎特蕾拉",
+        "cantarella (wuthering waves)"
+      ],
+      "channels": [
+        "anima_clear",
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ],
+      "source": "wuwa-all-anima-v2"
+    },
+    {
+      "key": "verina",
+      "name": "维里奈",
+      "category": "鸣潮",
+      "file": "anima\\鸣潮\\wuwa-all-anima-v2.safetensors",
+      "trigger": "verina (wuthering waves)",
+      "identity": "1girl, blonde hair, very long hair, twintails, short bangs, green eyes, hanfu, bare shoulders, green hairband, hair ornament",
+      "wardrobe": "wuthering waves, tacet mark (wuthering waves) qixiong ruqun, chinese clothes, see-through clothes, shorts under dress, black choker, white fingerless gloves",
+      "strength": 0.8,
+      "aliases": [
+        "verina",
+        "维里奈",
+        "verina (wuthering waves)"
+      ],
+      "channels": [
+        "anima_clear",
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ],
+      "source": "wuwa-all-anima-v2"
+    },
+    {
+      "key": "mornye",
+      "name": "莫宁",
+      "category": "鸣潮",
+      "file": "anima\\鸣潮\\wuwa-all-anima-v2.safetensors",
+      "trigger": "mornye (wuthering waves)",
+      "identity": "1girl, very long hair, hair intakes, hair over one eye, red eyes, colored eyelashes, halo, see-through body",
+      "wardrobe": "wuthering waves, transparent legs purple dress, gradient dress, gradient clothes, white jacket, id card",
+      "strength": 0.8,
+      "aliases": [
+        "mornye",
+        "莫宁",
+        "mornye (wuthering waves)"
+      ],
+      "channels": [
+        "anima_clear",
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ],
+      "source": "wuwa-all-anima-v2"
+    },
+    {
+      "key": "hsin",
+      "name": "心月狐",
+      "category": "鸣潮",
+      "file": "anima\\鸣潮\\wuwa-all-anima-v2.safetensors",
+      "trigger": "hsin (wuthering waves)",
+      "identity": "1girl, white hair, long hair, orange eyes, fox ears, fox girl, animal ears, chest tattoo, forehead tattoo, tattoo, long fingernails, mature female bare shoulders, hair ornament",
+      "wardrobe": "wuthering waves",
+      "strength": 0.8,
+      "aliases": [
+        "hsin",
+        "心月狐",
+        "hsin (wuthering waves)"
+      ],
+      "channels": [
+        "anima_clear",
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ],
+      "source": "wuwa-all-anima-v2"
     }
   ]
 }
