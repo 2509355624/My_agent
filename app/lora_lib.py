@@ -122,8 +122,31 @@ def _load():
         return False
 
 
+def _token_hit(c, text):
+    """这条角色的名字/触发词/别名，有没有**原样**出现在 prompt 里。
+
+    只用于**召回加权**（2026-11-06 修）：bge-small-zh 是中文模型，
+    `robin_(honkai:_star_rail), honkai:_star_rail, ...` 这种 danbooru tag
+    在它眼里和「罗宾」不沾边——实测 top-5 里根本没有 robin，最像的是
+    rossi / hysilens / rin。于是候选里没有正确角色，大模型只能 skip，
+    LoRA 没挂上，画出来就是模型自己想象的「知更鸟」。
+
+    加权之后候选里一定包含它；**判定仍然交给大模型**，这里只负责别漏人。
+    """
+    low = text.lower()
+    for k in (c.get("key"), c.get("trigger")):
+        k = str(k or "").strip().lower()
+        if k and len(k) >= 3 and k in low:
+            return True
+    for a in (c.get("aliases") or []):
+        a = str(a or "").strip().lower()
+        if a and len(a) >= 3 and a in low:
+            return True
+    return False
+
+
 def search(text, k=TOP_K):
-    """向量召回。返回 [{"key","name","score"}]，按余弦降序。"""
+    """向量召回 + 名字原样命中的加权。返回 [{"key","name","score"}]。"""
     import numpy as np
     with _LOCK:
         if not _load():
@@ -139,9 +162,16 @@ def search(text, k=TOP_K):
         return []
     q = q / (np.linalg.norm(q) + 1e-9)
     m = mat / (np.linalg.norm(mat, axis=1, keepdims=True) + 1e-9)
-    sims = m @ q
-    order = np.argsort(-sims)[:max(1, int(k))]
+    sims = (m @ q).astype(float)
+
     by_key = {str(c.get("key")): c for c in entries()}
+    BOOST = 0.45
+    for i, key in enumerate(keys):
+        c = by_key.get(key)
+        if c and _token_hit(c, t):
+            sims[i] = float(sims[i]) + BOOST
+
+    order = np.argsort(-sims)[:max(1, int(k))]
     out = []
     for i in order:
         s = float(sims[i])
@@ -170,6 +200,8 @@ JUDGE_SYS = """你在做一件很小的事：判断用户这句话里**有没有
 
 命中要件（三条同时成立）：
 1. 用户说了角色的名字（中文名、英文名、或明显的同义写法都算）；
+   **英文 danbooru 形式的 tag 也算**——`robin_(honkai:_star_rail)`、
+   `hutao_(genshin_impact)` 这种就是在点名角色，括号里是出处。
 2. 这个名字对应下面候选里的某一个；
 3. 用户是在**要求画这个角色**，不是在聊别的。
 
