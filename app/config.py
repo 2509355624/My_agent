@@ -18,20 +18,53 @@ ROOT_DIR = BASE_DIR
 # 实测跑一次全量测试就把 state/qq_names.json 又覆盖成夹具内容、往
 # state/image_log.jsonl 灌了一行 "a cat" 假记录（累计已 80 行）。
 #
-# 判据与 app/usage.py 一致：unittest / pytest 驱动进程时一定会 import 同名顶层
-# 模块，而生产进程（main.py / qq_bot.py）不会。测试里**显式** patch 模块的
-# PATH 仍然优先——调用点读的始终是模块属性，不经过这里。
+# 测试隔离：原先与 app/usage.py 一样靠 sys.modules 判定，2026-11-06 起改成
+# 只认进程入口（见 _is_test_process）。测试里**显式** patch 模块的 PATH 仍然
+# 优先——调用点读的始终是模块属性，不经过这里。
 _TEST_STATE_DIR = None
+
+
+def _is_test_process():
+    """是不是「测试 runner 拉起来」的进程。
+
+    2026-11-06 修：原判据直接看 `sys.modules` 里有没有 unittest / pytest，
+    看着省事，生产进程却会中招——实测 `import matplotlib` 就会把 unittest
+    带进 sys.modules。QQ 机器人运行途中一旦加载了这类库，之后**懒加载**的
+    模块（image_review 的 PATH / REVIEW_DIR 是模块 import 那一刻算的）就把
+    state 写进临时目录，网页端读的却是 <BASE_DIR>/state —— 两边对不上，
+    人工二审列表凭空少了当晚所有被拦的图，图本身还在临时目录里。
+
+    改成只认**进程入口**：由 unittest / pytest 驱动时才隔离；运行时谁顺手
+    import 了 unittest 都不影响。临时脚本要强制隔离，显式设
+    AGENT_STATE_TEST=1。
+    """
+    if os.environ.get("AGENT_STATE_TEST") == "1":
+        return True
+    if not ("unittest" in sys.modules or "pytest" in sys.modules):
+        return False
+    main = sys.modules.get("__main__")
+    main_file = (getattr(main, "__file__", "") or "").replace("\\", "/").lower()
+    argv0 = (sys.argv[0] if sys.argv else "").replace("\\", "/").lower()
+    # 只看「-m 后面那个模块名」，别把整条命令行拼进来：业务参数、甚至 -c
+    # 脚本正文里出现 unittest 字样都不代表这是测试进程。
+    orig = list(getattr(sys, "orig_argv", None) or [])
+    m_module = ""
+    for i, arg in enumerate(orig[:-1]):
+        if arg == "-m":
+            m_module = orig[i + 1]
+            break
+    hay = " ".join((main_file, argv0, m_module)).lower()
+    return "unittest" in hay or "pytest" in hay
 
 
 def state_path(filename):
     """state/ 下某个文件的路径。
 
-    测试进程一律导向临时目录（同一个进程内固定不变，好让多个测试共享一份）；
-    生产进程恒为 <BASE_DIR>/state/<filename>。
+    测试 runner 进程一律导向临时目录（同一个进程内固定不变，好让多个测试共享
+    一份）；生产进程恒为 <BASE_DIR>/state/<filename>。
     """
     global _TEST_STATE_DIR
-    if "unittest" in sys.modules or "pytest" in sys.modules:
+    if _is_test_process():
         if _TEST_STATE_DIR is None:
             _TEST_STATE_DIR = tempfile.mkdtemp(prefix="agent_state_test_")
         return os.path.join(_TEST_STATE_DIR, filename)
