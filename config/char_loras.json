@@ -1,10 +1,11 @@
 {
-  "_doc": "anima-line 角色 LoRA 库（2026-11-04）。prompt 里命中任一 alias（不区分大小写）→ 自动把 file 挂进工作流链头（LoraLoaderModelOnly，strength_model=strength），trigger 追加进正向提示词。file 相对 ComfyUI loras 目录（extra_model_paths.yaml 全部 loras 项 + COMFYUI_ROOT/models/loras），文件缺失时跳过装填只记日志。顺序即优先级：同时命中多个取第一个。注意只收 Anima 架构的 LoRA（键名 lora_unet_blocks_*）；SDXL/CLIP 键名（lora_te_text_model_encoder_*）挂上无效——本机 elaina_v3 就是这种，别入库。",
+  "_doc": "角色库（2026-11-06 规范化）：file 相对 ComfyUI loras 目录；trigger/identity 取自 lora 同名的 .txt；channels 是允许挂载的渠道。检索由角色库 AI 走向量召回 + 大模型判定，不做别名硬匹配。",
   "characters": [
     {
-      "key": "sunna",
+      "key": "chinatsu",
       "name": "绝区零·千夏",
-      "file": "anima\\sunna-anima_20260216_2230.safetensors",
+      "category": "zzz",
+      "file": "anima\\zzz-chinatsu.safetensors",
       "trigger": "sunnazzz",
       "identity": "(green hair:1.2), grey hair, side ponytail, hair over one eye, asymmetrical bangs, (green eyes:1.2), halo, hair ornament, earrings, white collared shirt, puffy short sleeves, red necktie, black choker, black frilled layered miniskirt, single white thighhigh, single striped loose sock, mismatched legwear, pink shoes",
       "strength": 0.8,
@@ -13,9 +14,1391 @@
         "sunna",
         "千夏",
         "绝区零千夏",
-        "aod"
+        "aod",
+        "chinatsu"
       ],
-      "_note": "千夏（Sunna），绝区零 2.6 S级支援代理人、妄想天使作曲担当，官方皮肤「午后茶歇」是猫耳小女仆。角色身份只认 Sunna 这一种写法，别名不再收 chinatsu 等拼法。本机自训版（触发词 sunnazzz，训练集 227 组）。备选：Sunna-Zenless_anima-base1_v1-1.safetensors（civitai，头里无触发词）、sgb-anima-zzz-sunna-v1.safetensors（触发词 snn4）。c_sunna_*(afternoon_tea_break)_ilv1.0-xl 是 SDXL 架构，不可用于 anima13。"
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "citlali",
+      "name": "茜特菈莉",
+      "category": "原神",
+      "file": "anima\\原神\\genshin-citlali.safetensors",
+      "trigger": "茜特菈莉",
+      "identity": "GI, Cithara 1girl, solo pink hair, long straight pink hair，gradient hair, ahoge, hair intakes, drill sidelocks, blue eyes, blue pupils, multicolored eyes, tassel hair ornament, ribbon small breasts, bare shoulders, clothing cutout, sideboob, waist cape, side slit, purple sash, jewelry, bracelet, armlet, bangle, headgear, facial mark, black shirt, sleeveless shirt, detached sleeves, single elbow glove, single fingerless glove, black leotard, leotard under clothes, blue skirt, long skirt purple nails, toenail polish black footwear, high heels, strappy heels, cross-laced footwear, sandals 茜特菈莉皮肤 GI，Citlali Obsidian Opalstar pink hair, low twintails, hair rings blue eyes, purple eyes, multicolored eyes hair ornament, hairclip, bow, jewelry, facial mark, white sleep mask 1girl, solo, small breasts, bare shoulders white dress, purple dress, off-shoulder dress, backless dress, frilled dress, detached sleeves white choker, frilled choker, white gloves, fingerless gloves purple ribbon, purple bow, footwear bow white socks, purple socks,asymmetrical legwear white footwear, purple footwear, boots",
+      "strength": 0.8,
+      "aliases": [
+        "茜特菈莉",
+        "citlali"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "columbina",
+      "name": "哥伦比亚",
+      "category": "原神",
+      "file": "anima\\原神\\genshin-columbina.safetensors",
+      "trigger": "Columbina",
+      "identity": "1girl, solo purple hair, colored inner hair, blunt bangs, sidelocks, hair flaps, wing hair ornament, butterfly hair ornament, x hair ornament, ribbon purple eyes, bare shoulders, bare legs, jewelry, ankle lace-up white dress, off-shoulder dress, long sleeves, wide sleeves, detached sleeves, sleeves past wrists head wings, wings, barefoot sandals (jewelry)",
+      "strength": 0.8,
+      "aliases": [
+        "Columbina",
+        "哥伦比亚"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "escoffier",
+      "name": "爱可菲",
+      "category": "原神",
+      "file": "anima\\原神\\genshin-escoffier.safetensors",
+      "trigger": "Escoffier",
+      "identity": "1girl, solo blonde hair, curly hair, ahoge, star hair ornament, hairclip blue eyes, symbol-shaped pupils medium breasts, cleavage, bare shoulders, sideboob, clothing cutout,  detached collar, wrist cuffs white dress, frills, double-breasted, back bow, red skirt, vertical-striped clothes, gold trim, short sleeves white thighhighs, vertical-striped thighhighs, garter straps chef hat black footwear, white footwear, high heels",
+      "strength": 0.8,
+      "aliases": [
+        "Escoffier",
+        "爱可菲"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "furina",
+      "name": "芙宁娜",
+      "category": "原神",
+      "file": "anima\\原神\\genshin-furina.safetensors",
+      "trigger": "白芙",
+      "identity": "GI，Furina-Ousia 1girl, solo light blue hair, two-tone hair, streaked hair, ahoge, hair between eyes, low twintails blue eyes，drop-shaped pupils thigh strap, blue gemstone, blue ascot, blue bow, hat bow blue jacket, long sleeves, white shorts, white gloves, black gloves, asymmetrical gloves white socks, frilled socks top hat black footwear, high heels 黑芙 GI，Furina-Pneuma 1girl, solo light blue hair, two-tone hair, streaked hair, short hair，ahoge blue eyes, drop-shaped pupils thigh strap, ankle garter, blue gemstone, blue ascot, blue bow, hat bow, footwear bow blue jacket, long sleeves, black shirt, black shorts white gloves, black gloves, asymmetrical gloves white socks, frilled socks blue headwear, top hat black footwear, high heels",
+      "strength": 0.8,
+      "aliases": [
+        "白芙",
+        "furina",
+        "芙宁娜"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "hutao",
+      "name": "胡桃",
+      "category": "原神",
+      "file": "anima\\原神\\genshin-hutao.safetensors",
+      "trigger": "胡桃",
+      "identity": "GI，Hu Tao 1girl, solo brown hair, twintails, sidelocks, hair between eyes red eyes, flower-shaped pupils jewelry, ring, black nails, red flower, plum blossoms, hat ornament, hat flower, hat tassel brown coat, coat, coattails, wide sleeves, red shirt, black shorts, black headwear white socks, kneehighs black footwear 胡桃皮肤 GI，Hu Tao-Cherries Snow-Laden 1girl, solo brown hair, twintails, low twintails, sidelocks, hair between eyes, hair rings red eyes, flower-shaped pupils jewelry, ring,  red nails, flower, hair ornament,  tinted eyewear, red-tinted eyewear, eyewear on head, black scarf, cape, zettai ryouiki white dress, red dress, pleated dress, puffy long sleeves, white sleeves, red sleeves, white headwear, beret black thighhighs, white footwear, red footwear, two-tone footwear, ankle boots, high heels",
+      "strength": 0.8,
+      "aliases": [
+        "胡桃",
+        "hutao"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "kokomi",
+      "name": "珊瑚宫心海",
+      "category": "原神",
+      "file": "anima\\原神\\genshin-kokomi.safetensors",
+      "trigger": "Sangonomiya Kokomi",
+      "identity": "1girl, solo pink hair,  ponytail, sidelocks, blunt bangs, bow-shaped hair, hair ornament, tassel purple eyes choker, bowtie, bow, navel japanese clothes, wide sleeves, frilled sleeves, detached sleeves, frills, short shorts, white shorts white gloves, half gloves white thighhighs sandals",
+      "strength": 0.8,
+      "aliases": [
+        "Sangonomiya Kokomi",
+        "kokomi",
+        "珊瑚宫心海"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "linaya",
+      "name": "莉奈娅",
+      "category": "原神",
+      "file": "anima\\原神\\genshin-linaya.safetensors",
+      "trigger": "Linaya",
+      "identity": "1girl, solo pink hair, sidelocks, hair between eyes, hair ornament pink eyes, pointy ears, wing hair ornament medium breasts, bare shoulders, bare legs, detached collar red dress,  detached sleeves, white coat, tailcoat, open clothes, short necktie backpack, red bag，book red socks black footwear, ankle boots, high heel boots",
+      "strength": 0.8,
+      "aliases": [
+        "Linaya",
+        "莉奈娅"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "mizuki",
+      "name": "梦见月瑞希",
+      "category": "原神",
+      "file": "anima\\原神\\genshin-mizuki.safetensors",
+      "trigger": "Yumemizuki Mizuki",
+      "identity": "1girl, solo light blue hair, sidelocks, hair rings, tassel hair ornament, purple bow, back bow, flower knot purple eyes, symbol-shaped pupils, pointy ears, single earring medium breasts, bare shoulders, thigh strap, baku tail purple kimono, japanese clothes, wide sleeves, detached sleeves, purple sleeves, frills, obi, sash, tassel, white apron, frilled apron, waist apron, maid headdress, neck bell, white socks, tabi okobo, platform footwear, black footwear, sandals",
+      "strength": 0.8,
+      "aliases": [
+        "Yumemizuki Mizuki",
+        "mizuki",
+        "梦见月瑞希"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "nahida",
+      "name": "纳西妲",
+      "category": "原神",
+      "file": "anima\\原神\\genshin-nahida.safetensors",
+      "trigger": "Nahida",
+      "identity": "1girl, solo white hair, multicolored hair, sidelocks, side ponytail, crown braid, leaf hair ornament green eyes, symbol-shaped pupils, pointy ears white dress, sleeveless dress, detached sleeves, green sleeves, green cape, bracelet, jewelry underwear, stirrup legwear, toeless legwear white footwear, toeless footwear",
+      "strength": 0.8,
+      "aliases": [
+        "Nahida",
+        "纳西妲"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "nico",
+      "name": "尼可",
+      "category": "原神",
+      "file": "anima\\原神\\genshin-nico.safetensors",
+      "trigger": "Nico",
+      "identity": "1girl, solo long hair, blonde hair, braid, parted bangs, hair ornament, hair bow blue eyes,  pointy ears, forehead jewel, medium breasts, bare shoulders white dress, frilled dress, backless dress,  blue dress, side slit, detached sleeves, white sleeves, frilled sleeves beret, white headwear, purple headwear, bow white pantyhose white footwear, ankle boots",
+      "strength": 0.8,
+      "aliases": [
+        "Nico",
+        "尼可"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "odette",
+      "name": "奥黛塔",
+      "category": "原神",
+      "file": "anima\\原神\\genshin-odette.safetensors",
+      "trigger": "Odette",
+      "identity": "light blue hair, updo, braided hair, spiral hair, purple eyes, tiara, floral headpiece, horned headpiece, star hairpin white blue layered dress, purple accents, corset, frilly skirt, winged shoulder sleeves, purple gloves, heart crystal ornaments high heels",
+      "strength": 0.8,
+      "aliases": [
+        "Odette",
+        "奥黛塔"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "ronova",
+      "name": "若娜瓦",
+      "category": "原神",
+      "file": "anima\\原神\\genshin-ronova.safetensors",
+      "trigger": "Ronova",
+      "identity": "long white hair, golden eyes, red hair ornament, red horn‑like ear accessories black outfit, red trim, armored outfit, silver armor, black collar, black gloves black pantyhose black high heels",
+      "strength": 0.8,
+      "aliases": [
+        "Ronova",
+        "若娜瓦"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "sandrone",
+      "name": "桑多涅",
+      "category": "原神",
+      "file": "anima\\原神\\genshin-sandrone.safetensors",
+      "trigger": "Sandrone",
+      "identity": "brown hair, sidelocks, braid, hair bun, low twintails blue eyes red ribbon, red bow, footwear bow, back bow, maid headdress, bonnet 1girl, solo, small breasts, cleavage, bare shoulders, bare back white dress, strapless dress, backless dress, two-tone dress, apron, detached collar, frills, detached sleeves, black sleeves,  maid white gloves, white thighhighs black footwear, high heels",
+      "strength": 0.8,
+      "aliases": [
+        "Sandrone",
+        "桑多涅"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "yae-miko",
+      "name": "八重神子",
+      "category": "原神",
+      "file": "anima\\原神\\genshin-yae-miko.safetensors",
+      "trigger": "Yae Miko",
+      "identity": "1girl, solo pink hair, sidelocks, hair between eyes, low-tied long hair, hair ornament, bow purple eyes fox ears, floppy ears medium breasts, bare shoulders, sideboob, bare legs nontraditional miko, japanese clothes, white shirt,  detached sleeves, wide sleeves, ribbon-trimmed sleeves, ribbon trim, red skirt, hakama, sash, obi, floral print, turtleneck, backless outfit, back bow jewelry, earrings, anklet, pink nails, tassel sandals, high heels",
+      "strength": 0.8,
+      "aliases": [
+        "Yae Miko",
+        "yae-miko",
+        "八重神子"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "chiz",
+      "name": "小吱",
+      "category": "异环",
+      "file": "anima\\异环\\nte-chiz.safetensors",
+      "trigger": "Chiz",
+      "identity": "pink hair, ahoge, hair bun, double bun, pink eyes, hair ornament, x hair ornament, hairclip, hair rings, pink bow, white headwear, beret, mechanical halo 1girl, solo, medium breasts, cleavage, bare shoulders, detached collar, short sleeves, white gloves, pleated skirt, pink skirt, frilled skirt, backless outfit, buttons, double-breasted, black bowtie, bandaged, pink nails, cross print, id card, broken heart, backpack, detached wings thigh strap, garter straps white thighhighs, socks white footwear, platform boots",
+      "strength": 0.8,
+      "aliases": [
+        "Chiz",
+        "小吱"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "elyms",
+      "name": "曳尔沐",
+      "category": "异环",
+      "file": "anima\\异环\\nte-elyms.safetensors",
+      "trigger": "Elyms",
+      "identity": "1girl, solo blue eyes, long flowing silver‑blue hair, large blue bow futuristic white‑and‑blue outfit, off‑shoulder outfit, zipper‑front jacket, waist bow, black gloves thigh‑high high‑heeled boots, glowing blue boot trim 腿部渐变 gradient thigh‑high stockings",
+      "strength": 0.8,
+      "aliases": [
+        "Elyms",
+        "曳尔沐"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "lacrimosa",
+      "name": "安魂曲",
+      "category": "异环",
+      "file": "anima\\异环\\nte-lacrimosa.safetensors",
+      "trigger": "Lacrimosa",
+      "identity": "two-tone hair, streaked hair, ahoge, twintails, red eyes, x hair ornament, hair bow, hair ribbon, neck ribbon, heart hair ornament, heart facial mark 1girl, solo, breasts, jewelry, black choker, collared shirt, white shirt, puffy sleeves, open jacket, red jacket, hood, black skirt, pleated skirt, frilled skirt, belt, black bowtie, badge, multicolored nails, demon tail, black pantyhose, platform boots, ankle boots",
+      "strength": 0.8,
+      "aliases": [
+        "Lacrimosa",
+        "安魂曲"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "nanally",
+      "name": "娜娜莉",
+      "category": "异环",
+      "file": "anima\\异环\\nte-nanally.safetensors",
+      "trigger": "Nanally",
+      "identity": "red hair, ahoge, blunt bangs, red eyes, x hair ornament, black bow, hair bow, cat ears, black-framed eyewear, round eyewear 1girl, solo, breasts, jewelry, black choker, collared shirt, puffy long sleeves, open jacket, red skirt, pleated skirt, black belt, belt buckle,  black necktie, red nails, badge, stuffed toy cat tail, white socks, kneehighs black footwear, platform footwear",
+      "strength": 0.8,
+      "aliases": [
+        "Nanally",
+        "娜娜莉"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "nitsa",
+      "name": "妮夏",
+      "category": "异环",
+      "file": "anima\\异环\\nte-nitsa.safetensors",
+      "trigger": "Nitsa",
+      "identity": "long blue hair, glowing blue hair, twin tails, purple eyes, white veil, starry veil, glowing horns white dress, layered dress, frilly skirt, off‑shoulder, choker, chain accessories, leather straps ankle straps, ankle cuffs barefoot",
+      "strength": 0.8,
+      "aliases": [
+        "Nitsa",
+        "妮夏"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "perset",
+      "name": "珀塞特",
+      "category": "异环",
+      "file": "anima\\异环\\nte-perset.safetensors",
+      "trigger": "Perset",
+      "identity": "silver hair, braided hair, red hood, fox ears, yellow eyes, green eyes, red ribbon red coat, red and white outfit, black skirt, white blouse, red gloves, red cross emblem, red poinsettia flower, black suspenders white thigh‑high socks black boots, white thigh‑high boots",
+      "strength": 0.8,
+      "aliases": [
+        "Perset",
+        "珀塞特"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "castorice",
+      "name": "遐蝶",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-castorice.safetensors",
+      "trigger": "Castorice",
+      "identity": "purple hair, colored inner hair, twintails, braid, hair flower, butterfly hair ornament, hair bow, hair ribbon, crown, purple eyes, pointy ears, earrings 1girl, solo, medium breasts, cleavage, bare shoulders, bare back, strapless dress, frilled dress, purple dress, detached collar, detached sleeves, purple sleeves, frills, clothing cutout, bandaged arm, elbow gloves, mismatched gloves, white thighhighs, white thighhighs, gradient legwear, white pantyhose high heel boots, high heels",
+      "strength": 0.8,
+      "aliases": [
+        "Castorice",
+        "遐蝶"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "castorice-dreamy",
+      "name": "遐蝶·梦蝶皮肤",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-castorice-dreamy.safetensors",
+      "trigger": "Castorice-Dreamy Flutter",
+      "identity": "purple hair, twintails, braid, purple flower, butterfly hair ornament, hair bow, pointy ears, earrings, purple eyes, 1girl, solo, medium breasts, cleavage, sideboob, bare shoulders, bare back, strapless dress, layered dress, frilled dress,  detached collar, detached sleeves, long sleeves,  purple sleeves, white skirt, jewelry, bare legs purple footwear, high heels",
+      "strength": 0.8,
+      "aliases": [
+        "Castorice-Dreamy Flutter",
+        "castorice-dreamy",
+        "遐蝶·梦蝶皮肤"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "cerydra",
+      "name": "刻律德菈",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-cerydra.safetensors",
+      "trigger": "Cerydra",
+      "identity": "light blue hair, crown braid, sidelocks, lack bow, mini crown, blue eyes, symbol-shaped pupils, blue gemstone, wings 1girl, solo, small breasts, bare shoulders, asymmetrical clothes, blue dress, back cutout, frilled dress, detached sleeves, mismatched sleeves,  bowtie, gold trim, coattails, jewelry, thigh strap, black thighhighs, frilled socks, single sock, asymmetrical legwear black footwear, high heels",
+      "strength": 0.8,
+      "aliases": [
+        "Cerydra",
+        "刻律德菈"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "clara",
+      "name": "克拉拉",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-clara.safetensors",
+      "trigger": "Clara",
+      "identity": "white hair, grey hair, sidelocks, pink eyes, 1girl, solo, long sleeves, red coat, open coat, brown sweater, detached collar, white collar, white dress, thigh strap, pom pom bare legs, barefoot, toes",
+      "strength": 0.8,
+      "aliases": [
+        "Clara",
+        "克拉拉"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "cyrene",
+      "name": "昔涟",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-cyrene.safetensors",
+      "trigger": "Cyrene",
+      "identity": "pink hair, colored tips, braid, white flower, pointy ears, pink eyes, pink pupils, earrings, bracelet, crystal, 1girl, solo, medium breasts, off-shoulder dress, white sleeves, white dress, two-sided dress, starry sky print, jewelry bare legs white footwear, high heels",
+      "strength": 0.8,
+      "aliases": [
+        "Cyrene",
+        "昔涟"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "evanescia",
+      "name": "绯英",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-evanescia.safetensors",
+      "trigger": "Evanescia",
+      "identity": "pink hair, braid, hair up, hair flower, hair bow, red bow, bowtie, ribbon, fox ears, purple eyes, alternate eye color, 1girl, solo, breasts, long sleeves, asymmetrical sleeves, white sleeves, white jacket, white kimono, pleated skirt, black skirt, thigh strap, black gloves, white gloves, fingerless gloves, mismatched gloves, thigh strap, grey pantyhose, pantyhose black footwear,high heel boots",
+      "strength": 0.8,
+      "aliases": [
+        "Evanescia",
+        "绯英"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "firefly",
+      "name": "流萤",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-firefly.safetensors",
+      "trigger": "流萤",
+      "identity": "SR，Firefly grey hair, sidelocks, black hairband, hair bow, butterfly hair ornament,  multicolored eyes, two-tone eyes, gradient eyes, 1girl, solo, small breasts, collared shirt, black jacket，white shirt, yellow neckerchief, cropped jacket, frilled sleeves, layered sleeves, short dress, gradient dress, pleated skirt, green skirt, frills, gold trim, tattoo, zettai ryouiki, thighhighs, green thighhighs, gradient legwear high heel boots, high heels, footwear bow 流萤皮肤 SR，Firefly-Spring Missive grey hair, sidelocks, black hairband, butterfly hair ornament, multicolored eyes, two-tone eyes, gradient eyes, 1girl, solo, medium breasts, serafuku, grey sailor collar, white shirt, long sleeves, double-breasted, white jacket, green bowtie, neckerchief, belt, buttons, pleated skirt, grey skirt, plaid skirt, zettai ryouiki, white thighhighs loafers",
+      "strength": 0.8,
+      "aliases": [
+        "流萤",
+        "firefly"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "fuxuan",
+      "name": "符玄",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-fuxuan.safetensors",
+      "trigger": "Fu Xuan",
+      "identity": "pink hair, low twintails, bow-shaped hair, parted bangs, hair stick, tassel hair ornament, crescent hair accessory, forehead jewel, pink eyes, tassel earrings, purple gemstone 1girl, solo, small breasts, bare shoulders, backless dress, clothing cutout, detached sleeves, short sleeves, white skirt, constellation print, cloud print, jewelry, tassel, rope white pantyhose black footwear, high heels, boots",
+      "strength": 0.8,
+      "aliases": [
+        "Fu Xuan",
+        "fuxuan",
+        "符玄"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "herta",
+      "name": "黑塔",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-herta.safetensors",
+      "trigger": "小黑塔",
+      "identity": "SR，Herta-Automaton grey hair, sidelocks, purple eyes, black beret, black headwear, black bow, ribbon, hat flower, doll joints, 1girl, solo, small breasts, bare shoulders, long sleeves, shoulder cutout, white dress, purple choker, key necklace, chain, key, lock, purple nails high heels, ankle boots, footwear bow 大黑塔 SR，Herta-Original grey hair, braid, low-tied long hair, purple eyes, witch hat, purple headwear, large hat, hair bow, ribbon, purple flower, hat flower, necklace, choker 1girl, solo, small breasts, bare shoulders, strapless dress, frilled dress,  detached sleeves, detached collar, white skirt, pleated skirt, thigh strap, grey pantyhose high heels, high heel boots, knee boots",
+      "strength": 0.8,
+      "aliases": [
+        "小黑塔",
+        "herta",
+        "黑塔"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "huohuo",
+      "name": "藿藿",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-huohuo.safetensors",
+      "trigger": "Huohuo",
+      "identity": "green hair, ahoge, green eyes, fox ears, green tail, ghost tail black headwear, hat, hair ornament, tassel, talisman, yin yang 1girl, solo, long sleeves, coat, brown shorts, bare shoulders, white socks, loose socks，leg warmers black footwear",
+      "strength": 0.8,
+      "aliases": [
+        "Huohuo",
+        "藿藿"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "hyacine",
+      "name": "风堇",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-hyacine.safetensors",
+      "trigger": "Hyacine",
+      "identity": "twin drills, pink hair, multicolored hair, green eyes, symbol-shaped pupils red headwear, beret, hat feather, white bow, bowtie, aqua ribbon, hair bobbles, pom pom (clothes) 1girl, solo, puffy long sleeves, detached sleeves, red dress, red capelet white pantyhose black footwear, footwear bow, ankle bow",
+      "strength": 0.8,
+      "aliases": [
+        "Hyacine",
+        "风堇"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "hysilens",
+      "name": "海瑟音",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-hysilens.safetensors",
+      "trigger": "Hysilens",
+      "identity": "black hair, colored inner hair, blunt bangs, blue eyes, hair ornament, x hair ornament, jewelry, earrings, crown 1girl, solo, medium breasts，see-through sleeves, blue dress, white dress, multicolored dress, short dress, cleavage, shrug (clothing), asymmetrical gloves, half gloves, black gloves, red gloves black thighhighs, gradient legwear, torn thighhighs, zettai ryouiki ankle boots",
+      "strength": 0.8,
+      "aliases": [
+        "Hysilens",
+        "海瑟音"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "march7",
+      "name": "三月七",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-march7.safetensors",
+      "trigger": "三月七",
+      "identity": "SR，March 7th 1girl, solo, medium breasts pink hair,blue eyes, pink eyes, two-tone eyes black choker, single earring, flower ornament, jewelry, long sleeves, white shirt, blue jacket, black corset, pleated skirt, blue skirt, black gloves, single glove, partially fingerless gloves，camera thigh strap, bare legs black footwear, high heels, ankle boots, 三月七皮肤 SR，March 7th-Nascent Spring pink hair, blue eyes, pink eyes, two-tone eyes, tiara, bow, 1girl, solo, medium breasts, cleavage, sideboob, jewelry, choker, off-shoulder dress, strapless dress, sleeveless dress, detached sleeves, blue dress, purple dress, multicolored dress, gradient dress, thigh strap, garter straps white thighhighs, zettai ryouiki purple footwear, high heels, pumps, strappy heels, ankle bow 巡猎三月七 SR，March 7th-The Hunt pink hair, braid, hair bun,  blue eyes, pink eyes, two-tone eyes, hair ornament, bow, red ribbon, hair rings, hair bell, earrings, single earring, 1girl, solo, medium breasts, jewelry, chinese clothes, red jacket, black corset, black shirt, red shirt, black dress, layered sleeves, white sleeves, red sleeves, white shorts, belt, fingerless gloves, thigh strap, asymmetrical legwear, garter straps white thighhighs, zettai ryouiki black footwear, high heels, ankle boots, fold-over boots 长夜月 SR，March 7th-Evernight pink hair, twintails, red eyes,  hair ornament, hair flower, hairclip, red flower, black flower, earrings, 1girl, solo, medium breasts, jewelry, single bare shoulder, clothing cutout, shoulder cutout, back cutout, asymmetrical clothes, asymmetrical sleeves,  white sleeves, black jacket, black dress, short dress, black gloves thigh strap black footwear, high heels, ankle boots",
+      "strength": 0.8,
+      "aliases": [
+        "三月七",
+        "march7"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "qingque",
+      "name": "青雀",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-qingque.safetensors",
+      "trigger": "Qingque",
+      "identity": "brown hair, low twintails, braid, green eyes, hair ornament, hairclip, bow, green bow, black ribbon, tassel 1girl, solo, small breasts, jewelry, bare shoulders, shoulder cutout, cleavage cutout, detached sleeves, layered clothes, turtleneck, green dress, off-shoulder dress, pleated skirt, white skirt, black sleeves, white socks black footwear, ankle boots",
+      "strength": 0.8,
+      "aliases": [
+        "Qingque",
+        "青雀"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "rin",
+      "name": "远坂凛",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-rin.safetensors",
+      "trigger": "Rin Tohsaka",
+      "identity": "1girl, black hair, long hair, cat ears, long black hair, blue eyes, detailed eyes red jacket, black outfit, gold trim, red and black color scheme, white skirt, red gem, black gloves, black top, heart necklace, diamond pendant, gold chain, gold belt, high collar thigh high socks, thigh-high stockings boots, white short boots，grey boots",
+      "strength": 0.8,
+      "aliases": [
+        "Rin Tohsaka",
+        "rin",
+        "远坂凛"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "robin",
+      "name": "知更鸟",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-robin.safetensors",
+      "trigger": "Robin",
+      "identity": "blue hair, ahoge, green eyes, crown braid, half updo, hair bun, flower, halo, head wings, earrings 1girl, solo, small breasts, jewelry, choker, bare shoulders, strapless dress, detached sleeves, detached collar, white gloves, white dress, purple dress purple footwear, high heels",
+      "strength": 0.8,
+      "aliases": [
+        "Robin",
+        "知更鸟"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "robin-serenade",
+      "name": "知更鸟·晴歌",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-robin-serenade.safetensors",
+      "trigger": "Robin Serenade",
+      "identity": "long blue hair, braided hair, flowing hair，light blue eyes，angel halo, star hairpin, headband, sunflower hair ornament, floral hair accessory，angel wings white and blue outfit, sleeveless top, bikini top, strap top, bare midriff flowing layered skirt, high slit skirt, star pattern fabric blue sash, floral waist belt, star pendant, choker, necklace white short gloves, star tattoo on waist, moderate bust high heels, heeled sandals, lace-up boots",
+      "strength": 0.8,
+      "aliases": [
+        "Robin Serenade",
+        "robin-serenade",
+        "知更鸟·晴歌"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "silverwolf",
+      "name": "银狼",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-silverwolf.safetensors",
+      "trigger": "Silver Wolf",
+      "identity": "grey hair, gradient hair, drill hair, high ponytail, grey eyes, hair ornament, hairclip, hairpin, purple ribbon, goggles on head, purple-tinted eyewear, earrings, 1girl, solo, small breasts, choker, jewelry, open jacket, cropped jacket, fur-trimmed jacket, fur trim, white shirt, crop top, black jacket, black shorts, belt, white belt, midriff, navel, fingerless gloves, bandaid, bra strap, badge, button badge thigh strap, bandaid on leg, bandaid on knee fishnet socks, fishnets black footwear, boots",
+      "strength": 0.8,
+      "aliases": [
+        "Silver Wolf",
+        "silverwolf",
+        "银狼"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "sparkle",
+      "name": "花火",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-sparkle.safetensors",
+      "trigger": "Sparkle",
+      "identity": "black hair, twintails, red eyes, hair ornament, bow, hair ribbon, jingle bell, neck bell, fox mask, mask on head,mole under each eye, 1girl, solo, medium breasts, cleavage, bare shoulders, halterneck, criss-cross halter, backless outfit, japanese clothes, red dress, detached sleeves, single glove, half gloves, black sash, obi, rope, shimenawa, chest tattoo, back tattoo, flower tattoo, multiple moles sandals, zouri",
+      "strength": 0.8,
+      "aliases": [
+        "Sparkle",
+        "花火"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "sparxie",
+      "name": "火花",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-sparxie.safetensors",
+      "trigger": "Sparxie",
+      "identity": "1girl, long white hair, braided hair, twin braids，twin ponytail, red ribbon, black top hat, rabbit ears hat, red eyes white dress，white frilled skirt, black belt, decorative bow, bow tie, black choker, chain necklace, white trim, single black gloves, armored sleeves，black and white checkered pattern, white socks black boots",
+      "strength": 0.8,
+      "aliases": [
+        "Sparxie",
+        "火花"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "sparxie-candy",
+      "name": "火花·糖果皮肤",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-sparxie-candy.safetensors",
+      "trigger": "Sparxie Candy Coated Waves",
+      "identity": "long silver white hair, twin tails, twin braids, red hair streaks, red hair clip, red heart sunglasses, red eyes, black choker, white ribbon bow, black off-shoulder top, cleavage，white inner shirt, black jacket, red plaid skirt, black belt, keychain accessory, newspaper accessory, small teddy bear pendant, white collar, X-shaped arm patch, black arm bands thigh high socks, fishnet socks, heart anklet black boots",
+      "strength": 0.8,
+      "aliases": [
+        "Sparxie Candy Coated Waves",
+        "sparxie-candy",
+        "火花·糖果皮肤"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "yaoguang",
+      "name": "爻光",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-yaoguang.safetensors",
+      "trigger": "Yaoguang",
+      "identity": "white hair,  hair between eyes, high ponytail, low-tied long hair, side ponytail blue eyes, purple eyes hair ornament, jewelry, single earring, bracelet, anklet 1girl, solo, medium breasts, breasts, sideboob, bare shoulders, collarbone, bare legs white dress, aqua dress, gradient dress, sleeveless dress, backless dress, chinese clothes, blue cape, white gloves,  back tattoo blue nails high heels,  white footwear, toeless footwear",
+      "strength": 0.8,
+      "aliases": [
+        "Yaoguang",
+        "爻光"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "yunli",
+      "name": "云璃",
+      "category": "星穹铁道",
+      "file": "anima\\星穹铁道\\hsr-yunli.safetensors",
+      "trigger": "Yunli",
+      "identity": "black hair, low twintails, ahoge, yellow eyes, hair ornament, crown, tiara, single earring 1girl, solo, small breasts, jewelry, bracelet, anklet, bare shoulders, clothing cutout, back cutout, skirt, o-ring, white short sleeves, thigh strap, bare legs barefoot",
+      "strength": 0.8,
+      "aliases": [
+        "Yunli",
+        "云璃"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "lino",
+      "name": "莉诺",
+      "category": "终末地",
+      "file": "anima\\终末地\\endfield-lino.safetensors",
+      "trigger": "Liino",
+      "identity": "long blonde hair, purple eyes, cat ears, purple bow, white hair clips, black headband, elf ears blue and white outfit, frilled skirt, white detached sleeves, black belt, black choker, purple dress, blue dress, black gloves, white gloves thigh‑high cutouts black thigh‑high stockings purple high heels",
+      "strength": 0.8,
+      "aliases": [
+        "Liino",
+        "lino",
+        "莉诺"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "perlica",
+      "name": "佩丽卡",
+      "category": "终末地",
+      "file": "anima\\终末地\\endfield-perlica.safetensors",
+      "trigger": "Perlica",
+      "identity": "brown hair, ahoge, hair bun, double bun, cone hair bun, blue eyes, yellow pupils, hairband, animal ears, animal ear fluff 1girl, solo, small breasts, jewelry, watch, wristwatch, bare shoulders, sleeveless dress, pleated dress, puffy sleeves, open jacket, white skirt,  pleated skirt, two-tone gloves, fingerless gloves, snap-fit buckle, belt pouch, black collar, ankle strap, ankleband thigh strap black pantyhose, black footwear, high heels",
+      "strength": 0.8,
+      "aliases": [
+        "Perlica",
+        "佩丽卡"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "rossi",
+      "name": "洛茜",
+      "category": "终末地",
+      "file": "anima\\终末地\\endfield-rossi.safetensors",
+      "trigger": "Rossi",
+      "identity": "1girl, solo blonde hair, sidelocks, blunt bangs, yellow eyes, diamond pupils wolf ears, wolf tail，animal ear fluff small breasts, corset, thigh strap, arm strap, lace trim, torn cloak white dress, red cape, red cloak, hooded capelet, red hood, black gloves, fingerless gloves, black shirt, belt white short socks black footwear, boots, platform footwear, geta",
+      "strength": 0.8,
+      "aliases": [
+        "Rossi",
+        "洛茜"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "si",
+      "name": "祀",
+      "category": "终末地",
+      "file": "anima\\终末地\\endfield-si.safetensors",
+      "trigger": "Si",
+      "identity": "light green long hair, straight bangs, twin ponytails bright blue eyes，elf pointed ears，twin black horns silver layered dress gold trim, yellow ribbons, yellow bead necklace, cross pendant, choker, geometric decorations shoulder pauldrons, black utility straps, utility belt, moderate bust dragon tail, thigh bands grey knee-high socks black heeled boots, black ankle boots，black low heel ankle leather boots",
+      "strength": 0.8,
+      "aliases": [
+        "Si",
+        "祀"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "aemeath",
+      "name": "爱弥斯",
+      "category": "鸣潮",
+      "file": "anima\\鸣潮\\wuthering-aemeath.safetensors",
+      "trigger": "Aemeath",
+      "identity": "long hair, pink hair, gradient hair, high ponytail, ahoge, sidelocks, hair between eyes, wing hair ornament, yellow eyes, symbol-shaped pupils, halo, heart 1girl, solo, medium breasts, cleavage, bare shoulders, detached collar, strapless, off-shoulder dress, backless dress, backless outfit, white leotard, strapless leotard, covered navel, detached sleeves, white sleeves, elbow gloves, white gloves, armor, jewelry, back bow thighlet, thighhighs, white thighhighs, single thighhigh, asymmetrical legwear high heel boots, single thigh boot, asymmetrical footwear",
+      "strength": 0.8,
+      "aliases": [
+        "Aemeath",
+        "爱弥斯"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "carlotta",
+      "name": "珂莱塔",
+      "category": "鸣潮",
+      "file": "anima\\鸣潮\\wuthering-carlotta.safetensors",
+      "trigger": "Carlotta",
+      "identity": "long hair, white hair, ahoge, sidelocks, parted bangs, grey eyes, hair ornament, striped bow, hair ribbon, hairband, flower, earrings, tiara 1girl, solo, medium breasts, sideboob, white dress, backless outfit, sideless outfit, cross-laced clothes, frills, pink jacket, black gloves, jewelry, bracelet, collar, ribbon, zipper, pink thighhighs,zettai ryouiki black high heel boots, looking at viewer",
+      "strength": 0.8,
+      "aliases": [
+        "Carlotta",
+        "珂莱塔"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "cartethyia",
+      "name": "卡提希娅",
+      "category": "鸣潮",
+      "file": "anima\\鸣潮\\wuthering-cartethyia.safetensors",
+      "trigger": "Cartethyia",
+      "identity": "long hair, blonde hair, twin braids, sidelocks, parted bangs, blue eyes, pointy ears, elf, earrings,  piercing, circlet, 1girl, solo, medium breasts, sideboob, bare shoulders, two-tone dress, short dress, backless dress, backless outfit, sideless outfit, clothing cutout, revealing clothes, bra, jewelry, bracelet, anklet sandals, white footwear, toeless footwear",
+      "strength": 0.8,
+      "aliases": [
+        "Cartethyia",
+        "卡提希娅"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "chisa",
+      "name": "千咲",
+      "category": "鸣潮",
+      "file": "anima\\鸣潮\\wuthering-chisa.safetensors",
+      "trigger": "千咲",
+      "identity": "WW，Chisa long hair, black hair, straight hair, blunt bangs, hime cut, red ribbon, red eyes, mole under eye, earrings 1girl, solo, medium breasts, black serafuku, white sailor collar, red neckerchief, black choker, cross-laced sleeves, miniskirt, open clothes, midriff peek, bandaid, id card, thigh strap, skindentation black socks loafers, black footwear, 千咲皮肤 WW，Chisa Peach Ice 1girl, black hair, long hair, ponytail, pigtails, straight hair, pink hair ribbon, pink floral hairpin, pink headband, white beret, red eyes pink and white outfit, pink frilly outfit, frilly skirt, pink skirt, short skirt, bikini top, pink checkered top, frilly top, off-shoulder, ruffled hem, white collar, red ribbon, white lace trim, pink bow, pink floral belt, floral belt, white belt pink thigh strap strappy heels, high heels, sandals",
+      "strength": 0.8,
+      "aliases": [
+        "千咲",
+        "chisa"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "daniya",
+      "name": "达妮娅",
+      "category": "鸣潮",
+      "file": "anima\\鸣潮\\wuthering-daniya.safetensors",
+      "trigger": "普通形态达妮娅",
+      "identity": "WW，Denia long hair, pink hair, colored inner hair, drill hair, ahoge, single side bun, wing hair ornament, black hairband, pink bow, black bow, hair ribbon, blue eyes, earrings 1girl, solo, medium breasts, cleavage, bare shoulders, white dress, wide sleeves, pink sleeves, sdetached sleeves, fur-trimmed sleeves, frills, pink jacket, black choker, collar, chain, jewelry, red gloves, ankle ribbon, ankle bow, footwear bow bare legs sandals, black footwear, 觉醒形态达妮娅 WW，Denia (Awakened) long hair, pink hair, colored inner hair, ahoge, braid, drill hair, drill sidelocks, one side up, single side bun, hair intakes, hair ornament, black hairband, black bow, black ribbon, purple eyes, earrings, halo 1girl, solo, medium breasts, cleavage, bare shoulders, blue dress, sleeveless dress, frilled dress, layered dress, frills, elbow gloves, purple gloves, jewelry, chest tattoo, thighhighs, gradient legwear, ankle ribbon black footwear, high heels",
+      "strength": 0.8,
+      "aliases": [
+        "普通形态达妮娅",
+        "daniya",
+        "达妮娅"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "jinhsi-peach",
+      "name": "今汐·桃花皮肤",
+      "category": "鸣潮",
+      "file": "anima\\鸣潮\\wuthering-jinhsi-peach.safetensors",
+      "trigger": "Jinhsi \\(Peach Blossom\\)",
+      "identity": "long hair, pink hair, white hair, gradient hair, colored tips, twintails, double bun, braided bun, braid, hair rings, hair flower, pink flower, pink eyes, earrings, 1girl, solo, bare shoulders, white dress, pink dress, gradient dress, strapless dress, backless dress, off-shoulder dress, detached sleeves, pink sleeves, see-through sleeves, gold trim, back bow, hair ribbon, necklace, tassel, jewelry, thigh strap, thighlet anklet high heels",
+      "strength": 0.8,
+      "aliases": [
+        "Jinhsi \\(Peach Blossom\\)",
+        "jinhsi-peach",
+        "今汐·桃花皮肤"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "linnai",
+      "name": "琳奈",
+      "category": "鸣潮",
+      "file": "anima\\鸣潮\\wuthering-linnai.safetensors",
+      "trigger": "琳奈",
+      "identity": "WW，Lynae long hair, blonde hair, colored tips, french braid, hair over one eye, black ribbon, blue eyes, earrings, 1girl, solo, medium breasts, cleavage, white shirt, pleated skirt, black skirt, miniskirt, high-waist skirt, long sleeves, sleeves rolled up, black belt, necklace, choker, bracelet, bangle, o-ring, harness, headphones around neck, badge, id card, white jacket, thigh strap kneehighs, black socks black footwear, high heels, colored shoe soles 琳奈皮肤 WW，Lynae Peppermint 1girl, long hair, blonde hair, twin ponytail, twin tails, blue flower hair accessory, white flower hairpin, yellow hair clips, gold earrings, blue eyes light blue crop top, off-shoulder top, transparent blue top，light blue jacket,denim shorts, belt with white flowers,  wristband, wristbands, pearl bracelet, star necklace, necklace, starfish accessory thigh holster, thigh straps, bare legs sandals, blue sandals, high heels",
+      "strength": 0.8,
+      "aliases": [
+        "琳奈",
+        "linnai"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "phoebe",
+      "name": "菲比",
+      "category": "鸣潮",
+      "file": "anima\\鸣潮\\wuthering-phoebe.safetensors",
+      "trigger": "Phoebe",
+      "identity": "long hair, blonde hair, streaked hair, wavy hair, hairband, star hair ornament, x hair ornament, hat bow, hat ribbon, hat flower, sun hat, white headwear, blue eyes, earrings 1girl, solo, medium breasts, long sleeves, layered sleeves, short over long sleeves, white dress, blue cape,  half gloves, black ribbon, blue scarf, jewelry, pocket watch, white pantyhose high heel boots",
+      "strength": 0.8,
+      "aliases": [
+        "Phoebe",
+        "菲比"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "qingxiao",
+      "name": "清宵",
+      "category": "鸣潮",
+      "file": "anima\\鸣潮\\wuthering-qingxiao.safetensors",
+      "trigger": "Qingxiao",
+      "identity": "long blue hair, blue eyes, ornate headpiece, cyan hair ribbons, cyan hair accessories, green earrings light blue dress, white dress, layered skirt, translucent sleeves, translucent cape, gold embroidery, green tassels, butterfly pendant, sleeveless, gold trim, cyan accents white stockings white high heels",
+      "strength": 0.8,
+      "aliases": [
+        "Qingxiao",
+        "清宵"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "shorekeeper",
+      "name": "守岸人",
+      "category": "鸣潮",
+      "file": "anima\\鸣潮\\wuthering-shorekeeper.safetensors",
+      "trigger": "Shorekeeper",
+      "identity": "medium hair, blue hair, hair between eyes, white flower, purple eyes,earrings 1girl, solo, medium breasts, cleavage, sideboob, bare shoulders, bare arms, sleeveless, sleeveless dress, frilled dress, blue dress, backless dress, see-through dress, hood up, choker, arm strap, armlet, bracelet, anklet, white veil, jewelry, bare legs high heels, strappy heels",
+      "strength": 0.8,
+      "aliases": [
+        "Shorekeeper",
+        "守岸人"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "suisui",
+      "name": "穗穗",
+      "category": "鸣潮",
+      "file": "anima\\鸣潮\\wuthering-suisui.safetensors",
+      "trigger": "suisui",
+      "identity": "1girl, long blonde hair, wavy hair, layered hair, bangs, high ponytail, yellow hair clip, black ribbon, golden eyes, star mark on forehead, teal earrings，peacock feather hairpin white and blue outfit, blue and gold patterned dress, layered dress, flowing dress, sleeveless top, black skirt, layered skirt, blue and black patterned skirt, high slit dress, gold trim, gold embroidery, red ribbon, ornate cape, black gloves, pearl bracelet, green gemstone high heels, black high heels",
+      "strength": 0.8,
+      "aliases": [
+        "suisui",
+        "穗穗"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "yangyang",
+      "name": "秧秧·玄翎",
+      "category": "鸣潮",
+      "file": "anima\\鸣潮\\wuthering-yangyang.safetensors",
+      "trigger": "Yangyang Xuanling",
+      "identity": "1girl, long black hair, blue feather ornament,blue hair tips, blue hair streaks, bangs, blue hair ornaments, red tassel hair accessory, blue feather hair extensions,blue eyes white and black outfit, blue and black outfit, sleeveless top, corset top, black and blue dress, open jacket, black skirt, short skirt, blue patterned skirt, layered skirt, high slit skirt, long sleeves, belt with chain, red gem belt, white fur trim, blue sash, blue tassels, feathered accessories black boots, thigh-high boots, high boots",
+      "strength": 0.8,
+      "aliases": [
+        "Yangyang Xuanling",
+        "yangyang",
+        "秧秧·玄翎"
+      ],
+      "channels": [
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
     }
   ]
 }
