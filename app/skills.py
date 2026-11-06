@@ -231,7 +231,9 @@ ARCHIVED_SKILLS = tuple(
     # 清单都能看到，点名就能跑。
     ["hd_fast_" + s for s in ("clear", "curvy", "gloss", "soft")]
     + ["hd_2_" + s for s in ("clear", "curvy", "gloss", "soft")]
-    + ["krea2"]
+    # 2026-11-06：krea2 也放出来——用户点名用它却回落到 silver，那种
+    # 「渠道串号」就是这么来的：归档 = list_skills 不吐它 = QQ 的
+    # _allowed_skills 里没有 = direct_gen 认不出 = 静默降级成默认档。
     + ["moss", "moss8", "moss50", "moss_page"]
 )
 
