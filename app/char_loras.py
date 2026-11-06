@@ -145,14 +145,17 @@ def match(skill, prompt):
     return entry
 
 
-def apply(skill, prompt, workflow):
+def apply(skill, prompt, workflow, user_text=""):
     """命中角色就把 LoRA 节点插进 workflow 副本、触发词追加进 prompt。
 
     返回 `(workflow, prompt)`；没命中时原样返回，调用方零改动。网页跑图台
     （`build_t2i_workflow`）和 QQ 直达生图（`_generate_image`）都走这一份，
     避免两条路各写一遍装填逻辑、其中一条漏掉。
     """
-    entry = match(skill, prompt)
+    # 判断用**用户原话**（2026-11-06）：`prompt` 到这里已经是翻译好的
+    # 英文 tag，拿它去判等于让角色库读机器人自己写的文本。网页跑图台
+    # 没有「原话」，传空就退回用 prompt 本身，行为不变。
+    entry = match(skill, str(user_text or "").strip() or prompt)
     if not entry:
         return workflow, prompt
     wf = patch(workflow, entry)

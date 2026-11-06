@@ -824,7 +824,7 @@ def _apply_i2i_placeholders(workflow, uploaded, denoise_txt):
     return workflow
 
 
-def build_t2i_workflow(skill, prompt, seed):
+def build_t2i_workflow(skill, prompt, seed, user_text=""):
     """按渠道模板 + 提示词 + 种子构建**文生图**工作流 dict。
 
     供 worker 的「随机口令被拦静默重抽」用（image_jobs.process）。skill 不
@@ -842,14 +842,24 @@ def build_t2i_workflow(skill, prompt, seed):
     # 角色 LoRA 节点、触发词追加进提示词。没命中零干预；文件缺失时
     # match 返回 None（宁可角色不像，不能整单报 value_not_in_list）。
     from app import char_loras
-    wf, prompt = char_loras.apply(skill, prompt, sd["workflow"])
+    wf, prompt = char_loras.apply(skill, prompt, sd["workflow"],
+                                  user_text=user_text)
     return apply_prompt_placeholders(json.dumps(wf),
                                      prompt, seed)
 
 
 def _generate_image(prompt, skill=None, lora=None, source_image="",
                     denoise=None, seed=None, use_character=None, preset=None,
-                    _skip_confirm=False, resample_fn=None):
+                    _skip_confirm=False, resample_fn=None, user_text=""):
+    # `user_text`（2026-11-06）：**用户原话**，只给角色库判断用。
+    #
+    # 为什么必须单独传：`prompt` 到这一步已经被 direct_gen 翻译成英文 tag 定稿
+    # （`1girl, solo, robin_(honkai:_star_rail), long blonde hair ...`）。角色库
+    # 要回答的是「用户**点名**了谁」——拿翻译稿去判，等于让机器人读自己写的
+    # 文本：用户说「知更鸟」，翻译稿里是 `robin_(honkai:_star_rail)`，中文模型
+    # 认不出，判定 skip，LoRA 不挂，最后画成模型自己想象的人。用户原话才是
+    # 唯一可信的输入。网页跑图台没有「原话」（用户直接写提示词），传空 → 退回
+    # 用 prompt 本身，行为与从前一致。
     # `_skip_confirm`：直达生图管道（app/direct_gen.py）专用——用户打的就是
     # 「渠道+描述」的明确指令，等于已经确认过了，再拦一发确认卡纯属多一轮。
     # agent 路径保持默认 False（拦）。
@@ -1164,7 +1174,8 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # `build_t2i_workflow`（网页跑图台 / 漫画 / 角色卡那几条）接了，
     # 群友在群里点名角色时一直没挂上 LoRA，画出来当然不像。
     from app import char_loras
-    workflow, prompt = char_loras.apply(skill, prompt, workflow)
+    workflow, prompt = char_loras.apply(skill, prompt, workflow,
+                                        user_text=user_text)
     workflow_str = json.dumps(workflow)
     workflow = apply_prompt_placeholders(workflow_str, prompt, seed)
     if is_i2i:

@@ -2041,7 +2041,8 @@ def _enqueue(skill, prompt, text, source_image=False, seed=None,
     _shown = skill or (_tok if _hit else "默认")
     try:
         result = gi._generate_image(
-            prompt, skill=skill, _skip_confirm=True, **extra)
+            prompt, skill=skill, _skip_confirm=True,
+            user_text=text, **extra)
     except Exception:
         log.exception("[direct] 直接入队失败")
         return "生图请求没发出去，稍后再试。"
