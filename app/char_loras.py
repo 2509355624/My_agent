@@ -34,6 +34,7 @@ import copy
 import json
 import logging
 import os
+import re
 
 import yaml
 
@@ -145,6 +146,41 @@ def match(skill, prompt):
     return entry
 
 
+def _strip_conflicts(prompt):
+    """把翻译稿里跟角色身份打架的 tag 摘掉（2026-11-06）。
+
+    起因：用户点「爱弥斯」，生图提示词里却是
+    `long white hair, pale blue eyes, original character, aemeath concept`——
+    爱弥斯是粉发金瞳。翻译模型不认识角色时会自己编一套外观，
+    `original character` 更是直接告诉底模「这不是已知角色」，与角色 LoRA 对着干。
+
+    只摘三类（其余一律不动，免得把用户真想要的东西删掉）：
+      1. `original character` / `oc` / `<名字> concept` 这种「这是原创」的宣告；
+      2. 发色 / 瞳色（它们是身份，必须由索引里的 identity 决定）；
+      3. 因上面两条留下的空项。
+    衣服、动作、构图、镜头一律保留——那些是用户的意图。
+    """
+    if not prompt:
+        return prompt
+    drop = re.compile(
+        r"^(?:original character|oc|unknown character"
+        r"|(?:[a-z0-9_]+ ){0,2}concept"
+        r"|(?:[a-z]+[- ])?(?:hair|eyes))$", re.I)
+    hair_eye = re.compile(
+        r"\b(?:white|black|blonde|blond|brown|pink|blue|green|red|purple|"
+        r"grey|gray|silver|gold|yellow|orange|aqua|cyan|multicolored|"
+        r"gradient|two-tone)\s+(?:hair|eyes)\b", re.I)
+    out = []
+    for tok in str(prompt).split(","):
+        t = tok.strip()
+        if not t:
+            continue
+        if drop.match(t.lower()) or hair_eye.search(t):
+            continue
+        out.append(t)
+    return ", ".join(out)
+
+
 def apply(skill, prompt, workflow, user_text=""):
     """命中角色就把 LoRA 节点插进 workflow 副本、触发词追加进 prompt。
 
@@ -159,6 +195,11 @@ def apply(skill, prompt, workflow, user_text=""):
     if not entry:
         return workflow, prompt
     wf = patch(workflow, entry)
+    # 命中之后先**洗掉翻译稿里跟角色打架的那几个 tag**（2026-11-06 用户报
+    # 「爱弥斯被画成白发蓝瞳」）：翻译模型不认识角色时会自己编一套外观，
+    # 还会加 `original character`——那句等于告诉底模「这不是已知角色」。
+    # 不清掉的话，后面再补 identity 也是两边打架，谁赢看运气。
+    prompt = _strip_conflicts(prompt)
     parts = [prompt.rstrip(" ,")]
     if entry.get("identity"):
         # 模型写英文 tag 时经常自己补一套错的外观（黑发、校服…），和 LoRA
