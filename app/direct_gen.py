@@ -1370,13 +1370,17 @@ _MASTER_TEMPLATE = (
     "### 画一张图\n"
     "\n"
     "{{\"tool\": \"generate_image\", \"prompt\": \"英文提示词\", "
-    "\"skill\": \"渠道，可省\", "
+    "\"skill\": \"渠道，可省\", \"character\": \"角色库 key，可省\", "
     "\"source_image\": 1, \"seed\": 123}}\n"
     "\n"
     "- `prompt` 必填，danbooru 格式的英文标签串，逗号分隔的短标签"
     "（如 `1girl, silver hair, school uniform, looking_at_viewer`）。"
     "整句叙述会被标签渠道当乱码、画面错位；走 qwen 才写完整英文句子。\n"
     "- `skill` 只在用户点名渠道时填，对照表在最后。\n"
+    "- `character` 填下面「Anima 角色库」候选块里那个 key，三条规矩：\n"
+    "  用户**点名**了其中某个角色才填；只是描述外观（「绿头发的偶像」"
+    "「白毛双马尾」）→ 留空；用户点的是 krea2 / qwen / moss / nai 这类"
+    "非 Anima 渠道 → 留空。\n"
     "- `source_image` 填 1 表示垫图，判据见下面「带图轮怎么走」。\n"
     "- `seed` 只在用户点名种子时填。用不上的字段省略。\n"
     "\n"
@@ -1610,6 +1614,7 @@ _MASTER_TEMPLATE = (
     "两点容易混：银发、silver hair 是发色，属于画面内容；画面要出中文时走 moss。\n"
     "{chan_hint}"
     "{search}"
+    "{role_block}"
     "\n"
     "【最近对话】\n{recent}\n"
     "\n"
@@ -1987,7 +1992,7 @@ def _random_resample(kind):
 
 
 def _enqueue(skill, prompt, text, source_image=False, seed=None,
-             resample_fn=None):
+             resample_fn=None, character=""):
     """转译结果落队。返回要发回会话的文本；成功且回执已直发返回 ""。
 
     source_image=True → 垫本轮引用的那张图（传 "1"，下游 comfy_src.resolve
@@ -1996,6 +2001,8 @@ def _enqueue(skill, prompt, text, source_image=False, seed=None,
     seed 非空 → 复刻账本里那张图的种子（引用 HT 图换档场景），下游
     _resolve_seed 会校验范围；只往本机渠道传（NAI 拒收 seed）。
     resample_fn 非空 → 随机口令的「被拦静默重抽」钩子（见 _random_resample）。
+    character 非空 → 大大怪在角色库候选块里挑好的 key（2026-11-06），直通
+    `char_loras.apply(key=…)`；空串 = 旧行为（走向量召回 + 大模型判定）。
     """
     from app.tools.normal import generate_image as gi
     extra = {}
@@ -2005,6 +2012,8 @@ def _enqueue(skill, prompt, text, source_image=False, seed=None,
         extra["seed"] = seed
     if resample_fn:
         extra["resample_fn"] = resample_fn
+    if character:
+        extra["character"] = character
     # 原话里带 `zdy-xxx` 令牌 → 交给下游套用那套 LoRA 槽位。
     # **在这里抽而不是让十几个调用点各传一遍**：漏掉一个的表现是「预设说了
     # 却没生效」，出图了、风格不对，最难查的那种。
@@ -2237,6 +2246,20 @@ def _retry_force_prompt(content, named):
     return data
 
 
+def _role_key_ok(skill, key):
+    """`character` 只在**真会挂角色 LoRA 的渠道**上才留着（2026-11-06）。
+
+    契约里已经写明「用户点 krea2 / qwen / moss / nai 就留空」，但模型偶尔照填
+    （实测 `krea2 坎特蕾拉` 仍给了 cantarella）。下游 `char_loras` 按白名单
+    会拦、图是对的，可这个字段一路带到日志里就是噪音。这里补一道代码侧闸：
+    渠道不在角色库白名单 → 直接清空，不依赖模型自觉。
+    """
+    if not key:
+        return ""
+    from app import char_loras
+    return key if skill in char_loras.CHAR_LORA_SKILLS else ""
+
+
 def _translate(text, history, skill=None, weighted=False, no_default=False,
                doc=None):
     """一次 LLM 调用 → 生图任务，或一句聊天回复。**所有提示词都由它产出**。
@@ -2298,10 +2321,27 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
         hint += ("\n本轮在**群聊**：不管用户要几张，只出一张。用 generate_image "
                  "画最能代表他那句需求的一张，不要 generate_comic、不要承诺「N 张」；"
                  "回话时顺口提一句「群里一次只能一张，要一组图私聊我」。\n")
+    # 角色库候选块（2026-11-06 用户拍板）：检索在本地做、不花 token，结果只是
+    # **参考资料**——用不用由大大怪自己定，中间那层「角色库 AI 判定」已经删掉。
+    # 没有候选、或检索炸了，整块为空，模板回到原样。
+    try:
+        from app import char_loras as _cl
+        from app import lora_lib
+        # 点名的渠道压根没有角色库（krea2 / qwen / moss / nai 这些）→ 整块不拼，
+        # 省 token、也免得模型照着候选块去填一个用不上的 character。
+        # 没点名（named 空）时仍照拼：模型可能自己判进 anima 系，给了它就能选。
+        if named and named not in _cl.CHAR_LORA_SKILLS:
+            role_block = ""
+        else:
+            role_block = lora_lib.preview_block(text)
+    except Exception:                                  # noqa: BLE001
+        log.warning("[direct] 角色库检索异常，候选块留空", exc_info=True)
+        role_block = ""
     content = _MASTER_TEMPLATE.format(
         recent=_recent_lines(history) or "（无）",
         text=text,
         search=(_SEARCH_HEADER.format(doc=doc) if doc else ""),
+        role_block=role_block,
         chan_hint=hint)
     data = _ask(content)
     if not data:
@@ -2340,6 +2380,10 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
                 return None
             return {"comic": {"brief": brief,
                               "panels": data.get("panels")}}
+    # 角色库 key（2026-11-06）：模型从候选块里自己挑的那一个，空串 = 不用。
+    # 这里**只做形状裁剪**，不校验存在性——查库由 `char_loras.entry_by_key`
+    # 负责，查不到就当没点名，不让一个瞎填的 key 拦掉整单。
+    char_key = str(data.get("character") or "").strip()[:60]
     user_prompt = (data.get("prompt") or "").strip()
     reply = (data.get("reply") or "").strip()
     if not user_prompt and named and reply:
@@ -2384,14 +2428,16 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
         judged = _fixed_chan(judged, text)
     out_skill = named or judged
     if out_skill in _allowed_skills():
-        return {"skill": out_skill, "prompt": user_prompt}
+        return {"skill": out_skill, "prompt": user_prompt,
+                "character": _role_key_ok(out_skill, char_key)}
     allowed = _allowed_skills()
     fallback = (named if named in allowed else
                 judged if judged in allowed else "")
     if fallback:
         log.warning("[direct] 未知渠道（点名 %r / 模型 %r），改用 %s",
                     named, judged, fallback)
-        return {"skill": fallback, "prompt": user_prompt}
+        return {"skill": fallback, "prompt": user_prompt,
+                "character": _role_key_ok(fallback, char_key)}
     if no_default:
         # 成品串：判不出就回问，绝不静默换默认档烧一张错风味的图。
         return None
@@ -2417,7 +2463,8 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
     else:
         log.info("[direct] 没点名渠道，走默认渠道 %s：%r",
                  _FALLBACK_SKILL, text[:50])
-    return {"skill": _FALLBACK_SKILL, "prompt": user_prompt}
+    return {"skill": _FALLBACK_SKILL, "prompt": user_prompt,
+            "character": _role_key_ok(_FALLBACK_SKILL, char_key)}
 
 
 def _recall_tags(data_urls, numbered=True):
@@ -3033,7 +3080,8 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         if not data:
             return _FINAL_PROMPT_NO_CHAN_TEXT
         _remember_job(session_key, data["skill"], data["prompt"])
-        return _enqueue(data["skill"], data["prompt"], text)
+        return _enqueue(data["skill"], data["prompt"], text,
+                     character=(data.get("character") or ""))
 
     # 2026-10-17 用户拍板：**删掉「再来一张」的关键词早退**（原来是
     # `_AGAIN_RE` 命中 + 内存 `_LAST_JOB` 有值就零调用直出）。理由同 `_revise`：
@@ -3066,7 +3114,8 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
                 return _enqueue_comic(data["comic"], text)
             if data:
                 _remember_job(session_key, data["skill"], data["prompt"])
-                return _enqueue(data["skill"], data["prompt"], text)
+                return _enqueue(data["skill"], data["prompt"], text,
+                     character=(data.get("character") or ""))
             return ("引用的内容没转成生图指令，引用一条带画面描述的消息"
                     "再试，或直接 @我 渠道 描述。")
         # 引用回执（HT- 编号）→ 重跑上次任务，渠道可换。
@@ -3098,7 +3147,8 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
             return _enqueue_comic(data["comic"], text)
         if data:
             _remember_job(session_key, data["skill"], data["prompt"])
-            return _enqueue(data["skill"], data["prompt"], text)
+            return _enqueue(data["skill"], data["prompt"], text,
+                     character=(data.get("character") or ""))
         return "这条没转译成生图指令。照格式来：@我 渠道 描述。"
 
     # 走到这里 = 没图 / 没渠道词 / 没成品串 / 没「再来一张」的纯文本轮
@@ -3117,5 +3167,6 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         return _enqueue_comic(data["comic"], text)
     if data:
         _remember_job(session_key, data["skill"], data["prompt"])
-        return _enqueue(data["skill"], data["prompt"], text)
+        return _enqueue(data["skill"], data["prompt"], text,
+                     character=(data.get("character") or ""))
     return None      # 转译失败 → 不接管，交回上层（不再回菜单）

@@ -42,15 +42,27 @@ from app.config import BASE_DIR, COMFYUI_ROOT, SKILLS_DIR
 
 log = logging.getLogger("char_loras")
 
-# 参与角色装填的渠道（2026-11-06 用户拍板扩到 8 个）。
-# 只收「用户真在用」的那几个：silver 是默认渠道，hd_3 是高清线，
-# anima-line / anima-real 是主线。silverqaq、anima-flesh（幼感）、
-# anima-guizhencao 用得少，先不加——加了也只是多一处要维护的地方。
-CHAR_LORA_SKILLS = frozenset((
+# 参与角色装填的渠道，**按底模架构分组**（2026-11-06 用户拍板：角色库不只服务
+# anima）。同一个角色在不同架构下是不同文件，靠 `channels` 说归属——索引里允许
+# 同一个 key 出现多条，`entry_by_key` 按渠道挑那一条。
+#
+#   anima  miaomiaoRealskin_anima13 / silvermoonmixAnimaEvolved
+#   sdxl   miaomiaoRealskin_epsV13（miao）/ NoobAI（cunny、jank）/ Illustrious（nffa）
+#   sd15   unholyDesireMixSinister（image_gen_v1、nsfw_pose_gen）
+#   moss   moss_image_sft_int8_convrot
+#
+# krea2（gguf）和 qwen（gguf）不吃这几类 LoRA，不放进来。
+_LORA_SKILLS_ANIMA = (
     "anima_clear", "anima-line", "anima-real",
     "hd_3_clear", "hd_3_curvy", "hd_3_gloss", "hd_3_soft",
     "silver", "silver-hd",
-))
+)
+_LORA_SKILLS_SDXL = ("miao", "cunny", "jank", "nffa")
+_LORA_SKILLS_SD15 = ("image_gen_v1", "image_gen_v1_hires", "nsfw_pose_gen")
+_LORA_SKILLS_MOSS = ("moss", "moss-light", "moss-qunyou", "moss50", "moss8",
+                     "moss_page")
+CHAR_LORA_SKILLS = frozenset(_LORA_SKILLS_ANIMA + _LORA_SKILLS_SDXL
+                             + _LORA_SKILLS_SD15 + _LORA_SKILLS_MOSS)
 _INDEX_NAME = "char_loras.json"
 
 
@@ -100,12 +112,10 @@ def _index_path(skill):
     return os.path.join(str(BASE_DIR), "config", _INDEX_NAME)
 
 
-def entries(skill):
-    """某渠道的角色库条目列表；没配 / 坏文件 / 渠道没开 → 空列表。"""
-    if skill not in CHAR_LORA_SKILLS:
-        return []
+def _read_index(path):
+    """读一本角色库，返回带 `file` 的条目；坏文件 / 结构不对 → 空列表。"""
     try:
-        with open(_index_path(skill), "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return []
@@ -113,6 +123,68 @@ def entries(skill):
     if not isinstance(chars, list):
         return []
     return [c for c in chars if isinstance(c, dict) and c.get("file")]
+
+
+def entries(skill):
+    """某渠道的角色库条目列表；没配 / 坏文件 / 渠道没开 → 空列表。"""
+    if skill not in CHAR_LORA_SKILLS:
+        return []
+    return _read_index(_index_path(skill))
+
+
+def entry_by_key(key, skill=None):
+    """按 key 取条目（2026-11-06）：**大大怪自己挑好了，代码只负责查**。
+
+    取库顺序与 `match` 一致：先看这个渠道自己的库（可能覆盖过），再看公共库
+    `config/char_loras.json`。查不到返回 None —— 调用方当作「没点名」,
+    不装填、也不拦整单。渠道白名单与文件存在性仍由 `_accept` 把关。
+
+    **同一个 key 允许多条**（2026-11-06）：一个角色在 anima / SDXL / SD1.5 下
+    是三份不同文件，各条用自己的 `channels` 声明归属。这里按渠道挑那条——
+    先挑 channels 明确写了本渠道的，再挑不限渠道的兜底，都没有就退回第一条
+    （交给 `_accept` 按白名单拒掉，不会错挂）。
+    """
+    k = str(key or "").strip()
+    if not k:
+        return None
+    pools = []
+    if skill:
+        pools.append(_index_path(skill))
+    common = os.path.join(str(BASE_DIR), "config", _INDEX_NAME)
+    if common not in pools:
+        pools.append(common)
+    hits = []
+    for p in pools:
+        for c in _read_index(p):
+            if str(c.get("key")) == k:
+                hits.append(c)
+    if not hits:
+        return None
+    if skill:
+        for c in hits:
+            chans = c.get("channels") or []
+            if chans and skill in chans:
+                return c
+    for c in hits:
+        if not (c.get("channels") or []):
+            return c
+    return hits[0]
+
+
+def _accept(skill, entry):
+    """渠道白名单 + LoRA 文件存在性：两条都过才装填，否则 None。"""
+    if not entry:
+        return None
+    chans = entry.get("channels") or []
+    if chans and skill not in chans:
+        log.info("角色 %s 不在渠道 %s 的白名单里，跳过",
+                 entry.get("key"), skill)
+        return None
+    if not _find_file(entry.get("file") or ""):
+        log.warning("角色 LoRA 文件不在 loras 目录，跳过装填：%s（%s）",
+                    entry.get("key") or "?", entry.get("file"))
+        return None
+    return entry
 
 
 def match(skill, prompt):
@@ -134,16 +206,7 @@ def match(skill, prompt):
         return None
     if not entry:
         return None
-    chans = entry.get("channels") or []
-    if chans and skill not in chans:
-        log.info("角色 %s 不在渠道 %s 的白名单里，跳过",
-                 entry.get("key"), skill)
-        return None
-    if not _find_file(entry.get("file") or ""):
-        log.warning("角色 LoRA 文件不在 loras 目录，跳过装填：%s（%s）",
-                    entry.get("key") or "?", entry.get("file"))
-        return None
-    return entry
+    return _accept(skill, entry)
 
 
 def _strip_conflicts(prompt):
@@ -181,20 +244,39 @@ def _strip_conflicts(prompt):
     return ", ".join(out)
 
 
-def apply(skill, prompt, workflow, user_text=""):
+def apply(skill, prompt, workflow, user_text="", key=""):
     """命中角色就把 LoRA 节点插进 workflow 副本、触发词追加进 prompt。
 
     返回 `(workflow, prompt)`；没命中时原样返回，调用方零改动。网页跑图台
     （`build_t2i_workflow`）和 QQ 直达生图（`_generate_image`）都走这一份，
     避免两条路各写一遍装填逻辑、其中一条漏掉。
+
+    `key`（2026-11-06）：大大怪在候选块里已经挑好的角色 key。给了就直接查库，
+    **不再走向量召回 + 大模型判定**；空串 = 旧行为（走 `match`），这条默认值
+    就是整套改动的回滚开关。
     """
-    # 判断用**用户原话**（2026-11-06）：`prompt` 到这里已经是翻译好的
-    # 英文 tag，拿它去判等于让角色库读机器人自己写的文本。网页跑图台
-    # 没有「原话」，传空就退回用 prompt 本身，行为不变。
-    entry = match(skill, str(user_text or "").strip() or prompt)
+    key = str(key or "").strip()
+    if key:
+        # 渠道不在白名单时零干预：krea2 / qwen / moss / nai 这些本来就不挂
+        # 角色 LoRA，模型就算填了 key 也不生效（用户点 krea2 就不会被改成
+        # silver）。渠道内白名单 + 文件存在性仍由 `_accept` 把关。
+        entry = _accept(skill, entry_by_key(key, skill))
+        if not entry:
+            log.info("[role] key=%s 在渠道 %s 不可用，不装填", key, skill)
+            return workflow, prompt
+    else:
+        # 判断用**用户原话**（2026-11-06）：`prompt` 到这里已经是翻译好的
+        # 英文 tag，拿它去判等于让角色库读机器人自己写的文本。网页跑图台
+        # 没有「原话」，传空就退回用 prompt 本身，行为不变。
+        entry = match(skill, str(user_text or "").strip() or prompt)
     if not entry:
         return workflow, prompt
     wf = patch(workflow, entry)
+    # 装填成功也留一条（2026-11-06）：从前只在跳过时打日志，成功一声不响，
+    # 线上排查「到底挂没挂」只能去翻 ComfyUI history。大模型填的 key 和旧路
+    # 判定分开标，一眼能看出走的是哪条。
+    log.info("[role] 装填 %s ← 渠道 %s（%s）", entry.get("key"), skill,
+             "模型填 key" if key else "旧路判定")
     # 命中之后先**洗掉翻译稿里跟角色打架的那几个 tag**（2026-11-06 用户报
     # 「爱弥斯被画成白发蓝瞳」）：翻译模型不认识角色时会自己编一套外观，
     # 还会加 `original character`——那句等于告诉底模「这不是已知角色」。
@@ -270,10 +352,12 @@ def patch(workflow, entry):
         wf[head]["inputs"]["model"] = [nid_new, 0]
         return wf
     # 2) 兜底：工作流没有任何 LoRA 节点 → 插到模型加载节点与其消费者之间
+    #    moss（2026-11-06）：它的加载器是自定义节点 MOSSImageUNETLoader，
+    #    output 也是 MODEL，但类名对不上上面那个元组，不加进来就整单跳过。
     src = None
     for nid, nd in wf.items():
         if str((nd or {}).get("class_type") or "") in (
-                "UNETLoader", "CheckpointLoaderSimple"):
+                "UNETLoader", "CheckpointLoaderSimple", "MOSSImageUNETLoader"):
             src = nid
             break
     if src is None:

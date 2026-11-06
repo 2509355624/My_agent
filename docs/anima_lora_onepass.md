@@ -93,3 +93,51 @@ JSON 的 character 字段；否则 character 留空，一切照常。
 - `char_loras.match()` 里调 `lora_lib.resolve()` 的那条兼容分支
 
 删之前先把 `state/lora_match_cache.json` 备份一份。
+
+---
+
+## 六、实施记录（2026-11-06，已落地）
+
+四文件改完，`py_compile` 全过；验证脚本留在 `tools/`：
+
+| 脚本 | 覆盖 |
+|---|---|
+| `_verify_anima_onepass.py` | 单元 20 项（`preview_block` / `entry_by_key` / `apply(key=…)` / 模板新槽） |
+| `_verify_anima_e2e.py` | 四种用例，`_translate → char_loras.apply` 全链路 |
+| `_verify_anima_queue.py` | `_enqueue(character=…)` → `_generate_image` kwargs 透传 |
+| `_verify_anima_regress.py` | `anima 千夏`、`silver 胡桃`、`/角色库` |
+
+跑法（系统 py 缺 numpy，必须用这个解释器）：
+`$env:PYTHONIOENCODING='utf-8'; D:\AI\confyui_env\Scripts\python.exe tools\_verify_anima_e2e.py`
+
+### 与清单的三处偏差
+
+1. **`anima 坎特蕾拉` 落 `hd_3_clear`，不是 `anima_clear`。**
+   代码里 `anima` 恒等于三档（`_TIER_RE`，2026-10-05 起既有口径）。两者都在
+   `CHAR_LORA_SKILLS` 里，LoRA 照挂、tag 照打头，只有渠道 id 不同。没有为这个
+   用例改渠道解析——改了会碰到「anima = 三档」那堆既有锚定。用例按真实行为断言。
+
+2. **加了相关性闸 `PREVIEW_MIN = 0.45`（清单没写）。**
+   `search()` 的 `MIN_SCORE=0.35` 太松：实测「帮我看看这个 bug」top 0.438、
+   「画个绿头发的偶像」0.397 都能召回 6 条，1100 字全塞进上下文是纯噪声。
+   真点名都在 0.57 以上（坎特蕾拉 1.095、千夏 0.576）。低于闸整块不拼，
+   过了闸也只留同样过闸的条目 —— 这正是第四条用例「提示词里没有角色库内容」
+   要的结果。热态耗时 ~13ms/次（首次要加载 embedding 模型）。
+
+3. **点名非角色库渠道时，候选块整块不拼。**
+   `named` 命中且不在 `CHAR_LORA_SKILLS`（krea2 / qwen / moss / nai）→
+   `role_block = ""`。省 token，也免得模型照着候选块去填 `character`。
+   没点名时仍照拼（模型可能自己判进 anima 系）。
+
+### 仍然走旧 `match() → resolve() → decide()` 的地方（key 恒空）
+
+网页跑图台 `build_t2i_workflow`、改图管道 `_revise`、`/直通-` 零 token 直通、
+漫画 brief。四条都没有「大大怪填 key」的机会，所以留旧路。副作用：`/直通-`
+号称零 token，实际仍会烧一次角色库判定 —— 这是改动前就有的，不在本次范围。
+
+### 已知抖动
+
+`坎特蕾拉`（不提渠道）两跑里有一次模型回 `reply` 反问「走哪个渠道」，
+另一次正常出 `silver + cantarella`。模板里本来就有「反问只是多耗他一轮」
+那条，属于模型温度随机，没有加硬指令去压。
+

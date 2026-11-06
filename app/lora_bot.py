@@ -2,17 +2,21 @@
 """QQ 指令 `/角色库`：把当前角色库列成一张聊天记录卡片（2026-11-06）。
 
 用户要的：群里发 `/角色库` → 合并转发卡片，先写支持哪些渠道，再按游戏分组
-把 60 个角色列出来。零 LLM、零生图，只读 `config/char_loras.json`。
+把角色列出来。零 LLM、零生图，只读 `config/char_loras.json`。
 
-为什么用合并转发：60 个名字平铺就是几百字，一条消息塞不下也刷屏；
+为什么用合并转发：几十个名字平铺就是几百字，一条消息塞不下也刷屏；
 卡片点开才展开（和 `card_bot` 造卡同一个理由）。
+
+2026-11-06 改：角色库按底模架构分了组（anima / SDXL / SD1.5 / moss），同一个
+角色可能有多条记录（各挂各的架构）。卡片里**同一个 key 合并成一行**，后面
+标它覆盖哪几个架构——不然「千夏」会出现两次，看着像重复。
 """
 import json
 import logging
 import os
 import re
 
-from app import qq_api
+from app import char_loras, qq_api
 from app.config import BASE_DIR
 
 log = logging.getLogger("lora_bot")
@@ -25,8 +29,27 @@ INDEX = os.path.join(BASE_DIR, "config", "char_loras.json")
 # 不会在闲聊里误撞。
 ROLELIB_RE = re.compile(r"[/／]\s*角色库")
 
-CATEGORY_NAME = {"genshin": "原神", "hsr": "星穹铁道", "wuthering": "鸣潮",
-                 "endfield": "终末地", "nte": "异环", "zzz": "绝区零"}
+# 分组顺序（索引里的 category 就是这些中文名）
+ORDER = ["鸣潮", "异环", "星穹铁道", "终末地", "绝区零", "原神",
+         "蔚蓝档案", "碧蓝航线", "Vocaloid", "AI拟人", "晴雅"]
+
+# 老条目写的是英文 slug，新条目写中文——归一，否则「千夏」会同时出现在
+# 「绝区零」和「zzz」两组里，同一张卡看着像两个人。
+CATEGORY_ALIAS = {"genshin": "原神", "hsr": "星穹铁道", "wuthering": "鸣潮",
+                  "endfield": "终末地", "nte": "异环", "zzz": "绝区零"}
+
+
+def _cat_of(entry):
+    raw = str(entry.get("category") or "其他")
+    return CATEGORY_ALIAS.get(raw, raw)
+
+# 架构标签：条目属于哪一组渠道
+ARCH_GROUPS = (
+    ("anima", char_loras._LORA_SKILLS_ANIMA),
+    ("SDXL", char_loras._LORA_SKILLS_SDXL),
+    ("SD1.5", char_loras._LORA_SKILLS_SD15),
+    ("moss", char_loras._LORA_SKILLS_MOSS),
+)
 
 
 def chars():
@@ -38,11 +61,29 @@ def chars():
         return []
 
 
+def arch_of(entry):
+    """这条 LoRA 属于哪个架构组。"""
+    ch = set(entry.get("channels") or [])
+    for label, skills in ARCH_GROUPS:
+        if ch & set(skills):
+            return label
+    return "?"
+
+
 def channels_text():
-    """支持哪些渠道 —— 从条目里取（所有条目同一套），取不到就给个兜底。"""
+    """按架构列出支持哪些渠道。"""
+    return " / ".join("%s %d 个" % (label, len(skills))
+                      for label, skills in ARCH_GROUPS)
+
+
+def head_text():
     cs = chars()
-    ch = (cs[0].get("channels") if cs else None) or []
-    return ch or ["silver"]
+    keys = {str(c.get("key")) for c in cs}
+    return ("📚 角色库 · %d 个角色（%d 条记录）\n"
+            "按底模分渠道：%s\n"
+            "用法：说「anima 千夏」「miao 今汐」「折枝」这样点名字；"
+            "不提渠道就跑默认，认得的角色会自动挂 LoRA。"
+            % (len(keys), len(cs), channels_text()))
 
 
 def _bot_identity():
@@ -57,44 +98,50 @@ def build_nodes():
     """标题节点 + 每个游戏一个节点。"""
     name, uin = _bot_identity()
     cs = chars()
-    chans = channels_text()
-    head = ("📚 角色库 · 共 %d 个角色\n"
-            "支持渠道：%s\n"
-            "用法：说「anima 千夏」「silver 胡桃」这样点名字；不提渠道就跑 silver。"
-            % (len(cs), " / ".join(chans)))
-    out = [qq_api.node_segment(head, name, uin)]
+    out = [qq_api.node_segment(head_text(), name, uin)]
 
     groups = {}
     for c in cs:
-        groups.setdefault(str(c.get("category") or "其他"), []).append(c)
-    order = ["genshin", "hsr", "wuthering", "endfield", "nte", "zzz"]
-    for key in order + [k for k in groups if k not in order]:
-        items = groups.get(key) or []
-        if not items:
+        cat = _cat_of(c)
+        key = str(c.get("key") or c.get("name"))
+        groups.setdefault(cat, {}).setdefault(key, []).append(c)
+
+    for cat in ORDER + [c for c in groups if c not in ORDER]:
+        acts = groups.get(cat) or {}
+        if not acts:
             continue
-        title = CATEGORY_NAME.get(key, key)
-        lines = ["【%s】%d 个" % (title, len(items))]
-        for c in items:
-            nm = str(c.get("name") or c.get("key"))
-            extra = ""
-            if c.get("trigger"):
-                extra = "（触发词 %s）" % c["trigger"]
-            lines.append("· %s%s" % (nm, extra))
+        lines = ["【%s】%d 个" % (cat, len(acts))]
+        for key, items in acts.items():
+            c = items[0]
+            nm = str(c.get("name") or key)
+            tag = " / ".join(dict.fromkeys(arch_of(it) for it in items))
+            lines.append("· %s[%s]%s" % (
+                nm, tag,
+                "（触发词 %s）" % c["trigger"] if c.get("trigger") else ""))
         out.append(qq_api.node_segment("\n".join(lines), name, uin))
     return out
 
 
 def plain_text():
-    """发不出卡片时的纯文本兜底。"""
+    """发不出卡片时的纯文本兜底。分组规则必须和卡片一致，否则同一个人在
+    卡片上标 [anima / SDXL]、在纯文本里只标一个架构。"""
     cs = chars()
-    by = {}
+    groups = {}
     for c in cs:
-        by.setdefault(str(c.get("category") or "其他"), []).append(
-            str(c.get("name") or c.get("key")))
-    parts = ["📚 角色库 · 共 %d 个（渠道：%s）"
-             % (len(cs), " / ".join(channels_text()))]
-    for k, names in by.items():
-        parts.append("%s：%s" % (CATEGORY_NAME.get(k, k), "、".join(names)))
+        cat = _cat_of(c)
+        key = str(c.get("key") or c.get("name"))
+        groups.setdefault(cat, {}).setdefault(key, []).append(c)
+    parts = ["📚 " + head_text().split("\n", 1)[0].lstrip("📚 ")]
+    for cat in ORDER + [x for x in groups if x not in ORDER]:
+        acts = groups.get(cat) or {}
+        if not acts:
+            continue
+        names = []
+        for key, items in acts.items():
+            nm = str(items[0].get("name") or key)
+            tag = "/".join(dict.fromkeys(arch_of(it) for it in items))
+            names.append("%s[%s]" % (nm, tag))
+        parts.append("%s：%s" % (cat, "、".join(names)))
     return "\n".join(parts)
 
 

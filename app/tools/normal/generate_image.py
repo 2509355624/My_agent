@@ -850,9 +850,13 @@ def build_t2i_workflow(skill, prompt, seed, user_text=""):
 
 def _generate_image(prompt, skill=None, lora=None, source_image="",
                     denoise=None, seed=None, use_character=None, preset=None,
-                    _skip_confirm=False, resample_fn=None, user_text=""):
-    # `user_text`（2026-11-06）：**用户原话**，只给角色库判断用。
+                    _skip_confirm=False, resample_fn=None, user_text="",
+                    character=""):
+    # `character`（2026-11-06）：大大怪在角色库候选块里挑好的 key，直通
+    # `char_loras.apply(key=…)`——有空就不走向量召回 + 大模型判定，省一次调用
+    # 也省一个误判点。空串 = 旧行为（走 `match`），这是整套改动的回滚开关。
     #
+    # `user_text`（2026-11-06）：**用户原话**，只给角色库判断用。
     # 为什么必须单独传：`prompt` 到这一步已经被 direct_gen 翻译成英文 tag 定稿
     # （`1girl, solo, robin_(honkai:_star_rail), long blonde hair ...`）。角色库
     # 要回答的是「用户**点名**了谁」——拿翻译稿去判，等于让机器人读自己写的
@@ -1175,7 +1179,8 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 群友在群里点名角色时一直没挂上 LoRA，画出来当然不像。
     from app import char_loras
     workflow, prompt = char_loras.apply(skill, prompt, workflow,
-                                        user_text=user_text)
+                                        user_text=user_text,
+                                        key=character)
     workflow_str = json.dumps(workflow)
     workflow = apply_prompt_placeholders(workflow_str, prompt, seed)
     if is_i2i:

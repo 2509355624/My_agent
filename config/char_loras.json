@@ -1628,6 +1628,377 @@
         "silver-hd"
       ],
       "source": "wuwa-all-anima-v2"
+    },
+    {
+      "key": "nanally-v2",
+      "name": "娜娜莉 v2",
+      "category": "异环",
+      "file": "anima\\异环\\nte-nanally-v2.safetensors",
+      "trigger": "nanally (neverness to everness)",
+      "identity": "red hair, ahoge, blunt bangs, red eyes, x hair ornament, black bow, cat ears, armband, long sleeves, school uniform",
+      "strength": 0.8,
+      "aliases": [
+        "nanally (neverness to everness)",
+        "娜娜莉 v2"
+      ],
+      "channels": [
+        "anima_clear",
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "miyako",
+      "name": "月雪宫子",
+      "category": "蔚蓝档案",
+      "file": "anima\\蔚蓝档案\\ba-miyako.safetensors",
+      "trigger": "miyako (blue archive)",
+      "identity": "halo, blue halo, long hair, purple eyes, grey hair, blue archive, 1girl, solo",
+      "strength": 0.8,
+      "aliases": [
+        "miyako (blue archive)",
+        "月雪宫子"
+      ],
+      "channels": [
+        "anima_clear",
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "gemini",
+      "name": "Gemini娘",
+      "category": "AI拟人",
+      "file": "anima\\AI拟人\\gemini-anima-v1.safetensors",
+      "trigger": "gemini_ai",
+      "identity": "blue hair, purple hair, multicolored hair, gradient hair, long hair, hair bun, ahoge, heterochromia, cat ears, cat tail, detached sleeves",
+      "strength": 0.8,
+      "aliases": [
+        "gemini_ai",
+        "Gemini娘"
+      ],
+      "channels": [
+        "anima_clear",
+        "anima-line",
+        "anima-real",
+        "hd_3_clear",
+        "hd_3_curvy",
+        "hd_3_gloss",
+        "hd_3_soft",
+        "silver",
+        "silver-hd"
+      ]
+    },
+    {
+      "key": "gemini-moss",
+      "name": "Gemini娘·moss",
+      "category": "AI拟人",
+      "file": "moss\\gemini-moss-v1.safetensors",
+      "trigger": "gemini musume",
+      "identity": "very long hair, blue hair, purple hair, gradient hair, two-tone hair, hair bun, star hair ornament, heterochromia, red eyes, yellow eyes",
+      "strength": 0.8,
+      "aliases": [
+        "gemini musume",
+        "Gemini娘·moss"
+      ],
+      "channels": [
+        "moss",
+        "moss-light",
+        "moss-qunyou",
+        "moss50",
+        "moss8",
+        "moss_page"
+      ]
+    },
+    {
+      "key": "jinhsi",
+      "name": "今汐",
+      "category": "鸣潮",
+      "file": "sdxl\\wuwa-jinhsi.safetensors",
+      "trigger": "jinhsi (wuthering waves)",
+      "identity": "long hair, bangs, twintails, grey eyes, hair ornament, jewelry, earrings, very long hair",
+      "strength": 0.8,
+      "aliases": [
+        "jinhsi (wuthering waves)",
+        "今汐"
+      ],
+      "channels": [
+        "miao",
+        "cunny",
+        "jank",
+        "nffa"
+      ]
+    },
+    {
+      "key": "aria",
+      "name": "爱芮",
+      "category": "绝区零",
+      "file": "sdxl\\zzz-wingxiang-v4.safetensors",
+      "trigger": "aria (zenless zone zero)",
+      "identity": "pink hair, multicolored hair, wings, pink gloves, white dress, black thighhighs, detached sleeves, fingerless gloves",
+      "strength": 0.8,
+      "aliases": [
+        "aria (zenless zone zero)",
+        "爱芮"
+      ],
+      "channels": [
+        "miao",
+        "cunny",
+        "jank",
+        "nffa"
+      ]
+    },
+    {
+      "key": "chinatsu",
+      "name": "绝区零·千夏",
+      "category": "绝区零",
+      "file": "sdxl\\zzz-wingxiang-v4.safetensors",
+      "trigger": "sunna (zenless zone zero)",
+      "identity": "necktie, red necktie, white shirt, hair ornament, short sleeves, bag, shirt",
+      "strength": 0.8,
+      "aliases": [
+        "sunna (zenless zone zero)",
+        "绝区零·千夏"
+      ],
+      "channels": [
+        "miao",
+        "cunny",
+        "jank",
+        "nffa"
+      ]
+    },
+    {
+      "key": "nangong",
+      "name": "南宫羽",
+      "category": "绝区零",
+      "file": "sdxl\\zzz-wingxiang-v4.safetensors",
+      "trigger": "nangong yu",
+      "identity": "multicolored hair, green hair bow, twintails, halo, bare shoulders, thighhighs",
+      "strength": 0.8,
+      "aliases": [
+        "nangong yu",
+        "南宫羽"
+      ],
+      "channels": [
+        "miao",
+        "cunny",
+        "jank",
+        "nffa"
+      ]
+    },
+    {
+      "key": "fushun",
+      "name": "抚顺",
+      "category": "碧蓝航线",
+      "file": "sdxl\\azur-fushun.safetensors",
+      "trigger": "shunfu",
+      "identity": "twintails, ahoge, hair ornament, long sleeves, gloves, detached sleeves",
+      "strength": 0.8,
+      "aliases": [
+        "shunfu",
+        "抚顺"
+      ],
+      "channels": [
+        "miao",
+        "cunny",
+        "jank",
+        "nffa"
+      ]
+    },
+    {
+      "key": "rossi",
+      "name": "洛茜",
+      "category": "终末地",
+      "file": "sdxl\\endfield-rossi.safetensors",
+      "trigger": "rossi (arknights)",
+      "identity": "animal ears, gloves, ears through hood, fingerless gloves, black gloves, hood",
+      "strength": 0.8,
+      "aliases": [
+        "rossi (arknights)",
+        "洛茜"
+      ],
+      "channels": [
+        "miao",
+        "cunny",
+        "jank",
+        "nffa"
+      ]
+    },
+    {
+      "key": "luotianyi",
+      "name": "洛天依",
+      "category": "Vocaloid",
+      "file": "sdxl\\vocaloid-luotianyi.safetensors",
+      "trigger": "luotianyi",
+      "identity": "green eyes, long hair, twintails, hair rings, hair ornament",
+      "strength": 0.8,
+      "aliases": [
+        "luotianyi",
+        "洛天依"
+      ],
+      "channels": [
+        "miao",
+        "cunny",
+        "jank",
+        "nffa"
+      ]
+    },
+    {
+      "key": "luotianyi-v4",
+      "name": "洛天依 V4",
+      "category": "Vocaloid",
+      "file": "sdxl\\vocaloid-luotianyi-v4.safetensors",
+      "trigger": "luo tianyi",
+      "identity": "grey hair, very long hair, twintails, nail polish, skirt, pleated skirt",
+      "strength": 0.8,
+      "aliases": [
+        "luo tianyi",
+        "洛天依 V4"
+      ],
+      "channels": [
+        "miao",
+        "cunny",
+        "jank",
+        "nffa"
+      ]
+    },
+    {
+      "key": "zhezhi",
+      "name": "折枝",
+      "category": "鸣潮",
+      "file": "sd15\\wuwa-zhezhi.safetensors",
+      "trigger": "zhezhi",
+      "identity": "black hair, long hair, bangs, earrings, jewelry, glasses, white pantyhose, dress",
+      "strength": 0.8,
+      "aliases": [
+        "zhezhi",
+        "折枝"
+      ],
+      "channels": [
+        "image_gen_v1",
+        "image_gen_v1_hires",
+        "nsfw_pose_gen"
+      ]
+    },
+    {
+      "key": "qingya-bw",
+      "name": "晴雅·保卫",
+      "category": "晴雅",
+      "file": "sd15\\qingya-bw.safetensors",
+      "trigger": "cfqingyabw",
+      "identity": "twintails, blue eyes, elbow gloves, pantyhose, crop top, belt, skirt",
+      "strength": 0.8,
+      "aliases": [
+        "cfqingyabw",
+        "晴雅·保卫"
+      ],
+      "channels": [
+        "image_gen_v1",
+        "image_gen_v1_hires",
+        "nsfw_pose_gen"
+      ]
+    },
+    {
+      "key": "qingya-qf",
+      "name": "晴雅·潜伏",
+      "category": "晴雅",
+      "file": "sd15\\qingya-qf.safetensors",
+      "trigger": "cfqingyaqf",
+      "identity": "twin braids, fingerless gloves, brown hair, pink skirt",
+      "strength": 0.8,
+      "aliases": [
+        "cfqingyaqf",
+        "晴雅·潜伏"
+      ],
+      "channels": [
+        "image_gen_v1",
+        "image_gen_v1_hires",
+        "nsfw_pose_gen"
+      ]
+    },
+    {
+      "key": "qingya-wz-bw",
+      "name": "王者晴雅·保卫",
+      "category": "晴雅",
+      "file": "sd15\\qingya-wz-bw.safetensors",
+      "trigger": "cfwangzheqingyabw",
+      "identity": "blue eyes, white hair, elbow gloves, pantyhose, belt, bare shoulders",
+      "strength": 0.8,
+      "aliases": [
+        "cfwangzheqingyabw",
+        "王者晴雅·保卫"
+      ],
+      "channels": [
+        "image_gen_v1",
+        "image_gen_v1_hires",
+        "nsfw_pose_gen"
+      ]
+    },
+    {
+      "key": "qingya-wz-qf",
+      "name": "王者晴雅·潜伏",
+      "category": "晴雅",
+      "file": "sd15\\qingya-wz-qf.safetensors",
+      "trigger": "cfwangzheqingyaqf",
+      "identity": "blonde hair, gun, handgun, weapon, holster",
+      "strength": 0.8,
+      "aliases": [
+        "cfwangzheqingyaqf",
+        "王者晴雅·潜伏"
+      ],
+      "channels": [
+        "image_gen_v1",
+        "image_gen_v1_hires",
+        "nsfw_pose_gen"
+      ]
+    },
+    {
+      "key": "laffey",
+      "name": "拉菲II",
+      "category": "碧蓝航线",
+      "file": "sd15\\azur-laffey-ii.safetensors",
+      "trigger": "laffey ii (azur lane)",
+      "identity": "laffey (azur lane), laffey ii (azur lane), twintails, red eyes, white hair, long hair, azur lane",
+      "strength": 0.8,
+      "aliases": [
+        "laffey ii (azur lane)",
+        "拉菲II"
+      ],
+      "channels": [
+        "image_gen_v1",
+        "image_gen_v1_hires",
+        "nsfw_pose_gen"
+      ]
+    },
+    {
+      "key": "yukikaze",
+      "name": "雪风",
+      "category": "碧蓝航线",
+      "file": "sd15\\azur-yukikaze.safetensors",
+      "trigger": "yukikaze",
+      "identity": "animal ears, cat ears, long hair, bow, hair bow, white hair, azur lane",
+      "strength": 0.8,
+      "aliases": [
+        "yukikaze",
+        "雪风"
+      ],
+      "channels": [
+        "image_gen_v1",
+        "image_gen_v1_hires",
+        "nsfw_pose_gen"
+      ]
     }
   ]
 }

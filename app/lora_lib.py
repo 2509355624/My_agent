@@ -184,6 +184,72 @@ def search(text, k=TOP_K):
     return out
 
 
+# ── 候选块（2026-11-06 用户拍板）──────────────────────────────────────
+# 中间那层「角色库 AI 判定」删掉了。检索结果直接当**参考资料**塞进大大怪
+# 自己的上下文，由它一次调用同时做三件事：判渠道 / 决定用不用库里这个角色 /
+# 写提示词。用不上就忽略，跟标签库资料一个待遇——**没有 skip 这个动作**。
+#
+# 为什么砍：多一次调用就多一个误判点，而且判定只能看见一张精简过的候选表
+# （key/名字/别名），看不见身份 tag 的细节、也看不见用户这句话的语气。把
+# 原始候选交给写提示词的那个模型，它自己就能对齐。
+PREVIEW_K = 6              # 最多放几条
+PREVIEW_IDENTITY = 120     # 每条 identity 截断
+PREVIEW_LIMIT = 1500       # 整块上限（字符）
+# 相关性门（2026-11-06 实测）：`search` 的 MIN_SCORE=0.35 太松——「帮我看看
+# 这个 bug」top 0.438、「画个绿头发的偶像」0.397 都能召回 6 条，塞给模型只是
+# 噪声。真点名（含名字原样命中的 0.45 加权）实测都在 0.57 以上：坎特蕾拉
+# 1.095、千夏 0.576。取 0.45 当闸：低于它 = 这句跟角色库没关系，整块不拼。
+PREVIEW_MIN = 0.45
+
+PREVIEW_HEAD = (
+    "\n【Anima 角色库 · 本次检索到的角色】\n"
+    "下面这些是按用户这句话在角色库里搜出来的（**可能无关，自己判断**）。\n"
+    "用户点名了 Anima 系渠道、并且要的就是其中某个角色 → 把该角色的 key 填进\n"
+    "JSON 的 `character` 字段；否则 `character` 留空，一切照常。\n\n"
+)
+
+
+def preview_block(text, k=PREVIEW_K):
+    """检索结果拼成一段参考资料，供 `direct_gen` 塞进提示词。空串 = 没候选。
+
+    内部就用 `search()`（向量 + 名字原样命中加权），不调大模型：整条路
+    只在本地跑，**不花 token**。返回的文本进的是**大大怪看到的上下文**，
+    不是最终生图提示词——最终 prompt 仍由它自己写。
+    """
+    t = str(text or "").strip()
+    if not t:
+        return ""
+    try:
+        hits = search(t, k)
+    except Exception:                                  # noqa: BLE001
+        log.warning("角色库检索异常，候选块留空", exc_info=True)
+        return ""
+    if not hits:
+        return ""
+    # 最高分不过闸 = 这句跟角色库无关（见 PREVIEW_MIN 注释），整块不拼。
+    if float(hits[0].get("score") or 0.0) < PREVIEW_MIN:
+        return ""
+    # 过了闸就只留同样过闸的那几条，别把 0.36 的凑数项带进去。
+    hits = [h for h in hits if float(h.get("score") or 0.0) >= PREVIEW_MIN]
+    by_key = {str(c.get("key")): c for c in entries()}
+    lines = []
+    for h in hits:
+        c = by_key.get(str(h.get("key"))) or {}
+        name = str(c.get("name") or h.get("name") or "").strip()
+        trig = str(c.get("trigger") or "").strip()
+        ident = str(c.get("identity") or "").strip()[:PREVIEW_IDENTITY]
+        head = "- %s｜%s" % (h["key"], name or "-")
+        if trig:
+            head += "｜trigger: %s" % trig
+        lines.append(head)
+        if ident:
+            lines.append("  ｜%s" % ident)
+    block = PREVIEW_HEAD + "\n".join(lines) + "\n"
+    if len(block) > PREVIEW_LIMIT:
+        block = block[:PREVIEW_LIMIT].rstrip() + "…\n"
+    return block
+
+
 ANIMA_CHANNELS = ["anima_clear", "anima-line", "anima-real",
                   "hd_3_clear", "hd_3_curvy", "hd_3_gloss", "hd_3_soft",
                   "silver", "silver-hd"]
