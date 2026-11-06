@@ -199,13 +199,21 @@ def apply(skill, prompt, workflow, user_text=""):
     # 「爱弥斯被画成白发蓝瞳」）：翻译模型不认识角色时会自己编一套外观，
     # 还会加 `original character`——那句等于告诉底模「这不是已知角色」。
     # 不清掉的话，后面再补 identity 也是两边打架，谁赢看运气。
-    prompt = _strip_conflicts(prompt)
-    parts = [prompt.rstrip(" ,")]
+    extra = _strip_conflicts(prompt)
+    # ── 顺序（2026-11-06 用户拍板）──────────────────────────────
+    #
+    # **原始角色提示词放最前面**，翻译稿里的其余需求（衣服、动作、场景、
+    # 构图）跟在后面，触发词压尾。理由：
+    #   · 角色库已经确认「这是谁」，身份就该由索引里的原始 tag 说了算；
+    #   · 放最后时它只是「补充说明」，和前面那串放不对地方的描写抢注意力，
+    #     经常被压过去（爱弥斯那次就是这么变成白发蓝瞳的）；
+    #   · 用户要换衣服时，衣服 tag 在它后面，仍然生效——脸部/身体特征由
+    #     前面那一段钉住，这正是「基于原始提示词改衣服、保住脸」。
+    parts = []
     if entry.get("identity"):
-        # 模型写英文 tag 时经常自己补一套错的外观（黑发、校服…），和 LoRA
-        # 打架；用带权重的固定外观压回去，发色 / 瞳色 / 猫耳这些是身份，
-        # 不跟着衣服走。
-        parts.append(str(entry["identity"]))
+        parts.append(str(entry["identity"]).strip(" ,"))
+    if extra:
+        parts.append(extra)
     if entry.get("trigger"):
         parts.append(str(entry["trigger"]))
     return wf, ", ".join(p for p in parts if p)
