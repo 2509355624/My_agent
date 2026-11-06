@@ -4167,6 +4167,8 @@ class GalleryCmdTest(unittest.TestCase):
     def test_private_chat_gets_the_gallery_url(self):
         text = self._text("private")
         self.assertIn(self.URL + "/gallery", text)
+        # 带解锁参数：这个浏览器可能刚玩过 /play，带着 fr_solo 页面锁
+        self.assertIn(self.URL + "/gallery?from=qq", text)
         self.assertIn("验证码", text)
 
     def test_group_chat_withholds_the_url(self):

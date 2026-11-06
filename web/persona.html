@@ -97,8 +97,10 @@
 
   /* `min-height: 0` 不能省：flex 子项的 min-height 默认是 `auto`，内容一多
      它就不肯收缩，会把下面的 `.composer` 挤出可视区（老浏览器上尤其明显）。*/
+  /* 2026-11-06：聊天正文的字号由「字体」滑块写进 --chat-fs。只放在 .log 上，
+     气泡不写自己的 font-size，自然继承；右栏、按钮、输入框一概不受影响。 */
   .log { flex: 1; min-height: 0; overflow-y: auto; padding: 16px;
-    display: flex;
+    display: flex; font-size: 14px; font-size: var(--chat-fs, 14px);
     flex-direction: column; gap: 12px; scroll-behavior: smooth;
     overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
   /* 聊天背景（2026-11-05）：图只铺在聊天区，气泡本身是不透明底，
@@ -145,14 +147,16 @@
   .tb:disabled { opacity: .35; cursor: default; }
 
   .empty { color: var(--text-mute); text-align: center; padding: 70px 20px;
-    font-size: 13px; line-height: 2; }
+    font-size: 13px; font-size: calc(var(--chat-fs, 14px) - 1px);
+    line-height: 2; }
 
   /* 开场导读（2026-11-04）：新线第一屏先交代「现在是什么情况」，
      不然玩家打开就是空的，不知道怎么开口。灰色 = 系统说话，不是她说的。 */
   .intro { margin: 10px 2px 18px; padding: 12px 14px; border-radius: var(--rs);
     background: var(--bg-elev);
     border: 1px dashed var(--border);
-    color: var(--text-dim); font-size: 13px; line-height: 1.85;
+    color: var(--text-dim); font-size: 13px;
+    font-size: calc(var(--chat-fs, 14px) - 1px); line-height: 1.85;
     white-space: pre-wrap; }
   .intro::before { content: "开场"; display: block; margin-bottom: 6px;
     font-size: 11px; letter-spacing: .12em; color: var(--text-mute); }
@@ -185,7 +189,8 @@
      手机点哪个按钮就显示哪一栏。三栏是独立的 textarea，切换不丢内容。 */
   #inp { border-left: 3px solid #6ea8fe; }
   .precise { flex: none; padding: 7px 14px 0; }
-  .preciseTabs { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .preciseTabs { display: flex; gap: 6px; align-items: center;
+    flex-wrap: wrap; position: relative; }
   .ptab, .ptgl { background: transparent; border: 1px solid var(--border);
     border-radius: 999px; padding: 5px 11px; font: inherit; font-size: 12px;
     cursor: pointer; color: var(--text-dim); }
@@ -209,6 +214,21 @@
   .f-action textarea { border-left: 3px solid #5fd6a0; }
   .f-plot textarea { border-left: 3px solid #ffb86b; }
   .pfield textarea:focus { border-color: currentColor; }
+  /* 「字体」按钮和它弹出的滑块（2026-11-06）：锚在标签栏上方，不占输入区。
+     z-index 120 在 .app 这个层叠上下文内压过气泡，仍低于弹窗 / 看图 / toast。 */
+  #btnFont.on { background: var(--bg-input); border-color: var(--accent);
+    color: var(--accent); }
+  .fontPop { position: absolute; right: 0; bottom: calc(100% + 8px);
+    width: 230px; box-sizing: border-box; z-index: 120;
+    background: var(--bg-elev); border: 1px solid var(--border);
+    border-radius: var(--r); padding: 12px 14px; }
+  .fontPop .fpH { display: flex; justify-content: space-between;
+    align-items: baseline; font-size: 12px; color: var(--text-dim);
+    margin-bottom: 10px; }
+  .fontPop .fpH b { font-size: 13px; font-weight: 500; color: var(--accent); }
+  .fontPop input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .fontPop .fpTip { font-size: 11px; color: var(--text-mute);
+    line-height: 1.6; margin-top: 8px; }
   @media (min-width: 1001px) {
     .preciseBody.open { flex-direction: row; }
     .pfield { display: block; flex: 1; min-width: 0; }
@@ -680,6 +700,16 @@
                 onclick="pickPField('action')">具体动作</button>
         <button class="ptab" data-f="plot"
                 onclick="pickPField('plot')">剧情推进</button>
+        <!-- 聊天字号（2026-11-06）：点开浮层拖滑块，只放大聊天气泡，
+             写浏览器本地，刷新不丢。放这里是因为它和输入区一样是「看字」的开关。 -->
+        <button class="ptab" id="btnFont" type="button"
+                title="调整聊天正文字号">字体</button>
+        <div class="fontPop" id="fontPop" style="display:none">
+          <div class="fpH"><span>聊天字号</span><b id="fontVal">14px</b></div>
+          <input type="range" id="fontRange" min="13" max="22" step="1"
+                 value="14" aria-label="聊天字号">
+          <div class="fpTip">只影响聊天区正文，右栏与输入框不变</div>
+        </div>
         <button class="ptgl" id="btnPrecise"
                 onclick="togglePrecise()">精确输入 ▾</button>
       </div>
@@ -976,6 +1006,10 @@
 <script>
 const $ = id => document.getElementById(id);
 const QQ = new URLSearchParams(location.search).get("qq") || "";
+// 分享用的独立游客页（2026-11-06）：/play 和 /persona 是同一份 HTML，靠路径
+// 认出孤立态。这一态里没有去画廊 / 登录 / 角色管理的入口，服务端也会把其它
+// 页面路由挡回 /play（见 friend_app.py 的 _gate）。
+const SOLO = /^\/play(?:\.html)?\/?$/.test(location.pathname);
 let card = null, busy = false, msgs = [];
 // 当前游戏日 / 时段（2026-11-05）：右栏「时间」那行显示「在一起第 N 天 · 中午」。
 let CUR_DAY = 0, CUR_PHASE = "";
@@ -1006,6 +1040,15 @@ let AFF = null;          // 攻略模式状态（session/chat 带回来；null=�
 (function bindGalleryLink() {
   const a = $("btnGallery");
   if (!a) return;
+  // 独立游客页连按钮都不给：藏起来只是防手滑，这里干脆不绑跳转，
+  // 免得哪天有人改了样式又把它露出来。首屏就收干净，不等 session 回来。
+  if (SOLO) {
+    ["btnGallery", "btnLogin", "btnNew", "btnBurger"].forEach(id => {
+      const el = $(id);
+      if (el) el.style.display = "none";
+    });
+    return;
+  }
   a.addEventListener("click", function (e) {
     e.preventDefault();
     const q = QQ ? ("?qq=" + encodeURIComponent(QQ)) : "";
@@ -1042,6 +1085,9 @@ let AFF = null;          // 攻略模式状态（session/chat 带回来；null=�
 
 // ── 请求 ──────────────────────────────────────────────
 async function api(p, opt) {
+  // 独立游客页走专用代理（2026-11-06）：服务端一律按游客转发，哪怕浏览器
+  // 里带着登录 cookie。普通 /persona 页仍走 /api/persona/*，互不影响。
+  if (SOLO) p = p.replace(/^\/api\/persona\//, "/api/solo/");
   const u = p + (p.includes("?") ? "&" : "?") + "qq=" + encodeURIComponent(QQ);
   const r = await fetch(u, opt);
   let d;
@@ -1182,9 +1228,17 @@ function goFinish() {
 // 每一次都是同一条消息，不需要另一套收尾流程。
 
 // ── 左栏 ──────────────────────────────────────────────
-async function loadCards() {
+async function loadCards(pending) {
   try {
-    const d = await api("/api/persona/cards");
+    // 首屏由 loadSession 把请求提前发出去（和 /session 并行），这里只等结果。
+    // 单独调用时（没有 pending）就自己发。两种失败都折成同一个对象，免得
+    // 并行发起的请求在 session 抛错时变成未捕获的 rejection。
+    const r = pending
+      ? await pending
+      : await api("/api/persona/cards").then(
+          d => ({ ok: true, d }), e => ({ ok: false, e }));
+    if (!r.ok) throw r.e;
+    const d = r.d;
     const box = $("cards");
     box.innerHTML = "";
     const list = d.cards || [];
@@ -1740,7 +1794,8 @@ function renderPanel(a, p) {
 async function refreshPanel() {
   if (ROLE === "guest") return;
   try {
-    const r = await fetch("/api/persona/affection/panel");
+    const r = await fetch(SOLO ? "/api/solo/affection/panel"
+                                : "/api/persona/affection/panel");
     const d = await r.json();
     if (d && d.ok) {
       PANEL = d.panel;
@@ -2037,6 +2092,12 @@ async function loadEarlier() {
 }
 
 async function loadSession() {
+  // 角色卡列表和会话在同一拍发出去：隧道一个来回就要几秒，串行会白背
+  // 一个 RTT。渲染仍排在 session 之后——loadCards 要用 card 高亮当前卡，
+  // 提前渲染会丢高亮。这里只把「等请求」并行化，不改任何顺序语义。
+  // 每次 loadSession 都重新发起（切角色 / 清存档后会再调），不复用旧数据。
+  const cardsP = api("/api/persona/cards").then(
+    d => ({ ok: true, d }), e => ({ ok: false, e }));
   try {
     const d = await api("/api/persona/session");
     ROLE = d.role || "member";
@@ -2059,7 +2120,7 @@ async function loadSession() {
     // 弹窗只由这一轮聊天回包里的 `climax` 触发，一次高潮问一次。
     ensureIntro();       // 新线：铺一段灰底说明当前情况（不阻塞上面的渲染）
     loadPics();          // 服务器映射恢复历史图（重登/换设备也能看到）
-    await loadCards();
+    await loadCards(cardsP);
     applyRoleUI();
     loadBg();            // 聊天背景：换角色后本地设置不变，没设过才重新解析服务端
   } catch (e) { toast(e.message, true); }
@@ -2315,7 +2376,12 @@ function applyRoleUI() {
   const guest = ROLE === "guest";
   // 游客：隐藏「新建角色」（那是站主才有的事）
   $("btnNew").style.display = guest ? "none" : "";
-  $("btnLogin").style.display = guest ? "" : "none";
+  // 独立游客页没有「登录」：那会跳去群友页首页，正是这一页要隔掉的地方。
+  $("btnLogin").style.display = (guest && !SOLO) ? "" : "none";
+  if (SOLO) {
+    const g = $("btnGallery"); if (g) g.style.display = "none";
+    const n = $("btnNew");     if (n) n.style.display = "none";
+  }
   // 游客固定学妹（2026-11-05 用户拍板）：角色抽屉不给，免得点了换人
   // 只换来一句「体验版只能玩学妹」。
   const burger = $("btnBurger");
@@ -2329,7 +2395,7 @@ function applyRoleUI() {
     if (el) el.disabled = done;
   });
   $("inp").placeholder = done
-    ? "体验版玩完啦，点右上角登录继续"
+    ? (SOLO ? "体验版玩完啦" : "体验版玩完啦，点右上角登录继续")
     : "说点什么…";
 }
 
@@ -2950,7 +3016,10 @@ $("inp").addEventListener("input", e => {
   e.target.style.height = "auto";
   e.target.style.height = Math.min(140, e.target.scrollHeight) + "px";
 });
-$("btnNew").onclick = () => { location.href = "/characters" + (QQ ? ("?qq=" + QQ) : ""); };
+$("btnNew").onclick = () => {
+  if (SOLO) return;
+  location.href = "/characters" + (QQ ? ("?qq=" + QQ) : "");
+};
 
 // ── 角色列表的点击：**事件委托**（2026-11-03）────────────────
 //
@@ -3029,6 +3098,51 @@ $("log").addEventListener("scroll", () => {
 });
 // 第一次打开如果一屏就装下了（新线只有几轮），也允许手动往回翻：
 // 这条线本来就没更多了，MORE_HIST 会是 false，函数自己会退出。
+
+// ── 聊天字号（2026-11-06）─────────────────────────────────
+// 变量 --chat-fs 只挂在 .log 上，气泡继承它；右栏数值、按钮、输入框一概不动。
+// 存浏览器本地（不跟账号绑定），换浏览器或清缓存回到 14px 是已知且接受的。
+const FS_KEY = "persona_chat_fs";
+const FS_MIN = 13, FS_MAX = 22, FS_DEF = 14;
+
+function applyFs(px) {
+  let v = Number(px);
+  if (!isFinite(v)) v = FS_DEF;
+  v = Math.max(FS_MIN, Math.min(FS_MAX, Math.round(v)));
+  document.documentElement.style.setProperty("--chat-fs", v + "px");
+  const r = $("fontRange"), lab = $("fontVal"), btn = $("btnFont");
+  if (r) r.value = String(v);
+  if (lab) lab.textContent = v + "px";
+  if (btn) btn.title = "聊天字号 " + v + "px，点击调整";
+  return v;
+}
+
+function initFs() {
+  let saved = FS_DEF;
+  try {
+    const raw = localStorage.getItem(FS_KEY);
+    if (raw !== null) saved = raw;
+  } catch (e) { /* 隐私模式下读不到就走默认 */ }
+  applyFs(saved);
+}
+
+$("btnFont").onclick = function (e) {
+  e.stopPropagation();
+  const p = $("fontPop");
+  const show = p.style.display === "none";
+  p.style.display = show ? "" : "none";
+  this.classList.toggle("on", show);
+};
+$("fontPop").addEventListener("click", e => e.stopPropagation());
+$("fontRange").oninput = function () {
+  const v = applyFs(this.value);
+  try { localStorage.setItem(FS_KEY, String(v)); } catch (e) {}
+};
+document.addEventListener("click", () => {
+  $("fontPop").style.display = "none";
+  $("btnFont").classList.remove("on");
+});
+initFs();
 
 loadSession();
 </script>

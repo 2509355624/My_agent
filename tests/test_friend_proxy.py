@@ -395,5 +395,83 @@ class WorkshopPageTest(unittest.TestCase):
         self.assertEqual(r.status_code, 404)
 
 
+class HtmlGzipTest(unittest.TestCase):
+    """所有 HTML 页面走统一出口压缩（2026-11-06，A 方案）。
+
+    静态页 `send_from_directory` 是 direct_passthrough，反代回来的
+    `/persona` 是普通 Response，两种都得压对；客户端不支持时字节必须
+    一个不差；已经压过的 /workshop 不能被压第二遍。缓存口径不动：
+    页面仍然 no-store，这里只省传输字节。
+    """
+
+    def setUp(self):
+        self.client = friend_app.app.test_client()
+        friend_app._gz_cache.clear()
+        self.addCleanup(friend_app._gz_cache.clear)
+
+    def _raw(self, name):
+        with open(os.path.join(friend_app.WEB_DIR, name), "rb") as f:
+            return f.read()
+
+    def test_static_page_is_gzipped_and_lossless(self):
+        raw = self._raw("compat.html")
+        r = self.client.get("/compat", headers={"Accept-Encoding": "gzip"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers.get("Content-Encoding"), "gzip")
+        self.assertEqual(r.headers.get("Vary"), "Accept-Encoding")
+        self.assertEqual(int(r.headers["Content-Length"]), len(r.data))
+        self.assertEqual(gzip.decompress(r.data), raw, "解压回来必须一字节不差")
+        self.assertLess(len(r.data), len(raw) / 2, "HTML 压不动就是没生效")
+
+    def test_client_without_gzip_gets_the_original_bytes(self):
+        r = self.client.get("/compat")
+        self.assertIsNone(r.headers.get("Content-Encoding"))
+        self.assertEqual(r.data, self._raw("compat.html"))
+        self.assertEqual(r.headers.get("Vary"), "Accept-Encoding")
+
+    def test_caching_policy_is_unchanged(self):
+        """B 方案没做：页面仍 no-store，压缩不等于放开缓存。"""
+        r = self.client.get("/compat", headers={"Accept-Encoding": "gzip"})
+        self.assertIn("no-store", r.headers.get("Cache-Control", ""))
+        self.assertNotIn("ETag", r.headers,
+                         "原文的 ETag 对 gzip 字节不成立，必须去掉")
+
+    def test_repeated_request_hits_the_compression_cache(self):
+        a = self.client.get("/compat", headers={"Accept-Encoding": "gzip"})
+        b = self.client.get("/compat", headers={"Accept-Encoding": "gzip"})
+        self.assertEqual(a.data, b.data)
+        self.assertEqual(len(friend_app._gz_cache), 1)
+
+    def test_proxied_persona_page_is_also_gzipped(self):
+        """5174 反代回来的聊天页是普通 Response，也要覆盖到。"""
+        html = ("<!doctype html><title>角色扮演</title>"
+                + "<div class='bubble'>今天下雨了</div>" * 400).encode("utf-8")
+        fake = _FakeResp(body=html, ctype="text/html; charset=utf-8")
+        sess = mock.MagicMock()
+        sess.get.return_value = fake
+        with patch.object(friend_app, "_new_session", return_value=sess):
+            r = self.client.get("/persona", headers={"Accept-Encoding": "gzip"})
+        self.assertEqual(r.headers.get("Content-Encoding"), "gzip")
+        self.assertEqual(gzip.decompress(r.data), html)
+
+    def test_already_gzipped_response_is_not_compressed_twice(self):
+        resp = friend_app.app.response_class(b"already-gzipped",
+                                             mimetype="text/html")
+        resp.headers["Content-Encoding"] = "gzip"
+        with friend_app.app.test_request_context(
+                "/x", headers={"Accept-Encoding": "gzip"}):
+            out = friend_app._gzip_html(resp)
+        self.assertEqual(out.data, b"already-gzipped")
+
+    def test_non_html_response_is_left_alone(self):
+        resp = friend_app.app.response_class(b'{"ok":true}',
+                                             mimetype="application/json")
+        with friend_app.app.test_request_context(
+                "/x", headers={"Accept-Encoding": "gzip"}):
+            out = friend_app._gzip_html(resp)
+        self.assertIsNone(out.headers.get("Content-Encoding"))
+        self.assertEqual(out.data, b'{"ok":true}')
+
+
 if __name__ == "__main__":
     unittest.main()

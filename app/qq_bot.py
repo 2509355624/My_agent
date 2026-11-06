@@ -42,7 +42,7 @@ except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
 from app import (card_bot, confirm_gate, direct_gen, galgame, image_jobs,
-                 lora_bot,
+                 lora_bot, solo_bot,
                  image_log,
                  image_out, interject,
                  logsetup,
@@ -729,6 +729,10 @@ def _should_reply(ev, target, target_id, text, at_me, has_image=False,
     # 「/画廊」同理：斜杠即命令，群里不用 @ 也不用喊名字（见上方常量注释）。
     if _GALLERY_RE.match(text):
         return True, "画廊指令（带斜杠）"
+    # 「#游客模式」（2026-11-06）：独立游客页地址。群里同样不用 @；谁发都给
+    # ——链接本来就是拿去分享的（用户拍板）。判据见 app/solo_bot.py。
+    if solo_bot.SOLO_RE.search(text):
+        return True, "游客模式指令"
     # 「/角色库」（2026-11-06）：同样是斜杠即命令，不用 @。
     if lora_bot.ROLELIB_RE.search(text):
         return True, "角色库指令（带斜杠）"
@@ -1601,6 +1605,12 @@ class SessionRunner:
         # 借用线让路：这套是生图机器人的语义，被借的 agent 不该被它接管。
         msg_id = str(batch[0].get("reply_to") or "")
         if not borrowed:
+            # `#游客模式`（2026-11-06）：回一张聊天记录卡片，里面是独立游客页
+            # 的当前地址。整轮接管，必须排在直达管道前面——否则「游客模式」
+            # 会被当成画面需求去跑图。群聊私聊都给，见 _should_reply。
+            if solo_bot.SOLO_RE.search(own_text or ""):
+                solo_bot.send(self.target, self.target_id)
+                return
             # `/角色库`（2026-11-06）：合并转发列出当前 60 个角色 + 支持的渠道。
             # 零 LLM、只读配置；必须排在直达管道前面，否则「角色库」会被当成
             # 画面需求画出来。斜杠即命令，群里不用 @。

@@ -89,6 +89,15 @@
     transition: opacity .2s; pointer-events: none; z-index: 99; }
   .toast.on { opacity: 1; }
   .toast.err { border-color: var(--err); color: var(--err); }
+  /* 实时刷新：未读小圆点 / 新消息浮标（2026-11-06） */
+  .row .dot { width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent); flex: none; }
+  .jump { position: fixed; right: 34px; bottom: 26px; z-index: 20;
+    background: var(--accent-dim); border: 1px solid var(--accent);
+    color: var(--text); border-radius: 18px; padding: 7px 14px;
+    font: inherit; font-size: 12px; cursor: pointer; display: none;
+    box-shadow: 0 4px 16px rgba(0,0,0,.45); }
+  .jump:hover { background: var(--accent); color: #1a0d14; }
 </style>
 </head>
 <body>
@@ -125,10 +134,34 @@
   </main>
 </div>
 <div class="toast" id="toast"></div>
+<button class="jump" id="jump">↓ 新消息</button>
 
 <script>
 const $ = id => document.getElementById(id);
 let ALL = [], FILTER = "all", CUR = null;
+const AUTO_KEY = "persona_admin_auto";
+const UNREAD = new Set();        // 自动刷新期间轮次涨过的会话
+let PREV = {}, FIRST_LOAD = true, JUMP_N = 0;
+
+// 5 分钟内显示相对时间，更早的用服务端的「11-06 20:08」，跨天更好认
+function relTime(sec, fallback) {
+  if (!sec) return fallback || "";
+  const s = Math.max(0, Date.now() / 1000 - sec);
+  if (s < 10) return "刚刚";
+  if (s < 60) return Math.floor(s) + " 秒前";
+  if (s < 3600) return Math.floor(s / 60) + " 分钟前";
+  return fallback || "";
+}
+function hideJump() { JUMP_N = 0; $("jump").style.display = "none"; }
+function atBottom() {
+  const l = $("log");
+  return l.scrollHeight - l.scrollTop - l.clientHeight < 80;
+}
+function toBottom() {
+  $("log").scrollTop = $("log").scrollHeight;
+  hideJump();
+}
+$("jump").onclick = toBottom;
 
 async function api(p, opt) {
   const r = await fetch(p, opt);
@@ -153,6 +186,7 @@ function tagClass(kind) {
 
 function render() {
   const box = $("list");
+  const keep = box.scrollTop;        // 别让 5 秒一轮把左栏滚动位置打断
   box.innerHTML = "";
   const rows = ALL.filter(r => FILTER === "all" || r.short === FILTER);
   if (!rows.length) {
@@ -164,6 +198,7 @@ function render() {
     el.className = "row" + (CUR && CUR.key === r.key && CUR.source === r.source ? " on" : "");
     el.innerHTML =
       '<div class="l1"><span class="tag ' + tagClass(r.kind) + '"></span>' +
+      (UNREAD.has(r.key + "|" + r.source) ? '<span class="dot"></span>' : '') +
       '<span class="nm"></span></div>' +
       '<div class="l2"><span class="card"></span><span class="st"></span>' +
       '<span class="tm"></span></div>';
@@ -171,10 +206,11 @@ function render() {
     el.querySelector(".nm").textContent = r.label;
     el.querySelector(".card").textContent = r.card ? ("演 " + r.card) : "";
     el.querySelector(".st").textContent = r.turns + " 轮";
-    el.querySelector(".tm").textContent = r.mtime_text;
+    el.querySelector(".tm").textContent = relTime(r.mtime, r.mtime_text) || r.mtime_text || "";
     el.onclick = () => open(r);
     box.appendChild(el);
   });
+  box.scrollTop = keep;
   $("cnt").textContent = "共 " + ALL.length + " 个会话";
 }
 
@@ -186,6 +222,8 @@ function setNote(text) {
 
 async function open(r) {
   CUR = r;
+  UNREAD.delete(r.key + "|" + r.source);
+  hideJump();
   render();
   $("who").textContent = r.label;
   $("meta").textContent = r.short + " · " + r.turns + " 轮 · " + r.mtime_text;
@@ -211,24 +249,38 @@ async function load() {
   try {
     const d = await api("/api/persona_admin/list");
     ALL = d.sessions || [];
+    const now = {};
+    ALL.forEach(r => {
+      const id = r.key + "|" + r.source;
+      now[id] = r.turns;
+      if (!FIRST_LOAD && PREV[id] !== undefined && r.turns > PREV[id]) UNREAD.add(id);
+    });
+    PREV = now;
+    FIRST_LOAD = false;
+    if (CUR) {
+      CUR = ALL.find(r => r.key === CUR.key && r.source === CUR.source) || CUR;
+      $("meta").textContent = CUR.short + " · " + CUR.turns + " 轮 · " +
+        (relTime(CUR.mtime, CUR.mtime_text) || CUR.mtime_text || "");
+    }
     $("cnt").textContent = "共 " + ALL.length + " 个会话";
     render();
   } catch (e) { toast(e.message, true); }
 }
 
-// ── 自动刷新（2026-11-03）─────────────────────────────────
-// 服务端没有缓存，每次调用都是现读磁盘，所以刷一次就是最新。
-// 默认**关**：看对话时页面自己跳会很烦。想边看群友边聊就打开。
+// ── 自动刷新（2026-11-06 改）──────────────────────────────
+// 服务端没有缓存，每次调用都现读磁盘，所以拉一次就是最新。
+// 默认开、开关记本地；后台标签照拉；详情只把多出来的消息追加到末尾，
+// 不清空重绘，滚动位置不动；没贴着底时给一个「N 条新消息」浮标。
 let AUTO_T = null;
-function setAuto(on) {
+function setAuto(on, remember) {
   if (AUTO_T) { clearInterval(AUTO_T); AUTO_T = null; }
+  $("auto").checked = on;
   $("auto").parentNode.classList.toggle("on", on);
+  if (remember) { try { localStorage.setItem(AUTO_KEY, on ? "1" : "0"); } catch (e) {} }
   if (!on) return;
   AUTO_T = setInterval(async () => {
-    // 正在读详情就跳过这一轮，别把滚动位置打断
-    if (document.hidden) return;
     await load();
-    if (CUR) await refreshCurrent();
+    await refreshCurrent();
   }, 5000);
 }
 
@@ -237,11 +289,38 @@ async function refreshCurrent() {
   try {
     const d = await api("/api/persona_admin/detail?key=" +
       encodeURIComponent(CUR.key) + "&source=" + encodeURIComponent(CUR.source));
-    const n = (d.messages || []).length;
+    const msgs = d.messages || [];
     const shown = $("log").querySelectorAll(".msg").length;
-    if (n === shown) return;          // 条数没变就别重绘，免得闪
-    renderMessages(d);
-  } catch (e) { /* 自动刷新失败就静默跳过，下一轮再试 */ }
+    if (msgs.length === shown) return;      // 条数没变就别动 DOM
+    const stick = atBottom();
+    if (msgs.length < shown || !shown) {    // 回退 / 首次从空态来消息：整块重画
+      renderMessages(d);
+      if (stick) toBottom();
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    msgs.slice(shown).forEach(m => frag.appendChild(makeMsg(m)));
+    $("log").appendChild(frag);
+    if (stick) toBottom();                 // 正贴着底就继续跟到最新
+    else {
+      JUMP_N += msgs.length - shown;
+      const b = $("jump");
+      b.textContent = "↓ " + JUMP_N + " 条新消息";
+      b.style.display = "";
+    }
+  } catch (e) { /* 自动刷新失败静默跳过，下一轮再试 */ }
+}
+
+function makeMsg(m) {
+  const el = document.createElement("div");
+  el.className = "msg " + (m.role === "user" ? "u" : "a");
+  el.innerHTML = '<div class="b"></div><div class="m"></div>';
+  el.querySelector(".b").textContent = m.text;
+  if (m.role === "assistant" && m.mood) {
+    el.querySelector(".m").textContent =
+      m.mood + " " + (m.intensity || 0) + (m.state ? ("　" + m.state) : "");
+  }
+  return el;
 }
 
 function renderMessages(d) {
@@ -252,22 +331,14 @@ function renderMessages(d) {
     log.innerHTML = '<div class="empty">这个会话没有消息</div>';
     return;
   }
-  msgs.forEach(m => {
-    const el = document.createElement("div");
-    el.className = "msg " + (m.role === "user" ? "u" : "a");
-    el.innerHTML = '<div class="b"></div><div class="m"></div>';
-    el.querySelector(".b").textContent = m.text;
-    if (m.role === "assistant" && m.mood) {
-      el.querySelector(".m").textContent =
-        m.mood + " " + (m.intensity || 0) + (m.state ? ("　" + m.state) : "");
-    }
-    log.appendChild(el);
-  });
+  const frag = document.createDocumentFragment();
+  msgs.forEach(m => frag.appendChild(makeMsg(m)));
+  log.appendChild(frag);
 }
 
 $("auto").onchange = (e) => {
-  setAuto(e.target.checked);
-  if (e.target.checked) toast("每 5 秒自动刷新");
+  setAuto(e.target.checked, true);
+  toast(e.target.checked ? "每 5 秒自动刷新" : "已停止自动刷新");
 };
 
 $("filters").onclick = (e) => {
@@ -299,6 +370,11 @@ $("del").onclick = async () => {
   } catch (e) { toast(e.message, true); }
 };
 
+// 不写死在 HTML：本地存过关就以本地为准，否则默认开。
+// 这样也顺手治了「浏览器恢复了勾选框、定时器却没起」的假开状态。
+let autoOn = true;
+try { if (localStorage.getItem(AUTO_KEY) === "0") autoOn = false; } catch (e) {}
+setAuto(autoOn, false);
 load();
 </script>
 </body>

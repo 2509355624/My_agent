@@ -25,6 +25,7 @@
 """
 
 import gzip
+import hashlib
 import json
 import logging
 import os
@@ -32,7 +33,7 @@ import threading
 import time
 
 import requests
-from flask import (Flask, Response, jsonify, make_response, redirect, request,
+from flask import (Flask, Response, g, jsonify, make_response, redirect, request,
                    send_from_directory, stream_with_context)
 
 from app import friend_auth
@@ -49,6 +50,14 @@ BACKEND = os.getenv("FRIEND_BACKEND", "http://127.0.0.1:5174").rstrip("/")
 # 登录态——游客没有 QQ 号，本来就不该有一张「登录凭证」。
 GUEST_COOKIE = "fr_guest"
 GUEST_TTL = 7 * 86400
+
+# 分享用的独立游客页（2026-11-06 用户要）：`/play` 下发这个标记，带标记的
+# **未登录**访客整个浏览会话都被圈在 /play 里，改地址栏去 /、/gallery 也挡回。
+# 已登录的站主不受页面锁影响——他还得进自己的画廊和管理页。
+# 强制游客身份另走 `/api/solo/*` 专用代理，不用这个 cookie 判断，免得站主
+# 自己打开过 /play 之后，普通 /persona 页的聊天也被当成游客。
+SOLO_COOKIE = "fr_solo"
+SOLO_PATH = "/play"
 
 app = Flask(__name__, static_folder=None)
 # 页面里没有任何外部资源，CSP 就按最紧的写：只允许自己和内联样式/脚本。
@@ -168,12 +177,80 @@ def _gate():
     bucket = "img" if (request.path or "").startswith("/api/gal/img/") else "all"
     if not rate_ok(bucket):
         return _secure(jsonify({"ok": False, "error": "请求太频繁，歇一下"})), 429
+    # 独立游客页的隔离：只圈「没登录 + 进过 /play」的人，且只挡页面导航。
+    # API 一律放行——聊天要靠它，其余接口本来就要求登录（见 _forward）。
+    p = (request.path or "/").rstrip("/") or "/"
+    # QQ「/画廊」发出来的正式入口：先把 /play 的页面锁解开再按正常鉴权走。
+    # 2026-11-06 回归：站主自己点过一次 /play 后，浏览器带着 7 天的 fr_solo，
+    # 再点 QQ 给的 /gallery 会被下面这条挡回游客页，看起来像「链接发错了」。
+    # 带 from=qq 只可能是刚从 QQ 指令拿到的链接；访客在 /play 里手改地址栏
+    # 到 /gallery（不带参数）仍然挡回，独立页的孤立性不变。
+    if (p in ("/gallery", "/gallery.html")
+            and request.args.get("from") == "qq" and _solo_in()):
+        g.clear_solo = True
+        return None
+    if (_solo_in() and not _logged_in()
+            and not p.startswith("/api/")
+            and p not in (SOLO_PATH, SOLO_PATH + ".html", "/health", "/logout")):
+        return redirect(SOLO_PATH)
     return None
+
+
+# ─── HTML 统一 gzip（2026-11-06）─────────────────────────
+# 隧道 RTT 本来就 3~4 秒，聊天页 148KB 明文还要再传十几秒。页面里全是
+# 重复的标签和样式，gzip 一般能压到 1/5。放在统一出口压，路由一行不用改：
+# send_from_directory 的静态页、5174 反代回来的 persona.html、错误页都覆盖。
+# /workshop 自己已经压过（带 Content-Encoding），这里跳过，免得压两遍。
+#
+# 不改 HTTP 缓存口径：页面仍旧 no-store（B 方案没做），压缩只省传输字节。
+# 压缩结果按内容缓存，省掉每个请求现压的 CPU；key 是内容 hash，改了文件
+# 自然换 key，不用记得清缓存。
+_gz_lock = threading.Lock()
+_gz_cache = {}          # sha1(raw) -> gz
+
+
+def _gzip_html(resp):
+    if resp.status_code != 200 or resp.headers.get("Content-Encoding"):
+        return resp
+    if not str(resp.headers.get("Content-Type") or "").startswith("text/html"):
+        return resp
+    # 同一个 URL 可能回两种字节，中间的代理 / CDN 必须按这个头分开存
+    resp.headers["Vary"] = "Accept-Encoding"
+    if "gzip" not in (request.headers.get("Accept-Encoding") or "").lower():
+        return resp
+    # send_from_directory 走 direct_passthrough（文件句柄直接交给 WSGI），
+    # 想读字节得先关掉直传；万一读不出来就原样发，绝不为了压缩弄坏页面。
+    was_direct = resp.direct_passthrough
+    if was_direct:
+        resp.direct_passthrough = False
+    try:
+        raw = resp.get_data()
+    except Exception:
+        resp.direct_passthrough = was_direct
+        return resp
+    if not raw:
+        return resp
+    key = hashlib.sha1(raw).digest()
+    with _gz_lock:
+        gz = _gz_cache.get(key)
+        if gz is None:
+            gz = gzip.compress(raw, 6)
+            if len(_gz_cache) >= 24:
+                _gz_cache.clear()
+            _gz_cache[key] = gz
+    resp.set_data(gz)
+    resp.headers["Content-Encoding"] = "gzip"
+    if "ETag" in resp.headers:
+        del resp.headers["ETag"]     # 原文的 ETag 对压缩后的字节不成立
+    resp.content_length = len(gz)
+    return resp
 
 
 @app.after_request
 def _after(resp):
-    return _secure(resp)
+    if getattr(g, "clear_solo", False):
+        resp.delete_cookie(SOLO_COOKIE, path="/")
+    return _gzip_html(_secure(resp))
 
 
 # ─── 登录 ────────────────────────────────────────────────
@@ -213,6 +290,8 @@ def logout():
     resp = make_response(jsonify({"ok": True}))
     resp.delete_cookie(friend_auth.COOKIE_NAME, path="/")
     resp.delete_cookie(GUEST_COOKIE, path="/")
+    # 退出登录顺手解开 /play 的页面锁：站主想回自己的画廊不用去清浏览器 cookie。
+    resp.delete_cookie(SOLO_COOKIE, path="/")
     return resp
 
 
@@ -234,6 +313,11 @@ def _guest_in():
     """游客标记。只在没登录时算数：真登录之后游客态自然失效。"""
     return bool(not _logged_in()
                 and request.cookies.get(GUEST_COOKIE) == "1")
+
+
+def _solo_in():
+    """进过独立游客页（/play）的标记。和登录态无关：站主自己点开也要算。"""
+    return request.cookies.get(SOLO_COOKIE) == "1"
 
 
 @app.route("/guest")
@@ -368,7 +452,7 @@ def health():
 
 # ─── 转发 ────────────────────────────────────────────────
 
-def _forward(prefix, sub, allow_guest=False):
+def _forward(prefix, sub, allow_guest=False, force_guest=False):
     """把请求原样转给 5174，并补上登录态里的 QQ 号。
 
     `qq` 一律由这里写死塞进去（参数或表单），**不信客户端传来的 qq**——
@@ -378,8 +462,14 @@ def _forward(prefix, sub, allow_guest=False):
     转发时不塞 `qq`——5174 那边收到空 qq 会走游客分支（见
     `persona_api._who()`），身份由它自己签发的 `gs_id` cookie 认。
     cookie 要**整条带过去**，不然 5174 认不出同一个游客。
+
+    `force_guest`（2026-11-06）：独立游客页 `/play` 的专用代理用。哪怕浏览器
+    里有登录 cookie 也不注入 QQ，保证从分享链接进去的人一定是游客、看不到
+    站主自己的线。只作用于 `/api/solo/*`，普通 `/persona` 页不受影响。
     """
     qq = friend_auth.check_cookie(request.cookies.get(friend_auth.COOKIE_NAME))
+    if force_guest:
+        qq = ""
     if not qq and not allow_guest:
         return jsonify({"ok": False, "error": "还没登录"}), 401
     url = "%s%s/%s" % (BACKEND, prefix, sub)
@@ -515,32 +605,68 @@ def proxy_gal(sub):
 # 用户定的架构：**角色扮演必须走 5175**，5174 只在隧道后面，绝不直接暴露
 # （5174 上有管理页）。所以这里加一层网关：
 #   · 页面 `/persona` 从 5174 拉 HTML，**不转发 cookie 校验**，游客也能进
+#   · 页面 `/play` 是同一份 HTML 的分享版（2026-11-06）：下发隔离标记，前端
+#     收掉所有外链，其它页面路由把这个访客挡回 /play
 #   · 接口 `/api/persona/*` 转发，登录用户注入 qq，游客透传 `gs_id`
+#   · 接口 `/api/solo/*` 只给 /play 用：一律不注入 qq，强制游客
 #
 # 限额（15 轮）和游客身份都在 5174 的 `persona_api` 里做——网关只管转发，
 # 不掺和业务判断，两边职责不重叠。
 
-@app.route("/persona")
-@app.route("/persona.html")
-def persona_page():
-    """角色扮演页。未登录也放行——5174 那边会按游客处理。"""
+def _persona_response():
+    """从 5174 拉角色扮演页 HTML，原样发出去（两个入口共用同一份）。"""
     try:
         sess = _new_session()
         r = sess.get(BACKEND + "/persona",
                      headers={"X-Friend-Token": friend_auth.secret()},
                      timeout=(10, 30))
         sess.close()
-        resp = Response(r.content, status=r.status_code,
+        return Response(r.content, status=r.status_code,
                         content_type="text/html; charset=utf-8")
-        return resp
     except requests.RequestException as e:
         log.warning("取角色扮演页失败：%s", e)
         return "后台没响应，稍后再试", 502
 
 
+@app.route("/persona")
+@app.route("/persona.html")
+def persona_page():
+    """角色扮演页。未登录也放行——5174 那边会按游客处理。"""
+    return _persona_response()
+
+
+@app.route("/play")
+@app.route("/play.html")
+def play_page():
+    """分享用的独立游客页（2026-11-06 用户要）。
+
+    和 /persona 是**同一份 HTML**：前端靠 `location.pathname` 认出孤立态、收掉
+    画廊 / 登录 / 角色管理这些外链；这里只负责下发隔离标记（见 _gate）。
+    不复制页面 = 以后改聊天页，两个入口一起生效。
+
+    `?exit=1` 是给站主 / 误入者的解除口：清掉标记后回首页。页面上没有这个
+    入口，访客不会自己走到。
+    """
+    if request.args.get("exit") == "1":
+        resp = make_response(redirect("/"))
+        resp.delete_cookie(SOLO_COOKIE, path="/")
+        return resp
+    resp = _persona_response()
+    if isinstance(resp, Response) and resp.status_code == 200:
+        resp.set_cookie(SOLO_COOKIE, "1", max_age=GUEST_TTL, httponly=True,
+                        samesite="Lax", secure=_cookie_secure(), path="/")
+    return resp
+
+
 @app.route("/api/persona/<path:sub>", methods=["GET", "POST", "DELETE"])
 def proxy_persona(sub):
     return _forward("/api/persona", sub, allow_guest=True)
+
+
+@app.route("/api/solo/<path:sub>", methods=["GET", "POST", "DELETE"])
+def proxy_solo(sub):
+    """独立游客页专用：一律游客，哪怕浏览器里带着登录 cookie。"""
+    return _forward("/api/persona", sub, allow_guest=True, force_guest=True)
 
 
 # ─── 角色扮演的漫画图（2026-11-03）──────────────────────
