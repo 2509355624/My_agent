@@ -281,8 +281,8 @@
     text-align: center; align-self: center; font-family: inherit; }
   .helpDot:hover { border-color: var(--accent); color: var(--accent); }
 
-  /* 聊天背景块（2026-11-05）：预览 + 两个按钮。游客整块隐藏
-     （applyBg 里判 editable），他们只吃卡/全局默认那一层。 */
+  /* 聊天背景块（2026-11-06）：预览 + 换背景 / 移除背景。游客整块隐藏，
+     但站主设的卡 / 全局默认背景他们照常能看到。 */
   .bgPrev { margin: 8px 0; height: 72px; border-radius: var(--rs);
     overflow: hidden; border: 1px solid var(--border); background: var(--bg-input);
     display: flex; align-items: center; justify-content: center;
@@ -741,18 +741,19 @@
         <span class="v" id="sCardName">—</span></div>
       <button class="btn sm" id="btnCardDetail" disabled>查看角色卡详情</button>
     </div>
-    <!-- 聊天背景（2026-11-05）：登录用户可换自己的图；游客整块隐藏，
-         上传接口也会 403。优先级：账号 > 这张卡 > 全局默认 > 内置图。 -->
+    <!-- 聊天背景（2026-11-06）：登录用户自己换的图压成 WebP 存在浏览器本地，
+         换浏览器 / 清缓存后消失是已知且接受的（用户拍板）。优先级：
+         本地图 > 本地「关闭」标记 > 这张卡 > 全局默认 > 内置图。
+         站主那两层必须留服务端，它们要给所有用户共享。 -->
     <div class="st" id="bgBox" style="display:none">
       <div class="nowrow"><span class="k">背景</span>
         <span class="v" id="sBgName">—</span></div>
       <div class="bgPrev" id="bgPrev">默认</div>
       <div class="bgBtns">
         <button class="btn sm" id="btnBgPick">换背景</button>
-        <button class="btn sm" id="btnBgReset" style="display:none">恢复默认</button>
+        <button class="btn sm" id="btnBgToggle" style="display:none">移除背景</button>
       </div>
-      <input type="file" id="fileBg" accept="image/jpeg,image/png,image/webp"
-             class="fileGhost">
+      <input type="file" id="fileBg" accept="image/*" class="fileGhost">
     </div>
     <!-- 攻略数值面板放第二（2026-11-05）：先看「她此刻什么心情」，
          再看「好感/冲动到哪了」。游客模式下整块隐藏（见 renderAff）。 -->
@@ -2060,7 +2061,7 @@ async function loadSession() {
     loadPics();          // 服务器映射恢复历史图（重登/换设备也能看到）
     await loadCards();
     applyRoleUI();
-    loadBg();            // 聊天背景：换角色后卡默认可能变，每次进线都重新解析
+    loadBg();            // 聊天背景：换角色后本地设置不变，没设过才重新解析服务端
   } catch (e) { toast(e.message, true); }
 }
 
@@ -2071,83 +2072,171 @@ function renderCardBox(c) {
   if (btn) btn.disabled = !c;
 }
 
-// ── 聊天背景（2026-11-05）────────────────────────────────
-// 优先级：账号自己换的 > 这张角色卡的默认 > 全局默认 > 内置图。
-// 游客没有账号层：上传/恢复都会被后端 403，这里连入口都不给。
-const BG_SRC_NAMES = { user: "你自己换的", card: "这张卡的默认",
+// ── 聊天背景（2026-11-06）────────────────────────────────
+// 账号自己换的图：浏览器里压成 WebP 后存本地，不再上传服务器。
+// 换浏览器 / 清缓存后消失是已知且接受的（用户 2026-11-06 拍板）。
+// 本地没设置时才回落服务端三层：这张卡 > 全局默认 > 内置图。
+// 站主那两层留服务端，它们要给所有用户共享。
+const BG_SRC_NAMES = { local: "你自己换的（本机）", off: "已移除",
+                       user: "账号背景（旧）", card: "这张卡的默认",
                        default: "全局默认", builtin: "内置图", none: "没有" };
+const BG_KEY = "persona_bg_" + (QQ || "local");
+const BG_MAX_CHARS = 3500000;   // dataURL 上限，给其他本地数据留足余量
 
-async function loadBg() {
-  try {
-    applyBg(await api("/api/persona/background"));
-  } catch (e) {
-    // 读不到就当没有，不影响聊天
-  }
+const bgStore = {
+  read() {
+    try {
+      const v = JSON.parse(localStorage.getItem(BG_KEY) || "null");
+      if (v && (v.state === "off" || (v.state === "image" && v.data))) return v;
+    } catch (e) {}
+    return { state: "none", data: "" };
+  },
+  write(state, data) {
+    try {
+      if (state === "none") localStorage.removeItem(BG_KEY);
+      else localStorage.setItem(BG_KEY,
+                                JSON.stringify({ state: state, data: data || "" }));
+      return true;
+    } catch (e) {
+      return false;                 // 配额满 / 隐私模式，交给调用方提示
+    }
+  },
+};
+
+// 选图后先在浏览器里压一遍：原图多大都能选，存进本地的只有一张长边
+// 1600 的 WebP。canvas 不支持 WebP 时自动退回 JPEG。
+function compressBg(file) {
+  return new Promise(function (resolve, reject) {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = function () {
+      try {
+        const w = img.naturalWidth || img.width;
+        const h = img.naturalHeight || img.height;
+        if (!w || !h) {
+          URL.revokeObjectURL(url);
+          reject(new Error("读不出图片尺寸"));
+          return;
+        }
+        function draw(edge, quality) {
+          const s = Math.min(1, edge / Math.max(w, h));
+          const cv = document.createElement("canvas");
+          cv.width = Math.max(1, Math.round(w * s));
+          cv.height = Math.max(1, Math.round(h * s));
+          cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+          let out = cv.toDataURL("image/webp", quality);
+          if (out.indexOf("data:image/webp") !== 0)
+            out = cv.toDataURL("image/jpeg", quality);
+          return out;
+        }
+        let out = draw(1600, 0.82);
+        if (out.length > BG_MAX_CHARS) out = draw(1280, 0.7);
+        URL.revokeObjectURL(url);
+        if (out.length > BG_MAX_CHARS) {
+          reject(new Error("这张图压缩后还是太大，换一张小一点的图"));
+          return;
+        }
+        resolve(out);
+      } catch (e) {
+        URL.revokeObjectURL(url);
+        reject(e);
+      }
+    };
+    img.onerror = function () {
+      URL.revokeObjectURL(url);
+      reject(new Error("浏览器打不开这张图；iPhone 的 HEIC 请先导出为 JPG"));
+    };
+    img.src = url;
+  });
 }
 
-function applyBg(d) {
-  const editable = !!(d && d.editable) && ROLE !== "guest";
+// url 为空 = 不显示任何背景。mode: on →「移除背景」，off →「恢复背景」，
+// 空 → 按钮隐藏。游客只吃背景图，设置块始终不露面。
+function renderBg(url, label, thumb, mode) {
+  const guest = ROLE === "guest";
   const box = $("bgBox");
-  if (box) box.style.display = editable ? "" : "none";
-
+  if (box) box.style.display = guest ? "none" : "";
   const log = $("log");
   if (log) {
-    if (d && d.url) {
+    if (url) {
       log.classList.add("has-bg");
       log.style.backgroundImage =
-        'linear-gradient(rgba(8,8,12,.35), rgba(8,8,12,.35)), url("' + d.url + '")';
+        'linear-gradient(rgba(8,8,12,.35), rgba(8,8,12,.35)), url("' + url + '")';
     } else {
       log.classList.remove("has-bg");
       log.style.backgroundImage = "";
     }
   }
-  if (!editable) return;
-
+  if (guest) return;
   const nm = $("sBgName");
-  if (nm) nm.textContent = BG_SRC_NAMES[d.source] || BG_SRC_NAMES.none;
+  if (nm) nm.textContent = label || BG_SRC_NAMES.none;
   const prev = $("bgPrev");
   if (prev) {
     prev.innerHTML = "";
-    if (d.thumb || d.url) {
-      const img = document.createElement("img");
-      img.src = d.thumb || d.url;
-      img.alt = "聊天背景";
-      prev.appendChild(img);
+    if (thumb || url) {
+      const im = document.createElement("img");
+      im.src = thumb || url;
+      im.alt = "聊天背景";
+      prev.appendChild(im);
     } else {
       prev.textContent = "还没有背景图";
     }
   }
-  const rb = $("btnBgReset");
-  if (rb) rb.style.display = (d.source === "user") ? "" : "none";
+  const tg = $("btnBgToggle");
+  if (tg) {
+    tg.style.display = mode ? "" : "none";
+    tg.textContent = mode === "off" ? "恢复背景" : "移除背景";
+  }
+}
+
+async function loadBg() {
+  const guest = ROLE === "guest";
+  const s = guest ? { state: "none", data: "" } : bgStore.read();
+  // 本地关掉了：连服务端那张默认图都不请求，这才是真的不再加载。
+  if (s.state === "off") { renderBg("", BG_SRC_NAMES.off, "", "off"); return; }
+  if (s.state === "image") { renderBg(s.data, BG_SRC_NAMES.local, s.data, "on"); return; }
+  try {
+    const d = await api("/api/persona/background");
+    renderBg(d.url || "", BG_SRC_NAMES[d.source] || BG_SRC_NAMES.none,
+             d.thumb || d.url || "", guest ? "" : (d.url ? "on" : ""));
+  } catch (e) {
+    // 读不到就当没有，不影响聊天
+    renderBg("", BG_SRC_NAMES.none, "", "");
+  }
 }
 
 async function uploadBg() {
   const inp = $("fileBg");
   const f = inp.files && inp.files[0];
   inp.value = "";
-  if (!f) return;
-  const fd = new FormData();
-  fd.append("file", f);
+  if (!f || ROLE === "guest") return;
   try {
-    const r = await fetch("/api/persona/background?qq=" + encodeURIComponent(QQ),
-                          { method: "POST", body: fd });
-    let d;
-    try { d = await r.json(); } catch (e) { d = { ok: false, error: "返回不是 JSON" }; }
-    if (!r.ok || d.ok === false) throw new Error(d.error || ("HTTP " + r.status));
-    applyBg(d);
-    toast("背景换好了");
+    const data = await compressBg(f);
+    if (!bgStore.write("image", data)) {
+      toast("本机存储空间不够，换一张小一点的图", true);
+      return;
+    }
+    renderBg(data, BG_SRC_NAMES.local, data, "on");
+    toast("背景换好了（只存在这台设备）");
   } catch (e) {
-    toast("换背景失败：" + e.message, true);
+    toast("换背景失败：" + (e.message || e), true);
   }
 }
 
-async function resetBg() {
-  try {
-    applyBg(await post("/api/persona/background/reset", {}));
-    toast("已恢复默认背景");
-  } catch (e) {
-    toast("恢复失败：" + e.message, true);
+// 一个按钮两态：移除 = 清掉自己传的图 + 盖上关闭标记，连站主设的
+// 卡 / 全局默认图都不显示；恢复 = 去掉标记，回落到服务端默认。
+async function toggleBg() {
+  if (ROLE === "guest") return;
+  const s = bgStore.read();
+  if (s.state === "off") {
+    if (!bgStore.write("none", "")) { toast("本机存储写入失败", true); return; }
+    toast("已恢复背景");
+    loadBg();
+    return;
   }
+  if (!bgStore.write("off", "")) { toast("本机存储写入失败", true); return; }
+  renderBg("", BG_SRC_NAMES.off, "", "off");
+  toast("背景已移除，这台设备不再加载背景图");
 }
 
 function setCardSec(boxId, valId, text) {
@@ -2202,14 +2291,14 @@ function closeCardDetail() {
   });
 })();
 
-// 背景块按钮（2026-11-05）：游客看不到这一块，但先把绑定挂上无害。
+// 背景块按钮（2026-11-06）：游客看不到这一块，但先把绑定挂上无害。
 (function bindBg() {
   const pick = $("btnBgPick");
   if (pick) pick.addEventListener("click", function () { $("fileBg").click(); });
   const inp = $("fileBg");
   if (inp) inp.addEventListener("change", uploadBg);
-  const reset = $("btnBgReset");
-  if (reset) reset.addEventListener("click", resetBg);
+  const toggle = $("btnBgToggle");
+  if (toggle) toggle.addEventListener("click", toggleBg);
 })();
 
 function renderQuota() {

@@ -145,7 +145,7 @@
       <button type="button" id="btnBgDefault">上传默认背景</button>
       <button type="button" class="danger" id="btnBgDefaultReset">恢复内置</button>
     </div>
-    <input type="file" id="fileBgDefault" accept="image/jpeg,image/png,image/webp"
+    <input type="file" id="fileBgDefault" accept="image/*"
            hidden onchange="uploadDefaultBg(this)">
   </div>
 
@@ -175,13 +175,24 @@ function say(msg, cls) {
   const el = $("status");
   el.textContent = msg || "";
   el.className = cls || "";
-  if (msg) setTimeout(() => { if (el.textContent === msg) say(""); }, 3000);
+  // 失败原因要留够时间看清：以前 3 秒就消失，用户只看到「好像传不上去」。
+  if (msg) setTimeout(() => { if (el.textContent === msg) say(""); },
+                      cls === "err" ? 8000 : 3000);
+}
+
+async function readJson(r) {
+  try { return await r.json(); }
+  catch (e) {
+    return { ok: false,
+             error: "服务端返回的不是 JSON（HTTP " + r.status + "）" };
+  }
 }
 
 async function load() {
   try {
     const r = await fetch("/api/characters");
-    const d = await r.json();
+    const d = await readJson(r);
+    if (d.ok === false) throw new Error(d.error || "读卡库失败");
     cards = d.cards || [];
     if (cur >= cards.length) cur = cards.length - 1;
     render();
@@ -198,7 +209,7 @@ async function load() {
 async function loadDefaultBg() {
   try {
     const r = await fetch("/api/persona_admin/background/default");
-    const d = await r.json();
+    const d = await readJson(r);
     if (!d.ok) { renderDefaultBg(); return; }
     DEFAULT_BG.default = d.default || null;
     DEFAULT_BG.builtin = d.builtin || null;
@@ -236,7 +247,7 @@ async function uploadDefaultBg(input) {
     const r = await fetch("/api/persona_admin/background/default", {
       method: "POST", body: fd,
     });
-    const d = await r.json();
+    const d = await readJson(r);
     if (!d.ok) { say(d.error || "上传失败", "err"); return; }
     DEFAULT_BG.default = d.background || {};
     renderDefaultBg();
@@ -251,7 +262,7 @@ async function resetDefaultBg() {
   try {
     const r = await fetch("/api/persona_admin/background/default", {
       method: "DELETE" });
-    const d = await r.json();
+    const d = await readJson(r);
     if (!d.ok) { say(d.error || "恢复失败", "err"); return; }
     DEFAULT_BG.default = d.default || null;
     DEFAULT_BG.builtin = d.builtin || DEFAULT_BG.builtin;
@@ -394,7 +405,7 @@ function renderPane() {
             ${c.id ? '<button type="button" onclick="pickCardBg()">上传这张卡的背景</button>' : ""}
             ${bg.exists ? '<button type="button" class="danger" onclick="clearCardBg()">清除</button>' : ""}
           </div>
-          <input type="file" id="f_bg_file" accept="image/jpeg,image/png,image/webp"
+          <input type="file" id="f_bg_file" accept="image/*"
                  hidden onchange="uploadCardBg(this)">
         </div>
       </div>
@@ -487,7 +498,7 @@ async function uploadCardBg(input) {
     const r = await fetch("/api/persona_admin/background/card/" + encodeURIComponent(cid), {
       method: "POST", body: fd,
     });
-    const d = await r.json();
+    const d = await readJson(r);
     if (!d.ok) { say(d.error || "上传失败", "err"); return; }
     cards[cur].background = d.background || {};
     render();
@@ -507,7 +518,7 @@ async function clearCardBg() {
     const r = await fetch("/api/persona_admin/background/card/" + encodeURIComponent(cid), {
       method: "DELETE",
     });
-    const d = await r.json();
+    const d = await readJson(r);
     if (!d.ok) { say(d.error || "清除失败", "err"); return; }
     cards[cur].background = d.background || {};
     render();
@@ -532,7 +543,7 @@ async function save() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cards }),
     });
-    const d = await r.json();
+    const d = await readJson(r);
     if (!d.ok) { say(d.error || "保存失败", "err"); return; }
     cards = d.cards || [];
     render();

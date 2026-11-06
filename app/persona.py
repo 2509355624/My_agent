@@ -4203,19 +4203,18 @@ def _gameday_block(gd):
                                       ("，" + phase) if phase else "")]
     place = str(gd.get("place") or "").strip()
     if place:
-        lines.append("【所在地】%s。这是**已经到的地方**，不是要去的地方；"
-                     "除非这一轮剧情里真的动身，否则别再写「前往…」「路上」"
-                     "这一类的行程。" % place)
+        lines.append("【所在地】%s。人已经在这里，这一轮就写她在这个地方"
+                     "做什么、碰到了什么。" % place)
     event = str(gd.get("event") or "").strip()
     if event:
         if event.startswith("已经办完"):
-            # 兑现过的约定不能当待办念（2026-11-06）：模型看到「约定：去某地」
-            # 就会一直按「还在路上」写，哪怕场景里人早就到了。
-            lines.append("今天已经办完的事：%s。**它已经过去了**，不要再当成"
-                         "今天的行程或还没做的事；以「状态」里的地点为准。"
+            # 兑现过的约定写成**过去式**（2026-11-06）：写成「约定：去某地」
+            # 模型会一直按「还在路上」写，哪怕场景里人早就到了。
+            lines.append("今天已经办完的事：%s。它已经过去了，"
+                         "以「状态」里的地点为准，聊接下来自然发生的事。"
                          % event[len("已经办完："):])
         else:
-            lines.append("今天的事：%s。把它织进今天的剧情，别复述这句话。" % event)
+            lines.append("今天的事：%s。把它化进今天的动作和对白里。" % event)
     plan = str(gd.get("plan") or "").strip()
     if plan:
         pd = gd.get("plan_day") or 0
@@ -4224,7 +4223,7 @@ def _gameday_block(gd):
         lines.append("挂着的约定：%s%s" % (plan, when))
     if int(gd.get("turns_today") or 0) >= _DAY_TURNS_SOFT:
         lines.append("这一天已经过了很久，天色不早了——找个合适的节拍把今天"
-                     "收束掉（道别、回家、说明天见），别无限聊下去。")
+                     "收束掉（道别、回家、说明天见），今天的故事到这里就好。")
     return "\n".join(lines)
 
 
@@ -4662,34 +4661,34 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     return Turn(reply, scene, mood, intensity, state, aff_res, finish)
 
 
-# 「睡到明天」时塞给她的话。**这条不进历史**——历史要以她的开场收尾，
-# 下一轮玩家的真消息直接接在她的话后面，模型不会看到这行系统腔。
+# 「睡到明天」时塞给她的话。2026-11-06 起这段**拼在 system 末尾**，
+# 不再以 user 身份塞在历史最后——玩家语域里混进指令腔会把角色带跑。
 #
-# 2026-11-05 修（用户：睡到第二天剧情严重不连贯）：原来只说「新的一天刚开始，
-# 由你先开口」，模型手里只有一段滑动窗口，又收到「新的一天」的强指令，
-# 它就另起一个头——换个地点、忘掉昨晚说过的话、把约定跳过去。
-# 现在明确三件事：接着前情写、别重写已经发生的、昨晚没收尾的先交代收尾。
-_SKIP_TASK = ("【这一轮】新的一天刚开始（第 %d 天），他还没说话。"
-              "**由你先开口**：早安或自然地把今天带出来%s。"
-              "\n\n接住上面「前情」往下写，不要另起一个场景："
-              "\n- 昨晚/此前的约定、没说完的话、没做完的事，这一轮要接着它走；"
-              "\n- 已经发生过的事**不要重写**，也不要假装没发生；"
-              "\n- 昨晚如果还停在场景里（衣物、地点、谁先睡着），先用一两句交代"
-              "这一夜是怎么过完的，再进入今天；"
-              "\n- 「状态」行是昨晚的，今天要重新写（醒来后的衣着、位置）。"
-              "\n按平常的格式输出（正文 + 画面 + 心情 + 状态）。")
+# 2026-11-05 修（睡到第二天剧情严重不连贯）：接住前情写、挂着的约定继续、
+# 昨晚没收尾的先交代收尾。
+# 2026-11-06 再改（白象效应）：原文里三条「不要/别」把想避开的写法点亮一遍，
+# 全部换成「可以这样写」的镜头清单；只给落点，不列禁区。
+_SKIP_TASK = ("【这一轮】新的一天刚开始（第 %d 天），他还没说话，"
+              "由你先开口：早安，或者自然地把今天带出来%s。"
+              "\n\n镜头就从上面那一幕抬起来，落在今天早晨，接着它往下写："
+              "\n- 昨晚说好的事、没说完的话、没做完的事，今天可以由她自己提起，"
+              "这样接得最顺；"
+              "\n- 已经发生过的事都算数，今天的态度和动作从那里长出来；"
+              "\n- 昨晚那一幕还停在半途（衣物、地点、谁先睡着），"
+              "可以用一两句把这一夜过完，再落进今天；"
+              "\n- 「状态」行写今天醒来后的衣着、位置、时辰。"
+              "\n按平常的格式收尾（正文 + 画面 + 心情 + 状态）。")
 
-_SKIP_TASK_MULTI = ("【这一轮】时间已经过去 %d 天（现在是第 %d 天），他还没说话。"
-                    "**由你先开口**，写这段时间之后她这边的变化%s。"
-                    "\n\n不要逐天流水账，也不要重写已经发生过的事："
-                    "\n- **不要按天编号**（不写「第三天…第四天…第八天…」），"
-                    "整段最多三个场景；"
-                    "\n- 只写「再见面时」她记得的、变了的地方：约定有没有兑现、"
+_SKIP_TASK_MULTI = ("【这一轮】时间过去了 %d 天（现在是第 %d 天），他还没说话，"
+                    "由你先开口，写这段时间之后她这边的变化%s。"
+                    "\n\n镜头可以这样挑："
+                    "\n- 整段落在三个场景以内，一个场景写透一个瞬间，"
+                    "场景之间自然跳过；"
+                    "\n- 写「再见面时」她记得的、变了的地方：约定有没有兑现、"
                     "关系走到哪、她现在的状态；"
-                    "\n- 时间跨度大，允许中间发生没写出来的日常，但不要编出"
-                    "和已有设定冲突的大事；"
-                    "\n- 「状态」行按现在的衣着、地点、时间写。"
-                    "\n按平常的格式输出（正文 + 画面 + 心情 + 状态）。")
+                    "\n- 中间那些日子照常过，留白就好，大事以已有设定为准；"
+                    "\n- 「状态」行按现在的衣着、地点、时辰写。"
+                    "\n按平常的格式收尾（正文 + 画面 + 心情 + 状态）。")
 
 # 跳很多天 + 玩家写了「这段时间在干什么」（2026-11-06 用户提的）。
 #
@@ -4701,76 +4700,111 @@ _SKIP_TASK_MULTI = ("【这一轮】时间已经过去 %d 天（现在是第 %d 
 # 所以玩家给了内容就换这条：按他写的主线把过程写出来，结尾落在「现在」。
 _SKIP_TASK_DOING = ("【这一轮】时间往前走了 %d 天（现在是第 %d 天），他还没说话。"
                     "\n这段时间他们在做这件事，照它写：%s"
-                    "\n\n**由你先开口**，写这段时间**本身**，不要一句「几天后到了」跳过："
-                    "\n- **不要按天编号**（不写「第一天…第二天…」「过了三天…」），"
-                    "整段最多三个场景，每个场景一两段话；"
-                    "\n- 挑有画面的：出发那一下、路上最难受的一段、落脚时两个人说过的一句话；"
+                    "\n\n由你先开口，写这段时间**本身**，让那几天真的过一遍："
+                    "\n- 整段落在三个场景以内，按场景推进（出发、路上、落脚），"
+                    "每个场景一两段，场景之间自然跳过；"
+                    "\n- 挑有画面的：出发那一下、路上最难受的一段、"
+                    "落脚时两个人说过的一句话；"
                     "\n- 赶路就写路程、天气、脚上的泡、干粮、夜里的火、靠得多近；"
-                    "\n- 结尾必须落在**现在**：第 %d 天的具体地点、时辰、她在做什么，"
+                    "\n- 结尾落在**现在**：第 %d 天的具体地点、时辰、她在做什么，"
                     "然后是她开口的第一句话；"
-                    "\n- 已经发生过的事不要重写；「状态」行按现在的衣着、地点、时间写。"
-                    "\n按平常的格式输出（正文 + 画面 + 心情 + 状态）。")
+                    "\n- 已经发生过的事都算数；「状态」行按现在的衣着、地点、时辰写。"
+                    "\n按平常的格式收尾（正文 + 画面 + 心情 + 状态）。")
 
 # 同一天切时段（2026-11-05）：不是「睡到明天」，所以不用「新的一天」那套，
 # 重点是**把刚才那段收尾**、再进入新时段。玩家把早晨的早餐拖到中午，
 # 她可以抱怨、追问——跳转本身就代表上一段 do 结束了。
-_PHASE_TASK = ("【这一轮】时间从「%s」走到了「%s」（还是第 %d 天），他还没说话。"
-               "**由你先开口**：先把刚才那一段收个尾——如果刚才在亲密或正在做"
-               "某件事，让那一拍自然结束（整理衣服、喘口气、收拾东西、说一句"
+_PHASE_TASK = ("【这一轮】时间从「%s」走到了「%s」（还是第 %d 天），他还没说话，"
+               "由你先开口：先把刚才那一段收个尾——刚才在亲密或正在做某件事，"
+               "就让那一拍自然结束（整理衣服、喘口气、收拾东西、说一句"
                "事后的话），再进入「%s」。"
-               "\n\n如果之前说好的事没做完（比如早上说想吃早餐却没吃），"
-               "你可以抱怨、追问、把他拉回那件事上。"
-               "\n接住上面「前情」往下写，不要另起一个场景；已经发生过的事不要"
-               "重写；「状态」行按现在的衣着、地点、时间重写。"
-               "\n按平常的格式输出（正文 + 画面 + 心情 + 状态）。")
+               "\n\n之前说好的事还没做完（比如早上说想吃早餐却没吃），"
+               "她可以抱怨、追问、把他拉回那件事上。"
+               "\n镜头从上面那一幕接着往下走；已经发生过的事都算数；"
+               "「状态」行按现在的衣着、地点、时辰写。"
+               "\n按平常的格式收尾（正文 + 画面 + 心情 + 状态）。")
 
-_RECAP_TURNS = 6      # 前情带最近几轮
-_RECAP_CHARS = 90     # 每段截断，免得把系统头撑爆
+_RECAP_MSGS = 2       # 只带跳跃前最后一幕（他一句 + 她一句）
+_RECAP_CHARS = 700    # 单条上限；按**句**截断，不切半句
+
+# 中文句末（含引号收尾）。用于「按句截断」——90 字硬切会把每条都切成
+# 半句话，模型拿到 12 条语义残缺的碎片，只能另起一个头。
+_SENT_END_RE = re.compile(r"[。！？!?…]+[」』”）)]*")
 
 
 def _brief(text, limit=_RECAP_CHARS):
-    """把一段正文压成一行：去空白、去元信息行、截断。"""
+    """把一段正文整理成可读的样子：保留段落、**按句**截断。
+
+    2026-11-06：原来是 `s[:90]` 硬切。实测每条精确 90 字，结尾是
+    「…是想喝牛奶还是想喝豆浆，那我」「…昨天」这种半句。现在超长时截到
+    limit 以内**最后一个句末标点**，宁可少给一段也不给断句。
+    段落换行留着：这一幕是要给模型照着文风接着写的，压成一行就只剩情节了。
+    """
     s = str(text or "").replace("\r", "")
-    s = re.sub(r"\n+", " ", s)
-    s = re.sub(r"\s{2,}", " ", s).strip()
-    return s[:limit]
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    s = re.sub(r"[ \t]{2,}", " ", s)
+    s = "\n".join(ln.strip() for ln in s.split("\n")).strip()
+    if len(s) <= limit:
+        return s
+    window = s[:limit]
+    ends = [m.end() for m in _SENT_END_RE.finditer(window)]
+    for end in reversed(ends):
+        if end >= int(limit * 0.4):          # 别为了一个句号只留开头 20 字
+            return window[:end].rstrip()
+    return window.rstrip() + "…"
 
 
 def _recap_block(session_key):
-    """跨日开场的「前情」：最近几轮到底发生了什么（2026-11-05）。
+    """跨日/切时段的「前情」：只给跳跃前**最后一幕**的完整原话。
 
-    `skip_day` 以前直接把滑动窗口丢给模型，再补一句「新的一天」——窗口里
-    是零散对白，没有任何一句告诉模型「昨天停在哪、说好了什么」。模型于是
-    自己编一个开头，玩家看到的就是断片。
+    2026-11-06 重写（用户：切换时间之后 AI 给的内容很差）：
+    旧版把最近 6 轮按 90 字硬切成 12 条清单，每条都断在半句上；这 1199 字
+    又和后面 12 条原始历史讲的是同一段事，一边是残缺摘要、一边是原文，
+    互相打架。模型手里没有「昨晚停在哪」，只能另起一个头。
 
-    这里按**轮**把归档拆开，只留她和他各自说的那部分（去掉画面/心情/状态
-    三行），压成短清单。加约定和昨晚的场景状态，模型才有连贯的起点。
+    现在只给一幕：完整、按句收尾、和历史里的原文一致。挂着的约定、所在地、
+    昨晚的状态本来就在 `_gameday_block` / `build_head` 里，这里不再重复一遍。
+
+    归档里「她先开口」的跳跃轮没有配对的 user（这是设计，不是断腿），
+    所以按**消息序列**取尾部两条：孤儿轮只写她那一半，接着她那句往下写。
     """
-    rows = load_archive(session_key) or []
-    pairs = []
-    pending_user = ""
-    for m in rows:
-        role = m.get("role")
-        if role == "user":
-            pending_user = _brief(m.get("content"))
-        elif role == "assistant":
-            body, _sc, _mo, _it, _st = split_turn(m.get("content") or "")
+    rows = [m for m in (load_archive(session_key) or [])
+            if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
+    tail = rows[-_RECAP_MSGS:]
+    lines = ["【前情 · 跳跃前停在这里】",
+             "（下面是刚才最后一幕的原话。镜头就从这里抬起来，接着往下写。）"]
+    for m in tail:
+        if m.get("role") == "user":
+            body = _brief(_visible_user_text(m.get("seg"), m.get("content")))
+            who = "他"
+        else:
+            body, _sc, _mo, _it, _st = split_turn(str(m.get("content") or ""))
             body = _brief(body)
-            if body or pending_user:
-                pairs.append((pending_user, body))
-            pending_user = ""
-    pairs = pairs[-_RECAP_TURNS:]
-    if not pairs:
+            who = "她"
+        if body:
+            lines.append("%s：%s" % (who, body))
+    if len(lines) <= 2:
         return ""
-    lines = ["【前情 · 这一夜之前发生的事】",
-             "（按时间顺序，最后一条就是昨晚停下的地方。接着它写，"
-             "不要另起炉灶。）"]
-    for i, (u, a) in enumerate(pairs, 1):
-        if u:
-            lines.append("%d. 他：%s" % (i, u))
-        if a:
-            lines.append("   她：%s" % a)
+    # 上一次跳跃是她先开的口：这一幕只有她的话，明说一句，读起来才不像漏了半轮。
+    if not any(ln.startswith("他：") for ln in lines[2:]):
+        lines.append("（上一轮是她先开的口，从她这句话接着写就行。）")
     return "\n".join(lines)
+
+
+def _time_boundary(gd, phase=None):
+    """跳跃轮最后一条 user：一句纯场景事实，标出「新的一轮从这里开始」。
+
+    2026-11-06 D：任务指令全部搬进 system 末尾，玩家语域只留这一句时间
+    标记。原来那条 user 写满了「【这一轮】…按平常的格式输出」，模型会把它
+    当成玩家说的话，角色语域立刻乱掉。
+
+    保留一条 user 有两个原因：OpenAI 兼容端点普遍以 user 作为一轮的开始；
+    也让模型明确「昨晚那一幕已经收了，下面写新的一段」，而不是顺着上一条
+    assistant 把昨晚继续写下去。
+    """
+    day = int((gd or {}).get("day") or 1)
+    ph = str(phase or (gd or {}).get("phase") or "").strip()
+    return "（第 %d 天%s）" % (day, ("，" + ph) if ph else "")
 
 
 
@@ -4779,7 +4813,7 @@ def jump_phase(session_key, phase, sender="", sender_uin=""):
 
     和 `skip_day` 的区别：**不推进天数**、不掷事件、不结算怀孕；但会
     `affection.sleep()` 把当前的亲密场景收掉（用户：跳转代表 do 结束），
-    再把最近几轮压成「前情」拼进系统头，避免剧情断片。
+    再把跳跃前最后一幕的完整原话拼进系统头，避免剧情断片。
     返回 `Turn`；没在演返回 None。
     """
     ph = str(phase or "").strip()
@@ -4821,11 +4855,13 @@ def jump_phase(session_key, phase, sender="", sender_uin=""):
     if recap:
         head = head + "\n\n" + recap
     task = _PHASE_TASK % (old_phase, ph, int(gd.get("day") or 1), ph)
+    # 2026-11-06 D：指令归 system；最后那条 user 只留一句时间事实。
+    head = head + "\n\n" + task
 
     hist = trim(_load_hist(key))
     model_hist = _render_hist(hist)
     msgs = ([{"role": "system", "content": head}] + model_hist
-            + [{"role": "user", "content": task}])
+            + [{"role": "user", "content": _time_boundary(gd, ph)}])
     try:
         raw = _llm_call(msgs, temperature=TEMPERATURE)
     except Exception:                                  # noqa: BLE001
@@ -4905,8 +4941,8 @@ def skip_day(session_key, sender="", sender_uin="", days=1, doing=""):
     pblock = pregnancy_block(key, preg_event)
     if pblock:
         head = head + "\n\n" + pblock
-    # 前情（2026-11-05）：把最近几轮压成清单拼进系统头。没有它，「新的一天」
-    # 就是一道把模型推去另起炉灶的指令——玩家看到的就是剧情断片。
+    # 前情（2026-11-06）：只给跳跃前最后一幕的完整原话。挂着的约定/所在地
+    # 已经在时间块里，这里不再重复一份半句清单。
     recap = _recap_block(key)
     if recap:
         head = head + "\n\n" + recap
@@ -4920,10 +4956,13 @@ def skip_day(session_key, sender="", sender_uin="", days=1, doing=""):
     else:
         task = _SKIP_TASK_MULTI % (days, new_day,
                                    ("（这段时间里：%s）" % event) if event else "")
+    # 2026-11-06 D：这一轮该怎么写，全在 system 里说清；玩家语域只留一句
+    # 时间事实，免得「按格式输出」这种系统腔被当成他说的话。
+    head = head + "\n\n" + task
     hist = trim(_load_hist(key))
     model_hist = _render_hist(hist)
     msgs = ([{"role": "system", "content": head}] + model_hist
-            + [{"role": "user", "content": task}])
+            + [{"role": "user", "content": _time_boundary(gd)}])
     try:
         raw = _llm_call(msgs, temperature=TEMPERATURE)
     except Exception:                                  # noqa: BLE001

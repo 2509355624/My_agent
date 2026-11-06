@@ -2391,11 +2391,10 @@ class GameDayTest(PersonaBase):
         self.assertEqual(hist[0]["role"], "assistant")
 
     def test_skip_day_carries_previous_plot_into_prompt(self):
-        """跨日开场要把前情拼进系统头（2026-11-05 修）。
+        """跨日开场把跳跃前最后一幕的完整原话拼进系统头（2026-11-06 重写）。
 
-        用户反馈「睡到第二天剧情严重不连贯」：以前只给滑动窗口 + 一句
-        「新的一天刚开始」，模型就另起一个头。现在显式给一份前情清单，
-        并要求接着它写、不要重写已经发生的事。
+        旧版把最近 6 轮按 90 字硬切成半句清单，模型只能另起一个头。
+        现在给的是一幕完整原话，镜头从那里抬起来接着写。
         """
         line = persona.resolve_line(self.KEY)
         persona._save_hist(line, [
@@ -2408,6 +2407,14 @@ class GameDayTest(PersonaBase):
             {"role": "assistant",
              "content": "好。\n画面：1girl, nodding\n心情：开心 强度2\n状态：客厅"},
         ])
+        # 前情只留正文：画面/心情/状态三行是格式示范，不是剧情。
+        # 要在跳跃**之前**取——跳跃本身会往归档追加她的新开场，
+        # 那时前情自然翻到最新一幕（TimeJumpPromptTest 覆盖这条）。
+        recap = persona._recap_block(line)
+        self.assertIn("明天带你去游乐园", recap)
+        self.assertNotIn("1girl, nodding", recap)
+        self.assertNotIn("画面：", recap)
+
         seen = {}
 
         def _fake(msgs, **kw):
@@ -2419,13 +2426,7 @@ class GameDayTest(PersonaBase):
         self.assertIsNotNone(turn)
         self.assertIn("游乐园", seen["prompt"])
         self.assertIn("前情", seen["prompt"])
-        self.assertIn("不要另起一个场景", seen["prompt"])
-        # 前情本身只留正文：画面/心情/状态三行是给模型看的 few-shot，
-        # 不该被当成「剧情」复述进前情清单。
-        recap = persona._recap_block(line)
-        self.assertIn("明天带你去游乐园", recap)
-        self.assertNotIn("1girl, nodding", recap)
-        self.assertNotIn("画面：", recap)
+        self.assertIn("镜头就从上面那一幕抬起来", seen["prompt"])
 
     def test_skip_day_closes_yesterdays_scene(self):
         """睡到第二天：昨晚进行中的场景要收场，别带着高潮值过夜。"""
@@ -2448,6 +2449,152 @@ class GameDayTest(PersonaBase):
             out = persona.handle_command(self.KEY, "#睡到明天")
         self.assertIsNotNone(out)
         self.assertIn("早", out)
+
+
+class TimeJumpPromptTest(PersonaBase):
+    """时间跳跃的提示词组装（2026-11-06，用户：切换时间之后内容很差）。
+
+    A 前情只给一幕完整原话；B 跳跃任务正向化；D 任务归 system、
+    user 只留时间事实、孤儿轮不再让前情断片。
+    """
+
+    KEY = "private_1"
+
+    def setUp(self):
+        super().setUp()
+        persona.save_cards([_card("纱雾")])
+        persona.switch_line(self.KEY, persona.find_card("纱雾"))
+
+    def _line(self):
+        return persona.resolve_line(self.KEY)
+
+    def _capture(self, fn, raw="早。\n画面：\n心情：平淡 强度1\n状态：起床"):
+        seen = {}
+
+        def _fake(msgs, **kw):
+            seen["msgs"] = msgs
+            return raw
+
+        with mock.patch.object(persona.llm, "call_llm", side_effect=_fake):
+            turn = fn()
+        return turn, seen["msgs"]
+
+    # ── A：前情是完整一幕，不是 12 条半句清单 ──
+    def test_brief_cuts_at_sentence_boundary(self):
+        text = "她把杯子往桌上一墩。水洒了半杯没擦，她盯着看了会儿才回过神。" * 20
+        out = persona._brief(text)
+        self.assertLessEqual(len(out), persona._RECAP_CHARS)
+        self.assertTrue(out.endswith(("。", "！", "？", "…", "」", "』", "）")))
+        self.assertIn("她把杯子往桌上一墩。", out)
+
+    def test_recap_keeps_full_original_line(self):
+        line = self._line()
+        body = "她把外套找出来了。嘴上还说着不去。"
+        rows = [{"role": "user", "content": "明天去游乐园"},
+                {"role": "assistant", "content":
+                 body + "\n画面：1girl\n心情：开心 强度3\n状态：客厅"}]
+        persona._save_hist(line, rows)
+        persona._save_archive(line, rows)
+        rec = persona._recap_block(line)
+        self.assertIn(body, rec)                    # 一字不切
+        self.assertNotIn("画面：", rec)             # 元数据不是剧情
+        self.assertNotIn("1girl", rec)
+
+    def test_recap_only_covers_the_last_scene(self):
+        line = self._line()
+        rows = []
+        for i in range(6):
+            rows.append({"role": "user", "content": "第%d句，提到了柠檬糖。" % i})
+            rows.append({"role": "assistant", "content":
+                         "她把糖纸叠好。第%d次了。\n画面：1girl\n"
+                         "心情：平静 强度1\n状态：桌前" % i})
+        persona._save_archive(line, rows)
+        rec = persona._recap_block(line)
+        self.assertIn("第5句，提到了柠檬糖。", rec)
+        self.assertIn("她把糖纸叠好。第5次了。", rec)
+        self.assertNotIn("第0句", rec)
+        self.assertNotIn("1. 他：", rec)            # 不再编号成清单
+
+    def test_recap_tolerates_orphan_opening_round(self):
+        """连跳两次时归档尾部是两条 assistant（她先开口），前情仍完整。"""
+        line = self._line()
+        persona._save_archive(line, [
+            {"role": "user", "content": "明天见"},
+            {"role": "assistant", "content":
+                "好。\n画面：\n心情：平静 强度1\n状态：客厅"},
+            {"role": "assistant", "content":
+                "早啊，粥在锅里。\n画面：\n心情：平静 强度1\n状态：厨房"},
+        ])
+        rec = persona._recap_block(line)
+        self.assertIn("早啊，粥在锅里。", rec)
+        self.assertIn("上一轮是她先开的口", rec)
+        self.assertNotIn("他：\n", rec)
+
+    def test_two_jumps_keep_recap_continuous(self):
+        """真的连跳两次：第二次前情接着第一次的开场，没有空轮、没有半句。"""
+        line = self._line()
+        rows = [
+            {"role": "user", "content": "明天带你去游乐园，说好了"},
+            {"role": "assistant", "content":
+                "好。\n画面：\n心情：开心 强度3\n状态：客厅"},
+        ]
+        persona._save_hist(line, list(rows))
+        persona._save_archive(line, list(rows))
+        r1 = "早啊，游乐园还去吗？\n画面：\n心情：期待 强度4\n状态：门口"
+        r2 = "那走吧。\n画面：\n心情：开心 强度4\n状态：车站"
+        with mock.patch.object(persona.llm, "call_llm", return_value=r1):
+            self.assertIsNotNone(persona.skip_day(self.KEY))
+        seen = {}
+
+        def _fake(msgs, **kw):
+            seen["sys"] = msgs[0]["content"]
+            return r2
+
+        with mock.patch.object(persona.llm, "call_llm", side_effect=_fake):
+            self.assertIsNotNone(persona.skip_day(self.KEY))
+        self.assertIn("早啊，游乐园还去吗？", seen["sys"])
+        self.assertIn("上一轮是她先开的口", seen["sys"])
+        self.assertEqual(persona._gameday(persona._entry(line))["day"], 3)
+
+    # ── D：指令归 system，玩家语域只留一句时间事实 ──
+    def test_skip_task_lives_in_system(self):
+        turn, msgs = self._capture(lambda: persona.skip_day(self.KEY))
+        self.assertIsNotNone(turn)
+        system, last = msgs[0]["content"], msgs[-1]
+        self.assertIn("【这一轮】", system)
+        self.assertIn("按平常的格式收尾", system)
+        self.assertEqual(last["role"], "user")
+        for bad in ("【这一轮】", "按平常的格式", "镜头", "状态行", "输出"):
+            self.assertNotIn(bad, last["content"])
+        self.assertRegex(last["content"], r"^（第 \d+ 天")
+
+    def test_phase_task_lives_in_system(self):
+        turn, msgs = self._capture(lambda: persona.jump_phase(self.KEY, "中午"))
+        self.assertIsNotNone(turn)
+        self.assertIn("【这一轮】", msgs[0]["content"])
+        self.assertIn("中午", msgs[-1]["content"])
+        self.assertNotIn("按平常的格式", msgs[-1]["content"])
+
+    def test_doing_task_lives_in_system(self):
+        turn, msgs = self._capture(
+            lambda: persona.skip_day(self.KEY, days=7, doing="一路赶路去情爱城"))
+        self.assertIsNotNone(turn)
+        self.assertIn("一路赶路去情爱城", msgs[0]["content"])
+        self.assertNotIn("一路赶路去情爱城", msgs[-1]["content"])
+
+    # ── B：跳跃链路正向化 ──
+    def test_jump_tasks_have_no_prohibition_words(self):
+        for name in ("_SKIP_TASK", "_SKIP_TASK_MULTI",
+                     "_SKIP_TASK_DOING", "_PHASE_TASK"):
+            s = getattr(persona, name)
+            for w in ("不要", "不许", "不能", "禁止", "别再", "别写"):
+                self.assertNotIn(w, s, "%s 里还有 %s" % (name, w))
+        blk = persona._gameday_block({"day": 2, "place": "客厅",
+                                      "event": "去游乐场", "plan": "买风筝",
+                                      "plan_day": 3, "turns_today": 40})
+        for w in ("不要", "不许", "不能", "禁止", "别再", "别写"):
+            self.assertNotIn(w, blk)
+        self.assertIn("天色不早", blk)             # 软宵禁的措辞还在
 
 
 class RollbackTurnTest(PersonaBase):

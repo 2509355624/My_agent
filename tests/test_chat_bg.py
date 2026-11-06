@@ -104,12 +104,50 @@ class SaveTest(BgBase):
         with self.assertRaises(ValueError):
             chat_bg.save(_file(data=b"not an image"), "default")
 
-    def test_rejects_gif(self):
-        img = Image.new("RGB", (20, 20))
+    def test_non_image_error_is_actionable(self):
+        """报错要说人话：HEIC 该导出成什么，别只丢一句「不是可识别的图片」。"""
+        with self.assertRaisesRegex(ValueError, "HEIC") as cm:
+            chat_bg.save(_file(data=b"not an image"), "default")
+        self.assertIn("JPG", str(cm.exception))
+
+    def test_accepts_gif_first_frame(self):
+        """格式白名单已撤：GIF 取首帧，落地仍是 WebP。"""
+        img = Image.new("RGB", (20, 20), (10, 100, 200))
         buf = io.BytesIO()
         img.save(buf, "GIF")
-        with self.assertRaises(ValueError):
-            chat_bg.save(_file(name="a.gif", data=buf.getvalue()), "default")
+        info = chat_bg.save(_file(name="a.gif", data=buf.getvalue()), "default")
+        self.assertTrue(info["exists"])
+        with Image.open(chat_bg.path_for("default")) as out:
+            self.assertEqual(out.format, "WEBP")
+            self.assertEqual(out.size, (20, 20))
+
+    def test_accepts_bmp(self):
+        buf = io.BytesIO()
+        Image.new("RGB", (30, 20), (9, 9, 9)).save(buf, "BMP")
+        self.assertTrue(chat_bg.save(_file(name="a.bmp", data=buf.getvalue()),
+                                    "default")["exists"])
+
+    def test_accepts_over_8mb(self):
+        """跑图台导出的高清 PNG 常常过 8MB；反正落地前会压，不该挡在门口。"""
+        raw = _png_bytes() + b"0" * (9 * 1024 * 1024)
+        self.assertTrue(chat_bg.save(_file(name="big.png", data=raw),
+                                    "default")["exists"])
+
+    def test_byte_limit_message_has_real_size(self):
+        with mock.patch.object(chat_bg, "MAX_BYTES", 100):
+            with self.assertRaisesRegex(ValueError, "不能超过") as cm:
+                chat_bg.save(_file(), "default")
+        self.assertIn("MB", str(cm.exception))
+
+    def test_pixel_limit_message_has_real_size(self):
+        with mock.patch.object(chat_bg, "MAX_PIXELS", 10):
+            with self.assertRaisesRegex(ValueError, "像素太大") as cm:
+                chat_bg.save(_file(), "default")
+        self.assertIn("80×50", str(cm.exception))
+
+    def test_thresholds_were_relaxed(self):
+        self.assertGreaterEqual(chat_bg.MAX_BYTES, 20 * 1024 * 1024)
+        self.assertGreater(chat_bg.MAX_PIXELS, 24_000_000)
 
     def test_delete_removes_original_and_thumb(self):
         chat_bg.save(_file(), "default")
