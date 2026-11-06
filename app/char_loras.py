@@ -115,25 +115,34 @@ def entries(skill):
 
 
 def match(skill, prompt):
-    """prompt 命中的第一个角色条目；没命中返回 None。
+    """用户原话 → 命中的角色条目；没点名就 None（2026-11-06 改）。
 
-    别名匹配不区分大小写（IP tag 常有大小写变体，比如 SUNNA / Sunna）。
-    同时命中多个按 JSON 顺序取第一个——顺序就是维护者的优先级。文件不在
-    loras 目录的条目跳过（记 warning），不拦整单。
+    这里**不再做别名硬匹配**（用户拍板）：硬匹配覆盖不了「绝区零的千夏」
+    「把我上次那个绿头发的放出来」，错了也不会自纠。现在交给角色库 AI——
+    向量召回 top-k + 大模型判定，判定不出明确人名就 skip，让生图 AI 自己发挥。
+
+    文件缺失仍然跳过（记 warning），不拦整单。
     """
-    text = str(prompt or "").lower()
-    if not text:
+    if skill not in CHAR_LORA_SKILLS:
         return None
-    for c in entries(skill):
-        for al in (c.get("aliases") or []):
-            al = str(al).strip().lower()
-            if al and al in text:
-                if _find_file(c["file"]):
-                    return c
-                log.warning("角色 LoRA 文件不在 loras 目录，跳过装填：%s（%s）",
-                            c.get("key") or "?", c["file"])
-                break
-    return None
+    try:
+        from app import lora_lib
+        entry = lora_lib.resolve(prompt)
+    except Exception:                                  # noqa: BLE001
+        log.warning("角色库检索异常，跳过装填", exc_info=True)
+        return None
+    if not entry:
+        return None
+    chans = entry.get("channels") or []
+    if chans and skill not in chans:
+        log.info("角色 %s 不在渠道 %s 的白名单里，跳过",
+                 entry.get("key"), skill)
+        return None
+    if not _find_file(entry.get("file") or ""):
+        log.warning("角色 LoRA 文件不在 loras 目录，跳过装填：%s（%s）",
+                    entry.get("key") or "?", entry.get("file"))
+        return None
+    return entry
 
 
 def apply(skill, prompt, workflow):

@@ -53,9 +53,19 @@ class LocalEmbeddings:
         return vectors.astype("float32").tolist()
 
     def embed_query(self, text: str) -> List[float]:
-        vector = self.model.encode(
-            QUERY_INSTRUCTION + text,
-            normalize_embeddings=True,
-            convert_to_numpy=True,
-        )
+        # 用**列表**形式编码（2026-11-06）：某些模型/版本下 `encode(str)` 会抛
+        # `TextEncodeInput must be Union[...]`，而 `encode([str])` 一直正常
+        # （embed_documents 就是这么调的）。取第 0 条即可，语义完全一样。
+        try:
+            vector = self.model.encode(
+                [QUERY_INSTRUCTION + str(text)],
+                normalize_embeddings=True,
+                convert_to_numpy=True,
+            )[0]
+        except Exception:
+            vector = self.model.encode(
+                QUERY_INSTRUCTION + str(text),
+                normalize_embeddings=True,
+                convert_to_numpy=True,
+            )
         return vector.astype("float32").tolist()
