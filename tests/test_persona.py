@@ -1689,11 +1689,16 @@ class NovelCraftContractTest(unittest.TestCase):
             self.assertIn(phrase, c, "笔法节漏了：%s" % phrase)
 
     def test_word_count_relaxed(self):
-        """1000 常态 / 2000 上限，旧的 400~800 和均匀密度配额要撤掉。"""
+        """600~2000 字区间；旧的 400~800、1000 常态、字数不是目标、
+        允许烂尾都要撤掉，均匀密度配额也不回来。"""
         c = persona._CONTRACT
-        self.assertIn("1000 字", c)
-        self.assertIn("2000 字", c)
+        self.assertIn("600~2000 字", c)
+        self.assertIn("把这一拍写完整", c)
+        self.assertIn("收得住", c)
+        self.assertNotIn("1000 字", c)
         self.assertNotIn("400~800", c)
+        self.assertNotIn("字数不是目标", c)
+        self.assertNotIn("允许烂尾", c)
         self.assertNotIn("3~4 段", c)
         self.assertNotIn("每段都要有具体的感官细节", c)
         self.assertNotIn("这一轮要有变化", c)
@@ -2915,6 +2920,41 @@ class ManualInputTest(unittest.TestCase):
         self.assertNotIn("她身体先往你这边靠", block)
         self.assertNotIn("她想让他先开口", block)
 
+    def test_plot_is_a_direction_not_a_secret(self):
+        """剧情推进写成正向指令，不再强调「她不知道」被当背景忽略。"""
+        segs = persona._manual_segments({"plot": "让她主动一点"})
+        block = persona.render_user_block(segs, True, "")
+        self.assertIn("真的发生在画面里", block)
+        self.assertIn("让她主动一点", block)
+        self.assertNotIn("她不知道", block)
+
+    def test_manual_block_explains_the_split_positive(self):
+        block = persona._manual_block({"thought": "秘密", "plot": "往前推"})
+        self.assertIn("心里话的原文留在编剧这一层", block)
+        self.assertIn("剧情推进写成", block)
+        for bad in ("不要写进", "不用你重拆"):
+            self.assertNotIn(bad, block)
+
+    def test_director_block_passes_plot_under_secret(self):
+        """心里话原文照旧不给演员，但玩家自己写的方向必须透过去。"""
+        block = persona._director_block(
+            {"literal": "你吃吧", "secret": True,
+             "tension": "她想让他先开口", "hook": "她身体先往你这边靠"},
+            plot="让她主动一点")
+        self.assertIn("让她主动一点", block)
+        self.assertIn("真的发生在画面里", block)
+        self.assertNotIn("她想让他先开口", block)
+        self.assertNotIn("她身体先往你这边靠", block)
+
+    def test_director_block_plot_alone_is_enough(self):
+        block = persona._director_block({}, plot="换个地方")
+        self.assertIn("换个地方", block)
+        self.assertIn("这一拍往这个方向走", block)
+
+    def test_msg_limit_allows_a_full_long_turn(self):
+        """网页端单条历史放宽；QQ 的 700 字分段是另一条链路，不在这里。"""
+        self.assertGreaterEqual(persona.MSG_MAX_CHARS, 2600)
+
 
 class ManualRunTurnTest(PersonaBase):
     """精确输入的整轮链路（2026-11-06）：心理活动只进编剧，不进演员。"""
@@ -2943,6 +2983,29 @@ class ManualRunTurnTest(PersonaBase):
         self.assertIn("拿起杯子", actor)
         self.assertNotIn("想让她主动", actor)
         self.assertIn("说出口", actor)
+
+    def test_plot_reaches_director_block_and_tail(self):
+        """剧情推进同时落在 user 块、导演条、近因位；心理活动原文仍不泄露。"""
+        seen = []
+
+        def fake(msgs, **kw):
+            seen.append(msgs)
+            return "（她抬了抬眼。）\n画面：1girl\n心情：平静 强度2\n状态：桌边"
+
+        with mock.patch.object(persona, "_judge_intent_scored",
+                               return_value=("neutral", "", {"segments": []})), \
+                mock.patch.object(persona, "_llm_call", side_effect=fake):
+            turn = persona.run_turn(
+                self.line, "", "private", "",
+                manual={"thought": "想让她主动", "plot": "让她先开口"})
+        self.assertTrue(turn.reply)
+        actor = "\n".join(m["content"] for m in seen[-1])
+        self.assertIn("这一拍往这个方向走", actor)
+        self.assertIn("让她先开口", actor)
+        self.assertIn("600~2000 字", actor)
+        self.assertNotIn("想让她主动", actor)
+        head = seen[-1][0]["content"]
+        self.assertIn("让她先开口", head)
 
 
 class PersonaModelTest(unittest.TestCase):

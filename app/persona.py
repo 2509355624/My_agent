@@ -147,15 +147,16 @@ _CLOTHES_NOUNS = (
 # 挤出窗口、还没进小记」的空档。影响可控——那段内容本来也要被压成摘要了。
 HISTORY_LIMIT = 12
 
-# 单条消息的截断上限（2026-11-02：200 → 900 → 2026-11-06：2400）。
-# 契约改成「酒馆式第三人称叙述」之后，一轮正文常在 400~800 字；200 字会把
-# 每一条历史都截成半句话，模型下一轮就接不上了。
-# 2026-11-06 正文上限放宽到 2000 字后，900 会立刻把上一轮砍掉一多半——
-# 她刚说完的话在下一轮只剩半截，语气和剧情全断。2400 = 2000 字正文 +
-# 三行元数据 + 余量，是「一整段完整场景」能原样进历史的宽度。
+# 单条消息的截断上限（2026-11-02：200 → 900 → 2026-11-06：2400
+# → 2026-11-07：2600）。契约把正文目标定到 600~2000 字之后，2400 对
+# 「2000 字正文 + 三行元数据 + 分段标签」只剩不到 300 字余量，写满一轮
+# 就会被截掉尾巴。2600 让一整段完整场景原样进历史。
+# ⚠️ 这是**网页端 / 扮演历史**的宽度，跟 QQ 的 QQ_REPLY_MAX_CHARS=700
+# 没关系：那个只在 qq_api.split_message 里把长回复切成几条发，内容不丢。
+# 2026-11-07 用户明确「QQ 那边不动，网页端放宽」。
 # 注意只放宽**单条**：HISTORY_LIMIT 仍是 12 条，用户要的是把内容写厚，
 # 不是把上下文窗口撑大。
-MSG_MAX_CHARS = 2400
+MSG_MAX_CHARS = 2600
 
 # 网页回看历史（2026-11-04 用户要求「能回到看从开始到现在」）：一页多少条。
 # 24 条 = 12 轮，和模型窗口同量级——首屏不会一次塞几百条，再往上滚由前端
@@ -562,15 +563,16 @@ _CONTRACT = (
     "段落长短不齐，一段两百字、下一段十五字、再下一段八十字；"
     "情绪到点上，让一句话自己单独占一段。紧张的时候用句号把动作切碎，"
     "平静的时候用逗号把语流接住。\n"
-    "- **这一轮可以什么都没发生。** 平淡的一轮、她没来由的沉默、突然的不对劲、"
-    "聊了半天也没聊到正题，都是戏。允许段落平收，允许烂尾，允许留白。"
-    "**均匀的机灵 = AI**：人大部分时候是平铺，偶尔才俏皮一次。\n"
-    "\n"
-    "### 篇幅\n"
-    "\n"
-    "一轮大约 **1000 字**，写得厚的时候到 **2000 字**也收得住。"
-    "段数自己定，写到该停的地方就停。字数不是目标——上面那些招里有两三样"
-    "真的落进画面了，比凑满一千字有用。\n"
+"- **这一轮可以什么都没发生。** 平淡的一轮、她没来由的沉默、突然的不对劲、"
+"聊了半天也没聊到正题，都是戏；平淡也写完整，有起、有落、一个收得住的落点。"
+"**均匀的机灵 = AI**：人大部分时候是平铺，偶尔才俏皮一次。\n"
+"\n"
+"### 篇幅\n"
+"\n"
+"一轮 **600~2000 字**，把这一拍写完整：进来时什么样、中间发生了什么、"
+"落在一个画面、一句话或一个没做完的动作上。段数自己定，"
+"句式长短照旧不齐。上面那些招里有两三样真的落进画面，这一轮自然就厚了；"
+"写到该停的地方收住，让人读完觉得这一轮真的过完了。\n"
     "\n"
     "### 她的心思\n"
     "\n"
@@ -2831,8 +2833,9 @@ def _manual_block(m):
     for k in _MANUAL_KEYS:
         if m.get(k):
             lines.append("- %s：%s" % (labels[k], m[k]))
-    lines.append("（分段以这里为准，不用你重拆；『想』的内容只用于判潜台词，"
-                 "不要写进演员提示词。）")
+    lines.append("（分段以这里为准。心理活动用来读潜台词；剧情推进写成"
+                 "「这一拍往哪走」的方向；动作和台词照原样给她看。"
+                 "心里话的原文留在编剧这一层。）")
     return "\n".join(lines)
 
 
@@ -2896,10 +2899,13 @@ def render_user_block(segments, addressed=True, fallback="", remind=False):
         who = str(seg.get("who") or "用户")
         typ = str(seg.get("type") or "说")
         text = str(seg.get("text") or "").strip()
-        # 剧情推进（2026-11-06）：这是玩家给导演/演员的方向，不是她已知的事实。
+        # 剧情推进（2026-11-07 改）：写成一句正向指令，让它真的落进画面。
+        # 原来是「导演意图（她不知道，只用来安排这一拍）」，重点落在
+        # 「她不知道」上，模型容易当背景略过；玩家填了却看不出变化。
+        # 同一句还会在近因位 tail(plot=...) 再钉一次，离生成点最近。
         if who == "导演" or typ in ("剧情", "plot"):
             if text:
-                lines.append("- 导演意图（她不知道，只用来安排这一拍）：%s" % text)
+                lines.append("- 这一拍往这个方向走，让它真的发生在画面里：%s" % text)
             continue
         if typ == "想":
             has_think = True
@@ -4050,10 +4056,12 @@ _STANCE_HINT = {
 }
 
 
-def _director_block(info):
+def _director_block(info, plot=""):
     """把第一段的导演条拼成系统头里的一小段。没有内容就不加。
 
     `info` 是 `_director_fields()` 的返回，或者攻略模式那个 score dict。
+    `plot` 是玩家在「剧情推进」栏写的方向（2026-11-07）：它本来就是玩家
+    给导演的话，不含心里话原文，所以不受 secret 影响，照常透给演员。
     """
     if not isinstance(info, dict):
         return ""
@@ -4068,12 +4076,18 @@ def _director_block(info):
     lead_form = str(info.get("lead_form") or "").strip()
     lead_reason = str(info.get("lead_reason") or "").strip()
     hook = str(info.get("hook") or "").strip()
+    # 玩家写的「剧情推进」本来就是给导演的话，不含心里话原文，
+    # 所以不受 secret 影响（2026-11-07）。代码只透传，方向由模型写。
+    direction = re.sub(r"\s+", " ", str(plot or "").strip())[:200]
     if not (literal or subtext or noticed or stance or secret or mode
-            or tension or lead in ("hint", "act") or hook):
+            or tension or lead in ("hint", "act") or hook or direction):
         return ""
     lines = ["## 这一拍你怎么读对方", ""]
     if mode:
         lines.append("- 她此刻的底色：%s" % mode)
+    # `tension` / `subtext` / `hook` 都可能是编剧从心里话原文推出来的，
+    # secret 时一律不给演员（test_secret_hides_hook 守着这条底线）。
+    # 玩家自己写的剧情推进走下面的 direction，不受 secret 影响。
     if tension and not secret:
         lines.append("- 张力：%s" % tension)
     if literal:
@@ -4103,6 +4117,8 @@ def _director_block(info):
         lines.append("- 这一拍她的身体先动了一步：%s。照着这个写进正文，"
                      "写清在什么场合、身上怎么反应、她是怎么试图遮掩的。"
                      "不要写成「她有点动情」，也不要让她自己点破。" % hook)
+    if direction:
+        lines.append("- 这一拍往这个方向走，让它真的发生在画面里：%s" % direction)
     lines.append("")
     lines.append("这些是给你看的导演提示，**不是台词**。不要引用、不要点破，"
                  "也不要替对方把话说破。")
@@ -4488,7 +4504,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         head = head + "\n\n" + block
     # 导演条（2026-11-05）：第一段顺手判的潜台词 / 她察觉到的 / 这一拍的态度。
     # 它只给演员「怎么反应」，不给台词——所以放在 intent 之后、结算之前。
-    dblock = _director_block(extras)
+    dblock = _director_block(extras, plot=man.get("plot"))
     if dblock:
         head = head + "\n\n" + dblock
     # 射精位置（2026-11-05）：玩家在弹窗里选的那个，不由正文决定。
@@ -4645,7 +4661,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         except Exception:
             turn_no = 1
     user_block = user_block + "\n\n" + writing_style.tail(
-        turn_no, author_note)
+        turn_no, author_note, plot=man.get("plot"))
     model_hist = _render_hist(hist)
     msgs = ([{"role": "system", "content": head}] + model_hist
             + [{"role": "user", "content": user_block}])

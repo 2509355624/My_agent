@@ -134,6 +134,31 @@ class StyleUnitTest(unittest.TestCase):
         self.assertEqual(writing_style.tail_note(12, "雨"),
                          writing_style.tail(12, "雨"))
 
+    def test_tail_default_carries_length_anchor(self):
+        """篇幅也钉在近因位，压住历史里清一色的短示范。"""
+        out = writing_style.tail()
+        self.assertIn("600~2000 字", out)
+        self.assertIn("写完整", out)
+        for bad in ("不能", "不许", "不要", "禁止", "必须"):
+            self.assertNotIn(bad, out)
+
+    def test_tail_plot_is_last_and_positive(self):
+        out = writing_style.tail(plot="让她主动一点")
+        self.assertIn("让她主动一点", out)
+        self.assertTrue(out.rstrip("）").endswith("让她主动一点"))
+        self.assertIn("真的发生在画面里", out)
+        self.assertLess(out.index("镜头可以跟着她"),
+                        out.index("让她主动一点"))
+
+    def test_tail_without_plot_has_no_direction(self):
+        self.assertNotIn("这一拍往这个方向走", writing_style.tail())
+
+    def test_tail_plot_is_normalized_and_capped(self):
+        out = writing_style.tail(plot="  换行\n 压成一行  ")
+        self.assertNotIn("\n", out)
+        self.assertIn("换行 压成一行", out)
+        self.assertLessEqual(len(writing_style.tail(plot="方" * 400)), 300)
+
 
 class BuildHeadTest(unittest.TestCase):
     def _head(self, **kw):

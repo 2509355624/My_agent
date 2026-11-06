@@ -8,20 +8,20 @@
 |---|---|
 | L1 sysprompt 档位 | `head_style()` → `build_head` 里「## 这一局的写法」 |
 | L2 厚卡 / mes_example | `card_sketch()` 把卡里已有却没进提示词的字段接上；`format_examples()` 支持 `<START>` / `***` 分块 |
-| L3 作者注 | 并进 `tail_note()` 的「这一幕：…」，见下方取舍 |
-| L4 jailbreak 近因位 | `tail_note()` 追加到**最后一条玩家消息**上 |
+| L3 作者注 | 并进 `tail()` 的「这一幕：…」，见下方取舍 |
+| L4 jailbreak 近因位 | `tail()` 追加到**最后一条玩家消息**上；篇幅锚点与剧情推进也在这里 |
 
 **为什么 L3 没有插进历史中间**：`_render_hist()` 产出的历史是 user/assistant
 交替，且 assistant 消息里带着「画面 / 心情 / 状态」三行，本身就是下一轮的
 格式 few-shot。中途插一条 system 会把这个节奏打断，收益不如直接贴脸。所以
 作者注和近因尾注合并成一条，用词仍是正向的「可以这样」。
 
-**默认零影响的范围**：`mode=normal` 且 `note` 为空时，`head_style()` 返回
-空串 —— 档位块不拼，消息角色序列不变。近因位 `tail()` 则**每轮都拼**一句
-正向锚点：普通轮是替换掉 `render_user_block(remind=True)` 原来那句人称
-禁令，长度相当、token 净增约 0；跳跃 / 收尾那几条路径原本没有这一层，
-各多一句（约 30 字），但只在跨天或收尾时才走，不进日常聊天。轮次和
-「这一幕」只在玩家主动选了写法时才带上。
+**默认注入的范围**：`mode=normal` 且 `note` 为空时，`head_style()` 返回
+空串 —— 档位块不拼，消息角色序列不变。近因位 `tail()` **每轮都拼**两句
+正向锚点（人称视角 + 这一轮写完整、600~2000 字）；跳跃 / 收尾那几条也
+走同一个函数。轮次、「这一幕」、剧情推进都是玩家主动填才带。
+篇幅锚点放在近因位而不是 system 头：历史 few-shot 全是三四百字的短回复，
+光在契约里写「写 1000 字」压不住示范的长度（2026-11-07 归档中位 360 字）。
 `card_sketch()` / `format_examples()` 属于卡层，是**有意对所有会话生效**的
 小改动（把卡里写着却没用上的事实接上、把多块示例编号），约多 20 字。
 
@@ -130,13 +130,22 @@ def format_examples(text):
 # 现在只把事实说清：谁是她、谁是你、镜头落在哪。全句不含禁令。
 ANCHOR = "她是「她」，你是「你」；镜头可以跟着她，落在她的反应上"
 
+# 篇幅也钉在近因位（2026-11-07）：契约里那句「字数不是目标 / 允许烂尾」，
+# 加上历史里清一色 300~500 字的示范，把模型稳稳按在 360 字中位上。
+# 正向写「写成什么样」，不写「不许短」。
+LENGTH_ANCHOR = "这一轮写完整：600~2000 字，有起有落，收得住"
 
-def tail(turn_no=None, note=""):
+# 剧情推进是玩家给这一拍的方向，放在尾注**最后一句**，离生成点最近。
+PLOT_PREFIX = "这一拍往这个方向走，让它真的发生在画面里："
+
+
+def tail(turn_no=None, note="", plot=""):
     """L3 + L4：所有组装路径共用的近因尾注，只拼在最后一条 user 消息末尾。
 
-    常态（不给轮次、没写调子）只返回一句锚点，长度和原来那句人称提醒相当，
-    token 净增约 0。玩家选了写法档位或写了「这一幕的调子」时才多带轮次和
-    调子。判断写什么交给模型，这里只做归一化。
+    常态（不给轮次、没写调子、没写剧情推进）只返回「人称视角 + 篇幅」两句
+    正向锚点；跳跃 / 收尾路径也走这里。轮次、「这一幕的调子」、剧情推进都是
+    玩家主动填才带，剧情推进放最后一句，离生成点最近。判断写什么交给模型，
+    这里只做归一化和事实透出。
     """
     bits = []
     if turn_no is not None:
@@ -149,9 +158,13 @@ def tail(turn_no=None, note=""):
     if clean:
         bits.append("这一幕：" + clean)
     bits.append(ANCHOR)
+    bits.append(LENGTH_ANCHOR)
+    clean_plot = _WS.sub(" ", str(plot or "").strip())[:NOTE_MAX_CHARS]
+    if clean_plot:
+        bits.append(PLOT_PREFIX + clean_plot)
     return "（" + " · ".join(bits) + "）"
 
 
-def tail_note(turn_no, note=""):
+def tail_note(turn_no, note="", plot=""):
     """兼容入口：带轮次的贴脸尾注（写法档位那条链路在用）。"""
-    return tail(turn_no, note)
+    return tail(turn_no, note, plot)
