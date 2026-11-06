@@ -46,7 +46,7 @@ log = logging.getLogger("char_loras")
 # anima-line / anima-real 是主线。silverqaq、anima-flesh（幼感）、
 # anima-guizhencao 用得少，先不加——加了也只是多一处要维护的地方。
 CHAR_LORA_SKILLS = frozenset((
-    "anima-line", "anima-real",
+    "anima_clear", "anima-line", "anima-real",
     "hd_3_clear", "hd_3_curvy", "hd_3_gloss", "hd_3_soft",
     "silver", "silver-hd",
 ))
