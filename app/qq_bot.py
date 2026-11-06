@@ -730,7 +730,7 @@ def _should_reply(ev, target, target_id, text, at_me, has_image=False,
     if _GALLERY_RE.match(text):
         return True, "画廊指令（带斜杠）"
     # 「/角色库」（2026-11-06）：同样是斜杠即命令，不用 @。
-    if lora_bot.ROLELIB_RE.match(text):
+    if lora_bot.ROLELIB_RE.search(text):
         return True, "角色库指令（带斜杠）"
     # 2026-10-31：预设网页 / 自定义预设这两条**不再无条件放行**，得先喊一声
     # 机器人（@ 或「大大怪」）。它们原本「关键词命中就免 @」，结果菜单和回执
@@ -1604,7 +1604,7 @@ class SessionRunner:
             # `/角色库`（2026-11-06）：合并转发列出当前 60 个角色 + 支持的渠道。
             # 零 LLM、只读配置；必须排在直达管道前面，否则「角色库」会被当成
             # 画面需求画出来。斜杠即命令，群里不用 @。
-            if lora_bot.ROLELIB_RE.match(own_text or ""):
+            if lora_bot.ROLELIB_RE.search(own_text or ""):
                 lora_bot.send(self.target, self.target_id)
                 return
             card_hit, card_skill, card_body = card_bot.parse(own_text)

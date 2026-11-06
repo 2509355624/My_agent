@@ -19,8 +19,11 @@ log = logging.getLogger("lora_bot")
 
 INDEX = os.path.join(BASE_DIR, "config", "char_loras.json")
 
-# 必须带斜杠、顶在句首（和 `/画廊` 同理：光「角色库」三个字群里随时会出现）
-ROLELIB_RE = re.compile(r"^\s*[/／]\s*角色库\s*$")
+# 只要句子里出现「/角色库」就算，**不要求顶在句首**（2026-11-06 实测：
+# 用户发的是「大大怪 /角色库」，前面带名字，锚定行首的正则直接漏给了生图管道，
+# 机器人回了一句「这是个指令，我画不了」）。斜杠 + 四个字本身已经够独特，
+# 不会在闲聊里误撞。
+ROLELIB_RE = re.compile(r"[/／]\s*角色库")
 
 CATEGORY_NAME = {"genshin": "原神", "hsr": "星穹铁道", "wuthering": "鸣潮",
                  "endfield": "终末地", "nte": "异环", "zzz": "绝区零"}
