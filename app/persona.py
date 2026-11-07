@@ -1182,6 +1182,12 @@ FAST_SKILL = "silver"
 # 角色 LoRA 自动装填（`app/char_loras.py`）挂在这条渠道上，IP 角色自动吃加成。
 SHOT_SKILL = "anima-line"
 
+# 扮演配图的输出目录（2026-11-07 用户点名）：落到
+# `output/角色扮演生图/<渠道>/`，和 `web/生图页/` 分开。
+# 以前不传 `out_dir` 时按 target 推断——网页线会落到 `web/生图页/`，
+# 和玩家手动出的图混在一起，谁也分不清哪张是聊天里生成的。
+PLAY_OUT_DIR = "角色扮演生图"
+
 
 # ─── 用户（男主）的固定外观 ────────────────────────────────
 #
@@ -1290,7 +1296,10 @@ def shot_scene(session_key, msg_index=None):
 
 
 def draw_shot(card, session_key, msg_index=None, reply_to="", on_submit=None):
-    """「出图」→ `SHOT_SKILL`（anima-line）单张**横屏** CG。
+    """「出图」→ `SHOT_SKILL`（anima-line）单张**竖屏** CG。
+
+    2026-11-07 用户拍板改竖屏：anima 的横屏构图（1024×1536 转 1536×1024）
+    线条极容易崩，竖屏是它的原生比例。
 
     返回 `(文件名, note)`：note 非空 = 没画出来及原因。**阻塞**几十秒，
     调用方放后台线程。和 moss 漫画共用同一套画面提取（`_shot_parts`），
@@ -1305,10 +1314,10 @@ def draw_shot(card, session_key, msg_index=None, reply_to="", on_submit=None):
     # 排查用（2026-11-05）：线上反馈「出图还是六格漫画」。这条日志把
     # **实际用的渠道和画幅**打出来，一眼就能分辨是代码没生效（进程跑着旧
     # 版本 → 没有这行）还是走了别的入口（这行有但渠道不是 anima-line）。
-    log.info("扮演出图：渠道=%s 画幅=横屏 行号=%s 画面=%s",
+    log.info("扮演出图：渠道=%s 画幅=竖屏 行号=%s 画面=%s",
              SHOT_SKILL, msg_index, scene[:60])
     name = draw(scene, card, session_key, reply_to=reply_to,
-                skill=SHOT_SKILL, landscape=True, on_submit=on_submit)
+                skill=SHOT_SKILL, landscape=False, on_submit=on_submit)
     if not name:
         return "", "没画出来（排队满 / ComfyUI 没在线 / 被审核拦下）"
     return name, ""
@@ -6452,6 +6461,10 @@ def draw(scene, card, session_key, reply_to="", state="", skill=None,
         job, reason = image_jobs.enqueue(
             target, target_id, wf, skill=chan, prompt=prompt,
             seed=seed, landscape=bool(landscape), quiet=True,
+            # 输出目录（2026-11-07 用户点名）：扮演的配图**不许**再混进
+            # `web/生图页/`——那是手动出图的地方，两边的图混在一起找不回来。
+            # `job.out_dir` 优先于按 target 推断（漫画工作台走的是同一条路）。
+            out_dir=PLAY_OUT_DIR,
             reply_to=str(reply_to or ""))
     except Exception:
         log.exception("扮演配图入队失败 %s", session_key)

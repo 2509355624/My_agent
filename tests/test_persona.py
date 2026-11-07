@@ -716,8 +716,12 @@ class DrawTest(unittest.TestCase):
         self.assertTrue(kw["landscape"])
         self.assertEqual(gi.build_t2i_workflow.call_args[0][0], "anima-line")
 
-    def test_draw_shot_uses_anima_line_landscape(self):
-        """draw_shot：画面行 → draw(SHOT_SKILL, 横屏)；没画面行 → 拒绝。"""
+    def test_draw_shot_uses_anima_line_portrait(self):
+        """draw_shot：画面行 → draw(SHOT_SKILL, **竖屏**)；没画面行 → 拒绝。
+
+        2026-11-07 用户拍板从横屏改竖屏：anima 横屏构图线条极容易崩，
+        1024×1536 才是它的原生比例。
+        """
         from unittest import mock
         self._patch()
         with mock.patch.object(persona, "shot_scene",
@@ -729,7 +733,9 @@ class DrawTest(unittest.TestCase):
         import app.image_jobs as ij
         _, kw = ij.enqueue.call_args
         self.assertEqual(kw["skill"], persona.SHOT_SKILL)
-        self.assertTrue(kw["landscape"])
+        self.assertFalse(kw["landscape"])
+        # 输出目录也得是独立的那个，不许混进 web/生图页
+        self.assertEqual(kw["out_dir"], persona.PLAY_OUT_DIR)
         # 没画面行：直接拒绝，note 带原因
         with mock.patch.object(persona, "shot_scene", return_value=""):
             self.assertEqual(persona.draw_shot({}, "group_1"),
