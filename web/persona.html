@@ -740,6 +740,9 @@
              作者注并进贴脸尾注。常态档不发任何额外字段，老链路不受影响。 -->
         <button class="ptab" id="btnStyle" type="button"
                 title="这一局怎么写">写法</button>
+        <button class="ptab" id="btnStyleHelp" type="button"
+                title="五种写法分别是什么意思"
+                style="min-width:0;padding:0 9px">?</button>
         <div class="stylePop" id="stylePop" style="display:none">
           <div class="fpH"><span>这一局的写法</span><b id="styleVal">常态</b></div>
           <select id="styleSel" aria-label="文风档位"></select>
@@ -976,6 +979,18 @@
     <div class="skipt" style="margin-top:2px">跳过几天由她先开口；选时段和选天数二选一。</div>
     <button class="btn pri skipGo" id="skipGo">跳</button>
     <button class="btn skipGo" id="skipCancel">取消</button>
+  </div>
+</div>
+
+<!-- 写法说明（2026-11-07）：五种写法各是什么意思。数据取自
+     /api/persona/writing_styles，和下拉同源，不在这里另写一份文案。 -->
+<div class="skipMask" id="styleHelpMask">
+  <div class="skipBox">
+    <h3>这一局的写法</h3>
+    <p class="skipt">只影响这一局，随时能改回来。选中的那句会放在每一轮的最后，
+      模型最后读到的就是它。</p>
+    <div id="styleHelpBody" style="margin-top:12px"></div>
+    <button class="btn pri skipGo" id="styleHelpClose">知道了</button>
   </div>
 </div>
 
@@ -3242,10 +3257,14 @@ const STYLE_FALLBACK = [
   { key: "quiet",   label: "留白" }
 ];
 let STYLE_MODE = "normal";
+// 服务端返回的那份含 `line`（每种写法具体写什么），说明窗要用它。
+// 兜底清单只有 label，说明窗里那几档会显示「（默认）」——旧服务也能开。
+let STYLE_LIST = STYLE_FALLBACK;
 
 function renderStyleSel(list) {
   const sel = $("styleSel");
   if (!sel) return;
+  STYLE_LIST = list;
   sel.innerHTML = "";
   list.forEach(s => {
     const o = document.createElement("option");
@@ -3285,6 +3304,32 @@ $("btnStyle").onclick = function (e) {
   p.style.display = show ? "" : "none";
   this.classList.toggle("on", show);
 };
+// 问号：五种写法各是什么意思（2026-11-07 用户要的）
+$("btnStyleHelp").onclick = function (e) {
+  e.stopPropagation();
+  const body = $("styleHelpBody");
+  if (body) {
+    body.innerHTML = "";
+    (STYLE_LIST || []).forEach(s => {
+      const box = document.createElement("div");
+      box.style.cssText = "margin-bottom:11px;line-height:1.75";
+      const b = document.createElement("b");
+      b.textContent = s.label || s.key;
+      b.style.cssText = "font-size:13px;color:var(--text)";
+      box.appendChild(b);
+      const p = document.createElement("div");
+      p.textContent = s.line || "（默认，不额外加任何指令）";
+      p.style.cssText = "font-size:12.5px;color:var(--text-dim)";
+      box.appendChild(p);
+      body.appendChild(box);
+    });
+  }
+  $("styleHelpMask").classList.add("on");
+};
+$("styleHelpClose").onclick = () => $("styleHelpMask").classList.remove("on");
+$("styleHelpMask").addEventListener("click", e => {
+  if (e.target === $("styleHelpMask")) $("styleHelpMask").classList.remove("on");
+});
 $("stylePop").addEventListener("click", e => e.stopPropagation());
 $("styleSel").onchange = function () {
   STYLE_MODE = this.value;

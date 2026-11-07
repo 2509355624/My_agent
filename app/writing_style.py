@@ -148,13 +148,17 @@ LENGTH_ANCHOR = "一轮 300~600 字，这一拍写完就停，停在哪都行，
 PLOT_PREFIX = "这一拍往这个方向走，让它真的发生在画面里："
 
 
-def tail(turn_no=None, note="", plot="", name=None):
+def tail(turn_no=None, note="", plot="", name=None, mode=""):
     """L3 + L4：所有组装路径共用的近因尾注，只拼在最后一条 user 消息末尾。
 
     常态（不给轮次、没写调子、没写剧情推进）只返回「人称视角 + 篇幅」两句
     正向锚点；跳跃 / 收尾路径也走这里。轮次、「这一幕的调子」、剧情推进都是
     玩家主动填才带，剧情推进放最后一句，离生成点最近。判断写什么交给模型，
     这里只做归一化和事实透出。`name` 是卡名：给了就写进人称锚点。
+
+    `mode`（2026-11-07）：写法档位那句也搬到这里。以前它只拼在 system 头，
+    位置在契约之后——加了 1.1 万字状态全书以后，那一句隔了两千多字才轮到
+    生成，模型基本听不见。搬到近因位，玩家点一下下一轮就有反应。
     """
     bits = []
     if turn_no is not None:
@@ -167,6 +171,9 @@ def tail(turn_no=None, note="", plot="", name=None):
     if clean:
         bits.append("这一幕：" + clean)
     bits.append(anchor_for(name))
+    mline = mode_line(mode) if mode else ""
+    if mline:
+        bits.append(mline)
     bits.append(LENGTH_ANCHOR)
     clean_plot = _WS.sub(" ", str(plot or "").strip())[:NOTE_MAX_CHARS]
     if clean_plot:

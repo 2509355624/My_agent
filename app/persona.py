@@ -5254,7 +5254,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
             turn_no = 1
     user_block = user_block + "\n\n" + writing_style.tail(
         turn_no, author_note, plot=man.get("plot"),
-        name=str((card or {}).get("name") or ""))
+        name=str((card or {}).get("name") or ""), mode=mode)
     model_hist = _render_hist(
         hist, name=str((card or {}).get("name") or ""))
     msgs = ([{"role": "system", "content": head}] + model_hist
