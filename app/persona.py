@@ -1527,6 +1527,10 @@ def _norm_card(c):
         # 房间与私物（2026-11-03）：只在「你离开她视线、进她房间」时当素材用。
         # 留空也能玩——由她按人设临场编，这里只是给个锚，避免每次房间都不一样。
         "room": str(c.get("room") or "").strip(),
+        # 卡级默认开场（2026-11-07）：游客第一屏要固定、可控，不能每次现生成。
+        # 生成版靠 `_OPENING_PROMPT` 抽卡，角色可能今天在食堂、明天在图书馆，
+        # 游客的判断窗口只有十几秒，必须一上来就抓住。留空 = 走生成那条老路。
+        "opening": str(c.get("opening") or "").strip(),
         # 攻略起点（2026-11-04）：不同角色不该都从「陌生人」开始。
         # 骨科卡可以一上来就是「妹妹」，同事卡可以一上来就是「同事」。
         # start_level = 距离层级 0~5；start_value 留空就卡在该级门槛上；
@@ -6765,6 +6769,13 @@ def opening(session_key, force=False):
     cur = str(ent.get("intro") or "").strip()
     if cur and not force:
         return cur
+    # 卡级默认开场（2026-11-07）：卡里写了就直接用，**不再调模型**。
+    # 优先级：session 的 `intro` > 卡的 `opening` > 现生成。
+    # 为什么 session 优先：玩家已经聊过的线不该被卡里的开场覆盖——
+    # 那等于把开场白换成另一段，历史还在，两边的场景对不上。
+    card_open = str(card.get("opening") or "").strip()
+    if card_open and not force:
+        return card_open
 
     rel = ""
     try:
