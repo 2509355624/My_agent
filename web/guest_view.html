@@ -7,6 +7,7 @@
 <title>游客会话 · 只读</title>
 <style>
   :root {
+    color-scheme: dark;
     --bg: #0a0a0f; --bg-elev: #12121a; --bg-input: #1a1a24;
     --border: #262633; --text: #e6e6ee; --text-dim: #8b8b9e;
     --text-mute: #5c5c70;
@@ -75,6 +76,18 @@
     letter-spacing: .06em; text-transform: uppercase;
     position: sticky; top: 0; background: var(--bg-elev); z-index: 2;
   }
+  /* 日期筛选：只按「最后活动时间」过滤，不改后端排序 */
+  .filters { display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    padding: 8px 10px; border-bottom: 1px solid var(--border);
+    background: var(--bg-elev); font-size: .78em; }
+  .filters label { color: var(--text-dim); }
+  .filters input[type="date"] {
+    flex: 1; min-width: 118px; padding: 5px 7px; font: inherit;
+    color: var(--text); background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: 7px; outline: none; }
+  .filters input[type="date"]:focus { border-color: var(--accent); }
+  .filters .cnt { color: var(--text-mute); white-space: nowrap; }
+  .filters .ibtn { padding: 4px 8px; font-size: .9em; }
   .row {
     display: flex; align-items: stretch; gap: 0;
     padding: 12px 14px 12px 12px; cursor: pointer;
@@ -167,11 +180,18 @@
     <h1 id="title">游客会话</h1>
     <button class="ibtn" id="fsDown" title="字号变小">A−</button>
     <button class="ibtn" id="fsUp" title="字号变大">A+</button>
+    <button class="ibtn" id="exportBtn" title="把当前会话导出成 Markdown" disabled>导出</button>
     <button class="ibtn" id="logoutBtn">退出</button>
   </header>
   <main>
     <aside id="list">
       <div class="listhead">会话</div>
+      <div class="filters">
+        <label for="dayFilter">最后活动日</label>
+        <input type="date" id="dayFilter" aria-label="按最后活动日期筛选">
+        <span class="cnt" id="listCnt"></span>
+        <button class="ibtn" id="clearDay" title="清除日期筛选">全部</button>
+      </div>
       <div id="rows"><div class="empty">加载中…</div></div>
     </aside>
     <div id="mask"></div>
@@ -185,6 +205,9 @@
 const $ = id => document.getElementById(id);
 const FS_KEY = "gv_fs";
 let CUR = "";
+let ALL = [];            // /gv/list 原始数据，筛选只在这份副本上做
+let CUR_D = null;        // 当前打开的 detail，导出时直接复用
+let CUR_META = null;     // 列表里那一行的元信息（label / card / turns）
 
 // ── 字号 ──────────────────────────────
 function applyFs(px) {
@@ -271,20 +294,28 @@ function fmt(sec) {
   return (sameDay ? "" : (d.getMonth() + 1) + "-" + p(d.getDate()) + " ") +
          p(d.getHours()) + ":" + p(d.getMinutes());
 }
-async function loadList() {
+// 本地时区的 YYYY-MM-DD，和 fmt() 口径一致；别用 toISOString（UTC 会差一天）
+function dayKey(sec) {
+  if (!sec) return "";
+  const d = new Date(sec * 1000);
+  const p = n => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+}
+function renderRows() {
+  // #rows 会被整体清空；筛选控件在 .filters 里、标题在 header 里，都不受牵连
   const box = $("rows");
-  box.innerHTML = '<div class="empty">加载中…</div>';
-  try {
-    const r = await fetch("/gv/list");
-    if (r.status === 401) { location.reload(); return; }
-    const d = await r.json();
-    const rows = d.sessions || [];
-    if (!rows.length) {
-      box.innerHTML = '<div class="empty">还没有游客会话</div>';
-      return;
-    }
-    box.innerHTML = "";
-    rows.forEach(s => {
+  const day = ($("dayFilter").value || "").trim();
+  const rows = day ? ALL.filter(s => dayKey(s.mtime) === day) : ALL;
+  $("listCnt").textContent = ALL.length ? (rows.length + " / " + ALL.length) : "";
+  box.innerHTML = "";
+  if (!rows.length) {
+    const e = document.createElement("div");
+    e.className = "empty";
+    e.textContent = day ? "这一天没有会话" : "还没有游客会话";
+    box.appendChild(e);
+    return;
+  }
+  rows.forEach(s => {
       const el = document.createElement("div");
       el.className = "row";
       el.dataset.key = s.key;
@@ -306,14 +337,29 @@ async function loadList() {
       el.onclick = () => openRow(s.key, el, s);
       box.appendChild(el);
     });
+}
+async function loadList() {
+  const box = $("rows");
+  box.innerHTML = '<div class="empty">加载中…</div>';
+  try {
+    const r = await fetch("/gv/list");
+    if (r.status === 401) { location.reload(); return; }
+    const d = await r.json();
+    ALL = d.sessions || [];
+    renderRows();
   } catch (e) {
     box.innerHTML = '<div class="empty">读不到：' + e.message + "</div>";
   }
 }
+$("dayFilter").addEventListener("change", renderRows);
+$("clearDay").onclick = () => { $("dayFilter").value = ""; renderRows(); };
 
 // ── 详情 ──────────────────────────────
 async function openRow(key, el, meta) {
   CUR = key;
+  CUR_D = null;                       // 加载期间不许导出到上一条的陈旧数据
+  CUR_META = meta || null;
+  $("exportBtn").disabled = true;
   document.querySelectorAll(".row.on").forEach(x => x.classList.remove("on"));
   if (el) el.classList.add("on");
   document.body.classList.add("detail");
@@ -356,10 +402,73 @@ async function openRow(key, el, meta) {
     if (!(d.messages || []).length)
       box.innerHTML = '<div class="empty">这条会话没有记录</div>';
     box.scrollTop = 0;
+    CUR_D = d;
+    $("exportBtn").disabled = false;
   } catch (e) {
     box.innerHTML = '<div class="empty">读不到：' + e.message + "</div>";
   }
 }
+
+// ── 导出（纯前端拼 Markdown，不新增接口）──────────────
+// /gv/detail 已经给了 messages / note / state / card，够拼一份可读的存档；
+// 让 5174 出文件反而要加接口 + 限流桶 + 鉴权，前端一个 Blob 就完事。
+function escMd(s) {
+  // 只把内容当纯文本：消息里出现 # / ``` 之类不该变成 markdown 结构。
+  // 用缩进 + 反斜杠转义行首的标记字符，正文换行原样保留。
+  return String(s || "").split("\n").map(line =>
+    line.replace(/^(\s{0,3})(#{1,6}\s|>\s?|[-*+]\s|\d+\.\s|```)/,
+                 "$1\\$2")).join("\n");
+}
+function buildMarkdown(d, meta) {
+  const m = meta || {};
+  const label = d.label || m.label || ("游客 " + String(d.key || "").slice(0, 8));
+  const L = [];
+  L.push("# " + label);
+  L.push("");
+  L.push("- 角色卡：" + (d.card || m.card || "—"));
+  L.push("- 最后活动：" + (d.mtime_text || "—"));
+  L.push("- 轮次：" + (m.turns != null ? m.turns :
+    (d.messages || []).filter(x => x.role === "assistant").length));
+  L.push("- 记录条数：" + (d.total != null ? d.total : (d.messages || []).length));
+  L.push("- 会话 key：`" + String(d.key || "") + "`");
+  L.push("- 导出时间：" + new Date().toLocaleString("zh-CN"));
+  if (d.state) L.push("", "## 状态", "", escMd(d.state));
+  if (d.note)  L.push("", "## 账本", "", escMd(d.note));
+  L.push("", "---", "", "## 对话", "");
+  const msgs = d.messages || [];
+  if (!msgs.length) L.push("（没有记录）");
+  msgs.forEach((x, i) => {
+    const who = x.role === "user" ? "你" : (d.card || "她");
+    L.push("### " + (i + 1) + " · " + who);
+    L.push("");
+    L.push(escMd(x.text));
+    if (x.role === "assistant" && (x.mood || x.state)) {
+      const tag = [x.mood ? (x.mood + " " + (x.intensity || "")) : "",
+                   x.state || ""].filter(Boolean).join(" · ");
+      L.push("", "> " + tag.replace(/\n/g, " "));
+    }
+    L.push("");
+  });
+  return L.join("\n");
+}
+$("exportBtn").onclick = () => {
+  if (!CUR_D) return;
+  const d = CUR_D;
+  const label = d.label || (CUR_META && CUR_META.label) || String(d.key || "session");
+  const safe = label.replace(/[\\/:*?"<>|\r\n]/g, "_").slice(0, 40);
+  const stamp = dayKey(Date.now() / 1000);
+  const name = "游客会话_" + safe + "_" + stamp + ".md";
+  const blob = new Blob(["\ufeff" + buildMarkdown(d, CUR_META)],
+                        { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
 
 // ── 启动 ──────────────────────────────
 async function enterApp() {
