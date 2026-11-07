@@ -118,6 +118,14 @@
     background: var(--bg-elev); border: 1px solid var(--border);
     white-space: pre-wrap; word-break: break-word; }
   .m.user .bubble { background: var(--accent-dim); border-color: #3a2d5c; }
+  /* 台词高亮（2026-11-08）：和角色扮演页同一套黄荧光，只圈引号内的字，
+     旁白 / 心理描写不吃色。转义在上色函数里做，见 fmtDlg。 */
+  .bubble .dlg { background: rgba(251, 191, 36, .16); color: #ffdf8a;
+    padding: 0 3px; border-radius: 4px; box-decoration-break: clone;
+    -webkit-box-decoration-break: clone; }
+  /* 自动刷新开关：开着就点亮，不用另外写字占 header 宽度 */
+  .ibtn.on { color: var(--accent); border-color: var(--accent);
+    background: var(--accent-dim); }
   .tag { font-size: .74em; color: var(--text-dim); margin-top: 7px;
          border-top: 1px dashed var(--border); padding-top: 6px; }
   .empty { color: var(--text-dim); text-align: center; padding: 48px 0; font-size: .88em; }
@@ -180,6 +188,8 @@
     <h1 id="title">游客会话</h1>
     <button class="ibtn" id="fsDown" title="字号变小">A−</button>
     <button class="ibtn" id="fsUp" title="字号变大">A+</button>
+    <button class="ibtn" id="autoBtn" aria-pressed="true"
+            title="自动刷新中（每 5 秒）· 点此关闭">↻</button>
     <button class="ibtn" id="exportBtn" title="把当前会话导出成 Markdown" disabled>导出</button>
     <button class="ibtn" id="logoutBtn">退出</button>
   </header>
@@ -204,14 +214,18 @@
 <script>
 const $ = id => document.getElementById(id);
 const FS_KEY = "gv_fs";
+const AUTO_KEY = "gv_auto";
 let CUR = "";
 let ALL = [];            // /gv/list 原始数据，筛选只在这份副本上做
 let CUR_D = null;        // 当前打开的 detail，导出时直接复用
 let CUR_META = null;     // 列表里那一行的元信息（label / card / turns）
+let LIST_FP = "";        // 上次列表的数据指纹，没变就别重绘 DOM
+let AUTO_T = null;
 
 // ── 字号 ──────────────────────────────
 function applyFs(px) {
-  px = Math.max(12, Math.min(22, px | 0));
+  // 下限 8px（2026-11-08 用户要手机上能缩到很小）；上限仍 22px。
+  px = Math.max(8, Math.min(22, px | 0));
   document.documentElement.style.setProperty("--fs", px + "px");
   try { localStorage.setItem(FS_KEY, px); } catch (e) {}
   return px;
@@ -304,6 +318,8 @@ function dayKey(sec) {
 function renderRows() {
   // #rows 会被整体清空；筛选控件在 .filters 里、标题在 header 里，都不受牵连
   const box = $("rows");
+  const list = $("list");
+  const keepTop = list.scrollTop;          // 自动刷新重绘后别把列表弹回顶部
   const day = ($("dayFilter").value || "").trim();
   const rows = day ? ALL.filter(s => dayKey(s.mtime) === day) : ALL;
   $("listCnt").textContent = ALL.length ? (rows.length + " / " + ALL.length) : "";
@@ -313,11 +329,13 @@ function renderRows() {
     e.className = "empty";
     e.textContent = day ? "这一天没有会话" : "还没有游客会话";
     box.appendChild(e);
+    list.scrollTop = keepTop;
     return;
   }
   rows.forEach(s => {
       const el = document.createElement("div");
       el.className = "row";
+      if (s.key === CUR) el.classList.add("on");   // 重绘后保住当前选中行
       el.dataset.key = s.key;
       const body = document.createElement("div");
       body.className = "body";
@@ -337,24 +355,79 @@ function renderRows() {
       el.onclick = () => openRow(s.key, el, s);
       box.appendChild(el);
     });
+  list.scrollTop = keepTop;
 }
-async function loadList() {
+async function loadList(quiet) {
   const box = $("rows");
-  box.innerHTML = '<div class="empty">加载中…</div>';
+  if (!quiet) box.innerHTML = '<div class="empty">加载中…</div>';
   try {
     const r = await fetch("/gv/list");
     if (r.status === 401) { location.reload(); return; }
     const d = await r.json();
-    ALL = d.sessions || [];
+    const rows = d.sessions || [];
+    const fp = JSON.stringify(rows);
+    // 自动刷新时数据没变就完全不碰 DOM：滚动位置、选中行、抽屉都不受影响
+    if (quiet && fp === LIST_FP) return;
+    ALL = rows;
+    LIST_FP = fp;
     renderRows();
+    if (quiet && CUR) {                // 轮次涨了，标题跟着更新（和管理台一样）
+      const hit = rows.find(x => x.key === CUR);
+      if (hit) {
+        CUR_META = hit;
+        $("title").textContent = [hit.label, hit.card, (hit.turns || 0) + " 轮"]
+          .filter(Boolean).join(" · ");
+      }
+    }
   } catch (e) {
-    box.innerHTML = '<div class="empty">读不到：' + e.message + "</div>";
+    // 自动刷新失败静默跳过，下一轮再试；首次加载才把错误显示出来
+    if (!quiet) box.innerHTML = '<div class="empty">读不到：' + e.message + "</div>";
   }
 }
 $("dayFilter").addEventListener("change", renderRows);
 $("clearDay").onclick = () => { $("dayFilter").value = ""; renderRows(); };
 
 // ── 详情 ──────────────────────────────
+// 台词高亮：和 `web/persona.html` 的 fmtDlg 同一套规则，**先转义再包 span**，
+// 正则只认转义后的三种引号，绝不对原始文本放行任何 HTML。
+function fmtDlg(text) {
+  const esc = String(text == null ? "" : text)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  return esc.replace(
+    /(&quot;[\s\S]*?&quot;|“[\s\S]*?”|「[^」]*」)/g,
+    '<span class="dlg">$1</span>');
+}
+
+// 首次渲染和自动刷新的增量追加共用同一个造气泡函数，别写两份。
+function makeMsg(m) {
+  const wrap = document.createElement("div");
+  wrap.className = "m " + (m.role === "user" ? "user" : "ai");
+  const b = document.createElement("div");
+  b.className = "bubble";
+  if (m.role === "assistant") b.innerHTML = fmtDlg(m.text || "");  // 转义在函数里做
+  else b.textContent = m.text || "";
+  if (m.role === "assistant" && (m.mood || m.state)) {
+    const t = document.createElement("div");
+    t.className = "tag";
+    t.textContent = [m.mood ? (m.mood + " " + (m.intensity || "")) : "",
+                     m.state || ""].filter(Boolean).join(" · ");
+    b.appendChild(t);
+  }
+  wrap.appendChild(b);
+  return wrap;
+}
+function paintDetail(d) {
+  const box = $("detail");
+  box.innerHTML = "";
+  const msgs = d.messages || [];
+  const frag = document.createDocumentFragment();
+  msgs.forEach(m => frag.appendChild(makeMsg(m)));
+  box.appendChild(frag);
+  if (!msgs.length) box.innerHTML = '<div class="empty">这条会话没有记录</div>';
+  box.scrollTop = 0;
+}
+
 async function openRow(key, el, meta) {
   CUR = key;
   CUR_D = null;                       // 加载期间不许导出到上一条的陈旧数据
@@ -374,34 +447,15 @@ async function openRow(key, el, meta) {
   box.innerHTML = '<div class="empty">加载中…</div>';
   try {
     const r = await fetch("/gv/detail?key=" + encodeURIComponent(key));
+    if (CUR !== key) return;         // 期间又点了别的会话，别把旧的画上去
     if (r.status === 401) { location.reload(); return; }
     const d = await r.json();
+    if (CUR !== key) return;
     if (!d.ok) {
       box.innerHTML = '<div class="empty">' + (d.error || "读不到") + "</div>";
       return;
     }
-    box.innerHTML = "";
-    const frag = document.createDocumentFragment();
-    (d.messages || []).forEach(m => {
-      const wrap = document.createElement("div");
-      wrap.className = "m " + (m.role === "user" ? "user" : "ai");
-      const b = document.createElement("div");
-      b.className = "bubble";
-      b.textContent = m.text || "";
-      if (m.role === "assistant" && (m.mood || m.state)) {
-        const t = document.createElement("div");
-        t.className = "tag";
-        t.textContent = [m.mood ? (m.mood + " " + (m.intensity || "")) : "",
-                         m.state || ""].filter(Boolean).join(" · ");
-        b.appendChild(t);
-      }
-      wrap.appendChild(b);
-      frag.appendChild(wrap);
-    });
-    box.appendChild(frag);
-    if (!(d.messages || []).length)
-      box.innerHTML = '<div class="empty">这条会话没有记录</div>';
-    box.scrollTop = 0;
+    paintDetail(d);
     CUR_D = d;
     $("exportBtn").disabled = false;
   } catch (e) {
@@ -470,12 +524,66 @@ $("exportBtn").onclick = () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 
+// ── 自动刷新（2026-11-08，照 persona_admin 管理台口径）──────────
+// 服务端每次都现读磁盘，拉一次就是最新。默认开、开关记本地、后台标签照拉。
+// 列表由 loadList(true) 按指纹决定要不要重绘；详情只把多出来的气泡追加到末尾，
+// 不动滚动位置（正贴着底就继续跟到最新），条数变少才整块重画。
+function curAuto() {
+  try {
+    const v = localStorage.getItem(AUTO_KEY);
+    return v === null ? true : v === "1";
+  } catch (e) { return true; }
+}
+function setAuto(on, remember) {
+  if (AUTO_T) { clearInterval(AUTO_T); AUTO_T = null; }
+  const b = $("autoBtn");
+  b.classList.toggle("on", on);
+  b.setAttribute("aria-pressed", on ? "true" : "false");
+  b.title = on ? "自动刷新中（每 5 秒）· 点此关闭" : "已停止自动刷新 · 点此开启";
+  if (remember) { try { localStorage.setItem(AUTO_KEY, on ? "1" : "0"); } catch (e) {} }
+  if (!on) return;
+  AUTO_T = setInterval(tick, 5000);
+}
+$("autoBtn").onclick = () => setAuto(!AUTO_T, true);
+
+async function tick() {
+  await loadList(true);
+  await refreshDetail();
+}
+async function refreshDetail() {
+  if (!CUR || !CUR_D) return;         // 没打开详情 / 正在加载，跳过
+  const key = CUR;
+  try {
+    const r = await fetch("/gv/detail?key=" + encodeURIComponent(key));
+    if (CUR !== key) return;
+    if (r.status === 401) { location.reload(); return; }
+    const d = await r.json();
+    if (CUR !== key || !d.ok) return;
+    CUR_D = d;                        // 导出始终用最新一份
+    const box = $("detail");
+    const shown = box.querySelectorAll(".m").length;
+    const msgs = d.messages || [];
+    if (msgs.length === shown) return;
+    const stick = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+    if (msgs.length < shown || !shown) {   // 回退 / 从空态来消息：整块重画
+      paintDetail(d);
+      if (stick) box.scrollTop = box.scrollHeight;
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    msgs.slice(shown).forEach(m => frag.appendChild(makeMsg(m)));
+    box.appendChild(frag);
+    if (stick) box.scrollTop = box.scrollHeight;
+  } catch (e) { /* 自动刷新失败静默跳过，下一轮再试 */ }
+}
+
 // ── 启动 ──────────────────────────────
 async function enterApp() {
   $("login").style.display = "none";
   $("app").classList.add("on");
   applyFs(curFs());
   await loadList();
+  setAuto(curAuto(), false);
 }
 (async function init() {
   applyFs(curFs());
