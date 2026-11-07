@@ -11,7 +11,11 @@
     数格数、报字数，**只报不拦**。
   · 一页一次生成，格与格共享上下文，角色一致性天然成立；代价是改一格只能
     整页重抽（所以这里只有「整页换 seed」，没有逐格重渲）。
-  · 气泡写进提示词由模型直接画（30 步实测 11 字内零错字），不需要另开一步。
+  · 文字（2026-11-08 起）：默认走 **Soda 程序排字**（`app/soda_letter.py`）——
+    底图用 `build_page_prompt(with_text=False)` 生成（画面里声明无文字），
+    工作流里 SaveImage 前插 `SodaLetterPage` 节点画气泡 + 竖排中文。台词
+    不再让模型画，根治气泡位置随机 / 贴边乱码。`MOSS_SODA_LETTER=0` 退回
+    老链路（模型画字）。
 
 端点：
   POST /api/moss/write    一句话剧情 → 编剧写 spec.json（同步，几秒）
@@ -38,7 +42,7 @@ import time
 
 from flask import Blueprint, jsonify, request, send_file
 
-from app import image_jobs, lora_slots, moss_comic
+from app import image_jobs, lora_slots, moss_comic, soda_letter
 from app.config import BASE_DIR, COMFYUI_OUTPUT_DIR
 from app.skills import load_workflow
 from app.tools.normal.generate_image import apply_prompt_placeholders
@@ -424,8 +428,12 @@ def _node_id(wf, cls, field):
     raise RuntimeError("工作流里找不到 %s.%s（渠道结构变了？）" % (cls, field))
 
 
-def _draw(page, prompt, base_wf, seed, out_dir, title):
-    """一页 → 一张图。返回 (相对 ComfyUI output 的路径 or None, 错误串)。"""
+def _draw(page, prompt, base_wf, seed, out_dir, title, letter_info=""):
+    """一页 → 一张图。返回 (相对 ComfyUI output 的路径 or None, 错误串)。
+
+    `letter_info` 非空 = Soda 程序排字模式（`soda_letter.page_info` 的产物）：
+    在 SaveImage 前插 `SodaLetterPage`，存盘的就是排好字的整页。
+    """
     wf = json.loads(json.dumps(base_wf))
     lat = _node_id(wf, "EmptyFlux2LatentImage", "width")
     wf[lat]["inputs"]["width"] = WIDTH
@@ -442,6 +450,8 @@ def _draw(page, prompt, base_wf, seed, out_dir, title):
     # 所以 `/view` 那条路不用改。
     wf[_node_id(wf, "SaveImage", "filename_prefix")]["inputs"]["filename_prefix"] = (
         "qq-moss漫画/MossComic_%s_P%02d" % (_slug(title), n))
+    if letter_info:
+        wf = soda_letter.rewire(wf, letter_info)
     # nai5 触发词跟着模板的 8 号槽走（2026-10-28）：模板开着就拼，用户「存为
     # 默认」关掉后这里自动就不拼了，两处永不脱节。
     prompt = lora_slots.nai5_prefix(SKILL) + prompt
@@ -487,6 +497,10 @@ def _run(d, spec, nums, seed_base, loras=None):
         if loras:
             lora_slots.apply_slots(base_wf, loras)
         prompts = _prompts(spec)
+        # 排字模式：提交的底图提示词去掉文字条目（文字归 SodaLetterPage 画）。
+        # prompts.txt 里仍保留 with_text=True 的版本——那是一份「字放哪」的
+        # 布局图，排查排版时有用。
+        lettering = soda_letter.enabled()
         by_n = {p.get("n"): p for p in spec.get("pages") or []}
         out_dir = "%s/%s" % (OUT_ROOT, os.path.basename(d))
         for n in nums:
@@ -500,8 +514,14 @@ def _run(d, spec, nums, seed_base, loras=None):
             _set_page(d, n, status="running", error="", rev=int(time.time()))
             t0 = time.time()
             try:
-                rel, err = _draw(page, prompts.get(str(n), ""), base_wf, seed,
-                                 out_dir, title)
+                info = ""
+                draw_prompt = prompts.get(str(n), "")
+                if lettering:
+                    info = soda_letter.page_info(spec, page)
+                    draw_prompt = moss_comic.build_page_prompt(spec, page,
+                                                               with_text=False)
+                rel, err = _draw(page, draw_prompt, base_wf, seed,
+                                 out_dir, title, letter_info=info)
             except BaseException as exc:        # noqa: BLE001
                 rel, err = None, str(exc) or exc.__class__.__name__
             if rel:
