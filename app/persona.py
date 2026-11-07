@@ -560,12 +560,76 @@ def contact_block(gd):
     return "\n".join(lines)
 
 
-def body_state_block(aff_res, gd=None):
-    """数值 + 档位 + 行为定性（2026-11-07）。
+def _pick_level(lst, v):
+    """从配置的档位表里挑当前这一档（min 从高到低排好的）。"""
+    try:
+        v = int(v or 0)
+    except (TypeError, ValueError):
+        v = 0
+    for lv in lst or []:
+        if v >= int(lv.get("min") or 0):
+            return lv
+    return {}
 
-    以前第二段只看得到 `_ORGASM_LAYERS` 挑出的一段文笔指导：知道「临界了」，
-    不知道是 76 还是 94；冲动值则一个字都没有。结果是模型没有连续量，
-    上一轮写得快到了、下一轮又回到「她还忍着」。
+
+def _combo_hits(aff_res, gd):
+    """组合规则命中的那几条（对应全书第 12 节）。
+
+    单轴管不了的事：时间×冲动、位置×高潮、戒备×好感、屈服×高潮。
+    命中的用**一句话**点出来，详细写法让模型回全书里看——这里只负责把
+    它的注意力拽到对的节上。
+    """
+    out = []
+    try:
+        ar = int(aff_res.get("arousal") or 0)
+        ex = int(aff_res.get("excite") or 0)
+        val = int(aff_res.get("value") or 0)
+        sus = int(aff_res.get("suspicion") or 0)
+        sub = int(aff_res.get("submit") or 0)
+    except (TypeError, ValueError):
+        return out
+    ph = normalize_phase((gd or {}).get("phase"))
+    con = str((gd or {}).get("contact") or "")
+
+    if ph == "深夜":
+        if ar < 60:
+            out.append("深夜 × 冲动 %d：约不动，别写成欲拒还迎（12.1）" % ar)
+        elif ar >= 80:
+            out.append("深夜 × 冲动 %d：她不等你开口（12.1）" % ar)
+        else:
+            out.append("深夜 × 冲动 %d：会答应，但会抱怨、会看时间（12.1）" % ar)
+    elif ph == "傍晚" and ar >= 45:
+        out.append("傍晚 × 冲动 %d：最容易出事的一组（12.1）" % ar)
+
+    if con == "mouth" and ex >= 75:
+        out.append("位置在口 × 高潮 %d：她说不出完整的话（12.2）" % ex)
+    elif con in ("pussy", "anus") and ex >= 75:
+        if sub < 40:
+            out.append("位置在%s × 高潮 %d × 屈服 %d：想叫又忍着（12.2/12.5）"
+                       % (_CONTACT_LABEL.get(con, con), ex, sub))
+        elif sub > 60:
+            out.append("位置在%s × 高潮 %d × 屈服 %d：不装了，叫出来（12.5）"
+                       % (_CONTACT_LABEL.get(con, con), ex, sub))
+    elif con == "none" and ex >= 75:
+        out.append("还没连上 × 高潮 %d：光是碰就快到了（12.2）" % ex)
+
+    if sus > 20 and val < 30:
+        out.append("戒备 %d × 好感 %d：越界一次就记账（12.3）" % (sus, val))
+    elif sus > 20 and val > 60:
+        out.append("戒备 %d × 好感 %d：她防的是失去，不是被伤害（12.3）" % (sus, val))
+    elif sus > 30:
+        out.append("戒备 %d：身体接触全关，包括牵手（12.3）" % sus)
+    return out
+
+
+def body_state_block(aff_res, gd=None):
+    """「你现在在」+ 组合命中（2026-11-07 方案 C）。
+
+    全书（`skills/writing/00-state-guide/state-guide.md`）负责「这一档怎么写」，
+    这里只负责两件事：
+      1. 报当前数值和档位名——模型拿名字回全书里找同名小节；
+      2. 算组合命中——单轴管不了的事，一句话把它拉到第 12 节。
+    全书读不到时退回内置的 `_TIME_LAYERS` / `_AROUSAL_LAYERS`（旧路径）。
 
     只读 `affection.settle()` 的返回值，不碰任何存储。
     """
@@ -574,20 +638,55 @@ def body_state_block(aff_res, gd=None):
     try:
         ex = int(aff_res.get("excite") or 0)
         ar = int(aff_res.get("arousal") or 0)
+        val = int(aff_res.get("value") or 0)
+        cor = int(aff_res.get("corrupt") or 0)
+        sub = int(aff_res.get("submit") or 0)
+        sus = int(aff_res.get("suspicion") or 0)
     except (TypeError, ValueError):
         return ""
     try:
         from app import affection
-        ol = affection.orgasm_level(ex) or {}
-        al = affection.arousal_level(ar) or {}
     except Exception:                                     # noqa: BLE001
-        ol, al = {}, {}
-    lines = ["## 她现在的身体（这一轮就按这个演，数值不要跳）"]
-    # 时间放在最前面（2026-11-07）：先定「现在几点」，再谈数值。同一组数字
-    # 放在深夜和下午，该写出来的东西完全不一样。
+        return ""
     gd = gd if isinstance(gd, dict) else {}
     ph = normalize_phase(gd.get("phase"))
-    lines.append("第 %d 天 · %s" % (_day_of(gd), ph or "时段未定"))
+    tier = affection.tier_for(val) or {}
+    al = affection.arousal_level(ar) or {}
+    ol = affection.orgasm_level(ex) or {}
+    try:
+        cfg = affection.load_config()
+    except Exception:                                     # noqa: BLE001
+        cfg = {}
+    cl = _pick_level(cfg.get("corruption_levels"), cor)
+    sl = _pick_level(cfg.get("submission_levels"), sub)
+
+    book = writing_skills.state_guide()
+    if book:
+        lines = ["## 你现在在（回《状态值全书》找同名小节，先看第 12 节）"]
+        lines.append("好感 %d（%s）· 感情 %s · 戒备 %d"
+                     % (val, tier.get("name") or "—",
+                        affection.level_name(aff_res.get("level")) or "—", sus))
+        lines.append("冲动 %d（%s）· 高潮 %d（%s）"
+                     % (ar, al.get("name") or "—", ex, ol.get("name") or "—"))
+        lines.append("堕落 %d（%s）· 屈服 %d（%s）"
+                     % (cor, cl.get("name") or "—", sub, sl.get("name") or "—"))
+        lines.append("第 %d 天 · %s · 接触：%s"
+                     % (_day_of(gd), ph or "时段未定",
+                        _CONTACT_LABEL.get(str(gd.get("contact") or ""), "无")))
+        hits = _combo_hits(aff_res, gd)
+        if hits:
+            lines.append("")
+            lines.append("【组合命中】")
+            lines.extend("- " + h for h in hits)
+        con = contact_block(gd)
+        if con:
+            lines.append("")
+            lines.append(con)
+        return "\n".join(lines)
+
+    # ── 旧路径：全书读不到时，用内置档位顶上 ──
+    lines = ["## 她现在的身体（这一轮就按这个演，数值不要跳）",
+             "第 %d 天 · %s" % (_day_of(gd), ph or "时段未定")]
     tlayer = _TIME_LAYERS.get(ph or "")
     if tlayer:
         lines.append(tlayer)
@@ -3008,9 +3107,18 @@ def build_head(card, session_key, sender, note="", state="", intimate=True,
     if room and not str(session_key or "").startswith("group_"):
         parts.append("## 她的房间（你离开她视线、进她房间时的素材，"
                      "可以自由发挥，不必全用）\n\n" + room)
-    # 人称（2026-11-07 二改）：正文用角色名字指代她，不再通篇「她」。
-    # 契约是模块常量，名字按卡填——占位符 {NAME} 在这里换成卡名；
-    # 没名字的卡退化成「她」，规则仍然成立。
+    # 状态值全书（2026-11-07 方案 C）：**总是拼**，不跟 `intimate` 走。
+    #
+    # 为什么总是拼：它放在 system 前段、逐字节不变，前缀缓存整段命中；如果
+    # 按轮次时有时无，前缀每轮都变，缓存全 miss——省下的 token 又赔回去。
+    # 为什么敢全量：模型看到的是**整条曲线**（同一根轴的上下档位），
+    # 而不只是「你现在在这一档」，它才知道自己该往哪个方向写。
+    #
+    # 位置在契约**之前**：契约末尾那段人称强调是「长上下文里开头规则会被稀释」
+    # 的补救，全书排到它后面会把这段挤出注意力窗口。
+    sg = writing_skills.state_guide()
+    if sg:
+        parts.append(sg)
     cname = str((card or {}).get("name") or "").strip() or "她"
     parts.append((_CONTRACT if intimate else _CONTRACT_NO_INTIMATE).replace(
         "{NAME}", cname))

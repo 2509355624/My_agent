@@ -37,13 +37,21 @@ check("前端按钮 = PHASES", tuple(btns) == persona.PHASES, str(tuple(btns)))
 check("前端有灰显逻辑", "btn.past" in html and "btn.now" in html)
 check("前端防重开", "SKIP_CLOSED_AT" in html)
 
-# 3) 状态注入
+# 3) 状态注入（两条路径都算过：有全书走锚点，没全书走内置档位）
+from app import writing_skills  # noqa: E402
+BOOK = bool(writing_skills.state_guide())
 for ar, key in ((10, "calm"), (35, "mild"), (55, "warm"),
                 (78, "hot"), (95, "burning")):
     blk = persona.body_state_block(
-        {"active": True, "excite": 78, "arousal": ar, "value": 30, "corrupt": 0})
-    ok = ("高潮 78/100" in blk and ("冲动 %d/100" % ar) in blk
-          and ("### " in blk))
+        {"active": True, "excite": 78, "arousal": ar, "value": 30,
+         "corrupt": 0, "submit": 0, "suspicion": 0, "level": 2},
+        {"day": 0, "phase": "深夜"})
+    if BOOK:
+        ok = ("## 你现在在" in blk and "高潮 78" in blk
+              and ("冲动 %d" % ar) in blk and "组合命中" in blk)
+    else:
+        ok = ("高潮 78/100" in blk and ("冲动 %d/100" % ar) in blk
+              and "### " in blk)
     check("body_state_block arousal=%d" % ar, ok,
           blk.split("\n")[0] if blk else "")
 

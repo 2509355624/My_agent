@@ -64,6 +64,7 @@ DEV_AXIS_AT = 40
 _DEV_KEYS = ("mouth", "nipple", "pussy", "anus", "skin")
 
 _H_WRITING = "02-h-tech/h-writing.md"
+_STATE_GUIDE = "00-state-guide/state-guide.md"
 _CONQUEST = "05-style/conquest-style.md"
 _DOMINATION = "01-structure/references/domination-training-techniques.md"
 _QUIET = "01-structure/references/quiet-exposure-techniques.md"
@@ -222,6 +223,32 @@ for _rows in _BY_AXIS.values():
     _CHECK += [(f, a, b) for _n, f, a, b, _u in _rows]
 for _rows in _SLOW_AXIS.values():
     _CHECK += [(f, a, b) for _n, f, a, b, _u in _rows]
+
+
+_STATE_GUIDE_CACHE = None
+
+
+def state_guide():
+    """全量「状态值全书」（2026-11-07 方案 C）。
+
+    它是**静态**的：每根轴每一档该怎么演，一次给全。为什么敢全量给——它放在
+    system 的最前段且逐字节不变，DeepSeek 的前缀缓存会整段命中，之后每轮只按
+    命中价计费；反而是「每轮按数值现挑一段」的切法每轮都 miss，更贵。
+
+    读不到返回空串：调用方退回 `persona._TIME_LAYERS` / `_AROUSAL_LAYERS`
+    那套内置档位，演员照样能演，只是看不到全貌。
+    """
+    global _STATE_GUIDE_CACHE
+    if _STATE_GUIDE_CACHE is not None:
+        return _STATE_GUIDE_CACHE
+    try:
+        path = os.path.join(_ROOT, *_STATE_GUIDE.split("/"))
+        with open(path, encoding="utf-8") as fh:
+            _STATE_GUIDE_CACHE = fh.read().strip()
+    except Exception:                                     # noqa: BLE001
+        log.warning("状态值全书读不到，退回内置档位", exc_info=True)
+        _STATE_GUIDE_CACHE = ""
+    return _STATE_GUIDE_CACHE
 
 
 def _slice(rel, start, end, until=None):
