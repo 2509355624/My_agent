@@ -546,7 +546,11 @@
     box-shadow: inset 0 0 0 1px rgba(240,180,41,.35); }
   .phaseBtns .btn.now::after { content: " · 现在"; font-size: 10px;
     opacity: .8; }
-  .phaseBtns .btn.past { opacity: .32; cursor: not-allowed; }
+  /* 过去的时段（2026-11-08 用户反馈「看不出区别」）：光降透明度不够，
+     深色背景上要再加删除线 + 虚线边框，一眼就知道点不了。 */
+  .phaseBtns .btn.past { opacity: .28; cursor: not-allowed;
+    text-decoration: line-through; border-style: dashed;
+    background: transparent; }
   .phaseBtns .btn.past:hover { border-color: var(--border); color: inherit; }
   .skipCustom { display: flex; gap: 8px; align-items: center; }
   .skipCustom input { flex: 1; min-width: 0; padding: 9px 12px; font: inherit;
@@ -1902,6 +1906,10 @@ function renderMode() {
   const raid = isRaid(AFF);
   b.textContent = raid ? "攻略模式" : "自由模式";
   b.classList.toggle("on", raid);
+  // 自由模式不结算时间/好感（2026-11-08 用户反馈）：🌙 按钮跟着隐藏，
+  // 否则点开的弹窗里全是灰的、还找不到自己在哪一段。
+  const sk = $("btnSkip");
+  if (sk) sk.style.display = raid ? "" : "none";
   // 结局定格（2026-11-04）：结局之后点一下就是「翻过这一页」——切自由模式
   // 会解除结局、数值封存。切回攻略模式只会回一句「还停在结局」，等于死路，
   // 所以这里先把话说清楚。
