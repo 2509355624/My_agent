@@ -176,9 +176,6 @@
     </aside>
     <div id="mask"></div>
     <section id="detail">
-      <div class="dhead">
-        <span class="t" id="dTitle">选一条会话</span>
-      </div>
       <div class="empty">左边选一条会话</div>
     </section>
   </main>
@@ -321,10 +318,12 @@ async function openRow(key, el, meta) {
   if (el) el.classList.add("on");
   document.body.classList.add("detail");
   closeDrawer();
-  if (meta) {
-    $("dTitle").textContent = [meta.label, meta.card,
-      (meta.turns || 0) + " 轮"].filter(Boolean).join(" · ");
-  }
+  // 标题放 header，不再往 detail 里塞 —— 上一版把 `#dTitle` 写在 detail 内部，
+  // 又被 `box.innerHTML = ...` 一起清掉，紧接着读它的 textContent 就炸了
+  // （2026-11-08 用户截图：Cannot read properties of null）。
+  $("title").textContent = meta
+    ? [meta.label, meta.card, (meta.turns || 0) + " 轮"].filter(Boolean).join(" · ")
+    : "会话";
   const box = $("detail");
   box.innerHTML = '<div class="empty">加载中…</div>';
   try {
@@ -335,8 +334,7 @@ async function openRow(key, el, meta) {
       box.innerHTML = '<div class="empty">' + (d.error || "读不到") + "</div>";
       return;
     }
-    box.innerHTML = '<div class="dhead"><span class="t" id="dTitle2"></span></div>';
-    $("dTitle2").textContent = $("dTitle").textContent;
+    box.innerHTML = "";
     const frag = document.createDocumentFragment();
     (d.messages || []).forEach(m => {
       const wrap = document.createElement("div");
