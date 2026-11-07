@@ -2004,6 +2004,16 @@ def process(job):
         # 快照存在 job 上，重抽几次都对调得一样。
         wf = (landscape_workflow(job.workflow) if job.landscape
               else job.workflow)
+        # 默认挂载 LoRA（2026-11-07）：渠道级的底层风格，`config/default_loras.json`
+        # 里按组配置。放在这里而不是各渠道的 build 里——所有入口（QQ / 网页 /
+        # 漫画 / 重抽）最后都从这里提交，一处覆盖全部。
+        # 插在 UNETLoader 与消费者之间，角色 LoRA（char_loras，build 时已插）
+        # 会落在它的下游，互不干扰。
+        try:
+            from app import default_loras
+            wf = default_loras.apply(job.skill, wf)
+        except Exception:                             # noqa: BLE001
+            log.exception("默认 LoRA 装填失败 %s，这一图按原样提交", job.skill)
         # 输出目录（2026-10-18）：把 SaveImage 的前缀改成 `<会话>/<渠道>/<原名>`，
         # 让 ComfyUI 自己往子目录里写（它建目录）。**每张图只改这一处**——
         # 所有渠道、所有入口（QQ / 网页 / 漫画）最后都从这儿提交。

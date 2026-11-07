@@ -1,0 +1,19 @@
+{
+  "_readme": [
+    "默认挂载 LoRA（2026-11-07）：不管玩家换哪个 moss 渠道，这些 LoRA 都会自动挂上。",
+    "groups 里是渠道分组，defaults 里按组挂；同一组里的每条都会插一个 LoraLoaderModelOnly 节点。",
+    "file 用 ComfyUI 的 lora_name 写法（相对 loras 目录，子目录用 `/` 或 `\\`）。",
+    "strength 建议 0.6~0.9：默认 LoRA 是背景，不该压过玩家自己选的风格。",
+    "改完重启 agent.py / qq_bot 生效。"
+  ],
+  "groups": {
+    "moss": ["moss", "moss-light", "moss-qunyou", "moss50", "moss8", "moss_page"]
+  },
+  "defaults": [
+    {
+      "group": "moss",
+      "file": "moss/moss_pussy_lora_v1.0.safetensors",
+      "strength": 0.8
+    }
+  ]
+}
