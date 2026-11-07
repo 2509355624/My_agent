@@ -502,6 +502,64 @@ _TIME_LAYERS = {
 }
 
 
+# 接触位置（2026-11-07 位置状态机）。
+#
+# 玩家实测的乱跳：上一拍还在后庭，下一句直接「射进小穴」；再下一句又「插进
+# 嘴里」，中间没有任何退出/进入的动作。根因不是模型笨，是它**没有状态**——
+# 300~500 字里它只能盯住当下的动作，跨轮的一致性必须靠外部记。
+#
+# 状态来源：角色 AI 自己在状态行第五段交（契约里限死七个词）。系统只做归一、
+# 存上一拍、在换位置时补一句硬约束。
+_CONTACT_LABEL = {"none": "无", "mouth": "口", "pussy": "小穴",
+                  "anus": "后庭", "hand": "手", "breast": "胸", "thigh": "腿"}
+
+_CONTACT_ALIAS = [
+    ("none", ("无", "没有", "没", "未", "none")),
+    ("pussy", ("小穴", "阴道", "穴", "里面", "pussy", "vagina")),
+    ("anus", ("后庭", "肛门", "后穴", "anus", "anal")),
+    ("mouth", ("口", "嘴", "口腔", "mouth", "oral")),
+    ("breast", ("胸", "乳房", "breast")),
+    ("thigh", ("腿", "大腿", "thigh")),
+    ("hand", ("手", "手指", "hand")),
+]
+
+
+def normalize_contact(value):
+    """任意写法 → 七个标准值之一；认不出来返回空串（当作「这一轮没交」）。"""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    low = raw.lower()
+    for key, words in _CONTACT_ALIAS:
+        for w in words:
+            if w in low:
+                return key
+    return ""
+
+
+def contact_block(gd):
+    """当前接触位置 + 换位置约束。只在亲密轮拼。"""
+    if not isinstance(gd, dict):
+        return ""
+    cur = str(gd.get("contact") or "").strip()
+    if not cur:
+        return ""
+    prev = str(gd.get("contact_prev") or "").strip()
+    lines = ["## 现在连在哪里",
+             "接触：%s" % _CONTACT_LABEL.get(cur, cur)]
+    # 换位置 = 上一拍和这一拍都非空、且不同。这时候必须写过渡，否则读者
+    # 看到的就是「上一句还在后庭，下一句已经在嘴里」。
+    if prev and prev != cur and "none" not in (prev, cur):
+        lines.append(
+            "⚠ 上一拍还在**%s**，这一拍到了**%s**。"
+            "**必须写清怎么退出来、怎么进去**——抽出来、换个姿势、再进，"
+            "至少一句话带过。直接从一处跳到另一处，这一轮算穿帮。"
+            % (_CONTACT_LABEL.get(prev, prev), _CONTACT_LABEL.get(cur, cur)))
+    elif prev == "none" and cur != "none":
+        lines.append("这一拍刚进去。**第一次进入要写**，别一句「已经在了」。")
+    return "\n".join(lines)
+
+
 def body_state_block(aff_res, gd=None):
     """数值 + 档位 + 行为定性（2026-11-07）。
 
@@ -538,6 +596,9 @@ def body_state_block(aff_res, gd=None):
     layer = _AROUSAL_LAYERS.get(str(al.get("key") or ""))
     if layer:
         lines.append(layer)
+    con = contact_block(gd)
+    if con:
+        lines.append(con)
     return "\n".join(lines)
 
 
@@ -838,7 +899,7 @@ _CONTRACT = (
     "- **穿什么**（具体到哪件、什么状态。这一项最重要，直接决定画面里她穿什么）\n"
     "- 跟你有没有肢体接触\n"
     "\n"
-    "示例：`靠窗坐着 · 白衬衫解开两粒扣 · 你扶着她的肩 · 傍晚`\n"
+    "示例：`靠窗坐着 · 白衬衫解开两粒扣 · 你扶着她的肩 · 傍晚 · 无`\n"
     "\n"
     "穿什么写具体：「宽松白T恤和居家短裤」「浴袍」「只裹着浴巾」这种一眼能看见的说法。"
     "状态接着上一轮往下走：上一轮脱掉的外套这一轮还脱着，上一轮到哪一步就接着哪一步。\n"
@@ -850,13 +911,18 @@ _CONTRACT = (
     "```\n"
     "画面：<英文一行，含穿着>\n"
     "心情：<情绪> 强度<N>\n"
-    "状态：<在哪> · <穿什么> · <接触> · <时段>\n"
+    "状态：<在哪> · <穿什么> · <姿态> · <时段> · <接触>\n"
     "```\n"
     "\n"
     "**`<时段>` 一定要写**：早晨 / 上午 / 中午 / 下午 / 傍晚 / 深夜，六个里挑一个。\n"
     "它是系统判断「现在几点」的唯一来源——不写，时间弹窗就不知道高亮哪一格，\n"
     "状态值也没法跟时间对上（深夜和下午，同一句话的分量不一样）。\n"
     "时段变了就跟着改；没变也要照写，留空这一轮就没有时间。\n"
+    "\n"
+    "**`<接触>` 只能从这七个词里挑一个**：无 / 口 / 小穴 / 后庭 / 手 / 胸 / 腿。\n"
+    "记的是这一拍**结束时**身体连在哪里——是位置，不是动作。没接触就写「无」。\n"
+    "系统拿它和上一拍对：**换了地方就得写清怎么退出来、怎么进去**，\n"
+    "直接从后庭跳到嘴里、中间一个字不提，会被判成穿帮。\n"
     "\n"
     "这三行是给系统读的，标签后面都要有内容。正文写得再投入，也记得把它们补上。\n"
     "\n"
@@ -5924,6 +5990,15 @@ def _save_mood(session_key, mood, intensity, state, prev_state=""):
             if ph in PHASES:
                 gd_now = _gameday(st)
                 gd_now["phase"] = ph
+        # 接触位置（2026-11-07）：第五段，角色 AI 自己交的枚举。
+        # 段数不足 5 = 这一轮没写，**保持上一拍不动**——空值不能当成「拔出来了」，
+        # 那样一次漏写就会把状态机清零。
+        if len(seg) >= 5:
+            con = normalize_contact(seg[4])
+            if con:
+                gd_now = _gameday(st)
+                gd_now["contact_prev"] = str(gd_now.get("contact") or "")
+                gd_now["contact"] = con
     _save_state(state_data)
 
 

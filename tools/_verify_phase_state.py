@@ -56,7 +56,22 @@ try:
 except Exception as e:                                     # noqa: BLE001
     check("冲动档位全覆盖", False, repr(e))
 
-# 5) 没状态时不能硬塞
+# 5) 接触位置状态机（2026-11-07）
+for raw, want in (("小穴", "pussy"), ("小穴里", "pussy"), ("后庭", "anus"),
+                  ("肛门里", "anus"), ("嘴里", "mouth"), ("无", "none"),
+                  ("手指", "hand"), ("乱写", "")):
+    got = persona.normalize_contact(raw)
+    check("contact %s" % raw, got == want, got or "(空)")
+
+blk = persona.contact_block({"contact": "pussy", "contact_prev": "anus"})
+check("换位置有过渡约束", "必须写清怎么退出来" in blk and "后庭" in blk)
+blk = persona.contact_block({"contact": "mouth", "contact_prev": "none"})
+check("首次进入有提醒", "第一次进入" in blk)
+blk = persona.contact_block({"contact": "pussy", "contact_prev": "pussy"})
+check("同位置不加约束", "⚠" not in blk)
+check("无接触返回空", persona.contact_block({"contact": "", "contact_prev": "anus"}) == "")
+
+# 6) 没状态时不能硬塞
 check("无 active 返回空", persona.body_state_block({"active": False}) == "")
 check("None 返回空", persona.body_state_block(None) == "")
 

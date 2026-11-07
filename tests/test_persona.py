@@ -1127,7 +1127,10 @@ class IntimateGuideTest(unittest.TestCase):
     def test_plain_head_drops_the_guide(self):
         head = persona.build_head(self.CARD, "private_1", "", intimate=False)
         self.assertNotIn("亲密场景", head)
-        self.assertNotIn("小穴", head)
+        # 2026-11-07：「小穴」进了状态行第五段的**枚举词表**
+        # （无 / 口 / 小穴 / 后庭 / 手 / 胸 / 腿），每轮都要给模型看，
+        # 它是元数据不是描写。这里改查真正露骨的动词。
+        self.assertNotIn("抽插", head)
         # 但格式要求、画面、心情、状态这些必须还在
         self.assertIn("## 画面", head)
         self.assertIn("## 心情", head)
