@@ -564,6 +564,12 @@ def cmd_run(args):
     if not key.startswith(COPY_PREFIX):
         _die("只跑副本（key 必须 %r 开头）：%s\n母本是只读快照，直接在真线上跑会改掉真实记录。"
              % (COPY_PREFIX, key))
+    if getattr(args, "cache", False):
+        # 只放 llm 的 INFO，别的模块保持安静——`[cache]` 是 `app.llm` 打的。
+        import logging
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
+        for name in ("app.rag", "rag", "LocalEmbeddings", "sentence_transformers"):
+            logging.getLogger(name).setLevel(logging.WARNING)
     persona = _persona()
     if not persona._entry(key):
         _die("副本不存在或已删：%s\n先 `new` 一个。" % key)
@@ -726,6 +732,8 @@ def main(argv=None):
     p.add_argument("--script", help="台词文件：一行一轮，# 开头忽略")
     p.add_argument("--max", type=int, default=0, help="最多跑几轮")
     p.add_argument("--dry", action="store_true", help="不调模型，只看注入内容")
+    p.add_argument("--cache", action="store_true",
+                   help="打印 prompt cache 命中（看方案 C 的全书有没有吃到缓存）")
     p.add_argument("--model", help="临时换文本模型（写进 PERSONA_MODEL）")
     p.set_defaults(func=cmd_run)
 
