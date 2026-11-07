@@ -52,6 +52,18 @@ from app.tools.normal.documents import list_documents, file_info, read_document,
 
 app = Flask(__name__, static_folder=WEB_DIR, static_url_path="")
 
+# 伪装 Server 头（2026-11-08）：Werkzeug 默认发
+# `Server: Werkzeug/3.1.3 Python/3.14.0`——版本号等于直接告诉扫描器该试哪几个
+# CVE。报一个通用值就行，真实栈不出门。
+try:
+    from werkzeug.serving import WSGIRequestHandler as _WSGIHandler
+
+    class _QuietRequestHandler(_WSGIHandler):
+        server_version = "nginx"
+        sys_version = ""
+except Exception:                                        # noqa: BLE001
+    _QuietRequestHandler = None
+
 # ─── 会话持久化（每个 agent 一个会话文件）────────────
 # 一切以磁盘文件为准：每次读写都 load/save，保证手机/电脑等多端
 # 刷新到的一致（不再依赖进程内存全局变量，避免多端不同步）。
@@ -140,6 +152,26 @@ app.register_blueprint(friend_api.bp)
 # 画廊（独立 Blueprint，见 app/gallery_api.py）：站主磁盘目录 → 作品集，
 # 群友上传 → 压缩后入库。同样只认内部令牌，公网入口在 5175。
 app.register_blueprint(gallery_api.bp)
+
+
+@app.before_request
+def _public_source_guard():
+    """公网来源直连一律拒（2026-11-08）。
+
+    cloudflared 跑在本机，Tunnel 流量的 `remote_addr` 是 127.0.0.1；本机浏览器、
+    手机/iPad 也都是私网段。**公网 IP 出现在 `remote_addr` 上，只可能是路由器
+    端口转发 / DMZ / UPnP 把 5174 捅到了外面**——那正是「反查源站 IP」之后能
+    直接打进来的口子，而且这条请求**不带** `CF-Connecting-IP`，`_tunnel_guard`
+    认不出来。
+
+    本机 + 私网放行（手机、iPad 照常用）；公网一律 403。
+    以后真要换别的反代（frp / ngrok 这类从公网连进来的），得把这层改成白名单。
+    """
+    addr = request.remote_addr or ""
+    if addr in _LOCAL_ADDRS or _is_lan_addr(addr):
+        return None
+    log.warning("拒绝公网直连：%s %s", addr, request.path)
+    return jsonify({"ok": False, "error": "forbidden"}), 403
 
 
 @app.before_request
@@ -2904,6 +2936,8 @@ def run():
         logging.getLogger("main").exception("游客目录检查失败")
 
     host = "0.0.0.0"  # 监听所有网卡，允许手机/iPad 局域网访问
+    # 公网直连由 `_public_source_guard` 拦（source IP 不是私网就 403），
+    # 所以这里保持 0.0.0.0 仍然安全。
     ip = _local_ip()
     print("=" * 50)
     print("  My Agent - Personal AI Assistant")
@@ -2915,7 +2949,10 @@ def run():
           + str(len(load_history(DEFAULT_AGENT_ID))) + " messages")
     print("  Skills: " + ", ".join(list_skills()))
     print("=" * 50)
-    app.run(host=host, port=AGENT_PORT, debug=False)
+    _run_kw = {}
+    if _QuietRequestHandler is not None:
+        _run_kw["request_handler"] = _QuietRequestHandler
+    app.run(host=host, port=AGENT_PORT, debug=False, **_run_kw)
 
 
 if __name__ == "__main__":
