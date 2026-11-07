@@ -774,6 +774,8 @@
     <div class="composer">
       <textarea id="inp" rows="1" placeholder="说点什么…"></textarea>
       <button class="btn" id="btnSkip" title="跳过几天，由她先开口">🌙 跳过</button>
+      <!-- 换行（2026-11-08 群友要的）：手机上没 Shift 键，Ctrl+Enter 也按不出来 -->
+      <button class="btn" id="btnNl" title="换行（Shift+Enter / Ctrl+Enter 也行）">↵</button>
       <button class="btn pri" id="btnSend">发送</button>
     </div>
   </main>
@@ -3059,6 +3061,14 @@ $("mask").onclick = function () { closeDrawer(); closeStats(); };
 $("btnStats").onclick = openStats;
 
 // ── 绑定 ──────────────────────────────────────────────
+$("btnNl").onclick = function () {
+  const el = $("inp");
+  const s = el.selectionStart, e2 = el.selectionEnd;
+  el.value = el.value.slice(0, s) + "\n" + el.value.slice(e2);
+  el.selectionStart = el.selectionEnd = s + 1;
+  el.dispatchEvent(new Event("input"));   // 让高度自适应跟着长
+  el.focus();
+};
 $("btnSend").onclick = send;
 $("btnSkip").onclick = openSkip;
 $("skipCancel").onclick = closeSkip;
