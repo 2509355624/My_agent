@@ -457,6 +457,81 @@ def _recent_docs(line, batches=3, limit=12):
     return out[:limit]
 
 
+def _bigrams(text):
+    """字符 bigram 集合。中文里「她做了早餐」和「早餐是她做的」重叠率很高，
+    比词袋稳（没有分词器也能跑）。"""
+    s = re.sub(r"\s+", "", str(text or ""))
+    if not s:
+        return set()
+    if len(s) == 1:
+        return {s}
+    return {s[i:i + 2] for i in range(len(s) - 1)}
+
+
+def _chars(text):
+    """去重后的字符集合。短句上比 bigram 宽容得多——
+    「她做了早餐，煎了蛋」和「她做早餐的时候煎了鸡蛋」按字集算重叠七成，
+    按 bigram 只有两成，MMR 会当场失效。"""
+    return set(re.sub(r"[\s，。、！？,.!?~～]+", "", str(text or "")))
+
+
+def _text_sim(a, b):
+    """0~1 的重复度：六成看字符集，四成看 bigram（防「同一批字不同顺序」）。"""
+    A, B = _chars(a), _chars(b)
+    if not A or not B:
+        return 0.0
+    uni = len(A & B) / float(len(A | B))
+    Ab, Bb = _bigrams(a), _bigrams(b)
+    bi = len(Ab & Bb) / float(len(Ab | Bb)) if (Ab and Bb) else 0.0
+    return 0.6 * uni + 0.4 * bi
+
+
+def mmr_select(docs, k, lam=0.7, dup=0.30):
+    """文本级 MMR（2026-11-07）：先挑最相关，之后每次挑「和已选最不重复」的。
+
+    为什么需要：纯 top-k 会把同一件事的三个说法全选进来——
+    「她做了早餐 / 她做早餐煎了蛋 / 早餐是她做的」三条占掉一半位置，
+    真正新的那条反而挤不进去。玩家看到的「回忆里全是重复」就是这个。
+
+    相关性用 `distance` 换算（1 - 距离），冗余度用字符集 + bigram 的相似度。
+    不依赖向量：`client.search` 只回文本和距离，拿不到 embedding。
+
+    两个参数：
+      `lam`  1.0 = 退化成纯 top-k；0.0 = 只看多样性。0.7 = 七分相关三分多样。
+      `dup`  和已选条目的相似度**达到这个值就直接不要**。只靠 lam 压不住：
+             重复条目的相关性往往最高，扣完分还是赢（实测 0.73×0.7−0.34×0.3
+             仍然高于一条真正新的 0.58）。所以加一道硬闸。
+    """
+    if not docs or k <= 0:
+        return []
+    rest = list(docs)
+    picked = []
+    while rest and len(picked) < k:
+        best = None
+        best_score = -1e9
+        for d in rest:
+            try:
+                rel = 1.0 - float(d.get("distance") or 1.0)
+            except (TypeError, ValueError):
+                rel = 0.0
+            red = 0.0
+            if picked:
+                red = max(_text_sim(d.get("content") or d.get("text") or "",
+                                    s.get("content") or s.get("text") or "")
+                          for s in picked)
+                if red >= dup:                       # 硬闸：几乎同一件事
+                    continue
+            score = lam * rel - (1.0 - lam) * red
+            if score > best_score:
+                best_score = score
+                best = d
+        if best is None:                             # 剩下的全重复了
+            break
+        picked.append(best)
+        rest.remove(best)
+    return picked
+
+
 def retrieve(line, query, k=None, day=None):
     """按当前用户的话找几条提炼过的记忆；daemon 没 ready 就返回空。
 
@@ -478,7 +553,10 @@ def retrieve(line, query, k=None, day=None):
         log.info("[回忆] %s daemon 未就绪，本轮不检索", line)
         return []
     limit = PERSONA_RAG_MAX_DISTANCE
-    kk = k or PERSONA_RAG_K
+    # 返回几条 vs 检索几条（2026-11-07）：候选池放大到 12 起步，再交给 MMR
+    # 按「相关性 - 重复度」挑。取多少回多少的话，MMR 没得挑。
+    kk_out = max(1, int(k or PERSONA_RAG_K))
+    kk = max(kk_out * 4, 12)
     time_q = bool(_TIME_QUERY.search(query))
     if time_q:
         limit = max(limit, 0.65)
@@ -507,7 +585,7 @@ def retrieve(line, query, k=None, day=None):
             if out:
                 log.info("[回忆] %s 按第 %d 天命中 %d 条（query=%r）",
                          line, day_q, len(out), query[:40])
-                return out[:12]
+                return mmr_select(out, kk_out)
     # 普通路径 / 天数过滤无结果时回退
     try:
         r = client.search(collection_name(line), query,
@@ -536,7 +614,7 @@ def retrieve(line, query, k=None, day=None):
         out = merged[:12]
     log.info("[回忆] %s 命中 %d 条（query=%r，阈值=%.2f，时间问法=%s）",
              line, len(out), query[:40], limit, time_q)
-    return out[:kk]
+    return mmr_select(out, kk_out)
 
 
 def retrieve_raw(line, query, k=None):
@@ -560,8 +638,9 @@ def retrieve_raw(line, query, k=None):
     if client is None or not client.is_ready():
         return []
     kk = max(1, int(k or RAW_BLOCK_ITEMS))
+    kk_pool = max(kk * 3, 12)      # 候选池放大，MMR 才有得挑
     try:
-        r = client.search(collection_name(line), query, k=kk,
+        r = client.search(collection_name(line), query, k=kk_pool,
                           timeout=PERSONA_RAG_TIMEOUT, allow_start=False,
                           where={"source": _RAW_SOURCE})
     except Exception:                                    # noqa: BLE001
@@ -584,7 +663,8 @@ def retrieve_raw(line, query, k=None):
             out.append(d)
     if out:
         log.info("[原话] %s 命中 %d 条（query=%r）", line, len(out), query[:40])
-    return out[:kk]
+    # 原话层重复更凶（同一个场景被记三四遍），MMR 挑完再给。
+    return mmr_select(out, kk)
 
 
 def _fact_block(docs):
