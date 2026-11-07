@@ -1,21 +1,10 @@
 {
   "_readme": [
-    "默认挂载 LoRA（2026-11-07）：不管玩家换哪个 moss 渠道，这些 LoRA 都会自动挂上。",
-    "groups 里是渠道分组，defaults 里按组挂；同一组里的每条都会插一个 LoraLoaderModelOnly 节点。",
-    "file 用 ComfyUI 的 lora_name 写法（相对 loras 目录，子目录用 `/` 或 `\\`）。",
-    "strength 建议 0.6~0.9：默认 LoRA 是背景，不该压过玩家自己选的风格。",
-    "改完重启 agent.py / qq_bot 生效。"
+    "默认挂载 LoRA（2026-11-07）：按渠道分组，不管玩家换哪个渠道，组里的 LoRA 都会自动挂上。",
+    "groups 定义组 -> 渠道列表；defaults 按组挂，每组每条插一个 LoraLoaderModelOnly 节点。",
+    "现在为空：那个 504MB 的细节 LoRA 显存占用过大，2026-11-07 已下架并移入回收站。",
+    "要再加，往下面写就行，改完重启 agent.py / qq_bot 生效。"
   ],
-  "groups": {
-    "moss细节": [
-      "moss细节"
-    ]
-  },
-  "defaults": [
-    {
-      "group": "moss细节",
-      "file": "moss/moss_pussy_lora_v1.0.safetensors",
-      "strength": 0.8
-    }
-  ]
+  "groups": {},
+  "defaults": []
 }
