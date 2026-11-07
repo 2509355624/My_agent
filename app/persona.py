@@ -3261,8 +3261,21 @@ def render_user_block(segments, addressed=True, fallback="", remind=False,
     参数保留给直接调用方，文案与统一尾注同源。
     """
     if not segments:
-        if remind and str(fallback or "").strip():
-            return str(fallback).strip() + "\n" + writing_style.tail(name=name)
+        body = str(fallback or "")
+        stripped = body.strip()
+        if remind and stripped:
+            return stripped + "\n" + writing_style.tail(name=name)
+        # 多行原文才加说明（2026-11-08 用户要的）：玩家在主对话框里会写一大段，
+        # 里面混着「他说的话 / 他做的动作 / 他心里的想法」，三种没有标记。
+        # 编剧要自己拆——这里只点明「有这三种」和「换行是他自己的分段」。
+        # 单行不加，省 token。
+        if "\n" in stripped:
+            return ("【玩家这一轮写的（原文，没分段）】\n"
+                    "下面是玩家自己写的一段，可能混着三类东西：**他说的话**、"
+                    "**他做的动作**、**他心里想的**。换行是他自己分的段，按行读，"
+                    "别合并成一句。判断依据：带「」『』引号的是话；括号里的是动作"
+                    "或心想；没有标记的按上下文判断，多数是话。\n\n"
+                    + body)
         return fallback
     lines = ["【这一轮你收到的（按发生顺序）】"]
     has_think = False
