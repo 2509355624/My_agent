@@ -618,6 +618,13 @@ def _gv_admin():
 @app.route("/guest-view")
 @app.route("/guest-view.html")
 def guest_view_page():
+    # `?out=1`：清掉登录 cookie 再回来（2026-11-08 用户反馈）。
+    # 浏览器记着 `fr_sess` 就不给登录框，手机上没有「清站点数据」这种入口，
+    # 给个地址最省事。清完跳到不带参数的地址，避免死循环。
+    if request.args.get("out"):
+        resp = make_response(redirect("/guest-view"))
+        resp.delete_cookie(friend_auth.COOKIE_NAME, path="/")
+        return resp
     return send_from_directory(WEB_DIR, "guest_view.html")
 
 
