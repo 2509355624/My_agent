@@ -316,8 +316,8 @@ class TurnTest(PersonaBase):
             persona.run_turn(self.KEY, "我走了。", "private")
         last_user = m.call_args_list[1][0][0][-1]["content"]
         self.assertIn("用户 · 说（你听得见）：我走了。", last_user)
-        self.assertIn("用户 · 想（你看不见", last_user)
-        self.assertNotIn("其实想留下", last_user)      # 心里话的正文不给演员看
+        self.assertIn("用户 · 想（心里想的", last_user)
+        self.assertIn("其实想留下", last_user)   # 心里话给写作 AI（2026-11-08 改）
         head = m.call_args_list[1][0][0][0]["content"]
         self.assertIn("对方心里有话没说出口", head)
         self.assertNotIn("对方真正在：想被留住", head)
@@ -837,8 +837,8 @@ class SegmentTest(unittest.TestCase):
             {"who": "用户", "type": "想", "text": "其实想留下"},
         ])
         self.assertIn("用户 · 说（你听得见）：我走了。", block)
-        self.assertIn("你看不见，也不知道内容", block)
-        self.assertNotIn("其实想留下", block)
+        self.assertIn("她听不见", block)
+        self.assertIn("其实想留下", block)
 
     def test_no_segments_falls_back_to_raw(self):
         self.assertEqual(persona.render_user_block([], True, "原文"), "原文")
@@ -911,8 +911,9 @@ class SegmentTest(unittest.TestCase):
             [{"who": "用户", "type": "说", "text": "我走了。"},
              {"who": "用户", "type": "想", "text": ""}],
             True, "我走了。（心里想：其实想留下）")
-        self.assertNotIn("其实想留下", block)
-        self.assertNotIn("【他这一轮的原话", block)
+        # 2026-11-08 改：原文总是补上，不再因为有心事就藏起来。
+        self.assertIn("其实想留下", block)
+        self.assertIn("【他这一轮的原话", block)
 
     def test_render_hist_uses_seg_only_for_new_messages(self):
         hist = [
@@ -923,7 +924,7 @@ class SegmentTest(unittest.TestCase):
         ]
         out = persona._render_hist(hist)
         self.assertEqual(out[0]["content"], "旧原话")
-        self.assertIn("看不见，也不知道内容", out[1]["content"])
+        self.assertIn("她听不见", out[1]["content"])
 
     def test_history_keeps_seg_through_trim(self):
         hist = [{"role": "user", "content": "原文",
@@ -2933,8 +2934,9 @@ class ManualInputTest(unittest.TestCase):
         block = persona.render_user_block(segs, True, "")
         self.assertIn("把果子接过来", block)
         self.assertIn("你吃吧", block)
-        self.assertNotIn("其实我想让她先开口", block)
-        self.assertIn("说出口", block)
+        # 2026-11-08 改：写作 AI 必须看到他在想什么，否则她的反应只能瞎编。
+        self.assertIn("其实我想让她先开口", block)
+        self.assertIn("她听不见", block)
 
     def test_manual_block_keeps_thought_for_director(self):
         block = persona._manual_block({
@@ -3026,8 +3028,8 @@ class ManualRunTurnTest(PersonaBase):
         self.assertTrue(turn.reply)
         actor = "\n".join(m["content"] for m in seen[-1])
         self.assertIn("拿起杯子", actor)
-        self.assertNotIn("想让她主动", actor)
-        self.assertIn("说出口", actor)
+        self.assertIn("想让她主动", actor)   # 心里话现在给写作 AI 看
+        self.assertIn("她听不见", actor)
 
     def test_plot_reaches_director_block_and_tail(self):
         """剧情推进同时落在 user 块、导演条、近因位；心理活动原文仍不泄露。"""
@@ -3048,7 +3050,7 @@ class ManualRunTurnTest(PersonaBase):
         self.assertIn("这一拍往这个方向走", actor)
         self.assertIn("让她先开口", actor)
         self.assertIn("300~600 字", actor)
-        self.assertNotIn("想让她主动", actor)
+        self.assertIn("想让她主动", actor)   # 2026-11-08：心里话给写作 AI
         head = seen[-1][0]["content"]
         self.assertIn("让她先开口", head)
 
