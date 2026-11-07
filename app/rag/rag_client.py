@@ -64,6 +64,14 @@ class RagClient:
             env=env,
             cwd=str(ROOT_DIR),
             text=True,
+            # 必须显式指定编码（2026-11-08）：Windows 上 `text=True` 默认按
+            # GBK 解码，daemon 输出的是 UTF-8 JSON，遇到第一个非 GBK 字节
+            # （比如「」这类）读线程直接 UnicodeDecodeError 崩掉。
+            # 崩了之后 `_ready` 永远设不上，`is_ready()` 恒 False ——
+            # 表现就是「daemon 未就绪，本轮不检索」，一条记忆都进不来，
+            # 模型只能从窗口里编（实测把「门板被撞见」编成「第一次」）。
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )
 

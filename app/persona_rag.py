@@ -109,6 +109,17 @@ _MEMORY_PROMPT = """你是角色扮演对话的记忆提炼器。把这一批对
 - 不要记寒暄、重复日常、临场玩笑、出图 tags、穿着和镜头。
 - 确实没有值得记的原子事实 → entries=[]，但 summary 仍要写。
 
+【锚点事实（anchors）】
+如果这一批里出现了下面这些**只发生一次**的事，必须单独写一条 anchor：
+初次性行为（第一次/破处/初夜）、第一次接吻、第一次口交、第一次后庭、
+第一次叫某个称呼、关系确认、第一次吵架/和好、搬家/换工作/被发现。
+- 必须写清**在哪、什么时候、当时穿的什么**——这三样是以后被问
+  「第一次在哪」时唯一能救场的东西。
+- 一条只写一件事，不合并；没有就是空数组。
+- `key` 用英文短标识：first_time / first_kiss / first_oral / first_anal /
+  relationship / moved / discovered。
+- anchor 不占 entries 的 4 条名额，另算。
+
 【输出 JSON】
 {{
   "skip": false,
@@ -118,6 +129,10 @@ _MEMORY_PROMPT = """你是角色扮演对话的记忆提炼器。把这一批对
       "topics": ["主题"], "primaryEmotion": "", "openThreads": []}},
     {{"about": "character", "content": "{name}：……",
       "topics": [], "primaryEmotion": "", "openThreads": []}}
+  ],
+  "anchors": [
+    {{"key": "first_time", "content": "第一次（破处）发生在……",
+      "place": "卧室", "outfit": "她当时穿什么"}}
   ]
 }}
 """
@@ -432,8 +447,10 @@ def _recent_docs(line, batches=3, limit=12):
     正常阈值直接把它过滤掉，演员就完全想不起来。时间问法额外把最近几批
     事实**不看距离**带进去，让演员手里至少有昨天发生过什么。
     """
-    client = _CLIENT
-    if client is None or not client.is_ready() or not hasattr(client, "list_entries"):
+    client = _client()
+    if not client.is_ready():
+        time.sleep(1.5)          # 冷启动空窗，见 `warm()` 注释
+    if not client.is_ready() or not hasattr(client, "list_entries"):
         return []
     try:
         r = client.list_entries(collection_name(line), timeout=PERSONA_RAG_TIMEOUT)
@@ -484,6 +501,53 @@ def _text_sim(a, b):
     Ab, Bb = _bigrams(a), _bigrams(b)
     bi = len(Ab & Bb) / float(len(Ab | Bb)) if (Ab and Bb) else 0.0
     return 0.6 * uni + 0.4 * bi
+
+
+_ANCHOR_RE = re.compile(
+    r"第一次|初次|初夜|破处|第一次接吻|第一次口|第一次后庭|"
+    r"确认关系|在一起了|搬家|被发现|第一次叫")
+_ANCHOR_CACHE = {}
+_ANCHOR_TTL = 300
+
+
+def _anchor_docs(line):
+    """锚点事实：只发生一次的节点（第一次/初夜/关系确认/搬家…）。
+
+    为什么单开一条路（2026-11-08）：364 条记忆里每轮只取 3 条，靠向量相似度
+    选。「第一次操你是在什么地方」这种问法，语义上更像「第一次高潮」（在数
+    次数那几条），而不是「第一次在卧室」——它永远挤不进 top-k。所以这类条目
+    不看距离，直接全量塞进回忆块（十几条以内，成本可接受）。
+
+    缓存 5 分钟：每轮 list_entries 拉全量太重（几百条 JSON）。
+    """
+    now = time.time()
+    row = _ANCHOR_CACHE.get(line)
+    if row and now - row[0] < _ANCHOR_TTL:
+        return row[1]
+    client = _client()
+    if not client.is_ready():
+        time.sleep(1.5)
+    docs = []
+    if client.is_ready() and hasattr(client, "list_entries"):
+        try:
+            r = client.list_entries(collection_name(line),
+                                    timeout=PERSONA_RAG_TIMEOUT)
+            for e in (r.get("entries") or []):
+                text = str(e.get("content") or e.get("text") or "")
+                meta = dict(e.get("metadata") or {})
+                # 两种来源：新版蒸馏直接标 kind=anchor；旧数据靠关键词兜住。
+                if meta.get("kind") != "anchor" and not _ANCHOR_RE.search(text):
+                    continue
+                meta["_anchor"] = True
+                docs.append({"id": e.get("id"), "content": text,
+                             "metadata": meta, "distance": 0.0})
+        except Exception:                                # noqa: BLE001
+            log.warning("锚点事实读取失败 %s", line, exc_info=True)
+    docs = docs[:12]
+    _ANCHOR_CACHE[line] = (now, docs)
+    if docs:
+        log.info("[回忆] %s 锚点 %d 条", line, len(docs))
+    return docs
 
 
 def mmr_select(docs, k, lam=0.7, dup=0.30):
@@ -548,8 +612,14 @@ def retrieve(line, query, k=None, day=None):
     with _LOCK:
         if line in _BLOCKED:
             return []
-    client = _CLIENT
-    if client is None or not client.is_ready():
+    client = _client()
+    if not client.is_ready():
+        # 冷启动空窗（2026-11-08）：daemon 懒启动要 3~8 秒，重启后第一轮必丢。
+        # 以前这里直接返回空，模型手里一条记忆都没有，只能从 12 条窗口里编
+        # （实测编出「第一次在门板」，而库里明明记着「卧室、床没铺好」）。
+        # 等一次，2 秒还不行才放弃。
+        time.sleep(1.5)
+    if not client.is_ready():
         log.info("[回忆] %s daemon 未就绪，本轮不检索", line)
         return []
     limit = PERSONA_RAG_MAX_DISTANCE
@@ -634,8 +704,10 @@ def retrieve_raw(line, query, k=None):
     with _LOCK:
         if line in _BLOCKED:
             return []
-    client = _CLIENT
-    if client is None or not client.is_ready():
+    client = _client()
+    if not client.is_ready():
+        time.sleep(1.5)          # 同 `retrieve`，冷启动空窗
+    if not client.is_ready():
         return []
     kk = max(1, int(k or RAW_BLOCK_ITEMS))
     kk_pool = max(kk * 3, 12)      # 候选池放大，MMR 才有得挑
@@ -680,7 +752,13 @@ def _fact_block(docs):
             batches.append(d)
         else:
             facts.append(d)
-    pick = batches[:2] + facts[:3]
+    # 锚点排最前，不受「2 批 + 3 条」限制：它们是「问起来必须答对」的事，
+    # 被 top-k 挤掉就等于让模型编（2026-11-08 实测「第一次在门板」）。
+    anchors = [d for d in docs if (d.get("metadata") or {}).get("_anchor")]
+    _aid = {id(d) for d in anchors}
+    batches = [d for d in batches if id(d) not in _aid]
+    facts = [d for d in facts if id(d) not in _aid]
+    pick = anchors[:5] + batches[:2] + facts[:3]
     if not pick:
         return ""
     who = {"user": "用户事实", "character": "角色言行", "shared": "双方约定"}
@@ -740,6 +818,11 @@ def build_block(line, query, k=None, day=None, context=""):
     比旧话更重要」，避免演员拿旧对话当台词复述。
     """
     docs = retrieve(line, query, k=k, day=day)
+    # 锚点（第一次/初夜/关系确认…）不看距离，直接排最前，见 `_anchor_docs`。
+    anchor = _anchor_docs(line)
+    if anchor:
+        seen = {str(d.get("id") or "") for d in anchor}
+        docs = anchor + [d for d in docs if str(d.get("id") or "") not in seen]
     if context:
         extra = retrieve(line, context, k=k, day=day)
         seen = {str(d.get("id") or "") for d in docs}
@@ -972,6 +1055,32 @@ def parse_memory_json(raw, start, end, day=0, phase="", card_name="角色",
                 "source": _SOURCE,
             },
         })
+    # 锚点事实（2026-11-08）：只发生一次的节点，单独存 kind=anchor。
+    # 渲染时它们不看向量距离、直接排最前（见 `_anchor_docs`）。
+    raw_anchors = data.get("anchors")
+    if isinstance(raw_anchors, list):
+        for j, a in enumerate(raw_anchors[:4]):
+            if not isinstance(a, dict):
+                continue
+            ac = str(a.get("content") or "").strip()
+            if not ac:
+                continue
+            out.append({
+                "id": "anchor-%d-%d-%s" % (start, end,
+                                           str(a.get("key") or j)[:24]),
+                "content": ac[:200],
+                "metadata": {
+                    "kind": "anchor",
+                    "key": str(a.get("key") or "")[:24],
+                    "about": "shared",
+                    "day": int(day or 0),
+                    "place": str(a.get("place") or "")[:40],
+                    "outfit": str(a.get("outfit") or "")[:80],
+                    "turn_start": start,
+                    "turn_end": end,
+                    "source": _SOURCE,
+                },
+            })
     raw_entries = data.get("entries")
     if not isinstance(raw_entries, list):
         return out
