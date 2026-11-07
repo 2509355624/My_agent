@@ -842,7 +842,7 @@ class SegmentTest(unittest.TestCase):
         block = persona.render_user_block(
             [{"who": "用户", "type": "说", "text": "我走了。"}],
             True, "我走了。", remind=True)
-        self.assertIn("她是「她」", block)
+        self.assertIn("她有名字", block)
         self.assertIn("镜头可以跟着她", block)
         self.assertNotIn("不要用「他」指玩家", block)
         # 历史消息不带提醒
@@ -854,7 +854,7 @@ class SegmentTest(unittest.TestCase):
     def test_no_segments_with_remind_still_has_hint(self):
         block = persona.render_user_block([], True, "原文", remind=True)
         self.assertIn("原文", block)
-        self.assertIn("她是「她」", block)
+        self.assertIn("她有名字", block)
 
     def test_history_sanitizes_player_he(self):
         """历史里的「他」会当示范被模型学走；送模型前纠成「你」。"""
@@ -991,8 +991,9 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(got, "她答应帮你，你说「我等你」，我们没走。")
 
     def test_contract_defines_every_pronoun(self):
-        """契约开头必须写清 你/她/我 各指代谁（2026-11-06 用户要求）。"""
-        for text in ("人称对照", "女主角一律「她」", "玩家一律「你」",
+        """契约开头必须写清 你/名字/我 各指代谁（2026-11-06 用户要求；
+        2026-11-07 二改：正文用角色名字指代她，不再通篇「她」）。"""
+        for text in ("人称对照", "用名字「{NAME}」叫她", "玩家一律「你」",
                      "指她自己", "指代玩家一律写「你」"):
             self.assertIn(text, persona._CONTRACT)
 
@@ -1495,7 +1496,9 @@ class NoteBudgetTest(unittest.TestCase):
         # 仍在生图链路（3000~5000 token）的两倍以内，门槛从 8000 放到 8200。
         # 2026-11-06：系统头最前面加了一段约 120 字的「私下虚构创作」框定
         # （压掉跳出角色的元话语），再涨约 80 token，门槛放到 8400。
-        self.assertLess(approx_tokens, 8400,
+        # 2026-11-07：加「真人感的底子」+「这一拍的戏」两节约 700 字（+450 token），
+        # 门槛放到 9200，仍在生图链路的两倍以内。
+        self.assertLess(approx_tokens, 9200,
                         "扮演一轮 %.0f token，超过生图链路太多" % approx_tokens)
 
 
@@ -1693,16 +1696,26 @@ class NovelCraftContractTest(unittest.TestCase):
         for phrase in ("可以这样写", "先给她一个能碰的东西", "闲笔",
                        "没用的道具", "对话可以碎", "情绪写成身体", "专属感",
                        "不回收的干扰项", "潜台词", "句式跟着情绪走",
-                       "这一轮可以什么都没发生", "均匀的机灵 = AI"):
+                       "平淡的内容可以有", "均匀的机灵 = AI"):
             self.assertIn(phrase, c, "笔法节漏了：%s" % phrase)
 
-    def test_word_count_relaxed(self):
-        """600~2000 字区间；旧的 400~800、1000 常态、字数不是目标、
-        允许烂尾都要撤掉，均匀密度配额也不回来。"""
+    def test_scene_section_exists(self):
+        """「这一拍的戏」小节（2026-11-07）：主动权、想要/怕/赌、
+        一轮一变化、留线头——爽感来源，不能被改丢。"""
         c = persona._CONTRACT
-        self.assertIn("600~2000 字", c)
-        self.assertIn("把这一拍写完整", c)
-        self.assertIn("收得住", c)
+        for phrase in ("### 这一拍的戏", "她可以主动",
+                       "怕什么", "和开头不一样", "线头留着别收干净"):
+            self.assertIn(phrase, c)
+
+    def test_word_count_relaxed(self):
+        """300~600 字区间（2026-11-07 二改：600~2000 实测催出凑字数）；
+        旧的 400~800、1000 常态、字数不是目标、允许烂尾都不回来，
+        「收得住」这种作文收尾口径也撤掉。"""
+        c = persona._CONTRACT
+        self.assertIn("300~600 字", c)
+        self.assertIn("停在哪都行", c)
+        self.assertNotIn("600~2000", c)
+        self.assertNotIn("收得住", c)
         self.assertNotIn("1000 字", c)
         self.assertNotIn("400~800", c)
         self.assertNotIn("字数不是目标", c)
@@ -3010,7 +3023,7 @@ class ManualRunTurnTest(PersonaBase):
         actor = "\n".join(m["content"] for m in seen[-1])
         self.assertIn("这一拍往这个方向走", actor)
         self.assertIn("让她先开口", actor)
-        self.assertIn("600~2000 字", actor)
+        self.assertIn("300~600 字", actor)
         self.assertNotIn("想让她主动", actor)
         head = seen[-1][0]["content"]
         self.assertIn("让她先开口", head)

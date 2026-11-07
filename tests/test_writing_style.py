@@ -116,13 +116,24 @@ class StyleUnitTest(unittest.TestCase):
         self.assertIn("第 1 轮", writing_style.tail_note(-3))
 
     def test_tail_default_is_positive_anchor(self):
-        """常态也贴一句正向锚点，替代原来那句人称禁令，不带轮次和调子。"""
+        """常态也贴一句正向锚点：正文用她的名字，玩家是「你」。"""
         out = writing_style.tail()
-        self.assertIn("她是「她」", out)
+        self.assertIn("她有名字", out)
+        self.assertIn("玩家是「你」", out)
         self.assertIn("镜头可以跟着她", out)
         self.assertNotIn("第", out)
         for bad in ("不能", "不许", "不要", "禁止", "必须"):
             self.assertNotIn(bad, out)
+
+    def test_tail_anchor_carries_card_name(self):
+        """给了卡名：人称锚点直接写名字，压住历史里通篇「她」的示范。"""
+        out = writing_style.tail(name="学妹")
+        self.assertIn("正文用「学妹」叫她", out)
+        self.assertNotIn("她有名字", out)   # 通用句换成带名字版，不重复
+        self.assertIn("镜头可以跟着她", out)
+        # 没名字 / 卡名就叫「她」：退回通用句
+        self.assertIn("她有名字", writing_style.tail(name=""))
+        self.assertIn("她有名字", writing_style.tail(name="她"))
 
     def test_tail_with_turn_and_note(self):
         out = writing_style.tail(12, "让雨声多待一会儿")
@@ -135,10 +146,11 @@ class StyleUnitTest(unittest.TestCase):
                          writing_style.tail(12, "雨"))
 
     def test_tail_default_carries_length_anchor(self):
-        """篇幅也钉在近因位，压住历史里清一色的短示范。"""
+        """篇幅锚点在近因位：300~600，停在哪都行，不收作文尾巴。"""
         out = writing_style.tail()
-        self.assertIn("600~2000 字", out)
-        self.assertIn("写完整", out)
+        self.assertIn("300~600 字", out)
+        self.assertIn("停", out)
+        self.assertNotIn("收得住", out)
         for bad in ("不能", "不许", "不要", "禁止", "必须"):
             self.assertNotIn(bad, out)
 

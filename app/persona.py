@@ -506,11 +506,13 @@ _CONTRACT = (
     "\n"
     "## 人称对照\n"
     "\n"
-    "- **正文**：女主角一律「她」，玩家一律「你」。\n"
-    "- **她的台词里**：她自称「我」（指她自己），对玩家仍用「你」；"
-    "叙述连着她的念头，一律写「她」，或干脆省掉主语。\n"
+    "- **正文**：她有自己的名字，叙述和她的念头里用名字「{NAME}」叫她，"
+    "玩家一律「你」。\n"
+    "- **她的台词里**：自称「我」（指她自己），对玩家仍用「你」。\n"
     "- **玩家原话**：里面的「我」是玩家本人，不是她。\n"
     "- 旁人用称呼或名字（摊主 / 伙计 / 同学……）。\n"
+    "- 主语能省就省：一句话里连着的动作，接着上一句的主语写下去，"
+    "比每句都点名更像小说。\n"
     "- 指代玩家一律写「你」——读者就是屏幕对面那个人。\n"
     "\n"
     "## 最优先的一条\n"
@@ -542,7 +544,7 @@ _CONTRACT = (
     "## 正文：写一段小说\n"
     "\n"
     "**正文是小说，不是聊天记录，也不是规格说明书。** 叙述用第三人称——"
-    "写「她」在做什么、身体怎么反应、周围在发生什么。她的台词用「」穿插在"
+    "写「{NAME}」在做什么、身体怎么反应、周围在发生什么。她的台词用「」穿插在"
     "叙述里；动作和神态用（）写，括号里只放看得见的东西。\n"
     "\n"
     "### 可以这样写（笔法，不是检查表）\n"
@@ -572,16 +574,57 @@ _CONTRACT = (
     "段落长短不齐，一段两百字、下一段十五字、再下一段八十字；"
     "情绪到点上，让一句话自己单独占一段。紧张的时候用句号把动作切碎，"
     "平静的时候用逗号把语流接住。\n"
-"- **这一轮可以什么都没发生。** 平淡的一轮、她没来由的沉默、突然的不对劲、"
-"聊了半天也没聊到正题，都是戏；平淡也写完整，有起、有落、一个收得住的落点。"
-"**均匀的机灵 = AI**：人大部分时候是平铺，偶尔才俏皮一次。\n"
+"- **平淡的内容可以有，平淡的变化不行。** 她没来由的沉默、聊了半天没聊到"
+"正题，都是戏——但这一拍里总得有一个没说破的东西压着：她在等你说什么、"
+"她在躲一个话题、她比平时安静是因为想起了什么。**均匀的机灵 = AI**："
+"人大部分时候是平铺，偶尔才俏皮一次。\n"
+"\n"
+"### 真人感的底子\n"
+"\n"
+"这几条专治「一眼就是生成的」——挑两样用得上就用：\n"
+"\n"
+"- **台词撑起这一拍。** 两个人都在场，带引号的对话就是主角：想让她说的，"
+"就让她真的说出口——「{NAME}说了谢谢」不如她开口那句「谢谢。」；"
+"转述多了，这一拍就成了说明书。\n"
+"- **她会记错、听错、慢半拍。** 把你上一句听岔了、把日子记混了、"
+"你问完她隔了一拍才反应过来——真人全是这样的，她也可以。\n"
+"- **她会出小错。** 说漏嘴、拿错东西、话说一半发现不对往回收。"
+"每一次都应对得体的，反而不像她。\n"
+"- **她的感官是偏心的。** 写她注意到的那个：满屋子的菜香她只闻到你袖口"
+"的烟味，一屋子人她只看见你杯子空了。偏心的那一眼，才是她的视角。\n"
+"- **信息碎着给。** 别一口气把底交代完：她今天为什么心不在焉，"
+"分三拍漏出来，比一段说明文有意思。\n"
+"- **这一拍待够再走。** 别一个场景一句话就滑过去——待到能闻到那个房间"
+"的味道：光从哪边来、地上有什么、她的动作分几步、步骤之间有没有停顿。"
+"一个待够的小场景，比三个滑过去的有味道。\n"
+"\n"
+"### 这一拍的戏\n"
+"\n"
+"质感只是底子，读的人想往下看，靠的是这一拍里有东西在动。每一拍挑一样"
+"用得上就行：\n"
+"\n"
+"- **她可以主动。** 不等你开口就做一件事、提一个要求、戳你一下、"
+"把话题拐到她想去的地方。主动权在她手里，不用等你批准；你刚说完一句，"
+"她顺着它往前推一步，比原地接住更有戏。\n"
+"- **让她站在这拍的哪一边。** 这一下她想要什么（想让你多留一会儿、"
+"想把话题岔开、想看你反应），怕什么（被看穿、被拒绝、话说过了），"
+"在赌什么（赌你先低头、赌你听不懂）。她自己最清楚这一下站在哪边——"
+"写出来，她的每个小动作就都有了方向。\n"
+"- **收拍时留下一样和开头不一样的东西。** 关系挪了半步、一个秘密露出"
+"一角、多了一个新的小麻烦、她说漏了一句本来不想说的。变化可以很小，"
+"但要有——两拍之间什么都没动，读起来就像停在原地。\n"
+"- **线头留着别收干净。** 没接完的话头、她多看了一眼的东西、"
+"一个没回答的问题，都留给下一拍。圆滑的收尾让人翻页，"
+"悬着的那一下让人想看下一拍。\n"
 "\n"
 "### 篇幅\n"
 "\n"
-"一轮 **600~2000 字**，把这一拍写完整：进来时什么样、中间发生了什么、"
-"落在一个画面、一句话或一个没做完的动作上。段数自己定，"
-"句式长短照旧不齐。上面那些招里有两三样真的落进画面，这一轮自然就厚了；"
-"写到该停的地方收住，让人读完觉得这一轮真的过完了。\n"
+"一轮 **300~600 字**就把这一拍写完：进来时什么样、发生了什么、"
+"停在哪一下。段数自己定，句式长短照旧不齐；上面那些招里有一两样"
+"真的落进画面，这一拍就够味了。停在哪都行——一个动作做到一半、"
+"一句话没说完、她刚转过头来，都可以是最后一行。不用把结尾收圆："
+"作文式的「综上所述」感一出现，这一拍就死了；想看下一拍的那种停法，"
+"比收得干干净净的好。\n"
     "\n"
     "### 她的心思\n"
     "\n"
@@ -2777,7 +2820,12 @@ def build_head(card, session_key, sender, note="", state="", intimate=True,
     if room and not str(session_key or "").startswith("group_"):
         parts.append("## 她的房间（你离开她视线、进她房间时的素材，"
                      "可以自由发挥，不必全用）\n\n" + room)
-    parts.append(_CONTRACT if intimate else _CONTRACT_NO_INTIMATE)
+    # 人称（2026-11-07 二改）：正文用角色名字指代她，不再通篇「她」。
+    # 契约是模块常量，名字按卡填——占位符 {NAME} 在这里换成卡名；
+    # 没名字的卡退化成「她」，规则仍然成立。
+    cname = str((card or {}).get("name") or "").strip() or "她"
+    parts.append((_CONTRACT if intimate else _CONTRACT_NO_INTIMATE).replace(
+        "{NAME}", cname))
     # 档位放契约之后：这一层只回答「这一局怎么写」，人设和格式都在它前面，
     # 不会抢「她是谁」的位置。常态档不拼，head 和以前逐字节一样。
     sty = writing_style.head_style(mode)
@@ -2883,7 +2931,8 @@ def _manual_display(m, text=""):
     return "\n".join(parts)
 
 
-def render_user_block(segments, addressed=True, fallback="", remind=False):
+def render_user_block(segments, addressed=True, fallback="", remind=False,
+                      name=""):
     """把第一段拆好的用户消息拼成演员层能读的块。
 
     没有分段就退回原文（`fallback`）。分段里的「想」**必须明确写成看不见**，
@@ -2904,7 +2953,7 @@ def render_user_block(segments, addressed=True, fallback="", remind=False):
     """
     if not segments:
         if remind and str(fallback or "").strip():
-            return str(fallback).strip() + "\n" + writing_style.tail()
+            return str(fallback).strip() + "\n" + writing_style.tail(name=name)
         return fallback
     lines = ["【这一轮你收到的（按发生顺序）】"]
     has_think = False
@@ -2956,7 +3005,7 @@ def render_user_block(segments, addressed=True, fallback="", remind=False):
         lines.append("（这段原话里的「我」= 玩家本人，不是你；原文里的动作都是玩家做的。）")
         lines.append(str(fallback).strip())
     if remind:
-        lines.append(writing_style.tail())
+        lines.append(writing_style.tail(name=name))
     return "\n".join(lines)
 
 
@@ -3004,11 +3053,28 @@ def _rag_context(hist, rounds=2):
     return " / ".join(parts)
 
 
-def _render_hist(hist):
+def _pronoun_to_name(content, name):
+    """历史示范里的「她」换成卡名（2026-11-07 二改）。
+
+    历史 12 条是强 few-shot：通篇「她」的示范会把「用名字叫她」的人称锚点
+    直接压死（实测两轮 0 次名字）。照「他→你」同一手法，只在**送模型前**
+    的副本上替换，落盘数据保持原样。先处理「她们」，避免拆成「学妹们」后
+    又多出一个孤「们」；台词里自称是「我」，不受影响。
+    """
+    n = str(name or "").strip()
+    if not n or n == "她":
+        return str(content)
+    text = str(content)
+    text = text.replace("她们", n + "们")
+    return text.replace("她", n)
+
+
+def _render_hist(hist, name=""):
     """历史里带 `seg` 的用户消息按分段渲染；老消息没有 `seg` 就用原文。
 
     这一步只在**送进模型前**做，落盘/网页回看仍用原文——否则展示层会冒出
-    「他说的 / 他做的」这种内部标签。
+    「他说的 / 他做的」这种内部标签。`name` 是卡名：assistant 示范里的
+    「她」一起换成名字，让人称和契约一致（见 `_pronoun_to_name`）。
     """
     out = []
     for m in hist or []:
@@ -3020,6 +3086,7 @@ def _render_hist(hist):
         if m.get("role") == "assistant":
             content = _strip_monologue_tag(content)
             content = _PRONOUN_HE.sub("你", content)
+            content = _pronoun_to_name(content, name)
         if m.get("role") == "user" and m.get("seg"):
             content = render_user_block(m["seg"], m.get("addressed", True),
                                         fallback=content)
@@ -4821,8 +4888,10 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         except Exception:
             turn_no = 1
     user_block = user_block + "\n\n" + writing_style.tail(
-        turn_no, author_note, plot=man.get("plot"))
-    model_hist = _render_hist(hist)
+        turn_no, author_note, plot=man.get("plot"),
+        name=str((card or {}).get("name") or ""))
+    model_hist = _render_hist(
+        hist, name=str((card or {}).get("name") or ""))
     msgs = ([{"role": "system", "content": head}] + model_hist
             + [{"role": "user", "content": user_block}])
     try:
@@ -5090,12 +5159,14 @@ def jump_phase(session_key, phase, sender="", sender_uin=""):
     head = head + "\n\n" + task
 
     hist = trim(_load_hist(key))
-    model_hist = _render_hist(hist)
+    model_hist = _render_hist(
+        hist, name=str((card or {}).get("name") or ""))
     # 近因位跟普通轮同源：时间事实之后仍贴一句正向锚点，别让跳跃开场
     # 因为换了条组装路径就丢了视角。
     msgs = ([{"role": "system", "content": head}] + model_hist
             + [{"role": "user", "content": _time_boundary(gd, ph)
-                + "\n\n" + writing_style.tail()}])
+                + "\n\n" + writing_style.tail(
+                    name=str((card or {}).get("name") or ""))}])
     try:
         raw = _llm_call(msgs, temperature=TEMPERATURE)
     except Exception:                                  # noqa: BLE001
@@ -5194,11 +5265,13 @@ def skip_day(session_key, sender="", sender_uin="", days=1, doing=""):
     # 时间事实，免得「按格式输出」这种系统腔被当成他说的话。
     head = head + "\n\n" + task
     hist = trim(_load_hist(key))
-    model_hist = _render_hist(hist)
+    model_hist = _render_hist(
+        hist, name=str((card or {}).get("name") or ""))
     # 睡到明天同样贴近因位，和普通轮、时段跳跃共用一句。
     msgs = ([{"role": "system", "content": head}] + model_hist
             + [{"role": "user", "content": _time_boundary(gd)
-                + "\n\n" + writing_style.tail()}])
+                + "\n\n" + writing_style.tail(
+                    name=str((card or {}).get("name") or ""))}])
     try:
         raw = _llm_call(msgs, temperature=TEMPERATURE)
     except Exception:                                  # noqa: BLE001
@@ -5305,12 +5378,14 @@ def _gen_and_save(key, ent, card, head, task, sender="", prev_state="",
     其余完全一样，抽出来免得三份各写一遍（写岔一次就有一处不落史）。
     """
     hist = trim(_load_hist(key))
-    model_hist = _render_hist(hist)
+    model_hist = _render_hist(
+        hist, name=str((card or {}).get("name") or ""))
     # 收尾 / 第二天 / 第五次收场：这一轮的最后一条是任务指令，同样在它
     # 末尾贴统一锚点，让视角要求离生成点最近。
     msgs = ([{"role": "system", "content": head}] + model_hist
             + [{"role": "user", "content": task
-                + "\n\n" + writing_style.tail()}])
+                + "\n\n" + writing_style.tail(
+                    name=str((card or {}).get("name") or ""))}])
     try:
         raw = _llm_call(msgs, temperature=TEMPERATURE)
     except Exception:                                  # noqa: BLE001

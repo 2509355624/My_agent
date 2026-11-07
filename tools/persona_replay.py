@@ -462,7 +462,8 @@ def _dry(key, text):
     print("  时间块 %d 字：%s" % (len(gb), gb.replace("\n", " / ")[:160] or "（空）"))
     try:
         from app import writing_style
-        tail = writing_style.tail(turn_no=persona.turn_total(key))
+        cname = str((card or {}).get("name") or "")
+        tail = writing_style.tail(turn_no=persona.turn_total(key), name=cname)
         print("  尾注 %d 字：%s" % (len(tail), tail.replace("\n", " / ")))
     except Exception as exc:                            # noqa: BLE001
         print("  尾注  取不到（%s）" % exc)

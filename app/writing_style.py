@@ -125,27 +125,36 @@ def format_examples(text):
                        for i, part in enumerate(parts))
 
 
-# 近因位固定句（2026-11-07）。它同时替代 `render_user_block(remind=True)`
+# 近因位固定句（2026-11-07 二改）。它同时替代 `render_user_block(remind=True)`
 # 原来那句「任何地方都不要用「他」指玩家」——把被禁概念说一遍反而会点亮它。
-# 现在只把事实说清：谁是她、谁是你、镜头落在哪。全句不含禁令。
-ANCHOR = "她是「她」，你是「你」；镜头可以跟着她，落在她的反应上"
+# 现在只把事实说清：她有名字、你是「你」、镜头落在哪。全句不含禁令；
+# 名字本身在契约的人称段里按卡给了，这条尾注只提醒规则，不带具体名字。
+ANCHOR = "正文里她有名字，用名字叫她；玩家是「你」；镜头可以跟着她，落在她的反应上"
 
-# 篇幅也钉在近因位（2026-11-07）：契约里那句「字数不是目标 / 允许烂尾」，
-# 加上历史里清一色 300~500 字的示范，把模型稳稳按在 360 字中位上。
-# 正向写「写成什么样」，不写「不许短」。
-LENGTH_ANCHOR = "这一轮写完整：600~2000 字，有起有落，收得住"
+
+def anchor_for(name=None):
+    """近因位人称锚点；知道卡名时把名字直接写进锚点，压住历史里通篇「她」的示范。"""
+    n = str(name or "").strip()
+    if not n or n == "她":
+        return ANCHOR
+    return ("正文用「%s」叫她；玩家是「你」；镜头可以跟着她，落在她的反应上" % n)
+
+# 篇幅锚点（2026-11-07 二改）：600~2000 实测催出「凑字数」——模型拿物件闲笔
+# 把零剧情灌到 600 字，再加「收得住」，每轮都像作文结尾。回到用户验证过的
+# 300~600：写完这一拍就停，停在半空比圆滑收尾更像活人写的。
+LENGTH_ANCHOR = "一轮 300~600 字，这一拍写完就停，停在哪都行，不用收成完整结尾"
 
 # 剧情推进是玩家给这一拍的方向，放在尾注**最后一句**，离生成点最近。
 PLOT_PREFIX = "这一拍往这个方向走，让它真的发生在画面里："
 
 
-def tail(turn_no=None, note="", plot=""):
+def tail(turn_no=None, note="", plot="", name=None):
     """L3 + L4：所有组装路径共用的近因尾注，只拼在最后一条 user 消息末尾。
 
     常态（不给轮次、没写调子、没写剧情推进）只返回「人称视角 + 篇幅」两句
     正向锚点；跳跃 / 收尾路径也走这里。轮次、「这一幕的调子」、剧情推进都是
     玩家主动填才带，剧情推进放最后一句，离生成点最近。判断写什么交给模型，
-    这里只做归一化和事实透出。
+    这里只做归一化和事实透出。`name` 是卡名：给了就写进人称锚点。
     """
     bits = []
     if turn_no is not None:
@@ -157,7 +166,7 @@ def tail(turn_no=None, note="", plot=""):
     clean = _WS.sub(" ", str(note or "").strip())[:NOTE_MAX_CHARS]
     if clean:
         bits.append("这一幕：" + clean)
-    bits.append(ANCHOR)
+    bits.append(anchor_for(name))
     bits.append(LENGTH_ANCHOR)
     clean_plot = _WS.sub(" ", str(plot or "").strip())[:NOTE_MAX_CHARS]
     if clean_plot:
