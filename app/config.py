@@ -782,9 +782,12 @@ PERSONA_RAG_DATA_DIR = os.getenv(
     "PERSONA_RAG_DATA_DIR",
     os.path.join(BASE_DIR, "vector_store", "chroma_persona"))
 try:
-    PERSONA_RAG_K = max(1, int(os.getenv("PERSONA_RAG_K", "3")))
+    # 2026-11-08 用户拍板 3 → 5：演进到几百条记忆之后，top-3 经常把
+    # 「馄饨摊」这种具体场景挤掉，只剩几条泛泛的偏好。5 条大约多 400~600 字，
+    # 锚点（第一次/初夜）另算、不占这个名额。
+    PERSONA_RAG_K = max(1, int(os.getenv("PERSONA_RAG_K", "5")))
 except ValueError:
-    PERSONA_RAG_K = 3
+    PERSONA_RAG_K = 5
 try:
     PERSONA_RAG_MAX_DISTANCE = float(
         os.getenv("PERSONA_RAG_MAX_DISTANCE", "0.60"))
@@ -799,6 +802,18 @@ try:
         1, int(os.getenv("PERSONA_RAG_INGEST_EVERY", "5")))
 except ValueError:
     PERSONA_RAG_INGEST_EVERY = 5
+
+# ─── 角色卡世界书（2026-11-07）──────────────────────────
+#
+# 酒馆卡的 `character_book` 自带 `token_budget`，实测两张卡是 500 / 512
+# token（约 4 条）。我们把它当参考值而不是上限：本机 token 预算充足，而少
+# 注一条就是「她不知道自己在哪」。
+#
+#   PERSONA_LORE_TOKENS  每轮世界书预算（默认 1200，约 2.4 倍于卡自带值）
+#   PERSONA_LORE_RAG=0   关掉「关键词没命中时按语义补条目」那一路
+PERSONA_LORE_TOKENS = max(0, int(os.getenv("PERSONA_LORE_TOKENS", "1200") or 1200))
+PERSONA_LORE_RAG = os.getenv("PERSONA_LORE_RAG", "1").strip().lower() not in (
+    "0", "false", "no", "off")
 
 
 # ─── 画廊 ───────────────────────────────────────────
