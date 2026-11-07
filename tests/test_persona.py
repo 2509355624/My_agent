@@ -934,7 +934,9 @@ class DirectorBlockTest(unittest.TestCase):
         block = persona._director_block({
             "literal": "他要走", "subtext": "想被留住",
             "noticed": "他站着没动", "stance": "装傻"})
-        self.assertIn("对方字面上在说：他要走", block)
+        # 2026-11-07：`literal` 不再进导演条——演员手里本来就有原文，
+        # 让编剧复述一遍纯属白花 token。传进来也不该出现。
+        self.assertNotIn("对方字面上在说", block)
         self.assertIn("对方真正在：想被留住", block)
         self.assertIn("装作没听懂", block)
         self.assertIn("不是台词", block)

@@ -3345,13 +3345,15 @@ _SEGMENT_GUIDE = (
 )
 
 _DIRECTOR_GUIDE = (
-    "另外给出四个短字段。它们是**给第二段演员看的导演提示**，不是她要说的话：\n"
-    "- literal：他字面上在说什么（不超过 20 个字）\n"
+    "另外给出三个短字段。它们是**给第二段演员看的导演提示**，不是她要说的话：\n"
     "- subtext：他真正想要 / 试探 / 回避的是什么（不超过 25 个字）\n"
     "- noticed：她这一刻能从语气、停顿、动作里察觉到什么（不超过 25 个字）。\n"
-    "  如果上面有「想」的分段，**literal 和 noticed 都只能写听得见/看得见的部分**，"
+    "  如果上面有「想」的分段，**noticed 只能写听得见/看得见的部分**，"
     "不能把想的内容抄进去；想的内容只放在 subtext，供导演层判断。\n"
     "- stance：这一拍她的态度，只能是 接住 / 装傻 / 反问 / 推开 之一。\n"
+    "\n"
+    "**`literal` 不用写了**（2026-11-07）：他字面上在说什么，演员手里本来就有原文，\n"
+    "再让编剧复述一遍只是白花 token。\n"
 )
 
 _INTENT_PROMPT = """先判断下面这句话**在干什么**，再把这一轮拆开。只输出一个 JSON 对象，不要解释。
@@ -3364,7 +3366,6 @@ _INTENT_PROMPT = """先判断下面这句话**在干什么**，再把这一轮�
     {"who": "用户 | 助手", "type": "说 | 做 | 想", "text": "说→原文；做→一句话概括；想→空串"}
   ],
   "addressed": true,
-  "literal": "他字面上在说什么",
   "subtext": "他真正想要 / 试探 / 回避什么",
   "noticed": "她能从外在表现里察觉到什么",
   "stance": "接住 | 装傻 | 反问 | 推开"
@@ -3841,16 +3842,13 @@ _SCORE_PROMPT = """判断下面这句话**在干什么**，并给这句话对你
   "beat": false,
   "soothe": false,
   "time": "none",
-  "phase": "",
   "plan": "",
-  "place": "",
   "reason": "不超过15个字",
   "note": "不超过15个字",
   "segments": [
     {"who": "用户 | 助手", "type": "说 | 做 | 想", "text": "说→原文；做→一句话概括；想→空串"}
   ],
   "addressed": true,
-  "literal": "他字面上在说什么",
   "subtext": "他真正想要 / 试探 / 回避什么",
   "noticed": "她能从外在表现里察觉到什么",
   "stance": "接住 | 装傻 | 反问 | 推开",
@@ -4087,16 +4085,8 @@ time（这轮剧情跨了多少时间）：
   场景明确切到了第二天。话题提到明天不算，要真的跨过去才算。
 - skip_days —— 明确隔了好几天：约的是「周末见」、他出了趟远门回来。
 
-phase（他们**现在**是什么时段，两三个字）：早晨 / 上午 / 中午 / 下午 / 傍晚 / 深夜…
-和上一轮比没变就留空；走了几个小时、场景从早上推到午后这类变化要跟着改，
-跨天时这一格必须给新时段。
-
 plan（这轮**说定了**的约定）：把约定写成一句话（「周末去游乐场」）。
 只是提议还没被答应、或者被岔开的，不算。已有约定且没变化就填空串。
-
-place（他们**现在**在哪儿）：只有这一轮真的换了地方才填，写一句短地名
-（「情爱城·城南旅店」「回廊尽头的亭子」）。还在原处就填空串——它不是
-行程，是事实，别把「准备去」写成 place。
 
 persona_mode（她此刻的底色，由你判，不要套阈值）：
 - 日常 —— 还是平常的她；
@@ -4338,7 +4328,6 @@ def _director_block(info, plot=""):
     """
     if not isinstance(info, dict):
         return ""
-    literal = str(info.get("literal") or "").strip()
     subtext = str(info.get("subtext") or "").strip()
     noticed = str(info.get("noticed") or "").strip()
     stance = str(info.get("stance") or "").strip()
@@ -4352,7 +4341,7 @@ def _director_block(info, plot=""):
     # 玩家写的「剧情推进」本来就是给导演的话，不含心里话原文，
     # 所以不受 secret 影响（2026-11-07）。代码只透传，方向由模型写。
     direction = re.sub(r"\s+", " ", str(plot or "").strip())[:200]
-    if not (literal or subtext or noticed or stance or secret or mode
+    if not (subtext or noticed or stance or secret or mode
             or tension or lead in ("hint", "act") or hook or direction):
         return ""
     lines = ["## 这一拍你怎么读对方", ""]
@@ -4363,8 +4352,6 @@ def _director_block(info, plot=""):
     # 玩家自己写的剧情推进走下面的 direction，不受 secret 影响。
     if tension and not secret:
         lines.append("- 张力：%s" % tension)
-    if literal:
-        lines.append("- 对方字面上在说：%s" % literal)
     if subtext and not secret:
         lines.append("- 对方真正在：%s" % subtext)
     if secret:
@@ -4522,6 +4509,9 @@ def _apply_gameday(key, score=None, force_new_day=False, days=1):
             gd["event"] = _roll_event(gd)
             gd["turns_today"] = 0
         else:
+            # 2026-11-07 起第一段**不再要求**输出 phase（角色 AI 的状态行第四段
+            # 是主来源）。这里保留读取只为两条路都通：旧版模型偶然还在给，
+            # 给了就采纳；不给就保持状态行给的值，不会被写成空。
             ph = normalize_phase(score.get("phase"))
             if ph:
                 gd["phase"] = ph[:12]
