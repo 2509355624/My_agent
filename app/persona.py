@@ -994,6 +994,12 @@ _CONTRACT = (
     "用 `loose grey hoodie` 这种一眼看得见的词。**这一行直接拿去生图，"
     "你写什么就画什么**——写到哪件画哪件。\n"
     "\n"
+    "**衣服不许写空话**（2026-11-08 实测）：`casual clothes`、`homewear`、"
+    "`日常服装` 这种，模型只能瞎猜，画出来要么不对，要么干脆不穿。"
+    "要写「哪一件、什么颜色、什么状态」：`loose beige knit sweater and grey "
+    "lounge shorts`、`white dress shirt with sleeves rolled to the elbow, black "
+    "pleated skirt`、`towel wrapped around the chest`。**一件一件数出来。**\n"
+    "\n"
     "她长什么样交给角色卡，这一行只管这一刻的样子。\n"
     "\n"
     "## 心情\n"
@@ -1545,6 +1551,11 @@ def _norm_card(c):
         "exampleDialogue": str(c.get("exampleDialogue") or "").strip(),
         "appearancePrompt": str(c.get("appearancePrompt") or "").strip(),
         "outfitPrompt": str(c.get("outfitPrompt") or "").strip(),
+        # 角色 LoRA（2026-11-08）：卡上写死的角色库 key。给了就硬挂，
+        # 不再让角色库每轮向量召回 + 大模型判一遍「这是谁」。
+        # 没加进这个白名单的话会被 `_norm_card` 丢掉——实测卡里写了
+        # char_lora，`load_cards()` 读出来是 None。
+        "char_lora": str(c.get("char_lora") or "").strip(),
         # 房间与私物（2026-11-03）：只在「你离开她视线、进她房间」时当素材用。
         # 留空也能玩——由她按人设临场编，这里只是给个锚，避免每次房间都不一样。
         "room": str(c.get("room") or "").strip(),
