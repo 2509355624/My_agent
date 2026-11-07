@@ -2906,9 +2906,9 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     if addressed and _MORE_CHAN_RE.search(text):
         return MORE_CHAN_TEXT
 
-    # 「#游客会话查看」（2026-11-08）：只给管理员发链接，零 API。
-    # 链接指向 5175（Tunnel 指向那边），不是 5174——5174 不对外。
-    if addressed and "游客会话查看" in text:
+    # 「#游客会话」（2026-11-08 用户改名，原来叫「游客会话查看」，太长）：
+    # 只给管理员发链接，零 API。链接指向 5175（Tunnel 指向那边），不是 5174。
+    if addressed and "#游客会话" in text:
         from app import guest_view, qq_api
         try:
             sender = str(qq_api.current_sender_uin() or "")
