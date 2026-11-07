@@ -4272,8 +4272,13 @@ def _gameday_block(gd):
             else "（就说今天）"
         lines.append("挂着的约定：%s%s" % (plan, when))
     if int(gd.get("turns_today") or 0) >= _DAY_TURNS_SOFT:
-        lines.append("这一天已经过了很久，天色不早了——找个合适的节拍把今天"
-                     "收束掉（道别、回家、说明天见），今天的故事到这里就好。")
+        # 2026-11-07：原来是「把今天收束掉（道别、回家、说明天见），
+        # 今天的故事到这里就好」。玩家没跳天时 turns_today 会一直涨，
+        # 这句便每轮都在逼模型收尾，而玩家正想推剧情，两边对着拉——
+        # 实测这条线 68 轮仍在第一天，剧情反复横跳。改成只给一个
+        # 可选方向，把「要不要换天」留给玩家手上的按钮。
+        lines.append("这一天已经过了很久，天色不早了。这一拍可以从容收住，"
+                     "眼前正在发生的事也可以接着往下演。")
     return "\n".join(lines)
 
 
@@ -5484,6 +5489,13 @@ def _save_mood(session_key, mood, intensity, state, prev_state=""):
         st["intensity"] = val
     if state:
         st["state"] = str(state)[:200]
+        # 地点同步（2026-11-07）：状态行按契约是「地点 · 衣着 · 姿态」，
+        # 第一段就是她此刻在哪，是模型每轮自己交的确定事实。以前 place
+        # 只在打分器给了 score["place"] 时才更新，没给就一直空着，模型
+        # 只能拿滞后账本里的旧地点猜——人在小超市，写的还是旧书市。
+        spot = str(state).split("·")[0].strip()[:40]
+        if spot:
+            _gameday(st)["place"] = spot
     _save_state(state_data)
 
 
@@ -5867,16 +5879,55 @@ def draw(scene, card, session_key, reply_to="", state="", skill=None,
     return names[0]
 
 
+_NOTE_LOCK = threading.Lock()
+_NOTE_RUNNING = set()
+# 补压时最多回看多少条归档（2026-11-07）。压缩是补「上次存档之后」的
+# 全部对话，拖得久时一次补齐；给上限是为了不把整条老线灌进一次 LLM。
+NOTE_MAX_ROWS = 40
+
+
+def _start_note_compress(session_key):
+    """起一次后台压缩；同一条线已经有线程在跑就不再起。
+
+    `note_due` 压缩失败不清零，下一轮会重试。没有这把锁时，模型连续 503
+    就会每轮叠一个线程，全部读同一份旧账本再抢着写回。
+    """
+    with _NOTE_LOCK:
+        if session_key in _NOTE_RUNNING:
+            return False
+        _NOTE_RUNNING.add(session_key)
+
+    def _run():
+        try:
+            compress_note(session_key)
+        finally:
+            with _NOTE_LOCK:
+                _NOTE_RUNNING.discard(session_key)
+
+    threading.Thread(target=_run, name="persona-note", daemon=True).start()
+    return True
+
+
 def _bump_turn(session_key):
     """轮次 +1；攒够 NOTE_EVERY_TURNS 轮就在后台压一次小记。
 
     放后台：压缩要一次 LLM 调用，不该让第 10 轮那个人的回话凭空慢几秒。
+
+    **节拍另记一份单调值（2026-11-07）**：`turns` 会被回退减 1，而玩家
+    「聊一条退好几次」时净增长长期为 0，`NOTE_EVERY_TURNS` 永远够不着，
+    账本就停在前一天不动（实测 11-07 全天 94 次聊天 / 28 次回退，
+    账本一次都没更新）。`note_due` 只增不减，回退不碰它——被撤掉的
+    那轮不进历史，但「生成过一轮」是既成事实，该压的还是要压。
     """
     state = _load_state()
     st = state.get(session_key)
     if not isinstance(st, dict):
         return
     st["turns"] = int(st.get("turns") or 0) + 1
+    if "note_due" not in st:
+        # 老线接上已有的节拍，不从零重新攒（否则已经滞后的还得再等 5 轮）。
+        st["note_due"] = max(0, int(st.get("turns") or 0) - 1)
+    st["note_due"] = int(st.get("note_due") or 0) + 1
     # 累计轮次（2026-11-06 用户要看的「聊了多少轮」）：`turns` 是每 5 轮
     # 清零的压缩节拍，这里另记一份永不归零的总量。老线第一次补算时归档
     # 已经包含这一轮，所以直接取她的回复条数，不再 +1。
@@ -5888,9 +5939,8 @@ def _bump_turn(session_key):
     # 新的一轮已经落史：刚才那级回退用完了，允许再退一次。
     st.pop("rollback_done", None)
     _save_state(state)
-    if st["turns"] >= NOTE_EVERY_TURNS:
-        threading.Thread(target=compress_note, args=(session_key,),
-                         name="persona-note", daemon=True).start()
+    if st["note_due"] >= NOTE_EVERY_TURNS:
+        _start_note_compress(session_key)
 
 
 def _cut_sentence(text, limit):
@@ -6136,15 +6186,35 @@ def opening(session_key, force=False):
     return text
 
 
+def _note_convo(session_key, st):
+    """取「上次压缩之后」的全部对话，返回 `(消息, 归档总行数)`。
+
+    以前读的是窗口 12 条——和压缩周期（5 轮 ≈ 10 条）几乎是同一批内容。
+    一旦因为回退或模型失败拖了几轮才压上，中间那几轮既不在窗口里、
+    也没进过任何一版账本，剧情的发展线路就永久断了（2026-11-07 用户报
+    「AI 根本不知道前面几个轮次聊的事情的发展线路」）。改读归档里
+    `note_at` 之后的部分，滞后多少补多少；老线没归档或增量为空时退回窗口。
+    """
+    arch = _read_archive_file(session_key)
+    arch_len = len(arch)
+    rows = []
+    if arch:
+        at = max(0, int(st.get("note_at") or 0))
+        rows = (arch[-NOTE_MAX_ROWS:] if at <= 0
+                else arch[min(at, arch_len):][-NOTE_MAX_ROWS:])
+    hist = _render_hist(rows) if rows else []
+    if not hist:
+        hist = _render_hist(trim(_load_hist(session_key)))
+    return hist, arch_len
+
+
 def compress_note(session_key):
-    """把旧账本 + 最近这段对话合并成一份 ≤1000 字的 Markdown 账本。
+    """把旧账本 + 上次存档以来的对话合并成一份 ≤1000 字的 Markdown 账本。
 
     2026-11-05 改：从「一段散文」改成「六个固定小节」。原来每次压缩都是拿
     「上一版摘要 + 最近 12 条」重写，聊到一百轮等于把最早的事摘要了二十遍，
     每遍丢一点。现在给旧账本一个明确的形状，并要求「还成立的条目原样抄」，
     只让模型改变化的部分——代际退化会小很多。
-
-    读的是**刚写过的那份历史**，所以不必由调用方传进来。
     """
     card = active_card(session_key)
     if card is None:
@@ -6153,7 +6223,7 @@ def compress_note(session_key):
     # 旧账本先纠人称再交给压缩器（2026-11-06）：不让「他」以「原样抄」的形式
     # 传给下一版，否则坏账本会永久自复制。
     old = _ledger_fix_pronouns(st.get("note") or "").strip()
-    hist = _render_hist(trim(_load_hist(session_key)))
+    hist, arch_len = _note_convo(session_key, st)
     if not hist:
         return False
     convo = "\n".join(
@@ -6180,9 +6250,16 @@ def compress_note(session_key):
     st = state.get(session_key)
     if not isinstance(st, dict):
         return False                          # 压缩期间出戏了，别把它写回去
+    # 压缩期间玩家按了「回退」：归档尾部已经被删掉，这份摘要里含着被撤掉
+    # 的那轮。写回去等于把没发生的事记成真事，放弃，下一轮重压。
+    if len(_read_archive_file(session_key)) < arch_len:
+        log.info("压缩期间发生回退，本次账本不落盘 %s", session_key)
+        return False
     st["note"] = _clip_ledger(note)
     st["turns"] = 0
+    st["note_due"] = 0
+    st["note_at"] = arch_len
     _save_state(state)
-    log.info("账本已更新 %s（%d 字，原始 %d）", session_key, len(st["note"]),
-             len(note))
+    log.info("账本已更新 %s（%d 字，原始 %d，补压 %d 条）", session_key,
+             len(st["note"]), len(note), len(hist))
     return True

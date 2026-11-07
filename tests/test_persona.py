@@ -3033,5 +3033,119 @@ class PersonaModelTest(unittest.TestCase):
         self.assertNotIn("model", call.call_args.kwargs)
 
 
+class NoteCompressionTest(PersonaBase):
+    """账本补压（2026-11-07）：回退不吃节拍，滞后轮次一次补齐。
+
+    背景：玩家「聊一条退好几次」时 turns 被反复减回去，NOTE_EVERY_TURNS
+    永远够不着，账本整天不更新；且压缩读的是同一个 12 条窗口，一旦滞后
+    就补不回中间的发展线路。
+    """
+
+    KEY = "private_note"
+
+    def setUp(self):
+        super().setUp()
+        persona.save_cards([_card("纱雾")])
+        persona.switch_line(self.KEY, persona.find_card("纱雾"))
+
+    def _line(self):
+        return persona.resolve_line(self.KEY)
+
+    def _set(self, **kw):
+        state = persona._load_state()
+        state[self._line()].update(kw)
+        persona._save_state(state)
+
+    @staticmethod
+    def _good_note(body="新事"):
+        return ("## 关系\n- %s\n## 你的事（你做过的）\n- 有\n"
+                "## 她的事（她做过的）\n- 有\n## 约定与未完成\n- 有\n"
+                "## 忌讳与偏好\n- 有\n## 日常与场景\n- 有" % body)
+
+    def test_rollback_keeps_note_due(self):
+        """回退仍减 turns（原语义），存档节拍只增不减。"""
+        line = self._line()
+        rows = [{"role": "user", "content": "嗨"},
+                {"role": "assistant", "content": "嗯"}]
+        persona._save_hist(line, rows)
+        persona._save_archive(line, [dict(r) for r in rows])
+        for _ in range(3):
+            persona._bump_turn(line)
+        self.assertEqual(persona._entry(line)["note_due"], 3)
+        self.assertTrue(persona.rollback_last_turn(self.KEY)["ok"])
+        after = persona._entry(line)
+        self.assertEqual(after["turns"], 2)
+        self.assertEqual(after["note_due"], 3)
+
+    def test_convo_reads_archive_since_note_at(self):
+        """滞后 18 轮时补压拿到 note_at 之后的全部对话，不是窗口 12 条。"""
+        line = self._line()
+        rows = []
+        for i in range(20):
+            rows.append({"role": "user", "content": "第%d句" % i})
+            rows.append({"role": "assistant", "content": "第%d答" % i})
+        persona._save_archive(line, rows)
+        persona._save_hist(line, rows[-12:])
+        self._set(note_at=4)
+        hist, total = persona._note_convo(line, persona._entry(line))
+        self.assertEqual(total, 40)
+        self.assertEqual(len(hist), 36)
+        self.assertEqual(hist[0]["content"], "第2句")
+        self.assertEqual(hist[-1]["content"], "第19答")
+
+    def test_convo_caps_rows(self):
+        line = self._line()
+        persona._save_archive(
+            line, [{"role": "user", "content": "x"} for _ in range(200)])
+        self._set(note_at=0)
+        hist, _ = persona._note_convo(line, persona._entry(line))
+        self.assertEqual(len(hist), persona.NOTE_MAX_ROWS)
+
+    def test_compress_writes_cursor_and_clears_due(self):
+        line = self._line()
+        rows = []
+        for i in range(6):
+            rows.append({"role": "user", "content": "第%d句" % i})
+            rows.append({"role": "assistant", "content": "第%d答" % i})
+        persona._save_archive(line, rows)
+        self._set(note_due=9, note="旧", note_at=2)
+        with mock.patch.object(persona, "_llm_call",
+                               return_value=self._good_note()):
+            self.assertTrue(persona.compress_note(line))
+        st = persona._entry(line)
+        self.assertIn("新事", st["note"])
+        self.assertEqual(st["note_at"], 12)
+        self.assertEqual(st["note_due"], 0)
+        self.assertEqual(st["turns"], 0)
+
+    def test_compress_aborts_if_rollback_during(self):
+        """压缩期间玩家回退了：这份摘要含着被撤掉的轮，不落盘。"""
+        line = self._line()
+        rows = [{"role": "user", "content": "x"},
+                {"role": "assistant", "content": "y"}]
+        persona._save_archive(line, rows)
+        self._set(note_due=9, note="旧账本")
+
+        def shrink(*_a, **_kw):
+            persona._save_archive(line, rows[:1])
+            return self._good_note()
+
+        with mock.patch.object(persona, "_llm_call", side_effect=shrink):
+            self.assertFalse(persona.compress_note(line))
+        self.assertEqual(persona._entry(line)["note"], "旧账本")
+
+    def test_save_mood_syncs_place(self):
+        line = self._line()
+        persona._save_mood(line, "害羞", 6,
+                           "小超市门口人行道上 · 浅色针织衫 · 站定")
+        self.assertEqual(persona._gameday(persona._entry(line))["place"],
+                         "小超市门口人行道上")
+
+    def test_soft_curfew_no_longer_forces_the_day_to_end(self):
+        blk = persona._gameday_block({"day": 1, "turns_today": 68})
+        self.assertIn("天色不早", blk)
+        self.assertNotIn("今天的故事到这里就好", blk)
+
+
 if __name__ == "__main__":
     unittest.main()
