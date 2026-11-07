@@ -3111,7 +3111,25 @@ $("skipDays").addEventListener("input", e => {
   }
 });
 $("inp").addEventListener("keydown", e => {
-  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+  if (e.key !== "Enter" || e.isComposing) return;
+  // Shift+Enter / Ctrl+Enter = 换行（2026-11-08 用户要的）。
+  // Shift 是浏览器自带行为，不用管；Ctrl 会被下面「无修饰键才发送」那条
+  // 判断吞掉（原来只判了 !shiftKey），所以这里先拦下来、手动插一个换行。
+  if (e.shiftKey || e.ctrlKey) {
+    if (e.ctrlKey) {
+      e.preventDefault();
+      const el = e.target;
+      const s = el.selectionStart;
+      const t = el.selectionEnd;
+      el.value = el.value.slice(0, s) + "\n" + el.value.slice(t);
+      el.selectionStart = el.selectionEnd = s + 1;
+      el.dispatchEvent(new Event("input"));   // 让高度自适应跟着长
+    }
+    return;
+  }
+  // Enter = 发送。输入法还没把候选词上屏时不发（否则打中文一半就被提交）。
+  e.preventDefault();
+  send();
 });
 $("inp").addEventListener("input", e => {
   e.target.style.height = "auto";
