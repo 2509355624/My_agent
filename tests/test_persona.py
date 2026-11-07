@@ -345,7 +345,12 @@ class TurnTest(PersonaBase):
         self.assertIsNone(remember.call_args.kwargs.get("custom"))
 
     def test_rag_block_reaches_the_actor(self):
-        """检索到的旧回忆要拼进演员系统头。"""
+        """检索到的旧回忆要进这一轮输入，且贴在最后一条玩家消息里。
+
+        2026-11-07：回忆块从 system 头挪到末尾——system 头是前缀，动态回忆
+        插进去会把前缀缓存打散（实测命中 59~70%）。这里同时守住「不能被丢
+        掉」这条底线，只换位置。
+        """
         with mock.patch.object(persona.llm, "call_llm",
                                return_value="嗯。") as m, \
              mock.patch.object(persona_rag, "enabled_for", return_value=True), \
@@ -353,8 +358,11 @@ class TurnTest(PersonaBase):
              mock.patch.object(persona_rag, "build_block",
                                return_value="【相关回忆】\n- 她怕打雷。") as bb:
             persona.run_turn(self.KEY, "今天打雷了", "private")
-        head = m.call_args[0][0][0]["content"]
-        self.assertIn("她怕打雷", head)
+        msgs = m.call_args[0][0]
+        head = msgs[0]["content"]
+        last = msgs[-1]["content"]
+        self.assertNotIn("她怕打雷", head)
+        self.assertIn("她怕打雷", last)
         bb.assert_called_once()
         self.assertEqual(bb.call_args[0][0], self._hist_key())
 
@@ -3145,6 +3153,81 @@ class NoteCompressionTest(PersonaBase):
         blk = persona._gameday_block({"day": 1, "turns_today": 68})
         self.assertIn("天色不早", blk)
         self.assertNotIn("今天的故事到这里就好", blk)
+
+
+class StoryLineTest(unittest.TestCase):
+    """发展线（2026-11-07）：只重组已有事实，缺哪段就跳哪段。"""
+
+    NOTE = (
+        "## 关系\n- 旅店认识的。\n"
+        "## 你的事（你做过的）\n- 说旅店有家更好的。\n"
+        "- 早上揽住她的头先吻了一回。\n"
+        "## 她的事（她做过的）\n- 赶了三天路。\n"
+        "- 进你房门只在门内两步停下。\n"
+        "## 约定与未完成\n- 房钱你出，房间相邻。\n- 早饭欠着。\n"
+        "## 忌讳与偏好\n- 不喜欢被叫小姐。\n"
+        "## 日常与场景\n- 靠窗的饭馆。\n"
+    )
+
+    def test_story_line_orders_time_done_and_todo(self):
+        out = persona.story_line(
+            {"day": 3, "phase": "下午", "place": "饭馆",
+             "plan": "陪她挑耳机", "plan_day": 5}, self.NOTE)
+        self.assertTrue(out.startswith(
+            "【故事到现在】\n时间：第 3 天 · 下午 · 饭馆"))
+        self.assertIn("已经发生：", out)
+        self.assertIn("早上揽住她的头先吻了一回", out)
+        self.assertIn("还没完成：陪她挑耳机（约在第 5 天）", out)
+        self.assertIn("早饭欠着", out)
+        # 正向写法：整块不含禁令词
+        for bad in ("不能", "不许", "不要", "禁止", "必须"):
+            self.assertNotIn(bad, out)
+
+    def test_story_line_skips_missing_sections(self):
+        out = persona.story_line({"day": 7, "event": "已经办完：去旧书市"}, "")
+        self.assertIn("时间：第 7 天", out)
+        self.assertIn("今天已经办完：去旧书市", out)
+        self.assertNotIn("已经发生：", out)
+        self.assertNotIn("还没完成：", out)
+
+    def test_prose_ledger_is_not_guessed(self):
+        """散文账本没有小节标题，不猜结构——返回空串。"""
+        self.assertEqual(
+            persona.story_line({}, "她推门进去时她正趴在桌上画稿。后来……"), "")
+
+    def test_empty_everything_returns_empty(self):
+        self.assertEqual(persona.story_line({}, ""), "")
+        self.assertEqual(persona.story_line(None, None), "")
+
+    def test_story_line_respects_char_budget(self):
+        gd = {"day": 9, "phase": "晚上", "place": "很长的地名" * 20,
+              "plan": "约定" * 100}
+        long_note = ("## 约定与未完成\n"
+                     + "\n".join("- %s" % ("事" * 80) for _ in range(10)))
+        out = persona.story_line(gd, long_note)
+        body = out.split("\n", 1)[1].rsplit("\n", 1)[0]
+        self.assertLessEqual(len(body), persona.STORY_MAX_CHARS + 1)
+
+    def test_ledger_section_matches_substring(self):
+        self.assertEqual(persona._ledger_section(self.NOTE, "约定"),
+                         ["房钱你出，房间相邻。", "早饭欠着。"])
+        self.assertEqual(persona._ledger_section(self.NOTE, "不存在"), [])
+        self.assertEqual(persona._ledger_section("一段散文", "约定"), [])
+
+    def test_plan_and_ledger_are_not_duplicated(self):
+        """同一条约定只写一遍：结构化那条带天数，优先留它。"""
+        note = ("## 约定与未完成\n"
+                "- 下课后一起去超市买菜，然后上你家做饭。\n"
+                "- 下一顿早餐她亲手做给你吃。\n")
+        out = persona.story_line(
+            {"day": 1, "plan": "一起买菜回家做饭", "plan_day": 2}, note)
+        self.assertEqual(out.count("做饭"), 1)
+        self.assertIn("一起买菜回家做饭（约在第 2 天）", out)
+        self.assertIn("下一顿早餐", out)
+
+    def test_clip_items_strips_double_punctuation(self):
+        got = persona._clip_items(["她笑了。", "他说好；"], 4, 40)
+        self.assertEqual(got, ["她笑了", "他说好"])
 
 
 if __name__ == "__main__":

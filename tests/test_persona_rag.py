@@ -259,8 +259,11 @@ class ForgetTest(RagBase):
         self.assertEqual(payload["end"], 2)
         self.assertIn("batch-1-2-0", payload["batch_ids"])
         rank._process(kind, _line, payload)
-        # 新批次 id + 旧版 batch-start-end + 4 条事实
-        self.assertEqual(len(self.client.deleted_entries), 6)
+        # 新批次 id + 旧版 batch-start-end + 4 条事实 + 2 轮 × 2 条原话
+        self.assertEqual(len(self.client.deleted_entries), 10)
+        ids = [eid for _coll, eid in self.client.deleted_entries]
+        for rid in ("raw-1-u", "raw-1-a", "raw-2-u", "raw-2-a"):
+            self.assertIn(rid, ids)
         # 回退最后一轮后，前一轮放回 pending，下一轮会重新凑批
         rec = rank.pending_for("web_10001__rem")
         self.assertEqual([t["turn"] for t in rec["items"]], [1])
@@ -372,6 +375,76 @@ class VisibleTextTest(unittest.TestCase):
     def test_only_thought_returns_empty_not_fallback(self):
         segs = [{"who": "用户", "type": "想", "text": "算了不说了。"}]
         self.assertEqual(persona._visible_user_text(segs, "原文里有心里话"), "")
+
+
+class RawMemoryTest(RagBase):
+    """原文层（2026-11-07）：和事实层并存，只补细节，回退时一起撤。"""
+
+    def test_raw_entries_shape(self):
+        rows = [{"turn": 7, "day": 3, "phase": "晚上",
+                 "user": "我带了伞", "assistant": "她看了一眼伞"}]
+        out = rank.raw_entries(rows)
+        self.assertEqual([e["id"] for e in out], ["raw-7-u", "raw-7-a"])
+        self.assertIn("第3天·晚上", out[0]["content"])
+        self.assertIn("用户说：我带了伞", out[0]["content"])
+        self.assertIn("她：她看了一眼伞", out[1]["content"])
+        self.assertEqual(out[0]["metadata"]["source"], rank._RAW_SOURCE)
+        self.assertEqual(out[0]["metadata"]["kind"], "raw")
+        self.assertEqual(out[0]["metadata"]["role"], "user")
+
+    def test_raw_entries_skip_empty_and_turnless(self):
+        self.assertEqual(rank.raw_entries([{"turn": 0, "user": "x"}]), [])
+        self.assertEqual(
+            rank.raw_entries([{"turn": 2, "user": "", "assistant": ""}]), [])
+        self.assertEqual(rank.raw_entries(None), [])
+
+    def test_raw_entries_truncate(self):
+        out = rank.raw_entries([{"turn": 1, "user": "字" * 900,
+                                 "assistant": ""}])
+        self.assertLessEqual(len(out[0]["content"]), rank.RAW_MAX_CHARS)
+
+    def test_retrieve_raw_needs_kind_and_distance(self):
+        self.client.docs = [
+            {"id": "raw-1", "content": "用户说：怕打雷", "distance": 0.50,
+             "metadata": {"kind": "raw", "source": rank._RAW_SOURCE}},
+            {"id": "batch-1", "content": "批次叙事", "distance": 0.30,
+             "metadata": {"kind": "batch", "source": rank._SOURCE}},
+            {"id": "raw-2", "content": "无关", "distance": 0.95,
+             "metadata": {"kind": "raw", "source": rank._RAW_SOURCE}},
+        ]
+        got = rank.retrieve_raw("web_10001__rem", "打雷")
+        self.assertEqual([d["id"] for d in got], ["raw-1"])
+
+    def test_build_block_has_both_layers(self):
+        self.client.docs = [
+            {"id": "b1", "content": "昨天在旧书市被人看见", "distance": 0.30,
+             "metadata": {"kind": "batch", "turn_start": 1, "turn_end": 5,
+                          "source": rank._SOURCE}},
+            {"id": "raw-3-u", "content": "第2天 用户说：我不怕打雷",
+             "distance": 0.40,
+             "metadata": {"kind": "raw", "source": rank._RAW_SOURCE}},
+        ]
+        blk = rank.build_block("web_10001__rem", "打雷")
+        self.assertIn("【长期记忆", blk)
+        self.assertIn("【当时的原话", blk)
+        self.assertIn("我不怕打雷", blk)
+        self.assertIn("正在发生的比旧话更重要", blk)
+
+    def test_raw_block_respects_budget(self):
+        docs = [{"content": "字" * 300} for _ in range(10)]
+        blk = rank._raw_block(docs)
+        body = blk.split("\n", 1)[1]
+        self.assertLessEqual(len(body.replace("\n", "")),
+                             rank.RAW_BLOCK_CHARS + rank.RAW_ITEM_CHARS)
+
+    def test_process_ingests_raw_before_distill(self):
+        turns = [{"turn": 1, "user": "我怕黑", "assistant": "嗯。"}]
+        with mock.patch.object(rank, "distill", return_value=[]):
+            rank._process("distill", "web_10001__rem", {"turns": turns})
+        # 提炼结果为空也要入原话：细节不能跟着摘要一起丢
+        self.assertEqual(len(self.client.ingested), 1)
+        _coll, entries = self.client.ingested[0]
+        self.assertEqual([e["id"] for e in entries], ["raw-1-u", "raw-1-a"])
 
 
 if __name__ == "__main__":

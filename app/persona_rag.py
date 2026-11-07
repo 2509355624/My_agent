@@ -1,16 +1,9 @@
-"""角色扮演的长期记忆向量库（2026-11-05）。
+"""角色扮演的长期记忆向量库（2026-11-05，2026-11-07 加原文层）。
 
-## 为什么不是存原文
+## 两层：提炼事实 + 原文片段
 
-参考项目 `picture_prompt_produce` 的做法：**每 5 次 AI 回复**把最近一批
-对话交给「记忆提炼器」，只留下可以长期复用的事实，再把事实入库。
-
-直接存「用户：…… / 她：……」的原文有两个根本问题：
-
-  · 检索命中的是一段旧对话，演员会照着复述，容易把当前话题带跑；
-  · 寒暄、重复、临场玩笑全混在里面，库里 90% 是垃圾。
-
-所以这里也只存**提炼后的事实**：
+**事实层**（`_SOURCE`）：**每 5 次 AI 回复**把最近一批对话交给「记忆提炼器」，
+只留下可以长期复用的事实，再把事实入库。入库形状：
 
     {"about": "user|character|shared", "content": "用户：……",
      "topics": "…", "primary_emotion": "…", "open_threads": "…",
@@ -19,6 +12,17 @@
 归属（about）是关键：用户亲口说的才算用户事实；角色说的不能写成用户事实；
 只有双方明确同意的计划才算 shared。检索时按归属标注，并带一条「旧事实
 优先于近期提及」的裁决规则。
+
+**原文层**（`_RAW_SOURCE`，2026-11-07 加）：每批顺手把这一批的对话原文
+也入库，一条消息一条，按 `RAW_MAX_CHARS` 截断。
+
+为什么要加：提炼后的批次叙事只有 200~300 字，细节全丢了。用户问「上次
+你说的那句」「我们当时是怎么说好的」时，演员手里只有摘要，回答只能靠猜。
+原文条目专门补这个洞——它**只用来说明细节**，注入块里写明「当前这一拍
+接着往下演，正在发生的比旧话更重要」，避免演员照着旧对话复述。
+
+原来担心的两个问题（演员复述旧对话、库里全是寒暄垃圾）用三件事压住：
+阈值放宽但条数限死（3 条）、注入时再压到 260 字、块内明确它只是细节来源。
 
 ## 隔离
 
@@ -31,7 +35,7 @@
 ## 慢加载
 
 CPU 小模型冷启动十几秒，绝不能在聊天轮里同步等：
-  · 提炼和入库都在后台线程/队列里做；
+  · 提炼、原文入库都在后台线程/队列里做；
   · 检索只在 daemon ready 时发生，否则这一轮不带回忆。
 """
 import hashlib
@@ -59,6 +63,17 @@ _TESTING = "unittest" in sys.modules
 
 _COLL_PREFIX = "persona_"
 _SOURCE = "batch_summary_v3"
+
+# 原文层（2026-11-07）。和事实层并存，不替代它：
+#   · 入库截 400 字——`bge-small-zh-v1.5` 上下文 512 token，再长会被截；
+#   · 阈值 0.70 比事实的 0.60 宽——原文句子长、复述多，距离天然更远；
+#   · 每轮最多 3 条、每条注入时压到 260 字、总预算 900 字。
+_RAW_SOURCE = "raw_msg_v1"
+RAW_MAX_CHARS = 400
+RAW_MAX_DISTANCE = 0.70
+RAW_BLOCK_ITEMS = 3
+RAW_ITEM_CHARS = 260
+RAW_BLOCK_CHARS = 900
 # 「昨天/上次/之前」这类问法：检索时放宽阈值、多取几条（2026-11-05）。
 _TIME_QUERY = re.compile(r"昨天|昨日|昨晚|昨夜|前一天|前天|上次|之前")
 _LOCK = threading.Lock()
@@ -284,6 +299,49 @@ def remember(line, user_text, reply, custom=None, day=None, phase="",
         })
 
 
+def raw_entries(turns):
+    """把一批对话原文转成可入库的条目（2026-11-07）。
+
+    一条消息一条，id 用 `raw-<轮次>-u/a`，回退时能按轮次精确删掉。
+    `content` 前缀「第N天·时段 用户说：/ 她：」——检索命中后模型能直接
+    看出这是哪一天、谁说的，不用再猜。
+    """
+    out = []
+    for it in turns or []:
+        if not isinstance(it, dict):
+            continue
+        try:
+            t = int(it.get("turn") or 0)
+        except (TypeError, ValueError):
+            t = 0
+        if not t:
+            continue
+        try:
+            day = int(it.get("day") or 0)
+        except (TypeError, ValueError):
+            day = 0
+        phase = str(it.get("phase") or "")[:12]
+        stamp = ("第%d天%s " % (day, ("·" + phase) if phase else "")) if day else ""
+        for role, tag, label in (("user", "u", "用户说"),
+                                 ("assistant", "a", "她")):
+            text = " ".join(str(it.get(role) or "").split())
+            if not text:
+                continue
+            out.append({
+                "id": "raw-%d-%s" % (t, tag),
+                "content": (stamp + label + "：" + text)[:RAW_MAX_CHARS],
+                "metadata": {
+                    "kind": "raw",
+                    "role": role,
+                    "day": day,
+                    "phase": phase,
+                    "turn": t,
+                    "source": _RAW_SOURCE,
+                },
+            })
+    return out
+
+
 def forget_last(line):
     """回退上一轮：只撤销最近这一轮，不碰更早的回合。
 
@@ -481,25 +539,64 @@ def retrieve(line, query, k=None, day=None):
     return out[:kk]
 
 
-def build_block(line, query, k=None, day=None, context=""):
-    """拼成能直接塞进系统提示词的一段；没命中返回空串。
+def retrieve_raw(line, query, k=None):
+    """按当前输入找几条窗口外的**原话**；daemon 没 ready 返回空。
 
-    2026-11-06：两路检索——当前用户话 + 最近几轮上下文，合并去重后
-    优先取 2 条批次叙事 + 3 条原子事实。问「昨天」这种短句时，
-    上下文那一路能把「昨天在哪、和谁、发生了什么」带出来。
+    阈值比提炼事实宽（`RAW_MAX_DISTANCE=0.70` 对 0.60）：原文句子长、
+    还带着叙事和对话，和一句提问的 embedding 距离天然更远，用 0.60
+    一条都召不回。代价是偶尔召回弱相关内容，靠「最多 3 条 + 每条 260 字」
+    和注入块里的用法说明压住。
     """
-    docs = retrieve(line, query, k=k, day=day)
-    if context:
-        extra = retrieve(line, context, k=k, day=day)
-        seen = {str(d.get("id") or "") for d in docs}
-        docs += [d for d in extra
-                 if str(d.get("id") or "") not in seen]
-    if not docs:
-        return ""
+    if not enabled_for(line):
+        return []
+    line = str(line or "").strip()
+    query = str(query or "").strip()
+    if not line or not query:
+        return []
+    with _LOCK:
+        if line in _BLOCKED:
+            return []
+    client = _CLIENT
+    if client is None or not client.is_ready():
+        return []
+    kk = max(1, int(k or RAW_BLOCK_ITEMS))
+    try:
+        r = client.search(collection_name(line), query, k=kk,
+                          timeout=PERSONA_RAG_TIMEOUT, allow_start=False,
+                          where={"source": _RAW_SOURCE})
+    except Exception:                                    # noqa: BLE001
+        log.exception("原话检索失败 %s", line)
+        return []
+    if not r.get("ok"):
+        return []
+    out = []
+    for d in r.get("docs") or []:
+        meta = d.get("metadata") or {}
+        # 真实 Chroma 已经用 where 过滤过；这里再兜一层，防止别的实现
+        # 忽略 where 时把批次叙事当成「原话」贴进来。
+        if str(meta.get("kind") or "") != "raw":
+            continue
+        try:
+            dist = float(d.get("distance", 1.0))
+        except (TypeError, ValueError):
+            dist = 1.0
+        if dist <= RAW_MAX_DISTANCE:
+            out.append(d)
+    if out:
+        log.info("[原话] %s 命中 %d 条（query=%r）", line, len(out), query[:40])
+    return out[:kk]
+
+
+def _fact_block(docs):
+    """提炼事实 → 一段；没有可用的返回空串。"""
     batches, facts = [], []
     for d in docs:
         meta = d.get("metadata") or {}
-        if str(meta.get("kind") or "") == "batch":
+        kind = str(meta.get("kind") or "")
+        if kind == "raw":
+            # 原话条目走 `_raw_block`；混进事实层会被当成「原子事实」读。
+            continue
+        if kind == "batch":
             batches.append(d)
         else:
             facts.append(d)
@@ -507,7 +604,7 @@ def build_block(line, query, k=None, day=None, context=""):
     if not pick:
         return ""
     who = {"user": "用户事实", "character": "角色言行", "shared": "双方约定"}
-    lines = ["【长期记忆 · 从过去提炼出的经过与事实，不是原对话】"]
+    lines = ["【长期记忆 · 从过去提炼出的经过与事实】"]
     for d in pick:
         meta = d.get("metadata") or {}
         if str(meta.get("kind") or "") == "batch":
@@ -528,12 +625,61 @@ def build_block(line, query, k=None, day=None, context=""):
         if len(text) > limit:
             text = text[:limit] + "…"
         lines.append(head + "\n" + text)
-    if len(lines) == 1:
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _raw_block(docs):
+    """原文条目 → 一段；总字数受 RAW_BLOCK_CHARS 限制。"""
+    if not docs:
         return ""
-    lines.append("【用法】用户问起自己/双方/角色的既有事实或「昨天/上次发生过什么」时，"
-                 "以此为准；最近对话只是提到某个话题，不等于偏好改变——旧事实只能补充，"
-                 "不能被近期闲聊覆盖。")
-    return "\n".join(lines)
+    lines, used = [], 0
+    for d in docs:
+        text = " ".join(str(d.get("content") or "").split())
+        if not text:
+            continue
+        if len(text) > RAW_ITEM_CHARS:
+            text = text[:RAW_ITEM_CHARS] + "…"
+        if lines and used + len(text) > RAW_BLOCK_CHARS:
+            break
+        lines.append("- " + text)
+        used += len(text)
+    if not lines:
+        return ""
+    return "【当时的原话 · 用来确认说过和做过什么】\n" + "\n".join(lines)
+
+
+def build_block(line, query, k=None, day=None, context=""):
+    """拼成能直接塞进最后一条玩家消息的一段；没命中返回空串。
+
+    2026-11-06：两路检索——当前用户话 + 最近几轮上下文，合并去重后
+    优先取 2 条批次叙事 + 3 条原子事实。问「昨天」这种短句时，
+    上下文那一路能把「昨天在哪、和谁、发生了什么」带出来。
+
+    2026-11-07：加原文层。两层分工写进块标题——提炼层说「经过与事实」，
+    原文层说「用来确认说过和做过什么」，结尾用法句再点明「正在发生的
+    比旧话更重要」，避免演员拿旧对话当台词复述。
+    """
+    docs = retrieve(line, query, k=k, day=day)
+    if context:
+        extra = retrieve(line, context, k=k, day=day)
+        seen = {str(d.get("id") or "") for d in docs}
+        docs += [d for d in extra
+                 if str(d.get("id") or "") not in seen]
+    parts = []
+    fact = _fact_block(docs)
+    if fact:
+        parts.append(fact)
+    raw = _raw_block(retrieve_raw(line, query))
+    if raw:
+        parts.append(raw)
+    if not parts:
+        return ""
+    parts.append(
+        "【用法】用户问起自己/双方/角色的既有事实，或「昨天/上次发生过什么」时，"
+        "以此为准。原话是当时确实说过、做过的细节，用来说明「是谁说的、"
+        "当时怎么说的」；当前这一拍接着往下演，正在发生的比旧话更重要。"
+        "旧事实只能补充，不会被近期闲聊覆盖。")
+    return "\n\n".join(parts)
 
 
 def _run():
@@ -572,6 +718,13 @@ def _process(kind, line, payload):
         if epoch != _current_epoch(line):
             log.info("记忆批次已作废，跳过入库 %s（epoch=%d）", line, epoch)
             return
+        # 原话先入库（2026-11-07）：它不依赖 LLM，所以放在 distill 之前。
+        # 提炼连续失败两次会整批丢弃，但原话已经落地，细节不会一起没掉。
+        raws = raw_entries(turns)
+        if raws:
+            rr = client.ingest(coll, raws)
+            if not rr.get("ok"):
+                log.warning("原话入库失败 %s：%s", coll, rr.get("error"))
         entries = distill(turns, custom, card_name=card_name,
                           epoch=epoch, batch_id=batch_id)
         if entries is None:
@@ -608,6 +761,10 @@ def _process(kind, line, payload):
         if start and end:
             ids.append("batch-%d-%d" % (start, end))
             ids += ["%d-%d-%d" % (start, end, idx) for idx in range(4)]
+            # 原文条目（2026-11-07）：这一批每一轮的原话都要一起撤掉，
+            # 否则回退之后演员还能把被撤掉的那句话召回出来。
+            for t in range(start, end + 1):
+                ids += ["raw-%d-u" % t, "raw-%d-a" % t]
         try:
             for entry_id in ids:
                 r = client.delete_entry(coll, entry_id)

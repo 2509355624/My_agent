@@ -201,6 +201,15 @@ NOTE_EVERY_TURNS = 5
 # 任何反证，就顺着「谢谢纱雾」演成「谢谢我做的饭」。
 NOTE_SOFT = 900
 
+# 「故事到现在」发展线的字数上限（2026-11-07）。
+#
+# 用户报「AI 不知道前面几轮聊的事情怎么发展下来的」：短期窗口只有 12 条，
+# 账本每 5 轮才压一次，中间那几轮两边都没有。`story_line()` 把
+# **时间/地点 → 已经发生 → 还没完成** 按因果顺序排成一条短块，贴在近因位。
+# 只搬已经存在的事实（gameday + 账本六小节），不调模型、不加玩家操作。
+# 320 字 ≈ 一份短账本的 1/3，够把「现在在哪一段、手上还欠着什么」说清。
+STORY_MAX_CHARS = 320
+
 # 扮演态的静默窗口（秒）：这之内的连发算同一条。用户 2026-10-16 定的 10 秒。
 # 群聊默认那 1.5 秒是给「连发三句问同一件事」用的；聊天不一样——人打字是
 # 断续的，1.5 秒会把一句话切成两轮，回两遍。
@@ -4282,6 +4291,130 @@ def _gameday_block(gd):
     return "\n".join(lines)
 
 
+def _ledger_section(note, key):
+    """从六小节账本里抽一节的条目；散文账本返回 []。
+
+    账本有两种历史形态：2026-11-05 之后是六小节 Markdown，之前是整段散文
+    （`_clip_note` 保头保尾截断）。这里只认前者，散文不去猜结构——猜错比
+    不拼更糟。key 用子串匹配，所以「约定」能对上「约定与未完成」。
+    """
+    text = str(note or "")
+    if not text.strip() or "#" not in text:
+        return []
+    out, cur = [], ""
+    for line in text.splitlines():
+        s = line.strip()
+        m = re.match(r"^#{1,3}\s*(.+?)\s*$", s)
+        if m:
+            cur = m.group(1)
+            continue
+        if not s or not cur or key not in cur:
+            continue
+        s = re.sub(r"^[-*·]\s*", "", s)
+        if s:
+            out.append(s)
+    return out
+
+
+def _clip_items(items, count, per):
+    """取最后 count 条、每条压到 per 字，去重保序。
+
+    条目标自带的句末标点先剥掉：账本每条都以「。」结尾，直接拿「；」
+    连起来会拼出「。；」这种双重标点。
+    """
+    out, seen = [], set()
+    for s in (items or [])[-max(1, int(count)):]:
+        s = " ".join(str(s or "").split()).rstrip("。；，、")
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        out.append(s if len(s) <= per else s[:per].rstrip("。；，、") + "…")
+    return out
+
+
+_PUNCT_CHARS = "，。；、！？…—·「」“”‘’（）()[],.!?;: \t\n"
+
+
+def _shares_phrase(a, b, thr=0.35):
+    """两句话是不是在说同一件事（去标点后的字符重叠度）。
+
+    用来判断「gameday.plan」和账本「约定与未完成」是不是同一条约定：
+    玩家在同一条线上，这两处经常记着同一件事（一个结构化、一个一句话），
+    不去重就会在近因位连写两遍，白白摊薄注意力。
+
+    用字符集合的 Jaccard 而不是子串匹配：两边措辞常常是改写过的
+    （「一起买菜回家做饭」对「下课后一起去超市买菜，然后上你家做饭」），
+    4 字子串一个都命不中，但字符重叠度能到 0.39；而真正无关的那条
+    （「下一顿早餐她亲手做给你吃」）只有 0.11，阈值 0.35 能分开。
+    """
+    sa = {ch for ch in str(a or "") if ch not in _PUNCT_CHARS}
+    sb = {ch for ch in str(b or "") if ch not in _PUNCT_CHARS}
+    if len(sa) < 4 or len(sb) < 4:
+        return False
+    return len(sa & sb) / len(sa | sb) >= thr
+
+
+def story_line(gd, note=""):
+    """【故事到现在】——时间、已经发生的事、还没完成的事，排成一条线。
+
+    2026-11-07 用户报「AI 不知道前面几轮聊的事情怎么发展下来」。诊断下来
+    不是窗口太小，是**没有任何一层按时间把因果串起来**：12 条窗口是散的
+    对话，账本是六小节的条目，gameday 只有天数地点。模型每一拍都要自己
+    从这三处归纳「我现在在故事哪一段」，长对话里这步最容易失败。
+
+    这里只做重组，不新增信息、不调模型：
+      · 时间线来自 `gameday`（第几天 / 时段 / 所在地）；
+      · 已经发生来自 `gameday.event` + 账本「你的事 / 她的事」末尾几条；
+      · 还没完成来自 `gameday.plan` + 账本「约定与未完成」。
+
+    任一部分缺失就跳过那一段；全空返回空串——新线、自由模式没开天数时，
+    那 12 条窗口本来就覆盖了全部历史，不需要额外提醒。
+    """
+    gd = gd if isinstance(gd, dict) else {}
+    day = _as_int(gd.get("day"), 0, 0, 99999)
+    phase = str(gd.get("phase") or "").strip()
+    place = str(gd.get("place") or "").strip()
+    event = str(gd.get("event") or "").strip()
+    plan = str(gd.get("plan") or "").strip()
+    plan_day = _as_int(gd.get("plan_day"), 0, 0, 99999)
+
+    ledger = _ledger_fix_pronouns(note) if note else ""
+    done = (_clip_items(_ledger_section(ledger, "你的事"), 2, 46)
+            + _clip_items(_ledger_section(ledger, "她的事"), 2, 46))
+    todo = _clip_items(_ledger_section(ledger, "约定"), 3, 40)
+
+    parts = []
+    if day:
+        stamp = "第 %d 天" % day
+        if phase:
+            stamp += " · " + phase
+        if place:
+            stamp += " · " + place
+        parts.append("时间：" + stamp)
+    if event:
+        # `_roll_event` 给兑现过的约定加了「已经办完：」前缀，展示时去掉。
+        if event.startswith("已经办完："):
+            parts.append("今天已经办完：" + event[len("已经办完："):])
+        else:
+            parts.append("今天：" + event)
+    if done:
+        parts.append("已经发生：" + "；".join(done))
+    if plan:
+        when = ("（约在第 %d 天）" % plan_day) if plan_day and plan_day > day else ""
+        # 账本里已经记着同一条约定时只留结构化那条：它带天数，信息更全。
+        todo = [t for t in todo if not _shares_phrase(plan, t)]
+        todo = [plan + when] + todo
+    if todo:
+        parts.append("还没完成：" + "；".join(todo[:4]))
+    if not parts:
+        return ""
+    body = "\n".join(parts)
+    if len(body) > STORY_MAX_CHARS:
+        body = body[:STORY_MAX_CHARS].rstrip("；，、") + "…"
+    return ("【故事到现在】\n" + body
+            + "\n这几件已经成立，顺着它们往下写，接住前面留下的线头。")
+
+
 def game_day(session_key):
     """这条线游戏内第几天（面板/回包用）；没在演返回 None。"""
     ent = _entry(resolve_line(session_key))
@@ -4519,15 +4652,19 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         head = head + "\n\n" + fblock
     # 长期记忆（2026-11-05）：按玩家这一轮**看得见的话**去翻旧账。
     # 用户没说出口的「想」不参与检索——拿心里话去翻回忆，容易让她提前知道。
+    #
+    # 2026-11-07：这里只**取**不拼。回忆块改成和「故事到现在」一起放到
+    # 最后一条玩家消息里——system 头是前缀，动态内容插进去会把前缀缓存
+    # 打散（实测命中 59~70%，一轮两万 token 时这一步很贵），放末尾既保住
+    # 缓存，又离生成点更近。
     visible = _visible_user_text(
         extras.get("segments") if isinstance(extras, dict) else [],
         "" if man.get("thought") else text)
+    rblock = ""
     if rag_on:
         try:
             rblock = persona_rag.build_block(
                 key, visible, day=day_before, context=_rag_context(hist))
-            if rblock:
-                head = head + "\n\n" + rblock
         except Exception:                                # noqa: BLE001
             log.exception("回忆注入失败 %s", key)
     # 攻略模式结算（2026-11-03）：分数落账 → 按档位往主提示词里注入关系块。
@@ -4659,6 +4796,15 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     # 不变（不插中途 system，免得打断历史里带三行元数据的格式 few-shot）。
     # 常态只给一句正向锚点，替换原来那句人称禁令；玩家选了档位或写了调子
     # 才多带轮次和「这一幕」。
+    #
+    # 顺序是「原话 → 回忆 → 发展线 → 锚点」：越靠后越贴近生成点。发展线比
+    # 回忆更近，因为用户抱怨的正是「不知道发展线路」；锚点（人称/篇幅/剧情
+    # 推进）永远最后一句。
+    if rblock:
+        user_block = user_block + "\n\n" + rblock
+    story = story_line(gd, note)
+    if story:
+        user_block = user_block + "\n\n" + story
     turn_no = None
     if styled:
         try:
