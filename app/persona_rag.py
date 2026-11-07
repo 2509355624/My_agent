@@ -561,7 +561,7 @@ def _anchor_docs(line):
                              "metadata": meta, "distance": 0.0})
         except Exception:                                # noqa: BLE001
             log.warning("锚点事实读取失败 %s", line, exc_info=True)
-    docs = docs[:12]
+    docs = docs[:20]
     _ANCHOR_CACHE[line] = (now, docs)
     if docs:
         log.info("[回忆] %s 锚点 %d 条", line, len(docs))
@@ -776,14 +776,19 @@ def _fact_block(docs):
     _aid = {id(d) for d in anchors}
     batches = [d for d in batches if id(d) not in _aid]
     facts = [d for d in facts if id(d) not in _aid]
-    pick = anchors[:5] + batches[:2] + facts[:3]
+    pick = anchors[:8] + batches[:2] + facts[:3]
     if not pick:
         return ""
     who = {"user": "用户事实", "character": "角色言行", "shared": "双方约定"}
     lines = ["【长期记忆 · 从过去提炼出的经过与事实】"]
     for d in pick:
         meta = d.get("metadata") or {}
-        if str(meta.get("kind") or "") == "batch":
+        if meta.get("_anchor"):
+            # 锚点单独标出来（2026-11-08）：以前它们混进 facts，顶着
+            # 「[双方约定]」这种标签，读起来像普通的计划，模型不会当回事。
+            head = "[锚点·只发生过一次]"
+            limit = 200
+        elif str(meta.get("kind") or "") == "batch":
             head = "[当时的经过]"
             limit = 320
         else:
@@ -1061,8 +1066,11 @@ def parse_memory_json(raw, start, end, day=0, phase="", card_name="角色",
     out = []
     summary = " ".join(str(data.get("summary") or "").split())
     if summary:
-        prefix = "【第%d天%s】" % (int(day or 0),
-                                (" · " + str(phase)) if phase else "")
+        # day=0 不写前缀（2026-11-08）：补录归档时不知道历史轮次属于第几天，
+        # 强写「【第0天】」比不写更误导。
+        prefix = ("【第%d天%s】" % (int(day or 0),
+                                 (" · " + str(phase)) if phase else "")
+                  if int(day or 0) else "")
         content = prefix + summary[:320]
         out.append({
             "id": str(batch_id or ("batch-%d-%d-%d"
