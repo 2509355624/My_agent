@@ -7,11 +7,13 @@
     "改完重启 agent.py / qq_bot 生效。"
   ],
   "groups": {
-    "moss": ["moss", "moss-light", "moss-qunyou", "moss50", "moss8", "moss_page"]
+    "moss细节": [
+      "moss细节"
+    ]
   },
   "defaults": [
     {
-      "group": "moss",
+      "group": "moss细节",
       "file": "moss/moss_pussy_lora_v1.0.safetensors",
       "strength": 0.8
     }
