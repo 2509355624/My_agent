@@ -1733,9 +1733,10 @@ class NovelCraftContractTest(unittest.TestCase):
         旧的 400~800、1000 常态、字数不是目标、允许烂尾都不回来，
         「收得住」这种作文收尾口径也撤掉。"""
         c = persona._CONTRACT
-        self.assertIn("300~600 字", c)
+        # 2026-11-08 改：保底 300，上限交给模型（600~1200 正常）。
+        self.assertIn("至少 300 字", c)
         self.assertIn("停在哪都行", c)
-        self.assertNotIn("600~2000", c)
+        self.assertNotIn("一轮 **300~600 字**就把这一拍写完", c)
         self.assertNotIn("收得住", c)
         self.assertNotIn("1000 字", c)
         self.assertNotIn("400~800", c)
@@ -3049,7 +3050,7 @@ class ManualRunTurnTest(PersonaBase):
         actor = "\n".join(m["content"] for m in seen[-1])
         self.assertIn("这一拍往这个方向走", actor)
         self.assertIn("让她先开口", actor)
-        self.assertIn("300~600 字", actor)
+        self.assertIn("至少 300 字", actor)
         self.assertIn("想让她主动", actor)   # 2026-11-08：心里话给写作 AI
         head = seen[-1][0]["content"]
         self.assertIn("让她先开口", head)
