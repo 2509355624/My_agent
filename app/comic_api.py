@@ -508,7 +508,10 @@ def api_comic_script():
     # 连载（2026-10-18）：prev = 上一集的任务号，给了就把它的气泡+旁白当前情。
     # 目录名过一遍 `_task_dir` 校验（它挡住 `..` 和绝对路径），指不到就当没给。
     prev = str(data.get("prev") or "").strip()
+    # 沿用上一集服装（2026-11-07）：默认不带，前端勾了才取最后一格的画面行。
+    carry_outfit = bool(data.get("carry_outfit"))
     prev_text = ""
+    prev_outfit_text = ""
     if prev:
         try:
             prev_path = os.path.join(_task_dir(prev), "script.md")
@@ -516,8 +519,11 @@ def api_comic_script():
             prev_path = ""
         if prev_path and os.path.isfile(prev_path):
             prev_text = comic_agent.prev_story_text(prev_path)
+            if carry_outfit:
+                prev_outfit_text = comic_agent.prev_outfit(prev_path)
         if not prev_text:
             prev = ""             # 目录不在 / 没有剧本：静默按全新一集处理
+            prev_outfit_text = ""
 
     job = uuid.uuid4().hex[:12]
     with _SCRIPT_LOCK:
@@ -562,7 +568,8 @@ def api_comic_script():
                 text = comic_agent.write_script(
                     brief, panels=panels_n, character=character,
                     provider=provider, model=model, progress=_progress,
-                    prev=prev_text, no_search=no_search, pov_mode=pov_mode)
+                    prev=prev_text, no_search=no_search, pov_mode=pov_mode,
+                    prev_outfit_text=prev_outfit_text)
                 # POV 才保留现有内容补正链路。
                 _progress("编剧交稿，开始补正")
                 try:

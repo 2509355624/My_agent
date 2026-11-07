@@ -148,6 +148,10 @@
               title="选了就把那一集的气泡和旁白当前情，本集接着往下写（不重演、关系延续）">
         <option value="">不接——全新一集</option>
       </select>
+      <label id="carryOutfitWrap" style="font-size:12px;white-space:nowrap;color:var(--text-dim)"
+             title="同一场戏跨集时，把上一集最后一格的服饰带过来——发色/款式/关键配件会沿用。换场景或过夜仍会重写，不会把睡衣带到公司">
+        <input type="checkbox" id="carryOutfit"> 沿用服装
+      </label>
       <span class="spacer" style="flex:1"></span>
       <label id="povModeWrap" style="font-size:12px;white-space:nowrap;color:var(--text-dim)"
              title="POV 第一人称：镜头＝观众的眼睛，画面里只有女主。自由视角：机位由编剧按剧情自己挑，可以双人同框。第三人称：镜头站在旁边看两个人，双人同框是常态、禁止一切 POV 标签——想稳定画出「男生女生都在画面里」选这个">
@@ -639,6 +643,7 @@ async function genScript() {
       character: document.getElementById('character').value.trim(),
       // 接上一集：给任务号，后端抽它的气泡+旁白当前情（2026-10-18）。
       prev: document.getElementById('prevTask').value || '',
+      carry_outfit: !!(document.getElementById('carryOutfit') || {}).checked,
       provider: document.getElementById('prov').value,
       model: document.getElementById('model').value,
       // 跳过查库（2026-10-22）：后端默认就是 true，这里显式传，取消勾选时
@@ -1971,6 +1976,8 @@ function applyMode() {
   document.getElementById('slotCard').style.display = p ? 'none' : '';
   document.getElementById('prevLabel').style.display = p ? 'none' : '';
   document.getElementById('prevTask').style.display = p ? 'none' : '';
+  const cow = document.getElementById('carryOutfitWrap');
+  if (cow) cow.style.display = p ? 'none' : '';
   // 写真卡：生图模式一律露出（没跑过也要看得见空态）；剧本模式下只在确实有
   // 写真时才挂出来——否则剧本页最上面会多一块空卡。
   document.getElementById('portraitCard').style.display =

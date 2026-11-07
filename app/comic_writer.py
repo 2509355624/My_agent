@@ -155,7 +155,7 @@ def _clean(text):
     return "\n".join(lines).strip()
 
 
-def _user_prompt(brief, panels, character, prev=""):
+def _user_prompt(brief, panels, character, prev="", outfit=""):
     parts = ["设定：%s" % brief.strip(), "格数：%d" % panels]
     if character.strip():
         parts.append("角色外观标签（每一格原样重复这套）：%s" % character.strip())
@@ -172,6 +172,17 @@ def _user_prompt(brief, panels, character, prev=""):
             "② 人物关系、情绪和已经发生的事必须延续——上一集她刚被拒绝，"
             "这一集就不能当没发生过；\n"
             "③ 前情里的服饰和场景不要求照抄，换场就换景。")
+    # 沿用上一集服装（2026-11-07 用户要的开关）：只在**同一场戏跨集**时有用。
+    # 默认不带（`outfit` 空），保持「换集换衣」的老口径；前端勾了才走到这里。
+    if (outfit or "").strip():
+        parts.append(
+            "**上一集最后停在这里，她当时是这身**：\n"
+            + outfit.strip() + "\n"
+            "如果这一集和上一集是**同一场、同一时间**（还在那个房间、那一段"
+            "对话里），就沿用这套——发色、款式、关键配件别改，只写这一集里"
+            "新增的变化（解开一粒扣、外套脱了搭在椅背上）；\n"
+            "如果换了场景或时间（出了门、过了一夜），按新场景重写，别把上一集"
+            "的衣服带过来。")
     return "\n".join(parts)
 
 

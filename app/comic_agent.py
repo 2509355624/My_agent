@@ -2436,9 +2436,37 @@ def prev_story_text(script_path, limit=PREV_STORY_LIMIT):
     return body
 
 
+def prev_outfit(script_path, limit=160):
+    """上一集最后一格的**画面行**（发色/服饰/景别都在里面）。
+
+    2026-11-07 用户点名：`prev_story_text` 故意丢了画面行，理由是「换集通常
+    换场景，衣服该跟着换」。但**同一场戏跨集**时衣服会断——上一集客厅里她
+    穿灰色针织衫，这一集还是那个客厅，剧本却重新给她编一套。
+
+    所以这里只取**最后一格**、只取画面行，由调用方决定要不要带（前端那个
+    「沿用上一集服装」勾选），并且带的时候会明确说「场景连续才沿用，
+    换场景就重写」——不推翻原来的取舍，只是补上「连续场景」这个缺口。
+
+    读不到 / 没有画面行返回空串，调用方按「不带」处理。
+    """
+    try:
+        with open(script_path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return ""
+    try:
+        _, panels = comic.parse_script_text(text)
+    except Exception:                                     # noqa: BLE001
+        return ""
+    if not panels:
+        return ""
+    last = str(panels[-1].get("scene") or "").strip()
+    return last[:limit] if last else ""
+
+
 def write_script(brief, panels=3, character="", provider=None, model=None,
                  max_rounds=MAX_ROUNDS, tries=2, progress=None, prev="",
-                 no_search=False, pov_mode="pov"):
+                 no_search=False, pov_mode="pov", prev_outfit_text=""):
     """写剧本。返回剧本文本（markdown，已含头部备选记录）。
 
     参数：
@@ -2477,7 +2505,8 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
         {"role": "system", "content": _system_prompt(panels, no_search=no_search,
                                                      pov_mode=pov_mode)},
         {"role": "user", "content": comic_writer._user_prompt(brief, panels,
-                                                              character, prev)},
+                                                              character, prev,
+                                                              prev_outfit_text)},
     ]
     # 回炉时只带「上次交出的剧本 + 错因」，不带工具中间结果——那些加起来几万字，
     # 带进下一轮会把上下文顶爆，而它们对改稿没有帮助（错因已经说清了）。
