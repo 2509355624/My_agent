@@ -390,3 +390,35 @@ def admin_delete_card_background(cid):
     chat_bg.delete("card", cid)
     return jsonify({"ok": True, "background": chat_bg.info("card", cid)})
 
+# ─── 游客会话查看：管理员 QQ 名单（2026-11-08）────────────
+#
+# 名单本身存在 `state/guest_admins.json`，读写逻辑在 `app/guest_view.py`
+# （5175 那边也要读同一份，放这里会让两个进程互相依赖）。
+
+@bp.route("/api/persona_admin/admins")
+def api_admins():
+    from app import guest_view
+    return jsonify({"ok": True, "ids": guest_view.list_admins()})
+
+
+@bp.route("/api/persona_admin/admins", methods=["POST"])
+def api_add_admin():
+    ok, why = _may_manage()
+    if not ok:
+        return _manage_denied(why)
+    from app import guest_view
+    data = request.get_json(silent=True) or {}
+    qq = str(data.get("qq") or "").strip()
+    ids, err = guest_view.add_admin(qq)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    return jsonify({"ok": True, "ids": ids})
+
+
+@bp.route("/api/persona_admin/admins/<qq>", methods=["DELETE"])
+def api_del_admin(qq):
+    ok, why = _may_manage()
+    if not ok:
+        return _manage_denied(why)
+    from app import guest_view
+    return jsonify({"ok": True, "ids": guest_view.remove_admin(qq)})

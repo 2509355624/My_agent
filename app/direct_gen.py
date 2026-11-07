@@ -2906,6 +2906,34 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     if addressed and _MORE_CHAN_RE.search(text):
         return MORE_CHAN_TEXT
 
+    # 「#游客会话查看」（2026-11-08）：只给管理员发链接，零 API。
+    # 链接指向 5175（Tunnel 指向那边），不是 5174——5174 不对外。
+    if addressed and "游客会话查看" in text:
+        from app import guest_view, qq_api
+        try:
+            sender = str(qq_api.current_sender_uin() or "")
+        except Exception:                            # noqa: BLE001
+            sender = ""
+        # 群号不算管理员：只认「谁在问」，不认「在哪儿问」。
+        try:
+            ok_admin = bool(sender) and guest_view.is_admin(sender)
+        except Exception:                            # noqa: BLE001
+            ok_admin = False
+        if not ok_admin:
+            return "这个入口只给管理员。"
+        try:
+            from app.config import BASE_DIR
+            import os as _os
+            with open(_os.path.join(BASE_DIR, "state", "friend_url.txt"),
+                      encoding="utf-8") as _f:
+                base = _f.read().strip().rstrip("/")
+        except Exception:                            # noqa: BLE001
+            base = ""
+        if not base:
+            return "隧道地址还没起来（state/friend_url.txt 是空的）。"
+        return ("游客会话查看（只读）：\n%s/guest-view\n"
+                "打开后输入管理员 QQ，验证码会私聊发给你。" % base)
+
     # 「提取提示词」直通（2026-10-07 用户拍板收窄到**就这 5 个字**）：命中 →
     # 把这张图当初真实用的提示词发回去，零 LLM、比让 AI 现推准。
     # 引用的图带 HT 编号 → 账本直通（这是唯一保留的硬编码，因为它足够确定）。

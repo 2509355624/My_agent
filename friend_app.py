@@ -37,6 +37,7 @@ from flask import (Flask, Response, g, jsonify, make_response, redirect, request
                    send_from_directory, stream_with_context)
 
 from app import friend_auth
+from app import guest_view
 from app.config import WEB_DIR, WORKSHOP_HTML
 from app.logsetup import setup as log_setup
 
@@ -108,6 +109,10 @@ LIMITS = {
     "img": (1500, 60),
     "send": (10, 3600),      # 发码：每小时 10 次
     "verify": (30, 600),     # 验码：10 分钟 30 次
+    # 游客会话查看（2026-11-08）：管理员自己的入口，不需要太严。
+    # 发码略放宽到 20/小时（他可能反复试登录），验码 30/10 分钟同群友页。
+    "gv_send": (20, 3600),
+    "gv_verify": (30, 600),
 }
 
 
@@ -591,6 +596,100 @@ def _relay_guest_cookie(resp, upstream):
 @app.route("/api/friend/<path:sub>", methods=["GET", "POST", "DELETE"])
 def proxy(sub):
     return _forward("/api/friend", sub)
+
+
+# ─── 游客会话查看（管理员只读，2026-11-08）─────────────────
+#
+# 和群友页共用登录（`friend_auth` 那套 6 位码 + HMAC cookie），只多一道
+# 「这个 QQ 在不在 `state/guest_admins.json` 里」。
+# 数据不在这里读：转发到 5174 的 `persona_admin`，再过滤成只剩游客——
+# 5174 那边的读法已经处理了「跨天合并、归档优先」这些细节，抄一遍必漏。
+
+def _gv_qq():
+    return friend_auth.check_cookie(request.cookies.get(friend_auth.COOKIE_NAME))
+
+
+def _gv_admin():
+    """当前 cookie 对应的 QQ，是管理员才返回；否则空串。"""
+    qq = _gv_qq()
+    return qq if (qq and guest_view.is_admin(qq)) else ""
+
+
+@app.route("/guest-view")
+@app.route("/guest-view.html")
+def guest_view_page():
+    return send_from_directory(WEB_DIR, "guest_view.html")
+
+
+@app.route("/gv/me")
+def gv_me():
+    qq = _gv_qq()
+    return jsonify({"ok": True, "qq": qq,
+                    "admin": bool(qq and guest_view.is_admin(qq))})
+
+
+@app.route("/gv/send", methods=["POST"])
+def gv_send():
+    if not rate_ok("gv_send"):
+        return jsonify({"ok": False, "error": "发太多次了，等一会儿"}), 429
+    data = request.get_json(silent=True) or {}
+    qq = str(data.get("qq") or "").strip()
+    # 不区分「不在名单」和「不在好友」——统一回「无法登录」，不给枚举空间。
+    if not guest_view.is_admin(qq):
+        return jsonify({"ok": False, "error": "无法登录"}), 403
+    ok, msg = friend_auth.send_code(qq)
+    return jsonify({"ok": ok, "message": msg, "error": "" if ok else msg}), \
+        (200 if ok else 400)
+
+
+@app.route("/gv/verify", methods=["POST"])
+def gv_verify():
+    if not rate_ok("gv_verify"):
+        return jsonify({"ok": False, "error": "试太多次了，等一会儿"}), 429
+    data = request.get_json(silent=True) or {}
+    qq = str(data.get("qq") or "").strip()
+    if not guest_view.is_admin(qq):
+        return jsonify({"ok": False, "error": "无法登录"}), 403
+    ok, msg, token = friend_auth.verify(qq, data.get("code"))
+    if not ok:
+        return jsonify({"ok": False, "error": msg}), 400
+    resp = make_response(jsonify({"ok": True}))
+    resp.set_cookie(friend_auth.COOKIE_NAME, token,
+                    max_age=friend_auth.COOKIE_TTL, httponly=True,
+                    samesite="Lax", secure=_cookie_secure(), path="/")
+    return resp
+
+
+@app.route("/gv/list")
+def gv_list():
+    if not _gv_admin():
+        return jsonify({"ok": False, "error": "没登录"}), 401
+    try:
+        r = requests.get(BACKEND + "/api/persona_admin/list",
+                         headers={"X-Friend-Token": friend_auth.secret()},
+                         timeout=15)
+        d = r.json()
+    except Exception as e:                            # noqa: BLE001
+        return jsonify({"ok": False, "error": "后端读不到：%s" % e}), 502
+    rows = [x for x in (d.get("sessions") or [])
+            if x.get("source") == "guest"]
+    return jsonify({"ok": True, "total": len(rows), "sessions": rows})
+
+
+@app.route("/gv/detail")
+def gv_detail():
+    if not _gv_admin():
+        return jsonify({"ok": False, "error": "没登录"}), 401
+    key = str(request.args.get("key") or "").strip()
+    try:
+        r = requests.get(BACKEND + "/api/persona_admin/detail",
+                         params={"key": key, "source": "guest"},
+                         headers={"X-Friend-Token": friend_auth.secret()},
+                         timeout=20)
+    except Exception as e:                            # noqa: BLE001
+        return jsonify({"ok": False, "error": "后端读不到：%s" % e}), 502
+    return Response(r.content, status=r.status_code,
+                    content_type=r.headers.get("Content-Type"))
 
 
 @app.route("/api/gal/<path:sub>", methods=["GET", "POST", "DELETE"])
