@@ -3532,15 +3532,12 @@ _DIRECTOR_GUIDE = (
     "再让编剧复述一遍只是白花 token。\n"
 )
 
-_INTENT_PROMPT = """先判断下面这句话**在干什么**，再把这一轮拆开。只输出一个 JSON 对象，不要解释。
+_INTENT_PROMPT = """判断下面这句话**在干什么**。只输出一个 JSON 对象，不要解释。
 
 {
   "intent": "intimate | joke | literal | insult | neutral",
   "finish": "inside | outside | none | unknown",
   "note": "用不超过 15 个字说明他到底在干什么",
-  "segments": [
-    {"who": "用户 | 助手", "type": "说 | 做 | 想", "text": "说→原文；做→一句话概括；想→空串"}
-  ],
   "addressed": true,
   "subtext": "他真正想要 / 试探 / 回避什么",
   "noticed": "她能从外在表现里察觉到什么",
@@ -3569,7 +3566,6 @@ finish（这一轮有没有「射在里面」）：只有明确发生/要求内�
 **括在（）里的动作也算发生**：像「（我把精液射进她的小穴里）」这种，
 是他真的在做，按字面判 inside，不要因为写法简短就判 none。
 
-%(segment_guide)s
 %(director_guide)s
 【最近发生过什么】（供你判断语境；不要复述、不要改动）
 %(recent)s
@@ -3865,7 +3861,6 @@ def _judge_intent(card, said, state="", history=None, note=""):
         "said": str(said or "")[:2000],
         "recent": _judge_recent(history),
         "ledger": _judge_ledger(note),
-        "segment_guide": _SEGMENT_GUIDE,
         "director_guide": _DIRECTOR_GUIDE,
     }
     try:
