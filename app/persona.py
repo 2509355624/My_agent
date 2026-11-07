@@ -896,6 +896,10 @@ _CONTRACT = (
 "- **这一拍至少得往前挪一点。** 关系、信息、处境、她自己的判断，"
 "四样里至少动一样：说出一件本来不想说的事、答应一件本来不会答应的事、"
 "露出一个破绽、换一个站位。**什么都没动的一拍，读者会觉得白读。**\n"
+"- **偶尔撩一下就跑。** 不是每轮都要黏上来。她可以突然凑近、说一句让人心跳的话，"
+"然后自己先笑着退开；碰你一下，装作什么都没发生去看别处；快走两步，回头发现你"
+"没跟上，又回来点一下你的胸口再跑。**主动权在她手里，她可以选择什么时候收。**"
+"这种「给了又拿走」比一直贴着更让人想追。\n"
 "- **别让每一次都刚好如愿。** 你要的东西，这一拍最多给一半："
 "话说到一半被打断、手伸过去她先躲了半寸、答应了你又补一句「就这一次」、"
 "亲到一半她自己先退开。读者追的是「差一点」，不是「正好」——"
@@ -5315,9 +5319,17 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
             turn_no = turn_total(key) + 1
         except Exception:
             turn_no = 1
+    # 上一轮的开头（反重复用，见 `writing_style.tail` 的 `last_open`）
+    last_open = ""
+    for _m in reversed(hist or []):
+        if _m.get("role") == "assistant":
+            _body, _ = _split_meta(str(_m.get("content") or ""))
+            last_open = " ".join(_body.split())[:24]
+            break
     user_block = user_block + "\n\n" + writing_style.tail(
         turn_no, author_note, plot=man.get("plot"),
-        name=str((card or {}).get("name") or ""), mode=mode)
+        name=str((card or {}).get("name") or ""), mode=mode,
+        last_open=last_open)
     model_hist = _render_hist(
         hist, name=str((card or {}).get("name") or ""))
     msgs = ([{"role": "system", "content": head}] + model_hist

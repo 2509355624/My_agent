@@ -159,7 +159,7 @@ LENGTH_ANCHOR = (
 PLOT_PREFIX = "这一拍往这个方向走，让它真的发生在画面里："
 
 
-def tail(turn_no=None, note="", plot="", name=None, mode=""):
+def tail(turn_no=None, note="", plot="", name=None, mode="", last_open=""):
     """L3 + L4：所有组装路径共用的近因尾注，只拼在最后一条 user 消息末尾。
 
     常态（不给轮次、没写调子、没写剧情推进）只返回「人称视角 + 篇幅」两句
@@ -182,6 +182,12 @@ def tail(turn_no=None, note="", plot="", name=None, mode=""):
     if clean:
         bits.append("这一幕：" + clean)
     bits.append(anchor_for(name))
+    # 反重复（2026-11-08）：模型会反复用同一个起手式，因为它觉得「这样写不会错」。
+    # 把它上一轮的原话摘一句放这儿，比空喊「不要重复」有用得多——
+    # 它不知道「最近用过什么」，但知道「这一句用过了」。
+    lo = " ".join(str(last_open or "").split())[:24]
+    if lo:
+        bits.append("上一轮你是这样开头的：「%s」——这一轮换个起手式" % lo)
     mline = mode_line(mode) if mode else ""
     if mline:
         bits.append(mline)
