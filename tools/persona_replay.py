@@ -479,6 +479,44 @@ def _dry(key, text):
     return 0
 
 
+def _settle_note(key, timeout=120):
+    """等这一轮触发的账本压缩落盘再继续。
+
+    `_bump_turn` 攒够 `NOTE_EVERY_TURNS` 轮会起一个 daemon 线程去压缩——
+    生产服务常驻，没问题；脚本跑完 5 轮就退出，那个线程直接被掐死，账本
+    停在上一版，`note_due` 还挂在 5。批量测长期记忆时会误判成「账本没更新」。
+
+    做法：先等后台线程（它在 `_NOTE_RUNNING` 里挂着），超时或线程已经不在
+    而节拍仍满，就同步补压一次。
+    """
+    persona = _persona()
+    due = getattr(persona, "NOTE_EVERY_TURNS", 5)
+    running = getattr(persona, "_NOTE_RUNNING", None)
+    if running is not None:
+        t0 = time.time()
+        while key in running and time.time() - t0 < timeout:
+            time.sleep(0.2)
+    st = persona._entry(key) or {}
+    if int(st.get("note_due") or 0) < due:
+        return False
+    if running is not None and key in running:
+        print("  ! 账本压缩超时未完成，先往下走")
+        return False
+    print("  账本压缩中（第 %s 轮这一批）…" % st.get("note_due"))
+    t0 = time.time()
+    ok = False
+    try:
+        ok = persona.compress_note(key)
+    except Exception as exc:                             # noqa: BLE001
+        print("  ! 账本压缩失败：%s" % exc)
+        return False
+    st = persona._entry(key) or {}
+    print("  账本 %s（%d 字，%.1fs）"
+          % ("已更新" if ok else "没变",
+             len(str(st.get("note") or "")), time.time() - t0))
+    return ok
+
+
 def _one_turn(key, text, idx=None):
     persona = _persona()
     t0 = time.time()
@@ -514,6 +552,7 @@ def _one_turn(key, text, idx=None):
         "tier": aff.get("tier"),
         "value": aff.get("value"),
     })
+    _settle_note(key)
     return reply
 
 
