@@ -450,11 +450,6 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    "mosslight3": "moss-light",
                    "moss-light1": "moss-light", "moss-light2": "moss-light",
                    "moss-light3": "moss-light",
-                   # 细节档（2026-11-07）：渠道目录名本身是中文 `moss细节`，
-                   # 值直接指向它自己。不登记的话 `_fixed_chan` 查不到键会把
-                   # token 原样当渠道 id 报未知（和 `moss光影` 同一个坑）。
-                   "moss细节": "moss细节", "mossdetail": "moss细节",
-                   "moss-detail": "moss细节", "moss 细节": "moss细节",
                    "日系": "krea2-rella"}
 _FIXED_CHAN_RE = re.compile(
     r"(?<![0-9A-Za-z_])"
@@ -526,10 +521,6 @@ _FIXED_CHAN_RE = re.compile(
     # 只写 `moss` 会把「光影」当正文喂进提示词。`[-\s]*` 同时认 `moss-light`
     # 与「moss 光影」；尾巴的 1/2/3 是老分档说法，一并吃掉归到同一条。
     r"|moss[-\s]*(?:light|光影)\s*[123]?"
-    # 细节档（2026-11-07 新建 `skills/moss细节/`）：模板同 qunyou，但 toggle 全关，
-    # 只默认挂一个大细节 LoRA。必须排在裸 `moss` 前整词吃掉，否则「细节」两个字
-    # 会漏进正文当提示词。
-    r"|moss[-\s]*(?:细节|detail)"
     r"|moss)"
     r"(?![0-9A-Za-z_])",
     re.I)
@@ -1098,7 +1089,7 @@ MORE_CHAN_TEXT = (
     "【★qwen】qwen\n"
     "【★miao】miao\n"
     "\n"
-    "【其他】moss ｜ moss光影 ｜ moss细节 ｜ silver-hd ｜ qwen-hd\n"
+    "【其他】moss ｜ moss光影 ｜ silver-hd ｜ qwen-hd\n"
     "　　　　qwen角色设定表 ｜ qwen修复 ｜ 半厚涂 ｜ sf ｜ anima多图\n"
     "　　　　anima线条 ｜ anima写实 ｜ anima鬼针草 ｜ anima肉感 ｜ jank\n"
     "　　　　sd ｜ nffa ｜ cunny ｜ nai\n"
