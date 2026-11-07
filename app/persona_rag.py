@@ -439,7 +439,23 @@ def drop_line(line):
     _enqueue("drop", line)
 
 
+_RECENT_CACHE = {}
+_RECENT_TTL = 300
+
+
 def _recent_docs(line, batches=3, limit=12):
+    """最近几批的叙事。带 5 分钟缓存（2026-11-08）：现在每轮都要带，
+    不能每轮扫一遍全库。"""
+    key = (line, int(batches or 1), int(limit or 12))
+    row = _RECENT_CACHE.get(key)
+    if row and time.time() - row[0] < _RECENT_TTL:
+        return row[1]
+    docs = _recent_docs_uncached(line, batches, limit)
+    _RECENT_CACHE[key] = (time.time(), docs)
+    return docs
+
+
+def _recent_docs_uncached(line, batches=3, limit=12):
     """按批次取最近几条事实（2026-11-05）。
 
     为什么需要：用户问「昨天」「上次」时，小模型对代词的语义匹配很差——
@@ -467,9 +483,11 @@ def _recent_docs(line, batches=3, limit=12):
         except (TypeError, ValueError):
             continue
         groups.setdefault(key, []).append(e)
+    # 取**最近**几批（2026-11-08 改）：原来是 `[:batches]` 取最早的，
+    # 问「昨天」时拿到的可能是前天以前的内容。现在取末尾几批，组内按时间正序。
+    keys = sorted(groups.keys())[-max(1, int(batches or 1)):]
     out = []
-    # 从早到晚排：问「昨天」时，最早那批（昨天发生的事）先进入演员的视野。
-    for key in sorted(groups.keys())[:max(1, int(batches or 1))]:
+    for key in keys:
         out.extend(groups[key])
     return out[:limit]
 
@@ -823,6 +841,12 @@ def build_block(line, query, k=None, day=None, context=""):
     if anchor:
         seen = {str(d.get("id") or "") for d in anchor}
         docs = anchor + [d for d in docs if str(d.get("id") or "") not in seen]
+    # 最近 2 批无条件带上（2026-11-08 用户拍板）：向量对「昨天吃了什么」这种
+    # 泛问经常算不准，最近发生的事却几乎总是相关的。多几百字，换「她记得」。
+    recent = _recent_docs(line, batches=2)
+    if recent:
+        seen = {str(d.get("id") or "") for d in docs}
+        docs = [d for d in recent if str(d.get("id") or "") not in seen] + docs
     if context:
         extra = retrieve(line, context, k=k, day=day)
         seen = {str(d.get("id") or "") for d in docs}
