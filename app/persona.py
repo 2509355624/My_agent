@@ -6534,7 +6534,12 @@ def draw(scene, card, session_key, reply_to="", state="", skill=None,
         return ""       # 没写画面行 = 这一轮不出图，调用方不用替它守
     seed = random.randint(0, 2 ** 32 - 1)
     chan = skill or FAST_SKILL
-    wf = gi.build_t2i_workflow(chan, prompt, seed)
+    # 角色卡上写了 `char_lora` 就硬挂（2026-11-08 用户拍板）：卡已经知道
+    # 她是谁，不用再让角色库猜一遍。没写就原样（旧行为，走向量召回）。
+    wf = gi.build_t2i_workflow(
+        chan, prompt, seed,
+        user_text=str((card or {}).get("name") or ""),
+        key=str((card or {}).get("char_lora") or ""))
     if wf is None:
         log.warning("扮演配图渠道 %s 没有文生图工作流", chan)
         return ""

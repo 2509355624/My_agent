@@ -824,7 +824,7 @@ def _apply_i2i_placeholders(workflow, uploaded, denoise_txt):
     return workflow
 
 
-def build_t2i_workflow(skill, prompt, seed, user_text=""):
+def build_t2i_workflow(skill, prompt, seed, user_text="", key=""):
     """按渠道模板 + 提示词 + 种子构建**文生图**工作流 dict。
 
     供 worker 的「随机口令被拦静默重抽」用（image_jobs.process）。skill 不
@@ -842,8 +842,11 @@ def build_t2i_workflow(skill, prompt, seed, user_text=""):
     # 角色 LoRA 节点、触发词追加进提示词。没命中零干预；文件缺失时
     # match 返回 None（宁可角色不像，不能整单报 value_not_in_list）。
     from app import char_loras
+    # `key`（2026-11-08）：角色卡上写死的 LoRA key。给了就直接查库，
+    # 不再走向量召回 + 大模型判定——扮演配图每轮都出图，多一次判定就是
+    # 多一次延迟和一次调用；卡上已经知道她是谁了，没必要再问一遍。
     wf, prompt = char_loras.apply(skill, prompt, sd["workflow"],
-                                  user_text=user_text)
+                                  user_text=user_text, key=key)
     return apply_prompt_placeholders(json.dumps(wf),
                                      prompt, seed)
 
