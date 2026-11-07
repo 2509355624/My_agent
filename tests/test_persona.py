@@ -283,7 +283,7 @@ class TurnTest(PersonaBase):
             out = persona.run_turn(self.KEY, "再要一次", "private", "张三")
         self.assertTrue(out.reply)
         # 还在同一天——跨天由 `/api/persona/finish_night` 负责。
-        self.assertEqual(persona.game_day(self.KEY), 1)
+        self.assertEqual(persona.game_day(self.KEY), 0)
         # 但要告诉前端「这是第 5 次，该弹第二个窗了」。
         self.assertIsInstance(out.aff, dict)
         self.assertTrue(out.aff["climax"]["last"])
@@ -2410,9 +2410,13 @@ class GameDayTest(PersonaBase):
         return persona._gameday(
             persona._entry(persona.resolve_line(self.KEY)))
 
-    def test_old_entry_defaults_to_day_one(self):
-        """老存档没有 gameday 字段，自动从第 1 天开始。"""
-        self.assertEqual(self._gday()["day"], 1)
+    def test_old_entry_defaults_to_day_zero(self):
+        """老存档没有 gameday 字段，从第 0 天开始（2026-11-07 改）。
+
+        开场白那一晚算第 0 天：以前默认 1，玩家点一次切时段看到「第 1 天」，
+        以为被推进了一天。
+        """
+        self.assertEqual(self._gday()["day"], 0)
 
     def test_overnight_advances_day_and_resets_turns(self):
         line = persona.resolve_line(self.KEY)
@@ -2420,7 +2424,7 @@ class GameDayTest(PersonaBase):
         persona._apply_gameday(line, {"time": "none"})
         gd = persona._apply_gameday(line, {"time": "overnight",
                                            "phase": "早晨"})
-        self.assertEqual(gd["day"], 2)
+        self.assertEqual(gd["day"], 1)          # 第 0 天 + 1
         self.assertEqual(gd["turns_today"], 0)
         self.assertEqual(gd["phase"], "早晨")
 
@@ -2430,7 +2434,7 @@ class GameDayTest(PersonaBase):
         persona._apply_gameday(line, {"time": "none", "plan": "去游乐场"})
         gd = self._gday()
         self.assertEqual(gd["plan"], "去游乐场")
-        self.assertEqual(gd["plan_day"], 2)
+        self.assertEqual(gd["plan_day"], 1)     # 第 0 天 + 1
         persona._apply_gameday(line, {"time": "overnight"})
         gd = self._gday()
         # 兑现后写成**过去式**（2026-11-06）：写成「约定：「…」」时模型会把它
@@ -2442,7 +2446,7 @@ class GameDayTest(PersonaBase):
         line = persona.resolve_line(self.KEY)
         persona._apply_gameday(line, {"time": "none", "plan": "去游乐场"})
         blk = persona._gameday_block(self._gday())
-        self.assertIn("第 1 天", blk)
+        self.assertIn("第 0 天", blk)
         self.assertIn("去游乐场", blk)
         for _ in range(30):                        # 超过 _DAY_TURNS_SOFT
             persona._apply_gameday(line, {"time": "none"})
@@ -2456,7 +2460,7 @@ class GameDayTest(PersonaBase):
             turn = persona.jump_phase(self.KEY, "中午")
         self.assertIsNotNone(turn)
         self.assertIn("中午", turn.reply)
-        self.assertEqual(self._gday()["day"], 1)      # 不推进天数
+        self.assertEqual(self._gday()["day"], 0)      # 不推进天数
         self.assertEqual(self._gday()["phase"], "中午")
         hist = persona._load_hist(persona.resolve_line(self.KEY))
         self.assertEqual(len(hist), 1)
@@ -2469,7 +2473,7 @@ class GameDayTest(PersonaBase):
             turn = persona.skip_day(self.KEY)
         self.assertIsNotNone(turn)
         self.assertIn("早啊", turn.reply)
-        self.assertEqual(self._gday()["day"], 2)
+        self.assertEqual(self._gday()["day"], 1)     # 第 0 天 + 1
         hist = persona._load_hist(persona.resolve_line(self.KEY))
         self.assertEqual(len(hist), 1)
         self.assertEqual(hist[0]["role"], "assistant")
@@ -2638,7 +2642,7 @@ class TimeJumpPromptTest(PersonaBase):
             self.assertIsNotNone(persona.skip_day(self.KEY))
         self.assertIn("早啊，游乐园还去吗？", seen["sys"])
         self.assertIn("上一轮是她先开的口", seen["sys"])
-        self.assertEqual(persona._gameday(persona._entry(line))["day"], 3)
+        self.assertEqual(persona._gameday(persona._entry(line))["day"], 2)
 
     # ── D：指令归 system，玩家语域只留一句时间事实 ──
     def test_skip_task_lives_in_system(self):
@@ -2737,14 +2741,14 @@ class RollbackTurnTest(PersonaBase):
         self._feed(line)
         persona._apply_gameday(line, {"time": "none"})
         persona._apply_gameday(line, {"time": "overnight", "phase": "早晨"})
-        self.assertEqual(persona._gameday(persona._entry(line))["day"], 2)
+        self.assertEqual(persona._gameday(persona._entry(line))["day"], 1)
         persona._save_mood(line, "开心", 3, "在家里")
         persona._bump_turn(line)
         persona._bump_turn(line)
         res = persona.rollback_last_turn(self.KEY)
         self.assertTrue(res["ok"])
         gd = persona._gameday(persona._entry(line))
-        self.assertEqual(gd["day"], 1)          # 「过夜」也退回来了
+        self.assertEqual(gd["day"], 0)          # 「过夜」也退回来了
         self.assertEqual(gd["turns_today"], 1)
         self.assertEqual(res["mood"], "")       # 退回这轮覆盖前的空状态
         self.assertEqual(persona._entry(line).get("turns"), 1)

@@ -424,6 +424,123 @@ _ORGASM_LAYERS = {
     ),
 }
 
+# 冲动值 → 她这一拍**主动做到哪一步**（2026-11-07 用户点名）。
+#
+# 和 `_ORGASM_LAYERS` 的分工：那一组管「节奏走到哪了」（怎么写），这一组管
+# 「谁在主导」（她该不该自己动手）。以前冲动值只喂给打分器，第二段一个字都
+# 看不到，所以数值再高她也只会「撑着、忍着」——玩家说的「75% 了还等着我动」
+# 就是这个缺口。
+_AROUSAL_LAYERS = {
+    "calm": (
+        "### 她这会儿不想\n"
+        "\n"
+        "没往那上面想。你不主动，她就不会往那儿带；你靠过来，她先是没反应，\n"
+        "要过一拍才意识到。**这一拍别让她自己贴上去**——那样数值就白算了。\n"
+    ),
+    "mild": (
+        "### 她有点想了，但不会说\n"
+        "\n"
+        "给信号不点破：靠近半步、手指停在袖口上、话说一半看你一眼又移开。\n"
+        "她会给自己找台阶（「你手怎么这么凉」），**等你去接**。\n"
+        "你接住，她才往下走；你没接，她会有点失落，但不会追。\n"
+    ),
+    "warm": (
+        "### 她在往你这边递\n"
+        "\n"
+        "开始主动造机会：找话说、坐得比该坐的近、碰一下又不当回事。\n"
+        "**这一拍她会给第二次机会**——你退一步，她再递一次，语气里带一点\n"
+        "自己都没察觉的急。\n"
+    ),
+    "hot": (
+        "### 她不等暗示了\n"
+        "\n"
+        "自己贴上来、拉你的手、亲一下退开又回来。**这一拍她主动**，\n"
+        "但还留着一层面子：被你正眼看会别开脸，嘴上还要找个理由\n"
+        "（「就一下」「别多想」）。动作比话诚实。\n"
+    ),
+    "burning": (
+        "### 她已经压不住了\n"
+        "\n"
+        "**不等你答应，自己动手。** 抓、拽、跨上来、把话打断——\n"
+        "理智只剩最后一层，她想的是「先做了再说」。\n"
+        "做完那一下才反应过来自己刚才什么样，失措、脸红、想装作没发生。\n"
+        "**这一拍不要写成她还在征求同意**，那是低档位的写法。\n"
+    ),
+}
+
+
+# 时段 → 这一拍她的状态和「约得动约不动」（2026-11-07）。
+#
+# 状态值本来是**没有时间**的：冲动 84 在下午两点和深夜十一点是两回事。
+# 这里给每个时段一句「她的处境」+ 一条门槛，让模型自己算「这句邀约合不合理」，
+# 而不是让代码硬拒——硬拒会把她变成机器人，提示词约束才会演。
+_TIME_LAYERS = {
+    "早晨": (
+        "刚醒，反应慢半拍，话也少。昨晚的事还挂在脸上，你不提她也想得起来。\n"
+        "**这个点约她出门最容易答应**——她还没开始防你。"
+    ),
+    "上午": (
+        "脑子清醒，戒备也是一天里最低的。普通邀约、顺路同行都好说。\n"
+        "**她对「你为什么突然找我」的注意力最低。**"
+    ),
+    "中午": (
+        "饿，注意力一半在饭上。谈正事、约饭都顺；这个点她说「不」多半只是客气。"
+    ),
+    "下午": (
+        "一天里最松的时段，愿意多待一会儿，也最容易把话说过头。\n"
+        "**她会在这种时候说出平时不会说的话**，说完自己先愣一下。"
+    ),
+    "傍晚": (
+        "天在暗，天然的借口。她心里知道接下来可能发生什么，嘴上还在犹豫。\n"
+        "**冲动值 45 以上，她就不会真的拒绝**——推两下就顺着走了。"
+    ),
+    "深夜": (
+        "这个点约她出门，**冲动值不到 60 她不会答应**：要么说「明天吧」，\n"
+        "要么答应了、动作全是敷衍。但真出了门，她的戒备是一天里最低的——\n"
+        "太晚了，她只能依赖你。也会因为太晚，比平时更放得开。"
+    ),
+}
+
+
+def body_state_block(aff_res, gd=None):
+    """数值 + 档位 + 行为定性（2026-11-07）。
+
+    以前第二段只看得到 `_ORGASM_LAYERS` 挑出的一段文笔指导：知道「临界了」，
+    不知道是 76 还是 94；冲动值则一个字都没有。结果是模型没有连续量，
+    上一轮写得快到了、下一轮又回到「她还忍着」。
+
+    只读 `affection.settle()` 的返回值，不碰任何存储。
+    """
+    if not isinstance(aff_res, dict) or not aff_res.get("active"):
+        return ""
+    try:
+        ex = int(aff_res.get("excite") or 0)
+        ar = int(aff_res.get("arousal") or 0)
+    except (TypeError, ValueError):
+        return ""
+    try:
+        from app import affection
+        ol = affection.orgasm_level(ex) or {}
+        al = affection.arousal_level(ar) or {}
+    except Exception:                                     # noqa: BLE001
+        ol, al = {}, {}
+    lines = ["## 她现在的身体（这一轮就按这个演，数值不要跳）"]
+    # 时间放在最前面（2026-11-07）：先定「现在几点」，再谈数值。同一组数字
+    # 放在深夜和下午，该写出来的东西完全不一样。
+    gd = gd if isinstance(gd, dict) else {}
+    ph = normalize_phase(gd.get("phase"))
+    lines.append("第 %d 天 · %s" % (_day_of(gd), ph or "时段未定"))
+    tlayer = _TIME_LAYERS.get(ph or "")
+    if tlayer:
+        lines.append(tlayer)
+    lines.append("高潮 %d/100 · %s" % (ex, ol.get("name") or "—"))
+    lines.append("冲动 %d/100 · %s" % (ar, al.get("name") or "—"))
+    layer = _AROUSAL_LAYERS.get(str(al.get("key") or ""))
+    if layer:
+        lines.append(layer)
+    return "\n".join(lines)
+
+
 # 堕落高的时候再加一层：她的反应已经不只是身体的了。
 _CORRUPT_LAYER = (
     "### 她现在不一样了\n"
@@ -536,7 +653,7 @@ _CONTRACT = (
     "1. **正文** —— 一段小说式的第三人称叙述（写法见下一节）。\n"
     "2. **`画面：`** —— 英文一行。\n"
     "3. **`心情：`** —— 情绪 + 强度。\n"
-    "4. **`状态：`** —— 中文一句话。\n"
+    "4. **`状态：`** —— 地点 · 衣着 · 接触 · 时段，四段用 ` · ` 隔开。\n"
     "\n"
     "正文之后空一行，按 2→3→4 写三行，每行以行首的中文标签开头。"
     "这三行是给系统读的元数据，标签照写、内容写清楚就好。\n"
@@ -721,7 +838,7 @@ _CONTRACT = (
     "- **穿什么**（具体到哪件、什么状态。这一项最重要，直接决定画面里她穿什么）\n"
     "- 跟你有没有肢体接触\n"
     "\n"
-    "示例：`靠窗坐着 · 白衬衫解开两粒扣 · 你扶着她的肩`\n"
+    "示例：`靠窗坐着 · 白衬衫解开两粒扣 · 你扶着她的肩 · 傍晚`\n"
     "\n"
     "穿什么写具体：「宽松白T恤和居家短裤」「浴袍」「只裹着浴巾」这种一眼能看见的说法。"
     "状态接着上一轮往下走：上一轮脱掉的外套这一轮还脱着，上一轮到哪一步就接着哪一步。\n"
@@ -733,8 +850,13 @@ _CONTRACT = (
     "```\n"
     "画面：<英文一行，含穿着>\n"
     "心情：<情绪> 强度<N>\n"
-    "状态：<在哪> · <穿什么> · <接触>\n"
+    "状态：<在哪> · <穿什么> · <接触> · <时段>\n"
     "```\n"
+    "\n"
+    "**`<时段>` 一定要写**：早晨 / 上午 / 中午 / 下午 / 傍晚 / 深夜，六个里挑一个。\n"
+    "它是系统判断「现在几点」的唯一来源——不写，时间弹窗就不知道高亮哪一格，\n"
+    "状态值也没法跟时间对上（深夜和下午，同一句话的分量不一样）。\n"
+    "时段变了就跟着改；没变也要照写，留空这一轮就没有时间。\n"
     "\n"
     "这三行是给系统读的，标签后面都要有内容。正文写得再投入，也记得把它们补上。\n"
     "\n"
@@ -4016,7 +4138,7 @@ def _judge_intent_scored(card, said, state="", line_key="", gameday=None,
         "recent": ctx["recent"],
         # 游戏内时间（2026-11-04）：打分 AI 顺带管时间推进，得知道今天第几天、
         # 有没有挂着没兑现的约定。
-        "gday": int(gd.get("day") or 1),
+        "gday": _day_of(gd),
         # 当前时段（2026-11-07）：2026-11-07 的复测发现 phase 字段永远是空的——
         # 打分器只看得到「第几天」，看不到「现在是早晨」，它就没法判断「变了没有」。
         # 不给这一格，`gd["phase"]` 只能靠玩家手动点时间按钮才会动。
@@ -4243,7 +4365,10 @@ def _gameday(ent):
     gd = ent.get("gameday")
     if not isinstance(gd, dict):
         gd = {}
-    gd["day"] = max(1, _as_int(gd.get("day"), 1, 1, 99999))
+    # 第 0 天 = 开场白那一晚（2026-11-07 用户点名）：以前下限是 1，
+    # 开场就是「第一天」，玩家点切时段看到「第 1 天 · 中午」，以为被推进了一天。
+    # 跨天（force_new_day / overnight）才 +1，第 0 天之后才是第 1 天。
+    gd["day"] = max(0, _as_int(gd.get("day"), 0, 0, 99999))
     gd["phase"] = str(gd.get("phase") or "")[:12]
     gd["plan"] = str(gd.get("plan") or "")[:80]     # 挂着的约定
     gd["plan_day"] = _as_int(gd.get("plan_day"), 0, 0, 99999)
@@ -4256,10 +4381,27 @@ def _gameday(ent):
     return gd
 
 
+def _day_of(gd):
+    """游戏日；缺字段按 0。
+
+    2026-11-07 起第 0 天是合法的（= 开场白那一晚），所以**不能**再写
+    `gd.get("day") or 1`——那个写法会把 0 当成「没值」，开场立刻跳成第 1 天，
+    这正是玩家看到的「点一下切时段就多了一天」。
+    """
+    try:
+        v = (gd or {}).get("day")
+    except AttributeError:
+        v = None
+    try:
+        return 0 if v is None else int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _roll_event(gd):
     """新的一天开什么：约定 > 随机事件（两成）> 普通的一天。"""
     plan = str(gd.get("plan") or "").strip()
-    if plan and (gd.get("plan_day") or 0) <= (gd.get("day") or 1):
+    if plan and (gd.get("plan_day") or 0) <= _day_of(gd):
         gd["plan"] = ""                             # 兑现了，销账
         gd["plan_day"] = 0
         # 用**过去式**（2026-11-06 用户报「都到目的地了还在提赶路」）：
@@ -4310,11 +4452,11 @@ def _apply_gameday(key, score=None, force_new_day=False, days=1):
         t = str(score.get("time") or "none").strip().lower()
         if t in ("overnight", "skip_days"):
             gd["day"] = int(gd["day"]) + (3 if t == "skip_days" else 1)
-            gd["phase"] = str(score.get("phase") or "")[:12]
+            gd["phase"] = normalize_phase(score.get("phase"))[:12] or gd["phase"]
             gd["event"] = _roll_event(gd)
             gd["turns_today"] = 0
         else:
-            ph = str(score.get("phase") or "").strip()
+            ph = normalize_phase(score.get("phase"))
             if ph:
                 gd["phase"] = ph[:12]
         plan = str(score.get("plan") or "").strip()
@@ -4334,7 +4476,7 @@ def _gameday_block(gd):
     if not isinstance(gd, dict):
         return ""
     phase = str(gd.get("phase") or "").strip()
-    lines = ["【游戏时间】第 %d 天%s" % (gd.get("day") or 1,
+    lines = ["【游戏时间】第 %d 天%s" % (_day_of(gd),
                                       ("，" + phase) if phase else "")]
     place = str(gd.get("place") or "").strip()
     if place:
@@ -4353,7 +4495,7 @@ def _gameday_block(gd):
     plan = str(gd.get("plan") or "").strip()
     if plan:
         pd = gd.get("plan_day") or 0
-        when = ("（约在第 %d 天）" % pd) if pd and pd > (gd.get("day") or 1) \
+        when = ("（约在第 %d 天）" % pd) if pd and pd > _day_of(gd) \
             else "（就说今天）"
         lines.append("挂着的约定：%s%s" % (plan, when))
     if int(gd.get("turns_today") or 0) >= _DAY_TURNS_SOFT:
@@ -4499,9 +4641,50 @@ def game_day(session_key):
     return _gameday(ent).get("day")
 
 
-# 网页「今天时段」手动切换的四个档（2026-11-05 用户要求）。
+# 游戏内时段（2026-11-05 四档 → 2026-11-07 六档）。
 # 只改 gameday.phase：不推进天数、不掷事件、不触发怀孕结算。
-PHASES = ("早晨", "中午", "下午", "晚上")
+#
+# 为什么从四个变六个：打分器的提示词一直写的是「早晨 / 上午 / 中午 / 下午 /
+# 傍晚 / 深夜」，它按这个交 phase；后端却只认四档，`傍晚` 被 `set_phase` 直接
+# 拒掉，前端按钮里也没有这一档——于是正文写着傍晚、状态栏还停在早晨，玩家
+# 点时间弹窗看不到任何高亮。三处词表必须同一张。
+PHASES = ("早晨", "上午", "中午", "下午", "傍晚", "深夜")
+
+# 旧数据、旧按钮、模型自由发挥的写法 → 归一。不改的话历史会话里的「晚上」
+# 会永远卡在 `set_phase` 外面。
+PHASE_ALIAS = {
+    "早晨": "早晨", "清晨": "早晨", "早上": "早晨", "清早": "早晨",
+    "上午": "上午", "接近中午": "上午",
+    "中午": "中午", "正午": "中午", "午间": "中午",
+    "下午": "下午", "午后": "下午",
+    "傍晚": "傍晚", "黄昏": "傍晚", "晚上": "傍晚", "入夜": "傍晚",
+    "深夜": "深夜", "夜里": "深夜", "夜晚": "深夜", "凌晨": "深夜",
+    "半夜": "深夜",
+}
+
+
+def normalize_phase(value):
+    """任意写法 → PHASES 里的那一档；认不出来原样返回（交给调用方判）。"""
+    ph = str(value or "").strip()
+    if not ph:
+        return ""
+    if ph in PHASE_ALIAS:
+        return PHASE_ALIAS[ph]
+    # 「傍晚前后」这类：取包含的**最长**那个已知档位（短词先命中会选错，
+    # 「傍晚前后」里同时含「傍晚」和「下午」）。
+    for word, norm in sorted(PHASE_ALIAS.items(), key=lambda kv: -len(kv[0])):
+        if len(word) >= 2 and word in ph:
+            return norm
+    return ph
+
+
+def phase_index(value):
+    """当前时段在一天里的位置；认不出来返回 -1（前端灰显用）。"""
+    ph = normalize_phase(value)
+    try:
+        return PHASES.index(ph)
+    except ValueError:
+        return -1
 
 
 def game_phase(session_key):
@@ -4518,7 +4701,7 @@ def set_phase(session_key, phase, sender_uin=""):
     刻意不碰 `gameday_prev`：切时段不是一轮对话，回退上一轮不该把它撤掉。
     也不重置 `turns_today`，否则「这一天聊了很久」的收束节拍会被刷掉。
     """
-    ph = str(phase or "").strip()
+    ph = normalize_phase(phase)
     if ph not in PHASES:
         return None
     key = resolve_line(_persona_key(session_key, sender_uin))
@@ -4658,7 +4841,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     note = str(ent.get("note") or "")
     prev_state = str(ent.get("state") or "")
     gd = _gameday(ent) if ent else None
-    day_before = int((gd or {}).get("day") or 1)
+    day_before = _day_of(gd)
 
     # 历史先读出来（2026-11-05）：第一段从「打分器」升级成「整理器 + 编剧」，
     # 它也要看最近发生过什么，才能判潜台词。原来它只看当前这一句。
@@ -4838,6 +5021,11 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         extra = intimate_guide(aff_res)
         if extra:
             head = head + "\n" + extra
+        # 数值 + 冲动档位（2026-11-07）：放在写法层后面，这一轮先把「她该
+        # 主动到什么程度」定下来，再谈用词。以前只有前者，模型没有连续量。
+        body = body_state_block(aff_res, gd)
+        if body:
+            head = head + "\n\n" + body
 
     # 第一轮把网页上那段开场导读也发给模型（2026-11-04）。
     # 否则玩家照着导读里的场景开口（「咖啡好香」），模型手里根本没这个场景，
@@ -5102,7 +5290,7 @@ def _time_boundary(gd, phase=None):
     也让模型明确「昨晚那一幕已经收了，下面写新的一段」，而不是顺着上一条
     assistant 把昨晚继续写下去。
     """
-    day = int((gd or {}).get("day") or 1)
+    day = _day_of(gd)
     ph = str(phase or (gd or {}).get("phase") or "").strip()
     return "（第 %d 天%s）" % (day, ("，" + ph) if ph else "")
 
@@ -5116,7 +5304,7 @@ def jump_phase(session_key, phase, sender="", sender_uin=""):
     再把跳跃前最后一幕的完整原话拼进系统头，避免剧情断片。
     返回 `Turn`；没在演返回 None。
     """
-    ph = str(phase or "").strip()
+    ph = normalize_phase(phase)
     if ph not in PHASES:
         return None
     key = resolve_line(_persona_key(session_key, sender_uin))
@@ -5154,7 +5342,7 @@ def jump_phase(session_key, phase, sender="", sender_uin=""):
     recap = _recap_block(key)
     if recap:
         head = head + "\n\n" + recap
-    task = _PHASE_TASK % (old_phase, ph, int(gd.get("day") or 1), ph)
+    task = _PHASE_TASK % (old_phase, ph, _day_of(gd), ph)
     # 2026-11-06 D：指令归 system；最后那条 user 只留一句时间事实。
     head = head + "\n\n" + task
 
@@ -5216,7 +5404,7 @@ def skip_day(session_key, sender="", sender_uin="", days=1, doing=""):
     if not ent:
         return None
 
-    old_day = int(_gameday(ent).get("day") or 1)
+    old_day = _day_of(_gameday(ent))
     gd = _apply_gameday(key, force_new_day=True, days=days)
     new_day = int((gd or {}).get("day") or old_day)
     preg_event = None
@@ -5438,7 +5626,7 @@ def finish_action(session_key, spot="", text="", sender="", sender_uin=""):
         finish = "inside"
     elif spot in ("mouth", "body"):
         finish = "outside"
-    day = int(_gameday(ent).get("day") or 1)
+    day = _day_of(_gameday(ent))
     if finish == "inside":
         try:
             _preg_record(key, card, day, finish)
@@ -5516,7 +5704,7 @@ def next_morning(session_key, sender="", sender_uin=""):
     if not ent:
         return None
 
-    old_day = int(_gameday(ent).get("day") or 1)
+    old_day = _day_of(_gameday(ent))
     gd = _apply_gameday(key, force_new_day=True, days=1) or _gameday(ent)
     new_day = int((gd or {}).get("day") or old_day)
     preg_event = None
@@ -5726,6 +5914,16 @@ def _save_mood(session_key, mood, intensity, state, prev_state=""):
         spot = str(state).split("·")[0].strip()[:40]
         if spot:
             _gameday(st)["place"] = spot
+        # 时段同步（2026-11-07）：状态行第四段是她**自己交的**「现在几点」。
+        # 以前只有第一段（地点）被解析，时段永远是开场时的默认值——玩家看到
+        # 深夜的正文、早晨的高亮，就是因为这一格没人写。
+        # 兼容旧数据：老状态行只有三段，len < 4 时不动现有的 phase。
+        seg = [x.strip() for x in str(state).split("·")]
+        if len(seg) >= 4:
+            ph = normalize_phase(seg[3])
+            if ph in PHASES:
+                gd_now = _gameday(st)
+                gd_now["phase"] = ph
     _save_state(state_data)
 
 

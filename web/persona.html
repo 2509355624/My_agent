@@ -510,6 +510,12 @@
   .skipBox .skipt { font-size: 12px; line-height: 1.7; color: var(--text-dim); }
   .skipBtns { display: flex; gap: 8px; margin: 14px 0 10px; }
   .skipBtns .btn { flex: 1; }
+  /* 六个时段（2026-11-07）：一行塞不下，硬挤会把 420px 的弹窗撑破，
+     整页跟着横向滚动——玩家拖按钮时拖的是 body，体验极差。
+     这里固定三列两行，弹窗内部禁止横向溢出。 */
+  .phaseBtns { flex-wrap: wrap; }
+  .phaseBtns .btn { flex: 1 1 calc(33.333% - 6px); min-width: 0; }
+  .skipBox { overflow-x: hidden; }
   /* 选中的预设按钮（2026-11-05）：四个位置里挑一个，再点下面的提交。 */
   .skipBtns .btn.on { border-color: var(--accent); color: var(--accent);
     background: var(--accent-dim); }
@@ -533,6 +539,15 @@
   /* 选中态（2026-11-05）：先选时段/天数，再点下面的「跳」执行。 */
   .skipBtns .btn.on { border-color: var(--accent); color: var(--accent);
     background: var(--accent-dim); }
+  /* 当前时段 / 已经过去的时段（2026-11-07）：
+     现在的描一圈琥珀色——玩家一眼看出「我现在是傍晚」；过去的灰掉，
+     同一天只能往后走，不能倒回早晨。 */
+  .phaseBtns .btn.now { border-color: #f0b429; color: #f0b429;
+    box-shadow: inset 0 0 0 1px rgba(240,180,41,.35); }
+  .phaseBtns .btn.now::after { content: " · 现在"; font-size: 10px;
+    opacity: .8; }
+  .phaseBtns .btn.past { opacity: .32; cursor: not-allowed; }
+  .phaseBtns .btn.past:hover { border-color: var(--border); color: inherit; }
   .skipCustom { display: flex; gap: 8px; align-items: center; }
   .skipCustom input { flex: 1; min-width: 0; padding: 9px 12px; font: inherit;
     font-size: 13px; color: var(--text); background: var(--bg-input);
@@ -934,9 +949,11 @@
     <div class="skipt">先选今天的时段，或者选要跳几天，再点下面的「跳」。</div>
     <div class="skipBtns phaseBtns">
       <button class="btn" data-phase="早晨">早晨</button>
+      <button class="btn" data-phase="上午">上午</button>
       <button class="btn" data-phase="中午">中午</button>
       <button class="btn" data-phase="下午">下午</button>
-      <button class="btn" data-phase="晚上">晚上</button>
+      <button class="btn" data-phase="傍晚">傍晚</button>
+      <button class="btn" data-phase="深夜">深夜</button>
     </div>
     <div class="skipt" style="margin-top:2px">切时段不推进天数，由她先开口接上。</div>
     <div class="skipBtns" style="margin-top:12px">
@@ -2629,12 +2646,39 @@ async function rollbackLast() {
 
 // ── 时间跳跃（2026-11-05）────────────────────────────
 // 1/7/30 天或自定义。后端在跨天时先结算怀孕，再由她先开口。
+// 时段顺序必须和后端 `persona.PHASES` 一字不差。分开维护过一次，
+// 结果是打分器能写「傍晚」、后端只认四档、按钮里没有这一档——状态栏和正文对不上。
+const PHASE_ORDER = ["早晨", "上午", "中午", "下午", "傍晚", "深夜"];
+
+function phaseIdx(p) {
+  const i = PHASE_ORDER.indexOf(String(p || "").trim());
+  return i;
+}
+
+let SKIP_CLOSED_AT = 0;   // 上一次关掉时间弹窗的时刻（防重开，见 openSkip）
+
 function openSkip() {
   if (busy || !card) return;
+  // 防重开（2026-11-07）：玩家点了取消、弹窗刚关，又立刻被同一个事件循环
+  // 打开——表现出来就是「点取消，它又弹出来」。1.2 秒内不允许重开。
+  if (Date.now() - SKIP_CLOSED_AT < 1200) return;
   clearJumpSel();
+  // 同一天只能往后走（2026-11-07）：已经过去的时段灰掉，当前时段描黄边。
+  // 以前这里只有「清空选择 + 显示」，所以晚上点开还能选早晨，选完又回到早上。
+  const cur = phaseIdx(CUR_PHASE);
+  document.querySelectorAll(".phaseBtns .btn").forEach(b => {
+    const i = phaseIdx(b.getAttribute("data-phase"));
+    const past = cur >= 0 && i >= 0 && i < cur;
+    b.disabled = past;
+    b.classList.toggle("past", past);
+    b.classList.toggle("now", cur >= 0 && i === cur);
+  });
   $("skipMask").classList.add("on");
 }
-function closeSkip() { $("skipMask").classList.remove("on"); }
+function closeSkip() {
+  $("skipMask").classList.remove("on");
+  SKIP_CLOSED_AT = Date.now();
+}
 
 // 时间弹窗的选择：时段和天数二选一，点「跳」才真正执行。
 function clearJumpSel() {

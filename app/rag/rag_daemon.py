@@ -183,6 +183,12 @@ def _handle(req: dict, embeddings: LocalEmbeddings, store: VectorStore) -> dict:
 def main():
     embeddings, store = _load_services()
     _reply({"id": "0", "ok": True, "event": "ready"})
+    # Windows 下 stdin 默认走 GBK（或 cp936），对面按 UTF-8 发 JSON 时第一条
+    # 中文就抛 UnicodeDecodeError，守护进程当场退出——表现是「RAG 调用超时」。
+    try:
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:                                    # noqa: BLE001
+        pass
     for line in sys.stdin:
         line = line.strip()
         if not line:

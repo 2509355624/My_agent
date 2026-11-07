@@ -462,7 +462,9 @@ def _dry(key, text):
     print("  时间块 %d 字：%s" % (len(gb), gb.replace("\n", " / ")[:160] or "（空）"))
     try:
         from app import writing_style
-        cname = str((card or {}).get("name") or "")
+        # `card` 在这里不在作用域里（这是 dry 分支，没走完整 run_turn）。
+        # 从副本那条线自己的 state 里取卡名，取不到就空着——尾注只是预览。
+        cname = str((persona._entry(key) or {}).get("card") or "")
         tail = writing_style.tail(turn_no=persona.turn_total(key), name=cname)
         print("  尾注 %d 字：%s" % (len(tail), tail.replace("\n", " / ")))
     except Exception as exc:                            # noqa: BLE001
