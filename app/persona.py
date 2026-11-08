@@ -998,10 +998,44 @@ _CONTRACT = (
     "## 画面（这一行就是她的出图提示词）\n"
     "\n"
     "**这一行是 POV 视角**（2026-11-08 用户拍板）：镜头就是「你」的眼睛，画面里"
-    "只有她一个完整的人。「你」在画面里最多是一只从下缘伸进来的手"
-    "（`viewer's hand entering from the bottom edge of the frame`），不写脸、"
-    "头发、身体、衣服，也不写第二个人的外貌词——写进去就会画出个陌生男人。"
-    "镜头那一节固定带 `first-person pov, eye level`。\n"
+    "只有她一个完整的人。\n"
+    "\n"
+    "**POV 有三种状态，每轮只选一种，选错就是多手多脚：**\n"
+    "\n"
+    "① **画面里只有她** → 只写 `pov` 一个词，不带 `pov hands`、不带 `1other`、"
+    "不带任何「你的身体部位」的词。写了什么模型就画什么——提了腿就长出腿，"
+    "提了手就长出多余的手（白熊效应，漫画工作台 2026-10-12 实测）。\n"
+    "  这一档要显示「你的手在这儿」，写成 `viewer's hand entering from the "
+    "bottom edge of the frame`（英文短语，不占 tag），比 `pov hands` 安全。\n"
+    "② **你的手入画** → **三件套齐全**才算数：`pov, pov hands, 1other`，"
+    "再写那只手在做什么（`holding another's wrist`）。只写 `pov hands` 不写 `1other`，"
+    "模型不知道那只手属于谁，会画成她自己的手。\n"
+    "③ **你本人是女性视角**（百合 / 女女向）→ 用 `female_pov` 替掉 `pov`。"
+    "`pov` 的默认先验是男性第一人称，光写它会画出一只男人的手。\n"
+    "\n"
+    "镜头那一节固定带 `first-person pov, eye level`（这是机位描述，"
+    "和上面那三个【状态】不冲突：状态讲的是**有没有你的身体部位入画**）。\n"
+    "\n"
+    "**两条硬禁令（写错必崩）：**\n"
+    "- **`solo` 和 `pov hands` / `1other` / `1boy` 永不共存。** 前者说「画面只有一个人」，"
+    "后者说「还有第二方的身体入画」，自相矛盾时模型三选一妥协：把手画成她自己、"
+    "放弃那个动作、或者画出一团畸形的手。\n"
+    "- **永不写 `hand around wrist`。** 它没写明是谁的手，实测被渲染成「她自己抓自己"
+    "手腕」。要写就写全：`holding another's wrist`；只是搭着不使劲写 "
+    "`hand on another's wrist`。\n"
+    "\n"
+    "**末尾补一句反向钉住**，写这一格最容易被画错的东西：`no other hands in frame`、"
+    "`no hands or hair covering her face`、`no text, no speech bubble`。"
+    "反向钉住比正面多写十个形容词有效（漫画工作台实测）。\n"
+    "\n"
+    "### 两条防崩写法\n"
+    "\n"
+    "- **拉扯动词会让模型腾出一只手**。衣物、动作一律写成**已经完成的状态**："
+    "`her cardigan already slipped off one shoulder`（不写 `she slips it off`）、"
+    "`the collar already pulled open`。漫画工作台实测：拉扯动词会占用双手，"
+    "多出来的那只就是这么长出来的。\n"
+    "- **景别放在这一行的开头**：`close-up of …` / `medium shot of …` / `full body of …`。"
+    "写在后半截模型经常只取前半句，最后每张都变成中景。\n"
     "\n"
     "**她冲着你做的动作，一律写成冲着镜头来**：牵手 = `reaching her hand toward "
     "the camera`、`her fingers extended toward the viewer`；凑近 = `leaning "
@@ -6948,6 +6982,19 @@ def draw(scene, card, session_key, reply_to="", state="", skill=None,
 
     _DRAW_ERR.reason = ""       # 同一个线程可能被复用，先清掉上一轮的原因
     prompt = build_prompt(card, scene, state)
+    # 出图前过一道 POV 校验（2026-11-08）：演员写的是 Danbooru tag，和漫画剧本
+    # 同一套语法，那套判据（`solo` 配 `pov hands`、`hand around wrist`、
+    # `pov hands` 缺 `1other`）在漫画那边早就有代码判据防着，扮演这条路一直
+    # 没接——实测就是多手多脚的来源。这里只做「有唯一正确答案」的自动修，
+    # 需要判断的地方不动（见 `comic_agent.repair_line`）。
+    try:
+        from app import comic_agent as _ca
+        _fixed, _changes = _ca.repair_line(prompt)
+        if _changes:
+            log.info("出图 tag 自动修正 %s：%s", session_key, "；".join(_changes))
+            prompt = _fixed
+    except Exception:                                # noqa: BLE001
+        log.warning("出图 tag 校验失败，按原文出图", exc_info=True)
     target, target_id = _session_target(session_key)
     # `target == ""` 才是「这条线没有队列身份」。不能用 `not target`：网页线
     # 的 target 是 None（见 `_session_target`），那也是合法身份。

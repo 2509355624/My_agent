@@ -686,5 +686,100 @@ class RelationAxisHelpTest(unittest.TestCase):
             self.assertIn(key, html, "前端没接 %s 的问号" % key)
 
 
+class PovTagAuditTest(unittest.TestCase):
+    """扮演画面行的 POV 校验（复用漫画那套判据，2026-11-08）。"""
+
+    def setUp(self):
+        from app import comic_agent
+        self.ca = comic_agent
+
+    def _kinds(self, line):
+        return [k for k, _, _ in self.ca.audit_line(line)]
+
+    def test_solo_with_pov_hands_is_conflict(self):
+        k = self._kinds("1girl, solo, pov, pov_hands, 1other, sitting")
+        self.assertIn("solo_conflict", k)
+
+    def test_pure_pov_without_hand_is_fine(self):
+        self.assertEqual(self._kinds("1girl, solo, pov, looking at viewer"), [])
+
+    def test_hand_around_wrist_is_banned(self):
+        k = self._kinds("1girl, pov, pov_hands, 1other, hand around wrist")
+        self.assertIn("banned_tag", k)
+
+    def test_pov_hands_needs_1other(self):
+        k = self._kinds("1girl, pov, pov_hands, sitting")
+        self.assertIn("pov_direction", k)
+
+    def test_1other_needs_pov_hands(self):
+        k = self._kinds("1girl, pov, 1other, sitting")
+        self.assertIn("pov_direction", k)
+
+    def test_repair_drops_solo(self):
+        fixed, ch = self.ca.repair_line(
+            "1girl, solo, pov, holding another's wrist")
+        self.assertNotIn("solo", fixed.split(", "))
+        self.assertTrue(any("solo" in c for c in ch))
+
+    def test_repair_adds_1other(self):
+        fixed, ch = self.ca.repair_line("1girl, pov, pov_hands, sitting")
+        parts = [x.strip() for x in fixed.split(",")]
+        self.assertIn("1other", parts)
+
+    def test_repair_replaces_banned(self):
+        fixed, ch = self.ca.repair_line(
+            "1girl, pov, pov_hands, 1other, hand around wrist")
+        self.assertNotIn("hand around wrist", fixed)
+        self.assertIn("holding another's wrist", fixed)
+
+    def test_clean_line_untouched(self):
+        s = "1girl, solo, pov, green hair, looking at viewer, soft light"
+        fixed, ch = self.ca.repair_line(s)
+        self.assertEqual(fixed, s)
+        self.assertEqual(ch, [])
+
+    def test_free_mode_skips_pov_rules(self):
+        self.assertEqual(self.ca.audit_line("1girl, solo, pov, pov_hands",
+                                            pov_mode="free"), [])
+
+
+class PovContractTest(unittest.TestCase):
+    """契约里必须写清 POV 的三种状态和两条硬禁令。"""
+
+    def test_contract_states_three_pov_modes(self):
+        from app import persona
+        c = persona._CONTRACT
+        self.assertIn("画面里只有她", c)
+        self.assertIn("你的手入画", c)
+        self.assertIn("female_pov", c)
+
+    def test_contract_bans_solo_with_hands(self):
+        from app import persona
+        c = persona._CONTRACT
+        self.assertIn("`solo` 和 `pov hands`", c)
+
+    def test_contract_bans_hand_around_wrist(self):
+        from app import persona
+        c = persona._CONTRACT
+        self.assertIn("hand around wrist", c)
+        self.assertIn("holding another's wrist", c)
+
+    def test_contract_has_negative_anchor(self):
+        from app import persona
+        self.assertIn("no other hands in frame", persona._CONTRACT)
+
+    def test_contract_bans_pulling_verbs(self):
+        from app import persona
+        c = persona._CONTRACT
+        self.assertIn("拉扯动词", c)
+        self.assertIn("already slipped off", c)
+
+    def test_draw_calls_repair(self):
+        import inspect
+        from app import persona
+        src = inspect.getsource(persona.draw)
+        self.assertIn("repair_line", src)
+
+
 if __name__ == "__main__":
     unittest.main()

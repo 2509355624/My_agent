@@ -881,6 +881,108 @@ def invented_names(text, allowed):
     return out
 
 
+# ─── 单行校验：给「扮演的画面行」用（2026-11-08）─────────────
+#
+# 漫画那边一稿十格，能按格号逐条报；扮演每轮只有**一行** tag，没有分格结构，
+# `parse_script_text` 吃不动。这里把它包成一个假的一格剧本再走同一套判据，
+# **规则一份、两个入口**，免得扮演这边另写一套慢慢和漫画那边漂移。
+#
+# 为什么扮演也需要这道校验：演员写的是 Danbooru tag，和漫画剧本同一套语法。
+# 实测踩的三个坑（`solo` 配 `pov hands`、`hand around wrist`、`pov` 用在女女向）
+# 在漫画那边早就有代码判据了，扮演这边一直没接。
+
+_LINE_POV_HINT = ("pov", "female_pov", "male_pov", "pov_hands", "1other",
+                  "disembodied_hand", "disembodied_arm")
+
+
+def audit_line(text, pov_mode="pov"):
+    """校验**一行** tag 串（扮演的画面行）。返回 `[(kind, 标签, 说明)]`。
+
+    只跑和「单行」有关、且不需要跨格上下文的判据：solo 冲突、禁用标签、
+    女女向用错视角、视角标签缺失。跨格那几条（配色统一、发饰位置一致、
+    两人合并）在这里没有意义，不跑。
+
+    `pov_mode="free"` 时整组停用——和 `collect_issues` 同一个口径。
+    """
+    import app.comic as _comic
+    raw = str(text or "")
+    parts = [x.strip() for x in raw.split(",") if x.strip()]
+    keys = [_db_key(_norm_tag(x)) for x in parts]
+
+    out = []
+    if pov_mode == "pov":
+        # ① solo 和第二方身体部位冲突
+        if "solo" in keys:
+            for k, orig in zip(keys, parts):
+                if _has_second_party(k):
+                    out.append(("solo_conflict", k,
+                                "写了 solo 又要第二方的身体入画，模型会画出畸形的手"))
+                    break
+        # ② 禁用标签（库里存在但语义错）
+        for k, orig in zip(keys, parts):
+            if k in _BANNED_TAGS:
+                out.append(("banned_tag", k,
+                            "没写明是谁的手，会被画成她自己抓自己"))
+        # ③ pov hands 却没写 1other —— 那只手没有归属
+        if "pov_hands" in keys and "1other" not in keys:
+            out.append(("pov_direction", "pov_hands",
+                        "有 pov hands 却没有 1other，模型不知道那只手属于谁"))
+        # ④ 1other 却没有 pov hands —— 声明了第二方却不说是手
+        if "1other" in keys and "pov_hands" not in keys:
+            out.append(("pov_direction", "1other",
+                        "有 1other 却没有 pov hands，第二方会变成一个完整的人"))
+        # ⑤ 女女向写 pov 而不是 female_pov（只在台词里有「我」是女性时才有意义，
+        #    这里判不了性别，只提示：two girls 同框时 pov 的先验是男性）
+        if "pov" in keys and ("2girls" in keys or "1girl" in keys):
+            pass  # 交给契约提示词，不在代码里猜
+    return out
+
+
+def repair_line(text, pov_mode="pov"):
+    """按判据**自动修**一行 tag，返回 `(新文本, 改了什么[])`。
+
+    只做「有唯一正确答案」的修改——去掉矛盾词、补齐配对词。
+    需要判断的地方（配色、姿态）一律不动，交给人眼或补正 AI。
+    """
+    issues = audit_line(text, pov_mode=pov_mode)
+    if not issues:
+        return str(text or ""), []
+    parts = [x.strip() for x in str(text or "").split(",") if x.strip()]
+    keys = [_db_key(_norm_tag(x)) for x in parts]
+    changed = []
+
+    def drop(key):
+        nonlocal parts, keys
+        keep = [(p, k) for p, k in zip(parts, keys) if k != key]
+        if len(keep) != len(parts):
+            parts = [x[0] for x in keep]
+            keys = [x[1] for x in keep]
+            changed.append("去掉 %s" % key)
+
+    def add(key):
+        nonlocal parts, keys
+        if key not in keys:
+            parts.append(key)
+            keys.append(key)
+            changed.append("补上 %s" % key)
+
+    for kind, tag, _ in issues:
+        if kind == "solo_conflict":
+            # 有第二方身体就不能要 solo
+            drop("solo")
+        elif kind == "banned_tag":
+            # hand around wrist → 语义等价的正确写法
+            drop(tag)
+            # 补成库里那种写法（下划线是归一形态，交出去用 Danbooru 的空格形态）
+            add("holding another's wrist")
+        elif kind == "pov_direction":
+            if tag == "pov_hands":
+                add("1other")
+            elif tag == "1other":
+                add("pov_hands")
+    return ", ".join(parts), changed
+
+
 def collect_issues(text, brief="", original="", pov_mode="pov"):
     """把代码判据能发现的问题整理成**结构化清单**，供补正 AI 与界面使用。
 
