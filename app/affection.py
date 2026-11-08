@@ -3913,6 +3913,20 @@ def _v2_rows(items, cur_key, cur_gate, gate_field="min", together=True,
     return rows
 
 
+def _v2_adult_panel(rec):
+    """身体这条线的只读视图。**算好给前端，前端不重算**。
+
+    单独包一层是为了吞异常：面板数据坏了不该让整页白屏，
+    缺了这块前端会自动跳过（`if (ad && ad.rows)`）。
+    """
+    try:
+        from app import affection_v2_adult as _ad
+        return _ad.panel(_ad.load(rec))
+    except Exception:                                     # noqa: BLE001
+        log.warning("v2 身体面板生成失败，本次不给这块", exc_info=True)
+        return None
+
+
 def _v2_panel(rec, card=None):
     """右栏整张面板。v2 默认只给「关系一行 + 已发生的事」，不画解锁清单；
     展开区要用的数值上限和四张状态表也在这里一并给全（2026-11-08）。
@@ -3989,6 +4003,9 @@ def _v2_panel(rec, card=None):
         "day": _v2_i(rec.get("day")),
         "turns": _v2_i(rec.get("turns")),
         "mode": str(rec.get("mode") or MODE_RAID),
+        # 身体这条线（2026-11-08 晚）：九条轴交给前端画。算好给，前端一个数
+        # 都不重算；老进程没加载到这段时前端整块跳过，页面照旧能用。
+        "adult": _v2_adult_panel(rec),
         # v1 前端读到的字段一律给空，避免 undefined 报错
         "intimacy": [], "tiers": [], "arousals": [], "corrupts": [],
         "arousal": 0, "arousalName": "", "corrupt": 0, "corruptName": "",

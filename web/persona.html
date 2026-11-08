@@ -1906,6 +1906,110 @@ function renderPanel(a, p) {
     if (typeof p.yandereMax === "number") v2Bar("病娇值", p.yandere, p.yandereMax, 0);
     if (typeof p.contactMax === "number") v2Bar("已发生接触", p.contactDegree, p.contactMax, 0);
 
+    // ── 身体这条线（2026-11-08 晚）──
+    // 后端 `affection_v2_adult.panel()` 已经算好九条轴，这里一个数都不重算：
+    // 数值、档位名、软顶、对等线、五处开发/敏感全照它给的画。
+    // 老后端不返回 adult 时整块跳过，页面照旧能用。
+    const ad = p.adult;
+    if (ad && ad.rows) {
+      const ah = document.createElement("div");
+      ah.style.cssText = "font-size:11px;color:var(--text-mute);margin:10px 0 2px";
+      ah.textContent = "身体这条线";
+      fbody.appendChild(ah);
+
+      ad.rows.forEach(function (r) {
+        if (r.axis === "arousal") {
+          // 冲动是档位不是数值：只写「现在哪一档」，不画条。
+          const d = document.createElement("div");
+          d.style.cssText = "margin:6px 0 2px;font-size:11.5px;color:var(--text-dim)";
+          const nm = document.createElement("span");
+          nm.textContent = "冲动 ";
+          const b = document.createElement("b");
+          b.style.cssText = "color:var(--accent);font-weight:600";
+          b.textContent = r.name || "—";
+          d.appendChild(nm); d.appendChild(b);
+          if (r.gateActive) {
+            const g = document.createElement("span");
+            g.style.cssText = "margin-left:6px;font-size:10.5px;color:var(--text-mute)";
+            g.textContent = "（开发度还不够，最高到第 " + (r.maxTier | 0) + " 档）";
+            d.appendChild(g);
+          }
+          fbody.appendChild(d);
+          return;
+        }
+        // 其余六条：数值 + 条 + 档位名。羞耻标软顶，主动权标对等线。
+        const label = { excite: "高潮", corrupt: "堕落", submit: "屈服",
+                        shame: "羞耻", control: "主动权" }[r.axis] || r.axis;
+        const d = document.createElement("div");
+        d.style.cssText = "margin:6px 0 2px;font-size:11.5px;color:var(--text-dim)";
+        const nm = document.createElement("span");
+        nm.textContent = label + " ";
+        const b = document.createElement("b");
+        b.style.cssText = "color:var(--text);font-weight:600";
+        b.textContent = (r.value | 0) + " / " + (r.max | 0);
+        d.appendChild(nm); d.appendChild(b);
+        if (r.name) {
+          const s = document.createElement("span");
+          s.style.cssText = "margin-left:6px;font-size:10.5px;color:var(--text-mute)";
+          s.textContent = "· " + r.name;
+          d.appendChild(s);
+        }
+        const track = document.createElement("div");
+        track.className = "bar";
+        const fill = document.createElement("i");
+        const span = (r.max | 0) - (r.min | 0);
+        const pct = span > 0
+          ? Math.max(0, Math.min(100, ((r.value | 0) - (r.min | 0)) / span * 100)) : 0;
+        fill.style.width = pct.toFixed(1) + "%";
+        track.appendChild(fill);
+        // 软顶 / 对等线：画一条竖线，让玩家看得出「到这儿就上不去了」。
+        const mark = (typeof r.softCap === "number") ? r.softCap
+                   : (typeof r.neutral === "number") ? r.neutral : null;
+        if (mark !== null && span > 0) {
+          const tick = document.createElement("s");
+          tick.style.cssText = "position:absolute;top:0;bottom:0;width:1px;background:var(--text-mute);opacity:.6;left:"
+            + Math.max(0, Math.min(100, (mark - (r.min | 0)) / span * 100)).toFixed(1) + "%";
+          track.style.position = "relative";
+          track.appendChild(tick);
+        }
+        d.appendChild(track);
+        if (r.gated) {
+          const g = document.createElement("span");
+          g.style.cssText = "font-size:10.5px;color:var(--text-mute)";
+          g.textContent = "好感为负才会涨";
+          d.appendChild(g);
+        }
+        fbody.appendChild(d);
+      });
+
+      // 五处开发 / 敏感：一条一行，两个数字并排，不画双条（太挤）。
+      if (ad.parts && ad.parts.length) {
+        const ph = document.createElement("div");
+        ph.style.cssText = "font-size:11px;color:var(--text-mute);margin:9px 0 2px";
+        ph.textContent = "五处（开发 / 敏感）";
+        fbody.appendChild(ph);
+        ad.parts.forEach(function (x) {
+          const d = document.createElement("div");
+          d.style.cssText = "display:flex;gap:8px;font-size:11.5px;color:var(--text-dim);line-height:1.9";
+          const n1 = document.createElement("span");
+          n1.style.cssText = "min-width:34px;color:var(--text)";
+          n1.textContent = x.name || x.part;
+          const n2 = document.createElement("span");
+          n2.textContent = "开发 " + (x.dev | 0);
+          const n3 = document.createElement("span");
+          // 敏感度被 floor 规则拉到和开发一样时，标一句「跟随」，免得玩家以为算错
+          n3.textContent = "敏感 " + (x.sense | 0) + ((x.sense | 0) === (x.dev | 0) ? "（跟随开发）" : "");
+          d.appendChild(n1); d.appendChild(n2); d.appendChild(n3);
+          fbody.appendChild(d);
+        });
+      }
+
+      const cht = document.createElement("div");
+      cht.style.cssText = "font-size:11.5px;color:var(--text-dim);margin-top:6px";
+      cht.textContent = "现在的接触：" + (ad.contactName || "无");
+      fbody.appendChild(cht);
+    }
+
     // 四张状态表：整张表只留一个粉色 ▶（当前档），其余一律不打勾。
     // 早先复用 panelSection 时负向档被判成 reached，整排 ✔ 会被读成
     // 「随时会走 / 在等你认错」这些事故都发生过。**前端也兜一层**：
