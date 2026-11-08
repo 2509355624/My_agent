@@ -5552,7 +5552,11 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
                 _ast, _anotes = adult_state.apply(
                     _ast, score["adult"],
                     value=(aff_res or {}).get("value") if isinstance(aff_res, dict) else None)
-                _rec["adult"] = _ast
+                # 只写 affection 下面那一份（2026-11-08）：adult 状态属于
+                # 关系档的一部分，和 value/contacts 放在一起，别在顶层再存一份
+                # ——两份会各自被读，一旦不同步就是「显示的和我看到的不一样」。
+                _aff = _rec.setdefault("affection", {})
+                _aff["adult"] = _ast
                 _astate[key] = _rec
                 _save_state(_astate)
                 for _n in _anotes:
