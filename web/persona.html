@@ -123,6 +123,11 @@
   .bubble .dlg { background: rgba(251, 191, 36, .16); color: #ffdf8a;
     padding: 0 3px; border-radius: 4px; box-decoration-break: clone;
     -webkit-box-decoration-break: clone; }
+  /* 心声（2026-11-08）：独立成段、行首带 〔心声〕 记号的那一句吃粉色荧光，
+     标签本身不显示。和台词黄荧光并列，两种颜色互不覆盖。 */
+  .bubble .mono { background: rgba(237, 147, 177, .16); color: #f4c0d1;
+    padding: 1px 5px; border-radius: 4px; box-decoration-break: clone;
+    -webkit-box-decoration-break: clone; }
   /* 这轮没发出去 → 原样重发的入口（超时/断流后不用重新打字） */
   .retryRow { display: flex; align-items: center; gap: 10px;
     margin: 6px 4px 0; font-size: 12px; color: var(--text-mute);
@@ -1372,7 +1377,12 @@ function fmtDlg(text) {
   const esc = String(text)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  return esc.replace(
+  // 心声：行首 〔心声〕 那一整行包粉色 span，标签本身吃掉不显示。
+  // 仍在转义之后做，和台词上色同一条安全边界。
+  const withMono = esc.replace(
+    /^〔心声〕[ \t]*[:：]?[ \t]*([^\n]*)/gm,
+    '<span class="mono">$1</span>');
+  return withMono.replace(
     /(&quot;[\s\S]*?&quot;|“[\s\S]*?”|「[^」]*」)/g,
     '<span class="dlg">$1</span>');
 }

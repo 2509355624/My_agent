@@ -577,7 +577,11 @@ class StatePersistenceTest(PersonaBase):
 
 
 class DrawTest(unittest.TestCase):
-    """扮演态配图：走 `_persona_fast`，入队带 quiet，失败一律静默。"""
+    """扮演态配图：走队列，入队带 quiet。
+
+    QQ 自动配图那条路失败仍静默；2026-11-08 起真实原因留在 thread-local 上，
+    由 `draw_shot()` 取走给网页端 / QQ 点单出图显示。
+    """
 
     def _patch(self, **kw):
         job = mock.Mock()
@@ -644,6 +648,37 @@ class DrawTest(unittest.TestCase):
         import app.image_jobs as ij
         self.assertEqual(persona.draw("x", {}, "private_1"), "")
         ij.enqueue.assert_not_called()
+
+    # ─── 2026-11-08：失败原因透传（draw 返回值仍当字符串用，不改签名）───
+    def test_comfy_down_records_its_own_reason(self):
+        self._patch(alive=False)
+        self.assertEqual(persona.draw("x", {}, "private_1"), "")
+        self.assertIn("没在线", persona._DRAW_ERR.reason)
+        self.addCleanup(setattr, persona._DRAW_ERR, "reason", "")
+
+    def test_timeout_reason_reaches_draw_shot_note(self):
+        job = self._patch()
+        job.wait.side_effect = TimeoutError("生成超时 (180s)")
+        with mock.patch.object(persona, "shot_scene", return_value="x, y"):
+            name, note = persona.draw_shot({"appearancePrompt": "1girl"},
+                                           "group_1")
+        self.assertEqual(name, "")
+        self.assertIn("生成超时 (180s)", note)
+        self.assertNotIn("排队满 / ComfyUI 没在线 / 被审核拦下", note)
+        self.addCleanup(setattr, persona._DRAW_ERR, "reason", "")
+
+    def test_no_image_has_a_different_reason_than_offline(self):
+        self._patch(names=[])
+        self.assertEqual(persona.draw("x", {}, "private_1"), "")
+        self.assertIn("没拿到图片", persona._DRAW_ERR.reason)
+        self.addCleanup(setattr, persona._DRAW_ERR, "reason", "")
+
+    def test_success_clears_the_previous_reason(self):
+        self._patch()
+        persona._DRAW_ERR.reason = "上一轮的老原因"
+        self.assertEqual(persona.draw("x", {"appearancePrompt": "1girl"},
+                                      "private_1"), "a.png")
+        self.assertEqual(persona._DRAW_ERR.reason, "")
 
     def test_empty_scene_does_not_enqueue(self):
         self._patch()
@@ -740,6 +775,24 @@ class DrawTest(unittest.TestCase):
         with mock.patch.object(persona, "shot_scene", return_value=""):
             self.assertEqual(persona.draw_shot({}, "group_1"),
                              ("", "这一轮没有可画的画面"))
+
+
+class PovContractTest(unittest.TestCase):
+    """2026-11-08：演员 AI 写的「画面：」行必须是第一人称 POV。"""
+
+    def test_both_contracts_carry_the_pov_rules(self):
+        for text in (persona._CONTRACT, persona._CONTRACT_NO_INTIMATE):
+            self.assertIn("POV 视角", text)
+            self.assertIn("first-person pov, eye level", text)
+            self.assertIn("viewer's hand entering from the bottom edge", text)
+            self.assertIn("reaching her hand toward the camera", text)
+            self.assertIn("looking straight at the camera", text)
+
+    def test_pov_rules_sit_inside_the_picture_section(self):
+        """规则得在「## 画面」节里，别落到别的段落被模型当闲话读。"""
+        sec = persona._CONTRACT.split("## 画面", 1)[1].split("## 心情", 1)[0]
+        self.assertIn("POV 视角", sec)
+        self.assertIn("toward the camera", sec)
 
 
 class IntentTest(unittest.TestCase):
@@ -1722,11 +1775,14 @@ class NovelCraftContractTest(unittest.TestCase):
 
     def test_scene_section_exists(self):
         """「这一拍的戏」小节（2026-11-07）：主动权、想要/怕/赌、
-        一轮一变化、留线头——爽感来源，不能被改丢。"""
+        一轮一变化、留线头——爽感来源，不能被改丢。
+        2026-11-08：钩子表述按用户要求清掉，线头只留在这一拍里。"""
         c = persona._CONTRACT
         for phrase in ("### 这一拍的戏", "她可以主动",
-                       "怕什么", "和开头不一样", "线头留着别收干净"):
+                       "怕什么", "和开头不一样", "线头留在这一拍里"):
             self.assertIn(phrase, c)
+        self.assertNotIn("想看下一拍", c)
+        self.assertNotIn("悬着的那一下", c)
 
     def test_word_count_relaxed(self):
         """300~600 字区间（2026-11-07 二改：600~2000 实测催出凑字数）；
@@ -1735,7 +1791,9 @@ class NovelCraftContractTest(unittest.TestCase):
         c = persona._CONTRACT
         # 2026-11-08 改：保底 300，上限交给模型（600~1200 正常）。
         self.assertIn("至少 300 字", c)
-        self.assertIn("停在哪都行", c)
+        # 2026-11-08：角色扮演没有结尾，钩子收尾的说法一并不回来
+        self.assertIn("这一拍没有结尾", c)
+        self.assertNotIn("想看下一拍", c)
         self.assertNotIn("一轮 **300~600 字**就把这一拍写完", c)
         self.assertNotIn("收得住", c)
         self.assertNotIn("1000 字", c)
@@ -3268,6 +3326,43 @@ class StoryLineTest(unittest.TestCase):
     def test_clip_items_strips_double_punctuation(self):
         got = persona._clip_items(["她笑了。", "他说好；"], 4, 40)
         self.assertEqual(got, ["她笑了", "他说好"])
+
+
+class ReplayContract20261108Test(unittest.TestCase):
+    """母本对照（v4p vs 3.8f）之后定下的四条，钉住防止改回去。"""
+
+    def test_contract_new_rules(self):
+        c = persona._CONTRACT
+        for s in ("她只知道这一刻站在她眼前能看见、能听见的",
+                  "一句台词换一次气", "一件事写到底",
+                  "这一拍没有结尾", "〔心声〕"):
+            self.assertIn(s, c)
+        for s in ("想看下一拍", "悬着的那一下", "收得干干净净"):
+            self.assertNotIn(s, c)
+
+    def test_scene_duty_text(self):
+        """单行输入以前整段漏拼，现在每轮都带这份场景义务。"""
+        d = persona._SCENE_DUTY
+        self.assertIn("用叙述演出来", d)
+        self.assertIn("只接不重念", d)
+        self.assertIn("顺序按他写的来", d)
+        self.assertIn("她知道不了", d)
+        self.assertIn("〔心声〕", d)
+
+    def test_thought_marker_survives_web_but_not_plain_text(self):
+        raw = ("学妹把杯子转了半圈。\n\n〔心声〕好烫。\n\n"
+               "画面：1girl, cup\n心情：害羞 强度6\n状态：桌边 · 制服 · 无")
+        body, scene, _mood, _it, _st = persona.split_turn(raw)
+        self.assertIn("〔心声〕好烫。", body)      # 网页端靠它上粉色
+        self.assertTrue(scene)                      # 三行元数据照旧剥干净
+        plain = persona.strip_thought_marker(body)
+        self.assertNotIn("〔心声〕", plain)         # QQ 等纯文本出口
+        self.assertIn("好烫。", plain)
+
+    def test_old_thought_tag_still_stripped(self):
+        body, *_ = persona.split_turn("她笑了。\n【心声】旧格式。")
+        self.assertNotIn("【心声】", body)
+        self.assertIn("旧格式。", body)
 
 
 if __name__ == "__main__":

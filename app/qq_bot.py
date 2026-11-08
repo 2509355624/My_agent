@@ -1163,7 +1163,8 @@ class SessionRunner:
         if turn.reply.strip():
             # 攻略模式（2026-11-03）：回复尾部带一行关系状态，让玩家每轮
             # 都有「她对我的态度」的体感；数值本身不藏，但档位才是重点。
-            out = turn.reply
+            # 〔心声〕 只是给网页端上色用的记号，QQ 是纯文本，发出去前剥掉
+            out = persona.strip_thought_marker(turn.reply)
             aff = getattr(turn, "aff", None)
             # 自由模式没有 `tail_line`，这里每轮补一条「此刻」窄条（2026-11-05
             # 用户要求：箭头 ▶ 指着哪一格就报哪一格）；攻略模式 tail_line 已经

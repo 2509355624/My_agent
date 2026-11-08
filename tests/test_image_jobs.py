@@ -2210,6 +2210,13 @@ class SameChannelReleaseTest(_Base):
             p = mock.patch.object(image_jobs, target, repl)
             p.start()
             self.addCleanup(p.stop)
+        # 2026-11-08 新增的「切进重渠道先重启」按**渠道切换事件**触发，跟本类
+        # 测的「同渠道连画 N 张」是两套机制。这里屏蔽掉它，本类才只盯自己那条
+        # 计数；新机制自己的用例在 HeavySwitchRestartTest。
+        p = mock.patch.object(image_jobs, "_maybe_restart_for_heavy_switch",
+                              lambda job: None)
+        p.start()
+        self.addCleanup(p.stop)
         # 钉死阈值，别跟着 .env 漂（.env 优先于 config 默认值）
         p = mock.patch.object(image_jobs, "COMFY_RELEASE_AFTER_SAME", 2)
         p.start()
@@ -2319,6 +2326,13 @@ class GlobalTotalReleaseTest(_Base):
             p = mock.patch.object(image_jobs, target, repl)
             p.start()
             self.addCleanup(p.stop)
+        # 屏蔽 2026-11-08 的「切进重渠道先重启」：本类测的是**不分渠道的累计
+        # 计数**，那套按切换事件触发的重启会把 total_run 清零，混进来就测不准。
+        # 新机制的用例在 HeavySwitchRestartTest。
+        p = mock.patch.object(image_jobs, "_maybe_restart_for_heavy_switch",
+                              lambda job: None)
+        p.start()
+        self.addCleanup(p.stop)
         p = mock.patch.object(image_jobs, "COMFY_RELEASE_AFTER_TOTAL", 2)
         p.start()
         self.addCleanup(p.stop)
@@ -2385,6 +2399,72 @@ class GlobalTotalReleaseTest(_Base):
                 self._run(s)
         self.assertEqual(self.events,
                          ["submit", "free", "submit", "free", "submit"])
+
+
+class HeavySwitchRestartTest(unittest.TestCase):
+    """切进重渠道先重启一次 ComfyUI（2026-11-08 用户拍板）。
+
+    按**渠道切换事件**判，不读显存/内存水位（那两张 CLEAN_START_* 表已被
+    275 次采样否决、保持为空）。这里只盯「有没有调 _restart_comfy」，不跑进程。
+    """
+
+    def setUp(self):
+        self.prev_last = image_jobs._COMFY.last_skill
+        self.calls = []
+
+        def _restart():
+            self.calls.append("restart")
+            return True
+
+        p = mock.patch.object(image_jobs, "_restart_comfy", _restart)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def tearDown(self):
+        image_jobs._COMFY.last_skill = self.prev_last
+
+    def _run(self, skill, prev):
+        image_jobs._COMFY.last_skill = prev
+        self.calls.clear()
+        image_jobs._maybe_restart_for_heavy_switch(mock.Mock(skill=skill))
+        # 真 process() 里紧随其后的 _maybe_release_for_switch 会把本次渠道记回
+        # last_skill；补上这一步，才能验证「同一批漫画只触发一次」。
+        image_jobs._COMFY.last_skill = skill
+        return list(self.calls)
+
+    def test_prefix_covers_the_whole_family(self):
+        for s in ("krea2", "krea2-real", "qwen_image_v1", "qwen-hd",
+                  "moss", "moss-light", "moss-qunyou", "moss8", "moss_page"):
+            self.assertTrue(image_jobs._is_heavy_skill(s), s)
+        for s in ("anima-line", "sd", "silver", "miao", "nai", "", None):
+            self.assertFalse(image_jobs._is_heavy_skill(s), s)
+
+    def test_light_to_heavy_restarts(self):
+        """用户原话场景：第一次 anima，第二次切到 MOSS / krea2 / qwen。"""
+        for heavy in ("moss-qunyou", "krea2-real", "qwen_image_v1"):
+            self.assertEqual(self._run(heavy, "anima-line"), ["restart"], heavy)
+
+    def test_heavy_to_heavy_restarts_too(self):
+        self.assertEqual(self._run("moss", "krea2-real"), ["restart"])
+
+    def test_same_heavy_channel_only_restarts_once(self):
+        """一批漫画十几格同渠道连画：只有切进来那一格重启。"""
+        self.assertEqual(self._run("moss", "anima-line"), ["restart"])
+        for _ in range(3):
+            self.assertEqual(
+                self._run("moss", image_jobs._COMFY.last_skill), [])
+
+    def test_cold_start_needs_no_restart(self):
+        """冷启动 / 刚重启完本身就是干净进程。"""
+        self.assertEqual(self._run("moss", None), [])
+
+    def test_light_channels_never_restart(self):
+        self.assertEqual(self._run("sd", "anima-line"), [])
+
+    def test_restart_refused_does_not_block_submit(self):
+        """重启被漫画台占用挡下时只记日志，不抛、不阻断这一张。"""
+        with mock.patch.object(image_jobs, "_restart_comfy", return_value=False):
+            self.assertEqual(self._run("moss", "anima-line"), [])
 
 
 class _TickingClock:

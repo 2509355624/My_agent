@@ -123,6 +123,10 @@
   .bubble .dlg { background: rgba(251, 191, 36, .16); color: #ffdf8a;
     padding: 0 3px; border-radius: 4px; box-decoration-break: clone;
     -webkit-box-decoration-break: clone; }
+  /* 心声粉色荧光，和角色扮演页同一套；〔心声〕 标签不显示 */
+  .bubble .mono { background: rgba(237, 147, 177, .16); color: #f4c0d1;
+    padding: 1px 5px; border-radius: 4px; box-decoration-break: clone;
+    -webkit-box-decoration-break: clone; }
   /* 自动刷新开关：开着就点亮，不用另外写字占 header 宽度 */
   .ibtn.on { color: var(--accent); border-color: var(--accent);
     background: var(--accent-dim); }
@@ -394,7 +398,10 @@ function fmtDlg(text) {
   const esc = String(text == null ? "" : text)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  return esc.replace(
+  const withMono = esc.replace(
+    /^〔心声〕[ \t]*[:：]?[ \t]*([^\n]*)/gm,
+    '<span class="mono">$1</span>');
+  return withMono.replace(
     /(&quot;[\s\S]*?&quot;|“[\s\S]*?”|「[^」]*」)/g,
     '<span class="dlg">$1</span>');
 }
@@ -467,9 +474,11 @@ async function openRow(key, el, meta) {
 // /gv/detail 已经给了 messages / note / state / card，够拼一份可读的存档；
 // 让 5174 出文件反而要加接口 + 限流桶 + 鉴权，前端一个 Blob 就完事。
 function escMd(s) {
+  // 纯文本导出：先剥掉心声记号，别把 〔心声〕 带进 Markdown。
   // 只把内容当纯文本：消息里出现 # / ``` 之类不该变成 markdown 结构。
   // 用缩进 + 反斜杠转义行首的标记字符，正文换行原样保留。
-  return String(s || "").split("\n").map(line =>
+  return String(s || "").replace(/^〔心声〕[ \t]*[:：]?[ \t]*/gm, "")
+    .split("\n").map(line =>
     line.replace(/^(\s{0,3})(#{1,6}\s|>\s?|[-*+]\s|\d+\.\s|```)/,
                  "$1\\$2")).join("\n");
 }

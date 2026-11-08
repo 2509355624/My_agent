@@ -339,7 +339,9 @@ function makeMsg(m) {
   const el = document.createElement("div");
   el.className = "msg " + (m.role === "user" ? "u" : "a");
   el.innerHTML = '<div class="b"></div><div class="m"></div>';
-  el.querySelector(".b").textContent = m.text;
+  // 后台回看是纯文本：心声记号只给前端上色用，这里剥掉不露出元数据
+  el.querySelector(".b").textContent = String(m.text || "")
+    .replace(/^〔心声〕[ \t]*[:：]?[ \t]*/gm, "");
   if (m.role === "assistant" && m.mood) {
     el.querySelector(".m").textContent =
       m.mood + " " + (m.intensity || 0) + (m.state ? ("　" + m.state) : "");

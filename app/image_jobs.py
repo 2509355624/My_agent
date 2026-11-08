@@ -68,6 +68,12 @@
   不落，挤干物理内存后 GGUF 要从磁盘重读、采样卡死。重启是唯一能把内存真正
   还回去的手段，代价是下一张要重新加载模型（十几秒到一分钟）。
   **这跟「换渠道先 /free」不冲突**：那条管显存，这条管内存。
+- **切进重渠道先重启一次**（2026-11-08 用户拍板，见
+  `_maybe_restart_for_heavy_switch`）：轻渠道（anima / sd）跑完接着点 krea2 /
+  qwen / moss 时，旧进程里还压着上一套模型，重渠道一装就撞显存和内存。按
+  「上次渠道 → 本次渠道」这个**切换事件**重启一次 ComfyUI，同渠道连画不重启。
+  只重启进程、**不改排队顺序**；下面的「重渠道优先度」与两张 CLEAN_START_*
+  水位表都保持关闭状态。
 
 ## 重渠道优先度（2026-09-27 加；**2026-10-04 已按用户要求关闭**）
 
@@ -545,6 +551,23 @@ CLEAN_START_SKILLS = {}
 # 权重走 NVMe 而不是全压内存）或**换更大的物理内存**。真要加回来，必须先拿出
 # 「某阈值下失败率显著更高」的证据。
 CLEAN_START_RAM = {}
+
+# ─── 切进重渠道先重启一次（2026-11-08 用户拍板）──────────────────
+#
+# 场景：先跑 anima-line / sd 这种轻渠道，接着点 krea2 / qwen / moss，旧进程里
+# 还压着上一套模型，重渠道的文本编码器 + UNet 一装就撞显存和内存，表现出来
+# 就是 180 秒超时、TDR 或者直接变僵尸。用户口径是「切进重渠道就先重启一次」。
+#
+# ⚠️ 这**不是**上面两张 CLEAN_START_* 水位表的复活。那两张按「提交时还剩多少
+# GB」判，275 次采样证明判别力接近零，已被数据否决、保持为空；这条按**事件**
+# 判：只看「上一张渠道 → 这一张渠道」这一件事，不读任何水位。
+# 也**不是**模块开头「重渠道优先度」（插队 / 90 秒冷却 / 队列上限）的复活，
+# 那套 2026-10-04 已关掉，这里只是重启一次进程，不改排队顺序。
+#
+# 按前缀整族算：krea2-*、qwen*（qwen_image_v1 / qwen-hd）、moss*（moss /
+# moss-light / moss-qunyou / moss50 / moss8 / moss_page）都算；anima / sd /
+# silver / miao 这些轻渠道不算。
+HEAVY_SKILL_PREFIXES = ("krea2", "qwen", "moss")
 
 # NAI 的两个渠道名（2026-10-03 加 `nai_wide` 横版）。所有「是不是 NAI」的判断
 # 都走这个元组——`job.skill` 存的是**真实渠道名**，云端分支靠它区分横竖。
@@ -1876,6 +1899,42 @@ def _maybe_restart_for_clean_start(job):
     _restart_comfy()
 
 
+def _is_heavy_skill(skill):
+    """渠道是不是「很吃显存」的那一族（按前缀，整族算）。"""
+    return str(skill or "").lower().startswith(HEAVY_SKILL_PREFIXES)
+
+
+def _maybe_restart_for_heavy_switch(job):
+    """切进重渠道（或从一种重渠道切到另一种）时，先重启一次 ComfyUI。
+
+    三条同时满足才动手：
+      1. 本次渠道是重渠道；
+      2. `_COMFY.last_skill` 有值——冷启动 / 刚重启完本来就是干净进程，不用再开；
+      3. 上次渠道 != 本次渠道。同渠道连画不在这里管，交给
+         `_maybe_release_for_switch` 的 `COMFY_RELEASE_AFTER_SAME`；
+         重渠道之间互切（krea2 → moss）算切换，照样重启。
+
+    放在 `_maybe_release_for_switch` 之前：`_restart_comfy()` 成功后会把
+    `last_skill / same_run / total_run` 清零，下游看到 `prev is None` 就不会再
+    补一发没用的 `/free`；同一批漫画的后续格子因为 `last_skill` 已被下游记回
+    本次渠道，整批只会触发这一次。
+
+    漫画工作台正持锁跑图时 `_restart_comfy()` 会自己避让并返回 False；这时不
+    阻断提交，下游换渠道 `/free` 兜底，宁可这一轮不重启也不打断别人的格。
+    """
+    skill = job.skill or ""
+    if not _is_heavy_skill(skill):
+        return
+    prev = _COMFY.last_skill
+    if not prev or prev == skill:
+        return
+    log.info("切进重渠道 %s（上一张 %s），先重启 ComfyUI 要一个干净进程",
+             skill, prev)
+    if not _restart_comfy():
+        log.warning("切进 %s 前的重启没成（被占用或没回来），照常提交；"
+                    "下游换渠道 /free 兜底", skill)
+
+
 def _send_image_bytes(target, target_id, path):
     """直接发一张本地文件（NAI 这种不走 ComfyUI 的图用）。"""
     from app import qq_api
@@ -1992,9 +2051,12 @@ def process(job):
     # NAI 云端生图：完全不碰 ComfyUI（token 是群主独立的，图由 NovelAI 出）。
     if job.skill in NAI_SKILLS:
         return _process_nai(job)
-    # 放在换渠道 /free 之前：重启成功后 _COMFY.last_skill 会被清成 None（新进程里
-    # 一个模型都没加载），换渠道那条就不会再打一次没用的 /free。
+    # 放在换渠道 /free 之前：两条重启成功后 _COMFY.last_skill 会被清成 None
+    # （新进程里一个模型都没加载），换渠道那条就不会再打一次没用的 /free。
+    # `clean_start` 是按水位的老机制（当前两表为空，恒不动手）；
+    # `heavy_switch` 是 2026-11-08 新加的按渠道切换事件。
     _maybe_restart_for_clean_start(job)
+    _maybe_restart_for_heavy_switch(job)
     _maybe_release_for_switch(job)
     _maybe_release_for_low_vram()
     try:

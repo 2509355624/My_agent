@@ -798,10 +798,14 @@ _CONTRACT = (
     "脸红也接住，慌也接住，嘴硬也接住，沉默也接住。情绪是她的反应，"
     "不是对这件事的否决。\n"
     "\n"
-    "她听得见你说的话，看得见你做的事；心里那句她收不到，只能从你的停顿、"
-    "语气、表情里感觉到一点什么，猜一猜。猜偏了也很好——那正是下一轮可以碰的东西。\n"
-    "\n"
-    "## 你的消息可能是分段的\n"
+"她听得见你说的话，看得见你做的事；心里那句她收不到，只能从你的停顿、"
+"语气、表情里感觉到一点什么，猜一猜。猜偏了也很好——那正是下一轮可以碰的东西。\n"
+"\n"
+"她只知道这一刻站在她眼前能看见、能听见的：你喘不喘气、手里提着什么、"
+"脸上是什么神色。你这一轮话里交代的前因、几点钟、别处发生过什么，"
+"她没跟着去过，只能从你的样子猜个大概——猜错了也算数。\n"
+"\n"
+"## 你的消息可能是分段的\n"
     "\n"
     "按「说 / 做 / 想」分条列出时：「说」是她听见的，「做」是她看见的，"
     "「想」是她猜的原料。给她语气、停顿、表情就够了，让她自己猜，也允许她猜错。\n"
@@ -863,6 +867,8 @@ _CONTRACT = (
 "- **台词撑起这一拍。** 两个人都在场，带引号的对话就是主角：想让她说的，"
 "就让她真的说出口——「{NAME}说了谢谢」不如她开口那句「谢谢。」；"
 "转述多了，这一拍就成了说明书。\n"
+"- **一句台词换一次气。** 她说完一句就停在自己的反应上，下一句留给你来接；"
+"两个人你一句我一句，中间那点空档也是戏。\n"
 "- **她会记错、听错、慢半拍。** 把你上一句听岔了、把日子记混了、"
 "你问完她隔了一拍才反应过来——真人全是这样的，她也可以。\n"
 "- **她会出小错。** 说漏嘴、拿错东西、话说一半发现不对往回收。"
@@ -890,9 +896,8 @@ _CONTRACT = (
 "- **收拍时留下一样和开头不一样的东西。** 关系挪了半步、一个秘密露出"
 "一角、多了一个新的小麻烦、她说漏了一句本来不想说的。变化可以很小，"
 "但要有——两拍之间什么都没动，读起来就像停在原地。\n"
-"- **线头留着别收干净。** 没接完的话头、她多看了一眼的东西、"
-"一个没回答的问题，都留给下一拍。圆滑的收尾让人翻页，"
-"悬着的那一下让人想看下一拍。\n"
+"- **线头留在这一拍里。** 没接完的话头、她多看了一眼的东西、"
+"一个没回答的问题，就摆在那儿，写到这里为止。\n"
 "- **这一拍至少得往前挪一点。** 关系、信息、处境、她自己的判断，"
 "四样里至少动一样：说出一件本来不想说的事、答应一件本来不会答应的事、"
 "露出一个破绽、换一个站位。**什么都没动的一拍，读者会觉得白读。**\n"
@@ -919,10 +924,12 @@ _CONTRACT = (
 "她本来想做又收回去的手；\n"
 "4. 停在最后一个动作上，别收圆。\n"
 "\n"
+"**一件事写到底。** 同一处地方、同一样东西，把它的每一步写够；"
+"节点是这一件事的起承转合，镜头不换场地、手里不换物件。\n"
+"\n"
 "进来时什么样、发生了什么、停在哪一下。段数自己定，句式长短照旧不齐。"
-"停在哪都行——一个动作做到一半、一句话没说完、她刚转过头来，"
-"都可以是最后一行。不用把结尾收圆：作文式的「综上所述」感一出现，"
-"这一拍就死了；想看下一拍的那种停法，比收得干干净净的好。\n"
+"一个动作做到一半、一句话没说完、她刚转过头来，都可以是最后一行——"
+"这一拍没有结尾，写到哪儿就停在哪儿。\n"
     "\n"
     "### 她的心思\n"
     "\n"
@@ -932,14 +939,24 @@ _CONTRACT = (
     "\n"
     "想写就写，一轮留一处就够，这一轮一句都没有也很正常。半句、一个词、"
     "一个没说完的疑问、一个她自己也说不清的念头，都算。允许它不讲道理，"
-    "允许和嘴上说的相反，允许她自己都不肯承认。指代写具体："
-    "写「被你碰到的地方」「桌沿下面」，让读者一眼能对上。\n"
+"允许和嘴上说的相反，允许她自己都不肯承认。指代写具体："
+"写「被你碰到的地方」「桌沿下面」，让读者一眼能对上。心里提到对面，"
+"照样写「你」：「你跑着来，是真怕我等着。」\n"
     "\n"
     "动作之间给她怎么想、怎么看、怎么给自己找台阶——读者要的是进得去她的脑子，"
     "动作、停顿、一个没说完的念头都通得进去。念头跟着身体走，写到哪儿就停在哪儿；"
-    "把情绪的名字和原因一并补齐，那是事后复盘，读起来就隔了一层。\n"
-    "\n"
-    "### 称呼与「你」\n"
+"把情绪的名字和原因一并补齐，那是事后复盘，读起来就隔了一层。\n"
+"\n"
+"真要写这一句，`〔心声〕` 和这句话写在同一行，整行夹在叙述中间——"
+"前后都还接着动作和台词，这一拍继续往下走：\n"
+"\n"
+"她把袋子换了只手，指尖被勒得发红。\n"
+"〔心声〕你提着重的那袋，我记着呢。\n"
+"她没说出口，只把步子放慢半拍，好让这段路长一点。\n"
+"\n"
+"位置由这一拍定，一轮最多一处。标签只是给页面看的记号，文字照常写。\n"
+"\n"
+"### 称呼与「你」\n"
     "\n"
     "偶尔用名字或身份（「哥哥」「学长」），一句里带一次就够。"
     "主语能省就省：「她把脸埋起来。手还在抖。」比"
@@ -977,30 +994,48 @@ _CONTRACT = (
     "\n"
     + _INTIMATE_GUIDE
     + "\n"
-    "## 画面\n"
+    "## 画面（这一行就是她的出图提示词）\n"
     "\n"
-    "用英文写一行，属性用标签（小写，多词用下划线），方位和互动用英文短语补，"
-    "例如 `on the left side of the desk`、`holding a mug in her right hand`。\n"
+    "**这一行是 POV 视角**（2026-11-08 用户拍板）：镜头就是「你」的眼睛，画面里"
+    "只有她一个完整的人。「你」在画面里最多是一只从下缘伸进来的手"
+    "（`viewer's hand entering from the bottom edge of the frame`），不写脸、"
+    "头发、身体、衣服，也不写第二个人的外貌词——写进去就会画出个陌生男人。"
+    "镜头那一节固定带 `first-person pov, eye level`。\n"
     "\n"
-    "要写清：在哪、在做什么、什么表情、什么东西在她哪一侧、什么镜头、什么光。\n"
+    "**她冲着你做的动作，一律写成冲着镜头来**：牵手 = `reaching her hand toward "
+    "the camera`、`her fingers extended toward the viewer`；凑近 = `leaning "
+    "toward the camera`；递东西 = `holding a cup out toward the viewer`；"
+    "对视 = `looking straight at the camera`。`she holds my hand`、"
+    "`holding hands with a man` 这类写法会把「我」变成画面里的另一个人，"
+    "视角就不是「你」了。\n"
     "\n"
-    "写清她身上穿着什么，具体到哪一件、什么状态：\n"
+    "英文一行，从她是谁写到这一刻在做什么，顺序是：角色名 / 触发词 → 固定外貌"
+    "（发色、瞳色、发型、发饰）→ 表情 → 动作 → 穿着 → 道具与场景 → 镜头 → 光照。"
+    "越靠前影响越大。\n"
     "\n"
-    "- 穿着：`loose grey hoodie and black lounge shorts`、`pink pajama top`\n"
+    "**长相照样写进这一行**：`sunna (zenless zone zero), 1girl, green hair, "
+    "asymmetrical bangs, hairclip, green eyes`。2026-11-08 同 seed 实测：只写角色名、"
+    "把外貌交给底模，绿发会被 LoRA 的银白倾向盖掉，衣服也变成灰白 T 恤。"
+    "角色卡上的固定外貌块系统另拼一份，这一行是给画面看的定稿。\n"
+    "\n"
+    "属性用 danbooru 标签（小写、多词下划线），方位 / 互动 / 材质用英文短语补："
+    "`on the left side of the desk`、`holding a mug in her right hand`、"
+    "`white ceramic, half filled with tea`。至少写满人物、服装分层、场景、镜头、"
+    "光照五项；质量词与画师 tag 由工作流的固定前缀负责，这一行只放看得见的东西。"
+    "手脚带一句 `detailed hands, perfect anatomy, five fingers`。\n"
+    "\n"
+    "写清她身上穿着什么，具体到哪一件、什么颜色、什么状态：\n"
+    "\n"
+    "- 穿着：`loose beige knit sweater and grey lounge shorts`、`pink pajama top`\n"
     "- 半脱：`pajama top unbuttoned and slipping off one shoulder`、"
     "`the collar pulled open`\n"
     "- 没有：`completely nude`\n"
     "\n"
-    "用 `loose grey hoodie` 这种一眼看得见的词。**这一行直接拿去生图，"
-    "你写什么就画什么**——写到哪件画哪件。\n"
-    "\n"
-    "**衣服写到件数**（2026-11-08 实测）：`loose beige knit sweater and grey "
-    "lounge shorts` 这种，模型照着画；`casual clothes` 这种，它只能猜，"
-    "画出来要么不对，要么干脆不穿。写「哪一件、什么颜色、什么状态」，"
-    "像 `white dress shirt with sleeves rolled to the elbow, black pleated skirt`"
-    "、`towel wrapped around the chest` 一样**一件一件数出来**。\n"
-    "\n"
-    "她长什么样交给角色卡，这一行只管这一刻的样子。\n"
+    "**没换就照抄**：这一轮没脱、没换、没提衣服，就把上一轮画面行里那串服饰标签"
+    "（或「她此刻的样子」里写的那身）逐字沿用，只换动作、表情、镜头、光照；"
+    "真换了才重写，一件一件数出来（`white dress shirt with sleeves rolled to "
+    "the elbow, black pleated skirt`、`towel wrapped around the chest`）。"
+    "`casual clothes` 这种它只能猜。**这一行直接拿去生图，你写什么就画什么**。\n"
     "\n"
     "## 心情\n"
     "\n"
@@ -1222,6 +1257,9 @@ PLAY_OUT_DIR = "角色扮演生图"
 # 六格漫画里的男方每格长得都不一样（moss 的 cast 由编剧自己写，不给他
 # 固定的串，他会每页临时编一个）。
 #
+# 2026-11-08：这串**只给漫画 brief 用**（见 comic_brief）。角色扮演的单张 CG
+# 已经改成 POV 视角，画面里只有她 + 你的一只手，`draw()` / `draw_shot()` 不拼
+# 这串——别把它接进单张路径，那会把男主的脸画出来。
 # 写成中性、可复用的描述：成年男性、短发、日常深色上衣。**不要写具体长相**
 # ——那是用户自己的脸，读者要能代入。
 MALE_PROTAGONIST = (
@@ -1328,7 +1366,8 @@ def draw_shot(card, session_key, msg_index=None, reply_to="", on_submit=None):
     2026-11-07 用户拍板改竖屏：anima 的横屏构图（1024×1536 转 1536×1024）
     线条极容易崩，竖屏是它的原生比例。
 
-    返回 `(文件名, note)`：note 非空 = 没画出来及原因。**阻塞**几十秒，
+    返回 `(文件名, note)`：note 非空 = 没画出来及**真实原因**（2026-11-08：
+    排队满 / 没在线 / 生成超时 / 跑完没图，各自说各自的）。**阻塞**几十秒，
     调用方放后台线程。和 moss 漫画共用同一套画面提取（`_shot_parts`），
     但不经编剧——画面行本来就是给生图写的英文定稿，直接拼角色外观串用。
 
@@ -1346,7 +1385,10 @@ def draw_shot(card, session_key, msg_index=None, reply_to="", on_submit=None):
     name = draw(scene, card, session_key, reply_to=reply_to,
                 skill=SHOT_SKILL, landscape=False, on_submit=on_submit)
     if not name:
-        return "", "没画出来（排队满 / ComfyUI 没在线 / 被审核拦下）"
+        # 真实原因在 thread-local 上（draw 的返回值十几个调用方都当字符串用，
+        # 不改签名）。拿不到才退回老的那句笼统文案。
+        return "", (getattr(_DRAW_ERR, "reason", "")
+                    or "没画出来（排队满 / ComfyUI 没在线 / 被审核拦下）")
     return name, ""
 
 
@@ -3281,17 +3323,22 @@ def _manual_display(m, text=""):
 # 所以这一段必须跟着用户输入一起给编剧，而且要钉死「动作要进正文」。
 _SCENE_DUTY = (
     "【写这一轮正文时，你必须做到】\n"
-    "1. **他做的动作，正文里要写出来。** 他这一轮写了「我把她拉起来」，"
+    "1. **他做的动作，用叙述演出来。** 他这一轮写了「我把她拉起来」，"
     "你的正文就要有「你走上前，伸手把她从地上拉起来」——"
-    "不能只写「她被你拉起来」，更不能直接跳到她的反应。"
+    "写成正在发生的一拍，不是把他那句话换个说法抄一遍；"
+    "场景跳了他没写全的地方（排队、装袋、递过去），按他写的顺序补齐再往下走。"
     "**动作省掉，读者会以为事情是凭空发生的。**\n"
-    "2. **他说的话，照那个意思接。** 原话怎么说的，你的回应就对着那个接，"
-    "别把它改写成另一个人说的话。\n"
+    "2. **他说的话，只接不重念。** 原话已经在他那条消息里了，正文里再写一遍"
+    "就成了回声；写她听见之后的反应、动作、停顿，意思对着那句接住就好。\n"
     "3. **他心里想的，她知道不了。** 内容你已经看到了，用它来安排她的反应——"
     "她察觉不到，但读者能看出那点错位。\n"
     "4. **顺序按他写的来**：先做什么、再说什么，正文就按这个落。\n"
     "5. 他没写满的地方（她怎么反应、说什么、接下来怎么走）由你补，"
-    "但**他明确写过的东西不能替他改**。"
+    "但**他明确写过的东西不能替他改**。\n"
+    "\n"
+    "心声这一拍有没有，由戏自己定：真冒出来一句才写，`〔心声〕` 和这句话同一行，"
+    "整行夹在两段叙述中间、前后都还接着动作和台词，这一句里说对面写「你」；"
+    "没冒出来就一句都不留，也不用凑在最后收尾。\n"
 )
 
 def render_user_block(segments, addressed=True, fallback="", remind=False,
@@ -5345,6 +5392,12 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
             _body, _ = _split_meta(str(_m.get("content") or ""))
             last_open = " ".join(_body.split())[:24]
             break
+    # 场景义务（2026-11-08）：以前只在「多行 / 三栏分段」时才拼，单行输入
+    # （最常见）整段没生效——玩家写「结完账我提起袋子」，模型直接跳到她的
+    # 反应，缺了打包提袋那几步。每轮都给一次；已拼过的路径不重复。
+    # 放在 tail 之前：它管这一拍怎么落地，tail 仍是最后一句。
+    if _SCENE_DUTY not in user_block:
+        user_block = user_block + "\n\n" + _SCENE_DUTY
     user_block = user_block + "\n\n" + writing_style.tail(
         turn_no, author_note, plot=man.get("plot"),
         name=str((card or {}).get("name") or ""), mode=mode,
@@ -6231,6 +6284,16 @@ def split_scene(text):
 
 _MONO_TAG_RE = re.compile(r"^[ \t]*【心声】[ \t]*[:：]?[ \t]*", re.M)
 
+# 心声重新结构化（2026-11-08）：用 `〔心声〕` 而不是老的 `【心声】`，是为了
+# 和已落盘的老回复、以及「旧标签一律剥掉」的既有行为完全隔开——老归档照旧剥，
+# 新标记留给网页端上色；QQ 这类纯文本出口在发出去之前用下面这个函数剥掉。
+_THOUGHT_TAG_RE = re.compile(r"^[ \t]*〔心声〕[ \t]*[:：]?[ \t]*", re.M)
+
+
+def strip_thought_marker(text):
+    """纯文本出口：剥掉行首的 `〔心声〕` 标记，只留那句话本身。"""
+    return _THOUGHT_TAG_RE.sub("", str(text or ""))
+
 
 def _strip_monologue_tag(text):
     """剥掉行首的 `【心声】` 标签，只留那句话（2026-11-06）。
@@ -6514,6 +6577,21 @@ def _session_target(session_key):
 # 服装完全交给正面提示词里 `状态` 行翻译出来的标签。
 
 
+# 出图失败原因（2026-11-08）：`draw()` 的返回值被十几个调用方和单测当字符串用，
+# 不改签名；失败原因放在 thread-local 上，由同一个后台线程里的 `draw_shot()`
+# 取走当 note。网页端 `/api/persona/shot_status` 会把 note 原样回给前端，玩家
+# 才分得清「排队满 / 没在线 / 生成超时 / 跑完没出图」到底是哪一种，而不是
+# 一律看到那句笼统的「排队满 / ComfyUI 没在线 / 被审核拦下」。
+_DRAW_ERR = threading.local()
+
+
+def _draw_fail(reason):
+    """记下这一轮没画出来的真实原因，返回值仍是 ""（不改 draw 的签名）。"""
+    _DRAW_ERR.reason = reason
+    log.info("扮演配图没画出来：%s", reason)
+    return ""
+
+
 def draw(scene, card, session_key, reply_to="", state="", skill=None,
          landscape=False, on_submit=None):
     """出一张配图，返回文件名（没画出来返回 ""）。**阻塞**——调用方放后台线程。
@@ -6532,17 +6610,20 @@ def draw(scene, card, session_key, reply_to="", state="", skill=None,
     「画面」时经常漏写衣服，只有这里才有服装信息，不拼进去就会画出裸体。
 
     也不扣私聊每日额度：扮演态配图是聊天的一部分，不是「点单生图」。队列满 /
-    ComfyUI 没在线 / 被审核拦下，一律静默跳过这一轮，聊天照常。
+    ComfyUI 没在线 / 被审核拦下时，`_draw_persona` 那条自动配图一律静默跳过，
+    聊天照常；`draw_shot()`（网页「出图」/ QQ 点单）会读 `_DRAW_ERR` 把真实
+    原因回给玩家。两者共用同一个 `draw()`，返回值始终是字符串。
     """
     from app import image_jobs
     from app.tools.normal import generate_image as gi
 
+    _DRAW_ERR.reason = ""       # 同一个线程可能被复用，先清掉上一轮的原因
     prompt = build_prompt(card, scene, state)
     target, target_id = _session_target(session_key)
     # `target == ""` 才是「这条线没有队列身份」。不能用 `not target`：网页线
     # 的 target 是 None（见 `_session_target`），那也是合法身份。
     if not _clean_scene(scene) or not prompt or target == "":
-        return ""       # 没写画面行 = 这一轮不出图，调用方不用替它守
+        return _draw_fail("这一轮没有可画的画面")
     seed = random.randint(0, 2 ** 32 - 1)
     chan = skill or FAST_SKILL
     # 角色卡上写了 `char_lora` 就硬挂（2026-11-08 用户拍板）：卡已经知道
@@ -6553,10 +6634,10 @@ def draw(scene, card, session_key, reply_to="", state="", skill=None,
         key=str((card or {}).get("char_lora") or ""))
     if wf is None:
         log.warning("扮演配图渠道 %s 没有文生图工作流", chan)
-        return ""
+        return _draw_fail("渠道 %s 没有文生图工作流" % chan)
     if not image_jobs.comfy_alive():
         log.info("扮演配图：ComfyUI 没在线，%s 这一轮不出图", session_key)
-        return ""
+        return _draw_fail("ComfyUI 没在线（探活没过），等它回来再点出图")
     try:
         # landscape=False 写死：这里跑在后台线程，读不到本轮原话（qq_api 的
         # 上下文是 threading.local），不能让 enqueue 自己去判——判不出会退回
@@ -6569,12 +6650,12 @@ def draw(scene, card, session_key, reply_to="", state="", skill=None,
             # `job.out_dir` 优先于按 target 推断（漫画工作台走的是同一条路）。
             out_dir=PLAY_OUT_DIR,
             reply_to=str(reply_to or ""))
-    except Exception:
+    except Exception as e:
         log.exception("扮演配图入队失败 %s", session_key)
-        return ""
+        return _draw_fail("排队时出了岔子：%s" % e)
     if reason:
         log.info("扮演配图没排上（%s）：%s", session_key, reason)
-        return ""
+        return _draw_fail("没排上：%s" % reason)
     # 提交成功那一刻给调用方一个钩子（2026-11-05 用户要求）：出图要几十秒到
     # 一两分钟，不回一句「已提交」，用户根本不知道这单到底排上没有。
     # 只传 job 不传调度细节——回执文案由调用方决定（QQ 用卡片发，网页蹲轮询）。
@@ -6587,11 +6668,11 @@ def draw(scene, card, session_key, reply_to="", state="", skill=None,
         entry = job.wait()
     except Exception as e:
         log.info("扮演配图没画出来（%s）：%s", session_key, e)
-        return ""
+        return _draw_fail("生成没成：%s" % e)
     names = image_jobs.output_images(entry, job=job)
     if not names:
         log.warning("扮演配图跑完却没有图片（%s）", session_key)
-        return ""
+        return _draw_fail("ComfyUI 跑完了，但这一轮没拿到图片")
     log.info("扮演配图完成 %s：%s（%s）", session_key, names[0], prompt[:60])
     return names[0]
 

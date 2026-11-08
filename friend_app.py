@@ -504,9 +504,12 @@ def _forward(prefix, sub, allow_guest=False, force_guest=False):
     streaming = (request.method == "GET"
                  and ((request.path or "").startswith("/api/gal/img/")
                       or (request.path or "").startswith("/api/moss/img")
-                      or (request.path or "").startswith("/api/image/web/")))
+                      or (request.path or "").startswith("/api/image/web/")
+                      or (request.path or "").startswith(
+                          "/api/image/角色扮演生图/")))
     #  ↑ moss 漫画图单张 2MB+（2026-11-03 实测），persona 的 CG 单张 8MB+
-    #    （2026-11-04 实测），一并流式。
+    #    （2026-11-04 实测），一并流式。2026-11-08 扮演 CG 改落独立的
+    #    `角色扮演生图/` 目录，这一支也得流式，否则 5175 会先把 8MB 读进内存。
     # 每个请求一个干净 session，用完就关（见 `_new_session` 的说明）。
     # 绝不能复用全局 session：那会把上一个用户的 cookie 带给下一个用户。
     sess = _new_session()
@@ -678,8 +681,21 @@ def gv_list():
         d = r.json()
     except Exception as e:                            # noqa: BLE001
         return jsonify({"ok": False, "error": "后端读不到：%s" % e}), 502
-    rows = [x for x in (d.get("sessions") or [])
-            if x.get("source") == "guest"]
+    # 2026-11-08：11-05 起游客改走 persona 存储，线键是 `guest_<uuid>__<卡>`，
+    # 5174 把它们标成 source="file"；只捞 source=="guest" 就只剩 11-03 老目录，
+    # 页面看着像「记录不更新」。两类都收，老记录照常显示。
+    rows = []
+    for x in (d.get("sessions") or []):
+        key = str(x.get("key") or "")
+        is_new = key.startswith("guest_")
+        if x.get("source") != "guest" and not is_new:
+            continue
+        if is_new:
+            x = dict(x)                       # 别改到后端返回的原对象
+            uid = key[len("guest_"):].split("__", 1)[0]
+            x["label"] = "游客 %s" % uid[:8]  # 5174 的 _label 会写成「游客 guest_8b」
+            x["short"] = "游客"
+        rows.append(x)
     return jsonify({"ok": True, "total": len(rows), "sessions": rows})
 
 
@@ -688,9 +704,12 @@ def gv_detail():
     if not _gv_admin():
         return jsonify({"ok": False, "error": "没登录"}), 401
     key = str(request.args.get("key") or "").strip()
+    # 裸 uuid = 老目录（跨天合并，走 guest 分支）；`guest_*` = 11-05 之后的
+    # persona 线，历史在 persona_archive_<key>.jsonl，得让 5174 走 file 分支。
+    src = "file" if key.startswith("guest_") else "guest"
     try:
         r = requests.get(BACKEND + "/api/persona_admin/detail",
-                         params={"key": key, "source": "guest"},
+                         params={"key": key, "source": src},
                          headers={"X-Friend-Token": friend_auth.secret()},
                          timeout=20)
     except Exception as e:                            # noqa: BLE001
@@ -790,17 +809,25 @@ def proxy_moss_img():
     return _forward("/api/moss", "img")
 
 
-# ─── 角色扮演的单张 CG（2026-11-04）─────────────────────
+# ─── 角色扮演的单张 CG（2026-11-04 建、2026-11-08 补第二支）─────
 #
-# persona 页「出图」的结果地址是 `/api/image/web/生图页/...`。这条不转发的话，
-# 手机端（5175/隧道）请求全部 404——用户报「网页端出图没有显示成果」，5174
-# 的日志里连一条 `/api/image` 请求都没有（请求根本没出网关）。
+# persona 页「出图」的结果地址先是 `/api/image/web/生图页/...`，2026-11-07 起
+# 改落 `/api/image/角色扮演生图/<渠道>/...`（`persona.PLAY_OUT_DIR`）。**两条
+# 都得转发**：只放老的那支时，新目录的图在 5174 上 200、在 5175/隧道上 404，
+# 用户看到的就是「图生成了但网页端不显示」，5174 日志里连一条请求都没有。
 #
-# ⚠️ 只放 `web/` 这一支：`/api/image` 底下还有 QQ 私聊/群聊的图，目录名里
+# ⚠️ 只放这两支：`/api/image` 底下还有 QQ 私聊/群聊的图，目录名里
 # 带 QQ 号/群号，不能整支暴露到公网。CG 只读，路径在 5174 侧还会做越界校验。
 @app.route("/api/image/web/<path:sub>", methods=["GET"])
 def proxy_web_img(sub):
     return _forward("/api/image/web", sub)
+
+
+@app.route("/api/image/角色扮演生图/<path:sub>", methods=["GET"])
+def proxy_play_img(sub):
+    # `sub` 只有 `<渠道>/<文件名>` 两段，都是 ASCII；前缀里的中文交给
+    # requests 的 requote_uri 百分号编码，5174 侧 Werkzeug 会解回中文再匹配路由。
+    return _forward("/api/image/角色扮演生图", sub)
 
 
 @app.route("/compat")
