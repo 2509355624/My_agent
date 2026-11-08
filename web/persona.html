@@ -3752,13 +3752,14 @@ function renderItems() {
     }
     const q = axisQ(it.help);
     if (q) row.appendChild(q);
-    if (it.kind !== "plot") {          // 剧情道具不提供一键插入，要玩家自己写
-      const btn = document.createElement("span");
-      btn.className = "use";
-      btn.textContent = "使用";
-      btn.onclick = function () { useItem(it); };
-      row.appendChild(btn);
-    }
+    // 全部道具都能一键插入（2026-11-08 用户要求：剧情道具也要能主动使用）。
+    // 剧情道具插进来的模板会多一个冒号，提示玩家补上「怎么用 / 用在哪」——
+    // 迷药、催眠手机光写个名字演员不知道该往哪儿落。
+    const btn = document.createElement("span");
+    btn.className = "use";
+    btn.textContent = "使用";
+    btn.onclick = function () { useItem(it); };
+    row.appendChild(btn);
     box.appendChild(row);
   });
 
@@ -3783,7 +3784,10 @@ function useItem(it) {
   const el = $("inp");
   if (!el) return;
   const s = el.value.trim();
-  const add = "（用" + (it.name || it.key) + "）";
+  const nm = it.name || it.key;
+  const add = (it.kind === "plot")
+    ? "（用" + nm + "：" + "）"          // 剧情道具留个空，玩家写怎么用
+    : "（用" + nm + "）";
   el.value = s ? (s + "\n" + add) : add;
   el.dispatchEvent(new Event("input"));
   el.focus();

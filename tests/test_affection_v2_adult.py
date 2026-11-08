@@ -1010,10 +1010,16 @@ class ItemsFrontendTest(unittest.TestCase):
         h = self._html()
         self.assertIn("道具表没拉到", h, "拉取失败要给明确提示，不能只说「还没加载」")
 
-    def test_plot_items_have_no_use_button(self):
-        """剧情道具不给一键插入——要玩家自己写怎么用。"""
+    def test_all_items_have_use_button(self):
+        """剧情道具也要能一键插入（2026-11-08 用户要求改的）。
+
+        之前按「剧情道具要玩家自己写怎么用」做成不给按钮，用户实机反馈
+        要能主动使用——改成全部可点，剧情道具插进来的模板多一个冒号，
+        提示玩家补「怎么用 / 用在哪」。
+        """
         h = self._html()
-        self.assertIn('it.kind !== "plot"', h)
+        self.assertNotIn('it.kind !== "plot"', h, "不该再把剧情道具排除在外")
+        self.assertIn('it.kind === "plot"', h, "剧情道具要有单独的插入模板")
 
     def test_panel_renders_rows(self):
         h = self._html()
