@@ -266,12 +266,16 @@ class PromptPolicyTest(unittest.TestCase):
         self.assertIn("乳头", p)
         self.assertIn("内裤", p)
 
-    def test_prompt_uncertain_must_pass(self):
-        """拿不准 = 放行：这是 10-26 换口径的**唯一目的**，反了就等于没改。"""
+    def test_prompt_uncertain_must_block(self):
+        """拿不准 = 拦（2026-11-08 用户拍板改回严的一侧）。
+
+        原来的口径是「拿不准就放行」，代价是中转站 502 降级到备用家之后，
+        一张露点的图直接过审发进了群。现在宁可多送几张进人工二审。
+        """
         p = image_audit._PROMPT
-        self.assertIn("拿不准就放行", p)
-        self.assertNotIn("confidence=low 一律拦", p)
-        self.assertNotIn("拿不准 → 按 2", p)
+        self.assertIn("拿不准就拦", p)
+        self.assertNotIn("拿不准就放行", p)
+        self.assertIn("进人工二审", p)
 
     def test_low_confidence_no_longer_overrides_allow(self):
         """代码层不再拿 confidence 当闸门。
