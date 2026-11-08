@@ -5430,6 +5430,27 @@ def _confession_reply(head, model_hist, first_reply, card=None):
     return str(out or "").strip()
 
 
+def pop_item_fade(session_key):
+    """取「这一轮刚失效的道具」并**立刻清掉**（读一次就够，下一轮不再显示）。
+
+    和 `take_pending_finish` 同一个套路：状态是给前端看一眼的，
+    留在存档里下次刷新会重复画那条删除线。
+    """
+    try:
+        key = resolve_line(session_key)
+        st = _load_state()
+        rec = st.get(key) or {}
+        fade = rec.pop("item_fade", None)
+        if not isinstance(fade, dict) or not fade.get("name"):
+            return None
+        st[key] = rec
+        _save_state(st)
+        return {"key": str(fade.get("key") or ""), "name": str(fade.get("name") or "")}
+    except Exception:                                     # noqa: BLE001
+        log.warning("取道具失效标记失败 %s", session_key, exc_info=True)
+        return None
+
+
 def run_turn(session_key, text, target, sender="", sender_uin="",
              manual=None, writing=None):
     """扮演态的一轮：**两次** LLM 调用，返回 `Turn(正文, 画面, 情绪, 强度, 状态)`。
@@ -5630,8 +5651,32 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
                 _irec["items"] = _items.apply_gain(_irec.get("items"), _gains)
                 _istate[key] = _irec
                 _save_state(_istate)
+            # 生效中的道具（2026-11-08）：一次只一个。倒计时由代码做，
+            # 不靠模型记「第几轮」——它记不住。
+            _act = _items.normalize_active(_irec.get("active_item"))
+            _fade_name, _fade_key = "", ""
+            if _act:
+                _act, _fade_name = _items.tick(_act)
+                _fade_key = str((_irec.get("active_item") or {}).get("key") or "")
+            _started = ""
+            if _use:
+                # 一次只用一样：多个就用第一个，其余忽略（用户拍板，先做简单版）
+                _act, _old = _items.start(_act, _use[0], turn_total(key))
+                if _old:
+                    log.info("道具顶替：%s 被 %s 换下", _old, _use[0])
+                _started = _use[0]
+            # 写回存档（active 变了就存）
+            if _act or _fade_name or _irec.get("active_item"):
+                _irec["active_item"] = _act
+                # 失效那一轮留个标记给前端画删除线，读一次就清（见 pop_item_fade）
+                if _fade_name:
+                    _irec["item_fade"] = {"key": _fade_key, "name": _fade_name}
+                _istate[key] = _irec
+                _save_state(_istate)
             for _blk in (_items.list_block(),
-                         _items.use_block(_use),
+                         _items.use_block([_started] if _started else []),
+                         _items.active_block(_act, just_started=bool(_started)),
+                         _items.fade_block(_fade_name, _fade_key),
                          _items.keepsake_block(_irec.get("items"))):
                 if _blk:
                     head = head + "\n\n" + _blk

@@ -610,6 +610,10 @@
     border: 1px dashed rgba(240,180,41,.55); border-radius: 7px;
     padding: 2px 8px; background: rgba(240,180,41,.07); }
   .itRow .use:hover { background: rgba(240,180,41,.16); }
+  /* 道具状态行：贴着 AI 回复的元数据，不抢视觉 */
+  .itline { font-size: 11px; line-height: 1.7; margin-top: 3px;
+    display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
+
   .itemsKeeps { margin-top: 10px; padding-top: 9px;
     border-top: 1px solid var(--border); font-size: 11.5px;
     color: var(--text-dim); line-height: 1.8; }
@@ -1403,7 +1407,10 @@ function lockInput(on) {
 function pushAssistant(d) {
   const nA = d.n ? d.n.assistant : null;
   const row = renderRow({ role: "assistant", text: d.reply,
-                          aff: d.affection || null, n: nA },
+                          aff: d.affection || null, n: nA,
+                          // 道具状态行（2026-11-08）：生效中带倒计时，
+                          // 刚失效那一轮带 fade（画删除线，下一轮就没了）。
+                          act: d.act || null, fade: d.fade || null },
                         nA === null ? ("a" + Date.now()) : nA);
   $("log").appendChild(row);
   markLastAff();
@@ -1576,6 +1583,12 @@ function makeRow(m, id) {
 
   // ★ 攻略模式（2026-11-03）：AI 回复下方的关系状态行
   if (m.role === "assistant" && m.aff) wrap.appendChild(affLine(m.aff));
+
+  // ★ 道具状态行（2026-11-08）：生效中的带倒计时，刚失效的带删除线。
+  // 数据存在消息的 `act` / `fade` 上（由 send 那侧回填），刷新页面时从后端补。
+  if (m.role === "assistant" && (m.act || m.fade)) {
+    wrap.appendChild(itemLine(m.act, m.fade));
+  }
 
   // ★ 图片容器：**就挂在气泡正下方**，不另起一行消息
   const pic = document.createElement("div");
@@ -2427,6 +2440,36 @@ async function refreshPanel() {
       renderPanel(AFF, PANEL);
     }
   } catch (e) { /* 网络抖一下就算了，下一轮还会再拉 */ }
+}
+
+// 道具状态行（2026-11-08）：AI 回复下方那一小行。
+// 生效中 = 名字 + 还剩几轮；刚失效 = 删除线 + 灰字，下一轮就不显示了。
+function itemLine(act, fade) {
+  const d = document.createElement("div");
+  d.className = "itline";
+  if (act && act.name) {
+    const s = document.createElement("span");
+    s.style.cssText = "color:#f0b429";
+    s.textContent = "🎒 " + act.name + " 生效中";
+    d.appendChild(s);
+    if (typeof act.left === "number" && act.total) {
+      const c = document.createElement("span");
+      c.style.cssText = "margin-left:6px;color:var(--text-mute)";
+      c.textContent = "还剩 " + act.left + " 轮（共 " + act.total + "）";
+      d.appendChild(c);
+    }
+  }
+  if (fade && fade.name) {
+    const s = document.createElement("span");
+    s.style.cssText = "color:var(--text-mute);text-decoration:line-through";
+    s.textContent = "🎒 " + fade.name;
+    d.appendChild(s);
+    const c = document.createElement("span");
+    c.style.cssText = "margin-left:5px;color:var(--text-mute);font-size:10.5px";
+    c.textContent = "已失效";
+    d.appendChild(c);
+  }
+  return d;
 }
 
 function renderAff(a, noFetch) {

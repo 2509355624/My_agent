@@ -876,5 +876,115 @@ class ItemSystemTest(unittest.TestCase):
         self.assertIn('/api/persona/items', src)
 
 
+class ItemLifecycleTest(unittest.TestCase):
+    """道具生效与失效（2026-11-08）：一次只一个，代码倒计时，配置给时长。"""
+
+    def setUp(self):
+        from app import items
+        self.it = items
+
+    def test_every_item_has_turns_and_fade(self):
+        for key, it in self.it.all_items().items():
+            self.assertIn("turns", it, "%s 缺 turns" % key)
+            self.assertIn("fade", it, "%s 缺 fade" % key)
+            self.assertGreaterEqual(it["turns"], 1)
+
+    def test_start_sets_full_countdown(self):
+        act, old = self.it.start(None, "wine", turn_no=5)
+        self.assertEqual(act["key"], "wine")
+        self.assertEqual(act["left"], act["total"])
+        self.assertEqual(old, "")
+
+    def test_start_replaces_previous(self):
+        act, _ = self.it.start(None, "wine")
+        act2, old = self.it.start(act, "vibrator")
+        self.assertEqual(act2["key"], "vibrator")
+        self.assertEqual(old, "酒", "旧道具要能报出名字，好写收尾")
+
+    def test_tick_counts_down(self):
+        act, _ = self.it.start(None, "wine")
+        total = act["total"]
+        for i in range(total - 1):
+            act, fade = self.it.tick(act)
+            self.assertEqual(fade, "")
+            self.assertIsNotNone(act)
+        act, fade = self.it.tick(act)
+        self.assertIsNone(act, "到 0 就该清空")
+        self.assertEqual(fade, "酒")
+
+    def test_turns_capped(self):
+        """配置写成 99 也要被 MAX_TURNS 压住。"""
+        self.assertLessEqual(self.it._turns_of("wine"), self.it.MAX_TURNS)
+
+    def test_active_block_shows_round(self):
+        act, _ = self.it.start(None, "wine")
+        act, _ = self.it.tick(act)
+        blk = self.it.active_block(act)
+        self.assertIn("酒", blk)
+        self.assertIn("第 2 轮", blk)
+
+    def test_active_block_just_started_is_short(self):
+        act, _ = self.it.start(None, "wine")
+        blk = self.it.active_block(act, just_started=True)
+        self.assertIn("第 1 轮", blk)
+        self.assertNotIn("接着写", blk, "刚用的那一轮不重复 prompt")
+
+    def test_fade_block_uses_config(self):
+        blk = self.it.fade_block("酒", "wine")
+        self.assertIn("酒", blk)
+        self.assertIn("酒劲下去了", blk)
+
+    def test_fade_block_empty_without_config(self):
+        self.assertEqual(self.it.fade_block("不存在", "nonexistent"), "")
+
+    def test_normalize_active_drops_invalid(self):
+        self.assertIsNone(self.it.normalize_active(None))
+        self.assertIsNone(self.it.normalize_active({"key": "不存在"}))
+        self.assertIsNone(self.it.normalize_active({"key": "wine", "left": 0}))
+
+    def test_normalize_active_keeps_valid(self):
+        a = self.it.normalize_active({"key": "wine", "left": 2, "total": 3})
+        self.assertEqual(a["key"], "wine")
+        self.assertEqual(a["left"], 2)
+
+    def test_run_turn_ticks_and_injects(self):
+        import inspect
+        from app import persona
+        src = inspect.getsource(persona.run_turn)
+        self.assertIn("_items.tick", src)
+        self.assertIn("_items.start", src)
+        self.assertIn("_items.active_block", src)
+        self.assertIn("_items.fade_block", src)
+
+    def test_fade_marker_is_popped_once(self):
+        import inspect
+        from app import persona
+        src = inspect.getsource(persona.pop_item_fade)
+        self.assertIn('pop("item_fade"', src)
+        self.assertIn("_save_state", src)
+
+    def test_api_returns_act_and_fade(self):
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "app", "persona_api.py")
+        with io.open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertIn('out["act"]', src)
+        self.assertIn('out["fade"]', src)
+
+    def test_frontend_renders_item_line(self):
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "web", "persona.html")
+        with io.open(path, encoding="utf-8") as fh:
+            h = fh.read()
+        self.assertIn("function itemLine", h)
+        self.assertIn("生效中", h)
+        self.assertIn("已失效", h)
+        self.assertIn("line-through", h)
+
+
 if __name__ == "__main__":
     unittest.main()

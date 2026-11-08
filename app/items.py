@@ -252,3 +252,116 @@ def panel(records):
         "keepsakes": [r for r in normalize(records)
                       if str(r.get("kind") or "") == "keepsake"],
     }
+
+
+# ─── 生效中的道具（一次只一个）─────────────────────────
+#
+# 2026-11-08 用户拍板：**一次只生效一个道具**。多个叠着用组合起来会出 bug，
+# 先做简单版。所以存档里是单值 `active_item`，不是列表。
+#
+# 倒计时由**代码**做，不靠模型记「这是第几轮」——模型记不住。
+# 配置给 `turns`（几轮）、`fade`（失效那轮怎么写收尾）。
+# 代码封顶 MAX_TURNS 轮，防止配置写成 99 之后一路醉到天亮。
+
+MAX_TURNS = 8
+
+
+def _turns_of(key):
+    it = get(key) or {}
+    try:
+        n = int(it.get("turns") or 1)
+    except (TypeError, ValueError):
+        n = 1
+    return max(1, min(MAX_TURNS, n))
+
+
+def start(active, key, turn_no=0):
+    """把某样道具置为生效中。返回 `(新 active, 被顶掉的旧名字或 "")`。
+
+    已经有别的道具在生效时**直接顶替**（旧的那条立刻失效，名字返回给调用方
+    让它写一句收尾）。
+    """
+    it = get(key)
+    if not it:
+        return (None if not isinstance(active, dict) else active), ""
+    old_name = ""
+    if isinstance(active, dict) and active.get("key") and active["key"] != key:
+        old_name = str(active.get("name") or active.get("key") or "")
+    n = _turns_of(key)
+    return {"key": key, "name": str(it.get("name") or key),
+            "left": n, "total": n, "since": int(turn_no or 0)}, old_name
+
+
+def tick(active):
+    """每轮开头调：倒计时 -1。返回 `(新 active 或 None, 刚失效的名字或 "")`。
+
+    `left` 到 0 就清空——调用方拿到的失效名字可以用来写一句收尾。
+    """
+    if not isinstance(active, dict) or not active.get("key"):
+        return None, ""
+    a = dict(active)
+    a["left"] = int(a.get("left") or 0) - 1
+    if a["left"] <= 0:
+        return None, str(a.get("name") or a.get("key") or "")
+    return a, ""
+
+
+def active_block(active, just_started=False):
+    """生效中的道具注入。
+
+    `just_started=True` 表示这一轮刚用上——那一段完整的 prompt 由 `use_block`
+    给，这里只补一句「第几轮」，免得重复。
+    """
+    if not isinstance(active, dict) or not active.get("key"):
+        return ""
+    name = str(active.get("name") or active.get("key") or "")
+    left = int(active.get("left") or 0)
+    total = int(active.get("total") or left)
+    done = max(0, total - left)
+    if just_started:
+        return ("\n（%s生效中：共 %d 轮，这是第 1 轮）\n" % (name, total))
+    it = get(str(active.get("key") or "")) or {}
+    tail = "，快过去了" if left == 1 else ""
+    return ("## 正在生效：%s\n\n"
+            "（第 %d 轮 / 共 %d 轮%s。这一轮照旧按上面那段写法接着写，"
+            "不用重新拿出来。）\n" % (name, done + 1, total, tail))
+
+
+def fade_block(name, key=""):
+    """失效那一轮的一句收尾。配置里没写 fade 就返回空（直接消失）。"""
+    if not name:
+        return ""
+    it = get(key) or {}
+    fade = str(it.get("fade") or "").strip()
+    if not fade:
+        return ""
+    return "## 刚失效：%s\n\n%s\n" % (name, fade)
+
+
+def active_names(active):
+    """给前端：正在生效的那一条。"""
+    if not isinstance(active, dict) or not active.get("key"):
+        return None
+    return {"key": str(active.get("key") or ""),
+            "name": str(active.get("name") or ""),
+            "left": int(active.get("left") or 0),
+            "total": int(active.get("total") or 0)}
+
+
+def normalize_active(active):
+    """读档时清洗：字段不合法就当没有。"""
+    if not isinstance(active, dict):
+        return None
+    key = str(active.get("key") or "").strip()
+    if not key or not get(key):
+        return None
+    total = int(active.get("total") or _turns_of(key))
+    # `left = 0` 是「已经失效」，不能被 `or total` 当成「没给」救回来
+    # （2026-11-08 实测：写过期存档会复活一条已经失效的道具）
+    raw_left = active.get("left")
+    left = total if raw_left is None else int(raw_left)
+    if left <= 0:
+        return None
+    return {"key": key, "name": str(active.get("name") or (get(key) or {}).get("name") or key),
+            "left": min(left, total), "total": min(total, MAX_TURNS),
+            "since": int(active.get("since") or 0)}

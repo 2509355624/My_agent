@@ -981,6 +981,16 @@ def skip_day_api():
         aff_now = _aff_status(key)
         if aff_now:
             out["affection"] = aff_now
+        # 道具状态行（2026-11-08）：AI 回复下方显示「生效中 · 还剩 N 轮」，
+        # 刚失效那一轮带 `fade`（前端画删除线）。数据从存档读，不重算。
+        try:
+            from app import items as _items
+            _rec = (persona._load_state() or {}).get(key) or {}
+            out["act"] = _items.active_names(
+                _items.normalize_active(_rec.get("active_item")))
+            out["fade"] = persona.pop_item_fade(key)
+        except Exception:                                # noqa: BLE001
+            log.warning("取道具状态失败", exc_info=True)
         return jsonify(out)
     finally:
         llm.set_custom_override(None)
@@ -1198,9 +1208,16 @@ def items_api():
                      if str(r.get("kind") or "") == "keepsake"]
     except Exception:                                     # noqa: BLE001
         log.warning("取信物失败，只给目录", exc_info=True)
+    active = None
+    try:
+        rec2 = (persona._load_state() or {}).get(key) or {}
+        active = items.active_names(items.normalize_active(rec2.get("active_item")))
+    except Exception:                                     # noqa: BLE001
+        log.warning("取生效道具失败", exc_info=True)
     return jsonify({"ok": True,
                     "catalog": items.panel(keepsakes)["catalog"],
-                    "keepsakes": keepsakes})
+                    "keepsakes": keepsakes,
+                    "active": active})
 
 
 @bp.route("/api/persona/affection/wipe", methods=["POST"])
