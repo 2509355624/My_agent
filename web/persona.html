@@ -3689,13 +3689,30 @@ function openItems() {
   const m = $("itemsMask");
   if (!m) return;
   m.classList.add("on");
-  renderItems();
-  if (!ITEMS) {
-    fetch("/api/persona/items?key=" + encodeURIComponent(KEY || ""))
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d) { ITEMS = d; renderItems(); } })
-      .catch(() => {});
+  if (ITEMS) { renderItems(); return; }
+  // 第一次打开才拉。**不带 key 参数**——后端自己从 cookie 取会话，
+  // 前端没有这个变量（2026-11-08 踩过：拼了个不存在的 KEY，
+  // 抛 ReferenceError 被 catch 吞掉，面板永远显示「还没加载」）。
+  const box = $("itemsList");
+  if (box) {
+    box.innerHTML = "";
+    const d = document.createElement("div");
+    d.style.cssText = "font-size:12px;color:var(--text-mute);padding:8px 0";
+    d.textContent = "正在加载道具表…";
+    box.appendChild(d);
   }
+  fetch("/api/persona/items")
+    .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)))
+    .then(d => { if (d && d.ok) { ITEMS = d; renderItems(); } })
+    .catch(err => {
+      if (!box) return;
+      box.innerHTML = "";
+      const d = document.createElement("div");
+      d.style.cssText = "font-size:12px;color:#e57373;padding:8px 0;line-height:1.7";
+      d.textContent = "道具表没拉到（" + (err && err.message ? err.message : "网络错误")
+        + "）。如果刚改过后端代码，要先重启 5174 再看。";
+      box.appendChild(d);
+    });
 }
 function closeItems() {
   const m = $("itemsMask");

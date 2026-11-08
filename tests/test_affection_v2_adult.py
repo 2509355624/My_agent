@@ -986,5 +986,40 @@ class ItemLifecycleTest(unittest.TestCase):
         self.assertIn("line-through", h)
 
 
+class ItemsFrontendTest(unittest.TestCase):
+    """道具面板前端（2026-11-08 踩过：拼了个不存在的 KEY 变量，永远不渲染）。"""
+
+    def _html(self):
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "web", "persona.html")
+        with io.open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_fetch_does_not_use_undefined_key(self):
+        """前端没有 KEY 这个变量；拼进去会抛 ReferenceError 被 catch 吞掉。"""
+        h = self._html()
+        import re
+        m = re.search(r'fetch\("/api/persona/items[^"]*"\)', h)
+        self.assertIsNotNone(m, "找不到道具接口的 fetch")
+        self.assertEqual(m.group(0), 'fetch("/api/persona/items")',
+                         "道具接口不该带 key 参数（后端从 cookie 取会话）")
+
+    def test_fetch_has_error_message(self):
+        h = self._html()
+        self.assertIn("道具表没拉到", h, "拉取失败要给明确提示，不能只说「还没加载」")
+
+    def test_plot_items_have_no_use_button(self):
+        """剧情道具不给一键插入——要玩家自己写怎么用。"""
+        h = self._html()
+        self.assertIn('it.kind !== "plot"', h)
+
+    def test_panel_renders_rows(self):
+        h = self._html()
+        self.assertIn('row.className = "itRow"', h)
+        self.assertIn("KIND[it.kind]", h)
+
+
 if __name__ == "__main__":
     unittest.main()
