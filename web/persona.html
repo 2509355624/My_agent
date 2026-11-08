@@ -590,6 +590,13 @@
      axisHelpMask 排在 itemsMask 前面，就会被道具面板整个盖住。
      给它单独抬高层级——不管从哪儿点开，它都在最上面。 */
   #axisHelpMask { z-index: 620; }
+  /* 层级约定（2026-11-08，同一个坑踩了两次）：
+     根因是 `.skipMask` / `.wipeMask` 一律 z-index:400，谁盖住谁**只看 DOM 顺序**。
+     凡是「从别的弹窗里点开」的东西，都得自己抬层级：
+       620  单条说明卡（从道具面板、身体面板点进来）
+       700  二次确认（删存档——它叠在存档列表上面）
+     以后再加这类嵌套弹窗，先到这张表里挑一个数，别再靠排 DOM 顺序。 */
+  #slotWipeMask { z-index: 700; }
   .axisHelp { max-width: 460px; max-height: 72vh; overflow-y: auto; }
   .axisHelpBody p { font-size: 12.5px; line-height: 1.85;
     color: var(--text-dim); margin: 6px 0; }

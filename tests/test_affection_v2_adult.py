@@ -1219,5 +1219,44 @@ class SlotWipeStrictTest(unittest.TestCase):
         self.assertIn("name", m.group(1))
 
 
+class ModalLayeringTest(unittest.TestCase):
+    """嵌套弹窗的层级（2026-11-08 同一个坑踩了两次）。
+
+    `.skipMask` / `.wipeMask` 一律 z-index:400，谁盖住谁只看 DOM 顺序。
+    凡是「从别的弹窗里点开」的，都得自己抬层级——这里钉住那张表。
+    """
+
+    def _html(self):
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "web", "persona.html")
+        with io.open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_base_masks_are_400(self):
+        h = self._html()
+        self.assertIn(".skipMask { display: none; position: fixed; inset: 0; z-index: 400;", h)
+        self.assertIn(".wipeMask { display: none; position: fixed; inset: 0; z-index: 400;", h)
+
+    def test_axis_help_above_panels(self):
+        h = self._html()
+        self.assertIn("#axisHelpMask { z-index: 620; }", h)
+
+    def test_slot_wipe_above_slot_list(self):
+        """删存档的确认要压在存档列表上面（用户实测报过被盖住）。"""
+        h = self._html()
+        self.assertIn("#slotWipeMask { z-index: 700; }", h)
+
+    def test_slot_wipe_dom_order_is_before_slot_list(self):
+        """顺便钉住事实：slotWipeMask 在 DOM 里排在 slotMask 前面。
+
+        正因为排在前面，才必须靠 z-index 抬起来——这条断言是给下一个改的人
+        看的：别以为挪一下 DOM 顺序就完事，两个 mask 的 z-index 都是 400。
+        """
+        h = self._html()
+        self.assertLess(h.find('id="slotWipeMask"'), h.find('id="slotMask"'))
+
+
 if __name__ == "__main__":
     unittest.main()
