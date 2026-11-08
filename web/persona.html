@@ -388,6 +388,9 @@
   .prow.current .nm { color: var(--accent); font-weight: 600; }
   .prow.current .vl { color: var(--accent); }
   .prow.locked { opacity: .55; }
+  /* v2 展开面板：走过的档不打勾，只比没到的稍亮一点（2026-11-08）。
+     整张表只有 current 那一行是粉色 ▶，避免玩家把一排勾读成「事故都发生过」。 */
+  .prow.passed .nm { color: var(--text-dim); }
   .prow .req { color: #f0a35e; font-size: 11px; }
   /* 状态数值条（2026-11-05 用户要求）：档位表上面先给一行具体数字。
      没有这一行时，玩家得自己从表里推「现在好感到底多少」，太累。 */
@@ -1487,6 +1490,22 @@ function affLine(a) {
   // → 靠得很近），但玩家看不出「还差多远」，用户原话「不知道怎么触发后续
   // 剧情」。所以加回数字，但只加在 `.cur`（最新一条）上，且用**档内进度**
   // `21/30`，不是后台刻度。
+  // v2 正向关系线（2026-11-08）：气泡下面只给关系名和已发生的事，
+  // 不画门槛数字、不画解锁进度条——身体接触是事实记录，不是攒分解锁。
+  if (a.schema === 2) {
+    const r2 = document.createElement("div");
+    r2.textContent = "❤ 关系 " + (a.tierName || "");
+    div.appendChild(r2);
+    const c2 = document.createElement("div");
+    c2.style.cssText = "font-size:11px;color:var(--text-dim)";
+    c2.textContent = "已发生：" + (a.contactName || "还没碰过");
+    div.appendChild(c2);
+    const q2 = document.createElement("div");
+    q2.style.cssText = "font-size:11px;color:var(--text-dim)";
+    q2.textContent = "她心里那句话：" + (a.confessName || "还没想过");
+    div.appendChild(q2);
+    return div;
+  }
   const g = a.intimacy || null;
 
   const rel = document.createElement("div");
@@ -1758,6 +1777,219 @@ function renderPanel(a, p) {
   const body = $("panelBody");
   body.innerHTML = "";
   const v = p.value | 0;
+
+  // ── v2 正向关系线（2026-11-08）────────────────────────────
+  // 老档继续用下面那张 v1 面板。默认只给「关系一行 + 已发生的事」，
+  // 不列门槛数字、不画解锁清单：身体接触是已发生的事实，不是攒分进度。
+  // 想看数值的玩家点开底下的折叠块，那里是另一张完整的状态表。
+  if (p.schema === 2) {
+    if (stats) stats.style.display = "none";
+    const sec = function (t) {
+      const d = document.createElement("div");
+      d.style.cssText = "font-size:11px;color:var(--text-mute);margin:10px 0 4px";
+      d.textContent = t; body.appendChild(d);
+    };
+    const line = function (t, dim) {
+      const d = document.createElement("div");
+      d.style.cssText = "font-size:12px;line-height:1.7;color:"
+        + (dim ? "var(--text-dim)" : "var(--text)");
+      d.textContent = t; body.appendChild(d);
+    };
+    const head = document.createElement("div");
+    head.style.cssText = "font-size:13px;padding:2px 0 6px;color:var(--text)";
+    head.textContent = "关系 ";
+    const hb = document.createElement("b");
+    hb.textContent = p.relation || "正常关系";
+    head.appendChild(hb); body.appendChild(head);
+    if (p.relationDesc) line(p.relationDesc, true);
+
+    sec("已经发生的事");
+    if (p.contacts && p.contacts.length) {
+      p.contacts.forEach(function (c) {
+        let t = "第" + (c.day | 0) + "天 · " + (c.place || "当时的地方")
+          + " · " + (c.cause || "自然发生的") + "：" + (c.excerpt || "");
+        if (c.first) t += "（第一次）";
+        line(t, false);
+      });
+    } else {
+      line("还没有超出客套的接触。", true);
+    }
+    const cur = document.createElement("div");
+    cur.style.cssText = "font-size:12px;padding:5px 0 2px;color:var(--text)";
+    cur.textContent = "现在到这一步：";
+    const cb = document.createElement("b");
+    cb.textContent = p.contact || "还没碰过";
+    cur.appendChild(cb); body.appendChild(cur);
+    line("拨头发、递东西、喂食、并肩走只让她心里软一点，不算接触，不会推着进度走。", true);
+
+    sec("她心里那句话");
+    const q = document.createElement("div");
+    q.style.cssText = "font-size:12px;color:var(--text)";
+    const qb = document.createElement("b");
+    qb.textContent = p.confessName || "还没想过";
+    q.appendChild(qb); body.appendChild(q);
+    if (p.confessDesc) line(p.confessDesc, true);
+    line("（这不是分数解锁，只说明她把话攒到了哪一步）", true);
+
+    if (p.yandere > 0) {
+      sec("她现在的状态");
+      line(p.yandereName || "有点不安", false);
+    }
+
+    // ── 数值与状态条（2026-11-08 晚）──
+    // 实机反馈：不要 .foldbody 那种 max-height + 内部滚动条，观感很差。
+    // 直接平铺挂在下面，默认展开；标题仍可点着收紧，状态记 localStorage。
+    // 数值上限、档位名、门槛全由后端从 config 给，前端一个数都不重算。
+    const fold = document.createElement("div");
+    const fhead = document.createElement("div");
+    fhead.className = "foldhead";
+    fhead.setAttribute("role", "button");
+    fhead.tabIndex = 0;
+    const fk = document.createElement("span");
+    fk.className = "k";
+    fk.textContent = "数值与状态条";
+    const fmark = document.createElement("span");
+    fmark.className = "foldmark";
+    fmark.textContent = "▾";
+    fhead.appendChild(fk);
+    fhead.appendChild(fmark);
+    const fbody = document.createElement("div");
+    fbody.className = "v2stats";
+    fbody.style.cssText = "padding-top:4px;color:var(--text-dim)";
+    fold.appendChild(fhead);
+    fold.appendChild(fbody);
+    body.appendChild(fold);
+
+    // 一行具体数字：不管后端有没有新字段都在，先给玩家一个清晰感知。
+    const numRows = [["好感", p.value | 0],
+                     ["表白值", (p.confess | 0) + "/" + (p.confessMax | 0)],
+                     ["病娇", p.yandere | 0],
+                     ["接触", "第" + (p.contactDegree | 0) + "档"],
+                     ["在一起", p.together ? "是" : "否"]];
+    if (typeof p.day === "number") numRows.push(["天数", "第" + (p.day | 0) + "天"]);
+    const nums = document.createElement("div");
+    nums.className = "pstats";
+    numRows.forEach(function (x) {
+      const el = document.createElement("span");
+      el.textContent = x[0] + " ";
+      const b = document.createElement("b");
+      b.textContent = x[1];
+      el.appendChild(b);
+      nums.appendChild(el);
+    });
+    fbody.appendChild(nums);
+
+    // 进度条：只在后端给了真实上限时画，没有就留数字，不拿假刻度凑。
+    const v2Bar = function (label, val, max, min) {
+      const d = document.createElement("div");
+      d.style.cssText = "margin:6px 0 2px;font-size:11.5px;color:var(--text-dim)";
+      const nm = document.createElement("span");
+      nm.textContent = label + " ";
+      const b = document.createElement("b");
+      b.style.cssText = "color:var(--text-dim);font-weight:500";
+      b.textContent = (val | 0) + " / " + (max | 0);
+      d.appendChild(nm);
+      d.appendChild(b);
+      const track = document.createElement("div");
+      track.className = "bar";
+      const fill = document.createElement("i");
+      const span = (max | 0) - (min | 0);
+      const pct = span > 0
+        ? Math.max(0, Math.min(100, ((val | 0) - (min | 0)) / span * 100)) : 0;
+      fill.style.width = pct.toFixed(1) + "%";
+      track.appendChild(fill);
+      d.appendChild(track);
+      fbody.appendChild(d);
+    };
+    if (typeof p.valueMax === "number") v2Bar("好感", p.value, p.valueMax, p.valueMin | 0);
+    if (typeof p.confessMax === "number") v2Bar("表白值", p.confess, p.confessMax, 0);
+    if (typeof p.yandereMax === "number") v2Bar("病娇值", p.yandere, p.yandereMax, 0);
+    if (typeof p.contactMax === "number") v2Bar("已发生接触", p.contactDegree, p.contactMax, 0);
+
+    // 四张状态表：整张表只留一个粉色 ▶（当前档），其余一律不打勾。
+    // 早先复用 panelSection 时负向档被判成 reached，整排 ✔ 会被读成
+    // 「随时会走 / 在等你认错」这些事故都发生过。**前端也兜一层**：
+    // 不信任旧后端返回的 reached，负向档直接不列，这样不用再重启 5174。
+    const v2Table = function (title, rows, curVal, isDeg) {
+      const wrap = document.createElement("div");
+      const h = document.createElement("h3");
+      h.textContent = title;
+      wrap.appendChild(h);
+      (rows || []).forEach(function (r) {
+        const gate = r.gate | 0;
+        if (!isDeg && gate < 0) return;    // 负向档不进这张表
+        const cur = r.state === "current";
+        const st = cur ? "current" : (r.state === "passed" ? "passed" : "locked");
+        const d = document.createElement("div");
+        d.className = "prow " + st;
+        const mk = document.createElement("span");
+        mk.className = "mk";
+        mk.textContent = cur ? "▶" : "·";
+        const nm = document.createElement("span");
+        nm.className = "nm";
+        nm.textContent = r.name || "—";
+        const vl = document.createElement("span");
+        vl.className = "vl";
+        if (r.gateText) {                   // 新后端给好的文案
+          vl.textContent = r.gateText;
+        } else if (isDeg) {                // 旧后端降级：不再出现「1/1 档」
+          vl.textContent = "第" + gate + "档";
+        } else if (cur) {
+          vl.textContent = String(curVal | 0);
+        } else if (gate <= 0) {
+          vl.textContent = "起点";
+        } else {
+          vl.textContent = "≥" + gate;
+        }
+        d.appendChild(mk);
+        d.appendChild(nm);
+        d.appendChild(vl);
+        wrap.appendChild(d);
+      });
+      return wrap;
+    };
+    [["感情 · 好感", p.tierRows, p.value, false],
+     ["身体接触 · 已发生", p.contactRows, p.contactDegree, true],
+     ["她心里那句话 · 表白值", p.confessRows, p.confess, false],
+     ["她的不安 · 病娇值", p.yandereRows, p.yandere, false]].forEach(function (x) {
+      if (x[1] && x[1].length) fbody.appendChild(v2Table(x[0], x[1], x[2], x[3]));
+    });
+    if (p.notContact && p.notContact.length) {
+      const nc = document.createElement("div");
+      nc.style.cssText = "font-size:11.5px;color:var(--text-mute);line-height:1.6;margin-top:6px";
+      nc.textContent = "不算接触：" + p.notContact.join("、") + "。只动心，不进接触记录。";
+      fbody.appendChild(nc);
+    }
+    const tip2 = document.createElement("div");
+    tip2.style.cssText = "font-size:11.5px;color:var(--text-mute);line-height:1.6;margin-top:6px";
+    tip2.textContent = "接触这几档是已经发生的事，不是攒分能推的进度；感情 50 分以上要先表白。";
+    fbody.appendChild(tip2);
+
+    const FKEY = "persona_v2_stats_open";
+    const setOpen = function (on, remember) {
+      fbody.style.display = on ? "" : "none";   // 平铺，不是内部滚动容器
+      fmark.textContent = on ? "▾" : "▸";
+      if (remember) {
+        try { localStorage.setItem(FKEY, on ? "1" : "0"); } catch (e) {}
+      }
+    };
+    let open = true;
+    try { open = localStorage.getItem(FKEY) !== "0"; } catch (e) {}
+    setOpen(open, false);   // 默认挂载在下面，只有主动收起过才记住收起
+    const toggleV2 = function () {
+      setOpen(fbody.style.display === "none", true);
+    };
+    fhead.addEventListener("click", toggleV2);
+    fhead.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleV2(); }
+    });
+
+    const note2 = $("panelNote");
+    note2.textContent = p.together
+      ? "你们已经在一起了，日子接着往下过。"
+      : "身体接触只记已经发生的事，不会随好感自己往前跳。";
+    return;
+  }
 
   // 状态数值条（2026-11-05）：先给一行具体数字，再往下才是档位表。
   // 自由模式下这些值不结算，但保留上次封存的值——玩家想知道自己停在哪。

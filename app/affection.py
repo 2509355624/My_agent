@@ -56,6 +56,15 @@ MAX_V = 100             # 2026-11-04 晚从 50 抬到 100：50 处只放「在�
 INITIAL_V = 0
 ROUND_CAP = 15          # 单轮加分绝对值上限（防一句话刷满）
 
+# 新标尺版本号。**必须放在文件前面**：`_blank()` 的默认参数在模块加载时
+# 就要求值，放在末尾会 NameError。没有这个字段的老档一律按 v1 处理。
+V2_SCHEMA = 2
+
+# 新建的记录默认走 v2（新存档）。v1 契约测试在 setUp 里把它关掉，明确
+# 声明自己钉的是老标尺——否则「临时建一条空线」在代码层跟真·新档完全
+# 一样，175 项老测试会集体被判成新档。老档不看这个开关。
+V2_AUTO_NEW = True
+
 # ── 身体进度（2026-11-04 深夜改版）──────────────────────
 # 「你们到哪一步了」。0~6 级，**每一级的名字就是这一级能做什么**：
 # 还没碰过 / 能碰到了 / 能抱了 / 亲过了 / 碰过了 / 做过了 / 要不够。
@@ -753,6 +762,8 @@ def dynamic_block(res, cfg=None):
     """
     if not isinstance(res, dict) or not res.get("active"):
         return ""
+    if res.get("schema") == V2_SCHEMA:
+        return ""          # v2 没有冲动/高潮那套临时行为规则
     st = dynamic_state(res, cfg)
     rules = dynamic_rules(cfg)
     lines = []
@@ -1249,11 +1260,15 @@ def card_start(card):
             "arousal": max(0, min(AROUSAL_MAX, aro))}
 
 
-def _blank(line_key="", value=None):
+def _blank(line_key="", value=None, schema=1):
     """新建一份攻略记录。
 
     起点**不是**固定的 0：先看角色卡有没有配 `start_level` / `start_value`。
     骨科卡可以一上来就是「妹妹」（第 2 级），不用从陌生人爬。
+
+    `schema` 默认 1（v1）：直接调这个函数的地方（测试、老线补建、v1 调用链）
+    一律按老标尺。是不是新存档由 `_ensure()` 判——只有它看得到这条线
+    有没有聊过，那里会显式传 2。别把默认改成 2，会让所有 v1 回归全红。
     """
     card = {}
     if line_key:
@@ -1266,17 +1281,21 @@ def _blank(line_key="", value=None):
     if value is not None:
         st["value"] = max(MIN_V, min(MAX_V, int(value)))
     t = tier_for(st["value"]) or {}
-    return {"mode": MODE_RAID, "value": st["value"], "tier": str(t.get("key") or ""),
-            "level": st["level"], "arousal": st.get("arousal", 0), "cross_n": 0,
-            "down": 0, "ending": "", "milestone": "",
-            "excite": 0, "scene": False, "orgasms": 0, "idle": 0,
-            "corrupt": 0, "submit": 0,
-            # 开发度（2026-11-05）：五个部位单独记，**只涨不掉、不设上限**，
-            # 500 是满格（面板显示 /500）。老档在 `_migrate` 里补 0。
-            "dev": dev_blank(),
-            "day": 0, "chat": 0, "acts": 0,
-            "streak": 1, "turns": 0, "ach": [], "hist": [],
-            "mercy": MERCY_MAX, "suspicion": 0}
+    rec = {"mode": MODE_RAID, "value": st["value"], "tier": str(t.get("key") or ""),
+           "level": st["level"], "arousal": st.get("arousal", 0), "cross_n": 0,
+           "down": 0, "ending": "", "milestone": "",
+           "excite": 0, "scene": False, "orgasms": 0, "idle": 0,
+           "corrupt": 0, "submit": 0,
+           # 开发度（2026-11-05）：五个部位单独记，**只涨不掉、不设上限**，
+           # 500 是满格（面板显示 /500）。老档在 `_migrate` 里补 0。
+           "dev": dev_blank(),
+           "day": 0, "chat": 0, "acts": 0,
+           "streak": 1, "turns": 0, "ach": [], "hist": [],
+           "mercy": MERCY_MAX, "suspicion": 0}
+    rec["schema"] = int(schema or 1)
+    if rec["schema"] == V2_SCHEMA:
+        rec.update(_v2_blank_fields())
+    return rec
 
 
 def _entry(line_key):
@@ -1328,6 +1347,10 @@ def _migrate(rec):
     旧的单轴系统里没有距离这个概念，这个信息本来就不存在，猜不出来。
     """
     if not isinstance(rec, dict):
+        return rec
+    # v2 记录不进 v1 迁移：老迁移会按好感反推 level、补 ach/hist，
+    # 那套标尺在 v2 里根本不用，补进来只会造脏字段、还可能触发落盘。
+    if int(rec.get("schema") or 1) == V2_SCHEMA:
         return rec
     v = int(rec.get("value") or 0)
     # 按门槛反推「好感够得上第几级」
@@ -1534,6 +1557,12 @@ def _ensure(line_key):
         log.error("[affection-lost] %s 有过进度却读不到好感记录，"
                   "正在新建空白记录。请检查 state/persona_sessions.json.prev",
                   line_key)
+        # 聊过的老线只是补建记录，不是新存档：保持 v1 标尺。
+    else:
+        # 从没聊过 = 真·新存档，用 v2 正向关系线。版本判定只在这里做：
+        # `_blank` 看不到历史，让它默认 2 会把 v1 调用链和测试全带偏。
+        if V2_AUTO_NEW:
+            rec = _blank(line_key, schema=V2_SCHEMA)
     ent["affection"] = rec
     try:
         _save_entry(line_key, ent)
@@ -1569,6 +1598,8 @@ def status(line_key):
     _ent, rec = _ensure(line_key)
     if not rec:
         return None
+    if _v2_is(rec):
+        return _v2_status(rec, _card_of(line_key))
     cfg = load_config()
     value = int(rec.get("value") or 0)
     t = tier_for(value, cfg) or {}
@@ -1659,6 +1690,8 @@ def panel(line_key):
     _ent, rec = _ensure(line_key)
     if not rec:
         return None
+    if _v2_is(rec):
+        return _v2_panel(rec, _card_of(line_key))
     cfg = load_config()
     card = _card_of(line_key)
     value = int(rec.get("value") or 0)
@@ -2103,7 +2136,8 @@ def wipe_numbers(line_key, keep_mode=True):
     ent, old = _ensure(line_key)
     if ent is None or old is None:
         return None           # 没在演谁：当普通消息
-    fresh = _blank(line_key)
+    # 清空存档保留原标尺：老线重开还是老线，新线重开还是新线。
+    fresh = _blank(line_key, schema=int(old.get("schema") or 1))
     if keep_mode and old.get("mode"):
         fresh["mode"] = old["mode"]
     ent["affection"] = fresh
@@ -2155,6 +2189,8 @@ def scoring_ctx(line_key):
     _ent, rec = _ensure(line_key)
     if not rec or rec.get("mode") != MODE_RAID:
         return None
+    if _v2_is(rec):
+        return _v2_scoring_ctx(rec, _card_of(line_key))
     cfg = load_config()
     value = int(rec.get("value") or 0)
     # 最近发生（2026-11-05 扩到 8 条）：打分 prompt 的「重复衰减」要靠它数
@@ -2261,7 +2297,12 @@ def settle(line_key, score, game_day=None):
         # **mode 必须带上**：网页端拿这个回包直接渲染开关状态，
         # 缺了就会被判成「自由模式」——聊天一轮后控件自己跳到自由模式
         # （2026-11-03 群友实测：好感 +20 时突然变自由模式，其实数值没变）。
-        return {"applied": 0, "active": False, "mode": MODE_FREE}
+        out = {"applied": 0, "active": False, "mode": MODE_FREE}
+        if _v2_is(rec):
+            out["schema"] = V2_SCHEMA
+        return out
+    if _v2_is(rec):
+        return _v2_settle(line_key, ent, rec, score, game_day)
     value = int(rec.get("value") or 0)
     cfg = load_config()
 
@@ -3058,6 +3099,8 @@ def injection_block(res, cfg=None):
     """主对话（第二段）系统头里追加的那段。自由模式返回空串。"""
     if not isinstance(res, dict) or not res.get("active"):
         return ""
+    if res.get("schema") == V2_SCHEMA:
+        return _v2_injection(res)
     cfg = cfg or load_config()
     lines = ["## 你们现在到这一步了（系统按状态结算的事实，照这个演，不要自己改）", ""]
     value = int(res.get("value") or 0)
@@ -3464,6 +3507,8 @@ def tail_line(res):
     """
     if not isinstance(res, dict) or not res.get("active"):
         return ""
+    if res.get("schema") == V2_SCHEMA:
+        return _v2_tail(res)
     ending = str(res.get("ending") or "")
     if ending:
         # 只剩进局子一种结局了（毕业 2026-11-04 晚退休）；老档若还留着
@@ -3637,3 +3682,551 @@ def achievement_text(line_key):
     if nodes is None:
         return None
     return "\n\n".join(nodes)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# v2 正向关系线（2026-11-08）
+#
+# 两套标尺靠记录里的 `schema` 分开，互不污染：
+#   · 没有 schema / schema != 2 → 老档，走本文件上半部 v1 的全部逻辑，
+#     **不迁移、不补字段、不改写任何数值**；
+#   · schema == 2              → 新档 + 指定的测试线，走下面这一套。
+#
+# 四条轴：
+#   value     好感，只描述关系与接受程度，档名固定软名、两段式
+#   contacts  身体接触，只记**已经发生的事实**，不是分数也不是许可
+#   confess   表白值，她心里那句话攒到哪一步（0~50）
+#   yandere   病娇值，只做数值和事件标记，剧情交给演员 AI
+#
+# 冲动 / 高潮 / 堕落 / 屈服是 v1 的东西。v2 里它们恒 0、不参与任何判定；
+# 它们的实现一行没动，老档该怎么玩还怎么玩。
+#
+# 分流点集中在几个入口函数开头，v1 主体保持原样——这是「超大更新不改老
+# 玩家存档」最省事也最不容易出错的做法。
+# ══════════════════════════════════════════════════════════════════════
+_V2_CFG_FILE = "affection_v2.json"
+
+# 配置丢了也不能让新线聊不下去：一份够用的最小兜底，机制照跑，只是没文案。
+_V2_FALLBACK = {
+    "value": {"min": -50, "max": 100, "initial": 0, "clamp_per_turn": 15},
+    "tiers": [
+        {"key": "lovers", "min": 75, "name": "恋人", "desc": ""},
+        {"key": "together", "min": 50, "name": "在一起了", "desc": "",
+         "needs_confession": True},
+        {"key": "sure", "min": 40, "name": "认准你了", "desc": "", "gate": True},
+        {"key": "inheart", "min": 30, "name": "心里有你", "desc": ""},
+        {"key": "moved", "min": 20, "name": "动了心", "desc": ""},
+        {"key": "aware", "min": 10, "name": "有点在意", "desc": ""},
+        {"key": "normal", "min": 0, "name": "正常关系", "desc": ""},
+    ],
+    "contacts": {"levels": [
+        {"key": "none", "degree": 0, "name": "还没碰过", "hint": ""},
+        {"key": "accident", "degree": 1, "name": "有过意外接触", "hint": ""},
+        {"key": "hand", "degree": 2, "name": "牵过手", "hint": ""},
+        {"key": "hug", "degree": 3, "name": "抱过", "hint": ""},
+        {"key": "kiss", "degree": 4, "name": "亲过", "hint": ""},
+        {"key": "made", "degree": 5, "name": "做过", "hint": ""},
+    ], "not_contact": []},
+    "confess": {"max": 50, "initial": 0,
+                "stages": [{"key": "none", "min": 0, "name": "还没想过",
+                            "desc": ""}],
+                "auto": {"requires_tier": "sure", "requires_confess": 50}},
+    "proposal": {"refuse_yandere": 35},
+    "yandere": {"max": 100, "initial": 0, "event_threshold": 45, "stages": []},
+}
+
+
+def _v2_i(x, default=0):
+    try:
+        return int(x or 0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _v2_config():
+    try:
+        with open(os.path.join(str(BASE_DIR), "config", _V2_CFG_FILE),
+                  encoding="utf-8") as fh:
+            d = json.load(fh)
+        if isinstance(d, dict) and isinstance(d.get("tiers"), list):
+            return d
+    except (OSError, ValueError):
+        log.warning("v2 档位配置读不到，用内嵌兜底")
+    return _V2_FALLBACK
+
+
+def _v2_is(rec):
+    return isinstance(rec, dict) and _v2_i(rec.get("schema"), 1) == V2_SCHEMA
+
+
+def is_v2(line_key):
+    """给 persona 用：这条线是不是新标尺。老线一律 False。"""
+    try:
+        ent = _entry(line_key)
+    except Exception:                                     # noqa: BLE001
+        return False
+    rec = ent.get("affection") if isinstance(ent, dict) else None
+    return _v2_is(rec)
+
+
+def _v2_blank_fields():
+    return {
+        "contacts": [],          # 已发生的事实，一条一行
+        "firsts": {},            # degree -> 第一次那条记录
+        "confess": 0,
+        "yandere": 0,
+        "together": False,
+        "auto_confess_done": False,
+        "yandere_event_done": False,
+    }
+
+
+def _v2_tier(value, together=False, cfg=None):
+    """两段式：50 / 75 两档必须由表白成功解锁，没表白就卡在「认准你了」。"""
+    cfg = cfg or _v2_config()
+    tiers = sorted(cfg.get("tiers") or [],
+                   key=lambda t: _v2_i(t.get("min")), reverse=True)
+    v = _v2_i(value)
+    for t in tiers:
+        # 50 及以上的档一律要表白成功才解锁（两段式）。**按门槛判，不靠
+        # 配置里逐个标 needs_confession**——漏标一档就会出现「没表白直接
+        # 跳到恋人」，实测 value=99 时踩过一次。
+        if _v2_i(t.get("min")) >= 50 and not together:
+            continue
+        if t.get("gate") and together:
+            continue
+        if v >= _v2_i(t.get("min")):
+            return t
+    return tiers[-1] if tiers else {"key": "normal", "name": "正常关系",
+                                   "desc": ""}
+
+
+def _v2_contact_level(rec, cfg=None):
+    """现在到哪一步 = 记录里最远的一条，不是攒分解锁。"""
+    cfg = cfg or _v2_config()
+    levels = sorted((cfg.get("contacts") or {}).get("levels") or [],
+                    key=lambda x: _v2_i(x.get("degree")))
+    deg = 0
+    for c in (rec.get("contacts") or []):
+        if isinstance(c, dict):
+            deg = max(deg, _v2_i(c.get("degree")))
+    hit = levels[0] if levels else {"key": "none", "degree": 0,
+                                    "name": "还没碰过", "hint": ""}
+    for l in levels:
+        if deg >= _v2_i(l.get("degree")):
+            hit = l
+    return hit, deg
+
+
+def _v2_stage(section, value, cfg=None):
+    """通用阶段查询（confess / yandere 都用这张表）。"""
+    cfg = cfg or _v2_config()
+    stages = sorted((cfg.get(section) or {}).get("stages") or [],
+                    key=lambda x: _v2_i(x.get("min")), reverse=True)
+    for s in stages:
+        if _v2_i(value) >= _v2_i(s.get("min")):
+            return s
+    return stages[-1] if stages else {"key": "none", "name": "—", "desc": ""}
+
+
+def _v2_recent(rec):
+    rows = []
+    for h in reversed((rec.get("hist") or [])[-8:]):
+        if isinstance(h, dict):
+            rows.append("· %s（%+d）" % (h.get("r") or "", _v2_i(h.get("d"))))
+    return ("最近发生：\n" + "\n".join(rows)) if rows else "（你们还没什么交集）"
+
+
+def _v2_status(rec, card=None):
+    """网页/管理页的只读快照。字段名沿用 v1，前端旧的 renderAff 不会崩。"""
+    cfg = _v2_config()
+    value = _v2_i(rec.get("value"))
+    together = bool(rec.get("together"))
+    t = _v2_tier(value, together, cfg)
+    contact, deg = _v2_contact_level(rec, cfg)
+    cs = _v2_stage("confess", rec.get("confess"), cfg)
+    ys = _v2_stage("yandere", rec.get("yandere"), cfg)
+    return {
+        "schema": V2_SCHEMA,
+        "mode": str(rec.get("mode") or MODE_RAID),
+        "value": value,
+        "tier": str(t.get("key") or ""),
+        "tierName": str(t.get("name") or ""),
+        "level": deg,
+        "levelMax": 5,
+        "levelName": "",                 # v2 关系名走 tierName，别再显示 v1 距离层级
+        "intimacy": None,                # 不列门槛数字
+        "arousal": 0, "arousalName": "", "arousalShort": "",
+        "excite": 0, "exciteName": "", "orgasms": 0, "orgasmMax": 0,
+        "inScene": False, "milestone": "", "crossN": 0, "ending": "",
+        "corrupt": 0, "corruptName": "", "submit": 0, "submitName": "",
+        "contactName": str(contact.get("name") or ""),
+        "confess": _v2_i(rec.get("confess")),
+        "confessName": str(cs.get("name") or ""),
+        "yandere": _v2_i(rec.get("yandere")),
+        "yandereName": str(ys.get("name") or ""),
+        "together": together,
+        "mercy": mercy_left(rec), "mercyMax": MERCY_MAX,
+    }
+
+
+def _v2_rows(items, cur_key, cur_gate, gate_field="min", together=True,
+             confess_gate=None, degree_fmt=False):
+    """展开面板用的档位表：升序，只有当前这一档高亮。
+
+    2026-11-08 实机踩坑：早先按「gate <= 当前值 = reached」打勾，负向档
+    门槛是负数（-50 / -30 / -20 / -10），好感 26 比它们都大，结果
+    「随时会走 / 在等你认错 / 爱答不理 / 小反感」整排 ✔，玩家会以为
+    这些事故都发生过。现在 state 只有三种：
+      current（粉色 ▶，仅一行）/ passed（走过，中性）/ locked（还没到）。
+    不再产 reached，也不再打勾。负向档由调用方直接过滤掉，不进这张表。
+    """
+    rows = []
+    for it in sorted([x for x in (items or []) if isinstance(x, dict)],
+                     key=lambda x: _v2_i(x.get(gate_field))):
+        g = _v2_i(it.get(gate_field))
+        k = str(it.get("key") or "")
+        if k == cur_key:
+            state = "current"
+        elif g < cur_gate:
+            state = "passed"
+        else:
+            state = "locked"
+        name = str(it.get("name") or "")
+        if confess_gate is not None and g >= confess_gate and not together:
+            state = "locked"
+            name += "（要先表白）"
+        if degree_fmt:
+            gate_text = "第" + str(g) + "档"
+        elif state == "current":
+            gate_text = str(cur_gate)
+        elif g <= 0:
+            gate_text = "起点"
+        else:
+            gate_text = "≥" + str(g)
+        rows.append({
+            "key": k, "name": name, "gate": g, "state": state,
+            "gateText": gate_text,
+            "desc": str(it.get("desc") or ""),
+            "hint": str(it.get("hint") or ""),
+        })
+    return rows
+
+
+def _v2_panel(rec, card=None):
+    """右栏整张面板。v2 默认只给「关系一行 + 已发生的事」，不画解锁清单；
+    展开区要用的数值上限和四张状态表也在这里一并给全（2026-11-08）。
+
+    这里全是只读展示数据：不写存档、不参与结算，v1 标尺也不受影响。
+    """
+    cfg = _v2_config()
+    value = _v2_i(rec.get("value"))
+    confess = _v2_i(rec.get("confess"))
+    yandere = _v2_i(rec.get("yandere"))
+    together = bool(rec.get("together"))
+    t = _v2_tier(value, together, cfg)
+    contact, deg = _v2_contact_level(rec, cfg)
+    cs = _v2_stage("confess", confess, cfg)
+    ys = _v2_stage("yandere", yandere, cfg)
+    vcfg = cfg.get("value") or {}
+    ccfg = cfg.get("contacts") or {}
+    cscfg = cfg.get("confess") or {}
+    ycfg = cfg.get("yandere") or {}
+    levels = sorted(ccfg.get("levels") or [],
+                    key=lambda x: _v2_i(x.get("degree")))
+    contact_max = max([_v2_i(l.get("degree")) for l in levels] or [5])
+    # 两段式门槛取配置里的主动表白条件，和结算器同一个数。
+    confess_gate = _v2_i((cscfg.get("auto") or {}).get("requires_confess"), 50)
+    # 感情表只列正向 7 档。负向档是「关系变坏时会走到的方向」，不是走过的路，
+    # 列进这张表就会像一排事故打卡（和 v1 面板「负向是事故，不进面板」一致）。
+    pos_tiers = [t for t in (cfg.get("tiers") or [])
+                 if isinstance(t, dict) and _v2_i(t.get("min")) >= 0]
+    contacts = []
+    for c in (rec.get("contacts") or []):
+        if not isinstance(c, dict):
+            continue
+        contacts.append({
+            "day": _v2_i(c.get("day")),
+            "place": str(c.get("place") or ""),
+            "cause": str(c.get("cause") or ""),
+            "who": str(c.get("who") or ""),
+            "degree": _v2_i(c.get("degree")),
+            "excerpt": str(c.get("excerpt") or "")[:120],
+            "first": bool(c.get("first")),
+        })
+    return {
+        "schema": V2_SCHEMA,
+        "value": value,
+        "relation": str(t.get("name") or ""),
+        "relationDesc": str(t.get("desc") or ""),
+        "relationKey": str(t.get("key") or ""),
+        "contact": str(contact.get("name") or ""),
+        "contactDegree": deg,
+        "contacts": contacts,
+        "confess": confess,
+        "confessMax": _v2_i(cscfg.get("max"), 50),
+        "confessName": str(cs.get("name") or ""),
+        "confessDesc": str(cs.get("desc") or ""),
+        "yandere": yandere,
+        "yandereName": str(ys.get("name") or ""),
+        "together": together,
+        # 展开区：数值上限 + 四张状态表。旧进程没加载到这段时前端只画
+        # 已有数字，不会拿假门槛去凑一张表。
+        "valueMin": _v2_i(vcfg.get("min"), -50),
+        "valueMax": _v2_i(vcfg.get("max"), 100),
+        "contactMax": contact_max,
+        "yandereMax": _v2_i(ycfg.get("max"), 100),
+        "yandereThreshold": _v2_i(ycfg.get("event_threshold"), 45),
+        "notContact": [str(x) for x in (ccfg.get("not_contact") or [])],
+        "tierRows": _v2_rows(pos_tiers, str(t.get("key") or ""), value,
+                             together=together, confess_gate=confess_gate),
+        "contactRows": _v2_rows(levels, str(contact.get("key") or ""), deg,
+                                gate_field="degree", degree_fmt=True),
+        "confessRows": _v2_rows(cscfg.get("stages"), str(cs.get("key") or ""),
+                                confess),
+        "yandereRows": _v2_rows(ycfg.get("stages"), str(ys.get("key") or ""),
+                                yandere),
+        "day": _v2_i(rec.get("day")),
+        "turns": _v2_i(rec.get("turns")),
+        "mode": str(rec.get("mode") or MODE_RAID),
+        # v1 前端读到的字段一律给空，避免 undefined 报错
+        "intimacy": [], "tiers": [], "arousals": [], "corrupts": [],
+        "arousal": 0, "arousalName": "", "corrupt": 0, "corruptName": "",
+        "submit": 0, "submitName": "", "orgasm": 0, "orgasmName": "",
+        "excite": 0, "exciteName": "", "dev": {}, "devPct": 0,
+        "devAllFull": False, "needValue": None,
+    }
+
+
+def _v2_scoring_ctx(rec, card=None):
+    """给 v2 第一段打分模型看的事实。返回的全是中文自然语言，不扔英文字段名。"""
+    cfg = _v2_config()
+    value = _v2_i(rec.get("value"))
+    together = bool(rec.get("together"))
+    t = _v2_tier(value, together, cfg)
+    contact, deg = _v2_contact_level(rec, cfg)
+    cs = _v2_stage("confess", rec.get("confess"), cfg)
+    ys = _v2_stage("yandere", rec.get("yandere"), cfg)
+    return {
+        "schema": V2_SCHEMA,
+        "value": value,
+        "tier": str(t.get("name") or ""),
+        "level": str(contact.get("name") or ""),
+        "levelN": deg,
+        "arousal": 0, "arousalName": "", "excite": 0, "exciteName": "",
+        "dynamicBrief": "（这一轮没有额外的动态规则）",
+        "corrupt": 0, "submit": 0, "suspicion": 0,
+        "devText": "", "devMax": 0,
+        "recent": _v2_recent(rec),
+        "relation_name": str(t.get("name") or ""),
+        "relation_desc": str(t.get("desc") or ""),
+        "contact_name": str(contact.get("name") or ""),
+        "confess": _v2_i(rec.get("confess")),
+        "confess_max": _v2_i((cfg.get("confess") or {}).get("max"), 50),
+        "confess_name": str(cs.get("name") or ""),
+        "confess_desc": str(cs.get("desc") or ""),
+        "yandere": _v2_i(rec.get("yandere")),
+        "yandere_name": str(ys.get("name") or ""),
+        "together": together,
+    }
+
+
+def _v2_injection(res):
+    """给第二段演员的事实块。**全部中文自然语言**——只扔 confess / yandere
+    这种英文字段名，演员根本不知道前面那个数是什么意思，等于白算。"""
+    if not isinstance(res, dict) or not res.get("active"):
+        return ""
+    lines = ["## 你们现在到这一步了（系统按状态结算的事实，照这个演，不要自己改）", ""]
+    lines.append("关系：【%s】" % (res.get("tierName") or "?"))
+    desc = str(res.get("relationDesc") or "").strip()
+    if desc:
+        lines += ["", desc]
+
+    contacts = res.get("contacts") or []
+    lines += ["", "已经发生的身体接触（只记事实，不是许可）："]
+    if contacts:
+        for c in contacts[-6:]:
+            bit = "· 第%s天，%s，%s：%s" % (
+                c.get("day") or "?", c.get("place") or "当时的地方",
+                c.get("cause") or "自然发生的", c.get("excerpt") or c.get("name") or "")
+            if c.get("first"):
+                bit += "（这是你们第一次到这一步）"
+            lines.append(bit)
+    else:
+        lines.append("· 还没有超出客套的接触。")
+    lines.append("现在到哪一步：【%s】。拨头发、递东西、喂食、并肩走都只让她心里软一点，"
+                 "不算接触，不要拿它们当进度。" % (res.get("contactName") or "还没碰过"))
+
+    cs = str(res.get("confessName") or "").strip()
+    cd = str(res.get("confessDesc") or "").strip()
+    lines += ["", "她心里那句话：【%s】。" % (cs or "还没想过")]
+    if cd:
+        lines.append(cd)
+    lines.append("这不是分数解锁，也不是她现在就要开口；它只说明她把话攒到了哪一步，"
+                 "你按这个分寸演她。")
+
+    if res.get("just_together"):
+        lines += ["", "**这一刻你们在一起了。**把这一拍演出来，不要写成收场——"
+                      "故事接着往下走，后面还有日子要过。"]
+    if res.get("new_first"):
+        nf = res["new_first"]
+        lines += ["", "**这一轮是第一次【%s】。**第一次是要在正文里写清楚的："
+                      "她愣了多久、手停在哪里、有没有躲，按她的性格写，别一笔带过。"
+                      % (nf.get("name") or "接触")]
+    if res.get("yandere_event"):
+        lines += ["", "她刚经历了一次很重的落空，这件事在她心里翻来覆去。"
+                      "这一拍该发生点什么了——具体怎么演由你定，别替她把情绪说破。"]
+
+    lines += ["", "她接不接得住更近一步，看你们现在的关系、这一刻的气氛和她是谁；"
+                  "别把档位当成许可，也别在面板之外编数字。"]
+    return "\n".join(lines)
+
+
+def _v2_tail(res):
+    """QQ 尾行：v2 不列门槛数字，只给关系与已发生的事。"""
+    if not isinstance(res, dict) or not res.get("active"):
+        return ""
+    rows = ["❤ 关系 %s" % (res.get("tierName") or "?")]
+    rows.append("已发生：%s" % (res.get("contactName") or "还没碰过"))
+    rows.append("她心里那句话：%s" % (res.get("confessName") or "还没想过"))
+    return "\n".join(rows)
+
+
+def _v2_settle(line_key, ent, rec, score, game_day=None):
+    """v2 结算。v1 那几百行一个字不动，这里只处理四条正向轴。"""
+    cfg = _v2_config()
+    score = score if isinstance(score, dict) else {}
+    vc = cfg.get("value") or {}
+    lo, hi = _v2_i(vc.get("min"), -50), _v2_i(vc.get("max"), 100)
+    cap = _v2_i(vc.get("clamp_per_turn"), 15)
+
+    _snap = copy.deepcopy(rec)
+    _snap.pop("_prev", None)
+    rec["_prev"] = _snap
+    rec["turns"] = _v2_i(rec.get("turns")) + 1
+    if game_day is not None:
+        try:
+            rec["day"] = int(game_day)
+        except (TypeError, ValueError):
+            pass
+
+    def _clamp(v, a, b):
+        return max(a, min(b, _v2_i(v)))
+
+    delta = _clamp(score.get("delta"), -cap, cap)
+    value = _clamp(_v2_i(rec.get("value")) + delta, lo, hi)
+    rec["value"] = value
+    reason = str(score.get("reason") or "").strip()[:30]
+    hist = rec.get("hist") if isinstance(rec.get("hist"), list) else []
+    if delta or reason:
+        hist.append({"d": delta, "r": reason, "ts": ""})
+        rec["hist"] = hist[-40:]
+
+    # 表白值：模型逐轮给增量，代码只夹单轮上限（防一句话刷满）。
+    cmax = _v2_i((cfg.get("confess") or {}).get("max"), 50)
+    confess = _clamp(_v2_i(rec.get("confess"))
+                     + _clamp(score.get("confess"), -10, 10), 0, cmax)
+    rec["confess"] = confess
+
+    # 病娇值：拒绝她主动表白是一次很重的落空，单独加一笔。
+    ymax = _v2_i((cfg.get("yandere") or {}).get("max"), 100)
+    yandere = _clamp(_v2_i(rec.get("yandere"))
+                     + _clamp(score.get("yandere"), -20, 20), 0, ymax)
+    if score.get("refused_confession"):
+        yandere = _clamp(
+            yandere + _v2_i((cfg.get("proposal") or {}).get("refuse_yandere"), 35),
+            0, ymax)
+    rec["yandere"] = yandere
+
+    # 身体接触：只记事实。第一次单独留一条，并且这一轮要写进正文。
+    new_first = None
+    c = score.get("contact")
+    levels = (cfg.get("contacts") or {}).get("levels") or []
+    max_deg = max([_v2_i(l.get("degree")) for l in levels] or [5])
+    if isinstance(c, dict) and _v2_i(c.get("degree")) > 0:
+        deg = _clamp(c.get("degree"), 0, max_deg)
+        item = {
+            "day": _v2_i(game_day) or _v2_i(rec.get("day")),
+            "place": str(c.get("place") or "").strip()[:40],
+            "cause": str(c.get("cause") or "").strip()[:40],
+            "who": str(c.get("who") or "").strip()[:20],
+            "degree": deg,
+            "excerpt": str(c.get("excerpt") or "").strip()[:120],
+        }
+        firsts = rec.get("firsts") if isinstance(rec.get("firsts"), dict) else {}
+        is_first = str(deg) not in firsts
+        item["first"] = is_first
+        if is_first:
+            firsts[str(deg)] = item
+            rec["firsts"] = firsts
+            lname = next((str(l.get("name") or "") for l in levels
+                          if _v2_i(l.get("degree")) == deg), "接触")
+            new_first = {"degree": deg, "name": lname, "excerpt": item["excerpt"]}
+        contacts = rec.get("contacts") if isinstance(rec.get("contacts"), list) else []
+        contacts.append(item)
+        rec["contacts"] = contacts[-60:]
+
+    # 男生主动表白：编剧 AI 判「是不是表白」+「她答不答应」，代码只落事实。
+    just_together = False
+    if (score.get("proposal") == "he" and score.get("accept") == "yes"
+            and not rec.get("together")):
+        rec["together"] = True
+        just_together = True
+        if value < 50:                       # 表白成功就跨过 50 这条线
+            value = 50
+            rec["value"] = value
+
+    t = _v2_tier(value, bool(rec.get("together")), cfg)
+    rec["tier"] = str(t.get("key") or "")
+    cs = _v2_stage("confess", confess, cfg)
+    ys = _v2_stage("yandere", yandere, cfg)
+
+    # 女生主动表白：满值 + 感情线到「认准你了」+ 还没在一起，只触发一次。
+    auto = (cfg.get("confess") or {}).get("auto") or {}
+    auto_confess = False
+    if (not rec.get("together") and not rec.get("auto_confess_done")
+            and confess >= _v2_i(auto.get("requires_confess"), 50)
+            and str(t.get("key") or "") == str(auto.get("requires_tier") or "sure")):
+        auto_confess = True
+        rec["auto_confess_done"] = True
+
+    # 病娇事件标记：只给方向，具体剧情交给演员 AI。
+    yandere_event = ""
+    if (ys.get("event") and not rec.get("yandere_event_done")):
+        yandere_event = str(ys.get("desc") or "她心里那件事翻来覆去。")
+        rec["yandere_event_done"] = True
+
+    contact, deg = _v2_contact_level(rec, cfg)
+    res = {
+        "schema": V2_SCHEMA, "active": True,
+        "mode": str(rec.get("mode") or MODE_RAID),
+        "applied": delta, "value": value, "reason": reason,
+        "tier": str(t.get("key") or ""),
+        "tierName": str(t.get("name") or ""),
+        "relationDesc": str(t.get("desc") or ""),
+        "levelName": "", "intimacy": None, "rose": 0,
+        "contactName": str(contact.get("name") or ""),
+        "contactDegree": deg,
+        "contacts": rec.get("contacts") or [],
+        "new_first": new_first,
+        "confess": confess, "confessName": str(cs.get("name") or ""),
+        "confessDesc": str(cs.get("desc") or ""),
+        "yandere": yandere, "yandereName": str(ys.get("name") or ""),
+        "yandere_event": yandere_event,
+        "together": bool(rec.get("together")),
+        "just_together": just_together,
+        "auto_confess": auto_confess,
+        # v1 调用链会读到的字段一律给 0/空，避免 KeyError 与旧样式串台
+        "arousal": 0, "arousalName": "", "excite": 0, "exciteName": "",
+        "orgasms": 0, "inScene": False, "milestone": "", "crossN": 0,
+        "ending": "", "just_ended": "", "just_milestone": "",
+        "corrupt": 0, "corruptName": "", "corruptDelta": 0,
+        "submit": 0, "submitName": "", "submitDelta": 0,
+        "suspicion": 0, "suspicionName": "", "suspicionDelta": 0,
+        "forced": False, "cross": "none", "allow": "",
+        "mercy": mercy_left(rec), "mercyMax": MERCY_MAX,
+    }
+    ent["affection"] = rec
+    _save_entry(line_key, ent)
+    return res
+

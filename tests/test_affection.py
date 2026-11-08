@@ -70,6 +70,11 @@ class AffBase(unittest.TestCase):
             os.path.join(self.tmp.name, "state", "persona_sessions.json"))
         q.start()
         self.addCleanup(q.stop)
+        # 这一整份用例钉的是 v1 老标尺。新线默认走 v2，不关掉的话临时建的
+        # 空线会被判成新档，175 项断言集体串台（2026-11-08 实踩）。
+        v = mock.patch.object(affection, "V2_AUTO_NEW", False)
+        v.start()
+        self.addCleanup(v.stop)
         # 配置钉死成默认档位，和用户的实际配置文件解耦
         c = mock.patch.object(affection, "load_config", _cfg)
         c.start()

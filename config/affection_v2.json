@@ -1,0 +1,67 @@
+{
+  "_note": "v2 正向关系线（2026-11-08）。新档专用；没有 schema 字段的老档一律走 config/affection_tiers.json 的 v1 逻辑，本文件不参与。只描述关系与已发生的事实，不含任何身体技法内容。",
+  "schema": 2,
+  "value": {"min": -50, "max": 100, "initial": 0, "clamp_per_turn": 15},
+  "tiers": [
+    {"key": "lovers", "min": 75, "name": "恋人", "desc": "关系稳下来了。她把你放进日常里，不再试探你会不会走，往后是日子里的事。", "needs_confession": true},
+    {"key": "together", "min": 50, "name": "在一起了", "desc": "表白成功，名分定了。她不再问你在不在意，开始理所当然地占用你的时间。", "needs_confession": true},
+    {"key": "sure", "min": 40, "name": "认准你了", "desc": "她心里已经认了，只差一句说出口。没表白就一直停在这一档，好感再涨也不往前跳。", "gate": true},
+    {"key": "inheart", "min": 30, "name": "心里有你", "desc": "开始把「以后」这个词用到你们身上。你不在的时候她会想，你在的时候又不肯直说。"},
+    {"key": "moved", "min": 20, "name": "动了心", "desc": "她对你和对别人不一样了。会特意坐得近一点，会为你一句话高兴半天，自己还没承认。"},
+    {"key": "aware", "min": 10, "name": "有点在意", "desc": "她开始在意你怎么看她。你夸她的时候会别过脸，还没到喜欢的程度。"},
+    {"key": "normal", "min": 0, "name": "正常关系", "desc": "同校、认识、有共同的空间。客气，也仅此而已。"},
+    {"key": "miffed", "min": -10, "name": "小反感", "desc": "她有点烦你，回话变短，心里在记账。"},
+    {"key": "cold", "min": -20, "name": "爱答不理", "desc": "她不想理你了，问三句答一句。"},
+    {"key": "forced", "min": -30, "name": "在等你认错", "desc": "她还没打算走，但现在是你在补账。"},
+    {"key": "fallen", "min": -50, "name": "随时会走", "desc": "她已经在心里收拾东西了，走还是留看你这一句。"}
+  ],
+  "contacts": {
+    "_note": "身体接触不是分数，也不是许可清单，只记已经发生过的事实。degree 取记录里最远的一条。",
+    "levels": [
+      {"key": "none", "degree": 0, "name": "还没碰过", "hint": "没有超出客套的接触"},
+      {"key": "accident", "degree": 1, "name": "有过意外接触", "hint": "玩家制造的意外：扶住摔倒、被人群挤到；双方都没打算"},
+      {"key": "hand", "degree": 2, "name": "牵过手", "hint": "第一次有意的接触"},
+      {"key": "hug", "degree": 3, "name": "抱过", "hint": "拥抱、靠肩停留"},
+      {"key": "kiss", "degree": 4, "name": "亲过", "hint": "接吻"},
+      {"key": "made", "degree": 5, "name": "做过", "hint": "发生过一次亲密关系"}
+    ],
+    "first_note": "第一次牵手、第一次抱、第一次亲、第一次做都要单独留一条，并且在给演员的事实里点明「这是第一次」。",
+    "not_contact": ["拨头发", "递东西", "喂食", "并肩走", "擦到胳膊", "整理衣领"],
+    "record_fields": ["day", "place", "cause", "who", "degree", "excerpt", "first"]
+  },
+  "confess": {
+    "_note": "表白值：她心里那句话攒到哪一步了。0~50 满分，由编剧 AI 逐轮给增量；代码只记事实，判不判、判多少、表白成不成全交给模型。",
+    "max": 50,
+    "initial": 0,
+    "stages": [
+      {"key": "none", "min": 0, "name": "还没想过", "desc": "她没往那方面想，你们之间还是普通相处。"},
+      {"key": "notices", "min": 10, "name": "开始在意", "desc": "她开始留意你，会说不清为什么在你面前紧张，但还没想过要说出口。"},
+      {"key": "wants", "min": 20, "name": "想说", "desc": "她心里有话，几次到了嘴边又绕开，会主动制造能单独待一会儿的机会。"},
+      {"key": "ready", "min": 35, "name": "快要说出口", "desc": "那句话已经压不住了。她会等你给一个台阶，话说到一半停住，看你接不接。"},
+      {"key": "active", "min": 50, "name": "该她开口了", "desc": "她攒够了。这一次不需要你先开口，她会自己把话说出来。", "auto": true}
+    ],
+    "auto": {
+      "_note": "女生主动表白：表白值到满 + 感情线到认准你了 + 还没在一起，三个都成立才触发一次。触发后在这一轮正常回复之后追加一段。",
+      "requires_tier": "sure",
+      "requires_confess": 50,
+      "once": true
+    }
+  },
+  "proposal": {
+    "_note": "男生主动表白：编剧 AI 判玩家这一句是不是在表白，以及她答不答应。代码只按结果落 together，不写成功率公式。",
+    "success_marker": "together",
+    "refuse_yandere": 35
+  },
+  "yandere": {
+    "_note": "病娇值：她已经认准你了，你却一直做违背她的事。只做数值和事件标记，具体怎么演交给演员 AI。",
+    "max": 100,
+    "initial": 0,
+    "event_threshold": 45,
+    "stages": [
+      {"key": "none", "min": 0, "name": "没有", "desc": "她没往那方面想。"},
+      {"key": "uneasy", "min": 20, "name": "有点不安", "desc": "她开始在意你跟别人走得多近，会多问一句，问完又装作随口。"},
+      {"key": "possessive", "min": 45, "name": "放不下", "desc": "她已经绷着了，被拒绝这件事在她心里翻来覆去。这一拍该出一个事件。", "event": true},
+      {"key": "broken", "min": 75, "name": "崩了", "desc": "她不再按平常那套跟你说话了。", "event": true}
+    ]
+  }
+}

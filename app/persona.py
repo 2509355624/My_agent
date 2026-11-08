@@ -4414,6 +4414,149 @@ def _score_profile(card, state=""):
     return "\n".join(lines)
 
 
+# ── v2 正向关系线的第一段（2026-11-08）─────────────────────────
+# 和上面那份 v1 打分提示词完全分开：v1 那套服务的是老档的距离层级 /
+# 冲动 / 高潮 / 堕落 / 开发度，v2 一条都不碰。这里只判四条正向轴，
+# 而且**每一轴都用中文把「这个数是什么意思」说清楚**——只扔英文字段名
+# 给第二段演员，它根本不知道前面算的表白值代表什么，等于白算。
+_SCORE_PROMPT_V2 = """你在给一段校园/日常恋爱角色扮演做「编剧记录」。读玩家这句话，判断它在干什么，并给下面几项各记一笔。**只输出一个 JSON 对象，不要解释、不要复述原文。**
+
+## 你们现在的事实（系统结算好的，照这个判）
+关系：%(relation_name)s。%(relation_desc)s
+%(together)s
+已经发生的身体接触：%(contact_name)s
+她心里那句话：%(confess_name)s（表白值 %(confess)d/%(confess_max)d）。%(confess_desc)s
+她现在的状态：%(yandere_name)s
+游戏内时间：第 %(gday)s 天 · %(gphase)s；%(gplan)s
+%(recent)s
+
+## 她是谁
+%(profile)s
+
+## 最近几轮
+%(history)s
+
+## 长期账本
+%(ledger)s
+
+## 玩家这一句
+%(said)s
+
+## 要填的字段
+{
+  "intent": "intimate | joke | literal | insult | neutral",
+  "delta": 0,
+  "turn_type": "chat | action",
+  "contact": {"degree": 0, "cause": "", "who": "", "place": "", "excerpt": ""},
+  "confess": 0,
+  "yandere": 0,
+  "proposal": "none | he",
+  "accept": "none | yes | hesitate | no",
+  "refused_confession": false,
+  "reason": "不超过15个字",
+  "note": "不超过15个字",
+  "segments": [{"who": "用户 | 助手", "type": "说 | 做 | 想", "text": "说→原文；做→一句话概括；想→空串"}],
+  "addressed": true,
+  "subtext": "他真正想要 / 试探 / 回避什么",
+  "noticed": "她能从外在表现里察觉到什么",
+  "stance": "接住 | 装傻 | 反问 | 推开",
+  "time": "none | overnight",
+  "phase": "",
+  "plan": "",
+  "place": ""
+}
+
+## 各字段怎么判
+delta：她对他的好感这轮变化多少，单轮 -15~+15。**给的是她的感受，不是他做得对不对**。
+  普通闲聊 -2~+3；真诚关心、记得她说过的话 +3~+6；主动推进场景（约她、递东西、兑现小事）+3~+6；
+  照料/解围 +6~+12；冒犯或让她不适 -3~-8。
+  按她的性格判：黏人的吃主动靠近，戒备的吃「不越线地待着」，嘴硬的不吃直白讨好。
+  turn_type：只有嘴上说、承诺、态度 = chat；叙述里真的发生了改变现状的动作 = action。
+  **空口宣称的大事没有铺垫，按 chat 给分**，别让一句话刷满。
+
+contact：**只记已经发生的、超出客套的身体接触**，不是分数也不是许可。
+  degree：0 没有 / 1 有过意外接触（玩家制造的意外，比如扶住摔倒、被人群挤到，双方都没打算）/
+  2 牵过手（第一次有意的接触）/ 3 抱过 / 4 亲过 / 5 做过。
+  拨头发、递东西、喂食、并肩走、擦到胳膊、整理衣领**都不算**，degree 填 0。
+  cause 写起因（「玩家制造的意外」「她主动」「自然发生」），who 写谁主动，
+  place 写在哪，excerpt 用一句不超过 30 字的话写清楚发生了什么。没发生就整项填 0 / 空。
+  判不出就填 0，宁可漏记，也不要把没发生的写成发生过。
+
+confess：表白值这轮往前挪了多少（-10~+10）。**它是「她心里那句话攒到哪一步」**，
+  不是好感，也不是她现在就要开口。看这一轮你们交流的深度：有没有说到只有彼此知道的事、
+  有没有单独待很久、有没有把「以后」摆在台面上、她有没有在你面前露出不设防的那一面。
+  只是气氛好、只是句好话 = 0。到 50 是满值，意味着她该自己开口了。
+
+yandere：病娇值这轮涨多少（-20~+20）。她已经认定你了，你却去接触别的女生、
+  明显冷落她、做了违背她的事，才给正值；哄回来、把事情圆回去给负值。没有就 0。
+
+proposal：玩家这一句**是不是在表白**（「我们在一起吧」「做我女朋友」这类）= "he"，否则 "none"。
+  表白不写成功率、不算公式：accept 由你结合关系档、表白值、她是谁，判她这一刻答不答应
+  （yes / hesitate / no）。没表白 accept 填 "none"。
+refused_confession：上一轮是她主动开口表白，而玩家这句在拒绝她 = true，否则 false。
+
+segments：把这一句按「说 / 做 / 想」拆开给演员用。想一律留空串，别替玩家补心里话。
+  %(segment_guide)s
+time：跨天/过夜填 "overnight"，其余 "none"；phase 是这一拍的时段（早晨/下午/晚上/深夜），
+  没变就留空；plan 是这轮定下的约定，没有留空；place 是换了地方才写，没换留空。
+  %(director_guide)s
+"""
+
+
+def _judge_v2(card, said, state="", line_key="", gameday=None,
+              history=None, note=""):
+    """v2 的第一段：意图 + 四条正向轴 + 分段/导演条。返回 `(intent, note, score)`。
+
+    判断失败返回 `(None, "", None)`——按 0 分走，不让整轮回不了话。
+    """
+    gd = gameday if isinstance(gameday, dict) else {}
+    plan = str(gd.get("plan") or "").strip()
+    ctx = affection.scoring_ctx(line_key) or {}
+    prompt = _SCORE_PROMPT_V2 % {
+        "relation_name": ctx.get("relation_name") or "正常关系",
+        "relation_desc": ctx.get("relation_desc") or "",
+        "together": ("你们已经在一起了。" if ctx.get("together")
+                     else "还没在一起；没表白之前，关系档不会自己往前跳。"),
+        "contact_name": ctx.get("contact_name") or "还没碰过",
+        "confess": int(ctx.get("confess") or 0),
+        "confess_max": int(ctx.get("confess_max") or 50),
+        "confess_name": ctx.get("confess_name") or "还没想过",
+        "confess_desc": ctx.get("confess_desc") or "",
+        "yandere_name": ctx.get("yandere_name") or "没有",
+        "recent": ctx.get("recent") or "（你们还没什么交集）",
+        "gday": _day_of(gd),
+        "gphase": str(gd.get("phase") or "还没定"),
+        "gplan": ("有个还没兑现的约定：" + plan) if plan else "（暂时没有约定）",
+        "profile": _score_profile(card, state),
+        "said": str(said or "")[:2000],
+        "history": _judge_recent(history),
+        "ledger": _judge_ledger(note),
+        "segment_guide": _SEGMENT_GUIDE,
+        "director_guide": _DIRECTOR_GUIDE,
+    }
+    try:
+        raw = _llm_call([{"role": "user", "content": prompt}], timeout=30)
+    except Exception:                            # noqa: BLE001
+        log.warning("v2 打分调用失败，按 0 分走")
+        return None, "", None
+    d = _parse_json_loose(raw)
+    if not isinstance(d, dict):
+        log.warning("v2 没交 JSON，按 0 分走（共 %d 字）：头=%r 尾=%r",
+                    len(str(raw or "")), str(raw or "")[:120],
+                    str(raw or "")[-120:])
+        return None, "", None
+    intent = str(d.get("intent") or "").strip().lower()
+    if intent not in INTENTS:
+        intent = None
+    note = str(d.get("note") or "").strip()[:30]
+    # settle_v2 只认这个 dict，少带一项等于模型白判。
+    score = {k: d.get(k) for k in (
+        "delta", "turn_type", "reason", "contact", "confess", "yandere",
+        "proposal", "accept", "refused_confession", "segments", "addressed",
+        "subtext", "noticed", "stance", "time", "phase", "plan", "place")}
+    return intent, note, score
+
+
 def _judge_intent_scored(card, said, state="", line_key="", gameday=None,
                          history=None, note=""):
     """攻略模式的第一段：意图 + 关系打分 + 分段/导演条。返回 `(intent, note, score)`。
@@ -5085,6 +5228,33 @@ def pregnancy_block(session_key, event=None):
     return pregnancy.prompt_block(ent, day, event)
 
 
+# 女生主动表白（2026-11-08）：本轮结算后表白值到满、感情线到「认准你了」，
+# 第一段已经是正常回复，这里再让演员补一段，把攒了很久的那句话说出口。
+# 两段之间不换场景、不跳时间，也不收场——角色扮演没有结尾。
+_AUTO_CONFESS_TASK = """（接着刚才那一拍）她终于把攒了很久的那句话说出口了。
+写她开口的那一段，接着刚才的场景，不要另起一个地方，不要跳时间，
+不要写成收场或全剧终——她还在等你的反应，故事接着往下走。
+只写她这一刻的动作、停顿和话，篇幅短一点。"""
+
+
+def _confession_reply(head, model_hist, first_reply, card=None):
+    """主动表白的第二段。失败就返回空串，第一段照常发出去。"""
+    msgs = ([{"role": "system", "content": head}]
+            + list(model_hist or [])
+            + [{"role": "assistant", "content": first_reply},
+               {"role": "user", "content": _AUTO_CONFESS_TASK}])
+    try:
+        raw = _llm_call(msgs, temperature=TEMPERATURE)
+    except Exception:                            # noqa: BLE001
+        log.exception("主动表白第二段调用失败")
+        return ""
+    try:
+        out = split_turn(raw, default_mood="")[0]
+    except Exception:                            # noqa: BLE001
+        out = str(raw or "").strip()
+    return str(out or "").strip()
+
+
 def run_turn(session_key, text, target, sender="", sender_uin="",
              manual=None, writing=None):
     """扮演态的一轮：**两次** LLM 调用，返回 `Turn(正文, 画面, 情绪, 强度, 状态)`。
@@ -5171,12 +5341,19 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     # 第一段：这句话在干什么。**用原始文本判**，不带「张三：」这种前缀。
     # 攻略模式（2026-11-03）：同一次调用顺带给关系打分，不多烧一轮。
     raid = affection.is_raid(key)
+    # v2 正向关系线：新档走独立打分器和独立结算，老档一条代码都不换。
+    v2 = raid and affection.is_v2(key)
     extras = {}
     score = None
     if raid:
-        intent, inote, score = _judge_intent_scored(
-            card, judge_said, prev_state, line_key=key, gameday=gd,
-            history=hist, note=note)
+        if v2:
+            intent, inote, score = _judge_v2(
+                card, judge_said, prev_state, line_key=key, gameday=gd,
+                history=hist, note=note)
+        else:
+            intent, inote, score = _judge_intent_scored(
+                card, judge_said, prev_state, line_key=key, gameday=gd,
+                history=hist, note=note)
         extras = score if isinstance(score, dict) else {}
     else:
         intent, inote, extras = _judge_intent(
@@ -5242,7 +5419,8 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     aff_res = None
     if raid:
         aff_res = affection.settle(key, score, game_day=day_before)
-        if isinstance(aff_res, dict):
+        # v2 的 res 是另一套轴，没有高潮/内射/怀孕那几项，别拿 v1 后处理去读。
+        if isinstance(aff_res, dict) and not v2:
             # 让状态块知道这一轮有没有内射：高潮和内射同一拍时换写法。
             aff_res["finish"] = finish
             # 怀孕/产后阶段（2026-11-06）：开发度满格时要靠它判断
@@ -5310,7 +5488,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     # 必须放在跨天结算**之后**拼：刚发现怀孕 / 刚生产这一轮就要按新状态演，
     # 不能等下一轮才让她想起来（用户说的「先结算，再开场」）。
     pblock = pregnancy_block(key, preg_event)
-    if pblock:
+    if pblock and not v2:
         head = head + "\n\n" + pblock
     # 分层写法（2026-11-04 深夜）：按**这一轮的高潮值**挑一块「这一拍该怎么写」
     # 拼上去。放在 settle 之后是因为要拿最新状态——放在 build_head 里只能拿到
@@ -5323,11 +5501,11 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     # **必须在这里补，不能指望 `injection_block` 写回**——它是纯函数，
     # 拿结果拼完就丢；这里不补的话，下面 `intimate_guide` 里的压迫层
     # 和 `writing_skills` 的 forced 轴永远进不去，整套玩法等于没接。
-    if isinstance(aff_res, dict) and aff_res.get("active"):
+    if isinstance(aff_res, dict) and aff_res.get("active") and not v2:
         aff_res["forced"] = affection.is_forced(
             aff_res.get("value"), aff_res.get("corrupt"),
             aff_res.get("arousal"), aff_res.get("excite"))
-    if intimate:
+    if intimate and not v2:
         extra = intimate_guide(aff_res)
         if extra:
             head = head + "\n" + extra
@@ -5418,6 +5596,17 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         # 但**不重跑**：重跑一次未必更好，还白烧一轮。
         log.warning("扮演轮空回复 %s", key)
         return Turn("（我这会儿有点卡，你再说一句？）", "")
+
+    # 女生主动表白（2026-11-08）：第一段正常回完之后，本轮结算的表达到了
+    # 满值、感情线也到了「认准你了」，再让演员补一段把话说出口。
+    # 历史里也要带上这一段，否则下一轮模型不知道她已经表白过。
+    if v2 and isinstance(aff_res, dict) and aff_res.get("auto_confess"):
+        extra = _confession_reply(head, model_hist, reply, card)
+        if extra:
+            body, meta = _split_meta(raw)
+            raw = body.rstrip() + "\n\n" + extra + (meta or "")
+            reply = reply.rstrip() + "\n\n" + extra
+            log.info("v2 主动表白第二段 %s（%d 字）", key, len(extra))
 
     # 落历史：存**完整原文**（含「画面 / 心情 / 状态」三行）。2026-11-02 改：
     # 这三行是下一轮的 few-shot 示范，剥掉的话模型第 2 轮起就把格式丢了

@@ -25,6 +25,7 @@ import unittest
 from unittest import mock
 
 import app.agents as agents
+import app.affection as affection
 import app.persona as persona
 import app.persona_rag as persona_rag
 
@@ -54,6 +55,10 @@ class PersonaBase(unittest.TestCase):
         self.addCleanup(q.stop)
         agents.clear_cache()
         self.addCleanup(agents.clear_cache)
+        # 这一整份用例钉的是 v1 老标尺，临时建的空线不该被当成新档。
+        v = mock.patch.object(affection, "V2_AUTO_NEW", False)
+        v.start()
+        self.addCleanup(v.stop)
 
 
 class CardStoreTest(PersonaBase):
