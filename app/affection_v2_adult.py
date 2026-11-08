@@ -117,9 +117,26 @@ def empty_state():
     }
 
 
+def _pick_adult(rec):
+    """从存档记录里定位成人向状态那一小块。
+
+    **唯一位置是 `affection.adult`**（和 value/contacts 放一起，属于关系档的
+    一部分）。顶层 `adult` 只是极早期副本的兼容读法——两边都认，就不会出现
+    「写一份、读另一份」把起点数值盖成默认值的 bug（2026-11-08 实测踩过）。
+    """
+    if not isinstance(rec, dict):
+        return None
+    aff = rec.get("affection")
+    if isinstance(aff, dict) and isinstance(aff.get("adult"), dict):
+        return aff["adult"]
+    if isinstance(rec.get("adult"), dict):
+        return rec["adult"]
+    return None
+
+
 def load(rec):
     """从存档记录里取成人向状态；没有或字段残缺就补齐。**不改 rec**。"""
-    src = rec.get("adult") if isinstance(rec, dict) else None
+    src = _pick_adult(rec)
     st = empty_state()
     if not isinstance(src, dict):
         return st
@@ -141,8 +158,16 @@ def load(rec):
 
 
 def save(rec, st):
-    """把状态写回 rec。返回 rec（调用方自己落盘）。"""
-    rec["adult"] = normalize(st)
+    """把状态写回 rec 的 `affection.adult`。返回 rec（调用方自己落盘）。
+
+    唯一写入位置和 `_pick_adult` 的优先读法一致；顶层那份若存在就顺手清掉，
+    免得以后有人读错位置。
+    """
+    if not isinstance(rec, dict):
+        return rec
+    rec.pop("adult", None)
+    aff = rec.setdefault("affection", {})
+    aff["adult"] = normalize(st)
     return rec
 
 
@@ -316,11 +341,17 @@ def apply(st, delta, value=None):
         ev = str((delta or {}).get("shame_event") or "").strip()
         soft = _i((cfg.get("shame") or {}).get("soft_cap"), 50)
         lo, hi = _axis_range(cfg, "shame")
-        if sd > 0 and st["shame"] >= soft:
-            # 超过软顶之后，只能靠露出/被看见这类事件继续涨
-            if not _is_exposure(ev):
+        exposure = _is_exposure(ev)
+        if sd > 0 and not exposure:
+            # 普通亲密事件：**涨完之后不能越过软顶**（2026-11-08 实测踩过：
+            # 只判「涨之前是否已过 50」，48 + 6 就直接冲到 54 了）。
+            room = soft - st["shame"]
+            if room <= 0:
                 notes.append("羞耻已到软顶 %d，事件「%s」不再推进" % (soft, ev or "未分类"))
                 sd = 0
+            elif sd > room:
+                notes.append("羞耻事件「%s」被软顶截断到 %d" % (ev or "未分类", soft))
+                sd = room
         if sd > 0 and ev:
             log_tbl = st["shame_log"]
             times = _i(log_tbl.get(ev))

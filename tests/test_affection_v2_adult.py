@@ -340,5 +340,80 @@ class RunTurnWiringTest(unittest.TestCase):
         self.assertIn("_save_state(_astate)", src)
 
 
+class StateLocationTest(unittest.TestCase):
+    """状态只存一处（2026-11-08 实测踩过：写顶层、读 affection，起点被盖成默认值）。"""
+
+    def test_save_writes_under_affection(self):
+        rec = {"affection": {"value": 50}}
+        ad.save(rec, ad.normalize({**ad.empty_state(), "excite": 42}))
+        self.assertIn("adult", rec["affection"])
+        self.assertEqual(rec["affection"]["adult"]["excite"], 42)
+        self.assertNotIn("adult", rec, "顶层不该再有副本")
+
+    def test_load_reads_from_affection(self):
+        rec = {"affection": {"adult": {"excite": 30, "dev": {"pussy": 60}}}}
+        st = ad.load(rec)
+        self.assertEqual(st["excite"], 30)
+        self.assertEqual(st["dev"]["pussy"], 60)
+        # 下限规则：sense 被抬到 dev
+        self.assertEqual(st["sense"]["pussy"], 60)
+
+    def test_load_falls_back_to_top_level(self):
+        """极早期副本写在顶层，也要读得到（兼容，但不鼓励）。"""
+        rec = {"adult": {"excite": 15}}
+        self.assertEqual(ad.load(rec)["excite"], 15)
+
+    def test_affection_wins_over_top_level(self):
+        rec = {"affection": {"adult": {"excite": 70}},
+               "adult": {"excite": 10}}
+        self.assertEqual(ad.load(rec)["excite"], 70,
+                         "affection 下面那份是权威")
+
+    def test_save_then_load_roundtrip_keeps_start_values(self):
+        """最容易出事的场景：设好起点 → 存 → 读回来必须一模一样。"""
+        start = ad.normalize({
+            **ad.empty_state(),
+            "excite": 30, "shame": 40,
+            "dev": {"mouth": 20, "nipple": 30, "pussy": 40, "anus": 0, "skin": 25},
+            "sense": {"mouth": 20, "nipple": 35, "pussy": 45, "anus": 0, "skin": 25},
+        })
+        rec = {"affection": {}}
+        ad.save(rec, start)
+        back = ad.load(rec)
+        for k in ("excite", "shame"):
+            self.assertEqual(back[k], start[k], "%s 被改掉了" % k)
+        for part in ad.PARTS:
+            self.assertEqual(back["dev"][part], start["dev"][part])
+            self.assertEqual(back["sense"][part], start["sense"][part])
+
+    def test_run_turn_uses_save_helper(self):
+        import inspect
+        from app import persona
+        src = inspect.getsource(persona.run_turn)
+        self.assertIn("adult_state.save", src)
+        self.assertNotIn('_rec["adult"] = _ast', src)
+
+
+class ShameCapOverflowTest(unittest.TestCase):
+    """软顶不能被一次性冲过（2026-11-08 实测踩过：48 + 6 冲到 54）。"""
+
+    def test_single_gain_cannot_jump_over_cap(self):
+        st = ad.normalize({**ad.empty_state(), "shame": 48})
+        out, notes = ad.apply(st, {"shame": 6, "shame_event": "kiss"}, value=50)
+        self.assertEqual(out["shame"], 50, "一次涨幅被截断到软顶，而不是冲过去")
+        self.assertTrue(any("截断" in n for n in notes))
+
+    def test_gain_exactly_fills_room(self):
+        st = ad.normalize({**ad.empty_state(), "shame": 45})
+        out, notes = ad.apply(st, {"shame": 5, "shame_event": "kiss"}, value=50)
+        self.assertEqual(out["shame"], 50)
+        self.assertEqual(notes, [], "刚好填满不算截断")
+
+    def test_exposure_still_passes(self):
+        st = ad.normalize({**ad.empty_state(), "shame": 48})
+        out, _ = ad.apply(st, {"shame": 6, "shame_event": "outdoor"}, value=50)
+        self.assertEqual(out["shame"], 54, "露出类不受软顶限制")
+
+
 if __name__ == "__main__":
     unittest.main()

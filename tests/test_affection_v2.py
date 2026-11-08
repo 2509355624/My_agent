@@ -169,6 +169,9 @@ class InjectionTest(unittest.TestCase):
              "confess_name": "想说", "confess_desc": "", "yandere_name": "没有",
              "recent": "", "gday": 1, "gphase": "下午", "gplan": "",
              "profile": "", "said": "走吧，回家吧", "history": "", "ledger": "",
+             # 成人向状态块（2026-11-08 加）：提示词里多了这个占位，
+             # 测试的 format 字典也得带上，否则 KeyError。
+             "dev": "（五处都还没被开发过）",
              "segment_guide": "", "director_guide": ""}
         txt = P._SCORE_PROMPT_V2 % d
         self.assertIn("表白值", txt)

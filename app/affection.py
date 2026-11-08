@@ -4007,6 +4007,34 @@ def _v2_scoring_ctx(rec, card=None):
     contact, deg = _v2_contact_level(rec, cfg)
     cs = _v2_stage("confess", rec.get("confess"), cfg)
     ys = _v2_stage("yandere", rec.get("yandere"), cfg)
+    # 身体这条线（2026-11-08）：编剧判涨幅时要看到「现在到哪了」，否则它没有
+    # 参照系——实测全给 0（压墙、「叫主人」都判了个 corrupt=0、submit=0）。
+    _value_negative = value < 0
+    adult_txt = ""
+    try:
+        from app import affection_v2_adult as _ad
+        _ast = _ad.load(rec)
+        _lines = []
+        _a = _ad.arousal_of(_ast)
+        _lines.append("冲动：%s" % (_a.get("name") or "?"))
+        _e = _ad._level_of("excite", _ast["excite"])
+        _lines.append("高潮：%d/100（%s）" % (_ast["excite"], _e.get("name") or "?"))
+        _lines.append("羞耻：%d/100（先看这一项再判 shame）" % _ast["shame"])
+        _lines.append("主动权：%d/100（50 是对等）" % _ast["control"])
+        if _value_negative:
+            _lines.append("堕落：%d/100 · 屈服：%d/100（负好感，这两条可以涨）"
+                          % (_ast["corrupt"], _ast["submit"]))
+        else:
+            _lines.append("堕落 / 屈服：好感是正的，这两条这一轮保持 0")
+        _dev_txt = "，".join(
+            "%s%d" % (((_ad._cfg().get("dev") or {}).get("part_names") or {}).get(p, p),
+                      _ast["dev"][p]) for p in _ad.PARTS if _ast["dev"][p] > 0)
+        _lines.append("开发度：%s" % (_dev_txt or "五处都还没动过"))
+        _lines.append("接触：%s" % (((_ad._cfg().get("contact") or {}).get("names") or {})
+                                    .get(_ast["contact"], "无")))
+        adult_txt = "\n".join("- " + x for x in _lines)
+    except Exception:                                     # noqa: BLE001
+        adult_txt = ""
     return {
         "schema": V2_SCHEMA,
         "value": value,
@@ -4016,7 +4044,7 @@ def _v2_scoring_ctx(rec, card=None):
         "arousal": 0, "arousalName": "", "excite": 0, "exciteName": "",
         "dynamicBrief": "（这一轮没有额外的动态规则）",
         "corrupt": 0, "submit": 0, "suspicion": 0,
-        "devText": "", "devMax": 0,
+        "devText": adult_txt, "devMax": 0,
         "recent": _v2_recent(rec),
         "relation_name": str(t.get("name") or ""),
         "relation_desc": str(t.get("desc") or ""),

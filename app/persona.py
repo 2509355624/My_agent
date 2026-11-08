@@ -4454,6 +4454,8 @@ _SCORE_PROMPT_V2 = """你在给一段校园/日常恋爱角色扮演做「编剧
 已经发生的身体接触：%(contact_name)s
 她心里那句话：%(confess_name)s（表白值 %(confess)d/%(confess_max)d）。%(confess_desc)s
 她现在的状态：%(yandere_name)s
+她身体这条线（**判 adult 之前先看这里，别从 0 起判**）：
+%(dev)s
 游戏内时间：第 %(gday)s 天 · %(gphase)s；%(gplan)s
 %(recent)s
 
@@ -4592,6 +4594,11 @@ contact：这一轮**结束时身体连在哪**，七个里挑一个（none / mo
   记的是位置，不是动作。没接触填 none。换了位置的话，正文里要写清怎么换的。
 
 orgasm：这一轮她**到没到**，true / false。到了系统会把反应值回落、敏感度整片降一档。
+  判据看**文里有没有出现「她到了」这件事**，不是看动作多激烈：
+    · 明确写到她越过去（绷紧后突然泄掉、声音断掉、身体一阵一阵地收、软下去）
+    · 或者玩家这一轮就是「射在里面 / 一起到」这类，把她带上去了
+  出现上面任何一种 → true。只是喘得急、只是紧张、只是「快了」→ false。
+  **这一轮没往那上面走（普通日常、纯聊天）→ false，别硬判。**
 
 refuse：玩家这一轮提了要求，而她**明确不愿意**（摇头、推开、说不要并且是真的）= true。
   嘴上说不要但身体在配合，是 false——那种情况按 corrupt 记，不按 refuse 记。
@@ -4621,6 +4628,7 @@ def _judge_v2(card, said, state="", line_key="", gameday=None,
         "confess_name": ctx.get("confess_name") or "还没想过",
         "confess_desc": ctx.get("confess_desc") or "",
         "yandere_name": ctx.get("yandere_name") or "没有",
+        "dev": ctx.get("devText") or "（五处都还没被开发过）",
         "recent": ctx.get("recent") or "（你们还没什么交集）",
         "gday": _day_of(gd),
         "gphase": str(gd.get("phase") or "还没定"),
@@ -5555,8 +5563,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
                 # 只写 affection 下面那一份（2026-11-08）：adult 状态属于
                 # 关系档的一部分，和 value/contacts 放在一起，别在顶层再存一份
                 # ——两份会各自被读，一旦不同步就是「显示的和我看到的不一样」。
-                _aff = _rec.setdefault("affection", {})
-                _aff["adult"] = _ast
+                adult_state.save(_rec, _ast)     # 写 affection.adult，顺手清顶层那份
                 _astate[key] = _rec
                 _save_state(_astate)
                 for _n in _anotes:
