@@ -463,11 +463,21 @@ def panel(st, cfg=None):
     st = normalize(st or empty_state())
     rows = []
 
+    def help_of(key):
+        """这一条轴的小问号说明。**配置里写，前端只负责显示**——
+        改文案不用动前端，也不会出现「前端写死了旧说法」。"""
+        h = (cfg.get(key) or {}).get("help")
+        if not isinstance(h, dict):
+            return None
+        return {"title": str(h.get("title") or ""),
+                "body": [str(x) for x in (h.get("body") or [])]}
+
     def row(axis, key, value, extra=None):
         lo, hi = _axis_range(cfg, key)
         lv = _level_of(key, value, cfg)
         r = {"axis": axis, "value": value, "min": lo, "max": hi,
-             "level": lv.get("key") or "", "name": lv.get("name") or ""}
+             "level": lv.get("key") or "", "name": lv.get("name") or "",
+             "help": help_of(key)}
         if extra:
             r.update(extra)
         rows.append(r)
@@ -475,6 +485,7 @@ def panel(st, cfg=None):
     a = arousal_of(st, cfg)
     rows.append({"axis": "arousal", "type": "tier",
                  "level": a.get("key") or "", "name": a.get("name") or "",
+                 "help": help_of("arousal"),
                  "tier": _i(a.get("tier")),
                  "maxTier": _i(((cfg.get("arousal") or {}).get("dev_gate") or {}).get("max_tier"), 4),
                  "gateActive": dev_avg(st) < _i(((cfg.get("arousal") or {}).get("dev_gate") or {}).get("below"), 40)})
@@ -492,9 +503,21 @@ def panel(st, cfg=None):
         parts.append({"part": p, "name": names.get(p, p),
                       "dev": st["dev"][p], "sense": st["sense"][p]})
     contact = st["contact"]
+    # 五处那一块也有自己的说明（开发/敏感两个数字一起讲）
+    parts_help = None
+    for key in ("dev", "sense"):
+        h = cfg.get(key) or {}
+        if isinstance(h.get("help"), dict):
+            parts_help = parts_help or {"title": "", "body": []}
+            hh = h["help"]
+            if hh.get("title"):
+                parts_help["title"] = (parts_help["title"] + " / " + str(hh["title"])).strip(" /")
+            parts_help["body"].extend(str(x) for x in (hh.get("body") or []))
     return {
         "rows": rows,
         "parts": parts,
+        "partsHelp": parts_help,
+        "contactHelp": help_of("contact"),
         "contact": contact,
         "contactName": ((cfg.get("contact") or {}).get("names") or {}).get(contact, contact),
         "orgasmCount": st["orgasm_count"],

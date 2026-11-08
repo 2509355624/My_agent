@@ -561,5 +561,80 @@ class HelpModalTest(unittest.TestCase):
         self.assertNotIn("on", (m.group(1) or "").split())
 
 
+class AxisHelpTest(unittest.TestCase):
+    """每条状态旁边的小问号：文案由配置给，前端只显示。"""
+
+    def _panel(self):
+        from app import affection, affection_v2_adult as ad
+        rec = {"schema": 2, "value": 45, "mode": "raid", "confess": 20,
+               "contacts": [], "contact": 2, "day": 3, "turns": 12,
+               "adult": ad.normalize({**ad.empty_state(), "arousal": "want",
+                                      "excite": 62, "shame": 55, "control": 72,
+                                      "corrupt": 18, "submit": 10,
+                                      "dev": {"pussy": 70}, "sense": {"pussy": 85},
+                                      "contact": "pussy"})}
+        return affection._v2_panel(rec, None)["adult"]
+
+    def test_every_row_has_help(self):
+        for r in self._panel()["rows"]:
+            self.assertTrue(r.get("help"), "%s 缺 help" % r["axis"])
+            self.assertTrue(r["help"].get("title"))
+            self.assertTrue(r["help"].get("body"))
+
+    def test_help_comes_from_config(self):
+        """文案不能写死在前端——配置改了就跟着改。"""
+        cfg = ad._cfg()
+        for key in ("arousal", "excite", "corrupt", "submit",
+                    "dev", "sense", "shame", "control", "contact"):
+            h = (cfg.get(key) or {}).get("help")
+            self.assertIsInstance(h, dict, "%s 配置里缺 help" % key)
+            self.assertTrue(h.get("title"), "%s help 缺标题" % key)
+            self.assertTrue(h.get("body"), "%s help 缺正文" % key)
+
+    def test_parts_help_merges_dev_and_sense(self):
+        ph = self._panel().get("partsHelp")
+        self.assertTrue(ph)
+        self.assertIn("开发", ph["title"])
+        self.assertIn("敏感", ph["title"])
+        self.assertGreaterEqual(len(ph["body"]), 4)
+
+    def test_contact_help_present(self):
+        self.assertTrue(self._panel().get("contactHelp"))
+
+    def test_help_marks_the_gate(self):
+        """最容易被玩错的那条，说明里必须点出来。"""
+        rows = {r["axis"]: r for r in self._panel()["rows"]}
+        joined = " ".join(rows["arousal"]["help"]["body"])
+        self.assertIn("开发度不够", joined)
+        joined = " ".join(rows["shame"]["help"]["body"])
+        self.assertIn("50", joined)
+
+    def test_frontend_renders_question_mark(self):
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "web", "persona.html")
+        with io.open(path, encoding="utf-8") as fh:
+            h = fh.read()
+        self.assertIn('id="axisHelpMask"', h)
+        self.assertIn("function axisQ", h)
+        self.assertIn("function openAxisHelp", h)
+        self.assertIn("axisHelpClose", h)
+        # 粗体只认 **x**，先转义再替换——顺序写反就是注入
+        self.assertIn("esc(line)", h)
+
+    def test_axis_modal_not_open_by_default(self):
+        import io
+        import os
+        import re
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "web", "persona.html")
+        with io.open(path, encoding="utf-8") as fh:
+            h = fh.read()
+        m = re.search(r'<div class="skipMask([^"]*)" id="axisHelpMask"', h)
+        self.assertIsNotNone(m)
+        self.assertNotIn("on", (m.group(1) or "").split())
+
+
 if __name__ == "__main__":
     unittest.main()

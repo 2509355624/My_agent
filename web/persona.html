@@ -583,6 +583,19 @@
     background: rgba(240,180,41,.07); font-size: 12px; color: #f0b429; }
   .adultHelpBtn:hover { background: rgba(240,180,41,.14); }
   .adultHelpBtn .q { font-weight: 700; }
+  .adultHelpBtn .q { font-weight: 700; }
+  /* 单条状态的说明弹窗 + 每行的小问号 */
+  .axisHelp { max-width: 460px; max-height: 72vh; overflow-y: auto; }
+  .axisHelpBody p { font-size: 12.5px; line-height: 1.85;
+    color: var(--text-dim); margin: 6px 0; }
+  .axisHelpBody b { color: #f0b429; font-weight: 600; }
+  .axisQ { display: inline-flex; align-items: center; justify-content: center;
+    width: 14px; height: 14px; margin-left: 5px; border-radius: 50%;
+    border: 1px solid rgba(240,180,41,.5); color: #f0b429;
+    font-size: 10px; font-weight: 700; line-height: 1; cursor: pointer;
+    vertical-align: 1px; user-select: none; }
+  .axisQ:hover { background: rgba(240,180,41,.18); }
+
   .skipCustom { display: flex; gap: 8px; align-items: center; }
   .skipCustom input { flex: 1; min-width: 0; padding: 9px 12px; font: inherit;
     font-size: 13px; color: var(--text); background: var(--bg-input);
@@ -1091,6 +1104,17 @@
         怀孕和孩子一起清掉。</p>
     </div>
     <button class="btn pri skipGo" id="pregHelpClose">知道了</button>
+  </div>
+</div>
+
+<!-- 单条状态的说明（2026-11-08 晚）：每条轴旁边那个小问号点开。
+     **内容全部来自后端**（config/affection_v2_adult.json 的 help），
+     前端不写死任何一句机制解释——改配置就改说明。 -->
+<div class="skipMask" id="axisHelpMask">
+  <div class="skipBox axisHelp">
+    <h3 id="axisHelpTitle">说明</h3>
+    <div id="axisHelpBody" class="axisHelpBody"></div>
+    <button class="btn pri skipGo" id="axisHelpClose">知道了</button>
   </div>
 </div>
 
@@ -2049,6 +2073,8 @@ function renderPanel(a, p) {
           b.style.cssText = "color:var(--accent);font-weight:600";
           b.textContent = r.name || "—";
           d.appendChild(nm); d.appendChild(b);
+          const qa = axisQ(r.help);
+          if (qa) d.appendChild(qa);
           if (r.gateActive) {
             const g = document.createElement("span");
             g.style.cssText = "margin-left:6px;font-size:10.5px;color:var(--text-mute)";
@@ -2075,6 +2101,8 @@ function renderPanel(a, p) {
           s.textContent = "· " + r.name;
           d.appendChild(s);
         }
+        const qr = axisQ(r.help);
+        if (qr) d.appendChild(qr);
         const track = document.createElement("div");
         track.className = "bar";
         const fill = document.createElement("i");
@@ -2107,7 +2135,11 @@ function renderPanel(a, p) {
       if (ad.parts && ad.parts.length) {
         const ph = document.createElement("div");
         ph.style.cssText = "font-size:11px;color:var(--text-mute);margin:9px 0 2px";
-        ph.textContent = "五处（开发 / 敏感）";
+        const pht = document.createElement("span");
+        pht.textContent = "五处（开发 / 敏感）";
+        ph.appendChild(pht);
+        const qp = axisQ(ad.partsHelp);
+        if (qp) ph.appendChild(qp);
         fbody.appendChild(ph);
         ad.parts.forEach(function (x) {
           const d = document.createElement("div");
@@ -2127,7 +2159,11 @@ function renderPanel(a, p) {
 
       const cht = document.createElement("div");
       cht.style.cssText = "font-size:11.5px;color:var(--text-dim);margin-top:6px";
-      cht.textContent = "现在的接触：" + (ad.contactName || "无");
+      const chtT = document.createElement("span");
+      chtT.textContent = "现在的接触：" + (ad.contactName || "无");
+      cht.appendChild(chtT);
+      const qc = axisQ(ad.contactHelp);
+      if (qc) cht.appendChild(qc);
       fbody.appendChild(cht);
     }
 
@@ -3553,6 +3589,45 @@ $("skipMask").addEventListener("click", e => {
 // 怀孕规则（2026-11-05）：状态条旁边的小问号。
 // 身体状态说明书（2026-11-08 晚）：面板标题旁的「怎么看」点开。
 // 关掉的方式和别的弹窗一致：点按钮、点遮罩、Esc。
+// 单条状态的说明（2026-11-08 晚）：每条轴和「五处」旁边的小问号点开。
+// 文案全部由后端给（axis.help = {title, body[]}），body 里 **粗体** 会转成 <b>。
+// 只做白名单式的最小渲染：先转义，再把 **x** 换成 <b>x</b>，不执行任何 HTML。
+function openAxisHelp(help) {
+  const m = $("axisHelpMask");
+  if (!m || !help) return;
+  const esc = s => String(s).replace(/[&<>"]/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  $("axisHelpTitle").textContent = help.title || "说明";
+  const body = $("axisHelpBody");
+  body.innerHTML = "";
+  (help.body || []).forEach(function (line) {
+    const p = document.createElement("p");
+    // 先整体转义，再只把 **粗体** 还原成 <b>——顺序反了就会被注入。
+    p.innerHTML = esc(line).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+    body.appendChild(p);
+  });
+  m.classList.add("on");
+}
+function closeAxisHelp() {
+  const m = $("axisHelpMask");
+  if (m) m.classList.remove("on");
+}
+// 造一个问号：给了 help 才返回节点，没给就返回 null（前端不留空壳）。
+function axisQ(help) {
+  if (!help) return null;
+  const q = document.createElement("span");
+  q.className = "axisQ";
+  q.setAttribute("role", "button");
+  q.tabIndex = 0;
+  q.title = "这一条是什么";
+  q.textContent = "?";
+  q.onclick = function (e) { e.stopPropagation(); openAxisHelp(help); };
+  q.onkeydown = function (e) {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openAxisHelp(help); }
+  };
+  return q;
+}
+
 function openAdultHelp() {
   const m = $("adultHelpMask");
   if (m) m.classList.add("on");
@@ -3562,13 +3637,19 @@ function closeAdultHelp() {
   if (m) m.classList.remove("on");
 }
 if ($("adultHelpClose")) $("adultHelpClose").onclick = closeAdultHelp;
+if ($("axisHelpClose")) $("axisHelpClose").onclick = closeAxisHelp;
+if ($("axisHelpMask")) {
+  $("axisHelpMask").addEventListener("click", e => {
+    if (e.target === $("axisHelpMask")) closeAxisHelp();
+  });
+}
 if ($("adultHelpMask")) {
   $("adultHelpMask").addEventListener("click", e => {
     if (e.target === $("adultHelpMask")) closeAdultHelp();
   });
 }
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape") closeAdultHelp();
+  if (e.key === "Escape") { closeAdultHelp(); closeAxisHelp(); }
 });
 
 $("btnPregHelp").onclick = () => $("pregHelpMask").classList.add("on");
