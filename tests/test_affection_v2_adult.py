@@ -282,5 +282,63 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(row["softCap"], 50)
 
 
+class ScorePromptTest(unittest.TestCase):
+    """编剧提示词里必须有的成人向字段（钉住契约，防止哪天被顺手删掉）。"""
+
+    def test_prompt_has_adult_block(self):
+        from app import persona
+        p = persona._SCORE_PROMPT_V2
+        self.assertIn("\"adult\"", p)
+        for key in ("arousal", "excite", "corrupt", "submit", "dev", "sense",
+                    "shame", "shame_event", "control", "contact", "orgasm", "refuse"):
+            self.assertIn(key, p, "提示词缺字段 %s" % key)
+
+    def test_prompt_has_the_five_parts(self):
+        from app import persona
+        p = persona._SCORE_PROMPT_V2
+        for part in ad.PARTS:
+            self.assertIn(part, p, "五处缺 %s" % part)
+
+    def test_prompt_states_the_gates(self):
+        """闸门必须写在提示词里，否则编剧会一直给正向好感也加堕落。"""
+        from app import persona
+        p = persona._SCORE_PROMPT_V2
+        self.assertIn("只在好感为负时", p)
+        self.assertIn("单纯插入不推这里", p)
+        self.assertIn("最多判到 want", p)
+
+    def test_prompt_lists_shame_event_kinds(self):
+        from app import persona
+        p = persona._SCORE_PROMPT_V2
+        for ev in ("kiss", "intimate_private", "outdoor", "exposed", "caught"):
+            self.assertIn(ev, p, "羞耻事件类别缺 %s" % ev)
+
+    def test_judge_v2_passes_adult_through(self):
+        """_judge_v2 要把 adult 原样交出去，不在这一层净化。"""
+        import inspect
+        from app import persona
+        src = inspect.getsource(persona._judge_v2)
+        self.assertIn('score["adult"] = d["adult"]', src)
+
+
+class RunTurnWiringTest(unittest.TestCase):
+    """run_turn 要真的把成人向结算接上（v2 分支才走）。"""
+
+    def test_run_turn_calls_adult_apply(self):
+        import inspect
+        from app import persona
+        src = inspect.getsource(persona.run_turn)
+        self.assertIn("adult_state.load", src)
+        self.assertIn("adult_state.apply", src)
+        self.assertIn("adult_state.block", src)
+        self.assertIn("if v2 and", src, "必须只在 v2 分支走，不能污染 v1")
+
+    def test_state_saved_after_settle(self):
+        import inspect
+        from app import persona
+        src = inspect.getsource(persona.run_turn)
+        self.assertIn("_save_state(_astate)", src)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -59,7 +59,8 @@ import shutil
 import threading
 import time
 
-from app import (affection, llm, persona_rag, pregnancy, trigger,
+from app import (affection, affection_v2_adult as adult_state, llm,
+                   persona_rag, pregnancy, trigger,
                  writing_skills, writing_style)
 from app.config import (BASE_DIR, PERSONA_MODEL, PERSONA_PROVIDER,
                         QQ_AGENT_ID, QQ_BOT_NAME)
@@ -4489,7 +4490,21 @@ _SCORE_PROMPT_V2 = """你在给一段校园/日常恋爱角色扮演做「编剧
   "time": "none | overnight",
   "phase": "",
   "plan": "",
-  "place": ""
+  "place": "",
+  "adult": {
+    "arousal": "calm | hint | want | lead | reverse",
+    "excite": 0,
+    "corrupt": 0,
+    "submit": 0,
+    "dev": {"mouth": 0, "nipple": 0, "pussy": 0, "anus": 0, "skin": 0},
+    "sense": {"mouth": 0, "nipple": 0, "pussy": 0, "anus": 0, "skin": 0},
+    "shame": 0,
+    "shame_event": "",
+    "control": 0,
+    "contact": "none | mouth | pussy | anus | hand | breast | leg",
+    "orgasm": false,
+    "refuse": false
+  }
 }
 
 ## 各字段怎么判
@@ -4523,6 +4538,63 @@ refused_confession：上一轮是她主动开口表白，而玩家这句在拒�
 
 segments：把这一句按「说 / 做 / 想」拆开给演员用。想一律留空串，别替玩家补心里话。
   %(segment_guide)s
+
+## adult：身体这条线（只在真的往那上面走时才填，普通日常整项留空/0）
+
+**总则：这里记的是「她身上发生了什么变化」，不是玩家的动作清单。**
+玩家的动作只是起因；她有没有被推着往前走，才是要判的东西。
+没往那上面走的一轮，整项填 0、arousal 填 calm、contact 填 none——不要为了填满而编。
+
+arousal：这一轮结束时**她想不想**，五档挑一个，别给数字。
+  calm   = 没往那上面想。玩家靠近，她要过一拍才反应过来。
+  hint   = 给信号不点破，等玩家来接。
+  want   = 主动造机会，会递第二次。
+  lead   = 自己贴上来，嘴上还要找理由。
+  reverse= 不等玩家答应，自己动手。
+  判据是**气氛 + 身体距离 + 她自己的反应**，不是玩家说得多直接。
+  **开发度低的时候最多判到 want**（系统会兜底压档，但你先判准，别一上来就 reverse）。
+
+excite：这一轮**身体反应前进/后退多少**，-30~+40。没有就往 0 填。
+  只写有身体反应的一轮；前戏、触碰、情绪被推高都算，纯聊天填 0。
+  到 100 系统会自动回到中段，下一轮还能继续涨——所以不要因为「已经到过顶」就不敢给正值。
+
+dev：这一轮**哪几处被开发了**，五处各给 0~20。**只看有没有真的发生，不看玩得多花。**
+  单纯插入也推这里；被反复使用的地方涨得多。只涨不跌，所以给保守一点。
+
+sense：这一轮**哪几处变敏感了**，五处各给 0~15。
+  **只在前戏、抚摸、道具、药物之后给**——单纯插入不推这里（那是 dev 的活）。
+  这一项记的是「以后碰这里她会更受不了」，不是当下的反应。
+
+corrupt：这一轮她**身体比嘴先服**往前挪了多少，0~20。
+  **只在好感为负时才可以给正值**（正向好感时系统会全部吃掉）。
+  两个条件都要满足：① 玩家做了她不愿意的事；② 她的身体有了反应。
+  只有①是强迫，只有②是发情，两样都有才是堕落。
+
+submit：这一轮她**认这个位置**往前挪了多少，0~15。
+  同样**只在好感为负时才可以给正值**。
+  涨的条件是**驯化**：改称呼（主人 / 爸爸 / 你指定的叫法）、规定她怎么说话、
+  用规矩或道具让她照做、她开始主动按规矩来。
+  和 corrupt 的分工：corrupt 是身体先服，submit 是她心里认了。
+
+shame：这一轮羞耻变化多少，-10~+15，配合 shame_event。
+  shame_event 写这一轮属于哪一类事件，用短英文键：
+    kiss / hug / handhold / petting / undress / intimate_private
+      —— 正常亲密，只能把羞耻推到中段就顶住
+    outdoor / public / exposed / caught
+      —— 露出、可能被看到、已经被看到，这几类能突破中段继续涨
+  同一类事件做过的次数系统会记，做得越多涨幅越小，做惯了就不再涨。
+
+control：这一轮**主动权**往哪边走，-20~+20。
+  玩家主导、她被动承受 → 负值；她开始自己带节奏、自己要求 → 正值。
+  50 是对等，别长期一边倒。
+
+contact：这一轮**结束时身体连在哪**，七个里挑一个（none / mouth / pussy / anus / hand / breast / leg）。
+  记的是位置，不是动作。没接触填 none。换了位置的话，正文里要写清怎么换的。
+
+orgasm：这一轮她**到没到**，true / false。到了系统会把反应值回落、敏感度整片降一档。
+
+refuse：玩家这一轮提了要求，而她**明确不愿意**（摇头、推开、说不要并且是真的）= true。
+  嘴上说不要但身体在配合，是 false——那种情况按 corrupt 记，不按 refuse 记。
 time：跨天/过夜填 "overnight"，其余 "none"；phase 是这一拍的时段（早晨/下午/晚上/深夜），
   没变就留空；plan 是这轮定下的约定，没有留空；place 是换了地方才写，没换留空。
   %(director_guide)s
@@ -4580,6 +4652,11 @@ def _judge_v2(card, said, state="", line_key="", gameday=None,
         "delta", "turn_type", "reason", "contact", "confess", "yandere",
         "proposal", "accept", "refused_confession", "segments", "addressed",
         "subtext", "noticed", "stance", "time", "phase", "plan", "place")}
+    # adult（2026-11-08）：身体这条线。**原样透传，不在这里净化**——
+    # 结算器 affection_v2_adult.apply 负责 clamp/闸门/回落/去重，
+    # 这里多改一处就多一个离线口径。
+    if isinstance(d.get("adult"), dict):
+        score["adult"] = d["adult"]
     return intent, note, score
 
 
@@ -5465,6 +5542,27 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
                 # 落盘成待办：页面刷新/断网后还能再问一次（见
                 # `_set_pending_finish` 的说明）。
                 _set_pending_finish(key, cl)
+        # v2 成人向（2026-11-08）：编剧判好的 adult delta → 结算 → 拼中文注入。
+        # 老档（没 schema=2）不会进这个分支，v1 一个字不动。
+        if v2 and isinstance(score, dict) and isinstance(score.get("adult"), dict):
+            try:
+                _astate = _load_state()                  # 读整份，改一条，写回
+                _rec = _astate.get(key) or {}
+                _ast = adult_state.load(_rec)
+                _ast, _anotes = adult_state.apply(
+                    _ast, score["adult"],
+                    value=(aff_res or {}).get("value") if isinstance(aff_res, dict) else None)
+                _rec["adult"] = _ast
+                _astate[key] = _rec
+                _save_state(_astate)
+                for _n in _anotes:
+                    log.info("adult %s：%s", key, _n)
+            except Exception:                            # noqa: BLE001
+                log.exception("成人向结算失败 %s", key)
+            else:
+                _ab = adult_state.block(_ast)
+                if _ab:
+                    head = head + "\n\n" + _ab
         blk = affection.injection_block(aff_res)
         if blk:
             head = head + "\n\n" + blk
