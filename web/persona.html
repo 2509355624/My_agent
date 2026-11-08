@@ -595,6 +595,25 @@
     font-size: 10px; font-weight: 700; line-height: 1; cursor: pointer;
     vertical-align: 1px; user-select: none; }
   .axisQ:hover { background: rgba(240,180,41,.18); }
+  /* 道具面板（2026-11-08）：一行一个，名字后面小问号，右边「使用」 */
+  .itemsBox { max-width: 460px; max-height: 76vh; overflow-y: auto; }
+  .itIntro { font-size: 12px; color: var(--text-dim); line-height: 1.75;
+    margin: 0 0 8px; }
+  .itemsList { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+  .itRow { display: flex; align-items: center; gap: 7px;
+    padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--bg-elev); }
+  .itRow .nm { font-size: 12.5px; color: var(--text); flex: 1; }
+  .itRow .kd { font-size: 10px; color: var(--text-mute);
+    border: 1px solid var(--border); border-radius: 5px; padding: 0 4px; }
+  .itRow .use { font-size: 11.5px; color: var(--accent); cursor: pointer;
+    border: 1px dashed rgba(240,180,41,.55); border-radius: 7px;
+    padding: 2px 8px; background: rgba(240,180,41,.07); }
+  .itRow .use:hover { background: rgba(240,180,41,.16); }
+  .itemsKeeps { margin-top: 10px; padding-top: 9px;
+    border-top: 1px solid var(--border); font-size: 11.5px;
+    color: var(--text-dim); line-height: 1.8; }
+
 
   .skipCustom { display: flex; gap: 8px; align-items: center; }
   .skipCustom input { flex: 1; min-width: 0; padding: 9px 12px; font: inherit;
@@ -774,6 +793,10 @@
                 onclick="pickPField('action')">具体动作</button>
         <button class="ptab" data-f="plot"
                 onclick="pickPField('plot')">剧情推进</button>
+        <!-- 道具（2026-11-08）：点开是道具面板，每样带问号，点「使用」就把
+             这句话塞进主输入框。文案全部来自 config/items.json。 -->
+        <button class="ptab" id="btnItems" type="button"
+                title="打开道具面板">道具</button>
         <!-- 聊天字号（2026-11-06）：点开浮层拖滑块，只放大聊天气泡，
              写浏览器本地，刷新不丢。放这里是因为它和输入区一样是「看字」的开关。 -->
         <button class="ptab" id="btnFont" type="button"
@@ -1115,6 +1138,18 @@
     <h3 id="axisHelpTitle">说明</h3>
     <div id="axisHelpBody" class="axisHelpBody"></div>
     <button class="btn pri skipGo" id="axisHelpClose">知道了</button>
+  </div>
+</div>
+
+<!-- 道具面板（2026-11-08）：点「道具」打开。每样一行，带问号看作用，
+     点「使用」把这句话写进主输入框（不直接发送，玩家还能补别的）。 -->
+<div class="skipMask" id="itemsMask">
+  <div class="skipBox itemsBox">
+    <h3>道具</h3>
+    <p class="itIntro">说用哪样就行，不限次数。用到哪样，写法会单独交给演员。</p>
+    <div id="itemsList" class="itemsList"></div>
+    <div id="itemsKeeps" class="itemsKeeps"></div>
+    <button class="btn pri skipGo" id="itemsClose">关闭</button>
   </div>
 </div>
 
@@ -3602,6 +3637,102 @@ $("skipMask").addEventListener("click", e => {
 // 单条状态的说明（2026-11-08 晚）：每条轴和「五处」旁边的小问号点开。
 // 文案全部由后端给（axis.help = {title, body[]}），body 里 **粗体** 会转成 <b>。
 // 只做白名单式的最小渲染：先转义，再把 **x** 换成 <b>x</b>，不执行任何 HTML。
+// ── 道具面板（2026-11-08）────────────────────────────
+// 数据来自后端 `/api/persona/items`（config/items.json 的只读视图）。
+// 「使用」只往主输入框追加一句话，**不直接发送**——玩家还能补别的。
+let ITEMS = null;
+
+function openItems() {
+  const m = $("itemsMask");
+  if (!m) return;
+  m.classList.add("on");
+  renderItems();
+  if (!ITEMS) {
+    fetch("/api/persona/items?key=" + encodeURIComponent(KEY || ""))
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) { ITEMS = d; renderItems(); } })
+      .catch(() => {});
+  }
+}
+function closeItems() {
+  const m = $("itemsMask");
+  if (m) m.classList.remove("on");
+}
+function renderItems() {
+  const box = $("itemsList");
+  const keeps = $("itemsKeeps");
+  if (!box) return;
+  box.innerHTML = "";
+  const list = (ITEMS && ITEMS.catalog) || [];
+  if (!list.length) {
+    const d = document.createElement("div");
+    d.style.cssText = "font-size:12px;color:var(--text-mute);padding:8px 0";
+    d.textContent = "道具表还没加载出来，稍后再开一次。";
+    box.appendChild(d);
+    return;
+  }
+  const KIND = { consumable: "消耗", plot: "剧情", restraint: "束缚" };
+  list.forEach(function (it) {
+    const row = document.createElement("div");
+    row.className = "itRow";
+    const nm = document.createElement("span");
+    nm.className = "nm";
+    nm.textContent = it.name || it.key;
+    row.appendChild(nm);
+    if (it.kind) {
+      const kd = document.createElement("span");
+      kd.className = "kd";
+      kd.textContent = KIND[it.kind] || it.kind;
+      row.appendChild(kd);
+    }
+    const q = axisQ(it.help);
+    if (q) row.appendChild(q);
+    if (it.kind !== "plot") {          // 剧情道具不提供一键插入，要玩家自己写
+      const btn = document.createElement("span");
+      btn.className = "use";
+      btn.textContent = "使用";
+      btn.onclick = function () { useItem(it); };
+      row.appendChild(btn);
+    }
+    box.appendChild(row);
+  });
+
+  if (keeps) {
+    keeps.innerHTML = "";
+    const ks = (ITEMS && ITEMS.keepsakes) || [];
+    if (!ks.length) return;
+    const h = document.createElement("div");
+    h.style.cssText = "color:var(--text-mute);margin-bottom:3px";
+    h.textContent = "她给过你的东西";
+    keeps.appendChild(h);
+    ks.forEach(function (k) {
+      const d = document.createElement("div");
+      let s = k.name;
+      if (k.from) s += "（" + k.from + (k.day ? " 第 " + k.day + " 天" : "") + "）";
+      d.textContent = "· " + s;
+      keeps.appendChild(d);
+    });
+  }
+}
+function useItem(it) {
+  const el = $("inp");
+  if (!el) return;
+  const s = el.value.trim();
+  const add = "（用" + (it.name || it.key) + "）";
+  el.value = s ? (s + "\n" + add) : add;
+  el.dispatchEvent(new Event("input"));
+  el.focus();
+  closeItems();
+}
+if ($("itemsClose")) $("itemsClose").onclick = closeItems;
+if ($("itemsMask")) {
+  $("itemsMask").addEventListener("click", e => {
+    if (e.target === $("itemsMask")) closeItems();
+  });
+}
+const _btnItems = $("btnItems");
+if (_btnItems) _btnItems.onclick = function (e) { e.stopPropagation(); openItems(); };
+
 function openAxisHelp(help) {
   const m = $("axisHelpMask");
   if (!m || !help) return;
@@ -3659,7 +3790,7 @@ if ($("adultHelpMask")) {
   });
 }
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape") { closeAdultHelp(); closeAxisHelp(); }
+  if (e.key === "Escape") { closeAdultHelp(); closeAxisHelp(); closeItems(); }
 });
 
 $("btnPregHelp").onclick = () => $("pregHelpMask").classList.add("on");

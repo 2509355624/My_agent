@@ -781,5 +781,100 @@ class PovContractTest(unittest.TestCase):
         self.assertIn("repair_line", src)
 
 
+class ItemSystemTest(unittest.TestCase):
+    """道具系统（2026-11-08）：道具是「一段写法」，不是数值。"""
+
+    def setUp(self):
+        from app import items
+        self.it = items
+
+    def test_catalog_has_ten(self):
+        self.assertGreaterEqual(len(self.it.all_items()), 10)
+
+    def test_every_item_has_prompt_and_help(self):
+        for key, it in self.it.all_items().items():
+            self.assertTrue(it.get("prompt"), "%s 缺 prompt" % key)
+            self.assertTrue(it.get("help"), "%s 缺 help" % key)
+            self.assertTrue(it["help"].get("body"), "%s help 缺正文" % key)
+            self.assertTrue(it.get("aliases"), "%s 缺别名" % key)
+
+    def test_match_by_alias(self):
+        self.assertEqual(self.it.match("我拿出跳蛋"), ["vibrator"])
+        self.assertEqual(self.it.match("用点润滑"), ["lubricant"])
+
+    def test_unknown_item_not_matched(self):
+        self.assertEqual(self.it.match("我掏出个手雷"), [],
+                         "表外的道具不该被匹配")
+
+    def test_list_block_is_short(self):
+        """常态注入只给名字——十几个道具全注 prompt 会炸预算。"""
+        blk = self.it.list_block()
+        self.assertIn("润滑液", blk)
+        self.assertNotIn("挤出来是凉的", blk, "常态不该带 prompt")
+        self.assertLess(len(blk), 400)
+
+    def test_use_block_carries_prompt(self):
+        blk = self.it.use_block(["sleep_drug"])
+        self.assertIn("迷药", blk)
+        self.assertIn("她闻到的时候已经晚了", blk)
+
+    def test_use_block_skips_unknown(self):
+        self.assertEqual(self.it.use_block(["手雷"]), "")
+
+    def test_keepsake_block(self):
+        blk = self.it.keepsake_block(
+            [{"name": "钥匙扣", "kind": "keepsake", "from": "千夏", "day": 3}])
+        self.assertIn("钥匙扣", blk)
+        self.assertIn("千夏", blk)
+
+    def test_keepsake_excludes_consumables(self):
+        self.assertEqual(self.it.keepsake_block(
+            [{"name": "酒", "kind": "consumable"}]), "")
+
+    def test_gain_dedupes_same_item(self):
+        rec = self.it.apply_gain([], [{"name": "钥匙扣", "kind": "keepsake",
+                                       "from": "千夏"}])
+        rec = self.it.apply_gain(rec, [{"name": "钥匙扣", "kind": "keepsake",
+                                        "from": "千夏"}])
+        self.assertEqual(len(rec), 1, "同一样东西不该记两次")
+
+    def test_plot_items_flagged(self):
+        self.assertTrue(self.it.is_plot("sleep_drug"))
+        self.assertFalse(self.it.is_plot("lubricant"))
+
+    def test_prompt_has_item_keys_placeholder(self):
+        from app import persona
+        self.assertIn("%(item_keys)s", persona._SCORE_PROMPT_V2)
+
+    def test_run_turn_injects_items(self):
+        import inspect
+        from app import persona
+        src = inspect.getsource(persona.run_turn)
+        self.assertIn("_items.list_block", src)
+        self.assertIn("_items.use_block", src)
+        self.assertIn("_items.keepsake_block", src)
+
+    def test_frontend_has_items_panel(self):
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "web", "persona.html")
+        with io.open(path, encoding="utf-8") as fh:
+            h = fh.read()
+        self.assertIn('id="itemsMask"', h)
+        self.assertIn('id="btnItems"', h)
+        self.assertIn("function openItems", h)
+        self.assertIn("function useItem", h)
+
+    def test_api_route_exists(self):
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "app", "persona_api.py")
+        with io.open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertIn('/api/persona/items', src)
+
+
 if __name__ == "__main__":
     unittest.main()

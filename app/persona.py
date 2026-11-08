@@ -59,7 +59,8 @@ import shutil
 import threading
 import time
 
-from app import (affection, affection_v2_adult as adult_state, llm,
+from app import (affection, affection_v2_adult as adult_state, items as _items,
+                   llm,
                    persona_rag, pregnancy, trigger,
                  writing_skills, writing_style)
 from app.config import (BASE_DIR, PERSONA_MODEL, PERSONA_PROVIDER,
@@ -4527,6 +4528,10 @@ _SCORE_PROMPT_V2 = """你在给一段校园/日常恋爱角色扮演做「编剧
   "phase": "",
   "plan": "",
   "place": "",
+  "items": {
+    "use": ["道具 key（见上面的道具清单）"],
+    "gain": [{"name": "东西的名字", "kind": "keepsake | consumable | tool | key", "from": "谁给的"}]
+  },
   "adult": {
     "arousal": "calm | hint | want | lead | reverse",
     "excite": 0,
@@ -4574,6 +4579,22 @@ refused_confession：上一轮是她主动开口表白，而玩家这句在拒�
 
 segments：把这一句按「说 / 做 / 想」拆开给演员用。想一律留空串，别替玩家补心里话。
   %(segment_guide)s
+
+## items：道具（只在真的有东西进出时才填）
+
+**道具不是数值，是「这一轮该按什么写法写」。** 你只需要判「用了哪个」，
+具体怎么描写由系统注入（每样道具自带一段写法）。
+
+use：这一轮真的用上了哪样。**从这个清单里挑 key**：%(item_keys)s
+  · 判据是「玩家说了要用 / 已经拿到手上 / 已经在起作用」——只是提了一句不算。
+  · 用完不会消耗，下次还能用（无限，不记数量）。
+  · 表外的道具（玩家自己编的）**不要写进 use**，系统会只记名字，让写法自由发挥。
+
+gain：这一轮有没有东西真的交到你手上。
+  · 只记**真的递过来 / 翻出来 / 捡到**的；看见了、指着说都不算。
+  · **她给你的私人物品一定要记**（key ring、旧信、她爸的打火机这类），
+    kind 填 keepsake，from 写她是谁。这一条比什么都重要——她会记住你带着它。
+  · 自己找的：kind 填 tool 或 consumable，from 留空。
 
 ## adult：身体这条线（只在真的往那上面走时才填，普通日常整项留空/0）
 
@@ -4668,6 +4689,7 @@ def _judge_v2(card, said, state="", line_key="", gameday=None,
         "confess_desc": ctx.get("confess_desc") or "",
         "yandere_name": ctx.get("yandere_name") or "没有",
         "dev": ctx.get("devText") or "（五处都还没被开发过）",
+        "item_keys": _item_keys_text(),
         "recent": ctx.get("recent") or "（你们还没什么交集）",
         "gday": _day_of(gd),
         "gphase": str(gd.get("phase") or "还没定"),
@@ -4704,6 +4726,9 @@ def _judge_v2(card, said, state="", line_key="", gameday=None,
     # 这里多改一处就多一个离线口径。
     if isinstance(d.get("adult"), dict):
         score["adult"] = d["adult"]
+    # items（2026-11-08）：原样透传，净化在 app/items.py 里做。
+    if isinstance(d.get("items"), dict):
+        score["items"] = d["items"]
     return intent, note, score
 
 
@@ -5589,6 +5614,29 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
                 # 落盘成待办：页面刷新/断网后还能再问一次（见
                 # `_set_pending_finish` 的说明）。
                 _set_pending_finish(key, cl)
+        # 道具（2026-11-08）：记录进出的东西 + 拼注入块。
+        # 三块拼在一起：能用的清单（常态）、这一轮用到的写法、她给过的东西。
+        try:
+            _istate = _load_state()
+            _irec = _istate.get(key) or {}
+            _sc = score if isinstance(score, dict) else {}
+            _idelta = _sc.get("items") if isinstance(_sc.get("items"), dict) else {}
+            # 编剧没给就自己从原话里认一遍（只认表里的别名，不猜）
+            _use = [str(x) for x in (_idelta.get("use") or []) if str(x).strip()]
+            if not _use:
+                _use = _items.match(text)
+            _gains = _idelta.get("gain") or []
+            if _gains:
+                _irec["items"] = _items.apply_gain(_irec.get("items"), _gains)
+                _istate[key] = _irec
+                _save_state(_istate)
+            for _blk in (_items.list_block(),
+                         _items.use_block(_use),
+                         _items.keepsake_block(_irec.get("items"))):
+                if _blk:
+                    head = head + "\n\n" + _blk
+        except Exception:                                # noqa: BLE001
+            log.warning("道具注入失败 %s", key, exc_info=True)
         # v2 成人向（2026-11-08）：编剧判好的 adult delta → 结算 → 拼中文注入。
         # 老档（没 schema=2）不会进这个分支，v1 一个字不动。
         if v2 and isinstance(score, dict) and isinstance(score.get("adult"), dict):

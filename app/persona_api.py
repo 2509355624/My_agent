@@ -1182,6 +1182,27 @@ def affection_panel_api():
     return jsonify({"ok": True, "panel": p})
 
 
+@bp.route("/api/persona/items")
+def items_api():
+    """道具面板（2026-11-08）：目录 + 她已经给过的信物。
+
+    目录来自 `config/items.json`，前端只负责显示（改配置就改面板，
+    不用动前端）。信物从当前这条线的存档里取——只有她会记得你带着什么。
+    """
+    from app import items
+    keepsakes = []
+    try:
+        key = _active_key(_key(_who()[1]))
+        rec = (persona._load_state() or {}).get(key) or {}
+        keepsakes = [r for r in items.normalize(rec.get("items"))
+                     if str(r.get("kind") or "") == "keepsake"]
+    except Exception:                                     # noqa: BLE001
+        log.warning("取信物失败，只给目录", exc_info=True)
+    return jsonify({"ok": True,
+                    "catalog": items.panel(keepsakes)["catalog"],
+                    "keepsakes": keepsakes})
+
+
 @bp.route("/api/persona/affection/wipe", methods=["POST"])
 @bp.route("/api/persona/affection/restart", methods=["POST"])
 def affection_wipe():
