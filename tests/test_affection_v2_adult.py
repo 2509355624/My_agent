@@ -1076,5 +1076,92 @@ class ItemsUniversalTest(unittest.TestCase):
         self.assertIn("#axisHelpMask { z-index: 620; }", h)
 
 
+class SaveSlotTest(unittest.TestCase):
+    """多存档（2026-11-08）：每张卡最多 3 个，slot 0 是老档，不能读不到。"""
+
+    def test_slot_zero_keeps_old_key(self):
+        """slot 0 的 key 必须和加这个功能之前一模一样。"""
+        from app import persona
+        self.assertEqual(persona._card_key_slot("web_1", "rem", 0),
+                         "web_1__rem")
+
+    def test_slot_one_and_two_suffix(self):
+        from app import persona
+        self.assertEqual(persona._card_key_slot("web_1", "rem", 1),
+                         "web_1__rem_s1")
+        self.assertEqual(persona._card_key_slot("web_1", "rem", 2),
+                         "web_1__rem_s2")
+
+    def test_slot_clamped(self):
+        from app import persona
+        self.assertEqual(persona._card_key_slot("web_1", "rem", 9),
+                         "web_1__rem_s2", "超过上限要压回最后一个槽")
+
+    def test_card_key_is_idempotent_with_slot(self):
+        from app import persona
+        k = persona._card_key_slot("web_1", "rem", 1)
+        self.assertEqual(persona._card_key_slot(k, "rem", 1), k,
+                         "不能叠成 __rem_s1__rem_s1")
+
+    def test_card_slot_of_roundtrip(self):
+        from app import persona
+        for n in range(persona.SLOT_MAX):
+            k = persona._card_key_slot("web_1", "rem", n)
+            self.assertEqual(persona.card_slot_of(k, "rem"), n)
+
+    def test_slot_max_is_three(self):
+        from app import persona
+        self.assertEqual(persona.SLOT_MAX, 3)
+
+    def test_slot_key_is_safe(self):
+        """`_SAFE_KEY` 只允许 [A-Za-z0-9_-]，后缀不能带 # 或 ~。"""
+        from app import persona
+        for n in range(persona.SLOT_MAX):
+            k = persona._card_key_slot("web_2509355624", "izumi_sagiri", n)
+            self.assertIsNotNone(persona._SAFE_KEY.match(k),
+                                 "%s 不合法" % k)
+            self.assertLessEqual(len(k), 63)
+
+    def test_resolve_line_reads_slot(self):
+        from app import persona
+        import inspect
+        src = inspect.getsource(persona.resolve_line)
+        self.assertIn('ent.get("slot")', src)
+        self.assertIn("_card_key_slot", src)
+
+    def test_api_has_slot_routes(self):
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "app", "persona_api.py")
+        with io.open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertIn("/api/persona/slots", src)
+        self.assertIn("/api/persona/slot_name", src)
+        self.assertIn("/api/persona/slot_wipe", src)
+
+    def test_wipe_needs_confirm_phrase(self):
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "app", "persona_api.py")
+        with io.open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertIn("确认删除", src)
+
+    def test_frontend_slot_panel(self):
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "web", "persona.html")
+        with io.open(path, encoding="utf-8") as fh:
+            h = fh.read()
+        self.assertIn('id="slotMask"', h)
+        for fn in ("openSlots", "enterSlot", "pickDone", "renameSlot", "wipeSlot"):
+            self.assertIn("function " + fn, h, "缺 %s" % fn)
+        # 每个只该定义一次（之前重写时担心重复定义）
+        self.assertEqual(h.count("function enterSlot"), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -616,6 +616,24 @@
     padding: 2px 8px; background: rgba(240,180,41,.07); }
   .itRow .use:hover { background: rgba(240,180,41,.16); }
   /* 道具状态行：贴着 AI 回复的元数据，不抢视觉 */
+  /* 存档面板（2026-11-08）：一行一个存档，空槽是虚线 */
+  .slotBox { max-width: 430px; max-height: 74vh; overflow-y: auto; }
+  .slotList { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+  .slotRow { display: flex; align-items: center; gap: 8px; padding: 9px 10px;
+    border: 1px solid var(--border); border-radius: 9px;
+    background: var(--bg-elev); cursor: pointer; }
+  .slotRow:hover { border-color: rgba(240,180,41,.5); }
+  .slotRow.empty { border-style: dashed; opacity: .62; }
+  .slotRow.cur { border-color: var(--accent); background: rgba(240,180,41,.08); }
+  .slotRow .snm { flex: 1; font-size: 12.5px; color: var(--text); min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .slotRow .smeta { font-size: 10.5px; color: var(--text-mute); }
+  .slotRow .sact { font-size: 11px; color: var(--text-mute); cursor: pointer;
+    padding: 1px 5px; border-radius: 5px; }
+  .slotRow .sact:hover { background: rgba(255,255,255,.08); color: var(--text); }
+  .slotRow .sact.del:hover { color: #e57373; background: rgba(229,115,115,.12); }
+  .slotRow .curTag { font-size: 10px; color: var(--accent);
+    border: 1px solid rgba(240,180,41,.5); border-radius: 5px; padding: 0 4px; }
   .itline { font-size: 11px; line-height: 1.7; margin-top: 3px;
     display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
 
@@ -1150,6 +1168,17 @@
   </div>
 </div>
 
+<!-- 存档面板（2026-11-08 用户要求）：点角色卡先展开它的存档，
+     挑一个进去。每张卡最多 3 个，名字是玩家自己起的。 -->
+<div class="skipMask" id="slotMask">
+  <div class="skipBox slotBox">
+    <h3 id="slotTitle">存档</h3>
+    <p class="itIntro">挑一个进去。三个存档各聊各的，互不影响。</p>
+    <div id="slotList" class="slotList"></div>
+    <button class="btn pri skipGo" id="slotClose">取消</button>
+  </div>
+</div>
+
 <!-- 道具面板（2026-11-08）：点「道具」打开。每样一行，带问号看作用，
      点「使用」把这句话写进主输入框（不直接发送，玩家还能补别的）。 -->
 <div class="skipMask" id="itemsMask">
@@ -1266,6 +1295,7 @@ let CARD_MAP = {};      // id → 卡对象，给角色列表的事件委托用
 let LAST_TAP = { id: "", t: 0 };   // 防手机端 touchend + click 重复触发
 let ROLE = "member";     // member / guest
 let GUEST_LEFT = 0;      // 游客还剩几轮
+let slotPick = null;   // 正在挑存档的角色（{id, name}），null = 没在挑
 let AFF = null;          // 攻略模式状态（session/chat 带回来；null=没开过）
 
 // ── 回画廊（2026-11-03）─────────────────────────────────
@@ -1504,6 +1534,134 @@ async function loadCards(pending) {
   }
 }
 
+// ── 存档面板（2026-11-08 用户要求）────────────────────
+// 点角色卡 → 拉 `/api/persona/slots?card=` → 列出三个槽。
+// 空槽点一下就是「新开一个」，有内容的点一下就是「接着这条线聊」。
+// 名字由玩家自己起（点铅笔），存在那条线自己的 slot_name 上。
+function openSlots(c) {
+  if (!c) return;
+  slotPick = { id: c.id, name: c.name, slot: 0 };
+  $("slotTitle").textContent = c.name + " · 存档";
+  const box = $("slotList");
+  box.innerHTML = "";
+  const ld = document.createElement("div");
+  ld.style.cssText = "font-size:12px;color:var(--text-mute);padding:8px 0";
+  ld.textContent = "正在读取存档…";
+  box.appendChild(ld);
+  $("slotMask").classList.add("on");
+  fetch("/api/persona/slots?card=" + encodeURIComponent(c.id))
+    .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)))
+    .then(d => { if (d && d.ok) renderSlots(d); else throw new Error((d && d.error) || "读取失败"); })
+    .catch(err => {
+      box.innerHTML = "";
+      const e = document.createElement("div");
+      e.style.cssText = "font-size:12px;color:#e57373;padding:8px 0";
+      e.textContent = "存档没读到（" + (err && err.message ? err.message : "网络错误") + "）。";
+      box.appendChild(e);
+    });
+}
+function closeSlots() {
+  slotPick = null;
+  const m = $("slotMask");
+  if (m) m.classList.remove("on");
+}
+function renderSlots(d) {
+  const box = $("slotList");
+  if (!box) return;
+  box.innerHTML = "";
+  (d.slots || []).forEach(function (s) {
+    const row = document.createElement("div");
+    row.className = "slotRow" + (s.exists ? "" : " empty")
+      + (d.current === s.slot ? " cur" : "");
+    const nm = document.createElement("span");
+    nm.className = "snm";
+    nm.textContent = s.exists ? s.name : "空存档 · 点这里开始";
+    row.appendChild(nm);
+    if (s.exists) {
+      const m = document.createElement("span");
+      m.className = "smeta";
+      m.textContent = "第 " + (s.day || 1) + " 天 · " + (s.turns || 0) + " 轮";
+      row.appendChild(m);
+    }
+    if (d.current === s.slot) {
+      const c2 = document.createElement("span");
+      c2.className = "curTag";
+      c2.textContent = "当前";
+      row.appendChild(c2);
+    }
+    if (s.exists) {
+      const pen = document.createElement("span");
+      pen.className = "sact";
+      pen.textContent = "改名";
+      pen.title = "给这个存档起个名字";
+      pen.onclick = function (e) {
+        e.stopPropagation();
+        renameSlot(d.card, s, d.cardName);
+      };
+      row.appendChild(pen);
+      const del = document.createElement("span");
+      del.className = "sact del";
+      del.textContent = "删";
+      del.title = "清空这个存档（其它存档不受影响）";
+      del.onclick = function (e) {
+        e.stopPropagation();
+        wipeSlot(d.card, s, d.cardName);
+      };
+      row.appendChild(del);
+    }
+    row.onclick = function () {
+      if (d.current === s.slot) { closeSlots(); return; }
+      enterSlot(d.card, s.slot, d.cardName);
+    };
+    box.appendChild(row);
+  });
+}
+function enterSlot(cardId, slot, name) {
+  // 记住挑的是哪张卡的第几个槽，然后**只关遮罩、不清 slotPick**——
+  // pickDone 还要读它（之前先 closeSlots() 再读，读到的是 null）。
+  slotPick = { id: cardId, name: name || "", slot: slot };
+  const m = $("slotMask");
+  if (m) m.classList.remove("on");
+  pickDone({ id: cardId, name: name || "" });
+}
+// 真正切线的动作（原来写在 pick() 里，拆出来给存档面板复用）
+async function pickDone(c) {
+  const slot = slotPick ? slotPick.slot : 0;
+  busy = true;
+  try {
+    const d = await post("/api/persona/switch", { id: c.id, slot: slot });
+    card = d.card;
+    // 换线 = 换一份历史，画面缓存也要清（编号会撞车）
+    clearPicStore();
+    msgs = [];
+    toast("现在是 " + c.name);
+    await loadSession();
+  } catch (e) {
+    toast("切换失败：" + e.message, true);
+  } finally { busy = false; slotPick = null; }
+}
+function renameSlot(cardId, s, cardName) {
+  const cur = s.custom ? s.name : "";
+  const v = window.prompt("给这个存档起个名字（留空 = 恢复默认）", cur);
+  if (v === null) return;
+  post("/api/persona/slot_name", { card: cardId, slot: s.slot, name: v })
+    .then(function () { openSlots({ id: cardId, name: cardName }); })
+    .catch(function (e) { toast(e.message, true); });
+}
+function wipeSlot(cardId, s, cardName) {
+  const v = window.prompt("这会清空「" + s.name + "」，其它存档不受影响。\n确认请打：确认删除");
+  if (v === null) return;
+  post("/api/persona/slot_wipe", { card: cardId, slot: s.slot, confirm: v })
+    .then(function () { toast("已清空"); openSlots({ id: cardId, name: cardName }); })
+    .catch(function (e) { toast(e.message, true); });
+}
+if ($("slotClose")) $("slotClose").onclick = closeSlots;
+if ($("slotMask")) {
+  $("slotMask").addEventListener("click", e => {
+    if (e.target === $("slotMask")) closeSlots();
+  });
+}
+
 async function pick(c) {
   // 诊断（2026-11-03）：用户报「点角色没反应」，但后端全正常。
   // 先把每次点击的状态打出来，出问题时一眼能看到卡在哪。
@@ -1520,23 +1678,16 @@ async function pick(c) {
     closeDrawer();
     return;
   }
-  busy = true;
-  try {
-    const d = await post("/api/persona/switch", { id: c.id });
-    console.log("[pick] 切换成功", d);
-    card = d.card;
-    // 换角色 = 换一条会话线，画面缓存也要跟着清——不清的话会把上一个
-    // 角色的图挂到新角色第一条回复下面（编号撞车）。
-    clearPicStore();
-    msgs = [];
-    toast("现在是 " + c.name);
+  // 存档槽（2026-11-08 用户要求）：点角色卡**先展开它的存档**，
+  // 玩家挑一个槽再进去。已经在演这个角色就直接关抽屉（老行为）。
+  if (!slotPick) {
     closeDrawer();
-    await loadSession();
-  } catch (e) {
-    console.error("[pick] 切换失败", e);
-    toast("切换失败：" + e.message, true);
+    openSlots(c);
+    return;
   }
-  finally { busy = false; }
+  // 走到这里说明是从存档面板点进来的（slotPick 已就位）
+  closeDrawer();
+  await pickDone(c);
 }
 
 function clearPicStore() {

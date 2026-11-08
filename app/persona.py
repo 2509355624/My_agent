@@ -2401,14 +2401,52 @@ def card_key(session_key, card_id=""):
 
     `card_id` 为空时返回原键——没选角色就没有「按角色分」这回事。
     """
+    return _card_key_slot(session_key, card_id, 0)
+
+
+# 每张卡最多几个存档（2026-11-08 用户拍板：3 个）。
+# slot 0 是**老存档**，key 不带后缀——加这一列之前的所有线都在 slot 0，
+# 不能因为新功能让老档读不到。
+SLOT_MAX = 3
+
+
+def _slot_suffix(slot):
+    """slot 0 → 空串（老 key 原样）；1/2 → `_s1` / `_s2`。
+
+    分隔符只能从 `_SAFE_KEY`（`[A-Za-z0-9_-]`）里挑，`#` `~` 会被判非法，
+    所以用下划线。`_s<数字>` 也不会和卡 id 撞（卡 id 里没有 `_s` 开头段）。
+    """
+    try:
+        n = int(slot or 0)
+    except (TypeError, ValueError):
+        n = 0
+    n = max(0, min(SLOT_MAX - 1, n))
+    return "" if n == 0 else "_s%d" % n
+
+
+def _card_key_slot(session_key, card_id, slot=0):
     k = str(session_key or "")
     cid = str(card_id or "").strip()
     if not cid or not k:
         return k
-    # 已经带过了就不要再叠（幂等）
-    if k.endswith("__" + cid):
+    sfx = _slot_suffix(slot)
+    # 已经带过了就不要再叠（幂等）；带 slot 时后缀也要一起比，
+    # 否则 `web_x__card_s1` 会被再叠一层变成 `..._s1__card_s1`
+    if k.endswith("__" + cid + sfx):
         return k
-    return k + "__" + cid
+    return k + "__" + cid + sfx
+
+
+def card_slot_of(key, card_id=""):
+    """反查一个线键是这张卡的第几个存档。读不出来当 0（老档）。"""
+    k = str(key or "")
+    cid = str(card_id or "").strip()
+    if not cid or not k:
+        return 0
+    for n in range(SLOT_MAX - 1, 0, -1):
+        if k.endswith("__" + cid + "_s%d" % n):
+            return n
+    return 0
 
 
 def resolve_line(session_key):
@@ -2427,7 +2465,15 @@ def resolve_line(session_key):
         return key
     ent = _entry(key) or {}
     cid = str(ent.get("card") or "").strip()
-    return card_key(key, cid) if cid else key
+    if not cid:
+        return key
+    # 存档槽（2026-11-08）：base 上记着 slot 就派生出带后缀的线键。
+    # 没有这个字段的老档按 slot 0 走，行为完全不变。
+    try:
+        slot = int(ent.get("slot") or 0)
+    except (TypeError, ValueError):
+        slot = 0
+    return _card_key_slot(key, cid, slot)
 
 
 def status_brief(session_key):
@@ -2443,8 +2489,8 @@ def status_brief(session_key):
         return ""
 
 
-def switch_line(base, card):
-    """切角色（QQ 私聊分线版）：**两条都要写**——
+def switch_line(base, card, slot=0):
+    """切角色 / 切存档（2026-11-08 加 slot）：**两条都要写**——
 
       · 线键 `base__<card_id>`：这条角色线的真实状态（历史/小记/好感都挂它）
       · base：记「此刻在演谁」的副本（`resolve_line` 靠它找线）
@@ -2452,10 +2498,20 @@ def switch_line(base, card):
     切回一条演过的线时，`switch()` 会保留它的小记/轮次——真正「接着聊」。
     网页端 switch 端点与本函数是同一套语义（2026-11-03 起共用这里）。
     """
-    ckey = card_key(base, card["id"])
+    ckey = _card_key_slot(base, card["id"], slot)
     switch(ckey, card)
     st = _load_state()
     st[base] = dict(st.get(ckey) or {})
+    # base 上记「此刻是这张卡的第几个存档」——`_active_key` / `resolve_line`
+    # 靠它派生出线键。slot 0 不写（老档没有这个字段，行为不变）。
+    try:
+        n = int(slot or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n:
+        st[base]["slot"] = n
+    else:
+        st[base].pop("slot", None)
     _save_state(st)
     return ckey
 

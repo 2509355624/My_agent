@@ -227,7 +227,13 @@ def _active_key(base):
     cid = str(ent.get("card") or "").strip()
     if not cid:
         return base
-    return persona.card_key(base, cid)
+    # 存档槽（2026-11-08）：base 上记着 slot 就派生带后缀的线键；
+    # 老档没有这个字段，按 0 走——key 和以前一模一样。
+    try:
+        slot = int(ent.get("slot") or 0)
+    except (TypeError, ValueError):
+        slot = 0
+    return persona._card_key_slot(base, cid, slot)        # noqa: SLF001
 
 
 def _card_json(card):
@@ -584,7 +590,13 @@ def switch():
     # 这样切角色 = 换一条独立的线，切回来还能接上。
     # （2026-11-03 起这段逻辑收进 persona.switch_line——QQ 私聊分线用的是
     #   同一套，切回旧线时小记/轮次保留的行为两边自然一致。）
-    ckey = persona.switch_line(base, card)                # noqa: SLF001
+    # 存档槽（2026-11-08）：不传 slot 就是老行为（slot 0，同一条线）。
+    try:
+        slot = int(body.get("slot") or 0)
+    except (TypeError, ValueError):
+        slot = 0
+    slot = max(0, min(persona.SLOT_MAX - 1, slot))        # noqa: SLF001
+    ckey = persona.switch_line(base, card, slot)          # noqa: SLF001
     # 默认攻略模式（2026-11-04）：切过来就把好感记录建好（按这张卡的起点），
     # 右栏一打开就有「关系 · 攻略模式」，不用等玩家先发一句话。
     try:
@@ -595,6 +607,138 @@ def switch():
     log.info("网页切角色：%s → %s（线 %s）", base, card["name"], ckey)
     return jsonify({"ok": True, "card": _card_json(card),
                     "reply": "从现在起我是%s。" % card["name"]})
+
+
+# ── 存档槽（2026-11-08 用户要求）──────────────────────────
+#
+# 每张卡最多 3 个存档，玩家自己命名、自己挑一个进。
+#
+# 实现上**没有新建任何存储结构**：一个存档就是一条线键
+# （`web_<qq>__<card>` / `_s1` / `_s2`），名字存在那条线自己的
+# `slot_name` 字段上。这样列表永远和实际状态一致，不会出现
+# 「索引说有存档、点进去是空的」。
+
+
+def _slot_meta(base, card, slot):
+    """读一个槽的摘要。不存在就返回 `{"exists": False}`。"""
+    key = persona._card_key_slot(base, card["id"], slot)  # noqa: SLF001
+    try:
+        ent = persona._entry(key) or {}
+    except Exception:                                     # noqa: BLE001
+        ent = {}
+    if not ent:
+        return {"slot": slot, "exists": False, "name": "", "turns": 0, "day": 0}
+    try:
+        day = persona.game_day(key)
+    except Exception:                                     # noqa: BLE001
+        day = 0
+    try:
+        turns = persona.turn_total(key)
+    except Exception:                                     # noqa: BLE001
+        turns = 0
+    name = str(ent.get("slot_name") or "").strip()
+    return {"slot": slot, "exists": True,
+            "name": name or ("存档 %d" % (slot + 1)),
+            "custom": bool(name),
+            "day": int(day or 0), "turns": int(turns or 0),
+            "card": str(ent.get("card") or "")}
+
+
+@bp.route("/api/persona/slots")
+def slots_api():
+    """某张卡名下的全部存档（最多 3 个）。`?card=<id 或名字>` 必传。"""
+    role, who, token = _who()
+    if role == "guest":
+        resp = jsonify({"ok": False, "error": "体验版没有存档", "limit": True})
+        resp.status_code = 403
+        _attach_guest_cookie(resp, token)
+        return resp
+    want = str(request.args.get("card") or "").strip()
+    card = persona.find_card(want) if want else None
+    if card is None:
+        return jsonify({"ok": False, "error": "没有这个角色：%s" % want}), 404
+    base = _key(who)
+    out = [_slot_meta(base, card, n) for n in range(persona.SLOT_MAX)]  # noqa: SLF001
+    # 当前正在用的是哪个槽
+    try:
+        ent = persona._entry(base) or {}                  # noqa: SLF001
+        cur = int(ent.get("slot") or 0) if str(ent.get("card") or "") == card["id"] else -1
+    except (TypeError, ValueError):
+        cur = -1
+    return jsonify({"ok": True, "card": card["id"], "cardName": card["name"],
+                    "current": cur, "slots": out,
+                    "max": persona.SLOT_MAX})             # noqa: SLF001
+
+
+@bp.route("/api/persona/slot_name", methods=["POST"])
+def slot_name_api():
+    """给一个存档改名。body: {card, slot, name}。名字空 = 恢复默认「存档 N」。"""
+    role, who, _token = _who()
+    if role == "guest":
+        return jsonify({"ok": False, "error": "体验版没有存档", "limit": True}), 403
+    body = request.get_json(silent=True) or {}
+    card = persona.find_card(str(body.get("card") or "").strip())
+    if card is None:
+        return jsonify({"ok": False, "error": "没有这个角色"}), 404
+    try:
+        slot = int(body.get("slot") or 0)
+    except (TypeError, ValueError):
+        slot = 0
+    slot = max(0, min(persona.SLOT_MAX - 1, slot))        # noqa: SLF001
+    name = str(body.get("name") or "").strip()[:16]
+    base = _key(who)
+    key = persona._card_key_slot(base, card["id"], slot)  # noqa: SLF001
+    st = persona._load_state()                            # noqa: SLF001
+    ent = st.get(key)
+    if not isinstance(ent, dict) or not ent:
+        return jsonify({"ok": False, "error": "这个存档还没有内容"}), 400
+    if name:
+        ent["slot_name"] = name
+    else:
+        ent.pop("slot_name", None)
+    st[key] = ent
+    persona._save_state(st)                               # noqa: SLF001
+    return jsonify({"ok": True, "slot": slot, "name": name})
+
+
+@bp.route("/api/persona/slot_wipe", methods=["POST"])
+def slot_wipe_api():
+    """清空一个存档（只删这个槽，不动这张卡的其它存档）。
+
+    要玩家把确认句原样打一遍才肯删——和整份存档清空同一套防手滑。
+    body: {card, slot, confirm}
+    """
+    role, who, _token = _who()
+    if role == "guest":
+        return jsonify({"ok": False, "error": "体验版没有存档", "limit": True}), 403
+    body = request.get_json(silent=True) or {}
+    if str(body.get("confirm") or "").strip() != "确认删除":
+        return jsonify({"ok": False, "error": "确认句不对"}), 400
+    card = persona.find_card(str(body.get("card") or "").strip())
+    if card is None:
+        return jsonify({"ok": False, "error": "没有这个角色"}), 404
+    try:
+        slot = int(body.get("slot") or 0)
+    except (TypeError, ValueError):
+        slot = 0
+    slot = max(0, min(persona.SLOT_MAX - 1, slot))        # noqa: SLF001
+    base = _key(who)
+    key = persona._card_key_slot(base, card["id"], slot)  # noqa: SLF001
+    st = persona._load_state()                            # noqa: SLF001
+    if key in st:
+        st.pop(key, None)
+        persona._save_state(st)                           # noqa: SLF001
+    # 删的正好是当前在用的槽 → base 退回「没在演」，免得继续写进一个空档
+    try:
+        ent = persona._entry(base) or {}                  # noqa: SLF001
+        if (str(ent.get("card") or "") == card["id"]
+                and int(ent.get("slot") or 0) == slot):
+            st2 = persona._load_state()                   # noqa: SLF001
+            st2.pop(base, None)
+            persona._save_state(st2)                      # noqa: SLF001
+    except (TypeError, ValueError):
+        pass
+    return jsonify({"ok": True, "slot": slot})
 
 
 @bp.route("/api/persona/leave", methods=["POST"])
