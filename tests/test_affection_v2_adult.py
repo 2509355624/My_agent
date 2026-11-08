@@ -504,5 +504,62 @@ class PanelContractTest(unittest.TestCase):
         self.assertIn("好感为负才会涨", html)
 
 
+class HelpModalTest(unittest.TestCase):
+    """说明书弹窗：内容要真的讲清机制，入口要显眼。"""
+
+    def _html(self):
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "web", "persona.html")
+        with io.open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_modal_exists(self):
+        h = self._html()
+        self.assertIn('id="adultHelpMask"', h)
+        self.assertIn("身体状态怎么看", h)
+
+    def test_modal_covers_every_axis(self):
+        h = self._html()
+        for word in ("冲动", "高潮", "堕落", "屈服", "羞耻", "主动权",
+                     "开发", "敏感", "接触"):
+            self.assertIn(word, h, "说明书缺 %s" % word)
+
+    def test_modal_marks_the_gates(self):
+        """最容易玩错的几条要加高亮，否则玩家不知道 50 是软顶。"""
+        h = self._html()
+        self.assertIn("最高到「想要」", h)
+        self.assertIn("掉回 50", h)
+        self.assertIn("好感是负的", h)
+        self.assertIn("50（软顶）", h)
+
+    def test_modal_has_play_guide(self):
+        h = self._html()
+        self.assertIn("怎么玩起来", h)
+        self.assertIn("先养开发", h)
+
+    def test_entry_is_visible_in_panel(self):
+        """入口不能是个藏起来的小问号，要带文字、虚线框、金色。"""
+        h = self._html()
+        self.assertIn("adultHelpBtn", h)
+        self.assertIn("怎么看", h)
+        self.assertIn("openAdultHelp", h)
+
+    def test_modal_can_be_closed(self):
+        h = self._html()
+        self.assertIn("closeAdultHelp", h)
+        self.assertIn('id="adultHelpClose"', h)
+        self.assertIn("Escape", h)
+
+    def test_not_left_open_by_default(self):
+        """默认不能带 on —— 一进页面就弹说明书是灾难。"""
+        h = self._html()
+        import re
+        m = re.search(r'<div class="skipMask([^"]*)" id="adultHelpMask"', h)
+        self.assertIsNotNone(m)
+        self.assertNotIn("on", (m.group(1) or "").split())
+
+
 if __name__ == "__main__":
     unittest.main()
