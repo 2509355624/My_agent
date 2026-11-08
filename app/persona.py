@@ -3682,7 +3682,8 @@ _INTENT_PROMPT = """判断下面这句话**在干什么**。只输出一个 JSON
   "addressed": true,
   "subtext": "他真正想要 / 试探 / 回避什么",
   "noticed": "她能从外在表现里察觉到什么",
-  "stance": "接住 | 装傻 | 反问 | 推开"
+  "stance": "接住 | 装傻 | 反问 | 推开",
+  "items": {"use": [], "gain": []}
 }
 
 类别：
@@ -3708,6 +3709,12 @@ finish（这一轮有没有「射在里面」）：只有明确发生/要求内�
 是他真的在做，按字面判 inside，不要因为写法简短就判 none。
 
 %(director_guide)s
+
+items：这一轮有没有东西进出她手里（没有就留空数组）。
+  use 只记**真的用上了**的——拿到手上、真起作用了；被她挡回来、只是拿给她看的都不算。
+  gain 只记**真的递到你手上**的；她给你的私人物品一定记，kind 填 keepsake。
+  （可选的道具 list：%(item_keys)s）
+
 【最近发生过什么】（供你判断语境；不要复述、不要改动）
 %(recent)s
 
@@ -3783,7 +3790,10 @@ def _director_fields(d):
     else:
         addressed = bool(addressed)
     segs = _parse_segments(d.get("segments"))
-    return {
+    # 道具（2026-11-08）：v1 / 自由模式也走这条路，这里透传出去，
+    # run_turn 那边就不用区分版本了。
+    _items_blk = d.get("items") if isinstance(d.get("items"), dict) else None
+    out = {
         "segments": segs,
         "addressed": addressed,
         "literal": str(d.get("literal") or "").strip()[:40],
@@ -3805,7 +3815,10 @@ def _director_fields(d):
         "hook": str(d.get("hook") or "").strip()[:120],
         # 怀孕（2026-11-05）：编剧判这一轮有没有内射。代码只在跨天时用。
         "finish": _norm_finish(d.get("finish")),
+        # 道具（2026-11-08）：v1 / 自由模式也走这条路，透传出去。
+        "items": _items_blk,
     }
+    return out
 
 
 def _norm_finish(value):
@@ -3988,6 +4001,23 @@ def _judge_ledger(note):
 
 
 
+def _item_keys_text():
+    """道具清单的 key 列表，给编剧挑 use 用。**只给 key，不给 prompt**。
+
+    写在提示词里的是「有哪些可选」，具体怎么写由 `app/items.py` 在
+    用到那一条时注入——这样十几样道具都进清单也只占一行。
+    """
+    try:
+        from app import items as _items
+        rows = []
+        for key, it in (_items.all_items() or {}).items():
+            if isinstance(it, dict):
+                rows.append("%s=%s" % (key, it.get("name") or key))
+        return "、".join(rows) if rows else "（无）"
+    except Exception:                                     # noqa: BLE001
+        return "（无）"
+
+
 def _judge_intent(card, said, state="", history=None, note=""):
     """判断这句话在干什么，并顺手把这一轮分段。返回 `(intent, note, extra)`。
 
@@ -4003,6 +4033,7 @@ def _judge_intent(card, said, state="", history=None, note=""):
         "recent": _judge_recent(history),
         "ledger": _judge_ledger(note),
         "director_guide": _DIRECTOR_GUIDE,
+        "item_keys": _item_keys_text(),
     }
     try:
         # 2026-11-05：分段 + 导演条后输出变长，20s 偶发不够；放到 30s。
@@ -5640,7 +5671,9 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         try:
             _istate = _load_state()
             _irec = _istate.get(key) or {}
-            _sc = score if isinstance(score, dict) else {}
+            # 用 extras 不是 score：自由模式下 score 是 None，但 extras 三种
+            # 情况都有值（v2 / v1攻略 / 自由），道具在三条路上都要能用。
+            _sc = extras if isinstance(extras, dict) else {}
             _idelta = _sc.get("items") if isinstance(_sc.get("items"), dict) else {}
             # 编剧没给就自己从原话里认一遍（只认表里的别名，不猜）
             _use = [str(x) for x in (_idelta.get("use") or []) if str(x).strip()]

@@ -1021,5 +1021,54 @@ class ItemsFrontendTest(unittest.TestCase):
         self.assertIn("KIND[it.kind]", h)
 
 
+class ItemsUniversalTest(unittest.TestCase):
+    """道具在 v1 / v2 / 自由模式三条路上都要能用（2026-11-08 补齐）。"""
+
+    def test_item_keys_helper_exists(self):
+        from app import persona
+        txt = persona._item_keys_text()
+        self.assertIn("lubricant=润滑液", txt)
+
+    def test_v1_prompt_has_items_block(self):
+        """v1 / 自由模式走 `_INTENT_PROMPT`，那里也要有 items 字段。"""
+        from app import persona
+        p = persona._INTENT_PROMPT
+        self.assertIn('"items"', p)
+        self.assertIn("%(item_keys)s", p)
+
+    def test_v1_prompt_has_items_criteria(self):
+        from app import persona
+        p = persona._INTENT_PROMPT
+        self.assertIn("真的用上了", p)
+        self.assertIn("keepsake", p)
+
+    def test_director_fields_passes_items(self):
+        from app import persona
+        out = persona._director_fields({"items": {"use": ["wine"]}})
+        self.assertEqual(out.get("items"), {"use": ["wine"]})
+
+    def test_director_fields_items_none_when_absent(self):
+        from app import persona
+        out = persona._director_fields({})
+        self.assertIsNone(out.get("items"))
+
+    def test_run_turn_reads_items_from_extras(self):
+        """自由模式下 score 是 None，道具只能从 extras 拿。"""
+        import inspect
+        from app import persona
+        src = inspect.getsource(persona.run_turn)
+        self.assertIn("_sc = extras if isinstance(extras, dict)", src)
+
+    def test_axis_help_above_items_panel(self):
+        """点道具面板里的问号，说明卡不能被面板盖住（z-index 要更高）。"""
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "web", "persona.html")
+        with io.open(path, encoding="utf-8") as fh:
+            h = fh.read()
+        self.assertIn("#axisHelpMask { z-index: 620; }", h)
+
+
 if __name__ == "__main__":
     unittest.main()

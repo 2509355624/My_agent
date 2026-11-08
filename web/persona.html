@@ -585,6 +585,11 @@
   .adultHelpBtn .q { font-weight: 700; }
   .adultHelpBtn .q { font-weight: 700; }
   /* 单条状态的说明弹窗 + 每行的小问号 */
+  /* 层级（2026-11-08 用户反馈）：说明卡片是从别的弹窗里点开的（道具面板、
+     身体面板都行），而 `.skipMask` 一律 z-index:400、靠 DOM 顺序决定谁在上。
+     axisHelpMask 排在 itemsMask 前面，就会被道具面板整个盖住。
+     给它单独抬高层级——不管从哪儿点开，它都在最上面。 */
+  #axisHelpMask { z-index: 620; }
   .axisHelp { max-width: 460px; max-height: 72vh; overflow-y: auto; }
   .axisHelpBody p { font-size: 12.5px; line-height: 1.85;
     color: var(--text-dim); margin: 6px 0; }
