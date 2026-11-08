@@ -1985,26 +1985,34 @@ function renderPanel(a, p) {
     body.appendChild(fold);
 
     // 一行具体数字：不管后端有没有新字段都在，先给玩家一个清晰感知。
-    const numRows = [["好感", p.value | 0],
-                     ["表白值", (p.confess | 0) + "/" + (p.confessMax | 0)],
-                     ["病娇", p.yandere | 0],
-                     ["接触", "第" + (p.contactDegree | 0) + "档"],
-                     ["在一起", p.together ? "是" : "否"]];
-    if (typeof p.day === "number") numRows.push(["天数", "第" + (p.day | 0) + "天"]);
+    // 每项第三格是这条轴的说明 key——后端 p.help 里有就挂问号，
+    // 没有就不挂（不写死文案，也不留点了没反应的壳）。
+    const H = p.help || {};
+    const numRows = [["好感", p.value | 0, "value"],
+                     ["表白值", (p.confess | 0) + "/" + (p.confessMax | 0), "confess"],
+                     ["病娇", p.yandere | 0, "yandere"],
+                     ["接触", "第" + (p.contactDegree | 0) + "档", "contacts"],
+                     ["在一起", p.together ? "是" : "否", "proposal"]];
+    if (typeof p.day === "number") numRows.push(["天数", "第" + (p.day | 0) + "天", ""]);
     const nums = document.createElement("div");
     nums.className = "pstats";
     numRows.forEach(function (x) {
       const el = document.createElement("span");
-      el.textContent = x[0] + " ";
+      el.style.cssText = "display:inline-flex;align-items:center";
+      const tx = document.createElement("span");
+      tx.textContent = x[0] + " ";
       const b = document.createElement("b");
       b.textContent = x[1];
-      el.appendChild(b);
+      tx.appendChild(b);
+      el.appendChild(tx);
+      const qn = x[2] ? axisQ(H[x[2]]) : null;
+      if (qn) { qn.style.width = "12px"; qn.style.height = "12px"; qn.style.fontSize = "9px"; el.appendChild(qn); }
       nums.appendChild(el);
     });
     fbody.appendChild(nums);
 
     // 进度条：只在后端给了真实上限时画，没有就留数字，不拿假刻度凑。
-    const v2Bar = function (label, val, max, min) {
+    const v2Bar = function (label, val, max, min, helpKey) {
       const d = document.createElement("div");
       d.style.cssText = "margin:6px 0 2px;font-size:11.5px;color:var(--text-dim)";
       const nm = document.createElement("span");
@@ -2014,6 +2022,8 @@ function renderPanel(a, p) {
       b.textContent = (val | 0) + " / " + (max | 0);
       d.appendChild(nm);
       d.appendChild(b);
+      const qb = helpKey ? axisQ(H[helpKey]) : null;
+      if (qb) { qb.style.width = "12px"; qb.style.height = "12px"; qb.style.fontSize = "9px"; d.appendChild(qb); }
       const track = document.createElement("div");
       track.className = "bar";
       const fill = document.createElement("i");
@@ -2025,10 +2035,10 @@ function renderPanel(a, p) {
       d.appendChild(track);
       fbody.appendChild(d);
     };
-    if (typeof p.valueMax === "number") v2Bar("好感", p.value, p.valueMax, p.valueMin | 0);
-    if (typeof p.confessMax === "number") v2Bar("表白值", p.confess, p.confessMax, 0);
-    if (typeof p.yandereMax === "number") v2Bar("病娇值", p.yandere, p.yandereMax, 0);
-    if (typeof p.contactMax === "number") v2Bar("已发生接触", p.contactDegree, p.contactMax, 0);
+    if (typeof p.valueMax === "number") v2Bar("好感", p.value, p.valueMax, p.valueMin | 0, "value");
+    if (typeof p.confessMax === "number") v2Bar("表白值", p.confess, p.confessMax, 0, "confess");
+    if (typeof p.yandereMax === "number") v2Bar("病娇值", p.yandere, p.yandereMax, 0, "yandere");
+    if (typeof p.contactMax === "number") v2Bar("已发生接触", p.contactDegree, p.contactMax, 0, "contacts");
 
     // ── 身体这条线（2026-11-08 晚）──
     // 后端 `affection_v2_adult.panel()` 已经算好九条轴，这里一个数都不重算：

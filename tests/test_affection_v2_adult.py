@@ -636,5 +636,55 @@ class AxisHelpTest(unittest.TestCase):
         self.assertNotIn("on", (m.group(1) or "").split())
 
 
+class RelationAxisHelpTest(unittest.TestCase):
+    """关系轴那几行（好感/表白/病娇/接触档/在一起）也要有问号。"""
+
+    def _panel(self):
+        from app import affection, affection_v2_adult as ad
+        rec = {"schema": 2, "value": 45, "mode": "raid", "confess": 20,
+               "contacts": [], "contact": 2, "day": 3, "turns": 12,
+               "adult": ad.normalize({**ad.empty_state(), "excite": 62,
+                                      "shame": 55, "control": 72})}
+        return affection._v2_panel(rec, None)
+
+    def test_panel_carries_relation_help(self):
+        h = self._panel().get("help")
+        self.assertTrue(h, "面板要给关系轴的 help")
+        for k in ("value", "confess", "yandere", "contacts", "proposal"):
+            self.assertIn(k, h, "缺 %s 的说明" % k)
+            self.assertTrue(h[k].get("title"))
+            self.assertTrue(h[k].get("body"))
+
+    def test_relation_help_comes_from_config(self):
+        from app import affection
+        cfg = affection._v2_config()
+        for key in ("value", "confess", "yandere", "contacts", "proposal"):
+            h = (cfg.get(key) or {}).get("help")
+            self.assertIsInstance(h, dict, "%s 配置里缺 help" % key)
+
+    def test_confess_help_explains_the_gate(self):
+        """表白值是 30 分那道坎的关键，说明里必须点到。"""
+        h = self._panel()["help"]["confess"]
+        joined = " ".join(h["body"])
+        self.assertIn("50", joined)
+        self.assertIn("表白", joined)
+
+    def test_contact_help_says_what_does_not_count(self):
+        h = self._panel()["help"]["contacts"]
+        joined = " ".join(h["body"])
+        self.assertIn("拨头发", joined)
+
+    def test_frontend_wires_relation_help(self):
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "web", "persona.html")
+        with io.open(path, encoding="utf-8") as fh:
+            html = fh.read()
+        self.assertIn("const H = p.help", html)
+        for key in ('"value"', '"confess"', '"yandere"', '"contacts"', '"proposal"'):
+            self.assertIn(key, html, "前端没接 %s 的问号" % key)
+
+
 if __name__ == "__main__":
     unittest.main()

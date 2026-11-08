@@ -3913,6 +3913,20 @@ def _v2_rows(items, cur_key, cur_gate, gate_field="min", together=True,
     return rows
 
 
+def _v2_help(cfg):
+    """v2 关系轴那几行的说明文案。**从配置读，前端不写死**。
+
+    缺哪一条就少哪一条——前端拿不到就不画问号，不会留一个点了没反应的壳。
+    """
+    out = {}
+    for key in ("value", "confess", "yandere", "contacts", "proposal"):
+        h = (cfg.get(key) or {}).get("help")
+        if isinstance(h, dict):
+            out[key] = {"title": str(h.get("title") or ""),
+                        "body": [str(x) for x in (h.get("body") or [])]}
+    return out
+
+
 def _v2_adult_panel(rec):
     """身体这条线的只读视图。**算好给前端，前端不重算**。
 
@@ -4006,6 +4020,9 @@ def _v2_panel(rec, card=None):
         # 身体这条线（2026-11-08 晚）：九条轴交给前端画。算好给，前端一个数
         # 都不重算；老进程没加载到这段时前端整块跳过，页面照旧能用。
         "adult": _v2_adult_panel(rec),
+        # 关系轴的说明（2026-11-08 晚）：和身体那条一样，文案写在配置里，
+        # 前端只负责显示。漏一条就是面板上有个没说明的数字。
+        "help": _v2_help(cfg),
         # v1 前端读到的字段一律给空，避免 undefined 报错
         "intimacy": [], "tiers": [], "arousals": [], "corrupts": [],
         "arousal": 0, "arousalName": "", "corrupt": 0, "corruptName": "",
