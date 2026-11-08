@@ -712,8 +712,12 @@ def slot_wipe_api():
     if role == "guest":
         return jsonify({"ok": False, "error": "体验版没有存档", "limit": True}), 403
     body = request.get_json(silent=True) or {}
-    if str(body.get("confirm") or "").strip() != "确认删除":
-        return jsonify({"ok": False, "error": "确认句不对"}), 400
+    # 确认句**带上存档名**（2026-11-08 用户要求严格）：
+    # 三个存档并存时，「确认删除」这种通用句子分不出删的是哪一个。
+    # 前端显示什么，这里就比什么，两个字都不能差。
+    _ok_text = "删除存档：%s" % str(body.get("name") or "").strip()
+    if str(body.get("confirm") or "").strip() != _ok_text:
+        return jsonify({"ok": False, "error": "确认句不对，一个字都不能差"}), 400
     card = persona.find_card(str(body.get("card") or "").strip())
     if card is None:
         return jsonify({"ok": False, "error": "没有这个角色"}), 404

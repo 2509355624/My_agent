@@ -1163,5 +1163,61 @@ class SaveSlotTest(unittest.TestCase):
         self.assertEqual(h.count("function enterSlot"), 1)
 
 
+class SlotWipeStrictTest(unittest.TestCase):
+    """删单个存档要用红色严格弹窗（2026-11-08 用户要求）。"""
+
+    def _html(self):
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "web", "persona.html")
+        with io.open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def _api(self):
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "app", "persona_api.py")
+        with io.open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_uses_red_wipe_modal_not_prompt(self):
+        """必须是 wipeMask 那套红框，不是 window.prompt。"""
+        h = self._html()
+        self.assertIn('id="slotWipeMask"', h)
+        self.assertIn('class="wipeMask"', h)
+        self.assertIn('class="btn danger" id="slotWipeOk"', h)
+        # 旧实现（prompt 直接删）不能留
+        self.assertNotIn('window.prompt("这会清空', h)
+
+    def test_confirm_phrase_contains_slot_name(self):
+        h = self._html()
+        self.assertIn('function slotWipeText', h)
+        self.assertIn('"删除存档：" +', h)
+
+    def test_button_disabled_until_exact_match(self):
+        h = self._html()
+        self.assertIn('$("slotWipeOk").disabled = e.target.value.trim() !== want', h)
+        self.assertIn('<button class="btn danger" id="slotWipeOk" disabled>', h)
+
+    def test_backend_checks_name_in_phrase(self):
+        src = self._api()
+        self.assertIn('"删除存档：%s"', src)
+        self.assertIn('body.get("name")', src)
+
+    def test_frontend_sends_name(self):
+        h = self._html()
+        self.assertIn("name: arg.name", h)
+
+    def test_three_slots_use_distinct_phrases(self):
+        """三个存档的确认句必须互不相同，否则分不出删的是哪个。"""
+        h = self._html()
+        import re
+        m = re.search(r"function slotWipeText\(name\) \{\s*return ([^;]+);", h)
+        self.assertIsNotNone(m)
+        self.assertIn("name", m.group(1))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1045,6 +1045,27 @@
   </div>
 </div>
 
+<!-- 删单个存档（2026-11-08 用户要求）：和清空存档同一套红色严格弹窗。
+     确认句里带上存档名，避免在多个存档之间手滑删错。 -->
+<div class="wipeMask" id="slotWipeMask">
+  <div class="wipeBox">
+    <h3>❗ 删除存档</h3>
+    <div class="wtext">
+      这一步删掉就找不回来了。<br>
+      会删掉<b id="slotWipeName">这个存档</b>里的全部聊天记录，
+      好感、关系进度、气氛、道具、身体状态也一起清空。<br>
+      <b>这张卡的其它存档不受影响</b>，角色卡本身也还在。
+    </div>
+    <div class="wcode" id="slotWipeCode"></div>
+    <input id="slotWipeInput" autocomplete="off" spellcheck="false"
+           placeholder="把上面这句原样打一遍">
+    <div class="wbtns">
+      <button class="btn" id="slotWipeCancel">取消</button>
+      <button class="btn danger" id="slotWipeOk" disabled>确认删除</button>
+    </div>
+  </div>
+</div>
+
 <!-- 时间（2026-11-05）：切今天时段，或者跳过几天。 -->
 <div class="skipMask" id="skipMask">
   <div class="skipBox">
@@ -1648,13 +1669,65 @@ function renameSlot(cardId, s, cardName) {
     .then(function () { openSlots({ id: cardId, name: cardName }); })
     .catch(function (e) { toast(e.message, true); });
 }
-function wipeSlot(cardId, s, cardName) {
-  const v = window.prompt("这会清空「" + s.name + "」，其它存档不受影响。\n确认请打：确认删除");
-  if (v === null) return;
-  post("/api/persona/slot_wipe", { card: cardId, slot: s.slot, confirm: v })
-    .then(function () { toast("已清空"); openSlots({ id: cardId, name: cardName }); })
-    .catch(function (e) { toast(e.message, true); });
+// 删单个存档（2026-11-08 用户要求）：和清空存档同一套红色严格弹窗。
+// 确认句**带上存档名**——三个存档并存时，「确认删除」这种通用句子
+// 分不出删的是哪一个，手滑就是删错。
+let slotWipeArg = null;
+function slotWipeText(name) {
+  return "删除存档：" + (name || "");
 }
+function wipeSlot(cardId, s, cardName) {
+  slotWipeArg = { card: cardId, slot: s.slot, name: s.name, cardName: cardName };
+  const want = slotWipeText(s.name);
+  $("slotWipeName").textContent = "「" + s.name + "」";
+  $("slotWipeCode").textContent = want;
+  $("slotWipeInput").value = "";
+  $("slotWipeOk").disabled = true;
+  $("slotWipeOk").textContent = "确认删除";
+  $("slotWipeMask").classList.add("on");
+  setTimeout(function () { try { $("slotWipeInput").focus(); } catch (e) {} }, 60);
+}
+function closeSlotWipe() {
+  $("slotWipeMask").classList.remove("on");
+  slotWipeArg = null;
+}
+// 输入校验：照抄清空存档那一套——打错一个字，按钮就是灰的
+$("slotWipeInput").addEventListener("input", function (e) {
+  const want = slotWipeArg ? slotWipeText(slotWipeArg.name) : "";
+  $("slotWipeOk").disabled = e.target.value.trim() !== want;
+});
+$("slotWipeInput").addEventListener("keydown", function (e) {
+  if (e.key === "Enter" && !$("slotWipeOk").disabled) $("slotWipeOk").click();
+  if (e.key === "Escape") closeSlotWipe();
+});
+$("slotWipeCancel").onclick = closeSlotWipe;
+$("slotWipeMask").addEventListener("click", function (e) {
+  if (e.target === $("slotWipeMask")) closeSlotWipe();
+});
+$("slotWipeOk").onclick = async function () {
+  if (!slotWipeArg) return;
+  const arg = slotWipeArg;
+  const btn = $("slotWipeOk");
+  btn.disabled = true;
+  btn.textContent = "删除中…";
+  try {
+    await post("/api/persona/slot_wipe", {
+      card: arg.card, slot: arg.slot,
+      name: arg.name,            // 后端按这个名字拼确认句，两边必须一致
+      confirm: slotWipeText(arg.name),
+    });
+    closeSlotWipe();
+    toast("已删除「" + arg.name + "」");
+    await openSlots({ id: arg.card, name: arg.cardName });
+  } catch (e) {
+    toast(e.message, true);
+    btn.textContent = "确认删除";
+    if (slotWipeArg) {
+      btn.disabled = $("slotWipeInput").value.trim()
+        !== slotWipeText(slotWipeArg.name);
+    }
+  }
+};
 if ($("slotClose")) $("slotClose").onclick = closeSlots;
 if ($("slotMask")) {
   $("slotMask").addEventListener("click", e => {
