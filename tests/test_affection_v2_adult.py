@@ -1,0 +1,286 @@
+# -*- coding: utf-8 -*-
+"""v2 成人向状态条结算器（app/affection_v2_adult.py）的契约测试。
+
+这些测试钉的是**用户拍板的规则**，不是实现细节：
+  · 冲动是档位，开发度 < 40 时最高 2 档
+  · 高潮到顶回落 reset_to，可以继续涨
+  · 堕落/屈服在正向好感时恒不涨
+  · 敏感度恒 >= 开发度（开发 80 敏感 20 不存在）
+  · 敏感度只从前戏/道具涨，单纯插入只涨开发度
+  · 羞耻 0~50 正常亲密，50 以上只有露出类事件能推
+  · 羞耻同类事件重复做，涨幅递减到 0
+  · 主动权 0~100，50 对等
+  · 接触是枚举，只记事实
+"""
+
+import unittest
+
+from app import affection_v2_adult as ad
+
+
+class ConfigTest(unittest.TestCase):
+    def test_config_file_loads(self):
+        cfg = ad._cfg()
+        for key in ("arousal", "excite", "corrupt", "submit",
+                    "dev", "sense", "shame", "control", "contact"):
+            self.assertIn(key, cfg, "缺轴 %s" % key)
+            self.assertTrue(cfg[key].get("levels"), "%s 没有档位" % key)
+
+    def test_arousal_is_tier_not_number(self):
+        cfg = ad._cfg()
+        self.assertEqual(cfg["arousal"]["type"], "tier")
+        tiers = [lv.get("tier") for lv in cfg["arousal"]["levels"]]
+        self.assertEqual(tiers, sorted(tiers), "档位序号要升序")
+        self.assertEqual(len(tiers), 5)
+
+    def test_contact_is_enum(self):
+        cfg = ad._cfg()
+        self.assertEqual(cfg["contact"]["type"], "enum")
+        self.assertEqual(set(cfg["contact"]["values"]),
+                         {"none", "mouth", "pussy", "anus", "hand", "breast", "leg"})
+
+
+class InitTest(unittest.TestCase):
+    def test_empty_state_defaults(self):
+        st = ad.empty_state()
+        self.assertEqual(st["arousal"], "calm")
+        self.assertEqual(st["excite"], 0)
+        self.assertEqual(st["corrupt"], 0)
+        self.assertEqual(st["submit"], 0)
+        self.assertEqual(st["shame"], 20)
+        self.assertEqual(st["control"], 50)
+        self.assertEqual(st["contact"], "none")
+        for p in ad.PARTS:
+            self.assertEqual(st["dev"][p], 0)
+            self.assertEqual(st["sense"][p], 0)
+
+    def test_load_fills_missing(self):
+        st = ad.load({})
+        self.assertEqual(st["arousal"], "calm")
+        st = ad.load({"adult": {"excite": 30}})
+        self.assertEqual(st["excite"], 30)
+        self.assertEqual(st["control"], 50)          # 缺的补默认
+
+    def test_save_roundtrip(self):
+        rec = {}
+        st = ad.normalize({**ad.empty_state(), "excite": 42, "contact": "pussy"})
+        ad.save(rec, st)
+        again = ad.load(rec)
+        self.assertEqual(again["excite"], 42)
+        self.assertEqual(again["contact"], "pussy")
+
+
+class ArousalGateTest(unittest.TestCase):
+    def test_low_dev_caps_arousal_at_tier2(self):
+        st = ad.empty_state()                        # dev 全 0
+        out, notes = ad.apply(st, {"arousal": "reverse"}, value=10)
+        self.assertEqual(out["arousal"], "want", "开发度低时最多到「想要」")
+        self.assertTrue(any("闸门" in n for n in notes))
+
+    def test_high_dev_allows_reverse(self):
+        st = ad.normalize({**ad.empty_state(),
+                           "dev": {p: 80 for p in ad.PARTS},
+                           "sense": {p: 80 for p in ad.PARTS}})
+        out, notes = ad.apply(st, {"arousal": "reverse"}, value=10)
+        self.assertEqual(out["arousal"], "reverse")
+
+    def test_dev_avg_is_used(self):
+        # 只有一处高、其余 0，均值 16 < 40，仍然封顶
+        st = ad.normalize({**ad.empty_state(), "dev": {"pussy": 80}})
+        out, _ = ad.apply(st, {"arousal": "lead"}, value=10)
+        self.assertEqual(out["arousal"], "want")
+        self.assertLess(ad.dev_avg(st), 40)
+
+
+class ExciteTest(unittest.TestCase):
+    def test_climb_and_reset(self):
+        st = ad.normalize({**ad.empty_state(), "excite": 85})
+        out, _ = ad.apply(st, {"excite": 20}, value=10)
+        self.assertEqual(out["excite"], 50, "到顶后回落 reset_to")
+        self.assertEqual(out["orgasm_count"], 1)
+
+    def test_can_rise_again_after_reset(self):
+        st = ad.normalize({**ad.empty_state(), "excite": 50})
+        out, _ = ad.apply(st, {"excite": 30}, value=10)
+        self.assertEqual(out["excite"], 80)
+
+    def test_orgasm_flag_forces_reset(self):
+        st = ad.normalize({**ad.empty_state(), "excite": 60})
+        out, _ = ad.apply(st, {"orgasm": True}, value=10)
+        self.assertEqual(out["excite"], 50)
+        self.assertEqual(out["orgasm_count"], 1)
+
+
+class GateTest(unittest.TestCase):
+    def test_positive_value_blocks_corrupt_and_submit(self):
+        st = ad.empty_state()
+        out, notes = ad.apply(st, {"corrupt": 30, "submit": 30}, value=40)
+        self.assertEqual(out["corrupt"], 0)
+        self.assertEqual(out["submit"], 0)
+        self.assertEqual(len(notes), 2)
+
+    def test_zero_value_blocks(self):
+        st = ad.empty_state()
+        out, _ = ad.apply(st, {"corrupt": 10, "submit": 10}, value=0)
+        self.assertEqual(out["corrupt"], 0)
+        self.assertEqual(out["submit"], 0)
+
+    def test_negative_value_allows_growth(self):
+        st = ad.empty_state()
+        out, notes = ad.apply(st, {"corrupt": 20, "submit": 15}, value=-10)
+        self.assertEqual(out["corrupt"], 20)
+        self.assertEqual(out["submit"], 15)
+        self.assertEqual(notes, [])
+
+    def test_gain_only_clamps_at_max(self):
+        st = ad.normalize({**ad.empty_state(), "corrupt": 95, "submit": 95})
+        out, _ = ad.apply(st, {"corrupt": 20, "submit": 20}, value=-10)
+        self.assertEqual(out["corrupt"], 100)
+        self.assertEqual(out["submit"], 100)
+
+
+class DevSenseTest(unittest.TestCase):
+    def test_dev_only_grows(self):
+        st = ad.normalize({**ad.empty_state(), "dev": {"pussy": 50}})
+        out, _ = ad.apply(st, {"dev": {"pussy": -20}}, value=10)
+        self.assertEqual(out["dev"]["pussy"], 50, "开发度只涨不掉")
+
+    def test_sense_never_below_dev(self):
+        st = ad.normalize({**ad.empty_state(),
+                           "dev": {"pussy": 80},
+                           "sense": {"pussy": 20}})
+        self.assertEqual(st["sense"]["pussy"], 80,
+                         "开发 80 敏感 20 是不存在的，自动抬到 80")
+
+    def test_sense_drops_on_orgasm(self):
+        st = ad.normalize({**ad.empty_state(),
+                           "dev": {p: 50 for p in ad.PARTS},
+                           "sense": {p: 90 for p in ad.PARTS},
+                           "excite": 60})
+        out, _ = ad.apply(st, {"orgasm": True}, value=10)
+        for p in ad.PARTS:
+            self.assertEqual(out["sense"][p], 80, "高潮后整片回落 10")
+            self.assertGreaterEqual(out["sense"][p], out["dev"][p])
+
+    def test_plain_sex_does_not_raise_sense(self):
+        """单纯插入只推开发度——敏感度靠前戏/道具（用户 2026-11-08 明确）。"""
+        st = ad.empty_state()
+        out, _ = ad.apply(st, {"dev": {"pussy": 10}}, value=10)
+        self.assertEqual(out["dev"]["pussy"], 10)
+        # 敏感度被 floor 规则抬到 dev（0→10），但不会高过它——
+        # 「单纯插入推的是开发度，不是敏感度」在这里体现为「不额外涨」。
+        self.assertEqual(out["sense"]["pussy"], out["dev"]["pussy"])
+        # 再插一轮，dev 到 20，sense 跟着到 20，仍然不多涨
+        out2, _ = ad.apply(out, {"dev": {"pussy": 10}}, value=10)
+        self.assertEqual(out2["dev"]["pussy"], 20)
+        self.assertEqual(out2["sense"]["pussy"], 20)
+
+
+class ShameTest(unittest.TestCase):
+    def test_soft_cap_blocks_normal_events(self):
+        st = ad.normalize({**ad.empty_state(), "shame": 50})
+        out, notes = ad.apply(st, {"shame": 10, "shame_event": "pussy_sex"}, value=20)
+        self.assertEqual(out["shame"], 50)
+        self.assertTrue(any("软顶" in n for n in notes))
+
+    def test_exposure_can_pass_soft_cap(self):
+        st = ad.normalize({**ad.empty_state(), "shame": 50})
+        out, notes = ad.apply(st, {"shame": 10, "shame_event": "outdoor_exposed"}, value=20)
+        self.assertEqual(out["shame"], 60)
+        self.assertEqual(notes, [])
+
+    def test_repeat_event_decays(self):
+        st = ad.normalize({**ad.empty_state(), "shame": 20})
+        gains = []
+        for _ in range(4):
+            st, _ = ad.apply(st, {"shame": 10, "shame_event": "kiss"}, value=20)
+            gains.append(st["shame"])
+        self.assertEqual(gains[0] - 20, 10)          # 第 1 次全额
+        self.assertEqual(gains[1] - gains[0], 5)     # 第 2 次 -5
+        self.assertEqual(gains[2] - gains[1], 0)     # 第 3 次没了
+        self.assertEqual(gains[3], gains[2])         # 之后不再涨
+
+    def test_below_soft_cap_normal_events_work(self):
+        st = ad.normalize({**ad.empty_state(), "shame": 30})
+        out, _ = ad.apply(st, {"shame": 10, "shame_event": "pussy_sex"}, value=20)
+        self.assertEqual(out["shame"], 40)
+
+
+class ControlTest(unittest.TestCase):
+    def test_neutral_is_50(self):
+        cfg = ad._cfg()
+        self.assertEqual(cfg["control"]["initial"], 50)
+        self.assertEqual(cfg["control"]["neutral"], 50)
+
+    def test_delta_moves_both_ways(self):
+        st = ad.empty_state()
+        out, _ = ad.apply(st, {"control": -30}, value=10)
+        self.assertEqual(out["control"], 20)
+        out, _ = ad.apply(out, {"control": 40}, value=10)   # 接着上一轮
+        self.assertEqual(out["control"], 60)
+        out, _ = ad.apply(out, {"control": 100}, value=10)
+        self.assertEqual(out["control"], 100)
+
+
+class ContactTest(unittest.TestCase):
+    def test_valid_enum_accepted(self):
+        st = ad.empty_state()
+        for v in ("mouth", "pussy", "anus", "hand", "breast", "leg", "none"):
+            out, _ = ad.apply(st, {"contact": v}, value=10)
+            self.assertEqual(out["contact"], v)
+
+    def test_invalid_value_ignored(self):
+        st = ad.normalize({**ad.empty_state(), "contact": "pussy"})
+        out, _ = ad.apply(st, {"contact": "banana"}, value=10)
+        self.assertEqual(out["contact"], "pussy", "枚举外的值不写进去")
+
+
+class BlockTest(unittest.TestCase):
+    def test_empty_state_gives_minimal_block(self):
+        blk = ad.block(ad.empty_state())
+        self.assertIn("她身上这会儿", blk)
+        self.assertNotIn("她身体比嘴先服", blk, "堕落 0 时不该出现")
+
+    def test_block_uses_chinese_only_no_field_names(self):
+        st = ad.normalize({**ad.empty_state(), "arousal": "want", "excite": 60,
+                           "shame": 55, "control": 70,
+                           "dev": {"pussy": 70}, "sense": {"pussy": 85},
+                           "contact": "pussy"})
+        blk = ad.block(st)
+        for bad in ("arousal", "excite", "shame", "control", "dev", "sense"):
+            self.assertNotIn(bad, blk, "注入块里不许出现字段名")
+        self.assertIn("小穴", blk)
+        self.assertIn("她这会儿想不想", blk)
+
+    def test_untouched_parts_not_listed(self):
+        st = ad.normalize({**ad.empty_state(), "dev": {"pussy": 60},
+                           "sense": {"pussy": 60}})
+        blk = ad.block(st)
+        self.assertIn("小穴", blk)
+        self.assertNotIn("后庭", blk, "没碰过的地方不占篇幅")
+
+
+class PanelTest(unittest.TestCase):
+    def test_panel_shape(self):
+        p = ad.panel(ad.empty_state())
+        self.assertIn("rows", p)
+        self.assertIn("parts", p)
+        axes = [r["axis"] for r in p["rows"]]
+        for a in ("arousal", "excite", "corrupt", "submit", "shame", "control"):
+            self.assertIn(a, axes)
+        self.assertEqual(len(p["parts"]), 5)
+
+    def test_arousal_row_is_tier_typed(self):
+        p = ad.panel(ad.empty_state())
+        row = [r for r in p["rows"] if r["axis"] == "arousal"][0]
+        self.assertEqual(row["type"], "tier")
+        self.assertTrue(row["gateActive"], "dev 0 时闸门是开着的")
+
+    def test_shame_row_exposes_soft_cap(self):
+        p = ad.panel(ad.empty_state())
+        row = [r for r in p["rows"] if r["axis"] == "shame"][0]
+        self.assertEqual(row["softCap"], 50)
+
+
+if __name__ == "__main__":
+    unittest.main()
