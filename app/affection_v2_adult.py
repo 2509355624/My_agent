@@ -34,6 +34,34 @@ _ADULT_CFG_FILE = "affection_v2_adult.json"
 # 五处身体部位（顺序固定，前端按这个顺序画）
 PARTS = ("mouth", "nipple", "pussy", "anus", "skin")
 
+# ── 高潮冷却（2026-11-10 用户拍板）──────────────────────
+# 和 v1 的 ORGASM_RECOVER / _RECOVER_RATIO 同口径：高潮那一轮把 recover 置满
+# 3，之后每轮**先减后查** → 2 时最多 85、1 时最多 95、0 时解禁。中间隔两个
+# 回合，进度条仍在一轮轮往上爬，不是死卡在 99 不动。
+#
+# v2 以前完全没有冷却：excite 到 100 或编剧给 orgasm:true 就立刻记一次，
+# 而 11-09 刚给 v2 补上 climax 弹窗，于是「射在哪里」连着几轮弹。
+# 用户原话：「高潮一次之后，至少需要 2 个回合才能进入下一次高潮」。
+ORGASM_RECOVER = 3
+_RECOVER_RATIO = {2: 0.85, 1: 0.95}
+
+# 没被往上推的那一轮，身体自己慢慢凉下来（用户：高潮值可以缓慢下降）。
+# 编剧给了负增量就照常叠加；给了正增量这一轮不回落，别把推进抵消掉。
+IDLE_DECAY = 5
+
+
+def _recover_cap(recover, max_v):
+    """冷却还剩 `recover` 轮时，高潮值最多涨到多少。"""
+    try:
+        r, m = int(recover or 0), int(max_v or 100)
+    except (TypeError, ValueError):
+        return 100
+    ratio = _RECOVER_RATIO.get(r)
+    if ratio is None:
+        return m
+    return max(1, int(round(m * ratio)))
+
+
 _CONTACT_VALUES = ("none", "mouth", "pussy", "anus", "hand", "breast", "leg")
 
 
@@ -114,6 +142,8 @@ def empty_state():
         "shame_log": {},
         # 发生过几次高潮，用来算回落之后还剩多少（暂时只做计数，不改算法）
         "orgasm_count": 0,
+        # 高潮冷却还剩几轮；老档缺这个字段按 0（见 normalize）
+        "recover": 0,
     }
 
 
@@ -142,7 +172,7 @@ def load(rec):
         return st
     if isinstance(src.get("arousal"), str) and src["arousal"]:
         st["arousal"] = src["arousal"]
-    for k in ("excite", "corrupt", "submit", "shame", "control", "orgasm_count"):
+    for k in ("excite", "corrupt", "submit", "shame", "control", "orgasm_count", "recover"):
         if k in src:
             st[k] = _i(src.get(k), st[k])
     for k in ("dev", "sense"):
@@ -169,6 +199,19 @@ def save(rec, st):
     aff = rec.setdefault("affection", {})
     aff["adult"] = normalize(st)
     return rec
+
+
+def night_reset(st):
+    """跨天：高潮值和冷却归零（2026-11-10 用户拍板「跨天清零」）。
+
+    只清这两样。开发度、敏感、羞耻、堕落、屈服都是「发生过的事实」，
+    睡一觉不会消失——和 v1 `affection.sleep()` 的口径一致。返回新 dict，
+    不改入参，方便调用方直接 save。
+    """
+    out = normalize(st)
+    out["excite"] = 0
+    out["recover"] = 0
+    return out
 
 
 def normalize(st):
@@ -202,6 +245,8 @@ def normalize(st):
     if not isinstance(st.get("shame_log"), dict):
         st["shame_log"] = {}
     st["orgasm_count"] = max(0, _i(st.get("orgasm_count")))
+    # 老档没有 recover → 0，就当她还没到过，下一轮照常可以到。
+    st["recover"] = max(0, min(ORGASM_RECOVER, _i(st.get("recover"))))
     return st
 
 
@@ -326,19 +371,41 @@ def apply(st, delta, value=None):
                         break
             st["arousal"] = a
 
-    # 2) 高潮：涨幅 + 到顶回落
+    # 2) 高潮：涨幅 + 到顶回落 + 冷却（2026-11-10）
     ex = _i((delta or {}).get("excite"))
-    if ex:
-        lo, hi = _axis_range(cfg, "excite")
-        st["excite"] = _clamp(st["excite"] + ex, lo, hi)
-    if st["excite"] >= _axis_range(cfg, "excite")[1] or (delta or {}).get("orgasm"):
+    lo, hi = _axis_range(cfg, "excite")
+    want_orgasm = bool((delta or {}).get("orgasm"))
+    # 先减后查：高潮那一轮刚置满 3，下一轮先减成 2 再查表 → 85；再下一轮
+    # 1 → 95；第三轮 0 → 解禁。中间隔两个回合（用户拍板）。
+    recover = max(0, _i(st.get("recover")))
+    if recover > 0:
+        recover -= 1
+    if ex > 0:
+        want = st["excite"] + ex
+        if recover > 0:
+            want = min(want, _recover_cap(recover, hi))
+        st["excite"] = _clamp(want, lo, hi)
+    elif not want_orgasm:
+        # 没被往上推的这一轮，身体自己慢慢凉下来。编剧给了负增量就照常叠加。
+        st["excite"] = _clamp(st["excite"] + ex - IDLE_DECAY, lo, hi)
+    reached = st["excite"] >= hi or want_orgasm
+    if recover > 0:
+        # 冷却期两个通道一起封死：数值到不了顶（上面已封），编剧判的
+        # orgasm:true 也不记。不回落、不计数、不降敏感 → 不产生 climax → 不弹窗。
+        if reached:
+            st["excite"] = min(st["excite"], _recover_cap(recover, hi))
+            if want_orgasm:
+                notes.append("高潮被冷却挡掉（还剩 %d 轮）" % recover)
+    elif reached:
         reset_to = _i((cfg.get("excite") or {}).get("reset_to"), 50)
-        st["excite"] = _clamp(reset_to, *_axis_range(cfg, "excite"))
+        st["excite"] = _clamp(reset_to, lo, hi)
         st["orgasm_count"] += 1
+        recover = ORGASM_RECOVER
         # 高潮后敏感度整片回落
         drop = _i(((cfg.get("sense") or {}).get("decay") or {}).get("on_orgasm"), 10)
         for p in PARTS:
             st["sense"][p] = max(st["dev"][p], st["sense"][p] - drop)
+    st["recover"] = recover
 
     # 3) 堕落 / 屈服：正向好感时恒定不涨（用户拍板）
     positive = value is not None and _i(value) >= 0
@@ -443,6 +510,13 @@ def block(st, cfg=None):
     e = _level_of("excite", st["excite"], cfg)
     if e.get("prompt"):
         out.append("【她身体走到哪了】%s" % e["prompt"])
+    # 刚到过（2026-11-10）：高潮后 excite 回落到 reset_to=50，正好落进
+    # 「有反应了」档——那一档只讲身体反应，没有余韵，写作层就照常让她
+    # 说完整句子。冷却期单独补一段「刚到过」的写法，台词才跟着身体走。
+    if _i(st.get("recover")) > 0:
+        glow = (cfg.get("excite") or {}).get("afterglow")
+        if glow:
+            out.append("【刚到过】%s" % glow)
 
     # 开发 / 敏感：只说被碰过的那几处，没动过的就不占篇幅
     touched = [p for p in PARTS if st["dev"][p] > 0]

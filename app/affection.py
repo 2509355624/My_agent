@@ -2274,6 +2274,14 @@ def sleep(line_key):
     rec["scene"] = False
     rec["orgasms"] = 0
     rec["idle"] = 0
+    # v2 成人向（2026-11-10「跨天清零」）：上面几行只动 v1 的记录，九条轴
+    # 存在 rec["adult"] 里，碰不到。这里只清高潮值和冷却——开发/敏感/羞耻/
+    # 堕落是「发生过的事实」，睡一觉不该消失（和 v1 同一口径）。
+    _adult = rec.get("adult")
+    if isinstance(_adult, dict):
+        # 函数内 import 用别名（项目约定）；规则只在 v2 结算器里写一份。
+        from app import affection_v2_adult as _adult_state
+        rec["adult"] = _adult_state.night_reset(_adult)
     ent["affection"] = rec
     _save_entry(line_key, ent)
     return {"arousal": rec["arousal"],

@@ -1283,5 +1283,89 @@ class ModalLayeringTest(unittest.TestCase):
         self.assertLess(h.find('id="slotWipeMask"'), h.find('id="slotMask"'))
 
 
+
+class OrgasmCooldownTest(unittest.TestCase):
+    """2026-11-10 用户拍板：高潮后中间隔 2 个回合才能再到。
+
+    v2 以前没有冷却，excite 到顶或编剧给 orgasm:true 就立刻记一次；
+    11-09 刚给 v2 补上 climax 弹窗，于是「射在哪里」连着几轮弹。
+    这里钉的是「至少 2 个回合 + 逐轮松开的天花板」，不是实现细节。
+    """
+
+    def _climax(self):
+        st = ad.normalize({**ad.empty_state(), "excite": 85})
+        out, _ = ad.apply(st, {"excite": 20}, value=10)
+        self.assertEqual(out["excite"], 50)
+        self.assertEqual(out["orgasm_count"], 1)
+        self.assertEqual(out["recover"], ad.ORGASM_RECOVER)
+        return out
+
+    def test_first_orgasm_starts_cooldown(self):
+        self._climax()
+
+    def test_two_turns_are_capped_but_still_move(self):
+        st = self._climax()
+        st, _ = ad.apply(st, {"excite": 40}, value=10)
+        self.assertEqual((st["excite"], st["recover"], st["orgasm_count"]),
+                         (85, 2, 1))
+        st, _ = ad.apply(st, {"excite": 40}, value=10)
+        self.assertEqual((st["excite"], st["recover"], st["orgasm_count"]),
+                         (95, 1, 1))
+
+    def test_third_turn_can_climax_again(self):
+        st = self._climax()
+        for _ in range(2):
+            st, _ = ad.apply(st, {"excite": 40}, value=10)
+        st, _ = ad.apply(st, {"excite": 40}, value=10)
+        self.assertEqual(st["excite"], 50)
+        self.assertEqual(st["orgasm_count"], 2)
+        self.assertEqual(st["recover"], ad.ORGASM_RECOVER)
+
+    def test_flag_is_ignored_during_cooldown(self):
+        """编剧判「她到了」也不能绕过冷却——弹窗就是这么连着来的。"""
+        st = self._climax()
+        out, notes = ad.apply(st, {"orgasm": True}, value=10)
+        self.assertEqual(out["orgasm_count"], 1)
+        self.assertEqual(out["recover"], 2)
+        self.assertTrue(any("冷却" in n for n in notes))
+
+    def test_excite_falls_slowly_when_not_pushed(self):
+        st = ad.normalize({**ad.empty_state(), "excite": 70})
+        out, _ = ad.apply(st, {}, value=10)
+        self.assertEqual(out["excite"], 70 - ad.IDLE_DECAY)
+        out, _ = ad.apply(out, {"excite": -10}, value=10)
+        self.assertEqual(out["excite"],
+                         70 - ad.IDLE_DECAY - 10 - ad.IDLE_DECAY)
+
+    def test_positive_delta_skips_the_decay(self):
+        """玩家在推的这一轮不该被回落抵消。"""
+        st = ad.normalize({**ad.empty_state(), "excite": 70})
+        out, _ = ad.apply(st, {"excite": 20}, value=10)
+        self.assertEqual(out["excite"], 90)
+
+    def test_old_state_without_recover_starts_clean(self):
+        """老档没有 recover 字段：按 0，下一轮照常可以到。"""
+        st = ad.normalize({"excite": 95, "orgasm_count": 3})
+        self.assertEqual(st["recover"], 0)
+        out, _ = ad.apply(st, {"excite": 10}, value=10)
+        self.assertEqual(out["orgasm_count"], 4)
+
+    def test_night_reset_clears_only_excite_and_cooldown(self):
+        st = self._climax()
+        st["shame"] = 30
+        out = ad.night_reset(st)
+        self.assertEqual(out["excite"], 0)
+        self.assertEqual(out["recover"], 0)
+        self.assertEqual(out["shame"], 30)
+        self.assertEqual(out["orgasm_count"], 1)
+
+    def test_afterglow_block_only_during_cooldown(self):
+        """高潮后 excite 掉回 50，档位文案里没有余韵，靠这一段补台词写法。"""
+        self.assertTrue(ad._cfg()["excite"].get("afterglow"))
+        st = self._climax()
+        self.assertIn("【刚到过】", ad.block(st))
+        self.assertNotIn("【刚到过】", ad.block(ad.empty_state()))
+
+
 if __name__ == "__main__":
     unittest.main()

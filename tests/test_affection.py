@@ -2026,5 +2026,25 @@ class DynamicRulesTest(unittest.TestCase):
         self.assertIn("第 3 次", brief)
 
 
+
+class V2NightResetTest(AffBase):
+    """2026-11-10：跨天也要清 v2 的高潮值和冷却（v1 早就清了）。"""
+
+    def test_sleep_clears_v2_excite_and_cooldown(self):
+        from app import affection_v2_adult as ad
+        key = self._raid()
+        ent, rec = affection._ensure(key)
+        rec["adult"] = ad.normalize({**ad.empty_state(),
+                                     "excite": 88, "recover": 2, "shame": 30})
+        affection._save_entry(key, ent)
+        affection.sleep(key)
+        _, rec2 = affection._ensure(key)
+        adult = rec2["adult"]
+        self.assertEqual(adult["excite"], 0)
+        self.assertEqual(adult["recover"], 0)
+        self.assertEqual(adult["shame"], 30,
+                         "发生过的事实不该因为睡一觉消失")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3562,5 +3562,30 @@ class ReplayContract20261108Test(unittest.TestCase):
         self.assertIn("旧格式。", body)
 
 
+
+class NightAdultClearTest(PersonaBase):
+    """2026-11-10：聊天里判 time=overnight 那条跨天路径也要收场。
+
+    `affection.sleep()` 只管时间跳跃 / 第二天早晨；`run_turn` 里编剧判
+    overnight 走的是 `_apply_gameday`，以前完全没碰 adult 状态。
+    """
+
+    def test_cross_day_clears_v2_excite_and_cooldown(self):
+        key = "private_night"
+        persona._save_state({key: {"affection": {"adult": {
+            "excite": 92, "recover": 2, "shame": 30}}}})
+        persona._clear_adult_night(key)
+        adult = persona._load_state()[key]["affection"]["adult"]
+        self.assertEqual(adult["excite"], 0)
+        self.assertEqual(adult["recover"], 0)
+        self.assertEqual(adult["shame"], 30)
+
+    def test_v1_line_is_untouched(self):
+        persona._save_state({"private_v1": {"affection": {"value": 10}}})
+        persona._clear_adult_night("private_v1")
+        self.assertEqual(persona._load_state()["private_v1"]["affection"],
+                         {"value": 10})
+
+
 if __name__ == "__main__":
     unittest.main()

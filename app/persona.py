@@ -4554,6 +4554,27 @@ def _climax_info(res):
     return {"n": n, "of": omax, "last": bool(omax and n >= omax)}
 
 
+def _clear_adult_night(key):
+    """跨天把 v2 的高潮值和冷却清零（2026-11-10）。
+
+    `affection.sleep()` 管的是时间跳跃 / 第二天早晨那两条显式跨天路径；
+    编剧在聊天里判 `time=overnight` 走的是 `_apply_gameday`，以前**完全没
+    收场**，第二天面板还挂着昨晚的高潮值。这里补上，和 sleep 同口径：
+    只清 excite / recover，开发度那些「发生过的事实」不动。
+    """
+    try:
+        st = _load_state()
+        rec = st.get(key) or {}
+        aff = rec.get("affection")
+        adult = aff.get("adult") if isinstance(aff, dict) else None
+        if not isinstance(adult, dict):
+            return
+        aff["adult"] = adult_state.night_reset(adult)
+        _save_state(st)
+    except Exception:                                    # noqa: BLE001
+        log.exception("跨天清 v2 高潮值失败 %s", key)
+
+
 def finish_block(spot):
     """把「射在哪里」拼成演员层的导演条。没有选择就返回空串。"""
     spot = str(spot or "").strip().lower()
@@ -6322,6 +6343,8 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         try:
             new_day = int((gd or {}).get("day") or day_before)
             if new_day > day_before:
+                # 先清 v2 的高潮值/冷却：怀孕结算万一抛异常，收场也不该漏。
+                _clear_adult_night(key)
                 preg_event = _preg_advance(key, day_before, new_day)
         except Exception:                                # noqa: BLE001
             log.exception("怀孕结算失败 %s", key)
