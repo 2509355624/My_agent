@@ -144,6 +144,14 @@ LLM_FALLBACK_CHAIN = os.getenv(
 # 60 秒一个字节都没回就认为卡死，换下一个候选。原先默认 600 秒等于不切。
 LLM_REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "60"))
 
+# 扮演链路里「裁判 / 意图 / 打分」这类内部短调用单独的可配超时（2026-11-10）：
+# grok 这类慢模型首次出字要 30s+，之前硬编码 30 会把裁判掐断、兜底成 0 分，
+# 表现为「第一次打分失败、第二次成功」。默认跟随 LLM_REQUEST_TIMEOUT（60s），
+# 真有更慢的模型就在 .env 里单独给 LLM_JUDGE_TIMEOUT 加长。
+_LLM_JUDGE_TIMEOUT_RAW = os.getenv("LLM_JUDGE_TIMEOUT", "")
+LLM_JUDGE_TIMEOUT = (float(_LLM_JUDGE_TIMEOUT_RAW)
+                     if _LLM_JUDGE_TIMEOUT_RAW else LLM_REQUEST_TIMEOUT)
+
 # 某个候选失败后「拉黑」多久不再试。到期自动回头重试主模型，所以额度
 # 充值、服务恢复之后能自愈，不用重启进程。
 LLM_FALLBACK_TTL = float(os.getenv("LLM_FALLBACK_TTL", "600"))

@@ -64,7 +64,7 @@ from app import (affection, affection_v2_adult as adult_state, items as _items,
                    persona_rag, pregnancy, trigger,
                  writing_skills, writing_style)
 from app.config import (BASE_DIR, PERSONA_MODEL, PERSONA_PROVIDER,
-                        QQ_AGENT_ID, QQ_BOT_NAME)
+                        QQ_AGENT_ID, QQ_BOT_NAME, LLM_JUDGE_TIMEOUT)
 
 log = logging.getLogger("persona")
 
@@ -4606,7 +4606,7 @@ def _judge_intent(card, said, state="", history=None, note=""):
     try:
         # 2026-11-05：分段 + 导演条后输出变长，20s 偶发不够；放到 30s。
         # 判挂了只是退回原文，不会阻塞这一轮，但能判出来质量更好。
-        raw = _llm_call([{"role": "user", "content": prompt}], timeout=30)
+        raw = _llm_call([{"role": "user", "content": prompt}], timeout=LLM_JUDGE_TIMEOUT)
     except Exception:                            # noqa: BLE001
         log.warning("意图判断调用失败，走原流程")
         return None, "", {}
@@ -5276,7 +5276,7 @@ def _judge_v2(card, said, state="", line_key="", gameday=None,
         "facts_guide": _FACTS_GUIDE,
     }
     try:
-        raw = _llm_call([{"role": "user", "content": prompt}], timeout=30)
+        raw = _llm_call([{"role": "user", "content": prompt}], timeout=LLM_JUDGE_TIMEOUT)
     except Exception:                            # noqa: BLE001
         log.warning("v2 打分调用失败，按 0 分走")
         return None, "", None
@@ -5361,7 +5361,7 @@ def _judge_intent_scored(card, said, state="", line_key="", gameday=None,
         # ——根本不是长度限制的问题，加了反而更短。真正的原因在提示词里
         # 那句「原文照抄」：模型逐字复述露骨原文时会被内容审核当场掐断，
         # 末尾补一句 `Sorry, I can't respond`。改措辞就好了（见 `segments`）。
-        raw = _llm_call([{"role": "user", "content": prompt}], timeout=30)
+        raw = _llm_call([{"role": "user", "content": prompt}], timeout=LLM_JUDGE_TIMEOUT)
     except Exception:                            # noqa: BLE001
         log.warning("攻略模式打分调用失败，按 0 分走")
         return None, "", None
