@@ -77,8 +77,15 @@ _RAW_SOURCE = "raw_msg_v1"
 RAW_MAX_CHARS = 900
 RAW_MAX_DISTANCE = 0.78
 RAW_BLOCK_ITEMS = 4
-RAW_ITEM_CHARS = 520
+# 单条注入上限跟入库上限对齐（2026-11-10）：入库放宽到 900 字之后，
+# 注入侧还截 520 字，等于后半段白存了。总预算不动，超预算时按剩余
+# 字数截而不是整条丢，优先让第一条拿全文。
+RAW_ITEM_CHARS = RAW_MAX_CHARS
 RAW_BLOCK_CHARS = 1600
+# 回填时一次送多少条去算 embedding：后台线程跑，单批别压到 daemon
+# 的 30 秒调用超时；批与批之间也让新的 distill 有机会插队。
+_BACKFILL_BATCH = 10
+_BACKFILL_QUEUED = set()
 # 「昨天/上次/之前」这类问法：检索时放宽阈值、多取几条（2026-11-05）。
 _TIME_QUERY = re.compile(r"昨天|昨日|昨晚|昨夜|前一天|前天|上次|之前")
 _LOCK = threading.Lock()
@@ -365,6 +372,112 @@ def raw_entries(turns):
                 },
             })
     return out
+
+
+def schedule_backfill(line, rows_factory):
+    """按线触发一次「归档原文回填」，幂等、后台执行。
+
+    原文层是 2026-11-07 才加的，更早的轮次只有提炼摘要；当时入库还截
+    400 字，后来放宽到 900 字，老条目也不会自己变长。这里从**全量归档**
+    把原文补齐/覆盖，所有老线都吃到新预算，不用手工逐条修库。
+
+    只按内容对齐，不按序号：回退/删档会让 RAG 的 turn 编号与归档轮号
+    错位（实测差 29 轮），按序号重建会撞 id，还会把回退掉的对话认成新的。
+    `rows_factory` 用 callable 传，只有真要回填时才读全量归档。
+    """
+    line = str(line or "").strip()
+    if not line or not enabled_for(line):
+        return
+    with _LOCK:
+        if line in _BACKFILL_QUEUED:
+            return
+        _BACKFILL_QUEUED.add(line)
+    try:
+        rows = rows_factory() if callable(rows_factory) else rows_factory
+    except Exception:                                        # noqa: BLE001
+        with _LOCK:
+            _BACKFILL_QUEUED.discard(line)
+        log.exception("读取归档失败，跳过回填 %s", line)
+        return
+    if not rows:
+        return
+    _enqueue("backfill", line, {"rows": rows})
+
+
+def _backfill_raw(client, coll, rows):
+    """把归档里的每条原话补成/覆盖成 900 字全文，返回实际写入条数。
+
+    已有 raw 条目用**它原来的 id** upsert 覆盖（400 字截断的那批原地变长，
+    不新增重复条目），缺失的用 `rawb-<轮次>-u/a` 追加。元数据沿用旧条目，
+    day/phase/turn 不丢。重跑时内容一致就跳过，天然幂等。
+    """
+    listed = client.list_entries(coll, timeout=60)
+    if not listed.get("ok"):
+        log.warning("回填读库失败 %s：%s", coll, listed.get("error"))
+        return 0
+    existing = {}
+    for e in listed.get("entries") or []:
+        meta = e.get("metadata") or {}
+        if str(meta.get("kind") or "") == "raw":
+            existing[str(e.get("id") or "")] = (
+                str(e.get("content") or ""), meta)
+    docs = [(eid, c) for eid, (c, _) in existing.items()]
+    todo, used_ids = [], set()
+    for i, row in enumerate(rows or []):
+        if not isinstance(row, dict):
+            continue
+        role = str(row.get("role") or "")
+        if role not in ("user", "assistant"):
+            continue
+        text = " ".join(str(row.get("content") or "").split())
+        if not text:
+            continue
+        label = "用户说" if role == "user" else "她"
+        tag = "u" if role == "user" else "a"
+        turn = i // 2 + 1
+        # 太短的句子不能当锚：「好。」会命中一堆条目，覆盖掉别人的记忆。
+        # 短文本一律走 rawb- 新增，重跑时靠 id + 内容一致照样幂等。
+        anchor = text[:40] if len(text) >= 40 else ""
+        hit, meta = None, {}
+        if anchor:
+            for eid, doc in docs:
+                if eid in used_ids or anchor not in doc:
+                    continue
+                old_role = str(existing[eid][1].get("role") or "")
+                if old_role and old_role != role:
+                    continue
+                hit, meta = eid, existing[eid][1]
+                break
+        stamp = ""
+        if hit:
+            m = re.match(r"^(第\d+天(?:·[^\s：]+)?\s+)", existing[hit][0])
+            if m:
+                stamp = m.group(1)
+        content = (stamp + label + "：" + text)[:RAW_MAX_CHARS]
+        eid = hit or ("rawb-%d-%s" % (turn, tag))
+        if eid in used_ids:
+            continue
+        if eid in existing and existing[eid][0] == content:
+            used_ids.add(eid)
+            continue
+        md = dict(meta) if meta else {
+            "kind": "raw", "role": role, "day": 0, "phase": "",
+            "turn": turn, "source": _RAW_SOURCE, "backfill": 1,
+        }
+        used_ids.add(eid)
+        todo.append({"id": eid, "content": content, "metadata": md})
+    written = 0
+    for s in range(0, len(todo), _BACKFILL_BATCH):
+        r = client.ingest(coll, todo[s:s + _BACKFILL_BATCH])
+        if not r.get("ok"):
+            log.warning("回填写库失败 %s：%s", coll, r.get("error"))
+            # 负数让调用方清掉「已排过」标记，下轮重排；已写入的那几批
+            # 因为内容一致会被跳过，等于接着补而不是从头再来。
+            return -1
+        written += int(r.get("count") or 0)
+    if written:
+        log.info("归档原文回填 %s：补/覆盖 %d 条", coll, written)
+    return written
 
 
 def forget_last(line):
@@ -844,7 +957,11 @@ def _fact_block(docs, recent=()):
 
 
 def _raw_block(docs):
-    """原文条目 → 一段；总字数受 RAW_BLOCK_CHARS 限制。"""
+    """原文条目 → 一段；总字数受 RAW_BLOCK_CHARS 限制。
+
+    2026-11-10：单条不再硬截 520 字（见 RAW_ITEM_CHARS）；预算不够时
+    按剩余字数截这一条，而不是把整条丢掉——细节往往就在后半段。
+    """
     if not docs:
         return ""
     lines, used = [], 0
@@ -854,8 +971,11 @@ def _raw_block(docs):
             continue
         if len(text) > RAW_ITEM_CHARS:
             text = text[:RAW_ITEM_CHARS] + "…"
-        if lines and used + len(text) > RAW_BLOCK_CHARS:
+        left = RAW_BLOCK_CHARS - used
+        if lines and left < 120:
             break
+        if len(text) > left:
+            text = text[:left].rstrip() + "…"
         lines.append("- " + text)
         used += len(text)
     if not lines:
@@ -924,16 +1044,35 @@ def _process(kind, line, payload):
     if not enabled():
         return
     if time.time() < _FAIL_UNTIL:
+        # 回填任务被静默丢掉的话，本进程的「已排过」标记会让它永不重试。
+        if kind == "backfill":
+            with _LOCK:
+                _BACKFILL_QUEUED.discard(line)
         return
     client = _client()
     if not client.is_ready():
         if not client.start():
             _FAIL_UNTIL = time.time() + 300
             log.warning("角色扮演 RAG 启动失败，5 分钟内不再重试")
+            if kind == "backfill":
+                with _LOCK:
+                    _BACKFILL_QUEUED.discard(line)
             return
     if kind == "warm":
         return
     coll = collection_name(line)
+    if kind == "backfill":
+        # 老线补原文：只动原文层，提炼事实一条不碰。失败不阻塞后续队列。
+        try:
+            if _backfill_raw(client, coll,
+                             (payload or {}).get("rows") or []) < 0:
+                with _LOCK:
+                    _BACKFILL_QUEUED.discard(line)
+        except Exception:                                    # noqa: BLE001
+            log.exception("归档原文回填失败 %s", coll)
+            with _LOCK:
+                _BACKFILL_QUEUED.discard(line)
+        return
     if kind == "distill":
         turns = (payload or {}).get("turns") or []
         custom = (payload or {}).get("custom")

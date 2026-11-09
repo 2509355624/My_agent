@@ -21,6 +21,7 @@ import app.persona_rag as rank
 class FakeClient:
     def __init__(self, docs=None):
         self.docs = docs or []
+        self.entries = []
         self.deleted = []
         self.deleted_entries = []
         self.ingested = []
@@ -41,6 +42,9 @@ class FakeClient:
     def ingest(self, coll, entries):
         self.ingested.append((coll, entries))
         return {"ok": True, "count": len(entries)}
+
+    def list_entries(self, coll, timeout=30):
+        return {"ok": True, "entries": list(self.entries)}
 
     def delete_kb(self, coll):
         self.deleted.append(coll)
@@ -485,6 +489,105 @@ class RawMemoryTest(RagBase):
         self.assertEqual(len(self.client.ingested), 1)
         _coll, entries = self.client.ingested[0]
         self.assertEqual([e["id"] for e in entries], ["raw-1-u", "raw-1-a"])
+
+
+class BackfillTest(RagBase):
+    """归档原文回填（2026-11-10）：老线补料 + 400 字截断原地变全文。"""
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.object(rank, "_BACKFILL_QUEUED", set())
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _rows(self, n, chars=120):
+        return [{"role": "user" if i % 2 == 0 else "assistant",
+                 "content": "第%d句 %s" % (i, "字" * chars)}
+                for i in range(n)]
+
+    def test_truncated_entry_is_extended_in_place(self):
+        full = "开头一句 " + "细" * 800
+        short = ("第2天·上午 她：" + full)[:400]
+        self.client.entries = [{
+            "id": "raw-62-a", "content": short,
+            "metadata": {"kind": "raw", "role": "assistant",
+                         "source": rank._RAW_SOURCE, "day": 2,
+                         "phase": "上午", "turn": 62},
+        }]
+        n = rank._backfill_raw(
+            self.client, "coll", [{"role": "assistant", "content": full}])
+        self.assertEqual(n, 1)
+        _coll, entries = self.client.ingested[0]
+        self.assertEqual(entries[0]["id"], "raw-62-a",
+                         "老条目应原地覆盖，不能新增一条重复的")
+        self.assertGreater(len(entries[0]["content"]), 400)
+        self.assertIn("细" * 100, entries[0]["content"])
+        self.assertTrue(entries[0]["content"].startswith("第2天·上午"),
+                        "覆盖时不能把天数/时段丢掉")
+        self.assertEqual(entries[0]["metadata"]["day"], 2)
+
+    def test_missing_turns_get_stable_ids(self):
+        self.client.entries = []
+        n = rank._backfill_raw(self.client, "coll", self._rows(6))
+        self.assertEqual(n, 6)
+        ids = [e["id"] for _, batch in self.client.ingested for e in batch]
+        self.assertEqual(ids, ["rawb-1-u", "rawb-1-a", "rawb-2-u",
+                               "rawb-2-a", "rawb-3-u", "rawb-3-a"])
+
+    def test_second_run_writes_nothing(self):
+        rows = self._rows(4)
+        self.assertEqual(rank._backfill_raw(self.client, "coll", rows), 4)
+        self.client.entries = [
+            {"id": e["id"], "content": e["content"],
+             "metadata": e["metadata"]}
+            for _, batch in self.client.ingested for e in batch]
+        self.client.ingested = []
+        self.assertEqual(rank._backfill_raw(self.client, "coll", rows), 0)
+        self.assertEqual(self.client.ingested, [])
+
+    def test_short_line_never_overwrites_an_old_entry(self):
+        old = "她：好。后面还有一大段细节" + "字" * 300
+        self.client.entries = [{
+            "id": "raw-1-a", "content": old,
+            "metadata": {"kind": "raw", "role": "assistant",
+                         "source": rank._RAW_SOURCE, "day": 1, "phase": "",
+                         "turn": 1},
+        }]
+        n = rank._backfill_raw(
+            self.client, "coll", [{"role": "assistant", "content": "好。"}])
+        self.assertEqual(n, 1)
+        self.assertTrue(self.client.ingested[0][1][0]["id"].startswith("rawb-"))
+        self.assertEqual(self.client.entries[0]["content"], old,
+                         "短句不能拿去覆盖别条目的全文")
+
+    def test_schedule_only_once_and_archive_is_lazy(self):
+        calls = []
+
+        def factory():
+            calls.append(1)
+            return self._rows(2)
+
+        with mock.patch.object(rank, "_enqueue") as enq:
+            rank.schedule_backfill("web_10001__rem", factory)
+            rank.schedule_backfill("web_10001__rem", factory)
+        self.assertEqual(len(calls), 1, "没排上队列就不该读全量归档")
+        self.assertEqual(enq.call_count, 1)
+        self.assertEqual(enq.call_args[0][0], "backfill")
+
+    def test_raw_block_keeps_the_whole_900_chars(self):
+        tail = "结尾独有的细节"
+        blk = rank._raw_block([{"content": "字" * 800 + tail}])
+        self.assertIn(tail, blk, "单条 520 字硬截会把后半段细节砍掉")
+
+    def test_process_backfill_only_writes_raw(self):
+        self.client.entries = []
+        with mock.patch.object(rank, "distill") as dist:
+            rank._process("backfill", "web_10001__rem",
+                          {"rows": self._rows(2)})
+        dist.assert_not_called()
+        self.assertEqual(len(self.client.ingested), 1)
+        for e in self.client.ingested[0][1]:
+            self.assertEqual(e["metadata"]["kind"], "raw")
 
 
 if __name__ == "__main__":
