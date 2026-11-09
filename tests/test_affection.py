@@ -628,9 +628,14 @@ class RaidTurnTest(AffBase):
         self.assertEqual(m.call_count, 2)
         # 第二段提示词里要有档位注入块
         head = m.call_args_list[1][0][0][0]["content"]
-        self.assertIn("你们现在到这一步了", head)
+        # 「你们现在到这一步了」是档位结算注入块（affection.injection_block），
+        # 「帮她解围」是导演条里编剧这一轮判的「理由」——两者都随缓存优化
+        # Phase A 挪到了末尾玩家消息，不再进 system 头。
+        last_user = m.call_args_list[1][0][0][-1]["content"]
+        self.assertIn("你们现在到这一步了", last_user)
+        self.assertIn("帮她解围", last_user)
+        # 「肢体接触」来自稳定的状态值全书（档位名），留在 system 头。
         self.assertIn("肢体接触", head)
-        self.assertIn("帮她解围", head)
         # Turn 带回结算结果
         self.assertIsNotNone(turn.aff)
         self.assertTrue(turn.aff["active"])

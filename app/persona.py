@@ -3781,9 +3781,32 @@ def _guard_block():
     return _GUARD_TEXT if on else ""
 
 
+def _note_block(note):
+    """「之前的事」小记块：旧账本可能带第三人称，注入前先纠成「你」。"""
+    if not str(note or "").strip():
+        return ""
+    return "【之前的事】\n" + _ledger_fix_pronouns(note).strip()
+
+
+def _state_block(state):
+    """「她此刻的样子」：上一轮结束时的状态，接着它往下演。"""
+    state = str(state or "").strip()
+    if not state:
+        return ""
+    return ("## 她此刻的样子\n\n" + _PRONOUN_HE.sub("你", state)
+            + "\n\n（这是上一轮结束时的状态，接着它往下演，"
+              "不要自己给她换回原来的衣服）")
+
+
 def build_head(card, session_key, sender, note="", state="", intimate=True,
-               mode="normal"):
+               mode="normal", dynamic=True):
     """扮演态的系统头：角色人设 + 输出契约 + 环境（+ 小记 + 此刻状态）。
+
+    `dynamic`（2026-11-10 缓存优化 Phase A）：是否把「小记（之前的事）」和
+    「上一轮状态（她此刻的样子）」这两块**逐轮会变**的内容拼进 head。默认
+    True（其它所有调用方都走默认，行为不变）；只有 `run_turn` 传 False，把
+    这两块挪到末尾玩家消息，让 system 头成为逐字节稳定的前缀，DeepSeek 的
+    前缀缓存才能整段命中（实测第二轮输入 token 翻倍就是被这些动态块打散的）。
 
     `mode`（2026-11-06）：酒馆 sysprompt 档位那一层，`writing_style.head_style`
     给的**一句**正向短句，拼在契约之后。默认 `normal` 不拼。
@@ -3856,16 +3879,17 @@ def build_head(card, session_key, sender, note="", state="", intimate=True,
     if str(session_key or "").startswith("group_"):
         parts.append(_GROUP_NOTE)
     parts.append(_env_note(session_key, sender))
-    if note.strip():
-        # 旧账本可能带着第三人称（2026-11-06）：注入前先纠成「你」，
-        # 存量脏账本不逐条手改也不会把演员带偏。
-        parts.append("【之前的事】\n" + _ledger_fix_pronouns(note).strip())
-    if str(state or "").strip():
-        # 存量的「她此刻的样子」也可能写着「他」（2026-11-06）：注入前纠成「你」。
-        parts.append("## 她此刻的样子\n\n"
-                     + _PRONOUN_HE.sub("你", str(state).strip())
-                     + "\n\n（这是上一轮结束时的状态，接着它往下演，"
-                       "不要自己给她换回原来的衣服）")
+    # 小记（之前的事）和上一轮状态（她此刻的样子）是**逐轮会变的**内容。
+    # 默认拼进 head（其它调用方都走默认，行为不变）；`run_turn` 传
+    # `dynamic=False`，把这两块挪到末尾玩家消息，让 system 头成为逐字节
+    # 稳定的前缀，DeepSeek 前缀缓存才能整段命中（缓存优化 Phase A）。
+    if dynamic:
+        nb = _note_block(note)
+        if nb:
+            parts.append(nb)
+        sb = _state_block(state)
+        if sb:
+            parts.append(sb)
     return "\n\n".join(parts)
 
 
@@ -6121,20 +6145,29 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     # 亲密场景写得干巴巴。`neutral` 也带上，它随时可能拐到亲密去。
     intimate = intent in (None, "", "intimate", "neutral")
     head = build_head(card, session_key, sender, note, prev_state,
-                      intimate=intimate, mode=mode)
+                      intimate=intimate, mode=mode, dynamic=False)
+    # 缓存优化 Phase A（2026-11-10）：所有逐轮变化的内容不再进 system 头，
+    # 改攒进 `dyn_parts`，最后统一贴到末尾玩家消息，保住 head 的前缀缓存。
+    dyn_parts = []
+    nb = _note_block(note)
+    if nb:
+        dyn_parts.append(nb)
+    sb = _state_block(prev_state)
+    if sb:
+        dyn_parts.append(sb)
     block = _intent_block(intent, inote)
     if block:
-        head = head + "\n\n" + block
+        dyn_parts.append(block)
     # 导演条（2026-11-05）：第一段顺手判的潜台词 / 她察觉到的 / 这一拍的态度。
     # 它只给演员「怎么反应」，不给台词——所以放在 intent 之后、结算之前。
     dblock = _director_block(extras, plot=man.get("plot"))
     if dblock:
-        head = head + "\n\n" + dblock
+        dyn_parts.append(dblock)
     # 射精位置（2026-11-05）：玩家在弹窗里选的那个，不由正文决定。
     # 拼在导演条之后、结算之前——它改的是「这一拍怎么写」，不是数值。
     fblock = finish_block(fin_pick)
     if fblock:
-        head = head + "\n\n" + fblock
+        dyn_parts.append(fblock)
     # 长期记忆（2026-11-05）：按玩家这一轮**看得见的话**去翻旧账。
     # 用户没说出口的「想」不参与检索——拿心里话去翻回忆，容易让她提前知道。
     #
@@ -6223,7 +6256,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
                          _items.fade_block(_fade_name, _fade_key),
                          _items.keepsake_block(_irec.get("items"))):
                 if _blk:
-                    head = head + "\n\n" + _blk
+                    dyn_parts.append(_blk)
         except Exception:                                # noqa: BLE001
             log.warning("道具注入失败 %s", key, exc_info=True)
         # v2 成人向（2026-11-08）：编剧判好的 adult delta → 结算 → 拼中文注入。
@@ -6261,16 +6294,16 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
             else:
                 _ab = adult_state.block(_ast)
                 if _ab:
-                    head = head + "\n\n" + _ab
+                    dyn_parts.append(_ab)
         blk = affection.injection_block(aff_res)
         if blk:
-            head = head + "\n\n" + blk
+            dyn_parts.append(blk)
         # 动态状态（2026-11-06 用户要求）：冲动/高潮是这一轮的气氛，档位到了
         # 就临时注入一段行为规则——她这一拍会主动到什么程度、脸上什么样。
         # 和长期轴（好感/堕落/屈服）分开：只在这一轮有效。
         dyn = affection.dynamic_block(aff_res)
         if dyn:
-            head = head + "\n\n" + dyn
+            dyn_parts.append(dyn)
         # 游戏内时间（2026-11-04）：把打分 AI 判的跨天/约定落账，
         # 再把「第 N 天 + 今天的事 + 约定」拼进系统头。
         #
@@ -6294,7 +6327,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
             log.exception("怀孕结算失败 %s", key)
         tblock = _gameday_block(gd)
         if tblock:
-            head = head + "\n\n" + tblock
+            dyn_parts.append(tblock)
     else:
         # 自由模式不推进天数，但内射照样按天记账，等时间跳跃时统一结算。
         if finish == "inside":
@@ -6306,13 +6339,13 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         # 她的下一句还按白天的场景写。
         tblock = _gameday_block(gd)
         if tblock:
-            head = head + "\n\n" + tblock
+            dyn_parts.append(tblock)
     # 怀孕/孩子（2026-11-05）：身体状态每轮都该在她脑子里，不需要等玩家问。
     # 必须放在跨天结算**之后**拼：刚发现怀孕 / 刚生产这一轮就要按新状态演，
     # 不能等下一轮才让她想起来（用户说的「先结算，再开场」）。
     pblock = pregnancy_block(key, preg_event)
     if pblock:
-        head = head + "\n\n" + pblock
+        dyn_parts.append(pblock)
     # 压迫模式（2026-11-05）：在 `aff_res` 上补一个 `forced` 标记。
     # **必须在这里补，不能指望 `injection_block` 写回**——它是纯函数，
     # 拿结果拼完就丢；这里不补的话，下面 `intimate_guide` 里的压迫层
@@ -6328,7 +6361,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     if intimate and not v2:
         extra = intimate_guide(aff_res)
         if extra:
-            head = head + "\n" + extra
+            dyn_parts.append(extra)
     # 数值读数（2026-11-09 用户拍板）：**每轮都给**，不再只挂在亲密轮上。
     #
     # 以前 `body_state_block` 写在上面那个 `intimate` 分支里，聊天轮她手里一个
@@ -6341,7 +6374,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     if isinstance(aff_res, dict) and aff_res.get("active") and not v2:
         body = body_state_block(aff_res, gd)
         if body:
-            head = head + "\n\n" + body
+            dyn_parts.append(body)
 
     # 第一轮把网页上那段开场导读也发给模型（2026-11-04）。
     # 否则玩家照着导读里的场景开口（「咖啡好香」），模型手里根本没这个场景，
@@ -6349,8 +6382,8 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     if not hist:
         intro = str((_entry(key) or {}).get("intro") or "").strip()
         if intro:
-            head += ("\n\n【此刻】\n" + intro
-                     + "\n（这是场景设定，照着它写，不要把这段话复述出来。）")
+            dyn_parts.append("【此刻】\n" + intro
+                             + "\n（这是场景设定，照着它写，不要把这段话复述出来。）")
 
     # 群里带上说话人，模型才知道是谁在说话（同 qq_bot 正文前缀的做法）；
     # 私聊和空正文都不加——「张三：」后面什么都没有比不写更糊涂。
@@ -6423,6 +6456,13 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     pb = _place_block(gd)
     if pb:
         user_block = user_block + "\n\n" + pb
+    # 缓存优化 Phase A（2026-11-10）：把这一轮所有逐轮变化的块（导演条 /
+    # 关系块 / 时间 / 怀孕 / 小记 / 状态 / 写法层 / 身体读数 / 开场导读…）统一
+    # 贴到末尾玩家消息，与回忆/故事/事实/穿着同层、紧贴生成点。system 头因此
+    # 只剩逐字节稳定的前缀，DeepSeek 前缀缓存才能整段命中。
+    dyn_block = "\n\n".join(p for p in dyn_parts if p)
+    if dyn_block:
+        user_block = user_block + "\n\n" + dyn_block
     user_block = user_block + "\n\n" + writing_style.tail(
         turn_no, author_note, plot=man.get("plot"),
         name=char_name(card, key=key), mode=mode,

@@ -411,9 +411,10 @@ class TurnTest(PersonaBase):
         self.assertNotIn("用户 · 想（心里想的", last_user)
         # 单行原话不加那段「三种东西」的说明（省 token，老行为）
         self.assertNotIn("【玩家这一轮写的主输入框原文】", last_user)
-        head = m.call_args_list[1][0][0][0]["content"]
-        self.assertIn("对方心里有话没说出口", head)
-        self.assertNotIn("对方真正在：想被留住", head)
+        # 导演条（含「对方心里有话没说出口」）已挪到最后一条玩家消息
+        # （缓存优化 Phase A），不再进 system 头。
+        self.assertIn("对方心里有话没说出口", last_user)
+        self.assertNotIn("对方真正在：想被留住", last_user)
 
     def test_rag_remembers_only_visible_text(self):
         """长期记忆入库：只收「说/做」，心里话不进去；条目挂在当前线。"""
@@ -479,8 +480,41 @@ class TurnTest(PersonaBase):
         self.assertNotIn("可以主动做一件事", head)
         self.assertNotIn("大腿开始磨", head)
         self.assertNotIn("张力：", head)
-        # 只剩事实：他藏着话这件事照旧告诉她，内容不给
-        self.assertIn("内容你不知道", head)
+        # 还剩事实：他藏着话这件事照旧告诉她，内容不给。导演条已挪到末尾
+        # 玩家消息（缓存优化 Phase A），所以「内容你不知道」要从 last_user 找。
+        last_user = m.call_args_list[1][0][0][-1]["content"]
+        self.assertIn("内容你不知道", last_user)
+
+    def test_system_head_is_stable_across_turns(self):
+        """主回复的 system 头必须跨轮逐字节稳定（缓存优化 Phase A）。
+
+        所有逐轮变化的内容（导演条 / 关系块 / 时间 / 怀孕 / 小记 / 状态 /
+        写法层 / 身体读数 / 开场导读）都已挪到最后一条玩家消息，system 头只
+        保留逐字节不变的前缀，DeepSeek 前缀缓存才能整段命中——否则每轮都把
+        大段稳定人设重新当 miss token 付费（实测第二轮输入翻倍）。
+
+        这里锁死：两轮用**不同的**用户原话、不同的编剧注入，但 system 头必须
+        一模一样。`call_args_list` 每轮两次 LLM 调用（[0] 编剧 / [1] 主回复），
+        两轮共四次，主回复的 head 分别是下标 1 和 3。
+        """
+        score1 = ('{"intent": "neutral", "delta": 1, "turn_type": "chat",'
+                  ' "subtext": "想被留住", "stance": "装傻"}')
+        score2 = ('{"intent": "neutral", "delta": -1, "turn_type": "chat",'
+                  ' "subtext": "想推开", "stance": "抗拒"}')
+        with mock.patch.object(persona.llm, "call_llm",
+                               side_effect=[score1, "她没松手。",
+                                            score2, "她退了半步。"]) as m:
+            persona.run_turn(self.KEY, "我走了。", "private")
+            persona.run_turn(self.KEY, "你别碰我。", "private")
+        # 主回复的 system 头（两条调用里的下标 1 和 3）
+        head1 = m.call_args_list[1][0][0][0]["content"]
+        head2 = m.call_args_list[3][0][0][0]["content"]
+        self.assertEqual(head1, head2,
+                         "system 头跨轮不一致：前缀缓存会被打散")
+        # 动态内容确实挪到了末尾玩家消息（与「head 不变」互相印证）
+        last1 = m.call_args_list[1][0][0][-1]["content"]
+        last2 = m.call_args_list[3][0][0][-1]["content"]
+        self.assertNotEqual(last1, last2, "两轮动态内容应不同")
 
     def test_scene_line_is_split_out_of_the_reply(self):
         """模型顺手写的那行「画面：」要剥出来：正文发回去，标签拿去出图。
@@ -3229,8 +3263,10 @@ class ManualRunTurnTest(PersonaBase):
         self.assertIn("让她先开口", actor)
         self.assertIn("至少 300 字", actor)
         self.assertIn("想让她主动", actor)   # 2026-11-08：心里话给写作 AI
-        head = seen[-1][0]["content"]
-        self.assertIn("让她先开口", head)
+        # 剧情推进（导演条）已随缓存优化 Phase A 挪到末尾玩家消息，不再进
+        # system 头；这里改查最后一条 user 消息。
+        last_user = seen[-1][-1]["content"]
+        self.assertIn("让她先开口", last_user)
 
 
 class PersonaModelTest(unittest.TestCase):
