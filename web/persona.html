@@ -942,6 +942,20 @@
   .cmKeyRow input { flex: 1; }
   .cmKeyRow .btn { flex: none; }
   .cmRow .cmStatus { margin-top: 6px; min-height: 0; }
+  /* 统一列表里的「公用 / 付费」固定行（2026-11-10） */
+  .cmRow.fixed, .cmRow.paid { display: block; }
+  .cmRow.fixed .cmRowHead, .cmRow.paid .cmRowHead { margin-bottom: 6px; }
+  .cmRow .tag { font-size: 10px; padding: 2px 8px; border-radius: 999px;
+    font-weight: 700; letter-spacing: .3px; }
+  .cmRow .tag.pub { background: rgba(80,200,120,.16); color: #7fe0a0; }
+  .cmRow .tag.pay { background: rgba(255,200,80,.16); color: #ffce6a; }
+  .cmRow .nm { flex: 1; font-size: 13px; font-weight: 600; color: var(--text); }
+  .cmRow .fix { margin-left: auto; color: var(--text-dim); font-size: 11px; }
+  .cmPayInfo { color: var(--text-dim); font-size: 11px; line-height: 1.5; }
+  .cmPayInfo b { color: #ffce6a; }
+  .cmRow.dim { opacity: .42; filter: grayscale(.5); }
+  .cmRow.dim button[data-act] { pointer-events: none; }
+  #forceModel { max-width: 230px; height: auto; padding: 3px 8px; font-size: 11px; }
   .cmAdd { width: 100%; margin-top: 2px; }
   /* 中转站连不上时的引导弹窗：复用 cmMask 的壳。 */
   .relayBox { width: min(460px, 100%); background: var(--bg-elev);
@@ -1132,11 +1146,16 @@
     <div class="modelBar" id="modelBar">
       <button class="btn sm" id="btnModelNow" type="button">当前模型 ▾</button>
       <span class="mn" id="modelNowName">还没开始聊</span>
+      <select id="forceModel" class="btn sm" title="这一轮强制用谁；选「默认」走你定义的降级链">
+        <option value="">默认（走降级链）</option>
+        <option value="public">公用 V4 Pro（免费）</option>
+        <option value="paid">官方 DeepSeek（代充余额）</option>
+      </select>
       <div class="modelBody" id="modelBody">
         最近一次回话用的是 <b id="modelBodyName">—</b>。<br>
         公用免费的 <b>V4 Pro</b> 永远排第一（中转站的 12 亿免费 token）；
-        <b>连续三次连不上</b>，才会按「自定义模型」面板里的顺序用你自己的模型。
-        <button class="btn sm" id="btnModelCfg" type="button">自定义模型</button>
+        <b>连续三次连不上</b>，才会按「模型选择（自定义）」面板里的顺序用你的模型。
+        <button class="btn sm" id="btnModelCfg" type="button">模型选择（自定义）</button>
       </div>
     </div>
     <!-- 精确输入（2026-11-06）：主输入框依旧是兜底；这三栏填了就以它为准。
@@ -1292,7 +1311,7 @@
     <!-- 自定义模型（2026-11-05）放最底：自带 OpenAI 兼容接口。游客也能
          用——体验版之外「自带钥匙来玩」的口子。配置只存浏览器本地。 -->
     <div class="st" id="customBox">
-      <button class="btn sm" id="btnCustom">自定义模型</button>
+      <button class="btn sm" id="btnCustom">模型选择（自定义）</button>
       <div class="cmNow" id="cmNow" style="display:none"></div>
     </div>
     <!-- 「查看」（2026-11-10）：放右栏最下面，跟「自定义模型」挨着——都是
@@ -1377,14 +1396,15 @@
 <div class="cmMask" id="cmMask">
   <div class="cmBox">
     <div class="cmHead">
-      <h3>自定义模型</h3>
+      <h3>模型选择（自定义）</h3>
       <button class="cmHelpBtn" id="cmHelpBtn" type="button"
               title="怎么拿到 API Key？" aria-label="怎么拿到 API Key？">?</button>
     </div>
     <div class="cmt">
-      公用免费的 <b>V4 Pro</b> 永远排第一；<b>连续三次连不上</b>，才按下面的
-      顺序依次用你自己的模型。可以加多条，<b>排上面的优先</b>。
-      接口要兼容 OpenAI 的 <b>/chat/completions</b>。
+      列表里三类模型一行一个：<b>公用 V4 Pro（免费）</b>永远排第一、不花你钱；
+      <b>自己付费的 DeepSeek（代充余额）</b>余额 &gt; 0 才亮、为 0 自动变灰跳过；
+      <b>你自己的模型</b>（grok 等）可以加多条。点一行展开填 Key，
+      <b>↑↓</b> 调整顺序。想单独试某个模型，用聊天区底部「本轮用 X」即可。
     </div>
     <div class="cmHelp" id="cmHelp">
       <b>怎么拿到自己的 API Key（以 DeepSeek 为例）：</b>
@@ -1431,14 +1451,14 @@
     <p>站主承担不起自掏腰包去给你们付费的这一个代价，但是中转站是有
       <b>12 亿的免费 token</b> 给你用的。现在它连不上，<b>连续三次请求都失败</b>，
       所以这一轮没跑出来。</p>
-    <p>想继续聊，可以接一个你自己的模型。<b>DeepSeek 很便宜</b>：点「自定义模型」，
+    <p>想继续聊，可以接一个你自己的模型。<b>DeepSeek 很便宜</b>：点「模型选择（自定义）」，
       按一下 <b>DeepSeek / DEP</b>，官网、接口地址和模型名都帮你填好了，
       你只要粘贴自己的 API Key、点「测试连接」，通了再保存就行。</p>
     <p id="relayCustomTip" style="display:none">你已经配了自定义模型，
       但它也没连上；检查一下 Key 和接口地址，再试一次。</p>
     <div class="wbtns">
       <button class="btn" id="relayLater">稍后再试</button>
-      <button class="btn pri" id="relayCfg">自定义模型</button>
+      <button class="btn pri" id="relayCfg">模型选择（自定义）</button>
     </div>
   </div>
 </div>
@@ -4449,6 +4469,8 @@ async function deliver(text, isRetry, payload) {
     const f = p.fields || {};
     if (Object.keys(f).some(k => f[k])) body.fields = f;
     body.custom_models = CM;
+    body.paid_after = PAID_AFTER;
+    body.force_model = FORCE_MODEL;
     // 文风档位 / 这一幕的调子：常态且没写调子时整个字段都不发，
     // 后端不拼档位块、不加贴脸尾注。
     const w = curWriting();
@@ -4491,6 +4513,8 @@ async function deliver(text, isRetry, payload) {
         toast("体验版还剩 " + GUEST_LEFT + " 轮");
       }
     }
+    // 「本轮用 X」只生效这一轮：成功回复后立刻回到默认降级链（失败走 catch 不重置，重发仍带强制模型）。
+    resetForce();
   } catch (err) {
     pending.remove();
     // 游客额度用完：后端回 403 + limit:true。这种没有「重发」的意义。
@@ -4641,6 +4665,8 @@ async function skipDay(days) {
     const doing = doBox ? doBox.value.trim().slice(0, 200) : "";
     if (doing) body.doing = doing;
     body.custom_models = CM;
+    body.paid_after = PAID_AFTER;
+    body.force_model = FORCE_MODEL;
     const d = await post("/api/persona/skip_day", body);
     const nA = (d.n && typeof d.n.assistant === "number") ? d.n.assistant : null;
     ROLLED_BACK = false;              // 新的一轮已落地，回退解锁
@@ -4681,6 +4707,8 @@ async function setPhase(phase) {
   try {
     const body = { phase: phase };
     body.custom_models = CM;
+    body.paid_after = PAID_AFTER;
+    body.force_model = FORCE_MODEL;
     const d = await post("/api/persona/set_phase", body);
     const nA = (d.n && typeof d.n.assistant === "number") ? d.n.assistant : null;
     ROLLED_BACK = false;              // 新的一轮已落地，回退解锁
@@ -4929,6 +4957,10 @@ const DS_PRESET = {
   api_key: ""
 };
 let CM = [];
+let PAID_AFTER = false;     // 付费模型是否排在自己自定义模型之后（默认付费在前）
+let FORCE_MODEL = "";       // 本轮强制模型令牌；只作用下一轮，发完回到默认
+let BALANCE = 0;            // 代充余额（微元），>0 时付费模型才亮
+const PAID_AFTER_KEY = "persona_paid_after";
 
 function cmLoad() {
   let raw = null;
@@ -4952,8 +4984,56 @@ function cmLoad() {
 function cmSaveStore() {
   try {
     localStorage.setItem(CM_KEY, JSON.stringify(CM));
+    localStorage.setItem(PAID_AFTER_KEY, PAID_AFTER ? "1" : "0");
     localStorage.removeItem(CM_OLD_KEY);
   } catch (e) {}
+}
+
+function savePaidAfter() {
+  try { localStorage.setItem(PAID_AFTER_KEY, PAID_AFTER ? "1" : "0"); }
+  catch (e) {}
+}
+
+// 拉代充余额：付费行亮灭 + 「本轮用 X」里付费选项是否可选，都看它。
+async function loadBalance() {
+  try {
+    const r = await fetch("/api/persona/billing", { credentials: "include" });
+    const d = await r.json();
+    BALANCE = (d && d.ok) ? (Number(d.balance) || 0) : 0;
+  } catch (e) { BALANCE = 0; }
+  updatePaidDim();
+  renderForceOptions();
+}
+
+function updatePaidDim() {
+  const paidRow = document.querySelector('#cmRows .cmRow[data-t="paid"]');
+  if (paidRow) paidRow.classList.toggle("dim", BALANCE <= 0);
+}
+
+// 聊天区底部「本轮用 X」选择器：默认（降级链）/ 公用 / 付费（余额0则禁选）/ 自定义。
+function renderForceOptions() {
+  const sel = $("forceModel");
+  if (!sel) return;
+  const keep = FORCE_MODEL || sel.value;
+  let html = '<option value="">默认（走降级链）</option>' +
+    '<option value="public">公用 V4 Pro（免费）</option>';
+  if (BALANCE > 0)
+    html += '<option value="paid">官方 DeepSeek（代充余额）</option>';
+  else
+    html += '<option value="paid" disabled>官方 DeepSeek（余额 0）</option>';
+  html += CM.map((m, i) =>
+    '<option value="custom:' + i + '">' +
+    cmEsc(m.label || m.model || ("自定义" + (i + 1))) + '</option>').join("");
+  sel.innerHTML = html;
+  sel.value = ([].slice.call(sel.options).some(o => o.value === keep)) ? keep : "";
+  FORCE_MODEL = sel.value;
+}
+
+// 「本轮用 X」只作用下一轮：发出去后立刻回到默认。
+function resetForce() {
+  FORCE_MODEL = "";
+  const sel = $("forceModel");
+  if (sel) sel.value = "";
 }
 
 function renderCmNow() {
@@ -4975,7 +5055,7 @@ function cmEsc(s) {
 }
 
 function cmRowHtml(m, i) {
-  return '<div class="cmRow" data-i="' + i + '">' +
+  return '<div class="cmRow" data-t="custom" data-i="' + i + '">' +
     '<div class="cmRowHead">' +
       '<span class="ix">#' + (i + 1) + '</span>' +
       '<span class="nm">备用 ' + (i + 1) + (i === 0 ? "（最优先）" : "") + '</span>' +
@@ -5003,8 +5083,31 @@ function cmRowHtml(m, i) {
   '</div>';
 }
 
+function cmRowFixedHtml() {
+  return '<div class="cmRow fixed" data-t="public">' +
+    '<div class="cmRowHead">' +
+      '<span class="tag pub">免费</span>' +
+      '<span class="nm">公用 V4 Pro</span>' +
+      '<span class="fix">永远排第一 · 不花你钱</span>' +
+    '</div></div>';
+}
+
+function cmRowPaidHtml() {
+  const bal = (BALANCE / 1e6);
+  return '<div class="cmRow paid" data-t="paid">' +
+    '<div class="cmRowHead">' +
+      '<span class="tag pay">付费</span>' +
+      '<span class="nm">自己付费的 DeepSeek（代充余额）</span>' +
+      '<button class="btn" data-act="togglePaid" ' +
+        'title="在自定义模型之前 / 之后切换">↑↓</button>' +
+    '</div>' +
+    '<div class="cmPayInfo">余额 <b>¥' + bal.toFixed(4) + '</b>；' +
+      '为 0 时这一行自动变灰、不参与降级链。</div>' +
+  '</div>';
+}
+
 function cmDraft() {
-  return Array.from($("cmRows").querySelectorAll(".cmRow")).map(row => {
+  return Array.from($("cmRows").querySelectorAll('.cmRow[data-t="custom"]')).map(row => {
     const o = {};
     row.querySelectorAll("input[data-k]").forEach(inp => {
       o[inp.dataset.k] = inp.value.trim();
@@ -5014,10 +5117,14 @@ function cmDraft() {
 }
 
 function cmRenderRows(list) {
-  $("cmRows").innerHTML = list.length
-    ? list.map(cmRowHtml).join("")
-    : '<div class="cmt" style="padding:10px 2px">还没配。点上面的 <b>DeepSeek / DEP</b>' +
-      ' 会自动填好官网、接口地址和模型名，你只要粘贴 Key。</div>';
+  const publicRow = cmRowFixedHtml();
+  const paidRow = cmRowPaidHtml();
+  const customs = list.map((m, i) => cmRowHtml(m, i)).join("");
+  // 付费模型默认排在自定义之前；PAID_AFTER 为真时排到自定义之后。
+  const html = PAID_AFTER ? (publicRow + customs + paidRow)
+                          : (publicRow + paidRow + customs);
+  $("cmRows").innerHTML = html;
+  updatePaidDim();
 }
 
 function cmAddRow(preset) {
@@ -5029,8 +5136,9 @@ function cmAddRow(preset) {
   if (last) last.scrollIntoView({ block: "nearest" });
 }
 
-function openCm() {
+async function openCm() {
   const draft = cmDraft();
+  await loadBalance();             // 先把余额拉准，付费行才显示正确的灰/亮
   cmRenderRows(draft.length ? draft : CM);
   const s = $("cmStatus");
   s.textContent = ""; s.className = "cmStatus";
@@ -5076,9 +5184,15 @@ $("cmRows").addEventListener("click", async ev => {
   if (!btn) return;
   const row = btn.closest(".cmRow");
   if (!row) return;
+  const act = btn.dataset.act;
+  if (act === "togglePaid") {       // 付费模型在自定义之前 / 之后切换
+    PAID_AFTER = !PAID_AFTER;
+    cmRenderRows(CM);
+    savePaidAfter();
+    return;
+  }
   const d = cmDraft();
   const i = Number(row.dataset.i);
-  const act = btn.dataset.act;
   if (act === "del") { d.splice(i, 1); cmRenderRows(d); return; }
   if (act === "up" && i > 0) {
     const t = d[i - 1]; d[i - 1] = d[i]; d[i] = t;
@@ -5140,6 +5254,7 @@ $("cmSave").onclick = () => {
   }
   CM = d;
   cmSaveStore();
+  savePaidAfter();
   renderCmNow();
   closeCm();
   toast(CM.length ? ("已保存 " + CM.length + " 个备用模型") : "已清空备用模型");
@@ -5173,10 +5288,13 @@ $("btnModelNow").onclick = () => {
   $("btnModelNow").textContent = on ? "当前模型 ▴" : "当前模型 ▾";
 };
 $("btnModelCfg").onclick = openCm;
+$("forceModel").onchange = () => { FORCE_MODEL = $("forceModel").value; };
 
 CM = cmLoad();
+PAID_AFTER = localStorage.getItem(PAID_AFTER_KEY) === "1";
 cmSaveStore();              // 老数据（单条）迁移后立刻固化到新 key
 renderCmNow();
+loadBalance();              // 拉一次余额：底部「本轮用 X」的付费选项才正确禁选
 
 // 遮罩两边都要能关：哪个开着就关哪个（同一次点击里可能两个都判一下，
 // 但 openDrawer / openStats 已经保证了不会同时开）。

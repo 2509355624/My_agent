@@ -1074,7 +1074,9 @@ def finish_api():
     body = request.get_json(silent=True) or {}
     spot = str(body.get("spot") or "").strip().lower()
     text = str(body.get("text") or "").strip()[:120]
-    llm.set_custom_override(_persona_customs(body))
+    llm.set_custom_override(_persona_customs(body),
+                            paid_after=bool(body.get("paid_after")),
+                            force_model=body.get("force_model"))
     try:
         role, who, token = _who()
         if role == "guest":
@@ -1143,7 +1145,9 @@ def finish_night_api():
     """
     body = request.get_json(silent=True) or {}
     last = bool(body.get("last"))
-    llm.set_custom_override(_persona_customs(body))
+    llm.set_custom_override(_persona_customs(body),
+                            paid_after=bool(body.get("paid_after")),
+                            force_model=body.get("force_model"))
     try:
         role, who, token = _who()
         if role == "guest":
@@ -1168,7 +1172,9 @@ def next_morning_api():
     生成期间锁输入，生成完才放开。
     """
     body = request.get_json(silent=True) or {}
-    llm.set_custom_override(_persona_customs(body))
+    llm.set_custom_override(_persona_customs(body),
+                            paid_after=bool(body.get("paid_after")),
+                            force_model=body.get("force_model"))
     try:
         role, who, token = _who()
         if role == "guest":
@@ -1226,7 +1232,9 @@ def chat():
     if not text and not manual:
         return jsonify({"ok": False, "error": "说点什么"}), 400
 
-    llm.set_custom_override(_persona_customs(body))
+    llm.set_custom_override(_persona_customs(body),
+                            paid_after=bool(body.get("paid_after")),
+                            force_model=body.get("force_model"))
     try:
         return _chat_turn(text, manual, body.get("writing"))
     finally:
@@ -1340,7 +1348,9 @@ def skip_day_api():
     body 可带 custom（自定义模型）——开场那一次 LLM 调用同样走它。
     """
     body = request.get_json(silent=True) or {}
-    llm.set_custom_override(_persona_customs(body))
+    llm.set_custom_override(_persona_customs(body),
+                            paid_after=bool(body.get("paid_after")),
+                            force_model=body.get("force_model"))
     try:
         days = max(1, min(365, int(body.get("days") or 1)))
     except (TypeError, ValueError):
@@ -1437,7 +1447,9 @@ def set_phase_api():
     再自然进入新时段。不推进天数、不掷事件、不结算怀孕。
     """
     body = request.get_json(silent=True) or {}
-    llm.set_custom_override(_persona_customs(body))
+    llm.set_custom_override(_persona_customs(body),
+                            paid_after=bool(body.get("paid_after")),
+                            force_model=body.get("force_model"))
     phase = str(body.get("phase") or "").strip()
     try:
         if phase not in persona.PHASES:

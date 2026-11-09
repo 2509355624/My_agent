@@ -246,6 +246,55 @@ class ChainTest(BillBase):
                          [llm._PERSONA_CUSTOM_PID] * 2)  # noqa: SLF001
         self.assertEqual([x[1] for x in c[2:]], ["0", "1"])
 
+    def test_paid_after_puts_custom_models_before_paid(self):
+        self.fund()
+        bill.begin(QQ)
+        fake = {config.PERSONA_PROVIDER: {"model": config.PERSONA_MODEL},
+                "deepseek": {"model": "deepseek-flash"}}
+        with mock.patch.object(llm, "PROVIDERS", fake):
+            llm.set_custom_override([
+                {"base_url": "https://a.example/v1", "model": "m-a", "api_key": "k1"},
+                {"base_url": "https://b.example/v1", "model": "m-b", "api_key": "k2"},
+            ], paid_after=True)
+            c = llm.candidates(config.PERSONA_PROVIDER, config.PERSONA_MODEL)
+        self.assertEqual(c[0], (config.PERSONA_PROVIDER, config.PERSONA_MODEL))
+        self.assertEqual(c[1][0], llm._PERSONA_CUSTOM_PID)       # noqa: SLF001
+        self.assertEqual(c[2][0], llm._PERSONA_CUSTOM_PID)       # noqa: SLF001
+        self.assertEqual(c[3], ("deepseek", "deepseek-flash"))
+
+    def test_force_model_promotes_chosen_custom_to_head(self):
+        self.fund()
+        bill.begin(QQ)
+        fake = {config.PERSONA_PROVIDER: {"model": config.PERSONA_MODEL},
+                "deepseek": {"model": "deepseek-flash"}}
+        with mock.patch.object(llm, "PROVIDERS", fake):
+            llm.set_custom_override([
+                {"base_url": "https://a.example/v1", "model": "m-a", "api_key": "k1"},
+            ], force_model="custom:0")
+            c = llm.candidates(config.PERSONA_PROVIDER, config.PERSONA_MODEL)
+        self.assertEqual(c[0], (llm._PERSONA_CUSTOM_PID, "0"))   # noqa: SLF001
+        self.assertEqual(c[1], (config.PERSONA_PROVIDER, config.PERSONA_MODEL))
+
+    def test_force_paid_with_balance(self):
+        self.fund()
+        bill.begin(QQ)
+        fake = {config.PERSONA_PROVIDER: {"model": config.PERSONA_MODEL},
+                "deepseek": {"model": "deepseek-flash"}}
+        with mock.patch.object(llm, "PROVIDERS", fake):
+            llm.set_custom_override([], force_model="paid")
+            c = llm.candidates(config.PERSONA_PROVIDER, config.PERSONA_MODEL)
+        self.assertEqual(c[0], ("deepseek", "deepseek-flash"))
+
+    def test_force_paid_without_balance_is_ignored(self):
+        bill.begin(QQ)                 # 未充值 → 无上下文
+        fake = {config.PERSONA_PROVIDER: {"model": config.PERSONA_MODEL},
+                "deepseek": {"model": "deepseek-flash"}}
+        with mock.patch.object(llm, "PROVIDERS", fake):
+            llm.set_custom_override([], force_model="paid")
+            c = llm.candidates(config.PERSONA_PROVIDER, config.PERSONA_MODEL)
+        self.assertEqual(c[0], (config.PERSONA_PROVIDER, config.PERSONA_MODEL))
+        self.assertNotIn(("deepseek", "deepseek-flash"), c)
+
     def test_no_balance_keeps_the_original_chain(self):
         bill.begin(QQ)                 # 未登记 → 空上下文
         c = self._candidates()

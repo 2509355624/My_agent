@@ -10,6 +10,7 @@ import time
 import requests
 from app.cancel import is_cancelled
 from app.config import (API_URL, API_KEY, MODEL, LLM_PROVIDER,
+                        PERSONA_PROVIDER, PERSONA_MODEL,
                         PROVIDERS, OLLAMA_BASE_URL, CONTEXT_BUDGET,
                         LLM_FALLBACK_CHAIN, LLM_REQUEST_TIMEOUT,
                         LLM_FALLBACK_TTL, LLM_RATE_LIMIT_TTL,
@@ -135,15 +136,22 @@ def _normalize_customs(cfg):
     return out
 
 
-def set_custom_override(cfg):
+def set_custom_override(cfg, paid_after=False, force_model=None):
     """挂上 / 摘掉当前线程的「扮演降级链」。
 
     cfg=None 才摘除；传空列表 [] 表示「这是扮演请求、但玩家没配自定义模型」——
     这个状态也要记住，否则 candidates() 会把付费的全局链又接回来。
+
+    paid_after（2026-11-10）：玩家把自定义模型拖到付费模型前面时为真——
+    降级链里自定义段排在付费段之前。
+    force_model（2026-11-10）：前端「本轮用 X」令牌，把指定模型提到链头、
+    失败仍回落降级链；后台提炼线程一律不传（None），不会误强制。
     """
     if cfg is None:
         _custom_ctx.models = []
         _custom_ctx.active = False
+        _custom_ctx.paid_after = False
+        _custom_ctx.force_model = None
         # ⚠️ `used` 故意不清：persona_api 的 `finally` 会调到这里，而
         # after_request 还要读它给「当前模型」按钮回包。下一次扮演请求
         # 一进来（下面的分支）就会把它重置，不会串到别的玩家。
@@ -151,6 +159,55 @@ def set_custom_override(cfg):
     _custom_ctx.models = _normalize_customs(cfg)
     _custom_ctx.active = True
     _custom_ctx.used = None
+    _custom_ctx.paid_after = bool(paid_after)
+    _custom_ctx.force_model = _normalize_force(force_model)
+
+
+def _normalize_force(token):
+    """把前端传来的「本轮用 X」令牌归一成内部形态。
+
+    支持：public/free/relay/v4pro（公用 V4 Pro）、paid/vip/balance/代充
+    （代充付费）、custom:<i>（第 i 条自定义模型）。其它一律返回 None（不强制）。
+    """
+    if not token:
+        return None
+    t = str(token).strip().lower()
+    if t in ("public", "free", "relay", "v4pro"):
+        return ("public",)
+    if t in ("paid", "vip", "balance", "代充"):
+        return ("paid",)
+    if t.startswith("custom:") or t.startswith("c:"):
+        try:
+            return ("custom", int(t.split(":", 1)[1]))
+        except (ValueError, IndexError):
+            return None
+    return None
+
+
+def _resolve_force_candidate():
+    """把「本轮强制模型」令牌解析成 (provider, model)；解析不出 / 不可用返回 None。"""
+    f = getattr(_custom_ctx, "force_model", None)
+    if not f:
+        return None
+    if f[0] == "public":
+        if PERSONA_PROVIDER:
+            return (PERSONA_PROVIDER, PERSONA_MODEL or "")
+        return None
+    if f[0] == "paid":
+        try:
+            from app import persona_billing
+            if persona_billing.paid_enabled():
+                return persona_billing.paid_target()
+        except Exception:
+            return None
+        return None
+    if f[0] == "custom":
+        customs = persona_customs()
+        i = f[1]
+        if 0 <= i < len(customs):
+            return (_PERSONA_CUSTOM_PID, str(i))
+        return None
+    return None
 
 
 def _custom_active():
@@ -725,19 +782,27 @@ def candidates(provider=None, model=None, require_vision=False, strict=False):
     # 插一段站主付费的官方 DeepSeek，用的就是他自己的余额。没登记 / 余额
     # 用完 / 后台提炼线程都没有计费上下文，这里就不会插，链子保持原样。
     if persona_chain_active():
-        tail = []
+        # 付费段与自定义模型的先后可由玩家排（paid_after）：默认付费在自定义前，
+        # 玩家也能把自定义拖到付费前面（想先试自己的模型）。
+        customs = [(_PERSONA_CUSTOM_PID, str(i))
+                   for i in range(len(persona_customs()))]
+        paid = []
         try:
             from app import persona_billing
             if persona_billing.paid_enabled():
-                tail.append(persona_billing.paid_target())
+                paid = [persona_billing.paid_target()]
         except Exception:                # 账本挂了不能拦住聊天
             log.warning("[persona] 计费闸门读取失败，跳过付费段", exc_info=True)
-        tail += [(_PERSONA_CUSTOM_PID, str(i))
-                 for i in range(len(persona_customs()))]
+        tail = customs + paid if getattr(_custom_ctx, "paid_after", False) else paid + customs
     else:
         tail = parse_chain(LLM_FALLBACK_CHAIN)
+    chain = ([head] if head else []) + tail
+    # 本轮强制模型（前端「本轮用 X」）：提到链头，其余作兜底——失败仍回落，不丢轮。
+    forced = _resolve_force_candidate()
+    if forced is not None:
+        chain = [forced] + [c for c in chain if c != forced]
     seen, ordered = set(), []
-    for item in ([head] if head else []) + tail:
+    for item in chain:
         if item in seen:
             continue
         seen.add(item)

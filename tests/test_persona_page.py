@@ -304,7 +304,7 @@ class RoleplayFallbackUiTest(unittest.TestCase):
 
     def test_relay_popup_uses_the_agreed_wording(self):
         for needle in ("公用的免费 V4 Pro 暂时连不上", "站主承担不起自掏腰包",
-                       "12 亿的免费 token", "连续三次", "自定义模型</button>"):
+                       "12 亿的免费 token", "连续三次", "模型选择（自定义）</button>"):
             self.assertIn(needle, self.html, "少了 %s" % needle)
         for banned in ("不再回退官方", "赞助", "站主不再承担费用"):
             self.assertNotIn(banned, self.html, "弹窗不该出现 %s" % banned)
@@ -344,6 +344,82 @@ class RoleplayFallbackUiTest(unittest.TestCase):
         self.assertIn("color: #e2e2ec", block)
         self.assertIn("text-shadow", block)
         self.assertIn("font-size: 12px", block)
+
+
+class ModelSelectionPanelTest(unittest.TestCase):
+    """「模型选择（自定义）」统一面板（2026-11-10 用户要求）。
+
+    把公用免费 V4 Pro、自己付费的 DeepSeek、玩家自定义模型放进**同一个**
+    折叠列表，并给聊天区加一个「本轮用 X」强制选择器。静态体检要兜住：
+      1. 四个入口（聊天区按钮 / 右栏按钮 / 面板标题 / 中转站引导按钮）
+         都改名成「模型选择（自定义）」，不再是各自叫「自定义模型」；
+      2. 免费行永远第一、不可拖（data-t="public"）；付费行 data-t="paid"、
+         自定义行 data-t="custom"；
+      3. 付费行按余额亮灭：BALANCE<=0 时 updatePaidDim 给它加 dim；
+      4. 「本轮用 X」选择器存在，且发完一轮后 resetForce() 把 FORCE_MODEL 清回默认。
+    """
+
+    def setUp(self):
+        self.html = _read()
+
+    def test_all_four_entries_renamed(self):
+        self.assertIn('id="btnModelCfg" type="button">模型选择（自定义）</button>',
+                      self.html)
+        self.assertIn('id="btnCustom">模型选择（自定义）</button>', self.html)
+        self.assertIn('<h3>模型选择（自定义）</h3>', self.html)
+        self.assertIn('id="relayCfg">模型选择（自定义）</button>', self.html)
+
+    def test_force_model_selector_exists(self):
+        self.assertIn('<select id="forceModel"', self.html)
+        # 切换选择器要写回 FORCE_MODEL
+        self.assertIn('$("forceModel").onchange', self.html)
+        # 选项文案：默认 / 公用 / 付费 / 自定义
+        self.assertIn('默认（走降级链）', self.html)
+        self.assertIn('公用 V4 Pro（免费）', self.html)
+        self.assertIn('官方 DeepSeek（代充余额）', self.html)
+
+    def test_balance_gates_paid_option(self):
+        """余额>0 才给付费选项，否则按钮 disabled（前端禁选 + 后端也会跳过）。"""
+        fn = self.html[self.html.index("function renderForceOptions("):]
+        fn = fn[:fn.index("\n}\n") + 3]
+        self.assertIn('<option value="paid" disabled>', fn,
+                      "余额 0 时付费选项必须禁用")
+        self.assertIn('<option value="paid">官方 DeepSeek（代充余额）</option>', fn,
+                      "余额 >0 时付费选项必须可点")
+
+    def test_paid_row_dim_logic(self):
+        """付费行按余额亮灭：BALANCE<=0 时 updatePaidDim 加 dim 类。"""
+        paid = self.html[self.html.index("function cmRowPaidHtml("):]
+        paid = paid[:paid.index("\n}\n") + 3]
+        self.assertIn('data-t="paid"', paid)
+        dim = self.html[self.html.index("function updatePaidDim("):]
+        dim = dim[:dim.index("\n}\n") + 3]
+        self.assertIn('toggle("dim", BALANCE <= 0)', dim)
+        # 余额 0 这一句口径要写在付费行里
+        self.assertIn('为 0 时这一行自动变灰', paid)
+
+    def test_row_markup_data_t(self):
+        fixed = self.html[self.html.index("function cmRowFixedHtml("):]
+        fixed = fixed[:fixed.index("\n}\n") + 3]
+        self.assertIn('data-t="public"', fixed, "免费行必须 data-t=public（永远第一）")
+        paid = self.html[self.html.index("function cmRowPaidHtml("):]
+        paid = paid[:paid.index("\n}\n") + 3]
+        self.assertIn('data-t="paid"', paid)
+        custom = self.html[self.html.index("function cmRowHtml("):]
+        custom = custom[:custom.index("\n}\n") + 3]
+        self.assertIn('data-t="custom"', custom)
+
+    def test_reset_force_after_one_reply(self):
+        """「本轮用 X」只作用下一轮：deliver 成功回复后必须调 resetForce()。"""
+        d = self.html[self.html.index("async function deliver("):]
+        # 截到下一个 async function 之前
+        nxt = self.html.find("async function ", d.index("\n") + 1)
+        d = d[:nxt - d.index("async function deliver(")] if nxt != -1 else d
+        self.assertIn("resetForce();", d,
+                      "deliver 里成功分支必须调 resetForce()，否则强制模型会一直粘着")
+        fn = self.html[self.html.index("function resetForce("):]
+        fn = fn[:fn.index("\n}\n") + 3]
+        self.assertIn('FORCE_MODEL = ""', fn)
 
 
 if __name__ == "__main__":
