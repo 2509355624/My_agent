@@ -171,19 +171,34 @@ class CandidatesTest(_ChainBase):
 
 
 class RateLimitBanTest(_ChainBase):
-    """429（频率/额度到顶）要拉黑一整天，而不是默认的 600 秒。
+    """429 的拉黑时长（2026-11-09 用户重定：一整天 → 30 秒）。
 
-    429 不是「这条请求失败」，是「这家这一阵都不给了」——免费额度按天重置，
-    600 秒后重试纯属白撞。拉黑一整天，让降级链直接把请求交给还能用的模型。
-    其余失败（网络抖动、模型退役）保持短 TTL，到期自愈，不用重启进程。
+    旧口径「429 = 额度到顶，黑一天」被 hfapi 打脸：它的并发上限只有 2，而
+    角色扮演一轮要打编剧+写作两次调用，两个玩家同时在线必撞 429。11-09 实录
+    连着黑 86400 秒——站明明活着（vision 同刻还在用），角色扮演却整天走付费
+    的官方 DeepSeek。现在所有 429 最多黑 `LLM_RATE_LIMIT_TTL`（30 秒），
+    到期自动回头试；限流措辞（too many requests 等）按瞬时故障走，先重试。
     """
 
-    def test_rate_limit_ttl_defaults_to_a_full_day(self):
-        self.assertEqual(config.LLM_RATE_LIMIT_TTL, 86400)
+    def test_rate_limit_ttl_is_thirty_seconds(self):
+        self.assertEqual(config.LLM_RATE_LIMIT_TTL, 30)
 
-    def test_429_error_gets_the_long_ttl(self):
+    def test_bare_429_is_rate_limit_and_retried(self):
+        """光秃秃的 429 Too Many Requests 按限流算：瞬时 → 重试 + 短拉黑。
+
+        hfapi 的 429 就是这个措辞（并发撞上限），重试两下常常就好了。
+        """
         err = RuntimeError("LLM 请求失败 HTTP 429 Too Many Requests @https://x")
+        self.assertTrue(llm._is_transient(err))
+        self.assertEqual(llm._ttl_for(err), llm.LLM_CONCURRENCY_TTL)
+
+    def test_429_without_hint_words_not_retried(self):
+        """没措辞的裸 429（比如「余额不足」）：不在同一家白撞，直接降级；
+        拉黑仍是 30 秒——过会儿再试，不是今天别碰。"""
+        err = RuntimeError("LLM 请求失败 HTTP 429 @https://x | insufficient balance")
+        self.assertFalse(llm._is_transient(err))
         self.assertEqual(llm._ttl_for(err), llm.LLM_RATE_LIMIT_TTL)
+        self.assertLessEqual(llm.LLM_RATE_LIMIT_TTL, 60)
 
     def test_concurrency_429_gets_the_short_ttl(self):
         """并发冲突也是 429，但它几十秒自愈，不能按额度到顶藏一整天。
@@ -197,7 +212,8 @@ class RateLimitBanTest(_ChainBase):
             '"too many concurrent requests for this api key '
             '(2 in flight, limit 2)"}')
         self.assertEqual(llm._ttl_for(err), llm.LLM_CONCURRENCY_TTL)
-        self.assertLess(llm.LLM_CONCURRENCY_TTL, llm.LLM_RATE_LIMIT_TTL)
+        # 2026-11-09 起两档同为 30 秒（用户统一口径），并发冲突照旧短
+        self.assertLessEqual(llm.LLM_CONCURRENCY_TTL, llm.LLM_RATE_LIMIT_TTL)
 
     def test_other_error_gets_the_short_ttl(self):
         self.assertEqual(llm._ttl_for(RuntimeError("HTTP 500 Server Error")),
@@ -253,17 +269,17 @@ class RateLimitBanTest(_ChainBase):
         remain = llm._DEAD[("volc", "a")] - before
         self.assertAlmostEqual(remain, llm.LLM_FALLBACK_TTL, delta=5)
 
-    def test_429_through_stream_bans_for_a_day(self):
+    def test_429_through_stream_bans_short(self):
         before = time.time()
-        self._patch_post([_Resp(status=429, reason="Too Many Requests"),
+        self._patch_post([_Resp(status=429, reason=""),
                           _Resp(lines=_sse("ok"))])
         list(llm.call_llm_stream([{"role": "user", "content": "hi"}]))
         remain = llm._DEAD[("volc", "a")] - before
         self.assertGreater(remain, llm.LLM_RATE_LIMIT_TTL - 10)
 
-    def test_429_through_sync_bans_for_a_day(self):
+    def test_429_through_sync_bans_short(self):
         before = time.time()
-        self._patch_post([_Resp(status=429, reason="Too Many Requests"),
+        self._patch_post([_Resp(status=429, reason=""),
                           _Resp(payload={"choices": [
                               {"message": {"content": "ok"}}]})])
         llm.call_llm([{"role": "user", "content": "hi"}])
@@ -319,9 +335,9 @@ class RetrySameCandidateTest(_ChainBase):
         self.assertLess(remain, llm.LLM_CONCURRENCY_TTL + 10)
         self.assertLess(remain, llm.LLM_FALLBACK_TTL)
 
-    def test_quota_429_is_not_retried(self):
-        """额度到顶重试多少次都一样，立刻降级、直接拉黑一天。"""
-        calls = self._patch_post([_Resp(status=429, reason="Too Many Requests"),
+    def test_plain_429_is_not_retried(self):
+        """裸 429（无限流措辞）重试多少次都一样，立刻降级（桩默认错误体「余额不足」）。"""
+        calls = self._patch_post([_Resp(status=429, reason=""),
                                   _Resp(lines=_sse("ok"))])
         list(llm.call_llm_stream([{"role": "user", "content": "hi"}]))
         self.assertEqual(len(calls), 2)
@@ -347,7 +363,7 @@ class RetrySameCandidateTest(_ChainBase):
 
 class StreamFallbackTest(_ChainBase):
     def test_falls_through_to_next_candidate(self):
-        self._patch_post([_Resp(status=429, reason="Too Many Requests"),
+        self._patch_post([_Resp(status=429, reason=""),
                           _Resp(lines=_sse("备胎的回复"))])
         out = list(llm.call_llm_stream([{"role": "user", "content": "hi"}]))
         self.assertEqual(out, [("content", "备胎的回复")])
@@ -425,7 +441,7 @@ class CallLlmFallbackTest(_ChainBase):
         return _Resp(payload={"choices": [{"message": {"content": text}}]})
 
     def test_falls_through_and_returns_text(self):
-        self._patch_post([_Resp(status=429, reason="Too Many Requests"),
+        self._patch_post([_Resp(status=429, reason=""),
                           self._ok("备胎回复")])
         self.assertEqual(llm.call_llm([{"role": "user", "content": "hi"}]),
                          "备胎回复")
