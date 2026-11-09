@@ -21,9 +21,10 @@ import os
 import threading
 import time
 
-from flask import Blueprint, jsonify, request, send_file
+from flask import Blueprint, Response, jsonify, request, send_file
 
-from app import chat_bg, friend_auth, llm, persona, usage, writing_style
+from app import (chat_bg, friend_auth, llm, persona, persona_billing,
+                 usage, writing_style)
 
 log = logging.getLogger("persona_api")
 
@@ -78,6 +79,69 @@ def _persona_chain_down(e):
         "has_custom": bool(getattr(e, "has_custom", False)),
         "detail": str(e)[:160],
     }), 503
+
+
+# ─── 代充计费：请求上下文 + 玩家只读接口（2026-11-10）──────
+#
+# 归属挂在请求线程上：before_request 认一次登录 QQ，teardown_request 摘掉。
+# 后台提炼记忆的线程拿不到它，所以不会误把站主的 Key 记到玩家头上；游客和
+# 没登记过的人 `begin()` 会直接挂空，账本里连零元流水都不会多一条。
+# 放在钩子而不是六个 `set_custom_override` 调用点各包一层：聊天 / 跳过 /
+# 切时段 / 收场 / 跨天早晨……每条支线都会跑 LLM，漏一个就少记一笔。
+
+@bp.before_request
+def _begin_persona_billing():
+    try:
+        persona_billing.begin(_qq())
+    except Exception:                                    # noqa: BLE001
+        log.warning("[persona] 计费上下文挂载失败", exc_info=True)
+
+
+@bp.teardown_request
+def _end_persona_billing(exc):
+    try:
+        persona_billing.end()
+    except Exception:                                    # noqa: BLE001
+        pass
+
+
+def _billing_days():
+    try:
+        return max(1, min(90, int(request.args.get("days") or 7)))
+    except (TypeError, ValueError):
+        return 7
+
+
+@bp.route("/api/persona/billing")
+def billing_view():
+    """「查看」面板：余额 + 最近 N 天的命中/未命中/输出/花费 + 每日横条。
+
+    只读，且只看自己的 QQ——身份由网关注入 / 登录 cookie 决定，客户端传的
+    `qq` 在 5175 那边会被覆盖掉。游客拿到一份全零的空账本。
+    """
+    try:
+        return jsonify({"ok": True,
+                        **persona_billing.summary(_qq(), days=_billing_days())})
+    except Exception:                                    # noqa: BLE001
+        log.exception("[persona] 计费面板读取失败")
+        return jsonify({"ok": False, "error": "账本暂时读不出来"}), 500
+
+
+@bp.route("/api/persona/billing/export.csv")
+def billing_export():
+    """按笔明细 CSV（带 BOM，Excel 直接双击）。同样是只读、只导自己那份。
+
+    不走 `Content-Disposition` 下载：5175 的 `_forward` 只透传少数几个头，
+    附件名会丢。前端改成 fetch 文本 → Blob → <a download>，一条头都不用加。
+    """
+    try:
+        days = _billing_days()
+        rows = persona_billing.read_calls(_qq(), days=days)
+        body = persona_billing.csv_text(rows)
+        return Response(body, mimetype="text/csv; charset=utf-8")
+    except Exception:                                    # noqa: BLE001
+        log.exception("[persona] 计费明细导出失败")
+        return jsonify({"ok": False, "error": "明细暂时导不出来"}), 500
 
 
 # 游客身份 cookie（2026-11-03）。和登录 cookie 分开：游客换浏览器会重来，

@@ -196,9 +196,19 @@ def _note_persona_used(pid, eff):
         _custom_ctx.used = {"kind": "custom",
                             "name": str(eff.get("model") or "自定义模型"),
                             "label": "自定义模型"}
-    else:
-        _custom_ctx.used = {"kind": "public", "name": "公用 V4 Pro",
-                            "label": "公用 V4 Pro（免费）"}
+        return
+    try:
+        # 2026-11-10：代充用户中转站挂了会落到付费官方，不能还标成「免费」。
+        from app import persona_billing
+        if (pid, str(eff.get("model") or "")) == persona_billing.paid_target():
+            _custom_ctx.used = {"kind": "paid",
+                                "name": "官方 DeepSeek（站主代充）",
+                                "label": "官方 DeepSeek（代充余额）"}
+            return
+    except Exception:                # 展示标记坏了不该影响回包
+        pass
+    _custom_ctx.used = {"kind": "public", "name": "公用 V4 Pro",
+                        "label": "公用 V4 Pro（免费）"}
 
 
 def describe_effective(provider=None, model=None):
@@ -462,6 +472,16 @@ def _record_usage(usage, elapsed=None, provider="", model="", kind="llm"):
                            elapsed=elapsed, kind=kind)
     except Exception:                # 统计挂了不能影响主链路
         pass
+    try:
+        # 2026-11-10 代充：同步/流式共用的唯一采集点。只有「真的打到付费段」
+        # 的调用才扣钱；免费中转 / 自带 Key 记零元流水。调用失败没有 usage，
+        # 根本走不到这里，天然不会误扣。
+        from app import persona_billing
+        persona_billing.record_call(provider=provider, model=model,
+                                    hit=hit or 0, miss=miss or 0, out=out,
+                                    kind=kind, tag=tag)
+    except Exception:                # 记账挂了不能影响主链路
+        pass
 
 
 def _log_effective(eff, stream, attempt=None):
@@ -700,9 +720,20 @@ def candidates(provider=None, model=None, require_vision=False, strict=False):
     # 2026-11-09：扮演链路的链尾换成玩家自己的模型，**不接全局降级链**。
     # 那条链第一项就是付费的官方 DeepSeek，中转站闭站时接上去等于站主掏钱。
     # 其它功能（QQ 机器人、漫画、识图……）照旧走全局链，不受影响。
+    #
+    # 2026-11-10 代充：唯一例外是**已充值的人**——在中转站与自带模型之间
+    # 插一段站主付费的官方 DeepSeek，用的就是他自己的余额。没登记 / 余额
+    # 用完 / 后台提炼线程都没有计费上下文，这里就不会插，链子保持原样。
     if persona_chain_active():
-        tail = [(_PERSONA_CUSTOM_PID, str(i))
-                for i in range(len(persona_customs()))]
+        tail = []
+        try:
+            from app import persona_billing
+            if persona_billing.paid_enabled():
+                tail.append(persona_billing.paid_target())
+        except Exception:                # 账本挂了不能拦住聊天
+            log.warning("[persona] 计费闸门读取失败，跳过付费段", exc_info=True)
+        tail += [(_PERSONA_CUSTOM_PID, str(i))
+                 for i in range(len(persona_customs()))]
     else:
         tail = parse_chain(LLM_FALLBACK_CHAIN)
     seen, ordered = set(), []

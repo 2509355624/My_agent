@@ -153,6 +153,40 @@
   .fsCtl { display: flex; align-items: center; gap: 4px; }
   .fsCtl b { font-size: calc(11px * var(--fs)); color: var(--text-mute);
     font-weight: 400; min-width: 34px; text-align: center; }
+  /* 代充计费（2026-11-10）：站主手动登记 QQ + 金额，看余额与逐笔明细。
+     没有在线支付、没有有效期；这一屏只做「记一笔」和「看账」。 */
+  .bMask { position: fixed; inset: 0; background: rgba(0, 0, 0, .62);
+    display: none; align-items: center; justify-content: center;
+    z-index: 70; padding: 16px; }
+  .bMask.on { display: flex; }
+  .bBox { width: min(900px, 100%); max-height: 90vh; overflow-y: auto;
+    background: var(--bg-elev); border: 1px solid var(--border);
+    border-radius: var(--r); padding: 16px 18px; }
+  .bBox h3 { font-size: calc(15px * var(--fs)); margin-bottom: 6px; }
+  .bTip { font-size: calc(11px * var(--fs)); color: var(--text-mute);
+    line-height: 1.75; margin-bottom: 12px; }
+  .bForm { display: flex; gap: 8px; flex-wrap: wrap;
+    align-items: center; margin-bottom: 14px; }
+  .bForm input { padding: 6px 10px; font: inherit;
+    font-size: calc(12px * var(--fs)); color: var(--text);
+    background: var(--bg-input); border: 1px solid var(--border);
+    border-radius: 6px; outline: none; }
+  .bForm input:focus { border-color: var(--accent); }
+  .bForm .qq { width: 130px; } .bForm .amt { width: 110px; }
+  .bForm .nt { flex: 1; min-width: 150px; }
+  .bTbl { width: 100%; border-collapse: collapse;
+    font-size: calc(11.5px * var(--fs)); }
+  .bTbl th, .bTbl td { padding: 6px 8px; text-align: left; white-space: nowrap;
+    border-bottom: 1px solid var(--border-soft); color: var(--text-dim); }
+  .bTbl th { color: var(--text-mute); font-weight: 500; }
+  .bTbl td b { color: var(--text); font-weight: 600; }
+  .bTbl td .lnk { color: var(--accent); cursor: pointer;
+    text-decoration: underline dotted; }
+  .bSub { font-size: calc(12px * var(--fs)); color: var(--text-dim);
+    margin: 14px 0 6px; }
+  .bEmpty { color: var(--text-mute); padding: 14px 2px;
+    font-size: calc(12px * var(--fs)); }
+  .bFoot { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
 </style>
 </head>
 <body>
@@ -197,6 +231,7 @@
         <button class="btn" id="fsReset" title="恢复 100%">A</button>
       </span>
       <a class="btn" href="/characters" title="改角色卡详情文案、换默认/角色背景">角色卡管理</a>
+      <button class="btn" id="btnBilling" title="登记代充、看余额和逐笔用量">代充计费</button>
       <label class="auto"><input type="checkbox" id="auto"> 自动刷新</label>
       <button class="btn" id="refresh">刷新</button>
       <!-- 「这张卡」（2026-11-09）：当前会话演的那张卡的详情。左栏那行也能点，
@@ -221,6 +256,36 @@
     <div class="cWho" id="cdWho"></div>
     <div id="cdBody"></div>
     <button class="btn cClose" id="cdClose">关闭</button>
+  </div>
+</div>
+
+<!-- 代充计费（2026-11-10）：群友转钱 → 站主在这里敲一笔 → 余额到账。
+     纯余额、不过期；真实扣费按官方价目表在 llm 采集点逐笔落 usage 流水。 -->
+<div class="bMask" id="billingMask">
+  <div class="bBox" role="dialog" aria-modal="true" aria-labelledby="bTitle">
+    <h3 id="bTitle">代充计费 · 查看台</h3>
+    <div class="bTip">
+      群友转钱之后在这里登记「QQ + 金额」即可，余额不过期、用完为止。
+      只有中转站连不上、落到站主付费的官方 DeepSeek 时才扣余额；免费中转和
+      玩家自带的 Key 只记 token 不记钱。价格表在 <code>config/persona_billing.json</code>，
+      按官方高峰 / 闲时口径，改价目表不用重启。
+    </div>
+    <div class="bForm">
+      <input class="qq" id="bQq" inputmode="numeric" placeholder="QQ 号">
+      <input class="amt" id="bAmt" inputmode="decimal" value="5" placeholder="金额（元）">
+      <input class="nt" id="bNote" placeholder="备注：微信转账 / 群友红包…">
+      <button class="btn" id="bAdd">登记充值</button>
+      <button class="btn" id="bCsvAll">导出全部 CSV</button>
+    </div>
+    <div class="bSub">已登记账号 <span id="bCnt"></span> · <span id="bPrice"></span></div>
+    <div id="bAccounts" style="overflow-x:auto"></div>
+    <div class="bSub">逐笔明细 <span id="bWho"></span></div>
+    <div id="bRows" style="overflow-x:auto"><div class="bEmpty">点上面一行的 QQ 看这个人的逐笔记录。</div></div>
+    <div class="bFoot">
+      <button class="btn" id="bCsvOne">导出这个人 CSV</button>
+      <button class="btn" id="bRefresh">刷新</button>
+      <button class="btn" id="bClose">关闭</button>
+    </div>
   </div>
 </div>
 
@@ -687,6 +752,140 @@ async function gvAdd() {
   }
 }
 gvLoad();
+
+// ── 代充计费（2026-11-10）─────────────────────────────
+// 只读表格 + 手动登记。身份由 5174 本机直连决定，这里没有支付、没有倒计时。
+let BILL_CUR = "";
+
+function billEsc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+async function billAccounts() {
+  try {
+    const d = await api("/api/persona_admin/billing");
+    $("bCnt").textContent = "(" + d.total + ")";
+    $("bPrice").textContent = "付费模型 " + billEsc(d.paid_model) +
+      (d.peak_now ? " · 现在高峰价" : " · 现在闲时价");
+    const rows = d.accounts || [];
+    if (!rows.length) {
+      $("bAccounts").innerHTML = '<div class="bEmpty">还没登记过代充。' +
+        "填上面的 QQ 和金额，点「登记充值」就会建账。</div>";
+      return;
+    }
+    const head = "<tr><th>QQ</th><th>余额</th><th>累计充值</th>" +
+      "<th>已花费</th><th>充值次数</th><th>最近活动</th></tr>";
+    const body = rows.map(r =>
+      "<tr><td><span class=\"lnk\" data-bq=\"" + billEsc(r.qq) + "\">" +
+      billEsc(r.qq) + "</span></td><td><b>¥" + billEsc(r.balance_text) +
+      "</b></td><td>¥" + billEsc(r.recharged_text) + "</td><td>¥" +
+      billEsc(r.spent_text) + "</td><td>" + Number(r.times || 0) +
+      "</td><td>" + billEsc(r.updated_text) + "</td></tr>").join("");
+    $("bAccounts").innerHTML = '<table class="bTbl"><thead>' + head +
+      "</thead><tbody>" + body + "</tbody></table>";
+  } catch (e) {
+    toast("余额列表读不出来：" + e.message, true);
+  }
+}
+
+async function billRows() {
+  if (!BILL_CUR) return;
+  $("bWho").textContent = "· " + BILL_CUR;
+  try {
+    const d = await api("/api/persona_admin/billing/detail?qq=" +
+      encodeURIComponent(BILL_CUR) + "&days=30");
+    const rows = d.rows || [];
+    if (!rows.length) {
+      $("bRows").innerHTML = '<div class="bEmpty">最近 30 天没有逐笔记录。</div>';
+      return;
+    }
+    const head = "<tr><th>时间</th><th>渠道</th><th>模型</th><th>时段</th>" +
+      "<th>命中</th><th>未命中</th><th>输出</th><th>金额(元)</th><th>会话</th></tr>";
+    const names = { free: "免费中转", paid: "站主代充", custom: "自带模型" };
+    const body = rows.map(r =>
+      "<tr><td>" + billEsc(r.date) + " " + billEsc(r.time) + "</td><td>" +
+      billEsc(names[r.channel] || "其他") + "</td><td>" + billEsc(r.model) +
+      "</td><td>" + (r.peak ? "高峰" : "闲时") + "</td><td>" +
+      Number(r.hit || 0) + "</td><td>" + Number(r.miss || 0) + "</td><td>" +
+      Number(r.out || 0) + "</td><td>" + (Number(r.cost || 0) / 1e6).toFixed(6) +
+      "</td><td>" + billEsc(r.session) + "</td></tr>").join("");
+    $("bRows").innerHTML = '<table class="bTbl"><thead>' + head +
+      "</thead><tbody>" + body + "</tbody></table>";
+  } catch (e) {
+    toast("明细读不出来：" + e.message, true);
+  }
+}
+
+async function billRecharge() {
+  const qq = ($("bQq").value || "").trim();
+  const amount = ($("bAmt").value || "").trim();
+  if (!/^\d{5,12}$/.test(qq)) return toast("QQ 号格式不对", true);
+  try {
+    const d = await api("/api/persona_admin/billing/recharge", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ qq, amount, note: $("bNote").value || "" }),
+    });
+    $("bNote").value = "";
+    BILL_CUR = qq;
+    toast("已登记：余额 ¥" + d.balance_text);
+    billAccounts();
+    billRows();
+  } catch (e) {
+    toast("登记失败：" + e.message, true);
+  }
+}
+
+async function billDownload(qq) {
+  let p = "/api/persona_admin/billing/export.csv?days=90";
+  if (qq) p += "&qq=" + encodeURIComponent(qq);
+  try {
+    const r = await fetch(p);
+    const text = await r.text();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(
+      new Blob([text], { type: "text/csv;charset=utf-8" }));
+    a.download = "代充明细_" + (qq || "全部") + "_" +
+      new Date().toISOString().slice(0, 10) + ".csv";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  } catch (e) {
+    toast("导出失败：" + e.message, true);
+  }
+}
+
+function billOpen() {
+  $("billingMask").classList.add("on");
+  billAccounts();
+  if (BILL_CUR) billRows();
+}
+function billClose() {
+  $("billingMask").classList.remove("on");
+}
+$("btnBilling").onclick = billOpen;
+$("bClose").onclick = billClose;
+$("bRefresh").onclick = () => { billAccounts(); if (BILL_CUR) billRows(); };
+$("bAdd").onclick = billRecharge;
+$("bCsvAll").onclick = () => billDownload("");
+// 没选人时 BILL_CUR 是空串，直接传过去会变成「导出全部」——按钮写着
+// 「这个人」却把所有人倒出来，容易误点。宁可提示一句，不发那个请求。
+$("bCsvOne").onclick = () => {
+  if (!BILL_CUR) { toast("先点上面一行的 QQ 选一个人"); return; }
+  billDownload(BILL_CUR);
+};
+$("bNote").onkeydown = e => { if (e.key === "Enter") billRecharge(); };
+$("bAccounts").addEventListener("click", e => {
+  const a = e.target.closest("[data-bq]");
+  if (a) { BILL_CUR = a.getAttribute("data-bq"); billRows(); }
+});
+$("billingMask").addEventListener("click", e => {
+  if (e.target === $("billingMask")) billClose();
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") billClose();
+});
 </script>
 </body>
 </html>

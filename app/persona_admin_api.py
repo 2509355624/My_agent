@@ -28,9 +28,10 @@ import json
 import logging
 import os
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
-from app import chat_bg, guest, persona, persona_rag
+from app import (chat_bg, friend_auth, guest, persona, persona_billing,
+                 persona_rag)
 from app.config import BASE_DIR
 
 log = logging.getLogger("persona_admin")
@@ -466,3 +467,75 @@ def api_del_admin(qq):
         return _manage_denied(why)
     from app import guest_view
     return jsonify({"ok": True, "ids": guest_view.remove_admin(qq)})
+
+
+# ─── 代充计费：站主手动登记（2026-11-10）────────────────
+#
+# 没有在线支付、没有倒计时、没有有效期：群友转 5 块钱，站主在查看台敲一笔
+# 「QQ + 5」，余额就是 5 元，用完为止。价格表和逐笔流水都在 persona_billing，
+# 这里只做「登记 / 列余额 / 看明细」三个动作。
+#
+# 写操作走 _may_manage()（和切背景、加管理员同一道闸）；读操作跟查看台其它
+# 接口一样不额外鉴权——5174 本身不对公网，5175 也不会转发 persona_admin/*。
+
+def _bill_days():
+    try:
+        return max(1, min(90, int(request.args.get("days") or 7)))
+    except (TypeError, ValueError):
+        return 7
+
+
+@bp.route("/api/persona_admin/billing")
+def api_billing_accounts():
+    rows = []
+    for a in persona_billing.accounts():
+        rows.append({
+            "qq": a.get("qq", ""),
+            "balance": a.get("balance", 0),
+            "balance_text": persona_billing.fmt_yuan(a.get("balance", 0)),
+            "recharged": a.get("recharged", 0),
+            "recharged_text": persona_billing.fmt_yuan(a.get("recharged", 0)),
+            "spent": a.get("spent", 0),
+            "spent_text": persona_billing.fmt_yuan(a.get("spent", 0)),
+            "times": len(a.get("recharges") or []),
+            "updated": a.get("updated") or a.get("created") or 0,
+            "updated_text": _ts(a.get("updated") or a.get("created")),
+        })
+    return jsonify({"ok": True, "total": len(rows), "accounts": rows,
+                    "paid_model": "/".join(persona_billing.paid_target()),
+                    "peak_now": persona_billing.is_peak()})
+
+
+@bp.route("/api/persona_admin/billing/recharge", methods=["POST"])
+def api_billing_recharge():
+    ok, why = _may_manage()
+    if not ok:
+        return _manage_denied(why)
+    body = request.get_json(silent=True) or {}
+    qq = str(body.get("qq") or "").strip()
+    if not friend_auth.QQ_RE.match(qq):
+        return jsonify({"ok": False, "error": "QQ 号看着不对"}), 400
+    acc, err = persona_billing.recharge(qq, body.get("amount"),
+                                        body.get("note"))
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    return jsonify({"ok": True, "qq": qq,
+                    "balance": acc["balance"],
+                    "balance_text": persona_billing.fmt_yuan(acc["balance"])})
+
+
+@bp.route("/api/persona_admin/billing/detail")
+def api_billing_detail():
+    qq = str(request.args.get("qq") or "").strip()
+    days = _bill_days()
+    rows = persona_billing.read_calls(qq, days=days)
+    return jsonify({"ok": True, "qq": qq, "days": days,
+                    "total": len(rows), "rows": rows[:500]})
+
+
+@bp.route("/api/persona_admin/billing/export.csv")
+def api_billing_export():
+    qq = str(request.args.get("qq") or "").strip()
+    body = persona_billing.csv_text(
+        persona_billing.read_calls(qq or None, days=_bill_days()))
+    return Response(body, mimetype="text/csv; charset=utf-8")

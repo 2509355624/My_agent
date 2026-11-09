@@ -963,16 +963,53 @@
     font-size: 11.5px; line-height: 1.7; color: var(--text-dim); }
   .modelBody.on { display: block; }
   .modelBody b { color: var(--text); }
+  /* 代充「查看」面板（2026-11-10）：余额 + 命中/未命中/输出 + 每日横条 + 明细。
+     复用 cmMask 的遮罩壳，横条照 DeepSeek 用量页那样按天排，纯 CSS 不引库。 */
+  .billBox { width: min(620px, 100%); background: var(--bg-elev);
+    border: 1px solid var(--border); border-radius: var(--r); padding: 18px;
+    box-shadow: 0 18px 50px rgba(0,0,0,.6);
+    max-height: calc(var(--vh, 100dvh) - 40px); overflow-y: auto; }
+  .billBox h3 { font-size: 16px; margin-bottom: 4px; }
+  .billBox .bSub { font-size: 11.5px; color: var(--text-mute);
+    line-height: 1.7; margin-bottom: 12px; }
+  .billBal { font-size: 26px; font-weight: 700; color: var(--accent); }
+  .billBal small { font-size: 12px; color: var(--text-dim);
+    font-weight: 400; margin-left: 8px; }
+  .billGrid { display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 8px; margin: 12px 0; }
+  .billGrid > div { background: var(--bg-input); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px; }
+  .billGrid .k { font-size: 10.5px; color: var(--text-mute); }
+  .billGrid .v { font-size: 14px; color: var(--text); margin-top: 3px; }
+  .billSec { font-size: 12px; color: var(--text-dim); margin: 14px 0 6px; }
+  .billBar { display: flex; align-items: center; gap: 8px;
+    margin-bottom: 4px; font-size: 11px; }
+  .billBar .d { width: 52px; color: var(--text-mute); flex: none; }
+  .billBar .t { flex: 1; background: var(--bg-input);
+    border-radius: 4px; height: 12px; overflow: hidden; }
+  .billBar .t i { display: block; height: 100%;
+    background: var(--accent); min-width: 1px; }
+  .billBar .n { width: 80px; text-align: right;
+    color: var(--text-dim); flex: none; }
+  .billTbl { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .billTbl th, .billTbl td { padding: 4px 6px; text-align: left;
+    border-bottom: 1px solid var(--border-soft);
+    color: var(--text-dim); white-space: nowrap; }
+  .billTbl th { color: var(--text-mute); font-weight: 500; }
+  .billTbl td.paid { color: var(--warn); }
+  .billEmpty { font-size: 12px; color: var(--text-mute); padding: 10px 0; }
+  .billBox .wbtns { display: flex; gap: 8px; margin-top: 14px; }
   /* 手机：输入框 16px 起——iOS Safari 聚焦字号小于 16px 会强行放大页面。 */
   @media (max-width: 1000px) {
     .composer textarea, .wipeBox input, .cmBox input,
     .skipCustom input { font-size: 16px; }
     /* 弹窗顶对齐 + 可滚动：iOS 软键盘弹出来时，居中弹窗的输入框会被键盘遮住；
        顶部对齐后用户能自己滚到输入框。 */
-    .wipeMask, .cmMask, .skipMask { align-items: flex-start; overflow-y: auto;
-      padding-top: max(16px, env(safe-area-inset-top)); }
-    .wipeBox, .cmBox, .skipBox { max-height: calc(var(--vh, 100dvh) - 32px);
-      overflow-y: auto; }
+    .wipeMask, .cmMask, .skipMask, .billMask { align-items: flex-start;
+      overflow-y: auto; padding-top: max(16px, env(safe-area-inset-top)); }
+    .wipeBox, .cmBox, .skipBox, .billBox {
+      max-height: calc(var(--vh, 100dvh) - 32px); overflow-y: auto; }
+    .billGrid { grid-template-columns: repeat(2, 1fr); }
     /* 刘海 / 状态栏安全区（viewport-fit=cover 下才不是 0）。 */
     .top { padding-top: max(10px, env(safe-area-inset-top)); }
     .side { padding-top: env(safe-area-inset-top); }
@@ -1258,6 +1295,13 @@
       <button class="btn sm" id="btnCustom">自定义模型</button>
       <div class="cmNow" id="cmNow" style="display:none"></div>
     </div>
+    <!-- 「查看」（2026-11-10）：放右栏最下面，跟「自定义模型」挨着——都是
+         「这一轮用的是谁的钱」那一类入口。没登记过代充的人点开只有全零账本，
+         不会误导他去充值。 -->
+    <div class="st" id="billEntry">
+      <button class="btn sm" id="btnBill" type="button">查看 · 用量 / 余额</button>
+      <div class="cmNow" id="billNow" style="display:none"></div>
+    </div>
   </aside>
 
   <!-- 遮罩必须在 .app 里面！手机端「抽屉灰色点不到角色」的真因：
@@ -1395,6 +1439,43 @@
     <div class="wbtns">
       <button class="btn" id="relayLater">稍后再试</button>
       <button class="btn pri" id="relayCfg">自定义模型</button>
+    </div>
+  </div>
+</div>
+
+<!-- 代充「查看」（2026-11-10）：只读面板。免费中转 / 自带 Key 也记 token，
+     但金额是 0；只有站主代充的官方 DeepSeek 会从余额里扣。 -->
+<div class="cmMask billMask" id="billMask">
+  <div class="billBox" role="dialog" aria-modal="true" aria-labelledby="billTitle">
+    <h3 id="billTitle">我的用量 / 余额</h3>
+    <div class="bSub">
+      余额是站主手动登记的代充额度，<b>不会过期</b>。免费中转站和你自己接的模型
+      照常记账（token 数会算进去），但<b>不扣钱</b>；只有中转站连不上、落到
+      站主付费的官方 DeepSeek 时才按官方价目表扣。
+    </div>
+    <div><span class="billBal" id="billBal">¥0.0000</span>
+      <small id="billPeak"></small></div>
+    <div class="billGrid">
+      <div><div class="k">输入 · 缓存命中</div><div class="v" id="billHit">0</div></div>
+      <div><div class="k">输入 · 缓存未命中</div><div class="v" id="billMiss">0</div></div>
+      <div><div class="k">输出</div><div class="v" id="billOut">0</div></div>
+      <div><div class="k">本期花费</div><div class="v" id="billCost">¥0.0000</div></div>
+    </div>
+    <div class="billSec">
+      每日花费（横条按这段时间的单日最高值归一）
+      <select id="billDays" style="background:var(--bg-input);color:var(--text);
+             border:1px solid var(--border);border-radius:5px;font:inherit;font-size:11px">
+        <option value="7">最近 7 天</option>
+        <option value="30">最近 30 天</option>
+      </select>
+    </div>
+    <div id="billBars"></div>
+    <div class="billSec">逐笔明细 <span id="billCnt"></span></div>
+    <div id="billRows" style="overflow-x:auto"></div>
+    <div class="wbtns">
+      <button class="btn" id="billRefresh" type="button">刷新</button>
+      <button class="btn" id="billCsv" type="button">导出 CSV</button>
+      <button class="btn pri" id="billClose" type="button">关闭</button>
     </div>
   </div>
 </div>
@@ -4974,7 +5055,9 @@ function renderModelUsed(used) {
   if (!el || !used) return;
   const name = used.kind === "public"
     ? "公用 V4 Pro（免费）"
-    : ("自定义模型 · " + (used.name || "未命名"));
+    : used.kind === "paid"
+      ? "官方 DeepSeek（代充余额）"
+      : ("自定义模型 · " + (used.name || "未命名"));
   el.textContent = name;
   $("modelBodyName").textContent = name;
 }
@@ -5614,6 +5697,109 @@ document.addEventListener("click", () => {
   $("btnStyle").classList.remove("on");
 });
 initStyle();
+
+// ── 代充「查看」面板（2026-11-10）───────────────────────
+// 只读：余额、命中/未命中/输出、每日横条、逐笔明细、CSV。身份由服务端认，
+// 前端不传别人的 QQ；CSV 也不走 Content-Disposition（5175 网关不透传那个头），
+// 改成 fetch 文本 → Blob → <a download>。
+const BILL_CH = { free: "免费中转", paid: "站主代充", custom: "自带模型" };
+
+function billYuan(micro) {
+  return "¥" + (Number(micro || 0) / 1e6).toFixed(4);
+}
+function billEscape(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+function billDaysNow() {
+  return Number(($("billDays") || {}).value || 7);
+}
+function renderBill(d) {
+  $("billBal").textContent = "¥" + (d.balance_text || "0.0000");
+  $("billPeak").textContent = d.peak_now
+    ? "现在是官方高峰时段（价格翻倍）" : "现在是官方闲时价";
+  const t = d.total || {};
+  $("billHit").textContent = Number(t.hit || 0).toLocaleString();
+  $("billMiss").textContent = Number(t.miss || 0).toLocaleString();
+  $("billOut").textContent = Number(t.out || 0).toLocaleString();
+  $("billCost").textContent = billYuan(t.cost);
+  $("billCnt").textContent = "（" + Number(t.calls || 0) + " 笔，只列最近 20 笔）";
+  const now = $("billNow");
+  if (d.registered) {
+    now.textContent = "余额 ¥" + (d.balance_text || "0.0000");
+    now.style.display = "";
+  } else {
+    now.style.display = "none";
+  }
+  // 旧 → 新往下排，跟官方用量页一样按时间读；横条只比「花费」，
+  // 免费调用虽然 token 多也不该把柱子撑满。
+  const daily = (d.daily || []).slice().reverse();
+  const top = Math.max(1, ...daily.map(x => Number(x.cost || 0)));
+  $("billBars").innerHTML = daily.length ? daily.map(x => {
+    const c = Number(x.cost || 0);
+    const pct = c ? Math.max(2, Math.round(c / top * 100)) : 0;
+    return '<div class="billBar"><span class="d">' + billEscape(x.date) +
+      '</span><span class="t"><i style="width:' + pct + '%"></i></span>' +
+      '<span class="n">' + billYuan(c) + "</span></div>";
+  }).join("") : '<div class="billEmpty">这段时间还没有记录。</div>';
+  const rows = d.recent || [];
+  if (!rows.length) {
+    $("billRows").innerHTML = '<div class="billEmpty">还没有逐笔记录。' +
+      "免费中转的调用也会记在这里，金额为 0。</div>";
+  } else {
+    const head = "<tr><th>时间</th><th>渠道</th><th>时段</th>" +
+      "<th>命中</th><th>未命中</th><th>输出</th><th>金额</th></tr>";
+    const body = rows.map(r =>
+      "<tr><td>" + billEscape(r.date) + " " + billEscape(r.time) +
+      '</td><td class="' + (r.channel === "paid" ? "paid" : "") + '">' +
+      billEscape(BILL_CH[r.channel] || "其他") + "</td><td>" +
+      (r.peak ? "高峰" : "闲时") + "</td><td>" + Number(r.hit || 0) +
+      "</td><td>" + Number(r.miss || 0) + "</td><td>" + Number(r.out || 0) +
+      "</td><td>" + billYuan(r.cost) + "</td></tr>").join("");
+    $("billRows").innerHTML = '<table class="billTbl"><thead>' + head +
+      "</thead><tbody>" + body + "</tbody></table>";
+  }
+}
+async function loadBill() {
+  try {
+    renderBill(await api("/api/persona/billing?days=" + billDaysNow()));
+  } catch (e) {
+    toast(e.message || "账本读不出来", true);
+  }
+}
+function openBill() {
+  $("billMask").classList.add("on");
+  loadBill();
+}
+function closeBill() {
+  $("billMask").classList.remove("on");
+}
+async function billExport() {
+  let p = "/api/persona/billing/export.csv?days=" + billDaysNow();
+  if (SOLO) p = p.replace(/^\/api\/persona\//, "/api/solo/");
+  try {
+    const r = await fetch(p + "&qq=" + encodeURIComponent(QQ));
+    const text = await r.text();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(
+      new Blob([text], { type: "text/csv;charset=utf-8" }));
+    a.download = "角色扮演用量_" + new Date().toISOString().slice(0, 10) + ".csv";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  } catch (e) {
+    toast("导出失败", true);
+  }
+}
+$("btnBill").onclick = openBill;
+$("billClose").onclick = closeBill;
+$("billRefresh").onclick = loadBill;
+$("billCsv").onclick = billExport;
+$("billDays").onchange = loadBill;
+$("billMask").addEventListener("click", e => {
+  if (e.target === $("billMask")) closeBill();
+});
 
 loadSession();
 </script>
