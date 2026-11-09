@@ -161,6 +161,24 @@ LLM_RATE_LIMIT_TTL = float(os.getenv("LLM_RATE_LIMIT_TTL", "86400"))
 # ——接中转站的意义全废。这里的 60 秒是「等同时在飞的那一两个请求返回」的量级。
 LLM_CONCURRENCY_TTL = float(os.getenv("LLM_CONCURRENCY_TTL", "60"))
 
+# 同一候选内部的**重试**（2026-11-09，用户拍板「重试 3 次之后再降级」）。
+#
+# 起因：中转站常常只是这一秒抽风（502 / 读超时 / 连接被掐），而旧逻辑一失败
+# 就把这个候选拉黑一小时，后面所有轮次都得走付费的官方 DeepSeek——一次瞬时
+# 抖动换一整小时的账单。现在瞬时故障先在**同一个候选**上重试，3 次都不过才
+# 换下一家。
+#
+#   LLM_RETRY_TIMES   单个候选最多尝试几次（含第一次，默认 3）
+#   LLM_RETRY_DELAY   第 n 次重试前等 n×该值秒（默认 1.0 → 等 1s、2s）
+#   LLM_RETRY_BUDGET  单个候选花在重试上的**总时长上限**（秒，默认 20）
+#
+# 预算这条是给「读超时」留的闸：一次超时已经吃满 LLM_REQUEST_TIMEOUT（60s），
+# 再重试三次等于让用户干等三分钟。超预算就直接降级，下一轮反正有 60 秒短
+# 拉黑兜着（见 llm._ttl_for）。
+LLM_RETRY_TIMES = max(1, int(os.getenv("LLM_RETRY_TIMES", "3") or 3))
+LLM_RETRY_DELAY = max(0.0, float(os.getenv("LLM_RETRY_DELAY", "1.0") or 1.0))
+LLM_RETRY_BUDGET = max(0.0, float(os.getenv("LLM_RETRY_BUDGET", "20") or 20))
+
 # 动态 API 地址和模型名（根据 provider 切换）
 if LLM_PROVIDER == "deepseek":
     API_URL = DEEPSEEK_BASE_URL.rstrip("/") + "/chat/completions"

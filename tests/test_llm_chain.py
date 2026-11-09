@@ -75,6 +75,10 @@ class _ChainBase(unittest.TestCase):
         p = mock.patch.object(llm, "LLM_FALLBACK_CHAIN", self.CHAIN)
         p.start()
         self.addCleanup(p.stop)
+        # 重试之间不真睡：用例只关心「试了几次、最后给谁」，不关心等待。
+        q = mock.patch.object(llm, "LLM_RETRY_DELAY", 0)
+        q.start()
+        self.addCleanup(q.stop)
 
     def _patch_post(self, responses):
         """按顺序把响应发给每一次请求；用完最后一条就一直用它。"""
@@ -218,6 +222,25 @@ class RateLimitBanTest(_ChainBase):
     def test_503_short_ttl_is_much_shorter_than_fallback(self):
         self.assertLess(llm.LLM_CONCURRENCY_TTL, llm.LLM_FALLBACK_TTL)
 
+    def test_timeout_and_connection_errors_get_the_short_ttl(self):
+        """读超时 / 连接被掐也是「等一下就好」，不能按硬故障黑一小时。
+
+        2026-11-09 实录：当天 11 次 `Read timed out` 和 1 次
+        `Connection aborted / RemoteDisconnected` 全落了 3600 秒拉黑，
+        中转站一整天被反复关停，后面只能走付费的官方 DeepSeek。
+        """
+        for err in (
+            "HTTPSConnectionPool(host='hfapi.cloud', port=443): "
+            "Read timed out. (read timeout=60)",
+            "('Connection aborted.', RemoteDisconnected('Remote end closed "
+            "connection without response'))",
+        ):
+            self.assertEqual(llm._ttl_for(RuntimeError(err)),
+                             llm.LLM_CONCURRENCY_TTL, err)
+        # 中文系统上的错误原文一个英文关键词都没有，只能按异常类型认
+        self.assertEqual(llm._ttl_for(ConnectionResetError(
+            10054, "远程主机强迫关闭了一个现有的连接。")), llm.LLM_CONCURRENCY_TTL)
+
     def test_explicit_ttl_overrides_the_default(self):
         before = time.time()
         llm._mark_dead(("volc", "a"), "x", ttl=123)
@@ -254,6 +277,72 @@ class RateLimitBanTest(_ChainBase):
         list(llm.call_llm_stream([{"role": "user", "content": "hi"}]))
         remain = llm._DEAD[("volc", "a")] - before
         self.assertLess(remain, llm.LLM_FALLBACK_TTL + 10)
+
+
+class RetrySameCandidateTest(_ChainBase):
+    """瞬时故障先在**同一个候选**上重试，3 次都不过才降级（2026-11-09）。
+
+    起因：中转站只是这一秒抽风（502 / 读超时 / 连接被掐），旧逻辑一失败就
+    拉黑一小时，后面全走付费的官方 DeepSeek。用户拍板「重试 3 次之后再
+    走降级链路」。
+    """
+
+    def test_transient_failure_retries_the_same_candidate_first(self):
+        calls = self._patch_post([_Resp(status=502, reason="Bad Gateway"),
+                                  _Resp(lines=_sse("重试成功"))])
+        out = list(llm.call_llm_stream([{"role": "user", "content": "hi"}]))
+        self.assertEqual(out, [("content", "重试成功")])
+        self.assertEqual(len(calls), 2)
+        # 两次都打同一家（链头），没有提前降级
+        self.assertEqual(len({c["url"] for c in calls}), 1)
+        self.assertEqual(llm._DEAD, {})
+
+    def test_three_attempts_then_falls_through(self):
+        calls = self._patch_post([_Resp(status=502, reason="Bad Gateway"),
+                                  _Resp(status=502, reason="Bad Gateway"),
+                                  _Resp(status=502, reason="Bad Gateway"),
+                                  _Resp(lines=_sse("备胎的回复"))])
+        out = list(llm.call_llm_stream([{"role": "user", "content": "hi"}]))
+        self.assertEqual(out, [("content", "备胎的回复")])
+        self.assertEqual(len(calls), 4)      # 3 次链头 + 1 次备胎
+        self.assertEqual(len({c["url"] for c in calls[:3]}), 1)
+
+    def test_retry_exhausted_ban_is_short(self):
+        """重试也失败后只拉黑 60 秒——下一轮就能再用，不是一小时。"""
+        before = time.time()
+        self._patch_post([_Resp(status=503, reason="Service Unavailable"),
+                          _Resp(status=503, reason="Service Unavailable"),
+                          _Resp(status=503, reason="Service Unavailable"),
+                          _Resp(lines=_sse("ok"))])
+        list(llm.call_llm_stream([{"role": "user", "content": "hi"}]))
+        remain = llm._DEAD[("volc", "a")] - before
+        self.assertLess(remain, llm.LLM_CONCURRENCY_TTL + 10)
+        self.assertLess(remain, llm.LLM_FALLBACK_TTL)
+
+    def test_quota_429_is_not_retried(self):
+        """额度到顶重试多少次都一样，立刻降级、直接拉黑一天。"""
+        calls = self._patch_post([_Resp(status=429, reason="Too Many Requests"),
+                                  _Resp(lines=_sse("ok"))])
+        list(llm.call_llm_stream([{"role": "user", "content": "hi"}]))
+        self.assertEqual(len(calls), 2)
+
+    def test_over_budget_skips_the_retry(self):
+        """读超时已经吃满 60 秒，再重试三次等于让用户干等三分钟 → 直接降级。"""
+        calls = self._patch_post([_Resp(status=504, reason="Gateway Timeout"),
+                                  _Resp(lines=_sse("ok"))])
+        with mock.patch.object(llm, "LLM_RETRY_BUDGET", 0):
+            out = list(llm.call_llm_stream([{"role": "user", "content": "hi"}]))
+        self.assertEqual(out, [("content", "ok")])
+        self.assertEqual(len(calls), 2)
+
+    def test_sync_call_also_retries(self):
+        calls = self._patch_post([
+            _Resp(status=502, reason="Bad Gateway"),
+            _Resp(payload={"choices": [{"message": {"content": "重试成功"}}]})])
+        self.assertEqual(llm.call_llm([{"role": "user", "content": "hi"}]),
+                         "重试成功")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(llm._DEAD, {})
 
 
 class StreamFallbackTest(_ChainBase):

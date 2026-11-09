@@ -13,7 +13,8 @@ from app.config import (API_URL, API_KEY, MODEL, LLM_PROVIDER,
                         PROVIDERS, OLLAMA_BASE_URL, CONTEXT_BUDGET,
                         LLM_FALLBACK_CHAIN, LLM_REQUEST_TIMEOUT,
                         LLM_FALLBACK_TTL, LLM_RATE_LIMIT_TTL,
-                        LLM_CONCURRENCY_TTL, provider_vision)
+                        LLM_CONCURRENCY_TTL, provider_vision,
+                        LLM_RETRY_TIMES, LLM_RETRY_DELAY, LLM_RETRY_BUDGET)
 
 # 诊断行一律走 logging，不走 print——原因见 app/logsetup.py 的模块说明：
 # print 落 stdout，被重定向/管道接管后是块缓冲，日志会「看起来丢了」。
@@ -225,11 +226,20 @@ def call_llm(messages, timeout=None, provider=None, model=None, strict=False,
         if temperature is not None:
             body["temperature"] = float(temperature)
         body.update(_reasoning_field(eff))
-        try:
-            return _call_provider(eff, body, timeout)
-        except Exception as e:
-            last_err = e
-            _mark_dead((pid, mname), _brief(e), ttl=_ttl_for(e))
+        started = time.time()
+        for attempt in range(1, LLM_RETRY_TIMES + 1):
+            try:
+                return _call_provider(eff, body, timeout)
+            except Exception as e:
+                last_err = e
+                wait = _retry_wait(attempt, started, e)
+                if wait is None:
+                    _mark_dead((pid, mname), _brief(e), ttl=_ttl_for(e))
+                    break
+                log.warning("[retry] %s / %s 第 %d/%d 次失败：%s；%.1f 秒后再试",
+                            pid, mname, attempt, LLM_RETRY_TIMES, _brief(e, 80),
+                            wait)
+                time.sleep(wait)
     raise last_err
 
 
@@ -449,7 +459,45 @@ _TRANSIENT_HINTS = (
     "503", "502", "504",
     "service unavailable", "bad gateway", "gateway timeout",
     "temporarily unavailable", "overloaded",
+    # 2026-11-09 补：读超时 / 连接被对端掐断同样是「等一下就好」。
+    # 当天实录：11 次 `Read timed out` 和 1 次 `Connection aborted /
+    # RemoteDisconnected` 全被当成硬故障拉黑 3600 秒，一次秒级抖动把中转站
+    # 关了整整一小时，后面全走付费的官方 DeepSeek。用户原话：「中转站可能
+    # 只是这一秒钟有问题，然后直接就禁言一个小时」。
+    "timed out", "timeout",
+    "connection aborted", "connection reset", "connection error",
+    "remote end closed", "remote disconnected",
 )
+
+# 网络类瞬时异常按类型认（见 _is_transient 的说明）。
+_TRANSIENT_TYPES = (
+    requests.exceptions.Timeout,          # ReadTimeout / ConnectTimeout
+    requests.exceptions.ConnectionError,  # 含 RemoteDisconnected
+    ConnectionError,                      # 含 ConnectionResetError/AbortedError
+    TimeoutError,
+)
+
+
+def _is_transient(err):
+    """瞬时故障：值得在同一个候选上立刻重试，拉黑也只拉短时间。
+
+    - 解析类异常（TypeError/AttributeError/KeyError）= 对方回了 2xx 但 body
+      不成形（null / 缺字段），重试一次多半就好；
+    - 并发冲突（中转站并发上限 2，撞了就回 concurrency）；
+    - 5xx 网关错误 / 读超时 / 连接被掐。
+
+    **429 额度到顶不算**：重试和短拉黑都治不了，得等额度按天重置。
+
+    ⚠️ 网络类异常按**类型**判，不只看字符串：中文系统上
+    `ConnectionResetError(10054)` 的 str 是「远程主机强迫关闭了一个现有的
+    连接」，一个英文关键词都匹配不到（2026-11-09 实测）。
+    """
+    if isinstance(err, (TypeError, AttributeError, KeyError)):
+        return True
+    if isinstance(err, _TRANSIENT_TYPES):
+        return True
+    text = str(err).lower()
+    return any(h in text for h in _CONCURRENCY_HINTS + _TRANSIENT_HINTS)
 
 
 def _ttl_for(err):
@@ -458,9 +506,9 @@ def _ttl_for(err):
     分四档（2026-11-03 加第二档）：
       - **并发冲突** → `LLM_CONCURRENCY_TTL`（默认 60 秒）。判据是错误体里的
         `concurrency` / `too many concurrent`。
-      - **服务端临时不可用（502/503/504）** → 同样 60 秒。中转站的并发上限低，
-        占满了就回 503，本质和并发冲突是同一件事，只是措辞不同。等几十秒、
-        在飞的请求返回之后就能再用，不该按硬故障黑一小时。
+      - **服务端临时不可用（502/503/504、读超时、连接被掐）** → 同样 60 秒。
+        中转站的并发上限低，占满了就回 503，本质和并发冲突是同一件事，只是
+        措辞不同。等几十秒、在飞的请求返回之后就能再用，不该按硬故障黑一小时。
       - **429（额度/频率到顶）** → `LLM_RATE_LIMIT_TTL`（默认 24 小时）。
         免费额度按天重置，短时间重试纯属白撞。
       - **其余**（模型退役、key 失效、网络硬故障）→ `LLM_FALLBACK_TTL`。
@@ -468,20 +516,45 @@ def _ttl_for(err):
     ⚠️ 顺序不能反：并发冲突和临时不可用的响应**也可能是 429**，先按 429 判
     就全被算成额度到顶。
     """
-    text = str(err).lower()
-    # 解析类异常（TypeError/KeyError/AttributeError）= 对方回了 2xx 但 body
-    # 不成形（null / 缺字段）。这是**瞬时**的垃圾响应，不是服务坏了——
-    # 60 秒短拉黑即可。原来落进「其余」档黑 3600s，等于把一次抽风当硬故障
-    # （2026-11-03 实测：官方 DeepSeek 回 null body，被黑了一小时）。
-    if isinstance(err, (TypeError, AttributeError, KeyError)):
+    if _is_transient(err):
         return LLM_CONCURRENCY_TTL
-    if any(h in text for h in _CONCURRENCY_HINTS):
-        return LLM_CONCURRENCY_TTL
-    if any(h in text for h in _TRANSIENT_HINTS):
-        return LLM_CONCURRENCY_TTL
-    if "429" in text:
+    if "429" in str(err).lower():
         return LLM_RATE_LIMIT_TTL
     return LLM_FALLBACK_TTL
+
+
+def _retry_wait(attempt, started, err):
+    """同一候选失败后要不要再试一次 → 需要等待的秒数；不重试返回 None。
+
+    - `attempt`：**已经失败**的次数（1 起）。达到 `LLM_RETRY_TIMES` 就停。
+    - 只有瞬时故障才重试（见 `_is_transient`）；429 额度到顶、key 失效、
+      400 这类重试多少次都一样，立刻降级。
+    - `LLM_RETRY_BUDGET` 是总时长闸：读超时一次就吃掉 60 秒，再重试三次等于
+      让用户干等三分钟，超预算直接降级。
+    """
+    if attempt >= LLM_RETRY_TIMES:
+        return None
+    if not _is_transient(err):
+        return None
+    elapsed = time.time() - started
+    if elapsed >= LLM_RETRY_BUDGET:
+        return None
+    wait = LLM_RETRY_DELAY * attempt
+    if elapsed + wait > LLM_RETRY_BUDGET:
+        return None
+    return wait
+
+
+def _sleep_with_cancel(seconds, cancel_event=None):
+    """睡指定秒数，期间每 0.2 秒看一眼取消信号；被取消返回 False。"""
+    end = time.time() + max(0.0, seconds)
+    while True:
+        if cancel_event is not None and is_cancelled(cancel_event):
+            return False
+        left = end - time.time()
+        if left <= 0:
+            return True
+        time.sleep(min(0.2, left))
 
 
 def _mark_dead(key, reason, ttl=None):
@@ -851,16 +924,26 @@ def call_llm_stream(messages, timeout=None, provider=None, model=None,
             return
         eff = get_effective_config(pid, mname)
         _log_effective(eff, stream=True, attempt=(i + 1, len(targets)))
-        spoke = False
-        try:
-            for kind, text in _stream_once(eff, messages, timeout, cancel_event):
-                if kind == "content":
-                    spoke = True
-                yield kind, text
-            return
-        except Exception as e:
-            if spoke:
-                raise
-            last_err = e
-            _mark_dead((pid, mname), _brief(e), ttl=_ttl_for(e))
+        started = time.time()
+        for attempt in range(1, LLM_RETRY_TIMES + 1):
+            spoke = False
+            try:
+                for kind, text in _stream_once(eff, messages, timeout, cancel_event):
+                    if kind == "content":
+                        spoke = True
+                    yield kind, text
+                return
+            except Exception as e:
+                if spoke:
+                    raise
+                last_err = e
+                wait = _retry_wait(attempt, started, e)
+                if wait is None:
+                    _mark_dead((pid, mname), _brief(e), ttl=_ttl_for(e))
+                    break
+                log.warning("[retry] %s / %s 第 %d/%d 次失败：%s；%.1f 秒后再试",
+                            pid, mname, attempt, LLM_RETRY_TIMES, _brief(e, 80),
+                            wait)
+                if not _sleep_with_cancel(wait, cancel_event):
+                    return
     raise last_err
