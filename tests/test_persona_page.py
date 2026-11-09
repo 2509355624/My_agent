@@ -198,5 +198,72 @@ class BackgroundPoursOnMidTest(unittest.TestCase):
                           "%s 的默认底色被改了，没背景的人也变了" % rule[:-2])
 
 
+class BackgroundFocusTest(unittest.TestCase):
+    """背景纵向取景（2026-11-09 用户要求）。
+
+    场景：电脑端拿一张竖屏立绘当背景，`background-size: cover` 会横向铺满、
+    纵向只剩中间一段，默认居中正好把脸裁掉。用户要「自己控制显示的上下」。
+
+    所以给一根滑块（0~100）控制 `background-position` 的纵向百分比，并且
+    位置跟着背景一起存在本地。四个点必须成立：
+      1. 滑块只在**真有背景图**时露面，没图时收起；
+      2. 位置写在 `#mid` 上，且只在 `has-bg` 时才写（否则会把没背景的栏也
+         设上 position，以后加了背景反而用错位置）；
+      3. `bgStore.write` 不能把 pos 冲掉——换图、设剧照都走它；
+      4. 拖动时只改样式、松手才写 localStorage（data 可能是几 MB 的
+         dataURL，每动一格重写一遍会卡）。
+    """
+
+    def setUp(self):
+        self.html = _read()
+
+    def test_slider_lives_in_the_background_block(self):
+        box = self.html[self.html.index('id="bgBox"'):]
+        box = box[:box.index("</div>", box.index('id="fileBg"'))]
+        self.assertIn('id="bgPos"', box)
+        self.assertIn('id="bgPosRow"', box)
+        self.assertIn('min="0" max="100"', box)
+        self.assertIn(".bgPos { display: flex", self.html)
+
+    def test_position_is_applied_to_mid_only_with_a_background(self):
+        fn = self.html[self.html.index("function applyBgPos("):]
+        fn = fn[:fn.index("\n}\n") + 3]
+        self.assertIn('$("mid")', fn)
+        self.assertIn('host.classList.contains("has-bg")', fn)
+        self.assertIn('host.style.backgroundPosition = "center " + p + "%"', fn)
+        # 缩略图跟着动，用户才知道自己调到了哪一段
+        self.assertIn("objectPosition", fn)
+
+    def test_slider_shows_only_when_there_is_an_image(self):
+        fn = self.html[self.html.index("function renderBg("):]
+        fn = fn[:fn.index("\n}\n") + 3]
+        self.assertIn('$("bgPosRow")', fn)
+        self.assertIn('row.style.display = url ? "" : "none"', fn)
+        self.assertIn("applyBgPos(bgStore.read().pos, false)", fn)
+
+    def test_store_keeps_the_position_when_the_image_changes(self):
+        store = self.html[self.html.index("const bgStore = {"):]
+        store = store[:store.index("\n};")]
+        # 换图 / 设剧照都走 write，它必须把旧 pos 带上
+        self.assertIn("pos: bgPosNum(this.read().pos)", store)
+        # 老记录没有 pos 字段时按居中读，不能变成 NaN
+        self.assertIn("v.pos = bgPosNum(v.pos)", store)
+        self.assertIn("writePos(pos)", store)
+
+    def test_drag_updates_style_and_only_release_persists(self):
+        bind = self.html[self.html.index("(function bindBg() {"):]
+        bind = bind[:bind.index("})();")]
+        self.assertIn('rg.addEventListener("input"', bind)
+        self.assertIn("applyBgPos(rg.value, false)", bind)
+        self.assertIn('rg.addEventListener("change"', bind)
+        self.assertIn("applyBgPos(rg.value, true)", bind)
+
+    def test_pos_number_is_clamped(self):
+        fn = self.html[self.html.index("function bgPosNum("):]
+        fn = fn[:fn.index("\n}\n") + 3]
+        self.assertIn("if (!isFinite(n)) return BG_POS_MID;", fn)
+        self.assertIn("Math.min(100, Math.max(0, Math.round(n)))", fn)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -414,6 +414,16 @@
     display: flex; align-items: center; justify-content: center;
     color: var(--text-mute); font-size: 11px; }
   .bgPrev img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* 背景取景位置（2026-11-09）：`cover` 遇到竖图只会露出一段，默认居中
+     正好把脸裁掉。这根滑块控制 background-position 的纵向百分比——
+     0% 露顶、50% 居中、100% 露底。缩略图同步换 object-position，
+     小图里能看出「现在是偏上还是偏下」。没有背景图时整行隐藏。 */
+  .bgPos { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
+  .bgPos .k { flex: 0 0 auto; font-size: 11px; color: var(--text-mute); }
+  .bgPos input[type="range"] { flex: 1; min-width: 0; height: 18px;
+    accent-color: var(--accent); cursor: pointer; }
+  .bgPos .pv { flex: 0 0 36px; text-align: right; font-size: 11px;
+    color: var(--text-mute); font-variant-numeric: tabular-nums; }
   .bgBtns { display: flex; gap: 6px; }
   .bgBtns > * { flex: 1; }
   /* iOS Safari 对 `hidden` 的文件选择框偶尔不会响应程序化 click；
@@ -1016,6 +1026,13 @@
       <div class="nowrow"><span class="k">背景</span>
         <span class="v" id="sBgName">—</span></div>
       <div class="bgPrev" id="bgPrev">默认</div>
+      <!-- 竖图套电脑宽屏时 cover 会裁掉头，位置交给用户自己定（2026-11-09） -->
+      <div class="bgPos" id="bgPosRow" style="display:none">
+        <span class="k">上下</span>
+        <input type="range" id="bgPos" min="0" max="100" step="1" value="50"
+               aria-label="背景上下位置">
+        <span class="pv" id="bgPosVal">50%</span>
+      </div>
       <div class="bgBtns">
         <button class="btn sm" id="btnBgPick">换背景</button>
         <button class="btn sm" id="btnBgToggle" style="display:none">移除背景</button>
@@ -3195,6 +3212,14 @@ const BG_SRC_NAMES = { local: "你自己换的（本机）", off: "已移除",
                        default: "全局默认", builtin: "内置图", none: "没有" };
 const BG_KEY = "persona_bg_" + (QQ || "local");
 const BG_MAX_CHARS = 3500000;   // dataURL 上限，给其他本地数据留足余量
+const BG_POS_MID = 50;          // 背景纵向取景默认居中（0=露顶，100=露底）
+
+// 存进本地的 pos 一定是 0~100 的整数；老记录没有这个字段就当居中。
+function bgPosNum(v) {
+  const n = Number(v);
+  if (!isFinite(n)) return BG_POS_MID;
+  return Math.min(100, Math.max(0, Math.round(n)));
+}
 
 const bgStore = {
   read() {
@@ -3204,18 +3229,34 @@ const bgStore = {
       // 本来就在 `/api/image/` 下，5174 和 5175 都能取到。
       if (v && (v.state === "off"
                 || (v.state === "image" && v.data)
-                || (v.state === "url" && v.data))) return v;
+                || (v.state === "url" && v.data))) {
+        v.pos = bgPosNum(v.pos);      // 2026-11-09 新增的取景位置
+        return v;
+      }
     } catch (e) {}
-    return { state: "none", data: "" };
+    return { state: "none", data: "", pos: BG_POS_MID };
   },
   write(state, data) {
     try {
       if (state === "none") localStorage.removeItem(BG_KEY);
       else localStorage.setItem(BG_KEY,
-                                JSON.stringify({ state: state, data: data || "" }));
+                                JSON.stringify({ state: state, data: data || "",
+                                  pos: bgPosNum(this.read().pos) }));
       return true;
     } catch (e) {
       return false;                 // 配额满 / 隐私模式，交给调用方提示
+    }
+  },
+  // 只改取景位置，不碰 data：data 可能是几 MB 的 dataURL，整条重写会卡手。
+  writePos(pos) {
+    const cur = this.read();
+    if (cur.state === "none" || cur.state === "off") return true;  // 没图，不用存
+    try {
+      localStorage.setItem(BG_KEY, JSON.stringify(
+        { state: cur.state, data: cur.data || "", pos: bgPosNum(pos) }));
+      return true;
+    } catch (e) {
+      return false;
     }
   },
 };
@@ -3267,6 +3308,26 @@ function compressBg(file) {
   });
 }
 
+// 背景纵向取景（2026-11-09）：竖图套在电脑宽屏上，`cover` 只露出一段，
+// 默认居中往往正好裁掉脸。percent 就是 `background-position` 的纵向百分比，
+// 0 = 图顶对齐（露头）、100 = 图底对齐。缩略图同步动一下，否则用户看不出
+// 自己调到了哪（小图比例跟中栏不同，只看方向，别当预览）。
+function applyBgPos(pos, persist) {
+  const p = bgPosNum(pos);
+  const host = $("mid");
+  if (host && host.classList.contains("has-bg"))
+    host.style.backgroundPosition = "center " + p + "%";
+  const box = $("bgPrev");
+  const im = box && box.querySelector("img");
+  if (im) im.style.objectPosition = "center " + p + "%";
+  const rg = $("bgPos"), pv = $("bgPosVal");
+  if (rg) rg.value = String(p);
+  if (pv) pv.textContent = p + "%";
+  if (persist && !bgStore.writePos(p))
+    toast("本机存储写入失败，这个位置只在本次有效", true);
+  return p;
+}
+
 // url 为空 = 不显示任何背景。mode: on →「移除背景」，off →「恢复背景」，
 // 空 → 按钮隐藏。游客只吃背景图，设置块始终不露面。
 function renderBg(url, label, thumb, mode) {
@@ -3307,6 +3368,11 @@ function renderBg(url, label, thumb, mode) {
     tg.style.display = mode ? "" : "none";
     tg.textContent = mode === "off" ? "恢复背景" : "移除背景";
   }
+  // 取景滑块只在真有图时出现；没有图就一并收起，免得点着没反应。
+  // 放在最后是因为它要读 bgPrev 里刚建好的 <img>。
+  const row = $("bgPosRow");
+  if (row) row.style.display = url ? "" : "none";
+  if (url) applyBgPos(bgStore.read().pos, false);
 }
 
 async function loadBg() {
@@ -3495,6 +3561,13 @@ function closeCardDetail() {
   if (inp) inp.addEventListener("change", uploadBg);
   const toggle = $("btnBgToggle");
   if (toggle) toggle.addEventListener("click", toggleBg);
+  // 取景位置（2026-11-09）：拖动时只改样式，松手才落盘——data 可能是几 MB
+  // 的 dataURL，每动一格就重写一遍 localStorage 会明显卡手。
+  const rg = $("bgPos");
+  if (rg) {
+    rg.addEventListener("input", function () { applyBgPos(rg.value, false); });
+    rg.addEventListener("change", function () { applyBgPos(rg.value, true); });
+  }
 })();
 
 function renderQuota() {
