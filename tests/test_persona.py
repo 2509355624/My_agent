@@ -243,6 +243,66 @@ class CacheWindowTest(unittest.TestCase):
                          persona.HISTORY_LIMIT)
 
 
+class StableNotesTest(PersonaBase):
+    """缓存 Phase B：恒定写法说明并进 system 头，末尾那份精确剔除。
+
+    末尾玩家消息是每轮最后一条，下一轮同一位置会被新追加的两条历史顶掉，
+    所以在 user_block 里怎么重排都吃不到跨轮命中——只有放进 system 头才行。
+    这里同时守住「文字总量不增、tail 仍是最后一句」。
+    """
+
+    def setUp(self):
+        super().setUp()
+        persona.save_cards([_card("纱雾")])
+        persona.switch_line("private_1", persona.find_card("纱雾"))
+
+    def test_stable_blocks_are_constant_and_nonempty(self):
+        blocks = persona._stable_note_blocks()
+        self.assertEqual(len(blocks), 2)
+        self.assertTrue(all(blocks))
+        self.assertEqual(blocks, persona._stable_note_blocks(),
+                         "恒定块必须逐轮逐字节一致，否则会打散整个 head 前缀")
+        self.assertIn("【写这一轮正文时，你必须做到】", "\n".join(blocks))
+
+    def test_strip_removes_only_exact_stable_segments(self):
+        blocks = persona._stable_note_blocks()
+        raw = ("玩家这一句\n\n" + "\n\n".join(blocks)
+               + "\n\n【回忆】她怕打雷。\n\n（尾注）")
+        out = persona._strip_stable_notes(raw)
+        self.assertIn("玩家这一句", out)
+        self.assertIn("【回忆】她怕打雷。", out)
+        self.assertIn("（尾注）", out)
+        for b in blocks:
+            self.assertNotIn(b, out)
+
+    def test_head_owns_the_stable_notes_and_tail_stays_last(self):
+        calls = []
+
+        def fake(msgs, *a, **kw):
+            # 只有主回复带 system 头；裁判是单条 user 消息。
+            if msgs and msgs[0].get("role") == "system":
+                calls.append(msgs)
+                return ("她抬了抬眼。\n画面：close-up\n服饰：white shirt\n"
+                        "心情：平静 强度3\n状态：桌前 · 白衬衫 · 坐着 · 傍晚 · 无")
+            return '{"intent":"neutral","delta":1,"turn_type":"chat"}'
+
+        with mock.patch.object(persona.llm, "call_llm", side_effect=fake):
+            persona.run_turn("private_1", "第一句话。", "private")
+            persona.run_turn("private_1", "第二句话。", "private")
+        heads = [c[0]["content"] for c in calls]
+        lasts = [c[-1]["content"] for c in calls]
+        self.assertEqual(heads[0], heads[1],
+                         "并进来的恒定块不能破坏 head 的跨轮稳定性")
+        for h in heads:
+            self.assertIn("【写这一轮正文时，你必须做到】", h)
+            self.assertIn("## 你能用的东西", h)
+        for u in lasts:
+            self.assertNotIn("【写这一轮正文时，你必须做到】", u)
+            self.assertNotIn("## 你能用的东西", u)
+            self.assertIn("正文用", u.split("\n\n")[-1],
+                          "tail 必须仍是生成前读到的最后一句")
+
+
 class CharNameTest(PersonaBase):
     """自定义女主名字（2026-11-09）：正文/摘要/编剧都用它，卡名继续管命令。"""
 

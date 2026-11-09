@@ -172,6 +172,8 @@ class InjectionTest(unittest.TestCase):
              "confess_name": "想说", "confess_desc": "", "yandere_name": "没有",
              "recent": "", "gday": 1, "gphase": "下午", "gplan": "",
              "profile": "", "said": "走吧，回家吧", "history": "", "ledger": "",
+             # 逐轮状态已从「她是谁」里拆出来，单独留在事实段（前缀缓存）
+             "state_line": "",
              # 成人向状态块（2026-11-08 加）：提示词里多了这个占位，
              # 测试的 format 字典也得带上，否则 KeyError。
              "dev": "（五处都还没被开发过）",
@@ -701,10 +703,12 @@ class JudgeV2PrefixCacheTest(unittest.TestCase):
         return P._SCORE_PROMPT_V2 % d
 
     def test_stable_prefix_is_byte_identical_across_turns(self):
+        # 稳定段现在还吃进了「她是谁 / 道具清单」：profile 已去掉逐轮 state，
+        # 道具清单是常量。变化的是 said / 状态行 / 关系 / 历史 / 账本。
         a = self._fill(said="今天天气不错", relation_name="普通同学",
-                       item_keys="钥匙、旧信", profile="甲，短发")
+                       state_line="桌前 · 白衬衫")
         b = self._fill(said="我把她抱起来放到灶台上", relation_name="恋人",
-                       item_keys="围裙、锅铲、杯子", profile="乙，长发",
+                       state_line="床边 · 睡裙",
                        history="另一段历史", ledger="另一本账",
                        recent="另一条记录", dev="另一组开发度")
         head_a = a.split(self.MARK)[0]
@@ -712,21 +716,28 @@ class JudgeV2PrefixCacheTest(unittest.TestCase):
         self.assertEqual(head_a, head_b)
         # 得够长才跨得过 DeepSeek 64 token 的缓存块粒度
         self.assertGreater(len(head_a), 3000)
+        self.assertIn("## 她是谁", head_a)
+        self.assertIn("## 道具清单", head_a)
+        # 状态没丢，只是挪到了动态段
+        self.assertIn("桌前 · 白衬衫", a.split(self.MARK)[1])
+        self.assertIn("床边 · 睡裙", b.split(self.MARK)[1])
 
     def test_no_dynamic_placeholder_in_the_stable_prefix(self):
-        """facts_guide 是常量可以留；其余占位符都得排在末尾动态段。"""
+        """稳定段只留三个恒定输入；其余占位符都得排在末尾动态段。"""
         stable = P._SCORE_PROMPT_V2.split(self.MARK)[0]
         left = set(re.findall(r"%\(([^)]+)\)", stable))
-        self.assertTrue(left <= {"facts_guide"}, left)
+        self.assertTrue(left <= {"facts_guide", "profile", "item_keys"}, left)
 
     def test_dynamic_values_only_appear_after_the_marker(self):
-        text = self._fill(said="一句独一无二的原话", item_keys="独一份的道具")
+        text = self._fill(said="一句独一无二的原话",
+                          state_line="桌前 · 白衬衫")
         cut = text.index(self.MARK)
         self.assertGreater(text.index("一句独一无二的原话"), cut)
-        self.assertGreater(text.index("独一份的道具"), cut)
-        # 玩家这一句仍要贴着生成点，不能被道具清单挤到中间
+        self.assertGreater(text.index("桌前 · 白衬衫"), cut)
+        # 道具清单是常量，挪到 marker 之前吃缓存；玩家这一句仍贴着生成点
+        self.assertLess(text.index("## 道具清单"), cut)
         self.assertGreater(text.index("一句独一无二的原话"),
-                           text.index("独一份的道具"))
+                           text.index("## 道具清单"))
 
     def test_judge_v2_sends_one_user_message_with_a_stable_head(self):
         """端到端：两轮不同状态/不同原话，发出去的 system 前缀逐字节相同。"""
