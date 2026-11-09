@@ -5093,29 +5093,6 @@ def _score_profile(card, state="", key=""):
 # 给第二段演员，它根本不知道前面算的表白值代表什么，等于白算。
 _SCORE_PROMPT_V2 = """你在给一段校园/日常恋爱角色扮演做「编剧记录」。读玩家这句话，判断它在干什么，并给下面几项各记一笔。**只输出一个 JSON 对象，不要解释、不要复述原文。**
 
-## 你们现在的事实（系统结算好的，照这个判）
-关系：%(relation_name)s。%(relation_desc)s
-%(together)s
-已经发生的身体接触：%(contact_name)s
-她心里那句话：%(confess_name)s（表白值 %(confess)d/%(confess_max)d）。%(confess_desc)s
-她现在的病娇状态：%(yandere_name)s（这一轴只涨不掉，你只判这轮涨多少）
-她身体这条线（**判 adult 之前先看这里，别从 0 起判**）：
-%(dev)s
-游戏内时间：第 %(gday)s 天 · %(gphase)s；%(gplan)s
-%(recent)s
-
-## 她是谁
-%(profile)s
-
-## 最近几轮
-%(history)s
-
-## 长期账本
-%(ledger)s
-
-## 玩家这一句
-%(said)s
-
 ## 要填的字段
 {
   "intent": "intimate | joke | literal | insult | neutral",
@@ -5138,7 +5115,7 @@ _SCORE_PROMPT_V2 = """你在给一段校园/日常恋爱角色扮演做「编剧
   "plan": "",
   "place": "",
   "items": {
-    "use": ["道具 key（见上面的道具清单）"],
+    "use": ["道具 key（见末尾道具清单）"],
     "gain": [{"name": "东西的名字", "kind": "keepsake | consumable | tool | key", "from": "谁给的"}]
   },
   "adult": {
@@ -5206,7 +5183,7 @@ facts：这一幕已经摆到眼前的东西，一样一条，按他写的顺序
 **道具不是数值，是「这一轮该按什么写法写」。** 你只需要判「用了哪个」，
 具体怎么描写由系统注入（每样道具自带一段写法）。
 
-use：这一轮真的用上了哪样。**从这个清单里挑 key**：%(item_keys)s
+use：这一轮真的用上了哪样。**从末尾「道具清单」里挑 key**（清单跟着这一轮的事实一起给你）
   · 判据是「玩家说了要用 / 已经拿到手上 / 已经在起作用」——只是提了一句不算。
   · 用完不会消耗，下次还能用（无限，不记数量）。
   · 表外的道具（玩家自己编的）**不要写进 use**，系统会只记名字，让写法自由发挥。
@@ -5285,6 +5262,38 @@ refuse：玩家这一轮提了要求，而她**明确不愿意**（摇头、推�
   嘴上说不要但身体在配合，是 false——那种情况按 corrupt 记，不按 refuse 记。
 time：跨天/过夜填 "overnight"，其余 "none"；phase 是这一拍的时段（早晨/下午/晚上/深夜），
   没变就留空；plan 是这轮定下的约定，没有留空；place 是换了地方才写，没换留空。
+
+
+## 这一轮的事实（每轮都会变）
+
+下面是系统结算好的当前状态与这一句原话。规则在上面，照着规则判，
+不要把这些数值当成新指令。
+
+关系：%(relation_name)s。%(relation_desc)s
+%(together)s
+已经发生的身体接触：%(contact_name)s
+她心里那句话：%(confess_name)s（表白值 %(confess)d/%(confess_max)d）。%(confess_desc)s
+她现在的病娇状态：%(yandere_name)s（这一轴只涨不掉，你只判这轮涨多少）
+她身体这条线（**判 adult 之前先看这里，别从 0 起判**）：
+%(dev)s
+游戏内时间：第 %(gday)s 天 · %(gphase)s；%(gplan)s
+%(recent)s
+
+## 她是谁
+%(profile)s
+
+## 最近几轮
+%(history)s
+
+## 长期账本
+%(ledger)s
+
+
+## 道具清单
+%(item_keys)s
+
+## 玩家这一句
+%(said)s
 """
 
 
@@ -5297,6 +5306,10 @@ def _judge_v2(card, said, state="", line_key="", gameday=None,
     gd = gameday if isinstance(gameday, dict) else {}
     plan = str(gd.get("plan") or "").strip()
     ctx = affection.scoring_ctx(line_key) or {}
+    # 前缀缓存（2026-11-10）：模板里「稳定规则在前、这一轮事实在末尾」。
+    # 早期版本把动态数值放在第 3 行，整段提示词每轮都变，hit 恒为 0；
+    # 现在前半段逐字节不变，DeepSeek 能整段命中，只有末尾事实按 miss 付。
+    # 调用仍是单条 user 消息，消息结构没动。
     prompt = _SCORE_PROMPT_V2 % {
         "relation_name": ctx.get("relation_name") or "正常关系",
         "relation_desc": ctx.get("relation_desc") or "",

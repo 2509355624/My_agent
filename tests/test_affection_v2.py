@@ -13,6 +13,7 @@
 """
 import copy
 import os
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -677,6 +678,82 @@ class CardStartTest(unittest.TestCase):
                            "start_value": 80})
         res, _ = _settle(rec, {"value_delta": 0, "reason": "闲聊"})
         self.assertFalse(res.get("auto_confess"))
+
+
+class JudgeV2PrefixCacheTest(unittest.TestCase):
+    """2026-11-10：v2 裁判模板「稳定规则在前、这一轮事实在末尾」。
+
+    旧模板第 3 行就是关系档、表白值、游戏内天数这些逐轮变的数值，整段
+    提示词每轮都变，DeepSeek 前缀缓存 hit 恒为 0，5,500 token 全价重付。
+    现在前半段逐字节不变，只有末尾事实按 miss 付。
+
+    这里守的是**口径**而不是措辞：动态占位符一个都不许留在稳定段里。
+    以后往模板里加字段，加错了会立刻红。
+    """
+
+    MARK = "## 这一轮的事实"
+
+    def _fill(self, **over):
+        """按模板占位符的类型填一份可 format 的 dict。"""
+        ph = re.findall(r"%\(([^)]+)\)([sd])", P._SCORE_PROMPT_V2)
+        d = {k: (7 if t == "d" else "样本内容") for k, t in ph}
+        d.update(over)
+        return P._SCORE_PROMPT_V2 % d
+
+    def test_stable_prefix_is_byte_identical_across_turns(self):
+        a = self._fill(said="今天天气不错", relation_name="普通同学",
+                       item_keys="钥匙、旧信", profile="甲，短发")
+        b = self._fill(said="我把她抱起来放到灶台上", relation_name="恋人",
+                       item_keys="围裙、锅铲、杯子", profile="乙，长发",
+                       history="另一段历史", ledger="另一本账",
+                       recent="另一条记录", dev="另一组开发度")
+        head_a = a.split(self.MARK)[0]
+        head_b = b.split(self.MARK)[0]
+        self.assertEqual(head_a, head_b)
+        # 得够长才跨得过 DeepSeek 64 token 的缓存块粒度
+        self.assertGreater(len(head_a), 3000)
+
+    def test_no_dynamic_placeholder_in_the_stable_prefix(self):
+        """facts_guide 是常量可以留；其余占位符都得排在末尾动态段。"""
+        stable = P._SCORE_PROMPT_V2.split(self.MARK)[0]
+        left = set(re.findall(r"%\(([^)]+)\)", stable))
+        self.assertTrue(left <= {"facts_guide"}, left)
+
+    def test_dynamic_values_only_appear_after_the_marker(self):
+        text = self._fill(said="一句独一无二的原话", item_keys="独一份的道具")
+        cut = text.index(self.MARK)
+        self.assertGreater(text.index("一句独一无二的原话"), cut)
+        self.assertGreater(text.index("独一份的道具"), cut)
+        # 玩家这一句仍要贴着生成点，不能被道具清单挤到中间
+        self.assertGreater(text.index("一句独一无二的原话"),
+                           text.index("独一份的道具"))
+
+    def test_judge_v2_sends_one_user_message_with_a_stable_head(self):
+        """端到端：两轮不同状态/不同原话，发出去的 system 前缀逐字节相同。"""
+        replies = [
+            '{"intent":"neutral","note":"闲聊","delta":1,'
+            '"turn_type":"chat","facts":[],"addressed":true,"secret":false}',
+            '{"intent":"intimate","note":"抱她","delta":3,'
+            '"turn_type":"action","facts":[],"addressed":true,"secret":false}',
+        ]
+        ctxs = [{"relation_name": "普通同学", "relation_desc": "还生分",
+                 "confess": 3, "confess_max": 50,
+                 "recent": "（你们还没什么交集）"},
+                {"relation_name": "恋人", "relation_desc": "已经认了",
+                 "confess": 31, "confess_max": 50,
+                 "recent": "第 6 天，她家厨房，抱过"}]
+        seen = []
+        with mock.patch.object(P, "_llm_call", side_effect=replies) as m, \
+             mock.patch.object(P.affection, "scoring_ctx",
+                               side_effect=ctxs), \
+             mock.patch.object(P, "_score_profile", return_value="她是谁"):
+            for said in ("今天天气不错", "我把她抱起来"):
+                P._judge_v2({"name": "甲"}, said, line_key="t_cache")
+            seen = [c[0][0][0]["content"] for c in m.call_args_list]
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(seen[0].split(self.MARK)[0],
+                         seen[1].split(self.MARK)[0])
+        self.assertIn("我把她抱起来", seen[1])
 
 
 if __name__ == "__main__":
