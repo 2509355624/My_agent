@@ -3837,6 +3837,22 @@ def _v2_recent(rec):
     return ("最近发生：\n" + "\n".join(rows)) if rows else "（你们还没什么交集）"
 
 
+def _confess_label(rec, cfg):
+    """表白那一行的名字/说明。已经在一起 → 「已表白」（配置可改）。
+
+    2026-11-09 用户拍板：表白值开口之后，这一行不要再写「该她开口了」，
+    统一改成「已表白」——否则面板一边显示恋人，一边显示「等她开口」。
+    """
+    cscfg = cfg.get("confess") or {}
+    done = cscfg.get("done") if isinstance(cscfg.get("done"), dict) else {}
+    if bool(rec.get("together")):
+        return (str(done.get("name") or "已表白"),
+                str(done.get("desc")
+                    or "这句话已经说出口了，名分定了；不用再攒，也不用再等她开口。"))
+    cs = _v2_stage("confess", rec.get("confess"), cfg)
+    return str(cs.get("name") or ""), str(cs.get("desc") or "")
+
+
 def _v2_status(rec, card=None):
     """网页/管理页的只读快照。字段名沿用 v1，前端旧的 renderAff 不会崩。"""
     cfg = _v2_config()
@@ -3844,8 +3860,8 @@ def _v2_status(rec, card=None):
     together = bool(rec.get("together"))
     t = _v2_tier(value, together, cfg)
     contact, deg = _v2_contact_level(rec, cfg)
-    cs = _v2_stage("confess", rec.get("confess"), cfg)
     ys = _v2_stage("yandere", rec.get("yandere"), cfg)
+    cname, _cdesc = _confess_label(rec, cfg)
     return {
         "schema": V2_SCHEMA,
         "mode": str(rec.get("mode") or MODE_RAID),
@@ -3862,7 +3878,7 @@ def _v2_status(rec, card=None):
         "corrupt": 0, "corruptName": "", "submit": 0, "submitName": "",
         "contactName": str(contact.get("name") or ""),
         "confess": _v2_i(rec.get("confess")),
-        "confessName": str(cs.get("name") or ""),
+        "confessName": cname,
         "yandere": _v2_i(rec.get("yandere")),
         "yandereName": str(ys.get("name") or ""),
         "together": together,
@@ -3956,6 +3972,7 @@ def _v2_panel(rec, card=None):
     contact, deg = _v2_contact_level(rec, cfg)
     cs = _v2_stage("confess", confess, cfg)
     ys = _v2_stage("yandere", yandere, cfg)
+    cname, cdesc = _confess_label(rec, cfg)
     vcfg = cfg.get("value") or {}
     ccfg = cfg.get("contacts") or {}
     cscfg = cfg.get("confess") or {}
@@ -3982,6 +3999,17 @@ def _v2_panel(rec, card=None):
             "excerpt": str(c.get("excerpt") or "")[:120],
             "first": bool(c.get("first")),
         })
+    confess_rows = _v2_rows(cscfg.get("stages"), str(cs.get("key") or ""),
+                            confess)
+    if together:
+        # 已经在一起：配置里「该她开口了」那一档降成「走过」，末尾补一行
+        # 「已表白」作为当前档（2026-11-09 用户拍板）。
+        confess_rows = [dict(r, state=("passed" if r.get("state") == "current"
+                                       else r.get("state")))
+                        for r in confess_rows]
+        confess_rows.append({"key": "done", "name": cname, "gate": confess,
+                             "state": "current", "gateText": str(confess),
+                             "desc": cdesc, "hint": ""})
     return {
         "schema": V2_SCHEMA,
         "value": value,
@@ -3993,8 +4021,8 @@ def _v2_panel(rec, card=None):
         "contacts": contacts,
         "confess": confess,
         "confessMax": _v2_i(cscfg.get("max"), 50),
-        "confessName": str(cs.get("name") or ""),
-        "confessDesc": str(cs.get("desc") or ""),
+        "confessName": cname,
+        "confessDesc": cdesc,
         "yandere": yandere,
         "yandereName": str(ys.get("name") or ""),
         "together": together,
@@ -4010,8 +4038,7 @@ def _v2_panel(rec, card=None):
                              together=together, confess_gate=confess_gate),
         "contactRows": _v2_rows(levels, str(contact.get("key") or ""), deg,
                                 gate_field="degree", degree_fmt=True),
-        "confessRows": _v2_rows(cscfg.get("stages"), str(cs.get("key") or ""),
-                                confess),
+        "confessRows": confess_rows,
         "yandereRows": _v2_rows(ycfg.get("stages"), str(ys.get("key") or ""),
                                 yandere),
         "day": _v2_i(rec.get("day")),
@@ -4039,8 +4066,8 @@ def _v2_scoring_ctx(rec, card=None):
     together = bool(rec.get("together"))
     t = _v2_tier(value, together, cfg)
     contact, deg = _v2_contact_level(rec, cfg)
-    cs = _v2_stage("confess", rec.get("confess"), cfg)
     ys = _v2_stage("yandere", rec.get("yandere"), cfg)
+    cname, cdesc = _confess_label(rec, cfg)
     # 身体这条线（2026-11-08）：编剧判涨幅时要看到「现在到哪了」，否则它没有
     # 参照系——实测全给 0（压墙、「叫主人」都判了个 corrupt=0、submit=0）。
     _value_negative = value < 0
@@ -4085,8 +4112,8 @@ def _v2_scoring_ctx(rec, card=None):
         "contact_name": str(contact.get("name") or ""),
         "confess": _v2_i(rec.get("confess")),
         "confess_max": _v2_i((cfg.get("confess") or {}).get("max"), 50),
-        "confess_name": str(cs.get("name") or ""),
-        "confess_desc": str(cs.get("desc") or ""),
+        "confess_name": cname,
+        "confess_desc": cdesc,
         "yandere": _v2_i(rec.get("yandere")),
         "yandere_name": str(ys.get("name") or ""),
         "together": together,
@@ -4121,6 +4148,29 @@ def _v2_stage_line(label, value, stages, vmax):
     return "\n".join(out)
 
 
+def _v2_tier_line(value, together, cfg, vmax):
+    """感情轴读数：按**两段式闸后**的档位写，没表白不会显示「恋人」。
+
+    2026-11-09 修：原先这里直接拿 `value` 去套 `tiers`，value=100 但
+    `together=False` 时会写成「恋人」——面板上是「认准你了」，演员却被
+    告知是恋人，两边对不上。档位必须和 `_v2_tier` 走同一套闸门。
+    """
+    cur = _v2_tier(value, together, cfg)
+    rows = [t for t in (cfg.get("tiers") or []) if isinstance(t, dict)]
+    lo = _v2_i(cur.get("min"))
+    ups = [t for t in rows
+           if _v2_i(t.get("min")) > lo
+           and not (_v2_i(t.get("min")) >= 50 and not together)]
+    hi = (_v2_i(min(ups, key=lambda t: _v2_i(t.get("min"))).get("min")) - 1
+          if ups else vmax)
+    out = ["感情 %d/%d —— %s（%d~%d）"
+           % (value, vmax, cur.get("name") or "?", lo, hi)]
+    desc = str(cur.get("desc") or "").strip()
+    if desc:
+        out.append("  " + desc)
+    return "\n".join(out)
+
+
 def _v2_injection(res):
     """给第二段演员的事实块。**全部中文自然语言**——只扔 confess / yandere
     这种英文字段名，演员根本不知道前面那个数是什么意思，等于白算。
@@ -4135,22 +4185,33 @@ def _v2_injection(res):
     vmax = _v2_i((cfg.get("value") or {}).get("max"), 100)
     cmax = _v2_i((cfg.get("confess") or {}).get("max"), 50)
     ymax = _v2_i((cfg.get("yandere") or {}).get("max"), 100)
+    together = bool(res.get("together"))
+    confess = _v2_i(res.get("confess"))
     lines = ["## 她现在在哪（系统按状态结算的事实，照这个演，不要自己改）", ""]
-    for row in (
-        _v2_stage_line("感情", _v2_i(res.get("value")),
-                       cfg.get("tiers"), vmax),
-        _v2_stage_line("她心里那句话", _v2_i(res.get("confess")),
-                       (cfg.get("confess") or {}).get("stages"), cmax),
-        _v2_stage_line("病娇", _v2_i(res.get("yandere")),
-                       (cfg.get("yandere") or {}).get("stages"), ymax),
-    ):
+    rows = [_v2_tier_line(_v2_i(res.get("value")), together, cfg, vmax)]
+    if together:
+        # 已经在一起：表白这件事是**既成事实**，不能再让她演「还没说出口」。
+        # 2026-11-09 修：原先无论在不在一起都写「该她开口了 / 不是她现在就要
+        # 开口」，玩家明明已经是恋人，正文还在拉扯「这样算什么」。
+        rows.append("她心里那句话 %d/%d —— 已经说开了（表白/答应这件事已经发生，"
+                    "不用再攒，也不用再等她开口）" % (confess, cmax))
+    else:
+        rows.append(_v2_stage_line("她心里那句话", confess,
+                                   (cfg.get("confess") or {}).get("stages"), cmax))
+    rows.append(_v2_stage_line("病娇", _v2_i(res.get("yandere")),
+                               (cfg.get("yandere") or {}).get("stages"), ymax))
+    for row in rows:
         if row:
             lines.append(row)
             lines.append("")
     lines.append("这些数是后台记的，她不会说出口，也不会拿它当理由；你按档位对应的"
                  "那个她去演，别自己改数、别在正文里报数。")
-    lines.append("「她心里那句话」只说明她把话攒到了哪一步——这不是分数解锁，"
-                 "也不是她现在就要开口。")
+    if together:
+        lines.append("**你们已经在一起了。**名分是既成事实，按恋人的方式说话做事，"
+                     "不要再演「我们这样算什么」「还没跟他挑明」那一套。")
+    else:
+        lines.append("「她心里那句话」只说明她把话攒到了哪一步——这不是分数解锁，"
+                     "也不是她现在就要开口。")
     # 全书索引（2026-11-09）：这本书第 1 节写的是**旧标尺**（肢体接触 / 开始凿
     # 那一套），和这条线用的档位名对不上——不点破的话，模型会拿错表对号。
     # 身体那几条轴的分档文案由 `adult_state.block()` 直接给中文，也不用回书里翻。
@@ -4285,8 +4346,8 @@ def _v2_settle(line_key, ent, rec, score, game_day=None):
 
     t = _v2_tier(value, bool(rec.get("together")), cfg)
     rec["tier"] = str(t.get("key") or "")
-    cs = _v2_stage("confess", confess, cfg)
     ys = _v2_stage("yandere", yandere, cfg)
+    cname, cdesc = _confess_label(rec, cfg)
 
     # 女生主动表白：满值 + 感情线到「认准你了」+ 还没在一起，只触发一次。
     auto = (cfg.get("confess") or {}).get("auto") or {}
@@ -4316,8 +4377,8 @@ def _v2_settle(line_key, ent, rec, score, game_day=None):
         "contactDegree": deg,
         "contacts": rec.get("contacts") or [],
         "new_first": new_first,
-        "confess": confess, "confessName": str(cs.get("name") or ""),
-        "confessDesc": str(cs.get("desc") or ""),
+        "confess": confess, "confessName": cname,
+        "confessDesc": cdesc,
         "yandere": yandere, "yandereName": str(ys.get("name") or ""),
         "yandere_event": yandere_event,
         "together": bool(rec.get("together")),

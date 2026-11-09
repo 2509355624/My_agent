@@ -13,10 +13,12 @@
 """
 import copy
 import os
+import tempfile
 import unittest
 from unittest import mock
 
 import app.affection as A
+import app.agents as agents
 import app.persona as P
 
 
@@ -183,6 +185,30 @@ class InjectionTest(unittest.TestCase):
     def test_dynamic_block_is_silent_for_v2(self):
         self.assertEqual(A.dynamic_block({"active": True, "schema": 2}), "")
 
+    def test_injection_says_together_is_a_done_deal(self):
+        """已经是恋人：注入必须说「在一起了」，不能再给「还没开口」的提示。
+
+        2026-11-09 用户实录：好感 100/恋人、表白值 50，正文还在拉扯
+        「我们这样算什么」——因为注入里无论在不在一起都写着「该她开口了 /
+        也不是她现在就要开口」，演员照着「还没挑明」演。
+        """
+        r = _rec(value=100, confess=50, together=True)
+        res, _ = _settle(r, {})
+        txt = A._v2_injection(res)
+        self.assertIn("恋人", txt)
+        self.assertIn("你们已经在一起了", txt)
+        self.assertIn("已经说开了", txt)
+        self.assertNotIn("也不是她现在就要开口", txt)
+
+    def test_injection_keeps_the_two_stage_gate_when_not_together(self):
+        """没表白时好感再高也只能读成「认准你了」，不能提前写成恋人。"""
+        r = _rec(value=100, confess=50)
+        res, _ = _settle(r, {})
+        txt = A._v2_injection(res)
+        self.assertIn("认准你了", txt)
+        self.assertNotIn("—— 恋人", txt)
+        self.assertIn("也不是她现在就要开口", txt)
+
     def test_tail_line_has_no_gate_numbers(self):
         r = _rec(value=26, confess=18)
         res, _ = _settle(r, {})
@@ -226,6 +252,19 @@ class PanelNumbersTest(unittest.TestCase):
                           if r["state"] == "current"], ["开始在意"])
         self.assertEqual([r["name"] for r in p["contactRows"]
                           if r["state"] == "current"], ["有过意外接触"])
+
+    def test_confess_row_becomes_confessed_after_together(self):
+        """已经在一起时，表白那一行显示「已表白」而不是「该她开口了」。"""
+        p = A._v2_panel(_rec(value=100, confess=50, together=True))
+        self.assertEqual(p["confessName"], "已表白")
+        self.assertEqual([r["name"] for r in p["confessRows"]
+                          if r["state"] == "current"], ["已表白"])
+        self.assertEqual([r["name"] for r in p["confessRows"]
+                          if r["state"] == "passed"][-1], "该她开口了")
+
+    def test_confess_row_stays_open_before_together(self):
+        p = A._v2_panel(_rec(value=45, confess=50))
+        self.assertEqual(p["confessName"], "该她开口了")
 
     def test_negative_tiers_never_reach_the_panel(self):
         p = A._v2_panel(_rec(value=26))
@@ -312,6 +351,88 @@ class TwoSegmentConfessionTest(unittest.TestCase):
     def test_task_does_not_ask_for_an_ending(self):
         self.assertIn("不要写成收场", P._AUTO_CONFESS_TASK)
         self.assertIn("接着刚才的场景", P._AUTO_CONFESS_TASK)
+
+
+class AutoConfessWiringTest(unittest.TestCase):
+    """表白值满 50：run_turn 真的会再发一次调用，并把告白接在正文后面。
+
+    2026-11-09 核查用户提问时补的接线测试。`ConfessionTest` 只测结算器
+    会不会置 `auto_confess`，不测 persona 有没有真去发第二段；这里把
+    `run_turn` 整条路跑一遍（模型调用打桩，不联网）。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = os.path.join(self.tmp.name, "agents")
+        os.makedirs(root, exist_ok=True)
+        p = mock.patch.object(agents, "AGENTS_DIR", root)
+        p.start()
+        self.addCleanup(p.stop)
+        q = mock.patch.object(
+            P, "_STATE_PATH",
+            os.path.join(self.tmp.name, "state", "persona_sessions.json"))
+        q.start()
+        self.addCleanup(q.stop)
+        agents.clear_cache()
+        self.addCleanup(agents.clear_cache)
+        P.save_cards([{"name": "纱雾", "systemPrompt": "你是纱雾。"}])
+        P.switch_line("private_1", P.find_card("纱雾"))
+        self.line = P.resolve_line("private_1")
+
+    def _aff(self, **kw):
+        base = {"schema": 2, "active": True, "value": 60, "tier": "sure",
+                "tierName": "认准你了", "relationDesc": "", "together": False,
+                "confess": 50, "confessName": "该她开口了", "confessDesc": "",
+                "confessMax": 50, "contacts": [], "contactName": "还没碰过",
+                "contactDegree": 0, "yandere": 0, "yandereName": "",
+                "arousal": 0, "excite": 0, "corrupt": 0, "submit": 0,
+                "auto_confess": True}
+        base.update(kw)
+        return base
+
+    def _run(self, aff):
+        calls = []
+        replies = [
+            "她把杯子放下，抬眼看你。\n画面：1girl\n心情：紧张 强度5\n"
+            "状态：桌边 · 校服 · 无 · 傍晚 · 无",
+            "她攥紧了袖口。「我们在一起吧。」"]
+
+        def fake(msgs, **kw):
+            calls.append(msgs)
+            return replies[min(len(calls) - 1, 1)]
+
+        with mock.patch.object(P, "_judge_v2",
+                               return_value=(None, "", {"delta": 0})), \
+                mock.patch.object(P.affection, "is_raid", return_value=True), \
+                mock.patch.object(P.affection, "is_v2", return_value=True), \
+                mock.patch.object(P.affection, "settle", return_value=aff), \
+                mock.patch.object(P.affection, "injection_block",
+                                  return_value=""), \
+                mock.patch.object(P.affection, "dynamic_block",
+                                  return_value=""), \
+                mock.patch.object(P, "_llm_call", side_effect=fake):
+            turn = P.run_turn(self.line, "我有话想跟你说", "private", "")
+        return turn, calls
+
+    def test_second_call_fires_and_is_appended(self):
+        turn, calls = self._run(self._aff())
+        self.assertEqual(len(calls), 2)               # 正文 + 主动表白
+        self.assertIn("她把杯子放下", turn.reply)
+        self.assertIn("我们在一起吧", turn.reply)
+        self.assertEqual(calls[1][-1]["content"], P._AUTO_CONFESS_TASK)
+
+    def test_second_call_sees_the_current_player_line(self):
+        """第二段的 messages 必须带玩家**这一轮**说的话，否则她接的是上一轮。"""
+        _turn, calls = self._run(self._aff())
+        self.assertEqual(calls[1][-2]["role"], "assistant")
+        users = [m["content"] for m in calls[1] if m["role"] == "user"]
+        self.assertTrue(any("我有话想跟你说" in u for u in users))
+
+    def test_no_second_call_when_the_trigger_is_off(self):
+        turn, calls = self._run(self._aff(auto_confess=False))
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("我们在一起吧", turn.reply)
 
 
 class OldSaveIsolationTest(unittest.TestCase):

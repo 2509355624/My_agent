@@ -223,6 +223,16 @@ class HeadTest(PersonaBase):
         head = persona.build_head(_card("纱雾"), "private_9", "")
         self.assertIn("私聊", head)
 
+    def test_contract_says_the_player_has_no_name(self):
+        """指代必须说死：名字是她的，玩家只有「你」。
+
+        2026-11-09 用户实录：摘要里「你叫她『苏暖』」被她当成了玩家的名字，
+        正文写成「她第一次这样叫你——苏暖」。
+        """
+        head = persona.build_head(_card("纱雾"), "private_1", "张三")
+        self.assertIn("玩家没有名字", head)
+        self.assertIn("她开口也只叫你「你」", head)
+
     def test_note_is_attached(self):
         head = persona.build_head(_card("纱雾"), "private_1", "张三",
                                   "他昨天让我画了只兔子。")
@@ -3241,6 +3251,30 @@ class NoteCompressionTest(PersonaBase):
         self._set(note_at=0)
         hist, _ = persona._note_convo(line, persona._entry(line))
         self.assertEqual(len(hist), persona.NOTE_MAX_ROWS)
+
+    def test_compress_prompt_names_who_is_who(self):
+        """摘要必须知道：名字是她的，玩家没有名字（2026-11-09 用户报「苏暖」被当成玩家）。
+
+        这条钉的是压缩请求本身——说话人标成「女主角 / 玩家」，并把角色卡名
+        和「玩家没有名字」的规矩一起发过去。只改模板不传进去等于没改。
+        """
+        line = self._line()
+        rows = [{"role": "user", "content": "你叫她苏暖"},
+                {"role": "assistant", "content": "苏暖低声应了"}]
+        persona._save_archive(line, rows)
+        seen = {}
+
+        def fake(msgs, **kw):
+            seen["prompt"] = msgs[0]["content"]
+            return self._good_note()
+
+        with mock.patch.object(persona, "_llm_call", side_effect=fake):
+            self.assertTrue(persona.compress_note(line))
+        prompt = seen["prompt"]
+        self.assertIn("玩家：你叫她苏暖", prompt)
+        self.assertIn("女主角：苏暖低声应了", prompt)
+        self.assertIn("玩家没有名字", prompt)
+        self.assertIn("「纱雾」", prompt)          # 角色卡名传进去了
 
     def test_compress_writes_cursor_and_clears_due(self):
         line = self._line()

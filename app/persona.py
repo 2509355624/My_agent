@@ -804,6 +804,8 @@ _CONTRACT = (
     "玩家一律「你」。\n"
     "- **她的台词里**：自称「我」（指她自己），对玩家仍用「你」。\n"
     "- **玩家原话**：里面的「我」是玩家本人，不是她。\n"
+    "- **玩家没有名字**：她的名字、小名、任何称呼都只属于她；写玩家就用「你」，"
+    "她开口也只叫你「你」。\n"
     "- 旁人用称呼或名字（摊主 / 伙计 / 同学……）。\n"
     "- 主语能省就省：一句话里连着的动作，接着上一句的主语写下去，"
     "比每句都点名更像小说。\n"
@@ -1290,6 +1292,14 @@ _NOTE_PROMPT = (
     "**每一节都必须守住这个视角**：「你的事」只写玩家（用「你」），"
     "「她的事」只写女主角（用「她」）。\n"
     "\n"
+    "**名字是谁的（最容易错，先看这条）**：\n"
+    "- 角色卡上她的名字是「%(name)s」；剧情里她还有别的称呼（比如玩家叫她的"
+    "小名），**那些也都是她**，不是玩家。\n"
+    "- **玩家没有名字**。写玩家只用「你」；绝不能给玩家起名字，也不能把她的"
+    "名字或称呼安到玩家头上——「她叫你 X」这种写法一律是错的。\n"
+    "- 玩家怎么称呼她可以记成「你叫她「X」」；这仍然是在写**她**的名字。\n"
+    "- 出现名字时先确认：这个名字是女主，还是旁人？**永远不是玩家**。\n"
+    "\n"
     "**旧账本里的人称写错了，先按上面的规则改写再抄**——把指代玩家的「他」"
     "改成「你」、把写女主角的「我」改成「她」（引号里的原话不动）。"
     "不要原样抄错人称的条目，否则错误会一轮一轮传下去。\n"
@@ -1319,13 +1329,14 @@ _NOTE_PROMPT = (
     "人称错的按上面的规则改；变化的就地改；"
     "完成的从「约定」里移走；过期的删掉。\n"
     "- 每节条数上限：关系 4、你的事 8、她的事 8、约定 5、忌讳 5、日常 3。\n"
-    "- 总字数 %d 字以内；超了先删最不重要的旧事，**六个标题必须都保留**。\n"
+    "- 总字数 %(soft)d 字以内；超了先删最不重要的旧事，**六个标题必须都保留**。\n"
     "- **输出前逐行自检**：全文不能出现指代玩家的「他」；「你的事」的主语是"
-    "「你」，「她的事」的主语是「她」；引号外不能出现「我」。有错就改，改完再交。\n"
+    "「你」，「她的事」的主语是「她」；引号外不能出现「我」；"
+    "所有名字都不属于玩家。有错就改，改完再交。\n"
     "\n"
     "只输出 Markdown 本身，不要解释、不要前后缀。\n"
     "\n"
-    "【你原来记得的】\n%s\n\n【最近发生的】\n%s"
+    "【你原来记得的】\n%(old)s\n\n【最近发生的】\n%(convo)s"
 )
 
 # 命令词。都带 `#` 前缀，且要求**整条消息只有这一个词**，免得误伤
@@ -5551,12 +5562,20 @@ _AUTO_CONFESS_TASK = """（接着刚才那一拍）她终于把攒了很久的�
 只写她这一刻的动作、停顿和话，篇幅短一点。"""
 
 
-def _confession_reply(head, model_hist, first_reply, card=None):
-    """主动表白的第二段。失败就返回空串，第一段照常发出去。"""
-    msgs = ([{"role": "system", "content": head}]
-            + list(model_hist or [])
-            + [{"role": "assistant", "content": first_reply},
-               {"role": "user", "content": _AUTO_CONFESS_TASK}])
+def _confession_reply(head, model_hist, first_reply, card=None, user_block=""):
+    """主动表白的第二段。失败就返回空串，第一段照常发出去。
+
+    `user_block`（2026-11-09 修）：玩家**这一轮**说的话必须一起带上。
+    原先只传了历史，当前这句不在 messages 里，第二段只能看见自己刚才的回
+    复——她说出口的那句话接的是「上一轮」，不是玩家刚说的这句。带上之后
+    消息序列和第一段完全同构（head + 历史 + 这一轮玩家 → 她的回复 → 任务），
+    前缀缓存也照样命中。
+    """
+    msgs = [{"role": "system", "content": head}] + list(model_hist or [])
+    if str(user_block or "").strip():
+        msgs.append({"role": "user", "content": user_block})
+    msgs += [{"role": "assistant", "content": first_reply},
+             {"role": "user", "content": _AUTO_CONFESS_TASK}]
     try:
         raw = _llm_call(msgs, temperature=TEMPERATURE)
     except Exception:                            # noqa: BLE001
@@ -6038,7 +6057,8 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     # 满值、感情线也到了「认准你了」，再让演员补一段把话说出口。
     # 历史里也要带上这一段，否则下一轮模型不知道她已经表白过。
     if v2 and isinstance(aff_res, dict) and aff_res.get("auto_confess"):
-        extra = _confession_reply(head, model_hist, reply, card)
+        extra = _confession_reply(head, model_hist, reply, card,
+                                  user_block=user_block)
         if extra:
             body, meta = _split_meta(raw)
             raw = body.rstrip() + "\n\n" + extra + (meta or "")
@@ -7742,9 +7762,14 @@ def compress_note(session_key):
     if not hist:
         return False
     convo = "\n".join(
-        "%s：%s" % ("我" if m["role"] == "assistant" else "对方", m["content"])
+        "%s：%s" % ("女主角" if m["role"] == "assistant" else "玩家", m["content"])
         for m in hist)
-    prompt = _NOTE_PROMPT % (NOTE_SOFT, old or "（还没有）", convo)
+    prompt = _NOTE_PROMPT % {
+        "soft": NOTE_SOFT,
+        "name": str((card or {}).get("name") or "她"),
+        "old": old or "（还没有）",
+        "convo": convo,
+    }
     try:
         # 输出上限要显式给：1000 字中文约 1500 token，不给的话服务端
         # 默认上限可能截在半句话上（同 `moss_comic.write` 的坑）。
