@@ -1746,7 +1746,12 @@ class ToolDescriptionBudgetTest(unittest.TestCase):
         param = self._tool()["parameters"]["properties"]["skill"]["description"]
         self.assertIn("Available Skills", param,
                       "应该把渠道清单指到 Available Skills 那份一行摘要")
-        self.assertLess(len(param), 560,
+        # **2026-11-09：上限 560 → 640。** 新增 `anima-2s`（角色扮演生图的
+        # 默认渠道，「大大怪，anima 2s」）。⚠️ 抬之前它就已经是 **586** 了——
+        # `anima_clear/curvy/gloss/soft` 2026-11-06 从归档放回、`sf` /
+        # `semi-thick` / `rs29` 陆续进来，这条上限一直没跟着抬（不是本次才超的）。
+        # 再往上加渠道时，先看是不是又漏抬了。
+        self.assertLess(len(param), 640,
                         "skill 参数又涨回 %d 字（精简前是 947）" % len(param))
         # 至少别把四个画风全名逐一抄一遍
         for ch in ("hd_3_soft", "hd_3_gloss", "hd_3_curvy"):
@@ -2310,6 +2315,112 @@ class AnimaLoraChannelTest(unittest.TestCase):
                 self.assertNotIn("workflow_i2i.json",
                                  os.listdir(os.path.join(SKILLS, name)), name)
                 self.assertNotIn(name, gi._I2I_SKILLS)
+
+
+class Anima2sChannelTest(unittest.TestCase):
+    """`anima-2s` —— 2026-11-09 用户从 anima-line 派生的换底模版。
+
+    用户原话：「基于 anima 线条的基础改造得来……一次采样模型改为
+    `miaomiaoRealskin_anima29B10`，二次采样模型改为
+    `silvermoonmixAnimaEvolved_v2329BTurbo`，一次采样步长为 10，二次采样步长为 5。
+    渠道命名为 anima 2s……这个新渠道将取代 anima 线条，作为新的角色扮演生图的
+    默认渠道」，触发词是「大大怪，anima 2s」。
+
+    跟 anima-line 的**骨架差别只有一张底模和采样参数**：6 条 LoRA 同序同强度、
+    1.2× latent、2x 像素放大、negative 一个都没动。2026-11-09 二次调参后
+    两段步数 15 / 10、两段采样器都是 `er_sde`；节点 4 只留 4 个画师 tag
+    作固定前缀，质量词实测对 Anima 没影响，已移除。
+    """
+
+    NAME = "anima-2s"
+
+    def test_loads_as_image_skill(self):
+        data = load_skill(self.NAME)
+        self.assertIsNotNone(data, self.NAME)
+        self.assertEqual(data["kind"], "生图", self.NAME)
+        self.assertEqual(len(data["workflow"]), 20, self.NAME)
+
+    def test_stage1_is_the_29b_base(self):
+        """一段底模 = 2.9B（1.3B 换成它，这就是「29b 的模式」那一半）。"""
+        wf = _load(self.NAME)
+        base = _base_file(wf, wf[_stage1(wf)]["inputs"]["model"])
+        self.assertEqual(base, "miaomiaoRealskin_anima29B10.safetensors")
+
+    def test_stage2_is_silvermoonmix_and_bare(self):
+        """二段 = silvermoonmix turbo，**裸接**（中间不许插 LoRA）。"""
+        wf = _load(self.NAME)
+        ref = wf[_stage2(wf)]["inputs"]["model"]
+        self.assertEqual(wf[ref[0]]["class_type"], "UNETLoader")
+        self.assertEqual(wf[ref[0]]["inputs"]["unet_name"],
+                         "silvermoonmixAnimaEvolved_v2329BTurbo.safetensors")
+
+    def test_steps_are_15_and_10_both_er_sde(self):
+        """一段主导手部结构、二段细化；低步数 + 0.25 重绘容易多手多脚。"""
+        wf = _load(self.NAME)
+        self.assertEqual(wf[_stage1(wf)]["inputs"]["steps"], 15)
+        self.assertEqual(wf[_stage2(wf)]["inputs"]["steps"], 10)
+        # cfg 跟 anima-line 一样留 1；rs29 的 cfg 3 是另一条渠道的口径。
+        self.assertEqual(wf[_stage1(wf)]["inputs"]["cfg"], 1)
+        self.assertEqual(wf[_stage2(wf)]["inputs"]["cfg"], 1)
+        self.assertEqual(wf[_stage1(wf)]["inputs"]["denoise"], 1)
+        self.assertEqual(wf[_stage2(wf)]["inputs"]["denoise"], 0.25)
+        self.assertEqual(wf[_stage1(wf)]["inputs"]["sampler_name"], "er_sde")
+        self.assertEqual(wf[_stage2(wf)]["inputs"]["sampler_name"], "er_sde")
+
+    def test_skeleton_is_unchanged_from_anima_line(self):
+        """6 条 LoRA（同序同强度）+ 1.2× latent + 2x 像素放大 + 同一串提示词。"""
+        mine, theirs = _load(self.NAME), _load("anima-line")
+        _, chain = _lora_chain(mine)
+        _, ref_chain = _lora_chain(theirs)
+        self.assertEqual([(f, st) for _, f, st in chain],
+                         [(f, st) for _, f, st in ref_chain])
+        self.assertEqual(mine[_upscale(mine)]["inputs"]["scale_by"], 1.2)
+        up = _all(mine, "UpscaleModelLoader")
+        self.assertEqual(len(up), 1, self.NAME)
+        self.assertEqual(mine[up[0]]["inputs"]["model_name"],
+                         "2x_Ani4Kv2_G6i2_Compact_107500.pth")
+        # 2026-11-09：节点 4 只留 4 个画师 tag 作固定前缀，质量词实测对
+        # Anima 没有影响，已移除——不再和 anima-line 逐字相等。
+        prefix = ("tianliang_duohe_fangdongye, (ask $askzy$:0.6), "
+                  "ciloranko, (sho_(sho_lwlw):0.8), ")
+        text = mine["4"]["inputs"]["text"]
+        self.assertTrue(text.startswith(prefix))
+        self.assertEqual(text[len(prefix):], "__MULTI_PROMPTS__")
+        for word in ("masterpiece", "best quality", "ultra-detailed",
+                     "absurdres", "sensitive"):
+            self.assertNotIn(word, text)
+        self.assertEqual(mine["8"]["inputs"]["text"],
+                         theirs["8"]["inputs"]["text"])
+        self.assertEqual(_raw(self.NAME).count("__SEED__"), 2)
+
+    def test_named_forms_resolve(self):
+        from app.direct_gen import _parse_channel, _strip_own_names
+        for text, want in (("anima 2s 少女", "anima-2s"),
+                           ("anima2s 少女", "anima-2s"),
+                           ("anima-2s 少女", "anima-2s"),
+                           ("用 anima 2s 画", "anima-2s")):
+            with self.subTest(text=text):
+                self.assertEqual(_parse_channel(text)[0], want)
+        # 生产路径：群里先剥昵称再解析（用户点名「大大怪，anima 2s」）。
+        self.assertEqual(
+            _parse_channel(_strip_own_names("大大怪，anima 2s，一个少女")),
+            ("anima-2s", "一个少女"))
+
+    def test_qq_and_persona_both_use_it(self):
+        from app import agents, char_loras, persona
+        from app.direct_gen import _allowed_skills
+        self.assertTrue(agents.allows_skill("qq", self.NAME))
+        self.assertIn(self.NAME, _allowed_skills())
+        # 角色 LoRA 要能挂到 2.9B 上（同架构），否则 IP 角色这张图就白挂。
+        self.assertIn(self.NAME, char_loras.CHAR_LORA_SKILLS)
+        # 用户拍板：取代 anima-line 成为角色扮演生图的默认渠道。
+        self.assertEqual(persona.SHOT_SKILL, self.NAME)
+
+    def test_no_i2i_skeleton(self):
+        from app.tools.normal import generate_image as gi
+        self.assertNotIn("workflow_i2i.json",
+                         os.listdir(os.path.join(SKILLS, self.NAME)))
+        self.assertNotIn(self.NAME, gi._I2I_SKILLS)
 
 
 class AnimaGuizhencaoTest(unittest.TestCase):

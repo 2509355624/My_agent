@@ -660,5 +660,77 @@ class ManualChatApiTest(PersonaApiBase):
                          {"action": "拿起杯子"})
 
 
+class _InlineThread:
+    """把后台线程改成同步跑。
+
+    出图接口是「起线程 → 立刻返回」，断言必须等线程跑完才有意义。用
+    `join` 也行，但接口不把 Thread 交出来，所以直接替换构造函数最省事。
+    """
+
+    def __init__(self, target=None, daemon=None, name=None, **kw):
+        self._target = target
+
+    def start(self):
+        if self._target:
+            self._target()
+
+
+class ShotOrientTest(PersonaApiBase):
+    """出图画幅（2026-11-09）：网页点「出图」可选横/竖，缺省竖屏。
+
+    只钉**接线**——`body.orient` 有没有变成 `draw_shot(landscape=)`。
+    宽高对调本身在 `image_jobs.landscape_workflow`，那边已有一整套用例；
+    真出图更不能在单测里跑。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.post("/api/persona/switch", id="izumi_sagiri")
+        # 「这一轮有画面可画」：不打真模型
+        p = mock.patch.object(persona, "shot_scene",
+                              return_value="1girl, sitting")
+        p.start()
+        self.addCleanup(p.stop)
+        p2 = mock.patch.object(persona_api.threading, "Thread", _InlineThread)
+        p2.start()
+        self.addCleanup(p2.stop)
+        # 图映射不落盘：否则写进真实 state/pic_map.json
+        p3 = mock.patch.object(persona_api, "_pic_map_set")
+        p3.start()
+        self.addCleanup(p3.stop)
+        self.seen = {}
+
+    def _shoot(self, **body):
+        def fake(card, key, msg_index=None, reply_to="", on_submit=None,
+                 landscape=False):
+            self.seen["landscape"] = landscape
+            self.seen["msg_index"] = msg_index
+            return "", "假装没画出来"
+
+        p = mock.patch.object(persona, "draw_shot", side_effect=fake)
+        p.start()
+        self.addCleanup(p.stop)
+        return self.post("/api/persona/shot", **body)
+
+    def test_default_is_tall(self):
+        d = self._shoot()
+        self.assertTrue(d["ok"])
+        self.assertFalse(self.seen["landscape"])
+        self.assertEqual(d["orient"], "tall")
+        self.assertIn("竖屏", d["reply"])
+
+    def test_wide_is_forwarded(self):
+        d = self._shoot(orient="wide")
+        self.assertTrue(self.seen["landscape"])
+        self.assertEqual(d["orient"], "wide")
+        self.assertIn("横屏", d["reply"])
+
+    def test_unknown_orient_falls_back_to_tall(self):
+        """拼错 / None / 空串都当竖屏——不猜「窗口宽就是横屏」，
+        手机横过来时窗口也是宽的，那不是她要的背景。"""
+        self._shoot(orient="随便写")
+        self.assertFalse(self.seen["landscape"])
+
+
 if __name__ == "__main__":
     unittest.main()

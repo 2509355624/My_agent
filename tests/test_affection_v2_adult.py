@@ -687,7 +687,11 @@ class RelationAxisHelpTest(unittest.TestCase):
 
 
 class PovTagAuditTest(unittest.TestCase):
-    """扮演画面行的 POV 校验（复用漫画那套判据，2026-11-08）。"""
+    """漫画 tag 判据的单行入口（2026-11-08 起扮演出图不再调用）。
+
+    `audit_line` / `repair_line` 留作漫画工作台的单行备用判据；角色扮演的
+    画面行是英文散文，不走这一层，见 `PovContractTest`。
+    """
 
     def setUp(self):
         from app import comic_agent
@@ -744,41 +748,62 @@ class PovTagAuditTest(unittest.TestCase):
 
 
 class PovContractTest(unittest.TestCase):
-    """契约里必须写清 POV 的三种状态和两条硬禁令。"""
+    """画面契约：主体分层、机位固定、不堆禁令、代码不自动修（2026-11-08）。
 
-    def test_contract_states_three_pov_modes(self):
+    上一版把漫画那套「三种状态 / 两条硬禁令 / `no ...` 反向钉住」搬进扮演契约，
+    还让 draw() 用代码自动删补 tag。实测那套判据对英文散文画面行 0 命中、
+    纯空转；自动补的 `1other` 反而是「凭空补出一个男生」的旧元凶。
+    """
+
+    def test_both_contracts_carry_pov_camera(self):
+        from app import persona
+        for c in (persona._CONTRACT, persona._CONTRACT_NO_INTIMATE):
+            self.assertIn("POV 视角", c)
+            self.assertIn("first-person pov, eye level", c)
+
+    def test_contract_splits_subject_from_scene(self):
         from app import persona
         c = persona._CONTRACT
-        self.assertIn("画面里只有她", c)
-        self.assertIn("你的手入画", c)
-        self.assertIn("female_pov", c)
+        self.assertIn("这一行只写「这一刻」", c)
+        self.assertIn("系统另拼一份固定块", c)
+        self.assertIn("长相不用你写", c)
 
-    def test_contract_bans_solo_with_hands(self):
+    def test_contract_has_no_hard_bans_or_negative_anchor(self):
         from app import persona
         c = persona._CONTRACT
-        self.assertIn("`solo` 和 `pov hands`", c)
+        for old in ("POV 有三种状态", "两条硬禁令", "no other hands in frame",
+                    "hand around wrist", "拉扯动词", "反向钉住"):
+            self.assertNotIn(old, c, old)
 
-    def test_contract_bans_hand_around_wrist(self):
-        from app import persona
-        c = persona._CONTRACT
-        self.assertIn("hand around wrist", c)
-        self.assertIn("holding another's wrist", c)
-
-    def test_contract_has_negative_anchor(self):
-        from app import persona
-        self.assertIn("no other hands in frame", persona._CONTRACT)
-
-    def test_contract_bans_pulling_verbs(self):
-        from app import persona
-        c = persona._CONTRACT
-        self.assertIn("拉扯动词", c)
-        self.assertIn("already slipped off", c)
-
-    def test_draw_calls_repair(self):
+    def test_draw_does_not_repair_tags(self):
         import inspect
         from app import persona
-        src = inspect.getsource(persona.draw)
-        self.assertIn("repair_line", src)
+        self.assertNotIn("repair_line", inspect.getsource(persona.draw))
+
+    def test_camera_is_fixed_and_adds_no_second_party(self):
+        from app import persona
+        cam = persona._POV_CAMERA
+        self.assertIn("first-person pov", cam)
+        for tag in ("1other", "pov hands", "solo", "1boy", "no "):
+            self.assertNotIn(tag, cam, tag)
+
+    def test_build_prompt_pov_opt_in_only(self):
+        from app import persona
+        card = {"appearancePrompt": "an adult woman with green hair"}
+        plain = persona.build_prompt(card, "medium shot, smiling")
+        self.assertEqual(plain,
+                         "an adult woman with green hair, medium shot, smiling")
+        pov = persona.build_prompt(card, "medium shot, smiling", pov=True)
+        self.assertEqual(pov, plain + ", " + persona._POV_CAMERA)
+        self.assertEqual(pov.count("first-person pov"), 1)
+
+    def test_subject_declared_once_in_pov_prompt(self):
+        from app import persona
+        p = persona.build_prompt(
+            {"appearancePrompt": "an adult woman with green hair"},
+            "medium shot, leaning toward the camera", pov=True)
+        self.assertEqual(p.lower().count("woman"), 1)
+        self.assertNotIn("1girl", p)
 
 
 class ItemSystemTest(unittest.TestCase):

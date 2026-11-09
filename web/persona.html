@@ -55,13 +55,29 @@
   .side-head .sp { flex: 1; }
   .side-list { flex: 1; overflow-y: auto; padding: 6px; }
   .ci { padding: 9px 11px; border-radius: var(--rs); cursor: pointer;
-    margin-bottom: 2px; border: 1px solid transparent; }
+    margin-bottom: 2px; border: 1px solid transparent; position: relative; }
   .ci:hover { background: var(--bg-input); }
   .ci.on { background: var(--bg-input); border-color: var(--accent-dim); }
-  .ci .nm { font-size: 13px; font-weight: 500; }
+  .ci .nm { font-size: 13px; font-weight: 500; padding-right: 46px; }
   .ci.on .nm { color: var(--accent); }
   .ci .ds { font-size: 11px; color: var(--text-mute); margin-top: 2px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 「存档」入口（2026-11-09 用户要求）：原来点卡片才弹存档面板，纯靠猜，
+     很多人根本不知道存档在哪。每张卡右上角挂一个黄色实心小标签，点它和点
+     卡片走同一条路（都进 openSlots），只是把「能看存档」写到脸上。
+     ⚠️ 不给它单独的 onclick / stopPropagation：容器上的 click + touchend
+     委托才是唯一入口，各写一套在手机上会双触发（touchend 和合成 click
+     都会来），存档面板就会拉两次。这里只做视觉，行为统一在 `.ci` 上——
+     按钮的点击照常冒泡上去，委托那边认 `.ciSlot` 就强制开存档面板。 */
+  .ci .ciSlot {
+    position: absolute; right: 7px; top: 7px;
+    background: #ffd24a; color: #2a1f00;
+    border: 0; border-radius: 5px; padding: 2px 7px;
+    font: 700 11px/1.5 inherit; letter-spacing: .3px;
+    cursor: pointer;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, .35);
+  }
+  .ci:hover .ciSlot { background: #ffdf7a; }
   .side-foot { padding: 8px; border-top: 1px solid var(--border-soft);
     display: flex; gap: 6px; }
   /* 三个按钮平分宽度（清空 / 出戏 / 自检）。老浏览器没有 gap，
@@ -144,6 +160,9 @@
   .pic .ph .dots::after { content: ""; animation: d 1.2s steps(4) infinite; }
   @keyframes d { 0%{content:"";} 25%{content:"·";} 50%{content:"··";}
     75%{content:"···";} }
+  /* 图下小工具条（2026-11-09）：目前只有「设为背景」一个按钮 */
+  .picbar { display: flex; gap: 6px; padding: 5px 6px;
+    border-top: 1px solid var(--border-soft); background: var(--bg-input); }
 
   /* 气泡下方工具条 */
   .tools { display: flex; gap: 6px; margin: 5px 4px 0; opacity: 0;
@@ -268,6 +287,35 @@
   .cardModal { display: none; position: fixed; inset: 0; z-index: 240;
     background: rgba(0,0,0,.72); padding: 18px; overflow-y: auto; }
   .cardModal.on { display: flex; align-items: flex-start; justify-content: center; }
+  /* 出图画幅（2026-11-09）：点「出图」先问一句横屏还是竖屏。
+     起因是背景——聊天区 `.log.has-bg` 是 `background-size: cover`，竖图
+     （2456×3686）铺 1200×760 的窗口要按宽度放大，纵向只剩约四成，头和脚
+     都被切掉；横图（3680×2464）只裁掉边缘几个百分点，当背景才成立。
+     反之手机竖屏用横图会上下大量留白。所以让玩家自己选，一次点击就出图。 */
+  .orientModal { display: none; position: fixed; inset: 0; z-index: 250;
+    background: rgba(0,0,0,.72); padding: 18px;
+    align-items: center; justify-content: center; }
+  .orientModal.on { display: flex; }
+  .orientSheet { width: min(420px, 100%); background: var(--bg-elev);
+    border: 1px solid var(--border); border-radius: 16px; padding: 18px;
+    box-shadow: 0 18px 60px rgba(0,0,0,.55); }
+  .orientSheet .ot { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .orientSheet .oh { font-size: 12px; color: var(--text-mute);
+    margin-bottom: 14px; line-height: 1.6; }
+  .orientPick { display: flex; gap: 10px; }
+  .orientPick button { flex: 1; padding: 13px 8px; border-radius: 12px;
+    background: var(--bg-input); border: 1px solid var(--border);
+    color: var(--text); cursor: pointer; text-align: center;
+    font-family: inherit; transition: border-color .15s; }
+  .orientPick button:hover { border-color: var(--accent-dim); }
+  .orientPick button.rec { border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent) inset; }
+  .orientPick .os { font-size: 22px; display: block; line-height: 1.1;
+    margin-bottom: 7px; color: var(--accent); }
+  .orientPick .on2 { font-size: 13px; font-weight: 600; display: block; }
+  .orientPick .od { font-size: 11px; color: var(--text-mute); display: block;
+    margin-top: 3px; }
+  .orientCancel { margin-top: 12px; width: 100%; }
   .cardSheet { width: min(560px, 100%); margin: auto; background: var(--bg-elev);
     border: 1px solid var(--border); border-radius: 16px; padding: 18px;
     box-shadow: 0 18px 60px rgba(0,0,0,.55); }
@@ -288,6 +336,15 @@
     white-space: pre-wrap; word-break: break-word; }
   .cardInitial { margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--border);
     font-size: 11px; color: var(--text-mute); line-height: 1.7; }
+
+  /* 角色介绍 / 萌娘百科（2026-11-08）：详情弹窗最下面一节，只读。
+     条目左标签右内容，行为段单独起一块；内容一律 textContent 写入，不拼 HTML。 */
+  .introRow { display: flex; gap: 10px; align-items: baseline; margin-bottom: 5px; }
+  .introRow .ik { flex: none; width: 72px; color: var(--text-mute); font-size: 11px; }
+  .introRow .iv { flex: 1 1 auto; }
+  .introBehK { margin: 10px 0 4px; font-size: 11px;
+    color: var(--text-mute); letter-spacing: .08em; }
+  .introBeh { color: var(--text); white-space: pre-wrap; }
 
 
   /* ─── 紧凑「此刻」区（2026-11-04 深夜）──
@@ -970,6 +1027,27 @@
   <div class="mask" id="mask"></div>
 </div>
 
+<!-- 出图画幅（2026-11-09）：横屏给电脑背景，竖屏给手机。
+     默认高亮按当前窗口方向推荐，但两个都能点——不记设置、不做开关，
+     点一下就出图。 -->
+<div class="orientModal" id="orientModal">
+  <div class="orientSheet" role="dialog" aria-modal="true" aria-labelledby="orientTitle">
+    <div class="ot" id="orientTitle">这张画成什么画幅？</div>
+    <div class="oh" id="orientHint">手机用竖屏，电脑上想当背景就选横屏。</div>
+    <div class="orientPick">
+      <button type="button" id="orientWide">
+        <span class="os">▬</span><span class="on2">横屏</span>
+        <span class="od">电脑 · 当聊天背景</span>
+      </button>
+      <button type="button" id="orientTall">
+        <span class="os">▮</span><span class="on2">竖屏</span>
+        <span class="od">手机 · 剧情配图</span>
+      </button>
+    </div>
+    <button class="btn sm orientCancel" id="orientCancel">算了</button>
+  </div>
+</div>
+
 <!-- 角色卡详情：只读。展示卡上「最初的设定」，不随好感/屈服变化。
      放在 .app 外面、z-index 240：它要压过固定的 .app 和抽屉遮罩。 -->
 <div class="cardModal" id="cardModal">
@@ -990,6 +1068,13 @@
     <div class="cardSec" id="cdPerBox">
       <div class="k">性格与相处方式</div>
       <div class="v" id="cdPer"></div>
+    </div>
+    <!-- 角色介绍 / 萌娘百科（2026-11-08）：数据在本机 web/char_intros.json，
+         按卡 id 索引。IP 卡标题「萌娘百科」，原创卡标题「角色介绍」。
+         取不到文件就整节隐藏，弹窗其余内容照常。 -->
+    <div class="cardSec" id="cdIntroBox" style="display:none">
+      <div class="k" id="cdIntroTitle">角色介绍</div>
+      <div class="v" id="cdIntro"></div>
     </div>
     <div class="cardInitial" id="cdEmpty" style="display:none">这张卡还没有写简介。</div>
     <div class="cardInitial">这是她最初的设定，不会随着剧情里的数值变化；她此刻的样子看右侧「心情 / 状态」。</div>
@@ -1554,6 +1639,17 @@ async function loadCards(pending) {
       el.innerHTML = '<div class="nm"></div><div class="ds"></div>';
       el.querySelector(".nm").textContent = c.name;
       el.querySelector(".ds").textContent = c.description || "";
+      // 右上角「存档」标签（2026-11-09 用户要求）：把「这里能看存档」写在脸上。
+      // 游客不挂——他们本来就没有存档（24 小时自动过期，后端 slots 也回 403），
+      // 挂上去等于给人一个点了就报错的按钮。
+      if (ROLE !== "guest") {
+        const sv = document.createElement("button");
+        sv.type = "button";
+        sv.className = "ciSlot";
+        sv.textContent = "存档";
+        sv.title = "看这张卡的存档（最多 3 个）";
+        el.appendChild(sv);
+      }
       box.appendChild(el);
     });
   } catch (e) {
@@ -1742,7 +1838,7 @@ if ($("slotMask")) {
   });
 }
 
-async function pick(c) {
+async function pick(c, wantSlots) {
   // 诊断（2026-11-03）：用户报「点角色没反应」，但后端全正常。
   // 先把每次点击的状态打出来，出问题时一眼能看到卡在哪。
   console.log("[pick] 点击", c && c.name, "busy=", busy,
@@ -1752,15 +1848,17 @@ async function pick(c) {
     toast("上一件事还没做完，稍等一下");
     return;
   }
-  // 已经在演这个角色就别白跑一次请求
-  if (card && card.id === c.id) {
+  // 已经在演这个角色就别白跑一次请求。
+  // 例外：点的是卡上的「存档」标签——那一下的意思明确是「我要看存档」，
+  // 不能因为「已经是她」就把抽屉关掉当没听见（2026-11-09）。
+  if (!wantSlots && card && card.id === c.id) {
     console.log("[pick] 已经是这个角色，直接关抽屉");
     closeDrawer();
     return;
   }
   // 存档槽（2026-11-08 用户要求）：点角色卡**先展开它的存档**，
   // 玩家挑一个槽再进去。已经在演这个角色就直接关抽屉（老行为）。
-  if (!slotPick) {
+  if (wantSlots || !slotPick) {
     closeDrawer();
     openSlots(c);
     return;
@@ -2772,6 +2870,19 @@ function setPic(idx, url) {  const pic = $("pic-" + idx);
   img.loading = "lazy";
   img.onclick = () => { $("zoomImg").src = url; $("zoom").classList.add("on"); };
   pic.appendChild(img);
+  // 「设为背景」（2026-11-09）：横屏剧照天生就是聊天背景的样子，
+  // 不该让人先存盘、再走「换背景」挑一遍文件。游客隐藏（他们本来就不能换）。
+  if (ROLE !== "guest") {
+    const bar = document.createElement("div");
+    bar.className = "picbar";
+    const b = document.createElement("button");
+    b.className = "tb";
+    b.type = "button";
+    b.textContent = "设为背景";
+    b.onclick = (e) => { e.stopPropagation(); useAsBg(url); };
+    bar.appendChild(b);
+    pic.appendChild(bar);
+  }
   const row = document.querySelector('.row[data-idx="' + idx + '"]');
   if (row && row._regen) row._regen.style.display = "";
 }
@@ -3046,6 +3157,7 @@ function renderCardBox(c) {
 // 本地没设置时才回落服务端三层：这张卡 > 全局默认 > 内置图。
 // 站主那两层留服务端，它们要给所有用户共享。
 const BG_SRC_NAMES = { local: "你自己换的（本机）", off: "已移除",
+                       shot: "这张剧照（本机）",
                        user: "账号背景（旧）", card: "这张卡的默认",
                        default: "全局默认", builtin: "内置图", none: "没有" };
 const BG_KEY = "persona_bg_" + (QQ || "local");
@@ -3055,7 +3167,11 @@ const bgStore = {
   read() {
     try {
       const v = JSON.parse(localStorage.getItem(BG_KEY) || "null");
-      if (v && (v.state === "off" || (v.state === "image" && v.data))) return v;
+      // `url` = 直接引用一张已有的图（剧照）。不复制、不转码——出图那份文件
+      // 本来就在 `/api/image/` 下，5174 和 5175 都能取到。
+      if (v && (v.state === "off"
+                || (v.state === "image" && v.data)
+                || (v.state === "url" && v.data))) return v;
     } catch (e) {}
     return { state: "none", data: "" };
   },
@@ -3162,6 +3278,9 @@ async function loadBg() {
   const s = guest ? { state: "none", data: "" } : bgStore.read();
   // 本地关掉了：连服务端那张默认图都不请求，这才是真的不再加载。
   if (s.state === "off") { renderBg("", BG_SRC_NAMES.off, "", "off"); return; }
+  if (s.state === "url" && s.data) {
+    renderBg(s.data, BG_SRC_NAMES.shot, s.data, "on"); return;
+  }
   if (s.state === "image") { renderBg(s.data, BG_SRC_NAMES.local, s.data, "on"); return; }
   try {
     const d = await api("/api/persona/background");
@@ -3193,6 +3312,18 @@ async function uploadBg() {
 
 // 一个按钮两态：移除 = 清掉自己传的图 + 盖上关闭标记，连站主设的
 // 卡 / 全局默认图都不显示；恢复 = 去掉标记，回落到服务端默认。
+// 剧照 → 聊天背景（2026-11-09）。和「换背景」共用同一格本地存储，
+// 所以同样只在这台设备生效、换浏览器会消失——这是 2026-11-06 拍板的既定
+// 设计（背景不进服务端、不给别人共享）。这里只记一个 URL，不复制文件：
+// 出图那份本来就在 `/api/image/` 下，手机经 5175 也取得到。
+function useAsBg(url) {
+  if (ROLE === "guest") { toast("体验版不能换背景，登录后可以。", true); return; }
+  if (!url) return;
+  if (!bgStore.write("url", url)) { toast("本机存储写入失败", true); return; }
+  renderBg(url, BG_SRC_NAMES.shot, url, "on");
+  toast("已设为聊天背景");
+}
+
 async function toggleBg() {
   if (ROLE === "guest") return;
   const s = bgStore.read();
@@ -3214,6 +3345,66 @@ function setCardSec(boxId, valId, text) {
   v.textContent = t;
 }
 
+// ── 角色介绍 / 萌娘百科（2026-11-08）────────────────────────────
+// 内容是本机静态文件，按卡 id 索引；IP 卡用「萌娘百科」，原创卡用「角色介绍」。
+// 只做展示，不进扮演提示词、不影响任何数值。取不到就整节隐藏、不弹错不重试。
+//
+// ⚠️ 函数名**不能叫 `renderIntro`**（2026-11-09）：开场导读那一个也叫
+// `renderIntro`，同一个 <script> 作用域里后声明的会把前面的整条覆盖掉——
+// 结果 `ensureIntro()` 调到了这个要 id 的版本，`!id` 直接 return，新存档
+// 就再也铺不出开场白（本机/手机都一样，只是手机上先被发现）。
+// 两个函数各管一摊，名字必须分开：`renderIntro` = 开场导读灰条，
+// `renderCardIntro` = 角色卡详情的介绍节。
+let INTROS_P = null;
+function loadIntros() {
+  if (!INTROS_P) {
+    INTROS_P = fetch("/char_intros.json", { cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; });
+  }
+  return INTROS_P;
+}
+function renderCardIntro(id) {
+  const box = $("cdIntroBox");
+  const host = $("cdIntro");
+  if (!box || !host) return;
+  box.style.display = "none";
+  host.textContent = "";
+  if (!id) return;
+  loadIntros().then(function (all) {
+    // 异步回填期间玩家可能已经切了角色，别把上一张卡的介绍贴到这一张上。
+    if (!all || !card || String(card.id || "") !== String(id)) return;
+    const it = all[id];
+    if (!it || !Array.isArray(it.fields) || !it.fields.length) return;
+    $("cdIntroTitle").textContent =
+      it.kind === "ip" ? "萌娘百科" : "角色介绍";
+    it.fields.forEach(function (f) {
+      const row = document.createElement("div");
+      row.className = "introRow";
+      const k = document.createElement("span");
+      k.className = "ik";
+      k.textContent = Array.isArray(f) ? (f[0] || "") : "";
+      const v = document.createElement("span");
+      v.className = "iv";
+      v.textContent = Array.isArray(f) ? (f[1] || "") : "";
+      row.appendChild(k);
+      row.appendChild(v);
+      host.appendChild(row);
+    });
+    if (String(it.behavior || "").trim()) {
+      const h = document.createElement("div");
+      h.className = "introBehK";
+      h.textContent = "她会做什么";
+      const p = document.createElement("div");
+      p.className = "introBeh";
+      p.textContent = String(it.behavior);
+      host.appendChild(h);
+      host.appendChild(p);
+    }
+    box.style.display = "";
+  });
+}
+
 function openCardDetail() {
   if (!card) { toast("先选一个角色", true); return; }
   const av = $("cdAvatar");
@@ -3232,6 +3423,7 @@ function openCardDetail() {
   const per = String(card.personality || "").trim();
   setCardSec("cdDescBox", "cdDesc", desc);
   setCardSec("cdPerBox", "cdPer", per);
+  renderCardIntro(card.id);
   $("cdEmpty").style.display = (!desc && !per) ? "" : "none";
   $("cardModal").classList.add("on");
   setTimeout(function () { try { $("cdClose").focus(); } catch (e) {} }, 30);
@@ -3655,17 +3847,56 @@ async function setPhase(phase) {
 // ── 出图：挂到**这条回复的气泡下方** ────────────────────
 // `n` 就是这条回复在**归档**里的行号（气泡的 DOM id 也是它）。后端按行号取
 // 那一轮，历史压缩多少次都不会画错、也不会挂到别的气泡上（2026-11-04）。
+// ── 出图画幅（2026-11-09）──────────────────────────────
+// 竖图在宽窗口里 `cover` 只能留下中间四成（2456×3686 铺 1200×760 → 纵向
+// 只剩约 42%，头和脚都被切）；横图反过来只裁边缘。手机则要竖图。所以问一句，
+// 返回 "wide" / "tall"，点「算了」返回 ""（什么都不做）。
+// 默认高亮按当前窗口方向给建议——建议而已，不写死，也不记忆。
+function askOrient() {
+  return new Promise(function (resolve) {
+    const m = $("orientModal");
+    if (!m) { resolve("tall"); return; }        // 老页面没有这块：退回竖屏
+    const wide = window.innerWidth > window.innerHeight * 1.15;
+    const bw = $("orientWide"), bt = $("orientTall"), bc = $("orientCancel");
+    if (bw) bw.classList.toggle("rec", wide);
+    if (bt) bt.classList.toggle("rec", !wide);
+    const hint = $("orientHint");
+    if (hint) {
+      hint.textContent = wide
+        ? "窗口比较宽：横屏可以直接当聊天背景，竖屏适合当配图。"
+        : "手机竖屏：竖屏更贴合屏幕，横屏适合横过来看或留档。";
+    }
+    function done(v) {
+      m.classList.remove("on");
+      m.onclick = null;
+      if (bw) bw.onclick = null;
+      if (bt) bt.onclick = null;
+      if (bc) bc.onclick = null;
+      resolve(v);
+    }
+    if (bw) bw.onclick = function () { done("wide"); };
+    if (bt) bt.onclick = function () { done("tall"); };
+    if (bc) bc.onclick = function () { done(""); };
+    m.onclick = function (e) { if (e.target === m) done(""); };
+    m.classList.add("on");
+  });
+}
+
 async function shoot(n, btn, isRegen) {
-  if (btn) btn.disabled = true;
   if (typeof n !== "number") {
     toast("这一条还没落档，刷新一下再出图", true);
-    if (btn) btn.disabled = false;
     return;
   }
-  setPicPending(n, "在画了，横屏单图");
+  if (btn && btn.disabled) return;
+  // 先问画幅再占按钮：弹窗开着的时候按钮还能再点一次，等选完才锁。
+  const orient = await askOrient();
+  if (!orient) return;                          // 「算了」
+  const wide = orient === "wide";
+  if (btn) btn.disabled = true;
+  setPicPending(n, wide ? "在画了，横屏单图" : "在画了，竖屏单图");
   try {
-    // 告诉后端「画哪一条」——不传就是最后一轮
-    await post("/api/persona/shot", { msgIndex: n });
+    // 告诉后端「画哪一条」「什么画幅」——不传 msgIndex 就是最后一轮
+    await post("/api/persona/shot", { msgIndex: n, orient: orient });
     // 轮询，出完挂到这条气泡下面（认归档行号，顺序不会乱）
     for (let i = 0; i < 100; i++) {
       await new Promise(r => setTimeout(r, 3000));
@@ -3683,7 +3914,7 @@ async function shoot(n, btn, isRegen) {
         return;
       }
       // running 都算还在画。单张 CG 几十秒，提示换着来免得以为卡死
-      if (i === 2) setPicPending(n, "正在画，几十秒就好");
+      if (i === 2) setPicPending(n, wide ? "正在画横图，几十秒就好" : "正在画，几十秒就好");
       if (i === 10) setPicPending(n, "还在画，别急");
     }
     setPicError(n, "等太久了，刷新页面看看结果");
@@ -4187,7 +4418,7 @@ $("cards").addEventListener("click", function (ev) {
   const cid = t.getAttribute("data-cid");
   const c = CARD_MAP[cid];
   console.log("[cards] click", cid, c && c.name);
-  if (c && tapOnce(cid)) pick(c);
+  if (c && tapOnce(cid)) pick(c, hitSlotBtn(ev.target));
 });
 // 触摸设备上补一道：某些老 WebView 的 click 事件在快速点击时会被吞
 //
@@ -4200,6 +4431,11 @@ function tapOnce(cid) {
   if (LAST_TAP.id === cid && now - LAST_TAP.t < 350) return false;
   LAST_TAP = { id: cid, t: now };
   return true;
+}
+// 点的是卡片右上角那颗黄色「存档」标签吗（2026-11-09）。
+// 那一下的意思和「点卡片」不完全一样：明确要看存档，所以 pick 会强制开面板。
+function hitSlotBtn(el) {
+  return !!(el && el.closest && el.closest(".ciSlot"));
 }
 // 滑动误触保护：touchend 在**滑动列表停在卡片上**时也会触发，不判位移的话
 // 划一下列表就会随机切角色。touchstart 记下起点，touchend 只认
@@ -4229,7 +4465,7 @@ $("cards").addEventListener("touchend", function (ev) {
     if (dx + dy > 12 || dt > 600) return;   // 是滑动，不是点按
   }
   ev.preventDefault();          // 阻止随后那次 click，交给这里统一处理
-  if (tapOnce(cid)) pick(c);
+  if (tapOnce(cid)) pick(c, hitSlotBtn(ev.target));
 }, { passive: false });
 // 「清空 / 出戏 / 自检」三个按钮已经去掉（2026-11-03 用户要求）：
 //   出戏  —— 没意义了，选另一个角色就是另一条线

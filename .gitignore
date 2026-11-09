@@ -29,6 +29,10 @@ presets_*.json
 # 文档（用户本地文档，不上传）
 documents/
 
+# 角色介绍 / 萌娘百科文案（2026-11-08）：按卡 id 写的介绍，属本机卡面素材，
+# 和 agents/qq/characters.json 一样不进 public 仓库。
+web/char_intros.json
+
 # 向量知识库
 vector_store/
 

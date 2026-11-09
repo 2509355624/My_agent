@@ -1403,9 +1403,9 @@ def _skill_param_desc():
     ]
     if any(c.startswith("hd_3_") for c in _CHANNELS):
         parts.append("说「anima」「三档」→ `hd_3_<画风>`。")
-    if {"anima-line", "anima-real", "anima-guizhencao",
+    if {"anima-line", "anima-2s", "anima-real", "anima-guizhencao",
             "anima-flesh"} <= set(_CHANNELS):
-        parts.append("⚠️「anima线条/写实/鬼针草/肉感」= 四个独立渠道，"
+        parts.append("⚠️「anima线条 / anima 2s / 写实 / 鬼针草 / 肉感」= 五个独立渠道，"
                      "**别拆成 anima + 画风**。")
     parts.append("**只在用户点名画风 / 尺寸 / 渠道时才传**；"
                  "分不清照 Available Skills 摘要选。")
@@ -1439,13 +1439,14 @@ tool = {
                   "- 画风四种（**渠道名就是画风**，按想要什么画风挑，不是按模型挑）："
                   "`hd_3_clear`（清透素净）/ `hd_3_soft`（柔光）/ "
                   "`hd_3_gloss`（冷调油光，用户直接叫它「anime2 / 原版」）/ `hd_3_curvy`（丰腴强光影）\n"
-                  "- **另有四条独立动漫渠道**：`anima-line`（「anima线条」）/ "
+                  "- **另有五条独立动漫渠道**：`anima-line`（「anima线条」）/ "
+                  "`anima-2s`（「anima 2s」，同配方换 2.9B 底模、15+10 步、两段 er_sde）/ "
                   "`anima-real`（「anima写实」）/ `anima-guizhencao`（「anima鬼针草」）/ "
                   "`anima-flesh`（「anima肉感」，皮肤质感最重）。"
-                  "前两条 = 6 条 LoRA + silvermoonmix 二段（2456×3686）；"
+                  "前三条 = 6 条 LoRA + silvermoonmix 二段（2456×3686）；"
                   "后两条单段（鬼针草 7 LoRA/30 步，肉感 Turbo+qaq/8 步/"
                   "1024×1536 再 2x），输出都是 2048×3072。"
-                  "四条都**不参与上面这套画风体系**，只在被点名时用；"
+                  "五条都**不参与上面这套画风体系**，只在被点名时用；"
                   "⚠️ 裸「肉感」是画风词（→ `hd_3_curvy`），不算点名\n"
                   "**换渠道的门槛：只有用户点名画风、或点名「anima / 三档」、或明确要「更柔 / 更亮 / 更丰满 / 更大」时才传，平时一律不传。**"
                   "clear 和 soft 像，分不清也走默认\n"

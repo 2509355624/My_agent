@@ -502,7 +502,7 @@ class SceneSplitTest(unittest.TestCase):
 
 
 class PromptTest(unittest.TestCase):
-    """出图提示词 = 角色卡固定块 + 这一轮的画面。"""
+    """出图提示词 = 角色卡固定块 + 这一轮的画面（+ 可选的固定 POV 机位）。"""
 
     def test_fixed_block_prepended(self):
         card = {"appearancePrompt": "1girl, white hair",
@@ -516,6 +516,17 @@ class PromptTest(unittest.TestCase):
     def test_empty_scene_leaves_the_fixed_block(self):
         self.assertEqual(persona.build_prompt({"appearancePrompt": "1girl"}, ""),
                          "1girl")
+
+    def test_pov_camera_is_opt_in_and_fixed(self):
+        """机位只给角色扮演 draw() 拼，galgame 等老调用方行为不变。"""
+        card = {"appearancePrompt": "an adult woman with green hair"}
+        plain = persona.build_prompt(card, "medium shot, smiling")
+        self.assertNotIn("first-person pov", plain)
+        pov = persona.build_prompt(card, "medium shot, smiling", pov=True)
+        self.assertTrue(pov.endswith(", " + persona._POV_CAMERA))
+        self.assertEqual(pov.count("first-person pov"), 1)
+        for tag in ("1other", "pov hands", "solo", "1boy"):
+            self.assertNotIn(tag, pov, tag)
 
 
 class SessionTargetTest(unittest.TestCase):
@@ -645,8 +656,9 @@ class DrawTest(unittest.TestCase):
         persona.draw("sitting, smile", {"appearancePrompt": "1girl"}, "private_1")
         self.assertEqual(gi.build_t2i_workflow.call_args[0][0],
                          persona.FAST_SKILL)
+        # 角色扮演出图的机位由代码固定拼在末尾（2026-11-08），演员不再赌视角状态
         self.assertEqual(gi.build_t2i_workflow.call_args[0][1],
-                         "1girl, sitting, smile")
+                         "1girl, sitting, smile, " + persona._POV_CAMERA)
 
     def test_comfy_down_is_silent(self):
         self._patch(alive=False)
@@ -783,7 +795,7 @@ class DrawTest(unittest.TestCase):
 
 
 class PovContractTest(unittest.TestCase):
-    """2026-11-08：演员 AI 写的「画面：」行必须是第一人称 POV。"""
+    """2026-11-08：POV 机位由代码固定拼，画面行写以镜头为受体的动作。"""
 
     def test_both_contracts_carry_the_pov_rules(self):
         for text in (persona._CONTRACT, persona._CONTRACT_NO_INTIMATE):
@@ -2075,6 +2087,10 @@ class RosterWebLinkTest(PersonaBase):
 
     理由：QQ 里打字出图太麻烦，网页点按钮就行；但外链发群里容易被风控、
     一次就刷屏，所以群里只回规则本身。
+
+    2026-11-09 用户补充：「直接把网页链接放到最上面的聊天记录卡片内容里面，
+    因为现在基本就是网页版了」——链接必须在**第一个节点**、且在「【怎么开始】」
+    之前，而不是原来排在【清空存档】后面的【网页版（推荐）】小节。
     """
 
     def setUp(self):
@@ -2086,10 +2102,33 @@ class RosterWebLinkTest(PersonaBase):
         self.assertIn("网页版", t)
         self.assertIn("https://x.trycloudflare.com/persona", t)
 
+    def test_private_roster_link_sits_on_top(self):
+        """链接要在标题下面第一段，不能压到命令/攻略后面。"""
+        t = persona.roster_text(site_url="https://x.trycloudflare.com")
+        self.assertLess(t.index("https://x.trycloudflare.com/persona"),
+                        t.index("【怎么开始】"),
+                        "网页链接必须在「【怎么开始】」之前")
+        # 只出现一次：原来底部还有一个【网页版（推荐）】小节，已并到顶部
+        self.assertEqual(t.count("https://x.trycloudflare.com/persona"), 1)
+
+    def test_private_first_node_is_the_entry(self):
+        """卡片第一个节点就是入口——点开第一屏就能看到链接。"""
+        nodes = persona.roster_nodes(site_url="https://x.trycloudflare.com")
+        self.assertTrue(nodes)
+        self.assertIn("https://x.trycloudflare.com/persona", nodes[0])
+        self.assertNotIn("【怎么开始】", nodes[0],
+                         "入口节点不该把「怎么开始」也吞进来")
+
     def test_group_roster_has_no_web_link(self):
         t = persona.roster_text(site_url="")
         self.assertNotIn("网页版", t)
         self.assertNotIn("trycloudflare", t)
+
+    def test_group_first_node_has_no_link(self):
+        nodes = persona.roster_nodes(site_url="")
+        self.assertTrue(nodes)
+        self.assertNotIn("http", nodes[0])
+        self.assertNotIn("网页版", nodes[0])
 
     def test_private_command_includes_link(self):
         with mock.patch("app.friend_site.url",

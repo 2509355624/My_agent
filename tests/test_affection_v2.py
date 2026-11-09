@@ -173,7 +173,7 @@ class InjectionTest(unittest.TestCase):
              # 测试的 format 字典也得带上，否则 KeyError。
              "dev": "（五处都还没被开发过）",
              "item_keys": "（无）",
-             "segment_guide": "", "director_guide": ""}
+             "segment_guide": "", "facts_guide": "", "director_guide": ""}
         txt = P._SCORE_PROMPT_V2 % d
         self.assertIn("表白值", txt)
         self.assertIn("不是好感", txt)

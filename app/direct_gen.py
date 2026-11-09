@@ -361,6 +361,15 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    "anima-real": "anima-real",
                    "anima-guizhencao": "anima-guizhencao",
                    "anima-flesh": "anima-flesh",
+                   # 2026-11-09 用户新建：anima-line 的换底模版——一段 1.3B →
+                   # realskin 2.9B，两段步数 20/20 → 10/5，其余（6 条 LoRA、
+                   # silvermoonmix 二段、1.2× latent、2x 像素放大）一字不动。
+                   # 用户原话：「我这个 29b 的模式和 silver 的结合」。
+                   # 点名词「anima 2s」= `anima2s`（`_fixed_chan` 去空格小写），
+                   # id 本身 `anima-2s` 也登记——理由同上面那批连字符 id：
+                   # 不登记的话 `_STYLE_RE` 会把 `2s` 啃掉，正文里剩个 `-2s`。
+                   "anima2s": "anima-2s",
+                   "anima-2s": "anima-2s",
                    # 2026-10-24 用户新建的**半厚涂测试渠道**：配方逐行照抄 silver，
                    # 只把 `Anima_in_real_update_v2_epoch_20`（元数据标题 `@Ani3rel`，
                    # Anima→写实/3D）从 **1.0 降到 0.55**、`_cowani_epoch_10` 0.8→0.5，
@@ -455,6 +464,12 @@ _FIXED_CHAN_RE = re.compile(
     r"(?<![0-9A-Za-z_])"
     r"(anima\s*线条|anima\s*写实|anima\s*鬼针草|anima\s*肉感"
     r"|anima-line|anima-real|anima-guizhencao|anima-flesh"
+    # 2026-11-09 新增 `anima 2s`（29B 一段 × silver 二段，见 `skills/anima-2s/`）。
+    # ⚠️ 两种写法都要登记：`anima\s*2s` 管「anima 2s / anima2s」，
+    #    `anima-2s` 管 id 原名——`anima\s*2s` 匹配不到中间的连字符。
+    # ⚠️ 必须排在裸 `anima` 档位词前面（本正则本来就先于 `_TIER_RE` 尝试，
+    #    排在组内哪个位置不影响，但别把它挪到 `_TIER_RE` 之后）。
+    r"|anima\s*2s|anima-2s"
     # 2026-10-24 半厚涂测试渠道（配方照抄 silver，降写实化 LoRA + 加半厚涂前缀）。
     # 中文名全句可认：它是渠道专名，画风表里没有「半厚涂」这一条。
     # `semi-thick` 整串必须写全 —— 只写 `semi` 会把 `-thick` 落在正文里。
@@ -1001,6 +1016,7 @@ GUIDE_TEXT = (
     "　silver-hd　3x超清 · 3696×5520（约18MB）\n"
     "　jank　NoobAI 自定义（有权号词就用它）\n"
     "　anima线条　anima 堆 6 条 LoRA 的版本 · 2456×3686\n"
+    "　anima 2s　同上，一段底模换成 realskin 2.9B · 15+10 步 · 双 er_sde\n"
     "　anima写实　同上，一段底模换成 AnimeReality\n"
     "　anima鬼针草　anima 堆 7 条 LoRA 的混搭 · 2048×3072\n"
     "　qwen　慢·写实·能在图里写中文字\n"
@@ -1091,7 +1107,7 @@ MORE_CHAN_TEXT = (
     "\n"
     "【其他】moss ｜ moss光影 ｜ silver-hd ｜ qwen-hd\n"
     "　　　　qwen角色设定表 ｜ qwen修复 ｜ 半厚涂 ｜ sf ｜ anima多图\n"
-    "　　　　anima线条 ｜ anima写实 ｜ anima鬼针草 ｜ anima肉感 ｜ jank\n"
+    "　　　　anima线条 ｜ anima 2s ｜ anima写实 ｜ anima鬼针草 ｜ anima肉感 ｜ jank\n"
     "　　　　sd ｜ nffa ｜ cunny ｜ nai\n"
     "\n"
     "【玩法】\n"
@@ -1604,6 +1620,7 @@ _MASTER_TEMPLATE = (
     "| moss | `moss-qunyou` | 点名 moss：竖版 25 步约 74 秒，出字最准；只挂 nai5，触发词自动加，提示词不用写 @//neoanime/ |\n"
     "| moss光影 | `moss-light` | 点名 moss光影才填：同骨架多 LoRA 组合（光影+nai5+米山舞+光润皮肤），写实向 |\n"
     "| anima线条 | `anima-line` | 点名，线条感重 |\n"
+    "| anima 2s | `anima-2s` | 点名，线条配方换 2.9B 底模、15+10 步、双 er_sde；角色扮演出图默认是它 |\n"
     "| anima写实 | `anima-real` | 点名，真人质感 |\n"
     "| anima鬼针草 | `anima-guizhencao` | 点名，鬼针草画风 |\n"
     "| anima肉感 | `anima-flesh` | 点名，皮肤质感和体量感最重 |\n"
@@ -1696,8 +1713,8 @@ _REVISE_TEMPLATE = (
     "  anima（= 三档）= hd_3_<画风>（末尾带 2x 像素放大 → 3072×4608；"
     "画风只有 clear/soft/gloss/curvy 四种，例「anima gloss」= hd_3_gloss，"
     "没说画风 = hd_3_clear）；\n"
-    "  anima-line / anima-real / anima-guizhencao / anima-flesh = "
-    "说「anima线条 / anima写实 / anima鬼针草 / anima肉感」"
+    "  anima-line / anima-2s / anima-real / anima-guizhencao / anima-flesh = "
+    "说「anima线条 / anima 2s / anima写实 / anima鬼针草 / anima肉感」"
     "（四条独立配方，不在画风体系里）；\n"
     "  nai / nai_wide = 说「nai」（画师串和权重语法认这两个）；\n"
     "  qwen_image_v1 = 说「qwen / 千问 / 通义」；image_gen_v1 = 说「sd」；\n"

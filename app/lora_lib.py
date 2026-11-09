@@ -296,7 +296,7 @@ def preview_block(text, k=PREVIEW_K):
     return block
 
 
-ANIMA_CHANNELS = ["anima_clear", "anima-line", "anima-real",
+ANIMA_CHANNELS = ["anima_clear", "anima-line", "anima-2s", "anima-real",
                   "hd_3_clear", "hd_3_curvy", "hd_3_gloss", "hd_3_soft",
                   "silver", "silver-hd"]
 # 用户 2026-11-06 拍板：
@@ -350,7 +350,9 @@ def _norm_channel(word):
         return ""
     if w in ANIMA_CHANNELS:
         return w
-    alias = {"线条": "anima-line", "line": "anima-line",
+    alias = {"2s": "anima-2s", "anima2s": "anima-2s",
+             "anima-2s": "anima-2s",
+             "线条": "anima-line", "line": "anima-line",
              "anima": "anima_clear", "默认": "anima_clear",
              "clear": "anima_clear", "anima线条": "anima-line",
              "real": "anima-real", "写实": "anima-real",

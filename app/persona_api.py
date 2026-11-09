@@ -1448,7 +1448,7 @@ def _img_rel(f):
 
 @bp.route("/api/persona/shot", methods=["POST"])
 def shot():
-    """「出图」→ anima-line 单张横屏 CG（2026-11-04 换线，原 moss 五格漫画）。
+    """「出图」→ `persona.SHOT_SKILL`（anima-2s）单张 CG，竖屏/横屏可选。
 
     仍走 `image_jobs` 那条全局队列（`persona.draw_shot` → `image_jobs.enqueue`），
     不绕过队列的串行/水位控制。**后台线程**出图，这个接口立刻返回；完成情况
@@ -1458,9 +1458,11 @@ def shot():
     - 失败：`{"error": 原因}`
     前端轮询 `/api/persona/shot_status?n=<行号>` 拿结果。
 
-    body: {msgIndex?}
+    body: {msgIndex?, orient?}
       - `msgIndex` 指定画哪一条回复：**归档行号**（每条回复下面的按钮传它）
       - 不传 = 画最后一轮
+      - `orient`：`wide` 横屏（网页背景用）/ `tall` 竖屏（手机、默认）。
+        缺省竖屏——手机端不传也是对的，网页端由前端弹窗显式给。
     """
     body = request.get_json(silent=True) or {}
     idx = body.get("msgIndex")
@@ -1469,6 +1471,10 @@ def shot():
             idx = int(idx)
         except (TypeError, ValueError):
             return jsonify({"ok": False, "error": "msgIndex 不是数字"}), 400
+    # 方向（2026-11-09）：只认显式 wide，别的（含拼错、None）都当竖屏。
+    # 不猜「窗口宽就是横屏」——手机横过来时窗口也是宽的，那不是她要的背景。
+    landscape = str(body.get("orient") or "").strip().lower() in (
+        "wide", "landscape", "land", "横", "横屏", "横版")
 
     role, who, _token = _who()
     if role == "guest":
@@ -1498,7 +1504,8 @@ def shot():
 
     def _work():
         try:
-            name, note = persona.draw_shot(card, key, msg_index=idx)
+            name, note = persona.draw_shot(card, key, msg_index=idx,
+                                           landscape=landscape)
         except Exception:                          # noqa: BLE001
             log.exception("网页出图异常 %s", key)
             name, note = "", "出图这步出了岔子，再试一次"
@@ -1507,8 +1514,10 @@ def shot():
                      else {"error": note or "出图失败"})
 
     threading.Thread(target=_work, daemon=True, name="persona-shot").start()
-    return jsonify({"ok": True, "msgIndex": idx,
-                    "reply": "在画了，横屏单图，几十秒。"})
+    return jsonify({"ok": True, "msgIndex": idx, "orient":
+                    "wide" if landscape else "tall",
+                    "reply": "在画了，%s，几十秒。"
+                             % ("横屏单图" if landscape else "竖屏单图")})
 
 
 @bp.route("/api/persona/shot_status")

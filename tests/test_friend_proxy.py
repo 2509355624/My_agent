@@ -7,6 +7,7 @@
 """
 
 import gzip
+import json
 import os
 import shutil
 import sys
@@ -188,6 +189,49 @@ class SessionIsolationTest(unittest.TestCase):
             client = friend_app.app.test_client()
             client.get("/api/persona/session")
         self.assertTrue(sess.close.called, "转发完要关 session")
+
+
+class CharIntrosRouteTest(unittest.TestCase):
+    """`/char_intros.json`（2026-11-09）：角色卡详情里那一节的数据源。
+
+    以前 5175 **完全不发静态文件**，而 `persona.html` 里是相对路径
+    `fetch("/char_intros.json")`——手机上（走隧道 → 5175）永远 404，角色卡
+    详情里「角色介绍 / 萌娘百科」整节消失，本机 5174 却看得到。用户报的
+    「貌似只有我自己的本地电脑可以看到」就是这条。
+
+    数据文件是本地内容（`.gitignore` 忽略），没这个文件时跳过——不能因为
+    某台机器没铺角色介绍就让测试红。
+    """
+
+    FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "web", "char_intros.json")
+
+    def setUp(self):
+        if not os.path.exists(self.FILE):
+            self.skipTest("本机没有 web/char_intros.json")
+
+    def _client(self, logged_in):
+        c = friend_app.app.test_client()
+        if logged_in:
+            c.set_cookie("fr_sess", friend_auth.issue_cookie("2509355624"))
+        return c
+
+    def test_logged_in_gets_the_json(self):
+        r = self._client(True).get("/char_intros.json")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.mimetype, "application/json")
+        self.assertTrue(json.loads(r.get_data(as_text=True)))
+
+    def test_anonymous_gets_nothing(self):
+        r = self._client(False).get("/char_intros.json")
+        self.assertEqual(r.status_code, 404)
+
+    def test_persona_page_fetches_that_exact_path(self):
+        """页面里的路径和路由必须逐字一致，少个斜杠就又 404。"""
+        with open(os.path.join(os.path.dirname(self.FILE), "persona.html"),
+                  encoding="utf-8") as f:
+            html = f.read()
+        self.assertIn('fetch("/char_intros.json"', html)
 
 
 class PageRoutingTest(unittest.TestCase):

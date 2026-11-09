@@ -90,6 +90,16 @@
     white-space: pre-wrap; word-break: break-word; }
   .msg.u .b { background: var(--accent-dim); }
   .msg.a .b { background: var(--bg-elev); border: 1px solid var(--border-soft); }
+  /* 台词高亮（2026-11-09 用户要求）：回看是一整屏散文，她说出口的话夹在叙述里
+     很难扫。颜色与扮演页同一套黄荧光，只圈引号内的字，旁白不吃色。 */
+  .msg .b .dlg { background: rgba(251, 191, 36, .16); color: #ffdf8a;
+    padding: 0 3px; border-radius: 4px; box-decoration-break: clone;
+    -webkit-box-decoration-break: clone; }
+  /* 心声：独立成段、行首带 〔心声〕 的那一行吃粉荧光，标签本身不显示。
+     2026-11-09 起和扮演页一致——以前这里把记号剥了就剩纯文本，看着像旁白。 */
+  .msg .b .mono { background: rgba(237, 147, 177, .16); color: #f4c0d1;
+    padding: 1px 5px; border-radius: 4px; box-decoration-break: clone;
+    -webkit-box-decoration-break: clone; }
   .msg .m { font-size: 10.5px; color: var(--text-mute); margin-top: 3px; }
   .empty { color: var(--text-mute); text-align: center; padding: 80px 20px;
     font-size: 13px; line-height: 2; }
@@ -335,13 +345,26 @@ async function refreshCurrent() {
   } catch (e) { /* 自动刷新失败静默跳过，下一轮再试 */ }
 }
 
+// 台词/心声高亮（2026-11-09）。和扮演页 `fmtDlg` 同一条规矩：**先整体转义，
+// 再在转义后的文本上包 span**——正则只认转义后的引号，不对原始文本放行任何
+// HTML，所以这里用 innerHTML 也不比原来的 textContent 多出注入面。
+function fmtDlg(text) {
+  const esc = String(text)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  // 心声：行首 〔心声〕 整行吃粉色，标记本身不显示（后台不需要看元数据）。
+  return esc
+    .replace(/^〔心声〕[ \t]*[:：]?[ \t]*([^\n]*)/gm,
+             '<span class="mono">$1</span>')
+    .replace(/(&quot;[\s\S]*?&quot;|“[\s\S]*?”|「[^」]*」)/g,
+             '<span class="dlg">$1</span>');
+}
+
 function makeMsg(m) {
   const el = document.createElement("div");
   el.className = "msg " + (m.role === "user" ? "u" : "a");
   el.innerHTML = '<div class="b"></div><div class="m"></div>';
-  // 后台回看是纯文本：心声记号只给前端上色用，这里剥掉不露出元数据
-  el.querySelector(".b").textContent = String(m.text || "")
-    .replace(/^〔心声〕[ \t]*[:：]?[ \t]*/gm, "");
+  el.querySelector(".b").innerHTML = fmtDlg(m.text || "");
   if (m.role === "assistant" && m.mood) {
     el.querySelector(".m").textContent =
       m.mood + " " + (m.intensity || 0) + (m.state ? ("　" + m.state) : "");

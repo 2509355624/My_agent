@@ -53,7 +53,7 @@ log = logging.getLogger("char_loras")
 #
 # krea2（gguf）和 qwen（gguf）不吃这几类 LoRA，不放进来。
 _LORA_SKILLS_ANIMA = (
-    "anima_clear", "anima-line", "anima-real",
+    "anima_clear", "anima-line", "anima-2s", "anima-real",
     "hd_3_clear", "hd_3_curvy", "hd_3_gloss", "hd_3_soft",
     "silver", "silver-hd",
 )

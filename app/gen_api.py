@@ -91,7 +91,8 @@ def _nai_prompt(prompt, prefix):
 # 列表展示顺序：最常用的排前面，其余按名字。QQ 那边渠道词一堆，这里只挑
 # 头部的几个——其余字母序也够找。
 _HEAD = ("silver", "silver-hd", "hd_3_clear", "hd_3_curvy", "hd_3_gloss",
-         "hd_3_soft", "anima-line", "anima-real", "qwen_image_v1", "qwen-hd",
+         "hd_3_soft", "anima-line", "anima-2s", "anima-real",
+         "qwen_image_v1", "qwen-hd",
          "nai", "nai_wide", "cunny", "miao", "jank", "nffa")
 
 

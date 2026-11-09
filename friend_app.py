@@ -196,7 +196,11 @@ def _gate():
         return None
     if (_solo_in() and not _logged_in()
             and not p.startswith("/api/")
-            and p not in (SOLO_PATH, SOLO_PATH + ".html", "/health", "/logout")):
+            # `/char_intros.json` 是角色卡详情的静态数据（2026-11-09），跟
+            # `/api/` 一样属于「页面要用到的东西」，拦成跳转的话独立页里
+            # fetch 会拿到一段 HTML，JSON 解析失败 → 介绍节静默消失。
+            and p not in (SOLO_PATH, SOLO_PATH + ".html", "/health", "/logout",
+                          "/char_intros.json")):
         return redirect(SOLO_PATH)
     return None
 
@@ -840,6 +844,24 @@ def compat_page():
     按钮——让他们把结果发过来，不用猜。
     """
     return send_from_directory(WEB_DIR, "compat.html")
+
+
+@app.route("/char_intros.json")
+def char_intros():
+    """角色卡详情的「角色介绍 / 萌娘百科」（2026-11-09）。
+
+    `persona.html` 里是**相对路径** `fetch("/char_intros.json")`：本机 5174
+    由 Flask 静态目录直接发；手机走 5175 时这条路径落在网关上，而网关只显式
+    列了页面路由 + 转发 `/api/*`，静态文件一个都不认——于是 404，角色卡详情
+    里那一节整块不显示。用户报的「本地电脑能看到、手机看不到」就是它。
+
+    文件就在 `web/` 下（和 5174 同一份），这里原样发出去，不新增任何数据。
+    门槛与页面一致：登录用户或游客（`/play` 独立页也是游客）；都不是就 404，
+    不把卡库介绍白送出去。
+    """
+    if not (_logged_in() or _guest_in()):
+        return "", 404
+    return send_from_directory(WEB_DIR, "char_intros.json")
 
 
 def run():

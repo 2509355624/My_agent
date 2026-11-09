@@ -814,15 +814,16 @@ _CONTRACT = (
     "\n"
     "## 输出格式\n"
     "\n"
-    "四段一起交出来：\n"
+    "五段一起交出来：\n"
     "\n"
     "1. **正文** —— 一段小说式的第三人称叙述（写法见下一节）。\n"
-    "2. **`画面：`** —— 英文一行。\n"
-    "3. **`心情：`** —— 情绪 + 强度。\n"
-    "4. **`状态：`** —— 地点 · 衣着 · 接触 · 时段，四段用 ` · ` 隔开。\n"
+    "2. **`画面：`** —— 英文一行，这一刻的景别 / 表情 / 动作 / 场景 / 光照。\n"
+    "3. **`服饰：`** —— 英文一行，她此刻身上的穿着，具体到哪一件。\n"
+    "4. **`心情：`** —— 情绪 + 强度。\n"
+    "5. **`状态：`** —— 地点 · 衣着 · 姿态 · 时段 · 接触，五段用 ` · ` 隔开。\n"
     "\n"
-    "正文之后空一行，按 2→3→4 写三行，每行以行首的中文标签开头。"
-    "这三行是给系统读的元数据，标签照写、内容写清楚就好。\n"
+    "正文之后空一行，按 2→3→4→5 写四行，每行以行首的中文标签开头。"
+    "这四行是给系统读的元数据，标签照写、内容写清楚就好。\n"
     "\n"
     "## 正文：写一段小说\n"
     "\n"
@@ -998,43 +999,19 @@ _CONTRACT = (
     + "\n"
     "## 画面（这一行就是她的出图提示词）\n"
     "\n"
-    "**这一行是 POV 视角**（2026-11-08 用户拍板）：镜头就是「你」的眼睛，画面里"
-    "只有她一个完整的人。\n"
+    "**这一行是 POV 视角**：镜头就是「你」的眼睛，画面里只有她一个完整的人。"
+    "机位那句 `first-person pov, eye level` 由系统固定拼在末尾，"
+    "你不用写机位，也不用挑视角状态。\n"
     "\n"
-    "**POV 有三种状态，每轮只选一种，选错就是多手多脚：**\n"
+    "**这一行只写「这一刻」**：景别、表情、动作、穿着、道具与场景、光照。"
+    "她是谁、长什么样、角色触发词和人数，系统另拼一份固定块放在这一行前面，"
+    "每轮都在；主体只声明这一次，画面里就只剩她对着你。\n"
     "\n"
-    "① **画面里只有她** → 只写 `pov` 一个词，不带 `pov hands`、不带 `1other`、"
-    "不带任何「你的身体部位」的词。写了什么模型就画什么——提了腿就长出腿，"
-    "提了手就长出多余的手（白熊效应，漫画工作台 2026-10-12 实测）。\n"
-    "  这一档要显示「你的手在这儿」，写成 `viewer's hand entering from the "
-    "bottom edge of the frame`（英文短语，不占 tag），比 `pov hands` 安全。\n"
-    "② **你的手入画** → **三件套齐全**才算数：`pov, pov hands, 1other`，"
-    "再写那只手在做什么（`holding another's wrist`）。只写 `pov hands` 不写 `1other`，"
-    "模型不知道那只手属于谁，会画成她自己的手。\n"
-    "③ **你本人是女性视角**（百合 / 女女向）→ 用 `female_pov` 替掉 `pov`。"
-    "`pov` 的默认先验是男性第一人称，光写它会画出一只男人的手。\n"
+    "### 两条稳画面的写法\n"
     "\n"
-    "镜头那一节固定带 `first-person pov, eye level`（这是机位描述，"
-    "和上面那三个【状态】不冲突：状态讲的是**有没有你的身体部位入画**）。\n"
-    "\n"
-    "**两条硬禁令（写错必崩）：**\n"
-    "- **`solo` 和 `pov hands` / `1other` / `1boy` 永不共存。** 前者说「画面只有一个人」，"
-    "后者说「还有第二方的身体入画」，自相矛盾时模型三选一妥协：把手画成她自己、"
-    "放弃那个动作、或者画出一团畸形的手。\n"
-    "- **永不写 `hand around wrist`。** 它没写明是谁的手，实测被渲染成「她自己抓自己"
-    "手腕」。要写就写全：`holding another's wrist`；只是搭着不使劲写 "
-    "`hand on another's wrist`。\n"
-    "\n"
-    "**末尾补一句反向钉住**，写这一格最容易被画错的东西：`no other hands in frame`、"
-    "`no hands or hair covering her face`、`no text, no speech bubble`。"
-    "反向钉住比正面多写十个形容词有效（漫画工作台实测）。\n"
-    "\n"
-    "### 两条防崩写法\n"
-    "\n"
-    "- **拉扯动词会让模型腾出一只手**。衣物、动作一律写成**已经完成的状态**："
-    "`her cardigan already slipped off one shoulder`（不写 `she slips it off`）、"
-    "`the collar already pulled open`。漫画工作台实测：拉扯动词会占用双手，"
-    "多出来的那只就是这么长出来的。\n"
+    "- **衣物和姿势写成已经摆好的样子**：`her cardigan already slipped off one "
+    "shoulder`、`the collar already pulled open`、`she is sitting with both knees "
+    "drawn up`。摆好的状态不占手，两只手就能各写各的动作。\n"
     "- **景别放在这一行的开头**：`close-up of …` / `medium shot of …` / `full body of …`。"
     "写在后半截模型经常只取前半句，最后每张都变成中景。\n"
     "\n"
@@ -1045,20 +1022,20 @@ _CONTRACT = (
     "`holding hands with a man` 这类写法会把「我」变成画面里的另一个人，"
     "视角就不是「你」了。\n"
     "\n"
-    "英文一行，从她是谁写到这一刻在做什么，顺序是：角色名 / 触发词 → 固定外貌"
-    "（发色、瞳色、发型、发饰）→ 表情 → 动作 → 穿着 → 道具与场景 → 镜头 → 光照。"
-    "越靠前影响越大。\n"
+    "想让「你」的手也在画面里，就写 `viewer's hand entering from the bottom edge "
+    "of the frame`：从画面下缘伸进来一只手，镜头后面的人不进画。\n"
     "\n"
-    "**长相照样写进这一行**：`sunna (zenless zone zero), 1girl, green hair, "
-    "asymmetrical bangs, hairclip, green eyes`。2026-11-08 同 seed 实测：只写角色名、"
-    "把外貌交给底模，绿发会被 LoRA 的银白倾向盖掉，衣服也变成灰白 T 恤。"
-    "角色卡上的固定外貌块系统另拼一份，这一行是给画面看的定稿。\n"
-    "\n"
-    "属性用 danbooru 标签（小写、多词下划线），方位 / 互动 / 材质用英文短语补："
+    "英文一行，从景别写起：景别 → 表情 → 动作 → 道具与场景 → 光照。"
+    "越靠前影响越大。标签或英文短句都行，方位 / 互动 / 材质用短语补清楚："
     "`on the left side of the desk`、`holding a mug in her right hand`、"
-    "`white ceramic, half filled with tea`。至少写满人物、服装分层、场景、镜头、"
-    "光照五项；质量词与画师 tag 由工作流的固定前缀负责，这一行只放看得见的东西。"
-    "手脚带一句 `detailed hands, perfect anatomy, five fingers`。\n"
+    "`white ceramic, half filled with tea`。\n"
+    "\n"
+    "**长相不用你写**：角色卡上的固定外貌块和角色触发词，系统每轮自动拼在这一行"
+    "前面（同 seed 实测过，外貌只交给底模会被 LoRA 的银白倾向盖掉，衣服也变成"
+    "灰白 T 恤）。你接在后面往下写这一刻就行。质量词与画师 tag 由工作流的固定"
+    "前缀负责，穿着由单独的「服饰：」行负责，这一行只放看得见的东西；"
+    "至少写满景别、动作、场景、光照四项。手脚带一句 "
+    "`detailed hands, perfect anatomy, five fingers`。\n"
     "\n"
     "**正文里出现的东西，画面行也写一份**（2026-11-08 实测：蛋糕和奶茶写在正文里、"
     "没进画面行，出图就什么都没有）。写完正文回头扫一遍：这一轮她吃了一口蛋糕、"
@@ -1086,18 +1063,28 @@ _CONTRACT = (
     "- 抽象词换具体部位：不写 `touching her`，写 `his thumb brushing her lower lip`；"
     "不写 `embracing`，写 `her arms around his neck, chin on his shoulder`。\n"
     "\n"
-    "写清她身上穿着什么，具体到哪一件、什么颜色、什么状态：\n"
+    "## 服饰（这一行是她此刻穿着的定稿）\n"
+    "\n"
+    "单独写一行，只写她身上穿着什么，具体到哪一件、什么颜色、什么状态：\n"
     "\n"
     "- 穿着：`loose beige knit sweater and grey lounge shorts`、`pink pajama top`\n"
     "- 半脱：`pajama top unbuttoned and slipping off one shoulder`、"
     "`the collar pulled open`\n"
     "- 没有：`completely nude`\n"
     "\n"
-    "**没换就照抄**：这一轮没脱、没换、没提衣服，就把上一轮画面行里那串服饰标签"
-    "（或「她此刻的样子」里写的那身）逐字沿用，只换动作、表情、镜头、光照；"
-    "真换了才重写，一件一件数出来（`white dress shirt with sleeves rolled to "
-    "the elbow, black pleated skirt`、`towel wrapped around the chest`）。"
-    "`casual clothes` 这种它只能猜。**这一行直接拿去生图，你写什么就画什么**。\n"
+    "系统会把它存成「当前穿着」，下一轮原样递给你，出图时也单独放在画面行"
+    "前面——**它是画里穿什么的唯一依据**。所以：\n"
+    "\n"
+    "- 这一轮她真的脱了、换了、加了一件，就只写此刻还穿在身上的那几件，"
+    "照这一轮的动作重新数清楚（`white dress shirt with sleeves rolled to "
+    "the elbow, black pleated skirt`、`towel wrapped around the chest`）。\n"
+    "- 身上的东西没动，就把递给你的那串**逐字照抄**，让画面行去换动作、"
+    "表情、镜头、光照就好。\n"
+    "- 写具体到几件的英文，不写 `casual clothes` 这种它只能猜的笼统词，"
+    "也不写长相、质量词、人数词。\n"
+    "\n"
+    "画面行里的穿着沿用这一行的说法。**这一行直接拿去生图，"
+    "你写什么就画什么**。\n"
     "\n"
     "## 心情\n"
     "\n"
@@ -1129,10 +1116,11 @@ _CONTRACT = (
     "\n"
     "## 收尾\n"
     "\n"
-    "正文之后空一行，补上三行元数据：\n"
+    "正文之后空一行，补上四行元数据：\n"
     "\n"
     "```\n"
-    "画面：<英文一行，含穿着>\n"
+    "画面：<英文一行，这一刻的景别 / 动作 / 场景 / 光照>\n"
+    "服饰：<英文一行，她此刻穿着什么>\n"
     "心情：<情绪> 强度<N>\n"
     "状态：<在哪> · <穿什么> · <姿态> · <时段> · <接触>\n"
     "```\n"
@@ -1147,7 +1135,7 @@ _CONTRACT = (
     "系统拿它和上一拍对：**换了地方就得写清怎么退出来、怎么进去**，\n"
     "直接从后庭跳到嘴里、中间一个字不提，会被判成穿帮。\n"
     "\n"
-    "这三行是给系统读的，标签后面都要有内容。正文写得再投入，也记得把它们补上。\n"
+    "这四行是给系统读的，标签后面都要有内容。正文写得再投入，也记得把它们补上。\n"
     "\n"
     "再扫一眼：对面那个人是「你」，她的念头里也一样；指代写具体；"
     "主语能省就省，读起来更像小说。\n"
@@ -1304,7 +1292,14 @@ FAST_SKILL = "silver"
 # 「出图」的渠道（2026-11-04 用户拍板）：moss 五格漫画剧情差、出图慢，
 # 换成 anima-line 单张横屏 CG——画面行本来就是英文定稿，零额外 LLM 调用；
 # 角色 LoRA 自动装填（`app/char_loras.py`）挂在这条渠道上，IP 角色自动吃加成。
-SHOT_SKILL = "anima-line"
+#
+# 2026-11-09 用户拍板换成 `anima-2s`（= 用户口中的「anima 2s」）：
+# anima-line 的骨架不动，一段底模 1.3B → realskin 2.9B、两段步数 20/20 → 10/5，
+# 二段仍是 silvermoonmix turbo（「29b 的模式和 silver 的结合」）。
+# 它**取代 anima-line 成为角色扮演出图的默认渠道**；anima-line 没下架，
+# 玩家点名「anima线条」照跑。换渠道要同步 `skills/anima-2s/`、QQ 白名单、
+# `char_loras._LORA_SKILLS_ANIMA`（角色 LoRA 要能挂到 2.9B 上）。
+SHOT_SKILL = "anima-2s"
 
 # 扮演配图的输出目录（2026-11-07 用户点名）：落到
 # `output/角色扮演生图/<渠道>/`，和 `web/生图页/` 分开。
@@ -1329,7 +1324,8 @@ MALE_PROTAGONIST = (
     "average build, natural proportions"
 )
 
-# 「出图」触发词。用户说这些就出一张 anima 横屏单图 CG。
+# 「出图」触发词。用户说这些就出一张 anima-2s 单张 CG（QQ 固定竖屏，
+# 网页端由弹窗选横/竖——横屏是给电脑背景用的，见 `draw_shot`）。
 #
 # 判据要严：`出图` 两个字太常见（「我刚才出图了」「出图失败」都是正常聊天），
 # 所以**只在扮演态里**、且整条消息就是这个意思时才触发。见 `is_shot_request`。
@@ -1422,11 +1418,49 @@ def shot_scene(session_key, msg_index=None):
     return _shot_parts(session_key, msg_index)[2]
 
 
-def draw_shot(card, session_key, msg_index=None, reply_to="", on_submit=None):
-    """「出图」→ `SHOT_SKILL`（anima-line）单张**竖屏** CG。
+def shot_outfit(session_key, msg_index=None):
+    """「出图」这一轮的「服饰：」行（当前穿着的英文定稿）。
+
+    优先取**那一轮**归档/窗口里的原文：点旧气泡出图时，画的是当时的穿着，
+    不是此刻的。老线没有这一行（功能上线前的归档），回落到当前固化的
+    `ent["outfit"]`；再没有就返回空串，`build_prompt` 走老拼法。
+
+    和 `_shot_parts` 分开，是为了不改它那个四元组返回（漫画 brief 也按它拆包）。
+    """
+    key = resolve_line(session_key)
+    ent = _entry(key) or {}
+    cur = str(ent.get("outfit") or "").strip()
+    if msg_index is None:
+        rows = [m for m in trim(_load_hist(key))
+                if m.get("role") == "assistant"]
+        if rows:
+            return split_outfit(str(rows[-1].get("content") or "")) or cur
+    else:
+        try:
+            n = int(msg_index)
+        except (TypeError, ValueError):
+            n = -1
+        rows = load_archive(key)
+        if 0 <= n < len(rows) and rows[n].get("role") == "assistant":
+            return split_outfit(str(rows[n].get("content") or "")) or cur
+    return cur
+
+
+def draw_shot(card, session_key, msg_index=None, reply_to="", on_submit=None,
+              landscape=False):
+    """「出图」→ `SHOT_SKILL`（anima-2s）单张 CG，默认**竖屏**。
 
     2026-11-07 用户拍板改竖屏：anima 的横屏构图（1024×1536 转 1536×1024）
     线条极容易崩，竖屏是它的原生比例。
+
+    `landscape=True`（2026-11-09 用户要网页背景，重新放开）：走
+    `image_jobs.landscape_workflow()` 把尺寸节点宽高对调，3680×2464、24~27 秒，
+    实测线条没崩——「横屏容易崩」在 anima-2s 上没有复现。**不是新渠道**，
+    所以角色 LoRA / 六条画风 LoRA / 两段采样全都不动。
+
+    横屏唯一的实测坑：提示词里写「两个人并排」会被画成两个女孩（
+    `two people standing side by side` → 双胞胎式同款浴衣）。要「一起看」的
+    意思，靠 POV 那只手表达，别在提示词里数人数。
 
     返回 `(文件名, note)`：note 非空 = 没画出来及**真实原因**（2026-11-08：
     排队满 / 没在线 / 生成超时 / 跑完没图，各自说各自的）。**阻塞**几十秒，
@@ -1441,11 +1475,14 @@ def draw_shot(card, session_key, msg_index=None, reply_to="", on_submit=None):
         return "", "这一轮没有可画的画面"
     # 排查用（2026-11-05）：线上反馈「出图还是六格漫画」。这条日志把
     # **实际用的渠道和画幅**打出来，一眼就能分辨是代码没生效（进程跑着旧
-    # 版本 → 没有这行）还是走了别的入口（这行有但渠道不是 anima-line）。
-    log.info("扮演出图：渠道=%s 画幅=竖屏 行号=%s 画面=%s",
-             SHOT_SKILL, msg_index, scene[:60])
+    # 版本 → 没有这行）还是走了别的入口（这行有但渠道不是 SHOT_SKILL）。
+    outfit = shot_outfit(session_key, msg_index)
+    log.info("扮演出图：渠道=%s 画幅=%s 行号=%s 画面=%s 服饰=%s",
+             SHOT_SKILL, "横屏" if landscape else "竖屏", msg_index,
+             scene[:60], outfit[:60])
     name = draw(scene, card, session_key, reply_to=reply_to,
-                skill=SHOT_SKILL, landscape=False, on_submit=on_submit)
+                skill=SHOT_SKILL, landscape=bool(landscape),
+                outfit=outfit, on_submit=on_submit)
     if not name:
         # 真实原因在 thread-local 上（draw 的返回值十几个调用方都当字符串用，
         # 不改签名）。拿不到才退回老的那句笼统文案。
@@ -1561,6 +1598,13 @@ _SCENE_RE = re.compile(r"^[ \t]*画面[：:][ \t]*(.*)$", re.M)
 
 # 这行里的修饰符：模型偶尔会把标签套进反引号或加粗星号里。
 _SCENE_NOISE_RE = re.compile(r"[`*]+")
+
+# 「服饰：」那一行（2026-11-09）：当前穿着的**权威英文串**，演员每轮交一次，
+# 代码固化成 `ent["outfit"]`，下一轮回注给演员、出图时前置。为什么要单独一行：
+# 服饰混在长画面行里会被景别/动作/光照冲掉，实测「脱了外套，下一轮又穿回来」。
+# 与「画面 / 心情 / 状态」同级，但取值走 `split_outfit()`，不改 `split_turn`
+# 的五元组返回签名（十几个调用点和单测都按它拆包）。
+_OUTFIT_RE = re.compile(r"^[ \t]*服饰[：:][ \t]*(.*)$", re.M)
 
 
 # ─── 卡库 ────────────────────────────────────────────
@@ -2567,17 +2611,34 @@ def roster_text(site_url=""):
     这份文案是**唯一的规则出口**，每次有人忘了怎么玩，发这个就行。
 
     `site_url`（2026-11-03 加）：群友页的公网地址，**只在私聊传**。
-    传了就在名单前补一段「网页版」——用户原话「QQ 单纯的指令很多人根本
+    传了就在**最上面**写「网页版入口」——用户原话「QQ 单纯的指令很多人根本
     不会玩，改成网页端反而更容易玩，点按钮即可」。
     群聊不传：外链发群里容易被风控，而且一次就刷屏。
+
+    2026-11-09 用户再次要求：链接必须落在「聊天记录卡片最上面」。现在基本
+    都在网页版玩，而卡片是分段节点、要点开逐条翻——原来那段「【网页版（推荐）】」
+    排在命令/攻略之后，等于找不到。所以改成标题下面第一段就放链接 + 一句
+    怎么用，后面不再重复第二遍。
     """
     cards = load_cards()
     if not cards:
         return "我这儿还没有人设卡。"
 
+    # 2026-11-09 用户要求：网页链接提到整张卡片最上面。卡片点开后按节点往
+    # 下翻，链接排在中段等于没有；所以它跟着标题一起，进第一段。
+    head = ["🎭 角色扮演 · 玩法说明", ""]
+    if site_url:
+        head += [
+            "🌐 网页版入口（现在基本都在这边玩）：",
+            "",
+            site_url.rstrip("/") + "/persona",
+            "",
+            "点开就能演：每条回复下面有**出图按钮**，右边能看到她此刻的心情和状态；",
+            "不登录也能玩（体验版 30 轮），登录后无限聊。",
+            "",
+        ]
+
     lines = [
-        "🎭 角色扮演 · 玩法说明",
-        "",
         "【怎么开始】",
         "",
         "· 发一个「#角色名」就进角色 —— 带前缀单独发，避免聊天误触",
@@ -2637,20 +2698,6 @@ def roster_text(site_url=""):
         "",
     ]
 
-    if site_url:
-        lines += [
-            "【网页版（推荐）】",
-            "",
-            "打字麻烦就上网页，点按钮就行：",
-            "",
-            site_url.rstrip("/") + "/persona",
-            "",
-            "· 每条回复下面有**出图按钮**，不用自己打字",
-            "· 右边能看到她此刻的心情和状态",
-            "· 没登录也能玩（体验版 30 轮），登录后无限聊 + 能出图",
-            "",
-        ]
-
     lines += ["【角色名单】", ""]
     for c in cards:
         if c.get("hidden"):
@@ -2658,7 +2705,7 @@ def roster_text(site_url=""):
         tag = c.get("description") or c.get("personality") or ""
         # 2026-11-05：命令统一要前缀了，名单也跟着写 `#名字`，玩家不用猜。
         lines.append("#%s%s" % (c["name"], ("　" + tag) if tag else ""))
-    return "\n".join(lines)
+    return "\n".join(head + lines)
 
 
 def roster_nodes(limit_per_node=400, site_url=""):
@@ -2683,10 +2730,15 @@ def roster_nodes(limit_per_node=400, site_url=""):
     if buf:
         parts.append("\n".join(buf).strip())
 
-    # 合并过短的段，避免卡片里出现只有标题的节点
+    # 合并过短的段，避免卡片里出现只有标题的节点。
+    #
+    # 2026-11-09：第一段带网页入口时**不让后面的小节并进来**——它就单独做
+    # 卡片的第一个节点，点开第一屏就能看到链接（用户要求「放最上面」）。
+    # 群里没有链接，第一段还是标题行，照旧往下合并。
     merged = []
     for p in parts:
-        if merged and len(merged[-1]) + len(p) < limit_per_node:
+        head_is_entry = len(merged) == 1 and "http" in merged[0]
+        if merged and not head_is_entry and len(merged[-1]) + len(p) < limit_per_node:
             merged[-1] = merged[-1] + "\n\n" + p
         else:
             merged.append(p)
@@ -3684,6 +3736,85 @@ SEG_TYPES = ("说", "做", "想")
 SEG_MAX = 16
 SEG_TEXT_MAX = 800
 
+# ── 本轮事实点（2026-11-08）──────────────────────────────
+# 玩家一段话里并列的道具、动作，最容易在第一段被「做→一句话概括」压成
+# 「他拿出食材」，演员再写就只剩最后一句台词（拿出了鸡蛋，却被反问
+# 「要不要加个鸡蛋」）。读原文的是编剧，所以让它顺手列一张清单；代码只
+# 裁剪和透传，落地交给演员——和 segments / items 同一个分工。
+#
+# 清单还兼一个作用：契约里有「你话里交代的前因，她没跟着去过」，场景义务
+# 又要求「他做的动作要演出来」。玩家写「我把鸡蛋拿出来」时模型会摇摆，
+# 于是把摆好的东西当没发生。这里正面说清「就在这一幕眼前」，不动契约正文。
+FACT_MAX = 12
+FACT_TEXT_MAX = 40
+
+_FACTS_GUIDE = (
+    "【再列一张「这一幕已经有的东西」】\n"
+    "facts：按他写的顺序，把这一轮他摆出来、做出来、说出口的具体东西各记一条，"
+    "每条不超过 20 字，只写名词和动作，不写解释：\n"
+    "  · 拿出来的、放下的、摆在某处的东西：一把小油菜、几个西红柿、豆干、"
+    "几颗鸡蛋、两块方便面……\n"
+    "  · 已经做完的一件事：中午和晚上的菜分好放进冰箱、冰箱塞满。\n"
+    "  · 他台词里点名的东西：早餐煮西红柿鸡蛋汤面加豆干。\n"
+    "并列的东西一样一条，写具体的名字和数量，越具体演员越好落地。\n"
+    "这里只记她眼前看得见、此刻已经发生的事；心里想的、别处发生过的，"
+    "交给别的字段。\n"
+)
+
+
+def _parse_facts(raw):
+    """把编剧交的 `facts` 裁成短句列表。只裁剪，不补写、不合并。"""
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out = []
+    for item in raw:
+        if isinstance(item, dict):
+            item = item.get("text") or item.get("name") or ""
+        s = " ".join(str(item or "").split())[:FACT_TEXT_MAX]
+        if s and s not in out:
+            out.append(s)
+        if len(out) >= FACT_MAX:
+            break
+    return out
+
+
+def _facts_block(facts):
+    """给演员的最后一张清单：这一轮已经在场的东西，按原顺序各落地一次。
+
+    放在场景义务之后、尾注之前——越贴近生成点，越不会被 300~600 字、
+    闲笔、物件锚点那些要求摊薄。措辞全部正向：只说「让它在画面里出现」，
+    不写「不许复述」，免得白象效应把复述点亮一遍。
+    """
+    items = _parse_facts(facts)
+    if not items:
+        return ""
+    lines = ["【这一幕已经有的东西（按他写的顺序）】"]
+    lines.extend("- " + f for f in items)
+    lines.append("这些是他这一轮摆到眼前、已经发生的事，就在这一幕里。")
+    lines.append("让它们按这个顺序在画面里各落地一次：写清东西此刻在哪、被谁碰过、"
+                 "成了什么样；中间接上她的动作、停顿、反应，再往下走一拍。"
+                 "落地是让它出现在这一刻的画面里，由她的动作带过去。")
+    return "\n".join(lines)
+
+
+def _outfit_block(outfit):
+    """给演员的「她此刻穿着」：只递上一轮的事实，**判断交给模型**。
+
+    位置同 `_facts_block`（场景义务之后、尾注之前），越贴近生成点越不会被
+    长契约摊薄。这里不列「脱下/穿上」词表、不做准入闸门——代码只检测事实，
+    穿没穿、该不该变由演员从这一轮的动作里自己判断。措辞全部正向：
+    说清「没动就照抄」，不写「不许穿回来」这类禁令（白象效应）。
+    """
+    cur = str(outfit or "").strip()
+    if not cur:
+        return ""
+    return ("【她此刻穿着（上一轮留下的状态）】\n"
+            "- " + cur + "\n"
+            "这一轮她脱了一件、加了一件、换了一身，就在「服饰：」行里写出"
+            "新的那一身；身上的东西没动，就把这串照抄过去。写具体到哪件、"
+            "什么颜色、什么状态，一件一件数清楚。")
+
+
 _SEGMENT_GUIDE = (
     "【先把这一轮拆开，再做判断】\n"
     "把他这一轮的消息按发生顺序拆成若干段，每段都标清「谁」和「是哪一种」：\n"
@@ -3739,6 +3870,7 @@ _INTENT_PROMPT = """判断下面这句话**在干什么**。只输出一个 JSON
   "subtext": "他真正想要 / 试探 / 回避什么",
   "noticed": "她能从外在表现里察觉到什么",
   "stance": "接住 | 装傻 | 反问 | 推开",
+  "facts": ["这一幕已经有的东西，一样一条"],
   "items": {"use": [], "gain": []}
 }
 
@@ -3765,6 +3897,7 @@ finish（这一轮有没有「射在里面」）：只有明确发生/要求内�
 是他真的在做，按字面判 inside，不要因为写法简短就判 none。
 
 %(director_guide)s
+%(facts_guide)s
 
 items：这一轮有没有东西进出她手里（没有就留空数组）。
   use 只记**真的用上了**的——拿到手上、真起作用了；被她挡回来、只是拿给她看的都不算。
@@ -3830,7 +3963,7 @@ def _parse_segments(raw):
 def _director_fields(d):
     """从第一段的 JSON 里取导演字段。缺字段就留空，不编。"""
     if not isinstance(d, dict):
-        return {"segments": [], "addressed": True, "literal": "", "subtext": "",
+        return {"segments": [], "facts": [], "addressed": True, "literal": "", "subtext": "",
                 "noticed": "", "stance": "", "secret": False,
                 "persona_mode": "", "tension": "", "lead": "none",
                 "lead_form": "", "lead_reason": ""}
@@ -3851,6 +3984,7 @@ def _director_fields(d):
     _items_blk = d.get("items") if isinstance(d.get("items"), dict) else None
     out = {
         "segments": segs,
+        "facts": _parse_facts(d.get("facts")),
         "addressed": addressed,
         "literal": str(d.get("literal") or "").strip()[:40],
         "subtext": str(d.get("subtext") or "").strip()[:50],
@@ -4089,6 +4223,7 @@ def _judge_intent(card, said, state="", history=None, note=""):
         "recent": _judge_recent(history),
         "ledger": _judge_ledger(note),
         "director_guide": _DIRECTOR_GUIDE,
+        "facts_guide": _FACTS_GUIDE,
         "item_keys": _item_keys_text(),
     }
     try:
@@ -4251,6 +4386,7 @@ _SCORE_PROMPT = """判断下面这句话**在干什么**，并给这句话对你
   "segments": [
     {"who": "用户 | 助手", "type": "说 | 做 | 想", "text": "说→原文；做→一句话概括；想→空串"}
   ],
+  "facts": ["这一幕已经有的东西，一样一条"],
   "addressed": true,
   "subtext": "他真正想要 / 试探 / 回避什么",
   "noticed": "她能从外在表现里察觉到什么",
@@ -4510,6 +4646,7 @@ lead_reason：一句话说清为什么这一拍会/不会主动（不超过 25 �
 克制会明显变弱。最终仍按角色和场合判，不要把档位机械套成开关。
 
 %(_segment_guide)s
+%(_facts_guide)s
 %(_director_guide)s
 【最近发生过什么】（只作语境，不要拆它；要拆的是最后「他这一轮说的」那句）
 %(history)s
@@ -4607,6 +4744,7 @@ _SCORE_PROMPT_V2 = """你在给一段校园/日常恋爱角色扮演做「编剧
   "reason": "不超过15个字",
   "note": "不超过15个字",
   "segments": [{"who": "用户 | 助手", "type": "说 | 做 | 想", "text": "说→原文；做→一句话概括；想→空串"}],
+  "facts": ["这一幕已经有的东西，一样一条"],
   "addressed": true,
   "subtext": "他真正想要 / 试探 / 回避什么",
   "noticed": "她能从外在表现里察觉到什么",
@@ -4666,6 +4804,8 @@ refused_confession：上一轮是她主动开口表白，而玩家这句在拒�
 
 segments：把这一句按「说 / 做 / 想」拆开给演员用。想一律留空串，别替玩家补心里话。
   %(segment_guide)s
+facts：这一幕已经摆到眼前的东西，一样一条，按他写的顺序。
+  %(facts_guide)s
 
 ## items：道具（只在真的有东西进出时才填）
 
@@ -4786,6 +4926,7 @@ def _judge_v2(card, said, state="", line_key="", gameday=None,
         "history": _judge_recent(history),
         "ledger": _judge_ledger(note),
         "segment_guide": _SEGMENT_GUIDE,
+        "facts_guide": _FACTS_GUIDE,
         "director_guide": _DIRECTOR_GUIDE,
     }
     try:
@@ -4806,7 +4947,7 @@ def _judge_v2(card, said, state="", line_key="", gameday=None,
     # settle_v2 只认这个 dict，少带一项等于模型白判。
     score = {k: d.get(k) for k in (
         "delta", "turn_type", "reason", "contact", "confess", "yandere",
-        "proposal", "accept", "refused_confession", "segments", "addressed",
+        "proposal", "accept", "refused_confession", "segments", "facts", "addressed",
         "subtext", "noticed", "stance", "time", "phase", "plan", "place")}
     # adult（2026-11-08）：身体这条线。**原样透传，不在这里净化**——
     # 结算器 affection_v2_adult.apply 负责 clamp/闸门/回落/去重，
@@ -4867,6 +5008,7 @@ def _judge_intent_scored(card, said, state="", line_key="", gameday=None,
         "history": _judge_recent(history),
         "ledger": _judge_ledger(note),
         "_segment_guide": _SEGMENT_GUIDE,
+        "_facts_guide": _FACTS_GUIDE,
         "_director_guide": _DIRECTOR_GUIDE,
     }
     try:
@@ -5603,6 +5745,9 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     ent = _entry(key) or {}
     note = str(ent.get("note") or "")
     prev_state = str(ent.get("state") or "")
+    # 当前穿着（2026-11-09）：独立固化的英文串，本轮要作为事实递给演员。
+    # 首轮还没有，就让它按角色卡自己定一身，这一轮交回来后开始固化。
+    prev_outfit = str(ent.get("outfit") or "").strip()
     gd = _gameday(ent) if ent else None
     day_before = _day_of(gd)
 
@@ -5889,6 +6034,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     # 分段渲染（2026-11-05）：第一段判出「说 / 做 / 想」就按块发；
     # 判不出来就退回原文——和以前完全一样，不会让这一轮哑掉。
     segments = extras.get("segments") if isinstance(extras, dict) else []
+    facts = extras.get("facts") if isinstance(extras, dict) else []
     addressed = extras.get("addressed", True) if isinstance(extras, dict) else True
     user_fallback = said
     if man_segs:
@@ -5932,6 +6078,16 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     # 放在 tail 之前：它管这一拍怎么落地，tail 仍是最后一句。
     if _SCENE_DUTY not in user_block:
         user_block = user_block + "\n\n" + _SCENE_DUTY
+    # 本轮事实点清单（2026-11-08）：放在场景义务之后、尾注之前，是演员
+    # 生成前读到的最后一块实质内容。第一段没给 facts 就整块不出，行为不变。
+    fb = _facts_block(facts)
+    if fb:
+        user_block = user_block + "\n\n" + fb
+    # 当前穿着（2026-11-09）：和 facts 同层的事实，放在尾注之前。服饰只靠
+    # 滑动窗口里上一轮那三行太弱，脱了外套下一轮就被模型重新穿回来。
+    ob = _outfit_block(prev_outfit)
+    if ob:
+        user_block = user_block + "\n\n" + ob
     user_block = user_block + "\n\n" + writing_style.tail(
         turn_no, author_note, plot=man.get("plot"),
         name=str((card or {}).get("name") or ""), mode=mode,
@@ -5945,6 +6101,8 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     except Exception:
         log.exception("扮演轮调用失败 %s", key)
         return Turn("", "")
+    # 服饰：演员这一轮交的就是新的当前穿着；没交作业沿用上一轮，不清零。
+    outfit = split_outfit(raw) or prev_outfit
     reply, scene, mood, intensity, state = split_turn(
         raw, default_mood=str(ent.get("mood") or ""))
     if not reply:
@@ -5980,7 +6138,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         new_user["addressed"] = addressed
     raw_hist.append(new_user)
     raw_hist.append({"role": "assistant", "content": _ensure_meta(
-        raw, scene, mood, intensity, state)})
+        raw, scene, mood, intensity, state, outfit)})
     try:
         _save_hist(key, raw_hist[-HISTORY_LIMIT:])
     except Exception:
@@ -5999,7 +6157,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
 
     # 情绪与状态落盘（2026-11-02）：只覆盖不累加——情绪是当下的，
     # 状态是这一格的结果，下一轮读 `state` 续着演。
-    _save_mood(key, mood, intensity, state, prev_state)
+    _save_mood(key, mood, intensity, state, prev_state, outfit=outfit)
 
     _bump_turn(key)
     # 长期记忆（2026-11-05）：先攒进缓冲，每 N 轮才在后台提炼成事实入库。
@@ -6231,17 +6389,20 @@ def jump_phase(session_key, phase, sender="", sender_uin=""):
         return None
     reply, scene, mood, intensity, state = split_turn(
         raw, default_mood=str(ent.get("mood") or ""))
+    # 服饰（2026-11-09）：时段跳跃 / 隔天 / 收尾也会换衣服，状态一样要更新，
+    # 否则「第二天换了身衣服」下一轮又被注回昨晚那件。没交作业就沿用。
+    outfit = split_outfit(raw) or str((ent or {}).get("outfit") or "").strip()
     if not reply:
         return None
     # 只归档她的开场，不归档那行系统任务。
     hist.append({"role": "assistant",
-                 "content": _ensure_meta(raw, scene, mood, intensity, state)})
+                 "content": _ensure_meta(raw, scene, mood, intensity, state, outfit)})
     try:
         _save_hist(key, hist[-HISTORY_LIMIT:])
         _append_archive(key, hist[-1:], seed=hist[-HISTORY_LIMIT:])
     except Exception:                                  # noqa: BLE001
         log.exception("时段跳跃落史失败 %s", key)
-    _save_mood(key, mood, intensity, state, prev_state)
+    _save_mood(key, mood, intensity, state, prev_state, outfit=outfit)
     _bump_turn(key)
     return Turn(reply, scene, mood, intensity, state, None, "")
 
@@ -6336,17 +6497,20 @@ def skip_day(session_key, sender="", sender_uin="", days=1, doing=""):
         return None
     reply, scene, mood, intensity, state = split_turn(
         raw, default_mood=str(ent.get("mood") or ""))
+    # 服饰（2026-11-09）：时段跳跃 / 隔天 / 收尾也会换衣服，状态一样要更新，
+    # 否则「第二天换了身衣服」下一轮又被注回昨晚那件。没交作业就沿用。
+    outfit = split_outfit(raw) or str((ent or {}).get("outfit") or "").strip()
     if not reply:
         return None
     # 只归档她的开场，不归档那行系统任务（见 _SKIP_TASK 注释）。
     hist.append({"role": "assistant",
-                 "content": _ensure_meta(raw, scene, mood, intensity, state)})
+                 "content": _ensure_meta(raw, scene, mood, intensity, state, outfit)})
     try:
         _save_hist(key, hist[-HISTORY_LIMIT:])
         _append_archive(key, hist[-1:], seed=hist[-HISTORY_LIMIT:])
     except Exception:
         log.exception("时间跳跃落史失败 %s", key)
-    _save_mood(key, mood, intensity, state, prev_state)
+    _save_mood(key, mood, intensity, state, prev_state, outfit=outfit)
     _bump_turn(key)
     return Turn(reply, scene, mood, intensity, state, None)
 
@@ -6450,16 +6614,19 @@ def _gen_and_save(key, ent, card, head, task, sender="", prev_state="",
         return None
     reply, scene, mood, intensity, state = split_turn(
         raw, default_mood=str((ent or {}).get("mood") or ""))
+    # 服饰（2026-11-09）：时段跳跃 / 隔天 / 收尾也会换衣服，状态一样要更新，
+    # 否则「第二天换了身衣服」下一轮又被注回昨晚那件。没交作业就沿用。
+    outfit = split_outfit(raw) or str((ent or {}).get("outfit") or "").strip()
     if not reply:
         return None
     hist.append({"role": "assistant",
-                 "content": _ensure_meta(raw, scene, mood, intensity, state)})
+                 "content": _ensure_meta(raw, scene, mood, intensity, state, outfit)})
     try:
         _save_hist(key, hist[-HISTORY_LIMIT:])
         _append_archive(key, hist[-1:], seed=hist[-HISTORY_LIMIT:])
     except Exception:
         log.exception("%s落史失败 %s", tag, key)
-    _save_mood(key, mood, intensity, state, prev_state)
+    _save_mood(key, mood, intensity, state, prev_state, outfit=outfit)
     _bump_turn(key)
     return Turn(reply, scene, mood, intensity, state, None)
 
@@ -6685,6 +6852,9 @@ def rollback_last_turn(session_key, sender_uin=""):
         ent["mood"] = str(mp.get("mood") or "")
         ent["intensity"] = mp.get("intensity") or 0
         ent["state"] = str(mp.get("state") or "")
+        # 老快照没有这个键，别把新服饰误清成空。
+        if "outfit" in mp:
+            ent["outfit"] = str(mp.get("outfit") or "")
     mood = str(ent.get("mood") or "")
     intensity = ent.get("intensity") or 0
     state = str(ent.get("state") or "")
@@ -6716,8 +6886,8 @@ def rollback_last_turn(session_key, sender_uin=""):
             "mood": mood, "intensity": intensity, "state": state}
 
 
-def _ensure_meta(raw, scene, mood, intensity, state):
-    """把这一轮的回复规范成「正文 + 三行」的形状再进历史。
+def _ensure_meta(raw, scene, mood, intensity, state, outfit=""):
+    """把这一轮的回复规范成「正文 + 四行」的形状再进历史。
 
     模型有约三分之一概率漏写三行（契约再长也压不住）。直接把漏写的原文存进
     历史，等于给下一轮示范「可以不写」——越往后越散。所以这里补一个占位版本，
@@ -6725,6 +6895,11 @@ def _ensure_meta(raw, scene, mood, intensity, state):
 
     补的值尽量从已有信息里取：画面缺就用空串（说明这轮没图），状态缺就沿用
     调用方给的值（`_save_mood` 已经在保留上一轮了）。
+
+    `outfit`（2026-11-09）：当前穿着的权威串。原文里已经写了「服饰：」就
+    原样留着；没写但调用方给了上一轮的值，就补一行——这样归档里每一轮
+    都有服饰，点旧气泡出图时取的是**那一轮**的衣服，不是此刻的。
+    不传就只保护原文里已有的行，老调用点行为不变。
     """
     body = str(raw or "").strip()
     if not body:
@@ -6735,13 +6910,17 @@ def _ensure_meta(raw, scene, mood, intensity, state):
         hits = list(rx.finditer(body))
         return any(h.group(1).strip() for h in hits)
 
-    # 三行齐了就不动
-    if _has(_SCENE_RE) and _has(_MOOD_RE) and _has(_STATE_RE):
+    cur = split_outfit(body) or str(outfit or "").strip()
+    # 服饰行齐了（或压根没有固化服饰）就不动原文
+    if (_has(_SCENE_RE) and _has(_MOOD_RE) and _has(_STATE_RE)
+            and (not cur or _has(_OUTFIT_RE))):
         return body
     plain, _, _, _, _ = split_turn(body)
     parts = [plain.rstrip()]
     if not _has(_SCENE_RE):
         parts.append("画面：" + (scene or ""))
+    if cur and not _has(_OUTFIT_RE):
+        parts.append("服饰：" + cur)
     if not _has(_MOOD_RE):
         parts.append("心情：%s 强度%d" % (mood or "平静", int(intensity or 0)))
     if not _has(_STATE_RE):
@@ -6749,8 +6928,12 @@ def _ensure_meta(raw, scene, mood, intensity, state):
     return "\n".join(parts)
 
 
-def _save_mood(session_key, mood, intensity, state, prev_state=""):
-    """把这一轮的情绪/状态写回会话条目。**已经出戏的不写。**
+def _save_mood(session_key, mood, intensity, state, prev_state="", outfit=""):
+    """把这一轮的情绪/状态/当前服饰写回会话条目。**已经出戏的不写。**
+
+    `outfit`（2026-11-09）：演员这一轮交的「服饰：」行。空串 = 没交作业，
+    沿用它上一轮已经写在 `st["outfit"]` 的值，不清零——和 mood/state 同一套
+    「漏写不改状态」的规矩。
 
     2026-11-02：模型偶尔整轮不交三行（同一份契约、同一句话，实测有 1/6 概率
     全空）。这时候**保留上一轮的值**而不是写空——否则下一轮 `state` 变成空串，
@@ -6765,7 +6948,8 @@ def _save_mood(session_key, mood, intensity, state, prev_state=""):
     # 状态，剧情会顺着错的方向演下去。
     st["mood_prev"] = {"mood": str(st.get("mood") or ""),
                        "intensity": st.get("intensity") or 0,
-                       "state": str(st.get("state") or "")}
+                       "state": str(st.get("state") or ""),
+                       "outfit": str(st.get("outfit") or "")}
     if mood:
         st["mood"] = mood
     try:
@@ -6802,6 +6986,10 @@ def _save_mood(session_key, mood, intensity, state, prev_state=""):
                 gd_now = _gameday(st)
                 gd_now["contact_prev"] = str(gd_now.get("contact") or "")
                 gd_now["contact"] = con
+    # 当前服饰（2026-11-09）：独立字段，别混进 `state` 那行中文里——
+    # 出图要用的是这串英文定稿，也是下一轮回注给演员的事实。
+    if str(outfit or "").strip():
+        st["outfit"] = str(outfit).strip()[:300]
     _save_state(state_data)
 
 
@@ -6915,11 +7103,26 @@ def _strip_refusal(text):
     return out
 
 
+def split_outfit(text):
+    """抽「服饰：」那一行（当前穿着的英文串），取**最后一处**匹配。
+
+    和 `split_turn` 分开，是为了不动那个五元组签名：服饰是新增的第四行元数据，
+    但老调用点、老归档、单测都按原来的形状拆包。清洗只去反引号/星号、
+    去首尾空白，代码不判断「穿了什么」——那是演员的事。
+    """
+    hits = list(_OUTFIT_RE.finditer(str(text or "")))
+    if not hits:
+        return ""
+    val = _SCENE_NOISE_RE.sub("", hits[-1].group(1).strip()).strip()
+    return val[:300].strip(" ,")
+
+
 def split_turn(text, default_mood=""):
     """把一轮输出切成 `(正文, 画面, 情绪, 强度, 状态)`。
 
-    「画面：」「心情：」「状态：」三行都是给代码的元数据，**全部从正文里剥掉**
-    ——用户不该在聊天里看到「状态：白衬衫解开两粒扣」这种东西。
+    「画面：」「服饰：」「心情：」「状态：」四行都是给代码的元数据，**全部从
+    正文里剥掉**——用户不该在聊天里看到「状态：白衬衫解开两粒扣」这种东西。
+    服饰行的值另由 `split_outfit()` 取，本函数只负责把它从正文里拿走。
 
     三条都取**最后一处**匹配（同 `_SCENE_RE` 的理由：正文里偶尔会提到这些词）。
     缺哪行就当没写：情绪空串、强度 0、状态空串，调用方不许兜底。
@@ -6940,6 +7143,8 @@ def split_turn(text, default_mood=""):
         body = rx.sub("", body)
         out[key] = val
 
+    # 服饰行同样从正文剥掉；值由 split_outfit() 单独取。
+    body = _OUTFIT_RE.sub("", body)
     out["scene"] = _clean_scene(out["scene"])
     out["mood"], out["intensity"] = _parse_mood(out["mood"])
     out["state"] = _clean_scene(out["state"])
@@ -7018,14 +7223,17 @@ def _clean_scene(raw):
     return s.strip(",").strip()
 
 
-def _fixed_block(card):
+def _fixed_block(card, outfit=""):
     """角色卡上的**外观固定块**：每轮都拼在画面标签前面，保证同一个角色不换脸。
 
-    两个字段都收（`appearancePrompt` 是外观、`outfitPrompt` 是服饰），都没有就
-    留空——空固定块也出得了图，只是角色长相交给模型自由发挥。
+    `appearancePrompt` 是外观，一定拼。`outfitPrompt` 只是**卡上的默认衣服**：
+    一旦有了固化的当前穿着（`outfit`），它就得退场——那件写死的外套每轮
+    硬拼在前面，正是「正文里脱了、下一张图又穿回来」的代码层原因。
+    没有固化服饰时（首轮 / 老线）照旧拼，行为不变。
     """
-    parts = [str(card.get("appearancePrompt") or "").strip(),
-             str(card.get("outfitPrompt") or "").strip()]
+    parts = [str(card.get("appearancePrompt") or "").strip()]
+    if not str(outfit or "").strip():
+        parts.append(str(card.get("outfitPrompt") or "").strip())
     return ", ".join(p for p in parts if p).strip(", ").strip()
 
 
@@ -7039,17 +7247,33 @@ def _fixed_block(card):
 # 不再经过这一层。
 
 
-def build_prompt(card, scene, state=""):
-    """出图提示词 = 角色卡固定块 + 这一轮的画面。
+# POV 机位固定模板（2026-11-08）：由代码拼在提示词末尾，不交给演员每轮重写。
+# 只写机位，不写人数词、不写 `1other` / `pov hands` / `solo`，也不写 `no ...`
+# 反向钉住——主体由角色固定块声明一次，视角方不进画就不会被凑出第二个人。
+_POV_CAMERA = "first-person pov, eye level"
 
-    `state` 保留在签名里但**不再参与拼装**（2026-11-02）：服装由模型写在
-    「画面」行里，契约已强制要求。它现在只用于 `clothes_changed()` 判断
-    要不要出图。
+
+def build_prompt(card, scene, state="", pov=False, outfit=""):
+    """出图提示词 = 角色卡外观 + 当前服饰 + 这一轮的画面（+ POV 机位）。
+
+    `outfit`（2026-11-09）：演员上一轮交、系统固化的英文服饰串。放在**画面行
+    之前**，权重高过景别/动作/光照；有它的时候卡上写死的 `outfitPrompt` 不再
+    拼（`_fixed_block`），画面里穿什么就只有这一个来源。
+    参考 `picture_prompt_produce` 的 `buildTurnPrompt`：服饰单独一行排最前，
+    就是为了压住「每轮重写、越写越飘」。
+
+    `state` 保留在签名里但**不参与拼装**（2026-11-02）：它是中文整行，
+    现在只用于 `clothes_changed()` 判断要不要出图。
+
+    `pov=True` 只给角色扮演的 `draw()` 用：`galgame` 与既有调用方不传，
+    行为完全不变；`outfit` 同理，不传就是老的四段拼法。
     """
-    fixed, scene = _fixed_block(card), _clean_scene(scene)
-    if fixed and scene:
-        return fixed + ", " + scene
-    return fixed or scene
+    fixed = _fixed_block(card, outfit)
+    scene = _clean_scene(scene)
+    cur = str(outfit or "").strip().strip(", ")
+    parts = [x for x in (fixed, cur, scene,
+                         _POV_CAMERA if pov else "") if x]
+    return ", ".join(parts)
 
 
 def image_caption(spoken, limit=20):
@@ -7138,11 +7362,11 @@ def _draw_fail(reason):
 
 
 def draw(scene, card, session_key, reply_to="", state="", skill=None,
-         landscape=False, on_submit=None):
+         landscape=False, on_submit=None, outfit=""):
     """出一张配图，返回文件名（没画出来返回 ""）。**阻塞**——调用方放后台线程。
 
-    走 `silver`（默认生图渠道，两段采样 12+8 步 → 1.2× 潜空间放大 → 2x 像素
-    放大，出图约 2464×3680）。排队走**正常 QQ 队列**，不插队。
+    走 `SHOT_SKILL`（角色扮演默认 `anima-2s`，两段 15+10 步 → 1.2× latent
+    → 2x 像素放大，出图约 2464×3680）。排队走**正常 QQ 队列**，不插队。
     入队带 `quiet=True`：worker 只跑图不发，图由调用方拿去 `_deliver`（要带
     caption 和引用，见 `qq_bot._draw_persona`）。
 
@@ -7151,8 +7375,9 @@ def draw(scene, card, session_key, reply_to="", state="", skill=None,
     而本函数跑在后台线程，那时上下文早不是本轮了，读出来是空或者别的轮次。
     这就是「图不引用消息」的根因。
 
-    `state`（2026-11-02）：这一轮「状态」行里她穿什么。**必须传**——模型写
-    「画面」时经常漏写衣服，只有这里才有服装信息，不拼进去就会画出裸体。
+    `outfit`（2026-11-09）：这一轮固化的当前穿着（英文），由 `shot_outfit()`
+    从那一轮的归档取，前置到画面行之前。`state` 是中文状态行，只给
+    `clothes_changed()` 判要不要出图，不参与拼提示词。
 
     也不扣私聊每日额度：扮演态配图是聊天的一部分，不是「点单生图」。队列满 /
     ComfyUI 没在线 / 被审核拦下时，`_draw_persona` 那条自动配图一律静默跳过，
@@ -7163,20 +7388,12 @@ def draw(scene, card, session_key, reply_to="", state="", skill=None,
     from app.tools.normal import generate_image as gi
 
     _DRAW_ERR.reason = ""       # 同一个线程可能被复用，先清掉上一轮的原因
-    prompt = build_prompt(card, scene, state)
-    # 出图前过一道 POV 校验（2026-11-08）：演员写的是 Danbooru tag，和漫画剧本
-    # 同一套语法，那套判据（`solo` 配 `pov hands`、`hand around wrist`、
-    # `pov hands` 缺 `1other`）在漫画那边早就有代码判据防着，扮演这条路一直
-    # 没接——实测就是多手多脚的来源。这里只做「有唯一正确答案」的自动修，
-    # 需要判断的地方不动（见 `comic_agent.repair_line`）。
-    try:
-        from app import comic_agent as _ca
-        _fixed, _changes = _ca.repair_line(prompt)
-        if _changes:
-            log.info("出图 tag 自动修正 %s：%s", session_key, "；".join(_changes))
-            prompt = _fixed
-    except Exception:                                # noqa: BLE001
-        log.warning("出图 tag 校验失败，按原文出图", exc_info=True)
+    # 机位固定拼，主体由角色固定块声明一次（`build_prompt`）。
+    # 2026-11-08 撤掉出图前的 tag 自动修：演员写的是英文散文长句，不是
+    # Danbooru tag，那套漫画判据在这里 0 命中、纯空转；自动补 `1other`
+    # 反而会把视角方实体化（漫画工作台 2026-10-12 的旧事故）。
+    # 代码只检测事实，画面写什么交给模型。
+    prompt = build_prompt(card, scene, state, pov=True, outfit=outfit)
     target, target_id = _session_target(session_key)
     # `target == ""` 才是「这条线没有队列身份」。不能用 `not target`：网页线
     # 的 target 是 None（见 `_session_target`），那也是合法身份。
