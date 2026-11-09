@@ -238,6 +238,23 @@
   .mid.has-bg .precise .ptab.on {
     background: rgba(14, 14, 18, .8);
     border-color: currentColor; }
+  /* 「当前模型」是 2026-11-09 才加的，比上面那批背景适配晚了一步：默认
+     11px 的 --text-dim 灰字直接压在角色背景图上会糊成一片（用户实测）。
+     照 .aff / .precise 的老办法：垫半透明深底 + 提亮字 + 加阴影 + 按钮垫底。 */
+  .mid.has-bg .modelBar {
+    background: rgba(14, 14, 18, .62);
+    border-top-color: rgba(255, 255, 255, .14);
+    color: #e2e2ec; font-size: 12px;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, .9);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px); }
+  .mid.has-bg .modelBar .mn { color: #f0f0f6; font-weight: 600; }
+  .mid.has-bg .modelBar .btn {
+    background: rgba(30, 30, 40, .82);
+    border-color: rgba(255, 255, 255, .22);
+    color: #f2f2f8; font-size: 12px; }
+  .mid.has-bg .modelBody { color: #e2e2ec; font-size: 12.5px; }
+  .mid.has-bg .modelBody b { color: #ffd24a; }
 
   .row { display: flex; }
   .row.u { justify-content: flex-end; }

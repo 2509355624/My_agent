@@ -327,6 +327,24 @@ class RoleplayFallbackUiTest(unittest.TestCase):
         self.assertIn('renderModelUsed(used)', self.html)
         self.assertIn('used.kind === "public"', self.html)
 
+    def test_current_model_stays_legible_over_a_character_background(self):
+        """2026-11-09 真机：加了角色背景图后这行是灰色小字，糊得看不清。
+
+        .modelBar 比上面那批 `.mid.has-bg` 适配晚加了一步，默认 --text-dim
+        直接压在图上。修法跟 .aff / .precise 一致：垫深底 + 提亮字 + 阴影。
+        """
+        for needle in (".mid.has-bg .modelBar {", ".mid.has-bg .modelBar .mn",
+                       ".mid.has-bg .modelBar .btn", ".mid.has-bg .modelBody {",
+                       ".mid.has-bg .modelBody b"):
+            self.assertIn(needle, self.html, "背景适配少了 %s" % needle)
+        i = self.html.index(".mid.has-bg .modelBar {")
+        block = self.html[i:self.html.index("}", i) + 1]
+        self.assertIn("background: rgba(14, 14, 18, .62)", block,
+                      "只调字色压不住花背景，必须垫一层半透明深底")
+        self.assertIn("color: #e2e2ec", block)
+        self.assertIn("text-shadow", block)
+        self.assertIn("font-size: 12px", block)
+
 
 if __name__ == "__main__":
     unittest.main()

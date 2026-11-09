@@ -6434,6 +6434,11 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
             + [{"role": "user", "content": user_block}])
     try:
         raw = _llm_call(msgs, temperature=TEMPERATURE)
+    except llm.PersonaChainExhausted:
+        # ⚠️ 链路全挂不能吞成空回复：吞了就变成 502「她这轮没说话」，前端
+        # 拿不到 relay_down、引导弹窗永远不弹（2026-11-09 真机实测）。
+        # 让它冒到 persona_api 的 errorhandler，回 503 让前端弹窗。
+        raise
     except Exception:
         log.exception("扮演轮调用失败 %s", key)
         return Turn("", "")
@@ -6722,6 +6727,8 @@ def jump_phase(session_key, phase, sender="", sender_uin=""):
                     name=char_name(card, key=key))}])
     try:
         raw = _llm_call(msgs, temperature=TEMPERATURE)
+    except llm.PersonaChainExhausted:
+        raise                                   # 见 run_turn：链路全挂要弹引导窗
     except Exception:                                  # noqa: BLE001
         log.exception("时段跳跃开场失败 %s", key)
         return None
@@ -6831,6 +6838,8 @@ def skip_day(session_key, sender="", sender_uin="", days=1, doing=""):
                     name=char_name(card, key=key))}])
     try:
         raw = _llm_call(msgs, temperature=TEMPERATURE)
+    except llm.PersonaChainExhausted:
+        raise                                   # 见 run_turn：链路全挂要弹引导窗
     except Exception:                                  # noqa: BLE001
         log.exception("时间跳跃开场失败 %s", key)
         return None
@@ -6949,6 +6958,8 @@ def _gen_and_save(key, ent, card, head, task, sender="", prev_state="",
                     name=char_name(card, key=key))}])
     try:
         raw = _llm_call(msgs, temperature=TEMPERATURE)
+    except llm.PersonaChainExhausted:
+        raise                                   # 见 run_turn：链路全挂要弹引导窗
     except Exception:                                  # noqa: BLE001
         log.exception("%s生成失败 %s", tag, key)
         return None

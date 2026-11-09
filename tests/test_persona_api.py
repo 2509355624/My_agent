@@ -11,7 +11,7 @@ from unittest import mock
 
 import flask
 
-from app import agents, persona, persona_api
+from app import agents, llm, persona, persona_api
 
 QQ = "2509355624"
 
@@ -202,6 +202,31 @@ class ChatTest(PersonaApiBase):
         self._enter()
         r = self.c.post("/api/persona/chat", json={"text": "  ", "qq": QQ})
         self.assertEqual(r.status_code, 400)
+
+    def test_chain_exhaustion_returns_relay_down_not_an_empty_reply(self):
+        """2026-11-09 真机：中转站 key 被停用 → PersonaChainExhausted。
+
+        `run_turn` 原来用 `except Exception` 把它吞成空 Turn，接口只回 502
+        「她这轮没说话」，前端拿不到 relay_down、引导弹窗永远不弹。链路耗尽
+        必须冒到 blueprint 的 errorhandler。
+        """
+        self._enter()
+        err = llm.PersonaChainExhausted("api key disabled", has_custom=False)
+        with mock.patch.object(persona, "_llm_call", side_effect=err):
+            r = self.c.post("/api/persona/chat", json={"text": "在吗", "qq": QQ})
+        self.assertEqual(r.status_code, 503)
+        d = r.get_json()
+        self.assertEqual(d["code"], "relay_down")
+        self.assertFalse(d["has_custom"])
+
+    def test_ordinary_llm_failure_still_degrades_quietly(self):
+        """别把普通超时也升级成引导弹窗：那会每次抖动都弹一次。"""
+        self._enter()
+        with mock.patch.object(persona, "_llm_call",
+                               side_effect=RuntimeError("read timeout")):
+            r = self.c.post("/api/persona/chat", json={"text": "在吗", "qq": QQ})
+        self.assertEqual(r.status_code, 502)
+        self.assertNotIn("code", r.get_json())
 
 
 class ComicStatusTest(PersonaApiBase):
