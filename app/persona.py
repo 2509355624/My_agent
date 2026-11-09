@@ -1340,9 +1340,17 @@ _NOTE_PROMPT = (
     "- 不要评价，不要总结「这一天很特别」这种话\n"
     "- **你只在心里想、没说出口的，不要记**——她不可能知道\n"
     "\n"
+    "**「约定与未完成」这一节只留到此刻确实还没做的事**：\n"
+    "- 已经做完、已经作废、被后面剧情推翻的，从这一节删掉；值得留的经过"
+    "写成过去式放进「你的事 / 她的事」。\n"
+    "- 拿不准做没做完，就对照【系统结算的事实】和【最近发生的】；"
+    "还拿不准，这一节就留白——少记一条待办，好过把做过的事天天重提。\n"
+    "- 旧账本里自己已经写明「已破」「已拿走」「不会再做了」的条目，"
+    "是已经结束的事，归到「你的事 / 她的事」里写成过去式。\n"
+    "\n"
     "**怎么写**：\n"
     "- 每条一行，以「- 」开头；同一条目不要拆成好几行。\n"
-    "- 旧账本里仍然成立的条目**除人称外**原样抄过去，不要改写措辞；"
+    "- 旧账本里仍然成立、且还没做完的条目**除人称外**原样抄过去；"
     "人称错的按上面的规则改；变化的就地改；"
     "完成的从「约定」里移走；过期的删掉。\n"
     "- 每节条数上限：关系 4、你的事 8、她的事 8、约定 5、忌讳 5、日常 3。\n"
@@ -1353,6 +1361,7 @@ _NOTE_PROMPT = (
     "\n"
     "只输出 Markdown 本身，不要解释、不要前后缀。\n"
     "\n"
+    "【系统结算的事实】\n%(day_facts)s\n\n"
     "【你原来记得的】\n%(old)s\n\n【最近发生的】\n%(convo)s"
 )
 
@@ -5774,33 +5783,57 @@ def _apply_gameday(key, score=None, force_new_day=False, days=1):
     return gd
 
 
-def _gameday_block(gd):
-    """拼进系统头的游戏时间块。没有状态（自由模式从没进过线等）返回空。"""
+def _gameday_block(gd, new_day=False):
+    """拼进动态块的游戏时间。没有状态（自由模式从没进过线等）返回空。
+
+    `new_day`（2026-11-10）：这一轮刚跨过一天时给一句过渡事实。以前跨天
+    只有「第 N 天 + 今天的事」，昨天没收尾的动作容易接着写，像没隔夜一样。
+    """
     if not isinstance(gd, dict):
         return ""
     phase = str(gd.get("phase") or "").strip()
-    lines = ["【游戏时间】第 %d 天%s" % (_day_of(gd),
+    day = _day_of(gd)
+    lines = ["【游戏时间】第 %d 天%s" % (day,
                                       ("，" + phase) if phase else "")]
+    if new_day:
+        lines.append("上一拍收在第 %d 天，现在是第 %d 天 · %s。"
+                     "中间怎么过来的按「状态」行写，"
+                     "这一拍从眼前正在发生的动作起笔。"
+                     % (max(0, day - 1), day, phase or "早晨"))
     place = str(gd.get("place") or "").strip()
     if place:
         lines.append("【所在地】%s。人已经在这里，这一轮就写她在这个地方"
                      "做什么、碰到了什么。" % place)
     event = str(gd.get("event") or "").strip()
     if event:
+        done = ""
         if event.startswith("已经办完"):
-            # 兑现过的约定写成**过去式**（2026-11-06）：写成「约定：去某地」
-            # 模型会一直按「还在路上」写，哪怕场景里人早就到了。
+            done = event[len("已经办完"):].lstrip("：:").strip()
+        elif event.startswith("约定："):
+            # 23213a7 之前生成的老存档还留着「约定：「X」」。它本来就是
+            # `_roll_event` 的兑现记录，不是未完成的待办，别再当今天的事念。
+            done = event[len("约定："):].strip("「」").strip()
+        if done:
             lines.append("今天已经办完的事：%s。它已经过去了，"
                          "以「状态」里的地点为准，聊接下来自然发生的事。"
-                         % event[len("已经办完："):])
+                         % done)
         else:
             lines.append("今天的事：%s。把它化进今天的动作和对白里。" % event)
     plan = str(gd.get("plan") or "").strip()
     if plan:
         pd = gd.get("plan_day") or 0
-        when = ("（约在第 %d 天）" % pd) if pd and pd > _day_of(gd) \
-            else "（就说今天）"
-        lines.append("挂着的约定：%s%s" % (plan, when))
+        if pd and pd > day:
+            when = "（约在第 %d 天）" % pd
+        elif pd:
+            when = "（第 %d 天约的，那天已经过了）" % pd
+        else:
+            when = ""
+        # 2026-11-10：原来写「挂着的约定：X（就说今天）」，等于代码替模型
+        # 断言它没做完。玩家明明办完了，跨天还天天被念一遍。改成只报
+        # 「哪天约的」这个事实，做没做过交给模型对照对话判断。
+        lines.append("登记过的约定：%s%s。做没做过以刚才的对话为准，"
+                     "做过的事已经留在昨天；这一拍接着眼前写。"
+                     % (plan, when))
     if int(gd.get("turns_today") or 0) >= _DAY_TURNS_SOFT:
         # 2026-11-07：原来是「把今天收束掉（道别、回家、说明天见），
         # 今天的故事到这里就好」。玩家没跳天时 turns_today 会一直涨，
@@ -5921,19 +5954,29 @@ def story_line(gd, note=""):
     if done:
         parts.append("已经发生：" + "；".join(done))
     if plan:
-        when = ("（约在第 %d 天）" % plan_day) if plan_day and plan_day > day else ""
+        if plan_day and plan_day > day:
+            when = "（约在第 %d 天）" % plan_day
+        elif plan_day:
+            when = "（第 %d 天约的，那天已经过了）" % plan_day
+        else:
+            when = ""
         # 账本里已经记着同一条约定时只留结构化那条：它带天数，信息更全。
         todo = [t for t in todo if not _shares_phrase(plan, t)]
         todo = [plan + when] + todo
     if todo:
-        parts.append("还没完成：" + "；".join(todo[:4]))
+        # 2026-11-10：以前硬写「还没完成：」＝代码替模型断言这件事没做完。
+        # 账本里明明写着「已破 / 已拿走 / 不会再做了」也照样被列成待办，
+        # 跨天就一遍遍重演。改成只报「账本记着」，判断权交回模型。
+        parts.append("账本里还记着的约定：" + "；".join(todo[:4]))
     if not parts:
         return ""
     body = "\n".join(parts)
     if len(body) > STORY_MAX_CHARS:
         body = body[:STORY_MAX_CHARS].rstrip("；，、") + "…"
     return ("【故事到现在】\n" + body
-            + "\n这几件已经成立，顺着它们往下写，接住前面留下的线头。")
+            + "\n已经办完的事就是过去了；约定做到没做到，对照上面的事实和"
+              "刚才的对话自己判断，做过的事留在昨天。"
+              "这一拍接着眼前正在发生的事往下写。")
 
 
 def game_day(session_key):
@@ -6435,6 +6478,9 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         # 自动跳会让玩家没得选，而且第五次那一轮被硬塞了「过渡到第二天」的
         # 指令，写出来就不再是那一场本身了。
         gd = _apply_gameday(key, score) or gd
+        # 跨天过渡（2026-11-10）：代码只报「上一拍收在第几天」这个事实，
+        # 怎么把昨天接过来由模型自己写。自由模式不推进天数，恒为 False。
+        crossed_day = int((gd or {}).get("day") or day_before) > day_before
         # 怀孕记录（2026-11-05）：放在时间推进/快照**之后**写。`preg_prev`
         # 必须是这一轮开始前的状态，回退时才能把本轮的内射记录一起撤掉。
         if finish == "inside":
@@ -6450,7 +6496,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
                 preg_event = _preg_advance(key, day_before, new_day)
         except Exception:                                # noqa: BLE001
             log.exception("怀孕结算失败 %s", key)
-        tblock = _gameday_block(gd)
+        tblock = _gameday_block(gd, new_day=crossed_day)
         if tblock:
             dyn_parts.append(tblock)
     else:
@@ -6462,7 +6508,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
                 log.exception("怀孕记录失败 %s", key)
         # 手动切的时段也要进系统头（2026-11-05）：否则自由模式切到晚上，
         # 她的下一句还按白天的场景写。
-        tblock = _gameday_block(gd)
+        tblock = _gameday_block(gd, new_day=False)
         if tblock:
             dyn_parts.append(tblock)
     # 怀孕/孩子（2026-11-05）：身体状态每轮都该在她脑子里，不需要等玩家问。
@@ -8338,6 +8384,39 @@ def _note_convo(session_key, st):
     return hist, arch_len
 
 
+def _settled_day_facts(gd):
+    """给账本压缩器的「系统结算事实」清单：只报事实，不下结论。
+
+    2026-11-10 用户报「昨天约好的事已经做完了，第二天她还当没做」。
+    根子在压缩器只看得见旧账本 + 最近对话，看不到这里结算过的天数、
+    已办完的事和约定的日期，于是把做过的约定一代代抄回待办节。
+    """
+    gd = gd if isinstance(gd, dict) else {}
+    day = _as_int(gd.get("day"), 0, 0, 99999)
+    facts = ["游戏内第 %d 天 · %s"
+             % (day, str(gd.get("phase") or "时段未定"))]
+    if str(gd.get("place") or "").strip():
+        facts.append("所在地：" + str(gd["place"]).strip())
+    ev = str(gd.get("event") or "").strip()
+    if ev.startswith("已经办完"):
+        facts.append("今天已经办完："
+                     + ev[len("已经办完"):].lstrip("：:").strip())
+    elif ev.startswith("约定："):
+        # 23213a7 之前生成的老存档：那句「约定：「X」」本来就是兑现记录。
+        facts.append("今天已经办完：" + ev[len("约定："):].strip("「」"))
+    pl = str(gd.get("plan") or "").strip()
+    if pl:
+        pd = _as_int(gd.get("plan_day"), 0, 0, 99999)
+        facts.append("系统登记过的约定：%s%s"
+                     % (pl, ("（约在第 %d 天）" % pd) if pd else ""))
+        if pd and pd <= day:
+            facts.append("约的那天已经过了；做没做过以最近对话为准。")
+    else:
+        facts.append("系统里目前没有登记在册的约定。")
+    facts.append("约定是否已经兑现，以【最近发生的】对话为准，系统登记只作参考。")
+    return "\n".join("- " + f for f in facts)
+
+
 def compress_note(session_key):
     """把旧账本 + 上次存档以来的对话合并成一份 ≤1000 字的 Markdown 账本。
 
@@ -8359,9 +8438,15 @@ def compress_note(session_key):
     convo = "\n".join(
         "%s：%s" % ("女主角" if m["role"] == "assistant" else "玩家", m["content"])
         for m in hist)
+    # 跨天事实（2026-11-10）：压缩器以前只看得见「旧账本 + 最近对话」，
+    # 看不到系统结算的「今天已经办完 / 约定约在第几天」，又要求旧条目原样抄，
+    # 于是把已经做完的约定一代代抄回待办节。这里只把**事实**列给它，
+    # 做没做完由它对照对话自己判断，代码不替它下结论。
+    gd = st.get("gameday") if isinstance(st.get("gameday"), dict) else {}
     prompt = _NOTE_PROMPT % {
         "soft": NOTE_SOFT,
         "name": char_name(card, key=session_key),
+        "day_facts": _settled_day_facts(gd),
         "old": old or "（还没有）",
         "convo": convo,
     }

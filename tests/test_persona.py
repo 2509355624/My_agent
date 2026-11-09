@@ -3588,8 +3588,12 @@ class StoryLineTest(unittest.TestCase):
             "【故事到现在】\n时间：第 3 天 · 下午 · 饭馆"))
         self.assertIn("已经发生：", out)
         self.assertIn("早上揽住她的头先吻了一回", out)
-        self.assertIn("还没完成：陪她挑耳机（约在第 5 天）", out)
+        self.assertIn("账本里还记着的约定：陪她挑耳机（约在第 5 天）", out)
         self.assertIn("早饭欠着", out)
+        # 2026-11-10：代码只报「账本记着」，做没做完交给模型判断。
+        # 以前硬写「还没完成：」，把已办完的约定跨天一遍遍重演。
+        self.assertNotIn("还没完成：", out)
+        self.assertIn("做过的事留在昨天", out)
         # 正向写法：整块不含禁令词
         for bad in ("不能", "不许", "不要", "禁止", "必须"):
             self.assertNotIn(bad, out)
@@ -3639,6 +3643,66 @@ class StoryLineTest(unittest.TestCase):
     def test_clip_items_strips_double_punctuation(self):
         got = persona._clip_items(["她笑了。", "他说好；"], 4, 40)
         self.assertEqual(got, ["她笑了", "他说好"])
+
+
+class CrossDayFactTest(unittest.TestCase):
+    """跨天事实（2026-11-10）：代码只报事实，做没做完交给模型判断。
+
+    用户报：昨天约好的事已经办完，第二天她还当成没做、又提一遍。
+    根子是三处代码替模型下了「还没完成」的结论。
+    """
+
+    def test_stale_plan_is_reported_as_a_date_not_a_todo(self):
+        out = persona.story_line(
+            {"day": 3, "plan": "去市场买菜", "plan_day": 2}, "")
+        self.assertIn("那天已经过了", out)
+        self.assertNotIn("就说今天", out)
+        self.assertNotIn("还没完成：", out)
+        self.assertIn("账本里还记着的约定", out)
+
+    def test_gameday_block_never_asserts_plan_is_pending(self):
+        blk = persona._gameday_block(
+            {"day": 4, "plan": "买风筝", "plan_day": 3})
+        self.assertNotIn("就说今天", blk)
+        self.assertNotIn("挂着的约定", blk)
+        self.assertIn("那天已经过了", blk)
+        for bad in ("不要", "不许", "不能", "禁止"):
+            self.assertNotIn(bad, blk)
+
+    def test_legacy_event_is_read_as_done(self):
+        """23213a7 之前生成的老存档留着「约定：「X」」，那是兑现记录。"""
+        blk = persona._gameday_block(
+            {"day": 2, "event": "约定：「明早请假」"})
+        self.assertIn("今天已经办完", blk)
+        self.assertNotIn("今天的事：", blk)
+
+    def test_new_day_adds_a_transition_fact(self):
+        gd = {"day": 3, "phase": "早晨"}
+        self.assertNotIn("上一拍收在", persona._gameday_block(gd))
+        blk = persona._gameday_block(gd, new_day=True)
+        self.assertIn("上一拍收在第 2 天", blk)
+        self.assertIn("现在是第 3 天", blk)
+        self.assertIn("从眼前正在发生的动作起笔", blk)
+
+    def test_note_prompt_asks_for_only_open_items(self):
+        p = persona._NOTE_PROMPT
+        self.assertIn("%(day_facts)s", p)
+        self.assertIn("【系统结算的事实】", p)
+        self.assertIn("这一节只留到此刻确实还没做的事", p)
+        self.assertIn("完成的从「约定」里移走", p)
+
+    def test_settled_day_facts_reports_done_and_stale_plan(self):
+        out = persona._settled_day_facts(
+            {"day": 3, "phase": "早晨", "event": "已经办完：去旧书市",
+             "plan": "买风筝", "plan_day": 2})
+        self.assertIn("今天已经办完：去旧书市", out)
+        self.assertIn("约的那天已经过了", out)
+        self.assertIn("以【最近发生的】对话为准", out)
+
+    def test_settled_day_facts_reads_legacy_event_as_done(self):
+        out = persona._settled_day_facts(
+            {"day": 2, "event": "约定：「明早请假」"})
+        self.assertIn("今天已经办完：明早请假", out)
 
 
 class ReplayContract20261108Test(unittest.TestCase):
