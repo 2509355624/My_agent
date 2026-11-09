@@ -181,6 +181,9 @@ class InjectionTest(unittest.TestCase):
         self.assertIn("不是好感", txt)
         self.assertIn("拨头发", txt)
         self.assertIn("第一次", txt)
+        # 病娇那一项必须写死「不给负值」，否则编剧照老习惯回吐负分
+        self.assertIn("这一项不给负值", txt)
+        self.assertIn("只涨不掉的棘轮", txt)
 
     def test_dynamic_block_is_silent_for_v2(self):
         self.assertEqual(A.dynamic_block({"active": True, "schema": 2}), "")
@@ -216,6 +219,66 @@ class InjectionTest(unittest.TestCase):
         self.assertIn("关系 动了心", tail)
         self.assertIn("已发生", tail)
         self.assertNotIn("/50", tail)
+
+
+class YandereTest(unittest.TestCase):
+    """病娇轴两件事（2026-11-09 用户拍板）：只涨不掉的棘轮 + 演法规则给演员。
+
+    原来 `yandere` 能吃负值（哄回来就掉），但病娇的定义就是「她已经记下了」——
+    能抹掉的分数演不出这一层。所以：
+      1. 单轮增量先钳到 0 以上再累加，编剧给负值也掉不下去，上限照 max 钳；
+      2. 文案在 `config/affection_v2.json` 的 `yandere.act`，病娇 >0 才整段递给
+         第二段演员；配置里没有 `act` 就不给，不留一段空标题。
+    """
+
+    def test_negative_delta_never_lowers_yandere(self):
+        _res, rec = _settle(_rec(yandere=30), {"yandere": -20})
+        self.assertEqual(rec["yandere"], 30)
+        # 连着一轮「哄好了 + 好感大涨」也一样抹不掉
+        _res2, rec2 = _settle(rec, {"yandere": -5, "delta": 8})
+        self.assertEqual(rec2["yandere"], 30)
+
+    def test_positive_delta_raises_and_still_caps_at_max(self):
+        _res, rec = _settle(_rec(yandere=30), {"yandere": 12})
+        self.assertEqual(rec["yandere"], 42)
+        _res2, rec2 = _settle(_rec(yandere=95), {"yandere": 20})
+        self.assertEqual(rec2["yandere"], 100)
+
+    def test_actor_gets_the_rules_once_she_is_actually_sick(self):
+        res, _ = _settle(_rec(), {"yandere": 20})
+        txt = A._v2_injection(res)
+        self.assertIn("病娇这一层怎么演", txt)
+        self.assertIn("占有欲", txt)
+        # 档位读数那一行是另一件事，规则块不代替它
+        self.assertIn("有点不安", txt)
+
+    def test_no_rules_block_when_yandere_is_zero(self):
+        res, _ = _settle(_rec(), {"yandere": -10})
+        self.assertEqual(res["yandere"], 0)
+        self.assertNotIn("病娇这一层怎么演", A._v2_injection(res))
+
+    def test_empty_config_means_no_orphan_header(self):
+        cfg = copy.deepcopy(A._v2_config())
+        cfg["yandere"]["act"] = []
+        self.assertEqual(A._v2_yandere_block(cfg, 60), "")
+        self.assertTrue(A._v2_yandere_block(A._v2_config(), 60))
+
+    def test_six_tiers_from_uneasy_to_merged(self):
+        """六档顺序锁死：文案改档位名要连这里一起改，别让面板和注入对不上。"""
+        stages = sorted(A._v2_config()["yandere"]["stages"],
+                        key=lambda x: int(x.get("min") or 0))
+        self.assertEqual([s["name"] for s in stages],
+                         ["没有", "有点不安", "放不下", "锁人", "关起来", "融为一体"])
+        self.assertEqual([int(s["min"]) for s in stages], [0, 20, 45, 75, 90, 100])
+
+    def test_each_stage_line_carries_both_words_and_actions(self):
+        """到 90 档：演员必须读到「反锁 / 钥匙」这类具体动作，不是一句「她绷着」。"""
+        res, _ = _settle(_rec(yandere=75), {"yandere": 20})
+        self.assertEqual(res["yandere"], 95)
+        self.assertEqual(res["yandereName"], "关起来")
+        txt = A._v2_injection(res)
+        self.assertIn("反锁", txt)
+        self.assertIn("我哪儿也不去", txt)
 
 
 class PanelNumbersTest(unittest.TestCase):
@@ -561,6 +624,59 @@ class OldSaveIsolationTest(unittest.TestCase):
             except Exception:                       # noqa: BLE001
                 pass                                # 只关心有没有走错分流
             v2.assert_not_called()
+
+
+class CardStartTest(unittest.TestCase):
+    """角色卡的四个 v2 起点：新建这条线时按卡落，没配就和以前一样。
+
+    以前 `_v2_blank_fields()` 硬写 0/0/False，卡面开不了口——想建一张
+    「一上来就绷着的病娇卡」或「已经是恋人」的卡做不到（2026-11-09）。
+    """
+
+    def _blank(self, card, schema=2):
+        with mock.patch.object(P, "active_card", return_value=card):
+            return A._blank("t_card_start", schema=schema)
+
+    def test_card_starts_land_on_four_axes(self):
+        rec = self._blank({"start_confess": 35, "start_yandere": 60,
+                           "start_together": True, "start_value": 60})
+        self.assertEqual(rec["confess"], 35)
+        self.assertEqual(rec["yandere"], 60)
+        self.assertTrue(rec["together"])
+        self.assertEqual(rec["value"], 60)
+        # 在一起 + 好感 60 → 落档就是「在一起了」，不用先爬
+        self.assertEqual(A._v2_tier(rec["value"], rec["together"])["name"],
+                         "在一起了")
+        # 好感 80 + 在一起 → 一上来就是恋人（以前钳在 50，这档根本填不出）
+        hot = self._blank({"start_together": True, "start_value": 80})
+        self.assertEqual(A._v2_tier(hot["value"], hot["together"])["name"], "恋人")
+
+    def test_no_card_start_keeps_old_behavior(self):
+        rec = self._blank({})
+        self.assertEqual((rec["confess"], rec["yandere"], rec["together"]),
+                         (0, 0, False))
+        self.assertNotIn("adult", rec)
+
+    def test_arousal_tier_seeds_the_body_axis(self):
+        """冲动起点在 v2 是身体线的 0~4 档，不是 v1 那个数值。"""
+        rec = self._blank({"start_arousal_tier": 3})
+        self.assertEqual(rec["adult"]["arousal"], "lead")
+        rec0 = self._blank({"start_arousal_tier": 0})
+        self.assertNotIn("adult", rec0)          # 0 档 = 不播种子，照旧
+
+    def test_v1_line_ignores_the_v2_start_fields(self):
+        rec = self._blank({"start_confess": 35, "start_together": True,
+                           "start_arousal_tier": 3}, schema=1)
+        self.assertEqual(rec["schema"], 1)
+        self.assertNotIn("confess", rec)
+        self.assertNotIn("adult", rec)
+
+    def test_together_start_does_not_fire_the_auto_confession(self):
+        """已经在一起的卡，不该第一拍又弹一次「她主动表白」。"""
+        rec = self._blank({"start_together": True, "start_confess": 50,
+                           "start_value": 80})
+        res, _ = _settle(rec, {"value_delta": 0, "reason": "闲聊"})
+        self.assertFalse(res.get("auto_confess"))
 
 
 if __name__ == "__main__":

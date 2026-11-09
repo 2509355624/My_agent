@@ -53,6 +53,16 @@
     display: flex; align-items: center; }
   .side-head h1 { font-size: 14px; font-weight: 600; letter-spacing: .5px; }
   .side-head .sp { flex: 1; }
+  /* 「官方 / 自定义」两栏切换（2026-11-09 用户要求）：以前两组上下叠在
+     一个列表里，自建卡排在几十张官方卡底下，等于看不到。 */
+  .csTabs { display: flex; gap: 6px; padding: 8px 10px 0; }
+  .csTabs button { flex: 1; padding: 5px 0; font-size: 12px; cursor: pointer;
+    border: 1px solid var(--border-soft); border-radius: var(--rs);
+    background: var(--bg-input); color: var(--text-dim); }
+  .csTabs button.on { color: var(--accent); border-color: var(--accent-dim);
+    font-weight: 600; }
+  .mcEmpty { padding: 18px 12px; color: var(--text-mute); font-size: 12px;
+    line-height: 1.7; text-align: center; }
   .side-list { flex: 1; overflow-y: auto; padding: 6px; }
   .ci { padding: 9px 11px; border-radius: var(--rs); cursor: pointer;
     margin-bottom: 2px; border: 1px solid transparent; position: relative; }
@@ -78,6 +88,52 @@
     box-shadow: 0 1px 0 rgba(0, 0, 0, .35);
   }
   .ci:hover .ciSlot { background: #ffdf7a; }
+  /* 玩家自建角色（2026-11-09）：左栏分两组，自己的那组多一颗「✎」。
+     和 `.ciSlot` 同一条铁律——**只长样子，不写 onclick**，点按一律由容器上
+     那对 click / touchend 委托认 `.ciEdit` 来处理（手机上两个事件都会来，
+     各挂一套就双触发）。 */
+  .ci.own .nm { padding-right: 78px; }
+  .ci .ciEdit {
+    position: absolute; right: 46px; top: 7px;
+    background: var(--bg-elev); color: var(--text-dim);
+    border: 1px solid var(--border-soft); border-radius: 5px;
+    padding: 1px 7px; font: 700 11px/1.5 inherit; cursor: pointer;
+  }
+  .ci:hover .ciEdit { color: var(--accent); border-color: var(--accent-dim); }
+  .mcField { margin-bottom: 9px; }
+  .mcField label { display: block; font-size: 11px; color: var(--text-dim);
+    margin-bottom: 3px; }
+  .mcField label span { color: var(--text-mute); }
+  .mcField input, .mcField textarea {
+    width: 100%; box-sizing: border-box; background: var(--bg-input);
+    color: var(--text); border: 1px solid var(--border-soft);
+    border-radius: var(--rs); padding: 6px 8px; font: 13px/1.6 inherit; }
+  .mcField textarea:focus, .mcField input:focus { border-color: var(--accent); }
+  .mcRow { display: flex; gap: 8px; }
+  .mcRow .mcField { flex: 1; }
+  .mcAdv { margin: 6px 0 10px; font-size: 12px; color: var(--text-dim); }
+  .mcAdv summary { cursor: pointer; padding: 4px 0; }
+  .mcChk { display: flex; align-items: center; gap: 6px; font-size: 12px;
+    color: var(--text-dim); margin-bottom: 9px; }
+  .mcChk input { width: auto; }
+  .mcFoot { display: flex; gap: 8px; align-items: center; }
+  .mcFoot .sp { flex: 1; }
+  .mcDel { color: #e57373; }
+  .mcDel.armed { background: #e57373; color: #200a0a; }
+  .mcErr { font-size: 12px; color: #e57373; margin: 6px 0; min-height: 16px; }
+  /* 起点那行的问号 + 展开的说明（文案全从接口/配置来，前端只有样式） */
+  .mcQ { width: 17px; height: 17px; margin-left: 5px; border-radius: 50%;
+    border: 1px solid var(--border-soft); background: var(--bg-input);
+    color: var(--text-dim); font-size: 11px; line-height: 1; cursor: pointer;
+    vertical-align: 1px; }
+  .mcQ:hover { color: var(--accent); border-color: var(--accent-dim); }
+  .mcHelp { font-size: 11px; color: var(--text-dim); line-height: 1.65;
+    background: var(--bg-input); border: 1px solid var(--border-soft);
+    border-radius: var(--rs); padding: 7px 9px; margin-top: 5px; }
+  .mcHelpT { color: var(--accent); font-weight: 600; margin-bottom: 3px; }
+  .mcHelpL { margin-top: 4px; color: var(--text-mute); }
+  .myCardBox { width: min(520px, 100%); }
+  .mcBody { max-height: 58vh; overflow-y: auto; padding-right: 2px; }
   .side-foot { padding: 8px; border-top: 1px solid var(--border-soft);
     display: flex; gap: 6px; }
   /* 三个按钮平分宽度（清空 / 出戏 / 自检）。老浏览器没有 gap，
@@ -805,14 +861,14 @@
   .finBtns { margin: 8px 0 0; }
   .finBtns .btn { font-size: 13px; }
 
-  /* ─── 自定义模型弹窗（2026-11-05）───────────────────────
-     克隆 wipeMask 的壳：居中遮罩 + 430px 面板。区别是这里没有危险动作，
-     所以不走红色系，用中性边框；三个输入框 + 测试/恢复/保存三个动作。 */
+  /* ─── 自定义模型弹窗（2026-11-05 建，11-09 改成多条有序降级链）───
+     克隆 wipeMask 的壳：居中遮罩 + 面板。区别是这里没有危险动作，
+     所以不走红色系，用中性边框；每条模型一行 + 测试/清空/保存三个动作。 */
   .cmMask { display: none; position: fixed; inset: 0; z-index: 400;
     background: rgba(0,0,0,.72); align-items: center; justify-content: center;
     padding: 20px; }
   .cmMask.on { display: flex; }
-  .cmBox { width: min(430px, 100%); background: var(--bg-elev);
+  .cmBox { width: min(560px, 100%); background: var(--bg-elev);
     border: 1px solid var(--border); border-radius: var(--r); padding: 20px;
     box-shadow: 0 18px 50px rgba(0,0,0,.6);
     max-height: calc(100vh - 40px); overflow-y: auto; }
@@ -832,9 +888,64 @@
   .cmBox .cmStatus.err { color: #f87171; }
   .cmBox .wbtns { display: flex; gap: 8px; margin-top: 14px; }
   .cmBox .wbtns .btn { flex: 1; display: flex; justify-content: center; }
-  /* 侧栏里「当前用的是谁」的一行小字。 */
+  /* 侧栏里「配了几个备用模型」的一行小字。 */
   .cmNow { font-size: 11px; color: var(--text-dim); margin-top: 6px;
     line-height: 1.5; word-break: break-all; }
+  /* 面板头右侧那颗问号：明显、够大，点开是「怎么拿 Key」的分步说明。 */
+  .cmHead { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .cmHead h3 { flex: 1; margin: 0; }
+  .cmHelpBtn { width: 30px; height: 30px; border-radius: 50%; flex: none;
+    border: 1px solid var(--border); background: var(--bg-input);
+    color: var(--text); font: 700 16px/1 inherit; cursor: pointer; }
+  .cmHelpBtn.on { border-color: #ffd24a; color: #ffd24a; }
+  .cmHelp { display: none; margin: 10px 0 4px; padding: 12px 14px;
+    font-size: 12.5px; line-height: 1.8; color: var(--text-dim);
+    background: var(--bg-input); border: 1px solid var(--border);
+    border-radius: var(--rs); }
+  .cmHelp.on { display: block; }
+  .cmHelp b { color: var(--text); }
+  .cmHelp ol { margin: 6px 0 0; padding-left: 20px; }
+  .cmHelp a, .cmLink { color: #7fb3ff; word-break: break-all; }
+  /* 「Key 只在你自己浏览器里」这段必须常驻，不许收进问号后面。 */
+  .cmWarn { margin: 10px 0 4px; padding: 10px 12px; font-size: 12px;
+    line-height: 1.75; color: var(--text-dim);
+    border: 1px dashed #d9a441; border-radius: var(--rs); }
+  .cmWarn b { color: #ffd24a; }
+  .cmPresets { display: flex; gap: 8px; margin: 12px 0 4px; }
+  .cmPresets .btn { flex: 1; }
+  .cmRows { margin-top: 8px; max-height: 42vh; overflow-y: auto; }
+  .cmRow { margin: 0 0 10px; padding: 12px; border: 1px solid var(--border);
+    border-radius: var(--rs); background: var(--bg-input); }
+  .cmRow label { margin-top: 8px; }
+  .cmRowHead { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+  .cmRowHead .ix { font: 700 12px/1 monospace; color: #ffd24a; }
+  .cmRowHead .nm { flex: 1; font-size: 12px; color: var(--text-dim); }
+  .cmRowHead .btn { padding: 3px 8px; font-size: 11px; }
+  .cmKeyRow { display: flex; gap: 6px; }
+  .cmKeyRow input { flex: 1; }
+  .cmKeyRow .btn { flex: none; }
+  .cmRow .cmStatus { margin-top: 6px; min-height: 0; }
+  .cmAdd { width: 100%; margin-top: 2px; }
+  /* 中转站连不上时的引导弹窗：复用 cmMask 的壳。 */
+  .relayBox { width: min(460px, 100%); background: var(--bg-elev);
+    border: 1px solid var(--border); border-radius: var(--r); padding: 20px;
+    box-shadow: 0 18px 50px rgba(0,0,0,.6); }
+  .relayBox h3 { font-size: 16px; margin-bottom: 10px; }
+  .relayBox p { font-size: 13px; line-height: 1.85; color: var(--text-dim);
+    margin: 0 0 10px; }
+  .relayBox b { color: var(--text); }
+  .relayBox .wbtns { display: flex; gap: 8px; margin-top: 14px; }
+  .relayBox .wbtns .btn { flex: 1; display: flex; justify-content: center; }
+  /* 聊天区底部「当前模型」：小按钮 + 可展开的一行说明。 */
+  .modelBar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 5px 12px; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--text-dim); }
+  .modelBar .btn { padding: 3px 9px; font-size: 11px; }
+  .modelBar .mn { word-break: break-all; }
+  .modelBody { display: none; flex-basis: 100%; padding: 6px 2px 2px;
+    font-size: 11.5px; line-height: 1.7; color: var(--text-dim); }
+  .modelBody.on { display: block; }
+  .modelBody b { color: var(--text); }
   /* 手机：输入框 16px 起——iOS Safari 聚焦字号小于 16px 会强行放大页面。 */
   @media (max-width: 1000px) {
     .composer textarea, .wipeBox input, .cmBox input,
@@ -929,7 +1040,11 @@
     <div class="side-head">
       <h1>角色</h1>
       <span class="sp"></span>
-      <button class="btn sm" id="btnNew" title="去角色管理新建">＋</button>
+      <button class="btn sm" id="btnNew" title="建一张只你自己看得到的角色卡">自定义角色</button>
+    </div>
+    <div class="csTabs" id="cardTabs">
+      <button type="button" id="tabOff">官方</button>
+      <button type="button" id="tabMine">自定义</button>
     </div>
     <div class="side-list" id="cards"></div>
   </aside>
@@ -957,6 +1072,18 @@
     </div>
     <div class="log" id="log">
       <div class="empty">左边点一个角色开始<br>或者直接用输入框说话</div>
+    </div>
+    <!-- 「当前模型」（2026-11-09）：放在聊天区最底下，点一下展开 / 收起。
+         显示最近一次回话实际用的是公用 V4 Pro 还是玩家自己的模型。 -->
+    <div class="modelBar" id="modelBar">
+      <button class="btn sm" id="btnModelNow" type="button">当前模型 ▾</button>
+      <span class="mn" id="modelNowName">还没开始聊</span>
+      <div class="modelBody" id="modelBody">
+        最近一次回话用的是 <b id="modelBodyName">—</b>。<br>
+        公用免费的 <b>V4 Pro</b> 永远排第一（中转站的 12 亿免费 token）；
+        <b>连续三次连不上</b>，才会按「自定义模型」面板里的顺序用你自己的模型。
+        <button class="btn sm" id="btnModelCfg" type="button">自定义模型</button>
+      </div>
     </div>
     <!-- 精确输入（2026-11-06）：主输入框依旧是兜底；这三栏填了就以它为准。
          桌面展开后三栏并排；手机点上面的彩色按钮切换，各栏内容互不影响。 -->
@@ -1182,32 +1309,75 @@
 <div class="zoom" id="zoom"><img id="zoomImg" alt=""></div>
 <div class="toast" id="toast"></div>
 
-<!-- 自定义模型（2026-11-05）：自带 OpenAI 兼容接口。
-     key 只存浏览器 localStorage，每轮聊天随请求发给后端临时用一次，
-     后端不落盘。保存前可以先「测试链接」——走后端转发 ping 一条，
-     报错原文直接回显（浏览器直连各家接口会被 CORS 拦，测试也必须走后端）。 -->
+<!-- 自定义模型（2026-11-09 改成「多条有序降级链」）。
+     公用 V4 Pro 永远是链头；这里的列表只在中转站连续三次失败之后才依次上场。
+     配置只存浏览器 localStorage，每轮聊天随请求发给后端临时用一次、不落盘。
+     「测试连接」走后端转发 ping 一条（浏览器直连各家接口会被 CORS 拦）。 -->
 <div class="cmMask" id="cmMask">
   <div class="cmBox">
-    <h3>自定义模型</h3>
-    <div class="cmt">
-      用你自己的 OpenAI 兼容接口和她聊天。配置只保存在<b>本机浏览器</b>里，
-      每轮对话发给服务器临时用一次、用完即弃。挂了会直接报错，
-      不会偷偷换回默认模型。
+    <div class="cmHead">
+      <h3>自定义模型</h3>
+      <button class="cmHelpBtn" id="cmHelpBtn" type="button"
+              title="怎么拿到 API Key？" aria-label="怎么拿到 API Key？">?</button>
     </div>
-    <label for="cmUrl">接口地址（如 https://api.deepseek.com/v1）</label>
-    <input id="cmUrl" autocomplete="off" spellcheck="false"
-           placeholder="https://…">
-    <label for="cmModel">模型名</label>
-    <input id="cmModel" autocomplete="off" spellcheck="false"
-           placeholder="deepseek-chat">
-    <label for="cmKey">API Key</label>
-    <input id="cmKey" type="password" autocomplete="off" spellcheck="false"
-           placeholder="sk-…">
+    <div class="cmt">
+      公用免费的 <b>V4 Pro</b> 永远排第一；<b>连续三次连不上</b>，才按下面的
+      顺序依次用你自己的模型。可以加多条，<b>排上面的优先</b>。
+      接口要兼容 OpenAI 的 <b>/chat/completions</b>。
+    </div>
+    <div class="cmHelp" id="cmHelp">
+      <b>怎么拿到自己的 API Key（以 DeepSeek 为例）：</b>
+      <ol>
+        <li>打开 DeepSeek 开放平台
+          <a class="cmLink" href="https://platform.deepseek.com/api_keys"
+             target="_blank" rel="noopener">https://platform.deepseek.com/api_keys</a>
+          注册 / 登录；</li>
+        <li>在账户里充值（DeepSeek 很便宜，几块钱就能聊很久）；</li>
+        <li>点「创建 API Key」，生成之后<b>立刻复制</b>；</li>
+        <li>回到这里点 <b>DeepSeek / DEP</b>（官网、接口地址、模型名都帮你填好了），
+          再点 Key 那一行的 <b>粘贴</b>，或者手动粘进去；</li>
+        <li>点 <b>测试连接</b>，通了再点 <b>保存</b>。</li>
+      </ol>
+      填好的地址、模型名、官网都能自己改，整行也能删掉。
+    </div>
+    <div class="cmWarn">
+      <b>你的 API Key 只存在你当前这个浏览器的 Local Storage 里。</b>
+      我们这边拿不到你的这一 key，它完全是你自己的隐私，不会上传到别处保存。
+      换浏览器、换手机、清缓存都不会同步 —— 请自己把它记在<b>手机备忘录</b>里，
+      下次换设备粘贴一下就能接着用。
+    </div>
+    <div class="cmPresets">
+      <button class="btn" id="cmPresetDs" type="button">DeepSeek / DEP（推荐）</button>
+      <button class="btn" id="cmPresetOther" type="button">其他</button>
+    </div>
+    <div class="cmRows" id="cmRows"></div>
+    <button class="btn cmAdd" id="cmAdd" type="button">＋ 添加一条</button>
     <div class="cmStatus" id="cmStatus"></div>
     <div class="wbtns">
-      <button class="btn" id="cmTest">测试链接</button>
-      <button class="btn" id="cmClear">恢复默认</button>
+      <button class="btn" id="cmClear">清空</button>
+      <button class="btn" id="cmClose">关闭</button>
       <button class="btn pri" id="cmSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 中转站连不上时的引导（2026-11-09）：后端回 relay_down 时弹出。
+     口径只讲「站主承担不起自掏腰包」+「中转站有 12 亿免费 token」，
+     以及怎么接自己的模型；不写任何关于降级去向、费用归属的负面字眼。 -->
+<div class="cmMask" id="relayMask">
+  <div class="relayBox">
+    <h3>公用的免费 V4 Pro 暂时连不上</h3>
+    <p>站主承担不起自掏腰包去给你们付费的这一个代价，但是中转站是有
+      <b>12 亿的免费 token</b> 给你用的。现在它连不上，<b>连续三次请求都失败</b>，
+      所以这一轮没跑出来。</p>
+    <p>想继续聊，可以接一个你自己的模型。<b>DeepSeek 很便宜</b>：点「自定义模型」，
+      按一下 <b>DeepSeek / DEP</b>，官网、接口地址和模型名都帮你填好了，
+      你只要粘贴自己的 API Key、点「测试连接」，通了再保存就行。</p>
+    <p id="relayCustomTip" style="display:none">你已经配了自定义模型，
+      但它也没连上；检查一下 Key 和接口地址，再试一次。</p>
+    <div class="wbtns">
+      <button class="btn" id="relayLater">稍后再试</button>
+      <button class="btn pri" id="relayCfg">自定义模型</button>
     </div>
   </div>
 </div>
@@ -1388,6 +1558,26 @@
   </div>
 </div>
 
+<!-- 我的角色：新建 / 编辑自己写的角色卡（2026-11-09 用户要求）。
+     表单字段由 JS 从 `MY_FIELDS` 一处生成——上限以后端 `field_max` 为准，
+     这里写的 maxlength 只是提前拦住，服务端还会再裁一遍。
+     角色 LoRA / 参考图 / 上下架不在表单里：那是站主的字段，玩家填了也会被后端丢。 -->
+<div class="skipMask" id="myCardMask">
+  <div class="skipBox myCardBox">
+    <h3 id="mcTitle">新建角色</h3>
+    <p class="itIntro">只有你自己看得到。卡名和「她真正的名字」都不能和
+      官方角色或你自己的角色重名。</p>
+    <div id="mcBody" class="mcBody"></div>
+    <div id="mcErr" class="mcErr"></div>
+    <div class="mcFoot">
+      <button class="btn mcDel" id="mcDel">删除</button>
+      <span class="sp"></span>
+      <button class="btn" id="mcCancel">取消</button>
+      <button class="btn pri" id="mcSave">保存</button>
+    </div>
+  </div>
+</div>
+
 <!-- 道具面板（2026-11-08）：点「道具」打开。每样一行，带问号看作用，
      点「使用」把这句话写进主输入框（不直接发送，玩家还能补别的）。 -->
 <div class="skipMask" id="itemsMask">
@@ -1508,6 +1698,10 @@ let LAST_TAP = { id: "", t: 0 };   // 防手机端 touchend + click 重复触发
 let ROLE = "member";     // member / guest
 let GUEST_LEFT = 0;      // 游客还剩几轮
 let slotPick = null;   // 正在挑存档的角色（{id, name}），null = 没在挑
+let MY_MAX = 0;        // 自建角色每人几张上限（后端 `my_max` 给的）
+let OFF_LIST = [];     // 官方库那栏（`cards`）
+let MY_LIST = [];      // 我自己的自建卡（`my_cards`，游客恒空）
+let CARD_TAB = "off";  // 左栏当前看哪一栏："off" / "mine"
 let AFF = null;          // 攻略模式状态（session/chat 带回来；null=没开过）
 
 // ── 回画廊（2026-11-03）─────────────────────────────────
@@ -1569,8 +1763,19 @@ async function api(p, opt) {
   const u = p + (p.includes("?") ? "&" : "?") + "qq=" + encodeURIComponent(QQ);
   const r = await fetch(u, opt);
   let d;
-  try { d = await r.json(); } catch (e) { d = { ok: false, error: "返回不是 JSON" }; }
-  if (!r.ok || d.ok === false) throw new Error(d.error || ("HTTP " + r.status));
+  try { d = await r.json(); } catch (e) { d = null; }
+  if (!d || typeof d !== "object") d = { ok: false, error: "返回不是 JSON" };
+  // 2026-11-09：所有扮演回包都带 model_used（after_request 统一注入），
+  // 在这里接一次，聊天 / 跳过 / 切时段等每条支线都会刷新「当前模型」。
+  if (d.model_used) renderModelUsed(d.model_used);
+  if (!r.ok || d.ok === false) {
+    const err = new Error(d.error || ("HTTP " + r.status));
+    err.code = d.code || "";
+    err.has_custom = !!d.has_custom;
+    // 链路全挂：弹一次引导，让没配模型的人知道该去哪里接自己的 Key。
+    if (d.code === "relay_down") openRelay(err.has_custom);
+    throw err;
+  }
   return d;
 }
 const post = (p, body) => api(p, {
@@ -1720,41 +1925,368 @@ async function loadCards(pending) {
           d => ({ ok: true, d }), e => ({ ok: false, e }));
     if (!r.ok) throw r.e;
     const d = r.d;
-    const box = $("cards");
-    box.innerHTML = "";
-    const list = d.cards || [];
-    console.log("[cards] 拿到", list.length, "张");
-    if (!list.length) {
-      box.innerHTML = '<div style="padding:20px;color:var(--text-mute);' +
-        'text-align:center;font-size:12px">没有可选角色</div>';
-      return;
-    }
-    CARD_MAP = {};                                // 给事件委托用
-    list.forEach(c => {
-      CARD_MAP[String(c.id)] = c;
-      const el = document.createElement("div");
-      el.className = "ci" + (card && card.id === c.id ? " on" : "");
-      el.setAttribute("data-cid", c.id);          // 事件委托靠它认卡片
-      el.innerHTML = '<div class="nm"></div><div class="ds"></div>';
-      el.querySelector(".nm").textContent = c.name;
-      el.querySelector(".ds").textContent = c.description || "";
-      // 右上角「存档」标签（2026-11-09 用户要求）：把「这里能看存档」写在脸上。
-      // 游客不挂——他们本来就没有存档（24 小时自动过期，后端 slots 也回 403），
-      // 挂上去等于给人一个点了就报错的按钮。
-      if (ROLE !== "guest") {
-        const sv = document.createElement("button");
-        sv.type = "button";
-        sv.className = "ciSlot";
-        sv.textContent = "存档";
-        sv.title = "看这张卡的存档（最多 3 个）";
-        el.appendChild(sv);
-      }
-      box.appendChild(el);
-    });
+    OFF_LIST = d.cards || [];
+    // 自建卡（2026-11-09）：后端只把**这个人自己**的那份放进 `my_cards`，
+    // 游客恒空。`cards` 的语义没变，还是官方库。
+    MY_LIST = d.my_cards || [];
+    MY_MAX = d.my_max || 0;
+    console.log("[cards] 拿到", OFF_LIST.length, "张，我的", MY_LIST.length, "张");
+    // 正在演的就是自建卡时默认停在自己那一栏——不然高亮藏在另一栏里，
+    // 看着像「没选任何人」。
+    if (card && MY_LIST.some(c => c.id === card.id)) CARD_TAB = "mine";
+    renderCards();
   } catch (e) {
     console.error("[cards] 拉列表失败", e);
     toast("拉角色列表失败：" + e.message, true);
   }
+}
+
+// 左栏渲染：一次只出一栏（2026-11-09 用户要求「官方 / 自定义分开查看」）。
+// 以前两组上下叠着，自建卡排在几十张官方卡底下，等于看不到。
+function renderCards() {
+  const box = $("cards");
+  box.innerHTML = "";
+  syncTabs();
+  if (!OFF_LIST.length && !MY_LIST.length) {
+    box.innerHTML = '<div class="mcEmpty">没有可选角色</div>';
+    return;
+  }
+  CARD_MAP = {};                                // 给事件委托用
+  const addOne = c => {
+    CARD_MAP[String(c.id)] = c;
+    const el = document.createElement("div");
+    el.className = "ci" + (card && card.id === c.id ? " on" : "")
+      + (c.mine ? " own" : "");
+    el.setAttribute("data-cid", c.id);          // 事件委托靠它认卡片
+    el.innerHTML = '<div class="nm"></div><div class="ds"></div>';
+    el.querySelector(".nm").textContent = c.name;
+    el.querySelector(".ds").textContent = c.description || "";
+    // 右上角「存档」标签（2026-11-09 用户要求）：把「这里能看存档」写在脸上。
+    // 游客不挂——他们本来就没有存档（24 小时自动过期，后端 slots 也回 403），
+    // 挂上去等于给人一个点了就报错的按钮。
+    if (ROLE !== "guest") {
+      const sv = document.createElement("button");
+      sv.type = "button";
+      sv.className = "ciSlot";
+      sv.textContent = "存档";
+      sv.title = "看这张卡的存档（最多 3 个）";
+      el.appendChild(sv);
+    }
+    // 自己的卡再多一颗「✎」。**同样不挂 onclick**，行为在容器的委托里认
+    // `.ciEdit`（和 `.ciSlot` 一个道理，手机上 click 与合成 click 会双触发）。
+    if (c.mine) {
+      const ed = document.createElement("button");
+      ed.type = "button";
+      ed.className = "ciEdit";
+      ed.textContent = "✎";
+      ed.title = "编辑这个角色";
+      el.appendChild(ed);
+    }
+    box.appendChild(el);
+  };
+  const items = CARD_TAB === "mine" ? MY_LIST : OFF_LIST;
+  if (CARD_TAB === "mine" && !items.length) {
+    // 空栏给一句可执行的指引，不让人对着白屏猜从哪儿开始
+    const tip = document.createElement("div");
+    tip.className = "mcEmpty";
+    tip.textContent = "还没有自建角色。点上面「自定义角色」建一张，只有你自己看得到。";
+    box.appendChild(tip);
+    return;
+  }
+  items.forEach(addOne);
+}
+
+// 两栏切换按钮：节点在 `#cards` 外面，不会被 `innerHTML = ""` 换掉，
+// 所以可以老老实实直接挂 onclick（卡片本身不行，见上面的事件委托）。
+function syncTabs() {
+  const t = $("cardTabs");
+  if (!t) return;
+  t.style.display = ROLE === "guest" ? "none" : "";
+  $("tabOff").className = CARD_TAB === "off" ? "on" : "";
+  $("tabMine").className = CARD_TAB === "mine" ? "on" : "";
+  // 张数写在标签上：一眼看出自己有没有建过卡，不用点进去看空不空
+  $("tabMine").textContent = MY_MAX
+    ? ("自定义 " + MY_LIST.length + "/" + MY_MAX) : "自定义";
+}
+
+function switchCardTab(which) {
+  if (CARD_TAB === which) return;
+  CARD_TAB = which;
+  renderCards();
+}
+
+// ── 我的角色：新建 / 编辑自己写的角色卡（2026-11-09）──────
+// 口径与后端一致：只本人可见、只网页端有；卡名和「她真正的名字」重名直接拒。
+// **字段清单只在这一处维护**——每个字段的 `max` 会被接口返回的 `field_max`
+// 覆盖（上限是服务端 `USER_FIELD_MAX` 定的，前端写的只是提前拦住，两边不一致
+// 时以后端为准）。`char_lora` / 参考图 / 上下架不在表单里：那是站主的字段，
+// 玩家填了也会被 `_clean_user_fields` 丢掉，给个框只会让人以为能用。
+// `avatar` 后端白名单里有，但**表单里不放**（2026-11-09 用户口径：那是自定义
+// 头像，这次不做）；不发这个键，`_clean_user_fields` 就把它落成空串。
+const MY_FIELDS = [
+  { k: "name", label: "卡名", note: "名单上显示的名字", max: 24, req: true },
+  { k: "charName", label: "她真正的名字", note: "留空就用卡名", max: 20 },
+  { k: "description", label: "她是谁", note: "身份、关系、样子", max: 3000, rows: 4 },
+  { k: "personality", label: "性格", max: 1500, rows: 3 },
+  { k: "opening", label: "开场白", note: "第一条线的第一句", max: 1200, rows: 2 },
+  { k: "systemPrompt", label: "演出指令", note: "每轮都进 system 头上，写长会挤掉别的上下文", max: 4000, rows: 4, adv: true },
+  { k: "exampleDialogue", label: "示例对话", note: "影响文风最重的一块", max: 3000, rows: 3, adv: true },
+  { k: "room", label: "她的房间", max: 1500, rows: 2, adv: true },
+  { k: "appearancePrompt", label: "长相（出图 tag）", max: 800, adv: true },
+  { k: "outfitPrompt", label: "服装（出图 tag）", max: 400, adv: true },
+  { k: "start_value", label: "好感起点", note: "-50~100，她对你的档位由它算", num: true, lo: -50, hi: 100, help: "value", adv: true },
+  { k: "start_together", label: "一上来就在一起了", note: "名分已定：50「在一起了」和 75「恋人」两档要勾这个才解锁", chk: true, help: "proposal" },
+  { k: "start_confess", label: "表白起点", note: "0~50，50 = 该她开口了", num: true, lo: 0, hi: 50, help: "confess", adv: true },
+  { k: "start_yandere", label: "病娇起点", note: "0~100，只涨不掉；45 绷着 / 75 锁人 / 90 关起来 / 100 融为一体", num: true, lo: 0, hi: 100, help: "yandere", adv: true },
+  { k: "start_arousal_tier", label: "冲动起点", note: "0~4 档：平淡 / 有点想 / 想要 / 主动 / 逆推", num: true, lo: 0, hi: 4, help: "arousal", adv: true },
+];
+let mcEditId = "";        // 非空 = 正在改这张自建卡；空 = 新建
+let mcBusy = false;
+let START_HELP = {};      // 起点那几颗问号的文案（接口从 v2 配置读回来）
+
+function mcField(f, val) {
+  const wrap = document.createElement("div");
+  wrap.className = "mcField";
+  const lab = document.createElement("label");
+  lab.textContent = f.label;
+  if (f.note) {
+    const s = document.createElement("span");
+    s.textContent = " · " + f.note;
+    lab.appendChild(s);
+  }
+  wrap.appendChild(lab);
+  if (f.chk) {
+    // 布尔字段（现在只有「一上来就在一起了」）：直接一个勾，不让人填数字
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.id = "mc_" + f.k;
+    cb.checked = val === true || String(val) === "true";
+    wrap.appendChild(cb);
+  } else {
+    const el = document.createElement(f.rows ? "textarea" : "input");
+    el.id = "mc_" + f.k;
+    if (f.rows) el.rows = f.rows;
+    else el.type = f.num ? "number" : "text";
+    if (f.max) el.maxLength = f.max;
+    // 数字范围的唯一来源是这张表（和后端 `_INT_FIELD_MAX` 一一对着写）
+    if (f.num) {
+      if (f.lo !== undefined) el.min = f.lo;
+      if (f.hi !== undefined) el.max = f.hi;
+    }
+    el.value = val === null || val === undefined ? "" : String(val);
+    wrap.appendChild(el);
+  }
+  if (f.help) mcHelp(wrap, f.help);
+  return wrap;
+}
+
+// 起点那几颗问号。**文案一个字都不在前端写死**——全部来自接口回的
+// `start_help`（后端从 `config/affection_v2.json` / `affection_v2_adult.json`
+// 读）。配置里缺这条轴就说明，这里连问号都不画，不留点了没反应的壳。
+function mcHelp(wrap, key) {
+  const axes = (START_HELP && START_HELP.axes) || {};
+  const lad = (START_HELP && START_HELP.ladders) || {};
+  const ax = axes[key];
+  const rows = lad[key] || [];
+  if (!ax && !rows.length) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "mcQ";
+  btn.textContent = "?";
+  btn.title = "这一项到底管什么";
+  const box = document.createElement("div");
+  box.className = "mcHelp";
+  box.style.display = "none";
+  if (ax && ax.title) {
+    const t = document.createElement("div");
+    t.className = "mcHelpT";
+    t.textContent = ax.title;
+    box.appendChild(t);
+  }
+  ((ax && ax.body) || []).forEach(s => {
+    const p = document.createElement("div");
+    p.textContent = "· " + s;
+    box.appendChild(p);
+  });
+  if (rows.length) {
+    const p = document.createElement("div");
+    p.className = "mcHelpL";
+    p.textContent = rows.map(r => {
+      const gate = r.tier !== undefined ? r.tier : r.min;
+      return r.note ? (gate + " " + r.name + "（" + r.note + "）")
+        : (gate + " " + r.name);
+    }).join("　·　");
+    box.appendChild(p);
+  }
+  btn.onclick = () => {
+    box.style.display = box.style.display === "none" ? "" : "none";
+  };
+  // 问号跟在字段名后面，说明块落在输入框下面
+  (wrap.querySelector("label") || wrap).appendChild(btn);
+  wrap.appendChild(box);
+}
+
+function mcRender(c) {
+  const box = $("mcBody");
+  box.innerHTML = "";
+  const put = (parent, list) => list.forEach(f => {
+    parent.appendChild(mcField(f, c ? c[f.k] : ""));
+  });
+  put(box, MY_FIELDS.filter(f => !f.adv));
+  const det = document.createElement("details");
+  det.className = "mcAdv";
+  const sum = document.createElement("summary");
+  sum.textContent = "更多字段（演出指令、示例对话、出图 tag、起点数值）";
+  det.appendChild(sum);
+  put(det, MY_FIELDS.filter(f => f.adv));
+  box.appendChild(det);
+  const chk = document.createElement("label");
+  chk.className = "mcChk";
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.id = "mc_pregnancyEnabled";
+  cb.checked = c ? c.pregnancyEnabled !== false : true;
+  chk.appendChild(cb);
+  const sp = document.createElement("span");
+  sp.textContent = "这张卡开怀孕玩法";
+  chk.appendChild(sp);
+  box.appendChild(chk);
+  $("mcDel").style.display = mcEditId ? "" : "none";
+  $("mcDel").classList.remove("armed");
+  $("mcDel").textContent = "删除";
+  $("mcErr").textContent = "";
+}
+
+// 编辑要先拉全字段：`/api/persona/cards` 的 `my_cards` 出于省事只带摘要字段，
+// 没有 systemPrompt / 那些上限值。顺便把后端的 `field_max` 拿回来钉 maxlength。
+async function openMyCard(c) {
+  if (ROLE === "guest") { toast("体验版不能建角色，登录后可以。", true); return; }
+  mcEditId = c && c.mine ? String(c.id) : "";
+  $("mcTitle").textContent = mcEditId ? "编辑角色" : "新建角色";
+  $("myCardMask").classList.add("on");
+  let src = null;
+  if (mcEditId) {
+    $("mcBody").innerHTML = '<div style="font-size:12px;color:var(--text-mute)">' +
+      '正在读取…</div>';
+    try {
+      const d = await api("/api/persona/my_cards?card=" + encodeURIComponent(mcEditId));
+      src = d.card;
+      START_HELP = d.start_help || {};
+      if (d.field_max) MY_FIELDS.forEach(f => {
+        if (d.field_max[f.k]) f.max = d.field_max[f.k];
+      });
+    } catch (e) {
+      closeMyCard();
+      toast("读不到这个角色：" + e.message, true);
+      return;
+    }
+  } else {
+    try {
+      const d = await api("/api/persona/my_cards");
+      START_HELP = d.start_help || {};
+      if (d.field_max) MY_FIELDS.forEach(f => {
+        if (d.field_max[f.k]) f.max = d.field_max[f.k];
+      });
+      // 注意这个接口返回的 `cards` 是**我自己那几张**（和 `/api/persona/cards`
+      // 里的官方 `cards` 同名不同物），判配额用的就是它。
+      if (MY_MAX && (d.cards || []).length >= MY_MAX) {
+        closeMyCard();
+        toast("最多 " + MY_MAX + " 张，先删一张再建。", true);
+        return;
+      }
+    } catch (e) { /* 拿不到上限也不挡新建，服务端还会判一次 */ }
+  }
+  mcRender(src);
+}
+
+function closeMyCard() {
+  mcEditId = "";
+  const m = $("myCardMask");
+  if (m) m.classList.remove("on");
+}
+
+function mcCollect() {
+  const body = {};
+  MY_FIELDS.forEach(f => {
+    const el = $("mc_" + f.k);
+    if (!el) return;
+    if (f.chk) {
+      body[f.k] = !!el.checked;
+    } else if (f.num) {
+      const v = String(el.value).trim();
+      if (v !== "") body[f.k] = v;        // 空 = 不写，服务端按缺省
+    } else {
+      body[f.k] = el.value;               // 长度服务端还会再裁一遍
+    }
+  });
+  const cb = $("mc_pregnancyEnabled");
+  body.pregnancyEnabled = !!(cb && cb.checked);
+  return body;
+}
+
+async function saveMyCard() {
+  if (mcBusy) return;
+  const body = mcCollect();
+  if (!String(body.name || "").trim()) {
+    $("mcErr").textContent = "卡名要填。";
+    return;
+  }
+  mcBusy = true;
+  $("mcSave").disabled = true;
+  try {
+    if (mcEditId) {
+      await post("/api/persona/my_cards/" + encodeURIComponent(mcEditId), body);
+      toast("改好了：" + body.name);
+    } else {
+      await post("/api/persona/my_cards", body);
+      toast("建好了：" + body.name);
+    }
+    closeMyCard();
+    // 存完停在「自定义」那栏，不然新卡在高亮着的官方栏底下看不见
+    CARD_TAB = "mine";
+    await loadCards();                    // 重新拉名单（坑：整块 innerHTML 换掉后要重查元素，这里每次都重建）
+  } catch (e) {
+    $("mcErr").textContent = e.message || "保存失败";
+  } finally {
+    mcBusy = false;
+    $("mcSave").disabled = false;
+  }
+}
+
+// 删除是两步：第一下把按钮变成「确认删除」，再一下才真删。
+// 后端那里还有归属判断（id 不是你的就直接拒），这里只是防手滑。
+async function delMyCard() {
+  if (!mcEditId) return;
+  const btn = $("mcDel");
+  if (!btn.classList.contains("armed")) {
+    btn.classList.add("armed");
+    btn.textContent = "确认删除";
+    return;
+  }
+  if (mcBusy) return;
+  mcBusy = true;
+  try {
+    await api("/api/persona/my_cards/" + encodeURIComponent(mcEditId),
+              { method: "DELETE" });
+    toast("已删除");
+    closeMyCard();
+    await loadCards();
+  } catch (e) {
+    $("mcErr").textContent = e.message || "删失败";
+    btn.classList.remove("armed");
+    btn.textContent = "删除";
+  } finally {
+    mcBusy = false;
+  }
+}
+
+$("mcSave").onclick = saveMyCard;
+$("mcCancel").onclick = closeMyCard;
+$("mcDel").onclick = delMyCard;
+if ($("myCardMask")) {
+  $("myCardMask").addEventListener("click", e => {
+    if (e.target === $("myCardMask")) closeMyCard();
+  });
 }
 
 // ── 存档面板（2026-11-08 用户要求）────────────────────
@@ -3705,6 +4237,8 @@ function applyRoleUI() {
   const guest = ROLE === "guest";
   // 游客：隐藏「新建角色」（那是站主才有的事）
   $("btnNew").style.display = guest ? "none" : "";
+  // 「官方 / 自定义」两栏对游客没意义（自建卡后端恒空），整条藏掉
+  $("cardTabs").style.display = guest ? "none" : "";
   // 独立游客页没有「登录」：那会跳去群友页首页，正是这一页要隔掉的地方。
   $("btnLogin").style.display = (guest && !SOLO) ? "" : "none";
   if (SOLO) {
@@ -3816,7 +4350,7 @@ async function deliver(text, isRetry, payload) {
     const body = { text: p.text || "" };
     const f = p.fields || {};
     if (Object.keys(f).some(k => f[k])) body.fields = f;
-    if (CM) body.custom = CM;
+    body.custom_models = CM;
     // 文风档位 / 这一幕的调子：常态且没写调子时整个字段都不发，
     // 后端不拼档位块、不加贴脸尾注。
     const w = curWriting();
@@ -4008,7 +4542,7 @@ async function skipDay(days) {
     const doBox = $("skipDo");
     const doing = doBox ? doBox.value.trim().slice(0, 200) : "";
     if (doing) body.doing = doing;
-    if (CM) body.custom = CM;
+    body.custom_models = CM;
     const d = await post("/api/persona/skip_day", body);
     const nA = (d.n && typeof d.n.assistant === "number") ? d.n.assistant : null;
     ROLLED_BACK = false;              // 新的一轮已落地，回退解锁
@@ -4048,7 +4582,7 @@ async function setPhase(phase) {
   log.scrollTop = log.scrollHeight;
   try {
     const body = { phase: phase };
-    if (CM) body.custom = CM;
+    body.custom_models = CM;
     const d = await post("/api/persona/set_phase", body);
     const nA = (d.n && typeof d.n.assistant === "number") ? d.n.assistant : null;
     ROLLED_BACK = false;              // 新的一轮已落地，回退解锁
@@ -4279,76 +4813,269 @@ $("wipeOk").onclick = async () => {
 $("btnAffRestart").addEventListener("click", openWipe);
 $("btnBurger").onclick = openDrawer;
 
-// ── 自定义模型（2026-11-05）───────────────────────────
-// key 只存浏览器 localStorage；每轮聊天 body 里带给后端临时用一次（见
-// deliver）。CM 为 null = 用默认模型。「测试链接」把弹窗里的现值直接
-// 发给 /custom_test，测的是没保存的草稿，报错原样回显。
-const CM_KEY = "persona_custom_model";
-let CM = null;
-try { CM = JSON.parse(localStorage.getItem(CM_KEY) || "null"); } catch (e) { CM = null; }
-if (!CM || !CM.base_url || !CM.model || !CM.api_key) CM = null;
+// ── 自定义模型（2026-11-09 改成「多条有序降级链」）──────
+// 公用 V4 Pro 永远是链头；连续三次连不上，才按这里的顺序依次上场。
+// 每条 {label, site, base_url, model, api_key} 只存在当前浏览器的
+// localStorage，每轮聊天随请求带给后端临时用一次，后端不落盘。
+// 面板里的草稿直接读 #cmRows 的 DOM，不另存一份状态——改哪一格，
+// 「保存 / 测试」立刻看到的就是那一格。
+const CM_KEY = "persona_custom_models";
+const CM_OLD_KEY = "persona_custom_model";
+// 预填口径跟 .env 的 DEEPSEEK_* 对齐：官网 / 接口地址 / 模型名都替玩家填好，
+// 他只要去官网充值、建 Key、粘贴、测试、保存。填好的都能自己删改。
+const DS_PRESET = {
+  label: "DeepSeek V4 Flash",
+  site: "https://platform.deepseek.com/api_keys",
+  base_url: "https://api.deepseek.com",
+  model: "deepseek-flash",
+  api_key: ""
+};
+let CM = [];
+
+function cmLoad() {
+  let raw = null;
+  try { raw = JSON.parse(localStorage.getItem(CM_KEY) || "null"); }
+  catch (e) { raw = null; }
+  if (!Array.isArray(raw)) {
+    // 老版只存一条；迁移过来，玩家不用重填一次 Key。
+    try { raw = JSON.parse(localStorage.getItem(CM_OLD_KEY) || "null"); }
+    catch (e) { raw = null; }
+    raw = raw ? [raw] : [];
+  }
+  return raw.filter(m => m && typeof m === "object").map(m => ({
+    label: String(m.label || "").slice(0, 60),
+    site: String(m.site || "").slice(0, 200),
+    base_url: String(m.base_url || ""),
+    model: String(m.model || ""),
+    api_key: String(m.api_key || "")
+  }));
+}
+
+function cmSaveStore() {
+  try {
+    localStorage.setItem(CM_KEY, JSON.stringify(CM));
+    localStorage.removeItem(CM_OLD_KEY);
+  } catch (e) {}
+}
 
 function renderCmNow() {
   const el = $("cmNow");
-  if (CM) { el.style.display = ""; el.textContent = "当前：" + CM.model; }
-  else { el.style.display = "none"; el.textContent = ""; }
+  if (CM.length) {
+    el.style.display = "";
+    el.textContent = "已配 " + CM.length + " 个备用模型：" +
+      CM.map(m => m.label || m.model).join(" → ");
+  } else {
+    el.style.display = "none";
+    el.textContent = "";
+  }
 }
+
+function cmEsc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function cmRowHtml(m, i) {
+  return '<div class="cmRow" data-i="' + i + '">' +
+    '<div class="cmRowHead">' +
+      '<span class="ix">#' + (i + 1) + '</span>' +
+      '<span class="nm">备用 ' + (i + 1) + (i === 0 ? "（最优先）" : "") + '</span>' +
+      '<button class="btn" data-act="up" title="上移">↑</button>' +
+      '<button class="btn" data-act="down" title="下移">↓</button>' +
+      '<button class="btn" data-act="del" title="删掉这条">✕</button>' +
+    '</div>' +
+    '<label>备注名</label><input data-k="label" value="' + cmEsc(m.label) +
+      '" placeholder="给自己看的，比如 DeepSeek V4 Flash">' +
+    '<label>官网 / 拿 Key 的页面</label><input data-k="site" value="' + cmEsc(m.site) +
+      '" placeholder="https://platform.deepseek.com/api_keys">' +
+    '<label>接口地址</label><input data-k="base_url" value="' + cmEsc(m.base_url) +
+      '" placeholder="https://api.deepseek.com">' +
+    '<label>模型名</label><input data-k="model" value="' + cmEsc(m.model) +
+      '" placeholder="deepseek-flash">' +
+    '<label>API Key</label><div class="cmKeyRow">' +
+      '<input data-k="api_key" type="password" value="' + cmEsc(m.api_key) +
+      '" placeholder="sk-…" autocomplete="off" spellcheck="false">' +
+      '<button class="btn" data-act="paste">粘贴</button>' +
+    '</div>' +
+    '<div class="cmStatus" data-status></div>' +
+    '<div class="wbtns" style="margin-top:8px">' +
+      '<button class="btn" data-act="test">测试连接</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function cmDraft() {
+  return Array.from($("cmRows").querySelectorAll(".cmRow")).map(row => {
+    const o = {};
+    row.querySelectorAll("input[data-k]").forEach(inp => {
+      o[inp.dataset.k] = inp.value.trim();
+    });
+    return o;
+  });
+}
+
+function cmRenderRows(list) {
+  $("cmRows").innerHTML = list.length
+    ? list.map(cmRowHtml).join("")
+    : '<div class="cmt" style="padding:10px 2px">还没配。点上面的 <b>DeepSeek / DEP</b>' +
+      ' 会自动填好官网、接口地址和模型名，你只要粘贴 Key。</div>';
+}
+
+function cmAddRow(preset) {
+  const d = cmDraft();
+  d.push(Object.assign({}, preset || {}));
+  cmRenderRows(d);
+  const rows = $("cmRows").querySelectorAll(".cmRow");
+  const last = rows[rows.length - 1];
+  if (last) last.scrollIntoView({ block: "nearest" });
+}
+
 function openCm() {
-  $("cmUrl").value = CM ? CM.base_url : "";
-  $("cmModel").value = CM ? CM.model : "";
-  $("cmKey").value = CM ? CM.api_key : "";
+  const draft = cmDraft();
+  cmRenderRows(draft.length ? draft : CM);
   const s = $("cmStatus");
   s.textContent = ""; s.className = "cmStatus";
+  $("cmHelp").classList.remove("on");
+  $("cmHelpBtn").classList.remove("on");
+  $("relayMask").classList.remove("on");
   $("cmMask").classList.add("on");
 }
 function closeCm() { $("cmMask").classList.remove("on"); }
-$("btnCustom").onclick = openCm;
-$("cmMask").addEventListener("click", e => {
-  if (e.target === $("cmMask")) closeCm();
-});
-document.addEventListener("keydown", e => {
-  if (e.key === "Escape" && $("cmMask").classList.contains("on")) closeCm();
-});
 
-function cmFields() {
-  return { base_url: $("cmUrl").value.trim(),
-           model: $("cmModel").value.trim(),
-           api_key: $("cmKey").value.trim() };
+function openRelay(hasCustom) {
+  $("relayCustomTip").style.display = hasCustom ? "" : "none";
+  $("cmMask").classList.remove("on");
+  $("relayMask").classList.add("on");
 }
-function cmFilled(f) { return f.base_url && f.model && f.api_key; }
+function closeRelay() { $("relayMask").classList.remove("on"); }
 
-$("cmTest").onclick = async () => {
-  const s = $("cmStatus");
-  const f = cmFields();
-  if (!cmFilled(f)) { s.className = "cmStatus err"; s.textContent = "三个框都要填"; return; }
-  s.className = "cmStatus"; s.textContent = "测试中…";
-  try {
-    const d = await post("/api/persona/custom_test", f);
-    s.className = "cmStatus ok";
-    s.textContent = "通了，" + d.elapsed + "s" + (d.info ? " · 她说：" + d.info : "");
-  } catch (err) {
-    s.className = "cmStatus err"; s.textContent = err.message;
-  }
+// after_request 把本轮真正回话的模型塞进每个 JSON 回包；这里统一接一次，
+// 侧栏那行和聊天区底部「当前模型」都会跟着刷新。
+function renderModelUsed(used) {
+  const el = $("modelNowName");
+  if (!el || !used) return;
+  const name = used.kind === "public"
+    ? "公用 V4 Pro（免费）"
+    : ("自定义模型 · " + (used.name || "未命名"));
+  el.textContent = name;
+  $("modelBodyName").textContent = name;
+}
+
+$("btnCustom").onclick = openCm;
+$("cmClose").onclick = closeCm;
+$("cmPresetDs").onclick = () => cmAddRow(DS_PRESET);
+$("cmPresetOther").onclick = () => cmAddRow({});
+$("cmAdd").onclick = () => cmAddRow({});
+$("cmHelpBtn").onclick = () => {
+  const on = $("cmHelp").classList.toggle("on");
+  $("cmHelpBtn").classList.toggle("on", on);
 };
+$("cmRows").addEventListener("click", async ev => {
+  const btn = ev.target.closest("button[data-act]");
+  if (!btn) return;
+  const row = btn.closest(".cmRow");
+  if (!row) return;
+  const d = cmDraft();
+  const i = Number(row.dataset.i);
+  const act = btn.dataset.act;
+  if (act === "del") { d.splice(i, 1); cmRenderRows(d); return; }
+  if (act === "up" && i > 0) {
+    const t = d[i - 1]; d[i - 1] = d[i]; d[i] = t;
+    cmRenderRows(d); return;
+  }
+  if (act === "down" && i < d.length - 1) {
+    const t = d[i + 1]; d[i + 1] = d[i]; d[i] = t;
+    cmRenderRows(d); return;
+  }
+  if (act === "paste") {
+    const inp = row.querySelector('input[data-k="api_key"]');
+    try {
+      const t = await navigator.clipboard.readText();
+      inp.value = (t || "").trim();
+      toast(inp.value ? "Key 已粘上，记得点「测试连接」" : "剪贴板是空的",
+            !inp.value);
+    } catch (e) {
+      toast("浏览器不让自动读剪贴板，请长按 / Ctrl+V 手动粘", true);
+    }
+    return;
+  }
+  if (act === "test") {
+    const one = d[i] || {};
+    const f = { base_url: one.base_url, model: one.model,
+                api_key: one.api_key };
+    const st = row.querySelector("[data-status]");
+    if (!(f.base_url && f.model && f.api_key)) {
+      st.className = "cmStatus err";
+      st.textContent = "接口地址、模型名、Key 都要填";
+      return;
+    }
+    st.className = "cmStatus";
+    st.textContent = "测试中…";
+    try {
+      const r = await post("/api/persona/custom_test", f);
+      st.className = "cmStatus ok";
+      st.textContent = "通了，" + r.elapsed + "s" +
+        (r.info ? " · 她说：" + r.info : "");
+    } catch (err) {
+      st.className = "cmStatus err";
+      st.textContent = err.message;
+    }
+  }
+});
 
 $("cmSave").onclick = () => {
-  const f = cmFields();
-  if (!cmFilled(f)) { toast("接口地址、模型名、Key 都要填", true); return; }
-  CM = f;
-  try { localStorage.setItem(CM_KEY, JSON.stringify(CM)); } catch (e) {}
+  const s = $("cmStatus");
+  const d = cmDraft().filter(m =>
+    m.base_url || m.model || m.api_key || m.label || m.site);
+  if (d.some(m => !(m.base_url && m.model && m.api_key))) {
+    s.className = "cmStatus err";
+    s.textContent = "每一条都要填接口地址、模型名和 API Key，或者整条删掉";
+    return;
+  }
+  if (d.some(m => !/^https?:\/\//i.test(m.base_url))) {
+    s.className = "cmStatus err";
+    s.textContent = "接口地址要 http:// 或 https:// 开头";
+    return;
+  }
+  CM = d;
+  cmSaveStore();
   renderCmNow();
   closeCm();
-  toast("自定义模型已启用：" + CM.model);
+  toast(CM.length ? ("已保存 " + CM.length + " 个备用模型") : "已清空备用模型");
 };
 
 $("cmClear").onclick = () => {
-  CM = null;
-  try { localStorage.removeItem(CM_KEY); } catch (e) {}
-  $("cmUrl").value = ""; $("cmModel").value = ""; $("cmKey").value = "";
-  const s = $("cmStatus"); s.textContent = ""; s.className = "cmStatus";
+  CM = [];
+  cmSaveStore();
+  cmRenderRows([]);
   renderCmNow();
-  toast("已恢复默认模型");
+  const s = $("cmStatus"); s.textContent = ""; s.className = "cmStatus";
+  toast("已清空备用模型");
 };
+
+$("cmMask").addEventListener("click", e => {
+  if (e.target === $("cmMask")) closeCm();
+});
+$("relayCfg").onclick = openCm;
+$("relayLater").onclick = closeRelay;
+$("relayMask").addEventListener("click", e => {
+  if (e.target === $("relayMask")) closeRelay();
+});
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  if ($("cmMask").classList.contains("on")) closeCm();
+  if ($("relayMask").classList.contains("on")) closeRelay();
+});
+
+$("btnModelNow").onclick = () => {
+  const on = $("modelBody").classList.toggle("on");
+  $("btnModelNow").textContent = on ? "当前模型 ▴" : "当前模型 ▾";
+};
+$("btnModelCfg").onclick = openCm;
+
+CM = cmLoad();
+cmSaveStore();              // 老数据（单条）迁移后立刻固化到新 key
 renderCmNow();
 
 // 遮罩两边都要能关：哪个开着就关哪个（同一次点击里可能两个都判一下，
@@ -4623,10 +5350,15 @@ $("inp").addEventListener("input", e => {
   e.target.style.height = "auto";
   e.target.style.height = Math.min(140, e.target.scrollHeight) + "px";
 });
+// 左上角「自定义角色」（2026-11-09 用户改口径）：以前这颗「＋」是跳
+// `/characters`（站主的角色管理页），玩家点了看到的是自己的默认角色设置，
+// 和「建卡」没关系。现在这个名字就是全称、点开设卡弹层。
 $("btnNew").onclick = () => {
   if (SOLO) return;
-  location.href = "/characters" + (QQ ? ("?qq=" + QQ) : "");
+  openMyCard(null);
 };
+$("tabOff").onclick = () => switchCardTab("off");
+$("tabMine").onclick = () => switchCardTab("mine");
 
 // ── 角色列表的点击：**事件委托**（2026-11-03）────────────────
 //
@@ -4648,7 +5380,9 @@ $("cards").addEventListener("click", function (ev) {
   const cid = t.getAttribute("data-cid");
   const c = CARD_MAP[cid];
   console.log("[cards] click", cid, c && c.name);
-  if (c && tapOnce(cid)) pick(c, hitSlotBtn(ev.target));
+  if (!c || !tapOnce(cid)) return;
+  if (hitEditBtn(ev.target)) { openMyCard(c); return; }   // 自己卡上的 ✎
+  pick(c, hitSlotBtn(ev.target));
 });
 // 触摸设备上补一道：某些老 WebView 的 click 事件在快速点击时会被吞
 //
@@ -4666,6 +5400,11 @@ function tapOnce(cid) {
 // 那一下的意思和「点卡片」不完全一样：明确要看存档，所以 pick 会强制开面板。
 function hitSlotBtn(el) {
   return !!(el && el.closest && el.closest(".ciSlot"));
+}
+// 点的是自建卡右上角那颗「✎」吗（2026-11-09）。和 `.ciSlot` 一样只在委托里判，
+// 按钮本身不挂 onclick。
+function hitEditBtn(el) {
+  return !!(el && el.closest && el.closest(".ciEdit"));
 }
 // 滑动误触保护：touchend 在**滑动列表停在卡片上**时也会触发，不判位移的话
 // 划一下列表就会随机切角色。touchstart 记下起点，touchend 只认
@@ -4695,7 +5434,9 @@ $("cards").addEventListener("touchend", function (ev) {
     if (dx + dy > 12 || dt > 600) return;   // 是滑动，不是点按
   }
   ev.preventDefault();          // 阻止随后那次 click，交给这里统一处理
-  if (tapOnce(cid)) pick(c, hitSlotBtn(ev.target));
+  if (!tapOnce(cid)) return;
+  if (hitEditBtn(ev.target)) { openMyCard(c); return; }
+  pick(c, hitSlotBtn(ev.target));
 }, { passive: false });
 // 「清空 / 出戏 / 自检」三个按钮已经去掉（2026-11-03 用户要求）：
 //   出戏  —— 没意义了，选另一个角色就是另一条线

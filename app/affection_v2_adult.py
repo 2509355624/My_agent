@@ -229,6 +229,41 @@ def arousal_of(st, cfg=None):
     return {}
 
 
+def arousal_key_for_tier(n):
+    """第 n 档（0~4）的 key；越界取边缘，配置读不到返回空串。
+
+    角色卡的 `start_arousal_tier` 建档时要落成 key 而不是数字——
+    这一轴的存档存的是 key，档名才是给演员看的（见 `empty_state`）。
+    """
+    cfg = _cfg()
+    levels = sorted(((cfg.get("arousal") or {}).get("levels") or []),
+                    key=lambda x: _i(x.get("tier")))
+    if not levels:
+        return ""
+    try:
+        n = _i(n)
+    except (TypeError, ValueError):
+        n = 0
+    n = max(0, min(len(levels) - 1, n))
+    return str(levels[n].get("key") or "")
+
+
+def arousal_ladder():
+    """冲动五档的档名表（给自建卡表单当说明用，从配置读、不写死）。"""
+    return [{"tier": _i(lv.get("tier")), "name": str(lv.get("name") or ""),
+             "desc": str(lv.get("desc") or "")}
+            for lv in (((_cfg().get("arousal") or {}).get("levels")) or [])]
+
+
+def arousal_help():
+    """冲动这一轴的问号文案；配置里没有就返回 None（前端就不画问号）。"""
+    h = (_cfg().get("arousal") or {}).get("help")
+    if isinstance(h, dict):
+        return {"title": str(h.get("title") or ""),
+                "body": [str(x) for x in (h.get("body") or [])]}
+    return None
+
+
 def dev_level(st, part, cfg=None):
     return _level_of("dev", _i(((st or {}).get("dev") or {}).get(part)), cfg)
 

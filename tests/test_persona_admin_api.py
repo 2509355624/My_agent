@@ -173,5 +173,56 @@ class DeleteTest(AdminBase):
         self.assertEqual(d["deleted"], 2)
 
 
+class CardViewTest(AdminBase):
+    """点「演 XXX」看玩家用的到底是哪张卡（2026-11-09 玩家自建角色）。"""
+
+    def test_list_rows_carry_card_id(self):
+        # 列表行是从**线键**的历史文件来的，`api_list` 也按线键去 state 里找卡
+        st = persona._load_state()                          # noqa: SLF001
+        st["web_2509355624__izumi_sagiri"] = {"card": "izumi_sagiri"}
+        persona._save_state(st)                             # noqa: SLF001
+        self.write_hist("web_2509355624__izumi_sagiri",
+                        [{"role": "user", "content": "在吗"}])
+        rows = self.get("/api/persona_admin/list")["sessions"]
+        hit = [r for r in rows if r["key"] == "web_2509355624__izumi_sagiri"]
+        self.assertTrue(hit)
+        self.assertEqual(hit[0]["card_id"], "izumi_sagiri")
+        self.assertEqual(hit[0]["card_owner"], "")          # 官方卡没有归属
+
+    def test_detail_carries_card_id(self):
+        self.write_hist("private_123", [{"role": "user", "content": "在吗"}])
+        st = persona._load_state()                          # noqa: SLF001
+        st["private_123"] = {"card": "izumi_sagiri"}
+        persona._save_state(st)                             # noqa: SLF001
+        d = self.c.get("/api/persona_admin/detail?key=private_123").get_json()
+        self.assertEqual(d["card_id"], "izumi_sagiri")
+
+    def test_official_card_full_fields(self):
+        d = self.get("/api/persona_admin/card?card_id=izumi_sagiri")
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["kind"], "官方")
+        self.assertEqual(d["owner"], "")
+        self.assertEqual(d["card"]["systemPrompt"], "你是纱雾。")
+
+    def test_player_card_resolves_from_the_id(self):
+        """归属写在 id 里，所以查看台不用先问「这条会话是谁」。"""
+        card, err = persona.make_user_card(
+            "1103174141", {"name": "玩家小满", "charName": "小满",
+                           "description": "咖啡店店员",
+                           "systemPrompt": "你是小满。"})
+        self.assertEqual(err, "")
+        d = self.get("/api/persona_admin/card?card_id=" + card["id"])
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["kind"], "自建")
+        self.assertEqual(d["owner"], "1103174141")
+        self.assertEqual(d["card"]["description"], "咖啡店店员")
+
+    def test_missing_card_is_404(self):
+        self.assertEqual(
+            self.c.get("/api/persona_admin/card?card_id=u1103_deadbeef"
+                       ).status_code, 404)
+        self.assertEqual(self.c.get("/api/persona_admin/card").status_code, 400)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -762,26 +762,46 @@ def retrieve_raw(line, query, k=None):
     return mmr_select(out, kk)
 
 
-def _fact_block(docs):
-    """提炼事实 → 一段；没有可用的返回空串。"""
-    batches, facts = [], []
-    for d in docs:
-        meta = d.get("metadata") or {}
-        kind = str(meta.get("kind") or "")
-        if kind == "raw":
-            # 原话条目走 `_raw_block`；混进事实层会被当成「原子事实」读。
-            continue
-        if kind == "batch":
-            batches.append(d)
-        else:
-            facts.append(d)
-    # 锚点排最前，不受「2 批 + 3 条」限制：它们是「问起来必须答对」的事，
-    # 被 top-k 挤掉就等于让模型编（2026-11-08 实测「第一次在门板」）。
+# 注入块名额（2026-11-09）：锚点不看相关性、最多 8 条；批次叙事 2 条；
+# 按相关性挑出来的旧事实 3 条；recent 那边最多再带 1 条自己的事实。
+_ANCHOR_SLOTS = 8
+_BATCH_SLOTS = 2
+_FACT_SLOTS = 3
+_RECENT_FACT_SLOTS = 1
+
+
+def _fact_block(docs, recent=()):
+    """提炼事实 → 一段；没有可用的返回空串。
+
+    `docs` 是按相关性排好的（锚点在最前）。`recent` 单独传：它是「最近 2 批
+    无条件带上」（2026-11-08 用户拍板），但它只补批次名额和一条事实名额，
+    不跟旧事实抢 `_FACT_SLOTS`——以前 recent 直接拼在 docs 最前面，三条事实
+    名额全被近期占掉，检索明明召回了旧事也端不上桌（2026-11-09 母本副本
+    实测：14 个窗口外考点，可召回 9 个，进注入块只有 4 个）。
+    """
+    def _split(items):
+        bs, fs = [], []
+        for d in items:
+            kind = str((d.get("metadata") or {}).get("kind") or "")
+            if kind == "raw":
+                # 原话条目走 `_raw_block`；混进事实层会被当成「原子事实」读。
+                continue
+            (bs if kind == "batch" else fs).append(d)
+        return bs, fs
+
+    batches, facts = _split(docs)
     anchors = [d for d in docs if (d.get("metadata") or {}).get("_anchor")]
     _aid = {id(d) for d in anchors}
     batches = [d for d in batches if id(d) not in _aid]
     facts = [d for d in facts if id(d) not in _aid]
-    pick = anchors[:8] + batches[:2] + facts[:3]
+    r_batches, r_facts = _split(recent)
+    pick = (anchors[:_ANCHOR_SLOTS]
+            + (r_batches + batches)[:_BATCH_SLOTS]
+            + facts[:_FACT_SLOTS]
+            + r_facts[:_RECENT_FACT_SLOTS])
+    seen = set()
+    pick = [d for d in pick
+            if id(d) not in seen and not seen.add(id(d))]
     if not pick:
         return ""
     who = {"user": "用户事实", "character": "角色言行", "shared": "双方约定"}
@@ -856,14 +876,14 @@ def build_block(line, query, k=None, day=None, context=""):
     recent = _recent_docs(line, batches=2)
     if recent:
         seen = {str(d.get("id") or "") for d in docs}
-        docs = [d for d in recent if str(d.get("id") or "") not in seen] + docs
+        recent = [d for d in recent if str(d.get("id") or "") not in seen]
     if context:
         extra = retrieve(line, context, k=k, day=day)
         seen = {str(d.get("id") or "") for d in docs}
         docs += [d for d in extra
                  if str(d.get("id") or "") not in seen]
     parts = []
-    fact = _fact_block(docs)
+    fact = _fact_block(docs, recent)
     if fact:
         parts.append(fact)
     raw = _raw_block(retrieve_raw(line, query))
@@ -1011,24 +1031,24 @@ def distill(turns, custom=None, card_name="角色", epoch=0, batch_id=""):
                                    dialogue=_format_dialogue(turns, card_name),
                                    name=card_name or "角色")
     from app import llm
-    if custom:
+    # 2026-11-09：后台线程要重建**同一条**扮演降级链。空列表也要挂上
+    # （`[]` ≠ None）——没挂就会退回全局链，中转站闭站时提炼照样烧官方的钱。
+    if custom is not None:
         llm.set_custom_override(custom)
     try:
-        # 记忆提炼也属于扮演链路：默认跟扮演模型走；玩家临时指定了自定义模型
-        # 时那个优先（`set_custom_override` 后 `get_custom_override` 非空）。
+        # 链头照样是公用中转站 V4 Pro，玩家的自定义模型只是第二段。
         kw = {}
-        if not llm.get_custom_override():
-            if PERSONA_PROVIDER:
-                kw["provider"] = PERSONA_PROVIDER
-            if PERSONA_MODEL:
-                kw["model"] = PERSONA_MODEL
+        if PERSONA_PROVIDER:
+            kw["provider"] = PERSONA_PROVIDER
+        if PERSONA_MODEL:
+            kw["model"] = PERSONA_MODEL
         raw = llm.call_llm([{"role": "user", "content": prompt}],
                            temperature=0.2, max_tokens=1600, **kw)
     except Exception:                                    # noqa: BLE001
         log.exception("记忆提炼调用失败 %s-%s", start, end)
         return None
     finally:
-        if custom:
+        if custom is not None:
             llm.set_custom_override(None)
     parsed = parse_memory_json(raw, start, end, day=day, phase=phase,
                                card_name=card_name, epoch=epoch,

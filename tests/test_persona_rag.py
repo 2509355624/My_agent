@@ -236,6 +236,46 @@ class RetrieveTest(RagBase):
         self.assertIn("主题：天气", block)
         self.assertIn("只能补充", block)
 
+    def test_recent_leaves_the_relevance_slots_alone(self):
+        """召回明明命中的旧事实，不能被「最近 2 批」挤下桌。
+
+        2026-11-09 母本副本实测：14 个窗口外考点，检索能召回 9 个，
+        真正进注入块的只有 4 个——差额全丢在 `facts[:3]` 被近期占了。
+        """
+        old = {"id": "f-old", "content": "双方：约定早上七点四十在四号楼楼下碰面。",
+               "metadata": {"kind": "fact", "about": "shared",
+                            "turn_start": 30, "turn_end": 34}}
+        recent = [
+            {"id": "b-1", "content": "【第1天】早晨小超市门口，用户提议帮她拿东西。",
+             "metadata": {"kind": "batch"}},
+            {"id": "f-1", "content": "用户：自己租房子一个人住。",
+             "metadata": {"kind": "fact"}},
+            {"id": "f-2", "content": "学妹：明天上午没课。",
+             "metadata": {"kind": "fact"}},
+        ]
+        block = rank._fact_block([old], recent)
+        self.assertIn("七点四十", block)        # 相关性那条占 facts 名额
+        self.assertIn("【第1天】", block)        # 最近批次照带（11-08 的决定没推翻）
+        self.assertIn("自己租房子", block)       # recent 还留着 1 条事实名额
+        self.assertNotIn("明天上午没课", block)  # 第 2 条往后不再往里塞
+
+    def test_build_block_keeps_recalled_old_fact(self):
+        self.client.docs = [
+            {"id": "a", "content": "角色：住在四楼走廊尽头，四人一间宿舍。",
+             "distance": 0.44,
+             "metadata": {"kind": "fact", "about": "character", "topics": "住处"}},
+        ]
+        recent = [
+            {"id": "b-1", "content": "【第2天】两人在市场采买三餐食材。",
+             "metadata": {"kind": "batch"}},
+            {"id": "f-1", "content": "用户：承诺明天见到学妹之前不吃东西。",
+             "metadata": {"kind": "fact"}},
+        ]
+        with mock.patch.object(rank, "_recent_docs", return_value=recent):
+            block = rank.build_block("web_10001__rem", "她住的宿舍在哪")
+        self.assertIn("四楼走廊尽头", block)
+        self.assertIn("【第2天】", block)
+
 
 class ForgetTest(RagBase):
     def test_forget_last_pops_pending(self):

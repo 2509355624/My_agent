@@ -201,6 +201,38 @@ def _card_name(card_id):
     return persona.char_name(c, card_id)
 
 
+def _card_brief(card_id):
+    """列表/详情行带上「演的是哪张卡」的机器可读部分（2026-11-09）。
+
+    前端原来只有 `card`（一个名字），点不出详情。这里补 id 和归属：
+    `card_id` 拿去喂 `/api/persona_admin/card`，`card_owner` 是空串就是官方卡。
+    """
+    cid = str(card_id or "").strip()
+    if not cid:
+        return {"card_id": "", "card_owner": ""}
+    return {"card_id": cid, "card_owner": persona.user_card_owner(cid)}
+
+
+@bp.route("/api/persona_admin/card")
+def api_card():
+    """按卡 id 返回整张卡的内容——官方卡、站主卡、玩家自建卡都走这一个入口。
+
+    查看台点「演 XXX」用它解析「玩家用的到底是哪张卡」：归属就写在 id 里
+    （`u<qq>_<slug>`），所以这里**不需要知道当前是谁**，`get_card()` 自己找文件。
+    卡是 `_norm_card()` 归一化后的原样字段；站主要看得全才能判断，所以
+    连 `char_lora` / `hidden` 这些玩家改不动的字段也一并给。
+    """
+    cid = str(request.args.get("card_id") or "").strip()
+    if not cid:
+        return jsonify({"ok": False, "error": "缺 card_id"}), 400
+    c = persona.get_card(cid)
+    if not c:
+        return jsonify({"ok": False, "error": "没有这张卡：%s" % cid}), 404
+    owner = persona.user_card_owner(cid)
+    return jsonify({"ok": True, "card": c,
+                    "kind": "自建" if owner else "官方", "owner": owner})
+
+
 @bp.route("/api/persona_admin/list")
 def api_list():
     """所有玩过的会话，按最后活动时间倒序。"""
@@ -216,11 +248,13 @@ def api_list():
             gkey = persona.card_key("guest_%s" % r["key"], GUEST_CARD_ID)
             nm = str((st.get(gkey) or {}).get("char_name") or "").strip()
             r["card"] = nm or _card_name(GUEST_CARD_ID)
+            r.update(_card_brief(GUEST_CARD_ID))
         else:
             # 存档级名字（2026-11-09）：玩家在网页右栏改过名就优先显示它，
             # 没改过才回落到卡上的默认名。
             nm = str(ent.get("char_name") or "").strip()
             r["card"] = nm or _card_name(ent.get("card"))
+            r.update(_card_brief(ent.get("card")))
         r["state"] = str(ent.get("state") or "")
 
     rows.sort(key=lambda r: r["mtime"], reverse=True)
@@ -279,6 +313,7 @@ def api_detail():
         "label": label,
         "card": (str(st.get("char_name") or "").strip()
                  or _card_name(st.get("card"))),
+        **_card_brief(st.get("card")),
         "note": str(st.get("note") or ""),
         "state": str(st.get("state") or ""),
         "messages": _norm(raw),

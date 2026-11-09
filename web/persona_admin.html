@@ -14,35 +14,39 @@
     --accent: #f472b6; --accent-dim: #6d2a48;
     --ok: #4ade80; --err: #f87171; --warn: #fbbf24;
     --r: 10px; --rs: 7px;
+    /* 字号缩放系数（2026-11-09 用户要求）：全站 19 处 font-size 都写成
+       calc(px * var(--fs))，A- / A+ 只动这一个变量。存 localStorage，
+       不跟账号走——换浏览器回到 1 是接受的。 */
+    --fs: 1;
   }
   html, body { background: var(--bg); color: var(--text); height: 100%;
     font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
-    font-size: 13px; overflow: hidden; }
+    font-size: calc(13px * var(--fs)); overflow: hidden; }
   .app { display: grid; grid-template-columns: 360px 1fr; height: 100vh; }
 
   /* 左栏 */
   .side { border-right: 1px solid var(--border-soft); display: flex;
     flex-direction: column; min-height: 0; background: var(--bg-elev); }
   .side-head { padding: 12px 14px; border-bottom: 1px solid var(--border-soft); }
-  .side-head h1 { font-size: 14px; font-weight: 600; display: flex;
+  .side-head h1 { font-size: calc(14px * var(--fs)); font-weight: 600; display: flex;
     align-items: center; gap: 8px; }
-  .side-head .cnt { font-size: 11px; color: var(--text-mute); font-weight: 400; }
+  .side-head .cnt { font-size: calc(11px * var(--fs)); color: var(--text-mute); font-weight: 400; }
   .filters { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
   .chip { background: var(--bg-input); border: 1px solid var(--border);
     color: var(--text-dim); border-radius: 20px; padding: 3px 10px;
-    font-size: 11px; cursor: pointer; }
+    font-size: calc(11px * var(--fs)); cursor: pointer; }
   .chip.on { border-color: var(--accent); color: var(--accent); }
   /* 游客查看管理员（2026-11-08）：只有这里加进去的 QQ 能登录 /guest-view */
   .gv-admins { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
-  .gv-h { font-size: 11px; color: var(--text-mute); margin-bottom: 6px; }
+  .gv-h { font-size: calc(11px * var(--fs)); color: var(--text-mute); margin-bottom: 6px; }
   .gv-list { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
-  .gv-tag { font-size: 11px; padding: 2px 7px; border-radius: 10px;
+  .gv-tag { font-size: calc(11px * var(--fs)); padding: 2px 7px; border-radius: 10px;
     background: var(--bg-input); border: 1px solid var(--border);
     color: var(--text-dim); cursor: pointer; }
   .gv-tag:hover { border-color: #b05050; color: #ff8080; }
   .gv-add { display: flex; gap: 6px; }
   .gv-add input { flex: 1; min-width: 0; padding: 5px 9px; font: inherit;
-    font-size: 12px; color: var(--text); background: var(--bg-input);
+    font-size: calc(12px * var(--fs)); color: var(--text); background: var(--bg-input);
     border: 1px solid var(--border); border-radius: 6px; outline: none; }
   .gv-add input:focus { border-color: var(--accent); }
   .side-list { flex: 1; overflow-y: auto; padding: 6px; }
@@ -51,14 +55,14 @@
   .row:hover { background: var(--bg-input); }
   .row.on { background: var(--bg-input); border-color: var(--accent-dim); }
   .row .l1 { display: flex; align-items: center; gap: 6px; }
-  .row .tag { font-size: 10px; padding: 1px 6px; border-radius: 8px;
+  .row .tag { font-size: calc(10px * var(--fs)); padding: 1px 6px; border-radius: 8px;
     border: 1px solid var(--border); color: var(--text-mute); }
   .row .tag.g { color: var(--warn); border-color: #6b5218; }
   .row .tag.w { color: #4fc3f7; border-color: #1e4a5c; }
   .row .tag.v { color: var(--accent); border-color: var(--accent-dim); }
-  .row .nm { font-size: 12.5px; flex: 1; overflow: hidden;
+  .row .nm { font-size: calc(12.5px * var(--fs)); flex: 1; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; }
-  .row .l2 { font-size: 11px; color: var(--text-mute); margin-top: 3px;
+  .row .l2 { font-size: calc(11px * var(--fs)); color: var(--text-mute); margin-top: 3px;
     display: flex; gap: 8px; }
   .row.on .nm { color: var(--accent); }
 
@@ -66,17 +70,17 @@
   .main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
   .top { padding: 11px 16px; border-bottom: 1px solid var(--border-soft);
     display: flex; align-items: center; gap: 10px; min-height: 48px; }
-  .top .who { font-size: 14px; font-weight: 600; }
-  .top .meta { font-size: 11px; color: var(--text-mute); }
+  .top .who { font-size: calc(14px * var(--fs)); font-weight: 600; }
+  .top .meta { font-size: calc(11px * var(--fs)); color: var(--text-mute); }
   .top .sp { flex: 1; }
   .btn { background: var(--bg-input); border: 1px solid var(--border);
     color: var(--text); border-radius: var(--rs); padding: 6px 12px;
-    font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
+    font: inherit; font-size: calc(12px * var(--fs)); cursor: pointer; white-space: nowrap; }
   .btn:hover { border-color: var(--accent); color: var(--accent); }
   /* 「角色卡管理」是链接不是按钮（2026-11-05）：去 /characters 改卡面文案 / 背景。 */
   a.btn { text-decoration: none; display: inline-flex; align-items: center; }
   .btn.danger:hover { border-color: var(--err); color: var(--err); }
-  .auto { font-size: 11.5px; color: var(--text-mute); display: flex;
+  .auto { font-size: calc(11.5px * var(--fs)); color: var(--text-mute); display: flex;
     align-items: center; gap: 5px; cursor: pointer; user-select: none; }
   .auto input { accent-color: var(--accent); cursor: pointer; }
   .auto.on { color: var(--accent); }
@@ -100,15 +104,15 @@
   .msg .b .mono { background: rgba(237, 147, 177, .16); color: #f4c0d1;
     padding: 1px 5px; border-radius: 4px; box-decoration-break: clone;
     -webkit-box-decoration-break: clone; }
-  .msg .m { font-size: 10.5px; color: var(--text-mute); margin-top: 3px; }
+  .msg .m { font-size: calc(10.5px * var(--fs)); color: var(--text-mute); margin-top: 3px; }
   .empty { color: var(--text-mute); text-align: center; padding: 80px 20px;
-    font-size: 13px; line-height: 2; }
+    font-size: calc(13px * var(--fs)); line-height: 2; }
   .note { margin: 0 18px 10px; padding: 10px 14px; background: var(--bg-elev);
     border-left: 2px solid var(--accent); border-radius: var(--rs);
-    font-size: 12px; color: var(--text-dim); line-height: 1.7; }
+    font-size: calc(12px * var(--fs)); color: var(--text-dim); line-height: 1.7; }
   .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
     background: var(--bg-input); border: 1px solid var(--border);
-    padding: 8px 16px; border-radius: 18px; font-size: 12.5px; opacity: 0;
+    padding: 8px 16px; border-radius: 18px; font-size: calc(12.5px * var(--fs)); opacity: 0;
     transition: opacity .2s; pointer-events: none; z-index: 99; }
   .toast.on { opacity: 1; }
   .toast.err { border-color: var(--err); color: var(--err); }
@@ -118,9 +122,37 @@
   .jump { position: fixed; right: 34px; bottom: 26px; z-index: 20;
     background: var(--accent-dim); border: 1px solid var(--accent);
     color: var(--text); border-radius: 18px; padding: 7px 14px;
-    font: inherit; font-size: 12px; cursor: pointer; display: none;
+    font: inherit; font-size: calc(12px * var(--fs)); cursor: pointer; display: none;
     box-shadow: 0 4px 16px rgba(0,0,0,.45); }
   .jump:hover { background: var(--accent); color: #1a0d14; }
+  /* 角色卡详情弹层（2026-11-09 用户要求）：点「演 XXX」看玩家用的到底是哪张卡。
+     官方卡和玩家自建卡走同一个入口（`/api/persona_admin/card?card_id=`），
+     归属写在 id 里，所以这里不用先知道「是谁的会话」。 */
+  .cMask { position: fixed; inset: 0; background: rgba(0, 0, 0, .62);
+    display: none; align-items: center; justify-content: center; z-index: 60;
+    padding: 16px; }
+  .cMask.on { display: flex; }
+  .cBox { width: min(680px, 100%); max-height: 88vh; overflow-y: auto;
+    background: var(--bg-elev); border: 1px solid var(--border);
+    border-radius: var(--r); padding: 16px 18px; }
+  .cBox h3 { font-size: calc(15px * var(--fs)); margin-bottom: 2px; }
+  .cWho { font-size: calc(11px * var(--fs)); color: var(--text-mute);
+    margin-bottom: 12px; }
+  .cWho b { color: var(--accent); font-weight: 500; }
+  .cSec { margin-bottom: 12px; }
+  .cSec .t { font-size: calc(11px * var(--fs)); color: var(--text-dim);
+    margin-bottom: 4px; letter-spacing: .3px; }
+  .cSec .v { font-size: calc(12.5px * var(--fs)); color: var(--text);
+    line-height: 1.75; white-space: pre-wrap; word-break: break-word; }
+  .cSec .v.mute { color: var(--text-mute); }
+  .cRow { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 12px; }
+  .cRow span { font-size: calc(11.5px * var(--fs)); color: var(--text-dim); }
+  .cClose { margin-top: 6px; }
+  .row .card.link { text-decoration: underline dotted; cursor: pointer; }
+  .row .card.link:hover { color: var(--accent); }
+  .fsCtl { display: flex; align-items: center; gap: 4px; }
+  .fsCtl b { font-size: calc(11px * var(--fs)); color: var(--text-mute);
+    font-weight: 400; min-width: 34px; text-align: center; }
 </style>
 </head>
 <body>
@@ -156,9 +188,20 @@
       <span class="who" id="who">选一个会话</span>
       <span class="meta" id="meta"></span>
       <span class="sp"></span>
+      <!-- 字号缩放（2026-11-09 用户要求）：整站 19 处 font-size 都吃 --fs 系数，
+           这两个按钮只动那一个变量。A 是复位（点一下回 100%）。 -->
+      <span class="fsCtl" title="字号缩放，存在这台浏览器里">
+        <button class="btn" id="fsDown">A-</button>
+        <b id="fsVal">100%</b>
+        <button class="btn" id="fsUp">A+</button>
+        <button class="btn" id="fsReset" title="恢复 100%">A</button>
+      </span>
       <a class="btn" href="/characters" title="改角色卡详情文案、换默认/角色背景">角色卡管理</a>
       <label class="auto"><input type="checkbox" id="auto"> 自动刷新</label>
       <button class="btn" id="refresh">刷新</button>
+      <!-- 「这张卡」（2026-11-09）：当前会话演的那张卡的详情。左栏那行也能点，
+           顶栏这个是给「已经打开对话、想看她是谁」用的。 -->
+      <button class="btn" id="btnCard" style="display:none">这张卡</button>
       <button class="btn danger" id="del" style="display:none">删除</button>
     </div>
     <div class="note" id="note" style="display:none"></div>
@@ -169,6 +212,17 @@
 </div>
 <div class="toast" id="toast"></div>
 <button class="jump" id="jump">↓ 新消息</button>
+
+<!-- 角色卡详情（2026-11-09）：点左栏「演 XXX」或顶栏「这张卡」都会弹这里。
+     玩家自建卡和官方卡同一个视图——字段全给，站主要看得全才判断得了。 -->
+<div class="cMask" id="cardMask">
+  <div class="cBox">
+    <h3 id="cdName">角色卡</h3>
+    <div class="cWho" id="cdWho"></div>
+    <div id="cdBody"></div>
+    <button class="btn cClose" id="cdClose">关闭</button>
+  </div>
+</div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -196,6 +250,148 @@ function toBottom() {
   hideJump();
 }
 $("jump").onclick = toBottom;
+
+// ── 字号缩放（2026-11-09 用户要求）───────────────────────
+// 全站 19 处 font-size 都是 `calc(px * var(--fs))`，所以这四个按钮只改
+// `--fs` 一个系数。存 localStorage，不跟账号走（换浏览器/清缓存回到 100%）。
+const FS_KEY = "persona_admin_fs";
+const FS_MIN = 0.8, FS_MAX = 1.8, FS_STEP = 0.1;
+
+function applyFs(v) {
+  let n = Number(v);
+  if (!isFinite(n)) n = 1;
+  n = Math.max(FS_MIN, Math.min(FS_MAX, Math.round(n * 100) / 100));
+  document.documentElement.style.setProperty("--fs", String(n));
+  $("fsVal").textContent = Math.round(n * 100) + "%";
+  return n;
+}
+
+function saveFs(n) {
+  try { localStorage.setItem(FS_KEY, String(n)); } catch (e) { /* 隐私模式忽略 */ }
+}
+
+function stepFs(delta) { applyFs(curFs() + delta); }
+
+function curFs() {
+  const raw = getComputedStyle(document.documentElement)
+    .getPropertyValue("--fs").trim();
+  const n = Number(raw);
+  return isFinite(n) && n > 0 ? n : 1;
+}
+
+(function initFs() {
+  let saved = 1;
+  try {
+    const raw = localStorage.getItem(FS_KEY);
+    if (raw !== null) saved = raw;
+  } catch (e) { /* 读不到就用默认 */ }
+  applyFs(saved);
+})();
+$("fsDown").onclick = () => { stepFs(-FS_STEP); saveFs(curFs()); };
+$("fsUp").onclick = () => { stepFs(FS_STEP); saveFs(curFs()); };
+$("fsReset").onclick = () => { applyFs(1); saveFs(1); };
+// 键盘也给了：Ctrl/Cmd + 滚轮在浏览器里是缩放整页（会连布局一起挤），
+// 这里用 +/- 调本控件的字号，不抢浏览器的快捷键。
+document.addEventListener("keydown", function (e) {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const t = e.target;
+  if (t && /INPUT|TEXTAREA/.test(t.tagName)) return;
+  if (e.key === "+" || e.key === "=") { stepFs(FS_STEP); saveFs(curFs()); }
+  else if (e.key === "-" || e.key === "_") { stepFs(-FS_STEP); saveFs(curFs()); }
+  else if (e.key === "0") { applyFs(1); saveFs(1); }
+});
+
+// ── 角色卡详情（2026-11-09）──────────────────────────────
+// 玩家自建卡的归属就写在 id 里，所以后端 `get_card()` 一个入口就能查
+// 官方卡和任何人的自建卡——这里只管展示，不猜是谁的。
+
+function cdSec(title, text) {
+  const d = document.createElement("div");
+  d.className = "cSec";
+  const t = document.createElement("div");
+  t.className = "t";
+  t.textContent = title;
+  const v = document.createElement("div");
+  v.className = "v" + (text ? "" : " mute");
+  v.textContent = text || "（没填）";
+  d.appendChild(t);
+  d.appendChild(v);
+  return d;
+}
+
+function renderCard(d) {
+  const c = d.card || {};
+  $("cdName").textContent = c.name || "（没名字）";
+  const who = document.createElement("div");
+  if (d.owner) {
+    who.innerHTML = "<b></b>";
+    who.querySelector("b").textContent = "玩家自建 · QQ " + d.owner;
+    const rest = document.createTextNode("　只这个本人看得到");
+    who.appendChild(rest);
+  } else {
+    who.textContent = "官方角色卡";
+  }
+  $("cdWho").textContent = "";
+  $("cdWho").appendChild(who);
+  const body = $("cdBody");
+  body.innerHTML = "";
+  [["她真正的名字", c.charName], ["描述", c.description],
+   ["性格", c.personality], ["演出指令 system", c.systemPrompt],
+   ["示例对话", c.exampleDialogue], ["开场白", c.opening],
+   ["她的房间", c.room], ["长相 tag", c.appearancePrompt],
+   ["服装 tag", c.outfitPrompt], ["头像", c.avatar]].forEach(function (p) {
+    body.appendChild(cdSec(p[0], p[1]));
+  });
+  const row = document.createElement("div");
+  row.className = "cRow";
+  // 起点这行（2026-11-09）：新线一律建成 v2，那里「关系级 / 冲动数值」
+  // 两个字段根本不参与判定，照旧显示等于骗站主。所以主写法是 v2 四条轴；
+  // 只有这张卡真的配了非零的 v1 起点才补一段标明「仅 v1 老线」。
+  // 注意别用「字段在不在」判标尺——`_norm_card` 给每张卡都补齐了 v2 键。
+  const v1Bits = [];
+  if ((Number(c.start_level) || 0) > 0) v1Bits.push("关系 " + Number(c.start_level) + " 级");
+  if ((Number(c.start_arousal) || 0) > 0) v1Bits.push("冲动 " + Number(c.start_arousal));
+  const v1Start = v1Bits.length ? "（仅 v1 老线：" + v1Bits.join(" · ") + "）" : "";
+  [["起点", "好感 " + (c.start_value === null || c.start_value === undefined ? "默认" : c.start_value)
+     + " · 表白 " + (Number(c.start_confess) || 0)
+     + " · 病娇 " + (Number(c.start_yandere) || 0)
+     + " · " + (c.start_together ? "已在一起" : "未在一起")
+     + " · 冲动 " + (Number(c.start_arousal_tier) || 0) + " 档" + v1Start],
+   ["怀孕玩法", c.pregnancyEnabled === false ? "关" : "开"],
+   ["角色 LoRA", c.char_lora || "（站主没挂）"],
+   ["状态", c.hidden ? "已下架" : "在册"]].forEach(function (p) {
+    const s = document.createElement("span");
+    s.textContent = p[0] + "：" + p[1];
+    row.appendChild(s);
+  });
+  body.appendChild(row);
+}
+
+async function showCard(cid, label) {
+  cid = String(cid || "").trim();
+  if (!cid) { toast("这条会话没记卡 id（老数据），看不出是哪张卡", true); return; }
+  $("cardMask").classList.add("on");
+  $("cdName").textContent = label || "角色卡";
+  $("cdWho").textContent = "";
+  $("cdBody").innerHTML = '<div class="v mute">读取中…</div>';
+  try {
+    const d = await api("/api/persona_admin/card?card_id=" + encodeURIComponent(cid));
+    renderCard(d);
+  } catch (e) {
+    $("cdBody").innerHTML = "";
+    $("cdBody").appendChild(cdSec("读不到", e.message || "未知错误"));
+  }
+}
+function closeCard() {
+  $("cardMask").classList.remove("on");
+}
+$("cdClose").onclick = closeCard;
+$("cardMask").addEventListener("click", function (e) {
+  if (e.target === $("cardMask")) closeCard();
+});
+document.addEventListener("keydown", function (e) {
+  if (e.key === "Escape") closeCard();
+});
 
 async function api(p, opt) {
   const r = await fetch(p, opt);
@@ -238,7 +434,18 @@ function render() {
       '<span class="tm"></span></div>';
     el.querySelector(".tag").textContent = r.short;
     el.querySelector(".nm").textContent = r.label;
-    el.querySelector(".card").textContent = r.card ? ("演 " + r.card) : "";
+    const cd = el.querySelector(".card");
+    cd.textContent = r.card ? ("演 " + r.card) : "";
+    if (r.card_id) {
+      // 「演 XXX」点下去看这张卡的详情（2026-11-09 用户要求）。
+      // stopPropagation：不然同一会跟着开——玩家想知道的是「她是谁」，不是重开对话。
+      cd.classList.add("link");
+      cd.title = "看这张角色卡的内容";
+      cd.onclick = function (e) {
+        e.stopPropagation();
+        showCard(r.card_id, r.card);
+      };
+    }
     el.querySelector(".st").textContent = r.turns + " 轮";
     el.querySelector(".tm").textContent = relTime(r.mtime, r.mtime_text) || r.mtime_text || "";
     el.onclick = () => open(r);
@@ -270,6 +477,9 @@ async function open(r) {
     $("who").textContent = d.label + (d.card ? ("　" + d.card) : "");
     $("meta").textContent = r.short + " · " + r.turns + " 轮 · " +
       (d.mtime_text || r.mtime_text);
+    // 顶栏「这张卡」：detail 接口现在连 card_id 一起回（老 state 没有就藏起来）
+    $("btnCard").style.display = d.card_id ? "" : "none";
+    $("btnCard").onclick = () => showCard(d.card_id, d.card);
     setNote(d.note);
     renderMessages(d);
     log.scrollTop = 0;

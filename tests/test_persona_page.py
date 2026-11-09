@@ -113,7 +113,7 @@ class SlotButtonTest(unittest.TestCase):
 
     四件事必须同时成立，少一件就会出真问题：
       1. 样式是黄色实心（不是普通灰按钮），否则「明显」不成立；
-      2. loadCards 里真的挂了按钮，游客不挂（他们本来就没有存档）；
+      2. 左栏渲染（`renderCards`）里真的挂了按钮，游客不挂（他们本来就没有存档）；
       3. click / touchend 两条路都把「点的是存档标签」传进 pick——
          手机只走 touchend、桌面只走 click，漏一条就是一半设备没反应；
       4. pick 认得这个标记：**哪怕正在演这个角色**也要开面板，
@@ -132,7 +132,9 @@ class SlotButtonTest(unittest.TestCase):
         self.assertIn("padding-right: 46px", self.html)
 
     def test_cards_render_the_button_but_guests_dont(self):
-        body = self.html[self.html.index("async function loadCards("):]
+        # 2026-11-09 左栏改成「官方 / 自定义」两栏后，建卡片那截从
+        # `loadCards` 拆进了 `renderCards`——契约没变，只是换了个函数体。
+        body = self.html[self.html.index("function renderCards("):]
         body = body[:body.index("\n}\n") + 3]
         self.assertIn('className = "ciSlot"', body)
         self.assertIn("存档", body)
@@ -263,6 +265,67 @@ class BackgroundFocusTest(unittest.TestCase):
         fn = fn[:fn.index("\n}\n") + 3]
         self.assertIn("if (!isFinite(n)) return BG_POS_MID;", fn)
         self.assertIn("Math.min(100, Math.max(0, Math.round(n)))", fn)
+
+
+class RoleplayFallbackUiTest(unittest.TestCase):
+    """扮演降级链的前端（2026-11-09）：多条自定义模型 + 闭站引导 + 当前模型。
+
+    后端那条链是「公用中转站 V4 Pro → 玩家自定义模型（有序）」，前端必须
+    同时做到三件事，少一件用户就会在闭站时一头雾水：
+      1. 每轮聊天把**数组** custom_models 带上，不是老的单条 custom；
+      2. 后端回 relay_down 时弹引导，且弹窗口径不能有"不再回退官方 /
+         赞助 / 站主不再承担费用"这类字眼；
+      3. 「当前模型」按钮老实显示 model_used，别自己猜。
+    """
+
+    def setUp(self):
+        self.html = _read()
+
+    def test_request_sends_the_ordered_list_not_a_single_model(self):
+        self.assertIn('const CM_KEY = "persona_custom_models"', self.html)
+        self.assertEqual(self.html.count("body.custom_models = CM;"), 3,
+                         "chat / skip_day / set_phase 三条支线都要带链")
+        self.assertNotIn("body.custom =", self.html)
+        self.assertNotIn('id="cmUrl"', self.html,
+                         "老的单模型弹窗还在，玩家没法加第二条")
+
+    def test_panel_prefills_deepseek_and_lets_players_paste_the_key(self):
+        for needle in ('DeepSeek / DEP（推荐）', "https://api.deepseek.com",
+                       "deepseek-flash", "https://platform.deepseek.com/api_keys",
+                       "navigator.clipboard.readText", "测试连接", "保存",
+                       "cmAddRow", "data-act=\"up\"", "data-act=\"del\""):
+            self.assertIn(needle, self.html, "少了 %s" % needle)
+
+    def test_help_and_local_storage_disclaimer_are_visible(self):
+        for needle in ("cmHelpBtn", "创建 API Key", "充值", "粘贴",
+                       "Local Storage", "我们这边拿不到你的这一 key",
+                       "手机备忘录", "换浏览器"):
+            self.assertIn(needle, self.html, "少了 %s" % needle)
+
+    def test_relay_popup_uses_the_agreed_wording(self):
+        for needle in ("公用的免费 V4 Pro 暂时连不上", "站主承担不起自掏腰包",
+                       "12 亿的免费 token", "连续三次", "自定义模型</button>"):
+            self.assertIn(needle, self.html, "少了 %s" % needle)
+        for banned in ("不再回退官方", "赞助", "站主不再承担费用"):
+            self.assertNotIn(banned, self.html, "弹窗不该出现 %s" % banned)
+
+    def test_api_opens_the_popup_and_prints_the_model_used(self):
+        fn = self.html[self.html.index("async function api("):]
+        fn = fn[:fn.index("\n}\n") + 3]
+        self.assertIn('if (d.code === "relay_down") openRelay(err.has_custom);', fn)
+        self.assertIn("if (d.model_used) renderModelUsed(d.model_used);", fn)
+
+    def test_current_model_button_sits_at_the_bottom_of_the_chat(self):
+        # 位置：.log 之后、精确输入之前，才是「聊天区底部」。
+        i_log = self.html.index('<div class="log" id="log">')
+        i_bar = self.html.index('id="modelBar"')
+        i_pre = self.html.index('id="preciseBox"')
+        self.assertLess(i_log, i_bar)
+        self.assertLess(i_bar, i_pre)
+        self.assertIn("当前模型 ▾", self.html)
+        self.assertIn('$("modelBody").classList.toggle("on")', self.html)
+        self.assertIn('renderModelUsed(used)', self.html)
+        self.assertIn('used.kind === "public"', self.html)
 
 
 if __name__ == "__main__":

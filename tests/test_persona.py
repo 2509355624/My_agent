@@ -3234,7 +3234,12 @@ class ManualRunTurnTest(PersonaBase):
 
 
 class PersonaModelTest(unittest.TestCase):
-    """扮演专用默认模型（2026-11-06）：默认走 PERSONA_*，玩家 override 优先。"""
+    """扮演专用链头（2026-11-06 建 / 11-09 翻转）：永远是公用中转站 V4 Pro。
+
+    玩家配的自定义模型不再是「整轮换人」，而是降级链的第二段。所以不管
+    `get_custom_override()` 返回什么，这里都必须点名链头——省掉 provider/model
+    会让 candidates() 没有链头，转去接含付费官方 DeepSeek 的全局链。
+    """
 
     def test_uses_persona_default_when_no_custom(self):
         with mock.patch.object(persona.llm, "get_custom_override",
@@ -3247,15 +3252,16 @@ class PersonaModelTest(unittest.TestCase):
         self.assertEqual(kw.get("model"), persona.PERSONA_MODEL)
         self.assertEqual(kw.get("timeout"), 10)
 
-    def test_player_custom_override_wins(self):
-        cfg = {"base_url": "http://x", "model": "m", "api_key": "k"}
+    def test_player_custom_models_do_not_replace_the_head(self):
+        cfg = [{"base_url": "http://x", "model": "m", "api_key": "k"}]
         with mock.patch.object(persona.llm, "get_custom_override",
                                return_value=cfg), \
                 mock.patch.object(persona.llm, "call_llm",
                                   return_value="x") as call:
             persona._llm_call([{"role": "user", "content": "hi"}])
-        self.assertNotIn("provider", call.call_args.kwargs)
-        self.assertNotIn("model", call.call_args.kwargs)
+        kw = call.call_args.kwargs
+        self.assertEqual(kw.get("provider"), persona.PERSONA_PROVIDER)
+        self.assertEqual(kw.get("model"), persona.PERSONA_MODEL)
 
 
 class NoteCompressionTest(PersonaBase):

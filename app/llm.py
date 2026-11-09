@@ -85,46 +85,120 @@ LAST_USAGE = _usage()
 CURRENT_PROVIDER = LLM_PROVIDER
 
 
-# ─── 请求级自定义模型（2026-11-05）───────────────────────
-# 网页端「自定义模型」：用户自己的 OpenAI 兼容接口（base_url + model +
+# ─── 请求级自定义模型（2026-11-05 建 / 11-09 改成降级链）──────
+# 网页端「自定义模型」：玩家自己的 OpenAI 兼容接口（base_url + model +
 # api_key）只存在**浏览器 localStorage**，每轮聊天随请求体带给后端，这里
 # 临时挂到当前线程（Flask 一请求一线程，threading.local 正好圈住一轮内部
 # 的主回复 + 好感打分 + 小记压缩全部调用），请求结束由 persona_api 在
 # finally 里摘掉。key 不落盘、不进 .env、不进任何会话状态。
 #
-# 覆盖是**整体换人**不是降级备胎：自定义模型不走降级链（call_llm 里单目标
-# 直调，失败直接抛）——挂了就报错，绝不偷偷烧回默认那几家的额度。
+# 2026-11-09 口径翻转：这些模型**不再是「整轮换人」，而是降级链的第二段**。
+# 扮演链路永远是「① 公用中转站 V4 Pro（链头，免费）→ 同一家重试 3 次 →
+# ② 玩家自定义模型（按列表顺序）」。全局 LLM_FALLBACK_CHAIN（第一项就是付费
+# 的官方 DeepSeek）**不接在扮演链路后面**——中转站闭站时不能让站主掏钱。
+# 玩家没配自定义模型 = 链尾空，全失败就报错并让前端弹窗引导。
+_PERSONA_CUSTOM_PID = "__persona_custom__"   # 只在 candidates() 里出现的伪 provider
 _custom_ctx = threading.local()
 
 
+class PersonaChainExhausted(RuntimeError):
+    """扮演链路（中转站 + 玩家自定义模型）全挂，交给前端弹窗引导。
+
+    单独立一个类型，是为了 persona_api 能精确认出来：不能把所有异常都包装成
+    「中转站挂了」，游戏逻辑里的 KeyError / TypeError 必须照旧暴露成 500。
+    """
+
+    def __init__(self, message, has_custom=False):
+        super().__init__(message)
+        self.has_custom = bool(has_custom)
+
+
+def _normalize_customs(cfg):
+    """→ 有序、可用的自定义模型列表。兼容老前端的单条 dict。"""
+    if isinstance(cfg, dict) and "models" in cfg:
+        cfg = cfg.get("models")
+    if isinstance(cfg, dict):
+        cfg = [cfg]
+    if not isinstance(cfg, list):
+        return []
+    out = []
+    for m in cfg:
+        if not isinstance(m, dict):
+            continue
+        base = str(m.get("base_url") or "").strip().rstrip("/")
+        key = str(m.get("api_key") or "").strip()
+        name = str(m.get("model") or "").strip()
+        if not (base.startswith(("http://", "https://")) and key and name):
+            continue
+        out.append({"base_url": base, "model": name, "api_key": key,
+                    "label": str(m.get("label") or "").strip()[:60]})
+    return out
+
+
 def set_custom_override(cfg):
-    """挂上 / 摘掉当前线程的自定义模型。cfg 缺关键字段视为摘除。"""
-    if isinstance(cfg, dict) and str(cfg.get("base_url") or "").strip() \
-            and str(cfg.get("api_key") or "").strip():
-        _custom_ctx.cfg = {
-            "base_url": str(cfg["base_url"]).strip(),
-            "model": str(cfg.get("model") or "").strip(),
-            "api_key": str(cfg["api_key"]).strip(),
-        }
-    else:
-        _custom_ctx.cfg = None
+    """挂上 / 摘掉当前线程的「扮演降级链」。
+
+    cfg=None 才摘除；传空列表 [] 表示「这是扮演请求、但玩家没配自定义模型」——
+    这个状态也要记住，否则 candidates() 会把付费的全局链又接回来。
+    """
+    if cfg is None:
+        _custom_ctx.models = []
+        _custom_ctx.active = False
+        # ⚠️ `used` 故意不清：persona_api 的 `finally` 会调到这里，而
+        # after_request 还要读它给「当前模型」按钮回包。下一次扮演请求
+        # 一进来（下面的分支）就会把它重置，不会串到别的玩家。
+        return
+    _custom_ctx.models = _normalize_customs(cfg)
+    _custom_ctx.active = True
+    _custom_ctx.used = None
 
 
 def _custom_active():
-    cfg = getattr(_custom_ctx, "cfg", None)
-    if cfg and cfg.get("base_url") and cfg.get("api_key"):
-        return cfg
-    return None
+    """当前线程的自定义模型列表；没挂 / 空列表返回 None。"""
+    if not getattr(_custom_ctx, "active", False):
+        return None
+    models = getattr(_custom_ctx, "models", None) or []
+    return list(models) if models else None
+
+
+def persona_chain_active():
+    """本线程是不是「扮演链路」（决定 candidates 接不接全局降级链）。"""
+    return bool(getattr(_custom_ctx, "active", False))
+
+
+def persona_customs():
+    """当前线程的自定义模型列表副本（没有就是 []）。"""
+    return list(getattr(_custom_ctx, "models", None) or [])
 
 
 def get_custom_override():
-    """当前线程的自定义模型配置副本；没有返回 None。
+    """当前线程的自定义模型配置副本（现在是列表）；没挂返回 None。
 
     角色扮演的记忆提炼在后台线程跑，拿不到请求线程的覆盖，所以要在
-    入队时先存一份，后台线程再 `set_custom_override` 回来。
+    入队时先存一份，后台线程再 `set_custom_override` 回来。空列表也要传
+    （`[]` 而不是 None）——不然后台线程会退回全局链，又烧到官方 DeepSeek。
     """
-    cfg = _custom_active()
-    return dict(cfg) if cfg else None
+    if not persona_chain_active():
+        return None
+    return persona_customs()
+
+
+def persona_last_model():
+    """本轮真正回话的是谁，供前端「当前模型」按钮显示；没跑过返回 None。"""
+    return getattr(_custom_ctx, "used", None)
+
+
+def _note_persona_used(pid, eff):
+    """调用成功后记下这一轮用的是公用模型还是玩家的自定义模型。"""
+    if not persona_chain_active():
+        return
+    if pid == _PERSONA_CUSTOM_PID:
+        _custom_ctx.used = {"kind": "custom",
+                            "name": str(eff.get("model") or "自定义模型"),
+                            "label": "自定义模型"}
+    else:
+        _custom_ctx.used = {"kind": "public", "name": "公用 V4 Pro",
+                            "label": "公用 V4 Pro（免费）"}
 
 
 def describe_effective(provider=None, model=None):
@@ -148,18 +222,30 @@ def describe_effective(provider=None, model=None):
 
 def get_effective_config(provider=None, model=None):
     """解析出一次请求要用的 (base_url, model, api_key, provider)"""
-    # 请求级自定义模型（2026-11-05）：调用方没有点名 provider/model 时，
-    # 当前线程挂着自定义配置就整个换人——一轮里的主回复、打分、压缩全走它。
+    # 扮演降级链里的自定义模型：伪 provider + 列表下标，从线程本地取配置。
+    # 只认 http(s)，避免把玩家手滑填的东西拼进 URL。
+    if provider == _PERSONA_CUSTOM_PID:
+        try:
+            idx = int(str(model or "0"))
+        except (TypeError, ValueError):
+            idx = 0
+        ms = persona_customs()
+        if 0 <= idx < len(ms):
+            c = ms[idx]
+            return {"provider": "custom", "base_url": c["base_url"],
+                    "model": c["model"], "api_key": c["api_key"],
+                    "reasoning_effort": ""}
+        provider, model = None, None
+    # 兼容老调用方：没点名 provider/model 时，挂着自定义配置就直接取第一条。
+    # 扮演链路不会走这里（`persona._llm_call` 永远点名链头），这条只服务
+    # 直接调 get_effective_config() 的日志 / 老前端。
     if not provider and not model:
         cust = _custom_active()
         if cust:
-            return {
-                "provider": "custom",
-                "base_url": cust["base_url"],
-                "model": cust["model"],
-                "api_key": cust["api_key"],
-                "reasoning_effort": "",
-            }
+            c = cust[0]
+            return {"provider": "custom", "base_url": c["base_url"],
+                    "model": c["model"], "api_key": c["api_key"],
+                    "reasoning_effort": ""}
     provider = (provider or CURRENT_PROVIDER or LLM_PROVIDER).lower()
     if provider not in PROVIDERS:
         provider = LLM_PROVIDER
@@ -204,17 +290,9 @@ def call_llm(messages, timeout=None, provider=None, model=None, strict=False,
     兼容旧调用 call_llm(messages)：用当前生效配置。
     """
     timeout = timeout or LLM_REQUEST_TIMEOUT
-    # 自定义模型（2026-11-05）：单目标直调，不进降级链——用户自己的接口挂了
-    # 就把错误原样抛回去，绝不偷偷换默认那几家（额度是钱，静默降级=烧钱不吭声）。
-    if not provider and _custom_active():
-        eff = get_effective_config()
-        _log_effective(eff, stream=False, attempt=(1, 1))
-        body = {"messages": messages, "stream": False, "model": eff["model"]}
-        if max_tokens:
-            body["max_tokens"] = int(max_tokens)
-        if temperature is not None:
-            body["temperature"] = float(temperature)
-        return _call_provider(eff, body, timeout)
+    # 2026-11-09：不再有「自定义模型整轮换人」的短路分支。链头永远是调用方
+    # 点名的那个模型（扮演 = 公用中转站 V4 Pro），玩家的自定义模型排在后面，
+    # 由 candidates() 统一装配，三次重试 / 拉黑 / 记流水都走同一套循环。
     targets = _chain_targets(provider, model, strict=strict)
     last_err = None
     for i, (pid, mname) in enumerate(targets):
@@ -229,7 +307,9 @@ def call_llm(messages, timeout=None, provider=None, model=None, strict=False,
         started = time.time()
         for attempt in range(1, LLM_RETRY_TIMES + 1):
             try:
-                return _call_provider(eff, body, timeout)
+                out = _call_provider(eff, body, timeout)
+                _note_persona_used(pid, eff)
+                return out
             except Exception as e:
                 last_err = e
                 wait = _retry_wait(attempt, started, e)
@@ -240,6 +320,10 @@ def call_llm(messages, timeout=None, provider=None, model=None, strict=False,
                             pid, mname, attempt, LLM_RETRY_TIMES, _brief(e, 80),
                             wait)
                 time.sleep(wait)
+    if persona_chain_active():
+        raise PersonaChainExhausted(
+            str(last_err) if last_err else "扮演链路全部不可用",
+            has_custom=bool(persona_customs())) from last_err
     raise last_err
 
 
@@ -613,8 +697,16 @@ def candidates(provider=None, model=None, require_vision=False, strict=False):
     if strict and head:
         return [head]
 
+    # 2026-11-09：扮演链路的链尾换成玩家自己的模型，**不接全局降级链**。
+    # 那条链第一项就是付费的官方 DeepSeek，中转站闭站时接上去等于站主掏钱。
+    # 其它功能（QQ 机器人、漫画、识图……）照旧走全局链，不受影响。
+    if persona_chain_active():
+        tail = [(_PERSONA_CUSTOM_PID, str(i))
+                for i in range(len(persona_customs()))]
+    else:
+        tail = parse_chain(LLM_FALLBACK_CHAIN)
     seen, ordered = set(), []
-    for item in ([head] if head else []) + parse_chain(LLM_FALLBACK_CHAIN):
+    for item in ([head] if head else []) + tail:
         if item in seen:
             continue
         seen.add(item)
@@ -623,7 +715,9 @@ def candidates(provider=None, model=None, require_vision=False, strict=False):
         return []
 
     if require_vision:
-        vision_ok = [c for c in ordered if provider_vision(c[0], c[1])]
+        # 玩家自带模型能不能读图无从得知（老口径也是直接发），别把它滤掉。
+        vision_ok = [c for c in ordered
+                     if c[0] == _PERSONA_CUSTOM_PID or provider_vision(c[0], c[1])]
         if vision_ok:
             ordered = vision_ok
 
@@ -935,6 +1029,7 @@ def call_llm_stream(messages, timeout=None, provider=None, model=None,
                     if kind == "content":
                         spoke = True
                     yield kind, text
+                _note_persona_used(pid, eff)
                 return
             except Exception as e:
                 if spoke:
@@ -949,4 +1044,8 @@ def call_llm_stream(messages, timeout=None, provider=None, model=None,
                             wait)
                 if not _sleep_with_cancel(wait, cancel_event):
                     return
+    if persona_chain_active():
+        raise PersonaChainExhausted(
+            str(last_err) if last_err else "扮演链路全部不可用",
+            has_custom=bool(persona_customs())) from last_err
     raise last_err

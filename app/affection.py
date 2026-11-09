@@ -1294,7 +1294,19 @@ def _blank(line_key="", value=None, schema=1):
            "mercy": MERCY_MAX, "suspicion": 0}
     rec["schema"] = int(schema or 1)
     if rec["schema"] == V2_SCHEMA:
-        rec.update(_v2_blank_fields())
+        rec.update(_v2_blank_fields(card))
+        # 冲动起点：v2 的冲动是身体线里的 0~4 档（不是 v1 那个数值），
+        # 那一块要等第一次碰成人向轴才建，所以这里先播一颗种子——
+        # `affection_v2_adult.load()` 读到 `adult.arousal` 就直接用。
+        tier = _v2_i(card.get("start_arousal_tier"))
+        if tier:
+            try:
+                from app import affection_v2_adult as _ad
+                key = _ad.arousal_key_for_tier(tier)
+            except Exception:                              # noqa: BLE001
+                key = ""
+            if key:
+                rec["adult"] = {"arousal": key}
     return rec
 
 
@@ -3769,13 +3781,20 @@ def is_v2(line_key):
     return _v2_is(rec)
 
 
-def _v2_blank_fields():
+def _v2_blank_fields(card=None):
+    """新 v2 线的四条轴起点。
+
+    2026-11-09：以前这里硬写 0/0/False，卡面根本开不了口——想建一张
+    「一上来就绷着的病娇卡」或「已经是恋人」的卡做不到。现在按角色卡起，
+    没配（或配的是老 v1 卡）就还是 0 / 没在一起，行为和以前一样。
+    """
+    c = card if isinstance(card, dict) else {}
     return {
         "contacts": [],          # 已发生的事实，一条一行
         "firsts": {},            # degree -> 第一次那条记录
-        "confess": 0,
-        "yandere": 0,
-        "together": False,
+        "confess": _v2_i(c.get("start_confess")),
+        "yandere": _v2_i(c.get("start_yandere")),
+        "together": bool(c.get("start_together")),
         "auto_confess_done": False,
         "yandere_event_done": False,
     }
@@ -3941,6 +3960,44 @@ def _v2_help(cfg):
             out[key] = {"title": str(h.get("title") or ""),
                         "body": [str(x) for x in (h.get("body") or [])]}
     return out
+
+
+def v2_start_help():
+    """自建卡表单「起点」那几颗问号的文案，一次给全。
+
+    和右栏面板同一套口径：**全从配置读，前端不写死**——改了 `affection_v2.json`
+    / `affection_v2_adult.json` 不用重启、也不用改 HTML。缺哪条前端就不画哪颗
+    问号，不留点了没反应的壳。
+
+    `ladders` 是各轴的档位表（档名 + 门槛），玩家填数字时得知道 40 叫
+    「认准你了」、75 叫「恋人」而且要先表白成功。
+    """
+    cfg = _v2_config()
+    axes = _v2_help(cfg)
+    tiers = []
+    for t in sorted(cfg.get("tiers") or [],
+                    key=lambda x: _v2_i(x.get("min")), reverse=True):
+        need = _v2_i(t.get("min")) >= 50
+        tiers.append({"name": str(t.get("name") or ""),
+                      "min": _v2_i(t.get("min")),
+                      "note": "要先表白" if need else ""})
+    ladders = {"value": tiers,
+               "confess": [{"name": str(s.get("name") or ""),
+                            "min": _v2_i(s.get("min"))}
+                           for s in ((cfg.get("confess") or {}).get("stages") or [])],
+               "yandere": [{"name": str(s.get("name") or ""),
+                            "min": _v2_i(s.get("min")),
+                            "desc": str(s.get("desc") or "")}
+                           for s in ((cfg.get("yandere") or {}).get("stages") or [])]}
+    try:
+        from app import affection_v2_adult as _ad
+        ladders["arousal"] = _ad.arousal_ladder()
+        h = _ad.arousal_help()
+        if h:
+            axes["arousal"] = h
+    except Exception:                                     # noqa: BLE001
+        ladders["arousal"] = []
+    return {"axes": axes, "ladders": ladders}
 
 
 def _v2_adult_panel(rec):
@@ -4148,6 +4205,24 @@ def _v2_stage_line(label, value, stages, vmax):
     return "\n".join(out)
 
 
+def _v2_yandere_block(cfg, yandere):
+    """病娇这一层的演法规则，递给第二段演员（2026-11-09）。
+
+    文案全部在 `config/affection_v2.json` 的 `yandere.act` 里，代码不写死——
+    这个文件每轮重读，站主改文案不用重启进程。两道闸：病娇 0 的时候不给
+    （她还没往那方面想，给了是白占预算），配置里没有 `act` 也不给（不留一段
+    空标题）。档位那一行由 `_v2_stage_line` 单独给，这里只补「怎么演」。
+    """
+    if _v2_i(yandere) <= 0:
+        return ""
+    rules = [str(x).strip() for x in ((cfg.get("yandere") or {}).get("act") or [])
+             if str(x or "").strip()]
+    if not rules:
+        return ""
+    return "\n".join(["病娇这一层怎么演（这是给你的规则，不是台词，别照抄进正文）："]
+                     + ["· " + r for r in rules])
+
+
 def _v2_tier_line(value, together, cfg, vmax):
     """感情轴读数：按**两段式闸后**的档位写，没表白不会显示「恋人」。
 
@@ -4217,6 +4292,10 @@ def _v2_injection(res):
     # 身体那几条轴的分档文案由 `adult_state.block()` 直接给中文，也不用回书里翻。
     lines.append("（《状态值全书》第 1 节是旧标尺，这条线以这里给的读数为准；"
                  "身体那几条轴的分档写法会另给一段，用得上才给，不用回书里找。）")
+
+    yblock = _v2_yandere_block(cfg, res.get("yandere"))
+    if yblock:
+        lines += ["", yblock]
 
     contacts = res.get("contacts") or []
     lines += ["", "已经发生的身体接触（只记事实，不是许可）："]
@@ -4296,10 +4375,13 @@ def _v2_settle(line_key, ent, rec, score, game_day=None):
                      + _clamp(score.get("confess"), -10, 10), 0, cmax)
     rec["confess"] = confess
 
-    # 病娇值：拒绝她主动表白是一次很重的落空，单独加一笔。
+    # 病娇值：**单向棘轮，只涨不掉**（2026-11-09 用户拍板）。她已经把这件事记下
+    # 了，哄回来、圆回去都抹不掉——这正是病娇和好感最本质的差别，好感能回，
+    # 病娇不能。所以单轮增量先钳到 0 以上再累加：编剧那侧就算按老习惯给了负值，
+    # 也掉不下去。拒绝她主动表白另加一笔（`proposal.refuse_yandere`）。
     ymax = _v2_i((cfg.get("yandere") or {}).get("max"), 100)
     yandere = _clamp(_v2_i(rec.get("yandere"))
-                     + _clamp(score.get("yandere"), -20, 20), 0, ymax)
+                     + max(0, _clamp(score.get("yandere"), -20, 20)), 0, ymax)
     if score.get("refused_confession"):
         yandere = _clamp(
             yandere + _v2_i((cfg.get("proposal") or {}).get("refuse_yandere"), 35),

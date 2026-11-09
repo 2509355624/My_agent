@@ -29,6 +29,57 @@ log = logging.getLogger("persona_api")
 
 bp = Blueprint("persona_api", __name__)
 
+
+def _persona_customs(body):
+    """扮演请求里玩家自带的模型列表（2026-11-09）。
+
+    新前端传 `custom_models`（数组顺序 = 降级顺序）；老前端传 `custom`
+    （单条 dict），两种都认，语义统一是「链尾备胎」而不是整轮换人。
+
+    ⚠️ 没带字段也必须返回 `[]`，不能返回 None：在 llm 那边 None 是「非扮演
+    请求」，会接回含付费官方 DeepSeek 的全局链；`[]` 才是「扮演请求、玩家
+    没配自己的模型」。
+    """
+    raw = body.get("custom_models")
+    if isinstance(raw, list):
+        return raw
+    one = body.get("custom")
+    return [one] if isinstance(one, dict) and one else []
+
+
+@bp.after_request
+def _attach_model_used(resp):
+    """所有扮演回包都带上本轮真正使用的模型，供「当前模型」按钮显示。
+
+    放在 after_request 而不是每个 out = {} 里补一行：这些回包有十来处，漏一个
+    就表现为「某条支线不刷新模型」。读的是请求线程的线程本地值（finally 里
+    只摘链配置、不清这个标记，见 llm.set_custom_override）。
+    """
+    used = llm.persona_last_model()
+    if used and resp.is_json:
+        try:
+            d = resp.get_json() or {}
+            if isinstance(d, dict):
+                d["model_used"] = used
+                resp.set_data(json.dumps(d, ensure_ascii=False))
+        except Exception:                                # noqa: BLE001
+            pass                                    # 标记只是展示，坏了别拦回包
+    return resp
+
+
+@bp.errorhandler(llm.PersonaChainExhausted)
+def _persona_chain_down(e):
+    """扮演链路全挂：不回退付费官方，回一个让前端弹窗引导的码。"""
+    log.warning("[persona] 扮演链路不可用：%s", e)
+    return jsonify({
+        "ok": False,
+        "code": "relay_down",
+        "error": "公用免费的 V4 Pro 暂时连不上",
+        "has_custom": bool(getattr(e, "has_custom", False)),
+        "detail": str(e)[:160],
+    }), 503
+
+
 # 游客身份 cookie（2026-11-03）。和登录 cookie 分开：游客换浏览器会重来，
 # 这是已知且接受的——体验版是为了让人尝到甜头，不是防盗版。
 GUEST_COOKIE = "gs_id"
@@ -247,6 +298,11 @@ def _card_json(card):
         "description": card.get("description") or "",
         "personality": card.get("personality") or "",
         "avatar": card.get("avatar") or "",
+        # 自建卡标记（2026-11-09）：左栏分「官方角色 / 我的角色」两组用。
+        # `owner` 是归属 QQ 号，官方卡恒为空串——列表里只给 id 和「是不是我的」，
+        # 卡面正文不发（要全文走 `/api/persona/my_cards/<id>` 自己那份）。
+        "owner": card.get("owner") or "",
+        "mine": bool(card.get("owner")),
     }
 
 
@@ -264,27 +320,166 @@ def writing_styles():
 @bp.route("/api/persona/cards")
 def list_cards():
     """可选角色列表：网页左栏用。hidden 的卡是暂下架，不进这个列表
-    （卡池页 /api/characters 仍能看到全部，那边的开关管上下架）。"""
+    （卡池页 /api/characters 仍能看到全部，那边的开关管上下架）。
+
+    2026-11-09 玩家自建角色：`my_cards` 是**这个人自己**建的卡，只有登录用户有，
+    游客恒空。它们不进 `cards`——`cards` 的语义（官方库）保持不变，别的调用点
+    和管理页都不必知道自建卡的存在。
+    """
     out = []
     for c in persona.load_cards():
         if c.get("hidden"):
             continue
         out.append(_card_json(c))
-    return jsonify({"ok": True, "cards": out})
+    role, who, _token = _who()
+    mine = []
+    if role != "guest":
+        for c in persona.load_user_cards(who):
+            if c.get("hidden"):
+                continue
+            mine.append(_card_json(c))
+    return jsonify({"ok": True, "cards": out, "my_cards": mine,
+                    "my_max": persona.USER_CARD_MAX})
 
 
-def _card_by_id(cid):
+def _user_card_json(card):
+    """自建卡的**可编辑全字段**，够前端把表单原样回填。
+
+    只发玩家自己能写的那些：`char_lora` / `referenceImage` / `hidden` 即便卡里
+    有也不回给前端——回给了也改不动（`_clean_user_fields` 不认），白白让人
+    以为那是个能填的框。
+    """
+    if not card:
+        return None
+    out = _card_json(card)
+    for k in persona.USER_FIELD_MAX:
+        out[k] = card.get(k) or ""
+    # 起点：只回玩家能写、而且**在新档（v2）上真生效**的那几个。
+    # `start_level` / `start_arousal` 是 v1 老标尺的字段，回给前端只会让人
+    # 以为填了有用（2026-11-09 用户口径：关系起点删掉，冲动走 v2 的 0~4 档）。
+    for k in ("start_value", "start_confess", "start_yandere",
+              "start_arousal_tier"):
+        out[k] = card.get(k)
+    out["start_together"] = bool(card.get("start_together"))
+    out["level_names"] = card.get("level_names") or []
+    out["stateBehavior"] = card.get("stateBehavior") or {}
+    out["pregnancyEnabled"] = bool(card.get("pregnancyEnabled", True))
+    out["createdAt"] = card.get("createdAt") or 0
+    return out
+
+
+def _member_only():
+    """自建卡接口的身份闸：登录用户 → `(qq, None)`；游客 → `(None, 403 响应)`。
+
+    qq **只从 `_who()` 拿**（5175 网关用登录 cookie 覆写 `params["qq"]` 送过来，
+    游客请求自带的 qq 会被网关剥掉），body 里传什么都不认。
+    """
+    role, who, token = _who()
+    if role == "guest":
+        resp = jsonify({"ok": False, "error": "登录后才能建自己的角色",
+                        "limit": True})
+        resp.status_code = 403
+        _attach_guest_cookie(resp, token)
+        return None, resp
+    return who, None
+
+
+@bp.route("/api/persona/my_cards")
+def my_cards_list():
+    """这个人的自建卡（全字段）。`?card=<id>` 只看一张。"""
+    who, deny = _member_only()
+    if deny is not None:
+        return deny
+    want = str(request.args.get("card") or "").strip()
+    # 起点那几颗问号的文案：全从 v2 配置读（`affection.v2_start_help`），
+    # 前端一份文案都不写死——改配置不用重启、也不用动 HTML。
+    try:
+        from app import affection
+        help_ = affection.v2_start_help()
+    except Exception:                                     # noqa: BLE001
+        help_ = {}
+    if want:
+        if persona.user_card_owner(want) != who:
+            return jsonify({"ok": False, "error": "没有这张卡"}), 404
+        return jsonify({"ok": True, "card": _user_card_json(persona.get_user_card(who, want)),
+                        "start_help": help_,
+                        "field_max": persona.USER_FIELD_MAX})
+    return jsonify({"ok": True,
+                    "cards": [_user_card_json(c)
+                              for c in persona.load_user_cards(who)],
+                    "max": persona.USER_CARD_MAX,
+                    "start_help": help_,
+                    "field_max": persona.USER_FIELD_MAX})
+
+
+@bp.route("/api/persona/my_cards", methods=["POST"])
+def my_cards_create():
+    """新建自建卡。body 就是卡面字段（见 `_card_json` / `USER_FIELD_MAX`）。
+
+    路径上没有 id = 建；`POST /api/persona/my_cards/<id>` = 改。
+    **不用 PUT**：5175 的通配转发只放 GET/POST/DELETE 三种方法过来。
+    """
+    who, deny = _member_only()
+    if deny is not None:
+        return deny
+    body = request.get_json(silent=True) or {}
+    card, err = persona.make_user_card(who, body)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    return jsonify({"ok": True, "card": _user_card_json(card)})
+
+
+@bp.route("/api/persona/my_cards/<cid>", methods=["POST"])
+def my_cards_edit(cid):
+    """改自己的一张自建卡：只覆盖 body 点名的字段，其余保持原值。"""
+    who, deny = _member_only()
+    if deny is not None:
+        return deny
+    body = request.get_json(silent=True) or {}
+    card, err = persona.edit_user_card(who, str(cid or "").strip(), body)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    return jsonify({"ok": True, "card": _user_card_json(card)})
+
+
+@bp.route("/api/persona/my_cards/<cid>", methods=["DELETE"])
+def my_cards_delete(cid):
+    """删自己的一张自建卡。正在演的那条线不受影响（按 id 存的档还在）。"""
+    who, deny = _member_only()
+    if deny is not None:
+        return deny
+    ok, err = persona.remove_user_card(who, str(cid or "").strip())
+    if not ok:
+        return jsonify({"ok": False, "error": err}), 400
+    return jsonify({"ok": True, "id": cid})
+
+
+def _card_by_id(cid, qq=""):
     """按 id 或名字找卡。
 
     2026-11-03：`persona.find_card()` 先查卡列表缓存，测试里换过
     `AGENTS_DIR` 之后那份缓存可能还指着旧目录。这里直接遍历
     `load_cards()` 的结果——它自己会处理缓存，不做二次 clear。
+
+    2026-11-09 玩家自建卡：id 以 `u<qq>_` 开头的走归属分支（这条调用点上的
+    id 来自**这个人自己**的线键，所以不需要再问「是谁」）；传了 `qq` 时名字
+    也扫一遍自己的库。
     """
     cid = str(cid or "").strip()
     if not cid:
         return None
+    owner = persona.user_card_owner(cid)
+    if owner:
+        if qq and owner != qq:
+            return None          # 别人的自建卡对你不存在
+        return persona.get_user_card(owner, cid)
     low = cid.lower()
     for c in persona.load_cards():
+        if str(c.get("id") or "").lower() == low:
+            return c
+        if str(c.get("name") or "").lower() == low:
+            return c
+    for c in persona.load_user_cards(qq):
         if str(c.get("id") or "").lower() == low:
             return c
         if str(c.get("name") or "").lower() == low:
@@ -327,7 +522,7 @@ def get_session():
 
     key = _active_key(_key(who))
     ent = persona._entry(key) or {}                       # noqa: SLF001
-    card = _card_by_id(ent.get("card"))
+    card = _card_by_id(ent.get("card"), qq=who)
 
     start, rows, total = persona.history_page(key)
     msgs = _msgs_from(rows, start)
@@ -586,7 +781,7 @@ def switch():
         return resp
 
     base = _key(who)
-    card = persona.find_card(want)
+    card = persona.find_card(want, qq=who)
     if card is None:
         return jsonify({"ok": False, "error": "没有这个角色：%s" % want}), 404
 
@@ -678,7 +873,7 @@ def slots_api():
         _attach_guest_cookie(resp, token)
         return resp
     want = str(request.args.get("card") or "").strip()
-    card = persona.find_card(want) if want else None
+    card = persona.find_card(want, qq=who) if want else None
     if card is None:
         return jsonify({"ok": False, "error": "没有这个角色：%s" % want}), 404
     base = _key(who)
@@ -701,7 +896,7 @@ def slot_name_api():
     if role == "guest":
         return jsonify({"ok": False, "error": "体验版没有存档", "limit": True}), 403
     body = request.get_json(silent=True) or {}
-    card = persona.find_card(str(body.get("card") or "").strip())
+    card = persona.find_card(str(body.get("card") or "").strip(), qq=who)
     if card is None:
         return jsonify({"ok": False, "error": "没有这个角色"}), 404
     try:
@@ -742,7 +937,7 @@ def slot_wipe_api():
     _ok_text = "删除存档：%s" % str(body.get("name") or "").strip()
     if str(body.get("confirm") or "").strip() != _ok_text:
         return jsonify({"ok": False, "error": "确认句不对，一个字都不能差"}), 400
-    card = persona.find_card(str(body.get("card") or "").strip())
+    card = persona.find_card(str(body.get("card") or "").strip(), qq=who)
     if card is None:
         return jsonify({"ok": False, "error": "没有这个角色"}), 404
     try:
@@ -815,7 +1010,7 @@ def finish_api():
     body = request.get_json(silent=True) or {}
     spot = str(body.get("spot") or "").strip().lower()
     text = str(body.get("text") or "").strip()[:120]
-    llm.set_custom_override(body.get("custom"))
+    llm.set_custom_override(_persona_customs(body))
     try:
         role, who, token = _who()
         if role == "guest":
@@ -884,7 +1079,7 @@ def finish_night_api():
     """
     body = request.get_json(silent=True) or {}
     last = bool(body.get("last"))
-    llm.set_custom_override(body.get("custom"))
+    llm.set_custom_override(_persona_customs(body))
     try:
         role, who, token = _who()
         if role == "guest":
@@ -909,7 +1104,7 @@ def next_morning_api():
     生成期间锁输入，生成完才放开。
     """
     body = request.get_json(silent=True) or {}
-    llm.set_custom_override(body.get("custom"))
+    llm.set_custom_override(_persona_customs(body))
     try:
         role, who, token = _who()
         if role == "guest":
@@ -950,13 +1145,15 @@ def _turn_out(key, turn, next_stage=""):
 
 @bp.route("/api/persona/chat", methods=["POST"])
 def chat():
-    """一轮对话。body: {text, custom?}
+    """一轮对话。body: {text, custom_models?}
 
     登录用户 → 无限；游客 → 30 轮（按 AI 回复次数算），超了硬拒绝。
-    `custom`（2026-11-05）：{base_url, model, api_key}——用户自带的
-    OpenAI 兼容模型，配置只存在浏览器 localStorage，随请求带给后端**临时
-    用一轮**（主回复、好感打分、小记压缩全走它），请求结束立刻摘掉，
-    后端不落盘。缺 custom 或字段不全 = 用默认模型，老前端不受影响。
+    `custom_models`（2026-11-09）：[{base_url, model, api_key}, ...]——玩家
+    自带的 OpenAI 兼容模型，配置只存在浏览器 localStorage，随请求带给后端
+    **临时用一轮**，请求结束立刻摘掉，后端不落盘。它们是降级链的第二段：
+    链头永远是公用中转站 V4 Pro，同一家重试 3 次都失败才按列表顺序往下试；
+    一条都没配就由 `relay_down` 弹窗引导，绝不接全局链里付费的官方。
+    老前端的 `custom`（单条 dict）也认，自动包成一条列表。
     """
     body = request.get_json(silent=True) or {}
     text = str(body.get("text") or "").strip()
@@ -965,7 +1162,7 @@ def chat():
     if not text and not manual:
         return jsonify({"ok": False, "error": "说点什么"}), 400
 
-    llm.set_custom_override(body.get("custom"))
+    llm.set_custom_override(_persona_customs(body))
     try:
         return _chat_turn(text, manual, body.get("writing"))
     finally:
@@ -1079,7 +1276,7 @@ def skip_day_api():
     body 可带 custom（自定义模型）——开场那一次 LLM 调用同样走它。
     """
     body = request.get_json(silent=True) or {}
-    llm.set_custom_override(body.get("custom"))
+    llm.set_custom_override(_persona_customs(body))
     try:
         days = max(1, min(365, int(body.get("days") or 1)))
     except (TypeError, ValueError):
@@ -1176,7 +1373,7 @@ def set_phase_api():
     再自然进入新时段。不推进天数、不掷事件、不结算怀孕。
     """
     body = request.get_json(silent=True) or {}
-    llm.set_custom_override(body.get("custom"))
+    llm.set_custom_override(_persona_customs(body))
     phase = str(body.get("phase") or "").strip()
     try:
         if phase not in persona.PHASES:
