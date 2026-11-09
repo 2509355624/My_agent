@@ -119,26 +119,42 @@
     display: flex; font-size: 14px; font-size: var(--chat-fs, 14px);
     flex-direction: column; gap: 12px; scroll-behavior: smooth;
     overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
-  /* 聊天背景（2026-11-05）：图只铺在聊天区，气泡本身是不透明底，
-     再亮的图也吃不掉文字。URL 由 JS 写进 style，这里只管铺法。 */
-  .log.has-bg { background-position: center; background-size: cover;
+  /* 聊天背景（2026-11-05，2026-11-09 改挂到中栏）：图原来只铺 `.log`，
+     结果开场导读、输入区、顶栏各是一块实心黑，图被切成一格一格，看着
+     完全不像「背景」。现在铺在**整个 `#mid`** 上，一栏到底都是同一张图；
+     URL 与 `has-bg` 由 JS 写在 `#mid` 上。 */
+  .mid.has-bg { background-position: center; background-size: cover;
     background-repeat: no-repeat; }
   /* 有背景图时气泡让出透明度（2026-11-09 用户要求）：原来是一块实心黑，
      整张图被切成一格一格的。改成「半透明底 + 背景模糊」——图能透出来，
      字还压得住。模糊不是为了好看：背景若是花火/夜景这类高频细节，
      不模糊时半透明底上的文字边缘会和图打架（截图实测 0.52 透明 + 不模糊
-     明显更难读）。没有背景图时这一组不生效，气泡仍是原来的实心底。 */
-  .log.has-bg .row.a .bubble {
+     明显更难读）。没有背景图时这一组不生效，观感与以前完全一致。 */
+  .mid.has-bg .row.a .bubble {
     background: rgba(14, 14, 18, .52);
     border-color: rgba(255, 255, 255, .1);
     -webkit-backdrop-filter: blur(6px) saturate(1.1);
     backdrop-filter: blur(6px) saturate(1.1); }
-  .log.has-bg .row.u .bubble {
+  .mid.has-bg .row.u .bubble {
     background: rgba(109, 42, 72, .52);
     -webkit-backdrop-filter: blur(6px) saturate(1.1);
     backdrop-filter: blur(6px) saturate(1.1); }
+  /* 开场导读、图下工具条、输入框：同样是一块块实心黑，一并让出透明度。
+     输入框比气泡再实一点（.55），光标和占位字在花哨背景上才不至于发飘。 */
+  .mid.has-bg .intro {
+    background: rgba(14, 14, 18, .46);
+    border-color: rgba(255, 255, 255, .14);
+    -webkit-backdrop-filter: blur(6px) saturate(1.1);
+    backdrop-filter: blur(6px) saturate(1.1); }
+  .mid.has-bg .picbar { background: rgba(23, 23, 31, .58); }
+  /* 图片容器自带一层 #0a0a0f 打底（占位/加载时用），压在图上就是一块黑，
+     有背景时改成半透明，加载中的占位字也不至于糊在图上。 */
+  .mid.has-bg .pic { background: rgba(10, 10, 15, .35); }
+  .mid.has-bg .composer textarea { background: rgba(23, 23, 31, .58); }
+  /* 横向分隔线也调淡：纯 #1a1a22 的线压在图上像一道黑缝 */
+  .mid.has-bg .top, .mid.has-bg .composer { border-color: rgba(255, 255, 255, .09); }
   /* 气泡外的「她 / 你」小字和重发提示直接压在图上，得自带一点阴影 */
-  .log.has-bg .who, .log.has-bg .retryRow {
+  .mid.has-bg .who, .mid.has-bg .retryRow {
     text-shadow: 0 1px 4px rgba(0, 0, 0, .85); }
 
   .row { display: flex; }
@@ -305,7 +321,7 @@
     background: rgba(0,0,0,.72); padding: 18px; overflow-y: auto; }
   .cardModal.on { display: flex; align-items: flex-start; justify-content: center; }
   /* 出图画幅（2026-11-09）：点「出图」先问一句横屏还是竖屏。
-     起因是背景——聊天区 `.log.has-bg` 是 `background-size: cover`，竖图
+     起因是背景——聊天区 `.mid.has-bg` 是 `background-size: cover`，竖图
      （2456×3686）铺 1200×760 的窗口要按宽度放大，纵向只剩约四成，头和脚
      都被切掉；横图（3680×2464）只裁掉边缘几个百分点，当背景才成立。
      反之手机竖屏用横图会上下大量留白。所以让玩家自己选，一次点击就出图。 */
@@ -867,7 +883,7 @@
     <div class="side-list" id="cards"></div>
   </aside>
 
-  <main class="mid">
+  <main class="mid" id="mid">
     <div class="top">
       <button class="btn sm burger" id="btnBurger">☰</button>
       <a class="btn sm back" id="btnGallery" href="/gallery"
@@ -3257,15 +3273,18 @@ function renderBg(url, label, thumb, mode) {
   const guest = ROLE === "guest";
   const box = $("bgBox");
   if (box) box.style.display = guest ? "none" : "";
-  const log = $("log");
-  if (log) {
+  // 背景挂在**中栏**（2026-11-09）：只挂 `.log` 的话，开场导读、输入区、
+  // 顶栏仍是实心黑，图被切成几段。挂中栏后一栏到底都是同一张图；
+  // `.log` 自己不设底色，直接把中栏的图透上来。
+  const host = $("mid");
+  if (host) {
     if (url) {
-      log.classList.add("has-bg");
-      log.style.backgroundImage =
+      host.classList.add("has-bg");
+      host.style.backgroundImage =
         'linear-gradient(rgba(8,8,12,.35), rgba(8,8,12,.35)), url("' + url + '")';
     } else {
-      log.classList.remove("has-bg");
-      log.style.backgroundImage = "";
+      host.classList.remove("has-bg");
+      host.style.backgroundImage = "";
     }
   }
   if (guest) return;

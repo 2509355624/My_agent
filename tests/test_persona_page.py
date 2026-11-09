@@ -158,5 +158,45 @@ class SlotButtonTest(unittest.TestCase):
         self.assertIn("if (wantSlots || !slotPick)", fn)
 
 
+class BackgroundPoursOnMidTest(unittest.TestCase):
+    """背景图铺的是**整个中栏**，不是只铺聊天区（2026-11-09 用户两次追问）。
+
+    第一次只把气泡改半透明，用户截图回来：「你管这个叫透明聊天框？」——
+    因为图只铺 `.log`，开场导读、输入区、顶栏仍是三块实心黑，图被切成几段。
+    所以现在 `has-bg` 挂在 `#mid` 上，聊天区自己不设底色。
+    """
+
+    def setUp(self):
+        self.html = _read()
+
+    def test_background_is_owned_by_mid_not_log(self):
+        self.assertIn('<main class="mid" id="mid">', self.html)
+        self.assertIn('.mid.has-bg { background-position: center', self.html)
+        self.assertNotIn(".log.has-bg", self.html,
+                         "has-bg 还挂在 .log 上，开场导读和输入区会重新变黑")
+
+    def test_js_writes_the_image_to_mid(self):
+        fn = self.html[self.html.index("function renderBg("):]
+        fn = fn[:fn.index("\n}\n") + 3]
+        self.assertIn('$("mid")', fn)
+        self.assertIn('host.classList.add("has-bg")', fn)
+        self.assertNotIn('$("log").classList', fn)
+
+    def test_intro_and_input_also_go_translucent(self):
+        for sel in (".mid.has-bg .intro", ".mid.has-bg .picbar",
+                    ".mid.has-bg .pic ", ".mid.has-bg .composer textarea"):
+            self.assertIn(sel, self.html, "少了 %s 的透明规则" % sel.strip())
+
+    def test_no_background_keeps_the_solid_boxes(self):
+        """透明规则全挂在 `.mid.has-bg` 下——没设背景的用户观感不许变。"""
+        for rule in (".intro {", ".composer textarea {"):
+            # 只认**行首**那条基础规则（带缩进），不然会先命中
+            # `.mid.has-bg .intro {` 那条覆盖规则。
+            i = self.html.index("\n  " + rule)
+            line = self.html[i:i + 220]
+            self.assertIn("var(--bg", line,
+                          "%s 的默认底色被改了，没背景的人也变了" % rule[:-2])
+
+
 if __name__ == "__main__":
     unittest.main()
