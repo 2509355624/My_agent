@@ -4093,16 +4093,69 @@ def _v2_scoring_ctx(rec, card=None):
     }
 
 
+def _v2_stage_line(label, value, stages, vmax):
+    """一条轴的读数：`感情 43/100 —— 认准你了（40~74）`，下面跟一句这一档的她。
+
+    2026-11-09 用户拍板：写作层必须知道每个数**落在什么区间**、这个区间对应
+    什么行为，否则它只能靠编剧的二手摘要演。区间和文案全部从配置读，代码
+    只算「这一档从哪到哪」，不另造一套标准。
+    """
+    rows = [s for s in (stages or []) if isinstance(s, dict)]
+    if not rows:
+        return ""
+    rows = sorted(rows, key=lambda s: _v2_i(s.get("min")), reverse=True)
+    cur = rows[-1]
+    for s in rows:
+        if value >= _v2_i(s.get("min")):
+            cur = s
+            break
+    lo = _v2_i(cur.get("min"))
+    ups = [s for s in rows if _v2_i(s.get("min")) > lo]
+    hi = ((_v2_i(min(ups, key=lambda s: _v2_i(s.get("min"))).get("min")) - 1)
+          if ups else vmax)
+    out = ["%s %d/%d —— %s（%d~%d）"
+           % (label, value, vmax, cur.get("name") or "?", lo, hi)]
+    desc = str(cur.get("desc") or "").strip()
+    if desc:
+        out.append("  " + desc)
+    return "\n".join(out)
+
+
 def _v2_injection(res):
     """给第二段演员的事实块。**全部中文自然语言**——只扔 confess / yandere
-    这种英文字段名，演员根本不知道前面那个数是什么意思，等于白算。"""
+    这种英文字段名，演员根本不知道前面那个数是什么意思，等于白算。
+
+    2026-11-09 加「读数」：以前这里只给 `关系：【恋人】` 一个名字，数值、区间、
+    档位含义一条都没有，写作层只能照编剧的摘要演。现在四条关系轴各给
+    「数值 / 满分 / 档位名 / 区间 / 这一档的她」——配置里怎么写，这里就怎么给。
+    """
     if not isinstance(res, dict) or not res.get("active"):
         return ""
-    lines = ["## 你们现在到这一步了（系统按状态结算的事实，照这个演，不要自己改）", ""]
-    lines.append("关系：【%s】" % (res.get("tierName") or "?"))
-    desc = str(res.get("relationDesc") or "").strip()
-    if desc:
-        lines += ["", desc]
+    cfg = _v2_config()
+    vmax = _v2_i((cfg.get("value") or {}).get("max"), 100)
+    cmax = _v2_i((cfg.get("confess") or {}).get("max"), 50)
+    ymax = _v2_i((cfg.get("yandere") or {}).get("max"), 100)
+    lines = ["## 她现在在哪（系统按状态结算的事实，照这个演，不要自己改）", ""]
+    for row in (
+        _v2_stage_line("感情", _v2_i(res.get("value")),
+                       cfg.get("tiers"), vmax),
+        _v2_stage_line("她心里那句话", _v2_i(res.get("confess")),
+                       (cfg.get("confess") or {}).get("stages"), cmax),
+        _v2_stage_line("病娇", _v2_i(res.get("yandere")),
+                       (cfg.get("yandere") or {}).get("stages"), ymax),
+    ):
+        if row:
+            lines.append(row)
+            lines.append("")
+    lines.append("这些数是后台记的，她不会说出口，也不会拿它当理由；你按档位对应的"
+                 "那个她去演，别自己改数、别在正文里报数。")
+    lines.append("「她心里那句话」只说明她把话攒到了哪一步——这不是分数解锁，"
+                 "也不是她现在就要开口。")
+    # 全书索引（2026-11-09）：这本书第 1 节写的是**旧标尺**（肢体接触 / 开始凿
+    # 那一套），和这条线用的档位名对不上——不点破的话，模型会拿错表对号。
+    # 身体那几条轴的分档文案由 `adult_state.block()` 直接给中文，也不用回书里翻。
+    lines.append("（《状态值全书》第 1 节是旧标尺，这条线以这里给的读数为准；"
+                 "身体那几条轴的分档写法会另给一段，用得上才给，不用回书里找。）")
 
     contacts = res.get("contacts") or []
     lines += ["", "已经发生的身体接触（只记事实，不是许可）："]
@@ -4118,14 +4171,6 @@ def _v2_injection(res):
         lines.append("· 还没有超出客套的接触。")
     lines.append("现在到哪一步：【%s】。拨头发、递东西、喂食、并肩走都只让她心里软一点，"
                  "不算接触，不要拿它们当进度。" % (res.get("contactName") or "还没碰过"))
-
-    cs = str(res.get("confessName") or "").strip()
-    cd = str(res.get("confessDesc") or "").strip()
-    lines += ["", "她心里那句话：【%s】。" % (cs or "还没想过")]
-    if cd:
-        lines.append(cd)
-    lines.append("这不是分数解锁，也不是她现在就要开口；它只说明她把话攒到了哪一步，"
-                 "你按这个分寸演她。")
 
     if res.get("just_together"):
         lines += ["", "**这一刻你们在一起了。**把这一拍演出来，不要写成收场——"

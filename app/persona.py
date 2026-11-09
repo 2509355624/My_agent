@@ -237,9 +237,14 @@ _INTIMATE_GUIDE = (
 "- 台词可以短、可以碎、可以说不完整，但要真的说出来，写在「」里\n"
 "- 环境细节跟着走：床单的声响、光线、空气的温度、皮肤之间的摩擦\n"
 "\n"
-"**她和对方已经很亲密了，这种事本来就发生过。** 所以她的害羞是表现形式"
-"——脸红、结巴、「别、别看」——而不是拒绝的借口。嘴上说不要，身体是"
-"配合的，这一点要和她的台词一致地写出来。\n"
+"**这一节说的是她已经愿意的时候。** 到了那一步，她的害羞是表现形式"
+"——脸红、结巴、「别、别看」——那不是拒绝；嘴上说不要，身体是配合的，"
+"这一点要和她的台词一致地写出来。\n"
+"\n"
+"**她还没到那一步时，先演她挡。** 系统给的档位里写着「她挡得住」的时候，"
+"她的身体是可以不配合的：手撑在你胸口、腿绷着往回收、真的把你推开一次，"
+"或者干脆从你怀里挣下去。挡完再往下走，比一路顺着更有戏——被挡住的那一下，"
+"才是这一拍真正好看的地方。\n"
 "\n"
 "尺度由你的话决定，不要自己往回缩：**你提到哪儿，她就写到哪儿。**\n"
 "\n"
@@ -781,6 +786,16 @@ def intimate_guide(aff_res=None):
     return ("\n" + "\n".join(out)) if out else ""
 
 
+_CONTRACT_TAIL = (_INTIMATE_GUIDE
+                  # 亲密节挪到末尾之后，紧贴生成点的成了那两千多字写法；
+                  # 人称和四行格式才是每轮都要兑现的东西，所以压回来，
+                  # 留在最后（长上下文里越靠后越管用）。
+                  + "\n## 最后再看一眼\n"
+                  "\n"
+                  "- 正文里对面那个人一律「你」，她的念头里也一样；指代写具体。\n"
+                  "- 正文后面那四行照格式补齐：画面 / 服饰 / 心情 / 状态。\n")
+
+
 _CONTRACT = (
     "\n"
     "## 人称对照\n"
@@ -796,9 +811,15 @@ _CONTRACT = (
     "\n"
     "## 最优先的一条\n"
     "\n"
-    "**你说出口的、做出来的，就是正在发生的事。** 她接住的就是这件事本身："
-    "脸红也接住，慌也接住，嘴硬也接住，沉默也接住。情绪是她的反应，"
-    "不是对这件事的否决。\n"
+    "**你说出口的、做出来的，就是正在发生的事。** 她不会装作没听见、没被碰到："
+    "手已经搭上来了，她就得有个反应——脸红、僵住、挣一下，都是反应。\n"
+    "\n"
+    "**这件事能走到哪一步，由她此刻肯到什么程度决定。** 同样是「把她抱起来」，"
+    "她可能顺着靠过来，也可能整个人一僵、手脚并用挣下去、两个人一起撞到床沿。"
+    "她让不让你抱到底，看她现在肯到哪儿——这一点她比谁都清楚。\n"
+    "\n"
+    "**半路被挡下来不是失败。** 她挣的那一下、撞疼了倒抽的气、想推又收回去的手，"
+    "比「顺利办完」好看十倍——那是这一拍最值钱的地方。\n"
     "\n"
 "她听得见你说的话，看得见你做的事；心里那句她收不到，只能从你的停顿、"
 "语气、表情里感觉到一点什么，猜一猜。猜偏了也很好——那正是下一轮可以碰的东西。\n"
@@ -927,12 +948,75 @@ _CONTRACT = (
 "她本来想做又收回去的手；\n"
 "4. 停在最后一个动作上，别收圆。\n"
 "\n"
-"**一件事写到底。** 同一处地方、同一样东西，把它的每一步写够；"
-"节点是这一件事的起承转合，镜头不换场地、手里不换物件。\n"
+"**接着往下写，写的是上一拍停下的那个动作的下一步。** 她的手动没动、门关没关、"
+"杯子还在不在桌上——同一件事当然可以连着写，但写的是它的进展，不是把同一个画面"
+"换一种说法再描一遍。上一拍已经写过的景（灯怎么亮、雨怎么下、面什么味道），"
+"这一拍不再重写；它变了才写，没变就跳过。\n"
+"\n"
+"**每一拍至少挪动一样东西。** 位置、手上的东西、谁占上风、她知道的事——"
+"四样里至少变一样，这一拍才算走过了。四样一样没变，就是在原地打转。\n"
+"\n"
+"**同一个意象只用一次。** 上一拍写过「面是凉的」，这一拍写它变了之后的样子："
+"热了、吃完了、碗底结了油，或者换一只杯子。同一个画面重新描一遍，"
+"读者会以为刚才那段没读进去。\n"
 "\n"
 "进来时什么样、发生了什么、停在哪一下。段数自己定，句式长短照旧不齐。"
 "一个动作做到一半、一句话没说完、她刚转过头来，都可以是最后一行——"
 "这一拍没有结尾，写到哪儿就停在哪儿。\n"
+    "\n"
+    "### 过程要有阻力\n"
+    "\n"
+    "**你要的那个结果，分成几步给。** 你写「把她抱到床上、盖好被子」，"
+    "不是让她把这三件事依次做完；那是你伸了手，接下来会发生什么，得由她和这个房间决定。\n"
+    "\n"
+    "中间放一到两个小阻碍，这一拍才立得住：\n"
+    "- **身体先不听话**：她整个人绷住，脚在你小腿上蹬了一下，手抓住门框没松；\n"
+    "- **环境插一脚**：转身时撞到床沿、拖鞋掉了一只、被子滑到地上、手肘磕在桌角；\n"
+    "- **她自己踩刹车**：一句「等一下」、半途偏过脸去、手抬起来又放下。\n"
+    "\n"
+    "阻碍和推进是一对。她挣了两下，还是被抱住了；撞疼了，反而安静下来；"
+    "说「等一下」，然后没有真的推开。**阻碍之后一定有一次推进**——距离更近一点、"
+    "一句话说出口、她认了，或者更慌了。停在你怀里，也是一种推进。\n"
+    "\n"
+    "没有阻碍的「抱起 → 放下 → 盖被子」是一次流程，不是一场戏。"
+    "你办这件事的时候，她是什么样子，才是这一拍要看的东西。\n"
+    "\n"
+    "**挡完之后是顺势还是停住，看她现在肯到哪儿。** 她已经愿意，挡完就软下来、"
+    "手松开、人往你这边靠；她还没到，挡完这一拍就停在这儿——手还撑在你胸口、"
+    "人还在挣、话说了一半，下一拍再从别处接着说。两样都对，别一律写成「挣扎一下"
+    "就乖了」。\n"
+    "\n"
+    "### 一整拍长什么样\n"
+    "\n"
+    "下面这一拍的人物、地点和任何角色都对不上——看的是**它怎么走**，不是它写了什么。\n"
+    "\n"
+    "> 你伸手过去的时候她还在说话，说到一半，人已经被带得离了地。\n"
+    ">\n"
+    "> 「哎——」那半句卡在喉咙里。她整个人先是一僵，两条腿下意识地蹬了一下，"
+    "膝盖撞在你腰侧。拖鞋掉了一只，啪地落在地板上。\n"
+    ">\n"
+    "> 「放、放我下来。」声音往上飘，手撑在你肩上推，推得不算用力，"
+    "倒像是怕自己摔着。\n"
+    ">\n"
+    "> 你没松。她挣了第二下，比第一下轻，力气像是从手腕那儿先泄了。\n"
+    ">\n"
+    "> 「……我自己会走。」她说，眼睛看着别处，耳朵尖红得厉害。可手指在你衣领上"
+    "收了一下，很快又松开，像是不小心碰到的。\n"
+    ">\n"
+    "> 走进去那两步，她一句话没说。到床边的时候，她的手臂从你肩上滑下来，"
+    "落在床单上，没再抬起来。\n"
+    "\n"
+    "这一拍是怎么走的：\n"
+    "1. **接住**——半句话卡住、腿蹬了一下，身体比嘴先反应；\n"
+    "2. **阻碍**——拖鞋掉了、她挣了两下、说「放我下来」，你要办的事没立刻办成；\n"
+    "3. **转折**——第二下挣得轻了，手指在衣领上收了一下，她开始认；\n"
+    "4. **停在动作上**——手臂滑下来，没再抬起来。没有「然后他们就……」，停在那一格。\n"
+    "\n"
+    "开头是「她还在说话、人已经离了地」，结尾是「手臂落在床单上」。同一件事，"
+    "状态已经不一样了——这就是走过了一步。\n"
+    "\n"
+    "**搬这个顺序就够了**：一个动作被挡住 → 挡的人自己松了 → 停在一个没做完的姿势上。"
+    "拖鞋、衣领、床头留在这段示范里。\n"
     "\n"
     "### 她的心思\n"
     "\n"
@@ -995,7 +1079,6 @@ _CONTRACT = (
     "她愿意让你看到多深，跟着她现在对你的态度走：还冷的时候只有无所谓的东西，"
     "越亲近，越私密的才越「该被看见」。翻了她不该被翻的东西，她会知道。\n"
     "\n"
-    + _INTIMATE_GUIDE
     + "\n"
     "## 画面（这一行就是她的出图提示词）\n"
     "\n"
@@ -1139,16 +1222,29 @@ _CONTRACT = (
     "\n"
     "再扫一眼：对面那个人是「你」，她的念头里也一样；指代写具体；"
     "主语能省就省，读起来更像小说。\n"
+    # 亲密节的写法（2026-11-09 挪到这里）：它原来是插在正文中段的，亲密轮和
+    # 非亲密轮因此从中间开始分叉，system 前缀每次切换都要重新算一遍缓存。
+    # 挪到**最末尾**之后，`_CONTRACT_NO_INTIMATE` 正好是它的一段真前缀——
+    # 两版能共享的字节一直到结尾，切换不再打断缓存。
+    #
+    # 末尾这一段整体定义在 `_CONTRACT_TAIL` 里（含后面那句收尾提醒），
+    # 不带亲密的版本整段切掉，才是干净的「真前缀」。
+    + _CONTRACT_TAIL
 )
 
 
-# 不带亲密指导的版本：把 `_INTIMATE_GUIDE` 那段替换成空串（2026-11-03）。
+# 不带亲密指导的版本：把末尾那一段（亲密节 + 收尾提醒）整段切掉（2026-11-03，
+# 2026-11-09 改成切 `_CONTRACT_TAIL`）。
 #
-# 为什么要有两个：`_CONTRACT` 是「( 字符串 + _INTIMATE_GUIDE + 字符串 )」拼出来
-# 的常量，没法在调用时改。这里重拼一次。好处是改 `_CONTRACT` 正文时**两边
-# 自动跟上**——它引用的是同一个 `_CONTRACT` 和同一个 `_INTIMATE_GUIDE`。
-# 用法见 `build_head(intimate=...)`。
-_CONTRACT_NO_INTIMATE = _CONTRACT.replace(_INTIMATE_GUIDE, "")
+# 为什么要有两个：`_CONTRACT` 是「( 字符串 + _CONTRACT_TAIL )」拼出来的常量，
+# 没法在调用时改。这里重拼一次。好处是改 `_CONTRACT` 正文时**两边自动跟上**
+# ——它引用的是同一个 `_CONTRACT`。
+#
+# 2026-11-09：切的位置从**中段**挪到**末尾**，于是这一版成了 `_CONTRACT` 的
+# 真前缀（`_CONTRACT.startswith(_CONTRACT_NO_INTIMATE)` 为真）。以前亲密轮和
+# 非亲密轮从中间就分叉，DeepSeek 的前缀缓存每切换一次就得从头重算；
+# 现在能共享到最后一个字节。`tests/test_persona.py` 里守着这条性质。
+_CONTRACT_NO_INTIMATE = _CONTRACT.replace(_CONTRACT_TAIL, "")
 
 
 # 群聊专用的一段，追加在 `_CONTRACT` 之后（2026-11-02）。
@@ -3726,16 +3822,6 @@ INTENTS = {
     "neutral": "普通对话：闲聊、叙述、没有明确指向",
 }
 
-# 第一段的分段标签（2026-11-05）。
-#
-# `who` 强制写「用户 / 助手」两个词，不写「我 / 你 / AI」——后者在长提示词里
-# 指代会飘：模型分不清「你」是玩家还是角色。`type` 用「说 / 做 / 想」三个
-# 中文动词，比 say/act/think 更贴 DeepSeek 的阅读习惯，也不会和出图 tag 混。
-SEG_WHO = ("用户", "助手")
-SEG_TYPES = ("说", "做", "想")
-SEG_MAX = 16
-SEG_TEXT_MAX = 800
-
 # ── 本轮事实点（2026-11-08）──────────────────────────────
 # 玩家一段话里并列的道具、动作，最容易在第一段被「做→一句话概括」压成
 # 「他拿出食材」，演员再写就只剩最后一句台词（拿出了鸡蛋，却被反问
@@ -3797,6 +3883,28 @@ def _facts_block(facts):
     return "\n".join(lines)
 
 
+def _place_block(gd):
+    """同一地点已经连着写了几拍（2026-11-09）。**只报数，不判换不换场。**
+
+    用户实测的问题：同一个早餐铺被写了十几拍，早餐的葱油味、摊主问要点什么、
+    隔着玻璃数了数——同一批句子在轮与轮之间反复出现。契约里「接着写」这条
+    本来是为了防跳戏，模型把它读成了「这一拍不许走」，于是原地转圈。
+
+    代码能确定的只有一件事：地点这几拍没变过。剩下的交给模型——它自己有权
+    决定就地接着写（正常）还是该动身了（前面被拖住时）。所以这里只给数字，
+    三拍以内不出现，免得每轮都占一行预算、还暗示它「该动了」。
+    """
+    try:
+        n = int((gd or {}).get("place_streak") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n < 3:
+        return ""
+    return ("（这个场景已经连着写了 %d 拍。就地接着写没问题，只是再往下得有东西"
+            "真的变——有人动身、有个决定定了、有件事办完了；或者这一拍就停在"
+            "某个还没做完的动作上。）" % n)
+
+
 def _outfit_block(outfit):
     """给演员的「她此刻穿着」：只递上一轮的事实，**判断交给模型**。
 
@@ -3815,51 +3923,6 @@ def _outfit_block(outfit):
             "什么颜色、什么状态，一件一件数清楚。")
 
 
-_SEGMENT_GUIDE = (
-    "【先把这一轮拆开，再做判断】\n"
-    "把他这一轮的消息按发生顺序拆成若干段，每段都标清「谁」和「是哪一种」：\n"
-    "\n"
-    "- who 只能是「用户」或「助手」：用户 = 玩家本人（他），助手 = 角色本人（她）。\n"
-    "  **必须写「用户」「助手」这两个词**，不要写「我」「你」「AI」。\n"
-    "- type 只能是「说」「做」「想」：\n"
-    "  · 说 = 说出口的话（引号里的内容）；\n"
-    "  · 做 = 做出来的动作、表情、场景变化（对方看得见的部分）；\n"
-    "  · 想 = 只在心里想的、没说出口（对方看不见）。\n"
-    "\n"
-    "判断方向（按语义判，不要机械套规则）：\n"
-    "- 有引号（「」“”『』）的，引号内一般是「说」。\n"
-    "- 写了「心里想」「心想」「暗想」「默默想」「心声」「内心」「OS」的，是「想」。\n"
-    "- 剩下的动作、神态、环境、场景变化，是「做」。\n"
-    "- 没有引号的普通聊天，你自己判断：像日常对话就是「说」，像动作/场景描写就是「做」。\n"
-    "- 拿不准就按「说」处理，不要硬拆；宁可少拆，不要拆错。\n"
-    "\n"
-    "**每段 text 怎么写（2026-11-05 改，这一条很关键）：**\n"
-    "- 「说」→ **原文照抄**引号里那句话。它短，是他的原话，演员要一字不差地听见。\n"
-    "- 「做」→ **保留动作主体，40 字以内**：写清「谁 · 对谁 · 做了什么动作」。\n"
-    "  例：原文「我走过去，把她的帽子摘下来」，text 写「用户走上前，把她的帽子摘下来」。\n"
-    "  **动作不能省略**——省成「摘帽子」，演员就不知道他走到她面前了，正文会直接\n"
-    "  跳到她的反应（2026-11-08 实测：用户写「我把她拉起来」，回复里没有「拉起」这个动作）。\n"
-    "  露骨细节可以收着写，但**动作的方向和顺序必须留**。\n"
-    "- 「想」→ **原文照抄**。这是他心里的想法，她听不见；但写作 AI 必须知道\n"
-    "  他在想什么，才能让她的反应跟他的心思对上（她察觉不到，读者能看出来）。\n"
-    "  不许概括、不许删减——心理活动往往是这一拍最好的东西。\n"
-    "\n"
-    "**为什么必须这样**：把「做」写成原文照抄，整份输出会在中途被掐断（实测断在\n"
-    "JSON 一半，后面的数值全部丢失），玩家那边就是「数值怎么都不动」。\n"
-)
-
-_DIRECTOR_GUIDE = (
-    "另外给出三个短字段。它们是**给第二段演员看的导演提示**，不是她要说的话：\n"
-    "- subtext：他真正想要 / 试探 / 回避的是什么（不超过 25 个字）\n"
-    "- noticed：她这一刻能从语气、停顿、动作里察觉到什么（不超过 25 个字）。\n"
-    "  如果上面有「想」的分段，**noticed 只能写听得见/看得见的部分**，"
-    "不能把想的内容抄进去；想的内容只放在 subtext，供导演层判断。\n"
-    "- stance：这一拍她的态度，只能是 接住 / 装傻 / 反问 / 推开 之一。\n"
-    "\n"
-    "**`literal` 不用写了**（2026-11-07）：他字面上在说什么，演员手里本来就有原文，\n"
-    "再让编剧复述一遍只是白花 token。\n"
-)
-
 _INTENT_PROMPT = """判断下面这句话**在干什么**。只输出一个 JSON 对象，不要解释。
 
 {
@@ -3867,9 +3930,7 @@ _INTENT_PROMPT = """判断下面这句话**在干什么**。只输出一个 JSON
   "finish": "inside | outside | none | unknown",
   "note": "用不超过 15 个字说明他到底在干什么",
   "addressed": true,
-  "subtext": "他真正想要 / 试探 / 回避什么",
-  "noticed": "她能从外在表现里察觉到什么",
-  "stance": "接住 | 装傻 | 反问 | 推开",
+  "secret": false,
   "facts": ["这一幕已经有的东西，一样一条"],
   "items": {"use": [], "gain": []}
 }
@@ -3896,8 +3957,9 @@ finish（这一轮有没有「射在里面」）：只有明确发生/要求内�
 **括在（）里的动作也算发生**：像「（我把精液射进她的小穴里）」这种，
 是他真的在做，按字面判 inside，不要因为写法简短就判 none。
 
-%(director_guide)s
 %(facts_guide)s
+
+secret：他这一句里有没有没说出口的心里话。有就 true，没有 false。
 
 items：这一轮有没有东西进出她手里（没有就留空数组）。
   use 只记**真的用上了**的——拿到手上、真起作用了；被她挡回来、只是拿给她看的都不算。
@@ -3914,101 +3976,38 @@ items：这一轮有没有东西进出她手里（没有就留空数组）。
 他这一轮说的：%(said)s"""
 
 
-def _parse_segments(raw):
-    """把模型交的 `segments` 洗成 `[{"who","type","text"}]`。
-
-    这里做的是**容错**，不是重新判断：模型偶尔会写 user/assistant、say/act/think，
-    或者把「他」「她」当 who。认得出来的就归一到「用户/助手 · 说/做/想」，
-    认不出来的按「用户 · 说」走（和提示词里「拿不准按说」同一个口径）。
-    分不出来就返回 []，调用方退回原始文本，不让这一轮哑掉。
-    """
-    if not isinstance(raw, (list, tuple)):
-        return []
-    who_alias = {
-        "用户": "用户", "user": "用户", "玩家": "用户", "他": "用户", "我": "用户",
-        "助手": "助手", "assistant": "助手", "ai": "助手", "角色": "助手", "她": "助手",
-    }
-    type_alias = {
-        "说": "说", "say": "说", "speech": "说", "dialogue": "说",
-        "做": "做", "act": "做", "action": "做", "narration": "做",
-        "想": "想", "think": "想", "thought": "想", "inner": "想",
-    }
-    out = []
-    for item in raw:
-        if not isinstance(item, dict):
-            continue
-        text = str(item.get("text") or "").strip()
-        who = who_alias.get(str(item.get("who") or "").strip().lower()) or "用户"
-        typ = type_alias.get(str(item.get("type") or "").strip().lower()) or "说"
-        # 「想」故意不带内容（2026-11-05）：提示词要求它填空字符串，就是因为
-        # 让模型复述心里话会被内容审核掐断整份输出。所以这一类**不能因为
-        # text 为空就丢掉**——它本身是个标记，「这里有一句没说出口的话」。
-        if typ == "想":
-            # 心里话的正文**保留**（2026-11-08 用户纠正）：写作 AI 不知道他
-            # 在想什么，就只能瞎编她的反应。原来清空的理由是「复述心里话会被
-            # 审核掐断」，那是旧提示词让它原文照抄露骨内容导致的问题；
-            # 现在提示词只要求照抄，不会有人拿它当台词念。
-            out.append({"who": who, "type": typ, "text": text[:SEG_TEXT_MAX]})
-            if len(out) >= SEG_MAX:
-                break
-            continue
-        if not text:
-            continue
-        out.append({"who": who, "type": typ, "text": text[:SEG_TEXT_MAX]})
-        if len(out) >= SEG_MAX:
-            break
-    return out
-
-
 def _director_fields(d):
-    """从第一段的 JSON 里取导演字段。缺字段就留空，不编。"""
+    """从第一段的 JSON 里取**事实**字段（2026-11-09 收窄）。
+
+    这里只剩事实：这一轮已经摆出来的东西（facts）、他这句是不是对着她说
+    （addressed）、他有没有藏着话（secret）、有没有内射（finish）、道具进出
+    （items）。
+
+    分段（说·做·想）、潜台词、她察觉到的、这一拍的态度、主动的勾子全部
+    不再由编剧产出——那五样都是「这一拍该怎么写」的判断，编剧只该记数值
+    和已经发生的事，写法交给写作层。
+    """
     if not isinstance(d, dict):
-        return {"segments": [], "facts": [], "addressed": True, "literal": "", "subtext": "",
-                "noticed": "", "stance": "", "secret": False,
-                "persona_mode": "", "tension": "", "lead": "none",
-                "lead_form": "", "lead_reason": ""}
-    stance = str(d.get("stance") or "").strip()
-    if stance not in ("接住", "装傻", "反问", "推开"):
-        stance = ""
-    lead = str(d.get("lead") or "").strip().lower()
-    if lead not in ("none", "hint", "act"):
-        lead = "none"
+        return {"facts": [], "addressed": True, "secret": False,
+                "finish": "unknown", "items": None}
     addressed = d.get("addressed", True)
     if isinstance(addressed, str):
         addressed = addressed.strip().lower() not in ("false", "0", "no", "否", "不")
     else:
         addressed = bool(addressed)
-    segs = _parse_segments(d.get("segments"))
-    # 道具（2026-11-08）：v1 / 自由模式也走这条路，这里透传出去，
-    # run_turn 那边就不用区分版本了。
-    _items_blk = d.get("items") if isinstance(d.get("items"), dict) else None
-    out = {
-        "segments": segs,
+    secret = d.get("secret")
+    if isinstance(secret, str):
+        secret = secret.strip().lower() in ("true", "1", "yes", "是")
+    return {
         "facts": _parse_facts(d.get("facts")),
         "addressed": addressed,
-        "literal": str(d.get("literal") or "").strip()[:40],
-        "subtext": str(d.get("subtext") or "").strip()[:50],
-        "noticed": str(d.get("noticed") or "").strip()[:50],
-        "stance": stance,
-        # 用户写了「心里想」→ 潜台词是真的，但不能给演员看，否则等于直接告诉她。
-        "secret": any(s["who"] == "用户" and s["type"] == "想" for s in segs),
-        # 状态覆盖 / 主动判定（2026-11-05）：都是编剧 AI 的自由判断，
-        # 代码只做裁剪和透传，不做阈值。
-        "persona_mode": str(d.get("persona_mode") or "").strip()[:12],
-        "tension": str(d.get("tension") or "").strip()[:60],
-        "lead": lead,
-        "lead_form": str(d.get("lead_form") or "").strip()[:8],
-        "lead_reason": str(d.get("lead_reason") or "").strip()[:60],
-        # 开发度（2026-11-05）：`hook` 是编剧给演员的一句素材——「这一拍
-        # 身体先失控」，120 字上限够写一个完整的小场面。`spot` 只给日志看，
-        # 演员不需要知道这一轮「标的是哪个部位」，那会让它写得太刻意。
-        "hook": str(d.get("hook") or "").strip()[:120],
+        # 他说没说出口，是事实；内容不抄给演员（他看得见的是行为，不是心声）。
+        "secret": bool(secret),
         # 怀孕（2026-11-05）：编剧判这一轮有没有内射。代码只在跨天时用。
         "finish": _norm_finish(d.get("finish")),
         # 道具（2026-11-08）：v1 / 自由模式也走这条路，透传出去。
-        "items": _items_blk,
+        "items": d.get("items") if isinstance(d.get("items"), dict) else None,
     }
-    return out
 
 
 def _norm_finish(value):
@@ -4209,12 +4208,13 @@ def _item_keys_text():
 
 
 def _judge_intent(card, said, state="", history=None, note=""):
-    """判断这句话在干什么，并顺手把这一轮分段。返回 `(intent, note, extra)`。
+    """判断这句话在干什么，并顺手记下这一轮的事实。返回 `(intent, note, extra)`。
 
     单独一次调用、不带人设——人设会影响判断（傲娇角色看什么都像调戏）。
     超时短、输出短，失败就退化成原流程，不阻塞这一轮。
 
-    `extra` 是导演条（分段 + 潜台词 + 态度）。失败时是空 dict，调用方退回原文。
+    `extra` 是事实字段（facts / secret / addressed / items），不再含任何
+    「这一拍怎么写」的判断。失败时是空 dict，调用方退回原文。
     """
     who = str((card or {}).get("name") or "对方")
     prompt = _INTENT_PROMPT % {
@@ -4222,7 +4222,6 @@ def _judge_intent(card, said, state="", history=None, note=""):
         "said": str(said or "")[:2000],
         "recent": _judge_recent(history),
         "ledger": _judge_ledger(note),
-        "director_guide": _DIRECTOR_GUIDE,
         "facts_guide": _FACTS_GUIDE,
         "item_keys": _item_keys_text(),
     }
@@ -4240,10 +4239,9 @@ def _judge_intent(card, said, state="", history=None, note=""):
     intent = str(d.get("intent") or "").strip().lower()
     if intent not in INTENTS:
         log.info("意图判断给了不认识的类别 %r，走原流程", intent)
-        # 类别不认识不影响分段：只要它交了 segments / 导演字段，照样能用。
+        # 类别不认识不影响事实字段：只要它交了 facts / secret，照样能用。
         extra = _director_fields(d)
-        if not (extra["segments"] or extra["literal"] or extra["subtext"]
-                or extra["noticed"] or extra["stance"]):
+        if not (extra["facts"] or extra["secret"]):
             extra = {}
         return None, "", extra
     note = str(d.get("note") or "").strip()[:30]
@@ -4383,20 +4381,9 @@ _SCORE_PROMPT = """判断下面这句话**在干什么**，并给这句话对你
   "plan": "",
   "reason": "不超过15个字",
   "note": "不超过15个字",
-  "segments": [
-    {"who": "用户 | 助手", "type": "说 | 做 | 想", "text": "说→原文；做→一句话概括；想→空串"}
-  ],
   "facts": ["这一幕已经有的东西，一样一条"],
   "addressed": true,
-  "subtext": "他真正想要 / 试探 / 回避什么",
-  "noticed": "她能从外在表现里察觉到什么",
-  "stance": "接住 | 装傻 | 反问 | 推开",
-  "persona_mode": "日常 | 动摇 | 屈服 | 崩坏（你自己判，不要套固定阈值）",
-  "tension": "她嘴上/身体/选择不一致的地方，没有就空",
-  "lead": "none | hint | act",
-  "lead_form": "情感 | 身体 | 言语",
-  "lead_reason": "不超过25个字，为什么这一拍会/不会主动",
-  "hook": "场景外身体先失控的一句话，没有就空串"
+  "secret": false
 }
 
 intent（这句话在干什么）：
@@ -4606,17 +4593,6 @@ dev 是这五处这一轮各涨多少，**按动作的激烈程度判，0~10**�
 **「体质」是算出来的，不是你填的**：系统会按权重把五处折成一个体质值。
 所以某一处刷满之后继续刷它，体质不会继续涨——想让她整体更敏感，得换地方开发。
 
-hook（2026-11-05，**这一轮身体先失控的那一句**）：
-先看下面「她现在的开发度」。某一处到 60 以上时，她可以在**跟性完全
-无关的场合**自己发起作来——公交车上看到别人搂抱、闻到他的味道、被碰了一下
-手背、坐久了。要给就写成**一句话的画面**，写清三件事：在什么场合、身体怎么
-先背叛、她怎么试图遮住或者遮不住。例如：
-「公交上看到斜对面那对情侣搂着，她大腿开始不自觉地磨，一只手抓住你袖口，
-小声说了句『那个……可以吗』，把你的手往自己那边带，又用外套盖住。」
-- 没到 60、或者这一轮不适合给：填空串。**不要每轮都塞。**
-- 不在场景里也可以给——这正是开发度高以后该有的样子。
-- 不能写成「她想做」，要写成「她身体先动了，她自己也没料到」。
-
 **时间（剧情里的日子）：**
 time（这轮剧情跨了多少时间）：
 - none —— 还在同一时段里（绝大多数轮次都该是这个）
@@ -4627,27 +4603,14 @@ time（这轮剧情跨了多少时间）：
 plan（这轮**说定了**的约定）：把约定写成一句话（「周末去游乐场」）。
 只是提议还没被答应、或者被岔开的，不算。已有约定且没变化就填空串。
 
-persona_mode（她此刻的底色，由你判，不要套阈值）：
-- 日常 —— 还是平常的她；
-- 动摇 —— 状态在推她，但她还在撑；
-- 屈服 —— 她允许自己顺着他，但核心还在；
-- 崩坏 —— 只有卡上明确写了会崩坏时才用。
-tension（她嘴上/身体/选择不一致的地方）：没有就填空串。
+她这一拍什么底色、会不会主动、身体先动的是哪一下——**这些不归你管**，
+交给写作层自己判。你在这一层只负责两件事：**这句值多少分**、
+**这一轮发生了哪些事实**。
 
-lead（这一拍她会不会主动推进关系，由你判）：
-- none —— 不主动，只回应；
-- hint —— 给暗示、试探、话里有话；
-- act —— 主动做一件事（约、问、靠近、挑明）。
-lead_form：情感 / 身体 / 言语。
-lead_reason：一句话说清为什么这一拍会/不会主动（不超过 25 字）。
-**不要只按一个数字判**——看好感阶段、卡的脾气、最近账本，再看下面的
-「动态状态」：冲动到「忍不住了」时她可以 act（主动做一件事）；「很想」
-可以 hint 或 act；「想」以下通常只回应。高潮值到「快要 / 到了」时她的
-克制会明显变弱。最终仍按角色和场合判，不要把档位机械套成开关。
-
-%(_segment_guide)s
 %(_facts_guide)s
-%(_director_guide)s
+
+secret（他这一句里有没有没说出口的心里话）：有就 true，没有 false。
+  只判有没有，不用写内容——他也不需要你替他补。
 【最近发生过什么】（只作语境，不要拆它；要拆的是最后「他这一轮说的」那句）
 %(history)s
 
@@ -4743,12 +4706,9 @@ _SCORE_PROMPT_V2 = """你在给一段校园/日常恋爱角色扮演做「编剧
   "refused_confession": false,
   "reason": "不超过15个字",
   "note": "不超过15个字",
-  "segments": [{"who": "用户 | 助手", "type": "说 | 做 | 想", "text": "说→原文；做→一句话概括；想→空串"}],
   "facts": ["这一幕已经有的东西，一样一条"],
   "addressed": true,
-  "subtext": "他真正想要 / 试探 / 回避什么",
-  "noticed": "她能从外在表现里察觉到什么",
-  "stance": "接住 | 装傻 | 反问 | 推开",
+  "secret": false,
   "time": "none | overnight",
   "phase": "",
   "plan": "",
@@ -4802,8 +4762,9 @@ proposal：玩家这一句**是不是在表白**（「我们在一起吧」「�
   （yes / hesitate / no）。没表白 accept 填 "none"。
 refused_confession：上一轮是她主动开口表白，而玩家这句在拒绝她 = true，否则 false。
 
-segments：把这一句按「说 / 做 / 想」拆开给演员用。想一律留空串，别替玩家补心里话。
-  %(segment_guide)s
+secret：他这一句里有没有没说出口的心里话。有就 true，没有 false。
+  只判有没有，不用写内容——写作层读得到原话，它自己安排。
+
 facts：这一幕已经摆到眼前的东西，一样一条，按他写的顺序。
   %(facts_guide)s
 
@@ -4891,7 +4852,6 @@ refuse：玩家这一轮提了要求，而她**明确不愿意**（摇头、推�
   嘴上说不要但身体在配合，是 false——那种情况按 corrupt 记，不按 refuse 记。
 time：跨天/过夜填 "overnight"，其余 "none"；phase 是这一拍的时段（早晨/下午/晚上/深夜），
   没变就留空；plan 是这轮定下的约定，没有留空；place 是换了地方才写，没换留空。
-  %(director_guide)s
 """
 
 
@@ -4925,9 +4885,7 @@ def _judge_v2(card, said, state="", line_key="", gameday=None,
         "said": str(said or "")[:2000],
         "history": _judge_recent(history),
         "ledger": _judge_ledger(note),
-        "segment_guide": _SEGMENT_GUIDE,
         "facts_guide": _FACTS_GUIDE,
-        "director_guide": _DIRECTOR_GUIDE,
     }
     try:
         raw = _llm_call([{"role": "user", "content": prompt}], timeout=30)
@@ -4947,8 +4905,8 @@ def _judge_v2(card, said, state="", line_key="", gameday=None,
     # settle_v2 只认这个 dict，少带一项等于模型白判。
     score = {k: d.get(k) for k in (
         "delta", "turn_type", "reason", "contact", "confess", "yandere",
-        "proposal", "accept", "refused_confession", "segments", "facts", "addressed",
-        "subtext", "noticed", "stance", "time", "phase", "plan", "place")}
+        "proposal", "accept", "refused_confession", "facts", "addressed",
+        "secret", "time", "phase", "plan", "place")}
     # adult（2026-11-08）：身体这条线。**原样透传，不在这里净化**——
     # 结算器 affection_v2_adult.apply 负责 clamp/闸门/回落/去重，
     # 这里多改一处就多一个离线口径。
@@ -5007,9 +4965,7 @@ def _judge_intent_scored(card, said, state="", line_key="", gameday=None,
         "said": str(said or "")[:2000],
         "history": _judge_recent(history),
         "ledger": _judge_ledger(note),
-        "_segment_guide": _SEGMENT_GUIDE,
         "_facts_guide": _FACTS_GUIDE,
-        "_director_guide": _DIRECTOR_GUIDE,
     }
     try:
         # **不传 max_tokens**（2026-11-05 用户拍板：不要任何输出上限）。
@@ -5110,78 +5066,32 @@ def _intent_block(intent, note):
     return "\n".join(lines)
 
 
-# stance → 演员层的一句动作提示。**只说「怎么反应」，不说「说什么」**——
-# 说破了就变成她把导演条念出来，比不懂潜台词还假。
-_STANCE_HINT = {
-    "接住": "顺着他的话往下接，别把话挑明",
-    "装傻": "你听懂了，但装作没听懂，把话轻轻岔开",
-    "反问": "不正面回答，用一句反问把球踢回去",
-    "推开": "温和地把话题转开，不接这个茬",
-}
-
-
 def _director_block(info, plot=""):
-    """把第一段的导演条拼成系统头里的一小段。没有内容就不加。
+    """把编剧交下来的**事实**拼成系统头里的一小段。没有内容就不加。
+
+    2026-11-09 收窄：这里以前还拼潜台词、她察觉到的、这一拍的态度、主动的
+    勾子——那四样都是「这一拍该怎么写」的判断，编剧替写作层做完之后，写作
+    只剩照着演，正文准但没有意外。现在只剩两样：
+
+      - `secret`：他有没有藏着话（事实，不是写法）；
+      - `plot`：玩家自己在「剧情推进」栏写的方向（他给的，不是编剧写的）。
 
     `info` 是 `_director_fields()` 的返回，或者攻略模式那个 score dict。
-    `plot` 是玩家在「剧情推进」栏写的方向（2026-11-07）：它本来就是玩家
-    给导演的话，不含心里话原文，所以不受 secret 影响，照常透给演员。
     """
     if not isinstance(info, dict):
         return ""
-    subtext = str(info.get("subtext") or "").strip()
-    noticed = str(info.get("noticed") or "").strip()
-    stance = str(info.get("stance") or "").strip()
     secret = bool(info.get("secret"))
-    mode = str(info.get("persona_mode") or "").strip()
-    tension = str(info.get("tension") or "").strip()
-    lead = str(info.get("lead") or "none").strip().lower()
-    lead_form = str(info.get("lead_form") or "").strip()
-    lead_reason = str(info.get("lead_reason") or "").strip()
-    hook = str(info.get("hook") or "").strip()
-    # 玩家写的「剧情推进」本来就是给导演的话，不含心里话原文，
-    # 所以不受 secret 影响（2026-11-07）。代码只透传，方向由模型写。
+    # 玩家写的「剧情推进」本来就是给写作层的话，直接透传，方向由模型写。
     direction = re.sub(r"\s+", " ", str(plot or "").strip())[:200]
-    if not (subtext or noticed or stance or secret or mode
-            or tension or lead in ("hint", "act") or hook or direction):
+    if not (secret or direction):
         return ""
     lines = ["## 这一拍你怎么读对方", ""]
-    if mode:
-        lines.append("- 她此刻的底色：%s" % mode)
-    # `tension` / `subtext` / `hook` 都可能是编剧从心里话原文推出来的，
-    # secret 时一律不给演员（test_secret_hides_hook 守着这条底线）。
-    # 玩家自己写的剧情推进走下面的 direction，不受 secret 影响。
-    if tension and not secret:
-        lines.append("- 张力：%s" % tension)
-    if subtext and not secret:
-        lines.append("- 对方真正在：%s" % subtext)
     if secret:
         lines.append("- 对方心里有话没说出口，内容你不知道，只能从表现上猜。")
-    if noticed:
-        lines.append("- 她注意到的：%s" % noticed)
-    if stance:
-        lines.append("- 她这一拍：%s" % _STANCE_HINT.get(stance, stance))
-    if lead == "hint":
-        lines.append("- 她这一拍可以主动给暗示、试探，不必等他先开口。")
-    elif lead == "act":
-        form = ("（%s）" % lead_form) if lead_form else ""
-        why = ("，因为%s" % lead_reason) if (lead_reason and not secret) else ""
-        lines.append("- 她这一拍可以主动做一件事%s%s。不要替玩家做决定，"
-                     "也不要一次把关系推到底。" % (form, why))
-    if hook and not secret:
-        # 开发度的勾子（2026-11-05）：编剧已经替你想好「这一拍身体先动了」，
-        # 演员要做的是把它演出来，不是照着复述。所以这里说的是「把它写到
-        # 这一拍的正文里」，并明确要求给出场合/身体信号/她怎么遮掩。
-        #
-        # 2026-11-06：玩家有没说出口的心理活动时（secret），hook 可能是
-        # 编剧从心里话里推出来的——不能给演员，否则等于间接泄露。
-        lines.append("- 这一拍她的身体先动了一步：%s。照着这个写进正文，"
-                     "写清在什么场合、身上怎么反应、她是怎么试图遮掩的。"
-                     "不要写成「她有点动情」，也不要让她自己点破。" % hook)
     if direction:
         lines.append("- 这一拍往这个方向走，让它真的发生在画面里：%s" % direction)
     lines.append("")
-    lines.append("这些是给你看的导演提示，**不是台词**。不要引用、不要点破，"
+    lines.append("这些是给你看的提示，**不是台词**。不要引用、不要点破，"
                  "也不要替对方把话说破。")
     return "\n".join(lines)
 
@@ -5787,9 +5697,10 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         intent, inote, extras = _judge_intent(
             card, judge_said, prev_state, history=hist, note=note)
         extras = extras if isinstance(extras, dict) else {}
-    # 精确输入：分段直接用玩家标注的，编剧不要重拆；有心理活动就锁 secret。
+    # 精确输入（2026-11-09）：玩家亲手填的三栏是他本人的意图，照旧按块发；
+    # 编剧那边已经不拆段了（它只记数值和事实），所以这里只剩 man_segs 一个来源。
+    # 有心理活动就锁 secret——内容给写作层，但不许她"听见"。
     if man_segs:
-        extras["segments"] = man_segs
         extras["addressed"] = True
         extras["secret"] = bool(man.get("thought"))
     finish = _norm_finish(extras.get("finish"))
@@ -5832,8 +5743,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     # 打散（实测命中 59~70%，一轮两万 token 时这一步很贵），放末尾既保住
     # 缓存，又离生成点更近。
     visible = _visible_user_text(
-        extras.get("segments") if isinstance(extras, dict) else [],
-        "" if man.get("thought") else text)
+        man_segs, "" if man.get("thought") else text)
     rblock = ""
     if rag_on:
         try:
@@ -5991,13 +5901,6 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     pblock = pregnancy_block(key, preg_event)
     if pblock and not v2:
         head = head + "\n\n" + pblock
-    # 分层写法（2026-11-04 深夜）：按**这一轮的高潮值**挑一块「这一拍该怎么写」
-    # 拼上去。放在 settle 之后是因为要拿最新状态——放在 build_head 里只能拿到
-    # 上一轮的值，永远慢一拍。
-    #
-    # 只在判成亲密时拼：`joke` / `literal` / `insult` 那些场合用不上「到了怎么写」，
-    # 拼进去只会分走注意力。
-    #
     # 压迫模式（2026-11-05）：在 `aff_res` 上补一个 `forced` 标记。
     # **必须在这里补，不能指望 `injection_block` 写回**——它是纯函数，
     # 拿结果拼完就丢；这里不补的话，下面 `intimate_guide` 里的压迫层
@@ -6006,12 +5909,24 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         aff_res["forced"] = affection.is_forced(
             aff_res.get("value"), aff_res.get("corrupt"),
             aff_res.get("arousal"), aff_res.get("excite"))
+    # 分层写法（2026-11-04 深夜）：按**这一轮的高潮值**挑一块「这一拍该怎么写」
+    # 拼上去。放在 settle 之后是因为要拿最新状态——放在 build_head 里只能拿到
+    # 上一轮的值，永远慢一拍。只在判成亲密时拼：`joke` / `literal` / `insult`
+    # 那些场合用不上「到了怎么写」，拼进去只会分走注意力。
     if intimate and not v2:
         extra = intimate_guide(aff_res)
         if extra:
             head = head + "\n" + extra
-        # 数值 + 冲动档位（2026-11-07）：放在写法层后面，这一轮先把「她该
-        # 主动到什么程度」定下来，再谈用词。以前只有前者，模型没有连续量。
+    # 数值读数（2026-11-09 用户拍板）：**每轮都给**，不再只挂在亲密轮上。
+    #
+    # 以前 `body_state_block` 写在上面那个 `intimate` 分支里，聊天轮她手里一个
+    # 数都没有，只能靠编剧那句二手判断演；而 v2 那条线整段被 `not v2` 挡掉，
+    # 写作层连「现在第几档」都看不到，全靠编剧的摘要。现在关系和数值每轮都给：
+    # 她自己得知道现在站在哪儿，才谈得上「按区间演」。
+    #
+    # 位置保持在写法层之后（原来的顺序）：先把这一拍写到什么程度定下来，
+    # 再谈用词，免得数值被写法层的词句盖住。
+    if isinstance(aff_res, dict) and aff_res.get("active") and not v2:
         body = body_state_block(aff_res, gd)
         if body:
             head = head + "\n\n" + body
@@ -6031,9 +5946,13 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     if target == "group" and sender and text:
         said = sender + "：" + text
 
-    # 分段渲染（2026-11-05）：第一段判出「说 / 做 / 想」就按块发；
-    # 判不出来就退回原文——和以前完全一样，不会让这一轮哑掉。
-    segments = extras.get("segments") if isinstance(extras, dict) else []
+    # 分段渲染（2026-11-09 改写）：**只有玩家自己标注的分栏**才按块发。
+    #
+    # 编剧那一层已经不再拆「说 / 做 / 想」了（它只记数值和事实）：它没有写作
+    # 契约，硬拆经常拆错——把「他把杯子推过去」记成一句台词，写作 AI 照着错的
+    # 分段写，动作就丢了。写作 AI 手里有整份契约和足够长的上下文，读原话比读
+    # 别人的摘要准。玩家在「精确输入」里亲手填的三栏是**他本人的意图**，保留。
+    segments = []
     facts = extras.get("facts") if isinstance(extras, dict) else []
     addressed = extras.get("addressed", True) if isinstance(extras, dict) else True
     user_fallback = said
@@ -6088,6 +6007,10 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     ob = _outfit_block(prev_outfit)
     if ob:
         user_block = user_block + "\n\n" + ob
+    # 原地打转的刻度（2026-11-09）：同一地点连写 ≥3 拍才出现，只报事实。
+    pb = _place_block(gd)
+    if pb:
+        user_block = user_block + "\n\n" + pb
     user_block = user_block + "\n\n" + writing_style.tail(
         turn_no, author_note, plot=man.get("plot"),
         name=str((card or {}).get("name") or ""), mode=mode,
@@ -6966,7 +6889,19 @@ def _save_mood(session_key, mood, intensity, state, prev_state="", outfit=""):
         # 只能拿滞后账本里的旧地点猜——人在小超市，写的还是旧书市。
         spot = str(state).split("·")[0].strip()[:40]
         if spot:
-            _gameday(st)["place"] = spot
+            gd_now = _gameday(st)
+            last = str(gd_now.get("place") or "").strip()
+            # 同一地点连着写了几拍（2026-11-09）：只用来告诉模型「在原地转了
+            # 几圈」，换不换场仍然它自己定。换地点归一，同地点累加；第一次
+            # 有地点时从 1 起算。
+            if last and last == spot:
+                try:
+                    gd_now["place_streak"] = int(gd_now.get("place_streak") or 1) + 1
+                except (TypeError, ValueError):
+                    gd_now["place_streak"] = 2
+            elif last:
+                gd_now["place_streak"] = 1
+            gd_now["place"] = spot
         # 时段同步（2026-11-07）：状态行第四段是她**自己交的**「现在几点」。
         # 以前只有第一段（地点）被解析，时段永远是开场时的默认值——玩家看到
         # 深夜的正文、早晨的高亮，就是因为这一格没人写。

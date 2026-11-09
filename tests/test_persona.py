@@ -308,21 +308,34 @@ class TurnTest(PersonaBase):
             persona.run_turn("private_1", "在吗", "private", "张三")
         self.assertEqual(m.call_count, 1)
 
-    def test_segments_and_director_reach_the_actor(self):
-        """第一段拆出的「说 / 想」要按块发给第二段，导演条也要进系统头。"""
+    def test_actor_reads_raw_text_not_judge_segments(self):
+        """写作 AI 读**原话**，不吃编剧拆的「说 / 想」块（2026-11-09）。
+
+        起因：用户发现主对话框里写的动作，经常被编剧拆成一句台词，写作 AI 照着
+        错的分段写，动作就丢了。编剧没有写作契约，它做的是状态判断；写作 AI 有
+        整份契约和足够上下文，读原话比读别人的摘要准。玩家自己填的精确输入三栏
+        是另一条路（`manual` 分支），不在这里。
+
+        导演条仍然进系统头——它是「她怎么反应」的判断，不是对用户原话的改写。
+        """
         score = ('{"intent": "neutral", "delta": 2, "turn_type": "chat",'
                  ' "reason": "试探", "note": "试探",'
                  ' "segments": ['
                  '   {"who": "用户", "type": "说", "text": "我走了。"},'
                  '   {"who": "用户", "type": "想", "text": "其实想留下"}],'
-                 ' "addressed": true, "subtext": "想被留住", "stance": "装傻"}')
+                 ' "addressed": true, "secret": true,'
+                 ' "subtext": "想被留住", "stance": "装傻"}')
         with mock.patch.object(persona.llm, "call_llm",
                                side_effect=[score, "她没松手。"]) as m:
             persona.run_turn(self.KEY, "我走了。", "private")
         last_user = m.call_args_list[1][0][0][-1]["content"]
-        self.assertIn("用户 · 说（你听得见）：我走了。", last_user)
-        self.assertIn("用户 · 想（心里想的", last_user)
-        self.assertIn("其实想留下", last_user)   # 心里话给写作 AI（2026-11-08 改）
+        # 原话完整在
+        self.assertIn("我走了。", last_user)
+        # 编剧拆的块一个都不该出现
+        self.assertNotIn("用户 · 说（你听得见）", last_user)
+        self.assertNotIn("用户 · 想（心里想的", last_user)
+        # 单行原话不加那段「三种东西」的说明（省 token，老行为）
+        self.assertNotIn("【玩家这一轮写的主输入框原文】", last_user)
         head = m.call_args_list[1][0][0][0]["content"]
         self.assertIn("对方心里有话没说出口", head)
         self.assertNotIn("对方真正在：想被留住", head)
@@ -371,19 +384,28 @@ class TurnTest(PersonaBase):
         bb.assert_called_once()
         self.assertEqual(bb.call_args[0][0], self._hist_key())
 
-    def test_state_and_lead_reach_the_actor(self):
-        """编剧的「状态底色 + 主动判定」要进演员系统头，不是只落库。"""
+    def test_judge_orders_do_not_reach_the_actor(self):
+        """编剧只记数值和事实：它不再给「这一拍怎么写」的指令（2026-11-09）。
+
+        以前 persona_mode / tension / lead / hook 都是编剧判完塞进系统头的，
+        写作层照着演，正文准但没有意外。现在这些字段就算还在 JSON 里，
+        也不会进演员的系统头。
+        """
         score = ('{"intent": "neutral", "delta": 2, "turn_type": "chat",'
                  ' "reason": "试探", "note": "试探",'
                  ' "persona_mode": "屈服", "tension": "照做了，但手指扣着衣角",'
-                 ' "lead": "act", "lead_form": "情感", "lead_reason": "她憋了几天"}')
+                 ' "hook": "大腿开始磨", "lead": "act", "lead_form": "情感",'
+                 ' "lead_reason": "她憋了几天", "secret": true}')
         with mock.patch.object(persona.llm, "call_llm",
                                side_effect=[score, "她没松手。"]) as m:
             persona.run_turn(self.KEY, "我走了。", "private")
         head = m.call_args_list[1][0][0][0]["content"]
-        self.assertIn("她此刻的底色：屈服", head)
-        self.assertIn("张力：照做了", head)
-        self.assertIn("可以主动做一件事（情感）", head)
+        self.assertNotIn("她此刻的底色", head)
+        self.assertNotIn("可以主动做一件事", head)
+        self.assertNotIn("大腿开始磨", head)
+        self.assertNotIn("张力：", head)
+        # 只剩事实：他藏着话这件事照旧告诉她，内容不给
+        self.assertIn("内容你不知道", head)
 
     def test_scene_line_is_split_out_of_the_reply(self):
         """模型顺手写的那行「画面：」要剥出来：正文发回去，标签拿去出图。
@@ -830,7 +852,7 @@ class IntentTest(unittest.TestCase):
     def test_reads_joke(self):
         got = self._judge('{"intent": "joke", "note": "拿兔子开玩笑"}')
         self.assertEqual(got[:2], ("joke", "拿兔子开玩笑"))
-        self.assertEqual(got[2]["segments"], [])
+        self.assertEqual(got[2]["facts"], [])
 
     def test_reads_intimate(self):
         got = self._judge('{"intent": "intimate", "note": "求抱抱"}')
@@ -851,22 +873,25 @@ class IntentTest(unittest.TestCase):
             self.assertEqual(persona._judge_intent(self.CARD, "x"),
                              (None, "", {}))
 
-    def test_parses_segments_and_director_fields(self):
+    def test_director_fields_keep_facts_only(self):
+        """2026-11-09：编剧只交事实，不再拆「说 / 做 / 想」，也不再给写法。
+
+        那四样（分段 / 潜台词 / 她察觉到的 / 这一拍的态度）都是「怎么写」的
+        判断，写作层自己有契约和原文，不需要别人替它读一遍。
+        """
         got = self._judge(
             '{"intent": "neutral", "note": "试探",'
-            ' "segments": ['
-            '   {"who": "用户", "type": "说", "text": "我走了。"},'
-            '   {"who": "助手", "type": "做", "text": "她把门拦住。"},'
-            '   {"who": "用户", "type": "想", "text": "其实想留下"}],'
-            ' "addressed": true, "literal": "他要走",'
+            ' "facts": ["两杯奶茶", "钥匙放在桌上"],'
+            ' "addressed": true, "secret": true,'
+            ' "segments": [{"who": "用户", "type": "说", "text": "我走了。"}],'
             ' "subtext": "想被留住", "noticed": "他站着没动",'
             ' "stance": "装傻"}')
         extra = got[2]
-        self.assertEqual(len(extra["segments"]), 3)
-        self.assertEqual(extra["segments"][1]["who"], "助手")
-        self.assertEqual(extra["segments"][2]["type"], "想")
-        self.assertEqual(extra["subtext"], "想被留住")
-        self.assertEqual(extra["stance"], "装傻")
+        self.assertEqual(sorted(extra),
+                         ["addressed", "facts", "finish", "items", "secret"])
+        self.assertEqual(extra["facts"], ["两杯奶茶", "钥匙放在桌上"])
+        self.assertTrue(extra["secret"])
+        self.assertTrue(extra["addressed"])
 
     def test_intent_block_tells_it_how_to_react(self):
         block = persona._intent_block("joke", "拿兔子开玩笑")
@@ -883,23 +908,6 @@ class IntentTest(unittest.TestCase):
 
 class SegmentTest(unittest.TestCase):
     """第一段的分段与演员层渲染（2026-11-05）。"""
-
-    def test_aliases_are_normalized(self):
-        segs = persona._parse_segments([
-            {"who": "user", "type": "say", "text": "a"},
-            {"who": "assistant", "type": "act", "text": "b"},
-            {"who": "她", "type": "thought", "text": "c"},
-        ])
-        self.assertEqual([(s["who"], s["type"]) for s in segs],
-                         [("用户", "说"), ("助手", "做"), ("助手", "想")])
-
-    def test_unknown_labels_fall_back_to_user_say(self):
-        segs = persona._parse_segments([{"who": "?", "type": "?", "text": "x"}])
-        self.assertEqual((segs[0]["who"], segs[0]["type"]), ("用户", "说"))
-
-    def test_empty_segments_are_dropped(self):
-        self.assertEqual(persona._parse_segments(
-            [{"who": "用户", "type": "说", "text": "  "}]), [])
 
     def test_thought_is_explicitly_invisible(self):
         block = persona.render_user_block([
@@ -952,18 +960,6 @@ class SegmentTest(unittest.TestCase):
             addressed=False)
         self.assertIn("不是在对你说", block)
 
-    def test_thought_segment_survives_empty_text(self):
-        """「想」故意不带内容——不能因为 text 空就被丢掉。
-
-        2026-11-05：提示词要求「想」的 text 填空串（让模型复述心里话会被
-        内容审核掐断整份输出）。它是个标记，不是内容。
-        """
-        segs = persona._parse_segments([
-            {"who": "用户", "type": "说", "text": "我走了。"},
-            {"who": "用户", "type": "想", "text": ""},
-        ])
-        self.assertEqual([s["type"] for s in segs], ["说", "想"])
-
     def test_original_is_appended_when_no_thought(self):
         """没有心里话时，原文要完整补上——分段里「做」只是概括。"""
         block = persona.render_user_block(
@@ -1007,24 +1003,28 @@ class SegmentTest(unittest.TestCase):
 class DirectorBlockTest(unittest.TestCase):
     """导演条只给「怎么反应」，不给台词（2026-11-05）。"""
 
-    def test_block_is_short_and_explicit(self):
-        block = persona._director_block({
-            "literal": "他要走", "subtext": "想被留住",
-            "noticed": "他站着没动", "stance": "装傻"})
-        # 2026-11-07：`literal` 不再进导演条——演员手里本来就有原文，
-        # 让编剧复述一遍纯属白花 token。传进来也不该出现。
-        self.assertNotIn("对方字面上在说", block)
-        self.assertIn("对方真正在：想被留住", block)
-        self.assertIn("装作没听懂", block)
+    def test_block_carries_facts_not_writing_orders(self):
+        """只剩两样事实：他有没有藏着话，和玩家自己写的剧情推进。"""
+        block = persona._director_block({"secret": True}, "把伞递给她，然后转身走")
+        self.assertIn("内容你不知道", block)
+        self.assertIn("把伞递给她", block)
         self.assertIn("不是台词", block)
 
     def test_empty_info_adds_nothing(self):
         self.assertEqual(persona._director_block({}), "")
 
-    def test_secret_thought_hides_subtext(self):
-        """用户写了「心里想」时，潜台词不能出现在演员的系统头里。"""
+    def test_judge_orders_never_reach_the_actor(self):
+        """2026-11-09：潜台词 / 她察觉到的 / 态度 / 勾子 / 主动判定全部不再
+        产出。就算把它们塞进来，导演条也一个字都不给——写法归写作层。"""
         block = persona._director_block({
-            "subtext": "想被留住", "secret": True, "stance": "装傻"})
+            "subtext": "想被留住", "noticed": "他站着没动", "stance": "装傻",
+            "hook": "大腿开始磨", "lead": "act", "lead_form": "情感",
+            "tension": "照做了，但手指扣着衣角"})
+        self.assertEqual(block, "")
+
+    def test_secret_does_not_leak_content(self):
+        """他藏着话时只报「有」，内容一个字都不给演员。"""
+        block = persona._director_block({"secret": True, "subtext": "想被留住"})
         self.assertNotIn("想被留住", block)
         self.assertIn("内容你不知道", block)
 
@@ -1168,29 +1168,20 @@ class StateBehaviorTest(unittest.TestCase):
             "name": "测试卡", "stateBehavior": {"affection": "主动但不承认"}})
         self.assertIn("好感高时：主动但不承认", p)
 
-    def test_director_reads_persona_mode_and_lead(self):
+    def test_director_fields_are_facts_only(self):
+        """编剧这一层只交事实（2026-11-09）。
+
+        她此刻什么底色、这一拍会不会主动——以前是编剧判了告诉演员的，
+        现在归写作层自己判；编剧交上来的只有「发生了什么」。
+        """
         info = persona._director_fields({
-            "persona_mode": "屈服", "tension": "照做了，但手指扣着衣角",
-            "lead": "act", "lead_form": "情感", "lead_reason": "她憋了几天",
-        })
-        self.assertEqual(info["persona_mode"], "屈服")
-        self.assertEqual(info["lead"], "act")
-        self.assertEqual(info["lead_form"], "情感")
-
-    def test_director_block_renders_state_and_lead(self):
-        block = persona._director_block({
-            "persona_mode": "屈服", "tension": "照做了，但手指扣着衣角",
-            "lead": "act", "lead_form": "情感", "lead_reason": "她憋了几天",
-        })
-        self.assertIn("她此刻的底色：屈服", block)
-        self.assertIn("张力：照做了", block)
-        self.assertIn("可以主动做一件事（情感）", block)
-        self.assertIn("不要替玩家做决定", block)
-
-    def test_secret_thought_hides_lead_reason(self):
-        block = persona._director_block({
-            "secret": True, "lead": "act", "lead_reason": "他其实想留下"})
-        self.assertNotIn("他其实想留下", block)
+            "persona_mode": "屈服", "lead": "act", "hook": "大腿开始磨",
+            "facts": ["两杯奶茶"], "secret": True, "addressed": False})
+        self.assertEqual(sorted(info),
+                         ["addressed", "facts", "finish", "items", "secret"])
+        self.assertEqual(info["facts"], ["两杯奶茶"])
+        self.assertTrue(info["secret"])
+        self.assertFalse(info["addressed"])
 
 
 class IntimateGuideTest(unittest.TestCase):
@@ -3378,10 +3369,22 @@ class ReplayContract20261108Test(unittest.TestCase):
     def test_contract_new_rules(self):
         c = persona._CONTRACT
         for s in ("她只知道这一刻站在她眼前能看见、能听见的",
-                  "一句台词换一次气", "一件事写到底",
+                  "一句台词换一次气",
+                  # 2026-11-09：原来那句「一件事写到底 / 镜头不换场地、手里不换物件」
+                  # 被模型读成「这一拍不许走」，同一条线 84 轮里攒出 345 个跨轮
+                  # 复刻片段。现在改成「写下一步」+ 每拍挪动一样东西 + 意象只用一次。
+                  "上一拍停下的那个动作的下一步",
+                  "每一拍至少挪动一样东西", "同一个意象只用一次",
+                  # 2026-11-09：过程要有阻力（用户：抱起→放床→盖被子太平淡了）
+                  "过程要有阻力", "分成几步给", "阻碍之后一定有一次推进",
+                  # 2026-11-09：一整拍的示范
+                  "一整拍长什么样", "挡的人自己松了",
+                  "这件事能走到哪一步", "半路被挡下来不是失败",
                   "这一拍没有结尾", "〔心声〕"):
             self.assertIn(s, c)
-        for s in ("想看下一拍", "悬着的那一下", "收得干干净净"):
+        for s in ("想看下一拍", "悬着的那一下", "收得干干净净",
+                  # 旧写法必须彻底退场，否则两条相反的指令会打架
+                  "一件事写到底", "镜头不换场地"):
             self.assertNotIn(s, c)
 
     def test_scene_duty_text(self):
