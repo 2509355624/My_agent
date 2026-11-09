@@ -809,7 +809,8 @@ VECTOR_STORE_DIR = os.path.join(BASE_DIR, "vector_store", "chroma")
 #   PERSONA_RAG_DATA_DIR     向量库目录（只放扮演记忆）
 #   PERSONA_RAG_K            每轮最多注入几条回忆
 #   PERSONA_RAG_MAX_DISTANCE 余弦距离上限，超过的不注入（0.60 来自实测：
-#                            相关记忆约 0.34~0.51，闲聊约 0.63+）
+#                            相关记忆约 0.34~0.51，闲聊约 0.63+；
+#                            2026-11-10 放宽到 0.66，配合 MMR 去重）
 PERSONA_RAG = os.getenv("PERSONA_RAG", "1").strip().lower() not in (
     "0", "false", "no", "off")
 PERSONA_RAG_MODEL = os.getenv(
@@ -821,14 +822,16 @@ try:
     # 2026-11-08 用户拍板 3 → 5：演进到几百条记忆之后，top-3 经常把
     # 「馄饨摊」这种具体场景挤掉，只剩几条泛泛的偏好。5 条大约多 400~600 字，
     # 锚点（第一次/初夜）另算、不占这个名额。
-    PERSONA_RAG_K = max(1, int(os.getenv("PERSONA_RAG_K", "5")))
+    # 2026-11-10 再放到 7：跨天问「昨天约好的事」时，弱相关的那条常排在
+    # 第 6~7 位，5 条正好被切掉。
+    PERSONA_RAG_K = max(1, int(os.getenv("PERSONA_RAG_K", "7")))
 except ValueError:
-    PERSONA_RAG_K = 5
+    PERSONA_RAG_K = 7
 try:
     PERSONA_RAG_MAX_DISTANCE = float(
-        os.getenv("PERSONA_RAG_MAX_DISTANCE", "0.60"))
+        os.getenv("PERSONA_RAG_MAX_DISTANCE", "0.66"))
 except ValueError:
-    PERSONA_RAG_MAX_DISTANCE = 0.60
+    PERSONA_RAG_MAX_DISTANCE = 0.66
 try:
     PERSONA_RAG_TIMEOUT = float(os.getenv("PERSONA_RAG_TIMEOUT", "2.5"))
 except ValueError:

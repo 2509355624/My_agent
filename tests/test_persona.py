@@ -303,6 +303,90 @@ class StableNotesTest(PersonaBase):
                           "tail 必须仍是生成前读到的最后一句")
 
 
+class NearGenerationEchoTest(PersonaBase):
+    """近因位再钉一次原话（2026-11-10）。
+
+    一轮请求约 2.9 万字符，玩家原话 31 字符，排在末尾消息最前，后面还隔着
+    近千字的注入块才到生成点。回复字数实测稳定在 900~1100，缺的不是篇幅，
+    是「有没有落在这一句上」。这里纯追加，不动已有块顺序，也不进落盘历史。
+    """
+
+    def setUp(self):
+        super().setUp()
+        persona.save_cards([_card("纱雾")])
+        persona.switch_line("private_1", persona.find_card("纱雾"))
+
+    def _run(self, text, times=2):
+        calls = []
+
+        def fake(msgs, *a, **kw):
+            if msgs and msgs[0].get("role") == "system":
+                calls.append(msgs)
+                return ("她抬了抬眼。\n画面：close-up\n服饰：white shirt\n"
+                        "心情：平静 强度3\n状态：桌前 · 白衬衫 · 坐着 · 傍晚 · 无")
+            return '{"intent":"neutral","delta":1,"turn_type":"chat"}'
+
+        with mock.patch.object(persona.llm, "call_llm", side_effect=fake):
+            for i in range(times):
+                said = text % i if "%d" in text else text
+                persona.run_turn("private_1", said, "private")
+        return calls
+
+    def test_original_words_are_repeated_next_to_generation(self):
+        calls = self._run("第 %d 句：把袋子放桌上。")
+        for msgs in calls:
+            u = msgs[-1]["content"]
+            self.assertIn("【这一轮照着演】", u)
+            self.assertEqual(u.count("把袋子放桌上"), 2,
+                             "开头一份 + 生成点前一份")
+            self.assertLess(u.index("【这一轮照着演】"),
+                            u.rindex("把袋子放桌上"))
+            self.assertIn("正文用", u.split("\n\n")[-1],
+                          "tail 必须仍是生成前读到的最后一句")
+
+    def test_echo_does_not_break_the_cross_turn_prefix(self):
+        calls = self._run("第 %d 句不一样。", times=3)
+        heads = [c[0]["content"] for c in calls]
+        self.assertEqual(len(set(heads)), 1,
+                         "system 头必须逐轮逐字节一致，否则前缀缓存全断")
+        # 落盘历史仍以原话开头，与请求里的历史序列对得上。
+        key = persona.resolve_line("private_1")
+        hist = persona._load_hist(key)
+        self.assertTrue(any("句不一样" in str(m.get("content") or "")
+                            for m in hist))
+
+
+class RecallBudgetTest(unittest.TestCase):
+    """跨轮召回预算（2026-11-10）：放宽细节上限，近期批次名额不动。
+
+    用户同一天报了两个症状：跨天记不住细节 + 已办完的约定被反复重提。
+    所以只放宽「按相关性召回的旧事实 / 原文层」，近期批次与 recent 名额
+    保持原样，免得把昨天的批次叙事更多地端上桌。
+    """
+
+    def test_raw_layer_keeps_more_of_a_1000_char_reply(self):
+        self.assertGreaterEqual(persona_rag.RAW_MAX_CHARS, 800)
+        self.assertGreaterEqual(persona_rag.RAW_ITEM_CHARS, 500)
+        self.assertGreaterEqual(persona_rag.RAW_BLOCK_CHARS, 1500)
+        self.assertGreaterEqual(persona_rag.RAW_BLOCK_ITEMS, 4)
+        self.assertGreater(persona_rag.RAW_MAX_DISTANCE, 0.70)
+
+    def test_relevance_slot_grew_but_recent_did_not(self):
+        self.assertGreaterEqual(persona_rag._FACT_SLOTS, 4)
+        self.assertEqual(persona_rag._BATCH_SLOTS, 2)
+        self.assertEqual(persona_rag._RECENT_FACT_SLOTS, 1)
+
+    def test_story_line_budget_and_item_counts_grew(self):
+        self.assertGreaterEqual(persona.STORY_MAX_CHARS, 600)
+        note = ("## 你的事（你做过的）\n"
+                + "\n".join("- 你的第%d件事。" % i for i in range(6))
+                + "\n## 她的事（她做过的）\n"
+                + "\n".join("- 她的第%d件事。" % i for i in range(6)))
+        out = persona.story_line({"day": 4}, note)
+        self.assertIn("你的第5件事", out)
+        self.assertIn("她的第5件事", out)
+
+
 class CharNameTest(PersonaBase):
     """自定义女主名字（2026-11-09）：正文/摘要/编剧都用它，卡名继续管命令。"""
 

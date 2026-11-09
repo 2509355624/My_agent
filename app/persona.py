@@ -227,7 +227,10 @@ NOTE_SOFT = 900
 # **时间/地点 → 已经发生 → 还没完成** 按因果顺序排成一条短块，贴在近因位。
 # 只搬已经存在的事实（gameday + 账本六小节），不调模型、不加玩家操作。
 # 320 字 ≈ 一份短账本的 1/3，够把「现在在哪一段、手上还欠着什么」说清。
-STORY_MAX_CHARS = 320
+# 2026-11-10 放宽到 600：用户报「跨天记不住细节」，320 字把账本每节末尾
+# 2~3 条压成骨架，具体物件与事件被裁掉。多出来的字落在末尾 miss 区，
+# 每轮约多 200 token，比把细节丢了再让模型编一遍便宜。
+STORY_MAX_CHARS = 600
 
 # 扮演态的静默窗口（秒）：这之内的连发算同一条。用户 2026-10-16 定的 10 秒。
 # 群聊默认那 1.5 秒是给「连发三句问同一件事」用的；聊天不一样——人打字是
@@ -4049,6 +4052,19 @@ _SCENE_DUTY = (
     "没冒出来就一句都不留，也不用凑在最后收尾。\n"
 )
 
+# 近因位再钉一次原话（2026-11-10）：末尾玩家消息里，原话排在最前，后面
+# 跟着近千字的 facts / 关系读数 / 状态 / 尾注，整条请求约 2.9 万字符时
+# 它只占 0.1%。实测回复字数稳定在 900~1100，问题不是写不长，是没落在
+# 这一句上。这里在生成点前把原话再放一份，并把「动作先落成画面」那句
+# 贴回来（Phase B 把整段场景义务搬进 system 头后，贴身说明书离原话太远）。
+# 纯追加：已有块的顺序一点不动，tail 仍是最后一句；落盘历史不含这一段，
+# 所以滞回窗口的跨轮前缀也不受影响。
+_THIS_TURN_ECHO = (
+    "【这一轮照着演】\n"
+    "他写的动作先落成画面，再接她的反应；台词顺着意思接住，"
+    "顺序照他写的来。\n\n"
+)
+
 
 def _stable_note_blocks():
     """逐轮恒定的写法说明块（场景义务 + 道具清单）。
@@ -5933,9 +5949,9 @@ def story_line(gd, note=""):
     plan_day = _as_int(gd.get("plan_day"), 0, 0, 99999)
 
     ledger = _ledger_fix_pronouns(note) if note else ""
-    done = (_clip_items(_ledger_section(ledger, "你的事"), 2, 46)
-            + _clip_items(_ledger_section(ledger, "她的事"), 2, 46))
-    todo = _clip_items(_ledger_section(ledger, "约定"), 3, 40)
+    done = (_clip_items(_ledger_section(ledger, "你的事"), 3, 60)
+            + _clip_items(_ledger_section(ledger, "她的事"), 3, 60))
+    todo = _clip_items(_ledger_section(ledger, "约定"), 4, 50)
 
     parts = []
     if day:
@@ -5967,7 +5983,7 @@ def story_line(gd, note=""):
         # 2026-11-10：以前硬写「还没完成：」＝代码替模型断言这件事没做完。
         # 账本里明明写着「已破 / 已拿走 / 不会再做了」也照样被列成待办，
         # 跨天就一遍遍重演。改成只报「账本记着」，判断权交回模型。
-        parts.append("账本里还记着的约定：" + "；".join(todo[:4]))
+        parts.append("账本里还记着的约定：" + "；".join(todo[:5]))
     if not parts:
         return ""
     body = "\n".join(parts)
@@ -6634,6 +6650,11 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     dyn_block = "\n\n".join(p for p in dyn_parts if p)
     if dyn_block:
         user_block = user_block + "\n\n" + dyn_block
+    # 近因位再钉一次原话（2026-11-10）：写了心里话时主输入框本来就不给她，
+    # 这时 user_fallback 为空，跳过——分段标签已经把可见动作说清了。
+    echo_text = str(user_fallback or "").strip()
+    if echo_text:
+        user_block = user_block + "\n\n" + _THIS_TURN_ECHO + echo_text
     user_block = user_block + "\n\n" + writing_style.tail(
         turn_no, author_note, plot=man.get("plot"),
         name=char_name(card, key=key), mode=mode,

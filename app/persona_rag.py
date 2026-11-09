@@ -65,15 +65,20 @@ _COLL_PREFIX = "persona_"
 _SOURCE = "batch_summary_v3"
 
 # 原文层（2026-11-07）。和事实层并存，不替代它：
-#   · 入库截 400 字——`bge-small-zh-v1.5` 上下文 512 token，再长会被截；
 #   · 阈值 0.70 比事实的 0.60 宽——原文句子长、复述多，距离天然更远；
-#   · 每轮最多 3 条、每条注入时压到 260 字、总预算 900 字。
+#   · 每轮取几条、每条注入时压到多少字、总预算多少。
+#
+# 2026-11-10 放宽（用户报「跨天记不住细节」）：原来入库截 400 字，而她的
+# 回复常态 1000 字，后半段的物件、名字、动作永远进不了库。放宽到 900 字、
+# 注入时也别再砍回 260 字。注意 bge-small-zh-v1.5 的 512 token 上限：超过
+# 前 512 token 的部分**不参与向量匹配**，但命中后整条 content 都会注入，
+# 所以细节至少读得到；真要让后半段也可被检索，得改成分块入库（本轮没动）。
 _RAW_SOURCE = "raw_msg_v1"
-RAW_MAX_CHARS = 400
-RAW_MAX_DISTANCE = 0.70
-RAW_BLOCK_ITEMS = 3
-RAW_ITEM_CHARS = 260
-RAW_BLOCK_CHARS = 900
+RAW_MAX_CHARS = 900
+RAW_MAX_DISTANCE = 0.78
+RAW_BLOCK_ITEMS = 4
+RAW_ITEM_CHARS = 520
+RAW_BLOCK_CHARS = 1600
 # 「昨天/上次/之前」这类问法：检索时放宽阈值、多取几条（2026-11-05）。
 _TIME_QUERY = re.compile(r"昨天|昨日|昨晚|昨夜|前一天|前天|上次|之前")
 _LOCK = threading.Lock()
@@ -764,9 +769,13 @@ def retrieve_raw(line, query, k=None):
 
 # 注入块名额（2026-11-09）：锚点不看相关性、最多 8 条；批次叙事 2 条；
 # 按相关性挑出来的旧事实 3 条；recent 那边最多再带 1 条自己的事实。
+# 2026-11-10 只把「按相关性召回的旧事实」从 3 放到 4：用户报跨天细节
+# 记不住时，被切掉的第 4 条常常正好是那个具体物件或地点。近期批次与
+# recent 名额一律不动——它们带的是昨天的批次叙事，多带反而会把已经
+# 办完的约定反复端上桌（同一天报的另一个症状）。
 _ANCHOR_SLOTS = 8
 _BATCH_SLOTS = 2
-_FACT_SLOTS = 3
+_FACT_SLOTS = 4
 _RECENT_FACT_SLOTS = 1
 
 
