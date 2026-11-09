@@ -435,6 +435,96 @@ class AutoConfessWiringTest(unittest.TestCase):
         self.assertNotIn("我们在一起吧", turn.reply)
 
 
+class V2PregnancyTest(unittest.TestCase):
+    """v2 的怀孕链路（2026-11-09 补）：编剧判 finish、高潮弹窗、孕期注入。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = os.path.join(self.tmp.name, "agents")
+        os.makedirs(root, exist_ok=True)
+        p = mock.patch.object(agents, "AGENTS_DIR", root)
+        p.start()
+        self.addCleanup(p.stop)
+        q = mock.patch.object(
+            P, "_STATE_PATH",
+            os.path.join(self.tmp.name, "state", "persona_sessions.json"))
+        q.start()
+        self.addCleanup(q.stop)
+        agents.clear_cache()
+        self.addCleanup(agents.clear_cache)
+        P.save_cards([{"name": "纱雾", "systemPrompt": "你是纱雾。"}])
+        P.switch_line("private_1", P.find_card("纱雾"))
+        self.line = P.resolve_line("private_1")
+
+    def _aff(self):
+        return {"schema": 2, "active": True, "value": 60, "together": True,
+                "confess": 50, "yandere": 0, "contacts": [],
+                "contactName": "亲过", "contactDegree": 4,
+                "auto_confess": False}
+
+    def test_judge_v2_keeps_finish(self):
+        raw = '{"intent":"intimate","delta":1,"finish":"inside"}'
+        with mock.patch.object(P, "_llm_call", return_value=raw), \
+                mock.patch.object(P.affection, "scoring_ctx", return_value={}):
+            _i, _n, score = P._judge_v2({"name": "甲"}, "我射在里面了")
+        self.assertEqual(score["finish"], "inside")
+
+    def test_v2_orgasm_opens_the_finish_popup(self):
+        calls = []
+
+        def fake(msgs, **kw):
+            calls.append(msgs)
+            return "她软下来。\n画面：1girl\n心情：空 强度1\n状态：床上"
+
+        score = {"delta": 0, "adult": {"orgasm": True}}
+        with mock.patch.object(P, "_llm_call", side_effect=fake), \
+                mock.patch.object(P.adult_state, "load",
+                                  return_value={"orgasm_count": 0}), \
+                mock.patch.object(P.adult_state, "apply",
+                                  return_value=({"orgasm_count": 1}, [])), \
+                mock.patch.object(P.adult_state, "save"), \
+                mock.patch.object(P.adult_state, "block", return_value=""), \
+                mock.patch.object(P.affection, "is_raid", return_value=True), \
+                mock.patch.object(P.affection, "is_v2", return_value=True), \
+                mock.patch.object(P.affection, "settle",
+                                  return_value=self._aff()), \
+                mock.patch.object(P.affection, "injection_block",
+                                  return_value=""), \
+                mock.patch.object(P.affection, "dynamic_block",
+                                  return_value=""), \
+                mock.patch.object(P, "_judge_v2",
+                                  return_value=(None, "", score)):
+            turn = P.run_turn(self.line, "（继续）", "private", "")
+        self.assertEqual(turn.aff["climax"]["n"], 1)
+        self.assertEqual(turn.aff["climax"]["of"], P.affection.ORGASM_MAX)
+        self.assertIsNotNone(P.pending_finish(self.line))
+
+    def test_pregnancy_block_reaches_v2(self):
+        calls = []
+
+        def fake(msgs, **kw):
+            calls.append(msgs)
+            return "她嗯了一声。\n画面：1girl\n心情：静 强度1\n状态：床边"
+
+        with mock.patch.object(P, "_llm_call", side_effect=fake), \
+                mock.patch.object(P, "pregnancy_block",
+                                  return_value="【孕期】怀孕第 40 天"), \
+                mock.patch.object(P.affection, "is_raid", return_value=True), \
+                mock.patch.object(P.affection, "is_v2", return_value=True), \
+                mock.patch.object(P.affection, "settle",
+                                  return_value=self._aff()), \
+                mock.patch.object(P.affection, "injection_block",
+                                  return_value=""), \
+                mock.patch.object(P.affection, "dynamic_block",
+                                  return_value=""), \
+                mock.patch.object(P, "_judge_v2",
+                                  return_value=(None, "", {"delta": 0})):
+            P.run_turn(self.line, "在吗", "private", "")
+        head = calls[-1][0]["content"]
+        self.assertIn("【孕期】怀孕第 40 天", head)
+
+
 class OldSaveIsolationTest(unittest.TestCase):
     """老档没有 schema 字段 = 永远走 v1，不迁移、不加字段。"""
 

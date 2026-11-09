@@ -195,7 +195,10 @@ def _card_name(card_id):
     if not card_id:
         return ""
     c = persona.find_card(card_id)
-    return (c or {}).get("name") or card_id
+    if not c:
+        return card_id
+    # 列表里的「演 XXX」优先显示自定义名字（苏暖），没有就用卡名。
+    return persona.char_name(c, card_id)
 
 
 @bp.route("/api/persona_admin/list")
@@ -208,11 +211,16 @@ def api_list():
     for r in rows:
         ent = st.get(r["key"]) or {}
         if r["source"] == "guest":
-            # 游客不存 state（走 guest 模块那套），但他们固定演一张卡
+            # 游客没有 base 记录，但有一条固定的线键，名字挂在线上（2026-11-09）
             from app.persona_api import GUEST_CARD_ID
-            r["card"] = _card_name(GUEST_CARD_ID)
+            gkey = persona.card_key("guest_%s" % r["key"], GUEST_CARD_ID)
+            nm = str((st.get(gkey) or {}).get("char_name") or "").strip()
+            r["card"] = nm or _card_name(GUEST_CARD_ID)
         else:
-            r["card"] = _card_name(ent.get("card"))
+            # 存档级名字（2026-11-09）：玩家在网页右栏改过名就优先显示它，
+            # 没改过才回落到卡上的默认名。
+            nm = str(ent.get("char_name") or "").strip()
+            r["card"] = nm or _card_name(ent.get("card"))
         r["state"] = str(ent.get("state") or "")
 
     rows.sort(key=lambda r: r["mtime"], reverse=True)
@@ -269,7 +277,8 @@ def api_detail():
         "kind": kind,
         "short": short,
         "label": label,
-        "card": _card_name(st.get("card")),
+        "card": (str(st.get("char_name") or "").strip()
+                 or _card_name(st.get("card"))),
         "note": str(st.get("note") or ""),
         "state": str(st.get("state") or ""),
         "messages": _norm(raw),

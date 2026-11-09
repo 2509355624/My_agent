@@ -318,6 +318,13 @@ function renderPane() {
       </div>
     </div>
     <div class="field">
+      <label>她真正的名字（正文里用这个名字；留空就用上面的卡名）</label>
+      <input type="text" id="f_charName" maxlength="20"
+             value="${esc(c.charName || "")}">
+      <div class="tip">卡名是「青梅竹马」这种关系称谓、想让正文写成「苏暖说……」时填这里。
+        角色列表和 <b>#这个名字</b> 命令仍然用上面的卡名，只有叙述里怎么叫她换成这个名字。</div>
+    </div>
+    <div class="field">
       <label>一句话说明（列清单时给它配这行）</label>
       <input type="text" id="f_desc" value="${esc(c.description)}">
     </div>
@@ -422,6 +429,7 @@ function collect() {
   if (cur < 0 || !cards[cur]) return;
   const c = cards[cur];
   c.name = $("f_name").value.trim();
+  c.charName = $("f_charName").value.trim();
   c.avatar = $("f_avatar").value.trim();
   c.description = $("f_desc").value.trim();
   c.personality = $("f_personality").value.trim();
@@ -454,7 +462,7 @@ function pick(i) {
 function add() {
   collect();
   cards.push({
-    id: "", name: "新角色", description: "", avatar: "",
+    id: "", name: "新角色", charName: "", description: "", avatar: "",
     personality: "", systemPrompt: "", appearancePrompt: "",
     outfitPrompt: "", room: "", referenceImage: "",
     stateBehavior: { submit: "", corrupt: "", affection: "", suspicion: "" },

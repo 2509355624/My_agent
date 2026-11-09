@@ -1400,13 +1400,11 @@ FAST_SKILL = "silver"
 # 换成 anima-line 单张横屏 CG——画面行本来就是英文定稿，零额外 LLM 调用；
 # 角色 LoRA 自动装填（`app/char_loras.py`）挂在这条渠道上，IP 角色自动吃加成。
 #
-# 2026-11-09 用户拍板换成 `anima-2s`（= 用户口中的「anima 2s」）：
-# anima-line 的骨架不动，一段底模 1.3B → realskin 2.9B、两段步数 20/20 → 10/5，
-# 二段仍是 silvermoonmix turbo（「29b 的模式和 silver 的结合」）。
-# 它**取代 anima-line 成为角色扮演出图的默认渠道**；anima-line 没下架，
-# 玩家点名「anima线条」照跑。换渠道要同步 `skills/anima-2s/`、QQ 白名单、
-# `char_loras._LORA_SKILLS_ANIMA`（角色 LoRA 要能挂到 2.9B 上）。
-SHOT_SKILL = "anima-2s"
+# 2026-11-09 用户拍板换成 `anima-2s`，当天下一步又拍板换回 `silver`：
+# **角色扮演的默认出图渠道，横屏竖屏都是它**。anima-line / anima-2s 没下架，
+# 玩家点名照跑。换渠道要同步 `skills/<渠道>/`、QQ 白名单、
+# `char_loras._LORA_SKILLS_ANIMA`（角色 LoRA 只挂在 anima 那套上）。
+SHOT_SKILL = "silver"
 
 # 扮演配图的输出目录（2026-11-07 用户点名）：落到
 # `output/角色扮演生图/<渠道>/`，和 `web/生图页/` 分开。
@@ -1431,8 +1429,8 @@ MALE_PROTAGONIST = (
     "average build, natural proportions"
 )
 
-# 「出图」触发词。用户说这些就出一张 anima-2s 单张 CG（QQ 固定竖屏，
-# 网页端由弹窗选横/竖——横屏是给电脑背景用的，见 `draw_shot`）。
+# 「出图」触发词。用户说这些就出一张 `SHOT_SKILL`（silver）单张 CG
+# （QQ 固定竖屏，网页端由弹窗选横/竖——横屏是给电脑背景用的，见 `draw_shot`）。
 #
 # 判据要严：`出图` 两个字太常见（「我刚才出图了」「出图失败」都是正常聊天），
 # 所以**只在扮演态里**、且整条消息就是这个意思时才触发。见 `is_shot_request`。
@@ -1555,15 +1553,11 @@ def shot_outfit(session_key, msg_index=None):
 
 def draw_shot(card, session_key, msg_index=None, reply_to="", on_submit=None,
               landscape=False):
-    """「出图」→ `SHOT_SKILL`（anima-2s）单张 CG，默认**竖屏**。
+    """「出图」→ `SHOT_SKILL`（silver）单张 CG，默认**竖屏**。
 
-    2026-11-07 用户拍板改竖屏：anima 的横屏构图（1024×1536 转 1536×1024）
-    线条极容易崩，竖屏是它的原生比例。
-
-    `landscape=True`（2026-11-09 用户要网页背景，重新放开）：走
-    `image_jobs.landscape_workflow()` 把尺寸节点宽高对调，3680×2464、24~27 秒，
-    实测线条没崩——「横屏容易崩」在 anima-2s 上没有复现。**不是新渠道**，
-    所以角色 LoRA / 六条画风 LoRA / 两段采样全都不动。
+    2026-11-09 用户拍板：默认渠道从 anima-2s 换回 `silver`，**横屏竖屏同一条**。
+    `landscape=True`（网页背景用）走 `image_jobs.landscape_workflow()` 把尺寸
+    节点宽高对调，不是新渠道，采样/LoRA 全都不动。
 
     横屏唯一的实测坑：提示词里写「两个人并排」会被画成两个女孩（
     `two people standing side by side` → 双胞胎式同款浴衣）。要「一起看」的
@@ -1630,7 +1624,7 @@ def comic_brief(card, session_key, extra="", msg_index=None):
     `split_turn`），不用另存一份。
     """
     session_key = resolve_line(session_key)
-    name = str((card or {}).get("name") or "女主角")
+    name = char_name(card, "女主角", key=session_key)
     look = _fixed_block(card)
 
     last_user, last_ai, scene, state = _shot_parts(session_key, msg_index)
@@ -1796,6 +1790,10 @@ def _norm_card(c):
     out = {
         "id": str(c.get("id") or "").strip(),
         "name": str(c.get("name") or "").strip(),
+        # 她真正的名字（2026-11-09 群友需求）：卡名可能是「青梅竹马」这种
+        # 关系称谓，正文里读着像代号；填了 charName 就用它指代她，
+        # 卡名仍然负责 `#角色名` 匹配、列表排序和 LoRA 找卡。
+        "charName": str(c.get("charName") or "").strip()[:20],
         "description": str(c.get("description") or "").strip(),
         "avatar": str(c.get("avatar") or "").strip(),
         "personality": str(c.get("personality") or "").strip(),
@@ -2091,6 +2089,11 @@ def find_card(word):
     for c in cards:
         if c["name"].lower() == low:
             return c
+    # 自定义名字（charName）也认：玩家记住的多半是「苏暖」，不是卡名「青梅竹马」。
+    # 仍然精确匹配，不做模糊，理由同上。
+    for c in cards:
+        if str(c.get("charName") or "").strip().lower() == low:
+            return c
     for c in cards:
         if c["id"].lower() == low:
             return c
@@ -2337,7 +2340,7 @@ def _erase(session_key):
     if not isinstance(ent, dict):
         return None
     card = get_card(str(ent.get("card") or ""))
-    name = (card or {}).get("name") or "她"
+    name = char_name(card, key=session_key)
 
     # 1) 历史：整份删。删失败就清空成空文件，至少别让下一轮读到旧内容。
     #    QQ 私聊分线（2026-11-03）：传 base 键时先换算成当前角色线——
@@ -2508,10 +2511,52 @@ def is_wipe_request(text, addressed=False):
         _command_body(text, addressed) in CLEAR_WORDS
 
 
-def _card_label(card):
-    """角色卡里能给人看的名字。"""
+def save_char_name(session_key):
+    """这条**存档**自定义的女主名字；没设过返回空串（2026-11-09）。"""
+    try:
+        ent = _entry(resolve_line(session_key)) or {}
+    except Exception:                                     # noqa: BLE001
+        return ""
+    return str(ent.get("char_name") or "").strip()
+
+
+def set_char_name(session_key, name):
+    """设置这条存档的女主名字；空串 = 恢复用卡名。返回最终生效的名字。"""
+    key = resolve_line(session_key)
+    state = _load_state()
+    ent = state.get(key)
+    if not isinstance(ent, dict):
+        return ""
+    nm = " ".join(str(name or "").split())[:20]
+    if nm:
+        ent["char_name"] = nm
+    else:
+        ent.pop("char_name", None)
+    state[key] = ent
+    _save_state(state)
+    return nm
+
+
+def char_name(card, default="她", key=None):
+    """她**真正的名字**：存档自定义 > 卡上的 `charName` > 卡名。
+
+    2026-11-09 群友反馈：卡名是「青梅竹马」这种关系称谓，AI 写出来像代号；
+    想让正文用她真正的名字（苏暖）。两层可改：
+      · 玩家在网页右栏「她的名字」改的是**这条存档**（state.char_name）；
+      · 站主在角色管理里填的 charName 是这张卡的默认。
+    卡名继续负责 `#命令` 匹配、列表和 LoRA，只有「叙述里怎么叫她」换名字。
+    """
+    if key:
+        nm = save_char_name(key)
+        if nm:
+            return nm
     card = card if isinstance(card, dict) else {}
-    return str(card.get("name") or "她")
+    return str(card.get("charName") or card.get("name") or default).strip()
+
+
+def _card_label(card):
+    """角色卡里能给人看的名字（有自定义名字就用自定义的）。"""
+    return char_name(card)
 
 
 def _entry(session_key):
@@ -3483,7 +3528,7 @@ def build_head(card, session_key, sender, note="", state="", intimate=True,
     sg = writing_skills.state_guide()
     if sg:
         parts.append(sg)
-    cname = str((card or {}).get("name") or "").strip() or "她"
+    cname = char_name(card, key=session_key)
     parts.append((_CONTRACT if intimate else _CONTRACT_NO_INTIMATE).replace(
         "{NAME}", cname))
     # 档位放契约之后：这一层只回答「这一局怎么写」，人设和格式都在它前面，
@@ -3786,12 +3831,16 @@ def _pronoun_to_name(content, name):
     return text.replace("她", n)
 
 
-def _render_hist(hist, name=""):
+def _render_hist(hist, name="", alias=""):
     """历史里带 `seg` 的用户消息按分段渲染；老消息没有 `seg` 就用原文。
 
     这一步只在**送进模型前**做，落盘/网页回看仍用原文——否则展示层会冒出
-    「他说的 / 他做的」这种内部标签。`name` 是卡名：assistant 示范里的
+    「他说的 / 他做的」这种内部标签。`name` 是她现在的名字：assistant 示范里的
     「她」一起换成名字，让人称和契约一致（见 `_pronoun_to_name`）。
+
+    `alias`（2026-11-09）：卡名。用户中途给她起了真正的名字（charName）时，
+    旧历史里留下的卡名也要在这份副本里换掉，否则模型会照着旧示范继续喊
+    「青梅竹马」。落盘数据不动。
     """
     out = []
     for m in hist or []:
@@ -3803,6 +3852,8 @@ def _render_hist(hist, name=""):
         if m.get("role") == "assistant":
             content = _strip_monologue_tag(content)
             content = _PRONOUN_HE.sub("你", content)
+            if alias and name and alias != name:
+                content = content.replace(alias, name)
             content = _pronoun_to_name(content, name)
         if m.get("role") == "user" and m.get("seg"):
             content = render_user_block(m["seg"], m.get("addressed", True),
@@ -4227,7 +4278,7 @@ def _judge_intent(card, said, state="", history=None, note=""):
     `extra` 是事实字段（facts / secret / addressed / items），不再含任何
     「这一拍怎么写」的判断。失败时是空 dict，调用方退回原文。
     """
-    who = str((card or {}).get("name") or "对方")
+    who = char_name(card, "对方")
     prompt = _INTENT_PROMPT % {
         "who": who + ("（" + state + "）" if state else ""),
         "said": str(said or "")[:2000],
@@ -4648,7 +4699,7 @@ secret（他这一句里有没有没说出口的心里话）：有就 true，没
 他说的：%(said)s"""
 
 
-def _score_profile(card, state=""):
+def _score_profile(card, state="", key=""):
     """打分用的「她是谁」：名字 + 当前状态 + 性格 + 设定。
 
     2026-11-03：以前只传名字，等于所有卡共用一把尺子，谁都不难攻略。现在把
@@ -4660,7 +4711,7 @@ def _score_profile(card, state=""):
     前面这段就够模型认人了。
     """
     c = card if isinstance(card, dict) else {}
-    name = str(c.get("name") or "").strip() or "对方"
+    name = char_name(c, "对方", key=key)
     lines = ["- 名字：" + name + (("（" + state + "）") if state else "")]
     p = str(c.get("personality") or "").strip()
     if p:
@@ -4711,6 +4762,7 @@ _SCORE_PROMPT_V2 = """你在给一段校园/日常恋爱角色扮演做「编剧
   "turn_type": "chat | action",
   "contact": {"degree": 0, "cause": "", "who": "", "place": "", "excerpt": ""},
   "confess": 0,
+  "finish": "inside | outside | none | unknown",
   "yandere": 0,
   "proposal": "none | he",
   "accept": "none | yes | hesitate | no",
@@ -4764,6 +4816,12 @@ confess：表白值这轮往前挪了多少（-10~+10）。**它是「她心里�
   不是好感，也不是她现在就要开口。看这一轮你们交流的深度：有没有说到只有彼此知道的事、
   有没有单独待很久、有没有把「以后」摆在台面上、她有没有在你面前露出不设防的那一面。
   只是气氛好、只是句好话 = 0。到 50 是满值，意味着她该自己开口了。
+
+finish（这一轮有没有「射在里面」）：只有明确发生/要求内射才 inside；
+  戴套、体外、射在外面 outside；没进入或没发生 none；看不出来 unknown。
+  普通对话一律 none，不要凭空补。括在（）里的动作也算发生——像
+  「（我把精液射进她的小穴里）」这种按字面判 inside，别因为写法简短就判 none。
+  这一项直接决定怀孕记账，判错了会产生玩家没写过的结果。
 
 yandere：病娇值这轮涨多少（-20~+20）。她已经认定你了，你却去接触别的女生、
   明显冷落她、做了违背她的事，才给正值；哄回来、把事情圆回去给负值。没有就 0。
@@ -4892,7 +4950,7 @@ def _judge_v2(card, said, state="", line_key="", gameday=None,
         "gday": _day_of(gd),
         "gphase": str(gd.get("phase") or "还没定"),
         "gplan": ("有个还没兑现的约定：" + plan) if plan else "（暂时没有约定）",
-        "profile": _score_profile(card, state),
+        "profile": _score_profile(card, state, key=line_key),
         "said": str(said or "")[:2000],
         "history": _judge_recent(history),
         "ledger": _judge_ledger(note),
@@ -4915,9 +4973,9 @@ def _judge_v2(card, said, state="", line_key="", gameday=None,
     note = str(d.get("note") or "").strip()[:30]
     # settle_v2 只认这个 dict，少带一项等于模型白判。
     score = {k: d.get(k) for k in (
-        "delta", "turn_type", "reason", "contact", "confess", "yandere",
-        "proposal", "accept", "refused_confession", "facts", "addressed",
-        "secret", "time", "phase", "plan", "place")}
+        "delta", "turn_type", "reason", "contact", "confess", "finish",
+        "yandere", "proposal", "accept", "refused_confession", "facts",
+        "addressed", "secret", "time", "phase", "plan", "place")}
     # adult（2026-11-08）：身体这条线。**原样透传，不在这里净化**——
     # 结算器 affection_v2_adult.apply 负责 clamp/闸门/回落/去重，
     # 这里多改一处就多一个离线口径。
@@ -4972,7 +5030,7 @@ def _judge_intent_scored(card, said, state="", line_key="", gameday=None,
                   + ("（约在第 %d 天）" % int(gd["plan_day"])
                      if gd.get("plan_day") else ""))
                   if plan else "（暂时没有约定）",
-        "profile": _score_profile(card, state),
+        "profile": _score_profile(card, state, key=line_key),
         "said": str(said or "")[:2000],
         "history": _judge_recent(history),
         "ledger": _judge_ledger(note),
@@ -5002,6 +5060,10 @@ def _judge_intent_scored(card, said, state="", line_key="", gameday=None,
     score = {"delta": d.get("delta"),
              "turn_type": d.get("turn_type") or "chat",
              "reason": d.get("reason") or "",
+             # 怀孕（2026-11-05 / 2026-11-09 补回）：模型判的「射在里面」以前
+             # 在这里被丢掉，只有「高潮满 → 弹窗」能记账；玩家正文里写明的
+             # 内射全漏。`run_turn` 的 `_preg_record` 只认 `finish == "inside"`。
+             "finish": _norm_finish(d.get("finish")),
              # 2026-11-04 距离层级三件事：这一刻的气氛、有没有越界、她答不答应、
              # 有没有做成一件能让关系往前走的事。**别在这里漏掉任何一项**——
              # 这个 dict 是 settle 唯一的输入，漏了就等于模型白判。
@@ -5852,6 +5914,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
                 _astate = _load_state()                  # 读整份，改一条，写回
                 _rec = _astate.get(key) or {}
                 _ast = adult_state.load(_rec)
+                _n_before = int(_ast.get("orgasm_count") or 0)
                 _ast, _anotes = adult_state.apply(
                     _ast, score["adult"],
                     value=(aff_res or {}).get("value") if isinstance(aff_res, dict) else None)
@@ -5861,6 +5924,17 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
                 adult_state.save(_rec, _ast)     # 写 affection.adult，顺手清顶层那份
                 _astate[key] = _rec
                 _save_state(_astate)
+                # 高潮弹窗（2026-11-09 补 v2）：v2 以前没有 `just_orgasm`，
+                # 「射在哪里」永远不弹，怀孕记账也就没有来源。这里用
+                # `orgasm_count` 的增量当唯一事实，和 v1 的 `_climax_info` 同口径。
+                _n_now = int(_ast.get("orgasm_count") or 0)
+                if _n_now > _n_before and isinstance(aff_res, dict):
+                    aff_res["just_orgasm"] = _n_now
+                    aff_res["orgasmMax"] = affection.ORGASM_MAX
+                    _cl = _climax_info(aff_res)
+                    if _cl:
+                        aff_res["climax"] = _cl
+                        _set_pending_finish(key, _cl)
                 for _n in _anotes:
                     log.info("adult %s：%s", key, _n)
             except Exception:                            # noqa: BLE001
@@ -5918,7 +5992,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     # 必须放在跨天结算**之后**拼：刚发现怀孕 / 刚生产这一轮就要按新状态演，
     # 不能等下一轮才让她想起来（用户说的「先结算，再开场」）。
     pblock = pregnancy_block(key, preg_event)
-    if pblock and not v2:
+    if pblock:
         head = head + "\n\n" + pblock
     # 压迫模式（2026-11-05）：在 `aff_res` 上补一个 `forced` 标记。
     # **必须在这里补，不能指望 `injection_block` 写回**——它是纯函数，
@@ -6032,10 +6106,11 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         user_block = user_block + "\n\n" + pb
     user_block = user_block + "\n\n" + writing_style.tail(
         turn_no, author_note, plot=man.get("plot"),
-        name=str((card or {}).get("name") or ""), mode=mode,
+        name=char_name(card, key=key), mode=mode,
         last_open=last_open)
     model_hist = _render_hist(
-        hist, name=str((card or {}).get("name") or ""))
+        hist, name=char_name(card, key=key),
+        alias=str((card or {}).get("name") or ""))
     msgs = ([{"role": "system", "content": head}] + model_hist
             + [{"role": "user", "content": user_block}])
     try:
@@ -6318,13 +6393,14 @@ def jump_phase(session_key, phase, sender="", sender_uin=""):
 
     hist = trim(_load_hist(key))
     model_hist = _render_hist(
-        hist, name=str((card or {}).get("name") or ""))
+        hist, name=char_name(card, key=key),
+        alias=str((card or {}).get("name") or ""))
     # 近因位跟普通轮同源：时间事实之后仍贴一句正向锚点，别让跳跃开场
     # 因为换了条组装路径就丢了视角。
     msgs = ([{"role": "system", "content": head}] + model_hist
             + [{"role": "user", "content": _time_boundary(gd, ph)
                 + "\n\n" + writing_style.tail(
-                    name=str((card or {}).get("name") or ""))}])
+                    name=char_name(card, key=key))}])
     try:
         raw = _llm_call(msgs, temperature=TEMPERATURE)
     except Exception:                                  # noqa: BLE001
@@ -6427,12 +6503,13 @@ def skip_day(session_key, sender="", sender_uin="", days=1, doing=""):
     head = head + "\n\n" + task
     hist = trim(_load_hist(key))
     model_hist = _render_hist(
-        hist, name=str((card or {}).get("name") or ""))
+        hist, name=char_name(card, key=key),
+        alias=str((card or {}).get("name") or ""))
     # 睡到明天同样贴近因位，和普通轮、时段跳跃共用一句。
     msgs = ([{"role": "system", "content": head}] + model_hist
             + [{"role": "user", "content": _time_boundary(gd)
                 + "\n\n" + writing_style.tail(
-                    name=str((card or {}).get("name") or ""))}])
+                    name=char_name(card, key=key))}])
     try:
         raw = _llm_call(msgs, temperature=TEMPERATURE)
     except Exception:                                  # noqa: BLE001
@@ -6543,13 +6620,14 @@ def _gen_and_save(key, ent, card, head, task, sender="", prev_state="",
     """
     hist = trim(_load_hist(key))
     model_hist = _render_hist(
-        hist, name=str((card or {}).get("name") or ""))
+        hist, name=char_name(card, key=key),
+        alias=str((card or {}).get("name") or ""))
     # 收尾 / 第二天 / 第五次收场：这一轮的最后一条是任务指令，同样在它
     # 末尾贴统一锚点，让视角要求离生成点最近。
     msgs = ([{"role": "system", "content": head}] + model_hist
             + [{"role": "user", "content": task
                 + "\n\n" + writing_style.tail(
-                    name=str((card or {}).get("name") or ""))}])
+                    name=char_name(card, key=key))}])
     try:
         raw = _llm_call(msgs, temperature=TEMPERATURE)
     except Exception:                                  # noqa: BLE001
@@ -7320,8 +7398,8 @@ def draw(scene, card, session_key, reply_to="", state="", skill=None,
          landscape=False, on_submit=None, outfit=""):
     """出一张配图，返回文件名（没画出来返回 ""）。**阻塞**——调用方放后台线程。
 
-    走 `SHOT_SKILL`（角色扮演默认 `anima-2s`，两段 15+10 步 → 1.2× latent
-    → 2x 像素放大，出图约 2464×3680）。排队走**正常 QQ 队列**，不插队。
+    走 `SHOT_SKILL`（角色扮演默认 `silver`，两段采样，横屏竖屏同一条渠道，
+    画幅只由 `landscape` 决定）。排队走**正常 QQ 队列**，不插队。
     入队带 `quiet=True`：worker 只跑图不发，图由调用方拿去 `_deliver`（要带
     caption 和引用，见 `qq_bot._draw_persona`）。
 
@@ -7335,9 +7413,11 @@ def draw(scene, card, session_key, reply_to="", state="", skill=None,
     `clothes_changed()` 判要不要出图，不参与拼提示词。
 
     也不扣私聊每日额度：扮演态配图是聊天的一部分，不是「点单生图」。队列满 /
-    ComfyUI 没在线 / 被审核拦下时，`_draw_persona` 那条自动配图一律静默跳过，
-    聊天照常；`draw_shot()`（网页「出图」/ QQ 点单）会读 `_DRAW_ERR` 把真实
+    被审核拦下时，`_draw_persona` 那条自动配图一律静默跳过，聊天照常；
+    `draw_shot()`（网页「出图」/ QQ 点单）会读 `_DRAW_ERR` 把真实
     原因回给玩家。两者共用同一个 `draw()`，返回值始终是字符串。
+    ComfyUI 正在重启时**照常入队**（2026-11-09）——worker 提交前会等它回来，
+    不再把重启窗口顶回成一次失败。
     """
     from app import image_jobs
     from app.tools.normal import generate_image as gi
@@ -7365,9 +7445,11 @@ def draw(scene, card, session_key, reply_to="", state="", skill=None,
     if wf is None:
         log.warning("扮演配图渠道 %s 没有文生图工作流", chan)
         return _draw_fail("渠道 %s 没有文生图工作流" % chan)
-    if not image_jobs.comfy_alive():
-        log.info("扮演配图：ComfyUI 没在线，%s 这一轮不出图", session_key)
-        return _draw_fail("ComfyUI 没在线（探活没过），等它回来再点出图")
+    # 探活**不再拒单**（2026-11-09 用户拍板，对齐 QQ 侧 2026-10-19 的口径）：
+    # 从前这里探不到就当场 `_draw_fail`，等于把每一个 ComfyUI 重启窗口（实测
+    # 14~22 秒）变成一次失败——而 worker 提交前本来就会 `wait_comfy_up` 等它
+    # 回来（见 image_jobs._worker）。现在照常入队，`comfy_down` 只影响回执措辞。
+    comfy_down = not image_jobs.comfy_alive()
     try:
         # landscape=False 写死：这里跑在后台线程，读不到本轮原话（qq_api 的
         # 上下文是 threading.local），不能让 enqueue 自己去判——判不出会退回
@@ -7379,6 +7461,7 @@ def draw(scene, card, session_key, reply_to="", state="", skill=None,
             # `web/生图页/`——那是手动出图的地方，两边的图混在一起找不回来。
             # `job.out_dir` 优先于按 target 推断（漫画工作台走的是同一条路）。
             out_dir=PLAY_OUT_DIR,
+            comfy_down=comfy_down,
             reply_to=str(reply_to or ""))
     except Exception as e:
         log.exception("扮演配图入队失败 %s", session_key)
@@ -7696,7 +7779,7 @@ def opening(session_key, force=False):
         rel = "还不熟"
 
     who = "，".join([b for b in (
-        str(card.get("name") or ""),
+        char_name(card, "", key=session_key),
         str(card.get("description") or ""),
         str(card.get("personality") or "")) if b])
     sysp = str(card.get("systemPrompt") or "").strip()
@@ -7766,7 +7849,7 @@ def compress_note(session_key):
         for m in hist)
     prompt = _NOTE_PROMPT % {
         "soft": NOTE_SOFT,
-        "name": str((card or {}).get("name") or "她"),
+        "name": char_name(card, key=session_key),
         "old": old or "（还没有）",
         "convo": convo,
     }

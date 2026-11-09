@@ -144,8 +144,41 @@ class SwitchTest(PersonaApiBase):
         self.assertEqual(r.status_code, 400)
 
 
-class ChatTest(PersonaApiBase):
+class NameTest(PersonaApiBase):
+    """右栏「名字」那行（2026-11-09）：只改当前存档，不影响别的档。"""
 
+    def _enter(self, name="纱雾"):
+        self.post("/api/persona/switch", name=name)
+        return name
+
+    def test_set_and_read_back(self):
+        self._enter()
+        d = self.post("/api/persona/name", name="苏暖")
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["name"], "苏暖")
+        self.assertEqual(self.get("/api/persona/session")["charName"], "苏暖")
+
+    def test_other_saves_keep_the_card_name(self):
+        self._enter("纱雾")
+        self.post("/api/persona/name", name="苏暖")
+        self._enter("雷姆")
+        self.assertEqual(self.get("/api/persona/session")["charName"], "雷姆")
+        self._enter("纱雾")
+        self.assertEqual(self.get("/api/persona/session")["charName"], "苏暖")
+
+    def test_blank_name_falls_back_to_the_card(self):
+        self._enter()
+        self.post("/api/persona/name", name="苏暖")
+        d = self.post("/api/persona/name", name="   ")
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["name"], "纱雾")
+
+    def test_without_a_save_is_400(self):
+        r = self.c.post("/api/persona/name", json={"qq": QQ, "name": "苏暖"})
+        self.assertEqual(r.status_code, 400)
+
+
+class ChatTest(PersonaApiBase):
     def _enter(self):
         name = self.get("/api/persona/cards")["cards"][0]["name"]
         self.post("/api/persona/switch", name=name)

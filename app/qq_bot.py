@@ -1246,6 +1246,15 @@ class SessionRunner:
         `image_jobs._send_text`——那边一律走聊天记录卡片，不刷屏。
         """
         def _receipt(job):
+            # 入队那一刻 ComfyUI 不在线（多半在重启，实测 14~22 秒）：现在
+            # 这单照样进了队，worker 提交前会等它回来——回执不能说「在画了」，
+            # 得说「排上了，它上线就画」（对齐 QQ 生图 2026-10-19 的口径）。
+            if getattr(job, "comfy_down", False):
+                image_jobs._send_text(
+                    self.target, self.target_id,
+                    "配图任务已排队，ComfyUI 正在重启（一般十几秒），"
+                    "它一上线就自动开始画，画好会发到这里。")
+                return
             ahead = 0
             try:
                 ahead = image_jobs.ahead_of(job)

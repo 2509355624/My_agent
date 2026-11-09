@@ -46,6 +46,11 @@ class FinishBase(unittest.TestCase):
         self.addCleanup(q.stop)
         agents.clear_cache()
         self.addCleanup(agents.clear_cache)
+        # 这一份用例钉的是 v1 的「射在哪里 / 跨天」流程；2026-11-08 起新线默认
+        # 走 v2（schema=2），v2 有自己的一套高潮与怀孕路径（见 test_affection_v2）。
+        v = mock.patch.object(persona.affection, "V2_AUTO_NEW", False)
+        v.start()
+        self.addCleanup(v.stop)
         persona.save_cards([_card()])
         persona.switch_line("private_1", persona.find_card("测试角色"))
         self.key = persona.resolve_line("private_1")

@@ -205,6 +205,71 @@ class TrimTest(unittest.TestCase):
         self.assertEqual([m["role"] for m in out], ["user"])
 
 
+class CharNameTest(PersonaBase):
+    """自定义女主名字（2026-11-09）：正文/摘要/编剧都用它，卡名继续管命令。"""
+
+    def test_falls_back_to_card_name(self):
+        self.assertEqual(persona.char_name({"name": "青梅竹马"}), "青梅竹马")
+
+    def test_custom_name_wins(self):
+        self.assertEqual(
+            persona.char_name({"name": "青梅竹马", "charName": "苏暖"}), "苏暖")
+
+    def test_head_uses_the_custom_name(self):
+        head = persona.build_head(_card("青梅竹马", charName="苏暖"),
+                                  "private_1", "张三")
+        self.assertIn("苏暖", head)
+
+    def test_norm_card_keeps_char_name(self):
+        c = persona._norm_card({"name": "青梅竹马", "charName": "苏暖"})
+        self.assertEqual(c["charName"], "苏暖")
+
+    def test_both_names_can_start_a_line(self):
+        persona.save_cards([_card("青梅竹马", charName="苏暖")])
+        agents.clear_cache()
+        self.assertIsNotNone(persona.find_card("青梅竹马"))
+        self.assertIsNotNone(persona.find_card("苏暖"))
+
+    def test_history_alias_is_rewritten_for_the_model(self):
+        """旧历史里喊的卡名，送模型前换成新名字；落盘原文不动。"""
+        hist = [{"role": "assistant", "content": "青梅竹马低下头。"}]
+        out = persona._render_hist(hist, name="苏暖", alias="青梅竹马")
+        self.assertIn("苏暖", out[0]["content"])
+        self.assertNotIn("青梅竹马", out[0]["content"])
+        self.assertIn("青梅竹马", hist[0]["content"])
+
+    # ── 存档级名字（2026-11-09 网页右栏「名字」那行）──────────
+    def _enter(self, name="青梅竹马", **kw):
+        persona.save_cards([_card(name, **kw)])
+        agents.clear_cache()
+        card = persona.find_card(name)
+        return card, persona.switch_line("private_7", card)
+
+    def test_save_name_wins_over_card_default(self):
+        card, key = self._enter(charName="默认名")
+        persona.set_char_name(key, "苏暖")
+        self.assertEqual(persona.char_name(card, key=key), "苏暖")
+
+    def test_save_names_do_not_leak_between_saves(self):
+        card, key = self._enter()
+        persona.set_char_name(key, "苏暖")
+        other = persona.switch_line("private_7", card, 1)
+        self.assertNotEqual(other, key)
+        self.assertEqual(persona.char_name(card, key=other), card["name"])
+        self.assertEqual(persona.char_name(card, key=key), "苏暖")
+
+    def test_blank_name_restores_the_card_default(self):
+        card, key = self._enter(charName="默认名")
+        persona.set_char_name(key, "苏暖")
+        self.assertEqual(persona.set_char_name(key, "  "), "")
+        self.assertEqual(persona.char_name(card, key=key), "默认名")
+
+    def test_name_is_trimmed_and_capped(self):
+        _card, key = self._enter()
+        self.assertEqual(persona.set_char_name(key, "  苏   暖  "), "苏 暖")
+        self.assertEqual(len(persona.set_char_name(key, "名" * 30)), 20)
+
+
 class HeadTest(PersonaBase):
     def test_head_has_persona_contract_env_and_nothing_else(self):
         head = persona.build_head(_card("纱雾"), "group_1", "张三")
@@ -692,18 +757,28 @@ class DrawTest(unittest.TestCase):
         self.assertEqual(gi.build_t2i_workflow.call_args[0][1],
                          "1girl, sitting, smile, " + persona._POV_CAMERA)
 
-    def test_comfy_down_is_silent(self):
-        self._patch(alive=False)
-        import app.image_jobs as ij
-        self.assertEqual(persona.draw("x", {}, "private_1"), "")
-        ij.enqueue.assert_not_called()
+    def test_comfy_down_still_enqueues(self):
+        """2026-11-09 用户拍板：ComfyUI 重启窗口不再顶回出图请求。
 
-    # ─── 2026-11-08：失败原因透传（draw 返回值仍当字符串用，不改签名）───
-    def test_comfy_down_records_its_own_reason(self):
-        self._patch(alive=False)
-        self.assertEqual(persona.draw("x", {}, "private_1"), "")
-        self.assertIn("没在线", persona._DRAW_ERR.reason)
-        self.addCleanup(setattr, persona._DRAW_ERR, "reason", "")
+        以前探活没过就当场失败（`enqueue.assert_not_called`），等于把每一个
+        重启窗口（实测 14~22 秒）变成一次「等它回来再点」。现在对齐 QQ 生图
+        2026-10-19 的口径：**照常入队**，`comfy_down=True` 传进 job，worker
+        提交前自己等（image_jobs._worker 的 wait_comfy_up）。
+        """
+        job = self._patch(alive=False)
+        import app.image_jobs as ij
+        name = persona.draw("x", {"appearancePrompt": "1girl"}, "private_1")
+        self.assertEqual(name, "a.png")            # 排队 → 等回来 → 照常用图
+        kw = ij.enqueue.call_args[1]
+        self.assertTrue(kw["comfy_down"])
+        job.wait.assert_called_once()
+
+    def test_comfy_up_marks_the_job_as_up(self):
+        """在线时 comfy_down 必须是 False——别把所有单都标成等机子。"""
+        self._patch()
+        import app.image_jobs as ij
+        persona.draw("x", {"appearancePrompt": "1girl"}, "private_1")
+        self.assertFalse(ij.enqueue.call_args[1]["comfy_down"])
 
     def test_timeout_reason_reaches_draw_shot_note(self):
         job = self._patch()
@@ -761,10 +836,9 @@ class DrawTest(unittest.TestCase):
         persona.draw("x", {"appearancePrompt": "1girl"}, "private_1",
                      on_submit=seen.append)
         self.assertEqual(seen, [])
-        # 没画面 / ComfyUI 没在线也算没提交
-        self._patch(alive=False)
+        # 没画面也算没提交；ComfyUI 没在线**算**提交（进了队列，2026-11-09）
         seen2 = []
-        persona.draw("x", {"appearancePrompt": "1girl"}, "private_1",
+        persona.draw("   ", {"appearancePrompt": "1girl"}, "private_1",
                      on_submit=seen2.append)
         self.assertEqual(seen2, [])
 

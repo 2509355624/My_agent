@@ -156,6 +156,32 @@
   /* 气泡外的「她 / 你」小字和重发提示直接压在图上，得自带一点阴影 */
   .mid.has-bg .who, .mid.has-bg .retryRow {
     text-shadow: 0 1px 4px rgba(0, 0, 0, .85); }
+  /* 状态行（关系 / 已发生 / 她心里那句话）和每条气泡下的「出图 / 回退」
+     也是直接压在图上的：文字加阴影、按钮垫一层半透明底，不然亮一点的
+     背景图会把它们吃成一片（2026-11-09 用户反馈「这些字透明了」）。 */
+  .mid.has-bg .aff {
+    color: #cfcfda;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, .9); }
+  .mid.has-bg .aff .sub { color: #cfcfda; }
+  .mid.has-bg .tb {
+    background: rgba(14, 14, 18, .58);
+    border-color: rgba(255, 255, 255, .18);
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px); }
+  /* 输入区上面那条工具条（心理活动 / 道具 / 字体 / 写法 / 精确输入）：
+     默认是透明底的胶囊，压在图上同样会「消失」。彩色那三个保留自己的颜色，
+     其余按钮垫深底、文字提亮。 */
+  .mid.has-bg .precise .ptab, .mid.has-bg .precise .ptgl {
+    background: rgba(14, 14, 18, .55);
+    border-color: rgba(255, 255, 255, .18);
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px); }
+  .mid.has-bg .precise .ptab:not([data-f]) { color: #cfcfda; }
+  .mid.has-bg .precise .ptgl { color: #cfcfda; }
+  /* 选中态要压回来一层：底色更实、边框仍是它自己的颜色，别被上面那条盖掉 */
+  .mid.has-bg .precise .ptab.on {
+    background: rgba(14, 14, 18, .8);
+    border-color: currentColor; }
 
   .row { display: flex; }
   .row.u { justify-content: flex-end; }
@@ -387,6 +413,20 @@
   .nowrow .k { margin: 0; flex: none; }
   .nowrow .v { flex: 1 1 auto; text-align: right;
     font-variant-numeric: tabular-nums; }
+  /* 她的名字（2026-11-09）：右栏里唯一能点改的字段，用强调色 + 虚下划线
+     让人看得出「这里能改」。点开就地变输入框，不弹窗。 */
+  .nameBtn { flex: 1 1 auto; min-width: 0; text-align: right; background: none;
+    border: 0; border-bottom: 1px dashed currentColor; padding: 0 0 1px;
+    margin: 0; color: var(--accent); font-size: 12.5px; font-family: inherit;
+    cursor: pointer; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .nameBtn:hover { color: var(--accent-dim); }
+  .nameBtn:disabled { color: var(--text-mute); border-bottom-color: transparent;
+    cursor: default; }
+  .nameInput { flex: 1 1 auto; min-width: 0; text-align: right;
+    background: var(--bg-input); border: 1px solid var(--accent-dim);
+    border-radius: 6px; color: var(--text); font-size: 12.5px;
+    font-family: inherit; padding: 2px 6px; }
   /* 高潮 / 内射这一拍的发光标识（2026-11-05）：只亮一轮，下一轮自动消失。 */
   .climaxBadge { display: none; margin: 0 0 8px; padding: 6px 12px;
     border-radius: 999px; text-align: center; font-size: 12px; font-weight: 600;
@@ -508,6 +548,7 @@
   /* 气泡下方的状态行：档位名是重点，增减跟着走一条 */
   .aff { font-size: 11.5px; color: var(--text-mute); margin-top: 5px;
     letter-spacing: .3px; width: 170px; max-width: 100%; }
+  .aff .sub { font-size: 11px; color: var(--text-dim); }
   .aff b { color: var(--accent); font-weight: 500; }
   .aff .d { margin-left: 6px; }
   .aff .d.up { color: #e8779c; }
@@ -1014,6 +1055,13 @@
     </div>
     <!-- 角色详情（2026-11-05）：看「她最初是什么人」，不跟剧情状态混在一起。 -->
     <div class="st" id="cardBox">
+      <!-- 她在这一档里叫什么（2026-11-09 用户要求）：点名字就地改，
+           只影响当前存档，不动角色卡；换一条存档各叫各的。 -->
+      <div class="nowrow">
+        <span class="k">名字</span>
+        <button class="nameBtn" id="btnName" type="button"
+                title="点一下改她在这条存档里的名字">—</button>
+      </div>
       <div class="nowrow"><span class="k">角色</span>
         <span class="v" id="sCardName">—</span></div>
       <button class="btn sm" id="btnCardDetail" disabled>查看角色卡详情</button>
@@ -1295,25 +1343,23 @@
 <!-- 跨天浮层（2026-11-05）：两次请求之间浮在页面正中，然后自己淡出。 -->
 <div class="dayVeil" id="dayVeil"><span>第二天</span></div>
 
-<!-- 怀孕规则（2026-11-05）：状态条旁边的小问号点开。只解释机制，
-     不显示当前处在周期的哪一段——那个要玩家自己按天算。 -->
+<!-- 怀孕规则（2026-11-05）：状态条旁边的小问号点开。只解释机制；
+     当前处在周期的哪一段由右栏直接写出来（2026-11-09 用户要求）。 -->
 <div class="skipMask" id="pregHelpMask">
   <div class="skipBox">
     <h3>怀孕规则</h3>
     <div class="pregRules">
       <p><b>什么时候判：</b>只有编剧判定这一轮「射在里面」才会记录，而且
         不会当场掷概率。等跨天时（点时间跳跃，或剧情里过夜）才结算一次。</p>
+      <p><b>当前时期：</b>右栏「未孕」下面直接写着——安全期 / 易孕期 / 排卵期，
+        以及现在是她周期的第几天，不用自己算。</p>
       <p><b>周期：</b>从认识她的第 1 天算，28 天一轮：第 1–9 天安全期，
         第 10–16 天易孕期（第 14 天前后排卵），第 17–28 天回到安全期。</p>
-      <p><b>她处在哪一段：</b>右栏「未孕」下面会写一句她自己的感觉——
-        没有直接标「排卵期」，你得自己留意。这句话可以在
-        <code>config/pregnancy.json</code> 的 <code>cycle_hint</code> 里
-        改成 <code>exact</code>（直接写期名和天数）或 <code>off</code>（完全不说）。</p>
       <p><b>概率：</b>一次内射，安全期 2%、易孕期 15%、排卵期 22%；
         同一天多次或跨天前多次会小幅叠加，安全期最多 8%。</p>
       <p><b>怀孕到生产：</b>从受孕那天算，怀孕第 N 天、预产期第 280 天；
         到预产期生产，孩子出生后按天显示年龄。</p>
-      <p><b>开关：</b>站主可在角色管理页按卡关闭怀孕玩法；清空存档会连
+      <p><b>开关：</b>这张卡的怀孕玩法可以在角色管理里关掉；清空存档会连
         怀孕和孩子一起清掉。</p>
     </div>
     <button class="btn pri skipGo" id="pregHelpClose">知道了</button>
@@ -1439,6 +1485,9 @@ const QQ = new URLSearchParams(location.search).get("qq") || "";
 // 页面路由挡回 /play（见 friend_app.py 的 _gate）。
 const SOLO = /^\/play(?:\.html)?\/?$/.test(location.pathname);
 let card = null, busy = false, msgs = [];
+// 她在这条存档里叫什么（2026-11-09）：服务端 state.char_name 优先，没有才
+// 回落到卡上的 charName / 卡名。改名只影响当前存档，换档各叫各的。
+let CUR_NAME = "";
 // 当前游戏日 / 时段（2026-11-05）：右栏「时间」那行显示「在一起第 N 天 · 中午」。
 let CUR_DAY = 0, CUR_PHASE = "";
 // 这一轮编剧判的内射（2026-11-05）：和 AFF.just_orgasm 一起决定发光标识。
@@ -1953,7 +2002,7 @@ function makeRow(m, id) {
 
   const who = document.createElement("div");
   who.className = "who";
-  who.textContent = m.role === "user" ? "你" : (card ? card.name : "她");
+  who.textContent = m.role === "user" ? "你" : (CUR_NAME || "她");
   wrap.appendChild(who);
 
   const b = document.createElement("div");
@@ -2053,11 +2102,11 @@ function affLine(a) {
     r2.textContent = "❤ 关系 " + (a.tierName || "");
     div.appendChild(r2);
     const c2 = document.createElement("div");
-    c2.style.cssText = "font-size:11px;color:var(--text-dim)";
+    c2.className = "sub";
     c2.textContent = "已发生：" + (a.contactName || "还没碰过");
     div.appendChild(c2);
     const q2 = document.createElement("div");
-    q2.style.cssText = "font-size:11px;color:var(--text-dim)";
+    q2.className = "sub";
     q2.textContent = "她心里那句话：" + (a.confessName || "还没想过");
     div.appendChild(q2);
     return div;
@@ -3171,7 +3220,9 @@ async function loadSession() {
     ROLE = d.role || "member";
     GUEST_LEFT = (d.remaining === undefined) ? -1 : d.remaining;
     card = d.card;
-    $("curName").textContent = card ? card.name : "选一个角色";
+    // 先定名字再渲染历史：气泡署名要用它（2026-11-09）。
+    CUR_NAME = d.charName || (card ? (card.charName || card.name || "") : "");
+    renderName();
     $("live").style.display = card ? "" : "none";
     renderCardBox(card);
     renderQuota();
@@ -3200,6 +3251,76 @@ function renderCardBox(c) {
   const btn = $("btnCardDetail");
   if (btn) btn.disabled = !c;
 }
+
+// ── 她的名字（2026-11-09）──────────────────────────────
+// 右栏「名字」那一行：显示当前存档里的名字，点一下就地变输入框。
+// 保存走 POST /api/persona/name，服务端只改这条线（state.char_name），
+// 不动角色卡——同一张卡的两条存档可以各叫各的。
+function renderName() {
+  const btn = $("btnName");
+  if (!btn) return;
+  btn.disabled = !card;
+  btn.textContent = card ? (CUR_NAME || "起个名字") : "—";
+  const top = $("curName");
+  if (top) top.textContent = card ? (CUR_NAME || card.name || "角色") : "选一个角色";
+}
+
+// 已经画出来的气泡署名一起换，避免为了改个名字重画整段历史。
+function paintWho() {
+  document.querySelectorAll("#log .row.a .who").forEach(function (el) {
+    el.textContent = CUR_NAME || "她";
+  });
+}
+
+async function editName() {
+  const btn = $("btnName");
+  if (!btn || !card || btn._editing) return;
+  btn._editing = true;
+  const old = CUR_NAME || "";
+  const inp = document.createElement("input");
+  inp.className = "nameInput";
+  inp.type = "text";
+  inp.maxLength = 20;
+  inp.value = old;
+  inp.placeholder = card.name || "她的名字";
+  inp.setAttribute("aria-label", "她在这条存档里的名字");
+  btn.style.display = "none";
+  btn.parentNode.insertBefore(inp, btn);
+  inp.focus();
+  inp.select();
+  let done = false;
+  const finish = async function (save) {
+    if (done) return;
+    done = true;
+    const nm = save ? inp.value.trim() : old;
+    inp.remove();
+    btn.style.display = "";
+    btn._editing = false;
+    if (!save || nm === old) return;
+    btn.disabled = true;
+    try {
+      const d = await post("/api/persona/name", { name: nm });
+      CUR_NAME = d.name || "";
+      renderName();
+      paintWho();
+      toast(CUR_NAME ? "她在这一档里叫「" + CUR_NAME + "」" : "已恢复默认名字");
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      btn.disabled = !card;
+    }
+  };
+  inp.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+  });
+  inp.addEventListener("blur", function () { finish(true); });
+}
+
+(function bindName() {
+  const btn = $("btnName");
+  if (btn) btn.addEventListener("click", editName);
+})();
 
 // ── 聊天背景（2026-11-06）────────────────────────────────
 // 账号自己换的图：浏览器里压成 WebP 后存本地，不再上传服务器。
@@ -3520,7 +3641,7 @@ function openCardDetail() {
   } else {
     av.textContent = src || (card.name || "?").slice(0, 1);
   }
-  $("cdName").textContent = card.name || "角色";
+  $("cdName").textContent = card.charName || card.name || "角色";
   const desc = String(card.description || "").trim();
   const per = String(card.personality || "").trim();
   setCardSec("cdDescBox", "cdDesc", desc);

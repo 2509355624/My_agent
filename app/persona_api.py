@@ -242,6 +242,8 @@ def _card_json(card):
     return {
         "id": card.get("id") or "",
         "name": card.get("name") or "",
+        # 她真正的名字（2026-11-09）：页面标题优先显示它，卡名仍用于命令。
+        "charName": card.get("charName") or "",
         "description": card.get("description") or "",
         "personality": card.get("personality") or "",
         "avatar": card.get("avatar") or "",
@@ -343,6 +345,8 @@ def get_session():
     return jsonify({
         "ok": True,
         "card": _card_json(card),
+        # 这条存档里她叫什么（2026-11-09）：玩家可在右栏改名，只影响本存档。
+        "charName": persona.char_name(card, "", key),
         "note": str(ent.get("note") or ""),
         "intro": str(ent.get("intro") or ""),
         "state": str(ent.get("state") or ""),
@@ -536,6 +540,8 @@ def _guest_session(uid, token):
     resp = jsonify({
         "ok": True,
         "card": _card_json(card),
+        # 游客也能在右栏改名（2026-11-09）：存在自己那条线的 state.char_name 上。
+        "charName": persona.char_name(card, "", key=ckey),
         "note": str(ent.get("note") or ""),
         "intro": str(ent.get("intro") or ""),
         "state": str(ent.get("state") or ""),
@@ -609,8 +615,26 @@ def switch():
                     "reply": "从现在起我是%s。" % card["name"]})
 
 
+@bp.route("/api/persona/name", methods=["POST"])
+def set_name():
+    """给**这条存档**的女主改名（2026-11-09 用户要求）。
+
+    只改当前线（state.char_name），不动角色卡、不影响同一张卡的其他存档；
+    传空串 = 恢复用卡名 / 卡上的默认名字。
+    """
+    body = request.get_json(silent=True) or {}
+    role, who, token = _who()
+    key = _guest_line(who) if role == "guest" else _active_key(_key(who))
+    if not key or not (persona._entry(key) or {}):         # noqa: SLF001
+        return jsonify({"ok": False, "error": "还没有存档"}), 400
+    persona.set_char_name(key, body.get("name"))
+    card = persona.active_card(key)
+    resp = jsonify({"ok": True, "name": persona.char_name(card, "", key=key)})
+    _attach_guest_cookie(resp, token)
+    return resp
+
+
 # ── 存档槽（2026-11-08 用户要求）──────────────────────────
-#
 # 每张卡最多 3 个存档，玩家自己命名、自己挑一个进。
 #
 # 实现上**没有新建任何存储结构**：一个存档就是一条线键
@@ -1448,7 +1472,7 @@ def _img_rel(f):
 
 @bp.route("/api/persona/shot", methods=["POST"])
 def shot():
-    """「出图」→ `persona.SHOT_SKILL`（anima-2s）单张 CG，竖屏/横屏可选。
+    """「出图」→ `persona.SHOT_SKILL`（silver）单张 CG，竖屏/横屏可选。
 
     仍走 `image_jobs` 那条全局队列（`persona.draw_shot` → `image_jobs.enqueue`），
     不绕过队列的串行/水位控制。**后台线程**出图，这个接口立刻返回；完成情况
