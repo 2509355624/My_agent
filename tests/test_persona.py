@@ -205,6 +205,44 @@ class TrimTest(unittest.TestCase):
         self.assertEqual([m["role"] for m in out], ["user"])
 
 
+class CacheWindowTest(unittest.TestCase):
+    """前缀缓存滞回窗口（2026-11-10）：逐轮只追加，到高水位才砍回。
+
+    背景：DeepSeek 只认**逐字节相同的前缀**。原来每轮取 `[-12:]`，
+    聊过 6 轮后每轮都把最老一条踢掉，整段历史跟着错位，命中永远只有
+    system 头那 15,104 token，8,000~9,000 token 每轮按未命中全价重付。
+    """
+
+    @staticmethod
+    def _rows(n, start=0):
+        return [{"role": "user" if i % 2 == 0 else "assistant",
+                 "content": "m%d" % i} for i in range(start, start + n)]
+
+    def test_appends_without_dropping_the_oldest(self):
+        win = persona.cache_rows(self._rows(12))
+        self.assertEqual(len(win), 12)
+        grown = persona.cache_rows(win + self._rows(2, 12))
+        self.assertEqual(len(grown), 14)
+        self.assertEqual(grown[0]["content"], "m0",
+                         "窗口起点动了：前缀缓存会从最老一条起全 miss")
+
+    def test_cuts_back_only_at_high_water(self):
+        # 正好到高水位还不砍；再多一条才一次性砍回低水位。
+        self.assertEqual(len(persona.cache_rows(self._rows(30))), 30)
+        cut = persona.cache_rows(self._rows(31))
+        self.assertEqual(len(cut), persona.HISTORY_LIMIT)
+        self.assertEqual(cut[0]["content"], "m19")
+        self.assertEqual(cut[-1]["content"], "m30")
+
+    def test_trim_limit_only_truncates_long_messages(self):
+        out = persona.trim(self._rows(20), limit=20)
+        self.assertEqual(len(out), 20)
+        self.assertEqual(out[0]["content"], "m0")
+        # 不给 limit 的老行为没变：内部调用仍只看最近 12 条。
+        self.assertEqual(len(persona.trim(self._rows(20))),
+                         persona.HISTORY_LIMIT)
+
+
 class CharNameTest(PersonaBase):
     """自定义女主名字（2026-11-09）：正文/摘要/编剧都用它，卡名继续管命令。"""
 
@@ -515,6 +553,36 @@ class TurnTest(PersonaBase):
         last1 = m.call_args_list[1][0][0][-1]["content"]
         last2 = m.call_args_list[3][0][0][-1]["content"]
         self.assertNotEqual(last1, last2, "两轮动态内容应不同")
+
+    def test_history_prefix_is_stable_across_turns(self):
+        """滞回窗口：上一轮的「system + 历史」必须原样出现在下一轮开头。
+
+        光有稳定的 system 头不够。历史每轮取 `[-12:]` 时，聊过 6 轮后最老
+        一条被踢掉、整段历史错位一位，前缀从那里起全 miss —— 账单里 hit
+        常年卡死在 15,104（正好是 system 头长度）就是这个原因。这里先垫满
+        12 条历史再连跑两轮，锁死「只追加、不滑动」。
+        """
+        hist_key = self._hist_key()
+        persona._save_hist(hist_key, [
+            {"role": "user", "content": "早轮%d" % i} if i % 2 == 0
+            else {"role": "assistant", "content": "回轮%d" % i}
+            for i in range(persona.HISTORY_LIMIT)])
+        score = '{"intent": "neutral", "delta": 1, "turn_type": "chat"}'
+        with mock.patch.object(persona.llm, "call_llm",
+                               side_effect=[score, "她没松手。",
+                                            score, "她退了半步。"]) as m:
+            persona.run_turn(self.KEY, "我走了。", "private")
+            persona.run_turn(self.KEY, "你别碰我。", "private")
+        # 每轮两次调用（[0] 编剧 / [1] 主回复），两轮共四次。
+        first = m.call_args_list[1][0][0][:-1]     # 去掉本轮那条动态玩家消息
+        second = m.call_args_list[3][0][0][:-1]
+        self.assertEqual(second[:len(first)], first,
+                         "历史窗口滑动了：上一轮的前缀被打散，缓存全 miss")
+        self.assertEqual(len(second), len(first) + 2,
+                         "两轮之间应只在尾巴追加一对 user/assistant")
+        # 落盘保留长窗口，下一轮才能接着这段前缀继续命中。
+        self.assertEqual(len(persona._load_hist(hist_key)),
+                         persona.HISTORY_LIMIT + 4)
 
     def test_scene_line_is_split_out_of_the_reply(self):
         """模型顺手写的那行「画面：」要剥出来：正文发回去，标签拿去出图。

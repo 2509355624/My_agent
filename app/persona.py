@@ -151,6 +151,21 @@ _CLOTHES_NOUNS = (
 # 挤出窗口、还没进小记」的空档。影响可控——那段内容本来也要被压成摘要了。
 HISTORY_LIMIT = 12
 
+# 前缀缓存的滞回窗口（2026-11-10）：送模型的历史**逐轮只追加，不滑动**。
+#
+# DeepSeek 按「逐字节相同的前缀」分价计费：命中 0.02/token、未命中 1.0/token，
+# 差 50 倍。原来每轮都取 `[-12:]`，聊过 6 轮之后每轮都会踢掉最老一条，整段
+# 历史跟着错位一位，后面的前缀全废 —— 账单里主回复的 hit 常年卡死在 15,104
+# （正好是 system 头的长度），miss 却有 8,000~9,000，那部分就是每轮重付的历史。
+#
+# 改成滞回：窗口从 12 条一路追加到 30 条（15 轮）期间**起点不动**，每轮只往
+# 尾巴加两条，前缀因而整段命中；超过 30 条才一次性砍回 12 条，那一轮断一次，
+# 之后重新开始累积。约 10 轮里 9 轮吃到长前缀，命中稳过 2 万。
+#
+# 落盘文件就当这个窗口用：网页回看读的是全量归档（`load_archive`），不依赖它；
+# 全量原文也一直在 `_append_archive` 里，砍窗口不丢历史。
+HISTORY_CACHE_HIGH = 30
+
 # 单条消息的截断上限（2026-11-02：200 → 900 → 2026-11-06：2400
 # → 2026-11-07：2600）。契约把正文目标定到 600~2000 字之后，2400 对
 # 「2000 字正文 + 三行元数据 + 分段标签」只剩不到 300 字余量，写满一轮
@@ -3694,8 +3709,12 @@ def _save_hist(session_key, msgs):
                                for m in msgs))
 
 
-def trim(hist):
-    """取最近 HISTORY_LIMIT 条，单条超 MSG_MAX_CHARS 截断。
+def trim(hist, limit=None):
+    """取最近 N 条（默认 HISTORY_LIMIT），单条超 MSG_MAX_CHARS 截断。
+
+    `limit`（2026-11-10）：给前缀缓存的滞回窗口用。传窗口的实际长度时，
+    **只做单条截断、不砍条数**，历史前缀才能逐轮只追加。不传时行为与
+    以前完全一致（编剧 / 打分器 / 回看等内部调用仍只看最近 12 条）。
 
     裁的是**送进模型的副本**；落盘保留原文（2026-11-05 起，`run_turn` 直接存
     `_load_hist` 的原始窗口，不再把截断版写回去）——网页回看和归档要的是全貌。
@@ -3706,7 +3725,8 @@ def trim(hist):
     """
     msgs = [m for m in (hist or [])
             if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
-    msgs = msgs[-HISTORY_LIMIT:]
+    n = HISTORY_LIMIT if not limit else max(1, int(limit))
+    msgs = msgs[-n:]
     out = []
     for m in msgs:
         c = str(m.get("content") or "").strip()
@@ -3724,6 +3744,23 @@ def trim(hist):
             out[-1]["seg"] = m["seg"]
             out[-1]["addressed"] = m.get("addressed", True)
     return out
+
+
+def cache_rows(hist):
+    """前缀缓存窗口：逐轮只追加，攒过 HISTORY_CACHE_HIGH 才一次性砍回低水位。
+
+    返回的是**原始行**（带着 `seg` 等字段），既能送模型（外面再 `trim(...
+    , limit=len(win))` 做单条截断），也能原样落盘。两条路径必须走同一个函数：
+    落盘的内容要和上一轮发给模型的历史序列逐字节对得上，下一轮才接得上前缀。
+
+    砍回那一次会断一次缓存，这是滞回的代价；换来的是其余 9 轮都能整段命中，
+    比每轮滑动（每轮都断）划算得多。
+    """
+    rows = [m for m in (hist or [])
+            if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
+    if len(rows) > HISTORY_CACHE_HIGH:
+        rows = rows[-HISTORY_LIMIT:]
+    return rows
 
 
 def _split_meta(text):
@@ -6503,8 +6540,13 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         turn_no, author_note, plot=man.get("plot"),
         name=char_name(card, key=key), mode=mode,
         last_open=last_open)
+    # 前缀缓存滞回窗口（2026-11-10）：送模型的是**整段窗口**，不是 trim 的
+    # 12 条。窗口起点逐轮不动，system 头 + 历史才能一整段命中；`trim` 只用来
+    # 做单条截断（limit=窗口实际长度），不砍条数。编剧 / 打分器上面用的
+    # `hist` 仍是最近 12 条，行为一点没变。
+    win = cache_rows(raw_hist)
     model_hist = _render_hist(
-        hist, name=char_name(card, key=key),
+        trim(win, limit=len(win)), name=char_name(card, key=key),
         alias=str((card or {}).get("name") or ""))
     msgs = ([{"role": "system", "content": head}] + model_hist
             + [{"role": "user", "content": user_block}])
@@ -6557,8 +6599,11 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     raw_hist.append(new_user)
     raw_hist.append({"role": "assistant", "content": _ensure_meta(
         raw, scene, mood, intensity, state, outfit)})
+    # 2026-11-10：落盘就是**下一轮要送的窗口**，逐轮只追加、到高水位才砍回。
+    # 以前每轮 `[-HISTORY_LIMIT:]`，聊过 6 轮后窗口每轮前移一条，前缀缓存
+    # 全部错位（hit 永远只有 system 头那 15,104）。全量原文另有归档，不丢。
     try:
-        _save_hist(key, raw_hist[-HISTORY_LIMIT:])
+        _save_hist(key, cache_rows(raw_hist))
     except Exception:
         log.exception("扮演轮落史失败 %s", key)
 
@@ -6791,9 +6836,11 @@ def jump_phase(session_key, phase, sender="", sender_uin=""):
     # 2026-11-06 D：指令归 system；最后那条 user 只留一句时间事实。
     head = head + "\n\n" + task
 
-    hist = trim(_load_hist(key))
+    # 缓存滞回窗口（2026-11-10）：这三条旁路也要用整段窗口、并且照样只追加
+    # 落盘，否则它们一跑就把主回复攒起来的前缀砍回 12 条，前功尽弃。
+    win = cache_rows(_load_hist(key))
     model_hist = _render_hist(
-        hist, name=char_name(card, key=key),
+        trim(win, limit=len(win)), name=char_name(card, key=key),
         alias=str((card or {}).get("name") or ""))
     # 近因位跟普通轮同源：时间事实之后仍贴一句正向锚点，别让跳跃开场
     # 因为换了条组装路径就丢了视角。
@@ -6816,11 +6863,11 @@ def jump_phase(session_key, phase, sender="", sender_uin=""):
     if not reply:
         return None
     # 只归档她的开场，不归档那行系统任务。
-    hist.append({"role": "assistant",
+    win.append({"role": "assistant",
                  "content": _ensure_meta(raw, scene, mood, intensity, state, outfit)})
     try:
-        _save_hist(key, hist[-HISTORY_LIMIT:])
-        _append_archive(key, hist[-1:], seed=hist[-HISTORY_LIMIT:])
+        _save_hist(key, cache_rows(win))
+        _append_archive(key, win[-1:], seed=trim(win[-HISTORY_LIMIT:]))
     except Exception:                                  # noqa: BLE001
         log.exception("时段跳跃落史失败 %s", key)
     _save_mood(key, mood, intensity, state, prev_state, outfit=outfit)
@@ -6903,9 +6950,11 @@ def skip_day(session_key, sender="", sender_uin="", days=1, doing=""):
     # 2026-11-06 D：这一轮该怎么写，全在 system 里说清；玩家语域只留一句
     # 时间事实，免得「按格式输出」这种系统腔被当成他说的话。
     head = head + "\n\n" + task
-    hist = trim(_load_hist(key))
+    # 缓存滞回窗口（2026-11-10）：这三条旁路也要用整段窗口、并且照样只追加
+    # 落盘，否则它们一跑就把主回复攒起来的前缀砍回 12 条，前功尽弃。
+    win = cache_rows(_load_hist(key))
     model_hist = _render_hist(
-        hist, name=char_name(card, key=key),
+        trim(win, limit=len(win)), name=char_name(card, key=key),
         alias=str((card or {}).get("name") or ""))
     # 睡到明天同样贴近因位，和普通轮、时段跳跃共用一句。
     msgs = ([{"role": "system", "content": head}] + model_hist
@@ -6927,11 +6976,11 @@ def skip_day(session_key, sender="", sender_uin="", days=1, doing=""):
     if not reply:
         return None
     # 只归档她的开场，不归档那行系统任务（见 _SKIP_TASK 注释）。
-    hist.append({"role": "assistant",
+    win.append({"role": "assistant",
                  "content": _ensure_meta(raw, scene, mood, intensity, state, outfit)})
     try:
-        _save_hist(key, hist[-HISTORY_LIMIT:])
-        _append_archive(key, hist[-1:], seed=hist[-HISTORY_LIMIT:])
+        _save_hist(key, cache_rows(win))
+        _append_archive(key, win[-1:], seed=trim(win[-HISTORY_LIMIT:]))
     except Exception:
         log.exception("时间跳跃落史失败 %s", key)
     _save_mood(key, mood, intensity, state, prev_state, outfit=outfit)
@@ -7022,9 +7071,11 @@ def _gen_and_save(key, ent, card, head, task, sender="", prev_state="",
     `finish_action` / `finish_night` / `next_morning` 三处只差提示词，
     其余完全一样，抽出来免得三份各写一遍（写岔一次就有一处不落史）。
     """
-    hist = trim(_load_hist(key))
+    # 缓存滞回窗口（2026-11-10）：这三条旁路也要用整段窗口、并且照样只追加
+    # 落盘，否则它们一跑就把主回复攒起来的前缀砍回 12 条，前功尽弃。
+    win = cache_rows(_load_hist(key))
     model_hist = _render_hist(
-        hist, name=char_name(card, key=key),
+        trim(win, limit=len(win)), name=char_name(card, key=key),
         alias=str((card or {}).get("name") or ""))
     # 收尾 / 第二天 / 第五次收场：这一轮的最后一条是任务指令，同样在它
     # 末尾贴统一锚点，让视角要求离生成点最近。
@@ -7046,11 +7097,11 @@ def _gen_and_save(key, ent, card, head, task, sender="", prev_state="",
     outfit = split_outfit(raw) or str((ent or {}).get("outfit") or "").strip()
     if not reply:
         return None
-    hist.append({"role": "assistant",
+    win.append({"role": "assistant",
                  "content": _ensure_meta(raw, scene, mood, intensity, state, outfit)})
     try:
-        _save_hist(key, hist[-HISTORY_LIMIT:])
-        _append_archive(key, hist[-1:], seed=hist[-HISTORY_LIMIT:])
+        _save_hist(key, cache_rows(win))
+        _append_archive(key, win[-1:], seed=trim(win[-HISTORY_LIMIT:]))
     except Exception:
         log.exception("%s落史失败 %s", tag, key)
     _save_mood(key, mood, intensity, state, prev_state, outfit=outfit)
