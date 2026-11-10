@@ -582,6 +582,8 @@ class TestComicAdminPage(_TempMixin, unittest.TestCase):
         self.assertIn("谁用了漫画台", page)
         self.assertIn("+1 剧本", page)
         self.assertNotIn("provider|model", page)
+        self.assertIn("每本格数上限", page)
+        self.assertNotIn("label: '每本格数'", page)
         adm = self._html("admin.html")
         self.assertNotIn("cfModels", adm)
         self.assertNotIn("cfAccounts", adm)
@@ -670,6 +672,8 @@ class TestFriendPageFromMaster(unittest.TestCase):
         self.assertNotIn('id="panels" type="number"', s)
         self.assertNotIn('id="pN"', s)          # 旧精简版能填 30 的写真框
         self.assertIn("不能自己改", s)
+        self.assertIn("每本最多 ", s)          # 是上限，不是「一本固定 N 格」
+        self.assertNotIn("'一本 ' + n + ' 格", s)
 
     def test_手动发送与失败反馈都在发送卡就地显示(self):
         s = self.html()

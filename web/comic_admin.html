@@ -161,7 +161,7 @@ const DEF_FIELDS = [
   { key: 'revise',     label: '修订次数' },
   { key: 'comic',      label: '漫画本数' },
   { key: 'portrait',   label: '写真本数' },
-  { key: 'max_panels', label: '每本格数' },
+  { key: 'max_panels', label: '每本格数上限' },
   { key: 'max_shots',  label: '写真张数' }
 ];
 
@@ -202,7 +202,7 @@ function renderDefaults(d) {
     + '修订 <b>' + (x.revise ?? 3) + '</b> 次 · '
     + '漫画 <b>' + (x.comic ?? 1) + '</b> 本 · '
     + '写真 <b>' + (x.portrait ?? 2) + '</b> 本 · '
-    + '每本 <b>' + (x.max_panels ?? 10) + '</b> 格 · '
+    + '每本格数上限 <b>' + (x.max_panels ?? 10) + '</b> 格 · '
     + '写真每本 <b>' + (x.max_shots ?? 5) + '</b> 张';
   $('defaultsFields').innerHTML = DEF_FIELDS.map((f) =>
     '<label>' + esc(f.label) + '<input type="number" min="0" data-k="' + f.key +
@@ -239,7 +239,7 @@ function renderAccounts(d) {
       + '<span class="meta">作品 ' + (a.works || 0) + ' 本</span></div>'
       + '<div class="quota">' + quota + '</div>'
       + '<div class="acts">' + adds + '<span class="sep"></span>'
-      + '<span class="hint">每本格数</span>'
+      + '<span class="hint">每本格数上限</span>'
       + '<select class="act-panels" data-qq="' + esc(a.qq) + '">' + tiers + '</select>'
       + '</div></div>';
   }).join('');
@@ -286,7 +286,7 @@ async function setPanels(qq, n) {
   try {
     render(await post('/api/comic/admin',
       { account: { qq: qq, limits: { max_panels: n } } }));
-    ok('已把 ' + qq + ' 的每本格数改成 ' + n);
+    ok('已把 ' + qq + ' 的每本格数上限改成 ' + n + ' 格');
   } catch (e) { fail(e); }
 }
 async function resend(qq, task) {

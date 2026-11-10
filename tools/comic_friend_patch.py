@@ -237,8 +237,8 @@ function friendPanelMax() {
   if (p) p.value = n;
   const hint = friendEl('panelsHint');
   if (hint) hint.textContent = portrait
-    ? '一次 ' + n + ' 张（站主给的额度，不能自己改）'
-    : '一本 ' + n + ' 格（站主给的额度，不能自己改）';
+    ? '一次最多 ' + n + ' 张（站主给的上限，不能自己改）'
+    : '每本最多 ' + n + ' 格（站主给的上限，不能自己改）';
 }
 function friendMode() {
   const p = curMode() === 'portrait';
