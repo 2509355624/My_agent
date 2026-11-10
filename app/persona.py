@@ -5130,8 +5130,10 @@ time（这轮剧情跨了多少时间）：
   场景明确切到了第二天。话题提到明天不算，要真的跨过去才算。
 - skip_days —— 明确隔了好几天：约的是「周末见」、他出了趟远门回来。
 
-plan（这轮**说定了**的约定）：把约定写成一句话（「周末去游乐场」）。
-只是提议还没被答应、或者被岔开的，不算。已有约定且没变化就填空串。
+plan（**到这一拍仍然有效**的约定）：这轮新说定的写成一句话
+（「周末去游乐场」）；系统登记过的那条还在，就原样写一遍；
+这一轮里已经做完了，就填空串销账。
+只是提议还没被答应、或者被岔开的，不算。
 
 她这一拍什么底色、会不会主动、身体先动的是哪一下——**这些不归你管**，
 交给写作层自己判。你在这一层只负责两件事：**这句值多少分**、
@@ -5368,7 +5370,9 @@ orgasm：这一轮她**到没到**，true / false。到了系统会把反应值�
 refuse：玩家这一轮提了要求，而她**明确不愿意**（摇头、推开、说不要并且是真的）= true。
   嘴上说不要但身体在配合，是 false——那种情况按 corrupt 记，不按 refuse 记。
 time：跨天/过夜填 "overnight"，其余 "none"；phase 是这一拍的时段（早晨/下午/晚上/深夜），
-  没变就留空；plan 是这轮定下的约定，没有留空；place 是换了地方才写，没换留空。
+  没变就留空；place 是换了地方才写，没换留空。
+plan 写**到这一拍仍然有效**的约定：这轮新说定的写新的；系统登记过的那条还在，
+  就原样写一遍；这一轮里已经做完了，就写空串销账。
 
 
 ## 她是谁
@@ -5433,7 +5437,7 @@ def _judge_v2(card, said, state="", line_key="", gameday=None,
         "recent": ctx.get("recent") or "（你们还没什么交集）",
         "gday": _day_of(gd),
         "gphase": str(gd.get("phase") or "还没定"),
-        "gplan": ("有个还没兑现的约定：" + plan) if plan else "（暂时没有约定）",
+        "gplan": _plan_fact(gd, plan),
         "profile": _score_profile(card, "", key=line_key),
         # 上一轮状态逐轮会变，从「她是谁」里拆出来留在事实段：
         # 卡面那段因此恒定，能整段吃前缀缓存；信息一点没少给。
@@ -5514,10 +5518,7 @@ def _judge_intent_scored(card, said, state="", line_key="", gameday=None,
         # 打分器只看得到「第几天」，看不到「现在是早晨」，它就没法判断「变了没有」。
         # 不给这一格，`gd["phase"]` 只能靠玩家手动点时间按钮才会动。
         "gphase": str(gd.get("phase") or "还没定"),
-        "gplan": ("有个还没兑现的约定：" + plan
-                  + ("（约在第 %d 天）" % int(gd["plan_day"])
-                     if gd.get("plan_day") else ""))
-                  if plan else "（暂时没有约定）",
+        "gplan": _plan_fact(gd, plan),
         "profile": _score_profile(card, state, key=line_key),
         "said": str(said or "")[:2000],
         "history": _judge_recent(history),
@@ -5723,6 +5724,25 @@ def _day_of(gd):
         return 0
 
 
+def _plan_fact(gd, plan):
+    """裁判看到的约定：只报登记事实，不替模型断言「还没兑现」。
+
+    2026-11-10：以前写「有个还没兑现的约定：X」，等于代码先判了它没做完；
+    裁判照着这句把 plan 一路往后传，同日内做完的约定永远销不掉账。
+    现在只给「哪天登记的 / 约了什么 / 约在哪天 / 那天过没过」，
+    做没做完由模型对照最近对话判断。
+    """
+    plan = str(plan or "").strip()
+    if not plan:
+        return "（系统里目前没有登记在册的约定）"
+    day = _day_of(gd)
+    pd = _as_int((gd or {}).get("plan_day"), 0, 0, 99999)
+    when = "，约在第 %d 天" % pd if pd and pd != day else ""
+    past = "；约的那天已经过了" if pd and pd <= day else ""
+    return ("第 %d 天登记过一条约定：%s%s%s。做没做过以最近对话为准，"
+            "已经做完就把 plan 写成空串销账。" % (day, plan, when, past))
+
+
 def _roll_event(gd):
     """新的一天开什么：约定 > 随机事件（两成）> 普通的一天。"""
     plan = str(gd.get("plan") or "").strip()
@@ -5787,10 +5807,15 @@ def _apply_gameday(key, score=None, force_new_day=False, days=1):
             ph = normalize_phase(score.get("phase"))
             if ph:
                 gd["phase"] = ph[:12]
-        plan = str(score.get("plan") or "").strip()
-        if plan:
+        # 2026-11-10：约定在**同一天**约、同一天做完时，跨天销账根本不触发，
+        # 旧 plan 会一直挂着被角色当成还欠着提。裁判现在把 plan 写成「到这一拍
+        # 仍然有效」的约定：做完了就交空串销账。代码只在它**确实交了字符串**
+        # 时覆盖（含空串）；没交作业（None）就沿用，不替它猜。
+        raw_plan = score.get("plan")
+        if isinstance(raw_plan, str):
+            plan = raw_plan.strip()
             gd["plan"] = plan[:80]
-            gd["plan_day"] = int(gd["day"]) + 1
+            gd["plan_day"] = int(gd["day"]) + 1 if plan else 0
         # 换地方了就更新（2026-11-06）：留空表示「还在原处」，别每轮都写。
         place = str(score.get("place") or "").strip()
         if place:

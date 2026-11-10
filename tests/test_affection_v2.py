@@ -728,6 +728,17 @@ class JudgeV2PrefixCacheTest(unittest.TestCase):
         left = set(re.findall(r"%\(([^)]+)\)", stable))
         self.assertTrue(left <= {"facts_guide", "profile", "item_keys"}, left)
 
+    def test_gplan_stays_in_the_dynamic_tail(self):
+        """约定事实每轮都变，只能排在末尾 miss 区，不许挪回稳定段。"""
+        stable, dynamic = P._SCORE_PROMPT_V2.split(self.MARK, 1)
+        self.assertIn("%(gplan)s", dynamic)
+        self.assertNotIn("%(gplan)s", stable)
+
+    def test_plan_contract_is_worded_as_still_valid(self):
+        stable = P._SCORE_PROMPT_V2.split(self.MARK)[0]
+        self.assertIn("到这一拍仍然有效", stable)
+        self.assertIn("写空串销账", stable)
+
     def test_dynamic_values_only_appear_after_the_marker(self):
         text = self._fill(said="一句独一无二的原话",
                           state_line="桌前 · 白衬衫")

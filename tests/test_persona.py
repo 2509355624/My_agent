@@ -2887,6 +2887,27 @@ class GameDayTest(PersonaBase):
         self.assertEqual(gd["event"], "已经办完：去游乐场")
         self.assertEqual(gd["plan"], "")
 
+    def test_empty_plan_string_clears_a_same_day_booking(self):
+        """2026-11-10：同日约、同日做完的约定，靠裁判交空串销账。
+
+        跨天销账只认 plan_day <= day；同一天做完的事根本不触发跨天，
+        旧 plan 会一直挂着被当成还欠着提。
+        """
+        line = persona.resolve_line(self.KEY)
+        persona._apply_gameday(line, {"time": "none", "plan": "去市场买菜"})
+        self.assertEqual(self._gday()["plan"], "去市场买菜")
+        gd = persona._apply_gameday(line, {"time": "none", "plan": ""})
+        self.assertEqual(gd["plan"], "")
+        self.assertEqual(gd["plan_day"], 0)
+        self.assertEqual(self._gday()["plan"], "")
+
+    def test_missing_plan_field_does_not_clear_anything(self):
+        """没交作业（None）就沿用，代码不替模型猜。"""
+        line = persona.resolve_line(self.KEY)
+        persona._apply_gameday(line, {"time": "none", "plan": "去市场买菜"})
+        persona._apply_gameday(line, {"time": "none"})
+        self.assertEqual(self._gday()["plan"], "去市场买菜")
+
     def test_block_shows_day_plan_and_soft_curfew(self):
         line = persona.resolve_line(self.KEY)
         persona._apply_gameday(line, {"time": "none", "plan": "去游乐场"})
@@ -3759,6 +3780,23 @@ class CrossDayFactTest(unittest.TestCase):
             {"day": 2, "event": "约定：「明早请假」"})
         self.assertIn("今天已经办完", blk)
         self.assertNotIn("今天的事：", blk)
+
+    def test_plan_fact_only_reports_booking_facts(self):
+        """裁判看到的约定只报事实，代码不替它断言「还没兑现」。"""
+        t = persona._plan_fact(
+            {"day": 2, "plan_day": 3, "plan": "去市场买菜"}, "去市场买菜")
+        self.assertIn("第 2 天登记过", t)
+        self.assertIn("约在第 3 天", t)
+        self.assertIn("以最近对话为准", t)
+        for bad in ("还没兑现", "未完成", "还没完成", "就说今天"):
+            self.assertNotIn(bad, t)
+
+    def test_plan_fact_flags_day_already_passed(self):
+        t = persona._plan_fact({"day": 4, "plan_day": 2}, "去市场买菜")
+        self.assertIn("那天已经过了", t)
+
+    def test_plan_fact_empty_when_nothing_is_registered(self):
+        self.assertIn("没有登记", persona._plan_fact({}, ""))
 
     def test_new_day_adds_a_transition_fact(self):
         gd = {"day": 3, "phase": "早晨"}

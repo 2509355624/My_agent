@@ -473,6 +473,9 @@ class RawMemoryTest(RagBase):
         self.assertIn("【当时的原话", blk)
         self.assertIn("我不怕打雷", blk)
         self.assertIn("正在发生的比旧话更重要", blk)
+        self.assertIn("当时记下的话", blk)
+        self.assertIn("想提旧事照提", blk)
+        self.assertIn("用已经发生过的口吻提", blk)
 
     def test_raw_block_respects_budget(self):
         docs = [{"content": "字" * 300} for _ in range(10)]
@@ -588,6 +591,22 @@ class BackfillTest(RagBase):
         self.assertEqual(len(self.client.ingested), 1)
         for e in self.client.ingested[0][1]:
             self.assertEqual(e["metadata"]["kind"], "raw")
+
+
+class PastTensePromptTest(unittest.TestCase):
+    """2026-11-10：老 fact 里的「明天/下次」是相对时间，召回时无从判断。"""
+
+    def test_batch_narrative_asks_for_a_past_record(self):
+        self.assertIn("当时记下的一笔", rank._MEMORY_PROMPT)
+
+    def test_atomic_facts_ask_for_past_tense(self):
+        self.assertIn("过去式的一笔记录", rank._MEMORY_PROMPT)
+
+    def test_prompt_still_formats_without_new_placeholders(self):
+        """新增的是纯文字；.format 的参数集合没变。"""
+        text = rank._MEMORY_PROMPT.format(
+            start=1, end=5, dialogue="测试", name="纱雾")
+        self.assertIn("当时记下的一笔", text)
 
 
 if __name__ == "__main__":
