@@ -75,9 +75,10 @@ TOPBAR = r"""  <div class="topbar">
       写三行设定 → 生成剧本 → 确认开跑 → 给格子加台词气泡。<br>
       <b>关于次数：</b>写剧本要反复查资料库、很费 Token，所以每个账号有免费次数；
       换种子重跑、改画面词、加气泡这些只吃显卡，不扣次数，可以随便跑。<br>
-      <b>关于图片：</b>网页里是缩略图（打开快、能随时翻旧作品）；高清成品打包成 zip
-      由 QQ 私聊发给你，可能要等一会儿才收得到，<b>不用守着网页</b>。服务端不长期保存，
-      收到后请及时下载。发送失败不会改成网页下载。
+      <b>自动发送：</b>跑完<b>自动</b>把高清包通过 QQ 发给你，<b>正常排队</b>，
+      <b>可以直接离开网页</b>。<br>
+      <b>包的名字：</b>「作品名 无气泡」是底图，「作品名 有气泡」是加完台词的成品；
+      网页里只有缩略图。
     </div>
   </div>
 """
@@ -114,16 +115,14 @@ RENDER_CARD = r"""  <div class="card" id="friendRenderCard">
 
 SEND_CARD = r"""
   <div class="card" id="sendCard">
-    <h2>📤 高清成品 · QQ 发送</h2>
+    <h2>📤 QQ 发送</h2>
     <div class="friend-note">
-      网页里是缩略图，高清原图不走网页下载。底图跑完会<b>自动发一次「底图包」</b>；
-      给全部格子加完气泡后会<b>自动再发一次「成品包」</b>。
-      想立刻拿<b>当前这一刻的成品</b>（比如刚重跑过几格、刚加完台词），就点下面按钮重新打包发一次。
-      文件由站主本机通过 QQ 私聊直发，可能要等一会儿才收得到，不用守着网页；
-      失败就点重发或找站主，不会改成网页下载。
+      <b>跑完自动发送，正常排队，可以直接离开网页。</b><br>
+      底图跑完发「<b>无气泡</b>」，全部格子加完气泡发「<b>有气泡</b>」。
+      刚重跑过几格想立刻拿当前成品，点下面按钮重发一次。
     </div>
     <div class="row" style="margin-top:10px">
-      <button class="btn primary" id="btnSendQQ" onclick="doSendQQ()">📤 发送当前成品到 QQ</button>
+      <button class="btn primary" id="btnSendQQ" onclick="doSendQQ()">📤 重发当前成品到 QQ</button>
       <span class="friend-note" id="queueHint"></span>
     </div>
     <div class="inline-status" id="lsSend"></div>
@@ -160,10 +159,8 @@ toast = function (msg, isErr) { _mToast(msg, isErr); friendSay(msg, isErr); };
 const _mSetBusy = setBusy;
 setBusy = function (b, phase) {
   _mSetBusy(b, phase);
-  if (b) friendInline('lsRun', '⏳ 当前任务正在跑（' +
-    (phase === 'bubble' ? '加气泡' : '渲染场景图') +
-    '），按钮已置灰，页面每 2 秒自动刷新，不用重复点');
-  else if (FRIEND.wasBusy) friendInline('lsRun', '✅ 这一批跑完了');
+  if (b) friendInline('lsRun', '⏳ 正在跑 · 正常排队 · 跑完自动发，可以离开网页');
+  else if (FRIEND.wasBusy) friendInline('lsRun', '✅ 跑完了 · 高清包会自动发到 QQ，可以离开网页');
   FRIEND.wasBusy = !!b;
 };
 
@@ -184,7 +181,7 @@ saveScript = async function (andRun) {
   if (FRIEND.starting) return;
   FRIEND.starting = true;
   friendFocus('lsRun');
-  friendInline('lsRun', '⏳ 正在提交开跑…按钮已置灰，不用重复点');
+  friendInline('lsRun', '⏳ 已提交 · 正常排队 · 跑完自动发，可以离开网页');
   const btn = friendEl('btnStart');
   if (btn) btn.disabled = true;
   try {
@@ -331,28 +328,26 @@ function friendPacks(v) {
   if (!box) return;
   const rows = (v.packages || []).map(function (p) {
     const st = p.state === 'sent' ? '<span class="ok">已发送</span>'
-      : p.state === 'failed' ? '<span class="bad">发送失败</span>' : '<span>处理中</span>';
-    return '<div class="pack"><b>' + esc(p.label) + '</b> · ' + st +
-      ' · ' + (p.files || 0) + ' 张 · ' + esc(p.at || '') +
-      (p.size ? ' · ' + (p.size / 1048576).toFixed(1) + ' MB' : '') +
+      : p.state === 'failed' ? '<span class="bad">发送失败</span>' : '<span>排队中</span>';
+    return '<div class="pack"><b>' + esc(p.name || p.label) + '</b> · ' + st +
+      ' · ' + (p.files || 0) + ' 张' +
       (p.error ? '<br><span class="bad">' + esc(p.error) + '</span>' : '') + '</div>';
   }).join('');
   const top = (v.state === 'packing')
-    ? '<div class="pack">⏳ <b>正在打包 / 通过 QQ 发送…</b> 大文件要等一会儿，下面会自动刷新。</div>'
+    ? '<div class="pack">⏳ 排队打包中</div>'
     : '';
   const sig = rows + '|' + (v.state || '') + '|' + (v.error || '');
   if (sig === FRIEND.packSig) return;
   FRIEND.packSig = sig;
   box.innerHTML = top + (rows ||
-    '<div class="pack">还没有可发送的文件。跑完底图会自动发一次，也可以点上面按钮手动发。</div>');
+    '<div class="pack">跑完自动发，正常排队，可以直接离开网页。</div>');
 }
 
 // 母本 2 秒一轮的 status 已经带 delivery / quota / queue，挂个钩子就够，
 // 不再另起轮询打重复请求。
 window.friendOnStatus = function (d) {
   const q = friendEl('queueHint');
-  if (q) q.textContent = '当前全站排队 ' + (d.queue || 0) +
-    ' 张 · 单张串行，前面可能还有别人的任务';
+  if (q) q.textContent = '正常排队 · 前面还有 ' + (d.queue || 0) + ' 张';
   const now = Date.now(), grid = friendEl('grid');
   (d.panels || []).forEach(function (p) {
     const k = String(p.no);
@@ -381,14 +376,14 @@ async function doSendQQ() {
   if (!TASK) { friendInline('lsSend', '先生成或选一本作品', 'err'); return; }
   const btn = friendEl('btnSendQQ');
   if (btn) btn.disabled = true;
-  friendInline('lsSend', '⏳ 正在打包当前成品并提交 QQ 发送…');
+  friendInline('lsSend', '⏳ 已提交，打包中');
   try {
     const d = await api('/api/comic/send_qq', {task: TASK});
-    friendInline('lsSend', '⏳ ' + (d.hint || '已提交 QQ 发送，可能要等一会儿才收得到，不用守着网页。'));
+    friendInline('lsSend', d.hint || '跑完自动发，正常排队。');
     if (d.delivery) friendPacks(d.delivery);
     friendPollSend();
   } catch (e) {
-    friendInline('lsSend', '✗ ' + e.message + '（不会改成网页下载，稍等再点或找站主）', 'err');
+    friendInline('lsSend', '✗ ' + e.message, 'err');
   } finally {
     setTimeout(function () { if (btn) btn.disabled = false; }, 4000);
   }
@@ -401,21 +396,22 @@ function friendPollSend() {
       const d = await api('/api/comic/delivery_status?task=' + encodeURIComponent(TASK));
       friendPacks(d);
       const st = d.state || '';
+      const names = (d.packages || []).filter(function (p) { return p.state === 'sent'; })
+        .map(function (p) { return p.name || p.label; }).join('、');
       if (st === 'sent') {
         clearInterval(FRIEND.sendTimer); FRIEND.sendTimer = null;
-        friendInline('lsSend', '✅ 已通过 QQ 发出，大文件可能要等一会儿才收得到；不用守着网页。', 'ok');
+        friendInline('lsSend', '✅ ' + (names || '高清包') + ' 已发送', 'ok');
       } else if (st === 'failed') {
         clearInterval(FRIEND.sendTimer); FRIEND.sendTimer = null;
-        friendInline('lsSend', '✗ 发送失败：' + (d.error || '看下面每个包的状态') +
-          '。点重发或找站主即可，不会改成网页下载。', 'err');
+        friendInline('lsSend', '✗ 发送失败：' + (d.error || '找站主补发'), 'err');
       } else if (d.error) {
-        friendInline('lsSend', '✗ 发送失败：' + d.error + '（不会改成网页下载）', 'err');
+        friendInline('lsSend', '✗ ' + d.error, 'err');
       }
       // packing 时不覆盖点击瞬间那句「本次会发哪几个包」，只靠 packs 里那行转圈提示。
     } catch (e) { /* 状态接口偶发失败下一轮再来 */ }
     if (Date.now() - t0 > 180000 && FRIEND.sendTimer) {
       clearInterval(FRIEND.sendTimer); FRIEND.sendTimer = null;
-      friendInline('lsSend', '⏳ 还在打包 / 发送中（大文件要一会儿），下面会自动刷新状态，不用守着网页。');
+      friendInline('lsSend', '⏳ 正常排队中，会自动继续发，可以离开网页。');
     }
   }, 2500);
 }
@@ -528,7 +524,7 @@ def main():
             "      <span id=\"progress\" style=\"color:var(--text-dim);font-size:12px\"></span>\n"
             "    </div>",
             "      <button class=\"btn primary\" id=\"btnBubbleAll\" onclick=\"bubbleAll()\">🫧 一键加气泡（全部待加格）</button>\n"
-            "      <button class=\"btn\" id=\"btnSendInline\" onclick=\"doSendQQ()\">📤 发送当前成品到 QQ</button>\n"
+            "      <button class=\"btn\" id=\"btnSendInline\" onclick=\"doSendQQ()\">📤 重发到 QQ</button>\n"
             "      <a class=\"btn hidden-by-friend\" id=\"btnZip\" style=\"text-decoration:none\" href=\"#\" onclick=\"return zipGuard()\">📦 下载成品 zip</a>\n"
             "      <span id=\"progress\" style=\"color:var(--text-dim);font-size:12px\"></span>\n"
             "    </div>\n"

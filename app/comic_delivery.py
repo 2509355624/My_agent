@@ -9,9 +9,13 @@
 
 ## 两个包分开
 
-- **底图包** `raw/NN_raw.png`：跳过 2x 放大后单张约 4MB。
-- **成品包** `final/NN_final.png`：加气泡/文字之后的图。
-- 写真任务另发一个写真包 `portraits/NN.png`。
+- **无气泡** `raw/NN_raw.png`：跳过 2x 放大后单张约 4MB。
+- **有气泡** `final/NN_final.png`：加气泡/文字之后的图。
+- 写真任务另发一个「写真」包 `portraits/NN.png`。
+
+QQ 里收到的名字是「<作品名> 无气泡 / 有气泡」，不用「底图包 / 成品包」
+这种内部叫法（2026-11-10 实测反馈）。内部 dict 的 key 仍沿用老名字，
+指纹去重与历史 `delivery.json` 才不会因为改文案而失效。
 
 用户各取所需，不用一次传 80MB。哪个包的文件变了就只重发那个包
 （换种子重跑、改画面词都只吃 GPU 不花 Token，重发也不额外收费）。
@@ -28,6 +32,7 @@
 
 import json
 import os
+import re
 import threading
 import time
 import zipfile
@@ -38,8 +43,49 @@ _LOCK = threading.Lock()
 _COOLDOWN = 60.0            # 手动重发冷却，防连点刷屏
 _last_manual = {}           # {任务目录: 上次手动重发时刻}
 
-_HINT = ("作品跑好了，文件正在打包并通过 QQ 发给你，可能要等一会儿才收得到，"
-         "不用守着网页。成品服务端不长期保存，收到后请及时下载保存。")
+# 给用户看的一句话规则。跑完就会自动发，不用守着网页；全站单张串行，
+# 排在别人后面是正常现象。长篇说明一律不写（用户实测反馈：看不进也看不到）。
+RULE = "跑完自动发送 · 正常排队 · 可以直接离开网页"
+
+# 内部 key → 给用户看的名字。key 不动，指纹去重和老状态文件才不受影响。
+_DISPLAY = {"底图包": "无气泡", "成品包": "有气泡", "写真包": "写真"}
+
+
+def _work_name(task_dir):
+    """作品名，用来给 zip 命名：`C20261110-01_学姐的饮料` → `学姐的饮料`。
+
+    剧本目录本来就带标题（`comic._next_task_dir`）；老任务退剧本里的
+    `# 标题：`；写真任务没剧本，用 `portrait.json` 需求快照第一行；
+    都不行才用目录名。只做文件名清洗，不改动任何数据。
+    """
+    base = os.path.basename(str(task_dir).rstrip("\\/")) or "作品"
+    m = re.match(r"^C\d{8}-\d+_(.+)$", base)
+    title = (m.group(1) if m else "").strip()
+    if not title:
+        try:
+            from app import comic
+            meta, _ = comic.parse_script(
+                os.path.join(str(task_dir), "script.md"))
+            title = str((meta or {}).get("title") or "").strip()
+        except Exception:
+            pass
+    if not title:
+        # 写真任务没有剧本标题，目录名只有编号；用需求快照第一行当作品名，
+        # 别让用户收到一个 `C20261110-02 写真.zip`。
+        try:
+            with open(os.path.join(str(task_dir), "portrait.json"),
+                      encoding="utf-8") as f:
+                brief = str((json.load(f) or {}).get("brief") or "").strip()
+            title = brief.splitlines()[0][:12] if brief else ""
+        except (OSError, ValueError, AttributeError, IndexError):
+            pass
+    title = re.sub(r'[\\/:*?"<>|\r\n\t]', "", (title or base)).strip()
+    return title[:40] or "作品"
+
+
+def pack_name(task_dir, label):
+    """`<作品名> 无气泡` —— zip 文件名、QQ 提示、网页状态共用这一个名字。"""
+    return "%s %s" % (_work_name(task_dir), _DISPLAY.get(label, label))
 
 
 def delivery_dir(task_dir, qq):
@@ -103,8 +149,8 @@ def _collect(task_dir):
 
 def preview(task_dir):
     """这一刻会发哪几个包、各几张。给「点了发送」的那一瞬间回话用，
-    别让用户对着一个按钮猜发出去的到底是什么。"""
-    return {label: len(files)
+    别让用户对着一个按钮猜发出去的到底是什么。key 直接用用户看到的名字。"""
+    return {pack_name(task_dir, label): len(files)
             for label, files in _collect(task_dir).items()}
 
 
@@ -130,8 +176,7 @@ def _pack(task_dir, qq, label, files):
     """打一个 zip，返回绝对路径。PNG 本身已压缩，ZIP_STORED 省 CPU。"""
     dst_dir = delivery_dir(task_dir, qq)
     os.makedirs(dst_dir, exist_ok=True)
-    work = os.path.basename(str(task_dir).rstrip("\\/")) or "作品"
-    name = "%s_%s.zip" % (work, label)
+    name = pack_name(task_dir, label) + ".zip"
     dst = os.path.join(dst_dir, name)
     tmp = dst + ".tmp"
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:
@@ -168,11 +213,13 @@ def deliver(task_dir, qq, force=False, auto=False):
                 from app import qq_api
                 qq_api.send_private_file(qq, path, os.path.basename(path))
                 results[label] = {"fingerprint": fp, "state": "sent",
+                                  "name": pack_name(task_dir, label),
                                   "files": len(files), "at": _now(),
                                   "size": os.path.getsize(path)}
                 sent.append(label)
             except Exception as exc:
                 results[label] = {"fingerprint": fp, "state": "failed",
+                                  "name": pack_name(task_dir, label),
                                   "files": len(files), "at": _now(),
                                   "error": str(exc)[:300]}
                 st["error"] = str(exc)[:300]
@@ -197,10 +244,11 @@ def deliver(task_dir, qq, force=False, auto=False):
             "sent" if st["state"] == "sent" else "failed",
             ",".join(sent) or st.get("error", ""))
     if sent:
-        # 一条说明就够，别每个包再刷一条消息。
+        # 一行一个包，只说「发了什么」，不写「正在打包 / 正在发送」这类长句。
         try:
             from app import qq_api
-            qq_api.send_private(qq, _HINT)
+            qq_api.send_private(qq, "\n".join(
+                "%s 已发送" % pack_name(task_dir, lab) for lab in sent))
         except Exception:
             pass
     return sent
@@ -246,9 +294,12 @@ def view(task_dir):
     st = delivery_state(task_dir)
     packs = []
     for label, v in sorted((st.get("packages") or {}).items()):
-        packs.append({"label": label, "state": v.get("state"),
+        # 老状态文件没有 name，按当前命名规则补一个，别把「底图包」露给用户。
+        packs.append({"label": label,
+                      "name": v.get("name") or pack_name(task_dir, label),
+                      "state": v.get("state"),
                       "files": v.get("files"), "at": v.get("at"),
                       "size": v.get("size"), "error": v.get("error")})
     return {"state": st.get("state") or "idle", "at": st.get("at") or "",
             "error": st.get("error") or "", "packages": packs,
-            "hint": _HINT}
+            "hint": RULE}

@@ -2002,9 +2002,7 @@ def api_comic_send_qq():
     what = "、".join("%s %d 张" % (k, v) for k, v in packs.items())
     return jsonify({"ok": True, "state": "packing", "packages": packs,
                     "delivery": comic_delivery.view(path),
-                    "hint": "已开始打包，本次会发：" + what +
-                            "。QQ 可能要等一会儿才收得到，不用守着网页；"
-                            "按钮下面会自动刷新每个包的状态。"})
+                    "hint": "本次会发：" + what + "。" + comic_delivery.RULE})
 
 
 @bp.route("/api/comic/admin", methods=["GET", "POST"])

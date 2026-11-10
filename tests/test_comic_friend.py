@@ -191,15 +191,49 @@ class TestDelivery(_TempMixin, unittest.TestCase):
         self.assertNotEqual(before, comic_delivery._fingerprint(
             comic_delivery._collect(d)["底图包"]))
 
+    def test_包名用作品名加无气泡有气泡(self):
+        d = self.mk_task(name="C20261110-01_学姐的饮料", raw=True, final=True)
+        self.assertEqual(comic_delivery._work_name(d), "学姐的饮料")
+        self.assertEqual(comic_delivery.pack_name(d, "底图包"),
+                         "学姐的饮料 无气泡")
+        self.assertEqual(comic_delivery.pack_name(d, "成品包"),
+                         "学姐的饮料 有气泡")
+        self.assertEqual(comic_delivery.pack_name(d, "写真包"),
+                         "学姐的饮料 写真")
+        self.assertEqual(comic_delivery.preview(d),
+                         {"学姐的饮料 无气泡": 1, "学姐的饮料 有气泡": 1})
+        # 老状态文件没有 name，view() 也要按当前命名补上，别露出「底图包」
+        comic_delivery._save_state(d, {"packages": {
+            "底图包": {"state": "sent", "files": 1}}})
+        self.assertEqual(comic_delivery.view(d)["packages"][0]["name"],
+                         "学姐的饮料 无气泡")
+        # 写真任务没有剧本标题，用需求快照第一行，别退化成纯编号
+        p = self.mk_task(name="C20261110-08", script=False)
+        with open(os.path.join(p, "portrait.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"brief": "花田里回眸、天台看夕阳"}, f,
+                      ensure_ascii=False)
+        self.assertEqual(comic_delivery._work_name(p), "花田里回眸、天台看夕阳")
+        self.assertEqual(comic_delivery.pack_name(p, "写真包"),
+                         "花田里回眸、天台看夕阳 写真")
+        for k in ("自动发送", "正常排队", "离开网页"):
+            self.assertIn(k, comic_delivery.RULE)
+
     def test_自动发送按指纹去重且失败写状态(self):
         from app import qq_api
         d = self.mk_task(raw=True, final=True)
         with mock.patch.object(qq_api, "send_private_file") as send, \
                 mock.patch.object(qq_api, "send_private") as hint:
             first = comic_delivery.deliver(d, QQ, auto=True)
-            self.assertEqual(set(first), {"底图包", "成品包"})
+            self.assertEqual(set(first), {"底图包", "成品包"})   # 内部 key 不变
             self.assertEqual(send.call_count, 2)
             self.assertEqual(hint.call_count, 1)
+            # QQ 文本只报包名，不写「正在打包 / 正在发送」那类长句
+            text = hint.call_args[0][1]
+            self.assertIn("无气泡 已发送", text)
+            self.assertIn("有气泡 已发送", text)
+            self.assertNotIn("正在打包", text)
+            self.assertNotIn("不用守着网页", text)
             self.assertEqual(comic_delivery.deliver(d, QQ, auto=True), [])
             self.assertEqual(send.call_count, 2)             # 没变化不重复发
             comic_delivery.deliver(d, QQ, force=True)
@@ -207,10 +241,13 @@ class TestDelivery(_TempMixin, unittest.TestCase):
         v = comic_delivery.view(d)
         self.assertEqual(v["state"], "sent")
         self.assertEqual(len(v["packages"]), 2)
-        self.assertIn("QQ 发给你", v["hint"])
+        self.assertEqual(v["hint"], comic_delivery.RULE)
+        self.assertEqual({p["name"] for p in v["packages"]},
+                         {comic_delivery.pack_name(d, k)
+                          for k in ("底图包", "成品包")})
         self.assertTrue(os.path.isfile(os.path.join(
             comic_delivery.delivery_dir(d, QQ),
-            os.path.basename(d) + "_底图包.zip")))            # zip 不自动删
+            comic_delivery.pack_name(d, "底图包") + ".zip")))   # zip 不自动删
 
         with mock.patch.object(qq_api, "send_private_file",
                                side_effect=RuntimeError("协议端离线")):
@@ -323,15 +360,19 @@ class TestFriendApi(_TempMixin, unittest.TestCase):
         self.assertEqual(reset.status_code, 403)
 
     def test_手动发送立刻回正在打包并说清会发什么(self):
-        d = self.mk_task(name="A1", raw=True, final=True)
+        name = "C20261110-07_学姐的饮料"
+        d = self.mk_task(name=name, raw=True, final=True)
         # 起线程会被 mock 掉：测试不碰真实 QQ 协议端。
         with mock.patch.object(comic_api.threading, "Thread") as th:
-            r = self._post("/api/comic/send_qq", {"task": "A1"}, QQ)
+            r = self._post("/api/comic/send_qq", {"task": name}, QQ)
         self.assertEqual(r.status_code, 200)
         j = r.get_json()
         self.assertEqual(j["state"], "packing")
-        self.assertEqual(j["packages"], {"底图包": 1, "成品包": 1})
-        self.assertIn("底图包 1 张", j["hint"])
+        self.assertEqual(j["packages"],
+                         {"学姐的饮料 无气泡": 1, "学姐的饮料 有气泡": 1})
+        self.assertIn("学姐的饮料 无气泡 1 张", j["hint"])
+        self.assertIn("自动发送", j["hint"])
+        self.assertIn("正常排队", j["hint"])
         self.assertEqual(comic_delivery.view(d)["state"], "packing")
         self.assertEqual(comic_delivery.view(d)["error"], "")
         th.assert_called_once()
@@ -406,7 +447,8 @@ class TestFriendApi(_TempMixin, unittest.TestCase):
                                   return_value=(True, 0)):
             r = self._post("/api/comic/send_qq", {"task": "A1", "qq": QQ})
         self.assertEqual(r.status_code, 200)
-        self.assertIn("QQ", r.get_json()["hint"])
+        self.assertIn("自动发送", r.get_json()["hint"])
+        self.assertIn("正常排队", r.get_json()["hint"])
         time.sleep(0.15)                       # 后台线程把 deliver 调起来
         self.assertTrue(deliver.called)
 
@@ -597,7 +639,7 @@ class TestFriendPageFromMaster(unittest.TestCase):
         self.assertIn("function friendInline", s)
         self.assertIn("window.friendOnStatus", s)
         self.assertIn("friendInline('lsScript'", s)   # 查库进度也写就地
-        self.assertIn("当前任务正在跑", s)
+        self.assertIn("⏳ 正在跑 · 正常排队", s)
         self.assertIn("按钮已置灰", s)
 
     def test_开跑提交瞬间就置灰(self):
@@ -605,7 +647,7 @@ class TestFriendPageFromMaster(unittest.TestCase):
         # 母本要等 /api/comic/start 返回才 setBusy，中间几秒会被当成卡住连点
         self.assertIn("if (FRIEND.starting) return;", s)
         self.assertIn("if (btn) btn.disabled = true;", s)
-        self.assertIn("不用重复点", s)
+        self.assertIn("⏳ 已提交 · 正常排队", s)
 
     def test_耗时角标与三格一行(self):
         s = self.html()
@@ -635,9 +677,23 @@ class TestFriendPageFromMaster(unittest.TestCase):
         self.assertIn('id="btnSendInline"', s)
         self.assertIn("async function doSendQQ", s)
         self.assertIn("'/api/comic/delivery_status?task='", s)
-        self.assertIn("⏳ 正在打包当前成品", s)
-        self.assertIn("不会改成网页下载", s)
+        self.assertIn("⏳ 已提交，打包中", s)
+        self.assertIn("跑完自动发，正常排队", s)
         self.assertIn('id="packs"', s)
+
+    def test_自动发送与正常排队写在顶部和每个关键按钮下(self):
+        s = self.html()
+        self.assertIn("<b>自动发送：</b>跑完<b>自动</b>", s)
+        self.assertIn("<b>正常排队</b>", s)
+        self.assertIn("<b>可以直接离开网页</b>", s)
+        self.assertIn("⏳ 已提交 · 正常排队 · 跑完自动发，可以离开网页", s)
+        self.assertIn("✅ 跑完了 · 高清包会自动发到 QQ", s)
+        self.assertIn("⏳ 排队打包中", s)
+        self.assertIn("作品名 无气泡", s)
+        self.assertIn("作品名 有气泡", s)
+        for old in ("正在打包 / 通过 QQ 发送", "大文件要等一会儿",
+                    "正在打包当前成品", "不用守着网页"):
+            self.assertNotIn(old, s)
 
     def test_不引用只在5174存在的页面且模型下拉改走配额配置(self):
         s = self.html()
