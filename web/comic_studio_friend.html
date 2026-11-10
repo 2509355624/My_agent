@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>漫画工作台</title>
+<title>漫画工作台 · 群友版</title>
+<!-- 由 tools/comic_friend_patch.py 从 comic_studio.html 生成，请勿直接编辑 -->
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%237c5cff'/></svg>">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -17,701 +18,2607 @@
   html, body { background: var(--bg); color: var(--text);
     font-family: "SF Mono", "JetBrains Mono", "Consolas", "Microsoft YaHei", monospace;
     font-size: 14px; min-height: 100%; }
-  .wrap { max-width: 1180px; margin: 0 auto; padding: 20px; }
-  .topbar { display: flex; align-items: center; gap: 12px; padding: 8px 0 18px; flex-wrap: wrap; }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 20px; }
+  .topbar { display: flex; align-items: center; gap: 12px; padding: 12px 0 20px; }
   .topbar h1 { font-size: 17px; font-weight: 500; }
   .topbar .spacer { flex: 1; }
   a.back { color: var(--text-dim); text-decoration: none; font-size: 13px; }
   a.back:hover { color: var(--accent); }
-  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
-  .chip { font-size: 11px; padding: 3px 9px; border: 1px solid var(--border);
-    border-radius: 20px; color: var(--text-dim); background: var(--bg-input); }
-  .chip b { color: var(--text); font-weight: 500; }
-  .chip.warn { color: var(--warn); border-color: #5a4618; }
   .card { background: var(--bg-elev); border: 1px solid var(--border-soft);
     border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
-  .card h2 { font-size: 14px; font-weight: 500; color: var(--text-dim);
-    margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
-  .card h2 .tip { font-size: 11px; color: var(--text-mute); font-weight: 400; }
-  .notice { border-color: #4a3a14; background: #17130a; color: #e7d3a1;
-    font-size: 12.5px; line-height: 1.9; }
-  .notice b { color: var(--warn); font-weight: 500; }
+  .card h2 { font-size: 14px; font-weight: 500; color: var(--text-dim); margin-bottom: 12px; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .row > label { font-size: 12px; color: var(--text-dim); }
-  .grow { flex: 1; min-width: 160px; }
   input, textarea, select {
     background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
     border-radius: var(--radius-sm); padding: 8px 10px; font: inherit; outline: none;
   }
-  input:focus, textarea:focus, select:focus { border-color: var(--accent); }
-  input[type=number] { width: 88px; }
-  input[type=checkbox] { accent-color: var(--accent); }
-  textarea { width: 100%; min-height: 190px; line-height: 1.6; resize: vertical; }
-  textarea.small { min-height: 72px; }
-  /* 设定三行竖排：手机上不用横着挤，也不会跟「镜头方式」下拉撞名。 */
-  .brief-line { margin-bottom: 8px; }
-  .brief-line > label { display: block; font-size: 12px; color: var(--text-dim);
-    margin-bottom: 3px; }
-  .brief-line input, .brief-line textarea { width: 100%; }
-  .brief-line textarea.small { min-height: 64px; }
+  input:focus, textarea:focus { border-color: var(--accent); }
+  textarea { width: 100%; min-height: 220px; line-height: 1.6; resize: vertical; }
   .btn { background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
     border-radius: var(--radius-sm); padding: 8px 14px; cursor: pointer; font: inherit; }
   .btn:hover:not(:disabled) { border-color: var(--accent); }
   .btn:disabled { opacity: .45; cursor: not-allowed; }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .btn.small { padding: 4px 9px; font-size: 12px; }
+  .btn.small { padding: 4px 10px; font-size: 12px; }
   .btn.danger { color: var(--error); }
-  .btn.on { border-color: var(--accent); color: #c9b8ff; }
-  .bar { display: none; padding: 9px 12px; border-radius: var(--radius-sm);
-    background: var(--bg-input); border: 1px solid var(--border); font-size: 12.5px;
-    color: var(--info); margin: 10px 0; white-space: pre-wrap; line-height: 1.7; }
-  .bar.err { color: var(--error); border-color: #5a2626; }
-  .bar.show { display: block; }
-  .muted { color: var(--text-mute); font-size: 12px; line-height: 1.8; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+  #jobbar { display: none; padding: 8px 12px; border-radius: var(--radius-sm);
+    background: var(--bg-input); border: 1px solid var(--border); font-size: 13px;
+    color: var(--info); margin-bottom: 12px; }
+  #jobbar.err { color: var(--error); border-color: var(--error); }
+  #jobbar .bar-row { display: flex; align-items: center; gap: 10px; }
+  #jobbar .bar-row #jobbarText { flex: 1; }
+  .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  @media (max-width: 980px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
   .slot { background: var(--bg-input); border: 1px solid var(--border);
     border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; }
-  .slot .head { display: flex; align-items: center; gap: 7px; padding: 8px 10px; }
-  .slot .no { font-size: 14px; font-weight: 500; }
-  .badge { font-size: 10px; padding: 2px 7px; border-radius: 10px; border: 1px solid; }
+  .slot .head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; }
+  .slot .no { font-size: 15px; font-weight: 500; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid; }
   .b-pending  { color: var(--text-mute); border-color: var(--text-mute); }
   .b-rendered { color: var(--info);     border-color: var(--info); }
   .b-done     { color: var(--success);  border-color: var(--success); }
   .b-error    { color: var(--error);    border-color: var(--error); }
+  .slot .seed { margin-left: auto; font-size: 11px; color: var(--text-mute); }
   .slot .imgs { display: flex; gap: 1px; background: var(--border-soft); }
-  .slot .imgs .cell { flex: 1; min-width: 0; background: #0d0d14;
-    display: flex; align-items: center; justify-content: center; }
-  .slot img { width: 100%; height: auto; display: block; cursor: zoom-in; }
-  .slot .ph { color: var(--text-mute); font-size: 11px; padding: 34px 4px; text-align: center; }
-  .slot .acts { padding: 8px 9px; display: flex; gap: 5px; flex-wrap: wrap; }
-  .slot .scene { padding: 0 10px 9px; font-size: 11px; color: var(--text-dim);
-    line-height: 1.6; max-height: 46px; overflow: hidden; }
-  .slot .err { padding: 0 10px 9px; font-size: 11px; color: var(--error); }
-  #chatLog { max-height: 210px; overflow-y: auto; margin-bottom: 9px; }
-  .msg { font-size: 12.5px; line-height: 1.7; padding: 7px 9px; border-radius: 8px;
-    margin-bottom: 6px; white-space: pre-wrap; word-break: break-word; }
-  .msg.u { background: #23203a; color: #cfc6ff; }
-  .msg.a { background: var(--bg-input); color: var(--text-dim); }
-  #lightbox { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.92);
-    z-index: 99; align-items: center; justify-content: center; padding: 24px; }
-  #lightbox.show { display: flex; }
-  #lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
-  hr { border: 0; border-top: 1px solid var(--border-soft); margin: 14px 0; }
-  @media (max-width: 640px) {
-    .wrap { padding: 12px; }
-    .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
-  }
+  .slot .imgs div { flex: 1; min-height: 160px; background: var(--bg-elev);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-mute); font-size: 11px; }
+  .slot img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .slot .ops { display: flex; gap: 6px; padding: 8px 10px; flex-wrap: wrap; }
+  .slot .err { color: var(--error); font-size: 11px; padding: 0 10px 8px; word-break: break-all; }
+  .slot .lbl { color: var(--text-dim); font-size: 11px; padding: 0 10px 8px; }
+  .empty { color: var(--text-mute); font-size: 13px; padding: 24px; text-align: center; }
+  .slot img.zoomable { cursor: zoom-in; }
+  #zoom { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.9);
+    z-index: 30; align-items: center; justify-content: center; cursor: zoom-out; }
+  #zoom img { max-width: 94vw; max-height: 94vh; }
+  .slot .manual { padding: 0 10px 8px; }
+  .slot .manual textarea { min-height: 48px; font-size: 12px; line-height: 1.5;
+    padding: 6px 8px; }
+  .mrow { display: flex; gap: 6px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+  .mrow select, .slot .ops select { padding: 4px 6px; font-size: 12px; }
+  .slot .peek { margin-top: 6px; }
+  .slot .peek .ptip { color: var(--text-dim); font-size: 11px; line-height: 1.6;
+    margin-bottom: 4px; }
+  .slot .peek textarea { min-height: 104px; font-size: 12px; line-height: 1.5;
+    padding: 6px 8px; }
+  .slot .escene { display: block; width: 100%; box-sizing: border-box; margin-top: 6px;
+    min-height: 72px; font-size: 12px; line-height: 1.5; padding: 6px 8px; }
+  #portraitGrid .shot img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  #portraitGrid .shot .imgs { min-height: 200px; }
+  #portraitGrid .shot .ptxt { color: var(--text-dim); font-size: 11px; line-height: 1.5;
+    padding: 6px 10px 8px; word-break: break-all; max-height: 66px; overflow: hidden; }
+  label.file { position: relative; overflow: hidden; }
+  label.file input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  #toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: var(--bg-input); border: 1px solid var(--accent); color: var(--text);
+    padding: 10px 18px; border-radius: var(--radius-sm); display: none; z-index: 9; max-width: 80%; }
+
+  /* ── 群友版补丁：母本 UI 一律保留，这里只加就地反馈 / 双 Tab / 耗时 / 发送卡 ── */
+  .hidden-by-friend { display: none !important; }
+  .inline-status { display: none; margin-top: 9px; padding: 9px 11px;
+    border-radius: var(--radius-sm); background: var(--bg-input);
+    border: 1px solid var(--border); font-size: 12px; line-height: 1.65;
+    color: var(--info); word-break: break-word; }
+  .inline-status.on { display: block; }
+  .inline-status.err { color: var(--error); border-color: var(--error); }
+  .inline-status.ok  { color: var(--success); border-color: var(--success); }
+  .friend-note { color: var(--text-dim); font-size: 12px; line-height: 1.7; }
+  .friend-note b { color: var(--text); font-weight: 500; }
+  .mode-tabs { display: flex; gap: 10px; margin-bottom: 12px; }
+  .mode-tab { flex: 1; display: flex; flex-direction: column; gap: 3px;
+    padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+    background: var(--bg-input); cursor: pointer; }
+  .mode-tab input { display: none; }
+  .mode-tab span { font-size: 14px; }
+  .mode-tab small { color: var(--text-dim); font-size: 11px; }
+  .mode-tab.on, .mode-tab:has(input:checked) { border-color: var(--accent); background: rgba(124,92,255,.12); }
+  .mode-tab.on span, .mode-tab:has(input:checked) span { color: var(--accent); }
+  .slot .cost { margin-left: 8px; font-size: 11px; color: var(--warn); white-space: nowrap; }
+  .chip { display: inline-block; font-size: 11px; padding: 3px 9px; margin-right: 6px;
+    border: 1px solid var(--border); border-radius: 20px; color: var(--text-dim); }
+  .pack { font-size: 12px; color: var(--text-dim); padding: 5px 0;
+    border-bottom: 1px solid var(--border-soft); line-height: 1.6; }
+  .pack b { color: var(--text); font-weight: 500; }
+  .pack .ok { color: var(--success); }
+  .pack .bad { color: var(--error); }
+  .ratio-btn.on { border-color: var(--accent); color: var(--accent); }
+  #briefRows input, #briefRows textarea { width: 100%; box-sizing: border-box; }
+  #briefRows textarea { min-height: 68px; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>漫画工作台</h1>
-    <div class="chips" id="chips"></div>
-    <div class="spacer"></div>
-    <a class="back" href="/">回首页</a>
+    <h1>🎬 漫画工作台</h1>
+    <span class="spacer"></span>
+    <span id="quotaTop"></span>
   </div>
 
-  <div class="card notice" id="notice">
-    <b>先说清楚怎么用：</b>生成剧本要反复查资料库，很费 Token，所以每位账号
-    <b>免费 1 次剧本生成 + 3 次修订助手</b>；还想要更多，直接找站主加次数。<br>
-    出图走站长的电脑，<b>一张一张排队画</b>，前面还有别人的图时要等，页面顶部会显示排队数。<br>
-    <b>不用守着网页。</b>跑完后打包成「底图包 / 成品包」的 zip，直接 QQ 私聊发给你，
-    文件可能要等一会儿才收得到。网页这边只放缩略图给你预览，高清原图都在 QQ 文件里。<br>
-    <b>服务端不会长期保存成品</b>，QQ 收到后请及时下载保存。发送失败就在这里点「重发到 QQ」，
-    或找站主补发；不会改成网页下载（走隧道绕一圈太慢）。
+  <div class="card" id="friendNote">
+    <div class="friend-note">
+      <b>怎么用：</b>顶上选「跑漫画」或「跑写真」，两个是分开的界面。跑漫画就是
+      写三行设定 → 生成剧本 → 确认开跑 → 给格子加台词气泡。<br>
+      <b>关于次数：</b>写剧本要反复查资料库、很费 Token，所以每个账号有免费次数；
+      换种子重跑、改画面词、加气泡这些只吃显卡，不扣次数，可以随便跑。<br>
+      <b>关于图片：</b>网页里是缩略图（打开快、能随时翻旧作品）；高清成品打包成 zip
+      由 QQ 私聊发给你，可能要等一会儿才收得到，<b>不用守着网页</b>。服务端不长期保存，
+      收到后请及时下载。发送失败不会改成网页下载。
+    </div>
   </div>
 
-  <div class="bar" id="bar"></div>
-
-  <!-- ① 剧本 -->
   <div class="card">
-    <h2>① 写剧本 <span class="tip" id="scriptTip"></span></h2>
-    <div class="row" style="margin-bottom:9px">
-      <label>历史作品</label>
-      <select id="taskSel" class="grow"><option value="">（新建一本）</option></select>
-      <button class="btn small" id="btnTasks">刷新</button>
+    <h2>① 需求 → 出内容</h2>
+    <div class="mode-tabs" id="modeTabs">
+      <label class="mode-tab on"><input type="radio" name="mode" value="script" checked onchange="switchMode()">
+        <span>📖 跑漫画</span><small>写剧本 → 逐格出图 → 加台词气泡</small></label>
+      <label class="mode-tab"><input type="radio" name="mode" value="portrait" onchange="switchMode()">
+        <span>📷 跑写真</span><small>单人写真集，一次多张，无视角无剧情</small></label>
     </div>
-    <div class="brief-line">
-      <label>① 视角 —— 谁的视角（镜头后面站的是谁）</label>
-      <input id="briefView" placeholder="例：我 / 哥哥">
-    </div>
-    <div class="brief-line">
-      <label>② 主角是谁（画面里的人）</label>
-      <input id="briefHero" placeholder="例：妹妹 / 千夏">
-    </div>
-    <div class="brief-line">
-      <label>③ 剧情是什么（在哪、发生什么）</label>
-      <textarea id="briefPlot" class="small" placeholder="例：下雨天两个人在公交站躲雨，她把伞往我这边偏了一点"></textarea>
-    </div>
-    <div class="hint" style="margin-bottom:9px;">
-      这三行编剧会当成硬约束（视角＝镜头后的「我」，主角＝画面里的人），照着填就行。
-      一本几格由站主按账号给，页面顶部会显示，不用自己填。
-    </div>
-    <div class="row" style="margin:9px 0">
-      <label>镜头方式</label>
-      <select id="pov" title="第一人称＝镜头就是「我」的眼睛；自由机位＝编剧按剧情自己挑；第三人称＝镜头在旁边看两个人">
-        <option value="pov">POV 第一人称</option>
-        <option value="free">自由视角</option>
-        <option value="third">第三人称</option>
+    <div class="row" style="margin-bottom:10px">
+      <span style="color:var(--text-dim);font-size:12px">历史任务</span>
+      <select id="taskPick" style="width:300px;max-width:46vw" onchange="switchTask(this.value)"
+              title="剧本都存着：选一个就切过去，看它当时的剧本和格子（不会删任何东西）">
+        <option value="">（当前没有任务）</option>
       </select>
-      <label>编剧模型</label><select id="model"><option value="">站主默认</option></select>
-      <label>接上一集</label><select id="prev"><option value="">不接</option></select>
-      <label><input type="checkbox" id="carry"> 沿用服装</label>
-      <label><input type="checkbox" id="noSearch" checked> 跳过查库（快）</label>
+      <button class="btn small" onclick="loadTasks()" title="重新扫一遍 comics/ 目录">↻</button>
+      <span style="color:var(--text-dim);font-size:12px">切过去只是打开它，不改内容</span>
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <span style="color:var(--text-dim);font-size:12px">生图渠道</span>
+      <select id="sceneSkill" style="width:250px" onchange="changeChannel(this.value)"
+              title="阶段一出场景图用哪个渠道。整本共用一个；换渠道只影响之后渲染的格，已出的图不动。">
+      </select>
+      <span id="chanHint" style="color:var(--text-dim);font-size:12px"></span>
+      <span class="spacer" style="flex:1"></span>
+      <span id="sizeHint" style="color:var(--text-dim);font-size:12px"></span>
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <div id="briefRows" style="flex:1;min-width:220px">
+        <input id="bfView" placeholder="① 视角：谁的视角？（例：哥哥 / 我 / 旁观者）" style="margin-bottom:6px">
+        <input id="bfHero" placeholder="② 主角是谁？（例：妹妹，长直黑发、校服）" style="margin-bottom:6px">
+        <textarea id="bfPlot" rows="2" placeholder="③ 剧情是什么？（例：下雨天兄妹俩在公交站躲雨……）"></textarea>
+      </div>
+      <textarea id="brief" style="display:none"></textarea>
+      <input id="heroine" style="display:none;width:220px" placeholder="女主设定：长直黑发、校服、气质文静……（填一次，这批写真每张都自动带上）">
+      <input id="character" style="width:130px" placeholder="角色名（可选）">
+      <input id="panels" type="hidden" value="10">
+      <span id="panelsHint" class="friend-note"></span>
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <span class="hidden-by-friend" style="color:var(--text-dim);font-size:12px">编剧模型</span>
+      <select id="prov" class="hidden-by-friend" style="width:140px" onchange="loadModels();syncProvBtn()" title="用哪家模型写剧本"></select>
+      <select id="model" class="hidden-by-friend" style="width:200px" onchange="rememberLlm()" title="写剧本用的具体模型（留空 = 该家默认）"></select>
+      <button class="btn small hidden-by-friend" id="btnAddProv" onclick="onAddProvClick()"
+              title="添加自定义中转站（比如 relaycore 的 grok），存下来下次还在">＋ 中转站</button>
+      <span id="prevLabel" style="color:var(--text-dim);font-size:12px;margin-left:6px">接上一集</span>
+      <select id="prevTask" style="width:230px;max-width:40vw"
+              title="选了就把那一集的气泡和旁白当前情，本集接着往下写（不重演、关系延续）">
+        <option value="">不接——全新一集</option>
+      </select>
+      <label id="carryOutfitWrap" style="font-size:12px;white-space:nowrap;color:var(--text-dim)"
+             title="同一场戏跨集时，把上一集最后一格的服饰带过来——发色/款式/关键配件会沿用。换场景或过夜仍会重写，不会把睡衣带到公司">
+        <input type="checkbox" id="carryOutfit"> 沿用服装
+      </label>
+      <span class="spacer" style="flex:1"></span>
+      <label id="povModeWrap" style="font-size:12px;white-space:nowrap;color:var(--text-dim)"
+             title="POV 第一人称：镜头＝观众的眼睛，画面里只有女主。自由视角：机位由编剧按剧情自己挑，可以双人同框。第三人称：镜头站在旁边看两个人，双人同框是常态、禁止一切 POV 标签——想稳定画出「男生女生都在画面里」选这个">
+        <select id="povMode" style="width:auto" onchange="rememberPovMode()">
+          <option value="pov">POV 第一人称</option>
+          <option value="free">自由视角（自选机位）</option>
+          <option value="third">第三人称（双人同框）</option>
+        </select>
+      </label>
+      <label id="skipSearchWrap" style="font-size:12px;white-space:nowrap;color:var(--text-dim)"
+             title="勾上就不查标签库，直接把规则给编剧模型、一次写完整剧本（快到十几倍）；取消勾选则先查库再写">
+        <input type="checkbox" id="skipSearch" checked onchange="rememberSkipSearch()"> 跳过查库
+      </label>
+      <label id="silverModeWrap" style="display:none;font-size:12px;white-space:nowrap;color:var(--text-dim)"
+             title="自由视角使用 silver 连续漫画路线，只请求一次模型，不经过补正 AI">
+        <select id="silverMode" style="width:auto" onchange="rememberSilverMode()">
+          <option value="no_bubble">连续漫画，无气泡</option>
+          <option value="bubble">连续漫画，有气泡</option>
+        </select>
+      </label>
+      <button class="btn primary" id="btnScript" onclick="genScript()">生成剧本</button>
+    </div>
+    <div class="inline-status" id="lsScript"></div>
+    <textarea id="script" style="display:none" spellcheck="false"></textarea>
+    <!-- 自由视角（silver）：固定部分 / 逐格动态部分分开显示。跑图时每格 =
+         固定部分 + 该格动态部分，跟 skill 示例的结构一致。 -->
+    <div id="silverParts" style="display:none;margin-top:10px"></div>
+    <div id="fixPanel" style="display:none;margin-top:10px"></div>
+    <div id="chatBox" style="display:none;margin-top:10px;border:1px solid var(--border);border-radius:8px;padding:10px">
+      <div style="font-size:13px;margin-bottom:6px">💬 和修订助手聊剧本
+        <span style="color:var(--text-dim);font-size:12px">——说「女主加长发」「03 格背景换成暖色」，它只动点名的地方；也可以直接问它问题</span>
+      </div>
+      <div id="chatLog" style="max-height:220px;overflow-y:auto;font-size:13px;line-height:1.55;margin-bottom:8px"></div>
+      <div class="row">
+        <input id="chatInput" style="flex:1" placeholder="例如：女主的头发改成长直发；02 格背景改成暖色系……" onkeydown="if(event.key==='Enter')chatSend()">
+        <button class="btn primary" id="btnChat" onclick="chatSend()">发送</button>
+        <button class="btn" id="btnChatUndo" onclick="chatUndo()" title="回退到最近一次对话改稿之前" style="display:none">↩️ 撤销对话改动</button>
+      </div>
+    </div>
+    <div class="row" id="scriptOps" style="display:none;margin-top:10px">
+      <span style="color:var(--text-dim);font-size:12px">剧本可直接改字（场景行/台词行都行），改完点确认开跑按改过的跑</span>
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn" id="btnRefix" onclick="refix()" title="以编剧原稿为底，重跑一遍内容补正">🩹 重新补正</button>
+      <button class="btn" id="btnRerun" onclick="rerunAll()"
+              title="剧本不动，按当前「生图渠道」把每一格重新画一遍——换渠道对比效果用">🔁 换渠道重跑</button>
+      <button class="btn hidden-by-friend" id="btnSave" onclick="saveScript(false)">只保存</button>
+      <button class="btn primary" id="btnStart" onclick="saveScript(true)">确认开跑（渲染全部场景图）</button>
+    </div>
+    <div class="inline-status" id="lsRun"></div>
+  </div>
+
+  <!-- 写真卡放在①卡正下方（2026-10-18）：原来它在整页最底下，切到生图模式后
+       上面还压着剧本正文 / 补正报告 / 修订助手 / 渲染参数 / 槽位五块，用户要
+       「往下拖好久才能看到写真」。剧本模式下它是 display:none，位置在这里不
+       影响剧本模式的观感。 -->
+  <div class="card" id="portraitCard" style="display:none">
+    <h2>写真 · 单人写真集</h2>
+    <div style="color:var(--text-dim);font-size:12px;margin-bottom:10px">
+      生图模式的产物：提示词员把「女主设定 + 需求」写成 N 条纯画面（无视角、无剧情、无观众、画面只有女主一人），
+      每条各出一张。走上面选的阶段一渠道——下面的渲染参数卡（LoRA / 采样 / 放大 / 分辨率）对它们同样生效。
+      对哪张点「🔁 换种子」就重跑哪张，其余不动。
+    </div>
+    <div id="portraitJob"></div>
+    <div class="inline-status" id="lsPortrait"></div>
+    <div id="portraitMeta" style="color:var(--text-dim);font-size:12px;margin-bottom:8px"></div>
+    <div id="portraitGrid" class="grid"><div class="empty">还没有写真——在上面切到「生图」模式写句需求，或对已有任务点下方刷新</div></div>
+  </div>
+
+  <div class="card hidden-by-friend" id="renderCard">
+    <h2 id="renderTitle">⚙ 渲染参数</h2>
+    <div style="color:var(--text-dim);font-size:12px;margin-bottom:10px">
+      三档保存：<b>本任务</b>（这个渠道记一份，换渠道互不覆盖）、<b>全局默认</b>（写
+      state/comic_render_defaults.json，按渠道分开存，新任务自动照它）、都没有就用上面选的
+      <b id="renderSkillName">anima-line</b> 模板当前值。取值优先级：本任务 &gt; 全局默认 &gt; 模板。
+      改了只影响<b>之后</b>渲染的格——已出的图不动，对哪格点「🔁 换种子重跑 / ▶ 跑这一格」哪格用新参数。
+      阶段二加气泡固定走 qwen，不受这些参数影响。
+      分辨率是<b>底图</b>尺寸；第二段采样和放大链都能关（关了出图就按剩下的那级算，右边「预计出图」会跟着变）。
+      这个渠道没有的东西（比如没有 LoRA 链、只有一段采样）不会显示。
+    </div>
+    <div id="loraRows"></div>
+    <div id="loraDefaultRow" style="display:none;margin-bottom:8px">
+      <button class="btn small" onclick="saveLoraToTemplate()">存为模板默认</button>
+      <span class="hint" style="margin-left:8px">写回 moss 模板，QQ 侧和另外两个台一起变</span>
+    </div>
+    <div id="baseCap" style="color:var(--text-dim);font-size:12px;margin:10px 0 6px">第一段采样 · 出构图</div>
+    <div class="row" id="baseRow" style="margin-bottom:10px"></div>
+    <div id="baseNote" style="display:none;color:var(--text-dim);font-size:12px;margin-bottom:10px">
+      这个渠道的采样步数由模型适配器（DMD 步码）定死，改不了；能调的只有下面的分辨率。
+    </div>
+    <div id="hiresCap" style="color:var(--text-dim);font-size:12px;margin:10px 0 6px">第二段采样 · 放大精修（denoise 越小越保留第一段）
+      <label id="hiresSkipLabel" style="margin-left:14px;white-space:nowrap;cursor:pointer"
+             title="只跑第一段采样直接出图。省时间很实在（krea2 832×1216：两段约 49 秒 → 单段 8 步约 16 秒），代价是 latent 放大这一级跟着失效"><input type="checkbox" id="rHiresSkip" onchange="onHiresSkip()" style="vertical-align:-2px"> 关闭二次采样（单段直出，快很多）</label>
+    </div>
+    <div class="row" id="hiresRow" style="margin-bottom:10px"></div>
+    <div class="row" style="margin-bottom:10px">
+      <span style="color:var(--text-dim);font-size:12px">底图分辨率</span>
+      <input id="rpW" type="number" min="256" max="4096" step="8" style="width:92px" title="宽，8 的倍数" oninput="updateSizeHint()">
+      <span style="color:var(--text-dim)">×</span>
+      <input id="rpH" type="number" min="256" max="4096" step="8" style="width:92px" title="高，8 的倍数" oninput="updateSizeHint()">
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn small" onclick="presetSize(1024,1536)" title="1024×1536">竖 2:3</button>
+      <button class="btn small" onclick="presetSize(960,1280)" title="960×1280">竖 3:4</button>
+      <button class="btn small" onclick="presetSize(1024,1024)" title="1024×1024">方 1:1</button>
+      <button class="btn small" onclick="presetSize(1536,1024)" title="1536×1024">横 3:2</button>
+    </div>
+    <div id="upCap" style="color:var(--text-dim);font-size:12px;margin:10px 0 6px">放大 · latent 倍率决定第二段实际跑的尺寸；最终像素放大是出图前最后一道</div>
+    <div class="row" id="upscaleRow" style="margin-bottom:10px">
+      <span id="upLatentLabel" style="color:var(--text-dim);font-size:12px">latent 放大</span>
+      <input id="rUpScale" type="number" min="0.25" max="4" step="0.05" style="width:80px" title="第二段采样前的潜空间放大倍率">
+      <span id="upTimes" style="color:var(--text-dim)">×</span>
+      <span class="spacer" style="flex:1"></span>
+      <select id="rUpModel" style="width:250px" title="最终像素放大模型（ComfyUI upscale_models 清单）"></select>
+      <label id="upSkipLabel" style="font-size:12px;color:var(--text-dim);white-space:nowrap"><input type="checkbox" id="rUpSkip" onchange="updateSizeHint()"> 跳过最终放大</label>
     </div>
     <div class="row">
-      <button class="btn primary" id="btnScript">生成剧本（消耗 1 次）</button>
-      <span class="muted" id="scriptLeft"></span>
-    </div>
-    <hr>
-    <div class="row" style="margin-bottom:8px">
-      <label>剧本正文（可直接改）</label>
-      <div class="grow"></div>
-      <button class="btn small" id="btnSave">保存剧本</button>
-    </div>
-    <textarea id="script"></textarea>
-    <hr>
-    <div class="row" style="margin-bottom:8px">
-      <label>修订助手</label>
-      <div class="grow"></div>
-      <span class="muted" id="reviseLeft"></span>
-      <button class="btn small" id="btnUndo">撤销上次改稿</button>
-    </div>
-    <div id="chatLog"></div>
-    <div class="row">
-      <input id="chatMsg" class="grow" placeholder="例：把第 3 格的背景换成暖色（只问问题、没真改稿，不扣次数）">
-      <button class="btn" id="btnChat">发送</button>
+      <button class="btn primary" id="btnSaveRender" onclick="saveRenderOpts('task')">保存（本任务）</button>
+      <button class="btn" id="btnSaveRenderAll" onclick="saveRenderOpts('global')" title="之后所有没单独存过参数的任务都用这套">存为全局默认</button>
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn small" onclick="resetRenderOpts('task')" title="删掉本任务在这个渠道下存的参数，回落到全局默认 / 模板">↺ 本任务恢复</button>
+      <button class="btn small" onclick="resetRenderOpts('global')" title="删掉 state/comic_render_defaults.json">✕ 清全局默认</button>
+      <span id="renderMsg" style="color:var(--text-dim);font-size:12px"></span>
     </div>
   </div>
 
-  <!-- ② 渲染参数 -->
-  <div class="card">
-    <h2>② 画幅与渠道 <span class="tip">改动即时生效，只影响之后画的格子</span></h2>
-    <div class="row" style="margin-bottom:9px">
-      <label>生图渠道</label><select id="channel" class="grow"></select>
-      <span class="muted" id="channelTip"></span>
-    </div>
+  <div class="card" id="friendRenderCard">
+    <h2>⚙ 画幅 <span style="color:var(--text-dim);font-size:12px;font-weight:400">改动即时生效，只影响之后画的格子</span></h2>
     <div class="row" id="ratios" style="margin-bottom:9px"></div>
     <div class="row">
-      <label>自定义宽</label><input type="number" id="width" min="512" max="2048" step="8">
-      <label>高</label><input type="number" id="height" min="512" max="2048" step="8">
-      <span class="muted" id="renderMsg">群友版已固定跳过最终 2 倍放大，单张约 4MB。</span>
+      <span class="friend-note">或自己填底图尺寸</span>
+      <input type="number" id="frW" min="512" max="2048" step="8" style="width:92px">
+      <span class="friend-note">×</span>
+      <input type="number" id="frH" min="512" max="2048" step="8" style="width:92px">
+      <span class="friend-note" id="frMsg">已固定跳过最终 2 倍放大，单张约 4MB。</span>
     </div>
   </div>
 
-  <!-- ③ 开跑 -->
-  <div class="card">
-    <h2>③ 开跑</h2>
-    <div class="row">
-      <button class="btn primary" id="btnStart">确认开跑（消耗 1 次漫画机会）</button>
-      <button class="btn" id="btnBubbleAll">给全部格子加气泡</button>
-      <button class="btn danger" id="btnAbort">中断排队</button>
-      <span class="muted" id="runState"></span>
+  <div class="card" id="slotCard">
+    <h2>② 槽位 · 逐格生成与修补</h2>
+    <div style="color:var(--text-dim);font-size:12px;margin-bottom:10px">
+      点图可放大看细节。每格能手输一句「要 Qwen 改什么」——源图是这一格**当前成品**，
+      所以可以一次次往上改（改坏了点「加气泡」从底图重画，底图不动）。
+      「📎 传底图」用来顶替你手跑好的底图。
     </div>
-  </div>
-
-  <!-- ④ 槽位 -->
-  <div class="card">
-    <h2>④ 作品槽位 <span class="tip">网页是缩略图，高清图在 QQ 发的 zip 里</span></h2>
-    <div class="grid" id="slots"></div>
-    <div class="muted" id="slotsEmpty">还没有选作品。生成剧本或点上面的「历史作品」翻回之前的。</div>
-  </div>
-
-  <!-- ⑤ 写真 -->
-  <div class="card">
-    <h2>⑤ 单人写真集 <span class="tip">一次最多 5 张，共 2 次机会</span></h2>
-    <div class="row" style="margin-bottom:8px">
-      <input id="pBrief" class="grow" placeholder="想拍什么：比如「雨天窗边、白衬衫、暖光」">
-      <input id="pHeroine" placeholder="角色（可留空）" style="width:150px">
-      <label>张数</label><input type="number" id="pN" min="1" max="5" value="5">
-      <button class="btn primary" id="btnPortrait">生成写真</button>
+    <div id="jobbar">
+      <div class="bar-row">
+        <span id="jobbarText"></span>
+        <button class="btn small danger" id="btnAbort" onclick="abortAll()"
+                title="停掉这一批：正在画的那张立刻停、排队中的不再画；已经出好的图全部保留">⏹ 中断全部</button>
+      </div>
     </div>
-    <div class="grid" id="shots"></div>
-    <div class="muted" id="portraitMsg"></div>
+    <div class="row" id="bubbleAllRow" style="display:none;margin-bottom:12px">
+      <button class="btn primary" id="btnBubbleAll" onclick="bubbleAll()">🫧 一键加气泡（全部待加格）</button>
+      <button class="btn" id="btnSendInline" onclick="doSendQQ()">📤 发送当前成品到 QQ</button>
+      <a class="btn hidden-by-friend" id="btnZip" style="text-decoration:none" href="#" onclick="return zipGuard()">📦 下载成品 zip</a>
+      <span id="progress" style="color:var(--text-dim);font-size:12px"></span>
+    </div>
+    <div class="inline-status" id="lsBubble"></div>
+    <div id="grid" class="grid"><div class="empty">还没有任务——先在上面生成剧本</div></div>
   </div>
 
-  <!-- ⑥ QQ 发送 -->
-  <div class="card">
-    <h2>⑥ QQ 发送状态</h2>
-    <div id="delivery" class="muted">跑完图会自动发，暂时还没有文件。</div>
+  <div class="card" id="sendCard">
+    <h2>📤 高清成品 · QQ 发送</h2>
+    <div class="friend-note">
+      网页里是缩略图，高清原图不走网页下载。底图跑完会<b>自动发一次「底图包」</b>；
+      给全部格子加完气泡后会<b>自动再发一次「成品包」</b>。
+      想立刻拿<b>当前这一刻的成品</b>（比如刚重跑过几格、刚加完台词），就点下面按钮重新打包发一次。
+      文件由站主本机通过 QQ 私聊直发，可能要等一会儿才收得到，不用守着网页；
+      失败就点重发或找站主，不会改成网页下载。
+    </div>
     <div class="row" style="margin-top:10px">
-      <button class="btn" id="btnSend">重发到 QQ</button>
-      <span class="muted">发送失败不会回退成网页下载；等一会儿没收到就找站主。</span>
+      <button class="btn primary" id="btnSendQQ" onclick="doSendQQ()">📤 发送当前成品到 QQ</button>
+      <span class="friend-note" id="queueHint"></span>
     </div>
+    <div class="inline-status" id="lsSend"></div>
+    <div id="packs" style="margin-top:10px"></div>
   </div>
 </div>
-
-<div id="lightbox"><img id="lightboxImg" alt="预览"></div>
+<div id="zoom" onclick="zoomClose()"><img alt=""></div>
+<div id="toast"></div>
 
 <script>
-"use strict";
-/* 群友漫画台：只存一个小状态（当前任务号）在浏览器，图片字节一律不进
-   Local Storage。缩略图由服务端按需生成并落盘，换设备/清缓存/刷新都能拉回来。 */
-const LS_TASK = "comicFriendTask";
-const $ = (id) => document.getElementById(id);
-let S = {
-  task: localStorage.getItem(LS_TASK) || "",
-  cfg: null, quota: null, channels: [], ratio: "",
-  lastRev: {}, slots: "", shots: "", poll: null, chatJob: null
-};
+let TASK = null;          // 任务 id（C<日期>-<序号>）
+// 记住最近一个任务（2026-10-18）：TASK 原来只在内存里，刷新就丢——参数卡、
+// 槽位、剧本全回到空白，得重新生成一遍剧本才接得上。存 localStorage，
+// 刷新后自动恢复；任务目录被删了就把这条忘掉（restoreSession 里处理）。
+const LS_TASK = 'comic_task';
 
-function bar(text, err) {
-  const el = $("bar");
-  el.textContent = text || "";
-  el.className = "bar" + (text ? " show" : "") + (err ? " err" : "");
+function rememberTask(t) {
+  try {
+    if (t) localStorage.setItem(LS_TASK, t);
+    else localStorage.removeItem(LS_TASK);
+  } catch (e) { /* 隐私模式禁用 localStorage 就算了，不影响功能 */ }
 }
-function fail(e) { bar(String(e && e.message || e), true); }
+let TIMER = null;
+let SCRIPT_JOB = null;    // 正在跑的编剧任务 id（编剧是后台 agent，轮询取结果）
+let SCRIPT_NO_SEARCH = true;  // 这一轮编剧是否跳过了查库（只影响提示文案）
+let PROVIDERS = [];       // /api/providers 拉回来的候选家（编剧模型下拉）
+let RUNNING = null;       // 后台正在跑的阶段（scene/bubble/fix）——renderSlot
+                          // 拿它区分「真排队」和「没线程会来跑的假排队」
 
-async function api(path, body, opts) {
-  const o = { method: body === undefined ? "GET" : "POST",
-              headers: {}, credentials: "same-origin" };
-  if (body !== undefined) {
-    o.headers["Content-Type"] = "application/json";
-    o.body = JSON.stringify(body);
-  }
-  if (opts && opts.query) {
-    path += (path.indexOf("?") < 0 ? "?" : "&") + opts.query;
-  }
-  const r = await fetch(path, o);
-  let d;
-  try { d = await r.json(); } catch (e) { throw new Error("后台返回的不是 JSON（" + r.status + "）"); }
-  if (!r.ok || d.ok === false) {
-    throw new Error(d.error || ("请求失败 " + r.status));
-  }
+function toast(msg, isErr) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.style.display = 'block';
+  t.style.borderColor = isErr ? 'var(--error)' : 'var(--accent)';
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.style.display = 'none', 3500);
+}
+
+async function api(path, body) {
+  const opt = body ? {method: 'POST', headers: {'Content-Type': 'application/json'},
+                      body: JSON.stringify(body)} : {};
+  const r = await fetch(path, opt);
+  const d = await r.json().catch(() => ({ok: false, error: '响应不是 JSON'}));
+  if (!d.ok) throw new Error(d.error || ('HTTP ' + r.status));
   return d;
 }
-const q = (o) => new URLSearchParams(o).toString();
 
-function esc(s) {
-  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
-    ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
-}
-
-/* ─── 顶部额度 / 排队 ─────────────────────────────────── */
-function renderChips(d) {
-  const lim = d.quota || S.quota;
-  if (lim) S.quota = lim;
-  const left = (lim && lim.left) || {};
-  const bits = [
-    "剧本 <b>" + (left.script == null ? "-" : left.script) + "</b>",
-    "修订 <b>" + (left.revise == null ? "-" : left.revise) + "</b>",
-    "漫画 <b>" + (left.comic == null ? "-" : left.comic) + "</b>",
-    "写真 <b>" + (left.portrait == null ? "-" : left.portrait) + "</b>",
-    "一本最多 <b>" + ((lim && lim.limits && lim.limits.max_panels) || 10) + "</b> 格"
-  ];
-  if (d.queue != null) bits.push("全站排队 <b>" + d.queue + "</b> 张");
-  $("chips").innerHTML = bits.map((x) => '<span class="chip">' + x + "</span>").join("");
-  $("scriptLeft").textContent = "剩余 " + (left.script == null ? "-" : left.script) + " 次";
-  $("reviseLeft").textContent = "剩余 " + (left.revise == null ? "-" : left.revise) +
-                                " 次（只有真的改了剧本才扣）";
-  $("btnScript").disabled = !(left.script > 0);
-  $("btnChat").disabled = !(left.revise > 0);
-  if (left.script <= 0) $("btnScript").textContent = "剧本次数已用完";
-  $("pN").max = (lim && lim.limits && lim.limits.max_shots) || 5;
+function setBusy(b, phase) {
+  // 编剧任务独立于渲染任务，但它跑的时候同样要锁住按钮——否则每 2 秒一轮的
+  // 槽位刷新会调 setBusy(false)，把「生成剧本」重新启用（用户能重复点，
+  // 一重复就是两个 agent 在并发烧 token）。
+  const busy = b || !!SCRIPT_JOB;
+  for (const id of ['btnScript', 'btnSave', 'btnStart', 'btnRerun', 'btnBubbleAll', 'btnRefix', 'btnChat', 'btnChatUndo'])
+    document.getElementById(id).disabled = busy;
+  document.querySelectorAll('.slot .ops button, .slot .ops select').forEach(x => x.disabled = busy);
+  // 手动修复栏也要锁：跑一轮 Qwen 时再点一次就是两个后台任务抢同一格。
+  document.querySelectorAll('.slot .mrow button, .slot .mrow select, .slot .mrow input[type=file]').forEach(
+    x => x.disabled = busy);
+  const bar = document.getElementById('jobbar');
+  // 「中断全部」跟着这条提示条一起出现：只有真有任务在跑时才需要它。
+  // 它是这条提示条里**唯一不被锁**的按钮——busy 时其它按钮全禁用了，
+  // 唯独中断必须是能点的（否则跑起来就停不下来了）。
+  const abortBtn = document.getElementById('btnAbort');
+  if (abortBtn) abortBtn.style.display = b ? '' : 'none';
+  if (b) { bar.style.display = 'block'; bar.classList.remove('err');
+           document.getElementById('jobbarText').textContent =
+             '⏳ 正在' + (phase === 'bubble' ? '加气泡' : '渲染场景图') + '……页面每 2 秒自动刷新'; }
+  // 渲染参数卡也锁：跑图时改参数，这批用不用新值全看 timing，不如锁掉
+  document.querySelectorAll('#renderCard button, #renderCard input, #renderCard select').forEach(
+    x => x.disabled = busy);
 }
 
-/* ─── 配置 / 下拉 ─────────────────────────────────────── */
-async function loadConfig() {
-  S.cfg = await api("/api/comic/friend_config");
-  const sel = $("model");
-  sel.innerHTML = '<option value="">站主默认</option>' +
-    (S.cfg.models || []).map((m) =>
-      '<option value="' + esc(m.provider + "|" + m.model) + '">' +
-      esc(m.label || m.model || m.provider) + "</option>").join("");
-  const box = $("ratios");
-  box.innerHTML = (S.cfg.ratio_presets || []).map((p) =>
-    '<button class="btn small" data-key="' + p.key + '" data-w="' + p.w +
-    '" data-h="' + p.h + '">' + esc(p.label) + " " + p.w + "×" + p.h + "</button>").join("");
-  box.querySelectorAll("button").forEach((b) => b.onclick = () => {
-    S.ratio = b.dataset.key;
-    $("width").value = b.dataset.w;
-    $("height").value = b.dataset.h;
-    highlightRatio();
-    saveRatio();
-  });
-  renderChips({ quota: S.cfg.quota });
-  S.quota = S.cfg.quota;
-  await loadChannels();
-  await loadTasks();
-}
-function highlightRatio() {
-  $("ratios").querySelectorAll("button").forEach((b) =>
-    b.classList.toggle("on", b.dataset.key === S.ratio));
-}
-async function loadChannels() {
-  const d = await api("/api/comic/channels?" + q({ task: S.task || "" }));
-  S.channels = d.channels || [];
-  $("channel").innerHTML = S.channels.map((c) =>
-    '<option value="' + esc(c.name) + '">' +
-    esc((c.group ? c.group + " · " : "") + c.name) + "</option>").join("");
-  if (d.current) $("channel").value = d.current;
-  $("channelTip").textContent = "共 " + S.channels.length + " 个渠道，全量开放";
-  await loadRenderOpts();
-}
-async function loadRenderOpts() {
-  const d = await api("/api/comic/render_opts?" +
-                      q({ task: S.task || "", skill: $("channel").value || "" }));
-  const o = d.opts || {};
-  $("width").value = o.width || 1024;
-  $("height").value = o.height || 1536;
-  const hit = (S.cfg.ratio_presets || []).find((p) =>
-    p.w === (o.width || 0) && p.h === (o.height || 0));
-  S.ratio = hit ? hit.key : "";
-  highlightRatio();
-  $("renderMsg").textContent = "群友版已固定跳过最终 2 倍放大，单张约 4MB。" +
-    ((d.opts && d.opts.upscale && d.opts.upscale.final_skip === false) ?
-     "（注意：本任务旧参数里还留着放大，下次开跑前请重选一次画幅）" : "");
-}
-async function saveRatio() {
-  if (!S.task) { bar("先生成或选一本作品，画幅才能保存", true); return; }
+// ── 编剧模型下拉 ─────────────────────────────────────
+// 候选由后端去问 provider 自己拿（模型 ID 会下线也会改名，写死的清单会慢慢
+// 指向不存在的模型）。复用网页端同一套接口，不另造一份。
+//
+// 只记住「具体模型名」，渠道本身每次回到后端默认（deepseek 官方）：
+// grok-4.5 思考要 30~40 秒，刷新后自动跳回它反而拖慢编剧（2026-10-22 用户口径）。
+
+const LS_LLM = 'comic_llm_choice';
+
+function rememberLlm() {
   try {
-    const d = await api("/api/comic/render_opts", {
-      task: S.task, scope: "task", skill: $("channel").value,
-      opts: { width: Number($("width").value), height: Number($("height").value) }
+    localStorage.setItem(LS_LLM, JSON.stringify({
+      provider: document.getElementById('prov').value,
+      model: document.getElementById('model').value,
+    }));
+  } catch (e) { }
+}
+
+function savedLlm() {
+  try { return JSON.parse(localStorage.getItem(LS_LLM) || 'null') || {}; }
+  catch (e) { return {}; }
+}
+
+// 「跳过查库」（2026-10-22）：默认勾上——用户现在的判断是模型够强，把规则给它
+// 直接写更快。选了不勾也要记住，否则每次刷新都得手动点回来。
+const LS_NO_SEARCH = 'comic_no_search';
+
+function skipSearch() {
+  return document.getElementById('skipSearch').checked;
+}
+
+function rememberSkipSearch() {
+  try { localStorage.setItem(LS_NO_SEARCH, skipSearch() ? '1' : '0'); } catch (e) { }
+}
+
+function restoreSkipSearch() {
+  let v = null;
+  try { v = localStorage.getItem(LS_NO_SEARCH); } catch (e) { }
+  // 没存过就是默认勾上；存过 '0' 才取消。
+  document.getElementById('skipSearch').checked = (v !== '0');
+}
+
+// 「视角模式」（2026-10-22）：pov = 全篇第一人称硬规则（默认，与之前完全一样）；
+// free = 不加 POV 限制，机位由编剧按规范自己挑，可以双人同框。
+// 记住上次选择：连着画同一部就是同一个模式，别每集重选。
+const LS_POV_MODE = 'comic_pov_mode';
+
+const POV_MODES = ['pov', 'free', 'third'];
+const LS_SILVER_MODE = 'comic_silver_mode';
+
+function povMode() {
+  const v = document.getElementById('povMode').value;
+  return POV_MODES.indexOf(v) >= 0 ? v : 'pov';
+}
+
+function setPovMode(v) {
+  // 只在合法值上动，避免把下拉搞成空值（后端认不出会退回 pov，但界面对不上）
+  document.getElementById('povMode').value =
+    POV_MODES.indexOf(v) >= 0 ? v : 'pov';
+}
+
+function rememberPovMode() {
+  try { localStorage.setItem(LS_POV_MODE, povMode()); } catch (e) { }
+  // 模式变了要给一句人话提示——这不是个无感的开关，POV 与自由视角出来的剧本
+  // 结构完全不同，用户得知道自己在切什么。
+  const HINT = {
+    pov: 'POV 第一人称：镜头＝观众的眼睛，画面里只有女主',
+    free: '自由视角：编剧自己挑机位，可以画双人同框',
+    third: '第三人称：镜头站在旁边看，双人同框是常态、不写 POV 标签'
+  };
+  toast(HINT[povMode()]);
+  syncModeInputs();
+  applyMode();
+}
+
+function restorePovMode() {
+  let v = null;
+  try { v = localStorage.getItem(LS_POV_MODE); } catch (e) { }
+  setPovMode(POV_MODES.indexOf(v) >= 0 ? v : 'pov');
+}
+
+function silverMode() {
+  const v = document.getElementById('silverMode').value;
+  return v === 'bubble' ? 'bubble' : 'no_bubble';
+}
+
+function rememberSilverMode() {
+  try { localStorage.setItem(LS_SILVER_MODE, silverMode()); } catch (e) { }
+}
+
+function restoreSilverMode() {
+  let v = null;
+  try { v = localStorage.getItem(LS_SILVER_MODE); } catch (e) { }
+  document.getElementById('silverMode').value = v === 'bubble' ? 'bubble' : 'no_bubble';
+}
+
+async function loadProviders() {
+  try {
+    // scope=comic：把「只在漫画台可见」的自定义中转站一起要回来。别的页面
+    // 不带这个参数，所以那些渠道不会出现在它们下拉里（用户 2026-10-22 选的）。
+    const d = await (await fetch('/api/providers?scope=comic')).json();
+    PROVIDERS = d.providers || [];
+    const sel = document.getElementById('prov');
+    sel.innerHTML = PROVIDERS.map(p =>
+      '<option value="' + esc(p.id) + '">' + esc(p.label)
+      + (p.custom ? ' · 自定义' : '') + '</option>').join('');
+    // 默认渠道：每次都用后端默认（deepseek 官方）。自定义中转站（grok）只是
+    // 手动切换用，不跨刷新记住——grok-4.5 光思考就要 30~40 秒，漫画编剧每次
+    // 都跳回它太慢（2026-10-22 用户口径）。具体模型名仍然记，只认当前渠道。
+    const want = savedLlm();
+    if (PROVIDERS.some(p => p.id === d.default)) {
+      sel.value = d.default;
+    } else if (want.provider && PROVIDERS.some(p => p.id === want.provider)) {
+      sel.value = want.provider;
+    }
+    await loadModels();
+    syncProvBtn();
+  } catch (e) { /* 拉不到就留空，请求里不传 = 走后端默认 */ }
+}
+
+// 「＋ 中转站」按钮随选中项变形：选中的是自定义渠道时，同一个按钮进编辑态。
+function syncProvBtn() {
+  const pid = document.getElementById('prov').value;
+  const meta = PROVIDERS.filter(p => p.id === pid)[0];
+  const btn = document.getElementById('btnAddProv');
+  if (!btn) return;
+  const own = !!(meta && meta.custom);
+  btn.textContent = own ? '✎ 编辑中转站' : '＋ 中转站';
+  btn.title = own ? ('编辑「' + meta.label + '」的地址 / 密钥 / 模型')
+                  : '添加自定义中转站（比如 relaycore 的 grok），存下来下次还在';
+}
+
+function onAddProvClick() {
+  const pid = document.getElementById('prov').value;
+  const meta = PROVIDERS.filter(p => p.id === pid)[0];
+  openProvDlg(meta && meta.custom ? pid : '');
+}
+
+// ── 自定义中转站表单 ─────────────────────────────────
+// 密钥是**单向**的：后端只回尾 4 位，前端也拿不到原文。所以编辑时密钥框留空
+// 表示「沿用原来的」——不能因为没重填就把它清成空串。
+
+let _pvEditId = '';
+
+function openProvDlg(pid) {
+  _pvEditId = pid || '';
+  const meta = PROVIDERS.filter(p => p.id === pid)[0] || {};
+  document.getElementById('pvTitle').textContent =
+    _pvEditId ? '编辑自定义中转站' : '添加自定义中转站';
+  document.getElementById('pvLabel').value = meta.label || '';
+  document.getElementById('pvBase').value = meta.base_url || '';
+  document.getElementById('pvModel').value = meta.model || '';
+  // 空串是合法值（「不下发」），不能用 || 兜底，否则永远选不到那一项。
+  document.getElementById('pvEffort').value =
+    _pvEditId ? (meta.reasoning_effort === undefined ? 'high' : meta.reasoning_effort)
+              : 'high';
+  const keyEl = document.getElementById('pvKey');
+  keyEl.value = '';
+  keyEl.placeholder = _pvEditId
+    ? ('留空 = 沿用原来的（' + (meta.key_tail || '已存') + '）')
+    : 'sk-...';
+  document.getElementById('pvDel').style.display = _pvEditId ? '' : 'none';
+  setPvMsg('');
+  document.getElementById('provDlg').showModal();
+}
+
+function closeProvDlg() { document.getElementById('provDlg').close(); }
+
+function setPvMsg(t, err) {
+  const el = document.getElementById('pvMsg');
+  el.textContent = t || '';
+  el.style.color = err ? 'var(--error)' : (t ? 'var(--success)' : 'var(--text-dim)');
+}
+
+function pvPayload() {
+  return {
+    id: _pvEditId,
+    label: document.getElementById('pvLabel').value.trim(),
+    base_url: document.getElementById('pvBase').value.trim(),
+    api_key: document.getElementById('pvKey').value.trim(),
+    model: document.getElementById('pvModel').value.trim(),
+    reasoning_effort: document.getElementById('pvEffort').value,
+    scope: 'comic',                  // 只在漫画台可见（用户选的口径）
+  };
+}
+
+async function testProvider() {
+  const btn = document.getElementById('pvTest');
+  btn.disabled = true;
+  setPvMsg('测试中……grok 会先思考，可能要 20 秒');
+  try {
+    const r = await fetch('/api/providers/custom/test', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(pvPayload())});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    setPvMsg('✓ 通了：' + (d.models || []).length + ' 个模型，它回了「'
+             + (d.reply || '') + '」，本次 ' + d.elapsed + ' 秒');
+  } catch (e) { setPvMsg('✗ ' + e.message, true); }
+  btn.disabled = false;
+}
+
+async function saveProvider() {
+  const btn = document.getElementById('pvSave');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/providers/custom', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(pvPayload())});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    closeProvDlg();
+    await loadProviders();
+    document.getElementById('prov').value = d.provider.id;
+    await loadModels();
+    syncProvBtn();
+    toast('已保存：' + d.provider.label + '，现在就能选它写剧本');
+  } catch (e) { setPvMsg('✗ ' + e.message, true); }
+  btn.disabled = false;
+}
+
+async function delProvider() {
+  if (!_pvEditId) return;
+  if (!confirm('删除这个中转站？存着的密钥也会一起删掉。')) return;
+  const btn = document.getElementById('pvDel');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/providers/custom/' + encodeURIComponent(_pvEditId),
+                          {method: 'DELETE'});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    closeProvDlg();
+    await loadProviders();
+    toast('已删除');
+  } catch (e) { setPvMsg('✗ ' + e.message, true); }
+  btn.disabled = false;
+}
+
+async function loadModels() {
+  const pid = document.getElementById('prov').value;
+  const meta = PROVIDERS.filter(p => p.id === pid)[0] || {};
+  const sel = document.getElementById('model');
+  sel.innerHTML = '<option value="">（' + esc(meta.label || pid) + ' 默认模型）</option>';
+  try {
+    const d = await (await fetch('/api/models?provider=' + encodeURIComponent(pid))).json();
+    const ids = ((d && d.models) || [])
+      .filter(m => !m.retiring)                 // 将退役的别占视野
+      .map(m => m.id);
+    if (ids.length) {
+      sel.innerHTML = '<option value="">（默认：' + esc(ids[0]) + '）</option>'
+        + ids.map(id => '<option value="' + esc(id) + '">' + esc(id) + '</option>').join('');
+    }
+    // 恢复上次这个渠道选的具体模型（换了渠道就按新渠道的默认走）。
+    const want = savedLlm();
+    if (want.provider === pid && want.model
+        && [].some.call(sel.options, o => o.value === want.model)) {
+      sel.value = want.model;
+    }
+  } catch (e) { /* 静默：留一个「默认模型」项，请求里不传 model 即可 */ }
+}
+
+async function genScript() {
+  if (curMode() === 'portrait') return genPortrait();
+  const brief = document.getElementById('brief').value.trim();
+  if (!brief) { toast('先写需求（视角/主角/剧情）', true); return; }
+  const btn = document.getElementById('btnScript');
+  SCRIPT_NO_SEARCH = skipSearch();       // 开跑那一刻定死，中途改勾选不影响本轮
+  // 新一轮失败时不应继续展示上一集的剧本，避免用户误以为失败稿已经生成。
+  document.getElementById('script').value = '';
+  document.getElementById('script').style.display = 'none';
+  document.getElementById('fixPanel').innerHTML = '';
+  document.getElementById('fixPanel').style.display = 'none';
+  renderSilverParts(null);
+  btn.disabled = true;
+  const silverRun = ['free', 'third'].indexOf(povMode()) >= 0;
+  btn.textContent = silverRun ? 'silver 编剧中…'
+                              : (SCRIPT_NO_SEARCH ? '编剧写剧本中…' : '编剧查库中…');
+  try {
+    const d = await api('/api/comic/script', {
+      brief, panels: +document.getElementById('panels').value || 10,
+      character: document.getElementById('character').value.trim(),
+      // 接上一集：给任务号，后端抽它的气泡+旁白当前情（2026-10-18）。
+      prev: document.getElementById('prevTask').value || '',
+      carry_outfit: !!(document.getElementById('carryOutfit') || {}).checked,
+      provider: document.getElementById('prov').value,
+      model: document.getElementById('model').value,
+      // 跳过查库（2026-10-22）：后端默认就是 true，这里显式传，取消勾选时
+      // 传 false 才走原来那十几轮查库。
+      no_search: SCRIPT_NO_SEARCH,
+      // 视角模式：pov 走原来的硬规则；free / third 走 silver 一次 API。
+      pov_mode: povMode(),
+      silver_mode: silverMode()
     });
-    $("renderMsg").textContent = "已保存 " + d.opts.width + "×" + d.opts.height +
-      "（固定跳过最终 2 倍放大）" + (d.warnings && d.warnings.length ?
-      "；" + d.warnings.join("；") : "");
-  } catch (e) { fail(e); }
+    SCRIPT_JOB = d.job;
+    pollScript();
+  } catch (e) {
+    toast(e.message, true);
+    finishScript();
+  }
 }
-let ratioTimer = null;
-function queueRatio() {
-  clearTimeout(ratioTimer);
-  ratioTimer = setTimeout(saveRatio, 450);
+
+// 编剧是后台 agent（查库要跑十几轮 LLM，几分钟很正常），所以这里轮询而不是
+// 干等一个请求——Flask 是单线程跑的，同步等待会把槽位刷新一起堵死。
+async function pollScript() {
+  if (!SCRIPT_JOB) return;
+  let d;
+  try { d = await api('/api/comic/script_status?job=' + SCRIPT_JOB); }
+  catch (e) { toast(e.message, true); finishScript(); return; }
+
+  if (d.state === 'running') {
+    const log = d.log || [];
+    const last = log.length ? log[log.length - 1] : '正在读规范…';
+    // 跳过查库时不叫「查库中」——它一个库都没查，写错话会让人以为卡住了。
+    // 用 SCRIPT_NO_SEARCH（开跑那一刻的快照）而不是现场读复选框：跑到一半改
+    // 勾选不该让文案跳来跳去。
+    const head = SCRIPT_NO_SEARCH ? '编剧写剧本中（' : '编剧查库中（';
+    document.getElementById('btnScript').textContent = head + last + '）';
+    if (window.friendInline) friendInline('lsScript', head + last + '）');
+    setTimeout(pollScript, 1200);
+    return;
+  }
+  if (d.state === 'error') {
+    toast('编剧失败：' + d.error, true);
+    finishScript();
+    return;
+  }
+  TASK = d.task;
+  rememberTask(TASK);
+  // 新任务目录里还没有 scene_skill，而渠道下拉还留着上一集的选项。这里把当前
+  // 选中值直接记进新任务，别让「刷新一下页面就悄悄跳回 anima-line」重演
+  // （2026-10-22 用户报的「显示宝可梦、画出来是 anima」就是这条链断在这）。
+  try { if (channel()) await api('/api/comic/channel', {task: TASK, skill: channel()}); }
+  catch (e) { /* 记不下就当没存过，开跑时 /start 还会再存一次 */ }
+  loadTasks();                            // 新任务要出现在「历史任务」下拉里
+  const ta = document.getElementById('script');
+  ta.style.display = 'block'; ta.value = d.script;
+  renderSilverParts(d.silver);            // 固定部分 / 逐格动态部分分栏
+  renderFix(d.fix);                       // 补正报告（编剧之后那一步）
+  document.getElementById('scriptOps').style.display = 'flex';
+  document.getElementById('chatBox').style.display = 'block';
+  loadChatHistory();
+  loadRenderOpts();                       // 渲染参数卡（这个任务的 render.json）
+  applyMode();                            // 编剧期间可能被切到生图模式，这里再收一次
+  toast('剧本已生成：' + TASK);
+  finishScript();
+  refresh();
 }
+
+function finishScript() {
+  SCRIPT_JOB = null;
+  const btn = document.getElementById('btnScript');
+  btn.disabled = false; btn.textContent = '生成剧本';
+}
+
+// ── 自由视角：固定部分 / 动态部分分栏（可编辑）─────────────
+// skill 的结构就是「固定部分（谁+脸部特征） + 动态部分（场景/服饰/动作/神态/镜头/灯光）」，
+// 跑图时每格 = 固定部分 + 该格动态部分。
+//
+// 这两块**必须能直接改**（2026-10-22 用户要求）：有时他想自己填固定部分、自己改某一格，
+// 所以这里是真输入框，不是在 textarea 里改。保存 / 开跑前由 `silverPartsToScript()`
+// 把它们拼回 script.md（隐藏的 #script 才是提交源，两边不会各存一份）。
+let SP_TITLE = '连续漫画';
+
+function renderSilverParts(s) {
+  const box = document.getElementById('silverParts');
+  if (!s || !s.fixed) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  SP_TITLE = s.title || '连续漫画';
+  const dyn = s.dynamics || [];
+  const lab = 'font-size:12px;color:var(--text-dim);margin:0 0 6px';
+  const ta = 'width:100%;box-sizing:border-box;font-family:ui-monospace,Consolas,monospace;' +
+             'font-size:12px;line-height:1.6;padding:8px 10px;border:1px solid var(--border);' +
+             'border-radius:6px;background:rgba(127,127,127,.06);color:inherit;resize:vertical';
+  let h = '<div style="' + lab + '">固定部分 —— 一个角色一行（人数 + 角色名 + 脸部特征），跑图时拼到每格开头，可直接改</div>' +
+          '<textarea id="spFixed" rows="' + Math.max(2, String(s.fixed).split('\n').length) +
+          '" spellcheck="false" style="' + ta + '">' + esc(s.fixed) + '</textarea>' +
+          '<div style="' + lab + 'margin-top:10px">动态部分 —— ' + dyn.length +
+          ' 格（场景 + 服饰 + 动作 + 神态 + 镜头 + 灯光），每格一行，可直接改</div>';
+  const bub = 'margin-top:4px;width:100%;box-sizing:border-box;font-size:12px;padding:5px 8px;' +
+              'border:1px solid var(--border);border-radius:6px;background:rgba(127,127,127,.06);color:inherit';
+  dyn.forEach(function (t, i) {
+    const b = (s.bubbles && s.bubbles[i]) || {};
+    h += '<div style="display:flex;gap:8px;margin-bottom:8px;align-items:flex-start">' +
+         '<span style="color:var(--text-dim);font-family:ui-monospace,Consolas,monospace;flex:none;padding-top:8px">' +
+         String(i + 1).padStart(2, '0') + '</span>' +
+         '<div style="flex:1">' +
+         '<textarea id="spDyn' + i + '" rows="3" spellcheck="false" style="' + ta + '">' +
+         esc(t) + '</textarea>' +
+         (b.bubble ? '<input id="spBub' + i + '" value="' + esc(b.bubble) + '" style="' + bub + '">' : '') +
+         (b.bubble2 ? '<input id="spBub2_' + i + '" value="' + esc(b.bubble2) + '" style="' + bub + '">' : '') +
+         '</div></div>';
+  });
+  box.innerHTML = h;
+  box.style.display = 'block';
+  document.getElementById('script').style.display = 'none';   // 分栏已经表达同一份内容
+}
+
+// 把分栏里的固定 / 动态（+ 气泡）拼回 script.md 契约。
+// 固定部分多行时按后端同一条规则合并：人数前置。
+function spFixedFlat() {
+  const lines = (document.getElementById('spFixed').value || '')
+    .split('\n').map(x => x.trim()).filter(Boolean);
+  if (lines.length <= 1) return lines[0] || '';
+  const m = lines.map(x => x.match(/^(\d+\s*(?:girls?|boys?|others?))\s*[,，]\s*(.+)$/i));
+  if (m.every(Boolean)) {
+    return m.map(x => x[1]).join(', ') + ', ' + m.map(x => x[2].trim()).join(', ');
+  }
+  return lines.join(', ');
+}
+
+function silverPartsToScript() {
+  const box = document.getElementById('silverParts');
+  if (box.style.display === 'none') return false;
+  const fixed = spFixedFlat();
+  if (!fixed) return false;
+  const out = ['# 标题：' + (SP_TITLE || '连续漫画')];
+  for (let i = 0; ; i++) {
+    const el = document.getElementById('spDyn' + i);
+    if (!el) break;
+    const scene = (el.value || '').trim();
+    out.push('', '## ' + String(i + 1).padStart(2, '0'),
+             '画面: ' + fixed + (scene ? ', ' + scene : ''));
+    const b1 = document.getElementById('spBub' + i);
+    const b2 = document.getElementById('spBub2_' + i);
+    if (b1 && b1.value.trim()) out.push('气泡: ' + b1.value.trim());
+    if (b2 && b2.value.trim()) out.push('气泡2: ' + b2.value.trim());
+  }
+  document.getElementById('script').value = out.join('\n');
+  return true;
+}
+
+// 分栏的原始数据（不拼 script）：保存时要一并回传后端，否则刷新后分栏会退回
+// 生成时的原稿（2026-10-22 踩过）。
+function silverPartsData() {
+  const box = document.getElementById('silverParts');
+  if (box.style.display === 'none') return null;
+  const dyn = [], bubs = [];
+  for (let i = 0; ; i++) {
+    const el = document.getElementById('spDyn' + i);
+    if (!el) break;
+    dyn.push((el.value || '').trim());
+    const b1 = document.getElementById('spBub' + i);
+    const b2 = document.getElementById('spBub2_' + i);
+    bubs.push({ bubble: b1 ? b1.value.trim() : '',
+                bubble2: b2 ? b2.value.trim() : '' });
+  }
+  return { title: SP_TITLE || '连续漫画', fixed: spFixedFlat(),
+           dynamics: dyn, bubbles: bubs };
+}
+
+// ── 内容补正报告（编剧之后的独立一步）─────────────────────
+// 补正是「编剧交稿 + 代码出问题清单（只做检测）→ 模型照清单补 → 直接采纳」。
+// 这里负责把 fix.json 显示出来：采纳了改了什么；没采纳只有一种情形——补正模型
+// 返回空 / 解析不出剧本 / 格号对不上，此时提示用户点「重新补正」重跑。
+// 数据来自 status 里的 fix 字段（落盘在任务目录的 fix.json），刷新页面也还在。
+const FIX_FAIL = {error: '调用失败', empty: '模型返回空',
+                  unparseable: '返回的格式解析不出剧本', structure: '格号与原稿对不上'};
+function renderFix(fix) {
+  const box = document.getElementById('fixPanel');
+  const silver = ['free', 'third'].indexOf(povMode()) >= 0;
+  if (silver || !fix) { box.style.display = 'none'; return; }
+  const sig = JSON.stringify([fix.status, fix.adopted, fix.skipped, fix.diff,
+                              fix.warnings, fix.audit, fix.at]);
+  if (box.dataset.sig === sig) return;          // 没变就别重建，避免闪烁
+  box.dataset.sig = sig; box.dataset.at = fix.at || '';
+  box.style.display = 'block';
+
+  const st = fix.status || '';
+  const bits = [];
+  if (fix.skipped)
+    bits.push('<span class="badge b-done">无需补正</span> 代码判据没发现问题，没调用补正模型');
+  else if (FIX_FAIL[st])
+    bits.push('<span class="badge b-error">补正失败（' + FIX_FAIL[st] + '）</span> 剧本保持原稿');
+  else if (st === 'nochange')
+    bits.push('<span class="badge b-error">未改动</span> 补正模型把原稿原样交回');
+  else if (fix.adopted)
+    bits.push('<span class="badge b-done">已采纳</span> 补正后直接成为剧本（原稿存为 script_original.md）');
+  else
+    bits.push('<span class="badge b-error">未采纳</span> 剧本保持原样');
+
+  let h = '<div style="border:1px solid var(--border);border-radius:8px;padding:10px">';
+  h += '<div style="font-size:13px;margin-bottom:6px">🩹 内容补正（' + esc(fix.at || '')
+     + '）：' + bits.join('') + '</div>';
+  if (FIX_FAIL[st])
+    h += '<div style="color:var(--error);font-size:13px;margin-top:6px;font-weight:500">'
+       + '👉 请点上方「🩹 重新补正」重跑一次</div>';
+  if (fix.issues && fix.issues.length)
+    h += '<div style="color:var(--text-dim);font-size:12px">代码清单：'
+       + fix.issues.length + ' 处</div>';
+  if (fix.audit && fix.audit.length)
+    h += '<div style="color:var(--text-dim);font-size:12px;margin-top:4px">'
+       + '补正后代码判据仍报 ' + fix.audit.length + ' 处（仅供参考，不影响采纳）</div>';
+  if (fix.warnings && fix.warnings.length)
+    h += '<div style="color:var(--text-dim);font-size:12px;margin-top:4px">'
+       + fix.warnings.map(esc).join('；') + '</div>';
+  for (const d of (fix.diff || [])) {
+    h += '<div style="margin-top:8px;font-size:12px">'
+       + '<b>格 ' + esc(d.no) + '</b> · ' + (d.changed || []).map(esc).join('、') + '</div>';
+    for (const k of (d.changed || [])) {
+      h += '<div style="font-family:var(--mono,monospace);font-size:12px;'
+         + 'color:var(--error);text-decoration:line-through;word-break:break-all">'
+         + esc((d.before || {})[k]) + '</div>';
+      h += '<div style="font-family:var(--mono,monospace);font-size:12px;'
+         + 'color:var(--accent);word-break:break-all">' + esc((d.after || {})[k]) + '</div>';
+    }
+  }
+  box.innerHTML = h + '</div>';
+}
+
+async function refix() {
+  if (!TASK) return;
+  const btn = document.getElementById('btnRefix');
+  const box = document.getElementById('fixPanel');
+  btn.disabled = true; btn.textContent = '补正中…';
+  box.style.display = 'block';
+  box.dataset.sig = ''; box.dataset.at = '';
+  box.innerHTML = '<div style="color:var(--text-dim);font-size:12px">'
+                + '🩹 正在以编剧原稿为底重跑补正（几秒到一分多钟，取决于模型）…</div>';
+  try {
+    await api('/api/comic/fix', {task: TASK,
+      provider: document.getElementById('prov').value,
+      model: document.getElementById('model').value});
+    // 补正是后台线程（实测 9~80 秒），轮询到 fix.json 换了一份为止。
+    // 拿 `at` 当指纹：它就是这次重跑的结果，跟旧的那份区分得开。
+    for (let i = 0; i < 120; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      let s;
+      try { s = await api('/api/comic/status?task=' + TASK); } catch (e) { break; }
+      if (s.fix && s.fix.at && s.fix.at !== box.dataset.at) {
+        renderFix(s.fix);
+        // ⚠️ 必须把 textarea 里的正文刷新成补正后的——不然用户接着点「确认开跑」
+        // 会把内存里的旧文本存回去，补正结果直接作废（见 script_text 端点注释）。
+        try {
+          const t = await api('/api/comic/script_text?task=' + TASK);
+          if (t.script) document.getElementById('script').value = t.script;
+        } catch (e) { console.warn(e); }
+        renderSilverParts(null);   // 补正改写了正文，分栏作废
+        const bad = !!FIX_FAIL[s.fix.status];
+        toast(bad ? ('补正失败：' + FIX_FAIL[s.fix.status] + '，请点「重新补正」重跑')
+                  : (s.fix.adopted ? '补正已采纳'
+                                   : (s.fix.status === 'nochange'
+                                      ? '补正模型没改动任何一处'
+                                      : '补正未改动，见下方说明')), bad);
+        break;
+      }
+      if (!s.running) break;              // 跑完了却没有新报告 = 后台出错
+    }
+  } catch (e) {
+    toast(e.message, true);
+    box.style.display = 'none';
+  } finally {
+    btn.disabled = false; btn.textContent = '🩹 重新补正';
+  }
+}
+
+// ── 剧本对话修订（2026-10-12）─────────────────────────────
+// 补正只治代码清单里的问题；作者自己的小修小改（加长发、背景换暖色）在这里说。
+// 后端要么交回改好的剧本（落地 script.md，改前备份 script_chat_backup.md，
+// 「撤销对话改动」回退一级），要么回一段答复（剧本不动）。
+let CHAT_JOB = null;      // 正在跑的一句（跑完置回 null）
+let CHAT_HIST = [];       // 本任务的对话历史 [{role, content}]
+
+async function loadChatHistory() {
+  if (!TASK) return;
+  try {
+    const d = await api('/api/comic/chat_history?task=' + TASK);
+    CHAT_HIST = d.history || [];
+    chatShowUndo(!!d.backup);
+    renderChat();
+  } catch (e) { console.warn(e); }
+}
+
+function renderChat() {
+  const log = document.getElementById('chatLog');
+  if (!CHAT_HIST.length) {
+    log.innerHTML = '<div style="color:var(--text-dim)">还没有对话——第一句想改什么直接说。</div>';
+    return;
+  }
+  // 签名没变就不重建，避免轮询重绘时把滚动位置顶回顶部。
+  const sig = JSON.stringify(CHAT_HIST);
+  if (log.dataset.sig === sig) return;
+  log.dataset.sig = sig;
+  log.innerHTML = CHAT_HIST.map(m => {
+    const mine = m.role === 'user';
+    return '<div style="margin-bottom:6px;text-align:' + (mine ? 'right' : 'left') + '">'
+      + '<span style="display:inline-block;max-width:88%;white-space:pre-wrap;'
+      + 'border:1px solid var(--border);border-radius:8px;padding:6px 10px;'
+      + (mine ? 'background:var(--accent-dim,rgba(0,0,0,.04))' : '') + '">'
+      + esc(m.content) + '</span></div>';
+  }).join('');
+  log.scrollTop = log.scrollHeight;
+}
+
+function chatShowUndo(has) {
+  document.getElementById('btnChatUndo').style.display = has ? '' : 'none';
+}
+
+async function chatSend() {
+  const input = document.getElementById('chatInput');
+  const msg = input.value.trim();
+  if (!msg) { toast('先写一句话再发送', true); return; }
+  if (!TASK) { toast('还没有任务', true); return; }
+  if (CHAT_JOB) { toast('上一句还在跑…', true); return; }
+  input.value = '';
+  CHAT_HIST.push({role: 'user', content: msg});
+  CHAT_HIST.push({role: 'assistant', content: '…修订助手在想'});
+  renderChat();
+  const btn = document.getElementById('btnChat');
+  btn.disabled = true; btn.textContent = '修订中…';
+  try {
+    const d = await api('/api/comic/chat_revise', {task: TASK, message: msg,
+      provider: document.getElementById('prov').value,
+      model: document.getElementById('model').value});
+    CHAT_JOB = d.job;
+    pollChat();
+  } catch (e) {
+    CHAT_HIST.splice(-2);               // 发送失败：两句占位都撤掉
+    renderChat();
+    toast(e.message, true);
+    btn.disabled = false; btn.textContent = '发送';
+  }
+}
+
+async function pollChat() {
+  if (!CHAT_JOB) return;
+  let d;
+  try { d = await api('/api/comic/chat_status?job=' + CHAT_JOB); }
+  catch (e) { d = {state: 'error', error: e.message}; }
+
+  if (d.state === 'running') { setTimeout(pollChat, 1500); return; }
+  CHAT_JOB = null;
+  document.getElementById('btnChat').disabled = false;
+  document.getElementById('btnChat').textContent = '发送';
+
+  // 把「…修订助手在想」占位换成真回答（失败也换，作者看得见原因）。
+  const reply = d.state === 'error' ? ('✗ 调用失败：' + d.error) : (d.reply || '（无回答）');
+  if (CHAT_HIST.length >= 2 && CHAT_HIST[CHAT_HIST.length - 1].content === '…修订助手在想')
+    CHAT_HIST[CHAT_HIST.length - 1].content = reply;
+  else CHAT_HIST.push({role: 'assistant', content: reply});
+  for (const w of (d.warnings || [])) CHAT_HIST.push({role: 'assistant', content: '⚠ ' + w});
+  renderChat();
+
+  if (d.changed) {
+    // 改稿落地了：textarea 必须刷新成新稿，不然接着「确认开跑」会把旧文本存回去
+    // （和 refix 之后刷新正文同一个坑）。改动的格会被 state 契约自动退回重画。
+    try {
+      const t = await api('/api/comic/chat_history?task=' + TASK);
+      chatShowUndo(!!t.backup);
+    } catch (e) { /* 无伤大雅：撤销按钮最多晚一拍出现 */ }
+    try {
+      const t = await api('/api/comic/script_text?task=' + TASK);
+      if (t.script) document.getElementById('script').value = t.script;
+    } catch (e) { console.warn(e); }
+    renderSilverParts(null);       // 正文被改写，固定/动态分栏已过期
+    toast('剧本已按对话改动更新（' + (d.diff || []).map(x => '格' + x.no).join('、') + '）');
+    refresh();
+  } else if (d.state !== 'error') {
+    toast('修订助手答复了（剧本未改动）');
+  } else {
+    toast('修订失败：' + (d.error || '未知错误'), true);
+  }
+}
+
+async function chatUndo() {
+  if (!TASK) return;
+  try {
+    const d = await api('/api/comic/chat_undo', {task: TASK});
+    document.getElementById('script').value = d.script;
+    renderSilverParts(null);       // 撤销后正文变了，分栏作废
+    chatShowUndo(false);
+    toast('已撤销最近一次对话改动');
+    refresh();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function saveScript(andRun) {
+  const btn = document.getElementById('btnStart');
+  try {
+    // 自由视角是在「固定部分 / 动态部分」分栏里改的，先拼回 script.md 再提交。
+    // 固定部分被清空时**必须拦住**：拼不回去就只能提交旧正文，用户会以为自己
+    // 的修改存上了（2026-10-22 用户要的就是「能自己填」）。
+    const silver = silverPartsData();
+    if (silver && !silver.fixed) {
+      toast('固定部分不能空着（至少要有 1girl, 角色名, 发色 这类内容）', true);
+      return;
+    }
+    if (!silverPartsToScript() && !document.getElementById('script').value.trim()) {
+      toast('剧本是空的', true);
+      return;
+    }
+    await api('/api/comic/save', {task: TASK,
+      script: document.getElementById('script').value, silver: silver});
+    if (!andRun) { toast('剧本已保存'); return; }
+    await api('/api/comic/start', {task: TASK, scene_skill: channel()});
+    setBusy(true, 'scene');
+    toast('已开跑：逐格渲染场景图（' + (channel() || '默认渠道') + '）');
+    poll();
+  } catch (e) { toast(e.message, true); }
+}
+
+// 换渠道重跑（2026-10-22 用户要的）：剧本一个字不动，按「生图渠道」下拉当前的
+// 值，把每一格都重画一遍。和「确认开跑」的区别就在这里——开跑会跳过已经出过图
+// 的格子，而换渠道测试时那些旧图正是要替换掉的，所以后端会先把状态清回待渲染。
+async function rerunAll() {
+  if (!TASK) { toast('先选一个任务', true); return; }
+  const ch = channel() || '默认渠道';
+  if (!confirm('按「' + ch + '」把这一集的场景图全部重画？\n\n'
+      + '· 剧本不动\n'
+      + '· 已出好的场景图会被新的覆盖\n'
+      + '· 气泡图（阶段二）不重画\n\n'
+      + '换渠道对比效果就靠这个，画的过程中可以点「中断全部」停下。')) return;
+  const btn = document.getElementById('btnRerun');
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ 提交中…';
+  try {
+    const d = await api('/api/comic/rerun', {task: TASK, scene_skill: channel()});
+    setBusy(true, 'scene');
+    toast('已重跑 ' + d.panels + ' 格（' + d.scene_skill + '）');
+    refresh(); poll();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
+}
+
+// 中断这一批（2026-10-22 用户要的）：正在画的那张立刻停、排队中的不再画，
+// 已经出好的图全部保留。停下来之后渲染参数卡会自动解锁（后台线程退出 →
+// 下一轮轮询 running 变空 → setBusy(false)），改完参数点「确认开跑」重跑。
+async function abortAll() {
+  if (!TASK) return;
+  if (!confirm('中断这一批渲染？\n\n'
+      + '· 正在画的那一张会立刻停下（这张作废）\n'
+      + '· 排队中的格不再画\n'
+      + '· 已经出好的图全部保留，重跑时跳过\n\n'
+      + '停稳大约要几秒（等 ComfyUI 真的退出那张），之后就能改参数重跑。')) return;
+  const btn = document.getElementById('btnAbort');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ 中断中…';
+  try {
+    const d = await api('/api/comic/abort', {task: TASK});
+    const bits = [];
+    if (d.dropped) bits.push('摘掉排队 ' + d.dropped + ' 张');
+    if (d.running) bits.push('正在画的 ' + d.running + ' 张已通知停下');
+    toast('已中断' + (bits.length ? '：' + bits.join('，') : '') + '——等几秒就能改参数重跑');
+    refresh();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+// ── 渲染参数卡（按渠道能力渲染：1/2 段采样 · LoRA 链 · 分辨率 · 放大）──────
+// 三档取值：任务 render.json > 全局默认 > 该渠道模板（后端 comic_render_opts.load
+// 里叠好）。卡片**常显**——没有任务时显示的是全局默认/模板值，新任务开工前就能调。
+// 加载一次就够（轮询刷新不碰它，免得把用户正在编辑的表单冲掉）。
+let _renderLoaded = null;
+let _caps = null;      // 当前渠道能调什么（后端 render_opts 的 caps）
+let _res = null;       // ComfyUI 资源清单（采样器/调度器/LoRA/放大模型）
+
+function _renderStateMsg(d) {
+  if (d.saved) return d.defaults_saved ? '本任务已存（另有全局默认）' : '本任务已存';
+  return d.defaults_saved ? '本任务没存 → 用全局默认' : '本任务没存 → 用模板值';
+}
+
+// ── 阶段一渠道（2026-10-19 多渠道）────────────────────────
+// 渠道跟着任务走（后端存进 state.json / portrait.json）。换渠道只影响**之后**
+// 渲染的格；参数卡按这个渠道的能力重画（几段采样、有没有 LoRA、出多大）。
+async function loadChannels() {
+  try {
+    const d = await api('/api/comic/channels'
+      + (TASK ? '?task=' + encodeURIComponent(TASK) : ''));
+    const sel = document.getElementById('sceneSkill');
+    const groups = {};
+    (d.channels || []).forEach(c => {
+      (groups[c.group] = groups[c.group] || []).push(c.name);
+    });
+    let h = '';
+    Object.keys(groups).forEach(g => {
+      h += '<optgroup label="' + esc(g) + '">'
+        + groups[g].map(n => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('')
+        + '</optgroup>';
+    });
+    sel.innerHTML = h;
+    const cur = d.current || '';
+    if (cur && !(d.channels || []).some(c => c.name === cur)) {
+      // 老任务用的渠道可能已经下架：留一项，别让它显示成别的渠道
+      sel.insertAdjacentHTML('afterbegin',
+        '<option value="' + esc(cur) + '">' + esc(cur) + '（不在清单里）</option>');
+    }
+    if (cur) sel.value = cur;
+  } catch (e) { /* 清单拉不到：下拉留空，参数卡照默认渠道走 */ }
+}
+
+async function changeChannel(skill) {
+  if (!skill) return;
+  try {
+    await api('/api/comic/channel', {task: TASK || '', skill});
+    _renderLoaded = null;
+    await loadRenderOpts(true);
+    toast('阶段一渠道：' + skill + '（只影响之后渲染的格）');
+  } catch (e) { toast(e.message, true); }
+}
+
+function channel() {
+  const el = document.getElementById('sceneSkill');
+  return el ? (el.value || '') : '';
+}
+
+async function loadRenderOpts(force) {
+  const sel = document.getElementById('sceneSkill');
+  const skill = sel ? (sel.value || '') : '';
+  const key = (TASK || '') + '|' + skill;
+  if (!force && _renderLoaded === key) return;
+  _renderLoaded = key;
+  try {
+    const q = [];
+    if (TASK) q.push('task=' + encodeURIComponent(TASK));
+    if (skill) q.push('skill=' + encodeURIComponent(skill));
+    const d = await api('/api/comic/render_opts' + (q.length ? '?' + q.join('&') : ''));
+    if (d.skill) {
+      if (sel && sel.value !== d.skill) sel.value = d.skill;
+      document.getElementById('renderSkillName').textContent = d.skill;
+    }
+    fillRenderForm(d.opts, d.resources, d.caps);
+    document.getElementById('renderMsg').textContent = _renderStateMsg(d);
+  } catch (e) {
+    document.getElementById('renderMsg').textContent = '参数加载失败：' + e.message;
+  }
+}
+
+function _pick(id, label, list, val, w) {
+  // 有清单 → select；没清单（ComfyUI 不在线）→ 也给 select，但只带当前值 +
+  // 一个提示项，用户仍可改成别的名字（后端不校验，写错那一格会明说）。
+  const names = (list || []).slice();
+  if (val && !names.includes(val)) names.unshift(val);
+  const opts = names.map(x =>
+    '<option value="' + esc(x) + '"' + (x === val ? ' selected' : '') + '>' + esc(x) + '</option>').join('');
+  return '<span style="color:var(--text-dim);font-size:12px">' + label + '</span>'
+    + '<select id="' + id + '" style="width:' + (w || 150) + 'px">' + opts + '</select>';
+}
+
+function _num(id, label, val, min, max, step, w) {
+  return '<span style="color:var(--text-dim);font-size:12px">' + label + '</span>'
+    + '<input id="' + id + '" type="number" min="' + min + '" max="' + max + '" step="' + step
+    + '" value="' + (val == null ? '' : val) + '" style="width:' + (w || 80) + 'px">';
+}
+
+function _show(id, on) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = on ? '' : 'none';
+}
+
+// 底图 → 预计出图。两段放大分开算：第二段（latent 倍率 / 渠道自带 hires 尺寸）
+// 和最终像素放大，各自可能被「关闭二次采样」「跳过最终放大」摘掉。
+function updateSizeHint() {
+  const el = document.getElementById('sizeHint');
+  const w = +document.getElementById('rpW').value || 0;
+  const h = +document.getElementById('rpH').value || 0;
+  const caps = _caps;
+  if (!caps || !caps.width || !w || !h) {
+    el.textContent = '';
+    return;
+  }
+  const skipH = !!caps.skip_hires && !!(document.getElementById('rHiresSkip') || {}).checked;
+  const skipF = !!(document.getElementById('rUpSkip') || {}).checked;
+  let f = 1;
+  if ((caps.passes || 0) > 1 && !skipH) f *= caps.hires_factor || 1;
+  if (caps.upscale_final && !skipF) f *= caps.final_factor || 2;
+  const ow = Math.round(w * f / 8) * 8;
+  const oh = Math.round(h * f / 8) * 8;
+  el.textContent = '底图 ' + w + '×' + h + ' → 预计出图约 ' + ow + '×' + oh
+    + (f === 1 ? '（原尺寸直出）' : '');
+}
+
+// 关了二次采样：第二段的输入全部禁用（禁掉而不是藏起来——位置不跳，用户
+// 还能看见自己原来填的是什么），latent 倍率跟着禁（它只喂第二段）。
+function _syncHiresDisabled() {
+  const caps = _caps || {};
+  const box = document.getElementById('rHiresSkip');
+  const on = !!(caps.skip_hires && box && box.checked);
+  const row = document.getElementById('hiresRow');
+  if (row) {
+    row.style.opacity = on ? '0.4' : '';
+    row.querySelectorAll('input,select').forEach(x => { x.disabled = on; });
+  }
+  const lat = document.getElementById('rUpScale');
+  if (lat) lat.disabled = on;
+  const cap = document.getElementById('upCap');
+  if (cap) {
+    cap.textContent = on
+      ? '放大 · latent 那一级不生效（二次采样关了，没人用它的输出）；最终像素放大照常是出图前最后一道'
+      : '放大 · latent 倍率决定第二段实际跑的尺寸；最终像素放大是出图前最后一道';
+  }
+}
+
+function onHiresSkip() {
+  _syncHiresDisabled();
+  updateSizeHint();
+}
+
+function fillRenderForm(opts, res, caps) {
+  res = res || {}; opts = opts || {}; caps = caps || {};
+  _caps = caps; _res = res;
+  const fam = caps.family || '';
+  const editable = caps.editable !== false;
+  const numPasses = caps.passes || 0;
+
+  // ── LoRA：两种载体渲染成两套控件（2026-10-28）
+  //   chain  = `LoraLoader` 链，可以任意换文件（anima 那 6 槽）
+  //   toggle = `MOSSLoRAToggle` 多槽开关，槽位和文件名由模板定死，只能勾选+调强度
+  const loraBox = document.getElementById('loraRows');
+  const loraDefRow = document.getElementById('loraDefaultRow');
+  if (caps.lora && caps.lora_kind === 'toggle') {
+    const loras = opts.loras || [];
+    let h = '';
+    loras.forEach(l => {
+      const short = String(l.name || '').replace(/^moss-/, '').replace(/\.safetensors$/, '');
+      h += '<div class="row rlora-toggle" data-slot="' + l.slot + '" style="margin-bottom:6px">'
+        + '<label style="display:flex;align-items:center;gap:6px;flex:1;min-width:0;font-size:12px;color:var(--text-dim);cursor:pointer">'
+        + '<input type="checkbox" class="ron"' + (l.on ? ' checked' : '') + '>'
+        + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(l.name) + '">'
+        + esc(short) + '</span></label>'
+        + '<input class="rstr" type="number" min="0" max="2" step="0.05" value="' + l.strength
+        + '" style="width:76px" title="强度 0~2">'
+        + '</div>';
+    });
+    loraBox.style.display = 'block';
+    loraBox.innerHTML = h;
+    loraDefRow.style.display = 'block';
+  } else if (caps.lora) {
+    const loras = opts.loras || [];
+    const n = Math.max(6, loras.length);
+    let h = '';
+    for (let i = 0; i < n; i++) {
+      const l = loras[i] || {name: '', strength: 0.8};
+      h += '<div class="row" style="margin-bottom:6px">'
+        + '<span style="color:var(--text-dim);font-size:12px;width:36px">槽 ' + (i + 1) + '</span>'
+        + '<select class="rlora" style="flex:1;min-width:220px">'
+        + '<option value="">（不使用）</option>'
+        + (res.loras || []).map(x =>
+            '<option value="' + esc(x) + '"' + (x === l.name ? ' selected' : '') + '>' + esc(x) + '</option>').join('')
+        + (l.name && !(res.loras || []).includes(l.name)
+            ? '<option value="' + esc(l.name) + '" selected>' + esc(l.name) + '（不在 ComfyUI 清单里）</option>' : '')
+        + '</select>'
+        + '<input class="rstr" type="number" min="0" max="2" step="0.05" value="' + l.strength
+        + '" style="width:76px" title="强度 0~2">'
+        + '</div>';
+    }
+    loraBox.style.display = 'block';
+    loraBox.innerHTML = h;
+    loraDefRow.style.display = 'none';
+  } else {
+    loraBox.style.display = 'none';
+    loraBox.innerHTML = '';
+    loraDefRow.style.display = 'none';
+  }
+
+  // ── 采样：editable=false（固定步数的渠道，如 moss 25 步）时只留分辨率
+  const b = opts.base || {}, hi = opts.hires || {};
+  document.getElementById('baseCap').style.display = editable ? '' : 'none';
+  document.getElementById('baseRow').style.display = editable ? 'flex' : 'none';
+  document.getElementById('baseNote').style.display = editable ? 'none' : 'block';
+  if (editable) {
+    document.getElementById('baseCap').textContent =
+      numPasses > 1 ? '第一段采样 · 出构图（denoise 固定 1）' : '采样 · 出构图';
+    document.getElementById('baseRow').innerHTML =
+      _num('rstepsB', '步数', b.steps, 1, 150, 1)
+      + _num('rcfgB', 'cfg', b.cfg, 0, 20, 0.1)
+      + _pick('rsampB', '采样器', res.samplers, b.sampler_name)
+      + _pick('rschB', '调度器', res.schedulers, b.scheduler, 110);
+  }
+
+  const showHires = editable && numPasses > 1;
+  document.getElementById('hiresCap').style.display = showHires ? '' : 'none';
+  document.getElementById('hiresRow').style.display = showHires ? 'flex' : 'none';
+  // 「关闭二次采样」只给有独立第二段 KSampler 的渠道（ks 族）；sd / miao 把
+  // 高清写在自己的复合节点里，没有可断的引用，给了开关也勾不出效果。
+  _show('hiresSkipLabel', showHires && !!caps.skip_hires);
+  const hiresSkipBox = document.getElementById('rHiresSkip');
+  if (hiresSkipBox) hiresSkipBox.checked = !!hi.skip;
+  if (showHires) {
+    // batch 族（sd / miao）第二段只有步数和 denoise——节点上没有第二段的
+    // cfg / 采样器，给输入框反而是骗人。
+    document.getElementById('hiresRow').innerHTML = (fam === 'batch')
+      ? _num('rstepsH', '步数', hi.steps, 1, 150, 1)
+        + _num('rdenH', 'denoise', hi.denoise, 0, 1, 0.05)
+      : _num('rstepsH', '步数', hi.steps, 1, 150, 1)
+        + _num('rcfgH', 'cfg', hi.cfg, 0, 20, 0.1)
+        + _num('rdenH', 'denoise', hi.denoise, 0, 1, 0.05)
+        + _pick('rsampH', '采样器', res.samplers, hi.sampler_name)
+        + _pick('rschH', '调度器', res.schedulers, hi.scheduler, 110);
+  }
+
+  // ── 分辨率
+  document.getElementById('rpW').value = opts.width;
+  document.getElementById('rpH').value = opts.height;
+  updateSizeHint();
+
+  // ── 放大：latent 倍率（有 LatentUpscale* 才显示）+ 最终像素放大（有才显示）
+  const up = opts.upscale || {};
+  const showLat = !!caps.upscale_latent, showFin = !!caps.upscale_final;
+  const showUp = showLat || showFin;
+  _show('upCap', showUp);
+  _show('upscaleRow', showUp);
+  ['upLatentLabel', 'rUpScale', 'upTimes'].forEach(id => _show(id, showLat));
+  ['rUpModel'].forEach(id => _show(id, showFin));
+  // sd 把最终放大写在 BatchPromptImageGenerator 节点里，没有独立节点可绕，
+  // 所以「跳过最终放大」只有真的存在那个节点时才给。
+  _show('upSkipLabel', showFin && !!caps.upscale_skip);
+  if (showLat) {
+    document.getElementById('rUpScale').value = up.scale_by == null ? 1.2 : up.scale_by;
+  }
+  if (showFin) {
+    const um = document.getElementById('rUpModel');
+    const upNames = (res.upscales || []).slice();
+    if (up.final_model && !upNames.includes(up.final_model)) upNames.unshift(up.final_model);
+    um.innerHTML = upNames.map(x =>
+      '<option value="' + esc(x) + '"' + (x === up.final_model ? ' selected' : '') + '>'
+      + esc(x) + '</option>').join('');
+    document.getElementById('rUpSkip').checked = !!up.final_skip;
+  }
+  // 放大区的勾选和禁用态都排完之后再算一次——上面那次 updateSizeHint 读到的
+  // 还是表单上一轮的值（比如模板默认开着最终放大、这个任务存的是跳过）。
+  _syncHiresDisabled();
+  updateSizeHint();
+}
+
+function presetSize(w, h) {
+  document.getElementById('rpW').value = w;
+  document.getElementById('rpH').value = h;
+  updateSizeHint();
+}
+
+function collectRenderOpts() {
+  const v = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+  const caps = _caps || {};
+  const out = {width: v('rpW'), height: v('rpH')};
+  // 没显示的字段**不提交**：normalize 会沿用 base 里的值。把看不见的那套一起
+  // 提交，等于把该渠道模板自带的配方（sd / miao 的 LoRA 链、moss 的步码）写成空。
+  if (caps.lora) {
+    const loras = [];
+    if (caps.lora_kind === 'toggle') {
+      // moss：带槽号和开关，后端按槽写 on_/strength_ 字段
+      document.querySelectorAll('#loraRows .rlora-toggle').forEach(r => {
+        loras.push({slot: parseInt(r.dataset.slot, 10),
+                    on: r.querySelector('input.ron').checked,
+                    strength: parseFloat(r.querySelector('input.rstr').value)});
+      });
+    } else {
+      document.querySelectorAll('#loraRows .row').forEach(r => {
+        loras.push({name: r.querySelector('select.rlora').value,
+                    strength: parseFloat(r.querySelector('input.rstr').value)});
+      });
+    }
+    out.loras = loras;
+  }
+  if (caps.editable !== false) {
+    out.base = {steps: v('rstepsB'), cfg: v('rcfgB'),
+                sampler_name: v('rsampB'), scheduler: v('rschB')};
+    if ((caps.passes || 0) > 1) {
+      const hr = (caps.family === 'batch')
+        ? {steps: v('rstepsH'), denoise: v('rdenH')}
+        : {steps: v('rstepsH'), cfg: v('rcfgH'), denoise: v('rdenH'),
+           sampler_name: v('rsampH'), scheduler: v('rschH')};
+      // 关了二次采样也照提交（输入被 disable，但 value 仍读得到），
+      // 这样取消勾选时原来填的步数 / denoise 还在，不用重填。
+      if (caps.skip_hires) hr.skip = !!(document.getElementById('rHiresSkip') || {}).checked;
+      out.hires = hr;
+    }
+  }
+  if (caps.upscale_latent || caps.upscale_final) {
+    const up = {};
+    if (caps.upscale_latent) up.scale_by = v('rUpScale');
+    if (caps.upscale_final) {
+      up.final_model = v('rUpModel');
+      if (caps.upscale_skip) up.final_skip = document.getElementById('rUpSkip').checked;
+    }
+    out.upscale = up;
+  }
+  return out;
+}
+
+async function saveRenderOpts(scope) {
+  scope = scope || 'task';
+  if (scope === 'task' && !TASK) {
+    toast('还没有任务——「本任务」存不了；想长期生效点「存为全局默认」', true);
+    return;
+  }
+  if (scope === 'global' && !confirm('存为全局默认？\n\n'
+      + '之后所有没单独存过参数的任务都照这套跑（本任务若清掉自己的参数也回落到它）。')) return;
+  try {
+    const d = await api('/api/comic/render_opts',
+                        {task: TASK, scope, skill: channel(), opts: collectRenderOpts()});
+    document.getElementById('renderMsg').textContent =
+      (d.warnings && d.warnings.length ? '注意：' + d.warnings.join('；') + '。' : '')
+      + (scope === 'global' ? '已存为全局默认，新任务照它跑'
+                            : '已保存，之后渲染的格生效');
+    toast(scope === 'global' ? '已存为全局默认' : '渲染参数已保存');
+  } catch (e) { toast(e.message, true); }
+}
+
+// moss 渠道的 LoRA 槽可以直接改模板（另外两个台的「存为默认」走同一个口）。
+// ⚠️ 和上面的「存为全局默认」不是一回事：那个只写漫画台的
+// `state/comic_render_defaults.json`，这个写回 skills/moss-qunyou/workflow.json，
+// QQ 侧和跑图台也跟着变。
+async function saveLoraToTemplate() {
+  const sk = channel();
+  if (!sk) { toast('先选渠道', true); return; }
+  const slots = [];
+  document.querySelectorAll('#loraRows .rlora-toggle').forEach(r => {
+    slots.push({slot: parseInt(r.dataset.slot, 10),
+                on: r.querySelector('input.ron').checked,
+                strength: parseFloat(r.querySelector('input.rstr').value)});
+  });
+  if (!slots.length) { toast('这个渠道没有可保存的槽', true); return; }
+  if (!confirm('写回 moss 模板？\n\n之后 QQ 侧、跑图台、MOSS 台都按这套 LoRA 跑。')) return;
+  try {
+    const d = await api('/api/lora/save', {skill: sk, slots});
+    toast(d.message || '已存为模板默认');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function resetRenderOpts(scope) {
+  scope = scope || 'task';
+  if (scope === 'global') {
+    if (!confirm('清掉全局默认参数？\n\n之后没单独存过参数的任务会退回该渠道的模板值。')) return;
+  } else if (!TASK) {
+    toast('当前没有任务', true);
+    return;
+  }
+  try {
+    await api('/api/comic/render_opts',
+              {task: TASK, scope, skill: channel(), reset: true});
+    await loadRenderOpts(true);
+    toast(scope === 'global' ? '全局默认已清掉' : '本任务参数已恢复（回落到全局默认/模板）');
+  } catch (e) { toast(e.message, true); }
+}
+
+const STATE_CN = {pending: '排队', rendered: '待加气泡', done: '完成'};
+
+function renderSlot(p) {
+  const badge = p.error ? '<span class="badge b-error">出错</span>'
+    : '<span class="badge b-' + p.state + '">' + (STATE_CN[p.state] || p.state) + '</span>';
+  const img = (url, alt, which) => url
+    ? '<img class="zoomable" loading="lazy" src="' + url + '&t=' + Date.now()
+      + '" onclick="zoomOpen(this.src, \'' + p.no + '\', \'' + which + '\')">'
+    : alt;
+  const ops = [];
+  // 失败格必须也能重跑（2026-10-12）。场景渲染挂掉的格**停在 pending**，
+  // 原来这条条件 `!== 'pending'` 正好把它挡在门外 —— 它是整个界面上唯一
+  // 没有任何操作按钮的格子，底下还写着「排队中…」，看上去像在排队。
+  // 加上 `|| p.error` 后：带错的格一律给重跑按钮。
+  // 真在排队的格分两种（2026-10-12 用户补报：改画面词/对话改稿把格退回
+  // pending 后，若没有后台任务在跑，没有任何线程会来跑它，它就永远「排队
+  // 中…」，用户只能整条「确认开跑」重跑——太麻烦）：
+  //   · 有任务在跑（RUNNING）→ 真排队，显示「排队中…」等轮询；
+  //   · 没任务在跑 → 给「▶ 跑这一格」出口（rerender 本就只跑这一格），
+  //     顺手给「✏️ 改画面词」——跑之前常还想再改一个词。
+  if (p.state !== 'pending' || p.error) {
+    ops.push('<button class="btn small" onclick="rerender(\'' + p.no + '\')">🔁 换种子重跑</button>');
+    ops.push('<button class="btn small" onclick="editToggle(\'' + p.no + '\')">✏️ 改画面词</button>');
+  } else if (!RUNNING) {
+    ops.push('<button class="btn small" onclick="rerender(\'' + p.no + '\')">▶ 跑这一格</button>');
+    ops.push('<button class="btn small" onclick="editToggle(\'' + p.no + '\')">✏️ 改画面词</button>');
+  }
+  if (p.state === 'rendered')
+    ops.push('<button class="btn small" onclick="bubble(\'' + p.no + '\')">🫧 加气泡</button>');
+  if (p.state === 'done')
+    ops.push('<button class="btn small" onclick="bubble(\'' + p.no + '\')">↩️ 从底图重画</button>');
+  // 画法开关，只给「有第二句台词」的格——别的格没有第二个气泡可画。
+  // 默认「一遍画完」：2026-10-11 起两个气泡+旁白一次交付，省掉一次 50~70 秒。
+  // 「分开画」是退路：某格一遍画崩了就切回来单独重跑（走原来的两遍老路）。
+  if (p.bubble2 && p.state !== 'pending')
+    ops.push('<select class="meth" id="meth-' + p.no + '" title="有第二句台词的格：一遍画完更快，画崩了再切分开画">'
+      + '<option value="0">一遍画完</option>'
+      + '<option value="1">分开画</option>'
+      + '</select>');
+  return '<div class="slot"><div class="head"><span class="no">格 ' + p.no + '</span>'
+    + badge + '<span class="seed">' + (p.seed != null ? 'seed ' + p.seed : '') + '</span></div>'
+    + '<div class="imgs"><div>' + img(p.scene_url, '场景图未生成', 'scene') + '</div>'
+    + '<div>' + img(p.final_url, '气泡未加', 'final') + '</div></div>'
+    + labelHtml(p)
+    + (p.error ? '<div class="err">' + esc(p.error) + '</div>' : '')
+    + '<div class="ops">' + (ops.join('') || '<span style="color:var(--text-mute);font-size:11px">排队中…</span>') + '</div>'
+    + editHtml(p)
+    + manualHtml(p) + '</div>';
+}
+
+// 手动修复栏：手输指令 → 跑一遍 Qwen（源图＝这一格**当前成品**，可累积着改）
+// ＋ 传底图顶替这一格的 raw ＋ 「完整提示词」框（看清并手改原样发给 qwen 的文字）。
+// 一格一个铺在卡片里（用户拍板要内联，不要弹面板）。
+function manualHtml(p) {
+  const open = !!_peekOpen[p.no];
+  return '<div class="manual">'
+    + '<textarea class="mins" spellcheck="false" placeholder="手输一句要 Qwen 改什么，例：把「松手啦，疼。」这几个字重画清楚"></textarea>'
+    + '<div class="mrow">'
+    + '<button class="btn small" onclick="manualRun(\'' + p.no + '\')">✍️ 跑 Qwen</button>'
+    + '<select class="mden" title="改字用小强度（只重画那几处）；整格重来用大强度">'
+    + '<option value="0.35">改字·轻</option>'
+    + '<option value="0.60" selected>标准</option>'
+    + '<option value="0.80">重画·强</option>'
+    + '</select>'
+    + '<button class="btn small" onclick="peekToggle(\'' + p.no + '\')">'
+    + (open ? '🔽 收起提示词' : '🔍 完整提示词') + '</button>'
+    + '<label class="btn small file" title="你在别处跑好的底图，传进来顶替这一格的底图">📎 传底图'
+    + '<input type="file" accept="image/*" onchange="uploadScene(\'' + p.no + '\', this)"></label>'
+    + '</div>'
+    + (open ? peekHtml(p) : '')
+    + '</div>';
+}
+
+// 「完整提示词」框：把**原样发给 qwen 的那段文字**摊开给人看并改。
+// 预填的是后端 bubble_prompt() 的输出（一字不差，见 /api/comic/prompt）。
+//
+// ⚠️ 它重跑时源图是这一格的**干净底图**（raw），不是当前成品——预填那段文字
+// 是「请新增一个对话框」，在已经有气泡的成品上再跑一次会叠出第二个气泡。
+// 想累积着改字（源图＝成品）就用上面的手输指令那条路。
+function peekHtml(p) {
+  return '<div class="peek">'
+    + '<div class="ptip">下面这段就是原样发给 Qwen 的文字，可以直接改。'
+    + '「用这段重画」拿这一格的<b>干净底图</b>当源图（不含已画的字），'
+    + '所以不会叠出第二个气泡。</div>'
+    + '<textarea class="mpeek" spellcheck="false" placeholder="点下面的「取回系统拼装」拉取，或自己整段写"></textarea>'
+    + '<div class="mrow">'
+    + '<button class="btn small" onclick="peekReset(\'' + p.no + '\')">↺ 取回系统拼装</button>'
+    + '<button class="btn small" onclick="peekRun(\'' + p.no + '\')">🎬 用这段从底图重画</button>'
+    + '</div></div>';
+}
+
+// 旁白：一格可以有多条（剧本里 `标签1:` `标签2:`…，后端用 \n 拼在一行里）。
+// 块内换行会触发整格重建（下面逐格 diff 只比 p.label 这个字符串），图片不在
+// 旁白 DOM 里，所以重建不会闪图。
+function labelHtml(p) {
+  const lines = String(p.label || '').split('\n').filter(x => x.trim());
+  if (!lines.length) return '';
+  return '<div class="lbl">' + lines.map((x, i) =>
+    '标签' + (i + 1) + ': ' + esc(x)).join('<br>') + '</div>';
+}
+
+const _slots = {};   // {no: {sig, el}} —— 逐格 diff，状态没变就不碰 DOM（不闪图）
+const _manual = {};  // {no: 手输的指令} —— 状态一变这一格就会重建，输入框内容
+                     // 若不另存就会没；跑完一次 Qwen 想接着调必须留住。
+const _method = {};  // {no: '0'|'1'} 这一格的画法（一遍画完 / 分开画）——同上，
+                     // 重建后不填回来就会悄悄弹回默认值。
+const _promptText = {};  // {no: 完整提示词框里的文字}（也算用户手改后的版本）——
+                         // 同上，这一格的 DOM 会因图片 rev 变化而重建，不存就会被
+                         // 2 秒一次的状态轮询冲掉。
+const _peekOpen = {};    // {no: true} 这一格的提示词框展开着吗。
+const _editOpen = {};    // {no: true} 这一格的「改画面词」框展开着吗。
+
+// ── 「改画面词」：直接改这一格的生图提示词（剧本里的 画面: 行）并重画 ──
+// 补正/编剧把词改坏时（实测：close-up 格被删 navy pleated skirt，裙子从画面
+// 上消失），手改一个词就能重画这一格，不用整份剧本推倒重来。预填＝当前
+// 画面行原文（status 里每格都带 p.scene，不用再拉接口）。
+function editHtml(p) {
+  if (!_editOpen[p.no]) return '';
+  return '<div class="peek">'
+    + '<div class="ptip">下面是这一格的<b>画面提示词</b>（剧本里的「画面:」行），'
+    + '改完保存即重画这一格（气泡之后照常加）。同一人的服饰每格必须一致，慎删标签。</div>'
+    + '<textarea class="escene" spellcheck="false">' + esc(p.scene || '') + '</textarea>'
+    + '<div class="mrow">'
+    + '<button class="btn small" onclick="editSave(\'' + p.no + '\')">💾 保存并重画这一格</button>'
+    + '</div></div>';
+}
+
+function editToggle(no) {
+  _editOpen[no] = !_editOpen[no];
+  const c = _slots[no];
+  if (c) c.sig = null;                     // 打脏签名逼刷新循环重建这一格
+  refresh();
+}
+
+async function editSave(no) {
+  const slot = document.querySelector('.slot[data-no="' + no + '"]');
+  const ta = slot && slot.querySelector('.escene');
+  const scene = ta ? ta.value.trim() : '';
+  if (!scene) { toast('画面提示词不能为空', true); return; }
+  try {
+    const d = await api('/api/comic/edit_scene',
+                        {task: TASK, no, scene, scene_skill: channel()});
+    _editOpen[no] = false;
+    const c = _slots[no];
+    if (c) c.sig = null;
+    setBusy(true, 'scene');
+    toast(d.notice || ('格 ' + no + ' 用你改过的画面词重画中'));
+  } catch (e) { toast(e.message, true); }
+}
+let _zoom = null;    // {no, which} 当前放大的那张图 —— 手动跑 Qwen 是在原文件上
+                     // 覆盖，放大层不跟着换的话，人盯着放大图会以为根本没重跑。
+
+function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
+
+async function refresh() {
+  if (!TASK) return;
+  let d;
+  try { d = await api('/api/comic/status?task=' + TASK); }
+  catch (e) { console.warn(e); return; }
+  if (window.friendOnStatus) friendOnStatus(d);
+  renderFix(d.fix);          // 重新补正后靠这个 2 秒轮询把报告刷出来
+  renderPortraits(d.portraits);   // 生图模式的写真（③ 卡），顺带刷新单张重跑的结果
+  RUNNING = d.running || null;   // renderSlot 靠它判断排队的格有没有线程在管
+  const grid = document.getElementById('grid');
+  if (!d.panels.length) {
+    // 纯写真任务（生图模式新建的目录没有剧本）：漫画卡显示一句指向 ③ 卡，
+    // 别甩一句「没解析到格子」让人以为出错了。
+    const tip = (d.portraits && d.portraits.length)
+      ? '这是生图模式的任务——写真的图在下方「③ 写真」卡' : '剧本里没解析到格子';
+    if (grid.dataset.empty !== '1') { grid.innerHTML = '<div class="empty">' + tip + '</div>'; grid.dataset.empty = '1'; }
+    document.getElementById('bubbleAllRow').style.display = 'none';
+    setBusy(false);
+    return;
+  }
+  grid.dataset.empty = '';
+  // 格子集合变了（剧本编辑增删格）→ 缓存和 DOM 全部重建
+  const nos = d.panels.map(p => p.no).sort().join(',');
+  if (Object.keys(_slots).sort().join(',') !== nos) {
+    for (const k of Object.keys(_slots)) delete _slots[k];
+    grid.innerHTML = '';
+  }
+  for (const p of d.panels) {
+    // 签名=影响展示的全部字段；没变就跳过这一格——图片不会重新加载，页面不闪。
+    // `rev` 是图片文件本身的指纹（mtime+大小）：手动跑 Qwen 是**就地覆盖成品**，
+    // state/seed/url 全都不变，当初只比这些字段时新图永远刷不出来。
+    const sig = [p.state, p.error, p.seed, p.scene_url, p.final_url, p.rev,
+                 p.label, p.bubble, p.bubble2, RUNNING].join('|');
+    const cached = _slots[p.no];
+    if (cached && cached.sig === sig) continue;
+    const el = document.createElement('div');
+    el.innerHTML = renderSlot(p);
+    const node = el.firstElementChild;
+    node.dataset.no = p.no;
+    // 手输的指令存在 _manual 里再填回来：状态一变这一格就整块重建，不填回去
+    // 的话跑完一次 Qwen 输入框就空了，没法接着调第二个字。
+    const ta = node.querySelector('.mins');
+    if (ta) {
+      ta.value = _manual[p.no] || '';
+      ta.addEventListener('input', () => { _manual[p.no] = ta.value; });
+    }
+    // 完整提示词框同理。第一次展开（还没有内容）才去后端拉一次系统拼装——
+    // 拉回来立刻存进 _promptText，之后重建就不会再打接口。
+    const pk = node.querySelector('.mpeek');
+    if (pk) {
+      pk.value = _promptText[p.no] || '';
+      pk.addEventListener('input', () => { _promptText[p.no] = pk.value; });
+      if (!_promptText[p.no]) peekFetch(p.no, pk);
+    }
+    // 画法开关同理要存回来：不存的话跑到第二遍时它已经悄悄弹回「一遍画完」。
+    const meth = node.querySelector('.meth');
+    if (meth) {
+      meth.value = _method[p.no] || '0';
+      meth.addEventListener('change', () => { _method[p.no] = meth.value; });
+    }
+    if (cached && cached.el.parentNode) cached.el.replaceWith(node);
+    else grid.appendChild(node);
+    _slots[p.no] = {sig, el: node};
+    // 正放大的那张图被重写了（刚跑完 Qwen）→ 放大层也换成新的
+    if (_zoom && _zoom.kind === 'panel' && _zoom.no === p.no) {
+      const u = _zoom.which === 'scene' ? p.scene_url : p.final_url;
+      const zi = document.querySelector('#zoom img');
+      if (u && zi) zi.src = u + '&t=' + Date.now();
+    }
+  }
+  const bar = document.getElementById('jobbar');
+  if (d.running) { setBusy(true, d.running); } else { setBusy(false); }
+  // 提示条优先级：后台失败 > ComfyUI 不在线 > 不显示（2026-10-18）。
+  // 加 comfy 这一档是因为「排队」有两种含义：真的在等前面的图，和在等
+  // ComfyUI 重启回来（comic._require_comfy 现在最多等 120 秒）。不写出来的话
+  // 两种情况在界面上长得一模一样，用户只会以为卡死了。
+  const barText = document.getElementById('jobbarText');
+  if (d.job_error) {
+    bar.style.display = 'block';
+    bar.classList.add('err');
+    barText.textContent = '✗ 后台任务失败：' + d.job_error;
+  } else if (d.comfy === false) {
+    bar.style.display = 'block';
+    bar.classList.add('err');
+    barText.textContent = '⚠ ComfyUI 没在线（可能正在重启）——现在点重跑会等它回来再提交，最多等 120 秒';
+  } else if (!d.running) {
+    bar.style.display = 'none';
+    bar.classList.remove('err');
+  }
+  const done = d.panels.filter(p => p.state === 'done').length;
+  const rendered = d.panels.filter(p => p.state === 'rendered').length;
+  document.getElementById('progress').textContent =
+    TASK ? ('进度：' + done + '/' + d.panels.length + ' 完成 · ' + rendered + ' 待加气泡') : '';
+  document.getElementById('bubbleAllRow').style.display = 'flex';
+  document.getElementById('btnBubbleAll').disabled = rendered === 0 || !!d.running;
+  const zip = document.getElementById('btnZip');
+  zip.href = '/api/comic/download?task=' + encodeURIComponent(TASK || '');
+  // 一张图都没有时别让人点出一个空 zip（2026-10-22 用户报「zip 是 0 字节」）。
+  // 判据用「有成的图」：无气泡模式下场景图就是成品，所以 done 也算。
+  const anyImg = d.panels.some(p => p.state === 'done' || p.state === 'rendered');
+  zip.dataset.empty = anyImg ? '' : '1';
+  zip.style.opacity = anyImg ? '' : '.5';
+}
+
+// 下载前的守卫：没图就说清楚，而不是让浏览器停在 JSON 报错页 / 空文件上。
+function zipGuard() {
+  const a = document.getElementById('btnZip');
+  if (!TASK) { toast('先选一个任务', true); return false; }
+  if (a.dataset.empty === '1') {
+    toast('这一集还没有任何图——先点「确认开跑」生成场景图', true);
+    return false;
+  }
+  return true;
+}
+
+function poll() { clearTimeout(TIMER); TIMER = setTimeout(async () => { await refresh(); poll(); }, 2000); }
+
+// 刷新页面后把上次的任务接回来（2026-10-18）：TASK 存 localStorage，脚本正文
+// 走 /api/comic/script_text 取回（纯写真任务没有 script.md，抛错就当没有）。
+// 参数卡无论如何先显示——它可能是全局默认/模板值，跟有没有任务无关。
+async function restoreSession() {
+  restoreSkipSearch();
+  restorePovMode();
+  restoreSilverMode();
+  // 视角是从 localStorage 恢复的，恢复后必须再算一次控件显隐；否则页面
+  // 会显示 free，但仍保留 POV 的「跳过查库」，并隐藏 silver 模式选择。
+  syncModeInputs();
+  applyMode();
+  await loadTasks();                  // 下拉先填好（一个任务都没有也要给个空选项）
+  await loadChannels();               // 渠道下拉同样先填好（没任务也能先挑渠道）
+  let saved = null;
+  try { saved = localStorage.getItem(LS_TASK); } catch (e) { }
+  if (!saved) { loadRenderOpts(true); return; }
+  try {
+    await loadTaskUI(saved, '已恢复上次的任务');
+  } catch (e) {
+    // 任务目录被删了 / 名字不对：别每次刷新都弹错，忘掉它重新开始。
+    rememberTask(null);
+    console.warn('恢复上次任务失败', e);
+    loadRenderOpts(true);
+  }
+}
+
+// ── 历史任务 / 连载（2026-10-18）──────────────────────────
+// 剧本其实一直在存（每个任务目录的 script.md），但页面以前只记得 localStorage
+// 里那一个任务名——新建一集之后就再也翻不回去了。两个下拉各管一件事：
+//   「历史任务」= 打开旧的一集，看它当时的剧本和格子；
+//   「接上一集」= 把某一集的气泡+旁白当成前情喂给编剧（后端抽，不带画面行）。
+let TASK_LIST = [];
 
 async function loadTasks() {
-  const d = await api("/api/comic/tasks");
-  const list = d.tasks || [];
-  const opts = ['<option value="">（新建一本）</option>'].concat(
-    list.map((t) => '<option value="' + esc(t.task) + '">' +
-      esc(t.task + (t.title ? " · " + t.title : "")) + "</option>"));
-  // 纯写真任务没有 script.md，服务端按设计不列进历史任务。但当前正打开着
-  // 的就是它，别因为「不在列表里」把任务号清掉，否则写真槽位一刷新就空。
-  if (S.task && !list.some((t) => t.task === S.task)) {
-    opts.push('<option value="' + esc(S.task) + '">' +
-              esc(S.task + "（写真）") + "</option>");
-  }
-  $("taskSel").innerHTML = opts.join("");
-  $("prev").innerHTML = '<option value="">不接</option>' +
-    list.map((t) => '<option value="' + esc(t.task) + '">' +
-      esc(t.task + (t.title ? " · " + t.title : "")) + "</option>").join("");
-  $("taskSel").value = S.task || "";
-}
-async function selectTask(name, quiet) {
-  S.task = name || "";
-  if (name) localStorage.setItem(LS_TASK, name);
-  else localStorage.removeItem(LS_TASK);
-  if (!name) {
-    $("script").value = ""; $("slots").innerHTML = ""; $("shots").innerHTML = "";
-    $("slotsEmpty").style.display = "";
-    bar("");
-    return;
-  }
-  try {
-    const [txt, hist, st] = await Promise.all([
-      api("/api/comic/script_text?" + q({ task: name })),
-      api("/api/comic/chat_history?" + q({ task: name })),
-      api("/api/comic/status?" + q({ task: name }))
-    ]);
-    $("script").value = txt.script || "";
-    $("pov").value = txt.pov_mode || "pov";
-    renderChat(hist.history || []);
-    $("btnUndo").disabled = !hist.backup;
-    applyStatus(st);
-    await loadChannels();
-    if (!quiet) bar("已打开 " + name);
-  } catch (e) { fail(e); }
+  let d;
+  try { d = await api('/api/comic/tasks'); }
+  catch (e) { console.warn('列任务失败', e); return; }
+  TASK_LIST = d.tasks || [];
+  const pick = document.getElementById('taskPick');
+  pick.innerHTML = TASK_LIST.length
+    ? TASK_LIST.map(t => '<option value="' + esc(t.task) + '">' + esc(taskLabel(t)) + '</option>').join('')
+    : '<option value="">（还没有剧本任务）</option>';
+  const prev = document.getElementById('prevTask');
+  prev.innerHTML = '<option value="">不接——全新一集</option>'
+    + TASK_LIST.filter(t => t.task !== TASK)
+        .map(t => '<option value="' + esc(t.task) + '">' + esc(taskLabel(t)) + '</option>').join('');
+  syncTaskPick();
 }
 
-/* ─── 编剧 / 修订 ─────────────────────────────────────── */
-function modelPair() {
-  const v = $("model").value;
-  if (!v) return { provider: "", model: "" };
-  const i = v.indexOf("|");
-  return { provider: v.slice(0, i), model: v.slice(i + 1) };
+function taskLabel(t) {
+  const st = t.panels ? (t.done + '/' + t.panels + ' 完成') : '空';
+  // 2026-10-18 起目录名自带标题（`C20261018-06_那杯饮料`），标题就别再拼一遍
+  // ——`C20261018-06_那杯饮料｜那杯饮料（3/10 完成）` 又长又吵。
+  const dup = t.title && t.task.indexOf(t.title) >= 0;
+  return t.task + (t.title && !dup ? '｜' + t.title : '') + '（' + st + '）';
 }
-async function poll(path, job, onDone, label) {
-  return new Promise((resolve, reject) => {
-    const tick = async () => {
-      try {
-        const d = await api(path + "?" + q({ job: job }));
-        if (d.state === "error") { reject(new Error(d.error || (label + "失败"))); return; }
-        if (d.state === "done") { resolve(await onDone(d)); return; }
-        bar(label + "…" + ((d.log || []).slice(-1)[0] || "处理中"));
-        setTimeout(tick, 1600);
-      } catch (e) { reject(e); }
-    };
-    tick();
+
+function syncTaskPick() {
+  const pick = document.getElementById('taskPick');
+  if (TASK) pick.value = TASK;
+}
+
+async function switchTask(name) {
+  if (!name || name === TASK) return;
+  try {
+    await loadTaskUI(name, '已切到');
+    loadTasks();          // 那一集的完成数可能变了，标签顺手刷新
+  } catch (e) { toast(e.message, true); }
+}
+
+// 打开一个任务：状态 + 剧本正文 + 补正报告 + 渲染参数。恢复会话和切任务共用。
+async function loadTaskUI(name, prefix) {
+  const d = await api('/api/comic/status?task=' + encodeURIComponent(name));
+  TASK = name; rememberTask(name);
+  const ta = document.getElementById('script');
+  ta.style.display = 'none'; ta.value = '';
+  document.getElementById('scriptOps').style.display = 'none';
+  document.getElementById('chatBox').style.display = 'none';
+  document.getElementById('fixPanel').style.display = 'none';
+  try {
+    const s = await api('/api/comic/script_text?task=' + encodeURIComponent(name));
+    // 打开旧任务时把视角下拉同步成**这一集当时用的模式**（2026-10-22）：下拉只
+    // 影响「下一次生成剧本」，但显示和任务对不上会让人以为能改已出的剧本。
+    if (s.pov_mode) setPovMode(s.pov_mode);
+    if (s.script) {
+      ta.style.display = 'block'; ta.value = s.script;
+      document.getElementById('scriptOps').style.display = 'flex';
+      document.getElementById('chatBox').style.display = 'block';
+      loadChatHistory();
+      renderFix(d.fix);
+      // 自由视角任务重开时，固定/动态分栏从 fix.json 的 silver 段还原
+      renderSilverParts(d.fix && d.fix.silver);
+    }
+  } catch (e) { /* 纯写真任务：没有剧本，正常 */ }
+  // 写真有就画出来（2026-10-18 补）：原来这里只切卡片显隐、不填内容，切到
+  // 一个跑过写真的任务会看到一张空网格。之后 applyMode 统一按模式决定谁露谁藏。
+  renderPortraits(d.portraits || []);
+  await loadChannels();          // 渠道下拉 + 当前值（任务自己的 scene_skill）
+  await loadRenderOpts(true);
+  applyMode();
+  syncTaskPick();
+  if (prefix) toast(prefix + '：' + name);
+  refresh();
+}
+
+async function rerender(no) {
+  // 带上下拉选中的渠道：不带的话后端只能认 state.json 里记的，新任务（还没
+  // 存过 state）会静默用 anima-line 画——2026-10-22 用户实报「点了宝可梦、
+  // 画出来是 anima 线条」就是这个。
+  try { await api('/api/comic/rerender', {task: TASK, no, scene_skill: channel()}); setBusy(true, 'scene'); toast('格 ' + no + ' 换种子重跑中'); }
+  catch (e) { toast(e.message, true); }
+}
+
+async function bubble(no) {
+  // 这一格的画法开关：p.bubble2 为空的格没有这个下拉，按默认（一遍画完）走。
+  const sel = document.getElementById('meth-' + no);
+  const split = !!(sel && sel.value === '1');
+  try {
+    await api('/api/comic/bubble', {task: TASK, no, split});
+    setBusy(true, 'bubble');
+    toast('格 ' + no + ' 加气泡中（qwen 图生图，' + (split ? '分开画' : '一遍画完') + '）');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function bubbleAll() {
+  try { await api('/api/comic/bubble', {task: TASK, no: 'all'}); setBusy(true, 'bubble'); toast('批量加气泡中'); }
+  catch (e) { toast(e.message, true); }
+}
+
+// ── 生图模式（单人写真集，2026-10-13）─────────────────────
+// 和剧本模式共用 ① 卡的输入框和模型选择，提示词规则另一套：无 POV、无剧情、
+// 无观众，画面只有女主一个人。后端 comic_portrait.run：提示词员写 N 条 →
+// 逐条 build_t2i_workflow + 渲染参数覆盖 + image_jobs 队列；账本 prompts.json
+// 逐条落盘，轮询即进度。单张换种子重跑是同步的（一张图几十秒，按钮转圈等）。
+let PORTRAIT_JOB = null;
+// 这批任务已经出了几张写真。卡片显隐要用它，而不是去数 DOM 子节点。
+let PORTRAIT_SHOTS = 0;
+
+// 上次用的模式（2026-10-18）：切到生图、刷新页面又跳回剧本布局，等于白切一次。
+const LS_MODE = 'comic_mode';
+
+function curMode() {
+  return document.querySelector('input[name=mode]:checked').value;
+}
+
+function savedMode() {
+  try { return localStorage.getItem(LS_MODE) === 'portrait' ? 'portrait' : 'script'; }
+  catch (e) { return 'script'; }
+}
+
+// 只换输入框和按钮文案（这部分两种模式共用同一套控件）
+function syncModeInputs() {
+  const p = curMode() === 'portrait';
+  document.getElementById('heroine').style.display = p ? '' : 'none';
+  document.getElementById('character').style.display = p ? 'none' : '';
+  document.getElementById('panels').title = p ? '写真相张数（1~12）' : '格数';
+  document.getElementById('panels').max = p ? 12 : 30;
+  document.getElementById('btnScript').textContent = p ? '生成写真' : '生成剧本';
+  // 「跳过查库」只对 POV 编剧路线有意义；silver 自由路线固定一次 API。
+  const silver = !p && ['free', 'third'].indexOf(povMode()) >= 0;
+  document.getElementById('skipSearchWrap').style.display = (p || silver) ? 'none' : '';
+  document.getElementById('silverModeWrap').style.display = silver ? '' : 'none';
+  document.getElementById('povModeWrap').style.display = p ? 'none' : '';
+  document.getElementById('btnRefix').style.display = silver ? 'none' : '';
+  document.getElementById('fixPanel').style.display =
+    (!p && !silver && document.getElementById('fixPanel').innerHTML.trim()) ? 'block' : 'none';
+  document.getElementById('brief').placeholder = p
+    ? '想拍什么：花田里回眸、天台看夕阳、教室靠窗午睡……（一次多张，每张换场景/服装/构图）'
+    : '视角: 哥哥\n主角: 妹妹\n剧情: 下雨天兄妹俩在公交站躲雨……（前两行是硬约束：视角=镜头后的「我」，男性→pov、女性→female_pov；主角=画面里唯一入画的人）';
+}
+
+function switchMode() {
+  try { localStorage.setItem(LS_MODE, curMode()); } catch (e) { }
+  syncModeInputs();
+  applyMode();
+}
+
+/**
+ * 按当前模式重排整页（2026-10-18 用户提出）。
+ *
+ * 原来切模式只换了女主输入框和按钮文案，剧本正文 / 补正报告 / 修订助手 /
+ * 渲染参数 / 槽位五块全留着，写真卡被压到整页最底——用户的原话是「要往下
+ * 拖好久才能看到写真」。现在生图模式只留：需求卡 → 写真卡 → 渲染参数卡。
+ *
+ * **显隐一律重算，不存快照**：切模式下后台刚好把剧本拉回来，快照就是过期
+ * 状态；而「有没有剧本 / 有没有修图报告」各自都有现成的判据，重算比还原稳。
+ */
+function applyMode() {
+  const p = curMode() === 'portrait';
+  const hasScript = !!document.getElementById('script').value.trim();
+  const showScript = !p && hasScript;
+  // 自由视角已经有「固定部分 / 动态部分」分栏时，textarea 收起：它只是内部拼接
+  // 格式，同一份内容显示两遍反而看不出结构（2026-10-22 用户口径）。
+  const partsShown = document.getElementById('silverParts').style.display !== 'none';
+  document.getElementById('script').style.display =
+    (showScript && !partsShown) ? 'block' : 'none';
+  document.getElementById('scriptOps').style.display = showScript ? 'flex' : 'none';
+  document.getElementById('chatBox').style.display = showScript ? 'block' : 'none';
+  const silver = !p && ['free', 'third'].indexOf(povMode()) >= 0;
+  document.getElementById('fixPanel').style.display =
+    (!p && !silver && document.getElementById('fixPanel').innerHTML.trim()) ? 'block' : 'none';
+  document.getElementById('btnRefix').style.display = silver ? 'none' : '';
+  // 槽位卡装的是漫画格；「接上一集」只对剧本有意义。生图模式下一并收起。
+  document.getElementById('slotCard').style.display = p ? 'none' : '';
+  document.getElementById('prevLabel').style.display = p ? 'none' : '';
+  document.getElementById('prevTask').style.display = p ? 'none' : '';
+  const cow = document.getElementById('carryOutfitWrap');
+  if (cow) cow.style.display = p ? 'none' : '';
+  // 写真卡：生图模式一律露出（没跑过也要看得见空态）；剧本模式下只在确实有
+  // 写真时才挂出来——否则剧本页最上面会多一块空卡。
+  document.getElementById('portraitCard').style.display =
+    (p || PORTRAIT_SHOTS > 0) ? 'block' : 'none';
+}
+
+async function genPortrait() {
+  const brief = document.getElementById('brief').value.trim();
+  if (!brief) { toast('想拍什么总得写一句', true); return; }
+  const btn = document.getElementById('btnScript');
+  btn.disabled = true; btn.textContent = '提示词员动笔…';
+  try {
+    const d = await api('/api/comic/portrait', {
+      task: TASK || '', brief,
+      scene_skill: channel(),
+      heroine: document.getElementById('heroine').value.trim(),
+      n: +document.getElementById('panels').value || 4,
+      provider: document.getElementById('prov').value,
+      model: document.getElementById('model').value
+    });
+    PORTRAIT_JOB = d.job;
+    if (!TASK) TASK = d.task;        // 后端给新建任务起了目录名
+    rememberTask(TASK);
+    document.getElementById('portraitCard').style.display = 'block';
+    loadRenderOpts(true);            // 渲染参数卡对写真同样生效（同渠道）
+    pollPortrait();
+  } catch (e) {
+    toast(e.message, true);
+    finishPortrait();
+  }
+}
+
+async function pollPortrait() {
+  if (!PORTRAIT_JOB) return;
+  let d;
+  try { d = await api('/api/comic/portrait_status?job=' + PORTRAIT_JOB); }
+  catch (e) { toast(e.message, true); finishPortrait(); return; }
+  const job = document.getElementById('portraitJob');
+  if (d.state === 'running') {
+    const log = d.log || [];
+    job.innerHTML = '<div class="badge b-rendered">跑图中</div> '
+      + '<span style="color:var(--text-dim);font-size:12px">'
+      + esc(log.length ? log[log.length - 1] : '提示词员动笔…') + '</span>';
+    renderPortraits(d.shots);
+    setTimeout(pollPortrait, 1500);
+    return;
+  }
+  PORTRAIT_JOB = null;
+  btnFinish();
+  if (d.state === 'error') {
+    job.innerHTML = '<div class="badge b-error">失败</div> '
+      + '<span style="color:var(--error);font-size:12px">' + esc(d.error || '') + '</span>';
+    toast('写真失败：' + (d.error || ''), true);
+  } else {
+    job.innerHTML = '<div class="badge b-done">完成</div>';
+    toast('写真完成：' + (d.shots || []).length + ' 张');
+  }
+  renderPortraits(d.shots);
+  refresh();               // 漫画卡/进度条跟着这个（可能新的）任务走
+}
+
+function btnFinish() {
+  const btn = document.getElementById('btnScript');
+  btn.disabled = false;
+  btn.textContent = curMode() === 'portrait' ? '生成写真' : '生成剧本';
+}
+
+function finishPortrait() { PORTRAIT_JOB = null; btnFinish(); }
+
+function renderPortraits(shots) {
+  const grid = document.getElementById('portraitGrid');
+  PORTRAIT_SHOTS = (shots || []).length;
+  if (!PORTRAIT_SHOTS) {
+    grid.dataset.sig = '';
+    grid.innerHTML = '<div class="empty">还没有写真——在上面写句需求点「生成写真」</div>';
+    applyMode();               // 空态：生图模式留着卡片，剧本模式收起
+    return;
+  }
+  applyMode();
+  const sig = JSON.stringify(shots.map(s => [s.no, s.state, s.seed, s.rev, s.error]));
+  if (grid.dataset.sig === sig) return;      // 没变就别重建，避免闪烁
+  grid.dataset.sig = sig;
+  const done = shots.filter(s => s.state === 'rendered').length;
+  document.getElementById('portraitMeta').textContent =
+    '这批 ' + shots.length + ' 张：' + done + ' 张完成'
+    + (done < shots.length ? '，失败的可以点「🔁 换种子」重跑' : '');
+  grid.innerHTML = shots.map(s => {
+    const badge = s.state === 'rendered' ? '<span class="badge b-done">完成</span>'
+      : '<span class="badge b-error">失败</span>';
+    const img = s.state === 'rendered'
+      ? '<div><img class="zoomable" loading="lazy" src="' + s.url + '&t=' + Date.now()
+        + '" onclick="zoomOpen(\'' + s.url + '\',\'' + s.no + '\',\'shot\',\'shot\')"></div>'
+      : '<div style="color:var(--text-mute);font-size:12px;display:flex;align-items:center;justify-content:center;min-height:200px">没出来</div>';
+    return '<div class="slot shot" data-no="' + esc(s.no) + '">'
+      + '<div class="head"><span class="no">' + esc(s.no) + '</span>' + badge
+      + '<span class="seed">seed ' + esc(s.seed) + '</span></div>'
+      + '<div class="imgs">' + img + '</div>'
+      + '<div class="ops"><button class="btn small" onclick="reseedShot(\'' + s.no
+      + '\')">🔁 换种子</button></div>'
+      + (s.error ? '<div class="err">' + esc(s.error) + '</div>' : '')
+      + '<div class="ptxt" title="' + esc(s.prompt) + '">' + esc(s.prompt) + '</div>'
+      + '</div>';
+  }).join('');
+}
+
+async function reseedShot(no) {
+  if (!TASK) return;
+  const btn = document.querySelector('.shot[data-no="' + no + '"] .btn');
+  if (btn) { btn.disabled = true; btn.textContent = '重跑中…'; }
+  try {
+    const d = await api('/api/comic/portrait_shot', {task: TASK, no});
+    toast('第 ' + no + ' 张已重跑（新种子 ' + d.shot.seed + '）');
+    refresh();
+  } catch (e) { toast(e.message, true); }
+  finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔁 换种子'; }
+  }
+}
+
+// 点图放大看细节——「哪几个字糊了」得先看清才写得出指令。
+// kind：panel=漫画格 / shot=写真张（写真的图不在 raw/final 里，刷新逻辑两样）。
+function zoomOpen(src, no, which, kind) {
+  _zoom = {no, which, kind: kind || 'panel', url: src};
+  const d = document.getElementById('zoom');
+  d.querySelector('img').src = src;
+  d.style.display = 'flex';
+}
+function zoomClose() { _zoom = null; document.getElementById('zoom').style.display = 'none'; }
+
+// 手动跑 Qwen：源图＝这一格当前成品，所以可以一次次往上改。
+async function manualRun(no) {
+  const slot = document.querySelector('.slot[data-no="' + no + '"]');
+  const ta = slot && slot.querySelector('.mins');
+  const sel = slot && slot.querySelector('select.mden');
+  const prompt = ta ? ta.value.trim() : '';
+  if (!prompt) { toast('先写一句要 Qwen 改什么', true); return; }
+  _manual[no] = ta.value;
+  try {
+    await api('/api/comic/manual', {task: TASK, no, prompt,
+                                    denoise: sel ? sel.value : ''});
+    setBusy(true, 'bubble');
+    toast('格 ' + no + ' 手动跑 Qwen 中（源图＝当前成品）');
+  } catch (e) { toast(e.message, true); }
+}
+
+// ── 「完整提示词」框：显示并手改原样发给 qwen 的文字 ──────────────
+// 展开/收起。改 _slots[no].sig 是**故意**的：刷新循环只在签名变了才重建这一格，
+// 而展开与否不在签名里（它在客户端状态里），所以直接把签名打脏逼它重建一次。
+function peekToggle(no) {
+  _peekOpen[no] = !_peekOpen[no];
+  const c = _slots[no];
+  if (c) c.sig = null;
+  refresh();
+}
+
+function _peekSplit(no) {
+  const sed = document.getElementById('meth-' + no);
+  return !!(sed && sed.value === '1');
+}
+
+// 拉取后端拼装好的那段文字。split 跟着界面上的画法下拉走——一格有没有第二句
+// 台词，拼出来的是两套模板，不跟就会「看到的是 A、跑的是 B」。
+async function peekFetch(no, el) {
+  const slot = document.querySelector('.slot[data-no="' + no + '"]');
+  const ta = el || (slot && slot.querySelector('.mpeek'));
+  if (!ta) return;
+  try {
+    const d = await api('/api/comic/prompt?task=' + TASK + '&no=' + no
+                        + '&split=' + (_peekSplit(no) ? 1 : 0));
+    _promptText[no] = d.prompt || '';
+    ta.value = _promptText[no];
+  } catch (e) { toast(e.message, true); }
+}
+
+async function peekReset(no) {
+  _promptText[no] = '';                    // 清掉才好重新拉（peekFetch 会填回去）
+  await peekFetch(no);
+  toast('已取回系统拼装的提示词');
+}
+
+// 用框里的文字重画这一格。源图＝干净底图（raw），所以是「从零加字」。
+async function peekRun(no) {
+  const slot = document.querySelector('.slot[data-no="' + no + '"]');
+  const ta = slot && slot.querySelector('.mpeek');
+  const prompt = ta ? ta.value.trim() : '';
+  if (!prompt) { toast('提示词是空的——先点「取回系统拼装」或自己写一段', true); return; }
+  _promptText[no] = ta.value;
+  try {
+    await api('/api/comic/bubble', {task: TASK, no, prompt,
+                                    split: _peekSplit(no)});
+    setBusy(true, 'bubble');
+    toast('格 ' + no + ' 用你改过的提示词重画中（源图＝干净底图）');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function uploadScene(no, input) {
+  const f = input.files && input.files[0];
+  input.value = '';                      // 清掉才能连传同一个文件两次
+  if (!f) return;
+  const fd = new FormData();
+  fd.append('task', TASK); fd.append('no', no); fd.append('file', f);
+  try {
+    const r = await fetch('/api/comic/upload', {method: 'POST', body: fd});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
+    toast('格 ' + no + ' 底图已替换，接着点「加气泡」');
+  } catch (e) { toast(e.message, true); }
+  await refresh();
+}
+
+// 上次用的模式要接回来：切到生图、一刷新又跳回剧本布局，等于白切一次。
+document.querySelector('input[name=mode][value="' + savedMode() + '"]').checked = true;
+syncModeInputs();
+applyMode();
+
+
+/* ═══════════════════════════════════════════════════════════════════════
+   群友版补丁（母本：web/comic_studio.html，由 tools/comic_friend_patch.py 注入）
+   母本的槽位 / 台词 / 标签 / 气泡 / 完整提示词 / 改画面词 / 红色补正 / 写真
+   一行都没动。这里只做：①隐藏站主专属控件 ②反馈搬到按钮正下方
+   ③配额 / 画幅 / 每格耗时 / QQ 手动发送。
+   ═══════════════════════════════════════════════════════════════════════ */
+const FRIEND = {cfg: null, active: 'lsRun', clock: {}, packSig: '',
+                sendTimer: null, wasBusy: false, starting: false};
+
+function friendEl(id) { return document.getElementById(id); }
+function friendInline(id, msg, kind) {
+  const el = friendEl(id);
+  if (!el) return;
+  el.textContent = msg || '';
+  el.className = 'inline-status' + (msg ? ' on' : '') + (kind ? ' ' + kind : '');
+}
+window.friendInline = friendInline;
+function friendFocus(id) { FRIEND.active = id; }
+function friendSay(msg, isErr) { friendInline(FRIEND.active, msg, isErr ? 'err' : ''); }
+
+// 母本底部浮条保留，同时把同一句反馈写到「刚点的那个按钮」正下方。
+const _mToast = toast;
+toast = function (msg, isErr) { _mToast(msg, isErr); friendSay(msg, isErr); };
+
+// 母本 setBusy 本来就会把 btnScript/btnStart/... 全置灰，这里只补就地文字。
+const _mSetBusy = setBusy;
+setBusy = function (b, phase) {
+  _mSetBusy(b, phase);
+  if (b) friendInline('lsRun', '⏳ 当前任务正在跑（' +
+    (phase === 'bubble' ? '加气泡' : '渲染场景图') +
+    '），按钮已置灰，页面每 2 秒自动刷新，不用重复点');
+  else if (FRIEND.wasBusy) friendInline('lsRun', '✅ 这一批跑完了');
+  FRIEND.wasBusy = !!b;
+};
+
+// 每个按钮点击时，把反馈落点切到它自己下面那条。
+const _mGenScript = genScript;
+genScript = async function () {
+  if (curMode() === 'portrait') return _mGenScript();
+  friendFocus('lsScript'); syncBrief();
+  friendInline('lsScript', '⏳ 已提交，编剧正在' + (skipSearch() ? '写剧本' : '查库 / 写剧本') +
+    '…（要几分钟，按钮已置灰，别重复点）');
+  return _mGenScript();
+};
+const _mSaveScript = saveScript;
+saveScript = async function (andRun) {
+  if (!andRun) return _mSaveScript(andRun);
+  // 母本要等 /api/comic/start 返回才 setBusy，中间那几秒按钮是亮的，
+  // 实测会被当成卡住连点好几次。点下去的瞬间就灰，并吞掉重复提交。
+  if (FRIEND.starting) return;
+  FRIEND.starting = true;
+  friendFocus('lsRun');
+  friendInline('lsRun', '⏳ 正在提交开跑…按钮已置灰，不用重复点');
+  const btn = friendEl('btnStart');
+  if (btn) btn.disabled = true;
+  try {
+    return await _mSaveScript(andRun);
+  } finally {
+    FRIEND.starting = false;
+    // 成功时 refresh() 会拿到 running 并继续锁住（wasBusy=true）；
+    // 失败时 2 秒轮询会解锁，这里再兜一层，别让人对着灰按钮干等。
+    setTimeout(function () {
+      const b = friendEl('btnStart');
+      if (b && !FRIEND.wasBusy && !RUNNING) b.disabled = false;
+    }, 2500);
+  }
+};
+const _mBubbleAll = bubbleAll;
+bubbleAll = async function () {
+  const btn = friendEl('btnBubbleAll');
+  if (btn) btn.disabled = true;
+  friendFocus('lsBubble');
+  friendInline('lsBubble', '⏳ 已提交，正在给所有待加格加气泡 / 写台词…');
+  return _mBubbleAll();
+};
+const _mGenPortrait = genPortrait;
+genPortrait = async function () {
+  friendFocus('lsPortrait');
+  friendInline('lsPortrait', '⏳ 已提交，提示词员正在写这一批写真…');
+  return _mGenPortrait();
+};
+const _mSwitchMode = switchMode;
+switchMode = function () { _mSwitchMode(); friendMode(); };
+
+// 设定拆三行：前端拼回母本原有的「视角:/主角:/剧情:」契约，后端一个字没改。
+function syncBrief() {
+  const v = (friendEl('bfView').value || '').trim();
+  const h = (friendEl('bfHero').value || '').trim();
+  const p = (friendEl('bfPlot').value || '').trim();
+  friendEl('brief').value = (v ? '视角: ' + v + '\n' : '') +
+                            (h ? '主角: ' + h + '\n' : '') +
+                            (p ? '剧情: ' + p : '');
+}
+['bfView', 'bfHero', 'bfPlot'].forEach(function (id) {
+  const el = friendEl(id);
+  if (el) el.addEventListener('input', syncBrief);
+});
+
+// 格数 / 张数由站主按账号给，页面只显示、不给输入（手机端粘贴 30 也没用）。
+function friendPanelMax() {
+  const q = FRIEND.cfg && FRIEND.cfg.quota;
+  const lim = (q && q.limits) || {};
+  const portrait = curMode() === 'portrait';
+  const n = portrait ? (lim.max_shots || 5) : (lim.max_panels || 10);
+  const p = friendEl('panels');
+  if (p) p.value = n;
+  const hint = friendEl('panelsHint');
+  if (hint) hint.textContent = portrait
+    ? '一次 ' + n + ' 张（站主给的额度，不能自己改）'
+    : '一本 ' + n + ' 格（站主给的额度，不能自己改）';
+}
+function friendMode() {
+  const p = curMode() === 'portrait';
+  const rows = friendEl('briefRows'), b = friendEl('brief');
+  if (rows) rows.style.display = p ? 'none' : '';
+  if (b) {
+    b.style.display = p ? '' : 'none';
+    b.rows = 3;                       // 母本默认 220px 高，写真只要一句话
+    if (p) b.placeholder = '想拍什么：花田里回眸、天台看夕阳、教室靠窗午睡……（一次多张，每张换场景 / 服装 / 构图）';
+    else syncBrief();
+  }
+  friendPanelMax();
+  document.querySelectorAll('.mode-tab').forEach(function (l) {
+    const i = l.querySelector('input');
+    if (i) l.classList.toggle('on', i.checked);
   });
 }
-async function doScript() {
-  const view = $("briefView").value.trim();
-  const hero = $("briefHero").value.trim();
-  const plot = $("briefPlot").value.trim();
-  if (!view || !hero || !plot) {
-    bar("三行都要填：视角是谁、主角是谁、剧情是什么", true);
+
+function friendQuota(q) {
+  const box = friendEl('quotaTop');
+  if (!box || !q) return;
+  const names = {script: '剧本', revise: '修订', comic: '漫画', portrait: '写真'};
+  const l = q.left || {};
+  box.innerHTML = Object.keys(names).map(function (k) {
+    return '<span class="chip">' + names[k] + ' 剩 ' + (l[k] || 0) + '</span>';
+  }).join('');
+}
+
+function friendRatios(list) {
+  const box = friendEl('ratios');
+  if (!box) return;
+  box.innerHTML = list.map(function (p) {
+    return '<button class="btn small ratio-btn" data-key="' + esc(p.key) + '" data-w="' +
+      p.w + '" data-h="' + p.h + '">' + esc(p.label) + ' ' + p.w + '×' + p.h + '</button>';
+  }).join('');
+  box.querySelectorAll('button').forEach(function (b) {
+    b.onclick = function () {
+      friendEl('frW').value = b.dataset.w;
+      friendEl('frH').value = b.dataset.h;
+      box.querySelectorAll('button').forEach(function (x) { x.classList.toggle('on', x === b); });
+      saveFriendSize();
+    };
+  });
+}
+async function loadFriendRender() {
+  const list = (FRIEND.cfg && FRIEND.cfg.ratio_presets) || [];
+  if (!TASK) {
+    if (list.length) { friendEl('frW').value = list[0].w; friendEl('frH').value = list[0].h; }
     return;
   }
-  // 站主版编剧契约本来就是这三行（comic_studio.html 的 placeholder 同款），
-  // 前端拼回原样再发，后端一个字不用改。
-  const brief = "视角: " + view + "\n主角: " + hero + "\n剧情: " + plot;
-  // 格数只认站主按账号给的上限，群友端不留输入框（原来那个 number 框在
-  // 手机上能粘贴 30，但服务端会夹回上限，纯属误导）。
-  const maxPanels = (S.quota && S.quota.limits && S.quota.limits.max_panels) || 10;
-  const m = modelPair();
-  $("btnScript").disabled = true;
   try {
-    const d = await api("/api/comic/script", {
-      brief: brief, panels: maxPanels,
-      character: "", pov_mode: $("pov").value,
-      prev: $("prev").value, carry_outfit: $("carry").checked,
-      no_search: $("noSearch").checked, silver_mode: "no_bubble",
-      provider: m.provider, model: m.model
+    const d = await api('/api/comic/render_opts?task=' + encodeURIComponent(TASK));
+    const o = d.opts || {}, w = +o.width || 0, h = +o.height || 0;
+    if (w && h) { friendEl('frW').value = w; friendEl('frH').value = h; }
+    const hit = list.find(function (p) { return p.w === w && p.h === h; });
+    friendEl('ratios').querySelectorAll('button').forEach(function (b) {
+      b.classList.toggle('on', !!hit && b.dataset.key === hit.key);
     });
-    await poll("/api/comic/script_status", d.job, async (r) => {
-      bar("剧本写好了：" + (r.task || ""));
-      S.task = r.task || "";
-      if (S.task) localStorage.setItem(LS_TASK, S.task);
-      $("script").value = r.script || "";
-      await loadTasks();
-      await loadConfig();
-    }, "编剧正在写剧本（要查库，可能几分钟）");
-  } catch (e) { fail(e); }
-  finally { $("btnScript").disabled = !(S.quota && S.quota.left.script > 0); }
+  } catch (e) { /* 老任务没存过参数就用默认值，不打断页面 */ }
 }
-function renderChat(hist) {
-  $("chatLog").innerHTML = (hist || []).map((m) =>
-    '<div class="msg ' + (m.role === "user" ? "u" : "a") + '">' +
-    esc(m.content) + "</div>").join("");
-  $("chatLog").scrollTop = $("chatLog").scrollHeight;
+let _sizeTimer = null;
+function saveFriendSize() {
+  clearTimeout(_sizeTimer);
+  _sizeTimer = setTimeout(async function () {
+    const msg = friendEl('frMsg');
+    if (!TASK) { if (msg) msg.textContent = '先生成或选一本作品，画幅才会保存'; return; }
+    const w = +friendEl('frW').value || 0, h = +friendEl('frH').value || 0;
+    if (!w || !h) return;
+    try {
+      await api('/api/comic/render_opts', {task: TASK, opts: {width: w, height: h}});
+      if (msg) msg.textContent = '画幅已生效：' + w + '×' + h + '（已固定跳过最终 2 倍放大）';
+    } catch (e) { if (msg) msg.textContent = '画幅没存上：' + e.message; }
+  }, 450);
 }
-async function doChat() {
-  if (!S.task) { bar("先生成或选一本作品", true); return; }
-  const msg = $("chatMsg").value.trim();
-  if (!msg) return;
-  const m = modelPair();
-  $("btnChat").disabled = true;
-  $("chatMsg").value = "";
-  renderChat((await api("/api/comic/chat_history?" + q({ task: S.task })))
-    .history.concat([{ role: "user", content: msg }]));
-  try {
-    const d = await api("/api/comic/chat_revise", {
-      task: S.task, message: msg, provider: m.provider, model: m.model
-    });
-    const r = await poll("/api/comic/chat_status", d.job, async (x) => x,
-                         "修订助手在想");
-    if (r.quota) { S.quota = r.quota; renderChips({ quota: r.quota }); }
-    if (r.changed) {
-      const txt = await api("/api/comic/script_text?" + q({ task: S.task }));
-      $("script").value = txt.script || "";
-      bar("修订助手改好了剧本，扣 1 次修订机会");
-    } else {
-      bar("修订助手只是回话／反问，剧本没动，这次不扣次数");
+friendEl('frW').addEventListener('input', saveFriendSize);
+friendEl('frH').addEventListener('input', saveFriendSize);
+
+// 右上角耗时：后端不用改，客户端按状态变化计时（排队 / 待加气泡 / 完成）。
+const _mRenderSlot = renderSlot;
+renderSlot = function (p) {
+  return _mRenderSlot(p).replace('<span class="seed">',
+    '<span class="cost" data-no="' + esc(String(p.no)) + '"></span><span class="seed">');
+};
+
+function friendPacks(v) {
+  const box = friendEl('packs');
+  if (!box) return;
+  const rows = (v.packages || []).map(function (p) {
+    const st = p.state === 'sent' ? '<span class="ok">已发送</span>'
+      : p.state === 'failed' ? '<span class="bad">发送失败</span>' : '<span>处理中</span>';
+    return '<div class="pack"><b>' + esc(p.label) + '</b> · ' + st +
+      ' · ' + (p.files || 0) + ' 张 · ' + esc(p.at || '') +
+      (p.size ? ' · ' + (p.size / 1048576).toFixed(1) + ' MB' : '') +
+      (p.error ? '<br><span class="bad">' + esc(p.error) + '</span>' : '') + '</div>';
+  }).join('');
+  const top = (v.state === 'packing')
+    ? '<div class="pack">⏳ <b>正在打包 / 通过 QQ 发送…</b> 大文件要等一会儿，下面会自动刷新。</div>'
+    : '';
+  const sig = rows + '|' + (v.state || '') + '|' + (v.error || '');
+  if (sig === FRIEND.packSig) return;
+  FRIEND.packSig = sig;
+  box.innerHTML = top + (rows ||
+    '<div class="pack">还没有可发送的文件。跑完底图会自动发一次，也可以点上面按钮手动发。</div>');
+}
+
+// 母本 2 秒一轮的 status 已经带 delivery / quota / queue，挂个钩子就够，
+// 不再另起轮询打重复请求。
+window.friendOnStatus = function (d) {
+  const q = friendEl('queueHint');
+  if (q) q.textContent = '当前全站排队 ' + (d.queue || 0) +
+    ' 张 · 单张串行，前面可能还有别人的任务';
+  const now = Date.now(), grid = friendEl('grid');
+  (d.panels || []).forEach(function (p) {
+    const k = String(p.no);
+    const c = FRIEND.clock[k] || (FRIEND.clock[k] = {});
+    if (!c.start && (p.state === 'pending' || p.scene_url)) c.start = now;
+    if ((p.state === 'done' || p.state === 'rendered') && c.start && !c.end) c.end = now;
+    const el = grid && grid.querySelector('.cost[data-no="' + k + '"]');
+    if (!el) return;
+    if (p.error) { el.textContent = '✗ 失败'; el.style.color = 'var(--error)'; }
+    else if (p.state === 'pending') {
+      el.textContent = c.start ? '⏳ ' + Math.max(0, Math.round((now - c.start) / 1000)) + 's' : '⏳ 排队';
+      el.style.color = 'var(--warn)';
+    } else if (p.state === 'rendered') {
+      el.textContent = '⏳ 待加气泡'; el.style.color = 'var(--info)';
+    } else if (p.state === 'done') {
+      el.textContent = (c.end && c.start) ? '✓ ' + Math.round((c.end - c.start) / 1000) + 's' : '✓ 完成';
+      el.style.color = 'var(--success)';
     }
-    const h = await api("/api/comic/chat_history?" + q({ task: S.task }));
-    renderChat(h.history || []);
-    $("btnUndo").disabled = !h.backup;
-  } catch (e) { fail(e); }
-  finally { $("btnChat").disabled = !(S.quota && S.quota.left.revise > 0); }
-}
-async function doSave() {
-  if (!S.task) { bar("先生成或选一本作品", true); return; }
-  try {
-    const d = await api("/api/comic/save", { task: S.task, script: $("script").value });
-    bar("剧本已保存（" + d.panels + " 格）");
-  } catch (e) { fail(e); }
-}
-async function doUndo() {
-  if (!S.task) return;
-  try {
-    const d = await api("/api/comic/chat_undo", { task: S.task });
-    $("script").value = d.script || "";
-    $("btnUndo").disabled = true;
-    bar("已撤销上次改稿（次数不退，剧本已经回去了）");
-  } catch (e) { fail(e); }
-}
+  });
+  if (d.delivery) friendPacks(d.delivery);
+  if (d.quota) friendQuota(d.quota);
+};
 
-/* ─── 开跑 / 槽位 ─────────────────────────────────────── */
-async function doStart() {
-  if (!S.task) { bar("先生成或选一本作品", true); return; }
+// 手动发送：按钮就地给阶段反馈，失败 / 60 秒冷却都写在按钮下面，不再只弹顶端。
+async function doSendQQ() {
+  if (!TASK) { friendInline('lsSend', '先生成或选一本作品', 'err'); return; }
+  const btn = friendEl('btnSendQQ');
+  if (btn) btn.disabled = true;
+  friendInline('lsSend', '⏳ 正在打包当前成品并提交 QQ 发送…');
   try {
-    await api("/api/comic/save", { task: S.task, script: $("script").value });
-    await api("/api/comic/start", { task: S.task,
-                                    scene_skill: $("channel").value });
-    bar("已提交开跑，正在逐张排队出图，不用守着网页");
-    await loadConfig();
-  } catch (e) { fail(e); }
-}
-async function doBubbleAll() {
-  if (!S.task) return;
-  try { await api("/api/comic/bubble", { task: S.task, no: "all" });
-        bar("正在给所有格加气泡，跑完会自动发成品包"); }
-  catch (e) { fail(e); }
-}
-async function doAbort() {
-  if (!S.task) return;
-  try { await api("/api/comic/abort", { task: S.task }); bar("已中断排队，已出的图保留"); }
-  catch (e) { fail(e); }
-}
-const BADGE = { pending: "排队", rendered: "待加气泡", done: "完成", error: "出错" };
-function slotHtml(p) {
-  const no = String(p.no).padStart(2, "0");
-  const imgs = ['<div class="cell">' + (p.final_url ?
-      '<img loading="lazy" src="' + esc(p.final_url) + "&r=" + encodeURIComponent(p.rev) +
-      '" onclick="zoom(this.src)" alt="成品">' :
-      '<div class="ph">成品</div>') + "</div>",
-    '<div class="cell">' + (p.scene_url ?
-      '<img loading="lazy" src="' + esc(p.scene_url) + "&r=" + encodeURIComponent(p.rev) +
-      '" onclick="zoom(this.src)" alt="底图">' :
-      '<div class="ph">底图</div>') + "</div>"].join("");
-  return '<div class="slot"><div class="head"><span class="no">' + no +
-    '</span><span class="badge b-' + esc(p.error ? "error" : p.state) + '">' +
-    esc(BADGE[p.error ? "error" : p.state] || p.state) + "</span></div>" +
-    '<div class="imgs">' + imgs + "</div>" +
-    '<div class="scene">' + esc(p.scene || p.label || "") + "</div>" +
-    (p.error ? '<div class="err">' + esc(p.error) + "</div>" : "") +
-    '<div class="acts">' +
-    '<button class="btn small" data-a="rerender" data-no="' + no + '">换种子重跑</button>' +
-    '<button class="btn small" data-a="bubble" data-no="' + no + '">加气泡</button>' +
-    '<button class="btn small" data-a="scene" data-no="' + no + '">改画面词</button>' +
-    '<button class="btn small" data-a="manual" data-no="' + no + '">手动修复</button>' +
-    "</div></div>";
-}
-function applyStatus(d) {
-  renderChips(d);
-  const panels = d.panels || [];
-  const key = JSON.stringify(panels.map((p) => [p.no, p.state, p.rev, p.error]));
-  if (key !== S.slots) {
-    S.slots = key;
-    $("slots").innerHTML = panels.map(slotHtml).join("");
-    $("slots").querySelectorAll("button[data-a]").forEach((b) =>
-      b.onclick = () => panelAction(b.dataset.a, b.dataset.no));
+    const d = await api('/api/comic/send_qq', {task: TASK});
+    friendInline('lsSend', '⏳ ' + (d.hint || '已提交 QQ 发送，可能要等一会儿才收得到，不用守着网页。'));
+    if (d.delivery) friendPacks(d.delivery);
+    friendPollSend();
+  } catch (e) {
+    friendInline('lsSend', '✗ ' + e.message + '（不会改成网页下载，稍等再点或找站主）', 'err');
+  } finally {
+    setTimeout(function () { if (btn) btn.disabled = false; }, 4000);
   }
-  $("slotsEmpty").style.display = panels.length ? "none" : "";
-  const shots = d.portraits || [];
-  const skey = JSON.stringify(shots.map((s) => [s.no, s.rev, s.url]));
-  if (skey !== S.shots) {
-    S.shots = skey;
-    $("shots").innerHTML = shots.map((s) =>
-      '<div class="slot"><div class="head"><span class="no">' +
-      esc(String(s.no).padStart(2, "0")) + "</span></div>" +
-      '<div class="imgs"><div class="cell">' + (s.url ?
-      '<img loading="lazy" src="' + esc(s.url) + "&r=" + encodeURIComponent(s.rev || "") +
-      '" onclick="zoom(this.src)" alt="写真">' : '<div class="ph">还没出图</div>') +
-      "</div></div><div class=\"scene\">" + esc(s.prompt || s.text || "") +
-      "</div></div>").join("");
-  }
-  $("runState").textContent = d.running ? ("正在跑：" + d.running) :
-    (d.comfy ? "ComfyUI 在线" : "ComfyUI 暂时连不上（会排队等它回来）");
-  renderDelivery(d.delivery);
 }
-async function panelAction(a, no) {
-  if (!S.task) return;
-  try {
-    if (a === "rerender") {
-      await api("/api/comic/rerender", { task: S.task, no: no,
-                                         scene_skill: $("channel").value });
-      bar("格 " + no + " 已重新排队");
-    } else if (a === "bubble") {
-      await api("/api/comic/bubble", { task: S.task, no: no });
-      bar("格 " + no + " 正在加气泡");
-    } else if (a === "scene") {
-      const cur = await api("/api/comic/status?" + q({ task: S.task }));
-      const p = (cur.panels || []).find((x) => String(x.no).padStart(2, "0") === no);
-      const v = prompt("第 " + no + " 格的画面词（改完整行）", (p && p.scene) || "");
-      if (v == null || !v.trim()) return;
-      await api("/api/comic/edit_scene", { task: S.task, no: no, scene: v.trim(),
-                                           scene_skill: $("channel").value });
-      bar("格 " + no + " 的画面词已改并重新排队");
-    } else if (a === "manual") {
-      const v = prompt("让 qwen 在这张成品上改什么？", "");
-      if (v == null || !v.trim()) return;
-      await api("/api/comic/manual", { task: S.task, no: no, prompt: v.trim() });
-      bar("格 " + no + " 正在就地重画");
+function friendPollSend() {
+  if (FRIEND.sendTimer) clearInterval(FRIEND.sendTimer);
+  const t0 = Date.now();
+  FRIEND.sendTimer = setInterval(async function () {
+    try {
+      const d = await api('/api/comic/delivery_status?task=' + encodeURIComponent(TASK));
+      friendPacks(d);
+      const st = d.state || '';
+      if (st === 'sent') {
+        clearInterval(FRIEND.sendTimer); FRIEND.sendTimer = null;
+        friendInline('lsSend', '✅ 已通过 QQ 发出，大文件可能要等一会儿才收得到；不用守着网页。', 'ok');
+      } else if (st === 'failed') {
+        clearInterval(FRIEND.sendTimer); FRIEND.sendTimer = null;
+        friendInline('lsSend', '✗ 发送失败：' + (d.error || '看下面每个包的状态') +
+          '。点重发或找站主即可，不会改成网页下载。', 'err');
+      } else if (d.error) {
+        friendInline('lsSend', '✗ 发送失败：' + d.error + '（不会改成网页下载）', 'err');
+      }
+      // packing 时不覆盖点击瞬间那句「本次会发哪几个包」，只靠 packs 里那行转圈提示。
+    } catch (e) { /* 状态接口偶发失败下一轮再来 */ }
+    if (Date.now() - t0 > 180000 && FRIEND.sendTimer) {
+      clearInterval(FRIEND.sendTimer); FRIEND.sendTimer = null;
+      friendInline('lsSend', '⏳ 还在打包 / 发送中（大文件要一会儿），下面会自动刷新状态，不用守着网页。');
     }
-  } catch (e) { fail(e); }
-}
-function renderDelivery(v) {
-  if (!v) { return; }
-  const rows = (v.packages || []).map((p) =>
-    "<div>· " + esc(p.label) + "：" +
-    (p.state === "sent" ? "已发送" : "发送失败") +
-    "（" + (p.files || 0) + " 张，" + esc(p.at || "") + "）" +
-    (p.error ? " " + esc(p.error) : "") + "</div>").join("");
-  $("delivery").innerHTML = "<div>" + esc(v.hint || "") + "</div>" +
-    "<div style='margin-top:6px'>当前状态：<b>" + esc(v.state) + "</b>" +
-    (v.at ? " · " + esc(v.at) : "") + "</div>" +
-    (rows || "<div class='muted'>还没跑出文件。</div>") +
-    (v.error ? "<div style='color:var(--error)'>" + esc(v.error) + "</div>" : "");
-}
-async function doSend() {
-  if (!S.task) { bar("先选一本作品", true); return; }
-  try { const d = await api("/api/comic/send_qq", { task: S.task });
-        bar(d.hint || "正在重新打包发送"); }
-  catch (e) { fail(e); }
+  }, 2500);
 }
 
-/* ─── 写真 ────────────────────────────────────────────── */
-async function doPortrait() {
-  const brief = $("pBrief").value.trim();
-  if (!brief) { bar("写真也要写一句想拍什么", true); return; }
-  const m = modelPair();
-  try {
-    const d = await api("/api/comic/portrait", {
-      brief: brief, heroine: $("pHeroine").value.trim(),
-      n: Number($("pN").value) || 5, scene_skill: $("channel").value,
-      provider: m.provider, model: m.model, task: S.task || ""
-    });
-    S.task = d.task || S.task;
-    if (S.task) localStorage.setItem(LS_TASK, S.task);
-    $("portraitMsg").textContent = "写真正在写提示词并逐张出图…";
-    await poll("/api/comic/portrait_status", d.job, async (r) => {
-      $("portraitMsg").textContent = "写真跑好了，QQ 会把写真包发给你";
-      await loadTasks();
-      await loadConfig();
-    }, "写真生成中");
-  } catch (e) { $("portraitMsg").textContent = "写真失败：" + (e.message || e); }
-}
+// 群友不该看到站主的编剧模型下拉 / 自定义中转站：这两个接口只在 5174 有，
+// 网关也不放行。空 provider/model 由后端收敛到白名单，站主默认即可。
+loadProviders = async function () {
+  try { FRIEND.cfg = await api('/api/comic/friend_config'); }
+  catch (e) { FRIEND.cfg = {ok: true, quota: null, ratio_presets: []}; }
+  friendQuota(FRIEND.cfg.quota);
+  friendRatios(FRIEND.cfg.ratio_presets || []);
+  friendMode();
+  loadFriendRender();
+};
+loadModels = async function () {};
 
-/* ─── 轮询与事件 ──────────────────────────────────────── */
-async function tick() {
-  if (!S.task) return;
-  try { applyStatus(await api("/api/comic/status?" + q({ task: S.task }))); }
-  catch (e) { /* 轮询出错不打断页面，下一次再来 */ }
-}
-function zoom(src) {
-  $("lightboxImg").src = src;
-  $("lightbox").classList.add("show");
-}
-$("lightbox").onclick = () => $("lightbox").classList.remove("show");
-$("taskSel").onchange = () => selectTask($("taskSel").value);
-$("btnTasks").onclick = () => loadTasks().catch(fail);
-$("btnScript").onclick = () => doScript().catch(fail);
-$("btnChat").onclick = () => doChat().catch(fail);
-$("chatMsg").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) doChat().catch(fail); };
-$("btnUndo").onclick = () => doUndo().catch(fail);
-$("btnSave").onclick = () => doSave().catch(fail);
-$("btnStart").onclick = () => doStart().catch(fail);
-$("btnBubbleAll").onclick = () => doBubbleAll().catch(fail);
-$("btnAbort").onclick = () => doAbort().catch(fail);
-$("btnSend").onclick = () => doSend().catch(fail);
-$("btnPortrait").onclick = () => doPortrait().catch(fail);
-$("channel").onchange = () => loadRenderOpts().catch(fail);
-$("width").oninput = () => { S.ratio = ""; highlightRatio(); queueRatio(); };
-$("height").oninput = () => { S.ratio = ""; highlightRatio(); queueRatio(); };
-
-(async function boot() {
-  try { await loadConfig(); } catch (e) { fail(e); return; }
-  if (S.task) {
-    try { await selectTask(S.task, true); }
-    catch (e) { /* 作品被清掉了就按新用户走，不让页面卡死 */ }
-  } else {
-    await tick();
-  }
-  S.poll = setInterval(tick, 2500);
-})();
+poll();
+loadProviders();
+restoreSession();
 </script>
+
+<!-- 自定义中转站（2026-10-22）：只有漫画台有入口，也只在这里的下拉里出现 -->
+<dialog id="provDlg" class="hidden-by-friend"
+        style="background:var(--bg-elev);color:var(--text);border:1px solid var(--border);
+               border-radius:var(--radius);padding:20px;width:470px;max-width:92vw;">
+  <h3 id="pvTitle" style="font-size:15px;font-weight:500;margin-bottom:4px">添加自定义中转站</h3>
+  <div style="color:var(--text-dim);font-size:12px;line-height:1.6;margin-bottom:14px">
+    地址填到 <code style="color:var(--info)">/v1</code> 这一层（如 <code style="color:var(--info)">https://api.relaycore.cn/v1</code>）。<br>
+    密钥存在本机 <code style="color:var(--info)">data/custom_providers.json</code>，不进仓库。
+  </div>
+  <div style="display:grid;grid-template-columns:78px 1fr;gap:10px;align-items:center">
+    <span style="color:var(--text-dim);font-size:12px">名称</span>
+    <input id="pvLabel" placeholder="RelayCore（自己认得出就行）">
+    <span style="color:var(--text-dim);font-size:12px">API 地址</span>
+    <input id="pvBase" placeholder="https://api.relaycore.cn/v1">
+    <span style="color:var(--text-dim);font-size:12px">API 密钥</span>
+    <input id="pvKey" type="password" autocomplete="off" placeholder="sk-...">
+    <span style="color:var(--text-dim);font-size:12px">模型名</span>
+    <input id="pvModel" placeholder="grok-4.5">
+    <span style="color:var(--text-dim);font-size:12px">思考档位</span>
+    <select id="pvEffort" title="grok 系默认就会思考；实测 high 约 42 秒、low 约 34 秒（3 格脚本）">
+      <option value="high">high — 稳（3 格约 42 秒）</option>
+      <option value="medium">medium</option>
+      <option value="low">low — 快（约 34 秒，偶尔多代码围栏）</option>
+      <option value="">不下发（用服务端默认）</option>
+    </select>
+  </div>
+  <div id="pvMsg" style="font-size:12px;min-height:18px;margin:12px 0 4px;color:var(--text-dim)"></div>
+  <div class="row" style="justify-content:flex-end">
+    <button class="btn small" id="pvDel" onclick="delProvider()"
+            style="display:none;color:var(--error)">删除</button>
+    <span style="flex:1"></span>
+    <button class="btn small" onclick="closeProvDlg()">取消</button>
+    <button class="btn small" id="pvTest" onclick="testProvider()">测试连通</button>
+    <button class="btn primary small" id="pvSave" onclick="saveProvider()">保存</button>
+  </div>
+</dialog>
 </body>
 </html>

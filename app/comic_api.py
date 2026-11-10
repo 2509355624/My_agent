@@ -1976,10 +1976,18 @@ def api_comic_send_qq():
     if not qq.isdigit():
         return jsonify({"ok": False,
                         "error": "这个任务没有绑定 QQ，没法直发"}), 400
+    # 点下去的这一瞬间就把「会发什么」说清楚，别让人对着按钮猜。
+    packs = comic_delivery.preview(path)
+    if not packs:
+        return jsonify({"ok": False,
+                        "error": "这本还没有任何图，等跑完底图再发"}), 409
     ok, wait = comic_delivery.manual_ok(path)
     if not ok:
         return jsonify({"ok": False,
-                        "error": "刚发过，等 %d 秒再点" % wait}), 429
+                        "error": "刚发过，等 %d 秒再点（按钮下面能看到每个包的状态）" % wait}), 429
+    # 先落「正在打包」：deliver() 要等 zip 打完 + 协议端回包才写状态，
+    # 几十 MB 时网页轮询会一直看到旧状态，用户以为按钮坏了就会反复点。
+    comic_delivery.mark_packing(path)
 
     def _run():
         try:
@@ -1988,9 +1996,15 @@ def api_comic_send_qq():
             comic.log.exception("手动重发 QQ 失败 %s", path)
             comic_quota.note_delivery(qq, os.path.basename(path),
                                       "failed", str(exc))
+            comic_delivery.mark_packing(path, "failed", str(exc)[:300])
 
     threading.Thread(target=_run, daemon=True, name="comic-resend").start()
-    return jsonify({"ok": True, "hint": comic_delivery.view(path)["hint"]})
+    what = "、".join("%s %d 张" % (k, v) for k, v in packs.items())
+    return jsonify({"ok": True, "state": "packing", "packages": packs,
+                    "delivery": comic_delivery.view(path),
+                    "hint": "已开始打包，本次会发：" + what +
+                            "。QQ 可能要等一会儿才收得到，不用守着网页；"
+                            "按钮下面会自动刷新每个包的状态。"})
 
 
 @bp.route("/api/comic/admin", methods=["GET", "POST"])

@@ -322,6 +322,26 @@ class TestFriendApi(_TempMixin, unittest.TestCase):
                            {"task": "A1", "reset": True}, QQ)
         self.assertEqual(reset.status_code, 403)
 
+    def test_手动发送立刻回正在打包并说清会发什么(self):
+        d = self.mk_task(name="A1", raw=True, final=True)
+        # 起线程会被 mock 掉：测试不碰真实 QQ 协议端。
+        with mock.patch.object(comic_api.threading, "Thread") as th:
+            r = self._post("/api/comic/send_qq", {"task": "A1"}, QQ)
+        self.assertEqual(r.status_code, 200)
+        j = r.get_json()
+        self.assertEqual(j["state"], "packing")
+        self.assertEqual(j["packages"], {"底图包": 1, "成品包": 1})
+        self.assertIn("底图包 1 张", j["hint"])
+        self.assertEqual(comic_delivery.view(d)["state"], "packing")
+        self.assertEqual(comic_delivery.view(d)["error"], "")
+        th.assert_called_once()
+
+    def test_手动发送没有图时明确拒绝(self):
+        self.mk_task(name="A1")
+        r = self._post("/api/comic/send_qq", {"task": "A1"}, QQ)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("还没有任何图", r.get_json()["error"])
+
     def test_修订助手不落实不扣次数(self):
         from app import comic_agent
         d = self.mk_task(name="A1")
@@ -423,11 +443,12 @@ class TestFriendGateway(_TempMixin, unittest.TestCase):
         with mock.patch.object(self.gw, "_logged_in", return_value=False):
             r = self.c.get("/comic")
         self.assertEqual(r.status_code, 200)
-        self.assertNotIn("先说清楚怎么用", r.get_data(as_text=True))
+        self.assertNotIn('id="friendNote"', r.get_data(as_text=True))
         with mock.patch.object(self.gw, "_logged_in", return_value=True):
             r = self.c.get("/comic")
-        self.assertIn("先说清楚怎么用", r.get_data(as_text=True))
+        self.assertIn('id="friendNote"', r.get_data(as_text=True))
         self.assertIn("缩略图", r.get_data(as_text=True))
+        self.assertIn("跑写真", r.get_data(as_text=True))
 
     def test_接口未登录401登录后注入qq(self):
         r = self.c.get("/api/comic/friend_config")
@@ -530,12 +551,110 @@ class TestComicAdminPage(_TempMixin, unittest.TestCase):
 
     def test_群友页设定拆三行且没有格数输入(self):
         cli = self._html("comic_studio_friend.html")
-        self.assertNotIn('id="panels"', cli)
-        for i in ("briefView", "briefHero", "briefPlot"):
+        # 格数控件还在（母本按 id 读它），但已经不是能粘贴 30 的输入框了
+        self.assertIn('id="panels" type="hidden"', cli)
+        self.assertNotIn('id="panels" type="number"', cli)
+        for i in ("bfView", "bfHero", "bfPlot"):
             self.assertIn('id="%s"' % i, cli)
-        self.assertIn('"视角: " + view', cli)
+        self.assertIn("'视角: ' + v", cli)
         self.assertIn("max_panels", cli)          # 格数只从站主额度取
+        self.assertIn("max_shots", cli)           # 写真张数同理
         self.assertNotIn("一句话设定", cli)
+
+
+class TestFriendPageFromMaster(unittest.TestCase):
+    """群友版必须真的是「站主成品页 + 补丁」，不许再另写一份精简页。
+
+    2026-11-10 实测反馈：另写的 717 行精简页把台词、标签、气泡、完整提示词、
+    改画面词内联展开、红色补正、写真换视图全丢了，反馈还全堆到页面顶端，
+    「确认开跑」也不置灰。这几条钉死，防止哪天又有人「顺手重写一遍」。
+    """
+    PAGE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "web", "comic_studio_friend.html")
+
+    def html(self):
+        with open(self.PAGE, encoding="utf-8") as f:
+            return f.read()
+
+    def test_母本成品UI一项都没丢(self):
+        s = self.html()
+        for fn in ("function labelHtml",      # 标签一 / 标签二
+                   "function manualHtml",     # 跑 Qwen / 传底图 / 完整提示词
+                   "function editHtml",       # 改画面词内联展开收回
+                   "function renderFix",      # 红色内容补正
+                   "function applyMode",      # 写真模式换视图
+                   "function renderSlot",
+                   "function setBusy"):       # 开跑按钮置灰
+            self.assertIn(fn, s, fn)
+        for ui in ("一键加气泡", "完整提示词", "改画面词", "传底图",
+                   "剧本可直接改字", "写真 · 单人写真集"):
+            self.assertIn(ui, s, ui)
+
+    def test_反馈在按钮正下方而不是页面顶端(self):
+        s = self.html()
+        for i in ("lsScript", "lsRun", "lsBubble", "lsPortrait", "lsSend"):
+            self.assertIn('id="%s"' % i, s)
+        self.assertIn("function friendInline", s)
+        self.assertIn("window.friendOnStatus", s)
+        self.assertIn("friendInline('lsScript'", s)   # 查库进度也写就地
+        self.assertIn("当前任务正在跑", s)
+        self.assertIn("按钮已置灰", s)
+
+    def test_开跑提交瞬间就置灰(self):
+        s = self.html()
+        # 母本要等 /api/comic/start 返回才 setBusy，中间几秒会被当成卡住连点
+        self.assertIn("if (FRIEND.starting) return;", s)
+        self.assertIn("if (btn) btn.disabled = true;", s)
+        self.assertIn("不用重复点", s)
+
+    def test_耗时角标与三格一行(self):
+        s = self.html()
+        self.assertIn("repeat(3, minmax(0, 1fr))", s)
+        self.assertIn('class="cost"', s)
+        self.assertIn("⏳ ", s)
+        self.assertIn("✓ ", s)
+
+    def test_写真与漫画是顶上两个显式入口(self):
+        s = self.html()
+        self.assertIn('id="modeTabs"', s)
+        self.assertIn("📖 跑漫画", s)
+        self.assertIn("📷 跑写真", s)
+        # 写真卡必须在①卡正下方，不能又掉到整页最底下
+        self.assertLess(s.index('id="portraitCard"'), s.index('id="slotCard"'))
+
+    def test_格数与张数都不能手输(self):
+        s = self.html()
+        self.assertIn('id="panels" type="hidden"', s)
+        self.assertNotIn('id="panels" type="number"', s)
+        self.assertNotIn('id="pN"', s)          # 旧精简版能填 30 的写真框
+        self.assertIn("不能自己改", s)
+
+    def test_手动发送与失败反馈都在发送卡就地显示(self):
+        s = self.html()
+        self.assertIn('id="btnSendQQ"', s)
+        self.assertIn('id="btnSendInline"', s)
+        self.assertIn("async function doSendQQ", s)
+        self.assertIn("'/api/comic/delivery_status?task='", s)
+        self.assertIn("⏳ 正在打包当前成品", s)
+        self.assertIn("不会改成网页下载", s)
+        self.assertIn('id="packs"', s)
+
+    def test_不引用只在5174存在的页面且模型下拉改走配额配置(self):
+        s = self.html()
+        self.assertNotIn('href="/comic_admin"', s)
+        self.assertNotIn('href="/gen"', s)
+        self.assertIn("loadProviders = async function", s)
+        self.assertIn("'/api/comic/friend_config'", s)
+
+    def test_生成脚本可重复且产物一致(self):
+        import subprocess
+        before = open(self.PAGE, "rb").read()
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        subprocess.check_call(
+            [sys.executable, os.path.join(root, "tools", "comic_friend_patch.py")],
+            cwd=root)
+        self.assertEqual(open(self.PAGE, "rb").read(), before,
+                         "重跑生成脚本产物变了，说明有人手改了生成页")
 
 
 if __name__ == "__main__":

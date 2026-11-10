@@ -101,6 +101,31 @@ def _collect(task_dir):
     return out
 
 
+def preview(task_dir):
+    """这一刻会发哪几个包、各几张。给「点了发送」的那一瞬间回话用，
+    别让用户对着一个按钮猜发出去的到底是什么。"""
+    return {label: len(files)
+            for label, files in _collect(task_dir).items()}
+
+
+def mark_packing(task_dir, state="packing", error=""):
+    """手动重发先落一个「正在打包」的状态。
+
+    `deliver()` 要等 zip 打完 + QQ 协议端回包才写 delivery.json，几十 MB 时
+    这段可能好几分钟。不先写一笔，网页轮询看到的一直是上一次的旧状态，
+    用户就会以为按钮坏了、反复点（2026-11-10 实测反馈）。
+    """
+    with _LOCK:
+        st = delivery_state(task_dir)
+        st["state"] = state
+        st["at"] = _now()
+        st["error"] = error
+        try:
+            _save_state(task_dir, st)
+        except OSError:
+            pass
+
+
 def _pack(task_dir, qq, label, files):
     """打一个 zip，返回绝对路径。PNG 本身已压缩，ZIP_STORED 省 CPU。"""
     dst_dir = delivery_dir(task_dir, qq)
@@ -152,16 +177,16 @@ def deliver(task_dir, qq, force=False, auto=False):
                                   "error": str(exc)[:300]}
                 st["error"] = str(exc)[:300]
         st["packages"] = results
-        st["state"] = ("sent" if sent and all(
-            v.get("state") == "sent" for v in results.values())
-            else "failed" if any(v.get("state") == "failed"
-                                 for v in results.values()) else "idle")
+        # 只看「本次涉及的包」：手动 force 会把三个包全重发，但只要有一个历史
+        # 失败记录还留在 results 里，按全表 any(failed) 判就会永远显示失败。
+        failed_now = [str(exc_label) for exc_label in packages
+                      if (results.get(exc_label) or {}).get("state") == "failed"]
+        st["state"] = ("failed" if failed_now else
+                       "sent" if sent else "idle")
         st["at"] = _now()
         st["qq"] = qq
-        if "error" not in st:
-            st["error"] = ""
-        elif st["state"] == "sent":
-            st["error"] = ""
+        st["error"] = (str((results.get(failed_now[0]) or {}).get("error")
+                           or "QQ 发送失败")[:300]) if failed_now else ""
         try:
             _save_state(task_dir, st)
         except OSError:
