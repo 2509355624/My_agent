@@ -19,6 +19,7 @@ from app import image_audit
 from app import image_migrate
 from app import logsetup
 from app import usage as usage_stats
+from app import qq_bill
 # 别名 `vision_mod` 是**必须**的：本文件里已有一个叫 `vision` 的路由函数
 # （POST /api/vision，网页端「让 AI 看图」），模块名直接被它盖掉，
 # 写成 `from app import vision` 会在调用处炸 AttributeError:
@@ -223,6 +224,33 @@ def get_usage():
             if total_in else 0.0
     data["dates"] = usage_stats.load_all_dates()
     return jsonify(data)
+
+
+@app.route("/api/qq_bill")
+def get_qq_bill():
+    """QQ 机器人按会话账单（只读，站主自付，不扣任何余额）。"""
+    date = (request.args.get("date") or "").strip() or None
+    if date and not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
+        return jsonify({"ok": False, "error": "date 格式应为 YYYY-MM-DD"}), 400
+    try:
+        return jsonify({"ok": True, **qq_bill.daily(date)})
+    except Exception:                                    # noqa: BLE001
+        app.logger.exception("[qq_bill] 账单读取失败")
+        return jsonify({"ok": False, "error": "账单独不出来"}), 500
+
+
+@app.route("/api/qq_bill/export.csv")
+def export_qq_bill():
+    """按会话明细 CSV。跟代充账本一样走 fetch→Blob，不靠 Content-Disposition。"""
+    date = (request.args.get("date") or "").strip() or None
+    if date and not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
+        return jsonify({"ok": False, "error": "date 格式应为 YYYY-MM-DD"}), 400
+    try:
+        body = qq_bill.csv_text(qq_bill.daily(date))
+    except Exception:                                    # noqa: BLE001
+        app.logger.exception("[qq_bill] 账单导出失败")
+        return jsonify({"ok": False, "error": "明细导不出来"}), 500
+    return Response(body, mimetype="text/csv; charset=utf-8")
 
 
 @app.route("/api/providers")

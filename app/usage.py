@@ -35,12 +35,15 @@ grep 日志数行数，对不上账。
 import json
 import logging
 import os
-import sys
 import tempfile
 import threading
 import time
 
-from app.config import BASE_DIR
+# 复用 config.py 的进程判据，**不在这里再实现一遍**。2026-11-10 的账单
+# 事故就是因为两份副本各自演化：config.py 11-06 改成「只认进程入口」，
+# usage.py 还留着 `"unittest" in sys.modules`，QQ 机器人运行途中被某个库
+# 带进 unittest，整天流水全写进系统临时目录，管理页按会话的用量整个缺失。
+from app.config import BASE_DIR, _is_test_process
 
 log = logging.getLogger("usage")
 
@@ -80,14 +83,10 @@ def _today():
 # 实测：跑一次全量测试就往 calls-*.jsonl 里灌了上百行假记录，第二天对账
 # 永远对不上）。
 #
-# 判据：unittest / pytest 驱动进程时一定会 import 同名顶层模块，而生产进程
-# （main.py / qq_bot.py）不会——已确认 app/ 下没有任何地方 import 它们。
+# 判据复用 config.py 的 `_is_test_process()`（顶部导入），只认进程入口。
+# 不再在这里留第二份实现——这次的事故就是两份副本各自演化造成的。
 _TEST_DIR = None
 _ORIG_BASE = BASE_DIR
-
-
-def _is_test_process():
-    return "unittest" in sys.modules or "pytest" in sys.modules
 
 
 def _usage_dir():

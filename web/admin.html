@@ -594,6 +594,17 @@
           compact=上下文压缩摘要，这些是 LLM 后台里「对不上号的请求」的出处。</div>
         <div class="sess" id="usageTable"></div>
       </div>
+
+      <div class="card">
+        <h2>QQ 账单 <span class="file"><select id="billDate"
+            style="margin-left:8px;"></select></span>
+          <button class="ghost" id="billExport" style="margin-left:8px;">导出 CSV</button></h2>
+        <div class="hint">按会话统计 QQ 机器人（生图提示词、接话判断、识图、聊天回复）
+          打到站主官方 DeepSeek 的调用，按官方价目表折成钱。只出账、不扣任何人的余额；
+          网页扮演的代充账本另算。无归属 = 后台隐形调用，没记到某个会话名下。</div>
+        <div id="billSummary" style="margin:8px 0;font-size:13px;line-height:1.7;"></div>
+        <div class="sess" id="billTable"></div>
+      </div>
     </div>
 
     <aside class="sessCol" id="sessCol">
@@ -3285,7 +3296,70 @@ async function loadUsage() {
 
 $('usageDate').addEventListener('change', () => loadUsage().catch((e) => status(e.message, 'err')));
 
+async function loadBill() {
+  const date = $('billDate').value || '';
+  const resp = await fetch('/api/qq_bill' + (date ? '?date=' + date : ''));
+  if (!resp.ok) throw new Error('账单加载失败 HTTP ' + resp.status);
+  const d = await resp.json();
+  if (!d.ok) throw new Error(d.error || '账单加载失败');
+  const sel = $('billDate');
+  const dates = (d.dates || []).slice().sort().reverse();
+  if (sel.options.length !== dates.length ||
+      dates.some((v, i) => sel.options[i].value !== v)) {
+    sel.innerHTML = dates.map((v) => `<option value="${v}">${v}</option>`).join('');
+  }
+  if (d.date) sel.value = d.date;
+  const yuan = (m) => '¥' + ((m || 0) / 1000000).toFixed(6);
+  const fmt = (n) => (n || 0).toLocaleString('zh-CN');
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  $('billSummary').innerHTML =
+    `QQ 已归属 <b>${yuan(d.total.cost)}</b> / ${fmt(d.total.calls)} 次` +
+    ` &nbsp;·&nbsp; 无归属 ${yuan(d.other.cost)} / ${fmt(d.other.calls)} 次` +
+    ` &nbsp;·&nbsp; 本地合计 <b>${yuan(d.local.cost)}</b>` +
+    ` &nbsp;·&nbsp; 网页扮演（不在本账）${yuan(d.web.cost)}` +
+    `<br><span style="opacity:.7;">跟官方后台当日 cost-*.csv 合计比对，差额就是本地日志没记到的调用。</span>`;
+  const rows = d.rows || [];
+  if (!rows.length) {
+    $('billTable').innerHTML = '<div class="hint">这一天还没有 QQ 侧记录。</div>';
+    return;
+  }
+  $('billTable').innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <tr style="text-align:left;opacity:.65;">
+        <th style="padding:4px 8px;">会话</th><th>类型</th><th>QQ / 群号</th>
+        <th>调用</th><th>命中</th><th>未命中</th><th>输出</th><th>金额</th>
+      </tr>
+      ${rows.map((r) => `
+        <tr style="border-top:1px solid rgba(128,128,128,.25);">
+          <td style="padding:4px 8px;">${esc(r.tag)}</td>
+          <td>${esc(r.kind)}</td>
+          <td style="text-align:right;padding:4px 8px;">${esc(r.id)}</td>
+          <td style="text-align:right;padding:4px 8px;">${fmt(r.calls)}</td>
+          <td style="text-align:right;padding:4px 8px;">${fmt(r.hit)}</td>
+          <td style="text-align:right;padding:4px 8px;">${fmt(r.miss)}</td>
+          <td style="text-align:right;padding:4px 8px;">${fmt(r.out)}</td>
+          <td style="text-align:right;padding:4px 8px;">${yuan(r.cost)}</td>
+        </tr>`).join('')}
+    </table>`;
+}
+
+$('billDate').addEventListener('change', () => loadBill().catch((e) => status(e.message, 'err')));
+$('billExport').addEventListener('click', async () => {
+  try {
+    const date = $('billDate').value || '';
+    const resp = await fetch('/api/qq_bill/export.csv' + (date ? '?date=' + date : ''));
+    if (!resp.ok) throw new Error('导出失败 HTTP ' + resp.status);
+    const blob = await resp.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'qq_bill-' + (date || 'today') + '.csv';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  } catch (e) { status(e.message, 'err'); }
+});
+
 loadUsage().catch(() => {});
+loadBill().catch(() => {});
 boot();
 </script>
 </body>
