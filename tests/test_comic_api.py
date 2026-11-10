@@ -1419,7 +1419,7 @@ class RerenderChannelTest(unittest.TestCase):
         def _run(*a, **kw):
             self.calls.append(kw)
 
-        def _spawn(path, phase, fn, on_error=None):
+        def _spawn(path, phase, fn, on_error=None, finish=None):
             fn()                       # 同步跑，测试里不真起线程
             return True
 

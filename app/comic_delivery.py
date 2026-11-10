@@ -43,9 +43,10 @@ _LOCK = threading.Lock()
 _COOLDOWN = 60.0            # 手动重发冷却，防连点刷屏
 _last_manual = {}           # {任务目录: 上次手动重发时刻}
 
-# 给用户看的一句话规则。跑完就会自动发，不用守着网页；全站单张串行，
-# 排在别人后面是正常现象。长篇说明一律不写（用户实测反馈：看不进也看不到）。
-RULE = "跑完自动发送 · 正常排队 · 可以直接离开网页"
+# 给用户看的一句话规则（2026-11-10 改）：底图/写真跑完只通知，用户检查确认后
+# 点「一键加气泡」或「一键发送 zip」才发高清包。全站单张串行，正常排队。
+# 长篇说明一律不写（用户实测反馈：看不进也看不到）。
+RULE = "跑完通知 · 检查后再发送 · 正常排队"
 
 # 内部 key → 给用户看的名字。key 不动，指纹去重和老状态文件才不受影响。
 _DISPLAY = {"底图包": "无气泡", "成品包": "有气泡", "写真包": "写真"}
@@ -189,9 +190,9 @@ def _pack(task_dir, qq, label, files):
 def deliver(task_dir, qq, force=False, auto=False):
     """打包 → QQ 私聊直发。返回本次实际发了哪几个包。
 
-    `auto=True` 时按内容指纹去重：整本没变化就不重复发（阶段一只发底图包、
-    加完气泡再发成品包，正好两个包各自一次）。
-    `force=True` 忽略指纹，用于手动「重发到 QQ」/ 管理页补发。
+    `auto=True` 时按内容指纹去重：整本没变化就不重复发。现在只在用户确认后
+    （漫画整批加完气泡）调用一次，底图包与成品包一起发。
+    `force=True` 忽略指纹，用于手动「发送 zip」/ 管理页补发。
     跑在后台线程里，任何异常都只写进 delivery.json，绝不抛回渲染线程。
     """
     task_dir, qq = str(task_dir), str(qq)
@@ -258,6 +259,60 @@ def _now():
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def notify_ready(task_dir, qq, kind="comic"):
+    """底图 / 写真跑完：**只通知、不发 zip**，等用户检查完自己触发发送。
+
+    阶段一刚跑完的图可能有瑕疵，用户会换种子重跑；一跑完就自动发，收到的
+    就是废包，重跑还会再打扰一次（2026-11-10 用户实报并拍板改流程）。
+    这里只落一个 `waiting_check` 状态 + 发一条 QQ 文字，网页轮询到就弹一次窗。
+
+    同一本只通知一次：换渠道整本重跑会再次走到这里，但 `ready_notified`
+    已经写过就不再重复发 QQ（用户此刻正在网页上，自己看得到结果）。
+    """
+    task_dir, qq = str(task_dir), str(qq)
+    with _LOCK:
+        st = delivery_state(task_dir)
+        if st.get("ready_notified"):
+            return False
+        is_portrait = kind == "portrait"
+        packs = _collect(task_dir)
+        n = len(packs.get("写真包" if is_portrait else "底图包") or [])
+        st.update({"ready_notified": _now(), "ready_kind": kind,
+                   "ready_count": n, "state": "waiting_check",
+                   "at": _now(), "qq": qq})
+        try:
+            _save_state(task_dir, st)
+        except OSError:
+            pass
+    # 三行短句，不写「正在打包 / 不用守着网页」这类长文案（用户明确嫌长）。
+    text = ("%d 张%s已完成\n去网页检查，有瑕疵可换种子重跑\n确认后点「%s」发到 QQ"
+            % (n, "写真" if is_portrait else "底图",
+               "一键发送 zip" if is_portrait else "一键加气泡"))
+    try:
+        from app import qq_api
+        qq_api.send_private(qq, text)
+    except Exception:
+        pass
+    return True
+
+
+def spawn_notify(task_dir, qq, kind="comic"):
+    """后台线程做完成通知 + 预热缩略图（用户马上要回网页逐张检查）。"""
+    def _run():
+        try:
+            from app import comic_thumb
+            comic_thumb.ensure_all(task_dir)
+        except Exception:
+            pass
+        try:
+            notify_ready(task_dir, qq, kind)
+        except Exception as exc:
+            import logging
+            logging.getLogger("comic_delivery").warning(
+                "完成通知失败 %s：%s", task_dir, exc)
+    threading.Thread(target=_run, daemon=True, name="comic-notify").start()
+
+
 def spawn_auto(task_dir, qq):
     """渲染线程收尾调用：起独立 daemon 线程发送，不占渲染线程、不阻塞轮询。
 
@@ -302,4 +357,6 @@ def view(task_dir):
                       "size": v.get("size"), "error": v.get("error")})
     return {"state": st.get("state") or "idle", "at": st.get("at") or "",
             "error": st.get("error") or "", "packages": packs,
+            "ready_kind": st.get("ready_kind") or "",
+            "ready_count": int(st.get("ready_count") or 0),
             "hint": RULE}

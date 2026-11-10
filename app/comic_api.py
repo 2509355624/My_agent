@@ -449,8 +449,16 @@ def _read_fix_report(path):
         return None
 
 
-def _spawn(path, phase, fn, on_error=None):
+def _spawn(path, phase, fn, on_error=None, finish=None):
     """起后台线程跑 fn()。同一任务已有线程在跑就拒绝（409 语义）。
+
+    `finish` 是这个任务跑完后的收尾动作，由**调用方显式给**，不靠 phase 猜：
+      - None      什么都不做（单格重跑 / 改画面词 / 传底图 / 补正，默认）
+      - "notify"  整本底图跑完：只通知「待检查」，不发 zip
+      - "send"    整批加完气泡：把底图包 + 成品包一起发到 QQ
+    2026-11-10 用户改的规则：阶段一刚跑完的图可能有瑕疵，用户会换种子重跑，
+    一跑完就自动发等于先把废包发出去、重跑再发一次，所以只有用户确认之后
+    （漫画点「一键加气泡」、写真点「发送 zip」）才真正发包。
 
     `on_error(exc)`：线程整体挂掉时的收尾（2026-10-18 加）。原来失败只记进
     内存 `_JOBS`，state.json 一个字都不动——而 `rerender` / `edit_scene` 进门
@@ -482,11 +490,12 @@ def _spawn(path, phase, fn, on_error=None):
             return
         with _JOBS_LOCK:
             _JOBS[path] = {"phase": None, "error": None}
-        # 群友任务：每一阶段跑完都试一次 QQ 直发。delivery 内部按文件指纹
-        # 去重——阶段一只发底图包，加完气泡后成品包指纹变了才发第二个包；
-        # 单纯重跑同一张（指纹没变）不会重复打扰群友。
-        if owner:
+        # 群友任务的收尾由调用方用 finish 指定，默认什么都不做。
+        # 单格重跑 / 改词 / 传底图都不再自动发（2026-11-10 用户拍板）。
+        if owner and finish == "send":
             comic_delivery.spawn_auto(path, owner)
+        elif owner and finish == "notify":
+            comic_delivery.spawn_notify(path, owner)
 
     threading.Thread(target=_worker, daemon=True, name="comic-studio").start()
     return True
@@ -878,7 +887,8 @@ def api_comic_start():
     _save_task_skill(path, scene_skill)
     started = _spawn(path, "scene", lambda: comic.run(
         os.path.join(path, "script.md"), silver_only=True,
-        scene_skill=scene_skill), on_error=_mark_pending_failed(path))
+        scene_skill=scene_skill), on_error=_mark_pending_failed(path),
+        finish="notify")
     if not started:
         return jsonify({"ok": False, "error": "这个任务已经在跑了"}), 409
     # 扣次放在启动成功之后：409 / 404 的调用不该白吃一次机会。
@@ -913,7 +923,8 @@ def api_comic_rerun():
     task.save_state()
     started = _spawn(path, "scene", lambda: comic.run(
         os.path.join(path, "script.md"), silver_only=True,
-        scene_skill=skill), on_error=_mark_pending_failed(path))
+        scene_skill=skill), on_error=_mark_pending_failed(path),
+        finish="notify")
     if not started:
         return jsonify({"ok": False, "error": "这个任务已经在跑了，先中断再重跑"}), 409
     comic.log.info("换渠道重跑 %s：%d 格，渠道 %s", os.path.basename(path),
@@ -1433,7 +1444,7 @@ def api_comic_portrait():
             with _PORTRAIT_LOCK:
                 _PORTRAIT_JOBS[job].update(state="done")
             if qq:
-                comic_delivery.spawn_auto(path, qq)
+                comic_delivery.spawn_notify(path, qq, "portrait")
         except BaseException as exc:        # SystemExit 不是 Exception（见模块头）
             with _PORTRAIT_LOCK:
                 _PORTRAIT_JOBS[job].update(state="error", error=str(exc))
@@ -1506,11 +1517,7 @@ def api_comic_portrait_shot():
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
     fp = comic_portrait.shot_path(path, no)
-    owner = comic_quota.owner_of(path)
-    if owner:
-        # 单张重跑只吃 GPU，但图确实换了，写真包得重新发一份（delivery 按
-        # 文件指纹去重，没变的包不会重复打扰人）。
-        comic_delivery.spawn_auto(path, owner)
+    # 单张重跑只吃 GPU：不再自动发 zip，等用户检查完自己点「发送 zip」。
     return jsonify({"ok": True, "shot": dict(
         shot, url=_img_url(os.path.basename(path),
                            "portraits/%s.png" % no,
@@ -1836,7 +1843,7 @@ def api_comic_bubble():
                             "override": True})
     started = _spawn(path, "bubble", lambda: comic.run(
         os.path.join(path, "script.md"), only=only, redo=redo,
-        split_bubbles=split))
+        split_bubbles=split), finish="send" if no == "all" else None)
     if not started:
         return jsonify({"ok": False, "error": "这个任务已经在跑了"}), 409
     return jsonify({"ok": True, "panels": sorted(only), "redo": redo,
@@ -1903,9 +1910,7 @@ def api_comic_upload():
     panel.state, panel.seed, panel.error = "rendered", None, None
     task.save_state()
     comic.log.info("格 %s 底图已手动替换 → %s", no, task._rel(task.raw_path(panel)))
-    owner = comic_quota.owner_of(path)
-    if owner:
-        comic_delivery.spawn_auto(path, owner)
+    # 手动换底图也不发 zip，检查完由用户自己触发。
     return jsonify({"ok": True, "no": no})
 
 

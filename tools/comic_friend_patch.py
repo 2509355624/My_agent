@@ -75,8 +75,9 @@ TOPBAR = r"""  <div class="topbar">
       写三行设定 → 生成剧本 → 确认开跑 → 给格子加台词气泡。<br>
       <b>关于次数：</b>写剧本要反复查资料库、很费 Token，所以每个账号有免费次数；
       换种子重跑、改画面词、加气泡这些只吃显卡，不扣次数，可以随便跑。<br>
-      <b>自动发送：</b>跑完<b>自动</b>把高清包通过 QQ 发给你，<b>正常排队</b>，
-      <b>可以直接离开网页</b>。<br>
+      <b>发送规则：</b>底图 / 写真跑完<b>先在 QQ 通知你</b>，去网页逐张检查；
+      有瑕疵可以换种子重跑。确认后漫画点「<b>一键加气泡</b>」、写真点
+      「<b>一键发送 zip</b>」，高清包才发到 QQ，<b>正常排队</b>。<br>
       <b>包的名字：</b>「作品名 无气泡」是底图，「作品名 有气泡」是加完台词的成品；
       网页里只有缩略图。
     </div>
@@ -117,12 +118,12 @@ SEND_CARD = r"""
   <div class="card" id="sendCard">
     <h2>📤 QQ 发送</h2>
     <div class="friend-note">
-      <b>跑完自动发送，正常排队，可以直接离开网页。</b><br>
-      底图跑完发「<b>无气泡</b>」，全部格子加完气泡发「<b>有气泡</b>」。
-      刚重跑过几格想立刻拿当前成品，点下面按钮重发一次。
+      <b>跑完先通知，检查好了才发送。</b><br>
+      漫画：检查底图没问题 → 点「一键加气泡」，加完自动把「无气泡」+「有气泡」一起发到 QQ。<br>
+      写真：检查没问题 → 点下面「一键发送 zip」。换种子重跑不会自动发。
     </div>
     <div class="row" style="margin-top:10px">
-      <button class="btn primary" id="btnSendQQ" onclick="doSendQQ()">📤 重发当前成品到 QQ</button>
+      <button class="btn primary" id="btnSendQQ" onclick="doSendQQ()">📤 一键发送 zip 到 QQ</button>
       <span class="friend-note" id="queueHint"></span>
     </div>
     <div class="inline-status" id="lsSend"></div>
@@ -138,7 +139,7 @@ JS = r"""
    ③配额 / 画幅 / 每格耗时 / QQ 手动发送。
    ═══════════════════════════════════════════════════════════════════════ */
 const FRIEND = {cfg: null, active: 'lsRun', clock: {}, packSig: '',
-                sendTimer: null, wasBusy: false, starting: false};
+                sendTimer: null, wasBusy: false, starting: false, readyShown: ''};
 
 function friendEl(id) { return document.getElementById(id); }
 function friendInline(id, msg, kind) {
@@ -159,8 +160,8 @@ toast = function (msg, isErr) { _mToast(msg, isErr); friendSay(msg, isErr); };
 const _mSetBusy = setBusy;
 setBusy = function (b, phase) {
   _mSetBusy(b, phase);
-  if (b) friendInline('lsRun', '⏳ 正在跑 · 正常排队 · 跑完自动发，可以离开网页');
-  else if (FRIEND.wasBusy) friendInline('lsRun', '✅ 跑完了 · 高清包会自动发到 QQ，可以离开网页');
+  if (b) friendInline('lsRun', '⏳ 正在跑 · 正常排队 · 跑完会在 QQ 通知你检查');
+  else if (FRIEND.wasBusy) friendInline('lsRun', '✅ 跑完了 · QQ 已通知，去网页检查，确认后再发送');
   FRIEND.wasBusy = !!b;
 };
 
@@ -181,7 +182,7 @@ saveScript = async function (andRun) {
   if (FRIEND.starting) return;
   FRIEND.starting = true;
   friendFocus('lsRun');
-  friendInline('lsRun', '⏳ 已提交 · 正常排队 · 跑完自动发，可以离开网页');
+  friendInline('lsRun', '⏳ 已提交 · 正常排队 · 跑完会在 QQ 通知你检查');
   const btn = friendEl('btnStart');
   if (btn) btn.disabled = true;
   try {
@@ -340,7 +341,7 @@ function friendPacks(v) {
   if (sig === FRIEND.packSig) return;
   FRIEND.packSig = sig;
   box.innerHTML = top + (rows ||
-    '<div class="pack">跑完自动发，正常排队，可以直接离开网页。</div>');
+    '<div class="pack">跑完会通知 · 检查后点「一键加气泡」或「一键发送 zip」才发。</div>');
 }
 
 // 母本 2 秒一轮的 status 已经带 delivery / quota / queue，挂个钩子就够，
@@ -368,6 +369,19 @@ window.friendOnStatus = function (d) {
     }
   });
   if (d.delivery) friendPacks(d.delivery);
+  // 底图 / 写真跑完：后端已发过 QQ 文字，网页这边顺手弹一次，最多一条。
+  // 用户不会一直挂着网页，所以这只是「正好在看」时的提醒，主通知在 QQ。
+  if (d.delivery && d.delivery.state === 'waiting_check') {
+    const key = String(d.task || TASK || '');
+    if (key && FRIEND.readyShown !== key) {
+      FRIEND.readyShown = key;
+      const isP = d.delivery.ready_kind === 'portrait';
+      const n = d.delivery.ready_count || 0;
+      window.alert((n ? n + ' 张' : '') + (isP ? '写真' : '底图') + '已完成\n'
+        + '请到网页逐张检查，有瑕疵可以点「换种子重跑」\n'
+        + '确认没问题后点「' + (isP ? '一键发送 zip' : '一键加气泡') + '」发到 QQ');
+    }
+  }
   if (d.quota) friendQuota(d.quota);
 };
 
@@ -379,7 +393,7 @@ async function doSendQQ() {
   friendInline('lsSend', '⏳ 已提交，打包中');
   try {
     const d = await api('/api/comic/send_qq', {task: TASK});
-    friendInline('lsSend', d.hint || '跑完自动发，正常排队。');
+    friendInline('lsSend', d.hint || '已提交，打包中，正常排队。');
     if (d.delivery) friendPacks(d.delivery);
     friendPollSend();
   } catch (e) {
@@ -411,7 +425,7 @@ function friendPollSend() {
     } catch (e) { /* 状态接口偶发失败下一轮再来 */ }
     if (Date.now() - t0 > 180000 && FRIEND.sendTimer) {
       clearInterval(FRIEND.sendTimer); FRIEND.sendTimer = null;
-      friendInline('lsSend', '⏳ 正常排队中，会自动继续发，可以离开网页。');
+      friendInline('lsSend', '⏳ 正常排队中，发完会在 QQ 通知你。');
     }
   }, 2500);
 }
