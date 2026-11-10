@@ -640,31 +640,11 @@ def clear():
 def _local_output_file(rel):
     """相对路径 → ComfyUI output 目录里的真实文件；没有就返回 None。
 
-    2026-10-18 加。`/api/image` 原来是**每一次都绕 ComfyUI 的 `/view`** 取图，
-    图明明就在本机磁盘上。代价是 ComfyUI 一不可用，页面上所有图立刻变破图——
-    实测 21:05 那次：图 21:05:00 已经写盘，21:05:01 RAM 守卫重启 ComfyUI，
-    浏览器 21:05:04 / 21:05:15 两次请求全 404，21:05:31 重启完成后同样的地址
-    就 200 了。而 `<img>` 拿到 404 不会自己重试，用户看到的就是「生成成功、
-    前端显示失败」。根子在于**取图不该依赖一个随时会重启的服务**。
-
-    返回 None 的两种情形都退回 `/view` 代理：`COMFYUI_OUTPUT_DIR` 没配（远端
-    ComfyUI 的部署，本机压根没有 output 目录），或者文件不在那儿。
-    `..` 一律不认——那不是我们写出去的路径。
+    2026-11-10 实现下沉到 `comfy_out.local_output_file`：跑图台 `/api/gen/img`
+    也要走同一套「先读盘」，两份路径校验迟早漂移。这里保留函数名给
+    `serve_image` 和既有测试。事故背景与校验理由见那边。
     """
-    root = (COMFYUI_OUTPUT_DIR or "").strip()
-    if not root:
-        return None
-    parts = [x for x in str(rel or "").replace("\\", "/").split("/") if x]
-    if not parts or ".." in parts:
-        return None
-    root_abs = os.path.abspath(root)
-    path = os.path.abspath(os.path.join(root_abs, *parts))
-    try:
-        if os.path.commonpath([path, root_abs]) != root_abs:   # 越界
-            return None
-    except ValueError:              # 不同盘符时 commonpath 会抛
-        return None
-    return path if os.path.isfile(path) else None
+    return comfy_out.local_output_file(rel, root=COMFYUI_OUTPUT_DIR)
 
 
 @app.route("/api/image/<path:filename>")

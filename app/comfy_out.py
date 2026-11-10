@@ -152,3 +152,41 @@ def stamp(workflow, body):
 def describe(job):
     """日志用：这张图会落到哪个目录。"""
     return body_for(job) or "output 根目录"
+
+
+def local_output_file(rel, root=None):
+    """相对路径 → ComfyUI output 目录里的真实文件；没有就返回 None。
+
+    2026-11-10 从 `main._local_output_file` 下沉到这里：跑图台 `/api/gen/img`
+    也要走「先读盘、再打 /view」，两份路径校验迟早漂移（和 `usage.py` 落后
+    `config.py` 是同一类事故）。
+
+    **为什么必须读盘**：2026-10-18 实测，图 21:05:00 已写盘、21:05:01 RAM
+    守卫重启 ComfyUI，浏览器 21:05:04 / 21:05:15 两次取图全 404，21:05:31
+    服务回来后同样地址才 200。而 `<img>` 拿到 404 不会自己重试，用户看到
+    的就是「生成成功、前端显示失败」。取图不该依赖一个随时会重启的服务。
+
+    返回 None 的三种情形都退回 `/view` 代理：`COMFYUI_OUTPUT_DIR` 没配
+    （远端 ComfyUI，本机没有 output 目录）、路径越界、或文件不在那儿。
+    `..` 一律不认——那不是我们写出去的路径。
+
+    `root` 不传就按 `app.config.COMFYUI_OUTPUT_DIR`；`main` 侧显式传它自己的
+    模块级变量，好让既有测试照旧 patch 而不用改一圈。
+    """
+    if root is None:
+        from app.config import COMFYUI_OUTPUT_DIR
+        root = COMFYUI_OUTPUT_DIR
+    root = (root or "").strip()
+    if not root:
+        return None
+    parts = [x for x in str(rel or "").replace("\\", "/").split("/") if x]
+    if not parts or ".." in parts:
+        return None
+    root_abs = os.path.abspath(root)
+    path = os.path.abspath(os.path.join(root_abs, *parts))
+    try:
+        if os.path.commonpath([path, root_abs]) != root_abs:   # 越界
+            return None
+    except ValueError:              # 不同盘符时 commonpath 会抛
+        return None
+    return path if os.path.isfile(path) else None

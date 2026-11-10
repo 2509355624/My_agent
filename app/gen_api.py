@@ -7,8 +7,9 @@
 ## 存储约定（2026-10-14 用户拍板：「历史栏就是 output 文件夹不是吗」）
 
 - **成图不复制**：ComfyUI 的 output 目录就是所有图的归宿（QQ 机器人跑的也在
-  那），`/api/gen/img` 走 `/view` 代理直接serve。本机不留第二份字节——单张
-  好几 MB，复制一本历史就是几百 MB 的重复。
+  那）。`/api/gen/img` **先读本机磁盘、读不到才代理 `/view`**（2026-11-10：
+  RAM 守卫重启 ComfyUI 的空窗里 `/view` 全 404，图明明跑好了却是永久破图）。
+  本机不留第二份字节——单张好几 MB，复制一本历史就是几百 MB 的重复。
 - **账本只记元数据**：`state/gen_pad.jsonl`，一行一张图（tag / 渠道 / 提示词 /
   种子 / 图片引用 / 时间 / 成败）。ComfyUI 图会随 output 目录清理而消失；NAI
   图保存在 `image_out` 的临时目录，按同一套过期清理规则处理。账本不会删除——
@@ -35,9 +36,10 @@ import threading
 import time
 
 import requests
-from flask import Blueprint, Response, jsonify, request, send_from_directory
+from flask import (Blueprint, Response, jsonify, request, send_file,
+                   send_from_directory)
 
-from app import comic, image_jobs, image_out, lora_slots
+from app import comic, comfy_out, image_jobs, image_out, lora_slots
 from app import gen_params, gen_steps
 from app.cancel import Cancelled
 from app.config import COMFYUI_URL, NAI_API_KEY, WEB_DIR, state_path
@@ -75,6 +77,10 @@ _ledger_lock = threading.Lock()
 _IMG_NAME_RE = re.compile(r"[A-Za-z0-9._\- ]{1,120}")
 _NAI_REF_RE = re.compile(r"nai:([A-Za-z0-9._\- ]{1,120})")
 _NAI_PREFIX_MAX = 2000
+
+# 跑图台「横屏」的固定**底图**尺寸（2026-11-10 用户拍板）。放大链全是倍率，
+# 1.2× latent 再 2x 超分 → 成品 4608×2592。只改画布，不动放大链。
+LANDSCAPE_SIZE = (1920, 1080)
 
 
 def _nai_prompt(prompt, prefix):
@@ -219,7 +225,7 @@ def _public(job):
                                     "state", "error", "file", "ts",
                                     "steps", "steps_label", "cfg",
                                     "negative", "width", "height",
-                                    "size_label", "secs")}
+                                    "size_label", "secs", "landscape")}
 
 
 def _enabled_loras(job):
@@ -231,6 +237,7 @@ def _enabled_loras(job):
 
 def _run(job):
     """worker 线程体：按渠道走 ComfyUI 或 NAI 队列，出图后记账。"""
+    landscape_ok = False
     try:
         if job["skill"] in image_jobs.NAI_SKILLS:
             queued, reason = image_jobs.enqueue(
@@ -291,7 +298,17 @@ def _run(job):
                 if not gen_params.apply_size(wf, job["width"], job["height"]):
                     log.warning("跑图台 %s：渠道 %s 没有可改的底图节点，按模板尺寸跑",
                                 job["id"], job["skill"])
+            # 横屏（2026-11-10）：勾上就把画布设成 1920×1080，放大链照常跑。
+            # 和上面的手填尺寸互斥（提交时已让位），顺序无关。
+            if job.get("landscape"):
+                landscape_ok = image_jobs.set_canvas_size(wf, *LANDSCAPE_SIZE)
+                if not landscape_ok:
+                    log.warning("跑图台 %s：渠道 %s 找不到画布节点，横屏未生效",
+                                job["id"], job["skill"])
             size_label = gen_params.describe_size(wf)
+            if landscape_ok:
+                # describe_size 只认 Empty* 画布；批量类画布认不出时别显示空串。
+                size_label = "%d×%d 横屏" % LANDSCAPE_SIZE
             # _submit_retry 只对超时重试；其余错误一次抛清。
             # with_entry=True：拿 history entry 算 ComfyUI 真跑这张图的耗时。
             name, entry = comic._submit_retry(
@@ -314,6 +331,9 @@ def _run(job):
             row["negative"] = job["negative"]
         if job.get("width") and job.get("height"):
             row["size"] = size_label or ("%d×%d" % (job["width"], job["height"]))
+        if landscape_ok:
+            row["landscape"] = True
+            row["size"] = size_label
         _ledger_append(row)
         with _JOBS_LOCK:
             job["state"] = "done"
@@ -459,6 +479,14 @@ def api_submit():
     if size and not _size_editable(skill):
         log.info("跑图台：渠道 %s 不开尺寸自定义，忽略 %d×%d", skill, *size)
         size = None
+    # 横屏（2026-11-10）：独立于「自定义参数」的一键开关，所有 ComfyUI
+    # 渠道都受理（按画布节点认，新增渠道自动生效）。NAI 云端已有 nai_wide
+    # 渠道，这里忽略，免得用户以为勾了能改云端尺寸。
+    landscape = bool(data.get("landscape")) and skill not in image_jobs.NAI_SKILLS
+    if landscape and size:
+        # 两处都改同一个画布节点，横屏优先；不让手填值把它悄悄覆盖回去。
+        log.info("跑图台：勾了横屏，忽略手填尺寸 %d×%d", *size)
+        size = None
     if skill in image_jobs.NAI_SKILLS:
         steps = None
         cfg = None
@@ -486,6 +514,7 @@ def api_submit():
                "cfg": cfg, "negative": negative,
                "width": size[0] if size else None,
                "height": size[1] if size else None,
+               "landscape": landscape,
                "size_label": "",
                "secs": None,
                "state": "queued", "error": "", "file": "",
@@ -591,6 +620,15 @@ def api_img():
     parts = [x for x in f.split("/") if x]
     if not parts or ".." in parts or not _IMG_NAME_RE.fullmatch(parts[-1]):
         return jsonify({"ok": False, "error": "非法文件名"}), 400
+    # 先读本机 output 目录（2026-11-10）：ComfyUI 会被 RAM 守卫 / 看门狗
+    # 重启，那 20 多秒空窗里 /view 全 404，而 <img> 拿到 404 不会自己重试
+    # → 图明明跑好了，页面上却是永久破图。读盘不依赖服务在不在线。
+    # 和主站 /api/image 共用同一套路径校验，磁盘上没有才走下面的代理。
+    local = comfy_out.local_output_file(f)
+    if local:
+        resp = send_file(local, conditional=True)
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
     params = {"filename": parts[-1]}
     if len(parts) > 1:
         params["subfolder"] = "/".join(parts[:-1])

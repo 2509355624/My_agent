@@ -2578,6 +2578,32 @@ def landscape_workflow(workflow):
     return out
 
 
+def set_canvas_size(workflow, width, height):
+    """把画布节点设成 width×height（原地改），返回「有没有找到并设上」。
+
+    跑图台「横屏」用（2026-11-10）：和 `landscape_workflow()` 共用
+    `_find_size_node`，所以横屏 QQ 侧认得的画布这里也认得，以后新增渠道不用
+    逐个登记。**只改这一处**——后面的 `LatentUpscaleBy` 1.2× 和
+    `ImageUpscaleWithModel` 2x 都是倍率，最终像素自动跟着翻，用户要的
+    「正常 2x 放大」原样保留，不用为了凑某个成品尺寸去动已验证的放大链。
+
+    `hires_width` / `hires_height` 一并设成同尺寸：`enable_hires` 开着时留旧值
+    等于把出图尺寸悄悄改回去（和 `gen_params.apply_size` 同一条理由）。
+
+    找不到画布节点返回 False，调用方按模板跑，绝不因为这点事把图卡住。
+    """
+    if not isinstance(workflow, dict):
+        return False
+    nid = _find_size_node(workflow)
+    if nid is None:
+        return False
+    ins = workflow[nid]["inputs"]
+    ins["width"], ins["height"] = width, height
+    if "hires_width" in ins and "hires_height" in ins:
+        ins["hires_width"], ins["hires_height"] = width, height
+    return True
+
+
 def _queue_prompt(workflow, timeout=SUBMIT_TIMEOUT):
     # client_id 必须是**进程级固定值**（comfy_progress.client_id），不是每次随机：
     # nightly 的 progress 消息定向推给发起客户端，随机 id 会让监听 WS 一条都收

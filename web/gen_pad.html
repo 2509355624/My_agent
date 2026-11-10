@@ -289,6 +289,10 @@
           <label class="params-toggle" title="默认关闭：不勾就完全按渠道模板跑，勾上才发步数/CFG/尺寸">
             <input type="checkbox" id="paramsOn">自定义参数
           </label>
+          <label class="params-toggle" id="landscapeWrap"
+                 title="勾上按 1920×1080 底图跑横屏，1.2× latent 与 2x 放大照常，成品 4608×2592；不勾完全按渠道模板">
+            <input type="checkbox" id="landscapeOn">横屏
+          </label>
           <span class="steps-box" id="stepsBox">
             <label for="stepsIn">步数</label>
             <input id="stepsIn" type="number" min="1" max="100" step="1"
@@ -565,6 +569,12 @@ function updateParams() {
   stepsBox.classList.toggle('on', PARAMS_ON && !cloud);
   cfgBox.classList.toggle('on', PARAMS_ON && !cloud);
   negBox.classList.toggle('on', !cloud && !!(ch && ch.negative));
+  // 横屏改的是本地画布尺寸，NAI 云端有自己的 nai_wide 渠道（2026-11-10）。
+  const landOn = document.getElementById('landscapeOn');
+  landOn.disabled = !!cloud;
+  landOn.parentElement.title = cloud
+    ? 'NAI 云端请用「nai_wide」渠道出横版'
+    : '横屏底图 1920×1080，1.2× latent 与 2x 放大照常，成品 4608×2592';
   // 尺寸只在 moss 渠道出现（后端 size_editable）——别的渠道带放大链，
   // 改了底图最终像素和填写值对不上，不给入口比给个假精确好。
   const sizeBox = document.getElementById('sizeBox');
@@ -888,8 +898,13 @@ async function gen(promptOverride) {
     const negOn = document.getElementById('negBox').classList.contains('on');
     const ng = negOn ? NEG_INPUT.value.trim() : '';
     if (ng && !isNai()) body.negative = ng;
-    // 尺寸只有 moss 渠道的输入框会亮（后端也只对这些渠道受理）
-    if (sizeBody) { body.width = sizeBody[0]; body.height = sizeBody[1]; }
+    // 横屏是独立开关，不用先勾「自定义参数」（2026-11-10）。
+    // NAI 云端有 nai_wide，勾选框已禁用，这里再挡一道。
+    const landOn = document.getElementById('landscapeOn');
+    if (landOn.checked && !isNai()) body.landscape = true;
+    // 尺寸只有 moss 渠道的输入框会亮（后端也只对这些渠道受理）；
+    // 勾了横屏就让位，免得两处改同一个画布节点。
+    if (sizeBody && !body.landscape) { body.width = sizeBody[0]; body.height = sizeBody[1]; }
     const d = await api('/api/gen/submit', body);
     JOBS.unshift(d.job);
     renderJobs();
@@ -991,6 +1006,22 @@ function showLatestDone() {
   showShot(done[0], true);
 }
 
+// 取图失败只重试一次（2026-11-10）：ComfyUI 被 RAM 守卫 / 看门狗重启时空窗
+// 约 22 秒，或者请求恰好撞上图片还没落盘，浏览器 <img> 拿到 404 后不会自己
+// 重来 —— 服务恢复了页面也还是破图。带 r=1 延迟重取一次把这一瞬兜住；
+// 真没图就照旧走 onFail，不无限重试。
+function loadImg(img, src, onFail) {
+  let retried = false;
+  img.onerror = () => {
+    if (retried) { onFail(); return; }
+    retried = true;
+    setTimeout(() => {
+      img.src = src + (src.indexOf('?') >= 0 ? '&' : '?') + 'r=1';
+    }, 1500);
+  };
+  img.src = src;
+}
+
 function showShot(j, auto) {
   PINNED = j.id || j.tag;
   PINNED_AUTO = !!auto;
@@ -1000,12 +1031,12 @@ function showShot(j, auto) {
   const el = document.createElement('div');
   el.className = 'shot';
   const img = document.createElement('img');
-  img.src = '/api/gen/img?f=' + encodeURIComponent(j.file);
   img.title = '点击在本页放大';
   img.onclick = () => openLightbox(img.src);
-  img.onerror = () => { img.replaceWith(Object.assign(document.createElement('div'),
-    {className: 'err', style: 'color:var(--error);font-size:12px;padding:20px 0',
-     textContent: '图取不到：服务暂时不可用，或图片已过期'})); };
+  loadImg(img, '/api/gen/img?f=' + encodeURIComponent(j.file),
+    () => img.replaceWith(Object.assign(document.createElement('div'),
+      {className: 'err', style: 'color:var(--error);font-size:12px;padding:20px 0',
+       textContent: '图取不到：服务暂时不可用，或图片已过期'})));
   el.appendChild(img);
   const meta = document.createElement('div');
   meta.className = 'meta';
@@ -1086,8 +1117,8 @@ function renderHistory() {
     if (r.ok && r.file) {
       const img = document.createElement('img');
       img.loading = 'lazy';
-      img.src = '/api/gen/img?f=' + encodeURIComponent(r.file);
-      img.onerror = () => { img.style.display = 'none'; };
+      loadImg(img, '/api/gen/img?f=' + encodeURIComponent(r.file),
+              () => { img.style.display = 'none'; });
       el.appendChild(img);
     } else {
       const no = document.createElement('div');
