@@ -488,6 +488,93 @@ class ApiTest(_Base):
         items = self.j(self.c.get("/api/gal/work/%d?qq=10001" % wid, headers=self.h))["items"]
         self.assertTrue(all(x["ext"] == "webp" for x in items))
 
+class ComicGroupingTest(_Base):
+    """漫画归一（2026-11-10）：所有漫画折成一个「漫画」标签，别一本一个标签。
+
+    真实库里漫画有两种落库形态，必须都认到、且都只出现在「漫画」这一个分类：
+      1) 双渠道本 → grp=`漫画_C...`，title=渠道名；
+      2) 单渠道本 → grp=`web`，title=`漫画_C.../anima-line`。
+    web 组里还夹着一条真·非漫画（title=生图页），不能把它吞进漫画、也不能丢。
+    """
+
+    def setUp(self):
+        super().setUp()
+        from flask import Flask
+        self.app = Flask(__name__)
+        self.app.register_blueprint(gallery_api.bp)
+        self.c = self.app.test_client()
+        self.h = {"X-Friend-Token": "tok"}
+        for target, attr, val in ((friend_auth, "secret", lambda: "tok"),
+                                  (gallery_api, "GALLERY_OWNER_QQ", "10001")):
+            p = mock.patch.object(target, attr, val)
+            p.start()
+            self.addCleanup(p.stop)
+        self._insert_works([
+            ("漫画_C20261104-01_妹妹的闺蜜", "anima-line", "owner", 15),
+            ("漫画_C20261104-01_妹妹的闺蜜", "qwen_image_v1", "owner", 10),
+            ("漫画_C20261105-01_烟火", "anima-line", "owner", 13),   # 第 2 本双渠道
+            ("web", "漫画_C20261102-01_草莓/anima-line", "owner", 6),  # 单渠道藏在 web
+            ("web", "生图页", "owner", 226),                           # web 里的真·非漫画
+            ("moss漫画", "20261031_2321", "owner", 4),                 # 普通分类
+        ])
+
+    def j(self, r):
+        return r.get_json()
+
+    def _insert_works(self, rows):
+        """rows: [(grp, title, src, n)]，直接插库，绕开扫描造历史数据形态。"""
+        with gallery.connect() as con:
+            for i, (grp, title, src, n) in enumerate(rows):
+                con.execute(
+                    "INSERT INTO works (key,src,owner,grp,title,path,n,sort,ord,ts,seen)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    ("owner:cg:%d:%d" % (time.time_ns(), i),
+                     src, "" if src == "owner" else "20002",
+                     grp, title, "/tmp/x", n, i, "", 0, 0))
+
+    def test_分类条把漫画折成一个标签(self):
+        d = self.j(self.c.get("/api/gal/list?qq=10001&scope=owner", headers=self.h))
+        grps = d["grps"]
+        self.assertIn(gallery_api.COMIC_LABEL, grps)
+        # 2 个 `漫画_C...` 碎标签一个都不该再出现
+        self.assertFalse(any(g.startswith("漫画_C") for g in grps))
+        # 普通分类还在，web 也还在（还有生图页那条）
+        self.assertIn("moss漫画", grps)
+        self.assertIn("web", grps)
+
+    def test_点漫画捞全两种形态(self):
+        d = self.j(self.c.get("/api/gal/list?qq=10001&scope=owner&grp=漫画",
+                              headers=self.h))
+        # 双渠道第 1 本 2 行 + 第 2 本 1 行 + 藏在 web 组的单渠道 1 行 = 4
+        self.assertEqual(len(d["works"]), 4)
+        self.assertTrue(all(("漫画_" in w["grp"] or "漫画_" in w["title"])
+                            for w in d["works"]))
+
+    def test_点web不含漫画只剩生图页(self):
+        d = self.j(self.c.get("/api/gal/list?qq=10001&scope=owner&grp=web",
+                              headers=self.h))
+        self.assertEqual(len(d["works"]), 1)
+        self.assertEqual(d["works"][0]["title"], "生图页")
+
+    def test_其它分类不被NOT误杀(self):
+        d = self.j(self.c.get("/api/gal/list?qq=10001&scope=owner&grp=moss漫画",
+                              headers=self.h))
+        self.assertEqual(len(d["works"]), 1)
+        self.assertEqual(d["works"][0]["title"], "20261031_2321")
+
+    def test_公开墙不冒出空白漫画标签(self):
+        # 公开墙全是 src='user'，没有磁盘漫画 → 不该出「漫画」标签
+        self._insert_works([("群友", "某群友作品", "user", 3)])
+        d = self.j(self.c.get("/api/gal/list?qq=20002&scope=pub", headers=self.h))
+        self.assertNotIn(gallery_api.COMIC_LABEL, d["grps"])
+
+    def test_无漫画时不显示漫画标签(self):
+        with gallery.connect() as con:
+            con.execute("DELETE FROM works")
+        d = self.j(self.c.get("/api/gal/list?qq=10001&scope=owner", headers=self.h))
+        self.assertNotIn(gallery_api.COMIC_LABEL, d["grps"])
+
+
 
 class UploadTest(_Base):
     def setUp(self):

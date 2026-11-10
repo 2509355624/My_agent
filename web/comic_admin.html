@@ -75,8 +75,14 @@
   .quota .item .of { color: var(--text-mute); }
   .acts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .acts .sep { width: 1px; height: 18px; background: var(--border); margin: 0 3px; }
+  /* 手动加次数（2026-11-10）：一次填 N，不用狂点 +1。单独一行，别把上面
+     那排快捷按钮和格数下拉挤成一团。 */
+  .acts.custom { margin-top: 8px; padding-top: 8px;
+    border-top: 1px dashed var(--border-soft); }
+  .ca-n { width: 74px; }
   .new { margin-top: 4px; }
   .new input { width: 160px; }
+  .new input.ca-n { width: 74px; }
   .empty { color: var(--text-mute); font-size: 13px; padding: 10px 0; }
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
   th { text-align: left; opacity: .6; font-weight: 400; padding: 4px 6px; }
@@ -137,6 +143,13 @@
       <button class="ghost btn-add" data-kind="comic" data-n="1">+1 漫画</button>
       <button class="ghost btn-add" data-kind="portrait" data-n="1">+1 写真</button>
     </div>
+    <div class="row new" style="margin-top:8px;">
+      <span class="hint">或直接填数量一次加：</span>
+      <input type="number" id="newNum" class="ca-n" min="1" max="10000"
+             value="1" inputmode="numeric" aria-label="要加的数量">
+      <select id="newKind" aria-label="类型"></select>
+      <button class="btn" id="newCustom">添加</button>
+    </div>
   </div>
 
   <div class="card">
@@ -156,6 +169,12 @@ const KINDS = [
   { key: 'comic',    label: '漫画', unit: '本', step: 1 },
   { key: 'portrait', label: '写真', unit: '本', step: 1 }
 ];
+const MAX_ADD = 10000;   // 与后端 comic_quota.MAX_ADD_PER_CLICK 一致，防手抖
+// 手动加次数的「类型」下拉：每个账号卡片和新号区共用。
+function kindOptions() {
+  return KINDS.map((k) => '<option value="' + k.key + '">' + k.label +
+    '（' + k.unit + '）</option>').join('');
+}
 const DEF_FIELDS = [
   { key: 'script',     label: '剧本次数' },
   { key: 'revise',     label: '修订次数' },
@@ -241,6 +260,14 @@ function renderAccounts(d) {
       + '<div class="acts">' + adds + '<span class="sep"></span>'
       + '<span class="hint">每本格数上限</span>'
       + '<select class="act-panels" data-qq="' + esc(a.qq) + '">' + tiers + '</select>'
+      + '</div>'
+      + '<div class="acts custom">'
+      + '<span class="hint">手动加：</span>'
+      + '<input type="number" class="ca-n" min="1" max="' + MAX_ADD +
+          '" value="1" inputmode="numeric" aria-label="要加的数量">'
+      + '<select class="ca-kind" aria-label="类型">' + kindOptions() + '</select>'
+      + '<button class="ghost mini act-custom" data-qq="' + esc(a.qq) +
+          '">添加</button>'
       + '</div></div>';
   }).join('');
   $('accounts').querySelectorAll('.act-add').forEach((b) =>
@@ -248,6 +275,14 @@ function renderAccounts(d) {
                                                 Number(b.dataset.n))));
   $('accounts').querySelectorAll('.act-panels').forEach((s) =>
     s.addEventListener('change', () => setPanels(s.dataset.qq, Number(s.value))));
+  // 手动加：读同一行里的数量 + 类型，交给 addTimes（和快捷按钮同一条链路）。
+  $('accounts').querySelectorAll('.act-custom').forEach((b) =>
+    b.addEventListener('click', () => {
+      const row = b.parentElement;
+      const n = Number(row.querySelector('.ca-n').value);
+      const kind = row.querySelector('.ca-kind').value;
+      submitCustom(b.dataset.qq, kind, n);
+    }));
 }
 
 function renderDeliveries(d) {
@@ -274,12 +309,32 @@ function render(d) {
   renderDeliveries(d);
 }
 
+// 手动加次数的统一入口：先校验数量，再走和快捷按钮一样的 addTimes。
+// 后端有单次上限（防手抖），所以成功提示以后端返回的真实额度为准，
+// 不能拿前端填的 n 去报——否则填 99999 会被截断，提示却说加满了，误导。
+function submitCustom(qq, kind, n) {
+  if (!/^\d{5,12}$/.test(String(qq || '').trim())) {
+    bar('先填一个正确的 QQ 号', 'err'); return;
+  }
+  if (!Number.isInteger(n) || n < 1) {
+    bar('数量要填 1 以上的整数', 'err'); return;
+  }
+  if (n > MAX_ADD) {
+    bar('一次最多加 ' + MAX_ADD + '，更多请分几次加', 'err'); return;
+  }
+  addTimes(String(qq).trim(), kind, n);
+}
 async function addTimes(qq, kind, n) {
-  const label = (KINDS.find((k) => k.key === kind) || {}).label || kind;
-  bar('正在给 ' + qq + ' 加 ' + n + ' ' + label + '…');
+  const k = KINDS.find((x) => x.key === kind) || { label: kind, unit: '次' };
+  bar('正在给 ' + qq + ' 加 ' + n + ' ' + k.label + '…');
   try {
-    render(await post('/api/comic/admin', { add: { qq: qq, kind: kind, n: n } }));
-    ok('已给 ' + qq + ' 加了 ' + n + ' ' + label);
+    const d = await post('/api/comic/admin', { add: { qq: qq, kind: kind, n: n } });
+    render(d);
+    // 后端可能因上限截断；报「现在共 X」最诚实，不谎报加了多少。
+    const acc = (d.accounts || []).find((a) => a.qq === qq);
+    const total = acc && acc.limits ? acc.limits[kind] : null;
+    ok('已给 ' + qq + ' 加 ' + k.label + (total == null ? ''
+      : '，现在共 ' + total + ' ' + k.unit));
   } catch (e) { fail(e); }
 }
 async function setPanels(qq, n) {
@@ -319,14 +374,20 @@ $('saveDefaults').addEventListener('click', async () => {
     ok('默认额度已保存');
   } catch (e) { fail(e); }
 });
+$('newKind').innerHTML = kindOptions();
 document.querySelectorAll('.btn-add').forEach((b) =>
   b.addEventListener('click', () => {
     const qq = $('newQQ').value.trim();
     if (!/^\d{5,12}$/.test(qq)) { bar('先填一个正确的 QQ 号', 'err'); return; }
     addTimes(qq, b.dataset.kind, Number(b.dataset.n));
   }));
+$('newCustom').addEventListener('click', () =>
+  submitCustom($('newQQ').value, $('newKind').value, Number($('newNum').value)));
 $('newQQ').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') document.querySelector('.btn-add').click();
+});
+$('newNum').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') $('newCustom').click();
 });
 
 reload();

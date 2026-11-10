@@ -527,6 +527,39 @@ def _mark_pending_failed(path, no=None):
     return _apply
 
 
+def _is_test_shell(path, name):
+    """一个任务目录是不是「测试空壳」——只跑过编剧、从没出图的联调残留。
+
+    背景（2026-11-10）：历史上有联调脚本拿固定 brief「公交站被抓包」直接打
+    运行中的 /api/comic/script，剧本落进了真实 comics/ 却从没点「确认开跑」，
+    攒出 76 个只有 5 个小文件的空壳，把历史任务下拉撑爆，站主找续集得疯狂下滑。
+
+    **按内容判、不按名字判**：目录名 `_测试` 后缀能抓 75 个，但漏网的
+    `C20261109-55_公交站被抓包` 名字里没有「测试」，只靠名字会漏。真正的共同
+    指纹是「只有剧本、没有任何出图/状态、且 brief 是那句固定测试语」。判据宁可
+    窄（只认这一组），也不能把用户刚生成、还没来得及开跑的真实剧本误藏掉——
+    那种目录 brief 是用户自己写的，不会等于固定测试语。
+    磁盘上的空壳已另行移动到归档目录；这道过滤是防复发兜底：以后再有联调
+    残留，也自动不进下拉。带 `?include_test=1` 可临时看回全部（排查用）。
+    """
+    # 出过图 / 记过状态 / 是群友任务的，一律不是空壳（先排除， widest 保护）
+    if os.path.isfile(os.path.join(path, "state.json")):
+        return False
+    if os.path.isdir(os.path.join(path, "raw")) or os.path.isdir(os.path.join(path, "final")):
+        return False
+    if os.path.isfile(os.path.join(path, "owner.json")):
+        return False
+    brief = os.path.join(path, "brief.txt")
+    try:
+        with open(brief, encoding="utf-8", errors="ignore") as f:
+            if f.read().strip() == "公交站被抓包":
+                return True
+    except OSError:
+        pass
+    # 名字带 _测试 后缀、且确实没有任何出图痕迹的，也算（兼容早期没写 brief 的）
+    return name.endswith("_测试")
+
+
 @bp.route("/api/comic/tasks")
 def api_comic_tasks():
     """列出 comics/ 下的剧本任务，给页面顶部的「历史任务」下拉用（2026-10-18）。
@@ -537,9 +570,13 @@ def api_comic_tasks():
 
     只收**有 script.md** 的目录：纯写真任务（生图模式新建、没剧本）不进这个
     列表，它们由 `portraits` 那条链路自己管。
+
+    默认隐藏「测试空壳」（`_is_test_shell`）：联调残留不该占着历史任务下拉。
+    站主排查时可带 `?include_test=1` 临时看回全部，不影响正常创作流程。
     """
     out = []
     qq = _qq()
+    include_test = request.args.get("include_test") == "1"
     try:
         names = os.listdir(_COMICS_ROOT)
     except OSError:
@@ -554,6 +591,9 @@ def api_comic_tasks():
             continue
         script = os.path.join(path, "script.md")
         if not os.path.isfile(script):
+            continue
+        # 测试空壳默认不进历史下拉；磁盘本身没删（已移归档），include_test 能看回
+        if not include_test and _is_test_shell(path, name):
             continue
         item = {"task": name, "title": "", "panels": 0, "done": 0,
                 "updated": "", "prev": ""}

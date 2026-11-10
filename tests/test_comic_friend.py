@@ -598,6 +598,32 @@ class TestComicAdminPage(_TempMixin, unittest.TestCase):
         self.assertEqual(comic_quota.admin_view()["accounts"][0]
                          ["limits"]["script"], comic_quota.DEFAULTS["script"] + 1)
 
+    def test_一次加100不被截断且超过上限被压到顶(self):
+        # 站主给赞助用户一次充 100 次，不该被旧的 min(99) 卡成 99。
+        comic_quota.admin_update({"add": {"qq": QQ, "kind": "comic", "n": 100}})
+        a = comic_quota.admin_view()["accounts"][0]
+        self.assertEqual(a["limits"]["comic"], comic_quota.DEFAULTS["comic"] + 100)
+        # 防手抖顶仍在：填一个天量，服务端压到上限，不无限涨。
+        comic_quota.admin_update({"add": {"qq": QQ, "kind": "comic",
+                                          "n": comic_quota.MAX_ADD_PER_CLICK + 9999}})
+        a = comic_quota.admin_view()["accounts"][0]
+        self.assertEqual(a["limits"]["comic"],
+                         comic_quota.DEFAULTS["comic"] + 100
+                         + comic_quota.MAX_ADD_PER_CLICK)
+
+    def test_管理页有手动输入次数入口(self):
+        page = self._html("comic_admin.html")
+        # 一键填 N 的入口：数量框 + 类型下拉 + 添加按钮，账号卡片与新号区各一套
+        self.assertIn("act-custom", page)
+        self.assertIn("ca-kind", page)
+        self.assertIn('id="newNum"', page)
+        self.assertIn('id="newCustom"', page)
+        self.assertIn("function submitCustom", page)
+        self.assertIn("MAX_ADD", page)
+        self.assertIn("kindOptions", page)
+        # 成功提示以后端返回为准，不再谎报「加了 n」
+        self.assertIn("现在共 ' + total", page)
+
     def test_独立页路由可达(self):
         r = main.app.test_client().get("/comic_admin")
         self.assertEqual(r.status_code, 200)

@@ -51,11 +51,16 @@
   .tools button:active{background:var(--card2)}
   .tools button.primary{background:var(--pink);border-color:var(--pink);
     color:#fff;font-weight:600}
-  /* 分类条（2026-11-05）：按主文件夹快速切换。横向可滚，手机上一行放不下。 */
-  .grps{display:none;gap:6px;padding:8px 14px 2px;overflow-x:auto;
-    -webkit-overflow-scrolling:touch;scrollbar-width:none}
+  /* 分类条（2026-11-05）：按主文件夹快速切换。横向可滚，手机上一行放不下。
+     2026-11-10：原来把滚动条藏了、桌面竖滚轮又不能横滚 → 用户看着一堆标签
+     卡在那儿"滑不动"。改成细滚动条常显 + JS 把竖滚轮映射成横滚。 */
+  .grps{display:none;gap:6px;padding:8px 14px 10px;overflow-x:auto;
+    -webkit-overflow-scrolling:touch;scrollbar-width:thin;
+    scrollbar-color:var(--line) transparent}
   .grps.on{display:flex}
-  .grps::-webkit-scrollbar{display:none}
+  .grps::-webkit-scrollbar{height:6px}
+  .grps::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+  .grps::-webkit-scrollbar-track{background:transparent}
   .grps button{flex:none;border:1px solid var(--line);background:var(--card);
     color:var(--dim);font:inherit;font-size:12.5px;padding:5px 12px;
     border-radius:999px;cursor:pointer;white-space:nowrap}
@@ -704,6 +709,22 @@
   function renderGrps() {
     var box = $("grps");
     if (!box) return;
+    // 竖滚轮 → 横向滚（2026-11-10）：桌面端鼠标没有横向滚动手势，标签一多
+    // 就"堆着滑不动"。只在真有横向溢出、且以纵向滚动为主时才接管；滚到两端
+    // 就放行页面，别把人卡在标签条上。只挂一次，重复 render 不重复绑。
+    if (!box.dataset.wheelBound) {
+      box.dataset.wheelBound = "1";
+      box.addEventListener("wheel", function (e) {
+        if (this.scrollWidth <= this.clientWidth) return;      // 没溢出，别管
+        if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;  // 已经是横滚，别插手
+        var atStart = this.scrollLeft <= 0 && e.deltaY < 0;
+        var atEnd = this.scrollLeft + this.clientWidth >= this.scrollWidth - 1
+                    && e.deltaY > 0;
+        if (atStart || atEnd) return;                          // 到头了，让页面滚
+        this.scrollLeft += e.deltaY;
+        e.preventDefault();
+      }, { passive: false });
+    }
     var show = S.owner && S.tab === "owner" && (S.grps || []).length > 0;
     box.classList.toggle("on", show);
     if (!show) { box.innerHTML = ""; return; }

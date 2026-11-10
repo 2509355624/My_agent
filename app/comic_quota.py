@@ -49,6 +49,10 @@ DEFAULTS = {
 KINDS = ("script", "revise", "comic", "portrait")
 # 管理页可调的档位（格数）。改额度直接改数字也认，这里只是前端快捷选项。
 PANEL_TIERS = (10, 15, 20, 25, 30)
+# 单次「加次数」的上限（2026-11-10）。站主给赞助用户一次充 100 次不必狂点 +1，
+# 但这个口子是对公网管理页开放的（站主直连 5174），留一个防手抖/误输入的顶，
+# 不设成无限。真要更多就多次提交，账本仍是服务端原子累加，不会串。
+MAX_ADD_PER_CLICK = 10000
 
 _EMPTY = {"defaults": dict(DEFAULTS), "models": [], "accounts": {},
           "charged": {}, "deliveries": []}
@@ -344,7 +348,7 @@ def admin_update(payload):
                 and str(add.get("kind") or "") in KINDS):
             qq, kind = str(add["qq"]), str(add["kind"])
             try:
-                n = max(0, min(99, int(add.get("n") or 1)))
+                n = max(0, min(MAX_ADD_PER_CLICK, int(add.get("n") or 1)))
             except (TypeError, ValueError):
                 n = 1
             slot = data["accounts"].setdefault(qq, {})

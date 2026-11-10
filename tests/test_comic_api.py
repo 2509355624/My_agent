@@ -1226,6 +1226,48 @@ class TasksApiTest(unittest.TestCase):
         self.assertEqual("C20261018-12_加了料的饮料", names[0])
         self.assertEqual("C20261018-10", names[1])
 
+    def _shell(self, name, brief="公交站被抓包", state=False, final=False):
+        """造一个「只跑过编剧」的测试空壳目录（默认固定测试 brief）。"""
+        d = os.path.join(self.tmp, name)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "script.md"), "w", encoding="utf-8") as f:
+            f.write("# 标题：测试\n\n## 01\n画面: 1girl, solo, pov\n气泡: 一\n")
+        with open(os.path.join(d, "brief.txt"), "w", encoding="utf-8") as f:
+            f.write(brief)
+        if state:
+            with open(os.path.join(d, "state.json"), "w", encoding="utf-8") as f:
+                json.dump({"panels": {}}, f)
+        if final:
+            os.makedirs(os.path.join(d, "final"), exist_ok=True)
+        return d
+
+    def test_测试空壳默认不进历史下拉(self):
+        # 75 个 _测试 + 1 个漏网的「公交站被抓包」名字，按内容指纹都该藏
+        self._shell("C20261109-67_测试")
+        self._shell("C20261109-55_公交站被抓包")
+        names = [t["task"] for t in self.c.get("/api/comic/tasks").get_json()["tasks"]]
+        self.assertNotIn("C20261109-67_测试", names)
+        self.assertNotIn("C20261109-55_公交站被抓包", names)
+        # 已有的两个真实任务（_mk 写了 state.json）不受影响
+        self.assertIn("C20261018-10", names)
+
+    def test_include_test能看到空壳(self):
+        self._shell("C20261109-67_测试")
+        names = [t["task"] for t in self.c.get(
+            "/api/comic/tasks?include_test=1").get_json()["tasks"]]
+        self.assertIn("C20261109-67_测试", names)
+
+    def test_有出图或真实brief的目录即使叫测试也不藏(self):
+        # 真任务：brief 撞了固定测试语，但已开过跑（state/final），绝不能误藏
+        self._shell("C20261109-70_测试", state=True)
+        self._shell("C20261109-71_测试", final=True)
+        # 用户自己写的 brief（非固定测试语）、还没开跑的真实新剧本，也不能藏
+        self._shell("C20261109-72_我自己的新故事", brief="一个真实需求")
+        names = [t["task"] for t in self.c.get("/api/comic/tasks").get_json()["tasks"]]
+        self.assertIn("C20261109-70_测试", names)
+        self.assertIn("C20261109-71_测试", names)
+        self.assertIn("C20261109-72_我自己的新故事", names)
+
 
 class MarkPendingFailedTest(unittest.TestCase):
     """后台线程挂掉时把「还在 pending 的格」标成出错并落盘（2026-10-18）。

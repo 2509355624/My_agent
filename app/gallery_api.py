@@ -47,6 +47,18 @@ UPLOAD_TOTAL = 250 << 20            # 一次合计上限 250MB
 # 换算下来每次重新打开画廊，几十张缩略图全要从这台机器重传一遍。
 IMG_MAX_AGE = 31536000
 
+# 漫画工作台出的多格漫画，出图目录是 output/web/漫画_<任务号>_<标题>/<渠道>/
+# （comic.py:_out_dir_for 里硬编码的前缀）。扫进画廊后落库有两种形态，必须
+# 都认到，不然「所有漫画归一类」会漏掉一半：
+#   1) 双渠道本 → 路径首段出现 ≥2 次，被提升成独立 grp `漫画_C...`，title=渠道名；
+#   2) 单渠道本 → count<2 没被提升，仍挂在 grp='web'，title=`漫画_C.../anima-line`。
+# 分类条把这 26 条统一折成一个虚拟标签「漫画」；`_` 是 LIKE 通配符，必须转义。
+COMIC_LABEL = "漫画"
+_COMIC_WHERE = ("(w.grp LIKE '漫画\\_%' ESCAPE '\\' "
+                "OR w.title LIKE '漫画\\_%' ESCAPE '\\')")
+_COMIC_WHERE_RAW = ("(grp LIKE '漫画\\_%' ESCAPE '\\' "
+                    "OR title LIKE '漫画\\_%' ESCAPE '\\')")
+
 # 批量取图：一次能带几张。24 张 ≈ 一屏（手机两列 × 12 行），再多变成
 # 一次传几 MB，反而不如让它先渲染出来。`v` 是 1600px 预览，一张 90KB
 # 上下，一次只给 6 张（只用来预取相邻的那两张）。
@@ -175,8 +187,14 @@ def api_list():
         order = " ORDER BY w.id DESC"        # 公开墙看最新的，不care发现顺序
 
     grp = str(request.args.get("grp") or "").strip()
-    if grp:
-        where.append("w.grp=?")
+    if grp == COMIC_LABEL:
+        # 虚拟「漫画」标签：把散在 7 个 `漫画_C...` grp 和 web 组里的单渠道本
+        # 一次捞全（判据见文件头的 _COMIC_WHERE）。
+        where.append(_COMIC_WHERE)
+    elif grp:
+        # 点其它真实分类时排除漫画行：web 组里那 12 本单渠道漫画的 grp 本身是
+        # 'web'，不排除的话点「web」会和「漫画」重复显示同一批。
+        where.append("w.grp=? AND NOT " + _COMIC_WHERE)
         args.append(grp)
 
     sql = (_SELECT_WORK + " WHERE " + " AND ".join(where) +
@@ -196,6 +214,20 @@ def api_list():
         else:
             gsql = "SELECT DISTINCT grp FROM works WHERE n>0 AND grp<>''"
         grps = [r["grp"] for r in con.execute(gsql)]
+        # 漫画归一：只要库里还有漫画行，就把 7 个 `漫画_C...` 碎标签撤掉，
+        # 换成一个「漫画」。web 组本身保留（还有「生图页」那 1 条真·非漫画）。
+        # 判据用 grp/title 两个字段：单渠道本藏在 web 组、只体现在 title 里。
+        # 和上面 gsql 用同一套 scope 约束：公开墙全是群友上传，没有磁盘漫画，
+        # 不能给它塞一个点进去空白的「漫画」标签。
+        comic_scope = (" AND src='owner'" if scope == "owner" else
+                       " AND src='user'" if scope == "pub" else "")
+        has_comic = con.execute(
+            "SELECT 1 FROM works WHERE n>0" + comic_scope + " AND "
+            + _COMIC_WHERE_RAW + " LIMIT 1"
+        ).fetchone()
+        if has_comic:
+            grps = [g for g in grps if g and not g.startswith("漫画_")]
+            grps.append(COMIC_LABEL)
 
     more = len(rows) > size
     return jsonify({"ok": True, "works": [_work_row(r, qq or "") for r in rows[:size]],
