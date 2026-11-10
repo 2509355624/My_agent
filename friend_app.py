@@ -179,7 +179,9 @@ def _secure(resp):
 
 @app.before_request
 def _gate():
-    bucket = "img" if (request.path or "").startswith("/api/gal/img/") else "all"
+    bucket = "img" if ((request.path or "").startswith("/api/gal/img/")
+                       or (request.path or "").startswith("/api/comic/img")) \
+        else "all"
     if not rate_ok(bucket):
         return _secure(jsonify({"ok": False, "error": "请求太频繁，歇一下"})), 429
     # 独立游客页的隔离：只圈「没登录 + 进过 /play」的人，且只挡页面导航。
@@ -508,6 +510,7 @@ def _forward(prefix, sub, allow_guest=False, force_guest=False):
     streaming = (request.method == "GET"
                  and ((request.path or "").startswith("/api/gal/img/")
                       or (request.path or "").startswith("/api/moss/img")
+                      or (request.path or "").startswith("/api/comic/img")
                       or (request.path or "").startswith("/api/image/web/")
                       or (request.path or "").startswith(
                           "/api/image/角色扮演生图/")))
@@ -762,6 +765,34 @@ def _persona_response():
 def persona_page():
     """角色扮演页。未登录也放行——5174 那边会按游客处理。"""
     return _persona_response()
+
+
+@app.route("/comic")
+@app.route("/comic.html")
+def comic_page():
+    """群友漫画工作台（2026-11-10 开放）。**必须登录**。
+
+    没登录时发的是 `friend.html`（它本身就是登录页，验证成功后 `location.reload()`
+    又回到这个地址，服务器这时才看到 cookie、才发漫画台）。游客态一律不给：
+    剧本生成要花站主的 Token，后续出图还要占整条 GPU 队列，不能匿名触发。
+
+    接口经 `/api/comic/<path>` 反代到 5174，`_forward` 会把登录 Cookie 解出的
+    QQ 写死塞进请求；页面自己不需要也不能传 qq。
+    """
+    if not _logged_in():
+        return send_from_directory(WEB_DIR, "friend.html")
+    return send_from_directory(WEB_DIR, "comic_studio_friend.html")
+
+
+@app.route("/api/comic/<path:sub>", methods=["GET", "POST", "DELETE"])
+def proxy_comic(sub):
+    """漫画台接口反代。不放游客（allow_guest 默认 False）。
+
+    5174 那边只认「X-Friend-Token + qq」组合：带令牌又有 qq = 群友，进配额、
+    归属、缩略图、跳过 2x 那套；站主直连 5174 没有令牌 = 全部放行、行为不变。
+    `/api/comic/admin` 即使被转发过来，也会因 `_qq()` 非空被 5174 拒掉。
+    """
+    return _forward("/api/comic", sub)
 
 
 @app.route("/play")

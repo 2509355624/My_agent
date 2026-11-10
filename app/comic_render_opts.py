@@ -502,6 +502,17 @@ def reset_defaults(skill=None):
     return True
 
 
+def _friend_fix(task_dir, opts):
+    """群友任务强制跳过最终 2x 放大 → 原地改 opts 并返回。
+
+    判据是任务目录里的 `owner.json`（渲染线程没有 request 上下文，归属必须
+    落盘）。站主任务没有这个文件，一个字段都不动。
+    """
+    if task_dir and os.path.isfile(os.path.join(str(task_dir), "owner.json")):
+        (opts.setdefault("upscale", {}))["final_skip"] = True
+    return opts
+
+
 def load(task_dir, skill=DEFAULT_SKILL):
     """读参数：**任务 render.json > 全局默认 > 模板当前值**。
 
@@ -512,28 +523,32 @@ def load(task_dir, skill=DEFAULT_SKILL):
     撤了）：模板里当然不会有用户自己训的角色 LoRA，一过滤就把最常用的功能丢
     了。跨渠道串参数靠**存取层**解决——任务级 `render_<渠道>.json`、全局默认
     按渠道分键，两处都不共用文件，就没有「anima 的槽跑到 krea2 上」这回事。
+
+    群友任务（2026-11-10）：无论走哪个 return 分支，最后都过 `_friend_fix`
+    强制跳过最终 2x 放大。放在 `load()` 这一层而不是前端，是因为 `run` /
+    `render_scene` 单格重跑 / 写真三条路都从这里取参数，任何入口都不会漏。
     """
     base = load_defaults(skill) or defaults(skill)
     if not task_dir:
         return base
     fp = path_of(task_dir, skill)
     if not os.path.isfile(fp):
-        return base
+        return _friend_fix(task_dir, base)
     try:
         with open(fp, "r", encoding="utf-8") as f:
             saved = json.load(f)
     except (OSError, ValueError) as e:
         log.warning("render.json 读不出来（%s），按全局默认 / 模板值渲染", e)
-        return base
+        return _friend_fix(task_dir, base)
     if not isinstance(saved, dict):
         log.warning("render.json 不是对象，按全局默认 / 模板值渲染")
-        return base
+        return _friend_fix(task_dir, base)
     opts, errors, _w = normalize(saved, base=base)
     if errors:
         # 存的时候就校验过，这里还报错只可能是文件被手改坏——不阻塞出图，
         # 但要把话说在日志里，免得用户以为存进去了。
         log.warning("render.json 有越界值（%s），已钳位", "；".join(errors))
-    return opts
+    return _friend_fix(task_dir, opts)
 
 
 def save(task_dir, opts, skill=DEFAULT_SKILL):
@@ -998,6 +1013,15 @@ def apply(workflow, opts):
                     inp["hires_height"] = max(8, int(round(hh * ry)) // 8 * 8)
             inp["width"], inp["height"] = w, h
     n_up = _apply_upscale(wf, (opts or {}).get("upscale") or {})
+    # batch 族（sd / miao / image_gen_v1）把 2x 藏在节点内部的 `upscale_model`
+    # 输入里，`_apply_upscale` 那招「断独立节点引用」管不到它。勾了「跳过最终
+    # 放大」却还在放大，就是这一族。直接把那个 optional 输入摘掉（不传 =
+    # 节点不跑放大），与 `pin_output_size` 里同一处写法保持一致。
+    if ((opts or {}).get("upscale") or {}).get("final_skip"):
+        for nid in _size_hosts(wf):
+            if "upscale_model" in _inputs(wf.get(nid)):
+                _inputs(wf[nid]).pop("upscale_model", None)
+                n_up += 1
     # 关掉二次采样：放在参数写完之后（第二段的 steps / denoise 写不写都无所谓，
     # 它已经不可达了），也不影响上面按节点 id 找放大节点。
     n_cut = _cut_hires(wf) if hires_p.get("skip") else 0

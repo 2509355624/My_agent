@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>漫画工作台</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%237c5cff'/></svg>">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0a0a0f; --bg-elev: #12121a; --bg-input: #1a1a24;
+    --border: #2a2a3a; --border-soft: #1f1f2e;
+    --text: #e8e8f0; --text-dim: #8888a0; --text-mute: #555570;
+    --accent: #7c5cff; --success: #4ade80; --error: #f87171;
+    --warn: #fbbf24; --info: #4fc3f7; --radius: 12px; --radius-sm: 8px;
+  }
+  html, body { background: var(--bg); color: var(--text);
+    font-family: "SF Mono", "JetBrains Mono", "Consolas", "Microsoft YaHei", monospace;
+    font-size: 14px; min-height: 100%; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 20px; }
+  .topbar { display: flex; align-items: center; gap: 12px; padding: 8px 0 18px; flex-wrap: wrap; }
+  .topbar h1 { font-size: 17px; font-weight: 500; }
+  .topbar .spacer { flex: 1; }
+  a.back { color: var(--text-dim); text-decoration: none; font-size: 13px; }
+  a.back:hover { color: var(--accent); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { font-size: 11px; padding: 3px 9px; border: 1px solid var(--border);
+    border-radius: 20px; color: var(--text-dim); background: var(--bg-input); }
+  .chip b { color: var(--text); font-weight: 500; }
+  .chip.warn { color: var(--warn); border-color: #5a4618; }
+  .card { background: var(--bg-elev); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
+  .card h2 { font-size: 14px; font-weight: 500; color: var(--text-dim);
+    margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  .card h2 .tip { font-size: 11px; color: var(--text-mute); font-weight: 400; }
+  .notice { border-color: #4a3a14; background: #17130a; color: #e7d3a1;
+    font-size: 12.5px; line-height: 1.9; }
+  .notice b { color: var(--warn); font-weight: 500; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row > label { font-size: 12px; color: var(--text-dim); }
+  .grow { flex: 1; min-width: 160px; }
+  input, textarea, select {
+    background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
+    border-radius: var(--radius-sm); padding: 8px 10px; font: inherit; outline: none;
+  }
+  input:focus, textarea:focus, select:focus { border-color: var(--accent); }
+  input[type=number] { width: 88px; }
+  input[type=checkbox] { accent-color: var(--accent); }
+  textarea { width: 100%; min-height: 190px; line-height: 1.6; resize: vertical; }
+  textarea.small { min-height: 72px; }
+  .btn { background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
+    border-radius: var(--radius-sm); padding: 8px 14px; cursor: pointer; font: inherit; }
+  .btn:hover:not(:disabled) { border-color: var(--accent); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.small { padding: 4px 9px; font-size: 12px; }
+  .btn.danger { color: var(--error); }
+  .btn.on { border-color: var(--accent); color: #c9b8ff; }
+  .bar { display: none; padding: 9px 12px; border-radius: var(--radius-sm);
+    background: var(--bg-input); border: 1px solid var(--border); font-size: 12.5px;
+    color: var(--info); margin: 10px 0; white-space: pre-wrap; line-height: 1.7; }
+  .bar.err { color: var(--error); border-color: #5a2626; }
+  .bar.show { display: block; }
+  .muted { color: var(--text-mute); font-size: 12px; line-height: 1.8; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+  .slot { background: var(--bg-input); border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; }
+  .slot .head { display: flex; align-items: center; gap: 7px; padding: 8px 10px; }
+  .slot .no { font-size: 14px; font-weight: 500; }
+  .badge { font-size: 10px; padding: 2px 7px; border-radius: 10px; border: 1px solid; }
+  .b-pending  { color: var(--text-mute); border-color: var(--text-mute); }
+  .b-rendered { color: var(--info);     border-color: var(--info); }
+  .b-done     { color: var(--success);  border-color: var(--success); }
+  .b-error    { color: var(--error);    border-color: var(--error); }
+  .slot .imgs { display: flex; gap: 1px; background: var(--border-soft); }
+  .slot .imgs .cell { flex: 1; min-width: 0; background: #0d0d14;
+    display: flex; align-items: center; justify-content: center; }
+  .slot img { width: 100%; height: auto; display: block; cursor: zoom-in; }
+  .slot .ph { color: var(--text-mute); font-size: 11px; padding: 34px 4px; text-align: center; }
+  .slot .acts { padding: 8px 9px; display: flex; gap: 5px; flex-wrap: wrap; }
+  .slot .scene { padding: 0 10px 9px; font-size: 11px; color: var(--text-dim);
+    line-height: 1.6; max-height: 46px; overflow: hidden; }
+  .slot .err { padding: 0 10px 9px; font-size: 11px; color: var(--error); }
+  #chatLog { max-height: 210px; overflow-y: auto; margin-bottom: 9px; }
+  .msg { font-size: 12.5px; line-height: 1.7; padding: 7px 9px; border-radius: 8px;
+    margin-bottom: 6px; white-space: pre-wrap; word-break: break-word; }
+  .msg.u { background: #23203a; color: #cfc6ff; }
+  .msg.a { background: var(--bg-input); color: var(--text-dim); }
+  #lightbox { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.92);
+    z-index: 99; align-items: center; justify-content: center; padding: 24px; }
+  #lightbox.show { display: flex; }
+  #lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  hr { border: 0; border-top: 1px solid var(--border-soft); margin: 14px 0; }
+  @media (max-width: 640px) {
+    .wrap { padding: 12px; }
+    .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <h1>漫画工作台</h1>
+    <div class="chips" id="chips"></div>
+    <div class="spacer"></div>
+    <a class="back" href="/">回首页</a>
+  </div>
+
+  <div class="card notice" id="notice">
+    <b>先说清楚怎么用：</b>生成剧本要反复查资料库，很费 Token，所以每位账号
+    <b>免费 1 次剧本生成 + 3 次修订助手</b>；还想要更多，直接找站主加次数。<br>
+    出图走站长的电脑，<b>一张一张排队画</b>，前面还有别人的图时要等，页面顶部会显示排队数。<br>
+    <b>不用守着网页。</b>跑完后打包成「底图包 / 成品包」的 zip，直接 QQ 私聊发给你，
+    文件可能要等一会儿才收得到。网页这边只放缩略图给你预览，高清原图都在 QQ 文件里。<br>
+    <b>服务端不会长期保存成品</b>，QQ 收到后请及时下载保存。发送失败就在这里点「重发到 QQ」，
+    或找站主补发；不会改成网页下载（走隧道绕一圈太慢）。
+  </div>
+
+  <div class="bar" id="bar"></div>
+
+  <!-- ① 剧本 -->
+  <div class="card">
+    <h2>① 写剧本 <span class="tip" id="scriptTip"></span></h2>
+    <div class="row" style="margin-bottom:9px">
+      <label>历史作品</label>
+      <select id="taskSel" class="grow"><option value="">（新建一本）</option></select>
+      <button class="btn small" id="btnTasks">刷新</button>
+    </div>
+    <textarea id="brief" class="small" placeholder="一句话设定：想看什么故事、谁、在哪、发生什么"></textarea>
+    <div class="row" style="margin:9px 0">
+      <label>格数</label><input type="number" id="panels" min="1" max="10" value="10">
+      <label>视角</label>
+      <select id="pov">
+        <option value="pov">POV 第一人称</option>
+        <option value="free">自由视角</option>
+        <option value="third">第三人称</option>
+      </select>
+      <label>编剧模型</label><select id="model"><option value="">站主默认</option></select>
+      <label>接上一集</label><select id="prev"><option value="">不接</option></select>
+      <label><input type="checkbox" id="carry"> 沿用服装</label>
+      <label><input type="checkbox" id="noSearch" checked> 跳过查库（快）</label>
+    </div>
+    <div class="row">
+      <button class="btn primary" id="btnScript">生成剧本（消耗 1 次）</button>
+      <span class="muted" id="scriptLeft"></span>
+    </div>
+    <hr>
+    <div class="row" style="margin-bottom:8px">
+      <label>剧本正文（可直接改）</label>
+      <div class="grow"></div>
+      <button class="btn small" id="btnSave">保存剧本</button>
+    </div>
+    <textarea id="script"></textarea>
+    <hr>
+    <div class="row" style="margin-bottom:8px">
+      <label>修订助手</label>
+      <div class="grow"></div>
+      <span class="muted" id="reviseLeft"></span>
+      <button class="btn small" id="btnUndo">撤销上次改稿</button>
+    </div>
+    <div id="chatLog"></div>
+    <div class="row">
+      <input id="chatMsg" class="grow" placeholder="例：把第 3 格的背景换成暖色（只问问题、没真改稿，不扣次数）">
+      <button class="btn" id="btnChat">发送</button>
+    </div>
+  </div>
+
+  <!-- ② 渲染参数 -->
+  <div class="card">
+    <h2>② 画幅与渠道 <span class="tip">改动即时生效，只影响之后画的格子</span></h2>
+    <div class="row" style="margin-bottom:9px">
+      <label>生图渠道</label><select id="channel" class="grow"></select>
+      <span class="muted" id="channelTip"></span>
+    </div>
+    <div class="row" id="ratios" style="margin-bottom:9px"></div>
+    <div class="row">
+      <label>自定义宽</label><input type="number" id="width" min="512" max="2048" step="8">
+      <label>高</label><input type="number" id="height" min="512" max="2048" step="8">
+      <span class="muted" id="renderMsg">群友版已固定跳过最终 2 倍放大，单张约 4MB。</span>
+    </div>
+  </div>
+
+  <!-- ③ 开跑 -->
+  <div class="card">
+    <h2>③ 开跑</h2>
+    <div class="row">
+      <button class="btn primary" id="btnStart">确认开跑（消耗 1 次漫画机会）</button>
+      <button class="btn" id="btnBubbleAll">给全部格子加气泡</button>
+      <button class="btn danger" id="btnAbort">中断排队</button>
+      <span class="muted" id="runState"></span>
+    </div>
+  </div>
+
+  <!-- ④ 槽位 -->
+  <div class="card">
+    <h2>④ 作品槽位 <span class="tip">网页是缩略图，高清图在 QQ 发的 zip 里</span></h2>
+    <div class="grid" id="slots"></div>
+    <div class="muted" id="slotsEmpty">还没有选作品。生成剧本或点上面的「历史作品」翻回之前的。</div>
+  </div>
+
+  <!-- ⑤ 写真 -->
+  <div class="card">
+    <h2>⑤ 单人写真集 <span class="tip">一次最多 5 张，共 2 次机会</span></h2>
+    <div class="row" style="margin-bottom:8px">
+      <input id="pBrief" class="grow" placeholder="想拍什么：比如「雨天窗边、白衬衫、暖光」">
+      <input id="pHeroine" placeholder="角色（可留空）" style="width:150px">
+      <label>张数</label><input type="number" id="pN" min="1" max="5" value="5">
+      <button class="btn primary" id="btnPortrait">生成写真</button>
+    </div>
+    <div class="grid" id="shots"></div>
+    <div class="muted" id="portraitMsg"></div>
+  </div>
+
+  <!-- ⑥ QQ 发送 -->
+  <div class="card">
+    <h2>⑥ QQ 发送状态</h2>
+    <div id="delivery" class="muted">跑完图会自动发，暂时还没有文件。</div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn" id="btnSend">重发到 QQ</button>
+      <span class="muted">发送失败不会回退成网页下载；等一会儿没收到就找站主。</span>
+    </div>
+  </div>
+</div>
+
+<div id="lightbox"><img id="lightboxImg" alt="预览"></div>
+
+<script>
+"use strict";
+/* 群友漫画台：只存一个小状态（当前任务号）在浏览器，图片字节一律不进
+   Local Storage。缩略图由服务端按需生成并落盘，换设备/清缓存/刷新都能拉回来。 */
+const LS_TASK = "comicFriendTask";
+const $ = (id) => document.getElementById(id);
+let S = {
+  task: localStorage.getItem(LS_TASK) || "",
+  cfg: null, quota: null, channels: [], ratio: "",
+  lastRev: {}, slots: "", shots: "", poll: null, chatJob: null
+};
+
+function bar(text, err) {
+  const el = $("bar");
+  el.textContent = text || "";
+  el.className = "bar" + (text ? " show" : "") + (err ? " err" : "");
+}
+function fail(e) { bar(String(e && e.message || e), true); }
+
+async function api(path, body, opts) {
+  const o = { method: body === undefined ? "GET" : "POST",
+              headers: {}, credentials: "same-origin" };
+  if (body !== undefined) {
+    o.headers["Content-Type"] = "application/json";
+    o.body = JSON.stringify(body);
+  }
+  if (opts && opts.query) {
+    path += (path.indexOf("?") < 0 ? "?" : "&") + opts.query;
+  }
+  const r = await fetch(path, o);
+  let d;
+  try { d = await r.json(); } catch (e) { throw new Error("后台返回的不是 JSON（" + r.status + "）"); }
+  if (!r.ok || d.ok === false) {
+    throw new Error(d.error || ("请求失败 " + r.status));
+  }
+  return d;
+}
+const q = (o) => new URLSearchParams(o).toString();
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+    ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+}
+
+/* ─── 顶部额度 / 排队 ─────────────────────────────────── */
+function renderChips(d) {
+  const lim = d.quota || S.quota;
+  if (lim) S.quota = lim;
+  const left = (lim && lim.left) || {};
+  const bits = [
+    "剧本 <b>" + (left.script == null ? "-" : left.script) + "</b>",
+    "修订 <b>" + (left.revise == null ? "-" : left.revise) + "</b>",
+    "漫画 <b>" + (left.comic == null ? "-" : left.comic) + "</b>",
+    "写真 <b>" + (left.portrait == null ? "-" : left.portrait) + "</b>",
+    "一本最多 <b>" + ((lim && lim.limits && lim.limits.max_panels) || 10) + "</b> 格"
+  ];
+  if (d.queue != null) bits.push("全站排队 <b>" + d.queue + "</b> 张");
+  $("chips").innerHTML = bits.map((x) => '<span class="chip">' + x + "</span>").join("");
+  $("scriptLeft").textContent = "剩余 " + (left.script == null ? "-" : left.script) + " 次";
+  $("reviseLeft").textContent = "剩余 " + (left.revise == null ? "-" : left.revise) +
+                                " 次（只有真的改了剧本才扣）";
+  $("btnScript").disabled = !(left.script > 0);
+  $("btnChat").disabled = !(left.revise > 0);
+  if (left.script <= 0) $("btnScript").textContent = "剧本次数已用完";
+  $("panels").max = (lim && lim.limits && lim.limits.max_panels) || 10;
+  $("pN").max = (lim && lim.limits && lim.limits.max_shots) || 5;
+}
+
+/* ─── 配置 / 下拉 ─────────────────────────────────────── */
+async function loadConfig() {
+  S.cfg = await api("/api/comic/friend_config");
+  const sel = $("model");
+  sel.innerHTML = '<option value="">站主默认</option>' +
+    (S.cfg.models || []).map((m) =>
+      '<option value="' + esc(m.provider + "|" + m.model) + '">' +
+      esc(m.label || m.model || m.provider) + "</option>").join("");
+  const box = $("ratios");
+  box.innerHTML = (S.cfg.ratio_presets || []).map((p) =>
+    '<button class="btn small" data-key="' + p.key + '" data-w="' + p.w +
+    '" data-h="' + p.h + '">' + esc(p.label) + " " + p.w + "×" + p.h + "</button>").join("");
+  box.querySelectorAll("button").forEach((b) => b.onclick = () => {
+    S.ratio = b.dataset.key;
+    $("width").value = b.dataset.w;
+    $("height").value = b.dataset.h;
+    highlightRatio();
+    saveRatio();
+  });
+  renderChips({ quota: S.cfg.quota });
+  S.quota = S.cfg.quota;
+  await loadChannels();
+  await loadTasks();
+}
+function highlightRatio() {
+  $("ratios").querySelectorAll("button").forEach((b) =>
+    b.classList.toggle("on", b.dataset.key === S.ratio));
+}
+async function loadChannels() {
+  const d = await api("/api/comic/channels?" + q({ task: S.task || "" }));
+  S.channels = d.channels || [];
+  $("channel").innerHTML = S.channels.map((c) =>
+    '<option value="' + esc(c.name) + '">' +
+    esc((c.group ? c.group + " · " : "") + c.name) + "</option>").join("");
+  if (d.current) $("channel").value = d.current;
+  $("channelTip").textContent = "共 " + S.channels.length + " 个渠道，全量开放";
+  await loadRenderOpts();
+}
+async function loadRenderOpts() {
+  const d = await api("/api/comic/render_opts?" +
+                      q({ task: S.task || "", skill: $("channel").value || "" }));
+  const o = d.opts || {};
+  $("width").value = o.width || 1024;
+  $("height").value = o.height || 1536;
+  const hit = (S.cfg.ratio_presets || []).find((p) =>
+    p.w === (o.width || 0) && p.h === (o.height || 0));
+  S.ratio = hit ? hit.key : "";
+  highlightRatio();
+  $("renderMsg").textContent = "群友版已固定跳过最终 2 倍放大，单张约 4MB。" +
+    ((d.opts && d.opts.upscale && d.opts.upscale.final_skip === false) ?
+     "（注意：本任务旧参数里还留着放大，下次开跑前请重选一次画幅）" : "");
+}
+async function saveRatio() {
+  if (!S.task) { bar("先生成或选一本作品，画幅才能保存", true); return; }
+  try {
+    const d = await api("/api/comic/render_opts", {
+      task: S.task, scope: "task", skill: $("channel").value,
+      opts: { width: Number($("width").value), height: Number($("height").value) }
+    });
+    $("renderMsg").textContent = "已保存 " + d.opts.width + "×" + d.opts.height +
+      "（固定跳过最终 2 倍放大）" + (d.warnings && d.warnings.length ?
+      "；" + d.warnings.join("；") : "");
+  } catch (e) { fail(e); }
+}
+let ratioTimer = null;
+function queueRatio() {
+  clearTimeout(ratioTimer);
+  ratioTimer = setTimeout(saveRatio, 450);
+}
+
+async function loadTasks() {
+  const d = await api("/api/comic/tasks");
+  const list = d.tasks || [];
+  const opts = ['<option value="">（新建一本）</option>'].concat(
+    list.map((t) => '<option value="' + esc(t.task) + '">' +
+      esc(t.task + (t.title ? " · " + t.title : "")) + "</option>"));
+  // 纯写真任务没有 script.md，服务端按设计不列进历史任务。但当前正打开着
+  // 的就是它，别因为「不在列表里」把任务号清掉，否则写真槽位一刷新就空。
+  if (S.task && !list.some((t) => t.task === S.task)) {
+    opts.push('<option value="' + esc(S.task) + '">' +
+              esc(S.task + "（写真）") + "</option>");
+  }
+  $("taskSel").innerHTML = opts.join("");
+  $("prev").innerHTML = '<option value="">不接</option>' +
+    list.map((t) => '<option value="' + esc(t.task) + '">' +
+      esc(t.task + (t.title ? " · " + t.title : "")) + "</option>").join("");
+  $("taskSel").value = S.task || "";
+}
+async function selectTask(name, quiet) {
+  S.task = name || "";
+  if (name) localStorage.setItem(LS_TASK, name);
+  else localStorage.removeItem(LS_TASK);
+  if (!name) {
+    $("script").value = ""; $("slots").innerHTML = ""; $("shots").innerHTML = "";
+    $("slotsEmpty").style.display = "";
+    bar("");
+    return;
+  }
+  try {
+    const [txt, hist, st] = await Promise.all([
+      api("/api/comic/script_text?" + q({ task: name })),
+      api("/api/comic/chat_history?" + q({ task: name })),
+      api("/api/comic/status?" + q({ task: name }))
+    ]);
+    $("script").value = txt.script || "";
+    $("pov").value = txt.pov_mode || "pov";
+    renderChat(hist.history || []);
+    $("btnUndo").disabled = !hist.backup;
+    applyStatus(st);
+    await loadChannels();
+    if (!quiet) bar("已打开 " + name);
+  } catch (e) { fail(e); }
+}
+
+/* ─── 编剧 / 修订 ─────────────────────────────────────── */
+function modelPair() {
+  const v = $("model").value;
+  if (!v) return { provider: "", model: "" };
+  const i = v.indexOf("|");
+  return { provider: v.slice(0, i), model: v.slice(i + 1) };
+}
+async function poll(path, job, onDone, label) {
+  return new Promise((resolve, reject) => {
+    const tick = async () => {
+      try {
+        const d = await api(path + "?" + q({ job: job }));
+        if (d.state === "error") { reject(new Error(d.error || (label + "失败"))); return; }
+        if (d.state === "done") { resolve(await onDone(d)); return; }
+        bar(label + "…" + ((d.log || []).slice(-1)[0] || "处理中"));
+        setTimeout(tick, 1600);
+      } catch (e) { reject(e); }
+    };
+    tick();
+  });
+}
+async function doScript() {
+  const brief = $("brief").value.trim();
+  if (!brief) { bar("先写一句设定", true); return; }
+  const m = modelPair();
+  $("btnScript").disabled = true;
+  try {
+    const d = await api("/api/comic/script", {
+      brief: brief, panels: Number($("panels").value) || 10,
+      character: "", pov_mode: $("pov").value,
+      prev: $("prev").value, carry_outfit: $("carry").checked,
+      no_search: $("noSearch").checked, silver_mode: "no_bubble",
+      provider: m.provider, model: m.model
+    });
+    await poll("/api/comic/script_status", d.job, async (r) => {
+      bar("剧本写好了：" + (r.task || ""));
+      S.task = r.task || "";
+      if (S.task) localStorage.setItem(LS_TASK, S.task);
+      $("script").value = r.script || "";
+      await loadTasks();
+      await loadConfig();
+    }, "编剧正在写剧本（要查库，可能几分钟）");
+  } catch (e) { fail(e); }
+  finally { $("btnScript").disabled = !(S.quota && S.quota.left.script > 0); }
+}
+function renderChat(hist) {
+  $("chatLog").innerHTML = (hist || []).map((m) =>
+    '<div class="msg ' + (m.role === "user" ? "u" : "a") + '">' +
+    esc(m.content) + "</div>").join("");
+  $("chatLog").scrollTop = $("chatLog").scrollHeight;
+}
+async function doChat() {
+  if (!S.task) { bar("先生成或选一本作品", true); return; }
+  const msg = $("chatMsg").value.trim();
+  if (!msg) return;
+  const m = modelPair();
+  $("btnChat").disabled = true;
+  $("chatMsg").value = "";
+  renderChat((await api("/api/comic/chat_history?" + q({ task: S.task })))
+    .history.concat([{ role: "user", content: msg }]));
+  try {
+    const d = await api("/api/comic/chat_revise", {
+      task: S.task, message: msg, provider: m.provider, model: m.model
+    });
+    const r = await poll("/api/comic/chat_status", d.job, async (x) => x,
+                         "修订助手在想");
+    if (r.quota) { S.quota = r.quota; renderChips({ quota: r.quota }); }
+    if (r.changed) {
+      const txt = await api("/api/comic/script_text?" + q({ task: S.task }));
+      $("script").value = txt.script || "";
+      bar("修订助手改好了剧本，扣 1 次修订机会");
+    } else {
+      bar("修订助手只是回话／反问，剧本没动，这次不扣次数");
+    }
+    const h = await api("/api/comic/chat_history?" + q({ task: S.task }));
+    renderChat(h.history || []);
+    $("btnUndo").disabled = !h.backup;
+  } catch (e) { fail(e); }
+  finally { $("btnChat").disabled = !(S.quota && S.quota.left.revise > 0); }
+}
+async function doSave() {
+  if (!S.task) { bar("先生成或选一本作品", true); return; }
+  try {
+    const d = await api("/api/comic/save", { task: S.task, script: $("script").value });
+    bar("剧本已保存（" + d.panels + " 格）");
+  } catch (e) { fail(e); }
+}
+async function doUndo() {
+  if (!S.task) return;
+  try {
+    const d = await api("/api/comic/chat_undo", { task: S.task });
+    $("script").value = d.script || "";
+    $("btnUndo").disabled = true;
+    bar("已撤销上次改稿（次数不退，剧本已经回去了）");
+  } catch (e) { fail(e); }
+}
+
+/* ─── 开跑 / 槽位 ─────────────────────────────────────── */
+async function doStart() {
+  if (!S.task) { bar("先生成或选一本作品", true); return; }
+  try {
+    await api("/api/comic/save", { task: S.task, script: $("script").value });
+    await api("/api/comic/start", { task: S.task,
+                                    scene_skill: $("channel").value });
+    bar("已提交开跑，正在逐张排队出图，不用守着网页");
+    await loadConfig();
+  } catch (e) { fail(e); }
+}
+async function doBubbleAll() {
+  if (!S.task) return;
+  try { await api("/api/comic/bubble", { task: S.task, no: "all" });
+        bar("正在给所有格加气泡，跑完会自动发成品包"); }
+  catch (e) { fail(e); }
+}
+async function doAbort() {
+  if (!S.task) return;
+  try { await api("/api/comic/abort", { task: S.task }); bar("已中断排队，已出的图保留"); }
+  catch (e) { fail(e); }
+}
+const BADGE = { pending: "排队", rendered: "待加气泡", done: "完成", error: "出错" };
+function slotHtml(p) {
+  const no = String(p.no).padStart(2, "0");
+  const imgs = ['<div class="cell">' + (p.final_url ?
+      '<img loading="lazy" src="' + esc(p.final_url) + "&r=" + encodeURIComponent(p.rev) +
+      '" onclick="zoom(this.src)" alt="成品">' :
+      '<div class="ph">成品</div>') + "</div>",
+    '<div class="cell">' + (p.scene_url ?
+      '<img loading="lazy" src="' + esc(p.scene_url) + "&r=" + encodeURIComponent(p.rev) +
+      '" onclick="zoom(this.src)" alt="底图">' :
+      '<div class="ph">底图</div>') + "</div>"].join("");
+  return '<div class="slot"><div class="head"><span class="no">' + no +
+    '</span><span class="badge b-' + esc(p.error ? "error" : p.state) + '">' +
+    esc(BADGE[p.error ? "error" : p.state] || p.state) + "</span></div>" +
+    '<div class="imgs">' + imgs + "</div>" +
+    '<div class="scene">' + esc(p.scene || p.label || "") + "</div>" +
+    (p.error ? '<div class="err">' + esc(p.error) + "</div>" : "") +
+    '<div class="acts">' +
+    '<button class="btn small" data-a="rerender" data-no="' + no + '">换种子重跑</button>' +
+    '<button class="btn small" data-a="bubble" data-no="' + no + '">加气泡</button>' +
+    '<button class="btn small" data-a="scene" data-no="' + no + '">改画面词</button>' +
+    '<button class="btn small" data-a="manual" data-no="' + no + '">手动修复</button>' +
+    "</div></div>";
+}
+function applyStatus(d) {
+  renderChips(d);
+  const panels = d.panels || [];
+  const key = JSON.stringify(panels.map((p) => [p.no, p.state, p.rev, p.error]));
+  if (key !== S.slots) {
+    S.slots = key;
+    $("slots").innerHTML = panels.map(slotHtml).join("");
+    $("slots").querySelectorAll("button[data-a]").forEach((b) =>
+      b.onclick = () => panelAction(b.dataset.a, b.dataset.no));
+  }
+  $("slotsEmpty").style.display = panels.length ? "none" : "";
+  const shots = d.portraits || [];
+  const skey = JSON.stringify(shots.map((s) => [s.no, s.rev, s.url]));
+  if (skey !== S.shots) {
+    S.shots = skey;
+    $("shots").innerHTML = shots.map((s) =>
+      '<div class="slot"><div class="head"><span class="no">' +
+      esc(String(s.no).padStart(2, "0")) + "</span></div>" +
+      '<div class="imgs"><div class="cell">' + (s.url ?
+      '<img loading="lazy" src="' + esc(s.url) + "&r=" + encodeURIComponent(s.rev || "") +
+      '" onclick="zoom(this.src)" alt="写真">' : '<div class="ph">还没出图</div>') +
+      "</div></div><div class=\"scene\">" + esc(s.prompt || s.text || "") +
+      "</div></div>").join("");
+  }
+  $("runState").textContent = d.running ? ("正在跑：" + d.running) :
+    (d.comfy ? "ComfyUI 在线" : "ComfyUI 暂时连不上（会排队等它回来）");
+  renderDelivery(d.delivery);
+}
+async function panelAction(a, no) {
+  if (!S.task) return;
+  try {
+    if (a === "rerender") {
+      await api("/api/comic/rerender", { task: S.task, no: no,
+                                         scene_skill: $("channel").value });
+      bar("格 " + no + " 已重新排队");
+    } else if (a === "bubble") {
+      await api("/api/comic/bubble", { task: S.task, no: no });
+      bar("格 " + no + " 正在加气泡");
+    } else if (a === "scene") {
+      const cur = await api("/api/comic/status?" + q({ task: S.task }));
+      const p = (cur.panels || []).find((x) => String(x.no).padStart(2, "0") === no);
+      const v = prompt("第 " + no + " 格的画面词（改完整行）", (p && p.scene) || "");
+      if (v == null || !v.trim()) return;
+      await api("/api/comic/edit_scene", { task: S.task, no: no, scene: v.trim(),
+                                           scene_skill: $("channel").value });
+      bar("格 " + no + " 的画面词已改并重新排队");
+    } else if (a === "manual") {
+      const v = prompt("让 qwen 在这张成品上改什么？", "");
+      if (v == null || !v.trim()) return;
+      await api("/api/comic/manual", { task: S.task, no: no, prompt: v.trim() });
+      bar("格 " + no + " 正在就地重画");
+    }
+  } catch (e) { fail(e); }
+}
+function renderDelivery(v) {
+  if (!v) { return; }
+  const rows = (v.packages || []).map((p) =>
+    "<div>· " + esc(p.label) + "：" +
+    (p.state === "sent" ? "已发送" : "发送失败") +
+    "（" + (p.files || 0) + " 张，" + esc(p.at || "") + "）" +
+    (p.error ? " " + esc(p.error) : "") + "</div>").join("");
+  $("delivery").innerHTML = "<div>" + esc(v.hint || "") + "</div>" +
+    "<div style='margin-top:6px'>当前状态：<b>" + esc(v.state) + "</b>" +
+    (v.at ? " · " + esc(v.at) : "") + "</div>" +
+    (rows || "<div class='muted'>还没跑出文件。</div>") +
+    (v.error ? "<div style='color:var(--error)'>" + esc(v.error) + "</div>" : "");
+}
+async function doSend() {
+  if (!S.task) { bar("先选一本作品", true); return; }
+  try { const d = await api("/api/comic/send_qq", { task: S.task });
+        bar(d.hint || "正在重新打包发送"); }
+  catch (e) { fail(e); }
+}
+
+/* ─── 写真 ────────────────────────────────────────────── */
+async function doPortrait() {
+  const brief = $("pBrief").value.trim();
+  if (!brief) { bar("写真也要写一句想拍什么", true); return; }
+  const m = modelPair();
+  try {
+    const d = await api("/api/comic/portrait", {
+      brief: brief, heroine: $("pHeroine").value.trim(),
+      n: Number($("pN").value) || 5, scene_skill: $("channel").value,
+      provider: m.provider, model: m.model, task: S.task || ""
+    });
+    S.task = d.task || S.task;
+    if (S.task) localStorage.setItem(LS_TASK, S.task);
+    $("portraitMsg").textContent = "写真正在写提示词并逐张出图…";
+    await poll("/api/comic/portrait_status", d.job, async (r) => {
+      $("portraitMsg").textContent = "写真跑好了，QQ 会把写真包发给你";
+      await loadTasks();
+      await loadConfig();
+    }, "写真生成中");
+  } catch (e) { $("portraitMsg").textContent = "写真失败：" + (e.message || e); }
+}
+
+/* ─── 轮询与事件 ──────────────────────────────────────── */
+async function tick() {
+  if (!S.task) return;
+  try { applyStatus(await api("/api/comic/status?" + q({ task: S.task }))); }
+  catch (e) { /* 轮询出错不打断页面，下一次再来 */ }
+}
+function zoom(src) {
+  $("lightboxImg").src = src;
+  $("lightbox").classList.add("show");
+}
+$("lightbox").onclick = () => $("lightbox").classList.remove("show");
+$("taskSel").onchange = () => selectTask($("taskSel").value);
+$("btnTasks").onclick = () => loadTasks().catch(fail);
+$("btnScript").onclick = () => doScript().catch(fail);
+$("btnChat").onclick = () => doChat().catch(fail);
+$("chatMsg").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) doChat().catch(fail); };
+$("btnUndo").onclick = () => doUndo().catch(fail);
+$("btnSave").onclick = () => doSave().catch(fail);
+$("btnStart").onclick = () => doStart().catch(fail);
+$("btnBubbleAll").onclick = () => doBubbleAll().catch(fail);
+$("btnAbort").onclick = () => doAbort().catch(fail);
+$("btnSend").onclick = () => doSend().catch(fail);
+$("btnPortrait").onclick = () => doPortrait().catch(fail);
+$("channel").onchange = () => loadRenderOpts().catch(fail);
+$("width").oninput = () => { S.ratio = ""; highlightRatio(); queueRatio(); };
+$("height").oninput = () => { S.ratio = ""; highlightRatio(); queueRatio(); };
+
+(async function boot() {
+  try { await loadConfig(); } catch (e) { fail(e); return; }
+  if (S.task) {
+    try { await selectTask(S.task, true); }
+    catch (e) { /* 作品被清掉了就按新用户走，不让页面卡死 */ }
+  } else {
+    await tick();
+  }
+  S.poll = setInterval(tick, 2500);
+})();
+</script>
+</body>
+</html>

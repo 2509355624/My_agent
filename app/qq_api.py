@@ -1,8 +1,8 @@
 """
-NapCat（OneBot 11）HTTP API 封装 + QQ 文本适配
+SnowLuma（OneBot 11 兼容）HTTP API 封装 + QQ 文本适配
 
-职责边界：只解决「一段文本 / 一张图怎么变成 QQ 消息发出去」。不含任何
-会话、触发、调度逻辑——那些在 app/qq_bot.py。
+职责边界：只解决「一段文本 / 一张图 / 一个本机文件怎么变成 QQ 消息发出去」。
+不含任何会话、触发、调度逻辑——那些在 app/qq_bot.py。
 
 为什么需要这个文件：模型的输出是给网页端看的 Markdown，直接丢给 QQ 会
 看到满屏 `**` 和 `#`，而且单条消息有长度上限会被截断。所以发送前必须
@@ -808,6 +808,45 @@ def send_private(user_id, message, limit=None, reply_to=None):
         ids.append(str((data or {}).get("message_id") or ""))
         _send_log("private", user_id, seg)
     return ids
+
+
+def send_private_file(user_id, path, name=""):
+    """给好友私聊发一个**本机文件**（漫画台的两个成品 zip 走这里）。
+
+    协议端是 SnowLuma（`@snowluma/runtime`），它的 OneBot 11 兼容动作表里
+    `upload_private_file` 是带 `run` 的真实现：`groupFile.uploadPrivate()` 上传
+    成功后会自己补一条 `type:"file"` 的私聊消息。参数为
+    `user_id / file / name / upload_file`，`file` 收「本地路径 / URL / base64」
+    字符串。项目原先只发过图片消息段（`image_segment` 的 `file://` URI），
+    从没调过这个 action。
+
+    **路径写法做双形态回退**：先给 Windows 正斜杠绝对路径（`D:/AI/...`），
+    协议端解析不了再退 `file:///D:/...`（`image_segment` 已验证的形态）。
+    两种都指向同一个本机文件，不重跑生成、不复制第二份。首次上线看日志确认
+    命中哪一支即可。
+
+    超时给 180 秒：zip 几十 MB，QQ 端上传比一张图慢得多，别按 `_call`
+    默认的 20 秒把已经送出去的文件误判成失败。
+    """
+    uid = str(user_id or "").strip()
+    src = os.path.abspath(str(path)).replace("\\", "/")
+    src_uri = "file:///" + src.lstrip("/")
+    last = None
+    for candidate in (src, src_uri):
+        try:
+            data = _call("upload_private_file",
+                         {"user_id": uid, "file": candidate,
+                          "name": str(name or os.path.basename(src)),
+                          "upload_file": True},
+                         timeout=180)
+            log.info("私聊文件已送 %s：%s（%s）", uid, name or src, candidate)
+            return data or {}
+        except Exception as exc:                # 路径形态不认 / 协议端离线
+            last = exc
+            log.warning("私聊文件发送失败（形态 %s）%s：%s",
+                        "file://" if candidate.startswith("file:") else "path",
+                        uid, exc)
+    raise RuntimeError("QQ 文件发送失败：%s" % last)
 
 
 def send_group(group_id, message, limit=None, reply_to=None):

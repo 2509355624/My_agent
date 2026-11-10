@@ -22,8 +22,18 @@
   GET  /api/comic/prompt    取出「这一格原样发给 qwen 的那段文字」，供界面显示与手改
   POST /api/comic/manual    手动修复：拿当前成品当源图，按手输的指令跑一遍 qwen
   POST /api/comic/upload    手动放底图：外部跑好的底图顶替这一格的 raw
-  GET  /api/comic/img       服务 raw/ final/ 下的图片文件
-  GET  /api/comic/download  成品 final/ 打包 zip
+  GET  /api/comic/img       服务 raw/ final/ portraits/ 的图；群友版改走 thumb/ 缩略图
+  GET  /api/comic/download  成品 final/ 打包 zip（站主版）
+  GET  /api/comic/friend_config  群友页启动配置：额度 / 模型白名单 / 画幅预设
+  GET  /api/comic/delivery_status  QQ 直发状态（哪个包发了、失败原因）
+  POST /api/comic/send_qq   手动重发成品包到 QQ（失败不回退网页下载）
+  GET|POST /api/comic/admin  站主 5174 管理页：模型白名单 / 按账号额度 / 发送记录
+
+群友态（2026-11-10 开放，详见 app/comic_quota.py 模块头）：5175 带内部令牌 +
+登录 Cookie 解出的 qq 转发过来才算群友。站主直连 5174 没有那层令牌，**全部放行、
+一个限制都不加**，老页面 /comic 一个字节都不用改。群友才走：按账号配额、作品
+归属校验、网页缩略图、强制跳过最终 2x 放大、output 按账号/作品分流、跑完 QQ
+直发 zip。高清原图不经 Cloudflare 隧道，网页只看服务端磁盘上的 WEBP 缩略图。
 
 为什么状态不用内存而读 state.json：comic.run 本来就逐格落盘 + 断点续跑，
 `pending → rendered → done` 的进度全在里面——轮询它就是唯一事实来源，
@@ -44,13 +54,102 @@ import time
 import uuid
 import zipfile
 
-from flask import Blueprint, jsonify, request, send_file, send_from_directory
+from flask import (Blueprint, Response, g, jsonify, request, send_file,
+                   send_from_directory)
 
-from app import (comic, comic_agent, comic_portrait, comic_render_opts,
-                 image_jobs, silver_comic)
+from app import (comic, comic_agent, comic_delivery, comic_portrait,
+                 comic_quota, comic_render_opts, comic_thumb, image_jobs,
+                 silver_comic)
 from app.config import BASE_DIR
 
 bp = Blueprint("comic_api", __name__)
+
+# ─── 群友态（2026-11-10 开放漫画台）──────────────────────
+#
+# 5175 的 `_forward()` 带 `X-Friend-Token` 内部令牌并把登录 Cookie 解出的 QQ
+# 写死塞进请求；站主直连 5174 没有那个头。`comic_quota.friend_qq()` 只认这个
+# 组合，所以**站主版 /comic 的所有行为完全不变**，前端一个字节都不用动。
+# 群友身份挂在 `g` 上：后台线程没有 request 上下文，但 `_task_dir` 的归属校验
+# 只在请求线程里跑，不冲突。
+
+@bp.before_request
+def _friend_context():
+    try:
+        g.comic_qq = comic_quota.friend_qq()
+    except Exception:
+        g.comic_qq = ""
+
+
+def _qq():
+    """当前请求的群友 QQ；站主返回空串（= 全部放行）。"""
+    try:
+        return getattr(g, "comic_qq", "") or ""
+    except RuntimeError:          # 没有请求上下文（后台线程/CLI）
+        return ""
+
+
+def _job_visible(task_value):
+    """群友能不能轮询这个 job。job 号是随机的，但剧本正文也在响应里，
+    猜到一个 id 就该只能看到自己的。`task` 还是 None = 后台还没建目录，
+    那时无从判断，放行（前端只拿得到自己刚提交的 job）。
+    """
+    qq = _qq()
+    name = os.path.basename(str(task_value or ""))
+    if not qq or not name:
+        return True
+    return comic_quota.can_read(os.path.join(_COMICS_ROOT, name), qq)
+
+
+def _img_url(task_id, rel, thumb=None):
+    """同一张图的 URL：群友版指服务端缩略图，站主版照旧指高清原图。
+
+    缩略图不是塞进浏览器 Local Storage 的字节，而是任务目录 `thumb/` 下按需
+    生成、落盘缓存的 WEBP（见 `app/comic_thumb`）。这样换设备、清缓存、刷新
+    页面都能重新拉回来；高清原图走 QQ zip，网页一次都不用碰 9MB 的 PNG。
+    """
+    f = thumb if (_qq() and thumb) else rel
+    return "/api/comic/img?task=%s&f=%s" % (task_id, f)
+
+
+def _need(kind):
+    """群友请求前检查额度 → 额度不足返回错误响应；站主永远返回 None。
+
+    只检查不扣：真正扣在各端点确认启动成功后，失败的调用不白扣次数。
+    """
+    qq = _qq()
+    if not qq:
+        return None
+    if comic_quota.remaining(qq, kind) <= 0:
+        label = {"script": "剧本生成", "revise": "修订助手",
+                 "comic": "漫画生成", "portrait": "写真集"}.get(kind, kind)
+        return jsonify({"ok": False,
+                        "error": "免费的%s次数用完了，找站主加次数吧" % label,
+                        "quota": comic_quota.snapshot(qq)}), 403
+    return None
+
+
+def _refund(kind):
+    """端点没真正启动（参数错、任务在跑、建目录失败）时退还预扣。"""
+    qq = _qq()
+    if qq:
+        comic_quota.refund(qq, kind)
+
+
+@bp.route("/api/comic/friend_config", methods=["GET"])
+def api_comic_friend_config():
+    """群友页启动配置：剩余额度、可用编剧模型、画幅预设、发送状态说明。"""
+    qq = _qq()
+    return jsonify({"ok": True, "friend": bool(qq),
+                    "quota": comic_quota.snapshot(qq) if qq else None,
+                    "models": comic_quota.models() if qq else None,
+                    "panel_tiers": comic_quota.PANEL_TIERS,
+                    "ratio_presets": [
+                        {"key": "2:3", "label": "竖屏 2:3", "w": 832, "h": 1216},
+                        {"key": "3:4", "label": "竖屏 3:4", "w": 960, "h": 1280},
+                        {"key": "1:1", "label": "方块 1:1", "w": 1024, "h": 1024},
+                        {"key": "3:2", "label": "横屏 3:2", "w": 1216, "h": 832},
+                        {"key": "16:9", "label": "横屏 16:9", "w": 1344, "h": 768},
+                    ]})
 
 # 任务根目录：CLI 里用相对路径 comics/（cwd 在项目根），API 这里钉死绝对，
 # 免得 Flask 的启动 cwd 不同把任务散到别处。
@@ -159,12 +258,20 @@ def _append_chat_history(path, user_msg, assistant_msg):
 
 
 def _task_dir(task_id):
-    """task id → 目录绝对路径。只认一级目录名，堵路径穿越。"""
+    """task id → 目录绝对路径。只认一级目录名，堵路径穿越。
+
+    群友请求额外验归属：每个任务目录里的 `owner.json` 是谁建的就只给谁看。
+    不这么拦的话，`/api/comic/tasks` 一把 `os.listdir` 就能把站主所有漫画和
+    别人的作品全列出来，改个 task 参数连原图都能拉走。
+    """
     name = os.path.basename(str(task_id or "").strip())
     if not name:
         raise ValueError("缺 task")
     path = os.path.join(_COMICS_ROOT, name)
     if not os.path.isdir(path):
+        raise ValueError("任务不存在：%s" % name)
+    qq = _qq()
+    if qq and not comic_quota.can_read(path, qq):
         raise ValueError("任务不存在：%s" % name)
     return path
 
@@ -357,6 +464,9 @@ def _spawn(path, phase, fn, on_error=None):
             return False
         _JOBS[path] = {"phase": phase, "error": None}
 
+    # 归属要在**请求线程**取：flask.g 是 thread-local，后台 worker 里读不到。
+    owner = comic_quota.owner_of(path)
+
     def _worker():
         try:
             fn()
@@ -372,6 +482,11 @@ def _spawn(path, phase, fn, on_error=None):
             return
         with _JOBS_LOCK:
             _JOBS[path] = {"phase": None, "error": None}
+        # 群友任务：每一阶段跑完都试一次 QQ 直发。delivery 内部按文件指纹
+        # 去重——阶段一只发底图包，加完气泡后成品包指纹变了才发第二个包；
+        # 单纯重跑同一张（指纹没变）不会重复打扰群友。
+        if owner:
+            comic_delivery.spawn_auto(path, owner)
 
     threading.Thread(target=_worker, daemon=True, name="comic-studio").start()
     return True
@@ -415,6 +530,7 @@ def api_comic_tasks():
     列表，它们由 `portraits` 那条链路自己管。
     """
     out = []
+    qq = _qq()
     try:
         names = os.listdir(_COMICS_ROOT)
     except OSError:
@@ -422,6 +538,10 @@ def api_comic_tasks():
     for name in names:
         path = os.path.join(_COMICS_ROOT, name)
         if not os.path.isdir(path):
+            continue
+        # 群友只看到自己建的任务；站主（qq 空）照旧看全部，含没有 owner.json
+        # 的老任务。开放前建的站主作品不带 owner，天然对群友不可见。
+        if qq and comic_quota.owner_of(path) != qq:
             continue
         script = os.path.join(path, "script.md")
         if not os.path.isfile(script):
@@ -475,9 +595,19 @@ def api_comic_script():
     provider / model 由前端下拉传入：不传就走全局默认，与别的环节同口径。
     """
     data = request.get_json(silent=True) or {}
+    qq = _qq()
     brief = str(data.get("brief") or "").strip()
     if not brief:
         return jsonify({"ok": False, "error": "缺 brief（一句话设定）"}), 400
+    deny = _need("script")
+    if deny:
+        return deny
+    # 群友版：只给一次免费剧本生成。用站主白名单里的模型，不给自定义入口；
+    # 自带 key 也不放行（会白嫖后面整条 GPU 队列）。
+    if qq:
+        if not comic_quota.consume(qq, "script"):
+            return jsonify({"ok": False,
+                            "error": "免费的剧本生成次数用完了"}), 403
     try:
         panels_n = int(data.get("panels") or 10)
     except (TypeError, ValueError):
@@ -485,9 +615,13 @@ def api_comic_script():
     # 格数上限以 silver 编剧为准（2026-10-22 用户要 50 页，原来这里写死 30）。
     # pov 路线自己还有 comic_story.clamp_panels 收口，不用在这拦。
     panels_n = max(1, min(silver_comic.MAX_PANELS, panels_n))
+    if qq:
+        panels_n = min(panels_n, comic_quota.limits(qq)["max_panels"])
     character = str(data.get("character") or "").strip()
     provider = str(data.get("provider") or "").strip() or None
     model = str(data.get("model") or "").strip() or None
+    if qq:
+        provider, model = comic_quota.resolve_model(provider, model)
     # 自由 / 第三人称统一走 silver 连续漫画 skill；pov 保持原路线。
     # free / third 不再调用 comic_agent 的复杂规范或内容补正。
     silver_mode = str(data.get("silver_mode") or "no_bubble").strip().lower()
@@ -598,6 +732,10 @@ def api_comic_script():
                 comic.log.warning("取标题失败 job=%s，目录退回纯编号", job)
             path = comic._next_task_dir(_COMICS_ROOT, title=title)
             os.makedirs(path, exist_ok=True)
+            # 群友任务一建目录就钉归属。后面所有取图 / 任务列表 / QQ 直发都
+            # 靠这个文件认主人，早一步写能挡住「编剧还没完成就来拉图」的窗口。
+            if qq:
+                comic_quota.set_owner(path, qq)
             with open(os.path.join(path, "script_original.md"), "w",
                       encoding="utf-8") as f:
                 f.write(text + "\n")
@@ -630,6 +768,9 @@ def api_comic_script():
             with _SCRIPT_LOCK:
                 _SCRIPT_JOBS[job].update(state="error", error=str(exc))
             comic.log.exception("编剧失败 job=%s", job)
+            # 编剧失败/超时不该白扣那唯一一次免费机会。
+            if qq:
+                comic_quota.refund(qq, "script")
 
     threading.Thread(target=_work, daemon=True, name="comic-script").start()
     return jsonify({"ok": True, "job": job})
@@ -644,6 +785,8 @@ def api_comic_script_status():
         if j is None:
             return jsonify({"ok": False,
                             "error": "没有这个编剧任务（可能已过期）"}), 404
+        if not _job_visible(j.get("task")):
+            return jsonify({"ok": False, "error": "没有这个编剧任务"}), 404
         snap = dict(j, log=list(j["log"]))
     snap["ok"] = True
     return jsonify(snap)
@@ -661,6 +804,19 @@ def api_comic_save():
     text = str(data.get("script") or "")
     if not text.strip():
         return jsonify({"ok": False, "error": "剧本不能为空"}), 400
+    # 群友：格数上限不能在「保存」这一步被绕过去。手写一份 30 格剧本再点
+    # 保存，/start 也会拦，但让坏本子先落盘只会让人白改一场，不如进门就说清。
+    qq = _qq()
+    if qq:
+        try:
+            _, peek = comic.parse_script_text(text)
+        except Exception:
+            peek = []
+        cap = comic_quota.limits(qq)["max_panels"]
+        if len(peek) > cap:
+            return jsonify({"ok": False,
+                            "error": "这一本 %d 格，超过你的 %d 格上限，"
+                                     "找站主开更高档位" % (len(peek), cap)}), 403
     # 先落盘再解析：解析失败说明改坏了契约，回滚不让坏本子进管道。
     script_path = os.path.join(path, "script.md")
     with open(script_path, "w", encoding="utf-8") as f:
@@ -696,11 +852,28 @@ def api_comic_start():
     """确认开跑：后台线程跑阶段一（所有格的场景图）。scene_skill 可选覆盖，
     默认就是 comic.SCENE_SKILL（anima-line）。"""
     data = request.get_json(silent=True) or {}
+    qq = _qq()
     try:
         path = _task_dir(data.get("task"))
-        _load_task(path)                    # 开跑前先验一遍剧本可解析
+        task = _load_task(path)                    # 开跑前先验一遍剧本可解析
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
+    need_charge = False
+    if qq:
+        lim = comic_quota.limits(qq)
+        if len(task.panels) > lim["max_panels"]:
+            return jsonify({"ok": False,
+                            "error": "这一本 %d 格，超过你的 %d 格上限，"
+                                     "找站主开更高档位" % (
+                                         len(task.panels), lim["max_panels"])}), 403
+        # 一本 = 一次生成机会，按任务幂等：同一本里换种子 / 改词 / 从底图重画
+        # 都只吃 GPU 不花 Token，随便重跑，不再扣次数。
+        need_charge = not comic_quota.charged(qq, "comic",
+                                              os.path.basename(path))
+        if need_charge:
+            deny = _need("comic")
+            if deny:
+                return deny
     scene_skill = _resolve_skill(path, data.get("scene_skill"))
     _save_task_skill(path, scene_skill)
     started = _spawn(path, "scene", lambda: comic.run(
@@ -708,6 +881,10 @@ def api_comic_start():
         scene_skill=scene_skill), on_error=_mark_pending_failed(path))
     if not started:
         return jsonify({"ok": False, "error": "这个任务已经在跑了"}), 409
+    # 扣次放在启动成功之后：409 / 404 的调用不该白吃一次机会。
+    if qq and need_charge:
+        comic_quota.consume(qq, "comic")
+        comic_quota.mark_charged(qq, "comic", os.path.basename(path))
     return jsonify({"ok": True, "scene_skill": scene_skill})
 
 
@@ -817,8 +994,12 @@ def api_comic_status():
         except ValueError:
             return jsonify({"ok": False, "error": str(exc)}), 404
         if not os.path.isfile(os.path.join(path, "script.md")):
+            qq = _qq()
             return jsonify({"ok": True, "task": os.path.basename(path),
                             "title": "", "running": None, "job_error": None,
+                            "queue": image_jobs.queue_depth(),
+                            "quota": comic_quota.snapshot(qq) if qq else None,
+                            "delivery": comic_delivery.view(path) if qq else None,
                             "comfy": _comfy_state(),
                             "fix": None, "panels": [],
                             "scene_skill": _resolve_skill(path),
@@ -837,13 +1018,19 @@ def api_comic_status():
                 "rev": "%s/%s" % (_rev(task.raw_path(p)), _rev(task.final_path(p))),
                 "error": p.error}
         if os.path.isfile(task.raw_path(p)):
-            item["scene_url"] = "/api/comic/img?task=%s&f=raw/%s_raw.png" % (
-                task.task_id, p.no)
+            item["scene_url"] = _img_url(task.task_id, "raw/%s_raw.png" % p.no,
+                                         comic_thumb.rel(p.no, "raw"))
         if os.path.isfile(task.final_path(p)):
-            item["final_url"] = "/api/comic/img?task=%s&f=final/%s_final.png" % (
-                task.task_id, p.no)
+            item["final_url"] = _img_url(task.task_id, "final/%s_final.png" % p.no,
+                                         comic_thumb.rel(p.no, "final"))
         panels.append(item)
+    qq = _qq()
     return jsonify({"ok": True, "task": task.task_id,
+                    # 全站共用的串行队列里还有几张在等，群友页顶部显示给用户。
+                    # 漫画台本来就是单张串行提交，不会一次占满 10 个名额。
+                    "queue": image_jobs.queue_depth(),
+                    "quota": comic_quota.snapshot(qq) if qq else None,
+                    "delivery": comic_delivery.view(path) if qq else None,
                     "title": task.meta.get("title", ""),
                     "running": running.get("phase"),
                     "job_error": running.get("error"),
@@ -875,12 +1062,20 @@ def api_comic_fix():
     状态里带 fix.json。
     """
     data = request.get_json(silent=True) or {}
+    qq = _qq()
     try:
         path = _task_dir(data.get("task"))
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
+    # 补正要再跑一次编剧模型，也是实打实的 Token。群友页不摆这个按钮，
+    # 但接口不能留成免收费后门，跟修订助手共用那 3 次额度。
+    deny = _need("revise")
+    if deny:
+        return deny
     provider = str(data.get("provider") or "").strip() or None
     model = str(data.get("model") or "").strip() or None
+    if qq:
+        provider, model = comic_quota.resolve_model(provider, model)
 
     orig_path = os.path.join(path, "script_original.md")
     if not os.path.isfile(orig_path):
@@ -897,22 +1092,33 @@ def api_comic_fix():
         return jsonify({"ok": False,
                         "error": "这个任务没存原始需求（老目录缺 brief.txt），"
                                  "请在请求里带上 brief"}), 400
+    charged = bool(qq) and comic_quota.consume(qq, "revise")
+    if qq and not charged:
+        return jsonify({"ok": False,
+                        "error": "免费的修订助手次数用完了"}), 403
 
     def _work():
-        fix = comic_agent.fix_script(
-            brief, original, provider=provider, model=model,
-            progress=lambda m: comic.log.info("[comic-fix] %s", m),
-            pov_mode=_read_pov_mode(path))
-        final = fix.get("text") or original
-        with open(os.path.join(path, "script.md"), "w", encoding="utf-8") as f:
-            f.write(final + "\n")
-        _write_fix_report(path, fix)
-        comic.log.info("补正重跑完成 %s（%s）", os.path.basename(path),
-                       "采纳" if fix.get("adopted") else "未采纳")
+        try:
+            fix = comic_agent.fix_script(
+                brief, original, provider=provider, model=model,
+                progress=lambda m: comic.log.info("[comic-fix] %s", m),
+                pov_mode=_read_pov_mode(path))
+            final = fix.get("text") or original
+            with open(os.path.join(path, "script.md"), "w", encoding="utf-8") as f:
+                f.write(final + "\n")
+            _write_fix_report(path, fix)
+            comic.log.info("补正重跑完成 %s（%s）", os.path.basename(path),
+                           "采纳" if fix.get("adopted") else "未采纳")
+        except BaseException:
+            if charged:
+                comic_quota.refund(qq, "revise")
+            raise
 
     # 用 _spawn 而不是自己开线程：状态里的 `running: "fix"` 和「同一任务只允许
     # 一个后台线程」都是现成的，跟 rerender / bubble / manual 一个口径。
     if not _spawn(path, "fix", _work):
+        if charged:
+            comic_quota.refund(qq, "revise")
         return jsonify({"ok": False, "error": "这个任务已经有别的事在跑"}), 409
     return jsonify({"ok": True, "task": os.path.basename(path)})
 
@@ -1001,10 +1207,18 @@ def api_comic_render_opts_save():
     钳位比拒掉友好）。保存只影响**之后**渲染的格——已出的图不动。
     """
     data = request.get_json(silent=True) or {}
+    qq = _qq()
     task_id = (data.get("task") or "").strip()
     scope = str(data.get("scope") or "task").strip().lower()
     if scope not in ("task", "global"):
         scope = "task"
+    # 群友版：只能改自己这一本的画幅。不许碰「全局默认」（那会把站主的
+    # 出图参数一起改掉），也不给 reset（reset 会删掉强制跳过放大的痕迹，
+    # 而且群友版根本没有这个按钮）。
+    if qq:
+        scope = "task"
+        if data.get("reset"):
+            return jsonify({"ok": False, "error": "群友版不支持重置渲染参数"}), 403
     path = ""
     if task_id:
         try:
@@ -1028,13 +1242,24 @@ def api_comic_render_opts_save():
                         "defaults_saved":
                             comic_render_opts.has_defaults(skill)})
 
+    raw_opts = data.get("opts") or {}
+    if qq:
+        # 只认宽高，其余（LoRA / 采样 / 放大模型）一律沿用当前生效值。
+        # 画幅预设由前端换成 width/height 数字发过来，服务端不信任别的字段。
+        raw_opts = {"width": raw_opts.get("width"),
+                    "height": raw_opts.get("height")}
     # base 传当前生效值：前端只提交**看得见**的字段（非 LoRA 渠道不提交 loras、
     # 单段渠道不提交 hires），缺的部分要沿用，不能变成空。
     opts, errors, warnings = comic_render_opts.normalize(
-        data.get("opts") or {}, base=comic_render_opts.load(path, skill),
+        raw_opts, base=comic_render_opts.load(path, skill),
         resources=_render_resources())
     if errors:
         return jsonify({"ok": False, "error": "；".join(errors)}), 400
+    if qq:
+        # 最后再钉一次：不管前端发了什么、render.json 里存了什么，群友任务
+        # 落盘的参数必须跳过最终 2x 放大。`load()` 兜的是「没存过参数」，
+        # 这里兜的是「存过之后又被手改」的情况。
+        opts.setdefault("upscale", {})["final_skip"] = True
     if scope == "global":
         comic_render_opts.save_defaults(opts, skill)
     else:
@@ -1144,6 +1369,7 @@ def api_comic_portrait():
     堵死轮询（和编剧同一个理由）。
     """
     data = request.get_json(silent=True) or {}
+    qq = _qq()
     brief = str(data.get("brief") or "").strip()
     if not brief:
         return jsonify({"ok": False, "error": "想拍什么总得写一句"}), 400
@@ -1152,9 +1378,13 @@ def api_comic_portrait():
     except (TypeError, ValueError):
         n = 4
     n = max(1, min(comic_portrait.MAX_SHOTS, n))
+    if qq:
+        n = min(n, comic_quota.limits(qq)["max_shots"])
     heroine = str(data.get("heroine") or "").strip()
     provider = str(data.get("provider") or "").strip() or None
     model = str(data.get("model") or "").strip() or None
+    if qq:
+        provider, model = comic_quota.resolve_model(provider, model)
 
     try:
         path = _portrait_task_dir(data)
@@ -1165,6 +1395,17 @@ def api_comic_portrait():
                    for j in _PORTRAIT_JOBS.values())
     if busy:
         return jsonify({"ok": False, "error": "这个任务的写真还在跑，等它跑完"}), 409
+    charged_now = False
+    if qq:
+        comic_quota.set_owner(path, qq)
+        tid = os.path.basename(path)
+        if not comic_quota.charged(qq, "portrait", tid):
+            deny = _need("portrait")
+            if deny:
+                return deny
+            comic_quota.consume(qq, "portrait")
+            comic_quota.mark_charged(qq, "portrait", tid)
+            charged_now = True
 
     # 阶段一渠道（2026-10-19）：跟剧本模式同一套解析，写真也用参数卡选的那个。
     skill = _resolve_skill(path, data.get("scene_skill"))
@@ -1191,10 +1432,15 @@ def api_comic_portrait():
                                model=model, progress=_progress, skill=skill)
             with _PORTRAIT_LOCK:
                 _PORTRAIT_JOBS[job].update(state="done")
+            if qq:
+                comic_delivery.spawn_auto(path, qq)
         except BaseException as exc:        # SystemExit 不是 Exception（见模块头）
             with _PORTRAIT_LOCK:
                 _PORTRAIT_JOBS[job].update(state="error", error=str(exc))
             comic.log.exception("写真批次失败 job=%s", job)
+            if qq and charged_now:
+                # 只有这次新扣的机会才退；同一本换种子重跑失败不该白送一次。
+                comic_quota.refund(qq, "portrait")
 
     threading.Thread(target=_work, daemon=True, name="comic-portrait").start()
     return jsonify({"ok": True, "job": job, "task": os.path.basename(path)})
@@ -1209,6 +1455,8 @@ def api_comic_portrait_status():
         if j is None:
             return jsonify({"ok": False,
                             "error": "没有这个写真任务（可能已过期）"}), 404
+        if not _job_visible(j.get("task")):
+            return jsonify({"ok": False, "error": "没有这个写真任务"}), 404
         snap = dict(j, log=list(j["log"]))
     snap["shots"] = _portrait_shots(snap.get("task"))
     snap["ok"] = True
@@ -1221,10 +1469,12 @@ def _portrait_shots(path):
         return []
     out = []
     for s in comic_portrait.load_prompts(path):
+        no = str(s.get("no") or "").zfill(2)
         fp = comic_portrait.shot_path(path, s.get("no"))
         item = dict(s)
-        item["url"] = ("/api/comic/img?task=%s&f=portraits/%s.png"
-                       % (os.path.basename(path), str(s.get("no")).zfill(2)))
+        item["url"] = _img_url(os.path.basename(path),
+                               "portraits/%s.png" % no,
+                               comic_thumb.rel(no, "portrait"))
         item["rev"] = _rev(fp)
         out.append(item)
     return out
@@ -1256,9 +1506,16 @@ def api_comic_portrait_shot():
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
     fp = comic_portrait.shot_path(path, no)
+    owner = comic_quota.owner_of(path)
+    if owner:
+        # 单张重跑只吃 GPU，但图确实换了，写真包得重新发一份（delivery 按
+        # 文件指纹去重，没变的包不会重复打扰人）。
+        comic_delivery.spawn_auto(path, owner)
     return jsonify({"ok": True, "shot": dict(
-        shot, url=("/api/comic/img?task=%s&f=portraits/%s.png"
-                   % (os.path.basename(path), no)), rev=_rev(fp))})
+        shot, url=_img_url(os.path.basename(path),
+                           "portraits/%s.png" % no,
+                           comic_thumb.rel(no, "portrait")),
+        rev=_rev(fp))})
 
 
 @bp.route("/api/comic/chat_revise", methods=["POST"])
@@ -1275,15 +1532,23 @@ def api_comic_chat_revise():
     拒绝改稿——改稿落地会把正在渲染的格偷偷换掉，等跑完再说。
     """
     data = request.get_json(silent=True) or {}
+    qq = _qq()
     try:
         path = _task_dir(data.get("task"))
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
+    # 群友：只有 3 次免费修订。先查够不够、后面预扣，没「落实」就退回去。
+    deny = _need("revise")
+    if deny:
+        return deny
     message = str(data.get("message") or "").strip()
     if not message:
         return jsonify({"ok": False, "error": "先写一句话再发送"}), 400
     provider = str(data.get("provider") or "").strip() or None
     model = str(data.get("model") or "").strip() or None
+    if qq:
+        # 修订助手也是编剧模型，一样只许用站主白名单里的那个，不给自带 key。
+        provider, model = comic_quota.resolve_model(provider, model)
 
     with _JOBS_LOCK:
         running = (_JOBS.get(path) or {}).get("phase")
@@ -1303,11 +1568,37 @@ def api_comic_chat_revise():
             brief = f.read().strip()
     history = _read_chat_history(path)
 
+    # 预扣 + 未落实就退：对外就是「只有修订助手真的改了剧本才扣一次」。
+    # 为什么要预扣而不是改完再扣：两个标签页同时发一句话，若都先查后扣，
+    # 两次都能落地、却只扣得起一次，等于白送。预扣是原子的（quota 里 RLock
+    # 读改写），拿不到名额的那个直接 403；反问/答疑/LLM 失败统一 _settle(False)
+    # 退回去。站主直连不预扣、不结算。
+    precharged = bool(qq) and comic_quota.consume(qq, "revise")
+    if qq and not precharged:
+        return jsonify({"ok": False,
+                        "error": "免费的修订助手次数用完了，找站主加次数吧"}), 403
+    settled = {"done": False}
+
+    def _settle(landed):
+        if settled["done"]:
+            return
+        settled["done"] = True
+        if qq and precharged and not landed:
+            comic_quota.refund(qq, "revise")
+
     job = uuid.uuid4().hex[:12]
     with _CHAT_LOCK:
+        # 同一任务同时只许一句话在跑：上面 _JOBS 只挡渲染，不挡两个改稿线程
+        # 互相覆盖 script.md。放在锁里判，避免并发请求一起通过。
+        if any(j.get("state") == "running" and
+               j.get("task") == os.path.basename(path)
+               for j in _CHAT_JOBS.values()):
+            _settle(False)
+            return jsonify({"ok": False, "error": "上一句还在改，等它回完再发"}), 409
         _CHAT_JOBS[job] = {"state": "running", "reply": "", "changed": False,
                            "diff": [], "warnings": [], "error": None,
-                           "task": os.path.basename(path), "at": None}
+                           "task": os.path.basename(path), "at": None,
+                           "charged": False}
         for k in [k for k, v in _CHAT_JOBS.items()
                   if v["state"] != "running"][:-_CHAT_KEEP]:
             _CHAT_JOBS.pop(k, None)
@@ -1318,7 +1609,8 @@ def api_comic_chat_revise():
                                     provider=provider, model=model,
                                     pov_mode=_read_pov_mode(path))
         reply = r.get("reply") or ""
-        if r.get("changed") and r.get("script"):
+        landed = bool(r.get("changed") and r.get("script"))
+        if landed:
             # 单级回退：改前整份备份。改两次只有最近一次可撤销——再早的用
             # 「只保存」+ 手改都能到，聊天框的定位是小修小改，不是版本管理。
             with open(script_path, encoding="utf-8") as f:
@@ -1330,10 +1622,14 @@ def api_comic_chat_revise():
                 f.write(r["script"] + "\n")
             comic.log.info("对话改稿落地 %s（%s）", os.path.basename(path),
                            "、".join(d["no"] for d in r.get("diff", [])))
+        # 落实判定只认「剧本真的写回磁盘」。在这之后就算追加聊天历史出错，
+        # 也不该把已落地的改动退成免费。
+        _settle(landed)
         _append_chat_history(path, message, reply)
         with _CHAT_LOCK:
             _CHAT_JOBS[job].update(
-                state="done", reply=reply, changed=bool(r.get("changed")),
+                state="done", reply=reply, changed=landed, charged=bool(
+                    qq and precharged and landed),
                 diff=r.get("diff") or [], warnings=r.get("warnings") or [],
                 at=time.strftime("%H:%M:%S"))
 
@@ -1342,6 +1638,7 @@ def api_comic_chat_revise():
             _work()
         except BaseException as exc:        # SystemExit 不是 Exception
             comic.log.exception("对话改稿失败 %s", path)
+            _settle(False)
             with _CHAT_LOCK:
                 _CHAT_JOBS[job].update(state="error", error=str(exc))
 
@@ -1359,8 +1656,15 @@ def api_comic_chat_status():
         if j is None:
             return jsonify({"ok": False,
                             "error": "没有这个对话任务（可能已过期）"}), 404
+        if not _job_visible(j.get("task")):
+            return jsonify({"ok": False, "error": "没有这个对话任务"}), 404
         snap = dict(j)
     snap["ok"] = True
+    # 群友页轮询完这句话就顺手拿最新余额，不用再多发一个请求。
+    # 「这次有没有扣」由 job 里的 charged 告诉前端：反问/答疑是不扣的。
+    qq = _qq()
+    if qq:
+        snap["quota"] = comic_quota.snapshot(qq)
     return jsonify(snap)
 
 
@@ -1599,26 +1903,109 @@ def api_comic_upload():
     panel.state, panel.seed, panel.error = "rendered", None, None
     task.save_state()
     comic.log.info("格 %s 底图已手动替换 → %s", no, task._rel(task.raw_path(panel)))
+    owner = comic_quota.owner_of(path)
+    if owner:
+        comic_delivery.spawn_auto(path, owner)
     return jsonify({"ok": True, "no": no})
 
 
 @bp.route("/api/comic/img", methods=["GET"])
 def api_comic_img():
-    """服务 raw/ final/ portraits/ 的图。f 只认 raw/NN_raw.png、final/NN_final.png、
-    portraits/NN.png 三种形态（正则钉死），别的一律 404——不做成通用静态目录服务。"""
+    """服务 raw/ final/ portraits/ 的图，外加群友版专用的 WEBP 缩略图。
+
+    `f` 只认四种形态（正则 / `comic_thumb.parse_rel` 钉死），别的一律 404——
+    不做成通用静态目录服务。缩略图是懒生成：源文件比缓存新就重画，否则只读盘；
+    万一 Pillow 打不开，退回高清原图，别让整页变成一排破图。
+    """
     import re as _re
     f = str(request.args.get("f") or "")
-    if not _re.fullmatch(r"(?:(?:raw|final)/\d{2}_(?:raw|final)|portraits/\d{2})\.png",
-                         f):
+    thumb = comic_thumb.parse_rel(f)
+    if thumb:
+        src_rel = comic_thumb.src_rel(*thumb)
+    elif _re.fullmatch(r"(?:(?:raw|final)/\d{2}_(?:raw|final)|portraits/\d{2})\.png",
+                       f):
+        src_rel = f
+    else:
         return jsonify({"ok": False, "error": "非法文件名"}), 404
     try:
         path = _task_dir(request.args.get("task"))
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
-    full = os.path.join(path, f.replace("/", os.sep))
+    if thumb:
+        cached = comic_thumb.ensure(path, *thumb)
+        if cached and os.path.isfile(cached):
+            # 几十 KB 的 WEBP，直接读成字节回：不把文件句柄挂在响应上，
+            # 5175 反代 / 测试客户端都能一次收干净。ETag 用 mtime+size，
+            # 换种子重跑后缩略图变了，浏览器不会接着用旧缓存。
+            with open(cached, "rb") as f:
+                data = f.read()
+            resp = Response(data, mimetype="image/webp")
+            resp.set_etag("%x-%x" % (os.stat(cached).st_mtime_ns, len(data)))
+            return resp.make_conditional(request)
+        # ensure 返回 None（源图不在 / PIL 失败）时下面会自然落到 404 或原图
+    full = os.path.join(path, src_rel.replace("/", os.sep))
     if not os.path.isfile(full):
         return jsonify({"ok": False, "error": "文件不存在"}), 404
-    return send_from_directory(path, f)
+    return send_from_directory(path, src_rel)
+
+
+@bp.route("/api/comic/delivery_status", methods=["GET"])
+def api_comic_delivery_status():
+    """QQ 直发状态轮询：哪个包发了、几张、什么时候、失败原因。"""
+    try:
+        path = _task_dir(request.args.get("task"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    return jsonify(dict(comic_delivery.view(path), ok=True))
+
+
+@bp.route("/api/comic/send_qq", methods=["POST"])
+def api_comic_send_qq():
+    """手动把成品包重发到 QQ。发送失败只提示找站主，**不回退网页下载**。
+
+    群友自己点（5175 注入 QQ）只能发自己的任务；站主在 5174 管理页点，
+    QQ 从任务目录的 owner.json 取，也能显式给 qq。60 秒冷却防连点。
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        path = _task_dir(data.get("task"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    qq = (_qq() or comic_quota.owner_of(path)
+          or str(data.get("qq") or "").strip())
+    if not qq.isdigit():
+        return jsonify({"ok": False,
+                        "error": "这个任务没有绑定 QQ，没法直发"}), 400
+    ok, wait = comic_delivery.manual_ok(path)
+    if not ok:
+        return jsonify({"ok": False,
+                        "error": "刚发过，等 %d 秒再点" % wait}), 429
+
+    def _run():
+        try:
+            comic_delivery.deliver(path, qq, force=True)
+        except Exception as exc:
+            comic.log.exception("手动重发 QQ 失败 %s", path)
+            comic_quota.note_delivery(qq, os.path.basename(path),
+                                      "failed", str(exc))
+
+    threading.Thread(target=_run, daemon=True, name="comic-resend").start()
+    return jsonify({"ok": True, "hint": comic_delivery.view(path)["hint"]})
+
+
+@bp.route("/api/comic/admin", methods=["GET", "POST"])
+def api_comic_admin():
+    """站主 5174 管理页：看/改编剧模型白名单与按账号额度。
+
+    群友请求（带内部令牌）一律 403——哪怕猜到了这个路径。站主直连 5174
+    本来就没有那层令牌，管理页与 /api/qq_bill 是同一套信任边界。
+    """
+    if _qq():
+        return jsonify({"ok": False, "error": "没有权限"}), 403
+    if request.method == "POST":
+        return jsonify(dict(comic_quota.admin_update(
+            request.get_json(silent=True) or {}), ok=True))
+    return jsonify(dict(comic_quota.admin_view(), ok=True))
 
 
 @bp.route("/api/comic/download", methods=["GET"])

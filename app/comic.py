@@ -868,18 +868,28 @@ def _require_comfy():
 
 
 def _out_dir_for(task):
-    """这本漫画的格子存哪：`output/web/漫画_<任务号>/<渠道>/`（2026-10-18）。
+    """这本漫画的格子存哪（2026-10-18，2026-11-10 加群友分流）。
 
-    任务号只有渲染这一层知道（`_submit` 是从各个 render_* 里调下来的），所以
-    显式传给 `enqueue(out_dir=...)`。不传就落到 `web/生图页`，一本漫画的格子
-    会跟生图页的图混在一起，正是用户抱怨「找图贼麻烦」的那种局面。
+    - 站主：老样子 `output/web/漫画_<任务号>/<渠道>/`。
+    - 群友：`output/群友漫画台/<QQ>/<作品>/<渠道>/`，按账号、按作品分开，
+      和成品 zip 的落点（comic_delivery.delivery_dir）是同一棵目录树。
+
+    归属读任务目录里的 `owner.json`，不是看当前请求：这里跑在渲染后台线程里，
+    没有 Flask 的 request 上下文。站主任务没有这个文件，行为一字不变。
 
     任务号带标题时目录也跟着带（`漫画_C20261018-06_加了料的饮料`）——用户在
-    资源管理器里翻图，光看编号认不出是哪一集。
+    资源管理器里翻图，光看编号认不出是哪一集。没有 task 的调用者是跑图台
+    （`gen_api._run` 复用 `_submit`）：返回空串让 image_jobs 按 target=None
+    落到 `web/生图页`，别把跑图台的图也塞进漫画目录。
     """
+    try:
+        from app import comic_quota
+        friend = comic_quota.output_base(getattr(task, "dir", "") or "")
+    except Exception:
+        friend = ""                            # 归属层异常不该拖垮出图
+    if friend:
+        return friend
     tid = str(getattr(task, "task_id", "") or "").strip() if task else ""
-    # 没有 task 的调用者是跑图台（`gen_api._run` 复用 `_submit`）：返回空串让
-    # image_jobs 按 target=None 落到 `web/生图页`，别把跑图台的图也塞进漫画目录。
     return "web/漫画_%s" % tid if tid else ""
 
 
