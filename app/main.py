@@ -914,6 +914,16 @@ def comic_admin_page():
     return send_from_directory(WEB_DIR, "comic_admin.html")
 
 
+@app.route("/comic_works")
+def comic_works_page():
+    """群友作品浏览：站主按账号翻群友跑的漫画 / 写真作品集（只读）。
+
+    和 /comic_admin 同一信任边界——只在 5174 开，5175 不反代这个路径；数据
+    走 /api/comic/works，那个接口还会再挡一次群友态（5175 是通配反代）。
+    """
+    return send_from_directory(WEB_DIR, "comic_works.html")
+
+
 @app.route("/moss")
 def moss_comic_page():
     """moss 漫画台：一句话 → 编剧写整页 → 一次出图（见 app/moss_api.py）。"""

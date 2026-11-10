@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>群友作品浏览</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='4' y='4' width='24' height='24' rx='5' fill='%237c5cff'/><circle cx='12' cy='13' r='3' fill='%23fff'/><path d='M6 25l7-8 5 5 3-3 5 6z' fill='%23fff'/></svg>">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0a0a0f; --bg-elev: #12121a; --bg-input: #1a1a24;
+    --border: #2a2a3a; --border-soft: #1f1f2e;
+    --text: #e8e8f0; --text-dim: #8888a0; --text-mute: #555570;
+    --accent: #7c5cff; --success: #4ade80; --error: #f87171;
+    --radius: 12px;
+  }
+  html, body { min-height: 100%; background: var(--bg); color: var(--text);
+    font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    font-size: 14px; line-height: 1.7; }
+  body::before { content: ""; position: fixed; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(124,92,255,.15), transparent); }
+  .wrap { position: relative; max-width: 1180px; margin: 0 auto; padding: 22px 16px 60px; }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+  h1 { font-size: 19px; font-weight: 600; }
+  .sub { color: var(--text-mute); font-size: 12px; }
+  .spacer { flex: 1; }
+  a.back { color: var(--text-dim); font-size: 13px; text-decoration: none; }
+  a.back:hover { color: var(--accent); }
+  button { cursor: pointer; font: inherit; color: inherit; }
+  .ghost { background: var(--bg-input); border: 1px solid var(--border);
+    border-radius: 8px; padding: 5px 11px; font-size: 13px; }
+  .ghost:hover { border-color: var(--accent); }
+
+  .layout { display: grid; grid-template-columns: 210px 1fr; gap: 18px; align-items: start; }
+
+  /* 左：账号列表 */
+  .accounts { background: var(--bg-elev); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: 8px; position: sticky; top: 18px; }
+  .accounts .cap { color: var(--text-mute); font-size: 12px; padding: 6px 8px 8px; }
+  .acc { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+    background: transparent; border: 1px solid transparent; border-radius: 9px;
+    padding: 9px 10px; margin-bottom: 3px; }
+  .acc:hover { background: var(--bg-input); }
+  .acc.on { background: var(--bg-input); border-color: var(--accent); }
+  .acc .qq { font-weight: 600; font-size: 14px; letter-spacing: .3px; }
+  .acc .cnt { margin-left: auto; color: var(--text-mute); font-size: 11px; }
+  .empty { color: var(--text-mute); font-size: 12px; padding: 14px 10px; }
+
+  /* 右：内容区 */
+  .panel { min-height: 320px; }
+  .who { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .who .big { font-size: 17px; font-weight: 600; }
+  .who .meta { color: var(--text-mute); font-size: 12px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; border-bottom: 1px solid var(--border-soft); }
+  .tab { background: transparent; border: 0; border-bottom: 2px solid transparent;
+    padding: 8px 14px 10px; font-size: 14px; color: var(--text-dim); }
+  .tab:hover { color: var(--text); }
+  .tab.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+  .tab .n { color: var(--text-mute); font-size: 12px; margin-left: 3px; }
+  .tab.on .n { color: var(--accent); }
+
+  .wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; }
+  .work { background: var(--bg-elev); border: 1px solid var(--border-soft);
+    border-radius: 11px; overflow: hidden; text-align: left; padding: 0;
+    transition: border-color .15s, transform .15s; }
+  .work:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .work .cover { width: 100%; aspect-ratio: 3 / 4; background: var(--bg-input);
+    display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; }
+  .work .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .work .cover .ph { color: var(--text-mute); font-size: 12px; text-align: center; padding: 10px; }
+  .work .cover .badge { position: absolute; right: 8px; bottom: 8px; background: rgba(10,10,15,.8);
+    color: #fff; font-size: 11px; border-radius: 6px; padding: 2px 7px; }
+  .work .info { padding: 10px 12px 12px; }
+  .work .t { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; }
+  .work .m { color: var(--text-mute); font-size: 11px; margin-top: 3px; }
+  .none { color: var(--text-mute); font-size: 13px; padding: 40px 8px; text-align: center;
+    border: 1px dashed var(--border); border-radius: 11px; }
+
+  /* 大图弹层 */
+  .mask { position: fixed; inset: 0; background: rgba(4,4,8,.92); z-index: 50;
+    display: none; flex-direction: column; }
+  .mask.on { display: flex; }
+  .mask .top { display: flex; align-items: center; gap: 14px; padding: 14px 20px;
+    border-bottom: 1px solid var(--border-soft); flex-wrap: wrap; }
+  .mask .top .ttl { font-size: 15px; font-weight: 600; }
+  .mask .top .mm { color: var(--text-mute); font-size: 12px; }
+  .mask .top .spacer { flex: 1; }
+  .mask .body { flex: 1; overflow: auto; padding: 20px; text-align: center; }
+  .mask .body img { max-width: min(100%, 900px); max-height: 78vh; border-radius: 8px;
+    margin: 0 auto 14px; display: block; background: var(--bg-elev); }
+  .nav { display: flex; align-items: center; justify-content: center; gap: 12px;
+    padding: 0 20px 18px; position: sticky; bottom: 0; }
+  .nav button { min-width: 74px; }
+  .nav .cur { color: var(--text-dim); font-size: 13px; min-width: 56px; text-align: center; }
+
+  .bar { min-height: 22px; margin-bottom: 12px; font-size: 13px; color: var(--text-dim); }
+  .bar.err { color: var(--error); }
+  @media (max-width: 720px) {
+    .layout { grid-template-columns: 1fr; }
+    .accounts { position: static; display: flex; flex-wrap: wrap; gap: 4px; }
+    .accounts .cap { width: 100%; }
+    .acc { width: auto; margin: 0; }
+    .acc .cnt { margin-left: 6px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>群友作品浏览</h1>
+    <span class="sub">按账号翻漫画 / 写真作品集 · 只读</span>
+    <span class="spacer"></span>
+    <button class="ghost" id="btnReload" onclick="load()">刷新</button>
+    <a class="back" href="/comic_admin">← 漫画台管理</a>
+  </header>
+
+  <div class="bar" id="bar">正在读取作品…</div>
+
+  <div class="layout" id="layout" style="display:none">
+    <nav class="accounts" id="accounts">
+      <div class="cap">群友账号</div>
+      <div id="accList"></div>
+    </nav>
+    <section class="panel">
+      <div class="who">
+        <span class="big" id="whoQq">—</span>
+        <span class="meta" id="whoMeta"></span>
+      </div>
+      <div class="tabs" id="tabs"></div>
+      <div class="wall" id="wall"></div>
+    </section>
+  </div>
+</div>
+
+<!-- 整本大图 -->
+<div class="mask" id="mask" onclick="if(event.target===this)closeViewer()">
+  <div class="top">
+    <span class="ttl" id="vTitle">—</span>
+    <span class="mm" id="vMeta"></span>
+    <span class="spacer"></span>
+    <button class="ghost" onclick="closeViewer()">关闭 ✕</button>
+  </div>
+  <div class="body" id="vBody"></div>
+  <div class="nav">
+    <button class="ghost" id="vPrev" onclick="vStep(-1)">← 上一张</button>
+    <span class="cur" id="vCur">1 / 1</span>
+    <button class="ghost" id="vNext" onclick="vStep(1)">下一张 →</button>
+  </div>
+</div>
+
+<script>
+let DATA = {accounts: []};
+let SEL = {qq: "", kind: "comic"};
+let VIEW = {thumbs: [], i: 0, title: ""};
+
+function setBar(msg, err) {
+  const b = document.getElementById('bar');
+  b.textContent = msg || '';
+  b.className = 'bar' + (err ? ' err' : '');
+}
+
+async function load() {
+  setBar('正在读取作品…');
+  document.getElementById('btnReload').disabled = true;
+  try {
+    const r = await fetch('/api/comic/works', {cache: 'no-store'});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || '读取失败');
+    DATA = d;
+    render();
+  } catch (e) {
+    setBar('读取失败：' + (e.message || e), true);
+    document.getElementById('layout').style.display = 'none';
+  } finally {
+    document.getElementById('btnReload').disabled = false;
+  }
+}
+
+function render() {
+  const accs = DATA.accounts || [];
+  document.getElementById('layout').style.display = accs.length ? 'grid' : 'none';
+  if (!accs.length) { setBar('还没有群友作品。跑完漫画 / 写真后会出现在这里。'); return; }
+  setBar('共 ' + accs.length + ' 个账号，点账号再选漫画台 / 写真台。');
+
+  // 默认选第一个账号，保留当前选择（刷新后不跳回）
+  if (!accs.some(a => a.qq === SEL.qq)) SEL.qq = accs[0].qq;
+  const al = document.getElementById('accList');
+  al.innerHTML = accs.map(a => {
+    const c = (a.counts || {});
+    return '<button class="acc' + (a.qq === SEL.qq ? ' on' : '') + '" '
+      + 'onclick="pick(\'' + esc(a.qq) + '\')">'
+      + '<span class="qq">' + esc(a.qq) + '</span>'
+      + '<span class="cnt">' + (c.comic || 0) + ' 漫 · ' + (c.portrait || 0) + ' 写真</span>'
+      + '</button>';
+  }).join('');
+  renderAccount();
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function pick(qq) { SEL.qq = qq; render(); }
+
+function curAccount() {
+  return (DATA.accounts || []).find(a => a.qq === SEL.qq) || null;
+}
+
+function renderAccount() {
+  const a = curAccount();
+  if (!a) return;
+  document.getElementById('whoQq').textContent = a.qq;
+  const total = (a.counts.comic || 0) + (a.counts.portrait || 0);
+  document.getElementById('whoMeta').textContent = '共 ' + total + ' 件作品';
+
+  // 当前 kind 在这一账号没有、另一个有时自动切过去
+  if (!(a[SEL.kind] || []).length) SEL.kind = (a.comic || []).length ? 'comic' : 'portrait';
+
+  const tabs = [['comic', '漫画台'], ['portrait', '写真台']];
+  document.getElementById('tabs').innerHTML = tabs.map(([k, label]) =>
+    '<button class="tab' + (SEL.kind === k ? ' on' : '') + '" '
+    + 'onclick="tab(\'' + k + '\')">' + label
+    + '<span class="n">' + ((a[k] || []).length) + '</span></button>'
+  ).join('');
+
+  const works = a[SEL.kind] || [];
+  const wall = document.getElementById('wall');
+  if (!works.length) {
+    wall.innerHTML = '<div class="none" style="grid-column:1/-1">这个人还没有' +
+      (SEL.kind === 'comic' ? '漫画' : '写真') + '作品</div>';
+    return;
+  }
+  wall.innerHTML = works.map((w, i) => {
+    const cover = w.cover
+      ? '<img src="' + esc(w.cover) + '" alt="" loading="lazy" '
+        + 'onerror="this.style.display=\'none\';this.parentNode.querySelector(\'.ph\').style.display=\'block\'">'
+        + '<span class="ph" style="display:none">封面暂不可用</span>'
+      : '<span class="ph">还没出图</span>';
+    return '<button class="work" onclick="openViewer(' + i + ')">'
+      + '<div class="cover">' + cover
+      + '<span class="badge">' + (w.count || 0) + ' 张</span></div>'
+      + '<div class="info"><div class="t" title="' + esc(w.title) + '">'
+      + esc(w.title || '未命名') + '</div>'
+      + '<div class="m">' + esc(w.updated || '') + '</div></div></button>';
+  }).join('');
+  WALL = works;
+}
+
+let WALL = [];
+function tab(k) { SEL.kind = k; renderAccount(); }
+
+function openViewer(i) {
+  const w = WALL[i];
+  if (!w) return;
+  VIEW = {thumbs: w.thumbs || [], i: 0,
+          title: w.title || '未命名', meta: (w.count || 0) + ' 张 · ' + (w.updated || '')};
+  if (!VIEW.thumbs.length) { alert('这本还没有出图'); return; }
+  document.getElementById('vTitle').textContent = VIEW.title;
+  document.getElementById('vMeta').textContent = VIEW.meta;
+  document.getElementById('mask').classList.add('on');
+  drawViewer();
+}
+
+function drawViewer() {
+  const t = VIEW.thumbs[VIEW.i];
+  document.getElementById('vBody').innerHTML =
+    '<img src="' + esc(t) + '" alt="第 ' + (VIEW.i + 1) + ' 张" '
+    + 'onerror="this.alt=\'这张图加载失败\'">';
+  document.getElementById('vCur').textContent = (VIEW.i + 1) + ' / ' + VIEW.thumbs.length;
+  document.getElementById('vPrev').disabled = VIEW.i <= 0;
+  document.getElementById('vNext').disabled = VIEW.i >= VIEW.thumbs.length - 1;
+}
+
+function vStep(d) {
+  const n = VIEW.i + d;
+  if (n < 0 || n >= VIEW.thumbs.length) return;
+  VIEW.i = n;
+  drawViewer();
+}
+
+function closeViewer() { document.getElementById('mask').classList.remove('on'); }
+document.addEventListener('keydown', e => {
+  if (!document.getElementById('mask').classList.contains('on')) return;
+  if (e.key === 'Escape') closeViewer();
+  if (e.key === 'ArrowLeft') vStep(-1);
+  if (e.key === 'ArrowRight') vStep(1);
+});
+
+load();
+</script>
+</body>
+</html>

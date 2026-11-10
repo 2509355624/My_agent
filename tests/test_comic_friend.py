@@ -766,5 +766,87 @@ class TestFriendPageFromMaster(unittest.TestCase):
                          "重跑生成脚本产物变了，说明有人手改了生成页")
 
 
+class TestComicWorks(_TempMixin, unittest.TestCase):
+    """站主「群友作品浏览」页：按账号 → 漫画台 / 写真台聚合作品（只读）。
+
+    聚合接口扫 comics/、按 owner.json 归账号，kind 判据 script.md=漫画 /
+    prompts.json 或 portraits/=写真。站主态看全部、群友态（5175 通配反代
+   过来）403。作品墙只出缩略图 URL，不碰额度 / 发送。
+    """
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.object(comic_api, "_COMICS_ROOT", self.tmp)
+        p.start()
+        self.addCleanup(p.stop)
+        self.c = main.app.test_client()
+
+    def _portrait(self, name, owner=QQ, brief="可爱妹妹，刚洗完澡"):
+        d = self.mk_task(name, owner=owner, script=False, portrait=True)
+        with open(os.path.join(d, "portrait.json"), "w", encoding="utf-8") as f:
+            json.dump({"brief": brief, "n": 1}, f, ensure_ascii=False)
+        return d
+
+    def test_站主看全部且按账号分漫画写真(self):
+        self.mk_task("C20261110-01_学姐的饮料", owner=QQ, script=True, final=True)
+        self._portrait("C20261110-02", owner=QQ)
+        r = self.c.get("/api/comic/works")
+        self.assertEqual(r.status_code, 200)
+        accs = r.get_json()["accounts"]
+        self.assertEqual(len(accs), 1)
+        a = accs[0]
+        self.assertEqual(a["qq"], QQ)
+        self.assertEqual(a["counts"], {"comic": 1, "portrait": 1})
+        cw = a["comic"][0]
+        self.assertEqual(cw["kind"], "comic")
+        self.assertEqual(cw["count"], 1)
+        self.assertIn("thumb/01_final_thumb.webp", cw["cover"])
+        self.assertEqual(len(cw["thumbs"]), 1)
+        pw = a["portrait"][0]
+        self.assertEqual(pw["kind"], "portrait")
+        self.assertEqual(pw["title"], "可爱妹妹，刚洗完澡")
+        self.assertIn("thumb/01_portrait_thumb.webp", pw["cover"])
+
+    def test_群友态403不能列走所有人作品(self):
+        self.mk_task("C20261110-01", owner=QQ, script=True, final=True)
+        r = self.c.get("/api/comic/works?qq=%s" % QQ,
+                       headers={"X-Friend-Token": SECRET})
+        self.assertEqual(r.status_code, 403)
+        self.assertFalse(r.get_json()["ok"])
+
+    def test_空壳目录与站主老作品不进账号列表(self):
+        # 有归属但没跑（无 script / prompts / portraits）→ 空壳，不算作品
+        self.mk_task("C20261110-01", owner=QQ, script=False)
+        # 站主老任务无 owner.json → 不进「账号 → 作品」这套
+        self.mk_task("C20261110-02", owner="", script=True, final=True)
+        r = self.c.get("/api/comic/works")
+        self.assertEqual(r.get_json()["accounts"], [])
+
+    def test_多账号分组且新账号排前(self):
+        self.mk_task("C20261110-01_A", owner=QQ, script=True, final=True)
+        self.mk_task("C20261109-01_B", owner=OTHER, script=True, final=True)
+        accs = self.c.get("/api/comic/works").get_json()["accounts"]
+        self.assertEqual({a["qq"] for a in accs}, {QQ, OTHER})
+        self.assertEqual(accs[0]["qq"], QQ)        # 日期新的排前
+
+    def test_站主态封面也指缩略图不退回高清原图(self):
+        self.mk_task("C20261110-01", owner=QQ, script=True, final=True)
+        w = self.c.get("/api/comic/works").get_json()["accounts"][0]["comic"][0]
+        self.assertTrue(w["cover"].startswith("/api/comic/img?"))
+        self.assertNotIn("final/01_final.png", w["cover"])
+
+    def test_页面路由可达且是只读作品浏览(self):
+        r = main.app.test_client().get("/comic_works")
+        self.assertEqual(r.status_code, 200)
+        page = r.get_data(as_text=True)
+        self.assertIn("群友作品浏览", page)
+        self.assertIn("/api/comic/works", page)
+        self.assertIn("漫画台", page)
+        self.assertIn("写真台", page)
+        # 只读：不出现任何额度 / 发送 / 扣次动作
+        for kw in ("send_qq", "consume", "加次数", "mark_charged", "delivery_status"):
+            self.assertNotIn(kw, page)
+
+
 if __name__ == "__main__":
     unittest.main()

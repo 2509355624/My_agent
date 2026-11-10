@@ -2010,6 +2010,132 @@ def api_comic_send_qq():
                     "hint": "本次会发：" + what + "。" + comic_delivery.RULE})
 
 
+def _works_img_url(task, f):
+    """作品浏览页固定指向服务端缩略图。
+
+    不走 `_img_url`：那个在站主态（qq 空）会退回 9MB 高清原图，作品墙一次
+    铺几十张会把 5174 本地带宽也拖住。`/api/comic/img` 对站主一样认 thumb
+    形态并懒生成 WEBP，所以这里直接拼 thumb URL。
+    """
+    from urllib.parse import quote
+    return "/api/comic/img?task=%s&f=%s" % (
+        quote(str(task), safe=""), quote(str(f), safe="/"))
+
+
+def _work_summary(name, kind):
+    """一个任务目录 → 作品墙一行。只读文件清单与元数据，不解码任何图片。
+
+    kind 判据在调用处定（script.md → 漫画；prompts.json / portraits/ → 写真），
+    这里只负责把标题、张数、缩略图清单、更新时间拼齐。标题写真取 brief 首行、
+    漫画取剧本 `# 标题：`，都没有才退回目录名（去 C 前缀）。
+    """
+    import datetime
+    path = os.path.join(_COMICS_ROOT, name)
+    item = {"task": name, "title": "", "kind": kind, "count": 0,
+            "updated": "", "thumbs": [], "cover": ""}
+    if kind == "comic":
+        try:
+            meta, _ = comic.parse_script(os.path.join(path, "script.md"))
+            item["title"] = str((meta or {}).get("title") or "").strip()
+        except Exception:
+            pass
+    else:
+        try:
+            with open(os.path.join(path, "portrait.json"),
+                      encoding="utf-8") as f:
+                brief = str((json.load(f) or {}).get("brief") or "").strip()
+            item["title"] = brief.splitlines()[0] if brief else ""
+        except (OSError, ValueError, AttributeError, IndexError):
+            pass
+    if not item["title"]:
+        m = re.match(r"^C\d{8}-\d+_(.+)$", name)
+        item["title"] = (m.group(1) if m else name).strip()
+
+    if kind == "comic":
+        final_d = os.path.join(path, "final")
+        raw_d = os.path.join(path, "raw")
+        finals = sorted(n for n in os.listdir(final_d) if n.endswith("_final.png")) \
+            if os.path.isdir(final_d) else []
+        raws = sorted(n for n in os.listdir(raw_d) if n.endswith("_raw.png")) \
+            if os.path.isdir(raw_d) else []
+        use, ck = (finals, "final") if finals else (raws, "raw")
+        for i in range(1, len(use) + 1):
+            item["thumbs"].append(_works_img_url(name, comic_thumb.rel(i, ck)))
+    else:
+        pd = os.path.join(path, "portraits")
+        shots = sorted(n for n in os.listdir(pd) if n.endswith(".png")) \
+            if os.path.isdir(pd) else []
+        for i in range(1, len(shots) + 1):
+            item["thumbs"].append(_works_img_url(name, comic_thumb.rel(i, "portrait")))
+    item["count"] = len(item["thumbs"])
+    if item["thumbs"]:
+        item["cover"] = item["thumbs"][0]
+    # 更新时间取目录树里最新一个文件的 mtime（目录 mtime 在 Windows 上不随
+    # 子目录内文件变化，不能用；写真也没有 state.json 的 updated 字段）。
+    try:
+        mt = max(os.path.getmtime(os.path.join(dp, f))
+                 for dp, _, fns in os.walk(path) for f in fns)
+        item["updated"] = datetime.datetime.fromtimestamp(mt).strftime("%Y-%m-%d %H:%M")
+    except (OSError, ValueError):
+        pass
+    return item
+
+
+@bp.route("/api/comic/works")
+def api_comic_works():
+    """站主「群友作品浏览」：按 QQ 账号 → 漫画台 / 写真台列作品集。
+
+    和 `/api/comic/tasks` 的分工：那个给站主版 /comic 当历史下拉、只收有
+    script.md 的漫画；这个给独立的 `/comic_works` 页，**漫画写真都收**、按
+    owner.json 的 QQ 分组，一次返回全量嵌套（群友账号就那么几个，前端切
+    Tab 不用再发请求）。站主自己的老作品没有 owner.json，仍归 /comic 自己管，
+    不混进「账号 → 作品」这套（那套的主键就是群友 QQ）。
+
+    ⚠ 5175 是 `/api/comic/<path>` 通配反代，群友带令牌也会打到这个路径，
+    所以和 `/api/comic/admin` 一样显式拒掉群友态——不能让人一把列走所有
+    账号的作品清单。
+    """
+    if _qq():
+        return jsonify({"ok": False, "error": "没有权限"}), 403
+    try:
+        names = os.listdir(_COMICS_ROOT)
+    except OSError:
+        names = []
+    groups = {}
+    for name in names:
+        path = os.path.join(_COMICS_ROOT, name)
+        if not os.path.isdir(path):
+            continue
+        qq = comic_quota.owner_of(path)
+        if not qq:                       # 站主作品不进「账号」体系
+            continue
+        if os.path.isfile(os.path.join(path, "script.md")):
+            kind = "comic"
+        elif (os.path.isfile(os.path.join(path, "prompts.json"))
+              or os.path.isdir(os.path.join(path, "portraits"))):
+            kind = "portrait"
+        else:
+            continue                     # 空壳目录（建了没跑）不算作品
+        groups.setdefault(qq, {"comic": [], "portrait": []})[kind].append(
+            _work_summary(name, kind))
+
+    def _key(it):
+        m = re.match(r"^C(\d{8})-(\d+)", it["task"])
+        return (m.group(1), int(m.group(2))) if m else ("0", 0)
+
+    accounts = []
+    for qq, gs in groups.items():
+        for k in ("comic", "portrait"):
+            gs[k].sort(key=_key, reverse=True)
+        accounts.append({"qq": qq, "comic": gs["comic"], "portrait": gs["portrait"],
+                         "counts": {"comic": len(gs["comic"]),
+                                    "portrait": len(gs["portrait"])}})
+    accounts.sort(key=lambda a: max([_key(x) for x in
+                                     a["comic"] + a["portrait"]] or [("0", 0)]),
+                  reverse=True)
+    return jsonify({"ok": True, "accounts": accounts})
+
+
 @bp.route("/api/comic/admin", methods=["GET", "POST"])
 def api_comic_admin():
     """独立「漫画台管理」页的数据：谁用了、各剩几次、加次数、直发补发。
