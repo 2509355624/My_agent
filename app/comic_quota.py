@@ -27,6 +27,7 @@ import copy
 import json
 import os
 import threading
+import time
 
 from flask import request
 
@@ -77,6 +78,15 @@ def _write(data):
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
         os.replace(tmp, _FILE)
+
+
+def _touch(acc):
+    """记一次「这个账号动过漫画台」。管理页靠它回答「谁用过、最近谁在用」。
+
+    只在真的扣/退/记账时写，不挂在每次 GET 上——否则光是页面轮询就会把
+    「最近使用」刷成当前时间，那一列就没意义了。
+    """
+    acc["last_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
 
 
 # ─── 身份 ──────────────────────────────────────────────
@@ -242,6 +252,7 @@ def consume(qq, kind, n=1):
         if cur + n > int(lim.get(kind) or 0):
             return False
         used[kind] = cur + n
+        _touch(acc)
         _write(data)
         return True
 
@@ -255,6 +266,7 @@ def refund(qq, kind, n=1):
         acc = data["accounts"].setdefault(str(qq), {})
         used = acc.setdefault("used", {})
         used[kind] = max(0, int(used.get(kind) or 0) - n)
+        _touch(acc)
         _write(data)
 
 
@@ -271,27 +283,42 @@ def mark_charged(qq, kind, task_id):
         if str(task_id) not in ids:
             ids.append(str(task_id))
             del ids[:-500]          # 只留最近 500 本，账本不无限长
+            _touch(data["accounts"].setdefault(str(qq), {}))
             _write(data)
 
 
 # ─── 管理页 ────────────────────────────────────────────
 
 def admin_view():
-    """管理页要看到的全部数据（不含任何密钥）。"""
+    """管理页要看到的全部数据（不含任何密钥）。
+
+    主体是「谁用了漫画台」：一行一个 QQ，给全各项剩余/已用/上限、每本格数、
+    最近一次动它的时间、跑了几本。`accounts` 是**有人真用过**才建号——站主要
+    给还没用过的人先加次数，走 `admin_update({"add": ...})`，它会自动建号。
+    """
     data = _read()
     out = {"defaults": dict(DEFAULTS), "models": models(), "accounts": [],
-           "deliveries": list(data["deliveries"] or [])[-20:]}
+           "deliveries": list(data["deliveries"] or [])[-20:],
+           "panel_tiers": list(PANEL_TIERS)}
     out["defaults"].update(data["defaults"] or {})
     for qq, acc in sorted(data["accounts"].items()):
         lim, used = limits(qq), usage(qq)
-        out["accounts"].append({"qq": qq, "limits": lim, "used": used,
-                                "left": {k: max(0, lim[k] - used[k]) for k in KINDS},
-                                "note": str(acc.get("note") or "")})
+        ch = data["charged"].get(qq) or {}
+        works = set(ch.get("comic") or []) | set(ch.get("portrait") or [])
+        out["accounts"].append({
+            "qq": qq, "limits": lim, "used": used,
+            "left": {k: max(0, lim[k] - used[k]) for k in KINDS},
+            "last_at": str(acc.get("last_at") or ""),
+            "works": len(works), "note": str(acc.get("note") or "")})
     return out
 
 
 def admin_update(payload):
-    """管理页改配置。只认白名单字段，其余忽略；返回更新后的 admin_view()。"""
+    """管理页改配置。只认白名单字段，其余忽略；返回更新后的 admin_view()。
+
+    `add: {qq, kind, n}` = 给这个账号上限加 n 次（原子、自动建号）。
+    `account: {qq, limits, used, note}` = 直接设整行，给改格数档位 / 备注用。
+    """
     p = payload or {}
     with _LOCK:
         data = _read()
@@ -309,6 +336,28 @@ def admin_update(payload):
                  "label": str(m.get("label") or "").strip()[:80]}
                 for m in p["models"] if isinstance(m, dict)
                 and str(m.get("provider") or "").strip()][:20]
+        # 「加次数」是增量、在服务端算，不让前端把整行上限读回去再提交：
+        # 两个页面同时点 +1 时，前端算好的旧值会互相覆盖。账号不存在就自动建，
+        # 站主可以给还没用过漫画台的人先加。
+        add = p.get("add")
+        if (isinstance(add, dict) and str(add.get("qq") or "").isdigit()
+                and str(add.get("kind") or "") in KINDS):
+            qq, kind = str(add["qq"]), str(add["kind"])
+            try:
+                n = max(0, min(99, int(add.get("n") or 1)))
+            except (TypeError, ValueError):
+                n = 1
+            slot = data["accounts"].setdefault(qq, {})
+            lim = slot.setdefault("limits", {})
+            # 账号没单独设过这一项时，要从「当前生效额度」起加，不能从 0 起算
+            # （否则给新人 +1 剧本会变成总共只有 1 次）。只冻结被加的这一项，
+            # 其它额度继续跟随全局默认。
+            base = dict(DEFAULTS)
+            base.update(data["defaults"] or {})
+            base.update(lim)
+            lim[kind] = max(0, int(base.get(kind) or 0) + n)
+            # 站主加次数不算「这个人用过漫画台」：最近使用只由他自己真的
+            # 扣/退/记账刷新，否则每加一次都会把那一列刷成现在的时间。
         acc = p.get("account")
         if isinstance(acc, dict) and str(acc.get("qq") or "").isdigit():
             qq = str(acc["qq"])

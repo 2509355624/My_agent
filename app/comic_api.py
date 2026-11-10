@@ -1995,10 +1995,11 @@ def api_comic_send_qq():
 
 @bp.route("/api/comic/admin", methods=["GET", "POST"])
 def api_comic_admin():
-    """站主 5174 管理页：看/改编剧模型白名单与按账号额度。
+    """独立「漫画台管理」页的数据：谁用了、各剩几次、加次数、直发补发。
 
     群友请求（带内部令牌）一律 403——哪怕猜到了这个路径。站主直连 5174
     本来就没有那层令牌，管理页与 /api/qq_bill 是同一套信任边界。
+    编剧模型白名单后端仍认，但管理页不再让站主手填：空 = 全体走站主默认。
     """
     if _qq():
         return jsonify({"ok": False, "error": "没有权限"}), 403

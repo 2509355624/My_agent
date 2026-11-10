@@ -313,6 +313,7 @@
     <h1>Agent 管理</h1>
     <span class="sub" id="sub">加载中</span>
     <span class="spacer"></span>
+    <a class="back" href="/comic_admin" style="margin-right:10px;">漫画台管理 →</a>
     <button class="ghost" id="reviewJumpBtn" style="margin-right:10px;">人工二审 <span class="hint" id="reviewBadgeTop"></span></button>
     <a class="back" href="/review" target="_blank" style="margin-right:10px;">独立界面 ↗</a>
     <a class="back" href="/">返回聊天</a>
@@ -606,37 +607,8 @@
         <div class="sess" id="billTable"></div>
       </div>
 
-      <div class="card">
-        <h2>漫画台管理 <button class="ghost" id="cfReload" style="margin-left:8px;">刷新</button></h2>
-        <div class="hint">站主版 /comic 不受这里影响。5175「漫画工作台」的群友按账号限次数；
-          编剧模型只许用下面这张白名单，空 = 只给「站主默认」一项，不给自定义模型
-          （自带 key 会白嫖后面整条 GPU 队列）。改动即时生效，不用重启。</div>
-
-        <div class="sess-foot" style="margin:10px 0 6px;flex-wrap:wrap;gap:6px;">
-          <span class="hint">默认额度</span>
-          <label class="hint">剧本 <input id="cf_script" type="number" min="0" style="width:58px;"></label>
-          <label class="hint">修订 <input id="cf_revise" type="number" min="0" style="width:58px;"></label>
-          <label class="hint">漫画 <input id="cf_comic" type="number" min="0" style="width:58px;"></label>
-          <label class="hint">写真 <input id="cf_portrait" type="number" min="0" style="width:58px;"></label>
-          <label class="hint">每本格数 <input id="cf_panels" type="number" min="1" style="width:58px;"></label>
-          <label class="hint">每本写真 <input id="cf_shots" type="number" min="1" style="width:58px;"></label>
-          <button class="ghost" id="cfDefaultsSave">保存默认</button>
-        </div>
-
-        <div class="hint" style="margin-top:10px;">编剧模型白名单：每行一条
-          <code>provider|model|显示名</code>，model 留空表示用该 provider 的默认模型。</div>
-        <textarea id="cfModels" rows="3" spellcheck="false"
-          style="width:100%;margin:6px 0;font-family:monospace;font-size:12px;"></textarea>
-        <div class="hint" id="cfProviders" style="margin-bottom:6px;"></div>
-        <button class="ghost" id="cfModelsSave">保存模型白名单</button>
-
-        <div class="hint" style="margin-top:14px;">按账号改额度 / 加次数（直接改「上限」或「已用」，
-          加次数就是把上限调大）。格数档位 10 / 15 / 20 / 25 / 30。</div>
-        <div class="sess" id="cfAccounts" style="margin-top:6px;"></div>
-
-        <div class="hint" style="margin-top:14px;">最近的 QQ 直发记录（失败可在这里补发）。</div>
-        <div class="sess" id="cfDeliveries" style="margin-top:6px;"></div>
-      </div>
+      <!-- 漫画台管理已搬到独立页 /comic_admin（2026-11-10）：它跟 QQ 机器人
+           不是一回事，塞在这堆卡片下面要滚半天，入口改到顶部 header。 -->
     </div>
 
     <aside class="sessCol" id="sessCol">
@@ -3390,149 +3362,9 @@ $('billExport').addEventListener('click', async () => {
   } catch (e) { status(e.message, 'err'); }
 });
 
-// ─── 漫画台管理（群友配额 / 编剧模型白名单 / QQ 直发记录）─────────────
-const CF_KINDS = ['script', 'revise', 'comic', 'portrait'];
-const CF_FIELDS = { script: 'cf_script', revise: 'cf_revise',
-                    comic: 'cf_comic', portrait: 'cf_portrait',
-                    max_panels: 'cf_panels', max_shots: 'cf_shots' };
-let cfData = null;
-
-function cfEsc(s) {
-  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-}
-async function cfPost(payload) {
-  const resp = await fetch('/api/comic/admin', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  let d = {};
-  try { d = await resp.json(); } catch (e) { /* 下面按状态码报错 */ }
-  if (!resp.ok || d.ok === false) {
-    throw new Error(d.error || ('保存失败 HTTP ' + resp.status));
-  }
-  return d;
-}
-function cfNum(id, fallback) {
-  const v = Number($(id).value);
-  return Number.isFinite(v) ? Math.max(0, Math.round(v)) : fallback;
-}
-function cfRender(d) {
-  cfData = d;
-  Object.keys(CF_FIELDS).forEach((k) => {
-    const el = $(CF_FIELDS[k]);
-    if (el) el.value = d.defaults && d.defaults[k] != null ? d.defaults[k] : '';
-  });
-  $('cfModels').value = (d.models || []).map((m) =>
-    [m.provider, m.model || '', m.label || ''].join('|')).join('\n');
-
-  const accs = d.accounts || [];
-  $('cfAccounts').innerHTML = accs.length ? `
-    <table style="width:100%;border-collapse:collapse;font-size:12px;">
-      <tr style="text-align:left;opacity:.65;"><th>QQ</th><th>额度（上限 / 已用）</th>
-        <th>格数 / 写真张数</th><th>剩余</th><th></th></tr>
-      ${accs.map((a) => `
-        <tr style="border-top:1px solid rgba(128,128,128,.25);" data-row="${cfEsc(a.qq)}">
-          <td style="padding:4px 6px;">${cfEsc(a.qq)}</td>
-          <td>${CF_KINDS.map((k) => `<label style="display:inline-block;margin:2px 6px 2px 0;">
-            ${k} <input class="cf-lim" data-k="${k}" type="number" min="0"
-              value="${a.limits[k] || 0}" style="width:46px;"> /
-            <input class="cf-used" data-k="${k}" type="number" min="0"
-              value="${a.used[k] || 0}" style="width:46px;"></label>`).join('')}</td>
-          <td><input class="cf-lim" data-k="max_panels" type="number" min="1"
-                value="${a.limits.max_panels || 10}" style="width:52px;"> /
-              <input class="cf-lim" data-k="max_shots" type="number" min="1"
-                value="${a.limits.max_shots || 5}" style="width:52px;"></td>
-          <td>${CF_KINDS.map((k) => k + ':' + (a.left[k] || 0)).join(' ')}</td>
-          <td><button class="ghost cf-save" data-qq="${cfEsc(a.qq)}">保存</button></td>
-        </tr>`).join('')}
-    </table>` : '<div class="hint">还没有群友用过漫画台。</div>';
-  $('cfAccounts').querySelectorAll('.cf-save').forEach((b) =>
-    b.addEventListener('click', () => cfSaveAccount(b.dataset.qq)));
-
-  const rows = (d.deliveries || []).slice().reverse();
-  $('cfDeliveries').innerHTML = rows.length ? `
-    <table style="width:100%;border-collapse:collapse;font-size:12px;">
-      <tr style="text-align:left;opacity:.65;"><th>时间</th><th>QQ</th><th>作品</th>
-        <th>状态</th><th>说明</th><th></th></tr>
-      ${rows.map((r) => `
-        <tr style="border-top:1px solid rgba(128,128,128,.25);">
-          <td style="padding:4px 6px;">${cfEsc(r.at)}</td>
-          <td>${cfEsc(r.qq)}</td><td>${cfEsc(r.task)}</td>
-          <td style="color:${r.state === 'failed' ? '#f87171' : 'inherit'}">${cfEsc(r.state)}</td>
-          <td>${cfEsc(r.detail)}</td>
-          <td><button class="ghost cf-resend" data-qq="${cfEsc(r.qq)}"
-            data-task="${cfEsc(r.task)}">补发到 QQ</button></td>
-        </tr>`).join('')}
-    </table>` : '<div class="hint">还没有发送记录。</div>';
-  $('cfDeliveries').querySelectorAll('.cf-resend').forEach((b) =>
-    b.addEventListener('click', () => cfResend(b.dataset.qq, b.dataset.task)));
-}
-async function loadComicAdmin() {
-  cfRender(await api('/api/comic/admin'));
-  // provider 填错不会报错，只会静默退回站主默认——把现役 id 列出来，
-  // 省得站主对着空白框猜名字。
-  try {
-    // scope=comic 才会带出「只在漫画台可见」的中转站渠道（私人额度，
-    // 主对话默认不展示），站主配白名单时正是要用这些。
-    const p = await api('/api/providers?scope=comic');
-    $('cfProviders').textContent = '现役 provider id：' +
-      (p.providers || []).map((x) => x.id +
-        (x.model ? '（默认 ' + x.model + '）' : '')).join('　');
-  } catch (e) {
-    $('cfProviders').textContent = '服务商清单暂时读不出来，provider 填 /api/providers 里的 id。';
-  }
-}
-async function cfSaveDefaults() {
-  const p = { defaults: {} };
-  Object.keys(CF_FIELDS).forEach((k) => {
-    p.defaults[k] = cfNum(CF_FIELDS[k], 0);
-  });
-  cfRender(await cfPost(p));
-  status('漫画台默认额度已保存');
-}
-async function cfSaveModels() {
-  const models = $('cfModels').value.split('\n').map((line) => line.trim())
-    .filter(Boolean).map((line) => {
-      const p = line.split('|');
-      return { provider: (p[0] || '').trim(), model: (p[1] || '').trim(),
-               label: (p[2] || '').trim() };
-    }).filter((m) => m.provider);
-  cfRender(await cfPost({ models: models }));
-  status('编剧模型白名单已保存（' + models.length + ' 条）');
-}
-async function cfSaveAccount(qq) {
-  const row = $('cfAccounts').querySelector('[data-row="' + qq + '"]');
-  if (!row) return;
-  const limits = {}, used = {};
-  row.querySelectorAll('.cf-lim').forEach((i) => {
-    limits[i.dataset.k] = Math.max(0, Number(i.value) || 0);
-  });
-  row.querySelectorAll('.cf-used').forEach((i) => {
-    used[i.dataset.k] = Math.max(0, Number(i.value) || 0);
-  });
-  cfRender(await cfPost({ account: { qq: qq, limits: limits, used: used } }));
-  status('已保存 ' + qq + ' 的漫画台额度');
-}
-async function cfResend(qq, task) {
-  const resp = await fetch('/api/comic/send_qq', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ task: task, qq: qq })
-  });
-  const d = await resp.json();
-  if (!resp.ok || d.ok === false) throw new Error(d.error || '补发失败');
-  status('已排队补发：' + task + ' → ' + qq);
-}
-$('cfReload').addEventListener('click', () =>
-  loadComicAdmin().catch((e) => status(e.message, 'err')));
-$('cfDefaultsSave').addEventListener('click', () =>
-  cfSaveDefaults().catch((e) => status(e.message, 'err')));
-$('cfModelsSave').addEventListener('click', () =>
-  cfSaveModels().catch((e) => status(e.message, 'err')));
-
+// 漫画台管理已搬到独立页 /comic_admin，相关脚本一并移走。
 loadUsage().catch(() => {});
 loadBill().catch(() => {});
-loadComicAdmin().catch((e) => status('漫画台管理读取失败：' + e.message, 'err'));
 boot();
 </script>
 </body>

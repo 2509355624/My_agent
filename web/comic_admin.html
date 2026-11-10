@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>漫画台管理</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%237c5cff'/></svg>">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0a0a0f; --bg-elev: #12121a; --bg-input: #1a1a24;
+    --border: #2a2a3a; --border-soft: #1f1f2e;
+    --text: #e8e8f0; --text-dim: #8888a0; --text-mute: #555570;
+    --accent: #7c5cff; --success: #4ade80; --error: #f87171;
+    --radius: 12px;
+  }
+  html, body { min-height: 100%; background: var(--bg); color: var(--text);
+    font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    font-size: 14px; line-height: 1.7; }
+  body::before { content: ""; position: fixed; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(124,92,255,.15), transparent); }
+  .wrap { position: relative; max-width: 1000px; margin: 0 auto; padding: 22px 16px 60px; }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  h1 { font-size: 19px; font-weight: 600; }
+  .sub { color: var(--text-mute); font-size: 12px; }
+  .spacer { flex: 1; }
+  a.back { color: var(--text-dim); font-size: 13px; text-decoration: none; }
+  a.back:hover { color: var(--accent); }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  .btn { background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+    padding: 6px 12px; font-size: 13px; }
+  .btn:hover { filter: brightness(1.12); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .ghost { background: var(--bg-input); border: 1px solid var(--border);
+    border-radius: 8px; padding: 5px 11px; font-size: 13px; }
+  .ghost:hover { border-color: var(--accent); }
+  .mini { padding: 3px 9px; font-size: 12px; }
+  input[type=text], input[type=number], select {
+    background: var(--bg-input); border: 1px solid var(--border);
+    border-radius: 8px; padding: 5px 9px; outline: none; }
+  input:focus, select:focus { border-color: var(--accent); }
+  .card { background: var(--bg-elev); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: 16px 18px; margin-bottom: 14px; }
+  .card h2 { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+  .hint { color: var(--text-dim); font-size: 12px; line-height: 1.65; }
+  .bar { min-height: 22px; margin: 8px 0 12px; font-size: 13px; color: var(--text-dim); }
+  .bar.err { color: var(--error); }
+  .bar.ok { color: var(--success); }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+  /* 默认额度：一行说人话，编辑区收起来，别挡住主体 */
+  .defaults { font-size: 13px; color: var(--text); line-height: 1.9; }
+  .defaults b { color: var(--accent); font-weight: 600; }
+  .edit { display: none; margin-top: 10px; padding-top: 10px;
+    border-top: 1px solid var(--border-soft); }
+  .edit.on { display: block; }
+  .edit label { display: inline-block; margin: 3px 12px 3px 0; font-size: 12px;
+    color: var(--text-dim); }
+  .edit input { width: 62px; margin-left: 4px; }
+
+  /* 一个账号一张卡：手机上也不会挤成一堆看不懂的小输入框 */
+  .acc { background: var(--bg-input); border: 1px solid var(--border-soft);
+    border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
+  .acc .head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    margin-bottom: 9px; }
+  .acc .qq { font-size: 15px; font-weight: 600; letter-spacing: .3px; }
+  .acc .meta { color: var(--text-mute); font-size: 12px; }
+  .quota { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+    gap: 7px 14px; margin-bottom: 10px; }
+  .quota .item { font-size: 12px; color: var(--text-dim); }
+  .quota .item .k { display: inline-block; min-width: 34px; color: var(--text); }
+  .quota .item .left { font-size: 15px; font-weight: 600; color: var(--success); }
+  .quota .item .left.zero { color: var(--text-mute); }
+  .quota .item .of { color: var(--text-mute); }
+  .acts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .acts .sep { width: 1px; height: 18px; background: var(--border); margin: 0 3px; }
+  .new { margin-top: 4px; }
+  .new input { width: 160px; }
+  .empty { color: var(--text-mute); font-size: 13px; padding: 10px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; opacity: .6; font-weight: 400; padding: 4px 6px; }
+  td { padding: 5px 6px; border-top: 1px solid var(--border-soft); }
+  .scroll { overflow-x: auto; }
+  details summary { cursor: pointer; color: var(--text-dim); font-size: 13px; }
+  @media (max-width: 560px) {
+    .wrap { padding: 14px 10px 40px; }
+    .card { padding: 13px; }
+    .new input { width: 130px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>漫画台管理</h1>
+    <span class="sub">谁用了漫画台 · 各剩几次 · 给他加次数</span>
+    <span class="spacer"></span>
+    <button class="ghost" id="reload">刷新</button>
+    <a class="back" href="/comic">漫画工作台 →</a>
+    <a class="back" href="/admin">Agent 管理 →</a>
+  </header>
+
+  <div class="bar" id="bar"></div>
+
+  <div class="card">
+    <h2>新人默认额度 <button class="ghost mini" id="toggleDefaults" style="margin-left:8px;">修改</button></h2>
+    <div class="defaults" id="defaultsText">读取中…</div>
+    <div class="edit" id="defaultsEdit">
+      <div class="row" id="defaultsFields"></div>
+      <div class="row" style="margin-top:9px;">
+        <button class="btn" id="saveDefaults">保存默认</button>
+        <span class="hint">只影响之后新建的账号；已经单独加过次数的账号不受影响。</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>谁用了漫画台 <span class="hint" id="accCount"></span></h2>
+    <div class="hint" style="margin-bottom:10px;">
+      「剩」是还能用几次，「共」是你给他的总次数，括号里是已经用掉的。
+      要加次数直接点下面的按钮，一次加一点，不用自己算总数。编剧模型统一走站主默认，不用配置。
+    </div>
+    <div id="accounts"><div class="empty">读取中…</div></div>
+  </div>
+
+  <div class="card">
+    <h2>给还没用过的人先加次数</h2>
+    <div class="hint" style="margin-bottom:9px;">
+      填对方 QQ，点一下就建号并加上次数；他打开漫画工作台就能直接用了。
+    </div>
+    <div class="row new">
+      <input type="text" id="newQQ" placeholder="对方 QQ 号" inputmode="numeric"
+             autocomplete="off" spellcheck="false">
+      <button class="ghost btn-add" data-kind="script" data-n="1">+1 剧本</button>
+      <button class="ghost btn-add" data-kind="revise" data-n="3">+3 修订</button>
+      <button class="ghost btn-add" data-kind="comic" data-n="1">+1 漫画</button>
+      <button class="ghost btn-add" data-kind="portrait" data-n="1">+1 写真</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <details id="deliverBox">
+      <summary>最近的 QQ 直发记录（失败可在这里补发）</summary>
+      <div class="scroll" id="deliveries" style="margin-top:10px;"></div>
+    </details>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+const KINDS = [
+  { key: 'script',   label: '剧本', unit: '次', step: 1 },
+  { key: 'revise',   label: '修订', unit: '次', step: 3 },
+  { key: 'comic',    label: '漫画', unit: '本', step: 1 },
+  { key: 'portrait', label: '写真', unit: '本', step: 1 }
+];
+const DEF_FIELDS = [
+  { key: 'script',     label: '剧本次数' },
+  { key: 'revise',     label: '修订次数' },
+  { key: 'comic',      label: '漫画本数' },
+  { key: 'portrait',   label: '写真本数' },
+  { key: 'max_panels', label: '每本格数' },
+  { key: 'max_shots',  label: '写真张数' }
+];
+
+let DATA = null;
+
+function $(id) { return document.getElementById(id); }
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function bar(msg, kind) {
+  const el = $('bar');
+  el.textContent = msg || '';
+  el.className = 'bar' + (kind ? ' ' + kind : '');
+}
+function ok(msg) { bar(msg, 'ok'); }
+function fail(e) { bar((e && e.message) || String(e), 'err'); }
+async function get(path) {
+  const r = await fetch(path, { cache: 'no-store' });
+  const d = await r.json();
+  if (!r.ok || d.ok === false) throw new Error(d.error || ('读取失败 HTTP ' + r.status));
+  return d;
+}
+async function post(path, payload) {
+  const r = await fetch(path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  let d = {};
+  try { d = await r.json(); } catch (e) { /* 下面按状态码报错 */ }
+  if (!r.ok || d.ok === false) throw new Error(d.error || ('保存失败 HTTP ' + r.status));
+  return d;
+}
+
+function renderDefaults(d) {
+  const x = d.defaults || {};
+  $('defaultsText').innerHTML = '新账号默认有：剧本 <b>' + (x.script ?? 1) + '</b> 次 · '
+    + '修订 <b>' + (x.revise ?? 3) + '</b> 次 · '
+    + '漫画 <b>' + (x.comic ?? 1) + '</b> 本 · '
+    + '写真 <b>' + (x.portrait ?? 2) + '</b> 本 · '
+    + '每本 <b>' + (x.max_panels ?? 10) + '</b> 格 · '
+    + '写真每本 <b>' + (x.max_shots ?? 5) + '</b> 张';
+  $('defaultsFields').innerHTML = DEF_FIELDS.map((f) =>
+    '<label>' + esc(f.label) + '<input type="number" min="0" data-k="' + f.key +
+    '" value="' + (x[f.key] ?? 0) + '"></label>').join('');
+}
+
+function renderAccounts(d) {
+  const rows = d.accounts || [];
+  $('accCount').textContent = rows.length ? '共 ' + rows.length + ' 个账号' : '';
+  if (!rows.length) {
+    $('accounts').innerHTML = '<div class="empty">还没有人用过漫画台。'
+      + '谁第一次用，这里就会自动出现一行；也可以直接在下面填 QQ 先给他加次数。</div>';
+    return;
+  }
+  $('accounts').innerHTML = rows.map((a) => {
+    const lim = a.limits || {}, used = a.used || {}, left = a.left || {};
+    const quota = KINDS.map((k) => {
+      const n = left[k.key] || 0;
+      return '<div class="item"><span class="k">' + k.label + '</span>'
+        + '剩 <span class="left' + (n ? '' : ' zero') + '">' + n + '</span> ' + k.unit
+        + ' <span class="of">/ 共 ' + (lim[k.key] || 0) + ' '
+        + k.unit + '（已用 ' + (used[k.key] || 0) + '）</span></div>';
+    }).join('');
+    const tiers = (d.panel_tiers || [10, 15, 20, 25, 30]).map((n) =>
+      '<option value="' + n + '"' + (Number(lim.max_panels) === n ? ' selected' : '') +
+      '>' + n + ' 格</option>').join('');
+    const adds = KINDS.map((k) =>
+      '<button class="ghost mini act-add" data-qq="' + esc(a.qq) +
+      '" data-kind="' + k.key + '" data-n="' + k.step + '">+' + k.step +
+      ' ' + k.label + '</button>').join('');
+    return '<div class="acc">'
+      + '<div class="head"><span class="qq">' + esc(a.qq) + '</span>'
+      + '<span class="meta">最近使用 ' + esc(a.last_at || '—') + '</span>'
+      + '<span class="meta">作品 ' + (a.works || 0) + ' 本</span></div>'
+      + '<div class="quota">' + quota + '</div>'
+      + '<div class="acts">' + adds + '<span class="sep"></span>'
+      + '<span class="hint">每本格数</span>'
+      + '<select class="act-panels" data-qq="' + esc(a.qq) + '">' + tiers + '</select>'
+      + '</div></div>';
+  }).join('');
+  $('accounts').querySelectorAll('.act-add').forEach((b) =>
+    b.addEventListener('click', () => addTimes(b.dataset.qq, b.dataset.kind,
+                                                Number(b.dataset.n))));
+  $('accounts').querySelectorAll('.act-panels').forEach((s) =>
+    s.addEventListener('change', () => setPanels(s.dataset.qq, Number(s.value))));
+}
+
+function renderDeliveries(d) {
+  const rows = (d.deliveries || []).slice().reverse();
+  $('deliveries').innerHTML = rows.length
+    ? '<table><tr><th>时间</th><th>QQ</th><th>作品</th><th>状态</th>'
+      + '<th>说明</th><th></th></tr>'
+      + rows.map((r) => '<tr><td>' + esc(r.at) + '</td><td>' + esc(r.qq)
+        + '</td><td>' + esc(r.task) + '</td><td style="color:'
+        + (r.state === 'failed' ? 'var(--error)' : 'inherit') + '">'
+        + esc(r.state) + '</td><td>' + esc(r.detail) + '</td>'
+        + '<td><button class="ghost mini act-resend" data-qq="' + esc(r.qq)
+        + '" data-task="' + esc(r.task) + '">补发到 QQ</button></td></tr>').join('')
+      + '</table>'
+    : '<div class="empty">还没有发送记录。</div>';
+  $('deliveries').querySelectorAll('.act-resend').forEach((b) =>
+    b.addEventListener('click', () => resend(b.dataset.qq, b.dataset.task)));
+}
+
+function render(d) {
+  DATA = d;
+  renderDefaults(d);
+  renderAccounts(d);
+  renderDeliveries(d);
+}
+
+async function addTimes(qq, kind, n) {
+  const label = (KINDS.find((k) => k.key === kind) || {}).label || kind;
+  bar('正在给 ' + qq + ' 加 ' + n + ' ' + label + '…');
+  try {
+    render(await post('/api/comic/admin', { add: { qq: qq, kind: kind, n: n } }));
+    ok('已给 ' + qq + ' 加了 ' + n + ' ' + label);
+  } catch (e) { fail(e); }
+}
+async function setPanels(qq, n) {
+  try {
+    render(await post('/api/comic/admin',
+      { account: { qq: qq, limits: { max_panels: n } } }));
+    ok('已把 ' + qq + ' 的每本格数改成 ' + n);
+  } catch (e) { fail(e); }
+}
+async function resend(qq, task) {
+  bar('正在排队补发 ' + task + ' → ' + qq);
+  try {
+    await post('/api/comic/send_qq', { task: task, qq: qq });
+    ok('已排队补发：' + task + ' → ' + qq);
+  } catch (e) { fail(e); }
+}
+async function reload() {
+  try { render(await get('/api/comic/admin')); bar(''); }
+  catch (e) { fail(e); }
+}
+
+$('reload').addEventListener('click', reload);
+$('toggleDefaults').addEventListener('click', () => {
+  const box = $('defaultsEdit');
+  box.classList.toggle('on');
+  $('toggleDefaults').textContent = box.classList.contains('on') ? '收起' : '修改';
+});
+$('saveDefaults').addEventListener('click', async () => {
+  const defaults = {};
+  $('defaultsFields').querySelectorAll('input[data-k]').forEach((i) => {
+    defaults[i.dataset.k] = Math.max(0, Number(i.value) || 0);
+  });
+  try {
+    render(await post('/api/comic/admin', { defaults: defaults }));
+    $('defaultsEdit').classList.remove('on');
+    $('toggleDefaults').textContent = '修改';
+    ok('默认额度已保存');
+  } catch (e) { fail(e); }
+});
+document.querySelectorAll('.btn-add').forEach((b) =>
+  b.addEventListener('click', () => {
+    const qq = $('newQQ').value.trim();
+    if (!/^\d{5,12}$/.test(qq)) { bar('先填一个正确的 QQ 号', 'err'); return; }
+    addTimes(qq, b.dataset.kind, Number(b.dataset.n));
+  }));
+$('newQQ').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.querySelector('.btn-add').click();
+});
+
+reload();
+</script>
+</body>
+</html>

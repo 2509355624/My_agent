@@ -48,6 +48,12 @@
   input[type=checkbox] { accent-color: var(--accent); }
   textarea { width: 100%; min-height: 190px; line-height: 1.6; resize: vertical; }
   textarea.small { min-height: 72px; }
+  /* 设定三行竖排：手机上不用横着挤，也不会跟「镜头方式」下拉撞名。 */
+  .brief-line { margin-bottom: 8px; }
+  .brief-line > label { display: block; font-size: 12px; color: var(--text-dim);
+    margin-bottom: 3px; }
+  .brief-line input, .brief-line textarea { width: 100%; }
+  .brief-line textarea.small { min-height: 64px; }
   .btn { background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
     border-radius: var(--radius-sm); padding: 8px 14px; cursor: pointer; font: inherit; }
   .btn:hover:not(:disabled) { border-color: var(--accent); }
@@ -126,11 +132,25 @@
       <select id="taskSel" class="grow"><option value="">（新建一本）</option></select>
       <button class="btn small" id="btnTasks">刷新</button>
     </div>
-    <textarea id="brief" class="small" placeholder="一句话设定：想看什么故事、谁、在哪、发生什么"></textarea>
+    <div class="brief-line">
+      <label>① 视角 —— 谁的视角（镜头后面站的是谁）</label>
+      <input id="briefView" placeholder="例：我 / 哥哥">
+    </div>
+    <div class="brief-line">
+      <label>② 主角是谁（画面里的人）</label>
+      <input id="briefHero" placeholder="例：妹妹 / 千夏">
+    </div>
+    <div class="brief-line">
+      <label>③ 剧情是什么（在哪、发生什么）</label>
+      <textarea id="briefPlot" class="small" placeholder="例：下雨天两个人在公交站躲雨，她把伞往我这边偏了一点"></textarea>
+    </div>
+    <div class="hint" style="margin-bottom:9px;">
+      这三行编剧会当成硬约束（视角＝镜头后的「我」，主角＝画面里的人），照着填就行。
+      一本几格由站主按账号给，页面顶部会显示，不用自己填。
+    </div>
     <div class="row" style="margin:9px 0">
-      <label>格数</label><input type="number" id="panels" min="1" max="10" value="10">
-      <label>视角</label>
-      <select id="pov">
+      <label>镜头方式</label>
+      <select id="pov" title="第一人称＝镜头就是「我」的眼睛；自由机位＝编剧按剧情自己挑；第三人称＝镜头在旁边看两个人">
         <option value="pov">POV 第一人称</option>
         <option value="free">自由视角</option>
         <option value="third">第三人称</option>
@@ -288,7 +308,6 @@ function renderChips(d) {
   $("btnScript").disabled = !(left.script > 0);
   $("btnChat").disabled = !(left.revise > 0);
   if (left.script <= 0) $("btnScript").textContent = "剧本次数已用完";
-  $("panels").max = (lim && lim.limits && lim.limits.max_panels) || 10;
   $("pN").max = (lim && lim.limits && lim.limits.max_shots) || 5;
 }
 
@@ -428,13 +447,24 @@ async function poll(path, job, onDone, label) {
   });
 }
 async function doScript() {
-  const brief = $("brief").value.trim();
-  if (!brief) { bar("先写一句设定", true); return; }
+  const view = $("briefView").value.trim();
+  const hero = $("briefHero").value.trim();
+  const plot = $("briefPlot").value.trim();
+  if (!view || !hero || !plot) {
+    bar("三行都要填：视角是谁、主角是谁、剧情是什么", true);
+    return;
+  }
+  // 站主版编剧契约本来就是这三行（comic_studio.html 的 placeholder 同款），
+  // 前端拼回原样再发，后端一个字不用改。
+  const brief = "视角: " + view + "\n主角: " + hero + "\n剧情: " + plot;
+  // 格数只认站主按账号给的上限，群友端不留输入框（原来那个 number 框在
+  // 手机上能粘贴 30，但服务端会夹回上限，纯属误导）。
+  const maxPanels = (S.quota && S.quota.limits && S.quota.limits.max_panels) || 10;
   const m = modelPair();
   $("btnScript").disabled = true;
   try {
     const d = await api("/api/comic/script", {
-      brief: brief, panels: Number($("panels").value) || 10,
+      brief: brief, panels: maxPanels,
       character: "", pov_mode: $("pov").value,
       prev: $("prev").value, carry_outfit: $("carry").checked,
       no_search: $("noSearch").checked, silver_mode: "no_bubble",

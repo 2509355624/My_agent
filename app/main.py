@@ -905,6 +905,15 @@ def comic_page():
     return send_from_directory(WEB_DIR, "comic_studio.html")
 
 
+@app.route("/comic_admin")
+def comic_admin_page():
+    """群友漫画台管理：独立页面，不塞在 /admin 的 QQ 机器人卡片里。
+
+    只在 5174 开：5175 不反代这个路径，群友也拿不到 /api/comic/admin 的数据。
+    """
+    return send_from_directory(WEB_DIR, "comic_admin.html")
+
+
 @app.route("/moss")
 def moss_comic_page():
     """moss 漫画台：一句话 → 编剧写整页 → 一次出图（见 app/moss_api.py）。"""

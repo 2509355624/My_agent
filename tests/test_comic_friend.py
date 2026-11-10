@@ -458,5 +458,85 @@ class TestFriendGateway(_TempMixin, unittest.TestCase):
         self.assertTrue(sess.get.call_args.kwargs["stream"])
 
 
+class TestComicAdminPage(_TempMixin, unittest.TestCase):
+    """独立管理页：加次数是增量、按账号看用量、页面与入口接线。"""
+
+    def _html(self, name):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "web", name), encoding="utf-8") as f:
+            return f.read()
+
+    def test_加次数是增量且自动建号(self):
+        self.assertEqual(comic_quota.admin_view()["accounts"], [])
+        comic_quota.admin_update({"add": {"qq": QQ, "kind": "script", "n": 1}})
+        comic_quota.admin_update({"add": {"qq": QQ, "kind": "revise", "n": 3}})
+        rows = comic_quota.admin_view()["accounts"]
+        self.assertEqual(len(rows), 1)
+        a = rows[0]
+        self.assertEqual(a["qq"], QQ)
+        self.assertEqual(a["limits"]["script"], comic_quota.DEFAULTS["script"] + 1)
+        self.assertEqual(a["limits"]["revise"], comic_quota.DEFAULTS["revise"] + 3)
+        self.assertEqual(a["left"]["script"], a["limits"]["script"])
+        self.assertEqual(a["last_at"], "")     # 站主加次数不算「他用过」
+        self.assertEqual(a["works"], 0)
+
+    def test_只冻结被加的那一项其它仍跟随默认(self):
+        comic_quota.admin_update({"add": {"qq": QQ, "kind": "script", "n": 1}})
+        comic_quota.admin_update({"defaults": {"comic": 5, "script": 9}})
+        a = comic_quota.admin_view()["accounts"][0]
+        self.assertEqual(a["limits"]["comic"], 5)
+        self.assertEqual(a["limits"]["script"], comic_quota.DEFAULTS["script"] + 1)
+
+    def test_最近使用与作品数来自真实使用(self):
+        comic_quota.consume(QQ, "script")
+        comic_quota.mark_charged(QQ, "comic", "T1")
+        comic_quota.mark_charged(QQ, "comic", "T1")   # 同一本重跑不重复记
+        comic_quota.mark_charged(QQ, "portrait", "T2")
+        a = comic_quota.admin_view()["accounts"][0]
+        self.assertTrue(a["last_at"])
+        self.assertEqual(a["works"], 2)
+        self.assertEqual(a["used"]["script"], 1)
+
+    def test_加次数走接口且群友不能改(self):
+        c = main.app.test_client()
+        r = c.post("/api/comic/admin?qq=%s" % QQ,
+                   json={"add": {"qq": QQ, "kind": "script", "n": 1}},
+                   headers={"X-Friend-Token": SECRET})
+        self.assertEqual(r.status_code, 403)
+        r = c.post("/api/comic/admin",
+                   json={"add": {"qq": QQ, "kind": "script", "n": 1}})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(comic_quota.admin_view()["accounts"][0]
+                         ["limits"]["script"], comic_quota.DEFAULTS["script"] + 1)
+
+    def test_独立页路由可达(self):
+        r = main.app.test_client().get("/comic_admin")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("漫画台管理", r.get_data(as_text=True))
+
+    def test_管理页独立且白名单手填已删(self):
+        page = self._html("comic_admin.html")
+        self.assertIn("谁用了漫画台", page)
+        self.assertIn("+1 剧本", page)
+        self.assertNotIn("provider|model", page)
+        adm = self._html("admin.html")
+        self.assertNotIn("cfModels", adm)
+        self.assertNotIn("cfAccounts", adm)
+        self.assertIn('href="/comic_admin"', adm)
+        # 搬走卡片时别把「今日用量 / QQ 账单」的初始化一起删掉
+        self.assertIn("loadUsage().catch", adm)
+        self.assertIn("loadBill().catch", adm)
+        self.assertIn('href="/comic_admin"', self._html("comic_studio.html"))
+
+    def test_群友页设定拆三行且没有格数输入(self):
+        cli = self._html("comic_studio_friend.html")
+        self.assertNotIn('id="panels"', cli)
+        for i in ("briefView", "briefHero", "briefPlot"):
+            self.assertIn('id="%s"' % i, cli)
+        self.assertIn('"视角: " + view', cli)
+        self.assertIn("max_panels", cli)          # 格数只从站主额度取
+        self.assertNotIn("一句话设定", cli)
+
+
 if __name__ == "__main__":
     unittest.main()
