@@ -1122,7 +1122,7 @@ MORE_CHAN_TEXT = (
     "【★qwen】qwen\n"
     "【★miao】miao\n"
     "\n"
-    "【其他】moss ｜ moss光影 ｜ silver-hd ｜ qwen-hd\n"
+    "【其他】moss ｜ moss光影 ｜ silver-hd ｜ qwen-hd ｜ qwen真人\n"
     "　　　　qwen角色设定表 ｜ qwen修复 ｜ 半厚涂 ｜ sf ｜ anima多图\n"
     "　　　　anima线条 ｜ anima 2s ｜ anima写实 ｜ anima鬼针草 ｜ anima肉感 ｜ jank\n"
     "　　　　sd ｜ nffa ｜ cunny ｜ nai\n"
