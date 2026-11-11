@@ -926,10 +926,14 @@ def api_comic_start():
     scene_skill = _resolve_skill(path, data.get("scene_skill"))
     _save_task_skill(path, scene_skill)
     # 独占通道（2026-11-11）：把待跑底图格一次性推上队列，前 comic.EXCLUSIVE_MAX
-    # 张登记优先票压后所有已排队任务。**只认站主**——群友经 5175 反代过来的
-    # 请求必带 qq（_qq() 注入），站主直连 qq 为空；群友传了也当没传，排队
-    # 行为跟从前完全一样。
-    exclusive = bool(data.get("exclusive")) and not qq
+    # 张登记优先票压后所有已排队任务。站主靠开跑旁的勾选框显式选择；**群友在
+    # anima-line 渠道自动走独占**（同日拍板）：群友页没有这个勾选框，参数卡全
+    # 局默认 + 优先票让一本底图一口气跑完；别的渠道照旧逐格（NAI 云端本来就
+    # 管不着独木桥顺序）。群友请求必带 qq（_qq() 注入），站主直连 qq 为空。
+    if qq:
+        exclusive = scene_skill == "anima-line"
+    else:
+        exclusive = bool(data.get("exclusive"))
     started = _spawn(path, "scene", lambda: comic.run(
         os.path.join(path, "script.md"), silver_only=True,
         scene_skill=scene_skill, exclusive=exclusive), on_error=_mark_pending_failed(path),
@@ -963,19 +967,29 @@ def api_comic_rerun():
         return jsonify({"ok": False, "error": str(exc)}), 404
     skill = _resolve_skill(path, data.get("scene_skill"))
     _save_task_skill(path, skill)
+    # 独占判定与 /start 同一条规则（2026-11-11）：站主看请求、群友在
+    # anima-line 渠道自动独占——重跑同样是整本底图批跑，不给优先的话
+    # 「一本底图一口气跑完」在重跑时不成立。这个端点原本只给站主页用，
+    # 群友页从 5175 反代过来会带 qq（_qq() 注入），这里第一次用到。
+    qq = _qq()
+    if qq:
+        exclusive = skill == "anima-line"
+    else:
+        exclusive = bool(data.get("exclusive"))
     for p in task.panels:
         p.state, p.seed, p.error = "pending", None, None
     task.scene_skill = skill
     task.save_state()
     started = _spawn(path, "scene", lambda: comic.run(
         os.path.join(path, "script.md"), silver_only=True,
-        scene_skill=skill), on_error=_mark_pending_failed(path),
-        finish="notify")
+        scene_skill=skill, exclusive=exclusive),
+        on_error=_mark_pending_failed(path), finish="notify")
     if not started:
         return jsonify({"ok": False, "error": "这个任务已经在跑了，先中断再重跑"}), 409
-    comic.log.info("换渠道重跑 %s：%d 格，渠道 %s", os.path.basename(path),
-                   len(task.panels), skill)
-    return jsonify({"ok": True, "panels": len(task.panels), "scene_skill": skill})
+    comic.log.info("换渠道重跑 %s：%d 格，渠道 %s%s", os.path.basename(path),
+                   len(task.panels), skill, "（独占）" if exclusive else "")
+    return jsonify({"ok": True, "panels": len(task.panels),
+                    "scene_skill": skill, "exclusive": exclusive})
 
 
 @bp.route("/api/comic/abort", methods=["POST"])

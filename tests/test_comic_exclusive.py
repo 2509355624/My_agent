@@ -11,8 +11,10 @@
   4. `comic.run(exclusive=True)`：阶段一把所有待跑格**一次性入队**（NAI
      渠道除外——云端队列管不着），前 EXCLUSIVE_MAX 张优先票、之后普通票；
      收图后每格照常落状态、记耗时；逐格路径（exclusive=False）行为不变。
-  5. `/api/comic/start` 只认站主：直连（无 qq）传 exclusive 生效；群友经
-     5175 反代必带 qq，传了也当没传。群友页由派生脚本隐藏这个勾选框。
+  5. `/api/comic/start` 与 `/api/comic/rerun` 的准入：站主看勾选框（直连无
+     qq）；群友经 5175 反代必带 qq，在 anima-line 渠道**自动**独占（群友页
+     没有勾选框，参数走全局默认），其他渠道照旧逐格。群友页由派生脚本隐藏
+     这个勾选框。
 """
 
 import os
@@ -222,14 +224,14 @@ class RunExclusiveTest(unittest.TestCase):
 
 
 class ApiStartExclusiveTest(unittest.TestCase):
-    """「独占通道」只认站主：直连（无 qq）生效，群友传了也当没传。"""
+    """独占通道准入：站主看勾选框；群友在 anima-line 渠道**自动**独占。"""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.c = main.app.test_client()
 
-    def _start(self, qq):
+    def _start(self, qq, skill="anima-line", exclusive=True):
         path = _mk_script(self.tmp.name, 2)
         meta, panels = comic.parse_script(path)
         task = comic.Task(path, meta, panels)
@@ -248,7 +250,7 @@ class ApiStartExclusiveTest(unittest.TestCase):
                 mock.patch.object(comic_api, "_load_task", lambda p: task), \
                 mock.patch.object(comic_api, "_qq", lambda: qq), \
                 mock.patch.object(comic_api, "_resolve_skill",
-                                  lambda p, s: "anima-line"), \
+                                  lambda p, s: skill), \
                 mock.patch.object(comic_api, "_save_task_skill",
                                   lambda p, s: None), \
                 mock.patch.object(comic_api, "_spawn", fake_spawn), \
@@ -258,7 +260,7 @@ class ApiStartExclusiveTest(unittest.TestCase):
                 mock.patch.object(comic_api.comic_quota, "charged",
                                   lambda *a, **k: True):
             rv = self.c.post("/api/comic/start",
-                             json={"task": "t", "exclusive": True})
+                             json={"task": "t", "exclusive": exclusive})
             if "fn" in spawned:
                 spawned["fn"]()                  # 直接调，省掉线程
         return rv.get_json(), run_calls
@@ -269,11 +271,89 @@ class ApiStartExclusiveTest(unittest.TestCase):
         self.assertTrue(d.get("exclusive"))
         self.assertTrue(calls[0].get("exclusive"))
 
-    def test_group_user_exclusive_is_ignored(self):
-        d, calls = self._start("12345")          # 群友：qq 非空
+    def test_owner_without_checkbox_stays_sequential(self):
+        d, calls = self._start(None, exclusive=False)
         self.assertTrue(d.get("ok"))
-        self.assertFalse(d.get("exclusive"), "群友传 exclusive 必须被忽略")
+        self.assertFalse(d.get("exclusive"))
         self.assertFalse(calls[0].get("exclusive"))
+
+    def test_group_user_auto_exclusive_on_anima_line(self):
+        # 群友页没有独占勾选框：anima-line 渠道后端自动给独占批量。
+        d, calls = self._start("12345", skill="anima-line", exclusive=False)
+        self.assertTrue(d.get("ok"))
+        self.assertTrue(d.get("exclusive"), "群友 anima-line 应自动独占")
+        self.assertTrue(calls[0].get("exclusive"))
+
+    def test_group_user_other_channel_stays_sequential(self):
+        # 只给 anima-line 这一渠道：别的渠道（含 NAI 云端）照旧逐格。
+        d, calls = self._start("12345", skill="nai", exclusive=True)
+        self.assertTrue(d.get("ok"))
+        self.assertFalse(d.get("exclusive"), "群友非 anima-line 不独占")
+        self.assertFalse(calls[0].get("exclusive"))
+
+
+class ApiRerunExclusiveTest(unittest.TestCase):
+    """换渠道重跑与 /start 同一条独占规则。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.c = main.app.test_client()
+
+    def _rerun(self, qq, skill="anima-line", exclusive=True):
+        path = _mk_script(self.tmp.name, 2)
+        meta, panels = comic.parse_script(path)
+        task = comic.Task(path, meta, panels)
+        spawned = {}
+        run_calls = []
+
+        def fake_spawn(path_, phase, fn, on_error=None, finish=None):
+            spawned["fn"] = fn
+            return True
+
+        def fake_run(script_path, **kw):
+            run_calls.append(kw)
+            return task
+
+        with mock.patch.object(comic_api, "_task_dir", lambda t: self.tmp.name), \
+                mock.patch.object(comic_api, "_load_task", lambda p: task), \
+                mock.patch.object(comic_api, "_qq", lambda: qq), \
+                mock.patch.object(comic_api, "_resolve_skill",
+                                  lambda p, s: skill), \
+                mock.patch.object(comic_api, "_save_task_skill",
+                                  lambda p, s: None), \
+                mock.patch.object(comic_api, "_spawn", fake_spawn), \
+                mock.patch.object(comic, "run", fake_run):
+            rv = self.c.post("/api/comic/rerun",
+                             json={"task": "t", "scene_skill": skill,
+                                   "exclusive": exclusive})
+            if "fn" in spawned:
+                spawned["fn"]()
+        return rv.get_json(), run_calls
+
+    def test_group_user_auto_exclusive_on_anima_line(self):
+        d, calls = self._rerun("12345")
+        self.assertTrue(d.get("ok"))
+        self.assertTrue(d.get("exclusive"))
+        self.assertTrue(calls[0].get("exclusive"))
+
+    def test_group_user_other_channel_stays_sequential(self):
+        d, calls = self._rerun("12345", skill="anima-real")
+        self.assertTrue(d.get("ok"))
+        self.assertFalse(d.get("exclusive"))
+        self.assertFalse(calls[0].get("exclusive"))
+
+    def test_owner_without_checkbox_stays_sequential(self):
+        d, calls = self._rerun(None, exclusive=False)
+        self.assertTrue(d.get("ok"))
+        self.assertFalse(d.get("exclusive"))
+        self.assertFalse(calls[0].get("exclusive"))
+
+    def test_owner_can_use_exclusive(self):
+        d, calls = self._rerun(None)
+        self.assertTrue(d.get("ok"))
+        self.assertTrue(d.get("exclusive"))
+        self.assertTrue(calls[0].get("exclusive"))
 
 
 class FriendPageHideTest(unittest.TestCase):
