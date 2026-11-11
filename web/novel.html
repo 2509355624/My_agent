@@ -2,119 +2,197 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>小说模式 · 丧尸末日</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23f472b6'/></svg>">
 <style>
-:root{
-  --nv-bg:#f6f5f2; --nv-panel:#ffffff; --nv-line:#e3e1da; --nv-text:#26251f;
-  --nv-muted:#77746a; --nv-soft:#f0eee8; --nv-accent:#3f5d8a; --nv-accent-soft:#e8eef7;
-  --nv-warn:#8a4a2f; --nv-warn-soft:#f8ece5; --nv-radius:12px;
+/* 皮肤与 web/persona.html 同一套（2026-11-11）：变量、三栏宽度、.btn /
+   .log / .composer / .side2 都照抄，不再另起一套配色。小说模式只是
+   「第三个玩法」，不该看起来像另一个网站。
+   ⚠️ persona.html 的样式是内嵌的，这里是它的基础皮肤副本；以后改配色
+   两处要同步（不在 281KB 单文件里抽公共 CSS，是为了不碰 1v1 的样式表）。 */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #000; --bg-elev: #0e0e12; --bg-input: #17171f;
+  --border: #26262f; --border-soft: #1a1a22;
+  --text: #e6e6ec; --text-dim: #8a8a9a; --text-mute: #55556a;
+  --accent: #f472b6; --accent-dim: #6d2a48;
+  --ok: #4ade80; --err: #f87171; --warn: #fbbf24;
+  --r: 12px; --rs: 8px;
 }
-@media (prefers-color-scheme: dark){
-  :root{
-    --nv-bg:#191a1c; --nv-panel:#222427; --nv-line:#363940; --nv-text:#eceae5;
-    --nv-muted:#a3a49e; --nv-soft:#2c2f33; --nv-accent:#8fb0e0; --nv-accent-soft:#2a3546;
-    --nv-warn:#e0a184; --nv-warn-soft:#3a2c26; --nv-radius:12px;
-  }
+html, body { background: var(--bg); color: var(--text); height: 100%;
+  font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-size: 14px; -webkit-text-size-adjust: 100%; }
+.app { display: flex; position: fixed; top: 0; right: 0; bottom: 0; left: 0;
+  height: 100vh; height: 100dvh; height: var(--vh, 100dvh);
+  touch-action: manipulation; }
+.app > .side { flex: 0 0 230px; }
+.app > .mid { flex: 1 1 auto; min-width: 0; }
+.app > .side2 { flex: 0 0 288px; }
+@supports (display: grid) {
+  .app { display: grid; grid-template-columns: 230px 1fr 288px; }
+  .app > .side, .app > .mid, .app > .side2 { flex: none; }
 }
-*{box-sizing:border-box}
-html,body{margin:0;padding:0;height:100%}
-body{background:var(--nv-bg);color:var(--nv-text);font:14px/1.7 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
-button,input,textarea,select{font:inherit;color:inherit}
-button{cursor:pointer}
-.nv-top{display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid var(--nv-line);background:var(--nv-panel);flex-wrap:wrap}
-.nv-top h1{font-size:16px;font-weight:500;margin:0}
-.nv-top .nv-sub{font-size:12px;color:var(--nv-muted)}
-.nv-top a{color:var(--nv-accent);font-size:12px;text-decoration:none;margin-left:auto}
-.nv-top a:hover{text-decoration:underline}
-.nv-wrap{display:grid;grid-template-columns:230px minmax(0,1fr) 280px;gap:12px;padding:12px;height:calc(100% - 54px);min-height:0}
-.nv-col{background:var(--nv-panel);border:1px solid var(--nv-line);border-radius:var(--nv-radius);padding:14px;min-width:0;overflow:auto}
-.nv-col h2{font-size:13px;font-weight:500;margin:0 0 10px;color:var(--nv-muted)}
-.nv-sec{margin-bottom:18px}
-.nv-sec h3{font-size:12px;font-weight:500;margin:0 0 8px;color:var(--nv-muted);letter-spacing:.04em}
-.nv-play{border:1px solid var(--nv-line);border-radius:10px;padding:10px 11px;margin-bottom:8px;cursor:pointer;background:var(--nv-soft)}
-.nv-play.on{border-color:var(--nv-accent);background:var(--nv-accent-soft)}
-.nv-play b{display:block;font-weight:500;font-size:13px}
-.nv-play span{display:block;font-size:11px;color:var(--nv-muted);margin-top:3px;overflow-wrap:anywhere}
-.nv-field{margin-bottom:8px}
-.nv-field label{display:block;font-size:11px;color:var(--nv-muted);margin-bottom:4px}
-.nv-field input,.nv-field select{width:100%;padding:7px 9px;border:1px solid var(--nv-line);border-radius:8px;background:var(--nv-bg);outline:none}
-.nv-btn{width:100%;padding:8px 10px;border:1px solid var(--nv-accent);border-radius:8px;background:var(--nv-accent-soft);color:var(--nv-accent)}
-.nv-btn:hover{filter:brightness(.96)}
-.nv-btn:disabled{opacity:.5;cursor:default}
-.nv-btn.ghost{background:transparent;border-color:var(--nv-line);color:var(--nv-muted)}
-.nv-world{font-size:12px;padding:7px 8px;border-radius:8px;cursor:pointer;border:1px solid transparent;overflow-wrap:anywhere}
-.nv-world:hover{background:var(--nv-soft)}
-.nv-world.on{background:var(--nv-accent-soft);border-color:var(--nv-accent)}
-.nv-empty{font-size:12px;color:var(--nv-muted)}
-.nv-log{display:flex;flex-direction:column;gap:14px;padding-bottom:10px;min-width:0}
-.nv-note{background:var(--nv-accent-soft);border-left:3px solid var(--nv-accent);padding:10px 12px;border-radius:0 8px 8px 0;font-size:13px;overflow-wrap:anywhere}
-.nv-para{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.9}
-.nv-said{align-self:flex-end;max-width:88%;background:var(--nv-soft);border-radius:10px 10px 2px 10px;padding:8px 11px;font-size:12px;color:var(--nv-muted);overflow-wrap:anywhere}
-.nv-ruling{font-size:12px;color:var(--nv-muted);border-top:1px dashed var(--nv-line);padding-top:7px;overflow-wrap:anywhere}
-.nv-end{background:var(--nv-warn-soft);border:1px solid var(--nv-warn);color:var(--nv-warn);border-radius:10px;padding:12px;overflow-wrap:anywhere}
-.nv-input{border-top:1px solid var(--nv-line);padding-top:10px;margin-top:8px}
-.nv-input textarea{width:100%;min-height:78px;resize:vertical;padding:9px 11px;border:1px solid var(--nv-line);border-radius:9px;background:var(--nv-bg);outline:none}
-.nv-actions{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
-.nv-actions button{padding:5px 10px;font-size:12px;border:1px solid var(--nv-line);border-radius:20px;background:var(--nv-soft);overflow-wrap:anywhere;max-width:100%;text-align:left}
-.nv-actions button:hover{border-color:var(--nv-accent)}
-.nv-sendrow{display:flex;gap:8px;margin-top:8px}
-.nv-sendrow .nv-btn{width:auto;flex:0 0 96px}
-.nv-card dl{margin:0}
-.nv-card dt{font-size:11px;color:var(--nv-muted);margin-top:11px}
-.nv-card dd{margin:2px 0 0;font-size:13px;overflow-wrap:anywhere}
-.nv-chip{display:inline-block;padding:2px 8px;margin:2px 4px 2px 0;border-radius:14px;background:var(--nv-soft);font-size:12px;overflow-wrap:anywhere}
-.nv-card ul{margin:4px 0 0;padding-left:17px;font-size:12px;overflow-wrap:anywhere}
-.nv-card li{margin-bottom:3px}
-.nv-dead{background:var(--nv-warn-soft);border:1px solid var(--nv-warn);border-radius:9px;padding:9px;font-size:12px;color:var(--nv-warn);overflow-wrap:anywhere}
-.nv-err{background:var(--nv-warn-soft);border:1px solid var(--nv-warn);color:var(--nv-warn);border-radius:8px;padding:8px 10px;font-size:12px;margin-bottom:10px;overflow-wrap:anywhere}
+.side { border-right: 1px solid var(--border-soft); display: flex;
+  flex-direction: column; min-height: 0; background: var(--bg-elev);
+  overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.side-head { padding: 14px 14px 10px; border-bottom: 1px solid var(--border-soft);
+  display: flex; align-items: center; }
+.side-head h1 { font-size: 14px; font-weight: 600; letter-spacing: .5px; }
+.side-head .sp { flex: 1; }
+.side-list { flex: 1; overflow-y: auto; padding: 10px 8px; }
+.mid { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.top { padding: 10px 16px; border-bottom: 1px solid var(--border-soft);
+  display: flex; align-items: center; gap: 10px; min-height: 50px; }
+.top .nm { font-size: 15px; font-weight: 600; }
+.top .sp { flex: 1; }
+.top a.btn { text-decoration: none; display: inline-flex; align-items: center; }
+.top a.btn:hover { border-color: var(--accent); color: var(--accent); }
+.log { flex: 1; min-height: 0; overflow-y: auto; padding: 16px;
+  display: flex; flex-direction: column; gap: 12px; scroll-behavior: smooth;
+  overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.composer { flex: none; border-top: 1px solid var(--border-soft);
+  padding: 10px 12px; display: flex; align-items: center; gap: 8px; }
+.composer textarea { flex: 1; background: var(--bg-input); color: var(--text);
+  border: 1px solid var(--border-soft); border-radius: var(--rs); padding: 8px 10px; }
+.composer textarea:focus { border-color: var(--accent); }
+.btn { background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
+  border-radius: var(--rs); padding: 7px 12px; cursor: pointer; white-space: nowrap;
+  font: inherit; }
+.btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn.pri { background: var(--accent-dim); border-color: var(--accent); }
+.btn.pri:hover:not(:disabled) { background: var(--accent); color: #000; }
+.btn.sm { padding: 5px 11px; font-size: 12px; }
+.side2 { border-left: 1px solid var(--border-soft); padding: 14px;
+  background: var(--bg-elev); overflow-y: auto; }
+.st { margin-bottom: 16px; }
+.st .k { font-size: 11px; color: var(--text-mute); margin-bottom: 3px; }
+.st .v { font-size: 12.5px; line-height: 1.65; word-break: break-word; }
+
+/* ─── 小说模式自己才有的几块（玩法列表 / 正文 / 事实卡）── */
+.nv-sub { font-size: 11px; color: var(--text-mute); }
+.nv-sec { margin-bottom: 18px; }
+.nv-sec h3 { font-size: 11px; font-weight: 500; margin: 0 0 8px;
+  color: var(--text-mute); letter-spacing: .04em; }
+.nv-play { border: 1px solid var(--border-soft); border-radius: var(--rs);
+  padding: 9px 10px; margin-bottom: 6px; cursor: pointer; background: var(--bg-input); }
+.nv-play.on { border-color: var(--accent-dim); }
+.nv-play b { display: block; font-weight: 500; font-size: 13px; }
+.nv-play.on b { color: var(--accent); }
+.nv-play span { display: block; font-size: 11px; color: var(--text-mute);
+  margin-top: 3px; overflow-wrap: anywhere; }
+.nv-world { font-size: 12px; padding: 8px 10px; border-radius: var(--rs);
+  cursor: pointer; border: 1px solid transparent; overflow-wrap: anywhere; }
+.nv-world:hover { background: var(--bg-input); }
+.nv-world.on { background: var(--bg-input); border-color: var(--accent-dim); }
+.nv-field { margin-bottom: 8px; }
+.nv-field label { display: block; font-size: 11px; color: var(--text-dim);
+  margin-bottom: 4px; }
+.nv-field input, .nv-field select { width: 100%; padding: 7px 9px;
+  border: 1px solid var(--border-soft); border-radius: var(--rs);
+  background: var(--bg-input); color: var(--text); outline: none; font: inherit; }
+.nv-field input:focus, .nv-field select:focus { border-color: var(--accent); }
+.nv-empty { font-size: 12px; color: var(--text-mute); line-height: 1.7; }
+.nv-note { background: rgba(244, 114, 182, .09); border-left: 3px solid var(--accent-dim);
+  padding: 10px 12px; border-radius: 0 var(--rs) var(--rs) 0; font-size: 13px;
+  overflow-wrap: anywhere; }
+.nv-para { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px;
+  line-height: 1.9; }
+.nv-said { align-self: flex-end; max-width: 88%; background: var(--bg-input);
+  border: 1px solid var(--border-soft); border-radius: var(--r);
+  padding: 8px 11px; font-size: 12px; color: var(--text-dim);
+  overflow-wrap: anywhere; }
+.nv-ruling { font-size: 12px; color: var(--text-mute);
+  border-top: 1px dashed var(--border); padding-top: 7px; overflow-wrap: anywhere; }
+.nv-end { background: rgba(248, 113, 113, .1); border: 1px solid var(--err);
+  color: var(--err); border-radius: var(--r); padding: 12px; overflow-wrap: anywhere; }
+.nv-err { background: rgba(248, 113, 113, .1); border: 1px solid var(--err);
+  color: var(--err); border-radius: var(--rs); padding: 8px 10px;
+  font-size: 12px; margin: 10px 16px 0; overflow-wrap: anywhere; }
+.nv-input { flex-direction: column; align-items: stretch; gap: 8px; padding: 10px 14px; }
+.nv-input textarea { width: 100%; min-height: 78px; resize: vertical;
+  padding: 9px 11px; font: inherit; }
+.nv-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.nv-actions button { font-size: 12px; overflow-wrap: anywhere; max-width: 100%;
+  text-align: left; white-space: normal; }
+.nv-sendrow { display: flex; gap: 8px; align-items: center; }
+.nv-sendrow .sp { flex: 1; }
+.nv-card dl { margin: 0; }
+.nv-card dt { font-size: 11px; color: var(--text-mute); margin-top: 11px; }
+.nv-card dd { margin: 2px 0 0; font-size: 13px; overflow-wrap: anywhere; }
+.nv-chip { display: inline-block; padding: 2px 8px; margin: 2px 4px 2px 0;
+  border-radius: 14px; background: var(--bg-input); font-size: 12px;
+  overflow-wrap: anywhere; }
+.nv-card ul { margin: 4px 0 0; padding-left: 17px; font-size: 12px;
+  overflow-wrap: anywhere; }
+.nv-card li { margin-bottom: 3px; }
+.nv-dead { background: rgba(251, 191, 36, .1); border: 1px solid var(--warn);
+  border-radius: var(--rs); padding: 9px; font-size: 12px; color: var(--warn);
+  overflow-wrap: anywhere; }
+/* 窄屏改纵向文档流：宽屏那套 position:fixed 三栏在手机上会把内容裁掉 */
 @media (max-width:900px){
-  .nv-wrap{grid-template-columns:minmax(0,1fr);height:auto;min-height:calc(100% - 54px)}
-  .nv-col{max-height:none;overflow:visible}
-  .nv-top a{margin-left:0}
+  .app{display:block;position:static;height:auto;min-height:100dvh}
+  .side,.mid,.side2{width:auto;min-height:0;max-height:none;overflow:visible;
+    border:0;border-bottom:1px solid var(--border-soft)}
+  .mid{min-height:70vh}
+  .log{min-height:40vh}
+  .side-list{overflow:visible}
+  .nv-sub{display:none}
 }
 </style>
 </head>
 <body>
-<h2 class="nv-sr" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">小说模式：选择玩法并开一本生存模拟小说，右侧是纯事实状态卡</h2>
-<div class="nv-top">
-  <h1>小说模式</h1>
-  <span class="nv-sub">一个世界一条线 · 你是主角 · 世界书会记住已经探明的事</span>
-  <a href="/persona">返回角色扮演</a>
-</div>
-<div class="nv-wrap">
+<div class="app">
 
-  <div class="nv-col" id="nvLeft">
-    <div class="nv-sec">
-      <h3>玩法</h3>
-      <div id="nvPlayList"><div class="nv-empty">正在读玩法…</div></div>
+  <aside class="side" id="nvLeft">
+    <div class="side-head">
+      <h1>小说模式</h1>
+      <span class="sp"></span>
+      <a class="btn sm" href="/persona" title="回到一对一角色扮演">← 扮演</a>
     </div>
-    <div class="nv-sec" id="nvNewBox">
-      <h3>开一本新的</h3>
-      <div class="nv-field"><label for="nvName">主角名字</label><input id="nvName" placeholder="给自己起个名字" maxlength="24"></div>
-      <div class="nv-field"><label for="nvIdentity">开局身份</label><select id="nvIdentity"></select></div>
-      <button class="nv-btn" id="nvOpenBtn">开场封样</button>
+    <div class="side-list">
+      <div class="nv-sec">
+        <h3>玩法</h3>
+        <div id="nvPlayList"><div class="nv-empty">正在读玩法…</div></div>
+      </div>
+      <div class="nv-sec" id="nvNewBox">
+        <h3>开一本新的</h3>
+        <div class="nv-field"><label for="nvName">主角名字</label><input id="nvName" placeholder="给自己起个名字" maxlength="24"></div>
+        <div class="nv-field"><label for="nvIdentity">开局身份</label><select id="nvIdentity"></select></div>
+        <button class="btn pri" id="nvOpenBtn" style="width:100%">开场封样</button>
+      </div>
+      <div class="nv-sec">
+        <h3>已有的世界</h3>
+        <div id="nvWorldList"><div class="nv-empty">还没有开过</div></div>
+      </div>
     </div>
-    <div class="nv-sec">
-      <h3>已有的世界</h3>
-      <div id="nvWorldList"><div class="nv-empty">还没有开过</div></div>
-    </div>
-  </div>
+  </aside>
 
-  <div class="nv-col" id="nvMain">
+  <main class="mid" id="nvMain">
+    <div class="top">
+      <span class="nm">丧尸末日</span>
+      <span class="sp"></span>
+      <span class="nv-sub">一个世界一条线 · 你是主角 · 世界书会记住已经探明的事</span>
+      <a class="btn sm" href="/persona" title="返回角色扮演">← 角色扮演</a>
+    </div>
     <div id="nvErr"></div>
-    <div class="nv-log" id="nvLog"><div class="nv-empty">左边选一个玩法，填好主角名字和身份，点「开场封样」。</div></div>
-    <div class="nv-input" id="nvInputBox" style="display:none">
+    <div class="log" id="nvLog"><div class="nv-empty">左边选一个玩法，填好主角名字和身份，点「开场封样」。</div></div>
+    <div class="composer nv-input" id="nvInputBox" style="display:none">
       <div class="nv-actions" id="nvActions"></div>
       <textarea id="nvText" placeholder="写下你打算做什么。想法可以天马行空，编剧会把它落成这一拍真正发生的事。"></textarea>
-      <div class="nv-sendrow"><button class="nv-btn" id="nvSendBtn">写下去</button><button class="nv-btn ghost" id="nvRestartBtn">重开一本</button></div>
+      <div class="nv-sendrow">
+        <button class="btn pri" id="nvSendBtn">写下去</button>
+        <button class="btn sm" id="nvRestartBtn">重开一本</button>
+        <span class="sp"></span>
+      </div>
     </div>
-  </div>
+  </main>
 
-  <div class="nv-col nv-card" id="nvRight">
-    <h2>状态卡</h2>
+  <aside class="side2 nv-card" id="nvRight">
+    <div class="st"><div class="k">状态卡 · 只记事实，没有数值条</div></div>
     <div id="nvCard"><div class="nv-empty">开场之后这里会记：现在在哪、手上有什么、在场的人、做过的事。</div></div>
-  </div>
+  </aside>
 
 </div>
 <script>
@@ -246,7 +324,7 @@ function nvRenderHistory(hist, note, ending){
 function nvRenderActions(actions, enabled){
   var box = nvEl('nvActions');
   box.innerHTML = (actions || []).map(function(a){
-    return '<button type="button" data-text="' + nvEsc(a) + '">' + nvEsc(a) + '</button>';
+    return '<button type="button" class="btn sm" data-text="' + nvEsc(a) + '">' + nvEsc(a) + '</button>';
   }).join('');
   Array.prototype.forEach.call(box.querySelectorAll('button'), function(b){
     b.disabled = !enabled;
@@ -259,7 +337,7 @@ function nvApplyState(s, note){
   nvRenderCard(s);
   nvRenderHistory(s.history, note, s.ending);
   nvRenderActions(s.actions, !s.ending && !nvBusy);
-  nvEl('nvInputBox').style.display = 'block';
+  nvEl('nvInputBox').style.display = 'flex';
   nvEl('nvText').disabled = !!s.ending;
   nvGet('/api/novel/worlds').then(function(d){ nvRenderWorlds(d.worlds); }).catch(function(){});
 }

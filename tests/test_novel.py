@@ -610,6 +610,31 @@ class WiringTest(unittest.TestCase):
         self.assertIn("window.open('/novel','_blank')", self.index)
         self.assertIn("小说模式", self.index)
 
+    def test_novel_page_uses_the_persona_skin(self):
+        """不许再画一套 UI：变量、三栏宽度、按钮、消息流都跟 persona.html 同源。"""
+        for needle in ("--bg-elev:", "--accent: #f472b6", "--r: 12px",
+                       'class="app"', 'class="side" id="nvLeft"',
+                       'class="mid" id="nvMain"', 'class="side2 nv-card"',
+                       'class="btn pri"', 'class="log" id="nvLog"',
+                       'class="composer nv-input"',
+                       "grid-template-columns: 230px 1fr 288px"):
+            self.assertIn(needle, self.html, "小说页没用共用皮肤：%s" % needle)
+        self.assertNotIn("--nv-bg", self.html, "旧的独立配色还在")
+        self.assertNotIn("prefers-color-scheme", self.html,
+                         "persona 是固定黑底，小说页不该自带亮暗双主题")
+
+    def test_persona_page_has_the_novel_entry(self):
+        """用户反馈「没看到入口」：入口必须在角色扮演页里常驻可见。"""
+        p = _read(os.path.join(ROOT, "web", "persona.html"))
+        self.assertIn('id="btnNovel"', p)
+        self.assertIn('href="/novel"', p)
+        self.assertIn("小说模式", p)
+        self.assertIn("function bindNovelLink()", p)
+        self.assertIn('location.port === "5174"', p)
+        self.assertIn(':5174/novel', p, "5175 打开同一份 HTML 时要能跳到 5174")
+        self.assertNotIn('id="btnNovel" style="display:none', p,
+                         "入口不许被样式藏起来")
+
     def test_engine_does_not_import_1v1_modules(self):
         for banned in ("from app import persona", "from app import affection",
                        "from app import galgame", "import persona",
