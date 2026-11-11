@@ -42,7 +42,8 @@ from datetime import datetime
 
 import requests
 
-from app import comfy_out, comfy_src, image_jobs, comic_render_opts
+from app import (comfy_out, comfy_src, comic_prompt_suffix,
+                 comic_render_opts, image_jobs)
 from app.cancel import Cancelled
 from app.config import BASE_DIR, COMFYUI_OUTPUT_DIR, COMFYUI_URL
 from app.skills import load_skill, load_workflow
@@ -1217,6 +1218,16 @@ def _submit_nai(prompt, skill):
     return paths[0]
 
 
+def scene_prompt(p):
+    """阶段一送进生图的最终画面词 = 编剧写的「画面:」行 + 全局附加提示词。
+
+    这里只**读**，不写回 `p.scene`：剧本 / state.json 里留的是编剧原文，
+    否则 `Task.load_state` 会判「scene 变了 → 旧图全作废」，改一次全局后缀
+    所有历史任务都得重跑。逐格、独占批量、NAI 云端三条路都从这里取值。
+    """
+    return comic_prompt_suffix.apply(p.scene)
+
+
 def _scene_wf(task, p, scene_skill, opts=None):
     """阶段一本机渠道的公共前段：读参数覆盖、开种子、建文生图工作流。
 
@@ -1226,7 +1237,7 @@ def _scene_wf(task, p, scene_skill, opts=None):
     if opts is None:
         opts = comic_render_opts.load(task.dir, scene_skill)
     seed = _new_seed()
-    wf = generate_image.build_t2i_workflow(scene_skill, p.scene, seed)
+    wf = generate_image.build_t2i_workflow(scene_skill, scene_prompt(p), seed)
     if wf is None:
         raise RuntimeError("skill %s 没有文生图工作流" % scene_skill)
     wf = comic_render_opts.apply(wf, opts)
@@ -1247,7 +1258,7 @@ def render_scene(task, p, scene_skill=SCENE_SKILL, opts=None, abort=None):
     if scene_skill in image_jobs.NAI_SKILLS:
         log.info("[格 %s] 场景渲染（%s 云端，无种子）", p.no, scene_skill)
         t0 = time.monotonic()
-        src = _submit_nai(p.scene, scene_skill)
+        src = _submit_nai(scene_prompt(p), scene_skill)
         os.makedirs(task.raw_dir, exist_ok=True)
         _publish_file(task.raw_path(p),
                       lambda tmp: shutil.copyfile(src, tmp))

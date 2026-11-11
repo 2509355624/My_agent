@@ -292,6 +292,25 @@
     </div>
   </div>
 
+  <div class="card hidden-by-friend" id="suffixCard">
+    <h2>✚ 附加提示词（全局一份）</h2>
+    <div style="color:var(--text-dim);font-size:12px;line-height:1.7;margin-bottom:10px">
+      编剧 AI 写完每格「画面:」提示词后，把下面这段<b>统一追加到末尾</b>再送生图。
+      全局一份：所有任务、所有渠道（含 NAI 云端）、所有格子共用，写进
+      <code style="color:var(--info)">state/comic_prompt_suffix.json</code>，重启服务也还在。
+      只影响<b>之后</b>渲染的格，已出的图不动；不改写剧本原文，不加到「加气泡」阶段，写真不受影响。
+      用英文 tag / 短语、逗号分隔，换行会自动折成逗号。
+    </div>
+    <textarea id="suffixText" rows="3" spellcheck="false" style="width:100%;box-sizing:border-box"
+              placeholder="例如：masterpiece, best quality, cinematic lighting"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button class="btn primary" id="btnSaveSuffix" onclick="savePromptSuffix()">保存（全局）</button>
+      <button class="btn small" onclick="clearPromptSuffix()">✕ 清空</button>
+      <span class="spacer" style="flex:1"></span>
+      <span id="suffixMsg" style="color:var(--text-dim);font-size:12px"></span>
+    </div>
+  </div>
+
   <div class="card" id="slotCard">
     <h2>② 槽位 · 逐格生成与修补</h2>
     <div style="color:var(--text-dim);font-size:12px;margin-bottom:10px">
@@ -1524,6 +1543,43 @@ async function resetRenderOpts(scope) {
   } catch (e) { toast(e.message, true); }
 }
 
+// 附加提示词（2026-11-12）：全局一份，拼在每格画面词末尾。设置框带
+// hidden-by-friend，群友派生页整卡隐藏；后端也挡群友写全局。
+async function loadPromptSuffix() {
+  const t = document.getElementById('suffixText');
+  if (!t) return;
+  const msg = document.getElementById('suffixMsg');
+  try {
+    const d = await api('/api/comic/prompt_suffix');
+    t.value = d.suffix || '';
+    if (msg) msg.textContent = d.suffix ? '已生效：' + d.suffix.length + ' 字' : '当前为空';
+  } catch (e) {
+    if (msg) msg.textContent = '读不到全局设置：' + e.message;
+  }
+}
+
+async function savePromptSuffix() {
+  const t = document.getElementById('suffixText');
+  if (!t) return;
+  const msg = document.getElementById('suffixMsg');
+  try {
+    const d = await api('/api/comic/prompt_suffix', {suffix: t.value});
+    t.value = d.suffix || '';
+    if (msg) msg.textContent = d.suffix
+      ? '已保存：' + d.suffix.length + ' 字，之后渲染的格生效' : '已清空';
+    toast(d.suffix ? '附加提示词已保存（全局）' : '附加提示词已清空');
+  } catch (e) { toast(e.message, true); }
+}
+
+function clearPromptSuffix() {
+  const t = document.getElementById('suffixText');
+  if (!t) return;
+  if (!t.value.trim()) { toast('本来就是空的'); return; }
+  if (!confirm('清空全局附加提示词？\n\n之后渲染的格不再追加任何内容，已出的图不动。')) return;
+  t.value = '';
+  savePromptSuffix();
+}
+
 const STATE_CN = {pending: '排队', rendered: '待加气泡', done: '完成'};
 
 // 图片 URL 只带「文件指纹」做失效，不再带 Date.now()（2026-11-11）。
@@ -2263,6 +2319,7 @@ document.querySelector('input[name=mode][value="' + savedMode() + '"]').checked 
 syncModeInputs();
 applyMode();
 
+loadPromptSuffix();
 poll();
 loadProviders();
 restoreSession();

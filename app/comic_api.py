@@ -14,6 +14,8 @@
   GET  /api/comic/status    槽位轮询：剧本 + state.json → 每格状态与图 URL
   GET  /api/comic/render_opts  读这个任务的渲染参数覆盖（render.json）+ ComfyUI 可用清单
   POST /api/comic/render_opts  保存 / 重置（reset=true）渲染参数覆盖
+  GET  /api/comic/prompt_suffix  读全局附加提示词（所有任务共用一份）
+  POST /api/comic/prompt_suffix  写 / 清空全局附加提示词（群友禁用）
   POST /api/comic/rerender  换种子重跑某格（重置该格 → 后台只跑阶段一）
   POST /api/comic/portrait  生图模式：提示词员写 N 条单人写真 → 逐条出图（后台）
   GET  /api/comic/portrait_status  轮询这批写真的进度（shots 逐条落盘）
@@ -58,8 +60,8 @@ from flask import (Blueprint, Response, g, jsonify, request, send_file,
                    send_from_directory)
 
 from app import (comic, comic_agent, comic_delivery, comic_portrait,
-                 comic_quota, comic_render_opts, comic_thumb, image_jobs,
-                 silver_comic)
+                 comic_prompt_suffix, comic_quota, comic_render_opts,
+                 comic_thumb, image_jobs, silver_comic)
 from app import config as _cfg
 from app.config import BASE_DIR
 
@@ -1446,6 +1448,31 @@ def api_comic_render_opts_save():
                              os.path.isfile(comic_render_opts.path_of(path, skill)),
                     "defaults_saved":
                         comic_render_opts.has_defaults(skill)})
+
+
+@bp.route("/api/comic/prompt_suffix", methods=["GET"])
+def api_comic_prompt_suffix_get():
+    """读全局附加提示词：所有任务、所有渠道、所有格子共用一份。"""
+    return jsonify({"ok": True, "suffix": comic_prompt_suffix.load(),
+                    "max_chars": comic_prompt_suffix.MAX_CHARS})
+
+
+@bp.route("/api/comic/prompt_suffix", methods=["POST"])
+def api_comic_prompt_suffix_save():
+    """写 / 清空全局附加提示词。群友不能改站主的全局设置。
+
+    保存只影响**之后**渲染的格——已出的图不动；剧本原文不改写。
+    """
+    if _qq():
+        return jsonify({"ok": False,
+                        "error": "群友版不能修改全局附加提示词"}), 403
+    data = request.get_json(silent=True) or {}
+    try:
+        text = comic_prompt_suffix.save(data.get("suffix") or "")
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    return jsonify({"ok": True, "suffix": text,
+                    "max_chars": comic_prompt_suffix.MAX_CHARS})
 
 
 @bp.route("/api/comic/channels", methods=["GET"])
