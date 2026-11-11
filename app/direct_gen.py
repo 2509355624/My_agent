@@ -205,6 +205,10 @@ _PRESET_WEB_RE = re.compile(
 # 链接就是把群友页根地址拼上 `/gallery`——画廊和预设页同一个站点、同一套
 # 登录态，不另起服务。
 _GALLERY_RE = re.compile(r"^\s*[\/／]\s*画廊")
+# 「/换装」= 双图换衣服/换姿势网页（2026-11-11）。同样斜杠即命令、不用 @；
+# 回的是带 HMAC 令牌的 /outfit 链接（令牌含来源会话 + 过期，免登录）。
+# 与 `_GALLERY_RE` 一字不差地挂在 decide 的零成本直回段，正则两份要同步。
+_OUTFIT_RE = re.compile(r"^\s*[\/／]\s*换装")
 # 生图意图粗判（画图动词）。「生成」后面 0~4 字内接「图」才算，避免
 # 「生成一下总结」误中。
 _INTENT_RE = re.compile(r"画|绘|来张|来一张|来幅|生成.{0,4}图|图.{0,2}一[张幅]")
@@ -1277,6 +1281,30 @@ def _gallery_text():
             "进去默认是站长的作品集，切「公开」看别人传的；\n"
             "「我的」里是自己传的、收藏和点赞。点开能左右滑，可点赞/收藏/下载。"
             % url)
+
+
+def _outfit_text():
+    """`/换装` 的正文。零 LLM：读隧道地址 + 签一个带来源的令牌拼 /outfit。
+
+    令牌把「结果推回哪个会话」编进链接，所以私聊发的链接回私聊、群发的回群，
+    不用登录、不用记账号。6 小时过期（隧道域名会变，旧的发过去也打不开）。
+    """
+    from app import friend_auth, friend_site, qq_api
+    url = friend_site.url()
+    if not url:
+        return ("换装页现在打不开——隧道没开，让群主双击"
+                "「启动群友隧道.bat」，起来之后再发 /换装。")
+    tgt, tid = qq_api.current_context()
+    if not tgt or not tid:
+        return "认不出你从哪发的，重新私聊我发一次 /换装。"
+    k = friend_auth.make_outfit_token(tgt, tid)
+    if not k:
+        return "这个会话没法发换装链接，私聊我发 /换装 试试。"
+    where = "这里" if tgt == "private" else "本群"
+    return ("换装：%s/outfit?k=%s\n"
+            "打开后左边传「衣服/姿势来源」、右边传「要被换的人」，"
+            "选换衣服或换姿势，出好图我直接发回%s。\n"
+            "（链接 6 小时内有效，别转发给不认识的人）" % (url, k, where))
 
 
 # ─── 提示词的「写法 + 语言」按渠道分家 ─────────────────────
@@ -2844,6 +2872,10 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     # （判据和理由见 `_GALLERY_RE` 注释）。
     if _GALLERY_RE.match(text):
         return _gallery_text()
+    # 「/换装」= 双图换装/换姿势网页（2026-11-11）。与 /画廊 同口径：斜杠即
+    # 命令、不过 addressed 闸、零 LLM 直回带令牌的链接。
+    if _OUTFIT_RE.match(text):
+        return _outfit_text()
     addressed = trigger.called(own_text, at_me)
     # 「预设网页」= 群友页地址（2026-10-30）。零 LLM，只读一个文件；
     # 放在这里而不是模板里——地址每次重启都变，模型记不住也不该记。

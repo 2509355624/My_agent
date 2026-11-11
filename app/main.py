@@ -32,6 +32,7 @@ from app import friend_api
 from app import gallery_api
 from app import card_api
 from app import output_api
+from app import outfit_api
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         LLM_PROVIDER, LLM_FALLBACK_CHAIN, PROVIDERS,
                         OLLAMA_BASE_URL, DEFAULT_AGENT_ID,
@@ -188,7 +189,8 @@ def _tunnel_guard():
             or request.headers.get("CF-Ray")):
         return None
     p = request.path or ""
-    if p.startswith("/api/friend/") or p.startswith("/api/gal/") or p == "/health":
+    if (p.startswith("/api/friend/") or p.startswith("/api/gal/")
+            or p.startswith("/api/outfit/") or p == "/health"):
         return None
     return jsonify({"ok": False, "error": "not found"}), 404
 
@@ -199,6 +201,10 @@ app.register_blueprint(card_api.bp)
 # output 图片管理台 API（独立 Blueprint，见 app/output_api.py）：ComfyUI output
 # 目录的网页版资源管理器——目录树点开就看，缩略图网格，勾选即删
 app.register_blueprint(output_api.bp)
+
+# 换装页 API（独立 Blueprint，见 app/outfit_api.py）：双图 qwen 换装/换姿势。
+# 免登录（令牌即凭证），公网入口在 5175 的 /outfit + /api/outfit/* 反代。
+app.register_blueprint(outfit_api.bp)
 
 @app.route("/")
 def index():

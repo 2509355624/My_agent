@@ -180,7 +180,8 @@ def _secure(resp):
 @app.before_request
 def _gate():
     bucket = "img" if ((request.path or "").startswith("/api/gal/img/")
-                       or (request.path or "").startswith("/api/comic/img")) \
+                       or (request.path or "").startswith("/api/comic/img")
+                       or (request.path or "").startswith("/api/outfit/img")) \
         else "all"
     if not rate_ok(bucket):
         return _secure(jsonify({"ok": False, "error": "请求太频繁，歇一下"})), 429
@@ -202,7 +203,7 @@ def _gate():
             # `/api/` 一样属于「页面要用到的东西」，拦成跳转的话独立页里
             # fetch 会拿到一段 HTML，JSON 解析失败 → 介绍节静默消失。
             and p not in (SOLO_PATH, SOLO_PATH + ".html", "/health", "/logout",
-                          "/char_intros.json")):
+                          "/char_intros.json", "/outfit", "/outfit.html")):
         return redirect(SOLO_PATH)
     return None
 
@@ -793,6 +794,25 @@ def proxy_comic(sub):
     `/api/comic/admin` 即使被转发过来，也会因 `_qq()` 非空被 5174 拒掉。
     """
     return _forward("/api/comic", sub)
+
+
+# ── 换装页（2026-11-11）──────────────────────────────────
+#
+# 「/换装」QQ 命令回的链接指向这里。它**免登录**：令牌本身是 QQ 可信通道发的
+# 凭证（含来源 + 过期 + HMAC 签名），网页提交时带上，5174 就能把结果推回原会话。
+# 所以页面路由直接发 HTML，接口反代走 allow_guest=True（不注入 qq、不带登录 cookie
+# 也放行）——换装不需要账号体系，分享给别人也能用，滥用由令牌时效 + 接口限流兜。
+
+@app.route("/outfit")
+@app.route("/outfit.html")
+def outfit_page():
+    return send_from_directory(WEB_DIR, "outfit.html")
+
+
+@app.route("/api/outfit/<path:sub>", methods=["GET", "POST", "DELETE"])
+def proxy_outfit(sub):
+    """换装接口反代。allow_guest=True：令牌即凭证，不注入 qq。"""
+    return _forward("/api/outfit", sub, allow_guest=True)
 
 
 @app.route("/play")

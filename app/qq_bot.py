@@ -616,6 +616,9 @@ _PRESET_WEB_RE = re.compile(
 # 门槛，所以这条**不用再喊名字**（与 `/直通-` 前缀同理）。正则与
 # `app/direct_gen.py` 那份保持一字不差。
 _GALLERY_RE = re.compile(r"^\s*[\/／]\s*画廊")
+# 「/换装」= 双图换装网页（2026-11-11），同 /画廊：斜杠即命令、群里免 @。
+# 正则与 `app/direct_gen.py` 那份保持一字不差。回链接正文在 direct_gen._outfit_text。
+_OUTFIT_RE = re.compile(r"^\s*[\/／]\s*换装")
 
 
 def _private_gate(user_id):
@@ -729,6 +732,9 @@ def _should_reply(ev, target, target_id, text, at_me, has_image=False,
     # 「/画廊」同理：斜杠即命令，群里不用 @ 也不用喊名字（见上方常量注释）。
     if _GALLERY_RE.match(text):
         return True, "画廊指令（带斜杠）"
+    # 「/换装」同理：斜杠即换装页命令，免 @（与 /画廊 同口径）。
+    if _OUTFIT_RE.match(text):
+        return True, "换装指令（带斜杠）"
     # 「#游客模式」（2026-11-06）：独立游客页地址。群里同样不用 @；谁发都给
     # ——链接本来就是拿去分享的（用户拍板）。判据见 app/solo_bot.py。
     if solo_bot.SOLO_RE.search(text):

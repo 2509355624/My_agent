@@ -321,3 +321,62 @@ def reset():
     with _friends_lock:
         _friends.update({"ts": 0.0, "ids": set(), "ok": False})
     _secret_cache = None
+
+
+# ─── 换装页令牌（2026-11-11）─────────────────────────────
+#
+# 「/换装」是 QQ 斜杠命令：机器人回一条带令牌的网页链接，点开即为换装页。
+# 它**不登录、不记账号**——令牌本身就是凭证，同时携带「出完图往哪推」的
+# 来源（私聊 QQ 号 / 群号）。这样共享链接给别人也能用，结果仍回原会话。
+#
+# 为什么不用登录 cookie：换装页是 QQ 内置功能的「遥控器」，用户已经通过
+# QQ 这条可信通道拿到的链接，再套一层验证码纯属多余（站主 2026-11-11 拍板）。
+# 令牌带过期时间 + HMAC 签名，篡改/伪造都过不了；真被转发刷爆由接口限流兜住。
+# 与登录 cookie 共用 `secret()` 的密钥，但**签名域分开**（前缀 outfit:），
+# 避免换装令牌和 fr_sess 互相顶替。
+
+OUTFIT_TTL = 6 * 3600            # 换装链接 6 小时有效（隧道域名会变，别留太久）
+_OUTFIT_SIGN_DOMAIN = "outfit:"
+
+
+def _outfit_sign(target, target_id, exp):
+    msg = "outfit:%s:%s:%d" % (target, target_id, exp)
+    return hmac.new(secret().encode("utf-8"), msg.encode("utf-8"),
+                    hashlib.sha256).hexdigest()[:32]
+
+
+def make_outfit_token(target, target_id, exp_hours=None):
+    """签一个换装链接令牌。target ∈ {'private','group'}，target_id 是 QQ 号/群号。
+
+    → token 字符串（URL 安全，只含 hex 与点）。来源与过期时间都编在里面，
+    后端解出来就知道「结果推回哪个会话」，不需要查表、不需要落盘。
+    """
+    target = str(target or "").strip().lower()
+    target_id = str(target_id or "").strip()
+    if target not in ("private", "group") or not QQ_RE.match(target_id):
+        return ""
+    exp = int(_now() + (exp_hours * 3600 if exp_hours else OUTFIT_TTL))
+    sig = _outfit_sign(target, target_id, exp)
+    return "%s.%s.%d.%s" % (target, target_id, exp, sig)
+
+
+def parse_outfit_token(k):
+    """验签 + 验过期。→ (target, target_id)；无效/过期一律 None。"""
+    parts = str(k or "").strip().split(".")
+    if len(parts) != 4:
+        return None
+    target, target_id, exp_s, sig = parts
+    target = target.lower()
+    if target not in ("private", "group") or not QQ_RE.match(target_id):
+        return None
+    try:
+        exp = int(exp_s)
+    except ValueError:
+        return None
+    if exp < _now():
+        return None
+    try:
+        good = _outfit_sign(target, target_id, exp)
+    except Exception:
+        return None
+    return (target, target_id) if hmac.compare_digest(good, sig) else None

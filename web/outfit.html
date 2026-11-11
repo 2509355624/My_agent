@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>换装 · 换姿势</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='4' y='4' width='24' height='24' rx='5' fill='%23ff6ba9'/><path d='M11 9l-5 4 3 3 2-2v9h8v-9l2 2 3-3-5-4-3 3z' fill='%23fff'/></svg>">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg:#0a0a0f; --elev:#12121a; --input:#1a1a24; --border:#2a2a3a;
+    --text:#e8e8f0; --dim:#8888a0; --mute:#555570;
+    --accent:#ff6ba9; --accent2:#7c5cff; --success:#4ade80; --error:#f87171;
+    --r:14px;
+  }
+  html,body{min-height:100%;background:var(--bg);color:var(--text);
+    font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+    font-size:15px;line-height:1.6;-webkit-tap-highlight-color:transparent;}
+  .wrap{max-width:900px;margin:0 auto;padding:22px 16px calc(40px + env(safe-area-inset-bottom));}
+  header{display:flex;align-items:center;gap:12px;margin-bottom:6px;}
+  header h1{font-size:22px;font-weight:700;letter-spacing:.5px;}
+  header .tag{font-size:11px;color:var(--accent);border:1px solid var(--accent);
+    border-radius:20px;padding:2px 9px;opacity:.9;}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:20px;}
+  .card{background:var(--elev);border:1px solid var(--border);border-radius:var(--r);
+    padding:18px;margin-bottom:16px;}
+  .mode-row{display:flex;gap:10px;margin-bottom:4px;}
+  .mode{flex:1;padding:13px 8px;border:1px solid var(--border);border-radius:11px;
+    background:var(--input);color:var(--dim);font-size:15px;font-weight:600;
+    cursor:pointer;transition:.15s;text-align:center;}
+  .mode.on{background:linear-gradient(135deg,var(--accent),var(--accent2));
+    color:#fff;border-color:transparent;}
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px;}
+  @media(max-width:560px){.pair{grid-template-columns:1fr;}}
+  .slot{position:relative;border:1.5px dashed var(--border);border-radius:12px;
+    background:var(--input);aspect-ratio:3/4;overflow:hidden;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;transition:.15s;}
+  .slot:hover{border-color:var(--accent);}
+  .slot img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;}
+  .slot .ph{color:var(--mute);text-align:center;padding:12px;font-size:13px;pointer-events:none;}
+  .slot .ph b{display:block;color:var(--dim);font-size:15px;margin-bottom:6px;}
+  .slot .badge{position:absolute;top:9px;left:9px;background:#0009;color:#fff;
+    font-size:11px;padding:3px 9px;border-radius:20px;backdrop-filter:blur(4px);}
+  .slot .clr{position:absolute;top:8px;right:8px;width:26px;height:26px;
+    border-radius:50%;background:#000a;color:#fff;border:0;cursor:pointer;
+    font-size:17px;line-height:26px;display:none;z-index:2;}
+  .slot.has .clr{display:block;}
+  .arrow{display:flex;align-items:center;justify-content:center;font-size:22px;
+    color:var(--dim);grid-column:1/-1;margin:-6px 0;}
+  @media(min-width:561px){.arrow{display:none;}}
+  .btn{width:100%;padding:15px;border:0;border-radius:12px;font-size:16px;
+    font-weight:700;color:#fff;cursor:pointer;
+    background:linear-gradient(135deg,var(--accent),var(--accent2));transition:.15s;}
+  .btn:disabled{opacity:.45;cursor:not-allowed;}
+  .btn.ghost{background:var(--input);border:1px solid var(--border);color:var(--dim);
+    font-size:14px;font-weight:500;padding:12px;}
+  .status{margin-top:14px;text-align:center;color:var(--dim);font-size:14px;min-height:22px;}
+  .status.err{color:var(--error);} .status.ok{color:var(--success);}
+  .result{display:none;margin-top:16px;}
+  .result.show{display:block;}
+  .result img{width:100%;max-width:520px;display:block;margin:0 auto;border-radius:12px;
+    border:1px solid var(--border);}
+  .result .acts{display:flex;gap:10px;margin-top:12px;}
+  .tip{color:var(--mute);font-size:12px;margin-top:12px;line-height:1.7;}
+  .hidden{display:none!important;}
+  input[type=file]{display:none;}
+  .spin{display:inline-block;width:15px;height:15px;border:2px solid var(--dim);
+    border-top-color:var(--accent);border-radius:50%;animation:sp .8s linear infinite;
+    vertical-align:-2px;margin-right:7px;}
+  @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>换装 · 换姿势</h1>
+    <span class="tag">Qwen 双图</span>
+  </header>
+  <p class="sub">把一张图的衣服／姿势，换到另一张人身上。出好图自动发回你刚才发命令的 QQ。</p>
+
+  <div class="card">
+    <div class="mode-row">
+      <button class="mode on" data-mode="outfit">👗 换衣服</button>
+      <button class="mode" data-mode="pose">🤸 换姿势</button>
+    </div>
+
+    <div class="pair">
+      <div class="slot" id="slotA" data-slot="a">
+        <span class="badge">图 1 · 来源</span>
+        <button class="clr" data-clr="a" title="清除">×</button>
+        <div class="ph"><b>衣服／姿势来源</b>点这里选图，或 Ctrl+V 粘贴<br>手机可拍照／相册</div>
+        <img class="hidden" id="imgA" alt="来源图">
+      </div>
+      <div class="arrow">↓</div>
+      <div class="slot" id="slotB" data-slot="b">
+        <span class="badge">图 2 · 被换的人</span>
+        <button class="clr" data-clr="b" title="清除">×</button>
+        <div class="ph"><b>要被换的人</b>这张的脸／身份／背景会保留<br>只换衣服或姿势</div>
+        <img class="hidden" id="imgB" alt="被换的人">
+      </div>
+    </div>
+    <input type="file" id="fileA" accept="image/*">
+    <input type="file" id="fileB" accept="image/*">
+    <p class="tip">顺序别反：左边是「衣服／姿势从哪来」，右边是「换到谁身上」。图片会先压缩再上传，原图不离开你手机／电脑。</p>
+  </div>
+
+  <button class="btn" id="go" disabled>开始换装</button>
+  <div class="status" id="status"></div>
+
+  <div class="result card" id="result">
+    <img id="resultImg" alt="换装结果">
+    <div class="acts">
+      <a class="btn ghost" id="dl" href="#" download="换装结果.png" style="text-align:center;text-decoration:none;">保存图片</a>
+      <button class="btn ghost" id="again">再换一张</button>
+    </div>
+    <p class="tip">结果已同时发回你的 QQ。网页这张是压缩预览，QQ 收到的是原图。</p>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var K = new URLSearchParams(location.search).get("k") || "";
+  var mode = "outfit";
+  var files = {a:null, b:null};       // {blob, url}
+  var busy = false, curTag = "";
+
+  var $ = function(id){ return document.getElementById(id); };
+  var st = $("status");
+  function say(msg, cls){ st.className = "status " + (cls||""); st.innerHTML = msg; }
+
+  // 令牌先验一下（页面打开即探），过期直接锁死按钮并说清楚
+  fetch("/api/outfit/check?k=" + encodeURIComponent(K))
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if(!j.ok){ say(j.error || "链接无效，回 QQ 再发一次 /换装", "err"); $("go").disabled = true; return; }
+      say("就绪 · 传两张图就能开始");
+    })
+    .catch(function(){ say("连不上服务器，检查网络后刷新", "err"); });
+
+  // 模式切换
+  document.querySelectorAll(".mode").forEach(function(b){
+    b.addEventListener("click", function(){
+      if(busy) return;
+      document.querySelectorAll(".mode").forEach(function(x){ x.classList.remove("on"); });
+      b.classList.add("on"); mode = b.getAttribute("data-mode");
+    });
+  });
+
+  // 选图 → 前端压到长边 960px 再存（隧道只过小图）
+  function pick(slot){
+    $("file" + slot.toUpperCase()).click();
+  }
+  function onFile(slot, f){
+    if(!f || !/^image\//.test(f.type)){ say("选的不是图片", "err"); return; }
+    shrink(f).then(function(blob){
+      if(files[slot] && files[slot].url) URL.revokeObjectURL(files[slot].url);
+      files[slot] = {blob:blob, url:URL.createObjectURL(blob)};
+      var img = $("img" + slot.toUpperCase());
+      img.src = files[slot].url; img.classList.remove("hidden");
+      $("slot" + slot.toUpperCase()).classList.add("has");
+      $("slot" + slot.toUpperCase()).querySelector(".ph").style.display = "none";
+      refresh();
+    });
+  }
+  function shrink(f){
+    return new Promise(function(res, rej){
+      var fr = new FileReader();
+      fr.onload = function(){
+        var im = new Image();
+        im.onload = function(){
+          var max = 960, w = im.width, h = im.height;
+          if(w > max || h > max){ var s = max/Math.max(w,h); w=Math.round(w*s); h=Math.round(h*s); }
+          var c = document.createElement("canvas"); c.width=w; c.height=h;
+          c.getContext("2d").drawImage(im,0,0,w,h);
+          c.toBlob(function(b){ res(b || f); }, "image/jpeg", 0.86);
+        };
+        im.onerror = function(){ res(f); };
+        im.src = fr.result;
+      };
+      fr.onerror = function(){ rej(f); };
+      fr.readAsDataURL(f);
+    });
+  }
+  ["a","b"].forEach(function(slot){
+    $("slot" + slot.toUpperCase()).addEventListener("click", function(e){
+      if(e.target.classList.contains("clr")) return;
+      if(busy) return;
+      pick(slot);
+    });
+    $("file" + slot.toUpperCase()).addEventListener("change", function(e){
+      onFile(slot, e.target.files[0]); this.value = "";
+    });
+    document.querySelector('[data-clr="'+slot+'"]').addEventListener("click", function(e){
+      e.stopPropagation();
+      if(busy) return;
+      files[slot] = null;
+      var img = $("img" + slot.toUpperCase());
+      img.classList.add("hidden"); img.src = "";
+      var s = $("slot" + slot.toUpperCase()); s.classList.remove("has");
+      s.querySelector(".ph").style.display = "";
+      refresh();
+    });
+  });
+  // Ctrl+V / 粘贴：填到空的那个槽，优先 A
+  document.addEventListener("paste", function(e){
+    var items = (e.clipboardData || {}).items || [];
+    for(var i=0;i<items.length;i++){
+      if(/^image\//.test(items[i].type)){
+        var f = items[i].getAsFile();
+        var slot = !files.a ? "a" : (!files.b ? "b" : "b");
+        onFile(slot, f); e.preventDefault(); return;
+      }
+    }
+  });
+
+  function refresh(){ $("go").disabled = busy || !(files.a && files.b); }
+
+  $("go").addEventListener("click", function(){
+    if(busy || !(files.a && files.b)) return;
+    busy = true; refresh(); $("result").classList.remove("show");
+    say('<span class="spin"></span>正在上传两张图…');
+    var fd = new FormData();
+    fd.append("k", K); fd.append("a", files.a.blob, "a.jpg"); fd.append("b", files.b.blob, "b.jpg");
+    fetch("/api/outfit/upload", {method:"POST", body:fd})
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(!j.ok) throw new Error(j.error || "上传失败");
+        say('<span class="spin"></span>已排队，正在换装（通常 30～60 秒）…');
+        return fetch("/api/outfit/gen", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({k:K, mode:mode})
+        });
+      })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(!j.ok) throw new Error(j.error || "提交失败");
+        curTag = j.tag; poll();
+      })
+      .catch(function(e){ fail(e.message); });
+  });
+
+  function poll(){
+    fetch("/api/outfit/status?k=" + encodeURIComponent(K) + "&tag=" + encodeURIComponent(curTag))
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(!j.ok) throw new Error(j.error || "查状态失败");
+        if(j.state === "queued"){ say('<span class="spin"></span>排队中，前面还有几张…'); return setTimeout(poll, 2500); }
+        if(j.state === "running"){ say('<span class="spin"></span>正在换装…'); return setTimeout(poll, 2500); }
+        if(j.state === "error") throw new Error(j.error || "没跑成");
+        if(j.state === "done"){ done(); return; }
+        setTimeout(poll, 2500);
+      })
+      .catch(function(e){ fail(e.message); });
+  }
+  function done(){
+    busy = false; refresh();
+    say("换好了，已发回你的 QQ", "ok");
+    $("resultImg").src = "/api/outfit/img?k=" + encodeURIComponent(K) + "&tag=" + encodeURIComponent(curTag) + "&t=" + Date.now();
+    $("dl").href = $("resultImg").src;
+    $("result").classList.add("show");
+  }
+  function fail(msg){ busy = false; refresh(); say(msg, "err"); }
+
+  $("again").addEventListener("click", function(){
+    $("result").classList.remove("show"); curTag = "";
+    say("就绪 · 可再传两张图");
+  });
+})();
+</script>
+</body>
+</html>
