@@ -107,6 +107,7 @@ _BRIEF_PARAM_EXTRA = {
              "点名「anima鬼针草」/「anima肉感」=anima-guizhencao / anima-flesh"
              "（裸「肉感」是画风词，不算点名）、"
              "点名 qwen/通义=qwen_image_v1、"
+             "点名「qwen真人」=qwen-real（qwen 默认档挂真人 LoRA，只文生图）、"
              "点名 nai=nai、点名 nffa=nffa。",
     # 开头的「垫图 / 图生图」由 `_brief_param_desc` 从真描述的第一句带过来，
     # 这里别再写一遍（写了两遍就成「垫图 / 图生图 垫图/图生图」）。

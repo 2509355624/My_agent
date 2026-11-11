@@ -104,6 +104,14 @@ class ChannelParseTest(unittest.TestCase):
                  "qwen30", "图生图，白衣上写孔雀东南飞"),
                 ("qwen 30 步 一只猫", "qwen30", "一只猫"),   # 中间夹空格也认
                 ("qwen30 一只猫", "qwen30", "一只猫"),       # 不带「步」也认
+                # 2026-11-11 新渠道 qwen-real。⚠️ 中文长名没登记进
+                # `_FIXED_CHAN_RE` 时会被裸词 `qwen` 抢先命中（尾部前瞻只挡
+                # ASCII），实测三次「qwen真人，…」全落 qwen_image_v1。
+                ("qwen真人，亚洲女孩", "qwen-real", "亚洲女孩"),
+                ("qwen 真人 亚洲女孩", "qwen-real", "亚洲女孩"),
+                ("，qwen真人，竖屏，jk日本女孩",
+                 "qwen-real", "竖屏，jk日本女孩"),
+                ("qwen，亚洲女孩", "qwen_image_v1", "亚洲女孩"),  # 裸 qwen 不受影响
                 ("nffa 插画少女", "nffa", "插画少女"),
                 ("cunny 一个女孩", "cunny", "一个女孩"),   # 2026-10-05 新渠道
                 ("miao 一个女孩", "miao", "一个女孩"),     # 2026-10-05 新渠道

@@ -2070,6 +2070,16 @@ class BriefToolParamTest(unittest.TestCase):
         self.assertIn("默认 silver", line, "brief 下丢了默认渠道名")
         self.assertIn("hd_3_", line, "brief 下丢了档位映射")
         self.assertIn("qwen_image_v1", line, "brief 下丢了 qwen 渠道映射")
+        # 2026-11-11：新渠道只写进工具描述正文不够，brief 会把它压掉，
+        # 模型在 system 头里连「qwen真人」这四个字都看不到。
+        self.assertIn("qwen真人", line, "brief 下丢了 qwen-real 的中文点名词")
+        self.assertIn("qwen-real", line, "brief 下丢了 qwen-real 的 id")
+
+    def test_qq_system_head_mentions_qwen_real(self):
+        from app.agent_prompt import build_stable_prompt
+        head = build_stable_prompt("qq")
+        self.assertIn("qwen真人", head)
+        self.assertIn("qwen-real", head)
 
     def test_brief_keeps_source_image_legal_value(self):
         line = self._line(True)
