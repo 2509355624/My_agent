@@ -1064,6 +1064,65 @@ def _submit_retry(make, what, tries=3):
                         what, attempt, tries)
 
 
+def _publish_file(dst, write):
+    """所有落图都走这里：先写 `.tmp`，确认非空再 `os.replace` 到正式编号。
+
+    2026-11-11：原来 `/view` 取图直接 `open(dst, "wb")`，ComfyUI 在写到一半
+    被 RAM 守卫重启时，会留下半截 PNG 顶着 `01_raw.png`，之后照样被当成品
+    打包。原子替换后，失败时正式编号上要么是新图、要么什么都没有。
+    """
+    tmp = dst + ".tmp"
+    try:
+        write(tmp)
+        if not os.path.isfile(tmp) or not os.path.getsize(tmp):
+            raise RuntimeError("落盘后是空图")
+        os.replace(tmp, dst)
+    finally:
+        try:
+            if os.path.isfile(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+    return dst
+
+
+def discard_numbered_images(task_dir, no, kinds=("raw", "final")):
+    """换种子重跑前，把这一编号占着的旧图从磁盘上清掉。
+
+    2026-11-11 用户拍板「先删再跑、新图替代原编号」：旧图（尤其是上一版的
+    `final/`）不能继续顶着格号留在任务目录里，否则站主去文件夹挑图会误发。
+    只删**同一任务目录、同一编号**的正图 + 对应缩略图；不动别的编号、别的
+    任务、剧本/状态文件，也不碰 ComfyUI output（那里是自动编号、跟格号无关，
+    还被 QQ / 跑图台 / 群友共用）。
+
+    删不掉只警告、不拦住重跑；返回删掉的相对路径列表，给日志用。
+    """
+    no = str(no).strip().zfill(2)
+    from app import comic_thumb          # 函数内 import，避开加载期循环
+    paths = []
+    for kind in kinds:
+        if kind == "raw":
+            paths.append(os.path.join(task_dir, "raw", "%s_raw.png" % no))
+        elif kind == "final":
+            paths.append(os.path.join(task_dir, "final", "%s_final.png" % no))
+        elif kind == "portrait":
+            paths.append(os.path.join(task_dir, "portraits", "%s.png" % no))
+        else:
+            continue
+        paths.append(comic_thumb.thumb_path(task_dir, no, kind))
+    removed = []
+    for fp in paths:
+        try:
+            if os.path.isfile(fp):
+                os.remove(fp)
+                removed.append(os.path.relpath(fp, task_dir).replace("\\", "/"))
+        except OSError as e:
+            log.warning("[comic] 重跑前删旧图失败 %s：%s", fp, e)
+    if removed:
+        log.info("[comic] 格 %s 重跑前清掉旧图：%s", no, "、".join(removed))
+    return removed
+
+
 def _download(filename, dst):
     """把 ComfyUI 那边的输出图取到本地。
 
@@ -1092,8 +1151,10 @@ def _download(filename, dst):
             resp = _session.get(COMFYUI_URL.rstrip("/") + "/view",
                                params=params, timeout=120)
             resp.raise_for_status()
-            with open(dst, "wb") as f:
-                f.write(resp.content)
+            def _write(tmp, content=resp.content):
+                with open(tmp, "wb") as f:
+                    f.write(content)
+            _publish_file(dst, _write)
             return dst
         except Exception as e:
             last = e
@@ -1130,7 +1191,7 @@ def _copy_from_comfy_output(filename, dst):
     src = os.path.join(root, *parts)
     if not os.path.isfile(src):
         return None
-    shutil.copyfile(src, dst)
+    _publish_file(dst, lambda tmp: shutil.copyfile(src, tmp))
     log.warning("改从 ComfyUI output 目录直接取图：%s", src)
     return dst
 
@@ -1188,7 +1249,8 @@ def render_scene(task, p, scene_skill=SCENE_SKILL, opts=None, abort=None):
         t0 = time.monotonic()
         src = _submit_nai(p.scene, scene_skill)
         os.makedirs(task.raw_dir, exist_ok=True)
-        shutil.copyfile(src, task.raw_path(p))
+        _publish_file(task.raw_path(p),
+                      lambda tmp: shutil.copyfile(src, tmp))
         p.seed = None
         p.state = "rendered"
         p.error = None

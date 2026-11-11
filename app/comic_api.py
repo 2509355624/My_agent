@@ -1525,10 +1525,18 @@ def api_comic_rerender():
     panel.state, panel.seed, panel.error = "pending", None, None
     task.scene_skill = skill          # save_state 会把它写回 state.json
     task.save_state()
-    started = _spawn(path, "scene", lambda: comic.run(
-        os.path.join(path, "script.md"), only={no}, silver_only=True,
-        scene_skill=skill),
-        on_error=_mark_pending_failed(path, no))
+    # 换种子重跑（2026-11-11 用户拍板「先删再跑、新图占原编号」）：
+    # 旧图在**后台线程确实启动之后、开跑之前**清掉。放进 fn 而不是请求线程，
+    # 是为了「任务已在跑 → 409」时一张图都不删；`comic.run` 自己会探活，
+    # 不在线就整格标 error，此时该编号保持空，绝不拿上一版冒充新图。
+    # 删完这一格只剩同编号的新底图，final 要再点「加气泡」。
+    def _run():
+        comic.discard_numbered_images(path, no, ("raw", "final"))
+        comic.run(os.path.join(path, "script.md"), only={no},
+                  silver_only=True, scene_skill=skill)
+
+    started = _spawn(path, "scene", _run,
+                     on_error=_mark_pending_failed(path, no))
     if not started:
         return jsonify({"ok": False, "error": "这个任务已经在跑了"}), 409
     return jsonify({"ok": True, "no": no, "scene_skill": skill})

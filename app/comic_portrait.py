@@ -225,6 +225,9 @@ def reseed_shot(task_dir, no, skill=SKILL):
     if not (hit.get("prompt") or "").strip():
         raise PortraitError("第 %s 条没有提示词，不能重跑" % no)
     comic._require_comfy()
+    # 换种子重跑：先清掉这一编号的旧图和缩略图，失败时宁可留空，不让上一版
+    # 占着编号被误发（2026-11-11 用户拍板「先删再跑、新图占原编号」）。
+    comic.discard_numbered_images(task_dir, no, ("portrait",))
     seed = comic._new_seed()
     try:
         new = _render_one(task_dir, hit["no"], hit["prompt"], seed, skill=skill)
