@@ -4220,6 +4220,80 @@ class GalleryCmdTest(unittest.TestCase):
         self.assertIn("画廊", why)
 
 
+class ComicStudioCmdTest(unittest.TestCase):
+    """`/漫画台`（2026-11-11）：与 `/画廊` 一字不差的同口径。
+
+    必须带斜杠且顶在句首（「漫画台」三个字日常对话撞得上）；斜杠已是门槛，
+    不过 `trigger.called` 那道闸，群里也不用 @。正文 = 隧道地址 + /comic?from=qq。
+    """
+
+    URL = "https://calm-otter-1234.trycloudflare.com"
+
+    def _text(self, where="private"):
+        from unittest import mock
+        from app import friend_site
+        with mock.patch.object(friend_site, "url", return_value=self.URL), \
+                mock.patch.object(direct_gen.qq_api, "current_context",
+                                  return_value=(where, "2509355624")):
+            return direct_gen._comic_studio_text()
+
+    def test_slash_forms_hit(self):
+        for t in ("/漫画台", "／漫画台", "/ 漫画台", "/漫画台 怎么进", "  /漫画台"):
+            self.assertTrue(direct_gen._COMIC_STUDIO_RE.match(t), t)
+
+    def test_bare_word_does_not_fire(self):
+        """纯「漫画台」交给 AI 正常聊天，不被吞成指令。"""
+        for t in ("漫画台", "这个漫画台不错", "漫画台在哪"):
+            self.assertIsNone(direct_gen._COMIC_STUDIO_RE.match(t), t)
+
+    def test_slash_must_start_the_line(self):
+        for t in ("你看 /漫画台", "去发/漫画台"):
+            self.assertIsNone(direct_gen._COMIC_STUDIO_RE.match(t), t)
+
+    def test_private_chat_gets_the_comic_url(self):
+        text = self._text("private")
+        self.assertIn(self.URL + "/comic?from=qq", text)
+        self.assertIn("验证码", text)
+
+    def test_group_chat_withholds_the_url(self):
+        text = self._text("group")
+        self.assertNotIn(self.URL, text)
+        self.assertIn("私聊", text)
+
+    def test_tunnel_down_says_so(self):
+        from unittest import mock
+        from app import friend_site
+        with mock.patch.object(friend_site, "url", return_value=""):
+            text = direct_gen._comic_studio_text()
+        self.assertIn("没开", text)
+        self.assertNotIn("https://", text)
+
+    def test_group_turn_needs_no_mention(self):
+        """群里没 @ 也没喊名字，照样直出——斜杠即命令。"""
+        from unittest import mock
+        from app import friend_site
+        with mock.patch.object(friend_site, "url", return_value=self.URL), \
+                mock.patch.object(direct_gen.qq_api, "current_context",
+                                  return_value=("group", "1103174141")), \
+                mock.patch.object(direct_gen.llm, "call_llm") as m_llm:
+            out = direct_gen.decide("/漫画台", [], False)
+        self.assertEqual(out, "漫画台在群友页里，网址我私聊发你——先加我好友，"
+                              "私聊发「/漫画台」就行。")
+        m_llm.assert_not_called()
+
+    def test_both_menus_mention_it(self):
+        self.assertIn("/漫画台", direct_gen.MENU_TEXT)
+        self.assertIn("/漫画台", direct_gen.GUIDE_TEXT)
+
+    def test_qq_bot_gate_lets_slash_through(self):
+        """群聊闸门：带斜杠直接放行，不带就得走关键词/@。"""
+        from app import qq_bot
+        ev = {"user_id": "1"}
+        ok, why = qq_bot._should_reply(ev, "group", "9", "/漫画台", False)
+        self.assertTrue(ok)
+        self.assertIn("漫画台", why)
+
+
 class QuotedPresetTest(unittest.TestCase):
     """引用图 + `zdy-` 预设 = 照这张的味道、用这套 LoRA 画一张新的（2026-10-30）。
 

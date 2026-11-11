@@ -108,6 +108,21 @@ class SoloGatewayTest(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         r.close()
 
+    def test_qq_comic_link_unlocks_solo_and_clears_marker(self):
+        """QQ /漫画台 发来的 /comic?from=qq 同样要解开 /play 页面锁（2026-11-11）。
+
+        与 /画廊 同一个坑：带 fr_solo 的浏览器点 QQ 给的 /comic，不该被挡回
+        /play；标记清掉后不带参数再访问也照常。
+        """
+        r = self._solo("/comic?from=qq")
+        self.assertEqual(r.status_code, 200)
+        cookies = " ".join(r.headers.getlist("Set-Cookie"))
+        self.assertIn("fr_solo=", cookies)
+        r.close()
+        r2 = self.client.get("/comic")
+        self.assertEqual(r2.status_code, 200)
+        r2.close()
+
     def test_qq_unlock_only_applies_to_gallery(self):
         """带 from=qq 不能顺手把首页/预设页也解锁，独立页的孤立性保留。"""
         for path in ("/?from=qq", "/preset?from=qq", "/guest?from=qq"):

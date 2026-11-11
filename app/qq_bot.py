@@ -619,6 +619,9 @@ _GALLERY_RE = re.compile(r"^\s*[\/／]\s*画廊")
 # 「/换装」= 双图换装网页（2026-11-11），同 /画廊：斜杠即命令、群里免 @。
 # 正则与 `app/direct_gen.py` 那份保持一字不差。回链接正文在 direct_gen._outfit_text。
 _OUTFIT_RE = re.compile(r"^\s*[\/／]\s*换装")
+# 「/漫画台」= 群友漫画工作台地址（2026-11-11），同 /画廊：斜杠即命令、群里
+# 免 @。正则与 `app/direct_gen.py` 那份保持一字不差。正文在 _comic_studio_text。
+_COMIC_STUDIO_RE = re.compile(r"^\s*[\/／]\s*漫画台")
 
 
 def _private_gate(user_id):
@@ -735,6 +738,9 @@ def _should_reply(ev, target, target_id, text, at_me, has_image=False,
     # 「/换装」同理：斜杠即换装页命令，免 @（与 /画廊 同口径）。
     if _OUTFIT_RE.match(text):
         return True, "换装指令（带斜杠）"
+    # 「/漫画台」同理：斜杠即漫画台地址命令，免 @（与 /画廊 同口径）。
+    if _COMIC_STUDIO_RE.match(text):
+        return True, "漫画台指令（带斜杠）"
     # 「#游客模式」（2026-11-06）：独立游客页地址。群里同样不用 @；谁发都给
     # ——链接本来就是拿去分享的（用户拍板）。判据见 app/solo_bot.py。
     if solo_bot.SOLO_RE.search(text):

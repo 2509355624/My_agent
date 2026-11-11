@@ -188,12 +188,13 @@ def _gate():
     # 独立游客页的隔离：只圈「没登录 + 进过 /play」的人，且只挡页面导航。
     # API 一律放行——聊天要靠它，其余接口本来就要求登录（见 _forward）。
     p = (request.path or "/").rstrip("/") or "/"
-    # QQ「/画廊」发出来的正式入口：先把 /play 的页面锁解开再按正常鉴权走。
-    # 2026-11-06 回归：站主自己点过一次 /play 后，浏览器带着 7 天的 fr_solo，
-    # 再点 QQ 给的 /gallery 会被下面这条挡回游客页，看起来像「链接发错了」。
-    # 带 from=qq 只可能是刚从 QQ 指令拿到的链接；访客在 /play 里手改地址栏
-    # 到 /gallery（不带参数）仍然挡回，独立页的孤立性不变。
-    if (p in ("/gallery", "/gallery.html")
+    # QQ「/画廊」「/漫画台」发出来的正式入口：先把 /play 的页面锁解开再按
+    # 正常鉴权走。2026-11-06 回归：站主自己点过一次 /play 后，浏览器带着
+    # 7 天的 fr_solo，再点 QQ 给的 /gallery 会被下面这条挡回游客页，看起来
+    # 像「链接发错了」。带 from=qq 只可能是刚从 QQ 指令拿到的链接；访客在
+    # /play 里手改地址栏到 /gallery（不带参数）仍然挡回，独立页的孤立性不变。
+    # 2026-11-11 把 /comic 一并收进来：QQ 新增「/漫画台」指令，同一个坑别再踩。
+    if (p in ("/gallery", "/gallery.html", "/comic", "/comic.html")
             and request.args.get("from") == "qq" and _solo_in()):
         g.clear_solo = True
         return None
