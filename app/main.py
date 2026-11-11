@@ -33,6 +33,7 @@ from app import gallery_api
 from app import card_api
 from app import output_api
 from app import outfit_api
+from app import novel_api
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         LLM_PROVIDER, LLM_FALLBACK_CHAIN, PROVIDERS,
                         OLLAMA_BASE_URL, DEFAULT_AGENT_ID,
@@ -205,6 +206,10 @@ app.register_blueprint(output_api.bp)
 # 换装页 API（独立 Blueprint，见 app/outfit_api.py）：双图 qwen 换装/换姿势。
 # 免登录（令牌即凭证），公网入口在 5175 的 /outfit + /api/outfit/* 反代。
 app.register_blueprint(outfit_api.bp)
+
+# 小说模式（2026-11-11）：和一对一角色扮演相互隔离的第三套，独立世界书 /
+# 裁定链 / 页面。只挂 5174，站主自用。
+app.register_blueprint(novel_api.bp)
 
 @app.route("/")
 def index():
@@ -944,6 +949,27 @@ def persona_page():
     见 `app/persona_api.py`。
     """
     return send_from_directory(WEB_DIR, "persona.html")
+
+
+@app.route("/novel")
+def novel_page():
+    """小说模式：丧尸末日生存模拟（见 app/novel.py、app/novel_api.py）。
+
+    独立的第三套页面，左边玩法列表、中间小说正文、右边纯事实状态卡；
+    跟 /persona 的好感数值条没有任何关系。
+    """
+    return send_from_directory(WEB_DIR, "novel.html")
+
+
+@app.after_request
+def _no_cache_novel(resp):
+    """小说页也是单页工具页，改了前端刷新就该生效（同 /persona 的坑）。"""
+    try:
+        if request.path == "/novel" or request.path.startswith("/api/novel/"):
+            resp.headers["Cache-Control"] = "no-store, must-revalidate"
+    except Exception:                                  # noqa: BLE001
+        pass
+    return resp
 
 
 @app.after_request

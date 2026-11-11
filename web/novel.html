@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>小说模式 · 丧尸末日</title>
+<style>
+:root{
+  --nv-bg:#f6f5f2; --nv-panel:#ffffff; --nv-line:#e3e1da; --nv-text:#26251f;
+  --nv-muted:#77746a; --nv-soft:#f0eee8; --nv-accent:#3f5d8a; --nv-accent-soft:#e8eef7;
+  --nv-warn:#8a4a2f; --nv-warn-soft:#f8ece5; --nv-radius:12px;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --nv-bg:#191a1c; --nv-panel:#222427; --nv-line:#363940; --nv-text:#eceae5;
+    --nv-muted:#a3a49e; --nv-soft:#2c2f33; --nv-accent:#8fb0e0; --nv-accent-soft:#2a3546;
+    --nv-warn:#e0a184; --nv-warn-soft:#3a2c26; --nv-radius:12px;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100%}
+body{background:var(--nv-bg);color:var(--nv-text);font:14px/1.7 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer}
+.nv-top{display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid var(--nv-line);background:var(--nv-panel);flex-wrap:wrap}
+.nv-top h1{font-size:16px;font-weight:500;margin:0}
+.nv-top .nv-sub{font-size:12px;color:var(--nv-muted)}
+.nv-top a{color:var(--nv-accent);font-size:12px;text-decoration:none;margin-left:auto}
+.nv-top a:hover{text-decoration:underline}
+.nv-wrap{display:grid;grid-template-columns:230px minmax(0,1fr) 280px;gap:12px;padding:12px;height:calc(100% - 54px);min-height:0}
+.nv-col{background:var(--nv-panel);border:1px solid var(--nv-line);border-radius:var(--nv-radius);padding:14px;min-width:0;overflow:auto}
+.nv-col h2{font-size:13px;font-weight:500;margin:0 0 10px;color:var(--nv-muted)}
+.nv-sec{margin-bottom:18px}
+.nv-sec h3{font-size:12px;font-weight:500;margin:0 0 8px;color:var(--nv-muted);letter-spacing:.04em}
+.nv-play{border:1px solid var(--nv-line);border-radius:10px;padding:10px 11px;margin-bottom:8px;cursor:pointer;background:var(--nv-soft)}
+.nv-play.on{border-color:var(--nv-accent);background:var(--nv-accent-soft)}
+.nv-play b{display:block;font-weight:500;font-size:13px}
+.nv-play span{display:block;font-size:11px;color:var(--nv-muted);margin-top:3px;overflow-wrap:anywhere}
+.nv-field{margin-bottom:8px}
+.nv-field label{display:block;font-size:11px;color:var(--nv-muted);margin-bottom:4px}
+.nv-field input,.nv-field select{width:100%;padding:7px 9px;border:1px solid var(--nv-line);border-radius:8px;background:var(--nv-bg);outline:none}
+.nv-btn{width:100%;padding:8px 10px;border:1px solid var(--nv-accent);border-radius:8px;background:var(--nv-accent-soft);color:var(--nv-accent)}
+.nv-btn:hover{filter:brightness(.96)}
+.nv-btn:disabled{opacity:.5;cursor:default}
+.nv-btn.ghost{background:transparent;border-color:var(--nv-line);color:var(--nv-muted)}
+.nv-world{font-size:12px;padding:7px 8px;border-radius:8px;cursor:pointer;border:1px solid transparent;overflow-wrap:anywhere}
+.nv-world:hover{background:var(--nv-soft)}
+.nv-world.on{background:var(--nv-accent-soft);border-color:var(--nv-accent)}
+.nv-empty{font-size:12px;color:var(--nv-muted)}
+.nv-log{display:flex;flex-direction:column;gap:14px;padding-bottom:10px;min-width:0}
+.nv-note{background:var(--nv-accent-soft);border-left:3px solid var(--nv-accent);padding:10px 12px;border-radius:0 8px 8px 0;font-size:13px;overflow-wrap:anywhere}
+.nv-para{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.9}
+.nv-said{align-self:flex-end;max-width:88%;background:var(--nv-soft);border-radius:10px 10px 2px 10px;padding:8px 11px;font-size:12px;color:var(--nv-muted);overflow-wrap:anywhere}
+.nv-ruling{font-size:12px;color:var(--nv-muted);border-top:1px dashed var(--nv-line);padding-top:7px;overflow-wrap:anywhere}
+.nv-end{background:var(--nv-warn-soft);border:1px solid var(--nv-warn);color:var(--nv-warn);border-radius:10px;padding:12px;overflow-wrap:anywhere}
+.nv-input{border-top:1px solid var(--nv-line);padding-top:10px;margin-top:8px}
+.nv-input textarea{width:100%;min-height:78px;resize:vertical;padding:9px 11px;border:1px solid var(--nv-line);border-radius:9px;background:var(--nv-bg);outline:none}
+.nv-actions{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.nv-actions button{padding:5px 10px;font-size:12px;border:1px solid var(--nv-line);border-radius:20px;background:var(--nv-soft);overflow-wrap:anywhere;max-width:100%;text-align:left}
+.nv-actions button:hover{border-color:var(--nv-accent)}
+.nv-sendrow{display:flex;gap:8px;margin-top:8px}
+.nv-sendrow .nv-btn{width:auto;flex:0 0 96px}
+.nv-card dl{margin:0}
+.nv-card dt{font-size:11px;color:var(--nv-muted);margin-top:11px}
+.nv-card dd{margin:2px 0 0;font-size:13px;overflow-wrap:anywhere}
+.nv-chip{display:inline-block;padding:2px 8px;margin:2px 4px 2px 0;border-radius:14px;background:var(--nv-soft);font-size:12px;overflow-wrap:anywhere}
+.nv-card ul{margin:4px 0 0;padding-left:17px;font-size:12px;overflow-wrap:anywhere}
+.nv-card li{margin-bottom:3px}
+.nv-dead{background:var(--nv-warn-soft);border:1px solid var(--nv-warn);border-radius:9px;padding:9px;font-size:12px;color:var(--nv-warn);overflow-wrap:anywhere}
+.nv-err{background:var(--nv-warn-soft);border:1px solid var(--nv-warn);color:var(--nv-warn);border-radius:8px;padding:8px 10px;font-size:12px;margin-bottom:10px;overflow-wrap:anywhere}
+@media (max-width:900px){
+  .nv-wrap{grid-template-columns:minmax(0,1fr);height:auto;min-height:calc(100% - 54px)}
+  .nv-col{max-height:none;overflow:visible}
+  .nv-top a{margin-left:0}
+}
+</style>
+</head>
+<body>
+<h2 class="nv-sr" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">小说模式：选择玩法并开一本生存模拟小说，右侧是纯事实状态卡</h2>
+<div class="nv-top">
+  <h1>小说模式</h1>
+  <span class="nv-sub">一个世界一条线 · 你是主角 · 世界书会记住已经探明的事</span>
+  <a href="/persona">返回角色扮演</a>
+</div>
+<div class="nv-wrap">
+
+  <div class="nv-col" id="nvLeft">
+    <div class="nv-sec">
+      <h3>玩法</h3>
+      <div id="nvPlayList"><div class="nv-empty">正在读玩法…</div></div>
+    </div>
+    <div class="nv-sec" id="nvNewBox">
+      <h3>开一本新的</h3>
+      <div class="nv-field"><label for="nvName">主角名字</label><input id="nvName" placeholder="给自己起个名字" maxlength="24"></div>
+      <div class="nv-field"><label for="nvIdentity">开局身份</label><select id="nvIdentity"></select></div>
+      <button class="nv-btn" id="nvOpenBtn">开场封样</button>
+    </div>
+    <div class="nv-sec">
+      <h3>已有的世界</h3>
+      <div id="nvWorldList"><div class="nv-empty">还没有开过</div></div>
+    </div>
+  </div>
+
+  <div class="nv-col" id="nvMain">
+    <div id="nvErr"></div>
+    <div class="nv-log" id="nvLog"><div class="nv-empty">左边选一个玩法，填好主角名字和身份，点「开场封样」。</div></div>
+    <div class="nv-input" id="nvInputBox" style="display:none">
+      <div class="nv-actions" id="nvActions"></div>
+      <textarea id="nvText" placeholder="写下你打算做什么。想法可以天马行空，编剧会把它落成这一拍真正发生的事。"></textarea>
+      <div class="nv-sendrow"><button class="nv-btn" id="nvSendBtn">写下去</button><button class="nv-btn ghost" id="nvRestartBtn">重开一本</button></div>
+    </div>
+  </div>
+
+  <div class="nv-col nv-card" id="nvRight">
+    <h2>状态卡</h2>
+    <div id="nvCard"><div class="nv-empty">开场之后这里会记：现在在哪、手上有什么、在场的人、做过的事。</div></div>
+  </div>
+
+</div>
+<script>
+var nvWorldId = '';
+var nvPlays = [];
+var nvPlayId = '';
+var nvBusy = false;
+var nvEnded = false;
+
+function nvEl(id){ return document.getElementById(id); }
+function nvEsc(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+function nvErr(msg){
+  nvEl('nvErr').innerHTML = msg ? '<div class="nv-err">' + nvEsc(msg) + '</div>' : '';
+}
+function nvBusySet(on){
+  nvBusy = on;
+  ['nvOpenBtn','nvSendBtn','nvRestartBtn'].forEach(function(id){
+    var b = nvEl(id); if(b) b.disabled = on;
+  });
+  Array.prototype.forEach.call(nvEl('nvActions').querySelectorAll('button'), function(b){
+    b.disabled = on || nvEnded;
+  });
+  if(nvEl('nvSendBtn')) nvEl('nvSendBtn').textContent = on ? '正在写…' : '写下去';
+}
+async function nvGet(path){
+  var r = await fetch(path, {headers:{'Accept':'application/json'}});
+  return await r.json();
+}
+async function nvPost(path, body){
+  var r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'},
+                             body:JSON.stringify(body || {})});
+  return await r.json();
+}
+function nvTextList(rows){
+  if(!rows || !rows.length) return '<span class="nv-empty">无</span>';
+  return '<ul>' + rows.map(function(x){ return '<li>' + nvEsc(x) + '</li>'; }).join('') + '</ul>';
+}
+function nvChips(rows){
+  if(!rows || !rows.length) return '<span class="nv-empty">空手</span>';
+  return rows.map(function(x){ return '<span class="nv-chip">' + nvEsc(x) + '</span>'; }).join('');
+}
+
+function nvRenderPlays(plays){
+  nvPlays = plays || [];
+  var box = nvEl('nvPlayList');
+  if(!nvPlays.length){ box.innerHTML = '<div class="nv-empty">没有找到玩法预设</div>'; return; }
+  box.innerHTML = nvPlays.map(function(p){
+    return '<div class="nv-play' + (p.id === nvPlayId ? ' on' : '') + '" data-id="' + nvEsc(p.id) + '">' +
+           '<b>' + nvEsc(p.name) + '</b><span>' + nvEsc(p.tagline) + '</span></div>';
+  }).join('');
+  Array.prototype.forEach.call(box.querySelectorAll('.nv-play'), function(el){
+    el.onclick = function(){ nvSelectPlay(el.getAttribute('data-id')); };
+  });
+  if(!nvPlayId) nvSelectPlay(nvPlays[0].id);
+}
+function nvSelectPlay(id){
+  nvPlayId = id;
+  var play = nvPlays.filter(function(p){ return p.id === id; })[0] || {};
+  var sel = nvEl('nvIdentity');
+  sel.innerHTML = (play.identity_choices || []).map(function(c){
+    return '<option value="' + nvEsc(c.name) + '">' + nvEsc(c.name) + ' · ' + nvEsc(c.desc) + '</option>';
+  }).join('');
+  Array.prototype.forEach.call(nvEl('nvPlayList').querySelectorAll('.nv-play'), function(el){
+    el.className = 'nv-play' + (el.getAttribute('data-id') === id ? ' on' : '');
+  });
+}
+function nvRenderWorlds(worlds){
+  var box = nvEl('nvWorldList');
+  if(!worlds || !worlds.length){ box.innerHTML = '<div class="nv-empty">还没有开过</div>'; return; }
+  box.innerHTML = worlds.map(function(w){
+    return '<div class="nv-world' + (w.id === nvWorldId ? ' on' : '') + '" data-id="' + nvEsc(w.id) + '">' +
+           nvEsc(w.name || '无名的人') + ' · 第 ' + nvEsc(w.chapter) + ' 章 · ' + nvEsc(w.place) +
+           (w.ending ? ' · 已结束' : '') + '</div>';
+  }).join('');
+  Array.prototype.forEach.call(box.querySelectorAll('.nv-world'), function(el){
+    el.onclick = function(){ nvLoadWorld(el.getAttribute('data-id')); };
+  });
+}
+function nvRenderCard(s){
+  if(!s){ nvEl('nvCard').innerHTML = '<div class="nv-empty">还没有世界书</div>'; return; }
+  var p = s.player || {};
+  var present = (s.present || []).map(function(c){
+    return c.name + '（' + (c.relation || '未定') + '，' + (c.willing || '未定') + '）';
+  });
+  var route = s.route || {};
+  var death = s.last_death;
+  var html = '<dl>';
+  html += '<dt>章节 · 本章目标</dt><dd>第 ' + nvEsc(s.chapter) + ' 章 · ' + nvEsc(s.chapter_goal || '暂无') + '</dd>';
+  html += '<dt>主角</dt><dd>' + nvEsc(p.name) + ' · ' + nvEsc(p.identity) + '</dd>';
+  html += '<dt>身份意味着什么</dt><dd>' + nvEsc(p.identity_desc || '普通人') + '</dd>';
+  html += '<dt>现在在哪</dt><dd>' + nvEsc(p.place || '未知') + '</dd>';
+  html += '<dt>身体状态</dt><dd>' + nvEsc(p.condition || '完好') + '</dd>';
+  html += '<dt>手上拿着</dt><dd>' + nvChips(p.items) + '</dd>';
+  html += '<dt>在场的人</dt><dd>' + nvChips(present) + '</dd>';
+  html += '<dt>主角团里有过谁</dt><dd>' + nvChips((s.cast || []).map(function(c){ return c.name; })) + '</dd>';
+  html += '<dt>当前路线</dt><dd>' + (route.goal ? nvEsc(route.goal) + '：' + nvEsc((route.nodes || []).join(' → ')) : '暂无') + '</dd>';
+  html += '<dt>还没了结的事</dt><dd>' + nvTextList((s.events || []).map(function(e){ return e.trigger; })) + '</dd>';
+  html += '<dt>最近做过的事</dt><dd>' + nvTextList(s.log) + '</dd>';
+  html += '<dt>已经探明的固定事实</dt><dd>' + nvTextList((s.discovered || []).map(function(d){ return d.fact; })) + '</dd>';
+  html += '</dl>';
+  if(death){
+    html += '<div class="nv-dead" style="margin-top:14px"><b>上一次怎么死的</b><br>' +
+            nvEsc(death.cause) + '<br>地点：' + nvEsc(death.at) +
+            ' · 身份：' + nvEsc(death.identity) + '</div>';
+  }
+  nvEl('nvCard').innerHTML = html;
+}
+function nvRenderHistory(hist, note, ending){
+  var box = nvEl('nvLog');
+  var html = note ? '<div class="nv-note">' + nvEsc(note) + '</div>' : '';
+  (hist || []).forEach(function(row){
+    if(row.role === 'user'){
+      html += '<div class="nv-said">你的意图：' + nvEsc(row.content) + '</div>';
+    } else {
+      html += '<div class="nv-para">' + nvEsc(row.content) + '</div>';
+    }
+  });
+  if(ending){
+    html += '<div class="nv-end"><b>这一本结束了</b><br>' + nvEsc(ending.cause) +
+            '<br>' + nvEsc(ending.summary) + '<br>人物归零，已经探明的固定事实会留下来。</div>';
+  }
+  box.innerHTML = html || '<div class="nv-empty">还没有正文</div>';
+  box.scrollTop = box.scrollHeight;
+}
+function nvRenderActions(actions, enabled){
+  var box = nvEl('nvActions');
+  box.innerHTML = (actions || []).map(function(a){
+    return '<button type="button" data-text="' + nvEsc(a) + '">' + nvEsc(a) + '</button>';
+  }).join('');
+  Array.prototype.forEach.call(box.querySelectorAll('button'), function(b){
+    b.disabled = !enabled;
+    b.onclick = function(){ nvSend(b.getAttribute('data-text')); };
+  });
+}
+function nvApplyState(s, note){
+  nvWorldId = s.id;
+  nvEnded = !!s.ending;
+  nvRenderCard(s);
+  nvRenderHistory(s.history, note, s.ending);
+  nvRenderActions(s.actions, !s.ending && !nvBusy);
+  nvEl('nvInputBox').style.display = 'block';
+  nvEl('nvText').disabled = !!s.ending;
+  nvGet('/api/novel/worlds').then(function(d){ nvRenderWorlds(d.worlds); }).catch(function(){});
+}
+async function nvBoot(){
+  try{
+    var d = await nvGet('/api/novel/plays');
+    nvRenderPlays(d.plays);
+    var w = await nvGet('/api/novel/worlds');
+    nvRenderWorlds(w.worlds);
+  }catch(e){ nvErr('读玩法失败：' + e.message); }
+}
+async function nvOpen(){
+  if(nvBusy) return;
+  nvErr(''); nvBusySet(true);
+  try{
+    var d = await nvPost('/api/novel/open', {
+      play:nvPlayId, name:nvEl('nvName').value.trim(),
+      identity:nvEl('nvIdentity').value
+    });
+    if(!d.ok){ nvErr(d.error); return; }
+    nvApplyState(d.state, d.note);
+  }catch(e){ nvErr('开场失败：' + e.message); }
+  finally{ nvBusySet(false); }
+}
+async function nvLoadWorld(id){
+  if(nvBusy) return;
+  nvErr('');
+  try{
+    var d = await nvGet('/api/novel/state?id=' + encodeURIComponent(id));
+    if(!d.ok){ nvErr(d.error); return; }
+    nvApplyState(d.state, '');
+  }catch(e){ nvErr('读取失败：' + e.message); }
+}
+async function nvSend(text){
+  if(nvBusy || !nvWorldId) return;
+  text = String(text || nvEl('nvText').value || '').trim();
+  if(!text) return;
+  nvErr(''); nvBusySet(true);
+  nvEl('nvText').value = '';
+  try{
+    var d = await nvPost('/api/novel/turn', {id:nvWorldId, text:text});
+    if(!d.ok){
+      nvErr(d.error);
+      if(d.state) nvApplyState(d.state, '');
+      return;
+    }
+    nvApplyState(d.state, '');
+  }catch(e){ nvErr('这一轮失败：' + e.message); }
+  finally{ nvBusySet(false); }
+}
+async function nvRestart(){
+  if(nvBusy || !nvWorldId) return;
+  nvErr(''); nvBusySet(true);
+  try{
+    var d = await nvPost('/api/novel/restart', {id:nvWorldId});
+    if(!d.ok){ nvErr(d.error); return; }
+    nvApplyState(d.state, d.note);
+  }catch(e){ nvErr('重开失败：' + e.message); }
+  finally{ nvBusySet(false); }
+}
+nvEl('nvOpenBtn').onclick = nvOpen;
+nvEl('nvSendBtn').onclick = function(){ nvSend(''); };
+nvEl('nvRestartBtn').onclick = nvRestart;
+nvEl('nvText').addEventListener('keydown', function(e){
+  if((e.ctrlKey || e.metaKey) && e.key === 'Enter'){ e.preventDefault(); nvSend(''); }
+});
+nvBoot();
+</script>
+</body>
+</html>
