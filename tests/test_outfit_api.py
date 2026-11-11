@@ -317,5 +317,61 @@ class UploadQualityTest(unittest.TestCase):
         self.assertEqual(outfit_api._UPLOAD_MAX, 12 << 20)
 
 
+class UploadInterruptionTest(unittest.TestCase):
+    """上传阶段中断的提示与中文兜底（2026-11-11 实机排障）。
+
+    群友上传中关页/断网 → 5175 收到半截 multipart → Werkzeug 吐 HTML 400，
+    5174 根本没收到。旧前端裸 r.json() 会把 "Unexpected token '<'" 抛给用户，
+    且上传阶段没说「别关页面」。这里钉死三件事：上传阶段显眼劝阻退出、
+    非 2xx 和原生网络错误都兜成中文、绿条仍是唯一「可以退」的信号。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "web", "outfit.html"), encoding="utf-8") as f:
+            cls.html = f.read()
+
+    def test_upload_stage_tells_user_not_to_leave(self):
+        # 上传阶段那句 status 必须含「别关页面」+「绿色提示」双信号
+        m = re.search(r"正在上传两张图[^<]*<br>.*?别关页面.*?绿色提示", self.html)
+        self.assertIsNotNone(m, "上传阶段缺『别关页面 + 等绿色提示』的显眼提示")
+
+    def test_non_2xx_goes_through_as_json_chinese_fallback(self):
+        self.assertIn("function asJson(r, fallback)", self.html)
+        # upload 和 gen 两个 fetch 都必须走 asJson，不许退回裸 r.json()
+        self.assertEqual(self.html.count("return asJson(r,"), 2)
+        # asJson 非 ok 时读 text 再兜中文，而非裸 json
+        self.assertIn("return r.text()", self.html)
+        # 上传中断的中文兜底文案在
+        self.assertIn("图片没传完就被断开了", self.html)
+        self.assertIn("提交没成功", self.html)
+
+    def test_as_json_rejects_non_ok(self):
+        # asJson 里必须有 if(r.ok) 分支，且对非 ok 抛中文
+        m = re.search(r"function asJson\(r, fallback\)\{.*?if\(r\.ok\).*?throw new Error\(msg\)",
+                      self.html, re.S)
+        self.assertIsNotNone(m, "asJson 的非 2xx → 中文错误链路不完整")
+
+    def test_native_fetch_error_is_translated(self):
+        # fail() 必须把 Chrome/Safari/Firefox 的原生英文网络错误兜成中文
+        self.assertIn("failed to fetch", self.html)
+        self.assertIn("load failed", self.html)
+        self.assertIn("networkerror", self.html)
+        self.assertIn("网络中断了", self.html)
+
+    def test_backend_chinese_error_still_shown(self):
+        # 后端自己的中文 error（如「上一张还在跑」）应原样显示，别被兜底误吞：
+        # asJson 里 JSON.parse 成功时优先取 j.error
+        self.assertIn("if(j && j.error) msg = j.error", self.html)
+
+    def test_green_hint_is_still_the_only_leave_signal(self):
+        # 改动不能破坏既有契约：绿条仍在 gen 成功后才 add
+        self.assertIn('$("asyncHint").classList.add("show")', self.html)
+        # 且 asyncHint 的两句告知还在
+        self.assertIn("可以关掉本页", self.html)
+        self.assertIn("自动发回", self.html)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

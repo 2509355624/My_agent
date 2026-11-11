@@ -142,6 +142,19 @@
   var st = $("status");
   function say(msg, cls){ st.className = "status " + (cls||""); st.innerHTML = msg; }
 
+  // 非 2xx 时后端可能回的不是 JSON：最典型是 5175 收到半截 multipart
+  // （上传中关页/断网），Werkzeug 直接吐一个 HTML 400。裸 r.json() 会把
+  // "Unexpected token '<'" 这种英文错抛给用户看。这里统一兜成能照做的中文，
+  // 后端自己回了 JSON error 就优先用它的（比如「上一张还在跑」）。
+  function asJson(r, fallback){
+    if(r.ok) return r.json();
+    return r.text().then(function(t){
+      var msg = fallback || "没成功，请重试";
+      try{ var j = JSON.parse(t); if(j && j.error) msg = j.error; }catch(_){}
+      throw new Error(msg);
+    });
+  }
+
   // 令牌先验一下（页面打开即探），过期直接锁死按钮并说清楚
   fetch("/api/outfit/check?k=" + encodeURIComponent(K))
     .then(function(r){ return r.json(); })
@@ -237,11 +250,14 @@
   $("go").addEventListener("click", function(){
     if(busy || !(files.a && files.b)) return;
     busy = true; refresh(); $("result").classList.remove("show");
-    say('<span class="spin"></span>正在上传两张图…');
+    // ⚠️ 上传阶段绝不能关页：两张图还在往服务器传，中途断开 5175 会收到
+    // 半截 multipart、直接吐 400，任务根本没提交（2026-11-11 实机排查）。
+    // 把「别关页面」摆在最显眼处，等下面绿色提示条亮了才真的可以退。
+    say('<span class="spin"></span>正在上传两张图…<br><b style="color:var(--error)">请别关页面、别退出</b>，等下面的绿色提示出现后再走');
     var fd = new FormData();
     fd.append("k", K); fd.append("a", files.a.blob, "a.png"); fd.append("b", files.b.blob, "b.png");
     fetch("/api/outfit/upload", {method:"POST", body:fd})
-      .then(function(r){ return r.json(); })
+      .then(function(r){ return asJson(r, "图片没传完就被断开了，请重新选两张图再试一次（上传时别关页面）"); })
       .then(function(j){
         if(!j.ok) throw new Error(j.error || "上传失败");
         say('<span class="spin"></span>已排队，正在换装（通常 30～60 秒）…');
@@ -250,7 +266,7 @@
           body:JSON.stringify({k:K, mode:mode})
         });
       })
-      .then(function(r){ return r.json(); })
+      .then(function(r){ return asJson(r, "提交没成功，请再点一次「开始换装」"); })
       .then(function(j){
         if(!j.ok) throw new Error(j.error || "提交失败");
         curTag = j.tag;
@@ -281,7 +297,17 @@
     $("dl").href = $("resultImg").src;
     $("result").classList.add("show");
   }
-  function fail(msg){ busy = false; refresh(); say(msg, "err"); $("asyncHint").classList.remove("show"); }
+  function fail(msg){
+    busy = false; refresh();
+    // fetch 被中断时浏览器 reject 的是原生英文 TypeError（Chrome「Failed to
+    // fetch」、Safari「Load failed」、Firefox「NetworkError」），不经过 asJson，
+    // 直接显示用户看不懂。兜成中文；后端返回的中文 error 原样保留。
+    if(/failed to fetch|load failed|networkerror|network request failed/i.test(msg || "")){
+      msg = "网络中断了，任务可能没提交成功，请检查网络后重新点一次";
+    }
+    say(msg, "err");
+    $("asyncHint").classList.remove("show");
+  }
 
   $("again").addEventListener("click", function(){
     $("result").classList.remove("show"); curTag = "";
