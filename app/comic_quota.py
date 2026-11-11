@@ -212,13 +212,40 @@ def resolve_model(provider, model):
 
 # ─── 配额 ──────────────────────────────────────────────
 
+def _overlay(base, acc_limits):
+    """把账号级覆盖叠到全局上限上。
+
+    四类次数（script/revise/comic/portrait）只有 **>0** 才算站主单独设过：
+    管理页只有「+N 加次数」（服务端算 base+N，结果必 >0），没有任何入口
+    能把某人设成 0。账号里躺着的 0 全是旧版管理页「加次数把整行上限读回
+    去提交」留下的冻结核（2026-11-11 修的 bug：站主改全局默认对老账号全
+    不生效）。所以 0 一律视为「没单独设过」，跟随全局默认——账本里的历史
+    脏数据不用清洗，这里天然免疫；真想拉黑某人就不给他加次数（默认 0）。
+    max_panels / max_shots 不适用这条：档位本来就 ≥1，是显式设置。
+    """
+    for k in KINDS:
+        try:
+            v = int((acc_limits or {}).get(k) or 0)
+        except (TypeError, ValueError):
+            v = 0
+        if v > 0:
+            base[k] = v
+    for k in ("max_panels", "max_shots"):
+        if k in (acc_limits or {}):
+            try:
+                base[k] = max(1, int((acc_limits or {})[k]))
+            except (TypeError, ValueError):
+                pass
+    return base
+
+
 def limits(qq):
-    """这个账号的上限 = 全局默认 + 按账号覆盖。"""
+    """这个账号的上限 = 全局默认 + 按账号覆盖（0 覆盖不算数，见 _overlay）。"""
     data = _read()
     lim = dict(DEFAULTS)
     lim.update(data["defaults"] or {})
     acc = (data["accounts"].get(str(qq)) or {})
-    lim.update(acc.get("limits") or {})
+    _overlay(lim, acc.get("limits") or {})
     for k in KINDS:
         lim[k] = max(0, int(lim.get(k) or 0))
     lim["max_panels"] = max(1, int(lim.get("max_panels") or 10))
@@ -252,9 +279,7 @@ def consume(qq, kind, n=1):
         data = _read()
         acc = data["accounts"].setdefault(str(qq), {})
         used = acc.setdefault("used", {})
-        lim = dict(DEFAULTS)
-        lim.update(data["defaults"] or {})
-        lim.update(acc.get("limits") or {})
+        lim = limits(qq)                    # 含 0-覆盖豁免，与展示口径一致
         cur = int(used.get(kind) or 0)
         if cur + n > int(lim.get(kind) or 0):
             return False
@@ -357,11 +382,11 @@ def admin_update(payload):
             slot = data["accounts"].setdefault(qq, {})
             lim = slot.setdefault("limits", {})
             # 账号没单独设过这一项时，要从「当前生效额度」起加，不能从 0 起算
-            # （否则给新人 +1 剧本会变成总共只有 1 次）。只冻结被加的这一项，
-            # 其它额度继续跟随全局默认。
+            # （否则给新人 +1 剧本会变成总共只有 1 次）。走 limits() 同一套
+            # 合并口径：0 冻结核不算数，显式加过的（如 100）继续在其上加。
             base = dict(DEFAULTS)
             base.update(data["defaults"] or {})
-            base.update(lim)
+            _overlay(base, lim)
             lim[kind] = max(0, int(base.get(kind) or 0) + n)
             # 站主加次数不算「这个人用过漫画台」：最近使用只由他自己真的
             # 扣/退/记账刷新，否则每加一次都会把那一列刷成现在的时间。

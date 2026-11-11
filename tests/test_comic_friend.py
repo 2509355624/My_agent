@@ -125,6 +125,26 @@ class TestFriendIdentity(_TempMixin, unittest.TestCase):
         self.assertEqual(comic_quota.remaining(QQ, "script"), 4)
         self.assertEqual(comic_quota.limits(OTHER)["script"], 0)  # 不影响别人
 
+    def test_账号0冻结核不压全局默认(self):
+        # 2026-11-11 bug：旧版管理页把整行 limits 提交过，账号里躺着一套全 0
+        # 冻结核，站主改「新人默认额度」对老账号全不生效。0 = 没单独设过。
+        data = {"defaults": {"comic": 10, "portrait": 5},
+                "accounts": {QQ: {"limits": {"script": 0, "revise": 0,
+                                             "comic": 0, "portrait": 0}}}}
+        json.dump(data, open(self.state_file, "w", encoding="utf-8"))
+        lim = comic_quota.limits(QQ)
+        self.assertEqual(lim["comic"], 10)     # 跟随全局默认
+        self.assertEqual(lim["portrait"], 5)
+        self.assertTrue(comic_quota.consume(QQ, "comic"))   # 扣的口径也一致
+        self.assertEqual(comic_quota.remaining(QQ, "comic"), 9)
+        # 显式加过的（非 0）依旧压住默认
+        comic_quota.admin_update({"account": {"qq": QQ, "limits": {"revise": 7}}})
+        self.assertEqual(comic_quota.limits(QQ)["revise"], 7)
+        # 在全局默认之上加次数：从 10 起算而不是从冻结核 0 起算
+        comic_quota.admin_update({"add": {"qq": OTHER, "kind": "comic", "n": 1}})
+        data = json.load(open(self.state_file, encoding="utf-8"))
+        self.assertEqual(data["accounts"][OTHER]["limits"]["comic"], 11)
+
     def test_中转站优先_在线免费不扣次(self):
         # 中转站请求成功 → 直接用，不查不扣任何额度。
         calls = []
