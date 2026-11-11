@@ -324,6 +324,10 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    # qwen30步，图生图，需求」。`qwen30` 不带「步」也认——归一化后
                    # （`_fixed_chan` 去空格 + 小写）两种写法都落到这两个 key 上。
                    "qwen30步": "qwen30", "qwen30": "qwen30",
+                   # 2026-11-11 用户新增：默认 qwen 挂 asianMix 真人 LoRA
+                   # （hina_QwenImage2.1_asianMix_v3.0-rank64），步数等全部照抄
+                   # qwen 默认档；目录名 ASCII，点名词中文。只文生图，没 i2i。
+                   "qwen真人": "qwen-real",
                    "nffa": "nffa", "nai": "nai",
                    "cunny": "cunny", "miao": "miao",
                    # 2026-10-11 新增：anima 的 LoRA 堆叠版（6 条 LoRA + silvermoonmix
@@ -1639,6 +1643,8 @@ _MASTER_TEMPLATE = (
     "| qwen、千问、通义 | `qwen_image_v1` | 点名，要写实照片感、要出中文。"
     "这个渠道 cfg=1.0，负向完全不生效，约束一律写进正向 |\n"
     "| qwen30步 | `qwen30` | 明说 qwen30步，更慢更精细 |\n"
+    "| qwen真人 | `qwen-real` | 明说 qwen真人：qwen 默认档挂 asianMix 真人 LoRA，"
+    "步数/画布同 qwen；只文生图，垫图别给它 |\n"
     "| qwen-hd、qwen 超清 | `qwen-hd` | 明说 qwen 超清 |\n"
     "| qwen 角色设定表 | `qwen-charsheet` | 要设定表、三视图、表情集，必须配参考图 |\n"
     "| qwen修复 | `qwen-restore` | 要把图本身修清楚，必须配原图 |\n"

@@ -327,6 +327,9 @@ SKILL_TIMEOUTS = {
     # 2026-10-16 用户新增：qwen 的 30 步副本（`skills/qwen30/`）。25 步那档实测
     # 约 41 秒，30 步多两成、再叠 2x 放大，给同档 220 秒余量足够。
     "qwen30": 220,
+    # 2026-11-11 用户新增：qwen 默认档挂 asianMix 真人 LoRA（`skills/qwen-real/`）。
+    # 步数/画布/采样与 qwen_image_v1 完全一致，只多一次 LoRA 加载，同档 220 秒。
+    "qwen-real": 220,
     # ⚠️ 2026-10-28 晚起 `moss` / `moss8` / `moss50` / `moss_page` 这四条**全部下架**
     #    （进 `app/skills.ARCHIVED_SKILLS`）。下面四个键留着只为「老任务重画 /
     #    `tools/run_moss_*.py` 一次性脚本 / 4 步 DMD 链的测试样本」不炸，

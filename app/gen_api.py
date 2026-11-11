@@ -98,7 +98,7 @@ def _nai_prompt(prompt, prefix):
 # 头部的几个——其余字母序也够找。
 _HEAD = ("silver", "silver-hd", "hd_3_clear", "hd_3_curvy", "hd_3_gloss",
          "hd_3_soft", "anima-line", "anima-2s", "anima-real",
-         "qwen_image_v1", "qwen-hd",
+         "qwen_image_v1", "qwen-hd", "qwen-real",
          "nai", "nai_wide", "cunny", "miao", "jank", "nffa")
 
 
