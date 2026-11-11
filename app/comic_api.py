@@ -60,6 +60,7 @@ from flask import (Blueprint, Response, g, jsonify, request, send_file,
 from app import (comic, comic_agent, comic_delivery, comic_portrait,
                  comic_quota, comic_render_opts, comic_thumb, image_jobs,
                  silver_comic)
+from app import config as _cfg
 from app.config import BASE_DIR
 
 bp = Blueprint("comic_api", __name__)
@@ -133,6 +134,64 @@ def _refund(kind):
     qq = _qq()
     if qq:
         comic_quota.refund(qq, kind)
+
+
+# ─── 群友编剧的「中转站优先」计费（2026-11-11 用户拍板）───────────────
+#
+# 免费层 = 公用中转站 V4 Pro（与角色扮演同一家，config.PERSONA_*），站主零成本：
+# 请求成功就免费、不限次、不扣任何额度。中转站挂了才动用「代充次数」——就是
+# comic_quota 现有的 script / revise 计数器（站主在管理页按账号加），走站主付费
+# 官方并扣 1 次；没次数就报错引导找站长。默认额度因此全部为 0（见
+# comic_quota.DEFAULTS，state/comic_friend.json 里也已是 0）。
+#
+# 免费尝试一律 strict=True：只打中转站、绝不接降级链——全局降级链的第一项就是
+# 付费官方，静默接上去等于绕过次数闸门白烧站主的余额（llm.candidates 文档）。
+# 下层函数（write_script / fix_script / chat_revise / silver）在 strict 模式下
+# 把调用失败**抛出来**而不是吞掉，这里才探测得到「中转站挂了」。
+
+# 免费层的 (provider, model)。读属性而非 import 常量：测试想换掉它时 patch
+# config 模块属性即可，不用重载本模块。
+def _relay_pair():
+    return ((_cfg.PERSONA_PROVIDER or "").strip(),
+            (_cfg.PERSONA_MODEL or "").strip())
+
+
+def _relay_err(exc):
+    return (str(exc) or exc.__class__.__name__)[:120]
+
+
+def _friend_llm(qq, kind, label, run):
+    """群友 LLM 作业：先免费中转站，挂了才扣代充次数走站主官方。
+
+    `run(provider, model, strict)` → 任意结果；抛异常 = 这一次没成（调用方的
+    「补正失败不拖垮编剧」这类兜底要在 run 内部处理好，别把业务失败混成网络
+    失败）。返回 (结果, 是否扣了次数)；扣了次数但官方也失败时在这里退回。
+    """
+    def _paid():
+        comic_quota.consume(qq, kind)
+        try:
+            return run(None, None, False), True
+        except Exception:
+            comic_quota.refund(qq, kind)
+            raise
+
+    relay_p, relay_m = _relay_pair()
+    if not relay_p:
+        # 免费层没配置：等同「中转站不在」——有次数扣着走官方，没有就明说。
+        if comic_quota.remaining(qq, kind) <= 0:
+            raise RuntimeError("中转站没有配置，免费的%s跑不了；"
+                               "找站长加次数就能用站主的额度继续" % label)
+        return _paid()
+    try:
+        return run(relay_p, relay_m, True), False
+    except Exception as relay_exc:
+        if comic_quota.remaining(qq, kind) <= 0:
+            raise RuntimeError(
+                "中转站出问题（%s），免费的%s暂时跑不了；"
+                "找站长加次数，就能用站主的额度继续"
+                % (_relay_err(relay_exc), label)) from relay_exc
+        comic.log.info("中转站没跑成（%s），扣 1 次代充改走站主官方", _relay_err(relay_exc))
+        return _paid()
 
 
 @bp.route("/api/comic/friend_config", methods=["GET"])
@@ -319,6 +378,20 @@ def _resolve_skill(path, wanted=""):
     """这次用哪个渠道：请求显式给的 > 任务存过的 > 全局默认。"""
     return (str(wanted or "").strip() or _state_skill(path)
             or comic.SCENE_SKILL)
+
+
+# 群友渠道锁定（2026-11-11）：群友页只给 anima-line 一个渠道（用户拍板「最快
+# 的当默认，其他先隐藏」）。前端隐藏只是 UI 层，这里在服务端收敛：带 qq 的
+# 请求无论传什么 scene_skill 都落回 anima-line，直连 5174 的 API 调用也绕不过。
+# 站主（qq 为空）不受影响，多渠道照旧。
+FRIEND_SKILL = "anima-line"
+
+
+def _skill_for(path, wanted=""):
+    """所有「渠道从请求里来」的入口统一走这里：群友锁死 anima-line。"""
+    if _qq():
+        return FRIEND_SKILL
+    return _resolve_skill(path, wanted)
 
 
 def _save_task_skill(path, skill):
@@ -648,15 +721,10 @@ def api_comic_script():
     brief = str(data.get("brief") or "").strip()
     if not brief:
         return jsonify({"ok": False, "error": "缺 brief（一句话设定）"}), 400
-    deny = _need("script")
-    if deny:
-        return deny
-    # 群友版：只给一次免费剧本生成。用站主白名单里的模型，不给自定义入口；
-    # 自带 key 也不放行（会白嫖后面整条 GPU 队列）。
-    if qq:
-        if not comic_quota.consume(qq, "script"):
-            return jsonify({"ok": False,
-                            "error": "免费的剧本生成次数用完了"}), 403
+    # 群友版计费（2026-11-11 改）：不再进门就查/扣次数——免费层是公用中转站，
+    # 在线就免费不限次；中转站挂了才在 _work 里查/扣「代充次数」走站主官方
+    #（见 _friend_llm）。站主直连照旧不查不扣。
+    # 自带 key 依然不放行：provider/model 对群友直接忽略，不给自定义入口。
     try:
         panels_n = int(data.get("panels") or 10)
     except (TypeError, ValueError):
@@ -669,8 +737,6 @@ def api_comic_script():
     character = str(data.get("character") or "").strip()
     provider = str(data.get("provider") or "").strip() or None
     model = str(data.get("model") or "").strip() or None
-    if qq:
-        provider, model = comic_quota.resolve_model(provider, model)
     # 自由 / 第三人称统一走 silver 连续漫画 skill；pov 保持原路线。
     # free / third 不再调用 comic_agent 的复杂规范或内容补正。
     silver_mode = str(data.get("silver_mode") or "no_bubble").strip().lower()
@@ -724,46 +790,63 @@ def api_comic_script():
                 j["log"].append(msg)
                 del j["log"][:-8]           # 只留最近几条给界面滚动显示
 
-    def _work():
+    def _produce(provider_, model_, strict_):
+        """「出稿」段（不含落盘）：silver 一次 API，或 POV 写作 + 补正。
+
+        strict=True 是中转站优先模式：写作层的调用失败**抛出来**，让 _friend_llm
+        探测得到「中转站挂了」并换道代充。补正失败仍按「绝不拖垮编剧」吞成
+        fix 报告（稿子已经免费拿到手；用户点「重新补正」时那条链路自己有
+        中转站优先 + 代充，挂了会自己扣次数走官方）。
+        """
+        if pov_mode in ("free", "third"):
+            # silver 自由路线：一次 API，skill 原文直接给模型，输出「固定部分 +
+            # --- + 动态部分」；这里只转成旧 script.md 契约，不查库、不补正。
+            detail = silver_comic.write_script_detail(
+                brief, panels=panels_n, character=character,
+                provider=provider_, model=model_,
+                mode=silver_mode, prev=prev_text, strict=strict_)
+            text_ = detail["script"]
+            # 固定部分 / 逐格动态部分单独留在 job 里：界面要分两栏看，
+            # 开跑时仍然是「固定部分 + 该格动态」拼起来交给渲染。
+            return text_, {"text": text_, "issues": [], "diff": [],
+                           "adopted": False, "status": "silver", "warnings": [],
+                           "audit": [], "skipped": True,
+                           "model": model_ or provider_ or "",
+                           "silver": {"title": detail["title"],
+                                      "fixed": detail["fixed"],
+                                      "dynamics": [p["scene"]
+                                                   for p in detail["panels"]],
+                                      "bubbles": [{"bubble": p["bubble"],
+                                                   "bubble2": p["bubble2"]}
+                                                  for p in detail["panels"]]}}
+        text_ = comic_agent.write_script(
+            brief, panels=panels_n, character=character,
+            provider=provider_, model=model_, progress=_progress,
+            prev=prev_text, no_search=no_search, pov_mode=pov_mode,
+            prev_outfit_text=prev_outfit_text, strict=strict_)
+        # POV 才保留现有内容补正链路。
+        _progress("编剧交稿，开始补正")
         try:
-            if pov_mode in ("free", "third"):
-                # silver 自由路线：一次 API，skill 原文直接给模型，输出「固定部分 +
-                # --- + 动态部分」；这里只转成旧 script.md 契约，不查库、不补正。
-                from app import silver_comic
-                detail = silver_comic.write_script_detail(
-                    brief, panels=panels_n, character=character,
-                    provider=provider, model=model,
-                    mode=silver_mode, prev=prev_text)
-                text = detail["script"]
-                # 固定部分 / 逐格动态部分单独留在 job 里：界面要分两栏看，
-                # 开跑时仍然是「固定部分 + 该格动态」拼起来交给渲染。
-                silver_parts = {"title": detail["title"],
-                                "fixed": detail["fixed"],
-                                "dynamics": [p["scene"] for p in detail["panels"]],
-                                "bubbles": [{"bubble": p["bubble"],
-                                             "bubble2": p["bubble2"]}
-                                            for p in detail["panels"]]}
-                fix = {"text": text, "issues": [], "diff": [], "adopted": False,
-                       "status": "silver", "warnings": [], "audit": [],
-                       "skipped": True, "model": model or provider or "",
-                       "silver": silver_parts}
+            fix_ = comic_agent.fix_script(brief, text_, provider=provider_,
+                                          model=model_, progress=_progress,
+                                          pov_mode=pov_mode, strict=strict_)
+        except Exception as exc:            # 补正绝不许拖垮编剧（strict 换道除外）
+            comic.log.exception("补正失败 job=%s", job)
+            fix_ = {"text": text_, "issues": [], "diff": [], "adopted": False,
+                    "status": "error", "warnings": ["补正异常：%s" % exc],
+                    "audit": [], "skipped": False, "model": ""}
+        return text_, fix_
+
+    def _work():
+        charged = False
+        try:
+            if qq:
+                # 中转站优先：在线免费不限次；挂了才扣「代充次数」走站主官方，
+                # 没次数报「找站长加次数」（错误文案进 job，前端原样显示）。
+                (text, fix), charged = _friend_llm(
+                    qq, "script", "剧本生成", _produce)
             else:
-                text = comic_agent.write_script(
-                    brief, panels=panels_n, character=character,
-                    provider=provider, model=model, progress=_progress,
-                    prev=prev_text, no_search=no_search, pov_mode=pov_mode,
-                    prev_outfit_text=prev_outfit_text)
-                # POV 才保留现有内容补正链路。
-                _progress("编剧交稿，开始补正")
-                try:
-                    fix = comic_agent.fix_script(brief, text, provider=provider,
-                                                 model=model, progress=_progress,
-                                                 pov_mode=pov_mode)
-                except Exception as exc:            # 补正绝不许拖垮编剧
-                    comic.log.exception("补正失败 job=%s", job)
-                    fix = {"text": text, "issues": [], "diff": [], "adopted": False,
-                           "status": "error", "warnings": ["补正异常：%s" % exc],
-                           "audit": [], "skipped": False, "model": ""}
+                text, fix = _produce(provider, model, False)
             # 目录**不再在这里建**：名字要带剧本标题，得等拿到稿子（见下面
             # `final` 那一段）。失败的 job 仍然不留空目录。
 
@@ -817,8 +900,9 @@ def api_comic_script():
             with _SCRIPT_LOCK:
                 _SCRIPT_JOBS[job].update(state="error", error=str(exc))
             comic.log.exception("编剧失败 job=%s", job)
-            # 编剧失败/超时不该白扣那唯一一次免费机会。
-            if qq:
+            # 只有真扣过代充次数的（中转站挂了走官方）才要退；中转站免费路径
+            # 本来就没扣，别把账退成负数。
+            if qq and charged:
                 comic_quota.refund(qq, "script")
 
     threading.Thread(target=_work, daemon=True, name="comic-script").start()
@@ -923,7 +1007,7 @@ def api_comic_start():
             deny = _need("comic")
             if deny:
                 return deny
-    scene_skill = _resolve_skill(path, data.get("scene_skill"))
+    scene_skill = _skill_for(path, data.get("scene_skill"))
     _save_task_skill(path, scene_skill)
     # 独占通道（2026-11-11）：把待跑底图格一次性推上队列，前 comic.EXCLUSIVE_MAX
     # 张登记优先票压后所有已排队任务。站主靠开跑旁的勾选框显式选择；**群友在
@@ -965,7 +1049,7 @@ def api_comic_rerun():
         task = _load_task(path)
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
-    skill = _resolve_skill(path, data.get("scene_skill"))
+    skill = _skill_for(path, data.get("scene_skill"))
     _save_task_skill(path, skill)
     # 独占判定与 /start 同一条规则（2026-11-11）：站主看请求、群友在
     # anima-line 渠道自动独占——重跑同样是整本底图批跑，不给优先的话
@@ -1159,15 +1243,10 @@ def api_comic_fix():
         path = _task_dir(data.get("task"))
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
-    # 补正要再跑一次编剧模型，也是实打实的 Token。群友页不摆这个按钮，
-    # 但接口不能留成免收费后门，跟修订助手共用那 3 次额度。
-    deny = _need("revise")
-    if deny:
-        return deny
+    # 补正要再跑一次编剧模型。群友计费同 gen_script（2026-11-11）：中转站在线
+    # 免费，挂了才在 _work 里查/扣代充次数走站主官方；provider/model 对群友忽略。
     provider = str(data.get("provider") or "").strip() or None
     model = str(data.get("model") or "").strip() or None
-    if qq:
-        provider, model = comic_quota.resolve_model(provider, model)
 
     orig_path = os.path.join(path, "script_original.md")
     if not os.path.isfile(orig_path):
@@ -1184,17 +1263,20 @@ def api_comic_fix():
         return jsonify({"ok": False,
                         "error": "这个任务没存原始需求（老目录缺 brief.txt），"
                                  "请在请求里带上 brief"}), 400
-    charged = bool(qq) and comic_quota.consume(qq, "revise")
-    if qq and not charged:
-        return jsonify({"ok": False,
-                        "error": "免费的修订助手次数用完了"}), 403
+
+    def _fix_once(provider_, model_, strict_):
+        return comic_agent.fix_script(
+            brief, original, provider=provider_, model=model_, strict=strict_,
+            progress=lambda m: comic.log.info("[comic-fix] %s", m),
+            pov_mode=_read_pov_mode(path))
 
     def _work():
+        charged = False
         try:
-            fix = comic_agent.fix_script(
-                brief, original, provider=provider, model=model,
-                progress=lambda m: comic.log.info("[comic-fix] %s", m),
-                pov_mode=_read_pov_mode(path))
+            if qq:
+                fix, charged = _friend_llm(qq, "revise", "修订助手", _fix_once)
+            else:
+                fix = _fix_once(provider, model, False)
             final = fix.get("text") or original
             with open(os.path.join(path, "script.md"), "w", encoding="utf-8") as f:
                 f.write(final + "\n")
@@ -1202,6 +1284,8 @@ def api_comic_fix():
             comic.log.info("补正重跑完成 %s（%s）", os.path.basename(path),
                            "采纳" if fix.get("adopted") else "未采纳")
         except BaseException:
+            # _friend_llm 在官方也失败时已经退过；这里兜的是「LLM 成功、落盘
+            # 失败」——扣了次数却什么都没落地，退回才对。
             if charged:
                 comic_quota.refund(qq, "revise")
             raise
@@ -1209,8 +1293,6 @@ def api_comic_fix():
     # 用 _spawn 而不是自己开线程：状态里的 `running: "fix"` 和「同一任务只允许
     # 一个后台线程」都是现成的，跟 rerender / bubble / manual 一个口径。
     if not _spawn(path, "fix", _work):
-        if charged:
-            comic_quota.refund(qq, "revise")
         return jsonify({"ok": False, "error": "这个任务已经有别的事在跑"}), 409
     return jsonify({"ok": True, "task": os.path.basename(path)})
 
@@ -1275,7 +1357,7 @@ def api_comic_render_opts_get():
             path = _task_dir(task_id)
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 404
-    skill = _resolve_skill(path, request.args.get("skill"))
+    skill = _skill_for(path, request.args.get("skill"))
     return jsonify({
         "ok": True,
         "skill": skill,
@@ -1320,7 +1402,7 @@ def api_comic_render_opts_save():
     elif scope == "task" and not data.get("reset"):
         return jsonify({"ok": False, "error": "缺 task"}), 400
 
-    skill = _resolve_skill(path, data.get("skill"))
+    skill = _skill_for(path, data.get("skill"))
     if data.get("reset"):
         if scope == "global":
             comic_render_opts.reset_defaults(skill)
@@ -1367,7 +1449,11 @@ def api_comic_render_opts_save():
 
 @bp.route("/api/comic/channels", methods=["GET"])
 def api_comic_channels():
-    """参数卡的渠道下拉：哪些渠道能当阶段一 + 这个任务现在用的是哪个。"""
+    """参数卡的渠道下拉：哪些渠道能当阶段一 + 这个任务现在用的是哪个。
+
+    群友只给 anima-line 一个（2026-11-11 用户拍板：最快的当默认，其他先隐藏；
+    服务端也收敛，跟 _skill_for 同一条规则）。站主多渠道照旧。
+    """
     task_id = (request.args.get("task") or "").strip()
     path = ""
     if task_id:
@@ -1375,7 +1461,11 @@ def api_comic_channels():
             path = _task_dir(task_id)
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 404
-    return jsonify({"ok": True, "channels": _channels(),
+    chans = _channels()
+    if _qq():
+        chans = [c for c in chans if c["name"] == FRIEND_SKILL] or \
+                [{"name": FRIEND_SKILL, "group": _group_of(FRIEND_SKILL)}]
+    return jsonify({"ok": True, "channels": chans,
                     "current": _resolve_skill(path)})
 
 
@@ -1385,6 +1475,10 @@ def api_comic_channel():
     data = request.get_json(silent=True) or {}
     task_id = str(data.get("task") or "").strip()
     skill = str(data.get("skill") or "").strip()
+    if _qq():
+        # 群友没有换渠道：传什么都落回 anima-line（前端下拉已隐藏，这里兜住
+        # API 直调；_channels 一定含 anima-line，下面的白名单校验天然通过）。
+        skill = FRIEND_SKILL
     if not skill:
         return jsonify({"ok": False, "error": "缺 skill"}), 400
     path = ""
@@ -1426,7 +1520,7 @@ def api_comic_rerender():
     panel = next((p for p in task.panels if p.no == no), None)
     if panel is None:
         return jsonify({"ok": False, "error": "没有 %s 这格" % no}), 404
-    skill = _resolve_skill(path, data.get("scene_skill"))
+    skill = _skill_for(path, data.get("scene_skill"))
     panel.state, panel.seed, panel.error = "pending", None, None
     task.scene_skill = skill          # save_state 会把它写回 state.json
     task.save_state()
@@ -1625,18 +1719,13 @@ def api_comic_chat_revise():
         path = _task_dir(data.get("task"))
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
-    # 群友：只有 3 次免费修订。先查够不够、后面预扣，没「落实」就退回去。
-    deny = _need("revise")
-    if deny:
-        return deny
+    # 群友计费同 gen_script（2026-11-11）：中转站在线免费不限次；挂了才在
+    # _work 里查/扣代充次数走站主官方。provider/model 对群友忽略（不给自带 key）。
     message = str(data.get("message") or "").strip()
     if not message:
         return jsonify({"ok": False, "error": "先写一句话再发送"}), 400
     provider = str(data.get("provider") or "").strip() or None
     model = str(data.get("model") or "").strip() or None
-    if qq:
-        # 修订助手也是编剧模型，一样只许用站主白名单里的那个，不给自带 key。
-        provider, model = comic_quota.resolve_model(provider, model)
 
     with _JOBS_LOCK:
         running = (_JOBS.get(path) or {}).get("phase")
@@ -1656,22 +1745,17 @@ def api_comic_chat_revise():
             brief = f.read().strip()
     history = _read_chat_history(path)
 
-    # 预扣 + 未落实就退：对外就是「只有修订助手真的改了剧本才扣一次」。
-    # 为什么要预扣而不是改完再扣：两个标签页同时发一句话，若都先查后扣，
-    # 两次都能落地、却只扣得起一次，等于白送。预扣是原子的（quota 里 RLock
-    # 读改写），拿不到名额的那个直接 403；反问/答疑/LLM 失败统一 _settle(False)
-    # 退回去。站主直连不预扣、不结算。
-    precharged = bool(qq) and comic_quota.consume(qq, "revise")
-    if qq and not precharged:
-        return jsonify({"ok": False,
-                        "error": "免费的修订助手次数用完了，找站主加次数吧"}), 403
+    # 结算：中转站路径没扣过账；官方代充路径扣了 1 次，但「修订助手真的改了
+    # 剧本才扣」的口径保留——反问/答疑/落地失败都退回去。扣发生在 _work 线程里
+    #（中转站挂了才知道要走官方），原子的 quota RLock 保证并发扣不超。
+    charged = {"v": False}
     settled = {"done": False}
 
     def _settle(landed):
         if settled["done"]:
             return
         settled["done"] = True
-        if qq and precharged and not landed:
+        if qq and charged["v"] and not landed:
             comic_quota.refund(qq, "revise")
 
     job = uuid.uuid4().hex[:12]
@@ -1691,11 +1775,19 @@ def api_comic_chat_revise():
                   if v["state"] != "running"][:-_CHAT_KEEP]:
             _CHAT_JOBS.pop(k, None)
 
+    def _chat_once(provider_, model_, strict_):
+        return comic_agent.chat_revise(script, message, brief=brief,
+                                       history=history[-8:],   # 最近 4 轮够用了
+                                       provider=provider_, model=model_,
+                                       strict=strict_,
+                                       pov_mode=_read_pov_mode(path))
+
     def _work():
-        r = comic_agent.chat_revise(script, message, brief=brief,
-                                    history=history[-8:],        # 最近 4 轮够用了
-                                    provider=provider, model=model,
-                                    pov_mode=_read_pov_mode(path))
+        if qq:
+            r, used = _friend_llm(qq, "revise", "修订助手", _chat_once)
+            charged["v"] = used
+        else:
+            r = _chat_once(provider, model, False)
         reply = r.get("reply") or ""
         landed = bool(r.get("changed") and r.get("script"))
         if landed:
@@ -1717,7 +1809,7 @@ def api_comic_chat_revise():
         with _CHAT_LOCK:
             _CHAT_JOBS[job].update(
                 state="done", reply=reply, changed=landed, charged=bool(
-                    qq and precharged and landed),
+                    qq and charged["v"] and landed),
                 diff=r.get("diff") or [], warnings=r.get("warnings") or [],
                 at=time.strftime("%H:%M:%S"))
 

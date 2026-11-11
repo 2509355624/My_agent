@@ -73,8 +73,9 @@ TOPBAR = r"""  <div class="topbar">
     <div class="friend-note">
       <b>怎么用：</b>顶上选「跑漫画」或「跑写真」，两个是分开的界面。跑漫画就是
       写三行设定 → 生成剧本 → 确认开跑 → 给格子加台词气泡。<br>
-      <b>关于次数：</b>写剧本要反复查资料库、很费 Token，所以每个账号有免费次数；
-      换种子重跑、改画面词、加气泡这些只吃显卡，不扣次数，可以随便跑。<br>
+      <b>关于次数：</b>写剧本 / 修订走站主的公用中转站，<b>中转站正常就免费随便用</b>；
+      中转站偶尔出问题时才扣次数（找站长要次数，用站主的额度跑）。换种子重跑、
+      改画面词、加气泡这些只吃显卡，不扣次数。<br>
       <b>发送规则：</b>底图 / 写真跑完<b>先在 QQ 通知你</b>，去网页逐张检查；
       有瑕疵可以换种子重跑。确认后漫画点「<b>一键加气泡</b>」、写真点
       「<b>一键发送 zip</b>」，高清包才发到 QQ，<b>正常排队</b>。<br>
@@ -501,6 +502,20 @@ def main():
             "<select id=\"model\" class=\"hidden-by-friend\" style=\"width:200px\"", "model")
     s = rep(s, "<button class=\"btn small\" id=\"btnAddProv\"",
             "<button class=\"btn small hidden-by-friend\" id=\"btnAddProv\"", "自定义中转站")
+
+    # ⑤b 生图渠道行 + 「换渠道重跑」：群友版只认 anima-line 一个渠道
+    #（2026-11-11 用户拍板「最快的当默认，其他先隐藏」）。整个行藏掉——
+    # sizeHint 是站主渲染卡的预估尺寸提示，群友版有自己那张画幅卡，用不上。
+    # 后端 /api/comic/channels 对带 qq 的请求也只返回 anima-line，双保险。
+    s = rep(s,
+            "    <div class=\"row\" style=\"margin-bottom:10px\">\n"
+            "      <span style=\"color:var(--text-dim);font-size:12px\">生图渠道</span>",
+            "    <div class=\"row hidden-by-friend\" style=\"margin-bottom:10px\">\n"
+            "      <span style=\"color:var(--text-dim);font-size:12px\">生图渠道</span>",
+            "生图渠道行")
+    s = rep(s, "<button class=\"btn\" id=\"btnRerun\" onclick=\"rerunAll()\"",
+            "<button class=\"btn hidden-by-friend\" id=\"btnRerun\" onclick=\"rerunAll()\"",
+            "换渠道重跑隐藏")
 
     # ⑥ 格数：只读文字 + 隐藏值，手机端没法粘贴 30
     s = rep(s,

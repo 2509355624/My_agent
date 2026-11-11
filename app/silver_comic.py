@@ -275,7 +275,7 @@ def parse(text, panels, mode="no_bubble"):
 
 
 def write_script_detail(brief, panels=10, character="", provider=None, model=None,
-                        mode="no_bubble", prev=""):
+                        mode="no_bubble", prev="", strict=False):
     """一次 API 请求，返回 {title, fixed, panels, script} 给接口和界面用。"""
     if not (brief or "").strip():
         raise ValueError("设定不能为空")
@@ -312,7 +312,7 @@ def write_script_detail(brief, panels=10, character="", provider=None, model=Non
     raw = llm.call_llm([{"role": "system", "content": system},
                         {"role": "user", "content": user}],
                        provider=provider, model=model,
-                       timeout=timeout, max_tokens=budget)
+                       timeout=timeout, max_tokens=budget, strict=strict)
     title, fixed, blocks = split(raw)
     script = parse(raw, panels, mode=mode)
     log.info("silver 自由视角剧本完成（%d 格，mode=%s，一次 API）", panels, mode)

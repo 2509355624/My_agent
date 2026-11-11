@@ -91,13 +91,17 @@ class TestFriendIdentity(_TempMixin, unittest.TestCase):
         self.assertTrue(comic_quota.can_read(d, ""))          # 站主放行
 
     def test_配额扣退与按本幂等(self):
-        self.assertEqual(comic_quota.remaining(QQ, "revise"), 3)
+        # 2026-11-11 默认额度全 0（中转站优先模型）：次数只管「中转站挂了之后
+        # 的代充」，默认一个都不送，全靠站长在管理页按账号加。
+        self.assertEqual(comic_quota.remaining(QQ, "revise"), 0)
+        self.assertFalse(comic_quota.consume(QQ, "revise"))
+        comic_quota.admin_update({"account": {
+            "qq": QQ, "limits": {"revise": 2}}})
         self.assertTrue(comic_quota.consume(QQ, "revise"))
-        self.assertEqual(comic_quota.remaining(QQ, "revise"), 2)
+        self.assertEqual(comic_quota.remaining(QQ, "revise"), 1)
         comic_quota.refund(QQ, "revise")
-        self.assertEqual(comic_quota.remaining(QQ, "revise"), 3)
-        self.assertTrue(comic_quota.consume(QQ, "script"))
-        self.assertFalse(comic_quota.consume(QQ, "script"))   # 免费 1 次
+        self.assertEqual(comic_quota.remaining(QQ, "revise"), 2)
+        self.assertFalse(comic_quota.consume(QQ, "script"))   # 默认 0，没加就跑不了
         self.assertFalse(comic_quota.charged(QQ, "comic", "C1"))
         comic_quota.mark_charged(QQ, "comic", "C1")
         self.assertTrue(comic_quota.charged(QQ, "comic", "C1"))
@@ -119,7 +123,74 @@ class TestFriendIdentity(_TempMixin, unittest.TestCase):
         self.assertEqual(lim["script"], 5)
         self.assertEqual(lim["max_panels"], 30)
         self.assertEqual(comic_quota.remaining(QQ, "script"), 4)
-        self.assertEqual(comic_quota.limits(OTHER)["script"], 1)  # 不影响别人
+        self.assertEqual(comic_quota.limits(OTHER)["script"], 0)  # 不影响别人
+
+    def test_中转站优先_在线免费不扣次(self):
+        # 中转站请求成功 → 直接用，不查不扣任何额度。
+        calls = []
+
+        def run(p, m, strict):
+            calls.append((p, m, strict))
+            return "ok-relay"
+
+        with mock.patch.object(comic_api._cfg, "PERSONA_PROVIDER", "relay-test"), \
+                mock.patch.object(comic_api._cfg, "PERSONA_MODEL", "m1"), \
+                mock.patch.object(comic_quota, "consume") as mc:
+            res, charged = comic_api._friend_llm(QQ, "script", "剧本生成", run)
+        self.assertEqual((res, charged), ("ok-relay", False))
+        self.assertEqual(calls, [("relay-test", "m1", True)])   # strict 只打中转站
+        mc.assert_not_called()
+
+    def test_中转站优先_挂了扣次走官方(self):
+        # strict 失败（中转站挂）→ 查额度 → 扣 1 次 → 走站主官方（非 strict）。
+        calls = []
+
+        def run(p, m, strict):
+            calls.append((p, m, strict))
+            if strict:
+                raise RuntimeError("502 from relay")
+            return "ok-official"
+
+        with mock.patch.object(comic_api._cfg, "PERSONA_PROVIDER", "relay-test"), \
+                mock.patch.object(comic_api._cfg, "PERSONA_MODEL", "m1"), \
+                mock.patch.object(comic_quota, "remaining", return_value=2), \
+                mock.patch.object(comic_quota, "consume",
+                                  return_value=True) as mc, \
+                mock.patch.object(comic_quota, "refund") as mr:
+            res, charged = comic_api._friend_llm(QQ, "script", "剧本生成", run)
+        self.assertEqual((res, charged), ("ok-official", True))
+        self.assertEqual(calls[0][2], True)
+        self.assertEqual(calls[1], (None, None, False))
+        mc.assert_called_once_with(QQ, "script")
+        mr.assert_not_called()
+
+    def test_中转站挂了_官方也失败要退次(self):
+        def run(p, m, strict):
+            if strict:
+                raise RuntimeError("down")
+            raise RuntimeError("official down too")
+
+        with mock.patch.object(comic_api._cfg, "PERSONA_PROVIDER", "relay-test"), \
+                mock.patch.object(comic_api._cfg, "PERSONA_MODEL", "m1"), \
+                mock.patch.object(comic_quota, "remaining", return_value=1), \
+                mock.patch.object(comic_quota, "consume", return_value=True), \
+                mock.patch.object(comic_quota, "refund") as mr:
+            with self.assertRaises(RuntimeError):
+                comic_api._friend_llm(QQ, "script", "剧本生成", run)
+        mr.assert_called_once_with(QQ, "script")
+
+    def test_中转站挂了_没次数报错引导找站长(self):
+        def run(p, m, strict):
+            raise RuntimeError("down")
+
+        with mock.patch.object(comic_api._cfg, "PERSONA_PROVIDER", "relay-test"), \
+                mock.patch.object(comic_api._cfg, "PERSONA_MODEL", "m1"), \
+                mock.patch.object(comic_quota, "remaining", return_value=0), \
+                mock.patch.object(comic_quota, "consume") as mc:
+            with self.assertRaises(RuntimeError) as cm:
+                comic_api._friend_llm(QQ, "script", "剧本生成", run)
+        self.assertIn("找站长", str(cm.exception))
+        mc.assert_not_called()
 
     def test_输出目录按账号分三段(self):
         d = self.mk_task(name="C20261110-01_加了料的饮料")
@@ -321,7 +392,7 @@ class TestFriendApi(_TempMixin, unittest.TestCase):
         d = self._get("/api/comic/friend_config", QQ).get_json()
         self.assertTrue(d["ok"])
         self.assertTrue(d["friend"])
-        self.assertEqual(d["quota"]["left"]["script"], 1)
+        self.assertEqual(d["quota"]["left"]["script"], 0)   # 默认额度 0（中转站优先）
         self.assertEqual(d["models"][0]["label"], "中转站 V4")
         self.assertTrue(any(p["key"] == "16:9" for p in d["ratio_presets"]))
 
@@ -413,14 +484,22 @@ class TestFriendApi(_TempMixin, unittest.TestCase):
         from app import comic_agent
         d = self.mk_task(name="A1")
         script = os.path.join(d, "script.md")
+        # 中转站挂了要走官方代充，得先有次数（默认额度 0）。
+        comic_quota.admin_update({"account": {"qq": QQ, "limits": {"revise": 3}}})
 
-        def _run(changed):
-            fake = {"reply": "好的" if changed else "你是想改哪格？",
-                    "changed": changed, "diff": [], "warnings": [],
-                    "script": "# 标题：改过\n\n## 01\n画面: 2girls, room\n气泡: 一\n"
-                    if changed else ""}
+        def _run(changed, relay_down):
+            result = {"reply": "好的" if changed else "你是想改哪格？",
+                      "changed": changed, "diff": [], "warnings": [],
+                      "script": "# 标题：改过\n\n## 01\n画面: 2girls, room\n气泡: 一\n"
+                      if changed else ""}
+
+            def _side(script_, message_, strict=False, **kw):
+                if strict and relay_down:
+                    raise RuntimeError("relay down")   # 中转站优先那次尝试失败
+                return result
+
             with mock.patch.object(comic_agent, "chat_revise",
-                                   return_value=fake):
+                                   side_effect=_side):
                 r = self._post("/api/comic/chat_revise",
                                {"task": "A1", "message": "改一下"}, QQ)
                 self.assertEqual(r.status_code, 200)
@@ -434,12 +513,24 @@ class TestFriendApi(_TempMixin, unittest.TestCase):
                     time.sleep(0.02)
                 return st
 
-        st = _run(False)
+        # 中转站在线：无论改没改剧本都不扣（免费层不限次）。
+        st = _run(False, relay_down=False)
         self.assertFalse(st["changed"])
+        self.assertFalse(st["charged"])
         self.assertEqual(comic_quota.usage(QQ)["revise"], 0)
-        st2 = _run(True)
+        st = _run(True, relay_down=False)
+        self.assertTrue(st["changed"])
+        self.assertFalse(st["charged"])              # 中转站免费，落地也不扣
+        # 中转站挂：走官方代充——「真的改了剧本才扣」，反问/答疑退回。
+        st2 = _run(True, relay_down=True)
         self.assertTrue(st2["changed"])
         self.assertTrue(st2["charged"])
+        self.assertEqual(comic_quota.usage(QQ)["revise"], 1)
+        st3 = _run(False, relay_down=True)
+        self.assertFalse(st3["changed"])
+        self.assertFalse(st3["charged"])
+        # st2 那次「改了剧本」的扣费合理保留；st3 扣了又因没落实退回，
+        # 所以总数还是 1。
         self.assertEqual(comic_quota.usage(QQ)["revise"], 1)
         with open(script, encoding="utf-8") as f:
             self.assertIn("改过", f.read())
@@ -577,6 +668,8 @@ class TestComicAdminPage(_TempMixin, unittest.TestCase):
         self.assertEqual(a["limits"]["script"], comic_quota.DEFAULTS["script"] + 1)
 
     def test_最近使用与作品数来自真实使用(self):
+        # 默认额度 0：先给次数才扣得动（真实流程里是站长在管理页加）。
+        comic_quota.admin_update({"account": {"qq": QQ, "limits": {"script": 3}}})
         comic_quota.consume(QQ, "script")
         comic_quota.mark_charged(QQ, "comic", "T1")
         comic_quota.mark_charged(QQ, "comic", "T1")   # 同一本重跑不重复记

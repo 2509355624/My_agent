@@ -2184,7 +2184,7 @@ def _emit(progress, msg):
 # ─── agent 循环 ─────────────────────────────────────────
 
 def run_rounds(messages, provider=None, model=None, max_rounds=MAX_ROUNDS,
-               progress=None, no_search=False):
+               progress=None, no_search=False, strict=False):
     """跑 agent 循环，返回模型最终交出的正文（可能为空串）。
 
     轮次分两段：
@@ -2223,8 +2223,13 @@ def run_rounds(messages, provider=None, model=None, max_rounds=MAX_ROUNDS,
 
         try:
             reply = llm.call_llm(messages, timeout=CALL_TIMEOUT,
-                                 provider=provider, model=model)
+                                 provider=provider, model=model, strict=strict)
         except Exception as e:
+            if strict:
+                # 中转站优先模式（2026-11-11）：调用失败要抛给 comic_api 的
+                # _friend_llm，让它探测「中转站挂了」并换道代充；吞掉的话上层
+                # 只会看到空稿，区分不了「站挂」和「模型摆烂」。
+                raise
             log.warning("[comic-agent] 第 %d 轮调用失败：%s", round_no, e)
             return fallback
         if not reply or not reply.strip():
@@ -2568,7 +2573,8 @@ def prev_outfit(script_path, limit=160):
 
 def write_script(brief, panels=3, character="", provider=None, model=None,
                  max_rounds=MAX_ROUNDS, tries=2, progress=None, prev="",
-                 no_search=False, pov_mode="pov", prev_outfit_text=""):
+                 no_search=False, pov_mode="pov", prev_outfit_text="",
+                 strict=False):
     """写剧本。返回剧本文本（markdown，已含头部备选记录）。
 
     参数：
@@ -2623,7 +2629,8 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
         text = comic_writer._clean(run_rounds(base + feedback, provider=provider,
                                               model=model, max_rounds=max_rounds,
                                               progress=progress,
-                                              no_search=no_search))
+                                              no_search=no_search,
+                                              strict=strict))
         # 账本要在 `_strip_preamble` 之前抽（它写在 `# 标题：` 前面，晚了就被砍掉）
         text, ledger = _extract_ledger(text)
         clean, notes = _extract_notes(_strip_preamble(text))
@@ -2953,7 +2960,7 @@ _SELF_AUDIT = {
 
 
 def fix_script(brief, text, provider=None, model=None, timeout=None,
-               progress=None, issues=None, pov_mode="pov"):
+               progress=None, issues=None, pov_mode="pov", strict=False):
     """补正一遍剧本：代码出清单（**只做检测**）→ 模型照清单补 → **直接采纳**。
 
     ⚠️ 2026-10-12 用户拍板：**取消准入闸门**。代码的服饰词表盖不全几万种服饰，
@@ -3017,8 +3024,12 @@ def fix_script(brief, text, provider=None, model=None, timeout=None,
     try:
         fixed = _strip_preamble(llm.call_llm(messages, provider=provider,
                                              model=model,
-                                             timeout=timeout or FIX_TIMEOUT))
+                                             timeout=timeout or FIX_TIMEOUT,
+                                             strict=strict))
     except Exception as exc:
+        if strict:
+            # 中转站优先模式：失败抛给 _friend_llm 换道代充，别吞成补正失败。
+            raise
         out["status"] = "error"
         out["warnings"].append("补正模型调用失败：%s —— 请在界面上点「重新补正」重跑"
                                % exc)
@@ -3163,7 +3174,7 @@ def _panel_mismatch_note(panels, orig_panels):
 
 
 def chat_revise(script, message, brief="", history=None, provider=None,
-                model=None, timeout=None, pov_mode="pov"):
+                model=None, timeout=None, pov_mode="pov", strict=False):
     """和修订助手聊一句：要么拿回一份改好的剧本，要么拿回一段答复。
 
     采纳判据与补正同一条哲学——**只判格式，不判内容**（用户 2026-10-12 拍板：
@@ -3211,8 +3222,12 @@ def chat_revise(script, message, brief="", history=None, provider=None,
     try:
         text = _strip_preamble(llm.call_llm(messages, provider=provider,
                                             model=model,
-                                            timeout=timeout or CHAT_TIMEOUT))
+                                            timeout=timeout or CHAT_TIMEOUT,
+                                            strict=strict))
     except Exception as exc:
+        if strict:
+            # 中转站优先模式：失败抛给 _friend_llm 换道代充，别吞成一句答复。
+            raise
         out["reply"] = "修订助手调用失败：%s —— 请再发一次" % exc
         out["warnings"].append("调用失败")
         log.warning("[comic-chat] 调用失败：%s", exc)

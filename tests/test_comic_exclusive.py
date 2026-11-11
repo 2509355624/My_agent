@@ -284,12 +284,15 @@ class ApiStartExclusiveTest(unittest.TestCase):
         self.assertTrue(d.get("exclusive"), "群友 anima-line 应自动独占")
         self.assertTrue(calls[0].get("exclusive"))
 
-    def test_group_user_other_channel_stays_sequential(self):
-        # 只给 anima-line 这一渠道：别的渠道（含 NAI 云端）照旧逐格。
+    def test_group_user_channel_locked_to_anima_line(self):
+        # 渠道锁定（2026-11-11）：群友页只给 anima-line 一个渠道。就算把别的
+        # 渠道名（含 NAI 云端）塞进请求，后端 _skill_for 也落回 anima-line
+        #（前端下拉已隐藏，这里兜的是 API 直调）；锁回 anima-line 后自动独占。
         d, calls = self._start("12345", skill="nai", exclusive=True)
         self.assertTrue(d.get("ok"))
-        self.assertFalse(d.get("exclusive"), "群友非 anima-line 不独占")
-        self.assertFalse(calls[0].get("exclusive"))
+        self.assertEqual(d.get("scene_skill"), "anima-line")
+        self.assertTrue(d.get("exclusive"), "群友锁回 anima-line 应自动独占")
+        self.assertTrue(calls[0].get("exclusive"))
 
 
 class ApiRerunExclusiveTest(unittest.TestCase):
@@ -337,11 +340,14 @@ class ApiRerunExclusiveTest(unittest.TestCase):
         self.assertTrue(d.get("exclusive"))
         self.assertTrue(calls[0].get("exclusive"))
 
-    def test_group_user_other_channel_stays_sequential(self):
+    def test_group_user_channel_locked_to_anima_line(self):
+        # 渠道锁定与 /start 同一条规则（2026-11-11）：群友传其他渠道也落回
+        # anima-line 并自动独占——重跑同样走整本底图批跑。
         d, calls = self._rerun("12345", skill="anima-real")
         self.assertTrue(d.get("ok"))
-        self.assertFalse(d.get("exclusive"))
-        self.assertFalse(calls[0].get("exclusive"))
+        self.assertEqual(d.get("scene_skill"), "anima-line")
+        self.assertTrue(d.get("exclusive"))
+        self.assertTrue(calls[0].get("exclusive"))
 
     def test_owner_without_checkbox_stays_sequential(self):
         d, calls = self._rerun(None, exclusive=False)

@@ -144,8 +144,9 @@
     <div class="friend-note">
       <b>怎么用：</b>顶上选「跑漫画」或「跑写真」，两个是分开的界面。跑漫画就是
       写三行设定 → 生成剧本 → 确认开跑 → 给格子加台词气泡。<br>
-      <b>关于次数：</b>写剧本要反复查资料库、很费 Token，所以每个账号有免费次数；
-      换种子重跑、改画面词、加气泡这些只吃显卡，不扣次数，可以随便跑。<br>
+      <b>关于次数：</b>写剧本 / 修订走站主的公用中转站，<b>中转站正常就免费随便用</b>；
+      中转站偶尔出问题时才扣次数（找站长要次数，用站主的额度跑）。换种子重跑、
+      改画面词、加气泡这些只吃显卡，不扣次数。<br>
       <b>发送规则：</b>底图 / 写真跑完<b>先在 QQ 通知你</b>，去网页逐张检查；
       有瑕疵可以换种子重跑。确认后漫画点「<b>一键加气泡</b>」、写真点
       「<b>一键发送 zip</b>」，高清包才发到 QQ，<b>正常排队</b>。<br>
@@ -171,7 +172,7 @@
       <button class="btn small" onclick="loadTasks()" title="重新扫一遍 comics/ 目录">↻</button>
       <span style="color:var(--text-dim);font-size:12px">切过去只是打开它，不改内容</span>
     </div>
-    <div class="row" style="margin-bottom:10px">
+    <div class="row hidden-by-friend" style="margin-bottom:10px">
       <span style="color:var(--text-dim);font-size:12px">生图渠道</span>
       <select id="sceneSkill" style="width:250px" onchange="changeChannel(this.value)"
               title="阶段一出场景图用哪个渠道。整本共用一个；换渠道只影响之后渲染的格，已出的图不动。">
@@ -250,7 +251,7 @@
       <span style="color:var(--text-dim);font-size:12px">剧本可直接改字（场景行/台词行都行），改完点确认开跑按改过的跑</span>
       <span class="spacer" style="flex:1"></span>
       <button class="btn" id="btnRefix" onclick="refix()" title="以编剧原稿为底，重跑一遍内容补正">🩹 重新补正</button>
-      <button class="btn" id="btnRerun" onclick="rerunAll()"
+      <button class="btn hidden-by-friend" id="btnRerun" onclick="rerunAll()"
               title="剧本不动，按当前「生图渠道」把每一格重新画一遍——换渠道对比效果用">🔁 换渠道重跑</button>
       <button class="btn hidden-by-friend" id="btnSave" onclick="saveScript(false)">只保存</button>
       <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--text-dim);cursor:pointer">

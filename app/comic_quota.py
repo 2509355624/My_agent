@@ -36,13 +36,16 @@ from app.config import BASE_DIR
 _FILE = os.path.join(BASE_DIR, "state", "comic_friend.json")
 _LOCK = threading.RLock()
 
-# 免费默认。写死在代码里是刻意的：state 文件丢失/损坏时也能开服，不会把
-# 群友全挡在门外，管理页随后补档即可。
+# 免费默认（2026-11-11 改为全 0，用户拍板）。原来的默认送次数（script 1 /
+# revise 3 / comic 1 / portrait 2）已被「中转站优先」模型取代：编剧/修订走公用
+# 中转站，在线就免费不限次（见 comic_api._friend_llm），次数只管「中转站挂了
+# 之后走站主付费官方」的代充；漫画/写真是纯显卡，但也一律由站主在管理页按账号
+# 给次数。写 0 不是失误——「开箱就能玩」由中转站的免费层兜着，GPU 的活按账号开。
 DEFAULTS = {
-    "script": 1,       # 剧本生成（站主模型）
-    "revise": 3,       # 修订助手，只在 changed=true 落地时扣
-    "comic": 1,        # 漫画「一次生成机会」= 一本
-    "portrait": 2,     # 写真「一次」= 一本 5 张
+    "script": 0,       # 剧本生成：中转站免费；代充走站主官方
+    "revise": 0,       # 修订助手 / 重新补正：同上
+    "comic": 0,        # 漫画「一次生成机会」= 一本（站长管理页加）
+    "portrait": 0,     # 写真「一次」= 一本 5 张（站长管理页加）
     "max_panels": 10,  # 一本最多几格
     "max_shots": 5,    # 写真一本最多几张
 }
