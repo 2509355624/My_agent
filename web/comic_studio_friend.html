@@ -64,6 +64,18 @@
   .slot .seed { margin-left: auto; font-size: 11px; color: var(--text-mute); }
   .slot .timing { font-size: 11px; color: var(--text-mute); white-space: nowrap; }
   .slot .head:has(.timing) .seed { margin-left: 0; }   /* 有耗时时别把 seed 顶到最右 */
+  /* 窄屏（手机）：head 是单行 flex，格号 / 徽章 / seed / 群友计时 / 耗时串
+     全挤一行；.timing 和 .cost 又都是 nowrap 长串，会把整行撑出格子，而
+     .slot 是 overflow:hidden，超出去的部分直接被裁掉 → 看着像「显示不全」。
+     这里让 head 折行、耗时串独占第二行并允许断行，计时也能收缩折行。
+     桌面端一行不变（2026-11-11 用户拍板：只在窄屏生效）。 */
+  @media (max-width: 640px) {
+    .grid, #portraitGrid { grid-template-columns: minmax(0, 1fr); }
+    .slot .head { flex-wrap: wrap; row-gap: 4px; }
+    .slot .cost { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+    .slot .timing { flex: 1 1 100%; white-space: normal; overflow-wrap: anywhere; }
+    .slot .head:has(.timing) .seed { margin-left: auto; }
+  }
   .slot .imgs { display: flex; gap: 1px; background: var(--border-soft); }
   .slot .imgs div { flex: 1; min-height: 160px; background: var(--bg-elev);
     display: flex; align-items: center; justify-content: center;
@@ -1600,6 +1612,16 @@ async function resetRenderOpts(scope) {
 
 const STATE_CN = {pending: '排队', rendered: '待加气泡', done: '完成'};
 
+// 图片 URL 只带「文件指纹」做失效，不再带 Date.now()（2026-11-11）。
+// HTTP 缓存按**完整 URL** 做 key：时间戳每帧都变 = 每次都是新地址，后端
+// 已有的 ETag / 304 和浏览器本地缓存全被绕过，重绘格子就得把所有图重下
+// 一遍。rev 是图片的 mtime+size（status 每格都返回，签名里本来就在用）：
+// 图没变 → URL 稳定 → 命中本地缓存；图被重写 → rev 变 → URL 跟着变，
+// 新图照常刷出来，不会留着旧图。后端只对带 v 的请求发长期缓存头。
+function imgUrl(url, rev) {
+  return url + '&v=' + encodeURIComponent(rev || '0');
+}
+
 // 耗时显示（2026-11-11）：exec=模型纯执行秒（不含排队）、wall=含排队墙上秒。
 // 老任务 / NAI 云端 / 没跑到那阶段 → null → 显示「—」，绝不倒推。
 function fmtSecs(v) {
@@ -1614,8 +1636,9 @@ function stageTiming(exec, wall) {
 function renderSlot(p) {
   const badge = p.error ? '<span class="badge b-error">出错</span>'
     : '<span class="badge b-' + p.state + '">' + (STATE_CN[p.state] || p.state) + '</span>';
-  const img = (url, alt, which) => url
-    ? '<img class="zoomable" loading="lazy" src="' + url + '&t=' + Date.now()
+  const revs = String(p.rev || '0/0').split('/');   // status: "raw指纹/final指纹"
+  const img = (url, alt, which, rev) => url
+    ? '<img class="zoomable" loading="lazy" src="' + imgUrl(url, rev)
       + '" onclick="zoomOpen(this.src, \'' + p.no + '\', \'' + which + '\')">'
     : alt;
   const ops = [];
@@ -1659,8 +1682,8 @@ function renderSlot(p) {
   return '<div class="slot"><div class="head"><span class="no">格 ' + p.no + '</span>'
     + badge + '<span class="seed">' + (p.seed != null ? 'seed ' + p.seed : '') + '</span>'
     + timing + '</div>'
-    + '<div class="imgs"><div>' + img(p.scene_url, '场景图未生成', 'scene') + '</div>'
-    + '<div>' + img(p.final_url, '气泡未加', 'final') + '</div></div>'
+    + '<div class="imgs"><div>' + img(p.scene_url, '场景图未生成', 'scene', revs[0]) + '</div>'
+    + '<div>' + img(p.final_url, '气泡未加', 'final', revs[1]) + '</div></div>'
     + labelHtml(p)
     + (p.error ? '<div class="err">' + esc(p.error) + '</div>' : '')
     + '<div class="ops">' + (ops.join('') || '<span style="color:var(--text-mute);font-size:11px">排队中…</span>') + '</div>'
@@ -1840,8 +1863,9 @@ async function refresh() {
     // 正放大的那张图被重写了（刚跑完 Qwen）→ 放大层也换成新的
     if (_zoom && _zoom.kind === 'panel' && _zoom.no === p.no) {
       const u = _zoom.which === 'scene' ? p.scene_url : p.final_url;
+      const rv = String(p.rev || '0/0').split('/');
       const zi = document.querySelector('#zoom img');
-      if (u && zi) zi.src = u + '&t=' + Date.now();
+      if (u && zi) zi.src = imgUrl(u, _zoom.which === 'scene' ? rv[0] : rv[1]);
     }
   }
   const bar = document.getElementById('jobbar');
@@ -2201,8 +2225,8 @@ function renderPortraits(shots) {
     const badge = s.state === 'rendered' ? '<span class="badge b-done">完成</span>'
       : '<span class="badge b-error">失败</span>';
     const img = s.state === 'rendered'
-      ? '<div><img class="zoomable" loading="lazy" src="' + s.url + '&t=' + Date.now()
-        + '" onclick="zoomOpen(\'' + s.url + '\',\'' + s.no + '\',\'shot\',\'shot\')"></div>'
+      ? '<div><img class="zoomable" loading="lazy" src="' + imgUrl(s.url, s.rev)
+        + '" onclick="zoomOpen(this.src,\'' + s.no + '\',\'shot\',\'shot\')"></div>'
       : '<div style="color:var(--text-mute);font-size:12px;display:flex;align-items:center;justify-content:center;min-height:200px">没出来</div>';
     return '<div class="slot shot" data-no="' + esc(s.no) + '">'
       + '<div class="head"><span class="no">' + esc(s.no) + '</span>' + badge

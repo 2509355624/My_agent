@@ -1133,8 +1133,9 @@ def api_comic_abort():
 
 @bp.route("/api/comic/status", methods=["GET"])
 def api_comic_status():
-    """槽位轮询。图片 URL 由前端拼时间戳防缓存；每格另带 `rev`（图片文件指纹），
-    前端拿它判断「图被重写过」，否则就地覆盖的场景（手动跑 Qwen）刷不出来。
+    """槽位轮询。图片 URL 由前端拼 `&v=<rev>` 做失效；每格另带 `rev`（图片
+    文件指纹），前端拿它判断「图被重写过」，否则就地覆盖的场景（手动跑 Qwen）
+    刷不出来。rev 稳定时 URL 稳定 → 浏览器走本地缓存，重绘不再重下整本图。
 
     纯写真任务（生图模式新建、没有 script.md）也认：panels 空 + portraits 照返，
     前端靠它把刷新后的写真卡恢复出来。"""
@@ -2097,6 +2098,14 @@ def api_comic_img():
     """
     import re as _re
     f = str(request.args.get("f") or "")
+    # 前端给每张图拼了 &v=<文件指纹>（图片 mtime+size，见 comic_studio.html
+    # 的 imgUrl）：图一变 URL 就变，所以这类请求可以让浏览器长期缓存，
+    # 重绘格子时连 304 条件请求都不发，手机端不用把整本图重下一遍。
+    # 没带 v 的旧链接保持原来 ETag / 条件请求的行为，免得缓存住会变的图。
+    # private 与 5175 反代层 _secure 对图片的口径一致：图片要过登录态，
+    # 不能让 CDN 边缘缓存下来（5175 那层本来就会把图片头改成 private）。
+    immutable = ("private, max-age=31536000, immutable"
+                 if request.args.get("v") else None)
     thumb = comic_thumb.parse_rel(f)
     if thumb:
         src_rel = comic_thumb.src_rel(*thumb)
@@ -2119,12 +2128,17 @@ def api_comic_img():
                 data = f.read()
             resp = Response(data, mimetype="image/webp")
             resp.set_etag("%x-%x" % (os.stat(cached).st_mtime_ns, len(data)))
+            if immutable:
+                resp.headers["Cache-Control"] = immutable
             return resp.make_conditional(request)
         # ensure 返回 None（源图不在 / PIL 失败）时下面会自然落到 404 或原图
     full = os.path.join(path, src_rel.replace("/", os.sep))
     if not os.path.isfile(full):
         return jsonify({"ok": False, "error": "文件不存在"}), 404
-    return send_from_directory(path, src_rel)
+    resp = send_from_directory(path, src_rel)
+    if immutable:
+        resp.headers["Cache-Control"] = immutable
+    return resp
 
 
 @bp.route("/api/comic/delivery_status", methods=["GET"])

@@ -455,6 +455,34 @@ class TestFriendApi(_TempMixin, unittest.TestCase):
                         query={"task": "A1", "f": "thumb/../../etc"})
         self.assertEqual(bad.status_code, 404)
 
+    def test_带指纹的图片可长期缓存_旧链接不缓存死(self):
+        # 前端给每张图拼 &v=<rev>：URL 随图片内容变，可以放心长期缓存；
+        # 不带 v 的老链接必须继续靠 ETag 条件请求，不能缓存住会变的图。
+        self.mk_task(name="A1", raw=True)
+        hit = self._get("/api/comic/img", QQ,
+                        query={"task": "A1", "f": "thumb/01_raw_thumb.webp",
+                               "v": "123.456"})
+        self.assertEqual(hit.status_code, 200)
+        cc = hit.headers.get("Cache-Control", "")
+        self.assertIn("immutable", cc)
+        self.assertIn("max-age=", cc)
+        plain = self._get("/api/comic/img", QQ,
+                          query={"task": "A1", "f": "thumb/01_raw_thumb.webp"})
+        self.assertEqual(plain.status_code, 200)
+        self.assertNotIn("immutable", plain.headers.get("Cache-Control", ""))
+        self.assertTrue(plain.headers.get("ETag"), "旧链接仍要走 ETag 条件请求")
+
+    def test_站主原图带v也长期缓存(self):
+        self.mk_task(name="A1", raw=True)
+        hit = self._get("/api/comic/img",
+                        query={"task": "A1", "f": "raw/01_raw.png", "v": "123.456"})
+        self.assertEqual(hit.status_code, 200)
+        self.assertIn("immutable", hit.headers.get("Cache-Control", ""))
+        plain = self._get("/api/comic/img",
+                          query={"task": "A1", "f": "raw/01_raw.png"})
+        self.assertEqual(plain.status_code, 200)
+        self.assertNotIn("immutable", plain.headers.get("Cache-Control", ""))
+
     def test_渲染参数强制task级且跳过放大(self):
         d = self.mk_task(name="A1")
         captured = {}
