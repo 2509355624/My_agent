@@ -110,6 +110,10 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
 .nv-err { background: rgba(248, 113, 113, .1); border: 1px solid var(--err);
   color: var(--err); border-radius: var(--rs); padding: 8px 10px;
   font-size: 12px; margin: 10px 16px 0; overflow-wrap: anywhere; }
+/* 具体原因（后端 detail）：402 余额不足这类不是「等一下就好」，必须看得见。 */
+.nv-err-sub { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--err);
+  font-size: 11px; font-weight: 400; line-height: 1.6; opacity: .8;
+  white-space: normal; overflow-wrap: anywhere; }
 .nv-input { flex-direction: column; align-items: stretch; gap: 8px; padding: 10px 14px; }
 .nv-input textarea { width: 100%; min-height: 78px; resize: vertical;
   padding: 9px 11px; font: inherit; }
@@ -208,8 +212,16 @@ function nvEsc(s){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
   });
 }
-function nvErr(msg){
-  nvEl('nvErr').innerHTML = msg ? '<div class="nv-err">' + nvEsc(msg) + '</div>' : '';
+function nvErr(msg, detail){
+  if(!msg){ nvEl('nvErr').innerHTML = ''; return; }
+  var d = String(detail || '').trim();
+  var main = msg;
+  // 后端统一说「等一下再试」，但 402 余额不足等不会好，得充值或换链头。
+  if (/402|余额|Insufficient Balance|Payment Required/i.test(d)) {
+    main = '模型额度不足：需要先充值，或在管理页换一个链头（不是等一下就好）';
+  }
+  nvEl('nvErr').innerHTML = '<div class="nv-err">' + nvEsc(main) +
+    (d ? '<div class="nv-err-sub">' + nvEsc(d) + '</div>' : '') + '</div>';
 }
 function nvBusySet(on){
   nvBusy = on;
@@ -357,7 +369,7 @@ async function nvOpen(){
       play:nvPlayId, name:nvEl('nvName').value.trim(),
       identity:nvEl('nvIdentity').value
     });
-    if(!d.ok){ nvErr(d.error); return; }
+    if(!d.ok){ nvErr(d.error, d.detail); return; }
     nvApplyState(d.state, d.note);
   }catch(e){ nvErr('开场失败：' + e.message); }
   finally{ nvBusySet(false); }
@@ -367,7 +379,7 @@ async function nvLoadWorld(id){
   nvErr('');
   try{
     var d = await nvGet('/api/novel/state?id=' + encodeURIComponent(id));
-    if(!d.ok){ nvErr(d.error); return; }
+    if(!d.ok){ nvErr(d.error, d.detail); return; }
     nvApplyState(d.state, '');
   }catch(e){ nvErr('读取失败：' + e.message); }
 }
@@ -380,7 +392,7 @@ async function nvSend(text){
   try{
     var d = await nvPost('/api/novel/turn', {id:nvWorldId, text:text});
     if(!d.ok){
-      nvErr(d.error);
+      nvErr(d.error, d.detail);
       if(d.state) nvApplyState(d.state, '');
       return;
     }
@@ -393,7 +405,7 @@ async function nvRestart(){
   nvErr(''); nvBusySet(true);
   try{
     var d = await nvPost('/api/novel/restart', {id:nvWorldId});
-    if(!d.ok){ nvErr(d.error); return; }
+    if(!d.ok){ nvErr(d.error, d.detail); return; }
     nvApplyState(d.state, d.note);
   }catch(e){ nvErr('重开失败：' + e.message); }
   finally{ nvBusySet(false); }

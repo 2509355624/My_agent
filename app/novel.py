@@ -258,12 +258,18 @@ _WRITER_CONTRACT = """你是这部长篇生存小说的叙述者，用第三人�
 
 
 def _call(messages, max_tokens, temperature):
-    """跟扮演共用链头（公用中转站），strict 保证不滑到付费官方降级链。"""
+    """跟扮演共用链头（公用中转站），失败时顺链降级，跟 1v1 一致。
+
+    2026-11-11：原来这里用严格模式单目标直调，中转站余额归零时
+    开场直接 502，前端还写「等一下再试」，充值前完全玩不了。站主拍板放开：
+    链头仍是 PERSONA_PROVIDER/MODEL，402 之后交给 llm.candidates() 顺链
+    试 deepseek-flash / mimo / volc；代价是可能落到付费 provider。
+    """
     return llm.call_llm(
         messages,
         provider=PERSONA_PROVIDER or None,
         model=PERSONA_MODEL or None,
-        strict=True,
+        strict=False,
         max_tokens=max_tokens,
         temperature=temperature,
     )

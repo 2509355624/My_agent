@@ -325,13 +325,13 @@ class ApplyTest(NovelBase):
 # ─── 三个 AI 的调用顺序 ───────────────────────────────
 
 class ChainTest(NovelBase):
-    def test_llm_call_is_strict_and_uses_the_shared_provider(self):
-        """strict 保证不滑到付费官方降级链；链头跟扮演共用。"""
+    def test_llm_call_falls_back_like_1v1_and_uses_the_shared_provider(self):
+        """链头跟扮演共用；中转站 402 时允许顺链降级，不再一击即败。"""
         with mock.patch.object(novel.llm, "call_llm",
                                return_value='{"ruling":"ok"}') as m:
             novel._call([{"role": "user", "content": "x"}], 100, 0.5)
         kw = m.call_args.kwargs
-        self.assertTrue(kw["strict"])
+        self.assertFalse(kw["strict"])
         self.assertEqual(kw["provider"], novel.PERSONA_PROVIDER or None)
         self.assertEqual(kw["model"], novel.PERSONA_MODEL or None)
         self.assertEqual(kw["max_tokens"], 100)
@@ -528,6 +528,8 @@ class ApiTest(NovelBase):
         msg = r.get_json()["error"]
         self.assertIn("等一下再试", msg)
         self.assertNotIn("再点一次", msg)
+        self.assertIn("upstream down", r.get_json()["detail"],
+                      "具体原因必须回给前端，红条才不会只说一句空话")
 
     def test_all_six_routes_are_registered(self):
         app = flask.Flask(__name__)
@@ -642,7 +644,19 @@ class WiringTest(unittest.TestCase):
             self.assertNotIn(banned, self.src,
                              "小说引擎接回 1v1 了：%s" % banned)
         self.assertIn("from app import llm", self.src)
-        self.assertIn("strict=True", self.src)
+        self.assertIn("strict=False", self.src)
+        self.assertNotIn("strict=True", self.src,
+                         "中转站余额归零时 strict 会让开场直接 502，别改回去")
+
+    def test_error_box_shows_the_real_reason_instead_of_wait_forever(self):
+        """402 余额不足时前端必须给可操作提示，并把 detail 原样显示。"""
+        self.assertIn("function nvErr(msg, detail)", self.html)
+        self.assertIn("nv-err-sub", self.html)
+        self.assertIn("模型额度不足", self.html)
+        self.assertIn("不是等一下就好", self.html)
+        self.assertIn("Insufficient Balance", self.html)
+        self.assertEqual(self.html.count("nvErr(d.error, d.detail)"), 4,
+                         "四个接口失败分支都要把 detail 带出来")
 
     def test_director_prompt_forbids_rejection_and_free_items(self):
         p = novel._DIRECTOR_PROMPT
