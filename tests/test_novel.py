@@ -139,6 +139,17 @@ class ParseJsonTest(unittest.TestCase):
             with self.assertRaises(novel.NoHomework):
                 novel._parse_json(bad)
 
+    def test_broken_json_error_carries_length_and_tail(self):
+        """被 max_tokens 砍断时，detail 要能看出「原文多长、结尾停在哪」。"""
+        raw = ('{"places":[{"name":"男生宿舍 304","detail":"柜门半开",'
+               '"kind":"static"}],"item_pool":["晾衣杆","胶')
+        with self.assertRaises(novel.NoHomework) as cm:
+            novel._parse_json(raw)
+        msg = str(cm.exception)
+        self.assertIn("原文 %d 字" % len(raw), msg)
+        self.assertIn("item_pool", msg)
+        self.assertIn("返回的 JSON 解析不了", msg)
+
     def test_no_homework_is_not_value_error(self):
         """参数错误 400、没交作业 502 —— 两者绝不能是同一个异常类。"""
         self.assertFalse(issubclass(novel.NoHomework, ValueError))
@@ -335,6 +346,20 @@ class ChainTest(NovelBase):
         self.assertEqual(kw["provider"], novel.PERSONA_PROVIDER or None)
         self.assertEqual(kw["model"], novel.PERSONA_MODEL or None)
         self.assertEqual(kw["max_tokens"], 100)
+
+    def test_three_ais_have_room_for_full_output(self):
+        """真机 2400 token 把开场世界书草稿砍断（finish_reason=length），别改回去。"""
+        self.assertGreaterEqual(novel.OPEN_MAX_TOKENS, 8192)
+        self.assertGreaterEqual(novel.DIRECTOR_MAX_TOKENS, 4096)
+        self.assertGreaterEqual(novel.WRITER_MAX_TOKENS, 4096)
+        out, m = self.open_a_world()
+        self.assertEqual(m.call_args_list[0].args[1], novel.OPEN_MAX_TOKENS)
+        self.assertEqual(m.call_args_list[1].args[1], novel.WRITER_MAX_TOKENS)
+        w = novel.get_world(out["world_id"])
+        with mock.patch.object(novel, "_call",
+                               return_value='{"ruling":"ok"}') as dm:
+            novel._director(w, "检查柜子")
+        self.assertEqual(dm.call_args.args[1], novel.DIRECTOR_MAX_TOKENS)
 
     def test_run_turn_director_first_writer_second(self):
         out, _ = self.open_a_world()

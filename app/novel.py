@@ -60,6 +60,14 @@ _LOG_MAX = 80
 _SLICE_LOG = 6
 _SLICE_DISCOVERED = 12
 
+# 输出上限（2026-11-11 真机修）：开场封样要一次交出整本世界书草稿（7 个
+# 字段、每个地点/角色还有好几项），2400 token 会被 finish_reason=length 砍断
+# （实测正文 4359 字），残缺 JSON 解析失败后前端只说「没交作业，再点一次」，
+# 再点还是截断。跟 1v1 的 REPLY_MAX_TOKENS 对齐，给足但不限定它写多少。
+OPEN_MAX_TOKENS = 8192
+DIRECTOR_MAX_TOKENS = 4096
+WRITER_MAX_TOKENS = 4096
+
 
 # ─── 玩法预设 ─────────────────────────────────────────
 
@@ -289,7 +297,12 @@ def _parse_json(text):
     try:
         data = json.loads(raw[i:j + 1])
     except ValueError as e:
-        raise NoHomework("返回的 JSON 解析不了：%s" % e) from e
+        # 真机 2026-11-11：输出被 max_tokens 砍断时，rfind("}") 会抓到中间
+        # 某个对象的右括号，报出来的「line 124 column 6」完全看不出是截断。
+        # 这里只登记事实（多长、结尾长什么样），判断交给人，不做自动补 JSON。
+        tail = raw[-24:].replace("\n", " ").replace("\r", " ")
+        raise NoHomework("返回的 JSON 解析不了：%s（原文 %d 字，结尾「%s」）"
+                         % (e, len(raw), tail)) from e
     if not isinstance(data, dict):
         raise NoHomework("返回的不是 JSON 对象")
     return data
@@ -547,14 +560,14 @@ def _open_ai(world, preset):
         identity=p.get("identity") or "",
         identity_desc=p.get("identity_desc") or "",
     )
-    raw = _call([{"role": "user", "content": msg}], 2400, 0.8)
+    raw = _call([{"role": "user", "content": msg}], OPEN_MAX_TOKENS, 0.8)
     return _parse_json(raw)
 
 
 def _director(world, said):
     msg = _DIRECTOR_PROMPT.format(slice=_slice(world),
                                   recent=_recent(world), said=said)
-    raw = _call([{"role": "user", "content": msg}], 2000, 0.7)
+    raw = _call([{"role": "user", "content": msg}], DIRECTOR_MAX_TOKENS, 0.7)
     return _parse_json(raw)
 
 
@@ -566,7 +579,7 @@ def _writer(world, facts, said):
         facts=_facts_text(facts),
         said=said or "（开场）",
     )
-    out = _call([{"role": "user", "content": msg}], 2200, 1.0)
+    out = _call([{"role": "user", "content": msg}], WRITER_MAX_TOKENS, 1.0)
     text = str(out or "").strip()
     if not text:
         raise NoHomework("写作 AI 没有返回正文")
