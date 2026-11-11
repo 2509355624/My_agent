@@ -244,5 +244,41 @@ class WiringTest(unittest.TestCase):
                          ("private", "1234567890"))
 
 
+class PageNoticeTest(unittest.TestCase):
+    """换装页的「可以退出 + 图自动发」告知（2026-11-11）。
+
+    后端是独立 daemon 线程出图、跑完 _deliver 直接推 QQ，网页只轮询进度——
+    关掉页面根本不影响出图。用户常误以为要守着等，所以提交后必须显眼告知
+    这两件事。用静态断言钉住文案和显隐逻辑，防止以后改页面时悄悄丢掉。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "web", "outfit.html"), encoding="utf-8") as f:
+            cls.html = f.read()
+
+    def test_hint_tells_user_they_can_leave(self):
+        self.assertIn("asyncHint", self.html)
+        self.assertIn("可以关掉本页", self.html)
+        self.assertIn("不用守着等", self.html)
+
+    def test_hint_tells_user_image_is_pushed_automatically(self):
+        self.assertIn("自动发回", self.html)
+
+    def test_hint_hidden_by_default_and_shown_after_enqueue(self):
+        # 默认 display:none；gen 成功拿到 tag 后才 add("show")
+        self.assertIn("class=\"async-hint\"", self.html)
+        self.assertIn('$("asyncHint").classList.add("show")', self.html)
+
+    def test_hint_collapsed_on_fail_done_and_again(self):
+        # 失败/出完图/再换一张 都要收起，别留「不用等」的过期提示
+        self.assertGreaterEqual(self.html.count(
+            '$("asyncHint").classList.remove("show")'), 3)
+
+    def test_waiting_status_line_also_mentions_leaving(self):
+        self.assertIn("可以先退出", self.html)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

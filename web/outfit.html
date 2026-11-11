@@ -56,6 +56,14 @@
     font-size:14px;font-weight:500;padding:12px;}
   .status{margin-top:14px;text-align:center;color:var(--dim);font-size:14px;min-height:22px;}
   .status.err{color:var(--error);} .status.ok{color:var(--success);}
+  /* 异步出图告知条（2026-11-11）：后端是独立线程跑完直接推 QQ，网页只查进度。
+     用户常误以为要守着页面等，所以提交后把「可以退出 + 图自动发」摆在最显眼处。 */
+  .async-hint{display:none;margin-top:14px;padding:13px 15px;border-radius:12px;
+    border:1px solid var(--success);background:rgba(74,222,128,.08);
+    color:var(--text);font-size:14px;line-height:1.7;}
+  .async-hint.show{display:block;}
+  .async-hint b{color:var(--success);}
+  .async-hint .q{display:block;color:var(--dim);font-size:12.5px;margin-top:5px;}
   .result{display:none;margin-top:16px;}
   .result.show{display:block;}
   .result img{width:100%;max-width:520px;display:block;margin:0 auto;border-radius:12px;
@@ -106,6 +114,11 @@
 
   <button class="btn" id="go" disabled>开始换装</button>
   <div class="status" id="status"></div>
+  <!-- 提交后亮出：后端独立线程出图 + 直接推 QQ，网页关掉也照发。别让用户守着等。 -->
+  <div class="async-hint" id="asyncHint">
+    <b>✅ 可以关掉本页 / 退出了，不用守着等</b>
+    <span class="q">图出好后会自动发回你刚才发命令的 QQ（私聊收原图、群里直接出图），本页只用来看进度和存预览。</span>
+  </div>
 
   <div class="result card" id="result">
     <img id="resultImg" alt="换装结果">
@@ -235,7 +248,9 @@
       .then(function(r){ return r.json(); })
       .then(function(j){
         if(!j.ok) throw new Error(j.error || "提交失败");
-        curTag = j.tag; poll();
+        curTag = j.tag;
+        $("asyncHint").classList.add("show");   // 已入队：告知可以退出，图自动发
+        poll();
       })
       .catch(function(e){ fail(e.message); });
   });
@@ -245,8 +260,8 @@
       .then(function(r){ return r.json(); })
       .then(function(j){
         if(!j.ok) throw new Error(j.error || "查状态失败");
-        if(j.state === "queued"){ say('<span class="spin"></span>排队中，前面还有几张…'); return setTimeout(poll, 2500); }
-        if(j.state === "running"){ say('<span class="spin"></span>正在换装…'); return setTimeout(poll, 2500); }
+        if(j.state === "queued"){ say('<span class="spin"></span>排队中（可以先退出，出好自动发你 QQ）'); return setTimeout(poll, 2500); }
+        if(j.state === "running"){ say('<span class="spin"></span>正在换装…（可以先退出，出好自动发你 QQ）'); return setTimeout(poll, 2500); }
         if(j.state === "error") throw new Error(j.error || "没跑成");
         if(j.state === "done"){ done(); return; }
         setTimeout(poll, 2500);
@@ -255,15 +270,17 @@
   }
   function done(){
     busy = false; refresh();
+    $("asyncHint").classList.remove("show");   // 已出完图，结果卡片接手（它自带「已发回 QQ」）
     say("换好了，已发回你的 QQ", "ok");
     $("resultImg").src = "/api/outfit/img?k=" + encodeURIComponent(K) + "&tag=" + encodeURIComponent(curTag) + "&t=" + Date.now();
     $("dl").href = $("resultImg").src;
     $("result").classList.add("show");
   }
-  function fail(msg){ busy = false; refresh(); say(msg, "err"); }
+  function fail(msg){ busy = false; refresh(); say(msg, "err"); $("asyncHint").classList.remove("show"); }
 
   $("again").addEventListener("click", function(){
     $("result").classList.remove("show"); curTag = "";
+    $("asyncHint").classList.remove("show");
     say("就绪 · 可再传两张图");
   });
 })();
