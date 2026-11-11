@@ -1136,6 +1136,13 @@
               title="看她现在到哪一步了">状态</button>
       <a class="btn sm" id="btnLogin" style="display:none;text-decoration:none"
          href="/" title="登录后可以无限对话、还能出图">登录</a>
+      <!-- 独立游客页的自救出口（2026-11-11）：/play?exit=1 会清掉 fr_solo
+           页面锁并回首页。默认藏，只有 SOLO 态在 bindGalleryLink 里露出来——
+           站主/误入者不用去记那个隐藏地址，点一下就能回自己的画廊去登录。
+           访客点了也只是回到未登录首页，看不到站主任何数据，锁的意义不变。 -->
+      <a class="btn sm back" id="btnExitSolo"
+         style="display:none;text-decoration:none" href="/play?exit=1"
+         title="退出独立游客页，回到首页">退出游客模式</a>
       <span class="quota" id="quota" style="display:none"></span>
     </div>
     <div class="log" id="log">
@@ -1828,8 +1835,6 @@ let AFF = null;          // 攻略模式状态（session/chat 带回来；null=�
 //   能开 → 跳过去
 //   打不开 → 退回 5175 的地址（从当前 host 推断），还不行就回首页
 (function bindGalleryLink() {
-  const a = $("btnGallery");
-  if (!a) return;
   // 独立游客页连按钮都不给：藏起来只是防手滑，这里干脆不绑跳转，
   // 免得哪天有人改了样式又把它露出来。首屏就收干净，不等 session 回来。
   if (SOLO) {
@@ -1837,8 +1842,16 @@ let AFF = null;          // 攻略模式状态（session/chat 带回来；null=�
       const el = $(id);
       if (el) el.style.display = "none";
     });
+    // 露出「退出游客模式」：给误入的站主一个可见的解锁口，不用记 /play?exit=1。
+    // 这条链接是服务端清 fr_solo 的正规解除口（play_page 的 exit 分支），
+    // 跟隐藏地址同一条路，只是从「藏着」改成「摆出来」。
+    // 注意：SOLO 分支放在 `if (!a) return` 之前，退出按钮不依赖 btnGallery 存在。
+    const exitBtn = $("btnExitSolo");
+    if (exitBtn) exitBtn.style.display = "";
     return;
   }
+  const a = $("btnGallery");
+  if (!a) return;
   a.addEventListener("click", function (e) {
     e.preventDefault();
     const q = QQ ? ("?qq=" + encodeURIComponent(QQ)) : "";

@@ -202,7 +202,11 @@ def _gate():
             # `/char_intros.json` 是角色卡详情的静态数据（2026-11-09），跟
             # `/api/` 一样属于「页面要用到的东西」，拦成跳转的话独立页里
             # fetch 会拿到一段 HTML，JSON 解析失败 → 介绍节静默消失。
+            # `/login/send|verify`（2026-11-11）：登录接口也得豁免。否则带着
+            # fr_solo 的浏览器连验证码都发不出去、更登不进来——登录成功前
+            # 不算 _logged_in，会被自己这条页面锁挡回 /play，登录这条路是死的。
             and p not in (SOLO_PATH, SOLO_PATH + ".html", "/health", "/logout",
+                          "/login/send", "/login/verify",
                           "/char_intros.json", "/outfit", "/outfit.html")):
         return redirect(SOLO_PATH)
     return None
@@ -294,6 +298,11 @@ def login_verify():
     resp.set_cookie(friend_auth.COOKIE_NAME, token,
                     max_age=friend_auth.COOKIE_TTL, httponly=True,
                     samesite="Lax", secure=_cookie_secure(), path="/")
+    # 登录成功顺手解开 /play 的页面锁（2026-11-11）：用户之前点过一次 /play
+    # 就带着 7 天 fr_solo，若只发登录 cookie 不清它，一旦登录态过期/换设备
+    # 没登录，_gate 立刻把人弹回游客页，看起来像「又变回游客界面」。
+    # 这一句让「重新登录」成为可靠的解锁路径（和 /play?exit=1、/logout 齐平）。
+    resp.delete_cookie(SOLO_COOKIE, path="/")
     return resp
 
 

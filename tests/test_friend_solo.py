@@ -4,10 +4,13 @@
 用假的 5174 上游，不碰真实服务：验证隔离标记、页面锁、解除口，以及
 「/api/solo/* 强制游客」不会连普通 /persona 页一起误伤。
 """
+import os
 import unittest
 from unittest import mock
 
 import friend_app
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _mark_solo(client):
@@ -141,6 +144,58 @@ class SoloGatewayTest(unittest.TestCase):
         r = self.client.get("/persona")
         self.assertEqual(r.status_code, 200)
         self.assertNotIn("fr_solo", r.headers.get("Set-Cookie", ""))
+
+    def test_login_clears_solo_marker(self):
+        """登录成功必须顺手清 fr_solo（2026-11-11）：否则登录态一过期/换
+        设备没登录，7 天的游客标记又把人弹回 /play，像「又变回游客界面」。
+        """
+        _mark_solo(self.client)
+        with mock.patch.object(friend_app, "rate_ok", return_value=True), \
+             mock.patch.object(friend_app.friend_auth, "verify",
+                               return_value=(True, "", "signed-token")):
+            r = self.client.post("/login/verify",
+                                 json={"qq": "12345", "code": "000000"})
+        self.assertEqual(r.status_code, 200)
+        cookies = " ".join(r.headers.getlist("Set-Cookie"))
+        # 登录 cookie 发下去了，同时 fr_solo 被 delete（Set-Cookie 带 Max-Age=0）
+        self.assertIn(friend_app.friend_auth.COOKIE_NAME + "=", cookies)
+        self.assertIn("fr_solo=", cookies)
+        self.assertIn("Max-Age=0", cookies)
+
+    def test_login_verify_reachable_under_solo_lock(self):
+        """带 fr_solo 时登录接口不能被页面锁挡回 /play——否则登录这条路是死的
+        （登录成功前不算 _logged_in，会被自己这条锁拦下）。verify 失败应回 400，
+        而不是 302。
+        """
+        _mark_solo(self.client)
+        with mock.patch.object(friend_app, "rate_ok", return_value=True), \
+             mock.patch.object(friend_app.friend_auth, "verify",
+                               return_value=(False, "验证码不对", None)):
+            r = self.client.post("/login/verify",
+                                 json={"qq": "12345", "code": "000000"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_login_send_reachable_under_solo_lock(self):
+        """验证码接口同理：被锁在 /play 的浏览器也得能重新登录。"""
+        _mark_solo(self.client)
+        with mock.patch.object(friend_app, "rate_ok", return_value=True), \
+             mock.patch.object(friend_app.friend_auth, "send_code",
+                               return_value=(True, "ok")):
+            r = self.client.post("/login/send", json={"qq": "12345"})
+        self.assertEqual(r.status_code, 200)
+
+    def test_exit_link_on_page_uses_the_real_unlock_route(self):
+        """前端「退出游客模式」按钮的 href 必须指向服务端真正的解除口。"""
+        with open(os.path.join(ROOT, "web", "persona.html"),
+                  encoding="utf-8") as f:
+            html = f.read()
+        self.assertIn('id="btnExitSolo"', html)
+        self.assertIn('href="/play?exit=1"', html)
+        # SOLO 分支里要把它露出来（style.display 置空），否则按钮永远藏着
+        i = html.index("if (SOLO) {", html.index("bindGalleryLink"))
+        block = html[i:i + 800]
+        self.assertIn("btnExitSolo", block)
+        self.assertIn('exitBtn.style.display = ""', block)
 
 
 class ForceGuestForwardTest(unittest.TestCase):
