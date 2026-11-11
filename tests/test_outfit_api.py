@@ -347,11 +347,19 @@ class UploadInterruptionTest(unittest.TestCase):
         self.assertIn("图片没传完就被断开了", self.html)
         self.assertIn("提交没成功", self.html)
 
+    def test_failure_copy_says_images_are_kept(self):
+        # 上传失败/网络中断的文案必须纠偏：告诉用户图还在、不用重选。
+        # 这是本轮核心——旧文案「请重新选两张图」误导用户白重选。
+        self.assertIn("不用重新选图", self.html)
+        self.assertIn("直接再点一次", self.html)
+        # 上传阶段那句也带「不用重选图」，别只在失败后才说
+        self.assertIn("传失败会自动重传，不用重选图", self.html)
+
     def test_as_json_rejects_non_ok(self):
-        # asJson 里必须有 if(r.ok) 分支，且对非 ok 抛中文
-        m = re.search(r"function asJson\(r, fallback\)\{.*?if\(r\.ok\).*?throw new Error\(msg\)",
+        # asJson 里必须有 if(r.ok) 分支；非 ok 抛中文错误并挂 business 标记
+        m = re.search(r"function asJson\(r, fallback\)\{.*?if\(r\.ok\).*?e\.business = business;.*?throw e;",
                       self.html, re.S)
-        self.assertIsNotNone(m, "asJson 的非 2xx → 中文错误链路不完整")
+        self.assertIsNotNone(m, "asJson 的非 2xx → 中文错误 + business 标记链路不完整")
 
     def test_native_fetch_error_is_translated(self):
         # fail() 必须把 Chrome/Safari/Firefox 的原生英文网络错误兜成中文
@@ -362,8 +370,8 @@ class UploadInterruptionTest(unittest.TestCase):
 
     def test_backend_chinese_error_still_shown(self):
         # 后端自己的中文 error（如「上一张还在跑」）应原样显示，别被兜底误吞：
-        # asJson 里 JSON.parse 成功时优先取 j.error
-        self.assertIn("if(j && j.error) msg = j.error", self.html)
+        # asJson 里 JSON.parse 成功时优先取 j.error，并标 business=true 不重试
+        self.assertIn("if(j && j.error){ msg = j.error; business = true; }", self.html)
 
     def test_green_hint_is_still_the_only_leave_signal(self):
         # 改动不能破坏既有契约：绿条仍在 gen 成功后才 add
@@ -371,6 +379,66 @@ class UploadInterruptionTest(unittest.TestCase):
         # 且 asyncHint 的两句告知还在
         self.assertIn("可以关掉本页", self.html)
         self.assertIn("自动发回", self.html)
+
+
+class UploadRetryTest(unittest.TestCase):
+    """上传自动重传契约（2026-11-11：省掉『失败要重选图』的麻烦）。
+
+    网络抖一下导致 5175 收到半截 multipart → 400，重传一次通常就好。
+    但绝不能无脑重试整条链：gen 一旦成功就入队、开跑、回执都发出去了，
+    重试 gen 会重复出图。所以只把 upload 单独包成 uploadWithRetry，
+    gen 仍是一次性 fetch。这组测试把这条边界钉死，防后人合流回整链重试。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "web", "outfit.html"), encoding="utf-8") as f:
+            cls.html = f.read()
+        # 抽出 uploadWithRetry 函数体，避免全文匹配串到别处
+        m = re.search(r"function uploadWithRetry\(attempt\)\{.*?\n  \}", cls.html, re.S)
+        cls.retry_fn = m.group(0) if m else ""
+
+    def test_upload_is_wrapped_in_retry_fn(self):
+        self.assertTrue(self.retry_fn, "uploadWithRetry 函数没找到")
+        self.assertIn('fetch("/api/outfit/upload"', self.retry_fn)
+        # 递归重传，且次数受上限约束
+        self.assertIn("uploadWithRetry(attempt + 1)", self.retry_fn)
+        self.assertIn("attempt < UPLOAD_TRIES", self.retry_fn)
+        self.assertIn("var UPLOAD_TRIES = 3", self.html)
+
+    def test_gen_is_not_retried(self):
+        # 这是最要紧的一条：重传函数体内绝不能出现 gen，否则重复出图/重复扣额
+        self.assertNotIn('outfit/gen', self.retry_fn)
+        # gen 仍在 click 主链里、且只 fetch 一次（不在重试函数内递归）
+        self.assertIn('return fetch("/api/outfit/gen"', self.html)
+        self.assertEqual(self.html.count('fetch("/api/outfit/gen"'), 1)
+
+    def test_business_errors_are_not_retried(self):
+        # asJson 给后端明确 JSON error 挂 business=true，重试判断必须带 !e.business
+        self.assertIn("e.business = business", self.html)
+        self.assertIn("if(!e.business && attempt < UPLOAD_TRIES)", self.retry_fn)
+        # 后端 JSON error 解析成功才置 business=true
+        self.assertIn("if(j && j.error){ msg = j.error; business = true; }", self.html)
+
+    def test_retry_exhaustion_keeps_images_and_says_so(self):
+        # 重传用尽后才改文案：图仍留着、直接再点、不用重选
+        self.assertIn("if(!e.business) e.message =", self.retry_fn)
+        self.assertIn("两张图还留着", self.retry_fn)
+        self.assertIn("不用重新选图", self.retry_fn)
+        # 关键不变量：失败路径（fail）和重传路径都不该清空 files。
+        # fail() 只翻 busy / refresh / 改文案， refresh 用 files.a&&files.b 决定按钮。
+        fail_m = re.search(r"function fail\(msg\)\{.*?\n  \}", self.html, re.S)
+        self.assertTrue(fail_m, "fail() 没找到")
+        self.assertNotIn("files.a = null", fail_m.group(0))
+        self.assertNotIn("files.b = null", fail_m.group(0))
+        self.assertNotIn("files = {a:null", fail_m.group(0))
+
+    def test_retry_has_backoff_and_progress_copy(self):
+        # 递增退避，别瞬间连打三次把网关打满
+        self.assertIn("setTimeout(res, 800 * attempt)", self.retry_fn)
+        # 重传期间给中文进度，不留白让用户以为卡死
+        self.assertIn("正在自动重传", self.retry_fn)
 
 
 if __name__ == "__main__":

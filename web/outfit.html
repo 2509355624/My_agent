@@ -137,6 +137,7 @@
   var mode = "outfit";
   var files = {a:null, b:null};       // {blob, url}
   var busy = false, curTag = "";
+  var UPLOAD_TRIES = 3;               // 上传最多试 3 次（首次 + 自动重传 2 次）
 
   var $ = function(id){ return document.getElementById(id); };
   var st = $("status");
@@ -146,12 +147,18 @@
   // （上传中关页/断网），Werkzeug 直接吐一个 HTML 400。裸 r.json() 会把
   // "Unexpected token '<'" 这种英文错抛给用户看。这里统一兜成能照做的中文，
   // 后端自己回了 JSON error 就优先用它的（比如「上一张还在跑」）。
+  // 同时给错误挂 business 标记：后端明确的 JSON 业务错误（图太大/不像图片/
+  // 令牌失效）重试也没用，标 true 不重试；解析不出 JSON 的传输层失败
+  // （半截 body / 网关 502 / 原生网络中断）标 false，交给 uploadWithRetry 重传。
   function asJson(r, fallback){
     if(r.ok) return r.json();
     return r.text().then(function(t){
       var msg = fallback || "没成功，请重试";
-      try{ var j = JSON.parse(t); if(j && j.error) msg = j.error; }catch(_){}
-      throw new Error(msg);
+      var business = false;
+      try{ var j = JSON.parse(t); if(j && j.error){ msg = j.error; business = true; } }catch(_){}
+      var e = new Error(msg);
+      e.business = business;
+      throw e;
     });
   }
 
@@ -247,17 +254,38 @@
 
   function refresh(){ $("go").disabled = busy || !(files.a && files.b); }
 
+  // 上传这一步单独做「自动重传」：网络抖一下 / 手机切后台 / 隧道断一下，
+  // 5175 收到半截 multipart 就吐 HTML 400（2026-11-11 实机排查），重传一次
+  // 通常就好。关键：① 只重试 upload，绝不重试 gen——gen 一旦成功就入队了，
+  // 重试会重复出图、重复扣额度；② 后端明确回的业务错误（business=true）
+  // 不重试，只有传输层失败才重传；③ 重试用完还失败，图仍在 files 里（fail
+  // 不清 files），文案告诉用户「直接再点一次即可，不用重新选图」。
+  function uploadWithRetry(attempt){
+    var fd = new FormData();
+    fd.append("k", K); fd.append("a", files.a.blob, "a.png"); fd.append("b", files.b.blob, "b.png");
+    return fetch("/api/outfit/upload", {method:"POST", body:fd})
+      .then(function(r){ return asJson(r, "图片没传完就被断开了"); })
+      .catch(function(e){
+        if(!e.business && attempt < UPLOAD_TRIES){
+          say('<span class="spin"></span>网络抖了一下，正在自动重传（第 ' + attempt + ' 次）… 请稍候');
+          return new Promise(function(res){ setTimeout(res, 800 * attempt); })
+            .then(function(){ return uploadWithRetry(attempt + 1); });
+        }
+        // 重传仍失败（或业务错误）：补一句「图还在，别重选」，再交给 fail。
+        if(!e.business) e.message = "图传了好几次都没成功，检查下网络。两张图还留着，直接再点一次「开始换装」就行，不用重新选图";
+        throw e;
+      });
+  }
+
   $("go").addEventListener("click", function(){
     if(busy || !(files.a && files.b)) return;
     busy = true; refresh(); $("result").classList.remove("show");
     // ⚠️ 上传阶段绝不能关页：两张图还在往服务器传，中途断开 5175 会收到
     // 半截 multipart、直接吐 400，任务根本没提交（2026-11-11 实机排查）。
-    // 把「别关页面」摆在最显眼处，等下面绿色提示条亮了才真的可以退。
-    say('<span class="spin"></span>正在上传两张图…<br><b style="color:var(--error)">请别关页面、别退出</b>，等下面的绿色提示出现后再走');
-    var fd = new FormData();
-    fd.append("k", K); fd.append("a", files.a.blob, "a.png"); fd.append("b", files.b.blob, "b.png");
-    fetch("/api/outfit/upload", {method:"POST", body:fd})
-      .then(function(r){ return asJson(r, "图片没传完就被断开了，请重新选两张图再试一次（上传时别关页面）"); })
+    // 现在有自动重传兜底网络抖动，但重传期间也别关页；绿色提示条才是
+    // 唯一「真的可以退」的信号。
+    say('<span class="spin"></span>正在上传两张图…<br><b style="color:var(--error)">请别关页面、别退出</b>，等下面的绿色提示出现后再走（传失败会自动重传，不用重选图）');
+    uploadWithRetry(1)
       .then(function(j){
         if(!j.ok) throw new Error(j.error || "上传失败");
         say('<span class="spin"></span>已排队，正在换装（通常 30～60 秒）…');
@@ -303,7 +331,7 @@
     // fetch」、Safari「Load failed」、Firefox「NetworkError」），不经过 asJson，
     // 直接显示用户看不懂。兜成中文；后端返回的中文 error 原样保留。
     if(/failed to fetch|load failed|networkerror|network request failed/i.test(msg || "")){
-      msg = "网络中断了，任务可能没提交成功，请检查网络后重新点一次";
+      msg = "网络中断了，任务可能没提交成功。两张图还留着，直接再点一次「开始换装」就行，不用重新选图";
     }
     say(msg, "err");
     $("asyncHint").classList.remove("show");
