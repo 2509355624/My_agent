@@ -189,14 +189,16 @@ class WorldBookTest(NovelBase):
         self.assertEqual(w["opening_reply"], OPENING_TEXT)
         self.assertEqual(w["player"]["items"], [], "开场不许凭空发道具")
         self.assertEqual([r["role"] for r in w["history"]], ["assistant"])
-        # 开场写作 AI 拿到的事实就是开场 AI 交的那几条
-        self.assertIn("林岸在 304 醒来", m.call_args_list[1].args[0][0]["content"])
+        # 开场写作 AI 拿到的事实就是开场 AI 交的那几条（在最后一条 user 消息里）
+        self.assertIn("林岸在 304 醒来",
+                      m.call_args_list[1].args[0][-1]["content"])
 
     def test_unknown_play_is_value_error(self):
         with self.assertRaises(ValueError):
             novel.open_world("nope", "林岸", "体育生")
 
-    def test_slice_only_injects_absent_cast_filter_and_static_facts(self):
+    def test_state_block_is_complete_and_not_a_summary(self):
+        """写作 AI 拿到的必须是代码直接读出的原始状态，不是编剧的摘要。"""
         out, _ = self.open_a_world()
         w = novel.get_world(out["world_id"])
         w["cast"] = [
@@ -209,15 +211,19 @@ class WorldBookTest(NovelBase):
             {"fact": "安保室门后挂着一把枪", "kind": "static"},
             {"fact": "警察局那边刚起过尸潮", "kind": "dynamic"},
         ]
-        s = novel._slice(w)
-        self.assertIn("林岸", s)
-        self.assertIn("文弱书生", s)
-        self.assertIn("男生宿舍 304", s)
-        self.assertIn("空手", s)
-        self.assertIn("安保室门后挂着一把枪", s)
-        self.assertNotIn("警察局那边刚起过尸潮", s, "动态事实不该进每轮切片")
+        w["log"] = ["林岸试过那把刀，能用"]
+        w["player"]["items"] = ["一袋薯片",
+                                "{'name': '钢刀', 'from': '床底铁皮箱'}"]
+        s = novel._state_block(w)
+        for needle in ("林岸", "文弱书生", "男生宿舍 304", "一袋薯片", "钢刀",
+                       "安保室门后挂着一把枪", "警察局那边刚起过尸潮",
+                       "已经演过的事", "不许凭空多出别的东西",
+                       "未经任何人压缩", "禁止重写"):
+            self.assertIn(needle, s)
+        self.assertNotIn("{'name'", s,
+                         "老存档的 Python 字典字面量必须清洗掉")
         self.assertIn("周砚", s)
-        self.assertIn("李二", s.split("主角团：")[1].split("\n")[0])
+        self.assertIn("李二", s.split("主角团里有过谁：")[1].split("\n")[0])
         self.assertNotIn("李二", s.split("在场的人：")[1].split("\n")[0])
 
 
@@ -382,9 +388,15 @@ class ChainTest(NovelBase):
         self.assertEqual([r["role"] for r in w["history"]][-2:],
                          ["user", "assistant"])
         # 写作 AI 拿到的是已裁定事实，不是「检查柜子」这句意图本身
-        writer_msg = m.call_args_list[1].args[0][0]["content"]
+        writer_msg = m.call_args_list[1].args[0][-1]["content"]
         self.assertIn("柜门卡住了", writer_msg)
         self.assertIn("晾衣杆", writer_msg)
+        # 而且拿到完整上下文：开场白正文、原始状态块、玩家原话、尾注
+        self.assertIn(OPENING_TEXT, m.call_args_list[1].args[0][1]["content"],
+                      "写作 AI 必须看到自己上一轮写的正文，否则会重演")
+        self.assertIn("此刻的世界", writer_msg)
+        self.assertIn("检查柜子", writer_msg)
+        self.assertIn("上一轮你是这样开头的", writer_msg)
 
     def test_ended_world_does_not_call_llm(self):
         out, _ = self.open_a_world()
@@ -410,12 +422,13 @@ class ChainTest(NovelBase):
             with self.assertRaises(novel.NoHomework):
                 novel.run_turn(out["world_id"], "检查柜子")
 
-    def test_writer_contract_is_third_person_with_second_person_ui(self):
-        c = novel._WRITER_CONTRACT
+    def test_head_contract_is_third_person_and_state_driven(self):
+        c = novel._NOVEL_CONTRACT
         self.assertIn("第三人称", c)
         self.assertIn("一律写主角的名字", c)
         self.assertIn("用「你」", c)
-        self.assertIn("400 到 700 字", c)
+        self.assertIn("不要重演", c)
+        self.assertIn("照着状态写", c)
         self.assertNotIn("好感", c)
         self.assertNotIn("亲密度", c)
 
@@ -497,6 +510,145 @@ class RestartTest(NovelBase):
     def test_restart_unknown_world_is_value_error(self):
         with self.assertRaises(ValueError):
             novel.restart("nv_nope")
+
+
+# ─── 复用 1v1 内核：完整上下文 / 状态直达 / RAG ───────────
+
+class KernelReuseTest(NovelBase):
+    def test_messages_are_system_plus_full_history_plus_one_user(self):
+        out, _ = self.open_a_world()
+        w = novel.get_world(out["world_id"])
+        w["history"].append({"role": "user", "content": "检查柜子"})
+        w["history"].append({"role": "assistant", "content": "林岸拽开柜门"})
+        msgs = novel._messages(w, facts=["摸到一根晾衣杆"], said="检查柜子")
+        self.assertEqual([m["role"] for m in msgs],
+                         ["system", "assistant", "user", "assistant", "user"])
+        self.assertIn("第三人称", msgs[0]["content"])
+        self.assertIn("林岸拽开柜门", msgs[-2]["content"],
+                      "写作 AI 必须看到自己上一轮写的完整正文")
+        self.assertIn("玩家这一轮打算做什么", msgs[-3]["content"],
+                      "玩家意图要标明是意图，不是既成事实")
+
+    def test_director_and_writer_share_the_same_raw_state(self):
+        """用户点名的错误：两个 AI 看到的东西不一样。"""
+        out, _ = self.open_a_world()
+        w = novel.get_world(out["world_id"])
+        w["player"]["items"] = ["钢刀", "两包薯片"]
+        d = novel._messages(w, said="去食堂", for_director=True)
+        r = novel._messages(w, facts=["钢刀还在手上"], said="去食堂")
+        ds = [m["content"] for m in d if m["role"] == "user"][-1]
+        ws = [m["content"] for m in r if m["role"] == "user"][-1]
+        for needle in ("钢刀", "两包薯片", "此刻的世界", "未经任何人压缩"):
+            self.assertIn(needle, ds)
+            self.assertIn(needle, ws)
+        self.assertIn("裁定", d[0]["content"], "编剧拿的是裁定规则")
+        self.assertIn("叙述者", r[0]["content"], "写作拿的是叙述契约")
+        self.assertIn("这一拍已经发生的事实", ws)
+
+    def test_writer_gets_facts_on_top_of_full_context_not_instead_of_it(self):
+        out, _ = self.open_a_world()
+        w = novel.get_world(out["world_id"])
+        u = novel._user_block(w, facts=["摸到晾衣杆"], said="检查柜子")
+        self.assertIn("此刻的世界", u)
+        self.assertIn("玩家这一轮（原话", u)
+        self.assertIn("摸到晾衣杆", u)
+        self.assertTrue(u.rstrip().endswith("）"),
+                        "近因位尾注必须是最后一句")
+        self.assertIn("不要重演", novel._head(w))
+
+    def test_no_1v1_pronoun_rewrite_in_history(self):
+        """persona._render_hist 会把「他」改成「你」，小说不能用。"""
+        out, _ = self.open_a_world()
+        w = novel.get_world(out["world_id"])
+        w["history"].append({"role": "assistant",
+                             "content": "他把刀横在桌上，试了一下。"})
+        hist = novel._hist(w)
+        self.assertIn("他把刀横在桌上", hist[-1]["content"])
+        self.assertNotIn("你把刀横在桌上", hist[-1]["content"])
+
+    def test_rag_is_reused_with_world_line(self):
+        out, _ = self.open_a_world()
+        w = novel.get_world(out["world_id"])
+        with mock.patch.object(novel.persona_rag, "enabled_for",
+                               return_value=True), \
+                mock.patch.object(novel.persona_rag, "build_block",
+                                  return_value="【回忆】安保室有枪") as m:
+            block = novel._rag_block(w, "安保室有枪吗")
+        self.assertIn("安保室有枪", block)
+        self.assertEqual(m.call_args.args[0], novel._rag_line(w))
+        self.assertTrue(m.call_args.kwargs.get("context") is not None)
+
+    def test_rag_line_changes_on_restart(self):
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        before = novel._rag_line(novel.get_world(wid))
+        with mock.patch.object(novel, "_call"):
+            novel.restart(wid)
+        after = novel._rag_line(novel.get_world(wid))
+        self.assertNotEqual(before, after,
+                            "重开后必须换 RAG 线，否则上一周目的尸潮会被检索回来")
+
+    def test_legacy_dict_items_are_cleaned_on_read(self):
+        """用户真机看到的「name from Name from」必须消失。"""
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        w = novel.get_world(wid)
+        w["player"]["items"] = [
+            "一袋薯片",
+            "{'name': '两个满电充电宝', 'from': '书桌抽屉最里层'}",
+            {"name": "登山包", "qty": "一个"},
+        ]
+        novel._save_world(w)
+        got = novel.get_world(wid)
+        self.assertEqual(got["player"]["items"],
+                         ["一袋薯片", "两个满电充电宝", "一个登山包"])
+        self.assertNotIn("from", "".join(got["player"]["items"]))
+
+    def test_director_returns_full_item_list_and_code_only_normalizes(self):
+        """数量变化 / 放下 / 刀不消失，全由编剧交完整清单裁定。"""
+        w = self._world_if_any()
+        novel._apply(w, {
+            "items": [{"name": "钢刀", "qty": "一把"},
+                      "一袋薯片", "铁晾衣杆"],
+        }, "收拾东西")
+        self.assertEqual(w["player"]["items"],
+                         ["一把钢刀", "一袋薯片", "铁晾衣杆"])
+        novel._apply(w, {
+            "items": [{"name": "钢刀", "qty": "一把"}, "两包薯片"],
+            "place": "宿舍楼外",
+        }, "两天后离开宿舍楼")
+        self.assertEqual(w["player"]["items"], ["一把钢刀", "两包薯片"],
+                         "薯片消耗了、晾衣杆没带走，刀必须还在")
+        self.assertEqual(w["player"]["place"], "宿舍楼外")
+
+    def _world_if_any(self):
+        out, _ = self.open_a_world()
+        return novel.get_world(out["world_id"])
+
+    def test_opening_is_idempotent_when_world_id_is_given(self):
+        """站主怕「再点一次开场封样又重新跑一遍」。"""
+        out, _ = self.open_a_world()
+        with mock.patch.object(novel, "_call") as m:
+            again = novel.open_world("zombie", "改个名", "体育生",
+                                     world_id=out["world_id"])
+        m.assert_not_called()
+        self.assertTrue(again["sealed"])
+        self.assertEqual(again["world_id"], out["world_id"])
+        self.assertEqual(again["state"]["player"]["identity"], "文弱书生",
+                         "身份已封样，不许被重复点开时改掉")
+
+    def test_rename_only_changes_the_name(self):
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        r = novel.rename(wid, "沈行")
+        self.assertTrue(r["ok"])
+        w = novel.get_world(wid)
+        self.assertEqual(w["player"]["name"], "沈行")
+        self.assertEqual(w["player"]["identity"], "文弱书生")
+        self.assertEqual(w["opening_reply"], OPENING_TEXT,
+                         "已写下的正文留着当时的名字，不篡改历史")
+        with self.assertRaises(ValueError):
+            novel.rename(wid, "   ")
 
 
 # ─── HTTP 接口：三种错误分开说 ─────────────────────────
@@ -662,13 +814,20 @@ class WiringTest(unittest.TestCase):
         self.assertNotIn('id="btnNovel" style="display:none', p,
                          "入口不许被样式藏起来")
 
-    def test_engine_does_not_import_1v1_modules(self):
-        for banned in ("from app import persona", "from app import affection",
-                       "from app import galgame", "import persona",
-                       "import affection"):
+    def test_engine_reuses_the_1v1_kernel_without_the_state_bars(self):
+        """2026-11-12 站主纠正「别从 0 造轮子」：小说复用扮演内核。
+
+        允许 import persona（只读纯函数），但不许接好感 / 跨天 / 服饰那些
+        数值状态条。persona.py 本身一行不改（1v1 正在跑那个文件）。
+        """
+        for banned in ("from app import affection", "from app import galgame",
+                       "import affection", "import galgame", "pregnancy"):
             self.assertNotIn(banned, self.src,
-                             "小说引擎接回 1v1 了：%s" % banned)
-        self.assertIn("from app import llm", self.src)
+                             "小说引擎接回 1v1 状态条了：%s" % banned)
+        for needle in ("from app import llm, persona, persona_rag, writing_style",
+                       "persona.cache_rows", "persona_rag.build_block",
+                       "persona_rag.remember", "writing_style.LENGTH_ANCHOR"):
+            self.assertIn(needle, self.src, "没复用扮演内核：%s" % needle)
         self.assertIn("strict=False", self.src)
         self.assertNotIn("strict=True", self.src,
                          "中转站余额归零时 strict 会让开场直接 502，别改回去")
@@ -692,6 +851,208 @@ class WiringTest(unittest.TestCase):
         self.assertIn("地图结构和固定物资是", novel._OPEN_PROMPT)
         self.assertIn("重开变化的是 dynamic", novel._OPEN_PROMPT)
         self.assertIn("只有这些会留下来", novel._opening_doc("zombie"))
+
+
+# ─── 2026-11-12：复用 1v1 内核之后，接口层与七项 UI 的守卫 ─────────
+
+class WarmWorldTest(NovelBase):
+    """老世界「打开即能用」：不用等下一轮写完才把 history 回填进 RAG。"""
+
+    def setUp(self):
+        super().setUp()
+        app = flask.Flask(__name__)
+        app.register_blueprint(novel_api.bp)
+        self.c = app.test_client()
+
+    def test_opening_an_old_world_queues_rag_backfill(self):
+        out, _ = self.open_a_world()
+        with mock.patch.object(novel.persona_rag, "enabled_for",
+                               return_value=True), \
+                mock.patch.object(novel.persona_rag, "warm") as warm, \
+                mock.patch.object(novel.persona_rag,
+                                  "schedule_backfill") as bf:
+            r = self.c.get("/api/novel/state?id=" + out["world_id"])
+        self.assertEqual(r.status_code, 200)
+        warm.assert_called()
+        self.assertTrue(bf.called)
+        line, factory = bf.call_args.args
+        self.assertEqual(line, out["world_id"] + "#0")
+        self.assertEqual(len(factory()), len(out["state"]["history"]),
+                         "回填的必须是已写下的全部 history，不是切片")
+
+    def test_idempotent_open_also_warms_the_existing_world(self):
+        out, _ = self.open_a_world()
+        with mock.patch.object(novel, "_call") as call, \
+                mock.patch.object(novel, "warm_world") as warm:
+            d = novel.open_world("zombie", "别的名字", "体育生",
+                                 out["world_id"])
+        call.assert_not_called()          # 重复点封样不再跑 LLM
+        warm.assert_called_once()
+        self.assertTrue(d["sealed"])
+        self.assertEqual(novel.get_world(out["world_id"])["player"]["identity"],
+                         "文弱书生", "身份不能被重复封样改掉")
+
+    def test_warm_world_does_not_mutate_the_world(self):
+        out, _ = self.open_a_world()
+        w = novel.get_world(out["world_id"])
+        before = json.dumps(w, ensure_ascii=False, sort_keys=True)
+        with mock.patch.object(novel.persona_rag, "enabled_for",
+                               return_value=True), \
+                mock.patch.object(novel.persona_rag, "warm"), \
+                mock.patch.object(novel.persona_rag, "schedule_backfill"):
+            novel.warm_world(w)
+        self.assertEqual(json.dumps(w, ensure_ascii=False, sort_keys=True),
+                         before)
+
+
+class CustomModelApiTest(NovelBase):
+    """自定义模型不能把「402 顺链降级」修好的链路又切断。"""
+
+    def setUp(self):
+        super().setUp()
+        app = flask.Flask(__name__)
+        app.register_blueprint(novel_api.bp)
+        self.c = app.test_client()
+
+    def test_no_custom_models_does_not_switch_the_chain(self):
+        with mock.patch.object(novel_api.llm, "set_custom_override") as setter:
+            self.c.post("/api/novel/turn", json={"id": "nv_x", "text": "走"})
+        attached = [c.args[0] for c in setter.call_args_list
+                    if c.args and c.args[0] is not None]
+        self.assertEqual(attached, [],
+                         "挂 set_custom_override([]) 会让 candidates 丢掉 "
+                         "LLM_FALLBACK_CHAIN，中转站一挂就无处可降")
+
+    def test_custom_models_are_attached_for_the_whole_request(self):
+        custom = [{"base_url": "https://x/v1", "model": "m", "api_key": "k"}]
+        with mock.patch.object(novel_api.llm, "set_custom_override") as setter:
+            self.c.post("/api/novel/turn",
+                        json={"id": "nv_x", "text": "走",
+                              "custom_models": custom})
+        attached = [c.args[0] for c in setter.call_args_list
+                    if c.args and c.args[0] is not None]
+        self.assertEqual(attached, [custom])
+
+    def test_every_json_reply_carries_model_used_and_confirm(self):
+        d = self.c.get("/api/novel/plays").get_json()
+        self.assertIn("model_used", d)
+        self.assertEqual(d["model_used"]["kind"], "chain_head")
+        self.assertEqual(d["model_used"]["name"], novel_api.PERSONA_MODEL)
+        self.assertEqual(d["restart_confirm"], novel_api.RESTART_CONFIRM)
+        self.assertEqual(d["chain_head"]["model"], novel_api.PERSONA_MODEL)
+
+    def test_model_used_does_not_leak_from_a_previous_request(self):
+        with mock.patch.object(novel_api.llm, "persona_last_model",
+                               return_value={"kind": "custom",
+                                             "name": "上一个请求残留"}):
+            d = self.c.get("/api/novel/plays").get_json()
+        self.assertEqual(d["model_used"]["kind"], "chain_head")
+
+    def test_open_route_forwards_world_id_for_idempotency(self):
+        with mock.patch.object(novel, "open_world",
+                               return_value={"ok": True, "sealed": True}) as m:
+            self.c.post("/api/novel/open",
+                        json={"play": "zombie", "world_id": "nv_1"})
+        self.assertEqual(m.call_args.args[3], "nv_1")
+
+    def test_restart_needs_the_typed_confirmation(self):
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        self.assertEqual(self.c.post("/api/novel/restart",
+                                     json={"id": wid}).status_code, 400)
+        r = self.c.post("/api/novel/restart",
+                        json={"id": wid, "confirm": "我同意"})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("确认句", r.get_json()["error"])
+        ok = self.c.post("/api/novel/restart",
+                         json={"id": wid,
+                               "confirm": novel_api.RESTART_CONFIRM})
+        self.assertEqual(ok.status_code, 200)
+        self.assertTrue(ok.get_json()["ok"])
+
+    def test_rename_route_only_changes_the_name(self):
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        r = self.c.post("/api/novel/rename",
+                        json={"id": wid, "name": "阿岸"})
+        self.assertEqual(r.get_json()["state"]["player"]["name"], "阿岸")
+        self.assertEqual(novel.get_world(wid)["player"]["identity"],
+                         "文弱书生")
+
+    def test_quota_reports_the_owner_fact(self):
+        d = self.c.get("/api/novel/quota").get_json()
+        self.assertTrue(d["ok"])
+        self.assertFalse(d["limited"])
+        self.assertEqual(d["mode"], "owner")
+
+    def test_custom_test_validates_the_draft(self):
+        self.assertEqual(self.c.post("/api/novel/custom_test",
+                                     json={"base_url": "x"}).status_code, 400)
+        with mock.patch.object(novel_api.llm, "test_custom",
+                               return_value=(True, 0.4, "pong")):
+            d = self.c.post("/api/novel/custom_test", json={
+                "base_url": "https://x/v1", "model": "m",
+                "api_key": "k"}).get_json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["info"], "pong")
+
+    def test_new_routes_are_registered(self):
+        app = flask.Flask(__name__)
+        app.register_blueprint(novel_api.bp)
+        paths = {r.rule for r in app.url_map.iter_rules()}
+        for p in ("/api/novel/rename", "/api/novel/quota",
+                  "/api/novel/custom_test"):
+            self.assertIn(p, paths)
+
+
+class UiSevenTest(unittest.TestCase):
+    """七项 UI 的静态体检（页面不跑浏览器，只锁住关键接线）。"""
+
+    def setUp(self):
+        self.html = _read(PAGE)
+        self.api = _read(os.path.join(ROOT, "app", "novel_api.py"))
+
+    def test_restart_has_typed_confirmation(self):
+        for needle in ("nvWipeMask", "nvWipeInput", "nvWipeOk", "nvConfirm",
+                       "我同意重开这一本", "confirm:nvConfirm",
+                       "原样打一遍"):
+            self.assertIn(needle, self.html, "缺少 %s" % needle)
+        self.assertEqual(novel_api.RESTART_CONFIRM, "我同意重开这一本")
+        self.assertIn("RESTART_CONFIRM", self.api)
+
+    def test_custom_model_current_model_and_quota_are_near_the_send_row(self):
+        for needle in ("nvCustomBtn", "nvModelNow", "nvQuotaBtn", "nvQuotaText",
+                       "/api/novel/quota", "/api/novel/custom_test",
+                       "persona_custom_models", "custom_models = nvCM",
+                       "function nvModelUsed"):
+            self.assertIn(needle, self.html, "缺少 %s" % needle)
+
+    def test_identity_is_locked_and_name_stays_editable(self):
+        for needle in ("function nvLockSeal", "nvIdentity').disabled = nvSealed",
+                       "已封样", "nvRenameBtn", "/api/novel/rename",
+                       "world_id:nvWorldId", "nvWipeIdentity"):
+            self.assertIn(needle, self.html, "缺少 %s" % needle)
+
+    def test_typing_dots_feedback(self):
+        for needle in ("nv-typing", "@keyframes nvBounce", "function nvTyping",
+                       "正在写…", "nvTyping(nvBusy)"):
+            self.assertIn(needle, self.html, "缺少 %s" % needle)
+
+    def test_mobile_drawer_matches_persona(self):
+        for needle in ("--vh", "nv-burger", "nv-stats", "nvDrawer",
+                       "nvCloseDrawer", "safe-area-inset-bottom",
+                       "font-size: 16px", "@media (max-width:1000px)",
+                       "translateX(-100%)", "translateX(100%)",
+                       "env(safe-area-inset-top)"):
+            self.assertIn(needle, self.html, "缺少 %s" % needle)
+
+    def test_custom_override_does_not_break_the_fallback_chain(self):
+        # 模块注释里会引用 `set_custom_override([])` 解释为什么不能那么写，
+        # 断言只看真正的代码部分。
+        code = re.sub(r'^""".*?"""', '', self.api, count=1, flags=re.S)
+        self.assertIn("if customs:", code)
+        self.assertIn("g.novel_has_custom = bool(customs)", code)
+        self.assertNotIn("set_custom_override([])", code)
 
 
 if __name__ == "__main__":

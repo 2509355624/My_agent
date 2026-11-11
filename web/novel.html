@@ -48,6 +48,7 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
 .top .sp { flex: 1; }
 .top a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 .top a.btn:hover { border-color: var(--accent); color: var(--accent); }
+.top .nv-burger, .top .nv-stats { display: none; }
 .log { flex: 1; min-height: 0; overflow-y: auto; padding: 16px;
   display: flex; flex-direction: column; gap: 12px; scroll-behavior: smooth;
   overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
@@ -64,6 +65,8 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
 .btn.pri { background: var(--accent-dim); border-color: var(--accent); }
 .btn.pri:hover:not(:disabled) { background: var(--accent); color: #000; }
 .btn.sm { padding: 5px 11px; font-size: 12px; }
+.btn.danger { background: rgba(248,113,113,.12); border-color: var(--err);
+  color: var(--err); }
 .side2 { border-left: 1px solid var(--border-soft); padding: 14px;
   background: var(--bg-elev); overflow-y: auto; }
 .st { margin-bottom: 16px; }
@@ -93,6 +96,8 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
   border: 1px solid var(--border-soft); border-radius: var(--rs);
   background: var(--bg-input); color: var(--text); outline: none; font: inherit; }
 .nv-field input:focus, .nv-field select:focus { border-color: var(--accent); }
+.nv-namerow { display: flex; gap: 6px; align-items: center; }
+.nv-namerow input { flex: 1; min-width: 0; }
 .nv-empty { font-size: 12px; color: var(--text-mute); line-height: 1.7; }
 .nv-note { background: rgba(244, 114, 182, .09); border-left: 3px solid var(--accent-dim);
   padding: 10px 12px; border-radius: 0 var(--rs) var(--rs) 0; font-size: 13px;
@@ -122,6 +127,14 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
   text-align: left; white-space: normal; }
 .nv-sendrow { display: flex; gap: 8px; align-items: center; }
 .nv-sendrow .sp { flex: 1; }
+/* 「写下去 / 重开一本」下面那一行：当前模型 + 查询额度（2026-11-12）。 */
+.nv-modelrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 11px; color: var(--text-dim); }
+.nv-modelrow .sp { flex: 1; }
+.nv-modelrow b { color: var(--text); font-weight: 500; }
+.nv-info { font-size: 11px; color: var(--warn); background: rgba(251,191,36,.08);
+  border: 1px solid #6b5218; border-radius: var(--rs); padding: 5px 9px;
+  overflow-wrap: anywhere; }
 .nv-card dl { margin: 0; }
 .nv-card dt { font-size: 11px; color: var(--text-mute); margin-top: 11px; }
 .nv-card dd { margin: 2px 0 0; font-size: 13px; overflow-wrap: anywhere; }
@@ -134,15 +147,90 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
 .nv-dead { background: rgba(251, 191, 36, .1); border: 1px solid var(--warn);
   border-radius: var(--rs); padding: 9px; font-size: 12px; color: var(--warn);
   overflow-wrap: anywhere; }
-/* 窄屏改纵向文档流：宽屏那套 position:fixed 三栏在手机上会把内容裁掉 */
+
+/* 写下去之后的三点抖动：让用户知道正在写，不是按钮没反应。 */
+.nv-typing { display: flex; align-items: center; gap: 5px; padding: 2px; }
+.nv-typing i { width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); display: block;
+  animation: nvBounce .9s infinite ease-in-out; }
+.nv-typing i:nth-child(2) { animation-delay: .15s; }
+.nv-typing i:nth-child(3) { animation-delay: .3s; }
+.nv-typing span { font-size: 11px; color: var(--text-mute); margin-left: 5px; }
+@keyframes nvBounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: .45; }
+  30% { transform: translateY(-6px); opacity: 1; }
+}
+
+/* 弹窗（自定义模型 / 重开二次确认），跟 persona 的 mask 同一套层叠口径。 */
+.nv-mask { display: none; position: fixed; inset: 0; z-index: 250;
+  background: rgba(0,0,0,.66); align-items: center; justify-content: center;
+  padding: 16px; }
+.nv-mask.on { display: flex; }
+.nv-box { width: min(560px, 100%); max-height: calc(var(--vh, 100dvh) - 32px);
+  overflow-y: auto; background: var(--bg-elev); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 16px; }
+.nv-box h3 { font-size: 16px; margin-bottom: 10px; }
+.nv-hint { font-size: 12px; color: var(--text-dim); line-height: 1.7;
+  margin-bottom: 12px; overflow-wrap: anywhere; }
+.nv-cmrow { border: 1px solid var(--border-soft); border-radius: var(--rs);
+  padding: 10px; margin-bottom: 8px; }
+.nv-cmrow .nv-field { margin-bottom: 6px; }
+.nv-cmrow input { width: 100%; padding: 6px 8px; font: inherit; font-size: 13px;
+  border: 1px solid var(--border-soft); border-radius: var(--rs);
+  background: var(--bg-input); color: var(--text); outline: none; }
+.nv-cmrow input:focus { border-color: var(--accent); }
+.nv-cmbar { display: flex; gap: 6px; align-items: center; }
+.nv-cmbar .sp { flex: 1; }
+.nv-status { font-size: 12px; color: var(--warn); margin-top: 8px;
+  min-height: 16px; overflow-wrap: anywhere; }
+.nv-status.ok { color: var(--ok); }
+.nv-status.err { color: var(--err); }
+.nv-wbtns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+.nv-wtext { font-size: 13px; line-height: 1.8; color: var(--text-dim);
+  background: rgba(248,113,113,.08); border-left: 3px solid var(--err);
+  padding: 10px 12px; margin-bottom: 12px; overflow-wrap: anywhere; }
+.nv-code { font-size: 14px; color: var(--err); background: var(--bg-input);
+  border: 1px dashed var(--err); border-radius: var(--rs); padding: 8px 10px;
+  margin-bottom: 8px; letter-spacing: .5px; }
+.nv-box .nv-code-input { width: 100%; padding: 8px 10px; font: inherit; font-size: 16px;
+  border: 1px solid var(--border); border-radius: var(--rs);
+  background: var(--bg-input); color: var(--text); outline: none; }
+.nv-drawer-mask { display: none; position: fixed; inset: 0; z-index: 140;
+  background: rgba(0,0,0,.6); }
+.nv-drawer-mask.on { display: block; }
+
+/* ─── 手机端：跟角色扮演一样用左右抽屉，不再把三栏压成一条长文档 ─── */
+@media (max-width:1000px) {
+  .app { grid-template-columns: 1fr; }
+  .side { position: fixed; left: 0; top: 0; bottom: 0; width: 250px;
+    max-width: 86vw; z-index: 150; transform: translateX(-100%);
+    transition: transform .22s; padding-top: max(14px, env(safe-area-inset-top));
+    padding-bottom: env(safe-area-inset-bottom);
+    box-shadow: 8px 0 24px rgba(0,0,0,.35); }
+  .side.open { transform: none; }
+  .side2 { position: fixed; right: 0; top: 0; bottom: 0; width: 300px;
+    max-width: 86vw; z-index: 150; transform: translateX(100%);
+    transition: transform .22s; padding-top: max(14px, env(safe-area-inset-top));
+    padding-bottom: env(safe-area-inset-bottom);
+    box-shadow: -8px 0 24px rgba(0,0,0,.35); }
+  .side2.open { transform: none; }
+  .top .nv-burger, .top .nv-stats { display: inline-block; }
+  .top { padding-top: max(10px, env(safe-area-inset-top)); }
+  .composer { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+  /* iOS Safari 聚焦字号小于 16px 会强行放大页面。 */
+  .composer textarea, .nv-box input, .nv-box select { font-size: 16px; }
+  /* 软键盘弹出时居中弹窗的输入框会被遮住，改顶对齐 + 可滚动。 */
+  .nv-mask { align-items: flex-start; overflow-y: auto;
+    padding-top: max(16px, env(safe-area-inset-top)); }
+}
+@media (min-width:1001px) {
+  .top .nv-burger, .top .nv-stats { display: none !important; }
+}
 @media (max-width:900px){
-  .app{display:block;position:static;height:auto;min-height:100dvh}
-  .side,.mid,.side2{width:auto;min-height:0;max-height:none;overflow:visible;
-    border:0;border-bottom:1px solid var(--border-soft)}
-  .mid{min-height:70vh}
-  .log{min-height:40vh}
-  .side-list{overflow:visible}
-  .nv-sub{display:none}
+  /* 更窄的屏：按钮行允许折行，长文案让出宽度。 */
+  .nv-sendrow { flex-wrap: wrap; }
+  .nv-modelrow { font-size: 10.5px; }
+  .nv-sub { display: none; }
 }
 </style>
 </head>
@@ -162,8 +250,13 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
       </div>
       <div class="nv-sec" id="nvNewBox">
         <h3>开一本新的</h3>
-        <div class="nv-field"><label for="nvName">主角名字</label><input id="nvName" placeholder="给自己起个名字" maxlength="24"></div>
-        <div class="nv-field"><label for="nvIdentity">开局身份</label><select id="nvIdentity"></select></div>
+        <div class="nv-field"><label for="nvName">主角名字（随时可改）</label>
+          <div class="nv-namerow">
+            <input id="nvName" placeholder="给自己起个名字" maxlength="24">
+            <button class="btn sm" id="nvRenameBtn" style="display:none">改</button>
+          </div>
+        </div>
+        <div class="nv-field"><label for="nvIdentity">开局身份（封样后固定，重开才能改）</label><select id="nvIdentity"></select></div>
         <button class="btn pri" id="nvOpenBtn" style="width:100%">开场封样</button>
       </div>
       <div class="nv-sec">
@@ -175,20 +268,30 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
 
   <main class="mid" id="nvMain">
     <div class="top">
+      <button class="btn sm nv-burger" id="nvBurger" type="button">☰</button>
       <span class="nm">丧尸末日</span>
       <span class="sp"></span>
       <span class="nv-sub">一个世界一条线 · 你是主角 · 世界书会记住已经探明的事</span>
+      <button class="btn sm nv-stats" id="nvStatsBtn" type="button">状态</button>
       <a class="btn sm" href="/persona" title="返回角色扮演">← 角色扮演</a>
     </div>
     <div id="nvErr"></div>
     <div class="log" id="nvLog"><div class="nv-empty">左边选一个玩法，填好主角名字和身份，点「开场封样」。</div></div>
     <div class="composer nv-input" id="nvInputBox" style="display:none">
+      <div class="nv-info" id="nvInfo" style="display:none"></div>
       <div class="nv-actions" id="nvActions"></div>
       <textarea id="nvText" placeholder="写下你打算做什么。想法可以天马行空，编剧会把它落成这一拍真正发生的事。"></textarea>
       <div class="nv-sendrow">
         <button class="btn pri" id="nvSendBtn">写下去</button>
         <button class="btn sm" id="nvRestartBtn">重开一本</button>
+        <button class="btn sm" id="nvCustomBtn">自定义模型</button>
         <span class="sp"></span>
+      </div>
+      <div class="nv-modelrow">
+        <span id="nvModelNow">当前模型：读取中…</span>
+        <span class="sp"></span>
+        <button class="btn sm" id="nvQuotaBtn">查询额度</button>
+        <span id="nvQuotaText"></span>
       </div>
     </div>
   </main>
@@ -198,6 +301,49 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
     <div id="nvCard"><div class="nv-empty">开场之后这里会记：现在在哪、手上有什么、在场的人、做过的事。</div></div>
   </aside>
 
+  <div class="nv-drawer-mask" id="nvMask"></div>
+
+  <!-- 自定义模型：和角色扮演共用同一份浏览器本地配置，不用填两次。 -->
+  <div class="nv-mask" id="nvCmMask">
+    <div class="nv-box">
+      <h3>自定义模型</h3>
+      <div class="nv-hint">
+        和角色扮演<b>共用同一份配置</b>（<code>persona_custom_models</code>），只存在你这个浏览器的本地存储里，
+        后端不落盘。公用链头连不上时，才按顺序用这里填的模型。<br>
+        <b>没配任何一条时，小说模式照旧顺全局降级链</b>，不会因为打开这个面板就少一层兜底。
+      </div>
+      <div id="nvCmRows"></div>
+      <button class="btn sm" id="nvCmAdd" type="button">＋ 添加一条</button>
+      <div class="nv-status" id="nvCmStatus"></div>
+      <div class="nv-wbtns">
+        <button class="btn" id="nvCmClose" type="button">关闭</button>
+        <button class="btn pri" id="nvCmSave" type="button">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 重开一本：跟角色扮演的清空存档一样，必须手打确认句，不用原生 confirm。 -->
+  <div class="nv-mask" id="nvWipeMask">
+    <div class="nv-box">
+      <h3>❗ 重开一本</h3>
+      <div class="nv-wtext">
+        人物进度会归零，这一周目走过的剧情、手上拿着的东西、在场的人都会重新来过。<br>
+        <b>已经探明的固定事实</b>（地图结构、固定物资）和上一次的死因会留下来；
+        会随重开变化的事不会留，免得提前预知。<br>
+        只在这里能重选开局身份，平时那个选项是锁着的。
+      </div>
+      <div class="nv-field"><label for="nvWipeName">主角名字</label><input id="nvWipeName" maxlength="24"></div>
+      <div class="nv-field"><label for="nvWipeIdentity">开局身份</label><select id="nvWipeIdentity"></select></div>
+      <div class="nv-code" id="nvWipeCode">我同意重开这一本</div>
+      <input class="nv-code-input" id="nvWipeInput" autocomplete="off" spellcheck="false"
+             placeholder="把上面这句原样打一遍">
+      <div class="nv-wbtns">
+        <button class="btn" id="nvWipeCancel" type="button">取消</button>
+        <button class="btn danger" id="nvWipeOk" type="button" disabled>确认重开</button>
+      </div>
+    </div>
+  </div>
+
 </div>
 <script>
 var nvWorldId = '';
@@ -205,6 +351,11 @@ var nvPlays = [];
 var nvPlayId = '';
 var nvBusy = false;
 var nvEnded = false;
+var nvSealed = false;
+var nvConfirm = '我同意重开这一本';
+var nvInfoTimer = null;
+var nvCM = [];
+var CM_KEY = 'persona_custom_models';
 
 function nvEl(id){ return document.getElementById(id); }
 function nvEsc(s){
@@ -223,23 +374,44 @@ function nvErr(msg, detail){
   nvEl('nvErr').innerHTML = '<div class="nv-err">' + nvEsc(main) +
     (d ? '<div class="nv-err-sub">' + nvEsc(d) + '</div>' : '') + '</div>';
 }
+function nvInfo(msg){
+  var el = nvEl('nvInfo');
+  el.textContent = msg || '';
+  el.style.display = msg ? '' : 'none';
+  if(nvInfoTimer) clearTimeout(nvInfoTimer);
+  if(msg) nvInfoTimer = setTimeout(function(){ nvInfo(''); }, 4000);
+}
+function nvTyping(on){
+  var old = nvEl('nvTyping');
+  if(old && old.parentNode) old.parentNode.removeChild(old);
+  if(!on) return;
+  var box = nvEl('nvLog');
+  var d = document.createElement('div');
+  d.className = 'nv-typing'; d.id = 'nvTyping';
+  d.innerHTML = '<i></i><i></i><i></i><span>正在写…</span>';
+  box.appendChild(d);
+  box.scrollTop = box.scrollHeight;
+}
 function nvBusySet(on){
   nvBusy = on;
-  ['nvOpenBtn','nvSendBtn','nvRestartBtn'].forEach(function(id){
+  ['nvSendBtn','nvRestartBtn','nvCustomBtn'].forEach(function(id){
     var b = nvEl(id); if(b) b.disabled = on;
   });
   Array.prototype.forEach.call(nvEl('nvActions').querySelectorAll('button'), function(b){
     b.disabled = on || nvEnded;
   });
   if(nvEl('nvSendBtn')) nvEl('nvSendBtn').textContent = on ? '正在写…' : '写下去';
+  nvTyping(on);
 }
 async function nvGet(path){
   var r = await fetch(path, {headers:{'Accept':'application/json'}});
   return await r.json();
 }
 async function nvPost(path, body){
+  body = body || {};
+  body.custom_models = nvCM;
   var r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'},
-                             body:JSON.stringify(body || {})});
+                             body:JSON.stringify(body)});
   return await r.json();
 }
 function nvTextList(rows){
@@ -249,6 +421,31 @@ function nvTextList(rows){
 function nvChips(rows){
   if(!rows || !rows.length) return '<span class="nv-empty">空手</span>';
   return rows.map(function(x){ return '<span class="nv-chip">' + nvEsc(x) + '</span>'; }).join('');
+}
+function nvModelUsed(d){
+  var u = d && d.model_used;
+  if(d && d.restart_confirm) nvConfirm = d.restart_confirm;
+  if(!u || !nvEl('nvModelNow')) return;
+  var name = u.kind === 'public' ? '公用 V4 Pro（免费）'
+    : u.kind === 'paid' ? '官方 DeepSeek（代充余额）'
+    : u.kind === 'custom' ? ('自定义模型 · ' + (u.name || '未命名'))
+    : (u.name || '默认链头');
+  nvEl('nvModelNow').textContent = '当前模型：' + name +
+    (u.kind === 'chain_head' ? '（链头，失败会顺链降级）' : '');
+}
+function nvSetVh(){
+  var vv = window.visualViewport;
+  document.documentElement.style.setProperty('--vh', (vv ? vv.height : window.innerHeight) + 'px');
+}
+function nvDrawer(which){
+  nvCloseDrawer();
+  nvEl('nvMask').classList.add('on');
+  nvEl(which).classList.add('open');
+}
+function nvCloseDrawer(){
+  nvEl('nvMask').classList.remove('on');
+  nvEl('nvLeft').classList.remove('open');
+  nvEl('nvRight').classList.remove('open');
 }
 
 function nvRenderPlays(plays){
@@ -264,13 +461,18 @@ function nvRenderPlays(plays){
   });
   if(!nvPlayId) nvSelectPlay(nvPlays[0].id);
 }
-function nvSelectPlay(id){
-  nvPlayId = id;
-  var play = nvPlays.filter(function(p){ return p.id === id; })[0] || {};
-  var sel = nvEl('nvIdentity');
-  sel.innerHTML = (play.identity_choices || []).map(function(c){
+function nvIdentityOptions(play){
+  return (play.identity_choices || []).map(function(c){
     return '<option value="' + nvEsc(c.name) + '">' + nvEsc(c.name) + ' · ' + nvEsc(c.desc) + '</option>';
   }).join('');
+}
+function nvCurrentPlay(){
+  return nvPlays.filter(function(p){ return p.id === nvPlayId; })[0] || {};
+}
+function nvSelectPlay(id){
+  nvPlayId = id;
+  nvEl('nvIdentity').innerHTML = nvIdentityOptions(nvCurrentPlay());
+  nvEl('nvWipeIdentity').innerHTML = nvIdentityOptions(nvCurrentPlay());
   Array.prototype.forEach.call(nvEl('nvPlayList').querySelectorAll('.nv-play'), function(el){
     el.className = 'nv-play' + (el.getAttribute('data-id') === id ? ' on' : '');
   });
@@ -343,6 +545,15 @@ function nvRenderActions(actions, enabled){
     b.onclick = function(){ nvSend(b.getAttribute('data-text')); };
   });
 }
+function nvLockSeal(s){
+  nvSealed = !!(s && s.id);
+  var btn = nvEl('nvOpenBtn');
+  btn.disabled = nvSealed || nvBusy;
+  btn.textContent = nvSealed ? '已封样' : '开场封样';
+  nvEl('nvIdentity').disabled = nvSealed;
+  nvEl('nvRenameBtn').style.display = nvSealed ? '' : 'none';
+  if(nvSealed && s.player) nvEl('nvName').value = s.player.name || '';
+}
 function nvApplyState(s, note){
   nvWorldId = s.id;
   nvEnded = !!s.ending;
@@ -351,36 +562,45 @@ function nvApplyState(s, note){
   nvRenderActions(s.actions, !s.ending && !nvBusy);
   nvEl('nvInputBox').style.display = 'flex';
   nvEl('nvText').disabled = !!s.ending;
+  nvLockSeal(s);
+  nvTyping(nvBusy);
   nvGet('/api/novel/worlds').then(function(d){ nvRenderWorlds(d.worlds); }).catch(function(){});
 }
 async function nvBoot(){
   try{
     var d = await nvGet('/api/novel/plays');
     nvRenderPlays(d.plays);
+    nvModelUsed(d);
     var w = await nvGet('/api/novel/worlds');
     nvRenderWorlds(w.worlds);
+    nvModelUsed(w);
   }catch(e){ nvErr('读玩法失败：' + e.message); }
 }
 async function nvOpen(){
   if(nvBusy) return;
   nvErr(''); nvBusySet(true);
+  nvEl('nvOpenBtn').disabled = true;
   try{
     var d = await nvPost('/api/novel/open', {
       play:nvPlayId, name:nvEl('nvName').value.trim(),
-      identity:nvEl('nvIdentity').value
+      identity:nvEl('nvIdentity').value, world_id:nvWorldId
     });
+    nvModelUsed(d);
     if(!d.ok){ nvErr(d.error, d.detail); return; }
     nvApplyState(d.state, d.note);
+    nvCloseDrawer();
   }catch(e){ nvErr('开场失败：' + e.message); }
-  finally{ nvBusySet(false); }
+  finally{ nvBusySet(false); nvLockSeal(nvSealed ? {id:nvWorldId, player:{name:nvEl('nvName').value}} : null); }
 }
 async function nvLoadWorld(id){
   if(nvBusy) return;
   nvErr('');
   try{
     var d = await nvGet('/api/novel/state?id=' + encodeURIComponent(id));
+    nvModelUsed(d);
     if(!d.ok){ nvErr(d.error, d.detail); return; }
     nvApplyState(d.state, '');
+    nvCloseDrawer();
   }catch(e){ nvErr('读取失败：' + e.message); }
 }
 async function nvSend(text){
@@ -391,6 +611,7 @@ async function nvSend(text){
   nvEl('nvText').value = '';
   try{
     var d = await nvPost('/api/novel/turn', {id:nvWorldId, text:text});
+    nvModelUsed(d);
     if(!d.ok){
       nvErr(d.error, d.detail);
       if(d.state) nvApplyState(d.state, '');
@@ -400,22 +621,164 @@ async function nvSend(text){
   }catch(e){ nvErr('这一轮失败：' + e.message); }
   finally{ nvBusySet(false); }
 }
-async function nvRestart(){
+async function nvRename(){
+  if(nvBusy || !nvWorldId) return;
+  var name = nvEl('nvName').value.trim();
+  if(!name){ nvInfo('名字不能是空的'); return; }
+  nvBusySet(true);
+  try{
+    var d = await nvPost('/api/novel/rename', {id:nvWorldId, name:name});
+    nvModelUsed(d);
+    if(!d.ok){ nvInfo(d.error || '改名失败'); return; }
+    nvApplyState(d.state, '');
+    nvInfo('名字已改成「' + name + '」，已写下的正文保持原样');
+  }catch(e){ nvInfo('改名失败：' + e.message); }
+  finally{ nvBusySet(false); }
+}
+async function nvQuota(){
+  try{
+    var d = await nvGet('/api/novel/quota');
+    nvModelUsed(d);
+    nvEl('nvQuotaText').textContent = d.ok
+      ? (d.limited ? ('剩余 ' + d.remaining + ' 次') : d.text)
+      : (d.error || '查询失败');
+  }catch(e){ nvEl('nvQuotaText').textContent = '查询失败：' + e.message; }
+}
+function nvOpenWipe(){
+  if(nvBusy || !nvWorldId) return;
+  var s = {player:{name:nvEl('nvName').value, identity:nvEl('nvIdentity').value}};
+  nvEl('nvWipeName').value = s.player.name || '';
+  nvEl('nvWipeIdentity').innerHTML = nvIdentityOptions(nvCurrentPlay());
+  if(s.player.identity) nvEl('nvWipeIdentity').value = s.player.identity;
+  nvEl('nvWipeCode').textContent = nvConfirm;
+  nvEl('nvWipeInput').value = '';
+  nvEl('nvWipeOk').disabled = true;
+  nvEl('nvWipeMask').classList.add('on');
+  setTimeout(function(){ try{ nvEl('nvWipeInput').focus(); }catch(e){} }, 60);
+}
+function nvCloseWipe(){ nvEl('nvWipeMask').classList.remove('on'); }
+function nvRestart(){ nvOpenWipe(); }
+async function nvDoRestart(){
   if(nvBusy || !nvWorldId) return;
   nvErr(''); nvBusySet(true);
   try{
-    var d = await nvPost('/api/novel/restart', {id:nvWorldId});
+    var d = await nvPost('/api/novel/restart', {
+      id:nvWorldId, confirm:nvConfirm,
+      name:nvEl('nvWipeName').value.trim(),
+      identity:nvEl('nvWipeIdentity').value
+    });
+    nvModelUsed(d);
     if(!d.ok){ nvErr(d.error, d.detail); return; }
+    nvCloseWipe();
     nvApplyState(d.state, d.note);
   }catch(e){ nvErr('重开失败：' + e.message); }
   finally{ nvBusySet(false); }
 }
+
+/* ─── 自定义模型：草稿直接读 DOM，不另存一份状态 ─── */
+function nvCmLoad(){
+  var raw = null;
+  try{ raw = JSON.parse(localStorage.getItem(CM_KEY) || 'null'); }catch(e){ raw = null; }
+  if(!Array.isArray(raw)) raw = [];
+  return raw.filter(function(m){ return m && typeof m === 'object'; }).map(function(m){
+    return {label:String(m.label || '').slice(0,60), site:String(m.site || '').slice(0,200),
+            base_url:String(m.base_url || ''), model:String(m.model || ''),
+            api_key:String(m.api_key || '')};
+  });
+}
+function nvCmDraft(){
+  return Array.prototype.map.call(nvEl('nvCmRows').querySelectorAll('.nv-cmrow'), function(row){
+    var get = function(k){ return row.querySelector('input[data-k="' + k + '"]').value.trim(); };
+    return {label:get('label'), site:'', base_url:get('base_url'),
+            model:get('model'), api_key:get('api_key')};
+  });
+}
+function nvCmRender(rows){
+  nvEl('nvCmRows').innerHTML = (rows || []).map(function(m, i){
+    return '<div class="nv-cmrow" data-i="' + i + '">' +
+      '<div class="nv-field"><label>备注</label><input data-k="label" value="' + nvEsc(m.label) + '" placeholder="随便起个名"></div>' +
+      '<div class="nv-field"><label>接口地址</label><input data-k="base_url" value="' + nvEsc(m.base_url) + '" placeholder="https://api.deepseek.com"></div>' +
+      '<div class="nv-field"><label>模型名</label><input data-k="model" value="' + nvEsc(m.model) + '" placeholder="deepseek-flash"></div>' +
+      '<div class="nv-field"><label>API Key</label><input data-k="api_key" value="' + nvEsc(m.api_key) + '" placeholder="sk-..."></div>' +
+      '<div class="nv-cmbar"><button type="button" class="btn sm" data-act="test">测试连接</button>' +
+      '<span class="sp"></span><button type="button" class="btn sm" data-act="del">删除</button></div>' +
+      '<div class="nv-status" data-status></div></div>';
+  }).join('') || '<div class="nv-empty">还没有配自定义模型。没配时照旧顺全局降级链。</div>';
+}
+function nvCmOpen(){
+  nvCmRender(nvCmLoad());
+  nvEl('nvCmStatus').textContent = '';
+  nvEl('nvCmMask').classList.add('on');
+}
+function nvCmClose(){ nvEl('nvCmMask').classList.remove('on'); }
+async function nvCmTest(btn, row){
+  var get = function(k){ return row.querySelector('input[data-k="' + k + '"]').value.trim(); };
+  var body = {base_url:get('base_url'), model:get('model'), api_key:get('api_key')};
+  var st = row.querySelector('[data-status]');
+  if(!(body.base_url && body.model && body.api_key)){
+    st.className = 'nv-status err'; st.textContent = '接口地址、模型名、Key 都要填'; return;
+  }
+  st.className = 'nv-status'; st.textContent = '测试中…';
+  try{
+    var d = await nvPost('/api/novel/custom_test', body);
+    st.className = 'nv-status ' + (d.ok ? 'ok' : 'err');
+    st.textContent = d.ok ? ('通了，' + d.elapsed + 's' + (d.info ? ' · ' + d.info : ''))
+                          : (d.error || '没通');
+  }catch(e){ st.className = 'nv-status err'; st.textContent = e.message; }
+}
+
 nvEl('nvOpenBtn').onclick = nvOpen;
 nvEl('nvSendBtn').onclick = function(){ nvSend(''); };
 nvEl('nvRestartBtn').onclick = nvRestart;
+nvEl('nvRenameBtn').onclick = nvRename;
+nvEl('nvCustomBtn').onclick = nvCmOpen;
+nvEl('nvQuotaBtn').onclick = nvQuota;
+nvEl('nvCmClose').onclick = nvCmClose;
+nvEl('nvCmAdd').onclick = function(){ nvCmRender(nvCmDraft().concat([{label:'',base_url:'',model:'',api_key:''}])); };
+nvEl('nvCmSave').onclick = function(){
+  var d = nvCmDraft().filter(function(m){ return m.base_url || m.model || m.api_key || m.label; });
+  var st = nvEl('nvCmStatus');
+  if(d.some(function(m){ return !(m.base_url && m.model && m.api_key); })){
+    st.className = 'nv-status err';
+    st.textContent = '每一条都要填接口地址、模型名和 API Key，或者整条删掉'; return;
+  }
+  try{ localStorage.setItem(CM_KEY, JSON.stringify(d)); }catch(e){}
+  nvCM = d;
+  st.className = 'nv-status ok';
+  st.textContent = '已保存，下一轮生效（和角色扮演共用）';
+};
+nvEl('nvCmRows').addEventListener('click', function(ev){
+  var btn = ev.target.closest('button[data-act]');
+  if(!btn) return;
+  var row = btn.closest('.nv-cmrow');
+  if(!row) return;
+  if(btn.getAttribute('data-act') === 'del'){
+    var d = nvCmDraft(); d.splice(Number(row.getAttribute('data-i')), 1); nvCmRender(d);
+  } else {
+    nvCmTest(btn, row);
+  }
+});
+nvEl('nvWipeInput').addEventListener('input', function(e){
+  nvEl('nvWipeOk').disabled = e.target.value.trim() !== nvConfirm;
+});
+nvEl('nvWipeInput').addEventListener('keydown', function(e){
+  if(e.key === 'Enter' && !nvEl('nvWipeOk').disabled) nvEl('nvWipeOk').click();
+  if(e.key === 'Escape') nvCloseWipe();
+});
+nvEl('nvWipeCancel').onclick = nvCloseWipe;
+nvEl('nvWipeOk').onclick = nvDoRestart;
+nvEl('nvCmMask').addEventListener('click', function(e){ if(e.target === nvEl('nvCmMask')) nvCmClose(); });
+nvEl('nvWipeMask').addEventListener('click', function(e){ if(e.target === nvEl('nvWipeMask')) nvCloseWipe(); });
+nvEl('nvBurger').onclick = function(){ nvDrawer('nvLeft'); };
+nvEl('nvStatsBtn').onclick = function(){ nvDrawer('nvRight'); };
+nvEl('nvMask').onclick = nvCloseDrawer;
 nvEl('nvText').addEventListener('keydown', function(e){
   if((e.ctrlKey || e.metaKey) && e.key === 'Enter'){ e.preventDefault(); nvSend(''); }
 });
+window.addEventListener('resize', nvSetVh);
+if(window.visualViewport) window.visualViewport.addEventListener('resize', nvSetVh);
+nvSetVh();
+nvCM = nvCmLoad();
 nvBoot();
 </script>
 </body>
