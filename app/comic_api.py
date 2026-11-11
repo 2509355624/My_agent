@@ -925,9 +925,14 @@ def api_comic_start():
                 return deny
     scene_skill = _resolve_skill(path, data.get("scene_skill"))
     _save_task_skill(path, scene_skill)
+    # 独占通道（2026-11-11）：把待跑底图格一次性推上队列，前 comic.EXCLUSIVE_MAX
+    # 张登记优先票压后所有已排队任务。**只认站主**——群友经 5175 反代过来的
+    # 请求必带 qq（_qq() 注入），站主直连 qq 为空；群友传了也当没传，排队
+    # 行为跟从前完全一样。
+    exclusive = bool(data.get("exclusive")) and not qq
     started = _spawn(path, "scene", lambda: comic.run(
         os.path.join(path, "script.md"), silver_only=True,
-        scene_skill=scene_skill), on_error=_mark_pending_failed(path),
+        scene_skill=scene_skill, exclusive=exclusive), on_error=_mark_pending_failed(path),
         finish="notify")
     if not started:
         return jsonify({"ok": False, "error": "这个任务已经在跑了"}), 409
@@ -935,7 +940,8 @@ def api_comic_start():
     if qq and need_charge:
         comic_quota.consume(qq, "comic")
         comic_quota.mark_charged(qq, "comic", os.path.basename(path))
-    return jsonify({"ok": True, "scene_skill": scene_skill})
+    return jsonify({"ok": True, "scene_skill": scene_skill,
+                    "exclusive": exclusive})
 
 
 @bp.route("/api/comic/rerun", methods=["POST"])

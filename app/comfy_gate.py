@@ -100,24 +100,30 @@ def queue_dir():
     return state_path(QUEUE_NAME)
 
 
-def _ticket_path():
+def _ticket_path(priority=False):
     """一张新票的路径。文件名自带顺序：纳秒时间戳定长 20 位 → 字典序即先后。
 
     后面两段（pid、随机串）只用来区分「同一纳秒」和排查时认出是谁，不参与
     排序（时间戳位数固定，排在前面）。
+
+    优先票（2026-11-11 漫画台「独占通道」）：文件名加 `!` 前缀——ASCII 里
+    `!`(0x21) 小于任何数字（0x30 起），`sorted()` 一比它就排到所有普通票
+    前面；多张优先票之间仍按各自时间戳 FIFO。机制没动（还是同一张排序
+    表），只是站主自己的票带了插队标记，群友的票完全是老样子。
     """
-    return os.path.join(queue_dir(), "%020d-%08d-%s.ticket"
+    head = "!" if priority else ""
+    return os.path.join(queue_dir(), head + "%020d-%08d-%s.ticket"
                         % (time.time_ns(), os.getpid(), uuid.uuid4().hex[:8]))
 
 
-def make_ticket():
+def make_ticket(priority=False):
     """登记一张票，返回路径。失败返回空串（调用方退化为纯抢占）。
 
     不抛异常：排队号是**公平性优化**，不是正确性前提。目录建不出来（权限、
     磁盘满）时宁可回到老行为继续出图，也不能让 ComfyUI 彻底用不了。
     """
     for _ in range(3):
-        fp = _ticket_path()
+        fp = _ticket_path(priority)
         try:
             os.makedirs(queue_dir(), exist_ok=True)
             with open(fp, "x", encoding="utf-8"):
@@ -365,7 +371,7 @@ class Gate:
         return False
 
 
-def hold(label="", timeout=DEFAULT_WAIT):
+def hold(label="", timeout=DEFAULT_WAIT, priority=False):
     """拿锁（阻塞直到拿到或超时）。返回 Gate；超时抛 TimeoutError。
 
     label 只用于日志/排查（`state/comfy.lock/owner.json` 里能看到「谁在跑」）。
@@ -373,6 +379,10 @@ def hold(label="", timeout=DEFAULT_WAIT):
     排队（2026-10-26）：进来先登记一张票，**队首才有资格 mkdir**。票在自己
     拿到锁时移交给 Gate（持锁期间留着），超时/异常路径在 finally 里摘掉——
     不摘的话这张票会一直挡在队首，把后面所有人卡死。
+
+    priority（2026-11-11 漫画台独占通道）：True 时登记优先票，排到所有已
+    在排队的普通票前面（正在跑的那张不打断——打断等于废掉别人正在出的图）。
+    只有站主自己的提交会传，QQ / 群友路径全是默认 False。
     """
     start = time.time()
     warned = False
@@ -385,7 +395,7 @@ def hold(label="", timeout=DEFAULT_WAIT):
                 # 只试一次：登记失败（权限/磁盘）就老老实实退回纯抢占，
                 # 别每轮 POLL 都重试一遍把日志刷满。
                 ticket_tried = True
-                ticket = make_ticket()
+                ticket = make_ticket(priority)
             if ticket:
                 _touch(ticket)              # 排队中也要刷，别被当僵尸
                 now = time.time()

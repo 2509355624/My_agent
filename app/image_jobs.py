@@ -1083,7 +1083,8 @@ def snapshot():
 def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
             intent=None, seed=None, resample_fn=None, landscape=None,
             quiet=False, batch=None, out_dir=None, comfy_down=False,
-            reply_to=None, at_user=None, i2i_src=None, i2i_name=""):
+            reply_to=None, at_user=None, i2i_src=None, i2i_name="",
+            priority=False):
     """把一张图排进**它该去的那条通道**的队列，返回 (job, reason)。
 
     prompt 是模型写的那段原始提示词，只用来**出图后记进账本**（编号 → 提示词，
@@ -1137,7 +1138,10 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
             return None, ("现在排队的人太多了（前面还有 %d 张），这一张先不画。"
                           "别跟对方提这张图，当没画过，接着把话说完。" % depth)
         cur = chan.per_session.get(key, 0)
-        if cur >= chan.max_inflight:
+        if cur >= chan.max_inflight and not priority:
+            # 优先票不受每会话在途上限（2026-11-11 独占通道）：独占的本意就是
+            # 把一整批（最多 10 张）一次推进队列，卡 5 张上限等于没独占。
+            # 全局 max_queue 仍然生效——这是真正防失控的那道闸。
             return None, ("这个会话已经排着 %d 张了，画完这些再说。"
                           "不要跟对方提这张图，当没画过，接着把话说完。" % cur)
         if weight > 1 and _heavy_ahead(chan) >= chan.max_heavy:
@@ -1153,6 +1157,10 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
                   out_dir=out_dir, comfy_down=comfy_down,
                   reply_to=reply_to, at_user=at_user,
                   i2i_src=i2i_src, i2i_name=i2i_name)
+        # 优先票（2026-11-11 漫画台「独占通道」）：worker 拿锁时登记优先票，
+        # 排到所有已排队普通票前面（见 comfy_gate.hold 的 priority 说明）。
+        # 只影响独木桥顺序，不改变任何出图行为；QQ / 群友路径不传，恒 False。
+        job.priority = bool(priority)
         # 随机口令的「被拦静默重抽」钩子（2026-10-05）：resample_fn 是无参
         # 可调用体，被审核拦下时由 worker 调它换一条新提示词，同 job 重跑。
         # 最多重抽 2 次（3 尝试）；普通生图不传，拦截行为与从前完全一致。
@@ -1403,7 +1411,8 @@ def _worker(chan):
         gate = None
         if chan.local:
             try:
-                gate = comfy_gate.hold("%s %s" % (job.skill or "?", job.tag or ""))
+                gate = comfy_gate.hold("%s %s" % (job.skill or "?", job.tag or ""),
+                                       priority=getattr(job, "priority", False))
             except TimeoutError as exc:
                 # 等不到锁 = 对方那条队卡了很久。这一张不跑，老实说一声，
                 # 名额照旧还回去（_finish），别把队列堵死。

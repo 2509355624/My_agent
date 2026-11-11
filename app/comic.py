@@ -921,7 +921,7 @@ def _out_dir_for(task):
 
 
 def _submit(workflow, skill, prompt, seed, task=None, out_dir=None, abort=None,
-            with_entry=False):
+            with_entry=False, priority=False, wait=True):
     """排进全局串行队列并等出图，返回 ComfyUI 那边的输出图（相对路径）。
 
     target=None 是「网页侧」路径：worker 出图后只把 history entry 挂到 job 上，
@@ -941,12 +941,20 @@ def _submit(workflow, skill, prompt, seed, task=None, out_dir=None, abort=None,
     的那一张靠它被 `wait_done` 中途停下（定向 /interrupt），排队中的靠
     `image_jobs.cancel_batch()` 整批摘掉。入队前先看一眼——已经中断了就别再
     往队列里塞，省得 worker 取到又立刻扔掉。
+
+    `priority` / `wait`（2026-11-11 独占通道，只给阶段一批量用）：
+      · priority=True → 这张登记**优先票**，排到所有已排队普通票前面（正在
+        跑的那张不打断）。只有站主「独占通道」开跑会传；单格重跑、加气泡、
+        群友的漫画一律默认 False，排队行为跟从前完全一样。
+      · wait=False → 入队并挂好中断信号后**立刻返回 job 句柄**（不阻塞），
+        供独占批量「先全部推上队列、再按序收图」；调用方随后用 `_collect`
+        收图。默认 wait=True 行为不变（阻塞等出图、返回文件名）。
     """
     if abort is not None and abort.is_set():
         raise Cancelled("用户中断了整批渲染")
     job, reason = image_jobs.enqueue(None, None, workflow, skill=skill,
                                      prompt=prompt, seed=seed, landscape=False,
-                                     batch="comic",
+                                     batch="comic", priority=priority,
                                      out_dir=_out_dir_for(task) if out_dir is None
                                      else out_dir)
     if reason:
@@ -955,14 +963,22 @@ def _submit(workflow, skill, prompt, seed, task=None, out_dir=None, abort=None,
         # 直接挂同一个 Event（不是 copy）：任务一中断，这一张立刻能看见。
         # 挂在 enqueue 之后是没法避免的：job 对象要等入队才有。
         job.cancel = abort
-    entry = job.wait()                       # 失败会抛 job.error
+    if not wait:
+        return job
+    return _collect(job, with_entry=with_entry)
+
+
+def _collect(job, with_entry=False):
+    """等一张已入队的 job 出图并取输出文件名（`_submit(wait=True)` 的后半段）。
+
+    失败会抛 job.error；中断时 worker 会把排队中的 job 摘掉、wait 抛的也是
+    error——调用方看 `abort` 信号自己分辨是不是 Cancelled。
+    """
+    entry = job.wait()
     names = image_jobs.output_images(entry, job=job)
     if not names:
         raise RuntimeError("跑完了但没找到输出图片")
     if with_entry:
-        # 跑图台要 history entry 算「ComfyUI 真跑这张图用了多久」
-        # （image_jobs.exec_seconds 读 status.messages 的时间戳）。
-        # 其余调用方签名不变，仍然只拿文件名。
         return names[0], entry
     return names[0]
 
@@ -1140,6 +1156,24 @@ def _submit_nai(prompt, skill):
     return paths[0]
 
 
+def _scene_wf(task, p, scene_skill, opts=None):
+    """阶段一本机渠道的公共前段：读参数覆盖、开种子、建文生图工作流。
+
+    render_scene（逐格）和独占批量（_run_scene_exclusive）共用这一段——
+    两者的差别只在**排队顺序**（优先票），建工作流的规则必须只有一份。
+    """
+    if opts is None:
+        opts = comic_render_opts.load(task.dir, scene_skill)
+    seed = _new_seed()
+    wf = generate_image.build_t2i_workflow(scene_skill, p.scene, seed)
+    if wf is None:
+        raise RuntimeError("skill %s 没有文生图工作流" % scene_skill)
+    wf = comic_render_opts.apply(wf, opts)
+    log.info("[格 %s] 场景渲染（%s，seed %s，%s）", p.no, scene_skill, seed,
+             comic_render_opts.describe(opts))
+    return seed, wf
+
+
 def render_scene(task, p, scene_skill=SCENE_SKILL, opts=None, abort=None):
     """阶段一：文生图，出这一格的场景图。
 
@@ -1163,15 +1197,7 @@ def render_scene(task, p, scene_skill=SCENE_SKILL, opts=None, abort=None):
         log.info("[格 %s] 场景已落盘：%s", p.no, task._rel(task.raw_path(p)))
         return
 
-    if opts is None:
-        opts = comic_render_opts.load(task.dir, scene_skill)
-    seed = _new_seed()
-    wf = generate_image.build_t2i_workflow(scene_skill, p.scene, seed)
-    if wf is None:
-        raise RuntimeError("skill %s 没有文生图工作流" % scene_skill)
-    wf = comic_render_opts.apply(wf, opts)
-    log.info("[格 %s] 场景渲染（%s，seed %s，%s）", p.no, scene_skill, seed,
-             comic_render_opts.describe(opts))
+    seed, wf = _scene_wf(task, p, scene_skill, opts)
     # `abort` 只在真给了才往下传：老测试 / 老调用方给 `_submit` 塞的替身是固定
     # 签名（`(wf, skill, prompt, seed, task=None)`），无条件带一个 abort 关键字
     # 会把它们一次性弄红，而这些路径本来就与中断无关。
@@ -1190,6 +1216,74 @@ def render_scene(task, p, scene_skill=SCENE_SKILL, opts=None, abort=None):
     _add_timing(p, "scene", exec_s, wall_s)
     log.info("[格 %s] 场景已落盘：%s（执行 %s s / 等待 %s s）", p.no,
              task._rel(task.raw_path(p)), exec_s, wall_s)
+
+
+# 独占通道一次推的优先票上限（2026-11-11 用户拍板「最大限额 10 张」）。
+# 超过的待跑格照样提前入队，但登记普通票、排在自己那批优先票后面。
+EXCLUSIVE_MAX = 10
+
+
+def _run_scene_exclusive(task, todo, scene_skill, scene_opts, ev):
+    """独占通道的阶段一：把所有待跑格**一次性推上队列**，再按序收图。
+
+    与逐格跑（render_scene 循环）的差别只在排队顺序：前 EXCLUSIVE_MAX 张登记
+    **优先票**，压后所有已排队的普通票（QQ / 跑图台 / 群友），这一批连着跑完；
+    **正在跑的那张不打断**——打断等于废掉别人正在出的图，优先从下一张生效。
+    每格的处理（建工作流、落盘、记耗时、单格失败不拖垮整批）与 render_scene
+    完全一致；中断语义也一致（ev 一设，排队中的 job 由 worker 摘掉）。
+
+    NAI 云端渠道不走这条（云端队列管不着优先级）——run() 那边已经分流。
+    """
+    handles = []                       # (panel, seed, job, 入队时刻)
+    prio_left = EXCLUSIVE_MAX
+    log.info("独占通道：待跑 %d 格一次性入队，前 %d 张优先票",
+             len([p for p in todo if p.state == "pending"]), EXCLUSIVE_MAX)
+    for p in todo:
+        if ev.is_set():
+            break
+        if p.state in ("rendered", "done"):
+            continue
+        try:
+            seed, wf = _scene_wf(task, p, scene_skill, scene_opts)
+            prio = prio_left > 0
+            if prio:
+                prio_left -= 1
+            job = _submit(wf, scene_skill, p.scene, seed, task=task,
+                          abort=ev, priority=prio, wait=False)
+            handles.append((p, seed, job, time.monotonic()))
+        except Cancelled:
+            break
+        except Exception as e:                   # 单格失败不拖垮整批
+            p.error = str(e)
+            task.save_state()
+            log.error("[格 %s] 场景入队失败：%s", p.no, e)
+    # 按入队顺序收图。排队时间也算进这一格的 wall（用户看到的「等了多久」
+    # 本来就该含排队，跟逐格跑的口径一致）。
+    for p, seed, job, t0 in handles:
+        try:
+            name, entry = _collect(job, with_entry=True)
+        except Exception as e:
+            if ev.is_set():
+                # 中断不算这一格的错：清掉半截状态、回到待渲染，改完参数
+                # 再点开跑它还在这批里。
+                p.error = None
+                task.save_state()
+                log.info("已中断：格 %s 停在半路，状态回到待渲染", p.no)
+                break
+            p.error = str(e)
+            task.save_state()
+            log.error("[格 %s] 场景渲染失败：%s", p.no, e)
+            continue
+        _download(name, task.raw_path(p))
+        p.seed = seed
+        p.state = "rendered"
+        p.error = None
+        _add_timing(p, "scene",
+                    image_jobs.exec_seconds(entry) if entry else None,
+                    round(time.monotonic() - t0, 2))
+        task.save_state()
+        log.info("[格 %s] 场景已落盘：%s（等待 %s s）", p.no,
+                 task._rel(task.raw_path(p)), round(time.monotonic() - t0, 2))
 
 
 def _upload_source(path):
@@ -1353,7 +1447,8 @@ def _next_task_dir(root="comics", title=""):
 
 
 def run(script_path, only=None, silver_only=False, redo=False,
-        scene_skill=None, split_bubbles=False, scene_opts=None):
+        scene_skill=None, split_bubbles=False, scene_opts=None,
+        exclusive=False):
     meta, panels = parse_script(script_path)
     if not panels:
         raise SystemExit("剧本里没解析到任何格子（每格以 `## 01` 这样的标题开头）")
@@ -1390,27 +1485,34 @@ def run(script_path, only=None, silver_only=False, redo=False,
     ev = new_abort_event(task.dir)
     try:
         # 阶段一：所有格先用同一个渠道渲染完（按模型分批，别逐格换渠道）
-        for p in todo:
-            if ev.is_set():
-                log.info("已中断：停在格 %s，剩下 %d 格没画（已出的图都留着）",
-                         p.no, len([x for x in todo if x.state == "pending"]))
-                break
-            if p.state in ("rendered", "done"):
-                log.info("[格 %s] 场景已就绪，跳过", p.no)
-                continue
-            try:
-                render_scene(task, p, scene_skill, opts=scene_opts, abort=ev)
-            except Cancelled:
-                # 用户按了「中断全部」：这一格没画完，**不算它的错**——清掉
-                # 半截状态、回到待渲染，改完参数点开跑它还在这批里。
-                p.error = None
+        # 独占通道（2026-11-11 站主页勾选）：本机渠道时把待跑格一次性推上
+        # 队列、前 EXCLUSIVE_MAX 张优先票压后所有已排队任务；NAI 云端管不着
+        # 排队顺序，退回逐格跑。加气泡（阶段二）不吃独占——气泡必须 25 步，
+        # 用户本来就要它慢慢来。
+        if exclusive and scene_skill not in image_jobs.NAI_SKILLS:
+            _run_scene_exclusive(task, todo, scene_skill, scene_opts, ev)
+        else:
+            for p in todo:
+                if ev.is_set():
+                    log.info("已中断：停在格 %s，剩下 %d 格没画（已出的图都留着）",
+                             p.no, len([x for x in todo if x.state == "pending"]))
+                    break
+                if p.state in ("rendered", "done"):
+                    log.info("[格 %s] 场景已就绪，跳过", p.no)
+                    continue
+                try:
+                    render_scene(task, p, scene_skill, opts=scene_opts, abort=ev)
+                except Cancelled:
+                    # 用户按了「中断全部」：这一格没画完，**不算它的错**——清掉
+                    # 半截状态、回到待渲染，改完参数点开跑它还在这批里。
+                    p.error = None
+                    task.save_state()
+                    log.info("已中断：格 %s 停在半路，状态回到待渲染", p.no)
+                    break
+                except Exception as e:                   # 单格失败不拖垮整批
+                    p.error = str(e)
+                    log.error("[格 %s] 场景渲染失败：%s", p.no, e)
                 task.save_state()
-                log.info("已中断：格 %s 停在半路，状态回到待渲染", p.no)
-                break
-            except Exception as e:                   # 单格失败不拖垮整批
-                p.error = str(e)
-                log.error("[格 %s] 场景渲染失败：%s", p.no, e)
-            task.save_state()
 
         if silver_only:
             _report(task)

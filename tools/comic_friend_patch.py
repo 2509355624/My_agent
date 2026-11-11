@@ -455,7 +455,9 @@ def main():
             "  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }",
             "  .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }\n"
             "  @media (max-width: 980px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }\n"
-            "  @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }",
+            "  @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }\n"
+            "  /* 独占通道：站主专属，群友页隐藏（后端对带 qq 的请求本来就不认） */\n"
+            "  label:has(> #exclusiveOn) { display: none !important; }",
             "三格一行")
     s = rep(s, "</style>", CSS + "</style>", "补丁 CSS")
 
