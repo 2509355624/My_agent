@@ -109,7 +109,7 @@
     </div>
     <input type="file" id="fileA" accept="image/*">
     <input type="file" id="fileB" accept="image/*">
-    <p class="tip">顺序别反：左边是「衣服／姿势从哪来」，右边是「换到谁身上」。图片会先压缩再上传，原图不离开你手机／电脑。</p>
+    <p class="tip">顺序别反：左边是「衣服／姿势从哪来」，右边是「换到谁身上」。图片只等比缩小尺寸、不降画质（无损 PNG），原图不离开你手机／电脑。</p>
   </div>
 
   <button class="btn" id="go" disabled>开始换装</button>
@@ -160,7 +160,11 @@
     });
   });
 
-  // 选图 → 前端压到长边 960px 再存（隧道只过小图）
+  // 选图 → 前端缩到长边 1536px、无损 PNG 再传。
+  // 2026-11-11 用户拍板：原来 960px+JPEG0.86 把 17MB 原图压到约 100KB，
+  // 衣服花纹/锐利感掉得厉害。Qwen 编码器 resolution=1024 会把参考图重采样到
+  // 约 1MP，1536 刚好喂满、再大收益递减；PNG 无损避免二次有损、体积约 1.5MB
+  // （两张约 3MB，远低于后端 12MB 闸门），上行多花 1~2 秒但生图本身要几十秒。
   function pick(slot){
     $("file" + slot.toUpperCase()).click();
   }
@@ -182,11 +186,12 @@
       fr.onload = function(){
         var im = new Image();
         im.onload = function(){
-          var max = 960, w = im.width, h = im.height;
+          var max = 1536, w = im.width, h = im.height;
           if(w > max || h > max){ var s = max/Math.max(w,h); w=Math.round(w*s); h=Math.round(h*s); }
           var c = document.createElement("canvas"); c.width=w; c.height=h;
           c.getContext("2d").drawImage(im,0,0,w,h);
-          c.toBlob(function(b){ res(b || f); }, "image/jpeg", 0.86);
+          // PNG 无损：不再引入 JPEG 伪影。旧版 JPEG0.86 是画质掉的主因之一。
+          c.toBlob(function(b){ res(b || f); }, "image/png");
         };
         im.onerror = function(){ res(f); };
         im.src = fr.result;
@@ -234,7 +239,7 @@
     busy = true; refresh(); $("result").classList.remove("show");
     say('<span class="spin"></span>正在上传两张图…');
     var fd = new FormData();
-    fd.append("k", K); fd.append("a", files.a.blob, "a.jpg"); fd.append("b", files.b.blob, "b.jpg");
+    fd.append("k", K); fd.append("a", files.a.blob, "a.png"); fd.append("b", files.b.blob, "b.png");
     fetch("/api/outfit/upload", {method:"POST", body:fd})
       .then(function(r){ return r.json(); })
       .then(function(j){

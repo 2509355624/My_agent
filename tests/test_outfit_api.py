@@ -280,5 +280,42 @@ class PageNoticeTest(unittest.TestCase):
         self.assertIn("可以先退出", self.html)
 
 
+class UploadQualityTest(unittest.TestCase):
+    """前端源图压缩参数（2026-11-11）。
+
+    换装是 denoise=1 的图生图，源图细节直接决定「像不像原图」。旧版
+    960px + JPEG0.86 把 17MB 原图压到约 100KB，衣服花纹/锐利感掉得厉害。
+    用户拍板改 1536px + PNG 无损：1536 刚好喂满 Qwen 编码器约 1MP 的
+    重采样档（再大收益递减），PNG 不再引入 JPEG 伪影，体积约 1.5MB/张、
+    两张约 3MB，远低于后端 12MB 闸门。这里钉死参数，防止被改回去。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "web", "outfit.html"), encoding="utf-8") as f:
+            cls.html = f.read()
+
+    def test_shrink_long_side_is_1536(self):
+        # 只看可执行代码行（var max = ...），不许注释里的 1536 蒙混过关
+        m = re.search(r'var\s+max\s*=\s*(\d+)\s*,\s*w\s*=', self.html)
+        self.assertIsNotNone(m, "shrink() 里的长边上限没找到")
+        self.assertEqual(int(m.group(1)), 1536)
+
+    def test_shrink_uses_lossless_png(self):
+        # 精确看 toBlob 调用行：必须 image/png、且不带 JPEG quality 参数。
+        # 不全文搜 0.86——顶部注释为了讲历史会提到旧值。
+        m = re.search(r'c\.toBlob\(function\(b\)\{[^}]*\}\s*,\s*"([^"]+)"([^)]*)\)',
+                      self.html)
+        self.assertIsNotNone(m, "shrink() 里的 toBlob 调用没找到")
+        self.assertEqual(m.group(1), "image/png")
+        self.assertNotIn("0.86", m.group(2))
+
+    def test_upload_stays_under_backend_gate(self):
+        # 后端单张闸门 12MB；1536+PNG 实测约 1.5MB，这里只钉「别私自调大
+        # 到会顶闸门的边长」，真机体积靠本地基准，不在这里跑 PIL。
+        self.assertEqual(outfit_api._UPLOAD_MAX, 12 << 20)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
