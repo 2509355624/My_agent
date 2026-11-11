@@ -678,6 +678,14 @@ class Panel:
         self.state = "pending"      # pending → rendered → done
         self.seed = None
         self.error = None
+        # 耗时（2026-11-11）：两阶段各记两个口径。exec = ComfyUI 真正执行这张
+        # 图的秒数（不含排队，拿不到就 None）；wall = 从提交这一格到落盘的墙上
+        # 秒数（含排队/重试/等重启）。float 累加（split 分开画一格里两次提交），
+        # None = 这一格这个阶段还没跑 / 老任务没记过 / NAI 云端拿不到 exec。
+        self.scene_exec = None
+        self.scene_wall = None
+        self.bubble_exec = None
+        self.bubble_wall = None
 
     def labels(self):
         """旁白行——多条旁白（`标签1:` `标签2:`…）在这里拆开。"""
@@ -800,11 +808,22 @@ class Task:
             # 实测 comics/C20261012-03 格01：state.json 里明明记着
             # ConnectionResetError(10054)，load 完却是 0 格有 error。
             p.error = s.get("error", p.error)
+            # 耗时读回（2026-11-11）：老 state.json 没这几个键 → 保持 None，
+            # 界面显示「—」不倒推（原始数据没记，倒推会骗人）。只认数字，
+            # 避免坏数据把前端 `.toFixed()` 弄炸。
+            for attr in ("scene_exec", "scene_wall", "bubble_exec",
+                         "bubble_wall"):
+                v = s.get(attr)
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    setattr(p, attr, round(float(v), 2))
             # 剧本改了就把旧图作废：场景变了 → 整格重来；只改了气泡/标签 →
             # 场景图还能用，退到「待加气泡」重跑阶段二。两种情况都要清掉旧
             # error——它描述的是上一版剧本的失败，留着会一直在界面上挂着「出错」。
             if s.get("scene") and s["scene"] != p.scene:
                 p.state, p.seed, p.error = "pending", None, None
+                # 底图作废 → 两阶段耗时都清（气泡建立在旧底图上，一起废）
+                p.scene_exec = p.scene_wall = None
+                p.bubble_exec = p.bubble_wall = None
             elif (p.state == "done"
                   and (s.get("bubble", "") != p.bubble
                        or s.get("bubble2", "") != p.bubble2
@@ -812,6 +831,8 @@ class Task:
                        or s.get("speaker", "") != p.speaker
                        or s.get("speaker2", "") != p.speaker2)):
                 p.state, p.error = "rendered", None
+                # 底图还复用，只清气泡那一段的耗时
+                p.bubble_exec = p.bubble_wall = None
 
     def save_state(self):
         os.makedirs(self.raw_dir, exist_ok=True)
@@ -835,6 +856,12 @@ class Task:
                     "error": p.error,
                     "raw": self._rel(self.raw_path(p)),
                     "final": self._rel(self.final_path(p)),
+                    # 耗时（2026-11-11）：None 照写（json 变 null），load 端认
+                    # 老任务缺键 / null 都为「无数据」，界面显示「—」。
+                    "scene_exec": p.scene_exec,
+                    "scene_wall": p.scene_wall,
+                    "bubble_exec": p.bubble_exec,
+                    "bubble_wall": p.bubble_wall,
                 }
                 for p in self.panels
             },
@@ -938,6 +965,62 @@ def _submit(workflow, skill, prompt, seed, task=None, out_dir=None, abort=None,
         # 其余调用方签名不变，仍然只拿文件名。
         return names[0], entry
     return names[0]
+
+
+def _submit_timed(wf, skill, prompt, seed, task=None, abort=None):
+    """跑一张并返回 `(文件名, exec秒, wall秒)`，给漫画台记耗时用（2026-11-11）。
+
+    两个口径分开记，正是用户要的「两个都要」：
+      · exec = ComfyUI 真正执行这张图的秒数（`image_jobs.exec_seconds` 读
+        history 的 execution_start→success，**不含排队/重试/等重启**）。拿不到
+        记 None（老 ComfyUI、NAI 云端、或下面说的测试替身）。
+      · wall = 从进这个函数到拿到输出图的墙上秒数（**含排队、超时重试、等
+        ComfyUI 回来**），是「这一格我等了多久」。
+
+    兼容性（关键）：仓库测试给 `_submit` 塞的是固定签名替身
+    `(wf, skill, prompt, seed, task=None)`、只返回字符串文件名，不认
+    `with_entry` 关键字。这里**先试** `with_entry=True`；一旦因这个关键字
+    TypeError，就退回原调用、exec 记 None。这样线上真 `_submit` 能拿纯执行
+    耗时，测试替身零改动照常跑，两边都不崩。NAI 云端不走 `_submit`（见
+    `render_scene` 的 NAI 分支），那条只在调用处记 wall、exec 留 None。
+    """
+    t0 = time.monotonic()
+    kw = {"task": task}
+    if abort is not None:
+        kw["abort"] = abort
+    try:
+        result = _submit(wf, skill, prompt, seed, with_entry=True, **kw)
+    except TypeError as exc:
+        if "with_entry" not in str(exc):
+            raise                      # 别的 TypeError 是真 bug，别吞
+        result = _submit(wf, skill, prompt, seed, **kw)
+        exec_s = None
+    else:
+        if isinstance(result, tuple) and len(result) == 2:
+            result, exec_s = result[0], image_jobs.exec_seconds(result[1])
+        else:
+            exec_s = None
+    wall_s = round(time.monotonic() - t0, 2)
+    return result, exec_s, wall_s
+
+
+def _add_timing(panel, stage, exec_s, wall_s):
+    """把一次的耗时累加到这一格（split 分开画 = 一格里两次提交，要累加）。"""
+    ex_attr = "%s_exec" % stage
+    wl_attr = "%s_wall" % stage
+    prev_ex, prev_wl = getattr(panel, ex_attr), getattr(panel, wl_attr)
+    first = prev_ex is None and prev_wl is None     # 这一格这一阶段第一次记
+    if first:
+        # 第一次直接落值：exec 这次拿不到（NAI / 替身）就该是 None，别当成
+        # 「累加时缺一次」——那是下面 else 分支才要处理的事。
+        setattr(panel, ex_attr, exec_s)
+    elif exec_s is None or prev_ex is None:
+        # exec：累加途中只要有一次拿不到，就把整段 exec 视为不可用（避免
+        # 「两遍里只记了一遍」被当成整格耗时，比显示「—」更误导）。
+        setattr(panel, ex_attr, None)
+    else:
+        setattr(panel, ex_attr, round(prev_ex + exec_s, 2))
+    setattr(panel, wl_attr, round((prev_wl or 0.0) + wall_s, 2))
 
 
 # 重试**只针对超时**这一种失败。实测它的成因有两类，都不是提示词的问题：
@@ -1068,12 +1151,15 @@ def render_scene(task, p, scene_skill=SCENE_SKILL, opts=None, abort=None):
     """
     if scene_skill in image_jobs.NAI_SKILLS:
         log.info("[格 %s] 场景渲染（%s 云端，无种子）", p.no, scene_skill)
+        t0 = time.monotonic()
         src = _submit_nai(p.scene, scene_skill)
         os.makedirs(task.raw_dir, exist_ok=True)
         shutil.copyfile(src, task.raw_path(p))
         p.seed = None
         p.state = "rendered"
         p.error = None
+        # NAI 是云端 HTTP，没有 ComfyUI history entry → exec 拿不到，只记 wall
+        _add_timing(p, "scene", None, round(time.monotonic() - t0, 2))
         log.info("[格 %s] 场景已落盘：%s", p.no, task._rel(task.raw_path(p)))
         return
 
@@ -1092,13 +1178,18 @@ def render_scene(task, p, scene_skill=SCENE_SKILL, opts=None, abort=None):
     _kw = {"task": task}
     if abort is not None:
         _kw["abort"] = abort
-    name = _submit_retry(lambda: _submit(wf, scene_skill, p.scene, seed, **_kw),
-                         "[格 %s] 场景" % p.no)
+    # _submit_timed 整体作为重试单元：超时白等的那次不计入耗时，只有成功
+    # 返回的这一组 (name, exec, wall) 才累加。_submit_timed 内部已含 wall 打点。
+    name, exec_s, wall_s = _submit_retry(
+        lambda: _submit_timed(wf, scene_skill, p.scene, seed, **_kw),
+        "[格 %s] 场景" % p.no)
     _download(name, task.raw_path(p))
     p.seed = seed
     p.state = "rendered"
     p.error = None
-    log.info("[格 %s] 场景已落盘：%s", p.no, task._rel(task.raw_path(p)))
+    _add_timing(p, "scene", exec_s, wall_s)
+    log.info("[格 %s] 场景已落盘：%s（执行 %s s / 等待 %s s）", p.no,
+             task._rel(task.raw_path(p)), exec_s, wall_s)
 
 
 def _upload_source(path):
@@ -1160,9 +1251,11 @@ def render_bubble(task, p, split=False, prompt=None, abort=None):
     _kw = {"task": task}
     if abort is not None:
         _kw["abort"] = abort
-    name = _submit_retry(lambda: _submit(wf, BUBBLE_SKILL, prompt, seed, **_kw),
-                         "[格 %s] 加气泡" % p.no)
+    name, exec_s, wall_s = _submit_retry(
+        lambda: _submit_timed(wf, BUBBLE_SKILL, prompt, seed, **_kw),
+        "[格 %s] 加气泡" % p.no)
     _download(name, task.final_path(p))
+    _add_timing(p, "bubble", exec_s, wall_s)
     if split and p.two_bubbles():
         # 有旁白条时它占了右上角，第二个气泡让位到右下角（见 BUBBLE_TEMPLATE_2）
         pos = "右下角" if p.labels() else "右上角"
@@ -1171,10 +1264,11 @@ def render_bubble(task, p, split=False, prompt=None, abort=None):
         uploaded2 = _upload_source(task.final_path(p))   # 源图=第一遍的成图
         wf2 = _build_i2i(BUBBLE_SKILL, prompt2, seed2, uploaded2)
         log.info("[格 %s] 加第二个气泡（%s，seed %s）", p.no, BUBBLE_SKILL, seed2)
-        name2 = _submit_retry(
-            lambda: _submit(wf2, BUBBLE_SKILL, prompt2, seed2, **_kw),
+        name2, exec2, wall2 = _submit_retry(
+            lambda: _submit_timed(wf2, BUBBLE_SKILL, prompt2, seed2, **_kw),
             "[格 %s] 加第二个气泡" % p.no)
         _download(name2, task.final_path(p))             # 覆盖成两气泡版
+        _add_timing(p, "bubble", exec2, wall2)           # 一格里累加第二遍
     p.state = "done"
     p.error = None
     log.info("[格 %s] 成品已落盘：%s", p.no, task._rel(task.final_path(p)))

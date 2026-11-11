@@ -57,6 +57,8 @@
   .b-done     { color: var(--success);  border-color: var(--success); }
   .b-error    { color: var(--error);    border-color: var(--error); }
   .slot .seed { margin-left: auto; font-size: 11px; color: var(--text-mute); }
+  .slot .timing { font-size: 11px; color: var(--text-mute); white-space: nowrap; }
+  .slot .head:has(.timing) .seed { margin-left: 0; }   /* 有耗时时别把 seed 顶到最右 */
   .slot .imgs { display: flex; gap: 1px; background: var(--border-soft); }
   .slot .imgs div { flex: 1; min-height: 160px; background: var(--bg-elev);
     display: flex; align-items: center; justify-content: center;
@@ -1503,6 +1505,17 @@ async function resetRenderOpts(scope) {
 
 const STATE_CN = {pending: '排队', rendered: '待加气泡', done: '完成'};
 
+// 耗时显示（2026-11-11）：exec=模型纯执行秒（不含排队）、wall=含排队墙上秒。
+// 老任务 / NAI 云端 / 没跑到那阶段 → null → 显示「—」，绝不倒推。
+function fmtSecs(v) {
+  return (typeof v === 'number' && isFinite(v) && v >= 0) ? v + 's' : '—';
+}
+// 一格里某一阶段的耗时小字：执行 Xs · 等 Ys；两个都没有就返回空串（不占位）。
+function stageTiming(exec, wall) {
+  if (exec == null && wall == null) return '';
+  return '执行 ' + fmtSecs(exec) + ' · 等 ' + fmtSecs(wall);
+}
+
 function renderSlot(p) {
   const badge = p.error ? '<span class="badge b-error">出错</span>'
     : '<span class="badge b-' + p.state + '">' + (STATE_CN[p.state] || p.state) + '</span>';
@@ -1540,8 +1553,17 @@ function renderSlot(p) {
       + '<option value="0">一遍画完</option>'
       + '<option value="1">分开画</option>'
       + '</select>');
+  const tScene = stageTiming(p.scene_exec, p.scene_wall);
+  const tBubble = stageTiming(p.bubble_exec, p.bubble_wall);
+  const timingBits = [];
+  if (tScene) timingBits.push('底图 ' + tScene);
+  if (tBubble) timingBits.push('气泡 ' + tBubble);
+  const timing = timingBits.length
+    ? '<span class="timing" title="执行＝模型纯执行耗时（不含排队）；等＝含排队/重试的墙上时间">'
+      + '⏱ ' + timingBits.join(' ｜ ') + '</span>' : '';
   return '<div class="slot"><div class="head"><span class="no">格 ' + p.no + '</span>'
-    + badge + '<span class="seed">' + (p.seed != null ? 'seed ' + p.seed : '') + '</span></div>'
+    + badge + '<span class="seed">' + (p.seed != null ? 'seed ' + p.seed : '') + '</span>'
+    + timing + '</div>'
     + '<div class="imgs"><div>' + img(p.scene_url, '场景图未生成', 'scene') + '</div>'
     + '<div>' + img(p.final_url, '气泡未加', 'final') + '</div></div>'
     + labelHtml(p)
@@ -1686,7 +1708,9 @@ async function refresh() {
     // `rev` 是图片文件本身的指纹（mtime+大小）：手动跑 Qwen 是**就地覆盖成品**，
     // state/seed/url 全都不变，当初只比这些字段时新图永远刷不出来。
     const sig = [p.state, p.error, p.seed, p.scene_url, p.final_url, p.rev,
-                 p.label, p.bubble, p.bubble2, RUNNING].join('|');
+                 p.label, p.bubble, p.bubble2,
+                 p.scene_exec, p.scene_wall, p.bubble_exec, p.bubble_wall,
+                 RUNNING].join('|');
     const cached = _slots[p.no];
     if (cached && cached.sig === sig) continue;
     const el = document.createElement('div');
@@ -1745,8 +1769,20 @@ async function refresh() {
   }
   const done = d.panels.filter(p => p.state === 'done').length;
   const rendered = d.panels.filter(p => p.state === 'rendered').length;
-  document.getElementById('progress').textContent =
-    TASK ? ('进度：' + done + '/' + d.panels.length + ' 完成 · ' + rendered + ' 待加气泡') : '';
+  let prog = TASK ? ('进度：' + done + '/' + d.panels.length + ' 完成 · ' + rendered + ' 待加气泡') : '';
+  // 两段耗时汇总（2026-11-11）：对「整本」显示的口径。exec 段任一格缺失后端就
+  // 给 null → 本次只显示 wall（并标注格数），不显示会误导的半成品 exec 合计。
+  const tm = d.timing || {};
+  const seg = (label, s) => {
+    if (!s || s.wall == null) return '';
+    const parts = [];
+    if (s.exec != null) parts.push('执行 ' + fmtSecs(s.exec));
+    parts.push('等 ' + fmtSecs(s.wall));
+    return label + ' ' + parts.join(' / ') + '（' + s.n + ' 格）';
+  };
+  const segs = [seg('底图阶段', tm.scene), seg('加气泡阶段', tm.bubble)].filter(Boolean);
+  if (segs.length) prog += ' ｜ ⏱ ' + segs.join(' · ');
+  document.getElementById('progress').textContent = prog;
   document.getElementById('bubbleAllRow').style.display = 'flex';
   document.getElementById('btnBubbleAll').disabled = rendered === 0 || !!d.running;
   const zip = document.getElementById('btnZip');

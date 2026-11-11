@@ -1067,7 +1067,11 @@ def api_comic_status():
                 # rev 给前端做失效判断：图被重写（手动跑 Qwen / 加气泡 / 传新底图）
                 # 后它必变，见 _rev() 的注释。
                 "rev": "%s/%s" % (_rev(task.raw_path(p)), _rev(task.final_path(p))),
-                "error": p.error}
+                "error": p.error,
+                # 耗时（2026-11-11）：两阶段各 exec/wall 两个口径，老任务缺值
+                # 为 None → 前端显示「—」。
+                "scene_exec": p.scene_exec, "scene_wall": p.scene_wall,
+                "bubble_exec": p.bubble_exec, "bubble_wall": p.bubble_wall}
         if os.path.isfile(task.raw_path(p)):
             item["scene_url"] = _img_url(task.task_id, "raw/%s_raw.png" % p.no,
                                          comic_thumb.rel(p.no, "raw"))
@@ -1075,8 +1079,25 @@ def api_comic_status():
             item["final_url"] = _img_url(task.task_id, "final/%s_final.png" % p.no,
                                          comic_thumb.rel(p.no, "final"))
         panels.append(item)
+    # 两段耗时汇总（2026-11-11）：各格求和 = 该阶段总耗时（漫画台是串行逐格
+    # 提交，求和就约等于阶段墙钟，且单格重跑 / 断点续跑 / 单独加气泡都能正确
+    # 反映）。exec 口径：只要有任意一格拿不到纯执行耗时，整段 exec 就标 None
+    # ——宁可显示「—」，也不给一个「只算了一半格」的虚高数字。wall 同理带
+    # 样本数 n，前端能显示「N 格合计」避免误读成整本。
+    def _sum_stage(stage):
+        ex = [getattr(p, stage + "_exec") for p in task.panels
+              if isinstance(getattr(p, stage + "_exec"), (int, float))]
+        wl = [getattr(p, stage + "_wall") for p in task.panels
+              if isinstance(getattr(p, stage + "_wall"), (int, float))]
+        return {"exec": round(sum(ex), 2) if len(ex) == len(task.panels) and ex
+                else None,
+                "wall": round(sum(wl), 2) if wl else None,
+                "n": len(wl)}
+
+    timing = {"scene": _sum_stage("scene"), "bubble": _sum_stage("bubble")}
     qq = _qq()
     return jsonify({"ok": True, "task": task.task_id,
+                    "timing": timing,
                     # 全站共用的串行队列里还有几张在等，群友页顶部显示给用户。
                     # 漫画台本来就是单张串行提交，不会一次占满 10 个名额。
                     "queue": image_jobs.queue_depth(),
