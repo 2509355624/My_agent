@@ -622,6 +622,18 @@ class ShouldReplyTest(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("关键词", reason)
 
+    def test_play_command_is_slash_only(self):
+        """`/玩法` 斜杠即命令，群里不用 @（与 /角色库 同口径）。"""
+        ok, reason = self._reply(text="/玩法")
+        self.assertTrue(ok)
+        self.assertIn("玩法指令", reason)
+        ok, reason = self._reply(text="大大怪 /玩法")
+        self.assertTrue(ok)
+        self.assertIn("玩法指令", reason)
+        # 没斜杠的「玩法」不触发（避免闲聊误撞）
+        ok, _ = self._reply(text="这个玩法不错")
+        self.assertFalse(ok)
+
     def test_group_whitelist_blocks_other_groups(self):
         self._override("QQ_WHITELIST_GROUPS", ["9"])
         ok, _ = self._reply(target_id="8", text="你好", at_me=True)

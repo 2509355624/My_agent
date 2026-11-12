@@ -42,7 +42,7 @@ except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
 from app import (card_bot, confirm_gate, direct_gen, galgame, image_jobs,
-                 lora_bot, solo_bot,
+                 lora_bot, play_bot, solo_bot,
                  image_log,
                  image_out, interject,
                  logsetup,
@@ -748,6 +748,10 @@ def _should_reply(ev, target, target_id, text, at_me, has_image=False,
     # 「/角色库」（2026-11-06）：同样是斜杠即命令，不用 @。
     if lora_bot.ROLELIB_RE.search(text):
         return True, "角色库指令（带斜杠）"
+    # 「/玩法」（2026-11-12）：生图渠道一览，斜杠即命令、不用 @（与 /角色库
+    # 同口径：斜杠 + 两个字已经够独特，不会在闲聊里误撞）。
+    if play_bot.PLAY_RE.search(text):
+        return True, "玩法指令（带斜杠）"
     # 2026-10-31：预设网页 / 自定义预设这两条**不再无条件放行**，得先喊一声
     # 机器人（@ 或「大大怪」）。它们原本「关键词命中就免 @」，结果菜单和回执
     # 把这两个词印在群聊里，谁复述一句就把地址/名单甩出来。判据见 app/trigger.py。
@@ -1638,6 +1642,12 @@ class SessionRunner:
             # 画面需求画出来。斜杠即命令，群里不用 @。
             if lora_bot.ROLELIB_RE.search(own_text or ""):
                 lora_bot.send(self.target, self.target_id)
+                return
+            # `/玩法`（2026-11-12）：合并转发列出所有生图渠道 + 画廊链接，人话
+            # 功效说明。零 LLM、只读常量；同样排在直达管道前面，否则「玩法」
+            # 会被当成画面需求画出来。斜杠即命令，群里不用 @。
+            if play_bot.PLAY_RE.search(own_text or ""):
+                play_bot.send(self.target, self.target_id)
                 return
             card_hit, card_skill, card_body = card_bot.parse(own_text)
             if card_hit:
