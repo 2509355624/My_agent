@@ -514,7 +514,11 @@ function nvRenderCard(s){
   html += '<dt>身体状态</dt><dd>' + nvEsc(p.condition || '完好') + '</dd>';
   html += '<dt>手上拿着</dt><dd>' + nvChips(p.items) + '</dd>';
   html += '<dt>在场的人</dt><dd>' + nvChips(present, '只有你一个') + '</dd>';
-  html += '<dt>遇到过的人</dt><dd>' + nvChips((s.cast || []).filter(function(c){ return !c.present; }).map(function(c){ return c.name; }), '还没遇到过别人') + '</dd>';
+  html += '<dt>遇到过的人</dt><dd>' + nvChips((s.cast || []).filter(function(c){ return c.kind !== '威胁' && !c.present; }).map(function(c){ return c.name; }), '还没遇到过别人') + '</dd>';
+  var threats = (s.cast || []).filter(function(c){ return c.kind === '威胁' && !c.present; }).map(function(c){ return c.name; });
+  if(threats.length){
+    html += '<dt>打过交道的威胁</dt><dd>' + nvChips(threats, '还没有') + '</dd>';
+  }
   html += '<dt>当前路线</dt><dd>' + (route.goal ? nvEsc(route.goal) + '：' + nvEsc((route.nodes || []).join(' → ')) : '暂无') + '</dd>';
   html += '<dt>还没了结的事</dt><dd>' + nvTextList((s.events || []).map(function(e){ return e.trigger; })) + '</dd>';
   html += '<dt>最近做过的事</dt><dd>' + nvTextList(s.log) + '</dd>';

@@ -307,6 +307,8 @@ _DIRECTOR_PROMPT = """你是这部长篇生存小说的编剧，负责把玩家�
 新遇到的人由你编：名字、一句话身份、跟主角的关系、愿不愿意跟着走。
 这一拍新出现的人写进 `cast_new`，已经出场过的人只用 `cast_update`，别重复造人。
 `tier` 写「主体」或「路人甲」。世界以主角为中心，路人甲只负责把剧情推一下。
+`kind` 写「人」或「威胁」：丧尸、怪物、野兽这类不是人的写「威胁」（它只记个名，
+不进「遇到过的人」）；活人一律写「人」，哪怕他是要杀主角的敌人。
 
 【换地方就要交代在场的人】
 主角离开一处、走到另一处，就把「谁跟着走、谁留在原地」在 `cast_update` 里写清楚：
@@ -328,8 +330,8 @@ _DIRECTOR_PROMPT = """你是这部长篇生存小说的编剧，负责把玩家�
  "facts":["这一拍确实发生了什么，按时间顺序一样一条"],
  "items":[{"name":"","qty":"","note":""}],
  "place":"","condition":"",
- "cast_new":[{"name":"","identity":"","relation":"","willing":"","tier":"主体","present":true}],
- "cast_update":[{"name":"","relation":"","willing":"","present":true}],
+ "cast_new":[{"name":"","kind":"人","identity":"","relation":"","willing":"","tier":"主体","present":true}],
+ "cast_update":[{"name":"","kind":"人","relation":"","willing":"","present":true}],
  "events_add":[{"trigger":"","result":"","done":true,"kind":"dynamic"}],
  "events_done":[],
  "discovered":[{"fact":"","kind":"static"}],
@@ -572,8 +574,14 @@ def _state_block(world):
         "遇到过的人（只是名录：路过的、已经分开的、已经死了的都在里面，"
         "不是「主角团」，不在这行的人此刻不在场）：%s" % (
             "、".join(c.get("name") or "" for c in world.get("cast", [])
-                     if not c.get("present")) or "还没遇到过别人"),
+                     if not c.get("present")
+                     and c.get("kind") != "威胁") or "还没遇到过别人"),
     ]
+    threats = [c.get("name") or "" for c in world.get("cast", [])
+               if c.get("kind") == "威胁" and not c.get("present")]
+    if threats:
+        lines.append("打过交道的威胁（不是人，只是记得遇过；此刻不在场）：%s"
+                     % "、".join(threats))
     discovered = world.get("discovered") or []
     # 固定事实只带最近若干条，更早的交给 RAG 检索（控制每轮 token）。
     static = [d.get("fact") for d in discovered
@@ -811,10 +819,13 @@ def _merge_cast(world, item):
     name = _as_text(item.get("name"))
     row = next((c for c in world["cast"] if c.get("name") == name), None)
     if row is None:
-        row = {"name": name, "identity": "", "relation": "",
+        # kind：人是「人」，丧尸/怪物/动物这类是「威胁」。右栏按它分两栏，
+        # 免得「遇到过的人」里蹲着一只丧尸（用户 2026-11-12 真机点名）。
+        row = {"name": name, "kind": "人", "identity": "", "relation": "",
                "willing": "", "tier": "路人甲", "present": True}
         world["cast"].append(row)
-    for key in ("identity", "relation", "willing", "tier", "present", "status"):
+    for key in ("kind", "identity", "relation", "willing", "tier", "present",
+                "status"):
         if key in item:
             row[key] = item[key]
 

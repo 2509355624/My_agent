@@ -1704,5 +1704,45 @@ class PresenceAndEventsTest(NovelBase):
                       "给编剧看全部，但要标清它挂在旧地方")
 
 
+    def test_threats_are_not_listed_as_people(self):
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        self._turn(wid, {"place": "男生宿舍 304",
+                         "cast_new": [{"name": "第四只丧尸", "kind": "威胁",
+                                       "identity": "楼道里多出来的"},
+                                      {"name": "周砚", "kind": "人",
+                                       "identity": "护士"}],
+                         "items": []}, "看看楼道")
+        # 换到别处、两个都没点名 → 都记为不在场，才能看名录
+        self._turn(wid, {"place": "女生宿舍二楼 空宿舍", "items": []}, "翻窗过去")
+        w = novel.get_world(wid)
+        self.assertEqual({c["name"]: c["kind"] for c in w["cast"]},
+                         {"第四只丧尸": "威胁", "周砚": "人"})
+        block = novel._state_block(w)
+        people = [x for x in block.split("\n") if x.startswith("遇到过的人")][0]
+        self.assertIn("周砚", people)
+        self.assertNotIn("第四只丧尸", people,
+                         "丧尸不是「遇到过的人」")
+        threat = [x for x in block.split("\n")
+                  if x.startswith("打过交道的威胁")][0]
+        self.assertIn("第四只丧尸", threat)
+        self.assertNotIn("周砚", threat)
+
+    def test_cast_row_without_kind_counts_as_a_person(self):
+        out, _ = self.open_a_world()
+        w = novel.get_world(out["world_id"])
+        w["cast"].append({"name": "老存档里的路人", "identity": "",
+                          "relation": "", "willing": "", "tier": "路人甲",
+                          "present": False})
+        block = novel._state_block(w)
+        people = [x for x in block.split("\n") if x.startswith("遇到过的人")][0]
+        self.assertIn("老存档里的路人", people, "没标 kind 的一律按人算")
+
+    def test_page_has_a_separate_threat_row(self):
+        p = _read(os.path.join(ROOT, "web", "novel.html"))
+        self.assertIn("c.kind !== '威胁'", p)
+        self.assertIn("打过交道的威胁", p)
+
+
 if __name__ == "__main__":
     unittest.main()
