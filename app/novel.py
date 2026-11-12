@@ -777,7 +777,7 @@ def _table_text(table):
         ("地点（一行一个）", t.get("places")),
         ("开局在哪儿", t.get("start_place")),
         ("开局身上有什么", t.get("start_items")),
-        ("我是谁（身份 · 长处短处）", t.get("identities")),
+        ("身份（一行一个：身份 | 长处短处，不是主角名字）", t.get("identities")),
         ("起手的人（名字 · 是谁 · 和主角什么关系）", t.get("cast")),
         ("这一章要干什么", t.get("goal")),
     ]

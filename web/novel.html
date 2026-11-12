@@ -517,8 +517,8 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
         <input id="nvMkStart" placeholder="旧维修巷二楼，你自己的诊所"></div>
       <div class="nv-field"><label for="nvMkItems">开局身上有什么（一行一个）</label>
         <textarea id="nvMkItems" rows="2" placeholder="一把螺丝刀&#10;半盒止痛药"></textarea></div>
-      <div class="nv-field"><label for="nvMkIds">我是谁（一行一个：身份名 | 长处短处）</label>
-        <textarea id="nvMkIds" rows="2" placeholder="黑医 | 会换脸，手稳，但自己一身的病&#10;跑腿的 | 认识所有人，谁都能搭上话"></textarea></div>
+      <div class="nv-field"><label for="nvMkIds">身份（一行一个：身份 | 长处短处）</label>
+        <textarea id="nvMkIds" rows="2" placeholder="例：黑医 | 会换脸，手稳，但自己一身的病&#10;跑腿的 | 认识所有人，谁都能搭上话&#10;（这里填身份，不是主角名字——名字在上面那一栏）"></textarea></div>
       <div class="nv-field"><label for="nvMkCast">起手的人（一行一个：名字 · 是谁 · 和你的关系）</label>
         <textarea id="nvMkCast" rows="2" placeholder="老周 · 收废品的 · 欠你两次手术钱"></textarea></div>
       <div class="nv-field"><label for="nvMkGoal">这一章要干什么</label>
@@ -590,6 +590,15 @@ function nvEsc(s){
   return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
   });
+}
+/* 「名字 · 身份」。两者填成同一个值时只显示一份——自建玩法那张表的「身份」
+   一栏早先只写「身份名」，有玩家把主角名字填了进去，界面上就成了
+   「主角 A · A」，看着像数据坏了。原值不动，只在这一层不再重复。 */
+function nvWho(p){
+  p = p || {};
+  var n = String(p.name == null ? '' : p.name).trim();
+  var i = String(p.identity == null ? '' : p.identity).trim();
+  return i && i !== n ? nvEsc(n) + ' · ' + nvEsc(i) : nvEsc(n);
 }
 function nvErr(msg, detail){
   if(!msg){ nvEl('nvErr').innerHTML = ''; return; }
@@ -801,7 +810,7 @@ function nvRenderCard(s){
   var death = s.last_death;
   var html = '<dl>';
   html += '<dt>章节 · 本章目标</dt><dd>第 ' + nvEsc(s.chapter) + ' 章 · ' + nvEsc(s.chapter_goal || '暂无') + '</dd>';
-  html += '<dt>主角</dt><dd>' + nvEsc(p.name) + ' · ' + nvEsc(p.identity) + '</dd>';
+  html += '<dt>主角</dt><dd>' + nvWho(p) + '</dd>';
   html += '<dt>身份意味着什么</dt><dd>' + nvEsc(p.identity_desc || '普通人') + '</dd>';
   html += '<dt>现在在哪 · 什么时候</dt><dd>' + nvEsc(p.place || '未知') + (s.clock ? ' · ' + nvEsc(s.clock) : '') + '</dd>';
   html += '<dt>身体状态</dt><dd>' + nvEsc(p.condition || '完好') + '</dd>';
@@ -820,7 +829,8 @@ function nvRenderCard(s){
   if(death){
     html += '<div class="nv-dead" style="margin-top:14px"><b>上一次怎么死的</b><br>' +
             nvEsc(death.cause) + '<br>地点：' + nvEsc(death.at) +
-            ' · 身份：' + nvEsc(death.identity) + '</div>';
+            (death.identity && death.identity !== p.name
+              ? ' · 身份：' + nvEsc(death.identity) : '') + '</div>';
   }
   nvEl('nvCard').innerHTML = html;
 }
@@ -1250,7 +1260,7 @@ function nvRenderBook(b){
 
   var p = b.person || {};
   var html = '<dl>';
-  html += '<dt>主角</dt><dd>' + nvEsc(p.name) + ' · ' + nvEsc(p.identity) + '</dd>';
+  html += '<dt>主角</dt><dd>' + nvWho(p) + '</dd>';
   html += '<dt>身份意味着什么</dt><dd>' + nvEsc(p.identity_desc || '普通人') + '</dd>';
   html += '<dt>现在在哪 · 什么时候</dt><dd>' + nvEsc(p.place || '未知') +
           (b.clock ? ' · ' + nvEsc(b.clock) : '') + '</dd>';

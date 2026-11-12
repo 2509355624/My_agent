@@ -2572,5 +2572,42 @@ class NovelUiFixTest(NovelBase):
         self.assertIn("calls", snap)
         self.assertEqual(snap["tokens"], 0, "刚起来应该是 0")
 
+
+class SameNameAsIdentityTest(NovelBase):
+    """「主角 A · A」：玩家把主角名字写进了身份那一栏。"""
+
+    def _html(self):
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "web", "novel.html")
+        with io.open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_identity_field_says_it_is_not_the_name(self):
+        """根因是表头写着「身份名」，玩家当成「我叫什么」。"""
+        h = self._html()
+        i = h.find('id="nvMkIds"')
+        block = h[h.rfind("<div class=\"nv-field\"", 0, i):i + 1200]
+        self.assertNotIn("身份名", block, "「身份名」会被读成「主角的名字」")
+        self.assertIn("不是主角名字", block)
+        self.assertIn("不是主角名字", novel._table_text({"identities": ""}),
+                      "给 AI 的表格里也要说清身份不是名字")
+
+    def test_the_row_does_not_print_the_same_word_twice(self):
+        """名字和身份相同时只显示一份；两处「主角」行都要走同一个函数。"""
+        h = self._html()
+        self.assertEqual(h.count("function nvWho(p)"), 1)
+        self.assertEqual(h.count("'<dt>主角</dt><dd>' + nvWho(p) + '</dd>'"), 2,
+                         "状态卡与世界书两处都要用 nvWho")
+
+    def test_old_data_is_left_alone(self):
+        """既有存档里 identity 就是填成名字的那个值，不改写、不猜。"""
+        table = {"name": "高中后宫爽文", "identities": "A | 贼帅，最受欢迎的人"}
+        p = novel._preset_from_draft({}, table)
+        self.assertEqual(p["identity_choices"][0]["name"], "A")
+        self.assertEqual(p["identity_choices"][0]["desc"], "贼帅，最受欢迎的人")
+
+
 if __name__ == "__main__":
     unittest.main()
