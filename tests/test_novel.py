@@ -2609,5 +2609,58 @@ class SameNameAsIdentityTest(NovelBase):
         self.assertEqual(p["identity_choices"][0]["desc"], "贼帅，最受欢迎的人")
 
 
+class UndoBusyAndPickTest(NovelBase):
+    """D：回退按钮挂到回复下方、请求不会把页面挂死、身份框不再反复弹。"""
+
+    def _html(self):
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "web", "novel.html")
+        with io.open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_undo_button_hangs_under_the_last_reply(self):
+        """回退原件被 innerHTML 冲掉过一次就再也不会回来（onclick 绑在节点上）。"""
+        h = self._html()
+        self.assertIn('id="nvUndoTools"', h)
+        self.assertIn("function nvPlaceUndo(ending)", h)
+        self.assertIn("function nvStashUndo()", h)
+        body = h[h.find("function nvRenderHistory"):]
+        body = body[:body.find("\nfunction ")]
+        self.assertLess(body.find("nvStashUndo()"), body.find("innerHTML"),
+                        "重画正文前必须先把按钮收回，否则会被冲掉")
+        self.assertIn("nvPlaceUndo(ending)", body, "画完要挂到最后一条回复下方")
+
+    def test_requests_cannot_hang_the_page_forever(self):
+        """不带超时的 fetch 一挂，busy 就永远为真，整页按钮一排灰。"""
+        h = self._html()
+        self.assertIn("AbortController", h)
+        self.assertIn("var NV_POST_TIMEOUT = 600000", h,
+                      "不许比网关的 600 秒更短：更短会在正文已落盘后掐掉连接")
+        self.assertIn("var NV_GET_TIMEOUT = 60000", h)
+        self.assertIn("没有回音", h, "超时要说人话，不能只抛 AbortError")
+        self.assertIn("不会重复算一轮", h, "要告诉用户重发同一句能接上")
+        from app import novel      # noqa: F401  —— 只为确认后端没被牵连
+        self.assertTrue(True)
+
+    def test_pick_popup_only_on_opening_a_book(self):
+        """每次状态刷新都重弹身份框，关掉又冒出来，就是「疯狂弹窗」。"""
+        h = self._html()
+        self.assertIn("function nvApplyState(s, note, pick)", h)
+        self.assertIn("if(pick && (!s.history", h,
+                      "半封样只在真正打开这本书时才弹")
+        self.assertEqual(h.count("nvApplyState(d.state, d.note, true)"), 2,
+                         "开场 / 填表生成世界这两条路要允许弹")
+        self.assertIn("nvApplyState(d.state, '', true)", h, "左栏点开一本书也要允许弹")
+        # 改名 / 回退 / 重开 / 写一轮都不许弹
+        for line in ("nvApplyState(d.state, '已回退上一轮')",
+                     "if(d.state) nvApplyState(d.state, '')",
+                     "nvApplyState(d.state, d.note);"):
+            self.assertIn(line, h)
+        self.assertIn("nvPickLater", h)
+        self.assertIn("'Escape'", h, "身份框要能按 Esc 关掉")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -420,9 +420,12 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
         <button class="btn pri nv-send" id="nvSendBtn">写下去</button>
       </div>
       <!-- 回退按钮挂在**最近一条 AI 回复下方**（2026-11-12 用户要求，
-           照角色扮演的气泡工具条）。这里只留一个隐藏的原件，由 JS 移动。 -->
-      <button class="btn sm" id="nvUndoBtn" type="button" style="display:none"
-              title="只回退最近一轮，而且只给一次">回退这一轮</button>
+           照角色扮演的气泡工具条）。这里只留一份原件，由 nvPlaceUndo() 移动；
+           没有可回退的一轮时收回来藏住，不占正文的位置。 -->
+      <div class="nv-turntools" id="nvUndoTools" style="display:none">
+        <button class="btn sm" id="nvUndoBtn" type="button"
+                title="只回退最近一轮，而且只给一次">回退这一轮</button>
+      </div>
     </div>
 
   </main>
@@ -608,6 +611,8 @@ function nvErr(msg, detail){
   if (/402|余额|Insufficient Balance|Payment Required/i.test(d)) {
     main = '模型额度不足：需要先充值，或在管理页换一个链头（不是等一下就好）';
   }
+  // 等超时不是「失败」：正文可能已经写好，别用「这一轮失败」把人吓回去重开。
+  if (main.indexOf('没有回音') >= 0) main = main.replace(/^[^：]{0,8}：/, '');
   nvEl('nvErr').innerHTML = '<div class="nv-err">' + nvEsc(main) +
     (d ? '<div class="nv-err-sub">' + nvEsc(d) + '</div>' : '') + '</div>';
 }
@@ -653,17 +658,53 @@ function nvBusySet(on, label){
   }
   nvTyping(on, label);
 }
-async function nvGet(path){
-  var r = await fetch(path, {headers:{'Accept':'application/json'}});
-  return await r.json();
+/* 一次请求最多等多久。网关给 /api/novel/* 的 post_timeout 是 600 秒，这里跟它
+   对齐：比网关短，就会在正文其实已经落盘之后把连接掐掉，用户看到「失败」、
+   翻开书却已经写好了。有了上限，链路真断也不会让「正在写…」挂到天荒地老、
+   一排按钮永远灰着（只能刷页面救回来）。
+   超时后把同一句再发一次会复用同一个 turn_token，后端直接把那一轮结果还回来。 */
+var NV_POST_TIMEOUT = 600000;
+var NV_GET_TIMEOUT = 60000;
+function nvTimeout(ms){
+  if(typeof AbortController === 'undefined') return {signal:undefined, clear:function(){}};
+  var ctl = new AbortController();
+  var tid = setTimeout(function(){ try{ ctl.abort(); }catch(e){} }, ms);
+  return {signal: ctl.signal, clear: function(){ clearTimeout(tid); }};
 }
-async function nvPost(path, body){
+/* 只有「我们自己掐的」才算超时；真断网、网关 502 原样抛给调用方。 */
+function nvAbortMessage(e, ms){
+  if(!e || (e.name !== 'AbortError' && e.code !== 20)) return '';
+  var mins = Math.max(1, Math.round(ms / 60000));
+  return '等了 ' + mins + ' 分钟没有回音，连接已经断了。'
+       + '这一轮可能已经写好了——把同一句再发一次会接上，不会重复算一轮。';
+}
+async function nvGet(path, timeout){
+  var ms = timeout || NV_GET_TIMEOUT;
+  var t = nvTimeout(ms);
+  try{
+    var r = await fetch(path, {headers:{'Accept':'application/json'}, signal:t.signal});
+    return await r.json();
+  }catch(e){
+    var m = nvAbortMessage(e, ms);
+    if(m) throw new Error(m);
+    throw e;
+  }finally{ t.clear(); }
+}
+async function nvPost(path, body, timeout){
   body = body || {};
   /* 群友态不带自定义模型：那是站主自用功能，Key 不该过站主服务器。 */
   if(!nvFriendMode) body.custom_models = nvCM;
-  var r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'},
-                             body:JSON.stringify(body)});
-  return await r.json();
+  var ms = timeout || NV_POST_TIMEOUT;
+  var t = nvTimeout(ms);
+  try{
+    var r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'},
+                               body:JSON.stringify(body), signal:t.signal});
+    return await r.json();
+  }catch(e){
+    var m = nvAbortMessage(e, ms);
+    if(m) throw new Error(m);
+    throw e;
+  }finally{ t.clear(); }
 }
 function nvTextList(rows){
   if(!rows || !rows.length) return '<span class="nv-empty">无</span>';
@@ -834,8 +875,30 @@ function nvRenderCard(s){
   }
   nvEl('nvCard').innerHTML = html;
 }
+/* 回退原件只有一份：挂在最近一条 AI 回复下方，和角色扮演的气泡工具条对齐。
+   每次重画正文前必须先把空收回输入区——它这会儿可能正坐在 #nvLog 里，
+   innerHTML 一冲就没了；而 onclick 是加载时绑在那颗节点上的，丢了不会重建，
+   表现就是「回退按钮消失」。 */
+function nvStashUndo(){
+  var tools = nvEl('nvUndoTools'), home = nvEl('nvInputBox');
+  if(!tools) return;
+  if(home && tools.parentNode !== home) home.appendChild(tools);
+  tools.style.display = 'none';
+}
+function nvPlaceUndo(ending){
+  var tools = nvEl('nvUndoTools');
+  if(!tools) return;
+  nvStashUndo();
+  if(!nvCanUndo || ending) return;
+  var paras = nvEl('nvLog').querySelectorAll('.nv-para');
+  var last = paras.length ? paras[paras.length - 1] : null;
+  if(!last) return;
+  last.insertAdjacentElement('afterend', tools);
+  tools.style.display = '';
+}
 function nvRenderHistory(hist, note, ending){
   var box = nvEl('nvLog');
+  nvStashUndo();                     /* 不先收回，下面的 innerHTML 会把它连根冲掉 */
   var html = note ? '<div class="nv-note">' + nvEsc(note) + '</div>' : '';
   (hist || []).forEach(function(row){
     if(row.role === 'user'){
@@ -849,6 +912,7 @@ function nvRenderHistory(hist, note, ending){
             '<br>' + nvEsc(ending.summary) + '<br>人物归零，已经探明的固定事实会留下来。</div>';
   }
   box.innerHTML = html || '<div class="nv-empty">还没有正文</div>';
+  nvPlaceUndo(ending);
   box.scrollTop = box.scrollHeight;
 }
 function nvRenderActions(actions, enabled){
@@ -878,7 +942,7 @@ function nvLockSeal(s){
   nvEl('nvRenameBtn').style.display = nvSealed ? '' : 'none';
   if(nvSealed && s.player) nvEl('nvName').value = s.player.name || '';
 }
-function nvApplyState(s, note){
+function nvApplyState(s, note, pick){
   nvWorldId = s.id;
   nvLastState = s;
   nvEnded = !!s.ending;
@@ -893,8 +957,11 @@ function nvApplyState(s, note){
   nvRenderCard(s);
   nvRenderHistory(s.history, note, s.ending);
   /* 半封样：世界书已经生成好、正文还没写（上次停在选身份这一步）。
-     打开这本时直接把身份摆出来，不然会看到一个没有开场的空本子。 */
-  if((!s.history || !s.history.length) && (s.identity_choices || []).length && s.id){
+     只有**你真的打开这本书**（pick 为真）才把身份摆出来。原来是无条件弹，
+     于是改名 / 回退 / 重开任何一次状态刷新都会把已经关掉的框再推一遍，
+     这就是「疯狂弹窗」：关掉、动一下别的、又冒出来。 */
+  if(pick && (!s.history || !s.history.length) &&
+     (s.identity_choices || []).length && s.id){
     nvMkDraft = {world_id: s.id, play_name: s.play_name,
                  identity_choices: s.identity_choices};
     nvShowPick(nvMkDraft);
@@ -935,7 +1002,7 @@ async function nvOpen(){
     var d = await nvPost('/api/novel/open', payload);
     nvModelUsed(d);
     if(!d.ok){ nvErr(d.error, d.detail); return; }
-    nvApplyState(d.state, d.note);
+    nvApplyState(d.state, d.note, true);
     nvCloseDrawer();
   }catch(e){ nvErr('开场失败：' + e.message); }
   finally{ nvBusySet(false); nvLockSeal(nvSealed ? {id:nvWorldId, player:{name:nvEl('nvName').value}} : null); }
@@ -947,7 +1014,7 @@ async function nvLoadWorld(id){
     var d = await nvGet('/api/novel/state?id=' + encodeURIComponent(id));
     nvModelUsed(d);
     if(!d.ok){ nvErr(d.error, d.detail); return; }
-    nvApplyState(d.state, '');
+    nvApplyState(d.state, '', true);
     nvCloseDrawer();
   }catch(e){ nvErr('读取失败：' + e.message); }
 }
@@ -1190,7 +1257,7 @@ async function nvMakeWorld(){
     nvCloseMake();
     /* 表里没写身份 → 世界书先生成好，挑一个身份才写正文。 */
     if(d.need_identity){ nvMkDraft = d; nvShowPick(d); return; }
-    nvApplyState(d.state, d.note);
+    nvApplyState(d.state, d.note, true);
     nvCloseDrawer();
   }catch(e){ st.className = 'nv-status err'; st.textContent = '生成失败：' + e.message; }
   finally{ go.disabled = false; go.textContent = '生成世界'; }
@@ -1206,6 +1273,11 @@ function nvShowPick(d){
       (c.desc ? '<span>' + nvEsc(c.desc) + '</span>' : '') + '</button>';
   }).join('') : '<div class="nv-empty">AI 没给出身份候选，先放着，回左栏打开这本也能继续。</div>';
   nvEl('nvPickMask').classList.add('on');
+}
+/* 关掉这个框不会丢东西：世界书已经落盘了。点空白、按 Esc、点按钮都走这里。 */
+function nvPickLater(){
+  nvEl('nvPickMask').classList.remove('on');
+  nvInfo('世界书已经存下来了，左栏「已有的世界」里能打开，选身份再写');
 }
 
 async function nvPickIdentity(i){
@@ -1434,11 +1506,15 @@ nvEl('nvPickRows').addEventListener('click', function(ev){
   var btn = ev.target.closest('button[data-i]');
   if(btn) nvPickIdentity(Number(btn.getAttribute('data-i')));
 });
-nvEl('nvPickCancel').onclick = function(){
-  nvEl('nvPickMask').classList.remove('on');
-  /* 世界书已经落盘了，别让玩家以为白点了：左栏能找回来。 */
-  nvInfo('世界书已经存下来了，左栏「已有的世界」里能打开，选身份再写');
-};
+nvEl('nvPickCancel').onclick = nvPickLater;
+nvEl('nvPickMask').addEventListener('click', function(e){
+  if(e.target === nvEl('nvPickMask')) nvPickLater();
+});
+document.addEventListener('keydown', function(e){
+  if(e.key !== 'Escape') return;
+  var m = nvEl('nvPickMask');
+  if(m && m.classList.contains('on')) nvPickLater();
+});
 nvEl('nvBookBtn').onclick = nvOpenBook;
 nvEl('nvBookClose').onclick = function(){ nvEl('nvBookMask').classList.remove('on'); };
 nvEl('nvCmMask').addEventListener('click', function(e){ if(e.target === nvEl('nvCmMask')) nvCmClose(); });
