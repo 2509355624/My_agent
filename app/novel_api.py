@@ -215,19 +215,33 @@ def state():
     return jsonify({"ok": True, "state": novel.state_card(w)})
 
 
+@bp.route("/api/novel/book")
+def book():
+    """世界书全貌，只读。世界一旦生成就不再改设定，这里只是看。"""
+    wid = str(request.args.get("id") or "").strip()
+    w = novel.get_world(wid, _qq())
+    if not w:
+        return jsonify({"ok": False, "error": "没有这个世界"}), 404
+    return jsonify({"ok": True, "book": novel.world_book(w)})
+
+
 @bp.route("/api/novel/open", methods=["POST"])
 def open_world():
-    """开场封样。body: {play, name, identity, world_id?}
+    """开场封样。body: {play, name, identity, world_id?, table?}
 
     带 world_id 时走 novel.open_world 的幂等分支：已经封过样就直接返回，
     不再跑一次 LLM，身份也不会被改掉。
+    `table` 非空 = 自建玩法：玩家填的那张表，AI 现生成一份世界观内嵌进
+    这本世界书，不进 novels/ 目录（那里是全局的，不认 owner）。
     """
     body = request.get_json(silent=True) or {}
     qq = _qq()
+    table = body.get("table")
     try:
         return jsonify(_friend_run(qq, lambda o: novel.open_world(
             body.get("play"), body.get("name"), body.get("identity"),
-            body.get("world_id") or body.get("id"), owner=qq, opts=o)))
+            body.get("world_id") or body.get("id"), owner=qq, opts=o,
+            table=table if isinstance(table, dict) else None)))
     except Exception as e:                              # noqa: BLE001
         return _fail(e)
 

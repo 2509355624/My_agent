@@ -147,6 +147,19 @@ def _opening_doc(play):
         return ""
 
 
+def world_preset(world):
+    """这一本用的是哪份玩法预设。
+
+    自建玩法把整份预设内嵌在世界书里（`world["preset"]`），因为它不属于
+    任何磁盘目录；普通玩法照旧读 `novels/<id>/preset.json`。重开、开场、
+    世界书面板都走这里，才不会出现「自建世界重开后掉回丧尸末日」。
+    """
+    p = (world or {}).get("preset")
+    if isinstance(p, dict) and _as_text(p.get("name")):
+        return p
+    return load_preset((world or {}).get("play"))
+
+
 # ─── 落盘 ────────────────────────────────────────────
 
 def _normalize_world(w):
@@ -171,6 +184,23 @@ def _normalize_world(w):
     # 现在由编剧每拍登记一句「第 3 天 傍晚」，代码只存不判断。
     if not isinstance(w.get("clock"), str):
         w["clock"] = ""
+    # 自建玩法（2026-11-12）：玩家自己写的世界观内嵌在这一本里，不进
+    # novels/ 目录——那里是全局的、不认 owner，写进去等于群友共享。
+    # 老世界没有这份，回退读磁盘预设，行为和以前完全一样。
+    if not isinstance(w.get("preset"), dict):
+        w["preset"] = {}
+    # 「世界书」弹窗要标出哪些地方去过。老存档没有这份事实，只能用它
+    # 现在站的地方 + 挂过事的地方兜底，不猜没记录的脚程。
+    if not isinstance(w.get("visited"), list):
+        v = []
+        here = (w.get("player") or {}).get("place")
+        if isinstance(here, str) and here:
+            v.append(here)
+        for e in w.get("events") or []:
+            at = (e or {}).get("place") if isinstance(e, dict) else ""
+            if isinstance(at, str) and at and at not in v:
+                v.append(at)
+        w["visited"] = v
     return w
 
 
@@ -228,6 +258,8 @@ def list_worlds(owner=""):
         out.append({
             "id": wid,
             "play": w.get("play"),
+            "play_name": w.get("play_name") or w.get("play") or "",
+            "custom": bool(w.get("preset")),
             "name": (w.get("player") or {}).get("name") or "",
             "chapter": w.get("chapter", 1),
             "place": (w.get("player") or {}).get("place") or "",
@@ -262,6 +294,51 @@ _OPEN_PROMPT = """你是这部长篇生存小说的开场编剧，现在要把�
 
 每个地点写清它是什么样、能翻到什么；`kind` 由你标：地图结构和固定物资是
 static，会随每次重开变化的是 dynamic。只输出 JSON。"""
+
+
+# 自建玩法（2026-11-12）：玩家填一张表，AI 把它补成能长期写下去的世界书。
+# 这里用 replace 而不是 format——JSON 里的花括号不用转义，也就不会重演
+# 「{{」被原样喂给模型那种事故。
+_CUSTOM_PROMPT = """你在为一部长篇互动小说搭世界书。玩家自己填了一份设定表：
+填了的是硬事实，一条都不许改、不许换个说法；空着的才由你补。
+
+补的方向只有一个：**能撑住长篇**。地点要够走动，人物要够反复打交道，
+规则要能用来判断「这件事做不做得到」。
+
+【玩家填的表】
+<<TABLE>>
+
+【主角】
+名字：<<NAME>>
+
+硬性要求：
+1. rules 写世界的机制（什么会致命、什么稀缺、什么被禁止），不写剧情。
+   给 3~6 条，每条一句话，将来要能回答「这样干行不行」。
+2. places 给 6~10 个，每个写清它是什么样子、能翻到什么。kind 只有两个值：
+   static 是地图结构和固定物资，dynamic 是会随每次重开变化的东西。
+3. cast_seed 给 3~5 人，每个人有自己的打算和难处，不是围着主角转的工具人。
+   tier 填「主体」（会反复出现）或「路人甲」（一面之缘）。
+   willing 写他此刻愿不愿意帮主角，要具体。
+4. identity_choices 给 3 个身份，每个都有长处也有短处，短处要具体到体力、
+   知识、胆量或人脉——它们决定主角做得到什么、做不到什么。
+   表里点了名的身份就按名单来，你只补 desc。
+5. start 是开场时主角站的地方、身上有什么。起点要能立刻写出画面，
+   别一上来就是绝境。
+6. opening_facts 写开场这一屏必须写到的 3~5 件事，按时间顺序。
+7. actions 给 3 个开场就能做的动作，具体、可执行，不要「观察四周」这种空话。
+
+只输出一个 JSON 对象，不要任何解释：
+{"name":"","tagline":"","brief":"",
+ "rules":["","",""],
+ "identity_choices":[{"name":"","desc":""}],
+ "start":{"place":"","condition":"","items":[""]},
+ "places":[{"name":"","detail":"","search":"","kind":"static"}],
+ "item_pool":[""],
+ "cast_seed":[{"name":"","identity":"","relation":"","willing":"","tier":"主体","present":false}],
+ "chapter_goal":"",
+ "opening_facts":["","",""],
+ "actions":["","",""],
+ "discovered":[{"fact":"","kind":"static"}]}"""
 
 
 _DIRECTOR_PROMPT = """你是这部长篇生存小说的编剧，负责把玩家这一轮写下的剧情落成这一拍真实发生的事。
@@ -445,6 +522,52 @@ def _as_text(v, default=""):
     return default
 
 
+def _lines(v):
+    """一行一条。自建玩法的表格字段在前端就是一个 textarea，玩家怎么断行
+    就怎么算一条，不做顿号/分号拆词——那是替他理解自己写的东西。"""
+    if isinstance(v, list):
+        rows = [str(x) for x in v]
+    else:
+        rows = str(v or "").splitlines()
+    return [x.strip() for x in rows if x.strip()]
+
+
+def _pairs(v):
+    """一行一个；行内用 `|` 分开名字和描述。没写描述的交给 AI 补。"""
+    out = []
+    for line in _lines(v):
+        name, _, desc = line.partition("|")
+        name = name.strip()
+        if name:
+            out.append({"name": name, "desc": desc.strip()})
+    return out
+
+
+def _table_text(table):
+    """把玩家填的表渲染成给 AI 看的一屏事实。没填的明确标出来。"""
+    t = table if isinstance(table, dict) else {}
+    rows = [
+        ("玩法名", t.get("name")),
+        ("世界规则（一行一条）", t.get("rules")),
+        ("地点（一行一个）", t.get("places")),
+        ("开局在哪儿", t.get("start_place")),
+        ("开局身上有什么", t.get("start_items")),
+        ("我是谁（身份 · 长处短处）", t.get("identities")),
+        ("起手的人（名字 · 是谁 · 和主角什么关系）", t.get("cast")),
+        ("这一章要干什么", t.get("goal")),
+    ]
+    out = []
+    for label, v in rows:
+        vals = _lines(v)
+        if not vals:
+            out.append("%s：（没填，你定）" % label)
+        elif len(vals) == 1:
+            out.append("%s：%s" % (label, vals[0]))
+        else:
+            out.append("%s：\n%s" % (label, "\n".join("  - " + x for x in vals)))
+    return "\n".join(out)
+
+
 # ─── 世界书 ──────────────────────────────────────────
 
 # 一轮会改动的状态字段。history / log 是追加的，只记「这一轮追加了几条」，
@@ -499,6 +622,8 @@ def _blank_world(play, name, identity, identity_desc, preset, owner=""):
         "clock": "",
         "undo": None,
         "seed": {},
+        "preset": {},
+        "visited": [start.get("place")] if start.get("place") else [],
         "opening_reply": "",
     }
 
@@ -869,6 +994,11 @@ def _apply(world, d, said):
     if place:
         p["place"] = place
     moved = bool(place) and place != old_place
+    if moved:
+        # 「世界书」弹窗要标出去过哪儿。只追加事实，不猜脚程。
+        seen = world.setdefault("visited", [])
+        if place not in seen:
+            seen.append(place)
     condition = _as_text(d.get("condition"), p.get("condition") or "")
     if condition:
         p["condition"] = condition
@@ -1023,24 +1153,149 @@ def _merge_seed(world, seed):
     _merge_discovered(world, seed.get("discovered"))
 
 
+# ─── 自建玩法 ────────────────────────────────────────
+
+def _preset_from_draft(draft, table):
+    """把开场 AI 交回来的草稿收成一份玩法预设。
+
+    取值优先级只有一条：**玩家在表里填了的，以玩家为准**，AI 只负责补描述。
+    这里不判断世界观合不合理，也不替玩家把空着的地方写成他的意思。
+    """
+    t = table if isinstance(table, dict) else {}
+    d = draft if isinstance(draft, dict) else {}
+    start = d.get("start") if isinstance(d.get("start"), dict) else {}
+    name = _as_text(t.get("name")) or _as_text(d.get("name")) or "自定世界"
+
+    rules = _lines(t.get("rules"))
+    if not rules:
+        rules = [str(x).strip() for x in _as_list(d.get("rules"))
+                 if str(x).strip()]
+
+    choices = []
+    for row in _as_list(d.get("identity_choices")):
+        if isinstance(row, dict) and _as_text(row.get("name")):
+            choices.append({"name": _as_text(row.get("name")),
+                            "desc": _as_text(row.get("desc"))})
+    want = _pairs(t.get("identities"))
+    if want:
+        # 玩家点了名要哪些身份：描述优先用他自己写的，没写才用 AI 补的。
+        # AI 漏掉某个名字也照样收进来，不能让玩家写下的设定凭空少一项。
+        by = {c["name"]: c["desc"] for c in choices}
+        choices = [{"name": x["name"], "desc": x["desc"] or by.get(x["name"], "")}
+                   for x in want]
+
+    goal = (_as_text(t.get("goal")) or _as_text(d.get("chapter_goal"))
+            or _as_text(start.get("chapter_goal")))
+    items = _lines(t.get("start_items")) or _norm_items(start.get("items"))
+    return {
+        "id": "custom",
+        "name": name,
+        "tagline": _as_text(d.get("tagline")),
+        "version": 1,
+        "brief": _as_text(d.get("brief")),
+        "rules": rules,
+        "identity_choices": choices,
+        "start": {
+            "place": _as_text(t.get("start_place")) or _as_text(start.get("place")),
+            "condition": _as_text(start.get("condition")),
+            "items": items,
+            "chapter": 1,
+            "chapter_goal": goal,
+        },
+        "places": _lines(t.get("places")),
+        "opening_director": "",
+        "opening_note": _as_text(d.get("opening_note")),
+        "opening_actions": [str(x).strip() for x in _as_list(d.get("actions"))
+                            if str(x).strip()][:3],
+    }
+
+
+def _custom_open_ai(table, name, opts=None):
+    """表格 → 世界书草稿。一次调用同时交出玩法预设和开局世界。"""
+    msg = (_CUSTOM_PROMPT
+           .replace("<<TABLE>>", _table_text(table))
+           .replace("<<NAME>>", name or "无名的人"))
+    raw = _call([{"role": "user", "content": msg}], OPEN_MAX_TOKENS, 0.8, opts)
+    return _parse_json(raw)
+
+
+def _seal_custom(world, identity, opts=None):
+    """自建玩法的开场正文。身份定下来之后才写，不然正文会写错人。"""
+    preset = world_preset(world) or {}
+    p = world["player"]
+    p["identity"] = identity
+    desc = _identity_desc(preset, identity)
+    if desc:
+        p["identity_desc"] = desc
+    seed = world.get("seed") or {}
+    reply = _writer(world, _as_list(seed.get("opening_facts")), "", opts)
+    world["opening_reply"] = reply
+    world["history"].append({"role": "assistant", "content": reply})
+    _save_world(world)
+    _remember(world, "（开场）", reply)
+    return {"ok": True, "world_id": world["id"], "reply": reply,
+            "note": preset.get("opening_note") or "", "sealed": True,
+            "state": state_card(world)}
+
+
+def _open_custom(table, name, identity, owner="", opts=None):
+    """自建玩法开场。表里写了身份就直接封完；没写就先交出候选。
+
+    没写身份时返回 `need_identity=True` 和三个身份，前端挑一个再调回来
+    （带 world_id），这时才写正文。世界书已经落盘，所以那一步不重跑 AI、
+    也不会因为网关超时白烧一次整本世界观。
+    """
+    name = _as_text(name) or "无名的人"
+    identity = _as_text(identity)
+    draft = _custom_open_ai(table, name, opts)
+    preset = _preset_from_draft(draft, table)
+    choices = preset.get("identity_choices") or []
+    pick = identity or (choices[0]["name"] if choices else "普通人")
+
+    world = _blank_world("custom", name, pick,
+                         _identity_desc(preset, pick), preset, owner)
+    world["preset"] = preset
+    _merge_seed(world, draft)
+    if not identity and len(choices) > 1:
+        # 只写了一个身份就是已经选好了，不用再问一遍；真的空着才给候选。
+        _save_world(world)
+        return {"ok": True, "world_id": world["id"], "need_identity": True,
+                "play_name": preset.get("name") or "",
+                "identity_choices": choices, "state": state_card(world)}
+    return _seal_custom(world, pick, opts)
+
+
 # ─── 对外接口 ────────────────────────────────────────
 
-def open_world(play, name, identity, world_id=None, owner="", opts=None):
+def open_world(play, name, identity, world_id=None, owner="", opts=None,
+               table=None):
     """开场封样：一次开场 AI + 一次写作 AI。返回给前端的完整一屏。
 
     传了 world_id 且世界已存在时直接返回那一本，**不再跑 LLM**——站主怕
     「再点一次开场封样又重新封一遍」，身份一旦选好就固定，除非重开。
     `owner` 由接口层给（站主 ""、群友 QQ），幂等分支也要校验，别让群友
     拿站主那本的 id 直接套到自己的封样上。
+
+    `table` 非空 = 自建玩法（玩家填的那张表），走 `_open_custom`；此时
+    `play` 没有意义，世界书里的玩法是 AI 现生成的那一份。
     """
     if world_id:
         existing = get_world(world_id, owner)
         if existing:
+            # 半封样：世界观已经生成好、正文还没写，这次带着身份回来。
+            # 接着封完，不重跑开场 AI（重跑会换掉玩家刚看过的世界）。
+            if (not _as_text(existing.get("opening_reply"))
+                    and isinstance(existing.get("preset"), dict)
+                    and existing["preset"].get("name") and _as_text(identity)):
+                existing["owner"] = str(owner or "")
+                return _seal_custom(existing, _as_text(identity), opts)
             warm_world(existing)
             return {"ok": True, "world_id": existing["id"],
                     "reply": existing.get("opening_reply") or "",
                     "note": "", "sealed": True,
                     "state": state_card(existing)}
+    if isinstance(table, dict):
+        return _open_custom(table, name, identity, owner=owner, opts=opts)
     preset = load_preset(play)
     if not preset:
         raise ValueError("没有这个玩法")
@@ -1181,7 +1436,7 @@ def restart(world_id, name=None, identity=None, owner=""):
     old = get_world(world_id, owner)
     if not old:
         raise ValueError("没有这个世界")
-    preset = load_preset(old.get("play"))
+    preset = world_preset(old)
     if not preset:
         raise ValueError("玩法预设不见了")
     p = old.get("player") or {}
@@ -1190,6 +1445,11 @@ def restart(world_id, name=None, identity=None, owner=""):
     fresh = _blank_world(old["play"], name, identity,
                          _identity_desc(preset, identity), preset, owner)
     fresh["owner"] = str(old.get("owner") or "")
+    # 自建玩法的世界观内嵌在这本里，重开必须一起带走，否则会掉回磁盘预设。
+    fresh["preset"] = old.get("preset") if isinstance(old.get("preset"), dict) else {}
+    fresh["play_name"] = old.get("play_name") or (preset.get("name") or "")
+    here = (fresh.get("player") or {}).get("place")
+    fresh["visited"] = [here] if here else []
     fresh["id"] = old["id"]                 # 同一个世界，同一条线
     fresh["created"] = old.get("created", fresh["created"])
     fresh["restarts"] = int(old.get("restarts") or 0) + 1  # RAG 换线，旧周目记忆不串
@@ -1256,5 +1516,98 @@ def state_card(world):
         "last_death": deaths[-1] if deaths else None,
         "actions": list(world.get("actions") or []),
         "can_undo": isinstance(world.get("undo"), dict),
+        # 自建玩法的身份选项内嵌在这本里（磁盘玩法前端自己从玩法列表拿）。
+        # 重开面板要用它，半封样（世界好了还没选身份）也要用它。
+        "identity_choices": ((world.get("preset") or {}).get("identity_choices")
+                             if isinstance(world.get("preset"), dict) else []) or [],
         "history": list(world.get("history") or [])[-_HISTORY_MAX:],
+    }
+
+
+def world_book(world):
+    """世界书全貌，**只读**。给「查看世界」弹窗用。
+
+    状态卡只给眼前的东西（在场的人、没了结的事、包里有什么），看不到这本
+    世界到底是怎么设的。这里把规则、地点全表、人物名录摆出来。
+
+    出去过的地方只按 `visited` 这个事实标，不猜；老存档没有这份记录的，
+    就只有它现在站的地方算去过。
+    """
+    p = world.get("player") or {}
+    preset = world_preset(world) or {}
+    went = [str(x) for x in (world.get("visited") or []) if str(x)]
+    here = p.get("place") or ""
+
+    def hit(name, rows):
+        """这条地点和某个记录是不是同一处：同名，或者记录更细。
+
+        玩家站在「旧维修巷二楼」而地点表里写的是「旧维修巷」，这是真机里
+        最常见的情况。这里只做字符串前缀比较（记录以地点名开头就算同一处），
+        不做语义判断，也绝不把没去过的地点算成去过。
+        """
+        return any(r == name or r.startswith(name) for r in rows)
+
+    places = []
+    for row in world.get("places") or []:
+        if isinstance(row, dict):
+            nm = _as_text(row.get("name"))
+            detail = _as_text(row.get("detail"))
+            search = _as_text(row.get("search"))
+        else:
+            nm, detail, search = _as_text(row), "", ""
+        if not nm:
+            continue
+        places.append({"name": nm, "detail": detail, "search": search,
+                       "here": hit(nm, [here]) if here else False,
+                       "visited": hit(nm, went)})
+    cast = []
+    for c in world.get("cast") or []:
+        if not isinstance(c, dict) or not _as_text(c.get("name")):
+            continue
+        cast.append({"name": _as_text(c.get("name")),
+                     "kind": _as_text(c.get("kind"), "人"),
+                     "identity": _as_text(c.get("identity")),
+                     "relation": _as_text(c.get("relation")),
+                     "willing": _as_text(c.get("willing")),
+                     "tier": _as_text(c.get("tier"), "路人甲"),
+                     "present": bool(c.get("present"))})
+    # 设定里的人（cast_seed）和「已经打过交道的人」是两回事，不能混成一份
+    # 名录：开场就列出来会让玩家以为已经见过面，真机里已经因为这个踩过一次
+    # （「遇到过的人里怎么有丧尸」）。这里分开摆，各自标清楚。
+    seeded = []
+    for c in world.get("cast_seed") or []:
+        if not isinstance(c, dict) or not _as_text(c.get("name")):
+            continue
+        seeded.append({"name": _as_text(c.get("name")),
+                       "identity": _as_text(c.get("identity")),
+                       "relation": _as_text(c.get("relation")),
+                       "willing": _as_text(c.get("willing")),
+                       "tier": _as_text(c.get("tier"), "路人甲")})
+    deaths = world.get("death_log") or []
+    return {
+        "id": world.get("id"),
+        "play": world.get("play"),
+        "name": preset.get("name") or world.get("play_name") or "",
+        "tagline": _as_text(preset.get("tagline")),
+        "brief": _as_text(preset.get("brief")),
+        "custom": bool(isinstance(world.get("preset"), dict)
+                       and world["preset"].get("name")),
+        "rules": [str(x) for x in (world.get("rules") or [])],
+        "chapter": world.get("chapter", 1),
+        "chapter_goal": world.get("chapter_goal") or "",
+        "clock": world.get("clock") or "",
+        "turns": world.get("turns", 0),
+        "restarts": world.get("restarts", 0),
+        "person": {"name": p.get("name") or "",
+                   "identity": p.get("identity") or "",
+                   "identity_desc": p.get("identity_desc") or "",
+                   "place": here,
+                   "condition": p.get("condition") or "",
+                   "items": _norm_items(p.get("items") or [])},
+        "places": places,
+        "cast": cast,
+        "cast_seed": seeded,
+        "path": list(world.get("visited") or []),
+        "deaths": [{"cause": d.get("cause") or "", "at": d.get("at") or ""}
+                   for d in deaths[-5:] if isinstance(d, dict)],
     }

@@ -171,7 +171,8 @@ class WorldBookTest(NovelBase):
         self.assertEqual(
             {"id", "play", "play_name", "chapter", "chapter_goal", "clock",
              "ending", "player", "present", "cast", "route", "events", "log",
-             "discovered", "last_death", "actions", "can_undo", "history"},
+             "discovered", "last_death", "actions", "can_undo",
+             "identity_choices", "history"},
             set(s.keys()))
         for banned in ("affection", "score", "tier", "gameday", "outfit",
                        "mood", "intensity", "day", "hp", "depth"):
@@ -518,6 +519,214 @@ class RestartTest(NovelBase):
             novel.restart("nv_nope")
 
 
+# ─── 自建玩法：填一张表，AI 补成世界书 ───────────────────
+
+CUSTOM_DRAFT = {
+    "name": "废土城",
+    "tagline": "义体比人命值钱",
+    "brief": "三家公司把城市切成三块。",
+    "rules": ["义体里装着定位芯片", "下雨天没人出门", "止痛药比子弹贵"],
+    "identity_choices": [
+        {"name": "黑医", "desc": "会换脸，手稳，但自己一身的病"},
+        {"name": "跑腿的", "desc": "认识所有人"},
+        {"name": "清道夫", "desc": "能打，但走不了远路"},
+    ],
+    "start": {"place": "旧维修巷二楼", "condition": "刚做完一台手术",
+              "items": ["螺丝刀"]},
+    "places": [
+        {"name": "旧维修巷", "detail": "你的诊所", "search": "螺丝刀",
+         "kind": "static"},
+        {"name": "中央车站", "detail": "人最多的地方", "search": "什么都有人卖",
+         "kind": "dynamic"},
+    ],
+    "item_pool": ["螺丝刀", "止痛药"],
+    "cast_seed": [
+        {"name": "老周", "identity": "收废品的", "relation": "欠你两次手术钱",
+         "willing": "想赖账", "tier": "主体", "present": False},
+    ],
+    "chapter_goal": "弄到一批干净的止痛药",
+    "opening_facts": ["你在诊所里给人拆线", "门外有人砸门"],
+    "actions": ["开门", "从后窗往下看", "先把灯关了"],
+    "discovered": [{"fact": "中央车站归三号公司管", "kind": "static"}],
+}
+
+# 玩家填的表：规则只写了两条、身份写了两个、地点写了两个。
+CUSTOM_TABLE = {
+    "name": "废土城",
+    "rules": "义体里装着定位芯片\n下雨天没人出门",
+    "places": "旧维修巷\n中央车站",
+    "start_place": "旧维修巷二楼",
+    "start_items": "螺丝刀",
+    "identities": "黑医 | 会换脸，手稳\n跑腿的 | 认识所有人",
+    "cast": "老周 · 收废品的 · 欠你两次手术钱",
+    "goal": "弄到一批干净的止痛药",
+}
+
+
+class CustomPlayTest(NovelBase):
+    def _open_custom(self, table=None, identity="", name="阿七"):
+        """自建玩法开场：一次 LLM 交世界书；给了身份就再写一次正文。"""
+        side = ([json.dumps(CUSTOM_DRAFT, ensure_ascii=False),
+                 OPENING_TEXT] if identity
+                else [json.dumps(CUSTOM_DRAFT, ensure_ascii=False)])
+        with mock.patch.object(novel, "_call", side_effect=side) as m:
+            out = novel.open_world(None, name, identity,
+                                   table=table or CUSTOM_TABLE)
+        return out, m
+
+    # ── 表格的优先级：玩家填了的就是玩家说了算 ──
+    def test_table_lines_win_over_the_model(self):
+        p = novel._preset_from_draft(CUSTOM_DRAFT, CUSTOM_TABLE)
+        self.assertEqual(p["name"], "废土城")
+        # AI 给了三条规则，玩家只写了两条：只收玩家那两条。
+        self.assertEqual(p["rules"], ["义体里装着定位芯片", "下雨天没人出门"])
+        self.assertEqual(p["start"]["place"], "旧维修巷二楼")
+        self.assertEqual(p["start"]["items"], ["螺丝刀"])
+        self.assertEqual(p["start"]["chapter_goal"], "弄到一批干净的止痛药")
+        # 玩家点了名要的两个身份，描述用他自己写的；AI 的第三个不收。
+        self.assertEqual([c["name"] for c in p["identity_choices"]],
+                         ["黑医", "跑腿的"])
+        self.assertIn("会换脸", p["identity_choices"][0]["desc"])
+        self.assertEqual(p["identity_choices"][1]["desc"], "认识所有人")
+
+    def test_blank_field_is_filled_by_the_model(self):
+        table = dict(CUSTOM_TABLE)
+        table["rules"] = ""
+        table["identities"] = ""
+        p = novel._preset_from_draft(CUSTOM_DRAFT, table)
+        self.assertEqual(len(p["rules"]), 3, "留空要由 AI 补")
+        self.assertEqual(len(p["identity_choices"]), 3)
+        text = novel._table_text(table)
+        self.assertIn("（没填，你定）", text, "没填的要在提示词里标出来")
+
+    def test_promise_that_played_fields_are_not_rewritten(self):
+        self.assertIn("填了的是硬事实", novel._CUSTOM_PROMPT)
+        self.assertIn("一条都不许改", novel._CUSTOM_PROMPT)
+        self.assertNotIn("{{", novel._CUSTOM_PROMPT,
+                         "这份提示词用 replace 不 format，花括号不该转义")
+
+    # ── 内嵌：不进 novels/，不改全局玩法列表 ──
+    def test_custom_world_embeds_preset_and_keeps_novels_clean(self):
+        before = len(novel.list_plays())
+        out, _ = self._open_custom(identity="黑医")
+        w = novel.get_world(out["world_id"])
+        self.assertEqual(w["preset"]["name"], "废土城")
+        self.assertEqual(w["play"], "custom")
+        self.assertEqual(w["play_name"], "废土城")
+        self.assertEqual(len(novel.list_plays()), before,
+                         "自建玩法绝不能混进全局玩法列表")
+        custom_dir = os.path.join(novel.NOVELS_DIR, "custom")
+        self.assertFalse(os.path.isdir(custom_dir),
+                         "自建玩法不落 novels/ 目录（那里不认 owner）")
+        self.assertEqual(out["reply"], OPENING_TEXT)
+        self.assertEqual(w["player"]["identity"], "黑医")
+
+    def test_open_returns_only_candidates_when_identity_is_blank(self):
+        out, m = self._open_custom()
+        self.assertTrue(out["need_identity"])
+        self.assertEqual(out["play_name"], "废土城")
+        self.assertEqual(len(out["identity_choices"]), 2)
+        self.assertEqual(m.call_count, 1, "身份没定之前不该写正文")
+        w = novel.get_world(out["world_id"])
+        self.assertIsNotNone(w, "世界书要先落盘，别让一轮模型白烧")
+        self.assertEqual(w["opening_reply"], "")
+        self.assertEqual(w["history"], [])
+
+    def test_one_identity_means_no_question_at_all(self):
+        """只写了一个身份，就是已经选好了：一次点完直接出正文。"""
+        table = dict(CUSTOM_TABLE)
+        table["identities"] = "黑医 | 会换脸，手稳"
+        with mock.patch.object(
+                novel, "_call",
+                side_effect=[json.dumps(CUSTOM_DRAFT, ensure_ascii=False),
+                             OPENING_TEXT]) as m:
+            out = novel.open_world(None, "阿七", "", table=table)
+        self.assertNotIn("need_identity", out)
+        self.assertEqual(out["reply"], OPENING_TEXT)
+        self.assertEqual(m.call_count, 2)
+        self.assertEqual(
+            novel.get_world(out["world_id"])["player"]["identity"], "黑医")
+
+    def test_picking_identity_seals_without_regenerating_the_world(self):
+        out, _ = self._open_custom()
+        with mock.patch.object(novel, "_call",
+                               side_effect=[OPENING_TEXT]) as m:
+            res = novel.open_world(None, None, "跑腿的",
+                                   world_id=out["world_id"])
+        self.assertEqual(m.call_count, 1,
+                         "选身份只该再跑写作，不该重跑整本世界观")
+        self.assertEqual(res["reply"], OPENING_TEXT)
+        w = novel.get_world(out["world_id"])
+        self.assertEqual(w["player"]["identity"], "跑腿的")
+        self.assertIn("认识所有人", w["player"]["identity_desc"])
+        self.assertEqual(len(w["history"]), 1)
+
+    def test_sealed_world_is_idempotent(self):
+        out, _ = self._open_custom(identity="黑医")
+        with mock.patch.object(novel, "_call") as m:
+            again = novel.open_world(None, None, "清道夫",
+                                     world_id=out["world_id"])
+        self.assertEqual(m.call_count, 0, "封过样的世界不能再跑模型")
+        self.assertEqual(again["reply"], OPENING_TEXT)
+        self.assertEqual(novel.get_world(out["world_id"])["player"]["identity"],
+                         "黑医")
+
+    # ── 世界书只读视图 ──
+    def test_world_book_lists_rules_places_and_people(self):
+        out, _ = self._open_custom(identity="黑医")
+        w = novel.get_world(out["world_id"])
+        novel._apply(w, {"place": "中央车站"}, "")
+        novel._save_world(w)
+        b = novel.world_book(novel.get_world(out["world_id"]))
+        self.assertEqual(b["name"], "废土城")
+        self.assertTrue(b["custom"])
+        self.assertEqual(len(b["rules"]), 2)
+        names = [p["name"] for p in b["places"]]
+        self.assertIn("旧维修巷", names)
+        self.assertIn("中央车站", names)
+        here = [p for p in b["places"] if p["here"]]
+        self.assertEqual([p["name"] for p in here], ["中央车站"])
+        seen = [p["name"] for p in b["places"] if p["visited"]]
+        self.assertIn("旧维修巷", seen, "走过的地方要留在世界书里")
+        self.assertEqual(b["person"]["place"], "中央车站")
+        # 设定里的人还没打过交道，只出现在「设定里的人」那一栏，不能混进
+        # 「遇到过的人」（这条在真机上踩过：遇到过的人里蹲着一只丧尸）。
+        self.assertEqual(b["cast"], [])
+        self.assertIn("老周", [c["name"] for c in b["cast_seed"]])
+
+    def test_world_book_has_no_write_side_effect(self):
+        out, _ = self._open_custom(identity="黑医")
+        before = json.dumps(novel.get_world(out["world_id"]),
+                            ensure_ascii=False, sort_keys=True)
+        novel.world_book(novel.get_world(out["world_id"]))
+        after = json.dumps(novel.get_world(out["world_id"]),
+                           ensure_ascii=False, sort_keys=True)
+        self.assertEqual(before, after)
+
+    def test_restart_keeps_the_embedded_preset(self):
+        out, _ = self._open_custom(identity="黑医")
+        with mock.patch.object(novel, "_call"):
+            novel.restart(out["world_id"], "阿八", "跑腿的")
+        w = novel.get_world(out["world_id"])
+        self.assertEqual(w["preset"]["name"], "废土城",
+                         "重开不能掉回磁盘预设")
+        self.assertEqual(w["play_name"], "废土城")
+        self.assertEqual(w["player"]["identity"], "跑腿的")
+        self.assertEqual(w["restarts"], 1)
+
+    def test_custom_world_belongs_to_its_owner_only(self):
+        out, _ = self._open_custom(identity="黑医")
+        self.assertIsNotNone(novel.get_world(out["world_id"], ""))
+        self.assertIsNone(novel.get_world(out["world_id"], "99990001"))
+        self.assertEqual(novel.list_worlds("99990001"), [])
+
+    def test_state_card_carries_the_choices_for_the_restart_panel(self):
+        out, _ = self._open_custom()
+        s = novel.state_card(novel.get_world(out["world_id"]))
+        self.assertEqual([c["name"] for c in s["identity_choices"]],
+                         ["黑医", "跑腿的"])
+
+
 # ─── 复用 1v1 内核：完整上下文 / 状态直达 / RAG ───────────
 
 class KernelReuseTest(NovelBase):
@@ -714,15 +923,57 @@ class ApiTest(NovelBase):
         self.assertIn("upstream down", r.get_json()["detail"],
                       "具体原因必须回给前端，红条才不会只说一句空话")
 
-    def test_all_six_routes_are_registered(self):
+    def test_all_routes_are_registered(self):
         app = flask.Flask(__name__)
         app.register_blueprint(novel_api.bp)
         paths = {r.rule for r in app.url_map.iter_rules()}
         expected = {
             "/api/novel/plays", "/api/novel/worlds", "/api/novel/state",
-            "/api/novel/open", "/api/novel/turn", "/api/novel/restart",
+            "/api/novel/book", "/api/novel/open", "/api/novel/turn",
+            "/api/novel/restart",
         }
         self.assertTrue(expected <= paths, "少注册了：%r" % (expected - paths))
+
+    def test_open_route_accepts_a_self_made_table(self):
+        with mock.patch.object(
+                novel, "_call",
+                side_effect=[json.dumps(CUSTOM_DRAFT, ensure_ascii=False),
+                             OPENING_TEXT]):
+            r = self.c.post("/api/novel/open", json={
+                "table": CUSTOM_TABLE, "name": "阿七", "identity": "黑医"})
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["reply"], OPENING_TEXT)
+        self.assertEqual(d["state"]["play_name"], "废土城")
+        self.assertEqual(d["state"]["player"]["identity"], "黑医")
+
+    def test_book_route_is_read_only(self):
+        with mock.patch.object(
+                novel, "_call",
+                side_effect=[json.dumps(CUSTOM_DRAFT, ensure_ascii=False),
+                             OPENING_TEXT]):
+            d = self.c.post("/api/novel/open", json={
+                "table": CUSTOM_TABLE, "name": "阿七",
+                "identity": "黑医"}).get_json()
+        r = self.c.get("/api/novel/book?id=" + d["world_id"])
+        self.assertEqual(r.status_code, 200)
+        book = r.get_json()["book"]
+        self.assertEqual(book["name"], "废土城")
+        self.assertEqual(len(book["rules"]), 2)
+        self.assertEqual(self.c.get("/api/novel/book?id=nv_nope").status_code,
+                         404)
+
+    def test_open_with_table_and_no_identity_asks_one_question(self):
+        with mock.patch.object(
+                novel, "_call",
+                side_effect=[json.dumps(CUSTOM_DRAFT, ensure_ascii=False)]):
+            d = self.c.post("/api/novel/open", json={
+                "table": CUSTOM_TABLE, "name": "阿七"}).get_json()
+        self.assertTrue(d["ok"])
+        self.assertTrue(d["need_identity"])
+        self.assertEqual([c["name"] for c in d["identity_choices"]],
+                         ["黑医", "跑腿的"])
 
     def test_fail_helper_keeps_three_branches_distinct(self):
         app = flask.Flask(__name__)
@@ -854,8 +1105,20 @@ class WiringTest(unittest.TestCase):
         self.assertIn("模型额度不足", self.html)
         self.assertIn("不是等一下就好", self.html)
         self.assertIn("Insufficient Balance", self.html)
-        self.assertEqual(self.html.count("nvErr(d.error, d.detail)"), 5,
-                         "五个接口失败分支（开场/一轮/重开/改名/回退）都要带 detail")
+        # 开场 / 选完身份再封样 / 一轮 / 重开 / 改名 / 回退
+        self.assertEqual(self.html.count("nvErr(d.error, d.detail)"), 6,
+                         "六个接口失败分支都要带 detail")
+
+    def test_page_has_the_self_made_play_and_world_book(self):
+        """自建玩法（填表生成）和世界书查看，两块入口都不能悄悄没了。"""
+        for token in ('id="nvMakeBtn"', 'id="nvMakeMask"', 'id="nvMkGo"',
+                      'id="nvMkRules"', 'id="nvMkIds"', 'id="nvPickMask"',
+                      'id="nvBookBtn"', 'id="nvBookMask"'):
+            self.assertIn(token, self.html, "页面缺少：%s" % token)
+        self.assertIn("/api/novel/book", self.html)
+        self.assertIn("table: table", self.html, "自建玩法的表格没随请求发出去")
+        self.assertIn("need_identity", self.html, "AI 给身份候选时要能接住")
+        self.assertIn("你自己写的玩法", self.html)
 
     def test_director_prompt_forbids_rejection_and_free_items(self):
         p = novel._DIRECTOR_PROMPT

@@ -92,10 +92,11 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
 .nv-field { margin-bottom: 8px; }
 .nv-field label { display: block; font-size: 11px; color: var(--text-dim);
   margin-bottom: 4px; }
-.nv-field input, .nv-field select { width: 100%; padding: 7px 9px;
+.nv-field input, .nv-field select, .nv-field textarea { width: 100%; padding: 7px 9px;
   border: 1px solid var(--border-soft); border-radius: var(--rs);
   background: var(--bg-input); color: var(--text); outline: none; font: inherit; }
-.nv-field input:focus, .nv-field select:focus { border-color: var(--accent); }
+.nv-field textarea { min-height: 52px; resize: vertical; line-height: 1.6; }
+.nv-field input:focus, .nv-field select:focus, .nv-field textarea:focus { border-color: var(--accent); }
 .nv-namerow { display: flex; gap: 6px; align-items: center; }
 .nv-namerow input { flex: 1; min-width: 0; }
 .nv-empty { font-size: 12px; color: var(--text-mute); line-height: 1.7; }
@@ -199,6 +200,22 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
   background: rgba(0,0,0,.6); }
 .nv-drawer-mask.on { display: block; }
 
+/* 自建玩法：身份候选（整行可点，不用选中再确认）。 */
+.nv-pickrow { display: block; width: 100%; text-align: left; margin-bottom: 8px;
+  white-space: normal; padding: 10px 12px; }
+.nv-pickrow b { display: block; font-size: 13px; font-weight: 500; margin-bottom: 3px; }
+.nv-pickrow span { display: block; font-size: 12px; color: var(--text-mute);
+  line-height: 1.6; overflow-wrap: anywhere; }
+/* 世界书弹窗：地点与人物名录。去过/没去过靠一行小字标，不靠颜色猜。 */
+.nv-book ul { margin: 4px 0 0; padding-left: 16px; font-size: 12.5px;
+  line-height: 1.85; overflow-wrap: anywhere; }
+.nv-book li { margin-bottom: 2px; }
+.nv-book li em { font-style: normal; font-size: 11px; color: var(--text-mute);
+  margin-left: 6px; }
+.nv-book li.here { color: var(--accent); }
+.nv-book li.seen { color: var(--text); }
+.nv-book li.todo { color: var(--text-mute); }
+
 /* ─── 手机端：跟角色扮演一样用左右抽屉，不再把三栏压成一条长文档 ─── */
 @media (max-width:1000px) {
   .app { grid-template-columns: 1fr; }
@@ -247,6 +264,7 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
       <div class="nv-sec">
         <h3>玩法</h3>
         <div id="nvPlayList"><div class="nv-empty">正在读玩法…</div></div>
+        <button class="btn sm" id="nvMakeBtn" type="button" style="width:100%;margin-top:2px">＋ 自己写一个玩法</button>
       </div>
       <div class="nv-sec" id="nvNewBox">
         <h3>开一本新的</h3>
@@ -272,6 +290,7 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
       <span class="nm">丧尸末日</span>
       <span class="sp"></span>
       <span class="nv-sub">一个世界一条线 · 你是主角 · 世界书会记住已经探明的事</span>
+      <button class="btn sm" id="nvBookBtn" type="button">世界书</button>
       <button class="btn sm nv-stats" id="nvStatsBtn" type="button">状态</button>
       <a class="btn sm" href="/persona" title="返回角色扮演">← 角色扮演</a>
     </div>
@@ -345,6 +364,64 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
     </div>
   </div>
 
+  <!-- 自建玩法：填一张表，AI 补成能写下去的世界书。填了的不会被改。 -->
+  <div class="nv-mask" id="nvMakeMask">
+    <div class="nv-box">
+      <h3>自己写一个玩法</h3>
+      <div class="nv-hint">
+        只填你想填的，<b>空着的交给 AI</b>；填了的它不许改。
+        点「生成世界」后会把这份设定铺成世界书，直接写开场，大概半分钟。
+      </div>
+      <div class="nv-field"><label for="nvMkName">玩法名（必填）</label>
+        <input id="nvMkName" maxlength="30" placeholder="废土上的赛博城市"></div>
+      <div class="nv-field"><label for="nvMkHero">主角名字（留空就叫「无名的人」）</label>
+        <input id="nvMkHero" maxlength="24" placeholder="你在这个世界叫什么"></div>
+      <div class="nv-field"><label for="nvMkRules">世界规则（一行一条，留空 AI 补 3~6 条）</label>
+        <textarea id="nvMkRules" rows="3" placeholder="义体里都装着定位芯片，跑不掉&#10;下雨天没人愿意出门"></textarea></div>
+      <div class="nv-field"><label for="nvMkPlaces">地点（一行一个，留空 AI 补 6~10 个）</label>
+        <textarea id="nvMkPlaces" rows="3" placeholder="中央车站&#10;旧维修巷&#10;三号公司的诊所"></textarea></div>
+      <div class="nv-field"><label for="nvMkStart">开局在哪儿</label>
+        <input id="nvMkStart" placeholder="旧维修巷二楼，你自己的诊所"></div>
+      <div class="nv-field"><label for="nvMkItems">开局身上有什么（一行一个）</label>
+        <textarea id="nvMkItems" rows="2" placeholder="一把螺丝刀&#10;半盒止痛药"></textarea></div>
+      <div class="nv-field"><label for="nvMkIds">我是谁（一行一个：身份名 | 长处短处）</label>
+        <textarea id="nvMkIds" rows="2" placeholder="黑医 | 会换脸，手稳，但自己一身的病&#10;跑腿的 | 认识所有人，谁都能搭上话"></textarea></div>
+      <div class="nv-field"><label for="nvMkCast">起手的人（一行一个：名字 · 是谁 · 和你的关系）</label>
+        <textarea id="nvMkCast" rows="2" placeholder="老周 · 收废品的 · 欠你两次手术钱"></textarea></div>
+      <div class="nv-field"><label for="nvMkGoal">这一章要干什么</label>
+        <input id="nvMkGoal" placeholder="弄到一批干净的止痛药"></div>
+      <div class="nv-status" id="nvMkStatus"></div>
+      <div class="nv-wbtns">
+        <button class="btn" id="nvMkCancel" type="button">取消</button>
+        <button class="btn pri" id="nvMkGo" type="button">生成世界</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 世界生成好了，还没定你是哪一个：身份决定做得到什么。 -->
+  <div class="nv-mask" id="nvPickMask">
+    <div class="nv-box">
+      <h3>世界已经生成，你是哪一个</h3>
+      <div class="nv-hint" id="nvPickNote"></div>
+      <div id="nvPickRows"></div>
+      <div class="nv-wbtns">
+        <button class="btn" id="nvPickCancel" type="button">先放着，待会儿再写</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 世界书全貌，只读。世界一旦生成就不再改设定。 -->
+  <div class="nv-mask" id="nvBookMask">
+    <div class="nv-box nv-book">
+      <h3 id="nvBookTitle">世界书</h3>
+      <div class="nv-hint" id="nvBookSub"></div>
+      <div id="nvBookBody"></div>
+      <div class="nv-wbtns">
+        <button class="btn" id="nvBookClose" type="button">关闭</button>
+      </div>
+    </div>
+  </div>
+
 </div>
 <script>
 var nvWorldId = '';
@@ -360,6 +437,11 @@ var CM_KEY = 'persona_custom_models';
 var nvFriendMode = false;
 var nvTurnToken = '';
 var nvTurnText = '';
+/* 最近一次拿到的完整状态：世界书的身份候选、重开面板都从这里取，
+   不再只认左栏那个磁盘玩法（自建玩法的身份选项是 AI 现生成的）。 */
+var nvLastState = null;
+/* 自建玩法生成好、还没选身份的那一本。选完才写开场正文。 */
+var nvMkDraft = null;
 /* 能不能回退：只认真实状态里的 can_undo，页面不自己记「退过一次」——
    那样刷新一下就绕过去了。 */
 var nvCanUndo = false;
@@ -491,6 +573,7 @@ function nvRenderWorlds(worlds){
   if(!worlds || !worlds.length){ box.innerHTML = '<div class="nv-empty">还没有开过</div>'; return; }
   box.innerHTML = worlds.map(function(w){
     return '<div class="nv-world' + (w.id === nvWorldId ? ' on' : '') + '" data-id="' + nvEsc(w.id) + '">' +
+           (w.custom && w.play_name ? nvEsc(w.play_name) + ' · ' : '') +
            nvEsc(w.name || '无名的人') + ' · 第 ' + nvEsc(w.chapter) + ' 章 · ' + nvEsc(w.place) +
            (w.ending ? ' · 已结束' : '') + '</div>';
   }).join('');
@@ -569,13 +652,28 @@ function nvLockSeal(s){
 }
 function nvApplyState(s, note){
   nvWorldId = s.id;
+  nvLastState = s;
   nvEnded = !!s.ending;
   nvCanUndo = !!s.can_undo;
   nvRenderCard(s);
   nvRenderHistory(s.history, note, s.ending);
+  /* 半封样：世界书已经生成好、正文还没写（上次停在选身份这一步）。
+     打开这本时直接把身份摆出来，不然会看到一个没有开场的空本子。 */
+  if((!s.history || !s.history.length) && (s.identity_choices || []).length && s.id){
+    nvMkDraft = {world_id: s.id, play_name: s.play_name,
+                 identity_choices: s.identity_choices};
+    nvShowPick(nvMkDraft);
+  }
   nvRenderActions(s.actions, !s.ending && !nvBusy);
   nvEl('nvInputBox').style.display = 'flex';
   nvEl('nvText').disabled = !!s.ending;
+  /* 自建玩法的身份不在左栏那个下拉里（那是磁盘玩法的），封样后左栏会空着。
+     这里把这一本自己的身份填回去，虽然已经锁住，但不该显示成没选。 */
+  if((s.identity_choices || []).length){
+    nvEl('nvIdentity').innerHTML =
+      nvIdentityOptions({identity_choices: s.identity_choices});
+    nvEl('nvIdentity').value = (s.player || {}).identity || '';
+  }
   nvLockSeal(s);
   nvTyping(nvBusy);
   nvUndoState();
@@ -672,12 +770,16 @@ async function nvQuota(){
       : (d.error || '查询失败');
   }catch(e){ nvEl('nvQuotaText').textContent = '查询失败：' + e.message; }
 }
+function nvWorldChoices(){
+  var rows = (nvLastState && nvLastState.identity_choices) || [];
+  return rows.length ? rows : (nvCurrentPlay().identity_choices || []);
+}
 function nvOpenWipe(){
   if(nvBusy || !nvWorldId) return;
-  var s = {player:{name:nvEl('nvName').value, identity:nvEl('nvIdentity').value}};
-  nvEl('nvWipeName').value = s.player.name || '';
-  nvEl('nvWipeIdentity').innerHTML = nvIdentityOptions(nvCurrentPlay());
-  if(s.player.identity) nvEl('nvWipeIdentity').value = s.player.identity;
+  var cur = (nvLastState && nvLastState.player) || {};
+  nvEl('nvWipeName').value = cur.name || nvEl('nvName').value || '';
+  nvEl('nvWipeIdentity').innerHTML = nvIdentityOptions({identity_choices: nvWorldChoices()});
+  if(cur.identity) nvEl('nvWipeIdentity').value = cur.identity;
   nvEl('nvWipeCode').textContent = nvConfirm;
   nvEl('nvWipeInput').value = '';
   nvEl('nvWipeOk').disabled = true;
@@ -726,6 +828,143 @@ async function nvDoRestart(){
     nvApplyState(d.state, d.note);
   }catch(e){ nvErr('重开失败：' + e.message); }
   finally{ nvBusySet(false); }
+}
+
+/* ─── 自建玩法：填表 → 生成世界 → 选身份 → 直接开写 ─── */
+function nvOpenMake(){
+  var st = nvEl('nvMkStatus');
+  st.className = 'nv-status'; st.textContent = '';
+  nvEl('nvMakeMask').classList.add('on');
+}
+function nvCloseMake(){ nvEl('nvMakeMask').classList.remove('on'); }
+
+async function nvMakeWorld(){
+  var st = nvEl('nvMkStatus');
+  var name = nvEl('nvMkName').value.trim();
+  if(!name){ st.className = 'nv-status err'; st.textContent = '玩法名得填一个'; return; }
+  var table = {
+    name: name,
+    rules: nvEl('nvMkRules').value,
+    places: nvEl('nvMkPlaces').value,
+    start_place: nvEl('nvMkStart').value,
+    start_items: nvEl('nvMkItems').value,
+    identities: nvEl('nvMkIds').value,
+    cast: nvEl('nvMkCast').value,
+    goal: nvEl('nvMkGoal').value
+  };
+  var go = nvEl('nvMkGo');
+  go.disabled = true; go.textContent = '正在生成世界…';
+  st.className = 'nv-status'; st.textContent = '正在把这份设定铺成世界书，大概半分钟…';
+  try{
+    var d = await nvPost('/api/novel/open',
+                         {table: table, name: nvEl('nvMkHero').value.trim()});
+    nvModelUsed(d);
+    if(!d.ok){ st.className = 'nv-status err'; st.textContent = d.error || '生成失败'; return; }
+    nvCloseMake();
+    /* 表里没写身份 → 世界书先生成好，挑一个身份才写正文。 */
+    if(d.need_identity){ nvMkDraft = d; nvShowPick(d); return; }
+    nvApplyState(d.state, d.note);
+    nvCloseDrawer();
+  }catch(e){ st.className = 'nv-status err'; st.textContent = '生成失败：' + e.message; }
+  finally{ go.disabled = false; go.textContent = '生成世界'; }
+}
+
+function nvShowPick(d){
+  nvEl('nvPickNote').innerHTML = '《' + nvEsc(d.play_name || '这个世界') +
+    '》的世界书已经生成好了。你是这里的哪一个？<br>身份会决定你做得到什么、做不到什么。';
+  var rows = d.identity_choices || [];
+  nvEl('nvPickRows').innerHTML = rows.length ? rows.map(function(c, i){
+    return '<button type="button" class="btn nv-pickrow" data-i="' + i + '">' +
+      '<b>' + nvEsc(c.name) + '</b>' +
+      (c.desc ? '<span>' + nvEsc(c.desc) + '</span>' : '') + '</button>';
+  }).join('') : '<div class="nv-empty">AI 没给出身份候选，先放着，回左栏打开这本也能继续。</div>';
+  nvEl('nvPickMask').classList.add('on');
+}
+
+async function nvPickIdentity(i){
+  if(!nvMkDraft || nvBusy) return;
+  var row = (nvMkDraft.identity_choices || [])[i];
+  if(!row) return;
+  nvEl('nvPickMask').classList.remove('on');
+  nvBusySet(true);
+  try{
+    var d = await nvPost('/api/novel/open',
+                         {world_id: nvMkDraft.world_id, identity: row.name});
+    nvModelUsed(d);
+    if(!d.ok){ nvErr(d.error, d.detail); return; }
+    nvMkDraft = null;
+    nvApplyState(d.state, d.note);
+    nvCloseDrawer();
+  }catch(e){ nvErr('开场失败：' + e.message); }
+  finally{ nvBusySet(false); }
+}
+
+/* ─── 世界书：只读全貌。生成之后不再改设定，这里只是看。 ─── */
+function nvBookPlaces(rows){
+  if(!rows || !rows.length) return '<div class="nv-empty">世界书里还没有地点</div>';
+  return '<ul>' + rows.map(function(p){
+    var cls = p.here ? 'here' : (p.visited ? 'seen' : 'todo');
+    var tag = p.here ? '就在这里' : (p.visited ? '去过' : '没去过');
+    return '<li class="' + cls + '">' + nvEsc(p.name) +
+      (p.detail ? ' · ' + nvEsc(p.detail) : '') + '<em>' + tag + '</em></li>';
+  }).join('') + '</ul>';
+}
+function nvBookCast(rows, seeded){
+  if(!rows || !rows.length) return '<div class="nv-empty">' +
+    (seeded ? '设定里没写别人' : '还没遇到过别人') + '</div>';
+  return '<ul>' + rows.map(function(c){
+    var bits = [];
+    if(c.identity) bits.push(c.identity);
+    if(c.relation) bits.push(c.relation);
+    if(c.willing) bits.push(c.willing);
+    var tag = seeded ? (c.tier || '设定里')
+      : (c.present ? '在场' : (c.kind === '威胁' ? '威胁' : (c.tier || '')));
+    return '<li class="' + (c.present && !seeded ? 'here' : '') + '">' + nvEsc(c.name) +
+      (bits.length ? ' · ' + nvEsc(bits.join(' · ')) : '') +
+      (tag ? '<em>' + nvEsc(tag) + '</em>' : '') + '</li>';
+  }).join('') + '</ul>';
+}
+function nvRenderBook(b){
+  nvEl('nvBookTitle').textContent = '《' + (b.name || '世界') + '》';
+  var sub = [];
+  if(b.tagline) sub.push(b.tagline);
+  sub.push(b.custom ? '你自己写的玩法' : '内置玩法');
+  nvEl('nvBookSub').textContent = sub.join(' · ');
+
+  var p = b.person || {};
+  var html = '<dl>';
+  html += '<dt>主角</dt><dd>' + nvEsc(p.name) + ' · ' + nvEsc(p.identity) + '</dd>';
+  html += '<dt>身份意味着什么</dt><dd>' + nvEsc(p.identity_desc || '普通人') + '</dd>';
+  html += '<dt>现在在哪 · 什么时候</dt><dd>' + nvEsc(p.place || '未知') +
+          (b.clock ? ' · ' + nvEsc(b.clock) : '') + '</dd>';
+  html += '<dt>身体状态</dt><dd>' + nvEsc(p.condition || '完好') + '</dd>';
+  html += '<dt>手上拿着</dt><dd>' + nvChips(p.items) + '</dd>';
+  html += '<dt>第 ' + nvEsc(b.chapter) + ' 章要干什么</dt><dd>' +
+          nvEsc(b.chapter_goal || '暂无') + '</dd>';
+  html += '<dt>世界规则</dt><dd>' + nvTextList(b.rules) + '</dd>';
+  html += '<dt>地点（' + ((b.places || []).length) + '）</dt><dd>' +
+          nvBookPlaces(b.places) + '</dd>';
+  html += '<dt>人物名录（已经打过交道）</dt><dd>' + nvBookCast(b.cast) + '</dd>';
+  html += '<dt>设定里的人（还没出场）</dt><dd>' + nvBookCast(b.cast_seed, true) + '</dd>';
+  html += '<dt>走过的路</dt><dd>' + nvTextList(b.path) + '</dd>';
+  html += '<dt>这一本写了多少</dt><dd>第 ' + nvEsc(b.turns) + ' 轮' +
+          (b.restarts ? ' · 死过 ' + nvEsc(b.restarts) + ' 次' : '') + '</dd>';
+  if((b.deaths || []).length){
+    html += '<dt>死因记录</dt><dd>' + nvTextList((b.deaths || []).map(function(d){
+      return d.cause + '（在' + d.at + '）';
+    })) + '</dd>';
+  }
+  html += '</dl>';
+  nvEl('nvBookBody').innerHTML = html;
+}
+async function nvOpenBook(){
+  if(!nvWorldId){ nvInfo('先开一本世界'); return; }
+  try{
+    var d = await nvGet('/api/novel/book?id=' + encodeURIComponent(nvWorldId));
+    if(!d.ok){ nvErr(d.error); return; }
+    nvRenderBook(d.book);
+    nvEl('nvBookMask').classList.add('on');
+  }catch(e){ nvInfo('读世界书失败：' + e.message); }
 }
 
 /* ─── 自定义模型：草稿直接读 DOM，不另存一份状态 ─── */
@@ -821,6 +1060,24 @@ nvEl('nvWipeInput').addEventListener('keydown', function(e){
 });
 nvEl('nvWipeCancel').onclick = nvCloseWipe;
 nvEl('nvWipeOk').onclick = nvDoRestart;
+
+nvEl('nvMakeBtn').onclick = nvOpenMake;
+nvEl('nvMkCancel').onclick = nvCloseMake;
+nvEl('nvMkGo').onclick = nvMakeWorld;
+nvEl('nvMkName').addEventListener('keydown', function(e){
+  if(e.key === 'Enter') nvMakeWorld();
+});
+nvEl('nvPickRows').addEventListener('click', function(ev){
+  var btn = ev.target.closest('button[data-i]');
+  if(btn) nvPickIdentity(Number(btn.getAttribute('data-i')));
+});
+nvEl('nvPickCancel').onclick = function(){
+  nvEl('nvPickMask').classList.remove('on');
+  /* 世界书已经落盘了，别让玩家以为白点了：左栏能找回来。 */
+  nvInfo('世界书已经存下来了，左栏「已有的世界」里能打开，选身份再写');
+};
+nvEl('nvBookBtn').onclick = nvOpenBook;
+nvEl('nvBookClose').onclick = function(){ nvEl('nvBookMask').classList.remove('on'); };
 nvEl('nvCmMask').addEventListener('click', function(e){ if(e.target === nvEl('nvCmMask')) nvCmClose(); });
 nvEl('nvWipeMask').addEventListener('click', function(e){ if(e.target === nvEl('nvWipeMask')) nvCloseWipe(); });
 nvEl('nvBurger').onclick = function(){ nvDrawer('nvLeft'); };
