@@ -843,13 +843,19 @@ def novel_page():
 
 @app.route("/api/novel/<path:sub>", methods=["GET", "POST", "DELETE"])
 def proxy_novel(sub):
-    """小说接口反代。POST 单独放宽到 300s（一轮两次 LLM）。
+    """小说接口反代。POST 单独放宽到 600s。
 
     原来是全场统一 60s，而 LLM_REQUEST_TIMEOUT 单次就是 60s —— 小说一轮
     串行两次，群友很容易收到「后台没响应」但正文其实已经落盘了。前端每轮
     带 turn_token，超时重发同一个 token 会拿到上一轮结果，不会重复写。
+
+    2026-11-12 再放大：小说三段现在各有各的读超时（开场 150 / 写作 120 /
+    编剧 90，见 novel.OPEN_TIMEOUT），群友最坏那条路要串四次 LLM —— 免费层
+    编剧+写作（210s）失败后再扣次数走全局链重跑一遍（又是 210s）= 420s。
+    网关还留 300s 的话，后端明明还在跑就被这里掐成 502，「正文已落盘、
+    用户看到报错」的老毛病会原样复发。600s 是 420s 之上再留一成半余量。
     """
-    return _forward("/api/novel", sub, post_timeout=300)
+    return _forward("/api/novel", sub, post_timeout=600)
 
 
 # ── 换装页（2026-11-11）──────────────────────────────────

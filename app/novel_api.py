@@ -143,6 +143,16 @@ def _attach_model_used(resp):
 
 def _fail(e):
     if isinstance(e, novel.NoHomework):
+        # 2026-11-12 真机事故：这一支原来一行日志都不打。用户连撞三次 502，
+        # 只能靠「有没有 [cache] 用量行」反推是「上游 200 但正文为空」还是
+        # 「JSON 被砍断」——两者在日志里长得一模一样，白白丢掉现场。
+        # detail 本身已带原文长度与结尾几个字（见 novel._parse_json），记下来
+        # 下次就能直接分辨，不用再猜。
+        try:
+            where = request.path
+        except Exception:                           # noqa: BLE001
+            where = "?"                             # 单测里没有请求上下文
+        log.warning("[novel] 没交作业 %s：%s", where, e)
         return jsonify({"ok": False, "error": "这一轮 AI 没交作业，再点一次",
                         "detail": str(e)}), 502
     if isinstance(e, ValueError):

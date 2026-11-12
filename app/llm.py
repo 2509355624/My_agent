@@ -874,7 +874,19 @@ def _call_provider(eff, body, timeout):
         log.warning("[reply-truncated] 输出被服务端上限截断（model=%s，正文 %d 字）。"
                     "调用方该显式给 max_tokens", eff["model"],
                     len(message.get("content") or ""))
-    return message.get("content") or ""
+    content = message.get("content") or ""
+    if not content.strip():
+        # 2026-11-12：中转站过载时不一定会报 429，实测有「回 200 + 空 choices
+        # 或空正文」的形态。原来这里静默返回空串，上层只报「模型没有返回内容」，
+        # 日志里一行痕迹都没有——跟链路真的断了长得一模一样，只能靠有没有
+        # [cache] 用量行去反推。这里只登记事实（finish / 思考字数 / choices 数），
+        # 不做任何兜底判断：空正文该不该重试由调用方决定。
+        log.warning("[empty-reply] %s / %s 返回 200 但正文为空"
+                    "（finish=%s，思考 %d 字，choices %d）",
+                    eff["provider"], eff["model"], fr,
+                    len(str(message.get("reasoning_content") or "")),
+                    len(data.get("choices") or []))
+    return content
 
 
 def _call_ollama(base_url, body, timeout):

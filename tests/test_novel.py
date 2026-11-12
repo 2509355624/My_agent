@@ -903,6 +903,17 @@ class ApiTest(NovelBase):
         self.assertEqual(r.status_code, 502)
         self.assertIn("再点一次", r.get_json()["error"])
 
+    def test_no_homework_leaves_a_log_line(self):
+        """2026-11-12：这一支原来不打日志，连撞三次 502 也只能靠猜。"""
+        with mock.patch.object(novel, "open_world",
+                               side_effect=novel.NoHomework("模型没有返回内容")):
+            with self.assertLogs("novel_api", level="WARNING") as cm:
+                r = self.c.post("/api/novel/open", json={"play": "zombie"})
+        self.assertEqual(r.status_code, 502)
+        line = "\n".join(cm.output)
+        self.assertIn("/api/novel/open", line, "日志要能看出是哪个接口")
+        self.assertIn("模型没有返回内容", line, "日志要带真实原因")
+
     def test_bad_argument_is_400_with_the_reason(self):
         r = self.c.post("/api/novel/open", json={"play": "nope"})
         self.assertEqual(r.status_code, 400)
@@ -1427,6 +1438,59 @@ class ChainOptsTest(NovelBase):
         self.assertEqual([c.args[3] for c in m2.call_args_list], [opts, opts])
 
 
+class TimeoutBudgetTest(NovelBase):
+    """输出量不一样，读超时就不能共用一个值（2026-11-12 真机超时）。
+
+    全局 `LLM_REQUEST_TIMEOUT` 是 60 秒，那是对话抢答的口径。开场一次要吐
+    3000+ 字的世界书草稿，实测 22.5 秒是缓存命中时的运气，未命中就顶到
+    60 秒线上。三段各给各的，谁也不许退回全局默认。
+    """
+
+    def test_three_stages_get_their_own_read_timeout(self):
+        self.assertGreater(novel.OPEN_TIMEOUT, novel.WRITER_TIMEOUT)
+        self.assertGreater(novel.WRITER_TIMEOUT, novel.DIRECTOR_TIMEOUT)
+        self.assertGreater(novel.DIRECTOR_TIMEOUT, 60.0,
+                           "三段都必须比全局 60 秒宽，否则等于没改")
+
+    def test_call_without_timeout_leaves_the_global_default(self):
+        with mock.patch.object(novel.llm, "call_llm", return_value="x") as m:
+            novel._call([{"role": "user", "content": "hi"}], 100, 0.5)
+        self.assertIsNone(m.call_args.kwargs["timeout"],
+                          "不传就交给 llm 的全局默认，别在服务层写死一个")
+
+    def test_call_passes_timeout_through(self):
+        with mock.patch.object(novel.llm, "call_llm", return_value="x") as m:
+            novel._call([{"role": "user", "content": "hi"}], 100, 0.5,
+                        timeout=123.0)
+        self.assertEqual(m.call_args.kwargs["timeout"], 123.0)
+
+    def test_opening_and_its_body_use_their_own_timeouts(self):
+        with mock.patch.object(novel, "_call",
+                               side_effect=[_seed_text(), OPENING_TEXT]) as m:
+            novel.open_world("zombie", "林岸", "医学生")
+        self.assertEqual([c.kwargs["timeout"] for c in m.call_args_list],
+                         [novel.OPEN_TIMEOUT, novel.WRITER_TIMEOUT])
+
+    def test_turn_uses_director_then_writer_timeout(self):
+        out, _ = self.open_a_world()
+        ruling = json.dumps({"ruling": "他摸到晾衣杆", "facts": ["柜子里有晾衣杆"],
+                             "items": ["晾衣杆"]}, ensure_ascii=False)
+        with mock.patch.object(novel, "_call",
+                               side_effect=[ruling, "他把晾衣杆握紧。"]) as m:
+            novel.run_turn(out["world_id"], "检查柜子")
+        self.assertEqual([c.kwargs["timeout"] for c in m.call_args_list],
+                         [novel.DIRECTOR_TIMEOUT, novel.WRITER_TIMEOUT])
+
+    def test_custom_open_uses_the_opening_timeout(self):
+        with mock.patch.object(
+                novel, "_call",
+                side_effect=[json.dumps(CUSTOM_DRAFT, ensure_ascii=False)]) as m:
+            out = novel.open_world(None, "阿七", "", table=CUSTOM_TABLE)
+        self.assertTrue(out.get("need_identity"))
+        self.assertEqual(m.call_args_list[0].kwargs["timeout"],
+                         novel.OPEN_TIMEOUT)
+
+
 class TurnTokenTest(NovelBase):
     def test_same_token_does_not_rerun_the_model_or_advance_a_turn(self):
         out, _ = self.open_a_world()
@@ -1593,7 +1657,12 @@ class FriendGatewayTest(unittest.TestCase):
     def test_novel_post_timeout_is_widened(self):
         self.assertIn("post_timeout=60", self.gw)
         self.assertIn("timeout=post_timeout", self.gw)
-        self.assertIn("post_timeout=300", self.gw)
+        self.assertIn("post_timeout=600", self.gw)
+        # 群友最坏要串两整轮（免费层失败 → 扣次数走全局链重跑），
+        # 网关若比后端窄，后端还在跑就被掐成 502，正文已落盘但用户看到报错。
+        self.assertGreater(
+            600, 2 * (novel.WRITER_TIMEOUT + novel.DIRECTOR_TIMEOUT),
+            "网关超时必须宽于「编剧+写作」跑两遍")
 
     def test_tunnel_guard_does_not_whitelist_novel(self):
         """隧道错指 5174 时，小说接口必须继续 404，不能绕开 QQ 注入变站主态。

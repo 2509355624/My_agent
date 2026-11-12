@@ -503,6 +503,47 @@ class LogFormatTest(unittest.TestCase):
         self.assertNotIn("[1/", line)
 
 
+class EmptyReplyLogTest(unittest.TestCase):
+    """200 但正文为空必须留痕（2026-11-12 小说开场连撞三次 502）。
+
+    中转站过载时不一定回 429，实测会回「200 + 空 choices / 空正文」。原来这里
+    静默返回空串，上层只报「模型没有返回内容」，日志里一行痕迹都没有——跟
+    链路真断了长得一模一样，只能靠有没有 [cache] 用量行去反推。
+    """
+
+    EFF = {"provider": "scnet2", "model": "b",
+           "base_url": "https://example.invalid", "api_key": "k"}
+
+    def _call_with(self, payload):
+        resp = _Resp(payload=payload)
+        with mock.patch.object(llm._session, "post", return_value=resp):
+            return llm._call_provider(self.EFF, {"messages": []}, 5.0)
+
+    def test_empty_content_is_logged(self):
+        with self.assertLogs("llm", level="WARNING") as cm:
+            out = self._call_with({"choices": [{"message": {"content": ""},
+                                                "finish_reason": "stop"}]})
+        self.assertEqual(out, "")
+        line = "\n".join(cm.output)
+        self.assertIn("[empty-reply]", line)
+        self.assertIn("scnet2 / b", line, "要能看出是哪一家返回的")
+
+    def test_blank_choices_is_logged(self):
+        with self.assertLogs("llm", level="WARNING") as cm:
+            out = self._call_with({"choices": []})
+        self.assertEqual(out, "")
+        self.assertIn("choices 0", "\n".join(cm.output))
+
+    def test_normal_content_does_not_warn(self):
+        resp = _Resp(payload={"choices": [{"message": {"content": "hi"},
+                                           "finish_reason": "stop"}]})
+        with mock.patch.object(llm._session, "post", return_value=resp), \
+                mock.patch.object(llm, "log") as fake:
+            out = llm._call_provider(self.EFF, {"messages": []}, 5.0)
+        self.assertEqual(out, "hi")
+        self.assertFalse(fake.warning.called, "正常正文不许刷 warning")
+
+
 class RequireVisionTest(_ChainBase):
     """带图轮次：降级链只走**能读图**的候选（2026-10-02 修的坑）。
 

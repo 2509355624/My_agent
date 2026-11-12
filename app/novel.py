@@ -97,6 +97,17 @@ OPEN_MAX_TOKENS = 8192
 DIRECTOR_MAX_TOKENS = 4096
 WRITER_MAX_TOKENS = 4096
 
+# 读超时要按输出量单独给（2026-11-12 真机修）：全局 LLM_REQUEST_TIMEOUT 是
+# 60 秒，那是对话抢答的口径。开场要一次吐 3000+ 字的世界书草稿，实测缓存
+# 命中时 22.5 秒，未命中或中转站抖动就到 50~70 秒，**正好卡在 60 秒线上**；
+# 撞了超时还会顺降级链换家从头再生成一遍，用户等两分钟只等到一句 502。
+# 漫画台 `silver_comic.write_script_detail` 早就是同样的处理（50 格给 120s
+# 起步），这里照抄那个先例，按各段的输出上限分档。写作段 600~1500 字卡在
+# 60 秒边缘的最多，所以给得比编剧宽。
+OPEN_TIMEOUT = 150.0
+WRITER_TIMEOUT = 120.0
+DIRECTOR_TIMEOUT = 90.0
+
 
 # ─── 玩法预设 ─────────────────────────────────────────
 
@@ -459,7 +470,7 @@ _NOVEL_CONTRACT = """你是这部长篇生存小说的叙述者，用第三人�
 写完这一段就停：把玩家给的剧情演完，别提前演下一轮，也别替下一轮收尾。"""
 
 
-def _call(messages, max_tokens, temperature, opts=None):
+def _call(messages, max_tokens, temperature, opts=None, timeout=None):
     """跟扮演共用链头（公用中转站），失败时顺链降级，跟 1v1 一致。
 
     2026-11-11：原来这里用严格模式单目标直调，中转站余额归零时
@@ -471,6 +482,10 @@ def _call(messages, max_tokens, temperature, opts=None):
     不 import flask、不认 QQ。None = 站主现状；群友免费层走严格模式，只打
     公用中转站（绝不静默落到付费官方），中转站挂了才由接口层扣代充次数、
     传 `provider/model=None` 走全局链。
+
+    `timeout` 由三个调用点各自给（`OPEN/WRITER/DIRECTOR_TIMEOUT`），不传才落到
+    全局 60 秒。别在这里写死一个值：同一份代码要服务 3000 字的开场和 600 字
+    的一轮，输出量差一倍，共用一个超时必然有一边被卡。
     """
     o = opts or {}
     return llm.call_llm(
@@ -480,6 +495,7 @@ def _call(messages, max_tokens, temperature, opts=None):
         strict=bool(o.get("strict", False)),
         max_tokens=max_tokens,
         temperature=temperature,
+        timeout=timeout,
     )
 
 
@@ -1112,14 +1128,14 @@ def _open_ai(world, preset, opts=None):
         identity_desc=p.get("identity_desc") or "",
     )
     raw = _call([{"role": "user", "content": msg}], OPEN_MAX_TOKENS, 0.8,
-                opts)
+                opts, timeout=OPEN_TIMEOUT)
     return _parse_json(raw)
 
 
 def _director(world, said, opts=None):
     """编剧：拿完整上下文，但 system 头是裁定规则（不是叙述契约）。"""
     raw = _call(_messages(world, said=said, for_director=True),
-                DIRECTOR_MAX_TOKENS, 0.7, opts)
+                DIRECTOR_MAX_TOKENS, 0.7, opts, timeout=DIRECTOR_TIMEOUT)
     return _parse_json(raw)
 
 
@@ -1130,7 +1146,7 @@ def _writer(world, facts, said, opts=None):
     交给编剧压缩后再转述给写作 AI —— 这正是 1v1 早就修掉的老问题。
     """
     out = _call(_messages(world, facts=facts, said=said),
-                WRITER_MAX_TOKENS, 1.0, opts)
+                WRITER_MAX_TOKENS, 1.0, opts, timeout=WRITER_TIMEOUT)
     text = str(out or "").strip()
     if not text:
         raise NoHomework("写作 AI 没有返回正文")
@@ -1215,7 +1231,8 @@ def _custom_open_ai(table, name, opts=None):
     msg = (_CUSTOM_PROMPT
            .replace("<<TABLE>>", _table_text(table))
            .replace("<<NAME>>", name or "无名的人"))
-    raw = _call([{"role": "user", "content": msg}], OPEN_MAX_TOKENS, 0.8, opts)
+    raw = _call([{"role": "user", "content": msg}], OPEN_MAX_TOKENS, 0.8, opts,
+                timeout=OPEN_TIMEOUT)
     return _parse_json(raw)
 
 
