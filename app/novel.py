@@ -93,9 +93,21 @@ _SLICE_DISCOVERED = 12
 # 字段、每个地点/角色还有好几项），2400 token 会被 finish_reason=length 砍断
 # （实测正文 4359 字），残缺 JSON 解析失败后前端只说「没交作业，再点一次」，
 # 再点还是截断。跟 1v1 的 REPLY_MAX_TOKENS 对齐，给足但不限定它写多少。
-OPEN_MAX_TOKENS = 8192
-DIRECTOR_MAX_TOKENS = 4096
-WRITER_MAX_TOKENS = 4096
+# 2026-11-12 用户拍板：**别给模型设输出上限**。
+# 原话：「怎么可能会给他的一个输出设置限制呢？没有必要去给他搞这一个，
+# 我们直接给他无限的一个最大输出。」
+#
+# 上面那段 8192 的来历还站得住（2400 确实会砍断），但**8192 同样会砍**——
+# 玩家表填得满一点，一次要出 6~10 地点 + 3~5 人物 + 3 身份，JSON 写到一半
+# 预算就没了，`_parse_json` 只能报「line 124 column 6」看不出是截断。
+# 治标是把数调大，治本是别让它有「写不下」这回事——所以给到模型能接受的上限。
+#
+# 各家的真实上限：deepseek 8192、多数中转 8192~16384、qwen 系 8192~32768。
+# 给 32768：有余量、又不会被总包拒成 400。真要更大就在 `_call` 的 opts 里
+# 按 provider 单独给，不在这里写死。
+OPEN_MAX_TOKENS = 32768
+DIRECTOR_MAX_TOKENS = 16384
+WRITER_MAX_TOKENS = 16384
 
 # 读超时要按输出量单独给（2026-11-12 真机修）：全局 LLM_REQUEST_TIMEOUT 是
 # 60 秒，那是对话抢答的口径。开场要一次吐 3000+ 字的世界书草稿，实测缓存
@@ -398,15 +410,58 @@ _CUSTOM_PROMPT = """你在为一部长篇互动小说搭世界书。玩家自己
 6. opening_facts 写开场这一屏必须写到的 3~5 件事，按时间顺序。
 7. actions 给 3 个开场就能做的动作，具体、可执行，不要「观察四周」这种空话。
 
+【这是一个成年向的私密场合】
+
+玩家是这个房间里唯一的读者，写给他自己看。填表里写了亲密关系、欲望、
+身体描写的，**照原样落进世界书**——不要淡化、不要换成含糊说法、
+不要自己替他把这类内容删掉或改成「关系暧昧」这种笼统词。这是这个场合
+该有的内容。
+
+- `brief` 可以直接点明这段关系是什么性质、身体上到了哪一步
+- `rules` 可以写身体关系的规矩（谁先开口、什么算越线、事后怎么收）
+- `cast_seed` 的 `willing` 可以写他愿意到什么程度，具体到能演
+- 表里没写但留了空间的，按「他们之间已经有这层关系」来补，不要回避
+
 只输出一个 JSON 对象，不要任何解释：
 {"name":"","tagline":"","brief":"",
  "rules":["","",""],
  "identity_choices":[{"name":"","desc":""}],
- "start":{"place":"","condition":"","items":[""]},
  "places":[{"name":"","detail":"","search":"","kind":"static"}],
  "item_pool":[""],
  "cast_seed":[{"name":"","identity":"","relation":"","willing":"","tier":"主体","present":false}],
- "chapter_goal":"",
+ "chapter_goal":""}"""
+
+
+
+# 第二段（2026-11-12 拆分）：开局那几样单独再问一次。
+# 为什么要拆：一次要交「整本世界书 + 开局」两样东西，玩家表填得满一点就
+# 写不下——被 max_tokens 砍断后 `_parse_json` 只报「line 124 column 6」，
+# 看不出是截断，用户以为是 AI 不会写。拆开之后每次的输出量减半，
+# 就算某一段真的超了，也只重跑那一段，不用整本重来。
+_OPENING_PROMPT = """你在为一部成年向互动小说写**开场那一屏**的落点。
+
+世界书已经搭好了（见下），这一轮只出四样东西：主角站在哪、身上有什么、
+开场必须写到的几件事、开局能做的动作。
+
+【已经定下来的世界书】
+<<PRESET>>
+
+【主角】
+名字：<<NAME>>
+
+【这是一个成年向的私密场合】
+
+玩家是这间房里唯一的读者。世界书里写了亲密关系、欲望、身体描写的，
+**开场要接得上**——不要突然变得客客气气，也不要把它写成两个刚认识的
+人。已经有的关系，第一屏就在场。
+
+- `start.place` 写主角此刻站/坐在哪，具体到能拍出来
+- `start.condition` 写身上什么状态（穿着、伤、醉、累），一眼能看见的
+- `opening_facts` 按时间顺序写这一屏要发生的 3~5 件事，第一件要能立刻成画面
+- `actions` 给 3 个开场就能做、且真的做得成的动作，不要「观察四周」这种空话
+
+只输出一个 JSON 对象，不要任何解释：
+{"start":{"place":"","condition":"","items":[""]},
  "opening_facts":["","",""],
  "actions":["","",""],
  "discovered":[{"fact":"","kind":"static"}]}"""
@@ -1287,13 +1342,55 @@ def _preset_from_draft(draft, table):
 
 
 def _custom_open_ai(table, name, opts=None):
-    """表格 → 世界书草稿。一次调用同时交出玩法预设和开局世界。"""
+    """表格 → 世界书草稿（2026-11-12 拆成两次调用）。
+
+    第一次出**玩法预设**（规则/地点/人物/身份），第二次拿着预设出**开局**
+    （起点/开场事实/可选动作），最后合成一份 draft 交回去，调用方不用改。
+
+    **为什么要拆**：合成一次的时候，玩家表填得满一点就写不下——被
+    max_tokens 砍断后 `_parse_json` 只报「line 124 column 6」，看不出是
+    截断，用户以为是 AI 不会写。拆开之后每次的输出量减半，而且**第二段
+    失败只重跑第二段**，不用整本重来。
+
+    第二段失败时降级：用预设里已有的信息凑一个最简开局（起点取第一个
+    地点、事实留空、动作留空），保证玩家至少能进书，不会被卡在门口。
+    """
     msg = (_CUSTOM_PROMPT
            .replace("<<TABLE>>", _table_text(table))
            .replace("<<NAME>>", name or "无名的人"))
-    raw = _call([{"role": "user", "content": msg}], OPEN_MAX_TOKENS, 0.8, opts,
-                timeout=OPEN_TIMEOUT)
-    return _parse_json(raw)
+    draft = _parse_json(_call(
+        [{"role": "user", "content": msg}], OPEN_MAX_TOKENS, 0.8, opts,
+        timeout=OPEN_TIMEOUT))
+
+    # 第二段：开局。预压缩成一小段给模型看，别把整本 JSON 再喂回去。
+    try:
+        preset_txt = json.dumps(
+            {k: draft.get(k) for k in ("name", "tagline", "brief", "rules",
+                                       "places", "cast_seed", "chapter_goal")},
+            ensure_ascii=False)
+        msg2 = (_OPENING_PROMPT
+                .replace("<<PRESET>>", preset_txt[:6000])
+                .replace("<<NAME>>", name or "无名的人"))
+        opening = _parse_json(_call(
+            [{"role": "user", "content": msg2}], OPEN_MAX_TOKENS, 0.8, opts,
+            timeout=OPEN_TIMEOUT))
+        for k in ("start", "opening_facts", "actions", "discovered"):
+            if opening.get(k):
+                draft[k] = opening[k]
+    except Exception:                                     # noqa: BLE001
+        # 第二段挂了不等于开场挂了：用预设里现成的信息凑一个能用的开局。
+        log.warning("自建玩法开局段失败，用兜底开局", exc_info=True)
+        places = draft.get("places") if isinstance(draft.get("places"), list) else []
+        first = places[0] if places and isinstance(places[0], dict) else {}
+        draft.setdefault("start", {
+            "place": _as_text(first.get("name")) or "起点",
+            "condition": "",
+            "items": [],
+        })
+        draft.setdefault("opening_facts", [])
+        draft.setdefault("actions", [])
+
+    return draft
 
 
 def _seal_custom(world, identity, opts=None):

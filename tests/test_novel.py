@@ -180,6 +180,7 @@ class WorldBookTest(NovelBase):
 
     def test_opening_seals_seed_and_writes_history(self):
         out, m = self.open_a_world()
+        # 预设 → 开局 → 正文，三次（2026-11-12 拆开后多一次开局）
         self.assertEqual(m.call_count, 2)
         self.assertEqual(out["reply"], OPENING_TEXT)
         w = novel.get_world(out["world_id"])
@@ -563,12 +564,29 @@ CUSTOM_TABLE = {
 }
 
 
+# 第二段（开局）交回来的东西。和 CUSTOM_DRAFT 分开，因为它现在是**单独一次**
+# 调用产出的（2026-11-12 拆分），不再混在一个大 JSON 里。
+CUSTOM_OPENING = {
+    "start": {"place": "旧维修巷二楼", "condition": "手上有机油",
+              "items": ["螺丝刀"]},
+    "opening_facts": ["雨刚停", "楼下有人在敲铁门", "他把螺丝刀收进袖子"],
+    "actions": ["下楼看看谁在敲门", "先翻一遍工具箱", "从后窗翻出去"],
+    "discovered": [{"fact": "楼下那扇铁门是从里面锁上的", "kind": "static"}],
+}
+
+
 class CustomPlayTest(NovelBase):
     def _open_custom(self, table=None, identity="", name="阿七"):
-        """自建玩法开场：一次 LLM 交世界书；给了身份就再写一次正文。"""
-        side = ([json.dumps(CUSTOM_DRAFT, ensure_ascii=False),
-                 OPENING_TEXT] if identity
-                else [json.dumps(CUSTOM_DRAFT, ensure_ascii=False)])
+        """自建玩法开场。
+
+        2026-11-12 起开场是**两次** LLM 调用：第一次出玩法预设、第二次出开局
+        （起点/开场事实/可选动作）。给了身份再写一次正文。所以 mock 的返回
+        顺序是 `预设 → 开局 → 正文`；没给身份就是 `预设 → 开局`。
+        """
+        side = [json.dumps(CUSTOM_DRAFT, ensure_ascii=False),
+                json.dumps(CUSTOM_OPENING, ensure_ascii=False)]
+        if identity:
+            side.append(OPENING_TEXT)
         with mock.patch.object(novel, "_call", side_effect=side) as m:
             out = novel.open_world(None, name, identity,
                                    table=table or CUSTOM_TABLE)
@@ -634,7 +652,7 @@ class CustomPlayTest(NovelBase):
         self.assertTrue(out["need_identity"])
         self.assertEqual(out["play_name"], "废土城")
         self.assertEqual(len(out["identity_choices"]), 2)
-        self.assertEqual(m.call_count, 1, "身份没定之前不该写正文")
+        self.assertEqual(m.call_count, 2, "身份没定之前不该写正文")
         w = novel.get_world(out["world_id"])
         self.assertIsNotNone(w, "世界书要先落盘，别让一轮模型白烧")
         self.assertEqual(w["opening_reply"], "")
@@ -647,11 +665,13 @@ class CustomPlayTest(NovelBase):
         with mock.patch.object(
                 novel, "_call",
                 side_effect=[json.dumps(CUSTOM_DRAFT, ensure_ascii=False),
+                             json.dumps(CUSTOM_OPENING, ensure_ascii=False),
                              OPENING_TEXT]) as m:
             out = novel.open_world(None, "阿七", "", table=table)
         self.assertNotIn("need_identity", out)
         self.assertEqual(out["reply"], OPENING_TEXT)
-        self.assertEqual(m.call_count, 2)
+        # 预设 → 开局 → 正文（2026-11-12 拆开后多一次开局）
+        self.assertEqual(m.call_count, 3)
         self.assertEqual(
             novel.get_world(out["world_id"])["player"]["identity"], "黑医")
 
@@ -884,6 +904,7 @@ class PlayGroupingTest(NovelBase):
         with mock.patch.object(
                 novel, "_call",
                 side_effect=[json.dumps(CUSTOM_DRAFT, ensure_ascii=False),
+                             json.dumps(CUSTOM_OPENING, ensure_ascii=False),
                              OPENING_TEXT]):
             return novel.open_world(None, name, identity, table=table or CUSTOM_TABLE)
 
@@ -986,6 +1007,7 @@ class DeleteWorldTest(NovelBase):
         with mock.patch.object(
                 novel, "_call",
                 side_effect=[json.dumps(CUSTOM_DRAFT, ensure_ascii=False),
+                             json.dumps(CUSTOM_OPENING, ensure_ascii=False),
                              OPENING_TEXT]):
             out = novel.open_world(None, "阿七", "黑医", table=CUSTOM_TABLE)
         self.assertIn("custom:废土城", [p["id"] for p in novel.list_plays("")])
@@ -1159,6 +1181,7 @@ class ApiTest(NovelBase):
         with mock.patch.object(
                 novel, "_call",
                 side_effect=[json.dumps(CUSTOM_DRAFT, ensure_ascii=False),
+                             json.dumps(CUSTOM_OPENING, ensure_ascii=False),
                              OPENING_TEXT]):
             r = self.c.post("/api/novel/open", json={
                 "table": CUSTOM_TABLE, "name": "阿七", "identity": "黑医"})
@@ -1173,6 +1196,7 @@ class ApiTest(NovelBase):
         with mock.patch.object(
                 novel, "_call",
                 side_effect=[json.dumps(CUSTOM_DRAFT, ensure_ascii=False),
+                             json.dumps(CUSTOM_OPENING, ensure_ascii=False),
                              OPENING_TEXT]):
             d = self.c.post("/api/novel/open", json={
                 "table": CUSTOM_TABLE, "name": "阿七",
@@ -2336,6 +2360,73 @@ class PresenceAndEventsTest(NovelBase):
         self.assertIn("c.kind !== '威胁'", p)
         self.assertIn("打过交道的威胁", p)
 
+
+
+
+class CustomSplitAndAdultTest(NovelBase):
+    """自建玩法：输出不再设限 + 成年人向授权（2026-11-12 用户拍板）。
+
+    两件事同源：原来一次要交「整本世界书 + 开局」，表填满了就写不下，
+    被 max_tokens 砍断后只报「line 124 column 6」，用户以为是 AI 不会写。
+    """
+
+    def test_output_limit_is_not_tight(self):
+        """用户原话：「怎么可能会给他的一个输出设置限制呢？」"""
+        self.assertGreaterEqual(novel.OPEN_MAX_TOKENS, 32768)
+        self.assertGreaterEqual(novel.WRITER_MAX_TOKENS, 16384)
+        self.assertGreaterEqual(novel.DIRECTOR_MAX_TOKENS, 16384)
+
+    def test_custom_prompt_authorizes_adult(self):
+        """没有这段授权时，模型会按安全策略把成人设定悄悄删掉。"""
+        p = novel._CUSTOM_PROMPT
+        self.assertIn("成年向", p)
+        self.assertIn("照原样落进世界书", p)
+        self.assertIn("不要淡化", p)
+
+    def test_opening_prompt_authorizes_adult_too(self):
+        """只授权世界书不够：开场正文也会自己收住。"""
+        p = novel._OPENING_PROMPT
+        self.assertIn("成年向", p)
+        self.assertIn("开场要接得上", p)
+
+    def test_opening_is_a_separate_call(self):
+        """拆成两次调用：预设一次、开局一次。"""
+        draft = dict(CUSTOM_DRAFT)
+        calls = []
+
+        def fake(messages, max_tokens, temperature, opts=None, timeout=None):
+            calls.append(messages[0]["content"][:20])
+            if len(calls) == 1:
+                return json.dumps(draft, ensure_ascii=False)
+            return json.dumps(CUSTOM_OPENING, ensure_ascii=False)
+
+        with mock.patch.object(novel, "_call", side_effect=fake):
+            out = novel._custom_open_ai(CUSTOM_TABLE, "阿七")
+        self.assertEqual(len(calls), 2, "应该正好两次：预设 + 开局")
+        self.assertIn("start", out, "开局那次的结果要并回 draft")
+        self.assertEqual(out["start"]["place"], "旧维修巷二楼")
+
+    def test_opening_failure_falls_back(self):
+        """第二段挂了不等于开场挂了：用预设里的地点凑一个能用的开局。"""
+        draft = dict(CUSTOM_DRAFT)
+        calls = []
+
+        def fake(messages, max_tokens, temperature, opts=None, timeout=None):
+            calls.append(1)
+            if len(calls) == 1:
+                return json.dumps(draft, ensure_ascii=False)
+            raise novel.NoHomework("开局段挂了")
+
+        with mock.patch.object(novel, "_call", side_effect=fake):
+            out = novel._custom_open_ai(CUSTOM_TABLE, "阿七")
+        self.assertIn("start", out, "降级也要有起点")
+        self.assertTrue(out["start"]["place"], "起点不能空")
+        self.assertIn("places", out, "预设部分要保住")
+
+    def test_opening_prompt_carries_preset(self):
+        """第二段要能看到第一段定的世界，不然开局会和世界对不上。"""
+        self.assertIn("<<PRESET>>", novel._OPENING_PROMPT)
+        self.assertIn("<<NAME>>", novel._OPENING_PROMPT)
 
 if __name__ == "__main__":
     unittest.main()
