@@ -263,10 +263,31 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
   .top .nv-burger, .top .nv-stats { display: none !important; }
 }
 @media (max-width:900px){
-  /* 更窄的屏：按钮行允许折行，长文案让出宽度。 */
-  .nv-sendrow { flex-wrap: wrap; }
-  .nv-modelrow { font-size: 10.5px; }
+  /* 窄屏三栏塌成一栏（2026-11-12 用户报「手机上去什么都点不到」）。
+     根因：`.app` 被 `@supports (display:grid)` 钉成 `230px 1fr 288px`，
+     这条规则**没有窄屏覆盖**——于是手机上也强制留 230+288 的固定列，
+     中间正文只剩几十像素，顶栏按钮全被挤出屏幕外，看起来就是「点了没反应」。
+     现在：左栏和右栏都变成覆盖式抽屉，中间正文独占整屏。 */
+  .app, .app { grid-template-columns: 1fr !important; }
+  .app > .side2 { display: none; }
+  .app > .side {
+    position: fixed; top: 0; bottom: 0; left: 0; z-index: 150;
+    width: 84vw; max-width: 320px;
+    transform: translateX(-100%); transition: transform .18s ease;
+    border-right: 1px solid var(--border); }
+  .app > .side.open { transform: translateX(0); }
+  .app > .side2.open {
+    display: block; position: fixed; top: 0; bottom: 0; right: 0;
+    z-index: 150; width: 86vw; max-width: 340px;
+    overflow-y: auto; }
+  .nv-burger, .top .nv-stats { display: inline-flex; }
+  .top { gap: 6px; padding: 8px 10px; }
+  .top .nm { font-size: 14px; }
+  .top .btn { padding: 3px 7px; font-size: 11.5px; }
   .nv-sub { display: none; }
+  .nv-sendrow { flex-wrap: nowrap; }
+  .composer.nv-input textarea { font-size: 16px; }   /* iOS 不缩放 */
+  .nv-tabs { padding: 6px 8px 0; }
 }
 
   /* ── 2026-11-12 布局重排（照角色扮演那套）────────────────
@@ -1253,9 +1274,13 @@ function nvRenderBook(b){
   html += '</dl>';
   nvEl('nvBookBody').innerHTML = html;
 }
-async /* 世界书弹窗（2026-11-12 修）：原来函数没写 async 却在用 await，整段是坏的；
+/* 世界书弹窗（2026-11-12 修）：原来没写 async 却在用 await，整段是坏的；
    而且先等请求回来才弹窗，用户点完要愣两三秒才有反应。
-   现在**先弹窗、先显示「读取中」，回来再填内容**。 */
+   现在**先弹窗、先显示「读取中」，回来再填内容**。
+   ⚠️ 2026-11-12 事故：上一次替换在这里留下了一个孤立的 `async` 关键字，
+   浏览器解析整个 <script> 时直接 SyntaxError —— 脚本一行都不执行，
+   于是页面上**所有按钮全都没反应**（用户报「小说模式废了」）。
+   加/改函数时先跑 node --check，别只看 diff。 */
 async function nvOpenBook(){
   if(!nvWorldId){ nvInfo('先开一本世界'); return; }
   var mask = nvEl('nvBookMask');
