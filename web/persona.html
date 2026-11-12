@@ -147,9 +147,7 @@
   .top { padding: 10px 16px; border-bottom: 1px solid var(--border-soft);
     display: flex; align-items: center; gap: 10px; min-height: 50px; }
   .top .burger { display: none; }
-  .top .nm { font-size: 15px; font-weight: 600; }
-  .top .live { font-size: 10px; color: var(--accent); border: 1px solid var(--accent-dim);
-    padding: 1px 7px; border-radius: 9px; }
+  /* `.top .nm` / `.top .live` 两条随「角色名」「扮演中」一起删掉了（2026-11-12）。 */
   .top .sp { flex: 1; }
   .quota { font-size: 11px; color: var(--warn); border: 1px solid #6b5218;
     padding: 2px 9px; border-radius: 10px; white-space: nowrap; }
@@ -1128,8 +1126,9 @@
            画廊之间太挤，而且它是个低频危险动作，混在导航里容易误点。
            入口统一挪进右栏状态区（#affBox 里的 #btnAffRestart）——
            手机展开右侧抽屉才看得到，桌面右栏常驻。 -->
-      <span class="nm" id="curName">选一个角色</span>
-      <span class="live" id="live" style="display:none">扮演中</span>
+      <!-- 顶栏原来有「角色名」和「扮演中」两个标签（2026-11-12 用户要求去掉）：
+           角色名在右栏角色卡和名字行都有，扮演中这个状态对玩家没有信息量，
+           两格宽度换给四个按钮，窄屏才不挤。 -->
       <span class="sp"></span>
       <button class="btn sm mode" id="btnMode" style="display:none">自由模式</button>
       <!-- 小说模式（2026-11-11 建，2026-11-12 上架 5175）：跟攻略/自由模式
@@ -3905,7 +3904,6 @@ async function loadSession() {
     // 先定名字再渲染历史：气泡署名要用它（2026-11-09）。
     CUR_NAME = d.charName || (card ? (card.charName || card.name || "") : "");
     renderName();
-    $("live").style.display = card ? "" : "none";
     renderCardBox(card);
     renderQuota();
     INTRO = d.intro || "";     // 后端缓存的开场导读（清空存档后会变空）
@@ -3943,8 +3941,8 @@ function renderName() {
   if (!btn) return;
   btn.disabled = !card;
   btn.textContent = card ? (CUR_NAME || "起个名字") : "—";
-  const top = $("curName");
-  if (top) top.textContent = card ? (CUR_NAME || card.name || "角色") : "选一个角色";
+  // 顶栏那个角色名（#curName）2026-11-12 已按用户要求删掉，这里不再同步。
+  // 原名在右栏的 #btnName 和角色卡上照旧显示，只是不再占顶栏一格。
 }
 
 // 已经画出来的气泡署名一起换，避免为了改个名字重画整段历史。
