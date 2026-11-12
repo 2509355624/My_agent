@@ -588,28 +588,40 @@ function nvInfo(msg){
   if(nvInfoTimer) clearTimeout(nvInfoTimer);
   if(msg) nvInfoTimer = setTimeout(function(){ nvInfo(''); }, 4000);
 }
-function nvTyping(on){
+/* 正文区的「正在…」提示（2026-11-12）。
+   原来只有「正在写…」一种文案，而且只在 nvBusySet 里被动打开——
+   重开一本要重新生成开场（一次 30 秒起），界面上什么都不变，
+   用户以为卡住了。现在允许传文案，重开时写「正在重开…」。 */
+function nvTyping(on, text){
   var old = nvEl('nvTyping');
   if(old && old.parentNode) old.parentNode.removeChild(old);
   if(!on) return;
   var box = nvEl('nvLog');
+  if(!box) return;
   var d = document.createElement('div');
   d.className = 'nv-typing'; d.id = 'nvTyping';
-  d.innerHTML = '<i></i><i></i><i></i><span>正在写…</span>';
+  d.innerHTML = '<i></i><i></i><i></i><span>' +
+    nvEsc(text || '正在写…') + '</span>';
   box.appendChild(d);
   box.scrollTop = box.scrollHeight;
 }
-function nvBusySet(on){
+function nvBusySet(on, label){
   nvBusy = on;
   ['nvSendBtn','nvUndoBtn','nvRestartBtn','nvCustomBtn'].forEach(function(id){
     var b = nvEl(id); if(b) b.disabled = on;
   });
+  /* 重开那一下人在左栏点的，按钮自己也得变一下，不然只有正文区在动，
+     左栏看起来毫无反应（2026-11-12）。 */
+  var rb = nvEl('nvRestartBtn');
+  if(rb) rb.textContent = on ? '重开中…' : '重开一本';
   if(nvEl('nvUndoBtn') && !on) nvUndoState();
   Array.prototype.forEach.call(nvEl('nvActions').querySelectorAll('button'), function(b){
     b.disabled = on || nvEnded;
   });
-  if(nvEl('nvSendBtn')) nvEl('nvSendBtn').textContent = on ? '正在写…' : '写下去';
-  nvTyping(on);
+  if(nvEl('nvSendBtn')){
+    nvEl('nvSendBtn').textContent = on ? (label || '正在写…') : '写下去';
+  }
+  nvTyping(on, label);
 }
 async function nvGet(path){
   var r = await fetch(path, {headers:{'Accept':'application/json'}});
@@ -886,7 +898,7 @@ async function nvOpen(){
      再点封样，是要在这个玩法下新开一本，不能把刚才那本重新交回去。 */
   var same = nvLastState && nvLastState.play_key === nvPlayId;
   if(nvWorldId && same) payload.world_id = nvWorldId;
-  nvErr(''); nvBusySet(true);
+  nvErr(''); nvBusySet(true, '正在开场…');
   nvEl('nvOpenBtn').disabled = true;
   try{
     var d = await nvPost('/api/novel/open', payload);
@@ -918,7 +930,7 @@ async function nvSend(text){
     ? nvTurnToken
     : ('t_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10));
   nvTurnToken = token; nvTurnText = text;
-  nvErr(''); nvBusySet(true);
+  nvErr(''); nvBusySet(true, '正在写…');
   nvEl('nvText').value = '';
   try{
     var d = await nvPost('/api/novel/turn', {id:nvWorldId, text:text, turn_token:token});
@@ -1080,7 +1092,13 @@ async function nvUndo(){
 }
 async function nvDoRestart(){
   if(nvBusy || !nvWorldId) return;
-  nvErr(''); nvBusySet(true);
+  nvErr('');
+  /* 重开要重新生成开场正文（30 秒起），必须让用户看见在跑（2026-11-12 用户报
+     「点了重开什么都没有，以为卡住了」）。先关弹窗、清空正文区，再挂提示。 */
+  nvCloseWipe();
+  var log = nvEl('nvLog');
+  if(log) log.innerHTML = '';
+  nvBusySet(true, '正在重开…');
   try{
     var d = await nvPost('/api/novel/restart', {
       id:nvWorldId, confirm:nvConfirm,
@@ -1151,7 +1169,7 @@ async function nvPickIdentity(i){
   var row = (nvMkDraft.identity_choices || [])[i];
   if(!row) return;
   nvEl('nvPickMask').classList.remove('on');
-  nvBusySet(true);
+  nvBusySet(true, '正在写开场…');
   try{
     var d = await nvPost('/api/novel/open',
                          {world_id: nvMkDraft.world_id, identity: row.name});
