@@ -152,6 +152,14 @@ def _normalize_world(w):
         p["items"] = _norm_items(p["items"])
     if not isinstance(w.get("restarts"), int):
         w["restarts"] = 0
+    # 上架 5175（2026-11-12）：世界书原来是全局单文件，谁都能列出全部。
+    # 老世界一律归站主（owner=""），群友世界写自己的 QQ；读写时严格比较。
+    if not isinstance(w.get("owner"), str):
+        w["owner"] = ""
+    # 2026-11-12 真机：跨了几天，薯片可乐一份没少——世界书里根本没有时间。
+    # 现在由编剧每拍登记一句「第 3 天 傍晚」，代码只存不判断。
+    if not isinstance(w.get("clock"), str):
+        w["clock"] = ""
     return w
 
 
@@ -183,17 +191,28 @@ def _save_world(world):
         _write_db(db)
 
 
-def get_world(world_id):
+def get_world(world_id, owner=""):
+    """按 id 取一本，**必须校验归属**。
+
+    owner="" 是站主；5175 转发来的群友请求传自己的 QQ。只看 id 不认人会让
+    猜到编号的人直接读到、改写、重开别人的本子（2026-11-12 上架前修）。
+    """
     wid = str(world_id or "").strip()
     if not _SAFE_ID.match(wid):
         return None
-    return _read_db().get("worlds", {}).get(wid)
+    w = _read_db().get("worlds", {}).get(wid)
+    if not isinstance(w, dict):
+        return None
+    return w if str(w.get("owner") or "") == str(owner or "") else None
 
 
-def list_worlds():
+def list_worlds(owner=""):
+    """只列自己的世界。站主传 ""，群友传 QQ。"""
     out = []
     for wid, w in _read_db().get("worlds", {}).items():
         if not isinstance(w, dict):
+            continue
+        if str(w.get("owner") or "") != str(owner or ""):
             continue
         out.append({
             "id": wid,
@@ -234,13 +253,27 @@ _OPEN_PROMPT = """你是这部长篇生存小说的开场编剧，现在要把�
 static，会随每次重开变化的是 dynamic。只输出 JSON。"""
 
 
-_DIRECTOR_PROMPT = """你是这部长篇生存小说的编剧，负责把玩家这一轮的意图落成这一拍真实发生的事。
+_DIRECTOR_PROMPT = """你是这部长篇生存小说的编剧，负责把玩家这一轮写下的剧情落成这一拍真实发生的事。
 你只改状态、不写正文；写作的人会拿到**同一份**世界书状态和你的裁定。
 
-【裁定的意思】
-玩家写的是意图，不是既成事实。手边没有的东西，就写他伸手摸到了什么；做不到的事，
-就写他试过之后的结果。主角的身份是真实条件：文弱书生翻不了窗，体育生能撞门，
-医学生看得懂伤口。你交回去的事实会写进世界书，下一轮所有人都照它演。
+【玩家写的是剧情，不是一句话】
+玩家这一轮给你的是**一段剧情的骨架**：他要往哪走、要见谁、想做什么。这不是一句等你
+回复的话，也不是让你缩写的摘要。你的任务是把它落成这一拍确实发生的事，**节点一个都
+不能少**：他写「往高层走，在 402 碰到一个叫苏然的女生」，这一拍就必须有「上楼」、
+「到 402」、「门里的苏然」这几件事，按时间顺序排好。少一个节点，写作的人就接不上。
+
+【裁定只判可行不可行，不改写剧情走向】
+玩家写下的是他的意图：能不能做到，由你判。手边没有的东西，就写他伸手摸到了什么；
+做不到的事，就写他试过之后的结果。
+主角的身份是真实条件：文弱书生翻不了窗，体育生能撞门，医学生看得懂伤口。
+但**不许否决他写的走向，也不许替他换成别的事**——他写去 402 找人，你不能裁定成
+「退回 402 门口防守、把门插上」；他没写撤退、没写丢下那个人，这些决定都不属于你。
+他没要求的那一段，别自己加戏。
+
+【`facts` 按时间顺序写过程】
+`facts` 是这一拍按时间顺序发生的每一步，一样一条：怎么走过去的、路上什么情况、
+看到什么、对方什么反应。**不要只写结果**——「他摸到 402 门口，推开门」是过程，
+「他退回 402 防守」是结果，而结果通常意味着中间全被砍了。
 
 【道具：交完整清单，不交增量】
 `items` 是**这一拍结束时主角身上/手上的全部东西**，照状态块里的「手上拿着」写：
@@ -250,12 +283,18 @@ _DIRECTOR_PROMPT = """你是这部长篇生存小说的编剧，负责把玩家�
 只有你发放的东西才会进主角的口袋。代码只做归一化和去重，不替你判断。
 写作的人会照你登记的持有物写动作，所以这一行必须准。
 
+【时间】
+每一拍都要给 `clock`：现在第几天、什么时候（「第 3 天 傍晚」）。玩家写的剧情跨了
+饭点、熬了夜、睡了一觉，就照实往后推，并把吃掉喝掉的份数从清单里扣掉——过了三天
+薯片可乐一份没少，那是错的。没跨时间就把上一拍的 `clock` 原样抄回。
+
 【路线】
 玩家提出一个远处的目标，就把它拆成两三段能走的路，每段是一个具体地点。
 玩家中途改了主意，就重新给一条路。已经走到的位置记在 `at` 上。
 
 【角色】
 新遇到的人由你编：名字、一句话身份、跟主角的关系、愿不愿意跟着走。
+这一拍新出现的人写进 `cast_new`，已经出场过的人只用 `cast_update`，别重复造人。
 `tier` 写「主体」或「路人甲」。世界以主角为中心，路人甲只负责把剧情推一下。
 
 【已经演过的事】
@@ -263,20 +302,20 @@ _DIRECTOR_PROMPT = """你是这部长篇生存小说的编剧，负责把玩家�
 不要把试过的刀、检查过的柜子、走过的路再裁定一遍。
 
 只输出一个 JSON 对象，字段：
-{{"ruling":"这一轮裁定成的事实，一句话",
- "facts":["这一拍确实发生了什么，一样一条"],
- "items":[{{"name":"","qty":"","note":""}}],
+{"clock":"","ruling":"这一轮裁定成的事实，一句话",
+ "facts":["这一拍确实发生了什么，按时间顺序一样一条"],
+ "items":[{"name":"","qty":"","note":""}],
  "place":"","condition":"",
- "cast_new":[{{"name":"","identity":"","relation":"","willing":"","tier":"主体","present":true}}],
- "cast_update":[{{"name":"","relation":"","willing":"","present":true}}],
- "events_add":[{{"trigger":"","result":"","done":true,"kind":"dynamic"}}],
+ "cast_new":[{"name":"","identity":"","relation":"","willing":"","tier":"主体","present":true}],
+ "cast_update":[{"name":"","relation":"","willing":"","present":true}],
+ "events_add":[{"trigger":"","result":"","done":true,"kind":"dynamic"}],
  "events_done":[],
- "discovered":[{{"fact":"","kind":"static"}}],
- "route":{{"goal":"","nodes":[],"at":0}},
+ "discovered":[{"fact":"","kind":"static"}],
+ "route":{"goal":"","nodes":[],"at":0},
  "chapter_goal":"",
  "chapter_advance":false,
- "ending":{{"cause":"","summary":""}},
- "actions":["","",""]}}
+ "ending":{"cause":"","summary":""},
+ "actions":["","",""]}
 
 `route` / `chapter_goal` / `ending` 这一轮没变化就给 null，`chapter_advance` 给 false。
 `ending` 只在主角这一拍死了才给，写清死因和当时发生了什么。只输出 JSON。"""
@@ -288,33 +327,56 @@ _NOVEL_CONTRACT = """你是这部长篇生存小说的叙述者，用第三人�
 正文一律写主角的名字「{name}」，不写「你」来指主角，也不写成第一人称「我」。
 给玩家看的引导语、动作选项和状态卡另有其文，那部分用「你」；这里只写小说正文。
 
-【你写的是已经发生过的事】
-每一轮末尾的「这一拍已经发生的事实」就是这一拍的全部内容。把它写成有过程、
-有阻力的一段戏，别提前写还没裁定的事，也别补写清单里没有的转折。
-「已经演过的事」是上一轮及更早已经写完的戏，只用来衔接，**不要重演**。
+【你要做的是扩写，不是回应】
+玩家这一轮写下的是一段剧情的骨架：他去哪、碰到谁、对方什么状态、他想做什么。
+他不是在跟你说话，也不指望你回他一句——他要你把这副骨架写成小说正文。
+骨架里有几个节点，正文里就得有几个节点，顺序照它来。
+
+【过程必须写出来，不许跳到结果】
+他写「往高层走，在 402 碰到一个叫苏然的女生，她饿了很多天」，你就从他此刻站的地方
+写起：怎么上的楼、楼梯间什么样、一路经过几层、402 的门是什么状态、推开门看见什么、
+苏然是什么样子、两人怎么开口、她说话什么语气。中间每一段路、每一次停顿、每一个过渡，
+都由你写。直接写「他退回 402 门口把门插上」这种结果、把相遇整段跳过去，就是没写完。
+
+【不许替玩家做决定，也不许改他写的剧情】
+他没写撤退，就不许写他撤退；他没写丢下那个人，就不许写他丢下她走掉。
+去哪、见谁、做什么，由他定；路上的细节、环境、动作、对话、他的心理活动，由你补。
+剧情是他的，血肉是你的。你不许把「去 402 找人」改成「回 402 门口防守」。
+
+【接上上一段】
+上一轮正文的最后一句，就是这一轮的起点。地方、时间、手上拿着的东西、在场的人，
+都从那儿接上，别重新开场。已经演过的事只用来衔接，**不要重演**：试过的刀不要再试
+一次，走过的楼梯不要再走一遍，遇见的人不要再重新遇见一次。
 
 【照着状态写】
 「此刻的世界」是代码从世界书直接读出来的原始状态，不是别人的摘要。
 主角手上拿着什么，动作里就带着什么；手上没有的东西不许凭空出现。
-他身上的状态、所在的地方、在场的人，都照它写。玩家原话只是意图，
-事实以「这一拍已经发生的事实」为准。
+他身上的状态、第几天、现在在哪、在场的人，都照它写。
+「这一拍必须写到的节点」是这一拍确实发生了的事，一条都不能漏；节点之间怎么写、
+写多细，是你的活。
 
-写完这一拍就停，别为凑字数灌水，也别替下一轮收尾。"""
+写完这一段就停：把玩家给的剧情演完，别提前演下一轮，也别替下一轮收尾。"""
 
 
-def _call(messages, max_tokens, temperature):
+def _call(messages, max_tokens, temperature, opts=None):
     """跟扮演共用链头（公用中转站），失败时顺链降级，跟 1v1 一致。
 
     2026-11-11：原来这里用严格模式单目标直调，中转站余额归零时
     开场直接 502，前端还写「等一下再试」，充值前完全玩不了。站主拍板放开：
     链头仍是 PERSONA_PROVIDER/MODEL，402 之后交给 llm.candidates() 顺链
     试 deepseek-flash / mimo / volc；代价是可能落到付费 provider。
+
+    2026-11-12 上架 5175：`opts` 是接口层已经定好的链策略，服务层只吃参数、
+    不 import flask、不认 QQ。None = 站主现状；群友免费层走严格模式，只打
+    公用中转站（绝不静默落到付费官方），中转站挂了才由接口层扣代充次数、
+    传 `provider/model=None` 走全局链。
     """
+    o = opts or {}
     return llm.call_llm(
         messages,
-        provider=PERSONA_PROVIDER or None,
-        model=PERSONA_MODEL or None,
-        strict=False,
+        provider=o.get("provider", PERSONA_PROVIDER or None),
+        model=o.get("model", PERSONA_MODEL or None),
+        strict=bool(o.get("strict", False)),
         max_tokens=max_tokens,
         temperature=temperature,
     )
@@ -361,10 +423,11 @@ def _as_text(v, default=""):
 
 # ─── 世界书 ──────────────────────────────────────────
 
-def _blank_world(play, name, identity, identity_desc, preset):
+def _blank_world(play, name, identity, identity_desc, preset, owner=""):
     start = dict(preset.get("start") or {})
     return {
         "id": "nv_" + time.strftime("%m%d%H%M%S") + "_" + uuid.uuid4().hex[:4],
+        "owner": str(owner or ""),
         "play": play,
         "play_name": preset.get("name") or play,
         "created": time.time(),
@@ -393,6 +456,7 @@ def _blank_world(play, name, identity, identity_desc, preset):
         "actions": list(preset.get("opening_actions") or []),
         "turns": 0,
         "restarts": 0,
+        "clock": "",
         "seed": {},
         "opening_reply": "",
     }
@@ -455,9 +519,9 @@ def _state_block(world):
             p.get("name") or "", p.get("identity") or "",
             p.get("identity_desc") or ""),
         "身体状态：%s" % (p.get("condition") or "完好"),
-        "现在在：%s，第 %s 章，本章目标：%s" % (
-            p.get("place") or "", world.get("chapter", 1),
-            world.get("chapter_goal") or ""),
+        "现在在：%s（%s），第 %s 章，本章目标：%s" % (
+            p.get("place") or "", world.get("clock") or "时间还没记",
+            world.get("chapter", 1), world.get("chapter_goal") or ""),
         "手上拿着：%s" % ("；".join(items) or "空手"),
         "【上面这行是主角此刻全部持有物：动作里只能用这些，不许凭空多出别的东西；"
         "数量、放下、没带走都以它为准】",
@@ -466,9 +530,10 @@ def _state_block(world):
                 c.get("name") or "", c.get("identity") or "",
                 c.get("relation") or "", c.get("willing") or "")
                 for c in present) or "只有主角一个"),
-        "主角团里有过谁：%s" % (
-            "、".join(c.get("name") or "" for c in world.get("cast", []))
-            or "还没有别人"),
+        "遇到过的人（只是名录：路过的、已经分开的、已经死了的都在里面，"
+        "不是「主角团」，不在这行的人此刻不在场）：%s" % (
+            "、".join(c.get("name") or "" for c in world.get("cast", [])
+                     if not c.get("present")) or "还没遇到过别人"),
     ]
     discovered = world.get("discovered") or []
     # 固定事实只带最近若干条，更早的交给 RAG 检索（控制每轮 token）。
@@ -540,7 +605,7 @@ def _hist(world):
         role = r.get("role")
         content = str(r.get("content") or "")
         if role == "user":
-            content = ("【玩家这一轮打算做什么（意图，不是既成事实）】\n"
+            content = ("【玩家当时写下的剧情骨架（不是跟你说话，是让你扩写）】\n"
                        + content)
         out.append({"role": role, "content": content})
     return out
@@ -589,10 +654,14 @@ def _tail(world):
         if r.get("role") == "assistant":
             last = str(r.get("content") or "")
             break
-    lo = " ".join(last.split())[:24]
+    lo = " ".join(last.split())
     if lo:
-        bits.append("上一轮你是这样开头的：「%s」——这一轮换个起手式" % lo)
+        bits.append("上一段停在「…%s」，从这里往下接，别重新开场" % lo[-26:])
     bits.append(writing_style.LENGTH_ANCHOR)
+    # 放在 LENGTH_ANCHOR 之后：那段是 1v1 的口径（没东西写就停在 300 字），
+    # 小说要的是扩写，近因位这句压住它，别让模型把路上的事压成一句。
+    bits.append("玩家给的节点有多少就写多少，600~1500 字正常："
+                "宁可长一点把过程写透，也别跳到结果")
     return "（" + " · ".join(bits) + "）"
 
 
@@ -620,8 +689,10 @@ def _rag_block(world, query):
 
 
 def _user_block(world, facts=None, said="", for_director=False):
-    """最后一条 user 消息：原话 → 回忆 → 发展线 → 状态 → facts → 尾注。"""
-    parts = ["【玩家这一轮（原话，是意图不是既成事实）】\n"
+    """最后一条 user 消息：玩家写的剧情 → 回忆 → 发展线 → 状态 → 节点 → 尾注。"""
+    parts = ["【玩家这一轮写下的剧情（这是这一段的骨架：去哪、遇到谁、做什么。"
+             "照它扩写成正文，节点一个不许漏，不许跳过过程直接写结果，"
+             "也不许换成别的事）】\n"
              + (said or "（开场）")]
     rag = _rag_block(world, said)
     if rag:
@@ -632,9 +703,11 @@ def _user_block(world, facts=None, said="", for_director=False):
     parts.append(_state_block(world))
     if for_director:
         parts.append("（这一轮只裁定新增事实，交 JSON，不写正文；"
+                     "玩家写的每个节点都要落成事实，不许换成别的事；"
                      "已经演过的事不要再裁定一遍）")
     else:
-        parts.append("【这一拍已经发生的事实（把它演成一段戏）】\n"
+        parts.append("【这一拍必须写到的节点（按时间顺序，一条都不许漏；"
+                     "节点之间的过场、环境、动作、对话由你写）】\n"
                      + _facts_text(facts))
         parts.append(_tail(world))
     return "\n\n".join(parts)
@@ -742,6 +815,9 @@ def _apply(world, d, said):
     condition = _as_text(d.get("condition"), p.get("condition") or "")
     if condition:
         p["condition"] = condition
+    clock = _as_text(d.get("clock"))
+    if clock:
+        world["clock"] = clock
 
     for item in _as_list(d.get("cast_new")) + _as_list(d.get("cast_update")):
         _merge_cast(world, item)
@@ -815,7 +891,7 @@ def _apply(world, d, said):
 
 # ─── 三个 AI ─────────────────────────────────────────
 
-def _open_ai(world, preset):
+def _open_ai(world, preset, opts=None):
     p = world["player"]
     msg = _OPEN_PROMPT.format(
         preset=json.dumps(preset, ensure_ascii=False),
@@ -824,25 +900,26 @@ def _open_ai(world, preset):
         identity=p.get("identity") or "",
         identity_desc=p.get("identity_desc") or "",
     )
-    raw = _call([{"role": "user", "content": msg}], OPEN_MAX_TOKENS, 0.8)
+    raw = _call([{"role": "user", "content": msg}], OPEN_MAX_TOKENS, 0.8,
+                opts)
     return _parse_json(raw)
 
 
-def _director(world, said):
+def _director(world, said, opts=None):
     """编剧：拿完整上下文，但 system 头是裁定规则（不是叙述契约）。"""
     raw = _call(_messages(world, said=said, for_director=True),
-                DIRECTOR_MAX_TOKENS, 0.7)
+                DIRECTOR_MAX_TOKENS, 0.7, opts)
     return _parse_json(raw)
 
 
-def _writer(world, facts, said):
+def _writer(world, facts, said, opts=None):
     """写作：拿完整上下文（人设 + 完整历史 + RAG + 状态 + 原话 + facts + 尾注）。
 
     2026-11-12 修正：原来只给一条 user 消息（切片 + facts），等于把世界
     交给编剧压缩后再转述给写作 AI —— 这正是 1v1 早就修掉的老问题。
     """
     out = _call(_messages(world, facts=facts, said=said),
-                WRITER_MAX_TOKENS, 1.0)
+                WRITER_MAX_TOKENS, 1.0, opts)
     text = str(out or "").strip()
     if not text:
         raise NoHomework("写作 AI 没有返回正文")
@@ -867,14 +944,16 @@ def _merge_seed(world, seed):
 
 # ─── 对外接口 ────────────────────────────────────────
 
-def open_world(play, name, identity, world_id=None):
+def open_world(play, name, identity, world_id=None, owner="", opts=None):
     """开场封样：一次开场 AI + 一次写作 AI。返回给前端的完整一屏。
 
     传了 world_id 且世界已存在时直接返回那一本，**不再跑 LLM**——站主怕
     「再点一次开场封样又重新封一遍」，身份一旦选好就固定，除非重开。
+    `owner` 由接口层给（站主 ""、群友 QQ），幂等分支也要校验，别让群友
+    拿站主那本的 id 直接套到自己的封样上。
     """
     if world_id:
-        existing = get_world(world_id)
+        existing = get_world(world_id, owner)
         if existing:
             warm_world(existing)
             return {"ok": True, "world_id": existing["id"],
@@ -891,11 +970,11 @@ def open_world(play, name, identity, world_id=None):
         identity = (choices[0].get("name") if choices and isinstance(choices[0], dict)
                     else "普通人")
     world = _blank_world(play, name, identity,
-                         _identity_desc(preset, identity), preset)
-    seed = _open_ai(world, preset)
+                         _identity_desc(preset, identity), preset, owner)
+    seed = _open_ai(world, preset, opts)
     _merge_seed(world, seed)
     facts = _as_list(seed.get("opening_facts"))
-    reply = _writer(world, facts, "")
+    reply = _writer(world, facts, "", opts)
     world["opening_reply"] = reply
     world["history"].append({"role": "assistant", "content": reply})
     _save_world(world)
@@ -905,12 +984,12 @@ def open_world(play, name, identity, world_id=None):
             "state": state_card(world)}
 
 
-def rename(world_id, name):
+def rename(world_id, name, owner=""):
     """主角名字随时可改；身份不在这里动（要改身份只能重开一本）。
 
     只改状态里的名字，已写过的正文和开场白留着原名——那是当时确实写下的文字。
     """
-    w = get_world(world_id)
+    w = get_world(world_id, owner)
     if not w:
         raise ValueError("没有这个世界")
     name = _as_text(name)
@@ -921,32 +1000,47 @@ def rename(world_id, name):
     return {"ok": True, "state": state_card(w)}
 
 
-def run_turn(world_id, said):
-    """一轮：编剧裁定 → 登记 → 写作演出。"""
+def run_turn(world_id, said, owner="", opts=None, turn_token=None):
+    """一轮：编剧裁定 → 登记 → 写作演出。
+
+    `turn_token`（2026-11-12 上架 5175）：一轮要串行两次 LLM，网关那头可能
+    先超时再被手点一次。同一个 token 直接把上一轮结果原样返回，不重跑模型、
+    不重复扣代充次数。编剧/写作任一步抛异常时世界书还没落盘（`_apply` 只改
+    内存副本），接口层整轮换一条链重跑是安全的。
+    """
     said = _as_text(said)
     if not said:
         raise ValueError("这一轮没有写意图")
-    world = get_world(world_id)
+    world = get_world(world_id, owner)
     if not world:
         raise ValueError("没有这个世界")
+    token = _as_text(turn_token)
+    last = world.get("last_turn_result")
+    if (token and token == world.get("last_turn_token")
+            and isinstance(last, dict)):
+        return dict(last)
     if world.get("ending"):
         return {"ok": False, "error": "这一本已经结束了，重开一本吧",
                 "state": state_card(world)}
 
-    d = _director(world, said)
+    d = _director(world, said, opts)
     ruling, facts = _apply(world, d, said)
-    reply = _writer(world, [ruling] + facts if ruling else facts, said)
+    reply = _writer(world, [ruling] + facts if ruling else facts, said, opts)
     world["history"].append({"role": "assistant", "content": reply})
     world["history"] = world["history"][-_HISTORY_MAX:]
+    out = {"ok": True, "reply": reply, "ruling": ruling,
+           "ending": world.get("ending"), "state": state_card(world)}
+    if token:
+        world["last_turn_token"] = token
+        world["last_turn_result"] = dict(out)
     _save_world(world)
     _remember(world, said, reply)
-    return {"ok": True, "reply": reply, "ruling": ruling,
-            "ending": world.get("ending"), "state": state_card(world)}
+    return out
 
 
-def restart(world_id, name=None, identity=None):
+def restart(world_id, name=None, identity=None, owner=""):
     """死亡重开：人物归零，静态世界事实与死因留下，封样复用，不重跑 LLM。"""
-    old = get_world(world_id)
+    old = get_world(world_id, owner)
     if not old:
         raise ValueError("没有这个世界")
     preset = load_preset(old.get("play"))
@@ -956,7 +1050,8 @@ def restart(world_id, name=None, identity=None):
     name = _as_text(name) or p.get("name") or "无名的人"
     identity = _as_text(identity) or p.get("identity") or ""
     fresh = _blank_world(old["play"], name, identity,
-                         _identity_desc(preset, identity), preset)
+                         _identity_desc(preset, identity), preset, owner)
+    fresh["owner"] = str(old.get("owner") or "")
     fresh["id"] = old["id"]                 # 同一个世界，同一条线
     fresh["created"] = old.get("created", fresh["created"])
     fresh["restarts"] = int(old.get("restarts") or 0) + 1  # RAG 换线，旧周目记忆不串
@@ -985,6 +1080,7 @@ def state_card(world):
         "play_name": world.get("play_name") or world.get("play"),
         "chapter": world.get("chapter", 1),
         "chapter_goal": world.get("chapter_goal") or "",
+        "clock": world.get("clock") or "",
         "ending": world.get("ending"),
         "player": {
             "name": p.get("name") or "",

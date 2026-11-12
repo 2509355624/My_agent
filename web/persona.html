@@ -1132,11 +1132,11 @@
       <span class="live" id="live" style="display:none">扮演中</span>
       <span class="sp"></span>
       <button class="btn sm mode" id="btnMode" style="display:none">自由模式</button>
-      <!-- 小说模式（2026-11-11）：跟攻略/自由模式并列的第三套，状态、引擎、
-           prompt、页面全独立，这里只放一个入口。小说页只挂 5174，链接由
-           bindNovelLink() 按端口修正，免得从 5175 点过去吃 404。 -->
+      <!-- 小说模式（2026-11-11 建，2026-11-12 上架 5175）：跟攻略/自由模式
+           并列的第三套，状态、引擎、prompt、页面全独立，这里只放一个入口。
+           5174 和 5175 各自都有 /novel，相对地址两边都指当前这一站。 -->
       <a class="btn sm" id="btnNovel" href="/novel"
-         title="小说模式：世界书 + 编剧裁定 + 第三人称正文，第一版玩法是丧尸末日（站主入口 · 只在 5174）">小说模式</a>
+         title="小说模式：世界书 + 编剧裁定 + 第三人称正文，第一版玩法是丧尸末日">小说模式</a>
       <!-- 「状态」：窄屏专用，点开右侧抽屉看面板（2026-11-04 深夜）。
            宽屏有这个按钮也不显示——右栏本来就一直开着。 -->
       <button class="btn sm stats-btn" id="btnStats"
@@ -1878,24 +1878,16 @@ let AFF = null;          // 攻略模式状态（session/chat 带回来；null=�
   });
 })();
 
-// ── 小说模式入口（2026-11-11）────────────────────────────
-// 小说页只挂 5174（站主自用）：5175 群友页既没有 /novel，也没有
-// /api/novel/* 反代。可 /persona 在 5175 打开的是**同一份 HTML**，所以
-// 这里按来源把按钮指到 5174，别让站主一点就吃 404；公网隧道来的访客
-// 根本不该看见这个入口，直接藏掉。
+// ── 小说模式入口（2026-11-11 建，2026-11-12 上架 5175）──────
+// 5174 与 5175 各自都有 /novel，直接用相对地址：站主本机、群友走隧道、
+// 手机走局域网，指的都是「当前这一站的 /novel」。旧版按端口把链接改到
+// :5174，公网访客会跳到不存在的本机端口，只能把按钮整个藏掉。
+// 独立游客页（/play）仍不给：小说模式要登录，一轮要跑两次 LLM。
 (function bindNovelLink() {
   const a = $("btnNovel");
   if (!a) return;
-  // 独立游客页不给：小说模式不是群友玩法，露出来只是条死路。
   if (SOLO) { a.style.display = "none"; return; }
-  if (location.port === "5174") return;          // 已经在 5174，/novel 直达
-  const h = location.hostname;
-  const local = h === "localhost" || h === "127.0.0.1" || h === "::1"
-    || /^192\.168\./.test(h) || /^10\./.test(h)
-    || /^172\.(1[6-9]|2\d|3[01])\./.test(h);
-  if (!local) { a.style.display = "none"; return; }
-  a.href = location.protocol + "//" + h + ":5174/novel";
-  a.title = "小说模式（站主入口 · 会跳到本机 5174）";
+  a.href = "/novel";
 })();
 
 // ── 手机视口高度（2026-11-03）────────────────────────────

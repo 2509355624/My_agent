@@ -280,7 +280,7 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
     <div class="composer nv-input" id="nvInputBox" style="display:none">
       <div class="nv-info" id="nvInfo" style="display:none"></div>
       <div class="nv-actions" id="nvActions"></div>
-      <textarea id="nvText" placeholder="写下你打算做什么。想法可以天马行空，编剧会把它落成这一拍真正发生的事。"></textarea>
+      <textarea id="nvText" placeholder="写下这一段要发生的事：往哪走、遇到谁、想做什么。AI 会把它扩写成正文，路上的过程由它写。"></textarea>
       <div class="nv-sendrow">
         <button class="btn pri" id="nvSendBtn">写下去</button>
         <button class="btn sm" id="nvRestartBtn">重开一本</button>
@@ -356,6 +356,9 @@ var nvConfirm = '我同意重开这一本';
 var nvInfoTimer = null;
 var nvCM = [];
 var CM_KEY = 'persona_custom_models';
+var nvFriendMode = false;
+var nvTurnToken = '';
+var nvTurnText = '';
 
 function nvEl(id){ return document.getElementById(id); }
 function nvEsc(s){
@@ -409,7 +412,8 @@ async function nvGet(path){
 }
 async function nvPost(path, body){
   body = body || {};
-  body.custom_models = nvCM;
+  /* 群友态不带自定义模型：那是站主自用功能，Key 不该过站主服务器。 */
+  if(!nvFriendMode) body.custom_models = nvCM;
   var r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'},
                              body:JSON.stringify(body)});
   return await r.json();
@@ -501,11 +505,11 @@ function nvRenderCard(s){
   html += '<dt>章节 · 本章目标</dt><dd>第 ' + nvEsc(s.chapter) + ' 章 · ' + nvEsc(s.chapter_goal || '暂无') + '</dd>';
   html += '<dt>主角</dt><dd>' + nvEsc(p.name) + ' · ' + nvEsc(p.identity) + '</dd>';
   html += '<dt>身份意味着什么</dt><dd>' + nvEsc(p.identity_desc || '普通人') + '</dd>';
-  html += '<dt>现在在哪</dt><dd>' + nvEsc(p.place || '未知') + '</dd>';
+  html += '<dt>现在在哪 · 什么时候</dt><dd>' + nvEsc(p.place || '未知') + (s.clock ? ' · ' + nvEsc(s.clock) : '') + '</dd>';
   html += '<dt>身体状态</dt><dd>' + nvEsc(p.condition || '完好') + '</dd>';
   html += '<dt>手上拿着</dt><dd>' + nvChips(p.items) + '</dd>';
   html += '<dt>在场的人</dt><dd>' + nvChips(present) + '</dd>';
-  html += '<dt>主角团里有过谁</dt><dd>' + nvChips((s.cast || []).map(function(c){ return c.name; })) + '</dd>';
+  html += '<dt>遇到过的人</dt><dd>' + nvChips((s.cast || []).filter(function(c){ return !c.present; }).map(function(c){ return c.name; })) + '</dd>';
   html += '<dt>当前路线</dt><dd>' + (route.goal ? nvEsc(route.goal) + '：' + nvEsc((route.nodes || []).join(' → ')) : '暂无') + '</dd>';
   html += '<dt>还没了结的事</dt><dd>' + nvTextList((s.events || []).map(function(e){ return e.trigger; })) + '</dd>';
   html += '<dt>最近做过的事</dt><dd>' + nvTextList(s.log) + '</dd>';
@@ -567,6 +571,8 @@ function nvApplyState(s, note){
   nvGet('/api/novel/worlds').then(function(d){ nvRenderWorlds(d.worlds); }).catch(function(){});
 }
 async function nvBoot(){
+  /* 先问一次额度：顺便认出是不是群友态，好把自定义模型入口收起来。 */
+  await nvQuota();
   try{
     var d = await nvGet('/api/novel/plays');
     nvRenderPlays(d.plays);
@@ -607,16 +613,23 @@ async function nvSend(text){
   if(nvBusy || !nvWorldId) return;
   text = String(text || nvEl('nvText').value || '').trim();
   if(!text) return;
+  /* 网关超时后原样重发同一句 → 复用同一个 token，后端直接还上一轮结果；
+     换了文本就是新的一轮，换新 token，别把旧结果当成这轮的。 */
+  var token = (nvTurnToken && nvTurnText === text)
+    ? nvTurnToken
+    : ('t_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10));
+  nvTurnToken = token; nvTurnText = text;
   nvErr(''); nvBusySet(true);
   nvEl('nvText').value = '';
   try{
-    var d = await nvPost('/api/novel/turn', {id:nvWorldId, text:text});
+    var d = await nvPost('/api/novel/turn', {id:nvWorldId, text:text, turn_token:token});
     nvModelUsed(d);
     if(!d.ok){
       nvErr(d.error, d.detail);
       if(d.state) nvApplyState(d.state, '');
       return;
     }
+    nvTurnToken = ''; nvTurnText = '';
     nvApplyState(d.state, '');
   }catch(e){ nvErr('这一轮失败：' + e.message); }
   finally{ nvBusySet(false); }
@@ -639,8 +652,12 @@ async function nvQuota(){
   try{
     var d = await nvGet('/api/novel/quota');
     nvModelUsed(d);
+    /* 群友态藏掉自定义模型：服务端那一半也关了 custom_test，这里是页面那一半。 */
+    nvFriendMode = d.mode === 'friend';
+    var cb = nvEl('nvCustomBtn');
+    if(cb) cb.style.display = nvFriendMode ? 'none' : '';
     nvEl('nvQuotaText').textContent = d.ok
-      ? (d.limited ? ('剩余 ' + d.remaining + ' 次') : d.text)
+      ? (d.text || (d.limited ? ('剩余 ' + d.remaining + ' 次') : ''))
       : (d.error || '查询失败');
   }catch(e){ nvEl('nvQuotaText').textContent = '查询失败：' + e.message; }
 }

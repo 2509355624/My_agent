@@ -16,6 +16,7 @@ import collections
 import json
 import os
 import re
+import shutil
 import tempfile
 import unittest
 from unittest import mock
@@ -168,8 +169,8 @@ class WorldBookTest(NovelBase):
         self.assertEqual(s["chapter"], 1)
         self.assertIsNone(s["ending"])
         self.assertEqual(
-            {"id", "play", "play_name", "chapter", "chapter_goal", "ending",
-             "player", "present", "cast", "route", "events", "log",
+            {"id", "play", "play_name", "chapter", "chapter_goal", "clock",
+             "ending", "player", "present", "cast", "route", "events", "log",
              "discovered", "last_death", "actions", "history"},
             set(s.keys()))
         for banned in ("affection", "score", "tier", "gameday", "outfit",
@@ -223,8 +224,10 @@ class WorldBookTest(NovelBase):
         self.assertNotIn("{'name'", s,
                          "老存档的 Python 字典字面量必须清洗掉")
         self.assertIn("周砚", s)
-        self.assertIn("李二", s.split("主角团里有过谁：")[1].split("\n")[0])
+        self.assertIn("李二", s.split("遇到过的人")[1].split("\n")[0])
         self.assertNotIn("李二", s.split("在场的人：")[1].split("\n")[0])
+        self.assertNotIn("主角团里有过谁", s,
+                         "2026-11-12 真机：这行把死掉的丧尸也算成「主角团」")
 
 
 # ─── 裁定登记：代码只合并，不判断 ──────────────────────
@@ -396,7 +399,7 @@ class ChainTest(NovelBase):
                       "写作 AI 必须看到自己上一轮写的正文，否则会重演")
         self.assertIn("此刻的世界", writer_msg)
         self.assertIn("检查柜子", writer_msg)
-        self.assertIn("上一轮你是这样开头的", writer_msg)
+        self.assertIn("上一段停在", writer_msg)
 
     def test_ended_world_does_not_call_llm(self):
         out, _ = self.open_a_world()
@@ -526,8 +529,8 @@ class KernelReuseTest(NovelBase):
         self.assertIn("第三人称", msgs[0]["content"])
         self.assertIn("林岸拽开柜门", msgs[-2]["content"],
                       "写作 AI 必须看到自己上一轮写的完整正文")
-        self.assertIn("玩家这一轮打算做什么", msgs[-3]["content"],
-                      "玩家意图要标明是意图，不是既成事实")
+        self.assertIn("玩家当时写下的剧情骨架", msgs[-3]["content"],
+                      "历史里的玩家话要标明「是让你扩写的骨架」，不是一句待回复的话")
 
     def test_director_and_writer_share_the_same_raw_state(self):
         """用户点名的错误：两个 AI 看到的东西不一样。"""
@@ -543,14 +546,14 @@ class KernelReuseTest(NovelBase):
             self.assertIn(needle, ws)
         self.assertIn("裁定", d[0]["content"], "编剧拿的是裁定规则")
         self.assertIn("叙述者", r[0]["content"], "写作拿的是叙述契约")
-        self.assertIn("这一拍已经发生的事实", ws)
+        self.assertIn("这一拍必须写到的节点", ws)
 
     def test_writer_gets_facts_on_top_of_full_context_not_instead_of_it(self):
         out, _ = self.open_a_world()
         w = novel.get_world(out["world_id"])
         u = novel._user_block(w, facts=["摸到晾衣杆"], said="检查柜子")
         self.assertIn("此刻的世界", u)
-        self.assertIn("玩家这一轮（原话", u)
+        self.assertIn("玩家这一轮写下的剧情", u)
         self.assertIn("摸到晾衣杆", u)
         self.assertTrue(u.rstrip().endswith("）"),
                         "近因位尾注必须是最后一句")
@@ -803,14 +806,21 @@ class WiringTest(unittest.TestCase):
                          "persona 是固定黑底，小说页不该自带亮暗双主题")
 
     def test_persona_page_has_the_novel_entry(self):
-        """用户反馈「没看到入口」：入口必须在角色扮演页里常驻可见。"""
+        """用户反馈「没看到入口」：入口必须在角色扮演页里常驻可见。
+
+        2026-11-12 上架 5175 后改成相对地址：5174 和 5175 各自都有 /novel，
+        按端口改写会把公网访客送到不存在的 127.0.0.1:5174。
+        """
         p = _read(os.path.join(ROOT, "web", "persona.html"))
         self.assertIn('id="btnNovel"', p)
         self.assertIn('href="/novel"', p)
         self.assertIn("小说模式", p)
         self.assertIn("function bindNovelLink()", p)
-        self.assertIn('location.port === "5174"', p)
-        self.assertIn(':5174/novel', p, "5175 打开同一份 HTML 时要能跳到 5174")
+        self.assertIn('a.href = "/novel"', p)
+        self.assertNotIn(':5174/novel', p,
+                         "上架 5175 后不能再按端口跳本机，公网访客会吃死链")
+        self.assertNotIn('if (!local) { a.style.display = "none"', p,
+                         "公网访客不该再被整个藏掉")
         self.assertNotIn('id="btnNovel" style="display:none', p,
                          "入口不许被样式藏起来")
 
@@ -828,9 +838,11 @@ class WiringTest(unittest.TestCase):
                        "persona.cache_rows", "persona_rag.build_block",
                        "persona_rag.remember", "writing_style.LENGTH_ANCHOR"):
             self.assertIn(needle, self.src, "没复用扮演内核：%s" % needle)
-        self.assertIn("strict=False", self.src)
-        self.assertNotIn("strict=True", self.src,
-                         "中转站余额归零时 strict 会让开场直接 502，别改回去")
+        self.assertIn('o.get("strict", False)', self.src,
+                      "站主默认不 strict，402 才能顺链降级；群友的免费层由接口层传严格模式")
+        body = re.search(r"def _call\((.*?)\n\ndef ", self.src, re.S).group(1)
+        self.assertNotIn("strict=True", body,
+                         "服务层不许硬编码 strict=True：中转站余额归零时站主开场会直接 502")
 
     def test_error_box_shows_the_real_reason_instead_of_wait_forever(self):
         """402 余额不足时前端必须给可操作提示，并把 detail 原样显示。"""
@@ -1053,6 +1065,382 @@ class UiSevenTest(unittest.TestCase):
         self.assertIn("if customs:", code)
         self.assertIn("g.novel_has_custom = bool(customs)", code)
         self.assertNotIn("set_custom_override([])", code)
+
+
+# ─── 上架 5175（2026-11-12）：归属隔离 / 链策略 / 幂等 / 计费 / 网关 ───
+
+class OwnerIsolationTest(NovelBase):
+    """世界书原来是全局单文件，上架前必须把「这是谁的书」钉死。"""
+
+    def test_owner_is_written_when_a_world_is_opened(self):
+        with mock.patch.object(novel, "_call",
+                               side_effect=[_seed_text(), OPENING_TEXT,
+                                            _seed_text(), OPENING_TEXT]):
+            a = novel.open_world("zombie", "站主", "体育生", owner="")
+            b = novel.open_world("zombie", "群友", "医学生", owner="123456")
+        self.assertEqual(novel.get_world(a["world_id"])["owner"], "")
+        self.assertEqual(novel.get_world(b["world_id"], "123456")["owner"],
+                         "123456")
+
+    def test_each_viewer_only_lists_their_own_worlds(self):
+        with mock.patch.object(novel, "_call",
+                               side_effect=[_seed_text(), OPENING_TEXT,
+                                            _seed_text(), OPENING_TEXT,
+                                            _seed_text(), OPENING_TEXT]):
+            novel.open_world("zombie", "站主", "体育生", owner="")
+            novel.open_world("zombie", "甲", "医学生", owner="111")
+            novel.open_world("zombie", "乙", "文弱书生", owner="222")
+        self.assertEqual([w["name"] for w in novel.list_worlds("")], ["站主"])
+        self.assertEqual([w["name"] for w in novel.list_worlds("111")], ["甲"])
+        self.assertEqual([w["name"] for w in novel.list_worlds("222")], ["乙"])
+        self.assertEqual(novel.list_worlds("333"), [])
+
+    def test_cross_owner_read_and_all_writes_are_rejected(self):
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        self.assertIsNone(novel.get_world(wid, "999"))
+        with self.assertRaisesRegex(ValueError, "没有这个世界"):
+            novel.run_turn(wid, "摸一下门", owner="999")
+        with self.assertRaisesRegex(ValueError, "没有这个世界"):
+            novel.rename(wid, "偷改的名字", owner="999")
+        with self.assertRaisesRegex(ValueError, "没有这个世界"):
+            novel.restart(wid, owner="999")
+        self.assertEqual(novel.get_world(wid)["player"]["name"], "林岸")
+
+    def test_legacy_world_without_owner_belongs_to_the_station_owner(self):
+        """老存档没有 owner 字段，读的时候归站主，群友一个也看不到。"""
+        out, _ = self.open_a_world()
+        w = novel.get_world(out["world_id"])
+        del w["owner"]
+        db = {"worlds": {w["id"]: w}}
+        with open(novel._FILE, "w", encoding="utf-8") as f:
+            json.dump(db, f, ensure_ascii=False)
+        self.assertEqual(novel.get_world(w["id"])["owner"], "")
+        self.assertIsNone(novel.get_world(w["id"], "999"))
+        self.assertEqual(len(novel.list_worlds("999")), 0)
+
+
+class ChainOptsTest(NovelBase):
+    """服务层不认 QQ，只吃接口层给的链策略。"""
+
+    def test_default_call_keeps_the_owner_fallback_chain(self):
+        with mock.patch.object(novel.llm, "call_llm", return_value="x") as m:
+            novel._call([{"role": "user", "content": "hi"}], 100, 0.5)
+        kw = m.call_args.kwargs
+        self.assertFalse(kw["strict"])
+        self.assertEqual(kw["provider"], novel.PERSONA_PROVIDER)
+        self.assertEqual(kw["model"], novel.PERSONA_MODEL)
+
+    def test_free_relay_opts_only_hit_the_one_public_provider(self):
+        opts = {"provider": "relay", "model": "v4", "strict": True}
+        with mock.patch.object(novel.llm, "call_llm", return_value="x") as m:
+            novel._call([{"role": "user", "content": "hi"}], 100, 0.5, opts)
+        kw = m.call_args.kwargs
+        self.assertEqual((kw["provider"], kw["model"], kw["strict"]),
+                         ("relay", "v4", True))
+
+    def test_paid_opts_start_from_the_global_chain(self):
+        opts = {"provider": None, "model": None, "strict": False}
+        with mock.patch.object(novel.llm, "call_llm", return_value="x") as m:
+            novel._call([{"role": "user", "content": "hi"}], 100, 0.5, opts)
+        kw = m.call_args.kwargs
+        self.assertIsNone(kw["provider"])
+        self.assertFalse(kw["strict"])
+
+    def test_open_and_turn_pass_opts_to_both_llm_calls(self):
+        opts = {"provider": "relay", "model": "v4", "strict": True}
+        with mock.patch.object(novel, "_call",
+                               side_effect=[_seed_text(), OPENING_TEXT]) as m:
+            out = novel.open_world("zombie", "林岸", "医学生", opts=opts)
+        self.assertEqual([c.args[3] for c in m.call_args_list], [opts, opts])
+        ruling = json.dumps({"ruling": "他摸到晾衣杆", "facts": ["柜子里有晾衣杆"],
+                             "items": ["晾衣杆"]}, ensure_ascii=False)
+        with mock.patch.object(novel, "_call",
+                               side_effect=[ruling, "他把晾衣杆握紧。"]) as m2:
+            novel.run_turn(out["world_id"], "检查柜子", opts=opts)
+        self.assertEqual([c.args[3] for c in m2.call_args_list], [opts, opts])
+
+
+class TurnTokenTest(NovelBase):
+    def test_same_token_does_not_rerun_the_model_or_advance_a_turn(self):
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        ruling = json.dumps({"ruling": "他摸到晾衣杆", "facts": ["柜子里有晾衣杆"],
+                             "items": ["晾衣杆"]}, ensure_ascii=False)
+        with mock.patch.object(novel, "_call",
+                               side_effect=[ruling, "他把晾衣杆握紧。"]) as m:
+            a = novel.run_turn(wid, "检查柜子", turn_token="tok1")
+            b = novel.run_turn(wid, "检查柜子", turn_token="tok1")
+        self.assertEqual(a["reply"], b["reply"])
+        self.assertEqual(m.call_count, 2, "同一 token 只能跑一次编剧 + 一次写作")
+        self.assertEqual(novel.get_world(wid)["turns"], 1)
+
+    def test_a_new_token_still_plays_a_new_turn(self):
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        ruling = json.dumps({"ruling": "", "facts": [], "items": []},
+                            ensure_ascii=False)
+        with mock.patch.object(novel, "_call",
+                               side_effect=[ruling, "第一拍。", ruling, "第二拍。"]):
+            novel.run_turn(wid, "检查柜子", turn_token="tok1")
+            b = novel.run_turn(wid, "掀开床板", turn_token="tok2")
+        self.assertEqual(b["reply"], "第二拍。")
+        self.assertEqual(novel.get_world(wid)["turns"], 2)
+
+
+class FriendBillingTest(NovelBase):
+    def setUp(self):
+        super().setUp()
+        app = flask.Flask(__name__)
+        app.register_blueprint(novel_api.bp)
+        self.app = app
+        self.c = app.test_client()
+
+    def _as_friend(self, qq="123456"):
+        p = mock.patch.object(novel_api.comic_quota, "friend_qq",
+                              return_value=qq)
+        p.start()
+        self.addCleanup(p.stop)
+        return qq
+
+    def test_station_owner_does_not_go_through_billing(self):
+        with mock.patch.object(novel_api.comic_quota, "consume") as consume:
+            self.assertIsNone(novel_api._friend_run("", lambda o: o))
+        consume.assert_not_called()
+
+    def test_free_relay_success_charges_nothing(self):
+        with mock.patch.object(novel_api._cfg, "PERSONA_PROVIDER", "relay"), \
+                mock.patch.object(novel_api.comic_quota, "consume") as consume:
+            opts = novel_api._friend_run("123", lambda o: o)
+        self.assertTrue(opts["strict"])
+        self.assertEqual(opts["provider"], "relay")
+        consume.assert_not_called()
+
+    def test_relay_failure_consumes_one_quota_and_reruns_on_paid_chain(self):
+        calls = []
+        with self.app.test_request_context():
+            with mock.patch.object(novel_api._cfg, "PERSONA_PROVIDER", "relay"), \
+                    mock.patch.object(novel_api.comic_quota, "remaining",
+                                      return_value=3), \
+                    mock.patch.object(novel_api.comic_quota, "consume",
+                                      return_value=True) as consume, \
+                    mock.patch.object(novel_api.comic_quota, "refund") as refund:
+                def run(o):
+                    calls.append(o)
+                    if len(calls) == 1:
+                        raise RuntimeError("402")
+                    return "ok"
+                got = novel_api._friend_run("123", run)
+        self.assertEqual(got, "ok")
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(calls[0]["strict"])
+        self.assertFalse(calls[1]["strict"])
+        self.assertIsNone(calls[1]["provider"])
+        consume.assert_called_once_with("123", "script")
+        refund.assert_not_called()
+
+    def test_no_quota_asks_the_player_to_find_the_station_owner(self):
+        with self.app.test_request_context():
+            with mock.patch.object(novel_api._cfg, "PERSONA_PROVIDER", "relay"), \
+                    mock.patch.object(novel_api.comic_quota, "remaining",
+                                      return_value=0), \
+                    mock.patch.object(novel_api.comic_quota, "consume") as consume:
+                with self.assertRaisesRegex(ValueError, "找站长加次数"):
+                    novel_api._friend_run(
+                        "123", lambda o: (_ for _ in ()).throw(RuntimeError("402")))
+        consume.assert_not_called()
+
+    def test_paid_failure_refunds_the_quota(self):
+        with self.app.test_request_context():
+            with mock.patch.object(novel_api._cfg, "PERSONA_PROVIDER", "relay"), \
+                    mock.patch.object(novel_api.comic_quota, "remaining",
+                                      return_value=3), \
+                    mock.patch.object(novel_api.comic_quota, "consume",
+                                      return_value=True), \
+                    mock.patch.object(novel_api.comic_quota, "refund") as refund:
+                with self.assertRaises(RuntimeError):
+                    novel_api._friend_run(
+                        "123", lambda o: (_ for _ in ()).throw(RuntimeError("down")))
+        refund.assert_called_once_with("123", "script")
+
+    def test_no_homework_is_not_mistaken_for_a_relay_outage(self):
+        with mock.patch.object(novel_api._cfg, "PERSONA_PROVIDER", "relay"), \
+                mock.patch.object(novel_api.comic_quota, "consume") as consume:
+            with self.assertRaises(novel.NoHomework):
+                novel_api._friend_run("123", lambda o: (_ for _ in ()).throw(
+                    novel.NoHomework("空返回")))
+        consume.assert_not_called()
+
+    def test_quota_route_reports_the_friend_ledger_and_owner_mode(self):
+        d = self.c.get("/api/novel/quota").get_json()
+        self.assertEqual(d["mode"], "owner")
+        self.assertFalse(d["limited"])
+        self._as_friend("123")
+        with mock.patch.object(novel_api.comic_quota, "snapshot",
+                               return_value={"left": {"script": 2}}) as snap:
+            d = self.c.get("/api/novel/quota").get_json()
+        self.assertEqual(d["mode"], "friend")
+        self.assertEqual(d["remaining"], 2)
+        self.assertIn("免费", d["text"])
+        snap.assert_called_once_with("123")
+
+    def test_worlds_route_only_lists_the_friends_world(self):
+        self.open_a_world(name="站主那本")
+        self._as_friend("123")
+        with mock.patch.object(novel, "_call",
+                               side_effect=[_seed_text(), OPENING_TEXT]):
+            self.c.post("/api/novel/open", json={
+                "play": "zombie", "name": "群友那本", "identity": "医学生"})
+        rows = self.c.get("/api/novel/worlds").get_json()["worlds"]
+        self.assertEqual([w["name"] for w in rows], ["群友那本"])
+
+    def test_custom_test_is_closed_for_friends(self):
+        self._as_friend("123")
+        r = self.c.post("/api/novel/custom_test", json={
+            "base_url": "https://x", "model": "m", "api_key": "k"})
+        self.assertEqual(r.status_code, 403)
+        self.assertIn("站主自用", r.get_json()["error"])
+
+    def test_turn_route_passes_owner_and_token_through(self):
+        self._as_friend("123")
+        with mock.patch.object(novel_api._cfg, "PERSONA_PROVIDER", "relay"), \
+                mock.patch.object(novel, "run_turn",
+                                  return_value={"ok": True, "reply": "正文"}) as m:
+            self.c.post("/api/novel/turn", json={
+                "id": "nv_x", "text": "检查柜子", "turn_token": "tok1"})
+        self.assertEqual(m.call_args.kwargs["owner"], "123")
+        self.assertEqual(m.call_args.kwargs["turn_token"], "tok1")
+
+
+class FriendGatewayTest(unittest.TestCase):
+    def setUp(self):
+        self.gw = _read(os.path.join(ROOT, "friend_app.py"))
+        self.main = _read(MAIN)
+
+    def test_page_and_api_routes_exist_and_require_login(self):
+        self.assertIn('@app.route("/novel")', self.gw)
+        self.assertIn("@app.route(\"/api/novel/<path:sub>\"", self.gw)
+        self.assertIn("if not _logged_in():", self.gw)
+        self.assertIn('BACKEND + "/novel"', self.gw)
+        self.assertIn("_forward(\"/api/novel\", sub", self.gw)
+
+    def test_novel_post_timeout_is_widened(self):
+        self.assertIn("post_timeout=60", self.gw)
+        self.assertIn("timeout=post_timeout", self.gw)
+        self.assertIn("post_timeout=300", self.gw)
+
+    def test_tunnel_guard_does_not_whitelist_novel(self):
+        """隧道错指 5174 时，小说接口必须继续 404，不能绕开 QQ 注入变站主态。
+
+        只看 `_tunnel_guard` 那段函数体：`main.py` 另有 no-cache 路由合法地
+        提到 `/api/novel/`，全文件扫会误报。
+        """
+        seg = re.search(r"def _tunnel_guard\(\):(.*?)(?=\n@app\.|\ndef |\n# )",
+                        self.main, re.S).group(1)
+        self.assertNotIn("/api/novel/", seg)
+        self.assertIn('p.startswith("/api/friend/")', seg)
+
+    def test_solo_qq_link_unlock_also_covers_novel(self):
+        self.assertIn('"/novel.html"', self.gw)
+
+
+class FriendUiTest(unittest.TestCase):
+    def setUp(self):
+        self.html = _read(PAGE)
+
+    def test_turn_token_is_bound_to_the_same_text(self):
+        self.assertIn("turn_token:token", self.html)
+        self.assertIn("nvTurnText === text", self.html)
+        self.assertIn("nvTurnToken = ''", self.html)
+
+    def test_boot_asks_quota_before_anything_else(self):
+        self.assertIn("await nvQuota();", self.html)
+        self.assertIn("nvFriendMode = d.mode === 'friend'", self.html)
+        self.assertIn("cb.style.display = nvFriendMode ? 'none' : ''", self.html)
+
+    def test_friend_posts_do_not_carry_custom_models(self):
+        self.assertIn("if(!nvFriendMode) body.custom_models = nvCM;", self.html)
+
+
+class ExpansionContractTest(unittest.TestCase):
+    """2026-11-12 真机：用户写「往高层走到 402 遇到苏然」，AI 直接写「退回 402
+    门口把门插上」。根因是整条链把用户的话当成「一句待回复的意图」，编剧压成
+    三条事实、写作照事实写结果，过程整段被砍。这里锁住「扩写」口径。"""
+
+    def setUp(self):
+        self.src = _read(os.path.join(ROOT, "app", "novel.py"))
+        self.writer = novel._NOVEL_CONTRACT
+        self.director = novel._DIRECTOR_PROMPT
+
+    def test_contract_is_expansion_not_reply(self):
+        self.assertIn("扩写，不是回应", self.writer)
+        self.assertIn("骨架", self.writer)
+        self.assertIn("他不是在跟你说话", self.writer)
+
+    def test_contract_forbids_skipping_the_process(self):
+        self.assertIn("跳到结果", self.writer)
+        self.assertIn("中间每一段路", self.writer)
+        self.assertIn("就是没写完", self.writer)
+
+    def test_contract_forbids_replacing_the_players_plot(self):
+        self.assertIn("不许替玩家做决定", self.writer)
+        self.assertIn("不许把「去 402 找人」改成「回 402 门口防守」", self.writer)
+        self.assertIn("剧情是他的，血肉是你的", self.writer)
+
+    def test_contract_requires_continuing_from_the_last_sentence(self):
+        self.assertIn("上一轮正文的最后一句", self.writer)
+        self.assertIn("别重新开场", self.writer)
+        self.assertIn("不要重演", self.writer)
+
+    def test_director_must_keep_every_node_in_order(self):
+        self.assertIn("玩家写的是剧情，不是一句话", self.director)
+        self.assertIn("节点一个都", self.director)
+        self.assertIn("按时间顺序", self.director)
+        self.assertIn("不许否决他写的走向", self.director)
+        self.assertIn("别自己加戏", self.director)
+
+    def test_director_is_told_not_to_compress_into_results(self):
+        self.assertIn("不要只写结果", self.director)
+        self.assertIn("「他退回 402 防守」是结果", self.director)
+
+    def test_director_registers_clock_and_consumption(self):
+        self.assertIn("每一拍都要给 `clock`", self.director)
+        self.assertIn("薯片可乐一份没少，那是错的", self.director)
+        self.assertIn('"clock":""', self.director, "JSON 字段里要有 clock")
+
+    def test_user_block_labels_the_plot_as_a_skeleton(self):
+        self.assertIn("玩家这一轮写下的剧情", self.src)
+        self.assertIn("节点一个不许漏", self.src)
+        self.assertIn("不许跳过过程直接写结果", self.src)
+
+    def test_facts_block_is_labelled_as_nodes_not_the_whole_turn(self):
+        self.assertIn("这一拍必须写到的节点", self.src)
+
+
+class StoryClockTest(unittest.TestCase):
+    """跨天之后薯片可乐一份没少：世界书原来没有时间字段。"""
+
+    def setUp(self):
+        tmp = tempfile.mkdtemp(prefix="novel_clock_")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        self.file = os.path.join(tmp, "novel_worlds.json")
+        p = mock.patch.object(novel, "_FILE", self.file)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_clock_is_registered_and_rendered(self):
+        w = novel._blank_world("zombie", "林岸", "体育生", "", {"start": {}})
+        self.assertEqual(w["clock"], "")
+        novel._apply(w, {"clock": "第 3 天 傍晚", "facts": ["在 402 门口停下"]},
+                     "往高层走")
+        self.assertEqual(w["clock"], "第 3 天 傍晚")
+        self.assertIn("第 3 天 傍晚", novel._state_block(w))
+
+    def test_old_world_without_clock_is_normalized(self):
+        w = {"id": "nv_x", "player": {"items": []}, "history": []}
+        novel._normalize_world(w)
+        self.assertEqual(w["clock"], "")
+        self.assertIn("时间还没记", novel._state_block(w))
 
 
 if __name__ == "__main__":

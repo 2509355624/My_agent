@@ -194,7 +194,9 @@ def _gate():
     # 像「链接发错了」。带 from=qq 只可能是刚从 QQ 指令拿到的链接；访客在
     # /play 里手改地址栏到 /gallery（不带参数）仍然挡回，独立页的孤立性不变。
     # 2026-11-11 把 /comic 一并收进来：QQ 新增「/漫画台」指令，同一个坑别再踩。
-    if (p in ("/gallery", "/gallery.html", "/comic", "/comic.html")
+    # 2026-11-12 /novel 同理：小说页上架后若加 QQ 直达链接，别让 fr_solo 挡回游客页。
+    if (p in ("/gallery", "/gallery.html", "/comic", "/comic.html",
+              "/novel", "/novel.html")
             and request.args.get("from") == "qq" and _solo_in()):
         g.clear_solo = True
         return None
@@ -474,7 +476,8 @@ def health():
 
 # ─── 转发 ────────────────────────────────────────────────
 
-def _forward(prefix, sub, allow_guest=False, force_guest=False):
+def _forward(prefix, sub, allow_guest=False, force_guest=False,
+             post_timeout=60):
     """把请求原样转给 5174，并补上登录态里的 QQ 号。
 
     `qq` 一律由这里写死塞进去（参数或表单），**不信客户端传来的 qq**——
@@ -556,7 +559,7 @@ def _forward(prefix, sub, allow_guest=False, force_guest=False):
             else:
                 body.pop("qq", None)
             r = sess.post(url, params=params, json=body,
-                          headers=headers, timeout=60)
+                          headers=headers, timeout=post_timeout)
     except requests.RequestException as e:
         sess.close()
         log.warning("转发失败 %s：%s", sub, e)
@@ -804,6 +807,49 @@ def proxy_comic(sub):
     `/api/comic/admin` 即使被转发过来，也会因 `_qq()` 非空被 5174 拒掉。
     """
     return _forward("/api/comic", sub)
+
+
+# ── 小说模式（2026-11-12 上架）────────────────────────────
+#
+# 页面跟 /persona 一样从 5174 拉**同一份** novel.html，不复制、不做派生页：
+# 以后改前端，站主和群友两边一起生效。接口逐条反代，登录用户由 _forward
+# 写死注入 QQ，5174 侧 novel_api 靠它做世界书归属隔离与群友计费。
+#
+# 必须登录：一轮要跑编剧 + 写作两次 LLM，不能匿名替站主烧 Token。
+# 不放游客，也不许带 fr_solo 的独立游客页进来（_gate 的页面锁照旧生效）。
+
+def _novel_response():
+    """从 5174 拉小说页 HTML，原样发出去。"""
+    try:
+        sess = _new_session()
+        r = sess.get(BACKEND + "/novel",
+                     headers={"X-Friend-Token": friend_auth.secret()},
+                     timeout=(10, 30))
+        sess.close()
+        return Response(r.content, status=r.status_code,
+                        content_type="text/html; charset=utf-8")
+    except requests.RequestException as e:
+        log.warning("取小说页失败：%s", e)
+        return "后台没响应，稍后再试", 502
+
+
+@app.route("/novel")
+@app.route("/novel.html")
+def novel_page():
+    if not _logged_in():
+        return send_from_directory(WEB_DIR, "friend.html")
+    return _novel_response()
+
+
+@app.route("/api/novel/<path:sub>", methods=["GET", "POST", "DELETE"])
+def proxy_novel(sub):
+    """小说接口反代。POST 单独放宽到 300s（一轮两次 LLM）。
+
+    原来是全场统一 60s，而 LLM_REQUEST_TIMEOUT 单次就是 60s —— 小说一轮
+    串行两次，群友很容易收到「后台没响应」但正文其实已经落盘了。前端每轮
+    带 turn_token，超时重发同一个 token 会拿到上一轮结果，不会重复写。
+    """
+    return _forward("/api/novel", sub, post_timeout=300)
 
 
 # ── 换装页（2026-11-11）──────────────────────────────────
