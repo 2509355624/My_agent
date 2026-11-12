@@ -268,5 +268,102 @@ class AdminApiTest(BgBase):
         self.assertFalse(r3.get_json()["background"]["exists"])
 
 
+class OffFlagTest(BgBase):
+    """「移除背景」要跨设备生效（2026-11-12）：标记存在服务端，不是 localStorage。"""
+
+    def test_off_beats_every_layer(self):
+        self.touch("user", QQ)
+        self.touch("card", "rem")
+        self.touch("default")
+        self.assertEqual(chat_bg.resolve(QQ, "rem")["source"], "user")
+
+        self.assertTrue(chat_bg.set_off(QQ, True))
+        d = chat_bg.resolve(QQ, "rem")
+        self.assertEqual(d["source"], "off")
+        # 连站主设的卡 / 全局默认也不返回：玩家点过「不要背景」就该一路没有。
+        self.assertEqual(d["url"], "")
+        self.assertFalse(d["exists"])
+
+    def test_off_is_per_account(self):
+        """QQ 关掉背景不影响另一个账号。"""
+        self.touch("user", QQ)
+        self.touch("user", "10001")
+        chat_bg.set_off(QQ, True)
+        self.assertEqual(chat_bg.resolve(QQ, "")["source"], "off")
+        self.assertEqual(chat_bg.resolve("10001", "")["source"], "user")
+
+    def test_clearing_the_flag_restores_the_picture(self):
+        self.touch("user", QQ)
+        chat_bg.set_off(QQ, True)
+        self.assertFalse(chat_bg.set_off(QQ, False))
+        self.assertEqual(chat_bg.resolve(QQ, "")["source"], "user")
+        self.assertFalse(os.path.isfile(chat_bg._off_path(QQ)))
+
+    def test_empty_who_is_never_off(self):
+        """游客没有账号层，不能写标记。"""
+        self.assertFalse(chat_bg.set_off("", True))
+        self.assertFalse(chat_bg.is_off(""))
+
+    def test_off_survives_a_fresh_import(self):
+        """标记就是磁盘上一个文件：进程重启后照样读得到。"""
+        chat_bg.set_off(QQ, True)
+        self.assertTrue(os.path.isfile(chat_bg._off_path(QQ)))
+        # 换个调用方重新问一遍，走的是文件系统而不是任何内存状态
+        self.assertTrue(chat_bg.is_off(QQ))
+
+
+class OffApiTest(BgBase):
+    """接口层：POST /api/persona/background/off。"""
+
+    def _off(self, on, qq=QQ):
+        return self.c.post("/api/persona/background/off?qq=" + qq,
+                           json={"on": on})
+
+    def test_toggle_is_visible_in_the_next_read(self):
+        self.touch("user", QQ)
+        self.assertEqual(self.c.get("/api/persona/background?qq=" + QQ)
+                         .get_json()["source"], "user")
+
+        d = self._off(True).get_json()
+        self.assertTrue(d["ok"])
+        self.assertTrue(d["off"])
+        self.assertEqual(d["source"], "off")
+
+        got = self.c.get("/api/persona/background?qq=" + QQ).get_json()
+        self.assertEqual(got["source"], "off")
+        self.assertEqual(got["url"], "")
+
+        d2 = self._off(False).get_json()
+        self.assertFalse(d2["off"])
+        self.assertEqual(d2["source"], "user")
+
+    def test_guest_is_403(self):
+        # 不传 qq = 游客
+        r = self.c.post("/api/persona/background/off", json={"on": True})
+        self.assertEqual(r.status_code, 403)
+        self.assertTrue(r.get_json()["limit"])
+
+    def test_upload_clears_the_off_flag(self):
+        """先移除、再换图：新图必须显示，否则用户以为上传失败了。"""
+        self.touch("user", QQ)
+        self._off(True)
+        r = self.c.post("/api/persona/background?qq=" + QQ,
+                        data={"file": (io.BytesIO(_png_bytes()), "bg.png")},
+                        content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(chat_bg.is_off(QQ))
+        self.assertEqual(self.c.get("/api/persona/background?qq=" + QQ)
+                         .get_json()["source"], "user")
+
+    def test_reset_clears_the_off_flag(self):
+        """恢复默认 = 要背景，只是不想要自己那张。"""
+        self.touch("user", QQ)
+        self.touch("default")
+        self._off(True)
+        d = self.c.post("/api/persona/background/reset?qq=" + QQ).get_json()
+        self.assertFalse(chat_bg.is_off(QQ))
+        self.assertEqual(d["source"], "default")
+
+
 if __name__ == "__main__":
     unittest.main()

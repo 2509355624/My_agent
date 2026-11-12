@@ -106,8 +106,68 @@ def info(kind, ident=""):
     }
 
 
+def _off_path(who):
+    """「这个账号不要背景」的标记文件路径（2026-11-12）。
+
+    只记事实、不存映射表：文件在 = 关掉，跟本模块其他层一致（有没有设置
+    看文件在不在）。账号进文件名前先哈希，不把 QQ 号写进路径。
+    """
+    return os.path.join(ROOT, "off_%s.flag" % _safe_id(who))
+
+
+def is_off(who=""):
+    """这个账号是不是点过「移除背景」。"""
+    if not who:
+        return False
+    return os.path.isfile(_off_path(who))
+
+
+def set_off(who="", on=True):
+    """置 / 清「已关闭」标记，返回设置后的状态。
+
+    为什么放服务端（2026-11-12）：原来「移除背景」只往浏览器 localStorage
+    写一条 `off`，换设备 / 换浏览器、或者 5174 与 5175 之间换（localStorage
+    按 origin 隔离）就不存在了，于是回落到服务端那张账号图，用户看到的是
+    「移除了又自己冒出来」。标记放服务端，这个动作才算数。
+
+    `who` 为空（游客）时不写——游客没有账号层。
+    """
+    if not who:
+        return False
+    p = _off_path(who)
+    if on:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        tmp = p + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write("")          # 内容无意义，存在即关闭
+            os.replace(tmp, p)
+        finally:
+            try:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+            except OSError:
+                pass
+    else:
+        try:
+            if os.path.isfile(p):
+                os.unlink(p)
+        except OSError:
+            pass
+    return is_off(who)
+
+
 def resolve(who="", card_id="", allow_user=True):
-    """账号背景 > 卡默认 > 全局默认 > 内置图 > 没有。"""
+    """账号背景 > 卡默认 > 全局默认 > 内置图 > 没有。
+
+    `allow_user` 为真且这个账号点过「移除背景」时，**一层都不返回**：
+    连站主设的卡 / 全局默认也只是「站主想给所有人看」，不该覆盖玩家自己
+    点过的「不要背景」。source 给 `off`，前端据此显示「已移除」和
+    「恢复背景」按钮。
+    """
+    if allow_user and who and is_off(who):
+        return {"url": "", "thumb": "", "version": 0, "exists": False,
+                "source": "off"}
     if allow_user and who:
         i = info("user", who)
         if i["exists"]:

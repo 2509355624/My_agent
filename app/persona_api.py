@@ -2024,6 +2024,9 @@ def upload_background():
         bg = chat_bg.save(request.files.get("file"), "user", who)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
+    # 上传 = 明确要背景，顺手清掉之前点过的「移除」标记（2026-11-12）。
+    # 不清的话 resolve 会先看到 off 层，刚传的图永远不显示，用户会以为上传失败。
+    chat_bg.set_off(who, False)
     return jsonify({"ok": True, "source": "user", **bg})
 
 
@@ -2038,8 +2041,35 @@ def reset_background():
         _attach_guest_cookie(resp, token)
         return resp
     chat_bg.delete("user", who)
+    # 恢复到默认（= 要背景，只是不想要自己那张），所以也得清掉「移除」标记。
+    chat_bg.set_off(who, False)
     bg = chat_bg.resolve(who, _bg_card_id(role, who), allow_user=True)
     return jsonify({"ok": True, **bg})
+
+
+@bp.route("/api/persona/background/off", methods=["POST"])
+def set_background_off():
+    """「移除背景 / 恢复背景」的服务端标记（2026-11-12）。游客 403。
+
+    前端点一次就写一次。原来这一步只写 localStorage，而 localStorage 按
+    origin 隔离（5174 与 5175 是两个 origin），换设备 / 换浏览器就没了，
+    于是回落到服务端那张账号图，表现成「移除了又自己冒出来」。
+
+    body: `{"on": true}` 关闭，`{"on": false}` 恢复。返回当前解析结果，
+    前端拿 `source` 判断该显示图还是显示「已移除」。
+    """
+    role, who, token = _who()
+    if role == "guest":
+        resp = jsonify({"ok": False, "limit": True,
+                        "error": "体验版不能改背景，登录后可以。"})
+        resp.status_code = 403
+        _attach_guest_cookie(resp, token)
+        return resp
+    data = request.get_json(silent=True) or {}
+    on = bool(data.get("on", True))
+    chat_bg.set_off(who, on)
+    bg = chat_bg.resolve(who, _bg_card_id(role, who), allow_user=True)
+    return jsonify({"ok": True, "off": chat_bg.is_off(who), **bg})
 
 
 @bp.route("/api/persona/background/file")

@@ -4187,6 +4187,10 @@ async function loadBg() {
   if (s.state === "image") { renderBg(s.data, BG_SRC_NAMES.local, s.data, "on"); return; }
   try {
     const d = await api("/api/persona/background");
+    // 服务端记着「这个账号不要背景」（2026-11-12）：换设备、换浏览器、或者
+    // 5174 与 5175 之间换（localStorage 按 origin 隔离）时本地没有 off 标记，
+    // 靠这一条兜住，否则会回落到账号那张图、看起来像「移除了又自己冒出来」。
+    if (d.source === "off") { renderBg("", BG_SRC_NAMES.off, "", "off"); return; }
     renderBg(d.url || "", BG_SRC_NAMES[d.source] || BG_SRC_NAMES.none,
              d.thumb || d.url || "", guest ? "" : (d.url ? "on" : ""));
   } catch (e) {
@@ -4207,6 +4211,9 @@ async function uploadBg() {
       return;
     }
     renderBg(data, BG_SRC_NAMES.local, data, "on");
+    // 换新图 = 要背景，顺手清服务端那条「移除」标记（2026-11-12），
+    // 否则换设备时会被它压住、显示成「已移除」。
+    postBgOff(false);
     toast("背景换好了（只存在这台设备）");
   } catch (e) {
     toast("换背景失败：" + (e.message || e), true);
@@ -4224,7 +4231,23 @@ function useAsBg(url) {
   if (!url) return;
   if (!bgStore.write("url", url)) { toast("本机存储写入失败", true); return; }
   renderBg(url, BG_SRC_NAMES.shot, url, "on");
+  postBgOff(false);        // 同上：设了新背景就别让「移除」标记压着
   toast("已设为聊天背景");
+}
+
+// 「移除 / 恢复」写服务端标记（2026-11-12）：localStorage 只在这台设备有效，
+// 换设备或 5174↔5175 换域名就丢；服务端那条才管跨设备。返回是否写成功。
+async function postBgOff(on) {
+  try {
+    await api("/api/persona/background/off", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ on: !!on }),
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
 }
 
 async function toggleBg() {
@@ -4232,13 +4255,20 @@ async function toggleBg() {
   const s = bgStore.read();
   if (s.state === "off") {
     if (!bgStore.write("none", "")) { toast("本机存储写入失败", true); return; }
+    // 服务端没清掉就把本地标记放回去，免得出现「点了恢复还是已移除」的假象。
+    if (!await postBgOff(false)) {
+      bgStore.write("off", "");
+      toast("服务端没响应，背景还是关着的，稍后再点一次", true);
+      return;
+    }
     toast("已恢复背景");
     loadBg();
     return;
   }
   if (!bgStore.write("off", "")) { toast("本机存储写入失败", true); return; }
   renderBg("", BG_SRC_NAMES.off, "", "off");
-  toast("背景已移除，这台设备不再加载背景图");
+  if (await postBgOff(true)) toast("背景已移除（换设备也不会再出现）");
+  else toast("这台设备已关闭；服务端没记住，换设备可能还会出现", true);
 }
 
 function setCardSec(boxId, valId, text) {
