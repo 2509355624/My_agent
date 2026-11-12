@@ -426,7 +426,14 @@ class ChainTest(NovelBase):
     def test_writer_empty_body_is_no_homework(self):
         out, _ = self.open_a_world()
         d = json.dumps({"ruling": "摸了个空", "facts": []}, ensure_ascii=False)
-        with mock.patch.object(novel, "_call", side_effect=[d, "  "]):
+        # 2026-11-12：写作改成会重试（撞拒绝/空回包就再要一次），
+        # 所以第二个位置之后一律给空串，而不是只给一次。
+        def _fake(messages, *a, **kw):
+            if a and a[0] == novel.WRITER_MAX_TOKENS:
+                return "  "
+            return d
+
+        with mock.patch.object(novel, "_call", side_effect=_fake):
             with self.assertRaises(novel.NoHomework):
                 novel.run_turn(out["world_id"], "检查柜子")
 
@@ -2160,8 +2167,13 @@ class RollbackTest(NovelBase):
 
     def test_failed_turn_leaves_no_undo_point(self):
         out, _ = self.open_a_world()
-        with mock.patch.object(novel, "_call",
-                               side_effect=["{}", ""]):
+        # 写作会重试（2026-11-12），所以第二次之后一律给空
+        def _fake(messages, *a, **kw):
+            if a and a[0] == novel.WRITER_MAX_TOKENS:
+                return ""
+            return "{}"
+
+        with mock.patch.object(novel, "_call", side_effect=_fake):
             with self.assertRaises(novel.NoHomework):
                 novel.run_turn(out["world_id"], "检查柜子")
         self.assertIsNone(novel.get_world(out["world_id"]).get("undo"))
@@ -2427,6 +2439,84 @@ class CustomSplitAndAdultTest(NovelBase):
         """第二段要能看到第一段定的世界，不然开局会和世界对不上。"""
         self.assertIn("<<PRESET>>", novel._OPENING_PROMPT)
         self.assertIn("<<NAME>>", novel._OPENING_PROMPT)
+
+
+
+class NovelWritingSkillTest(NovelBase):
+    """小说模式的笔法注入（2026-11-12）。
+
+    用户定位：小说面向用户自己，没有状态轴可以判——所以**不做任何条件
+    判断**，常驻层每轮全给。角色扮演那边按轴挑段，是因为那边知道「她到
+    哪一步了」；小说不知道，也不该猜。
+    """
+
+    def test_block_is_substantial(self):
+        """原来小说一条规范都没有；现在要给到和角色扮演同量级。"""
+        from app import novel_writing
+        blk = novel_writing.block()
+        self.assertGreater(len(blk), 2000, "笔法规范太短，等于没给")
+        self.assertLessEqual(len(blk), novel_writing.MAX_CHARS + 200)
+
+    def test_carries_deai_word_list(self):
+        """禁用词表是最直接见效的一块。"""
+        from app import novel_writing
+        blk = novel_writing.block()
+        self.assertIn("禁用词", blk)
+        self.assertIn("微微", blk)
+        self.assertIn("仿佛", blk)
+
+    def test_carries_human_techniques(self):
+        from app import novel_writing
+        blk = novel_writing.block()
+        self.assertIn("技法", blk)
+        self.assertTrue("人味技法" in blk or "节奏法则" in blk)
+
+    def test_adult_techniques_are_always_on(self):
+        """成人技法常驻，**不按亲密程度挑**——小说没有那个维度可判。"""
+        from app import novel_writing
+        used = novel_writing._CACHE.get("used") or []
+        blk = novel_writing.guide()
+        self.assertTrue(blk, "规范必须能切出来")
+        # 配方里成人那一块存在且不依赖任何入参
+        titles = [row[0] for row in novel_writing._PLAN]
+        self.assertIn("成人场景的写法", titles)
+        # guide() 不接受任何状态参数——这是设计，不是漏写
+        import inspect
+        sig = inspect.signature(novel_writing.guide)
+        self.assertEqual(len(sig.parameters), 0,
+                         "小说规范不该按状态挑段")
+
+    def test_block_does_not_dictate_plot(self):
+        """笔法只管怎么写，不许改剧情——抬头要写清楚。"""
+        from app import novel_writing
+        blk = novel_writing.block()
+        self.assertIn("不改变剧情走向", blk)
+
+    def test_writer_head_carries_it_director_does_not(self):
+        """编剧只出裁定、不写正文，拿不到笔法规范。"""
+        import tempfile
+        from app import novel
+        w = {"player": {"name": "林决", "identity": "实习医生",
+                        "identity_desc": "刚来三个月"},
+             "rules": ["不能离岗"]}
+        wh = novel._head(w, for_director=False)
+        dh = novel._head(w, for_director=True)
+        self.assertIn("怎么写（这一轮的笔法", wh)
+        self.assertNotIn("怎么写（这一轮的笔法", dh)
+        self.assertGreater(len(wh) - len(dh), 1000, "笔法段应该有一两千字")
+
+    def test_head_is_stable_across_calls(self):
+        """放 head 就是为了吃前缀缓存：同样输入必须逐字节一样。"""
+        from app import novel
+        w = {"player": {"name": "林决", "identity": "实习医生",
+                        "identity_desc": "刚来三个月"},
+             "rules": ["不能离岗"]}
+        self.assertEqual(novel._head(w, False), novel._head(w, False))
+
+    def test_slice_missing_marker_returns_empty_not_raise(self):
+        """规范文件缺失不该让正文写不出来。"""
+        from app import novel_writing
+        self.assertEqual(novel_writing._slice("不存在的文件.md", "", "", 100), "")
 
 if __name__ == "__main__":
     unittest.main()

@@ -614,6 +614,72 @@ def _call(messages, max_tokens, temperature, opts=None, timeout=None):
     )
 
 
+# ── 上游拒绝识别（2026-11-12 真机）──────────────────────
+#
+# 现象：同一份世界书、同一句话，一次被拒一次写成 524 字正常正文。
+# 原因不是内容违规，而是**中转站有多家，降级到哪家是随机的**——
+# 其中一家会回「抱歉，系统检测到您当前输入的信息存在敏感内容」，
+# 而那是一次**正常返回**（不是异常），所以 `_writer` 里
+# `if not text` 拦不住它，拒绝话术被当成正文存进 history，
+# 还写了两遍（管理页能看到两条一样的「抱歉」）。
+#
+# 修法：命中拒绝措辞就**再要一次**，穷尽之后才报错给玩家。
+# 不在这里做内容判断——判「该不该写」不是代码的活，代码只判
+# 「这段能不能当正文用」。
+
+_REFUSAL_MARKS = (
+    "系统检测到您当前的输入信息存在敏感内容",
+    "系统检测到您当前输入的信息存在敏感内容",
+    "我无法响应您的请求",
+    "无法响应您的请求",
+    "我无法提供该内容",
+    "我无法提供这部分内容",
+    "抱歉，我无法",
+    "很抱歉，我不能",
+)
+
+# 短到这种程度的「正文」，基本只会是拒绝话术或空壳。
+_REFUSAL_MIN = 200
+
+
+def looks_like_refusal(text):
+    """这段回包能不能当正文用？命中拒绝措辞、或短得离谱 → True。"""
+    s = str(text or "").strip()
+    if not s:
+        return False          # 空串走另一条路（NoHomework）
+    for mark in _REFUSAL_MARKS:
+        if mark in s:
+            return True
+    # 短且以「抱歉 / 很抱歉」开头：正文不会这么写
+    if len(s) < _REFUSAL_MIN and s[:6].find("抱歉") >= 0:
+        return True
+    return False
+
+
+def _call_text(messages, max_tokens, temperature, opts=None, timeout=None,
+               tries=3):
+    """要一段**能当正文用**的回包：撞上拒绝就再要，最多 `tries` 次。
+
+    每次重试都重新进降级链，抽到另一家的概率就在这一次次里。三次都撞上
+    再报错——那时才告诉玩家「换个说法」，而不是把他的设定判成违规。
+    """
+    last = ""
+    for i in range(max(1, tries)):
+        raw = _call(messages, max_tokens, temperature, opts, timeout=timeout)
+        text = str(raw or "").strip()
+        if not text:
+            last = "空返回"
+            continue
+        if looks_like_refusal(text):
+            last = "被模型挡回"
+            log.info("小说回包被上游拒（第 %d/%d 次）：%s", i + 1, tries,
+                     text[:60])
+            continue
+        return text
+    raise NoHomework("这一段被模型挡回来了（%s，试了 %d 次）。"
+                     "换个说法再试一次。" % (last or "没有正文", tries))
+
+
 def _parse_json(text):
     """模型没交作业（空返回 / 不是 JSON）就抛，交给接口提示重来。"""
     raw = str(text or "").strip()
@@ -890,6 +956,18 @@ def _head(world, for_director=False):
     p = world.get("player") or {}
     parts = [_DIRECTOR_PROMPT if for_director
              else _NOVEL_CONTRACT.format(name=p.get("name") or "主角")]
+    # 笔法规范（2026-11-12）：每次都在 head 里、只给写作那一侧。
+    # 为什么放 head 不放 user：这段是**静态的**（规范文件改了才变），
+    # 放前缀能吃缓存；而且它是「怎么写」不是「这一轮写什么」，
+    # 天然就该在系统头里。编剧拿不到它——编剧只出裁定，不写正文。
+    if not for_director:
+        try:
+            from app import novel_writing
+            _blk = novel_writing.block()
+            if _blk:
+                parts.append(_blk)
+        except Exception:                                 # noqa: BLE001
+            log.warning("笔法规范注入失败，这一轮只靠契约", exc_info=True)
     parts.append("【主角】\n名字：%s\n身份：%s（%s）\n"
                  "身份是真实条件：文弱书生翻不了窗，体育生能撞门，"
                  "医学生看得懂伤口。" % (
@@ -1260,12 +1338,10 @@ def _writer(world, facts, said, opts=None):
     2026-11-12 修正：原来只给一条 user 消息（切片 + facts），等于把世界
     交给编剧压缩后再转述给写作 AI —— 这正是 1v1 早就修掉的老问题。
     """
-    out = _call(_messages(world, facts=facts, said=said),
-                WRITER_MAX_TOKENS, 1.0, opts, timeout=WRITER_TIMEOUT)
-    text = str(out or "").strip()
-    if not text:
-        raise NoHomework("写作 AI 没有返回正文")
-    return text
+    # 走 `_call_text`：撞上上游拒稿会自动再要一次（2026-11-12），
+    # 拒绝话术绝不会流进 history。
+    return _call_text(_messages(world, facts=facts, said=said),
+                      WRITER_MAX_TOKENS, 1.0, opts, timeout=WRITER_TIMEOUT)
 
 
 def _merge_seed(world, seed):
