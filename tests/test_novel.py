@@ -23,7 +23,7 @@ from unittest import mock
 
 import flask
 
-from app import novel, novel_api
+from app import novel, novel_api, persona_rag
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAGE = os.path.join(ROOT, "web", "novel.html")
@@ -171,7 +171,7 @@ class WorldBookTest(NovelBase):
         self.assertEqual(
             {"id", "play", "play_name", "chapter", "chapter_goal", "clock",
              "ending", "player", "present", "cast", "route", "events", "log",
-             "discovered", "last_death", "actions", "history"},
+             "discovered", "last_death", "actions", "can_undo", "history"},
             set(s.keys()))
         for banned in ("affection", "score", "tier", "gameday", "outfit",
                        "mood", "intensity", "day", "hp", "depth"):
@@ -851,8 +851,8 @@ class WiringTest(unittest.TestCase):
         self.assertIn("模型额度不足", self.html)
         self.assertIn("不是等一下就好", self.html)
         self.assertIn("Insufficient Balance", self.html)
-        self.assertEqual(self.html.count("nvErr(d.error, d.detail)"), 4,
-                         "四个接口失败分支都要把 detail 带出来")
+        self.assertEqual(self.html.count("nvErr(d.error, d.detail)"), 5,
+                         "五个接口失败分支（开场/一轮/重开/改名/回退）都要带 detail")
 
     def test_director_prompt_forbids_rejection_and_free_items(self):
         p = novel._DIRECTOR_PROMPT
@@ -1441,6 +1441,134 @@ class StoryClockTest(unittest.TestCase):
         novel._normalize_world(w)
         self.assertEqual(w["clock"], "")
         self.assertIn("时间还没记", novel._state_block(w))
+
+
+class RollbackTest(NovelBase):
+    """回退最近一轮，而且只给一次（用户 2026-11-12 要求）。
+
+    「只能回退最近一条，用户无法回退两次，不然全乱完了」——所以回退点只有
+    一个，回退完就清空；想再退必须先往下写一轮。
+    """
+
+    def _after_one_turn(self, wid):
+        d = json.dumps({
+            "clock": "第 1 天 傍晚",
+            "ruling": "林岸在柜子里摸到一根晾衣杆",
+            "facts": ["他打开柜门", "摸到一根铁晾衣杆"],
+            "items": [{"name": "铁晾衣杆", "qty": ""}],
+            "place": "男生宿舍 304",
+        }, ensure_ascii=False)
+        with mock.patch.object(novel, "_call", side_effect=[d, "他握住了晾衣杆。"]):
+            out = novel.run_turn(wid, "检查柜子", turn_token="tk-1")
+        return out
+
+    def test_turn_leaves_exactly_one_undo_point(self):
+        out, _ = self.open_a_world()
+        w = novel.get_world(out["world_id"])
+        self.assertIsNone(w.get("undo"))
+        self.assertFalse(out["state"]["can_undo"])
+        self._after_one_turn(out["world_id"])
+        w = novel.get_world(out["world_id"])
+        self.assertIsInstance(w.get("undo"), dict)
+        self.assertEqual(w["undo"]["hist_added"], 2, "一轮追加 user + assistant 两行")
+        self.assertGreaterEqual(w["undo"]["log_added"], 1)
+        self.assertIn("player", w["undo"]["state"])
+        self.assertTrue(novel.state_card(w)["can_undo"])
+
+    def test_rollback_restores_state_and_truncates_history(self):
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        before = novel.get_world(wid)
+        h0, l0 = len(before["history"]), len(before["log"])
+        p0 = dict(before["player"])
+        self._after_one_turn(wid)
+        r = novel.rollback(wid)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["said"], "检查柜子", "回退要把玩家那段放回输入框")
+        w = novel.get_world(wid)
+        self.assertEqual(len(w["history"]), h0)
+        self.assertEqual(len(w["log"]), l0)
+        self.assertEqual(w["player"]["items"], p0["items"])
+        self.assertEqual(w["player"]["place"], p0["place"])
+        self.assertEqual(w["turns"], before["turns"])
+        self.assertIsNone(w["undo"])
+        self.assertFalse(novel.state_card(w)["can_undo"])
+
+    def test_cannot_rollback_twice(self):
+        out, _ = self.open_a_world()
+        self._after_one_turn(out["world_id"])
+        novel.rollback(out["world_id"])
+        with self.assertRaises(ValueError) as ctx:
+            novel.rollback(out["world_id"])
+        self.assertIn("已经回退过", str(ctx.exception))
+
+    def test_new_turn_reopens_the_undo_point(self):
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        self._after_one_turn(wid)
+        novel.rollback(wid)
+        self._after_one_turn(wid)
+        self.assertTrue(novel.state_card(novel.get_world(wid))["can_undo"])
+
+    def test_rollback_drops_the_idempotency_token(self):
+        """网关超时后重发同一个 token，不能把刚回退掉的那轮结果吐回来。"""
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        self._after_one_turn(wid)
+        self.assertEqual(novel.get_world(wid).get("last_turn_token"), "tk-1")
+        novel.rollback(wid)
+        w = novel.get_world(wid)
+        self.assertNotIn("last_turn_token", w)
+        self.assertNotIn("last_turn_result", w)
+
+    def test_rollback_forgets_that_round_in_rag(self):
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        self._after_one_turn(wid)
+        with mock.patch.object(persona_rag, "forget_last") as forget:
+            novel.rollback(wid)
+        forget.assert_called_once_with("%s#0" % wid)
+
+    def test_rollback_respects_owner(self):
+        out, _ = self.open_a_world()
+        self._after_one_turn(out["world_id"])
+        with self.assertRaises(ValueError):
+            novel.rollback(out["world_id"], owner="123456")
+        self.assertTrue(novel.state_card(
+            novel.get_world(out["world_id"]))["can_undo"],
+            "别人的本子不能被回退，也不能因此丢掉回退点")
+
+    def test_failed_turn_leaves_no_undo_point(self):
+        out, _ = self.open_a_world()
+        with mock.patch.object(novel, "_call",
+                               side_effect=["{}", ""]):
+            with self.assertRaises(novel.NoHomework):
+                novel.run_turn(out["world_id"], "检查柜子")
+        self.assertIsNone(novel.get_world(out["world_id"]).get("undo"))
+
+    def test_state_card_exposes_can_undo_only(self):
+        out, _ = self.open_a_world()
+        self.assertIn("can_undo", out["state"])
+        self.assertNotIn("undo", out["state"],
+                         "整份快照不进前端，只给一个布尔")
+
+    def test_rollback_keeps_a_later_rename(self):
+        """名字是玩家随时改的偏好，不该跟着回退缩回去。"""
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        self._after_one_turn(wid)
+        novel.rename(wid, "阿岸")
+        novel.rollback(wid)
+        self.assertEqual(novel.get_world(wid)["player"]["name"], "阿岸")
+
+    def test_api_rollback_route_is_wired(self):
+        api = _read(os.path.join(ROOT, "app", "novel_api.py"))
+        self.assertIn('@bp.route("/api/novel/rollback", methods=["POST"])', api)
+        self.assertIn("novel.rollback(", api)
+        html = _read(PAGE)
+        self.assertIn('id="nvUndoBtn"', html)
+        self.assertIn("function nvUndo()", html)
+        self.assertIn("nvCanUndo = !!s.can_undo", html)
 
 
 if __name__ == "__main__":

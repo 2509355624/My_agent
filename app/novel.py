@@ -37,6 +37,16 @@
 裁定不是拒绝：玩家说掏出手枪，编剧会写「宿舍里没有枪，你摸到的是晾衣杆」，
 把意图落成能往下演的事实，而不是退回重填。
 
+## 回退（2026-11-12）
+
+只回退**最近一轮**，而且只给一次：`world["undo"]` 里存着一轮开始前的那份
+状态快照（`_UNDO_KEYS` + history/log 长度），回退时还原它、把 history/log 截回
+那个长度、清掉 `undo`。**回退过一次就必须先往下写一轮才能再回退**，不许连着
+回退两次——连着退会把整条历史拆碎，状态和正文对不上。
+
+RAG 那边不自己造轮子：`persona_rag.forget_last(line)` 就是 1v1 早就做好、
+专门处理「刚入库又回退」的那支。
+
 ## 死亡与重开
 
 人物进度归零，世界知识留下：`discovered` 里 `kind == "static"` 的（地图、
@@ -45,6 +55,7 @@ RAG 的线也跟着换 epoch，免得上一周目的动态危险被检索回来�
 重开不再调 LLM。
 """
 import ast
+import copy
 import json
 import logging
 import os
@@ -423,6 +434,22 @@ def _as_text(v, default=""):
 
 # ─── 世界书 ──────────────────────────────────────────
 
+# 一轮会改动的状态字段。history / log 是追加的，只记「这一轮追加了几条」，
+# 回退时从尾巴削掉——不整份复制，一本世界不用多背几十 KB 的快照。
+_UNDO_KEYS = ("player", "cast", "events", "discovered", "route", "chapter",
+              "chapter_goal", "ending", "death_log", "actions", "turns",
+              "clock")
+
+
+def _snapshot(world):
+    """一轮开始前的状态快照，只留一份（存在 world["undo"]）。"""
+    return {
+        "state": {k: copy.deepcopy(world.get(k)) for k in _UNDO_KEYS},
+        "hist_added": 0,
+        "log_added": 0,
+    }
+
+
 def _blank_world(play, name, identity, identity_desc, preset, owner=""):
     start = dict(preset.get("start") or {})
     return {
@@ -457,6 +484,7 @@ def _blank_world(play, name, identity, identity_desc, preset, owner=""):
         "turns": 0,
         "restarts": 0,
         "clock": "",
+        "undo": None,
         "seed": {},
         "opening_reply": "",
     }
@@ -857,9 +885,14 @@ def _apply(world, d, said):
 
     ruling = _as_text(d.get("ruling"))
     facts = [str(x).strip() for x in _as_list(d.get("facts")) if str(x).strip()]
+    _log0 = len(world["log"])
     for line in [ruling] + facts:
         if line:
             world["log"].append(line[:200])
+    # 回退要按「这一轮追加了几条」从尾巴削，不能用长度截断：log 满 80 条时
+    # 新加的行会同时把最老的顶掉，按长度切等于一条都不删。
+    if isinstance(world.get("undo"), dict):
+        world["undo"]["log_added"] = len(world["log"]) - _log0
     world["log"] = world["log"][-_LOG_MAX:]
 
     actions = [str(x).strip() for x in _as_list(d.get("actions")) if str(x).strip()]
@@ -1023,10 +1056,17 @@ def run_turn(world_id, said, owner="", opts=None, turn_token=None):
         return {"ok": False, "error": "这一本已经结束了，重开一本吧",
                 "state": state_card(world)}
 
+    # 回退点：这一轮开始前的状态。只在整轮成功后随 `_save_world` 落盘，
+    # 所以中途抛异常不会留下一个假的回退点。
+    world["undo"] = _snapshot(world)
+    _hist0 = len(world["history"])
+
     d = _director(world, said, opts)
     ruling, facts = _apply(world, d, said)
     reply = _writer(world, [ruling] + facts if ruling else facts, said, opts)
     world["history"].append({"role": "assistant", "content": reply})
+    if isinstance(world.get("undo"), dict):
+        world["undo"]["hist_added"] = len(world["history"]) - _hist0
     world["history"] = world["history"][-_HISTORY_MAX:]
     out = {"ok": True, "reply": reply, "ruling": ruling,
            "ending": world.get("ending"), "state": state_card(world)}
@@ -1036,6 +1076,56 @@ def run_turn(world_id, said, owner="", opts=None, turn_token=None):
     _save_world(world)
     _remember(world, said, reply)
     return out
+
+
+def rollback(world_id, owner=""):
+    """回退最近一轮，只给一次。
+
+    只还原这一轮改过的状态、把 history/log 从尾巴削掉这一轮追加的条数，
+    然后**清空回退点**——想再回退必须先往下写一轮，否则连着退会把整条历史
+    拆碎、状态和正文对不上（用户 2026-11-12 明确要求「无法回退两次」）。
+
+    顺带把这一轮写进 RAG 的那份记忆撤掉：`persona_rag.forget_last()` 就是
+    1v1 为「第 5 轮刚入库又回退」做好的那支，不另写一套。
+    """
+    w = get_world(world_id, owner)
+    if not w:
+        raise ValueError("没有这个世界")
+    snap = w.get("undo")
+    if not isinstance(snap, dict) or not isinstance(snap.get("state"), dict):
+        raise ValueError("这一轮已经回退过了，先往下写一轮才能再回退")
+
+    said = ""
+    for r in reversed(w.get("history") or []):
+        if r.get("role") == "user":
+            said = str(r.get("content") or "")
+            break
+
+    cur_name = _as_text((w.get("player") or {}).get("name"))
+    for k, v in snap["state"].items():
+        w[k] = copy.deepcopy(v)
+    # 名字是玩家随时改的偏好，不是剧情状态：回退不该把改名也退回去。
+    if cur_name and isinstance(w.get("player"), dict):
+        w["player"]["name"] = cur_name
+    back_h = int(snap.get("hist_added") or 0)
+    if back_h:
+        w["history"] = (w.get("history") or [])[:-back_h]
+    back_l = int(snap.get("log_added") or 0)
+    if back_l:
+        w["log"] = (w.get("log") or [])[:-back_l]
+    w["undo"] = None
+    # 幂等令牌也得撤：不然网关超时后重发同一个 token，会把刚回退掉的那一轮
+    # 结果原样吐回来。
+    w.pop("last_turn_token", None)
+    w.pop("last_turn_result", None)
+    _save_world(w)
+
+    line = _rag_line(w)
+    try:
+        persona_rag.forget_last(line)
+    except Exception:                                       # noqa: BLE001
+        log.exception("[novel] RAG 回退失败，世界书已回退")
+    return {"ok": True, "said": said, "state": state_card(w)}
 
 
 def restart(world_id, name=None, identity=None, owner=""):
@@ -1099,5 +1189,6 @@ def state_card(world):
                        if d.get("kind") == "static"],
         "last_death": deaths[-1] if deaths else None,
         "actions": list(world.get("actions") or []),
+        "can_undo": isinstance(world.get("undo"), dict),
         "history": list(world.get("history") or [])[-_HISTORY_MAX:],
     }

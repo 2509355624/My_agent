@@ -283,6 +283,7 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
       <textarea id="nvText" placeholder="写下这一段要发生的事：往哪走、遇到谁、想做什么。AI 会把它扩写成正文，路上的过程由它写。"></textarea>
       <div class="nv-sendrow">
         <button class="btn pri" id="nvSendBtn">写下去</button>
+        <button class="btn sm" id="nvUndoBtn" disabled title="只回退最近一轮，而且只给一次；回退后要往下写一轮才能再回退">回退这一轮</button>
         <button class="btn sm" id="nvRestartBtn">重开一本</button>
         <button class="btn sm" id="nvCustomBtn">自定义模型</button>
         <span class="sp"></span>
@@ -359,6 +360,9 @@ var CM_KEY = 'persona_custom_models';
 var nvFriendMode = false;
 var nvTurnToken = '';
 var nvTurnText = '';
+/* 能不能回退：只认真实状态里的 can_undo，页面不自己记「退过一次」——
+   那样刷新一下就绕过去了。 */
+var nvCanUndo = false;
 
 function nvEl(id){ return document.getElementById(id); }
 function nvEsc(s){
@@ -397,9 +401,10 @@ function nvTyping(on){
 }
 function nvBusySet(on){
   nvBusy = on;
-  ['nvSendBtn','nvRestartBtn','nvCustomBtn'].forEach(function(id){
+  ['nvSendBtn','nvUndoBtn','nvRestartBtn','nvCustomBtn'].forEach(function(id){
     var b = nvEl(id); if(b) b.disabled = on;
   });
+  if(nvEl('nvUndoBtn') && !on) nvUndoState();
   Array.prototype.forEach.call(nvEl('nvActions').querySelectorAll('button'), function(b){
     b.disabled = on || nvEnded;
   });
@@ -561,6 +566,7 @@ function nvLockSeal(s){
 function nvApplyState(s, note){
   nvWorldId = s.id;
   nvEnded = !!s.ending;
+  nvCanUndo = !!s.can_undo;
   nvRenderCard(s);
   nvRenderHistory(s.history, note, s.ending);
   nvRenderActions(s.actions, !s.ending && !nvBusy);
@@ -568,6 +574,7 @@ function nvApplyState(s, note){
   nvEl('nvText').disabled = !!s.ending;
   nvLockSeal(s);
   nvTyping(nvBusy);
+  nvUndoState();
   nvGet('/api/novel/worlds').then(function(d){ nvRenderWorlds(d.worlds); }).catch(function(){});
 }
 async function nvBoot(){
@@ -675,6 +682,31 @@ function nvOpenWipe(){
 }
 function nvCloseWipe(){ nvEl('nvWipeMask').classList.remove('on'); }
 function nvRestart(){ nvOpenWipe(); }
+/* 回退：只退最近一轮，而且只给一次。状态里的 can_undo 才是唯一依据。 */
+function nvUndoState(){
+  var b = nvEl('nvUndoBtn'); if(!b) return;
+  b.disabled = nvBusy || !nvCanUndo;
+  b.title = nvCanUndo
+    ? '回退最近一轮：正文和它改动的状态一起撤掉，你写的那段会放回输入框'
+    : '没有可回退的一轮（已经回退过了，或者刚打开这本）';
+}
+async function nvUndo(){
+  if(nvBusy || !nvWorldId || !nvCanUndo) return;
+  var ok = confirm('回退最近一轮？\n\n这一轮的正文和它改动的状态都会撤掉，' +
+                   '你写的那段会放回输入框，改完可以重发。\n' +
+                   '只给一次——回退之后要往下写一轮，才能再回退。');
+  if(!ok) return;
+  nvErr(''); nvBusySet(true);
+  try{
+    var d = await nvPost('/api/novel/rollback', {id:nvWorldId});
+    nvModelUsed(d);
+    if(!d.ok){ nvErr(d.error, d.detail); return; }
+    nvCanUndo = false;
+    nvApplyState(d.state, '已回退上一轮');
+    if(d.said){ nvEl('nvText').value = d.said; nvEl('nvText').focus(); }
+  }catch(e){ nvErr('回退失败：' + e.message); }
+  finally{ nvBusySet(false); }
+}
 async function nvDoRestart(){
   if(nvBusy || !nvWorldId) return;
   nvErr(''); nvBusySet(true);
@@ -746,6 +778,7 @@ async function nvCmTest(btn, row){
 
 nvEl('nvOpenBtn').onclick = nvOpen;
 nvEl('nvSendBtn').onclick = function(){ nvSend(''); };
+nvEl('nvUndoBtn').onclick = nvUndo;
 nvEl('nvRestartBtn').onclick = nvRestart;
 nvEl('nvRenameBtn').onclick = nvRename;
 nvEl('nvCustomBtn').onclick = nvCmOpen;

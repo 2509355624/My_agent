@@ -260,6 +260,22 @@ def turn():
         return _fail(e)
 
 
+@bp.route("/api/novel/rollback", methods=["POST"])
+def rollback():
+    """回退最近一轮。body: {id}
+
+    不跑模型、不扣次数（没有 LLM 调用），所以不走 `_friend_run`；只校验归属。
+    只给一次：回退后世界书的回退点被清空，前端那颗按钮随即变灰，要再回退
+    必须先往下写一轮。
+    """
+    body = request.get_json(silent=True) or {}
+    try:
+        return jsonify(novel.rollback(body.get("id") or body.get("world_id"),
+                                      owner=_qq()))
+    except Exception as e:                              # noqa: BLE001
+        return _fail(e)
+
+
 @bp.route("/api/novel/restart", methods=["POST"])
 def restart():
     """死亡重开。body: {id, confirm, name?, identity?}
