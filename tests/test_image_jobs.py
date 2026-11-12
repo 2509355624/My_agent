@@ -4606,5 +4606,43 @@ class I2iSourceQueueTest(unittest.TestCase):
         self.assertEqual(job.i2i_name, self.PLACEHOLDER)
 
 
+class ComfyRejectLogTest(unittest.TestCase):
+    """ComfyUI 拒收（4xx）时，响应体要落到日志里。
+
+    2026-11-12 nffa 只出 400 的教训：`raise_for_status()` 把响应体（哪个节点、
+    哪个输入不合法）连着异常一起丢了，日志里只剩一句 "400 Client Error: Bad
+    Request"。真因是 `UltralyticsDetectorProvider` 的模型列表为空，传
+    `bbox/face_yolov8m.pt` 被判 value_not_in_list —— 这句话就在响应体里。
+    """
+
+    def test_4xx_body_is_logged_then_raised(self):
+        resp = mock.Mock()
+        resp.status_code = 400
+        resp.text = '{"error":{"message":"value_not_in_list"}}'
+        resp.raise_for_status.side_effect = requests.HTTPError("400 Client Error")
+        with mock.patch.object(image_jobs.requests, "post", return_value=resp), \
+                mock.patch.object(image_jobs.comfy_progress, "ensure_started",
+                                  lambda *a, **k: None), \
+                mock.patch.object(image_jobs.comfy_progress, "client_id",
+                                  lambda: "cid"), \
+                self.assertLogs("image_jobs", level="WARNING") as cm:
+            with self.assertRaises(requests.HTTPError):
+                image_jobs._queue_prompt({"1": {"class_type": "X"}})
+        self.assertTrue(
+            any("[comfy-reject]" in line and "value_not_in_list" in line
+                for line in cm.output), cm.output)
+
+    def test_200_still_returns_the_prompt_id(self):
+        resp = mock.Mock()
+        resp.status_code = 200
+        resp.json.return_value = {"prompt_id": "pid-1"}
+        with mock.patch.object(image_jobs.requests, "post", return_value=resp), \
+                mock.patch.object(image_jobs.comfy_progress, "ensure_started",
+                                  lambda *a, **k: None), \
+                mock.patch.object(image_jobs.comfy_progress, "client_id",
+                                  lambda: "cid"):
+            self.assertEqual(image_jobs._queue_prompt({"1": {}}), "pid-1")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2625,6 +2625,14 @@ def _queue_prompt(workflow, timeout=SUBMIT_TIMEOUT):
         "prompt": workflow,
         "client_id": comfy_progress.client_id(),
     }, timeout=timeout)
+    if resp.status_code >= 400:
+        # 2026-11-12：`raise_for_status()` 把响应体（里面就是哪个节点、哪个输入
+        # 不合法）连同异常一起丢掉了，日志里只剩一句 "400 Client Error: Bad
+        # Request"，只能靠猜。nffa 那次真因是 UltralyticsDetectorProvider 的
+        # 模型列表为空、传 `bbox/face_yolov8m.pt` 判 value_not_in_list。这里只
+        # 登记事实（状态码 + 前 600 字），判断仍交给看日志的人。
+        log.warning("[comfy-reject] %s /prompt：%s",
+                    resp.status_code, (resp.text or "")[:600])
     resp.raise_for_status()
     return resp.json()["prompt_id"]
 

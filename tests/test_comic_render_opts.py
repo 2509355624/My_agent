@@ -718,6 +718,21 @@ class MultiChannelApplyTest(unittest.TestCase):
         self.assertEqual((out[lat]["inputs"]["width"], out[lat]["inputs"]["height"]),
                          (896, 1152))
 
+    def test_qwen_default_canvas_is_1024_by_1536(self):
+        """2026-11-12 用户改的档：816×1024 → 1024×1536。
+
+        宽高**必须是 16 的倍数**：qwen 的 VAE 是 16x 空间压缩，
+        `EmptySD3LatentImage` 会把非倍数向下对齐（当年写 812，出来是
+        800×1024）。换档时把这条断言一起改，别只改 workflow.json。
+        """
+        wf = gi.build_t2i_workflow("qwen_image_v1", "1girl", 42)
+        lat = ro._latent_ids(wf)[0]
+        self.assertEqual(wf[lat]["class_type"], "EmptySD3LatentImage")
+        self.assertEqual((wf[lat]["inputs"]["width"], wf[lat]["inputs"]["height"]),
+                         (1024, 1536))
+        self.assertEqual(wf[lat]["inputs"]["width"] % 16, 0)
+        self.assertEqual(wf[lat]["inputs"]["height"] % 16, 0)
+
     def test_no_lora_is_injected_where_channel_has_no_chain(self):
         """qwen 模板没 LoRA 链，参数里却带着 anima 那 6 槽（全局默认）。照旧
         重建就是往 CLIPLoader/UNETLoader 链上硬塞 LoraLoaderModelOnly，提交必被
