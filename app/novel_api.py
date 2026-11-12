@@ -356,10 +356,20 @@ def quota():
     文案必须说清楚「只有中转站挂了才用次数」。
     """
     qq = _qq()
+    # 用量（2026-11-12）：原来站主态只回一句固定文案，什么都看不出来。
+    # 现在把进程内的累计调用数和 token 估算一起带上。
+    try:
+        _u = novel.usage_snapshot()
+    except Exception:                                     # noqa: BLE001
+        _u = {"tokens": 0, "calls": 0}
+    _usage_txt = ("本次运行已调用 %d 次 · 约 %s token"
+                  % (_u["calls"], format(_u["tokens"], ","))) if _u["calls"] \
+                 else "本次运行还没写过"
     if not qq:
         return jsonify({"ok": True, "mode": "owner", "limited": False,
-                        "remaining": None,
-                        "text": "站主自用 · 走自己的链头，没有次数额度"})
+                        "remaining": None, "usage": _u,
+                        "text": "站主自用 · 走自己的链头，没有次数额度\n"
+                                + _usage_txt})
     left = comic_quota.snapshot(qq)["left"].get("script", 0)
     return jsonify({
         "ok": True, "mode": "friend", "limited": left <= 0,

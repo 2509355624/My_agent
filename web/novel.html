@@ -977,7 +977,20 @@ async function nvQuota(){
     var txt = d.ok
       ? (d.text || (d.limited ? ('剩余 ' + d.remaining + ' 次') : '没有次数限制'))
       : (d.error || '查询失败');
-    if(out) out.textContent = txt + ' · ' + hh + ':' + mm + ' 查过';
+    /* 用量（2026-11-12）：原来只回一句「没有次数额度」，用户不知道花了多少。
+       现在把本次运行调了几次、大概多少 token 一起显示。 */
+    if(out){
+      out.textContent = txt + ' · ' + hh + ':' + mm + ' 查过';
+      if(d.usage){
+        var u = document.createElement('div');
+        u.style.cssText = 'margin-top:3px;color:var(--text-mute)';
+        u.textContent = d.usage.calls
+          ? ('本次运行 ' + d.usage.calls + ' 次调用 · 约 '
+             + Number(d.usage.tokens || 0).toLocaleString() + ' token')
+          : '本次运行还没写过';
+        out.appendChild(u);
+      }
+    }
   }catch(e){
     if(out) out.textContent = '查询失败：' + e.message;
   }finally{
@@ -1240,14 +1253,22 @@ function nvRenderBook(b){
   html += '</dl>';
   nvEl('nvBookBody').innerHTML = html;
 }
+async /* 世界书弹窗（2026-11-12 修）：原来函数没写 async 却在用 await，整段是坏的；
+   而且先等请求回来才弹窗，用户点完要愣两三秒才有反应。
+   现在**先弹窗、先显示「读取中」，回来再填内容**。 */
 async function nvOpenBook(){
   if(!nvWorldId){ nvInfo('先开一本世界'); return; }
+  var mask = nvEl('nvBookMask');
+  var body = nvEl('nvBookBody');
+  if(body) body.innerHTML = '<div class="nv-empty">正在读世界书…</div>';
+  if(mask) mask.classList.add('on');
   try{
     var d = await nvGet('/api/novel/book?id=' + encodeURIComponent(nvWorldId));
-    if(!d.ok){ nvErr(d.error); return; }
+    if(!d.ok){ if(body) body.innerHTML = '<div class="nv-empty">' + nvEsc(d.error || '读不到') + '</div>'; return; }
     nvRenderBook(d.book);
-    nvEl('nvBookMask').classList.add('on');
-  }catch(e){ nvInfo('读世界书失败：' + e.message); }
+  }catch(e){
+    if(body) body.innerHTML = '<div class="nv-empty">读世界书失败：' + nvEsc(e.message) + '</div>';
+  }
 }
 
 /* ─── 自定义模型：草稿直接读 DOM，不另存一份状态 ─── */

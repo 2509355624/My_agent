@@ -1279,8 +1279,10 @@ class WiringTest(unittest.TestCase):
         self.assertIn("b.disabled = on || nvEnded", self.html)
 
     def test_page_is_a_standalone_three_column_file(self):
+        # nvWorldList 在 2026-11-12 重排时去掉了：左栏只剩玩法，
+        # 点玩法直接进书，不再列「已有的世界」那一坨。
         for el in ("nvLeft", "nvMain", "nvRight", "nvPlayList",
-                   "nvWorldList", "nvCard", "nvLog", "nvActions"):
+                   "nvNewBox", "nvCard", "nvLog", "nvActions"):
             self.assertIn('id="%s"' % el, self.html)
         self.assertIn("@media (max-width:900px)", self.html)
         self.assertIn("/persona", self.html)
@@ -1597,10 +1599,12 @@ class NavUiTest(unittest.TestCase):
         self.html = _read(PAGE)
 
     def test_left_column_splits_official_and_my_plays(self):
-        for needle in ("nv-glabel", "'官方'", "'我的'", "nvBooksOf",
-                       "nvAllWorlds", "function nvRenderPlays",
-                       "function nvSelectPlay", "function nvRefreshNav",
-                       "nvWorldScope"):
+        """官方 / 我的分成两个 tab（2026-11-12 用户要求，照角色扮演那套）。
+        原来是一列里嵌两组 glabel，用户报「全部混在一起」。"""
+        for needle in ("nv-tab", "data-g=\"official\"", "data-g=\"mine\"",
+                       "官方", "我的", "nvBooksOf", "nvAllWorlds",
+                       "function nvRenderPlays", "function nvSelectPlay",
+                       "var nvTab"):
             self.assertIn(needle, self.html, "缺少 %s" % needle)
 
     def test_top_bar_title_is_not_hardcoded(self):
@@ -1616,9 +1620,11 @@ class NavUiTest(unittest.TestCase):
         self.assertIn("s.play_key && s.play_key !== nvPlayId", self.html)
 
     def test_every_book_has_a_delete_button(self):
-        for needle in ("nv-del", "data-del", "nvOpenDel", "nvDoDel",
-                       "/api/novel/delete", "nvDelInput", "nvDelOk",
-                       "没有回收站", "我确认删掉这本书"):
+        """删除接口和确认弹窗必须还在（2026-11-12 布局重排后列表不再显示
+        书，「×」那个入口随列表一起去掉了，但删书能力和确认句不能丢）。"""
+        for needle in ("nvOpenDel", "nvDoDel", "/api/novel/delete",
+                       "nvDelInput", "nvDelOk", "没有回收站",
+                       "我确认删掉这本书"):
             self.assertIn(needle, self.html, "缺少 %s" % needle)
 
     def test_delete_needs_the_phrase_typed_by_hand(self):
@@ -2517,6 +2523,54 @@ class NovelWritingSkillTest(NovelBase):
         """规范文件缺失不该让正文写不出来。"""
         from app import novel_writing
         self.assertEqual(novel_writing._slice("不存在的文件.md", "", "", 100), "")
+
+
+
+class NovelUiFixTest(NovelBase):
+    """2026-11-12 用户实机报的两个 UI bug。"""
+
+    def _html(self):
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "web", "novel.html")
+        with io.open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_book_modal_opens_before_fetch(self):
+        """世界书：点完立刻弹窗，不许等请求回来才出现。
+
+        用户原话：「世界书点击之后要等个两三秒才会有一个反应，
+        它不会立刻跳出来一个弹窗。」
+        """
+        h = self._html()
+        i = h.find("async function nvOpenBook")
+        j = h.find("\n}", i)
+        body = h[i:j]
+        # 弹窗要在 await 之前就打开
+        self.assertLess(body.find("classList.add('on')"),
+                        body.find("await nvGet"),
+                        "弹窗必须在请求之前打开")
+        self.assertIn("正在读世界书", body, "要有加载中提示")
+
+    def test_open_book_is_async(self):
+        """原来没写 async 却在用 await —— 整段是坏的。"""
+        h = self._html()
+        self.assertIn("async function nvOpenBook", h)
+
+    def test_quota_shows_usage(self):
+        """额度：要能看到用量，不只是一句「没有次数额度」。"""
+        h = self._html()
+        self.assertIn("d.usage", h, "前端要读 usage 字段")
+        self.assertIn("本次运行", h, "要有用量文案")
+
+    def test_usage_accumulates_across_turns(self):
+        """`llm.current_usage()` 只记当前一轮，面板要的是累计。"""
+        from app import novel
+        snap = novel.usage_snapshot()
+        self.assertIn("tokens", snap)
+        self.assertIn("calls", snap)
+        self.assertEqual(snap["tokens"], 0, "刚起来应该是 0")
 
 if __name__ == "__main__":
     unittest.main()

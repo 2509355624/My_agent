@@ -603,7 +603,8 @@ def _call(messages, max_tokens, temperature, opts=None, timeout=None):
     的一轮，输出量差一倍，共用一个超时必然有一边被卡。
     """
     o = opts or {}
-    return llm.call_llm(
+    _before = llm.current_usage()
+    _out = llm.call_llm(
         messages,
         provider=o.get("provider", PERSONA_PROVIDER or None),
         model=o.get("model", PERSONA_MODEL or None),
@@ -612,7 +613,34 @@ def _call(messages, max_tokens, temperature, opts=None, timeout=None):
         temperature=temperature,
         timeout=timeout,
     )
+    # 跨轮累计（2026-11-12）：`llm.current_usage()` 每轮重置，只记**这一轮**。
+    # 额度面板要的是「这本小说一共花了多少」，所以在这里累加起来。
+    try:
+        _after = llm.current_usage()
+        _d = int(_after.get("total_tokens") or 0) - int(_before.get("total_tokens") or 0)
+        if _d > 0:
+            with _USAGE_LOCK:
+                _USAGE_TOTAL["tokens"] += _d
+                _USAGE_TOTAL["calls"] += 1
+        elif _d == 0 and _after.get("total_tokens"):
+            with _USAGE_LOCK:
+                _USAGE_TOTAL["calls"] += 1
+    except Exception:                                     # noqa: BLE001
+        pass
+    return _out
 
+
+# 小说模式的累计用量（进程级，重启清零）。
+# 额度面板要能说清「这本到现在花了多少 token、调了几次」，
+# 而 `llm.current_usage()` 只记当前这一轮。
+_USAGE_LOCK = threading.RLock()
+_USAGE_TOTAL = {"tokens": 0, "calls": 0}
+
+
+def usage_snapshot():
+    """累计用量。重启后从 0 开始——这是诊断用的估算，不是账单。"""
+    with _USAGE_LOCK:
+        return dict(_USAGE_TOTAL)
 
 # ── 上游拒绝识别（2026-11-12 真机）──────────────────────
 #
