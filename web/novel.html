@@ -268,6 +268,58 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
   .nv-modelrow { font-size: 10.5px; }
   .nv-sub { display: none; }
 }
+
+  /* ── 2026-11-12 布局重排（照角色扮演那套）────────────────
+     用户原话：「角色扮演这边布局明明弄得好好的，结果来到小说模式这边，
+     整个布局全他妈乱完了。」以下按 persona.html 的排法对齐。 */
+
+  /* 左栏两个 tab：官方 / 我的。和角色扮演的分组一致。 */
+  .nv-tabs { display: flex; gap: 6px; padding: 8px 10px 0; }
+  .nv-tab { flex: 1; padding: 6px 10px; font-size: 12px; cursor: pointer;
+    border: 1px solid var(--border); border-radius: var(--rs);
+    background: transparent; color: var(--text-dim); }
+  .nv-tab.on { border-color: var(--accent); color: var(--accent);
+    background: rgba(240,180,41,.08); }
+
+  /* 左栏底部的低频动作：重开 / 自定义模型 / 额度。
+     原来这三个占着输入区下面两整行，把正文挤没了。 */
+  .nv-more { margin-top: 14px; padding-top: 10px;
+    border-top: 1px solid var(--border-soft);
+    display: flex; flex-direction: column; gap: 6px; }
+  .nv-quota { display: flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--text-mute); }
+  .nv-quota span { flex: 1; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .nv-quota-text { font-size: 10.5px; color: var(--text-mute);
+    line-height: 1.6; overflow-wrap: anywhere; }
+
+  /* 顶栏返回键靠左（右上只留状态/世界书，防误触）。 */
+  .top .nv-back { color: var(--text-dim); }
+
+  /* 输入区：一行 = 输入框 + 发送。 */
+  .composer.nv-input { flex-direction: column; align-items: stretch; gap: 6px; }
+  .composer.nv-input .nv-sendrow { display: flex; gap: 8px; align-items: flex-end; }
+  .composer.nv-input textarea { flex: 1; min-height: 38px; max-height: 140px;
+    resize: none; line-height: 1.5; }
+  .composer.nv-input .nv-send { flex: none; align-self: stretch; padding: 0 18px; }
+
+  /* AI 回复下方的工具行（回退），和角色扮演的气泡工具条对齐。 */
+  .nv-turntools { display: flex; gap: 8px; align-items: center;
+    margin-top: 4px; font-size: 11px; color: var(--text-mute); }
+  .nv-turntools .btn { font-size: 11px; padding: 2px 8px; }
+
+
+  /* 中间区的开书表单（2026-11-12）：左栏不再常驻它。 */
+  .nv-newbox { margin: 12px 16px; padding: 14px 16px;
+    border: 1px solid var(--border); border-radius: var(--rs);
+    background: var(--bg-elev); }
+  .nv-newbox h3 { font-size: 13px; margin-bottom: 10px; color: var(--text); }
+  .nv-newbox .nv-field { margin-bottom: 10px; }
+  .nv-newbox .nv-field label { display: block; font-size: 11px;
+    color: var(--text-mute); margin-bottom: 4px; }
+  .nv-newbox input, .nv-newbox select { width: 100%; }
+  .nv-namerow { display: flex; gap: 6px; }
+
 </style>
 </head>
 <body>
@@ -275,64 +327,83 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
 
   <aside class="side" id="nvLeft">
     <div class="side-head">
-      <h1>小说模式</h1>
+      <h1>小说</h1>
       <span class="sp"></span>
       <a class="btn sm" href="/persona" title="回到一对一角色扮演">← 扮演</a>
     </div>
+    <!-- 玩法分「官方 / 我的」两组（2026-11-12 用户要求，照角色扮演那套）：
+         一个 tab 一屏，不再把官方玩法、自建玩法、每本书全堆在一起。 -->
+    <div class="nv-tabs">
+      <button class="nv-tab on" data-g="official" type="button">官方</button>
+      <button class="nv-tab" data-g="mine" type="button">我的</button>
+    </div>
     <div class="side-list">
-      <div class="nv-sec">
-        <h3>玩法</h3>
-        <div id="nvPlayList"><div class="nv-empty">正在读玩法…</div></div>
-        <button class="btn sm" id="nvMakeBtn" type="button" style="width:100%;margin-top:2px">＋ 自己写一个玩法</button>
-      </div>
-      <div class="nv-sec" id="nvNewBox">
-        <h3>开一本新的</h3>
-        <div class="nv-field"><label for="nvName">主角名字（随时可改）</label>
-          <div class="nv-namerow">
-            <input id="nvName" placeholder="给自己起个名字" maxlength="24">
-            <button class="btn sm" id="nvRenameBtn" style="display:none">改</button>
-          </div>
+      <div id="nvPlayList"><div class="nv-empty">正在读玩法…</div></div>
+      <button class="btn sm" id="nvMakeBtn" type="button" style="width:100%;margin-top:8px">＋ 自己写一个玩法</button>
+      <!-- 低频动作收在这里（2026-11-12）：重开 / 自定义模型 / 额度原来常驻
+           在输入区下方，把正文挤得只剩一半。 -->
+      <div class="nv-more">
+        <button class="btn sm" id="nvRestartBtn" type="button" style="width:100%">重开一本</button>
+        <button class="btn sm" id="nvCustomBtn" type="button" style="width:100%">自定义模型</button>
+        <div class="nv-quota">
+          <span id="nvModelNow">读取中…</span>
+          <button class="btn sm" id="nvQuotaBtn" type="button">额度</button>
         </div>
-        <div class="nv-field"><label for="nvIdentity">开局身份（封样后固定，重开才能改）</label><select id="nvIdentity"></select></div>
-        <button class="btn pri" id="nvOpenBtn" style="width:100%">开场封样</button>
-      </div>
-      <div class="nv-sec">
-        <h3>已有的世界 <span class="nv-sub" id="nvWorldScope"></span></h3>
-        <div id="nvWorldList"><div class="nv-empty">还没有开过</div></div>
+        <div id="nvQuotaText" class="nv-quota-text"></div>
       </div>
     </div>
   </aside>
 
   <main class="mid" id="nvMain">
+    <!-- 顶栏照角色扮演的排法（2026-11-12 用户要求）：
+         左上 = 返回，右上 = 状态 / 世界书。
+         原来「← 角色扮演」挂在右上角，和用户习惯点「状态」的位置重叠，
+         一滑就跳走，已经移到左上。 -->
     <div class="top">
       <button class="btn sm nv-burger" id="nvBurger" type="button">☰</button>
-      <span class="nm" id="nvTitle">小说模式</span>
+      <a class="btn sm nv-back" href="/persona" title="返回角色扮演">← 角色扮演</a>
+      <span class="nm" id="nvTitle">小说</span>
       <span class="sp"></span>
-      <span class="nv-sub">一个世界一条线 · 你是主角 · 世界书会记住已经探明的事</span>
       <button class="btn sm" id="nvBookBtn" type="button">世界书</button>
       <button class="btn sm nv-stats" id="nvStatsBtn" type="button">状态</button>
-      <a class="btn sm" href="/persona" title="返回角色扮演">← 角色扮演</a>
     </div>
     <div id="nvErr"></div>
+    <!-- 开一本新书（2026-11-12）：点玩法后如果这个玩法还没开过，就在中间
+         出这张表。左栏不再常驻「开一本新的」那块——它把一个低频表单
+         常挂在左边，挤掉了玩法列表的位置。 -->
+    <div class="nv-newbox" id="nvNewBox" style="display:none">
+      <h3 id="nvNewTitle">开一本新书</h3>
+      <div class="nv-field"><label for="nvName">主角名字（随时可改）</label>
+        <div class="nv-namerow">
+          <input id="nvName" placeholder="给自己起个名字" maxlength="24">
+          <button class="btn sm" id="nvRenameBtn" style="display:none">改</button>
+        </div>
+      </div>
+      <div class="nv-field"><label for="nvIdentity">开局身份（开场后固定）</label>
+        <select id="nvIdentity"></select>
+      </div>
+      <button class="btn pri" id="nvOpenBtn" style="width:100%">开场</button>
+    </div>
     <div class="log" id="nvLog"><div class="nv-empty">左边选一个玩法，填好主角名字和身份，点下面的按钮开一本。</div></div>
+    <!-- 底部照角色扮演的排法（2026-11-12 用户要求）：
+         一行 = 输入框 + 发送按钮，右边不许再堆东西。
+         三个动作选项只在有内容时才占一行；模型 / 额度全折进 ☰ 菜单，
+         不再常驻两行把正文挤没。
+         回退按钮挪到「AI 回复下方」，和角色扮演一致。 -->
     <div class="composer nv-input" id="nvInputBox" style="display:none">
       <div class="nv-info" id="nvInfo" style="display:none"></div>
       <div class="nv-actions" id="nvActions"></div>
-      <textarea id="nvText" placeholder="写下这一段要发生的事：往哪走、遇到谁、想做什么。AI 会把它扩写成正文，路上的过程由它写。"></textarea>
+      <span id="nvTyping" style="display:none"></span>
       <div class="nv-sendrow">
-        <button class="btn pri" id="nvSendBtn">写下去</button>
-        <button class="btn sm" id="nvUndoBtn" disabled title="只回退最近一轮，而且只给一次；回退后要往下写一轮才能再回退">回退这一轮</button>
-        <button class="btn sm" id="nvRestartBtn">重开一本</button>
-        <button class="btn sm" id="nvCustomBtn">自定义模型</button>
-        <span class="sp"></span>
+        <textarea id="nvText" rows="1" placeholder="写下这一段要发生的事：往哪走、遇到谁、想做什么。"></textarea>
+        <button class="btn pri nv-send" id="nvSendBtn">写下去</button>
       </div>
-      <div class="nv-modelrow">
-        <span id="nvModelNow">当前模型：读取中…</span>
-        <span class="sp"></span>
-        <button class="btn sm" id="nvQuotaBtn">查询额度</button>
-        <span id="nvQuotaText"></span>
-      </div>
+      <!-- 回退按钮挂在**最近一条 AI 回复下方**（2026-11-12 用户要求，
+           照角色扮演的气泡工具条）。这里只留一个隐藏的原件，由 JS 移动。 -->
+      <button class="btn sm" id="nvUndoBtn" type="button" style="display:none"
+              title="只回退最近一轮，而且只给一次">回退这一轮</button>
     </div>
+
   </main>
 
   <aside class="side2 nv-card" id="nvRight">
@@ -468,6 +539,9 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
 var nvWorldId = '';
 var nvPlays = [];
 var nvPlayId = '';
+
+/* tab 状态（2026-11-12）：official / mine。 */
+var nvTab = 'official';
 /* 全部世界书（服务端已经按 owner 过滤过）。左栏按玩法筛，切换玩法时用它，
    不用再请求一次。 */
 var nvAllWorlds = [];
@@ -591,12 +665,18 @@ function nvRenderPlays(plays){
   /* 官方 / 我的 分开列（2026-11-12 用户报「全部混在一起」）。以前只有一列，
      而且「没选中就默认选第一个」，打开自建那本时左上角还亮着丧尸末日，
      看着就像切换不生效。 */
+  /* 一个 tab 一屏（2026-11-12）：官方 / 我的分开显示，不再两组都堆在
+     同一列里。nvTab 记当前看的是哪组。 */
+  var wantCustom = (nvTab === 'mine');
+  var rows = nvPlays.filter(function(p){ return !!p.custom === wantCustom; });
+  if(!rows.length){
+    box.innerHTML = '<div class="nv-empty">' + (wantCustom
+      ? '还没有自己写的玩法，点下面那行加一个'
+      : '没有官方玩法') + '</div>';
+    return;
+  }
   var html = '';
-  [['官方', false], ['我的', true]].forEach(function(g){
-    var rows = nvPlays.filter(function(p){ return !!p.custom === g[1]; });
-    if(!rows.length) return;
-    html += '<div class="nv-glabel">' + g[0] + '</div>';
-    html += rows.map(function(p){
+  html += rows.map(function(p){
       /* 「有几本」用服务端数好的，页面不自己再算一遍。 */
       var n = typeof p.books === 'number' ? p.books : nvBooksOf(p.id).length;
       var sub = p.tagline || '';
@@ -605,8 +685,7 @@ function nvRenderPlays(plays){
       return '<div class="nv-play' + (p.id === nvPlayId ? ' on' : '') + '" data-id="' +
              nvEsc(p.id) + '"><b>' + nvEsc(p.name) + '</b>' +
              (sub ? '<span>' + nvEsc(sub) + '</span>' : '') + '</div>';
-    }).join('');
-  });
+  }).join('');
   if(!nvPlays.some(function(p){ return p.id === nvPlayId; })){
     nvPlayId = nvPlays[0].id;               /* 选的那组玩法没了（删了最后一本） */
   }
@@ -631,48 +710,46 @@ function nvBooksOf(key){
 }
 function nvSelectPlay(id){
   nvPlayId = id;
-  nvEl('nvIdentity').innerHTML = nvIdentityOptions(nvCurrentPlay());
-  nvEl('nvWipeIdentity').innerHTML = nvIdentityOptions(nvCurrentPlay());
+  var sel = nvEl('nvIdentity');
+  if(sel) sel.innerHTML = nvIdentityOptions(nvCurrentPlay());
+  var wi = nvEl('nvWipeIdentity');
+  if(wi) wi.innerHTML = nvIdentityOptions(nvCurrentPlay());
   Array.prototype.forEach.call(nvEl('nvPlayList').querySelectorAll('.nv-play'), function(el){
     el.className = 'nv-play' + (el.getAttribute('data-id') === id ? ' on' : '');
   });
   nvRenderWorlds(nvAllWorlds);
   nvLockSeal(nvWorldId ? nvLastState : null);
-  nvEl('nvNewBox').style.display = '';
+  /* 有书就直接显示正文；没书才把开书表单亮出来。
+     （2026-11-12）原来这块一直挂着，用户点完玩法还在想「下面那个要不要点」。 */
+  var nb = nvEl('nvNewBox');
+  var mineNow = nvBooksOf(id);
+  if(nb) nb.style.display = mineNow.length ? 'none' : '';
+  /* 点玩法 = 直接进那本书（2026-11-12 用户要求）。
+     原来点完只改选中态，右边不动，用户还得再去点下面「已有的世界」里
+     某一本——他不知道要这么点，以为玩法点一下就该进去。
+     现在：这个玩法下有书 → 进最近那本；没书 → 显示开新书的表单。 */
+  var mine = nvBooksOf(id);
+  if(mine.length){
+    var last = mine[0];
+    if(last && last.id !== nvWorldId) nvLoadWorld(last.id);
+  }else{
+    nvWorldId = null;
+    nvRenderCard(null);
+  }
 }
+/* 「第几章」不再显示（2026-11-12 用户拍板）：小说是按轮次往下走的，
+   没有「这一章要做什么」这回事。数据还留在存档里，只是不再拿出来看。 */
 function nvRenderWorlds(worlds){
   nvAllWorlds = worlds || [];
-  var box = nvEl('nvWorldList');
   var p = nvCurrentPlay();
   var mine = nvBooksOf(nvPlayId);
-  nvEl('nvWorldScope').textContent = p.name ? ('· 只列「' + p.name + '」的') : '';
   if(!mine.length){
-    box.innerHTML = '<div class="nv-empty">' + (p.name
-      ? '「' + nvEsc(p.name) + '」还没有开过，上面填好名字、点开场封样就是第一本'
-      : '还没有开过') + '</div>';
+    if(nvWorldId === null) nvRenderCard(null);
     return;
   }
-  box.innerHTML = mine.map(function(w){
-    return '<div class="nv-world' + (w.id === nvWorldId ? ' on' : '') + '" data-id="' +
-      nvEsc(w.id) + '"><span class="nv-wname">' + nvEsc(w.name || '无名的人') + '</span>' +
-      '<em>第 ' + nvEsc(w.chapter || 1) + ' 章 · ' + nvEsc(w.place || '不知道在哪') +
-      (w.ending ? ' · 已结束' : '') + '</em>' +
-      '<button class="nv-del" type="button" data-del="' + nvEsc(w.id) +
-      '" title="删掉这本书（不可恢复）">×</button></div>';
-  }).join('');
-  Array.prototype.forEach.call(box.querySelectorAll('.nv-world'), function(el){
-    el.onclick = function(ev){
-      if(ev.target.closest('.nv-del')) return;
-      nvLoadWorld(el.getAttribute('data-id'));
-    };
-  });
-  Array.prototype.forEach.call(box.querySelectorAll('.nv-del'), function(el){
-    el.onclick = function(ev){
-      ev.stopPropagation();
-      nvOpenDel(el.getAttribute('data-del'));
-    };
-  });
+  if(!nvWorldId && mine.length) nvLoadWorld(mine[0].id);
 }
+
 function nvRefreshNav(){
   return Promise.all([nvGet('/api/novel/plays'), nvGet('/api/novel/worlds')])
     .then(function(r){
@@ -1259,6 +1336,18 @@ nvEl('nvDelCancel').onclick = nvCloseDel;
 nvEl('nvDelOk').onclick = nvDoDel;
 nvEl('nvDelMask').addEventListener('click', function(e){
   if(e.target === nvEl('nvDelMask')) nvCloseDel();
+});
+
+/* 左栏 tab（2026-11-12）：官方 / 我的，一个 tab 一屏。
+   照角色扮演那边「官方 / 我的」两个按钮的做法。 */
+Array.prototype.forEach.call(document.querySelectorAll('.nv-tab'), function(el){
+  el.onclick = function(){
+    nvTab = el.getAttribute('data-g');
+    Array.prototype.forEach.call(document.querySelectorAll('.nv-tab'), function(x){
+      x.classList.toggle('on', x === el);
+    });
+    nvRenderPlays(nvPlays);
+  };
 });
 
 nvEl('nvMakeBtn').onclick = nvOpenMake;
