@@ -195,6 +195,13 @@
   <aside class="side">
     <div class="side-head">
       <h1>角色扮演 <span class="cnt" id="cnt">加载中…</span></h1>
+      <!-- 小说模式是另一套记录（世界书 + 第三人称正文），不混进这份会话列表；
+            入口放在这里，是因为「谁玩过什么」都从这一个台子进（2026-11-12）。 -->
+      <div class="filters">
+        <a class="chip" href="/novel_admin" target="_blank"
+           style="text-decoration:none;display:inline-block"
+           title="小说记录：谁写了什么小说 —— 按 QQ 列出所有世界书，点开看整本正文（只读）">小说模式查看 →</a>
+      </div>
       <div class="filters" id="filters">
         <button class="chip on" data-k="all">全部</button>
         <button class="chip" data-k="网页">网页</button>

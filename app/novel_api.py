@@ -50,6 +50,11 @@ bp = Blueprint("novel_api", __name__)
 # 小说模式删的是一整本周目进度，文案得说清楚是哪件事。
 RESTART_CONFIRM = "我同意重开这一本"
 
+# 「删掉这本书」的手打确认句。粒度就是整本：设定、主角、正文、状态一起没，
+# 没有「只删一部分」的选项，也没有回收站。比重开更狠，所以文案和按钮都单独
+# 一套（红色 danger），不跟重开共用。
+DELETE_CONFIRM = "我确认删掉这本书"
+
 # 代充层：provider/model 都空 → llm.candidates() 从全局降级链头开始。
 # 免费层的参数是每次请求现算的（见 _relay_opts），别在 import 时定死，
 # 否则测试 patch config 换链头不生效。
@@ -134,6 +139,7 @@ def _attach_model_used(resp):
             if isinstance(d, dict):
                 d["model_used"] = used
                 d["restart_confirm"] = RESTART_CONFIRM
+                d["delete_confirm"] = DELETE_CONFIRM
                 d["mode"] = "friend" if _qq() else "owner"
                 resp.set_data(json.dumps(d, ensure_ascii=False))
         except Exception:                                   # noqa: BLE001
@@ -202,8 +208,12 @@ def _friend_run(qq, run):
 
 @bp.route("/api/novel/plays")
 def plays():
-    """玩法列表。第一版只有「丧尸末日」，以后加玩法就是多放一包预设。"""
-    return jsonify({"ok": True, "plays": novel.list_plays(),
+    """玩法列表：官方（磁盘预设）+ 这个人自己的（从自己的书里反推）。
+
+    自建玩法不落磁盘，所以左栏那两组数据都是这一次现算的：别人的书不会
+    出现在你的「我的玩法」里，删掉最后一本，那个玩法条目也就没了。
+    """
+    return jsonify({"ok": True, "plays": novel.list_plays(_qq()),
                     "chain_head": {"provider": PERSONA_PROVIDER or "",
                                    "model": PERSONA_MODEL or ""}})
 
@@ -300,6 +310,26 @@ def rollback():
         return _fail(e)
 
 
+@bp.route("/api/novel/delete", methods=["POST"])
+def delete():
+    """删掉一整本。body: {id, confirm}
+
+    粒度就是这本书：设定、主角、所有正文、人物名录、走过的路一起没，没有
+    「只删设定」或「只删进度」的选项，也没有回收站。confirm 必须是把确认句
+    原样打一遍，前后端各校验一次（防直接打接口绕过）——这是全项目唯一一个
+    真正不可恢复的动作，比「重开」还狠。
+    """
+    body = request.get_json(silent=True) or {}
+    if str(body.get("confirm") or "").strip() != DELETE_CONFIRM:
+        return jsonify({"ok": False,
+                        "error": "删掉要把确认句原样打一遍"}), 400
+    try:
+        return jsonify(novel.delete_world(body.get("id") or body.get("world_id"),
+                                         owner=_qq()))
+    except Exception as e:                              # noqa: BLE001
+        return _fail(e)
+
+
 @bp.route("/api/novel/restart", methods=["POST"])
 def restart():
     """死亡重开。body: {id, confirm, name?, identity?}
@@ -360,3 +390,37 @@ def custom_test():
     if not ok:
         return jsonify({"ok": False, "elapsed": elapsed, "error": info})
     return jsonify({"ok": True, "elapsed": elapsed, "info": info})
+
+
+# ─── 管理页（只读）──────────────────────────────────
+#
+# 5175 把 `/api/novel/<path>` 整个通配反代给了群友，所以这几个接口必须自己
+# 挡一次身份，不能指望「管理页没挂到网关」——接口只要能被 POST 到就等于开着。
+
+def _owner_only():
+    """群友态一律 403；站主直连（qq 为空）才继续。"""
+    if _qq():
+        return jsonify({"ok": False, "error": "小说记录只有站主能看"}), 403
+    return None
+
+
+@bp.route("/api/novel/admin/list")
+def admin_list():
+    """所有世界书（不分 owner），给管理页列「谁写了什么」。"""
+    blocked = _owner_only()
+    if blocked is not None:
+        return blocked
+    return jsonify({"ok": True, "worlds": novel.all_worlds()})
+
+
+@bp.route("/api/novel/admin/book")
+def admin_book():
+    """管理页读一本：正文按轮次摆好 + 世界书全貌。只读，不改任何东西。"""
+    blocked = _owner_only()
+    if blocked is not None:
+        return blocked
+    w = novel.admin_world(request.args.get("id"))
+    if not w:
+        return jsonify({"ok": False, "error": "没有这个世界"}), 404
+    return jsonify({"ok": True, "story": novel.admin_story(w),
+                    "book": novel.world_book(w)})

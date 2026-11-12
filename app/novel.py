@@ -111,8 +111,8 @@ DIRECTOR_TIMEOUT = 90.0
 
 # ─── 玩法预设 ─────────────────────────────────────────
 
-def list_plays():
-    """扫 novels/*/preset.json。第一版只有「丧尸末日」一个玩法。"""
+def _disk_plays():
+    """扫 novels/*/preset.json。现在只有「丧尸末日」一份官方玩法。"""
     out = []
     try:
         names = sorted(os.listdir(NOVELS_DIR))
@@ -128,7 +128,66 @@ def list_plays():
                 "brief": p.get("brief") or "",
                 "identity_choices": p.get("identity_choices") or [],
                 "opening_note": p.get("opening_note") or "",
+                "custom": False,
             })
+    return out
+
+
+def play_key(world):
+    """这本书属于哪个玩法。
+
+    自建玩法的 `play` 一律是 `"custom"`（同一个驱动，世界观各不相同），真正
+    区分它们的是生成时 AI 定下的那个玩法名，所以键写成 `custom:<玩法名>`。
+    老存档没有 preset 的照旧用 `play`，行为和以前完全一样。
+    """
+    if not isinstance(world, dict):
+        return ""
+    p = world.get("preset")
+    if isinstance(p, dict) and _as_text(p.get("name")):
+        return "custom:" + _as_text(p.get("name"))
+    return str(world.get("play") or "")
+
+
+def list_plays(owner=""):
+    """官方玩法（磁盘预设）+ 这个人自己的玩法（从世界书里推导）。
+
+    自建玩法不落 `novels/` 目录——那里是全局的、不认 owner，写进去等于把
+    私人设定发给所有人。它内嵌在各自的世界书里，所以「我的玩法」只能从
+    「我有哪些书」反推：同一份预设名下的书算同一个玩法，删掉最后一本，
+    这个玩法条目跟着消失（也正是不想让别人看到的那份设定）。
+    """
+    out = _disk_plays()
+    mine = {}
+    books = {}
+    for w in _read_db().get("worlds", {}).values():
+        if not isinstance(w, dict):
+            continue
+        if str(w.get("owner") or "") != str(owner or ""):
+            continue
+        key = play_key(w)
+        books[key] = books.get(key, 0) + 1
+        if not key.startswith("custom:"):
+            continue
+        row = mine.get(key)
+        if row is None:
+            preset = w.get("preset") or {}
+            mine[key] = {
+                "id": key,
+                "name": key[len("custom:"):],
+                "tagline": _as_text(preset.get("tagline")),
+                "brief": _as_text(preset.get("brief")),
+                "identity_choices": preset.get("identity_choices") or [],
+                "opening_note": _as_text(preset.get("opening_note")),
+                "custom": True,
+                "books": 0,
+            }
+    # 「有几本」由代码数，别让前端再算一遍（两边算法一分叉就会出现
+    # 「写着 2 本、点开只有 1 本」）。
+    for p in out:
+        p["books"] = books.get(p["id"], 0)
+    for key, row in mine.items():
+        row["books"] = books.get(key, 0)
+    out.extend(sorted(mine.values(), key=lambda x: x["name"]))
     return out
 
 
@@ -269,6 +328,7 @@ def list_worlds(owner=""):
         out.append({
             "id": wid,
             "play": w.get("play"),
+            "play_key": play_key(w),
             "play_name": w.get("play_name") or w.get("play") or "",
             "custom": bool(w.get("preset")),
             "name": (w.get("player") or {}).get("name") or "",
@@ -1282,6 +1342,64 @@ def _open_custom(table, name, identity, owner="", opts=None):
     return _seal_custom(world, pick, opts)
 
 
+def _custom_preset(play, owner=""):
+    """`custom:<玩法名>` → 世界书里那份内嵌预设（取最近生成的一本）。
+
+    自建玩法没有磁盘文件，设定只活在世界书里，所以「用同一个玩法再开一本」
+    只能从已有的书里反查。一本都没有就返回 None，由调用方报「没有这个玩法」。
+    """
+    key = str(play or "").strip()
+    if not key.startswith("custom:"):
+        return None
+    want = key[len("custom:"):]
+    best, best_at = None, None
+    for w in _read_db().get("worlds", {}).values():
+        if not isinstance(w, dict):
+            continue
+        if str(w.get("owner") or "") != str(owner or ""):
+            continue
+        p = w.get("preset")
+        if not isinstance(p, dict) or _as_text(p.get("name")) != want:
+            continue
+        at = float(w.get("created") or 0)
+        if best is None or at >= best_at:
+            best, best_at = (w, p), at
+    return best
+
+
+def _open_replay(play, name, identity, owner="", opts=None):
+    """用自己已有的玩法再开一本：世界观照抄，只重写开场正文。
+
+    不重跑开场 AI —— 那份设定是玩家看过、认过的，重新生成等于偷偷换掉他
+    的世界。地点表、固定物资、人物种子从源世界那份 `seed` 里来；动态的东西
+    （走过的路、手上拿的、遇见过的人）一律不带，新书就是新书。
+    """
+    found = _custom_preset(play, owner)
+    if not found:
+        raise ValueError("没有这个玩法")
+    src, preset = found
+    name = _as_text(name) or "无名的人"
+    choices = [c for c in (preset.get("identity_choices") or [])
+               if isinstance(c, dict)]
+    identity = _as_text(identity)
+    if not identity and choices:
+        identity = _as_text(choices[0].get("name"))
+    identity = identity or "普通人"
+    world = _blank_world("custom", name, identity,
+                         _identity_desc(preset, identity), preset, owner)
+    world["preset"] = preset
+    world["play_name"] = _as_text(preset.get("name")) or world["play_name"]
+    try:                                    # seed 来自 JSON，深拷一份免得两本共享
+        seed = json.loads(json.dumps(src.get("seed") or {}, ensure_ascii=False))
+    except (TypeError, ValueError):
+        seed = {}
+    _merge_seed(world, seed)
+    # 只继承「不会随重开变化」的固定事实，跟 restart 一个口径。
+    world["discovered"] = [d for d in (src.get("discovered") or [])
+                           if isinstance(d, dict) and d.get("kind") == "static"]
+    return _seal_custom(world, identity, opts)
+
+
 # ─── 对外接口 ────────────────────────────────────────
 
 def open_world(play, name, identity, world_id=None, owner="", opts=None,
@@ -1313,6 +1431,8 @@ def open_world(play, name, identity, world_id=None, owner="", opts=None,
                     "state": state_card(existing)}
     if isinstance(table, dict):
         return _open_custom(table, name, identity, owner=owner, opts=opts)
+    if str(play or "").strip().startswith("custom:"):
+        return _open_replay(play, name, identity, owner=owner, opts=opts)
     preset = load_preset(play)
     if not preset:
         raise ValueError("没有这个玩法")
@@ -1351,6 +1471,31 @@ def rename(world_id, name, owner=""):
     w["player"]["name"] = name[:24]
     _save_world(w)
     return {"ok": True, "state": state_card(w)}
+
+
+def delete_world(world_id, owner=""):
+    """整本删掉：世界书 + 这条线在 RAG 里的长期记忆，一起消失。
+
+    接口层必须先让玩家把确认句手打一遍，这里不再问第二遍，只做事实。
+    **没有回收站**：`state/novel_worlds.json` 里那一项直接摘掉；RAG 每代
+    （`id#0`、`id#1`…）也一起清，否则删了书，那份记忆还躺在检索池里。
+    """
+    wid = str(world_id or "").strip()
+    w = get_world(wid, owner) if _SAFE_ID.match(wid) else None
+    if not w:
+        raise ValueError("没有这个世界")
+    with _LOCK:
+        db = _read_db()
+        db.get("worlds", {}).pop(wid, None)
+        _write_db(db)
+    for n in range(int(w.get("restarts") or 0) + 1):
+        try:
+            persona_rag.drop_line("%s#%d" % (wid, n))
+        except Exception:                                   # noqa: BLE001
+            log.exception("[novel] 删 RAG 线失败 %s#%d", wid, n)
+    return {"ok": True, "id": wid,
+            "name": (w.get("player") or {}).get("name") or "",
+            "play_name": w.get("play_name") or ""}
 
 
 def run_turn(world_id, said, owner="", opts=None, turn_token=None):
@@ -1510,6 +1655,7 @@ def state_card(world):
     return {
         "id": world.get("id"),
         "play": world.get("play"),
+        "play_key": play_key(world),
         "play_name": world.get("play_name") or world.get("play"),
         "chapter": world.get("chapter", 1),
         "chapter_goal": world.get("chapter_goal") or "",
@@ -1627,4 +1773,91 @@ def world_book(world):
         "path": list(world.get("visited") or []),
         "deaths": [{"cause": d.get("cause") or "", "at": d.get("at") or ""}
                    for d in deaths[-5:] if isinstance(d, dict)],
+    }
+
+
+# ─── 管理页（只读，只在 5174 开）──────────────────────
+
+def all_worlds():
+    """所有世界书，不分 owner，按「谁写的」分组给管理页看。
+
+    只读：这里不做 owner 过滤，因为调它的是站主的管理页；反过来说，**这个
+    函数绝不能直接挂在群友能打到的接口上**（5175 会通配反代 /api/novel/*，
+    接口层还得再挡一次）。
+    """
+    out = []
+    for wid, w in _read_db().get("worlds", {}).items():
+        if not isinstance(w, dict):
+            continue
+        p = w.get("player") or {}
+        hist = w.get("history") or []
+        last = ""
+        for row in reversed(hist):
+            if isinstance(row, dict) and str(row.get("content") or "").strip():
+                last = str(row.get("content")).strip().replace("\n", " ")
+                break
+        out.append({
+            "id": wid,
+            "owner": str(w.get("owner") or ""),
+            "name": p.get("name") or "",
+            "play_name": w.get("play_name") or w.get("play") or "",
+            "custom": bool(w.get("preset")),
+            "chapter": w.get("chapter", 1),
+            "place": p.get("place") or "",
+            "clock": w.get("clock") or "",
+            "turns": w.get("turns", 0),
+            "created": w.get("created") or 0,
+            "ending": w.get("ending"),
+            "lines": len(hist),
+            "last": last[:140],
+        })
+    return sorted(out, key=lambda x: (x["owner"], -float(x["created"] or 0)))
+
+
+def admin_world(world_id):
+    """管理页读某一本，跨 owner。只读，不改任何东西；调用方限定站主。"""
+    wid = str(world_id or "").strip()
+    if not _SAFE_ID.match(wid):
+        return None
+    w = _read_db().get("worlds", {}).get(wid)
+    return w if isinstance(w, dict) else None
+
+
+def admin_story(world):
+    """一本书的正文，按轮次摆好。
+
+    历史里 assistant 的每一段就是一轮的正文，user 那一条是玩家当时写下的
+    剧情骨架。管理页要能看出「他写了什么 → AI 写成了什么」，所以两半都留。
+    开场那一条没有对应的 user，单独标出来。
+    """
+    out = []
+    said = ""
+    for row in world.get("history") or []:
+        if not isinstance(row, dict):
+            continue
+        text = str(row.get("content") or "").strip()
+        if not text:
+            continue
+        if row.get("role") == "user":
+            said = text
+            continue
+        out.append({"said": said, "text": text})
+        said = ""
+    if said:
+        out.append({"said": said, "text": ""})
+    p = world.get("player") or {}
+    return {
+        "id": world.get("id"),
+        "owner": str(world.get("owner") or ""),
+        "name": p.get("name") or "",
+        "identity": p.get("identity") or "",
+        "play_name": world.get("play_name") or world.get("play") or "",
+        "chapter": world.get("chapter", 1),
+        "chapter_goal": world.get("chapter_goal") or "",
+        "clock": world.get("clock") or "",
+        "place": p.get("place") or "",
+        "turns": world.get("turns", 0),
+        "restarts": world.get("restarts", 0),
+        "ending": world.get("ending"),
+        "turns_rows": out,
     }

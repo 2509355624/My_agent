@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>小说模式 · 记录</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23f472b6'/></svg>">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0a0a0f; --bg-elev: #12121a; --bg-input: #1a1a24;
+    --border: #2a2a3a; --border-soft: #1f1f2e;
+    --text: #e8e8f0; --text-dim: #8888a0; --text-mute: #555570;
+    --accent: #f472b6; --accent-dim: #6d2a48;
+    --ok: #4ade80; --err: #f87171;
+    --r: 10px; --rs: 7px;
+  }
+  html, body { background: var(--bg); color: var(--text); height: 100%;
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 13px; overflow: hidden; }
+  .app { display: grid; grid-template-columns: 330px 1fr; height: 100vh; }
+
+  .side { border-right: 1px solid var(--border-soft); display: flex;
+    flex-direction: column; min-height: 0; background: var(--bg-elev); }
+  .side-head { padding: 12px 14px; border-bottom: 1px solid var(--border-soft); }
+  .side-head h1 { font-size: 14px; font-weight: 600; display: flex;
+    align-items: center; gap: 8px; }
+  .side-head .cnt { font-size: 11px; color: var(--text-mute); font-weight: 400; }
+  .side-head a { margin-left: auto; font-size: 12px; color: var(--text-dim);
+    text-decoration: none; }
+  .side-head a:hover { color: var(--accent); }
+  .filters { display: flex; gap: 6px; margin-top: 10px; }
+  .filters input { flex: 1; min-width: 0; padding: 5px 9px; font: inherit;
+    font-size: 12px; color: var(--text); background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: 6px; outline: none; }
+  .filters input:focus { border-color: var(--accent); }
+  .filters button { background: var(--bg-input); border: 1px solid var(--border);
+    color: var(--text-dim); border-radius: 6px; padding: 4px 10px;
+    font: inherit; font-size: 12px; cursor: pointer; }
+  .filters button:hover { border-color: var(--accent); color: var(--accent); }
+  .side-list { flex: 1; overflow-y: auto; padding: 8px; }
+  .owner { font-size: 10.5px; color: var(--text-mute); letter-spacing: .06em;
+    margin: 12px 2px 6px; }
+  .owner:first-child { margin-top: 2px; }
+  .row { padding: 8px 10px; border-radius: var(--rs); cursor: pointer;
+    margin-bottom: 3px; border: 1px solid transparent; }
+  .row:hover { background: var(--bg-input); }
+  .row.on { background: var(--bg-input); border-color: var(--accent-dim); }
+  .row .l1 { display: flex; align-items: center; gap: 6px; }
+  .row .nm { font-weight: 500; font-size: 12.5px; }
+  .row .tag { font-size: 10px; padding: 1px 6px; border-radius: 8px;
+    border: 1px solid var(--border); color: var(--text-mute); }
+  .row .tag.g { color: var(--accent); border-color: var(--accent-dim); }
+  .row .l2 { font-size: 11px; color: var(--text-mute); margin-top: 3px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .mid { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .top { padding: 12px 20px; border-bottom: 1px solid var(--border-soft);
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .top h2 { font-size: 15px; font-weight: 600; }
+  .top .meta { font-size: 11.5px; color: var(--text-mute); }
+  .body { flex: 1; overflow-y: auto; padding: 18px 22px 60px; }
+  .empty { color: var(--text-mute); font-size: 12.5px; line-height: 1.9; }
+  .turn { margin-bottom: 22px; }
+  .said { background: var(--bg-input); border: 1px solid var(--border-soft);
+    border-left: 3px solid var(--accent-dim); border-radius: var(--rs);
+    padding: 7px 11px; font-size: 12px; color: var(--text-dim);
+    white-space: pre-wrap; overflow-wrap: anywhere; margin-bottom: 8px; }
+  .said b { color: var(--text-mute); font-weight: 500; }
+  .para { font-size: 14px; line-height: 1.95; white-space: pre-wrap;
+    overflow-wrap: anywhere; }
+  .opening { font-size: 11px; color: var(--text-mute); margin-bottom: 4px; }
+  .facts { background: var(--bg-elev); border: 1px solid var(--border-soft);
+    border-radius: var(--r); padding: 12px 14px; margin-bottom: 18px; }
+  .facts h3 { font-size: 12px; font-weight: 600; margin-bottom: 8px;
+    color: var(--text-dim); }
+  .facts dl { display: grid; grid-template-columns: 74px 1fr; gap: 5px 10px;
+    font-size: 12px; }
+  .facts dt { color: var(--text-mute); }
+  .facts dd { color: var(--text-dim); overflow-wrap: anywhere; }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .chip { font-size: 11px; padding: 1px 7px; border-radius: 9px;
+    background: var(--bg-input); border: 1px solid var(--border);
+    color: var(--text-dim); }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="side-head">
+      <h1>小说记录 <span class="cnt" id="cnt"></span></h1>
+      <a href="/admin">管理页 →</a>
+      <div class="filters">
+        <input id="q" placeholder="搜 QQ / 主角名 / 玩法" autocomplete="off">
+        <button id="reload" type="button">刷新</button>
+      </div>
+    </div>
+    <div class="side-list" id="list"><div class="empty">正在读…</div></div>
+  </aside>
+
+  <main class="mid">
+    <div class="top">
+      <h2 id="title">小说记录</h2>
+      <span class="meta" id="meta"></span>
+    </div>
+    <div class="body" id="body">
+      <div class="empty">左边选一本，右边看正文。<br>
+        这里只读：删书、改设定都不在这个页面做。</div>
+    </div>
+  </main>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+let all = [];
+let cur = '';
+let q = '';
+
+function esc(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function ownerName(owner){
+  return owner ? ('QQ ' + owner) : '站主';
+}
+function matches(w){
+  if(!q) return true;
+  const hay = [w.owner, w.name, w.play_name, w.id].join(' ').toLowerCase();
+  return hay.indexOf(q) >= 0;
+}
+function render(){
+  const rows = all.filter(matches);
+  const box = $('list');
+  $('cnt').textContent = rows.length + ' / ' + all.length + ' 本';
+  if(!rows.length){
+    box.innerHTML = '<div class="empty">' + (all.length ? '没有匹配的世界书' : '还没有人写过') + '</div>';
+    return;
+  }
+  // 按 owner 分组：站主在前，群友按 QQ 排。
+  const groups = [];
+  const byOwner = {};
+  rows.forEach((w) => {
+    const k = w.owner || '';
+    if(!byOwner[k]){ byOwner[k] = {owner: k, rows: []}; groups.push(byOwner[k]); }
+    byOwner[k].rows.push(w);
+  });
+  groups.sort((a, b) => (a.owner === '' ? -1 : b.owner === '' ? 1 : a.owner.localeCompare(b.owner)));
+  box.innerHTML = groups.map((g) => {
+    return '<div class="owner">' + esc(ownerName(g.owner)) + ' · ' + g.rows.length + ' 本</div>' +
+      g.rows.map((w) => {
+        const tag = w.custom ? '自写' : '官方';
+        return '<div class="row' + (w.id === cur ? ' on' : '') + '" data-id="' + esc(w.id) + '">' +
+          '<div class="l1"><span class="nm">' + esc(w.name || '无名的人') + '</span>' +
+          '<span class="tag' + (w.custom ? ' g' : '') + '">' + tag + '</span></div>' +
+          '<div class="l2">' + esc(w.play_name || '') + ' · 第 ' + esc(w.chapter) + ' 章 · ' +
+          esc(w.turns) + ' 轮' + (w.ending ? ' · 已结束' : '') + '</div></div>';
+      }).join('');
+  }).join('');
+  Array.prototype.forEach.call(box.querySelectorAll('.row'), (el) => {
+    el.onclick = () => open(el.getAttribute('data-id'));
+  });
+}
+async function load(){
+  try{
+    const r = await fetch('/api/novel/admin/list', {headers:{'Accept':'application/json'}});
+    const d = await r.json();
+    if(!d.ok){ $('list').innerHTML = '<div class="empty">' + esc(d.error || '读不到') + '</div>'; return; }
+    all = d.worlds || [];
+    render();
+  }catch(e){
+    $('list').innerHTML = '<div class="empty">读不到：' + esc(e.message) + '</div>';
+  }
+}
+function line(label, val){
+  return val ? '<dt>' + esc(label) + '</dt><dd>' + esc(val) + '</dd>' : '';
+}
+function chips(rows, empty){
+  if(!rows || !rows.length) return '<span class="chip">' + esc(empty || '无') + '</span>';
+  return rows.map((x) => '<span class="chip">' + esc(x) + '</span>').join('');
+}
+async function open(id){
+  cur = id;
+  render();
+  $('body').innerHTML = '<div class="empty">正在读…</div>';
+  try{
+    const r = await fetch('/api/novel/admin/book?id=' + encodeURIComponent(id),
+                          {headers:{'Accept':'application/json'}});
+    const d = await r.json();
+    if(!d.ok){ $('body').innerHTML = '<div class="empty">' + esc(d.error || '读不到') + '</div>'; return; }
+    paint(d.story, d.book);
+  }catch(e){
+    $('body').innerHTML = '<div class="empty">读不到：' + esc(e.message) + '</div>';
+  }
+}
+function paint(s, b){
+  $('title').textContent = (s.name || '无名的人') + ' · ' + (s.play_name || '');
+  $('meta').textContent = [
+    ownerName(s.owner),
+    '第 ' + (s.chapter || 1) + ' 章',
+    (s.turns || 0) + ' 轮',
+    s.clock || '',
+    s.ending ? '已结束' : '',
+    s.restarts ? ('重开 ' + s.restarts + ' 次') : ''
+  ].filter(Boolean).join(' · ');
+
+  const places = (b.places || []).map((p) =>
+    p.name + (p.here ? '（现在在这）' : (p.visited ? '（去过）' : '（没去过）')));
+  const people = (b.cast || []).map((c) => c.name + (c.kind === '威胁' ? '（威胁）' : ''));
+  let html = '<div class="facts"><h3>世界书</h3><dl>' +
+    line('主角', s.name + (s.identity ? ' · ' + s.identity : '')) +
+    line('身份说明', (b.person || {}).identity_desc) +
+    line('现在在哪', (b.person || {}).place) +
+    line('这一章要做的', s.chapter_goal) +
+    line('世界规则', (b.rules || []).join(' / ')) +
+    line('地点', places.join(' / ')) +
+    line('遇到过的人', people.join(' / ')) +
+    '</dl></div>';
+
+  const rows = s.turns_rows || [];
+  if(!rows.length){
+    html += '<div class="empty">这本还没有正文（可能停在选身份那一步）。</div>';
+  }else{
+    html += rows.map((t, i) => {
+      const head = i === 0 && !t.said ? '<div class="opening">开场</div>' : '';
+      return '<div class="turn">' + head +
+        (t.said ? '<div class="said"><b>他写的：</b>' + esc(t.said) + '</div>' : '') +
+        (t.text ? '<div class="para">' + esc(t.text) + '</div>' : '') +
+        '</div>';
+    }).join('');
+  }
+  $('body').innerHTML = html;
+  $('body').scrollTop = 0;
+}
+$('q').addEventListener('input', (e) => { q = e.target.value.trim().toLowerCase(); render(); });
+$('reload').onclick = () => load();
+load();
+</script>
+</body>
+</html>

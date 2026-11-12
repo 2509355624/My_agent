@@ -78,6 +78,12 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
 .nv-sec { margin-bottom: 18px; }
 .nv-sec h3 { font-size: 11px; font-weight: 500; margin: 0 0 8px;
   color: var(--text-mute); letter-spacing: .04em; }
+/* 玩法分「官方 / 我的」两组（2026-11-12 用户报「全混在一起」）：
+   不分组的话自建玩法跟磁盘玩法长得一模一样，而「没选中就默认选第一个」
+   会让左上角永远亮着丧尸末日——看着就像切换不生效。 */
+.nv-glabel { font-size: 10px; color: var(--text-mute); letter-spacing: .08em;
+  margin: 10px 0 5px; }
+.nv-glabel:first-child { margin-top: 0; }
 .nv-play { border: 1px solid var(--border-soft); border-radius: var(--rs);
   padding: 9px 10px; margin-bottom: 6px; cursor: pointer; background: var(--bg-input); }
 .nv-play.on { border-color: var(--accent-dim); }
@@ -86,9 +92,18 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
 .nv-play span { display: block; font-size: 11px; color: var(--text-mute);
   margin-top: 3px; overflow-wrap: anywhere; }
 .nv-world { font-size: 12px; padding: 8px 10px; border-radius: var(--rs);
-  cursor: pointer; border: 1px solid transparent; overflow-wrap: anywhere; }
+  cursor: pointer; border: 1px solid transparent; overflow-wrap: anywhere;
+  display: flex; align-items: center; gap: 6px; }
 .nv-world:hover { background: var(--bg-input); }
 .nv-world.on { background: var(--bg-input); border-color: var(--accent-dim); }
+.nv-world .nv-wname { font-weight: 500; color: var(--text); flex: 0 0 auto; }
+.nv-world em { font-style: normal; color: var(--text-mute); font-size: 11px;
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.nv-del { flex: 0 0 auto; background: transparent; border: 0; cursor: pointer;
+  color: var(--text-mute); font-size: 15px; line-height: 1; padding: 2px 5px;
+  border-radius: 5px; }
+.nv-del:hover { color: var(--err); background: rgba(248, 113, 113, .14); }
 .nv-field { margin-bottom: 8px; }
 .nv-field label { display: block; font-size: 11px; color: var(--text-dim);
   margin-bottom: 4px; }
@@ -193,6 +208,10 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
 .nv-code { font-size: 14px; color: var(--err); background: var(--bg-input);
   border: 1px dashed var(--err); border-radius: var(--rs); padding: 8px 10px;
   margin-bottom: 8px; letter-spacing: .5px; }
+/* 删除弹窗里「删的是哪一本」：名字 + 章节 + 现在在哪，避免删错。 */
+.nv-delwho { font-size: 13px; color: var(--text); background: var(--bg-input);
+  border: 1px solid var(--border-soft); border-radius: var(--rs);
+  padding: 8px 10px; margin-bottom: 10px; overflow-wrap: anywhere; }
 .nv-box .nv-code-input { width: 100%; padding: 8px 10px; font: inherit; font-size: 16px;
   border: 1px solid var(--border); border-radius: var(--rs);
   background: var(--bg-input); color: var(--text); outline: none; }
@@ -278,7 +297,7 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
         <button class="btn pri" id="nvOpenBtn" style="width:100%">开场封样</button>
       </div>
       <div class="nv-sec">
-        <h3>已有的世界</h3>
+        <h3>已有的世界 <span class="nv-sub" id="nvWorldScope"></span></h3>
         <div id="nvWorldList"><div class="nv-empty">还没有开过</div></div>
       </div>
     </div>
@@ -287,7 +306,7 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
   <main class="mid" id="nvMain">
     <div class="top">
       <button class="btn sm nv-burger" id="nvBurger" type="button">☰</button>
-      <span class="nm">丧尸末日</span>
+      <span class="nm" id="nvTitle">小说模式</span>
       <span class="sp"></span>
       <span class="nv-sub">一个世界一条线 · 你是主角 · 世界书会记住已经探明的事</span>
       <button class="btn sm" id="nvBookBtn" type="button">世界书</button>
@@ -295,7 +314,7 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
       <a class="btn sm" href="/persona" title="返回角色扮演">← 角色扮演</a>
     </div>
     <div id="nvErr"></div>
-    <div class="log" id="nvLog"><div class="nv-empty">左边选一个玩法，填好主角名字和身份，点「开场封样」。</div></div>
+    <div class="log" id="nvLog"><div class="nv-empty">左边选一个玩法，填好主角名字和身份，点下面的按钮开一本。</div></div>
     <div class="composer nv-input" id="nvInputBox" style="display:none">
       <div class="nv-info" id="nvInfo" style="display:none"></div>
       <div class="nv-actions" id="nvActions"></div>
@@ -364,6 +383,28 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
     </div>
   </div>
 
+  <!-- 删掉一本书：唯一一个真正不可恢复的动作，所以警告 + 手打确认都要。 -->
+  <div class="nv-mask" id="nvDelMask">
+    <div class="nv-box">
+      <h3>❗ 删掉这本书</h3>
+      <div class="nv-wtext">
+        <b>这不是重开，也不是回退。</b>这本世界书里的所有东西会一起消失：
+        你写的世界观设定、主角、每一章正文、人物名录、走过的路、探明的事、
+        包里的东西、死因记录 —— <b>全部</b>。<br>
+        <b>没有回收站，也恢复不了。</b>同玩法的其他书不受影响。
+      </div>
+      <div class="nv-delwho" id="nvDelWho"></div>
+      <div class="nv-code" id="nvDelCode">我确认删掉这本书</div>
+      <input class="nv-code-input" id="nvDelInput" autocomplete="off" spellcheck="false"
+             placeholder="把上面这句原样打一遍">
+      <div class="nv-status err" id="nvDelErr"></div>
+      <div class="nv-wbtns">
+        <button class="btn" id="nvDelCancel" type="button">不删了</button>
+        <button class="btn danger" id="nvDelOk" type="button" disabled>永久删除</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 自建玩法：填一张表，AI 补成能写下去的世界书。填了的不会被改。 -->
   <div class="nv-mask" id="nvMakeMask">
     <div class="nv-box">
@@ -427,6 +468,9 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
 var nvWorldId = '';
 var nvPlays = [];
 var nvPlayId = '';
+/* 全部世界书（服务端已经按 owner 过滤过）。左栏按玩法筛，切换玩法时用它，
+   不用再请求一次。 */
+var nvAllWorlds = [];
 var nvBusy = false;
 var nvEnded = false;
 var nvSealed = false;
@@ -516,6 +560,7 @@ function nvChips(rows, empty){
 function nvModelUsed(d){
   var u = d && d.model_used;
   if(d && d.restart_confirm) nvConfirm = d.restart_confirm;
+  if(d && d.delete_confirm) nvDelConfirm = d.delete_confirm;
   if(!u || !nvEl('nvModelNow')) return;
   var name = u.kind === 'public' ? '公用 V4 Pro（免费）'
     : u.kind === 'paid' ? '官方 DeepSeek（代充余额）'
@@ -543,14 +588,33 @@ function nvRenderPlays(plays){
   nvPlays = plays || [];
   var box = nvEl('nvPlayList');
   if(!nvPlays.length){ box.innerHTML = '<div class="nv-empty">没有找到玩法预设</div>'; return; }
-  box.innerHTML = nvPlays.map(function(p){
-    return '<div class="nv-play' + (p.id === nvPlayId ? ' on' : '') + '" data-id="' + nvEsc(p.id) + '">' +
-           '<b>' + nvEsc(p.name) + '</b><span>' + nvEsc(p.tagline) + '</span></div>';
-  }).join('');
+  /* 官方 / 我的 分开列（2026-11-12 用户报「全部混在一起」）。以前只有一列，
+     而且「没选中就默认选第一个」，打开自建那本时左上角还亮着丧尸末日，
+     看着就像切换不生效。 */
+  var html = '';
+  [['官方', false], ['我的', true]].forEach(function(g){
+    var rows = nvPlays.filter(function(p){ return !!p.custom === g[1]; });
+    if(!rows.length) return;
+    html += '<div class="nv-glabel">' + g[0] + '</div>';
+    html += rows.map(function(p){
+      /* 「有几本」用服务端数好的，页面不自己再算一遍。 */
+      var n = typeof p.books === 'number' ? p.books : nvBooksOf(p.id).length;
+      var sub = p.tagline || '';
+      if(n) sub += (sub ? ' · ' : '') + n + ' 本';
+      else if(p.custom) sub += (sub ? ' · ' : '') + '还没开过';
+      return '<div class="nv-play' + (p.id === nvPlayId ? ' on' : '') + '" data-id="' +
+             nvEsc(p.id) + '"><b>' + nvEsc(p.name) + '</b>' +
+             (sub ? '<span>' + nvEsc(sub) + '</span>' : '') + '</div>';
+    }).join('');
+  });
+  if(!nvPlays.some(function(p){ return p.id === nvPlayId; })){
+    nvPlayId = nvPlays[0].id;               /* 选的那组玩法没了（删了最后一本） */
+  }
+  box.innerHTML = html;
   Array.prototype.forEach.call(box.querySelectorAll('.nv-play'), function(el){
     el.onclick = function(){ nvSelectPlay(el.getAttribute('data-id')); };
   });
-  if(!nvPlayId) nvSelectPlay(nvPlays[0].id);
+  nvSelectPlay(nvPlayId);
 }
 function nvIdentityOptions(play){
   return (play.identity_choices || []).map(function(c){
@@ -560,6 +624,11 @@ function nvIdentityOptions(play){
 function nvCurrentPlay(){
   return nvPlays.filter(function(p){ return p.id === nvPlayId; })[0] || {};
 }
+function nvBooksOf(key){
+  return (nvAllWorlds || []).filter(function(w){
+    return (w.play_key || w.play || '') === key;
+  });
+}
 function nvSelectPlay(id){
   nvPlayId = id;
   nvEl('nvIdentity').innerHTML = nvIdentityOptions(nvCurrentPlay());
@@ -567,19 +636,50 @@ function nvSelectPlay(id){
   Array.prototype.forEach.call(nvEl('nvPlayList').querySelectorAll('.nv-play'), function(el){
     el.className = 'nv-play' + (el.getAttribute('data-id') === id ? ' on' : '');
   });
+  nvRenderWorlds(nvAllWorlds);
+  nvLockSeal(nvWorldId ? nvLastState : null);
+  nvEl('nvNewBox').style.display = '';
 }
 function nvRenderWorlds(worlds){
+  nvAllWorlds = worlds || [];
   var box = nvEl('nvWorldList');
-  if(!worlds || !worlds.length){ box.innerHTML = '<div class="nv-empty">还没有开过</div>'; return; }
-  box.innerHTML = worlds.map(function(w){
-    return '<div class="nv-world' + (w.id === nvWorldId ? ' on' : '') + '" data-id="' + nvEsc(w.id) + '">' +
-           (w.custom && w.play_name ? nvEsc(w.play_name) + ' · ' : '') +
-           nvEsc(w.name || '无名的人') + ' · 第 ' + nvEsc(w.chapter) + ' 章 · ' + nvEsc(w.place) +
-           (w.ending ? ' · 已结束' : '') + '</div>';
+  var p = nvCurrentPlay();
+  var mine = nvBooksOf(nvPlayId);
+  nvEl('nvWorldScope').textContent = p.name ? ('· 只列「' + p.name + '」的') : '';
+  if(!mine.length){
+    box.innerHTML = '<div class="nv-empty">' + (p.name
+      ? '「' + nvEsc(p.name) + '」还没有开过，上面填好名字、点开场封样就是第一本'
+      : '还没有开过') + '</div>';
+    return;
+  }
+  box.innerHTML = mine.map(function(w){
+    return '<div class="nv-world' + (w.id === nvWorldId ? ' on' : '') + '" data-id="' +
+      nvEsc(w.id) + '"><span class="nv-wname">' + nvEsc(w.name || '无名的人') + '</span>' +
+      '<em>第 ' + nvEsc(w.chapter || 1) + ' 章 · ' + nvEsc(w.place || '不知道在哪') +
+      (w.ending ? ' · 已结束' : '') + '</em>' +
+      '<button class="nv-del" type="button" data-del="' + nvEsc(w.id) +
+      '" title="删掉这本书（不可恢复）">×</button></div>';
   }).join('');
   Array.prototype.forEach.call(box.querySelectorAll('.nv-world'), function(el){
-    el.onclick = function(){ nvLoadWorld(el.getAttribute('data-id')); };
+    el.onclick = function(ev){
+      if(ev.target.closest('.nv-del')) return;
+      nvLoadWorld(el.getAttribute('data-id'));
+    };
   });
+  Array.prototype.forEach.call(box.querySelectorAll('.nv-del'), function(el){
+    el.onclick = function(ev){
+      ev.stopPropagation();
+      nvOpenDel(el.getAttribute('data-del'));
+    };
+  });
+}
+function nvRefreshNav(){
+  return Promise.all([nvGet('/api/novel/plays'), nvGet('/api/novel/worlds')])
+    .then(function(r){
+      nvModelUsed(r[0]);
+      nvAllWorlds = r[1].worlds || [];
+      nvRenderPlays(r[0].plays);
+    }).catch(function(){});
 }
 function nvRenderCard(s){
   if(!s){ nvEl('nvCard').innerHTML = '<div class="nv-empty">还没有世界书</div>'; return; }
@@ -644,9 +744,17 @@ function nvRenderActions(actions, enabled){
 function nvLockSeal(s){
   nvSealed = !!(s && s.id);
   var btn = nvEl('nvOpenBtn');
-  btn.disabled = nvSealed || nvBusy;
-  btn.textContent = nvSealed ? '已封样' : '开场封样';
-  nvEl('nvIdentity').disabled = nvSealed;
+  /* 现在打开的那本书是不是「当前选中的玩法」的：
+     · 是 → 已经在看它了，按钮变「已封样」；
+     · 不是（切到别的玩法）→ 按钮得能用，用来在这个玩法下开一本新的。 */
+  var same = nvSealed && nvLastState && nvLastState.play_key === nvPlayId;
+  var half = nvSealed && nvLastState && !((nvLastState.history || []).length);
+  btn.disabled = (same && !half) || nvBusy;
+  /* 这个玩法下已经有书了，这颗按钮就是在开新的一本，别再叫「开场封样」——
+     会被理解成「再封一次现在这本」。 */
+  btn.textContent = (same && !half) ? '已封样'
+    : (nvBooksOf(nvPlayId).length ? '开一本新的' : '开场封样');
+  nvEl('nvIdentity').disabled = same && !half;
   nvEl('nvRenameBtn').style.display = nvSealed ? '' : 'none';
   if(nvSealed && s.player) nvEl('nvName').value = s.player.name || '';
 }
@@ -655,6 +763,13 @@ function nvApplyState(s, note){
   nvLastState = s;
   nvEnded = !!s.ending;
   nvCanUndo = !!s.can_undo;
+  /* 打开的是哪本书，左栏就跟着切到那个玩法——不然会出现「顶栏写着高中
+     后宫爽文、左边亮着丧尸末日」，用户原话是「显示的是一个丧尸末日的主题」。 */
+  if(s.play_key && s.play_key !== nvPlayId){
+    nvPlayId = s.play_key;
+    nvEl('nvIdentity').innerHTML = nvIdentityOptions(nvCurrentPlay());
+  }
+  if(nvEl('nvTitle')) nvEl('nvTitle').textContent = s.play_name || '小说模式';
   nvRenderCard(s);
   nvRenderHistory(s.history, note, s.ending);
   /* 半封样：世界书已经生成好、正文还没写（上次停在选身份这一步）。
@@ -677,29 +792,27 @@ function nvApplyState(s, note){
   nvLockSeal(s);
   nvTyping(nvBusy);
   nvUndoState();
-  nvGet('/api/novel/worlds').then(function(d){ nvRenderWorlds(d.worlds); }).catch(function(){});
+  nvRefreshNav();
 }
 async function nvBoot(){
   /* 先问一次额度：顺便认出是不是群友态，好把自定义模型入口收起来。 */
   await nvQuota();
   try{
-    var d = await nvGet('/api/novel/plays');
-    nvRenderPlays(d.plays);
-    nvModelUsed(d);
-    var w = await nvGet('/api/novel/worlds');
-    nvRenderWorlds(w.worlds);
-    nvModelUsed(w);
+    await nvRefreshNav();
   }catch(e){ nvErr('读玩法失败：' + e.message); }
 }
 async function nvOpen(){
   if(nvBusy) return;
+  var payload = {play:nvPlayId, name:nvEl('nvName').value.trim(),
+                 identity:nvEl('nvIdentity').value};
+  /* 带 world_id 只用在「这本书还没写完开场」的续封上。切到别的玩法以后
+     再点封样，是要在这个玩法下新开一本，不能把刚才那本重新交回去。 */
+  var same = nvLastState && nvLastState.play_key === nvPlayId;
+  if(nvWorldId && same) payload.world_id = nvWorldId;
   nvErr(''); nvBusySet(true);
   nvEl('nvOpenBtn').disabled = true;
   try{
-    var d = await nvPost('/api/novel/open', {
-      play:nvPlayId, name:nvEl('nvName').value.trim(),
-      identity:nvEl('nvIdentity').value, world_id:nvWorldId
-    });
+    var d = await nvPost('/api/novel/open', payload);
     nvModelUsed(d);
     if(!d.ok){ nvErr(d.error, d.detail); return; }
     nvApplyState(d.state, d.note);
@@ -758,6 +871,11 @@ async function nvRename(){
   finally{ nvBusySet(false); }
 }
 async function nvQuota(){
+  var btn = nvEl('nvQuotaBtn'), out = nvEl('nvQuotaText');
+  /* 2026-11-12 用户报「点查询额度没有任何作用」：站主态前后两次文案一模一样，
+     看不出到底查没查。现在按钮会有「查询中…」，结果后面带查询时刻。 */
+  if(btn){ btn.disabled = true; btn.textContent = '查询中…'; }
+  if(out) out.textContent = '';
   try{
     var d = await nvGet('/api/novel/quota');
     nvModelUsed(d);
@@ -765,10 +883,17 @@ async function nvQuota(){
     nvFriendMode = d.mode === 'friend';
     var cb = nvEl('nvCustomBtn');
     if(cb) cb.style.display = nvFriendMode ? 'none' : '';
-    nvEl('nvQuotaText').textContent = d.ok
-      ? (d.text || (d.limited ? ('剩余 ' + d.remaining + ' 次') : ''))
+    var now = new Date();
+    var hh = ('0' + now.getHours()).slice(-2), mm = ('0' + now.getMinutes()).slice(-2);
+    var txt = d.ok
+      ? (d.text || (d.limited ? ('剩余 ' + d.remaining + ' 次') : '没有次数限制'))
       : (d.error || '查询失败');
-  }catch(e){ nvEl('nvQuotaText').textContent = '查询失败：' + e.message; }
+    if(out) out.textContent = txt + ' · ' + hh + ':' + mm + ' 查过';
+  }catch(e){
+    if(out) out.textContent = '查询失败：' + e.message;
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '查询额度'; }
+  }
 }
 function nvWorldChoices(){
   var rows = (nvLastState && nvLastState.identity_choices) || [];
@@ -788,6 +913,69 @@ function nvOpenWipe(){
 }
 function nvCloseWipe(){ nvEl('nvWipeMask').classList.remove('on'); }
 function nvRestart(){ nvOpenWipe(); }
+
+/* ─── 删掉一本书：整本没了，没有回收站 ─── */
+var nvDelId = '';
+var nvDelConfirm = '我确认删掉这本书';
+function nvOpenDel(id){
+  if(nvBusy) return;
+  var w = (nvAllWorlds || []).filter(function(x){ return x.id === id; })[0] || {};
+  nvDelId = id;
+  nvEl('nvDelWho').textContent = '要删的是：' + (w.name || '无名的人') +
+    ' · 第 ' + (w.chapter || 1) + ' 章' +
+    (w.place ? ' · 现在在' + w.place : '') +
+    (w.turns ? ' · 已经写了 ' + w.turns + ' 轮' : '') +
+    (w.play_name ? '（' + w.play_name + '）' : '');
+  nvEl('nvDelCode').textContent = nvDelConfirm;
+  nvEl('nvDelErr').textContent = '';
+  nvEl('nvDelInput').value = '';
+  nvEl('nvDelOk').disabled = true;
+  nvEl('nvDelOk').textContent = '永久删除';
+  nvEl('nvDelMask').classList.add('on');
+  setTimeout(function(){ try{ nvEl('nvDelInput').focus(); }catch(e){} }, 60);
+}
+function nvCloseDel(){
+  nvEl('nvDelMask').classList.remove('on');
+  nvDelId = '';
+}
+async function nvDoDel(){
+  if(!nvDelId) return;
+  var id = nvDelId;
+  nvEl('nvDelErr').textContent = '';
+  nvEl('nvDelOk').disabled = true;
+  nvEl('nvDelOk').textContent = '正在删…';
+  try{
+    var d = await nvPost('/api/novel/delete', {
+      id: id, confirm: nvEl('nvDelInput').value.trim()
+    });
+    if(!d.ok){
+      nvEl('nvDelErr').textContent = d.error || '删除失败';
+      nvEl('nvDelOk').disabled = false;
+      return;
+    }
+    nvCloseDel();
+    if(id === nvWorldId){
+      /* 删的就是正开着的那本：中间清空，别留着一本已经不存在的书。 */
+      nvWorldId = ''; nvLastState = null; nvSealed = false; nvEnded = false;
+      nvCanUndo = false; nvTurnToken = ''; nvTurnText = '';
+      nvEl('nvLog').innerHTML =
+        '<div class="nv-empty">这本书已经删掉了。左边选一个玩法，或者自己写一个新的。</div>';
+      nvEl('nvInputBox').style.display = 'none';
+      nvEl('nvCard').innerHTML =
+        '<div class="nv-empty">开场之后这里会记：现在在哪、手上有什么、在场的人、做过的事。</div>';
+      nvEl('nvActions').innerHTML = '';
+      if(nvEl('nvTitle')) nvEl('nvTitle').textContent = '小说模式';
+      nvLockSeal(null);
+    }
+    nvInfo('已删掉「' + (d.name || '这本书') + '」');
+    nvRefreshNav();
+  }catch(e){
+    nvEl('nvDelErr').textContent = '删除失败：' + e.message;
+    nvEl('nvDelOk').disabled = false;
+  }finally{
+    nvEl('nvDelOk').textContent = '永久删除';
+  }
+}
 /* 回退：只退最近一轮，而且只给一次。状态里的 can_undo 才是唯一依据。 */
 function nvUndoState(){
   var b = nvEl('nvUndoBtn'); if(!b) return;
@@ -1060,6 +1248,18 @@ nvEl('nvWipeInput').addEventListener('keydown', function(e){
 });
 nvEl('nvWipeCancel').onclick = nvCloseWipe;
 nvEl('nvWipeOk').onclick = nvDoRestart;
+nvEl('nvDelInput').addEventListener('input', function(e){
+  nvEl('nvDelOk').disabled = e.target.value.trim() !== nvDelConfirm;
+});
+nvEl('nvDelInput').addEventListener('keydown', function(e){
+  if(e.key === 'Enter' && !nvEl('nvDelOk').disabled) nvEl('nvDelOk').click();
+  if(e.key === 'Escape') nvCloseDel();
+});
+nvEl('nvDelCancel').onclick = nvCloseDel;
+nvEl('nvDelOk').onclick = nvDoDel;
+nvEl('nvDelMask').addEventListener('click', function(e){
+  if(e.target === nvEl('nvDelMask')) nvCloseDel();
+});
 
 nvEl('nvMakeBtn').onclick = nvOpenMake;
 nvEl('nvMkCancel').onclick = nvCloseMake;

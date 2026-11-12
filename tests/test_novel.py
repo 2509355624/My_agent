@@ -169,9 +169,9 @@ class WorldBookTest(NovelBase):
         self.assertEqual(s["chapter"], 1)
         self.assertIsNone(s["ending"])
         self.assertEqual(
-            {"id", "play", "play_name", "chapter", "chapter_goal", "clock",
-             "ending", "player", "present", "cast", "route", "events", "log",
-             "discovered", "last_death", "actions", "can_undo",
+            {"id", "play", "play_key", "play_name", "chapter", "chapter_goal",
+             "clock", "ending", "player", "present", "cast", "route", "events",
+             "log", "discovered", "last_death", "actions", "can_undo",
              "identity_choices", "history"},
             set(s.keys()))
         for banned in ("affection", "score", "tier", "gameday", "outfit",
@@ -605,16 +605,24 @@ class CustomPlayTest(NovelBase):
         self.assertNotIn("{{", novel._CUSTOM_PROMPT,
                          "这份提示词用 replace 不 format，花括号不该转义")
 
-    # ── 内嵌：不进 novels/，不改全局玩法列表 ──
+    # ── 内嵌：不进 novels/，只在「我的玩法」里出现 ──
     def test_custom_world_embeds_preset_and_keeps_novels_clean(self):
-        before = len(novel.list_plays())
+        before = [p["id"] for p in novel.list_plays() if not p.get("custom")]
         out, _ = self._open_custom(identity="黑医")
         w = novel.get_world(out["world_id"])
         self.assertEqual(w["preset"]["name"], "废土城")
         self.assertEqual(w["play"], "custom")
         self.assertEqual(w["play_name"], "废土城")
-        self.assertEqual(len(novel.list_plays()), before,
-                         "自建玩法绝不能混进全局玩法列表")
+        # 自建玩法会出现在「我的玩法」里（否则左栏根本没法切换），但**绝不能**
+        # 变成所有人都看得见的官方玩法，也不落 novels/ 目录。
+        self.assertEqual(before,
+                         [p["id"] for p in novel.list_plays() if not p.get("custom")],
+                         "自建玩法不能混进官方玩法列表")
+        mine = novel.list_plays("")
+        self.assertTrue(any(p["custom"] and p["id"] == "custom:废土城" for p in mine),
+                        "自己的玩法要能在自己的列表里选到")
+        self.assertFalse(any(p["custom"] for p in novel.list_plays("123456")),
+                         "群友看不到站主自建的玩法")
         custom_dir = os.path.join(novel.NOVELS_DIR, "custom")
         self.assertFalse(os.path.isdir(custom_dir),
                          "自建玩法不落 novels/ 目录（那里不认 owner）")
@@ -868,6 +876,207 @@ class KernelReuseTest(NovelBase):
 
 # ─── HTTP 接口：三种错误分开说 ─────────────────────────
 
+class PlayGroupingTest(NovelBase):
+    """左栏「官方 / 我的」两组 + 按玩法筛书（2026-11-12 用户报「全混在一起、
+    而且根本没法切换」）。"""
+
+    def _custom(self, table=None, identity="黑医", name="阿七"):
+        with mock.patch.object(
+                novel, "_call",
+                side_effect=[json.dumps(CUSTOM_DRAFT, ensure_ascii=False),
+                             OPENING_TEXT]):
+            return novel.open_world(None, name, identity, table=table or CUSTOM_TABLE)
+
+    def test_official_plays_are_always_flagged_official(self):
+        ids = {p["id"]: p for p in novel.list_plays("")}
+        self.assertIn("zombie", ids)
+        self.assertFalse(ids["zombie"]["custom"])
+
+    def test_custom_play_shows_up_only_for_its_owner(self):
+        self._custom()
+        mine = {p["id"]: p for p in novel.list_plays("")}
+        self.assertIn("custom:废土城", mine)
+        self.assertTrue(mine["custom:废土城"]["custom"])
+        self.assertEqual(mine["custom:废土城"]["books"], 1)
+        # 群友既看不到这本书，也看不到这个玩法（设定就内嵌在那本书里）。
+        self.assertEqual([p["id"] for p in novel.list_plays("2509355624")],
+                         ["zombie"])
+
+    def test_two_custom_plays_get_different_keys(self):
+        self._custom()
+        self._custom(table=dict(CUSTOM_TABLE, name="末日学院"))
+        keys = [p["id"] for p in novel.list_plays("") if p["custom"]]
+        self.assertEqual(sorted(keys), sorted(["custom:末日学院", "custom:废土城"]))
+
+    def test_same_custom_play_counts_its_books(self):
+        self._custom()
+        with mock.patch.object(novel, "_call", side_effect=[OPENING_TEXT]):
+            novel.open_world("custom:废土城", "阿九", "跑腿的")
+        row = next(p for p in novel.list_plays("") if p["id"] == "custom:废土城")
+        self.assertEqual(row["books"], 2, "同一份设定的两本书算同一个玩法")
+
+    def test_worlds_carry_their_play_key(self):
+        out = self._custom()
+        w = next(x for x in novel.list_worlds("") if x["id"] == out["world_id"])
+        self.assertEqual(w["play_key"], "custom:废土城")
+        z, _ = self.open_a_world()
+        zz = next(x for x in novel.list_worlds("") if x["id"] == z["world_id"])
+        self.assertEqual(zz["play_key"], "zombie")
+
+    def test_replaying_a_custom_play_reuses_the_world_without_rerunning_ai(self):
+        src = self._custom()
+        src_w = novel.get_world(src["world_id"])
+        with mock.patch.object(novel, "_call", side_effect=[OPENING_TEXT]) as m:
+            out = novel.open_world("custom:废土城", "阿九", "跑腿的")
+        self.assertEqual(m.call_count, 1, "只该写开场正文，不重跑整本世界书")
+        new = novel.get_world(out["world_id"])
+        self.assertNotEqual(new["id"], src_w["id"], "是新的一本")
+        self.assertEqual(new["preset"]["name"], "废土城")
+        self.assertEqual(new["player"]["identity"], "跑腿的")
+        self.assertEqual([p["name"] for p in new["places"]],
+                         [p["name"] for p in src_w["places"]], "地点表照抄")
+        self.assertEqual(new["cast"], [], "遇见过的人不该带到新书里")
+        self.assertEqual(new["turns"], 0)
+        self.assertEqual(new["play"], "custom")
+        self.assertEqual(novel.play_key(new), "custom:废土城")
+
+    def test_replaying_an_unknown_custom_play_is_rejected(self):
+        with self.assertRaises(ValueError):
+            novel.open_world("custom:不存在", "阿九", "")
+
+
+class DeleteWorldTest(NovelBase):
+    """删掉一整本：唯一真正不可恢复的动作（2026-11-12 用户明确要求整本删）。"""
+
+    def setUp(self):
+        super().setUp()
+        app = flask.Flask(__name__)
+        app.register_blueprint(novel_api.bp)
+        self.c = app.test_client()
+
+    def test_delete_removes_the_world_and_its_rag_line(self):
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        with mock.patch.object(novel.persona_rag, "drop_line") as drop:
+            novel.delete_world(wid)
+        self.assertIsNone(novel.get_world(wid))
+        self.assertEqual(novel.list_worlds(""), [])
+        drop.assert_called_once_with(wid + "#0")
+
+    def test_delete_clears_every_restart_epoch_of_rag(self):
+        out, _ = self.open_a_world()
+        w = novel.get_world(out["world_id"])
+        w["restarts"] = 2
+        novel._save_world(w)
+        with mock.patch.object(novel.persona_rag, "drop_line") as drop:
+            novel.delete_world(out["world_id"])
+        self.assertEqual([c.args[0] for c in drop.call_args_list],
+                         [out["world_id"] + "#0", out["world_id"] + "#1",
+                          out["world_id"] + "#2"])
+
+    def test_other_owner_cannot_delete(self):
+        out, _ = self.open_a_world()
+        with mock.patch.object(novel.persona_rag, "drop_line") as drop:
+            with self.assertRaises(ValueError):
+                novel.delete_world(out["world_id"], owner="2509355624")
+        drop.assert_not_called()
+        self.assertIsNotNone(novel.get_world(out["world_id"]))
+
+    def test_deleting_the_last_custom_book_drops_the_play_entry(self):
+        with mock.patch.object(
+                novel, "_call",
+                side_effect=[json.dumps(CUSTOM_DRAFT, ensure_ascii=False),
+                             OPENING_TEXT]):
+            out = novel.open_world(None, "阿七", "黑医", table=CUSTOM_TABLE)
+        self.assertIn("custom:废土城", [p["id"] for p in novel.list_plays("")])
+        with mock.patch.object(novel.persona_rag, "drop_line"):
+            novel.delete_world(out["world_id"])
+        self.assertNotIn("custom:废土城", [p["id"] for p in novel.list_plays("")])
+
+    def test_delete_route_requires_the_hand_typed_confirm(self):
+        out, _ = self.open_a_world()
+        for bad in (None, "", "删掉", "我同意重开这一本"):
+            r = self.c.post("/api/novel/delete",
+                            json={"id": out["world_id"], "confirm": bad})
+            self.assertEqual(r.status_code, 400, bad)
+        self.assertIsNotNone(novel.get_world(out["world_id"]),
+                            "确认句不对就一个字都不能删")
+
+    def test_delete_route_deletes_with_the_right_phrase(self):
+        out, _ = self.open_a_world()
+        with mock.patch.object(novel.persona_rag, "drop_line"):
+            r = self.c.post("/api/novel/delete", json={
+                "id": out["world_id"], "confirm": novel_api.DELETE_CONFIRM})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["ok"])
+        self.assertIsNone(novel.get_world(out["world_id"]))
+
+    def test_delete_route_404s_an_unknown_world(self):
+        r = self.c.post("/api/novel/delete", json={
+            "id": "nv_nope", "confirm": novel_api.DELETE_CONFIRM})
+        self.assertEqual(r.status_code, 400)
+        self.assertFalse(r.get_json()["ok"])
+
+    def test_delete_phrase_is_its_own_sentence(self):
+        self.assertEqual(novel_api.DELETE_CONFIRM, "我确认删掉这本书")
+        self.assertNotEqual(novel_api.DELETE_CONFIRM, novel_api.RESTART_CONFIRM,
+                            "删整本和重开不能共用一句话")
+
+
+class NovelAdminTest(NovelBase):
+    """管理页：按 QQ 看别人写了什么（只读）。"""
+
+    def setUp(self):
+        super().setUp()
+        app = flask.Flask(__name__)
+        app.register_blueprint(novel_api.bp)
+        self.c = app.test_client()
+
+    def test_admin_lists_worlds_across_owners(self):
+        out, _ = self.open_a_world()
+        w = novel.get_world(out["world_id"])
+        w["owner"] = "2509355624"
+        novel._save_world(w)
+        self.open_a_world(name="林岸")
+        rows = novel.all_worlds()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({r["owner"] for r in rows}, {"", "2509355624"})
+        self.assertEqual(rows[0]["owner"], "", "站主排在前面")
+        for key in ("id", "owner", "name", "play_name", "chapter", "turns",
+                    "last", "lines"):
+            self.assertIn(key, rows[0])
+
+    def test_story_pairs_what_the_player_wrote_with_what_the_ai_wrote(self):
+        out, _ = self.open_a_world()
+        w = novel.get_world(out["world_id"])
+        w["history"].append({"role": "user", "content": "去食堂的库房翻罐头"})
+        w["history"].append({"role": "assistant", "content": "库房里霉味很重。"})
+        story = novel.admin_story(w)
+        rows = story["turns_rows"]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["said"], "", "开场没有对应的玩家输入")
+        self.assertEqual(rows[0]["text"], OPENING_TEXT)
+        self.assertEqual(rows[1]["said"], "去食堂的库房翻罐头")
+        self.assertEqual(rows[1]["text"], "库房里霉味很重。")
+        self.assertEqual(story["name"], "林岸")
+
+    def test_admin_routes_refuse_friends(self):
+        with mock.patch.object(novel_api, "_qq", return_value="2509355624"):
+            for path in ("/api/novel/admin/list", "/api/novel/admin/book?id=nv_x"):
+                r = self.c.get(path)
+                self.assertEqual(r.status_code, 403, path)
+
+    def test_admin_book_needs_a_real_id(self):
+        r = self.c.get("/api/novel/admin/book?id=nv_nope")
+        self.assertEqual(r.status_code, 404)
+
+    def test_admin_page_lists_the_books_it_can_read(self):
+        html = _read(os.path.join(novel.BASE_DIR, "web", "novel_admin.html"))
+        for needle in ("/api/novel/admin/list", "/api/novel/admin/book",
+                       "ownerName", "他写的：", "这里只读"):
+            self.assertIn(needle, html, "缺少 %s" % needle)
+
+
 class ApiTest(NovelBase):
     def setUp(self):
         super().setUp()
@@ -941,7 +1150,8 @@ class ApiTest(NovelBase):
         expected = {
             "/api/novel/plays", "/api/novel/worlds", "/api/novel/state",
             "/api/novel/book", "/api/novel/open", "/api/novel/turn",
-            "/api/novel/restart",
+            "/api/novel/restart", "/api/novel/delete",
+            "/api/novel/admin/list", "/api/novel/admin/book",
         }
         self.assertTrue(expected <= paths, "少注册了：%r" % (expected - paths))
 
@@ -1317,9 +1527,12 @@ class UiSevenTest(unittest.TestCase):
             self.assertIn(needle, self.html, "缺少 %s" % needle)
 
     def test_identity_is_locked_and_name_stays_editable(self):
-        for needle in ("function nvLockSeal", "nvIdentity').disabled = nvSealed",
-                       "已封样", "nvRenameBtn", "/api/novel/rename",
-                       "world_id:nvWorldId", "nvWipeIdentity"):
+        # 身份锁定只在「正在看这本、而且它已经封完」时成立：切到别的玩法要
+        # 能重新选、能开新的一本（2026-11-12 用户报「没法切换」）。
+        for needle in ("function nvLockSeal", "same && !half",
+                       "nvIdentity').disabled", "已封样", "nvRenameBtn",
+                       "/api/novel/rename", "payload.world_id = nvWorldId",
+                       "nvWipeIdentity"):
             self.assertIn(needle, self.html, "缺少 %s" % needle)
 
     def test_typing_dots_feedback(self):
@@ -1345,6 +1558,54 @@ class UiSevenTest(unittest.TestCase):
 
 
 # ─── 上架 5175（2026-11-12）：归属隔离 / 链策略 / 幂等 / 计费 / 网关 ───
+
+class NavUiTest(unittest.TestCase):
+    """左栏分组 / 删书弹窗 / 额度反馈的静态体检（2026-11-12）。"""
+
+    def setUp(self):
+        self.html = _read(PAGE)
+
+    def test_left_column_splits_official_and_my_plays(self):
+        for needle in ("nv-glabel", "'官方'", "'我的'", "nvBooksOf",
+                       "nvAllWorlds", "function nvRenderPlays",
+                       "function nvSelectPlay", "function nvRefreshNav",
+                       "nvWorldScope"):
+            self.assertIn(needle, self.html, "缺少 %s" % needle)
+
+    def test_top_bar_title_is_not_hardcoded(self):
+        self.assertIn('id="nvTitle"', self.html)
+        self.assertNotIn("丧尸末日</span>", self.html,
+                         "顶栏标题原来写死成丧尸末日，打开自建那本会显示错")
+
+    def test_world_list_only_shows_the_selected_play(self):
+        self.assertIn("nvBooksOf(nvPlayId)", self.html)
+        self.assertIn("w.play_key", self.html)
+
+    def test_opening_a_world_switches_the_left_column_to_its_play(self):
+        self.assertIn("s.play_key && s.play_key !== nvPlayId", self.html)
+
+    def test_every_book_has_a_delete_button(self):
+        for needle in ("nv-del", "data-del", "nvOpenDel", "nvDoDel",
+                       "/api/novel/delete", "nvDelInput", "nvDelOk",
+                       "没有回收站", "我确认删掉这本书"):
+            self.assertIn(needle, self.html, "缺少 %s" % needle)
+
+    def test_delete_needs_the_phrase_typed_by_hand(self):
+        self.assertIn(
+            "nvEl('nvDelOk').disabled = e.target.value.trim() !== nvDelConfirm",
+            self.html)
+
+    def test_quota_button_shows_that_it_actually_ran(self):
+        for needle in ("查询中…", "查过", "function nvQuota"):
+            self.assertIn(needle, self.html, "缺少 %s" % needle)
+
+    def test_admin_page_has_three_entry_points(self):
+        main = _read(os.path.join(ROOT, "app", "main.py"))
+        self.assertIn('"/novel_admin"', main)
+        for name in ("index.html", "admin.html", "persona_admin.html"):
+            html = _read(os.path.join(ROOT, "web", name))
+            self.assertIn("/novel_admin", html, name + " 缺小说记录入口")
+
 
 class OwnerIsolationTest(NovelBase):
     """世界书原来是全局单文件，上架前必须把「这是谁的书」钉死。"""

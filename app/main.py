@@ -961,6 +961,16 @@ def novel_page():
     return send_from_directory(WEB_DIR, "novel.html")
 
 
+@app.route("/novel_admin")
+def novel_admin_page():
+    """小说模式记录：站主按 QQ 翻别人写了什么（只读）。
+
+    跟 `/comic_admin` 同一个信任边界——只在 5174 开，5175 不反代这个路径；
+    接口 `/api/novel/admin/*` 还会再挡一次群友态（5175 是通配反代）。
+    """
+    return send_from_directory(WEB_DIR, "novel_admin.html")
+
+
 @app.after_request
 def _no_cache_novel(resp):
     """小说页也是单页工具页，改了前端刷新就该生效（同 /persona 的坑）。"""
