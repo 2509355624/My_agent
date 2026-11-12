@@ -262,7 +262,10 @@ class ApplyTest(NovelBase):
             ],
             "events_add": [
                 {"trigger": "三楼有人拍门", "result": "还没查", "kind": "dynamic"},
-                {"trigger": "广播在重复一句话", "result": "还没查", "kind": "dynamic"},
+                # 显式 done=False 才是「还留着尾巴」；没写 done 又有 result 的
+                # 按当拍已兑现算（见 PresenceAndEventsTest）。
+                {"trigger": "广播在重复一句话", "result": "还没查", "done": False,
+                 "kind": "dynamic"},
             ],
             "events_done": ["三楼有人拍门"],
             "discovered": [
@@ -1569,6 +1572,136 @@ class RollbackTest(NovelBase):
         self.assertIn('id="nvUndoBtn"', html)
         self.assertIn("function nvUndo()", html)
         self.assertIn("nvCanUndo = !!s.can_undo", html)
+
+
+class PresenceAndEventsTest(NovelBase):
+    """走开的人和事不该继续挂在眼前（用户 2026-11-12 真机反馈）。
+
+    原话：「在场的人里还是第四只丧尸」「我都已经离开男生宿舍了，怎么可能
+    还是未完成的事情」。present 原来全靠编剧自己在 cast_update 里报，它漏
+    一次，走掉的丧尸就永远挂在「在场的人」；events 的 done 也一样，当拍
+    已经兑现的事（砍断丧尸、声音传开）被挂成未了结，主角换了三个地图它还挂着。
+    """
+
+    def _turn(self, wid, payload, text="往前赶"):
+        d = json.dumps(payload, ensure_ascii=False)
+        with mock.patch.object(novel, "_call",
+                               side_effect=[d, "他往前赶。"]) as m:
+            return novel.run_turn(wid, text), m
+
+    def test_leaving_a_place_clears_people_who_stayed(self):
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        self._turn(wid, {"place": "男生宿舍 304",
+                         "cast_new": [{"name": "第四只丧尸",
+                                       "identity": "楼道里多出来的",
+                                       "present": True}],
+                         "items": []}, "看看楼道")
+        self.assertEqual([c["name"] for c in
+                          novel.state_card(novel.get_world(wid))["present"]],
+                         ["第四只丧尸"])
+        # 换到别处、没点名它 —— 它留在原地，不该还在场
+        self._turn(wid, {"place": "女生宿舍二楼 空宿舍", "items": []},
+                   "翻窗进女生宿舍")
+        w = novel.get_world(wid)
+        self.assertEqual(novel.state_card(w)["present"], [])
+        self.assertIn("第四只丧尸", [c["name"] for c in w["cast"]],
+                      "人被记为分开，不是从名录里删掉")
+        self.assertFalse([c for c in w["cast"] if c["name"] == "第四只丧尸"][0]["present"])
+
+    def test_person_who_comes_along_is_kept_present(self):
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        self._turn(wid, {"place": "男生宿舍 304",
+                         "cast_new": [{"name": "周砚", "identity": "护士",
+                                       "present": True}],
+                         "items": []}, "救人")
+        self._turn(wid, {"place": "楼梯间",
+                         "cast_update": [{"name": "周砚", "present": True}],
+                         "items": []}, "带她一起下楼")
+        self.assertEqual([c["name"] for c in
+                          novel.state_card(novel.get_world(wid))["present"]],
+                         ["周砚"], "编剧点名跟着走的，不能被换地方清掉")
+
+    def test_staying_in_the_same_place_changes_nothing(self):
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        self._turn(wid, {"place": "男生宿舍 304",
+                         "cast_new": [{"name": "第四只丧尸", "present": True}],
+                         "items": []}, "看看楼道")
+        self._turn(wid, {"place": "男生宿舍 304", "items": []}, "在屋里翻柜子")
+        self.assertEqual([c["name"] for c in
+                          novel.state_card(novel.get_world(wid))["present"]],
+                         ["第四只丧尸"], "没换地方就还在场")
+
+    def test_event_with_result_is_closed_by_default(self):
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        self._turn(wid, {"place": "男生宿舍 304",
+                         "events_add": [{"trigger": "老A砍断丧尸的动静传开",
+                                         "result": "剩下三只被引向楼梯口",
+                                         "kind": "dynamic"}],
+                         "items": []}, "砍丧尸")
+        e = novel.get_world(wid)["events"][-1]
+        self.assertTrue(e["done"], "当场兑现的事不许挂成未了结")
+        self.assertEqual(e["place"], "男生宿舍 304", "事件要记发生在哪")
+
+    def test_event_without_result_stays_open(self):
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        self._turn(wid, {"place": "男生宿舍 304",
+                         "events_add": [{"trigger": "楼梯口的尸群随时会摸上来",
+                                         "kind": "dynamic"}],
+                         "items": []}, "听动静")
+        self.assertFalse(novel.get_world(wid)["events"][-1]["done"],
+                         "没写结果的才是伏笔")
+
+    def test_explicit_done_false_is_respected(self):
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        self._turn(wid, {"place": "男生宿舍 304",
+                         "events_add": [{"trigger": "门外有东西在挠门",
+                                         "result": "暂时没进来",
+                                         "done": False, "kind": "dynamic"}],
+                         "items": []}, "听门")
+        self.assertFalse(novel.get_world(wid)["events"][-1]["done"],
+                         "编剧明确说没完，代码不许替它改")
+
+    def test_old_place_event_leaves_the_card_but_stays_in_the_world(self):
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        self._turn(wid, {"place": "男生宿舍 304",
+                         "events_add": [{"trigger": "楼道的动静还没完",
+                                         "kind": "dynamic"}],
+                         "items": []}, "听动静")
+        self.assertEqual(len(novel.state_card(novel.get_world(wid))["events"]), 1)
+        self._turn(wid, {"place": "女生宿舍二楼 空宿舍", "items": []}, "翻窗过去")
+        w = novel.get_world(wid)
+        self.assertEqual(novel.state_card(w)["events"], [],
+                         "挂在已经离开的地方的事，不该还摆在眼前")
+        self.assertEqual(len(w["events"]), 1, "只是不显示，不是删数据")
+
+    def test_event_without_place_still_shows(self):
+        out, _ = self.open_a_world()
+        wid = out["world_id"]
+        w = novel.get_world(wid)
+        w["events"].append({"trigger": "老存档里没有地点的一条", "result": "",
+                            "done": False, "kind": "dynamic", "chapter": 1})
+        novel._save_world(w)
+        self.assertEqual(len(novel.state_card(novel.get_world(wid))["events"]), 1,
+                         "老存档没记地点的事件不能凭空藏掉")
+
+    def test_state_block_tells_the_director_the_event_is_behind_him(self):
+        out, _ = self.open_a_world()
+        w = novel.get_world(out["world_id"])
+        w["player"]["place"] = "女生宿舍二楼 空宿舍"
+        w["events"] = [{"trigger": "楼道的动静还没完", "result": "",
+                        "done": False, "kind": "dynamic", "chapter": 1,
+                        "place": "男生宿舍 304"}]
+        block = novel._state_block(w)
+        self.assertIn("楼道的动静还没完", block)
+        self.assertIn("你已经离开那儿了", block,
+                      "给编剧看全部，但要标清它挂在旧地方")
 
 
 if __name__ == "__main__":

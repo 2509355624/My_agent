@@ -308,6 +308,17 @@ _DIRECTOR_PROMPT = """你是这部长篇生存小说的编剧，负责把玩家�
 这一拍新出现的人写进 `cast_new`，已经出场过的人只用 `cast_update`，别重复造人。
 `tier` 写「主体」或「路人甲」。世界以主角为中心，路人甲只负责把剧情推一下。
 
+【换地方就要交代在场的人】
+主角离开一处、走到另一处，就把「谁跟着走、谁留在原地」在 `cast_update` 里写清楚：
+跟着走的人 `present` 报 true，留在原地的报 false。没在本拍点名的人，代码一律按
+「已经分开」处理——他走开了，那个人不该还挂在「在场的人」里。
+
+【事件要当场分清风声了结还是留了尾巴】
+`events_add` 只登记**还没兑现的伏笔**：谁被惊动了会追来、什么动静会引来尸群、
+哪扇门后面还有东西。这一拍当场就发生完、结果已经写进 `facts` 的事（砍断丧尸、
+炸开一扇门、声音传出去），`done` 一律给 true，别把它们挂成未了结。
+主角已经离开那个地方、那件事不会再推进的，从 `events_done` 里点名结掉。
+
 【已经演过的事】
 状态块里「已经演过的事」是上一轮及更早已经写完的戏。**只裁定本轮新增**，
 不要把试过的刀、检查过的柜子、走过的路再裁定一遍。
@@ -583,8 +594,13 @@ def _state_block(world):
             route.get("at", 0)))
     open_events = [e for e in world.get("events", []) if not e.get("done")]
     if open_events:
-        lines.append("还没了结的事：%s" % "；".join(
-            str(e.get("trigger") or "") for e in open_events[-5:]))
+        here = p.get("place") or ""
+        shown = []
+        for e in open_events[-5:]:
+            at = e.get("place") or ""
+            tail = ("（挂在%s，你已经离开那儿了）" % at) if (at and at != here) else ""
+            shown.append(str(e.get("trigger") or "") + tail)
+        lines.append("还没了结的事：%s" % "；".join(shown))
     rules = world.get("rules") or []
     if rules:
         lines.append("世界规则：%s" % "；".join(str(x) for x in rules))
@@ -837,9 +853,11 @@ def _apply(world, d, said):
         p["items"] = [x for x in dict.fromkeys(
             _norm_items(p.get("items")) + gains) if x not in drop]
 
-    place = _as_text(d.get("place"), p.get("place") or "")
+    old_place = p.get("place") or ""
+    place = _as_text(d.get("place"), old_place)
     if place:
         p["place"] = place
+    moved = bool(place) and place != old_place
     condition = _as_text(d.get("condition"), p.get("condition") or "")
     if condition:
         p["condition"] = condition
@@ -847,17 +865,36 @@ def _apply(world, d, said):
     if clock:
         world["clock"] = clock
 
+    named = []
     for item in _as_list(d.get("cast_new")) + _as_list(d.get("cast_update")):
         _merge_cast(world, item)
+        if isinstance(item, dict) and _as_text(item.get("name")):
+            named.append(_as_text(item.get("name")))
+    # 换地方是事实，人不会跟着瞬移：换到别处之后，编剧没在本拍点名的人
+    # 一律记为已经分开。原来 present 全靠编剧自己报，它漏一次，走掉的丧尸
+    # 就会永远挂在「在场的人」里。跟着走的人由编剧 cast_update 报回来，
+    # 状态块里也写了这条规则，所以这不是替模型判断，只是把「你走开了」
+    # 这个事实落到它该落的地方。
+    if moved:
+        for c in world.get("cast", []):
+            if c.get("present") and c.get("name") not in named:
+                c["present"] = False
 
     for item in _as_list(d.get("events_add")):
         if isinstance(item, dict) and _as_text(item.get("trigger")):
+            # 有 result 又没显式写 done 的，按「这一拍已经兑现」算：
+            # 「砍断丧尸的动静在楼道里传开」这种当场就发生完的事，原来
+            # 一直被挂成未了结，主角走了三个地图它还挂着。
+            has_result = bool(_as_text(item.get("result")))
+            done_flag = item.get("done")
             world["events"].append({
                 "trigger": _as_text(item.get("trigger")),
                 "result": _as_text(item.get("result")),
-                "done": bool(item.get("done")),
+                "done": (done_flag if isinstance(done_flag, bool)
+                         else has_result),
                 "kind": _as_text(item.get("kind"), "dynamic"),
                 "chapter": world.get("chapter", 1),
+                "place": _as_text(item.get("place")) or (p.get("place") or ""),
             })
     done = {str(x) for x in _as_list(d.get("events_done"))}
     if done:
@@ -1160,6 +1197,24 @@ def restart(world_id, name=None, identity=None, owner=""):
             "state": state_card(fresh)}
 
 
+def _open_events(world, here_only=True):
+    """还没了结的事。挂在一个已经离开的地方、又没写后续的，不再算在眼前。
+
+    老存档的事件没有 place 字段，一律照旧显示（代码不猜它发生在哪）。
+    这里只做「这条事挂在哪」的事实比较，不问它该不该算完。
+    """
+    here = (world.get("player") or {}).get("place") or ""
+    out = []
+    for e in world.get("events") or []:
+        if e.get("done"):
+            continue
+        at = e.get("place") or ""
+        if here_only and at and here and at != here:
+            continue
+        out.append(e)
+    return out
+
+
 def state_card(world):
     """右栏用的纯事实状态卡。没有任何数值条、好感、跨天、服饰。"""
     p = world.get("player") or {}
@@ -1183,7 +1238,7 @@ def state_card(world):
         "present": [c for c in world.get("cast", []) if c.get("present")],
         "cast": list(world.get("cast") or []),
         "route": dict(world.get("route") or {}),
-        "events": [e for e in world.get("events", []) if not e.get("done")][-6:],
+        "events": _open_events(world)[-6:],
         "log": list(world.get("log") or [])[-8:],
         "discovered": [d for d in world.get("discovered", [])
                        if d.get("kind") == "static"],
