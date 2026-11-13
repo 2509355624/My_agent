@@ -378,13 +378,29 @@ positive 提示词是英文的，中途夹一段中文会让光照描述被截�
     整页最贵的那个画面放这里。
   - `shots`：每格的景别，英文，**长度必须等于格数**，按顺序对应。
     相邻两格不许同景别，整页至少三档（close-up / medium shot / wide shot）。
-  - `state`：这一页的**穿着与状态轨迹**，一句话说清哪几格什么状态、从第几格起变化。
-    例：`panels 1-3 wearing the black feathered gown; panels 4-5 completely nude,
-    the gown lying on the stage floor behind her`。
-    这是治「上一格脱了、下一格又穿回去」的唯一手段——`cast` 里写的是常穿的衣服，
-    模型每格都会默认把它画回来，必须靠这句轨迹压住。
+  - `state`：这一页的**穿着轨迹**，一句话说清哪几格什么状态、从第几格起变化。
+    例：`panel 1 wearing the black gown; panels 2-5 completely nude, the gown already
+    on the floor behind her`。
   写完 plan 之后，下面每一格的 `desc` 必须**按 shots 定的景别、按 state 定的状态执行**，
   不许临时改。
+
+⚠️ **`state` 只是计划，真正压住画面的是每一格 `desc` 里的反向钉住。**
+`cast` 里写的是常穿的衣服，模型每格都会默认把它画回来——**光在 state 里写
+"completely nude" 压不住**，实测第 3 格又把上衣画回去了（2026-11-12 用户报）。
+
+所以：**一旦这一格是脱掉的，`desc` 里必须同时写两样东西**——
+   ① 正面写结果：`completely nude` / `her breasts bare` / `torso fully exposed`
+   ② **反向钉死那件衣服**：`no white t-shirt, no grey shorts` / `no cardigan,
+      no skirt`。把 `cast` 里那件衣服的名字原样列出来，前面加 `no`。
+   ✓ `completely nude, no grey knit cardigan, no white shirt`
+   ✗ `completely nude`（模型照样会把 cast 的衣服画回来）
+   ✗ `her cardigan pushed aside`（"推在一边"在模型眼里还是穿着）
+这是 2026-11-12 修「前面露出来了、后面又遮回去」的核心手段：**每一格自己钉住**，
+不要指望 state 那一句话管五格。
+
+**跨页也要接住**：上一页最后一格如果是裸的，这一页第一格的 `state` 必须从
+「已经裸着」起算，`desc` 同样要写 `no <衣服>`；反过来，穿衣的戏不许在下一页
+突然变成裸，除非剧情里真有一格写脱衣的过程。
 
 **scene**（每页一条）：这一页发生在哪，英文 15~40 词，写清地点、时间、光源、
 两三个具体物件。
@@ -417,6 +433,36 @@ positive 提示词是英文的，中途夹一段中文会让光照描述被截�
 **把过程写成结果**：衣物、动作、姿态一律写成**已经完成的状态**，不用过程动词。
 写 `her cardigan already slipped off one shoulder`，不写 `she pulls her cardigan down`
 ——过程动词会让同一格里的手数量失控，长出第三只手。
+
+**成人场景的写法**（2026-11-12 用户报「编剧不会写后入这类动作」）：
+
+先记住一句：**模型看不懂抽象动词，只看得懂身体在哪、谁在谁后面、什么进了哪里**。
+
+① **体位先写身体朝向和支撑点，再写动作**。不写 `having sex from behind`（抽象），写
+   `she is on all fours on the bed, facing away from the camera, her back arched low,
+   her hips pulled up against the viewer's hips behind her`。
+   每一个体位都要能回答三件事：**她朝哪、她的身体靠什么撑着、另一个人的身体在哪**。
+
+② **进入这件事写成「已经进入 + 在哪里」**，不写成过程：
+   ✓ `his length already inside her from behind, her entrance stretched around it`
+   ✗ `he pushes into her`（过程动词，模型会画出三四只手）
+   位置词用 danbooru 认的那套：`from behind` / `on all fours` / `mounted` /
+   `her hips raised` / `bent over`。
+
+③ **两个人的手必须逐只交代**：`her both hands gripping the sheets, her face turned
+   to the side on the mattress`。不写清就是第三只手、第四只手。
+
+④ **液体和反应写视觉后果**，不写感受：`sweat beading along her spine, the sheets
+   bunched under her knees, a wet smear on her inner thigh`。
+
+⑤ **同一个体位连续几格时，靠景别和角度变化推进**，不靠换动作：
+   第 1 格 wide 看到两个人怎么叠在一起 → 第 2 格 close-up 手抓着床单 →
+   第 3 格 extreme close-up 脸侧过去贴着床垫 → 第 4 格 from behind 看到她的背线和腰。
+   这样五格是同一件事的五个切面，读起来连贯，也不会每格都像换了姿势。
+
+⑥ **不许一格塞两个体位**。一格一个姿势，换姿势必须有单独一格写过渡
+   （`she is already turned onto her side, one knee drawn up`），否则模型会把两个
+   姿势画在同一张图里，出双头或四腿的怪图。
 
 **bubbles**（对白气泡，**数组，1~2 条**）：中文台词，**每条 ≤11 字**，像真人说话。
   一格两条是「一问一答」或「一句顶一句」，**不是把一句话切成两半**。

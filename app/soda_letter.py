@@ -27,13 +27,14 @@ import os
 
 from app import moss_comic
 
-# 环境开关：默认开（排字比让模型画字稳定得多），MOSS_SODA_LETTER=0 退回
-# 老链路（MOSS 自己画气泡）——出问题时的逃生门，不用改代码。
+# 环境开关：**默认关**（2026-11-12 用户拍板恢复「模型自己画气泡」的老链路——
+# Soda 程序排字会出几个大气泡糊脸）。MOSS_SODA_LETTER=1 显式开回程序排字，
+# 作为逃生门，不用改代码。
 _ENV = "MOSS_SODA_LETTER"
 
 
 def enabled():
-    return os.getenv(_ENV, "1") != "0"
+    return os.getenv(_ENV, "0") != "0"
 
 
 def _to_tl(cell):

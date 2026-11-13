@@ -128,14 +128,14 @@ class RewireTests(unittest.TestCase):
 
 
 class SwitchTests(unittest.TestCase):
-    def test_default_on(self):
+    def test_default_off(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop(soda_letter._ENV, None)
-            self.assertTrue(soda_letter.enabled())
-
-    def test_env_off(self):
-        with mock.patch.dict(os.environ, {soda_letter._ENV: "0"}):
             self.assertFalse(soda_letter.enabled())
+
+    def test_env_on(self):
+        with mock.patch.dict(os.environ, {soda_letter._ENV: "1"}):
+            self.assertTrue(soda_letter.enabled())
 
 
 if __name__ == "__main__":
