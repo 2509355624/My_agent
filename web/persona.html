@@ -179,32 +179,38 @@
      URL 与 `has-bg` 由 JS 写在 `#mid` 上。 */
   .mid.has-bg { background-position: center; background-size: cover;
     background-repeat: no-repeat; }
-  /* 有背景图时气泡让出透明度（2026-11-09 用户要求）：原来是一块实心黑，
-     整张图被切成一格一格的。改成「半透明底 + 背景模糊」——图能透出来，
-     字还压得住。模糊不是为了好看：背景若是花火/夜景这类高频细节，
-     不模糊时半透明底上的文字边缘会和图打架（截图实测 0.52 透明 + 不模糊
-     明显更难读）。没有背景图时这一组不生效，观感与以前完全一致。 */
+  /* 有背景图时内容卡片让出透明度（2026-11-14 用户要求「看到背景」）：
+     原来 .52 太实，整张图被一块块灰挡住，加了背景等于白加。
+     现在降到 .18，靠**更强模糊 + 文字阴影**把可读性补回来——
+     模糊不是装饰：背景若是花火/夜景这类高频细节，不模糊的话
+     半透明底上的字边缘会和图打架。没有背景图时整组不生效。 */
   .mid.has-bg .row.a .bubble {
-    background: rgba(14, 14, 18, .52);
-    border-color: rgba(255, 255, 255, .1);
-    -webkit-backdrop-filter: blur(6px) saturate(1.1);
-    backdrop-filter: blur(6px) saturate(1.1); }
+    background: rgba(14, 14, 18, .18);
+    border-color: rgba(255, 255, 255, .12);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, .78);
+    -webkit-backdrop-filter: blur(14px) saturate(1.15);
+    backdrop-filter: blur(14px) saturate(1.15); }
   .mid.has-bg .row.u .bubble {
-    background: rgba(109, 42, 72, .52);
-    -webkit-backdrop-filter: blur(6px) saturate(1.1);
-    backdrop-filter: blur(6px) saturate(1.1); }
+    background: rgba(109, 42, 72, .26);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, .78);
+    -webkit-backdrop-filter: blur(14px) saturate(1.15);
+    backdrop-filter: blur(14px) saturate(1.15); }
   /* 开场导读、图下工具条、输入框：同样是一块块实心黑，一并让出透明度。
      输入框比气泡再实一点（.55），光标和占位字在花哨背景上才不至于发飘。 */
   .mid.has-bg .intro {
-    background: rgba(14, 14, 18, .46);
+    background: rgba(14, 14, 18, .18);
     border-color: rgba(255, 255, 255, .14);
-    -webkit-backdrop-filter: blur(6px) saturate(1.1);
-    backdrop-filter: blur(6px) saturate(1.1); }
-  .mid.has-bg .picbar { background: rgba(23, 23, 31, .58); }
+    -webkit-backdrop-filter: blur(14px) saturate(1.15);
+    backdrop-filter: blur(14px) saturate(1.15); }
+  .mid.has-bg .picbar { background: rgba(23, 23, 31, .3); }
   /* 图片容器自带一层 #0a0a0f 打底（占位/加载时用），压在图上就是一块黑，
      有背景时改成半透明，加载中的占位字也不至于糊在图上。 */
-  .mid.has-bg .pic { background: rgba(10, 10, 15, .35); }
-  .mid.has-bg .composer textarea { background: rgba(23, 23, 31, .58); }
+  .mid.has-bg .pic { background: rgba(10, 10, 15, .16); }
+  /* 输入框比气泡稍实一点（.3）：光标和占位字要找准位置，太透会发飘 */
+  .mid.has-bg .composer textarea {
+    background: rgba(23, 23, 31, .3);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px); }
   /* 横向分隔线也调淡：纯 #1a1a22 的线压在图上像一道黑缝 */
   .mid.has-bg .top, .mid.has-bg .composer { border-color: rgba(255, 255, 255, .09); }
   /* 气泡外的「她 / 你」小字和重发提示直接压在图上，得自带一点阴影 */
@@ -218,7 +224,7 @@
     text-shadow: 0 1px 4px rgba(0, 0, 0, .9); }
   .mid.has-bg .aff .sub { color: #cfcfda; }
   .mid.has-bg .tb {
-    background: rgba(14, 14, 18, .58);
+    background: rgba(14, 14, 18, .3);
     border-color: rgba(255, 255, 255, .18);
     -webkit-backdrop-filter: blur(4px);
     backdrop-filter: blur(4px); }
@@ -226,7 +232,7 @@
      默认是透明底的胶囊，压在图上同样会「消失」。彩色那三个保留自己的颜色，
      其余按钮垫深底、文字提亮。 */
   .mid.has-bg .precise .ptab, .mid.has-bg .precise .ptgl {
-    background: rgba(14, 14, 18, .55);
+    background: rgba(14, 14, 18, .3);
     border-color: rgba(255, 255, 255, .18);
     -webkit-backdrop-filter: blur(4px);
     backdrop-filter: blur(4px); }
@@ -234,7 +240,7 @@
   .mid.has-bg .precise .ptgl { color: #cfcfda; }
   /* 选中态要压回来一层：底色更实、边框仍是它自己的颜色，别被上面那条盖掉 */
   .mid.has-bg .precise .ptab.on {
-    background: rgba(14, 14, 18, .8);
+    background: rgba(14, 14, 18, .55);
     border-color: currentColor; }
   /* 「当前模型」是 2026-11-09 才加的，比上面那批背景适配晚了一步：默认
      11px 的 --text-dim 灰字直接压在角色背景图上会糊成一片（用户实测）。

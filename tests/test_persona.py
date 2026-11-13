@@ -4102,5 +4102,56 @@ class ModelChooseTest(unittest.TestCase):
         self.assertIn("persona_model_pick", h)
         self.assertIn("loadModelList", h)
 
+
+
+class BgTransparencyTest(unittest.TestCase):
+    """有背景时内容卡片要透（2026-11-14 用户要求）。
+
+    原话：「我加了背景之后，希望内容卡片是透明的，不然看不到背景，
+    现在是半透明灰色的，看不到背景很难受。」
+    原来气泡是 rgba(...,.52)，整张图被一块块灰挡住，加背景等于白加。
+    """
+
+    def _html(self):
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "web", "persona.html")
+        with io.open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_bubbles_are_translucent_enough(self):
+        """不透明度必须低于 0.3——再高就把背景盖住了。"""
+        import re
+        h = self._html()
+        for sel in (".mid.has-bg .row.a .bubble", ".mid.has-bg .row.u .bubble"):
+            i = h.find(sel)
+            self.assertGreater(i, 0, "缺 %s" % sel)
+            seg = h[i:i + 300]
+            m = re.search(r"rgba\([^)]*?,\s*([0-9.]+)\)", seg)
+            self.assertIsNotNone(m, "%s 里找不到 rgba" % sel)
+            self.assertLessEqual(float(m.group(1)), 0.30,
+                                 "%s 还是太实（%s）" % (sel, m.group(1)))
+
+    def test_readability_compensated(self):
+        """透归透，字要看得清：必须有模糊兜底 + 文字阴影。"""
+        h = self._html()
+        for sel in (".mid.has-bg .row.a .bubble", ".mid.has-bg .row.u .bubble"):
+            i = h.find(sel)
+            seg = h[i:i + 400]
+            self.assertIn("backdrop-filter", seg, "%s 缺模糊" % sel)
+            self.assertIn("text-shadow", seg, "%s 缺文字阴影" % sel)
+
+    def test_no_heavy_opacity_left(self):
+        """has-bg 那一组里不许再留 .5 以上的实底。"""
+        import re
+        h = self._html()
+        for line in h.split("\n"):
+            if "has-bg" not in line:
+                continue
+            m = re.search(r"background:\s*rgba\([^)]*?,\s*([0-9.]+)\)", line)
+            if m:
+                self.assertLessEqual(float(m.group(1)), 0.60, line.strip())
+
 if __name__ == "__main__":
     unittest.main()
