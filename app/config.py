@@ -101,7 +101,7 @@ PERSONA_MODELS = [
      "provider": "cx_a1b2c3d4"},
     {"id": "deepseek-v4-pro",
      "label": "V4 Pro",
-     "note": "更细腻，慢一倍，露骨处可能自己停笔",
+     "note": "更细腻，慢一倍，个别情况下会中途停笔",
      "provider": "cx_a1b2c3d4"},
 ]
 PERSONA_MODEL_DEFAULT = os.getenv("PERSONA_MODEL_DEFAULT",

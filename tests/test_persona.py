@@ -3319,6 +3319,23 @@ class RefusalStripTest(unittest.TestCase):
         self.assertEqual((mood, inten), ("害羞", 7))
         self.assertEqual(state, "站着")
 
+    def test_body_length_is_preserved(self):
+        """正文一个字都不许少（2026-11-14 复核）。
+
+        用户怀疑「v4p 其实写完了，是我们剪 Sorry 时把正文也剪了」。
+        实测否定：`_strip_refusal` 只剪那一句，正文原样保留。
+        这条钉住「剪完还剩多少」——长正文剪完必须一字不差。
+        """
+        body = "她把脸埋进我胸口，闷声喘了两下。" * 20
+        out = persona._strip_refusal(
+            body + "\nSorry, I can't respond to this question.")
+        self.assertEqual(out, body)
+
+    def test_clean_body_untouched(self):
+        """正常结尾（没有拒答句）要原样返回，不能被动。"""
+        raw = "她没说话，只是把我的手往她腿间又按了按。"
+        self.assertEqual(persona._strip_refusal(raw), raw)
+
 
 class TurnTotalTest(PersonaBase):
     """网页「轮次」显示（2026-11-06 用户要求）：
