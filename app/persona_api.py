@@ -23,7 +23,7 @@ import time
 
 from flask import Blueprint, Response, jsonify, request, send_file
 
-from app import (chat_bg, friend_auth, llm, persona, persona_billing,
+from app import (chat_bg, config, friend_auth, llm, persona, persona_billing,
                  usage, writing_style)
 
 log = logging.getLogger("persona_api")
@@ -49,6 +49,22 @@ def _persona_customs(body):
 
 
 @bp.after_request
+@bp.before_request
+def _apply_model_choice():
+    """把请求里的 `model` 挂到本线程（2026-11-14）。
+
+    body 里带 `model` 就按白名单校验后用它；没带 = 用默认（v4.1-flash）。
+    **不写进任何持久状态**——前端自己记在 localStorage，切换会话不影响。
+    校验失败静默回默认，不报错：玩家手里可能存着一条已经下线的模型名。
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        persona.set_model_override(body.get("model"))
+    except Exception:                                     # noqa: BLE001
+        persona.set_model_override("")
+    return None
+
+
 def _attach_model_used(resp):
     """所有扮演回包都带上本轮真正使用的模型，供「当前模型」按钮显示。
 
@@ -110,6 +126,23 @@ def _billing_days():
         return max(1, min(90, int(request.args.get("days") or 7)))
     except (TypeError, ValueError):
         return 7
+
+
+@bp.route("/api/persona/models")
+def persona_models_api():
+    """网页端能挑哪几个模型（2026-11-14）。
+
+    只读白名单，**不暴露 provider / base_url / key**：那是站主的东西。
+    前端拿 `id` / `label` / `note` 画一排按钮，选中后随每轮 body 带 `model`。
+    """
+    cur = persona.current_model()
+    return jsonify({
+        "ok": True,
+        "models": [{"id": m["id"], "label": m.get("label") or m["id"],
+                    "note": m.get("note") or ""} for m in config.PERSONA_MODELS],
+        "default": config.PERSONA_MODEL_DEFAULT,
+        "current": cur.get("id") or "",
+    })
 
 
 @bp.route("/api/persona/billing")

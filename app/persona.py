@@ -63,10 +63,36 @@ from app import (affection, affection_v2_adult as adult_state, items as _items,
                    llm,
                    persona_rag, pregnancy, trigger,
                  writing_skills, writing_style)
-from app.config import (BASE_DIR, PERSONA_MODEL, PERSONA_PROVIDER,
+from app.config import (BASE_DIR, PERSONA_MODEL, PERSONA_MODEL_DEFAULT,
+                        PERSONA_MODELS, PERSONA_PROVIDER,
+                        persona_model_of,
                         QQ_AGENT_ID, QQ_BOT_NAME, LLM_JUDGE_TIMEOUT)
 
 log = logging.getLogger("persona")
+
+
+# 请求级的模型选择（2026-11-14）。网页端玩家在下拉里挑了哪个模型，接口层
+# `set_model_override()` 挂在本线程上，`_llm_call` 拼链头时用它顶掉默认值。
+# 用 thread-local 而不是全局变量：Flask 每个请求一个线程，两个人同时聊不该
+# 互相改对方的模型。
+_MODEL_LOCAL = threading.local()
+
+
+def set_model_override(model_id):
+    """挂一个本线程的模型覆盖。传空/不在白名单 = 清掉，回默认值。"""
+    got = persona_model_of(model_id)
+    _MODEL_LOCAL.model = got["id"] if got else ""
+
+
+def current_model():
+    """本线程此刻真正会用哪个模型（白名单里的那条记录）。"""
+    got = persona_model_of(getattr(_MODEL_LOCAL, "model", ""))
+    if got:
+        return got
+    got = persona_model_of(PERSONA_MODEL_DEFAULT) or persona_model_of(PERSONA_MODEL)
+    if got:
+        return got
+    return {"id": PERSONA_MODEL, "label": PERSONA_MODEL, "provider": PERSONA_PROVIDER}
 
 
 def _llm_call(messages, **kw):
@@ -86,10 +112,14 @@ def _llm_call(messages, **kw):
     # 省掉 provider/model 的后果：candidates() 没有链头，就会去接全局
     # LLM_FALLBACK_CHAIN，第一项正是付费的官方 DeepSeek。中转站闭站时
     # 那就是站主自掏腰包，所以链头在这里写死。
-    if PERSONA_PROVIDER:
+    # 链头：玩家这一轮挑的模型优先（白名单过一遍），没挑就用默认。
+    _pick = current_model()
+    if _pick.get("provider"):
+        kw.setdefault("provider", _pick["provider"])
+    elif PERSONA_PROVIDER:
         kw.setdefault("provider", PERSONA_PROVIDER)
-    if PERSONA_MODEL:
-        kw.setdefault("model", PERSONA_MODEL)
+    if _pick.get("id"):
+        kw.setdefault("model", _pick["id"])
     return llm.call_llm(messages, **kw)
 
 

@@ -3984,5 +3984,82 @@ class RatingTagTest(unittest.TestCase):
         for w in ("censor", "mosaic", "pixelat", "bar censor"):
             self.assertNotIn(w, out.lower())
 
+
+
+class ModelChooseTest(unittest.TestCase):
+    """网页端模型选择（2026-11-14）。
+
+    起因：群友的回复在露骨处被截断。实测同一段 prompt——
+      v4.1-flash 5.1 秒写完 730 字，内容连贯；
+      v4-pro    11.4 秒写到 697 字，吐出「Sorry, I can't respond」然后停住。
+    所以默认换成 v4.1f，v4p 降为可选。
+    """
+
+    def test_default_is_flash(self):
+        from app import config
+        self.assertEqual(config.PERSONA_MODEL_DEFAULT, "deepseek-v4.1-flash")
+        self.assertEqual(config.PERSONA_MODEL, "deepseek-v4.1-flash")
+
+    def test_whitelist_has_both(self):
+        from app import config
+        ids = config.persona_model_ids()
+        self.assertIn("deepseek-v4.1-flash", ids)
+        self.assertIn("deepseek-v4-pro", ids)
+
+    def test_unknown_model_rejected(self):
+        """玩家传什么都不能进——否则能指到付费官方那家。"""
+        from app import config
+        for bad in ("gpt-4", "deepseek-chat", "", "  ", "../../etc"):
+            self.assertIsNone(config.persona_model_of(bad), bad)
+
+    def test_override_switches_and_falls_back(self):
+        from app import persona
+        try:
+            persona.set_model_override("deepseek-v4-pro")
+            self.assertEqual(persona.current_model()["id"], "deepseek-v4-pro")
+            persona.set_model_override("gpt-4-evil")
+            self.assertEqual(persona.current_model()["id"],
+                             "deepseek-v4.1-flash", "乱传要回落默认")
+            persona.set_model_override("")
+            self.assertEqual(persona.current_model()["id"],
+                             "deepseek-v4.1-flash")
+        finally:
+            persona.set_model_override("")
+
+    def test_llm_call_uses_override(self):
+        """`_llm_call` 拼链头时要用覆盖值，不能还用全局常量。"""
+        import inspect
+        from app import persona
+        src = inspect.getsource(persona._llm_call)
+        self.assertIn("current_model()", src)
+        self.assertNotIn('kw.setdefault("model", PERSONA_MODEL)', src)
+
+    def test_api_has_models_endpoint(self):
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "app", "persona_api.py")
+        with io.open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertIn("/api/persona/models", src)
+        self.assertIn("_apply_model_choice", src)
+        # 接口不许把 provider / key 吐给前端：只看 jsonify 那一段，
+        # 文档字符串里提一句「不暴露 base_url」是说明，不是泄露。
+        i = src.find("return jsonify({", src.find("def persona_models_api"))
+        body = src[i:i + 500]
+        for leak in ("api_key", "base_url", "provider"):
+            self.assertNotIn(leak, body, "回包里不该有 %s" % leak)
+
+    def test_frontend_sends_model(self):
+        import io
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "web", "persona.html")
+        with io.open(path, encoding="utf-8") as fh:
+            h = fh.read()
+        self.assertIn("body.model = MODEL_PICK", h)
+        self.assertIn("persona_model_pick", h)
+        self.assertIn("loadModelList", h)
+
 if __name__ == "__main__":
     unittest.main()
