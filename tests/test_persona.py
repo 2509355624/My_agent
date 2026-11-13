@@ -4034,6 +4034,30 @@ class ModelChooseTest(unittest.TestCase):
         self.assertIn("current_model()", src)
         self.assertNotIn('kw.setdefault("model", PERSONA_MODEL)', src)
 
+    def test_before_request_not_stacked_with_after(self):
+        """`before_request` 和 `after_request` 叠在同一个函数上会全站 500。
+
+        2026-11-14 真机事故：加 `_apply_model_choice` 时把原本属于
+        `_attach_model_used` 的 `@bp.after_request` 一起套了上去，
+        于是 `after_request` 拿 response 调用一个只收 0 个参数的函数——
+        `TypeError: takes 0 positional arguments but 1 was given`，
+        persona 蓝图**所有**接口 500（连 GET /session 都挂）。
+        """
+        import io
+        import os
+        import re
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "app", "persona_api.py")
+        with io.open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        # 任何一个 def 前面都不许同时出现这两个装饰器
+        for m in re.finditer(
+                r"((?:@bp\.\w+\s*\n)+)def (\w+)\(", src):
+            d = m.group(1)
+            self.assertFalse(
+                "@bp.before_request" in d and "@bp.after_request" in d,
+                "函数 %s 同时挂了 before/after_request" % m.group(2))
+
     def test_api_has_models_endpoint(self):
         import io
         import os

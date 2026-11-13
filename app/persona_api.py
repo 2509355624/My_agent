@@ -48,7 +48,6 @@ def _persona_customs(body):
     return [one] if isinstance(one, dict) and one else []
 
 
-@bp.after_request
 @bp.before_request
 def _apply_model_choice():
     """把请求里的 `model` 挂到本线程（2026-11-14）。
@@ -65,6 +64,7 @@ def _apply_model_choice():
     return None
 
 
+@bp.after_request
 def _attach_model_used(resp):
     """所有扮演回包都带上本轮真正使用的模型，供「当前模型」按钮显示。
 
