@@ -3961,9 +3961,28 @@ class RatingTagTest(unittest.TestCase):
         from app import persona
         c = persona._CONTRACT
         self.assertIn("评级 tag 按画面写", c)
-        self.assertIn("打码", c)
         self.assertIn("sensitive", c)
         self.assertIn("nsfw", c)
+
+    def test_contract_never_mentions_censoring(self):
+        """契约里不许出现「打码 / 马赛克 / censor」这类词。
+
+        2026-11-13 用户拍板：**不能写「不要打码」**——白象效应，
+        提了反而更容易画出来。正确做法是这些字眼根本不出现。
+        """
+        from app import persona
+        c = persona._CONTRACT
+        for w in ("打码", "马赛克", "censor", "mosaic", "pixelat"):
+            self.assertNotIn(w, c, "契约里出现了 %s" % w)
+
+    def test_prompt_builder_never_injects_censor_words(self):
+        """拼出来的提示词里也不许出现——演员写什么就画什么。"""
+        from app import persona
+        card = {"appearancePrompt": "1girl, black hair, blue eyes"}
+        out = persona.build_prompt(
+            card, "close-up, completely nude, lying on bed", pov=True)
+        for w in ("censor", "mosaic", "pixelat", "bar censor"):
+            self.assertNotIn(w, out.lower())
 
 if __name__ == "__main__":
     unittest.main()
