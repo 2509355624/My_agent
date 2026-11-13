@@ -56,6 +56,9 @@ _LORA_SKILLS_ANIMA = (
     "anima_clear", "anima-line", "anima-2s", "anima-real",
     "hd_3_clear", "hd_3_curvy", "hd_3_gloss", "hd_3_soft",
     "silver", "silver-hd",
+    # 2026-11-13 ANIMA 随心配：双模型两段，底模从 anima 池随机选，角色 LoRA
+    # 照走 anima 架构（第 6 槽，不随机）。加进来角色库才认它。
+    "_anima_random",
 )
 _LORA_SKILLS_SDXL = ("miao", "cunny", "jank", "nffa")
 _LORA_SKILLS_SD15 = ("image_gen_v1", "image_gen_v1_hires", "nsfw_pose_gen")
@@ -176,7 +179,13 @@ def _accept(skill, entry):
     if not entry:
         return None
     chans = entry.get("channels") or []
-    if chans and skill not in chans:
+    # ANIMA 随心配（2026-11-13）是 anima 架构的**随机版**：底模就是 anima 池里的
+    # 那几个（miaomiaoRealskin_anima13 等），角色 LoRA 也是同一批 anima 架构
+    # 文件。所以它等价于 anima 架构——channels 里写了任一 anima 渠道，就视为
+    # 在随心配下也有效。这样不用把 67 条角色的 channels 各加一遍 `_anima_random`
+    # （那是「同一条角色、同一个文件」的重复声明，容易改漏）。
+    allowed = _LORA_SKILLS_ANIMA if skill == "_anima_random" else (skill,)
+    if chans and not any(c in allowed for c in chans):
         log.info("角色 %s 不在渠道 %s 的白名单里，跳过",
                  entry.get("key"), skill)
         return None

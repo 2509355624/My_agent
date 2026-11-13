@@ -678,7 +678,7 @@ class Job:
                  nai_i2i=None, tag=None, prompt=None, intent=None, seed=None,
                  chan=None, landscape=False, quiet=False, batch=None,
                  out_dir=None, comfy_down=False, reply_to="", at_user=None,
-                 i2i_src=None, i2i_name=""):
+                 i2i_src=None, i2i_name="", anima_draw=None):
         self.target = target
         self.target_id = target_id
         self.workflow = workflow
@@ -761,6 +761,10 @@ class Job:
         # 换成它返回的真名（见 `_worker`）。传完立即把 `i2i_src` 置 None 释放。
         self.i2i_src = i2i_src
         self.i2i_name = i2i_name or ""
+        # ANIMA 随心配抽卡参数（2026-11-13）：{"models":[m1,m2], "loras":[l1..l5]}。
+        # 出图后发图时拼进 caption，让用户看到这次随机抽到了什么画风组合。
+        # 默认 None = 普通渠道，行为与从前完全一致。
+        self.anima_draw = anima_draw
         self.waits = 0              # 被冷却 / 被插队推回过几次（只为日志）
         self.skill_done = False     # 已经成功跑完一张？决定跑完要不要开冷却
         self.prompt_id = None
@@ -1087,7 +1091,7 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
             intent=None, seed=None, resample_fn=None, landscape=None,
             quiet=False, batch=None, out_dir=None, comfy_down=False,
             reply_to=None, at_user=None, i2i_src=None, i2i_name="",
-            priority=False):
+            priority=False, anima_draw=None):
     """把一张图排进**它该去的那条通道**的队列，返回 (job, reason)。
 
     prompt 是模型写的那段原始提示词，只用来**出图后记进账本**（编号 → 提示词，
@@ -1159,7 +1163,8 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
                   chan=chan, landscape=landscape, quiet=quiet, batch=batch,
                   out_dir=out_dir, comfy_down=comfy_down,
                   reply_to=reply_to, at_user=at_user,
-                  i2i_src=i2i_src, i2i_name=i2i_name)
+                  i2i_src=i2i_src, i2i_name=i2i_name,
+                  anima_draw=anima_draw)
         # 优先票（2026-11-11 漫画台「独占通道」）：worker 拿锁时登记优先票，
         # 排到所有已排队普通票前面（见 comfy_gate.hold 的 priority 说明）。
         # 只影响独木桥顺序，不改变任何出图行为；QQ / 群友路径不传，恒 False。
@@ -2222,6 +2227,7 @@ def process(job):
                                   prompt=job.prompt or "",
                                   reply_to=getattr(job, "reply_to", "") or "",
                                   at_user=getattr(job, "at_user", None),
+                                  anima_draw=getattr(job, "anima_draw", None),
                                   **({"notify": False} if quiet_audit else {})))
         blocked = len(names) - sent
         if sent:
@@ -3089,7 +3095,7 @@ def _elapsed(job):
     return max(0.0, time.time() - (job.started or job.created))
 
 
-def _caption(tag, path, skill, image_out, seed=None):
+def _caption(tag, path, skill, image_out, seed=None, anima_draw=None):
     """图上那行字：`编号 · 分辨率 · 渠道 · seed 数字`。
 
     编号**必须在最前且原样**——它是群友引用那条消息时被正则抠回来的锚点
@@ -3102,6 +3108,11 @@ def _caption(tag, path, skill, image_out, seed=None):
     唯一一条不依赖模型记忆的通路（理由同 image_log 模块开头那段）。
 
     没种子时（NAI 那种云端图 / 老调用方）不多写那一段，整行与从前一致。
+
+    anima_draw（2026-11-13，ANIMA 随心配抽卡参数）：有值就在 seed 之后追加
+    一行「抽卡：模型 A / 模型 B · LoRA×5 简写」，让用户一眼看到这次随机抽到
+    什么画风。⚠️ 文件名里只有字母数字、`-`、`.` 才安全（这行会过
+    `qq_api.to_qq_text` 做 Markdown 降级），这里做一层清洗。
 
     ⚠️ 每一项都只放**字母数字和 `-`**：这行会过一遍 `qq_api.to_qq_text` 做
     Markdown 降级，`_` `*` 反引号 那些会被吃掉或改变排版。
@@ -3117,6 +3128,18 @@ def _caption(tag, path, skill, image_out, seed=None):
     if seed is not None:
         bits.append("seed %d" % int(seed))
     line = " · ".join(bits)
+    # 随心配抽卡参数（2026-11-13）：抽卡结果贴出来，人看得懂、引用也能复刻。
+    # 这里**不做激进清洗**（保留下划线/中文/空格）——它们是模型/LoRA 的正式
+    # 文件名，去掉分隔符反而没法照着复刻。只剥 `.safetensors` 后缀。
+    if anima_draw:
+        models = anima_draw.get("models") or []
+        loras = anima_draw.get("loras") or []
+        strip = lambda s: str(s).replace(".safetensors", "").strip()
+        clean_m = [strip(m) for m in models if str(m).strip()]
+        clean_l = [strip(l) for l in loras if str(l).strip()]
+        if clean_m or clean_l:
+            line += "\n随心配 模型: " + " / ".join(clean_m) \
+                    + "  LoRA: " + " / ".join(clean_l)
     # 后面那段附言**可在管理页改**（settings.json 的 `caption_note`，见
     # agents.caption_note）。2026-10-06 用户拍板：「那些字我就希望我可以自己
     # 去附加这一些内容……一点换行、二点换行」。没设就用内置默认（引用这张图
@@ -3195,7 +3218,8 @@ def _notify_batch_blocked(target, target_id, sent, blocked, total):
 
 
 def _send_image(target, target_id, filename, tag="", skill="", seed=None,
-                notify=True, prompt="", reply_to="", at_user=None):
+                notify=True, prompt="", reply_to="", at_user=None,
+                anima_draw=None):
     """发回原会话。先过 image_out 出副本（jpg 压扁丢元数据 / png 原样带工作流），
     格式看管理页开关。
 
@@ -3220,7 +3244,7 @@ def _send_image(target, target_id, filename, tag="", skill="", seed=None,
     path = image_out.prepare_for_send(filename, fmt)
     # caption 提到审核**之前**算：被拦时它要跟着图一起进人工二审队列，管理员
     # 点「过审」补发的就是这一行原文——跟没被拦过的图一个字都不差。
-    caption = _caption(tag, path, skill, image_out, seed)
+    caption = _caption(tag, path, skill, image_out, seed, anima_draw)
     if not image_audit.allow_send(path, QQ_AGENT_ID, target, target_id,
                                   notify=notify,
                                   meta={"tag": tag, "skill": skill,

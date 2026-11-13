@@ -1177,6 +1177,19 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     from app import moss_prompt
     prompt = moss_prompt.clean(skill, prompt)
     prompt = lora_slots.nai5_prefix(skill, preset_slots) + prompt
+    # ANIMA 随心配（2026-11-13）：抽卡——底模随机选 2（可重复）、画风 LoRA
+    # 随机选 5（不重复），替换工作流里的 __MODEL_*__ / __LORA_*__ 占位符。
+    # 放在角色 LoRA 装填**之前**：占位符换成真实文件名后，char_loras.patch
+    # 才能正确找到 LoRA 链头（链头 = model 指向非 LoRA 节点的那个 LoraLoader）。
+    # 抽卡参数存进 job 上（_anima_random_draw），出图后 caption 带出来。
+    anima_draw = None
+    if skill == "_anima_random":
+        from app import anima_random
+        anima_draw = anima_random.draw()
+        workflow = anima_random.apply_random(workflow, anima_draw)
+        log.info("[随心配] 抽到模型 %s · LoRA %s",
+                 " / ".join(anima_draw["models"]),
+                 " / ".join(anima_draw["loras"]))
     # 角色 LoRA（2026-11-04）：QQ 直达生图也在这里装填。之前只有
     # `build_t2i_workflow`（网页跑图台 / 漫画 / 角色卡那几条）接了，
     # 群友在群里点名角色时一直没挂上 LoRA，画出来当然不像。
@@ -1254,7 +1267,8 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
                                      prompt=prompt, intent=intent, seed=seed,
                                      resample_fn=resample_fn,
                                      comfy_down=comfy_down,
-                                     i2i_src=i2i_src, i2i_name=uploaded)
+                                     i2i_src=i2i_src, i2i_name=uploaded,
+                                     anima_draw=anima_draw)
     if reason is not None:
         # 拒收时工作流还在手上，ComfyUI 一点算力都没浪费，也不会留下「画了
         # 却没人发」的孤儿图。
