@@ -152,6 +152,74 @@ class DirectReceiptTest(_SubmitHarness):
         self.assertIn("生成成功", out)
 
 
+class ReceiptLinksTest(_SubmitHarness):
+    """回执尾巴的三个入口：跑图台 / 角色扮演 / 画廊（2026-11-13 用户要求）。
+
+    用户原话：「可以做到每次任务回执给跑图台的最新链接吗？……反正回执是给到
+    消息卡片的，这样大家其实能够直接从回执去进到跑图台的链接」「角色扮演的
+    链接也给吧，画廊也给」。
+
+    这里守四条：① 地址是**现读**的（隧道重启换域名，新回执就得是新地址）；
+    ② 隧道没开就一条都不给（不发打不开的链接）；③ 跑图台令牌按会话签、能验回
+    同一个会话；④ 第一行永远是那句状态，链接只加在末尾（卡片预览靠第一行）。
+    """
+
+    URL = "https://demo-for-test.trycloudflare.com"
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch("app.friend_auth.secret", return_value="t" * 64)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _submit_with(self, ctx, url=URL):
+        with mock.patch("app.friend_site.url", return_value=url):
+            self._submit(ctx)
+        return self.sent[-1][2]
+
+    def test_links_ride_at_the_end_with_the_current_domain(self):
+        text = self._submit_with(("group", "482079537"))
+        lines = text.splitlines()
+        # 第一行不动：卡片收起来时预览的就是它，也是 receipt_line 取的那行
+        self.assertEqual(lines[0], "任务已提交，正在画了。")
+        self.assertEqual(lines[-2], "角色扮演 %s/persona?from=qq" % self.URL)
+        self.assertEqual(lines[-1], "画廊 %s/gallery?from=qq" % self.URL)
+        self.assertTrue(lines[-3].startswith("跑图台 %s/runbench?k=" % self.URL))
+
+    def test_runbench_token_leads_back_to_this_session(self):
+        from app import friend_auth
+        text = self._submit_with(("group", "482079537"))
+        line = [x for x in text.splitlines() if x.startswith("跑图台 ")][0]
+        k = line.split("k=", 1)[1]
+        self.assertEqual(friend_auth.parse_runbench_token(k),
+                         ("group", "482079537"))
+
+    def test_private_and_group_get_their_own_token(self):
+        from app import friend_auth
+        text = self._submit_with(("private", "2509355624"))
+        k = [x for x in text.splitlines()
+             if x.startswith("跑图台 ")][0].split("k=", 1)[1]
+        self.assertEqual(friend_auth.parse_runbench_token(k),
+                         ("private", "2509355624"))
+
+    def test_no_tunnel_no_links(self):
+        """隧道没开：一行链接都不加，别发三个打不开的地址。"""
+        text = self._submit_with(("group", "9"), url="")
+        self.assertNotIn("https://", text)
+        self.assertNotIn("runbench", text)
+        self.assertNotIn("persona", text)
+
+    def test_switch_off_removes_the_links(self):
+        with mock.patch("app.config.QQ_RECEIPT_LINKS", False):
+            text = self._submit_with(("group", "9"))
+        self.assertNotIn("runbench", text)
+
+    def test_group_note_still_before_the_links(self):
+        """群聊那行「一次只出一张」不能被顶到链接后面去（它是给人看的提示）。"""
+        lines = self._submit_with(("group", "482079537")).splitlines()
+        self.assertTrue(any("群里一次只出一张" in x for x in lines[:-3]))
+
+
 class ReceiptNoteTest(_SubmitHarness):
     """附言那段的三态（2026-10-06 用户：「那些字我就希望我可以自己去附加」）。
 

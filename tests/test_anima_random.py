@@ -14,7 +14,7 @@ from app import anima_random
 
 
 class DrawTest(unittest.TestCase):
-    """抽卡：模型可重复选 2、LoRA 不重复选 5。"""
+    """抽卡：模型不重复选 2、LoRA 不重复选 5。"""
 
     def test_draw_counts(self):
         d = anima_random.draw(rng=random.Random(1))
@@ -39,11 +39,70 @@ class DrawTest(unittest.TestCase):
         b = anima_random.draw(rng=random.Random(99))
         self.assertEqual(a, b)
 
+    def test_models_no_duplicate(self):
+        """两个底模必须不同（去放回）。"""
+        for seed in range(20):
+            d = anima_random.draw(rng=random.Random(seed))
+            self.assertEqual(len(set(d["models"])), 2,
+                             "seed=%d 抽出了重复底模 %r" % (seed, d["models"]))
+
     def test_pool_sizes(self):
-        """模型池 ≥ 2（可重复选 2）、LoRA 池 ≥ 5（不重复选 5）。"""
+        """模型池 ≥ 2（不重复选 2）、LoRA 池 ≥ 5（不重复选 5）。"""
         self.assertGreaterEqual(len(anima_random.MODEL_POOL), 2)
         self.assertGreaterEqual(len(anima_random.LORA_POOL),
                                 anima_random.LORA_COUNT)
+
+
+class CooldownTest(unittest.TestCase):
+    """冷却期：不带 rng 的生产路径要避开最近抽中的项。"""
+
+    def setUp(self):
+        anima_random.reset_history()
+
+    def tearDown(self):
+        anima_random.reset_history()
+
+    def test_models_cooled_next_round(self):
+        """上一轮抽中的两个底模，下一轮不能再出现。"""
+        first = anima_random.draw()
+        second = anima_random.draw()
+        cooled = set(first["models"])
+        self.assertTrue(set(second["models"]).isdisjoint(cooled),
+                        "上一轮底模 %r 又被抽中 %r" % (cooled, second["models"]))
+
+    def test_loras_cooled_next_round(self):
+        """上一轮抽中的 LoRA，下一轮不能再出现。"""
+        first = anima_random.draw()
+        second = anima_random.draw()
+        cooled = set(first["loras"])
+        self.assertTrue(set(second["loras"]).isdisjoint(cooled),
+                        "上一轮 LoRA %r 又被抽中 %r" % (cooled, second["loras"]))
+
+    def test_models_not_repeat_within_cooldown_window(self):
+        """连续 MODEL_COOLDOWN+1 轮内，同一个底模不重复出现。"""
+        seen = set()
+        window = anima_random.MODEL_COOLDOWN + 1
+        for _ in range(window):
+            d = anima_random.draw()
+            for m in d["models"]:
+                self.assertNotIn(m, seen, "底模 %r 在 %d 轮内重复" % (m, window))
+            seen.update(d["models"])
+
+    def test_rng_path_ignores_history(self):
+        """带 rng 的调用是纯函数，不读也不写冷却历史。"""
+        anima_random.draw()  # 先抽一次，把历史填上
+        before = list(anima_random._history)
+        anima_random.draw(rng=random.Random(7))  # 纯函数路径
+        after = list(anima_random._history)
+        self.assertEqual(len(before), len(after),
+                         "rng 路径不应改动历史")
+
+    def test_history_capped(self):
+        """历史只保留够最长冷却的轮数，不无限增长。"""
+        for _ in range(anima_random._HIST_MAX + 5):
+            anima_random.draw()
+        self.assertLessEqual(len(anima_random._history),
+                             anima_random._HIST_MAX)
 
 
 class ApplyRandomTest(unittest.TestCase):

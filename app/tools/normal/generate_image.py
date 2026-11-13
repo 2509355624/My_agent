@@ -470,6 +470,44 @@ def receipt_note_default():
     return _RECEIPT_NOTE_DEFAULT % QQ_BOT_NAME
 
 
+# ─── 回执尾巴的三个入口（2026-11-13 用户要求）─────────────
+#
+# 用户原话：「可以做到每次任务回执给跑图台的最新链接吗？……反正回执是给到消息
+# 卡片的，这样大家其实能够直接从回执去进到跑图台的链接」「角色扮演的链接也给
+# 吧，画廊也给」。三条硬规则，缺一条就变成坑：
+#
+#   1. **地址必须现读**（`friend_site.url()`），一个字都不能写进 `receipt_note`。
+#      Quick Tunnel 每次重启都换域名，写死在设置文本里的地址第二天就是 1033。
+#      「隧道重启后还能进」靠的不是稳定域名，而是**每条新回执都带当时那个域名**。
+#   2. **隧道没开就一条链接都不给**（`url()` 返回 ""）。宁可少一行，也别发三条
+#      必然打不开的地址——回执最不该干的事就是给出假入口。
+#   3. **跑图台令牌必须按会话现签**，不能缓存复用：令牌里编着「出好的图推回哪个
+#      会话」，群里那份是本群的、私聊那份是那个人的。签一次就能用一天（见
+#      `config.QQ_RECEIPT_LINK_TTL_HOURS`），比 `/跑图台` 的 6 小时长，因为回执
+#      是留在聊天记录里给人回头点的。
+#
+# 角色扮演 / 画廊不带令牌（页面自己按登录态处理），但都要带 `from=qq`：
+# 进过 `/play` 的浏览器会带 7 天的 fr_solo，不带这个参数会被 5175 挡回游客页，
+# 看起来像「链接发错了」（2026-11-06 踩过一次，/gallery 和 /comic 都是这样修的）。
+def _receipt_links(target, target_id):
+    """回执末尾那三行入口；隧道没开 / 开关关掉 → ""（一个字都不加）。"""
+    from app import friend_auth, friend_site
+    from app.config import QQ_RECEIPT_LINKS, QQ_RECEIPT_LINK_TTL_HOURS
+    if not QQ_RECEIPT_LINKS:
+        return ""
+    url = friend_site.url()
+    if not url:
+        return ""
+    lines = []
+    k = friend_auth.make_runbench_token(target, target_id,
+                                        exp_hours=QQ_RECEIPT_LINK_TTL_HOURS)
+    if k:      # 认不出会话（target_id 不是 QQ 号）时只给另外两个，不瞎签
+        lines.append("跑图台 %s/runbench?k=%s" % (url, k))
+    lines.append("角色扮演 %s/persona?from=qq" % url)
+    lines.append("画廊 %s/gallery?from=qq" % url)
+    return "\n".join(lines)
+
+
 def _receipt_text(ahead, skill=None, waiting=False, preset=""):
     """后台直发的回执正文：短、纯状态、像系统回执（不给模型留编的余地）。
 
@@ -560,6 +598,11 @@ def _qq_receipt(job, target, target_id, source_note="", quota_tail="",
     # 转述」的几条不加——模板里已经交代过，写两遍只会挤掉真正要说的话。
     if target == "group":
         receipt += "\n（群里一次只出一张，要一组图私聊我）"
+    # 三个入口放**最后**：卡片收起来时预览的是第一行，别让链接抢掉「任务已提交」
+    # 那句话；点开卡片又能直接点进去（见 `_receipt_links` 的三条规则）。
+    _links = _receipt_links(target, target_id)
+    if _links:
+        receipt += "\n" + _links
     tail = _note_tail(source_note) + quota_tail
     if _send_receipt(target, target_id, receipt):
         return (image_jobs.RECEIPT_SENT_MARK + receipt + "\n"
@@ -853,6 +896,7 @@ def build_t2i_workflow(skill, prompt, seed, user_text="", key=""):
 
 def _generate_image(prompt, skill=None, lora=None, source_image="",
                     denoise=None, seed=None, use_character=None, preset=None,
+                    anima_preset=None,
                     _skip_confirm=False, resample_fn=None, user_text="",
                     character=""):
     # `character`（2026-11-06）：大大怪在角色库候选块里挑好的 key，直通
@@ -1185,11 +1229,36 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     anima_draw = None
     if skill == "_anima_random":
         from app import anima_random
-        anima_draw = anima_random.draw()
+        from app import runbench_api
+        # 复用预设（2026-11-13）：原话里点名了预设名（如「随心配 可爱画风」），
+        # 直接读存好的配方出图，**不随机抽卡**。配方是「代码登记的事实」，
+        # 直接喂，不经过 AI 判断。
+        if anima_preset:
+            preset_name, perr = runbench_api.resolve(anima_preset)
+            if perr:
+                return perr
+            rec = runbench_api.get(preset_name)
+            anima_draw = {
+                "models": list(rec.get("models") or []),
+                "loras": list(rec.get("loras") or []),
+            }
+            # 预设里存了 seed 就固定复刻；没存（老数据）就照常随机 seed。
+            # seed 在上面 _resolve_seed 已定好，这里只在「预设带了 seed 且
+            # 调用方没点名 seed」时覆盖。
+            if rec.get("seed") is not None and not seed_pinned:
+                seed = int(rec["seed"])
+            log.info("[随心配·预设] 复用「%s」模型 %s · LoRA %s",
+                     preset_name, " / ".join(anima_draw["models"]),
+                     " / ".join(anima_draw["loras"]))
+        else:
+            anima_draw = anima_random.draw()
         workflow = anima_random.apply_random(workflow, anima_draw)
         log.info("[随心配] 抽到模型 %s · LoRA %s",
                  " / ".join(anima_draw["models"]),
                  " / ".join(anima_draw["loras"]))
+        # 把这次配方（+seed）落成「最近一次」，供 /存预设 抓刚出的图。
+        # seed 在上面 _resolve_seed 已定好（int），跟 models/loras 一起配对存。
+        anima_random.save_last(anima_draw, seed=seed)
     # 角色 LoRA（2026-11-04）：QQ 直达生图也在这里装填。之前只有
     # `build_t2i_workflow`（网页跑图台 / 漫画 / 角色卡那几条）接了，
     # 群友在群里点名角色时一直没挂上 LoRA，画出来当然不像。
@@ -1345,9 +1414,15 @@ def _enqueue_nai(prompt, target, target_id, nai_i2i=None, intent=None,
     quota_tail = _charge_quota(job, target, target_id)
     # 回执同样由工具**直接发**（见 _qq_receipt）：NAI 也占同一条队列，
     # 「前面还有几张」一样是后台现算的，没理由让模型去转述。
+    #
+    # ⚠️ 这里**不能**带 `preset=`：`preset_label` 是 `_generate_image` 的局部
+    # 变量，到不了这个函数（2026-11-13 实测 `tests/test_image_i2i.py` 的 8 个
+    # NAI 用例全挂在 NameError 上——也就是说 NAI 渠道提交时必挂）。而 NAI
+    # 本来就用不了预设（上面 `skill in image_jobs.NAI_SKILLS` 那步直接回了
+    # 「NAI 套不了 LoRA」），走到这里时预设名必然是空的，不传才是对的。
     return _qq_receipt(job, target, target_id,
                        source_note=(nai_i2i["note"] if nai_i2i else ""),
-                       quota_tail=quota_tail, preset=preset_label)
+                       quota_tail=quota_tail)
 
 
 # ── 渠道清单：按 skills/ 里**实际装的目录**生成（2026-10-19）────────────

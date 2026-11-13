@@ -42,6 +42,7 @@ import time
 from flask import Blueprint, jsonify, request, send_file
 
 from app.config import BASE_DIR, COMFYUI_OUTPUT_DIR
+from app import runbench_api
 
 bp = Blueprint("output_api", __name__)
 
@@ -243,8 +244,15 @@ def api_stat():
 @bp.route("/api/output/tree")
 def api_tree():
     """列一层。子目录只报**本层直接**的图片数/占用（不递归）：qq 下面 11G，
-    递归统计会让每次点击都卡秒级，而用户点进去自然能看到下一层。"""
+    递归统计会让每次点击都卡秒级，而用户点进去自然能看到下一层。
+
+    `recursive=1`：`files` 改为返回**当前目录 + 所有子孙目录**的图片（混排，
+    按自然序排文件名），`dirs` 不变（目录树仍一层层点）。这是给「图片管理台
+    点开某目录就铺出整棵子树的图」用的——用户嫌 qq 下 37 个私聊/群目录要
+    挨个点。注意 qq 递归有 2400+ 张，前端默认不开启，由开关手动触发。
+    """
     rel = (request.args.get("path") or "").strip()
+    recursive = request.args.get("recursive") in ("1", "true", "yes")
     try:
         root = _root()
     except ValueError as exc:
@@ -258,56 +266,81 @@ def api_tree():
         rel = ""
 
     dirs, files = [], []
-    try:
-        with os.scandir(base) as it:
-            entries = list(it)
-    except OSError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-    for ent in entries:
+    if recursive:
+        # 递归整棵子树收图片：os.walk 一次扫完，比逐层 scandir 快。
+        # 只收图片、跳过符号链接、保留 mtime 供混排展示。
         try:
-            st = ent.stat()
-        except OSError:
-            continue
-        mtime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime))
-        if ent.is_dir(follow_symlinks=False):
-            # 本层直接图片：套娃目录（qq/私聊_xxx/...）会显示 0，点进去再看。
-            # 顺手数本层直接子目录数：没有直接图片的中间层（web、生图页）光看
-            # 「0P · 0 B」会被当成空目录，前端拿这个数改成显示「N 个目录」。
-            n_img, n_bytes, n_sub = 0, 0, 0
-            try:
-                with os.scandir(ent.path) as sub:
-                    for s in sub:
-                        if s.is_dir(follow_symlinks=False):
-                            n_sub += 1
-                        elif s.is_file(follow_symlinks=False):
-                            ext = os.path.splitext(s.name)[1].lower()
-                            if ext in IMG_EXT:
-                                n_img += 1
-                                try:
-                                    n_bytes += s.stat().st_size
-                                except OSError:
-                                    pass
-            except OSError:
-                pass
-            dirs.append({"name": ent.name, "rel": _rel_of(ent.path),
-                         "n_img": n_img, "n_dirs": n_sub,
-                         "bytes": n_bytes, "mtime": mtime})
-        elif ent.is_file(follow_symlinks=False):
-            ext = os.path.splitext(ent.name)[1].lower()
-            if ext not in IMG_EXT:
-                continue                      # 只管理图片；其他文件不列不删
-            files.append({"name": ent.name, "rel": _rel_of(ent.path),
-                          "bytes": st.st_size, "mtime": mtime})
+            for dirpath, _dirnames, filenames in os.walk(base, followlinks=False):
+                for name in filenames:
+                    if os.path.splitext(name)[1].lower() not in IMG_EXT:
+                        continue
+                    full = os.path.join(dirpath, name)
+                    try:
+                        st = os.stat(full)
+                    except OSError:
+                        continue
+                    files.append({
+                        "name": name,
+                        "rel": _rel_of(full),
+                        "bytes": st.st_size,
+                        "mtime": time.strftime("%Y-%m-%d %H:%M:%S",
+                                              time.localtime(st.st_mtime)),
+                    })
+        except OSError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+        files.sort(key=lambda f: _natural_key(f["name"]))
+    else:
+        try:
+            with os.scandir(base) as it:
+                entries = list(it)
+        except OSError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
 
-    # 按编号升序（自然序）。原来是 mtime 倒序，网格里 00005 排在最左，用户
-    # 找图得倒着看；编号顺序才是出图顺序。
-    dirs.sort(key=lambda d: _natural_key(d["name"]))
-    files.sort(key=lambda f: _natural_key(f["name"]))
+        for ent in entries:
+            try:
+                st = ent.stat()
+            except OSError:
+                continue
+            mtime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime))
+            if ent.is_dir(follow_symlinks=False):
+                # 本层直接图片：套娃目录（qq/私聊_xxx/...）会显示 0，点进去再看。
+                # 顺手数本层直接子目录数：没有直接图片的中间层（web、生图页）光看
+                # 「0P · 0 B」会被当成空目录，前端拿这个数改成显示「N 个目录」。
+                n_img, n_bytes, n_sub = 0, 0, 0
+                try:
+                    with os.scandir(ent.path) as sub:
+                        for s in sub:
+                            if s.is_dir(follow_symlinks=False):
+                                n_sub += 1
+                            elif s.is_file(follow_symlinks=False):
+                                ext = os.path.splitext(s.name)[1].lower()
+                                if ext in IMG_EXT:
+                                    n_img += 1
+                                    try:
+                                        n_bytes += s.stat().st_size
+                                    except OSError:
+                                        pass
+                except OSError:
+                    pass
+                dirs.append({"name": ent.name, "rel": _rel_of(ent.path),
+                             "n_img": n_img, "n_dirs": n_sub,
+                             "bytes": n_bytes, "mtime": mtime})
+            elif ent.is_file(follow_symlinks=False):
+                ext = os.path.splitext(ent.name)[1].lower()
+                if ext not in IMG_EXT:
+                    continue                      # 只管理图片；其他文件不列不删
+                files.append({"name": ent.name, "rel": _rel_of(ent.path),
+                              "bytes": st.st_size, "mtime": mtime})
+
+        # 按编号升序（自然序）。原来是 mtime 倒序，网格里 00005 排在最左，用户
+        # 找图得倒着看；编号顺序才是出图顺序。
+        dirs.sort(key=lambda d: _natural_key(d["name"]))
+        files.sort(key=lambda f: _natural_key(f["name"]))
     parent = _rel_of(os.path.dirname(base)) if rel else ""
     if parent.startswith(".."):
         parent = ""
     return jsonify({"ok": True, "path": rel, "parent": parent,
+                    "recursive": recursive,
                     "dirs": dirs, "files": files})
 
 
@@ -404,3 +437,75 @@ def api_delete():
                     "moved_human": human,
                     "freed": moved_bytes,      # 兼容旧调用方
                     "freed_human": human})
+
+
+# ─── 存为封面（2026-11-13）──────────────────────────────
+#
+# 跑图台预设卡片要封面。用户在图片管理页灯箱里看中一张已出的图，点「存为
+# 封面」→ 弹框选/建一个预设名 → 后端把这张图转成 PNG 复制到
+# `state/runbench_covers/<预设名>.png`。
+#
+# 为什么「存为封面」挂在这里而不是 runbench_api 里：图片管理页就是 output
+# 的网页视图，`rel`（图片相对路径）是它自己的语言；runbench_api 只认
+# 「预设名 → 封面文件」，不该知道 output 根在哪、怎么把 rel 折成绝对路径。
+
+def _channel_of_rel(rel):
+    """从图片 rel 路径里抽渠道名。返回渠道 id 或 ""。
+
+    出图路径固定是 `web/生图页/<渠道>/<图名>.png`（ComfyUI 按渠道落子目录），
+    渠道名就是「生图页」之后那一段。抽不出来（在别的目录里）就回 ""，前端
+    展示「未知渠道」，不猜。
+    """
+    parts = [p for p in str(rel or "").replace("\\", "/").split("/") if p]
+    for i, p in enumerate(parts):
+        if p == "生图页" and i + 1 < len(parts):
+            return parts[i + 1]
+    return ""
+
+
+@bp.route("/api/output/set_cover", methods=["POST"])
+def api_set_cover():
+    """把一张已出的图存成**它所属渠道**的封面。body: {rel}。
+
+    渠道名直接从 rel 路径里抽（出图路径固定是 `web/生图页/<渠道>/<图名>.png`），
+    用户不用选也不用填——在哪个渠道的图上点「存为封面」，就存成哪个渠道的
+    默认封面（同名覆盖）。rel 过 _safe_abs；来源图统一转成 PNG（cover_path()
+    约定 .png 后缀）。抽不出渠道（图不在生图页目录结构里）就拒，不猜。
+    """
+    body = request.get_json(silent=True) or {}
+    rel = str(body.get("rel") or "").strip()
+    if not rel:
+        return jsonify({"ok": False, "error": "没选图"}), 400
+    name = _channel_of_rel(rel)
+    if not name:
+        return (jsonify({"ok": False,
+                         "error": "这张图不在生图页渠道目录里，认不出渠道"}), 400)
+    src = _safe_abs(rel)
+    if not src or not os.path.isfile(src):
+        return jsonify({"ok": False, "error": "图不存在：%s" % rel}), 404
+
+    # 读图校验 + 转 PNG：不是图直接拒（防存进一个损坏文件当封面）；统一
+    # 转 PNG 后交给 runbench_api.save_cover 复制（它只复制、不转码）。
+    try:
+        from PIL import Image
+        im = Image.open(src)
+        im.load()
+        if im.mode not in ("RGB", "RGBA"):
+            im = im.convert("RGBA" if "A" in im.getbands() else "RGB")
+        tmp = os.path.join(runbench_api.covers_dir(), "_conv_%d.png" % os.getpid())
+        os.makedirs(runbench_api.covers_dir(), exist_ok=True)
+        im.save(tmp, "PNG")
+        im.close()
+        ok, serr = runbench_api.save_cover(name, tmp)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        if not ok:
+            return jsonify({"ok": False, "error": serr}), 500
+    except Exception as exc:                          # noqa: BLE001
+        log.warning("存封面失败 rel=%s channel=%s：%s", rel, name, exc)
+        return jsonify({"ok": False, "error": "这文件不像图片，换一张试试"}), 400
+
+    return jsonify({"ok": True, "name": name, "channel": name,
+                    "url": "/api/runbench/cover/%s" % name})

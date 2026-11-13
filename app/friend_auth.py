@@ -380,3 +380,52 @@ def parse_outfit_token(k):
     except Exception:
         return None
     return (target, target_id) if hmac.compare_digest(good, sig) else None
+
+
+# ─── 跑图台令牌（2026-11-13）─────────────────────────────
+#
+# 和换装令牌同一套机制，只换签名域前缀（runbench:），避免和换装/fr_sess 互相
+# 顶替。跑图台也是「QQ 斜杠命令 /跑图台 → 回带令牌的网页链接 → 点卡片用预设
+# 出图 → 结果推回原会话」，免登录、令牌即凭证。TTL 同换装 6 小时。
+
+RUNBENCH_TTL = 6 * 3600
+_RUNBENCH_SIGN_DOMAIN = "runbench:"
+
+
+def _runbench_sign(target, target_id, exp):
+    msg = "runbench:%s:%s:%d" % (target, target_id, exp)
+    return hmac.new(secret().encode("utf-8"), msg.encode("utf-8"),
+                    hashlib.sha256).hexdigest()[:32]
+
+
+def make_runbench_token(target, target_id, exp_hours=None):
+    """签一个跑图台令牌。target ∈ {'private','group'}，target_id 是 QQ 号/群号。"""
+    target = str(target or "").strip().lower()
+    target_id = str(target_id or "").strip()
+    if target not in ("private", "group") or not QQ_RE.match(target_id):
+        return ""
+    exp = int(_now() + (exp_hours * 3600 if exp_hours else RUNBENCH_TTL))
+    sig = _runbench_sign(target, target_id, exp)
+    return "%s.%s.%d.%s" % (target, target_id, exp, sig)
+
+
+def parse_runbench_token(k):
+    """验签 + 验过期。→ (target, target_id)；无效/过期一律 None。"""
+    parts = str(k or "").strip().split(".")
+    if len(parts) != 4:
+        return None
+    target, target_id, exp_s, sig = parts
+    target = target.lower()
+    if target not in ("private", "group") or not QQ_RE.match(target_id):
+        return None
+    try:
+        exp = int(exp_s)
+    except ValueError:
+        return None
+    if exp < _now():
+        return None
+    try:
+        good = _runbench_sign(target, target_id, exp)
+    except Exception:
+        return None
+    return (target, target_id) if hmac.compare_digest(good, sig) else None

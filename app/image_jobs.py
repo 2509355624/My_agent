@@ -2198,6 +2198,15 @@ def process(job):
 
     job.entry = entry
     job.skill_done = True
+    # 随心配出图完成：把成品图路径补记进「最近一次配方」，/存预设 拿它抓
+    # 刚出的图当预设封面（2026-11-13）。只记第一张，抽卡配方已由 save_last
+    # 落过，这里只补 image_rel，别覆盖配方字段。
+    if job.skill == "_anima_random":
+        try:
+            from app import anima_random
+            anima_random.save_last_image(names[0])
+        except Exception:
+            log.warning("补记随心配成品图路径失败", exc_info=True)
     # 静默出图（2026-10-16，扮演态配图）：worker **只负责把图跑出来**，投递交给
     # 调用方——`persona.draw` 拿到文件名后由 qq_bot 走 `_deliver` 发（发送格式、
     # 审核闸门、「开过口要重新计时」三件事都在那边）。

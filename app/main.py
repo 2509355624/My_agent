@@ -191,7 +191,8 @@ def _tunnel_guard():
         return None
     p = request.path or ""
     if (p.startswith("/api/friend/") or p.startswith("/api/gal/")
-            or p.startswith("/api/outfit/") or p == "/health"):
+            or p.startswith("/api/outfit/") or p.startswith("/api/runbench/")
+            or p == "/health"):
         return None
     return jsonify({"ok": False, "error": "not found"}), 404
 
@@ -210,6 +211,11 @@ app.register_blueprint(outfit_api.bp)
 # 小说模式（2026-11-11）：和一对一角色扮演相互隔离的第三套，独立世界书 /
 # 裁定链 / 页面。只挂 5174，站主自用。
 app.register_blueprint(novel_api.bp)
+
+# 跑图台（2026-11-13）：随心配预设面板，点卡片用预设 recipe 出图、结果推回 QQ。
+# 免登录（令牌即凭证），公网入口在 5175 的 /runbench + /api/runbench/* 反代。
+from app import runbench_web                      # noqa: E402
+app.register_blueprint(runbench_web.bp)
 
 @app.route("/")
 def index():

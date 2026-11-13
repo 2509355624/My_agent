@@ -230,6 +230,14 @@ _OUTFIT_RE = re.compile(r"^\s*[\/／]\s*换装")
 # 零 LLM 直回隧道地址；正文与门控解锁（/comic?from=qq）跟 /画廊 一字不差
 # 地同口径，正则三份要同步。
 _COMIC_STUDIO_RE = re.compile(r"^\s*[\/／]\s*漫画台")
+# 「/存预设」= 把最近一次随心配配方存成命名预设（2026-11-13）。斜杠即命令、
+# 不用 @。后面跟预设名：`/存预设 可爱画风`。
+_SAVE_PRESET_RE = re.compile(r"^\s*[\/／]\s*存预设\s*([^\s]+)")
+# 「/预设列表」= 列出所有已存的随心配预设名（2026-11-13）。斜杠即命令。
+_LIST_PRESET_RE = re.compile(r"^\s*[\/／]\s*预设列表")
+# 「/跑图台」= 随心配预设面板网页（2026-11-13）。斜杠即命令、不用 @、
+# 零 LLM 直回带令牌的链接（与 /换装 同口径：令牌含来源会话 + 过期，免登录）。
+_RUNBENCH_RE = re.compile(r"^\s*[\/／]\s*跑图台")
 # 生图意图粗判（画图动词）。「生成」后面 0~4 字内接「图」才算，避免
 # 「生成一下总结」误中。
 _INTENT_RE = re.compile(r"画|绘|来张|来一张|来幅|生成.{0,4}图|图.{0,2}一[张幅]")
@@ -1382,6 +1390,76 @@ def _outfit_text():
             "（链接 6 小时内有效，别转发给不认识的人）" % (url, k, where))
 
 
+def _save_preset_text(raw_name):
+    """`/存预设 名字`：把最近一次随心配配方存成命名预设（2026-11-13）。
+
+    配方来源 = `anima_random.load_last()`（最近一次随心配抽卡落盘的那份）。
+    没存过（还没玩过随心配 / 重启后还没抽）就照实说，不瞎编。
+    同名覆盖（用户拍板）。
+    存成功后，若最近那次抽卡已出图（`image_rel` 有值），顺手把那张成品图
+    复制成预设封面（2026-11-13 用户拍板：预设封面自动抓大大怪刚出的图，
+    不用图片管理页手动存）。
+    """
+    from app import anima_random, runbench_api
+    last = anima_random.load_last()
+    if not last:
+        return ("还没存到随心配配方——先玩一次「随心配」出图，"
+                "再发 /存预设 名字 就能把那次抽到的配方存下来。")
+    name, err = runbench_api.save(
+        raw_name, last.get("models"), last.get("loras"), seed=last.get("seed"))
+    if err:
+        return err
+    n_model = len(last.get("models") or [])
+    n_lora = len(last.get("loras") or [])
+    # 抓封面：只做「有图就复制」这个事实动作，图没有就留空，不编不猜。
+    cover_note = ""
+    image_rel = last.get("image_rel") or ""
+    if image_rel:
+        from app import comfy_out
+        src = comfy_out.local_output_file(image_rel)
+        if src and os.path.isfile(src):
+            ok_cov, _err = runbench_api.save_cover(name, src)
+            if ok_cov:
+                cover_note = "（封面已抓这张图）"
+    return ("已存预设「%s」（%d 底模 + %d LoRA）。%s\n"
+            "以后发「随心配 %s」就能按这套配方出图。"
+            % (name, n_model, n_lora, cover_note, name))
+
+
+def _list_preset_text():
+    """`/预设列表`：列出所有已存的随心配预设名（2026-11-13）。零 LLM。"""
+    from app import runbench_api
+    names = runbench_api.list_names()
+    if not names:
+        return ("还没有存过预设。玩「随心配」出图后，发 /存预设 名字 就能存下来。")
+    return "已存的随心配预设（%d 个）：\n%s" % (
+        len(names), "、".join(names))
+
+
+def _runbench_text():
+    """`/跑图台` 的正文。零 LLM：读隧道地址 + 签带来源的令牌拼 /runbench。
+
+    和 `/换装` 完全同款：令牌把「结果推回哪个会话」编进链接，免登录、不记
+    账号，分享给别人也能用，结果仍回原会话。6 小时过期。
+    """
+    from app import friend_auth, friend_site, qq_api
+    url = friend_site.url()
+    if not url:
+        return ("跑图台现在打不开——隧道没开，让群主双击"
+                "「启动群友隧道.bat」，起来之后再发 /跑图台。")
+    tgt, tid = qq_api.current_context()
+    if not tgt or not tid:
+        return "认不出你从哪发的，重新私聊我发一次 /跑图台。"
+    k = friend_auth.make_runbench_token(tgt, tid)
+    if not k:
+        return "这个会话没法发跑图台链接，私聊我发 /跑图台 试试。"
+    where = "这里" if tgt == "private" else "本群"
+    return ("跑图台：%s/runbench?k=%s\n"
+            "打开后点一张「随心配预设」卡片，填一句提示词，就用那套配方出图，"
+            "出好我直接发回%s。\n"
+            "（链接 6 小时内有效，别转发给不认识的人）" % (url, k, where))
+
+
 # ─── 提示词的「写法 + 语言」按渠道分家 ─────────────────────
 # 2026-10-05 用户点名要明确写进模板：「如果我给的是中文的需求，他要翻译成
 # 英文再跑图」——**这条必须明写**，不然模型看到中文输入很容易把中文原样抄进
@@ -2154,6 +2232,15 @@ def _enqueue(skill, prompt, text, source_image=False, seed=None,
         extra["resample_fn"] = resample_fn
     if character:
         extra["character"] = character
+    # 随心配预设复用（2026-11-13）：skill 已判成 `_anima_random`，原话里若
+    # 带了某个预设名（如「随心配 可爱画风」），就把预设名传给下游按配方出图，
+    # 不随机抽卡。只做「库里有没有这个名字」的事实匹配，不猜近似。
+    if skill == "_anima_random" and text:
+        from app import runbench_api
+        for _pn in runbench_api.list_names():
+            if _pn in text:
+                extra["anima_preset"] = _pn
+                break
     # 原话里带 `zdy-xxx` 令牌 → 交给下游套用那套 LoRA 槽位。
     # **在这里抽而不是让十几个调用点各传一遍**：漏掉一个的表现是「预设说了
     # 却没生效」，出图了、风格不对，最难查的那种。
@@ -2969,6 +3056,17 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     # 斜杠即命令、不过 addressed 闸、零 LLM 直回隧道地址。
     if _COMIC_STUDIO_RE.match(text):
         return _comic_studio_text()
+    # 「/存预设」= 存最近一次随心配配方（2026-11-13）。斜杠即命令、不用 @。
+    m = _SAVE_PRESET_RE.match(text)
+    if m:
+        return _save_preset_text(m.group(1))
+    # 「/预设列表」= 列出已存预设（2026-11-13）。斜杠即命令、不用 @。
+    if _LIST_PRESET_RE.match(text):
+        return _list_preset_text()
+    # 「/跑图台」= 随心配预设面板网页（2026-11-13）。斜杠即命令、不用 @、
+    # 零 LLM 直回带令牌的链接。
+    if _RUNBENCH_RE.match(text):
+        return _runbench_text()
     addressed = trigger.called(own_text, at_me)
     # 「预设网页」= 群友页地址（2026-10-30）。零 LLM，只读一个文件；
     # 放在这里而不是模板里——地址每次重启都变，模型记不住也不该记。

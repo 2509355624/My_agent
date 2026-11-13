@@ -69,6 +69,13 @@
   #toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
     margin-bottom: 14px; }
   #toolbar .info { font-size: 12px; color: var(--text-mute); }
+  .recursive-toggle { display: flex; align-items: center; gap: 5px;
+    font-size: 12px; color: var(--text-dim); cursor: pointer;
+    user-select: none; padding: 5px 10px; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); background: var(--bg-input); }
+  .recursive-toggle:hover { border-color: var(--accent); }
+  .recursive-toggle input { accent-color: var(--accent); cursor: pointer; margin: 0; }
+  .recursive-toggle.on { color: var(--accent); border-color: var(--accent-dim); }
 
   #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
     gap: 12px; }
@@ -82,6 +89,8 @@
   .cell .meta { padding: 6px 8px; font-size: 11px; color: var(--text-mute);
     line-height: 1.5; }
   .cell .meta .nm { color: var(--text-dim); word-break: break-all; }
+  .cell .meta .src { color: var(--accent-dim); font-size: 10px; word-break: break-all;
+    margin-top: 1px; }
   .cell .pick { position: absolute; top: 6px; left: 6px; width: 15px; height: 15px;
     accent-color: var(--error); cursor: pointer; display: none; }
   .cell:hover .pick, .cell.picked .pick { display: block; }
@@ -168,6 +177,10 @@
     <div id="crumb"></div>
     <div id="toolbar">
       <span class="info" id="dirInfo"></span>
+      <label class="recursive-toggle" id="recWrap" title="把当前目录下所有子目录的图片也一并铺出来">
+        <input type="checkbox" id="btnRecursive">
+        <span>包含子目录</span>
+      </label>
       <span class="spacer"></span>
       <button class="btn small danger" id="btnDelPicked" disabled>删除选中 (0)</button>
       <button class="btn small danger" id="btnDelDir" style="display:none">删除整个文件夹</button>
@@ -182,6 +195,7 @@
   <div class="bar">
     <span class="nm" id="lbName"></span>
     <span class="cnt" id="lbCnt">1 / 1</span>
+    <button class="nav" id="lbCover" title="把这张图存成它所属渠道的默认封面（跑图台卡片显示）">存为封面</button>
     <button class="nav danger" id="lbDel" title="移入回收站（可恢复）">删除</button>
     <button class="nav" id="lbClose">关闭 (Esc)</button>
   </div>
@@ -220,6 +234,7 @@ var curRel = "";               // 当前目录（"" = output 根）
 var picked = new Set();        // 勾选的图片 rel
 var lbList = [], lbIdx = 0;    // 灯箱当前目录的图片列表 + 下标
 var _mainSeq = 0;              // renderMain 的请求令牌，防并发重复渲染
+var recursive = false;         // 「包含子目录」开关：true 时 renderMain 拉整棵子树
 
 var $ = function (id) { return document.getElementById(id); };
 var imgUrl = function (rel) {
@@ -254,13 +269,18 @@ function toast(msg, ok) {
 // ══════════════════════════════════════════════════════
 //  数据
 // ══════════════════════════════════════════════════════
-function loadTree(rel) {
-  if (treeCache[rel]) return Promise.resolve(treeCache[rel]);
-  return fetch("/api/output/tree?path=" + encodeURIComponent(rel))
+function loadTree(rel, opts) {
+  opts = opts || {};
+  // 递归模式用独立缓存 key（`#rec` 前缀），跟普通结果互不串味
+  var cacheKey = opts.recursive ? ("#rec:" + rel) : rel;
+  if (treeCache[cacheKey]) return Promise.resolve(treeCache[cacheKey]);
+  var q = "path=" + encodeURIComponent(rel);
+  if (opts.recursive) q += "&recursive=1";
+  return fetch("/api/output/tree?" + q)
     .then(function (r) { return r.json(); })
     .then(function (d) {
       if (!d.ok) throw new Error(d.error || "读取失败");
-      treeCache[rel] = d;
+      treeCache[cacheKey] = d;
       return d;
     });
 }
@@ -486,7 +506,7 @@ function renderMain() {
   $("dirInfo").textContent = curRel ? curRel : "output 根目录";
   $("btnDelDir").style.display = curRel ? "" : "none";
   // 返回 promise：删除后要等新一屏渲染完再决定灯箱停在哪一张
-  return loadTree(curRel).then(function (d) {
+  return loadTree(curRel, { recursive: recursive }).then(function (d) {
     if (seq !== _mainSeq) return;
     lbList = d.files;
     if (!d.files.length) {
@@ -496,7 +516,8 @@ function renderMain() {
       return;
     }
     empty.style.display = "none";
-    $("dirInfo").textContent += " · " + d.files.length + " 张图";
+    $("dirInfo").textContent += " · " + d.files.length + " 张图" +
+      (recursive ? "（含子目录）" : "");
     d.files.forEach(function (f, i) {
       var cell = document.createElement("div");
       cell.className = "cell";
@@ -525,8 +546,17 @@ function renderMain() {
       d1.onclick = function () { askDelete([f.rel], "1 张图片"); };
       var meta = document.createElement("div");
       meta.className = "meta";
+      // 递归模式下文件名可能撞车（不同私聊里都叫 QwenImage_00001_），
+      // 附上相对来源目录（相对 curRel 的那段），不然分不清是谁的图。
+      var srcHint = "";
+      if (recursive && f.rel && curRel) {
+        var rest = f.rel.slice(curRel.length).replace(/^\/+/, "");
+        var slash = rest.lastIndexOf("/");
+        if (slash >= 0) srcHint = '<div class="src">' +
+          rest.slice(0, slash).replace(/</g, "&lt;") + "</div>";
+      }
       meta.innerHTML = '<div class="nm">' + f.name + "</div>" +
-        human(f.bytes) + " · " + shortTime(f.mtime);
+        srcHint + human(f.bytes) + " · " + shortTime(f.mtime);
       cell.appendChild(cb); cell.appendChild(d1); cell.appendChild(img); cell.appendChild(meta);
       if (picked.has(f.rel)) cell.classList.add("picked");
       grid.appendChild(cell);
@@ -635,6 +665,11 @@ $("btnRefresh").onclick = function () {
   expanded = {};
   renderTree().then(function () { selectDir(curRel); });
 };
+$("btnRecursive").onchange = function () {
+  recursive = $("btnRecursive").checked;
+  $("recWrap").classList.toggle("on", recursive);
+  renderMain();
+};
 $("btnDelPicked").onclick = function () {
   askDelete(Array.from(picked), picked.size + " 张图片");
 };
@@ -647,6 +682,39 @@ $("btnDelDir").onclick = function () {
 $("dlgYes").onclick = doDelete;
 $("dlgNo").onclick = function () { $("mask").classList.remove("on"); pendingDel = null; };
 $("mask").onclick = function (ev) { if (ev.target === $("mask")) $("dlgNo").onclick(); };
+
+// ══════════════════════════════════════════════════════
+//  存为封面（2026-11-13）：灯箱里看中一张图 → 一键存成该渠道的封面。
+//  渠道名从图的路径里自动带出（web/生图页/<渠道>/...），不用选不用填。
+// ══════════════════════════════════════════════════════
+function channelOfRel(rel) {
+  // 从图片 rel 里抽渠道名（web/生图页/<渠道>/... 的第三段）
+  var parts = (rel || "").split("/").filter(Boolean);
+  for (var i = 0; i < parts.length; i++) {
+    if (parts[i] === "生图页" && i + 1 < parts.length) return parts[i + 1];
+  }
+  return "";
+}
+$("lbCover").onclick = function () {
+  var f = lbList[lbIdx];
+  if (!f) return;
+  var ch = channelOfRel(f.rel);
+  if (!ch) { toast("这张图不在生图页渠道目录里，认不出渠道", false); return; }
+  fetch("/api/output/set_cover", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rel: f.rel })
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      if (j.ok) toast("已存成渠道「" + j.channel + "」的封面", true);
+      else toast(j.error || "存封面失败", false);
+    })
+    .catch(function (e) {
+      toast("存封面请求失败：" + e.message, false);
+    });
+};
+
 $("lbDel").onclick = function () {
   var f = lbList[lbIdx];
   if (f) askDelete([f.rel], "1 张图片");

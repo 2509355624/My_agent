@@ -1012,6 +1012,22 @@ QQ_CHAT_SPLIT_TRIGGER = int(os.getenv("QQ_CHAT_SPLIT_TRIGGER", "25"))
 QQ_CHAT_SPLIT_CHARS = int(os.getenv("QQ_CHAT_SPLIT_CHARS", "18"))
 QQ_CHAT_SPLIT_MAX_PARTS = int(os.getenv("QQ_CHAT_SPLIT_MAX_PARTS", "3"))
 
+# 任务回执尾巴带不带「跑图台 / 角色扮演 / 画廊」的入口链接（2026-11-13 用户要求）。
+#
+# 用户原话：「可以做到每次任务回执给跑图台的最新链接吗？……反正回执是给到消息
+# 卡片的，这样大家其实能够直接从回执去进到跑图台的链接」「角色扮演的链接也给吧，
+# 画廊也给」。回执本来就是合并转发的卡片，收起来一行，链接藏在里面不占版面。
+#
+# **必须在回执构造时现读 `friend_site.url()`，绝不能写进 `receipt_note`**：
+# Quick Tunnel 每次重启都换域名，写死在设置文本里的地址第二天就是 1033。
+# 这条开关只用来一键关掉（隧道没开时也会自动不出链接，见 `_receipt_links`）。
+QQ_RECEIPT_LINKS = os.getenv("QQ_RECEIPT_LINKS", "1") not in ("0", "false", "False")
+
+# 回执里跑图台令牌的有效期（小时）。`/跑图台` 指令给的是 6 小时（对齐一次
+# 闲聊的时长）；回执是留在聊天记录里给人回头点的，给一天，但不能更长——
+# 隧道重启后旧域名本来就打不开了，令牌活再久也没有意义。
+QQ_RECEIPT_LINK_TTL_HOURS = int(os.getenv("QQ_RECEIPT_LINK_TTL_HOURS", "24"))
+
 # 群聊背景：被 @ 时顺带把群里最近这几条消息送去，让它知道刚才在聊什么。
 # 原先收到群消息、不 @ 就整个丢掉，模型每轮只看得到「有人问了它一句」，
 # 所以只能一问一答、像个问答助手。0 表示不带（退回旧行为）。

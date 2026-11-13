@@ -79,6 +79,58 @@ class TreeOrderTest(unittest.TestCase):
         self.assertEqual([x["name"] for x in d["dirs"]], ["私聊_1", "私聊_2", "私聊_10"])
 
 
+class RecursiveTreeTest(unittest.TestCase):
+    """recursive=1：files 返回整棵子树的图片（混排），dirs 仍只报本层。
+
+    这是「图片管理台点开某目录铺出全部子目录的图」的后端支持（2026-11-13）。
+    零网络，临时目录里搭一层套娃，验证递归收图 + 排序。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="outapi_rec_")
+        self.old = output_api.COMFYUI_OUTPUT_DIR
+        output_api.COMFYUI_OUTPUT_DIR = self.tmp
+        self.addCleanup(self._restore)
+
+        # qq/ 下两个私聊目录，各放几张图，模拟「群聊/私聊一层嵌套」
+        for rel in ["qq/私聊_1/a.png", "qq/私聊_1/b.png", "qq/私聊_2/c.png",
+                    "top.png"]:
+            p = os.path.join(self.tmp, *rel.split("/"))
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "wb") as f:
+                f.write(b"x")
+
+        app = Flask(__name__)
+        app.register_blueprint(output_api.bp)
+        self.client = app.test_client()
+
+    def _restore(self):
+        output_api.COMFYUI_OUTPUT_DIR = self.old
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_non_recursive_only_lists_immediate_files(self):
+        d = self.client.get("/api/output/tree?path=qq").get_json()
+        self.assertTrue(d["ok"])
+        # qq 本层没有直接图片，只有两个子目录
+        self.assertEqual(d["files"], [])
+        self.assertEqual([x["name"] for x in d["dirs"]], ["私聊_1", "私聊_2"])
+
+    def test_recursive_collects_all_subdir_images(self):
+        d = self.client.get("/api/output/tree?path=qq&recursive=1").get_json()
+        self.assertTrue(d["ok"])
+        names = sorted(f["name"] for f in d["files"])
+        self.assertEqual(names, ["a.png", "b.png", "c.png"])
+        # rel 是相对 output 根的完整路径，保证前端能定位回原图
+        rels = sorted(f["rel"] for f in d["files"])
+        self.assertEqual(rels, ["qq/私聊_1/a.png", "qq/私聊_1/b.png", "qq/私聊_2/c.png"])
+
+    def test_recursive_root_collects_everything(self):
+        d = self.client.get("/api/output/tree?path=&recursive=1").get_json()
+        self.assertTrue(d["ok"])
+        names = sorted(f["name"] for f in d["files"])
+        self.assertEqual(names, ["a.png", "b.png", "c.png", "top.png"])
+
+
 class TrashTest(unittest.TestCase):
     """删除 = 移入回收站（2026-10-30 用户要求）。
 

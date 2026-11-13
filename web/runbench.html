@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>跑图台</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='4' y='4' width='24' height='24' rx='6' fill='%23ff6ba9'/><circle cx='16' cy='13' r='5' fill='%23fff'/><path d='M6 26c2-5 5-7 10-7s8 2 10 7z' fill='%23fff'/></svg>">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  :root {
+    --bg:#0a0a0f; --elev:#12121a; --input:#1a1a24; --border:#2a2a3a;
+    --text:#e8e8f0; --dim:#8888a0; --mute:#555570;
+    --accent:#ff6ba9; --accent2:#7c5cff; --success:#4ade80; --error:#f87171;
+    --r:14px;
+  }
+  html,body{min-height:100%;background:var(--bg);color:var(--text);
+    font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+    font-size:15px;line-height:1.6;-webkit-tap-highlight-color:transparent;}
+  .wrap{max-width:960px;margin:0 auto;padding:20px 16px calc(44px + env(safe-area-inset-bottom));}
+  header{display:flex;align-items:center;gap:12px;margin-bottom:4px;}
+  header h1{font-size:22px;font-weight:700;letter-spacing:.5px;}
+  header .tag{font-size:11px;color:var(--accent);border:1px solid var(--accent);
+    border-radius:20px;padding:2px 9px;opacity:.9;}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:18px;}
+
+  /* Tab 切换 */
+  .tabs{display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--border);}
+  .tab{flex:1;padding:12px 8px;border:0;background:none;color:var(--dim);
+    font-size:15px;font-weight:600;cursor:pointer;border-bottom:2px solid transparent;
+    transition:.15s;white-space:nowrap;}
+  .tab.on{color:var(--text);border-bottom-color:var(--accent);}
+  .tab .cnt{font-size:11px;color:var(--mute);margin-left:4px;font-weight:400;}
+
+  /* 卡片网格 */
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
+    gap:14px;}
+  @media(max-width:380px){.grid{grid-template-columns:repeat(2,1fr);gap:10px;}}
+  .card{background:var(--elev);border:1px solid var(--border);border-radius:var(--r);
+    overflow:hidden;cursor:pointer;transition:.15s;display:flex;flex-direction:column;}
+  .card:hover{border-color:var(--accent);transform:translateY(-2px);}
+  .card .thumb{position:relative;width:100%;aspect-ratio:3/4;background:var(--input);
+    overflow:hidden;display:flex;align-items:center;justify-content:center;}
+  .card .thumb img{width:100%;height:100%;object-fit:cover;}
+  .card .thumb .ph{color:var(--mute);font-size:12px;text-align:center;padding:10px;
+    line-height:1.4;}
+  .card .thumb .ph b{display:block;color:var(--dim);font-size:15px;margin-bottom:4px;}
+  .card .cloud{position:absolute;top:8px;left:8px;background:#0008;color:#7cc7ff;
+    font-size:10px;padding:2px 7px;border-radius:20px;}
+  .card .meta{padding:10px 11px 12px;display:flex;flex-direction:column;gap:3px;}
+  .card .name{font-size:14px;font-weight:700;letter-spacing:.3px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .card .desc{font-size:11.5px;color:var(--dim);line-height:1.5;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+  /* 出图按钮：卡片本体不点弹窗（避免上下滑动误触），要出图点这个按钮 */
+  .card .go{margin:0 11px 12px;padding:9px 0;border:0;border-radius:9px;
+    background:linear-gradient(135deg,var(--accent),var(--accent2));
+    color:#fff;font-size:13.5px;font-weight:700;cursor:pointer;letter-spacing:1px;}
+  .card .go:active{opacity:.85;}
+
+  .empty{padding:50px 20px;text-align:center;color:var(--mute);font-size:14px;line-height:1.8;}
+  .empty b{color:var(--dim);}
+
+  /* 弹框 */
+  .mask{position:fixed;inset:0;background:#000c;display:none;align-items:center;
+    justify-content:center;z-index:200;padding:20px;}
+  .mask.on{display:flex;}
+  .dlg{background:var(--elev);border:1px solid var(--border);border-radius:var(--r);
+    padding:20px;width:100%;max-width:480px;max-height:86vh;overflow:auto;}
+  .dlg .dtitle{font-size:16px;font-weight:700;margin-bottom:4px;}
+  .dlg .dsub{font-size:12.5px;color:var(--dim);margin-bottom:14px;line-height:1.6;}
+  .dlg textarea{width:100%;min-height:110px;resize:vertical;background:var(--input);
+    border:1px solid var(--border);border-radius:11px;color:var(--text);
+    padding:12px;font-size:15px;font-family:inherit;line-height:1.6;outline:none;}
+  .dlg textarea:focus{border-color:var(--accent);}
+  /* 提示词框上方的小工具条（右侧粘贴按钮） */
+  .pbar{display:flex;justify-content:flex-end;margin:2px 0 6px;}
+  .pbar button{background:var(--input);border:1px solid var(--border);color:var(--dim);
+    border-radius:8px;padding:5px 13px;font-size:12.5px;cursor:pointer;
+    font-family:inherit;transition:.15s;}
+  .pbar button:hover{border-color:var(--accent);color:var(--text);}
+  .pbar button:active{opacity:.8;}
+  .dlg .acts{display:flex;gap:10px;margin-top:14px;}
+  .btn{flex:1;padding:13px;border:0;border-radius:12px;font-size:15px;font-weight:700;
+    color:#fff;cursor:pointer;background:linear-gradient(135deg,var(--accent),var(--accent2));
+    transition:.15s;}
+  .btn:disabled{opacity:.45;cursor:not-allowed;}
+  .btn.ghost{background:var(--input);border:1px solid var(--border);color:var(--dim);
+    font-weight:500;}
+
+  /* ── 上传图片区 ── */
+  .up{display:flex;align-items:center;gap:12px;margin-bottom:12px;
+    padding:11px;border:1px dashed var(--border);border-radius:11px;cursor:pointer;
+    transition:.15s;}
+  .up:hover{border-color:var(--accent);}
+  .up .box{width:58px;height:58px;border-radius:9px;background:var(--input);
+    display:flex;align-items:center;justify-content:center;overflow:hidden;
+    flex:0 0 auto;font-size:24px;color:var(--mute);}
+  .up .box img{width:100%;height:100%;object-fit:cover;}
+  .up .txt{font-size:13px;color:var(--dim);line-height:1.6;}
+  .up .txt b{color:var(--text);}
+  .up .rm{display:none;margin-left:auto;flex:0 0 auto;background:var(--input);
+    border:1px solid var(--border);color:var(--dim);border-radius:7px;
+    padding:4px 10px;font-size:12px;cursor:pointer;}
+  .up .rm.on{display:inline-block;}
+
+  /* ── 弹窗内绿色成功提示条 ── */
+  .ok-bar{display:none;margin-top:14px;padding:12px 14px;border-radius:11px;
+    border:1px solid var(--success);background:rgba(74,222,128,.1);
+    color:var(--text);font-size:14px;line-height:1.6;}
+  .ok-bar.show{display:block;}
+  .ok-bar b{color:var(--success);}
+  .ok-bar .err{color:var(--error);}
+
+  .status{margin-top:14px;text-align:center;color:var(--dim);font-size:14px;min-height:22px;}
+  .status.err{color:var(--error);} .status.ok{color:var(--success);}
+  .hidden{display:none!important;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>跑图台</h1>
+    <span class="tag">点卡片出图</span>
+  </header>
+  <p class="sub">点一张卡片，填一句需求，出好图自动发回你刚才发命令的 QQ。</p>
+
+  <div class="tabs">
+    <button class="tab on" data-tab="channel">官方渠道 <span class="cnt" id="cntChannel"></span></button>
+    <button class="tab" data-tab="preset">我的预设 <span class="cnt" id="cntPreset"></span></button>
+  </div>
+
+  <div class="grid" id="channelGrid"></div>
+  <div class="grid hidden" id="presetGrid"></div>
+
+  <div class="status" id="status"></div>
+</div>
+
+<!-- 出图弹框 -->
+<div class="mask" id="mask">
+  <div class="dlg">
+    <div class="dtitle" id="dTitle"></div>
+    <div class="dsub" id="dSub"></div>
+    <div class="up" id="upBox" title="上传一张图，反推出提示词再画">
+      <div class="box" id="upPreview">＋</div>
+      <div class="txt" id="upTxt"><b>上传一张图（可选）</b><br>上传后会自动反推这张图的提示词，再按你的需求出图</div>
+      <button class="rm" id="upRm">移除</button>
+    </div>
+    <div class="pbar"><button type="button" id="btnPaste">粘贴</button></div>
+    <textarea id="dPrompt" placeholder="写一句你想画的内容…"></textarea>
+    <div class="ok-bar" id="okBar"></div>
+    <div class="acts">
+      <button class="btn ghost" id="dCancel">取消</button>
+      <button class="btn" id="dGo">出图</button>
+    </div>
+  </div>
+</div>
+<input type="file" id="upFile" accept="image/*" style="display:none">
+
+<script>
+(function(){
+  "use strict";
+  var K = new URLSearchParams(location.search).get("k") || "";
+  var curTab = "channel";
+  var curPick = null;    // {kind, name, label}
+  var curImage = "";     // 上传图的 data URL（缩略图，已压缩）
+  var busy = false;
+
+  var $ = function(id){ return document.getElementById(id); };
+  var st = $("status");
+  function say(msg, cls){ st.className = "status " + (cls||""); st.innerHTML = msg; }
+
+  function asJson(r, fallback){
+    if(r.ok) return r.json();
+    return r.text().then(function(t){
+      var msg = fallback || "没成功，请重试";
+      try{ var j = JSON.parse(t); if(j && j.error) msg = j.error; }catch(_){}
+      throw new Error(msg);
+    });
+  }
+
+  // ── 渲染卡片 ──────────────────────────────
+  function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]; }); }
+
+  function coverHtml(url, has, name, sub){
+    if(has) return '<img loading="lazy" src="'+esc(url)+'" alt="'+esc(name)+'" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\';">'
+      + '<div class="ph" style="display:none"><b>'+esc(name)+'</b>'+esc(sub)+'</div>';
+    return '<div class="ph"><b>'+esc(name)+'</b>'+esc(sub)+'</div>';
+  }
+
+  function renderChannels(list){
+    var g = $("channelGrid"); g.innerHTML = "";
+    if(!list || !list.length){
+      g.innerHTML = '<div class="empty">还没有可用的生图渠道。<br><b>检查 ComfyUI 是否在线。</b></div>';
+      return;
+    }
+    list.forEach(function(c){
+      var el = document.createElement("div");
+      el.className = "card";
+      el.innerHTML =
+        '<div class="thumb">' + (c.cloud ? '<span class="cloud">云端</span>' : '') +
+          coverHtml(c.cover, c.has_cover, c.label, "还没设封面") +
+        '</div>' +
+        '<div class="meta"><div class="name">'+esc(c.label)+'</div>' +
+        (c.summary ? '<div class="desc">'+esc(c.summary)+'</div>' : '') +
+        '</div>' +
+        '<button class="go">出图</button>';
+      // 只有点「出图」按钮才弹窗；卡片本体可点击查看、也可只滑动不误触
+      el.querySelector(".go").addEventListener("click", function(ev){
+        ev.stopPropagation();
+        openDlg("channel", c.id, c.label, c.summary);
+      });
+      g.appendChild(el);
+    });
+  }
+
+  function renderPresets(list){
+    var g = $("presetGrid"); g.innerHTML = "";
+    if(!list || !list.length){
+      g.innerHTML = '<div class="empty">还没有存过预设。<br><b>在 QQ 里玩「随心配」出图后，发 /存预设 名字 就能存。</b></div>';
+      return;
+    }
+    list.forEach(function(p){
+      var el = document.createElement("div");
+      el.className = "card";
+      var sub = p.n_model + " 底模 · " + p.n_lora + " LoRA" + (p.seed!=null ? " · seed "+p.seed : "");
+      el.innerHTML =
+        '<div class="thumb">' + coverHtml(p.cover, p.has_cover, p.name, "还没封面") + '</div>' +
+        '<div class="meta"><div class="name">'+esc(p.name)+'</div>' +
+        '<div class="desc">'+esc(sub)+'</div></div>' +
+        '<button class="go">出图</button>';
+      el.querySelector(".go").addEventListener("click", function(ev){
+        ev.stopPropagation();
+        openDlg("preset", p.name, p.name, sub);
+      });
+      g.appendChild(el);
+    });
+  }
+
+  // ── Tab 切换 ──────────────────────────────
+  document.querySelectorAll(".tab").forEach(function(b){
+    b.addEventListener("click", function(){
+      document.querySelectorAll(".tab").forEach(function(x){ x.classList.remove("on"); });
+      b.classList.add("on");
+      curTab = b.getAttribute("data-tab");
+      $("channelGrid").classList.toggle("hidden", curTab !== "channel");
+      $("presetGrid").classList.toggle("hidden", curTab !== "preset");
+    });
+  });
+
+  // ── 弹框 ──────────────────────────────
+  function openDlg(kind, name, label, sub){
+    curPick = {kind:kind, name:name, label:label};
+    $("dTitle").textContent = label;
+    $("dSub").textContent = (kind === "channel"
+      ? (sub ? sub + " · " : "") + "写一句中文需求，或传一张图反推提示词，出图自动发回你的 QQ。"
+      : (sub ? sub + " · " : "") + "写一句提示词，按这套配方出图。");
+    $("dPrompt").value = "";
+    resetUp();
+    hideOkBar();
+    $("mask").classList.add("on");
+    $("dPrompt").focus();
+  }
+  function closeDlg(){
+    $("mask").classList.remove("on");
+    curPick = null; curImage = "";
+  }
+  $("dCancel").addEventListener("click", closeDlg);
+  $("mask").addEventListener("click", function(e){ if(e.target === $("mask")) closeDlg(); });
+  document.addEventListener("keydown", function(e){
+    if(e.key === "Escape" && $("mask").classList.contains("on")) closeDlg();
+  });
+
+  // ── 上传图（压缩成缩略图，绝不上传原图） ──
+  var UP_LONG = 960;   // 长边压到 960px，原图不出本机
+  function resetUp(){
+    curImage = "";
+    $("upPreview").innerHTML = "＋";
+    $("upTxt").innerHTML = "<b>上传一张图（可选）</b><br>上传后会自动反推这张图的提示词，再按你的需求出图";
+    $("upRm").classList.remove("on");
+  }
+  function readAndCompress(file){
+    // 读文件 → Canvas 等比压到长边 960px → data URL(JPEG)。原图字节根本不上传。
+    var img = new Image();
+    var url = URL.createObjectURL(file);
+    img.onload = function(){
+      var w = img.naturalWidth, h = img.naturalHeight;
+      var scale = Math.min(1, UP_LONG / Math.max(w, h));
+      var nw = Math.max(1, Math.round(w * scale));
+      var nh = Math.max(1, Math.round(h * scale));
+      var cv = document.createElement("canvas");
+      cv.width = nw; cv.height = nh;
+      cv.getContext("2d").drawImage(img, 0, 0, nw, nh);
+      URL.revokeObjectURL(url);
+      curImage = cv.toDataURL("image/jpeg", 0.85);
+      $("upPreview").innerHTML = '<img src="'+curImage+'" alt="预览">';
+      $("upTxt").innerHTML = "<b>已选图（缩略图 " + nw + "×" + nh + "）</b><br>会自动反推这张图的提示词";
+      $("upRm").classList.add("on");
+    };
+    img.onerror = function(){ URL.revokeObjectURL(url); showOkBar("这张图读不出来，换一张", false); };
+    img.src = url;
+  }
+  $("upBox").addEventListener("click", function(){ $("upFile").click(); });
+  $("upFile").addEventListener("change", function(){
+    var f = this.files && this.files[0];
+    if(f) readAndCompress(f);
+    this.value = "";
+  });
+  $("upRm").addEventListener("click", function(ev){ ev.stopPropagation(); resetUp(); });
+
+  function showOkBar(html, ok){
+    var b = $("okBar");
+    b.className = "ok-bar show" + (ok ? "" : " err");
+    b.innerHTML = html;
+  }
+  function hideOkBar(){ $("okBar").className = "ok-bar"; $("okBar").innerHTML = ""; }
+
+  // ── 粘贴按钮（手机上长按选「粘贴」太费劲，点一下直接填） ──
+  function fillPrompt(t){
+    var ta = $("dPrompt");
+    t = (t || "").replace(/^\s+|\s+$/g, "");
+    if(!t){ showOkBar("剪贴板里没有文字，先复制一段提示词再来", false); return; }
+    var cur = ta.value.replace(/^\s+|\s+$/g, "");
+    ta.value = cur ? cur + " " + t : t;     // 框里已有内容就接在后面，不覆盖你写好的
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    hideOkBar();
+  }
+  $("btnPaste").addEventListener("click", function(){
+    if(navigator.clipboard && navigator.clipboard.readText){
+      navigator.clipboard.readText().then(fillPrompt).catch(function(){
+        $("dPrompt").focus();
+        showOkBar("浏览器没给剪贴板权限，长按输入框选「粘贴」就行", false);
+      });
+    } else {
+      $("dPrompt").focus();
+      showOkBar("这个浏览器不支持一键粘贴，长按输入框选「粘贴」就行", false);
+    }
+  });
+
+  // ── 出图 ──────────────────────────────
+  $("dGo").addEventListener("click", function(){
+    if(busy || !curPick) return;
+    var prompt = $("dPrompt").value.trim();
+    if(!prompt && !curImage){ showOkBar("先写一句想画的内容，或传一张图", false); return; }
+    busy = true; $("dGo").disabled = true;
+    hideOkBar();
+    fetch("/api/runbench/gen", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({k:K, kind:curPick.kind, name:curPick.name,
+                           prompt:prompt, image:curImage})
+    })
+      .then(function(r){ return asJson(r, "提交没成功，请再点一次"); })
+      .then(function(j){
+        if(!j.ok) throw new Error(j.error || "提交失败");
+        // 弹窗内绿色提示条：已成功提交，等一下自动发到 QQ
+        showOkBar("<b>✅ 已成功提交</b> 等一下就会自动发到你的 QQ（私聊收原图、群里直接出图）。可以关掉这个弹窗，不用守着。", true);
+        $("dGo").disabled = false; busy = false;
+      })
+      .catch(function(e){
+        showOkBar("<b>出图失败：</b>" + e.message, false);
+        busy=false; $("dGo").disabled=false;
+      });
+  });
+
+  // ── 初始化 ──────────────────────────────
+  fetch("/api/runbench/check?k=" + encodeURIComponent(K))
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if(!j.ok){ say(j.error || "链接无效，回 QQ 再发一次 /跑图台", "err"); return; }
+      renderChannels(j.channels);
+      renderPresets(j.presets);
+      $("cntChannel").textContent = (j.channels||[]).length;
+      $("cntPreset").textContent = (j.presets||[]).length;
+      say("");
+    })
+    .catch(function(){ say("连不上服务器，检查网络后刷新", "err"); });
+})();
+</script>
+</body>
+</html>

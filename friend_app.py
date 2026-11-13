@@ -195,8 +195,11 @@ def _gate():
     # /play 里手改地址栏到 /gallery（不带参数）仍然挡回，独立页的孤立性不变。
     # 2026-11-11 把 /comic 一并收进来：QQ 新增「/漫画台」指令，同一个坑别再踩。
     # 2026-11-12 /novel 同理：小说页上架后若加 QQ 直达链接，别让 fr_solo 挡回游客页。
+    # 2026-11-13 /persona 同理：任务回执尾巴现在带「角色扮演」入口，被 fr_solo
+    # 挡回 /play 就会变成「点了没反应」。
     if (p in ("/gallery", "/gallery.html", "/comic", "/comic.html",
-              "/novel", "/novel.html")
+              "/novel", "/novel.html", "/runbench", "/runbench.html",
+              "/persona", "/persona.html")
             and request.args.get("from") == "qq" and _solo_in()):
         g.clear_solo = True
         return None
@@ -210,7 +213,8 @@ def _gate():
             # 不算 _logged_in，会被自己这条页面锁挡回 /play，登录这条路是死的。
             and p not in (SOLO_PATH, SOLO_PATH + ".html", "/health", "/logout",
                           "/login/send", "/login/verify",
-                          "/char_intros.json", "/outfit", "/outfit.html")):
+                          "/char_intros.json", "/outfit", "/outfit.html",
+                          "/runbench", "/runbench.html")):
         return redirect(SOLO_PATH)
     return None
 
@@ -525,6 +529,7 @@ def _forward(prefix, sub, allow_guest=False, force_guest=False,
                  and ((request.path or "").startswith("/api/gal/img/")
                       or (request.path or "").startswith("/api/moss/img")
                       or (request.path or "").startswith("/api/comic/img")
+                      or (request.path or "").startswith("/api/runbench/cover/")
                       or (request.path or "").startswith("/api/image/web/")
                       or (request.path or "").startswith(
                           "/api/image/角色扮演生图/")))
@@ -578,9 +583,11 @@ def _forward(prefix, sub, allow_guest=False, force_guest=False,
         resp = Response(stream_with_context(_pump()), status=r.status_code,
                         content_type=ctype)
         # 这几个头必须照抄：少了 Content-Length 浏览器不知道进度，
-        # 少了 Content-Range 断点续传直接坏。
+        # 少了 Content-Range 断点续传直接坏。Cache-Control 也要透传，否则
+        # 5174 给封面图下的 immutable 长期缓存到 5175 就丢了（2026-11-13
+        # 跑图台封面缩略图需要它让浏览器刷新不重拉）。
         for h in ("Content-Length", "Content-Range", "Accept-Ranges",
-                  "ETag", "Last-Modified"):
+                  "ETag", "Last-Modified", "Cache-Control"):
             if r.headers.get(h):
                 resp.headers[h] = r.headers[h]
         return resp
@@ -875,6 +882,26 @@ def outfit_page():
 def proxy_outfit(sub):
     """换装接口反代。allow_guest=True：令牌即凭证，不注入 qq。"""
     return _forward("/api/outfit", sub, allow_guest=True)
+
+
+# ── 跑图台页（2026-11-13）────────────────────────────────
+#
+# 「/跑图台」QQ 命令回的链接指向这里。和 /outfit 同款**免登录令牌制**：令牌
+# 本身就是凭证（含来源 + 过期 + HMAC 签名，签名域 runbench:），网页提交时带
+# 上，5174 解出「结果推回哪个会话」出图。页面路由直接发 HTML，接口反代走
+# allow_guest=True（不注入 qq、不带登录 cookie 也放行）——跑图台不需要账号
+# 体系，分享给别人也能用，滥用由令牌时效 + 接口限流兜。
+
+@app.route("/runbench")
+@app.route("/runbench.html")
+def runbench_page():
+    return send_from_directory(WEB_DIR, "runbench.html")
+
+
+@app.route("/api/runbench/<path:sub>", methods=["GET", "POST", "DELETE"])
+def proxy_runbench(sub):
+    """跑图台接口反代。allow_guest=True：令牌即凭证，不注入 qq。"""
+    return _forward("/api/runbench", sub, allow_guest=True)
 
 
 @app.route("/play")
