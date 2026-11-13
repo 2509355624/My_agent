@@ -123,6 +123,10 @@ _HD_TIERS = ("3",)
 _HD_STYLES = ("clear", "curvy", "gloss", "soft")
 _FIXED_SKILLS = ("image_gen_v1", "image_gen_v1_hires", "nffa",
                  "cunny", "miao", "qwen_image_v1", *image_jobs.NAI_SKILLS)
+# 内部渠道（2026-11-13）：目录名 `_` 开头、不对外点名，但能被代码点中
+# （`_parse_channel` 认「随心配」→ `_anima_random`）。`list_skills()` 会跳过它们，
+# 所以 `_allowed_skills()` 里要单独按磁盘实况放行，否则点名后被静默降级成默认档。
+_INTERNAL_CHANNELS = ("_anima_random",)
 # 默认单图渠道（与 generate_image.py 里那个 T2I 默认常量同一个值）：**既是**
 # 「用户没点名渠道」时的默认出图方式（判据在 `_translate` 末尾），**也是**单张
 # 那几条路的落点——改图（`_revise` 判不出渠道）、随机口令、`/直通`、还有
@@ -169,6 +173,19 @@ def _allowed_skills():
         allowed &= present | set(image_jobs.NAI_SKILLS)
     except Exception:
         log.exception("list_skills 失败，渠道校验跳过目录核对")
+    # 内部渠道（2026-11-13）：目录名 `_` 开头 → `list_skills()` 故意跳过（不对外
+    # 点名、不进管理页/计数），但它们**能被代码点中**（`_parse_channel` 认
+    # 「随心配」→ `_anima_random`）。若不加回白名单，`_translate` 末尾的
+    # `out_skill in _allowed_skills()` 校验过不了，会把它当「不存在的渠道」静默
+    # 降到默认 silver（2026-11-13 实测：anima随心配 出的是 silver）。这里按磁盘
+    # 实况单独放行——目录在、kind=生图 才算数，删了目录就自动失效。
+    try:
+        for _sk in _INTERNAL_CHANNELS:
+            _sd = load_skill(_sk)
+            if _sd and _sd.get("kind") == "生图":
+                allowed.add(_sk)
+    except Exception:
+        log.exception("内部渠道放行失败，跳过")
     return allowed
 
 
