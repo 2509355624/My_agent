@@ -3901,5 +3901,69 @@ class NightAdultClearTest(PersonaBase):
                          {"value": 10})
 
 
+
+
+class RatingTagTest(unittest.TestCase):
+    """出图评级 tag（2026-11-13 群友报「该露的地方被打码」）。
+
+    根因不是负向词，是画面行开头的 `safe`——模型把它当指令读，
+    于是「想办法遮起来」：黑块、胳膊挡、被子盖、镜头切掉。
+    """
+
+    def test_safe_upgraded_when_nude(self):
+        from app import persona
+        out, note = persona._fix_rating("safe, 1girl, completely nude, lying on bed")
+        self.assertTrue(out.startswith("sensitive"))
+        self.assertEqual(note, "safe → sensitive")
+
+    def test_safe_upgraded_when_explicit(self):
+        from app import persona
+        out, _ = persona._fix_rating("safe, 1girl, penetration, from behind")
+        self.assertTrue(out.startswith("nsfw"))
+
+    def test_daily_scene_untouched(self):
+        """穿衣日常不能被动——乱升级会让普通图往情色构图跑。"""
+        from app import persona
+        src = "safe, 1girl, wearing a white shirt, smiling"
+        out, note = persona._fix_rating(src)
+        self.assertEqual(out, src)
+        self.assertEqual(note, "")
+
+    def test_missing_rating_gets_one(self):
+        from app import persona
+        out, _ = persona._fix_rating("1girl, completely nude")
+        self.assertTrue(out.startswith("sensitive"))
+
+    def test_higher_rating_not_downgraded(self):
+        """演员写了 nsfw / explicit 就别往回压。"""
+        from app import persona
+        for src in ("nsfw, 1girl, completely nude", "explicit, 1girl, penetration"):
+            out, note = persona._fix_rating(src)
+            self.assertEqual(out, src, "不许降级：%s" % src)
+            self.assertEqual(note, "")
+
+    def test_only_rating_word_changes(self):
+        """只改评级词，其它 tag 一个都不动。"""
+        from app import persona
+        src = "safe, 1girl, solo, pov, completely nude, blonde hair"
+        out, _ = persona._fix_rating(src)
+        self.assertEqual(out.replace("sensitive", "safe"), src)
+
+    def test_build_prompt_applies_fix(self):
+        """`build_prompt` 是出图前的最后一道，必须真的调用它。"""
+        import inspect
+        from app import persona
+        src = inspect.getsource(persona.build_prompt)
+        self.assertIn("_fix_rating", src)
+
+    def test_contract_teaches_rating(self):
+        """契约要教演员按场景写评级，否则每张图都带着 safe。"""
+        from app import persona
+        c = persona._CONTRACT
+        self.assertIn("评级 tag 按画面写", c)
+        self.assertIn("打码", c)
+        self.assertIn("sensitive", c)
+        self.assertIn("nsfw", c)
+
 if __name__ == "__main__":
     unittest.main()

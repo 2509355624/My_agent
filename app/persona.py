@@ -1116,6 +1116,18 @@ _CONTRACT = (
     "她是谁、长什么样、角色触发词和人数，系统另拼一份固定块放在这一行前面，"
     "每轮都在；主体只声明这一次，画面里就只剩她对着你。\n"
     "\n"
+    "### 评级 tag 按画面写（写错了图会被打码）\n"
+    "\n"
+    "画面行开头那个评级词，模型是当**指令**读的，不是当分类标签：\n"
+    "\n"
+    "- 日常、穿衣、没有身体暴露 → `safe`\n"
+    "- 有裸露（裸了、脱了、露胸露下身）但还没在正戏 → `sensitive`\n"
+    "- 正在做、或者器官直接入画 → `nsfw`\n"
+    "\n"
+    "**把 `safe` 写在正戏的画面上，模型会照着「安全内容」去画。**它的做法不是\n"
+    "拒绝出图，而是想办法遮起来：糊成黑块、用胳膊挡、拿被子盖、镜头切掉那一块。\n"
+    "图上莫名其妙有遮挡，来源就是这个词——和负向词、和底模都没关系。\n"
+    "\n"
     "### 两条稳画面的写法\n"
     "\n"
     "- **衣物和姿势写成已经摆好的样子**：`her cardigan already slipped off one "
@@ -7895,6 +7907,101 @@ def _fixed_block(card, outfit=""):
 # 不再经过这一层。
 
 
+# ─── 评级 tag（2026-11-13 群友报「该露的地方被打码」）─────────
+#
+# 现象：明明是正戏，出图却把隐私部位糊成黑块、或者用一堆东西遮住。
+# 根因不是负向词（`silver` 的负向只有画质词），也不是代码加了什么限制，
+# 而是**画面行开头那个 `safe`**：
+#
+#     safe, 1girl, solo, pov, blonde hair, ... completely nude ...
+#     ↑
+#     Danbooru 评级 tag「安全内容、非露骨」
+#
+# 模型收到 `safe` 就会主动回避裸露——它的做法不是拒绝出图，而是
+# 「想办法遮起来」，表现就是黑块、手臂挡、被单盖、构图切掉那一块。
+# 演员在任何场景都写 `safe`（契约里没教它什么时候该换），所以每一张
+# 亲密图都带着这个反向指令。
+#
+# 修法两道：
+#   ① 契约里教演员按场景写对的评级（见 `_CONTRACT` 的「评级 tag」一节）；
+#   ② 这里做代码兜底——已经能看出是亲密画面，评级还是 `safe` 的，直接改掉。
+#      演员漏写一次不该让整张图废掉。
+#
+# ⚠️ 只改**评级词本身**，不删不加任何别的 tag；`safe → sensitive` 是最小改动，
+# 画面内容仍然完全由演员那一行决定。
+
+_RATING_TAGS = ("safe", "sensitive", "nsfw", "explicit")
+
+# 明确「有裸露」的信号：出现任何一个，评级至少得是 sensitive。
+_NUDE_SIGNALS = (
+    "completely nude", "fully nude", "nude", "topless", "bottomless",
+    "bare breasts", "bare chest", "exposed breasts", "breasts out",
+    "bare pussy", "pussy visible", "spread pussy", "exposed pussy",
+    "bare ass", "bare buttocks", "naked",
+)
+
+# 明确「露器官 / 正在做」的信号：这些出现，评级应该是 nsfw。
+_EXPLICIT_SIGNALS = (
+    "penetration", "inside her", "inside him", "sex from behind",
+    "cunnilingus", "fellatio", "cum", "semen", "ejaculat",
+    "pussy juice", "wet pussy", "clitoris", "labia", "anus visible",
+    "pussy", "nipples visible", "areola",
+)
+
+
+def _rating_of(parts):
+    """这一行现在写的是哪个评级？没有返回空串。"""
+    for x in parts:
+        k = str(x or "").strip().lower()
+        if k in _RATING_TAGS:
+            return k
+    return ""
+
+
+def _wanted_rating(text):
+    """按画面内容判「至少该是哪个评级」。判不出来返回空串（不动）。"""
+    low = str(text or "").lower()
+    if any(s in low for s in _EXPLICIT_SIGNALS):
+        return "nsfw"
+    if any(s in low for s in _NUDE_SIGNALS):
+        return "sensitive"
+    return ""
+
+
+def _fix_rating(prompt):
+    """把 `safe` 升级成画面内容需要的评级。返回 `(新文本, 改了什么)`。
+
+    **只降不升的反向也做**：内容明显是穿衣日常却写了 `nsfw`，改回 `safe`——
+    评级和画面矛盾时两边都会画歪（写成 nsfw 的日常图会自己往情色构图跑）。
+    """
+    raw = str(prompt or "")
+    if not raw.strip():
+        return raw, ""
+    parts = [x.strip() for x in raw.split(",")]
+    cur = _rating_of(parts)
+    want = _wanted_rating(raw)
+    if not want:
+        return raw, ""
+    if cur == want:
+        return raw, ""
+    # 已经有了更高级的评级，不往回压（演员写了 explicit 就别改）
+    order = {"safe": 0, "sensitive": 1, "nsfw": 2, "explicit": 3}
+    if cur and order.get(cur, 0) >= order.get(want, 0):
+        return raw, ""
+    out = []
+    replaced = False
+    for x in parts:
+        if not replaced and x.strip().lower() in _RATING_TAGS:
+            out.append(want)
+            replaced = True
+        else:
+            out.append(x)
+    if not replaced:
+        out.insert(0, want)
+    note = "%s → %s" % (cur or "（无评级）", want)
+    return ", ".join(y for y in out if y), note
+
+
 # POV 机位固定模板（2026-11-08）：由代码拼在提示词末尾，不交给演员每轮重写。
 # 只写机位，不写人数词、不写 `1other` / `pov hands` / `solo`，也不写 `no ...`
 # 反向钉住——主体由角色固定块声明一次，视角方不进画就不会被凑出第二个人。
@@ -7921,7 +8028,13 @@ def build_prompt(card, scene, state="", pov=False, outfit=""):
     cur = str(outfit or "").strip().strip(", ")
     parts = [x for x in (fixed, cur, scene,
                          _POV_CAMERA if pov else "") if x]
-    return ", ".join(parts)
+    prompt = ", ".join(parts)
+    # 评级兜底（2026-11-13）：演员在亲密画面里仍然写 `safe`，模型就会主动
+    # 把该露的地方遮起来——出图看着像打码。这里按画面内容把评级改成对的。
+    prompt, _note = _fix_rating(prompt)
+    if _note:
+        log.info("出图评级修正：%s", _note)
+    return prompt
 
 
 def image_caption(spoken, limit=20):
