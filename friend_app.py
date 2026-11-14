@@ -1011,8 +1011,13 @@ def run():
     print("  本机: http://127.0.0.1:%d" % PORT)
     print("  后端: %s" % BACKEND)
     print("=" * 50)
-    # 0.0.0.0 绝对不要：一开就等于绕过验证码直连
-    app.run(host="127.0.0.1", port=PORT, debug=False, threaded=True)
+    # 0.0.0.0 绝对不要：一开就等于绕过验证码直连。
+    # 例外（2026-11-14）：Docker 容器里必须监听 0.0.0.0，否则容器内 127.0.0.1
+    # 只有容器自己够得着，docker 端口映射进来会 Connection refused。容器里
+    # 网络是隔离的，外界唯一入口是 compose 里显式声明的端口映射，验证码防线
+    # 不受影响。真机不设 FRIEND_HOST，行为与原来完全一致。
+    host = os.getenv("FRIEND_HOST", "127.0.0.1")
+    app.run(host=host, port=PORT, debug=False, threaded=True)
 
 
 if __name__ == "__main__":
